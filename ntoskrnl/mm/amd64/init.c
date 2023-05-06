@@ -290,7 +290,8 @@ MiInitializePageTable(VOID)
 #endif
 
     /* Map PPEs for paged pool */
-    MiMapPPEs(MmPagedPoolStart, MmPagedPoolEnd);
+//    MmPagedPoolEnd = Add2Ptr(MmPagedPoolStart, MmSizeOfPagedPoolInBytes - 1);
+//    MiMapPPEs(MmPagedPoolStart, MmPagedPoolEnd);
 
     /* Setup 1 PPE for hyper space */
     MiMapPPEs((PVOID)HYPER_SPACE, (PVOID)HYPER_SPACE_END);
