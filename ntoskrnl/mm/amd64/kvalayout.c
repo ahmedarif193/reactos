@@ -87,7 +87,7 @@ AcquireRandomPxiRange(ULONG NumberOfPxis)
 
     /* Get a random skip count */
     SkipCount = RtlRandomEx(&MiRandomSeed);
-    SkipCount %= AvailableSlots;
+    SkipCount %= AvailableSlots; // FIXME, not correctly distributed
 
     /* Skip over unavailable and 'SkipCount' available slots */
     while (!RtlAreBitsClear(&MiSystemVaAssignmentBitmap, Index, NumberOfPxis) ||
@@ -99,7 +99,7 @@ AcquireRandomPxiRange(ULONG NumberOfPxis)
     /* Now set the bits */
     for (ULONG i = 0; i < NumberOfPxis; i++)
     {
-        RtlSetBit(&MiSystemVaAssignmentBitmap, Index + i);
+        RtlSetBit(&MiSystemVaAssignmentBitmap, Index + i); // RtlSetBits?
     }
 
     return Index + 256;
@@ -133,7 +133,7 @@ RandomizeVaRegion(
     ULONG AvailableSlots = 1 + (MaxOffset / Alignment);
 
     /* Get a random slot index */
-    ULONG SlotIndex = RtlRandomEx(&MiRandomSeed) % AvailableSlots;
+    ULONG SlotIndex = RtlRandomEx(&MiRandomSeed) % AvailableSlots; // distribution
 
     /* Calculate the actual base address */
     PVOID BaseAddress = Add2Ptr(MiPxiToAddress(Pxi), SlotIndex * Alignment);
