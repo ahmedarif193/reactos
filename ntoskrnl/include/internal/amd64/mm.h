@@ -24,12 +24,12 @@
 #define MI_SYSTEM_CACHE_START                  0xFFFFF98000000000ULL // 1 TB system cache (on Vista+ this is dynamic VA space) [MiVaSystemCache,MiVaSpecialPoolPaged,MiVaSpecialPoolNonPaged]
 #define MI_SYSTEM_CACHE_END                    0xFFFFFA7FFFFFFFFFULL
 #define MI_PFN_DATABASE                        0xFFFFFA8000000000ULL // up to 5.5 TB PFN database followed by non paged pool [MiVaPfnDatabase/MiVaNonPagedPool]
-#define MI_NONPAGED_POOL_END            (PVOID)0xFFFFFFFFFFBFFFFFULL
 //#define MM_HAL_VA_START                      0xFFFFFFFFFFC00000ULL // 4 MB HAL mappings, defined in NDK [MiVaHal]
 #define MI_HIGHEST_SYSTEM_ADDRESS       (PVOID)0xFFFFFFFFFFFFFFFFULL
 #define MmSystemRangeStart              ((PVOID)MI_REAL_SYSTEM_RANGE_START)
 
 /* Dummy values (dynamically assigned) */
+#define MI_NONPAGED_POOL_END 0
 #define MI_PAGED_POOL_START 0
 
 /* WOW64 address definitions */

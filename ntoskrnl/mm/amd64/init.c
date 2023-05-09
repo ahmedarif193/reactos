@@ -376,17 +376,17 @@ MiBuildNonPagedPool(VOID)
     }
 
     /* Don't let the maximum go too high */
-    if (MmMaximumNonPagedPoolInBytes > MI_MAX_NONPAGED_POOL_SIZE)
+    if (MmMaximumNonPagedPoolInBytes > MiSystemVaRegions[AssignedRegionNonPagedPool].NumberOfBytes)
     {
         /* Set it to the upper limit */
-        MmMaximumNonPagedPoolInBytes = MI_MAX_NONPAGED_POOL_SIZE;
+        MmMaximumNonPagedPoolInBytes = MiSystemVaRegions[AssignedRegionNonPagedPool].NumberOfBytes;
     }
 
     /* Convert nonpaged pool size from bytes to pages */
     MmMaximumNonPagedPoolInPages = MmMaximumNonPagedPoolInBytes >> PAGE_SHIFT;
 
-    /* Non paged pool starts after the PFN database */
-    MmNonPagedPoolStart = (PUCHAR)MmPfnDatabase + MxPfnAllocation * PAGE_SIZE;
+    /* Get non paged pool start address */
+    MmNonPagedPoolStart = MiSystemVaRegions[AssignedRegionNonPagedPool].BaseAddress;
 
     /* Calculate the nonpaged pool expansion start region */
     MmNonPagedPoolExpansionStart = (PCHAR)MmNonPagedPoolStart +
