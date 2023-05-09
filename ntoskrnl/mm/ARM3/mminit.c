@@ -2535,7 +2535,7 @@ MmArmInitSystem(IN ULONG Phase,
         ASSERT(PointerPte == TestPte);
 
         /* Try the last nonpaged pool address */
-        PointerPte = (PMMPTE)MI_NONPAGED_POOL_END;
+        PointerPte = (PMMPTE)MmNonPagedPoolEnd;
         MI_MAKE_PROTOTYPE_PTE(&TempPte, PointerPte);
         TestPte = MiProtoPteToPte(&TempPte);
         ASSERT(PointerPte == TestPte);
