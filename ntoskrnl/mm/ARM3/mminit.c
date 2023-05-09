@@ -2989,15 +2989,17 @@ MmArmInitSystem(IN ULONG Phase,
         }
 
         /* Define limits for system cache */
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64)
+        MmSizeOfSystemCacheInPages = MiSystemVaRegions[AssignedRegionSystemCache].NumberOfBytes / PAGE_SIZE;
+#elif defined(_M_ARM64)
         MmSizeOfSystemCacheInPages = ((MI_SYSTEM_CACHE_END + 1) - MI_SYSTEM_CACHE_START) / PAGE_SIZE;
 #else
         MmSizeOfSystemCacheInPages = ((ULONG_PTR)MI_PAGED_POOL_START - (ULONG_PTR)MI_SYSTEM_CACHE_START) / PAGE_SIZE;
 #endif
         MmSystemCacheEnd = (PVOID)((ULONG_PTR)MmSystemCacheStart + (MmSizeOfSystemCacheInPages * PAGE_SIZE) - 1);
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_ARM64)
         ASSERT(MmSystemCacheEnd == (PVOID)MI_SYSTEM_CACHE_END);
-#else
+#elif !defined(_M_AMD64)
         ASSERT(MmSystemCacheEnd == (PVOID)((ULONG_PTR)MI_PAGED_POOL_START - 1));
 #endif
 
