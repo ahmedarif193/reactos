@@ -195,13 +195,13 @@ SetupVaRegions(
     /* Reserve 2 TB system cache */
     ReserveVaRegion(AssignedRegionSystemCache, MI_SYSTEM_CACHE_START, 2 * _1TB);
 
+    /* Reserve 128 GB for system PTEs */
+    ReserveVaRegion(AssignedRegionSystemPtes, MM_SYSTEM_SPACE_START, 128 * _1GB);
+
     /* Reserve up to 8 TB for the PFN database */
     PFN_NUMBER HighestPfn = FindHighestPfnNumber(LoaderBlock);
     ULONG64 PfnDbSize = HighestPfn * sizeof(MMPFN) + _1MB;
-    ReserveVaRegion(AssignedRegionPfnDatabase, MI_PFN_DATABASE, PfnDbSize);
-
-    /* Reserve 128 GB for system PTEs */
-    ReserveVaRegion(AssignedRegionSystemPtes, MM_SYSTEM_SPACE_START, 128 * _1GB);
+    RandomizeVaRegion(AssignedRegionPfnDatabase, PfnDbSize, PDE_MAPPED_VA);
 
     /* Reserve 128 GB for non-paged pool */
     RandomizeVaRegion(AssignedRegionNonPagedPool, 128 * _1GB, PDE_MAPPED_VA);

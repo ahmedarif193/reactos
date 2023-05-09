@@ -742,9 +742,8 @@ MiInitMachineDependent(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Set some hardcoded addresses */
     MmHyperSpaceEnd = (PVOID)HYPER_SPACE_END;
     MmNonPagedSystemStart = (PVOID)MM_SYSTEM_SPACE_START;
-    MmPfnDatabase = (PVOID)MI_PFN_DATABASE;
+    MmPfnDatabase = MiSystemVaRegions[AssignedRegionPfnDatabase].BaseAddress;
     MmWorkingSetList = (PVOID)MI_WORKING_SET_LIST;
-
 
 //    PrototypePte.u.Proto.Valid = 1
 //    PrototypePte.u.ReadOnly
