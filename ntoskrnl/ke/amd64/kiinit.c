@@ -536,6 +536,9 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
         /* Setup the IDT */
         KeInitExceptions();
+
+        /* Initialize the kernel VA layout */
+        MiInitializeKernelVaLayout(LoaderBlock);
     }
 
     /* Acquire lock */
