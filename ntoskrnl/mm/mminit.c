@@ -70,7 +70,15 @@ MiInitSystemMemoryAreas(VOID)
 
     MmLockAddressSpace(MmGetKernelAddressSpace());
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _M_AMD64
+    // On x64 we reserve everything except system cache, which is used for all RosMm mappings
+    ULONG64 SystemCacheStart = (ULONG64)MiSystemVaRegions[AssignedRegionSystemCache].BaseAddress;
+    ULONG64 SystemCacheEnd = SystemCacheStart + MiSystemVaRegions[AssignedRegionSystemCache].NumberOfBytes;
+    MiCreateArm3StaticMemoryArea((PVOID)MI_REAL_SYSTEM_RANGE_START, SystemCacheStart - MI_REAL_SYSTEM_RANGE_START, FALSE);
+    MiCreateArm3StaticMemoryArea((PVOID)SystemCacheEnd, 0xFFFFFFFFFFFFFFFFULL - SystemCacheEnd, FALSE);
+#else /* _M_AMD64 */
+
+#if defined(_M_ARM64)
     // Reserved range FFFF800000000000 - FFFFF68000000000
     MiCreateArm3StaticMemoryArea((PVOID)MI_REAL_SYSTEM_RANGE_START, PTE_BASE - MI_REAL_SYSTEM_RANGE_START, FALSE);
 #endif
@@ -130,16 +138,15 @@ MiInitSystemMemoryAreas(VOID)
     // Reserved HAL area (includes KUSER_SHARED_DATA and KPCR)
     MiCreateArm3StaticMemoryArea((PVOID)MM_HAL_VA_START, MM_HAL_VA_END - MM_HAL_VA_START + 1, FALSE);
 #else /* _X86_ */
-#ifndef _M_AMD64
 #if !defined(_M_ARM64)
     // KPCR, one page per CPU. Only for 32-bit kernel.
     MiCreateArm3StaticMemoryArea(PCR, PAGE_SIZE * KeNumberProcessors, FALSE);
 #endif
-#endif /* _M_AMD64 */
 
     // KUSER_SHARED_DATA
     MiCreateArm3StaticMemoryArea((PVOID)KI_USER_SHARED_DATA, PAGE_SIZE, FALSE);
 #endif /* _X86_ */
+#endif /* _M_AMD64 */
 
     MmUnlockAddressSpace(MmGetKernelAddressSpace());
 }
