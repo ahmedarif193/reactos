@@ -115,6 +115,33 @@ MiInitializeSessionSpaceLayout(VOID)
 
 VOID
 NTAPI
+MiMapPXEs(
+    PVOID StartAddress,
+    PVOID EndAddress)
+{
+    PMMPDE PointerPxe;
+    MMPDE TmplPxe = ValidKernelPde;
+
+    /* Loop the PPEs */
+    for (PointerPxe = MiAddressToPxe(StartAddress);
+         PointerPxe <= MiAddressToPxe(EndAddress);
+         PointerPxe++)
+    {
+        /* Check if its already mapped */
+        if (!PointerPxe->u.Hard.Valid)
+        {
+            /* No, map it! */
+            TmplPxe.u.Hard.PageFrameNumber = MxGetNextPage(1);
+            MI_WRITE_VALID_PTE(PointerPxe, TmplPxe);
+
+            /* Zero out the page table */
+            RtlZeroMemory(MiPteToAddress(PointerPxe), PAGE_SIZE);
+        }
+    }
+}
+
+VOID
+NTAPI
 MiMapPPEs(
     PVOID StartAddress,
     PVOID EndAddress)
@@ -240,22 +267,21 @@ MiInitializePageTable(VOID)
     /* Create PDPTs (72 KB) for shared system address space,
      * skip page tables TODO: use global pages. */
 
-    /* Loop the PXEs */
-    for (PointerPxe = MiAddressToPxe((PVOID)HYPER_SPACE);
-         PointerPxe <= MiAddressToPxe(MI_HIGHEST_SYSTEM_ADDRESS);
-         PointerPxe++)
+    /* Map the PXEs for all VA regions */
+    for (ULONG i = 0; i < ARRAYSIZE(MiSystemVaRegions); i++)
     {
-        /* Is the PXE already valid? */
-        if (!PointerPxe->u.Hard.Valid)
-        {
-            /* It's not Initialize it */
-            TmplPte.u.Flush.PageFrameNumber = MxGetNextPage(1);
-            *PointerPxe = TmplPte;
+        PMI_SYSTEM_VA_ASSIGNMENT Region = &MiSystemVaRegions[i];
 
-            /* Zero the page. The PXE is the PTE for the PDPT. */
-            RtlZeroMemory(MiPteToAddress(PointerPxe), PAGE_SIZE);
+        if (Region->BaseAddress == NULL)
+        {
+            continue;
         }
+
+        /* Map the PXE(s) */
+        MiMapPXEs(Region->BaseAddress,
+            Add2Ptr(Region->BaseAddress, Region->NumberOfBytes - 1));
     }
+
     PxePfn = PFN_FROM_PXE(MiAddressToPxe((PVOID)HYPER_SPACE));
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
     PsGetCurrentProcess()->Pcb.Unused0 = PxePfn << PAGE_SHIFT;
