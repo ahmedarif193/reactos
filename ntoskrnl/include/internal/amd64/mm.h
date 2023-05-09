@@ -18,8 +18,6 @@
 #define MI_LOADER_MAPPINGS                     0xFFFFF80000000000ULL // 512 GB loader mappings aka KSEG0_BASE (NDK) [MiVaBootLoaded]
 #define MM_SYSTEM_SPACE_START                  0xFFFFF88000000000ULL // 128 GB system PTEs [MiVaSystemPtes]
 #define MI_DEBUG_MAPPING                (PVOID)0xFFFFF89FFFFFF000ULL // FIXME should be allocated from System PTEs
-#define MI_PAGED_POOL_START             (PVOID)0xFFFFF8A000000000ULL // 128 GB paged pool [MiVaPagedPool]
-//#define MI_PAGED_POOL_END                    0xFFFFF8BFFFFFFFFFULL
 #define MI_SESSION_SPACE_START                 0xFFFFF90000000000ULL // 512 GB session space [MiVaSessionSpace]
 //#define MI_SESSION_VIEW_END                    0xFFFFF97FFF000000ULL
 #define MI_SESSION_SPACE_END                   0xFFFFF98000000000ULL
@@ -30,6 +28,9 @@
 //#define MM_HAL_VA_START                      0xFFFFFFFFFFC00000ULL // 4 MB HAL mappings, defined in NDK [MiVaHal]
 #define MI_HIGHEST_SYSTEM_ADDRESS       (PVOID)0xFFFFFFFFFFFFFFFFULL
 #define MmSystemRangeStart              ((PVOID)MI_REAL_SYSTEM_RANGE_START)
+
+/* Dummy values (dynamically assigned) */
+#define MI_PAGED_POOL_START 0
 
 /* WOW64 address definitions */
 #define MM_HIGHEST_USER_ADDRESS_WOW64   0x7FFEFFFF
