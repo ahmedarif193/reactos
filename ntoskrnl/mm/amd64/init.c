@@ -324,90 +324,91 @@ VOID
 NTAPI
 MiBuildNonPagedPool(VOID)
 {
-    /* Check if this is a machine with less than 256MB of RAM, and no overide */
-    if ((MmNumberOfPhysicalPages <= MI_MIN_PAGES_FOR_NONPAGED_POOL_TUNING) &&
-        !(MmSizeOfNonPagedPoolInBytes))
+    /* Calculate the size of system RAM in bytes */
+    ULONG64 SizeOfSystemRamInBytes = (ULONG64)MmNumberOfPhysicalPages * PAGE_SIZE;
+
+    /* Check if we had a registry value for the maximum non-paged pool size percentage */
+    if (MmMaximumNonPagedPoolPercent != 0)
     {
-        /* Force the non paged pool to be 2MB so we can reduce RAM usage */
-        MmSizeOfNonPagedPoolInBytes = 2 * 1024 * 1024;
+        /* Cap the percentage to 90% */
+        if (MmMaximumNonPagedPoolPercent > 90)
+        {
+            MmMaximumNonPagedPoolPercent = 90;
+        }
+    }
+    else
+    {
+        /* Otherwise use default maximum non-paged pool size percentage of 75% */
+        MmMaximumNonPagedPoolPercent = 75;
     }
 
-    /* Check if the user gave a ridicuously large nonpaged pool RAM size */
-    if ((MmSizeOfNonPagedPoolInBytes >> PAGE_SHIFT) >
-        (MmNumberOfPhysicalPages * 7 / 8))
-    {
-        /* More than 7/8ths of RAM was dedicated to nonpaged pool, ignore! */
-        MmSizeOfNonPagedPoolInBytes = 0;
-    }
+    /* Now calculate the maximum non-paged pool size */
+    MmMaximumNonPagedPoolInBytes = (SizeOfSystemRamInBytes * MmMaximumNonPagedPoolPercent) / 100;
 
-    /* Check if no registry setting was set, or if the setting was too low */
-    if (MmSizeOfNonPagedPoolInBytes < MmMinimumNonPagedPoolSize)
-    {
-        /* Start with the minimum (256 KB) and add 32 KB for each MB above 4 */
-        MmSizeOfNonPagedPoolInBytes = MmMinimumNonPagedPoolSize;
-        MmSizeOfNonPagedPoolInBytes += (SIZE_T)((MmNumberOfPhysicalPages - 1024) /
-                                       256) * MmMinAdditionNonPagedPoolPerMb;
-    }
+    /* Round the maximum nonpaged pool size to pages */
+    MmMaximumNonPagedPoolInBytes = ROUND_TO_PAGES(MmMaximumNonPagedPoolInBytes);
 
-    /* Check if the registy setting or our dynamic calculation was too high */
-    if (MmSizeOfNonPagedPoolInBytes > MI_MAX_INIT_NONPAGED_POOL_SIZE)
-    {
-        /* Set it to the maximum */
-        MmSizeOfNonPagedPoolInBytes = MI_MAX_INIT_NONPAGED_POOL_SIZE;
-    }
-
-    /* Check if a percentage cap was set through the registry */
-    if (MmMaximumNonPagedPoolPercent)
-    {
-        /* Don't feel like supporting this right now */
-        UNIMPLEMENTED;
-    }
-
-    /* Page-align the nonpaged pool size */
-    MmSizeOfNonPagedPoolInBytes &= ~(PAGE_SIZE - 1);
-
-    /* Now, check if there was a registry size for the maximum size */
-    if (!MmMaximumNonPagedPoolInBytes)
-    {
-        /* Start with the default (1MB) and add 400 KB for each MB above 4 */
-        MmMaximumNonPagedPoolInBytes = MmDefaultMaximumNonPagedPool;
-        MmMaximumNonPagedPoolInBytes += (SIZE_T)((MmNumberOfPhysicalPages - 1024) /
-                                         256) * MmMaxAdditionNonPagedPoolPerMb;
-    }
-
-    /* Don't let the maximum go too high */
+    /* Make sure the maximum is within the bounds of the VA region (128 GB) */
     if (MmMaximumNonPagedPoolInBytes > MiSystemVaRegions[AssignedRegionNonPagedPool].NumberOfBytes)
     {
-        /* Set it to the upper limit */
         MmMaximumNonPagedPoolInBytes = MiSystemVaRegions[AssignedRegionNonPagedPool].NumberOfBytes;
     }
 
+    /* Check if we had a registry value for the initial non-paged pool size */
+    if (MmSizeOfNonPagedPoolInBytes == 0)
+    {
+        /* Default initial non-paged pool size is 3% of system RAM */
+        MmSizeOfNonPagedPoolInBytes = (SizeOfSystemRamInBytes * 3 / 100);
+    }
+
+    /* Check if this is less than 40 MB */
+    if (MmSizeOfNonPagedPoolInBytes < 40 * _1MB)
+    {
+        /* Check if we have at least 400 MB of RAM */
+        if (SizeOfSystemRamInBytes >= (400 * _1MB))
+        {
+            /* Use 40 MB */
+            MmSizeOfNonPagedPoolInBytes = 40 * _1MB;
+        }
+        else
+        {
+            /* For less than 400 MB of RAM, use 10% of RAM */
+            MmSizeOfNonPagedPoolInBytes = SizeOfSystemRamInBytes / 10;
+        }
+    }
+
+    /* Round the nonpaged pool size to pages */
+    MmSizeOfNonPagedPoolInBytes = ROUND_TO_PAGES(MmSizeOfNonPagedPoolInBytes);
+
+    /* Make sure the non-paged pool size not larger than the maximum */
+    if (MmSizeOfNonPagedPoolInBytes > MmMaximumNonPagedPoolInBytes)
+    {
+        MmSizeOfNonPagedPoolInBytes = MmMaximumNonPagedPoolInBytes;
+    }
+
     /* Convert nonpaged pool size from bytes to pages */
-    MmMaximumNonPagedPoolInPages = MmMaximumNonPagedPoolInBytes >> PAGE_SHIFT;
+    MmMaximumNonPagedPoolInPages = BYTES_TO_PAGES(MmMaximumNonPagedPoolInBytes);
 
     /* Get non paged pool start address */
     MmNonPagedPoolStart = MiSystemVaRegions[AssignedRegionNonPagedPool].BaseAddress;
 
     /* Calculate the nonpaged pool expansion start region */
-    MmNonPagedPoolExpansionStart = (PCHAR)MmNonPagedPoolStart +
-                                          MmSizeOfNonPagedPoolInBytes;
+    MmNonPagedPoolExpansionStart = Add2Ptr(MmNonPagedPoolStart, MmSizeOfNonPagedPoolInBytes);
     ASSERT(IS_PAGE_ALIGNED(MmNonPagedPoolExpansionStart));
 
     /* And this is where the none paged pool ends */
-    MmNonPagedPoolEnd = (PCHAR)MmNonPagedPoolStart + MmMaximumNonPagedPoolInBytes;
-    ASSERT(MmNonPagedPoolEnd < (PVOID)MM_HAL_VA_START);
+    MmNonPagedPoolEnd = Add2Ptr(MmNonPagedPoolStart, MmMaximumNonPagedPoolInBytes);
 
     /* Map PPEs and PDEs for non paged pool (including expansion) */
     MiMapPPEs(MmNonPagedPoolStart, MmNonPagedPoolEnd);
     MiMapPDEs(MmNonPagedPoolStart, MmNonPagedPoolEnd);
 
     /* Map the nonpaged pool PTEs (without expansion) */
-    MiMapPTEs(MmNonPagedPoolStart, (PCHAR)MmNonPagedPoolExpansionStart - 1);
+    MiMapPTEs(MmNonPagedPoolStart, (PUCHAR)MmNonPagedPoolExpansionStart - 1);
 
-    /* Initialize the ARM3 nonpaged pool */
+    /* Initialize the nonpaged pool */
     MiInitializeNonPagedPool();
     MiInitializeNonPagedPoolThresholds();
-
 }
 
 CODE_SEG("INIT")
