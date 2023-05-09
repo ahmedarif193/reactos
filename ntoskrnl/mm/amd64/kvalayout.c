@@ -203,11 +203,11 @@ SetupVaRegions(
     /* Reserve 512 GB for non-paged pool */
     ReserveVaRegion(AssignedRegionNonPagedPool, MI_PFN_DATABASE + 512 * _1GB, 512 * _1GB);
 
-    /* Reserve 128 GB for paged pool */
-    ReserveVaRegion(AssignedRegionPagedPool, (ULONG64)MI_PAGED_POOL_START, 128 * _1GB);
-
     /* Reserve 128 GB for system PTEs */
     ReserveVaRegion(AssignedRegionSystemPtes, MM_SYSTEM_SPACE_START, 128 * _1GB);
+
+    /* Reserve 128 GB for paged pool */
+    RandomizeVaRegion(AssignedRegionPagedPool, 128 * _1GB, PDE_MAPPED_VA);
 
     /* Reserve 128 GB for kernel stacks */
     RandomizeVaRegion(AssignedRegionKernelStacks, 128 * _1GB, PPE_MAPPED_VA);
@@ -217,6 +217,8 @@ SetupVaRegions(
     AssignedRegionCfg = 6,
     AssignedRegionSecureNonPagedPool = 11,
 */
+
+    MmPagedPoolStart = MiSystemVaRegions[AssignedRegionPagedPool].BaseAddress;
 }
 
 static
