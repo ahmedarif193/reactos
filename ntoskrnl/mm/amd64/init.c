@@ -309,11 +309,6 @@ MiInitializePageTable(VOID)
     MmLastReservedMappingPte = MiAddressToPte((PVOID)MI_MAPPING_RANGE_END);
     MmFirstReservedMappingPte->u.Hard.PageFrameNumber = MI_HYPERSPACE_PTES;
 
-    /* Setup debug mapping PTE */
-    MiMapPPEs((PVOID)MI_DEBUG_MAPPING, (PVOID)MI_DEBUG_MAPPING);
-    MiMapPDEs((PVOID)MI_DEBUG_MAPPING, (PVOID)MI_DEBUG_MAPPING);
-    MmDebugPte = MiAddressToPte((PVOID)MI_DEBUG_MAPPING);
-
     /* Setup PDE and PTEs for VAD bitmap and working set list */
     MiMapPDEs((PVOID)MI_VAD_BITMAP, (PVOID)(MI_WORKING_SET_LIST + PAGE_SIZE - 1));
     MiMapPTEs((PVOID)MI_VAD_BITMAP, (PVOID)(MI_WORKING_SET_LIST + PAGE_SIZE - 1));
@@ -442,6 +437,10 @@ MiBuildSystemPteSpace(VOID)
 
     /* Set the counter to maximum */
     MiFirstReservedZeroingPte->u.Hard.PageFrameNumber = MI_ZERO_PTES;
+
+    /* Allocate the debug PTE from system PTEs */
+    MmDebugPte = MiReserveSystemPtes(1, SystemPteSpace);
+    MiDebugMapping = MiPteToAddress(MmDebugPte);
 }
 
 static
@@ -741,7 +740,7 @@ MiInitMachineDependent(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Set some hardcoded addresses */
     MmHyperSpaceEnd = (PVOID)HYPER_SPACE_END;
-    MmNonPagedSystemStart = (PVOID)MM_SYSTEM_SPACE_START;
+    //MmNonPagedSystemStart = (PVOID)MM_SYSTEM_SPACE_START;
     MmPfnDatabase = MiSystemVaRegions[AssignedRegionPfnDatabase].BaseAddress;
     MmWorkingSetList = (PVOID)MI_WORKING_SET_LIST;
 
@@ -799,7 +798,7 @@ MiInitMachineDependent(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Make sure we have everything we need */
     ASSERT(MmPfnDatabase);
-    ASSERT(MmNonPagedSystemStart);
+    //ASSERT(MmNonPagedSystemStart);
     ASSERT(MmNonPagedPoolStart);
     ASSERT(MmSizeOfNonPagedPoolInBytes);
     ASSERT(MmMaximumNonPagedPoolInBytes);

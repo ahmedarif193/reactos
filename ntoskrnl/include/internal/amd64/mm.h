@@ -16,7 +16,6 @@
 //#define MI_SHARED_SYSTEM_PAGE                0xFFFFF78000000000ULL
 #define MI_LOADER_MAPPINGS                     0xFFFFF80000000000ULL // 512 GB loader mappings aka KSEG0_BASE (NDK) [MiVaBootLoaded]
 #define MM_SYSTEM_SPACE_START                  0xFFFFF88000000000ULL // 128 GB system PTEs [MiVaSystemPtes]
-#define MI_DEBUG_MAPPING                (PVOID)0xFFFFF89FFFFFF000ULL // FIXME should be allocated from System PTEs
 #define MI_SESSION_SPACE_START                 0xFFFFF90000000000ULL // 512 GB session space [MiVaSessionSpace]
 //#define MI_SESSION_VIEW_END                    0xFFFFF97FFF000000ULL
 #define MI_SESSION_SPACE_END                   0xFFFFF98000000000ULL
@@ -29,6 +28,7 @@
 #define MI_PAGED_POOL_START 0
 #define MI_SYSTEM_CACHE_START 0
 #define MI_SYSTEM_CACHE_WS_START 0
+#define MI_DEBUG_MAPPING 0
 
 /* WOW64 address definitions */
 #define MM_HIGHEST_USER_ADDRESS_WOW64   0x7FFEFFFF
