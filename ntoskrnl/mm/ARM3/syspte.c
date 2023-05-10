@@ -18,7 +18,6 @@
 
 /* GLOBALS ********************************************************************/
 
-PMMPTE MmSystemPteBase;
 PMMPTE MmSystemPtesStart[MaximumPtePoolTypes];
 PMMPTE MmSystemPtesEnd[MaximumPtePoolTypes];
 MMPTE MmFirstFreeSystemPte[MaximumPtePoolTypes];
@@ -92,6 +91,7 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
     KIRQL OldIrql;
     PMMPTE PreviousPte, NextPte, ReturnPte;
     ULONG ClusterSize;
+    PMMPTE SystemPteBase = MmSystemPtesStart[SystemPtePoolType];
 
     //
     // Sanity check
@@ -113,7 +113,7 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
         //
         // Get the next cluster and its size
         //
-        NextPte = MmSystemPteBase + PreviousPte->u.List.NextEntry;
+        NextPte = SystemPteBase + PreviousPte->u.List.NextEntry;
         ClusterSize = MI_GET_CLUSTER_SIZE(NextPte);
 
         //
@@ -197,7 +197,7 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
             //
             // Get the next cluster
             //
-            NextPte = MmSystemPteBase + PreviousPte->u.List.NextEntry;
+            NextPte = SystemPteBase + PreviousPte->u.List.NextEntry;
 
             //
             // Check if the cluster to insert is smaller or of equal size
@@ -217,7 +217,7 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
         NextPte = ReturnPte - ClusterSize;
 
         NextPte->u.List.NextEntry = PreviousPte->u.List.NextEntry;
-        PreviousPte->u.List.NextEntry = NextPte - MmSystemPteBase;
+        PreviousPte->u.List.NextEntry = NextPte - SystemPteBase;
     }
 
     //
@@ -270,6 +270,7 @@ MiReleaseSystemPtes(IN PMMPTE StartingPte,
     KIRQL OldIrql;
     ULONG ClusterSize;
     PMMPTE PreviousPte, NextPte, InsertPte;
+    PMMPTE SystemPteBase = MmSystemPtesStart[SystemPtePoolType];
 
     //
     // Check to make sure the PTE address is within bounds
@@ -304,7 +305,7 @@ MiReleaseSystemPtes(IN PMMPTE StartingPte,
         //
         // Get the next cluster and its size
         //
-        NextPte = MmSystemPteBase + PreviousPte->u.List.NextEntry;
+        NextPte = SystemPteBase + PreviousPte->u.List.NextEntry;
         ClusterSize = MI_GET_CLUSTER_SIZE(NextPte);
 
         //
@@ -376,7 +377,7 @@ MiReleaseSystemPtes(IN PMMPTE StartingPte,
     // Link the new cluster into the cluster list at the insertion location
     //
     StartingPte->u.List.NextEntry = InsertPte->u.List.NextEntry;
-    InsertPte->u.List.NextEntry = StartingPte - MmSystemPteBase;
+    InsertPte->u.List.NextEntry = StartingPte - SystemPteBase;
 
     //
     // Release the System PTE lock
@@ -391,6 +392,8 @@ MiInitializeSystemPtes(IN PMMPTE StartingPte,
                        IN ULONG NumberOfPtes,
                        IN MMSYSTEM_PTE_POOL_TYPE PoolType)
 {
+    PMMPTE SystemPteBase = StartingPte;
+
     //
     // Sanity checks
     //
@@ -399,7 +402,6 @@ MiInitializeSystemPtes(IN PMMPTE StartingPte,
     //
     // Set the starting and ending PTE addresses for this space
     //
-    MmSystemPteBase = MI_SYSTEM_PTE_BASE;
     MmSystemPtesStart[PoolType] = StartingPte;
     MmSystemPtesEnd[PoolType] = StartingPte + NumberOfPtes - 1;
     DPRINT("System PTE space for %d starting at: %p and ending at: %p\n",
@@ -416,7 +418,7 @@ MiInitializeSystemPtes(IN PMMPTE StartingPte,
     StartingPte->u.List.NextEntry = MM_EMPTY_PTE_LIST;
     MmFirstFreeSystemPte[PoolType].u.Long = 0;
     MmFirstFreeSystemPte[PoolType].u.List.NextEntry = StartingPte -
-                                                      MmSystemPteBase;
+                                                      SystemPteBase;
 
     //
     // The second entry stores the size of this PTE space
