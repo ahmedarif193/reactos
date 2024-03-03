@@ -16,8 +16,6 @@ PciIdeXPdoDispatchPower(
     NTSTATUS Status;
     PIO_STACK_LOCATION IoStack;
 
-    UNREFERENCED_PARAMETER(PdoExtension);
-
     IoStack = IoGetCurrentIrpStackLocation(Irp);
     switch (IoStack->MinorFunction)
     {
