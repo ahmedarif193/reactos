@@ -1,4 +1,5 @@
 
+if(NOT ENABLE_UNIATA)
 add_library(pciide MODULE pciide.c pciide.rc)
 set_module_type(pciide kernelmodedriver)
 if(MSVC)
@@ -11,3 +12,5 @@ else()
 endif()
 add_importlibs(pciide pciidex ntoskrnl)
 add_cd_file(TARGET pciide DESTINATION reactos/system32/drivers NO_CAB FOR all)
+endif()
+add_registry_inf(pciide_reg.inf)
