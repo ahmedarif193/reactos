@@ -324,3 +324,66 @@
 @ stdcall WriteFmtUserTypeStg(ptr long ptr)
 @ stub WriteOleStg
 @ stub WriteStringStream
+
+# Windows 10 COM/OLE APIs and WinRT Integration
+@ stdcall -stub -version=0x600+ CoGetApartmentType(ptr ptr)
+@ stdcall -stub -version=0x600+ CoGetApplicationSingletonKey(ptr ptr)
+@ stdcall -stub -version=0x600+ CoGetApplicationToken(ptr)
+@ stdcall -stub -version=0x600+ CoGetApplicationThreadingModel(ptr)
+@ stdcall -stub -version=0x600+ CoRegisterApplicationRestart(wstr long)
+@ stdcall -stub -version=0x600+ CoUnregisterApplicationRestart()
+@ stdcall -stub -version=0x600+ CoCreateInstanceFromApp(ptr ptr long ptr long ptr)
+@ stdcall -stub -version=0x600+ CoGetInstanceFromApp(ptr ptr ptr long ptr long ptr)
+@ stdcall -stub -version=0x600+ CoCreateObjectInContext(ptr ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ CoQueryProxyBlanketEx(ptr ptr ptr ptr ptr ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ CoSetProxyBlanketEx(ptr long long ptr long long ptr long ptr)
+
+# WinRT Activation Factory Support
+@ stdcall -stub -version=0x600+ RoActivateInstance(ptr ptr)
+@ stdcall -stub -version=0x600+ RoGetActivationFactory(ptr ptr ptr)
+@ stdcall -stub -version=0x600+ RoInitialize(long)
+@ stdcall -stub -version=0x600+ RoUninitialize()
+@ stdcall -stub -version=0x600+ RoGetAgileReference(long ptr ptr)
+@ stdcall -stub -version=0x600+ RoResolveRestrictedErrorInfoReference(ptr ptr)
+@ stdcall -stub -version=0x600+ RoOriginateError(long ptr)
+@ stdcall -stub -version=0x600+ RoOriginateErrorW(long wstr)
+@ stdcall -stub -version=0x600+ RoOriginateLanguageException(long ptr ptr)
+@ stdcall -stub -version=0x600+ RoCaptureErrorContext(long)
+@ stdcall -stub -version=0x600+ RoFailFastWithErrorContext(long)
+@ stdcall -stub -version=0x600+ RoGetErrorReportingFlags(ptr)
+@ stdcall -stub -version=0x600+ RoSetErrorReportingFlags(long)
+
+# Modern COM Threading and Apartment Support
+@ stdcall -stub -version=0x600+ CoInitializeWinRT(long)
+@ stdcall -stub -version=0x600+ CoUninitializeWinRT()
+@ stdcall -stub -version=0x600+ CoCreateInstanceInPartition(ptr ptr long ptr long ptr ptr)
+@ stdcall -stub -version=0x600+ CoEnterApplicationThreadContext(ptr ptr)
+@ stdcall -stub -version=0x600+ CoExitApplicationThreadContext(ptr)
+
+# Windows Runtime Factory Cache
+@ stdcall -stub -version=0x600+ RoGetActivationFactoryProxy(ptr ptr ptr)
+@ stdcall -stub -version=0x600+ RoRegisterActivationFactories(ptr ptr long ptr)
+@ stdcall -stub -version=0x600+ RoRevokeActivationFactories(ptr)
+
+# Enhanced Error Handling
+@ stdcall -stub -version=0x600+ RestrictedErrorInfoCreateReference(ptr ptr)
+@ stdcall -stub -version=0x600+ RestrictedErrorInfoGetReference(ptr ptr ptr)
+@ stdcall -stub -version=0x600+ RestrictedErrorInfoGetDetails(ptr ptr ptr ptr ptr)
+
+# Windows Store App Container Support
+@ stdcall -stub -version=0x600+ CoCreateInstanceInAppContainer(ptr ptr long ptr long ptr ptr)
+@ stdcall -stub -version=0x600+ CoRegisterAppContainerPSClsid(ptr ptr ptr)
+@ stdcall -stub -version=0x600+ CoRevokeAppContainerPSClsid(ptr ptr)
+
+# Windows Runtime Buffer Support
+@ stdcall -stub -version=0x600+ WindowsCreateBuffer(long ptr ptr)
+@ stdcall -stub -version=0x600+ WindowsCreateBufferFromData(ptr long ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WindowsPromoteStringBuffer(ptr ptr)
+@ stdcall -stub -version=0x600+ WindowsDeleteBuffer(ptr)
+@ stdcall -stub -version=0x600+ WindowsGetBufferFromString(ptr ptr ptr)
+
+# Modern Metadata Support
+@ stdcall -stub -version=0x600+ RoParseTypeName(ptr ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ RoGetMetaDataFile(ptr ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ RoIsApiContractPresent(ptr long long ptr)
+@ stdcall -stub -version=0x600+ RoIsApiContractMajorVersionPresent(ptr long ptr)

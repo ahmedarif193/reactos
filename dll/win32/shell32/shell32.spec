@@ -469,3 +469,50 @@
 757 stdcall -noname -version=0x600+ DisplayNameOfW(ptr ptr long ptr long)
 866 stdcall -noname -version=0x600+ SHExtCoCreateInstance(wstr ptr ptr ptr ptr)
 887 stub -noname -version=0x601+ SHExtCoCreateInstanceCheckCategory
+
+; Windows 10 Enhanced Shell APIs
+888 stdcall -version=0x600+ SHCreateShellItem(ptr ptr ptr ptr)
+889 stdcall -version=0x600+ SHCreateItemFromParsingName(wstr ptr ptr ptr)
+890 stdcall -version=0x600+ SHCreateItemFromIDList(ptr ptr ptr)
+891 stdcall -version=0x600+ SHCreateItemFromRelativeName(ptr wstr ptr ptr ptr)
+892 stdcall -version=0x600+ SHCreateShellItemArray(ptr ptr long ptr ptr)
+893 stdcall -version=0x600+ SHCreateShellItemArrayFromDataObject(ptr ptr ptr)
+894 stdcall -version=0x600+ SHCreateShellItemArrayFromIDLists(long ptr ptr)
+895 stdcall -version=0x600+ SHCreateShellItemArrayFromShellItem(ptr ptr ptr)
+896 stdcall -version=0x600+ SHGetKnownFolderPath(ptr long ptr ptr)
+897 stdcall -version=0x600+ SHSetKnownFolderPath(ptr long ptr wstr)
+898 stdcall -version=0x600+ SHGetKnownFolderIDList(ptr long ptr long ptr)
+899 stdcall -version=0x600+ SHGetFolderPathEx(ptr long ptr long wstr long)
+900 stdcall -version=0x600+ SHGetKnownFolderItem(ptr long ptr ptr ptr)
+
+; Windows 10 File Operations APIs
+901 stdcall -version=0x600+ SHFileOperationEx(ptr)
+902 stdcall -version=0x600+ SHMoveFileW(wstr wstr)
+903 stdcall -version=0x600+ SHCopyFileW(wstr wstr long)
+904 stdcall -version=0x600+ SHDeleteFileW(wstr)
+905 stdcall -version=0x600+ SHRenameFileW(wstr wstr)
+906 stdcall -version=0x600+ SHCreateDirectoryExW(ptr wstr ptr)
+907 stdcall -version=0x600+ SHGetStockIconInfo(long long ptr)
+
+; Windows 10 Shell Namespace APIs
+908 stdcall -version=0x600+ SHCreateLibrary(ptr ptr ptr)
+909 stdcall -version=0x600+ SHOpenLibrary(wstr ptr ptr)
+910 stdcall -version=0x600+ SHSaveLibrary(ptr wstr long)
+911 stdcall -version=0x600+ SHLoadLibraryFromItem(ptr long ptr ptr)
+912 stdcall -version=0x600+ SHAddFolderPathToLibrary(ptr wstr)
+913 stdcall -version=0x600+ SHRemoveFolderPathFromLibrary(ptr wstr)
+914 stdcall -version=0x600+ SHResolveFolderPathInLibrary(ptr wstr long ptr)
+
+; Windows 10 Start Menu and Taskbar APIs
+915 stdcall -version=0x600+ SetCurrentProcessExplicitAppUserModelID(wstr)
+916 stdcall -version=0x600+ GetCurrentProcessExplicitAppUserModelID(ptr)
+917 stdcall -version=0x600+ SHGetPropertyStoreForWindow(ptr ptr ptr)
+918 stdcall -version=0x600+ SHSetWindowPropertyStore(ptr ptr)
+
+; Windows 10 Advanced File Dialog APIs
+919 stdcall -version=0x600+ SHCreateFileOpenDialog(ptr)
+920 stdcall -version=0x600+ SHCreateFileSaveDialog(ptr)
+921 stdcall -version=0x600+ SHCreateFolderBrowserDialog(ptr)
+922 stdcall -version=0x600+ SHGetPathFromIDListEx(ptr wstr long long)
+923 stdcall -version=0x600+ SHCreateItemInKnownFolder(ptr long wstr ptr ptr)
+924 stdcall -version=0x600+ SHSetLocalizedName(wstr wstr long)

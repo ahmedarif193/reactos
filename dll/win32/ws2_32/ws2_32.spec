@@ -185,3 +185,92 @@
 @ stdcall getnameinfo(ptr long ptr long ptr long long)
 @ stdcall -version=0x600+ inet_ntop(long ptr ptr long)
 @ stdcall -version=0x600+ inet_pton(long str ptr)
+
+# Windows 10 Advanced Networking APIs
+@ stdcall -stub -version=0x600+ WSAConnectByNameA(long str str ptr ptr ptr ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSAConnectByNameW(long wstr wstr ptr ptr ptr ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSAConnectByList(long ptr ptr ptr ptr ptr ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSAPoll(ptr long long)
+@ stdcall -stub -version=0x600+ WSASendMsg(long ptr long ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSARecvMsg(long ptr ptr ptr ptr ptr)
+
+# Socket Security and Firewall Support
+@ stdcall -stub -version=0x600+ WSASetSocketSecurity(long ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSAQuerySocketSecurity(long ptr ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSASetSocketPeerTargetName(long wstr)
+@ stdcall -stub -version=0x600+ WSAImpersonateSocketPeer(long ptr long)
+@ stdcall -stub -version=0x600+ WSARevertImpersonation()
+
+# IPv6 and Dual-Stack Support
+@ stdcall -stub -version=0x600+ WSAAddressToStringA(ptr long ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSAAddressToStringW(ptr long ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSAStringToAddressA(str long ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSAStringToAddressW(wstr long ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSANSPIoctl(long long ptr long ptr long ptr ptr)
+
+# Quality of Service (QoS) Support
+@ stdcall -stub -version=0x600+ WSAGetQOSByName(long ptr ptr)
+@ stdcall -stub -version=0x600+ WSASetServiceA(ptr long long)
+@ stdcall -stub -version=0x600+ WSASetServiceW(ptr long long)
+@ stdcall -stub -version=0x600+ WSAGetServiceClassInfoA(ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSAGetServiceClassInfoW(ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSAGetServiceClassNameByClassIdA(ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSAGetServiceClassNameByClassIdW(ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSAInstallServiceClassA(ptr)
+@ stdcall -stub -version=0x600+ WSAInstallServiceClassW(ptr)
+@ stdcall -stub -version=0x600+ WSARemoveServiceClass(ptr)
+
+# Advanced Event and Completion Port Support
+@ stdcall -stub -version=0x600+ WSACreateEvent()
+@ stdcall -stub -version=0x600+ WSASetEvent(long)
+@ stdcall -stub -version=0x600+ WSAResetEvent(long)
+@ stdcall -stub -version=0x600+ WSACloseEvent(long)
+@ stdcall -stub -version=0x600+ WSAWaitForMultipleEvents(long ptr long long long)
+@ stdcall -stub -version=0x600+ WSAEnumNetworkEvents(long long ptr)
+@ stdcall -stub -version=0x600+ WSAEventSelect(long long long)
+
+# Socket Groups and Multicast Support
+@ stdcall -stub -version=0x600+ WSAJoinLeaf(long ptr long ptr ptr ptr ptr long)
+@ stdcall -stub -version=0x600+ WSASocketA(long long long ptr long long)
+@ stdcall -stub -version=0x600+ WSASocketW(long long long ptr long long)
+@ stdcall -stub -version=0x600+ WSAAccept(long ptr ptr ptr long)
+@ stdcall -stub -version=0x600+ WSAAsyncGetHostByAddr(long long ptr long long ptr long)
+@ stdcall -stub -version=0x600+ WSAAsyncGetHostByName(long long str ptr long)
+@ stdcall -stub -version=0x600+ WSAAsyncGetProtoByName(long long str ptr long)
+@ stdcall -stub -version=0x600+ WSAAsyncGetProtoByNumber(long long long ptr long)
+@ stdcall -stub -version=0x600+ WSAAsyncGetServByName(long long str str ptr long)
+@ stdcall -stub -version=0x600+ WSAAsyncGetServByPort(long long long str ptr long)
+
+# Raw Socket Support
+@ stdcall -stub -version=0x600+ WSARecvFrom(long ptr long ptr ptr ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSASendTo(long ptr long ptr long ptr long ptr ptr)
+@ stdcall -stub -version=0x600+ WSARecv(long ptr long ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSASend(long ptr long ptr long ptr ptr)
+
+# Network Provider Support
+@ stdcall -stub -version=0x600+ WSCInstallProvider64_32(ptr wstr ptr long ptr)
+@ stdcall -stub -version=0x600+ WSCGetProviderInfo32(ptr long ptr ptr long ptr)
+@ stdcall -stub -version=0x600+ WSCSetProviderInfo32(ptr long ptr long long ptr)
+@ stdcall -stub -version=0x600+ WSCInstallNameSpace32(wstr wstr long long ptr)
+@ stdcall -stub -version=0x600+ WSCUnInstallNameSpace32(ptr)
+@ stdcall -stub -version=0x600+ WSCEnableNSProvider32(ptr long)
+@ stdcall -stub -version=0x600+ WSCInstallProviderAndChains64_32(ptr wstr ptr long ptr)
+
+# Enhanced Error Reporting
+@ stdcall -stub -version=0x600+ WSAGetOverlappedResult(long ptr ptr long ptr)
+@ stdcall -stub -version=0x600+ WSAHtonl(long long ptr)
+@ stdcall -stub -version=0x600+ WSAHtons(long long ptr)
+@ stdcall -stub -version=0x600+ WSANtohl(long long ptr)
+@ stdcall -stub -version=0x600+ WSANtohs(long long ptr)
+
+# Modern Protocol Support
+@ stdcall -stub -version=0x600+ WSAEnumProtocolsA(ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSAEnumProtocolsW(ptr ptr ptr)
+@ stdcall -stub -version=0x600+ WSADuplicateSocketA(long long ptr)
+@ stdcall -stub -version=0x600+ WSADuplicateSocketW(long long ptr)
+
+# Container and Virtualization Support
+@ stdcall -stub -version=0x600+ WSASetUdpSendMessageSize(long long)
+@ stdcall -stub -version=0x600+ WSAGetUdpSendMessageSize(long ptr)
+@ stdcall -stub -version=0x600+ WSASetUdpReceiveMessageSize(long long)
+@ stdcall -stub -version=0x600+ WSAGetUdpReceiveMessageSize(long ptr)
