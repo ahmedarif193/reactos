@@ -207,8 +207,17 @@ FORCEINLINE
 PVOID
 MiPteToAddress(PMMPTE PointerPte)
 {
-    /* Use signed math */
-    return (PVOID)(((LONG64)PointerPte << 25) >> 16);
+    /* Use signed math with proper bounds checking for x64 */
+    LONG64 Address = ((LONG64)PointerPte << 25) >> 16;
+    
+    /* Ensure the result is a canonical address */
+    if ((Address & 0x0000800000000000ULL) && ((Address & 0xFFFF000000000000ULL) != 0xFFFF000000000000ULL))
+    {
+        /* Sign extend for canonical form */
+        Address |= 0xFFFF000000000000ULL;
+    }
+    
+    return (PVOID)Address;
 }
 
 /* Convert a PDE into a corresponding address */

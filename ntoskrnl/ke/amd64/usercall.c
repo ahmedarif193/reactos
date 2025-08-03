@@ -60,8 +60,10 @@ KiInitializeUserApc(
     /* Sanity check, that the trap frame is from user mode */
     ASSERT((TrapFrame->SegCs & MODE_MASK) != KernelMode);
 
-    /* Allocate a 16 byte aligned UAPC_FRAME structure on the user stack */
-    ApcFrame = (PUAPC_FRAME)ALIGN_DOWN_POINTER_BY(TrapFrame->Rsp - sizeof(*ApcFrame), 16);
+    /* Allocate a 16 byte aligned UAPC_FRAME structure on the user stack
+       Ensure we have enough space and proper alignment for x64 ABI */
+    ULONG_PTR AlignedRsp = (TrapFrame->Rsp - sizeof(*ApcFrame) - 8) & ~0xF;  /* Account for return address */
+    ApcFrame = (PUAPC_FRAME)AlignedRsp;
     Context = &ApcFrame->Context;
 
     /* Protect with SEH */
@@ -161,14 +163,20 @@ KiUserModeCallout(
     /* Align stack on a 16-byte boundary */
     InitialStack = (ULONG_PTR)ALIGN_DOWN_POINTER_BY(CalloutFrame, 16);
 
-    /* Check if we have enough space on the stack */
-    if ((InitialStack - KERNEL_STACK_SIZE) < CurrentThread->StackLimit)
+    /* Check if we have enough space on the stack with safety margin */
+    if ((InitialStack - KERNEL_STACK_SIZE - PAGE_SIZE) < CurrentThread->StackLimit)  /* Add PAGE_SIZE safety margin */
     {
         /* We don't, we'll have to grow our stack */
-        Status = MmGrowKernelStack((PVOID)InitialStack);
+        Status = MmGrowKernelStack((PVOID)(InitialStack - PAGE_SIZE));  /* Grow with margin */
 
         /* Quit if we failed */
         if (!NT_SUCCESS(Status)) return Status;
+        
+        /* Verify the stack growth was successful */
+        if ((InitialStack - KERNEL_STACK_SIZE - PAGE_SIZE) < CurrentThread->StackLimit)
+        {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
     }
 
     /* Save the current callback stack and initial stack */
@@ -259,11 +267,11 @@ KeUserModeCallback(
     /* Enter a SEH Block */
     _SEH2_TRY
     {
-        /* Calculate and align the stack. This is unaligned by 8 bytes, since the following
-           UCALLOUT_FRAME compensates for that and on entry we already have a full stack
-           frame with home space for the next call, i.e. we are already inside the function
-           body and the stack needs to be 16 byte aligned. */
-        UserArguments = (PUCHAR)ALIGN_DOWN_POINTER_BY(OldStack - ArgumentLength, 16) - 8;
+        /* Calculate and align the stack. Ensure proper 16-byte alignment for x64 ABI.
+           We need to account for the UCALLOUT_FRAME structure size and maintain
+           alignment requirements for function calls. */
+        ULONG_PTR AlignedBase = (OldStack - ArgumentLength - sizeof(UCALLOUT_FRAME)) & ~0xF;
+        UserArguments = (PUCHAR)AlignedBase + sizeof(UCALLOUT_FRAME);
 
         /* The callout frame is below the arguments */
         CalloutFrame = ((PUCALLOUT_FRAME)UserArguments) - 1;

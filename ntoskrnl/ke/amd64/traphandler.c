@@ -96,8 +96,9 @@ KiNmiInterruptHandler(
     {
         /* Check if GS base is already kernel mode. This is needed, because
            we might be interrupted during an interrupt/exception from user-mode
-           before the swapgs instruction. */
-        if ((LONG64)__readmsr(MSR_GS_BASE) >= 0)
+           before the swapgs instruction. Use canonical address check instead of sign check */
+        ULONG64 GsBase = __readmsr(MSR_GS_BASE);
+        if ((GsBase & 0xFFFF800000000000ULL) == 0)  /* Check canonical user address range */
         {
             /* Swap GS to kernel */
             __swapgs();
@@ -144,8 +145,14 @@ KiSystemCallHandler(
     ULONG ServiceNumber, TableIndex, Count;
     ULONG64 UserRsp;
 
-    /* Get a pointer to the trap frame */
+    /* Get a pointer to the trap frame - ensure proper alignment */
     TrapFrame = (PKTRAP_FRAME)((PULONG64)_AddressOfReturnAddress() + 1 + MAX_SYSCALL_PARAMS);
+    
+    /* Validate trap frame pointer is properly aligned and within expected range */
+    if ((ULONG_PTR)TrapFrame & (sizeof(ULONG_PTR) - 1))
+    {
+        KeBugCheckEx(SYSTEM_SERVICE_EXCEPTION, 0x25, (ULONG_PTR)TrapFrame, 0, 0);
+    }
 
     /* Increase system call count */
     __addgsdword(FIELD_OFFSET(KIPCR, Prcb.KeSystemCalls), 1);
