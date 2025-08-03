@@ -2263,6 +2263,76 @@ typedef struct _KPROCESS
 #if (NTDDI_VERSION >= NTDDI_LONGHORN) // [
     ULONGLONG CycleTime;
 #endif // ]
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    // Windows 10 specific KPROCESS fields
+    ULONG FreezeCount;
+    ULONG KernelTime2;
+    ULONG UserTime2;
+    PVOID InstrumentationCallback;
+    union {
+        ULONG SecureState;
+        struct {
+            ULONG SecureProcess : 1;
+            ULONG Unused : 31;
+        };
+    };
+    ULONG_PTR KernelDirectoryTableBase;
+    ULONG_PTR UserDirectoryTableBase;
+    UCHAR PriorityClass2;
+    union {
+        UCHAR Union;
+        struct {
+            UCHAR IdealNode2 : 6;
+            UCHAR ReservedFlags : 2;
+        };
+    };
+    union {
+        UCHAR Flags2;
+        struct {
+            UCHAR ThreadSeed2 : 6;
+            UCHAR Spare : 2;
+        };
+    };
+    volatile USHORT ThreadListHead2;
+    USHORT ProcessFlags2;
+    ULONG ActiveThreads2;
+    ULONG_PTR ReadyTime;
+    PVOID SwapListEntry2;
+    volatile ULONG_PTR ActiveProcessors2;
+    union {
+        ULONG AutoAlignment2 : 1;
+        ULONG DisableBoost2 : 1;
+        ULONG DisableQuantum2 : 1;
+        ULONG DeepFreeze : 1;
+        ULONG TimerVirtualization : 1;
+        ULONG CheckStackExtents : 1;
+        ULONG CacheIsolationEnabled : 1;
+        ULONG PpmPolicy : 3;
+        ULONG VmDeleteInProgress : 1;
+        ULONG VmTopDown2 : 1;
+        ULONG ImageNotifyDone2 : 1;
+        ULONG PdeUpdateNeeded2 : 1;
+        ULONG VdmAllowed2 : 1;
+        ULONG ProcessRundown : 1;
+        ULONG ProcessInserted2 : 1;
+        ULONG DefaultIoPriority2 : 3;
+        ULONG ProcessSelfDelete : 1;
+        ULONG SetTimerResolutionLink : 1;
+        ULONG Spare2 : 9;
+    };
+    ULONG KernelTime3;
+    ULONG UserTime3;
+    ULONG ReadyListHead;
+    SINGLE_LIST_ENTRY SwapListEntry3;
+    volatile PVOID VdmTrapcHandler2;
+    LIST_ENTRY ThreadListHead3;
+    KSPIN_LOCK ProcessLock2;
+    volatile KAFFINITY Affinity2;
+    volatile USHORT IopmOffset2;
+    volatile UCHAR Iopl2;
+    volatile UCHAR Unused2;
+    volatile ULONG ActiveProcessors3;
+#endif
 } KPROCESS;
 
 #define ASSERT_PROCESS(object) \

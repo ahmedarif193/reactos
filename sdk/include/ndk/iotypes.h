@@ -1269,6 +1269,290 @@ typedef struct _REPARSE_DATA_BUFFER {
   } DUMMYUNIONNAME;
 } REPARSE_DATA_BUFFER, *PREPARSE_DATA_BUFFER;
 
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+
+//
+// Windows 10 I/O Subsystem Enhancements
+//
+
+// Storage Query Property Definitions for Windows 10
+typedef enum _STORAGE_PROPERTY_ID_WIN10
+{
+    StorageDeviceProperty = 0,
+    StorageAdapterProperty,
+    StorageDeviceIdProperty,
+    StorageDeviceUniqueIdProperty,
+    StorageDeviceWriteCacheProperty,
+    StorageMiniportProperty,
+    StorageAccessAlignmentProperty,
+    StorageDeviceSeekPenaltyProperty,
+    StorageDeviceTrimProperty,
+    StorageDeviceWriteAggregationProperty,
+    StorageDeviceDeviceTelemetryProperty,
+    StorageDeviceLBProvisioningProperty,
+    StorageDevicePowerProperty,
+    StorageDeviceCopyOffloadProperty,
+    StorageDeviceResiliencyProperty,
+    StorageDeviceMediumProductType,
+    StorageAdapterRpmbProperty,
+    StorageAdapterCryptoProperty,
+    StorageDeviceIoCapabilityProperty,
+    StorageAdapterProtocolSpecificProperty,
+    StorageDeviceProtocolSpecificProperty,
+    StorageAdapterTemperatureProperty,
+    StorageDeviceTemperatureProperty,
+    StorageAdapterPhysicalTopologyProperty,
+    StorageDevicePhysicalTopologyProperty,
+    StorageDeviceAttributesProperty,
+    StorageDeviceManagementStatus,
+    StorageAdapterSerialNumberProperty,
+    StorageDeviceLocationProperty,
+    StorageDeviceNumaProperty,
+    StorageDeviceZonedDeviceProperty,
+    StorageDeviceUnsafeShutdownCount,
+    StorageDeviceEnduranceProperty,
+    StorageDeviceLedStateProperty,
+    StorageDeviceSelfEncryptionProperty,
+    StorageFruIdProperty
+} STORAGE_PROPERTY_ID_WIN10;
+
+// Enhanced Driver Object for Windows 10
+typedef struct _DRIVER_OBJECT_WIN10
+{
+    CSHORT Type;
+    CSHORT Size;
+    PDEVICE_OBJECT DeviceObject;
+    ULONG Flags;
+    PVOID DriverStart;
+    ULONG DriverSize;
+    PVOID DriverSection;
+    PDRIVER_EXTENSION DriverExtension;
+    UNICODE_STRING DriverName;
+    PUNICODE_STRING HardwareDatabase;
+    PFAST_IO_DISPATCH FastIoDispatch;
+    PDRIVER_INITIALIZE DriverInit;
+    PDRIVER_STARTIO DriverStartIo;
+    PDRIVER_UNLOAD DriverUnload;
+    PDRIVER_DISPATCH MajorFunction[IRP_MJ_MAXIMUM_FUNCTION + 1];
+    // Windows 10 specific fields
+    PVOID DriverVerifierContext;
+    PVOID MmTriageActionTaken;
+    PVOID KmTriageActionTaken;
+    ULONG DriverFlags;
+    PVOID VerifierContext;
+    PVOID SecureSectionTableEntry;
+    PVOID MmVerifyImageLevel;
+    PVOID LoadImageNotifyRoutine;
+    PVOID WheaMemoryErrorEntryFlags;
+    PVOID DriverValidationFlags;
+    PVOID ControlFlowGuardStatus;
+    PVOID ReturnFlowGuardStatus;
+    PVOID KernelCfgDispatchFunction;
+    PVOID HotPatchImageInfo;
+    PVOID CodeIntegrityInfo;
+    PVOID ProcessorFeatureInformation;
+    ULONG RetpolineThunkSize;
+    PVOID RetpolineReserved[16];
+} DRIVER_OBJECT_WIN10, *PDRIVER_OBJECT_WIN10;
+
+// Enhanced Device Object for Windows 10
+typedef struct _DEVICE_OBJECT_WIN10
+{
+    CSHORT Type;
+    USHORT Size;
+    LONG ReferenceCount;
+    struct _DRIVER_OBJECT *DriverObject;
+    struct _DEVICE_OBJECT *NextDevice;
+    struct _DEVICE_OBJECT *AttachedDevice;
+    struct _IRP *CurrentIrp;
+    PIO_TIMER Timer;
+    ULONG Flags;
+    ULONG Characteristics;
+    __volatile PVOID Vpb;
+    PVOID DeviceExtension;
+    DEVICE_TYPE DeviceType;
+    CCHAR StackSize;
+    union {
+        LIST_ENTRY ListEntry;
+        WAIT_CONTEXT_BLOCK Wcb;
+    } Queue;
+    ULONG AlignmentRequirement;
+    KDEVICE_QUEUE DeviceQueue;
+    KDPC Dpc;
+    ULONG ActiveThreadCount;
+    PSECURITY_DESCRIPTOR SecurityDescriptor;
+    KEVENT DeviceLock;
+    USHORT SectorSize;
+    USHORT Spare1;
+    struct _DEVOBJ_EXTENSION *DeviceObjectExtension;
+    PVOID Reserved;
+    // Windows 10 specific fields
+    ULONG ExtensionFlags;
+    PVOID PowerContext;
+    PVOID SecurityContext;
+    PVOID IntegrityContext;
+    PVOID VerifierContext;
+    PVOID DeviceSecurityDescriptor;
+    PVOID DeviceSecurityState;
+    PVOID DeviceCapabilities;
+    PVOID PowerManagementContext;
+    PVOID IdleSettings;
+    PVOID WakeSettings;
+    PVOID BusInformation;
+    PVOID LocationInformation;
+    PVOID RemovalPolicy;
+    PVOID InstallState;
+    PVOID DeviceUsageNotificationHandlers;
+    PVOID TargetDeviceNotificationHandlers;
+    PVOID QueryCapabilitiesHandlers;
+    ULONG DevicePropertyFlags;
+    PVOID DevicePropertyData;
+    PVOID DevicePropertyDataLock;
+    PVOID FsFilterCallbacks;
+    PVOID WmiInstanceCount;
+    PVOID WmiInstanceNames;
+    UNICODE_STRING Win32DeviceName;
+    PVOID DeviceInterfaces;
+    PVOID DeviceArbiterList;
+    PVOID DeviceTranslatorList;
+    USHORT DeviceNodeNumber;
+    USHORT DeviceBusNumber;
+    INTERFACE_TYPE DeviceInterfaceType;
+    BUS_DATA_TYPE DeviceBusDataType;
+} DEVICE_OBJECT_WIN10, *PDEVICE_OBJECT_WIN10;
+
+// Enhanced IRP for Windows 10
+typedef struct _IRP_WIN10
+{
+    CSHORT Type;
+    USHORT Size;
+    struct _MDL *MdlAddress;
+    ULONG Flags;
+    union {
+        struct _IRP *MasterIrp;
+        __volatile LONG IrpCount;
+        PVOID SystemBuffer;
+    } AssociatedIrp;
+    LIST_ENTRY ThreadListEntry;
+    IO_STATUS_BLOCK IoStatus;
+    KPROCESSOR_MODE RequestorMode;
+    BOOLEAN PendingReturned;
+    CHAR StackCount;
+    CHAR CurrentLocation;
+    BOOLEAN Cancel;
+    KIRQL CancelIrql;
+    CCHAR ApcEnvironment;
+    UCHAR AllocationFlags;
+    PIO_STATUS_BLOCK UserIosb;
+    PKEVENT UserEvent;
+    union {
+        struct {
+            union {
+                PIO_APC_ROUTINE UserApcRoutine;
+                PVOID IssuingProcess;
+            };
+            PVOID UserApcContext;
+        } AsynchronousParameters;
+        LARGE_INTEGER AllocationSize;
+    } Overlay;
+    __volatile PDRIVER_CANCEL CancelRoutine;
+    PVOID UserBuffer;
+    union {
+        struct {
+            union {
+                KDEVICE_QUEUE_ENTRY DeviceQueueEntry;
+                struct {
+                    PVOID DriverContext[4];
+                };
+            };
+            PETHREAD Thread;
+            PCHAR AuxiliaryBuffer;
+            struct {
+                LIST_ENTRY ListEntry;
+                union {
+                    struct _IO_STACK_LOCATION *CurrentStackLocation;
+                    ULONG PacketType;
+                };
+            };
+            PFILE_OBJECT OriginalFileObject;
+        } Overlay;
+        KAPC Apc;
+        PVOID CompletionKey;
+    } Tail;
+    // Windows 10 specific fields
+    PVOID SecurityContext;
+    ULONG SecurityFlags;
+    PVOID IntegrityContext;
+    ULONG IntegrityFlags;
+    PVOID ActivityId;
+    ULONG RequestId;
+    PVOID CompletionContext;
+    PVOID CancelContext;
+    ULONG IrpFlags2;
+    PVOID SubjectContext;
+    PVOID IrpExtension;
+} IRP_WIN10, *PIRP_WIN10;
+
+// Container and Isolation Support for I/O
+typedef struct _IO_CONTAINER_INFORMATION
+{
+    ULONG ContainerId;
+    ULONG SiloId;
+    ULONG JobId;
+    ULONG SessionId;
+} IO_CONTAINER_INFORMATION, *PIO_CONTAINER_INFORMATION;
+
+typedef struct _IO_CONTAINER_NOTIFICATION_INFORMATION
+{
+    ULONG Version;
+    ULONG Flags;
+    IO_CONTAINER_INFORMATION ContainerInformation;
+    PVOID NotificationContext;
+} IO_CONTAINER_NOTIFICATION_INFORMATION, *PIO_CONTAINER_NOTIFICATION_INFORMATION;
+
+// Enhanced Filter Manager Support
+typedef struct _FILTER_AGGREGATE_STANDARD_INFORMATION
+{
+    ULONG NextEntryOffset;
+    ULONG Flags;
+    ULONG FrameID;
+    ULONG NumberOfInstances;
+    USHORT FilterNameLength;
+    WCHAR FilterNameBuffer[1];
+} FILTER_AGGREGATE_STANDARD_INFORMATION, *PFILTER_AGGREGATE_STANDARD_INFORMATION;
+
+typedef struct _FILTER_AGGREGATE_BASIC_INFORMATION
+{
+    ULONG NextEntryOffset;
+    ULONG Flags;
+    ULONG FrameID;
+    ULONG NumberOfInstances;
+} FILTER_AGGREGATE_BASIC_INFORMATION, *PFILTER_AGGREGATE_BASIC_INFORMATION;
+
+// Driver Signing and Verification
+typedef enum _DRIVER_SIGNATURE_STATE
+{
+    DriverSignatureStateUnsigned,
+    DriverSignatureStateTrusted,
+    DriverSignatureStateUnTrusted,
+    DriverSignatureStateSignatureError,
+    DriverSignatureStateUntrustedCatalog
+} DRIVER_SIGNATURE_STATE;
+
+typedef struct _DRIVER_VERIFICATION_INFO
+{
+    ULONG Version;
+    ULONG Flags;
+    DRIVER_SIGNATURE_STATE SignatureState;
+    UNICODE_STRING CertificateIssuer;
+    UNICODE_STRING CertificateSubject;
+    LARGE_INTEGER CertificateTimestamp;
+    PVOID CertificateThumbprint;
+    ULONG CertificateThumbprintLength;
+} DRIVER_VERIFICATION_INFO, *PDRIVER_VERIFICATION_INFO;
+
+#endif // NTDDI_WIN10
+
 #endif // NTOS_MODE_USER
 
 #endif

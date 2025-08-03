@@ -1044,6 +1044,193 @@ extern SIZE_T MmHeapDeCommitFreeBlockThreshold;
 //
 extern POBJECT_TYPE NTSYSAPI MmSectionObjectType;
 
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+
+//
+// Windows 10 Memory Management Features
+//
+
+// Memory Compression Types
+typedef enum _MM_COMPRESSION_TYPE
+{
+    MmCompressionTypeLz4,
+    MmCompressionTypeXpress,
+    MmCompressionTypeXpressHuffman,
+    MmCompressionTypeMax
+} MM_COMPRESSION_TYPE, *PMM_COMPRESSION_TYPE;
+
+typedef struct _MM_COMPRESSION_CONTEXT
+{
+    MM_COMPRESSION_TYPE CompressionType;
+    ULONG CompressedSize;
+    ULONG UncompressedSize;
+    PVOID CompressedData;
+    PVOID CompressionWorkspace;
+    ULONG WorkspaceSize;
+} MM_COMPRESSION_CONTEXT, *PMM_COMPRESSION_CONTEXT;
+
+// Control Flow Guard (CFG) Support
+typedef struct _CFG_BITMAP_INFO
+{
+    PVOID BaseAddress;
+    SIZE_T MappedSize;
+    PULONG Bitmap;
+    ULONG BitmapSize;
+} CFG_BITMAP_INFO, *PCFG_BITMAP_INFO;
+
+typedef struct _CFG_PROCESS_INFO
+{
+    ULONG Flags;
+    CFG_BITMAP_INFO Bitmap;
+    LIST_ENTRY ProcessCfgList;
+    KSPIN_LOCK ProcessCfgLock;
+} CFG_PROCESS_INFO, *PCFG_PROCESS_INFO;
+
+// Enhanced Virtual Address Descriptor (VAD) for Windows 10
+typedef struct _MMVAD_FLAGS3
+{
+    ULONG_PTR PreferredNode : 6;
+    ULONG_PTR Teb : 1;
+    ULONG_PTR Spare : 1;
+    ULONG_PTR NoChildBit : 1;
+    ULONG_PTR Spare2 : 7;
+#ifdef _WIN64
+    ULONG_PTR Spare3 : 48;
+#else
+    ULONG_PTR Spare3 : 16;
+#endif
+} MMVAD_FLAGS3, *PMMVAD_FLAGS3;
+
+// Memory Manager Working Set Information for Windows 10
+typedef struct _MMWSL_SHARED
+{
+    ULONG FirstFree;
+    ULONG FirstDynamic;
+    ULONG LastEntry;
+    ULONG NextSlot;
+    PMMWSLE Wsle;
+    ULONG LastInitializedWsle;
+    ULONG NextEstimationSlot;
+    ULONG NextAgingSlot;
+    ULONG EstimatedAvailable;
+    ULONG GrowthSinceLastEstimate;
+    ULONG NumberOfCommittedPageTables;
+    ULONG VadBitMapHint;
+    ULONG NonDirectCount;
+    LONG LastAccessClearingRemainder;
+    LONG LastAgingRemainder;
+    ULONG LastAccessClearingRemainder2;
+    ULONG LastAgingRemainder2;
+    ULONG NumberOfImageWaiters;
+    ULONG VadBitMapSize;
+    ULONG AgeDistribution[8];
+    PMMWSLE_NONDIRECT_HASH HashTableStart;
+    PMMWSLE_HASH HighestPermittedHashAddress;
+    ULONG MaximumUserPageTablePages;
+    ULONG MaximumUserPageDirectoryPages;
+    PULONG CommittedPageTables;
+    ULONG NumberOfCommittedPageDirectories;
+    PULONG CommittedPageDirectories;
+    ULONG NumberOfCommittedPageDirectoryParents;
+    ULONG CommittedPageDirectoryParents[128];
+    ULONG TrimHint;
+    ULONG PartitionId;
+    ULONG SelfmapLock;
+    union
+    {
+        struct
+        {
+            ULONG WsNotEmpty : 1;
+            ULONG WsExpansionInProgress : 1;
+            ULONG WsHardFault : 1;
+            ULONG SessionMaster : 1;
+            ULONG TrimHard : 1;
+            ULONG WorkingSetCorrupted : 1;
+            ULONG PageTableSlushDirty : 1;
+            ULONG PageTableReservesExhausted : 1;
+            ULONG AllocatedPageTableCountMaximum : 1;
+            ULONG ForceTrim : 1;
+            ULONG ContainsLockedPages : 1;
+            ULONG SessionSpace : 1;
+            ULONG TallyingVadBitmap : 1;
+            ULONG Filler : 19;
+        };
+        ULONG Flags;
+    } u1;
+} MMWSL_SHARED, *PMMWSL_SHARED;
+
+// Windows 10 Enhanced Page File Entry
+typedef struct _MMPFN_WIN10
+{
+    union
+    {
+        PFN_NUMBER Flink;
+        WSLE_NUMBER WsIndex;
+        PKEVENT Event;
+        NTSTATUS ReadStatus;
+        SINGLE_LIST_ENTRY NextStackPfn;
+    } u1;
+    union
+    {
+        PFN_NUMBER Blink;
+        PVOID ImageProtoPte;
+        ULONG_PTR ShareCount;
+    } u2;
+    union
+    {
+        PMMPTE PteAddress;
+        PVOID VolatilePteAddress;
+    } u3;
+    union
+    {
+        struct
+        {
+            USHORT ReferenceCount;
+            MMPFNENTRY e1;
+        };
+        struct
+        {
+            USHORT ReferenceCount;
+            USHORT ShortFlags;
+        } e2;
+        struct
+        {
+            ULONG EntireFrame;
+        } e3;
+    } u4;
+    ULONG_PTR OriginalPte;
+    ULONG_PTR AweReferenceCount;
+    volatile SCHAR NodeBlinkLow;
+    UCHAR Unused;
+    USHORT UsedPageTableEntries;
+} MMPFN_WIN10, *PMMPFN_WIN10;
+
+// Memory Partition Support for Windows 10
+typedef struct _MM_PARTITION
+{
+    LIST_ENTRY ListEntry;
+    ULONG PartitionId;
+    LONG ReferenceCount;
+    PULONG_PTR PagedPoolInfo;
+    PULONG_PTR NonPagedPoolInfo;
+    ULONG_PTR TotalCommittedPages;
+    ULONG_PTR TotalCommitLimit;
+    ULONG_PTR AvailablePages;
+    ULONG_PTR SharedCommit;
+    ULONG_PTR ChargedCommit;
+    EX_PUSH_LOCK PartitionLock;
+    struct _MM_PARTITION_SEGMENT *Segments;
+    ULONG64 RepurposeSequenceNumber;
+    LONG MinimumCommitCharge;
+    LONG MaximumCommitCharge;
+    LIST_ENTRY LargePageListHead;
+    KSPIN_LOCK LargePageListLock;
+    ULONG_PTR TotalCommittedPagesByPriority[8];
+    ULONG_PTR TotalCommittedPagesByNode[1];
+} MM_PARTITION, *PMM_PARTITION;
+
+#endif // NTDDI_WIN10
+
 #ifdef __cplusplus
 }; // extern "C"
 #endif

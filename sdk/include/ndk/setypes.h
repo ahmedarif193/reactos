@@ -273,7 +273,191 @@ typedef struct _AUX_ACCESS_DATA
 #if (NTDDI_VERSION >= NTDDI_WIN8)
     BOOLEAN GenerateStagingEvents;
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    // Windows 10 specific security enhancements
+    PVOID SecurityAttributes;
+    ULONG SecurityAttributeCount;
+    PVOID Claims;
+    ULONG ClaimsCount;
+    PVOID DeviceClaims;
+    ULONG DeviceClaimsCount;
+    BOOLEAN TokenHasRestrictions;
+    BOOLEAN TokenHasCapabilities;
+    PVOID TokenCapabilities;
+    ULONG TokenCapabilityCount;
+    PSECURITY_CAPABILITIES SecurityCapabilities;
+    BOOLEAN TokenIsLowBox;
+    PVOID LowBoxHandles;
+    ULONG LowBoxHandleCount;
+    PVOID TokenIntegrityLevelSid;
+    ULONG TokenIntegrityLevel;
+    BOOLEAN TokenIsAppContainer;
+    PSID TokenAppContainerSid;
+    PVOID TokenAppContainerNumber;
+    PVOID TokenUserClaimAttributes;
+    PVOID TokenDeviceClaimAttributes;
+    PVOID TokenSecurityAttributes;
+    PVOID TokenBnoIsolation;
+    PVOID TokenChildProcessFlags;
+    BOOLEAN TokenIsLessPrivilegedAppContainer;
+    BOOLEAN TokenIsSandboxed;
+    ULONG64 TokenOriginClaim;
+#endif
 } AUX_ACCESS_DATA, *PAUX_ACCESS_DATA;
+
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+
+//
+// Windows 10 Security Features
+//
+
+// App Container Support
+typedef struct _TOKEN_APPCONTAINER_INFORMATION
+{
+    PSID TokenAppContainer;
+} TOKEN_APPCONTAINER_INFORMATION, *PTOKEN_APPCONTAINER_INFORMATION;
+
+typedef struct _TOKEN_SID_INFORMATION
+{
+    PSID Sid;
+} TOKEN_SID_INFORMATION, *PTOKEN_SID_INFORMATION;
+
+// Security Capabilities
+typedef struct _SECURITY_CAPABILITIES
+{
+    PSID AppContainerSid;
+    PSID_AND_ATTRIBUTES Capabilities;
+    ULONG CapabilityCount;
+    ULONG Reserved;
+} SECURITY_CAPABILITIES, *PSECURITY_CAPABILITIES;
+
+// Token Security Attributes
+typedef struct _TOKEN_SECURITY_ATTRIBUTE_FQBN_VALUE
+{
+    ULONG64 Version;
+    UNICODE_STRING Name;
+} TOKEN_SECURITY_ATTRIBUTE_FQBN_VALUE, *PTOKEN_SECURITY_ATTRIBUTE_FQBN_VALUE;
+
+typedef struct _TOKEN_SECURITY_ATTRIBUTE_OCTET_STRING_VALUE
+{
+    PVOID pValue;
+    ULONG ValueLength;
+} TOKEN_SECURITY_ATTRIBUTE_OCTET_STRING_VALUE, *PTOKEN_SECURITY_ATTRIBUTE_OCTET_STRING_VALUE;
+
+typedef struct _TOKEN_SECURITY_ATTRIBUTE_V1
+{
+    UNICODE_STRING Name;
+    USHORT ValueType;
+    USHORT Reserved;
+    ULONG Flags;
+    ULONG ValueCount;
+    union
+    {
+        PLONG64 pInt64;
+        PULONG64 pUint64;
+        PUNICODE_STRING pString;
+        PTOKEN_SECURITY_ATTRIBUTE_FQBN_VALUE pFqbn;
+        PTOKEN_SECURITY_ATTRIBUTE_OCTET_STRING_VALUE pOctetString;
+    } Values;
+} TOKEN_SECURITY_ATTRIBUTE_V1, *PTOKEN_SECURITY_ATTRIBUTE_V1;
+
+typedef struct _TOKEN_SECURITY_ATTRIBUTES_INFORMATION
+{
+    USHORT Version;
+    USHORT Reserved;
+    ULONG AttributeCount;
+    union
+    {
+        PTOKEN_SECURITY_ATTRIBUTE_V1 pAttributeV1;
+    } Attribute;
+} TOKEN_SECURITY_ATTRIBUTES_INFORMATION, *PTOKEN_SECURITY_ATTRIBUTES_INFORMATION;
+
+// Device Claims
+typedef struct _TOKEN_DEVICE_CLAIMS
+{
+    PVOID DeviceClaims;
+} TOKEN_DEVICE_CLAIMS, *PTOKEN_DEVICE_CLAIMS;
+
+// Isolation Support
+typedef struct _TOKEN_BNO_ISOLATION_INFORMATION
+{
+    PWSTR IsolationPrefix;
+    BOOLEAN IsolationEnabled;
+} TOKEN_BNO_ISOLATION_INFORMATION, *PTOKEN_BNO_ISOLATION_INFORMATION;
+
+// Child Process Policy
+typedef struct _TOKEN_CHILD_PROCESS_POLICY
+{
+    ULONG Policy;
+} TOKEN_CHILD_PROCESS_POLICY, *PTOKEN_CHILD_PROCESS_POLICY;
+
+// Process Trust Level
+typedef enum _PROCESS_TRUST_LABEL_TYPE
+{
+    ProcessTrustLabelTypeNone,
+    ProcessTrustLabelTypeProtectedProcess,
+    ProcessTrustLabelTypeProtectedProcessLight
+} PROCESS_TRUST_LABEL_TYPE;
+
+typedef struct _PROCESS_TRUST_LABEL_ACE
+{
+    ACE_HEADER Header;
+    ACCESS_MASK Mask;
+    ULONG TrustLabelType;
+    ULONG TrustLevel;
+} PROCESS_TRUST_LABEL_ACE, *PPROCESS_TRUST_LABEL_ACE;
+
+// Enhanced Token Structure for Windows 10
+typedef struct _TOKEN_WIN10
+{
+    TOKEN_SOURCE TokenSource;
+    LUID TokenId;
+    LUID AuthenticationId;
+    LUID ParentTokenId;
+    LARGE_INTEGER ExpirationTime;
+    struct _ERESOURCE *TokenLock;
+    LUID ModifiedId;
+    SID_AND_ATTRIBUTES User;
+    ULONG GroupCount;
+    ULONG GroupCountLogonSession;
+    PSID_AND_ATTRIBUTES Groups;
+    ULONG RestrictedSidCount;
+    PSID_AND_ATTRIBUTES RestrictedSids;
+    PSID PrimaryGroup;
+    PLUID_AND_ATTRIBUTES Privileges;
+    PULONG DynamicPart;
+    PACL DefaultDacl;
+    TOKEN_TYPE TokenType;
+    SECURITY_IMPERSONATION_LEVEL ImpersonationLevel;
+    ULONG TokenFlags;
+    BOOLEAN TokenInUse;
+    PSECURITY_TOKEN_PROXY_DATA ProxyData;
+    PSECURITY_TOKEN_AUDIT_DATA AuditData;
+    PSEP_LOGON_SESSION_REFERENCES LogonSession;
+    LUID OriginatingLogonSession;
+    // Windows 10 specific fields
+    PSID_AND_ATTRIBUTES Capabilities;
+    ULONG CapabilityCount;
+    PSID_AND_ATTRIBUTES_HASH CapabilitiesHash;
+    PSID LowboxNumberEntry;
+    PSID_AND_ATTRIBUTES_HASH LowboxHandlesEntry;
+    PTOKEN_SECURITY_ATTRIBUTES_INFORMATION SecurityAttributes;
+    PVOID Package;
+    PSID_AND_ATTRIBUTES UserClaims;
+    PSID_AND_ATTRIBUTES DeviceClaims;
+    PSID_AND_ATTRIBUTES DeviceGroups;
+    PSID_AND_ATTRIBUTES RestrictedDeviceGroups;
+    ULONG SessionId;
+    TOKEN_MANDATORY_POLICY MandatoryPolicy;
+    ULONG TokenFlags2;
+    BOOLEAN IsChildProcessRestricted;
+    BOOLEAN IsLessPrivilegedAppContainer;
+    TOKEN_CHILD_PROCESS_POLICY ChildProcessPolicy;
+    TOKEN_BNO_ISOLATION_INFORMATION BnoIsolation;
+    ULONG64 OriginClaim;
+} TOKEN_WIN10, *PTOKEN_WIN10;
+
+#endif // NTDDI_WIN10
 
 //
 // External SRM Data

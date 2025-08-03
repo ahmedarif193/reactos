@@ -196,6 +196,174 @@ extern POBJECT_TYPE NTSYSAPI PsJobType;
 #define TEB_ACTIVE_FRAME_CONTEXT_FLAG_EXTENDED 	0x1
 
 //
+// Windows 10 Types and Constants
+//
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+
+// Memory Manager Types for Windows 10
+typedef struct _MM_ALT_TABLE
+{
+    PVOID AlternateTable;
+    ULONG AlternateTableSize;
+} MM_ALT_TABLE, *PMM_ALT_TABLE;
+
+// Process Security and Isolation Types
+typedef struct _PS_TRUSTLET_CREATE_ATTRIBUTES
+{
+    ULONG64 TrustletKind;
+    PVOID MemoryBlock;
+    ULONG_PTR MemoryBlockSize;
+    ULONG_PTR ExtensionBytes;
+    PVOID ExtensionData;
+} PS_TRUSTLET_CREATE_ATTRIBUTES, *PPS_TRUSTLET_CREATE_ATTRIBUTES;
+
+typedef struct _PS_DYNAMIC_ENFORCED_ADDRESS_RANGES
+{
+    RTL_AVL_TREE Tree;
+    EX_PUSH_LOCK Lock;
+} PS_DYNAMIC_ENFORCED_ADDRESS_RANGES, *PPS_DYNAMIC_ENFORCED_ADDRESS_RANGES;
+
+// CPU Set Management
+#define MAXIMUM_PROC_PER_GROUP  64
+
+// Process Mitigation Policies
+typedef enum _PS_MITIGATION_OPTION
+{
+    PS_MITIGATION_OPTION_NX,
+    PS_MITIGATION_OPTION_SEHOP,
+    PS_MITIGATION_OPTION_FORCE_RELOCATE_IMAGES,
+    PS_MITIGATION_OPTION_HEAP_TERMINATE,
+    PS_MITIGATION_OPTION_BOTTOM_UP_ASLR,
+    PS_MITIGATION_OPTION_HIGH_ENTROPY_ASLR,
+    PS_MITIGATION_OPTION_STRICT_HANDLE_CHECKS,
+    PS_MITIGATION_OPTION_WIN32K_SYSTEM_CALL_DISABLE,
+    PS_MITIGATION_OPTION_EXTENSION_POINT_DISABLE,
+    PS_MITIGATION_OPTION_PROHIBIT_DYNAMIC_CODE,
+    PS_MITIGATION_OPTION_CONTROL_FLOW_GUARD,
+    PS_MITIGATION_OPTION_BLOCK_NON_MICROSOFT_BINARIES,
+    PS_MITIGATION_OPTION_FONT_DISABLE,
+    PS_MITIGATION_OPTION_IMAGE_LOAD_NO_REMOTE,
+    PS_MITIGATION_OPTION_IMAGE_LOAD_NO_LOW_LABEL,
+    PS_MITIGATION_OPTION_IMAGE_LOAD_PREFER_SYSTEM32,
+    PS_MITIGATION_OPTION_RETURN_FLOW_GUARD,
+    PS_MITIGATION_OPTION_LOADER_INTEGRITY_CONTINUITY,
+    PS_MITIGATION_OPTION_STRICT_CONTROL_FLOW_GUARD,
+    PS_MITIGATION_OPTION_RESTRICT_INDIRECT_BRANCH_PREDICTION,
+    PS_MITIGATION_OPTION_ALLOW_DOWNGRADE_DYNAMIC_CODE_POLICY,
+    PS_MITIGATION_OPTION_SPECULATIVE_STORE_BYPASS_DISABLE,
+    PS_MITIGATION_OPTION_CET_USER_SHADOW_STACKS,
+    PS_MITIGATION_OPTION_USER_CET_SET_CONTEXT_IP_VALIDATION,
+    PS_MITIGATION_OPTION_BLOCK_NON_CET_BINARIES,
+    PS_MITIGATION_OPTION_CET_DYNAMIC_APIS_OUT_OF_PROC_ONLY,
+    PS_MITIGATION_OPTION_RESTRICT_CORE_SHARING
+} PS_MITIGATION_OPTION;
+
+// WNF (Windows Notification Framework) Support
+typedef ULONG64 WNF_STATE_NAME, *PWNF_STATE_NAME;
+typedef ULONG WNF_CHANGE_STAMP, *PWNF_CHANGE_STAMP;
+
+typedef struct _WNF_STATE_DATA
+{
+    WNF_CHANGE_STAMP ChangeStamp;
+    ULONG DataSize;
+    UCHAR Data[1];
+} WNF_STATE_DATA, *PWNF_STATE_DATA;
+
+// Container and Silo Support
+typedef enum _SERVERSILO_STATE
+{
+    SERVERSILO_INITING = 0,
+    SERVERSILO_STARTED,
+    SERVERSILO_SHUTTING_DOWN,
+    SERVERSILO_TERMINATED
+} SERVERSILO_STATE, *PSERVERSILO_STATE;
+
+typedef struct _EJOB_NET_RATE_CONTROL_HEADER
+{
+    VOID* NetRateControlContext;
+    ULONG Flags;
+} EJOB_NET_RATE_CONTROL_HEADER, *PEJOB_NET_RATE_CONTROL_HEADER;
+
+// Thread Energy Values
+typedef struct _THREAD_ENERGY_VALUES
+{
+    ULONG64 CyclesContributed;
+    ULONG64 AttributedCycles;
+} THREAD_ENERGY_VALUES, *PTHREAD_ENERGY_VALUES;
+
+// Scheduler Types
+typedef struct _SCHED_SHARED_READY_QUEUE
+{
+    PVOID ReadyListHead;
+    ULONG ActiveCount;
+    VOLATILE LONG Affinity;
+} SCHED_SHARED_READY_QUEUE, *PSCHED_SHARED_READY_QUEUE;
+
+// Thread State
+typedef enum _THREAD_STATE
+{
+    Initialized,
+    Ready,
+    Running,
+    Standby,
+    Terminated,
+    Waiting,
+    Transition,
+    DeferredReady,
+    GateWaitObsolete,
+    WaitingForProcessInSwap,
+    MaximumThreadState
+} THREAD_STATE, *PTHREAD_STATE;
+
+// Wait Reason  
+typedef enum _KWAIT_REASON
+{
+    Executive = 0,
+    FreePage = 1,
+    PageIn = 2,
+    PoolAllocation = 3,
+    DelayExecution = 4,
+    Suspended = 5,
+    UserRequest = 6,
+    WrExecutive = 7,
+    WrFreePage = 8,
+    WrPageIn = 9,
+    WrPoolAllocation = 10,
+    WrDelayExecution = 11,
+    WrSuspended = 12,
+    WrUserRequest = 13,
+    WrEventPair = 14,
+    WrQueue = 15,
+    WrLpcReceive = 16,
+    WrLpcReply = 17,
+    WrVirtualMemory = 18,
+    WrPageOut = 19,
+    WrRendezvous = 20,
+    WrKeyedEvent = 21,
+    WrTerminated = 22,
+    WrProcessInSwap = 23,
+    WrCpuRateControl = 24,
+    WrCalloutStack = 25,
+    WrKernel = 26,
+    WrResource = 27,
+    WrPushLock = 28,
+    WrMutex = 29,
+    WrQuantumEnd = 30,
+    WrDispatchInt = 31,
+    WrPreempted = 32,
+    WrYieldExecution = 33,
+    WrFastMutex = 34,
+    WrGuardedMutex = 35,
+    WrRundown = 36,
+    WrAlertByThreadId = 37,
+    WrDeferredPreempt = 38,
+    WrPhysicalFault = 39,
+    MaximumWaitReason = 40
+} KWAIT_REASON, *PKWAIT_REASON;
+
+#endif // NTDDI_WIN10
+
+//
 // Job Access Types
 //
 #define JOB_OBJECT_ASSIGN_PROCESS               0x1
@@ -1253,6 +1421,170 @@ typedef struct _ETHREAD
     KSEMAPHORE AlpcWaitSemaphore;
     ULONG CacheManagerCount;
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    // Windows 10 specific thread fields
+    ULONG_PTR OwnerEntryListHead;
+    ULONG64 DisownedOwnerEntryListLock;
+    LIST_ENTRY DisownedOwnerEntryListHead;
+    KSEMAPHORE PropertySemaphore;
+    PTR_ADDEND Spare21;
+    LIST_ENTRY ThreadListEntry2;
+    EX_RUNDOWN_REF RundownProtect2;
+    ULONG_PTR ThreadLock2;
+    ULONG LpcReplyMessageId2;
+    ULONG ReadClusterSize2;
+    ACCESS_MASK GrantedAccess2;
+    union {
+        struct {
+            ULONG Terminated2 : 1;
+            ULONG ThreadInserted2 : 1;
+            ULONG HideFromDebugger2 : 1;
+            ULONG ActiveImpersonationInfo2 : 1;
+            ULONG SystemThread2 : 1;
+            ULONG HardErrorsAreDisabled2 : 1;
+            ULONG BreakOnTermination2 : 1;
+            ULONG SkipCreationMsg2 : 1;
+            ULONG SkipTerminationMsg2 : 1;
+            ULONG CreateMsgSent2 : 1;
+            ULONG ThreadIoPriority2 : 3;
+            ULONG ThreadPagePriority2 : 3;
+            ULONG PendingRatecontrol2 : 1;
+            ULONG Spare22 : 15;
+        };
+        ULONG CrossThreadFlags2;
+    };
+    // Windows 10 Thread Energy tracking
+    THREAD_ENERGY_VALUES EnergyValues;
+    volatile ULONG64 CycleTime2;
+    ULONG ContextSwitches2;
+    SCHED_SHARED_READY_QUEUE* SchedulingGroup2;
+    ULONG FreezeCount;
+    ULONG SuspendCount2;
+    THREAD_STATE ThreadState;
+    KWAIT_REASON WaitReason2;
+    SCHAR PriorityIncrement;
+    UCHAR BasePriority2;
+    union {
+        KAPC SuspendApc;
+        struct {
+            UCHAR QuantumReset2;
+            UCHAR PriorityDecrement2;
+            USHORT UnusedSpare;
+        };
+    };
+    LONG KernelTime2;
+    PKTHREAD WaitBlockList2;
+    union {
+        LIST_ENTRY WaitListEntry2;
+        SINGLE_LIST_ENTRY SwapListEntry2;
+    };
+    LONG_PTR KernelApcDisable2;
+    LONG_PTR SpecialApcDisable2;
+    ULONG CombinedApcDisable2;
+    LIST_ENTRY QueueListEntry2;
+    PTRAP_FRAME TrapFrame2;
+    PVOID FirstArgument2;
+    union {
+        PVOID CallbackStack;
+        ULONG_PTR CallbackDepth;
+    };
+    UCHAR ApcStateIndex2;
+    CHAR BasePriority3;
+    union {
+        CHAR PriorityDecrement3;
+        struct {
+            UCHAR ForegroundBoost : 4;
+            UCHAR UnusualBoost : 4;
+        };
+    };
+    UCHAR Preempted2;
+    UCHAR AdjustReason2;
+    CHAR AdjustIncrement2;
+    UCHAR PreviousMode2;
+    UCHAR Saturation2;
+    ULONG SystemCallNumber2;
+    ULONG_PTR Spare23;
+    PVOID Win32StartAddress2;
+    union {
+        PKSTART_ROUTINE StartAddress2;
+        ULONG LpcReceivedMessageId3;
+    };
+    LIST_ENTRY ThreadListEntry3;
+    EX_RUNDOWN_REF RundownProtect3;
+    EX_PUSH_LOCK ThreadLock3;
+    ULONG ReadClusterSize3;
+    VOLATILE LONG MmLockOrdering;
+    union {
+        ULONG CrossThreadFlags3;
+        struct {
+            ULONG Terminated3 : 1;
+            ULONG ThreadInserted3 : 1;
+            ULONG HideFromDebugger3 : 1;
+            ULONG ActiveImpersonationInfo3 : 1;
+            ULONG SystemThread3 : 1;
+            ULONG HardErrorsAreDisabled3 : 1;
+            ULONG BreakOnTermination3 : 1;
+            ULONG SkipCreationMsg3 : 1;
+            ULONG SkipTerminationMsg3 : 1;
+            ULONG CreateMsgSent3 : 1;
+            ULONG ThreadIoPriority3 : 3;
+            ULONG ThreadPagePriority3 : 3;
+            ULONG PendingRatecontrol3 : 1;
+            ULONG Spare24 : 15;
+        };
+    };
+    union {
+        ULONG SameThreadPassiveFlags2;
+        struct {
+            ULONG ActiveExWorker2 : 1;
+            ULONG ExWorkerCanWaitUser2 : 1;
+            ULONG MemoryMaker2 : 1;
+            ULONG KeyedEventInUse2 : 1;
+            ULONG RateApcState2 : 2;
+            ULONG Spare25 : 26;
+        };
+    };
+    union {
+        ULONG SameThreadApcFlags2;
+        struct {
+            VOLATILE UCHAR OwnsProcessWorkingSetExclusive2 : 1;
+            VOLATILE UCHAR OwnsProcessWorkingSetShared2 : 1;
+            VOLATILE UCHAR OwnsSystemCacheWorkingSetExclusive2 : 1;
+            VOLATILE UCHAR OwnsSystemCacheWorkingSetShared2 : 1;
+            VOLATILE UCHAR OwnsSessionWorkingSetExclusive2 : 1;
+            VOLATILE UCHAR OwnsSessionWorkingSetShared2 : 1;
+            VOLATILE UCHAR OwnsProcessAddressSpaceExclusive2 : 1;
+            VOLATILE UCHAR OwnsProcessAddressSpaceShared2 : 1;
+            VOLATILE UCHAR SuppressSymbolLoad2 : 1;
+            VOLATILE UCHAR Prefetching2 : 1;
+            VOLATILE UCHAR OwnsVadExclusive2 : 1;
+            VOLATILE UCHAR OwnsChangeControlAreaExclusive2 : 1;
+            VOLATILE UCHAR OwnsChangeControlAreaShared2 : 1;
+            VOLATILE UCHAR OwnsPagedPoolMutex2 : 1;
+            VOLATILE UCHAR OwnsFileCacheMutex2 : 1;
+            VOLATILE UCHAR AllowKernelApcs2 : 1;
+            USHORT Spare26;
+        };
+    };
+    UCHAR CacheManagerActive2;
+    UCHAR DisablePageFaultClustering2;
+    UCHAR ActiveFaultCount2;
+    UCHAR LockOrderState;
+    ULONG64 AlpcMessageId2;
+    union {
+        PVOID AlpcMessage2;
+        ULONG AlpcReceiveAttributeSet2;
+    };
+    LIST_ENTRY AlpcWaitListEntry2;
+    LONG ExitStatus2;
+    ULONG CacheManagerCount2;
+    ULONG IoBoostCount;
+    ULONG IoQueueState;
+    PVOID IoQueueEntry;
+    ULONG FreezeFlags;
+    ULONG FreezeCount2;
+    ULONG SuspendedByDebugger;
+#endif
 } ETHREAD;
 
 //
@@ -1453,6 +1785,108 @@ typedef struct _EPROCESS
     UCHAR PriorityClass;
     MM_AVL_TABLE VadRoot;
     ULONG Cookie;
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    // Windows 10 specific fields
+    ULONG_PTR CycleTime;
+    ULONG_PTR ContextSwitches;
+    PETHREAD RunningThreadsProcess;
+    PVOID MmProcessColorBase;
+    ULONG64 SequenceNumber;
+    ULONG64 CreateInterruptTime;
+    ULONG64 CreateUnbiasedInterruptTime;
+    ULONG64 TotalUnbiasedFrozenTime;
+    ULONG64 LastAppStateChangeTime;
+    ULONG64 LastAppStateUptime;
+    EX_PUSH_LOCK SharedCommitLock;
+    LIST_ENTRY SharedCommitLinks;
+    union {
+        struct {
+            ULONG64 AllowedCpuSetsIndirect : 1;
+            ULONG64 Unused : 63;
+        };
+        ULONG64 AllowedCpuSets;
+    };
+    union {
+        struct {
+            ULONG64 DefaultCpuSetsIndirect : 1;
+            ULONG64 Unused : 63;
+        };
+        ULONG64 DefaultCpuSets;
+    };
+    PVOID *CpuSetBitmap;
+    ULONG64 VadRootLock;
+    PVOID VadHint;
+    PVOID VadCount;
+    volatile PVOID VadPhysicalPages;
+    PVOID VadPhysicalPagesLimit;
+    MM_ALT_TABLE AlternateVadTable;
+    KMUTANT AddressCreationMutex;
+    KSEMAPHORE TempSemaphore;
+    PVOID CommitChargeJob;
+    struct {
+        ULONG DisableSystemAllowedCpuSet : 1;
+        ULONG PermanentCpuRateControl : 1;
+        ULONG ProcessDebugPort : 30;
+    };
+    union {
+        EX_PUSH_LOCK ProcessLockSubclass;
+        PVOID TrustletIdentity;
+    };
+    KAFFINITY IdealProcessorSets[MAXIMUM_PROC_PER_GROUP];
+    PVOID ReservedUserModeBase;
+    PVOID *UserDirectoryBase;
+    UCHAR *ProcessGroupCache;
+    ULONG ProcessGroupCacheSize;
+    ULONG PrefetchArgument;
+    KEVENT *ProcessWakeCountLock;
+    ULONG ProcessWakeCount;
+    ULONG UnusedActualWakeCount;
+    ULONG ActualWakeCount;
+    // Security and isolation fields for Windows 10
+    PVOID LowBoxNumberMapping;
+    struct _PS_TRUSTLET_CREATE_ATTRIBUTES *TrustletCreateAttributes;
+    PVOID TrustletIdentityToken;
+    PVOID IntegrityPolicy;
+    ULONG ControlFlowGuardPolicy;
+    struct {
+        ULONG ControlFlowGuardEnabled : 1;
+        ULONG ControlFlowGuardExportSuppression : 1;
+        ULONG ControlFlowGuardStrict : 1;
+        ULONG DisallowStrippedImages : 1;
+        ULONG ForceRelocateImages : 1;
+        ULONG HighEntropyASLREnabled : 1;
+        ULONG ExtensionPointDisable : 1;
+        ULONG ProhibitDynamicCode : 1;
+        ULONG ProhibitNonMicrosoftBinaries : 1;
+        ULONG AuditProhibitNonMicrosoftBinaries : 1;
+        ULONG ProhibitWin32kSystemCalls : 1;
+        ULONG AuditProhibitWin32kSystemCalls : 1;
+        ULONG EnableFilteredWin32kAPIs : 1;
+        ULONG AuditFilteredWin32kAPIs : 1;
+        ULONG PreferSystem32Images : 1;
+        ULONG ProhibitLowILImageMap : 1;
+        ULONG AuditProhibitLowILImageMap : 1;
+        ULONG SignatureMitigationOptIn : 1;
+        ULONG AuditBlockNonMicrosoftBinariesAllowStore : 1;
+        ULONG LoaderIntegrityContinuityEnabled : 1;
+        ULONG AuditLoaderIntegrityContinuity : 1;
+        ULONG EnableModuleTamperingProtection : 1;
+        ULONG EnableModuleTamperingProtectionNoInherit : 1;
+        ULONG RestrictIndirectBranchPrediction : 1;
+        ULONG IsolateSecurityDomain : 1;
+        ULONG Reserved : 7;
+    } MitigationFlags2;
+    PVOID PartitionObject;
+    ULONG64 SecurityDomain;
+    ULONG64 ParentSecurityDomain;
+    PVOID *CoverageSamplerModule;
+    PVOID MmHotPatchContext;
+    RTL_AVL_TREE DynamicEHContinuationTargetsTree;
+    EX_PUSH_LOCK DynamicEHContinuationTargetsLock;
+    PS_DYNAMIC_ENFORCED_ADDRESS_RANGES DynamicEnforcedCetCompatibleRanges;
+    ULONG DisabledComponentFlags;
+    PVOID *PathRedirectionHashes;
+#endif
 } EPROCESS;
 
 //

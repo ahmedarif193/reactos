@@ -177,6 +177,106 @@ typedef struct STRUCT(_PEB)
     PTR(PVOID) WerRegistrationData;
     PTR(PVOID) WerShipAssertPtr;
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    // Windows 10 specific PEB fields
+    PTR(PVOID) pContextData;
+    PTR(PVOID) pImageHeaderHash;
+    union
+    {
+        ULONG TracingFlags;
+        struct
+        {
+            ULONG HeapTracingEnabled : 1;
+            ULONG CritSecTracingEnabled : 1;
+            ULONG LibLoaderTracingEnabled : 1;
+            ULONG SpareTracingBits : 29;
+        };
+    };
+    ULONGLONG CsrServerReadOnlySharedMemoryBase;
+    PTR(ULONG_PTR) TppWorkerpListLock;
+    PTR(LIST_ENTRY) TppWorkerpList;
+    PTR(PVOID) WaitOnAddressHashTable[128];
+    PTR(PVOID) TelemetryCoverageHeader;
+    ULONG CloudFileFlags;
+    ULONG CloudFileDiagFlags;
+    CHAR PlaceholderCompatibilityMode;
+    CHAR PlaceholderCompatibilityModeReserved[7];
+    PTR(struct _LEAP_SECOND_DATA*) LeapSecondData;
+    union
+    {
+        ULONG LeapSecondFlags;
+        struct
+        {
+            ULONG SixtySecondEnabled : 1;
+            ULONG Reserved : 31;
+        };
+    };
+    ULONG NtGlobalFlag2;
+    // AppContainer and Security features
+    PTR(PVOID) AppContainerProfile;
+    PTR(PVOID) AppContainerContext;
+    ULONG AppContainerSid;
+    PTR(PVOID) LowBoxTokenHandle;
+    PTR(PVOID) LowBoxSecurityDescriptor;
+    // Process mitigation policies
+    ULONGLONG MitigationOptionsMap;
+    union
+    {
+        ULONGLONG ProcessMitigationPolicy;
+        struct
+        {
+            ULONGLONG ControlFlowGuardPolicy : 2;
+            ULONGLONG DisallowStrippedImages : 1;
+            ULONGLONG ForceRelocateImages : 1;
+            ULONGLONG HighEntropyASLREnabled : 1;
+            ULONGLONG StackRandomizationDisabled : 1;
+            ULONGLONG ExtensionPointDisable : 1;
+            ULONGLONG DisableDynamicCode : 1;
+            ULONGLONG DisableDynamicCodeAllowOptOut : 1;
+            ULONGLONG DisableDynamicCodeAllowRemoteDowngrade : 1;
+            ULONGLONG AuditDisableDynamicCode : 1;
+            ULONGLONG DisallowWin32kSystemCalls : 1;
+            ULONGLONG AuditDisallowWin32kSystemCalls : 1;
+            ULONGLONG EnableFilteredWin32kAPIs : 1;
+            ULONGLONG AuditFilteredWin32kAPIs : 1;
+            ULONGLONG DisableNonSystemFonts : 1;
+            ULONGLONG AuditNonSystemFontLoading : 1;
+            ULONGLONG PreferSystem32Images : 1;
+            ULONGLONG ProhibitRemoteImageMap : 1;
+            ULONGLONG AuditRemoteImageMap : 1;
+            ULONGLONG ProhibitLowILImageMap : 1;
+            ULONGLONG AuditProhibitLowILImageMap : 1;
+            ULONGLONG SignatureMitigationOptIn : 1;
+            ULONGLONG AuditBlockNonMicrosoftBinariesAllowStore : 1;
+            ULONGLONG LoaderIntegrityContinuityEnabled : 1;
+            ULONGLONG AuditLoaderIntegrityContinuity : 1;
+            ULONGLONG EnableModuleTamperingProtection : 1;
+            ULONGLONG EnableModuleTamperingProtectionNoInherit : 1;
+            ULONGLONG RestrictIndirectBranchPrediction : 1;
+            ULONGLONG IsolateSecurityDomain : 1;
+            ULONGLONG Reserved : 34;
+        };
+    };
+    // Energy Values and Package Information
+    PTR(PVOID) EnergyValues;
+    PTR(PVOID) PackageStatusCallback;
+    PTR(PVOID) PackageId;
+    PTR(PVOID) ActivationStack;
+    PTR(PVOID) ProcessActivationContextData;
+    PTR(PVOID) AssemblyStorageMap;
+    PTR(PVOID) SystemDefaultActivationData;
+    PTR(PVOID) SystemAssemblyStorageMap;
+    PTR(ULONG_PTR) MinimumStackCommit2;
+    PTR(PVOID) SparePointers[2];
+    PTR(PVOID) PatchLoaderData;
+    PTR(struct _CHPEV2_PROCESS_INFO*) ChpeV2ProcessInfo;
+    ULONG AppModelFeatureState;
+    ULONG SpareUlongs[2];
+    USHORT ActiveCodePage;
+    USHORT OemCodePage;
+    USHORT UseCaseMapping;
+    USHORT UnusedNlsField;
+#endif
 } STRUCT(PEB), *STRUCT(PPEB);
 
 #undef PPEB
