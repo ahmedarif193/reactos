@@ -237,14 +237,15 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     endif()
 
     # Version Options
-    add_definitions(-DWINVER=0x502
-                    -D_WIN32_IE=0x600
-                    -D_WIN32_WINNT=0x502
-                    -D_WIN32_WINDOWS=0x502
-                    -D_SETUPAPI_VER=0x502
+    add_definitions(-DWINVER=0x0A00
+                    -D_WIN32_IE=0x0A00
+                    -D_WIN32_WINNT=0x0A00
+                    -D_WIN32_WINDOWS=0x0A00
+                    -D_SETUPAPI_VER=0x0A00
+                    -DNTDDI_VERSION=0x0A000000
                     -DMINGW_HAS_SECURE_API=1
-                    -DD3D_UMD_INTERFACE_VERSION=0x000C # Vista
-                    -DDXGKDDI_INTERFACE_VERSION=0x1052 # Vista
+                    -DD3D_UMD_INTERFACE_VERSION=0x0014 # Windows 10
+                    -DDXGKDDI_INTERFACE_VERSION=0x3023 # Windows 10
                     -DDLL_EXPORT_VERSION=${DLL_EXPORT_VERSION})
 
     # Arch Options
