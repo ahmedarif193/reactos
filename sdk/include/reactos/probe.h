@@ -17,13 +17,19 @@ static const LARGE_STRING __emptyLargeString = {0, 0, 0, NULL};
 #endif
 
 /*
- * NOTE: Alignment of the pointers is not verified!
+ * Enhanced with alignment verification for security
  */
 #define ProbeForWriteGenericType(Ptr, Type)                                    \
     do {                                                                       \
+        /* Check for integer overflow in address calculation */                \
         if ((ULONG_PTR)(Ptr) + sizeof(Type) - 1 < (ULONG_PTR)(Ptr) ||          \
             (ULONG_PTR)(Ptr) + sizeof(Type) - 1 >= (ULONG_PTR)MmUserProbeAddress) { \
             ExRaiseAccessViolation();                                          \
+        }                                                                      \
+        /* Verify proper alignment for types larger than UCHAR */              \
+        if ((sizeof(Type) > sizeof(UCHAR)) &&                                  \
+            ((ULONG_PTR)(Ptr) & (TYPE_ALIGNMENT(Type) - 1)) != 0) {            \
+            ExRaiseDatatypeMisalignment();                                     \
         }                                                                      \
         *(volatile Type *)(Ptr) = *(volatile Type *)(Ptr);                     \
     } while (0)
@@ -54,7 +60,10 @@ static const LARGE_STRING __emptyLargeString = {0, 0, 0, NULL};
 #define ProbeForReadGenericType(Ptr, Type, Default)                            \
     (((ULONG_PTR)(Ptr) + sizeof(Type) - 1 < (ULONG_PTR)(Ptr) ||                \
      (ULONG_PTR)(Ptr) + sizeof(Type) - 1 >= (ULONG_PTR)MmUserProbeAddress) ?   \
-         ExRaiseAccessViolation(), Default :                     \
+         ExRaiseAccessViolation(), Default :                                   \
+     ((sizeof(Type) > sizeof(UCHAR)) &&                                        \
+      ((ULONG_PTR)(Ptr) & (TYPE_ALIGNMENT(Type) - 1)) != 0) ?                  \
+         ExRaiseDatatypeMisalignment(), Default :                              \
          *(const volatile Type *)(Ptr))
 
 #define ProbeForReadBoolean(Ptr) ProbeForReadGenericType(Ptr, BOOLEAN, FALSE)
