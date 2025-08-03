@@ -439,15 +439,24 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
     //
     // Figure out how big the allocation is in pages
     //
+    // First check for potential overflow before conversion
+    if (SizeInBytes > (SIZE_T)MAXULONG_PTR - PAGE_SIZE + 1)
+    {
+        //
+        // Size too large, would overflow
+        //
+        return NULL;
+    }
+    
     SizeInPages = (PFN_COUNT)BYTES_TO_PAGES(SizeInBytes);
 
     //
-    // Check for overflow
+    // Check for overflow in page count calculation
     //
-    if (SizeInPages == 0)
+    if ((SizeInPages == 0) || (SizeInPages > (MAXULONG_PTR / PAGE_SIZE)))
     {
         //
-        // Fail
+        // Fail - either wrapped to 0 or too many pages
         //
         return NULL;
     }

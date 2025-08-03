@@ -319,22 +319,51 @@ ObfDereferenceObject(IN PVOID Object)
 {
     POBJECT_HEADER Header;
     LONG_PTR NewCount;
+    LONG_PTR OldCount;
 
     /* Extract the object header */
     Header = OBJECT_TO_OBJECT_HEADER(Object);
 
-    if (Header->PointerCount < Header->HandleCount)
+    /* Use compare-exchange loop to ensure atomic check and decrement */
+    do
     {
-        DPRINT1("Misbehaving object: %wZ\n", &Header->Type->Name);
-        return Header->PointerCount;
-    }
+        OldCount = Header->PointerCount;
+        
+        /* Validate pointer count vs handle count */
+        if (OldCount < Header->HandleCount)
+        {
+            DPRINT1("Misbehaving object: %wZ (PointerCount=%ld, HandleCount=%ld)\n", 
+                    &Header->Type->Name, OldCount, Header->HandleCount);
+            return OldCount;
+        }
+        
+        /* Don't decrement if already at zero (double-free protection) */
+        if (OldCount == 0)
+        {
+            DPRINT1("Attempting to dereference object with zero reference count\n");
+            KeBugCheckEx(OBJECT_REFERENCE_COUNT_ZERO,
+                         (ULONG_PTR)Object,
+                         (ULONG_PTR)Header->Type,
+                         0,
+                         0);
+        }
+        
+        NewCount = OldCount - 1;
+    } while (InterlockedCompareExchangeSizeT(&Header->PointerCount, NewCount, OldCount) != OldCount);
 
     /* Check whether the object can now be deleted. */
-    NewCount = InterlockedDecrementSizeT(&Header->PointerCount);
     if (!NewCount)
     {
-        /* Sanity check */
-        ASSERT(Header->HandleCount == 0);
+        /* Sanity check - ensure handle count is also zero */
+        if (Header->HandleCount != 0)
+        {
+            /* This is a critical error - handles exist but pointer count is zero */
+            KeBugCheckEx(OBJECT_HANDLE_COUNT_NONZERO,
+                         (ULONG_PTR)Object,
+                         Header->HandleCount,
+                         0,
+                         0);
+        }
 
         /* Check if APCs are still active */
         if (!KeAreAllApcsDisabled())
@@ -358,9 +387,29 @@ NTAPI
 ObDereferenceObjectDeferDelete(IN PVOID Object)
 {
     POBJECT_HEADER Header = OBJECT_TO_OBJECT_HEADER(Object);
+    LONG_PTR OldCount, NewCount;
+
+    /* Use compare-exchange loop for atomic decrement */
+    do
+    {
+        OldCount = Header->PointerCount;
+        
+        /* Don't decrement if already at zero (double-free protection) */
+        if (OldCount == 0)
+        {
+            DPRINT1("Attempting to dereference object with zero reference count in deferred delete\n");
+            KeBugCheckEx(OBJECT_REFERENCE_COUNT_ZERO,
+                         (ULONG_PTR)Object,
+                         (ULONG_PTR)Header->Type,
+                         1,
+                         0);
+        }
+        
+        NewCount = OldCount - 1;
+    } while (InterlockedCompareExchangeSizeT(&Header->PointerCount, NewCount, OldCount) != OldCount);
 
     /* Check whether the object can now be deleted. */
-    if (!InterlockedDecrementSizeT(&Header->PointerCount))
+    if (!NewCount)
     {
         /* Add us to the deferred deletion list */
         ObpDeferObjectDeletion(Header);

@@ -188,11 +188,53 @@ ExpInsertPoolHeadList(IN PLIST_ENTRY ListHead,
     ExpCheckPoolLinks(ListHead);
 }
 
+/* Pool header magic value for additional validation */
+#define POOL_HEADER_MAGIC 0x504F4F4C /* 'POOL' */
+
+ULONG
+NTAPI
+ExpCalculatePoolChecksum(IN PPOOL_HEADER Entry)
+{
+    ULONG Checksum = POOL_HEADER_MAGIC;
+    PULONG Data = (PULONG)Entry;
+    ULONG i;
+    
+    /* Calculate checksum over the header fields */
+    Checksum ^= Entry->Ulong1;
+    Checksum ^= Entry->PoolTag;
+    Checksum = _rotl(Checksum, 13);
+    
+    return Checksum;
+}
+
 VOID
 NTAPI
 ExpCheckPoolHeader(IN PPOOL_HEADER Entry)
 {
     PPOOL_HEADER PreviousEntry, NextEntry;
+    ULONG ExpectedChecksum;
+
+    /* Validate basic pool header integrity */
+    if (Entry->BlockSize == 0 || Entry->BlockSize > (PAGE_SIZE / POOL_BLOCK_SIZE))
+    {
+        /* Invalid block size */
+        KeBugCheckEx(BAD_POOL_HEADER,
+                     7,
+                     (ULONG_PTR)Entry,
+                     Entry->BlockSize,
+                     0);
+    }
+
+    /* Validate pool type */
+    if ((Entry->PoolType & 0x3) > PagedPoolSession)
+    {
+        /* Invalid pool type */
+        KeBugCheckEx(BAD_POOL_HEADER,
+                     8,
+                     (ULONG_PTR)Entry,
+                     Entry->PoolType,
+                     0);
+    }
 
     /* Is there a block before this one? */
     if (Entry->PreviousSize)
@@ -417,22 +459,52 @@ ExpCheckPoolIrqlLevel(IN POOL_TYPE PoolType,
                       IN SIZE_T NumberOfBytes,
                       IN PVOID Entry)
 {
+    KIRQL CurrentIrql = KeGetCurrentIrql();
+    
     //
     // Validate IRQL: It must be APC_LEVEL or lower for Paged Pool, and it must
     // be DISPATCH_LEVEL or lower for Non Paged Pool
     //
     if (((PoolType & BASE_POOL_TYPE_MASK) == PagedPool) ?
-        (KeGetCurrentIrql() > APC_LEVEL) :
-        (KeGetCurrentIrql() > DISPATCH_LEVEL))
+        (CurrentIrql > APC_LEVEL) :
+        (CurrentIrql > DISPATCH_LEVEL))
     {
         //
         // Take the system down
         //
         KeBugCheckEx(BAD_POOL_CALLER,
                      !Entry ? POOL_ALLOC_IRQL_INVALID : POOL_FREE_IRQL_INVALID,
-                     KeGetCurrentIrql(),
+                     CurrentIrql,
                      PoolType,
                      !Entry ? NumberOfBytes : (ULONG_PTR)Entry);
+    }
+    
+    //
+    // Additional validation: Check for IRQL consistency
+    // PASSIVE_LEVEL allocations should not be holding spinlocks
+    //
+    if ((CurrentIrql == PASSIVE_LEVEL) && 
+        (KeTestSpinLock(&ExpTaggedPoolLock) || KeTestSpinLock(&ExpLargePoolTableLock)))
+    {
+        //
+        // Potential deadlock: holding pool locks at PASSIVE_LEVEL
+        //
+        DPRINT1("WARNING: Pool allocation at PASSIVE_LEVEL while holding pool locks\n");
+    }
+    
+    //
+    // Validate that we're not in a DPC if requesting paged pool
+    //
+    if (((PoolType & BASE_POOL_TYPE_MASK) == PagedPool) && KeIsExecutingDpc())
+    {
+        //
+        // Cannot allocate paged pool from DPC context
+        //
+        KeBugCheckEx(IRQL_NOT_LESS_OR_EQUAL,
+                     (ULONG_PTR)Entry,
+                     CurrentIrql,
+                     0,
+                     1);
     }
 }
 

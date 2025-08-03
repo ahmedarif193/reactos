@@ -26,6 +26,10 @@ MmRebalanceMemoryConsumersAndWait(VOID);
 BOOLEAN UserPdeFault = FALSE;
 #endif
 
+/* Guard page synchronization lock */
+static KSPIN_LOCK MmGuardPageLock;
+static BOOLEAN MmGuardPageLockInitialized = FALSE;
+
 /* PRIVATE FUNCTIONS **********************************************************/
 
 static
@@ -39,6 +43,14 @@ MiCheckForUserStackOverflow(IN PVOID Address,
     PVOID StackBase, DeallocationStack, NextStackAddress;
     SIZE_T GuaranteedSize;
     NTSTATUS Status;
+    KIRQL OldIrql;
+    
+    /* Initialize the guard page lock if needed */
+    if (!MmGuardPageLockInitialized)
+    {
+        KeInitializeSpinLock(&MmGuardPageLock);
+        MmGuardPageLockInitialized = TRUE;
+    }
 
     /* Do we own the address space lock? */
     if (CurrentThread->AddressSpaceOwner == 1)
@@ -79,6 +91,13 @@ MiCheckForUserStackOverflow(IN PVOID Address,
         return STATUS_GUARD_PAGE_VIOLATION;
     }
 
+    /* Acquire guard page lock to prevent race conditions */
+    KeAcquireSpinLock(&MmGuardPageLock, &OldIrql);
+    
+    /* Re-read stack limit under lock to ensure consistency */
+    StackBase = Teb->NtTib.StackBase;
+    DeallocationStack = Teb->DeallocationStack;
+    
     /* This is where the stack will start now */
     NextStackAddress = (PVOID)((ULONG_PTR)PAGE_ALIGN(Address) - GuaranteedSize);
 
@@ -108,6 +127,7 @@ MiCheckForUserStackOverflow(IN PVOID Address,
             DPRINT1("Failed to allocate memory\n");
         }
 
+        KeReleaseSpinLock(&MmGuardPageLock, OldIrql);
         return STATUS_STACK_OVERFLOW;
     }
 
@@ -124,6 +144,9 @@ MiCheckForUserStackOverflow(IN PVOID Address,
                                      &GuaranteedSize,
                                      MEM_COMMIT,
                                      PAGE_READWRITE | PAGE_GUARD);
+    /* Release the lock after allocation */
+    KeReleaseSpinLock(&MmGuardPageLock, OldIrql);
+    
     if ((NT_SUCCESS(Status) || (Status == STATUS_ALREADY_COMMITTED)))
     {
         /* We did it! */
