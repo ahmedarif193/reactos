@@ -12,7 +12,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(shellfind);
 
 #ifndef _SHELL32_
 
-static HRESULT WINAPI DisplayNameOfW(_In_ IShellFolder *psf, _In_ LPCITEMIDLIST pidl,
+HRESULT WINAPI DisplayNameOfW(_In_ IShellFolder *psf, _In_ LPCITEMIDLIST pidl,
                                      _In_ DWORD dwFlags, _Out_ LPWSTR pszBuf, _In_ UINT cchBuf)
 {
     *pszBuf = UNICODE_NULL;

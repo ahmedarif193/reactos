@@ -1359,7 +1359,7 @@
 @ stdcall -version=0x600+ RegGetValueA(ptr str str long ptr ptr ptr)
 @ stdcall -version=0x600+ RegGetValueW(ptr wstr wstr long ptr ptr ptr)
 
-lstrcat(str str) lstrcatA
+@ stdcall lstrcat(str str) lstrcatA
 @ stdcall lstrcatA(str str)
 @ stdcall lstrcatW(wstr wstr)
 @ stdcall lstrcmp(str str) lstrcmpA

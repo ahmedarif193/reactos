@@ -1437,3 +1437,7 @@ HRESULT get_properties( const struct view *view, UINT index, LONG flags, SAFEARR
     *props = sa;
     return S_OK;
 }
+
+/* Parser helper functions - needed for bison-generated parser */
+
+/* Parser functions are now in wql.y */

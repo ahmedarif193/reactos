@@ -34,6 +34,7 @@ int __cdecl __acrt_initialize_sse2(void)
     return 0;
 }
 
+
 // The following stubs cannot be implemented as stubs by spec2def, because they are intrinsics
 
 #ifdef _MSC_VER

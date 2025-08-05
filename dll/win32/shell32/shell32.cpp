@@ -491,3 +491,28 @@ HRESULT WINAPI DllInstall(BOOL bInstall, LPCWSTR cmdline)
     FIXME("%s %s: stub\n", bInstall ? "TRUE":"FALSE", debugstr_w(cmdline));
     return S_OK;        /* indicate success */
 }
+
+/*************************************************************************
+ * Windows 10 Shell Item Array Functions - Stub implementations
+ */
+
+HRESULT WINAPI SHCreateShellItemArray(PCIDLIST_ABSOLUTE pidlParent, IShellFolder* psf, UINT cidl, PCUITEMID_CHILD_ARRAY ppidl, IShellItemArray **ppsiItemArray)
+{
+    FIXME("SHCreateShellItemArray() stub\n");
+    if (ppsiItemArray) *ppsiItemArray = NULL;
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI SHCreateShellItemArrayFromIDLists(UINT cidl, PCIDLIST_ABSOLUTE_ARRAY pidl_array, IShellItemArray **psia)
+{
+    FIXME("SHCreateShellItemArrayFromIDLists() stub\n");
+    if (psia) *psia = NULL;
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI SHCreateShellItemArrayFromShellItem(IShellItem *psi, REFIID riid, void **ppv)
+{
+    FIXME("SHCreateShellItemArrayFromShellItem() stub\n");
+    if (ppv) *ppv = NULL;
+    return E_NOTIMPL;
+}

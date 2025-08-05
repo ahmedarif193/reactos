@@ -28,6 +28,22 @@
 #ifdef __REACTOS__
 #include <wingdi.h>
 #endif
+
+#ifdef __REACTOS__
+// Default DllMain for ReactOS
+BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
+{
+    switch (fdwReason)
+    {
+        case DLL_PROCESS_ATTACH:
+        case DLL_THREAD_ATTACH:
+        case DLL_THREAD_DETACH:
+        case DLL_PROCESS_DETACH:
+            break;
+    }
+    return TRUE;
+}
+#endif
 #include "dciman.h"
 #include "wine/debug.h"
 

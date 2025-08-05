@@ -4040,9 +4040,9 @@ SockReenableAsyncSelectEvent (IN PSOCKET_INFORMATION Socket,
 
 BOOL
 WINAPI
-DllMain(HANDLE hInstDll,
-        ULONG dwReason,
-        PVOID Reserved)
+DllMain(HINSTANCE hInstDll,
+        DWORD dwReason,
+        LPVOID Reserved)
 {
 
     switch (dwReason)

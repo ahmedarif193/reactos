@@ -106,7 +106,7 @@ GetApplicationUserModelId(HANDLE hProcess,
                           PWSTR applicationUserModelId)
 {
     DPRINT1("GetApplicationUserModelId stub\n");
-    return APPMODEL_ERROR_NO_APPLICATION_USER_MODEL_ID;
+    return ERROR_NOT_SUPPORTED;
 }
 
 BOOL
@@ -136,7 +136,7 @@ GetMemoryErrorHandlingCapabilities(PULONG Capabilities)
 
 PVOID
 WINAPI
-RegisterBadMemoryNotification(PBAD_MEMORY_CALLBACK_ROUTINE Callback)
+RegisterBadMemoryNotification(PVOID Callback)
 {
     DPRINT1("RegisterBadMemoryNotification stub\n");
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
@@ -165,7 +165,7 @@ BOOL
 WINAPI
 PrefetchVirtualMemory(HANDLE hProcess,
                       ULONG_PTR NumberOfEntries,
-                      PWIN32_MEMORY_RANGE_ENTRY VirtualAddresses,
+                      PVOID VirtualAddresses,
                       ULONG Flags)
 {
     DPRINT1("PrefetchVirtualMemory stub\n");
@@ -183,7 +183,7 @@ CreateFile2(LPCWSTR lpFileName,
             DWORD dwDesiredAccess,
             DWORD dwShareMode,
             DWORD dwCreationDisposition,
-            LPCREATEFILE2_EXTENDED_PARAMETERS pCreateExParams)
+            PVOID pCreateExParams)
 {
     DPRINT1("CreateFile2 stub\n");
     // For now, forward to CreateFileW with basic parameters
@@ -208,103 +208,16 @@ GetFileInformationByHandleEx(HANDLE hFile,
     return FALSE;
 }
 
-BOOL
-WINAPI
-SetFileInformationByHandle(HANDLE hFile,
-                           FILE_INFO_BY_HANDLE_CLASS FileInformationClass,
-                           LPVOID lpFileInformation,
-                           DWORD dwBufferSize)
-{
-    DPRINT1("SetFileInformationByHandle stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
 
 /*
  * Windows 10 Synchronization APIs
  */
 
-HANDLE
-WINAPI
-CreateEventExA(LPSECURITY_ATTRIBUTES lpEventAttributes,
-               LPCSTR lpName,
-               DWORD dwFlags,
-               DWORD dwDesiredAccess)
-{
-    DPRINT1("CreateEventExA stub\n");
-    // Forward to CreateEventA for basic functionality
-    return CreateEventA(lpEventAttributes,
-                        (dwFlags & CREATE_EVENT_MANUAL_RESET) ? TRUE : FALSE,
-                        (dwFlags & CREATE_EVENT_INITIAL_SET) ? TRUE : FALSE,
-                        lpName);
-}
-
-HANDLE
-WINAPI
-CreateEventExW(LPSECURITY_ATTRIBUTES lpEventAttributes,
-               LPCWSTR lpName,
-               DWORD dwFlags,
-               DWORD dwDesiredAccess)
-{
-    DPRINT1("CreateEventExW stub\n");
-    // Forward to CreateEventW for basic functionality
-    return CreateEventW(lpEventAttributes,
-                        (dwFlags & CREATE_EVENT_MANUAL_RESET) ? TRUE : FALSE,
-                        (dwFlags & CREATE_EVENT_INITIAL_SET) ? TRUE : FALSE,
-                        lpName);
-}
-
-HANDLE
-WINAPI
-CreateMutexExA(LPSECURITY_ATTRIBUTES lpMutexAttributes,
-               LPCSTR lpName,
-               DWORD dwFlags,
-               DWORD dwDesiredAccess)
-{
-    DPRINT1("CreateMutexExA stub\n");
-    // Forward to CreateMutexA for basic functionality
-    return CreateMutexA(lpMutexAttributes,
-                        (dwFlags & CREATE_MUTEX_INITIAL_OWNER) ? TRUE : FALSE,
-                        lpName);
-}
-
-HANDLE
-WINAPI
-CreateMutexExW(LPSECURITY_ATTRIBUTES lpMutexAttributes,
-               LPCWSTR lpName,
-               DWORD dwFlags,
-               DWORD dwDesiredAccess)
-{
-    DPRINT1("CreateMutexExW stub\n");
-    // Forward to CreateMutexW for basic functionality
-    return CreateMutexW(lpMutexAttributes,
-                        (dwFlags & CREATE_MUTEX_INITIAL_OWNER) ? TRUE : FALSE,
-                        lpName);
-}
 
 /*
  * Windows 10 Console APIs
  */
 
-BOOL
-WINAPI
-GetConsoleScreenBufferInfoEx(HANDLE hConsoleOutput,
-                             PCONSOLE_SCREEN_BUFFER_INFOEX lpConsoleScreenBufferInfoEx)
-{
-    DPRINT1("GetConsoleScreenBufferInfoEx stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
-
-BOOL
-WINAPI
-SetConsoleScreenBufferInfoEx(HANDLE hConsoleOutput,
-                             PCONSOLE_SCREEN_BUFFER_INFOEX lpConsoleScreenBufferInfoEx)
-{
-    DPRINT1("SetConsoleScreenBufferInfoEx stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
 
 /*
  * Windows 10 Locale and Globalization APIs
@@ -324,19 +237,6 @@ GetUserDefaultLocaleName(LPWSTR lpLocaleName,
     return 0;
 }
 
-int
-WINAPI
-GetSystemDefaultLocaleName(LPWSTR lpLocaleName,
-                            int cchLocaleName)
-{
-    DPRINT1("GetSystemDefaultLocaleName stub\n");
-    if (lpLocaleName && cchLocaleName > 0)
-    {
-        wcscpy(lpLocaleName, L"en-US");
-        return 6;
-    }
-    return 0;
-}
 
 LCID
 WINAPI
@@ -385,32 +285,7 @@ RaiseFailFastException(PEXCEPTION_RECORD pExceptionRecord,
     TerminateProcess(GetCurrentProcess(), STATUS_FATAL_APP_EXIT);
 }
 
-DWORD
-WINAPI
-GetErrorMode(VOID)
-{
-    DPRINT1("GetErrorMode stub\n");
-    return 0;
-}
 
-BOOL
-WINAPI
-SetThreadErrorMode(DWORD dwNewMode,
-                   LPDWORD lpOldMode)
-{
-    DPRINT1("SetThreadErrorMode stub\n");
-    if (lpOldMode)
-        *lpOldMode = 0;
-    return TRUE;
-}
-
-DWORD
-WINAPI
-GetThreadErrorMode(VOID)
-{
-    DPRINT1("GetThreadErrorMode stub\n");
-    return 0;
-}
 
 /*
  * Windows 10 DLL Management APIs
@@ -449,3 +324,123 @@ RemoveDllDirectory(DLL_DIRECTORY_COOKIE Cookie)
     DPRINT1("RemoveDllDirectory stub\n");
     return TRUE;
 }
+
+/*
+ * Additional Windows 10 APIs
+ */
+
+PVOID
+WINAPI
+VirtualAllocFromApp(PVOID BaseAddress,
+                    SIZE_T Size,
+                    DWORD AllocationType,
+                    DWORD Protect)
+{
+    DPRINT1("VirtualAllocFromApp stub\n");
+    return VirtualAlloc(BaseAddress, Size, AllocationType, Protect);
+}
+
+BOOL
+WINAPI
+VirtualProtectFromApp(PVOID BaseAddress,
+                      SIZE_T Size,
+                      DWORD NewProtect,
+                      PDWORD OldProtect)
+{
+    DPRINT1("VirtualProtectFromApp stub\n");
+    return VirtualProtect(BaseAddress, Size, NewProtect, OldProtect);
+}
+
+HANDLE
+WINAPI
+OpenFileMappingFromApp(DWORD DesiredAccess,
+                       BOOL InheritHandle,
+                       LPCWSTR Name)
+{
+    DPRINT1("OpenFileMappingFromApp stub\n");
+    return OpenFileMappingW(DesiredAccess, InheritHandle, Name);
+}
+
+HANDLE
+WINAPI
+CreateFileMappingFromApp(HANDLE File,
+                         PSECURITY_ATTRIBUTES FileMappingAttributes,
+                         ULONG PageProtection,
+                         ULONG64 MaximumSize,
+                         PCWSTR Name)
+{
+    DPRINT1("CreateFileMappingFromApp stub\n");
+    return CreateFileMappingW(File, FileMappingAttributes, PageProtection, 
+                              (DWORD)(MaximumSize >> 32), (DWORD)MaximumSize, Name);
+}
+
+PVOID
+WINAPI
+MapViewOfFileFromApp(HANDLE FileMappingObject,
+                     ULONG DesiredAccess,
+                     ULONG64 FileOffset,
+                     SIZE_T NumberOfBytesToMap)
+{
+    DPRINT1("MapViewOfFileFromApp stub\n");
+    return MapViewOfFile(FileMappingObject, DesiredAccess,
+                         (DWORD)(FileOffset >> 32), (DWORD)FileOffset,
+                         NumberOfBytesToMap);
+}
+
+BOOL
+WINAPI
+UnmapViewOfFileEx(PVOID BaseAddress,
+                  ULONG UnmapFlags)
+{
+    DPRINT1("UnmapViewOfFileEx stub\n");
+    return UnmapViewOfFile(BaseAddress);
+}
+
+DWORD
+WINAPI
+OfferVirtualMemory(PVOID VirtualAddress,
+                   SIZE_T Size,
+                   DWORD Priority)
+{
+    DPRINT1("OfferVirtualMemory stub\n");
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+DWORD
+WINAPI
+ReclaimVirtualMemory(PVOID VirtualAddress,
+                     SIZE_T Size)
+{
+    DPRINT1("ReclaimVirtualMemory stub\n");
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+BOOL
+WINAPI
+MapUserPhysicalPagesScatterNuma(PVOID VirtualAddresses,
+                                 ULONG_PTR NumberOfPages,
+                                 PULONG_PTR PageArray,
+                                 USHORT NodeNumber)
+{
+    DPRINT1("MapUserPhysicalPagesScatterNuma stub\n");
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+
+BOOL
+WINAPI
+TryAcquireSRWLockExclusive(PSRWLOCK SRWLock)
+{
+    DPRINT1("TryAcquireSRWLockExclusive stub\n");
+    return FALSE;
+}
+
+BOOL
+WINAPI
+TryAcquireSRWLockShared(PSRWLOCK SRWLock)
+{
+    DPRINT1("TryAcquireSRWLockShared stub\n");
+    return FALSE;
+}
+

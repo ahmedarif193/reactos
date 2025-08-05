@@ -980,11 +980,15 @@ LdrShutdownProcess(VOID)
     RtlEnterCriticalSection(&LdrpLoaderLock);
 
     /* Cleanup trace logging data (Etw) */
+#if (NTDDI_VERSION < NTDDI_VISTA)
     if (SharedUserData->TraceLogging)
     {
         /* FIXME */
         DPRINT1("We don't support Etw yet.\n");
     }
+#else
+    /* On Vista+, TraceLogging is replaced by other fields */
+#endif
 
     /* Start at the end */
     ListHead = &Peb->Ldr->InInitializationOrderModuleList;
@@ -1099,11 +1103,15 @@ LdrShutdownThread(VOID)
             &LdrpImageEntry->BaseDllName);
 
     /* Cleanup trace logging data (Etw) */
+#if (NTDDI_VERSION < NTDDI_VISTA)
     if (SharedUserData->TraceLogging)
     {
         /* FIXME */
         DPRINT1("We don't support Etw yet.\n");
     }
+#else
+    /* On Vista+, TraceLogging is replaced by other fields */
+#endif
 
     /* Get the Ldr Lock */
     RtlEnterCriticalSection(&LdrpLoaderLock);
@@ -1246,7 +1254,11 @@ LdrShutdownThread(VOID)
     }
 
     /* Check for Fiber data */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    if (Teb->SameTebFlags & 0x4) /* DbgHasFiberData bit */
+#else
     if (Teb->HasFiberData)
+#endif
     {
         /* Free Fiber data*/
         RtlFreeHeap(RtlGetProcessHeap(), 0, Teb->NtTib.FiberData);

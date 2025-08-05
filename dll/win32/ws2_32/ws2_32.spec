@@ -71,8 +71,6 @@
 @ stdcall WSACloseEvent(long)
 @ stdcall WSAConnect(long ptr long ptr ptr ptr ptr)
 @ stdcall -stub -version=0x600+ WSAConnectByList(long ptr ptr ptr ptr ptr ptr ptr)
-@ stdcall -stub -version=0x600+ WSAConnectByNameA(long str str ptr ptr ptr ptr ptr ptr)
-@ stdcall -stub -version=0x600+ WSAConnectByNameW(long str str ptr ptr ptr ptr ptr ptr)
 @ stdcall WSACreateEvent()
 @ stdcall WSADuplicateSocketA(long long ptr)
 @ stdcall WSADuplicateSocketW(long long ptr)
@@ -104,7 +102,6 @@
 @ stdcall WSANSPIoctl(ptr long ptr long ptr long ptr ptr)
 @ stdcall WSANtohl(long long ptr)
 @ stdcall WSANtohs(long long ptr)
-@ stdcall -stub -version=0x600+ WSAPoll(ptr long long)
 @ stdcall -stub -version=0x600+ WSAProviderCompleteAsyncCall(ptr long)
 @ stdcall WSAProviderConfigChange(ptr ptr ptr)
 @ stdcall WSARecv(long ptr long ptr ptr ptr ptr)
@@ -189,7 +186,6 @@
 # Windows 10 Advanced Networking APIs
 @ stdcall -stub -version=0x600+ WSAConnectByNameA(long str str ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall -stub -version=0x600+ WSAConnectByNameW(long wstr wstr ptr ptr ptr ptr ptr ptr ptr)
-@ stdcall -stub -version=0x600+ WSAConnectByList(long ptr ptr ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall -stub -version=0x600+ WSAPoll(ptr long long)
 @ stdcall -stub -version=0x600+ WSASendMsg(long ptr long ptr ptr ptr)
 @ stdcall -stub -version=0x600+ WSARecvMsg(long ptr ptr ptr ptr ptr)
@@ -270,7 +266,7 @@
 @ stdcall -stub -version=0x600+ WSADuplicateSocketW(long long ptr)
 
 # Container and Virtualization Support
-@ stdcall -stub -version=0x600+ WSASetUdpSendMessageSize(long long)
-@ stdcall -stub -version=0x600+ WSAGetUdpSendMessageSize(long ptr)
-@ stdcall -stub -version=0x600+ WSASetUdpReceiveMessageSize(long long)
-@ stdcall -stub -version=0x600+ WSAGetUdpReceiveMessageSize(long ptr)
+@ stdcall -version=0x600+ WSASetUdpSendMessageSize(long long)
+@ stdcall -version=0x600+ WSAGetUdpSendMessageSize(long ptr)
+@ stdcall -version=0x600+ WSASetUdpReceiveMessageSize(long long)
+@ stdcall -version=0x600+ WSAGetUdpReceiveMessageSize(long ptr)

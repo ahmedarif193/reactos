@@ -787,3 +787,209 @@ DWORD WINAPI CheckStagingArea(VOID)
     /* Called by native explorer */
     return 0;
 }
+
+/*
+ * Windows 10 API Functions - Unimplemented
+ */
+
+EXTERN_C HRESULT
+WINAPI
+GetCurrentProcessExplicitAppUserModelID(PWSTR *AppID)
+{
+    FIXME("GetCurrentProcessExplicitAppUserModelID() stub\n");
+    if (AppID) *AppID = NULL;
+    return E_FAIL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SetCurrentProcessExplicitAppUserModelID(PCWSTR AppID)
+{
+    FIXME("SetCurrentProcessExplicitAppUserModelID() stub\n");
+    return E_FAIL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHAddFolderPathToLibrary(void *plib, PCWSTR pszFolderPath)
+{
+    FIXME("SHAddFolderPathToLibrary() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHCopyFileW(HWND hwnd, PCWSTR pszSrcFile, PCWSTR pszDestFile, DWORD dwFlags)
+{
+    FIXME("SHCopyFileW() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHCreateFileOpenDialog(REFIID riid, void **ppv)
+{
+    FIXME("SHCreateFileOpenDialog() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHCreateFileSaveDialog(REFIID riid, void **ppv)
+{
+    FIXME("SHCreateFileSaveDialog() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHCreateFolderBrowserDialog(REFIID riid, void **ppv)
+{
+    FIXME("SHCreateFolderBrowserDialog() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHCreateItemFromRelativeName(void *psiParent, PCWSTR pszName, void *pbc, REFIID riid, void **ppv)
+{
+    FIXME("SHCreateItemFromRelativeName() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHCreateItemInKnownFolder(REFKNOWNFOLDERID kfid, DWORD dwKFFlags, PCWSTR pszItem, REFIID riid, void **ppv)
+{
+    FIXME("SHCreateItemInKnownFolder() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHCreateLibrary(REFIID riid, void **ppv)
+{
+    FIXME("SHCreateLibrary() stub\n");
+    return E_NOTIMPL;
+}
+
+
+EXTERN_C HRESULT
+WINAPI
+SHDeleteFileW(HWND hwnd, PCWSTR pszPath, DWORD dwFlags)
+{
+    FIXME("SHDeleteFileW() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHFileOperationEx(LPSHFILEOPSTRUCTW lpFileOp, void *pProgressSink)
+{
+    FIXME("SHFileOperationEx() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHGetKnownFolderIDList(REFIID rfid, DWORD dwFlags, HANDLE hToken, void **ppidl)
+{
+    FIXME("SHGetKnownFolderIDList() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHGetKnownFolderItem(REFIID rfid, DWORD flags, HANDLE hToken, REFIID riid, void **ppv)
+{
+    FIXME("SHGetKnownFolderItem() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHGetPathFromIDListEx(void *pidl, PWSTR pszPath, DWORD cchPath, DWORD uOpts)
+{
+    FIXME("SHGetPathFromIDListEx() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHGetPropertyStoreForWindow(HWND hwnd, REFIID riid, void **ppv)
+{
+    FIXME("SHGetPropertyStoreForWindow() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHGetStockIconInfo(INT siid, UINT uFlags, void *psii)
+{
+    FIXME("SHGetStockIconInfo() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHLoadLibraryFromItem(void *psi, DWORD mode, REFIID riid, void **ppv)
+{
+    FIXME("SHLoadLibraryFromItem() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHMoveFileW(HWND hwnd, PCWSTR pszSrcFile, PCWSTR pszDestFile, DWORD dwFlags)
+{
+    FIXME("SHMoveFileW() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHOpenLibrary(PCWSTR pszLibraryPath, DWORD dwMode, REFIID riid, void **ppv)
+{
+    FIXME("SHOpenLibrary() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHRemoveFolderPathFromLibrary(void *plib, PCWSTR pszFolderPath)
+{
+    FIXME("SHRemoveFolderPathFromLibrary() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHRenameFileW(HWND hwnd, PCWSTR pszSrcFile, PCWSTR pszDestFile, DWORD dwFlags)
+{
+    FIXME("SHRenameFileW() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHResolveFolderPathInLibrary(void *plib, PCWSTR pszFolderPath, DWORD dwTimeout, PWSTR *ppszResolvedPath)
+{
+    FIXME("SHResolveFolderPathInLibrary() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHSaveLibrary(void *plib, void *psiLibraryFolder, PCWSTR pszLibraryName, DWORD lsf, void **ppsiNewItem)
+{
+    FIXME("SHSaveLibrary() stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHSetWindowPropertyStore(HWND hwnd, void *pps)
+{
+    FIXME("SHSetWindowPropertyStore() stub\n");
+    return E_NOTIMPL;
+}

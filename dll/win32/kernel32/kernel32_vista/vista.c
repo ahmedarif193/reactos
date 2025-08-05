@@ -9,8 +9,8 @@
 
 #include <k32_vista.h>
 
-#if _WIN32_WINNT != _WIN32_WINNT_VISTA
-#error "This file must be compiled with _WIN32_WINNT == _WIN32_WINNT_VISTA"
+#if _WIN32_WINNT < _WIN32_WINNT_VISTA
+#error "This file must be compiled with _WIN32_WINNT >= _WIN32_WINNT_VISTA"
 #endif
 
 // This is defined only in ntifs.h
@@ -737,5 +737,809 @@ SetThreadPreferredUILanguages(
     DPRINT1("%x %p %p\n", dwFlags, pwszLanguagesBuffer, pulNumLanguages);
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return FALSE;
+}
+
+
+/* Windows 10 API Stubs */
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+GetFileAttributesExFromAppW(LPCWSTR lpFileName,
+                           GET_FILEEX_INFO_LEVELS fInfoLevelId,
+                           LPVOID lpFileInformation)
+{
+    DPRINT1("GetFileAttributesExFromAppW stub: %S %d %p\n", lpFileName, fInfoLevelId, lpFileInformation);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+GetNumaNodeNumberFromHandle(HANDLE hFile,
+                           PUSHORT NodeNumber)
+{
+    DPRINT1("GetNumaNodeNumberFromHandle stub: %p %p\n", hFile, NodeNumber);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+GetPackageApplicationIds(PCWSTR packageFullName,
+                        UINT32 *packageApplicationIdLength,
+                        PWSTR *packageApplicationIds,
+                        UINT32 *applicationIdCount)
+{
+    DPRINT1("GetPackageApplicationIds stub: %S %p %p %p\n", packageFullName, packageApplicationIdLength, packageApplicationIds, applicationIdCount);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+GetPackageInfo(HANDLE hProcess,
+               DWORD flags,
+               UINT32 *bufferLength,
+               BYTE *buffer,
+               UINT32 *count)
+{
+    DPRINT1("GetPackageInfo stub: %p %lx %p %p %p\n", hProcess, flags, bufferLength, buffer, count);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+GetPackagePath(HANDLE hProcess,
+               DWORD reserved,
+               UINT32 *pathLength,
+               PWSTR path)
+{
+    DPRINT1("GetPackagePath stub: %p %lx %p %p\n", hProcess, reserved, pathLength, path);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+GetProcessGroupAffinity(HANDLE hProcess,
+                       PUSHORT GroupCount,
+                       PUSHORT GroupArray)
+{
+    DPRINT1("GetProcessGroupAffinity stub: %p %p %p\n", hProcess, GroupCount, GroupArray);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+GetStagedPackageOrigin(PCWSTR packageFullName,
+                      DWORD *origin)
+{
+    DPRINT1("GetStagedPackageOrigin stub: %S %p\n", packageFullName, origin);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+DWORD
+WINAPI
+GetTempPathFromAppW(DWORD nBufferLength,
+                   LPWSTR lpBuffer)
+{
+    DPRINT1("GetTempPathFromAppW stub: %lx %p\n", nBufferLength, lpBuffer);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return 0;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+GetThreadGroupAffinity(HANDLE hThread,
+                      PGROUP_AFFINITY GroupAffinity)
+{
+    DPRINT1("GetThreadGroupAffinity stub: %p %p\n", hThread, GroupAffinity);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+GetThreadIdealProcessorEx(HANDLE hThread,
+                         PPROCESSOR_NUMBER lpIdealProcessor)
+{
+    DPRINT1("GetThreadIdealProcessorEx stub: %p %p\n", hThread, lpIdealProcessor);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+MoveFileExFromAppW(LPCWSTR lpExistingFileName,
+                  LPCWSTR lpNewFileName,
+                  DWORD dwFlags)
+{
+    DPRINT1("MoveFileExFromAppW stub: %S %S %lx\n", lpExistingFileName, lpNewFileName, dwFlags);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+MoveFileFromAppW(LPCWSTR lpExistingFileName,
+                LPCWSTR lpNewFileName)
+{
+    DPRINT1("MoveFileFromAppW stub: %S %S\n", lpExistingFileName, lpNewFileName);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+PackageFamilyNameFromFullName(PCWSTR packageFullName,
+                             UINT32 *packageFamilyNameLength,
+                             PWSTR packageFamilyName)
+{
+    DPRINT1("PackageFamilyNameFromFullName stub: %S %p %p\n", packageFullName, packageFamilyNameLength, packageFamilyName);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+PackageFamilyNameFromId(HANDLE hProcess,
+                       UINT32 *packageFamilyNameLength,
+                       PWSTR packageFamilyName)
+{
+    DPRINT1("PackageFamilyNameFromId stub: %p %p %p\n", hProcess, packageFamilyNameLength, packageFamilyName);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+PackageFullNameFromId(HANDLE hProcess,
+                     UINT32 *packageFullNameLength,
+                     PWSTR packageFullName)
+{
+    DPRINT1("PackageFullNameFromId stub: %p %p %p\n", hProcess, packageFullNameLength, packageFullName);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+PackageIdFromFullName(PCWSTR packageFullName,
+                     DWORD flags,
+                     UINT32 *bufferLength,
+                     BYTE *buffer)
+{
+    DPRINT1("PackageIdFromFullName stub: %S %lx %p %p\n", packageFullName, flags, bufferLength, buffer);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+PackageNameAndPublisherIdFromFamilyName(PCWSTR packageFamilyName,
+                                       UINT32 *packageNameLength,
+                                       PWSTR packageName,
+                                       UINT32 *packagePublisherIdLength,
+                                       PWSTR packagePublisherId)
+{
+    DPRINT1("PackageNameAndPublisherIdFromFamilyName stub: %S %p %p %p %p\n", packageFamilyName, packageNameLength, packageName, packagePublisherIdLength, packagePublisherId);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+ParseApplicationUserModelId(PCWSTR applicationUserModelId,
+                           UINT32 *packageFamilyNameLength,
+                           PWSTR packageFamilyName,
+                           UINT32 *packageRelativeApplicationIdLength,
+                           PWSTR packageRelativeApplicationId)
+{
+    DPRINT1("ParseApplicationUserModelId stub: %S %p %p %p %p\n", applicationUserModelId, packageFamilyNameLength, packageFamilyName, packageRelativeApplicationIdLength, packageRelativeApplicationId);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegCopyTreeW(HKEY hKeySrc,
+            LPCWSTR lpSubKey,
+            HKEY hKeyDest)
+{
+    DPRINT1("RegCopyTreeW stub: %p %S %p\n", hKeySrc, lpSubKey, hKeyDest);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegCreateKeyTransactedA(HKEY hKey,
+                       LPCSTR lpSubKey,
+                       DWORD Reserved,
+                       LPSTR lpClass,
+                       DWORD dwOptions,
+                       DWORD samDesired,
+                       LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+                       PHKEY phkResult,
+                       LPDWORD lpdwDisposition)
+{
+    DPRINT1("RegCreateKeyTransactedA stub: %p %s %lx %s %lx %lx %p %p %p\n", hKey, lpSubKey, Reserved, lpClass, dwOptions, samDesired, lpSecurityAttributes, phkResult, lpdwDisposition);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegCreateKeyTransactedW(HKEY hKey,
+                       LPCWSTR lpSubKey,
+                       DWORD Reserved,
+                       LPWSTR lpClass,
+                       DWORD dwOptions,
+                       DWORD samDesired,
+                       LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+                       PHKEY phkResult,
+                       LPDWORD lpdwDisposition)
+{
+    DPRINT1("RegCreateKeyTransactedW stub: %p %S %lx %S %lx %lx %p %p %p\n", hKey, lpSubKey, Reserved, lpClass, dwOptions, samDesired, lpSecurityAttributes, phkResult, lpdwDisposition);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegDeleteKeyTransactedA(HKEY hKey,
+                       LPCSTR lpSubKey,
+                       DWORD samDesired,
+                       DWORD Reserved,
+                       HANDLE hTransaction)
+{
+    DPRINT1("RegDeleteKeyTransactedA stub: %p %s %lx %lx %p\n", hKey, lpSubKey, samDesired, Reserved, hTransaction);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegDeleteKeyTransactedW(HKEY hKey,
+                       LPCWSTR lpSubKey,
+                       DWORD samDesired,
+                       DWORD Reserved,
+                       HANDLE hTransaction)
+{
+    DPRINT1("RegDeleteKeyTransactedW stub: %p %S %lx %lx %p\n", hKey, lpSubKey, samDesired, Reserved, hTransaction);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegDeleteKeyValueA(HKEY hKey,
+                  LPCSTR lpSubKey,
+                  LPCSTR lpValueName)
+{
+    DPRINT1("RegDeleteKeyValueA stub: %p %s %s\n", hKey, lpSubKey, lpValueName);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegDeleteKeyValueW(HKEY hKey,
+                  LPCWSTR lpSubKey,
+                  LPCWSTR lpValueName)
+{
+    DPRINT1("RegDeleteKeyValueW stub: %p %S %S\n", hKey, lpSubKey, lpValueName);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegDeleteTreeA(HKEY hKey,
+              LPCSTR lpSubKey)
+{
+    DPRINT1("RegDeleteTreeA stub: %p %s\n", hKey, lpSubKey);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegDeleteTreeW(HKEY hKey,
+              LPCWSTR lpSubKey)
+{
+    DPRINT1("RegDeleteTreeW stub: %p %S\n", hKey, lpSubKey);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegDisableReflectionKey(HKEY hBase)
+{
+    DPRINT1("RegDisableReflectionKey stub: %p\n", hBase);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegEnableReflectionKey(HKEY hBase)
+{
+    DPRINT1("RegEnableReflectionKey stub: %p\n", hBase);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegGetValueA(HKEY hkey,
+            LPCSTR lpSubKey,
+            LPCSTR lpValue,
+            DWORD dwFlags,
+            LPDWORD pdwType,
+            PVOID pvData,
+            LPDWORD pcbData)
+{
+    DPRINT1("RegGetValueA stub: %p %s %s %lx %p %p %p\n", hkey, lpSubKey, lpValue, dwFlags, pdwType, pvData, pcbData);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegGetValueW(HKEY hkey,
+            LPCWSTR lpSubKey,
+            LPCWSTR lpValue,
+            DWORD dwFlags,
+            LPDWORD pdwType,
+            PVOID pvData,
+            LPDWORD pcbData)
+{
+    DPRINT1("RegGetValueW stub: %p %S %S %lx %p %p %p\n", hkey, lpSubKey, lpValue, dwFlags, pdwType, pvData, pcbData);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegLoadAppKeyA(LPCSTR lpFile,
+              PHKEY phkResult,
+              DWORD samDesired,
+              DWORD dwOptions,
+              DWORD Reserved)
+{
+    DPRINT1("RegLoadAppKeyA stub: %s %p %lx %lx %lx\n", lpFile, phkResult, samDesired, dwOptions, Reserved);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegLoadAppKeyW(LPCWSTR lpFile,
+              PHKEY phkResult,
+              DWORD samDesired,
+              DWORD dwOptions,
+              DWORD Reserved)
+{
+    DPRINT1("RegLoadAppKeyW stub: %S %p %lx %lx %lx\n", lpFile, phkResult, samDesired, dwOptions, Reserved);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegOpenKeyTransactedA(HKEY hKey,
+                     LPCSTR lpSubKey,
+                     DWORD ulOptions,
+                     DWORD samDesired,
+                     PHKEY phkResult,
+                     HANDLE hTransaction)
+{
+    DPRINT1("RegOpenKeyTransactedA stub: %p %s %lx %lx %p %p\n", hKey, lpSubKey, ulOptions, samDesired, phkResult, hTransaction);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegOpenKeyTransactedW(HKEY hKey,
+                     LPCWSTR lpSubKey,
+                     DWORD ulOptions,
+                     DWORD samDesired,
+                     PHKEY phkResult,
+                     HANDLE hTransaction)
+{
+    DPRINT1("RegOpenKeyTransactedW stub: %p %S %lx %lx %p %p\n", hKey, lpSubKey, ulOptions, samDesired, phkResult, hTransaction);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegQueryReflectionKey(HKEY hBase,
+                     BOOL *bIsReflectionDisabled)
+{
+    DPRINT1("RegQueryReflectionKey stub: %p %p\n", hBase, bIsReflectionDisabled);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegSetKeyValueA(HKEY hKey,
+               LPCSTR lpSubKey,
+               LPCSTR lpValueName,
+               DWORD dwType,
+               LPCVOID lpData,
+               DWORD cbData)
+{
+    DPRINT1("RegSetKeyValueA stub: %p %s %s %lx %p %lx\n", hKey, lpSubKey, lpValueName, dwType, lpData, cbData);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+RegSetKeyValueW(HKEY hKey,
+               LPCWSTR lpSubKey,
+               LPCWSTR lpValueName,
+               DWORD dwType,
+               LPCVOID lpData,
+               DWORD cbData)
+{
+    DPRINT1("RegSetKeyValueW stub: %p %S %S %lx %p %lx\n", hKey, lpSubKey, lpValueName, dwType, lpData, cbData);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+RemoveDirectoryFromAppW(LPCWSTR lpPathName)
+{
+    DPRINT1("RemoveDirectoryFromAppW stub: %S\n", lpPathName);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+ReplaceFileFromAppW(LPCWSTR lpReplacedFileName,
+                   LPCWSTR lpReplacementFileName,
+                   LPCWSTR lpBackupFileName,
+                   DWORD dwReplaceFlags,
+                   LPVOID lpExclude,
+                   LPVOID lpReserved)
+{
+    DPRINT1("ReplaceFileFromAppW stub: %S %S %S %lx %p %p\n", lpReplacedFileName, lpReplacementFileName, lpBackupFileName, dwReplaceFlags, lpExclude, lpReserved);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+SetCalendarInfoEx(LPCWSTR lpLocaleName,
+                 CALID Calendar,
+                 LPCWSTR lpCalData,
+                 CALTYPE CalType,
+                 LPCWSTR lpReserved)
+{
+    DPRINT1("SetCalendarInfoEx stub: %S %lx %S %lx %S\n", lpLocaleName, Calendar, lpCalData, CalType, lpReserved);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+SetFileAttributesFromAppW(LPCWSTR lpFileName,
+                         DWORD dwFileAttributes)
+{
+    DPRINT1("SetFileAttributesFromAppW stub: %S %lx\n", lpFileName, dwFileAttributes);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+SetLocaleInfoEx(LPCWSTR lpLocaleName,
+               LCTYPE LCType,
+               LPCWSTR lpLCData)
+{
+    DPRINT1("SetLocaleInfoEx stub: %S %lx %S\n", lpLocaleName, LCType, lpLCData);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+SetProcessGroupAffinity(HANDLE hProcess,
+                       CONST GROUP_AFFINITY *GroupAffinity)
+{
+    DPRINT1("SetProcessGroupAffinity stub: %p %p\n", hProcess, GroupAffinity);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+SetThreadGroupAffinity(HANDLE hThread,
+                      CONST GROUP_AFFINITY *GroupAffinity,
+                      PGROUP_AFFINITY PreviousGroupAffinity)
+{
+    DPRINT1("SetThreadGroupAffinity stub: %p %p %p\n", hThread, GroupAffinity, PreviousGroupAffinity);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+SetThreadIdealProcessorEx(HANDLE hThread,
+                         PPROCESSOR_NUMBER lpIdealProcessor,
+                         PPROCESSOR_NUMBER lpPreviousIdealProcessor)
+{
+    DPRINT1("SetThreadIdealProcessorEx stub: %p %p %p\n", hThread, lpIdealProcessor, lpPreviousIdealProcessor);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+HRESULT
+WINAPI
+CopyFile2(PCWSTR pwszExistingFileName,
+          PCWSTR pwszNewFileName,
+          COPYFILE2_EXTENDED_PARAMETERS *pExtendedParameters)
+{
+    DPRINT1("CopyFile2 stub: %S %S %p\n", pwszExistingFileName, pwszNewFileName, pExtendedParameters);
+    return HRESULT_FROM_WIN32(ERROR_CALL_NOT_IMPLEMENTED);
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+CopyFileExFromAppW(LPCWSTR lpExistingFileName,
+                  LPCWSTR lpNewFileName,
+                  PVOID lpProgressRoutine,
+                  LPVOID lpData,
+                  LPBOOL pbCancel,
+                  DWORD dwCopyFlags)
+{
+    DPRINT1("CopyFileExFromAppW stub: %S %S %p %p %p %lx\n", lpExistingFileName, lpNewFileName, lpProgressRoutine, lpData, pbCancel, dwCopyFlags);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+CopyFileFromAppW(LPCWSTR lpExistingFileName,
+                LPCWSTR lpNewFileName,
+                BOOL bFailIfExists)
+{
+    DPRINT1("CopyFileFromAppW stub: %S %S %d\n", lpExistingFileName, lpNewFileName, bFailIfExists);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+CreateDirectoryFromAppW(LPCWSTR lpPathName,
+                       LPCWSTR lpTemplateDirectory,
+                       LPSECURITY_ATTRIBUTES lpSecurityAttributes)
+{
+    DPRINT1("CreateDirectoryFromAppW stub: %S %S %p\n", lpPathName, lpTemplateDirectory, lpSecurityAttributes);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+HANDLE
+WINAPI
+CreateFileFromAppW(LPCWSTR lpFileName,
+                  DWORD dwDesiredAccess,
+                  DWORD dwShareMode,
+                  DWORD dwCreationDisposition,
+                  LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+                  DWORD dwFlagsAndAttributes,
+                  HANDLE hTemplateFile)
+{
+    DPRINT1("CreateFileFromAppW stub: %S %lx %lx %lx %p %lx %p\n", lpFileName, dwDesiredAccess, dwShareMode, dwCreationDisposition, lpSecurityAttributes, dwFlagsAndAttributes, hTemplateFile);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return INVALID_HANDLE_VALUE;
+}
+
+/*
+ * @unimplemented
+ */
+HANDLE
+WINAPI
+CreateRemoteThreadEx(HANDLE hProcess,
+                    LPSECURITY_ATTRIBUTES lpThreadAttributes,
+                    SIZE_T dwStackSize,
+                    PVOID lpStartAddress,
+                    LPVOID lpParameter,
+                    DWORD dwCreationFlags,
+                    PVOID lpAttributeList,
+                    LPDWORD lpThreadId)
+{
+    DPRINT1("CreateRemoteThreadEx stub: %p %p %Ix %p %p %lx %p %p\n", hProcess, lpThreadAttributes, dwStackSize, lpStartAddress, lpParameter, dwCreationFlags, lpAttributeList, lpThreadId);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return NULL;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+DeleteFileFromAppW(LPCWSTR lpFileName)
+{
+    DPRINT1("DeleteFileFromAppW stub: %S\n", lpFileName);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+HANDLE
+WINAPI
+FindFirstFileExFromAppW(LPCWSTR lpFileName,
+                       DWORD fInfoLevelId,
+                       LPVOID lpFindFileData,
+                       DWORD fSearchOp,
+                       LPVOID lpSearchFilter,
+                       DWORD dwAdditionalFlags)
+{
+    DPRINT1("FindFirstFileExFromAppW stub: %S %lx %p %lx %p %lx\n", lpFileName, fInfoLevelId, lpFindFileData, fSearchOp, lpSearchFilter, dwAdditionalFlags);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return INVALID_HANDLE_VALUE;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+FormatApplicationUserModelId(PCWSTR packageFamilyName,
+                            PCWSTR packageRelativeApplicationId,
+                            PWSTR applicationUserModelId,
+                            UINT32 *applicationUserModelIdLength)
+{
+    DPRINT1("FormatApplicationUserModelId stub: %S %S %p %p\n", packageFamilyName, packageRelativeApplicationId, applicationUserModelId, applicationUserModelIdLength);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+/*
+ * @unimplemented
+ */
+LONG
+WINAPI
+GetCurrentApplicationUserModelId(UINT32 *applicationUserModelIdLength,
+                                PWSTR applicationUserModelId)
+{
+    DPRINT1("GetCurrentApplicationUserModelId stub: %p %p\n", applicationUserModelIdLength, applicationUserModelId);
+    return ERROR_CALL_NOT_IMPLEMENTED;
 }
 

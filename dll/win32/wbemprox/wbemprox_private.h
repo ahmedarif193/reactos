@@ -202,6 +202,28 @@ struct query *addref_query( struct query * ) DECLSPEC_HIDDEN;
 void release_query( struct query *query ) DECLSPEC_HIDDEN;
 HRESULT exec_query( const WCHAR *, IEnumWbemClassObject ** ) DECLSPEC_HIDDEN;
 HRESULT parse_query( const WCHAR *, struct view **, struct list * ) DECLSPEC_HIDDEN;
+
+/* Parser interface - needed for generated parser */
+struct parser
+{
+    const WCHAR *cmd;
+    UINT idx;
+    UINT len;
+    HRESULT error;
+    struct view **view;
+    struct list *mem;
+};
+
+struct string
+{
+    const WCHAR *data;
+    int len;
+};
+
+/* Parser functions for bison-generated code */
+int wql_lex( void *val, struct parser *parser );
+int wql_error( struct parser *parser, const char *str );
+int wql_parse( struct parser *parser );
 HRESULT create_view( enum view_type, const WCHAR *, const struct keyword *, const WCHAR *, const struct property *,
                      const struct expr *, struct view ** ) DECLSPEC_HIDDEN;
 void destroy_view( struct view * ) DECLSPEC_HIDDEN;

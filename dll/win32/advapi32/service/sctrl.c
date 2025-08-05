@@ -1241,4 +1241,34 @@ done:
     return bRet;
 }
 
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+ControlServiceExA(IN SC_HANDLE hService,
+                  IN DWORD dwControl,
+                  IN DWORD dwInfoLevel,
+                  IN PVOID pControlParams)
+{
+    UNIMPLEMENTED;
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+ControlServiceExW(IN SC_HANDLE hService,
+                  IN DWORD dwControl,
+                  IN DWORD dwInfoLevel,
+                  IN PVOID pControlParams)
+{
+    UNIMPLEMENTED;
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
 /* EOF */

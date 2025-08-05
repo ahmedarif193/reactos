@@ -7,7 +7,7 @@
 
 /* We need NT6+ Ex definitions */
 #undef NTDDI_VERSION
-#define NTDDI_VERSION NTDDI_VISTA
+#define NTDDI_VERSION NTDDI_WIN10
 #include <ndk/exfuncs.h>
 
 #include "k32_vista.h"
