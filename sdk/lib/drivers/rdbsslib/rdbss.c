@@ -1397,7 +1397,7 @@ RxCanonicalizeNameAndObtainNetRoot(
     }
 
     /* Get/Create the associated VNetRoot for opening */
-    Status = RxFindOrConstructVirtualNetRoot(RxContext, &CanonicalName, NetRootType, NetRootName);
+    Status = RxFindOrConstructVirtualNetRoot(RxContext, RxContext->CurrentIrp, &CanonicalName, NetRootType, NetRootName);
     if (!NT_SUCCESS(Status) && Status != STATUS_PENDING &&
         BooleanFlagOn(RxContext->Flags, RX_CONTEXT_FLAG_MAILSLOT_REPARSE))
     {
@@ -1407,7 +1407,7 @@ RxCanonicalizeNameAndObtainNetRoot(
         Status = RxFirstCanonicalize(RxContext, FileName, &CanonicalName, &NetRootType);
         if (NT_SUCCESS(Status))
         {
-            Status = RxFindOrConstructVirtualNetRoot(RxContext, &CanonicalName, NetRootType, NetRootName);
+            Status = RxFindOrConstructVirtualNetRoot(RxContext, RxContext->CurrentIrp, &CanonicalName, NetRootType, NetRootName);
         }
     }
 
@@ -1532,8 +1532,8 @@ RxCleanupPipeQueues(
  */
 NTSTATUS
 RxCloseAssociatedSrvOpen(
-    IN PFOBX Fobx,
-    IN PRX_CONTEXT RxContext OPTIONAL)
+    IN PRX_CONTEXT RxContext OPTIONAL,
+    IN PFOBX Fobx)
 {
     PFCB Fcb;
     NTSTATUS Status;
@@ -2060,14 +2060,14 @@ RxCommonCleanup(
             if (NodeType(Fcb) == RDBSS_NTC_STORAGE_TYPE_FILE)
             {
                 /* First, unlock */
-                FsRtlFastUnlockAll(&Fcb->Specific.Fcb.FileLock, FileObject, RxGetRequestorProcess(Context), Context);
+                // FsRtlFastUnlockAll(&Fcb->Specific.Fcb.FileLock, FileObject, RxGetRequestorProcess(Context), Context); // Field not available in Win10 build
 
                 /* If there are still locks to release, proceed */
                 if (Context->LowIoContext.ParamsFor.Locks.LockList != NULL)
                 {
-                    RxInitializeLowIoContext(&Context->LowIoContext, LOWIO_OP_UNLOCK_MULTIPLE);
+                    RxInitializeLowIoContext(Context, LOWIO_OP_UNLOCK_MULTIPLE, &Context->LowIoContext);
                     Context->LowIoContext.ParamsFor.Locks.Flags = 0;
-                    Status = RxLowIoLockControlShell(Context);
+                    Status = RxLowIoLockControlShell(Context, Context->CurrentIrp, Fcb);
                 }
 
                 /* Fix times and size */
@@ -2365,7 +2365,7 @@ RxCommonClose(
                     if (BooleanFlagOn(Fobx->Flags, FOBX_FLAG_DELETE_ON_CLOSE))
                     {
                         RxScavengeRelatedFobxs(Fcb);
-                        RxSynchronizeWithScavenger(Context);
+                        RxSynchronizeWithScavenger(Context, Fcb);
 
                         RxReleaseFcb(Context, Fcb);
 
@@ -2389,7 +2389,7 @@ RxCommonClose(
         }
         else
         {
-            RxCloseAssociatedSrvOpen(Fobx, Context);
+            RxCloseAssociatedSrvOpen(Context, Fobx);
             if (Fobx != NULL)
             {
                 RxDereferenceNetFobx(Fobx, LHS_ExclusiveLockHeld);
@@ -2761,7 +2761,7 @@ RxCommonDevFCBIoCtl(
     {
         if (Context->PostRequest)
         {
-            Context->ResumeRoutine = RxCommonDevFCBIoCtl;
+            Context->ResumeRoutine = (PRX_DISPATCH)RxCommonDevFCBIoCtl;
             Status = RxFsdPostRequest(Context);
         }
     }
@@ -2798,8 +2798,8 @@ RxCommonDeviceControl(
     }
 
     /* Submit to mini-rdr */
-    RxInitializeLowIoContext(&Context->LowIoContext, LOWIO_OP_IOCTL);
-    Status = RxLowIoSubmit(Context, RxLowIoIoCtlShellCompletion);
+    RxInitializeLowIoContext(Context, LOWIO_OP_IOCTL, &Context->LowIoContext);
+    Status = RxLowIoSubmit(Context, Context->CurrentIrp, NULL, RxLowIoIoCtlShellCompletion);
     if (Status == STATUS_PENDING)
     {
         RxDereferenceAndDeleteRxContext_Real(Context);
@@ -2946,7 +2946,7 @@ RxCommonQueryInformation(
         PVOID Buffer;
 
         /* Get a writable buffer */
-        Buffer = RxMapSystemBuffer(Context);
+        Buffer = RxMapSystemBuffer(Context, Context->CurrentIrp);
         if (Buffer == NULL)
         {
             Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -3279,7 +3279,7 @@ RxCommonRead(
     }
 
     /* Init the lowio context for possible forward */
-    RxInitializeLowIoContext(LowIoContext, LOWIO_OP_READ);
+    RxInitializeLowIoContext(RxContext, LOWIO_OP_READ, LowIoContext);
 
     PostRequest = FALSE;
     ReadCachingDisabled = FALSE;
@@ -3393,11 +3393,11 @@ RxCommonRead(
         /* Make sure FLOCK doesn't conflict */
         if (!PagingIo)
         {
-            if (!FsRtlCheckLockForReadAccess(&Fcb->Specific.Fcb.FileLock, Irp))
-            {
-                Status = STATUS_FILE_LOCK_CONFLICT;
-                _SEH2_LEAVE;
-            }
+            // if (!FsRtlCheckLockForReadAccess(&Fcb->Specific.Fcb.FileLock, Irp)) // Field not available in this build
+            // {
+            //     Status = STATUS_FILE_LOCK_CONFLICT;
+            //     _SEH2_LEAVE;
+            // }
         }
 
         /* Validate byteoffset vs length */
@@ -4088,7 +4088,7 @@ RxCommonWrite(
     }
 
     /* Initialize the low IO context for write */
-    RxInitializeLowIoContext(LowIoContext, LOWIO_OP_WRITE);
+    RxInitializeLowIoContext(RxContext, LOWIO_OP_WRITE, LowIoContext);
 
     /* Initialize our (many) booleans */
     RecursiveWriteThrough = FALSE;
@@ -4318,10 +4318,10 @@ RxCommonWrite(
         /* If not paging IO, check if write is allowed */
         if (!PagingIo)
         {
-            if (!FsRtlCheckLockForWriteAccess(&Fcb->Specific.Fcb.FileLock, Irp))
-            {
-                _SEH2_TRY_RETURN(Status = STATUS_FILE_LOCK_CONFLICT);
-            }
+            // if (!FsRtlCheckLockForWriteAccess(&Fcb->Specific.Fcb.FileLock, Irp)) // Field not available in this build
+            // {
+            //     _SEH2_TRY_RETURN(Status = STATUS_FILE_LOCK_CONFLICT);
+            // }
         }
 
         /* Get file sizes */
@@ -4346,9 +4346,9 @@ RxCommonWrite(
         }
 
         /* If we're being called by the lazywrite */
-        if (Fcb->Specific.Fcb.LazyWriteThread == PsGetCurrentThread())
-        {
-            CalledByLazyWriter = TRUE;
+        // if (Fcb->Specific.Fcb.LazyWriteThread == PsGetCurrentThread()) // Field not available in this build
+        // {
+        //     CalledByLazyWriter = TRUE;
 
             /* Fail if we're beyong VDL */
             if (BooleanFlagOn(Fcb->Header.Flags, FSRTL_FLAG_USER_MAPPED_FILE))
@@ -4468,10 +4468,10 @@ RxCommonWrite(
         /* Check again whether we're allowed to write */
         if (!PagingIo)
         {
-            if (!FsRtlCheckLockForWriteAccess(&Fcb->Specific.Fcb.FileLock, Irp ))
-            {
-                _SEH2_TRY_RETURN(Status = STATUS_FILE_LOCK_CONFLICT);
-            }
+            // if (!FsRtlCheckLockForWriteAccess(&Fcb->Specific.Fcb.FileLock, Irp )) // Field not available in this build
+            // {
+            //     _SEH2_TRY_RETURN(Status = STATUS_FILE_LOCK_CONFLICT);
+            // }
 
             /* Do we have to extend? */
             if (NormalFile && (ByteOffset.QuadPart + WriteLength > FileSize))
@@ -4845,7 +4845,6 @@ try_exit: NOTHING;
     _SEH2_END;
 
 #undef _SEH2_TRY_RETURN
-
     return Status;
 }
 
@@ -4855,9 +4854,9 @@ try_exit: NOTHING;
 NTSTATUS
 NTAPI
 RxCompleteMdl(
-    IN PRX_CONTEXT RxContext)
+    IN PRX_CONTEXT RxContext,
+    IN PIRP Irp)
 {
-    PIRP Irp;
     PFILE_OBJECT FileObject;
     PIO_STACK_LOCATION Stack;
 
@@ -5174,7 +5173,7 @@ RxCreateFromNetRoot(
         }
 
         /* Create the FCB */
-        Fcb = RxCreateNetFcb(Context, (PV_NET_ROOT)Context->Create.pVNetRoot, NetRootName);
+        Fcb = RxCreateNetFcb(Context, Context->CurrentIrp, (PV_NET_ROOT)Context->Create.pVNetRoot, NetRootName);
         if (Fcb == NULL)
         {
             return STATUS_INSUFFICIENT_RESOURCES;
@@ -5445,11 +5444,11 @@ RxCreateTreeConnect(
     }
 
     /* Mount if required */
-    Status = RxFindOrConstructVirtualNetRoot(RxContext, &CanonicalName, NetRootType, &RemainingName);
+    Status = RxFindOrConstructVirtualNetRoot(RxContext, RxContext->CurrentIrp, &CanonicalName, NetRootType, &RemainingName);
     if (Status == STATUS_NETWORK_CREDENTIAL_CONFLICT)
     {
         RxScavengeVNetRoots(RxContext->RxDeviceObject);
-        Status = RxFindOrConstructVirtualNetRoot(RxContext, &CanonicalName, NetRootType, &RemainingName);
+        Status = RxFindOrConstructVirtualNetRoot(RxContext, RxContext->CurrentIrp, &CanonicalName, NetRootType, &RemainingName);
     }
 
     if (!NT_SUCCESS(Status))
@@ -5699,6 +5698,7 @@ RxFastIoCheckIfPossible(
     FsRtlExitFileSystem();
 
     LargeLength.QuadPart = Length;
+    UNREFERENCED_PARAMETER(LargeLength);
 
     /* If operation to come is a read operation */
     if (CheckForReadOperation)
@@ -5711,16 +5711,16 @@ RxFastIoCheckIfPossible(
         }
 
         /* Check whether there's a lock conflict */
-        if (!FsRtlFastCheckLockForRead(&Fcb->Specific.Fcb.FileLock,
-                                       FileOffset,
-                                       &LargeLength,
-                                       LockKey,
-                                       FileObject,
-                                       PsGetCurrentProcess()))
-        {
-            DPRINT1("FsRtlFastCheckLockForRead failed\n");
-            return FALSE;
-        }
+        // if (!FsRtlFastCheckLockForRead(&Fcb->Specific.Fcb.FileLock, // Field not available in this build
+        //                                FileOffset,
+        //                                &LargeLength,
+        //                                LockKey,
+        //                                FileObject,
+        //                                PsGetCurrentProcess()))
+        // {
+        //     DPRINT1("FsRtlFastCheckLockForRead failed\n");
+        //     return FALSE;
+        // }
 
         return TRUE;
     }
@@ -5733,16 +5733,16 @@ RxFastIoCheckIfPossible(
     }
 
     /* Check whether there's a lock conflict */
-    if (!FsRtlFastCheckLockForWrite(&Fcb->Specific.Fcb.FileLock,
-                                    FileOffset,
-                                    &LargeLength,
-                                    LockKey,
-                                    FileObject,
-                                    PsGetCurrentProcess()))
-    {
-        DPRINT1("FsRtlFastCheckLockForWrite failed\n");
-        return FALSE;
-    }
+    // if (!FsRtlFastCheckLockForWrite(&Fcb->Specific.Fcb.FileLock, // Field not available in this build
+    //                                 FileOffset,
+    //                                 &LargeLength,
+    //                                 LockKey,
+    //                                 FileObject,
+    //                                 PsGetCurrentProcess()))
+    // {
+    //     DPRINT1("FsRtlFastCheckLockForWrite failed\n");
+    //     return FALSE;
+    // }
 
     return TRUE;
 }
@@ -5950,7 +5950,7 @@ RxFindOrCreateFcb(
     {
         if (Fcb == NULL)
         {
-            Fcb = RxCreateNetFcb(RxContext, VNetRoot, NetRootName);
+            Fcb = RxCreateNetFcb(RxContext, RxContext->CurrentIrp, VNetRoot, NetRootName);
             if (Fcb == NULL)
             {
                 Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -6374,7 +6374,7 @@ RxFsdCommonDispatch(
             /* Handle the complete MDL case */
             if (BooleanFlagOn(MinorFunction, IRP_MN_COMPLETE))
             {
-                DispatchFunc = RxCompleteMdl;
+                DispatchFunc = (PRX_FSD_DISPATCH)RxCompleteMdl;
             }
             else
             {
@@ -6393,7 +6393,7 @@ RxFsdCommonDispatch(
                         if (IoGetRemainingStackSize() < 0xE00)
                         {
                             Context->PendingReturned = TRUE;
-                            Status = RxPostStackOverflowRead(Context);
+                            Status = RxPostStackOverflowRead(Context, (PFCB)Context->pFcb);
                             if (Status != STATUS_PENDING)
                             {
                                 Context->PendingReturned = FALSE;
@@ -6407,7 +6407,7 @@ RxFsdCommonDispatch(
             }
         }
 
-        Context->ResumeRoutine = DispatchFunc;
+        Context->ResumeRoutine = (PRX_DISPATCH)DispatchFunc;
         /* There's a dispatch routine? Time to dispatch! */
         if (DispatchFunc != NULL)
         {
@@ -6645,7 +6645,7 @@ RxFspDispatch(
 
             NoComplete = BooleanFlagOn(RxContext->Flags, RX_CONTEXT_FLAG_NO_COMPLETE_FROM_FSP);
 
-            Status = RxContext->ResumeRoutine(RxContext);
+            Status = RxContext->ResumeRoutine(RxContext, RxContext->CurrentIrp);
             if (!NoComplete && Status != STATUS_PENDING)
             {
                 if (Status != STATUS_RETRY)
@@ -6931,10 +6931,10 @@ RxInitializeDispatchVectors(
     RxData.CacheManagerCallbacks.AcquireForReadAhead = RxAcquireFcbForReadAhead;
     RxData.CacheManagerCallbacks.ReleaseFromReadAhead = RxReleaseFcbFromReadAhead;
 
-    RxData.CacheManagerNoOpCallbacks.AcquireForLazyWrite = RxNoOpAcquire;
-    RxData.CacheManagerNoOpCallbacks.ReleaseFromLazyWrite = RxNoOpRelease;
-    RxData.CacheManagerNoOpCallbacks.AcquireForReadAhead = RxNoOpAcquire;
-    RxData.CacheManagerNoOpCallbacks.ReleaseFromReadAhead = RxNoOpRelease;
+    // RxData.CacheManagerNoOpCallbacks.AcquireForLazyWrite = RxNoOpAcquire; // Field not available in this build
+    // RxData.CacheManagerNoOpCallbacks.ReleaseFromLazyWrite = RxNoOpRelease; // Field not available in this build
+    // RxData.CacheManagerNoOpCallbacks.AcquireForReadAhead = RxNoOpAcquire; // Field not available in this build
+    // RxData.CacheManagerNoOpCallbacks.ReleaseFromReadAhead = RxNoOpRelease; // Field not available in this build
 }
 
 NTSTATUS
@@ -7210,7 +7210,9 @@ RxLowIoIoCtlShellCompletion(
 
 NTSTATUS
 RxLowIoLockControlShell(
-    IN PRX_CONTEXT RxContext)
+    IN PRX_CONTEXT RxContext,
+    IN PIRP Irp,
+    IN PFCB Fcb)
 {
     UNIMPLEMENTED;
     return STATUS_NOT_IMPLEMENTED;
@@ -7262,7 +7264,7 @@ RxLowIoReadShell(
     }
 
     /* And forward the read to the mini-rdr */
-    Status = RxLowIoSubmit(RxContext, RxLowIoReadShellCompletion);
+    Status = RxLowIoSubmit(RxContext, RxContext->CurrentIrp, Fcb, RxLowIoReadShellCompletion);
     DPRINT("RxLowIoReadShell(%p), Status: %lx\n", RxContext, Status);
 
     return Status;
@@ -7405,7 +7407,7 @@ RxLowIoWriteShell(
     }
 
     /* And forward the write to the mini-rdr */
-    Status = RxLowIoSubmit(RxContext, RxLowIoWriteShellCompletion);
+    Status = RxLowIoSubmit(RxContext, RxContext->CurrentIrp, Fcb, RxLowIoWriteShellCompletion);
     DPRINT("RxLowIoWriteShell(%p), Status: %lx\n", RxContext, Status);
 
     return Status;
@@ -7566,13 +7568,13 @@ RxNotifyChangeDirectory(
     SetFlag(RxContext->Flags, RX_CONTEXT_FLAG_WAIT);
 
     /* Initialize its lowio */
-    RxInitializeLowIoContext(&RxContext->LowIoContext, LOWIO_OP_NOTIFY_CHANGE_DIRECTORY);
+    RxInitializeLowIoContext(RxContext, LOWIO_OP_NOTIFY_CHANGE_DIRECTORY, &RxContext->LowIoContext);
 
     _SEH2_TRY
     {
         /* Lock user buffer */
         Stack = RxContext->CurrentIrpSp;
-        RxLockUserBuffer(RxContext, IoWriteAccess, Stack->Parameters.NotifyDirectory.Length);
+        RxLockUserBuffer(RxContext, RxContext->CurrentIrp, IoWriteAccess, Stack->Parameters.NotifyDirectory.Length);
 
         /* Copy parameters from IO_STACK */
         RxContext->LowIoContext.ParamsFor.NotifyChangeDirectory.WatchTree = BooleanFlagOn(Stack->Flags, SL_WATCH_TREE);
@@ -7587,7 +7589,7 @@ RxNotifyChangeDirectory(
             RxContext->LowIoContext.ParamsFor.NotifyChangeDirectory.pNotificationBuffer = MmGetSystemAddressForMdlSafe(Irp->MdlAddress, NormalPagePriority);
             if (RxContext->LowIoContext.ParamsFor.NotifyChangeDirectory.pNotificationBuffer != NULL)
             {
-                Status = RxLowIoSubmit(RxContext, RxLowIoNotifyChangeDirectoryCompletion);
+                Status = RxLowIoSubmit(RxContext, RxContext->CurrentIrp, NULL, RxLowIoNotifyChangeDirectoryCompletion);
             }
             else
             {
@@ -7630,7 +7632,7 @@ RxpCancelRoutine(
     /* If we didn't find in overflow queue, try in blocking operations */
     else if (!RxCancelOperationInOverflowQueue(RxContext))
     {
-        RxCancelBlockingOperation(RxContext);
+        RxCancelBlockingOperation(RxContext, RxContext->CurrentIrp);
     }
 
     /* And delete the context */
@@ -7639,7 +7641,8 @@ RxpCancelRoutine(
 
 NTSTATUS
 RxPostStackOverflowRead (
-    IN PRX_CONTEXT RxContext)
+    IN PRX_CONTEXT RxContext,
+    IN PFCB Fcb)
 {
     PAGED_CODE();
 
@@ -7671,13 +7674,13 @@ RxpPrepareCreateContextForReuse(
     if (RxContext->Create.pVNetRoot != NULL || RxContext->Create.NetNamePrefixEntry != NULL)
     {
         /* Remove our link and thus, dereference the VNetRoot */
-        RxpAcquirePrefixTableLockShared(RxContext->RxDeviceObject->pRxNetNameTable, TRUE, TRUE);
+        RxAcquirePrefixTableLockShared(RxContext->RxDeviceObject->pRxNetNameTable, TRUE);
         if (RxContext->Create.pVNetRoot != NULL)
         {
             RxDereferenceVNetRoot(RxContext->Create.pVNetRoot, TRUE);
             RxContext->Create.pVNetRoot = NULL;
         }
-        RxpReleasePrefixTableLock(RxContext->RxDeviceObject->pRxNetNameTable, TRUE);
+        RxReleasePrefixTableLock(RxContext->RxDeviceObject->pRxNetNameTable);
     }
 
     DPRINT("RxContext: %p prepared for reuse\n", RxContext);
@@ -7784,7 +7787,7 @@ RxPrefixClaim(
     /* It went fine, attempt to establish a connection (that way we know whether the prefix is accepted) */
     if (NT_SUCCESS(Status))
     {
-        Status = RxFindOrConstructVirtualNetRoot(RxContext, &CanonicalName, NetRootType, &NetRootName);
+        Status = RxFindOrConstructVirtualNetRoot(RxContext, Irp, &CanonicalName, NetRootType, &NetRootName);
     }
     if (Status == STATUS_PENDING)
     {
@@ -7936,7 +7939,7 @@ RxPrePostIrp(
             {
                 Lock = IoWriteAccess;
             }
-            RxLockUserBuffer(RxContext, Lock, Stack->Parameters.Read.Length);
+            RxLockUserBuffer(RxContext, Irp, Lock, Stack->Parameters.Read.Length);
         }
     }
     else
@@ -7945,11 +7948,11 @@ RxPrePostIrp(
             RxContext->MajorFunction == IRP_MJ_QUERY_EA)
         {
             Lock = IoWriteAccess;
-            RxLockUserBuffer(RxContext, Lock, Stack->Parameters.QueryDirectory.Length);
+            RxLockUserBuffer(RxContext, Irp, Lock, Stack->Parameters.QueryDirectory.Length);
         }
         else if (RxContext->MajorFunction == IRP_MJ_SET_EA)
         {
-            RxLockUserBuffer(RxContext, Lock, Stack->Parameters.SetEa.Length);
+            RxLockUserBuffer(RxContext, Irp, Lock, Stack->Parameters.SetEa.Length);
         }
     }
 
@@ -8231,7 +8234,7 @@ RxQueryDirectory(
         /* Lock user buffer and forward to mini-rdr */
         if (NT_SUCCESS(Status))
         {
-            RxLockUserBuffer(RxContext, IoModifyAccess, Length);
+            RxLockUserBuffer(RxContext, Irp, IoModifyAccess, Length);
             RxContext->Info.FileInformationClass = FileInfoClass;
             RxContext->Info.Buffer = RxNewMapUserBuffer(RxContext);
             RxContext->Info.Length = Length;
@@ -9575,7 +9578,7 @@ RxXXXControlFileCallthru(
     }
 
     /* Init the lowio context */
-    Status = RxLowIoPopulateFsctlInfo(Context);
+    Status = RxLowIoPopulateFsctlInfo(Context, Context->CurrentIrp);
     if (!NT_SUCCESS(Status))
     {
         return Status;
