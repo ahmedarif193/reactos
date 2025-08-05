@@ -13,6 +13,71 @@
 
 #include <scsi.h>
 
+#if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
+typedef struct _STORAGE_HW_FIRMWARE_SLOT_INFO {
+    ULONG Version;
+    ULONG Size;
+    UCHAR SlotNumber;
+    UCHAR ReadOnly:1;
+    UCHAR Reserved0:7;
+    UCHAR Reserved1[6];
+    UCHAR Revision[16];
+} STORAGE_HW_FIRMWARE_SLOT_INFO, *PSTORAGE_HW_FIRMWARE_SLOT_INFO;
+
+typedef struct _STORAGE_HW_FIRMWARE_INFO {
+    ULONG Version;
+    ULONG Size;
+    UCHAR SupportUpgrade:1;
+    UCHAR Reserved0:7;
+    UCHAR SlotCount;
+    UCHAR ActiveSlot;
+    UCHAR PendingActivateSlot;
+    BOOLEAN FirmwareShared;
+    UCHAR Reserved[16];
+    ULONG ImagePayloadAlignment;
+    ULONG ImagePayloadMaxSize;
+    STORAGE_HW_FIRMWARE_SLOT_INFO Slot[1];
+} STORAGE_HW_FIRMWARE_INFO, *PSTORAGE_HW_FIRMWARE_INFO;
+
+typedef struct _ADDITIONAL_FDO_DATA {
+    ULONG HwFirmwareInfoSize;
+    PSTORAGE_HW_FIRMWARE_INFO HwFirmwareInfo;
+} ADDITIONAL_FDO_DATA, *PADDITIONAL_FDO_DATA;
+
+typedef struct _STORAGE_HW_FIRMWARE_ACTIVATE {
+    ULONG Version;
+    ULONG Size;
+    ULONG Flags;
+    UCHAR Slot;
+    UCHAR Reserved[3];
+} STORAGE_HW_FIRMWARE_ACTIVATE, *PSTORAGE_HW_FIRMWARE_ACTIVATE;
+
+#define STORAGE_HW_FIRMWARE_REQUEST_FLAG_CONTROLLER     0x00000001
+#define STORAGE_HW_FIRMWARE_REQUEST_FLAG_LAST_SEGMENT   0x00000002
+#define STORAGE_HW_FIRMWARE_REQUEST_FLAG_FIRST_SEGMENT  0x00000004
+#define STORAGE_HW_FIRMWARE_REQUEST_FLAG_REPLACE_EXISTING_IMAGE     0x40000000
+#define STORAGE_HW_FIRMWARE_REQUEST_FLAG_SWITCH_TO_EXISTING_FIRMWARE 0x80000000
+
+typedef struct _STORAGE_HW_FIRMWARE_DOWNLOAD {
+    ULONG Version;
+    ULONG Size;
+    ULONG Flags;
+    UCHAR Slot;
+    UCHAR Reserved[3];
+    ULONGLONG Offset;
+    ULONGLONG BufferSize;
+    UCHAR ImageBuffer[1];
+} STORAGE_HW_FIRMWARE_DOWNLOAD, *PSTORAGE_HW_FIRMWARE_DOWNLOAD;
+
+typedef struct _STORAGE_HW_FIRMWARE_INFO_QUERY {
+    ULONG Version;
+    ULONG Size;
+    ULONG Flags;
+    UCHAR Reserved[4];
+} STORAGE_HW_FIRMWARE_INFO_QUERY, *PSTORAGE_HW_FIRMWARE_INFO_QUERY;
+
+#endif
+
 #define max(a,b) (((a) > (b)) ? (a) : (b))
 #define min(a,b) (((a) < (b)) ? (a) : (b))
 
@@ -1492,6 +1557,11 @@ typedef VOID
 (NTAPI *PCLASS_SCAN_FOR_SPECIAL_HANDLER)(
   _In_ PFUNCTIONAL_DEVICE_EXTENSION FdoExtension,
   _In_ ULONG_PTR Data);
+
+BOOLEAN
+NTAPI
+ClassDeviceHwFirmwareIsPortDriverSupported(
+  _In_ PDEVICE_OBJECT DeviceObject);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID

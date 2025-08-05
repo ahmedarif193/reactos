@@ -1338,7 +1338,7 @@ _ExAcquireFastMutexUnsafe(IN PFAST_MUTEX FastMutex)
     ASSERT((KeGetCurrentIrql() == APC_LEVEL) ||
            (Thread->CombinedApcDisable != 0) ||
            (Thread->Teb == NULL) ||
-           (Thread->Teb >= (PTEB)MM_SYSTEM_RANGE_START));
+           ((ULONG_PTR)Thread->Teb >= (ULONG_PTR)MM_SYSTEM_RANGE_START));
     ASSERT(FastMutex->Owner != Thread);
 
     /* Decrease the count */
@@ -1359,7 +1359,7 @@ _ExReleaseFastMutexUnsafe(IN OUT PFAST_MUTEX FastMutex)
     ASSERT((KeGetCurrentIrql() == APC_LEVEL) ||
            (KeGetCurrentThread()->CombinedApcDisable != 0) ||
            (KeGetCurrentThread()->Teb == NULL) ||
-           (KeGetCurrentThread()->Teb >= (PTEB)MM_SYSTEM_RANGE_START));
+           ((ULONG_PTR)KeGetCurrentThread()->Teb >= (ULONG_PTR)MM_SYSTEM_RANGE_START));
     ASSERT(FastMutex->Owner == KeGetCurrentThread());
 
     /* Erase the owner */

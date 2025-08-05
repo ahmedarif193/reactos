@@ -195,6 +195,9 @@ typedef union _MM_PREFETCH_FLAGS {
   struct {
     ULONG Priority : SYSTEM_PAGE_PRIORITY_BITS;
     ULONG RepurposePriority : SYSTEM_PAGE_PRIORITY_BITS;
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    ULONG PriorityProtection : 1;
+#endif
   } Flags;
   ULONG AllFlags;
 } MM_PREFETCH_FLAGS, *PMM_PREFETCH_FLAGS;

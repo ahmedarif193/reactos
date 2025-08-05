@@ -88,9 +88,8 @@ typedef struct _FLT_PORT *PFLT_PORT;
 
 typedef PVOID PFLT_CONTEXT;
 
-#if !FLT_MGR_LONGHORN
+/* Forward declaration for transaction support */
 typedef struct _KTRANSACTION *PKTRANSACTION;
-#endif
 
 #if !defined(_AMD64_) && !defined(_IA64_) && !defined(_ARM_)
 #include "pshpack4.h"

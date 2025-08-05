@@ -463,6 +463,8 @@ typedef enum _KPROFILE_SOURCE {
   ProfileMaximum
 } KPROFILE_SOURCE;
 
+#ifndef _KWAIT_REASON_DEFINED
+#define _KWAIT_REASON_DEFINED
 typedef enum _KWAIT_REASON {
   Executive,
   FreePage,
@@ -503,6 +505,7 @@ typedef enum _KWAIT_REASON {
   WrRundown,
   MaximumWaitReason
 } KWAIT_REASON;
+#endif // _KWAIT_REASON_DEFINED
 
 typedef struct _KWAIT_BLOCK {
   LIST_ENTRY WaitListEntry;

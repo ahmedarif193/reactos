@@ -2046,6 +2046,13 @@ NtGdiGetFontFileData(
     _In_ SIZE_T cjBuf);
 
 #if (_WIN32_WINNT >= _WIN32_WINNT_WIN7)
+/* Windows 7+ font file information structures */
+typedef struct _FONT_FILE_INFO {
+    ULONG Size;
+    ULONG FilePathLength;
+    WCHAR FilePath[1];
+} FONT_FILE_INFO, *PFONT_FILE_INFO;
+
 __kernel_entry
 W32KAPI
 DWORD
@@ -3037,6 +3044,29 @@ NtGdiGetFontUnicodeRanges(
 
 #ifdef LANGPACK
 #if (_WIN32_WINNT >= _WIN32_WINNT_WIN7)
+/* Windows 7+ font realization information structure */
+typedef struct _FONT_REALIZATION_INFO {
+    ULONG Size;
+    ULONG Flags;
+    ULONG EmHeight;
+    ULONG Ascent;
+    ULONG Descent;
+    ULONG InternalLeading;
+    ULONG ExternalLeading;
+    ULONG AveCharWidth;
+    ULONG MaxCharWidth;
+    ULONG Weight;
+    ULONG Italic;
+    ULONG Underline;
+    ULONG StrikeOut;
+    ULONG CharSet;
+    ULONG OutPrecision;
+    ULONG ClipPrecision;
+    ULONG Quality;
+    ULONG PitchAndFamily;
+    WCHAR FaceName[LF_FACESIZE];
+} FONT_REALIZATION_INFO, *PFONT_REALIZATION_INFO;
+
 __kernel_entry
 W32KAPI
 BOOL

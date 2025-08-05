@@ -30,6 +30,19 @@ Author:
 extern "C" {
 #endif
 
+// Windows 10 compatibility type definitions
+#ifndef PMMWSLE_NONDIRECT_HASH
+typedef struct _MMWSLE_NONDIRECT_HASH *PMMWSLE_NONDIRECT_HASH;
+#endif
+
+#ifndef WSLE_NUMBER
+typedef ULONG WSLE_NUMBER;
+#endif
+
+#ifndef MMPFNENTRY
+typedef ULONG MMPFNENTRY;
+#endif
+
 //
 // Page-Rounding Macros
 //

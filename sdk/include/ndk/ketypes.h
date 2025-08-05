@@ -383,6 +383,8 @@ typedef enum _ALTERNATIVE_ARCHITECTURE_TYPE
 //
 // Thread States
 //
+#ifndef _KTHREAD_STATE_DEFINED
+#define _KTHREAD_STATE_DEFINED
 typedef enum _KTHREAD_STATE
 {
     Initialized,
@@ -397,6 +399,7 @@ typedef enum _KTHREAD_STATE
     GateWait
 #endif
 } KTHREAD_STATE, *PKTHREAD_STATE;
+#endif // _KTHREAD_STATE_DEFINED
 
 //
 // Kernel Object Types
@@ -1912,6 +1915,12 @@ typedef struct _KTHREAD
         };
     };
 
+#if (NTDDI_VERSION < NTDDI_WIN8)
+    /* ReactOS compatibility fields for older Windows versions */
+    KSPIN_LOCK ApcQueueLock;
+    volatile ULONG DeferredProcessor;
+#endif
+
 #ifndef _WIN64
     ULONG ContextSwitches;
     volatile UCHAR State;
@@ -2028,7 +2037,11 @@ typedef struct _KTHREAD
             ULONG SharedReadyQueue : 1;
         };
     };
+#if (NTDDI_VERSION >= NTDDI_WINBLUE)
     LONG QueuePriority;
+#else
+    ULONG DeferredProcessor;
+#endif
 #else
     ULONG NextProcessor;
     ULONG DeferredProcessor;
@@ -2283,7 +2296,7 @@ typedef struct _KPROCESS
         UCHAR Union;
         struct {
             UCHAR IdealNode2 : 6;
-            UCHAR ReservedFlags : 2;
+            UCHAR ReservedFlags2 : 2;
         };
     };
     union {
@@ -2322,7 +2335,7 @@ typedef struct _KPROCESS
     };
     ULONG KernelTime3;
     ULONG UserTime3;
-    ULONG ReadyListHead;
+    ULONG ReadyListHead2;
     SINGLE_LIST_ENTRY SwapListEntry3;
     volatile PVOID VdmTrapcHandler2;
     LIST_ENTRY ThreadListHead3;

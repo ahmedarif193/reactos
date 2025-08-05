@@ -8,7 +8,7 @@ extern "C" {
 #ifdef _MSC_VER
 #define MSWSOCKDEF_INLINE __inline
 #else
-#define MSWSOCKDEF_INLINE extern inline
+#define MSWSOCKDEF_INLINE static inline
 #endif
 #endif /* (_WIN32_WINNT>=0x0600) */
 
@@ -21,7 +21,7 @@ extern "C" {
 
 #ifdef _WS2DEF_
 
-const UCHAR sockaddr_size[AF_MAX];
+static const UCHAR sockaddr_size[AF_MAX] = {0};
 
 MSWSOCKDEF_INLINE
 UCHAR

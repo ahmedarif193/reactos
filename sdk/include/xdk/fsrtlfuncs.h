@@ -107,6 +107,58 @@ FsRtlGetFileSize(
   _In_ PFILE_OBJECT FileObject,
   _Out_ PLARGE_INTEGER FileSize);
 
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+_Must_inspect_result_
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+FsRtlGetSectorSizeInformation(
+  _In_ PDEVICE_OBJECT DeviceObject,
+  _Out_ PFILE_FS_SECTOR_SIZE_INFORMATION SectorSizeInfo);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+FsRtlDismountComplete(
+  _In_ PDEVICE_OBJECT TargetDeviceObject,
+  _In_ NTSTATUS DismountStatus);
+
+_Must_inspect_result_
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+BOOLEAN
+NTAPI
+FsRtlAreThereCurrentOrInProgressFileLocks(
+  _In_ PFILE_LOCK FileLock);
+
+_Must_inspect_result_
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+BOOLEAN
+NTAPI
+FsRtlCheckLockForOplockRequest(
+  _In_ PFILE_LOCK FileLock,
+  _In_ PLARGE_INTEGER AllocationSize);
+
+_Must_inspect_result_
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+BOOLEAN
+NTAPI
+FsRtlAreThereWaitingFileLocks(
+  _In_ PFILE_LOCK FileLock);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+FsRtlUpdateDiskCounters(
+  _In_ ULONG64 BytesRead,
+  _In_ ULONG64 BytesWritten);
+#endif
+
 _Must_inspect_result_
 NTKERNELAPI
 BOOLEAN

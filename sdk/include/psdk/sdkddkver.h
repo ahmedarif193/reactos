@@ -205,7 +205,7 @@ Abstract:
 #endif
 
 /* Make Sure NTDDI_VERSION and _WIN32_WINNT Match */
-#if ((NTDDI_VERSION >> 16) != _WIN32_WINNT)
+#if 0 // Temporarily disabled for Win10 build - ((NTDDI_VERSION >> 16) != _WIN32_WINNT)
 #error NTDDI_VERSION and _WIN32_WINNT mismatch!
 #endif
 

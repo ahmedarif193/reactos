@@ -2329,7 +2329,7 @@ _Success_(return)
 _Kernel_float_restored_
 _At_(*pBuffer, _Kernel_requires_resource_held_(EngFloatState)
                _Kernel_releases_resource_(EngFloatState))
-ENGAPI
+static inline
 BOOL
 APIENTRY
 EngRestoreFloatingPointState(
@@ -2346,7 +2346,7 @@ _Success_(((pBuffer != NULL && cjBufferSize != 0) && return == 1) ||
 _When_(pBuffer != NULL && cjBufferSize != 0 && return == 1, _Kernel_float_saved_
     _At_(*pBuffer, _Post_valid_ _Kernel_acquires_resource_(EngFloatState)))
 _On_failure_(_Post_satisfies_(return == 0))
-ENGAPI
+static inline
 ULONG
 APIENTRY
 EngSaveFloatingPointState(

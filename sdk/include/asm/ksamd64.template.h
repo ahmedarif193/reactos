@@ -468,7 +468,9 @@ OFFSET(PbNestingLevel, KPRCB, NestingLevel),
 OFFSET(PbRspBase, KPRCB, RspBase),
 OFFSET(PbPrcbLock, KPRCB, PrcbLock),
 #if (NTDDI_VERSION >= NTDDI_VISTA)
+#if (NTDDI_VERSION < NTDDI_WIN10)
 OFFSET(PbPriorityState, KPRCB, PriorityState),
+#endif
 #endif /* (NTDDI_VERSION >= NTDDI_VISTA) */
 OFFSET(PbSetMember, KPRCB, SetMember), // not Win 10
 OFFSET(PbProcessorState, KPRCB, ProcessorState),
@@ -824,6 +826,7 @@ OFFSET(UcContextLock, RTL_UMS_CONTEXT, ContextLock),
 OFFSET(UcPrimaryUmsContext, RTL_UMS_CONTEXT, PrimaryUmsContext),
 SIZE(RTL_UMS_CONTEXT_LENGTH, RTL_UMS_CONTEXT),
 
+#if (NTDDI_VERSION < NTDDI_WIN10)
 HEADER("KUMS_CONTEXT_HEADER offsets"),
 OFFSET(UchStackTop, KUMS_CONTEXT_HEADER, StackTop),
 OFFSET(UchStackSize, KUMS_CONTEXT_HEADER, StackSize),
@@ -838,12 +841,13 @@ SIZE(KUMS_CONTEXT_HEADER_LENGTH, KUMS_CONTEXT_HEADER),
 HEADER("UMS_CONTROL_BLOCK offsets"),
 OFFSET(UcbUmsTeb, UMS_CONTROL_BLOCK, UmsTeb),
 #endif
+#endif
 
 HEADER("XSTATE_CONFIGURATION offsets"),
 OFFSET(XcfgEnabledFeatures, XSTATE_CONFIGURATION, EnabledFeatures),
 #if (NTDDI_VERSION >= NTDDI_WIN10)
 OFFSET(XcfgEnabledVolatileFeatures, XSTATE_CONFIGURATION, EnabledFeatures),
-OFFSET(XcfgEnabledSupervisorFeatures, XSTATE_CONFIGURATION, EnabledSupervisorFeaturestures),
+OFFSET(XcfgEnabledSupervisorFeatures, XSTATE_CONFIGURATION, EnabledSupervisorFeatures),
 #endif
 
 HEADER("XSTATE_CONTEXT offsets"),
@@ -868,8 +872,10 @@ OFFSET(ThUcb, KTHREAD, Ucb),
 
 #if (NTDDI_VERSION >= NTDDI_VISTA)
 HEADER("KPROCESS offsets"),
+#if (NTDDI_VERSION < NTDDI_WIN10)
 OFFSET(PrLdtSystemDescriptor, KPROCESS, LdtSystemDescriptor), // not Win 10
 OFFSET(PrLdtBaseAddress, KPROCESS, LdtBaseAddress), // not Win 10
+#endif
 #endif
 
 
@@ -1047,7 +1053,9 @@ OFFSET(KTHREAD_TrapFrame, KTHREAD, TrapFrame),
 OFFSET(KTHREAD_PreviousMode, KTHREAD, PreviousMode),
 OFFSET(KTHREAD_KernelStack, KTHREAD, KernelStack),
 OFFSET(KTHREAD_UserApcPending, KTHREAD, ApcState.UserApcPending),
+#if (NTDDI_VERSION < NTDDI_WIN10)
 OFFSET(KTHREAD_LargeStack, KTHREAD, LargeStack),
+#endif
 
 HEADER("KINTERRUPT"),
 OFFSET(KINTERRUPT_Type, KINTERRUPT, Type),

@@ -24,6 +24,11 @@ Author:
 //
 #include <umtypes.h>
 
+// Windows 10 compatibility type definitions
+#ifndef PSECURITY_CAPABILITIES
+typedef struct _SECURITY_CAPABILITIES *PSECURITY_CAPABILITIES;
+#endif
+
 //
 // Well Known SIDs
 //

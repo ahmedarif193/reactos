@@ -2505,6 +2505,18 @@ IoInitializePriorityInfo(
     PriorityInfo->IoPriority = IoPriorityNormal;
     PriorityInfo->PagePriority = 0;
 }
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoRetrievePriorityInfo(
+    _In_opt_ PIRP Irp,
+    _In_ PFILE_OBJECT FileObject,
+    _In_ PETHREAD Thread,
+    _Out_ PIO_PRIORITY_INFO PriorityInfo);
+#endif
+
 $endif (_NTIFS_)
 #endif /* (NTDDI_VERSION >= NTDDI_VISTA) */
 

@@ -102,7 +102,9 @@
 #define MI_PAGE_WRITE_THROUGH(x)   ((x)->u.Hard.WriteThrough = 1)
 #define MI_PAGE_WRITE_COMBINED(x)  ((x)->u.Hard.WriteThrough = 0)
 #define MI_IS_PAGE_LARGE(x)        ((x)->u.Hard.LargePage == 1)
-#if !defined(CONFIG_SMP)
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+#define MI_IS_PAGE_WRITEABLE(x)    ((x)->u.Hard.Write == 1)
+#elif !defined(CONFIG_SMP)
 #define MI_IS_PAGE_WRITEABLE(x)    ((x)->u.Hard.Write == 1)
 #else
 #define MI_IS_PAGE_WRITEABLE(x)    ((x)->u.Hard.Writable == 1)

@@ -364,7 +364,7 @@ typedef enum _MI_PFN_USAGES
 #define StartOfAllocation ReadInProgress
 #define EndOfAllocation WriteInProgress
 
-typedef struct _MMPFNENTRY
+typedef struct _MMPFNENTRY_FLAGS
 {
     USHORT Modified:1;
     USHORT ReadInProgress:1;                 // StartOfAllocation
@@ -376,7 +376,7 @@ typedef struct _MMPFNENTRY
     USHORT CacheAttribute:2;
     USHORT Rom:1;
     USHORT ParityError:1;
-} MMPFNENTRY;
+} MMPFNENTRY_FLAGS;
 
 #ifdef _WIN64
 #define MI_PTE_FRAME_BITS 57
@@ -409,7 +409,7 @@ typedef struct _MMPFN
         struct
         {
             USHORT ReferenceCount;
-            MMPFNENTRY e1;
+            MMPFNENTRY_FLAGS e1;
         };
         struct
         {
@@ -1699,14 +1699,22 @@ MmLockAddressSpace(PMMSUPPORT AddressSpace)
     ASSERT(!PsGetCurrentThread()->OwnsSystemWorkingSetShared);
     ASSERT(!PsGetCurrentThread()->OwnsSessionWorkingSetExclusive);
     ASSERT(!PsGetCurrentThread()->OwnsSessionWorkingSetShared);
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ExAcquirePushLockExclusive(&CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock);
+#else
     KeAcquireGuardedMutex(&CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock);
+#endif
 }
 
 FORCEINLINE
 VOID
 MmUnlockAddressSpace(PMMSUPPORT AddressSpace)
 {
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ExReleasePushLockExclusive(&CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock);
+#else
     KeReleaseGuardedMutex(&CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock);
+#endif
 }
 
 FORCEINLINE

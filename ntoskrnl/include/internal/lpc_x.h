@@ -128,6 +128,12 @@ FORCEINLINE
 PLPCP_MESSAGE
 LpcpGetMessageFromThread(IN PETHREAD Thread)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* Windows 10: LpcReplyMessage field was removed, use LpcReplyMessageId2 as a stub */
+    /* In Windows 10, LPC implementation was redesigned - return NULL for compatibility */
+    UNREFERENCED_PARAMETER(Thread);
+    return NULL;
+#else
     /* Check if the port flag is set */
     if (((ULONG_PTR)Thread->LpcReplyMessage) & LPCP_THREAD_FLAG_IS_PORT)
     {
@@ -137,12 +143,18 @@ LpcpGetMessageFromThread(IN PETHREAD Thread)
 
     /* Otherwise, this is a message. Return the pointer */
     return (PLPCP_MESSAGE)((ULONG_PTR)Thread->LpcReplyMessage & ~LPCP_THREAD_FLAGS);
+#endif
 }
 
 FORCEINLINE
 PLPCP_PORT_OBJECT
 LpcpGetPortFromThread(IN PETHREAD Thread)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* Windows 10: LpcWaitingOnPort field was removed - return NULL for compatibility */
+    UNREFERENCED_PARAMETER(Thread);
+    return NULL;
+#else
     /* Check if the port flag is set */
     if (((ULONG_PTR)Thread->LpcReplyMessage) & LPCP_THREAD_FLAG_IS_PORT)
     {
@@ -153,6 +165,7 @@ LpcpGetPortFromThread(IN PETHREAD Thread)
 
     /* Otherwise, this is a message. There is nothing to return */
     return NULL;
+#endif
 }
 
 FORCEINLINE
@@ -160,9 +173,15 @@ VOID
 LpcpSetPortToThread(IN PETHREAD Thread,
                     IN PLPCP_PORT_OBJECT Port)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* Windows 10: LpcWaitingOnPort field was removed - no-op for compatibility */
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(Port);
+#else
     /* Set the port object */
     Thread->LpcWaitingOnPort = (PVOID)(((ULONG_PTR)Port) |
                                        LPCP_THREAD_FLAG_IS_PORT);
+#endif
 }
 
 FORCEINLINE

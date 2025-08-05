@@ -36,6 +36,41 @@ Author:
 extern "C" {
 #endif
 
+// Additional type definitions for Windows 10 compatibility
+#ifndef PTR_ADDEND
+typedef ULONG_PTR PTR_ADDEND;
+#endif
+
+#ifndef PTRAP_FRAME
+typedef struct _KTRAP_FRAME *PTRAP_FRAME;
+#endif
+
+#ifndef VOLATILE
+#define VOLATILE volatile
+#endif
+
+#ifndef RTL_AVL_TREE
+typedef struct _RTL_AVL_TREE {
+    struct _RTL_BALANCED_NODE *Root;
+} RTL_AVL_TREE;
+#endif
+
+#ifndef PMMWSLE_NONDIRECT_HASH
+typedef struct _MMWSLE_NONDIRECT_HASH *PMMWSLE_NONDIRECT_HASH;
+#endif
+
+#ifndef WSLE_NUMBER
+typedef ULONG WSLE_NUMBER;
+#endif
+
+#ifndef MMPFNENTRY
+typedef ULONG MMPFNENTRY;
+#endif
+
+#ifndef PSECURITY_CAPABILITIES
+typedef struct _SECURITY_CAPABILITIES *PSECURITY_CAPABILITIES;
+#endif
+
 #ifndef NTOS_MODE_USER
 
 //
@@ -300,6 +335,8 @@ typedef struct _SCHED_SHARED_READY_QUEUE
 } SCHED_SHARED_READY_QUEUE, *PSCHED_SHARED_READY_QUEUE;
 
 // Thread State
+#if !defined(_THREAD_STATE_DEFINED) && !defined(_KTHREAD_STATE_DEFINED)
+#define _THREAD_STATE_DEFINED
 typedef enum _THREAD_STATE
 {
     Initialized,
@@ -314,8 +351,14 @@ typedef enum _THREAD_STATE
     WaitingForProcessInSwap,
     MaximumThreadState
 } THREAD_STATE, *PTHREAD_STATE;
+#else
+// If KTHREAD_STATE is already defined, alias THREAD_STATE to it
+typedef KTHREAD_STATE THREAD_STATE, *PTHREAD_STATE;
+#endif // !defined(_THREAD_STATE_DEFINED) && !defined(_KTHREAD_STATE_DEFINED)
 
 // Wait Reason  
+#ifndef _KWAIT_REASON_DEFINED
+#define _KWAIT_REASON_DEFINED
 typedef enum _KWAIT_REASON
 {
     Executive = 0,
@@ -360,6 +403,7 @@ typedef enum _KWAIT_REASON
     WrPhysicalFault = 39,
     MaximumWaitReason = 40
 } KWAIT_REASON, *PKWAIT_REASON;
+#endif // _KWAIT_REASON_DEFINED
 
 #endif // NTDDI_WIN10
 
@@ -1809,7 +1853,7 @@ typedef struct _EPROCESS
     union {
         struct {
             ULONG64 DefaultCpuSetsIndirect : 1;
-            ULONG64 Unused : 63;
+            ULONG64 Unused2 : 63;
         };
         ULONG64 DefaultCpuSets;
     };

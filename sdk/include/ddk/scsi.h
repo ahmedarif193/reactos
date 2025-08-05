@@ -289,6 +289,10 @@ extern "C" {
 #define SCSIOP_COPY_COMPARE             0x3A
 #define SCSIOP_WRITE_DATA_BUFF          0x3B
 #define SCSIOP_READ_DATA_BUFF           0x3C
+
+/* SCSI Write Buffer Mode values */
+#define SCSI_WRITE_BUFFER_MODE_ACTIVATE_DEFERRED_MICROCODE     0x0F
+#define SCSI_WRITE_BUFFER_MODE_DOWNLOAD_MICROCODE_WITH_OFFSETS_SAVE_DEFER_ACTIVATE 0x0E
 #define SCSIOP_WRITE_LONG               0x3F
 #define SCSIOP_CHANGE_DEFINITION        0x40
 #define SCSIOP_WRITE_SAME               0x41
@@ -2030,6 +2034,16 @@ typedef union _CDB {
     UCHAR Reserved2;
     UCHAR Control;
   } GET_LBA_STATUS;
+  struct _WRITE_BUFFER {
+    UCHAR OperationCode;
+    UCHAR Mode:5;
+    UCHAR Reserved1:3;
+    UCHAR BufferID;
+    UCHAR BufferOffset[3];
+    UCHAR ParameterListLength[3];
+    UCHAR ModeSpecific;
+    UCHAR Control;
+  } WRITE_BUFFER;
   ULONG AsUlong[4];
   UCHAR AsByte[16];
 } CDB, *PCDB;

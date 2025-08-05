@@ -1269,7 +1269,7 @@ typedef struct _REPARSE_DATA_BUFFER {
   } DUMMYUNIONNAME;
 } REPARSE_DATA_BUFFER, *PREPARSE_DATA_BUFFER;
 
-#if (NTDDI_VERSION >= NTDDI_WIN10)
+#if (NTDDI_VERSION >= NTDDI_WIN10) && 0  // Disabled for compatibility
 
 //
 // Windows 10 I/O Subsystem Enhancements

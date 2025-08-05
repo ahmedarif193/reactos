@@ -1046,6 +1046,20 @@ KeExpandKernelStackAndCallout(
   _In_opt_ PVOID Parameter,
   _In_ SIZE_T Size);
 
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+_Must_inspect_result_
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+KeExpandKernelStackAndCalloutEx(
+  _In_ PEXPAND_STACK_CALLOUT Callout,
+  _In_opt_ PVOID Parameter,
+  _In_ SIZE_T Size,
+  _In_ BOOLEAN Wait,
+  _In_opt_ PVOID Context);
+#endif
+
 _Acquires_lock_(_Global_critical_region_)
 _IRQL_requires_max_(APC_LEVEL)
 NTKERNELAPI

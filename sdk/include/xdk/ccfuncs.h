@@ -130,6 +130,20 @@ CcCopyRead(
   _Out_writes_bytes_(Length) PVOID Buffer,
   _Out_ PIO_STATUS_BLOCK IoStatus);
 
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+NTKERNELAPI
+BOOLEAN
+NTAPI
+CcCopyReadEx(
+  _In_ PFILE_OBJECT FileObject,
+  _In_ PLARGE_INTEGER FileOffset,
+  _In_ ULONG Length,
+  _In_ BOOLEAN Wait,
+  _Out_writes_bytes_(Length) PVOID Buffer,
+  _Out_ PIO_STATUS_BLOCK IoStatus,
+  _In_opt_ PVOID Context);
+#endif
+
 NTKERNELAPI
 VOID
 NTAPI
@@ -150,6 +164,19 @@ CcCopyWrite(
   _In_ ULONG Length,
   _In_ BOOLEAN Wait,
   _In_reads_bytes_(Length) PVOID Buffer);
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+NTKERNELAPI
+BOOLEAN
+NTAPI
+CcCopyWriteEx(
+  _In_ PFILE_OBJECT FileObject,
+  _In_ PLARGE_INTEGER FileOffset,
+  _In_ ULONG Length,
+  _In_ BOOLEAN Wait,
+  _In_reads_bytes_(Length) PVOID Buffer,
+  _In_ PETHREAD IoIssuerThread);
+#endif
 
 NTKERNELAPI
 VOID

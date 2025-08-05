@@ -208,7 +208,7 @@ typedef struct STRUCT(_PEB)
         struct
         {
             ULONG SixtySecondEnabled : 1;
-            ULONG Reserved : 31;
+            ULONG ReservedLeapSecond : 31;
         };
     };
     ULONG NtGlobalFlag2;
@@ -254,7 +254,7 @@ typedef struct STRUCT(_PEB)
             ULONGLONG EnableModuleTamperingProtectionNoInherit : 1;
             ULONGLONG RestrictIndirectBranchPrediction : 1;
             ULONGLONG IsolateSecurityDomain : 1;
-            ULONGLONG Reserved : 34;
+            ULONGLONG ReservedMitigation : 34;
         };
     };
     // Energy Values and Package Information
@@ -265,7 +265,7 @@ typedef struct STRUCT(_PEB)
     PTR(PVOID) ProcessActivationContextData;
     PTR(PVOID) AssemblyStorageMap;
     PTR(PVOID) SystemDefaultActivationData;
-    PTR(PVOID) SystemAssemblyStorageMap;
+    PTR(PVOID) SystemAssemblyStorageMap2;
     PTR(ULONG_PTR) MinimumStackCommit2;
     PTR(PVOID) SparePointers[2];
     PTR(PVOID) PatchLoaderData;

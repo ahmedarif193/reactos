@@ -2134,6 +2134,13 @@ UINT WINAPI GetSystemDirectoryW(LPWSTR,UINT);
 
 VOID WINAPI GetSystemInfo(LPSYSTEM_INFO);
 BOOL WINAPI GetSystemPowerStatus(_Out_ LPSYSTEM_POWER_STATUS);
+
+#if (_WIN32_WINNT >= 0x0600)
+BOOL WINAPI GetNumaHighestNodeNumber(_Out_ PULONG HighestNodeNumber);
+BOOL WINAPI GetNumaAvailableMemoryNode(_In_ UCHAR Node, _Out_ PULONGLONG AvailableBytes);  
+BOOL WINAPI GetNumaNodeProcessorMask(_In_ UCHAR Node, _Out_ PULONGLONG ProcessorMask);
+BOOL WINAPI GetNumaProcessorNode(_In_ UCHAR Processor, _Out_ PUCHAR NodeNumber);
+#endif
 #if (_WIN32_WINNT >= 0x0502)
 BOOL WINAPI GetSystemRegistryQuota(_Out_opt_ PDWORD, _Out_opt_ PDWORD);
 #endif
@@ -2985,6 +2992,9 @@ SetFirmwareEnvironmentVariableExA(
 #else
 #define SetFirmwareEnvironmentVariableEx SetFirmwareEnvironmentVariableExA
 #endif
+
+/* Forward declaration for Windows 8+ */
+typedef enum _FIRMWARE_TYPE FIRMWARE_TYPE, *PFIRMWARE_TYPE;
 
 _Success_(return)
 WINBASEAPI

@@ -1388,6 +1388,10 @@ typedef enum _FSINFOCLASS {
   FileFsObjectIdInformation,
   FileFsDriverPathInformation,
   FileFsVolumeFlagsInformation,
+  FileFsSectorSizeInformation,
+  FileFsDataCopyInformation,
+  FileFsMetadataSizeInformation,
+  FileFsFullSizeInformationEx,
   FileFsMaximumInformation
 } FS_INFORMATION_CLASS, *PFS_INFORMATION_CLASS;
 
@@ -3387,6 +3391,7 @@ $if (_WDMDDK_)
 #define FILE_ATTRIBUTE_ENCRYPTED          0x00004000
 #define FILE_ATTRIBUTE_INTEGRITY_STREAM   0x00008000
 #define FILE_ATTRIBUTE_VIRTUAL            0x00010000
+#define FILE_ATTRIBUTE_NO_SCRUB_DATA      0x00020000
 
 #define FILE_ATTRIBUTE_VALID_FLAGS        0x00007fb7
 #define FILE_ATTRIBUTE_VALID_SET_FLAGS    0x000031a7
@@ -4414,6 +4419,8 @@ typedef enum _CONFIGURATION_TYPE {
 #define IRP_MN_UNLOCK_ALL_BY_KEY          0x04
 
 #define IRP_MN_FLUSH_AND_PURGE          0x01
+#define IRP_MN_FLUSH_DATA_ONLY           0x02
+#define IRP_MN_FLUSH_NO_SYNC             0x03
 
 #define IRP_MN_NORMAL                     0x00
 #define IRP_MN_DPC                        0x01
@@ -5765,6 +5772,69 @@ typedef struct _FILE_ID_BOTH_DIR_INFORMATION {
   WCHAR FileName[1];
 } FILE_ID_BOTH_DIR_INFORMATION, *PFILE_ID_BOTH_DIR_INFORMATION;
 
+typedef struct _FILE_ID_128 {
+  UCHAR Identifier[16];
+} FILE_ID_128, *PFILE_ID_128;
+
+typedef struct _FILE_ID_EXTD_DIR_INFORMATION {
+  ULONG NextEntryOffset;
+  ULONG FileIndex;
+  LARGE_INTEGER CreationTime;
+  LARGE_INTEGER LastAccessTime;
+  LARGE_INTEGER LastWriteTime;
+  LARGE_INTEGER ChangeTime;
+  LARGE_INTEGER EndOfFile;
+  LARGE_INTEGER AllocationSize;
+  ULONG FileAttributes;
+  ULONG FileNameLength;
+  ULONG EaSize;
+  ULONG ReparsePointTag;
+  FILE_ID_128 FileId;
+  WCHAR FileName[1];
+} FILE_ID_EXTD_DIR_INFORMATION, *PFILE_ID_EXTD_DIR_INFORMATION;
+
+typedef struct _FILE_RENAME_INFORMATION_EX {
+  union {
+    BOOLEAN ReplaceIfExists;
+    ULONG Flags;
+  };
+  HANDLE RootDirectory;
+  ULONG FileNameLength;
+  WCHAR FileName[1];
+} FILE_RENAME_INFORMATION_EX, *PFILE_RENAME_INFORMATION_EX;
+
+typedef struct _FILE_DISPOSITION_INFORMATION_EX {
+  ULONG Flags;
+} FILE_DISPOSITION_INFORMATION_EX, *PFILE_DISPOSITION_INFORMATION_EX;
+
+typedef struct _FILE_LINK_INFORMATION_EX {
+  union {
+    BOOLEAN ReplaceIfExists;
+    ULONG Flags;
+  };
+  HANDLE RootDirectory;
+  ULONG FileNameLength;
+  WCHAR FileName[1];
+} FILE_LINK_INFORMATION_EX, *PFILE_LINK_INFORMATION_EX;
+
+#define FILE_RENAME_REPLACE_IF_EXISTS                       0x001
+#define FILE_RENAME_POSIX_SEMANTICS                         0x002
+#define FILE_RENAME_IGNORE_READONLY_ATTRIBUTE               0x040
+#define FILE_RENAME_FORCE_RESIZE_TARGET_SR                  0x080
+#define FILE_RENAME_FORCE_RESIZE_SOURCE_SR                  0x100
+
+#define FILE_DISPOSITION_DELETE                             0x001
+#define FILE_DISPOSITION_POSIX_SEMANTICS                    0x002
+#define FILE_DISPOSITION_FORCE_IMAGE_SECTION_CHECK          0x004
+#define FILE_DISPOSITION_ON_CLOSE                           0x008
+#define FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE          0x010
+
+#define FILE_LINK_REPLACE_IF_EXISTS                         0x001
+#define FILE_LINK_POSIX_SEMANTICS                           0x002
+#define FILE_LINK_IGNORE_READONLY_ATTRIBUTE                 0x040
+#define FILE_LINK_FORCE_RESIZE_TARGET_SR                    0x080
+#define FILE_LINK_FORCE_RESIZE_SOURCE_SR                    0x100
+
 typedef struct _FILE_NAMES_INFORMATION {
   ULONG NextEntryOffset;
   ULONG FileIndex;
@@ -6871,6 +6941,14 @@ typedef struct _FILE_FS_PERSISTENT_VOLUME_INFORMATION {
   ULONG Version;
   ULONG Reserved;
 } FILE_FS_PERSISTENT_VOLUME_INFORMATION, *PFILE_FS_PERSISTENT_VOLUME_INFORMATION;
+
+typedef struct _FILE_FS_SECTOR_SIZE_INFORMATION {
+  ULONG LogicalBytesPerSector;
+  ULONG PhysicalBytesPerSectorForAtomicity;
+  ULONG PhysicalBytesPerSectorForPerformance;
+  ULONG FileSystemEffectivePhysicalBytesPerSectorForAtomicity;
+  ULONG Flags;
+} FILE_FS_SECTOR_SIZE_INFORMATION, *PFILE_FS_SECTOR_SIZE_INFORMATION;
 
 typedef struct _FILE_SYSTEM_RECOGNITION_INFORMATION {
   CHAR FileSystem[9];

@@ -44,6 +44,37 @@ RtlRaiseException(
     PEXCEPTION_RECORD ExceptionRecord
 );
 
+// Default DLL entry point for stub modules
+#if !defined(HINSTANCE) && !defined(_WINDEF_) && !defined(_MINWINDEF_)
+typedef void* HINSTANCE;
+typedef void* LPVOID;
+#ifndef _WINDEF_
+typedef int BOOL;
+#define TRUE 1
+#define FALSE 0
+#define DLL_PROCESS_ATTACH 1
+#define DLL_THREAD_ATTACH 2
+#define DLL_THREAD_DETACH 3
+#define DLL_PROCESS_DETACH 0
+#endif
+#endif
+
+// Provide default DllMain for stub modules only if not already defined
+#ifndef STUB_NO_DEFAULT_DLLMAIN
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+__attribute__((weak)) BOOL __stdcall DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
+{
+    return TRUE;
+}
+
+#ifdef __cplusplus
+}
+#endif
+#endif
+
 ULONG
 __cdecl
 DbgPrint(
