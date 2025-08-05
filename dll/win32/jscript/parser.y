@@ -26,11 +26,12 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(jscript);
 
-static int parser_error(parser_ctx_t*,const char*);
+static void parser_error(parser_ctx_t*,const char*);
 static void set_error(parser_ctx_t*,UINT);
 static BOOL explicit_error(parser_ctx_t*,void*,WCHAR);
 static BOOL allow_auto_semicolon(parser_ctx_t*);
 static void program_parsed(parser_ctx_t*,source_elements_t*);
+
 
 typedef struct _statement_list_t {
     statement_t *head;
@@ -902,6 +903,15 @@ semicolon
 
 %%
 
+/* Forward declaration for bison-generated function */
+int yyparse(parser_ctx_t *);
+
+/* Simple wrapper function that doesn't conflict with generated code */
+int parse_source(parser_ctx_t *ctx)
+{
+    return yyparse(ctx);
+}
+
 static BOOL allow_auto_semicolon(parser_ctx_t *ctx)
 {
     return ctx->nl || ctx->ptr == ctx->end || *(ctx->ptr-1) == '}';
@@ -1461,9 +1471,9 @@ static expression_t *new_call_expression(parser_ctx_t *ctx, expression_t *expres
     return &ret->expr;
 }
 
-static int parser_error(parser_ctx_t *ctx, const char *str)
+void parser_error(parser_ctx_t *ctx, const char *str)
 {
-    return 0;
+    /* Empty implementation as required by bison but not used */
 }
 
 static void set_error(parser_ctx_t *ctx, UINT error)

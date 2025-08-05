@@ -46,17 +46,16 @@ WINE_DEFAULT_DEBUG_CHANNEL(jscript);
 
 %{
 
-static int cc_parser_error(parser_ctx_t *ctx, const char *str)
+
+void cc_parser_error(parser_ctx_t *ctx, const char *str)
 {
     if(SUCCEEDED(ctx->hres)) {
         WARN("%s\n", str);
         ctx->hres = JS_E_SYNTAX;
     }
-
-    return 0;
 }
 
-static int cc_parser_lex(void *lval, parser_ctx_t *ctx)
+int cc_parser_lex(void *lval, parser_ctx_t *ctx)
 {
     int r;
 
@@ -227,9 +226,18 @@ CCMultiplicativeExpression
 
 %%
 
+/* Forward declaration for bison-generated function */
+int yyparse(parser_ctx_t *);
+
+/* Simple wrapper function that doesn't conflict with generated code */
+int parse_ccval(parser_ctx_t *ctx)
+{
+    return yyparse(ctx);
+}
+
 BOOL parse_cc_expr(parser_ctx_t *ctx)
 {
     ctx->hres = S_OK;
-    cc_parser_parse(ctx);
+    parse_ccval(ctx);
     return SUCCEEDED(ctx->hres);
 }
