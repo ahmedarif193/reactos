@@ -53,7 +53,7 @@ int  xslpattern_lex(xmlChar**, void*) DECLSPEC_HIDDEN;
 int  xslpattern_lex_init(void**) DECLSPEC_HIDDEN;
 int  xslpattern_lex_destroy(void*) DECLSPEC_HIDDEN;
 void xslpattern_set_extra(parser_param*, void*) DECLSPEC_HIDDEN;
-int  xslpattern_parse(parser_param*, void*) DECLSPEC_HIDDEN;
+int  parse_xslpattern(parser_param*, void*) DECLSPEC_HIDDEN;
 
 
 #endif /* __XSLPATTERN__ */

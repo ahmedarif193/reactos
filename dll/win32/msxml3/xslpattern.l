@@ -165,7 +165,7 @@ xmlChar* XSLPattern_to_XPath(xmlXPathContextPtr ctxt, xmlChar const* xslpat_str)
     xslpattern_lex_init(&p.yyscanner);
     xslpattern_set_extra(&p, p.yyscanner);
 
-    xslpattern_parse(&p, p.yyscanner);
+    parse_xslpattern(&p, p.yyscanner);
 
     TRACE("=> %s\n", debugstr_a((char const*)p.out));
     xslpattern_lex_destroy(p.yyscanner);

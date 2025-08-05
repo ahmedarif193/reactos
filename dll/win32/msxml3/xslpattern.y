@@ -42,6 +42,7 @@ static inline BOOL is_literal(xmlChar const* tok)
             (tok[0] == '\'' || tok[0] == '"'));
 }
 
+
 static void xslpattern_error(parser_param* param, void const* scanner, char const* msg)
 {
     FIXME("%s:\n"
@@ -750,5 +751,14 @@ static void xslpattern_error(parser_param* param, void const* scanner, char cons
     ;
 
 %%
+
+/* Forward declaration for bison-generated function */
+int yyparse(parser_param* p, void* scanner);
+
+/* Simple wrapper function that doesn't conflict with generated code */
+int parse_xslpattern(parser_param* p, void* scanner)
+{
+    return yyparse(p, scanner);
+}
 
 #endif  /* HAVE_LIBXML2 */
