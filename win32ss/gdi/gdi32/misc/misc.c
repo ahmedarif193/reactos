@@ -1018,10 +1018,10 @@ GdiConvertToDevmodeW(const DEVMODEA *dmA)
 BOOL
 WINAPI
 GdiRealizationInfo(HDC hdc,
-                   PREALIZATION_INFO pri)
+                   PFONT_REALIZATION_INFO pri)
 {
     // ATM we do not support local font data and Language Pack.
-    return NtGdiGetRealizationInfo(hdc, pri, (HFONT) NULL);
+    return NtGdiGetRealizationInfo(hdc, pri);
 }
 
 

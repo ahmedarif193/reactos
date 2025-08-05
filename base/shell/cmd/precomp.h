@@ -38,6 +38,11 @@
 #include <wine/debug.h>
 WINE_DEFAULT_DEBUG_CHANNEL(cmd);
 
+/* Windows 10 compatibility - constants not in PSDK headers */
+#if !defined(FILE_ATTRIBUTE_NO_SCRUB_DATA) && (NTDDI_VERSION >= NTDDI_WIN8)
+#define FILE_ATTRIBUTE_NO_SCRUB_DATA 0x00020000
+#endif
+
 #ifdef UNICODE
 #define debugstr_aw debugstr_w
 #else

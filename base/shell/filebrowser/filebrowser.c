@@ -27,6 +27,24 @@
 
 #include <browseui_undoc.h>
 
+int _tmain(int argc, _TCHAR* argv[]);
+
+#ifdef UNICODE
+// Provide wWinMain entry point for GUI applications using _tmain
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow)
+{
+    int argc = 0;
+    wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    
+    if (!argv) return -1;
+    
+    int result = _tmain(argc, argv);
+    
+    LocalFree(argv);
+    return result;
+}
+#endif
+
 int _tmain(int argc, _TCHAR* argv[])
 {
     EXPLORER_CMDLINE_PARSE_RESULTS parseResults = { 0 };

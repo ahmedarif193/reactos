@@ -9,7 +9,7 @@
 
 
 HANDLE WINAPI
-GetSpoolFileHandle( HANDLE hPrinter )
+GetSpoolFileHandleW( HANDLE hPrinter )
 {
     DWORD dwErrorCode, cpid;
     WINSPOOL_FILE_INFO_CONTAINER FileInfoContainer;
@@ -17,7 +17,7 @@ GetSpoolFileHandle( HANDLE hPrinter )
     PSPOOLER_HANDLE pHandle = (PSPOOLER_HANDLE)hPrinter;
     HANDLE hHandle = NULL;
 
-    FIXME("GetSpoolFileHandle(%p)\n", hPrinter);
+    FIXME("GetSpoolFileHandleW(%p)\n", hPrinter);
 
     if ( IntProtectHandle( hPrinter, FALSE ) )
     {
@@ -59,6 +59,16 @@ GetSpoolFileHandle( HANDLE hPrinter )
     }
     SetLastError(dwErrorCode);
     return hHandle;
+}
+
+#ifdef GetSpoolFileHandle
+#undef GetSpoolFileHandle
+#endif
+
+HANDLE WINAPI
+GetSpoolFileHandle( HANDLE hPrinter )
+{
+    return GetSpoolFileHandleW(hPrinter);
 }
 
 HANDLE WINAPI

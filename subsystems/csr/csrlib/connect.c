@@ -165,7 +165,10 @@ CsrpConnectToServer(
 
     /* Save CSR Section data */
     NtCurrentPeb()->ReadOnlySharedMemoryBase = ConnectionInfo.SharedSectionBase;
+    /* In Windows 10, ReadOnlySharedMemoryHeap was removed from PEB */
+#if (NTDDI_VERSION < NTDDI_WIN10)
     NtCurrentPeb()->ReadOnlySharedMemoryHeap = ConnectionInfo.SharedSectionHeap;
+#endif
     NtCurrentPeb()->ReadOnlyStaticServerData = ConnectionInfo.SharedStaticServerData;
 
     /* Create the port heap */

@@ -859,3 +859,26 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPWSTR cmdline, int cm
 
     return 0;
 }
+
+#ifdef __REACTOS__
+// ReactOS: Provide wmain entry point for console applications
+// This is needed because the code uses wWinMain but the module is set up as win32cui
+int wmain(int argc, wchar_t* argv[])
+{
+    LPWSTR cmdline = GetCommandLineW();
+    
+    // Skip program name to get command line arguments
+    if (cmdline && *cmdline) {
+        if (*cmdline == L'"') {
+            cmdline++;
+            while (*cmdline && *cmdline != L'"') cmdline++;
+            if (*cmdline == L'"') cmdline++;
+        } else {
+            while (*cmdline && *cmdline != L' ') cmdline++;
+        }
+        while (*cmdline == L' ') cmdline++;
+    }
+    
+    return wWinMain(GetModuleHandleW(NULL), NULL, cmdline ? cmdline : L"", SW_SHOWNORMAL);
+}
+#endif

@@ -359,7 +359,11 @@ BaseSrvBSMThread(PVOID StartupContext)
     --BaseSrvpBSMThreadCount;
     RtlLeaveCriticalSection(&BaseSrvDDDBSMCritSec);
 
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     NtCurrentTeb()->FreeStackOnTermination = TRUE;
+#else
+    /* FreeStackOnTermination not available on Vista+ */
+#endif
     NtTerminateThread(NtCurrentThread(), ExitStatus);
 
     return ExitStatus;

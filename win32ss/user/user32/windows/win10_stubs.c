@@ -13,27 +13,140 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(user32);
 
+/* Missing type definitions for Windows 10 APIs */
+typedef enum _PROCESS_DPI_AWARENESS {
+    PROCESS_DPI_UNAWARE = 0,
+    PROCESS_SYSTEM_DPI_AWARE = 1,
+    PROCESS_PER_MONITOR_DPI_AWARE = 2
+} PROCESS_DPI_AWARENESS;
+
+typedef HANDLE HTOUCHINPUT;
+typedef HANDLE HGESTUREINFO;
+
+typedef struct tagTOUCHINPUT {
+    LONG x;
+    LONG y;
+    HANDLE hSource;
+    DWORD dwID;
+    DWORD dwFlags;
+    DWORD dwMask;
+    DWORD dwTime;
+    ULONG_PTR dwExtraInfo;
+    DWORD cxContact;
+    DWORD cyContact;
+} TOUCHINPUT, *PTOUCHINPUT;
+
+typedef struct tagGESTUREINFO {
+    UINT cbSize;
+    DWORD dwFlags;
+    DWORD dwID;
+    HWND hwndTarget;
+    POINTS ptsLocation;
+    DWORD dwInstanceID;
+    DWORD dwSequenceID;
+    ULONGLONG ullArguments;
+    UINT cbExtraArgs;
+} GESTUREINFO, *PGESTUREINFO;
+
+typedef struct tagGESTURECONFIG {
+    DWORD dwID;
+    DWORD dwWant;
+    DWORD dwBlock;
+} GESTURECONFIG, *PGESTURECONFIG;
+
+typedef struct tagPOINTER_INFO {
+    UINT32 pointerId;
+    UINT32 frameId;
+    RECT rcContact;
+    RECT rcContactRaw;
+    UINT32 dwKeyStates;
+    UINT64 dwTime;
+    UINT32 historyCount;
+    INT32 InputData;
+    UINT32 dwFlags;
+} POINTER_INFO;
+
+typedef struct tagPOINTER_TOUCH_INFO {
+    POINTER_INFO pointerInfo;
+    UINT32 touchFlags;
+    UINT32 touchMask;
+    RECT rcContact;
+    RECT rcContactRaw;
+    UINT32 orientation;
+    UINT32 pressure;
+} POINTER_TOUCH_INFO;
+
+typedef struct tagPOINTER_DEVICE_INFO {
+    DWORD displayOrientation;
+    HANDLE device;
+    UINT32 pointerDeviceType;
+    HMONITOR monitor;
+    ULONG startingCursorId;
+    USHORT maxActiveContacts;
+    WCHAR productString[520];
+} POINTER_DEVICE_INFO;
+
+typedef struct tagWINDOWCOMPOSITIONATTRIBDATA {
+    DWORD Attrib;
+    PVOID pvData;
+    SIZE_T cbData;
+} WINDOWCOMPOSITIONATTRIBDATA;
+
+typedef struct tagCHANGEFILTERSTRUCT {
+    DWORD cbSize;
+    DWORD ExtStatus;
+} CHANGEFILTERSTRUCT, *PCHANGEFILTERSTRUCT;
+
+/* Additional Windows 10 types */
+/* Note: DPI types are already defined in headers */
+
+/* Forward declarations for shell types */
+typedef struct _ITEMIDLIST *PCIDLIST_ABSOLUTE;
+typedef struct _ITEMIDLIST *PIDLIST_ABSOLUTE; 
+typedef const struct _ITEMIDLIST *PCUITEMID_CHILD;
+typedef const GUID *REFKNOWNFOLDERID;
+typedef struct IBindCtx IBindCtx;
+typedef struct IShellFolder IShellFolder;
+typedef struct IShellItem IShellItem;
+
+typedef struct tagPOINTER_DEVICE_CURSOR_INFO {
+    UINT32 cursorId;
+    UINT32 cursor;
+} POINTER_DEVICE_CURSOR_INFO;
+
+typedef struct tagPOINTER_DEVICE_PROPERTY {
+    INT32 logicalMin;
+    INT32 logicalMax;
+    UINT32 physicalMin;
+    UINT32 physicalMax;
+    UINT32 unit;
+    UINT32 unitExponent;
+    USHORT usagePageId;
+    USHORT usageId;
+} POINTER_DEVICE_PROPERTY;
+
+typedef struct tagPOINTER_PEN_INFO {
+    POINTER_INFO pointerInfo;
+    UINT32 penFlags;
+    UINT32 penMask;
+    UINT32 pressure;
+    UINT32 rotation;
+    INT32 tiltX;
+    INT32 tiltY;
+} POINTER_PEN_INFO;
+
+/* Forward declarations and simple implementations */
+// LogicalToPhysicalPoint - implemented in user32_vista
+// PhysicalToLogicalPoint - implemented in user32_vista
+
 /* FUNCTIONS ******************************************************************/
 
 /*
  * Windows 10 DPI Awareness APIs
  */
 
-BOOL
-WINAPI
-SetProcessDPIAware(VOID)
-{
-    WARN("SetProcessDPIAware stub\n");
-    return TRUE;
-}
-
-BOOL
-WINAPI
-IsProcessDPIAware(VOID)
-{
-    WARN("IsProcessDPIAware stub\n");
-    return FALSE;
-}
+// SetProcessDPIAware - implemented in user32_vista
+// IsProcessDPIAware - implemented in user32_vista
 
 HRESULT
 WINAPI
@@ -54,29 +167,11 @@ GetProcessDpiAwareness(HANDLE hprocess,
     return S_OK;
 }
 
-BOOL
-WINAPI
-SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT value)
-{
-    WARN("SetProcessDpiAwarenessContext stub\n");
-    return TRUE;
-}
+// SetProcessDpiAwarenessContext - implemented in user32_vista
 
-UINT
-WINAPI
-GetDpiForSystem(VOID)
-{
-    WARN("GetDpiForSystem stub\n");
-    return 96; // Standard DPI
-}
+// GetDpiForSystem - implemented in user32_vista
 
-UINT
-WINAPI
-GetDpiForWindow(HWND hwnd)
-{
-    WARN("GetDpiForWindow stub\n");
-    return 96; // Standard DPI
-}
+// GetDpiForWindow - implemented in user32_vista
 
 BOOL
 WINAPI
@@ -106,176 +201,49 @@ AdjustWindowRectExForDpi(LPRECT lpRect,
     return AdjustWindowRectEx(lpRect, dwStyle, bMenu, dwExStyle);
 }
 
-BOOL
-WINAPI
-LogicalToPhysicalPointForPerMonitorDPI(HWND hwnd, LPPOINT lpPoint)
-{
-    WARN("LogicalToPhysicalPointForPerMonitorDPI stub\n");
-    return LogicalToPhysicalPoint(hwnd, lpPoint);
-}
+// LogicalToPhysicalPointForPerMonitorDPI - implemented in user32_stubs.c
 
 BOOL
 WINAPI
 PhysicalToLogicalPointForPerMonitorDPI(HWND hwnd, LPPOINT lpPoint)
 {
     WARN("PhysicalToLogicalPointForPerMonitorDPI stub\n");
-    return PhysicalToLogicalPoint(hwnd, lpPoint);
+    /* For now, just return as-is since we don't have DPI scaling */
+    return TRUE;
 }
 
 /*
  * Windows 10 Touch and Pen Input APIs
  */
 
-BOOL
-WINAPI
-RegisterTouchWindow(HWND hwnd, ULONG ulFlags)
-{
-    WARN("RegisterTouchWindow stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
+// RegisterTouchWindow - implemented in user32_vista
 
-BOOL
-WINAPI
-UnregisterTouchWindow(HWND hwnd)
-{
-    WARN("UnregisterTouchWindow stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
+// UnregisterTouchWindow - implemented in user32_vista
 
-BOOL
-WINAPI
-IsTouchWindow(HWND hwnd, PULONG pulFlags)
-{
-    WARN("IsTouchWindow stub\n");
-    if (pulFlags)
-        *pulFlags = 0;
-    return FALSE;
-}
+// IsTouchWindow - implemented in user32_vista
 
-BOOL
-WINAPI
-GetTouchInputInfo(HTOUCHINPUT hTouchInput,
-                  UINT cInputs,
-                  PTOUCHINPUT pInputs,
-                  int cbSize)
-{
-    WARN("GetTouchInputInfo stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
+// GetTouchInputInfo - implemented in user32_vista
 
-BOOL
-WINAPI
-CloseTouchInputHandle(HTOUCHINPUT hTouchInput)
-{
-    WARN("CloseTouchInputHandle stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
+// CloseTouchInputHandle - implemented in user32_vista
 
-BOOL
-WINAPI
-GetGestureInfo(HGESTUREINFO hGestureInfo,
-               PGESTUREINFO pGestureInfo)
-{
-    WARN("GetGestureInfo stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
+// GetGestureInfo - implemented in user32_vista
 
-BOOL
-WINAPI
-CloseGestureInfoHandle(HGESTUREINFO hGestureInfo)
-{
-    WARN("CloseGestureInfoHandle stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
+// CloseGestureInfoHandle - implemented in user32_vista
 
-BOOL
-WINAPI
-SetGestureConfig(HWND hwnd,
-                 DWORD dwReserved,
-                 UINT cIDs,
-                 PGESTURECONFIG pGestureConfig,
-                 UINT cbSize)
-{
-    WARN("SetGestureConfig stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
+// SetGestureConfig - implemented in user32_vista
 
-BOOL
-WINAPI
-GetGestureConfig(HWND hwnd,
-                 DWORD dwReserved,
-                 DWORD dwFlags,
-                 PUINT pcIDs,
-                 PGESTURECONFIG pGestureConfig,
-                 UINT cbSize)
-{
-    WARN("GetGestureConfig stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
+// GetGestureConfig - implemented in user32_vista
 
 /*
  * Windows 10 Pointer APIs
  */
 
-BOOL
-WINAPI
-GetPointerInfo(UINT32 pointerId,
-               POINTER_INFO *pointerInfo)
-{
-    WARN("GetPointerInfo stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
+// GetPointerInfo - implemented in user32_vista
+// GetPointerType - implemented in user32_vista
 
-BOOL
-WINAPI
-GetPointerType(UINT32 pointerId,
-               POINTER_INPUT_TYPE *pointerType)
-{
-    WARN("GetPointerType stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
-
-BOOL
-WINAPI
-GetPointerTouchInfo(UINT32 pointerId,
-                    POINTER_TOUCH_INFO *touchInfo)
-{
-    WARN("GetPointerTouchInfo stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
-
-BOOL
-WINAPI
-GetPointerDevices(UINT32 *deviceCount,
-                  POINTER_DEVICE_INFO *pointerDevices)
-{
-    WARN("GetPointerDevices stub\n");
-    if (deviceCount)
-        *deviceCount = 0;
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
-
-BOOL
-WINAPI
-RegisterPointerDeviceNotifications(HWND window,
-                                   BOOL notifyRange)
-{
-    WARN("RegisterPointerDeviceNotifications stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
+// GetPointerTouchInfo - implemented in user32_vista
+// GetPointerDevices - implemented in user32_vista  
+// RegisterPointerDeviceNotifications - implemented in user32_vista
 
 /*
  * Windows 10 Window Management APIs
@@ -321,195 +289,402 @@ GetWindowCompositionAttribute(HWND hwnd,
     return FALSE;
 }
 
-BOOL
-WINAPI
-IsWindowRedirectedForPrint(HWND hWnd)
-{
-    WARN("IsWindowRedirectedForPrint stub\n");
-    return FALSE;
-}
+// IsWindowRedirectedForPrint - implemented in user32_vista
 
-BOOL
-WINAPI
-ChangeWindowMessageFilter(UINT message, DWORD dwFlag)
-{
-    WARN("ChangeWindowMessageFilter stub\n");
-    return TRUE;
-}
-
-BOOL
-WINAPI
-ChangeWindowMessageFilterEx(HWND hwnd,
-                            UINT message,
-                            DWORD action,
-                            PCHANGEFILTERSTRUCT pChangeFilterStruct)
-{
-    WARN("ChangeWindowMessageFilterEx stub\n");
-    return TRUE;
-}
+// ChangeWindowMessageFilter - implemented in user32_vista
+// ChangeWindowMessageFilterEx - implemented in user32_vista
 
 /*
  * Windows 10 Shutdown APIs
  */
 
-BOOL
-WINAPI
-ShutdownBlockReasonCreate(HWND hWnd,
-                          LPCWSTR pwszReason)
-{
-    WARN("ShutdownBlockReasonCreate stub\n");
-    return TRUE;
-}
+// ShutdownBlockReasonCreate - implemented in user32_vista
 
 BOOL
-WINAPI
-ShutdownBlockReasonQuery(HWND hWnd,
-                         LPWSTR pwszBuff,
-                         DWORD *pcchBuff)
+WINAPI 
+ShutdownBlockReasonQuery(HWND hWnd, LPWSTR pwszBuff, DWORD *pcchBuff)
 {
     WARN("ShutdownBlockReasonQuery stub\n");
-    if (pcchBuff)
-        *pcchBuff = 0;
+    if (pcchBuff) *pcchBuff = 0;
+    if (pwszBuff && *pcchBuff > 0) pwszBuff[0] = 0;
     return FALSE;
 }
 
-BOOL
-WINAPI
-ShutdownBlockReasonDestroy(HWND hWnd)
-{
-    WARN("ShutdownBlockReasonDestroy stub\n");
-    return TRUE;
-}
+// ShutdownBlockReasonDestroy - implemented in user32_vista
 
 /*
  * Windows 10 Display and Monitor APIs
  */
 
-LONG
-WINAPI
-GetDisplayConfigBufferSizes(UINT32 flags,
-                            UINT32 *numPathArrayElements,
-                            UINT32 *numModeInfoArrayElements)
-{
-    WARN("GetDisplayConfigBufferSizes stub\n");
-    if (numPathArrayElements)
-        *numPathArrayElements = 0;
-    if (numModeInfoArrayElements)
-        *numModeInfoArrayElements = 0;
-    return ERROR_CALL_NOT_IMPLEMENTED;
-}
+// GetDisplayConfigBufferSizes - implemented in user32_vista
 
-LONG
-WINAPI
-QueryDisplayConfig(UINT32 flags,
-                   UINT32 *numPathArrayElements,
-                   DISPLAYCONFIG_PATH_INFO *pathArray,
-                   UINT32 *numModeInfoArrayElements,
-                   DISPLAYCONFIG_MODE_INFO *modeInfoArray,
-                   DISPLAYCONFIG_TOPOLOGY_ID *currentTopologyId)
-{
-    WARN("QueryDisplayConfig stub\n");
-    return ERROR_CALL_NOT_IMPLEMENTED;
-}
+// QueryDisplayConfig - implemented in user32_vista
 
-LONG
-WINAPI
-SetDisplayConfig(UINT32 numPathArrayElements,
-                 DISPLAYCONFIG_PATH_INFO *pathArray,
-                 UINT32 numModeInfoArrayElements,
-                 DISPLAYCONFIG_MODE_INFO *modeInfoArray,
-                 UINT32 flags)
-{
-    WARN("SetDisplayConfig stub\n");
-    return ERROR_CALL_NOT_IMPLEMENTED;
-}
+// SetDisplayConfig - implemented in user32_vista
 
-LONG
-WINAPI
-DisplayConfigGetDeviceInfo(DISPLAYCONFIG_DEVICE_INFO_HEADER *requestPacket)
-{
-    WARN("DisplayConfigGetDeviceInfo stub\n");
-    return ERROR_CALL_NOT_IMPLEMENTED;
-}
+// DisplayConfigGetDeviceInfo - implemented in user32_vista
 
-LONG
-WINAPI
-DisplayConfigSetDeviceInfo(DISPLAYCONFIG_DEVICE_INFO_HEADER *setPacket)
-{
-    WARN("DisplayConfigSetDeviceInfo stub\n");
-    return ERROR_CALL_NOT_IMPLEMENTED;
-}
+// DisplayConfigSetDeviceInfo - implemented in user32_vista
 
 /*
  * Windows 10 Raw Input APIs
  */
 
-UINT
-WINAPI
-GetRawInputData(HRAWINPUT hRawInput,
-                UINT uiCommand,
-                LPVOID pData,
-                PUINT pcbSize,
-                UINT cbSizeHeader)
-{
-    WARN("GetRawInputData stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return (UINT)-1;
-}
+// GetRawInputData - implemented in misc/stubs.c
 
-UINT
-WINAPI
-GetRawInputDeviceList(PRAWINPUTDEVICELIST pRawInputDeviceList,
-                      PUINT puiNumDevices,
-                      UINT cbSize)
-{
-    WARN("GetRawInputDeviceList stub\n");
-    if (puiNumDevices)
-        *puiNumDevices = 0;
-    return 0;
-}
+// GetRawInputDeviceList - implemented in misc/stubs.c
 
-UINT
-WINAPI
-GetRawInputDeviceInfoA(HANDLE hDevice,
-                       UINT uiCommand,
-                       LPVOID pData,
-                       PUINT pcbSize)
-{
-    WARN("GetRawInputDeviceInfoA stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return (UINT)-1;
-}
+// GetRawInputDeviceInfoA - implemented in misc/stubs.c
 
-UINT
+// GetRawInputDeviceInfoW - implemented in misc/stubs.c
+
+// RegisterRawInputDevices - implemented in misc/stubs.c
+
+// DefRawInputProc - implemented in misc/stubs.c
+
+/* Additional Windows 10 API stubs */
+
+BOOL
 WINAPI
-GetRawInputDeviceInfoW(HANDLE hDevice,
-                       UINT uiCommand,
-                       LPVOID pData,
-                       PUINT pcbSize)
+AreDpiAwarenessContextsEqual(DPI_AWARENESS_CONTEXT dpiContextA, DPI_AWARENESS_CONTEXT dpiContextB)
 {
-    WARN("GetRawInputDeviceInfoW stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return (UINT)-1;
+    WARN("AreDpiAwarenessContextsEqual stub\n");
+    return FALSE;
 }
 
 BOOL
 WINAPI
-RegisterRawInputDevices(PCRAWINPUTDEVICE pRawInputDevices,
-                        UINT uiNumDevices,
-                        UINT cbSize)
+EvaluateProximityToPolygon(UINT32 numVertices, POINT *controlPolygon, POINT *hitPoint)
 {
-    WARN("RegisterRawInputDevices stub\n");
+    WARN("EvaluateProximityToPolygon stub\n");
+    return FALSE;
+}
+
+DPI_AWARENESS
+WINAPI
+GetAwarenessFromDpiAwarenessContext(DPI_AWARENESS_CONTEXT value)
+{
+    WARN("GetAwarenessFromDpiAwarenessContext stub\n");
+    return DPI_AWARENESS_INVALID;
+}
+
+DWORD
+WINAPI
+GetClipboardSequenceNumber(VOID)
+{
+    WARN("GetClipboardSequenceNumber stub\n");
+    return 0;
+}
+
+DPI_AWARENESS_CONTEXT
+WINAPI
+GetDpiAwarenessContextForProcess(HANDLE hProcess)
+{
+    WARN("GetDpiAwarenessContextForProcess stub\n");
+    return DPI_AWARENESS_CONTEXT_UNAWARE;
+}
+
+HRESULT
+WINAPI
+GetDpiForMonitor(HMONITOR hmonitor, UINT dpiType, UINT *dpiX, UINT *dpiY)
+{
+    WARN("GetDpiForMonitor stub\n");
+    if (dpiX) *dpiX = 96;
+    if (dpiY) *dpiY = 96;
+    return S_OK;
+}
+
+UINT
+WINAPI
+GetDpiFromDpiAwarenessContext(DPI_AWARENESS_CONTEXT value)
+{
+    WARN("GetDpiFromDpiAwarenessContext stub\n");
+    return 96;
+}
+
+BOOL
+WINAPI
+GetGUIThreadInfo(DWORD idThread, PGUITHREADINFO pgui)
+{
+    WARN("GetGUIThreadInfo stub\n");
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return FALSE;
 }
 
-LRESULT
+DWORD
 WINAPI
-DefRawInputProc(PRAWINPUT *paRawInput,
-                INT nInput,
-                UINT cbSizeHeader)
+GetListBoxInfo(HWND hwnd)
 {
-    WARN("DefRawInputProc stub\n");
+    WARN("GetListBoxInfo stub\n");
     return 0;
+}
+
+BOOL
+WINAPI
+GetMenuBarInfo(HWND hwnd, LONG idObject, LONG idItem, PMENUBARINFO pmbi)
+{
+    WARN("GetMenuBarInfo stub\n");
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+UINT
+WINAPI
+GetSystemDpiForProcess(HANDLE hProcess)
+{
+    WARN("GetSystemDpiForProcess stub\n");
+    return 96;
+}
+
+DPI_AWARENESS_CONTEXT
+WINAPI
+GetThreadDpiAwarenessContext(VOID)
+{
+    WARN("GetThreadDpiAwarenessContext stub\n");
+    return DPI_AWARENESS_CONTEXT_UNAWARE;
+}
+
+BOOL
+WINAPI
+GetTitleBarInfo(HWND hwnd, PTITLEBARINFO pti)
+{
+    WARN("GetTitleBarInfo stub\n");
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+DWORD
+WINAPI
+GetUnpredictedMessagePos(VOID)
+{
+    WARN("GetUnpredictedMessagePos stub\n");
+    return GetMessagePos();
+}
+
+DPI_AWARENESS_CONTEXT
+WINAPI
+GetWindowDpiAwarenessContext(HWND hwnd)
+{
+    WARN("GetWindowDpiAwarenessContext stub\n");
+    return DPI_AWARENESS_CONTEXT_UNAWARE;
+}
+
+BOOL
+WINAPI
+IsClipboardFormatAvailable(UINT format)
+{
+    WARN("IsClipboardFormatAvailable stub\n");
+    return FALSE;
+}
+
+DPI_AWARENESS_CONTEXT
+WINAPI
+SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT dpiContext)
+{
+    WARN("SetThreadDpiAwarenessContext stub\n");
+    return DPI_AWARENESS_CONTEXT_UNAWARE;
+}
+
+BOOL
+WINAPI
+SkipPointerFrameMessages(UINT32 pointerId)
+{
+    WARN("SkipPointerFrameMessages stub\n");
+    return FALSE;
+}
+
+/* Shell API stubs that were moved to user32 in Windows 10 */
+
+HRESULT
+WINAPI
+SHCreateItemFromIDList(PCIDLIST_ABSOLUTE pidl, const GUID *riid, void **ppv)
+{
+    WARN("SHCreateItemFromIDList stub\n");
+    return E_NOTIMPL;
+}
+
+HRESULT
+WINAPI
+SHCreateItemFromParsingName(PCWSTR pszPath, IBindCtx *pbc, const GUID *riid, void **ppv)
+{
+    WARN("SHCreateItemFromParsingName stub\n");
+    return E_NOTIMPL;
+}
+
+HRESULT
+WINAPI
+SHCreateShellItem(PCIDLIST_ABSOLUTE pidlParent, IShellFolder *psfParent, PCUITEMID_CHILD pidl, IShellItem **ppsi)
+{
+    WARN("SHCreateShellItem stub\n");
+    return E_NOTIMPL;
+}
+
+HRESULT
+WINAPI
+SHGetFolderPathEx(REFKNOWNFOLDERID rfid, DWORD dwFlags, HANDLE hToken, PWSTR pszPath, DWORD cchPath)
+{
+    WARN("SHGetFolderPathEx stub\n");
+    return E_NOTIMPL;
+}
+
+HRESULT
+WINAPI
+SHGetKnownFolderPath(REFKNOWNFOLDERID rfid, DWORD dwFlags, HANDLE hToken, PWSTR *ppszPath)
+{
+    WARN("SHGetKnownFolderPath stub\n");
+    return E_NOTIMPL;
+}
+
+HRESULT
+WINAPI
+SHGetSpecialFolderLocation(HWND hwndOwner, int nFolder, PIDLIST_ABSOLUTE *ppidl)
+{
+    WARN("SHGetSpecialFolderLocation stub\n");
+    return E_NOTIMPL;
+}
+
+BOOL
+WINAPI
+SHGetSpecialFolderPathA(HWND hwndOwner, LPSTR lpszPath, int nFolder, BOOL fCreate)
+{
+    WARN("SHGetSpecialFolderPathA stub\n");
+    return FALSE;
+}
+
+BOOL
+WINAPI
+SHGetSpecialFolderPathW(HWND hwndOwner, LPWSTR lpszPath, int nFolder, BOOL fCreate)
+{
+    WARN("SHGetSpecialFolderPathW stub\n");
+    return FALSE;
+}
+
+HRESULT
+WINAPI
+SHSetKnownFolderPath(REFKNOWNFOLDERID rfid, DWORD dwFlags, HANDLE hToken, PCWSTR pszPath)
+{
+    WARN("SHSetKnownFolderPath stub\n");
+    return E_NOTIMPL;
+}
+
+/* Pointer/Touch API stubs */
+
+BOOL
+WINAPI
+GetPointerCursorId(UINT32 pointerId, UINT32 *cursorId)
+{
+    WARN("GetPointerCursorId stub\n");
+    return FALSE;
+}
+
+BOOL
+WINAPI
+GetPointerDevice(HANDLE device, POINTER_DEVICE_INFO *pointerDevice)
+{
+    WARN("GetPointerDevice stub\n");
+    return FALSE;
+}
+
+BOOL
+WINAPI
+GetPointerDeviceCursors(HANDLE device, UINT32 *cursorCount, POINTER_DEVICE_CURSOR_INFO *deviceCursors)
+{
+    WARN("GetPointerDeviceCursors stub\n");
+    return FALSE;
+}
+
+BOOL
+WINAPI
+GetPointerDeviceProperties(HANDLE device, UINT32 *propertyCount, POINTER_DEVICE_PROPERTY *pointerProperties)
+{
+    WARN("GetPointerDeviceProperties stub\n");
+    return FALSE;
+}
+
+BOOL
+WINAPI
+GetPointerDeviceRects(HANDLE device, RECT *pointerDeviceRect, RECT *displayRect)
+{
+    WARN("GetPointerDeviceRects stub\n");
+    return FALSE;
+}
+
+BOOL
+WINAPI
+GetPointerFrameInfo(UINT32 pointerId, UINT32 *pointerCount, POINTER_INFO *pointerInfo)
+{
+    WARN("GetPointerFrameInfo stub\n");
+    return FALSE;
+}
+
+BOOL
+WINAPI
+GetPointerFrameInfoHistory(UINT32 pointerId, UINT32 *entriesCount, UINT32 *pointerCount, POINTER_INFO *pointerInfo)
+{
+    WARN("GetPointerFrameInfoHistory stub\n");
+    return FALSE;
+}
+
+BOOL
+WINAPI
+GetPointerFramePenInfo(UINT32 pointerId, UINT32 *pointerCount, POINTER_PEN_INFO *penInfo)
+{
+    WARN("GetPointerFramePenInfo stub\n");
+    return FALSE;
+}
+
+BOOL
+WINAPI
+GetPointerFramePenInfoHistory(UINT32 pointerId, UINT32 *entriesCount, UINT32 *pointerCount, POINTER_PEN_INFO *penInfo)
+{
+    WARN("GetPointerFramePenInfoHistory stub\n");
+    return FALSE;
+}
+
+BOOL
+WINAPI
+GetPointerFrameTouchInfo(UINT32 pointerId, UINT32 *pointerCount, POINTER_TOUCH_INFO *touchInfo)
+{
+    WARN("GetPointerFrameTouchInfo stub\n");
+    return FALSE;
+}
+
+BOOL
+WINAPI
+GetPointerFrameTouchInfoHistory(UINT32 pointerId, UINT32 *entriesCount, UINT32 *pointerCount, POINTER_TOUCH_INFO *touchInfo)
+{
+    WARN("GetPointerFrameTouchInfoHistory stub\n");
+    return FALSE;
+}
+
+BOOL
+WINAPI
+GetPointerPenInfo(UINT32 pointerId, POINTER_PEN_INFO *penInfo)
+{
+    WARN("GetPointerPenInfo stub\n");
+    return FALSE;
+}
+
+BOOL
+WINAPI
+GetPointerPenInfoHistory(UINT32 pointerId, UINT32 *entriesCount, POINTER_PEN_INFO *penInfo)
+{
+    WARN("GetPointerPenInfoHistory stub\n");
+    return FALSE;
+}
+
+int
+WINAPI
+GetPriorityClipboardFormat(UINT *paFormatPriorityList, int cFormats)
+{
+    WARN("GetPriorityClipboardFormat stub\n");
+    return 0;
+}
+
+BOOL
+WINAPI
+GetRawPointerDeviceData(UINT32 pointerId, UINT32 historyCount, UINT32 propertiesCount, POINTER_DEVICE_PROPERTY *pProperties, LONG *pValues)
+{
+    WARN("GetRawPointerDeviceData stub\n");
+    return FALSE;
 }

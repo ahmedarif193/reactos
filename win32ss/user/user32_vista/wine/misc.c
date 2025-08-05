@@ -34,6 +34,8 @@
 
 #define POINTER_DEVICE_PRODUCT_STRING_MAX 520
 
+/* POINTER_INPUT_TYPE enum is already defined in Windows 10 SDK headers */
+#if (NTDDI_VERSION < NTDDI_WIN10)
 enum tagPOINTER_INPUT_TYPE {
   PT_POINTER = 1,
   PT_TOUCH,
@@ -41,6 +43,7 @@ enum tagPOINTER_INPUT_TYPE {
   PT_MOUSE,
   PT_TOUCHPAD
 };
+#endif
 
 typedef PVOID HPOWERNOTIFY, *PHPOWERNOTIFY;
 typedef UINT32 POINTER_FLAGS;

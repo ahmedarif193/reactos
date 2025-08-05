@@ -654,12 +654,22 @@ DevQueryPrintEx( PDEVQUERYPRINT_INFO pDQPInfo )
     return Ret;
 }
 
-INT WINAPI
-DocumentEvent( HANDLE hPrinter, HDC hdc, int iEsc, ULONG cbIn, PVOID pvIn, ULONG cbOut, PVOID pvOut)
+HRESULT WINAPI
+DocumentEventW( HANDLE hPrinter, HDC hdc, INT iEsc, ULONG cbIn, PVOID pvIn, ULONG cbOut, PVOID pvOut)
 {
-    FIXME("DocumentEvent(%p, %p, %lu, %lu, %p, %lu, %p)\n", hPrinter, hdc, iEsc, cbIn, pvIn, cbOut, pvOut);
+    FIXME("DocumentEventW(%p, %p, %d, %lu, %p, %lu, %p)\n", hPrinter, hdc, iEsc, cbIn, pvIn, cbOut, pvOut);
     UNIMPLEMENTED;
-    return DOCUMENTEVENT_UNSUPPORTED;
+    return E_NOTIMPL;
+}
+
+#ifdef DocumentEvent
+#undef DocumentEvent
+#endif
+
+HRESULT WINAPI
+DocumentEvent( HANDLE hPrinter, HDC hdc, INT iEsc, ULONG cbIn, PVOID pvIn, ULONG cbOut, PVOID pvOut)
+{
+    return DocumentEventW(hPrinter, hdc, iEsc, cbIn, pvIn, cbOut, pvOut);
 }
 
 LONG WINAPI
