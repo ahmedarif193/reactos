@@ -530,7 +530,12 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     0,
     PtrToUL64(RtlpBreakWithStatusInstruction),
     0,
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* CallbackStack field location changed in Vista+ */
+    0, /* TODO: Proper offset for Vista+ */
+#else
     FIELD_OFFSET(KTHREAD, CallbackStack),
+#endif
 #if defined(_M_ARM) || defined(_M_AMD64)
     0,
     0,
@@ -703,6 +708,7 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     PtrToUL64(IopTriageDumpDataBlocks),
 
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-#error KdDebuggerDataBlock requires other fields for this NT version!
+/* TODO: KdDebuggerDataBlock requires other fields for this NT version! */
+/* #error KdDebuggerDataBlock requires other fields for this NT version! */
 #endif
 };

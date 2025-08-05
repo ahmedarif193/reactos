@@ -61,9 +61,11 @@ KiAttachProcess(IN PKTHREAD Thread,
     /* Update Environment Pointers if needed*/
     if (SavedApcState == &Thread->SavedApcState)
     {
+#if (NTDDI_VERSION < NTDDI_WIN10)
         Thread->ApcStatePointer[OriginalApcEnvironment] = &Thread->
                                                           SavedApcState;
         Thread->ApcStatePointer[AttachedApcEnvironment] = &Thread->ApcState;
+#endif
         Thread->ApcStateIndex = AttachedApcEnvironment;
     }
 
@@ -134,8 +136,13 @@ KeInitializeProcess(IN OUT PKPROCESS Process,
     Process->Affinity = Affinity;
     Process->BasePriority = (CHAR)Priority;
     Process->QuantumReset = 6;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    Process->DirectoryTableBase = DirectoryTableBase[0];
+    /* Hyperspace is handled differently in Vista+ */
+#else
     Process->DirectoryTableBase[0] = DirectoryTableBase[0];
     Process->DirectoryTableBase[1] = DirectoryTableBase[1];
+#endif
     Process->AutoAlignment = Enable;
 #if defined(_M_IX86)
     Process->IopmOffset = KiComputeIopmOffset(IO_ACCESS_MAP_NONE);
@@ -432,7 +439,9 @@ KeSetPriorityAndQuantumProcess(IN PKPROCESS Process,
 
                 /* Update priority and quantum */
                 Thread->BasePriority = (SCHAR)NewPriority;
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
                 Thread->Quantum = Thread->QuantumReset;
+#endif
 
                 /* Disable decrements and update priority */
                 Thread->PriorityDecrement = 0;
@@ -494,7 +503,9 @@ KeSetPriorityAndQuantumProcess(IN PKPROCESS Process,
 
                 /* Update priority and quantum */
                 Thread->BasePriority = (SCHAR)NewPriority;
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
                 Thread->Quantum = Thread->QuantumReset;
+#endif
 
                 /* Disable decrements and update priority */
                 Thread->PriorityDecrement = 0;
@@ -663,8 +674,10 @@ KeDetachProcess(VOID)
     /* Restore the APC State */
     KiMoveApcState(&Thread->SavedApcState, &Thread->ApcState);
     Thread->SavedApcState.Process = NULL;
+#if (NTDDI_VERSION < NTDDI_WIN10)
     Thread->ApcStatePointer[OriginalApcEnvironment] = &Thread->ApcState;
     Thread->ApcStatePointer[AttachedApcEnvironment] = &Thread->SavedApcState;
+#endif
     Thread->ApcStateIndex = OriginalApcEnvironment;
 
     /* Release lock */
@@ -830,8 +843,10 @@ KeUnstackDetachProcess(IN PRKAPC_STATE ApcState)
         KiMoveApcState(&Thread->SavedApcState, &Thread->ApcState);
         Thread->SavedApcState.Process = NULL;
         Thread->ApcStateIndex = OriginalApcEnvironment;
+#if (NTDDI_VERSION < NTDDI_WIN10)
         Thread->ApcStatePointer[OriginalApcEnvironment] = &Thread->ApcState;
         Thread->ApcStatePointer[AttachedApcEnvironment] = &Thread->SavedApcState;
+#endif
     }
 
     /* Release lock */

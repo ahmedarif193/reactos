@@ -39,7 +39,11 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
     Thread = PsGetCurrentThread();
 
     /* Check if the thread is dead */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    if (!Thread->ThreadInserted)
+#else
     if (Thread->DeadThread)
+#endif
     {
         /* Remember that we're dead */
         DeadThread = TRUE;
@@ -53,7 +57,11 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
     }
 
     /* Check if this is a dead thread, or if we're hiding */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    if ((Thread->ThreadInserted) && !(Thread->HideFromDebugger))
+#else
     if (!(Thread->DeadThread) && !(Thread->HideFromDebugger))
+#endif
     {
         /* We're not, so notify the debugger */
         DbgkCreateThread(Thread, StartContext);
@@ -150,7 +158,11 @@ PspSystemThreadStartup(IN PKSTART_ROUTINE StartRoutine,
     /* Make sure the thread isn't gone */
     _SEH2_TRY
     {
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        if (!(Thread->Terminated) && (Thread->ThreadInserted))
+#else
         if (!(Thread->Terminated) && !(Thread->DeadThread))
+#endif
         {
             /* Call the Start Routine */
             StartRoutine(StartContext);
@@ -269,7 +281,12 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     Thread->ExitStatus = STATUS_PENDING;
 
     /* Set the Process CID */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* ThreadsProcess field removed, stored in ApcState.Process */
+    Thread->Tcb.ApcState.Process = (PKPROCESS)Process;
+#else
     Thread->ThreadsProcess = Process;
+#endif
     Thread->Cid.UniqueProcess = Process->UniqueProcessId;
 
     /* Create Cid Handle */
@@ -287,7 +304,11 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     Thread->ReadClusterSize = MmReadClusterSize;
 
     /* Initialize the LPC Reply Semaphore */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    KeInitializeSemaphore(&Thread->KeyedWaitSemaphore, 0, 1);
+#else
     KeInitializeSemaphore(&Thread->LpcReplySemaphore, 0, 1);
+#endif
 
     /* Initialize the list heads and locks */
     InitializeListHead(&Thread->LpcReplyChain);
@@ -381,7 +402,11 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     /* Check if the thread was ours, terminated and it was user mode */
     if ((Thread->Terminated) &&
         (ThreadContext) &&
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        ((PEPROCESS)Thread->Tcb.ApcState.Process == Process))
+#else
         (Thread->ThreadsProcess == Process))
+#endif
     {
         /* Cleanup, we don't want to start it up and context switch */
         goto Quickie;
@@ -502,7 +527,11 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     ASSERT(!(Thread->CreateTime.HighPart & 0xF0000000));
 
     /* Make sure the thread isn't dead */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    if (Thread->ThreadInserted)
+#else
     if (!Thread->DeadThread)
+#endif
     {
         /* Get the thread's SD */
         Status = ObGetObjectSecurity(Thread,
@@ -541,7 +570,11 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
                                NULL,
                                &PsThreadType->TypeInfo.GenericMapping,
                                PreviousMode,
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+                               NULL,  /* GrantedAccess field was removed */
+#else
                                &Thread->GrantedAccess,
+#endif
                                &AccessStatus);
 
         /* Dereference the token and let go the SD */
@@ -550,17 +583,23 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
         ObReleaseObjectSecurity(SecurityDescriptor, SdAllocated);
 
         /* Remove access if it failed */
+#if (NTDDI_VERSION < NTDDI_WIN7)
         if (!Result) Process->GrantedAccess = 0;
+#endif
 
         /* Set least some minimum access */
+#if (NTDDI_VERSION < NTDDI_WIN7)
         Thread->GrantedAccess |= (THREAD_TERMINATE |
                                   THREAD_SET_INFORMATION |
                                   THREAD_QUERY_INFORMATION);
+#endif
     }
     else
     {
         /* Set the thread access mask to maximum */
+#if (NTDDI_VERSION < NTDDI_WIN7)
         Thread->GrantedAccess = THREAD_ALL_ACCESS;
+#endif
     }
 
     /* Dispatch thread */
@@ -724,7 +763,12 @@ PEPROCESS
 NTAPI
 PsGetThreadProcess(IN PETHREAD Thread)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* ThreadsProcess field removed, stored in ApcState.Process */
+    return (PEPROCESS)Thread->Tcb.ApcState.Process;
+#else
     return Thread->ThreadsProcess;
+#endif
 }
 
 /*
@@ -734,7 +778,12 @@ PEPROCESS
 NTAPI
 PsGetCurrentThreadProcess(VOID)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* ThreadsProcess field removed, stored in ApcState.Process */
+    return (PEPROCESS)PsGetCurrentThread()->Tcb.ApcState.Process;
+#else
     return PsGetCurrentThread()->ThreadsProcess;
+#endif
 }
 
 /*
@@ -764,7 +813,12 @@ ULONG
 NTAPI
 PsGetThreadSessionId(IN PETHREAD Thread)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* ThreadsProcess field removed, stored in ApcState.Process */
+    return MmGetSessionId((PEPROCESS)Thread->Tcb.ApcState.Process);
+#else
     return MmGetSessionId(Thread->ThreadsProcess);
+#endif
 }
 
 /*

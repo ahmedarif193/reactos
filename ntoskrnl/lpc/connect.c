@@ -51,7 +51,9 @@ LpcpFreeConMsg(IN OUT PLPCP_MESSAGE *Message,
 
         /* Clear message data */
         CurrentThread->LpcReceivedMessageId = 0;
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
         CurrentThread->LpcReplyMessage = NULL;
+#endif
 
         /* Get the connection message and clear the section */
         *ConnectMessage = (PLPCP_CONNECTION_MESSAGE)(ReplyMessage + 1);
@@ -558,12 +560,20 @@ NtSecureConnectPort(OUT PHANDLE PortHandle,
         /* Generate the Message ID and set it */
         Message->Request.MessageId =  LpcpNextMessageId++;
         if (!LpcpNextMessageId) LpcpNextMessageId = 1;
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        Thread->LpcReplyMessageId2 = Message->Request.MessageId;
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
+        /* LpcReplyMessageId was removed in Vista-Win8 */
+#else
         Thread->LpcReplyMessageId = Message->Request.MessageId;
+#endif
 
         /* Insert the message into the queue and thread chain */
         InsertTailList(&Port->MsgQueue.ReceiveHead, &Message->Entry);
         InsertTailList(&Port->LpcReplyChainHead, &Thread->LpcReplyChain);
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
         Thread->LpcReplyMessage = Message;
+#endif
 
         /* Now we can finally reference the client port and link it */
         ObReferenceObject(ClientPort);
@@ -599,7 +609,11 @@ NtSecureConnectPort(OUT PHANDLE PortHandle,
         KeLeaveCriticalRegion();
 
         /* Now wait for a reply and set 'Status' */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        LpcpConnectWait(&Thread->KeyedWaitSemaphore, PreviousMode);
+#else
         LpcpConnectWait(&Thread->LpcReplySemaphore, PreviousMode);
+#endif
     }
 
     /* Now, always free the connection message */
@@ -609,10 +623,18 @@ NtSecureConnectPort(OUT PHANDLE PortHandle,
     if (!NT_SUCCESS(Status))
     {
         /* Check if the semaphore got signaled in the meantime */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        if (KeReadStateSemaphore(&Thread->KeyedWaitSemaphore))
+#else
         if (KeReadStateSemaphore(&Thread->LpcReplySemaphore))
+#endif
         {
             /* Wait on it */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+            KeWaitForSingleObject(&Thread->KeyedWaitSemaphore,
+#else
             KeWaitForSingleObject(&Thread->LpcReplySemaphore,
+#endif
                                   WrExecutive,
                                   KernelMode,
                                   FALSE,

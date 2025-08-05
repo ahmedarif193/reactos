@@ -898,19 +898,26 @@ FsRtlOplockCleanup(IN PINTERNAL_OPLOCK Oplock,
 
 NTSTATUS
 NTAPI
-FsRtlOplockBreakToNone(IN PINTERNAL_OPLOCK Oplock,
+FsRtlOplockBreakToNone(IN POPLOCK OplockPtr,
                        IN PIO_STACK_LOCATION Stack,
                        IN PIRP Irp,
                        IN PVOID Context,
                        IN POPLOCK_WAIT_COMPLETE_ROUTINE CompletionRoutine OPTIONAL,
                        IN POPLOCK_FS_PREPOST_IRP PostIrpRoutine OPTIONAL)
 {
+    PINTERNAL_OPLOCK Oplock = (PINTERNAL_OPLOCK)*OplockPtr;
     PLIST_ENTRY NextEntry;
     PWAIT_CONTEXT WaitCtx;
     PIRP ListIrp;
     KEVENT WaitEvent;
 
     DPRINT("FsRtlOplockBreakToNone(%p, %p, %p, %p, %p, %p)\n", Oplock, Stack, Irp, Context, CompletionRoutine, PostIrpRoutine);
+
+    /* Check if oplock exists */
+    if (!Oplock)
+    {
+        return STATUS_SUCCESS;
+    }
 
     ExAcquireFastMutexUnsafe(Oplock->IntLock);
 

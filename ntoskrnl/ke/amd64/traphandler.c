@@ -151,7 +151,7 @@ KiSystemCallHandler(
     /* Validate trap frame pointer is properly aligned and within expected range */
     if ((ULONG_PTR)TrapFrame & (sizeof(ULONG_PTR) - 1))
     {
-        KeBugCheckEx(SYSTEM_SERVICE_EXCEPTION, 0x25, (ULONG_PTR)TrapFrame, 0, 0);
+        KeBugCheckEx(0x3B /* SYSTEM_SERVICE_EXCEPTION */, 0x25, (ULONG_PTR)TrapFrame, 0, 0);
     }
 
     /* Increase system call count */
@@ -208,14 +208,24 @@ KiSystemCallHandler(
     }
 
     /* Get descriptor table */
+#if (NTDDI_VERSION < NTDDI_LONGHORN) || ((NTDDI_VERSION < NTDDI_WIN7) && !defined(_WIN64))
     DescriptorTable = &((PKSERVICE_TABLE_DESCRIPTOR)Thread->ServiceTable)[TableIndex];
+#else
+    /* ServiceTable field removed in newer versions - use KeServiceDescriptorTable */
+    DescriptorTable = &KeServiceDescriptorTable[TableIndex];
+#endif
 
     /* Validate the system call number */
     if (ServiceNumber >= DescriptorTable->Limit)
     {
         /* Check if this is a GUI call and this is not a GUI thread yet */
         if ((TableIndex == WIN32K_SERVICE_INDEX) &&
+#if (NTDDI_VERSION < NTDDI_LONGHORN) || ((NTDDI_VERSION < NTDDI_WIN7) && !defined(_WIN64))
             (Thread->ServiceTable == KeServiceDescriptorTable))
+#else
+            /* ServiceTable field removed - check if thread is Win32 thread */
+            (PsGetThreadWin32Thread((PETHREAD)Thread) == NULL))
+#endif
         {
             /* Convert this thread to a GUI thread.
                It is invalid to change the stack in the middle of a C function,

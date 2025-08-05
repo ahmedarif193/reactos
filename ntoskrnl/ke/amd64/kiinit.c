@@ -189,8 +189,12 @@ KiInitializeCpu(PKIPCR Pcr)
     FeatureBits |= KF_NX_ENABLED;
 
     /* Save feature bits */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    Pcr->Prcb.FeatureBits = FeatureBits;  /* FeatureBits is already 64-bit in Win10 */
+#else
     Pcr->Prcb.FeatureBits = (ULONG)FeatureBits;
     Pcr->Prcb.FeatureBitsHigh = FeatureBits >> 32;
+#endif
 
     /* Enable fx save restore support */
     __writecr4(__readcr4() | CR4_FXSR);
@@ -528,8 +532,12 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     if (Cpu == 0)
     {
         /* Set global feature bits */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        KeFeatureBits = Pcr->Prcb.FeatureBits;  /* FeatureBits is already 64-bit in Win10 */
+#else
         KeFeatureBits = (ULONG64)Pcr->Prcb.FeatureBitsHigh << 32 |
                         Pcr->Prcb.FeatureBits;
+#endif
 
         /* Initialize the module list (ntos, hal, kdcom) */
         KiInitModuleList(LoaderBlock);

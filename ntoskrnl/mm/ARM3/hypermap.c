@@ -54,7 +54,12 @@ MiMapPageInHyperSpace(IN PEPROCESS Process,
     // Acquire the hyperlock
     //
     ASSERT(Process == PsGetCurrentProcess());
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* In Vista+, use dispatcher lock for synchronization */
+    *OldIrql = KeRaiseIrqlToDpcLevel();
+#else
     KeAcquireSpinLock(&Process->HyperSpaceLock, OldIrql);
+#endif
 
     //
     // Now get the first free PTE
@@ -103,7 +108,12 @@ MiUnmapPageInHyperSpace(IN PEPROCESS Process,
     // Release the hyperlock
     //
     ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* In Vista+, just lower IRQL */
+    KeLowerIrql(OldIrql);
+#else
     KeReleaseSpinLock(&Process->HyperSpaceLock, OldIrql);
+#endif
 }
 
 PVOID

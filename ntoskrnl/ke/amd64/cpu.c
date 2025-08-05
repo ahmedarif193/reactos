@@ -124,7 +124,7 @@ KiSetProcessorType(VOID)
     {
         ExtendModel |= (Vendor == CPU_INTEL);
 #if (NTDDI_VERSION >= NTDDI_WIN8)
-        ExtendModel |= (Vendor == CPU_CENTAUR);
+        ExtendModel |= (Vendor == CPU_VIA);  /* CPU_CENTAUR is an alias for CPU_VIA */
 #endif
     }
 #endif
@@ -216,9 +216,15 @@ KiGetFeatureBits(VOID)
     if (VersionInfo.Edx.Bits.HTT)
     {
         /* Set the number of logical CPUs */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        Prcb->CoresPerPhysicalProcessor =
+            VersionInfo.Ebx.Bits.MaximumAddressableIdsForLogicalProcessors;
+        if (Prcb->CoresPerPhysicalProcessor > 1)
+#else
         Prcb->LogicalProcessorsPerPhysicalProcessor =
             VersionInfo.Ebx.Bits.MaximumAddressableIdsForLogicalProcessors;
         if (Prcb->LogicalProcessorsPerPhysicalProcessor > 1)
+#endif
         {
             /* We're on dual-core */
             KiSMTProcessorsPresent = TRUE;
@@ -227,7 +233,11 @@ KiGetFeatureBits(VOID)
     else
     {
         /* We only have a single CPU */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        Prcb->CoresPerPhysicalProcessor = 1;
+#else
         Prcb->LogicalProcessorsPerPhysicalProcessor = 1;
+#endif
     }
 
     /* Check if CPUID_THERMAL_POWER_MANAGEMENT (0x06) is supported */
@@ -353,7 +363,11 @@ KiGetFeatureBits(VOID)
 VOID
 KiReportCpuFeatures(IN PKPRCB Prcb)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    ULONG64 FeatureBits = Prcb->FeatureBits;  /* FeatureBits is already 64-bit in Win10 */
+#else
     ULONG64 FeatureBits = Prcb->FeatureBits | ((ULONG64)Prcb->FeatureBitsHigh << 32);
+#endif
     ULONG CpuFeatures = 0;
     CPU_INFO CpuInfo;
 

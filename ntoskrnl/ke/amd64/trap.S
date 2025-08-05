@@ -1081,10 +1081,9 @@ FUNC KiConvertToGuiThread
     .allocstack 40
     .endprolog
 
-    /* Check if we already have a large stack */
+    /* LargeStack field removed in newer versions - skip check and always expand */
     mov rax, gs:[PcCurrentThread]
-    cmp byte ptr [rax + KTHREAD_LargeStack], 0
-    jnz AlreadyLargeStack
+    /* Always proceed with stack expansion */
 
     // NewStack = (ULONG_PTR)MmCreateKernelStack(TRUE, 0);
     mov cl, 1

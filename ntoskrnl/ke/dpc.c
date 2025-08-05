@@ -227,7 +227,9 @@ KiTimerExpiration(IN PKDPC Dpc,
                     {
 #if DBG
                         /* Clear DPC Time */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
                         Prcb->DebugDpcTime = 0;
+#endif
 #endif
 
                         /* Call the DPC */
@@ -275,7 +277,9 @@ KiTimerExpiration(IN PKDPC Dpc,
                     {
 #if DBG
                         /* Clear DPC Time */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
                         Prcb->DebugDpcTime = 0;
+#endif
 #endif
 
                         /* Call the DPC */
@@ -313,7 +317,9 @@ KiTimerExpiration(IN PKDPC Dpc,
         {
 #if DBG
             /* Clear DPC Time */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
             Prcb->DebugDpcTime = 0;
+#endif
 #endif
 
             /* Call the DPC */
@@ -440,7 +446,9 @@ KiTimerListExpire(IN PLIST_ENTRY ExpiredListHead,
         {
 #if DBG
             /* Clear DPC Time */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
             Prcb->DebugDpcTime = 0;
+#endif
 #endif
 
             /* Call the DPC */
@@ -481,6 +489,7 @@ KiQuantumEnd(VOID)
     KiAcquirePrcbLock(Prcb);
 
     /* Check if Quantum expired */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     if (Thread->Quantum <= 0)
     {
         /* Check if we're real-time and with quantums disabled */
@@ -494,6 +503,11 @@ KiQuantumEnd(VOID)
         {
             /* Reset the new Quantum */
             Thread->Quantum = Thread->QuantumReset;
+#else
+    /* In Vista+, quantum is handled differently */
+    {
+        {
+#endif
 
             /* Calculate new priority */
             Thread->Priority = KiComputeNewPriority(Thread, 1);
@@ -573,7 +587,11 @@ KiRetireDpcList(IN PKPRCB Prcb)
 
     /* Get data and list variables before starting anything else */
     DpcData = &Prcb->DpcData[DPC_NORMAL];
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ListHead = &DpcData->DpcList.ListHead;
+#else
     ListHead = &DpcData->DpcListHead;
+#endif
 
     /* Main outer loop */
     do
@@ -620,7 +638,9 @@ KiRetireDpcList(IN PKPRCB Prcb)
 
 #if DBG
                 /* Clear DPC Time */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
                 Prcb->DebugDpcTime = 0;
+#endif
 #endif
 
                 /* Release the lock */
@@ -783,12 +803,20 @@ KeInsertQueueDpc(IN PKDPC Dpc,
         if (Dpc->Importance == HighImportance)
         {
             /* Pre-empty other DPCs */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+            InsertHeadList(&DpcData->DpcList.ListHead, &Dpc->DpcListEntry);
+#else
             InsertHeadList(&DpcData->DpcListHead, &Dpc->DpcListEntry);
+#endif
         }
         else
         {
             /* Add it at the end */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+            InsertTailList(&DpcData->DpcList.ListHead, &Dpc->DpcListEntry);
+#else
             InsertTailList(&DpcData->DpcListHead, &Dpc->DpcListEntry);
+#endif
         }
 
         /* Check if this is the DPC on the threaded list */

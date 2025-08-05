@@ -161,7 +161,12 @@ NTAPI
 IoThreadToProcess(IN PETHREAD Thread)
 {
     /* Return the thread's process */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* In Vista+, ThreadsProcess was removed. Use the APC state to get the process */
+    return Thread->Tcb.ApcState.Process;
+#else
     return Thread->ThreadsProcess;
+#endif
 }
 
 /*

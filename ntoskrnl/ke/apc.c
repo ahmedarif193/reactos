@@ -105,7 +105,19 @@ KiInsertQueueApc(IN PKAPC Apc,
     }
 
     /* Get the APC State for this Index, and the mode too */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* In Windows 10, ApcStatePointer was removed. Use ApcStateIndex to determine state */
+    if (Apc->ApcStateIndex == OriginalApcEnvironment)
+    {
+        ApcState = &Thread->ApcState;
+    }
+    else
+    {
+        ApcState = &Thread->SavedApcState;
+    }
+#else
     ApcState = Thread->ApcStatePointer[(UCHAR)Apc->ApcStateIndex];
+#endif
     ApcMode = Apc->ApcMode;
 
     /* The APC must be "inserted" already */
@@ -227,7 +239,12 @@ KiInsertQueueApc(IN PKAPC Apc,
                         DPRINT1("A thread was in a gate wait\n");
 
                         /* Get the gate */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+                        /* In Windows 10+, GateObject was removed from the union */
+                        Gate = (PKGATE)Thread->WaitBlockList;
+#else
                         Gate = Thread->GateObject;
+#endif
 
                         /* Lock the gate */
                         KiAcquireDispatcherObject(&Gate->Header);
@@ -901,7 +918,19 @@ KeRemoveQueueApc(IN PKAPC Apc)
     {
         /* Set it as non-inserted and get the APC state */
         Apc->Inserted = FALSE;
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        /* In Windows 10, ApcStatePointer was removed. Use ApcStateIndex to determine state */
+        if (Apc->ApcStateIndex == OriginalApcEnvironment)
+        {
+            ApcState = &Thread->ApcState;
+        }
+        else
+        {
+            ApcState = &Thread->SavedApcState;
+        }
+#else
         ApcState = Thread->ApcStatePointer[(UCHAR)Apc->ApcStateIndex];
+#endif
 
         /* Acquire the dispatcher lock and remove it from the list */
         KiAcquireDispatcherLockAtSynchLevel();

@@ -265,7 +265,11 @@ MmFreeMemoryArea(
     PVOID EndAddress;
 
     /* Make sure we own the address space lock! */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* EX_PUSH_LOCK.Owner was removed in Windows 10 */
+#else
     ASSERT(CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock.Owner == KeGetCurrentThread());
+#endif
 
     /* Check magic */
     ASSERT(MemoryArea->Magic == 'erAM');
@@ -502,7 +506,11 @@ MiRosCleanupMemoryArea(
        Make sure things are as expected... */
     ASSERT(Process == PsGetCurrentProcess());
     ASSERT(Process->VmDeleted == TRUE);
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    ASSERT((((PEPROCESS)PsGetCurrentThread()->Tcb.ApcState.Process == Process) &&
+#else
     ASSERT(((PsGetCurrentThread()->ThreadsProcess == Process) &&
+#endif
             (Process->ActiveThreads == 1)) ||
            (Process->ActiveThreads == 0));
 

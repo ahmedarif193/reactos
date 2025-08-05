@@ -367,6 +367,166 @@ NtCancelTimer(IN HANDLE TimerHandle,
     return Status;
 }
 
+#if 0 /* First duplicate block - these appear to be duplicate implementations of the EX timer functions */
+/*
+ * @implemented
+ */
+PEX_TIMER
+NTAPI
+ExAllocateTimer(
+    _In_opt_ PEXT_CALLBACK Callback,
+    _In_opt_ PVOID CallbackContext,
+    _In_ ULONG Attributes)
+{
+    PETIMER Timer;
+    NTSTATUS Status;
+
+    /* Create the Timer Object */
+    Status = ObCreateObject(KernelMode,
+                            ExTimerType,
+                            NULL,
+                            KernelMode,
+                            NULL,
+                            sizeof(ETIMER),
+                            0,
+                            0,
+                            (PVOID*)&Timer);
+    if (!NT_SUCCESS(Status))
+    {
+        return NULL;
+    }
+
+    /* Initialize the DPC */
+    KeInitializeDpc(&Timer->TimerDpc, ExpTimerDpcRoutine, Timer);
+
+    /* Initialize the Kernel Timer */
+    KeInitializeTimerEx(&Timer->KeTimer, NotificationTimer);
+
+    /* Initialize the timer fields */
+    KeInitializeSpinLock(&Timer->Lock);
+    Timer->ApcAssociated = FALSE;
+    Timer->WakeTimer = FALSE;
+    Timer->WakeTimerListEntry.Flink = NULL;
+    Timer->Period = 0;
+
+    return (PEX_TIMER)Timer;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExSetTimer(
+    _In_ PEX_TIMER Timer,
+    _In_ LONGLONG DueTime,
+    _In_ LONGLONG Period,
+    _In_opt_ PEXT_SET_PARAMETERS Parameters)
+{
+    PETIMER ExTimer = (PETIMER)Timer;
+    LARGE_INTEGER TimerDueTime;
+    BOOLEAN State;
+    KIRQL OldIrql;
+
+    if (!Timer)
+        return FALSE;
+
+    TimerDueTime.QuadPart = DueTime;
+
+    /* Lock the Timer */
+    KeAcquireSpinLock(&ExTimer->Lock, &OldIrql);
+
+    /* Cancel Running Timer */
+    if (ExTimer->ApcAssociated)
+    {
+        KeCancelTimer(&ExTimer->KeTimer);
+        KeRemoveQueueDpc(&ExTimer->TimerDpc);
+    }
+    else
+    {
+        /* If timer was disabled, we still need to cancel it */
+        KeCancelTimer(&ExTimer->KeTimer);
+    }
+
+    /* Read the State */
+    State = KeReadStateTimer(&ExTimer->KeTimer);
+
+    /* Set the period */
+    ExTimer->Period = (LONG)Period;
+
+    /* Enable and Set the Timer */
+    KeSetTimerEx(&ExTimer->KeTimer,
+                 TimerDueTime,
+                 (LONG)Period,
+                 &ExTimer->TimerDpc);
+
+    /* Unlock the Timer */
+    KeReleaseSpinLock(&ExTimer->Lock, OldIrql);
+
+    return State;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExCancelTimer(
+    _In_ PEX_TIMER Timer,
+    _In_opt_ PVOID Parameters)
+{
+    PETIMER ExTimer = (PETIMER)Timer;
+    BOOLEAN State;
+    KIRQL OldIrql;
+
+    if (!Timer)
+        return FALSE;
+
+    /* Lock the Timer */
+    KeAcquireSpinLock(&ExTimer->Lock, &OldIrql);
+
+    /* Cancel the Timer */
+    KeCancelTimer(&ExTimer->KeTimer);
+    KeRemoveQueueDpc(&ExTimer->TimerDpc);
+
+    /* Read the old State */
+    State = KeReadStateTimer(&ExTimer->KeTimer);
+
+    /* Unlock the Timer */
+    KeReleaseSpinLock(&ExTimer->Lock, OldIrql);
+
+    return State;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExDeleteTimer(
+    _In_ PEX_TIMER Timer,
+    _In_ BOOLEAN Cancel,
+    _In_ BOOLEAN Wait,
+    _In_opt_ PEXT_DELETE_PARAMETERS Parameters)
+{
+    PETIMER ExTimer = (PETIMER)Timer;
+    BOOLEAN Cancelled = FALSE;
+
+    if (!Timer)
+        return FALSE;
+
+    if (Cancel)
+    {
+        Cancelled = ExCancelTimer(Timer, NULL);
+    }
+
+    /* Dereference the timer object */
+    ObDereferenceObject(ExTimer);
+    
+    return Cancelled;
+}
+#endif /* End of first duplicate block */
+
 NTSTATUS
 NTAPI
 NtCreateTimer(OUT PHANDLE TimerHandle,
@@ -458,6 +618,166 @@ NtCreateTimer(OUT PHANDLE TimerHandle,
     return Status;
 }
 
+#if 0 /* Second duplicate block */
+/*
+ * @implemented
+ */
+PEX_TIMER
+NTAPI
+ExAllocateTimer(
+    _In_opt_ PEXT_CALLBACK Callback,
+    _In_opt_ PVOID CallbackContext,
+    _In_ ULONG Attributes)
+{
+    PETIMER Timer;
+    NTSTATUS Status;
+
+    /* Create the Timer Object */
+    Status = ObCreateObject(KernelMode,
+                            ExTimerType,
+                            NULL,
+                            KernelMode,
+                            NULL,
+                            sizeof(ETIMER),
+                            0,
+                            0,
+                            (PVOID*)&Timer);
+    if (!NT_SUCCESS(Status))
+    {
+        return NULL;
+    }
+
+    /* Initialize the DPC */
+    KeInitializeDpc(&Timer->TimerDpc, ExpTimerDpcRoutine, Timer);
+
+    /* Initialize the Kernel Timer */
+    KeInitializeTimerEx(&Timer->KeTimer, NotificationTimer);
+
+    /* Initialize the timer fields */
+    KeInitializeSpinLock(&Timer->Lock);
+    Timer->ApcAssociated = FALSE;
+    Timer->WakeTimer = FALSE;
+    Timer->WakeTimerListEntry.Flink = NULL;
+    Timer->Period = 0;
+
+    return (PEX_TIMER)Timer;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExSetTimer(
+    _In_ PEX_TIMER Timer,
+    _In_ LONGLONG DueTime,
+    _In_ LONGLONG Period,
+    _In_opt_ PEXT_SET_PARAMETERS Parameters)
+{
+    PETIMER ExTimer = (PETIMER)Timer;
+    LARGE_INTEGER TimerDueTime;
+    BOOLEAN State;
+    KIRQL OldIrql;
+
+    if (!Timer)
+        return FALSE;
+
+    TimerDueTime.QuadPart = DueTime;
+
+    /* Lock the Timer */
+    KeAcquireSpinLock(&ExTimer->Lock, &OldIrql);
+
+    /* Cancel Running Timer */
+    if (ExTimer->ApcAssociated)
+    {
+        KeCancelTimer(&ExTimer->KeTimer);
+        KeRemoveQueueDpc(&ExTimer->TimerDpc);
+    }
+    else
+    {
+        /* If timer was disabled, we still need to cancel it */
+        KeCancelTimer(&ExTimer->KeTimer);
+    }
+
+    /* Read the State */
+    State = KeReadStateTimer(&ExTimer->KeTimer);
+
+    /* Set the period */
+    ExTimer->Period = (LONG)Period;
+
+    /* Enable and Set the Timer */
+    KeSetTimerEx(&ExTimer->KeTimer,
+                 TimerDueTime,
+                 (LONG)Period,
+                 &ExTimer->TimerDpc);
+
+    /* Unlock the Timer */
+    KeReleaseSpinLock(&ExTimer->Lock, OldIrql);
+
+    return State;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExCancelTimer(
+    _In_ PEX_TIMER Timer,
+    _In_opt_ PVOID Parameters)
+{
+    PETIMER ExTimer = (PETIMER)Timer;
+    BOOLEAN State;
+    KIRQL OldIrql;
+
+    if (!Timer)
+        return FALSE;
+
+    /* Lock the Timer */
+    KeAcquireSpinLock(&ExTimer->Lock, &OldIrql);
+
+    /* Cancel the Timer */
+    KeCancelTimer(&ExTimer->KeTimer);
+    KeRemoveQueueDpc(&ExTimer->TimerDpc);
+
+    /* Read the old State */
+    State = KeReadStateTimer(&ExTimer->KeTimer);
+
+    /* Unlock the Timer */
+    KeReleaseSpinLock(&ExTimer->Lock, OldIrql);
+
+    return State;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExDeleteTimer(
+    _In_ PEX_TIMER Timer,
+    _In_ BOOLEAN Cancel,
+    _In_ BOOLEAN Wait,
+    _In_opt_ PEXT_DELETE_PARAMETERS Parameters)
+{
+    PETIMER ExTimer = (PETIMER)Timer;
+    BOOLEAN Cancelled = FALSE;
+
+    if (!Timer)
+        return FALSE;
+
+    if (Cancel)
+    {
+        Cancelled = ExCancelTimer(Timer, NULL);
+    }
+
+    /* Dereference the timer object */
+    ObDereferenceObject(ExTimer);
+    
+    return Cancelled;
+}
+#endif /* End of second duplicate block */
+
 NTSTATUS
 NTAPI
 NtOpenTimer(OUT PHANDLE TimerHandle,
@@ -511,6 +831,165 @@ NtOpenTimer(OUT PHANDLE TimerHandle,
 
     /* Return to Caller */
     return Status;
+}
+
+#if 0 /* Third duplicate block */
+/*
+ * @implemented
+ */
+PEX_TIMER
+NTAPI
+ExAllocateTimer(
+    _In_opt_ PEXT_CALLBACK Callback,
+    _In_opt_ PVOID CallbackContext,
+    _In_ ULONG Attributes)
+{
+    PETIMER Timer;
+    NTSTATUS Status;
+
+    /* Create the Timer Object */
+    Status = ObCreateObject(KernelMode,
+                            ExTimerType,
+                            NULL,
+                            KernelMode,
+                            NULL,
+                            sizeof(ETIMER),
+                            0,
+                            0,
+                            (PVOID*)&Timer);
+    if (!NT_SUCCESS(Status))
+    {
+        return NULL;
+    }
+
+    /* Initialize the DPC */
+    KeInitializeDpc(&Timer->TimerDpc, ExpTimerDpcRoutine, Timer);
+
+    /* Initialize the Kernel Timer */
+    KeInitializeTimerEx(&Timer->KeTimer, NotificationTimer);
+
+    /* Initialize the timer fields */
+    KeInitializeSpinLock(&Timer->Lock);
+    Timer->ApcAssociated = FALSE;
+    Timer->WakeTimer = FALSE;
+    Timer->WakeTimerListEntry.Flink = NULL;
+    Timer->Period = 0;
+
+    return (PEX_TIMER)Timer;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExSetTimer(
+    _In_ PEX_TIMER Timer,
+    _In_ LONGLONG DueTime,
+    _In_ LONGLONG Period,
+    _In_opt_ PEXT_SET_PARAMETERS Parameters)
+{
+    PETIMER ExTimer = (PETIMER)Timer;
+    LARGE_INTEGER TimerDueTime;
+    BOOLEAN State;
+    KIRQL OldIrql;
+
+    if (!Timer)
+        return FALSE;
+
+    TimerDueTime.QuadPart = DueTime;
+
+    /* Lock the Timer */
+    KeAcquireSpinLock(&ExTimer->Lock, &OldIrql);
+
+    /* Cancel Running Timer */
+    if (ExTimer->ApcAssociated)
+    {
+        KeCancelTimer(&ExTimer->KeTimer);
+        KeRemoveQueueDpc(&ExTimer->TimerDpc);
+    }
+    else
+    {
+        /* If timer was disabled, we still need to cancel it */
+        KeCancelTimer(&ExTimer->KeTimer);
+    }
+
+    /* Read the State */
+    State = KeReadStateTimer(&ExTimer->KeTimer);
+
+    /* Set the period */
+    ExTimer->Period = (LONG)Period;
+
+    /* Enable and Set the Timer */
+    KeSetTimerEx(&ExTimer->KeTimer,
+                 TimerDueTime,
+                 (LONG)Period,
+                 &ExTimer->TimerDpc);
+
+    /* Unlock the Timer */
+    KeReleaseSpinLock(&ExTimer->Lock, OldIrql);
+
+    return State;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExCancelTimer(
+    _In_ PEX_TIMER Timer,
+    _In_opt_ PVOID Parameters)
+{
+    PETIMER ExTimer = (PETIMER)Timer;
+    BOOLEAN State;
+    KIRQL OldIrql;
+
+    if (!Timer)
+        return FALSE;
+
+    /* Lock the Timer */
+    KeAcquireSpinLock(&ExTimer->Lock, &OldIrql);
+
+    /* Cancel the Timer */
+    KeCancelTimer(&ExTimer->KeTimer);
+    KeRemoveQueueDpc(&ExTimer->TimerDpc);
+
+    /* Read the old State */
+    State = KeReadStateTimer(&ExTimer->KeTimer);
+
+    /* Unlock the Timer */
+    KeReleaseSpinLock(&ExTimer->Lock, OldIrql);
+
+    return State;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExDeleteTimer(
+    _In_ PEX_TIMER Timer,
+    _In_ BOOLEAN Cancel,
+    _In_ BOOLEAN Wait,
+    _In_opt_ PEXT_DELETE_PARAMETERS Parameters)
+{
+    PETIMER ExTimer = (PETIMER)Timer;
+    BOOLEAN Cancelled = FALSE;
+
+    if (!Timer)
+        return FALSE;
+
+    if (Cancel)
+    {
+        Cancelled = ExCancelTimer(Timer, NULL);
+    }
+
+    /* Dereference the timer object */
+    ObDereferenceObject(ExTimer);
+    
+    return Cancelled;
 }
 
 NTSTATUS
@@ -757,4 +1236,164 @@ NtSetTimer(IN HANDLE TimerHandle,
 
     /* Return to Caller */
     return Status;
+}
+#endif /* End of third duplicate block */
+
+/* The following are the actual implementations to keep */
+/*
+ * @implemented
+ */
+PEX_TIMER
+NTAPI
+ExAllocateTimer(
+    _In_opt_ PEXT_CALLBACK Callback,
+    _In_opt_ PVOID CallbackContext,
+    _In_ ULONG Attributes)
+{
+    PETIMER Timer;
+    NTSTATUS Status;
+
+    /* Create the Timer Object */
+    Status = ObCreateObject(KernelMode,
+                            ExTimerType,
+                            NULL,
+                            KernelMode,
+                            NULL,
+                            sizeof(ETIMER),
+                            0,
+                            0,
+                            (PVOID*)&Timer);
+    if (!NT_SUCCESS(Status))
+    {
+        return NULL;
+    }
+
+    /* Initialize the DPC */
+    KeInitializeDpc(&Timer->TimerDpc, ExpTimerDpcRoutine, Timer);
+
+    /* Initialize the Kernel Timer */
+    KeInitializeTimerEx(&Timer->KeTimer, NotificationTimer);
+
+    /* Initialize the timer fields */
+    KeInitializeSpinLock(&Timer->Lock);
+    Timer->ApcAssociated = FALSE;
+    Timer->WakeTimer = FALSE;
+    Timer->WakeTimerListEntry.Flink = NULL;
+    Timer->Period = 0;
+
+    return (PEX_TIMER)Timer;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExSetTimer(
+    _In_ PEX_TIMER Timer,
+    _In_ LONGLONG DueTime,
+    _In_ LONGLONG Period,
+    _In_opt_ PEXT_SET_PARAMETERS Parameters)
+{
+    PETIMER ExTimer = (PETIMER)Timer;
+    LARGE_INTEGER TimerDueTime;
+    BOOLEAN State;
+    KIRQL OldIrql;
+
+    if (!Timer)
+        return FALSE;
+
+    TimerDueTime.QuadPart = DueTime;
+
+    /* Lock the Timer */
+    KeAcquireSpinLock(&ExTimer->Lock, &OldIrql);
+
+    /* Cancel Running Timer */
+    if (ExTimer->ApcAssociated)
+    {
+        KeCancelTimer(&ExTimer->KeTimer);
+        KeRemoveQueueDpc(&ExTimer->TimerDpc);
+    }
+    else
+    {
+        /* If timer was disabled, we still need to cancel it */
+        KeCancelTimer(&ExTimer->KeTimer);
+    }
+
+    /* Read the State */
+    State = KeReadStateTimer(&ExTimer->KeTimer);
+
+    /* Set the period */
+    ExTimer->Period = (LONG)Period;
+
+    /* Enable and Set the Timer */
+    KeSetTimerEx(&ExTimer->KeTimer,
+                 TimerDueTime,
+                 (LONG)Period,
+                 &ExTimer->TimerDpc);
+
+    /* Unlock the Timer */
+    KeReleaseSpinLock(&ExTimer->Lock, OldIrql);
+
+    return State;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExCancelTimer(
+    _In_ PEX_TIMER Timer,
+    _In_opt_ PVOID Parameters)
+{
+    PETIMER ExTimer = (PETIMER)Timer;
+    BOOLEAN State;
+    KIRQL OldIrql;
+
+    if (!Timer)
+        return FALSE;
+
+    /* Lock the Timer */
+    KeAcquireSpinLock(&ExTimer->Lock, &OldIrql);
+
+    /* Cancel the Timer */
+    KeCancelTimer(&ExTimer->KeTimer);
+    KeRemoveQueueDpc(&ExTimer->TimerDpc);
+
+    /* Read the old State */
+    State = KeReadStateTimer(&ExTimer->KeTimer);
+
+    /* Unlock the Timer */
+    KeReleaseSpinLock(&ExTimer->Lock, OldIrql);
+
+    return State;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExDeleteTimer(
+    _In_ PEX_TIMER Timer,
+    _In_ BOOLEAN Cancel,
+    _In_ BOOLEAN Wait,
+    _In_opt_ PEXT_DELETE_PARAMETERS Parameters)
+{
+    PETIMER ExTimer = (PETIMER)Timer;
+    BOOLEAN Cancelled = FALSE;
+
+    if (!Timer)
+        return FALSE;
+
+    if (Cancel)
+    {
+        Cancelled = ExCancelTimer(Timer, NULL);
+    }
+
+    /* Dereference the timer object */
+    ObDereferenceObject(ExTimer);
+    
+    return Cancelled;
 }

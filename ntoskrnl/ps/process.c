@@ -544,7 +544,11 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
         if (!NT_SUCCESS(Status)) goto CleanupWithRef;
 
         /* Save the exception port */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        Process->ExceptionPortData = ExceptionPortObject;
+#else
         Process->ExceptionPort = ExceptionPortObject;
+#endif
     }
 
     /* Save the pointer to the section object */
@@ -786,7 +790,11 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     Process->Pcb.QuantumReset = Quantum;
 
     /* Check if we have a parent other then the initial system process */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    /* GrantedAccess field was removed in later versions */
+#else
     Process->GrantedAccess = PROCESS_TERMINATE;
+#endif
     if ((Parent) && (Parent != PsInitialSystemProcess))
     {
         /* Get the process's SD */
@@ -814,7 +822,11 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
                                NULL,
                                &PsProcessType->TypeInfo.GenericMapping,
                                PreviousMode,
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+                               NULL,  /* GrantedAccess field was removed in later versions */
+#else
                                &Process->GrantedAccess,
+#endif
                                &AccessStatus);
 
         /* Dereference the token and let go the SD */
@@ -822,6 +834,7 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
                                 SubjectContext.PrimaryToken);
         ObReleaseObjectSecurity(SecurityDescriptor, SdAllocated);
 
+#if (NTDDI_VERSION < NTDDI_WIN7)
         /* Remove access if it failed */
         if (!Result) Process->GrantedAccess = 0;
 
@@ -837,11 +850,18 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
                                    PROCESS_SET_INFORMATION |
                                    STANDARD_RIGHTS_ALL |
                                    PROCESS_SET_QUOTA);
+#else
+        /* GrantedAccess field was removed in Windows 7+ */
+#endif
     }
     else
     {
         /* Set full granted access */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+        /* GrantedAccess field was removed in later versions */
+#else
         Process->GrantedAccess = PROCESS_ALL_ACCESS;
+#endif
     }
 
     /* Set the Creation Time */
@@ -853,7 +873,7 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
         /* Hacky way of returning the PEB to the user-mode creator */
         if ((Process->Peb) && (CurrentThread->Tcb.Teb))
         {
-            CurrentThread->Tcb.Teb->NtTib.ArbitraryUserPointer = Process->Peb;
+            ((PTEB)CurrentThread->Tcb.Teb)->NtTib.ArbitraryUserPointer = Process->Peb;
         }
 
         /* Save the process handle */
@@ -990,7 +1010,11 @@ PsLookupProcessThreadByCid(IN PCLIENT_ID Cid,
                 if (Process)
                 {
                     /* Return it and reference it */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+                    *Process = (PEPROCESS)FoundThread->Tcb.ApcState.Process;
+#else
                     *Process = FoundThread->ThreadsProcess;
+#endif
                     ObReferenceObject(*Process);
                 }
             }

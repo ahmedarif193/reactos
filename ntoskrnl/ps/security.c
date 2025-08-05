@@ -126,7 +126,11 @@ PspWriteTebImpersonationInfo(IN PETHREAD Thread,
     ASSERT(CurrentThread == PsGetCurrentThread());
 
     /* Get process and TEB */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    Process = (PEPROCESS)Thread->Tcb.ApcState.Process;
+#else
     Process = Thread->ThreadsProcess;
+#endif
     Teb = Thread->Tcb.Teb;
     if (Teb)
     {
@@ -147,13 +151,17 @@ PspWriteTebImpersonationInfo(IN PETHREAD Thread,
             if (IsImpersonating)
             {
                 /* Set TEB data */
+#if (NTDDI_VERSION < NTDDI_WIN10)
                 Teb->ImpersonationLocale = -1;
+#endif
                 Teb->IsImpersonating = 1;
             }
             else
             {
                 /* Set TEB data */
+#if (NTDDI_VERSION < NTDDI_WIN10)
                 Teb->ImpersonationLocale = 0;
+#endif
                 Teb->IsImpersonating = 0;
             }
         }
@@ -301,7 +309,11 @@ PspSetPrimaryToken(IN PEPROCESS Process,
                                    NULL,
                                    &PsProcessType->TypeInfo.GenericMapping,
                                    PreviousMode,
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+                                   NULL,  /* GrantedAccess field was removed in later versions */
+#else
                                    &Process->GrantedAccess,
+#endif
                                    &AccessStatus);
 
             /* Dereference the token and let go the SD */
@@ -310,9 +322,14 @@ PspSetPrimaryToken(IN PEPROCESS Process,
             ObReleaseObjectSecurity(SecurityDescriptor, SdAllocated);
 
             /* Remove access if it failed */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+            /* GrantedAccess field was removed in later versions */
+#else
             if (!Result) Process->GrantedAccess = 0;
+#endif
 
             /* Setup granted access */
+#if (NTDDI_VERSION < NTDDI_WIN7)
             Process->GrantedAccess |= (PROCESS_VM_OPERATION |
                                        PROCESS_VM_READ |
                                        PROCESS_VM_WRITE |
@@ -324,6 +341,7 @@ PspSetPrimaryToken(IN PEPROCESS Process,
                                        PROCESS_SET_INFORMATION |
                                        STANDARD_RIGHTS_ALL |
                                        PROCESS_SET_QUOTA);
+#endif
         }
 
         /*
@@ -683,7 +701,11 @@ PsImpersonateClient(IN PETHREAD Thread,
         ImpersonationToken = Token;
 
         /* Obtain a token from the process */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        ProcessToken = PsReferencePrimaryToken((PEPROCESS)Thread->Tcb.ApcState.Process);
+#else
         ProcessToken = PsReferencePrimaryToken(Thread->ThreadsProcess);
+#endif
         if (!ProcessToken)
         {
             /* We can't continue this way without having the process' token... */
@@ -703,7 +725,15 @@ PsImpersonateClient(IN PETHREAD Thread,
             if (!NT_SUCCESS(Status))
             {
                 /* We can't even make a copy of the token? Then bail out... */
-                ObFastDereferenceObject(&Thread->ThreadsProcess->Token, ProcessToken);
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+                ObFastDereferenceObject(&((PEPROCESS)Thread->Tcb.ApcState.Process)->Token, ProcessToken);
+#else
+        #if (NTDDI_VERSION >= NTDDI_WIN10)
+        ObFastDereferenceObject(&((PEPROCESS)Thread->Tcb.ApcState.Process)->Token, ProcessToken);
+#else
+        ObFastDereferenceObject(&Thread->ThreadsProcess->Token, ProcessToken);
+#endif
+#endif
                 return Status;
             }
 
@@ -718,10 +748,18 @@ PsImpersonateClient(IN PETHREAD Thread,
         }
 
         /* We no longer need the process' token */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        ObFastDereferenceObject(&((PEPROCESS)Thread->Tcb.ApcState.Process)->Token, ProcessToken);
+#else
         ObFastDereferenceObject(&Thread->ThreadsProcess->Token, ProcessToken);
+#endif
 
         /* Check if this is a job */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        Job = ((PEPROCESS)Thread->Tcb.ApcState.Process)->Job;
+#else
         Job = Thread->ThreadsProcess->Job;
+#endif
         if (Job != NULL)
         {
             /* No admin allowed in this job */
@@ -813,7 +851,11 @@ PsReferenceEffectiveToken(IN PETHREAD Thread,
             "Thread: %p, TokenType: %p\n", Thread, TokenType);
 
     /* Check if we don't have impersonation info */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    Process = (PEPROCESS)Thread->Tcb.ApcState.Process;
+#else
     Process = Thread->ThreadsProcess;
+#endif
     if (Thread->ActiveImpersonationInfo)
     {
         /* Lock the Process */

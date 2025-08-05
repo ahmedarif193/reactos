@@ -714,7 +714,12 @@ FsRtlCheckLockForWriteAccess(IN PFILE_LOCK FileLock,
     PIO_STACK_LOCATION IoStack = IoGetCurrentIrpStackLocation(Irp);
     COMBINED_LOCK_ELEMENT ToFind;
     PCOMBINED_LOCK_ELEMENT Found;
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* In Windows 10+, use ApcState.Process to get the process */
+    PEPROCESS Process = (PEPROCESS)Irp->Tail.Overlay.Thread->Tcb.ApcState.Process;
+#else
     PEPROCESS Process = Irp->Tail.Overlay.Thread->ThreadsProcess;
+#endif
     DPRINT("CheckLockForWriteAccess(%wZ, Offset %08x%08x, Length %x)\n",
            &IoStack->FileObject->FileName,
            IoStack->Parameters.Write.ByteOffset.HighPart,
@@ -1344,4 +1349,88 @@ FsRtlFreeFileLock(IN PFILE_LOCK FileLock)
     /* Uninitialize and free the lock */
     FsRtlUninitializeFileLock(FileLock);
     ExFreeToPagedLookasideList(&FsRtlFileLockLookasideList, FileLock);
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+FsRtlAreThereCurrentOrInProgressFileLocks(IN PFILE_LOCK FileLock)
+{
+    PAGED_CODE();
+    
+    /* Check if the file lock exists and has any locks */
+    if (!FileLock) return FALSE;
+    
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* In Windows 10+, FILE_LOCK is opaque. We need to check the internal structure */
+    PLOCK_INFORMATION LockInfo = (PLOCK_INFORMATION)FileLock->LockInformation;
+    if (!LockInfo) return FALSE;
+    
+    /* Check both the shared locks list and the range table for exclusive locks */
+    return (!IsListEmpty(&LockInfo->SharedLocks) || 
+            (RtlNumberGenericTableElements(&LockInfo->RangeTable) > 0));
+#else
+    /* Check if there are any shared or exclusive locks */
+    return (!IsListEmpty(&FileLock->SharedLockList) || 
+            !IsListEmpty(&FileLock->ExclusiveLockList));
+#endif
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+FsRtlCheckLockForOplockRequest(
+    IN PFILE_LOCK FileLock,
+    IN PLARGE_INTEGER AllocationSize)
+{
+    PAGED_CODE();
+    
+    /* Windows 10 compatibility stub - for now just check if there are any locks */
+    UNREFERENCED_PARAMETER(AllocationSize);
+    
+    if (!FileLock) return TRUE;
+    
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* In Windows 10+, FILE_LOCK is opaque. We need to check the internal structure */
+    PLOCK_INFORMATION LockInfo = (PLOCK_INFORMATION)FileLock->LockInformation;
+    if (!LockInfo) return TRUE;
+    
+    /* Check both the shared locks list and the range table for exclusive locks */
+    return (IsListEmpty(&LockInfo->SharedLocks) && 
+            (RtlNumberGenericTableElements(&LockInfo->RangeTable) == 0));
+#else
+    /* Return TRUE if no locks, FALSE if there are locks that might conflict */
+    return (IsListEmpty(&FileLock->SharedLockList) && 
+            IsListEmpty(&FileLock->ExclusiveLockList));
+#endif
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+FsRtlAreThereWaitingFileLocks(
+    IN PFILE_LOCK FileLock)
+{
+    PAGED_CODE();
+    
+    /* Windows 10 compatibility stub - check if there are any waiting locks */
+    if (!FileLock) return FALSE;
+    
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* In Windows 10+, FILE_LOCK is opaque. We need to check the internal structure */
+    PLOCK_INFORMATION LockInfo = (PLOCK_INFORMATION)FileLock->LockInformation;
+    if (!LockInfo) return FALSE;
+    
+    /* Check the CSQ list for waiting lock requests */
+    return !IsListEmpty(&LockInfo->CsqList);
+#else
+    /* Check if there are any pending requests waiting for locks */
+    return !IsListEmpty(&FileLock->WaitingLockQueue);
+#endif
 }

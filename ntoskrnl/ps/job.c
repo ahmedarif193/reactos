@@ -309,7 +309,13 @@ NtCreateJobObject (
         /* inherit the session id from the caller */
         Job->SessionId = PsGetProcessSessionId(CurrentProcess);
 
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        ExInitializePushLock(&Job->MemoryLimitsLock);
+#elif (NTDDI_VERSION >= NTDDI_WS03)
         KeInitializeGuardedMutex(&Job->MemoryLimitsLock);
+#else
+        ExInitializeFastMutex(&Job->MemoryLimitsLock);
+#endif
 
         Status = ExInitializeResource(&Job->JobLock);
         if(!NT_SUCCESS(Status))
@@ -629,7 +635,12 @@ NtQueryInformationJobObject (
                 PEPROCESS Process;
 
                 Process = CONTAINING_RECORD(NextEntry, EPROCESS, JobLinks);
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
                 if (!BooleanFlagOn(Process->JobStatus, 2))
+#else
+                /* JobStatus field removed in Vista+, check Flags2 instead */
+                if (!BooleanFlagOn(Process->Flags2, 2))
+#endif
                 {
                     PROCESS_VALUES Values;
 
@@ -677,13 +688,27 @@ NtQueryInformationJobObject (
             if (JobInformationClass == JobObjectExtendedLimitInformation)
             {
                 /* Lock our memory lock */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+                KeEnterCriticalRegion();
+                ExAcquirePushLockExclusive(&Job->MemoryLimitsLock);
+#elif (NTDDI_VERSION >= NTDDI_WS03)
                 KeAcquireGuardedMutexUnsafe(&Job->MemoryLimitsLock);
+#else
+                ExAcquireFastMutexUnsafe(&Job->MemoryLimitsLock);
+#endif
                 /* Return limits */
                 ExtendedLimit.ProcessMemoryLimit = Job->ProcessMemoryLimit << PAGE_SHIFT;
                 ExtendedLimit.JobMemoryLimit = Job->JobMemoryLimit << PAGE_SHIFT;
                 ExtendedLimit.PeakProcessMemoryUsed = Job->PeakProcessMemoryUsed << PAGE_SHIFT;
                 ExtendedLimit.PeakJobMemoryUsed = Job->PeakJobMemoryUsed << PAGE_SHIFT;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+                ExReleasePushLockExclusive(&Job->MemoryLimitsLock);
+                KeLeaveCriticalRegion();
+#elif (NTDDI_VERSION >= NTDDI_WS03)
                 KeReleaseGuardedMutexUnsafe(&Job->MemoryLimitsLock);
+#else
+                ExReleaseFastMutexUnsafe(&Job->MemoryLimitsLock);
+#endif
 
                 /* And done */
                 ExReleaseResourceLite(&Job->JobLock);

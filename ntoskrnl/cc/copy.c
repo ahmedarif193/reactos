@@ -935,3 +935,46 @@ CcZeroData (
 
     return TRUE;
 }
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+CcCopyWriteEx (
+    IN PFILE_OBJECT FileObject,
+    IN PLARGE_INTEGER FileOffset,
+    IN ULONG Length,
+    IN BOOLEAN Wait,
+    IN PVOID Buffer,
+    IN PETHREAD IoIssuerThread)
+{
+    CCTRACE(CC_API_DEBUG, "FileObject=%p FileOffset=%I64d Length=%lu Wait=%d Buffer=%p Thread=%p\n",
+        FileObject, FileOffset->QuadPart, Length, Wait, Buffer, IoIssuerThread);
+        
+    /* Windows 8+ extended write function - for now just call the basic version and ignore thread */
+    UNREFERENCED_PARAMETER(IoIssuerThread);
+    return CcCopyWrite(FileObject, FileOffset, Length, Wait, Buffer);
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+CcCopyReadEx (
+    IN PFILE_OBJECT FileObject,
+    IN PLARGE_INTEGER FileOffset,
+    IN ULONG Length,
+    IN BOOLEAN Wait,
+    OUT PVOID Buffer,
+    OUT PIO_STATUS_BLOCK IoStatus,
+    IN PVOID Context)
+{
+    CCTRACE(CC_API_DEBUG, "FileObject=%p FileOffset=%I64d Length=%lu Wait=%d Buffer=%p Context=%p\n",
+        FileObject, FileOffset->QuadPart, Length, Wait, Buffer, Context);
+        
+    /* Windows 8+ extended read function - for now just call the basic version and ignore context */
+    UNREFERENCED_PARAMETER(Context);
+    return CcCopyRead(FileObject, FileOffset, Length, Wait, Buffer, IoStatus);
+}

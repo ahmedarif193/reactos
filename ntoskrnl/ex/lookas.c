@@ -70,16 +70,26 @@ ExInitPoolLookasidePointers(VOID)
         InitializeSListHead(&Entry->ListHead);
 
         /* Bind to PRCB */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
         Prcb->PPNPagedLookasideList[i].P = Entry;
         Prcb->PPNPagedLookasideList[i].L = Entry;
+#else
+        /* For Windows Vista+, the lookaside lists are initialized differently */
+        RtlZeroMemory(&Prcb->PPNPagedLookasideList[i], sizeof(GENERAL_LOOKASIDE_POOL));
+#endif
 
         /* Initialize the paged list */
         Entry = &ExpSmallPagedPoolLookasideLists[i];
         InitializeSListHead(&Entry->ListHead);
 
         /* Bind to PRCB */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
         Prcb->PPPagedLookasideList[i].P = Entry;
         Prcb->PPPagedLookasideList[i].L = Entry;
+#else
+        /* For Windows Vista+, the lookaside lists are initialized differently */
+        RtlZeroMemory(&Prcb->PPPagedLookasideList[i], sizeof(GENERAL_LOOKASIDE_POOL));
+#endif
     }
 }
 

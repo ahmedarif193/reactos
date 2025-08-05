@@ -271,7 +271,11 @@ MiInitMachineDependent(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     //
     PointerPte = MiAddressToPde(PDE_BASE);
     PageFrameIndex = PFN_FROM_PTE(PointerPte) << PAGE_SHIFT;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    PsGetCurrentProcess()->Pcb.DirectoryTableBase = PageFrameIndex;
+#else
     PsGetCurrentProcess()->Pcb.DirectoryTableBase[0] = PageFrameIndex;
+#endif
 
     //
     // Blow away user-mode
@@ -498,7 +502,9 @@ MiInitMachineDependent(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     TempPde = ValidKernelPdeLocal;
     TempPde.u.Hard.PageFrameNumber = PageFrameIndex;
     MI_WRITE_VALID_PTE(StartPde, TempPde);
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     PsGetCurrentProcess()->Pcb.DirectoryTableBase[1] = PageFrameIndex << PAGE_SHIFT;
+#endif
 
     /* Flush the TLB */
     KeFlushCurrentTb();

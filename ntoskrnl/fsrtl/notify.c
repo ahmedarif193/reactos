@@ -917,7 +917,12 @@ FsRtlNotifyFilterChangeDirectory(IN PNOTIFY_SYNC NotifySync,
             NotifyChange->BufferLength = Stack->Parameters.NotifyDirectory.Length;
         }
 
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        /* In Windows 10+, use ApcState.Process to get the process */
+        NotifyChange->OwningProcess = (PEPROCESS)NotifyIrp->Tail.Overlay.Thread->Tcb.ApcState.Process;
+#else
         NotifyChange->OwningProcess = NotifyIrp->Tail.Overlay.Thread->ThreadsProcess;
+#endif
 
         /* Insert the notification into the notification list */
         InsertTailList(NotifyList, &(NotifyChange->NotifyList));
@@ -1672,5 +1677,20 @@ FsRtlNotifyUninitializeSync(IN PNOTIFY_SYNC *NotifySync)
         ExFreePoolWithTag(*NotifySync, 'SNSF');
         *NotifySync = NULL;
     }
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+FsRtlUpdateDiskCounters(
+    IN ULONG64 BytesRead,
+    IN ULONG64 BytesWritten)
+{
+    /* Windows 10 compatibility stub for disk performance counters */
+    /* In a full implementation this would update system performance counters */
+    UNREFERENCED_PARAMETER(BytesRead);
+    UNREFERENCED_PARAMETER(BytesWritten);
 }
 

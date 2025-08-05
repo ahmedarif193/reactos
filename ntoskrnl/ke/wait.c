@@ -63,6 +63,23 @@ KiUnlinkThread(IN PKTHREAD Thread,
 
     /* Remove the Wait Blocks from the list */
     WaitBlock = Thread->WaitBlockList;
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    /* In Windows 8+, NextWaitBlock was removed. Use a different approach */
+    PKWAIT_BLOCK FirstBlock = WaitBlock;
+    ULONG Count = 0;
+    do
+    {
+        /* Remove it */
+        RemoveEntryList(&WaitBlock->WaitListEntry);
+
+        /* Move to next wait block in array */
+        WaitBlock++;
+        Count++;
+        
+        /* Check if we wrapped around (max 64 wait blocks) */
+        if (Count >= MAXIMUM_WAIT_OBJECTS) break;
+    } while (WaitBlock->Object != NULL);
+#else
     do
     {
         /* Remove it */
@@ -71,6 +88,7 @@ KiUnlinkThread(IN PKTHREAD Thread,
         /* Go to the next one */
         WaitBlock = WaitBlock->NextWaitBlock;
     } while (WaitBlock != Thread->WaitBlockList);
+#endif
 
     /* Remove the thread from the wait list! */
     if (Thread->WaitListEntry.Flink) RemoveEntryList(&Thread->WaitListEntry);
@@ -762,7 +780,12 @@ KeWaitForMultipleObjects(IN ULONG Count,
                         KiSatisfyObjectWait(CurrentObject, Thread);
 
                         /* Go to the next block */
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+                        /* NextWaitBlock was removed in Windows 8+ */
+                        WaitBlock++;
+#else
                         WaitBlock = WaitBlock->NextWaitBlock;
+#endif
                     } while(WaitBlock != WaitBlockArray);
 
                     /* Set the wait status and get out */
@@ -792,7 +815,11 @@ KeWaitForMultipleObjects(IN ULONG Count,
                 Timer->Header.Inserted = TRUE;
 
                 /* Link the wait blocks */
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+                /* NextWaitBlock was removed in Windows 8+ */
+#else
                 WaitBlock->NextWaitBlock = TimerBlock;
+#endif
             }
 
             /* Insert into Object's Wait List*/
@@ -807,7 +834,12 @@ KeWaitForMultipleObjects(IN ULONG Count,
                                &WaitBlock->WaitListEntry);
 
                 /* Move to the next Wait Block */
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+                /* NextWaitBlock was removed in Windows 8+ */
+                WaitBlock++;
+#else
                 WaitBlock = WaitBlock->NextWaitBlock;
+#endif
             } while (WaitBlock != WaitBlockArray);
 
             /* Handle Kernel Queues */

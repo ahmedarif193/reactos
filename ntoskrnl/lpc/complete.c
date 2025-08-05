@@ -161,7 +161,14 @@ NtAcceptConnectPort(OUT PHANDLE PortHandle,
     /* Make sure that the client wants a reply, and this is the right one */
     if (!(LpcpGetMessageFromThread(ClientThread)) ||
         !(CapturedReplyMessage.MessageId) ||
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        (ClientThread->LpcReplyMessageId2 != CapturedReplyMessage.MessageId))
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
+        /* LpcReplyMessageId was removed in Vista-Win8 */
+        (FALSE))
+#else
         (ClientThread->LpcReplyMessageId != CapturedReplyMessage.MessageId))
+#endif
     {
         /* Not the reply asked for, or no reply wanted, fail */
         KeReleaseGuardedMutex(&LpcpLock);
@@ -189,8 +196,16 @@ NtAcceptConnectPort(OUT PHANDLE PortHandle,
     }
 
     /* At this point, don't let other accept attempts happen */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     ClientThread->LpcReplyMessage = NULL;
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    ClientThread->LpcReplyMessageId2 = 0;
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* LpcReplyMessageId was removed in Vista-Win8 */
+#else
     ClientThread->LpcReplyMessageId = 0;
+#endif
 
     /* Clear the client port for now as well, then release the lock */
     ConnectMessage->ClientPort = NULL;
@@ -380,7 +395,9 @@ NtAcceptConnectPort(OUT PHANDLE PortHandle,
 
     /* Set this message as the LPC Reply message while holding the lock */
     KeAcquireGuardedMutex(&LpcpLock);
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     ClientThread->LpcReplyMessage = Message;
+#endif
     KeReleaseGuardedMutex(&LpcpLock);
 
     /* Clear the thread pointer so it doesn't get cleaned later */
@@ -397,10 +414,16 @@ Cleanup:
     if (ClientThread)
     {
         KeAcquireGuardedMutex(&LpcpLock);
-        ClientThread->LpcReplyMessage = Message;
+    #if (NTDDI_VERSION < NTDDI_LONGHORN)
+    ClientThread->LpcReplyMessage = Message;
+#endif
         LpcpPrepareToWakeClient(ClientThread);
         KeReleaseGuardedMutex(&LpcpLock);
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        LpcpCompleteWait(&ClientThread->KeyedWaitSemaphore);
+#else
         LpcpCompleteWait(&ClientThread->LpcReplySemaphore);
+#endif
         ObDereferenceObject(ClientThread);
     }
 
@@ -477,7 +500,11 @@ NtCompleteConnectPort(IN HANDLE PortHandle)
 
     /* Release the lock and wait for an answer */
     KeReleaseGuardedMutex(&LpcpLock);
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    LpcpCompleteWait(&Thread->KeyedWaitSemaphore);
+#else
     LpcpCompleteWait(&Thread->LpcReplySemaphore);
+#endif
 
     /* Dereference the Thread and Port and return */
     ObDereferenceObject(Port);

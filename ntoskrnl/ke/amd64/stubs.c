@@ -53,7 +53,11 @@ KiSwitchKernelStack(PVOID StackBase, PVOID StackLimit)
     OldStackBase = CurrentThread->StackBase;
 
     /* Get the size of the current stack */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    StackSize = (ULONG_PTR)CurrentThread->StackBase - (ULONG_PTR)CurrentThread->StackLimit;
+#else
     StackSize = (ULONG_PTR)CurrentThread->StackBase - CurrentThread->StackLimit;
+#endif
     ASSERT(StackSize <= (ULONG_PTR)StackBase - (ULONG_PTR)StackLimit);
 
     /* Copy the current stack contents to the new stack */
@@ -82,8 +86,14 @@ KiSwitchKernelStack(PVOID StackBase, PVOID StackLimit)
 
     /* Set the new stack limits */
     CurrentThread->StackBase = StackBase;
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    CurrentThread->StackLimit = StackLimit;
+#else
     CurrentThread->StackLimit = (ULONG_PTR)StackLimit;
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN7) && !defined(_M_AMD64)
     CurrentThread->LargeStack = TRUE;
+#endif
 
     /* Adjust RspBase in the PCR */
     Pcr = (PKIPCR)KeGetPcr();
@@ -178,7 +188,11 @@ KiSwapProcess(IN PKPROCESS NewProcess,
 #endif
 
     /* Update CR3 */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    __writecr3(NewProcess->DirectoryTableBase);
+#else
     __writecr3(NewProcess->DirectoryTableBase[0]);
+#endif
 
     /* Update IOPM offset */
     Pcr->TssBase->IoMapBase = NewProcess->IopmOffset;
@@ -200,4 +214,36 @@ NtVdmControl(IN ULONG ControlCode,
 {
     /* Not supported */
     return STATUS_NOT_IMPLEMENTED;
+}
+
+NTSTATUS
+NTAPI
+KeExpandKernelStackAndCalloutEx(
+    IN PEXPAND_STACK_CALLOUT Callout,
+    IN PVOID Parameter,
+    IN SIZE_T Size,
+    IN BOOLEAN Wait,
+    IN PVOID Context)
+{
+    /* Windows 10 compatibility stub - for now just call the original function */
+    UNREFERENCED_PARAMETER(Size);
+    UNREFERENCED_PARAMETER(Wait);
+    UNREFERENCED_PARAMETER(Context);
+    
+    /* For now, just call the callback directly */
+    Callout(Parameter);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+KeExpandKernelStackAndCallout(
+    IN PEXPAND_STACK_CALLOUT Callout,
+    IN PVOID Parameter,
+    IN SIZE_T Size)
+{
+    /* Windows 10 API - for now just call the callback directly */
+    UNREFERENCED_PARAMETER(Size);
+    Callout(Parameter);
+    return STATUS_SUCCESS;
 }

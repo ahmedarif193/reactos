@@ -1045,7 +1045,11 @@ KdbpAttachToThread(
         KdbpPrint("Invalid thread id: 0x%08x\n", (ULONG_PTR)ThreadId);
         return FALSE;
     }
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    Process = (PEPROCESS)Thread->Tcb.ApcState.Process;
+#else
     Process = Thread->ThreadsProcess;
+#endif
 
     if (KeIsExecutingDpc() && Process != KdbCurrentProcess)
     {

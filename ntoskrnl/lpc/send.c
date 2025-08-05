@@ -139,7 +139,15 @@ LpcRequestPort(IN PVOID PortObject,
         Message->Request.CallbackId = 0;
 
         /* No Message ID for the thread */
-        Thread->LpcReplyMessageId = 0;
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        Thread->LpcReplyMessageId2 = 0;
+#else
+    #if (NTDDI_VERSION >= NTDDI_WIN10)
+    Thread->LpcReplyMessageId2 = 0;
+#else
+    Thread->LpcReplyMessageId = 0;
+#endif
+#endif
 
         /* Insert the message in our chain */
         InsertTailList(&QueuePort->MsgQueue.ReceiveHead, &Message->Entry);
@@ -330,8 +338,20 @@ LpcRequestWaitReplyPort(IN PVOID PortObject,
         Message->Request.CallbackId = 0;
 
         /* Set the message ID for our thread now */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        Thread->LpcReplyMessageId2 = Message->Request.MessageId;
+#else
         Thread->LpcReplyMessageId = Message->Request.MessageId;
-        Thread->LpcReplyMessage = NULL;
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        /* LpcReplyMessage field was removed in Windows 10 */
+#else
+    #if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* LpcReplyMessage field was removed in Windows 10 */
+#else
+    Thread->LpcReplyMessage = NULL;
+#endif
+#endif
 
         /* Insert the message in our chain */
         InsertTailList(&QueuePort->MsgQueue.ReceiveHead, &Message->Entry);
@@ -356,15 +376,28 @@ LpcRequestWaitReplyPort(IN PVOID PortObject,
     KeLeaveCriticalRegion();
 
     /* And let's wait for the reply */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* In Windows 10, LPC reply mechanism changed - wait on thread directly */
+    Status = KeWaitForSingleObject(Thread, WrLpcReply, PreviousMode, FALSE, NULL);
+#else
     LpcpReplyWait(&Thread->LpcReplySemaphore, PreviousMode);
+#endif
 
     /* Acquire the LPC lock */
     KeAcquireGuardedMutex(&LpcpLock);
 
     /* Get the LPC Message and clear our thread's reply data */
     Message = LpcpGetMessageFromThread(Thread);
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* LpcReplyMessage field was removed in Windows 10 */
+#else
     Thread->LpcReplyMessage = NULL;
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    Thread->LpcReplyMessageId2 = 0;
+#else
     Thread->LpcReplyMessageId = 0;
+#endif
 
     /* Check if we have anything on the reply chain*/
     if (!IsListEmpty(&Thread->LpcReplyChain))
@@ -604,7 +637,15 @@ NtRequestPort(IN HANDLE PortHandle,
         Message->Request.CallbackId = 0;
 
         /* No Message ID for the thread */
-        Thread->LpcReplyMessageId = 0;
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        Thread->LpcReplyMessageId2 = 0;
+#else
+    #if (NTDDI_VERSION >= NTDDI_WIN10)
+    Thread->LpcReplyMessageId2 = 0;
+#else
+    Thread->LpcReplyMessageId = 0;
+#endif
+#endif
 
         /* Insert the message in our chain */
         InsertTailList(&QueuePort->MsgQueue.ReceiveHead, &Message->Entry);
@@ -938,8 +979,20 @@ NtRequestWaitReplyPort(IN HANDLE PortHandle,
         Message->Request.CallbackId = 0;
 
         /* Set the message ID for our thread now */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        Thread->LpcReplyMessageId2 = Message->Request.MessageId;
+#else
         Thread->LpcReplyMessageId = Message->Request.MessageId;
-        Thread->LpcReplyMessage = NULL;
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        /* LpcReplyMessage field was removed in Windows 10 */
+#else
+    #if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* LpcReplyMessage field was removed in Windows 10 */
+#else
+    Thread->LpcReplyMessage = NULL;
+#endif
+#endif
 
         /* Insert the message in our chain */
         InsertTailList(&QueuePort->MsgQueue.ReceiveHead, &Message->Entry);
@@ -964,15 +1017,28 @@ NtRequestWaitReplyPort(IN HANDLE PortHandle,
     KeLeaveCriticalRegion();
 
     /* And let's wait for the reply */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* In Windows 10, LPC reply mechanism changed - wait on thread directly */
+    Status = KeWaitForSingleObject(Thread, WrLpcReply, PreviousMode, FALSE, NULL);
+#else
     LpcpReplyWait(&Thread->LpcReplySemaphore, PreviousMode);
+#endif
 
     /* Acquire the LPC lock */
     KeAcquireGuardedMutex(&LpcpLock);
 
     /* Get the LPC Message and clear our thread's reply data */
     Message = LpcpGetMessageFromThread(Thread);
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* LpcReplyMessage field was removed in Windows 10 */
+#else
     Thread->LpcReplyMessage = NULL;
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    Thread->LpcReplyMessageId2 = 0;
+#else
     Thread->LpcReplyMessageId = 0;
+#endif
 
     /* Check if we have anything on the reply chain*/
     if (!IsListEmpty(&Thread->LpcReplyChain))

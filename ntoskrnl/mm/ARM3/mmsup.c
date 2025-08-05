@@ -235,7 +235,12 @@ MmIsRecursiveIoFault(VOID)
     //
     // If any of these is true, this is a recursive fault
     //
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* ForwardClusterOnly was removed in Windows 10 */
+    return Thread->DisablePageFaultClustering;
+#else
     return ((Thread->DisablePageFaultClustering) | (Thread->ForwardClusterOnly));
+#endif
 }
 
 /*

@@ -299,7 +299,12 @@ VOID
 NTAPI
 MmRebalanceMemoryConsumersAndWait(VOID)
 {
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* EX_PUSH_LOCK doesn't have Owner field in Vista+ */
+    ASSERT(!ExIsAcquiredPushLockExclusive(&PsGetCurrentProcess()->AddressCreationLock));
+#else
     ASSERT(PsGetCurrentProcess()->AddressCreationLock.Owner != KeGetCurrentThread());
+#endif
     ASSERT(!MM_ANY_WS_LOCK_HELD(PsGetCurrentThread()));
     ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
 

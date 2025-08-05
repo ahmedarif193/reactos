@@ -120,7 +120,11 @@ KiSelectNextProcessor(
     ULONG Processor;
 
     /* Start with the affinity */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    PreferredSet = Thread->Affinity.Mask;
+#else
     PreferredSet = Thread->Affinity;
+#endif
 
     /* If we have matching idle processors, use them */
     IdleSet = PreferredSet & KiIdleSummary;
@@ -190,8 +194,12 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
         }
 
         /* We need 4 quanta, make sure we have them, then decrease by one */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
         if (Thread->Quantum < 4) Thread->Quantum = 4;
         Thread->Quantum--;
+#else
+        /* Quantum field was removed in Vista+ */
+#endif
 
         /* Make sure the priority is still valid */
         ASSERT((Thread->Priority >= 0) && (Thread->Priority <= HIGH_PRIORITY));
@@ -210,7 +218,9 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
             if (Thread->BasePriority >= (LOW_REALTIME_PRIORITY - 2))
             {
                 /* It is, so simply reset its quantum */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
                 Thread->Quantum = Thread->QuantumReset;
+#endif
             }
             else
             {
@@ -218,17 +228,24 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
                 if (!(Thread->PriorityDecrement) && (Thread->AdjustIncrement))
                 {
                     /* Yes, reset its quantum */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
                     Thread->Quantum = Thread->QuantumReset;
+#endif
                 }
 
                 /* Wait code already handles quantum adjustment during APCs */
                 if (Thread->WaitStatus != STATUS_KERNEL_APC)
                 {
                     /* Decrease the quantum by one and check if we're out */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
                     if (--Thread->Quantum <= 0)
                     {
                         /* We are, reset the quantum and get a new priority */
                         Thread->Quantum = Thread->QuantumReset;
+#else
+                    /* In Vista+, quantum is handled differently */
+                    {
+#endif
                         Thread->Priority = KiComputeNewPriority(Thread, 1);
                     }
                 }
@@ -283,7 +300,9 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
         else
         {
             /* It's a real-time thread, so just reset its quantum */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
             Thread->Quantum = Thread->QuantumReset;
+#endif
         }
 
         /* Make sure the priority makes sense */
@@ -341,7 +360,12 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 
             /* Set it in deferred ready mode */
             NextThread->State = DeferredReady;
+#if (NTDDI_VERSION < NTDDI_WIN8)
             NextThread->DeferredProcessor = Prcb->Number;
+#else
+            /* On Windows 8+, use NextProcessor field */
+            NextThread->NextProcessor = Prcb->Number;
+#endif
             KiReleasePrcbLock(Prcb);
             KiDeferredReadyThread(NextThread);
             return;
@@ -545,10 +569,15 @@ KiAdjustQuantumThread(IN PKTHREAD Thread)
         (Thread->BasePriority < (LOW_REALTIME_PRIORITY - 2)))
     {
         /* Decrease Quantum by one and see if we've ran out */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
         if (--Thread->Quantum <= 0)
         {
             /* Return quantum */
             Thread->Quantum = Thread->QuantumReset;
+#else
+        /* In Vista+, quantum is handled differently */
+        {
+#endif
 
             /* Calculate new Priority */
             Thread->Priority = KiComputeNewPriority(Thread, 1);
@@ -769,11 +798,20 @@ KiUpdateEffectiveAffinityThread(
     KiAcquirePrcbLock(Prcb);
 
     /* Set the thread's affinity and ideal processor */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
     Thread->Affinity = Thread->UserAffinity;
     Thread->IdealProcessor = Thread->UserIdealProcessor;
+#else
+    Thread->Affinity = Thread->UserAffinity;
+    Thread->IdealProcessor = Thread->UserIdealProcessor;
+#endif
 
     /* Check if the affinity doesn't match with the current processor */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    if ((Prcb->SetMember & Thread->Affinity.Mask) == 0)
+#else
     if ((Prcb->SetMember & Thread->Affinity) == 0)
+#endif
     {
         if (Thread->State == Running)
         {
@@ -828,7 +866,11 @@ KiSetAffinityThread(IN PKTHREAD Thread,
     KAFFINITY OldAffinity;
 
     /* Get the current affinity */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    OldAffinity = Thread->UserAffinity.Mask;
+#else
     OldAffinity = Thread->UserAffinity;
+#endif
 
     /* Make sure that the affinity is valid */
     if (((Affinity & Thread->ApcState.Process->Affinity) != (Affinity)) ||
@@ -839,7 +881,12 @@ KiSetAffinityThread(IN PKTHREAD Thread,
     }
 
     /* Update the new affinity */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    Thread->UserAffinity.Mask = Affinity;
+    Thread->UserAffinity.Group = 0; /* Assume group 0 for now */
+#else
     Thread->UserAffinity = Affinity;
+#endif
 
 #ifdef CONFIG_SMP
     /* Check if system affinity is not active */
@@ -919,7 +966,9 @@ NtYieldExecution(VOID)
         if (NextThread)
         {
             /* Reset quantum and recalculate priority */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
             Thread->Quantum = Thread->QuantumReset;
+#endif
             Thread->Priority = KiComputeNewPriority(Thread, 1);
 
             /* Release the thread lock */

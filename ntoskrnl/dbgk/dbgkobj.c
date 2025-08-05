@@ -345,7 +345,11 @@ DbgkForwardException(IN PEXCEPTION_RECORD ExceptionRecord,
     else
     {
         /* Otherwise, use the exception port */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+        Port = Process->ExceptionPortData;
+#else
         Port = Process->ExceptionPort;
+#endif
         ApiMessage.h.u2.ZeroInit = 0;
         ApiMessage.h.u2.s2.Type = LPC_EXCEPTION;
         UseLpc = TRUE;
@@ -666,7 +670,11 @@ DbgkpPostFakeThreadMessages(IN PEPROCESS Process,
         if ((IsFirstThread) &&
             !(Flags & DEBUG_EVENT_PROTECT_FAILED) &&
             !(ThisThread->SystemThread) &&
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+            (ThisThread->GrantedAccess2))
+#else
             (ThisThread->GrantedAccess))
+#endif
         {
             /* It is, save the flag */
             First = TRUE;
@@ -1330,7 +1338,11 @@ ThreadScan:
 
             /* Check if the status is success */
             if ((MsgStatus == STATUS_SUCCESS) &&
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+                (EventThread->GrantedAccess2) &&
+#else
                 (EventThread->GrantedAccess) &&
+#endif
                 (!EventThread->SystemThread))
             {
                 /* Check if we couldn't acquire rundown for it */

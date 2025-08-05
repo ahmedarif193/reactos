@@ -164,7 +164,7 @@ KiUserModeCallout(
     InitialStack = (ULONG_PTR)ALIGN_DOWN_POINTER_BY(CalloutFrame, 16);
 
     /* Check if we have enough space on the stack with safety margin */
-    if ((InitialStack - KERNEL_STACK_SIZE - PAGE_SIZE) < CurrentThread->StackLimit)  /* Add PAGE_SIZE safety margin */
+    if ((InitialStack - KERNEL_STACK_SIZE - PAGE_SIZE) < (ULONG_PTR)CurrentThread->StackLimit)  /* Add PAGE_SIZE safety margin */
     {
         /* We don't, we'll have to grow our stack */
         Status = MmGrowKernelStack((PVOID)(InitialStack - PAGE_SIZE));  /* Grow with margin */
@@ -173,22 +173,28 @@ KiUserModeCallout(
         if (!NT_SUCCESS(Status)) return Status;
         
         /* Verify the stack growth was successful */
-        if ((InitialStack - KERNEL_STACK_SIZE - PAGE_SIZE) < CurrentThread->StackLimit)
+        if ((InitialStack - KERNEL_STACK_SIZE - PAGE_SIZE) < (ULONG_PTR)CurrentThread->StackLimit)
         {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
     }
 
     /* Save the current callback stack and initial stack */
+#if (NTDDI_VERSION < NTDDI_WIN8)
     CalloutFrame->CallbackStack = (ULONG_PTR)CurrentThread->CallbackStack;
+#endif
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     CalloutFrame->InitialStack = (ULONG_PTR)CurrentThread->InitialStack;
+#endif
 
     /* Get and save the trap frame */
     TrapFrame = CurrentThread->TrapFrame;
     CalloutFrame->TrapFrame = (ULONG_PTR)TrapFrame;
 
     /* Set the new callback stack */
+#if (NTDDI_VERSION < NTDDI_LONGHORN) || ((NTDDI_VERSION < NTDDI_WIN7) && defined(_WIN64))
     CurrentThread->CallbackStack = CalloutFrame;
+#endif
 
     /* Disable interrupts so we can fill the NPX State */
     _disable();
@@ -349,7 +355,12 @@ NtCallbackReturn(
 
     /* Get the current thread and make sure we have a callback stack */
     CurrentThread = KeGetCurrentThread();
+#if (NTDDI_VERSION < NTDDI_LONGHORN) || ((NTDDI_VERSION < NTDDI_WIN7) && defined(_WIN64))
     CalloutFrame = CurrentThread->CallbackStack;
+#else
+    /* CallbackStack field removed in newer versions */
+    CalloutFrame = NULL;
+#endif
     if (CalloutFrame == NULL)
     {
         return STATUS_NO_CALLBACK_ACTIVE;
@@ -393,15 +404,25 @@ NtCallbackReturn(
     }
 
     /* Switch the stack back to the previous value */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     Pcr->TssBase->Rsp0 = CalloutFrame->InitialStack;
     Pcr->Prcb.RspBase = CalloutFrame->InitialStack;
 
     /* Get the initial stack and restore it */
     CurrentThread->InitialStack = (PVOID)CalloutFrame->InitialStack;
+#else
+    /* InitialStack field removed in newer versions */
+#endif
 
     /* Restore the trap frame and the previous callback stack */
     CurrentThread->TrapFrame = TrapFrame;
+#if (NTDDI_VERSION < NTDDI_LONGHORN) || ((NTDDI_VERSION < NTDDI_WIN7) && defined(_WIN64))
+#if (NTDDI_VERSION < NTDDI_WIN8)
     CurrentThread->CallbackStack = (PVOID)CalloutFrame->CallbackStack;
+#else
+    CurrentThread->CallbackStack = NULL;
+#endif
+#endif
 
     /* Bring interrupts back */
     _enable();

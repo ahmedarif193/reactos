@@ -18,6 +18,12 @@
 LIST_ENTRY HandleTableListHead;
 EX_PUSH_LOCK HandleTableListLock;
 #define SizeOfHandle(x) (sizeof(HANDLE) * (x))
+
+/* Windows 10 compatibility - map old handle table members to new ones */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+#define FirstFree FirstFreeHandle
+#define LastFree FirstFreeHandle  /* Note: LastFree doesn't have direct equivalent, using FirstFreeHandle */
+#endif
 #define INDEX_TO_HANDLE_VALUE(x) ((x) << HANDLE_TAG_BITS)
 
 /* PRIVATE FUNCTIONS *********************************************************/

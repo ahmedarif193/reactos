@@ -64,7 +64,12 @@ KeQueryBasePriorityThread(IN PKTHREAD Thread)
     KiAcquireThreadLock(Thread);
 
     /* Get the Process */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* In Windows 10, ApcStatePointer was removed. Use ApcState directly */
+    Process = Thread->ApcState.Process;
+#else
     Process = Thread->ApcStatePointer[0]->Process;
+#endif
 
     /* Calculate the base increment */
     BaseIncrement = Thread->BasePriority - Process->BasePriority;
@@ -159,8 +164,28 @@ KeAlertResumeThread(IN PKTHREAD Thread)
         if (!(Thread->SuspendCount) && !(Thread->FreezeCount))
         {
             /* Signal and satisfy */
-            Thread->SuspendSemaphore.Header.SignalState++;
-            KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+            /* SuspendSemaphore was removed in Windows 10 */
+            /* TODO: Find replacement implementation */
+#else
+    #if (NTDDI_VERSION >= NTDDI_WIN10)
+        /* SuspendSemaphore was removed in Windows 10 */
+        /* TODO: Find replacement implementation */
+#else
+        Thread->SuspendSemaphore.Header.SignalState++;
+#endif
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+            /* SuspendSemaphore was removed in Windows 10 */
+            /* TODO: Find replacement implementation */
+#else
+    #if (NTDDI_VERSION >= NTDDI_WIN10)
+        /* SuspendSemaphore was removed in Windows 10 */
+        /* TODO: Find replacement implementation */
+#else
+        KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
+#endif
+#endif
         }
     }
 
@@ -247,7 +272,15 @@ KeBoostPriorityThread(IN PKTHREAD Thread,
                 }
 
                 /* Reset the quantum */
-                Thread->Quantum = Thread->QuantumReset;
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
+        #if (NTDDI_VERSION < NTDDI_WIN8)
+        Thread->Quantum = Thread->QuantumReset;
+#else
+        /* Quantum field was removed in Windows 8+ */
+#endif
+#else
+                /* Quantum field was removed in Vista+ */
+#endif
 
                 /* Set the new Priority */
                 KiSetPriorityThread(Thread, Priority);
@@ -288,8 +321,18 @@ KeForceResumeThread(IN PKTHREAD Thread)
         KiAcquireDispatcherLockAtSynchLevel();
 
         /* Signal and satisfy */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        /* SuspendSemaphore was removed in Windows 10 */
+        /* TODO: Find replacement implementation */
+#else
         Thread->SuspendSemaphore.Header.SignalState++;
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        /* SuspendSemaphore was removed in Windows 10 */
+        /* TODO: Find replacement implementation */
+#else
         KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
+#endif
 
         /* Release the dispatcher */
         KiReleaseDispatcherLockFromSynchLevel();
@@ -351,11 +394,23 @@ KeFreezeAllThreads(VOID)
             if (!(OldCount) && !(Current->SuspendCount))
             {
                 /* Did we already insert it? */
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+                if (!Current->SchedulerApc.Inserted)
+#else
                 if (!Current->SuspendApc.Inserted)
+#endif
                 {
                     /* Insert the APC */
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+                    Current->SchedulerApc.Inserted = TRUE;
+#else
                     Current->SuspendApc.Inserted = TRUE;
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+                    KiInsertQueueApc(&Current->SchedulerApc, IO_NO_INCREMENT);
+#else
                     KiInsertQueueApc(&Current->SuspendApc, IO_NO_INCREMENT);
+#endif
                 }
                 else
                 {
@@ -363,7 +418,12 @@ KeFreezeAllThreads(VOID)
                     KiAcquireDispatcherLockAtSynchLevel();
 
                     /* Unsignal the semaphore, the APC was already inserted */
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+                    /* Use SuspendEvent in Windows 8+ */
+                    Current->SuspendEvent.Header.SignalState = 0;
+#else
                     Current->SuspendSemaphore.Header.SignalState--;
+#endif
 
                     /* Release the dispatcher */
                     KiReleaseDispatcherLockFromSynchLevel();
@@ -411,8 +471,28 @@ KeResumeThread(IN PKTHREAD Thread)
             KiAcquireDispatcherLockAtSynchLevel();
 
             /* Signal the Suspend Semaphore */
-            Thread->SuspendSemaphore.Header.SignalState++;
-            KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+            /* SuspendSemaphore was removed in Windows 10 */
+            /* TODO: Find replacement implementation */
+#else
+    #if (NTDDI_VERSION >= NTDDI_WIN10)
+        /* SuspendSemaphore was removed in Windows 10 */
+        /* TODO: Find replacement implementation */
+#else
+        Thread->SuspendSemaphore.Header.SignalState++;
+#endif
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+            /* SuspendSemaphore was removed in Windows 10 */
+            /* TODO: Find replacement implementation */
+#else
+    #if (NTDDI_VERSION >= NTDDI_WIN10)
+        /* SuspendSemaphore was removed in Windows 10 */
+        /* TODO: Find replacement implementation */
+#else
+        KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
+#endif
+#endif
 
             /* Release the dispatcher lock */
             KiReleaseDispatcherLockFromSynchLevel();
@@ -502,7 +582,12 @@ KeStartThread(IN OUT PKTHREAD Thread)
 #if defined(_M_IX86)
     Thread->Iopl = Process->Iopl;
 #endif
+#if (NTDDI_VERSION < NTDDI_WIN8)
     Thread->Quantum = Process->QuantumReset;
+#else
+    /* Quantum field was removed in Windows 8+ */
+    Thread->QuantumReset = Process->QuantumReset;
+#endif
     Thread->QuantumReset = Process->QuantumReset;
     Thread->SystemAffinityActive = FALSE;
 
@@ -512,8 +597,15 @@ KeStartThread(IN OUT PKTHREAD Thread)
     /* Setup volatile data */
     Thread->Priority = Process->BasePriority;
     Thread->BasePriority = Process->BasePriority;
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    Thread->Affinity.Mask = Process->Affinity;
+    Thread->Affinity.Group = 0;
+    Thread->UserAffinity.Mask = Process->Affinity;
+    Thread->UserAffinity.Group = 0;
+#else
     Thread->Affinity = Process->Affinity;
     Thread->UserAffinity = Process->Affinity;
+#endif
 
 #ifdef CONFIG_SMP
     /* Get the KNODE and its PRCB */
@@ -536,7 +628,11 @@ KeStartThread(IN OUT PKTHREAD Thread)
     Process->ThreadSeed = IdealProcessor;
 
     /* Sanity check */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    ASSERT((Thread->UserAffinity.Mask & AFFINITY_MASK(IdealProcessor)));
+#else
     ASSERT((Thread->UserAffinity & AFFINITY_MASK(IdealProcessor)));
+#endif
 #endif
 
     /* Set the Ideal Processor */
@@ -589,7 +685,12 @@ KiSuspendThread(IN PVOID NormalContext,
                 IN PVOID SystemArgument2)
 {
     /* Non-alertable kernel-mode suspended wait */
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    /* Use SuspendEvent in Windows 8+ */
+    KeWaitForSingleObject(&KeGetCurrentThread()->SuspendEvent,
+#else
     KeWaitForSingleObject(&KeGetCurrentThread()->SuspendSemaphore,
+#endif
                           Suspended,
                           KernelMode,
                           FALSE,
@@ -629,11 +730,26 @@ KeSuspendThread(PKTHREAD Thread)
         if (!(PreviousCount) && !(Thread->FreezeCount))
         {
             /* Is the APC already inserted? */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+            /* SuspendApc was removed in Windows 10 */
+            /* TODO: Find replacement implementation */
+            if (FALSE)
+#else
             if (!Thread->SuspendApc.Inserted)
+#endif
             {
                 /* Not inserted, insert it */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+                /* SuspendApc was removed in Windows 10 */
+#else
                 Thread->SuspendApc.Inserted = TRUE;
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+                /* SuspendApc was removed in Windows 10 */
+                /* TODO: Find replacement implementation */
+#else
                 KiInsertQueueApc(&Thread->SuspendApc, IO_NO_INCREMENT);
+#endif
             }
             else
             {
@@ -641,7 +757,12 @@ KeSuspendThread(PKTHREAD Thread)
                 KiAcquireDispatcherLockAtSynchLevel();
 
                 /* Unsignal the semaphore, the APC was already inserted */
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+                /* Use SuspendEvent in Windows 8+ */
+                Thread->SuspendEvent.Header.SignalState = 0;
+#else
                 Thread->SuspendSemaphore.Header.SignalState--;
+#endif
 
                 /* Release the dispatcher */
                 KiReleaseDispatcherLockFromSynchLevel();
@@ -694,8 +815,14 @@ KeThawAllThreads(VOID)
                 KiAcquireDispatcherLockAtSynchLevel();
 
                 /* Signal the suspend semaphore and wake it */
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+                /* Use SuspendEvent in Windows 8+ */
+                Current->SuspendEvent.Header.SignalState = 1;
+                KiWaitTest(&Current->SuspendEvent, 0);
+#else
                 Current->SuspendSemaphore.Header.SignalState++;
                 KiWaitTest(&Current->SuspendSemaphore, 0);
+#endif
 
                 /* Unlock the dispatcher */
                 KiReleaseDispatcherLockFromSynchLevel();
@@ -788,7 +915,11 @@ KeInitThread(IN OUT PKTHREAD Thread,
     /* Set swap settings */
     Thread->EnableStackSwap = TRUE;
     Thread->IdealProcessor = 1;
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     Thread->SwapBusy = FALSE;
+#else
+    /* SwapBusy field removed in Vista+ */
+#endif
     Thread->KernelStackResident = TRUE;
     Thread->AdjustReason = AdjustNone;
 
@@ -796,19 +927,34 @@ KeInitThread(IN OUT PKTHREAD Thread,
     KeInitializeSpinLock(&Thread->ThreadLock);
 
     /* Setup the Service Descriptor Table for Native Calls */
+#if (NTDDI_VERSION < NTDDI_LONGHORN) || ((NTDDI_VERSION < NTDDI_WIN7) && !defined(_WIN64))
     Thread->ServiceTable = KeServiceDescriptorTable;
+#else
+    /* ServiceTable field removed in newer versions */
+#endif
 
     /* Setup APC Fields */
     InitializeListHead(&Thread->ApcState.ApcListHead[KernelMode]);
     InitializeListHead(&Thread->ApcState.ApcListHead[UserMode]);
     Thread->ApcState.Process = Process;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* ApcStatePointer renamed to ApcStateIndex */
+    Thread->ApcStateIndex = OriginalApcEnvironment;
+#else
     Thread->ApcStatePointer[OriginalApcEnvironment] = &Thread->ApcState;
     Thread->ApcStatePointer[AttachedApcEnvironment] = &Thread->SavedApcState;
+#endif
     Thread->ApcStateIndex = OriginalApcEnvironment;
     Thread->ApcQueueable = TRUE;
+#if (NTDDI_VERSION < NTDDI_WIN8)
     KeInitializeSpinLock(&Thread->ApcQueueLock);
+#endif
 
     /* Initialize the Suspend APC */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* SuspendApc was removed in Windows 10 */
+    /* TODO: Find replacement implementation */
+#else
     KeInitializeApc(&Thread->SuspendApc,
                     Thread,
                     OriginalApcEnvironment,
@@ -817,9 +963,15 @@ KeInitThread(IN OUT PKTHREAD Thread,
                     KiSuspendThread,
                     KernelMode,
                     NULL);
+#endif
 
     /* Initialize the Suspend Semaphore */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* SuspendSemaphore was removed in Windows 10 */
+    /* TODO: Find replacement implementation */
+#else
     KeInitializeSemaphore(&Thread->SuspendSemaphore, 0, 2);
+#endif
 
     /* Setup the timer */
     Timer = &Thread->Timer;
@@ -828,7 +980,11 @@ KeInitThread(IN OUT PKTHREAD Thread,
     TimerWaitBlock->Object = Timer;
     TimerWaitBlock->WaitKey = STATUS_TIMEOUT;
     TimerWaitBlock->WaitType = WaitAny;
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    /* NextWaitBlock was removed in Windows 8+ */
+#else
     TimerWaitBlock->NextWaitBlock = NULL;
+#endif
 
     /* Link the two wait lists together */
     TimerWaitBlock->WaitListEntry.Flink = &Timer->Header.WaitListHead;
@@ -852,7 +1008,7 @@ KeInitThread(IN OUT PKTHREAD Thread,
     /* Set the Thread Stacks */
     Thread->InitialStack = KernelStack;
     Thread->StackBase = KernelStack;
-    Thread->StackLimit = (ULONG_PTR)KernelStack - KERNEL_STACK_SIZE;
+    Thread->StackLimit = (PVOID)((ULONG_PTR)KernelStack - KERNEL_STACK_SIZE);
     Thread->KernelStackResident = TRUE;
 
     /* Enter SEH to avoid crashes due to user mode */
@@ -1036,7 +1192,11 @@ KeRevertToUserAffinityThread(VOID)
 
     /* Get the current PRCB and check if it doesn't match this affinity */
     Prcb = KeGetCurrentPrcb();
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    if (!(Prcb->SetMember & CurrentThread->Affinity.Mask))
+#else
     if (!(Prcb->SetMember & CurrentThread->Affinity))
+#endif
     {
         /* Lock the PRCB */
         KiAcquirePrcbLock(Prcb);
@@ -1080,7 +1240,11 @@ KeSetIdealProcessorThread(IN PKTHREAD Thread,
     if (Processor < KeNumberProcessors)
     {
         /* Check if the user ideal CPU is in the affinity */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+        if (Thread->Affinity.Mask & AFFINITY_MASK(Processor))
+#else
         if (Thread->Affinity & AFFINITY_MASK(Processor))
+#endif
         {
             /* Set the ideal processor */
             Thread->IdealProcessor = Processor;
@@ -1116,7 +1280,12 @@ KeSetSystemAffinityThread(IN KAFFINITY Affinity)
     OldIrql = KiAcquireDispatcherLock();
 
     /* Restore the affinity and enable system affinity */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    CurrentThread->Affinity.Mask = Affinity;
+    CurrentThread->Affinity.Group = 0;
+#else
     CurrentThread->Affinity = Affinity;
+#endif
     CurrentThread->SystemAffinityActive = TRUE;
 
 #ifdef CONFIG_SMP
@@ -1127,7 +1296,11 @@ KeSetSystemAffinityThread(IN KAFFINITY Affinity)
 
     /* Get the current PRCB and check if it doesn't match this affinity */
     Prcb = KeGetCurrentPrcb();
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    if (!(Prcb->SetMember & CurrentThread->Affinity.Mask))
+#else
     if (!(Prcb->SetMember & CurrentThread->Affinity))
+#endif
     {
         /* Lock the PRCB */
         KiAcquirePrcbLock(Prcb);
@@ -1256,7 +1429,11 @@ KeSetBasePriorityThread(IN PKTHREAD Thread,
     if (Priority != Thread->Priority)
     {
         /* Reset the quantum and do the actual priority modification */
+#if (NTDDI_VERSION < NTDDI_WIN8)
         Thread->Quantum = Thread->QuantumReset;
+#else
+        /* Quantum field was removed in Windows 8+ */
+#endif
         KiSetPriorityThread(Thread, Priority);
     }
 
@@ -1321,7 +1498,11 @@ KeSetPriorityThread(IN PKTHREAD Thread,
     if (Priority != Thread->Priority)
     {
         /* Reset the quantum */
+#if (NTDDI_VERSION < NTDDI_WIN8)
         Thread->Quantum = Thread->QuantumReset;
+#else
+        /* Quantum field was removed in Windows 8+ */
+#endif
 
         /* Check if priority is being set too low and normalize if so */
         if ((Thread->BasePriority != 0) && !(Priority)) Priority = 1;

@@ -250,8 +250,16 @@ ObInitSystem(VOID)
     KeInitializeGuardedMutex(&ObpDeviceMapLock);
 
     /* Setup default access for the system process */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* GrantedAccess was removed from process/thread structures in Windows 10 */
+#else
     PsGetCurrentProcess()->GrantedAccess = PROCESS_ALL_ACCESS;
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    PsGetCurrentThread()->GrantedAccess2 = THREAD_ALL_ACCESS;
+#else
     PsGetCurrentThread()->GrantedAccess = THREAD_ALL_ACCESS;
+#endif
 
     /* Setup the Object Reaper */
     ExInitializeWorkItem(&ObpReaperWorkItem, ObpReapObject, NULL);

@@ -312,7 +312,11 @@ DbgkExitProcess(IN NTSTATUS ExitStatus)
     /* Check if this thread is hidden, doesn't have a debug port, or died */
     if ((Thread->HideFromDebugger) ||
         !(Process->DebugPort) ||
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        (Thread->Terminated))
+#else
         (Thread->DeadThread))
+#endif
     {
         /* Don't notify the debugger */
         return;
@@ -349,7 +353,11 @@ DbgkExitThread(IN NTSTATUS ExitStatus)
     /* Check if this thread is hidden, doesn't have a debug port, or died */
     if ((Thread->HideFromDebugger) ||
         !(Process->DebugPort) ||
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        (Thread->Terminated))
+#else
         (Thread->DeadThread))
+#endif
     {
         /* Don't notify the debugger */
         return;

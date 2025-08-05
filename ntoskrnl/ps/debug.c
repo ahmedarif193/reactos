@@ -52,7 +52,12 @@ PspDumpThreads(BOOLEAN IncludeSystem)
                          Thread->Tcb.Priority,
                          Thread->Cid.UniqueProcess,
                          Thread->Cid.UniqueThread,
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+                         /* In Windows 10+, use ApcState.Process to get the process */
+                         ((PEPROCESS)Thread->Tcb.ApcState.Process)->ImageFileName);
+#else
                          Thread->ThreadsProcess->ImageFileName);
+#endif
 
                 /* Make sure it's not running */
                 if(Thread->Tcb.State == Ready ||

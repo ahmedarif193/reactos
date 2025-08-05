@@ -277,7 +277,11 @@ NtReplyPort(IN HANDLE PortHandle,
     KeAcquireGuardedMutex(&LpcpLock);
 
     /* Make sure this is the reply the thread is waiting for */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    if ((WakeupThread->LpcReplyMessageId2 != CapturedReplyMessage.MessageId) ||
+#else
     if ((WakeupThread->LpcReplyMessageId != CapturedReplyMessage.MessageId) ||
+#endif
         ((LpcpGetMessageFromThread(WakeupThread)) &&
         (LpcpGetMessageType(&LpcpGetMessageFromThread(WakeupThread)-> Request)
             != LPC_REQUEST)))
@@ -313,8 +317,17 @@ NtReplyPort(IN HANDLE PortHandle,
     Message->RepliedToThread = WakeupThread;
 
     /* Set this as the reply message */
+    #if (NTDDI_VERSION >= NTDDI_WIN10)
+    WakeupThread->LpcReplyMessageId2 = 0;
+#else
     WakeupThread->LpcReplyMessageId = 0;
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* LpcReplyMessage was removed in Windows 10 - store in a different field */
+    /* FIXME: Find correct field or implementation */
+#else
     WakeupThread->LpcReplyMessage = (PVOID)Message;
+#endif
 
     /* Check if we have messages on the reply chain */
     if (!(WakeupThread->LpcExitThreadCalled) &&
@@ -342,7 +355,12 @@ NtReplyPort(IN HANDLE PortHandle,
 
     /* Release the lock and release the LPC semaphore to wake up waiters */
     KeReleaseGuardedMutex(&LpcpLock);
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* In Windows 10, LPC reply mechanism changed - wake thread directly */
+    KeUnwaitThread(WakeupThread, STATUS_SUCCESS, 0);
+#else
     LpcpCompleteWait(&WakeupThread->LpcReplySemaphore);
+#endif
 
     /* Now we can let go of the thread */
     ObDereferenceObject(WakeupThread);
@@ -521,7 +539,11 @@ NtReplyWaitReceivePortEx(IN HANDLE PortHandle,
         KeAcquireGuardedMutex(&LpcpLock);
 
         /* Make sure this is the reply the thread is waiting for */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        if ((WakeupThread->LpcReplyMessageId2 != CapturedReplyMessage.MessageId) ||
+#else
         if ((WakeupThread->LpcReplyMessageId != CapturedReplyMessage.MessageId) ||
+#endif
             ((LpcpGetMessageFromThread(WakeupThread)) &&
              (LpcpGetMessageType(&LpcpGetMessageFromThread(WakeupThread)->Request)
                 != LPC_REQUEST)))
@@ -559,8 +581,17 @@ NtReplyWaitReceivePortEx(IN HANDLE PortHandle,
         Message->RepliedToThread = WakeupThread;
 
         /* Set this as the reply message */
-        WakeupThread->LpcReplyMessageId = 0;
-        WakeupThread->LpcReplyMessage = (PVOID)Message;
+        #if (NTDDI_VERSION >= NTDDI_WIN10)
+    WakeupThread->LpcReplyMessageId2 = 0;
+#else
+    WakeupThread->LpcReplyMessageId = 0;
+#endif
+    #if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* LpcReplyMessage was removed in Windows 10 - store in a different field */
+    /* FIXME: Find correct field or implementation */
+#else
+    WakeupThread->LpcReplyMessage = (PVOID)Message;
+#endif
 
         /* Check if we have messages on the reply chain */
         if (!(WakeupThread->LpcExitThreadCalled) &&
@@ -588,7 +619,12 @@ NtReplyWaitReceivePortEx(IN HANDLE PortHandle,
 
         /* Release the lock and release the LPC semaphore to wake up waiters */
         KeReleaseGuardedMutex(&LpcpLock);
-        LpcpCompleteWait(&WakeupThread->LpcReplySemaphore);
+    #if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* In Windows 10, LPC reply mechanism changed - wake thread directly */
+    KeUnwaitThread(WakeupThread, STATUS_SUCCESS, 0);
+#else
+    LpcpCompleteWait(&WakeupThread->LpcReplySemaphore);
+#endif
 
         /* Now we can let go of the thread */
         ObDereferenceObject(WakeupThread);
@@ -842,11 +878,20 @@ LpcpCopyRequestData(
     KeAcquireGuardedMutex(&LpcpLock);
 
     /* Check for message id mismatch */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    if ((ClientThread->LpcReplyMessageId2 != CapturedMessage.MessageId) ||
+#else
     if ((ClientThread->LpcReplyMessageId != CapturedMessage.MessageId) ||
+#endif
         (CapturedMessage.MessageId == 0))
     {
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        DPRINT1("LpcReplyMessageId mismatch: 0x%lx/0x%lx.\n",
+                ClientThread->LpcReplyMessageId2, CapturedMessage.MessageId);
+#else
         DPRINT1("LpcReplyMessageId mismatch: 0x%lx/0x%lx.\n",
                 ClientThread->LpcReplyMessageId, CapturedMessage.MessageId);
+#endif
         Status = STATUS_REPLY_MESSAGE_MISMATCH;
         goto CleanupWithLock;
     }
@@ -902,7 +947,12 @@ LpcpCopyRequestData(
         /* Copy data from the caller to the message sender */
         Status = MmCopyVirtualMemory(PsGetCurrentProcess(),
                                      Buffer,
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+                                     /* In Windows 10+, use ApcState.Process to get the process */
+                                     (PEPROCESS)ClientThread->Tcb.ApcState.Process,
+#else
                                      ClientThread->ThreadsProcess,
+#endif
                                      DataInfoBaseAddress,
                                      BufferLength,
                                      PreviousMode,
@@ -911,7 +961,12 @@ LpcpCopyRequestData(
     else
     {
         /* Copy data from the message sender to the caller */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        /* In Windows 10+, use ApcState.Process to get the process */
+        Status = MmCopyVirtualMemory((PEPROCESS)ClientThread->Tcb.ApcState.Process,
+#else
         Status = MmCopyVirtualMemory(ClientThread->ThreadsProcess,
+#endif
                                      DataInfoBaseAddress,
                                      PsGetCurrentProcess(),
                                      Buffer,

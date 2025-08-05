@@ -1786,7 +1786,12 @@ IoGetRequestorProcess(IN PIRP Irp)
     {
         if (Irp->ApcEnvironment == OriginalApcEnvironment)
         {
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+            /* In Windows 10+, use ApcState.Process to get the process */
+            return (PEPROCESS)Irp->Tail.Overlay.Thread->Tcb.ApcState.Process;
+#else
             return Irp->Tail.Overlay.Thread->ThreadsProcess;
+#endif
         }
         else if (Irp->ApcEnvironment == AttachedApcEnvironment)
         {
@@ -1826,7 +1831,12 @@ IoGetRequestorSessionId(IN PIRP Irp,
     /* Return the session */
     if (Irp->Tail.Overlay.Thread)
     {
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        /* In Windows 10+, use ApcState.Process to get the process */
+        Process = (PEPROCESS)Irp->Tail.Overlay.Thread->Tcb.ApcState.Process;
+#else
         Process = Irp->Tail.Overlay.Thread->ThreadsProcess;
+#endif
         *pSessionId = MmGetSessionId(Process);
         return STATUS_SUCCESS;
     }

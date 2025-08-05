@@ -341,7 +341,7 @@ ObfDereferenceObject(IN PVOID Object)
         if (OldCount == 0)
         {
             DPRINT1("Attempting to dereference object with zero reference count\n");
-            KeBugCheckEx(OBJECT_REFERENCE_COUNT_ZERO,
+            KeBugCheckEx(REFERENCE_BY_POINTER,
                          (ULONG_PTR)Object,
                          (ULONG_PTR)Header->Type,
                          0,
@@ -358,7 +358,7 @@ ObfDereferenceObject(IN PVOID Object)
         if (Header->HandleCount != 0)
         {
             /* This is a critical error - handles exist but pointer count is zero */
-            KeBugCheckEx(OBJECT_HANDLE_COUNT_NONZERO,
+            KeBugCheckEx(REFERENCE_BY_POINTER,
                          (ULONG_PTR)Object,
                          Header->HandleCount,
                          0,
@@ -398,7 +398,7 @@ ObDereferenceObjectDeferDelete(IN PVOID Object)
         if (OldCount == 0)
         {
             DPRINT1("Attempting to dereference object with zero reference count in deferred delete\n");
-            KeBugCheckEx(OBJECT_REFERENCE_COUNT_ZERO,
+            KeBugCheckEx(REFERENCE_BY_POINTER,
                          (ULONG_PTR)Object,
                          (ULONG_PTR)Header->Type,
                          1,
@@ -571,7 +571,11 @@ ObReferenceObjectByHandle(IN HANDLE Handle,
             {
                 /* Get the current process and granted access */
                 CurrentProcess = PsGetCurrentProcess();
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+                GrantedAccess = PROCESS_ALL_ACCESS;  /* GrantedAccess field was removed */
+#else
                 GrantedAccess = CurrentProcess->GrantedAccess;
+#endif
 
                 /* Validate access */
                 /* ~GrantedAccess = RefusedAccess.*/
@@ -619,7 +623,11 @@ ObReferenceObjectByHandle(IN HANDLE Handle,
             {
                 /* Get the current process and granted access */
                 CurrentThread = PsGetCurrentThread();
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+                GrantedAccess = THREAD_ALL_ACCESS;  /* GrantedAccess field was removed */
+#else
                 GrantedAccess = CurrentThread->GrantedAccess;
+#endif
 
                 /* Validate access */
                 /* ~GrantedAccess = RefusedAccess.*/

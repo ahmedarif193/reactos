@@ -1380,7 +1380,11 @@ NtSetInformationProcess(IN HANDLE ProcessHandle,
             if (!NT_SUCCESS(Status)) break;
 
             /* Change the pointer */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+            if (InterlockedCompareExchangePointer((PVOID*)&Process->ExceptionPortData,
+#else
             if (InterlockedCompareExchangePointer(&Process->ExceptionPort,
+#endif
                                                   ExceptionPort,
                                                   NULL))
             {
@@ -2345,7 +2349,11 @@ NtSetInformationThread(IN HANDLE ThreadHandle,
                 break;
 
             /* Get the process */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+            Process = (PEPROCESS)Thread->Tcb.ApcState.Process;
+#else
             Process = Thread->ThreadsProcess;
+#endif
 
             /* Try to acquire rundown */
             if (ExAcquireRundownProtection(&Process->RundownProtect))
@@ -2605,7 +2613,11 @@ NtSetInformationThread(IN HANDLE ThreadHandle,
             }
 
             /* Get the process */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+            Process = (PEPROCESS)Thread->Tcb.ApcState.Process;
+#else
             Process = Thread->ThreadsProcess;
+#endif
 
             /* Loop the threads */
             ProcThread = PsGetNextProcessThread(Process, NULL);
@@ -2816,7 +2828,11 @@ NtQueryInformationThread(IN HANDLE ThreadHandle,
                 ThreadBasicInfo->ExitStatus = Thread->ExitStatus;
                 ThreadBasicInfo->TebBaseAddress = (PVOID)Thread->Tcb.Teb;
                 ThreadBasicInfo->ClientId = Thread->Cid;
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+                ThreadBasicInfo->AffinityMask = Thread->Tcb.Affinity.Mask;
+#else
                 ThreadBasicInfo->AffinityMask = Thread->Tcb.Affinity;
+#endif
                 ThreadBasicInfo->Priority = Thread->Tcb.Priority;
                 ThreadBasicInfo->BasePriority = KeQueryBasePriorityThread(&Thread->Tcb);
             }
@@ -2983,11 +2999,22 @@ NtQueryInformationThread(IN HANDLE ThreadHandle,
             _SEH2_TRY
             {
                 /* Return whether or not we are the last thread */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+                {
+                    PEPROCESS ThreadProcess = (PEPROCESS)Thread->Tcb.ApcState.Process;
+                    *(PULONG)ThreadInformation = ((ThreadProcess->
+                                                   ThreadListHead.Flink->Flink ==
+                                                   &ThreadProcess->
+                                                   ThreadListHead) ?
+                                                  TRUE : FALSE);
+                }
+#else
                 *(PULONG)ThreadInformation = ((Thread->ThreadsProcess->
                                                ThreadListHead.Flink->Flink ==
                                                &Thread->ThreadsProcess->
                                                ThreadListHead) ?
                                               TRUE : FALSE);
+#endif
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {

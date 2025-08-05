@@ -115,3 +115,33 @@ FsRtlNotifyVolumeEvent(IN PFILE_OBJECT FileObject,
 
     return Status;
 }
+
+/*++
+ * @name FsRtlDismountComplete
+ * @implemented
+ *
+ * Notifies system that dismount has completed.
+ *
+ * @param TargetDeviceObject
+ *        Device object for the volume
+ *
+ * @param DismountStatus
+ *        Status of the dismount operation
+ *
+ * @return STATUS_SUCCESS
+ *
+ * @remarks This is a Windows 10 compatibility stub.
+ *
+ *--*/
+VOID
+NTAPI
+FsRtlDismountComplete(
+    IN PDEVICE_OBJECT TargetDeviceObject,
+    IN NTSTATUS DismountStatus)
+{
+    UNREFERENCED_PARAMETER(TargetDeviceObject);
+    UNREFERENCED_PARAMETER(DismountStatus);
+    
+    /* For Windows 10 compatibility - currently a no-op */
+    return;
+}

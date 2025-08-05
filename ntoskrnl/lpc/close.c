@@ -33,7 +33,13 @@ LpcExitThread(IN PETHREAD Thread)
 
     /* Set the thread in exit mode */
     Thread->LpcExitThreadCalled = TRUE;
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    Thread->LpcReplyMessageId2 = 0;
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* LpcReplyMessageId was removed in Vista-Win8 */
+#else
     Thread->LpcReplyMessageId = 0;
+#endif
 
     /* Check if there's a reply message */
     Message = LpcpGetMessageFromThread(Thread);
@@ -164,7 +170,11 @@ LpcpDestroyPortQueue(IN PLPCP_PORT_OBJECT Port,
         InitializeListHead(&Thread->LpcReplyChain);
 
         /* Check if someone is waiting */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        if (!KeReadStateSemaphore(&Thread->KeyedWaitSemaphore))
+#else
         if (!KeReadStateSemaphore(&Thread->LpcReplySemaphore))
+#endif
         {
             /* Get the message */
             Message = LpcpGetMessageFromThread(Thread);
@@ -185,7 +195,9 @@ LpcpDestroyPortQueue(IN PLPCP_PORT_OBJECT Port,
                 }
 
                 /* Clear the reply message */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
                 Thread->LpcReplyMessage = NULL;
+#endif
 
                 /* And remove the message from the port zone */
                 LpcpFreeToPortZone(Message, LPCP_LOCK_HELD);
@@ -193,8 +205,18 @@ LpcpDestroyPortQueue(IN PLPCP_PORT_OBJECT Port,
             }
 
             /* Release the semaphore and reset message id count */
-            Thread->LpcReplyMessageId = 0;
+        #if (NTDDI_VERSION >= NTDDI_WIN10)
+    Thread->LpcReplyMessageId2 = 0;
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* LpcReplyMessageId was removed in Vista-Win8 */
+#else
+    Thread->LpcReplyMessageId = 0;
+#endif
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+            KeReleaseSemaphore(&Thread->KeyedWaitSemaphore, 0, 1, FALSE);
+#else
             KeReleaseSemaphore(&Thread->LpcReplySemaphore, 0, 1, FALSE);
+#endif
         }
     }
 

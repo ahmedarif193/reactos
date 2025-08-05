@@ -92,7 +92,11 @@ KiScanReadyQueues(IN PKDPC Dpc,
 
                         /* Update priority and insert into ready list */
                         Thread->Priority = THREAD_BOOST_PRIORITY;
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
                         Thread->Quantum = WAIT_QUANTUM_DECREMENT * 4;
+#else
+                        /* Quantum field was removed in Vista+ */
+#endif
                         KiInsertDeferredReadyList(Thread);
                         Count --;
                     }

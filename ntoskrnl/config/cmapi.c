@@ -1496,19 +1496,44 @@ static
 NTSTATUS
 CmpQueryFlagsInformation(
     _In_ PCM_KEY_CONTROL_BLOCK Kcb,
-    _Out_ PKEY_USER_FLAGS_INFORMATION KeyFlagsInfo,
+    _Out_ PVOID KeyFlagsInfo,
     _In_ ULONG Length,
     _In_ PULONG ResultLength)
 {
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+    /* For Vista+, we use a different structure */
+    typedef struct _KEY_FLAGS_INFORMATION {
+        ULONG Wow64Flags;
+        ULONG UserFlags;
+        ULONG ControlFlags;
+    } KEY_FLAGS_INFORMATION, *PKEY_FLAGS_INFORMATION;
+    
+    PKEY_FLAGS_INFORMATION FlagsInfo = (PKEY_FLAGS_INFORMATION)KeyFlagsInfo;
+    
     /* Validate the buffer size */
-    *ResultLength = sizeof(*KeyFlagsInfo);
+    *ResultLength = sizeof(KEY_FLAGS_INFORMATION);
+    if (Length < *ResultLength)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    /* Copy the flags */
+    FlagsInfo->Wow64Flags = 0;  /* Not implemented */
+    FlagsInfo->UserFlags = Kcb->KcbUserFlags;
+    FlagsInfo->ControlFlags = 0;  /* Not implemented */
+#else
+    PKEY_USER_FLAGS_INFORMATION UserFlagsInfo = (PKEY_USER_FLAGS_INFORMATION)KeyFlagsInfo;
+    
+    /* Validate the buffer size */
+    *ResultLength = sizeof(KEY_USER_FLAGS_INFORMATION);
     if (Length < *ResultLength)
     {
         return STATUS_BUFFER_TOO_SMALL;
     }
 
     /* Copy the user flags */
-    KeyFlagsInfo->UserFlags = Kcb->KcbUserFlags;
+    UserFlagsInfo->UserFlags = Kcb->KcbUserFlags;
+#endif
 
     return STATUS_SUCCESS;
 }
@@ -1700,6 +1725,18 @@ CmQueryKey(_In_ PCM_KEY_CONTROL_BLOCK Kcb,
                                                  ResultLength);
                 break;
             }
+
+#if (NTDDI_VERSION < NTDDI_VISTA)
+            case KeyUserFlagsInformation:
+            {
+                /* Call the same internal API as KeyFlagsInformation */
+                Status = CmpQueryFlagsInformation(Kcb,
+                                                  KeyInformation,
+                                                  Length,
+                                                  ResultLength);
+                break;
+            }
+#endif
 
             /* Illegal classes */
             default:

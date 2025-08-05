@@ -2563,4 +2563,62 @@ IoWritePartitionTableEx(IN PDEVICE_OBJECT DeviceObject,
     return Status;
 }
 
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+FsRtlGetSectorSizeInformation(
+    IN PDEVICE_OBJECT DeviceObject,
+    OUT PFILE_FS_SECTOR_SIZE_INFORMATION SectorSizeInfo)
+{
+    DISK_GEOMETRY DiskGeometry;
+    NTSTATUS Status;
+    IO_STATUS_BLOCK IoStatusBlock;
+    KEVENT Event;
+    PIRP Irp;
+    
+    PAGED_CODE();
+    
+    if (!DeviceObject || !SectorSizeInfo)
+        return STATUS_INVALID_PARAMETER;
+    
+    /* Initialize event for synchronous operation */
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    
+    /* Build IRP to get disk geometry */
+    Irp = IoBuildDeviceIoControlRequest(IOCTL_DISK_GET_DRIVE_GEOMETRY,
+                                        DeviceObject,
+                                        NULL,
+                                        0,
+                                        &DiskGeometry,
+                                        sizeof(DISK_GEOMETRY),
+                                        FALSE,
+                                        &Event,
+                                        &IoStatusBlock);
+    
+    if (!Irp)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    
+    /* Send the IRP */
+    Status = IoCallDriver(DeviceObject, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatusBlock.Status;
+    }
+    
+    if (NT_SUCCESS(Status))
+    {
+        /* Fill in the sector size information */
+        SectorSizeInfo->LogicalBytesPerSector = DiskGeometry.BytesPerSector;
+        SectorSizeInfo->PhysicalBytesPerSectorForAtomicity = DiskGeometry.BytesPerSector;
+        SectorSizeInfo->PhysicalBytesPerSectorForPerformance = DiskGeometry.BytesPerSector;
+        SectorSizeInfo->FileSystemEffectivePhysicalBytesPerSectorForAtomicity = DiskGeometry.BytesPerSector;
+        SectorSizeInfo->Flags = 0; /* No special flags */
+    }
+    
+    return Status;
+}
+
 /* EOF */

@@ -191,10 +191,18 @@ KeUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
 
 #if DBG
             /* Update the DPC time */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
             Prcb->DebugDpcTime++;
+#else
+            /* DebugDpcTime was removed in Vista+ */
+#endif
 
             /* Check if we have timed out */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
             if (Prcb->DebugDpcTime == KiDPCTimeout)
+#else
+            if (FALSE) /* DebugDpcTime was removed in Vista+ */
+#endif
             {
                 /* We did! */
                 DbgPrint("*** DPC routine > 1 sec --- This is not a break in KeUpdateSystemTime\n");
@@ -203,7 +211,9 @@ KeUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
                 if (KdDebuggerEnabled) DbgBreakPoint();
 
                 /* Clear state */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
                 Prcb->DebugDpcTime = 0;
+#endif
             }
 #endif
         }
@@ -245,10 +255,15 @@ KeUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
     }
 
     /* Decrement the thread quantum */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     Thread->Quantum -= CLOCK_QUANTUM_DECREMENT;
 
     /* Check if the time expired */
     if ((Thread->Quantum <= 0) && (Thread != Prcb->IdleThread))
+#else
+    /* Quantum is handled differently in Vista+ */
+    if ((Thread != Prcb->IdleThread))
+#endif
     {
         /* Schedule a quantum end */
         Prcb->QuantumEnd = 1;

@@ -129,7 +129,21 @@ KiInitializeHandBuiltThread(
     Thread->IdealProcessor = Prcb->Number;
     Thread->Priority = HIGH_PRIORITY;
     Thread->State = Running;
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    Thread->Affinity.Mask = (ULONG_PTR)1 << Prcb->Number;
+    Thread->Affinity.Group = 0;
+    Thread->Affinity.Reserved[0] = 0;
+    Thread->Affinity.Reserved[1] = 0;
+    Thread->Affinity.Reserved[2] = 0;
+#elif (NTDDI_VERSION >= NTDDI_WIN7)
+    Thread->Affinity.Mask = (ULONG_PTR)1 << Prcb->Number;
+    Thread->Affinity.Group = 0;
+    Thread->Affinity.Reserved[0] = 0;
+    Thread->Affinity.Reserved[1] = 0;
+    Thread->Affinity.Reserved[2] = 0;
+#else
     Thread->Affinity = (ULONG_PTR)1 << Prcb->Number;
+#endif
     Thread->WaitIrql = DISPATCH_LEVEL;
     Process->ActiveProcessors |= (ULONG_PTR)1 << Prcb->Number;
 

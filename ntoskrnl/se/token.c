@@ -1242,7 +1242,11 @@ SepOpenThreadToken(
     }
 
     /* Reference the primary token of the process' thread */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    PrimaryToken = PsReferencePrimaryToken((PEPROCESS)Thread2->Tcb.ApcState.Process);
+#else
     PrimaryToken = PsReferencePrimaryToken(Thread2->ThreadsProcess);
+#endif
     if (!PrimaryToken)
     {
         DPRINT1("Failed to reference the primary token of thread\n");
@@ -1252,7 +1256,11 @@ SepOpenThreadToken(
 
     /* Create an impersonation DACL from the tokens we got */
     Status = SepCreateImpersonationTokenDacl(ThreadToken, PrimaryToken, &Dacl);
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    ObFastDereferenceObject(&((PEPROCESS)Thread2->Tcb.ApcState.Process)->Token, PrimaryToken);
+#else
     ObFastDereferenceObject(&Thread2->ThreadsProcess->Token, PrimaryToken);
+#endif
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to create an impersonation token DACL (Status 0x%lx)\n", Status);

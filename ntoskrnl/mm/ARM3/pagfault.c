@@ -52,6 +52,7 @@ MiCheckForUserStackOverflow(IN PVOID Address,
         MmGuardPageLockInitialized = TRUE;
     }
 
+#if (NTDDI_VERSION < NTDDI_WIN7)
     /* Do we own the address space lock? */
     if (CurrentThread->AddressSpaceOwner == 1)
     {
@@ -60,6 +61,9 @@ MiCheckForUserStackOverflow(IN PVOID Address,
         ASSERT(KeAreAllApcsDisabled() == TRUE);
         return STATUS_GUARD_PAGE_VIOLATION;
     }
+#else
+    /* AddressSpaceOwner field was removed in Windows 7+ */
+#endif
 
     /* Are we attached? */
     if (KeIsAttachedProcess())
@@ -2458,7 +2462,11 @@ UserFault:
 
             /* Not supported */
             ASSERT(ProtoPte == NULL);
+#if (NTDDI_VERSION < NTDDI_WIN7)
             ASSERT(CurrentThread->ApcNeeded == 0);
+#else
+            /* ApcNeeded field was removed in Windows 7+ */
+#endif
 
             /* Drop the working set lock */
             MiUnlockProcessWorkingSet(CurrentProcess, CurrentThread);
@@ -2628,7 +2636,11 @@ UserFault:
         if (Status != STATUS_SUCCESS)
         {
             /* Not supported */
+#if (NTDDI_VERSION < NTDDI_WIN7)
             ASSERT(CurrentThread->ApcNeeded == 0);
+#else
+            /* ApcNeeded field was removed in Windows 7+ */
+#endif
 
             /* Drop the working set lock */
             MiUnlockProcessWorkingSet(CurrentProcess, CurrentThread);

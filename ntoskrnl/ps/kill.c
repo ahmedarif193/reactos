@@ -186,7 +186,11 @@ PspReapRoutine(IN PVOID Context)
 
             /* Delete this entry's kernel stack */
             MmDeleteKernelStack((PVOID)Thread->Tcb.StackBase,
+#if (NTDDI_VERSION < NTDDI_LONGHORN) || ((NTDDI_VERSION < NTDDI_WIN7) && !defined(_WIN64))
                                 Thread->Tcb.LargeStack);
+#else
+                                FALSE);
+#endif
             Thread->Tcb.InitialStack = NULL;
 
             /* Move to the next entry */
@@ -301,11 +305,20 @@ PspDeleteProcess(IN PVOID ObjectBody)
     }
 
     /* Check if we have an exception port */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    if (Process->ExceptionPortData)
+#else
     if (Process->ExceptionPort)
+#endif
     {
         /* Deference the Exception Port */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        ObDereferenceObject(Process->ExceptionPortData);
+        Process->ExceptionPortData = 0;
+#else
         ObDereferenceObject(Process->ExceptionPort);
         Process->ExceptionPort = NULL;
+#endif
     }
 
     /* Check if we have a section object */
@@ -391,7 +404,11 @@ NTAPI
 PspDeleteThread(IN PVOID ObjectBody)
 {
     PETHREAD Thread = (PETHREAD)ObjectBody;
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    PEPROCESS Process = (PEPROCESS)Thread->Tcb.ApcState.Process;
+#else
     PEPROCESS Process = Thread->ThreadsProcess;
+#endif
     PAGED_CODE();
     PSTRACE(PS_KILL_DEBUG, "ObjectBody: %p\n", ObjectBody);
     PSREFTRACE(Thread);
@@ -402,7 +419,11 @@ PspDeleteThread(IN PVOID ObjectBody)
     {
         /* Release it */
         MmDeleteKernelStack((PVOID)Thread->Tcb.StackBase,
+#if (NTDDI_VERSION < NTDDI_LONGHORN) || ((NTDDI_VERSION < NTDDI_WIN7) && !defined(_WIN64))
                             Thread->Tcb.LargeStack);
+#else
+                            FALSE);
+#endif
     }
 
     /* Check if we have a CID Handle */
@@ -466,7 +487,11 @@ PspExitThread(IN NTSTATUS ExitStatus)
 
     /* Get the Current Thread and Process */
     Thread = PsGetCurrentThread();
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    CurrentProcess = (PEPROCESS)Thread->Tcb.ApcState.Process;
+#else
     CurrentProcess = Thread->ThreadsProcess;
+#endif
     ASSERT((Thread) == PsGetCurrentThread());
 
     /* Can't terminate a thread if it attached another process */
@@ -509,7 +534,10 @@ PspExitThread(IN NTSTATUS ExitStatus)
     ExWaitForRundownProtectionRelease(&Thread->RundownProtect);
 
     /* Cleanup the power state */
+#if (NTDDI_VERSION < NTDDI_WIN10)
+    /* PowerState field removed in Windows 10 */
     PopCleanupPowerState((PPOWER_STATE)&Thread->Tcb.PowerState);
+#endif
 
     /* Call the WMI Callback for Threads */
     //WmiTraceThread(Thread, NULL, FALSE);
@@ -688,8 +716,13 @@ PspExitThread(IN NTSTATUS ExitStatus)
         } while (TerminationPort);
     }
     else if (((ExitStatus == STATUS_THREAD_IS_TERMINATING) &&
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+              (!Thread->ThreadInserted)) ||
+             (Thread->ThreadInserted))
+#else
               (Thread->DeadThread)) ||
              !(Thread->DeadThread))
+#endif
     {
         /*
          * This case is special and deserves some extra comments. What
@@ -717,7 +750,11 @@ PspExitThread(IN NTSTATUS ExitStatus)
                                             sizeof(PORT_MESSAGE);
 
         /* Make sure the process has an exception port */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        if (CurrentProcess->ExceptionPortData)
+#else
         if (CurrentProcess->ExceptionPort)
+#endif
         {
             /* Save the Create Time */
             TerminationMsg.CreateTime = Thread->CreateTime;
@@ -726,7 +763,11 @@ PspExitThread(IN NTSTATUS ExitStatus)
             while (TRUE)
             {
                 /* Send the LPC Message */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+                Status = LpcRequestPort((PVOID)CurrentProcess->ExceptionPortData,
+#else
                 Status = LpcRequestPort(CurrentProcess->ExceptionPort,
+#endif
                                         &TerminationMsg.h);
                 if ((Status == STATUS_NO_MEMORY) ||
                     (Status == STATUS_INSUFFICIENT_RESOURCES))
@@ -775,10 +816,19 @@ PspExitThread(IN NTSTATUS ExitStatus)
     if (Teb)
     {
         /* Check if the thread is still alive */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        if (Thread->ThreadInserted)
+#else
         if (!Thread->DeadThread)
+#endif
         {
             /* Check if we need to free its stack */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
             if (Teb->FreeStackOnTermination)
+#else
+            /* FreeStackOnTermination field removed in Vista+ */
+            if (FALSE)
+#endif
             {
                 /* Set the TEB's Deallocation Stack as the Base Address */
                 Dummy = 0;
@@ -1002,7 +1052,11 @@ PspTerminateThreadByPointer(IN PETHREAD Thread,
         /* Break to debugger */
         PspCatchCriticalBreak("Terminating critical thread 0x%p (%s)\n",
                               Thread,
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+                              ((PEPROCESS)Thread->Tcb.ApcState.Process)->ImageFileName);
+#else
                               Thread->ThreadsProcess->ImageFileName);
+#endif
     }
 
     /* Check if we are already inside the thread */

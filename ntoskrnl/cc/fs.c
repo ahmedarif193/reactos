@@ -158,7 +158,11 @@ CcPurgeCacheSection (
     IN PSECTION_OBJECT_POINTERS SectionObjectPointer,
     IN PLARGE_INTEGER FileOffset OPTIONAL,
     IN ULONG Length,
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+    IN ULONG Flags)
+#else
     IN BOOLEAN UninitializeCacheMaps)
+#endif
 {
     PROS_SHARED_CACHE_MAP SharedCacheMap;
     PPRIVATE_CACHE_MAP PrivateCacheMap;
@@ -171,8 +175,14 @@ CcPurgeCacheSection (
     LONGLONG ViewEnd;
     BOOLEAN Success;
 
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+    BOOLEAN UninitializeCacheMaps = (Flags & 1) != 0;  // Flag 0x1 means uninitialize cache maps
+    CCTRACE(CC_API_DEBUG, "SectionObjectPointer=%p\n FileOffset=%p Length=%lu Flags=%lu",
+        SectionObjectPointer, FileOffset, Length, Flags);
+#else
     CCTRACE(CC_API_DEBUG, "SectionObjectPointer=%p\n FileOffset=%p Length=%lu UninitializeCacheMaps=%d",
         SectionObjectPointer, FileOffset, Length, UninitializeCacheMaps);
+#endif
 
     /* Obtain the shared cache from the section */
     SharedCacheMap = SectionObjectPointer->SharedCacheMap;

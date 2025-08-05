@@ -94,7 +94,11 @@ KeWaitForGate(IN PKGATE Gate,
             Thread->WaitReason = WaitReason;
             Thread->WaitIrql = ApcLock.OldIrql;
             Thread->State = GateWait;
+#if (NTDDI_VERSION < NTDDI_WIN7)
             Thread->GateObject = Gate;
+#else
+            /* GateObject was removed in Windows 7+ */
+#endif
 
             /* Insert into the Wait List */
             InsertTailList(&Gate->Header.WaitListHead,
@@ -189,7 +193,12 @@ KeSignalGateBoostPriority(IN PKGATE Gate)
 
             /* Set state and CPU */
             WaitThread->State = DeferredReady;
+#if (NTDDI_VERSION < NTDDI_WIN8)
             WaitThread->DeferredProcessor = KeGetCurrentPrcb()->Number;
+#else
+            /* On Windows 8+, use NextProcessor field */
+            WaitThread->NextProcessor = KeGetCurrentPrcb()->Number;
+#endif
 
             /* Release the gate lock */
             KiReleaseDispatcherObject(&Gate->Header);

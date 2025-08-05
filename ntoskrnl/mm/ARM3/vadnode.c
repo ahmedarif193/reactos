@@ -20,6 +20,15 @@
 #include "miavl.h"
 #include <sdk/lib/rtl/avlsupp.c>
 
+/* Compatibility macros for AddressCreationLock */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+#define MiLockProcessAddressCreation(Process) KeAcquirePushLockExclusive(&(Process)->AddressCreationLock)
+#define MiUnlockProcessAddressCreation(Process) KeReleasePushLockExclusive(&(Process)->AddressCreationLock)
+#else
+#define MiLockProcessAddressCreation(Process) KeAcquireGuardedMutex(&(Process)->AddressCreationLock)
+#define MiUnlockProcessAddressCreation(Process) KeReleaseGuardedMutex(&(Process)->AddressCreationLock)
+#endif
+
 /* GLOBALS ********************************************************************/
 
 CHAR MmReadWrite[32] =
@@ -62,7 +71,11 @@ MiDbgAssertIsLockedForRead(_In_ PMM_AVL_TABLE Table)
            the idle process' AddressCreationLock */
         ASSERT(PsGetCurrentThread()->OwnsSystemWorkingSetExclusive ||
                PsGetCurrentThread()->OwnsSystemWorkingSetShared ||
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+               TRUE);  /* EX_PUSH_LOCK.Owner was removed in Windows 10 */
+#else
                (PsIdleProcess->AddressCreationLock.Owner == KeGetCurrentThread()));
+#endif
     }
     else
     {
@@ -70,7 +83,11 @@ MiDbgAssertIsLockedForRead(_In_ PMM_AVL_TABLE Table)
            the current process' AddressCreationLock */
         PEPROCESS Process = CONTAINING_RECORD(Table, EPROCESS, VadRoot);
         ASSERT(MI_WS_OWNER(Process) ||
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+               TRUE);  /* EX_PUSH_LOCK.Owner was removed in Windows 10 */
+#else
                (Process->AddressCreationLock.Owner == KeGetCurrentThread()));
+#endif
     }
 }
 
@@ -88,7 +105,11 @@ MiDbgAssertIsLockedForWrite(_In_ PMM_AVL_TABLE Table)
         /* Need to hold both the system working-set lock exclusive and
            the idle process' AddressCreationLock */
         ASSERT(PsGetCurrentThread()->OwnsSystemWorkingSetExclusive);
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        /* EX_PUSH_LOCK.Owner was removed in Windows 10 */
+#else
         ASSERT(PsIdleProcess->AddressCreationLock.Owner == KeGetCurrentThread());
+#endif
     }
     else
     {
@@ -97,7 +118,11 @@ MiDbgAssertIsLockedForWrite(_In_ PMM_AVL_TABLE Table)
         PEPROCESS Process = CONTAINING_RECORD(Table, EPROCESS, VadRoot);
         ASSERT(Process == PsGetCurrentProcess());
         ASSERT(PsGetCurrentThread()->OwnsProcessWorkingSetExclusive);
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+        /* EX_PUSH_LOCK.Owner was removed in Windows 10 */
+#else
         ASSERT(Process->AddressCreationLock.Owner == KeGetCurrentThread());
+#endif
     }
 }
 
@@ -263,10 +288,10 @@ MiInsertVadEx(
     CurrentProcess = PsGetCurrentProcess();
 
     /* Acquire the address creation lock and make sure the process is alive */
-    KeAcquireGuardedMutex(&CurrentProcess->AddressCreationLock);
+    MiLockProcessAddressCreation(CurrentProcess);
     if (CurrentProcess->VmDeleted)
     {
-        KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
+        MiUnlockProcessAddressCreation(CurrentProcess);
         DPRINT1("The process is dying\n");
         return STATUS_PROCESS_IS_TERMINATING;
     }
@@ -305,7 +330,7 @@ MiInsertVadEx(
         if ((Result == TableFoundNode) || (EndingAddress > HighestAddress))
         {
             DPRINT1("Not enough free space to insert this VAD node!\n");
-            KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
+            MiUnlockProcessAddressCreation(CurrentProcess);
             return STATUS_NO_MEMORY;
         }
 
@@ -327,7 +352,7 @@ MiInsertVadEx(
         if (Result == TableFoundNode)
         {
             DPRINT("Given address conflicts with existing node\n");
-            KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
+            MiUnlockProcessAddressCreation(CurrentProcess);
             return STATUS_CONFLICTING_ADDRESSES;
         }
     }
@@ -375,7 +400,7 @@ MiInsertVadEx(
     }
 
     /* Unlock the address space */
-    KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
+    MiUnlockProcessAddressCreation(CurrentProcess);
 
     *BaseAddress = StartingAddress;
     return STATUS_SUCCESS;

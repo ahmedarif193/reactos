@@ -818,8 +818,14 @@ QSI_DEF(SystemPerformanceInformation)
         if (Prcb)
         {
             Spi->ContextSwitches += KeGetContextSwitches(Prcb);
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
             Spi->FirstLevelTbFills += Prcb->KeFirstLevelTbFills;
             Spi->SecondLevelTbFills += Prcb->KeSecondLevelTbFills;
+#else
+            /* These counters were removed in Vista+ */
+            Spi->FirstLevelTbFills += 0;
+            Spi->SecondLevelTbFills += 0;
+#endif
             Spi->SystemCalls += Prcb->KeSystemCalls;
         }
     }
@@ -1802,7 +1808,12 @@ QSI_DEF(SystemExceptionInformation)
             AlignmentFixupCount += Prcb->KeAlignmentFixupCount;
             ExceptionDispatchCount += Prcb->KeExceptionDispatchCount;
 #ifndef _M_ARM
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
             FloatingEmulationCount += Prcb->KeFloatingEmulationCount;
+#else
+            /* KeFloatingEmulationCount was removed in Vista+ */
+            FloatingEmulationCount += 0;
+#endif
 #endif // _M_ARM
         }
     }

@@ -161,10 +161,18 @@ ExpRaiseHardError(IN NTSTATUS ErrorStatus,
         (ErrorStatus & HARDERROR_OVERRIDE_ERRORMODE))
     {
         /* Check if we have an exception port */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+        if (Process->ExceptionPortData)
+#else
         if (Process->ExceptionPort)
+#endif
         {
             /* Use the port */
-            PortHandle = Process->ExceptionPort;
+    #if (NTDDI_VERSION >= NTDDI_WIN7)
+        PortHandle = Process->ExceptionPortData;
+#else
+        PortHandle = Process->ExceptionPort;
+#endif
         }
         else
         {

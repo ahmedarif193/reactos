@@ -50,14 +50,24 @@ PsConvertToGuiThread(VOID)
     if (!PspW32ProcessCallout) return STATUS_ACCESS_DENIED;
 
     /* Make sure it's not already win32 */
+#if (NTDDI_VERSION < NTDDI_LONGHORN) || ((NTDDI_VERSION < NTDDI_WIN7) && !defined(_WIN64))
     if (Thread->Tcb.ServiceTable != KeServiceDescriptorTable)
+#else
+    /* ServiceTable was removed in newer versions - check another way */
+    if (PsGetThreadWin32Thread(Thread) != NULL)
+#endif
     {
         /* We're already a win32 thread */
         return STATUS_ALREADY_WIN32;
     }
 
     /* Check if we don't already have a kernel-mode stack */
+#if (NTDDI_VERSION >= NTDDI_WIN7) && !defined(_M_AMD64)
     if (!Thread->Tcb.LargeStack)
+#else
+    /* LargeStack field doesn't exist on all architectures/versions */
+    if (FALSE)
+#endif
     {
         /* We don't create one */
         NewStack = (ULONG_PTR)MmCreateKernelStack(TRUE, 0);
@@ -87,7 +97,9 @@ PsConvertToGuiThread(VOID)
     if (!NT_SUCCESS(Status)) return Status;
 
     /* Set the new service table */
+#if (NTDDI_VERSION < NTDDI_LONGHORN) || ((NTDDI_VERSION < NTDDI_WIN7) && !defined(_WIN64))
     Thread->Tcb.ServiceTable = KeServiceDescriptorTableShadow;
+#endif
     ASSERT(Thread->Tcb.Win32Thread == 0);
 
     /* Tell Win32k about our thread */
@@ -95,7 +107,9 @@ PsConvertToGuiThread(VOID)
     if (!NT_SUCCESS(Status))
     {
         /* Revert our table */
+#if (NTDDI_VERSION < NTDDI_LONGHORN) || ((NTDDI_VERSION < NTDDI_WIN7) && !defined(_WIN64))
         Thread->Tcb.ServiceTable = KeServiceDescriptorTable;
+#endif
     }
 
     /* Return status */

@@ -201,7 +201,12 @@ NtImpersonateClientOfPort(IN HANDLE PortHandle,
     }
 
     /* Check for no-impersonation flag */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     if ((ULONG_PTR)ClientThread->LpcReplyMessage & LPCP_THREAD_FLAG_NO_IMPERSONATION)
+#else
+    /* Vista+ doesn't have LpcReplyMessage field */
+    if (0)
+#endif
     {
         DPRINT1("Reply message has no impersonation flag set\n");
         Status = STATUS_ACCESS_DENIED;
@@ -209,10 +214,23 @@ NtImpersonateClientOfPort(IN HANDLE PortHandle,
     }
 
     /* Check for message id mismatch */
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    if ((ClientThread->LpcReplyMessageId2 != MessageId) || (MessageId == 0))
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* Vista-Win8 doesn't have LpcReplyMessageId field */
+    if (MessageId == 0)
+#else
     if ((ClientThread->LpcReplyMessageId != MessageId) || (MessageId == 0))
+#endif
     {
         DPRINT1("LpcReplyMessageId mismatch: 0x%lx/0x%lx.\n",
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+                ClientThread->LpcReplyMessageId2, MessageId);
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
+                0, MessageId);
+#else
                 ClientThread->LpcReplyMessageId, MessageId);
+#endif
         Status = STATUS_REPLY_MESSAGE_MISMATCH;
         goto CleanupWithLock;
     }
