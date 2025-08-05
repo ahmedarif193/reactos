@@ -169,6 +169,23 @@ finish_seh_function(void* event_data, void* UNUSED user_data)
 
     /* Update asm statement */
     std::stringstream asm_str;
+    
+    /* For GCC 13 compatibility, provide weak definitions for labels that PSEH2 expects */
+    for (auto& handler : seh_fun->handlers)
+    {
+        asm_str << ".weak __seh2$$begin_try__" << handler.line << "\n";
+        asm_str << "__seh2$$begin_try__" << handler.line << " = .\n";
+        asm_str << ".weak __seh2$$end_try__" << handler.line << "\n"; 
+        asm_str << "__seh2$$end_try__" << handler.line << " = .\n";
+        asm_str << ".weak __seh2$$filter__" << handler.line << "\n";
+        asm_str << "__seh2$$filter__" << handler.line << " = .\n";
+        if (handler.is_except)
+        {
+            asm_str << ".weak __seh2$$begin_except__" << handler.line << "\n";
+            asm_str << "__seh2$$begin_except__" << handler.line << " = .\n";
+        }
+    }
+    
     asm_str << ".seh_handler __C_specific_handler";
     if (seh_fun->unwind)
         asm_str << ", @unwind";
