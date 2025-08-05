@@ -504,7 +504,11 @@ HvSyncHive(
 #endif
 
     /* Update the hive log file if present */
+#if (NTDDI_VERSION < NTDDI_WIN10)
     if (RegistryHive->Log)
+#else
+    if (FALSE) /* Log member not available in Windows 10+ */
+#endif
     {
         if (!HvpWriteLog(RegistryHive))
         {
@@ -527,7 +531,11 @@ HvSyncHive(
     }
 
     /* Update the alternate hive file if present */
+#if (NTDDI_VERSION < NTDDI_WIN10)
     if (RegistryHive->Alternate)
+#else
+    if (FALSE) /* Alternate member not available in Windows 10+ */
+#endif
     {
         if (!HvpWriteHive(RegistryHive, TRUE, HFILE_TYPE_ALTERNATE))
         {
@@ -636,7 +644,11 @@ HvWriteAlternateHive(
 {
     ASSERT(!RegistryHive->ReadOnly);
     ASSERT(RegistryHive->Signature == HV_HHIVE_SIGNATURE);
+#if (NTDDI_VERSION < NTDDI_WIN10)
     ASSERT(RegistryHive->Alternate);
+#else
+    ASSERT(TRUE); /* Alternate member not available in Windows 10+ */
+#endif
 
 #if !defined(_BLDR_)
     /* Update hive header modification time */

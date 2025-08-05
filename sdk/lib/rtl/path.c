@@ -1937,7 +1937,7 @@ Leave:
 /*
  * @implemented
  */
-ULONG
+NTSTATUS
 NTAPI
 RtlGetFullPathName_UEx(
     _In_ PWSTR FileName,
@@ -1954,16 +1954,18 @@ RtlGetFullPathName_UEx(
 
     /* Build the string */
     status = RtlInitUnicodeStringEx(&FileNameString, FileName);
-    if (!NT_SUCCESS(status)) return 0;
+    if (!NT_SUCCESS(status)) return status;
 
-    /* Call the extended function */
-    return RtlGetFullPathName_Ustr(
+    /* Call the extended function and convert result to NTSTATUS */
+    ULONG result = RtlGetFullPathName_Ustr(
         &FileNameString,
         BufferLength,
         Buffer,
         (PCWSTR*)FilePart,
         NULL,
         InputPathType);
+    
+    return result ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 }
 
 /******************************************************************

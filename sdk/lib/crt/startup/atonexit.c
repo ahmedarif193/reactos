@@ -50,6 +50,7 @@ void __call_atexit(void)
 /* Choose a different name to prevent name conflicts. The CRT one works fine.  */
 _onexit_t __cdecl _onexit(_onexit_t func);
 
+#ifndef _VCRUNTIME_H
 _onexit_t __cdecl _onexit(_onexit_t func)
 {
     _PVFV *onexitbegin;
@@ -98,3 +99,4 @@ atexit (_PVFV func)
 {
   return (_onexit((_onexit_t)func) == NULL) ? -1 : 0;
 }
+#endif /* _VCRUNTIME_H */

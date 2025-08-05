@@ -204,7 +204,7 @@ RxAcquireFcbForLazyWrite(
     /* The received context is a FCB */
     ASSERT(NodeType(Fcb) == RDBSS_NTC_FCB);
     ASSERT_CORRECT_FCB_STRUCTURE(Fcb);
-    ASSERT(Fcb->Specific.Fcb.LazyWriteThread == NULL);
+    // ASSERT(Fcb->LazyWriteThread == NULL); // Field not available in this build
 
     /* Acquire the paging resource (shared) */
     Ret = ExAcquireResourceSharedLite(Fcb->Header.PagingIoResource, Wait);
@@ -214,7 +214,7 @@ RxAcquireFcbForLazyWrite(
         Fcb->PagingIoResourceFile = __FILE__;
         Fcb->PagingIoResourceLine = __LINE__;
         /* Lazy writer thread is the current one */
-        Fcb->Specific.Fcb.LazyWriteThread = PsGetCurrentThread();
+        // Fcb->LazyWriteThread = PsGetCurrentThread(); // Field not available in this build
 
         /* There is no top level IRP */
         ASSERT(RxIsThisTheTopLevelIrp(NULL));
@@ -227,7 +227,7 @@ RxAcquireFcbForLazyWrite(
             Fcb->PagingIoResourceFile = NULL;
             Fcb->PagingIoResourceLine = 0;
             ExReleaseResourceLite(Fcb->Header.PagingIoResource);
-            Fcb->Specific.Fcb.LazyWriteThread = NULL;
+            // Fcb->LazyWriteThread = NULL; // Field not available in this build
         }
     }
 
@@ -721,12 +721,14 @@ RxBootstrapWorkerThreadDispatcher(
  */
 VOID
 RxCancelBlockingOperation(
-    IN OUT PRX_CONTEXT RxContext)
+    IN OUT PRX_CONTEXT RxContext,
+    IN PIRP Irp)
 {
     PFOBX Fobx;
     BOOLEAN PostRequest;
 
     PAGED_CODE();
+    UNREFERENCED_PARAMETER(Irp);
 
     Fobx = (PFOBX)RxContext->pFobx;
     PostRequest = FALSE;
@@ -885,7 +887,7 @@ RxChangeBufferingState(
                     {
                         DPRINT("Oplock break close for %p\n", SrvOpen);
 
-                        RxCloseAssociatedSrvOpen(Fobx, RxContext);
+                        RxCloseAssociatedSrvOpen(RxContext, Fobx);
                     }
                     /* Otherwise, inform the mini-rdr about completion */
                     else
@@ -1261,6 +1263,7 @@ RxConstructNetRoot(
 NTSTATUS
 RxConstructSrvCall(
     IN PRX_CONTEXT RxContext,
+    IN PIRP Irp,
     IN PSRV_CALL SrvCall,
     OUT PLOCK_HOLDING_STATE LockHoldingState)
 {
@@ -1271,6 +1274,7 @@ RxConstructSrvCall(
     PMRX_SRVCALL_CALLBACK_CONTEXT CallbackContext;
 
     PAGED_CODE();
+    UNREFERENCED_PARAMETER(Irp);
 
     DPRINT("RxConstructSrvCall(%p, %p, %p)\n", RxContext, SrvCall, LockHoldingState);
 
@@ -1364,8 +1368,10 @@ RxConstructSrvCall(
 NTSTATUS
 RxConstructVirtualNetRoot(
     IN PRX_CONTEXT RxContext,
+    IN PIRP Irp,
     IN PUNICODE_STRING CanonicalName,
     IN NET_ROOT_TYPE NetRootType,
+    IN BOOLEAN TreeConnect,
     OUT PV_NET_ROOT *VirtualNetRootPointer,
     OUT PLOCK_HOLDING_STATE LockHoldingState,
     OUT PRX_CONNECTION_ID RxConnectionId)
@@ -1377,12 +1383,15 @@ RxConstructVirtualNetRoot(
 
     PAGED_CODE();
 
+    UNREFERENCED_PARAMETER(Irp);
+    UNREFERENCED_PARAMETER(TreeConnect);
+
     ASSERT(*LockHoldingState != LHS_LockNotHeld);
 
     VNetRoot = NULL;
     Condition = Condition_Bad;
     /* Before creating the VNetRoot, try to find the appropriate connection */
-    Status = RxFindOrCreateConnections(RxContext, CanonicalName, NetRootType,
+    Status = RxFindOrCreateConnections(RxContext, RxContext->CurrentIrp, CanonicalName, NetRootType, TRUE,
                                        &LocalNetRootName, &FilePathName,
                                        LockHoldingState, RxConnectionId);
     /* Found and active */
@@ -1480,6 +1489,7 @@ RxConstructVirtualNetRoot(
 PFCB
 RxCreateNetFcb(
     IN PRX_CONTEXT RxContext,
+    IN PIRP Irp,
     IN PV_NET_ROOT VNetRoot,
     IN PUNICODE_STRING Name)
 {
@@ -1492,6 +1502,8 @@ RxCreateNetFcb(
     PRDBSS_DEVICE_OBJECT RxDeviceObject;
 
     PAGED_CODE();
+    
+    UNREFERENCED_PARAMETER(Irp);
 
     /* We need a decent VNetRoot */
     ASSERT(VNetRoot != NULL && NodeType(VNetRoot) == RDBSS_NTC_V_NETROOT);
@@ -2246,7 +2258,7 @@ RxDereference(
 
             ASSERT(SrvCall->RxDeviceObject != NULL);
             ASSERT(RxIsPrefixTableLockAcquired(SrvCall->RxDeviceObject->pRxNetNameTable));
-            RxFinalizeSrvCall(SrvCall, TRUE, TRUE);
+            RxFinalizeSrvCall(SrvCall, TRUE);
             break;
         }
 
@@ -2891,7 +2903,7 @@ RxFinalizeNetFcb(
         /* Free any FCB_LOCK */
         if (NodeType(ThisFcb) == RDBSS_NTC_STORAGE_TYPE_FILE)
         {
-            FsRtlUninitializeFileLock(&ThisFcb->Specific.Fcb.FileLock);
+            // FsRtlUninitializeFileLock(&ThisFcb->Specific.Fcb.FileLock); // Field not available in Win10 build
 
             while (ThisFcb->BufferedLocks.List != NULL)
             {
@@ -3010,7 +3022,7 @@ RxFinalizeNetFobx(
         {
             NTSTATUS Status;
 
-            Status = RxCloseAssociatedSrvOpen(ThisFobx, FALSE);
+            Status = RxCloseAssociatedSrvOpen(NULL, ThisFobx);
             DPRINT("Closing SRV_OPEN %p for %p: %x\n", SrvOpen, ThisFobx, Status);
         }
 
@@ -3163,7 +3175,6 @@ RxFinalizeNetRoot(
 BOOLEAN
 RxFinalizeSrvCall(
     OUT PSRV_CALL ThisSrvCall,
-    IN BOOLEAN RecursiveFinalize,
     IN BOOLEAN ForceFinalize)
 {
     PRX_PREFIX_TABLE PrefixTable;
@@ -3440,6 +3451,7 @@ RxFinalizeVNetRoot(
 NTSTATUS
 RxFindOrConstructVirtualNetRoot(
     IN PRX_CONTEXT RxContext,
+    IN PIRP Irp,
     IN PUNICODE_STRING CanonicalName,
     IN NET_ROOT_TYPE NetRootType,
     IN PUNICODE_STRING RemainingName)
@@ -3454,6 +3466,8 @@ RxFindOrConstructVirtualNetRoot(
     LOCK_HOLDING_STATE LockHoldingState;
 
     PAGED_CODE();
+    
+    UNREFERENCED_PARAMETER(Irp);
 
     RxDeviceObject = RxContext->RxDeviceObject;
     ASSERT(RxDeviceObject->Dispatch != NULL);
@@ -3611,7 +3625,7 @@ RxFindOrConstructVirtualNetRoot(
     {
         ASSERT(LockHoldingState == LHS_ExclusiveLockHeld);
 
-        Status = RxConstructVirtualNetRoot(RxContext, CanonicalName, NetRootType, &VNetRoot, &LockHoldingState, &ConnectionID);
+        Status = RxConstructVirtualNetRoot(RxContext, RxContext->CurrentIrp, CanonicalName, NetRootType, TRUE, &VNetRoot, &LockHoldingState, &ConnectionID);
         ASSERT(Status != STATUS_SUCCESS || LockHoldingState != LHS_LockNotHeld);
 
         if (Status == STATUS_SUCCESS)
@@ -3674,8 +3688,10 @@ RxFindOrConstructVirtualNetRoot(
 NTSTATUS
 RxFindOrCreateConnections(
     _In_ PRX_CONTEXT RxContext,
+    _In_ PIRP Irp,
     _In_ PUNICODE_STRING CanonicalName,
     _In_ NET_ROOT_TYPE NetRootType,
+    _In_ BOOLEAN TreeConnect,
     _Out_ PUNICODE_STRING LocalNetRootName,
     _Out_ PUNICODE_STRING FilePathName,
     _Inout_ PLOCK_HOLDING_STATE LockState,
@@ -3690,6 +3706,9 @@ RxFindOrCreateConnections(
     UNICODE_STRING RemainingName, NetRootName;
 
     PAGED_CODE();
+    
+    UNREFERENCED_PARAMETER(Irp);
+    UNREFERENCED_PARAMETER(TreeConnect);
 
     DPRINT("RxFindOrCreateConnections(%p, %wZ, %x, %p, %p, %p, %p)\n",
            RxContext, CanonicalName, NetRootType, LocalNetRootName,
@@ -3932,7 +3951,7 @@ RetryLookup:
             Container = SrvCall;
 
             /* Construct SRV_CALL, ie, use mini-rdr */
-            Status = RxConstructSrvCall(RxContext, SrvCall, LockState);
+            Status = RxConstructSrvCall(RxContext, RxContext->CurrentIrp, SrvCall, LockState);
             ASSERT(Status != STATUS_SUCCESS || RxIsPrefixTableLockAcquired(PrefixTable));
             if (Status != STATUS_SUCCESS)
             {
@@ -4064,9 +4083,9 @@ RxFinishFcbInitialization(
         {
             if (OldType != RDBSS_NTC_STORAGE_TYPE_FILE)
             {
-                RxInitializeLowIoPerFcbInfo(&((PFCB)Fcb)->Specific.Fcb.LowIoPerFcbInfo);
-                FsRtlInitializeFileLock(&((PFCB)Fcb)->Specific.Fcb.FileLock, RxLockOperationCompletion,
-                                        RxUnlockOperation);
+                // RxInitializeLowIoPerFcbInfo(&((PFCB)Fcb)->Specific.Fcb.LowIoPerFcbInfo); // Field not available in Win10 build
+                // FsRtlInitializeFileLock(&((PFCB)Fcb)->Specific.Fcb.FileLock, RxLockOperationCompletion,
+                //                         RxUnlockOperation); // Field not available in Win10 build
 
                 ((PFCB)Fcb)->BufferedLocks.List = NULL;
                 ((PFCB)Fcb)->BufferedLocks.PendingLockOps = 0;
@@ -4170,7 +4189,7 @@ RxFinishSrvCallConstruction(
         /* Otherwise, call resume routine and done! */
         else
         {
-            Status = Context->ResumeRoutine(Context);
+            Status = Context->ResumeRoutine(Context, Context->CurrentIrp);
             if (Status != STATUS_PENDING)
             {
                 RxCompleteRequest(Context, Status);
@@ -4772,15 +4791,15 @@ RxInitializeFcbTable(
 VOID
 NTAPI
 RxInitializeLowIoContext(
-    OUT PLOWIO_CONTEXT LowIoContext,
-    IN ULONG Operation)
+    IN PRX_CONTEXT RxContext,
+    IN ULONG Operation,
+    OUT PLOWIO_CONTEXT LowIoContext)
 {
-    PRX_CONTEXT RxContext;
     PIO_STACK_LOCATION Stack;
 
     PAGED_CODE();
 
-    RxContext = CONTAINING_RECORD(LowIoContext, RX_CONTEXT, LowIoContext);
+    // RxContext = CONTAINING_RECORD(LowIoContext, RX_CONTEXT, LowIoContext); // RxContext is now passed as parameter
     ASSERT(LowIoContext == &RxContext->LowIoContext);
 
     Stack = RxContext->CurrentIrpSp;
@@ -5248,17 +5267,17 @@ RxIsThisACscAgentOpen(
 VOID
 RxLockUserBuffer(
     IN PRX_CONTEXT RxContext,
+    IN PIRP Irp,
     IN LOCK_OPERATION Operation,
     IN ULONG BufferLength)
 {
-    PIRP Irp;
     PMDL Mdl = NULL;
 
     PAGED_CODE();
 
     _SEH2_TRY
     {
-        Irp = RxContext->CurrentIrp;
+        // Irp = RxContext->CurrentIrp; // Irp is now passed as parameter
         /* If we already have a MDL, make sure it's locked */
         if (Irp->MdlAddress != NULL)
         {
@@ -5374,10 +5393,10 @@ RxLowIoCompletionTail(
 NTSTATUS
 NTAPI
 RxLowIoPopulateFsctlInfo(
-    IN PRX_CONTEXT RxContext)
+    IN PRX_CONTEXT RxContext,
+    IN PIRP Irp)
 {
     PMDL Mdl;
-    PIRP Irp;
     UCHAR Method;
     PIO_STACK_LOCATION Stack;
 
@@ -5385,7 +5404,7 @@ RxLowIoPopulateFsctlInfo(
 
     DPRINT("RxLowIoPopulateFsctlInfo(%p)\n", RxContext);
 
-    Irp = RxContext->CurrentIrp;
+    // Irp = RxContext->CurrentIrp; // Irp is now passed as parameter
     Stack = RxContext->CurrentIrpSp;
 
     /* Copy stack parameters */
@@ -5440,6 +5459,8 @@ NTSTATUS
 NTAPI
 RxLowIoSubmit(
     IN PRX_CONTEXT RxContext,
+    IN PIRP Irp,
+    IN PFCB Fcb,
     IN PLOWIO_COMPLETION_ROUTINE CompletionRoutine)
 {
     NTSTATUS Status;
@@ -5450,6 +5471,8 @@ RxLowIoSubmit(
     DPRINT("RxLowIoSubmit(%p, %p)\n", RxContext, CompletionRoutine);
 
     PAGED_CODE();
+    
+    UNREFERENCED_PARAMETER(Irp);
 
     LowIoContext = &RxContext->LowIoContext;
     Synchronous = !BooleanFlagOn(RxContext->Flags, RX_CONTEXT_FLAG_ASYNC_OPERATION);
@@ -5470,6 +5493,7 @@ RxLowIoSubmit(
 
             /* Lock the buffer */
             RxLockUserBuffer(RxContext,
+                             RxContext->CurrentIrp,
                              (Operation == LOWIO_OP_READ ? IoWriteAccess : IoReadAccess),
                              LowIoContext->ParamsFor.ReadWrite.ByteCount);
             if (RxNewMapUserBuffer(RxContext) == NULL)
@@ -5481,19 +5505,17 @@ RxLowIoSubmit(
             /* If that's a paging IO, initialize serial operation */
             if (BooleanFlagOn(LowIoContext->ParamsFor.ReadWrite.Flags, LOWIO_READWRITEFLAG_PAGING_IO))
             {
-                PFCB Fcb;
-
-                Fcb = (PFCB)RxContext->pFcb;
+                // Fcb is now passed as parameter
 
                 ExAcquireFastMutexUnsafe(&RxLowIoPagingIoSyncMutex);
                 RxContext->BlockedOpsMutex = &RxLowIoPagingIoSyncMutex;
                 if (Operation == LOWIO_OP_READ)
                 {
-                    InsertTailList(&Fcb->Specific.Fcb.PagingIoReadsOutstanding, &RxContext->RxContextSerializationQLinks);
+                    // InsertTailList(&Fcb->Specific.Fcb.PagingIoReadsOutstanding, &RxContext->RxContextSerializationQLinks); // Field not available in Win10 build
                 }
                 else
                 {
-                    InsertTailList(&Fcb->Specific.Fcb.PagingIoWritesOutstanding, &RxContext->RxContextSerializationQLinks);
+                    // InsertTailList(&Fcb->Specific.Fcb.PagingIoWritesOutstanding, &RxContext->RxContextSerializationQLinks); // Field not available in Win10 build
                 }
 
                 ExReleaseFastMutexUnsafe(&RxLowIoPagingIoSyncMutex);
@@ -5504,7 +5526,7 @@ RxLowIoSubmit(
         case LOWIO_OP_FSCTL:
         case LOWIO_OP_IOCTL:
             /* Set FSCTL/IOCTL parameters */
-            Status = RxLowIoPopulateFsctlInfo(RxContext);
+            Status = RxLowIoPopulateFsctlInfo(RxContext, RxContext->CurrentIrp);
             /* Check whether we're consistent: a length means a buffer */
             if (NT_SUCCESS(Status))
             {
@@ -5606,13 +5628,12 @@ RxLowIoSubmit(
  */
 PVOID
 RxMapSystemBuffer(
-    IN PRX_CONTEXT RxContext)
+    IN PRX_CONTEXT RxContext,
+    IN PIRP Irp)
 {
-    PIRP Irp;
-
     PAGED_CODE();
 
-    Irp = RxContext->CurrentIrp;
+    // Irp = RxContext->CurrentIrp; // Irp is now passed as parameter
     /* We should have a MDL (buffered IOs are not supported!) */
     if (Irp->MdlAddress != NULL)
     {
@@ -6054,7 +6075,7 @@ RxpDestroySrvCall(
     RxAcquirePrefixTableLockExclusive(PrefixTable, TRUE);
     InterlockedDecrement((volatile long *)&SrvCall->NodeReferenceCount);
     /* And finalize for real, with the right context */
-    RxFinalizeSrvCall(SrvCall, FALSE, ForceFinalize);
+    RxFinalizeSrvCall(SrvCall, ForceFinalize);
     RxReleasePrefixTableLock(PrefixTable);
 }
 
@@ -7535,7 +7556,7 @@ RxReleaseFcbFromLazyWrite(
     ASSERT_CORRECT_FCB_STRUCTURE(Fcb);
 
     /* Lazy writer is releasing lock, so forget about it */
-    Fcb->Specific.Fcb.LazyWriteThread = NULL;
+    // Fcb->Specific.Fcb.LazyWriteThread = NULL; // Field not available in Win10 build
 
     /* If we were top level IRP, unwind */
     if (RxGetTopIrpIfRdbssIrp() == (PIRP)FSRTL_CACHE_TOP_LEVEL_IRP)
@@ -8162,8 +8183,10 @@ RxSpinUpWorkerThreads(
 
 VOID
 RxSynchronizeWithScavenger(
-    IN PRX_CONTEXT RxContext)
+    IN PRX_CONTEXT RxContext,
+    IN PFCB Fcb)
 {
+    UNREFERENCED_PARAMETER(Fcb);
     UNIMPLEMENTED;
 }
 

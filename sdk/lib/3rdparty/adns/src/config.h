@@ -40,11 +40,13 @@
 #ifdef HAVE_POLL
 #include <sys/poll.h>
 #else
-/* kludge it up */
+/* kludge it up - but only if not already defined by Windows headers */
+#if !(defined(_WIN32) && (NTDDI_VERSION >= NTDDI_WIN10))
 struct pollfd { int fd; short events; short revents; };
 #define POLLIN  1
 #define POLLPRI 2
 #define POLLOUT 4
+#endif
 #endif
 
 /* GNU C attributes. */

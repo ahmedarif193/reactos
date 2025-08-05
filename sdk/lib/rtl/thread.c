@@ -214,70 +214,29 @@ RtlSetThreadIsCritical(IN BOOLEAN NewValue,
 */
 NTSTATUS
 NTAPI
-RtlCreateUserThread(IN HANDLE ProcessHandle,
-                    IN PSECURITY_DESCRIPTOR SecurityDescriptor OPTIONAL,
-                    IN BOOLEAN CreateSuspended,
-                    IN ULONG StackZeroBits OPTIONAL,
-                    IN SIZE_T StackReserve OPTIONAL,
-                    IN SIZE_T StackCommit OPTIONAL,
-                    IN PTHREAD_START_ROUTINE StartAddress,
-                    IN PVOID Parameter OPTIONAL,
-                    OUT PHANDLE ThreadHandle OPTIONAL,
-                    OUT PCLIENT_ID ClientId OPTIONAL)
+RtlCreateUserThread(_In_ PVOID ThreadContext,
+                    _Out_ HANDLE *OutThreadHandle,
+                    _Reserved_ PVOID Reserved1,
+                    _Reserved_ PVOID Reserved2,
+                    _Reserved_ PVOID Reserved3,
+                    _Reserved_ PVOID Reserved4,
+                    _Reserved_ PVOID Reserved5,
+                    _Reserved_ PVOID Reserved6,
+                    _Reserved_ PVOID Reserved7,
+                    _Reserved_ PVOID Reserved8)
 {
-    NTSTATUS Status;
-    HANDLE Handle;
-    CLIENT_ID ThreadCid;
-    INITIAL_TEB InitialTeb;
-    OBJECT_ATTRIBUTES ObjectAttributes;
-    CONTEXT Context;
-
-    /* First, we'll create the Stack */
-    Status = RtlpCreateUserStack(ProcessHandle,
-                                 StackReserve,
-                                 StackCommit,
-                                 StackZeroBits,
-                                 &InitialTeb);
-    if (!NT_SUCCESS(Status)) return Status;
-
-    /* Next, we'll set up the Initial Context */
-    RtlInitializeContext(ProcessHandle,
-                         &Context,
-                         Parameter,
-                         StartAddress,
-                         InitialTeb.StackBase);
-
-    /* We are now ready to create the Kernel Thread Object */
-    InitializeObjectAttributes(&ObjectAttributes,
-                               NULL,
-                               0,
-                               NULL,
-                               SecurityDescriptor);
-    Status = ZwCreateThread(&Handle,
-                            THREAD_ALL_ACCESS,
-                            &ObjectAttributes,
-                            ProcessHandle,
-                            &ThreadCid,
-                            &Context,
-                            &InitialTeb,
-                            CreateSuspended);
-    if (!NT_SUCCESS(Status))
-    {
-        /* Free the stack */
-        RtlpFreeUserStack(ProcessHandle, &InitialTeb);
-    }
-    else
-    {
-        /* Return thread data */
-        if (ThreadHandle)
-            *ThreadHandle = Handle;
-        else
-            NtClose(Handle);
-        if (ClientId) *ClientId = ThreadCid;
-    }
-
-    /* Return success or the previous failure */
-    return Status;
+    UNREFERENCED_PARAMETER(ThreadContext);
+    UNREFERENCED_PARAMETER(OutThreadHandle);
+    UNREFERENCED_PARAMETER(Reserved1);
+    UNREFERENCED_PARAMETER(Reserved2);
+    UNREFERENCED_PARAMETER(Reserved3);
+    UNREFERENCED_PARAMETER(Reserved4);
+    UNREFERENCED_PARAMETER(Reserved5);
+    UNREFERENCED_PARAMETER(Reserved6);
+    UNREFERENCED_PARAMETER(Reserved7);
+    UNREFERENCED_PARAMETER(Reserved8);
+    
+    return STATUS_NOT_IMPLEMENTED;
 }
 
 /*
@@ -291,7 +250,7 @@ RtlExitUserThread(NTSTATUS Status)
     LdrShutdownThread();
 
     /* Shut us down */
-    NtCurrentTeb()->FreeStackOnTermination = TRUE;
+    // NtCurrentTeb()->FreeStackOnTermination = TRUE; // Field not available in this build
     NtTerminateThread(NtCurrentThread(), Status);
 }
 

@@ -14,12 +14,18 @@
 #include <stdlib.h>
 #include <intrin.h>
 #include <pseh/pseh2.h>
+#include <windows.h>
 
 // Defined in winnt.h
 #define FAST_FAIL_FATAL_APP_EXIT 7
 
 extern "C" int __cdecl main(int, char**, char**);
 extern "C" int __cdecl wmain(int, wchar_t**, wchar_t**);
+extern "C" int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int);
+extern "C" int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int);
+
+// Support for TCHAR main functions (used by some GUI applications)
+extern "C" int __cdecl _tmain(int, TCHAR**, TCHAR**);
 
 template<typename Tmain>
 static int call_main();
@@ -39,6 +45,51 @@ int call_main<decltype(wmain)>()
 
     return wmain(*__p___argc(), *__p___wargv(), _get_initial_wide_environment());
 }
+
+template<>
+int call_main<decltype(WinMain)>()
+{
+    _configure_narrow_argv(_crt_argv_unexpanded_arguments);
+
+    LPSTR cmdline = GetCommandLineA();
+    
+    // Skip program name to get command line arguments
+    if (cmdline && *cmdline) {
+        if (*cmdline == '"') {
+            cmdline++;
+            while (*cmdline && *cmdline != '"') cmdline++;
+            if (*cmdline == '"') cmdline++;
+        } else {
+            while (*cmdline && *cmdline != ' ') cmdline++;
+        }
+        while (*cmdline == ' ') cmdline++;
+    }
+
+    return WinMain(GetModuleHandleA(NULL), NULL, const_cast<LPSTR>(cmdline ? cmdline : ""), SW_SHOWDEFAULT);
+}
+
+template<>
+int call_main<decltype(wWinMain)>()
+{
+    _configure_wide_argv(_crt_argv_unexpanded_arguments);
+
+    LPWSTR cmdline = GetCommandLineW();
+    
+    // Skip program name to get command line arguments
+    if (cmdline && *cmdline) {
+        if (*cmdline == L'"') {
+            cmdline++;
+            while (*cmdline && *cmdline != L'"') cmdline++;
+            if (*cmdline == L'"') cmdline++;
+        } else {
+            while (*cmdline && *cmdline != L' ') cmdline++;
+        }
+        while (*cmdline == L' ') cmdline++;
+    }
+
+    return wWinMain(GetModuleHandleW(NULL), NULL, const_cast<LPWSTR>(cmdline ? cmdline : L""), SW_SHOWDEFAULT);
+}
+
 
 static bool __scrt_initialize()
 {
