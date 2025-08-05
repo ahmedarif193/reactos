@@ -11,7 +11,7 @@ include_directories(
 add_definitions(
     -D_NTOSKRNL_
     -D_NTSYSTEM_
-    -DNTDDI_VERSION=0x05020400)
+    -DNTDDI_VERSION=0x0A000000)
 
 if(NOT DEFINED NEWCC)
     set(NEWCC FALSE)
@@ -35,6 +35,7 @@ else()
     list(APPEND SOURCE
         ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/cacheman.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/copy.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/win10_stubs.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/fs.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/lazywrite.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/mdl.c
@@ -88,6 +89,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/mutant.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/profile.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/pushlock.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/pushlock_win10.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/resource.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/rundown.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/sem.c
@@ -95,6 +97,8 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/sysinfo.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/time.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/timer.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/timer_ntsettimer.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/timer_win10.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/uuid.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/win32k.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/work.c
@@ -117,6 +121,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/stackovf.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/tunnel.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/unc.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/win10_stubs.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fstub/disksup.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fstub/fstubex.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fstub/halstub.c
@@ -164,6 +169,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/pnproot.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/pnputil.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/debug.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/io/win10_stubs.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kdapi.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kdbreak.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kddata.c
@@ -197,6 +203,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/time.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/timerobj.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/wait.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/win10_stubs.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/lpc/close.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/lpc/complete.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/lpc/connect.c
@@ -269,6 +276,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/state.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/thread.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/win32.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/win10_stubs.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/libsupp.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/misc.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/access.c

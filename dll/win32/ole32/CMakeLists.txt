@@ -1,6 +1,6 @@
 
 remove_definitions(-D_WIN32_WINNT=0x502)
-add_definitions(-D_WIN32_WINNT=0x600)
+add_definitions(-D_WIN32_WINNT=0x0A00)
 
 add_definitions(
     -D_OLE32_
@@ -56,7 +56,9 @@ list(APPEND SOURCE
     stg_stream.c
     storage32.c
     stubmanager.c
-    usrmarshal.c)
+    usrmarshal.c
+    ole32_win10_stubs.c
+    ole32_win10_stubs_extra.c)
 
 if(MSVC AND (ARCH STREQUAL "i386"))
     list(APPEND SOURCE msvc-thiscall.c)
@@ -68,7 +70,6 @@ list(APPEND PCH_SKIP_SOURCE
     ${CMAKE_CURRENT_BINARY_DIR}/ole32_objidl_p.c
     ${CMAKE_CURRENT_BINARY_DIR}/ole32_oleidl_p.c
     ${CMAKE_CURRENT_BINARY_DIR}/ole32_unknwn_p.c
-    ${CMAKE_CURRENT_BINARY_DIR}/ole32_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/proxy.dlldata.c)
 
 add_library(ole32 MODULE

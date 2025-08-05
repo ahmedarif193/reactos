@@ -174,9 +174,9 @@ endif()
 
 add_compile_options(-Wall -Wpointer-arith)
 
+#TODO we should remove those options
 # Disable some overzealous warnings
 add_compile_options(
-    -Wno-unknown-warning-option
     -Wno-char-subscripts
     -Wno-multichar
     -Wno-unused-value
@@ -405,6 +405,12 @@ function(set_module_type_toolchain MODULE TYPE)
 
         # Believe it or not, cmake doesn't do that
         set_property(TARGET ${MODULE} APPEND PROPERTY LINK_DEPENDS $<TARGET_PROPERTY:native-pefixup,IMPORTED_LOCATION>)
+    elseif(${TYPE} STREQUAL "win32cui" OR ${TYPE} STREQUAL "win32gui")
+        # Link CRT startup library for user-mode executables
+        target_link_libraries(${MODULE} vcstartup)
+    elseif(${TYPE} STREQUAL "win32dll" OR ${TYPE} STREQUAL "win32ocx" OR ${TYPE} STREQUAL "cpl")
+        # Link CRT startup library for user-mode DLLs
+        target_link_libraries(${MODULE} vcstartup)
     endif()
 endfunction()
 
@@ -445,10 +451,11 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
         # ar just puts stuff into the archive, without looking twice. Just delete the lib, we're going to rebuild it anyway
         COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE:${_libname}>
         COMMAND ${CMAKE_DLLTOOL} --def ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def --kill-at --output-lib=${_libname}.a -t ${_libname}
+        COMMAND ${CMAKE_RANLIB} ${_libname}.a
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
         WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
 
-    # We create a static library with the importlib thus created as object. AR will extract the obj files and archive it again as a thin lib
+    # We create a static library with the importlib thus created as object. AR will extract the obj files and archive it again
     set_source_files_properties(
         ${LIBRARY_PRIVATE_DIR}/${_libname}.a
         PROPERTIES
@@ -459,6 +466,9 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
         PROPERTIES
         LINKER_LANGUAGE "C"
         PREFIX "")
+    # Post-process the library to fix nested archive issue
+    add_custom_command(TARGET ${_libname} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy ${LIBRARY_PRIVATE_DIR}/${_libname}.a $<TARGET_FILE:${_libname}>)
 
     # Do the same with delay-import libs
     set(LIBRARY_PRIVATE_DIR ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${_libname}_delayed.dir)
@@ -467,10 +477,11 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
         # ar just puts stuff into the archive, without looking twice. Just delete the lib, we're going to rebuild it anyway
         COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE:${_libname}_delayed>
         COMMAND ${CMAKE_DLLTOOL} --def ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def --kill-at --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
+        COMMAND ${CMAKE_RANLIB} ${_libname}_delayed.a
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
         WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
 
-    # We create a static library with the importlib thus created. AR will extract the obj files and archive it again as a thin lib
+    # We create a static library with the importlib thus created. AR will extract the obj files and archive it again
     set_source_files_properties(
         ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
         PROPERTIES
@@ -481,6 +492,9 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
         PROPERTIES
         LINKER_LANGUAGE "C"
         PREFIX "")
+    # Post-process the library to fix nested archive issue
+    add_custom_command(TARGET ${_libname}_delayed POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a $<TARGET_FILE:${_libname}_delayed>)
 endfunction()
 
 function(spec2def _dllname _spec_file)
@@ -638,14 +652,15 @@ execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libgcc.a OUTPUT_VARIA
 string(STRIP ${LIBGCC_LOCATION} LIBGCC_LOCATION)
 set_target_properties(libgcc PROPERTIES IMPORTED_LOCATION ${LIBGCC_LOCATION})
 # libgcc needs kernel32 and winpthread (an appropriate CRT must be linked manually)
-target_link_libraries(libgcc INTERFACE libwinpthread libkernel32)
+# Also needs cpprt for GCC compatibility symbols
+target_link_libraries(libgcc INTERFACE libwinpthread libkernel32 cpprt)
 
 add_library(libsupc++ STATIC IMPORTED GLOBAL)
 execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libsupc++.a OUTPUT_VARIABLE LIBSUPCXX_LOCATION)
 string(STRIP ${LIBSUPCXX_LOCATION} LIBSUPCXX_LOCATION)
 set_target_properties(libsupc++ PROPERTIES IMPORTED_LOCATION ${LIBSUPCXX_LOCATION})
-# libsupc++ requires libgcc and stdc++compat
-target_link_libraries(libsupc++ INTERFACE libgcc stdc++compat)
+# libsupc++ requires libgcc and stdc++compat, and ucrtbase for __acrt_iob_func
+target_link_libraries(libsupc++ INTERFACE libucrtbase libgcc stdc++compat)
 
 add_library(libmingwex STATIC IMPORTED)
 execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libmingwex.a OUTPUT_VARIABLE LIBMINGWEX_LOCATION)

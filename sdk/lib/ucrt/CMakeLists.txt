@@ -22,10 +22,7 @@ if(${ARCH} STREQUAL "i386")
     include_directories(inc/i386)
 endif()
 
-remove_definitions(-D_WIN32_WINNT=0x502 -DWINVER=0x502)
 add_compile_definitions(
-    WINVER=0x600
-    _WIN32_WINNT=0x600
     _UCRT
     _CORECRT_BUILD
     _CRT_DECLARE_GLOBAL_VARIABLES_DIRECTLY
@@ -36,8 +33,8 @@ add_compile_definitions(
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
    CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # Silence GCC/Clang warnings
+    #TODO we should remove those options
     add_compile_options(
-        -Wno-unknown-warning-option
         -Wno-unused-function
         -Wno-unknown-pragmas
         -Wno-builtin-declaration-mismatch
@@ -52,14 +49,9 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
         -Wno-misleading-indentation
         -Wno-missing-braces
         -Wno-unused-value
-        -Wno-unused-local-typedef
         -Wno-unused-function
-        -Wno-writable-strings
-        -Wno-microsoft-template
         -Wno-switch
-        -Wno-ignored-pragmas
         -Wno-empty-body
-        -Wno-tautological-constant-out-of-range-compare
         -Wno-ignored-attributes
         -Wno-uninitialized
     )

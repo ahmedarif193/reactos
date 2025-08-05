@@ -7,6 +7,7 @@ if(NOT MSVC)
         # ar just puts stuff into the archive, without looking twice. Just delete the lib, we're going to rebuild it anyway
         COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE:oldnames>
         COMMAND ${CMAKE_DLLTOOL} --def ${CMAKE_CURRENT_SOURCE_DIR}/moldname-msvcrt.def --kill-at --output-lib=oldnames.a -t oldnames
+        COMMAND ${CMAKE_RANLIB} oldnames.a
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/moldname-msvcrt.def
         WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
     set_source_files_properties(
@@ -16,6 +17,9 @@ if(NOT MSVC)
 
     _add_library(oldnames STATIC EXCLUDE_FROM_ALL ${LIBRARY_PRIVATE_DIR}/oldnames.a)
     set_target_properties(oldnames PROPERTIES LINKER_LANGUAGE "C")
+    # Post-process the library to fix nested archive issue
+    add_custom_command(TARGET oldnames POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy ${LIBRARY_PRIVATE_DIR}/oldnames.a $<TARGET_FILE:oldnames>)
 else()
     add_asm_files(oldnames_asm oldnames-common.S oldnames-msvcrt.S)
     add_library(oldnames ${oldnames_asm})

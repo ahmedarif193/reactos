@@ -43,9 +43,10 @@ require_program(CMAKE_MC_COMPILER ${MINGW_TOOLCHAIN_PREFIX}windmc)
 require_program(CMAKE_RC_COMPILER ${MINGW_TOOLCHAIN_PREFIX}windres)
 require_program(CMAKE_DLLTOOL ${MINGW_TOOLCHAIN_PREFIX}dlltool)
 #set(CMAKE_AR ${MINGW_TOOLCHAIN_PREFIX}gcc-ar${MINGW_TOOLCHAIN_SUFFIX})
+require_program(CMAKE_RANLIB ${MINGW_TOOLCHAIN_PREFIX}ranlib)
 require_program(CMAKE_OBJCOPY ${MINGW_TOOLCHAIN_PREFIX}objcopy)
 
-set(CMAKE_C_CREATE_STATIC_LIBRARY "<CMAKE_AR> crT <TARGET> <LINK_FLAGS> <OBJECTS>")
+set(CMAKE_C_CREATE_STATIC_LIBRARY "<CMAKE_AR> cr <TARGET> <LINK_FLAGS> <OBJECTS>" "<CMAKE_RANLIB> <TARGET>")
 set(CMAKE_CXX_CREATE_STATIC_LIBRARY ${CMAKE_C_CREATE_STATIC_LIBRARY})
 set(CMAKE_ASM_CREATE_STATIC_LIBRARY ${CMAKE_C_CREATE_STATIC_LIBRARY})
 
@@ -58,9 +59,9 @@ set(CMAKE_CXX_STANDARD_LIBRARIES "-lgcc" CACHE STRING "Standard C++ Libraries")
 # This allows to have CMake test the compiler without linking
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
-set(CMAKE_SHARED_LINKER_FLAGS_INIT "-nostdlib -Wl,--enable-auto-image-base,--disable-auto-import")
-set(CMAKE_MODULE_LINKER_FLAGS_INIT "-nostdlib -Wl,--enable-auto-image-base,--disable-auto-import")
-set(CMAKE_EXE_LINKER_FLAGS_INIT "-nostdlib -Wl,--enable-auto-image-base,--disable-auto-import")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "-nostdlib -Wl,--disable-auto-import,--no-keep-memory,--reduce-memory-overheads,--strip-debug")
+set(CMAKE_MODULE_LINKER_FLAGS_INIT "-nostdlib -Wl,--disable-auto-import,--no-keep-memory,--reduce-memory-overheads,--strip-debug")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-nostdlib -Wl,--disable-auto-import,--no-keep-memory,--reduce-memory-overheads,--strip-debug")
 
 set(CMAKE_USER_MAKE_RULES_OVERRIDE "${CMAKE_CURRENT_LIST_DIR}/overrides-gcc.cmake")
 

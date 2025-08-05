@@ -43,12 +43,13 @@ list(APPEND SOURCE
     src/sputil.c
     src/startup.c
     src/wsautil.c
+    src/win10_stubs.c
+    src/simple_stubs.c
     inc/ws2_32.h)
 
 add_library(ws2_32 MODULE
     ${SOURCE}
     ws2_32.rc
-    ${CMAKE_CURRENT_BINARY_DIR}/ws2_32_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/ws2_32.def)
 
 set_module_type(ws2_32 win32dll)

@@ -6,7 +6,7 @@ add_definitions(
 
 remove_definitions(-D_WIN32_WINNT=0x502)
 remove_definitions(-D_CRT_NON_CONFORMING_SWPRINTFS)
-add_definitions(-D_WIN32_WINNT=0x600)
+add_definitions(-D_WIN32_WINNT=0x0A00)
 
 include_directories(
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/libjpeg

@@ -1,6 +1,6 @@
 
 remove_definitions(-D_WIN32_WINNT=0x502)
-add_definitions(-D_WIN32_WINNT=0x600)
+add_definitions(-D_WIN32_WINNT=0x0A00)
 
 add_executable(winspool_winetest info.c testlist.c)
 set_module_type(winspool_winetest win32cui)

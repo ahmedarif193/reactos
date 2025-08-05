@@ -37,8 +37,12 @@ list(APPEND VCRT_STARTUP_SOURCES
     __vcrt_init_stubs.c
     _onexit.c
     atexit.c
+    gcccompat.c
     mainCRTStartup.cpp
     wmainCRTStartup.cpp
+    WinMainCRTStartup.cpp
+    wWinMainCRTStartup.cpp
+    DllMainCRTStartup.cpp
 )
 
 if(${ARCH} STREQUAL "i386")

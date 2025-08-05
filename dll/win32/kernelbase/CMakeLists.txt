@@ -1,6 +1,6 @@
 
 remove_definitions(-D_WIN32_WINNT=0x502 -DWINVER=0x502)
-add_definitions(-D_WIN32_WINNT=0x601 -DWINVER=0x601)
+add_definitions(-D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00)
 
 add_definitions(
     -D__WINESRC__

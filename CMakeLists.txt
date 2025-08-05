@@ -18,6 +18,11 @@ project(REACTOS)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_INCLUDE_DIRECTORIES_PROJECT_BEFORE ON)
+
+# Fix bison skeleton compatibility issue by using system bison skeletons
+if(EXISTS "/usr/share/bison")
+    set(ENV{BISON_PKGDATADIR} "/usr/share/bison")
+endif()
 set(CMAKE_SHARED_LIBRARY_PREFIX "")
 set(CMAKE_SHARED_MODULE_PREFIX "")
 set(CMAKE_SKIP_PREPROCESSED_SOURCE_RULES TRUE)
@@ -99,6 +104,32 @@ endif()
 find_package(BISON REQUIRED)
 find_package(FLEX REQUIRED)
 
+# Auto-detect BISON_PKGDATADIR for Unix systems  
+if(UNIX)
+    # Check if we're using RosBE bison skeletons which have compatibility issues
+    if(DEFINED ENV{BISON_PKGDATADIR} AND "$ENV{BISON_PKGDATADIR}" MATCHES "RosBE")
+        # Override RosBE bison datadir with system bison datadir
+        set(ENV{BISON_PKGDATADIR} "/usr/share/bison")
+        message(STATUS "Overriding RosBE BISON_PKGDATADIR with system: /usr/share/bison")
+    elseif(NOT DEFINED ENV{BISON_PKGDATADIR})
+        # Use system bison datadir to avoid RosBE skeleton issues
+        execute_process(
+            COMMAND env BISON_PKGDATADIR=/usr/share/bison ${BISON_EXECUTABLE} --print-datadir
+            OUTPUT_VARIABLE BISON_DATADIR
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(BISON_DATADIR AND BISON_DATADIR STREQUAL "/usr/share/bison")
+            set(ENV{BISON_PKGDATADIR} "${BISON_DATADIR}")
+            message(STATUS "Auto-detected BISON_PKGDATADIR: ${BISON_DATADIR}")
+        else()
+            # Fallback to system bison datadir
+            set(ENV{BISON_PKGDATADIR} "/usr/share/bison")
+            message(STATUS "Using system BISON_PKGDATADIR: /usr/share/bison")
+        endif()
+    endif()
+endif()
+
 if(MSVC_IDE)
     # Bison needs M4 and BISON_PKGDATADIR set at build time,
     # but visual studio is hardly ever opened from the configure-time environment.
@@ -111,6 +142,8 @@ if(MSVC_IDE)
     endif()
     if(DEFINED ENV{BISON_PKGDATADIR})
         SET(ROS_SAVED_BISON_PKGDATADIR "$ENV{BISON_PKGDATADIR}" CACHE INTERNAL "")
+    else()
+        SET(ROS_SAVED_BISON_PKGDATADIR "/usr/share/bison" CACHE INTERNAL "")
     endif()
 
     # Tell the user about a misconfigured environment

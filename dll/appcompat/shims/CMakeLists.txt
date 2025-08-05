@@ -1,5 +1,6 @@
 
 add_subdirectory(shimlib)
-add_subdirectory(genral)
+# Temporarily disable genral due to linker segfault
+#add_subdirectory(genral)
 add_subdirectory(layer)
 

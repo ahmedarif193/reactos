@@ -44,6 +44,7 @@ list(APPEND SOURCE
     client/vdm.c
     client/version.c
     client/virtmem.c
+    client/win10_stubs.c
     client/console/alias.c
     client/console/console.c
     client/console/history.c

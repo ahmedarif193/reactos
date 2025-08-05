@@ -1,6 +1,6 @@
 
 remove_definitions(-D_WIN32_WINNT=0x502 -D_CRT_NON_CONFORMING_SWPRINTFS)
-add_definitions(-D_WIN32_WINNT=0x600)
+add_definitions(-D_WIN32_WINNT=0x0A00)
 
 add_definitions(-D__WINESRC__ -D__ROS_LONG64__ -DMSIRUNMODE=MSIRUNMODE_T)
 spec2def(msi.dll msi.spec ADD_IMPORTLIB)

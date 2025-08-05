@@ -3,8 +3,8 @@ remove_definitions(
     -DWINVER=0x502
     -D_WIN32_WINNT=0x502)
 add_definitions(
-    -DWINVER=0x600
-    -D_WIN32_WINNT=0x600)
+    -DWINVER=0x0A00
+    -D_WIN32_WINNT=0x0A00)
 
 add_definitions(
     -D_WINE

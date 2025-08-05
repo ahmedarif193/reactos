@@ -19,7 +19,8 @@ if(MSVC)
     endif()
 else()
     list(APPEND SOURCE
-        __cxa_pure_virtual.cpp)
+        __cxa_pure_virtual.cpp
+        gcc_compat.c)
 endif()
 
 add_library(cpprt ${SOURCE} ${cpprt_asm})

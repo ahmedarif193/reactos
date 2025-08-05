@@ -66,6 +66,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/win32ss/user/rtl/image.c
     ${REACTOS_SOURCE_DIR}/win32ss/user/rtl/text.c
     ${CMAKE_CURRENT_BINARY_DIR}/user32_stubs.c
+    windows/win10_stubs.c
     include/user32.h)
 
 if(ARCH STREQUAL "i386")

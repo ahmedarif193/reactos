@@ -5,7 +5,7 @@ add_definitions(
     -D_COMCTL32_)
 
 remove_definitions(-D_WIN32_WINNT=0x502 -DWINVER=0x502)
-add_definitions(-D_WIN32_WINNT=0x600 -DWINVER=0x600)
+add_definitions(-D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00)
 
 spec2def(comctl32.dll comctl32.spec ADD_IMPORTLIB)
 

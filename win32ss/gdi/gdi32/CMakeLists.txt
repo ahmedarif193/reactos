@@ -20,6 +20,7 @@ list(APPEND SOURCE
     misc/gdientry.c
     misc/historic.c
     misc/misc.c
+    misc/win10_stubs.c
     misc/wingl.c
     objects/arc.c
     objects/bitmap.c
