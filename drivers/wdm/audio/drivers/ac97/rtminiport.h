@@ -11,6 +11,7 @@
 #define _RTMINIPORT_H_
 
 #include "shared.h"
+#include "miniport.h"
 
 #if (NTDDI_VERSION >= NTDDI_VISTA)
 
@@ -18,17 +19,7 @@
  * Constants
  *****************************************************************************
  */
-const int WAVE_SAMPLERATES_TESTED = 7;
-const int MIC_SAMPLERATES_TESTED = 4;
-
-const DWORD dwWaveSampleRates[WAVE_SAMPLERATES_TESTED] =
-    {48000, 44100, 32000, 22050, 16000, 11025, 8000};
-const DWORD dwMicSampleRates[MIC_SAMPLERATES_TESTED] =
-    {48000, 32000, 16000, 8000};
-
-const int PIN_WAVEOUT_OFFSET = (PIN_WAVEOUT / 2);
-const int PIN_WAVEIN_OFFSET  = (PIN_WAVEIN / 2);
-const int PIN_MICIN_OFFSET   = (PIN_MICIN / 2);
+// These constants are already defined in miniport.h through shared.h
 
 /*****************************************************************************
  * Forward References
@@ -56,7 +47,7 @@ extern NTSTATUS CreateAC97MiniportWaveRTStream
  * power management notification.
  */
 class CAC97MiniportWaveRT : public IMiniportWaveRT,
-                                    public IPowerNotify,
+                                    public CMiniport,
                                     public CUnknown
 {
 private:

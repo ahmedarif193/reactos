@@ -19,7 +19,7 @@
 #pragma code_seg("PAGE")
 #endif
 
-IMP_CMiniport(CAC97MiniportWaveRT, IID_IMiniportRT)
+IMP_CMiniport(CAC97MiniportWaveRT, IID_IMiniportWaveRT)
 
 /*****************************************************************************
  * CreateAC97MiniportWaveRT
@@ -198,7 +198,7 @@ STDMETHODIMP CAC97MiniportWaveRT::NewStream
     //
     ntStatus = pStream->Init (this,
                               PortStream,
-                              Channel,
+                              Channel_,
                               Capture,
                               DataFormat);
     if (!NT_SUCCESS (ntStatus))
@@ -246,7 +246,53 @@ STDMETHODIMP_(NTSTATUS) CAC97MiniportWaveRT::GetDeviceDescription
     return STATUS_SUCCESS;
 }
 
+/*****************************************************************************
+ * CAC97MiniportWaveRT::~CAC97MiniportWaveRT
+ *****************************************************************************
+ * Destructor.
+ */
+CAC97MiniportWaveRT::~CAC97MiniportWaveRT()
+{
+    PAGED_CODE();
+    
+    DOUT(DBG_PRINT, ("[CAC97MiniportWaveRT::~CAC97MiniportWaveRT]"));
+}
 
+/*****************************************************************************
+ * CAC97MiniportWaveRT::PowerChangeNotify
+ *****************************************************************************
+ * Handle power state changes.
+ */
+STDMETHODIMP_(void) CAC97MiniportWaveRT::PowerChangeNotify(
+    IN POWER_STATE PowerState
+    )
+{
+    PAGED_CODE();
+    
+    DOUT(DBG_PRINT, ("[CAC97MiniportWaveRT::PowerChangeNotify]"));
+    
+    // Call the base class implementation
+    CMiniport::PowerChangeNotify(PowerState);
+}
+
+/*****************************************************************************
+ * CAC97MiniportWaveRT::InterruptServiceRoutine
+ *****************************************************************************
+ * Static interrupt service routine.
+ */
+NTSTATUS CAC97MiniportWaveRT::InterruptServiceRoutine(
+    IN PINTERRUPTSYNC InterruptSync,
+    IN PVOID StaticContext
+    )
+{
+    CAC97MiniportWaveRT *that = (CAC97MiniportWaveRT *)StaticContext;
+    
+    ASSERT(that);
+    
+    // Handle interrupt for RT streams
+    // RT streams typically handle their own buffer cycling
+    return STATUS_SUCCESS;
+}
 
 #endif
 

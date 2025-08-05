@@ -1047,17 +1047,18 @@ Return Value:
             break;
         }
 
-        case IOCTL_STORAGE_PREDICT_FAILURE : {
-            status = DiskIoctlPredictFailure(DeviceObject, Irp);
-            break;
-        }
-
-        #if (NTDDI_VERSION >= NTDDI_WINBLUE)
-        case IOCTL_STORAGE_FAILURE_PREDICTION_CONFIG : {
+        case IOCTL_STORAGE_PREDICT_FAILURE :
+        /* IOCTL_STORAGE_FAILURE_PREDICTION_CONFIG has the same value as IOCTL_STORAGE_PREDICT_FAILURE */
+        {
+            #if (NTDDI_VERSION >= NTDDI_WINBLUE)
+            /* For Windows 8.1+, handle as failure prediction config */
             status = DiskIoctlEnableFailurePrediction(DeviceObject, Irp);
+            #else
+            /* For older versions, handle as predict failure */
+            status = DiskIoctlPredictFailure(DeviceObject, Irp);
+            #endif
             break;
         }
-        #endif
 
         case SMART_GET_VERSION: {
             status = DiskIoctlSmartGetVersion(DeviceObject, Irp);

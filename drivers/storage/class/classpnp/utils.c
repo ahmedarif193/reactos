@@ -8324,7 +8324,6 @@ retry:
 
 #endif // #if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
 
-#ifndef __REACTOS__ // the functions is not used
 __inline
 BOOLEAN
 ClassDeviceHwFirmwareIsPortDriverSupported(
@@ -8360,7 +8359,6 @@ Return Value:
 
     return isSupported;
 }
-#endif
 
 NTSTATUS
 ClassDeviceHwFirmwareGetInfoProcess(

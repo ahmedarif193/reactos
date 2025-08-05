@@ -76,34 +76,18 @@ typedef struct _FILE_STAT_LX_INFORMATION {
 #define LX_FILE_METADATA_HAS_DEVICE_ID  0x08
 #define LX_FILE_CASE_SENSITIVE_DIR      0x10
 
-typedef struct _FILE_RENAME_INFORMATION_EX {
-    union {
-        BOOLEAN ReplaceIfExists;
-        ULONG Flags;
-    };
-    HANDLE RootDirectory;
-    ULONG FileNameLength;
-    WCHAR FileName[1];
-} FILE_RENAME_INFORMATION_EX, *PFILE_RENAME_INFORMATION_EX;
+// FILE_RENAME_INFORMATION_EX, FILE_DISPOSITION_INFORMATION_EX, and FILE_LINK_INFORMATION_EX
+// are now defined in system headers for Windows 10
 
-typedef struct _FILE_DISPOSITION_INFORMATION_EX {
-    ULONG Flags;
-} FILE_DISPOSITION_INFORMATION_EX, *PFILE_DISPOSITION_INFORMATION_EX;
-
-typedef struct _FILE_LINK_INFORMATION_EX {
-    union {
-        BOOLEAN ReplaceIfExists;
-        ULONG Flags;
-    };
-    HANDLE RootDirectory;
-    ULONG FileNameLength;
-    WCHAR FileName[1];
-} FILE_LINK_INFORMATION_EX, *PFILE_LINK_INFORMATION_EX;
-
+#ifndef _FILE_CASE_SENSITIVE_INFORMATION_DEFINED
+#define _FILE_CASE_SENSITIVE_INFORMATION_DEFINED
 typedef struct _FILE_CASE_SENSITIVE_INFORMATION {
     ULONG Flags;
 } FILE_CASE_SENSITIVE_INFORMATION, *PFILE_CASE_SENSITIVE_INFORMATION;
+#endif
 
+#ifndef _FILE_LINK_FULL_ID_INFORMATION_DEFINED
+#define _FILE_LINK_FULL_ID_INFORMATION_DEFINED
 typedef struct _FILE_LINK_ENTRY_FULL_ID_INFORMATION {
     ULONG NextEntryOffset;
     FILE_ID_128 ParentFileId;
@@ -116,6 +100,7 @@ typedef struct _FILE_LINKS_FULL_ID_INFORMATION {
     ULONG EntriesReturned;
     FILE_LINK_ENTRY_FULL_ID_INFORMATION Entry;
 } FILE_LINKS_FULL_ID_INFORMATION, *PFILE_LINKS_FULL_ID_INFORMATION;
+#endif
 
 #define FILE_RENAME_REPLACE_IF_EXISTS                       0x001
 #define FILE_RENAME_POSIX_SEMANTICS                         0x002
@@ -127,10 +112,7 @@ typedef struct _FILE_LINKS_FULL_ID_INFORMATION {
 #define FILE_RENAME_FORCE_RESIZE_TARGET_SR                  0x080
 #define FILE_RENAME_FORCE_RESIZE_SOURCE_SR                  0x100
 
-#define FILE_DISPOSITION_DELETE                         0x1
-#define FILE_DISPOSITION_POSIX_SEMANTICS                0x2
-#define FILE_DISPOSITION_FORCE_IMAGE_SECTION_CHECK      0x4
-#define FILE_DISPOSITION_ON_CLOSE                       0x8
+// FILE_DISPOSITION_* constants are now defined in system headers for Windows 10
 
 #define FILE_LINK_REPLACE_IF_EXISTS                       0x001
 #define FILE_LINK_POSIX_SEMANTICS                         0x002
@@ -150,37 +132,13 @@ typedef struct _FILE_LINKS_FULL_ID_INFORMATION {
 #endif
 
 #ifdef __REACTOS__
-typedef struct _FILE_RENAME_INFORMATION_EX {
-    union {
-        BOOLEAN ReplaceIfExists;
-        ULONG Flags;
-    };
-    HANDLE RootDirectory;
-    ULONG FileNameLength;
-    WCHAR FileName[1];
-} FILE_RENAME_INFORMATION_EX, *PFILE_RENAME_INFORMATION_EX;
-
-typedef struct _FILE_DISPOSITION_INFORMATION_EX {
-    ULONG Flags;
-} FILE_DISPOSITION_INFORMATION_EX, *PFILE_DISPOSITION_INFORMATION_EX;
-
-typedef struct _FILE_LINK_INFORMATION_EX {
-    union {
-        BOOLEAN ReplaceIfExists;
-        ULONG Flags;
-    };
-    HANDLE RootDirectory;
-    ULONG FileNameLength;
-    WCHAR FileName[1];
-} FILE_LINK_INFORMATION_EX, *PFILE_LINK_INFORMATION_EX;
+// Structures now defined in system headers for Windows 10
 
 #define FILE_RENAME_REPLACE_IF_EXISTS                       0x001
 #define FILE_RENAME_POSIX_SEMANTICS                         0x002
 #define FILE_RENAME_IGNORE_READONLY_ATTRIBUTE               0x040
 
-#define FILE_DISPOSITION_DELETE                         0x1
-#define FILE_DISPOSITION_POSIX_SEMANTICS                0x2
-#define FILE_DISPOSITION_FORCE_IMAGE_SECTION_CHECK      0x4
+// FILE_DISPOSITION_* constants now defined in system headers for Windows 10
 
 #define FILE_LINK_REPLACE_IF_EXISTS                       0x001
 #define FILE_LINK_POSIX_SEMANTICS                         0x002
@@ -4516,7 +4474,7 @@ end:
     return Status;
 }
 
-#ifndef __REACTOS__
+#if !defined(__REACTOS__) || (NTDDI_VERSION >= NTDDI_WIN10)
 static NTSTATUS fill_in_file_standard_link_information(FILE_STANDARD_LINK_INFORMATION* fsli, fcb* fcb, file_ref* fileref, LONG* length) {
     TRACE("FileStandardLinkInformation\n");
 
@@ -5024,7 +4982,7 @@ static NTSTATUS fill_in_file_case_sensitive_information(FILE_CASE_SENSITIVE_INFO
     return STATUS_SUCCESS;
 }
 
-#endif // __REACTOS__
+#endif // !defined(__REACTOS__) || (NTDDI_VERSION >= NTDDI_WIN10)
 
 static NTSTATUS fill_in_file_compression_information(FILE_COMPRESSION_INFORMATION* fci, LONG* length, fcb* fcb) {
     *length -= sizeof(FILE_COMPRESSION_INFORMATION);

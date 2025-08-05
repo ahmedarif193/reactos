@@ -1223,7 +1223,8 @@ Return Value:
         //  Initialize the volume guid.
         //
 
-        if (NT_SUCCESS( IoVolumeDeviceToGuid( Vcb->TargetDeviceObject, &VolumeGuid ))) {
+        // Note: IoVolumeDeviceToGuid not implemented in ReactOS yet
+        if (FALSE) { // if (NT_SUCCESS( IoVolumeDeviceToGuid( Vcb->TargetDeviceObject, &VolumeGuid ))) {
 
 
             //
@@ -1245,7 +1246,8 @@ Return Value:
             Vcb->VolumeGuidPath.Length = Vcb->VolumeGuidPath.MaximumLength = 0;
         }
 
-        IoVolumeDeviceToGuidPath( Vcb->TargetDeviceObject, &Vcb->VolumeGuidPath );
+        // Note: IoVolumeDeviceToGuidPath not implemented in ReactOS yet
+        // IoVolumeDeviceToGuidPath( Vcb->TargetDeviceObject, &Vcb->VolumeGuidPath );
 #endif
 
         //
@@ -1820,7 +1822,8 @@ Return Value:
 #if (NTDDI_VERSION >= NTDDI_WIN8)
         if (FatDiskAccountingEnabled) {
 
-            CcSetAdditionalCacheAttributesEx( RootDirectoryFile, CC_ENABLE_DISK_IO_ACCOUNTING );
+            // Note: CcSetAdditionalCacheAttributesEx not implemented in ReactOS yet
+            // CcSetAdditionalCacheAttributesEx( RootDirectoryFile, CC_ENABLE_DISK_IO_ACCOUNTING );
         }
 #endif
 
@@ -7165,7 +7168,7 @@ Return Value:
 
     RtlZeroMemory( RetrievalPointerBase, BufferLength );
 
-    try {
+    _SEH2_TRY {
 
         FatAcquireSharedVcb(IrpContext, Vcb);
         FatQuickVerifyVcb(IrpContext, Vcb);
@@ -7173,11 +7176,11 @@ Return Value:
         RetrievalPointerBase->FileAreaOffset.QuadPart = Vcb->AllocationSupport.FileAreaLbo >> Vcb->AllocationSupport.LogOfBytesPerSector;
         Irp->IoStatus.Information = sizeof( RETRIEVAL_POINTER_BASE );
 
-    } finally {
+    } _SEH2_FINALLY {
 
         FatReleaseVcb(IrpContext, Vcb);
 
-    }
+    } _SEH2_END;
 
     FatCompleteRequest( IrpContext, Irp, STATUS_SUCCESS );
 
@@ -7271,7 +7274,7 @@ Return Value:
 
     RtlZeroMemory( BootAreaInfo, BufferLength );
 
-    try {
+    _SEH2_TRY {
 
         FatAcquireSharedVcb(IrpContext, Vcb);
         FatQuickVerifyVcb(IrpContext, Vcb);
@@ -7289,10 +7292,10 @@ Return Value:
 
         Irp->IoStatus.Information = sizeof( BOOT_AREA_INFO );
 
-    } finally {
+    } _SEH2_FINALLY {
 
         FatReleaseVcb(IrpContext, Vcb);
-    }
+    } _SEH2_END;
 
     FatCompleteRequest( IrpContext, Irp, STATUS_SUCCESS );
     return STATUS_SUCCESS;
@@ -7761,7 +7764,7 @@ Return Value:
         return STATUS_INVALID_PARAMETER;
     }
 
-    try {
+    _SEH2_TRY {
 
         //
         //  Acquire the FCB exclusively to synchronize with coherency flush
@@ -7796,12 +7799,12 @@ Return Value:
 
         try_exit: NOTHING;
 
-    } finally {
+    } _SEH2_FINALLY {
 
         if (FcbAcquired) {
             FatReleaseFcb( IrpContext, Fcb );
         }
-    }
+    } _SEH2_END;
 
     //
     //  Complete the irp if we terminated normally.

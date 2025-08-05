@@ -180,7 +180,7 @@ FatSingleNonAlignedSync (
         (C)->ZeroMdl = NULL;                                            \
     }
 
-#if (NTDDI_VERSION >= NTDDI_WIN8)
+#if (NTDDI_VERSION >= NTDDI_WIN8) && !defined(__REACTOS__)
 #define FatUpdateIOCountersPCW(IsAWrite,Count)                          \
     FsRtlUpdateDiskCounters( ((IsAWrite) ? 0       : (Count) ),         \
                              ((IsAWrite) ? (Count) : 0) )

@@ -1078,7 +1078,7 @@ BOOLEAN DummyRestoreIrql(_Inout_ PFAST_MUTEX FastMutex);
 
 #if (NTDDI_VERSION >= NTDDI_WIN8)
 
-#define CdGetFcbOplock(F)   &(F)->Header.Oplock
+#define CdGetFcbOplock(F)   (&(F)->Oplock)
 
 #else
 

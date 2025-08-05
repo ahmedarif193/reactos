@@ -1079,6 +1079,14 @@ typedef struct _FCB {
             OPLOCK Oplock;
 #endif
 
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+            //
+            //  Windows 10: Oplock field for compatibility
+            //
+            
+            OPLOCK Oplock;
+#endif
+
             //
             //  This pointer is used to detect writes that eminated in the
             //  cache manager's lazywriter.  It prevents lazy writer threads,

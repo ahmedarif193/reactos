@@ -1652,7 +1652,7 @@ FatFilterCallbackAcquireForCreateSection (
 //  in Win8.
 //
 
-#if (NTDDI_VERSION >= NTDDI_WIN8)
+#if (NTDDI_VERSION >= NTDDI_WIN8) && (NTDDI_VERSION < NTDDI_WIN10)
 
 #define FatGetFcbOplock(F)  &(F)->Header.Oplock
 
@@ -3105,6 +3105,44 @@ FatInterpretClusterType (
 #define BlockAlignTruncate(P,V) ((P) & (0-(V)))
 
 #define IsDirectory(FcbOrDcb) ((NodeType((FcbOrDcb)) == FAT_NTC_DCB) || (NodeType((FcbOrDcb)) == FAT_NTC_ROOT_DCB))
+
+//
+// Windows 10 compatibility definitions
+//
+
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+
+#ifndef OPLOCK_FLAG_PARENT_OBJECT
+#define OPLOCK_FLAG_PARENT_OBJECT           0x00000010
+#endif
+
+#ifndef OPLOCK_FLAG_CLOSING_DELETE_ON_CLOSE
+#define OPLOCK_FLAG_CLOSING_DELETE_ON_CLOSE 0x00000020
+#endif
+
+#ifndef OPLOCK_FLAG_REMOVING_FILE_OR_LINK
+#define OPLOCK_FLAG_REMOVING_FILE_OR_LINK   0x00000040
+#endif
+
+#ifndef SET_PURGE_FAILURE_MODE_ENABLED
+#define SET_PURGE_FAILURE_MODE_ENABLED      0x00000001
+#define SET_PURGE_FAILURE_MODE_DISABLED     0x00000002
+
+typedef struct _SET_PURGE_FAILURE_MODE_INPUT {
+    ULONG Flags;
+} SET_PURGE_FAILURE_MODE_INPUT, *PSET_PURGE_FAILURE_MODE_INPUT;
+#endif
+
+#ifndef CC_ENABLE_DISK_IO_ACCOUNTING
+#define CC_ENABLE_DISK_IO_ACCOUNTING        0x00000010
+#endif
+
+// Stub for missing Windows 10 functions
+#ifndef PsUpdateDiskCounters
+#define PsUpdateDiskCounters(Process, BytesRead, BytesWritten, ReadOperations, WriteOperations, FlushOperations) ((void)0)
+#endif
+
+#endif // NTDDI_VERSION >= NTDDI_WIN10
 
 #endif // _FATPROCS_
 

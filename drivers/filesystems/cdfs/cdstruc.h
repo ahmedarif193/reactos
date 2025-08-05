@@ -783,7 +783,15 @@ typedef enum _FCB_CONDITION {
 
 typedef struct _FCB_DATA {
 
-#if (NTDDI_VERSION < NTDDI_WIN8)
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    //
+    //  The following field is used by the oplock module
+    //  to maintain current oplock information.
+    //  For Windows 8+, this is stored directly in FCB_DATA
+    //
+
+    OPLOCK Oplock;
+#else
     //
     //  The following field is used by the oplock module
     //  to maintain current oplock information.

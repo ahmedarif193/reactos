@@ -18,29 +18,16 @@
 #include "btrfs_drv.h"
 #include "crc32c.h"
 
-#ifndef __REACTOS__
+#if !defined(__REACTOS__) || (NTDDI_VERSION >= NTDDI_WIN10)
 // not currently in mingw
 #ifndef _MSC_VER
 #define FileIdExtdDirectoryInformation (enum _FILE_INFORMATION_CLASS)60
 #define FileIdExtdBothDirectoryInformation (enum _FILE_INFORMATION_CLASS)63
 
-typedef struct _FILE_ID_EXTD_DIR_INFORMATION {
-    ULONG NextEntryOffset;
-    ULONG FileIndex;
-    LARGE_INTEGER CreationTime;
-    LARGE_INTEGER LastAccessTime;
-    LARGE_INTEGER LastWriteTime;
-    LARGE_INTEGER ChangeTime;
-    LARGE_INTEGER EndOfFile;
-    LARGE_INTEGER AllocationSize;
-    ULONG FileAttributes;
-    ULONG FileNameLength;
-    ULONG EaSize;
-    ULONG ReparsePointTag;
-    FILE_ID_128 FileId;
-    WCHAR FileName[1];
-} FILE_ID_EXTD_DIR_INFORMATION, *PFILE_ID_EXTD_DIR_INFORMATION;
+// FILE_ID_EXTD_DIR_INFORMATION is already defined in Windows 10 system headers
 
+#ifndef _FILE_ID_EXTD_BOTH_DIR_INFORMATION_DEFINED
+#define _FILE_ID_EXTD_BOTH_DIR_INFORMATION_DEFINED
 typedef struct _FILE_ID_EXTD_BOTH_DIR_INFORMATION {
     ULONG NextEntryOffset;
     ULONG FileIndex;
@@ -59,12 +46,13 @@ typedef struct _FILE_ID_EXTD_BOTH_DIR_INFORMATION {
     WCHAR ShortName[12];
     WCHAR FileName[1];
 } FILE_ID_EXTD_BOTH_DIR_INFORMATION, *PFILE_ID_EXTD_BOTH_DIR_INFORMATION;
+#endif
 
 #endif
 #else
 #define FileIdExtdDirectoryInformation (enum _FILE_INFORMATION_CLASS)60
 #define FileIdExtdBothDirectoryInformation (enum _FILE_INFORMATION_CLASS)63
-#endif // __REACTOS__
+#endif // !defined(__REACTOS__) || (NTDDI_VERSION >= NTDDI_WIN10)
 
 enum DirEntryType {
     DirEntryType_File,

@@ -1,6 +1,8 @@
 #ifndef _STREAM_H_
 #define _STREAM_H_
 
+#include "miniport.h"
+
 const int DMA_ENGINE_OFF        = 0;
 const int DMA_ENGINE_PAUSE      = 1;
 const int DMA_ENGINE_PEND       = 2;

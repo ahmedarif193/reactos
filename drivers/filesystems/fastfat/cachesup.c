@@ -92,8 +92,9 @@ Routine Description:
     //
 
     if (FatDiskAccountingEnabled) {
-
+#ifndef __REACTOS__
         CcSetAdditionalCacheAttributesEx( FileObject, CC_ENABLE_DISK_IO_ACCOUNTING );
+#endif
     }
 #endif
 }

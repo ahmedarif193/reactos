@@ -13,6 +13,11 @@
 #include "rtminiport.h"
 #include "rtstream.h"
 
+// Ensure MmGetPhysicalAddress is available
+#ifndef MmGetPhysicalAddress
+extern "C" PHYSICAL_ADDRESS NTAPI MmGetPhysicalAddress(PVOID BaseAddress);
+#endif
+
 #if (NTDDI_VERSION >= NTDDI_VISTA)
 
 /*****************************************************************************
@@ -119,6 +124,9 @@ NTSTATUS CAC97MiniportWaveRTStream::Init
     ASSERT (PortStream_);
     ASSERT (DataFormat_);
 
+    // Store the port stream interface
+    PortStream = PortStream_;
+
     //
     // The rule here is that we return when we fail without a cleanup.
     // The destructor will relase the allocated memory.
@@ -167,8 +175,9 @@ NTSTATUS CAC97MiniportWaveRTStream::Init
     }
     
     
-    return CMiniportStream::Init(Miniport_, 
-                                 Channel_, 
+    return CMiniportStream::Init((CMiniport*)Miniport_, 
+                                 (PUNKNOWN)PortStream_,
+                                 (WavePins)Channel_, 
                                  Capture_, 
                                  DataFormat_, 
                                  NULL);
@@ -405,21 +414,103 @@ STDMETHODIMP_(NTSTATUS) CAC97MiniportWaveRTStream::GetPosition
     return STATUS_SUCCESS;
 }
 
-+/*****************************************************************************
-+ * Non paged code begins here
-+ *****************************************************************************
-+ */
+/*****************************************************************************
+ * Non paged code begins here
+ *****************************************************************************
+ */
 
 #ifdef _MSC_VER
 #pragma code_seg()
 #endif
 
-void CMiniportWaveICHStream::InterruptServiceRoutine()
+void CAC97MiniportWaveRTStream::InterruptServiceRoutine()
 {
-    //
-    // Update the LVI so that we cycle around in the scatter gather list.
-    //
-    UpdateLviCyclic();
+    // RT stream doesn't need cyclic buffer updates
+    // The hardware handles buffer cycling automatically
+}
+
+NTSTATUS CAC97MiniportWaveRTStream::Init_()
+{
+    // RT stream initialization is handled in the main Init method
+    return STATUS_SUCCESS;
+}
+
+/*****************************************************************************
+ * CAC97MiniportWaveRTStream::NonDelegatingQueryInterface
+ *****************************************************************************
+ * Obtains an interface.  This function works just like a COM QueryInterface
+ * call and is used if the object is not being aggregated.
+ */
+STDMETHODIMP CAC97MiniportWaveRTStream::NonDelegatingQueryInterface(
+    IN  REFIID Interface,
+    OUT PVOID * Object
+    )
+{
+    PAGED_CODE();
+
+    ASSERT(Object);
+
+    DOUT(DBG_PRINT, ("[CAC97MiniportWaveRTStream::NonDelegatingQueryInterface]"));
+
+    if (IsEqualGUIDAligned(Interface, IID_IUnknown))
+    {
+        *Object = PVOID(PUNKNOWN(PMINIPORTWAVERTSTREAM(this)));
+    }
+    else if (IsEqualGUIDAligned(Interface, IID_IMiniportWaveRTStream))
+    {
+        *Object = PVOID(PMINIPORTWAVERTSTREAM(this));
+    }
+    else if (IsEqualGUIDAligned(Interface, IID_IDrmAudioStream))
+    {
+        *Object = (PVOID)(PDRMAUDIOSTREAM)this;
+    }
+    else
+    {
+        *Object = NULL;
+    }
+
+    if (*Object)
+    {
+        // We reference the interface for the caller.
+        PUNKNOWN(*Object)->AddRef();
+        return STATUS_SUCCESS;
+    }
+
+    return STATUS_INVALID_PARAMETER;
+}
+
+/*****************************************************************************
+ * CAC97MiniportWaveRTStream::SetFormat
+ *****************************************************************************
+ * Sets the format of the stream.
+ */
+STDMETHODIMP_(NTSTATUS) CAC97MiniportWaveRTStream::SetFormat(
+    _In_ PKSDATAFORMAT Format
+    )
+{
+    PAGED_CODE();
+    
+    DOUT(DBG_PRINT, ("[CAC97MiniportWaveRTStream::SetFormat]"));
+    
+    // Call the base class implementation
+    return CMiniportStream::SetFormat(Format);
+}
+
+/*****************************************************************************
+ * CAC97MiniportWaveRTStream::SetState
+ *****************************************************************************
+ * Sets the state of the stream.
+ */
+STDMETHODIMP_(NTSTATUS) CAC97MiniportWaveRTStream::SetState(
+    _In_ KSSTATE State
+    )
+{
+    PAGED_CODE();
+    
+    DOUT(DBG_PRINT, ("[CAC97MiniportWaveRTStream::SetState]"));
+    
+    // Call the base class implementation
+    return CMiniportStream::SetState(State);
 }
 
 #endif          // (NTDDI_VERSION >= NTDDI_VISTA)

@@ -14,19 +14,15 @@
 
 #if (NTDDI_VERSION >= NTDDI_VISTA)
 
+#include "stream.h"
+
 //*****************************************************************************
 // Defines
 //*****************************************************************************
 
-//
-// The scatter gather can (only) handle 32 entries
-//
-const int MAX_BDL_ENTRIES = 32;
-
-//
-// Mask for accessing the scatter gather entries with a counter.
-//
-const int BDL_MASK = 31;
+// These are already defined in stream.h which we inherit from
+// const int MAX_BDL_ENTRIES = 32;
+// const int BDL_MASK = 31;
 
 
 //*****************************************************************************
@@ -47,6 +43,7 @@ private:
     // CAC97MiniportWaveRTStream private variables
     //
     DEVICE_POWER_STATE  m_PowerState;       // Current power state of the device.
+    PPORTWAVERTSTREAM   PortStream;         // Port stream interface
 
 
     int                 mapEntries;
@@ -99,6 +96,12 @@ public:
         IN  BOOLEAN             Capture,
         IN  PKSDATAFORMAT       DataFormat
     );
+    
+    //
+    // Virtual methods from CMiniportStream
+    //
+    virtual void InterruptServiceRoutine();
+    virtual NTSTATUS Init_();
 
     //
     // Friends
