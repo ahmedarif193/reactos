@@ -209,13 +209,16 @@ BOOL add_entry (LPINT ac, LPTSTR **arg, LPCTSTR entry)
 
     _tcscpy (q, entry);
     oldarg = *arg;
-    *arg = cmd_realloc (oldarg, (*ac + 2) * sizeof (LPTSTR));
-    if (!*arg)
     {
-        WARN("Cannot reallocate memory for arg!\n");
-        *arg = oldarg;
-        cmd_free (q);
-        return FALSE;
+        LPTSTR *newarg = cmd_realloc (oldarg, (*ac + 2) * sizeof (LPTSTR));
+        if (!newarg)
+        {
+            WARN("Cannot reallocate memory for arg!\n");
+            /* oldarg is still valid when realloc fails */
+            cmd_free (q);
+            return FALSE;
+        }
+        *arg = newarg;
     }
 
     /* save new entry */

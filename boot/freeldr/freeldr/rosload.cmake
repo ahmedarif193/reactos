@@ -90,6 +90,10 @@ endif()
 
 target_link_libraries(rosload blcmlib blrtl libcntpr)
 add_importlibs(rosload freeldr)
+# Target-specific fix: Use CMake script to fix nested archives  
+add_custom_command(TARGET rosload PRE_LINK
+    COMMAND ${CMAKE_COMMAND} -DARCHIVE_PATH=${CMAKE_BINARY_DIR}/boot/freeldr/freeldr/libfreeldr.a -DCMAKE_AR=${CMAKE_AR} -DCMAKE_RANLIB=${CMAKE_RANLIB} -P ${CMAKE_SOURCE_DIR}/fix_archive.cmake
+    COMMENT "Fixing nested freeldr archive using CMake script")
 
 # dynamic analysis switches
 if(STACK_PROTECTOR)

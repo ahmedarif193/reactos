@@ -261,8 +261,10 @@ void ReverseIP( PCHAR pIP, PCHAR pReturn )
     /* A */
     for( ; i > 0; i -= 1 ) if( '.' == pIP[i] ) break;
 
-    strncpy( &pReturn[k], &pIP[i + 1], (j - i) );
-    k += (j - i);
+    if (j > i) {
+        strncpy( &pReturn[k], &pIP[i + 1], (j - i) );
+        k += (j - i);
+    }
 
     pReturn[k] = '.';
     k += 1;
@@ -273,8 +275,10 @@ void ReverseIP( PCHAR pIP, PCHAR pReturn )
     /* B */
     for( ; i > 0; i -= 1 ) if( '.' == pIP[i] ) break;
 
-    strncpy( &pReturn[k], &pIP[i + 1], (j - i) );
-    k += (j - i);
+    if (j > i) {
+        strncpy( &pReturn[k], &pIP[i + 1], (j - i) );
+        k += (j - i);
+    }
 
     pReturn[k] = '.';
     k += 1;
@@ -285,8 +289,10 @@ void ReverseIP( PCHAR pIP, PCHAR pReturn )
     /* C */
     for( ; i > 0; i -= 1 ) if( '.' == pIP[i] ) break;
 
-    strncpy( &pReturn[k], &pIP[i + 1], (j - i) );
-    k += (j - i);
+    if (j > i) {
+        strncpy( &pReturn[k], &pIP[i + 1], (j - i) );
+        k += (j - i);
+    }
 
     pReturn[k] = '.';
     k += 1;

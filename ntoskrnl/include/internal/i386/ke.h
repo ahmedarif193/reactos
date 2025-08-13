@@ -218,8 +218,18 @@ typedef union _KTRAP_EXIT_SKIP_BITS
 // more time, this way we don't redefine ALL opcode handlers to have 3 parameters,
 // which would be forcing stack usage in all other scenarios.
 //
-#define KiVdmSetVdmEFlags(x)        InterlockedOr((PLONG)KiNtVdmState, (x));
-#define KiVdmClearVdmEFlags(x)      InterlockedAnd((PLONG)KiNtVdmState, ~(x))
+#define KiVdmSetVdmEFlags(x)        do { \
+    _Pragma("GCC diagnostic push") \
+    _Pragma("GCC diagnostic ignored \"-Wstringop-overflow\"") \
+    InterlockedOr((PLONG)KiNtVdmState, (x)); \
+    _Pragma("GCC diagnostic pop") \
+} while (0)
+#define KiVdmClearVdmEFlags(x)      do { \
+    _Pragma("GCC diagnostic push") \
+    _Pragma("GCC diagnostic ignored \"-Wstringop-overflow\"") \
+    InterlockedAnd((PLONG)KiNtVdmState, ~(x)); \
+    _Pragma("GCC diagnostic pop") \
+} while (0)
 #define KiCallVdmHandler(x)         KiVdmOpcode##x(TrapFrame, Flags)
 #define KiCallVdmPrefixHandler(x)   KiVdmOpcodePrefix(TrapFrame, Flags | x)
 #define KiVdmUnhandledOpcode(x)                     \

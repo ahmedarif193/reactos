@@ -35,6 +35,7 @@ list(APPEND SOURCE
     client/resntfy.c
     client/session.c
     client/synch.c
+    client/vista_stubs.c
     client/sysinfo.c
     client/time.c
     client/timerqueue.c

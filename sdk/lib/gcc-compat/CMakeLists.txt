@@ -5,7 +5,10 @@ include_directories(
 list(APPEND SOURCE
     __mingw_vsprintf.c
     __throw_out_of_range_fmt.cpp
-    StringCchCopyNA.c)
+    StringCchCopyNA.c
+    emutls.c
+    rand_s_compat.c
+    unwind.c)
 
 add_library(stdc++compat ${SOURCE})
 set_target_cpp_properties(stdc++compat WITH_EXCEPTIONS)

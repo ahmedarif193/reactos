@@ -39,4 +39,8 @@ add_library(apphelp MODULE
 set_module_type(apphelp win32dll UNICODE ENTRYPOINT DllMain 12)
 add_delay_importlibs(apphelp version)
 add_importlibs(apphelp kernel32 ntdll)
+# Target-specific fix: Use CMake script to fix nested archives  
+add_custom_command(TARGET apphelp PRE_LINK
+    COMMAND ${CMAKE_COMMAND} -DARCHIVE_PATH=${CMAKE_BINARY_DIR}/dll/win32/version/libversion_delayed.a -DCMAKE_AR=${CMAKE_AR} -DCMAKE_RANLIB=${CMAKE_RANLIB} -P ${CMAKE_SOURCE_DIR}/fix_archive.cmake
+    COMMENT "Fixing nested version_delayed archive using CMake script")
 add_cd_file(TARGET apphelp DESTINATION reactos/system32 FOR all)

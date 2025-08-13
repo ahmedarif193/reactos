@@ -1677,11 +1677,12 @@ int globulize(const char **cpp)
 		return (0);
 	}
 	if (globbed) {
+		char **original_globbed = globbed;
 		*cpp = *globbed++;
 		/* don't waste too much memory */
 		if (*globbed) {
-			blkfree(globbed);
-			free((char *)globbed);
+			blkfree(original_globbed);
+			free((char *)original_globbed);
 		}
 	}
 	return (1);

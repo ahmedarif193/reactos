@@ -4626,7 +4626,7 @@ static HRESULT WINAPI d3d_device3_ComputeSphereVisibility(IDirect3DDevice3 *ifac
         D3DVECTOR *centers, D3DVALUE *radii, DWORD sphere_count, DWORD flags, DWORD *return_values)
 {
     static const DWORD enabled_planes = 0x3f;
-    struct wined3d_vec4 plane[6];
+    struct wined3d_vec4 plane[12];
     unsigned int i, j;
 
     TRACE("iface %p, centers %p, radii %p, sphere_count %u, flags %#x, return_values %p.\n",

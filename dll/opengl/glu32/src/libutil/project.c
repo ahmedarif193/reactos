@@ -64,7 +64,7 @@ gluOrtho2D(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top)
 void GLAPIENTRY
 gluPerspective(GLdouble fovy, GLdouble aspect, GLdouble zNear, GLdouble zFar)
 {
-    GLdouble m[4][4];
+    GLdouble m[16];
     double sine, cotangent, deltaZ;
     double radians = fovy / 2 * __glPi / 180;
 
@@ -75,14 +75,14 @@ gluPerspective(GLdouble fovy, GLdouble aspect, GLdouble zNear, GLdouble zFar)
     }
     cotangent = COS(radians) / sine;
 
-    __gluMakeIdentityd(&m[0][0]);
-    m[0][0] = cotangent / aspect;
-    m[1][1] = cotangent;
-    m[2][2] = -(zFar + zNear) / deltaZ;
-    m[2][3] = -1;
-    m[3][2] = -2 * zNear * zFar / deltaZ;
-    m[3][3] = 0;
-    glMultMatrixd(&m[0][0]);
+    __gluMakeIdentityd(m);
+    m[0+4*0] = cotangent / aspect;
+    m[1+4*1] = cotangent;
+    m[2+4*2] = -(zFar + zNear) / deltaZ;
+    m[2+4*3] = -1;
+    m[3+4*2] = -2 * zNear * zFar / deltaZ;
+    m[3+4*3] = 0;
+    glMultMatrixd(m);
 }
 
 static void normalize(float v[3])
@@ -110,7 +110,7 @@ gluLookAt(GLdouble eyex, GLdouble eyey, GLdouble eyez, GLdouble centerx,
 	  GLdouble upz)
 {
     float forward[3], side[3], up[3];
-    GLfloat m[4][4];
+    GLfloat m[16];
 
     forward[0] = centerx - eyex;
     forward[1] = centery - eyey;
@@ -129,20 +129,20 @@ gluLookAt(GLdouble eyex, GLdouble eyey, GLdouble eyez, GLdouble centerx,
     /* Recompute up as: up = side x forward */
     cross(side, forward, up);
 
-    __gluMakeIdentityf(&m[0][0]);
-    m[0][0] = side[0];
-    m[1][0] = side[1];
-    m[2][0] = side[2];
+    __gluMakeIdentityf(m);
+    m[0+4*0] = side[0];
+    m[1+4*0] = side[1];
+    m[2+4*0] = side[2];
 
-    m[0][1] = up[0];
-    m[1][1] = up[1];
-    m[2][1] = up[2];
+    m[0+4*1] = up[0];
+    m[1+4*1] = up[1];
+    m[2+4*1] = up[2];
 
-    m[0][2] = -forward[0];
-    m[1][2] = -forward[1];
-    m[2][2] = -forward[2];
+    m[0+4*2] = -forward[0];
+    m[1+4*2] = -forward[1];
+    m[2+4*2] = -forward[2];
 
-    glMultMatrixf(&m[0][0]);
+    glMultMatrixf(m);
     glTranslated(-eyex, -eyey, -eyez);
 }
 

@@ -40,5 +40,12 @@ set_module_type(kernel32_vista win32dll ENTRYPOINT DllMain 12)
 target_link_libraries(kernel32_vista kernel32_vista_static kernel32_shared)
 add_importlibs(kernel32_vista kernel32 ntdll_vista ntdll)
 add_delay_importlibs(kernel32_vista ntdll_vista)
+# Target-specific fix: Use CMake script to fix nested archives  
+add_custom_command(TARGET kernel32_vista PRE_LINK
+    COMMAND ${CMAKE_COMMAND} -DARCHIVE_PATH=${CMAKE_BINARY_DIR}/dll/win32/kernel32/libkernel32.a -DCMAKE_AR=${CMAKE_AR} -DCMAKE_RANLIB=${CMAKE_RANLIB} -P ${CMAKE_SOURCE_DIR}/fix_archive.cmake
+    COMMAND ${CMAKE_COMMAND} -DARCHIVE_PATH=${CMAKE_BINARY_DIR}/dll/ntdll/nt_0600/libntdll_vista.a -DCMAKE_AR=${CMAKE_AR} -DCMAKE_RANLIB=${CMAKE_RANLIB} -P ${CMAKE_SOURCE_DIR}/fix_archive.cmake  
+    COMMAND ${CMAKE_COMMAND} -DARCHIVE_PATH=${CMAKE_BINARY_DIR}/dll/ntdll/libntdll.a -DCMAKE_AR=${CMAKE_AR} -DCMAKE_RANLIB=${CMAKE_RANLIB} -P ${CMAKE_SOURCE_DIR}/fix_archive.cmake
+    COMMAND ${CMAKE_COMMAND} -DARCHIVE_PATH=${CMAKE_BINARY_DIR}/dll/ntdll/nt_0600/libntdll_vista_delayed.a -DCMAKE_AR=${CMAKE_AR} -DCMAKE_RANLIB=${CMAKE_RANLIB} -P ${CMAKE_SOURCE_DIR}/fix_archive.cmake
+    COMMENT "Fixing nested archives using CMake script")
 add_dependencies(kernel32_vista psdk)
 add_cd_file(TARGET kernel32_vista DESTINATION reactos/system32 FOR all)

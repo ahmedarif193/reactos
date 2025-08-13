@@ -55,6 +55,10 @@ endif()
 add_importlibs(ntoskrnl hal kdcom bootvid)
 add_pch(ntoskrnl ${REACTOS_SOURCE_DIR}/ntoskrnl/include/ntoskrnl.h "${PCH_SKIP_SOURCE}")
 add_dependencies(ntoskrnl psdk asm)
+# Fix for nested archives: Apply ranlib to ntoskrnl import library archive
+add_custom_command(TARGET ntoskrnl POST_BUILD
+    COMMAND ${CMAKE_RANLIB} ${CMAKE_CURRENT_BINARY_DIR}/libntoskrnl.a
+    COMMENT "Applying ranlib to ntoskrnl import library")
 add_cd_file(TARGET ntoskrnl DESTINATION reactos/system32 NO_CAB FOR all)
 
 add_subdirectory(ntkrnlmp)

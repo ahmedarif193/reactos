@@ -35,7 +35,7 @@ HRESULT CInputContextOwner::_Advise(IUnknown *pContext)
     m_pContext = NULL;
 
     HRESULT hr = E_FAIL;
-    if (SUCCEEDED(m_pContext->QueryInterface(IID_ITfSource, (LPVOID*)&pSource)) &&
+    if (SUCCEEDED(pContext->QueryInterface(IID_ITfSource, (LPVOID*)&pSource)) &&
         SUCCEEDED(pSource->AdviseSink(IID_ITfContextOwner,
                                       static_cast<ITfContextOwner*>(this), &m_dwCookie)))
     {

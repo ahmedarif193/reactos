@@ -172,7 +172,9 @@ private:
         m_CurRefHistory(0),
         m_OwningObject(Owner)
     {
-        RtlZeroMemory(m_TagHistory, sizeof(m_TagHistory));
+        for (int i = 0; i < TAG_HISTORY_DEPTH; i++) {
+            m_TagHistory[i] = FxTagHistory();
+        }
 
         //
         // We keep handle reference trackers in a list,

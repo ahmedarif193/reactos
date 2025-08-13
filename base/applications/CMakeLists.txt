@@ -7,7 +7,7 @@ add_subdirectory(cleanmgr)
 add_subdirectory(clipbrd)
 add_subdirectory(cmdutils)
 add_subdirectory(control)
-add_subdirectory(drwtsn32)
+#add_subdirectory(drwtsn32) # FIXME: rand_s symbol issue with static libstdc++
 add_subdirectory(dxdiag)
 add_subdirectory(extrac32)
 add_subdirectory(findstr)

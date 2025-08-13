@@ -7,6 +7,7 @@ if(NOT MSVC)
         # ar just puts stuff into the archive, without looking twice. Just delete the lib, we're going to rebuild it anyway
         COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE:oldnames>
         COMMAND ${CMAKE_DLLTOOL} --def ${CMAKE_CURRENT_SOURCE_DIR}/moldname-msvcrt.def --kill-at --output-lib=oldnames.a -t oldnames
+        COMMAND ${CMAKE_RANLIB} ${LIBRARY_PRIVATE_DIR}/oldnames.a
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/moldname-msvcrt.def
         WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
     set_source_files_properties(
@@ -16,6 +17,10 @@ if(NOT MSVC)
 
     _add_library(oldnames STATIC EXCLUDE_FROM_ALL ${LIBRARY_PRIVATE_DIR}/oldnames.a)
     set_target_properties(oldnames PROPERTIES LINKER_LANGUAGE "C")
+    # Apply fix_archive.cmake to handle nested archives
+    add_custom_command(TARGET oldnames POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -DARCHIVE_PATH=${CMAKE_CURRENT_BINARY_DIR}/liboldnames.a -DCMAKE_AR=${CMAKE_AR} -DCMAKE_RANLIB=${CMAKE_RANLIB} -P ${REACTOS_SOURCE_DIR}/fix_archive.cmake
+        COMMENT "Fixing nested archive and applying ranlib to oldnames library")
 else()
     add_asm_files(oldnames_asm oldnames-common.S oldnames-msvcrt.S)
     add_library(oldnames ${oldnames_asm})

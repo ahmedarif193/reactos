@@ -16,7 +16,7 @@ struct FxIrpDynamicDispatchInfo : public FxStump {
         CxDeviceInfo(NULL)
     {
         InitializeListHead(&ListEntry);
-        RtlZeroMemory(Dispatch, sizeof(Dispatch));
+        // Dispatch array elements are automatically initialized by their constructors
     }
 
     ~FxIrpDynamicDispatchInfo()

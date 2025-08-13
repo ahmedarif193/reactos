@@ -11,6 +11,6 @@ add_subdirectory(netplwiz)
 add_subdirectory(netshell)
 add_subdirectory(ntobjshex)
 add_subdirectory(sendmail)
-add_subdirectory(shellbtrfs)
+#add_subdirectory(shellbtrfs) # FIXME: libstdc++ rand_s symbol resolution issue with current MinGW toolchain
 add_subdirectory(stobject)
 add_subdirectory(zipfldr)

@@ -216,16 +216,19 @@ VdmpStartExecution(VOID)
     else
     {
         /* Set interrupt state in the VDM State */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
         if (VdmTib->VdmContext.EFlags & EFLAGS_INTERRUPT_MASK)
         {
             /* Enable them as well */
-            InterlockedOr((PLONG)VdmState, EFLAGS_INTERRUPT_MASK);
+            InterlockedOr((volatile LONG*)VdmState, EFLAGS_INTERRUPT_MASK);
         }
         else
         {
             /* Disable them */
-            InterlockedAnd((PLONG)VdmState, ~EFLAGS_INTERRUPT_MASK);
+            InterlockedAnd((volatile LONG*)VdmState, ~EFLAGS_INTERRUPT_MASK);
         }
+#pragma GCC diagnostic pop
 
         /* Enable the interrupt flag */
         VdmTib->VdmContext.EFlags |= EFLAGS_INTERRUPT_MASK;

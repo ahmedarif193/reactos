@@ -38,7 +38,7 @@ ImageModel::ImageModel()
     , m_undoSteps(0)
     , m_redoSteps(0)
 {
-    ZeroMemory(m_historyItems, sizeof(m_historyItems));
+    // m_historyItems array elements are automatically initialized by their constructors
 
     m_hbmMaster = CreateColorDIB(1, 1, RGB(255, 255, 255));
     m_hbmOld = ::SelectObject(m_hDrawingDC, m_hbmMaster);

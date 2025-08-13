@@ -442,9 +442,15 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
     set(LIBRARY_PRIVATE_DIR ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${_libname}.dir)
     add_custom_command(
         OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}.a
-        # ar just puts stuff into the archive, without looking twice. Just delete the lib, we're going to rebuild it anyway
+        # AR just packs whatever it's given; ensure we don't reuse a stale file
         COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE:${_libname}>
-        COMMAND ${CMAKE_DLLTOOL} --def ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def --kill-at --output-lib=${_libname}.a -t ${_libname}
+        COMMAND ${CMAKE_DLLTOOL}
+                --def ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
+                --kill-at
+                --output-lib=${_libname}.a
+                -t ${_libname}
+        # Index the intermediate archive produced by dlltool
+        COMMAND ${CMAKE_RANLIB} ${_libname}.a
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
         WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
 
@@ -459,14 +465,23 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
         PROPERTIES
         LINKER_LANGUAGE "C"
         PREFIX "")
+    # Apply ranlib to the final import library archive to ensure it has proper index
+    # and use fix_archive.cmake to handle nested archives
+    add_custom_command(TARGET ${_libname} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -DARCHIVE_PATH=${CMAKE_CURRENT_BINARY_DIR}/${_libname}.a -DCMAKE_AR=${CMAKE_AR} -DCMAKE_RANLIB=${CMAKE_RANLIB} -P ${REACTOS_SOURCE_DIR}/fix_archive.cmake
+        COMMENT "Fixing nested archive and applying ranlib to import library ${_libname}")
 
     # Do the same with delay-import libs
     set(LIBRARY_PRIVATE_DIR ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${_libname}_delayed.dir)
     add_custom_command(
         OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
-        # ar just puts stuff into the archive, without looking twice. Just delete the lib, we're going to rebuild it anyway
         COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE:${_libname}_delayed>
-        COMMAND ${CMAKE_DLLTOOL} --def ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def --kill-at --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
+        COMMAND ${CMAKE_DLLTOOL}
+                --def ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
+                --kill-at
+                --output-delaylib=${_libname}_delayed.a
+                -t ${_libname}_delayed
+        COMMAND ${CMAKE_RANLIB} ${_libname}_delayed.a
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
         WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
 
@@ -481,6 +496,11 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
         PROPERTIES
         LINKER_LANGUAGE "C"
         PREFIX "")
+    # Apply ranlib to the final delayed import library archive to ensure it has proper index
+    # and use fix_archive.cmake to handle nested archives
+    add_custom_command(TARGET ${_libname}_delayed POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -DARCHIVE_PATH=${CMAKE_CURRENT_BINARY_DIR}/${_libname}_delayed.a -DCMAKE_AR=${CMAKE_AR} -DCMAKE_RANLIB=${CMAKE_RANLIB} -P ${REACTOS_SOURCE_DIR}/fix_archive.cmake
+        COMMENT "Fixing nested archive and applying ranlib to delayed import library ${_libname}_delayed")
 endfunction()
 
 function(spec2def _dllname _spec_file)
