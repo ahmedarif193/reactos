@@ -1406,7 +1406,7 @@
 @ cdecl -version=0x600+ mbrlen(str long ptr)
 @ cdecl -version=0x600+ mbrtowc(ptr str long ptr)
 @ stub -version=0x600+ mbsdup_dbg
-@ stub -version=0x600+ mbsrtowcs
+@ cdecl -version=0x600+ mbsrtowcs(ptr ptr long ptr) MSVCRT_mbsrtowcs
 @ stub -version=0x600+ mbsrtowcs_s
 @ cdecl mbstowcs(ptr str long)
 @ stub -version=0x600+ mbstowcs_s

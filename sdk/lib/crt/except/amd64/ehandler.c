@@ -138,3 +138,19 @@ void __cdecl _local_unwind(void* frame, void* target)
 {
     RtlUnwind(frame, target, NULL, 0);
 }
+
+_CRTIMP
+EXCEPTION_DISPOSITION
+__cdecl
+_GCC_specific_handler(
+    struct _EXCEPTION_RECORD *ExceptionRecord,
+    void *EstablisherFrame,
+    struct _CONTEXT *ContextRecord,
+    struct _DISPATCHER_CONTEXT *DispatcherContext)
+{
+    /* For now, delegate to the C-specific handler */
+    return __C_specific_handler(ExceptionRecord, 
+                              EstablisherFrame, 
+                              ContextRecord, 
+                              DispatcherContext);
+}

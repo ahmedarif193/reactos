@@ -1,5 +1,5 @@
 /* NFSv4.1 client for Windows
- * Copyright © 2012 The Regents of the University of Michigan
+ * Copyright ï¿½ 2012 The Regents of the University of Michigan
  *
  * Olga Kornievskaia <aglo@umich.edu>
  * Casey Bodley <cbodley@umich.edu>
@@ -180,7 +180,8 @@ xdr_rpc_sspi_unwrap_data(XDR *xdrs, xdrproc_t xdr_func, caddr_t xdr_ptr,
 	XDR tmpxdrs;
 	sspi_buffer_desc databuf, wrapbuf;
 	uint32_t maj_stat;
-	u_int seq_num, qop_state;
+	u_int seq_num;
+	ULONG qop_state;
 	int conf_state;
 	bool_t xdr_stat;
 

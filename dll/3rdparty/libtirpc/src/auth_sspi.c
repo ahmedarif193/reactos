@@ -1,5 +1,5 @@
 /* NFSv4.1 client for Windows
- * Copyright © 2012 The Regents of the University of Michigan
+ * Copyright ï¿½ 2012 The Regents of the University of Michigan
  *
  * Olga Kornievskaia <aglo@umich.edu>
  * Casey Bodley <cbodley@umich.edu>
@@ -275,7 +275,8 @@ static bool_t
 authsspi_validate(AUTH *auth, struct opaque_auth *verf, u_int seq)
 {
 	struct rpc_sspi_data *gd;
-	u_int num, qop_state, cur_seq;
+	u_int num, cur_seq;
+	ULONG qop_state;
 	sspi_buffer_desc signbuf, checksum;
 	uint32_t maj_stat;
 
@@ -345,7 +346,8 @@ authsspi_refresh(AUTH *auth, void *tmp)
 	struct rpc_sspi_data *gd;
 	struct rpc_sspi_init_res gr;
     sspi_buffer_desc *recv_tokenp, send_token;
-	uint32_t maj_stat, call_stat, ret_flags, i;
+	uint32_t maj_stat, call_stat, i;
+	ULONG ret_flags;
     unsigned long flags = 
         ISC_REQ_MUTUAL_AUTH|ISC_REQ_INTEGRITY|ISC_REQ_ALLOCATE_MEMORY;
     SecBufferDesc out_desc, in_desc;
@@ -493,7 +495,8 @@ authsspi_refresh(AUTH *auth, void *tmp)
 		 */
 		if (maj_stat == SEC_E_OK) {
 			sspi_buffer_desc bufin;
-			u_int seq, qop_state = 0;
+			u_int seq;
+		ULONG qop_state = 0;
             
             print_negotiated_attrs(&gd->ctx);
 
@@ -701,7 +704,7 @@ uint32_t sspi_verify_mic(PCtxtHandle ctx, u_int seq, sspi_buffer_desc *bufin,
 {
 #else
 uint32_t sspi_verify_mic(void *dummy, u_int seq, sspi_buffer_desc *bufin, 
-                            sspi_buffer_desc *bufout, u_int *qop_state)
+                            sspi_buffer_desc *bufout, PULONG qop_state)
 {
     PCtxtHandle ctx = dummy;
 #endif
@@ -814,7 +817,7 @@ uint32_t sspi_unwrap(PCtxtHandle ctx, u_int seq, sspi_buffer_desc *bufin,
 #else
 uint32_t sspi_unwrap(void *dummy, u_int seq, sspi_buffer_desc *bufin, 
                      sspi_buffer_desc *bufout, u_int *conf_state, 
-                     u_int *qop_state)
+                     PULONG qop_state)
 {
     PCtxtHandle ctx = dummy;
 #endif

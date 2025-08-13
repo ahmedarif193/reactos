@@ -1,5 +1,5 @@
 /* NFSv4.1 client for Windows
- * Copyright © 2012 The Regents of the University of Michigan
+ * Copyright ï¿½ 2012 The Regents of the University of Michigan
  *
  * Olga Kornievskaia <aglo@umich.edu>
  * Casey Bodley <cbodley@umich.edu>
@@ -102,12 +102,12 @@ bool_t authsspi_service(AUTH *auth, int svc);
 uint32_t sspi_get_mic(void *ctx, u_int qop, u_int seq, 
                       sspi_buffer_desc *bufin, sspi_buffer_desc *bufout);
 uint32_t sspi_verify_mic(void *ctx, u_int seq, sspi_buffer_desc *bufin, 
-                         sspi_buffer_desc *bufout, u_int *qop_state);
+                         sspi_buffer_desc *bufout, PULONG qop_state);
 uint32_t sspi_wrap(void *ctx, u_int seq, sspi_buffer_desc *bufin, 
                          sspi_buffer_desc *bufout, u_int *conf_state);
 uint32_t sspi_unwrap(void *ctx, u_int seq, sspi_buffer_desc *bufin, 
                      sspi_buffer_desc *bufout, u_int *conf_state, 
-                     u_int *qop_state);
+                     PULONG qop_state);
 void sspi_release_buffer(sspi_buffer_desc *buf);
 uint32_t sspi_import_name(sspi_buffer_desc *name_in, sspi_name_t *name_out);
 

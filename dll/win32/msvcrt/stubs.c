@@ -1,5 +1,6 @@
 
 #include <windef.h>
+#include <wchar.h>
 #include <stubs.h>
 
 #undef UNIMPLEMENTED
@@ -916,6 +917,20 @@ vsnprintf(
 {
     UNIMPLEMENTED;
     return 0;
+}
+
+_Check_return_opt_
+_CRTIMP
+size_t
+__cdecl
+MSVCRT_mbsrtowcs(
+    _Out_writes_opt_(_MaxCount) wchar_t *dst,
+    _Inout_ const char **src,
+    _In_ size_t maxCount,
+    _Inout_opt_ mbstate_t *pst)
+{
+    UNIMPLEMENTED;
+    return (size_t)-1;
 }
 
 

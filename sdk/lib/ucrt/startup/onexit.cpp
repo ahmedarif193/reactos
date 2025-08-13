@@ -229,3 +229,8 @@ extern "C" int __cdecl _execute_onexit_table(_onexit_table_t* const table)
         return 0;
     });
 }
+
+extern "C" int __cdecl at_quick_exit(void (__cdecl* function)(void))
+{
+    return _crt_at_quick_exit(function);
+}
