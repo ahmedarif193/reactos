@@ -861,6 +861,8 @@ SmpTranslateSystemPartitionInformation(VOID)
                        SystemPartition.MaximumLength,
                        &StrLength);
     SystemPartition.Length = (USHORT)StrLength;
+    
+    DPRINT1("SMSS: SystemPartition = '%wZ'\n", &SystemPartition);
 
     /* Enumerate the directory looking for the symbolic link string */
     RtlInitUnicodeString(&SearchString, L"SymbolicLink");
@@ -874,18 +876,24 @@ SmpTranslateSystemPartitionInformation(VOID)
                                     NULL);
     if (!NT_SUCCESS(Status))
     {
+        DPRINT1("SMSS: Cannot enumerate DOS devices directory (Status 0x%x)\n", Status);
         DPRINT1("SMSS: Cannot find drive letter for system partition\n");
         return;
     }
+    
+    DPRINT1("SMSS: Starting DOS device enumeration...\n");
 
     /* Keep searching until we find it */
     do
     {
+        DPRINT1("SMSS: Found DOS device: '%wZ' (Type: '%wZ')\n", &DirInfo->Name, &DirInfo->TypeName);
+        
         /* Is this it? */
         if ((RtlEqualUnicodeString(&DirInfo->TypeName, &SearchString, TRUE)) &&
             (DirInfo->Name.Length == 2 * sizeof(WCHAR)) &&
             (DirInfo->Name.Buffer[1] == L':'))
         {
+            DPRINT1("SMSS: Found potential drive letter: '%wZ'\n", &DirInfo->Name);
             /* Looks like we found it, open the link to get its target */
             InitializeObjectAttributes(&ObjectAttributes,
                                        &DirInfo->Name,
@@ -902,6 +910,10 @@ SmpTranslateSystemPartitionInformation(VOID)
                                                    &LinkTarget,
                                                    NULL);
                 NtClose(LinkHandle);
+                if (NT_SUCCESS(Status))
+                {
+                    DPRINT1("SMSS: Drive '%wZ' -> '%wZ'\n", &DirInfo->Name, &LinkTarget);
+                }
 
                 /* Check if it matches the string we had found earlier */
                 if ((NT_SUCCESS(Status)) &&
@@ -913,6 +925,7 @@ SmpTranslateSystemPartitionInformation(VOID)
                                              TRUE)) &&
                      (LinkTarget.Buffer[SystemPartition.Length / sizeof(WCHAR)] == L'\\'))))
                 {
+                    DPRINT1("SMSS: MATCH! Using drive letter '%wZ' for system partition\n", &DirInfo->Name);
                     /* All done */
                     break;
                 }
@@ -931,7 +944,104 @@ SmpTranslateSystemPartitionInformation(VOID)
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("SMSS: Cannot find drive letter for system partition\n");
-        return;
+        DPRINT1("SMSS: SystemPartition = '%wZ'\n", &SystemPartition);
+        DPRINT1("SMSS: Checking if X: already points to system partition...\n");
+        
+        /* Check if X: already points to the system partition */
+        UNICODE_STRING XTargetName;
+        WCHAR XTargetBuffer[MAX_PATH];
+        HANDLE ExistingXHandle;
+        UNICODE_STRING ExistingXName;
+        
+        RtlInitUnicodeString(&ExistingXName, L"X:");
+        InitializeObjectAttributes(&ObjectAttributes,
+                                   &ExistingXName, 
+                                   OBJ_CASE_INSENSITIVE,
+                                   SmpDosDevicesObjectDirectory,
+                                   NULL);
+        
+        Status = NtOpenSymbolicLinkObject(&ExistingXHandle,
+                                          SYMBOLIC_LINK_QUERY,
+                                          &ObjectAttributes);
+        if (NT_SUCCESS(Status))
+        {
+            XTargetName.Buffer = XTargetBuffer;
+            XTargetName.Length = 0;
+            XTargetName.MaximumLength = sizeof(XTargetBuffer);
+            
+            Status = NtQuerySymbolicLinkObject(ExistingXHandle,
+                                               &XTargetName,
+                                               NULL);
+            NtClose(ExistingXHandle);
+            
+            if (NT_SUCCESS(Status))
+            {
+                DPRINT1("SMSS: X: currently points to '%wZ'\n", &XTargetName);
+                
+                /* Check if X: already points to the correct location */
+                if (RtlEqualUnicodeString(&XTargetName, &SystemPartition, TRUE))
+                {
+                    DPRINT1("SMSS: X: already points to system partition, using it\n");
+                    /* Set up DirInfo to point to existing X: drive */
+                    wcsncpy((WCHAR*)DirInfoBuffer, L"X:", 2 * sizeof(WCHAR));
+                    DirInfo->Name.Length = 2 * sizeof(WCHAR);
+                    DirInfo->Name.MaximumLength = 2 * sizeof(WCHAR);
+                    DirInfo->Name.Buffer = (WCHAR*)DirInfoBuffer;
+                    return;
+                }
+                
+                /* Check if X: points to CdRom0 and system partition is also CdRom0 */
+                UNICODE_STRING CdRom0Name;
+                RtlInitUnicodeString(&CdRom0Name, L"\\Device\\CdRom0");
+                if (RtlEqualUnicodeString(&XTargetName, &CdRom0Name, TRUE) &&
+                    RtlEqualUnicodeString(&SystemPartition, &CdRom0Name, TRUE))
+                {
+                    DPRINT1("SMSS: X: and SystemPartition both point to CdRom0, using X:\n");
+                    /* Set up DirInfo to point to existing X: drive */
+                    wcsncpy((WCHAR*)DirInfoBuffer, L"X:", 2 * sizeof(WCHAR));
+                    DirInfo->Name.Length = 2 * sizeof(WCHAR);
+                    DirInfo->Name.MaximumLength = 2 * sizeof(WCHAR);
+                    DirInfo->Name.Buffer = (WCHAR*)DirInfoBuffer;
+                    return;
+                }
+            }
+        }
+        
+        DPRINT1("SMSS: Attempting to create drive letter Y: for system partition...\n");
+        
+        /* Create Y: -> SystemPartition symbolic link as fallback */
+        UNICODE_STRING YDriveName, YDriveTarget;
+        HANDLE LinkHandle;
+        
+        RtlInitUnicodeString(&YDriveName, L"Y:");
+        YDriveTarget = SystemPartition;
+        
+        InitializeObjectAttributes(&ObjectAttributes,
+                                   &YDriveName,
+                                   OBJ_CASE_INSENSITIVE | OBJ_PERMANENT,
+                                   SmpDosDevicesObjectDirectory,
+                                   NULL);
+        
+        Status = NtCreateSymbolicLinkObject(&LinkHandle,
+                                            SYMBOLIC_LINK_ALL_ACCESS,
+                                            &ObjectAttributes,
+                                            &YDriveTarget);
+        if (NT_SUCCESS(Status))
+        {
+            DPRINT1("SMSS: Successfully created Y: -> '%wZ'\n", &SystemPartition);
+            NtClose(LinkHandle);
+            
+            /* Set up DirInfo to point to our created Y: drive */
+            wcsncpy((WCHAR*)DirInfoBuffer, L"Y:", 2 * sizeof(WCHAR));
+            DirInfo->Name.Length = 2 * sizeof(WCHAR);
+            DirInfo->Name.MaximumLength = 2 * sizeof(WCHAR);
+            DirInfo->Name.Buffer = (WCHAR*)DirInfoBuffer;
+        }
+        else
+        {
+            DPRINT1("SMSS: Failed to create Y: symbolic link (Status 0x%x)\n", Status);
+            return;
+        }
     }
 
     /* Open the setup key again, for full access this time */
@@ -1301,6 +1411,10 @@ SmpInitializeDosDevices(VOID)
         DPRINT1("SMSS: Unable to open %wZ directory - Status == %lx\n",
                 &GlobalName, Status);
         return Status;
+    }
+    else
+    {
+        DPRINT1("SMSS: Successfully opened %wZ directory\n", &GlobalName);
     }
 
     /* Loop the DOS devices */

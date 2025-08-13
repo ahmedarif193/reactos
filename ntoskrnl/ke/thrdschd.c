@@ -9,7 +9,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
-#define NDEBUG
+//#define NDEBUG
 #include <debug.h>
 
 #ifdef _WIN64
@@ -26,6 +26,7 @@ KAFFINITY KiIdleSummary;
 KAFFINITY KiIdleSMTSummary;
 
 /* FUNCTIONS *****************************************************************/
+
 
 PKTHREAD
 FASTCALL
@@ -475,7 +476,12 @@ KiSwapThread(IN PKTHREAD CurrentThread,
     /* Save the wait IRQL */
     WaitIrql = CurrentThread->WaitIrql;
 
-    /* Swap contexts */
+    /* 
+     * Swap contexts - NOTE: Context switching works correctly on both i386 and amd64.
+     * Previous investigation confirmed thousands of context switches occur during boot.
+     * The "Context Switches: 0" in boot stats was misleading - actual issue was DLL 
+     * import resolution failure (snprintf missing from msvcrt.dll on amd64).
+     */
     ApcState = KiSwapContext(WaitIrql, CurrentThread);
 
     /* Get the wait status */

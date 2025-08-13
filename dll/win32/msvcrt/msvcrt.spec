@@ -1453,6 +1453,8 @@
 @ cdecl -arch=x86_64,arm sinhf(long)
 @ varargs sprintf(ptr str)
 @ varargs -version=0x600+ sprintf_s(ptr long str)
+@ varargs -arch=x86_64 snprintf(ptr long str)
+@ varargs -version=0x600+ -arch=i386 snprintf(ptr long str)
 @ cdecl sqrt(double)
 @ cdecl -arch=x86_64,arm sqrtf(long)
 @ cdecl srand(long)

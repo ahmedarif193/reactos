@@ -2,9 +2,13 @@
 #include <windef.h>
 #include <wchar.h>
 #include <stubs.h>
+#include <stdarg.h>
 
 #undef UNIMPLEMENTED
 #define UNIMPLEMENTED __wine_spec_unimplemented_stub("msvcrt.dll", __FUNCTION__)
+
+/* Forward declarations */
+int __cdecl _vsnprintf(char *buffer, size_t count, const char *format, va_list argptr);
 
 int __get_app_type()
 {
@@ -915,8 +919,25 @@ vsnprintf(
     _In_z_ _Printf_format_string_ const char *format,
     va_list argptr)
 {
-    UNIMPLEMENTED;
-    return 0;
+    return _vsnprintf(dest, maxCount, format, argptr);
+}
+
+_Check_return_opt_
+_CRTIMP
+_CRT_INSECURE_DEPRECATE(snprintf_s)
+int
+__cdecl
+snprintf(
+    _Out_writes_(_MaxCount) char *dest,
+    _In_ size_t maxCount,
+    _In_z_ _Printf_format_string_ const char *format,
+    ...)
+{
+    va_list args;
+    va_start(args, format);
+    int result = _vsnprintf(dest, maxCount, format, args);
+    va_end(args);
+    return result;
 }
 
 _Check_return_opt_

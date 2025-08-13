@@ -10,7 +10,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
-#define NDEBUG
+//#define NDEBUG
 #include <debug.h>
 
 extern void KiInvalidSystemThreadStartupExit(void);
@@ -203,7 +203,7 @@ KiSwapContextResume(
     }
 
     /* Increase context switch count */
-    Pcr->ContextSwitches++;
+    Pcr->Prcb.KeContextSwitches++;
     NewThread->ContextSwitches++;
 
     /* DPCs shouldn't be active */
