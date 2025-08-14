@@ -13,7 +13,7 @@
 #include <reactos/buildno.h>
 #include "inbv/logo.h"
 
-#define NDEBUG
+//#define NDEBUG
 #include <debug.h>
 
 /* This is the size that we can expect from the win 2003 loader */

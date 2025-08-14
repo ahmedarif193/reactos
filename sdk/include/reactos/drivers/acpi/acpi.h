@@ -41,6 +41,7 @@ typedef struct _ACPI_BIOS_MULTI_NODE
 #define SRAT_SIGNATURE 'TARS'
 #define WDRT_SIGNATURE 'TRDW'
 #define BGRT_SIGNATURE  0x54524742      	// "BGRT"
+#define MCFG_SIGNATURE  0x4746434D      	// "MCFG"
 
 //
 // FADT Flags
@@ -247,6 +248,25 @@ typedef struct _BOOT_TABLE
     UCHAR Reserved[3];
 } BOOT_TABLE, *PBOOT_TABLE;
 
+//
+// MCFG (Memory Mapped Configuration) Table for PCIe
+//
+typedef struct _MCFG_ALLOCATION
+{
+    PHYSICAL_ADDRESS BaseAddress;
+    USHORT PciSegment;
+    UCHAR StartBusNumber;
+    UCHAR EndBusNumber;
+    ULONG Reserved;
+} MCFG_ALLOCATION, *PMCFG_ALLOCATION;
+
+typedef struct _MCFG_TABLE
+{
+    DESCRIPTION_HEADER Header;
+    ULONGLONG Reserved;
+    MCFG_ALLOCATION Allocations[ANYSIZE_ARRAY];
+} MCFG_TABLE, *PMCFG_TABLE;
+
 typedef struct _ACPI_SRAT
 {
     DESCRIPTION_HEADER Header;
@@ -264,5 +284,114 @@ typedef struct _BGRT_TABLE
     ULONG OffsetX;
     ULONG OffsetY;
 } BGRT_TABLE, *PBGRT_TABLE;
+
+//
+// ACPI _PRT (PCI Routing Table) Structures
+//
+typedef struct _ACPI_PRT_ENTRY
+{
+    ULONGLONG Address;       // Device address (high 16 bits = device, low 16 bits = function)
+    ULONG Pin;              // PCI interrupt pin (0=INTA, 1=INTB, 2=INTC, 3=INTD)
+    ULONG Source;           // Interrupt source (0 if SourceName used)
+    CHAR SourceName[16];    // ACPI device path for interrupt controller
+    ULONG SourceIndex;      // Pin on the interrupt controller
+} ACPI_PRT_ENTRY, *PACPI_PRT_ENTRY;
+
+typedef struct _ACPI_PRT_TABLE
+{
+    ULONG Count;
+    ACPI_PRT_ENTRY Entries[64];  // Maximum 64 PCI routing entries
+} ACPI_PRT_TABLE, *PACPI_PRT_TABLE;
+
+//
+// ACPI Power Management Structures
+//
+typedef enum _ACPI_POWER_STATE
+{
+    AcpiPowerStateD0 = 0,    // Fully functional
+    AcpiPowerStateD1 = 1,    // Not used in PCI
+    AcpiPowerStateD2 = 2,    // Not used in PCI  
+    AcpiPowerStateD3 = 3,    // Power off
+    AcpiPowerStateUnknown = 4
+} ACPI_POWER_STATE, *PACPI_POWER_STATE;
+
+typedef struct _ACPI_DEVICE_POWER_INFO
+{
+    ACPI_POWER_STATE CurrentState;
+    ACPI_POWER_STATE SupportedStates[4];  // D0, D1, D2, D3
+    BOOLEAN CanWakeFromD0;
+    BOOLEAN CanWakeFromD1;
+    BOOLEAN CanWakeFromD2;
+    BOOLEAN CanWakeFromD3;
+} ACPI_DEVICE_POWER_INFO, *PACPI_DEVICE_POWER_INFO;
+
+//
+// ACPI Resource Management Structures (_CRS/_PRS/_SRS)
+//
+typedef enum _ACPI_RESOURCE_TYPE
+{
+    AcpiResourceTypeMemory = 0,      // Memory ranges
+    AcpiResourceTypeIo = 1,          // I/O port ranges  
+    AcpiResourceTypeIrq = 2,         // Interrupt lines
+    AcpiResourceTypeDma = 3,         // DMA channels
+    AcpiResourceTypeBusNumber = 4,   // Bus number ranges
+    AcpiResourceTypeUnknown = 5
+} ACPI_RESOURCE_TYPE, *PACPI_RESOURCE_TYPE;
+
+typedef struct _ACPI_RESOURCE_DESCRIPTOR
+{
+    ACPI_RESOURCE_TYPE Type;
+    ULONG Length;                    // Length of this descriptor
+    union {
+        struct {
+            PHYSICAL_ADDRESS BaseAddress;
+            ULONG Length;
+            BOOLEAN IsWriteable;
+            BOOLEAN IsCacheable;
+            BOOLEAN IsPrefetchable;
+        } Memory;
+        
+        struct {
+            ULONG BasePort;
+            ULONG Length;
+            BOOLEAN IsDecoded16Bit;
+        } Io;
+        
+        struct {
+            ULONG Vector;
+            BOOLEAN IsLevelTriggered;
+            BOOLEAN IsActiveHigh;
+            BOOLEAN IsShared;
+        } Irq;
+        
+        struct {
+            ULONG Channel;
+            BOOLEAN IsTypeBMaster;
+            BOOLEAN IsTransferSize8Bit;
+            BOOLEAN IsTransferSize16Bit;
+        } Dma;
+        
+        struct {
+            ULONG MinBusNumber;
+            ULONG MaxBusNumber;
+            ULONG Length;
+        } BusNumber;
+    } u;
+} ACPI_RESOURCE_DESCRIPTOR, *PACPI_RESOURCE_DESCRIPTOR;
+
+typedef struct _ACPI_RESOURCE_LIST
+{
+    ULONG Count;
+    ACPI_RESOURCE_DESCRIPTOR Descriptors[32];  // Maximum 32 resources per device
+} ACPI_RESOURCE_LIST, *PACPI_RESOURCE_LIST;
+
+typedef struct _ACPI_DEVICE_RESOURCES
+{
+    ACPI_RESOURCE_LIST CurrentResources;      // _CRS - Current Resource Settings
+    ACPI_RESOURCE_LIST PossibleResources;     // _PRS - Possible Resource Settings  
+    BOOLEAN HasCurrentResources;
+    BOOLEAN HasPossibleResources;
+    BOOLEAN ResourcesAssigned;
+} ACPI_DEVICE_RESOURCES, *PACPI_DEVICE_RESOURCES;
 
 /* EOF */

@@ -255,8 +255,13 @@ Ext2ClearFlag(PULONG Flags, ULONG FlagBit)
 
 #else
 
+#ifdef _M_AMD64
+#define SetLongFlag(_F,_SF)       InterlockedOr((volatile long *)&(_F), (ULONG)(_SF))
+#define ClearLongFlag(_F,_SF)     InterlockedAnd((volatile long *)&(_F), ~((ULONG)(_SF)))
+#else
 #define SetLongFlag(_F,_SF)       InterlockedOr(&(_F), (ULONG)(_SF))
 #define ClearLongFlag(_F,_SF)     InterlockedAnd(&(_F), ~((ULONG)(_SF)))
+#endif
 
 #endif  /* release */
 
