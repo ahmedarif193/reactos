@@ -27,6 +27,11 @@ function(add_hal _halname)
     else()
         target_link_libraries(${_halname} libcntpr fast486)
     endif()
+    
+    # Link pseh for HAL modules that use ACPI (they use SEH3 exception handling)
+    if(${_halname} MATCHES "acpi")
+        target_link_libraries(${_halname} pseh)
+    endif()
 
     add_importlibs(${_halname} ntoskrnl)
     #add_pch(${_halname} include/hal.h)
