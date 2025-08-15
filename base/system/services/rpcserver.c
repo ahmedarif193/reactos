@@ -108,35 +108,80 @@ ScmStartRpcServer(VOID)
 {
     RPC_STATUS Status;
 
-    DPRINT("ScmStartRpcServer() called\n");
+#ifdef _M_AMD64
+    DPRINT1("RPCSERVER: [AMD64] ScmStartRpcServer() starting...\n");
+#else
+    DPRINT1("RPCSERVER: [i386] ScmStartRpcServer() starting...\n");
+#endif
 
+#ifdef _M_AMD64
+    DPRINT1("RPCSERVER: [AMD64] Creating RPC endpoint ncacn_np:\\pipe\\ntsvcs...\n");
+#else
+    DPRINT1("RPCSERVER: [i386] Creating RPC endpoint ncacn_np:\\pipe\\ntsvcs...\n");
+#endif
     Status = RpcServerUseProtseqEpW(L"ncacn_np",
                                     10,
                                     L"\\pipe\\ntsvcs",
                                     NULL);
     if (Status != RPC_S_OK)
     {
-        DPRINT1("RpcServerUseProtseqEpW() failed (Status %lx)\n", Status);
+#ifdef _M_AMD64
+        DPRINT1("RPCSERVER: [AMD64] RpcServerUseProtseqEpW() FAILED! Status=0x%lx\n", Status);
+#else
+        DPRINT1("RPCSERVER: [i386] RpcServerUseProtseqEpW() FAILED! Status=0x%lx\n", Status);
+#endif
         return;
     }
+#ifdef _M_AMD64
+    DPRINT1("RPCSERVER: [AMD64] RPC endpoint created successfully\n");
+#else
+    DPRINT1("RPCSERVER: [i386] RPC endpoint created successfully\n");
+#endif
 
+#ifdef _M_AMD64
+    DPRINT1("RPCSERVER: [AMD64] Registering RPC interface...\n");
+#else
+    DPRINT1("RPCSERVER: [i386] Registering RPC interface...\n");
+#endif
     Status = RpcServerRegisterIf(svcctl_v2_0_s_ifspec,
                                  NULL,
                                  NULL);
     if (Status != RPC_S_OK)
     {
-        DPRINT1("RpcServerRegisterIf() failed (Status %lx)\n", Status);
+#ifdef _M_AMD64
+        DPRINT1("RPCSERVER: [AMD64] RpcServerRegisterIf() FAILED! Status=0x%lx\n", Status);
+#else
+        DPRINT1("RPCSERVER: [i386] RpcServerRegisterIf() FAILED! Status=0x%lx\n", Status);
+#endif
         return;
     }
+#ifdef _M_AMD64
+    DPRINT1("RPCSERVER: [AMD64] RPC interface registered successfully\n");
+#else
+    DPRINT1("RPCSERVER: [i386] RPC interface registered successfully\n");
+#endif
 
+#ifdef _M_AMD64
+    DPRINT1("RPCSERVER: [AMD64] Starting RPC server listen (1, 20, TRUE)...\n");
+#else
+    DPRINT1("RPCSERVER: [i386] Starting RPC server listen (1, 20, TRUE)...\n");
+#endif
     Status = RpcServerListen(1, 20, TRUE);
     if (Status != RPC_S_OK)
     {
-        DPRINT1("RpcServerListen() failed (Status %lx)\n", Status);
+#ifdef _M_AMD64
+        DPRINT1("RPCSERVER: [AMD64] RpcServerListen() FAILED! Status=0x%lx\n", Status);
+#else
+        DPRINT1("RPCSERVER: [i386] RpcServerListen() FAILED! Status=0x%lx\n", Status);
+#endif
         return;
     }
 
-    DPRINT("ScmStartRpcServer() done\n");
+#ifdef _M_AMD64
+    DPRINT1("RPCSERVER: [AMD64] RPC server is now listening and ready for connections!\n");
+#else
+    DPRINT1("RPCSERVER: [i386] RPC server is now listening and ready for connections!\n");
+#endif
 }
 
 

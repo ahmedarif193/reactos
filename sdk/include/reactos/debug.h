@@ -14,6 +14,19 @@
 
 #pragma once
 
+/* Include for __rdtsc() intrinsic */
+#ifdef _MSC_VER
+#include <intrin.h>
+#else
+#ifdef __GNUC__
+#define __rdtsc() ({ \
+    unsigned int lo, hi; \
+    __asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi)); \
+    ((unsigned long long)hi << 32) | lo; \
+})
+#endif
+#endif
+
 #ifndef __RELFILE__
 #define __RELFILE__ __FILE__
 #endif
@@ -96,16 +109,24 @@ RtlAssert(
 
     /* These are always printed */
     #define DPRINT1(fmt, ...) do { \
-        if (DbgPrint("(%s:%d) " fmt, __RELFILE__, __LINE__, ##__VA_ARGS__))  \
-            DbgPrint("(%s:%d) DbgPrint() failed!\n", __RELFILE__, __LINE__); \
+        LARGE_INTEGER _Ticks; \
+        ULONG _Uptime = 0; \
+        _Ticks.QuadPart = __rdtsc(); \
+        _Uptime = (ULONG)(_Ticks.QuadPart / 1000000); \
+        if (DbgPrint("[%5lu.%03lu] (%s:%d) " fmt, _Uptime / 1000, _Uptime % 1000, __RELFILE__, __LINE__, ##__VA_ARGS__))  \
+            DbgPrint("[%5lu.%03lu] (%s:%d) DbgPrint() failed!\n", _Uptime / 1000, _Uptime % 1000, __RELFILE__, __LINE__); \
     } while (0)
 
     /* These are printed only if NDEBUG is NOT defined */
     #ifndef NDEBUG
 
         #define DPRINT(fmt, ...) do { \
-            if (DbgPrint("(%s:%d) " fmt, __RELFILE__, __LINE__, ##__VA_ARGS__))  \
-                DbgPrint("(%s:%d) DbgPrint() failed!\n", __RELFILE__, __LINE__); \
+            LARGE_INTEGER _Ticks; \
+            ULONG _Uptime = 0; \
+            _Ticks.QuadPart = __rdtsc(); \
+            _Uptime = (ULONG)(_Ticks.QuadPart / 1000000); \
+            if (DbgPrint("[%5lu.%03lu] (%s:%d) " fmt, _Uptime / 1000, _Uptime % 1000, __RELFILE__, __LINE__, ##__VA_ARGS__))  \
+                DbgPrint("[%5lu.%03lu] (%s:%d) DbgPrint() failed!\n", _Uptime / 1000, _Uptime % 1000, __RELFILE__, __LINE__); \
         } while (0)
 
     #else
@@ -121,15 +142,63 @@ RtlAssert(
     #define UNIMPLEMENTED         __NOTICE(WARNING, "is UNIMPLEMENTED!\n")
     #define UNIMPLEMENTED_ONCE    do { static int bWarnedOnce = 0; if (!bWarnedOnce) { bWarnedOnce++; UNIMPLEMENTED; } } while (0)
 
-    #define ERR_(ch, fmt, ...)    DbgPrintEx(DPFLTR_##ch##_ID, DPFLTR_ERROR_LEVEL, "(%s:%d) " fmt, __RELFILE__, __LINE__, ##__VA_ARGS__)
-    #define WARN_(ch, fmt, ...)   DbgPrintEx(DPFLTR_##ch##_ID, DPFLTR_WARNING_LEVEL, "(%s:%d) " fmt, __RELFILE__, __LINE__, ##__VA_ARGS__)
-    #define TRACE_(ch, fmt, ...)  DbgPrintEx(DPFLTR_##ch##_ID, DPFLTR_TRACE_LEVEL, "(%s:%d) " fmt, __RELFILE__, __LINE__, ##__VA_ARGS__)
-    #define INFO_(ch, fmt, ...)   DbgPrintEx(DPFLTR_##ch##_ID, DPFLTR_INFO_LEVEL, "(%s:%d) " fmt, __RELFILE__, __LINE__, ##__VA_ARGS__)
+    #define ERR_(ch, fmt, ...) do { \
+        LARGE_INTEGER _Ticks; \
+        ULONG _Uptime = 0; \
+        _Ticks.QuadPart = __rdtsc(); \
+        _Uptime = (ULONG)(_Ticks.QuadPart / 1000000); \
+        DbgPrintEx(DPFLTR_##ch##_ID, DPFLTR_ERROR_LEVEL, "[%5lu.%03lu] (%s:%d) " fmt, _Uptime / 1000, _Uptime % 1000, __RELFILE__, __LINE__, ##__VA_ARGS__); \
+    } while(0)
+    #define WARN_(ch, fmt, ...) do { \
+        LARGE_INTEGER _Ticks; \
+        ULONG _Uptime = 0; \
+        _Ticks.QuadPart = __rdtsc(); \
+        _Uptime = (ULONG)(_Ticks.QuadPart / 1000000); \
+        DbgPrintEx(DPFLTR_##ch##_ID, DPFLTR_WARNING_LEVEL, "[%5lu.%03lu] (%s:%d) " fmt, _Uptime / 1000, _Uptime % 1000, __RELFILE__, __LINE__, ##__VA_ARGS__); \
+    } while(0)
+    #define TRACE_(ch, fmt, ...) do { \
+        LARGE_INTEGER _Ticks; \
+        ULONG _Uptime = 0; \
+        _Ticks.QuadPart = __rdtsc(); \
+        _Uptime = (ULONG)(_Ticks.QuadPart / 1000000); \
+        DbgPrintEx(DPFLTR_##ch##_ID, DPFLTR_TRACE_LEVEL, "[%5lu.%03lu] (%s:%d) " fmt, _Uptime / 1000, _Uptime % 1000, __RELFILE__, __LINE__, ##__VA_ARGS__); \
+    } while(0)
+    #define INFO_(ch, fmt, ...) do { \
+        LARGE_INTEGER _Ticks; \
+        ULONG _Uptime = 0; \
+        _Ticks.QuadPart = __rdtsc(); \
+        _Uptime = (ULONG)(_Ticks.QuadPart / 1000000); \
+        DbgPrintEx(DPFLTR_##ch##_ID, DPFLTR_INFO_LEVEL, "[%5lu.%03lu] (%s:%d) " fmt, _Uptime / 1000, _Uptime % 1000, __RELFILE__, __LINE__, ##__VA_ARGS__); \
+    } while(0)
 
-    #define ERR__(ch, fmt, ...)    DbgPrintEx(ch, DPFLTR_ERROR_LEVEL, "(%s:%d) " fmt, __RELFILE__, __LINE__, ##__VA_ARGS__)
-    #define WARN__(ch, fmt, ...)   DbgPrintEx(ch, DPFLTR_WARNING_LEVEL, "(%s:%d) " fmt, __RELFILE__, __LINE__, ##__VA_ARGS__)
-    #define TRACE__(ch, fmt, ...)  DbgPrintEx(ch, DPFLTR_TRACE_LEVEL, "(%s:%d) " fmt, __RELFILE__, __LINE__, ##__VA_ARGS__)
-    #define INFO__(ch, fmt, ...)   DbgPrintEx(ch, DPFLTR_INFO_LEVEL, "(%s:%d) " fmt, __RELFILE__, __LINE__, ##__VA_ARGS__)
+    #define ERR__(ch, fmt, ...) do { \
+        LARGE_INTEGER _Ticks; \
+        ULONG _Uptime = 0; \
+        _Ticks.QuadPart = __rdtsc(); \
+        _Uptime = (ULONG)(_Ticks.QuadPart / 1000000); \
+        DbgPrintEx(ch, DPFLTR_ERROR_LEVEL, "[%5lu.%03lu] (%s:%d) " fmt, _Uptime / 1000, _Uptime % 1000, __RELFILE__, __LINE__, ##__VA_ARGS__); \
+    } while(0)
+    #define WARN__(ch, fmt, ...) do { \
+        LARGE_INTEGER _Ticks; \
+        ULONG _Uptime = 0; \
+        _Ticks.QuadPart = __rdtsc(); \
+        _Uptime = (ULONG)(_Ticks.QuadPart / 1000000); \
+        DbgPrintEx(ch, DPFLTR_WARNING_LEVEL, "[%5lu.%03lu] (%s:%d) " fmt, _Uptime / 1000, _Uptime % 1000, __RELFILE__, __LINE__, ##__VA_ARGS__); \
+    } while(0)
+    #define TRACE__(ch, fmt, ...) do { \
+        LARGE_INTEGER _Ticks; \
+        ULONG _Uptime = 0; \
+        _Ticks.QuadPart = __rdtsc(); \
+        _Uptime = (ULONG)(_Ticks.QuadPart / 1000000); \
+        DbgPrintEx(ch, DPFLTR_TRACE_LEVEL, "[%5lu.%03lu] (%s:%d) " fmt, _Uptime / 1000, _Uptime % 1000, __RELFILE__, __LINE__, ##__VA_ARGS__); \
+    } while(0)
+    #define INFO__(ch, fmt, ...) do { \
+        LARGE_INTEGER _Ticks; \
+        ULONG _Uptime = 0; \
+        _Ticks.QuadPart = __rdtsc(); \
+        _Uptime = (ULONG)(_Ticks.QuadPart / 1000000); \
+        DbgPrintEx(ch, DPFLTR_INFO_LEVEL, "[%5lu.%03lu] (%s:%d) " fmt, _Uptime / 1000, _Uptime % 1000, __RELFILE__, __LINE__, ##__VA_ARGS__); \
+    } while(0)
 
 #else /* not DBG */
 

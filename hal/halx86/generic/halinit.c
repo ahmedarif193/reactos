@@ -87,11 +87,23 @@ HalInitSystem(
     PKPRCB Prcb = KeGetCurrentPrcb();
     NTSTATUS Status;
 
+#ifdef _M_AMD64
+    DPRINT1("HAL: [AMD64] HalInitSystem starting - BootPhase=%lu\n", BootPhase);
+#else
+    DPRINT1("HAL: [i386] HalInitSystem starting - BootPhase=%lu\n", BootPhase);
+#endif
+
     /* Check the boot phase */
     if (BootPhase == 0)
     {
         /* Save bus type */
         HalpBusType = LoaderBlock->u.I386.MachineType & 0xFF;
+        
+#ifdef _M_AMD64
+        DPRINT1("HAL: [AMD64] Bus type = 0x%x\n", HalpBusType);
+#else
+        DPRINT1("HAL: [i386] Bus type = 0x%x\n", HalpBusType);
+#endif
 
         /* Get command-line parameters */
         HalpGetParameters(LoaderBlock);
@@ -111,13 +123,33 @@ HalInitSystem(
         }
 
         /* Initialize ACPI */
+#ifdef _M_AMD64
+        DPRINT1("HAL: [AMD64] Initializing ACPI Phase 0...\n");
+#else
+        DPRINT1("HAL: [i386] Initializing ACPI Phase 0...\n");
+#endif
         Status = HalpSetupAcpiPhase0(LoaderBlock);
         if (!NT_SUCCESS(Status))
         {
+#ifdef _M_AMD64
+            DPRINT1("HAL: [AMD64] ACPI Phase 0 FAILED! Status=0x%lx\n", Status);
+#else
+            DPRINT1("HAL: [i386] ACPI Phase 0 FAILED! Status=0x%lx\n", Status);
+#endif
             KeBugCheckEx(ACPI_BIOS_ERROR, Status, 0, 0, 0);
         }
+#ifdef _M_AMD64
+        DPRINT1("HAL: [AMD64] ACPI Phase 0 initialized successfully\n");
+#else
+        DPRINT1("HAL: [i386] ACPI Phase 0 initialized successfully\n");
+#endif
 
         /* Initialize the PICs */
+#ifdef _M_AMD64
+        DPRINT1("HAL: [AMD64] Initializing PICs...\n");
+#else
+        DPRINT1("HAL: [i386] Initializing PICs...\n");
+#endif
         HalpInitializePICs(TRUE);
 
         /* Initialize CMOS lock */

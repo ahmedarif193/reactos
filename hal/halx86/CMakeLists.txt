@@ -1,7 +1,8 @@
 
 add_definitions(
     -D_NTHALDLL_
-    -D_NTHAL_)
+    -D_NTHAL_
+    -D_KERNEL_MODE)
 
 include_directories(
     include

@@ -2015,6 +2015,9 @@ ThemePageDlgProc(HWND hwndDlg,
             ListView_SetTextBkColor(hListView, CLR_NONE);
             /* Reduce the size between the items */
             ListView_SetIconSpacing(hListView, 190, 173);
+            
+            /* Select Mizu theme by default (index 3) instead of Classic (index 0) */
+            ListView_SetItemState(hListView, 3, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
             break;
         }
 
