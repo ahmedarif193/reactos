@@ -33,7 +33,7 @@ static
 BOOLEAN
 MempAllocatePageTables(VOID)
 {
-    TRACE(">>> MempAllocatePageTables\n");
+    // TRACE(">>> MempAllocatePageTables\n");
 
     /* Allocate a page for the PML4 */
     PxeBase = MmAllocateMemoryWithType(PAGE_SIZE, LoaderMemoryData);

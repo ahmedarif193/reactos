@@ -264,6 +264,17 @@ DbgPrint2(ULONG Mask, ULONG Level, const char *File, ULONG Line, char *Format, .
     /* Print the header if we have started a new line */
     if (DebugStartOfLine)
     {
+        /* Add timestamp - get current time */
+        TIMEINFO* TimeInfo = ArcGetTime();
+        if (TimeInfo)
+        {
+            DbgPrint("[%02d:%02d:%02d.%03d] ", 
+                     TimeInfo->Hour, 
+                     TimeInfo->Minute, 
+                     TimeInfo->Second,
+                     0); /* No milliseconds in TIMEINFO, using 0 */
+        }
+        
         DbgPrint("(%s:%lu) ", File, Line);
 
         switch (Level)
