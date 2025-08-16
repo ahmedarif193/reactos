@@ -1885,8 +1885,8 @@ IntPaintDesktop(HDC hDC)
         {
             SIZE sz;
             int x, y;
-            int scaledWidth, scaledHeight;
-            int wallpaperX, wallpaperY, wallpaperWidth, wallpaperHeight;
+            int scaledWidth = 0, scaledHeight = 0;
+            int wallpaperX = 0, wallpaperY = 0, wallpaperWidth = 0, wallpaperHeight = 0;
             HDC hWallpaperDC;
 
             sz.cx = WndDesktop->rcWindow.right - WndDesktop->rcWindow.left;
