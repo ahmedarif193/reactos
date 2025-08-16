@@ -561,7 +561,7 @@
 @ cdecl -arch=x86_64 KeAcquireQueuedSpinLockRaiseToSynch(long)
 @ stdcall KeAcquireSpinLockAtDpcLevel(ptr)
 @ fastcall KeAcquireSpinLockForDpc(ptr)
-@ stdcall -arch=x86_64 KeAcquireSpinLockRaiseToDpc(ptr)
+@ stdcall -arch=x86_64,arm64 KeAcquireSpinLockRaiseToDpc(ptr)
 @ stdcall -arch=x86_64 KeAcquireSpinLockRaiseToSynch(ptr)
 @ stdcall KeAddSystemServiceTable(ptr ptr long ptr long)
 @ stdcall KeAreAllApcsDisabled()
@@ -638,7 +638,7 @@
 @ stdcall KeProfileInterruptWithSource(ptr long)
 @ stdcall KePulseEvent(ptr long long)
 @ stdcall KeQueryActiveProcessors()
-@ stdcall -arch=i386,arm KeQueryInterruptTime()
+@ stdcall -arch=i386,arm,arm64 KeQueryInterruptTime()
 ;@ cdecl -arch=x86_64 KeQueryMultiThreadProcessorSet
 ;@ cdecl -arch=x86_64 KeQueryPrcbAddress
 @ stdcall KeQueryPriorityThread(ptr)
@@ -667,7 +667,7 @@
 @ stdcall KeReleaseMutex(ptr long)
 @ cdecl -arch=x86_64 KeReleaseQueuedSpinLock(long long)
 @ stdcall KeReleaseSemaphore(ptr long long long)
-@ stdcall -arch=x86_64 KeReleaseSpinLock(ptr long)
+@ stdcall -arch=x86_64,arm64 KeReleaseSpinLock(ptr long)
 @ fastcall KeReleaseSpinLockForDpc(ptr long)
 @ stdcall KeReleaseSpinLockFromDpcLevel(ptr)
 @ stdcall KeRemoveByKeyDeviceQueue(ptr long)

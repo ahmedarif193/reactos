@@ -126,7 +126,7 @@ elseif(ARCH STREQUAL "amd64")
         arch/i386/hwapm.c
         arch/i386/hwdisk.c
         arch/i386/hwpci.c
-        # arch/i386/i386bug.c
+        arch/amd64/amd64bug.c
         arch/i386/pc/machpc.c
         arch/i386/pc/pcbeep.c
         arch/i386/pc/pccons.c
@@ -162,8 +162,10 @@ if(MSVC AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(freeldr_common PRIVATE "/Os")
 endif()
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    # Prevent using SSE (no support in freeldr)
-    target_compile_options(freeldr_common PUBLIC -mno-sse)
+    # Prevent using SSE (no support in freeldr) - only for x86 architectures
+    if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+        target_compile_options(freeldr_common PUBLIC -mno-sse)
+    endif()
 endif()
 
 set(PCH_SOURCE
@@ -243,14 +245,19 @@ if(SARCH STREQUAL "pc98")
         VERBATIM)
 endif()
 
-if(NOT ARCH STREQUAL "arm")
+if(NOT ARCH STREQUAL "arm" AND NOT ARCH STREQUAL "arm64")
     concatenate_files(
         ${CMAKE_CURRENT_BINARY_DIR}/freeldr.sys
         ${CMAKE_CURRENT_BINARY_DIR}/frldr16.bin
         ${CMAKE_CURRENT_BINARY_DIR}/$<TARGET_FILE_NAME:freeldr_pe>)
     add_custom_target(freeldr ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/freeldr.sys)
 else()
-    add_custom_target(freeldr ALL DEPENDS freeldr_pe)
+    # For ARM and ARM64, freeldr.sys is just a copy of freeldr_pe
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/freeldr.sys
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:freeldr_pe> ${CMAKE_CURRENT_BINARY_DIR}/freeldr.sys
+        DEPENDS freeldr_pe)
+    add_custom_target(freeldr ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/freeldr.sys)
 endif()
 
 add_cd_file(TARGET freeldr FILE ${CMAKE_CURRENT_BINARY_DIR}/freeldr.sys DESTINATION loader NO_CAB NOT_IN_HYBRIDCD FOR bootcd livecd hybridcd regtest)

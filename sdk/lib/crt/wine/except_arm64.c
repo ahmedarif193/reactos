@@ -120,6 +120,8 @@ void __cdecl MSVCRT_longjmp(_JUMP_BUFFER *jmp, int retval)
     EXCEPTION_RECORD rec;
 
     if (!retval) retval = 1;
+    /* ARM64 jump buffer may not have Frame member - skip RtlUnwind for now */
+#if 0
     if (jmp->Frame)
     {
         rec.ExceptionCode = STATUS_LONGJUMP;
@@ -130,6 +132,7 @@ void __cdecl MSVCRT_longjmp(_JUMP_BUFFER *jmp, int retval)
         rec.ExceptionInformation[0] = (DWORD_PTR)jmp;
         RtlUnwind((void *)jmp->Frame, (void *)jmp->Lr, &rec, IntToPtr(retval));
     }
+#endif
     __wine_longjmp( (__wine_jmp_buf *)jmp, retval );
 }
 

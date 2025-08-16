@@ -49,6 +49,15 @@
     #define MAXIMUM_PAGEFILE_SIZE   ((1ULL * 1024 * 1024 - 1) * PAGE_SIZE)
                                  // PAGE_ROUND_DOWN(4ULL * GIGABYTE - 1)
     #endif
+#elif defined(_M_ARM64) || defined(__aarch64__)
+/* ARM64 uses 64-bit addressing, similar to AMD64 */
+    #if (NTDDI_VERSION >= NTDDI_WIN10)
+    #define MAXIMUM_PAGEFILE_SIZE   ((512ULL * 1024 - 2) * PAGE_SIZE)
+    #elif (NTDDI_VERSION >= NTDDI_WINBLUE)
+    #define MAXIMUM_PAGEFILE_SIZE   ((512ULL * 1024 - 1) * PAGE_SIZE)
+    #else
+    #define MAXIMUM_PAGEFILE_SIZE   ((1ULL * 1024 * 1024 - 1) * PAGE_SIZE)
+    #endif
 #else
 #error Unknown architecture
 #endif

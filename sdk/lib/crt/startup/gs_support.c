@@ -17,6 +17,10 @@
 #include <ntstatus.h>	/* STATUS macros */
 #ifdef _WIN64
 #include <intrin.h>
+#ifdef _M_ARM64
+#include <internal/arm64/context_compat.h>
+#include <internal/arm64/unwind_stubs.h>
+#endif
 #endif
 
 #ifdef _WIN64

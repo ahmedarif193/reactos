@@ -29,6 +29,11 @@ list(APPEND SOURCE
     pngwutil.c
     pngpriv.h)
 
+# Add ARM64 NEON stubs
+if(ARCH STREQUAL "arm64")
+    list(APPEND SOURCE arm64_neon_stubs.c)
+endif()
+
 add_library(libpng MODULE ${SOURCE} ${CMAKE_CURRENT_BINARY_DIR}/libpng.def)
 set_module_type(libpng win32dll)
 target_link_libraries(libpng zlib)

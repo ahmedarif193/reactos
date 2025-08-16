@@ -9,6 +9,20 @@
 
 #include <sysfuncs.h>
 
+#elif defined(_M_ARM64) || defined(__aarch64__)
+
+/* ARM64 system call stubs */
+.text
+
+#define SVC_(name, argcount) \
+.global Zw##name; \
+Zw##name: \
+    mov w8, #0; \
+    svc #0; \
+    ret
+
+#include <sysfuncs.h>
+
 #else
 
 #ifdef _M_IX86

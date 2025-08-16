@@ -42,9 +42,10 @@
 
 #elif defined(__GNUC__) && !defined(__clang__) && defined(_M_AMD64)
 
+/* Fallback to pseh2_64.h if native SEH not available */
 #include "pseh2_64.h"
 
-#elif defined(_USE_DUMMY_PSEH) || defined (__arm__) || defined(_M_AMD64)
+#elif defined(_USE_DUMMY_PSEH) || defined (__arm__) || defined(__aarch64__) || defined(_ARM64_) || defined(_M_AMD64)
 
 #ifdef __cplusplus
 extern"C"

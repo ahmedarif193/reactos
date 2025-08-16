@@ -103,6 +103,7 @@ DriverEntry(IN PVOID DriverObject,
     UCHAR DeviceId[4] = { '1', '0', '4', '0'        };
 
     DebugPrint((TRACE,"\n BusLogic -  Inside the DriverEntry function \n"));
+    DebugPrint((INFO,"BusLogic: DriverEntry starting\n"));
 
     // Zero out structure.
     for (i = 0; i < sizeof(HW_INITIALIZATION_DATA); i++)
@@ -163,6 +164,7 @@ DriverEntry(IN PVOID DriverObject,
 
     DebugPrint((TRACE,"\n BusLogic -  Exiting the DriverEntry function \n"));
     DebugPrint((INFO,"\n BusLogic - Status = %ul \n", Status));
+    DebugPrint((INFO,"BusLogic: DriverEntry completed with status 0x%08lX\n", Status));
     return( Status );
 
 } // end DriverEntry()

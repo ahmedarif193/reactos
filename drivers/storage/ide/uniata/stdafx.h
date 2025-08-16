@@ -3,6 +3,9 @@
 extern "C" {
 
 #include <ntddk.h>
+#ifdef _M_AMD64
+#include <intrin.h>
+#endif
 
 };
 #include "stddef.h"

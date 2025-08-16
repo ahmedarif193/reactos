@@ -360,6 +360,8 @@ int	vers;
 	if (uname(&u) == -1)
 #elif defined(sparc)
 	if (uname(&u) == -1)
+#elif defined(__aarch64__) || defined(_M_ARM64)
+	if (uname(&u) == -1)
 #else
 #error Unknown architecture!
 #endif

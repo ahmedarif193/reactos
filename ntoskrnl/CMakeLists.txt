@@ -29,8 +29,10 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
 endif()
 
 if((CMAKE_C_COMPILER_ID STREQUAL "Clang") OR (CMAKE_C_COMPILER_ID STREQUAL "GNU"))
-    # Enable xsave feature
-    add_compile_options(-mxsave)
+    # Enable xsave feature (x86/x64 only)
+    if(NOT ARCH STREQUAL "arm64")
+        add_compile_options(-mxsave)
+    endif()
 endif()
 
 list(APPEND PCH_SKIP_SOURCE

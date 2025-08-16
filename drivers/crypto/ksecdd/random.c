@@ -79,6 +79,11 @@ KsecReadMachineSpecificCounters(
 #elif defined(_M_ARM)
     /* Read the Cycle Counter Register */
     MachineSpecificCounters->Ccr = _MoveFromCoprocessor(CP15_PMCCNTR);
+#elif defined(_M_ARM64) || defined(__aarch64__)
+    /* Read the Performance Monitors Cycle Count Register */
+    /* For ARM64, we can use the cycle counter if available */
+    /* This is a placeholder - actual implementation would need proper register access */
+    MachineSpecificCounters->Ccr = 0; /* TODO: Implement proper cycle counter reading */
 #else
     #error Implement me!
 #endif

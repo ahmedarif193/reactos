@@ -123,8 +123,15 @@ void * __cdecl __attribute__((error("Can only be used inside an exception filter
 /* This attribute allows automatic cleanup of the registered frames */
 #define _SEH3$_AUTO_CLEANUP __attribute__((cleanup(_SEH3$_AutoCleanup)))
 
+#if defined(__aarch64__) || defined(_ARM64_)
+/* ARM64 doesn't use regparm - uses standard ABI */
+#define _SEH3_REGPARM
+#else
+#define _SEH3_REGPARM __attribute__((regparm(3)))
+#endif
+
 int
-__attribute__((regparm(3)))
+_SEH3_REGPARM
 __attribute__((returns_twice))
 _SEH3$_RegisterFrameWithNonVolatiles(
     volatile SEH3$_REGISTRATION_FRAME* RegistrationFrame,
@@ -132,7 +139,7 @@ _SEH3$_RegisterFrameWithNonVolatiles(
     void* AllocaFrame);
 
 int
-__attribute__((regparm(3)))
+_SEH3_REGPARM
 __attribute__((returns_twice))
 _SEH3$_RegisterTryLevelWithNonVolatiles(
     volatile SEH3$_REGISTRATION_FRAME* RegistrationFrame,
@@ -143,7 +150,11 @@ _SEH3$_RegisterTryLevelWithNonVolatiles(
 #ifdef __clang__
 
 /* CLANG thinks it is smart and optimizes the alloca away if it is 0 and with it the use of a frame register */
+#if defined(__aarch64__) || defined(_ARM64_)
+#define _SEH3$_EnforceFramePointer() asm volatile ("#\n" : : "m"(*(char*)__builtin_alloca(4)) : "sp", "memory")
+#else
 #define _SEH3$_EnforceFramePointer() asm volatile ("#\n" : : "m"(*(char*)__builtin_alloca(4)) : "%esp", "memory")
+#endif
 
 /* CLANG doesn't have asm goto! */
 #define _SEH3$_ASM_GOTO(...)
@@ -178,7 +189,11 @@ _SEH3$_RegisterTryLevelWithNonVolatiles(
 #else /* !__clang__ */
 
 /* This will make GCC use ebp, even if it was disabled by -fomit-frame-pointer */
+#if defined(__aarch64__) || defined(_ARM64_)
+#define _SEH3$_EnforceFramePointer() asm volatile ("#\n" : : "m"(*(char*)__builtin_alloca(0)) : "sp", "memory")
+#else
 #define _SEH3$_EnforceFramePointer() asm volatile ("#\n" : : "m"(*(char*)__builtin_alloca(0)) : "%esp", "memory")
+#endif
 
 #define _SEH3$_ASM_GOTO(...) asm goto ("#\n" : : : "memory" : __VA_ARGS__)
 
@@ -234,7 +249,9 @@ _SEH3$_RegisterTryLevelWithNonVolatiles(
 
 /* Use the global unregister function */
 void
+#if !defined(__aarch64__) && !defined(_ARM64_)
 __attribute__((regparm(1)))
+#endif
 _SEH3$_AutoCleanup(
     volatile SEH3$_REGISTRATION_FRAME *Frame);
 

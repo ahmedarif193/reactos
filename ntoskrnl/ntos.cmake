@@ -298,7 +298,14 @@ if(DBG)
     list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/se/debug.c)
 endif()
 
-list(APPEND ASM_SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/zw.S)
+# Architecture-specific zw.S handling
+if(ARCH STREQUAL "arm64")
+    list(APPEND ASM_SOURCE 
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/arm64/zw.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/arm64/zw_missing.S)
+else()
+    list(APPEND ASM_SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/zw.S)
+endif()
 
 if(ARCH STREQUAL "i386")
     list(APPEND ASM_SOURCE
@@ -383,6 +390,26 @@ elseif(ARCH STREQUAL "arm")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/arm/init.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/arm/psctx.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/arm/rtlexcpt.c)
+elseif(ARCH STREQUAL "arm64")
+    list(APPEND ASM_SOURCE
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/ctxswitch.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/trap.S)
+    list(APPEND SOURCE
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/config/arm64/cmhardwr.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/arm64/kdarm64.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/arm64/kdsup.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/cpu.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/except.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/exp.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/interrupt.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/kiinit.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/stubs.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/syscall.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/thrdini.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/usercall.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/arm64/page.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/arm64/init.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/arm64/psctx.c)
 endif()
 
 if(NOT _WINKD_)
@@ -404,6 +431,11 @@ if(NOT _WINKD_)
         endif()
     elseif(ARCH STREQUAL "arm")
         list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kd/arm/kdserial.c)
+    elseif(ARCH STREQUAL "arm64")
+        list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kd/arm64/kdserial.c)
+        if(KDBG)
+            list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/arm64/kdb_arch.c)
+        endif()
     endif()
 
     if(KDBG)

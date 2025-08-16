@@ -19,11 +19,20 @@
 #include <intrin.h>
 #else
 #ifdef __GNUC__
+#if defined(__aarch64__) || defined(_ARM64_)
+/* ARM64 doesn't have RDTSC - use cycle counter or return 0 for now */
+#define __rdtsc() ({ \
+    unsigned long long val = 0; \
+    /* TODO: Could use PMCCNTR_EL0 if enabled */ \
+    val; \
+})
+#else
 #define __rdtsc() ({ \
     unsigned int lo, hi; \
     __asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi)); \
     ((unsigned long long)hi << 32) | lo; \
 })
+#endif
 #endif
 #endif
 

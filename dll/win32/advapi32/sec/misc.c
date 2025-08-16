@@ -115,7 +115,7 @@ CheckNtMartaPresent(VOID)
 VOID
 UnloadNtMarta(VOID)
 {
-    if (InterlockedExchangePointer((PVOID)&NtMarta,
+    if (InterlockedExchangePointer((PVOID*)&NtMarta,
                                    NULL) != NULL)
     {
         FreeLibrary(NtMartaStatic.hDllInstance);

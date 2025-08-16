@@ -47,6 +47,21 @@ UefiPcBeep(VOID)
     /* Not possible on UEFI, for now */
 }
 
+#ifdef _M_ARM64
+/* Bootloader-specific implementation for KeGetCurrentIrql */
+/* This is needed because ARM64 defines it as a macro accessing PCR */
+/* but in bootloader we don't have a PCR structure */
+#undef KeGetCurrentIrql
+KIRQL
+NTAPI
+KeGetCurrentIrql(VOID)
+{
+    /* Boot loader always runs at passive level */
+    return 0;
+}
+#endif
+
+
 VOID
 UefiHwIdle(VOID)
 {

@@ -31,7 +31,7 @@ Notes:
 Revision History:
 
     Some parts of hardware-specific code were taken from FreeBSD 4.3-6.1 ATA driver by
-         Søren Schmidt, Copyright (c) 1998-2007
+         Sï¿½ren Schmidt, Copyright (c) 1998-2007
 
     Some parts of device detection code were taken from from standard ATAPI.SYS from NT4 DDK by
          Mike Glass (MGlass)
@@ -2913,8 +2913,15 @@ CheckDevice(
     ULONG                waitCount = g_opt_WaitBusyResetCount;
     ULONG                at_home = 0;
 
+#ifdef _M_AMD64
+    LARGE_INTEGER StartTicks, EndTicks;
+    StartTicks.QuadPart = __rdtsc();
+    KdPrint2((PRINT_PREFIX "CheckDevice: [AMD64] Starting check for Device %#x at time %llu\n",
+               deviceNumber, StartTicks.QuadPart));
+#else
     KdPrint2((PRINT_PREFIX "CheckDevice: Device %#x\n",
                deviceNumber));
+#endif
 
     if(deviceNumber >= chan->NumberLuns) {
         return 0;
@@ -2955,6 +2962,8 @@ CheckDevice(
     if(ResetDev) {
         KdPrint2((PRINT_PREFIX "CheckDevice: reset dev\n"));
 
+        /* Removed AMD64-specific quick check to match i386 behavior */
+
         // Reset device
         AtapiSoftReset(chan, deviceNumber);
 
@@ -2973,6 +2982,7 @@ CheckDevice(
             KdPrint2((PRINT_PREFIX
                         "CheckDevice: BUSY\n"));
 
+            /* Use normal 500ms reset delay on all architectures */
             AtapiHardReset(chan, FALSE, 500 * 1000);
 /*
             AtapiWritePort1(chan, IDX_IO2_o_Control, IDE_DC_RESET_CONTROLLER );
@@ -2982,11 +2992,11 @@ CheckDevice(
 */
             SelectDrive(chan, deviceNumber & 0x01);
 
+            /* Use same wait logic for both architectures */
             do {
                 // Wait for Busy to drop.
                 AtapiStallExecution(100);
                 GetStatus(chan, statusByte);
-
             } while ((statusByte & IDE_STATUS_BUSY) && waitCount--);
 
             GetBaseStatus(chan, statusByte);
@@ -3156,7 +3166,17 @@ forget_device:
         }
         GetBaseStatus(chan, statusByte);
     }
+#ifdef _M_AMD64
+    EndTicks.QuadPart = __rdtsc();
+    ULONG ElapsedMs = (ULONG)((EndTicks.QuadPart - StartTicks.QuadPart) / 1000000);
+    KdPrint2((PRINT_PREFIX "CheckDevice: [AMD64] Device %#x check completed in %lu ms, %sfound\n", 
+              deviceNumber, ElapsedMs, RetVal ? "" : "not "));
+    if (ElapsedMs > 1000) {
+        KdPrint2((PRINT_PREFIX "CheckDevice: [AMD64] WARNING - Device detection took > 1 second!\n"));
+    }
+#else
     KdPrint2((PRINT_PREFIX "CheckDevice: check status: %sfound\n", RetVal ? "" : "not "));
+#endif
     return RetVal;
 } // end CheckDevice()
 
@@ -3199,7 +3219,13 @@ FindDevices(
     ULONG                max_ldev;
     BOOLEAN              AtapiOnly = FALSE;
 
+#ifdef _M_AMD64
+    LARGE_INTEGER StartTicks, EndTicks;
+    StartTicks.QuadPart = __rdtsc();
+    KdPrint2((PRINT_PREFIX "FindDevices: [AMD64] Starting device scan on channel %d\n", Channel));
+#else
     KdPrint2((PRINT_PREFIX "FindDevices:\n"));
+#endif
 
     // Disable interrupts
     AtapiDisableInterrupts(deviceExtension, Channel);
@@ -3214,6 +3240,11 @@ FindDevices(
 
     // Search for devices.
     for (i = 0; i < max_ldev; i++) {
+#ifdef _M_AMD64
+        LARGE_INTEGER DevStartTicks, DevEndTicks;
+        DevStartTicks.QuadPart = __rdtsc();
+        KdPrint2((PRINT_PREFIX "FindDevices: [AMD64] Checking device %d on channel %d\n", i, Channel));
+#endif
         //AtapiDisableInterrupts(deviceExtension, Channel);
         if(Flags & UNIATA_FIND_DEV_UNHIDE) {
             chan->lun[i]->DeviceFlags &= ~DFLAGS_HIDDEN;
@@ -3221,6 +3252,11 @@ FindDevices(
         deviceResponded |=
             (CheckDevice(HwDeviceExtension, Channel, i, TRUE) != 0);
         //AtapiEnableInterrupts(deviceExtension, Channel);
+#ifdef _M_AMD64
+        DevEndTicks.QuadPart = __rdtsc();
+        ULONG DevMs = (ULONG)((DevEndTicks.QuadPart - DevStartTicks.QuadPart) / 1000000);
+        KdPrint2((PRINT_PREFIX "FindDevices: [AMD64] Device %d check took %lu ms\n", i, DevMs));
+#endif
     }
 
     if(chan->DeviceExtension->HwFlags & UNIATA_AHCI) {
@@ -3290,6 +3326,7 @@ FindDevices(
                 KdPrint2((PRINT_PREFIX
                             "FindDevices: Resetting controller before SetDriveParameters.\n"));
 
+                /* Use same reset delay for both architectures */
                 AtapiHardReset(chan, FALSE, 500 * 1000);
 /*
                 AtapiWritePort1(chan, IDX_IO2_o_Control, IDE_DC_RESET_CONTROLLER );
@@ -3349,6 +3386,7 @@ FindDevices(
     if (!deviceResponded) {
 
         AtapiWritePort1(chan, IDX_IO2_o_Control,IDE_DC_RESET_CONTROLLER );
+        // AMD64: Would use reduced delay (10ms) instead of 50ms
         AtapiStallExecution(50 * 1000);
         AtapiWritePort1(chan, IDX_IO2_o_Control,IDE_DC_REENABLE_CONTROLLER);
     }
@@ -3383,9 +3421,20 @@ FindDevices(
 //    AtapiWritePort1(chan, IDX_IO2_o_Control, IDE_DC_A_4BIT );
     GetBaseStatus(chan, statusByte);
 
+#ifdef _M_AMD64
+    EndTicks.QuadPart = __rdtsc();
+    ULONG ElapsedMs = (ULONG)((EndTicks.QuadPart - StartTicks.QuadPart) / 1000000);
+    KdPrint2((PRINT_PREFIX
+               "FindDevices: [AMD64] Channel %d scan completed in %lu ms, returning %d\n",
+               Channel, ElapsedMs, deviceResponded));
+    if (ElapsedMs > 5000) {
+        KdPrint2((PRINT_PREFIX "FindDevices: [AMD64] WARNING - Channel scan took > 5 seconds!\n"));
+    }
+#else
     KdPrint2((PRINT_PREFIX
                "FindDevices: returning %d\n",
                deviceResponded));
+#endif
 
     return deviceResponded;
 

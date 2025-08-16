@@ -95,6 +95,11 @@ SVCCTL_HANDLEW_bind(SVCCTL_HANDLEW szMachineName)
     TRACE("SVCCTL_HANDLEW_bind(%s)\n",
           debugstr_w(szMachineName));
 
+#ifdef _M_AMD64
+    TRACE("SVCCTL_HANDLEW_bind: [AMD64] Binding to machine=%S\n", 
+          szMachineName ? szMachineName : L"(local)");
+#endif
+
     status = RpcStringBindingComposeW(NULL,
                                       L"ncacn_np",
                                       szMachineName,
@@ -104,8 +109,15 @@ SVCCTL_HANDLEW_bind(SVCCTL_HANDLEW szMachineName)
     if (status != RPC_S_OK)
     {
         ERR("RpcStringBindingCompose returned 0x%x\n", status);
+#ifdef _M_AMD64
+        ERR("SVCCTL_HANDLEW_bind: [AMD64] Failed to compose binding string! status=0x%lx\n", status);
+#endif
         return NULL;
     }
+
+#ifdef _M_AMD64
+    TRACE("SVCCTL_HANDLEW_bind: [AMD64] Binding string composed: %S\n", pszStringBinding);
+#endif
 
     /* Set the binding handle that will be used to bind to the server. */
     status = RpcBindingFromStringBindingW(pszStringBinding,
@@ -113,7 +125,16 @@ SVCCTL_HANDLEW_bind(SVCCTL_HANDLEW szMachineName)
     if (status != RPC_S_OK)
     {
         ERR("RpcBindingFromStringBinding returned 0x%x\n", status);
+#ifdef _M_AMD64
+        ERR("SVCCTL_HANDLEW_bind: [AMD64] Failed to create binding from string! status=0x%lx\n", status);
+#endif
     }
+#ifdef _M_AMD64
+    else
+    {
+        TRACE("SVCCTL_HANDLEW_bind: [AMD64] Binding handle created successfully: %p\n", hBinding);
+    }
+#endif
 
     status = RpcStringFreeW(&pszStringBinding);
     if (status != RPC_S_OK)
@@ -2026,12 +2047,27 @@ LockServiceDatabase(SC_HANDLE hSCManager)
 }
 
 
+/* Test function for native SEH on AMD64 - disabled for GCC */
+#if 0
+/* GCC doesn't support MSVC-style __try/__except keywords even on AMD64 */
+static VOID
+TestNativeSEH(VOID)
+{
+    TRACE("Testing native SEH on AMD64...\n");
+    /* This code is disabled because GCC doesn't support __try/__except */
+}
+#endif
+
 static VOID
 WaitForSCManager(VOID)
 {
     HANDLE hEvent;
 
     TRACE("WaitForSCManager()\n");
+    
+#if 0
+    /* Native SEH test disabled for GCC - doesn't support __try/__except */
+#endif
 
     /* Try to open the existing event */
     hEvent = OpenEventW(SYNCHRONIZE, FALSE, SCM_START_EVENT);
@@ -2046,8 +2082,16 @@ WaitForSCManager(VOID)
             return;
     }
 
+#ifdef _M_AMD64
+    /* On AMD64, limit the wait time as events may not work properly across processes.
+     * Give SCM 10 seconds to start, which should be plenty based on logs showing
+     * it starts within 40 seconds of boot. */
+    TRACE("WaitForSCManager: [AMD64] Waiting max 10 seconds for SCM\n");
+    WaitForSingleObject(hEvent, 10000);
+#else
     /* Wait for 3 minutes */
     WaitForSingleObject(hEvent, 180000);
+#endif
     CloseHandle(hEvent);
 
     TRACE("ScmWaitForSCManager() done\n");
@@ -2065,7 +2109,7 @@ OpenSCManagerA(LPCSTR lpMachineName,
                DWORD dwDesiredAccess)
 {
     SC_HANDLE hScm = NULL;
-    DWORD dwError;
+    DWORD dwError = ERROR_TIMEOUT;  /* Default to timeout - will be overwritten on success */
 
     TRACE("OpenSCManagerA(%s %s %lx)\n",
           debugstr_a(lpMachineName), debugstr_a(lpDatabaseName), dwDesiredAccess);
@@ -2109,7 +2153,7 @@ OpenSCManagerW(LPCWSTR lpMachineName,
                DWORD dwDesiredAccess)
 {
     SC_HANDLE hScm = NULL;
-    DWORD dwError;
+    DWORD dwError = ERROR_TIMEOUT;  /* Default to timeout - will be overwritten on success */
 
     TRACE("OpenSCManagerW(%s %s %lx)\n",
           debugstr_w(lpMachineName), debugstr_w(lpDatabaseName), dwDesiredAccess);

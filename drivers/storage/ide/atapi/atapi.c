@@ -6202,6 +6202,7 @@ Return Value:
     ULONG                  statusToReturn, newStatus;
 
     DebugPrint((1,"\n\nATAPI IDE MiniPort Driver\n"));
+    DebugPrint((1,"ATAPI: DriverEntry starting\n"));
 
     statusToReturn = 0xffffffff;
 

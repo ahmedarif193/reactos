@@ -30,8 +30,9 @@ FdoSendInquiry(
     ULONG RetryCount = 0;
     SCSI_REQUEST_BLOCK Srb;
     PCDB Cdb;
+    LARGE_INTEGER StartTime, EndTime, ElapsedTime;
 
-    DPRINT("FdoSendInquiry() called\n");
+    DPRINT1("FdoSendInquiry() called\n");
 
     PSCSI_PORT_LUN_EXTENSION LunExtension = DeviceObject->DeviceExtension;
     PSCSI_PORT_DEVICE_EXTENSION DeviceExtension =
@@ -50,6 +51,9 @@ FdoSendInquiry(
 
     while (KeepTrying)
     {
+        DPRINT1("FdoSendInquiry: Starting inquiry attempt %lu for PathId=%u TargetId=%u Lun=%u\n",
+            RetryCount, LunExtension->PathId, LunExtension->TargetId, LunExtension->Lun);
+        
         /* Initialize event for waiting */
         KeInitializeEvent(&Event,
                           NotificationEvent,
@@ -85,7 +89,14 @@ FdoSendInquiry(
         Srb.Lun = LunExtension->Lun;
         Srb.Function = SRB_FUNCTION_EXECUTE_SCSI;
         Srb.SrbFlags = SRB_FLAGS_DATA_IN | SRB_FLAGS_DISABLE_SYNCH_TRANSFER;
+#ifdef _M_AMD64
+        /* Reduce timeout on AMD64 to mitigate boot delays when devices don't respond */
+        Srb.TimeOutValue = 1;  /* 1 second instead of 4 */
+        DPRINT1("FdoSendInquiry: [AMD64] Using reduced timeout of 1 second\n");
+#else
         Srb.TimeOutValue = 4;
+        DPRINT1("FdoSendInquiry: [i386] Using standard timeout of 4 seconds\n");
+#endif
         Srb.CdbLength = 6;
 
         Srb.SenseInfoBuffer = SenseBuffer;
@@ -105,12 +116,14 @@ FdoSendInquiry(
         Cdb->CDB6INQUIRY.AllocationLength = INQUIRYDATABUFFERSIZE;
 
         /* Call the driver */
+        KeQuerySystemTime(&StartTime);
+        DPRINT1("FdoSendInquiry: Calling IoCallDriver at time %lld\n", StartTime.QuadPart);
         Status = IoCallDriver(DeviceObject, Irp);
 
         /* Wait for it to complete */
         if (Status == STATUS_PENDING)
         {
-            DPRINT("FdoSendInquiry(): Waiting for the driver to process request...\n");
+            DPRINT1("FdoSendInquiry: Request pending, waiting for completion...\n");
             KeWaitForSingleObject(&Event,
                                   Executive,
                                   KernelMode,
@@ -118,8 +131,14 @@ FdoSendInquiry(
                                   NULL);
             Status = IoStatusBlock.Status;
         }
+        
+        KeQuerySystemTime(&EndTime);
+        ElapsedTime.QuadPart = (EndTime.QuadPart - StartTime.QuadPart) / 10000; /* Convert to milliseconds */
+        DPRINT1("FdoSendInquiry: Request completed after %lld ms with Status=0x%08X\n", 
+            ElapsedTime.QuadPart, Status);
 
-        DPRINT("FdoSendInquiry(): Request processed by driver, status = 0x%08X\n", Status);
+        DPRINT1("FdoSendInquiry: SrbStatus=0x%02X, ScsiStatus=0x%02X\n", 
+            Srb.SrbStatus, Srb.ScsiStatus);
 
         if (SRB_STATUS(Srb.SrbStatus) == SRB_STATUS_SUCCESS)
         {
@@ -134,7 +153,19 @@ FdoSendInquiry(
             continue;
         }
 
-        DPRINT("Inquiry SRB failed with SrbStatus 0x%08X\n", Srb.SrbStatus);
+        DPRINT1("FdoSendInquiry: Inquiry SRB failed with SrbStatus 0x%08X\n", Srb.SrbStatus);
+        
+        /* Log timeout details for debugging */
+        if (SRB_STATUS(Srb.SrbStatus) == SRB_STATUS_SELECTION_TIMEOUT ||
+            SRB_STATUS(Srb.SrbStatus) == SRB_STATUS_COMMAND_TIMEOUT ||
+            SRB_STATUS(Srb.SrbStatus) == SRB_STATUS_TIMEOUT)
+        {
+#ifdef _M_AMD64
+            DPRINT1("FdoSendInquiry: [AMD64] TIMEOUT detected! This is causing boot delays!\n");
+#else
+            DPRINT1("FdoSendInquiry: [i386] TIMEOUT detected!\n");
+#endif
+        }
 
         /* Check if the queue is frozen */
         if (Srb.SrbStatus & SRB_STATUS_QUEUE_FROZEN)
@@ -224,13 +255,15 @@ FdoScanAdapter(
 {
     NTSTATUS status;
     UINT32 totalLUNs = PortExtension->TotalLUCount;
+    LARGE_INTEGER ScanStartTime, ScanEndTime, ElapsedTime;
 
-    DPRINT("FdoScanAdapter() called\n");
+    KeQuerySystemTime(&ScanStartTime);
+    DPRINT1("FdoScanAdapter() called - Starting full adapter scan\n");
 
     /* Scan all buses */
     for (UINT8 pathId = 0; pathId < PortExtension->NumberOfBuses; pathId++)
     {
-        DPRINT("    Scanning bus/pathID %u\n", pathId);
+        DPRINT1("FdoScanAdapter: Scanning bus/pathID %u of %u\n", pathId, PortExtension->NumberOfBuses);
 
         /* Get pointer to the scan information */
         PSCSI_BUS_INFO currentBus = &PortExtension->Buses[pathId];
@@ -351,6 +384,20 @@ FdoScanAdapter(
     }
 
     PortExtension->TotalLUCount = totalLUNs;
+    
+    KeQuerySystemTime(&ScanEndTime);
+    ElapsedTime.QuadPart = (ScanEndTime.QuadPart - ScanStartTime.QuadPart) / 10000;
+    DPRINT1("FdoScanAdapter: Full adapter scan completed in %lld ms, found %u LUNs\n", 
+        ElapsedTime.QuadPart, totalLUNs);
+        
+    if (ElapsedTime.QuadPart > 5000) /* Warn if scan took more than 5 seconds */
+    {
+#ifdef _M_AMD64
+        DPRINT1("FdoScanAdapter: [AMD64] WARNING - Adapter scan took too long (%lld ms)!\n", ElapsedTime.QuadPart);
+#else
+        DPRINT1("FdoScanAdapter: [i386] WARNING - Adapter scan took too long (%lld ms)!\n", ElapsedTime.QuadPart);
+#endif
+    }
 }
 
 /**

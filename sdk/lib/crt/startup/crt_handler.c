@@ -14,6 +14,12 @@
 #define _NTSYSTEM_
 #include <windef.h>
 #include <winbase.h>
+#ifdef _M_ARM64
+#include <internal/arm64/context_compat.h>
+#include <internal/arm64/unwind_stubs.h>
+/* ARM64 uses compact unwind format - EndAddress doesn't exist */
+#define EndAddress UnwindData
+#endif
 
 #if defined (_WIN64) && defined (__ia64__)
 #error FIXME: Unsupported __ImageBase implementation.

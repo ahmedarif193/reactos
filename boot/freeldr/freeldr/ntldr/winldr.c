@@ -12,6 +12,13 @@
 #include "registry.h"
 #include <internal/cmboot.h>
 
+/* Include architecture-specific definitions */
+#if defined(_M_ARM64)
+#ifndef KI_USER_SHARED_DATA
+#define KI_USER_SHARED_DATA     0xFFFF800000000000ULL
+#endif
+#endif
+
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WINDOWS);
 

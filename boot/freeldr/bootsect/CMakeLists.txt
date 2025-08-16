@@ -47,4 +47,21 @@ elseif(ARCH STREQUAL "arm")
     add_custom_target(fat32
         COMMAND exit 1
         COMMENT "arm fat32 target not implemented yet")
+elseif(ARCH STREQUAL "arm64")
+    # ARM64 uses UEFI boot, so we need dummy targets for compatibility
+    add_custom_target(fat
+        COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/fat.bin
+        COMMENT "Creating dummy fat.bin for ARM64")
+    add_custom_target(fat32
+        COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/fat32.bin
+        COMMENT "Creating dummy fat32.bin for ARM64")
+    add_custom_target(isombr
+        COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/isombr.bin
+        COMMENT "Creating dummy isombr.bin for ARM64")
+    add_custom_target(isoboot
+        COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/isoboot.bin
+        COMMENT "Creating dummy isoboot.bin for ARM64")
+    add_custom_target(isobtrt
+        COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/isobtrt.bin
+        COMMENT "Creating dummy isobtrt.bin for ARM64")
 endif()

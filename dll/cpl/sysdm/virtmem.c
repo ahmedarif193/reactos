@@ -50,6 +50,9 @@
 /* Around 4 GB */
     #define MAXIMUM_PAGEFILE_SIZE       MAXIMUM_PAGEFILE_SIZE32
     #endif
+#elif defined(_M_ARM64) || defined(__aarch64__)
+/* ARM64 uses 64-bit addressing */
+    #define MAXIMUM_PAGEFILE_SIZE       MAXIMUM_PAGEFILE_SIZE64
 #else
 /* On unknown architectures, default to either one of the 32 or 64 bit sizes */
 #pragma message("Unknown architecture")

@@ -252,8 +252,10 @@ ENDM
 
 #else /***********************************************************************/
 
-/* Force intel syntax */
+/* Force intel syntax (not for ARM64) */
+#if !defined(_M_ARM64) && !defined(__aarch64__)
 .intel_syntax noprefix
+#endif
 
 /* Put dwarf debug info in the .dwarf_debug section, which will be properly stripped */
 .cfi_sections .debug_frame
@@ -279,9 +281,11 @@ ENDM
 
 /* To avoid reverse syntax we provide a new macro .PROC, replacing PROC... */
 .macro .PROC name
+#if !defined(_M_ARM64) && !defined(__aarch64__)
     .func \name
+#endif
     \name:
-#ifdef _X86_
+#if defined(_X86_) || defined(_M_ARM64) || defined(__aarch64__)
     .cfi_startproc
 #else
     .seh_proc \name
@@ -291,12 +295,14 @@ ENDM
 
 /* ... and .ENDP, replacing ENDP */
 .macro .ENDP
-#ifdef _X86_
+#if defined(_X86_) || defined(_M_ARM64) || defined(__aarch64__)
     .cfi_endproc
 #else
     .seh_endproc
 #endif
+#if !defined(_M_ARM64) && !defined(__aarch64__)
     .endfunc
+#endif
 .endm
 #define ENDFUNC .ENDP
 

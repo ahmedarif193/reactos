@@ -116,10 +116,15 @@ RegisterToTrapFrame[] =
     /* FIXME: X86 only */
 #ifdef _M_IX86
     {"eip",     FIELD_OFFSET(KDB_KTRAP_FRAME, Eip),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Eip)},
+    {"eflags",  FIELD_OFFSET(KDB_KTRAP_FRAME, EFlags),  RTL_FIELD_SIZE(KDB_KTRAP_FRAME, EFlags)},
+#elif defined(_M_ARM64) || defined(_ARM64_)
+    {"pc",      FIELD_OFFSET(KDB_KTRAP_FRAME, Pc),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Pc)},
+    /* KDB_KTRAP_FRAME is typedef'd to CONTEXT which uses Cpsr */
+    {"cpsr",    FIELD_OFFSET(KDB_KTRAP_FRAME, Cpsr),    RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Cpsr)},
 #else
     {"rip",     FIELD_OFFSET(KDB_KTRAP_FRAME, Rip),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rip)},
-#endif
     {"eflags",  FIELD_OFFSET(KDB_KTRAP_FRAME, EFlags),  RTL_FIELD_SIZE(KDB_KTRAP_FRAME, EFlags)},
+#endif
 #ifdef _M_IX86
     {"eax",     FIELD_OFFSET(KDB_KTRAP_FRAME, Eax),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Eax)},
     {"ebx",     FIELD_OFFSET(KDB_KTRAP_FRAME, Ebx),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Ebx)},
@@ -129,6 +134,14 @@ RegisterToTrapFrame[] =
     {"edi",     FIELD_OFFSET(KDB_KTRAP_FRAME, Edi),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Edi)},
     {"esp",     FIELD_OFFSET(KDB_KTRAP_FRAME, Esp),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Esp)},
     {"ebp",     FIELD_OFFSET(KDB_KTRAP_FRAME, Ebp),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Ebp)},
+#elif defined(_M_ARM64) || defined(_ARM64_)
+    {"x0",      FIELD_OFFSET(KDB_KTRAP_FRAME, X0),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, X0)},
+    {"x1",      FIELD_OFFSET(KDB_KTRAP_FRAME, X1),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, X1)},
+    {"x2",      FIELD_OFFSET(KDB_KTRAP_FRAME, X2),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, X2)},
+    {"x3",      FIELD_OFFSET(KDB_KTRAP_FRAME, X3),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, X3)},
+    {"sp",      FIELD_OFFSET(KDB_KTRAP_FRAME, Sp),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Sp)},
+    {"fp",      FIELD_OFFSET(KDB_KTRAP_FRAME, Fp),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Fp)},
+    {"lr",      FIELD_OFFSET(KDB_KTRAP_FRAME, Lr),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Lr)},
 #else
     {"rax",     FIELD_OFFSET(KDB_KTRAP_FRAME, Rax),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rax)},
     {"rbx",     FIELD_OFFSET(KDB_KTRAP_FRAME, Rbx),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rbx)},
@@ -139,6 +152,7 @@ RegisterToTrapFrame[] =
     {"rsp",     FIELD_OFFSET(KDB_KTRAP_FRAME, Rsp),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rsp)},
     {"rbp",     FIELD_OFFSET(KDB_KTRAP_FRAME, Rbp),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rbp)},
 #endif
+#if defined(_M_IX86) || defined(_M_AMD64)
     {"cs",      FIELD_OFFSET(KDB_KTRAP_FRAME, SegCs),      2 }, /* Use only the lower 2 bytes */
     {"ds",      FIELD_OFFSET(KDB_KTRAP_FRAME, SegDs),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, SegDs)},
     {"es",      FIELD_OFFSET(KDB_KTRAP_FRAME, SegEs),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, SegEs)},
@@ -151,6 +165,7 @@ RegisterToTrapFrame[] =
     {"dr3",     FIELD_OFFSET(KDB_KTRAP_FRAME, Dr3),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Dr3)},
     {"dr6",     FIELD_OFFSET(KDB_KTRAP_FRAME, Dr6),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Dr6)},
     {"dr7",     FIELD_OFFSET(KDB_KTRAP_FRAME, Dr7),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Dr7)}
+#endif
 };
 static const INT RegisterToTrapFrameCount = sizeof (RegisterToTrapFrame) / sizeof (RegisterToTrapFrame[0]);
 

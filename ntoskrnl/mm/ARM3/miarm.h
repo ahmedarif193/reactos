@@ -150,6 +150,33 @@ C_ASSERT(SYSTEM_PD_SIZE == PAGE_SIZE);
 #define PTE_DISABLE_CACHE       0x10
 #define PTE_WRITECOMBINED_CACHE 0x10
 #define PTE_PROTECT_MASK        0x610
+#elif defined(_M_ARM64)
+//
+// Access Flags for ARM64
+//
+#define PTE_READONLY            0x0800000000000000ULL
+#define PTE_EXECUTE             0x0000000000000000ULL
+#define PTE_EXECUTE_READ        PTE_EXECUTE /* EXECUTE implies READ on ARM64 */
+#define PTE_READWRITE           0x0800000000000080ULL
+#define PTE_WRITECOPY           0x0800000000008000ULL
+#define PTE_EXECUTE_READWRITE   0x0000000000000080ULL
+#define PTE_EXECUTE_WRITECOPY   0x0000000000008000ULL
+#define PTE_PROTOTYPE           0x0000000000000400ULL
+
+//
+// State Flags
+//
+#define PTE_VALID               0x0000000000000001ULL
+#define PTE_ACCESSED            0x0000000000000400ULL
+#define PTE_DIRTY               0x0000000000000080ULL
+
+//
+// Cache flags for ARM64
+//
+#define PTE_ENABLE_CACHE        0x0000000000000000ULL
+#define PTE_DISABLE_CACHE       0x0000000000001000ULL
+#define PTE_WRITECOMBINED_CACHE 0x0000000000001000ULL
+#define PTE_PROTECT_MASK        0x0800000000009480ULL
 #else
 #error Define these please!
 #endif
@@ -849,7 +876,7 @@ MI_MAKE_HARDWARE_PTE_USER(IN PMMPTE NewPte,
     NewPte->u.Long |= MmProtectToPteMask[ProtectionMask];
 }
 
-#ifndef _M_AMD64
+#if !defined(_M_AMD64) && !defined(_M_ARM64)
 //
 // Builds a Prototype PTE for the address of the PTE
 //

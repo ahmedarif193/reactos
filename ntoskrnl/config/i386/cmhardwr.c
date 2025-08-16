@@ -404,6 +404,14 @@ CmpInitializeMachineDependentConfiguration(IN PLOADER_PARAMETER_BLOCK LoaderBloc
                     Prcb->CpuType,
                     (Prcb->CpuStep >> 8),
                     Prcb->CpuStep & 0xff);
+#elif defined(_M_ARM64) || defined(__aarch64__)
+            /* ARM64 family */
+            sprintf(Buffer,
+                    "%s Family %u Model %u Stepping %u",
+                    "ARM64",
+                    Prcb->CpuType,
+                    (Prcb->CpuStep >> 8),
+                    Prcb->CpuStep & 0xff);
 #else
 #error Unknown architecture
 #endif

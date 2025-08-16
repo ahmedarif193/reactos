@@ -11,6 +11,10 @@ elseif(ARCH STREQUAL "arm")
     list(APPEND LIBCNTPR_SETJMP_ASM_SOURCE
         setjmp/arm/setjmp.s
     )
+elseif(ARCH STREQUAL "arm64")
+    list(APPEND LIBCNTPR_SETJMP_ASM_SOURCE
+        setjmp/arm64/setjmp.S
+    )
 endif()
 
 list(APPEND CRT_SETJMP_ASM_SOURCE

@@ -46,10 +46,19 @@ MachHwDetect(_In_opt_ PCSTR Options)
     return MachVtbl.HwDetect(Options);
 }
 
+#ifndef __aarch64__
 VOID MachPrepareForReactOS(VOID)
 {
     MachVtbl.PrepareForReactOS();
 }
+#else
+/* ARM64 has its own implementation in ntldr/arch/arm64/winldr.c */
+__attribute__((weak))
+VOID MachPrepareForReactOS(VOID)
+{
+    /* This is overridden by the ARM64 specific version */
+}
+#endif
 
 VOID MachGetExtendedBIOSData(PULONG ExtendedBIOSDataArea, PULONG ExtendedBIOSDataSize)
 {

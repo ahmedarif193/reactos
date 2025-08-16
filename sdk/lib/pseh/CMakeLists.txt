@@ -10,6 +10,9 @@ elseif(ARCH STREQUAL "amd64")
 elseif(ARCH STREQUAL "arm")
     list(APPEND ASM_SOURCE
         arm/seh_prolog.s)
+elseif(ARCH STREQUAL "arm64")
+    # ARM64 doesn't use PSEH, just provide a dummy
+    list(APPEND SOURCE dummy.c)
 endif()
 
 if(MSVC OR ((CMAKE_C_COMPILER_ID STREQUAL "Clang") AND (ARCH STREQUAL "amd64")))
@@ -30,10 +33,15 @@ elseif((CMAKE_C_COMPILER_ID STREQUAL "GNU") AND (ARCH STREQUAL "amd64"))
 else()
 
     if(USE_PSEH3)
-        include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/pseh)
-        list(APPEND SOURCE
-            i386/pseh3.c
-            i386/pseh3_i386.S)
+        if(ARCH STREQUAL "arm64")
+            # ARM64 doesn't support PSEH3, use dummy
+            list(APPEND SOURCE dummy.c)
+        else()
+            include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/pseh)
+            list(APPEND SOURCE
+                i386/pseh3.c
+                i386/pseh3_i386.S)
+        endif()
     elseif(USE_DUMMY_PSEH)
         list(APPEND SOURCE dummy.c)
     elseif(ARCH STREQUAL "i386")
@@ -43,6 +51,9 @@ else()
             i386/framebased-gcchack-asm.S)
     elseif(ARCH STREQUAL "amd64")
         list(APPEND SOURCE amd64/framebased.S)
+    elseif(ARCH STREQUAL "arm64")
+        # ARM64 uses standard unwinding, no PSEH needed
+        list(APPEND SOURCE dummy.c)
     endif()
 
     add_library(pseh ${SOURCE} ${ASM_SOURCE})

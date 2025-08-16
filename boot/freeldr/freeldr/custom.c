@@ -553,9 +553,14 @@ EditCustomBootReactOS(
         return;
 
     /* Construct the ReactOS ARC system path */
+#if defined(_M_IX86) || defined(_M_AMD64)
     ConstructArcPath(ReactOSARCPath, ReactOSSystemPath,
                      DriveMapGetBiosDriveNumber(BootDriveString),
                      atoi(BootPartitionString));
+#else
+    /* For ARM64, use a simple path construction */
+    RtlStringCbCopyA(ReactOSARCPath, sizeof(ReactOSARCPath), ReactOSSystemPath);
+#endif
 
     /* Add the system path */
     if (!IniAddSettingValueToSection(SectionId, "SystemPath", ReactOSARCPath))

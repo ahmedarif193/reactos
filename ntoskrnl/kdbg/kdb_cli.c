@@ -48,6 +48,16 @@
                    ((type) == KdbAccessWrite ? "write" :                  \
                    ((type) == KdbAccessReadWrite ? "rdwr" : "exec")))
 
+#if defined(_M_ARM64) || defined(_ARM64_)
+/* ARM64 doesn't have NPX states, define dummy values */
+#define NPX_STATE_NOT_LOADED 0
+#define NPX_STATE_LOADED 1
+
+/* ARM64 doesn't have GDT/LDT, provide stubs */
+#define Ke386GetGlobalDescriptorTable(Reg) ((void)0)
+#define Ke386GetLocalDescriptorTable(Reg) ((void)0)
+#endif
+
 #define NPX_STATE_TO_STRING(state)                                        \
                    ((state) == NPX_STATE_LOADED ? "Loaded" :              \
                    ((state) == NPX_STATE_NOT_LOADED ? "Not loaded" : "Unknown"))
@@ -948,6 +958,17 @@ KdbpCmdRegs(
                   Context->Ecx, Context->Edx,
                   Context->Esi, Context->Edi,
                   Context->Ebp);
+#elif defined(_M_ARM64) || defined(_ARM64_)
+        KdbpPrint("    PC  0x%p\n"
+                  "    SP  0x%p\n"
+                  "    X0  0x%p      X1  0x%p\n"
+                  "    X2  0x%p      X3  0x%p\n"
+                  "    FP  0x%p      LR  0x%p\n",
+                  Context->Pc,
+                  Context->Sp,
+                  Context->X0, Context->X1,
+                  Context->X2, Context->X3,
+                  Context->Fp, Context->Lr);
 #else
         KdbpPrint("CS:RIP  0x%04x:0x%p\n"
                   "SS:RSP  0x%04x:0x%p\n"
@@ -962,7 +983,16 @@ KdbpCmdRegs(
                   Context->Rsi, Context->Rdi,
                   Context->Rbp);
 #endif
-        /* Display the EFlags */
+        /* Display the EFlags/CPSR */
+#if defined(_M_ARM64) || defined(_ARM64_)
+        KdbpPrint("CPSR  0x%08x ", Context->Cpsr);
+        /* ARM64 CPSR bits: N Z C V ... */
+        if (Context->Cpsr & (1 << 31)) KdbpPrint(" N");
+        if (Context->Cpsr & (1 << 30)) KdbpPrint(" Z");
+        if (Context->Cpsr & (1 << 29)) KdbpPrint(" C");
+        if (Context->Cpsr & (1 << 28)) KdbpPrint(" V");
+        KdbpPrint("\n");
+#else
         KdbpPrint("EFLAGS  0x%08x ", Context->EFlags);
         for (i = 0; i < 32; i++)
         {
@@ -984,6 +1014,7 @@ KdbpCmdRegs(
             }
         }
         KdbpPrint("\n");
+#endif
     }
     else if (Argv[0][0] == 'c') /* cregs */
     {
@@ -1008,6 +1039,9 @@ KdbpCmdRegs(
         Input.Request = sizeof(SpecialRegisters);
 #ifdef _M_IX86
         Input.Address = sizeof(CONTEXT);
+#elif defined(_M_ARM64) || defined(_ARM64_)
+        /* ARM64 doesn't use the same control register scheme */
+        Input.Address = 0;
 #else
         Input.Address = AMD64_DEBUG_CONTROL_SPACE_KSPECIAL;
 #endif
@@ -1020,6 +1054,14 @@ KdbpCmdRegs(
             KdbpPrint("Failed to get registers: status 0x%08x\n", Status);
             return TRUE;
         }
+#if defined(_M_ARM64) || defined(_ARM64_)
+        /* ARM64 has different system registers */
+        KdbpPrint("ARM64 System Registers:\n");
+        KdbpPrint("ELR_EL1: 0x%p\n", SpecialRegisters.Elr_El1);
+        KdbpPrint("SPSR_EL1: 0x%08x\n", SpecialRegisters.Spsr_El1);
+        KdbpPrint("TPIDR_EL0: 0x%p\n", SpecialRegisters.Tpidr_El0);
+        KdbpPrint("TPIDR_EL1: 0x%p\n", SpecialRegisters.Tpidr_El1);
+#else
         Cr0 = SpecialRegisters.Cr0;
         Cr2 = SpecialRegisters.Cr2;
         Cr3 = SpecialRegisters.Cr3;
@@ -1062,9 +1104,13 @@ KdbpCmdRegs(
         KdbpPrint("LDTR 0x%04x\n", Ldtr);
         KdbpPrint("IDTR Base 0x%08x  Size 0x%04x\n", Idtr.Base, Idtr.Limit);
         KdbpPrint("TR   0x%04x\n", Tr);
+#endif /* !ARM64 */
     }
     else if (Argv[0][0] == 's') /* sregs */
     {
+#if defined(_M_ARM64) || defined(_ARM64_)
+        KdbpPrint("ARM64 does not have segment registers\n");
+#else
         KdbpPrint("CS  0x%04x  Index 0x%04x  %cDT RPL%d\n",
                   Context->SegCs & 0xffff, (Context->SegCs & 0xffff) >> 3,
                   (Context->SegCs & (1 << 2)) ? 'L' : 'G', Context->SegCs & 3);
@@ -1078,10 +1124,17 @@ KdbpCmdRegs(
                   Context->SegGs, Context->SegGs >> 3, (Context->SegGs & (1 << 2)) ? 'L' : 'G', Context->SegGs & 3);
         KdbpPrint("SS  0x%04x  Index 0x%04x  %cDT RPL%d\n",
                   Context->SegSs, Context->SegSs >> 3, (Context->SegSs & (1 << 2)) ? 'L' : 'G', Context->SegSs & 3);
+#endif
     }
     else /* dregs */
     {
         ASSERT(Argv[0][0] == 'd');
+#if defined(_M_ARM64) || defined(_ARM64_)
+        KdbpPrint("ARM64 debug registers:\n");
+        /* ARM64 has hardware breakpoint/watchpoint registers */
+        KdbpPrint("Breakpoint registers (BVR): %d available\n", ARM64_MAX_BREAKPOINTS);
+        KdbpPrint("Watchpoint registers (WVR): %d available\n", ARM64_MAX_WATCHPOINTS);
+#else
         KdbpPrint("DR0  0x%08x\n"
                   "DR1  0x%08x\n"
                   "DR2  0x%08x\n"
@@ -1090,6 +1143,7 @@ KdbpCmdRegs(
                   "DR7  0x%08x\n",
                   Context->Dr0, Context->Dr1, Context->Dr2, Context->Dr3,
                   Context->Dr6, Context->Dr7);
+#endif
     }
 
     return TRUE;
@@ -2441,6 +2495,17 @@ KdbpCmdPcr(
               , Pcr->VdmAlert
               , Pcr->SecondLevelCacheSize
               , Pcr->InterruptMode);
+#elif defined(_M_ARM64) || defined(_ARM64_)
+    /* ARM64 PCR fields */
+    KdbpPrint("  Self:                          0x%p\n", Pcr->Self);
+    KdbpPrint("  Prcb:                          0x%p\n", Pcr->Prcb);
+    KdbpPrint("  CurrentIrql:                   %u\n", Pcr->CurrentIrql);
+    KdbpPrint("  SecondLevelCacheAssociativity: 0x%u\n", Pcr->SecondLevelCacheAssociativity);
+    KdbpPrint("  MajorVersion:                  0x%x\n", Pcr->MajorVersion);
+    KdbpPrint("  MinorVersion:                  0x%x\n", Pcr->MinorVersion);
+    KdbpPrint("  StallScaleFactor:              0x%x\n", Pcr->StallScaleFactor);
+    KdbpPrint("  SecondLevelCacheSize:          0x%x\n", Pcr->SecondLevelCacheSize);
+    KdbpPrint("  KdVersionBlock:                0x%p\n", Pcr->KdVersionBlock);
 #else
     KdbpPrint("  GdtBase:                       0x%p\n", Pcr->GdtBase);
     KdbpPrint("  TssBase:                       0x%p\n", Pcr->TssBase);

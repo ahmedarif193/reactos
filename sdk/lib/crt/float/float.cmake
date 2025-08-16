@@ -47,4 +47,8 @@ elseif(ARCH STREQUAL "arm")
         float/arm/__getfp.s
         float/arm/__setfp.s
     )
+elseif(ARCH STREQUAL "arm64")
+    list(APPEND CRT_FLOAT_SOURCE
+        float/arm64/float_stubs.c
+    )
 endif()

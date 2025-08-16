@@ -338,6 +338,9 @@ IopDisplayLoadingMessage(
     static const UNICODE_STRING DotSys = RTL_CONSTANT_STRING(L".SYS");
     CHAR TextBuffer[256];
 
+    /* Always log driver loading with timestamps */
+    DPRINT1("Loading driver: %wZ\n", ServiceName);
+    
     if (!SosEnabled) return;
     if (!KeLoaderBlock) return;
     RtlStringCbPrintfA(TextBuffer, sizeof(TextBuffer),
@@ -2050,6 +2053,7 @@ IopLoadDriver(
     }
 
     NTSTATUS driverEntryStatus;
+    DPRINT1("Calling IopInitializeDriverModule for driver\n");
     Status = IopInitializeDriverModule(ModuleObject,
                                        ServiceHandle,
                                        DriverObject,
@@ -2057,6 +2061,10 @@ IopLoadDriver(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("IopInitializeDriverModule() failed (Status %lx)\n", Status);
+    }
+    else
+    {
+        DPRINT1("Driver loaded successfully\n");
     }
 
     ExReleaseResourceLite(&IopDriverLoadResource);

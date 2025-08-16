@@ -18,12 +18,21 @@ else()
 endif()
 
 if(DEFINED EFI_PLATFORM_ID)
-    add_custom_target(efisys
-        COMMAND native-fatten ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin -format 2880 EFIBOOT
-            -boot ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/fat.bin
-            -mkdir EFI -mkdir EFI/BOOT -add $<TARGET_FILE:uefildr> EFI/BOOT/boot${EFI_PLATFORM_ID}.efi
-        DEPENDS native-fatten fat uefildr
-        VERBATIM)
+    if(ARCH STREQUAL "arm64")
+        # ARM64 UEFI doesn't need a boot sector
+        add_custom_target(efisys
+            COMMAND native-fatten ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin -format 2880 EFIBOOT
+                -mkdir EFI -mkdir EFI/BOOT -add $<TARGET_FILE:uefildr> EFI/BOOT/boot${EFI_PLATFORM_ID}.efi
+            DEPENDS native-fatten uefildr
+            VERBATIM)
+    else()
+        add_custom_target(efisys
+            COMMAND native-fatten ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin -format 2880 EFIBOOT
+                -boot ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/fat.bin
+                -mkdir EFI -mkdir EFI/BOOT -add $<TARGET_FILE:uefildr> EFI/BOOT/boot${EFI_PLATFORM_ID}.efi
+            DEPENDS native-fatten fat uefildr
+            VERBATIM)
+    endif()
 endif()
 
 # ISO image EFI boot parameters

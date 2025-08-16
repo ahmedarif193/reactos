@@ -860,7 +860,16 @@ ScsiPortInitialize(
 
     PCM_RESOURCE_LIST ResourceList;
 
-    DPRINT("ScsiPortInitialize() called!\n");
+    DPRINT1("ScsiPortInitialize() called for driver at %p!\n", DriverObject);
+    
+    /* Log timing info to debug boot delays */
+    LARGE_INTEGER SystemTime;
+    KeQuerySystemTime(&SystemTime);
+#ifdef _M_AMD64
+    DPRINT1("ScsiPortInitialize: [AMD64] Starting at system time %lld\n", SystemTime.QuadPart);
+#else
+    DPRINT1("ScsiPortInitialize: [i386] Starting at system time %lld\n", SystemTime.QuadPart);
+#endif
 
     /* Check params for validity */
     if ((HwInitializationData->HwInitialize == NULL) ||
@@ -1117,13 +1126,80 @@ CreatePortConfig:
 
         /* Note: HwFindAdapter is called once for each bus */
         Again = FALSE;
-        DPRINT("Calling HwFindAdapter() for Bus %lu\n", PortConfig->SystemIoBusNumber);
-        Result = (HwInitializationData->HwFindAdapter)(
-            &DeviceExtension->MiniPortDeviceExtension, HwContext, 0, /* BusInformation */
-            ConfigInfo.Parameter,                                    /* ArgumentString */
-            PortConfig, &Again);
+        DPRINT1("Calling HwFindAdapter() for Bus %lu\n", PortConfig->SystemIoBusNumber);
+        
+        LARGE_INTEGER StartTime, EndTime;
+        KeQuerySystemTime(&StartTime);
+        
+        /* Log driver name if we can determine it */
+        if (DeviceExtension && DriverObject)
+        {
+            UNICODE_STRING driverName = DriverObject->DriverName;
+            if (driverName.Buffer)
+            {
+                DPRINT1("HwFindAdapter: Driver is %wZ\n", &driverName);
+            }
+        }
+        
+#ifdef _M_AMD64
+        /* WORKAROUND: Limit uniata driver delays on AMD64 */
+        /* The uniata driver takes 9 seconds per HwFindAdapter call on AMD64 */
+        /* We need to let it detect at least the primary controller for boot disk */
+        /* But we'll skip subsequent attempts to save time */
+        static ULONG UniataCallCount = 0;
+        BOOLEAN IsUniata = FALSE;
+        
+        if (DriverObject && DriverObject->DriverName.Buffer)
+        {
+            UNICODE_STRING UniataName = RTL_CONSTANT_STRING(L"\\Driver\\UniATA");
+            UNICODE_STRING UniataName2 = RTL_CONSTANT_STRING(L"\\Driver\\uniata");
+            if (RtlCompareUnicodeString(&DriverObject->DriverName, &UniataName, TRUE) == 0 ||
+                RtlCompareUnicodeString(&DriverObject->DriverName, &UniataName2, TRUE) == 0)
+            {
+                IsUniata = TRUE;
+                UniataCallCount++;
+                DPRINT1("HwFindAdapter: Detected UNIATA driver (call #%lu)\n", UniataCallCount);
+                
+                /* Allow first 2 calls to succeed (primary and secondary IDE controller) */
+                /* Skip the rest to avoid the 9-second delays */
+                if (UniataCallCount > 2)
+                {
+                    DPRINT1("HwFindAdapter: [AMD64] Skipping additional uniata calls (call #%lu) to save time\n", 
+                        UniataCallCount);
+                    Result = SP_RETURN_NOT_FOUND;
+                    Again = FALSE;
+                    goto SkipFindAdapter;
+                }
+                else
+                {
+                    DPRINT1("HwFindAdapter: [AMD64] Allowing uniata call #%lu (needed for boot disk)\n", 
+                        UniataCallCount);
+                    /* Let it run but warn about the delay */
+                    DPRINT1("HwFindAdapter: [AMD64] WARNING - This will take ~9 seconds...\n");
+                }
+            }
+        }
+#endif
+            Result = (HwInitializationData->HwFindAdapter)(
+                &DeviceExtension->MiniPortDeviceExtension, HwContext, 0, /* BusInformation */
+                ConfigInfo.Parameter,                                    /* ArgumentString */
+                PortConfig, &Again);
+#ifdef _M_AMD64
+SkipFindAdapter:
+#endif
 
-        DPRINT("HwFindAdapter() Result: %lu  Again: %s\n", Result, (Again) ? "True" : "False");
+        KeQuerySystemTime(&EndTime);
+        LONGLONG ElapsedMs = (EndTime.QuadPart - StartTime.QuadPart) / 10000;
+        DPRINT1("HwFindAdapter() completed in %lld ms with Result: %lu  Again: %s\n", 
+            ElapsedMs, Result, (Again) ? "True" : "False");
+        if (ElapsedMs > 1000) /* Warn if it took more than 1 second */
+        {
+#ifdef _M_AMD64
+            DPRINT1("HwFindAdapter: [AMD64] WARNING - FindAdapter took %lld ms!\n", ElapsedMs);
+#else
+            DPRINT1("HwFindAdapter: [i386] WARNING - FindAdapter took %lld ms!\n", ElapsedMs);
+#endif
+        }
 
         /* Free MapRegisterBase, it's not needed anymore */
         if (DeviceExtension->MapRegisterBase != NULL)

@@ -94,6 +94,12 @@
    offsets anymore. */
 #define IsPointerOffset(Ptr)  (((ULONG_PTR)(Ptr) & 0xFFFFFF0000000000ULL) == 0)
 
+#elif defined(_M_ARM64) || defined(__aarch64__)
+
+/* ARM64 uses 48-bit virtual addresses, kernel space starts at 0xFFFF000000000000
+   so we test if the top 16 bits are not all set */
+#define IsPointerOffset(Ptr) ((LONG_PTR)(Ptr) >= 0)
+
 #else
 #error IsPointerOffset() needs to be defined for this architecture
 #endif

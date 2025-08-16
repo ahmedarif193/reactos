@@ -23,6 +23,11 @@ elseif(ARCH STREQUAL "arm")
     list(APPEND SOURCE
         arm/arm.h
         arm/bootvid.c)
+elseif(ARCH STREQUAL "arm64")
+    # ARM64 can reuse ARM implementation for now
+    list(APPEND SOURCE
+        arm/arm.h
+        arm/bootvid.c)
 endif()
 
 list(APPEND SOURCE

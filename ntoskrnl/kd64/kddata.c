@@ -53,6 +53,16 @@ VOID NTAPI RtlpBreakWithStatusInstruction(VOID);
 #define KPRCB_PCR_PAGE_OFFSET          FIELD_OFFSET(KPRCB, PcrPage)
 #define CBSTACK_FRAME_POINTER          DummyFramePointer
 
+#elif defined(_M_ARM64) || defined(_ARM64_)
+
+#define KPCR_SELF_PCR_OFFSET           0x18
+#define KPCR_CURRENT_PRCB_OFFSET       0x20
+#define KPCR_CONTAINED_PRCB_OFFSET     0x180
+#define KPCR_INITIAL_STACK_OFFSET      0x08
+#define KPCR_STACK_LIMIT_OFFSET        0x10
+#define KPRCB_PCR_PAGE_OFFSET          0x18
+#define CBSTACK_FRAME_POINTER          Fp
+
 #else
 #error Unsupported Architecture
 #endif

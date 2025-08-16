@@ -26,6 +26,8 @@
 #endif
 #elif defined(_M_ARM)
 #include "arm/arm.h"
+#elif defined(_M_ARM64) || defined(__aarch64__)
+#include "arm/arm.h" /* ARM64 uses similar video setup as ARM */
 #else
 #error Unknown architecture
 #endif

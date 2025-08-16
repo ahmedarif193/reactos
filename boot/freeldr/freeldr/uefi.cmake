@@ -12,7 +12,12 @@ include_directories(BEFORE
     ${REACTOS_SOURCE_DIR}/boot/freeldr/freeldr/include/arch/uefi)
 
 list(APPEND UEFILDR_ARC_SOURCE
-    ${FREELDR_ARC_SOURCE}
+    arcname.c
+    arch/arcemul.c
+    arch/archwsup.c
+    disk/disk.c
+    disk/partition.c
+    disk/ramdisk.c
     arch/uefi/stubs.c
     arch/uefi/ueficon.c
     arch/uefi/uefidisk.c
@@ -32,13 +37,20 @@ if(ARCH STREQUAL "i386")
 elseif(ARCH STREQUAL "amd64")
     list(APPEND UEFILDR_COMMON_ASM_SOURCE
         arch/uefi/amd64/uefiasm.S)
+    list(APPEND UEFILDR_ARC_SOURCE
+        arch/amd64/amd64bug.c)
 elseif(ARCH STREQUAL "arm")
     list(APPEND UEFILDR_ARC_SOURCE
         arch/arm/macharm.c
         arch/arm/debug.c)
     #TBD
 elseif(ARCH STREQUAL "arm64")
-    #TBD
+    list(APPEND UEFILDR_COMMON_ASM_SOURCE
+        arch/uefi/arm64/uefiasm.S)
+    list(APPEND UEFILDR_ARC_SOURCE
+        arch/arm64/mmu_v2.c
+        arch/arm64/timer.c
+        arch/arm64/trap.c)
 else()
     #TBD
 endif()
@@ -62,8 +74,10 @@ add_library(uefifreeldr_common
 target_compile_definitions(uefifreeldr_common PRIVATE UEFIBOOT)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    # Prevent using SSE (no support in freeldr)
-    target_compile_options(uefifreeldr_common PUBLIC -mno-sse)
+    # Prevent using SSE (no support in freeldr) - only for x86/x64
+    if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+        target_compile_options(uefifreeldr_common PUBLIC -mno-sse)
+    endif()
 endif()
 
 set(PCH_SOURCE
@@ -135,7 +149,13 @@ if(ARCH STREQUAL "i386")
     target_link_libraries(uefildr mini_hal)
 endif()
 
-target_link_libraries(uefildr uefifreeldr_common cportlib blcmlib blrtl libcntpr)
+# For ARM64, we need __chkstk available for blcmlib
+if(ARCH STREQUAL "arm64")
+    add_library(chkstk_arm64 STATIC arch/arm64/chkstk.S)
+    target_link_libraries(uefildr uefifreeldr_common cportlib blcmlib chkstk_arm64 blrtl libcntpr chkstk_arm64)
+else()
+    target_link_libraries(uefildr uefifreeldr_common cportlib blcmlib blrtl libcntpr)
+endif()
 
 # dynamic analysis switches
 if(STACK_PROTECTOR)

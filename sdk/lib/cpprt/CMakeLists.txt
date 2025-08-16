@@ -20,6 +20,13 @@ if(MSVC)
 else()
     list(APPEND SOURCE
         __cxa_pure_virtual.cpp)
+    
+    # Add ARM64 C++ runtime stubs
+    if(ARCH STREQUAL "arm64")
+        list(APPEND SOURCE 
+            arm64/cpprt_stubs.c
+            arm64/cppnew.cpp)
+    endif()
 endif()
 
 add_library(cpprt ${SOURCE} ${cpprt_asm})
@@ -28,5 +35,8 @@ add_dependencies(cpprt xdk)
 
 # On GCC builds, we need to link against libsupc++
 if(NOT MSVC)
-    target_link_libraries(cpprt libsupc++)
+    # ARM64 doesn't have libsupc++, skip linking for now
+    if(NOT ARCH STREQUAL "arm64")
+        target_link_libraries(cpprt libsupc++)
+    endif()
 endif()

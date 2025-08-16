@@ -48,6 +48,9 @@ static const ULONG BaseArray[] = {0, 0x800003F8};
 static const ULONG BaseArray[] = {0, 0x80006000, 0x80007000};
 #elif defined(_M_ARM)
 static const ULONG BaseArray[] = {0, 0xF1012000};
+#elif defined(_M_ARM64) || defined(__aarch64__)
+/* For ARM64, we need to define UART base addresses */
+static const ULONG BaseArray[] = {0, 0x09000000}; /* PL011 UART base for ARM64 */
 #else
 #error Unknown architecture
 #endif

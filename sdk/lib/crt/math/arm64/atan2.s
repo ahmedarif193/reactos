@@ -1,16 +1,15 @@
 
 /* INCLUDES ******************************************************************/
 
-/* We need one of these first! */
-/* #include <kxarm64.h> */
-
 /* CODE **********************************************************************/
 
-    TEXTAREA
+    .text
+    .align 2
 
-    LEAF_ENTRY atan2
-    /* TODO: add an assert fail call, as this is unimplemented */
-    LEAF_END atan2
+    .global atan2
+atan2:
+    /* Stub implementation - infinite loop for now */
+    /* TODO: Implement proper atan2 for ARM64 */
+1:  b 1b
 
-    END
 /* EOF */

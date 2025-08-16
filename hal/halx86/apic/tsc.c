@@ -11,7 +11,8 @@
 #include <hal.h>
 #include "tsc.h"
 #include "apicp.h"
-#define NDEBUG
+/* Enable debugging to track timing issues */
+#undef NDEBUG
 #include <debug.h>
 
 LARGE_INTEGER HalpCpuClockFrequency = {{INITIAL_STALL_COUNT * 1000000}};
@@ -109,6 +110,21 @@ HalpInitializeTsc(VOID)
     /* Calculate an average, using simplified linear regression */
     HalpCpuClockFrequency.QuadPart = DoLinearRegression(NUM_SAMPLES - 1,
                                                         TscCalibrationArray);
+    
+    /* Debug: Log the calibration samples */
+    DPRINT1("HalpInitializeTsc: Calibration samples (TSC values at 1024Hz intervals):\n");
+    for (ULONG i = 0; i < NUM_SAMPLES; i++)
+    {
+        DPRINT1("  Sample[%lu] = %llu cycles\n", i, TscCalibrationArray[i]);
+        if (i > 0)
+        {
+            ULONG64 Delta = TscCalibrationArray[i] - TscCalibrationArray[i-1];
+            DPRINT1("    Delta from previous = %llu cycles (~%llu Hz)\n", 
+                    Delta, Delta * SAMPLE_FREQUENCY);
+        }
+    }
+    DPRINT1("HalpInitializeTsc: Calculated CPU frequency = %lld Hz\n", 
+            HalpCpuClockFrequency.QuadPart);
 
     /* Restore flags */
     __writeeflags(Flags);
@@ -119,11 +135,45 @@ VOID
 NTAPI
 HalpCalibrateStallExecution(VOID)
 {
+    ULONG StallFactor;
+    
     // Timer interrupt is now active
+    DPRINT1("HalpCalibrateStallExecution: Starting TSC calibration...\n");
 
     HalpInitializeTsc();
 
-    KeGetPcr()->StallScaleFactor = (ULONG)(HalpCpuClockFrequency.QuadPart / 1000000);
+    StallFactor = (ULONG)(HalpCpuClockFrequency.QuadPart / 1000000);
+    KeGetPcr()->StallScaleFactor = StallFactor;
+    
+    /* Log the calibration results */
+    DPRINT1("HalpCalibrateStallExecution: CPU Frequency = %lld Hz\n", HalpCpuClockFrequency.QuadPart);
+    DPRINT1("HalpCalibrateStallExecution: StallScaleFactor = %lu (cycles per microsecond)\n", StallFactor);
+    
+    /* Sanity check - typical modern CPUs run at 1-4 GHz */
+    if (StallFactor < 100 || StallFactor > 10000)
+    {
+        DPRINT1("HalpCalibrateStallExecution: WARNING - Suspicious StallScaleFactor %lu!\n", StallFactor);
+        DPRINT1("HalpCalibrateStallExecution: Expected range is 100-10000 for 0.1-10 GHz CPUs\n");
+        
+        /* If calibration failed badly, use a reasonable default (2 GHz) */
+        if (StallFactor < 10 || StallFactor > 100000)
+        {
+            DPRINT1("HalpCalibrateStallExecution: Using default 2 GHz calibration\n");
+            HalpCpuClockFrequency.QuadPart = 2000000000LL;
+            StallFactor = 2000;
+            KeGetPcr()->StallScaleFactor = StallFactor;
+        }
+    }
+    
+    /* Test the calibration */
+    {
+        ULONG64 StartTest = __rdtsc();
+        KeStallExecutionProcessor(1000); /* 1ms test */
+        ULONG64 EndTest = __rdtsc();
+        ULONG64 Cycles = EndTest - StartTest;
+        DPRINT1("HalpCalibrateStallExecution: 1ms test used %llu cycles (expected ~%lu)\n", 
+                Cycles, StallFactor * 1000);
+    }
 }
 
 /* PUBLIC FUNCTIONS ***********************************************************/
@@ -154,16 +204,53 @@ VOID
 NTAPI
 KeStallExecutionProcessor(ULONG MicroSeconds)
 {
-    ULONG64 StartTime, EndTime;
+    ULONG64 StartTime, EndTime, ActualEndTime;
+    ULONG StallFactor;
+    static BOOLEAN FirstCall = TRUE;
+    static ULONG BigDelayCount = 0;
+
+    /* Get stall factor */
+    StallFactor = KeGetPcr()->StallScaleFactor;
+    
+    /* Log first call and big delays */
+    if (FirstCall)
+    {
+        DPRINT1("KeStallExecutionProcessor: First call, StallFactor=%lu\n", StallFactor);
+        FirstCall = FALSE;
+    }
+    
+    if (MicroSeconds >= 100000 && BigDelayCount < 5) /* Log first 5 delays >= 100ms */
+    {
+        BigDelayCount++;
+        DPRINT1("KeStallExecutionProcessor: Large delay requested: %lu us\n", MicroSeconds);
+    }
 
     /* Get the initial time */
     StartTime = __rdtsc();
 
-    /* Calculate the ending time */
-    EndTime = StartTime + KeGetPcr()->StallScaleFactor * MicroSeconds;
+    /* Calculate the ending time - ensure 64-bit math */
+    EndTime = StartTime + ((ULONG64)StallFactor * (ULONG64)MicroSeconds);
 
     /* Loop until time is elapsed */
-    while (__rdtsc() < EndTime);
+    while ((ActualEndTime = __rdtsc()) < EndTime);
+    
+    /* Check for timing problems on large delays */
+    if (MicroSeconds >= 100000)
+    {
+        ULONG64 ActualCycles = ActualEndTime - StartTime;
+        ULONG64 ExpectedCycles = (ULONG64)StallFactor * (ULONG64)MicroSeconds;
+        ULONG64 ActualMicroseconds = ActualCycles / StallFactor;
+        
+        if (ActualMicroseconds > MicroSeconds * 2)
+        {
+            DPRINT1("KeStallExecutionProcessor: ERROR - Delay was too long!\n");
+            DPRINT1("  Requested: %lu us, Actual: ~%llu us (%.1fx longer)\n",
+                    MicroSeconds, ActualMicroseconds,
+                    (double)ActualMicroseconds / (double)MicroSeconds);
+            DPRINT1("  StallFactor=%lu, Expected cycles=%llu, Actual cycles=%llu\n",
+                    StallFactor, ExpectedCycles, ActualCycles);
+        }
+    }
 }
 
 VOID

@@ -178,6 +178,8 @@ typedef ULONG_PTR SWAPENTRY;
 #define MM_WAIT_ENTRY            0x7ffffc00
 #elif defined(_M_AMD64)
 #define MM_WAIT_ENTRY            0x7FFFFFFFFFFFFC00ULL
+#elif defined(_M_ARM64) || defined(__aarch64__)
+#define MM_WAIT_ENTRY            0x7FFFFFFFFFFFFC00ULL
 #else
 #error Unsupported architecture!
 #endif

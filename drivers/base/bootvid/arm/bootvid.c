@@ -38,7 +38,6 @@ PrepareForSetPixel(VOID)
     NOTHING;
 }
 
-FORCEINLINE
 VOID
 SetPixel(
     _In_ ULONG Left,

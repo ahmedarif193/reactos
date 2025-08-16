@@ -35,7 +35,7 @@ Revision History:
          Chuck Park (ChuckP)
 
     Some parts of code were taken from FreeBSD 4.3-6.1 ATA driver by
-         Søren Schmidt, Copyright (c) 1998-2007
+         Sï¿½ren Schmidt, Copyright (c) 1998-2007
 
     All parts of code are significantly changed/updated by
          Alter, Copyright (c) 2002-2014:
@@ -86,12 +86,23 @@ ULONG  g_LogToDisplay = 0;
 
 ULONG  g_WaitBusyInISR = 1;
 
-ULONG  g_opt_WaitBusyResetCount = 10000; // 20000
-ULONG  g_opt_WaitBusyCount = 200; // 20000
-ULONG  g_opt_WaitBusyDelay = 10;  // 150
-ULONG  g_opt_WaitDrqDelay  = 10; // 100
-ULONG  g_opt_WaitBusyLongCount = 2000; // 2000
-ULONG  g_opt_WaitBusyLongDelay = 250;  // 250
+#ifdef _M_AMD64
+/* AMD64: Use normal timing values - KeStallExecutionProcessor works correctly now */
+ULONG  g_opt_WaitBusyResetCount = 10000;
+ULONG  g_opt_WaitBusyCount = 200;
+ULONG  g_opt_WaitBusyDelay = 10;
+ULONG  g_opt_WaitDrqDelay  = 10;
+ULONG  g_opt_WaitBusyLongCount = 2000;
+ULONG  g_opt_WaitBusyLongDelay = 250;
+#else
+/* i386: Original timeouts work correctly */
+ULONG  g_opt_WaitBusyResetCount = 10000;  
+ULONG  g_opt_WaitBusyCount = 200;         
+ULONG  g_opt_WaitBusyDelay = 10;          
+ULONG  g_opt_WaitDrqDelay  = 10;          
+ULONG  g_opt_WaitBusyLongCount = 2000;    
+ULONG  g_opt_WaitBusyLongDelay = 250;     
+#endif
 ULONG  g_opt_MaxIsrWait = 40;
 
 ULONG  g_opt_DriveSelectNanoDelay = 0; // 400; // ns
@@ -655,6 +666,10 @@ WaitOnBusy(
 {
     ULONG i;
     UCHAR Status;
+#ifdef _M_AMD64
+    LARGE_INTEGER StartTicks, EndTicks;
+    StartTicks.QuadPart = __rdtsc();
+#endif
 
     GetStatus(chan, Status);
     for (i=0; i<g_opt_WaitBusyCount; i++) {
@@ -666,6 +681,15 @@ WaitOnBusy(
             break;
         }
     }
+    
+#ifdef _M_AMD64
+    EndTicks.QuadPart = __rdtsc();
+    ULONG ElapsedMs = (ULONG)((EndTicks.QuadPart - StartTicks.QuadPart) / 1000000);
+    if (ElapsedMs > 100) {
+        KdPrint(("WaitOnBusy: [AMD64] WARNING - Took %lu ms (iterations=%lu, status=0x%02X)\n", 
+                 ElapsedMs, i, Status));
+    }
+#endif
     return Status;
 } // end WaitOnBusy()
 
@@ -677,6 +701,10 @@ WaitOnBusyLong(
 {
     ULONG i;
     UCHAR Status;
+#ifdef _M_AMD64
+    LARGE_INTEGER StartTicks, EndTicks;
+    StartTicks.QuadPart = __rdtsc();
+#endif
 
     Status = WaitOnBusy(chan);
     if(!(Status & IDE_STATUS_BUSY))
@@ -690,6 +718,15 @@ WaitOnBusyLong(
             break;
         }
     }
+    
+#ifdef _M_AMD64
+    EndTicks.QuadPart = __rdtsc();
+    ULONG ElapsedMs = (ULONG)((EndTicks.QuadPart - StartTicks.QuadPart) / 1000000);
+    if (ElapsedMs > 1000) {
+        KdPrint(("WaitOnBusyLong: [AMD64] WARNING - Took %lu ms (iterations=%lu, status=0x%02X)\n", 
+                 ElapsedMs, i, Status));
+    }
+#endif
     return Status;
 } // end WaitOnBusyLong()
 
@@ -721,11 +758,18 @@ WaitOnBaseBusyLong(
 {
     ULONG i;
     UCHAR Status;
+#ifdef _M_AMD64
+    LARGE_INTEGER StartTicks, EndTicks;
+    StartTicks.QuadPart = __rdtsc();
+    ULONG MaxIterations = 200;  // AMD64: Reduced from 2000 to 200
+#else
+    ULONG MaxIterations = 2000; // i386: Keep original
+#endif
 
     Status = WaitOnBaseBusy(chan);
     if(!(Status & IDE_STATUS_BUSY))
         return Status;
-    for (i=0; i<2000; i++) {
+    for (i=0; i<MaxIterations; i++) {
         GetBaseStatus(chan, Status);
         if (Status & IDE_STATUS_BUSY) {
             AtapiStallExecution(250);
@@ -734,6 +778,15 @@ WaitOnBaseBusyLong(
             break;
         }
     }
+    
+#ifdef _M_AMD64
+    EndTicks.QuadPart = __rdtsc();
+    ULONG ElapsedMs = (ULONG)((EndTicks.QuadPart - StartTicks.QuadPart) / 1000000);
+    if (ElapsedMs > 1000) {
+        KdPrint(("WaitOnBaseBusyLong: [AMD64] WARNING - Took %lu ms (iterations=%lu, status=0x%02X)\n", 
+                 ElapsedMs, i, Status));
+    }
+#endif
     return Status;
 } // end WaitOnBaseBusyLong()
 

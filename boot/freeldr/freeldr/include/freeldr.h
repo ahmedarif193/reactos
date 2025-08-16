@@ -106,6 +106,8 @@
 #include <arch/pc/x86common.h>
 #include <arch/pc/pxe.h>
 #include <arch/i386/drivemap.h>
+#elif defined(_M_ARM64)
+#include <arch/arm64/arm64.h>
 #endif
 #if defined(_M_IX86)
 #if defined(SARCH_PC98)

@@ -27,11 +27,16 @@ add_definitions(-D_NTHAL_ -D_BLDR_ -D_NTSYSTEM_)
 
 list(APPEND FREELDR_ARC_SOURCE
     arcname.c
-    arch/arcemul.c
     arch/archwsup.c
     disk/disk.c
     disk/partition.c
     disk/ramdisk.c)
+
+# ARM64 provides its own implementations in macharm64.c
+if(NOT ARCH STREQUAL "arm64")
+    list(APPEND FREELDR_ARC_SOURCE
+        arch/arcemul.c)
+endif()
     # disk/scsiport.c
     # lib/fs/pxe.c
 
@@ -105,6 +110,22 @@ elseif(ARCH STREQUAL "arm")
     list(APPEND FREELDR_NTLDR_SOURCE
         ntldr/arch/arm/winldr.c)
 
+elseif(ARCH STREQUAL "arm64")
+    list(APPEND FREELDR_COMMON_ASM_SOURCE
+        arch/arm64/misc.S
+        arch/arm64/except.S
+        arch/arm64/cache_v2.S
+        arch/arm64/chkstk.S)
+
+    list(APPEND FREELDR_ARC_SOURCE
+        arch/arm64/macharm64.c
+        arch/arm64/trap.c
+        arch/arm64/mmu_v2.c
+        arch/arm64/timer.c)
+
+    list(APPEND FREELDR_NTLDR_SOURCE
+        ntldr/arch/arm64/winldr.c)
+
 else()
     #TBD
 endif()
@@ -120,8 +141,15 @@ if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
         ${CMAKE_CURRENT_BINARY_DIR}/freeldr.def)
 endif()
 
-include(pcat.cmake)
-include(rosload.cmake)
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+    include(pcat.cmake)
+    include(rosload.cmake)
+endif()
 if(NOT ARCH STREQUAL "i386" OR NOT (SARCH STREQUAL "pc98" OR SARCH STREQUAL "xbox"))
     include(uefi.cmake)
+endif()
+
+# Include ARM64 bootloader image target
+if(ARCH STREQUAL "arm64")
+    include(arm64img.cmake)
 endif()

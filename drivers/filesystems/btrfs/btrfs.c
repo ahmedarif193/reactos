@@ -29,6 +29,10 @@
 #include <intrin.h>
 #endif
 #endif // __REACTOS__
+/* ARM NEON support disabled for now - compiler doesn't have arm_neon.h */
+#if 0 && (defined(_ARM_) || defined(_ARM64_))
+#include <arm_neon.h>
+#endif
 #include <ntddscsi.h>
 #include "btrfs.h"
 #include <ata.h>
@@ -287,7 +291,8 @@ bool is_top_level(_In_ PIRP Irp) {
 static void __stdcall do_xor_basic(uint8_t* buf1, uint8_t* buf2, uint32_t len) {
     uint32_t j;
 
-#if defined(_ARM_) || defined(_ARM64_)
+/* NEON support disabled for now - compiler doesn't have arm_neon.h */
+#if 0 && (defined(_ARM_) || defined(_ARM64_))
     uint64x2_t x1, x2;
 
     if (((uintptr_t)buf1 & 0xf) == 0 && ((uintptr_t)buf2 & 0xf) == 0) {

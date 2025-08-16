@@ -391,6 +391,8 @@ RtlWalkFrameChain(OUT PVOID *Callers,
     __asm__("mr %0,1" : "=r" (Stack) : );
 #elif defined(_M_ARM)
     __asm__("mov sp, %0" : "=r"(Stack) : );
+#elif defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__)
+    __asm__("mov %0, sp" : "=r"(Stack) : );
 #else
 #error Unknown architecture
 #endif
@@ -434,6 +436,8 @@ RtlWalkFrameChain(OUT PVOID *Callers,
             Stack = TrapFrame->Ebp;
 #elif defined(_M_PPC)
             Stack = TrapFrame->Gpr1;
+#elif defined(_M_ARM64) || defined(_ARM64_)
+            Stack = TrapFrame->Fp;
 #else
 #error Unknown architecture
 #endif

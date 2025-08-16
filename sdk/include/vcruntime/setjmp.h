@@ -176,6 +176,37 @@ typedef struct __JUMP_BUFFER {
     double D[8];
   } _JUMP_BUFFER;
 
+#elif defined(__aarch64__) || defined(_ARM64_)
+
+#define _JBLEN  32
+#define _JBTYPE __int64
+
+  typedef struct __JUMP_BUFFER {
+    unsigned __int64 X19;       // Callee saved registers X19-X28
+    unsigned __int64 X20;
+    unsigned __int64 X21;
+    unsigned __int64 X22;
+    unsigned __int64 X23;
+    unsigned __int64 X24;
+    unsigned __int64 X25;
+    unsigned __int64 X26;
+    unsigned __int64 X27;
+    unsigned __int64 X28;
+    unsigned __int64 Fp;        // Frame pointer (X29)
+    unsigned __int64 Lr;        // Link register (X30)
+    unsigned __int64 Sp;        // Stack pointer
+    unsigned __int64 Fpcr;      // Floating point control register
+    unsigned __int64 Fpsr;      // Floating point status register
+    double D8;                  // Callee saved FP registers D8-D15
+    double D9;
+    double D10;
+    double D11;
+    double D12;
+    double D13;
+    double D14;
+    double D15;
+  } _JUMP_BUFFER;
+
 #else
 
 #error Define Setjmp for this architecture!
@@ -195,6 +226,9 @@ typedef struct __JUMP_BUFFER {
 #elif defined(_X86_)
 # define mingw_getsp() \
   ({ void* value; __asm__ __volatile__("movl %%esp, %[value]" : [value] "=r" (value)); value; })
+#elif defined(_M_ARM64) || defined(__aarch64__)
+# define mingw_getsp() \
+  ({ void* value; __asm__ __volatile__("mov %[value], sp" : [value] "=r" (value)); value; })
 #endif
 #define setjmp(BUF) _setjmp((BUF),mingw_getsp())
   int __MINGW_NOTHROW __cdecl _setjmp(jmp_buf _Buf,void *_Ctx);

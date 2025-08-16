@@ -4606,6 +4606,18 @@ FORCEINLINE PVOID GetCurrentFiber(VOID)
 {
     return _read_teb_dword(0x10);
 }
+#elif defined(_M_ARM64) || defined(__aarch64__)
+FORCEINLINE struct _TEB * NtCurrentTeb(VOID)
+{
+    struct _TEB *teb;
+    __asm__ __volatile__("mrs %0, tpidr_el0" : "=r" (teb));
+    return teb;
+}
+FORCEINLINE PVOID GetCurrentFiber(VOID)
+{
+    struct _TEB *teb = NtCurrentTeb();
+    return (PVOID)((ULONG_PTR)teb + 0x1468); /* FiberData offset in TEB */
+}
 #else
 #error Unknown architecture
 #endif

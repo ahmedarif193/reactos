@@ -96,6 +96,8 @@
 #elif defined(__x86_64__)
 /* TODO: the x64 architecture shares most of the i386 intrinsics. It should be easy to support */
 #include "intrin_x86.h"
+#elif defined(__aarch64__) || defined(_ARM64_)
+#include "intrin_arm64.h"
 #else
 #error Unsupported architecture
 #endif

@@ -13,6 +13,7 @@ $if (_WDMDDK_)
 #define PROFILE_LEVEL           15
 #define HIGH_LEVEL              15
 
+#define KI_USER_SHARED_DATA     0xFFFF800000000000ULL
 #define SharedUserData          ((KUSER_SHARED_DATA * const)KI_USER_SHARED_DATA)
 
 #define PAGE_SIZE               0x1000
@@ -35,6 +36,64 @@ PKTHREAD
 NTAPI
 KeGetCurrentThread(VOID);
 
+FORCEINLINE
+ULONG
+KeGetCurrentProcessorNumber(VOID)
+{
+    /* ARM64: Read processor number from PCR */
+    /* The PCR is stored in TPIDR_EL1 */
+    /* Use void pointer to avoid forward declaration issues */
+    PVOID Pcr;
+    __asm__ __volatile__("mrs %0, tpidr_el1" : "=r" (Pcr));
+    /* PCR->CurrentPrcb is at offset 0x180, PRCB->Number is at offset 2 */
+    return *((PUSHORT)((PUCHAR)Pcr + 0x180 + 2));
+}
+
+/* ARM64 IRQL management */
+NTKERNELAPI
+KIRQL
+NTAPI
+KeGetCurrentIrql(VOID);
+
+NTKERNELAPI
+VOID
+NTAPI
+KeLowerIrql(
+    _In_ KIRQL NewIrql);
+
+NTKERNELAPI
+VOID
+NTAPI
+KeRaiseIrql(
+    _In_ KIRQL NewIrql,
+    _Out_ PKIRQL OldIrql);
+
+NTKERNELAPI
+KIRQL
+FASTCALL
+KfRaiseIrql(
+    _In_ KIRQL NewIrql);
+
+NTKERNELAPI
+VOID
+FASTCALL
+KfLowerIrql(
+    _In_ KIRQL NewIrql);
+
+#define KeRaiseIrqlToDpcLevel() KfRaiseIrql(DISPATCH_LEVEL)
+#define KeRaiseIrqlToSynchLevel() KfRaiseIrql(SYNCH_LEVEL)
+
+NTKERNELAPI
+BOOLEAN
+NTAPI
+KeDisableInterrupts(VOID);
+
+NTKERNELAPI
+VOID
+NTAPI
+KeRestoreInterrupts(
+    _In_ BOOLEAN Enable);
+
 #define DbgRaiseAssertionFailure() __break(0xf001)
 
 $endif (_WDMDDK_)
@@ -54,6 +113,13 @@ typedef union NEON128 {
     UCHAR  B[16];
 } NEON128, *PNEON128;
 typedef NEON128 NEON128, *PNEON128;
+
+/* Context flags for ARM64 */
+#define CONTEXT_CONTROL         0x00000001
+#define CONTEXT_INTEGER         0x00000002
+#define CONTEXT_FLOATING_POINT  0x00000004
+#define CONTEXT_DEBUG_REGISTERS 0x00000008
+#define CONTEXT_FULL (CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_FLOATING_POINT)
 
 typedef struct _CONTEXT {
 
@@ -126,4 +192,62 @@ typedef struct _CONTEXT {
     ULONG64 Wvr[ARM64_MAX_WATCHPOINTS];
 
 } CONTEXT, *PCONTEXT;
+
+/* Timer functions */
+VOID
+NTAPI
+KeQueryTickCount(OUT PLARGE_INTEGER CurrentCount);
+
+/* HAL functions needed for ARM64 */
+/* FIXME TODO: These should be moved to proper HAL headers */
+NTSTATUS
+NTAPI
+HalAllocateAdapterChannel(
+  _In_ PADAPTER_OBJECT AdapterObject,
+  _In_ PWAIT_CONTEXT_BLOCK Wcb,
+  _In_ ULONG NumberOfMapRegisters,
+  _In_ PDRIVER_CONTROL ExecutionRoutine);
+
+/* Additional ARM64 kernel functions */
+/* FIXME TODO: These functions use types not yet defined in NTDDK scope
+ * They should be moved to a location where the types are available
+ */
+#if 0
+FORCEINLINE
+ULONG
+KeGetContextSwitches(IN PKPRCB Prcb)
+{
+    return Prcb->KeContextSwitches;
+}
+
+/* Trap frame functions */
+ULONG_PTR
+NTAPI
+KeGetTrapFramePc(IN PKTRAP_FRAME TrapFrame);
+
+BOOLEAN
+NTAPI
+KiUserTrap(IN PKTRAP_FRAME TrapFrame);
+
+PKTRAP_FRAME
+NTAPI
+KiGetLinkedTrapFrame(IN PKTRAP_FRAME TrapFrame);
+
+VOID
+NTAPI
+KiExceptionExit(IN PKTRAP_FRAME TrapFrame,
+                IN PKEXCEPTION_FRAME ExceptionFrame);
+
+/* HAL functions */
+NTSTATUS
+NTAPI
+HalAllocateAdapterChannel(IN PADAPTER_OBJECT AdapterObject,
+                          IN PWAIT_CONTEXT_BLOCK Wcb,
+                          IN ULONG NumberOfMapRegisters,
+                          IN PDRIVER_CONTROL ExecutionRoutine);
+
+/* ARM64 has cache-coherent DMA, so KeFlushIoBuffers is a no-op */
+#define KeFlushIoBuffers(Mdl, ReadOp, DmaOp) ((void)0)
+#endif
+
 $endif

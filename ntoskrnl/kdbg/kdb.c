@@ -20,9 +20,30 @@
 #ifdef _M_AMD64
 #define KDB_STACK_ALIGN                 16
 #define KDB_STACK_RESERVE               (5 * sizeof(PVOID)) /* Home space + return address */
+/* Helper macros for AMD64 - uses EFlags same as x86 */
+#define KDB_GET_FLAGS(ctx)              ((ctx)->EFlags)
+#define KDB_SET_FLAGS(ctx, val)         ((ctx)->EFlags = (val))
+#define KDB_CLEAR_TF(ctx)               ((ctx)->EFlags &= ~EFLAGS_TF)
+#define KDB_SET_TF(ctx)                 ((ctx)->EFlags |= EFLAGS_TF)
+#elif defined(_M_ARM64) || defined(_ARM64_)
+#define KDB_STACK_ALIGN                 16
+#define KDB_STACK_RESERVE               sizeof(PVOID) /* Return address */
+/* ARM64 doesn't have EFLAGS, use CPSR single-step bit */
+#define EFLAGS_TF                       0x200000 /* CPSR SS bit (bit 21) for single stepping */
+#define EFLAGS_RF                       0 /* Resume flag doesn't exist on ARM64 */
+/* Helper macros for accessing processor status flags */
+#define KDB_GET_FLAGS(ctx)              ((ctx)->Cpsr)
+#define KDB_SET_FLAGS(ctx, val)         ((ctx)->Cpsr = (val))
+#define KDB_CLEAR_TF(ctx)               ((ctx)->Cpsr &= ~EFLAGS_TF)
+#define KDB_SET_TF(ctx)                 ((ctx)->Cpsr |= EFLAGS_TF)
 #else
 #define KDB_STACK_ALIGN                 4
 #define KDB_STACK_RESERVE               sizeof(ULONG) /* Return address */
+/* Helper macros for x86 */
+#define KDB_GET_FLAGS(ctx)              ((ctx)->EFlags)
+#define KDB_SET_FLAGS(ctx, val)         ((ctx)->EFlags = (val))
+#define KDB_CLEAR_TF(ctx)               ((ctx)->EFlags &= ~EFLAGS_TF)
+#define KDB_SET_TF(ctx)                 ((ctx)->EFlags |= EFLAGS_TF)
 #endif
 #define KDB_MAXIMUM_BREAKPOINT_COUNT     256
 #define KDB_MAXIMUM_HW_BREAKPOINT_COUNT  4
@@ -319,7 +340,11 @@ KdbpStepIntoInstruction(
         IntVect = 3;
     else if (Mem[0] == 0xcd)
         IntVect = Mem[1];
-    else if (Mem[0] == 0xce && KdbCurrentTrapFrame->EFlags & (1<<11)) /* 1 << 11 is the overflow flag */
+#if defined(_M_ARM64) || defined(_ARM64_)
+    else if (Mem[0] == 0xce && KdbCurrentTrapFrame->Cpsr & (1<<28)) /* 1 << 28 is the overflow flag in CPSR */
+#else
+    else if (Mem[0] == 0xce && KDB_GET_FLAGS(KdbCurrentTrapFrame) & (1<<11)) /* 1 << 11 is the overflow flag */
+#endif
         IntVect = 4;
     else
         return FALSE;
@@ -1352,7 +1377,7 @@ KdbEnterDebuggerException(
         else if (BreakPoint->Type == KdbBreakPointTemporary &&
                  BreakPoint->Process == KdbCurrentProcess)
         {
-            ASSERT((Context->EFlags & EFLAGS_TF) == 0);
+            ASSERT((KDB_GET_FLAGS(Context) & EFLAGS_TF) == 0);
 
             /* Delete the temporary breakpoint which was used to step over or into the instruction */
             KdbpDeleteBreakPoint(-1, BreakPoint);
@@ -1362,7 +1387,7 @@ KdbEnterDebuggerException(
                 if ((KdbSingleStepOver && !KdbpStepOverInstruction(KeGetContextPc(Context))) ||
                     (!KdbSingleStepOver && !KdbpStepIntoInstruction(KeGetContextPc(Context))))
                 {
-                    Context->EFlags |= EFLAGS_TF;
+                    KDB_SET_TF(Context);
                 }
 
                 goto continue_execution; /* return */
@@ -1378,7 +1403,7 @@ KdbEnterDebuggerException(
                  BreakPoint->Type == KdbBreakPointTemporary)
         {
             ASSERT(ExceptionCode == STATUS_BREAKPOINT);
-            Context->EFlags |= EFLAGS_TF;
+            KDB_SET_TF(Context);
             KdbBreakPointToReenable = BreakPoint;
         }
 
@@ -1444,7 +1469,7 @@ KdbEnterDebuggerException(
 
             /* Unset TF if we are no longer single stepping. */
             if (KdbNumSingleSteps == 0)
-                Context->EFlags &= ~EFLAGS_TF;
+                KDB_CLEAR_TF(Context);
 
             if (!KdbpEvenThoughWeHaveABreakPointToReenableWeAlsoHaveARealSingleStep)
             {
@@ -1464,18 +1489,18 @@ KdbEnterDebuggerException(
                 if ((KdbSingleStepOver && KdbpStepOverInstruction(KeGetContextPc(Context))) ||
                     (!KdbSingleStepOver && KdbpStepIntoInstruction(KeGetContextPc(Context))))
                 {
-                    Context->EFlags &= ~EFLAGS_TF;
+                    KDB_CLEAR_TF(Context);
                 }
                 else
                 {
-                    Context->EFlags |= EFLAGS_TF;
+                    KDB_SET_TF(Context);
                 }
 
                 goto continue_execution; /* return */
             }
             else
             {
-                Context->EFlags &= ~EFLAGS_TF;
+                KDB_CLEAR_TF(Context);
                 KdbEnteredOnSingleStep = TRUE;
             }
         }
@@ -1543,7 +1568,12 @@ EnterKdbg:;
     KdbTrapFrame = *Context;
 
     /* Enter critical section */
+#if defined(_M_ARM64) || defined(_ARM64_)
+    /* ARM64: Save DAIF (interrupt flags) */
+    __asm__ __volatile__("mrs %0, daif" : "=r" (OldEflags));
+#else
     OldEflags = __readeflags();
+#endif
     _disable();
 
     /* HACK: Save the current IRQL and pretend we are at dispatch level */
@@ -1554,7 +1584,12 @@ EnterKdbg:;
     /* Exception inside the debugger? Game over. */
     if (InterlockedIncrement(&KdbEntryCount) > 1)
     {
+#if defined(_M_ARM64) || defined(_ARM64_)
+        /* ARM64: Restore DAIF (interrupt flags) */
+        __asm__ __volatile__("msr daif, %0" : : "r" (OldEflags));
+#else
         __writeeflags(OldEflags);
+#endif
         return kdHandleException;
     }
 
@@ -1570,12 +1605,12 @@ EnterKdbg:;
         if ((KdbSingleStepOver && KdbpStepOverInstruction(KeGetContextPc(KdbCurrentTrapFrame))) ||
             (!KdbSingleStepOver && KdbpStepIntoInstruction(KeGetContextPc(KdbCurrentTrapFrame))))
         {
-            ASSERT((KdbCurrentTrapFrame->EFlags & EFLAGS_TF) == 0);
-            /*KdbCurrentTrapFrame->EFlags &= ~EFLAGS_TF;*/
+            ASSERT((KDB_GET_FLAGS(KdbCurrentTrapFrame) & EFLAGS_TF) == 0);
+            /*KDB_GET_FLAGS(KdbCurrentTrapFrame) &= ~EFLAGS_TF;*/
         }
         else
         {
-            KdbTrapFrame.EFlags |= EFLAGS_TF;
+            KDB_SET_TF(&KdbTrapFrame);
         }
     }
 
@@ -1598,7 +1633,12 @@ EnterKdbg:;
         KeRaiseIrql(OldIrql, &OldIrql);
 
     /* Leave critical section */
+#if defined(_M_ARM64) || defined(_ARM64_)
+    /* ARM64: Restore DAIF (interrupt flags) */
+    __asm__ __volatile__("msr daif, %0" : : "r" (OldEflags));
+#else
     __writeeflags(OldEflags);
+#endif
 
     /* Check if user requested a bugcheck */
     if (KdbpBugCheckRequested)
@@ -1615,7 +1655,7 @@ continue_execution:
         /* Set the RF flag so we don't trigger the same breakpoint again. */
         if (Resume)
         {
-            Context->EFlags |= EFLAGS_RF;
+            KDB_GET_FLAGS(Context) |= EFLAGS_RF;
         }
 
         /* Clear dr6 status flags. */

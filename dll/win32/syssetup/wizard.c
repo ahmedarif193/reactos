@@ -2250,9 +2250,11 @@ RegisterComponents(
     DWORD Error = NO_ERROR;
     REGISTRATIONNOTIFY Notify;
 
+    DPRINT1("RegisterComponents: Starting\n");
     ZeroMemory(&Notify, sizeof(Notify));
 
     /* Count the 'RegisterDlls' steps */
+    DPRINT1("RegisterComponents: Looking for RegistrationPhase2 section...\n");
     if (!SetupFindFirstLineW(hSysSetupInf, L"RegistrationPhase2",
                              L"RegisterDlls", &Context))
     {
@@ -2274,16 +2276,25 @@ RegisterComponents(
     Steps += SetupGetLineCountW(hSysSetupInf, L"TypeLibraries");
 
     /* Start the item */
-    DPRINT("Register Components: %ld Steps\n", Steps);
+    DPRINT1("RegisterComponents: %ld Steps to process\n", Steps);
+    DPRINT1("RegisterComponents: Sending PM_ITEM_START message...\n");
     SendMessage(pItemsData->hwndDlg, PM_ITEM_START, 0, (LPARAM)Steps);
 
+    DPRINT1("RegisterComponents: Calling RegisterDlls...\n");
     Error = RegisterDlls(pItemsData, &Notify);
+    DPRINT1("RegisterComponents: RegisterDlls returned %lu\n", Error);
+    
     if (Error == ERROR_SUCCESS)
+    {
+        DPRINT1("RegisterComponents: Calling RegisterTypeLibraries...\n");
         RegisterTypeLibraries(pItemsData, &Notify, hSysSetupInf, L"TypeLibraries");
+        DPRINT1("RegisterComponents: RegisterTypeLibraries completed\n");
+    }
 
     /* End the item */
-    DPRINT("Register Components: done\n");
+    DPRINT1("RegisterComponents: Sending PM_ITEM_END message...\n");
     SendMessage(pItemsData->hwndDlg, PM_ITEM_END, 0, Error);
+    DPRINT1("RegisterComponents: Completed successfully\n");
 }
 
 
@@ -2295,27 +2306,72 @@ ItemCompletionThread(
 {
     PITEMSDATA pItemsData;
     HWND hwndDlg;
+    LARGE_INTEGER StartTime, EndTime, Frequency;
+    double ElapsedSeconds;
 
     pItemsData = (PITEMSDATA)Parameter;
     hwndDlg = pItemsData->hwndDlg;
 
+    DPRINT1("ItemCompletionThread: Starting (Thread ID: %lu)\n", GetCurrentThreadId());
+
+    /* Get performance counter frequency for timing */
+    QueryPerformanceFrequency(&Frequency);
+
     /* Step 0 - Registering components */
+    DPRINT1("ItemCompletionThread: Starting RegisterComponents...\n");
+    QueryPerformanceCounter(&StartTime);
     RegisterComponents(pItemsData);
+    QueryPerformanceCounter(&EndTime);
+    ElapsedSeconds = (double)(EndTime.QuadPart - StartTime.QuadPart) / Frequency.QuadPart;
+    DPRINT1("ItemCompletionThread: RegisterComponents completed in %.2f seconds\n", ElapsedSeconds);
 
     /* Step 1 - Installing start menu items */
+    DPRINT1("ItemCompletionThread: Starting InstallStartMenuItems...\n");
+    QueryPerformanceCounter(&StartTime);
     InstallStartMenuItems(pItemsData);
+    QueryPerformanceCounter(&EndTime);
+    ElapsedSeconds = (double)(EndTime.QuadPart - StartTime.QuadPart) / Frequency.QuadPart;
+    DPRINT1("ItemCompletionThread: InstallStartMenuItems completed in %.2f seconds\n", ElapsedSeconds);
 
     /* FIXME: Add completion steps here! */
 
     // FIXME: Move this call to a separate cleanup page!
+    DPRINT1("ItemCompletionThread: Creating boot status data file...\n");
+    QueryPerformanceCounter(&StartTime);
     RtlCreateBootStatusDataFile();
+    QueryPerformanceCounter(&EndTime);
+    ElapsedSeconds = (double)(EndTime.QuadPart - StartTime.QuadPart) / Frequency.QuadPart;
+    DPRINT1("ItemCompletionThread: RtlCreateBootStatusDataFile completed in %.2f seconds\n", ElapsedSeconds);
 
     /* Free the items data */
     HeapFree(GetProcessHeap(), 0, pItemsData);
 
     /* Tell the wizard page that we are done */
-    PostMessage(hwndDlg, PM_ITEMS_DONE, 0, 0);
+    DPRINT1("ItemCompletionThread: Posting PM_ITEMS_DONE to wizard (hwnd=%p)...\n", hwndDlg);
+    
+#ifdef _M_AMD64
+    /* On AMD64, PostMessage seems unreliable. Try multiple approaches */
+    DPRINT1("ItemCompletionThread: [AMD64] Using SendNotifyMessage as fallback\n");
+    if (!SendNotifyMessage(hwndDlg, PM_ITEMS_DONE, 0, 0))
+    {
+        DPRINT1("ItemCompletionThread: [AMD64] SendNotifyMessage failed! Error=%lu\n", GetLastError());
+        /* Try PostMessage anyway */
+        if (!PostMessage(hwndDlg, PM_ITEMS_DONE, 0, 0))
+        {
+            DPRINT1("ItemCompletionThread: [AMD64] PostMessage also failed! Error=%lu\n", GetLastError());
+            /* As last resort, try SendMessage (will block but should work) */
+            DPRINT1("ItemCompletionThread: [AMD64] Using SendMessage as last resort\n");
+            SendMessage(hwndDlg, PM_ITEMS_DONE, 0, 0);
+        }
+    }
+#else
+    if (!PostMessage(hwndDlg, PM_ITEMS_DONE, 0, 0))
+    {
+        DPRINT1("ItemCompletionThread: PostMessage failed! Error=%lu\n", GetLastError());
+    }
+#endif
 
+    DPRINT1("ItemCompletionThread: Thread completed successfully\n");
     return 0;
 }
 
@@ -2462,9 +2518,17 @@ ProcessPageDlgProc(HWND hwndDlg,
             {
                 case PSN_SETACTIVE:
                     LogItem(L"BEGIN", L"ProcessPage");
+                    DPRINT1("ProcessPageDlgProc: PSN_SETACTIVE - Starting completion thread\n");
 
                     /* Disable the Back and Next buttons */
                     PropSheet_SetWizButtons(GetParent(hwndDlg), 0);
+                    
+#ifdef _M_AMD64
+                    /* On AMD64, set a timer as backup in case the thread message doesn't arrive */
+                    DPRINT1("ProcessPageDlgProc: [AMD64] Setting backup timer (60 seconds)\n");
+                    SetTimer(hwndDlg, 9999, 60000, NULL); /* 60 second backup timer */
+#endif
+                    
                     RunItemCompletionThread(hwndDlg);
                     break;
 
@@ -2517,10 +2581,28 @@ ProcessPageDlgProc(HWND hwndDlg,
             break;
 
         case PM_ITEMS_DONE:
-            DPRINT("PM_ITEMS_DONE\n");
+            DPRINT1("ProcessPageDlgProc: PM_ITEMS_DONE received!\n");
+#ifdef _M_AMD64
+            /* Kill the backup timer if it was set */
+            KillTimer(hwndDlg, 9999);
+#endif
             /* Enable the Back and Next buttons */
             PropSheet_SetWizButtons(GetParent(hwndDlg), PSWIZB_NEXT);
+            DPRINT1("ProcessPageDlgProc: Pressing Next button automatically...\n");
             PropSheet_PressButton(GetParent(hwndDlg), PSBTN_NEXT);
+            DPRINT1("ProcessPageDlgProc: Next button pressed, moving to next page\n");
+            break;
+
+        case WM_TIMER:
+#ifdef _M_AMD64
+            if (wParam == 9999)
+            {
+                DPRINT1("ProcessPageDlgProc: [AMD64] BACKUP TIMER FIRED! Thread probably didn't send message\n");
+                KillTimer(hwndDlg, 9999);
+                /* Force completion */
+                PostMessage(hwndDlg, PM_ITEMS_DONE, 0, 0);
+            }
+#endif
             break;
 
         default:

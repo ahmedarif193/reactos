@@ -57,6 +57,7 @@ HRESULT create_view( enum view_type type, const WCHAR *path, const struct keywor
 
     case VIEW_TYPE_SELECT:
     {
+        //TODO : FATAL : table can be NULL 
         struct table *table = grab_table( class );
         HRESULT hr;
 

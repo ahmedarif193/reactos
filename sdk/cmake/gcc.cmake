@@ -44,8 +44,10 @@ endif()
 # note: -fno-common is default since GCC 10
 add_compile_options(-pipe -fms-extensions -fno-strict-aliasing -fno-common)
 
-# A long double is 64 bits
-add_compile_options(-mlong-double-64)
+# A long double is 64 bits (not supported on ARM64)
+if(NOT ARCH STREQUAL "arm64")
+    add_compile_options(-mlong-double-64)
+endif()
 
 # Prevent GCC from searching any of the default directories.
 # The case for C++ is handled through the reactos_c++ INTERFACE library
@@ -183,7 +185,6 @@ add_compile_options(
     -Wno-unused-local-typedefs
     -Wno-deprecated
     -Wno-unused-result # FIXME To be removed when CORE-17637 is resolved
-    -Wno-maybe-uninitialized
 )
 
 if(ARCH STREQUAL "amd64")
@@ -236,8 +237,17 @@ if(ARCH STREQUAL "i386")
 elseif(ARCH STREQUAL "amd64")
     if (CMAKE_C_COMPILER_ID STREQUAL "GNU")
         add_compile_options(-mpreferred-stack-boundary=4)
+        # SEH is default on x86_64-w64-mingw32, only need unwind tables
+        # Note: GCC uses SEH internally but doesn't expose MSVC-style __try/__except keywords
+        add_compile_options(-fasynchronous-unwind-tables)
+        # Don't define __SEH__ as GCC doesn't support MSVC-style SEH keywords
+        message(STATUS "Using PSEH library for AMD64 GCC (SEH internal but no MSVC keywords)")
     endif()
     add_compile_options(-Wno-error)
+elseif(ARCH STREQUAL "arm64")
+    # Add library search path for ARM64 toolchain
+    link_directories(/home/ahmed/x-tools/aarch64-w64-mingw32/aarch64-w64-mingw32/lib)
+    link_directories(/home/ahmed/x-tools/aarch64-w64-mingw32/lib)
 endif()
 
 # Other
@@ -364,6 +374,7 @@ set(CMAKE_C_COMPILE_OBJECT "<CMAKE_C_COMPILER> <DEFINES> ${_compress_debug_secti
 set(CMAKE_CXX_COMPILE_OBJECT "<CMAKE_CXX_COMPILER> <DEFINES> <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>")
 set(CMAKE_ASM_COMPILE_OBJECT "<CMAKE_ASM_COMPILER> ${_compress_debug_sections_flag} -x assembler-with-cpp -o <OBJECT> -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm <INCLUDES> <FLAGS> <DEFINES> -D__ASM__ -c <SOURCE>")
 
+# FIXME TODO: ARM64 windres doesn't support pe-aarch64, using coff
 set(CMAKE_RC_COMPILE_OBJECT "<CMAKE_RC_COMPILER> -O coff <INCLUDES> <FLAGS> -DRC_INVOKED -D__WIN32__=1 -D__FLAT__=1 ${I18N_DEFS} <DEFINES> <SOURCE> <OBJECT>")
 
 if (CMAKE_C_COMPILER_ID STREQUAL "Clang")
@@ -491,17 +502,32 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
 
     # Do the same with delay-import libs
     set(LIBRARY_PRIVATE_DIR ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${_libname}_delayed.dir)
-    add_custom_command(
-        OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
-        COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE:${_libname}_delayed>
-        COMMAND ${CMAKE_DLLTOOL}
-                --def ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
-                --kill-at
-                --output-delaylib=${_libname}_delayed.a
-                -t ${_libname}_delayed
-        COMMAND ${CMAKE_RANLIB} ${_libname}_delayed.a
-        DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
-        WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
+    if(ARCH STREQUAL "arm64")
+        # ARM64 dlltool doesn't support --output-delaylib, use --output-lib instead
+        add_custom_command(
+            OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
+            COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE:${_libname}_delayed>
+            COMMAND ${CMAKE_DLLTOOL}
+                    --def ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
+                    --kill-at
+                    --output-lib=${_libname}_delayed.a
+                    -t ${_libname}_delayed
+            COMMAND ${CMAKE_RANLIB} ${_libname}_delayed.a
+            DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
+            WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
+    else()
+        add_custom_command(
+            OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
+            COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE:${_libname}_delayed>
+            COMMAND ${CMAKE_DLLTOOL}
+                    --def ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
+                    --kill-at
+                    --output-delaylib=${_libname}_delayed.a
+                    -t ${_libname}_delayed
+            COMMAND ${CMAKE_RANLIB} ${_libname}_delayed.a
+            DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
+            WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
+    endif()
 
     # We create a static library with the importlib thus created. AR will extract the obj files and archive it again as a thin lib
     set_source_files_properties(
@@ -672,34 +698,104 @@ else()
 endif()
 
 add_library(libgcc STATIC IMPORTED)
-execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libgcc.a OUTPUT_VARIABLE LIBGCC_LOCATION)
-string(STRIP ${LIBGCC_LOCATION} LIBGCC_LOCATION)
-set_target_properties(libgcc PROPERTIES IMPORTED_LOCATION ${LIBGCC_LOCATION})
+execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libgcc.a OUTPUT_VARIABLE LIBGCC_LOCATION OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(LIBGCC_LOCATION)
+    string(STRIP "${LIBGCC_LOCATION}" LIBGCC_LOCATION)
+    # For ARM64, if we get just "libgcc.a" back, try to find it manually
+    if(ARCH STREQUAL "arm64" AND LIBGCC_LOCATION STREQUAL "libgcc.a")
+        # Try to find libgcc.a in the toolchain paths
+        set(LIBGCC_SEARCH_PATHS
+            "${CMAKE_C_COMPILER}/../aarch64-w64-mingw32/lib/libgcc.a"
+            "${CMAKE_C_COMPILER}/../../aarch64-w64-mingw32/lib/libgcc.a"
+            "/home/ahmed/x-tools/aarch64-w64-mingw32/aarch64-w64-mingw32/lib/libgcc.a"
+        )
+        foreach(SEARCH_PATH ${LIBGCC_SEARCH_PATHS})
+            if(EXISTS ${SEARCH_PATH})
+                set(LIBGCC_LOCATION ${SEARCH_PATH})
+                message(STATUS "Found libgcc.a at ${LIBGCC_LOCATION}")
+                break()
+            endif()
+        endforeach()
+    endif()
+    if(EXISTS ${LIBGCC_LOCATION})
+        set_target_properties(libgcc PROPERTIES IMPORTED_LOCATION ${LIBGCC_LOCATION})
+    else()
+        message(WARNING "Could not find libgcc.a at ${LIBGCC_LOCATION}")
+    endif()
+else()
+    message(WARNING "Could not find libgcc.a")
+endif()
 # libgcc needs kernel32 and winpthread (an appropriate CRT must be linked manually)
 target_link_libraries(libgcc INTERFACE libwinpthread libkernel32)
 
-add_library(libsupc++ STATIC IMPORTED GLOBAL)
-execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libsupc++.a OUTPUT_VARIABLE LIBSUPCXX_LOCATION)
-string(STRIP ${LIBSUPCXX_LOCATION} LIBSUPCXX_LOCATION)
-set_target_properties(libsupc++ PROPERTIES IMPORTED_LOCATION ${LIBSUPCXX_LOCATION})
-# libsupc++ requires libgcc and stdc++compat
-target_link_libraries(libsupc++ INTERFACE libgcc stdc++compat)
+# For ARM64, we don't have libsupc++ in the toolchain
+if(ARCH STREQUAL "arm64")
+    # Create a stub library for ARM64
+    add_library(libsupc++ INTERFACE)
+else()
+    add_library(libsupc++ STATIC IMPORTED GLOBAL)
+    execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libsupc++.a OUTPUT_VARIABLE LIBSUPCXX_LOCATION OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(LIBSUPCXX_LOCATION AND EXISTS ${LIBSUPCXX_LOCATION})
+        string(STRIP "${LIBSUPCXX_LOCATION}" LIBSUPCXX_LOCATION)
+        set_target_properties(libsupc++ PROPERTIES IMPORTED_LOCATION ${LIBSUPCXX_LOCATION})
+    else()
+        message(WARNING "Could not find libsupc++.a")
+    endif()
+    # libsupc++ requires libgcc and stdc++compat
+    target_link_libraries(libsupc++ INTERFACE libgcc stdc++compat)
+endif()
 
 add_library(libmingwex STATIC IMPORTED)
-execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libmingwex.a OUTPUT_VARIABLE LIBMINGWEX_LOCATION)
-string(STRIP ${LIBMINGWEX_LOCATION} LIBMINGWEX_LOCATION)
-set_target_properties(libmingwex PROPERTIES IMPORTED_LOCATION ${LIBMINGWEX_LOCATION})
+execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libmingwex.a OUTPUT_VARIABLE LIBMINGWEX_LOCATION OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(LIBMINGWEX_LOCATION)
+    string(STRIP "${LIBMINGWEX_LOCATION}" LIBMINGWEX_LOCATION)
+    # For ARM64, if we get just "libmingwex.a" back, try to find it manually
+    if(ARCH STREQUAL "arm64" AND LIBMINGWEX_LOCATION STREQUAL "libmingwex.a")
+        # Try to find libmingwex.a in the toolchain paths
+        set(LIBMINGWEX_SEARCH_PATHS
+            "${CMAKE_C_COMPILER}/../aarch64-w64-mingw32/sysroot/usr/aarch64-w64-mingw32/lib/libmingwex.a"
+            "${CMAKE_C_COMPILER}/../../aarch64-w64-mingw32/sysroot/usr/aarch64-w64-mingw32/lib/libmingwex.a"
+            "/home/ahmed/x-tools/aarch64-w64-mingw32/aarch64-w64-mingw32/sysroot/usr/aarch64-w64-mingw32/lib/libmingwex.a"
+        )
+        foreach(SEARCH_PATH ${LIBMINGWEX_SEARCH_PATHS})
+            if(EXISTS ${SEARCH_PATH})
+                set(LIBMINGWEX_LOCATION ${SEARCH_PATH})
+                message(STATUS "Found libmingwex.a at ${LIBMINGWEX_LOCATION}")
+                break()
+            endif()
+        endforeach()
+    endif()
+    if(EXISTS ${LIBMINGWEX_LOCATION})
+        set_target_properties(libmingwex PROPERTIES IMPORTED_LOCATION ${LIBMINGWEX_LOCATION})
+    else()
+        message(WARNING "Could not find libmingwex.a at ${LIBMINGWEX_LOCATION}")
+    endif()
+else()
+    message(WARNING "Could not find libmingwex.a")
+endif()
 # libmingwex requires a CRT and imports from kernel32
 target_link_libraries(libmingwex INTERFACE libmsvcrt libkernel32)
 
-add_library(libstdc++ STATIC IMPORTED GLOBAL)
-execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libstdc++.a OUTPUT_VARIABLE LIBSTDCCXX_LOCATION)
-string(STRIP ${LIBSTDCCXX_LOCATION} LIBSTDCCXX_LOCATION)
-set_target_properties(libstdc++ PROPERTIES IMPORTED_LOCATION ${LIBSTDCCXX_LOCATION})
-# libstdc++ requires libsupc++ and mingwex provided by GCC
-target_link_libraries(libstdc++ INTERFACE libsupc++ libmingwex oldnames)
-# this is for our SAL annotations
-target_compile_definitions(libstdc++ INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:PAL_STDCPP_COMPAT>")
+# For ARM64, we don't have libstdc++ in the toolchain
+if(ARCH STREQUAL "arm64")
+    # Create a stub library for ARM64
+    add_library(libstdc++ INTERFACE)
+    # this is for our SAL annotations
+    target_compile_definitions(libstdc++ INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:PAL_STDCPP_COMPAT>")
+else()
+    add_library(libstdc++ STATIC IMPORTED GLOBAL)
+    execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libstdc++.a OUTPUT_VARIABLE LIBSTDCCXX_LOCATION OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(LIBSTDCCXX_LOCATION AND EXISTS ${LIBSTDCCXX_LOCATION})
+        string(STRIP "${LIBSTDCCXX_LOCATION}" LIBSTDCCXX_LOCATION)
+        set_target_properties(libstdc++ PROPERTIES IMPORTED_LOCATION ${LIBSTDCCXX_LOCATION})
+    else()
+        message(WARNING "Could not find libstdc++.a")
+    endif()
+    # libstdc++ requires libsupc++ and mingwex provided by GCC
+    target_link_libraries(libstdc++ INTERFACE libsupc++ libmingwex oldnames)
+    # this is for our SAL annotations
+    target_compile_definitions(libstdc++ INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:PAL_STDCPP_COMPAT>")
+endif()
 
 # Create our alias libraries
 add_library(cppstl ALIAS libstdc++)

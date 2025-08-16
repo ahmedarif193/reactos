@@ -12,6 +12,29 @@
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WARNING);
 
+#ifndef TAG_HW_RESOURCE_LIST
+#define TAG_HW_RESOURCE_LIST    'lRwH'
+#endif
+
+#if defined(_M_ARM64)
+/* Simple memory map structure for ARM64 */
+typedef struct
+{
+    ULONGLONG   BaseAddress;
+    ULONGLONG   Length;
+    ULONG       Type;
+    ULONG       ExtendedAttributesAsULONG;
+} BIOS_MEMORY_MAP, *PBIOS_MEMORY_MAP;
+
+/* Simple ACPI_BIOS_DATA structure for ARM64 */
+typedef struct _ACPI_BIOS_DATA
+{
+    PHYSICAL_ADDRESS RSDTAddress;
+    ULONGLONG Count;
+    BIOS_MEMORY_MAP MemoryMap[1]; /* Count of BIOS memory map entries */
+} ACPI_BIOS_DATA, *PACPI_BIOS_DATA;
+#endif
+
 /* GLOBALS *******************************************************************/
 
 extern EFI_SYSTEM_TABLE * GlobalSystemTable;
