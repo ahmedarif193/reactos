@@ -22,7 +22,6 @@
 #include <shobjidl.h>
 #include <rpcproxy.h>
 #include <ndk/cmfuncs.h>
-#include <services/services.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -615,141 +614,24 @@ EnableUserModePnpManager(VOID)
     SERVICE_STATUS_PROCESS ServiceStatus;
     BOOL bRet = FALSE;
     DWORD BytesNeeded, WaitTime;
-    DWORD dwRetryCount = 0;
-    DWORD dwError = 0;  /* Initialize to avoid garbage values */
 
-#ifdef _M_AMD64
-    DPRINT1("SYSSETUP: [AMD64] EnableUserModePnpManager starting...\n");
-    
-    /* Give SCM time to fully initialize on AMD64 */
-    DPRINT1("SYSSETUP: [AMD64] Waiting 1 second for SCM to be ready...\n");
-    Sleep(1000);
-    
-    /* Try to open SCM */
-    DPRINT1("SYSSETUP: [AMD64] Attempting to open SCM...\n");
     hSCManager = OpenSCManagerW(NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE);
-    if (hSCManager != NULL)
-    {
-        DPRINT1("SYSSETUP: [AMD64] SCM opened successfully!\n");
-    }
-    else
-    {
-        dwError = GetLastError();
-        DPRINT1("SYSSETUP: [AMD64] Failed to open SCM, error %lu (0x%lx)\n", dwError, dwError);
-        
-        /* Try with explicit local machine name */
-        DPRINT1("SYSSETUP: [AMD64] Retrying with explicit local machine...\n");
-        hSCManager = OpenSCManagerW(L".", NULL, SC_MANAGER_ENUMERATE_SERVICE);
-        if (hSCManager != NULL)
-        {
-            DPRINT1("SYSSETUP: [AMD64] SCM opened successfully with explicit local!\n");
-        }
-        else
-        {
-            dwError = GetLastError();
-            DPRINT1("SYSSETUP: [AMD64] Still failed, error %lu (0x%lx)\n", dwError, dwError);
-        }
-    }
-#else
-    DPRINT1("SYSSETUP: [i386] EnableUserModePnpManager starting...\n");
-    DPRINT1("SYSSETUP: [i386] Current process: %p, Thread: %p\n", GetCurrentProcess(), GetCurrentThread());
-    
-    /* Try to open the SCM start event on i386 too for comparison */
-    DPRINT1("SYSSETUP: [i386] Checking for SCM start event 'SvcctrlStartEvent_A3752DX'...\n");
-    HANDLE hScmStartEvent = OpenEventW(SYNCHRONIZE, FALSE, L"SvcctrlStartEvent_A3752DX");
-    if (hScmStartEvent)
-    {
-        DPRINT1("SYSSETUP: [i386] SCM start event FOUND! Handle=%p\n", hScmStartEvent);
-        DWORD dwWaitResult = WaitForSingleObject(hScmStartEvent, 0); /* Check if signaled */
-        if (dwWaitResult == WAIT_OBJECT_0)
-        {
-            DPRINT1("SYSSETUP: [i386] Event is already signaled (SCM ready)\n");
-        }
-        else
-        {
-            DPRINT1("SYSSETUP: [i386] Event exists but not signaled yet\n");
-        }
-        CloseHandle(hScmStartEvent);
-    }
-    else
-    {
-        dwError = GetLastError();
-        DPRINT1("SYSSETUP: [i386] SCM start event NOT found. Error=%lu (0x%lx)\n", dwError, dwError);
-        
-        /* Try with Global namespace */
-        DPRINT1("SYSSETUP: [i386] Trying Global\\SvcctrlStartEvent_A3752DX...\n");
-        hScmStartEvent = OpenEventW(SYNCHRONIZE, FALSE, L"Global\\SvcctrlStartEvent_A3752DX");
-        if (hScmStartEvent)
-        {
-            DPRINT1("SYSSETUP: [i386] Found with Global namespace! Handle=%p\n", hScmStartEvent);
-            CloseHandle(hScmStartEvent);
-        }
-        else
-        {
-            DPRINT1("SYSSETUP: [i386] Global namespace failed. Error=%lu\n", GetLastError());
-        }
-    }
-    
-    DPRINT1("SYSSETUP: [i386] Opening SCM with OpenSCManagerW...\n");
-    SetLastError(0);  /* Clear any previous error state */
-    hSCManager = OpenSCManagerW(NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE);
-    if (hSCManager != NULL)
-    {
-        DPRINT1("SYSSETUP: [i386] OpenSCManagerW SUCCESS! Handle=%p\n", hSCManager);
-    }
-    else
-    {
-        dwError = GetLastError();
-        DPRINT1("SYSSETUP: [i386] OpenSCManagerW FAILED! Error=%lu (0x%lx)\n", dwError, dwError);
-    }
-#endif
-
     if (hSCManager == NULL)
     {
-        dwError = GetLastError();
-#ifdef _M_AMD64
-        DPRINT1("SYSSETUP: [AMD64] Unable to open SCM, error %lu (0x%lx)\n", dwError, dwError);
-        /* On AMD64, try to continue anyway - the SCM might be accessible later */
-        DPRINT1("SYSSETUP: [AMD64] Attempting to continue without SCM connection...\n");
-        /* Don't goto cleanup - try to proceed */
-        bRet = TRUE;  /* Pretend success to avoid fatal error */
+        DPRINT1("Unable to open the service control manager.\n");
+        DPRINT1("Last Error %d\n", GetLastError());
         goto cleanup;
-#else
-        DPRINT1("SYSSETUP: [i386] FATAL: Unable to open SCM!\n");
-        DPRINT1("SYSSETUP: [i386] Last Error %lu (0x%lx)\n", dwError, dwError);
-        goto cleanup;
-#endif
     }
 
-#ifdef _M_AMD64
-    DPRINT1("SYSSETUP: [AMD64] Opening PlugPlay service...\n");
-#else
-    DPRINT1("SYSSETUP: [i386] Opening PlugPlay service...\n");
-#endif
     hService = OpenServiceW(hSCManager,
                             L"PlugPlay",
                             SERVICE_CHANGE_CONFIG | SERVICE_START | SERVICE_QUERY_STATUS);
     if (hService == NULL)
     {
-        dwError = GetLastError();
-#ifdef _M_AMD64
-        DPRINT1("SYSSETUP: [AMD64] Unable to open PlugPlay service! Error=%lu (0x%lx)\n", dwError, dwError);
-#else
-        DPRINT1("SYSSETUP: [i386] Unable to open PlugPlay service! Error=%lu (0x%lx)\n", dwError, dwError);
-#endif
+        DPRINT1("Unable to open PlugPlay service\n");
         goto cleanup;
     }
-#ifdef _M_AMD64
-    DPRINT1("SYSSETUP: [AMD64] PlugPlay service opened successfully\n");
-#else
-    DPRINT1("SYSSETUP: [i386] PlugPlay service opened successfully\n");
-#endif
 
-#ifdef _M_AMD64
-    DPRINT1("SYSSETUP: [AMD64] Changing PlugPlay service config to AUTO_START...\n");
-#else
-    DPRINT1("SYSSETUP: [i386] Changing PlugPlay service config to AUTO_START...\n");
-#endif
     bRet = ChangeServiceConfigW(hService,
                                 SERVICE_NO_CHANGE,
                                 SERVICE_AUTO_START,
@@ -758,47 +640,17 @@ EnableUserModePnpManager(VOID)
                                 NULL, NULL, NULL, NULL);
     if (!bRet)
     {
-        dwError = GetLastError();
-#ifdef _M_AMD64
-        DPRINT1("SYSSETUP: [AMD64] Unable to change service configuration! Error=%lu (0x%lx)\n", dwError, dwError);
-#else
-        DPRINT1("SYSSETUP: [i386] Unable to change service configuration! Error=%lu (0x%lx)\n", dwError, dwError);
-#endif
+        DPRINT1("Unable to change the service configuration\n");
         goto cleanup;
     }
-#ifdef _M_AMD64
-    DPRINT1("SYSSETUP: [AMD64] Service configuration changed successfully\n");
-#else
-    DPRINT1("SYSSETUP: [i386] Service configuration changed successfully\n");
-#endif
 
-#ifdef _M_AMD64
-    DPRINT1("SYSSETUP: [AMD64] Starting PlugPlay service...\n");
-#else
-    DPRINT1("SYSSETUP: [i386] Starting PlugPlay service...\n");
-#endif
     bRet = StartServiceW(hService, 0, NULL);
     if (!bRet && (GetLastError() != ERROR_SERVICE_ALREADY_RUNNING))
     {
-        dwError = GetLastError();
-#ifdef _M_AMD64
-        DPRINT1("SYSSETUP: [AMD64] Unable to start PlugPlay service! Error=%lu (0x%lx)\n", dwError, dwError);
-#else
-        DPRINT1("SYSSETUP: [i386] Unable to start PlugPlay service! Error=%lu (0x%lx)\n", dwError, dwError);
-#endif
+        DPRINT1("Unable to start service\n");
         goto cleanup;
     }
-#ifdef _M_AMD64
-    DPRINT1("SYSSETUP: [AMD64] PlugPlay service start command issued\n");
-#else
-    DPRINT1("SYSSETUP: [i386] PlugPlay service start command issued\n");
-#endif
 
-#ifdef _M_AMD64
-    DPRINT1("SYSSETUP: [AMD64] Waiting for PlugPlay service to start...\n");
-#else
-    DPRINT1("SYSSETUP: [i386] Waiting for PlugPlay service to start...\n");
-#endif
     while (TRUE)
     {
         bRet = QueryServiceStatusEx(hService,
@@ -808,20 +660,9 @@ EnableUserModePnpManager(VOID)
                                     &BytesNeeded);
         if (!bRet)
         {
-            dwError = GetLastError();
-#ifdef _M_AMD64
-            DPRINT1("SYSSETUP: [AMD64] QueryServiceStatusEx() failed! Error=%lu (0x%lx)\n", dwError, dwError);
-#else
-            DPRINT1("SYSSETUP: [i386] QueryServiceStatusEx() failed! Error=%lu (0x%lx)\n", dwError, dwError);
-#endif
+            DPRINT1("QueryServiceStatusEx() failed for PlugPlay service (error 0x%x)\n", GetLastError());
             goto cleanup;
         }
-
-#ifdef _M_AMD64
-        DPRINT1("SYSSETUP: [AMD64] PlugPlay service state: %lu\n", ServiceStatus.dwCurrentState);
-#else
-        DPRINT1("SYSSETUP: [i386] PlugPlay service state: %lu\n", ServiceStatus.dwCurrentState);
-#endif
 
         if (ServiceStatus.dwCurrentState != SERVICE_START_PENDING)
             break;
@@ -829,30 +670,16 @@ EnableUserModePnpManager(VOID)
         WaitTime = ServiceStatus.dwWaitHint / 10;
         if (WaitTime < 1000) WaitTime = 1000;
         else if (WaitTime > 10000) WaitTime = 10000;
-#ifdef _M_AMD64
-        DPRINT1("SYSSETUP: [AMD64] Service still starting, waiting %lu ms...\n", WaitTime);
-#else
-        DPRINT1("SYSSETUP: [i386] Service still starting, waiting %lu ms...\n", WaitTime);
-#endif
         Sleep(WaitTime);
     };
 
     if (ServiceStatus.dwCurrentState != SERVICE_RUNNING)
     {
         bRet = FALSE;
-#ifdef _M_AMD64
-        DPRINT1("SYSSETUP: [AMD64] FAILED to start PlugPlay service! Final state: %lu\n", ServiceStatus.dwCurrentState);
-#else
-        DPRINT1("SYSSETUP: [i386] FAILED to start PlugPlay service! Final state: %lu\n", ServiceStatus.dwCurrentState);
-#endif
+        DPRINT1("Failed to start PlugPlay service\n");
         goto cleanup;
     }
 
-#ifdef _M_AMD64
-    DPRINT1("SYSSETUP: [AMD64] PlugPlay service started successfully (state: SERVICE_RUNNING)\n");
-#else
-    DPRINT1("SYSSETUP: [i386] PlugPlay service started successfully (state: SERVICE_RUNNING)\n");
-#endif
     bRet = TRUE;
 
 cleanup:
@@ -1251,14 +1078,6 @@ CommonInstall(VOID)
                                NULL);
     }
 
-#ifdef _M_AMD64
-    /* Skip PnP manager on AMD64 due to RPC communication issues */
-    DPRINT1("WARNING: Skipping EnableUserModePnpManager on AMD64 due to RPC issues\n");
-    DPRINT1("TODO FIXME: Fix RPC/Global namespace issues preventing PnP manager from working\n");
-    
-    /* Also skip waiting for PnP events since they won't be available without PnP manager */
-    DPRINT1("WARNING: Skipping CMP_WaitNoPendingInstallEvents on AMD64\n");
-#else
     if (!EnableUserModePnpManager())
     {
         FatalError("EnableUserModePnpManager() failed!\n");
@@ -1270,7 +1089,6 @@ CommonInstall(VOID)
         FatalError("CMP_WaitNoPendingInstallEvents() failed!\n");
         goto Exit;
     }
-#endif
 
     bResult = TRUE;
 
