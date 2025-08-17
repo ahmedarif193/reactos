@@ -23,9 +23,32 @@ UefiGetTime(VOID)
     EFI_STATUS Status;
     EFI_TIME time = {0};
 
+    /* Check if RuntimeServices is available */
+    if (!GlobalSystemTable || !GlobalSystemTable->RuntimeServices)
+    {
+        /* Return a default time if RuntimeServices is not available */
+        TimeInfo.Year = 2025;
+        TimeInfo.Month = 1;
+        TimeInfo.Day = 1;
+        TimeInfo.Hour = 0;
+        TimeInfo.Minute = 0;
+        TimeInfo.Second = 0;
+        return &TimeInfo;
+    }
+
     Status = GlobalSystemTable->RuntimeServices->GetTime(&time, NULL);
     if (Status != EFI_SUCCESS)
+    {
         ERR("UefiGetTime: cannot get time status %d\n", Status);
+        /* Return a default time on error */
+        TimeInfo.Year = 2025;
+        TimeInfo.Month = 1;
+        TimeInfo.Day = 1;
+        TimeInfo.Hour = 0;
+        TimeInfo.Minute = 0;
+        TimeInfo.Second = 0;
+        return &TimeInfo;
+    }
 
     TimeInfo.Year = time.Year;
     TimeInfo.Month = time.Month;

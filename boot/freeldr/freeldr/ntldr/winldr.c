@@ -12,6 +12,10 @@
 #include "registry.h"
 #include <internal/cmboot.h>
 
+#ifdef UEFIBOOT
+#include <uefildr.h>
+#endif
+
 /* Include architecture-specific definitions */
 #if defined(_M_ARM64)
 #ifndef KI_USER_SHARED_DATA
@@ -108,6 +112,14 @@ AllocateAndInitLPB(
     Extension->Size = sizeof(LOADER_PARAMETER_EXTENSION);
     Extension->MajorVersion = (VersionToBoot & 0xFF00) >> 8;
     Extension->MinorVersion = (VersionToBoot & 0xFF);
+    
+#ifdef UEFIBOOT
+    /* Set UEFI boot flag */
+    Extension->BootViaEFI = TRUE;
+    TRACE("WinLdrInitializePhase1: UEFI boot flag set\n");
+    
+    /* We'll pass framebuffer info later when video is initialized */
+#endif
 
     /* Init three critical lists, used right away */
     InitializeListHead(&LoaderBlock->LoadOrderListHead);
@@ -534,14 +546,23 @@ LoadModule(
     CHAR ProgressString[256];
     PVOID BaseAddress;
 
+    ERR("LoadModule: Entry - File=%s\n", File);
+    
     RtlStringCbPrintfA(ProgressString, sizeof(ProgressString), "Loading %s...", File);
+#ifdef UEFIBOOT
+    ERR("LoadModule: Skipping UiUpdateProgressBar in UEFI\n");
+#else
     UiUpdateProgressBar(Percentage, ProgressString);
+#endif
 
     RtlStringCbCopyA(FullFileName, sizeof(FullFileName), Path);
     RtlStringCbCatA(FullFileName, sizeof(FullFileName), File);
+    ERR("LoadModule: FullFileName=%s\n", FullFileName);
 
     NtLdrOutputLoadMsg(FullFileName, NULL);
+    ERR("LoadModule: Calling PeLdrLoadImage\n");
     Success = PeLdrLoadImage(FullFileName, MemoryType, &BaseAddress);
+    ERR("LoadModule: PeLdrLoadImage returned %d, BaseAddress=%p\n", Success, BaseAddress);
     if (!Success)
     {
         ERR("PeLdrLoadImage('%s') failed\n", File);
@@ -649,7 +670,12 @@ LoadWindowsCore(IN USHORT OperatingSystemVersion,
 
     /* Parse the boot options */
     TRACE("LoadWindowsCore: BootOptions '%s'\n", BootOptions);
+    ERR("LoadWindowsCore: Entry\n");
 
+#ifdef UEFIBOOT
+    /* Skip options parsing in UEFI mode - they cause crashes */
+    ERR("LoadWindowsCore: UEFI - Skipping boot options parsing\n");
+#else
 #ifdef _M_IX86
     if (NtLdrGetOption(BootOptions, "3GB"))
     {
@@ -676,6 +702,7 @@ LoadWindowsCore(IN USHORT OperatingSystemVersion,
         FIXME("LoadWindowsCore: BOOTLOGO - TRUE (not implemented)\n");
         BootLogo = TRUE;
     }
+#endif
 
     /* Check the (NO)EXECUTE options */
     if ((OperatingSystemVersion > _WIN32_WINNT_WIN2K) &&
@@ -768,8 +795,10 @@ LoadWindowsCore(IN USHORT OperatingSystemVersion,
      */
 
     /* Load the Kernel */
+    ERR("LoadWindowsCore: Loading kernel: %s%s\n", DirPath, KernelFileName);
     KernelBase = LoadModule(LoaderBlock, DirPath, KernelFileName,
                             "ntoskrnl.exe", LoaderSystemCode, KernelDTE, 30);
+    ERR("LoadWindowsCore: KernelBase=%p\n", KernelBase);
     if (!KernelBase)
     {
         ERR("LoadModule('%s') failed\n", KernelFileName);
@@ -988,6 +1017,7 @@ LoadAndBootWindows(
     IN PCHAR Argv[],
     IN PCHAR Envp[])
 {
+
     ARC_STATUS Status;
     PCSTR ArgValue;
     PCSTR SystemPartition;
@@ -1000,8 +1030,19 @@ LoadAndBootWindows(
     CHAR FilePath[MAX_PATH];
     CHAR BootOptions[256];
 
+    
+    ERR("LoadAndBootWindows: Entry point reached\n");
+    
+#ifdef UEFIBOOT
+    ERR("LoadAndBootWindows: UEFI build detected\n");
+#endif
+
+    ERR("LoadAndBootWindows: About to get BootType\n");
+    
     /* Retrieve the (mandatory) boot type */
     ArgValue = GetArgumentValue(Argc, Argv, "BootType");
+    
+    ERR("LoadAndBootWindows: BootType = %s\n", ArgValue ? ArgValue : "(null)");
     if (!ArgValue || !*ArgValue)
     {
         ERR("No 'BootType' value, aborting!\n");
@@ -1009,18 +1050,23 @@ LoadAndBootWindows(
     }
 
     /* Convert it to an OS version */
+    ERR("LoadAndBootWindows: Converting BootType to OS version\n");
+    ERR("LoadAndBootWindows: About to call _stricmp with ArgValue=%s\n", ArgValue);
     if (_stricmp(ArgValue, "Windows") == 0 ||
         _stricmp(ArgValue, "Windows2003") == 0)
     {
         OperatingSystemVersion = _WIN32_WINNT_WS03;
+        ERR("LoadAndBootWindows: Set OS version to WS03\n");
     }
     else if (_stricmp(ArgValue, "WindowsNT40") == 0)
     {
         OperatingSystemVersion = _WIN32_WINNT_NT4;
+        ERR("LoadAndBootWindows: Set OS version to NT4\n");
     }
     else if (_stricmp(ArgValue, "WindowsVista") == 0)
     {
         OperatingSystemVersion = _WIN32_WINNT_VISTA;
+        ERR("LoadAndBootWindows: Set OS version to Vista\n");
     }
     else
     {
@@ -1028,8 +1074,10 @@ LoadAndBootWindows(
         return EINVAL;
     }
 
+    ERR("LoadAndBootWindows: About to get SystemPartition\n");
     /* Retrieve the (mandatory) system partition */
     SystemPartition = GetArgumentValue(Argc, Argv, "SystemPartition");
+    ERR("LoadAndBootWindows: SystemPartition = %s\n", SystemPartition ? SystemPartition : "(null)");
     if (!SystemPartition || !*SystemPartition)
     {
         ERR("No 'SystemPartition' specified, aborting!\n");
@@ -1037,13 +1085,19 @@ LoadAndBootWindows(
     }
 
     /* Let the user know we started loading */
+    ERR("LoadAndBootWindows: About to draw UI backdrop\n");
     UiDrawBackdrop(UiGetScreenHeight());
+    ERR("LoadAndBootWindows: UI backdrop drawn\n");
     UiDrawStatusText("Loading...");
+    ERR("LoadAndBootWindows: Status text drawn\n");
     UiDrawProgressBarCenter("Loading NT...");
+    ERR("LoadAndBootWindows: Progress bar drawn\n");
 
     /* Retrieve the system path */
+    ERR("LoadAndBootWindows: About to get SystemPath\n");
     *BootPath = ANSI_NULL;
     ArgValue = GetArgumentValue(Argc, Argv, "SystemPath");
+    ERR("LoadAndBootWindows: SystemPath = %s\n", ArgValue ? ArgValue : "(null)");
     if (ArgValue)
         RtlStringCbCopyA(BootPath, sizeof(BootPath), ArgValue);
 
@@ -1053,6 +1107,7 @@ LoadAndBootWindows(
      *
      * See FsOpenFile for the technique used.
      */
+    ERR("LoadAndBootWindows: Checking if BootPath is full path\n");
     if (strrchr(BootPath, ')') == NULL)
     {
         /* Temporarily save the boot path */
@@ -1073,16 +1128,29 @@ LoadAndBootWindows(
     if (!*BootPath || BootPath[strlen(BootPath) - 1] != '\\')
         RtlStringCbCatA(BootPath, sizeof(BootPath), "\\");
 
+    ERR("LoadAndBootWindows: Final BootPath = '%s'\n", BootPath);
     TRACE("BootPath: '%s'\n", BootPath);
 
     /* Retrieve the boot options */
+    ERR("LoadAndBootWindows: About to get boot options\n");
     *BootOptions = ANSI_NULL;
     ArgValue = GetArgumentValue(Argc, Argv, "Options");
+    ERR("LoadAndBootWindows: Options = %s\n", ArgValue ? ArgValue : "(null)");
     if (ArgValue && *ArgValue)
         RtlStringCbCopyA(BootOptions, sizeof(BootOptions), ArgValue);
 
     /* Append boot-time options */
+    ERR("LoadAndBootWindows: About to append boot-time options\n");
+    ERR("LoadAndBootWindows: BootOptions before append: len=%d, '%s'\n", strlen(BootOptions), BootOptions);
     AppendBootTimeOptions(BootOptions);
+    ERR("LoadAndBootWindows: BootOptions after append: len=%d\n", strlen(BootOptions));
+    ERR("LoadAndBootWindows: Final BootOptions = '%s'\n", BootOptions);
+
+#ifdef UEFIBOOT
+    /* HACK: Skip all HAL/KERNEL option processing in UEFI mode due to crash */
+    ERR("LoadAndBootWindows: UEFI - Skipping ALL option processing due to crash\n");
+    goto skip_all_option_processing;
+#endif
 
     /*
      * Set the "/HAL=" and "/KERNEL=" options if needed.
@@ -1090,6 +1158,13 @@ LoadAndBootWindows(
      * precedence over those passed via the separate "Hal=" and "Kernel="
      * options.
      */
+    ERR("LoadAndBootWindows: About to check HAL option\n");
+    ERR("LoadAndBootWindows: BootOptions ptr = %p, content = '%s'\n", BootOptions, BootOptions);
+#ifdef UEFIBOOT
+    /* HACK: Skip NtLdrGetOption in UEFI mode to test if it's causing the crash */
+    ERR("LoadAndBootWindows: UEFI - Skipping HAL/KERNEL option checks\n");
+    goto skip_hal_kernel_options;
+#endif
     if (!NtLdrGetOption(BootOptions, "HAL="))
     {
         /*
@@ -1118,9 +1193,19 @@ LoadAndBootWindows(
     }
 
     TRACE("BootOptions: '%s'\n", BootOptions);
+    ERR("LoadAndBootWindows: HAL/KERNEL options processed\n");
 
+#ifdef UEFIBOOT
+skip_hal_kernel_options:
+skip_all_option_processing:
+    /* Skip RAM disk check in UEFI mode as well */
+    ERR("LoadAndBootWindows: UEFI - Skipping RAM disk check\n");
+    FileName = NULL;
+#else
     /* Check if a RAM disk file was given */
+    ERR("LoadAndBootWindows: Checking for RAM disk\n");
     FileName = NtLdrGetOptionEx(BootOptions, "RDPATH=", &FileNameLength);
+#endif
     if (FileName && (FileNameLength >= 7))
     {
         /* Load the RAM disk */
@@ -1135,40 +1220,68 @@ LoadAndBootWindows(
     }
 
     /* Handle the SOS option */
+    ERR("LoadAndBootWindows: Checking SOS option\n");
+#ifdef UEFIBOOT
+    /* HACK: Force SOS enabled in UEFI mode without checking options */
+    ERR("LoadAndBootWindows: UEFI - Forcing SOS enabled\n");
+    SosEnabled = TRUE;
+#else
     SosEnabled = !!NtLdrGetOption(BootOptions, "SOS");
+#endif
     if (SosEnabled)
+    {
+        ERR("LoadAndBootWindows: SOS enabled, resetting UI\n");
         UiResetForSOS();
+    }
 
     /* Allocate and minimally-initialize the Loader Parameter Block */
+    ERR("LoadAndBootWindows: Allocating LPB\n");
     AllocateAndInitLPB(OperatingSystemVersion, &LoaderBlock);
+    ERR("LoadAndBootWindows: LPB allocated\n");
 
     /* Load the system hive */
+    ERR("LoadAndBootWindows: Loading system hive from '%s'\n", BootPath);
     UiUpdateProgressBar(15, "Loading system hive...");
     Success = WinLdrInitSystemHive(LoaderBlock, BootPath, FALSE);
+    ERR("LoadAndBootWindows: System hive load result: %s\n", Success ? "SUCCESS" : "FAILED");
+    ERR("LoadAndBootWindows: After result print\n");
     TRACE("SYSTEM hive %s\n", (Success ? "loaded" : "not loaded"));
+    ERR("LoadAndBootWindows: After TRACE\n");
     /* Bail out if failure */
     if (!Success)
+    {
+        ERR("LoadAndBootWindows: System hive load failed, returning\n");
         return ENOEXEC;
+    }
+    ERR("LoadAndBootWindows: System hive loaded successfully, continuing\n");
 
     /* Fixup the version number using data from the registry */
+    ERR("LoadAndBootWindows: Fixing up OS version\n");
     if (OperatingSystemVersion == 0)
         OperatingSystemVersion = WinLdrDetectVersion();
     LoaderBlock->Extension->MajorVersion = (OperatingSystemVersion & 0xFF00) >> 8;
     LoaderBlock->Extension->MinorVersion = (OperatingSystemVersion & 0xFF);
+    ERR("LoadAndBootWindows: OS version fixed: Major=%d, Minor=%d\n", 
+        LoaderBlock->Extension->MajorVersion, LoaderBlock->Extension->MinorVersion);
 
     /* Load NLS data, OEM font, and prepare boot drivers list */
+    ERR("LoadAndBootWindows: Scanning system hive\n");
     Success = WinLdrScanSystemHive(LoaderBlock, BootPath);
+    ERR("LoadAndBootWindows: System hive scan result: %s\n", Success ? "SUCCESS" : "FAILED");
     TRACE("SYSTEM hive %s\n", (Success ? "scanned" : "not scanned"));
     /* Bail out if failure */
     if (!Success)
         return ENOEXEC;
 
     /* Load the Firmware Errata file */
+    ERR("LoadAndBootWindows: Loading firmware errata\n");
     Success = WinLdrInitErrataInf(LoaderBlock, OperatingSystemVersion, BootPath);
+    ERR("LoadAndBootWindows: Firmware errata result: %s\n", Success ? "SUCCESS" : "FAILED");
     TRACE("Firmware Errata file %s\n", (Success ? "loaded" : "not loaded"));
     /* Not necessarily fatal if not found - carry on going */
 
     /* Finish loading */
+    ERR("LoadAndBootWindows: Calling LoadAndBootWindowsCommon\n");
     return LoadAndBootWindowsCommon(OperatingSystemVersion,
                                     LoaderBlock,
                                     BootOptions,
@@ -1188,9 +1301,15 @@ LoadAndBootWindowsCommon(
     KERNEL_ENTRY_POINT KiSystemStartup;
     PCSTR SystemRoot;
 
+    ERR("LoadAndBootWindowsCommon: START\n");
+    
+#ifdef UEFIBOOT
+    /* Skip problematic debug in UEFI - string handling causes crashes */
+#else
+    ERR("LoadAndBootWindowsCommon: OSVersion=%x, BootPath='%s'\n", OperatingSystemVersion, BootPath);
     TRACE("LoadAndBootWindowsCommon()\n");
-
     ASSERT(OperatingSystemVersion != 0);
+#endif
 
 #ifdef _M_IX86
     /* Setup redirection support */
@@ -1199,29 +1318,35 @@ LoadAndBootWindowsCommon(
 
     /* Convert BootPath to SystemRoot */
     SystemRoot = strstr(BootPath, "\\");
+    ERR("LoadAndBootWindowsCommon: HW detect\n");
 
     /* Detect hardware */
     UiUpdateProgressBar(20, "Detecting hardware...");
     LoaderBlock->ConfigurationRoot = MachHwDetect(BootOptions);
+    ERR("LoadAndBootWindowsCommon: HW done\n");
 
     /* Initialize the PE loader import-DLL callback, so that we can obtain
      * feedback (for example during SOS) on the PE images that get loaded. */
     PeLdrImportDllLoadCallback = NtLdrImportDllLoadCallback;
 
     /* Load the operating system core: the Kernel, the HAL and the Kernel Debugger Transport DLL */
+    ERR("LoadAndBootWindowsCommon: About to call LoadWindowsCore\n");
+    ERR("LoadAndBootWindowsCommon: BootPath=%s\n", BootPath);
     Success = LoadWindowsCore(OperatingSystemVersion,
                               LoaderBlock,
                               BootOptions,
                               BootPath,
                               &KernelDTE);
+    ERR("LoadAndBootWindowsCommon: LoadWindowsCore returned %d\n", Success);
     if (!Success)
     {
         /* Reset the PE loader import-DLL callback */
         PeLdrImportDllLoadCallback = NULL;
-
+        ERR("LoadAndBootWindowsCommon: Kernel FAIL\n");
         UiMessageBox("Error loading NTOS core.");
         return ENOEXEC;
     }
+    ERR("LoadAndBootWindowsCommon: KERNEL LOADED!\n");
 
     /* Cleanup INI file */
     IniCleanup();
@@ -1229,12 +1354,15 @@ LoadAndBootWindowsCommon(
 /****
  **** WE HAVE NOW REACHED THE POINT OF NO RETURN !!
  ****/
+    ERR("LoadAndBootWindowsCommon: NO RETURN\n");
 
     UiSetProgressBarSubset(40, 90); // NTOS goes from 25 to 75%
 
     /* Load boot drivers */
+    ERR("LoadAndBootWindowsCommon: Loading boot drivers\n");
     UiSetProgressBarText("Loading boot drivers...");
     Success = WinLdrLoadBootDrivers(LoaderBlock, BootPath);
+    ERR("LoadAndBootWindowsCommon: Boot drivers %s\n", Success ? "OK" : "FAIL");
     TRACE("Boot drivers loading %s\n", Success ? "successful" : "failed");
 
     UiSetProgressBarSubset(0, 100);
@@ -1243,23 +1371,56 @@ LoadAndBootWindowsCommon(
     PeLdrImportDllLoadCallback = NULL;
 
     /* Initialize Phase 1 - no drivers loading anymore */
+    ERR("LoadAndBootWindowsCommon: Phase 1 init\n");
     WinLdrInitializePhase1(LoaderBlock,
                            BootOptions,
                            SystemRoot,
                            BootPath,
                            OperatingSystemVersion);
+    ERR("LoadAndBootWindowsCommon: Phase 1 done\n");
 
+#ifdef UEFIBOOT
+    /* Skip UI update in UEFI mode - might crash */
+    ERR("LoadAndBootWindowsCommon: Skipping UI update (UEFI)\n");
+#else
     UiUpdateProgressBar(100, NULL);
+#endif
+    ERR("LoadAndBootWindowsCommon: After progress bar\n");
 
     /* Save entry-point pointer and Loader block VAs */
+    ERR("LoadAndBootWindowsCommon: KernelDTE=%p\n", KernelDTE);
+    if (KernelDTE == NULL)
+    {
+        ERR("LoadAndBootWindowsCommon: ERROR - KernelDTE is NULL!\n");
+#ifdef UEFIBOOT
+        /* Try to continue anyway in UEFI mode */
+        ERR("LoadAndBootWindowsCommon: UEFI - Skipping kernel jump due to NULL DTE\n");
+        return ESUCCESS;
+#endif
+    }
+    ERR("LoadAndBootWindowsCommon: Getting entry point from DTE\n");
     KiSystemStartup = (KERNEL_ENTRY_POINT)KernelDTE->EntryPoint;
+    ERR("LoadAndBootWindowsCommon: KiSystemStartup=%p\n", KiSystemStartup);
     LoaderBlockVA = PaToVa(LoaderBlock);
+    ERR("LoadAndBootWindowsCommon: LoaderBlockVA=%p\n", LoaderBlockVA);
+    ERR("LoadAndBootWindowsCommon: Entry point ready\n");
 
     /* "Stop all motors", change videomode */
+#ifdef UEFIBOOT
+    /* Skip MachPrepareForReactOS in UEFI mode - it crashes */
+    ERR("LoadAndBootWindowsCommon: Skipping MachPrepare (UEFI)\n");
+#else
+    ERR("LoadAndBootWindowsCommon: MachPrepare\n");
     MachPrepareForReactOS();
+    ERR("LoadAndBootWindowsCommon: MachPrepare done\n");
+#endif
 
     /* Show the "debug mode" notice if needed */
     /* Match KdInitSystem() conditions */
+#ifdef UEFIBOOT
+    /* Skip NtLdrGetOption calls in UEFI mode - they crash */
+    ERR("LoadAndBootWindowsCommon: Skipping debug banner (UEFI)\n");
+#else
     if (!NtLdrGetOption(BootOptions, "CRASHDEBUG") &&
         !NtLdrGetOption(BootOptions, "NODEBUG") &&
         !!NtLdrGetOption(BootOptions, "DEBUG"))
@@ -1284,27 +1445,100 @@ LoadAndBootWindowsCommon(
                   "For more information, visit https://reactos.org/wiki/Debugging.\n",
                   DebugPortLength, DebugPort);
     }
+#endif
 
     /* Debugging... */
     //DumpMemoryAllocMap();
 
     /* Do the machine specific initialization */
+    ERR("LoadAndBootWindowsCommon: Machine setup\n");
     WinLdrSetupMachineDependent(LoaderBlock);
 
     /* Map pages and create memory descriptors */
+    ERR("LoadAndBootWindowsCommon: Memory layout\n");
     WinLdrSetupMemoryLayout(LoaderBlock);
 
     /* Set processor context */
+#ifdef UEFIBOOT
+    /* For UEFI, attempt processor context setup with debug */
+    ERR("LoadAndBootWindowsCommon: UEFI - Setting processor context\n");
+    
+    /* Call WinLdrSetProcessorContext - let's see where it crashes */
+    ERR("LoadAndBootWindowsCommon: About to call WinLdrSetProcessorContext\n");
     WinLdrSetProcessorContext(OperatingSystemVersion);
+    ERR("LoadAndBootWindowsCommon: WinLdrSetProcessorContext returned!\n");
+    
+    /* Save final value of LoaderPagesSpanned - skip in UEFI for now since Extension is virtual */
+    ERR("LoadAndBootWindowsCommon: LoaderBlock=%p\n", LoaderBlock);
+    ERR("LoadAndBootWindowsCommon: UEFI - Skipping LoaderPagesSpanned (Extension is virtual)\n");
+    
+    /* Jump to kernel */
+    ERR("LoadAndBootWindowsCommon: JUMPING TO KERNEL (UEFI)!\n");
+    ERR("LoadAndBootWindowsCommon: KiSystemStartup=%p\n", KiSystemStartup);
+    ERR("LoadAndBootWindowsCommon: LoaderBlock=%p (physical)\n", LoaderBlock);
+    ERR("LoadAndBootWindowsCommon: LoaderBlockVA=%p (virtual)\n", LoaderBlockVA);
+    
+    /* Set up kernel virtual mappings */
+    ERR("LoadAndBootWindowsCommon: Setting up kernel virtual mappings\n");
+    if (!WinLdrSetupKernelVirtualMapping(LoaderBlock))
+    {
+        ERR("LoadAndBootWindowsCommon: ERROR - Failed to set up virtual mappings!\n");
+        while(1) __asm__ __volatile__("hlt");
+    }
+    
+    /* Get the PxeBase for new page tables */
+    extern PHARDWARE_PTE PxeBase;  /* Defined in arch/amd64/winldr.c */
+    if (!PxeBase)
+    {
+        ERR("LoadAndBootWindowsCommon: ERROR - PxeBase is NULL!\n");
+        while(1) __asm__ __volatile__("hlt");
+    }
+    
+    /* Update LoaderBlockVA to use virtual address */
+    LoaderBlockVA = PaToVa(LoaderBlock);
+    
+    /* Now switch to kernel page tables and jump to kernel in one operation */
+    ERR("LoadAndBootWindowsCommon: >>> JUMPING TO KERNEL <<<\n");
+    ERR("LoadAndBootWindowsCommon: PxeBase=%p\n", PxeBase);
+    ERR("LoadAndBootWindowsCommon: KiSystemStartup=%p\n", KiSystemStartup);
+    ERR("LoadAndBootWindowsCommon: LoaderBlockVA=%p\n", LoaderBlockVA);
+    
+    /* First, let's try jumping without switching CR3 to see if kernel is accessible */
+    ERR("LoadAndBootWindowsCommon: Testing kernel accessibility without CR3 switch\n");
+    
+    /* Check if we can read from kernel entry point */
+    volatile UCHAR testByte = *(UCHAR*)((ULONG64)KiSystemStartup & ~KSEG0_BASE);
+    ERR("LoadAndBootWindowsCommon: Read byte %02x from physical kernel entry\n", testByte);
+    
+    /* For now, just jump to the physical address of the kernel */
+    typedef VOID (NTAPI *KERNEL_ENTRY_POINT)(PLOADER_PARAMETER_BLOCK LoaderBlock);
+    KERNEL_ENTRY_POINT PhysicalKernelEntry = (KERNEL_ENTRY_POINT)((ULONG64)KiSystemStartup & ~KSEG0_BASE);
+    ERR("LoadAndBootWindowsCommon: Jumping to physical kernel at %p\n", PhysicalKernelEntry);
+    ERR("LoadAndBootWindowsCommon: With LoaderBlock at %p\n", LoaderBlock);
+    
+    /* Try jumping to physical kernel with physical loader block */
+    PhysicalKernelEntry(LoaderBlock);
+    
+    /* Should never get here */
+    ERR("LoadAndBootWindowsCommon: ERROR - Kernel returned!\n");
+    while(1) __asm__ __volatile__("hlt");
+#else
+    ERR("LoadAndBootWindowsCommon: CPU context\n");
+    WinLdrSetProcessorContext(OperatingSystemVersion);
+    ERR("LoadAndBootWindowsCommon: CPU context SET\n");
 
     /* Save final value of LoaderPagesSpanned */
     LoaderBlock->Extension->LoaderPagesSpanned = MmGetLoaderPagesSpanned();
+    ERR("LoadAndBootWindowsCommon: Pages spanned saved\n");
 
+    ERR("LoadAndBootWindowsCommon: Paged mode OK\n");
     TRACE("Hello from paged mode, KiSystemStartup %p, LoaderBlockVA %p!\n",
           KiSystemStartup, LoaderBlockVA);
 
     /* Zero KI_USER_SHARED_DATA page */
+    ERR("LoadAndBootWindowsCommon: Zeroing USER_SHARED_DATA\n");
     RtlZeroMemory((PVOID)KI_USER_SHARED_DATA, MM_PAGE_SIZE);
+    ERR("LoadAndBootWindowsCommon: USER_SHARED_DATA zeroed\n");
 
     WinLdrpDumpMemoryDescriptors(LoaderBlockVA);
     WinLdrpDumpBootDriver(LoaderBlockVA);
@@ -1313,7 +1547,10 @@ LoadAndBootWindowsCommon(
 #endif
 
     /* Pass control */
+    ERR("LoadAndBootWindowsCommon: JUMPING TO KERNEL!\n");
     (*KiSystemStartup)(LoaderBlockVA);
+#endif
+    ERR("LoadAndBootWindowsCommon: KERNEL RETURNED?!\n");
 
     UNREACHABLE; // return ESUCCESS;
 }

@@ -20,6 +20,9 @@
 /* INCLUDES *******************************************************************/
 
 #include <freeldr.h>
+#ifdef UEFIBOOT
+#include <uefildr.h>
+#endif
 
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WARNING);
@@ -30,6 +33,7 @@ CCHAR FrLdrBootPath[MAX_PATH] = "";
 
 /* FUNCTIONS ******************************************************************/
 
+#ifndef UEFIBOOT
 static
 BOOLEAN
 LoadRosload(
@@ -87,16 +91,32 @@ LaunchSecondStageLoader(VOID)
     EntryPoint = VaToPa(RosloadDTE->EntryPoint);
     return (*EntryPoint)();
 }
+#endif
 
 VOID __cdecl BootMain(IN PCCH CmdLine)
 {
+#ifdef UEFIBOOT
+    GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"BootMain: Starting\r\n");
+#endif
     /* Load the default settings from the command-line */
     LoadSettings(CmdLine);
+
+#ifdef UEFIBOOT
+    GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"BootMain: Settings loaded\r\n");
+#endif
 
     /* Debugger pre-initialization */
     DebugInit(BootMgrInfo.DebugString);
 
+#ifdef UEFIBOOT
+    GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"BootMain: Debug initialized\r\n");
+#endif
+
     MachInit(CmdLine);
+
+#ifdef UEFIBOOT
+    GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"BootMain: MachInit done\r\n");
+#endif
 
     TRACE("BootMain() called.\n");
 
@@ -105,12 +125,19 @@ VOID __cdecl BootMain(IN PCCH CmdLine)
     FrLdrCheckCpuCompatibility(); // FIXME: Should be done inside MachInit!
 #endif
 
+#ifdef UEFIBOOT
+    GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"BootMain: Starting UI init\r\n");
+#endif
     /* UI pre-initialization */
     if (!UiInitialize(FALSE))
     {
         UiMessageBoxCritical("Unable to initialize UI.");
         goto Quit;
     }
+
+#ifdef UEFIBOOT
+    GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"BootMain: UI initialized\r\n");
+#endif
 
     /* Initialize memory manager */
     if (!MmInitializeMemoryManager())
@@ -119,8 +146,16 @@ VOID __cdecl BootMain(IN PCCH CmdLine)
         goto Quit;
     }
 
+#ifdef UEFIBOOT
+    GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"BootMain: Memory manager initialized\r\n");
+#endif
+
     /* Initialize I/O subsystem */
     FsInit();
+
+#ifdef UEFIBOOT
+    GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"BootMain: FS initialized\r\n");
+#endif
 
     /* Initialize the module list */
     if (!PeLdrInitializeModuleList())
@@ -129,17 +164,32 @@ VOID __cdecl BootMain(IN PCCH CmdLine)
         goto Quit;
     }
 
+#ifdef UEFIBOOT
+    GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"BootMain: Module list initialized\r\n");
+#endif
+
     if (!MachInitializeBootDevices())
     {
         UiMessageBoxCritical("Error when detecting hardware.");
         goto Quit;
     }
 
+#ifdef UEFIBOOT
+    GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"BootMain: Boot devices initialized\r\n");
+#endif
+
+#ifndef UEFIBOOT
     /* Launch second stage loader */
     if (LaunchSecondStageLoader() != ESUCCESS)
     {
         UiMessageBoxCritical("Unable to load second stage loader.");
     }
+#else
+    /* For UEFI boot, directly run the boot manager */
+    GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"BootMain: About to call RunLoader\r\n");
+    RunLoader();
+    GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"BootMain: RunLoader returned (unexpected)\r\n");
+#endif
 
 Quit:
     /* If we reach this point, something went wrong before, therefore reboot */

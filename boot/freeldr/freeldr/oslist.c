@@ -21,6 +21,10 @@
 
 #include <freeldr.h>
 
+#ifdef UEFIBOOT
+#include <uefildr.h>
+#endif
+
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(INIFILE);
 
@@ -62,17 +66,51 @@ InitOperatingSystemList(
     CHAR BootType[80];
     CHAR TempBuffer[_countof(SettingValue)];
 
+#ifdef UEFIBOOT
+    {
+        extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+        if (GlobalSystemTable && GlobalSystemTable->ConOut)
+            GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"InitOperatingSystemList: Starting\r\n");
+    }
+#endif
+
     /* Open the [Operating Systems] section */
     if (!IniOpenSection("Operating Systems", &OsSectionId))
+    {
+#ifdef UEFIBOOT
+        {
+            extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+            if (GlobalSystemTable && GlobalSystemTable->ConOut)
+                GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"InitOperatingSystemList: Failed to open Operating Systems section\r\n");
+        }
+#endif
         return NULL;
+    }
 
     /* Count the number of operating systems in the section */
     Count = IniGetNumSectionItems(OsSectionId);
 
+#ifdef UEFIBOOT
+    {
+        extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+        if (GlobalSystemTable && GlobalSystemTable->ConOut)
+            GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"InitOperatingSystemList: Count obtained\r\n");
+    }
+#endif
+
     /* Allocate memory to hold operating system lists */
     Items = FrLdrHeapAlloc(Count * sizeof(OperatingSystemItem), TAG_OS_ITEM);
     if (!Items)
+    {
+#ifdef UEFIBOOT
+        {
+            extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+            if (GlobalSystemTable && GlobalSystemTable->ConOut)
+                GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"InitOperatingSystemList: Failed to allocate memory\r\n");
+        }
+#endif
         return NULL;
+    }
 
     /* Retrieve the default OS */
     DefaultOSName = GetBootMgrInfo()->DefaultOs;
@@ -80,6 +118,13 @@ InitOperatingSystemList(
     /* Now loop through the operating system section and load each item */
     for (i = 0; i < Count; ++i)
     {
+#ifdef UEFIBOOT
+        {
+            extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+            if (GlobalSystemTable && GlobalSystemTable->ConOut)
+                GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"InitOperatingSystemList: Processing entry\r\n");
+        }
+#endif
         IniReadSettingByNumber(OsSectionId, i,
                                SettingName, sizeof(SettingName),
                                SettingValue, sizeof(SettingValue));
@@ -281,5 +326,14 @@ InitOperatingSystemList(
     /* Return success */
     *OperatingSystemCount = Count;
     *DefaultOperatingSystem = DefaultOS;
+
+#ifdef UEFIBOOT
+    {
+        extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+        if (GlobalSystemTable && GlobalSystemTable->ConOut)
+            GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"InitOperatingSystemList: Completed successfully\r\n");
+    }
+#endif
+
     return Items;
 }

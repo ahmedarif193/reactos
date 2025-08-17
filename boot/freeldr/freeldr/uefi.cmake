@@ -105,8 +105,8 @@ list(APPEND UEFILDR_BASE_SOURCE
     ntldr/inffile.c
     ${FREELDR_BASE_SOURCE})
 
-if(ARCH STREQUAL "i386")
-    # Must be included together with disk/scsiport.c
+# Include the exports definition file for both i386 and amd64
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
     list(APPEND UEFILDR_BASE_SOURCE
         ${CMAKE_CURRENT_BINARY_DIR}/uefildr.def)
 endif()
@@ -129,12 +129,12 @@ endif()
     # We don't need hotpatching
     remove_target_compile_option(uefildr "/hotpatch")
 else()
-    target_link_options(uefildr PRIVATE -Wl,--exclude-all-symbols,--file-alignment,0x200,--section-alignment,0x200)
-    # Strip everything, including rossym data
+    # Don't exclude symbols - we need them for rosload.exe to import
+    target_link_options(uefildr PRIVATE -Wl,--file-alignment,0x200,--section-alignment,0x200)
+    # Strip rossym but keep exports
     add_custom_command(TARGET uefildr
                     POST_BUILD
-                    COMMAND ${CMAKE_STRIP} --remove-section=.rossym $<TARGET_FILE:uefildr>
-                    COMMAND ${CMAKE_STRIP} --strip-all $<TARGET_FILE:uefildr>)
+                    COMMAND ${CMAKE_STRIP} --remove-section=.rossym $<TARGET_FILE:uefildr>)
 endif()
 
 if(MSVC)

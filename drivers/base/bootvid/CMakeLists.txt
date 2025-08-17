@@ -10,6 +10,10 @@ if((ARCH STREQUAL "i386") OR (ARCH STREQUAL "amd64"))
         list(APPEND SOURCE
             i386/xbox/xbox.h
             i386/xbox/bootvid.c)
+    elseif(DEFINED ENV{UEFI_BUILD} AND (ARCH STREQUAL "amd64"))
+        # Use UEFI GOP driver for AMD64 UEFI builds
+        list(APPEND SOURCE
+            uefi/bootvid.c)
     else()
         list(APPEND SOURCE
             i386/pc/pc.h

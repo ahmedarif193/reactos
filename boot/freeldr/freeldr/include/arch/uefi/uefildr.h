@@ -33,4 +33,8 @@ typedef struct _REACTOS_INTERNAL_BGCONTEXT
     UINT32       PixelFormat;
 } REACTOS_INTERNAL_BGCONTEXT, *PREACTOS_INTERNAL_BGCONTEXT;
 
+/* Global UEFI Variables */
+extern EFI_HANDLE GlobalImageHandle;
+extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+
 VOID __cdecl BootMain(IN PCCH CmdLine);

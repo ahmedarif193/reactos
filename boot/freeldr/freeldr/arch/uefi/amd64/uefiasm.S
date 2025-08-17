@@ -11,8 +11,10 @@
 
 EXTERN UefiServiceStack:QWORD
 EXTERN BasicStack:QWORD
-EXTERN ExecuteLoaderCleanly:PROC
 EXTERN UefiExitBootServices:PROC
+
+/* ExecuteLoaderCleanly is defined in uefildr.c */
+.extern ExecuteLoaderCleanly
 
 .code64
 
@@ -57,10 +59,63 @@ _exituefi:
 // void _changestack(VOID)
 PUBLIC _changestack
 _changestack:
-    mov rax, rsp
-    mov rsp, BasicStack[rip]
-    push rax
-    call ExecuteLoaderCleanly[rip]
+    /* Load new stack pointer from BasicStack variable */
+    mov rax, qword ptr BasicStack[rip]
+    
+    /* Copy return address to new stack */
+    pop rdx           /* Get return address */
+    mov rsp, rax      /* Switch to new stack */
+    
+    /* Align stack to 16 bytes */
+    and rsp, -16
+    sub rsp, 8        /* Make room for return address */
+    
+    push rdx          /* Push return address onto new stack */
+    ret               /* Return on new stack */
+
+// void _JumpToKernel(PVOID KiSystemStartup, PVOID LoaderBlockVA)
+// RCX = KiSystemStartup (kernel entry point)
+// RDX = LoaderBlockVA (loader block virtual address)
+PUBLIC _JumpToKernel
+_JumpToKernel:
+    /* Save kernel entry point */
+    mov rax, rcx      /* Save KiSystemStartup to RAX */
+    
+    /* Set up parameters for kernel */
+    /* Windows x64 calling convention: RCX = first param */
+    mov rcx, rdx      /* LoaderBlockVA becomes first parameter */
+    
+    /* Jump to kernel entry point */
+    jmp rax           /* Jump to KiSystemStartup */
+    
+    /* Should never get here */
+    int 3
+    ret
+
+// void _SwitchToKernelPageTables(ULONG64 PxeBase, PVOID KiSystemStartup, PVOID LoaderBlockVA)
+// RCX = PxeBase (new CR3 value)
+// RDX = KiSystemStartup (kernel entry point)
+// R8 = LoaderBlockVA (loader block virtual address)
+PUBLIC _SwitchToKernelPageTables
+_SwitchToKernelPageTables:
+    /* Disable interrupts */
+    cli
+    
+    /* Save kernel entry point and loader block */
+    mov r9, rdx       /* Save KiSystemStartup */
+    mov r10, r8       /* Save LoaderBlockVA */
+    
+    /* Switch to new page tables */
+    mov cr3, rcx
+    
+    /* Set up parameters for kernel (Windows x64 ABI) */
+    mov rcx, r10      /* LoaderBlockVA is first parameter */
+    
+    /* Jump to kernel */
+    jmp r9            /* Jump to KiSystemStartup */
+    
+    /* Should never get here */
+    int 3
     ret
 
 .align 8

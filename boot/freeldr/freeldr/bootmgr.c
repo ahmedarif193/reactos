@@ -20,6 +20,9 @@
 /* INCLUDES *******************************************************************/
 
 #include <freeldr.h>
+#ifdef UEFIBOOT
+#include <uefildr.h>
+#endif
 
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WARNING);
@@ -287,17 +290,54 @@ LoadOperatingSystem(
     const OS_LOADING_METHOD* OSLoadingMethod;
     ULONG Argc;
     PCHAR* Argv;
+    
+#ifdef UEFIBOOT
+    {
+        extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+        if (GlobalSystemTable && GlobalSystemTable->ConOut)
+        {
+            GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"LoadOperatingSystem: Function entered successfully\r\n");
+            GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"LoadOperatingSystem: Starting\r\n");
+        }
+    }
+#endif
 
     /* Find the suitable OS loader to start */
     OSLoadingMethod = GetOSLoadingMethod(SectionId);
     if (!OSLoadingMethod)
+    {
+#ifdef UEFIBOOT
+        {
+            extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+            if (GlobalSystemTable && GlobalSystemTable->ConOut)
+                GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"LoadOperatingSystem: No loading method found\r\n");
+        }
+#endif
         return;
+    }
     ASSERT(OSLoadingMethod->OsLoader);
+
+#ifdef UEFIBOOT
+    {
+        extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+        if (GlobalSystemTable && GlobalSystemTable->ConOut)
+            GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"LoadOperatingSystem: Building argv\r\n");
+    }
+#endif
 
     /* Build the ARC-compatible argument vector */
     Argv = BuildArgvForOsLoader(OperatingSystem->LoadIdentifier, SectionId, &Argc);
     if (!Argv)
+    {
+#ifdef UEFIBOOT
+        {
+            extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+            if (GlobalSystemTable && GlobalSystemTable->ConOut)
+                GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"LoadOperatingSystem: Failed to build argv\r\n");
+        }
+#endif
         return; // Unexpected failure.
+    }
 
 #ifdef _M_IX86
 #ifndef UEFIBOOT
@@ -306,8 +346,29 @@ LoadOperatingSystem(
 #endif
 #endif
 
+#ifdef UEFIBOOT
+    {
+        extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+        if (GlobalSystemTable && GlobalSystemTable->ConOut)
+            GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"LoadOperatingSystem: Starting OS loader\r\n");
+    }
+#endif
+
     /* Start the OS loader */
+#ifdef UEFIBOOT
+    {
+        extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+        if (GlobalSystemTable && GlobalSystemTable->ConOut)
+        {
+            WCHAR Buffer[256];
+            GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"LoadOperatingSystem: About to call OsLoader\r\n");
+        }
+    }
+#endif
+    
     OSLoadingMethod->OsLoader(Argc, Argv, NULL);
+    
+    ERR("LoadOperatingSystem: OsLoader returned (should not happen)\n");
     FrLdrHeapFree(Argv, TAG_STRING);
 }
 
@@ -380,7 +441,19 @@ VOID RunLoader(VOID)
         UiMessageBoxCritical("Error initializing .ini file.");
         return;
     }
+#ifdef UEFIBOOT
+    {
+        extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"RunLoader: IniFileInitialize succeeded\r\n");
+    }
+#endif
     LoadSettings(NULL);
+#ifdef UEFIBOOT
+    {
+        extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"RunLoader: LoadSettings done\r\n");
+    }
+#endif
 #if 0
     if (FALSE)
     {
@@ -390,17 +463,42 @@ VOID RunLoader(VOID)
 #endif
 
     /* Debugger main initialization */
+#ifdef UEFIBOOT
+    {
+        extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"RunLoader: Starting DebugInit\r\n");
+    }
+#endif
     DebugInit(GetBootMgrInfo()->DebugString);
 
     /* UI main initialization */
+#ifdef UEFIBOOT
+    {
+        extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"RunLoader: Starting UiInitialize (TRUE)\r\n");
+    }
+#endif
     if (!UiInitialize(TRUE))
     {
         UiMessageBoxCritical("Unable to initialize UI.");
         return;
     }
 
+#ifdef UEFIBOOT
+    {
+        extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"RunLoader: InitOperatingSystemList\r\n");
+    }
+#endif
     OperatingSystemList = InitOperatingSystemList(&OperatingSystemCount,
                                                   &DefaultOperatingSystem);
+#ifdef UEFIBOOT
+    {
+        extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+        if (GlobalSystemTable && GlobalSystemTable->ConOut)
+            GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"RunLoader: InitOperatingSystemList returned\r\n");
+    }
+#endif
     if (!OperatingSystemList)
     {
         UiMessageBox("Unable to read operating systems section in freeldr.ini.\nPress ENTER to reboot.");
@@ -413,6 +511,13 @@ VOID RunLoader(VOID)
     }
 
     /* Create list of display names */
+#ifdef UEFIBOOT
+    {
+        extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+        if (GlobalSystemTable && GlobalSystemTable->ConOut)
+            GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"RunLoader: Creating display names\r\n");
+    }
+#endif
     OperatingSystemDisplayNames = FrLdrTempAlloc(sizeof(PCSTR) * OperatingSystemCount, 'mNSO');
     if (!OperatingSystemDisplayNames)
         goto Reboot;
@@ -422,14 +527,35 @@ VOID RunLoader(VOID)
         OperatingSystemDisplayNames[i] = OperatingSystemList[i].LoadIdentifier;
     }
 
+#ifdef UEFIBOOT
+    {
+        extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+        if (GlobalSystemTable && GlobalSystemTable->ConOut)
+            GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"RunLoader: About to show message boxes\r\n");
+    }
+#endif
     /* Find all the message box settings and run them */
     UiShowMessageBoxesInSection(GetBootMgrInfo()->FrLdrSection);
 
     for (;;)
     {
+#ifdef UEFIBOOT
+        {
+            extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+            if (GlobalSystemTable && GlobalSystemTable->ConOut)
+                GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"RunLoader: Starting main loop\r\n");
+        }
+#endif
         /* Redraw the backdrop, but don't overwrite boot options */
         UiDrawBackdrop(UiGetScreenHeight() - 2);
 
+#ifdef UEFIBOOT
+        {
+            extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+            if (GlobalSystemTable && GlobalSystemTable->ConOut)
+                GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"RunLoader: About to display menu\r\n");
+        }
+#endif
         /* Show the operating system list menu */
         if (!UiDisplayMenu("Please select the operating system to start:",
                            "For troubleshooting and advanced startup options for "
@@ -447,6 +573,13 @@ VOID RunLoader(VOID)
             goto Reboot;
         }
 
+#ifdef UEFIBOOT
+        {
+            extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+            if (GlobalSystemTable && GlobalSystemTable->ConOut)
+                GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"RunLoader: About to load operating system\r\n");
+        }
+#endif
         /* Load the chosen operating system */
         LoadOperatingSystem(&OperatingSystemList[SelectedOperatingSystem]);
 

@@ -151,6 +151,11 @@ VOID
 WinLdrSetProcessorContext(
     _In_ USHORT OperatingSystemVersion);
 
+#ifdef UEFIBOOT
+BOOLEAN
+WinLdrSetupKernelVirtualMapping(PLOADER_PARAMETER_BLOCK LoaderBlock);
+#endif
+
 // arch/xxx/winldr.c
 BOOLEAN
 MempSetupPaging(IN PFN_NUMBER StartPage,

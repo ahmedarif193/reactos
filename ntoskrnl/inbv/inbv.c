@@ -189,6 +189,25 @@ InbvDriverInitialize(
 
     /* Initialize the lock and check the current display state */
     KeInitializeSpinLock(&BootDriverLock);
+    
+    /* Check if we're booting via UEFI */
+    BOOLEAN IsUefiBoot = FALSE;
+    if (LoaderBlock && LoaderBlock->Extension)
+    {
+        IsUefiBoot = LoaderBlock->Extension->BootViaEFI;
+        if (IsUefiBoot)
+        {
+            DbgPrint("*** UEFI Boot Detected ***\n");
+            if (LoaderBlock->Extension->UefiFramebuffer.FrameBufferBase.QuadPart)
+            {
+                DbgPrint("*** UEFI GOP Framebuffer: %dx%d @ 0x%llx ***\n",
+                         LoaderBlock->Extension->UefiFramebuffer.ScreenWidth,
+                         LoaderBlock->Extension->UefiFramebuffer.ScreenHeight,
+                         LoaderBlock->Extension->UefiFramebuffer.FrameBufferBase.QuadPart);
+            }
+        }
+    }
+    
     if (InbvDisplayState == INBV_DISPLAY_STATE_OWNED)
     {
         /* Reset the video mode in case we do not have a custom boot logo */
@@ -197,7 +216,17 @@ InbvDriverInitialize(
     }
 
     /* Initialize the video */
-    InbvBootDriverInstalled = VidInitialize(ResetMode);
+    if (IsUefiBoot)
+    {
+        /* For UEFI, we always have display available through GOP */
+        InbvBootDriverInstalled = TRUE;
+        /* TODO: Initialize UEFI framebuffer driver here */
+    }
+    else
+    {
+        /* Legacy BIOS boot - use VGA */
+        InbvBootDriverInstalled = VidInitialize(ResetMode);
+    }
     if (InbvBootDriverInstalled)
     {
         /* Find bitmap resources in the kernel */

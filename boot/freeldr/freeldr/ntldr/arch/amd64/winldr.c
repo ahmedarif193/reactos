@@ -34,9 +34,11 @@ BOOLEAN
 MempAllocatePageTables(VOID)
 {
     // TRACE(">>> MempAllocatePageTables\n");
+    ERR("MempAllocatePageTables: Entry\n");
 
     /* Allocate a page for the PML4 */
     PxeBase = MmAllocateMemoryWithType(PAGE_SIZE, LoaderMemoryData);
+    ERR("MempAllocatePageTables: Allocated PxeBase=%p\n", PxeBase);
     if (!PxeBase)
     {
         ERR("failed to allocate PML4\n");
@@ -47,6 +49,7 @@ MempAllocatePageTables(VOID)
 
     /* Zero the PML4 */
     RtlZeroMemory(PxeBase, PAGE_SIZE);
+    ERR("MempAllocatePageTables: Zeroed PML4\n");
 
     /* The page tables are located at 0xfffff68000000000
      * We create a recursive self mapping through all 4 levels at
@@ -54,10 +57,67 @@ MempAllocatePageTables(VOID)
     PxeBase[VAtoPXI(PXE_BASE)].Valid = 1;
     PxeBase[VAtoPXI(PXE_BASE)].Write = 1;
     PxeBase[VAtoPXI(PXE_BASE)].PageFrameNumber = PtrToPfn(PxeBase);
+    ERR("MempAllocatePageTables: Set recursive mapping\n");
+
+#ifdef UEFIBOOT
+    /* In UEFI mode, we need identity mapping for the first 4GB to ensure code execution continues */
+    ERR("MempAllocatePageTables: UEFI - Setting up identity mapping\n");
+    
+    /* Allocate a PDPT (Page Directory Pointer Table) */
+    PHARDWARE_PTE PdptBase = MmAllocateMemoryWithType(PAGE_SIZE, LoaderMemoryData);
+    if (PdptBase)
+    {
+        RtlZeroMemory(PdptBase, PAGE_SIZE);
+        
+        /* Map first PML4 entry to PDPT */
+        PxeBase[0].Valid = 1;
+        PxeBase[0].Write = 1;
+        PxeBase[0].PageFrameNumber = PtrToPfn(PdptBase);
+        
+        /* Allocate PDs (Page Directories) for first 2GB */
+        PHARDWARE_PTE PdBase0 = MmAllocateMemoryWithType(PAGE_SIZE, LoaderMemoryData);
+        PHARDWARE_PTE PdBase1 = MmAllocateMemoryWithType(PAGE_SIZE, LoaderMemoryData);
+        if (PdBase0 && PdBase1)
+        {
+            RtlZeroMemory(PdBase0, PAGE_SIZE);
+            RtlZeroMemory(PdBase1, PAGE_SIZE);
+            
+            /* Map first two PDPT entries to PDs */
+            PdptBase[0].Valid = 1;
+            PdptBase[0].Write = 1;
+            PdptBase[0].PageFrameNumber = PtrToPfn(PdBase0);
+            
+            PdptBase[1].Valid = 1;
+            PdptBase[1].Write = 1;
+            PdptBase[1].PageFrameNumber = PtrToPfn(PdBase1);
+            
+            /* Create identity mapping using 2MB pages for first 1GB */
+            for (int i = 0; i < 512; i++)
+            {
+                PdBase0[i].Valid = 1;
+                PdBase0[i].Write = 1;
+                PdBase0[i].LargePage = 1;  /* 2MB page */
+                PdBase0[i].PageFrameNumber = i * 512;  /* Each 2MB page = 512 * 4KB */
+            }
+            
+            /* Create identity mapping using 2MB pages for second 1GB */
+            for (int i = 0; i < 512; i++)
+            {
+                PdBase1[i].Valid = 1;
+                PdBase1[i].Write = 1;
+                PdBase1[i].LargePage = 1;  /* 2MB page */
+                PdBase1[i].PageFrameNumber = (512 + i) * 512;  /* Continue from 1GB */
+            }
+            
+            ERR("MempAllocatePageTables: UEFI - Identity mapped first 2GB with 2MB pages\n");
+        }
+    }
+#endif
 
     // FIXME: map PDE's for hals memory mapping
 
     TRACE(">>> leave MempAllocatePageTables\n");
+    ERR("MempAllocatePageTables: Success\n");
 
     return TRUE;
 }
@@ -139,6 +199,14 @@ MempIsPageMapped(PVOID VirtualAddress)
     if (!PdeBase[Index].Valid)
         return FALSE;
 
+    /* Check if this is a large page (2MB) */
+    if (PdeBase[Index].LargePage)
+    {
+        /* It's a 2MB page, so it's mapped */
+        return TRUE;
+    }
+
+    /* Otherwise check the PTE level for 4KB pages */
     PteBase = (PVOID)((ULONG64)(PdeBase[Index].PageFrameNumber) * PAGE_SIZE);
     Index = VAtoPTI(VirtualAddress);
     if (!PteBase[Index].Valid)
@@ -175,14 +243,34 @@ MempSetupPaging(IN PFN_NUMBER StartPage,
     TRACE(">>> MempSetupPaging(0x%lx, %ld, %p)\n",
             StartPage, NumberOfPages, StartPage * PAGE_SIZE + KSEG0_BASE);
 
-    /* Identity mapping */
-    if (MempMapRangeOfPages(StartPage * PAGE_SIZE,
-                            StartPage * PAGE_SIZE,
-                            NumberOfPages) != NumberOfPages)
+#ifdef UEFIBOOT
+    /* In UEFI mode, check if pages are already mapped (e.g., by 2MB pages) */
+    BOOLEAN allMapped = TRUE;
+    for (PFN_NUMBER i = 0; i < NumberOfPages; i++)
     {
-        ERR("Failed to map pages %ld, %ld\n",
-                StartPage, NumberOfPages);
-        return FALSE;
+        if (!MempIsPageMapped((PVOID)((StartPage + i) * PAGE_SIZE)))
+        {
+            allMapped = FALSE;
+            break;
+        }
+    }
+    
+    if (allMapped)
+    {
+        TRACE("Pages already mapped, skipping identity mapping\n");
+    }
+    else
+#endif
+    {
+        /* Identity mapping */
+        if (MempMapRangeOfPages(StartPage * PAGE_SIZE,
+                                StartPage * PAGE_SIZE,
+                                NumberOfPages) != NumberOfPages)
+        {
+            ERR("Failed to map pages %ld, %ld\n",
+                    StartPage, NumberOfPages);
+            return FALSE;
+        }
     }
 
     /* Kernel mapping */
@@ -239,6 +327,209 @@ WinLdrpMapApic(VOID)
     /* Map it */
     MempMapSinglePage(APIC_BASE, APICAddress);
 }
+
+#ifdef UEFIBOOT
+/* Simple wide string comparison for UEFI boot */
+static BOOLEAN
+WinLdrWideStringStartsWith(PCWSTR String, PCWSTR Prefix, SIZE_T PrefixLen)
+{
+    SIZE_T i;
+    if (!String || !Prefix) return FALSE;
+    for (i = 0; i < PrefixLen; i++)
+    {
+        if (String[i] == 0 || String[i] != Prefix[i])
+            return FALSE;
+    }
+    return TRUE;
+}
+
+BOOLEAN
+WinLdrSetupKernelVirtualMapping(PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PLDR_DATA_TABLE_ENTRY KernelDTE, HalDTE, CurrentDTE;
+    PLIST_ENTRY NextEntry;
+    ULONG64 PhysicalBase, VirtualBase;
+    PFN_NUMBER NumPages;
+    
+    ERR("WinLdrSetupKernelVirtualMapping: Setting up kernel virtual mappings\n");
+    
+    /* Find kernel and HAL entries */
+    KernelDTE = NULL;
+    HalDTE = NULL;
+    
+    ERR("WinLdrSetupKernelVirtualMapping: LoaderBlock=%p\n", LoaderBlock);
+    ERR("WinLdrSetupKernelVirtualMapping: LoadOrderListHead at %p\n", &LoaderBlock->LoadOrderListHead);
+    
+    NextEntry = LoaderBlock->LoadOrderListHead.Flink;
+    ERR("WinLdrSetupKernelVirtualMapping: First entry at %p\n", NextEntry);
+    
+    /* Convert virtual to physical if needed */
+    if ((ULONG64)NextEntry >= KSEG0_BASE)
+    {
+        NextEntry = (PLIST_ENTRY)((ULONG64)NextEntry - KSEG0_BASE);
+        ERR("WinLdrSetupKernelVirtualMapping: Converted to physical: %p\n", NextEntry);
+    }
+    
+    while (NextEntry != &LoaderBlock->LoadOrderListHead)
+    {
+        CurrentDTE = CONTAINING_RECORD(NextEntry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+        ERR("WinLdrSetupKernelVirtualMapping: Checking DTE at %p\n", CurrentDTE);
+        
+        /* For UEFI, just use the first two DTEs as kernel and HAL */
+        /* This is a simplification to avoid string comparison issues */
+        if (!KernelDTE)
+        {
+            KernelDTE = CurrentDTE;
+            ERR("WinLdrSetupKernelVirtualMapping: Using first DTE as kernel\n");
+            ERR("  DllBase=%p, SizeOfImage=%x\n", CurrentDTE->DllBase, CurrentDTE->SizeOfImage);
+        }
+        else if (!HalDTE)
+        {
+            HalDTE = CurrentDTE;
+            ERR("WinLdrSetupKernelVirtualMapping: Using second DTE as HAL\n");
+            ERR("  DllBase=%p, SizeOfImage=%x\n", CurrentDTE->DllBase, CurrentDTE->SizeOfImage);
+        }
+        
+        NextEntry = NextEntry->Flink;
+        
+        /* Convert virtual to physical if needed */
+        if ((ULONG64)NextEntry >= KSEG0_BASE)
+        {
+            NextEntry = (PLIST_ENTRY)((ULONG64)NextEntry - KSEG0_BASE);
+        }
+        
+        ERR("WinLdrSetupKernelVirtualMapping: Next entry at %p\n", NextEntry);
+    }
+    
+    if (!KernelDTE)
+    {
+        ERR("WinLdrSetupKernelVirtualMapping: ERROR - Kernel DTE not found!\n");
+        return FALSE;
+    }
+    
+    /* Map the kernel at its virtual address */
+    /* Kernel is loaded physically at 0x400000 but expects to run at 0xFFFFF80000400000 */
+    /* Check if DllBase is already virtual (starts with 0xFFFFF) */
+    if ((ULONG64)KernelDTE->DllBase >= KSEG0_BASE)
+    {
+        /* DllBase is already virtual, extract physical */
+        VirtualBase = (ULONG64)KernelDTE->DllBase & ~(PAGE_SIZE - 1);
+        PhysicalBase = VirtualBase - KSEG0_BASE;
+    }
+    else
+    {
+        /* DllBase is physical */
+        PhysicalBase = (ULONG64)KernelDTE->DllBase & ~(PAGE_SIZE - 1);
+        VirtualBase = KSEG0_BASE + PhysicalBase;
+    }
+    NumPages = (KernelDTE->SizeOfImage + PAGE_SIZE - 1) / PAGE_SIZE;
+    
+    ERR("WinLdrSetupKernelVirtualMapping: Mapping kernel:\n");
+    ERR("  Physical: %llx, Virtual: %llx, Pages: %ld\n", PhysicalBase, VirtualBase, NumPages);
+    
+    if (MempMapRangeOfPages(VirtualBase, PhysicalBase, NumPages) != NumPages)
+    {
+        ERR("WinLdrSetupKernelVirtualMapping: Failed to map kernel!\n");
+        return FALSE;
+    }
+    
+    /* Map HAL if found */
+    if (HalDTE)
+    {
+        /* Check if DllBase is already virtual */
+        if ((ULONG64)HalDTE->DllBase >= KSEG0_BASE)
+        {
+            VirtualBase = (ULONG64)HalDTE->DllBase & ~(PAGE_SIZE - 1);
+            PhysicalBase = VirtualBase - KSEG0_BASE;
+        }
+        else
+        {
+            PhysicalBase = (ULONG64)HalDTE->DllBase & ~(PAGE_SIZE - 1);
+            VirtualBase = KSEG0_BASE + PhysicalBase;
+        }
+        NumPages = (HalDTE->SizeOfImage + PAGE_SIZE - 1) / PAGE_SIZE;
+        
+        ERR("WinLdrSetupKernelVirtualMapping: Mapping HAL:\n");
+        ERR("  Physical: %llx, Virtual: %llx, Pages: %ld\n", PhysicalBase, VirtualBase, NumPages);
+        
+        if (MempMapRangeOfPages(VirtualBase, PhysicalBase, NumPages) != NumPages)
+        {
+            ERR("WinLdrSetupKernelVirtualMapping: Failed to map HAL!\n");
+            return FALSE;
+        }
+    }
+    
+    /* Map all boot drivers */
+    NextEntry = LoaderBlock->BootDriverListHead.Flink;
+    while (NextEntry != &LoaderBlock->BootDriverListHead)
+    {
+        PBOOT_DRIVER_LIST_ENTRY BootDriver = CONTAINING_RECORD(NextEntry, BOOT_DRIVER_LIST_ENTRY, Link);
+        CurrentDTE = BootDriver->LdrEntry;
+        
+        if (CurrentDTE && CurrentDTE->DllBase)
+        {
+            /* Check if DllBase is already virtual */
+            if ((ULONG64)CurrentDTE->DllBase >= KSEG0_BASE)
+            {
+                VirtualBase = (ULONG64)CurrentDTE->DllBase & ~(PAGE_SIZE - 1);
+                PhysicalBase = VirtualBase - KSEG0_BASE;
+            }
+            else
+            {
+                PhysicalBase = (ULONG64)CurrentDTE->DllBase & ~(PAGE_SIZE - 1);
+                VirtualBase = KSEG0_BASE + PhysicalBase;
+            }
+            NumPages = (CurrentDTE->SizeOfImage + PAGE_SIZE - 1) / PAGE_SIZE;
+            
+            ERR("WinLdrSetupKernelVirtualMapping: Mapping driver %S\n", 
+                CurrentDTE->BaseDllName.Buffer ? CurrentDTE->BaseDllName.Buffer : L"<unknown>");
+            
+            if (MempMapRangeOfPages(VirtualBase, PhysicalBase, NumPages) != NumPages)
+            {
+                ERR("WinLdrSetupKernelVirtualMapping: Failed to map driver!\n");
+            }
+        }
+        
+        NextEntry = NextEntry->Flink;
+    }
+    
+    /* Map loader block at both physical and virtual addresses */
+    PhysicalBase = (ULONG64)LoaderBlock & ~(PAGE_SIZE - 1);
+    VirtualBase = KSEG0_BASE + PhysicalBase;
+    NumPages = (sizeof(LOADER_PARAMETER_BLOCK) + PAGE_SIZE - 1) / PAGE_SIZE;
+    
+    ERR("WinLdrSetupKernelVirtualMapping: Mapping LoaderBlock:\n");
+    ERR("  Physical: %llx, Virtual: %llx, Pages: %ld\n", PhysicalBase, VirtualBase, NumPages);
+    
+    if (MempMapRangeOfPages(VirtualBase, PhysicalBase, NumPages) != NumPages)
+    {
+        ERR("WinLdrSetupKernelVirtualMapping: Failed to map LoaderBlock!\n");
+    }
+    
+    /* Ensure freeldr itself is identity-mapped - map more aggressively */
+    ERR("WinLdrSetupKernelVirtualMapping: Ensuring comprehensive identity mapping\n");
+    
+    /* Map first 256MB to ensure all of freeldr and low memory is accessible */
+    for (ULONG64 addr = 0; addr < 0x10000000; addr += PAGE_SIZE)
+    {
+        if (!MempIsPageMapped((PVOID)addr))
+        {
+            /* Map it identity */
+            if (!MempMapSinglePage(addr, addr))
+            {
+                /* Only warn for critical regions */
+                if (addr < 0x8000000)
+                {
+                    ERR("WinLdrSetupKernelVirtualMapping: WARNING - Failed to identity map %llx\n", addr);
+                }
+            }
+        }
+    }
+    
+    ERR("WinLdrSetupKernelVirtualMapping: Virtual mappings complete\n");
+    return TRUE;
+}
+#endif
 
 static
 BOOLEAN
@@ -343,32 +634,92 @@ WinLdrSetProcessorContext(
     _In_ USHORT OperatingSystemVersion)
 {
     TRACE("WinLdrSetProcessorContext\n");
+    ERR("WinLdrSetProcessorContext: Entry\n");
 
     /* Disable Interrupts */
+    ERR("WinLdrSetProcessorContext: Disabling interrupts\n");
     _disable();
 
     /* Re-initialize EFLAGS */
+    ERR("WinLdrSetProcessorContext: Reset EFLAGS\n");
     __writeeflags(0);
 
     /* Set the new PML4 */
+    ERR("WinLdrSetProcessorContext: PxeBase=%p\n", PxeBase);
+    if (!PxeBase)
+    {
+        ERR("WinLdrSetProcessorContext: ERROR - PxeBase is NULL!\n");
+        return;
+    }
+    
+#ifdef UEFIBOOT
+    /* In UEFI mode, we might need to ensure the page tables are identity mapped first */
+    ERR("WinLdrSetProcessorContext: UEFI - Checking if PxeBase is valid\n");
+    
+    /* Try to read from PxeBase to verify it's accessible */
+    volatile ULONG64 test = *(ULONG64*)PxeBase;
+    ERR("WinLdrSetProcessorContext: PxeBase first entry = %llx\n", test);
+    
+    /* Get current CR3 for comparison */
+    ULONG64 oldCr3 = __readcr3();
+    ERR("WinLdrSetProcessorContext: Current CR3 = %llx\n", oldCr3);
+    
+    /* Get current RIP to see where we're executing from */
+    void* currentAddr = WinLdrSetProcessorContext;
+    ERR("WinLdrSetProcessorContext: Current function at %p\n", currentAddr);
+    
+    /* Check if we're in low memory that should be identity mapped */
+    if ((ULONG_PTR)currentAddr > 0x40000000)  /* 1GB */
+    {
+        ERR("WinLdrSetProcessorContext: WARNING - Code at %p is not in identity mapped region!\n", currentAddr);
+        /* For now, continue without changing CR3 in UEFI mode */
+    }
+#endif
+    
+#ifdef UEFIBOOT
+    /* In UEFI mode, we don't switch CR3 here - we'll do it later after setting up virtual mappings */
+    ERR("WinLdrSetProcessorContext: UEFI - Deferring CR3 change until after virtual mapping setup\n");
+#else
+    ERR("WinLdrSetProcessorContext: Setting CR3 to %llx\n", (ULONG64)PxeBase);
     __writecr3((ULONG64)PxeBase);
+    ERR("WinLdrSetProcessorContext: CR3 set\n");
+#endif
 
     /* Get kernel mode address of gdt / idt */
+    ERR("WinLdrSetProcessorContext: GdtIdt=%p\n", GdtIdt);
+#ifdef UEFIBOOT
+    /* In UEFI mode, don't add virtual base since we're not using virtual addresses yet */
+    ERR("WinLdrSetProcessorContext: UEFI - Using physical GdtIdt\n");
+#else
     GdtIdt = (PVOID)((ULONG64)GdtIdt + KSEG0_BASE);
+    ERR("WinLdrSetProcessorContext: GdtIdt(virtual)=%p\n", GdtIdt);
+#endif
 
     /* Create gdt entries and load gdtr */
+    ERR("WinLdrSetProcessorContext: Setting up GDT\n");
+#ifdef UEFIBOOT
+    /* Use physical address for TSS in UEFI mode */
+    Amd64SetupGdt(GdtIdt, (TssBasePage << MM_PAGE_SHIFT));
+#else
     Amd64SetupGdt(GdtIdt, KSEG0_BASE | (TssBasePage << MM_PAGE_SHIFT));
+#endif
+    ERR("WinLdrSetProcessorContext: GDT set\n");
 
     /* Copy old Idt and set idtr */
+    ERR("WinLdrSetProcessorContext: Setting up IDT\n");
     Amd64SetupIdt((PVOID)((ULONG64)GdtIdt + NUM_GDT * sizeof(KGDTENTRY)));
+    ERR("WinLdrSetProcessorContext: IDT set\n");
 
     /* LDT is unused */
 //    __lldt(0);
 
     /* Load TSR */
+    ERR("WinLdrSetProcessorContext: Loading TSS\n");
     __ltr(KGDT64_SYS_TSS);
+    ERR("WinLdrSetProcessorContext: TSS loaded\n");
 
     TRACE("leave WinLdrSetProcessorContext\n");
+    ERR("WinLdrSetProcessorContext: Exit\n");
 }
 
 void WinLdrSetupMachineDependent(PLOADER_PARAMETER_BLOCK LoaderBlock)

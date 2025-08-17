@@ -28,51 +28,15 @@ EfiEntry(
 {
     PCSTR CmdLine = ""; // FIXME: Determine a command-line from UEFI boot options
 
-    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI EntryPoint: Starting freeldr from UEFI");
+    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI EntryPoint: Starting freeldr from UEFI\r\n");
     GlobalImageHandle = ImageHandle;
     GlobalSystemTable = SystemTable;
 
-    /* Load the default settings from the command-line */
-    LoadSettings(CmdLine);
-
-    /* Debugger pre-initialization */
-    DebugInit(BootMgrInfo.DebugString);
-
-    MachInit(CmdLine);
-
-    /* UI pre-initialization */
-    if (!UiInitialize(FALSE))
-    {
-        UiMessageBoxCritical("Unable to initialize UI.");
-        goto Quit;
-    }
-
-    /* Initialize memory manager */
-    if (!MmInitializeMemoryManager())
-    {
-        UiMessageBoxCritical("Unable to initialize memory manager.");
-        goto Quit;
-    }
-
-    /* Initialize I/O subsystem */
-    FsInit();
-
-    /* Initialize the module list */
-    if (!PeLdrInitializeModuleList())
-    {
-        UiMessageBoxCritical("Unable to initialize module list.");
-        goto Quit;
-    }
-
-    if (!MachInitializeBootDevices())
-    {
-        UiMessageBoxCritical("Error when detecting hardware.");
-        goto Quit;
-    }
-
-    /* 0x32000 is what UEFI defines, but we can go smaller if we want */
-    BasicStack = (PVOID)((ULONG_PTR)0x32000 + (ULONG_PTR)MmAllocateMemoryWithType(0x32000, LoaderOsloaderStack));
-    _changestack();
+    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI: About to call BootMain\r\n");
+    /* Call the main boot manager */
+    BootMain(CmdLine);
+    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI: BootMain returned (should not happen)\r\n");
+    UNREACHABLE;
 
 Quit:
     /* If we reach this point, something went wrong before, therefore reboot */
@@ -82,15 +46,6 @@ Quit:
     return 0;
 }
 
-void
-ExecuteLoaderCleanly(PVOID PreviousStack)
-{
-    TRACE("ExecuteLoaderCleanly Entry\n");
-    UefiServiceStack = PreviousStack;
-
-    RunLoader();
-    UNREACHABLE;
-}
 
 #if !defined(_M_ARM) && !defined(_M_ARM64)
 DECLSPEC_NORETURN
