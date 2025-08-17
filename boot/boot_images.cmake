@@ -3,20 +3,11 @@
 # EFI platform ID, used in environ/CMakelists.txt for bootmgfw filename naming also.
 if(ARCH STREQUAL "amd64")
     set(EFI_PLATFORM_ID "x64")
-elseif(ARCH STREQUAL "i386")
-    if(NOT (SARCH STREQUAL "pc98" OR SARCH STREQUAL "xbox"))
-        set(EFI_PLATFORM_ID "ia32")
-    endif()
-elseif(ARCH STREQUAL "ia64")
-    set(EFI_PLATFORM_ID "ia64")
-elseif(ARCH STREQUAL "arm")
-    set(EFI_PLATFORM_ID "arm")
 elseif(ARCH STREQUAL "arm64")
     set(EFI_PLATFORM_ID "aa64")
-else()
-    message(FATAL_ERROR "Unknown ARCH '" ${ARCH} "', cannot generate a valid UEFI boot filename.")
 endif()
 
+# Only build EFI system for architectures that support UEFI
 if(DEFINED EFI_PLATFORM_ID)
     if(ARCH STREQUAL "arm64")
         # ARM64 UEFI doesn't need a boot sector
@@ -190,10 +181,12 @@ if(DEFINED EFI_PLATFORM_ID)
     # For things like flashing USB drives, we also add the efi file into efi/boot.
     add_cd_file(TARGET efisys FILE ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin DESTINATION loader NO_CAB NOT_IN_HYBRIDCD FOR bootcd regtest livecd hybridcd)
 
-    add_cd_file(
-        TARGET uefildr
-        DESTINATION efi/boot
-        NO_CAB
-        NAME_ON_CD boot${EFI_PLATFORM_ID}.efi
-        FOR livecd hybridcd)
+    if(TARGET uefildr)
+        add_cd_file(
+            TARGET uefildr
+            DESTINATION efi/boot
+            NO_CAB
+            NAME_ON_CD boot${EFI_PLATFORM_ID}.efi
+            FOR livecd hybridcd)
+    endif()
 endif()

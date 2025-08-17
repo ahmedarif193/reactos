@@ -238,10 +238,16 @@ elseif(ARCH STREQUAL "amd64")
     if (CMAKE_C_COMPILER_ID STREQUAL "GNU")
         add_compile_options(-mpreferred-stack-boundary=4)
         # SEH is default on x86_64-w64-mingw32, only need unwind tables
-        # Note: GCC uses SEH internally but doesn't expose MSVC-style __try/__except keywords
         add_compile_options(-fasynchronous-unwind-tables)
-        # Don't define __SEH__ as GCC doesn't support MSVC-style SEH keywords
-        message(STATUS "Using PSEH library for AMD64 GCC (SEH internal but no MSVC keywords)")
+        
+        # Stack optimization flags to reduce consumption
+        add_compile_options(-fomit-frame-pointer)           # Save 8 bytes per function
+        add_compile_options(-momit-leaf-frame-pointer)      # Optimize leaf functions
+        add_compile_options(-maccumulate-outgoing-args)     # Reuse argument space
+        
+        # Note: GCC uses SEH internally but doesn't expose MSVC-style __try/__except keywords
+        # We still need PSEH for exception handling syntax, but with optimizations enabled
+        message(STATUS "Using PSEH library for AMD64 GCC with stack optimizations")
     endif()
     add_compile_options(-Wno-error)
 elseif(ARCH STREQUAL "arm64")

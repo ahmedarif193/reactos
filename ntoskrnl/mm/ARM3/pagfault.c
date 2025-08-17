@@ -64,11 +64,12 @@ MiCheckForUserStackOverflow(IN PVOID Address,
     DPRINT("Handling guard page fault with Stacks Addresses 0x%p and 0x%p, guarantee: %lx\n",
             StackBase, DeallocationStack, GuaranteedSize);
 
-    /* Guarantees make this code harder, for now, assume there aren't any */
-    ASSERT(GuaranteedSize == 0);
-
-    /* So allocate only the minimum guard page size */
-    GuaranteedSize = PAGE_SIZE;
+    /* If no guaranteed size is set, use a reasonable default */
+    if (GuaranteedSize == 0)
+    {
+        /* Allocate at least one guard page */
+        GuaranteedSize = PAGE_SIZE;
+    }
 
     /* Does this faulting stack address actually exist in the stack? */
     if ((Address >= StackBase) || (Address < DeallocationStack))
@@ -85,8 +86,8 @@ MiCheckForUserStackOverflow(IN PVOID Address,
     /* Do we have at least one page between here and the end of the stack? */
     if (((ULONG_PTR)NextStackAddress - PAGE_SIZE) <= (ULONG_PTR)DeallocationStack)
     {
-        /* We don't -- Trying to make this guard page valid now */
-        DPRINT1("Close to our death...\n");
+        /* We don't -- Trying to allocate more stack to prevent overflow */
+        DPRINT("WARNING: Stack is nearly exhausted, attempting to extend...\n");
 
         /* Calculate the next memory address */
         NextStackAddress = (PVOID)((ULONG_PTR)PAGE_ALIGN(DeallocationStack) + GuaranteedSize);

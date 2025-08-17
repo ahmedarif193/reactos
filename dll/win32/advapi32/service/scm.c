@@ -2082,16 +2082,8 @@ WaitForSCManager(VOID)
             return;
     }
 
-#ifdef _M_AMD64
-    /* On AMD64, limit the wait time as events may not work properly across processes.
-     * Give SCM 10 seconds to start, which should be plenty based on logs showing
-     * it starts within 40 seconds of boot. */
-    TRACE("WaitForSCManager: [AMD64] Waiting max 10 seconds for SCM\n");
-    WaitForSingleObject(hEvent, 10000);
-#else
     /* Wait for 3 minutes */
     WaitForSingleObject(hEvent, 180000);
-#endif
     CloseHandle(hEvent);
 
     TRACE("ScmWaitForSCManager() done\n");

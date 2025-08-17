@@ -24,16 +24,6 @@
  * to know whether the SCM is initialized.
  */
 #define SCM_START_EVENT L"SvcctrlStartEvent_A3752DX"
-#define SCM_GLOBAL_PREFIX L"Global\\"
-
-/* Full event name with namespace for cross-process access */
-#ifdef _M_AMD64
-    /* On AMD64, concatenate Global prefix with event name */
-    #define SCM_START_EVENT_FULL SCM_GLOBAL_PREFIX SCM_START_EVENT
-#else
-    /* On i386, use event name without prefix */
-    #define SCM_START_EVENT_FULL SCM_START_EVENT
-#endif
 
 typedef struct _SCM_CONTROL_PACKET
 {

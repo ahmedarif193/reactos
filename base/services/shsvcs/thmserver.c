@@ -135,7 +135,8 @@ ThemeWaitForServiceReady(DWORD dwTimeout)
 
     if (!(scm = OpenSCManagerW( NULL, NULL, 0 )))
     {
-        ERR( "failed to open service manager\n" );
+        DWORD dwError = GetLastError();
+        ERR( "failed to open service manager, error %lu (0x%lx)\n", dwError, dwError );
         return FALSE;
     }
     if (!(service = OpenServiceW( scm, ServiceName, SERVICE_QUERY_STATUS )))

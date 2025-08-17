@@ -278,59 +278,17 @@ wWinMain(HINSTANCE hInstance,
 #endif
 
     /* Create the start event */
-#ifdef _M_AMD64
-    /* On AMD64, try without Global namespace since it seems not to work */
-    DPRINT1("SERVICES: [AMD64] Creating SCM start event '%S'...\n", SCM_START_EVENT);
-    DPRINT1("SERVICES: [AMD64] Using CreateEventW(NULL, TRUE, FALSE, '%S')\n", SCM_START_EVENT);
+    DPRINT1("SERVICES: Creating SCM start event '%S'...\n", SCM_START_EVENT);
     hScmStartEvent = CreateEventW(NULL, TRUE, FALSE, SCM_START_EVENT);
-#else
-    DPRINT1("SERVICES: [i386] Creating SCM start event '%S'...\n", SCM_START_EVENT_FULL);
-    DPRINT1("SERVICES: [i386] Using CreateEventW(NULL, TRUE, FALSE, '%S')\n", SCM_START_EVENT_FULL);
-    hScmStartEvent = CreateEventW(NULL, TRUE, FALSE, SCM_START_EVENT_FULL);
-#endif
     if (hScmStartEvent == NULL)
     {
         dwError = GetLastError();
-#ifdef _M_AMD64
-        DPRINT1("SERVICES: [AMD64] CreateEventW FAILED! Error=%lu (0x%lx)\n", dwError, dwError);
-        DPRINT1("SERVICES: [AMD64] Event name was: '%S'\n", SCM_START_EVENT);
-#else
-        DPRINT1("SERVICES: [i386] CreateEventW FAILED! Error=%lu (0x%lx)\n", dwError, dwError);
-        DPRINT1("SERVICES: [i386] Event name was: '%S'\n", SCM_START_EVENT);
-#endif
+        DPRINT1("SERVICES: CreateEventW FAILED! Error=%lu (0x%lx)\n", dwError, dwError);
+        DPRINT1("SERVICES: Event name was: '%S'\n", SCM_START_EVENT);
         goto done;
     }
-#ifdef _M_AMD64
-    DPRINT1("SERVICES: [AMD64] CreateEventW SUCCESS! Handle=%p\n", hScmStartEvent);
-    DPRINT1("SERVICES: [AMD64] Event successfully created with name '%S'\n", SCM_START_EVENT);
-    
-    /* Try to verify the event can be opened */
-    HANDLE hTestEvent = OpenEventW(EVENT_ALL_ACCESS, FALSE, SCM_START_EVENT);
-    if (hTestEvent)
-    {
-        DPRINT1("SERVICES: [AMD64] Verification: Event can be opened successfully (handle=%p)\n", hTestEvent);
-        CloseHandle(hTestEvent);
-    }
-    else
-    {
-        DPRINT1("SERVICES: [AMD64] WARNING: Cannot re-open our own event! Error=%lu\n", GetLastError());
-    }
-#else
-    DPRINT1("SERVICES: [i386] CreateEventW SUCCESS! Handle=%p\n", hScmStartEvent);
-    DPRINT1("SERVICES: [i386] Event successfully created with name '%S'\n", SCM_START_EVENT);
-    
-    /* Try to verify the event can be opened */
-    HANDLE hTestEvent = OpenEventW(EVENT_ALL_ACCESS, FALSE, SCM_START_EVENT);
-    if (hTestEvent)
-    {
-        DPRINT1("SERVICES: [i386] Verification: Event can be opened successfully (handle=%p)\n", hTestEvent);
-        CloseHandle(hTestEvent);
-    }
-    else
-    {
-        DPRINT1("SERVICES: [i386] WARNING: Cannot re-open our own event! Error=%lu\n", GetLastError());
-    }
-#endif
+    DPRINT1("SERVICES: CreateEventW SUCCESS! Handle=%p\n", hScmStartEvent);
+    DPRINT1("SERVICES: Event successfully created with name '%S'\n", SCM_START_EVENT);
 
     /* Create the auto-start complete event */
     hScmAutoStartCompleteEvent = CreateEventW(NULL, TRUE, FALSE, SCM_AUTOSTARTCOMPLETE_EVENT);
@@ -397,40 +355,20 @@ wWinMain(HINSTANCE hInstance,
     }
 
     /* Start the RPC server */
-#ifdef _M_AMD64
-    DPRINT1("SERVICES: [AMD64] Starting RPC server...\n");
-#else
-    DPRINT1("SERVICES: [i386] Starting RPC server...\n");
-#endif
+    DPRINT1("SERVICES: Starting RPC server...\n");
     ScmStartRpcServer();
-#ifdef _M_AMD64
-    DPRINT1("SERVICES: [AMD64] RPC server started successfully\n");
-#else
-    DPRINT1("SERVICES: [i386] RPC server started successfully\n");
-#endif
+    DPRINT1("SERVICES: RPC server started successfully\n");
 
     /* Signal start event */
-#ifdef _M_AMD64
-    DPRINT1("SERVICES: [AMD64] About to signal SCM start event (handle=%p)...\n", hScmStartEvent);
-#else
-    DPRINT1("SERVICES: [i386] About to signal SCM start event (handle=%p)...\n", hScmStartEvent);
-#endif
+    DPRINT1("SERVICES: About to signal SCM start event (handle=%p)...\n", hScmStartEvent);
     if (!SetEvent(hScmStartEvent))
     {
         dwError = GetLastError();
-#ifdef _M_AMD64
-        DPRINT1("SERVICES: [AMD64] SetEvent FAILED! Error=%lu (0x%lx)\n", dwError, dwError);
-#else
-        DPRINT1("SERVICES: [i386] SetEvent FAILED! Error=%lu (0x%lx)\n", dwError, dwError);
-#endif
+        DPRINT1("SERVICES: SetEvent FAILED! Error=%lu (0x%lx)\n", dwError, dwError);
     }
     else
     {
-#ifdef _M_AMD64
-        DPRINT1("SERVICES: [AMD64] SetEvent SUCCESS! Event is now signaled\n");
-#else
-        DPRINT1("SERVICES: [i386] SetEvent SUCCESS! Event is now signaled\n");
-#endif
+        DPRINT1("SERVICES: SetEvent SUCCESS! Event is now signaled\n");
     }
 #ifdef _M_AMD64
     DPRINT1("SERVICES: [AMD64] SCM fully initialized and ready!\n");

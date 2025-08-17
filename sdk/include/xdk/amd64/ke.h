@@ -181,7 +181,12 @@ $if (_NTDDK_)
 
 #define PAUSE_PROCESSOR YieldProcessor();
 
-#define KERNEL_STACK_SIZE 0x6000
+/* MinGW needs more stack due to PSEH overhead and less efficient stack usage */
+#ifdef __GNUC__
+#define KERNEL_STACK_SIZE 0xC000  /* 48KB for MinGW - increased for AMD64 */
+#else
+#define KERNEL_STACK_SIZE 0xA000  /* 40KB for MSVC - increased for AMD64 */
+#endif
 #define KERNEL_LARGE_STACK_SIZE 0x12000
 #define KERNEL_LARGE_STACK_COMMIT KERNEL_STACK_SIZE
 
