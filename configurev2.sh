@@ -307,7 +307,7 @@ if [ $? -eq 0 ]; then
         echo "  cd $OUTPUT_DIR && ninja lviecd"
     else
         echo "  cd $OUTPUT_DIR && make"
-        echo "  cd $OUTPUT_DIR && make lviecd"
+        echo "  cd $OUTPUT_DIR && make livecd"
     fi
     echo "========================================="
 else
