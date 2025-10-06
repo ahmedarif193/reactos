@@ -4586,16 +4586,17 @@ static void prepare_clip_space_planes(struct d3d_device *device, struct wined3d_
     plane[5].w = m._44 - m._43;
 }
 
-static void compute_sphere_visibility(struct wined3d_vec4 plane[12], DWORD enabled_planes, BOOL equality,
-        D3DVECTOR *centers, D3DVALUE *radii, DWORD sphere_count, DWORD *return_values)
+static void compute_sphere_visibility(const struct wined3d_vec4 *plane, UINT plane_count,
+        DWORD enabled_planes, BOOL equality, D3DVECTOR *centers, D3DVALUE *radii,
+        DWORD sphere_count, DWORD *return_values)
 {
     UINT i, j;
 
     for (i = 0; i < sphere_count; ++i)
     {
         return_values[i] = 0;
-        for (j = 0; j < 12; ++j)
-            if (enabled_planes & 1u << j)
+        for (j = 0; j < plane_count; ++j)
+            if (enabled_planes & (1u << j))
                 return_values[i] |= in_plane(j, plane[j], centers[i], radii[i], equality);
     }
 }
@@ -4618,7 +4619,8 @@ static HRESULT WINAPI d3d_device7_ComputeSphereVisibility(IDirect3DDevice7 *ifac
     for (j = 6; j < 12; ++j)
         IDirect3DDevice7_GetClipPlane(iface, j - 6, (D3DVALUE *)&plane[j]);
 
-    compute_sphere_visibility(plane, enabled_planes, FALSE, centers, radii, sphere_count, return_values);
+    compute_sphere_visibility(plane, ARRAY_SIZE(plane), enabled_planes, FALSE,
+            centers, radii, sphere_count, return_values);
     return D3D_OK;
 }
 
@@ -4634,7 +4636,8 @@ static HRESULT WINAPI d3d_device3_ComputeSphereVisibility(IDirect3DDevice3 *ifac
 
     prepare_clip_space_planes(impl_from_IDirect3DDevice3(iface), plane);
 
-    compute_sphere_visibility(plane, enabled_planes, TRUE, centers, radii, sphere_count, return_values);
+    compute_sphere_visibility(plane, ARRAY_SIZE(plane), enabled_planes, TRUE,
+            centers, radii, sphere_count, return_values);
     for (i = 0; i < sphere_count; ++i)
     {
         BOOL intersect_frustum = FALSE, outside_frustum = FALSE;

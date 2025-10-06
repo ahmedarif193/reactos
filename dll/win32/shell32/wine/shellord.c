@@ -1629,7 +1629,9 @@ HRESULT WINAPI SHCreateShellFolderViewEx(
     hRes = IShellView_Constructor(psvcbi->pshf, &psf);
 
     if (FAILED(hRes))
+    {
         return hRes;
+    }
 
 	hRes = IShellView_QueryInterface(psf, &IID_IShellView, (LPVOID *)ppv);
 	IShellView_Release(psf);
@@ -2453,7 +2455,9 @@ HRESULT WINAPI SHCreateStdEnumFmtEtc(
 
     hRes = IEnumFORMATETC_Constructor(cFormats, lpFormats, &pef);
     if (FAILED(hRes))
+    {
         return hRes;
+    }
 
 	IEnumFORMATETC_AddRef(pef);
 	hRes = IEnumFORMATETC_QueryInterface(pef, &IID_IEnumFORMATETC, (LPVOID*)ppenumFormatetc);

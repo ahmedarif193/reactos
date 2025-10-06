@@ -300,7 +300,7 @@ extern void gl_save_MultMatrixf( GLcontext *ctx, const GLfloat *m );
 
 extern void gl_save_NewList( GLcontext *ctx, GLuint list, GLenum mode );
 
-extern void gl_save_Normal3fv( GLcontext *ctx, const GLfloat n[3] );
+extern void gl_save_Normal3fv( GLcontext *ctx, const GLfloat *n );
 
 extern void gl_save_Normal3f( GLcontext *ctx,
                               GLfloat nx, GLfloat ny, GLfloat nz );

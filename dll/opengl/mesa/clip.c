@@ -538,7 +538,7 @@ GLuint gl_viewclip_polygon( GLcontext* ctx, GLuint n, GLuint vlist[] )
       /* check for overflowing vertex buffer */				\
       if (OUTCOUNT>=VB_SIZE-1) {					\
 	 /* Too many vertices */					\
-         if (OUTLIST==vlist2) {						\
+         if ((OUTLIST) == (GLuint *)vlist2) {					\
 	    /* copy OUTLIST[] to vlist[] */				\
 	    int i;							\
 	    for (i=0;i<VB_SIZE;i++) {					\
@@ -1052,4 +1052,3 @@ GLuint gl_userclip_polygon( GLcontext* ctx, GLuint n, GLuint vlist[] )
 
    return outcount;
 }
-

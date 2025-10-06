@@ -21,6 +21,9 @@
 
 #include "precomp.h"
 
+#include <stdlib.h>
+#include <string.h>
+
 #include "pathnames.h"
 
 #ifndef lint
@@ -1660,29 +1663,42 @@ static void fatal(const char *msg)
  * Can't control multiple values being expanded
  * from the expression, we return only the first.
  */
+/* On success, *cpp may be replaced with a heap-allocated duplicate (caller lifetime). */
 int globulize(const char **cpp)
 {
-	char **globbed;
+	char **globbed_base;
+	const char *first_entry;
+	char *duplicate;
 
 	if (!doglob)
 		return (1);
-	globbed = glob(*cpp);
+	globbed_base = glob(*cpp);
 	if (globerr != NULL) {
 		printf("%s: %s\n", *cpp, globerr);
 		(void) fflush(stdout);
-		if (globbed) {
-			blkfree(globbed);
-			free((char *)globbed);
+		if (globbed_base) {
+			blkfree(globbed_base);
+			free(globbed_base);
 		}
 		return (0);
 	}
-	if (globbed) {
-		*cpp = *globbed++;
-		/* don't waste too much memory */
-		if (*globbed) {
-			blkfree(globbed);
-			free((char *)globbed);
+	if (globbed_base) {
+		first_entry = globbed_base[0];
+		if (!first_entry) {
+			blkfree(globbed_base);
+			free(globbed_base);
+			return (0);
 		}
+
+		duplicate = _strdup(first_entry);
+		if (duplicate == NULL) {
+			blkfree(globbed_base);
+			free(globbed_base);
+			return (0);
+		}
+		*cpp = duplicate;
+		blkfree(globbed_base);
+		free(globbed_base);
 	}
 	return (1);
 }

@@ -16,6 +16,13 @@ struct IMAGE_PART
     HBITMAP m_hbmImage;
     BOOL m_bPartial;
 
+    IMAGE_PART()
+        : m_hbmImage(NULL)
+        , m_bPartial(FALSE)
+    {
+        m_rcPart.SetRectEmpty();
+    }
+
     void clear();
 };
 

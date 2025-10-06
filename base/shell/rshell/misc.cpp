@@ -189,6 +189,11 @@ DllUnregisterServer(void)
     return S_OK;
 }
 
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Woverloaded-virtual"
+#endif
+
 class CRShellClassFactory :
     public CComObjectRootEx<CComMultiThreadModelNoCS>,
     public IClassFactory
@@ -241,6 +246,10 @@ public:
         COM_INTERFACE_ENTRY_IID(IID_IClassFactory, IClassFactory)
     END_COM_MAP()
 };
+
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
 
 STDAPI
 DllGetClassObject(

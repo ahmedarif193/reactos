@@ -218,8 +218,43 @@ typedef union _KTRAP_EXIT_SKIP_BITS
 // more time, this way we don't redefine ALL opcode handlers to have 3 parameters,
 // which would be forcing stack usage in all other scenarios.
 //
-#define KiVdmSetVdmEFlags(x)        InterlockedOr((PLONG)KiNtVdmState, (x));
-#define KiVdmClearVdmEFlags(x)      InterlockedAnd((PLONG)KiNtVdmState, ~(x))
+extern volatile LONG * const KiNtVdmState;
+
+#if defined(__GNUC__)
+FORCEINLINE
+VOID
+KiVdmAtomicOr(
+    _Inout_ volatile LONG *Address,
+    _In_ LONG Mask)
+{
+    __asm__ __volatile__("lock orl %1, %0"
+                         : "+m" (*Address)
+                         : "ir" (Mask)
+                         : "memory");
+}
+
+FORCEINLINE
+VOID
+KiVdmAtomicAnd(
+    _Inout_ volatile LONG *Address,
+    _In_ LONG Mask)
+{
+    __asm__ __volatile__("lock andl %1, %0"
+                         : "+m" (*Address)
+                         : "ir" (Mask)
+                         : "memory");
+}
+
+#define KiVdmSetVdmEFlagsAt(p, m)   do { KiVdmAtomicOr((volatile LONG *)(p),  (LONG)(m)); } while (0)
+#define KiVdmClearVdmEFlagsAt(p, m) do { KiVdmAtomicAnd((volatile LONG *)(p), ~(LONG)(m)); } while (0)
+#else
+#define KiVdmSetVdmEFlagsAt(p, m)   do { InterlockedOr((volatile LONG *)(p),  (LONG)(m)); } while (0)
+#define KiVdmClearVdmEFlagsAt(p, m) do { InterlockedAnd((volatile LONG *)(p), ~(LONG)(m)); } while (0)
+#endif
+#define KiVdmSetVdmEFlags(x)        KiVdmSetVdmEFlagsAt(KiNtVdmState, (x))
+#define KiVdmClearVdmEFlags(x)      KiVdmClearVdmEFlagsAt(KiNtVdmState, (x))
+
+C_ASSERT(sizeof(LONG) == sizeof(ULONG));
 #define KiCallVdmHandler(x)         KiVdmOpcode##x(TrapFrame, Flags)
 #define KiCallVdmPrefixHandler(x)   KiVdmOpcodePrefix(TrapFrame, Flags | x)
 #define KiVdmUnhandledOpcode(x)                     \

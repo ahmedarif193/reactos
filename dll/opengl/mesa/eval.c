@@ -2026,9 +2026,8 @@ void gl_EvalCoord1f(GLcontext* ctx, GLfloat u)
      colorptr = icolor;
   }
   else {
-     GLubyte col[4];
-     COPY_4V(col, ctx->Current.ByteColor );
-     colorptr = col;
+     COPY_4V(icolor, ctx->Current.ByteColor);
+     colorptr = icolor;
   }
 
   /** Normal Vector **/
@@ -2164,9 +2163,8 @@ void gl_EvalCoord2f( GLcontext* ctx, GLfloat u, GLfloat v )
       colorptr = icolor;
    }
    else {
-     GLubyte col[4];
-     COPY_4V(col, ctx->Current.ByteColor );
-     colorptr = col;
+     COPY_4V(icolor, ctx->Current.ByteColor);
+     colorptr = icolor;
    }
 
    /** Normal **/
@@ -2463,4 +2461,3 @@ void gl_EvalMesh2( GLcontext* ctx, GLenum mode, GLint i1, GLint i2, GLint j1, GL
 #undef I_TO_U
 #undef J_TO_V
 }
-
