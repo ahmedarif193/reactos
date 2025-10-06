@@ -108,7 +108,13 @@ UniataChipDetectChannels(
         AtapiRegCheckDevValue(deviceExtension, CHAN_NOT_SPECIFIED, DEVNUM_NOT_SPECIFIED, L"PortMask", (ULONG)0xffffffff >> (32-deviceExtension->NumberChannels) );
     KdPrint2((PRINT_PREFIX "Force PortMask %#x\n", deviceExtension->AHCI_PI_mask));
 
-    for(i=deviceExtension->AHCI_PI_mask, n=0; i; n++, i=i>>1);
+    /* Count active ports (PI can be sparse) */
+    n = 0;
+    for (i = deviceExtension->AHCI_PI_mask; i; i >>= 1)
+    {
+        if (i & 1)
+            n++;
+    }
     KdPrint2((PRINT_PREFIX "mask -> %d chans\n", n));
 
     switch(VendorID) {
@@ -2986,4 +2992,3 @@ UniataFreeLunExt(
 
     return;
 } // end UniataFreeLunExt()
-

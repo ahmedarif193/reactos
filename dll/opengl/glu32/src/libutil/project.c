@@ -37,20 +37,26 @@
 /*
 ** Make m an identity matrix
 */
-static void __gluMakeIdentityd(GLdouble m[16])
+static void __gluMakeIdentityd(GLdouble m[4][4])
 {
-    m[0+4*0] = 1; m[0+4*1] = 0; m[0+4*2] = 0; m[0+4*3] = 0;
-    m[1+4*0] = 0; m[1+4*1] = 1; m[1+4*2] = 0; m[1+4*3] = 0;
-    m[2+4*0] = 0; m[2+4*1] = 0; m[2+4*2] = 1; m[2+4*3] = 0;
-    m[3+4*0] = 0; m[3+4*1] = 0; m[3+4*2] = 0; m[3+4*3] = 1;
+    int r, c;
+
+    for (r = 0; r < 4; ++r)
+    {
+        for (c = 0; c < 4; ++c)
+            m[r][c] = (r == c) ? 1.0 : 0.0;
+    }
 }
 
-static void __gluMakeIdentityf(GLfloat m[16])
+static void __gluMakeIdentityf(GLfloat m[4][4])
 {
-    m[0+4*0] = 1; m[0+4*1] = 0; m[0+4*2] = 0; m[0+4*3] = 0;
-    m[1+4*0] = 0; m[1+4*1] = 1; m[1+4*2] = 0; m[1+4*3] = 0;
-    m[2+4*0] = 0; m[2+4*1] = 0; m[2+4*2] = 1; m[2+4*3] = 0;
-    m[3+4*0] = 0; m[3+4*1] = 0; m[3+4*2] = 0; m[3+4*3] = 1;
+    int r, c;
+
+    for (r = 0; r < 4; ++r)
+    {
+        for (c = 0; c < 4; ++c)
+            m[r][c] = (r == c) ? 1.0f : 0.0f;
+    }
 }
 
 void GLAPIENTRY
@@ -75,7 +81,7 @@ gluPerspective(GLdouble fovy, GLdouble aspect, GLdouble zNear, GLdouble zFar)
     }
     cotangent = COS(radians) / sine;
 
-    __gluMakeIdentityd(&m[0][0]);
+    __gluMakeIdentityd(m);
     m[0][0] = cotangent / aspect;
     m[1][1] = cotangent;
     m[2][2] = -(zFar + zNear) / deltaZ;
@@ -129,7 +135,7 @@ gluLookAt(GLdouble eyex, GLdouble eyey, GLdouble eyez, GLdouble centerx,
     /* Recompute up as: up = side x forward */
     cross(side, forward, up);
 
-    __gluMakeIdentityf(&m[0][0]);
+    __gluMakeIdentityf(m);
     m[0][0] = side[0];
     m[1][0] = side[1];
     m[2][0] = side[2];

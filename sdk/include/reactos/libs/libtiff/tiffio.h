@@ -504,7 +504,7 @@ extern uint64 TIFFGetStrileByteCountWithErr(TIFF *tif, uint32 strile, int *pbErr
 #define UVSCALE		410.
 extern double LogL16toY(int);
 extern double LogL10toY(int);
-extern void XYZtoRGB24(float*, uint8*);
+extern void XYZtoRGB24(const float*, uint8*);
 extern int uv_decode(double*, double*, int);
 extern void LogLuv24toXYZ(uint32, float*);
 extern void LogLuv32toXYZ(uint32, float*);
@@ -512,14 +512,14 @@ extern void LogLuv32toXYZ(uint32, float*);
 extern int LogL16fromY(double, int = SGILOGENCODE_NODITHER);
 extern int LogL10fromY(double, int = SGILOGENCODE_NODITHER);
 extern int uv_encode(double, double, int = SGILOGENCODE_NODITHER);
-extern uint32 LogLuv24fromXYZ(float*, int = SGILOGENCODE_NODITHER);
-extern uint32 LogLuv32fromXYZ(float*, int = SGILOGENCODE_NODITHER);
+extern uint32 LogLuv24fromXYZ(const float*, int = SGILOGENCODE_NODITHER);
+extern uint32 LogLuv32fromXYZ(const float*, int = SGILOGENCODE_NODITHER);
 #else
 extern int LogL16fromY(double, int);
 extern int LogL10fromY(double, int);
 extern int uv_encode(double, double, int);
-extern uint32 LogLuv24fromXYZ(float*, int);
-extern uint32 LogLuv32fromXYZ(float*, int);
+extern uint32 LogLuv24fromXYZ(const float*, int);
+extern uint32 LogLuv32fromXYZ(const float*, int);
 #endif
 #endif /* LOGLUV_PUBLIC */
 

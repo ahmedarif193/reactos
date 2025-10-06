@@ -131,8 +131,14 @@ struct FxTagHistory {
 
     FxTagHistory(
         )
+        : RefType(static_cast<decltype(RefType)>(0))
+        , RefCount(0)
+        , File(NULL)
+        , Line(0)
+        , Tag(NULL)
+        , StackFrames(NULL)
     {
-        StackFrames = NULL;
+        Time.QuadPart = 0;
     }
 
     ~FxTagHistory(
@@ -172,7 +178,10 @@ private:
         m_CurRefHistory(0),
         m_OwningObject(Owner)
     {
-        RtlZeroMemory(m_TagHistory, sizeof(m_TagHistory));
+        for (size_t i = 0; i < RTL_NUMBER_OF(m_TagHistory); ++i)
+        {
+            m_TagHistory[i] = FxTagHistory();
+        }
 
         //
         // We keep handle reference trackers in a list,
@@ -314,4 +323,3 @@ protected:
 };
 
 #endif // _FXTAGTRACKER_HPP_
-

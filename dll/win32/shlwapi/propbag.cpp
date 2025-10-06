@@ -143,6 +143,11 @@ protected:
 public:
     CMemPropertyBag(DWORD dwMode) : CBasePropertyBag(dwMode) { }
 
+#if (_WIN32_WINNT < _WIN32_WINNT_VISTA)
+    using CBasePropertyBag::Read;
+    using CBasePropertyBag::Write;
+#endif
+
     STDMETHODIMP Read(_In_z_ LPCWSTR pszPropName, _Inout_ VARIANT *pvari,
                       _Inout_opt_ IErrorLog *pErrorLog) override;
     STDMETHODIMP Write(_In_z_ LPCWSTR pszPropName, _In_ VARIANT *pvari) override;
@@ -289,6 +294,11 @@ public:
     }
 
     HRESULT Init(HKEY hKey, LPCWSTR lpSubKey);
+
+#if (_WIN32_WINNT < _WIN32_WINNT_VISTA)
+    using CBasePropertyBag::Read;
+    using CBasePropertyBag::Write;
+#endif
 
     STDMETHODIMP Read(_In_z_ LPCWSTR pszPropName, _Inout_ VARIANT *pvari,
                       _Inout_opt_ IErrorLog *pErrorLog) override;
@@ -797,6 +807,11 @@ public:
 
     HRESULT Init(LPCWSTR pszIniFile, LPCWSTR pszSection);
 
+#if (_WIN32_WINNT < _WIN32_WINNT_VISTA)
+    using CBasePropertyBag::Read;
+    using CBasePropertyBag::Write;
+#endif
+
     STDMETHODIMP Read(
         _In_z_ LPCWSTR pszPropName,
         _Inout_ VARIANT *pvari,
@@ -1019,6 +1034,11 @@ protected:
 
 public:
     CDesktopUpgradePropertyBag() : CBasePropertyBag(STGM_READ) { }
+
+#if (_WIN32_WINNT < _WIN32_WINNT_VISTA)
+    using CBasePropertyBag::Read;
+    using CBasePropertyBag::Write;
+#endif
 
     STDMETHODIMP Read(
         _In_z_ LPCWSTR pszPropName,
@@ -1295,6 +1315,11 @@ public:
 
     HRESULT Init(_In_opt_ LPCITEMIDLIST pidl, _In_opt_ LPCWSTR pszPath, _In_ DWORD dwVspbFlags);
     BOOL IsSameBag(LPCITEMIDLIST pidl, LPCWSTR pszPath, DWORD dwVspbFlags) const;
+
+#if (_WIN32_WINNT < _WIN32_WINNT_VISTA)
+    using CBasePropertyBag::Read;
+    using CBasePropertyBag::Write;
+#endif
 
     STDMETHODIMP Read(
         _In_z_ LPCWSTR pszPropName,

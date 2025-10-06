@@ -248,59 +248,110 @@ BOOL SendRequest( PCHAR pInBuffer,
 
 void ReverseIP( PCHAR pIP, PCHAR pReturn )
 {
-    int i;
-    int j;
-    int k = 0;
+    CHAR buffer[16];
+    CHAR reversed[16];
+    CHAR *segments[4] = { NULL };
+    CHAR inputCopy[16];
+    const CHAR *source;
+    SIZE_T length;
+    CHAR *cursor;
+    INT count = 0;
+    SIZE_T offset = 0;
+    BOOL valid = TRUE;
 
-    j = strlen( pIP ) - 1;
-    i = j;
+    if (!pIP || !pReturn)
+        return;
 
-    /* We have A.B.C.D
-       We will turn this into D.C.B.A and stick it in pReturn */
+    source = pIP;
+    length = strlen(source);
+    if (length >= sizeof(buffer))
+    {
+        pReturn[0] = '\0';
+        return;
+    }
 
-    /* A */
-    for( ; i > 0; i -= 1 ) if( '.' == pIP[i] ) break;
+    if (pReturn == pIP)
+    {
+        memcpy(inputCopy, pIP, length + 1);
+        source = inputCopy;
+    }
 
-    strncpy( &pReturn[k], &pIP[i + 1], (j - i) );
-    k += (j - i);
+    memcpy(buffer, source, length + 1);
 
-    pReturn[k] = '.';
-    k += 1;
+    cursor = buffer;
+    while (valid && *cursor)
+    {
+        CHAR *segment = cursor;
 
-    i -= 1;
-    j = i;
+        if (count >= 4)
+        {
+            valid = FALSE;
+            break;
+        }
 
-    /* B */
-    for( ; i > 0; i -= 1 ) if( '.' == pIP[i] ) break;
+        while (*cursor && *cursor != '.')
+            cursor++;
 
-    strncpy( &pReturn[k], &pIP[i + 1], (j - i) );
-    k += (j - i);
+        if (cursor == segment)
+        {
+            valid = FALSE;
+            break;
+        }
 
-    pReturn[k] = '.';
-    k += 1;
+        segments[count++] = segment;
 
-    i -= 1;
-    j = i;
+        if (*cursor == '.')
+        {
+            *cursor++ = '\0';
+            if (*cursor == '\0')
+            {
+                valid = FALSE;
+                break;
+            }
+        }
+    }
 
-    /* C */
-    for( ; i > 0; i -= 1 ) if( '.' == pIP[i] ) break;
+    if (valid && count != 4)
+        valid = FALSE;
 
-    strncpy( &pReturn[k], &pIP[i + 1], (j - i) );
-    k += (j - i);
+    if (!valid)
+    {
+        pReturn[0] = '\0';
+        return;
+    }
 
-    pReturn[k] = '.';
-    k += 1;
+    for (INT idx = count - 1; idx >= 0; --idx)
+    {
+        SIZE_T segmentLength = strlen(segments[idx]);
 
-    i -= 1;
-    j = i;
+        if (offset + segmentLength >= sizeof(reversed))
+        {
+            valid = FALSE;
+            break;
+        }
 
-    /* D */
-    for( ; i > 0; i -= 1 );
+        memcpy(reversed + offset, segments[idx], segmentLength);
+        offset += segmentLength;
 
-    strncpy( &pReturn[k], &pIP[i], (j - i) + 1 );
-    k += (j - i) + 1;
+        if (idx > 0)
+        {
+            if (offset + 1 >= sizeof(reversed))
+            {
+                valid = FALSE;
+                break;
+            }
+            reversed[offset++] = '.';
+        }
+    }
 
-    pReturn[k] = '\0';
+    if (!valid)
+    {
+        pReturn[0] = '\0';
+        return;
+    }
+
+    reversed[offset] = '\0';
+    memcpy(pReturn, reversed, offset + 1);
 }
 
 BOOL IsValidIP( PCHAR pInput )

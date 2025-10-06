@@ -323,7 +323,7 @@ gluTessCallback( GLUtesselator *tess, GLenum which, _GLUfuncptr fn)
     return;
   case GLU_TESS_COMBINE:
     tess->callCombine = (fn == NULL) ? &noCombine :
-	(void (GLAPIENTRY *)(GLdouble [3],void *[4], GLfloat [4], void ** )) fn;
+	(void (GLAPIENTRY *)(GLdouble [3], void *[4], GLfloat [4], void **)) fn;
     return;
   case GLU_TESS_COMBINE_DATA:
     tess->callCombineData = (fn == NULL) ? &__gl_noCombineData :
@@ -342,7 +342,7 @@ gluTessCallback( GLUtesselator *tess, GLenum which, _GLUfuncptr fn)
   }
 }
 
-static int AddVertex( GLUtesselator *tess, GLdouble coords[3], void *data )
+static int AddVertex( GLUtesselator *tess, GLdouble *coords, void *data )
 {
   GLUhalfEdge *e;
 
@@ -381,7 +381,7 @@ static int AddVertex( GLUtesselator *tess, GLdouble coords[3], void *data )
 }
 
 
-static void CacheVertex( GLUtesselator *tess, GLdouble coords[3], void *data )
+static void CacheVertex( GLUtesselator *tess, GLdouble *coords, void *data )
 {
   CachedVertex *v = &tess->cache[tess->cacheCount];
 
@@ -412,7 +412,7 @@ static int EmptyCache( GLUtesselator *tess )
 
 
 void GLAPIENTRY
-gluTessVertex( GLUtesselator *tess, GLdouble coords[3], void *data )
+gluTessVertex( GLUtesselator *tess, GLdouble *coords, void *data )
 {
   int i, tooLarge = FALSE;
   GLdouble x, clamped[3];

@@ -1091,7 +1091,7 @@ void gl_vertex2f_nop( GLcontext *ctx, GLfloat x, GLfloat y )
    gl_error( ctx, GL_INVALID_OPERATION, "glVertex2" );
 }
 
-void gl_vertex3fv_nop( GLcontext *ctx, const GLfloat v[3] )
+void gl_vertex3fv_nop( GLcontext *ctx, const GLfloat *v )
 {
    gl_error( ctx, GL_INVALID_OPERATION, "glVertex3v" );
 }
@@ -1450,4 +1450,3 @@ void gl_End( GLcontext *ctx )
    ctx->BeginEndCount++;
 #endif
 }
-

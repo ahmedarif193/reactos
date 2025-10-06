@@ -139,7 +139,7 @@ UDFCommonClose(
     PIRP             Irp
     )
 {
-    NTSTATUS                RC = STATUS_SUCCESS;
+    NTSTATUS                RC = STATUS_UNSUCCESSFUL;
     PIO_STACK_LOCATION      IrpSp = NULL;
     PFILE_OBJECT            FileObject = NULL;
     PtrUDFFCB               Fcb = NULL;
@@ -925,7 +925,7 @@ UDFCloseAllXXXDelayedInDir(
     ULONG                   PassedListSize = 0;
     PUDF_FILE_INFO*         FoundList = NULL;
     ULONG                   FoundListSize = 0;
-    NTSTATUS                RC;
+    NTSTATUS                RC = STATUS_UNSUCCESSFUL;
     ULONG                   i;
     _SEH2_VOLATILE BOOLEAN  ResAcq = FALSE;
     _SEH2_VOLATILE BOOLEAN  AcquiredVcb = FALSE;
@@ -1111,7 +1111,7 @@ UDFQueueDelayedClose(
     PtrUDFIrpContextLite    IrpContextLite;
     BOOLEAN                 StartWorker = FALSE;
     _SEH2_VOLATILE BOOLEAN  AcquiredVcb = FALSE;
-    NTSTATUS                RC;
+    NTSTATUS                RC = STATUS_UNSUCCESSFUL;
 
     AdPrint(("  UDFQueueDelayedClose\n"));
 
@@ -1192,4 +1192,3 @@ try_exit:    NOTHING;
     } _SEH2_END;
     return RC;
 } // end UDFQueueDelayedClose()
-

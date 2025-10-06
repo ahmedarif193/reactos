@@ -198,7 +198,7 @@ BOOL CheckCtrlBreak(INT mode)
 BOOL add_entry (LPINT ac, LPTSTR **arg, LPCTSTR entry)
 {
     LPTSTR q;
-    LPTSTR *oldarg;
+    LPTSTR *newArray;
 
     q = cmd_alloc ((_tcslen(entry) + 1) * sizeof (TCHAR));
     if (!q)
@@ -208,15 +208,15 @@ BOOL add_entry (LPINT ac, LPTSTR **arg, LPCTSTR entry)
     }
 
     _tcscpy (q, entry);
-    oldarg = *arg;
-    *arg = cmd_realloc (oldarg, (*ac + 2) * sizeof (LPTSTR));
-    if (!*arg)
+    newArray = cmd_realloc(*arg, ((*ac) + 2) * sizeof(LPTSTR));
+    if (!newArray)
     {
         WARN("Cannot reallocate memory for arg!\n");
-        *arg = oldarg;
         cmd_free (q);
         return FALSE;
     }
+
+    *arg = newArray;
 
     /* save new entry */
     (*arg)[*ac] = q;

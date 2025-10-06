@@ -26,7 +26,9 @@
 #define NDEBUG
 #include <debug.h>
 
-typedef struct {
+#if defined(_MSC_VER)
+#pragma pack(push, 1)
+typedef struct _LFN_ENT {
     uint8_t id;			/* sequence number for slot */
     uint8_t name0_4[10];	/* first 5 characters in name */
     uint8_t attr;		/* attribute byte */
@@ -36,6 +38,19 @@ typedef struct {
     uint16_t start;		/* starting cluster number, 0 in long slots */
     uint8_t name11_12[4];	/* last 2 characters in name */
 } LFN_ENT;
+#pragma pack(pop)
+#else
+typedef struct _LFN_ENT {
+    uint8_t id;			/* sequence number for slot */
+    uint8_t name0_4[10];	/* first 5 characters in name */
+    uint8_t attr;		/* attribute byte */
+    uint8_t reserved;		/* always 0 */
+    uint8_t alias_checksum;	/* checksum for 8.3 alias */
+    uint8_t name5_10[12];	/* 6 more characters in name */
+    uint16_t start;		/* starting cluster number, 0 in long slots */
+    uint8_t name11_12[4];	/* last 2 characters in name */
+} __attribute__((packed)) LFN_ENT;
+#endif
 
 #define LFN_ID_START	0x40
 #define LFN_ID_SLOTMASK	0x1f

@@ -138,7 +138,7 @@ static INT ForF(PARSED_COMMAND *Cmd, LPTSTR List, TCHAR *Buffer)
 #endif
     TCHAR StringQuote = _T('"');
     TCHAR CommandQuote = _T('\'');
-    LPTSTR Variables[32];
+    LPTSTR *AllocatedValues = NULL;
     PTCHAR Start, End;
     INT Ret = 0;
 
@@ -293,35 +293,41 @@ static INT ForF(PARSED_COMMAND *Cmd, LPTSTR List, TCHAR *Buffer)
             {
             error:
                 error_syntax(Param);
-                return 1;
+                Ret = 1;
+                goto Quit;
             }
         }
     }
 
 #ifdef MSCMD_FOR_QUIRKS
     /* Windows' CMD compatibility: use the wrongly evaluated number of tokens */
-    fc->varcount = NumTokens;
-    /* Allocate a large enough variables array if needed */
-    if (NumTokens <= ARRAYSIZE(Variables))
+    fc->varcount = NumTokens ? NumTokens : 1;
+    AllocatedValues = cmd_alloc(fc->varcount * sizeof(*fc->values));
+    if (!AllocatedValues)
     {
-        fc->values = Variables;
+        error_out_of_memory();
+        Ret = 1;
+        goto Quit;
     }
-    else
-    {
-        fc->values = cmd_alloc(fc->varcount * sizeof(*fc->values));
-        if (!fc->values)
-        {
-            error_out_of_memory();
-            return 1;
-        }
-    }
+    fc->values = AllocatedValues;
+    RtlZeroMemory(fc->values, fc->varcount * sizeof(*fc->values));
 #else
     /* Count how many variables will be set: one for each token,
      * plus maybe one for the remainder. */
     fc->varcount = NumTokens;
     for (NumTokens = 1; NumTokens < 32; ++NumTokens)
         fc->varcount += (TokensMask >> NumTokens) & 1;
-    fc->values = Variables;
+    if (fc->varcount == 0)
+        fc->varcount = 1;
+    AllocatedValues = cmd_alloc(fc->varcount * sizeof(*fc->values));
+    if (!AllocatedValues)
+    {
+        error_out_of_memory();
+        Ret = 1;
+        goto Quit;
+    }
+    fc->values = AllocatedValues;
+    RtlZeroMemory(fc->values, fc->varcount * sizeof(*fc->values));
 #endif
 
     if (*List == StringQuote || *List == CommandQuote)
@@ -470,10 +476,8 @@ static INT ForF(PARSED_COMMAND *Cmd, LPTSTR List, TCHAR *Buffer)
     }
 
 Quit:
-#ifdef MSCMD_FOR_QUIRKS
-    if (fc->values && (fc->values != Variables))
-        cmd_free(fc->values);
-#endif
+    if (AllocatedValues)
+        cmd_free(AllocatedValues);
 
     return Ret;
 }

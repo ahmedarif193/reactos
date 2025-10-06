@@ -38,7 +38,10 @@ ImageModel::ImageModel()
     , m_undoSteps(0)
     , m_redoSteps(0)
 {
-    ZeroMemory(m_historyItems, sizeof(m_historyItems));
+    for (size_t i = 0; i < HISTORYSIZE; ++i)
+    {
+        m_historyItems[i].clear();
+    }
 
     m_hbmMaster = CreateColorDIB(1, 1, RGB(255, 255, 255));
     m_hbmOld = ::SelectObject(m_hDrawingDC, m_hbmMaster);
@@ -115,7 +118,7 @@ void ImageModel::Redo()
 
 void ImageModel::ClearHistory()
 {
-    for (int i = 0; i < HISTORYSIZE; ++i)
+    for (size_t i = 0; i < HISTORYSIZE; ++i)
     {
         m_historyItems[i].clear();
     }

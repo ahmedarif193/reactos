@@ -331,19 +331,21 @@ ProcessDirectory(LPTSTR FileName, DWORD* dwFlags, DWORD dwAttrFlags)
             do
             {
                 if (!(f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
-                        !_tcscmp(f.cFileName, _T(".")) ||
-                        !_tcscmp(f.cFileName, _T("..")))
+                    !_tcscmp(f.cFileName, _T(".")) ||
+                    !_tcscmp(f.cFileName, _T("..")))
+                {
                     continue;
+                }
 
-                    _tcscpy(pFilePart, f.cFileName);
-                    _tcscat(pFilePart, _T("\\"));
-                    _tcscat(pFilePart, pSearchPart);
+                _tcscpy(pFilePart, f.cFileName);
+                _tcscat(pFilePart, _T("\\"));
+                _tcscat(pFilePart, pSearchPart);
 
-                    dwFiles +=ProcessDirectory(szFullPath, dwFlags, dwAttrFlags);
-                    if (dwFiles & 0x80000000)
-                    {
-                        break;
-                    }
+                dwFiles += ProcessDirectory(szFullPath, dwFlags, dwAttrFlags);
+                if (dwFiles & 0x80000000)
+                {
+                    break;
+                }
             }
             while (FindNextFile (hFile, &f));
             FindClose (hFile);

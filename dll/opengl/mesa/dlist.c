@@ -1735,7 +1735,7 @@ void gl_save_NewList( GLcontext *ctx, GLuint list, GLenum mode )
 }
 
 
-void gl_save_Normal3fv( GLcontext *ctx, const GLfloat norm[3] )
+void gl_save_Normal3fv( GLcontext *ctx, const GLfloat *norm )
 {
    Node *n = alloc_instruction( ctx, OPCODE_NORMAL, 3 );
    if (n) {
@@ -2353,7 +2353,7 @@ void gl_save_Vertex4f( GLcontext *ctx,
 }
 
 
-void gl_save_Vertex3fv( GLcontext *ctx, const GLfloat v[3] )
+void gl_save_Vertex3fv( GLcontext *ctx, const GLfloat *v )
 {
    Node *n = alloc_instruction( ctx,  OPCODE_VERTEX3, 3 );
    if (n) {

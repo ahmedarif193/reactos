@@ -219,12 +219,12 @@ VdmpStartExecution(VOID)
         if (VdmTib->VdmContext.EFlags & EFLAGS_INTERRUPT_MASK)
         {
             /* Enable them as well */
-            InterlockedOr((PLONG)VdmState, EFLAGS_INTERRUPT_MASK);
+            KiVdmSetVdmEFlagsAt(VdmState, EFLAGS_INTERRUPT_MASK);
         }
         else
         {
             /* Disable them */
-            InterlockedAnd((PLONG)VdmState, ~EFLAGS_INTERRUPT_MASK);
+            KiVdmClearVdmEFlagsAt(VdmState, EFLAGS_INTERRUPT_MASK);
         }
 
         /* Enable the interrupt flag */
@@ -403,4 +403,3 @@ VdmDispatchPageFault(
     DPRINT1("VdmDispatchPageFault EFlags %lx exit with 0x%lx\n", TrapFrame->EFlags, Status);
     return NT_SUCCESS(Status);
 }
-
