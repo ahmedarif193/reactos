@@ -6,6 +6,51 @@
 set -e
 
 REACTOS_SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEFAULT_TOOLCHAIN_ROOT="${HOME}/mingw-toolchains"
+MINGW_X86_64_URL="https://github.com/ahmedarif193/mingw-gcc15.2/releases/download/v15.2/x86_64-w64-mingw32.tar.gz"
+MINGW_I686_URL="https://github.com/ahmedarif193/mingw-gcc15.2/releases/download/v15.2/i686-w64-mingw32.tar.gz"
+MINGW_TOOLCHAIN_BANNER_SHOWN=0
+
+ensure_mingw_toolchain() {
+    local prefix="$1"
+    local url="$2"
+    local target_dir="${DEFAULT_TOOLCHAIN_ROOT}/${prefix}"
+    local bin_dir="${target_dir}/bin"
+
+    if [ -z "$prefix" ] || [ -z "$url" ]; then
+        return
+    fi
+
+    if [ -d "$bin_dir" ]; then
+        return
+    fi
+
+    if [ "$MINGW_TOOLCHAIN_BANNER_SHOWN" -eq 0 ]; then
+        echo "========================================="
+        echo "MinGW toolchains not found in ${DEFAULT_TOOLCHAIN_ROOT}"
+        echo "Downloading required toolchains..."
+        echo "========================================="
+        MINGW_TOOLCHAIN_BANNER_SHOWN=1
+    fi
+
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Error: curl is required to download MinGW toolchains." >&2
+        exit 1
+    fi
+
+    mkdir -p "$DEFAULT_TOOLCHAIN_ROOT"
+
+    local archive_name="$(basename "$url")"
+    local archive_path="/tmp/${archive_name}"
+
+    echo "Fetching ${archive_name}..."
+    curl -L --fail "$url" -o "$archive_path"
+
+    echo "Extracting ${archive_name} into ${DEFAULT_TOOLCHAIN_ROOT}..."
+    tar -xzf "$archive_path" -C "$DEFAULT_TOOLCHAIN_ROOT"
+
+    rm -f "$archive_path"
+}
 
 usage() {
     cat << EOF
@@ -17,7 +62,7 @@ Options:
     -t, --type TYPE         Set build type (Debug, Release, MinSizeRel, RelWithDebInfo)
     -g, --generator GEN     Set CMake generator (Ninja, "Unix Makefiles")
     -o, --output DIR        Set output directory name
-    -p, --toolchain-path    Set toolchain binaries path (e.g., /home/$(whoami)/toolchains/x86_64-w64-mingw32/bin)
+    -p, --toolchain-path    Set toolchain binaries path (e.g., $HOME/mingw-toolchains/x86_64-w64-mingw32/bin)
     --toolchain-prefix      Set toolchain prefix (e.g., x86_64-w64-mingw32)
     --clang                 Configure using the Clang toolchain file
     --clang-version VER     Use clang binaries with the specified version suffix (e.g., 18)
@@ -37,6 +82,7 @@ BUILD_TYPE="Debug"
 CMAKE_GENERATOR=""
 OUTPUT_DIR=""
 TOOLCHAIN_PATH=""
+USER_PROVIDED_TOOLCHAIN_PATH=0
 TOOLCHAIN_PREFIX=""
 TOOLCHAIN_FILE="toolchain-gcc.cmake"
 ENABLE_CCACHE=""
@@ -68,6 +114,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         -p|--toolchain-path)
             TOOLCHAIN_PATH="$2"
+            USER_PROVIDED_TOOLCHAIN_PATH=1
             shift 2
             ;;
         --toolchain-prefix)
@@ -116,23 +163,6 @@ fi
 [ -z "$BUILD_TYPE" ] && BUILD_TYPE="RelWithDebInfo"
 [ -z "$CMAKE_GENERATOR" ] && CMAKE_GENERATOR="Ninja"
 [ -z "$ENABLE_CCACHE" ] && ENABLE_CCACHE="OFF"
-if [ -z "$TOOLCHAIN_PATH" ]; then
-    case "$ARCH" in
-        amd64|x86_64)
-            TOOLCHAIN_PATH="/home/$(whoami)/toolchains/x86_64-w64-mingw32/bin"
-            ;;
-        arm64|aarch64)
-            TOOLCHAIN_PATH="/home/$(whoami)/toolchains/aarch64-w64-mingw32/bin"
-            ;;
-        i386|x86)
-            TOOLCHAIN_PATH="/home/$(whoami)/toolchains/i686-w64-mingw32/bin"
-            ;;
-        *)
-            TOOLCHAIN_PATH="/home/$(whoami)/toolchains/i686-w64-mingw32/bin"
-            ;;
-    esac
-fi
-
 if [ -z "$TOOLCHAIN_PREFIX" ]; then
     case "$ARCH" in
         amd64|x86_64)
@@ -147,7 +177,35 @@ if [ -z "$TOOLCHAIN_PREFIX" ]; then
         arm64|aarch64)
             TOOLCHAIN_PREFIX="aarch64-w64-mingw32"
             ;;
+        *)
+            TOOLCHAIN_PREFIX="i686-w64-mingw32"
+            ;;
     esac
+fi
+
+if [ -z "$TOOLCHAIN_PATH" ]; then
+    case "$TOOLCHAIN_PREFIX" in
+        x86_64-w64-mingw32)
+            TOOLCHAIN_PATH="${DEFAULT_TOOLCHAIN_ROOT}/x86_64-w64-mingw32/bin"
+            ;;
+        i686-w64-mingw32)
+            TOOLCHAIN_PATH="${DEFAULT_TOOLCHAIN_ROOT}/i686-w64-mingw32/bin"
+            ;;
+        arm-w64-mingw32)
+            TOOLCHAIN_PATH="${DEFAULT_TOOLCHAIN_ROOT}/arm-w64-mingw32/bin"
+            ;;
+        aarch64-w64-mingw32)
+            TOOLCHAIN_PATH="${DEFAULT_TOOLCHAIN_ROOT}/aarch64-w64-mingw32/bin"
+            ;;
+        *)
+            TOOLCHAIN_PATH="${DEFAULT_TOOLCHAIN_ROOT}/i686-w64-mingw32/bin"
+            ;;
+    esac
+fi
+
+if [ "$USER_PROVIDED_TOOLCHAIN_PATH" -eq 0 ]; then
+    ensure_mingw_toolchain "x86_64-w64-mingw32" "$MINGW_X86_64_URL"
+    ensure_mingw_toolchain "i686-w64-mingw32" "$MINGW_I686_URL"
 fi
 
 ARCH_LOWER=$(echo "$ARCH" | tr '[:upper:]' '[:lower:]')
