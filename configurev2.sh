@@ -60,6 +60,7 @@ Options:
     -h, --help              Show this help message
     -a, --arch ARCH         Set architecture (i386, amd64, arm, arm64)
     -t, --type TYPE         Set build type (Debug, Release, MinSizeRel, RelWithDebInfo)
+    -r, --release           Shortcut for --type Release
     -g, --generator GEN     Set CMake generator (Ninja, "Unix Makefiles")
     -o, --output DIR        Set output directory name
     -p, --toolchain-path    Set toolchain binaries path (e.g., $HOME/mingw-toolchains/x86_64-w64-mingw32/bin)
@@ -103,6 +104,10 @@ while [[ $# -gt 0 ]]; do
         -t|--type)
             BUILD_TYPE="$2"
             shift 2
+            ;;
+        -r|--release)
+            BUILD_TYPE="Release"
+            shift
             ;;
         -g|--generator)
             CMAKE_GENERATOR="$2"
@@ -217,6 +222,9 @@ if [ -z "$OUTPUT_DIR" ]; then
         OUTPUT_DIR="output-MinGW-${ARCH_LOWER}"
     fi
 fi
+
+BUILD_TYPE_SANITIZED="${BUILD_TYPE// /_}"
+OUTPUT_DIR="${OUTPUT_DIR}-${BUILD_TYPE_SANITIZED}"
 
 echo "========================================="
 echo "ReactOS Build Configuration"
