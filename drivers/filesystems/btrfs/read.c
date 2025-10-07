@@ -1482,7 +1482,7 @@ NTSTATUS read_data(_In_ device_extension* Vcb, _In_ uint64_t addr, _In_ uint32_t
     CHUNK_ITEM_STRIPE* cis;
     read_data_context context;
     uint64_t type, offset, total_reading = 0;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     device** devices = NULL;
     uint16_t i, startoffstripe, allowed_missing, missing_devices = 0;
     uint8_t* dummypage = NULL;

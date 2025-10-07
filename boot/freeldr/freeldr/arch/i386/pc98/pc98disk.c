@@ -210,7 +210,7 @@ Pc98DiskReadLogicalSectorsLBA(
         RegsIn.w.bp = ((ULONG_PTR)Buffer) & 0x0F;
 
         /* Retry 3 times */
-        for (RetryCount = 0; RetryCount < 3; ++RetryCount)
+        for (RetryCount = 0; RetryCount < 3; RetryCount++)
         {
             Int386(0x1B, &RegsIn, &RegsOut);
 
@@ -226,7 +226,7 @@ Pc98DiskReadLogicalSectorsLBA(
 
     /* If we get here then the read failed */
     DiskError("Disk Read Failed in LBA mode", RegsOut.b.ah);
-    ERR("Disk Read Failed in LBA mode: %x (%s) (DriveNumber: 0x%x SectorNumber: %I64u SectorCount: %u)\n",
+    ERR("Disk Read Failed in LBA mode: %x (%s) (DriveNumber: 0x%x SectorNumber: %I64d SectorCount: %d)\n",
         RegsOut.b.ah, DiskGetErrorCodeString(RegsOut.b.ah),
         DiskDrive->DaUa, SectorNumber, SectorCount);
 
@@ -341,24 +341,33 @@ Pc98DiskReadLogicalSectorsCHS(
         }
 
         /* Perform the read. Retry 3 times. */
-        for (RetryCount = 0; RetryCount < 3; ++RetryCount)
+        for (RetryCount = 0; RetryCount < 3; RetryCount++)
         {
             Int386(0x1B, &RegsIn, &RegsOut);
 
-            /* If it worked, or if it was a corrected ECC error
-             * and the data is still good, return success */
-            if (INT386_SUCCESS(RegsOut) || (RegsOut.b.ah == 0x08))
+            /* If it worked break out */
+            if (INT386_SUCCESS(RegsOut))
+            {
                 break;
-
-            /* It failed, do the next retry */
-            DiskResetController(DiskDrive);
+            }
+            /* If it was a corrected ECC error then the data is still good */
+            else if (RegsOut.b.ah == 0x08)
+            {
+                break;
+            }
+            /* If it failed then do the next retry */
+            else
+            {
+                DiskResetController(DiskDrive);
+                continue;
+            }
         }
 
         /* If we retried 3 times then fail */
         if (RetryCount >= 3)
         {
             DiskError("Disk Read Failed in CHS mode, after retrying 3 times", RegsOut.b.ah);
-            ERR("Disk Read Failed in CHS mode, after retrying 3 times: %x (%s) (DriveNumber: 0x%x SectorNumber: %I64u SectorCount: %u)\n",
+            ERR("Disk Read Failed in CHS mode, after retrying 3 times: %x (%s) (DriveNumber: 0x%x SectorNumber: %I64d SectorCount: %d)\n",
                 RegsOut.b.ah, DiskGetErrorCodeString(RegsOut.b.ah),
                 DiskDrive->DaUa, SectorNumber, SectorCount);
             return FALSE;
@@ -467,13 +476,11 @@ InitScsiDrive(
           "Cylinders  : 0x%x\n"
           "Heads      : 0x%x\n"
           "Sects/Track: 0x%x\n"
-          "Total Sects: 0x%llx\n"
           "Bytes/Sect : 0x%x\n",
           DaUa,
           DiskDrive->Geometry.Cylinders,
           DiskDrive->Geometry.Heads,
           DiskDrive->Geometry.SectorsPerTrack,
-          DiskDrive->Geometry.Sectors,
           DiskDrive->Geometry.BytesPerSector);
 
     return TRUE;
@@ -506,13 +513,11 @@ InitIdeDrive(
               "Cylinders  : 0x%x\n"
               "Heads      : 0x%x\n"
               "Sects/Track: 0x%x\n"
-              "Total Sects: 0x%llx\n"
               "Bytes/Sect : 0x%x\n",
               UnitNumber,
               DiskDrive->Geometry.Cylinders,
               DiskDrive->Geometry.Heads,
               DiskDrive->Geometry.SectorsPerTrack,
-              DiskDrive->Geometry.Sectors,
               DiskDrive->Geometry.BytesPerSector);
 
         return TRUE;
@@ -581,13 +586,11 @@ InitHardDrive(
           "Cylinders  : 0x%x\n"
           "Heads      : 0x%x\n"
           "Sects/Track: 0x%x\n"
-          "Total Sects: 0x%llx\n"
           "Bytes/Sect : 0x%x\n",
           DaUa,
           DiskDrive->Geometry.Cylinders,
           DiskDrive->Geometry.Heads,
           DiskDrive->Geometry.SectorsPerTrack,
-          DiskDrive->Geometry.Sectors,
           DiskDrive->Geometry.BytesPerSector);
 
     return TRUE;
@@ -698,13 +701,11 @@ InitFloppyDrive(
           "Cylinders  : 0x%x\n"
           "Heads      : 0x%x\n"
           "Sects/Track: 0x%x\n"
-          "Total Sects: 0x%llx\n"
           "Bytes/Sect : 0x%x\n",
           DaUa,
           DiskDrive->Geometry.Cylinders,
           DiskDrive->Geometry.Heads,
           DiskDrive->Geometry.SectorsPerTrack,
-          DiskDrive->Geometry.Sectors,
           DiskDrive->Geometry.BytesPerSector);
 
     return TRUE;
@@ -837,7 +838,7 @@ Pc98DiskReadLogicalSectors(
 {
     PPC98_DISK_DRIVE DiskDrive;
 
-    TRACE("Pc98DiskReadLogicalSectors() DriveNumber: 0x%x SectorNumber: %I64u SectorCount: %u Buffer: 0x%x\n",
+    TRACE("Pc98DiskReadLogicalSectors() DriveNumber: 0x%x SectorNumber: %I64d SectorCount: %d Buffer: 0x%x\n",
           DriveNumber, SectorNumber, SectorCount, Buffer);
 
     /* 16-bit BIOS addressing limitation */

@@ -534,7 +534,7 @@ Ext2QueryDirectory (IN PEXT2_IRP_CONTEXT IrpContext)
     PIRP                    Irp = NULL;
     PIO_STACK_LOCATION      IoStackLocation = NULL;
 
-    ULONG                   Length;
+    ULONG                   Length = 0;
     ULONG                   FileIndex;
     PUNICODE_STRING         FileName;
     PUCHAR                  Buffer;

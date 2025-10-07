@@ -31,6 +31,37 @@
 #define TAG_ADDRESS_MAPPING 'MAtS'
 #define TAG_INQUIRY_DATA    'QItS'
 #define TAG_SENSE_DATA      'NStS'
+#define TAG_SRB_EXT         'rbsP'
+#define TAG_SG_LIST         'LgSP'
+#define TAG_SRB_POOL_BITMAP 'mBsP'
+
+typedef struct _PORT_SRB_EXTENSION
+{
+    PMDL Mdl;
+    PSTOR_SCATTER_GATHER_LIST ScatterList;
+    ULONG ScatterListSize;
+    ULONG MiniportExtensionOffset;
+    PVOID MiniportExtension;
+    ULONG MiniportExtensionLength;
+    PVOID OriginalDataBuffer;
+} PORT_SRB_EXTENSION, *PPORT_SRB_EXTENSION;
+
+FORCEINLINE
+PPORT_SRB_EXTENSION
+PortGetSrbExtensionContext(_In_ PSCSI_REQUEST_BLOCK Srb)
+{
+    PIRP Irp;
+
+    if (Srb == NULL)
+        return NULL;
+
+    Irp = (PIRP)Srb->OriginalRequest;
+    if (Irp == NULL)
+        return NULL;
+
+    return (PPORT_SRB_EXTENSION)Irp->Tail.Overlay.DriverContext[0];
+}
+
 
 typedef enum
 {
@@ -87,6 +118,17 @@ typedef struct _UNIT_DATA
     INQUIRYDATA InquiryData;
 } UNIT_DATA, *PUNIT_DATA;
 
+typedef struct _SRB_EXTENSION_POOL
+{
+    PVOID BaseAddress;              /* Virtual base of pool */
+    PHYSICAL_ADDRESS PhysicalBase;   /* Physical base of pool */
+    ULONG SlotSize;                  /* Size of each SRB extension slot (aligned) */
+    ULONG SlotCount;                 /* Total number of slots */
+    PULONG BitmapBuffer;             /* Allocation bitmap */
+    RTL_BITMAP Bitmap;               /* Bitmap structure */
+    KSPIN_LOCK Lock;                 /* Protects allocations at DISPATCH_LEVEL */
+} SRB_EXTENSION_POOL, *PSRB_EXTENSION_POOL;
+
 typedef struct _FDO_DEVICE_EXTENSION
 {
     EXTENSION_TYPE ExtensionType;
@@ -115,6 +157,8 @@ typedef struct _FDO_DEVICE_EXTENSION
     KSPIN_LOCK PdoListLock;
     LIST_ENTRY PdoListHead;
     ULONG PdoCount;
+
+    SRB_EXTENSION_POOL SrbExtensionPool;
 } FDO_DEVICE_EXTENSION, *PFDO_DEVICE_EXTENSION;
 
 
@@ -134,6 +178,34 @@ typedef struct _PDO_DEVICE_EXTENSION
 
 
 } PDO_DEVICE_EXTENSION, *PPDO_DEVICE_EXTENSION;
+
+
+VOID
+PortpCleanupSrbExtension(_Inout_opt_ PIRP Irp);
+
+PSTOR_SCATTER_GATHER_LIST
+PortpBuildScatterGatherList(
+    _In_ PMINIPORT_DEVICE_EXTENSION MiniportExtension,
+    _In_ PSCSI_REQUEST_BLOCK Srb);
+
+NTSTATUS
+PortInitializeSrbExtensionPool(
+    _Inout_ PFDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG SrbExtensionSize,
+    _In_ ULONG MaxConcurrentRequests);
+
+PVOID
+PortAllocateSrbExtension(
+    _In_ PFDO_DEVICE_EXTENSION DeviceExtension);
+
+VOID
+PortFreeSrbExtension(
+    _In_ PFDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ PVOID SrbExtension);
+
+VOID
+PortCleanupSrbExtensionPool(
+    _Inout_ PFDO_DEVICE_EXTENSION DeviceExtension);
 
 
 /* fdo.c */
@@ -175,6 +247,9 @@ BOOLEAN
 MiniportStartIo(
     _In_ PMINIPORT Miniport,
     _In_ PSCSI_REQUEST_BLOCK Srb);
+
+NTSTATUS
+StorPortSrbStatusToNtStatus(_In_ UCHAR SrbStatus);
 
 /* misc.c */
 

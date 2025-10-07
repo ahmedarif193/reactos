@@ -1512,7 +1512,8 @@ Return Value:
 
         fdoExtension->DiskGeometry = diskData->RealGeometry;
 
-        (VOID)ClassReadDriveCapacity(unmatchedDisk);
+        NTSTATUS status = ClassReadDriveCapacity(unmatchedDisk);
+        UNREFERENCED_PARAMETER(status);
 
         if (diskData->RealGeometry.BytesPerSector == 0) {
 

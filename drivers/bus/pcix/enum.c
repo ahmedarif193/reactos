@@ -1674,7 +1674,7 @@ PciScanBus(IN PPCI_FDO_EXTENSION DeviceExtension)
             }
 
             /* Check for non-simple devices */
-            if ((PCI_MULTIFUNCTION_DEVICE(PciData)) ||
+            if (((PciData->HeaderType & PCI_MULTIFUNCTION) != 0) ||
                 (PciData->BaseClass == PCI_CLASS_BRIDGE_DEV))
             {
                 /* No subsystem data defined for these kinds of bridges */
@@ -1764,7 +1764,7 @@ PciScanBus(IN PPCI_FDO_EXTENSION DeviceExtension)
             NewExtension->ProgIf = PciData->ProgIf;
             NewExtension->SubClass = PciData->SubClass;
             NewExtension->BaseClass = PciData->BaseClass;
-            NewExtension->HeaderType = PCI_CONFIGURATION_TYPE(PciData);
+            NewExtension->HeaderType = PciData->HeaderType & ~PCI_MULTIFUNCTION;
 
             /* Check for modern bridge types, which are managed by the driver */
             if ((NewExtension->BaseClass == PCI_CLASS_BRIDGE_DEV) &&

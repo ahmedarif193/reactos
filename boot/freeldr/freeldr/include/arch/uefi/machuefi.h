@@ -110,3 +110,22 @@ UefiInitializeFileSystemSupport(_In_ EFI_HANDLE ImageHandle,
 
 VOID
 UefiVideoScrollUp(VOID);
+
+/* GOP console helpers used once the firmware text console becomes unavailable. */
+VOID
+UefiGopConsolePutChar(CHAR Ch);
+
+VOID
+UefiGopConsolePutString(PCSTR String);
+
+VOID
+UefiGopConsoleClear(VOID);
+
+VOID
+UefiGopConsoleSetCursor(UINT32 X, UINT32 Y);
+
+BOOLEAN
+UefiGopConsoleIsInitialized(VOID);
+
+VOID
+UefiConsMarkBootServicesExited(VOID);

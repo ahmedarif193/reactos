@@ -176,8 +176,11 @@ DriverEntry(
     IN PUNICODE_STRING RegistryPath
     )
 {
-    UNREFERENCED_PARAMETER(DriverObject);
-    UNREFERENCED_PARAMETER(RegistryPath);
+    TracePrint((TRACE_LEVEL_INFORMATION,
+                TRACE_FLAG_INIT,
+                "CLASSPNP DriverEntry: DriverObject=%p RegistryPath=%wZ\n",
+                DriverObject,
+                RegistryPath));
 
     return STATUS_SUCCESS;
 }
@@ -862,9 +865,21 @@ ClassAddDevice(
 
     PAGED_CODE();
 
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[CLASSPNP] ClassAddDevice: DriverObject=%p PDO=%p DriverExtension=%p\n",
+               DriverObject,
+               PhysicalDeviceObject,
+               driverExtension);
+
 
     status = driverExtension->InitData.ClassAddDevice(DriverObject,
                                               PhysicalDeviceObject);
+
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[CLASSPNP] ClassAddDevice: returning %lx\n",
+               status);
 
     return status;
 } // end ClassAddDevice()
@@ -10336,7 +10351,10 @@ ClassRemoveDevice(
      *  then delete it now.
      */
     if (commonExtension->MountedDeviceInterfaceName.Buffer){
-        (VOID)IoSetDeviceInterfaceState(&commonExtension->MountedDeviceInterfaceName, FALSE);
+        {
+            NTSTATUS status = IoSetDeviceInterfaceState(&commonExtension->MountedDeviceInterfaceName, FALSE);
+            UNREFERENCED_PARAMETER(status);
+        }
         RtlFreeUnicodeString(&commonExtension->MountedDeviceInterfaceName);
         RtlInitUnicodeString(&commonExtension->MountedDeviceInterfaceName, NULL);
     }
@@ -12922,7 +12940,7 @@ ClasspGetInquiryVpdSupportInfo(
     PVPD_SUPPORTED_PAGES_PAGE supportedPages = NULL;
     UCHAR                     bufferLength = VPD_MAX_BUFFER_SIZE;
     ULONG                     allocationBufferLength = bufferLength;
-    UCHAR srbExBuffer[CLASS_SRBEX_SCSI_CDB16_BUFFER_SIZE] = {0};
+    UCHAR srbExBuffer[sizeof(STORAGE_REQUEST_BLOCK) + sizeof(STOR_ADDR_BTL8) + sizeof(SRBEX_DATA_SCSI_CDB32)] = {0};
     PSTORAGE_REQUEST_BLOCK_HEADER srbHeader;
 
 #if defined(_ARM_) || defined(_ARM64_)
@@ -16549,4 +16567,3 @@ Return Value:
 
     return status;
 }
-

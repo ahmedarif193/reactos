@@ -206,7 +206,7 @@ NTSTATUS
 Ext2UnlockVcb ( IN PEXT2_VCB    Vcb,
                 IN PFILE_OBJECT FileObject )
 {
-    NTSTATUS        Status;
+    NTSTATUS        Status = STATUS_SUCCESS;
 
     _SEH2_TRY {
 

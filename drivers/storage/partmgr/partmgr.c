@@ -1124,7 +1124,8 @@ FdoHandleRemoveDevice(
 
     if (FdoExtension->DiskInterfaceName.Buffer)
     {
-        IoSetDeviceInterfaceState(&FdoExtension->DiskInterfaceName, FALSE);
+        NTSTATUS status = IoSetDeviceInterfaceState(&FdoExtension->DiskInterfaceName, FALSE);
+        UNREFERENCED_PARAMETER(status);
         RtlFreeUnicodeString(&FdoExtension->DiskInterfaceName);
         RtlInitUnicodeString(&FdoExtension->DiskInterfaceName, NULL);
     }

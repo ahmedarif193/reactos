@@ -26,7 +26,10 @@ PciIdeXStartMiniport(
     if (FdoExtension->MiniportStarted)
         return STATUS_SUCCESS;
 
-    DPRINT("Starting miniport\n");
+    DbgPrintEx(DPFLTR_PCIIDE_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[PCIIDEX] StartMiniport: entering (MiniportStarted=%lu)\n",
+               FdoExtension->MiniportStarted ? 1UL : 0UL);
 
     DriverExtension = IoGetDriverObjectExtension(FdoExtension->DriverObject,
                                                  FdoExtension->DriverObject);
@@ -34,12 +37,29 @@ PciIdeXStartMiniport(
 
     FdoExtension->Properties.Size = sizeof(IDE_CONTROLLER_PROPERTIES);
     FdoExtension->Properties.ExtensionSize = DriverExtension->MiniControllerExtensionSize;
+
+    /* Validate that the HwGetControllerProperties function exists */
+    if (!DriverExtension->HwGetControllerProperties)
+    {
+        DPRINT1("HwGetControllerProperties is NULL\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
     Status = DriverExtension->HwGetControllerProperties(FdoExtension->MiniControllerExtension,
                                                         &FdoExtension->Properties);
     if (!NT_SUCCESS(Status))
+    {
+        DbgPrintEx(DPFLTR_PCIIDE_ID,
+                   DPFLTR_ERROR_LEVEL,
+                   "[PCIIDEX] StartMiniport: HwGetControllerProperties failed %lx\n",
+                   Status);
         return Status;
+    }
 
     FdoExtension->MiniportStarted = TRUE;
+    DbgPrintEx(DPFLTR_PCIIDE_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[PCIIDEX] StartMiniport: success\n");
     return STATUS_SUCCESS;
 }
 
@@ -101,9 +121,37 @@ PciIdeXGetBusData(
     DPRINT("PciIdeXGetBusData(%p %p 0x%lx 0x%lx)\n",
            DeviceExtension, Buffer, ConfigDataOffset, BufferLength);
 
+    /* Validate DeviceExtension parameter */
+    if (!DeviceExtension)
+    {
+        DPRINT1("DeviceExtension is NULL\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* Validate parameters */
+    if (!Buffer || BufferLength == 0 || ConfigDataOffset + BufferLength < ConfigDataOffset)
+    {
+        DPRINT1("Invalid buffer parameters in GetBusData\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
     FdoExtension = CONTAINING_RECORD(DeviceExtension,
                                      FDO_DEVICE_EXTENSION,
                                      MiniControllerExtension);
+
+    /* Validate that we got a valid FdoExtension */
+    if (!FdoExtension || !FdoExtension->Common.IsFDO)
+    {
+        DPRINT1("Invalid FdoExtension or not an FDO\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* Validate BusInterface function pointer */
+    if (!FdoExtension->BusInterface.GetBusData)
+    {
+        DPRINT1("BusInterface.GetBusData is NULL\n");
+        return STATUS_INVALID_PARAMETER;
+    }
 
     BytesRead = (*FdoExtension->BusInterface.GetBusData)(FdoExtension->BusInterface.Context,
                                                          PCI_WHICHSPACE_CONFIG,
@@ -135,6 +183,20 @@ PciIdeXSetBusData(
     DPRINT("PciIdeXSetBusData(%p %p %p 0x%lx 0x%lx)\n",
            DeviceExtension, Buffer, DataMask, ConfigDataOffset, BufferLength);
 
+    /* Validate DeviceExtension parameter */
+    if (!DeviceExtension)
+    {
+        DPRINT1("DeviceExtension is NULL\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* Validate parameters */
+    if (!Buffer || !DataMask || BufferLength == 0 || ConfigDataOffset + BufferLength < ConfigDataOffset)
+    {
+        DPRINT1("Invalid buffer parameters in SetBusData\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
     CurrentBuffer = ExAllocatePoolWithTag(NonPagedPool, BufferLength, TAG_PCIIDEX);
     if (!CurrentBuffer)
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -143,9 +205,25 @@ PciIdeXSetBusData(
                                      FDO_DEVICE_EXTENSION,
                                      MiniControllerExtension);
 
+    /* Validate that we got a valid FdoExtension */
+    if (!FdoExtension || !FdoExtension->Common.IsFDO)
+    {
+        DPRINT1("Invalid FdoExtension or not an FDO\n");
+        ExFreePoolWithTag(CurrentBuffer, TAG_PCIIDEX);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* Validate BusInterface function pointers */
+    if (!FdoExtension->BusInterface.GetBusData || !FdoExtension->BusInterface.SetBusData)
+    {
+        DPRINT1("BusInterface function pointers are NULL\n");
+        ExFreePoolWithTag(CurrentBuffer, TAG_PCIIDEX);
+        return STATUS_INVALID_PARAMETER;
+    }
+
     KeAcquireSpinLock(&FdoExtension->BusDataLock, &OldIrql);
 
-    Status = PciIdeXGetBusData(DeviceExtension, Buffer, ConfigDataOffset, BufferLength);
+    Status = PciIdeXGetBusData(DeviceExtension, CurrentBuffer, ConfigDataOffset, BufferLength);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 

@@ -35,7 +35,7 @@ Revision History:
          Chuck Park (ChuckP)
 
     Some parts of code were taken from FreeBSD 4.3-6.1 ATA driver by
-         Søren Schmidt, Copyright (c) 1998-2007
+         S�ren Schmidt, Copyright (c) 1998-2007
 
     All parts of code are significantly changed/updated by
          Alter, Copyright (c) 2002-2014:
@@ -107,7 +107,7 @@ ULONG g_opt_VirtualMachine = 0; // Auto
 BOOLEAN InDriverEntry = TRUE;
 BOOLEAN g_Dump = FALSE;
 
-BOOLEAN g_opt_Verbose = 0;
+BOOLEAN g_opt_Verbose = 1;
 
 BOOLEAN WinVer_WDM_Model = FALSE;
 ULONG CPU_num = 1;
@@ -8381,8 +8381,24 @@ default_no_prep:
             // Zero INQUIRY data structure.
             RtlZeroMemory((PCHAR)(Srb->DataBuffer), Srb->DataTransferLength);
 
-            // Standard IDE interface only supports disks.
-            inquiryData->DeviceType = DIRECT_ACCESS_DEVICE;
+            // Decide INQUIRY DeviceType based on device kind.
+            // Default: disk; ATAPI CD/DVD must report CdRom.
+            if (LunExt->DeviceFlags & DFLAGS_ATAPI_DEVICE)
+            {
+                UCHAR atapiType = identifyData->DeviceType;
+                if ((atapiType == ATAPI_TYPE_CDROM) || (atapiType == ATAPI_TYPE_OPTICAL))
+                {
+                    inquiryData->DeviceType = READ_ONLY_DIRECT_ACCESS_DEVICE; // CdRom
+                }
+                else
+                {
+                    inquiryData->DeviceType = DIRECT_ACCESS_DEVICE; // fallback
+                }
+            }
+            else
+            {
+                inquiryData->DeviceType = DIRECT_ACCESS_DEVICE;
+            }
 
             // Set the removable bit, if applicable.
             if (LunExt->DeviceFlags & DFLAGS_REMOVABLE_DRIVE) {
@@ -8398,6 +8414,12 @@ default_no_prep:
             }
             // Set the CommandQueue bit
             inquiryData->CommandQueue = 1;
+
+            KdPrint(("UNIATA: INQUIRY synth DevType=%u ATAPI=%d IdType=%u Flags=%#x\n",
+                     inquiryData->DeviceType,
+                     (LunExt->DeviceFlags & DFLAGS_ATAPI_DEVICE) ? 1 : 0,
+                     identifyData->DeviceType,
+                     LunExt->DeviceFlags));
 
             // Fill in vendor identification fields.
 #ifdef __REACTOS__
@@ -9362,18 +9384,17 @@ wrong_buffer_size:
 
                 PINQUIRYDATA    inquiryData  = (PINQUIRYDATA)(Srb->DataBuffer);
 
-                KdPrint2((PRINT_PREFIX
-                           "  INQUIRY\n"));
-                // Zero INQUIRY data structure.
-                RtlZeroMemory((PCHAR)(Srb->DataBuffer), Srb->DataTransferLength);
+            KdPrint(("UNIATA: comm-port INQUIRY filtered\n"));
+            // Zero INQUIRY data structure (for possible diagnostics).
+            RtlZeroMemory((PCHAR)(Srb->DataBuffer), Srb->DataTransferLength);
 
-                inquiryData->DeviceType = COMMUNICATION_DEVICE;
+            inquiryData->DeviceType = COMMUNICATION_DEVICE;
+            inquiryData->DeviceTypeQualifier = DEVICE_QUALIFIER_NOT_SUPPORTED;
 
-                // Fill in vendor identification fields.
-                RtlCopyMemory(&inquiryData->VendorId, &uniata_comm_name, 28);
+            RtlCopyMemory(&inquiryData->VendorId, &uniata_comm_name, 28);
 
-                status = SRB_STATUS_SUCCESS;
-                goto complete_req;
+            status = SRB_STATUS_SELECTION_TIMEOUT;
+            goto complete_req;
             }
             commPort = TRUE;
             /* Pass IOCTL request down */
@@ -9398,7 +9419,8 @@ reject_srb:
         } else
         if((deviceExtension->HwFlags & UNIATA_AHCI) &&
            !UniataAhciChanImplemented(deviceExtension, lChannel)) {
-            chan = NULL;
+            KdPrint(("UNIATA: AtapiStartIo port %d not implemented\n", lChannel));
+            goto reject_srb;
         }
 
         if(!commPort) {
@@ -9610,7 +9632,13 @@ reject_srb:
                             inquiryData->CommandQueue = 1;
 
                             // Fill in vendor identification fields.
+#ifdef __REACTOS__
                             FillDeviceIdentificationString(inquiryData, identifyData);
+#else
+                            for (i = 0; i < 24; i += 2) {
+                                MOV_DW_SWP(inquiryData->DeviceIdentificationString[i], ((PUCHAR)identifyData->ModelNumber)[i]);
+                            }
+#endif
 
                             // Move firmware revision from IDENTIFY data to
                             // product revision in INQUIRY data.
@@ -10338,7 +10366,8 @@ uata_ctl_queue:
                     AtaCtl->AdapterInfo.NumberLuns = (UCHAR)deviceExtension->NumberLuns;
                     AtaCtl->AdapterInfo.AdapterInterfaceType = deviceExtension->AdapterInterfaceType;
                     if(deviceExtension->FullDevName) {
-                        strncpy(AtaCtl->AdapterInfo.DeviceName, deviceExtension->FullDevName, 64);
+                        strncpy(AtaCtl->AdapterInfo.DeviceName, deviceExtension->FullDevName, 63);
+                        AtaCtl->AdapterInfo.DeviceName[63] = '\0';
                     }
                     AtaCtl->AdapterInfo.ChanInfoValid = FALSE;
                     AtaCtl->AdapterInfo.LunInfoValid = FALSE;
@@ -11406,28 +11435,23 @@ AtapiRegCheckDevValue(
             swprintf(namev, L"\\SATA");
             swprintf(namex, L"Parameters%s", namev);
             val = AtapiRegCheckDevLunValue(
-                HwDeviceExtension, namex, CHAN_NOT_SPECIFIED, dev, Name, val);
+                HwDeviceExtension, namex, chan, dev, Name, val);
         }
         if(HwFlags & UNIATA_AHCI) {
             swprintf(namev, L"\\AHCI");
             swprintf(namex, L"Parameters%s", namev);
             val = AtapiRegCheckDevLunValue(
-                HwDeviceExtension, namex, CHAN_NOT_SPECIFIED, dev, Name, val);
+                HwDeviceExtension, namex, chan, dev, Name, val);
         }
         if(!(HwFlags & (UNIATA_SATA | UNIATA_AHCI))) {
             swprintf(namev, L"\\PATA");
             swprintf(namex, L"Parameters%s", namev);
             val = AtapiRegCheckDevLunValue(
-                HwDeviceExtension, namex, CHAN_NOT_SPECIFIED, dev, Name, val);
+                HwDeviceExtension, namex, chan, dev, Name, val);
         }
 
         if(deviceExtension->AdapterInterfaceType == PCIBus) {
             // PCI
-            swprintf(namev, L"\\PCIIDE");
-            swprintf(namex, L"Parameters%s", namev);
-            val = AtapiRegCheckDevLunValue(
-                HwDeviceExtension, namex, CHAN_NOT_SPECIFIED, dev, Name, val);
-
             swprintf(namev, L"\\IDE_%d", deviceExtension->DevIndex);
             swprintf(namex, L"Parameters%s", namev);
             val = AtapiRegCheckDevLunValue(
@@ -11452,11 +11476,6 @@ AtapiRegCheckDevValue(
         } else
         if(deviceExtension->AdapterInterfaceType == Isa) {
             // Isa
-            swprintf(namev, L"\\ISAIDE");
-            swprintf(namex, L"Parameters%s", namev);
-            val = AtapiRegCheckDevLunValue(
-                HwDeviceExtension, namex, CHAN_NOT_SPECIFIED, dev, Name, val);
-
             swprintf(namev, L"\\IDE_%d", deviceExtension->DevIndex+BMListLen);
             swprintf(namex, L"Parameters%s", namev);
             val = AtapiRegCheckDevLunValue(
@@ -11470,11 +11489,6 @@ AtapiRegCheckDevValue(
         } else
         if(deviceExtension->AdapterInterfaceType == MicroChannel) {
             // MicroChannel
-            swprintf(namev, L"\\MCA");
-            swprintf(namex, L"Parameters%s", namev);
-            val = AtapiRegCheckDevLunValue(
-                HwDeviceExtension, namex, CHAN_NOT_SPECIFIED, dev, Name, val);
-
             swprintf(namev, L"\\IDE_%d", deviceExtension->DevIndex+BMListLen+IsaCount);
             swprintf(namex, L"Parameters%s", namev);
             val = AtapiRegCheckDevLunValue(
@@ -11722,4 +11736,3 @@ _PrintNtConsole(
     va_end(ap);
 
 } // end PrintNtConsole()
-

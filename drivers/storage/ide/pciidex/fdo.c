@@ -117,6 +117,9 @@ PciIdeXFdoStartDevice(
         return Status;
     }
 
+    /* Controller is initialized; request child channel enumeration */
+    IoInvalidateDeviceRelations(FdoExtension->Ldo, BusRelations);
+
     return STATUS_SUCCESS;
 }
 
@@ -250,7 +253,13 @@ PciIdeXPdoCreateDevice(
         return NULL;
     }
 
-    DPRINT("Created device object %p '%wZ'\n", Pdo, &DeviceName);
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[PCIIDEX] Created channel PDO=%p (%S) Controller=%lu Channel=%lu\n",
+               Pdo,
+               DeviceNameBuffer,
+               FdoExtension->ControllerNumber,
+               ChannelNumber);
 
     /* DMA buffers alignment */
     Alignment = FdoExtension->Properties.AlignmentRequirement;
@@ -265,6 +274,7 @@ PciIdeXPdoCreateDevice(
     PdoExtension->Channel = ChannelNumber;
     PdoExtension->ParentController = FdoExtension;
 
+    Pdo->Flags |= DO_BUS_ENUMERATED_DEVICE;
     Pdo->Flags &= ~DO_DEVICE_INITIALIZING;
     return PdoExtension;
 }

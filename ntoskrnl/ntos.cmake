@@ -1,12 +1,26 @@
 
+get_filename_component(NTOS_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
+
+set(NT_ARCH "${ARCH}" CACHE STRING "Kernel architecture (i386|amd64|arm64)")
+if(NT_ARCH STREQUAL "arm64")
+    set(NTOS_ARCH_DIR "${NTOS_SOURCE_DIR}/arch/arm")
+else()
+    set(NTOS_ARCH_DIR "${NTOS_SOURCE_DIR}/arch/${NT_ARCH}")
+endif()
+
 include_directories(
     ${REACTOS_SOURCE_DIR}
     ${REACTOS_SOURCE_DIR}/sdk/lib/drivers/arbiter
     ${REACTOS_SOURCE_DIR}/sdk/lib/cmlib
-    include
+    ${NTOS_SOURCE_DIR}/include
+    ${NTOS_SOURCE_DIR}/arch/${NT_ARCH}/include
     ${CMAKE_CURRENT_BINARY_DIR}/include
     ${CMAKE_CURRENT_BINARY_DIR}/include/internal
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/drivers)
+
+if(NT_ARCH STREQUAL "amd64")
+    include_directories(${NTOS_SOURCE_DIR}/arch/i386/include)
+endif()
 
 add_definitions(
     -D_NTOSKRNL_
@@ -304,89 +318,89 @@ endif()
 
 list(APPEND ASM_SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/zw.S)
 
-if(ARCH STREQUAL "i386")
+if(NT_ARCH STREQUAL "i386")
     list(APPEND ASM_SOURCE
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/i386/fastinterlck_asm.S
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/i386/ioport.S
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/ctxswitch.S
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/trap.s
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/usercall_asm.S
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/zeropage.S
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/i386/prefetch.S)
+        ${NTOS_ARCH_DIR}/ex/fastinterlck_asm.S
+        ${NTOS_ARCH_DIR}/ex/ioport.S
+        ${NTOS_ARCH_DIR}/ke/ctxswitch.S
+        ${NTOS_ARCH_DIR}/ke/trap.s
+        ${NTOS_ARCH_DIR}/ke/usercall_asm.S
+        ${NTOS_ARCH_DIR}/ke/zeropage.S
+        ${NTOS_ARCH_DIR}/rtl/prefetch.S)
     list(APPEND SOURCE
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/config/i386/cmhardwr.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/i386/kdx86.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/abios.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/cpu.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/context.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/exp.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/freeze.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/irqobj.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/kiinit.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/ldt.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/mtrr.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/patpge.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/thrdini.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/traphdlr.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/usercall.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/v86vdm.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/i386/page.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/i386/procsup.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/i386/init.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/i386/psctx.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/i386/psldt.c
+        ${NTOS_ARCH_DIR}/config/cmhardwr.c
+        ${NTOS_ARCH_DIR}/kd64/kdx86.c
+        ${NTOS_ARCH_DIR}/ke/abios.c
+        ${NTOS_ARCH_DIR}/ke/cpu.c
+        ${NTOS_ARCH_DIR}/ke/context.c
+        ${NTOS_ARCH_DIR}/ke/exp.c
+        ${NTOS_ARCH_DIR}/ke/freeze.c
+        ${NTOS_ARCH_DIR}/ke/irqobj.c
+        ${NTOS_ARCH_DIR}/ke/kiinit.c
+        ${NTOS_ARCH_DIR}/ke/ldt.c
+        ${NTOS_ARCH_DIR}/ke/mtrr.c
+        ${NTOS_ARCH_DIR}/ke/patpge.c
+        ${NTOS_ARCH_DIR}/ke/thrdini.c
+        ${NTOS_ARCH_DIR}/ke/traphdlr.c
+        ${NTOS_ARCH_DIR}/ke/usercall.c
+        ${NTOS_ARCH_DIR}/ke/v86vdm.c
+        ${NTOS_ARCH_DIR}/mm/page.c
+        ${NTOS_ARCH_DIR}/mm/procsup.c
+        ${NTOS_ARCH_DIR}/mm/ARM3/init.c
+        ${NTOS_ARCH_DIR}/ps/psctx.c
+        ${NTOS_ARCH_DIR}/ps/psldt.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/vdm/vdmmain.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/vdm/vdmexec.c)
-elseif(ARCH STREQUAL "amd64")
+elseif(NT_ARCH STREQUAL "amd64")
     list(APPEND ASM_SOURCE
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/boot.S
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/ctxswitch.S
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/trap.S
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/usercall_asm.S
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/zeropage.S)
+        ${NTOS_ARCH_DIR}/ke/boot.S
+        ${NTOS_ARCH_DIR}/ke/ctxswitch.S
+        ${NTOS_ARCH_DIR}/ke/trap.S
+        ${NTOS_ARCH_DIR}/ke/usercall_asm.S
+        ${NTOS_ARCH_DIR}/ke/zeropage.S)
     list(APPEND SOURCE
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/config/i386/cmhardwr.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/i386/page.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/amd64/kdx64.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/context.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/cpu.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/except.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/freeze.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/interrupt.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/ipi.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/irql.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/kiinit.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/krnlinit.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/spinlock.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/thrdini.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/amd64/init.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/amd64/procsup.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/amd64/psctx.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/stubs.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/traphandler.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/usercall.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/xstate.c)
-elseif(ARCH STREQUAL "arm")
+        ${NTOS_SOURCE_DIR}/arch/i386/config/cmhardwr.c
+        ${NTOS_SOURCE_DIR}/arch/i386/mm/page.c
+        ${NTOS_ARCH_DIR}/kd64/kdx64.c
+        ${NTOS_ARCH_DIR}/ke/context.c
+        ${NTOS_ARCH_DIR}/ke/cpu.c
+        ${NTOS_ARCH_DIR}/ke/except.c
+        ${NTOS_ARCH_DIR}/ke/freeze.c
+        ${NTOS_ARCH_DIR}/ke/interrupt.c
+        ${NTOS_ARCH_DIR}/ke/ipi.c
+        ${NTOS_ARCH_DIR}/ke/irql.c
+        ${NTOS_ARCH_DIR}/ke/kiinit.c
+        ${NTOS_ARCH_DIR}/ke/krnlinit.c
+        ${NTOS_ARCH_DIR}/ke/spinlock.c
+        ${NTOS_ARCH_DIR}/ke/thrdini.c
+        ${NTOS_ARCH_DIR}/mm/init.c
+        ${NTOS_ARCH_DIR}/mm/procsup.c
+        ${NTOS_ARCH_DIR}/ps/psctx.c
+        ${NTOS_ARCH_DIR}/ke/stubs.c
+        ${NTOS_ARCH_DIR}/ke/traphandler.c
+        ${NTOS_ARCH_DIR}/ke/usercall.c
+        ${NTOS_ARCH_DIR}/ke/xstate.c)
+elseif(NT_ARCH STREQUAL "arm" OR NT_ARCH STREQUAL "arm64")
     list(APPEND ASM_SOURCE
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/arm/ioport.s
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm/boot.s
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm/ctxswtch.s
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm/stubs_asm.s
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm/trap.s)
+        ${NTOS_ARCH_DIR}/ex/ioport.s
+        ${NTOS_ARCH_DIR}/ke/boot.s
+        ${NTOS_ARCH_DIR}/ke/ctxswtch.s
+        ${NTOS_ARCH_DIR}/ke/stubs_asm.s
+        ${NTOS_ARCH_DIR}/ke/trap.s)
     list(APPEND SOURCE
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/config/arm/cmhardwr.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/arm/kdarm.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm/cpu.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm/exp.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm/interrupt.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm/kiinit.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm/thrdini.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm/trapc.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm/usercall.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/arm/page.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/arm/init.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/arm/psctx.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/arm/rtlexcpt.c)
+        ${NTOS_ARCH_DIR}/config/cmhardwr.c
+        ${NTOS_ARCH_DIR}/kd64/kdarm.c
+        ${NTOS_ARCH_DIR}/ke/cpu.c
+        ${NTOS_ARCH_DIR}/ke/exp.c
+        ${NTOS_ARCH_DIR}/ke/interrupt.c
+        ${NTOS_ARCH_DIR}/ke/kiinit.c
+        ${NTOS_ARCH_DIR}/ke/thrdini.c
+        ${NTOS_ARCH_DIR}/ke/trapc.c
+        ${NTOS_ARCH_DIR}/ke/usercall.c
+        ${NTOS_ARCH_DIR}/mm/page.c
+        ${NTOS_ARCH_DIR}/mm/ARM3/init.c
+        ${NTOS_ARCH_DIR}/ps/psctx.c
+        ${NTOS_ARCH_DIR}/rtl/rtlexcpt.c)
 endif()
 
 if(NOT _WINKD_)
@@ -394,20 +408,20 @@ if(NOT _WINKD_)
         add_definitions(-DKDBG)
     endif()
 
-    if(ARCH STREQUAL "i386")
-        list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kd/i386/kdserial.c)
+    if(NT_ARCH STREQUAL "i386")
+        list(APPEND SOURCE ${NTOS_SOURCE_DIR}/arch/i386/kd/kdserial.c)
         if(KDBG)
-            list(APPEND ASM_SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/i386/kdb_help.S)
-            list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/i386/i386-dis.c)
+            list(APPEND ASM_SOURCE ${NTOS_SOURCE_DIR}/arch/i386/kdbg/kdb_help.S)
+            list(APPEND SOURCE ${NTOS_SOURCE_DIR}/arch/i386/kdbg/i386-dis.c)
         endif()
-    elseif(ARCH STREQUAL "amd64")
-        list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kd/i386/kdserial.c)
+    elseif(NT_ARCH STREQUAL "amd64")
+        list(APPEND SOURCE ${NTOS_SOURCE_DIR}/arch/i386/kd/kdserial.c)
         if(KDBG)
-            list(APPEND ASM_SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/amd64/kdb_help.S)
-            list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/i386/i386-dis.c)
+            list(APPEND ASM_SOURCE ${NTOS_SOURCE_DIR}/arch/amd64/kdbg/kdb_help.S)
+            list(APPEND SOURCE ${NTOS_SOURCE_DIR}/arch/i386/kdbg/i386-dis.c)
         endif()
-    elseif(ARCH STREQUAL "arm")
-        list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kd/arm/kdserial.c)
+    elseif(NT_ARCH STREQUAL "arm" OR NT_ARCH STREQUAL "arm64")
+        list(APPEND SOURCE ${NTOS_ARCH_DIR}/kd/kdserial.c)
     endif()
 
     if(KDBG)

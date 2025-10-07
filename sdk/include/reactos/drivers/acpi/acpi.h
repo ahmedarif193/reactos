@@ -18,6 +18,7 @@ typedef struct _ACPI_E820_ENTRY
 
 typedef struct _ACPI_BIOS_MULTI_NODE
 {
+    PHYSICAL_ADDRESS RsdpAddress;
     PHYSICAL_ADDRESS RsdtAddress;
     ULONGLONG Count;
     ACPI_E820_ENTRY E820Entry[1];

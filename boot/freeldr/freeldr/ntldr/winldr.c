@@ -12,6 +12,16 @@
 #include "registry.h"
 #include <internal/cmboot.h>
 
+#ifdef UEFIBOOT
+/* UEFI boot path helpers. */
+#include <uefildr.h>
+#include <uefi/uefiarcname.h>
+/* Needed for BGRT table detection when running under UEFI. */
+#include <drivers/acpi/acpi.h>
+extern EFI_SYSTEM_TABLE* GlobalSystemTable;
+extern EFI_HANDLE GlobalImageHandle;
+#endif
+
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WINDOWS);
 
@@ -107,6 +117,24 @@ AllocateAndInitLPB(
     InitializeListHead(&LoaderBlock->MemoryDescriptorListHead);
     InitializeListHead(&LoaderBlock->BootDriverListHead);
 
+    /* Record the firmware type based on the boot method. */
+#ifdef UEFIBOOT
+    if (GlobalSystemTable != NULL)
+    {
+        /* We're booting via UEFI */
+        LoaderBlock->FirmwareInformation.FirmwareTypeEfi = 1;
+        Extension->BootViaEFI = 1;
+        TRACE("Setting FirmwareTypeEfi = 1 (UEFI boot detected)\n");
+    }
+    else
+#endif
+    {
+        /* We're booting via legacy BIOS */
+        LoaderBlock->FirmwareInformation.FirmwareTypeEfi = 0;
+        Extension->BootViaEFI = 0;
+        TRACE("Setting FirmwareTypeEfi = 0 (BIOS boot)\n");
+    }
+
     *OutLoaderBlock = LoaderBlock;
 }
 
@@ -134,9 +162,33 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
     ULONG_PTR PathSeparator;
     PLOADER_PARAMETER_EXTENSION Extension;
 
-    /* Construct SystemRoot and ArcBoot from SystemPath */
-    PathSeparator = strstr(BootPath, "\\") - BootPath;
-    RtlStringCbCopyNA(ArcBoot, sizeof(ArcBoot), BootPath, PathSeparator);
+    /* Prefer the UEFI-specific helpers when we are running under UEFI firmware. */
+#ifdef UEFIBOOT
+    if (GlobalSystemTable != NULL)
+    {
+        ULONG RDiskNumber = 0;
+        ULONG PartitionNumber = 1;
+        
+        /* Get boot partition info from UEFI */
+        if (UefiGetBootPartitionInfo(&RDiskNumber, &PartitionNumber, ArcBoot, sizeof(ArcBoot)))
+        {
+            TRACE("UEFI Boot Device: %s\n", ArcBoot);
+        }
+        else
+        {
+            /* Fallback to parsing the BootPath */
+            PathSeparator = strstr(BootPath, "\\") - BootPath;
+            RtlStringCbCopyNA(ArcBoot, sizeof(ArcBoot), BootPath, PathSeparator);
+            TRACE("Using fallback ArcBoot: '%s'\n", ArcBoot);
+        }
+    }
+    else
+#endif
+    {
+        /* Construct SystemRoot and ArcBoot from SystemPath */
+        PathSeparator = strstr(BootPath, "\\") - BootPath;
+        RtlStringCbCopyNA(ArcBoot, sizeof(ArcBoot), BootPath, PathSeparator);
+    }
 
     TRACE("ArcBoot: '%s'\n", ArcBoot);
     TRACE("SystemRoot: '%s'\n", SystemRoot);
@@ -196,30 +248,44 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
     LoaderBlock->ArcDiskInformation = &WinLdrSystemBlock->ArcDiskInformation;
     InitializeListHead(&LoaderBlock->ArcDiskInformation->DiskSignatureListHead);
 
-    /* Convert ARC disk information from freeldr to a correct format */
-    ULONG DiscCount = ArcGetDiskCount();
-    for (i = 0; i < DiscCount; i++)
+    /* Populate the ARC disk tables via the UEFI helpers when we booted via UEFI. */
+#ifdef UEFIBOOT
+    if (GlobalSystemTable != NULL)
     {
-        PARC_DISK_SIGNATURE_EX ArcDiskSig;
-
-        /* Allocate the ARC structure */
-        ArcDiskSig = FrLdrHeapAlloc(sizeof(ARC_DISK_SIGNATURE_EX), 'giSD');
-        if (!ArcDiskSig)
+        /* Use UEFI-specific ARC disk initialization */
+        if (!UefiInitializeArcDisks(LoaderBlock))
         {
-            ERR("Failed to allocate ARC structure! Ignoring remaining ARC disks. (i = %lu, DiskCount = %lu)\n",
-                i, DiscCount);
-            break;
+            ERR("UefiInitializeArcDisks() failed\n");
         }
+    }
+    else
+#endif
+    {
+        /* Convert ARC disk information from freeldr to a correct format */
+        ULONG DiscCount = ArcGetDiskCount();
+        for (i = 0; i < DiscCount; i++)
+        {
+            PARC_DISK_SIGNATURE_EX ArcDiskSig;
 
-        /* Copy the data over */
-        RtlCopyMemory(ArcDiskSig, ArcGetDiskInfo(i), sizeof(ARC_DISK_SIGNATURE_EX));
+            /* Allocate the ARC structure */
+            ArcDiskSig = FrLdrHeapAlloc(sizeof(ARC_DISK_SIGNATURE_EX), 'giSD');
+            if (!ArcDiskSig)
+            {
+                ERR("Failed to allocate ARC structure! Ignoring remaining ARC disks. (i = %lu, DiskCount = %lu)\n",
+                    i, DiscCount);
+                break;
+            }
 
-        /* Set the ARC Name pointer */
-        ArcDiskSig->DiskSignature.ArcName = PaToVa(ArcDiskSig->ArcName);
+            /* Copy the data over */
+            RtlCopyMemory(ArcDiskSig, ArcGetDiskInfo(i), sizeof(ARC_DISK_SIGNATURE_EX));
 
-        /* Insert into the list */
-        InsertTailList(&LoaderBlock->ArcDiskInformation->DiskSignatureListHead,
-                       &ArcDiskSig->DiskSignature.ListEntry);
+            /* Set the ARC Name pointer */
+            ArcDiskSig->DiskSignature.ArcName = PaToVa(ArcDiskSig->ArcName);
+
+            /* Insert into the list */
+            InsertTailList(&LoaderBlock->ArcDiskInformation->DiskSignatureListHead,
+                           &ArcDiskSig->DiskSignature.ListEntry);
+        }
     }
 
     /* Convert all lists to Virtual address */
@@ -253,6 +319,64 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
         Extension->AcpiTable = (PVOID)1;
         // FIXME: Extension->AcpiTableSize;
     }
+
+    /* Pass GOP framebuffer info to the kernel so it can reuse the firmware display. */
+#ifdef UEFIBOOT
+    {
+        extern REACTOS_INTERNAL_BGCONTEXT framebufferData;
+        extern PBGRT_TABLE GetBgrtTable(VOID);
+        
+        if (framebufferData.BaseAddress != 0)
+        {
+            Extension->GopFramebuffer.FrameBufferBase.QuadPart = framebufferData.BaseAddress;
+            Extension->GopFramebuffer.FrameBufferSize = framebufferData.BufferSize;
+            Extension->GopFramebuffer.HorizontalResolution = framebufferData.ScreenWidth;
+            Extension->GopFramebuffer.VerticalResolution = framebufferData.ScreenHeight;
+            Extension->GopFramebuffer.PixelsPerScanLine = framebufferData.PixelsPerScanLine;
+            Extension->GopFramebuffer.PixelFormat = framebufferData.PixelFormat;
+            Extension->GopFramebuffer.RedMask = framebufferData.RedMask;
+            Extension->GopFramebuffer.GreenMask = framebufferData.GreenMask;
+            Extension->GopFramebuffer.BlueMask = framebufferData.BlueMask;
+            Extension->GopFramebuffer.Reserved = framebufferData.ReservedMask;
+
+            TRACE("Passing GOP framebuffer to kernel:\n");
+            TRACE("  BaseAddress: 0x%llx\n", Extension->GopFramebuffer.FrameBufferBase.QuadPart);
+            TRACE("  Size: 0x%x\n", Extension->GopFramebuffer.FrameBufferSize);
+            TRACE("  Resolution: %dx%d\n", Extension->GopFramebuffer.HorizontalResolution,
+                  Extension->GopFramebuffer.VerticalResolution);
+            TRACE("  PixelsPerScanLine: %d\n", Extension->GopFramebuffer.PixelsPerScanLine);
+            TRACE("  PixelFormat: %d\n", Extension->GopFramebuffer.PixelFormat);
+            TRACE("  Masks: R=0x%08x G=0x%08x B=0x%08x\n",
+                  Extension->GopFramebuffer.RedMask,
+                  Extension->GopFramebuffer.GreenMask,
+                  Extension->GopFramebuffer.BlueMask);
+        }
+        
+        /* Pass BGRT info to the kernel for seamless boot logo support. */
+        PBGRT_TABLE Bgrt = GetBgrtTable();
+        if (Bgrt)
+        {
+            Extension->BgrtInfo.Valid = TRUE;
+            Extension->BgrtInfo.ImageType = Bgrt->ImageType;
+            Extension->BgrtInfo.ImageAddress = Bgrt->LogoAddress;
+            // Calculate image size from BMP header if needed (for now set to 0)
+            Extension->BgrtInfo.ImageSize = 0; // Will be determined later from BMP header
+            Extension->BgrtInfo.ImageOffsetX = Bgrt->OffsetX;
+            Extension->BgrtInfo.ImageOffsetY = Bgrt->OffsetY;
+            
+            TRACE("BGRT info passed to kernel:\n");
+            TRACE("  ImageType: %u\n", Extension->BgrtInfo.ImageType);
+            TRACE("  ImageAddress: 0x%llx\n", Extension->BgrtInfo.ImageAddress);
+            TRACE("  ImageOffset: (%lu, %lu)\n", Extension->BgrtInfo.ImageOffsetX,
+                  Extension->BgrtInfo.ImageOffsetY);
+        }
+        else
+        {
+            Extension->BgrtInfo.Valid = FALSE;
+            TRACE("No BGRT table found, boot logo support disabled\n");
+        }
+    }
+#endif
 
     if (VersionToBoot >= _WIN32_WINNT_VISTA)
     {

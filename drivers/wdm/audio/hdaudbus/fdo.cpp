@@ -144,7 +144,7 @@ HDA_SendVerbs(
     IN ULONG Count)
 {
     PHDA_FDO_DEVICE_EXTENSION DeviceExtension;
-    ULONG Sent = 0, ReadPosition, WritePosition, Queued;
+    ULONG Sent = 0, ReadPosition, WritePosition, Queued = 0;
 
     /* get device extension */
     DeviceExtension = (PHDA_FDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;

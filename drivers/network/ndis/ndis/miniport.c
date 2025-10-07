@@ -1526,7 +1526,8 @@ NdisMDeregisterAdapterShutdownHandler(
   NDIS_DbgPrint(DEBUG_MINIPORT, ("Called.\n"));
 
   if(Adapter->BugcheckContext->ShutdownHandler) {
-    KeDeregisterBugCheckCallback(Adapter->BugcheckContext->CallbackRecord);
+    BOOLEAN Status = KeDeregisterBugCheckCallback(Adapter->BugcheckContext->CallbackRecord);
+    UNREFERENCED_PARAMETER(Status);
     IoUnregisterShutdownNotification(Adapter->NdisMiniportBlock.DeviceObject);
   }
 }
@@ -1736,8 +1737,9 @@ NdisMRegisterAdapterShutdownHandler(
 
   KeInitializeCallbackRecord(BugcheckContext->CallbackRecord);
 
-  KeRegisterBugCheckCallback(BugcheckContext->CallbackRecord, NdisIBugcheckCallback,
+  BOOLEAN Status2 = KeRegisterBugCheckCallback(BugcheckContext->CallbackRecord, NdisIBugcheckCallback,
       BugcheckContext, sizeof(*BugcheckContext), (PUCHAR)"Ndis Miniport");
+  UNREFERENCED_PARAMETER(Status2);
 
   IoRegisterShutdownNotification(Adapter->NdisMiniportBlock.DeviceObject);
 }
@@ -2182,7 +2184,7 @@ NdisIPnPStartDevice(
   Adapter->NdisMiniportBlock.OldPnPDeviceState = Adapter->NdisMiniportBlock.PnPDeviceState;
   Adapter->NdisMiniportBlock.PnPDeviceState = NdisPnPDeviceStarted;
 
-  IoSetDeviceInterfaceState(&Adapter->NdisMiniportBlock.SymbolicLinkName, TRUE);
+  {NTSTATUS status = IoSetDeviceInterfaceState(&Adapter->NdisMiniportBlock.SymbolicLinkName, TRUE); UNREFERENCED_PARAMETER(status);}
 
   Timeout.QuadPart = Int32x32To64(Adapter->NdisMiniportBlock.CheckForHangSeconds, -1000000);
   KeSetTimerEx(&Adapter->NdisMiniportBlock.WakeUpDpcTimer.Timer, Timeout,
@@ -2236,7 +2238,7 @@ NdisIPnPStopDevice(
 
   (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.HaltHandler)(Adapter);
 
-  IoSetDeviceInterfaceState(&Adapter->NdisMiniportBlock.SymbolicLinkName, FALSE);
+  {NTSTATUS status = IoSetDeviceInterfaceState(&Adapter->NdisMiniportBlock.SymbolicLinkName, FALSE); UNREFERENCED_PARAMETER(status);}
 
   if (Adapter->NdisMiniportBlock.AllocatedResources)
     {
@@ -2312,11 +2314,6 @@ NdisIDeviceIoControl(
                                     MmGetSystemAddressForMdl(Irp->MdlAddress),
                                     &Written);
       Irp->IoStatus.Information = Written;
-      break;
-
-    case IOCTL_NDIS_RESERVED7:
-      NDIS_DbgPrint(MIN_TRACE, ("NdisIDeviceIoControl: IOCTL_NDIS_RESERVED7 UNIMPLEMENTED (CORE-13831)\n"));
-      Status = STATUS_NOT_IMPLEMENTED;
       break;
 
     default:

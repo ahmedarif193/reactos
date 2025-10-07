@@ -13,6 +13,26 @@
 #include <ntddscsi.h>
 #include <ntdddisk.h>
 #include <mountdev.h>
+#include <iofuncs.h>
+
+#ifndef _MSC_VER
+NTSTATUS
+NTAPI
+IoConnectInterruptEx(
+    _Inout_ PIO_CONNECT_INTERRUPT_PARAMETERS Parameters);
+
+VOID
+NTAPI
+IoDisconnectInterruptEx(
+    _In_ PIO_DISCONNECT_INTERRUPT_PARAMETERS Parameters);
+#endif
+
+#ifndef SCSIPORT_LEGACY_DETECTION
+#define SCSIPORT_LEGACY_DETECTION 1
+#endif
+
+/* Ensure consistent structure packing between i386 and AMD64 */
+#pragma pack(push, 8)
 
 #ifdef DBG
 #include <debug/driverdbg.h>
@@ -41,6 +61,10 @@
 #define SCSI_PORT_DISABLE_INTERRUPTS     0x04000
 #define SCSI_PORT_ENABLE_INT_REQUEST     0x08000
 #define SCSI_PORT_TIMER_NEEDED           0x10000
+
+/* DMA tracking flags stored in SRB info */
+#define SCSI_PORT_DMA_FLAG_MAPPED        0x01
+#define SCSI_PORT_DMA_FLAG_WRITE_OUT     0x02
 
 /* LUN Extension flags*/
 #define LUNEX_FROZEN_QUEUE               0x0001
@@ -97,6 +121,8 @@ typedef struct _CONFIGURATION_INFO
     PACCESS_RANGE AccessRanges;
 } CONFIGURATION_INFO, *PCONFIGURATION_INFO;
 
+struct _SCSI_PORT_DEVICE_EXTENSION;
+
 typedef struct _SCSI_PORT_DEVICE_BASE
 {
     LIST_ENTRY List;
@@ -106,6 +132,12 @@ typedef struct _SCSI_PORT_DEVICE_BASE
     SCSI_PHYSICAL_ADDRESS IoAddress;
     ULONG SystemIoBusNumber;
 } SCSI_PORT_DEVICE_BASE, *PSCSI_PORT_DEVICE_BASE;
+
+typedef struct _SCSI_PORT_INTERRUPT_CONTEXT
+{
+    struct _SCSI_PORT_DEVICE_EXTENSION *DeviceExtension;
+    ULONG MessageId;
+} SCSI_PORT_INTERRUPT_CONTEXT, *PSCSI_PORT_INTERRUPT_CONTEXT;
 
 typedef struct _SCSI_SG_ADDRESS
 {
@@ -131,6 +163,17 @@ typedef struct _SCSI_REQUEST_BLOCK_INFO
     /* Scatter-gather list */
     PSCSI_SG_ADDRESS ScatterGather;
     SCSI_SG_ADDRESS ScatterGatherList[MAX_SG_LIST];
+
+    /* Subordinate DMA bookkeeping */
+    PVOID DmaLogicalAddress;
+    ULONG DmaTransferLength;
+    ULONG DmaCurrentOffset;
+    UCHAR DmaFlags;
+    UCHAR DmaTelemetryLogged;
+    USHORT Reserved;
+    ULONG DmaWindowCount;
+    ULONG DmaBytesMapped;
+    ULONG DmaBytesFlushed;
 } SCSI_REQUEST_BLOCK_INFO, *PSCSI_REQUEST_BLOCK_INFO;
 
 typedef struct _SCSI_PORT_COMMON_EXTENSION
@@ -138,6 +181,12 @@ typedef struct _SCSI_PORT_COMMON_EXTENSION
     PDEVICE_OBJECT DeviceObject;
     PDEVICE_OBJECT LowerDevice;
     BOOLEAN IsFDO;
+    /* Add padding for proper alignment on AMD64 */
+#ifdef _WIN64
+    UCHAR Padding[7];  /* Align to 8-byte boundary */
+#else
+    UCHAR Padding[3];  /* Align to 4-byte boundary */
+#endif
 } SCSI_PORT_COMMON_EXTENSION, *PSCSI_PORT_COMMON_EXTENSION;
 
 // PDO device
@@ -148,6 +197,11 @@ typedef struct _SCSI_PORT_LUN_EXTENSION
     UCHAR PathId;
     UCHAR TargetId;
     UCHAR Lun;
+#ifdef _WIN64
+    UCHAR Padding1[5];  /* Align ULONG Flags to 8-byte boundary on AMD64 */
+#else
+    UCHAR Padding1[1];  /* Align ULONG Flags to 4-byte boundary on i386 */
+#endif
 
     ULONG Flags;
 
@@ -224,9 +278,14 @@ typedef struct _SCSI_PORT_SAVE_INTERRUPT
 #endif
 
 // FDO
+struct _SCSIPORT_DRIVER_EXTENSION;
+typedef struct _SCSIPORT_DRIVER_EXTENSION SCSI_PORT_DRIVER_EXTENSION, *PSCSI_PORT_DRIVER_EXTENSION;
+
 typedef struct _SCSI_PORT_DEVICE_EXTENSION
 {
     SCSI_PORT_COMMON_EXTENSION Common;
+    PSCSI_PORT_DRIVER_EXTENSION DriverExtension;
+    PDEVICE_OBJECT PhysicalDeviceObject;
 
     ULONG Length;
     ULONG MiniPortExtensionSize;
@@ -246,7 +305,9 @@ typedef struct _SCSI_PORT_DEVICE_EXTENSION
     KSPIN_LOCK IrqLock; /* Used when there are 2 irqs */
     ULONG SequenceNumber; /* Global sequence number for packets */
     KSPIN_LOCK SpinLock;
-    PKINTERRUPT Interrupt[2];
+    PKINTERRUPT *InterruptObjects;
+    PSCSI_PORT_INTERRUPT_CONTEXT InterruptContext;
+    PIO_INTERRUPT_MESSAGE_INFO InterruptMessageInfo;
     PIRP CurrentIrp;
     ULONG IrpFlags;
 
@@ -303,8 +364,10 @@ typedef struct _SCSI_PORT_DEVICE_EXTENSION
 
     PHYSICAL_ADDRESS PhysicalAddress;
     ULONG CommonBufferLength;
-    ULONG InterruptLevel[2];
     ULONG IoAddress;
+
+    BOOLEAN InterruptMessageBased;
+    BOOLEAN FirmwareSupportsPnp;
 
     BOOLEAN NeedSrbExtensionAlloc;
     BOOLEAN NeedSrbDataAlloc;
@@ -329,12 +392,18 @@ typedef struct _RESETBUS_PARAMS
     PSCSI_PORT_DEVICE_EXTENSION DeviceExtension;
 } RESETBUS_PARAMS, *PRESETBUS_PARAMS;
 
-typedef struct _SCSIPORT_DRIVER_EXTENSION
+struct _SCSIPORT_DRIVER_EXTENSION
 {
     PDRIVER_OBJECT DriverObject;
     UNICODE_STRING RegistryPath;
     BOOLEAN IsLegacyDriver;
-} SCSI_PORT_DRIVER_EXTENSION, *PSCSI_PORT_DRIVER_EXTENSION;
+    BOOLEAN HwInitDataValid;
+    BOOLEAN FirmwareSupportsPnp;
+    BOOLEAN LegacyOverrideActive;
+    LONG NextPortNumber;
+    HW_INITIALIZATION_DATA HwInitializationData;
+    PVOID HwContext;
+};
 
 FORCEINLINE
 BOOLEAN
@@ -366,6 +435,20 @@ VerifyIrpInBufferSize(
     return TRUE;
 }
 
+FORCEINLINE
+PKINTERRUPT
+SppGetPrimaryInterruptObject(
+    _In_ PSCSI_PORT_DEVICE_EXTENSION DeviceExtension)
+{
+    if (DeviceExtension->InterruptObjects != NULL &&
+        DeviceExtension->InterruptCount > 0)
+    {
+        return DeviceExtension->InterruptObjects[0];
+    }
+
+    return NULL;
+}
+
 // ioctl.c
 
 NTSTATUS
@@ -380,13 +463,38 @@ VOID
 FdoScanAdapter(
     _In_ PSCSI_PORT_DEVICE_EXTENSION DeviceExtension);
 
+VOID
+SpiParseDeviceInfo(
+    _In_ PSCSI_PORT_DEVICE_EXTENSION DeviceExtension,
+    _In_ HANDLE Key,
+    _Inout_ PPORT_CONFIGURATION_INFORMATION ConfigInfo,
+    _Inout_ PCONFIGURATION_INFO InternalConfigInfo,
+    _Inout_ PUCHAR Buffer);
+
+VOID
+SpiResourceToConfig(
+    _In_ PHW_INITIALIZATION_DATA HwInitializationData,
+    _In_ PCM_FULL_RESOURCE_DESCRIPTOR ResourceDescriptor,
+    _Inout_ PPORT_CONFIGURATION_INFORMATION PortConfig);
+
+NTSTATUS
+SpiEnsureAdapterObject(
+    _Inout_ PSCSI_PORT_DEVICE_EXTENSION DeviceExtension,
+    _Inout_ PPORT_CONFIGURATION_INFORMATION ConfigInfo);
+
+NTSTATUS
+SpiAllocateCommonBuffer(
+    _Inout_ PSCSI_PORT_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG NonCachedSize);
+
 NTSTATUS
 FdoCallHWInitialize(
     _In_ PSCSI_PORT_DEVICE_EXTENSION DeviceExtension);
 
 NTSTATUS
 FdoRemoveAdapter(
-    _In_ PSCSI_PORT_DEVICE_EXTENSION DeviceExtension);
+    _Inout_ PSCSI_PORT_DEVICE_EXTENSION DeviceExtension,
+    _In_ BOOLEAN DeleteDeviceObject);
 
 NTSTATUS
 FdoStartAdapter(
@@ -457,6 +565,14 @@ DRIVER_STARTIO ScsiPortStartIo;
 // scsiport.c
 
 KSERVICE_ROUTINE ScsiPortIsr;
+BOOLEAN
+NTAPI
+SppMessageInterruptService(
+    _In_ PKINTERRUPT Interrupt,
+    _In_ PVOID ServiceContext,
+    _In_ ULONG MessageId);
+
+KSERVICE_ROUTINE SppMessageFallbackService;
 
 IO_ALLOCATION_ACTION
 NTAPI
@@ -473,3 +589,6 @@ ScsiPortAllocateAdapterChannel(
     _In_ PIRP Irp,
     _In_ PVOID MapRegisterBase,
     _In_ PVOID Context);
+
+/* Restore previous packing */
+#pragma pack(pop)

@@ -1097,7 +1097,7 @@ UhciMapAsyncTransferToTDs(IN PUHCI_EXTENSION UhciExtension,
     SIZE_T TransferLength = 0;
     SIZE_T LengthMapped = 0;
     SIZE_T BytesRemaining;
-    SIZE_T LengthThisTD;
+    SIZE_T LengthThisTD = 0;
     ULONG ix;
     BOOL DataToggle;
     UCHAR PIDCode;

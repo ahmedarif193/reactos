@@ -18,3 +18,25 @@
  */
 
 #include <freeldr.h>
+
+#define FREELDR_DEFAULT_DISK_BUFFER_SIZE (128 * 1024)
+
+SIZE_T
+FrLdrGetRecommendedDiskBufferSize(SIZE_T Maximum)
+{
+    SIZE_T Preferred = FREELDR_DEFAULT_DISK_BUFFER_SIZE;
+
+    if (Maximum != 0 && Preferred > Maximum)
+    {
+        Preferred = Maximum;
+    }
+
+    /* Align down to the sector size to avoid partial sector transfers */
+    Preferred &= ~(SIZE_T)(512 - 1);
+    if (Preferred == 0)
+    {
+        Preferred = 512;
+    }
+
+    return Preferred;
+}

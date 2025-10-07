@@ -576,7 +576,7 @@ UDFIndexDirectory(
         Offset += (FileId->lengthFileIdent + FileId->lengthOfImpUse + sizeof(FILE_IDENT_DESC) + 3) & (~((uint32)3));
         FileId = (PFILE_IDENT_DESC)((buff)+Offset);
         Count++;
-        if(Offset+sizeof(FILE_IDENT_DESC) > ExtInfo->Length) {
+        if(Offset+sizeof(FILE_IDENT_DESC) > (uint64)ExtInfo->Length) {
             if(Offset != ExtInfo->Length) {
                 UDFPrint(("  Trash at the end of Dir\n"));
             }
@@ -669,7 +669,7 @@ UDFIndexDirectory(
         } else {
             // init plain file/dir entry
             ASSERT( (Offset+sizeof(FILE_IDENT_DESC)+FileId->lengthOfImpUse+FileId->lengthFileIdent) <=
-                    ExtInfo->Length );
+                    (uint64)ExtInfo->Length );
             UDFDecompressUnicode(&(DirNdx->FName),
                              ((uint8*)(FileId+1)) + (FileId->lengthOfImpUse),
                              FileId->lengthFileIdent,
@@ -714,7 +714,7 @@ UDFIndexDirectory(
         Offset += DirNdx->Length;
         FileId = (PFILE_IDENT_DESC)(((int8*)FileId)+DirNdx->Length);
         Count++;
-        if(Offset+sizeof(FILE_IDENT_DESC) > ExtInfo->Length) {
+        if(Offset+sizeof(FILE_IDENT_DESC) > (uint64)ExtInfo->Length) {
             if(Offset != ExtInfo->Length) {
                 UDFPrint(("  Trash at the end of Dir (2)\n"));
             }
@@ -900,7 +900,7 @@ UDFReTagDirectory(
     uint32 l;
     uint32 Offset;
     int8* Buf;
-    OSSTATUS status;
+    OSSTATUS status = STATUS_SUCCESS;
     SIZE_T ReadBytes;
     PUDF_FILE_INFO curFileInfo;
     PDIR_INDEX_ITEM DirNdx;

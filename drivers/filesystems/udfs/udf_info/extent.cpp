@@ -2271,7 +2271,7 @@ UDFResizeExtent(
 
     UDFCheckSpaceAllocation(Vcb, 0, ExtInfo->Mapping, AS_USED); // check if used
     if(ExtInfo->Offset) {
-        if(ExtInfo->Offset + Length <= LBS) {
+        if(ExtInfo->Offset + Length <= (int64)LBS) {
             ExtPrint(("Resize IN-ICB\n"));
             ExtInfo->Length = Length;
             return STATUS_SUCCESS;
@@ -2501,7 +2501,7 @@ UDFResizeExtent(
             if(l < Length) {
                 // we get here if simple increasing of the last frag failed
                 AdPrint(("Resize add new frag (7)\n"));
-                if(l < LBS && Length >= LBS &&
+                if(l < (int64)LBS && Length >= (int64)LBS &&
                    (ExtInfo->Flags & EXTENT_FLAG_ALLOC_MASK) == EXTENT_FLAG_ALLOC_SEQUENTIAL) {
                     AdPrint(("Resize tune for SEQUENTIAL i/o\n"));
                 }
@@ -2595,7 +2595,9 @@ tail_cached:;
         if(!AlwaysInIcb) {
             // remove 1st entry pointing to FileEntry
             s = UDFGetMappingLength(ExtInfo->Mapping);
-            RtlMoveMemory(&(ExtInfo->Mapping[0]), &(ExtInfo->Mapping[1]), s - sizeof(EXTENT_MAP));
+            if (s > sizeof(EXTENT_MAP)) {
+                RtlMoveMemory(&(ExtInfo->Mapping[0]), &(ExtInfo->Mapping[1]), s - sizeof(EXTENT_MAP));
+            }
             if(!MyReallocPool__((int8*)(ExtInfo->Mapping), s,
                           (int8**)&(ExtInfo->Mapping), s - sizeof(EXTENT_MAP) )) {
                 // This must never happen on truncate !!!
@@ -2987,7 +2989,7 @@ UDFReadExtentCached(
     OSSTATUS status;
     // prevent reading out of data space
     if(Offset > ExtInfo->Length) return STATUS_END_OF_FILE;
-    if(Offset+Length > ExtInfo->Length) Length = (uint32)(ExtInfo->Length - Offset);
+    if(Offset+Length > (uint64)ExtInfo->Length) Length = (uint32)(ExtInfo->Length - Offset);
     Offset += ExtInfo->Offset;               // used for in-ICB data
     // read maximal possible part of each frag of extent
     while(((LONG)Length) > 0) {
@@ -3028,20 +3030,34 @@ UDFReadExtent(
     OUT PSIZE_T ReadBytes
     )
 {
-    (*ReadBytes) = 0;
-    if(!ExtInfo || !ExtInfo->Mapping) return STATUS_INVALID_PARAMETER;
-    ASSERT((uintptr_t)Buffer > 0x1000);
+    if (!Buffer) return STATUS_INVALID_PARAMETER;
+    if (!ExtInfo || !ExtInfo->Mapping) return STATUS_INVALID_PARAMETER;
+    *ReadBytes = 0;
+    if (Length == 0) return STATUS_SUCCESS;
+    if (Offset < 0) return STATUS_INVALID_PARAMETER;
 
-    AdPrint(("Read ExtInfo %x, Mapping %x\n", ExtInfo, ExtInfo->Mapping));
+    /* Restore locals that were used later */
+    PEXTENT_MAP Extent = ExtInfo->Mapping;   // extent array
+    SIZE_T to_read = 0, _ReadBytes = 0;
+    ULONG Lba = 0, sect_offs = 0, flags = 0, index = 0;
+    NTSTATUS status = STATUS_SUCCESS;
 
-    PEXTENT_MAP Extent = ExtInfo->Mapping;   // Extent array
-    SIZE_T to_read, _ReadBytes;
-    uint32 Lba, sect_offs, flags;
-    uint32 index;
-    OSSTATUS status;
-    // prevent reading out of data space
-    if(Offset > ExtInfo->Length) return STATUS_END_OF_FILE;
-    if(Offset+Length > ExtInfo->Length) Length = (uint32)(ExtInfo->Length - Offset);
+    /* Clamp Length safely without stdint */
+    ULONGLONG obj_len = (ULONGLONG)ExtInfo->Length;
+    ULONGLONG off64   = (ULONGLONG)Offset;
+    if (off64 >= obj_len) return STATUS_END_OF_FILE;
+
+    ULONGLONG avail = obj_len - off64;
+    ULONGLONG req64 = (ULONGLONG)Length;
+    if (req64 > avail) req64 = avail;
+
+    ULONGLONG size_t_max = (ULONGLONG)(~(SIZE_T)0);
+    if (req64 > size_t_max) req64 = size_t_max;
+
+    Length = (SIZE_T)req64;
+
+
+
     Offset += ExtInfo->Offset;               // used for in-ICB data
     // read maximal possible part of each frag of extent
     Lba = UDFExtentOffsetToLba(Vcb, Extent, Offset, &sect_offs, &to_read, &flags, &index);

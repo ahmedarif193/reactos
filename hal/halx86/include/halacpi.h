@@ -1,41 +1,11 @@
+/*
+ * PROJECT:         ReactOS HAL
+ * LICENSE:         GPL-2.0-or-later - See COPYING in the top level directory
+ * FILE:            hal/halx86/include/halacpi.h
+ * PURPOSE:         Legacy HAL include forwarding header
+ * REASON:         Maintain legacy include path compatibility during arch reshuffle
+ * COPYRIGHT:       Copyright (c) Ahmed ARIF (arif.ing@outlook.com)
+ */
+
 #pragma once
-
-//
-// Internal HAL structure
-//
-typedef struct _ACPI_CACHED_TABLE
-{
-    LIST_ENTRY Links;
-    DESCRIPTION_HEADER Header;
-    // table follows
-    // ...
-} ACPI_CACHED_TABLE, *PACPI_CACHED_TABLE;
-
-NTSTATUS
-NTAPI
-HalpAcpiTableCacheInit(
-    IN PLOADER_PARAMETER_BLOCK LoaderBlock
-);
-
-PVOID
-NTAPI
-HalpAcpiGetTable(
-    IN PLOADER_PARAMETER_BLOCK LoaderBlock,
-    IN ULONG Signature
-);
-
-CODE_SEG("INIT")
-NTSTATUS
-NTAPI
-HalpSetupAcpiPhase0(
-    IN PLOADER_PARAMETER_BLOCK LoaderBlock
-);
-
-PVOID
-NTAPI
-HalAcpiGetTable(
-    IN PLOADER_PARAMETER_BLOCK LoaderBlock,
-    IN ULONG Signature
-);
-
-/* EOF */
+#include "../../arch/i386/include/halacpi.h"

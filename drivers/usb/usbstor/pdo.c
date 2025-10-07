@@ -162,7 +162,13 @@ USBSTOR_PdoHandleQueryDeviceText(
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
 
-            RtlAnsiStringToUnicodeString(&DeviceDescription, &AnsiString, FALSE);
+            NTSTATUS Status = RtlAnsiStringToUnicodeString(&DeviceDescription, &AnsiString, FALSE);
+            if (!NT_SUCCESS(Status))
+            {
+                ExFreePoolWithTag(DeviceDescription.Buffer, USB_STOR_TAG);
+                Irp->IoStatus.Information = 0;
+                return Status;
+            }
 
             Irp->IoStatus.Information = (ULONG_PTR)DeviceDescription.Buffer;
             return STATUS_SUCCESS;

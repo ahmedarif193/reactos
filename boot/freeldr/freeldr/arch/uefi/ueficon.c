@@ -19,12 +19,28 @@ static unsigned CurrentAttr = 0x0f;
 static EFI_INPUT_KEY Key;
 static BOOLEAN ExtendedKey = FALSE;
 static char ExtendedScanCode = 0;
+static BOOLEAN KeyAvailable = FALSE;
+
+/* GOP console entry points provided by the GOP console module. */
+extern VOID UefiGopConsolePutChar(CHAR Ch);
+extern VOID UefiGopConsolePutString(PCSTR String);
+extern VOID UefiGopConsoleClear(VOID);
+extern VOID UefiGopConsoleSetCursor(UINT32 X, UINT32 Y);
+extern BOOLEAN UefiGopConsoleIsInitialized(VOID);
+static BOOLEAN BootServicesExited = FALSE;
 
 /* FUNCTIONS ******************************************************************/
 
 VOID
 UefiConsPutChar(int c)
 {
+    /* Once boot services are gone, fall back to the GOP console implementation. */
+    if (BootServicesExited && UefiGopConsoleIsInitialized())
+    {
+        UefiGopConsolePutChar((CHAR)c);
+        return;
+    }
+    
     ULONG Width, Height, Unused;
     BOOLEAN NeedScroll;
 
@@ -121,13 +137,30 @@ ConvertToBiosExtValue(UCHAR KeyIn)
 BOOLEAN
 UefiConsKbHit(VOID)
 {
-    return (GlobalSystemTable->ConIn->ReadKeyStroke(GlobalSystemTable->ConIn, &Key) != EFI_NOT_READY);
+    EFI_STATUS Status;
+    
+    /* Only read a new key if we don't have one buffered */
+    if (!KeyAvailable && !ExtendedKey)
+    {
+        Status = GlobalSystemTable->ConIn->ReadKeyStroke(GlobalSystemTable->ConIn, &Key);
+        if (Status == EFI_SUCCESS)
+        {
+            KeyAvailable = TRUE;
+        }
+        else
+        {
+            KeyAvailable = FALSE;
+        }
+    }
+    
+    return (KeyAvailable || ExtendedKey);
 }
 
 int
 UefiConsGetCh(VOID)
 {
     UCHAR KeyOutput = 0;
+    EFI_STATUS Status;
 
     /* If an extended key press was detected the last time we were called
      * then return the scan code of that key. */
@@ -137,19 +170,45 @@ UefiConsGetCh(VOID)
         return ExtendedScanCode;
     }
 
+    /* Ensure we have a key available */
+    if (!KeyAvailable)
+    {
+        /* Wait for a key if none is buffered */
+        do
+        {
+            Status = GlobalSystemTable->ConIn->ReadKeyStroke(GlobalSystemTable->ConIn, &Key);
+        } while (Status != EFI_SUCCESS);
+        KeyAvailable = TRUE;
+    }
+
     if (Key.UnicodeChar != 0)
     {
         KeyOutput = Key.UnicodeChar;
     }
-    else
+    else if (Key.ScanCode != 0)
     {
         ExtendedKey = TRUE;
         ExtendedScanCode = ConvertToBiosExtValue(Key.ScanCode);
         KeyOutput = KEY_EXTENDED;
     }
 
-    /* UEFI will stack input requests, we have to clear it */
+    /* Clear the key buffer after consuming it */
     Key.UnicodeChar = 0;
     Key.ScanCode = 0;
+    KeyAvailable = FALSE;
+    
     return KeyOutput;
+}
+
+/* Record that ExitBootServices has been called so we can switch to GOP output. */
+VOID
+UefiConsMarkBootServicesExited(VOID)
+{
+    BootServicesExited = TRUE;
+    
+    /* Reposition the cursor if the GOP console is already initialised. */
+    if (UefiGopConsoleIsInitialized())
+    {
+        UefiGopConsoleSetCursor(CurrentCursorX, CurrentCursorY);
+    }
 }

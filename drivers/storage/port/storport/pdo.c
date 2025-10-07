@@ -12,6 +12,12 @@
 #define NDEBUG
 #include <debug.h>
 
+#ifndef ALIGN_UP_BY
+#define ALIGN_UP_BY(length, alignment) (((length) + ((alignment) - 1)) & ~((alignment) - 1))
+#endif
+
+#define SRB_EXTENSION_ALIGNMENT 128
+
 
 /* FUNCTIONS ******************************************************************/
 
@@ -121,12 +127,180 @@ PortPdoScsi(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ PIRP Irp)
 {
-    DPRINT1("PortPdoScsi(%p %p)\n", DeviceObject, Irp);
+    PPDO_DEVICE_EXTENSION PdoExtension;
+    PFDO_DEVICE_EXTENSION FdoExtension;
+    PIO_STACK_LOCATION Stack;
+    PSCSI_REQUEST_BLOCK Srb = NULL;
+    NTSTATUS Status;
 
-    Irp->IoStatus.Information = 0;
-    Irp->IoStatus.Status = STATUS_SUCCESS;
+    PdoExtension = (PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    ASSERT(PdoExtension != NULL);
+    FdoExtension = PdoExtension->FdoExtension;
+    ASSERT(FdoExtension != NULL);
+
+    Stack = IoGetCurrentIrpStackLocation(Irp);
+
+    switch (Stack->MajorFunction)
+    {
+        case IRP_MJ_DEVICE_CONTROL:
+        {
+            ULONG Ioctl = Stack->Parameters.DeviceIoControl.IoControlCode;
+
+            if (Ioctl == IOCTL_SCSI_EXECUTE_IN ||
+                Ioctl == IOCTL_SCSI_EXECUTE_OUT)
+            {
+                Srb = Stack->Parameters.Scsi.Srb;
+            }
+            break;
+        }
+
+        case IRP_MJ_SCSI:
+            Srb = Stack->Parameters.Scsi.Srb;
+            break;
+
+        default:
+            break;
+    }
+
+    if (Srb == NULL)
+    {
+        Irp->IoStatus.Information = 0;
+        Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    /* Make sure the SRB knows which device it targets */
+    Srb->PathId = (UCHAR)PdoExtension->Bus;
+    Srb->TargetId = (UCHAR)PdoExtension->Target;
+    Srb->Lun = (UCHAR)PdoExtension->Lun;
+    Srb->OriginalRequest = Irp;
+
+    /* Allocate an SRB extension if the miniport requested one */
+    {
+        SIZE_T MiniportSize = FdoExtension->Miniport.PortConfig.SrbExtensionSize;
+        SIZE_T HeaderSize = sizeof(PORT_SRB_EXTENSION);
+        PPORT_SRB_EXTENSION PortSrbExtension;
+        PVOID MiniportExtension;
+        PMDL IrpMdl;
+        PVOID SystemAddress;
+
+        /*
+         * Allocate the PORT_SRB_EXTENSION header from NonPagedPool.
+         * This is a small fixed-size allocation that doesn't need to be
+         * in the uncached extension.
+         */
+        PortSrbExtension = ExAllocatePoolWithTag(NonPagedPool, HeaderSize, TAG_SRB_EXT);
+        if (PortSrbExtension == NULL)
+        {
+            Irp->IoStatus.Information = 0;
+            Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        RtlZeroMemory(PortSrbExtension, HeaderSize);
+
+        PortSrbExtension->MiniportExtension = NULL;
+        PortSrbExtension->MiniportExtensionLength = 0;
+        PortSrbExtension->OriginalDataBuffer = Srb->DataBuffer;
+
+        Irp->Tail.Overlay.DriverContext[0] = PortSrbExtension;
+
+        /*
+         * Allocate the miniport's SRB extension from the SRB extension pool
+         * in the uncached extension. This ensures it can be translated to
+         * a physical address at any IRQL.
+         */
+        if (MiniportSize != 0)
+        {
+            MiniportExtension = PortAllocateSrbExtension(FdoExtension);
+            if (MiniportExtension == NULL)
+            {
+                ExFreePoolWithTag(PortSrbExtension, TAG_SRB_EXT);
+                Irp->IoStatus.Information = 0;
+                Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            /* Already zeroed by PortAllocateSrbExtension */
+            Srb->SrbExtension = MiniportExtension;
+            PortSrbExtension->MiniportExtension = MiniportExtension;
+            PortSrbExtension->MiniportExtensionLength = (ULONG)MiniportSize;
+
+            DPRINT("PortPdoScsi: Allocated SRB extension at VA=%p for miniport\n", MiniportExtension);
+        }
+        else
+        {
+            Srb->SrbExtension = NULL;
+        }
+
+        IrpMdl = Irp->MdlAddress;
+
+        if (IrpMdl != NULL)
+        {
+            SystemAddress = MmGetSystemAddressForMdlSafe(IrpMdl,
+                                                         NormalPagePriority);
+
+            if (SystemAddress == NULL)
+            {
+                PortpCleanupSrbExtension(Irp);
+
+                Irp->IoStatus.Information = 0;
+                Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            Srb->DataBuffer = SystemAddress;
+        }
+        else if (Irp->AssociatedIrp.SystemBuffer != NULL)
+        {
+            Srb->DataBuffer = Irp->AssociatedIrp.SystemBuffer;
+        }
+
+        PortSrbExtension->Mdl = IrpMdl;
+    }
+
+    if (!MiniportStartIo(&FdoExtension->Miniport, Srb))
+    {
+        PPORT_SRB_EXTENSION PortSrbExtension = PortGetSrbExtensionContext(Srb);
+        if (PortSrbExtension != NULL)
+        {
+            Srb->DataBuffer = PortSrbExtension->OriginalDataBuffer;
+        }
+
+        PortpCleanupSrbExtension(Irp);
+
+        Irp->IoStatus.Information = 0;
+        Irp->IoStatus.Status = STATUS_DEVICE_BUSY;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_DEVICE_BUSY;
+    }
+
+    if (SRB_STATUS(Srb->SrbStatus) == SRB_STATUS_PENDING)
+    {
+        IoMarkIrpPending(Irp);
+        return STATUS_PENDING;
+    }
+
+    Status = StorPortSrbStatusToNtStatus(Srb->SrbStatus);
+    Irp->IoStatus.Information = Srb->DataTransferLength;
+    Irp->IoStatus.Status = Status;
+
+    {
+        PPORT_SRB_EXTENSION PortSrbExtension = PortGetSrbExtensionContext(Srb);
+        if (PortSrbExtension != NULL)
+        {
+            Srb->DataBuffer = PortSrbExtension->OriginalDataBuffer;
+        }
+    }
+
+    PortpCleanupSrbExtension(Irp);
+
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 
@@ -136,7 +310,7 @@ PortPdoPnp(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ PIRP Irp)
 {
-    DPRINT1("PortPdoPnp(%p %p)\n", DeviceObject, Irp);
+    DPRINT("PortPdoPnp(%p %p)\n", DeviceObject, Irp);
 
     Irp->IoStatus.Information = 0;
     Irp->IoStatus.Status = STATUS_SUCCESS;

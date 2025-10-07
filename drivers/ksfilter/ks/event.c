@@ -201,7 +201,8 @@ KspEnableEvent(
     {
         UNICODE_STRING GuidString;
 
-        RtlStringFromGUID(&Event.Set, &GuidString);
+        NTSTATUS ConvertStatus = RtlStringFromGUID(&Event.Set, &GuidString);
+        UNREFERENCED_PARAMETER(ConvertStatus);
 
         DPRINT("Guid %S Id %u Flags %x not found\n", GuidString.Buffer, Event.Id, Event.Flags);
         RtlFreeUnicodeString(&GuidString);

@@ -574,7 +574,7 @@ VfatSetRenameInformation(
     UNICODE_STRING NewPath;
     UNICODE_STRING NewFile;
     PFILE_OBJECT RootFileObject;
-    PVFATFCB RootFCB;
+    PVFATFCB RootFCB = NULL;
     UNICODE_STRING RenameInfoString;
     PVFATFCB ParentFCB;
     IO_STATUS_BLOCK IoStatusBlock;

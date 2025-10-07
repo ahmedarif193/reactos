@@ -20,7 +20,7 @@ DcTransmitPacket(
     _In_ PDC_TCB Tcb,
     _In_ PSCATTER_GATHER_LIST SgList)
 {
-    PDC_TBD Tbd, NextTbd, FirstTbd, LastTbd;
+    PDC_TBD Tbd, NextTbd = NULL, FirstTbd, LastTbd = NULL;
     ULONG i, TbdStatus;
 
     TbdStatus = 0;

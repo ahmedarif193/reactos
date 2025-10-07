@@ -920,7 +920,7 @@ SetResidentAttributeDataLength(PDEVICE_EXTENSION Vcb,
                 PNTFS_ATTR_RECORD Destination = (PNTFS_ATTR_RECORD)((ULONG_PTR)FileRecord + AttrOffset);
                 PNTFS_ATTR_RECORD NewRecord;
                 LARGE_INTEGER AttribDataSize;
-                PVOID AttribData;
+                PVOID AttribData = NULL;
                 ULONG NewRecordLength;
                 ULONG EndAttributeOffset;
                 ULONG LengthWritten;
@@ -2998,7 +2998,7 @@ BrowseIndexEntries(PDEVICE_EXTENSION Vcb,
     PINDEX_ENTRY_ATTRIBUTE IndexEntry;
     PNTFS_ATTR_CONTEXT IndexAllocationContext;
     PNTFS_ATTR_CONTEXT BitmapContext;
-    PCHAR *BitmapMem;
+    PCHAR *BitmapMem = NULL;
     ULONG *BitmapPtr;
     RTL_BITMAP  Bitmap;
 
@@ -3097,7 +3097,8 @@ BrowseIndexEntries(PDEVICE_EXTENSION Vcb,
                                                    OutMFTIndex);
                 if (NT_SUCCESS(Status))
                 {
-                    ExFreePoolWithTag(BitmapMem, TAG_NTFS);
+                    if (BitmapMem)
+                        ExFreePoolWithTag(BitmapMem, TAG_NTFS);
                     ReleaseAttributeContext(BitmapContext);
                     ReleaseAttributeContext(IndexAllocationContext);
                     return Status;
@@ -3119,7 +3120,8 @@ BrowseIndexEntries(PDEVICE_EXTENSION Vcb,
             *OutMFTIndex = (IndexEntry->Data.Directory.IndexedFile & NTFS_MFT_MASK);
             if (IndexAllocationContext)
             {
-                ExFreePoolWithTag(BitmapMem, TAG_NTFS);
+                if (BitmapMem)
+                    ExFreePoolWithTag(BitmapMem, TAG_NTFS);
                 ReleaseAttributeContext(BitmapContext);
                 ReleaseAttributeContext(IndexAllocationContext);
             }
@@ -3134,7 +3136,8 @@ BrowseIndexEntries(PDEVICE_EXTENSION Vcb,
 
     if (IndexAllocationContext)
     {
-        ExFreePoolWithTag(BitmapMem, TAG_NTFS);
+        if (BitmapMem)
+            ExFreePoolWithTag(BitmapMem, TAG_NTFS);
         ReleaseAttributeContext(BitmapContext);
         ReleaseAttributeContext(IndexAllocationContext);
     }

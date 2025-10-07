@@ -24,9 +24,6 @@ PortFdoInterruptRoutine(
 {
     PFDO_DEVICE_EXTENSION DeviceExtension;
 
-    DPRINT1("PortFdoInterruptRoutine(%p %p)\n",
-            Interrupt, ServiceContext);
-
     DeviceExtension = (PFDO_DEVICE_EXTENSION)ServiceContext;
 
     return MiniportHwInterrupt(&DeviceExtension->Miniport);
@@ -45,14 +42,14 @@ PortFdoConnectInterrupt(
     KAFFINITY Affinity;
     NTSTATUS Status;
 
-    DPRINT1("PortFdoConnectInterrupt(%p)\n",
+    DPRINT("PortFdoConnectInterrupt(%p)\n",
             DeviceExtension);
 
     /* No resources, no interrupt. Done! */
     if (DeviceExtension->AllocatedResources == NULL ||
         DeviceExtension->TranslatedResources == NULL)
     {
-        DPRINT1("Checkpoint\n");
+        DPRINT("Checkpoint\n");
         return STATUS_SUCCESS;
     }
 
@@ -69,10 +66,10 @@ PortFdoConnectInterrupt(
         return Status;
     }
 
-    DPRINT1("Vector: %lu\n", Vector);
-    DPRINT1("Irql: %lu\n", Irql);
+    DPRINT("Vector: %lu\n", Vector);
+    DPRINT("Irql: %lu\n", Irql);
 
-    DPRINT1("Affinity: 0x%08lx\n", Affinity);
+    DPRINT("Affinity: 0x%08lx\n", Affinity);
 
     /* Connect the interrupt */
     Status = IoConnectInterrupt(&DeviceExtension->Interrupt,
@@ -108,7 +105,7 @@ PortFdoStartMiniport(
     INTERFACE_TYPE InterfaceType;
     NTSTATUS Status;
 
-    DPRINT1("PortFdoStartDevice(%p)\n", DeviceExtension);
+    DPRINT("PortFdoStartDevice(%p)\n", DeviceExtension);
 
     /* Get the interface type of the lower device */
     InterfaceType = GetBusInterface(DeviceExtension->LowerDevice);
@@ -158,7 +155,7 @@ PortFdoStartMiniport(
     /* Call the HwPassiveInitRoutine function, if available */
     if (DeviceExtension->HwPassiveInitRoutine != NULL)
     {
-        DPRINT1("Calling HwPassiveInitRoutine()\n");
+        DPRINT("Calling HwPassiveInitRoutine()\n");
         if (!DeviceExtension->HwPassiveInitRoutine(&DeviceExtension->Miniport.MiniportExtension->HwDeviceExtension))
         {
             DPRINT1("HwPassiveInitRoutine() failed\n");
@@ -180,13 +177,19 @@ PortFdoStartDevice(
     PIO_STACK_LOCATION Stack;
     NTSTATUS Status;
 
-    DPRINT1("PortFdoStartDevice(%p %p)\n",
+    DPRINT("PortFdoStartDevice(%p %p)\n",
             DeviceExtension, Irp);
 
     ASSERT(DeviceExtension->ExtensionType == FdoExtension);
 
     /* Get the current stack location */
     Stack = IoGetCurrentIrpStackLocation(Irp);
+
+    /*
+     * IRP_MN_START_DEVICE must always be called at PASSIVE_LEVEL per DDK documentation.
+     * IoForwardIrpSynchronously performs a wait operation, so verify IRQL.
+     */
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
 
     /* Start the lower device if the FDO is in 'stopped' state */
     if (DeviceExtension->PnpState == dsStopped)
@@ -232,10 +235,10 @@ PortFdoStartDevice(
                                1,
                                &DeviceExtension->BusInterface,
                                NULL);
-    DPRINT1("Status: 0x%08lx\n", Status);
+    DPRINT("Status: 0x%08lx\n", Status);
     if (NT_SUCCESS(Status))
     {
-        DPRINT1("Context: %p\n", DeviceExtension->BusInterface.Context);
+        DPRINT("Context: %p\n", DeviceExtension->BusInterface.Context);
         DeviceExtension->BusInitialized = TRUE;
     }
 
@@ -272,6 +275,16 @@ PortSendInquiry(
 
     DPRINT("PortSendInquiry(%p)\n", PdoExtension);
 
+    /*
+     * This function performs synchronous I/O with infinite wait, which requires
+     * PASSIVE_LEVEL IRQL. Bus enumeration (IRP_MN_QUERY_DEVICE_RELATIONS) should
+     * always be called at PASSIVE_LEVEL per Windows DDK documentation.
+     *
+     * However, we must handle the case where we're called at elevated IRQL.
+     * This should not normally happen, but if it does, we cannot use KeWaitForSingleObject
+     * with infinite timeout, so we check IRQL before proceeding with the wait.
+     */
+
     if (PdoExtension->InquiryBuffer == NULL)
     {
         PdoExtension->InquiryBuffer = ExAllocatePoolWithTag(NonPagedPool, INQUIRYDATABUFFERSIZE, TAG_INQUIRY_DATA);
@@ -287,6 +300,25 @@ PortSendInquiry(
 
     while (KeepTrying)
     {
+        /*
+         * Check IRQL before starting the I/O operation. We must be at PASSIVE_LEVEL
+         * to safely wait for completion with infinite timeout. If we're at a higher
+         * IRQL, we cannot proceed because:
+         * 1. KeWaitForSingleObject with NULL timeout requires IRQL < DISPATCH_LEVEL
+         * 2. We cannot start an async operation and abandon the wait - that would
+         *    leave a pending IRP with a stack-based Event, causing memory corruption
+         *
+         * This should not normally happen during PnP bus enumeration, but we must
+         * handle it gracefully if it does.
+         */
+        if (KeGetCurrentIrql() > PASSIVE_LEVEL)
+        {
+            DPRINT1("PortSendInquiry: ERROR - Called at IRQL %u, requires PASSIVE_LEVEL for synchronous I/O\n",
+                    KeGetCurrentIrql());
+            Status = STATUS_UNSUCCESSFUL;
+            break;
+        }
+
         /* Initialize event for waiting */
         KeInitializeEvent(&Event,
                           NotificationEvent,
@@ -347,7 +379,11 @@ PortSendInquiry(
         /* Wait for it to complete */
         if (Status == STATUS_PENDING)
         {
-            DPRINT1("PortSendInquiry(): Waiting for the driver to process request...\n");
+            DPRINT("PortSendInquiry(): Waiting for the driver to process request...\n");
+            /*
+             * Wait indefinitely for completion. This is safe because we verified
+             * we're at PASSIVE_LEVEL before starting the I/O operation.
+             */
             KeWaitForSingleObject(&Event,
                                   Executive,
                                   KernelMode,
@@ -528,12 +564,12 @@ PortFdoQueryBusRelations(
 {
     NTSTATUS Status = STATUS_SUCCESS;;
 
-    DPRINT1("PortFdoQueryBusRelations(%p %p)\n",
+    DPRINT("PortFdoQueryBusRelations(%p %p)\n",
             DeviceExtension, Information);
 
     Status = PortFdoScanBus(DeviceExtension);
 
-    DPRINT1("Units found: %lu\n", DeviceExtension->PdoCount);
+    DPRINT("Units found: %lu\n", DeviceExtension->PdoCount);
 
     *Information = 0;
 
@@ -549,7 +585,7 @@ PortFdoFilterRequirements(
 {
     PIO_RESOURCE_REQUIREMENTS_LIST RequirementsList;
 
-    DPRINT1("PortFdoFilterRequirements(%p %p)\n", DeviceExtension, Irp);
+    DPRINT("PortFdoFilterRequirements(%p %p)\n", DeviceExtension, Irp);
 
     /* Get the bus number and the slot number */
     RequirementsList =(PIO_RESOURCE_REQUIREMENTS_LIST)Irp->IoStatus.Information;
@@ -558,6 +594,57 @@ PortFdoFilterRequirements(
         DeviceExtension->BusNumber = RequirementsList->BusNumber;
         DeviceExtension->SlotNumber = RequirementsList->SlotNumber;
     }
+
+    return STATUS_SUCCESS;
+}
+
+
+static
+NTSTATUS
+PortFdoRemoveDevice(
+    _In_ PFDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ PIRP Irp)
+{
+    DPRINT("PortFdoRemoveDevice(%p %p)\n", DeviceExtension, Irp);
+
+    /* Cleanup SRB extension pool if it was initialized */
+    if (DeviceExtension->SrbExtensionPool.BaseAddress != NULL)
+    {
+        DPRINT("PortFdoRemoveDevice: Cleaning up SRB extension pool\n");
+        PortCleanupSrbExtensionPool(DeviceExtension);
+    }
+
+    /* Disconnect interrupt if connected */
+    if (DeviceExtension->Interrupt != NULL)
+    {
+        DPRINT("PortFdoRemoveDevice: Disconnecting interrupt\n");
+        IoDisconnectInterrupt(DeviceExtension->Interrupt);
+        DeviceExtension->Interrupt = NULL;
+    }
+
+    /* Free uncached extension if allocated */
+    if (DeviceExtension->UncachedExtensionVirtualBase != NULL)
+    {
+        DPRINT("PortFdoRemoveDevice: Freeing uncached extension\n");
+        MmFreeContiguousMemory(DeviceExtension->UncachedExtensionVirtualBase);
+        DeviceExtension->UncachedExtensionVirtualBase = NULL;
+        DeviceExtension->UncachedExtensionSize = 0;
+    }
+
+    /* Free resource lists if allocated */
+    if (DeviceExtension->AllocatedResources != NULL)
+    {
+        ExFreePoolWithTag(DeviceExtension->AllocatedResources, TAG_RESOURCE_LIST);
+        DeviceExtension->AllocatedResources = NULL;
+    }
+
+    if (DeviceExtension->TranslatedResources != NULL)
+    {
+        ExFreePoolWithTag(DeviceExtension->TranslatedResources, TAG_RESOURCE_LIST);
+        DeviceExtension->TranslatedResources = NULL;
+    }
+
+    DeviceExtension->PnpState = dsRemoved;
 
     return STATUS_SUCCESS;
 }
@@ -602,7 +689,7 @@ PortFdoPnp(
     ULONG_PTR Information = 0;
     NTSTATUS Status = STATUS_NOT_SUPPORTED;
 
-    DPRINT1("PortFdoPnp(%p %p)\n",
+    DPRINT("PortFdoPnp(%p %p)\n",
             DeviceObject, Irp);
 
     DeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
@@ -614,73 +701,74 @@ PortFdoPnp(
     switch (Stack->MinorFunction)
     {
         case IRP_MN_START_DEVICE: /* 0x00 */
-            DPRINT1("IRP_MJ_PNP / IRP_MN_START_DEVICE\n");
+            DPRINT("IRP_MJ_PNP / IRP_MN_START_DEVICE\n");
             Status = PortFdoStartDevice(DeviceExtension, Irp);
             break;
 
         case IRP_MN_QUERY_REMOVE_DEVICE: /* 0x01 */
-            DPRINT1("IRP_MJ_PNP / IRP_MN_QUERY_REMOVE_DEVICE\n");
+            DPRINT("IRP_MJ_PNP / IRP_MN_QUERY_REMOVE_DEVICE\n");
             break;
 
         case IRP_MN_REMOVE_DEVICE: /* 0x02 */
-            DPRINT1("IRP_MJ_PNP / IRP_MN_REMOVE_DEVICE\n");
+            DPRINT("IRP_MJ_PNP / IRP_MN_REMOVE_DEVICE\n");
+            Status = PortFdoRemoveDevice(DeviceExtension, Irp);
             break;
 
         case IRP_MN_CANCEL_REMOVE_DEVICE: /* 0x03 */
-            DPRINT1("IRP_MJ_PNP / IRP_MN_CANCEL_REMOVE_DEVICE\n");
+            DPRINT("IRP_MJ_PNP / IRP_MN_CANCEL_REMOVE_DEVICE\n");
             break;
 
         case IRP_MN_STOP_DEVICE: /* 0x04 */
-            DPRINT1("IRP_MJ_PNP / IRP_MN_STOP_DEVICE\n");
+            DPRINT("IRP_MJ_PNP / IRP_MN_STOP_DEVICE\n");
             break;
 
         case IRP_MN_QUERY_STOP_DEVICE: /* 0x05 */
-            DPRINT1("IRP_MJ_PNP / IRP_MN_QUERY_STOP_DEVICE\n");
+            DPRINT("IRP_MJ_PNP / IRP_MN_QUERY_STOP_DEVICE\n");
             break;
 
         case IRP_MN_CANCEL_STOP_DEVICE: /* 0x06 */
-            DPRINT1("IRP_MJ_PNP / IRP_MN_CANCEL_STOP_DEVICE\n");
+            DPRINT("IRP_MJ_PNP / IRP_MN_CANCEL_STOP_DEVICE\n");
             break;
 
         case IRP_MN_QUERY_DEVICE_RELATIONS: /* 0x07 */
-            DPRINT1("IRP_MJ_PNP / IRP_MN_QUERY_DEVICE_RELATIONS\n");
+            DPRINT("IRP_MJ_PNP / IRP_MN_QUERY_DEVICE_RELATIONS\n");
             switch (Stack->Parameters.QueryDeviceRelations.Type)
             {
                 case BusRelations:
-                    DPRINT1("    IRP_MJ_PNP / IRP_MN_QUERY_DEVICE_RELATIONS / BusRelations\n");
+                    DPRINT("    IRP_MJ_PNP / IRP_MN_QUERY_DEVICE_RELATIONS / BusRelations\n");
                     Status = PortFdoQueryBusRelations(DeviceExtension, &Information);
                     break;
 
                 case RemovalRelations:
-                    DPRINT1("    IRP_MJ_PNP / IRP_MN_QUERY_DEVICE_RELATIONS / RemovalRelations\n");
+                    DPRINT("    IRP_MJ_PNP / IRP_MN_QUERY_DEVICE_RELATIONS / RemovalRelations\n");
                     return ForwardIrpAndForget(DeviceExtension->LowerDevice, Irp);
 
                 default:
-                    DPRINT1("    IRP_MJ_PNP / IRP_MN_QUERY_DEVICE_RELATIONS / Unknown type 0x%lx\n",
+                    DPRINT("    IRP_MJ_PNP / IRP_MN_QUERY_DEVICE_RELATIONS / Unknown type 0x%lx\n",
                             Stack->Parameters.QueryDeviceRelations.Type);
                     return ForwardIrpAndForget(DeviceExtension->LowerDevice, Irp);
             }
             break;
 
         case IRP_MN_FILTER_RESOURCE_REQUIREMENTS: /* 0x0d */
-            DPRINT1("IRP_MJ_PNP / IRP_MN_FILTER_RESOURCE_REQUIREMENTS\n");
+            DPRINT("IRP_MJ_PNP / IRP_MN_FILTER_RESOURCE_REQUIREMENTS\n");
             PortFdoFilterRequirements(DeviceExtension, Irp);
             return ForwardIrpAndForget(DeviceExtension->LowerDevice, Irp);
 
         case IRP_MN_QUERY_PNP_DEVICE_STATE: /* 0x14 */
-            DPRINT1("IRP_MJ_PNP / IRP_MN_QUERY_PNP_DEVICE_STATE\n");
+            DPRINT("IRP_MJ_PNP / IRP_MN_QUERY_PNP_DEVICE_STATE\n");
             break;
 
         case IRP_MN_DEVICE_USAGE_NOTIFICATION: /* 0x16 */
-            DPRINT1("IRP_MJ_PNP / IRP_MN_DEVICE_USAGE_NOTIFICATION\n");
+            DPRINT("IRP_MJ_PNP / IRP_MN_DEVICE_USAGE_NOTIFICATION\n");
             break;
 
         case IRP_MN_SURPRISE_REMOVAL: /* 0x17 */
-            DPRINT1("IRP_MJ_PNP / IRP_MN_SURPRISE_REMOVAL\n");
+            DPRINT("IRP_MJ_PNP / IRP_MN_SURPRISE_REMOVAL\n");
             break;
 
         default:
-            DPRINT1("IRP_MJ_PNP / Unknown IOCTL 0x%lx\n", Stack->MinorFunction);
+            DPRINT("IRP_MJ_PNP / Unknown IOCTL 0x%lx\n", Stack->MinorFunction);
             return ForwardIrpAndForget(DeviceExtension->LowerDevice, Irp);
     }
 

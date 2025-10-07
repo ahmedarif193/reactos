@@ -10,13 +10,10 @@ endif()
 
 add_asm_files(ntkrnlmp_asm ${NTKRNLMP_ASM_SOURCE})
 
-if(ARCH STREQUAL "i386")
+if(NT_ARCH STREQUAL "i386" OR NT_ARCH STREQUAL "amd64")
     list(APPEND NTKRNLMP_SOURCE
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/mproc.c)
-elseif(ARCH STREQUAL "amd64")
-    list(APPEND NTKRNLMP_SOURCE
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/mproc.c)
-elseif(ARCH STREQUAL "arm")
+        ${NTOS_ARCH_DIR}/ke/mproc.c)
+elseif(NT_ARCH STREQUAL "arm" OR NT_ARCH STREQUAL "arm64")
     #TBD
 endif()
 

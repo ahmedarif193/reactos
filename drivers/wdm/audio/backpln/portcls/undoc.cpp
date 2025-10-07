@@ -277,7 +277,7 @@ PropertyItemDispatch(
     {
         // now call the handler
         UNICODE_STRING GuidBuffer;
-        RtlStringFromGUID(Property->Set, &GuidBuffer);
+        {NTSTATUS status = RtlStringFromGUID(Property->Set, &GuidBuffer); UNREFERENCED_PARAMETER(status);}
         DPRINT("Calling Node %lu MajorTarget %p MinorTarget %p PropertySet %S PropertyId %lu PropertyFlags %lx InstanceSize %lu ValueSize %lu Handler %p PropertyRequest %p PropertyItemFlags %lx PropertyItemId %lu\n",
                 PropertyRequest->Node, PropertyRequest->MajorTarget, PropertyRequest->MinorTarget, GuidBuffer.Buffer, Property->Id, Property->Flags, PropertyRequest->InstanceSize, PropertyRequest->ValueSize,
                 PropertyRequest->PropertyItem->Handler, PropertyRequest, PropertyRequest->PropertyItem->Flags, PropertyRequest->PropertyItem->Id);
@@ -548,7 +548,7 @@ DumpAutomationTable(
             for(Index = 0; Index < AutomationTable->PropertyCount; Index++)
             {
                 // convert to printable string
-                RtlStringFromGUID(*PropertyItem->Set, &GuidString);
+                {NTSTATUS status = RtlStringFromGUID(*PropertyItem->Set, &GuidString); UNREFERENCED_PARAMETER(status);}
                 DPRINT("%SPropertyItemIndex %lu %p GUID %S Id %u Flags %x\n", DebugIndentation, Index, PropertyItem, GuidString.Buffer, PropertyItem->Id, PropertyItem->Flags);
                 RtlFreeUnicodeString(&GuidString);
                 // move to next item
@@ -576,7 +576,7 @@ DumpAutomationTable(
             for(Index = 0; Index < AutomationTable->EventCount; Index++)
             {
                 // convert to printable string
-                RtlStringFromGUID(*EventItem->Set, &GuidString);
+                {NTSTATUS status = RtlStringFromGUID(*EventItem->Set, &GuidString); UNREFERENCED_PARAMETER(status);}
                 DPRINT("%SEventItemIndex %lu %p GUID %S Id %u Flags %x\n", DebugIndentation, Index, EventItem, GuidString.Buffer, EventItem->Id, EventItem->Flags);
                 RtlFreeUnicodeString(&GuidString);
 
@@ -604,7 +604,7 @@ DumpAutomationTable(
             for(Index = 0; Index < AutomationTable->MethodCount; Index++)
             {
                 // convert to printable string
-                RtlStringFromGUID(*MethodItem->Set, &GuidString);
+                {NTSTATUS status = RtlStringFromGUID(*MethodItem->Set, &GuidString); UNREFERENCED_PARAMETER(status);}
                 DPRINT("%SMethodItemIndex %lu %p GUID %S Id %u Flags %x\n", DebugIndentation, Index, MethodItem, GuidString.Buffer, MethodItem->Id, MethodItem->Flags);
                 RtlFreeUnicodeString(&GuidString);
 

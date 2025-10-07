@@ -221,7 +221,8 @@ vfatRenameEntry(
         NameA.Buffer = (PCHAR)pDirEntry->Filename;
         NameA.Length = 0;
         NameA.MaximumLength = 42;
-        RtlUnicodeStringToOemString(&NameA, FileName, FALSE);
+        NTSTATUS ConvertStatus = RtlUnicodeStringToOemString(&NameA, FileName, FALSE);
+        UNREFERENCED_PARAMETER(ConvertStatus);
         pDirEntry->FilenameLength = (unsigned char)NameA.Length;
 
         /* Update FCB */
@@ -888,7 +889,8 @@ FATXAddEntry(
     NameA.Buffer = (PCHAR)DirContext.DirEntry.FatX.Filename;
     NameA.Length = 0;
     NameA.MaximumLength = 42;
-    RtlUnicodeStringToOemString(&NameA, &DirContext.LongNameU, FALSE);
+    NTSTATUS ConvertStatus2 = RtlUnicodeStringToOemString(&NameA, &DirContext.LongNameU, FALSE);
+    UNREFERENCED_PARAMETER(ConvertStatus2);
     DirContext.DirEntry.FatX.FilenameLength = (unsigned char)NameA.Length;
 
     /* set attributes */

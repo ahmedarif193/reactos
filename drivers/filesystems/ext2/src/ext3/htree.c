@@ -1863,6 +1863,8 @@ int make_indexed_dir(struct ext2_icb *icb, struct dentry *dentry,
     ext3_lblk_t  block;
     struct fake_dirent *fde;
 
+    memset(frames, 0, sizeof(frames));
+
     blocksize =  dir->i_sb->s_blocksize;
     dxtrace(printk("Creating index: inode %lu\n", dir->i_ino));
 

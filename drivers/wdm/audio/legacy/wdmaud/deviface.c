@@ -193,7 +193,7 @@ WdmAudRegisterDeviceInterface(
     Status = IoRegisterDeviceInterface(PhysicalDeviceObject, &KSCATEGORY_WDMAUD, NULL, &SymbolicLinkName);
     if (NT_SUCCESS(Status))
     {
-        IoSetDeviceInterfaceState(&SymbolicLinkName, TRUE);
+        {NTSTATUS status = IoSetDeviceInterfaceState(&SymbolicLinkName, TRUE); UNREFERENCED_PARAMETER(status);}
         RtlFreeUnicodeString(&SymbolicLinkName);
         //DeviceExtension->DeviceInterfaceSupport = TRUE;
         return Status;

@@ -120,6 +120,10 @@ DriverEntry(
 {
 	NTSTATUS Status;
 
+	DPRINT1("PCIIDE DriverEntry: DriverObject=%p RegistryPath=%wZ\n",
+	        DriverObject,
+	        RegistryPath);
+
 	Status = PciIdeXInitialize(
 		DriverObject,
 		RegistryPath,

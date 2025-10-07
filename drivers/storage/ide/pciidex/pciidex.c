@@ -108,33 +108,44 @@ NTSTATUS
 PciIdeXGetConfigurationInfo(
     _In_ PFDO_DEVICE_EXTENSION FdoExtension)
 {
-    UCHAR Buffer[RTL_SIZEOF_THROUGH_FIELD(PCI_COMMON_HEADER, BaseClass)];
-    PPCI_COMMON_HEADER PciConfig = (PPCI_COMMON_HEADER)Buffer;
+    union {
+        struct {
+            USHORT VendorID;
+            USHORT DeviceID;
+            USHORT Command;
+            USHORT Status;
+            UCHAR RevisionID;
+            UCHAR ProgIf;
+            UCHAR SubClass;
+            UCHAR BaseClass;
+        } Fields;
+        UCHAR Buffer[RTL_SIZEOF_THROUGH_FIELD(PCI_COMMON_HEADER, BaseClass)];
+    } PciData;
     ULONG BytesRead;
 
     PAGED_CODE();
 
     BytesRead = (*FdoExtension->BusInterface.GetBusData)(FdoExtension->BusInterface.Context,
                                                          PCI_WHICHSPACE_CONFIG,
-                                                         Buffer,
+                                                         PciData.Buffer,
                                                          0,
-                                                         sizeof(Buffer));
-    if (BytesRead != sizeof(Buffer))
+                                                         sizeof(PciData.Buffer));
+    if (BytesRead != sizeof(PciData.Buffer))
         return STATUS_IO_DEVICE_ERROR;
 
-    FdoExtension->VendorId = PciConfig->VendorID;
-    FdoExtension->DeviceId = PciConfig->DeviceID;
+    FdoExtension->VendorId = PciData.Fields.VendorID;
+    FdoExtension->DeviceId = PciData.Fields.DeviceID;
 
-    if (PciConfig->BaseClass == PCI_CLASS_MASS_STORAGE_CTLR)
+    if (PciData.Fields.BaseClass == PCI_CLASS_MASS_STORAGE_CTLR)
     {
-        if (PciConfig->SubClass == PCI_SUBCLASS_MSC_IDE_CTLR)
+        if (PciData.Fields.SubClass == PCI_SUBCLASS_MSC_IDE_CTLR)
         {
             /* Both IDE channels in native mode */
             FdoExtension->InNativeMode =
-                (PciConfig->ProgIf & PCIIDE_PROGIF_PRIMARY_CHANNEL_NATIVE_MODE) &&
-                (PciConfig->ProgIf & PCIIDE_PROGIF_SECONDARY_CHANNEL_NATIVE_MODE);
+                (PciData.Fields.ProgIf & PCIIDE_PROGIF_PRIMARY_CHANNEL_NATIVE_MODE) &&
+                (PciData.Fields.ProgIf & PCIIDE_PROGIF_SECONDARY_CHANNEL_NATIVE_MODE);
         }
-        else if (PciConfig->SubClass == PCI_SUBCLASS_MSC_RAID_CTLR)
+        else if (PciData.Fields.SubClass == PCI_SUBCLASS_MSC_RAID_CTLR)
         {
             FdoExtension->InNativeMode = TRUE;
         }
@@ -143,7 +154,7 @@ PciIdeXGetConfigurationInfo(
     DPRINT("Controller %04x:%04x, Interface byte 0x%02x, Native mode %d\n",
            FdoExtension->VendorId,
            FdoExtension->DeviceId,
-           PciConfig->ProgIf,
+           PciData.Fields.ProgIf,
            FdoExtension->InNativeMode);
 
     return STATUS_SUCCESS;
@@ -188,6 +199,12 @@ PciIdeXAddDevice(
         return Status;
     }
 
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[PCIIDEX] AddDevice: DriverObject=%p PDO=%p\n",
+               DriverObject,
+               PhysicalDeviceObject);
+
     Status = IoCreateDevice(DriverObject,
                             DeviceExtensionSize,
                             &DeviceName,
@@ -198,6 +215,10 @@ PciIdeXAddDevice(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to create FDO 0x%lx\n", Status);
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_ERROR_LEVEL,
+                   "[PCIIDEX] AddDevice: IoCreateDevice failed %lx\n",
+                   Status);
         return Status;
     }
 
@@ -216,6 +237,10 @@ PciIdeXAddDevice(
     if (!NT_SUCCESS(Status))
     {
         DPRINT("Failed to attach FDO 0x%lx\n", Status);
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_ERROR_LEVEL,
+                   "[PCIIDEX] AddDevice: IoAttachDeviceToDeviceStackSafe failed %lx\n",
+                   Status);
         goto Failure;
     }
 
@@ -229,6 +254,10 @@ PciIdeXAddDevice(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("No bus interface 0x%lx\n", Status);
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_ERROR_LEVEL,
+                   "[PCIIDEX] AddDevice: PciIdeXQueryInterface failed %lx\n",
+                   Status);
         goto Failure;
     }
 
@@ -236,10 +265,21 @@ PciIdeXAddDevice(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Unable to retrieve the configuration info %lx\n", Status);
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_ERROR_LEVEL,
+                   "[PCIIDEX] AddDevice: PciIdeXGetConfigurationInfo failed %lx\n",
+                   Status);
         goto Failure;
     }
 
     Fdo->Flags &= ~DO_DEVICE_INITIALIZING;
+
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[PCIIDEX] AddDevice: success FDO=%p LDO=%p Controller=%lu\n",
+               Fdo,
+               FdoExtension->Ldo,
+               FdoExtension->ControllerNumber);
 
     return STATUS_SUCCESS;
 
@@ -248,6 +288,11 @@ Failure:
         IoDetachDevice(FdoExtension->Ldo);
 
     IoDeleteDevice(Fdo);
+
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[PCIIDEX] AddDevice: failing with %lx\n",
+               Status);
 
     return Status;
 }
@@ -330,10 +375,11 @@ DriverEntry(
     _In_ PDRIVER_OBJECT DriverObject,
     _In_ PUNICODE_STRING RegistryPath)
 {
-    UNREFERENCED_PARAMETER(DriverObject);
-    UNREFERENCED_PARAMETER(RegistryPath);
-
     PAGED_CODE();
+
+    DPRINT1("PCIIDEX DriverEntry: DriverObject=%p RegistryPath=%wZ\n",
+            DriverObject,
+            RegistryPath);
 
     return STATUS_SUCCESS;
 }

@@ -90,11 +90,11 @@ __seh2$$leave_scope__: __MINGW_ATTRIB_UNUSED;                                   
     }                                                                                           \
 __seh2$$end_try__:(void)0;                                                                      \
     /* Call our home-made pragma */                                                             \
+    volatile long __attribute__((unused)) __seh2$$exception_code__ = 0;                        \
     _SEH3$_EMIT_DEFS_AND_PRAGMA(__seh$$except);                                                 \
     if (0)                                                                                      \
     {                                                                                           \
         __label__ __seh2$$leave_scope__;                                                        \
-        long __MINGW_ATTRIB_UNUSED __seh2$$exception_code__;                                    \
         /* Add our handlers to the list */                                                      \
         if (0)                                                                                  \
         {                                                                                       \

@@ -1283,7 +1283,7 @@ typedef struct _MINIDUMP_THREAD_CALLBACK
 {
     ULONG                       ThreadId;
     HANDLE                      ThreadHandle;
-    CONTEXT                     Context;
+    PCONTEXT                    Context;
     ULONG                       SizeOfContext;
     ULONG64                     StackBase;
     ULONG64                     StackEnd;
@@ -1292,7 +1292,7 @@ typedef struct _MINIDUMP_THREAD_EX_CALLBACK
 {
     ULONG                       ThreadId;
     HANDLE                      ThreadHandle;
-    CONTEXT                     Context;
+    PCONTEXT                    Context;
     ULONG                       SizeOfContext;
     ULONG64                     StackBase;
     ULONG64                     StackEnd;

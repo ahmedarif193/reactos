@@ -95,7 +95,7 @@ MuppIsDfsEnabled(VOID)
 {
     HANDLE Key;
     ULONG Length;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     UNICODE_STRING KeyName;
     OBJECT_ATTRIBUTES ObjectAttributes;
     struct
@@ -364,7 +364,7 @@ MupDereferenceMasterIoContext(PMUP_MIC MasterIoContext,
                               PNTSTATUS NewStatus)
 {
     PIRP Irp;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PIO_STACK_LOCATION Stack;
 
     Status = STATUS_SUCCESS;
@@ -531,7 +531,7 @@ CommonForwardedIoCompletionRoutine(PDEVICE_OBJECT DeviceObject,
                                    PIRP Irp,
                                    PFORWARDED_IO_CONTEXT FwdCtxt)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     Status = Irp->IoStatus.Status;
 
@@ -600,7 +600,7 @@ BuildAndSubmitIrp(PIRP Irp,
 {
     PMDL Mdl;
     PIRP LowerIrp;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PIO_STACK_LOCATION Stack;
     PDEVICE_OBJECT DeviceObject;
     PFORWARDED_IO_CONTEXT FwdCtxt;
@@ -763,7 +763,7 @@ MupForwardIoRequest(PDEVICE_OBJECT DeviceObject,
 {
     PMUP_FCB Fcb;
     PMUP_CCB Ccb;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PLIST_ENTRY Entry;
     PMUP_CCB FcbListCcb;
     BOOLEAN CcbLockAcquired;
@@ -895,7 +895,7 @@ VOID
 InitializeProvider(PCWSTR ProviderName,
                    ULONG ProviderOrder)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     HANDLE KeyHandle;
     UNICODE_STRING Key, Value;
     PKEY_VALUE_FULL_INFORMATION Info;
@@ -969,7 +969,7 @@ VOID
 MupGetProviderInformation(VOID)
 {
     BOOLEAN End;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     HANDLE KeyHandle;
     PWSTR Providers, Coma;
     PKEY_VALUE_FULL_INFORMATION Info;
@@ -1085,7 +1085,7 @@ RegisterUncProvider(PDEVICE_OBJECT DeviceObject,
     BOOLEAN New;
     PMUP_FCB Fcb;
     PMUP_CCB Ccb;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PLIST_ENTRY Entry;
     PIO_STACK_LOCATION Stack;
     IO_STATUS_BLOCK IoStatusBlock;
@@ -1242,7 +1242,7 @@ NTAPI
 MupFsControl(PDEVICE_OBJECT DeviceObject,
              PIRP Irp)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PIO_STACK_LOCATION Stack;
 
     Stack = IoGetCurrentIrpStackLocation(Irp);
@@ -1608,7 +1608,7 @@ NTSTATUS
 MupDereferenceMasterQueryContext(PMUP_MQC MasterQueryContext)
 {
     LONG References;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     BOOLEAN KeepExtraRef;
 
     ExAcquireResourceExclusiveLite(&MupGlobalLock, TRUE);
@@ -1876,7 +1876,7 @@ CreateRedirectedFile(PIRP Irp,
     WCHAR Cur;
     PWSTR Name;
     PIRP QueryIrp;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PMUP_PFX Prefix;
     PLIST_ENTRY Entry;
     PMUP_UNC UncProvider;
@@ -2163,7 +2163,7 @@ OpenMupFileSystem(PMUP_VCB Vcb,
                   ACCESS_MASK DesiredAccess,
                   USHORT ShareAccess)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     DPRINT1("Opening MUP\n");
 
@@ -2193,7 +2193,7 @@ NTAPI
 MupCreate(PDEVICE_OBJECT DeviceObject,
           PIRP Irp)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PIO_STACK_LOCATION Stack;
     PFILE_OBJECT FileObject, RelatedFileObject;
 
@@ -2277,7 +2277,7 @@ MupCleanup(PDEVICE_OBJECT DeviceObject,
     ULONG Type;
     PMUP_FCB Fcb;
     PMUP_CCB Ccb;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PIO_STACK_LOCATION Stack;
 
     /* If DFS is enabled, check if that's for DFS and is so relay */
@@ -2399,7 +2399,7 @@ MupClose(PDEVICE_OBJECT DeviceObject,
 {
     PMUP_FCB Fcb;
     PMUP_CCB Ccb;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PIO_STACK_LOCATION Stack;
 
     /* If DFS is enabled, check if that's for DFS and is so relay */
@@ -2490,7 +2490,7 @@ NTAPI
 DriverEntry(PDRIVER_OBJECT DriverObject,
             PUNICODE_STRING RegistryPath)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     UNICODE_STRING MupString;
     PDEVICE_OBJECT DeviceObject;
 

@@ -255,6 +255,7 @@ typedef struct {
 
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdint.h>
 
 /* share internal LogLuv conversion routines? */
 #ifndef LOGLUV_PUBLIC
@@ -441,7 +442,7 @@ extern TIFF* TIFFOpen(const char*, const char*);
 # ifdef __WIN32__
 extern TIFF* TIFFOpenW(const wchar_t*, const char*);
 # endif /* __WIN32__ */
-extern TIFF* TIFFFdOpen(int, const char*, const char*);
+extern TIFF* TIFFFdOpen(intptr_t, const char*, const char*);
 extern TIFF* TIFFClientOpen(const char*, const char*,
 	    thandle_t,
 	    TIFFReadWriteProc, TIFFReadWriteProc,

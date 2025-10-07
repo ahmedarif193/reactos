@@ -850,6 +850,63 @@ RegQueryValue(
     return ERROR_SUCCESS;
 }
 
+LONG
+RegSetValueDword(
+    _In_ HKEY Key,
+    _In_z_ PCWSTR ValueName,
+    _In_ ULONG Data)
+{
+    PHHIVE Hive = GET_HHIVE_FROM_HKEY(Key);
+    PCM_KEY_NODE KeyNode;
+    PCM_KEY_VALUE ValueCell;
+    HCELL_INDEX CellIndex;
+    UNICODE_STRING ValueNameString;
+    ULONG ExistingLength;
+    BOOLEAN IsSmall;
+
+    TRACE("RegSetValueDword(%p, '%S', %lu)\n", Key, ValueName, Data);
+
+    /* Get the key node */
+    KeyNode = GET_CM_KEY_NODE(Hive, Key);
+    ASSERT(KeyNode);
+    ASSERT(KeyNode->Signature == CM_KEY_NODE_SIGNATURE);
+
+    /* Locate the value */
+    RtlInitUnicodeString(&ValueNameString, ValueName);
+    CellIndex = CmpFindValueByName(Hive, KeyNode, &ValueNameString);
+    HvReleaseCell(Hive, HKEY_TO_HCI(Key));
+    if (CellIndex == HCELL_NIL)
+    {
+        TRACE("RegSetValueDword: value '%S' not found\n", ValueName);
+        return ERROR_FILE_NOT_FOUND;
+    }
+
+    ValueCell = (PCM_KEY_VALUE)HvGetCell(Hive, CellIndex);
+    ASSERT(ValueCell != NULL);
+
+    /* We only support in-place (small) REG_DWORD values here */
+    IsSmall = CmpIsKeyValueSmall(&ExistingLength, ValueCell->DataLength);
+    if (!IsSmall || ExistingLength < sizeof(ULONG))
+    {
+        WARN("RegSetValueDword: value '%S' not stored inline or too small\n", ValueName);
+        HvReleaseCell(Hive, CellIndex);
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    ValueCell->Type = REG_DWORD;
+    ValueCell->DataLength = CM_KEY_VALUE_SPECIAL_SIZE + sizeof(ULONG);
+    *((PULONG)&ValueCell->Data) = Data;
+
+    if (!Hive->ReadOnly)
+    {
+        HvMarkCellDirty(Hive, CellIndex, FALSE);
+        HvMarkCellDirty(Hive, HKEY_TO_HCI(Key), FALSE);
+    }
+
+    HvReleaseCell(Hive, CellIndex);
+    return ERROR_SUCCESS;
+}
+
 /*
  * NOTE: This function is currently unused in FreeLdr; however it is kept here
  * as an implementation reference of RegEnumValue using CMLIB that may be used

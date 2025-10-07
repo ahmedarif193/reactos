@@ -613,7 +613,7 @@ Return Value:
             // Suck out any remaining bytes and throw away.
             //
 
-            ScsiPortReadPortUshort(&baseIoAddress1->Data);
+            {USHORT dummy = ScsiPortReadPortUshort(&baseIoAddress1->Data); UNREFERENCED_PARAMETER(dummy);}
 
         } else {
 
@@ -1304,6 +1304,10 @@ Return Value:
     ULONG i;
     UCHAR statusByte, errorByte;
 
+    ScsiDebugPrint(0,
+                   "[ATAPI] AtapiHwInitialize: DeviceExtension=%p\n",
+                   deviceExtension);
+
 
     for (i = 0; i < 4; i++) {
         if (deviceExtension->DeviceFlags[i] & DFLAGS_DEVICE_PRESENT) {
@@ -1459,6 +1463,10 @@ Return Value:
         }
     }
 
+    ScsiDebugPrint(0,
+                   "[ATAPI] AtapiHwInitialize: completed, NumberChannels=%lu\n",
+                   deviceExtension->NumberChannels);
+
     return TRUE;
 
 } // end AtapiHwInitialize()
@@ -1524,6 +1532,13 @@ Return Value:
                          signatureHigh;
     UCHAR                statusByte;
 
+    ScsiDebugPrint(0,
+                   "[ATAPI] FindDevices: entry Channel=%lu AtapiOnly=%u BaseIo1=%p BaseIo2=%p\n",
+                   Channel,
+                   AtapiOnly,
+                   baseIoAddress1,
+                   baseIoAddress2);
+
     //
     // Clear expecting interrupt flag and current SRB field.
     //
@@ -1550,6 +1565,10 @@ Return Value:
 
         GetStatus(baseIoAddress2, statusByte);
         if (statusByte == 0xFF) {
+            ScsiDebugPrint(0,
+                           "[ATAPI] FindDevices: status 0xFF on device %lu (Channel=%lu) -- skipping\n",
+                           deviceNumber,
+                           Channel);
             continue;
         }
 
@@ -1584,9 +1603,10 @@ atapiIssueId:
                     // Indicate ATAPI device.
                     //
 
-                    DebugPrint((1,
-                               "FindDevices: Device %x is ATAPI\n",
-                               deviceNumber));
+                    ScsiDebugPrint(0,
+                               "[ATAPI] FindDevices: device %lu is ATAPI (Channel=%lu)\n",
+                               deviceNumber,
+                               Channel);
 
                     deviceExtension->DeviceFlags[deviceNumber + (Channel * 2)] |= DFLAGS_ATAPI_DEVICE;
                     deviceExtension->DeviceFlags[deviceNumber + (Channel * 2)] |= DFLAGS_DEVICE_PRESENT;
@@ -1605,9 +1625,10 @@ atapiIssueId:
                     // Indicate no working device.
                     //
 
-                    DebugPrint((1,
-                               "FindDevices: Device %x not responding\n",
-                               deviceNumber));
+                    ScsiDebugPrint(0,
+                               "[ATAPI] FindDevices: device %lu not responding (Channel=%lu)\n",
+                               deviceNumber,
+                               Channel);
 
                     deviceExtension->DeviceFlags[deviceNumber + (Channel * 2)] &= ~DFLAGS_DEVICE_PRESENT;
                 }
@@ -1631,9 +1652,10 @@ atapiIssueId:
                 //
 
 
-                DebugPrint((1,
-                           "FindDevices: Device %x is IDE\n",
-                           deviceNumber));
+                ScsiDebugPrint(0,
+                           "[ATAPI] FindDevices: device %lu is IDE (Channel=%lu)\n",
+                           deviceNumber,
+                           Channel);
 
                 deviceExtension->DeviceFlags[deviceNumber + (Channel * 2)] |= DFLAGS_DEVICE_PRESENT;
 
@@ -1841,6 +1863,12 @@ atapiIssueId:
         ScsiPortStallExecution(50 * 1000);
         ScsiPortWritePortUchar(&baseIoAddress2->AlternateStatus,IDE_DC_REENABLE_CONTROLLER);
     }
+
+    ScsiDebugPrint(0,
+                   "[ATAPI] FindDevices: exit Channel=%lu responded=%u AtapiOnly=%u\n",
+                   Channel,
+                   deviceResponded,
+                   AtapiOnly);
 
     return deviceResponded;
 
@@ -2147,6 +2175,15 @@ Return Value:
     BOOLEAN              atapiOnly;
     UCHAR                statusByte;
     BOOLEAN              preConfig = FALSE;
+
+    ScsiDebugPrint(0,
+                   "[ATAPI] AtapiFindController: entry adapterCount=%lu bus=%lu interface=%u argument=%p preConfig=%u\n",
+                   adapterCount ? *adapterCount : 0,
+                   ConfigInfo ? ConfigInfo->SystemIoBusNumber : 0,
+                   ConfigInfo ? ConfigInfo->AdapterInterfaceType : 0,
+                   ArgumentString,
+                   preConfig);
+
     //
     // The following table specifies the ports to be checked when searching for
     // an IDE controller.  A zero entry terminates the search.
@@ -2162,8 +2199,15 @@ Return Value:
     CONST ULONG InterruptLevels[5] = {14, 15, 11, 10, 0};
 
     if (!deviceExtension) {
+        ScsiDebugPrint(0,
+                       "[ATAPI] AtapiFindPCIController: deviceExtension NULL, returning SP_RETURN_ERROR\n");
         return SP_RETURN_ERROR;
     }
+
+    ScsiDebugPrint(0,
+                   "[ATAPI] AtapiFindPCIController: AdapterCount=%lu Bus=%lu\n",
+                   adapterCount ? *adapterCount : 0,
+                   ConfigInfo ? ConfigInfo->SystemIoBusNumber : 0);
 
     //
     // Check to see if this is a special configuration environment.
@@ -2216,6 +2260,16 @@ Return Value:
 
     while (AdapterAddresses[*adapterCount] != 0) {
 
+        ULONG probeIndex = *adapterCount;
+        ULONG probePort = portBase ? portBase : AdapterAddresses[probeIndex];
+
+        ScsiDebugPrint(0,
+                       "[ATAPI] AtapiFindController: probing index=%lu port=0x%lx preConfig=%u portBase=0x%lx\n",
+                       probeIndex,
+                       probePort,
+                       preConfig,
+                       portBase);
+
         retryCount = 4;
 
         for (i = 0; i < 4; i++) {
@@ -2257,6 +2311,13 @@ Return Value:
             }
 
         }// ConfigInfo check
+
+        ScsiDebugPrint(0,
+                       "[ATAPI] AtapiFindController: ioSpace=%p for port=0x%lx (preConfig=%u)\n",
+                       ioSpace,
+                       probePort,
+                       preConfig);
+
         //
         // Update the adapter count.
         //
@@ -2268,6 +2329,9 @@ Return Value:
         //
 
         if (!ioSpace) {
+            ScsiDebugPrint(0,
+                           "[ATAPI] AtapiFindController: ScsiPortGetDeviceBase returned NULL for port=0x%lx, continuing\n",
+                           probePort);
             continue;
         }
 
@@ -2291,9 +2355,10 @@ retryIdentifier:
 
         if ((statusByte = ScsiPortReadPortUchar(&((PIDE_REGISTERS_1)ioSpace)->CylinderLow)) != 0xAA) {
 
-            DebugPrint((2,
-                        "AtapiFindController: Identifier read back from Master (%x)\n",
-                        statusByte));
+            ScsiDebugPrint(0,
+                           "[ATAPI] AtapiFindController: master readback=0x%02x at port=0x%lx\n",
+                           statusByte,
+                           probePort);
 
             statusByte = ScsiPortReadPortUchar(&((PATAPI_REGISTERS_2)ioSpace)->AlternateStatus);
 
@@ -2309,9 +2374,10 @@ retryIdentifier:
                 do {
                     ScsiPortStallExecution(1000);
                     statusByte = ScsiPortReadPortUchar(&((PATAPI_REGISTERS_1)ioSpace)->Command);
-                    DebugPrint((3,
-                                "AtapiFindController: First access to status %x\n",
-                                statusByte));
+                    ScsiDebugPrint(0,
+                               "[ATAPI] AtapiFindController: status after busy wait=0x%02x at port=0x%lx\n",
+                               statusByte,
+                               probePort);
                 } while ((statusByte & IDE_STATUS_BUSY) && ++i < 10);
 
                 if (retryCount-- && (!(statusByte & IDE_STATUS_BUSY))) {
@@ -2333,9 +2399,10 @@ retryIdentifier:
 
             if ((statusByte = ScsiPortReadPortUchar(&((PIDE_REGISTERS_1)ioSpace)->CylinderLow)) != 0xAA) {
 
-                DebugPrint((2,
-                            "AtapiFindController: Identifier read back from Slave (%x)\n",
-                            statusByte));
+                ScsiDebugPrint(0,
+                           "[ATAPI] AtapiFindController: slave readback=0x%02x at port=0x%lx\n",
+                           statusByte,
+                           probePort);
 
                 //
                 //
@@ -2425,9 +2492,10 @@ retryIdentifier:
 
         ConfigInfo->MaximumTransferLength = 0x10000;
 
-        DebugPrint((1,
-                   "AtapiFindController: Found IDE at %x\n",
-                   deviceExtension->BaseIoAddress1[0]));
+        ScsiDebugPrint(0,
+                       "[ATAPI] AtapiFindController: controller found at BaseIoAddress1=%p (port=0x%lx)\n",
+                       deviceExtension->BaseIoAddress1[0],
+                       probePort);
 
 
         //
@@ -2448,20 +2516,20 @@ retryIdentifier:
                 if (ArgumentString) {
 
                     if (AtapiParseArgumentString(ArgumentString, "dump") == 1) {
-                        DebugPrint((3,
-                                   "AtapiFindController: Crash dump\n"));
+                        ScsiDebugPrint(0,
+                                   "[ATAPI] AtapiFindController: crash dump mode detected\n");
                         atapiOnly = FALSE;
                         deviceExtension->DriverMustPoll = TRUE;
                     } else {
-                        DebugPrint((3,
-                                   "AtapiFindController: Atapi Only\n"));
+                        ScsiDebugPrint(0,
+                                   "[ATAPI] AtapiFindController: ATAPI-only mode\n");
                         atapiOnly = TRUE;
                         deviceExtension->DriverMustPoll = FALSE;
                     }
                 } else {
 
-                    DebugPrint((3,
-                               "AtapiFindController: Atapi Only\n"));
+                    ScsiDebugPrint(0,
+                               "[ATAPI] AtapiFindController: ATAPI-only mode (default)\n");
                     atapiOnly = TRUE;
                     deviceExtension->DriverMustPoll = FALSE;
                 }
@@ -2522,6 +2590,12 @@ retryIdentifier:
                         atapiOnly,
                         0)) {
 
+            ScsiDebugPrint(0,
+                           "[ATAPI] AtapiFindController: FindDevices succeeded at port=0x%lx (atapiOnly=%u, adapterCount=%lu)\n",
+                           probePort,
+                           atapiOnly,
+                           *adapterCount);
+
             //
             // Claim primary or secondary ATA IO range.
             //
@@ -2550,6 +2624,12 @@ retryIdentifier:
             }
 
             return(SP_RETURN_FOUND);
+        } else {
+            ScsiDebugPrint(0,
+                           "[ATAPI] AtapiFindController: FindDevices failed at port=0x%lx (atapiOnly=%u, adapterCount=%lu)\n",
+                           probePort,
+                           atapiOnly,
+                           *adapterCount);
         }
     }
 
@@ -2561,6 +2641,9 @@ retryIdentifier:
 
     *Again = FALSE;
     *(adapterCount) = 0;
+
+    ScsiDebugPrint(0,
+                   "[ATAPI] AtapiFindController: returning SP_RETURN_NOT_FOUND\n");
 
     return(SP_RETURN_NOT_FOUND);
 
@@ -2598,17 +2681,20 @@ Return Value:
 
 --*/
 {
-    ULONG               pciBuffer;
+    union {
+        ULONG AsULONG;
+        struct {
+            USHORT VendorID;
+            USHORT DeviceID;
+        } Fields;
+    } pciBuffer;
     ULONG               slotNumber;
     ULONG               functionNumber;
     PCI_SLOT_NUMBER     slotData;
-    PPCI_COMMON_CONFIG  pciData;
     UCHAR               vendorString[5];
     UCHAR               deviceString[5];
     PUCHAR              vendorStrPtr;
     PUCHAR              deviceStrPtr;
-
-    pciData = (PPCI_COMMON_CONFIG)&pciBuffer;
 
     slotData.u.AsULONG = 0;
 
@@ -2636,7 +2722,7 @@ Return Value:
                                     PCIConfiguration,
                                     BusNumber,
                                     slotData.u.AsULONG,
-                                    pciData,
+                                    &pciBuffer,
                                     sizeof(ULONG))) {
 
                 //
@@ -2647,7 +2733,7 @@ Return Value:
                 return FALSE;
             }
 
-            if (pciData->VendorID == PCI_INVALID_VENDORID) {
+            if (pciBuffer.Fields.VendorID == PCI_INVALID_VENDORID) {
 
                 //
                 // No PCI device, or no more functions on device
@@ -2663,8 +2749,8 @@ Return Value:
 
             vendorStrPtr = vendorString;
             deviceStrPtr = deviceString;
-            AtapiHexToString(pciData->VendorID, (PCHAR*)&vendorStrPtr);
-            AtapiHexToString(pciData->DeviceID, (PCHAR*)&deviceStrPtr);
+            AtapiHexToString(pciBuffer.Fields.VendorID, (PCHAR*)&vendorStrPtr);
+            AtapiHexToString(pciBuffer.Fields.DeviceID, (PCHAR*)&deviceStrPtr);
 
             DebugPrint((2,
                        "FindBrokenController: Bus %x Slot %x Function %x Vendor %s Product %s\n",
@@ -3085,12 +3171,19 @@ Return Value:
 
     if (ScsiPortConvertPhysicalAddressToUlong((*ConfigInfo->AccessRanges)[0].RangeStart) != 0) {
 
-        return AtapiFindController(HwDeviceExtension,
-                                   Context,
-                                   BusInformation,
-                                   ArgumentString,
-                                   ConfigInfo,
-                                   Again);
+        ULONG result = AtapiFindController(HwDeviceExtension,
+                                           Context,
+                                           BusInformation,
+                                           ArgumentString,
+                                           ConfigInfo,
+                                           Again);
+
+        ScsiDebugPrint(0,
+                       "[ATAPI] AtapiFindPCIController: AtapiFindController returned %lu (Again=%lu)\n",
+                       result,
+                       Again ? *Again : 0);
+
+        return result;
     }
 
 
@@ -3339,6 +3432,10 @@ setStatusAndExit:
         if (controllerFound && deviceFound) {
 
             *Again = TRUE;
+            ScsiDebugPrint(0,
+                           "[ATAPI] AtapiFindPCIController: returning SP_RETURN_FOUND (controllerFound=%lu deviceFound=%lu)\n",
+                           controllerFound,
+                           deviceFound);
             return SP_RETURN_FOUND;
         }
     }
@@ -3349,6 +3446,9 @@ setStatusAndExit:
     //
 
     *Again = FALSE;
+
+    ScsiDebugPrint(0,
+                   "[ATAPI] AtapiFindPCIController: returning SP_RETURN_NOT_FOUND\n");
 
     return SP_RETURN_NOT_FOUND;
 
@@ -5155,7 +5255,7 @@ Return Value:
 
            if (statusByte & IDE_STATUS_DRQ) {
 
-              ScsiPortReadPortUshort(&baseIoAddress1->Data);
+              {USHORT dummy = ScsiPortReadPortUshort(&baseIoAddress1->Data); UNREFERENCED_PARAMETER(dummy);}
 
            } else {
 
@@ -6201,7 +6301,11 @@ Return Value:
     ULONG                  i;
     ULONG                  statusToReturn, newStatus;
 
-    DebugPrint((1,"\n\nATAPI IDE MiniPort Driver\n"));
+    ScsiDebugPrint(0, "ATAPI DriverEntry: DriverObject=%p Argument2=%p\n",
+                   DriverObject,
+                   Argument2);
+
+    ScsiDebugPrint(0, "\n\nATAPI IDE MiniPort Driver\n");
 
     statusToReturn = 0xffffffff;
 
@@ -6257,6 +6361,10 @@ Return Value:
                                        Argument2,
                                        &hwInitializationData,
                                        (PVOID)(ULONG_PTR)i);
+        ScsiDebugPrint(0,
+                       "[ATAPI] DriverEntry: Native index=%lu ScsiPortInitialize status=%lu\n",
+                       (ULONG)i,
+                       newStatus);
         if (newStatus < statusToReturn)
             statusToReturn = newStatus;
     }
@@ -6281,6 +6389,10 @@ Return Value:
                                    Argument2,
                                    &hwInitializationData,
                                    &adapterCount);
+    ScsiDebugPrint(0,
+                   "[ATAPI] DriverEntry: PCI probe status=%lu adapterCount=%lu\n",
+                   newStatus,
+                   adapterCount);
     if (newStatus < statusToReturn)
         statusToReturn = newStatus;
 
@@ -6305,6 +6417,10 @@ Return Value:
                                     Argument2,
                                     &hwInitializationData,
                                     &adapterCount);
+    ScsiDebugPrint(0,
+                   "[ATAPI] DriverEntry: ISA probe status=%lu adapterCount=%lu\n",
+                   newStatus,
+                   adapterCount);
     if (newStatus < statusToReturn)
         statusToReturn = newStatus;
 
@@ -6319,9 +6435,16 @@ Return Value:
                                     Argument2,
                                     &hwInitializationData,
                                     &adapterCount);
+    ScsiDebugPrint(0,
+                   "[ATAPI] DriverEntry: MCA probe status=%lu adapterCount=%lu\n",
+                   newStatus,
+                   adapterCount);
     if (newStatus < statusToReturn)
         statusToReturn = newStatus;
 
+    ScsiDebugPrint(0,
+                   "[ATAPI] DriverEntry: returning status=%lu\n",
+                   statusToReturn);
     return statusToReturn;
 
 } // end DriverEntry()
@@ -6532,8 +6655,3 @@ BuildRequestSenseSrb (
 
     return srb;
 }
-
-
-
-
-

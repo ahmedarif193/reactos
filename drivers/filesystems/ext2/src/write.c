@@ -247,7 +247,7 @@ Ext2WriteVolume (IN PEXT2_IRP_CONTEXT IrpContext)
     PIRP                Irp = NULL;
     PIO_STACK_LOCATION  IoStackLocation = NULL;
 
-    ULONG               Length;
+    ULONG               Length = 0;
     LARGE_INTEGER       ByteOffset;
 
     BOOLEAN             PagingIo = FALSE;

@@ -862,20 +862,25 @@ PeLdrLoadImageEx(
     PIMAGE_SECTION_HEADER SectionHeader;
     ULONG VirtualSize, SizeOfRawData, NumberOfSections;
     ARC_STATUS Status;
+    ARC_STATUS RelocStatus = ESUCCESS;
     LARGE_INTEGER Position;
     ULONG i, BytesRead;
 
     TRACE("PeLdrLoadImage('%s', %ld)\n", FilePath, MemoryType);
+    DbgPrint("PeLdrLoadImageEx: Opening file '%s'\n", FilePath);
 
     /* Open the image file */
     Status = ArcOpen((PSTR)FilePath, OpenReadOnly, &FileId);
     if (Status != ESUCCESS)
     {
+        DbgPrint("PeLdrLoadImageEx: ArcOpen failed for '%s', Status=%u\n", FilePath, Status);
         WARN("ArcOpen('%s') failed. Status: %u\n", FilePath, Status);
         return FALSE;
     }
+    DbgPrint("PeLdrLoadImageEx: File opened successfully, FileId=%lu\n", FileId);
 
     /* Load the first 2 sectors of the image so we can read the PE header */
+    DbgPrint("PeLdrLoadImageEx: Reading PE headers...\n");
     Status = ArcRead(FileId, HeadersBuffer, SECTOR_SIZE * 2, &BytesRead);
     if (Status != ESUCCESS)
     {
@@ -907,7 +912,7 @@ PeLdrLoadImageEx(
 
     /* Try to allocate this memory; if it fails, allocate somewhere else */
     PhysicalBase = MmAllocateMemoryAtAddress(NtHeaders->OptionalHeader.SizeOfImage,
-                       (PVOID)((ULONG)NtHeaders->OptionalHeader.ImageBase & (KSEG0_BASE - 1)),
+                       (PVOID)((ULONG_PTR)NtHeaders->OptionalHeader.ImageBase & (KSEG0_BASE - 1)),
                        MemoryType);
 
     if (PhysicalBase == NULL)
@@ -985,7 +990,7 @@ PeLdrLoadImageEx(
             Position.QuadPart = SectionHeader->PointerToRawData;
             Status = ArcSeek(FileId, &Position, SeekAbsolute);
 
-            TRACE("SH->VA: 0x%X\n", SectionHeader->VirtualAddress);
+            //TODO keep this TRACE("SH->VA: 0x%X\n", SectionHeader->VirtualAddress);
 
             /* Read this section from the file, size = SizeOfRawData */
             Status = ArcRead(FileId, (PUCHAR)PhysicalBase + SectionHeader->VirtualAddress, SizeOfRawData, &BytesRead);
@@ -999,7 +1004,7 @@ PeLdrLoadImageEx(
         /* Size of data is less than the virtual size: fill up the remainder with zeroes */
         if (SizeOfRawData < VirtualSize)
         {
-            TRACE("PeLdrLoadImage(): SORD %d < VS %d\n", SizeOfRawData, VirtualSize);
+            //TODO keep this TRACE("PeLdrLoadImage(): SORD %d < VS %d\n", SizeOfRawData, VirtualSize);
             RtlZeroMemory((PVOID)(SectionHeader->VirtualAddress + (ULONG_PTR)PhysicalBase + SizeOfRawData), VirtualSize - SizeOfRawData);
         }
 
@@ -1017,14 +1022,19 @@ PeLdrLoadImageEx(
     if (NtHeaders->OptionalHeader.ImageBase != (ULONG_PTR)VirtualBase)
     {
         WARN("Relocating %p -> %p\n", NtHeaders->OptionalHeader.ImageBase, VirtualBase);
-        Status = LdrRelocateImageWithBias(PhysicalBase,
-                                          (ULONG_PTR)VirtualBase - (ULONG_PTR)PhysicalBase,
-                                          "FreeLdr",
-                                          ESUCCESS,
-                                          ESUCCESS, /* In case of conflict still return success */
-                                          ENOEXEC);
-        if (Status != ESUCCESS)
+        RelocStatus = LdrRelocateImageWithBias(PhysicalBase,
+                                               (ULONG_PTR)VirtualBase - (ULONG_PTR)PhysicalBase,
+                                               "FreeLdr",
+                                               ESUCCESS,
+                                               ESUCCESS, /* In case of conflict still return success */
+                                               ENOEXEC);
+        if (RelocStatus != ESUCCESS)
+        {
+            ERR("LdrRelocateImageWithBias(%s) failed: Status %u, PhysicalBase %p, VirtualBase %p\n",
+                FilePath, RelocStatus, PhysicalBase, VirtualBase);
+            Status = RelocStatus;
             goto Failure;
+        }
     }
 
     /* Fill output parameters */
@@ -1034,6 +1044,11 @@ PeLdrLoadImageEx(
     return TRUE;
 
 Failure:
+    if (Status != ESUCCESS || RelocStatus != ESUCCESS)
+    {
+        ERR("PeLdrLoadImage('%s') aborting, Status=%u RelocStatus=%u\n",
+            FilePath, Status, RelocStatus);
+    }
     /* Cleanup and bail out */
     MmFreeMemory(PhysicalBase);
     return FALSE;
@@ -1056,6 +1071,7 @@ PeLdrLoadBootImage(
     _Out_ PLDR_DATA_TABLE_ENTRY* DataTableEntry)
 {
     BOOLEAN Success;
+    
 
     /* Load the image as a bootloader image */
     Success = PeLdrLoadImageEx(FilePath,

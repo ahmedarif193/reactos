@@ -11,7 +11,6 @@
 #define _PSEH3_H_
 
 #include <excpt.h>
-#include <intrin.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -112,7 +111,6 @@ void _SEH3$_UnregisterTryLevel(
 enum
 {
     _SEH3$_TryLevel = -1,
-    _SEH3$_InnerTryLevel = -1,
 };
 
 #ifndef __clang__
@@ -166,7 +164,7 @@ _SEH3$_RegisterTryLevelWithNonVolatiles(
 #define _SEH3$_RegisterTryLevel_(_TrylevelFrame, _DataTable) \
     do { \
         (_TrylevelFrame)->TryLevel = _SEH3$_TryLevel; \
-        int result = _SEH3$_RegisterTryLevelWithNonVolatiles(_TrylevelFrame, _DataTable, __builtin_alloca(0)); \
+        int result = _SEH3$_RegisterTryLevelWithNonVolatiles(_TrylevelFrame, _DataTable, __builtin_alloca(4)); \
         if (__builtin_expect(result != 0, 0)) \
         { \
             if (result == 1) goto _SEH3$_l_FilterOrFinally; \
@@ -180,7 +178,7 @@ _SEH3$_RegisterTryLevelWithNonVolatiles(
 #else /* !__clang__ */
 
 /* This will make GCC use ebp, even if it was disabled by -fomit-frame-pointer */
-#define _SEH3$_EnforceFramePointer() asm volatile ("#\n" : : "m"(*(char*)__builtin_alloca(0)) : "%esp", "memory")
+#define _SEH3$_EnforceFramePointer() asm volatile ("#\n" : : "m"(*(char*)__builtin_alloca(4)) : "memory")
 
 #define _SEH3$_ASM_GOTO(...) asm goto ("#\n" : : : "memory" : __VA_ARGS__)
 
@@ -190,7 +188,7 @@ _SEH3$_RegisterTryLevelWithNonVolatiles(
               "leal %1, %%edx\n\t" \
               "call " #_Function "WithStackLayout" \
               : \
-              : "m" (*(_TrylevelFrame)), "m" (*(_DataTable)), "c" (__builtin_alloca(0)), "p" (_SEH3$_RegisterFrameWithNonVolatiles) \
+              : "m" (*(_TrylevelFrame)), "m" (*(_DataTable)), "c" (__builtin_alloca(4)), "p" (_SEH3$_RegisterFrameWithNonVolatiles) \
               : "eax", "edx", "memory" \
               : _SEH3$_l_BeforeTry, _SEH3$_l_HandlerTarget, _SEH3$_l_OnException, _SEH3$_l_BeforeFilterOrFinally, _SEH3$_l_FilterOrFinally)
 
@@ -376,7 +374,7 @@ _Pragma("GCC diagnostic pop") \
 \
         /* Count the try level. Outside of any __try, _SEH3$_TryLevel is -1 */ \
         enum { \
-            _SEH3$_PreviousTryLevel = _SEH3$_InnerTryLevel, \
+            _SEH3$_PreviousTryLevel = _SEH3$_TryLevel, \
             _SEH3$_TryLevel = _SEH3$_PreviousTryLevel + 1, \
         }; \
 \
@@ -385,15 +383,11 @@ _Pragma("GCC diagnostic pop") \
 \
         /* Allocate a registration frame */ \
         volatile SEH3$_REGISTRATION_FRAME _SEH3$_AUTO_CLEANUP _SEH3$_TrylevelFrame; \
+        _SEH3$_TrylevelFrame.ExceptionCode = 0; /* Initialize to prevent compiler warning */ \
 \
         goto _SEH3$_l_BeforeTry; \
         { \
             __label__ _SEH3$_l_Leave; \
-\
-            enum { \
-                _SEH3$_InnerTryLevel = _SEH3$_TryLevel, \
-            }; \
-\
             _SEH3$_l_Leave: (void)0; \
         /* Silence warning */ goto _SEH3$_l_AfterTry; \
         /* Silence warning */ goto _SEH3$_l_Leave; \
@@ -502,14 +496,6 @@ _Pragma("GCC diagnostic pop") \
 
 #define _SEH3_VOLATILE volatile
 
-int _setjmp3(jmp_buf env, int count, ...);
-void __stdcall _SEH3$_longjmp_unwind(_JUMP_BUFFER* _Buf);
-
-#undef setjmp
-#define setjmp(env) \
-    _setjmp3(env, 2, (const void*)_SEH3$_longjmp_unwind, _SEH3$_TryLevel)
-
-#define _INC_SETJMPEX
 
 #ifdef __cplusplus
 }; // extern "C"

@@ -227,9 +227,9 @@ InPortIsr(
     _In_ PKINTERRUPT Interrupt,
     _In_ PVOID Context)
 {
-    UCHAR Buttons;
+    UCHAR Buttons = 0;
     ULONG ButtonDiff;
-    CHAR DeltaX, DeltaY;
+    CHAR DeltaX = 0, DeltaY = 0;
     PINPORT_DEVICE_EXTENSION DeviceExtension = Context;
 
     UNREFERENCED_PARAMETER(Interrupt);
@@ -317,6 +317,9 @@ InPortIsr(
 
             break;
         }
+
+        default:
+            return FALSE;
     }
 
     ButtonDiff = DeviceExtension->MouseButtonState ^ Buttons;

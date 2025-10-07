@@ -872,7 +872,7 @@ Ext2SaveBuffer( IN PEXT2_IRP_CONTEXT    IrpContext,
                 IN ULONG                Size,
                 IN PVOID                Buf )
 {
-    BOOLEAN     rc;
+    BOOLEAN     rc = FALSE;
 
     while (Size) {
 

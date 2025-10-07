@@ -347,18 +347,18 @@ ReadVolumeLabel(
     BOOLEAN IsFatX,
     PUNICODE_STRING VolumeLabel)
 {
-    PDEVICE_EXTENSION DeviceExt;
-    PDEVICE_OBJECT DeviceObject;
+    PDEVICE_EXTENSION DeviceExt = NULL;
+    PDEVICE_OBJECT DeviceObject = NULL;
     PVOID Context = NULL;
     ULONG DirIndex = 0;
-    PDIR_ENTRY Entry;
-    PVFATFCB pFcb;
+    PDIR_ENTRY Entry = NULL;
+    PVFATFCB pFcb = NULL;
     LARGE_INTEGER FileOffset;
     ULONG SizeDirEntry;
     ULONG EntriesPerPage;
     OEM_STRING StringO;
     BOOLEAN NoCache = (Start != 0);
-    PVOID Buffer;
+    PVOID Buffer = NULL;
     NTSTATUS Status = STATUS_SUCCESS;
 
     if (IsFatX)
@@ -431,7 +431,8 @@ ReadVolumeLabel(
                 {
                     StringO.Buffer = (PCHAR)Entry->FatX.Filename;
                     StringO.MaximumLength = StringO.Length = Entry->FatX.FilenameLength;
-                    RtlOemStringToUnicodeString(VolumeLabel, &StringO, FALSE);
+                    NTSTATUS ConvertStatus = RtlOemStringToUnicodeString(VolumeLabel, &StringO, FALSE);
+                    UNREFERENCED_PARAMETER(ConvertStatus);
                 }
                 else
                 {

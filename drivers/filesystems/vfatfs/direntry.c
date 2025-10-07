@@ -602,7 +602,8 @@ FATXGetNextDirEntry(
     }
     StringO.Buffer = (PCHAR)fatxDirEntry->Filename;
     StringO.Length = StringO.MaximumLength = fatxDirEntry->FilenameLength;
-    RtlOemStringToUnicodeString(&DirContext->LongNameU, &StringO, FALSE);
+    Status = RtlOemStringToUnicodeString(&DirContext->LongNameU, &StringO, FALSE);
+    UNREFERENCED_PARAMETER(Status);
     DirContext->ShortNameU = DirContext->LongNameU;
     return STATUS_SUCCESS;
 }

@@ -309,8 +309,19 @@ ACPIDispatchDeviceControl(
               break;
 
            case IOCTL_GET_SYS_BUTTON_EVENT:
-              PsCreateSystemThread(&ThreadHandle, THREAD_ALL_ACCESS, 0, 0, 0, ButtonWaitThread, Irp);
-              ZwClose(ThreadHandle);
+              {
+                  NTSTATUS ThreadStatus = PsCreateSystemThread(&ThreadHandle, THREAD_ALL_ACCESS, 0, 0, 0, ButtonWaitThread, Irp);
+                  if (NT_SUCCESS(ThreadStatus))
+                  {
+                      ZwClose(ThreadHandle);
+                  }
+                  else
+                  {
+                      DPRINT1("Failed to create system thread: 0x%lx\n", ThreadStatus);
+                      status = ThreadStatus;
+                      break;
+                  }
+              }
 
               status = STATUS_PENDING;
               break;

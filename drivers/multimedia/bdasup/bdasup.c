@@ -304,7 +304,8 @@ BdaCreateFilterFactoryEx(
         if (FilterDescriptor->AutomationTable != &FilterAutomationTable)
         {
             /* add the item to filter object bag */
-            KsAddItemToObjectBag(FilterFactory->Bag, (PVOID)FilterDescriptor->AutomationTable, FreeFilterInstance);
+            NTSTATUS Status1 = KsAddItemToObjectBag(FilterFactory->Bag, (PVOID)FilterDescriptor->AutomationTable, FreeFilterInstance);
+            UNREFERENCED_PARAMETER(Status1);
         }
         else
         {
@@ -315,7 +316,8 @@ BdaCreateFilterFactoryEx(
             ASSERT(Status == STATUS_SUCCESS);
 
             /* add to object bag */
-            KsAddItemToObjectBag(FilterFactory->Bag, (PVOID)FilterDescriptor->AutomationTable, FreeFilterInstance);
+            NTSTATUS Status2 = KsAddItemToObjectBag(FilterFactory->Bag, (PVOID)FilterDescriptor->AutomationTable, FreeFilterInstance);
+            UNREFERENCED_PARAMETER(Status2);
         }
 
         /* initialize filter instance entry */

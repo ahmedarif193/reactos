@@ -44,8 +44,21 @@ AcpiOsGetRootPointer (
     void)
 {
     ACPI_PHYSICAL_ADDRESS pa = 0;
+    HAL_ACPI_ROOT_POINTER_INFORMATION AcpiInfo;
+    ULONG ReturnedLength = 0;
+    NTSTATUS Status;
 
     DPRINT("AcpiOsGetRootPointer\n");
+
+    Status = HalQuerySystemInformation(HalAcpiAuditInformation,
+                                       sizeof(AcpiInfo),
+                                       &AcpiInfo,
+                                       &ReturnedLength);
+    if (NT_SUCCESS(Status) &&
+        AcpiInfo.RsdpPhysicalAddress.QuadPart != 0)
+    {
+        return AcpiInfo.RsdpPhysicalAddress.QuadPart;
+    }
 
     AcpiFindRootPointer(&pa);
     return pa;

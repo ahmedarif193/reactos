@@ -239,9 +239,10 @@ int journal_recover(journal_t *journal)
      */
 
     if (!sb->s_start) {
+        __u32 sequence = be32_to_cpu(sb->s_sequence);
         jbd_debug(1, "No recovery required, last transaction %d\n",
-                  be32_to_cpu(sb->s_sequence));
-        journal->j_transaction_sequence = be32_to_cpu(sb->s_sequence) + 1;
+                  sequence);
+        journal->j_transaction_sequence = sequence + 1;
         return 0;
     }
 

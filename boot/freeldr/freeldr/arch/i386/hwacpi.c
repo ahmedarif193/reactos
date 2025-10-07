@@ -99,6 +99,8 @@ DetectAcpiBios(PCONFIGURATION_COMPONENT_DATA SystemKey, ULONG *BusNumber)
         /* Fill the table */
         AcpiBiosData = (PACPI_BIOS_DATA)&PartialResourceList->PartialDescriptors[1];
 
+        AcpiBiosData->RSDPAddress.QuadPart = (ULONGLONG)(ULONG_PTR)Rsdp;
+
         if (Rsdp->revision > 0)
         {
             TRACE("ACPI >1.0, using XSDT address\n");

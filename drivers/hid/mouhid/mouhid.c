@@ -893,22 +893,24 @@ MouHid_StartDevice(
     DeviceExtension->PreparsedData = PreparsedData;
 
     ValueCapsLength = 1;
-    HidP_GetSpecificValueCaps(HidP_Input,
+    Status = HidP_GetSpecificValueCaps(HidP_Input,
                               HID_USAGE_PAGE_GENERIC,
                               HIDP_LINK_COLLECTION_UNSPECIFIED,
                               HID_USAGE_GENERIC_X,
                               &DeviceExtension->ValueCapsX,
                               &ValueCapsLength,
                               PreparsedData);
+    UNREFERENCED_PARAMETER(Status);
 
     ValueCapsLength = 1;
-    HidP_GetSpecificValueCaps(HidP_Input,
+    Status = HidP_GetSpecificValueCaps(HidP_Input,
                               HID_USAGE_PAGE_GENERIC,
                               HIDP_LINK_COLLECTION_UNSPECIFIED,
                               HID_USAGE_GENERIC_Y,
                               &DeviceExtension->ValueCapsY,
                               &ValueCapsLength,
                               PreparsedData);
+    UNREFERENCED_PARAMETER(Status);
 
     /* now check for wheel mouse support */
     ValueCapsLength = 1;

@@ -107,9 +107,6 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    printf("Binary hive maker\n");
-
-    /* Read the options */
     for (i = 1; i < argc && *argv[i] == '-'; i++)
     {
         if (argv[i][1] == '?' && argv[i][2] == 0)
@@ -214,10 +211,6 @@ int main(int argc, char *argv[])
 Quit:
     /* Shut down the registry */
     RegShutdownRegistry();
-
-    if (ret == 0)
-        printf("  Done.\n");
-
     return ret;
 }
 

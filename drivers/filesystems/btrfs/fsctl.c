@@ -542,7 +542,7 @@ static NTSTATUS create_snapshot(device_extension* Vcb, PFILE_OBJECT FileObject, 
         if (length < offsetof(btrfs_create_snapshot32, name) + bcs32->namelen)
             return STATUS_INVALID_PARAMETER;
 
-        subvolh = Handle32ToHandle(bcs32->subvol);
+        subvolh = (HANDLE)(ULONG_PTR)bcs32->subvol;
 
         nameus.Buffer = bcs32->name;
         nameus.Length = nameus.MaximumLength = bcs32->namelen;
@@ -1443,7 +1443,7 @@ end:
 
 static NTSTATUS get_devices(device_extension* Vcb, void* data, ULONG length) {
     btrfs_device* dev = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     LIST_ENTRY* le;
 
     ExAcquireResourceSharedLite(&Vcb->tree_lock, true);
@@ -5007,7 +5007,7 @@ static NTSTATUS fsctl_oplock(device_extension* Vcb, PIRP* Pirp) {
 
 static NTSTATUS get_retrieval_pointers(device_extension* Vcb, PFILE_OBJECT FileObject, STARTING_VCN_INPUT_BUFFER* in,
                                        ULONG inlen, RETRIEVAL_POINTERS_BUFFER* out, ULONG outlen, ULONG_PTR* retlen) {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     fcb* fcb;
 
     TRACE("get_retrieval_pointers(%p, %p, %p, %lx, %p, %lx, %p)\n", Vcb, FileObject, in, inlen,
@@ -5208,7 +5208,7 @@ static NTSTATUS add_csum_sparse_extents(device_extension* Vcb, uint64_t sparse_e
 
 static NTSTATUS get_csum_info(device_extension* Vcb, PFILE_OBJECT FileObject, btrfs_csum_info* buf, ULONG buflen,
                               ULONG_PTR* retlen, KPROCESSOR_MODE processor_mode) {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     fcb* fcb;
     ccb* ccb;
 

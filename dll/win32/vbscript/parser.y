@@ -81,7 +81,8 @@ static statement_t *link_statements(statement_t*,statement_t*);
 
 %lex-param { parser_ctx_t *ctx }
 %parse-param { parser_ctx_t *ctx }
-%pure-parser
+%define api.pure
+%expect 9
 %start Program
 
 %union {

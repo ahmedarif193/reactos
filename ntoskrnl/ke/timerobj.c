@@ -189,6 +189,12 @@ KiCompleteTimer(IN PKTIMER Timer,
     /* Signal the timer if it's still on our list */
     if (!IsListEmpty(&ListHead)) RequestInterrupt = KiSignalTimer(Timer);
 
+    /* Clean up if the timer is still linked to our stack */
+    if (Timer->TimerListEntry.Flink == &ListHead)
+    {
+        InitializeListHead(&Timer->TimerListEntry);
+    }
+
     /* Release the dispatcher lock */
     KiReleaseDispatcherLockFromSynchLevel();
 

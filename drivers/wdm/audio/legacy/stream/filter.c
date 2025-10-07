@@ -136,7 +136,7 @@ RegisterDeviceInterfaces(
             if (NT_SUCCESS(Status))
             {
                 /* Activate device interface */
-                IoSetDeviceInterfaceState(&SymbolicLink, TRUE);
+                {NTSTATUS status = IoSetDeviceInterfaceState(&SymbolicLink, TRUE); UNREFERENCED_PARAMETER(status);}
                 /* Release Symbolic Link */
                 RtlFreeUnicodeString(&SymbolicLink);
             }

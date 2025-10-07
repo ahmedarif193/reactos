@@ -26,7 +26,7 @@ InitializeConfiguration(
     PCONFIGURATION_INFORMATION ConfigInfo;
     ULONG i;
 
-    DPRINT1("InitializeConfiguration(%p %p %lu %lu)\n",
+    DPRINT("InitializeConfiguration(%p %p %lu %lu)\n",
             PortConfig, InitData, BusNumber, SlotNumber);
 
     /* Get the configurration information */
@@ -69,7 +69,7 @@ InitializeConfiguration(
     PortConfig->WmiDataProvider = TRUE;
 
     PortConfig->NumberOfAccessRanges = InitData->NumberOfAccessRanges;
-    DPRINT1("NumberOfAccessRanges: %lu\n", PortConfig->NumberOfAccessRanges);
+    DPRINT("NumberOfAccessRanges: %lu\n", PortConfig->NumberOfAccessRanges);
     if (PortConfig->NumberOfAccessRanges != 0)
     {
         PortConfig->AccessRanges = ExAllocatePoolWithTag(NonPagedPool,
@@ -105,7 +105,7 @@ AssignResourcesToConfiguration(
     INT i, j;
     ULONG RangeNumber = 0, Interrupt = 0, Dma = 0;
 
-    DPRINT1("AssignResourceToConfiguration(%p %p %lu)\n",
+    DPRINT("AssignResourceToConfiguration(%p %p %lu)\n",
             PortConfiguration, ResourceList, NumberOfAccessRanges);
 
     FullDescriptor = &ResourceList->List[0];
@@ -120,7 +120,7 @@ AssignResourcesToConfiguration(
             switch (PartialDescriptor->Type)
             {
                 case CmResourceTypePort:
-                    DPRINT1("Port: 0x%I64x (0x%lx)\n",
+                    DPRINT("Port: 0x%I64x (0x%lx)\n",
                             PartialDescriptor->u.Port.Start.QuadPart,
                             PartialDescriptor->u.Port.Length);
                     if (RangeNumber < NumberOfAccessRanges)
@@ -134,7 +134,7 @@ AssignResourcesToConfiguration(
                     break;
 
                 case CmResourceTypeMemory:
-                    DPRINT1("Memory: 0x%I64x (0x%lx)\n",
+                    DPRINT("Memory: 0x%I64x (0x%lx)\n",
                             PartialDescriptor->u.Memory.Start.QuadPart,
                             PartialDescriptor->u.Memory.Length);
                     if (RangeNumber < NumberOfAccessRanges)
@@ -148,7 +148,7 @@ AssignResourcesToConfiguration(
                     break;
 
                 case CmResourceTypeInterrupt:
-                    DPRINT1("Interrupt: Level %lu  Vector %lu\n",
+                    DPRINT("Interrupt: Level %lu  Vector %lu\n",
                             PartialDescriptor->u.Interrupt.Level,
                             PartialDescriptor->u.Interrupt.Vector);
                     if (Interrupt == 0)
@@ -187,7 +187,7 @@ AssignResourcesToConfiguration(
                     break;
 
                 case CmResourceTypeDma:
-                    DPRINT1("Dma: Channel: %lu  Port: %lu\n",
+                    DPRINT("Dma: Channel: %lu  Port: %lu\n",
                             PartialDescriptor->u.Dma.Channel,
                             PartialDescriptor->u.Dma.Port);
                     if (Dma == 0)
@@ -220,7 +220,7 @@ AssignResourcesToConfiguration(
                     break;
 
                 default:
-                    DPRINT1("Other: %u\n", PartialDescriptor->Type);
+                    DPRINT("Other: %u\n", PartialDescriptor->Type);
                     break;
             }
         }
@@ -242,7 +242,7 @@ MiniportInitialize(
     ULONG Size;
     NTSTATUS Status;
 
-    DPRINT1("MiniportInitialize(%p %p %p)\n",
+    DPRINT("MiniportInitialize(%p %p %p)\n",
             Miniport, DeviceExtension, InitData);
 
     Miniport->DeviceExtension = DeviceExtension;
@@ -289,7 +289,7 @@ MiniportFindAdapter(
     ULONG Result;
     NTSTATUS Status;
 
-    DPRINT1("MiniportFindAdapter(%p)\n", Miniport);
+    DPRINT("MiniportFindAdapter(%p)\n", Miniport);
 
     /* Call the miniport HwFindAdapter routine */
     Result = Miniport->InitData->HwFindAdapter(&Miniport->MiniportExtension->HwDeviceExtension,
@@ -298,18 +298,18 @@ MiniportFindAdapter(
                                                NULL,
                                                &Miniport->PortConfig,
                                                &Reserved);
-    DPRINT1("HwFindAdapter() returned %lu\n", Result);
+    DPRINT("HwFindAdapter() returned %lu\n", Result);
 
     /* Convert the result to a status code */
     switch (Result)
     {
         case SP_RETURN_NOT_FOUND:
-            DPRINT1("SP_RETURN_NOT_FOUND\n");
+            DPRINT("SP_RETURN_NOT_FOUND\n");
             Status = STATUS_NOT_FOUND;
             break;
 
         case SP_RETURN_FOUND:
-            DPRINT1("SP_RETURN_FOUND\n");
+            DPRINT("SP_RETURN_FOUND\n");
             Status = STATUS_SUCCESS;
             break;
 
@@ -319,12 +319,12 @@ MiniportFindAdapter(
             break;
 
         case SP_RETURN_BAD_CONFIG:
-            DPRINT1("SP_RETURN_BAD_CONFIG\n");
+            DPRINT("SP_RETURN_BAD_CONFIG\n");
             Status = STATUS_DEVICE_CONFIGURATION_ERROR;
             break;
 
         default:
-            DPRINT1("Unknown result: %lu\n", Result);
+            DPRINT("Unknown result: %lu\n", Result);
             Status = STATUS_INTERNAL_ERROR;
             break;
     }
@@ -339,11 +339,11 @@ MiniportHwInitialize(
 {
     BOOLEAN Result;
 
-    DPRINT1("MiniportHwInitialize(%p)\n", Miniport);
+    DPRINT("MiniportHwInitialize(%p)\n", Miniport);
 
     /* Call the miniport HwInitialize routine */
     Result = Miniport->InitData->HwInitialize(&Miniport->MiniportExtension->HwDeviceExtension);
-    DPRINT1("HwInitialize() returned %u\n", Result);
+    DPRINT("HwInitialize() returned %u\n", Result);
 
     return Result ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 }
@@ -355,11 +355,7 @@ MiniportHwInterrupt(
 {
     BOOLEAN Result;
 
-    DPRINT1("MiniportHwInterrupt(%p)\n",
-            Miniport);
-
     Result = Miniport->InitData->HwInterrupt(&Miniport->MiniportExtension->HwDeviceExtension);
-    DPRINT1("HwInterrupt() returned %u\n", Result);
 
     return Result;
 }
@@ -372,11 +368,7 @@ MiniportStartIo(
 {
     BOOLEAN Result;
 
-    DPRINT1("MiniportHwStartIo(%p %p)\n",
-            Miniport, Srb);
-
     Result = Miniport->InitData->HwStartIo(&Miniport->MiniportExtension->HwDeviceExtension, Srb);
-    DPRINT1("HwStartIo() returned %u\n", Result);
 
     return Result;
 }

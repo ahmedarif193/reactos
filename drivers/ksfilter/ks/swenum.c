@@ -148,7 +148,8 @@ KspRemoveDeviceAssociations(
          ASSERT(CurEntry->SymbolicLink.Buffer);
 
          /* de-register interface */
-         IoSetDeviceInterfaceState(&CurEntry->SymbolicLink, FALSE);
+         NTSTATUS Status1 = IoSetDeviceInterfaceState(&CurEntry->SymbolicLink, FALSE);
+         UNREFERENCED_PARAMETER(Status1);
 
          /* free symbolic link buffer */
          FreeItem(CurEntry->SymbolicLink.Buffer);
@@ -272,7 +273,8 @@ KspCreateDeviceAssociation(
     RtlInitUnicodeString(&DeviceName, InterfaceString);
 
     /* first convert device name to guid */
-    RtlGUIDFromString(&DeviceName, &InterfaceGUID);
+    NTSTATUS Status4 = RtlGUIDFromString(&DeviceName, &InterfaceGUID);
+    UNREFERENCED_PARAMETER(Status4);
 
     /* check if the device is already present */
     Entry = DeviceEntry->DeviceInterfaceList.Flink;
@@ -400,7 +402,8 @@ KspCreateDeviceReference(
 
         /* copy device guid */
         RtlInitUnicodeString(&String, DeviceId);
-        RtlGUIDFromString(&String, &DeviceEntry->DeviceGuid);
+        NTSTATUS Status5 = RtlGUIDFromString(&String, &DeviceEntry->DeviceGuid);
+        UNREFERENCED_PARAMETER(Status5);
 
         /* copy device names */
         DeviceEntry->DeviceName = DeviceName;
@@ -1658,7 +1661,8 @@ KsCreateBusEnumObject(
             DPRINT1("IoAttachDeviceToDeviceStack failed with %x\n", Status);
             if (BusDeviceExtension->DeviceInterfaceLink.Buffer)
             {
-                IoSetDeviceInterfaceState(&BusDeviceExtension->DeviceInterfaceLink, FALSE);
+                NTSTATUS Status2 = IoSetDeviceInterfaceState(&BusDeviceExtension->DeviceInterfaceLink, FALSE);
+                UNREFERENCED_PARAMETER(Status2);
                 RtlFreeUnicodeString(&BusDeviceExtension->DeviceInterfaceLink);
             }
 
@@ -1687,7 +1691,8 @@ KsCreateBusEnumObject(
         /* failed to scan bus */
         if (BusDeviceExtension->DeviceInterfaceLink.Buffer)
         {
-            IoSetDeviceInterfaceState(&BusDeviceExtension->DeviceInterfaceLink, FALSE);
+            NTSTATUS Status3 = IoSetDeviceInterfaceState(&BusDeviceExtension->DeviceInterfaceLink, FALSE);
+            UNREFERENCED_PARAMETER(Status3);
             RtlFreeUnicodeString(&BusDeviceExtension->DeviceInterfaceLink);
         }
 

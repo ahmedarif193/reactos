@@ -949,7 +949,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLine,
 
 	hInst = hInstance;
 	InitCommonControls();
-	CoInitialize(NULL);
+	HRESULT hr = CoInitialize(NULL);
+	UNREFERENCED_PARAMETER(hr);
 
 	ZeroMemory(&wce, sizeof(WNDCLASSEX));
 	wce.cbSize        = sizeof(WNDCLASSEX);

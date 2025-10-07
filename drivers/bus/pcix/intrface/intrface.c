@@ -54,9 +54,16 @@ PciQueryInterface(IN PPCI_FDO_EXTENSION DeviceExtension,
     NTSTATUS Status;
     PPCI_INTERFACE *InterfaceList;
     PPCI_INTERFACE PciInterface;
-    RtlStringFromGUID(InterfaceType, &GuidString);
-    DPRINT1("PCI - PciQueryInterface TYPE = %wZ\n", &GuidString);
-    RtlFreeUnicodeString(&GuidString);
+    Status = RtlStringFromGUID(InterfaceType, &GuidString);
+    if (NT_SUCCESS(Status))
+    {
+        DPRINT1("PCI - PciQueryInterface TYPE = %wZ\n", &GuidString);
+        RtlFreeUnicodeString(&GuidString);
+    }
+    else
+    {
+        DPRINT1("PCI - PciQueryInterface TYPE = <GUID conversion failed>\n");
+    }
     DPRINT1("      Size = %u, Version = %u, InterfaceData = %p, LastChance = %s\n",
             Size,
             Version,
@@ -72,7 +79,12 @@ PciQueryInterface(IN PPCI_FDO_EXTENSION DeviceExtension,
         PciInterface = *InterfaceList;
 
         /* For debugging, construct the GUID string */
-        RtlStringFromGUID(PciInterface->InterfaceType, &GuidString);
+        Status = RtlStringFromGUID(PciInterface->InterfaceType, &GuidString);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("Failed to convert interface GUID to string: 0x%lx\n", Status);
+            continue;
+        }
 
         /* Check if this is an FDO or PDO */
         if (DeviceExtension->ExtensionType == PciFdoExtensionType)

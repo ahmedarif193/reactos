@@ -8,13 +8,15 @@
 /* INCLUDES ******************************************************************/
 
 #include <uefildr.h>
+#include <uefi/uefiarcname.h>
+#include <DevicePath.h>  /* EFI_DEVICE_PATH_PROTOCOL, helpers */
+#include <disk.h>
 
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WARNING);
 
 #define TAG_HW_RESOURCE_LIST    'lRwH'
 #define TAG_HW_DISK_CONTEXT     'cDwH'
-#define FIRST_BIOS_DISK 0x80
 #define FIRST_PARTITION 1
 
 typedef struct tagDISKCONTEXT
@@ -61,6 +63,41 @@ static EFI_GUID bioGuid = BLOCK_IO_PROTOCOL;
 static EFI_BLOCK_IO* bio;
 static EFI_HANDLE* handles = NULL;
 
+BOOLEAN UefiBootHasDiskArc = FALSE;
+ULONG UefiBootDiskArcNumber = 0;
+ULONG UefiBootDiskArcPartition = 0;
+
+#ifndef EFI_DEVICE_PATH_PROTOCOL_GUID
+#define EFI_DEVICE_PATH_PROTOCOL_GUID \
+  { 0x09576e91, 0x6d3f, 0x11d2, { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } }
+#endif
+
+static EFI_GUID DevicePathProtocolGuid = EFI_DEVICE_PATH_PROTOCOL_GUID;
+
+static
+BOOLEAN
+UefiIsCdRomHandle(IN EFI_HANDLE Handle)
+{
+    EFI_DEVICE_PATH_PROTOCOL* DevicePath = NULL;
+
+    if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+            Handle, &DevicePathProtocolGuid, (VOID**)&DevicePath)) ||
+        !DevicePath)
+    {
+        return FALSE;
+    }
+
+    EFI_DEVICE_PATH_PROTOCOL* Node = DevicePath;
+    while (!IsDevicePathEnd(Node))
+    {
+        if (Node->Type == MEDIA_DEVICE_PATH && Node->SubType == MEDIA_CDROM_DP)
+            return TRUE;
+        Node = NextDevicePathNode(Node);
+    }
+
+    return FALSE;
+}
+
 /* FUNCTIONS *****************************************************************/
 
 PCHAR
@@ -81,7 +118,6 @@ DiskReportError(BOOLEAN bShowError)
     return lReportError;
 }
 
-static
 BOOLEAN
 UefiGetBootPartitionEntry(
     IN UCHAR DriveNumber,
@@ -461,29 +497,74 @@ UefiSetBootpath(VOID)
    TRACE("UefiSetBootpath: Setting up boot path\n");
    GlobalSystemTable->BootServices->HandleProtocol(handles[UefiBootRootIdentifier], &bioGuid, (void**)&bio);
    FrldrBootDrive = (FIRST_BIOS_DISK + PublicBootArcDisk);
-   if (bio->Media->RemovableMedia == TRUE && bio->Media->BlockSize == 2048)
+   UefiBootHasDiskArc = FALSE;
+   UefiBootDiskArcNumber = 0;
+   UefiBootDiskArcPartition = 0;
+
+   TRACE("Boot media: Removable=%d BlockSize=%u LogicalPartition=%d\n",
+         bio->Media->RemovableMedia,
+         bio->Media->BlockSize,
+         bio->Media->LogicalPartition);
+
+   ULONG BootPartition = 0;
+   PARTITION_TABLE_ENTRY PartitionEntry = {0};
+   BOOLEAN HasPartitionInfo = FALSE;
+   BOOLEAN TreatAsCd = UefiIsCdRomHandle(handles[UefiBootRootIdentifier]);
+
+   if (!TreatAsCd && bio->Media->RemovableMedia == TRUE && bio->Media->BlockSize == 2048)
    {
-        /* Boot Partition 0xFF is the magic value that indicates booting from CD-ROM (see isoboot.S) */
+        TreatAsCd = TRUE;
+   }
+
+   if (UefiGetBootPartitionEntry(FrldrBootDrive, &PartitionEntry, &BootPartition) &&
+       BootPartition != 0)
+   {
+        HasPartitionInfo = TRUE;
+   }
+
+   if (!TreatAsCd && HasPartitionInfo && !bio->Media->LogicalPartition && BootPartition > 1)
+   {
+        TRACE("Treating boot media as ISO/CD based on partition index %lu\n", BootPartition);
+        TreatAsCd = TRUE;
+   }
+
+   if (!HasPartitionInfo)
+   {
+        BootPartition = 1;
+   }
+
+   if (BootPartition == 0)
+   {
+        BootPartition = 1;
+   }
+
+   if (TreatAsCd && BootPartition > 1)
+   {
+        TRACE("Normalizing boot partition %lu to 1 for ISO/CD boot\n", BootPartition);
+        BootPartition = 1;
+   }
+
+   UefiBootHasDiskArc = TRUE;
+   UefiBootDiskArcNumber = PublicBootArcDisk;
+   UefiBootDiskArcPartition = BootPartition;
+
+   TRACE("UEFI boot media classification: TreatAsCd=%d HasPartitionInfo=%d BootPartition=%lu\n",
+         TreatAsCd, HasPartitionInfo, BootPartition);
+
+   if (TreatAsCd)
+   {
+        ULONG CdIndex = MapToCdromIndex(handles[UefiBootRootIdentifier]);
         FrldrBootPartition = 0xFF;
         RtlStringCbPrintfA(FrLdrBootPath, sizeof(FrLdrBootPath),
-                           "multi(0)disk(0)cdrom(%u)", PublicBootArcDisk);
+                           "multi(0)disk(0)cdrom(%lu)", CdIndex);
    }
    else
    {
-        ULONG BootPartition;
-        PARTITION_TABLE_ENTRY PartitionEntry;
-
-        /* This is a hard disk */
-        if (!UefiGetBootPartitionEntry(FrldrBootDrive, &PartitionEntry, &BootPartition))
-        {
-            ERR("Failed to get boot partition entry\n");
-            return FALSE;
-        }
-
+        FrldrBootPartition = BootPartition;
         RtlStringCbPrintfA(FrLdrBootPath, sizeof(FrLdrBootPath),
                            "multi(0)disk(0)rdisk(%u)partition(%lu)",
                            PublicBootArcDisk, BootPartition);
-    }
+   }
 
     return TRUE;
 }
@@ -492,36 +573,110 @@ BOOLEAN
 UefiInitializeBootDevices(VOID)
 {
     ULONG i = 0;
+    BOOLEAN IsCdBoot;
 
-    DiskReadBufferSize = EFI_PAGE_SIZE;
-    DiskReadBuffer = MmAllocateMemoryWithType(DiskReadBufferSize, LoaderFirmwareTemporary);
+    /* Use a larger bouncing buffer than a single EFI page to speed up ISO reads */
+    {
+        SIZE_T PreferredBufferSize = FrLdrGetRecommendedDiskBufferSize(0);
+        DiskReadBufferSize = PreferredBufferSize;
+        DiskReadBuffer = MmAllocateMemoryWithType(DiskReadBufferSize, LoaderFirmwareTemporary);
+    }
+    if (!DiskReadBuffer)
+    {
+        /* Fall back to a single page if the large buffer cannot be allocated */
+        DiskReadBufferSize = EFI_PAGE_SIZE;
+        DiskReadBuffer = MmAllocateMemoryWithType(DiskReadBufferSize, LoaderFirmwareTemporary);
+    }
+    ASSERT(DiskReadBuffer != NULL);
     UefiSetupBlockDevices();
     UefiSetBootpath();
 
+    /* Populate the ARC disk list so the Windows boot loader sees every disk. */
+    UefiEnumerateArcDisks();
+
     /* Add it, if it's a cdrom */
     GlobalSystemTable->BootServices->HandleProtocol(handles[UefiBootRootIdentifier], &bioGuid, (void**)&bio);
-    if (bio->Media->RemovableMedia == TRUE && bio->Media->BlockSize == 2048)
+    IsCdBoot = (FrldrBootPartition == 0xFF);
+
+    if (IsCdBoot ||
+        (bio->Media->RemovableMedia == TRUE && bio->Media->BlockSize == 2048))
     {
         PMASTER_BOOT_RECORD Mbr;
         PULONG Buffer;
         ULONG Checksum = 0;
         ULONG Signature;
+        ULONG BlockSize;
+        ULONG BlocksToRead;
+        ULONG ChecksumBytes;
+        EFI_STATUS Status;
+        EFI_BLOCK_IO* BootBlockIo;
 
-        /* Read the MBR */
-        if (!MachDiskReadLogicalSectors(FrldrBootDrive, 16ULL, 1, DiskReadBuffer))
+        BlockSize = bio->Media->BlockSize;
+        if (BlockSize == 0)
         {
-            ERR("Reading MBR failed\n");
+            /* Fallback to the ISO9660 logical block size */
+            BlockSize = 2048;
+        }
+
+        /* Ensure we read enough data to cover the ISO primary descriptor */
+        BlocksToRead = (2048 + BlockSize - 1) / BlockSize;
+        if (BlocksToRead == 0)
+        {
+            BlocksToRead = 1;
+        }
+
+        /* Obtain the block protocol for the boot handle */
+        Status = GlobalSystemTable->BootServices->HandleProtocol(
+            handles[UefiBootRootIdentifier], &bioGuid, (VOID**)&BootBlockIo);
+        if (EFI_ERROR(Status) || BootBlockIo == NULL)
+        {
+            ERR("Failed to query block protocol for boot device (Status=%lx)\n", (ULONG_PTR)Status);
             return FALSE;
         }
 
-        Buffer = (ULONG*)DiskReadBuffer;
-        Mbr = (PMASTER_BOOT_RECORD)DiskReadBuffer;
+        /* Sanity-check read buffer size */
+        PVOID ReadBuffer;
+        BOOLEAN TempBufferAllocated = FALSE;
+
+        if (BlocksToRead * BlockSize > DiskReadBufferSize)
+        {
+            ULONG NewSize = BlocksToRead * BlockSize;
+            ReadBuffer = FrLdrTempAlloc(NewSize, TAG_HW_DISK_CONTEXT);
+            if (!ReadBuffer)
+            {
+                ERR("Failed to allocate %lu bytes for CD checksum\n", NewSize);
+                return FALSE;
+            }
+            TempBufferAllocated = TRUE;
+        }
+        else
+        {
+            ReadBuffer = DiskReadBuffer;
+        }
+
+        /* Read the ISO primary volume descriptor (at logical block 16) */
+        Status = BootBlockIo->ReadBlocks(BootBlockIo,
+                                         BootBlockIo->Media->MediaId,
+                                         16ULL,
+                                         BlocksToRead * BlockSize,
+                                         ReadBuffer);
+        if (EFI_ERROR(Status))
+        {
+            ERR("ReadBlocks for CD checksum failed (Status=%lx)\n", (ULONG_PTR)Status);
+            if (TempBufferAllocated)
+                FrLdrTempFree(ReadBuffer, TAG_HW_DISK_CONTEXT);
+            return FALSE;
+        }
+
+        Buffer = (ULONG*)ReadBuffer;
+        Mbr = (PMASTER_BOOT_RECORD)ReadBuffer;
 
         Signature = Mbr->Signature;
         TRACE("Signature: %x\n", Signature);
 
         /* Calculate the MBR checksum */
-        for (i = 0; i < 2048 / sizeof(ULONG); i++)
+        ChecksumBytes = min(BlocksToRead * BlockSize, (ULONG)2048);
+        for (i = 0; i < ChecksumBytes / sizeof(ULONG); i++)
         {
             Checksum += Buffer[i];
         }
@@ -530,6 +685,9 @@ UefiInitializeBootDevices(VOID)
 
         /* Fill out the ARC disk block */
         AddReactOSArcDiskInfo(FrLdrBootPath, Signature, Checksum, TRUE);
+
+        if (TempBufferAllocated)
+            FrLdrTempFree(ReadBuffer, TAG_HW_DISK_CONTEXT);
 
         FsRegisterDevice(FrLdrBootPath, &UefiDiskVtbl);
         PcBiosDiskCount++; // This is not accounted for in the number of pre-enumerated BIOS drives!
@@ -555,7 +713,7 @@ UefiDiskReadLogicalSectors(
     ULONG UefiDriveNumber;
 
     UefiDriveNumber = InternalUefiDisk[DriveNumber - FIRST_BIOS_DISK].UefiRootNumber;
-    TRACE("UefiDiskReadLogicalSectors: DriveNumber: %d\n", UefiDriveNumber);
+    //TODO keep this TRACE("UefiDiskReadLogicalSectors: DriveNumber: %d\n", UefiDriveNumber);
     GlobalSystemTable->BootServices->HandleProtocol(handles[UefiDriveNumber], &bioGuid, (void**)&bio);
 
     /* Devices setup */

@@ -31,6 +31,10 @@ typedef struct _REACTOS_INTERNAL_BGCONTEXT
     UINT32       ScreenHeight;
     UINT32       PixelsPerScanLine;
     UINT32       PixelFormat;
+    UINT32       RedMask;
+    UINT32       GreenMask;
+    UINT32       BlueMask;
+    UINT32       ReservedMask;
 } REACTOS_INTERNAL_BGCONTEXT, *PREACTOS_INTERNAL_BGCONTEXT;
 
 VOID __cdecl BootMain(IN PCCH CmdLine);

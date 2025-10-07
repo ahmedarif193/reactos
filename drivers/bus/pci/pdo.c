@@ -1054,6 +1054,668 @@ InterfaceBusSetBusData(
     return Size;
 }
 
+static
+BOOLEAN
+PciLookupCriticalDatabaseServiceForId(
+    _In_ PCWSTR Id,
+    _Outptr_result_maybenull_ PWSTR *ServiceNameOut)
+{
+    static const WCHAR CriticalDbPrefix[] =
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\CriticalDeviceDatabase\\";
+
+    UNICODE_STRING keyName;
+    UNICODE_STRING valueName;
+    OBJECT_ATTRIBUTES objectAttributes;
+    PKEY_VALUE_PARTIAL_INFORMATION valueInfo = NULL;
+    PWSTR keyBuffer = NULL;
+    HANDLE keyHandle = NULL;
+    PWSTR serviceBuffer = NULL;
+    SIZE_T prefixChars = RTL_NUMBER_OF(CriticalDbPrefix) - 1;
+    SIZE_T idChars;
+    SIZE_T totalChars;
+    SIZE_T i;
+    ULONG valueLength = 0;
+    NTSTATUS Status;
+
+    if (!Id || !ServiceNameOut)
+        return FALSE;
+
+    idChars = wcslen(Id);
+    if (idChars == 0)
+        return FALSE;
+
+    totalChars = prefixChars + idChars;
+    keyBuffer = ExAllocatePoolWithTag(PagedPool,
+                                      (totalChars + 1) * sizeof(WCHAR),
+                                      'prCP');
+    if (!keyBuffer)
+        return FALSE;
+
+    RtlCopyMemory(keyBuffer,
+                  CriticalDbPrefix,
+                  prefixChars * sizeof(WCHAR));
+
+    for (i = 0; i < idChars; ++i)
+    {
+        WCHAR ch = Id[i];
+        if (ch == L'\\')
+            ch = L'#';
+        else
+            ch = RtlUpcaseUnicodeChar(ch);
+
+        keyBuffer[prefixChars + i] = ch;
+    }
+
+    keyBuffer[totalChars] = UNICODE_NULL;
+    RtlInitUnicodeString(&keyName, keyBuffer);
+
+    InitializeObjectAttributes(&objectAttributes,
+                               &keyName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+
+    Status = ZwOpenKey(&keyHandle, KEY_READ, &objectAttributes);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    RtlInitUnicodeString(&valueName, L"Service");
+    Status = ZwQueryValueKey(keyHandle,
+                             &valueName,
+                             KeyValuePartialInformation,
+                             NULL,
+                             0,
+                             &valueLength);
+    if (Status != STATUS_BUFFER_TOO_SMALL ||
+        valueLength < sizeof(KEY_VALUE_PARTIAL_INFORMATION))
+        goto Cleanup;
+
+    valueInfo = ExAllocatePoolWithTag(PagedPool, valueLength, 'prCP');
+    if (!valueInfo)
+        goto Cleanup;
+
+    Status = ZwQueryValueKey(keyHandle,
+                             &valueName,
+                             KeyValuePartialInformation,
+                             valueInfo,
+                             valueLength,
+                             &valueLength);
+    if (!NT_SUCCESS(Status) ||
+        valueInfo->Type != REG_SZ ||
+        valueInfo->DataLength < sizeof(WCHAR))
+        goto Cleanup;
+
+    serviceBuffer = ExAllocatePoolWithTag(PagedPool, valueInfo->DataLength, 'prCP');
+    if (!serviceBuffer)
+        goto Cleanup;
+
+    RtlCopyMemory(serviceBuffer,
+                  valueInfo->Data,
+                  valueInfo->DataLength);
+
+    serviceBuffer[(valueInfo->DataLength / sizeof(WCHAR)) - 1] = UNICODE_NULL;
+    *ServiceNameOut = serviceBuffer;
+
+    ExFreePool(valueInfo);
+    ZwClose(keyHandle);
+    ExFreePool(keyBuffer);
+    return TRUE;
+
+Cleanup:
+    if (serviceBuffer)
+        ExFreePool(serviceBuffer);
+    if (valueInfo)
+        ExFreePool(valueInfo);
+    if (keyHandle)
+        ZwClose(keyHandle);
+    if (keyBuffer)
+        ExFreePool(keyBuffer);
+
+    return FALSE;
+}
+
+static
+BOOLEAN
+PciTryLookupServiceInIdList(
+    _In_opt_ PWSTR IdList,
+    _Outptr_result_maybenull_ PWSTR *ServiceNameOut)
+{
+    if (!IdList)
+        return FALSE;
+
+    PWSTR current;
+
+    for (current = IdList; *current; current += wcslen(current) + 1)
+    {
+        if (PciLookupCriticalDatabaseServiceForId(current, ServiceNameOut))
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static
+BOOLEAN
+PciFindCriticalDeviceService(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Outptr_result_maybenull_ PWSTR *ServiceNameOut)
+{
+    PPDO_DEVICE_EXTENSION DeviceExtension;
+    PWSTR buffer = NULL;
+    ULONG length = 0;
+    BOOLEAN found = FALSE;
+    NTSTATUS Status;
+
+    DeviceExtension = (PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    if (!DeviceExtension || !ServiceNameOut)
+        return FALSE;
+
+    *ServiceNameOut = NULL;
+
+    Status = IoGetDeviceProperty(DeviceObject,
+                                 DevicePropertyHardwareID,
+                                 0,
+                                 NULL,
+                                 &length);
+    if (Status == STATUS_BUFFER_TOO_SMALL && length >= sizeof(WCHAR))
+    {
+        buffer = ExAllocatePoolWithTag(PagedPool, length, 'prCP');
+        if (buffer)
+        {
+            Status = IoGetDeviceProperty(DeviceObject,
+                                         DevicePropertyHardwareID,
+                                         length,
+                                         buffer,
+                                         &length);
+            if (NT_SUCCESS(Status))
+                found = PciTryLookupServiceInIdList(buffer, ServiceNameOut);
+
+            ExFreePool(buffer);
+            buffer = NULL;
+        }
+    }
+
+    if (!found)
+    {
+        length = 0;
+        Status = IoGetDeviceProperty(DeviceObject,
+                                     DevicePropertyCompatibleIDs,
+                                     0,
+                                     NULL,
+                                     &length);
+        if (Status == STATUS_BUFFER_TOO_SMALL && length >= sizeof(WCHAR))
+        {
+            buffer = ExAllocatePoolWithTag(PagedPool, length, 'prCP');
+            if (buffer)
+            {
+                Status = IoGetDeviceProperty(DeviceObject,
+                                             DevicePropertyCompatibleIDs,
+                                             length,
+                                             buffer,
+                                             &length);
+                if (NT_SUCCESS(Status))
+                    found = PciTryLookupServiceInIdList(buffer, ServiceNameOut);
+
+                ExFreePool(buffer);
+                buffer = NULL;
+            }
+        }
+    }
+
+    if (!found)
+    {
+        WCHAR classKey[20];
+        UCHAR baseClass = DeviceExtension->PciDevice->PciConfig.BaseClass;
+        UCHAR subClass = DeviceExtension->PciDevice->PciConfig.SubClass;
+        UCHAR progIf = DeviceExtension->PciDevice->PciConfig.ProgIf;
+
+        _snwprintf(classKey,
+                   RTL_NUMBER_OF(classKey),
+                   L"PCI#CC_%02X%02X",
+                   baseClass,
+                   subClass);
+        classKey[RTL_NUMBER_OF(classKey) - 1] = UNICODE_NULL;
+        found = PciLookupCriticalDatabaseServiceForId(classKey, ServiceNameOut);
+
+        if (!found && progIf != 0)
+        {
+            _snwprintf(classKey,
+                       RTL_NUMBER_OF(classKey),
+                       L"PCI#CC_%02X%02X%02X",
+                       baseClass,
+                       subClass,
+                       progIf);
+            classKey[RTL_NUMBER_OF(classKey) - 1] = UNICODE_NULL;
+            found = PciLookupCriticalDatabaseServiceForId(classKey, ServiceNameOut);
+        }
+    }
+
+    return found;
+}
+
+static VOID
+PciPublishLegacyScsiportConfig(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PCM_RESOURCE_LIST ResourceListTranslated)
+{
+    static const WCHAR ServicePrefix[] =
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\";
+
+    PPDO_DEVICE_EXTENSION DeviceExtension;
+    UNICODE_STRING driverKeyName, serviceValueName, keyName;
+    UNICODE_STRING prefixUs, serviceUs, parametersSuffix, basePathUs;
+    OBJECT_ATTRIBUTES objectAttributes;
+    HANDLE driverKey = NULL, parametersKey = NULL;
+    HANDLE deviceKey = NULL, pdoDeviceKey = NULL;
+    KEY_VALUE_PARTIAL_INFORMATION *serviceInfo = NULL;
+    KEY_VALUE_PARTIAL_INFORMATION *busInfo = NULL;
+    PWCHAR serviceName = NULL, basePath = NULL;
+    PCM_FULL_RESOURCE_DESCRIPTOR descriptorCopy = NULL;
+    PCM_FULL_RESOURCE_DESCRIPTOR fullDescriptor;
+    ULONG neededLength = 0, descriptorSize;
+    ULONG deviceIndex;
+    ULONG disposition = 0;
+    ULONG busNumber;
+    NTSTATUS Status;
+    BOOLEAN freeServiceName = FALSE;
+
+    DeviceExtension = (PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    if (!DeviceExtension || !DeviceExtension->PciDevice)
+        return;
+
+    if (DeviceExtension->PciDevice->PciConfig.BaseClass != PCI_CLASS_MASS_STORAGE_CTLR)
+        return;
+
+    if (!ResourceListTranslated || ResourceListTranslated->Count == 0)
+        return;
+
+    RtlZeroMemory(&driverKeyName, sizeof(driverKeyName));
+
+    if (!serviceName)
+    {
+        if (PciFindCriticalDeviceService(DeviceObject, &serviceName))
+        {
+            freeServiceName = TRUE;
+        }
+    }
+
+    Status = IoOpenDeviceRegistryKey(DeviceObject,
+                                     PLUGPLAY_REGKEY_DRIVER,
+                                     KEY_READ,
+                                     &driverKey);
+    if (NT_SUCCESS(Status))
+    {
+        RtlInitUnicodeString(&serviceValueName, L"Service");
+        Status = ZwQueryValueKey(driverKey,
+                                 &serviceValueName,
+                                 KeyValuePartialInformation,
+                                 NULL,
+                                 0,
+                                 &neededLength);
+        if (Status == STATUS_BUFFER_TOO_SMALL &&
+            neededLength >= sizeof(KEY_VALUE_PARTIAL_INFORMATION))
+        {
+            serviceInfo = ExAllocatePoolWithTag(PagedPool, neededLength, 'prCP');
+            if (serviceInfo)
+            {
+                Status = ZwQueryValueKey(driverKey,
+                                         &serviceValueName,
+                                         KeyValuePartialInformation,
+                                         serviceInfo,
+                                         neededLength,
+                                         &neededLength);
+                if (NT_SUCCESS(Status) &&
+                    serviceInfo->Type == REG_SZ &&
+                    serviceInfo->DataLength >= sizeof(WCHAR))
+                {
+                    serviceName = ExAllocatePoolWithTag(PagedPool,
+                                                        serviceInfo->DataLength,
+                                                        'prCP');
+                    if (serviceName)
+                    {
+                        RtlCopyMemory(serviceName,
+                                      serviceInfo->Data,
+                                      serviceInfo->DataLength);
+                        freeServiceName = TRUE;
+                        if (serviceInfo->DataLength >= sizeof(WCHAR))
+                            serviceName[(serviceInfo->DataLength / sizeof(WCHAR)) - 1] = UNICODE_NULL;
+                    }
+                }
+
+                ExFreePool(serviceInfo);
+                serviceInfo = NULL;
+            }
+        }
+
+        ZwClose(driverKey);
+        driverKey = NULL;
+    }
+
+    if (!serviceName)
+    {
+        Status = IoOpenDeviceRegistryKey(DeviceObject,
+                                         PLUGPLAY_REGKEY_DEVICE,
+                                         KEY_READ,
+                                         &pdoDeviceKey);
+        if (NT_SUCCESS(Status))
+        {
+            RtlInitUnicodeString(&serviceValueName, L"Service");
+            Status = ZwQueryValueKey(pdoDeviceKey,
+                                     &serviceValueName,
+                                     KeyValuePartialInformation,
+                                     NULL,
+                                     0,
+                                     &neededLength);
+            if (Status == STATUS_BUFFER_TOO_SMALL &&
+                neededLength >= sizeof(KEY_VALUE_PARTIAL_INFORMATION))
+            {
+                serviceInfo = ExAllocatePoolWithTag(PagedPool, neededLength, 'prCP');
+                if (serviceInfo)
+                {
+                    Status = ZwQueryValueKey(pdoDeviceKey,
+                                             &serviceValueName,
+                                             KeyValuePartialInformation,
+                                             serviceInfo,
+                                             neededLength,
+                                             &neededLength);
+                    if (NT_SUCCESS(Status) &&
+                        serviceInfo->Type == REG_SZ &&
+                        serviceInfo->DataLength >= sizeof(WCHAR))
+                    {
+                        serviceName = ExAllocatePoolWithTag(PagedPool,
+                                                            serviceInfo->DataLength,
+                                                            'prCP');
+                        if (serviceName)
+                        {
+                            RtlCopyMemory(serviceName,
+                                          serviceInfo->Data,
+                                          serviceInfo->DataLength);
+                            freeServiceName = TRUE;
+                            if (serviceInfo->DataLength >= sizeof(WCHAR))
+                                serviceName[(serviceInfo->DataLength / sizeof(WCHAR)) - 1] = UNICODE_NULL;
+                        }
+                    }
+
+                    ExFreePool(serviceInfo);
+                    serviceInfo = NULL;
+                }
+            }
+
+            ZwClose(pdoDeviceKey);
+            pdoDeviceKey = NULL;
+        }
+
+        if (!serviceName)
+        {
+            Status = IoGetDeviceProperty(DeviceObject,
+                                         DevicePropertyDriverKeyName,
+                                         0,
+                                         NULL,
+                                         &neededLength);
+            if (Status != STATUS_BUFFER_TOO_SMALL || neededLength < sizeof(WCHAR))
+                return;
+
+            driverKeyName.Buffer = ExAllocatePoolWithTag(PagedPool, neededLength, 'prCP');
+            if (!driverKeyName.Buffer)
+                return;
+
+            Status = IoGetDeviceProperty(DeviceObject,
+                                         DevicePropertyDriverKeyName,
+                                         neededLength,
+                                         driverKeyName.Buffer,
+                                         &neededLength);
+            if (!NT_SUCCESS(Status))
+                goto Cleanup;
+
+            driverKeyName.Length = (USHORT)(neededLength - sizeof(WCHAR));
+            driverKeyName.MaximumLength = (USHORT)neededLength;
+
+            InitializeObjectAttributes(&objectAttributes,
+                                       &driverKeyName,
+                                       OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                       NULL,
+                                       NULL);
+            Status = ZwOpenKey(&driverKey, KEY_READ, &objectAttributes);
+            if (!NT_SUCCESS(Status))
+                goto Cleanup;
+
+            RtlInitUnicodeString(&serviceValueName, L"Service");
+            Status = ZwQueryValueKey(driverKey,
+                                     &serviceValueName,
+                                     KeyValuePartialInformation,
+                                     NULL,
+                                     0,
+                                     &neededLength);
+            if (Status != STATUS_BUFFER_TOO_SMALL || neededLength < sizeof(KEY_VALUE_PARTIAL_INFORMATION))
+                goto Cleanup;
+
+            serviceInfo = ExAllocatePoolWithTag(PagedPool, neededLength, 'prCP');
+            if (!serviceInfo)
+                goto Cleanup;
+
+            Status = ZwQueryValueKey(driverKey,
+                                     &serviceValueName,
+                                     KeyValuePartialInformation,
+                                     serviceInfo,
+                                     neededLength,
+                                     &neededLength);
+            if (!NT_SUCCESS(Status) || serviceInfo->Type != REG_SZ || serviceInfo->DataLength < sizeof(WCHAR))
+                goto Cleanup;
+
+            serviceName = ExAllocatePoolWithTag(PagedPool, serviceInfo->DataLength, 'prCP');
+            if (!serviceName)
+                goto Cleanup;
+
+            RtlCopyMemory(serviceName, serviceInfo->Data, serviceInfo->DataLength);
+            freeServiceName = TRUE;
+        }
+    }
+
+    prefixUs.Buffer = (PWSTR)ServicePrefix;
+    prefixUs.Length = prefixUs.MaximumLength =
+        (USHORT)((RTL_NUMBER_OF(ServicePrefix) - 1) * sizeof(WCHAR));
+
+    RtlInitUnicodeString(&serviceUs, serviceName);
+    RtlInitUnicodeString(&parametersSuffix, L"\\Parameters");
+
+    basePathUs.MaximumLength = prefixUs.Length + serviceUs.Length +
+        parametersSuffix.Length + sizeof(WCHAR);
+    basePathUs.Buffer = ExAllocatePoolWithTag(PagedPool, basePathUs.MaximumLength, 'prCP');
+    if (!basePathUs.Buffer)
+        goto Cleanup;
+    RtlZeroMemory(basePathUs.Buffer, basePathUs.MaximumLength);
+    basePathUs.Length = 0;
+    basePath = basePathUs.Buffer;
+
+    RtlCopyUnicodeString(&basePathUs, &prefixUs);
+    RtlAppendUnicodeStringToString(&basePathUs, &serviceUs);
+    RtlAppendUnicodeStringToString(&basePathUs, &parametersSuffix);
+    basePathUs.Buffer[basePathUs.Length / sizeof(WCHAR)] = UNICODE_NULL;
+    DPRINT1("PCI: Parameters base path %wZ\n", &basePathUs);
+
+    fullDescriptor = &ResourceListTranslated->List[0];
+    descriptorSize = (ULONG)(FIELD_OFFSET(CM_FULL_RESOURCE_DESCRIPTOR,
+                                          PartialResourceList.PartialDescriptors) +
+                              fullDescriptor->PartialResourceList.Count *
+                              sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR));
+
+    descriptorCopy = ExAllocatePoolWithTag(PagedPool, descriptorSize, 'prCP');
+    if (!descriptorCopy)
+        goto Cleanup;
+    RtlCopyMemory(descriptorCopy, fullDescriptor, descriptorSize);
+
+    busNumber = fullDescriptor->BusNumber;
+    if (busNumber == (ULONG)-1)
+        busNumber = DeviceExtension->PciDevice->BusNumber;
+
+    DPRINT1("PCI: Publishing legacy config for service %wZ (bus %lu, resources %lu)\n",
+            &serviceUs,
+            busNumber,
+            fullDescriptor->PartialResourceList.Count);
+
+    RtlInitUnicodeString(&keyName, basePathUs.Buffer);
+    InitializeObjectAttributes(&objectAttributes,
+                               &keyName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+    Status = ZwCreateKey(&parametersKey,
+                         KEY_ALL_ACCESS,
+                         &objectAttributes,
+                         0,
+                         NULL,
+                         REG_OPTION_NON_VOLATILE,
+                         NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("PCI: ZwCreateKey(%wZ) for Parameters failed (%lx)\n", &keyName, Status);
+        goto Cleanup;
+    }
+
+    for (deviceIndex = 0; deviceIndex < 256; ++deviceIndex)
+    {
+        WCHAR deviceNameBuffer[32];
+
+        _snwprintf(deviceNameBuffer,
+                   RTL_NUMBER_OF(deviceNameBuffer),
+                   L"Device%lu",
+                   deviceIndex);
+        deviceNameBuffer[RTL_NUMBER_OF(deviceNameBuffer) - 1] = UNICODE_NULL;
+        RtlInitUnicodeString(&keyName, deviceNameBuffer);
+
+        InitializeObjectAttributes(&objectAttributes,
+                                   &keyName,
+                                   OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                   parametersKey,
+                                   NULL);
+
+        Status = ZwCreateKey(&deviceKey,
+                             KEY_ALL_ACCESS,
+                             &objectAttributes,
+                             0,
+                             NULL,
+                             REG_OPTION_NON_VOLATILE,
+                             &disposition);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("PCI: ZwCreateKey(Device%lu) failed (%lx)\n", deviceIndex, Status);
+            goto Cleanup;
+        }
+
+        if (disposition == REG_OPENED_EXISTING_KEY)
+        {
+            UNICODE_STRING busValueName;
+            ULONG tempLength = 0;
+
+            RtlInitUnicodeString(&busValueName, L"BusNumber");
+            Status = ZwQueryValueKey(deviceKey,
+                                     &busValueName,
+                                     KeyValuePartialInformation,
+                                     NULL,
+                                     0,
+                                     &tempLength);
+            if (Status == STATUS_BUFFER_TOO_SMALL &&
+                tempLength >= sizeof(KEY_VALUE_PARTIAL_INFORMATION))
+            {
+                busInfo = ExAllocatePoolWithTag(PagedPool, tempLength, 'prCP');
+                if (!busInfo)
+                {
+                    ZwClose(deviceKey);
+                    deviceKey = NULL;
+                    goto Cleanup;
+                }
+
+                Status = ZwQueryValueKey(deviceKey,
+                                         &busValueName,
+                                         KeyValuePartialInformation,
+                                         busInfo,
+                                         tempLength,
+                                         &tempLength);
+                if (NT_SUCCESS(Status) &&
+                    busInfo->Type == REG_DWORD &&
+                    busInfo->DataLength == sizeof(ULONG) &&
+                    *(ULONG*)busInfo->Data == busNumber)
+                {
+                    ExFreePool(busInfo);
+                    busInfo = NULL;
+                    DPRINT1("PCI: Reusing Device%lu for service %wZ (bus %lu)\n",
+                            deviceIndex, &serviceUs, busNumber);
+                    break;
+                }
+
+                ExFreePool(busInfo);
+                busInfo = NULL;
+            }
+
+            ZwClose(deviceKey);
+            deviceKey = NULL;
+            continue;
+        }
+
+        DPRINT1("PCI: Created Device%lu for service %wZ\n", deviceIndex, &serviceUs);
+
+        break;
+    }
+
+    if (!deviceKey)
+        goto Cleanup;
+
+    RtlInitUnicodeString(&keyName, L"ResourceList");
+    Status = ZwSetValueKey(deviceKey,
+                           &keyName,
+                           0,
+                           REG_FULL_RESOURCE_DESCRIPTOR,
+                           descriptorCopy,
+                           descriptorSize);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("PCI: ZwSetValueKey(ResourceList) failed (%lx)\n", Status);
+        goto Cleanup;
+    }
+
+    RtlInitUnicodeString(&keyName, L"Configuration Data");
+    Status = ZwSetValueKey(deviceKey,
+                           &keyName,
+                           0,
+                           REG_FULL_RESOURCE_DESCRIPTOR,
+                           descriptorCopy,
+                           descriptorSize);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("PCI: ZwSetValueKey(Configuration Data) failed (%lx) for Device%lu\n", Status, deviceIndex);
+
+    RtlInitUnicodeString(&keyName, L"BusNumber");
+    Status = ZwSetValueKey(deviceKey,
+                           &keyName,
+                           0,
+                           REG_DWORD,
+                           &busNumber,
+                           sizeof(ULONG));
+    if (!NT_SUCCESS(Status))
+        DPRINT1("PCI: ZwSetValueKey(BusNumber) failed (%lx) for Device%lu\n", Status, deviceIndex);
+
+Cleanup:
+    if (deviceKey)
+        ZwClose(deviceKey);
+    if (pdoDeviceKey)
+        ZwClose(pdoDeviceKey);
+    if (parametersKey)
+        ZwClose(parametersKey);
+    if (driverKey)
+        ZwClose(driverKey);
+    if (descriptorCopy)
+        ExFreePool(descriptorCopy);
+    if (serviceName && freeServiceName)
+        ExFreePool(serviceName);
+    if (basePath)
+        ExFreePool(basePath);
+    if (serviceInfo)
+        ExFreePool(serviceInfo);
+    if (busInfo)
+        ExFreePool(busInfo);
+    if (driverKeyName.Buffer)
+        ExFreePool(driverKeyName.Buffer);
+}
+
 static GET_SET_DEVICE_DATA InterfaceBusGetBusData;
 
 static
@@ -1333,7 +1995,11 @@ PdoStartDevice(
     UNREFERENCED_PARAMETER(Irp);
 
     if (!RawResList)
+    {
+        PciPublishLegacyScsiportConfig(DeviceObject,
+            IrpSp->Parameters.StartDevice.AllocatedResourcesTranslated);
         return STATUS_SUCCESS;
+    }
 
     /* TODO: Assign the other resources we get to the card */
 
@@ -1405,6 +2071,9 @@ PdoStartDevice(
     {
         DBGPRINT("None\n");
     }
+
+    PciPublishLegacyScsiportConfig(DeviceObject,
+        IrpSp->Parameters.StartDevice.AllocatedResourcesTranslated);
 
     return STATUS_SUCCESS;
 }

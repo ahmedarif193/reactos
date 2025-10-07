@@ -26,6 +26,30 @@
 
 #define DEVICE_ATA_BLOCK_SIZE               512
 
+#ifndef SERVICE_ACTION_READ_CAPACITY16
+#define SERVICE_ACTION_READ_CAPACITY16      0x10
+#endif
+
+#ifndef _READ_CAPACITY16_DATA_DEFINED
+#define _READ_CAPACITY16_DATA_DEFINED
+typedef struct _READ_CAPACITY16_DATA
+{
+    ULONGLONG LogicalBlockAddress;
+    ULONG BytesPerBlock;
+    UCHAR ProtectionEnable:1;
+    UCHAR ProtectionType:3;
+    UCHAR RcBasis:2;
+    UCHAR Reserved:2;
+    UCHAR LogicalPerPhysicalExponent:4;
+    UCHAR ProtectionInfoExponent:4;
+    UCHAR LowestAlignedBlock_MSB:6;
+    UCHAR LBPRZ:1;
+    UCHAR LBPME:1;
+    UCHAR LowestAlignedBlock_LSB;
+    UCHAR Reserved3[16];
+} READ_CAPACITY16_DATA, *PREAD_CAPACITY16_DATA;
+#endif
+
 // device type (DeviceParams)
 #define AHCI_DEVICE_TYPE_ATA                1
 #define AHCI_DEVICE_TYPE_ATAPI              2
@@ -82,7 +106,8 @@
 
 #define ROUND_UP(N, S) ((((N) + (S) - 1) / (S)) * (S))
 //#define AhciDebugPrint(format, ...) StorPortDebugPrint(0, format, __VA_ARGS__)
-#define AhciDebugPrint(format, ...) DbgPrint("(%s:%d) " format, __RELFILE__, __LINE__, ##__VA_ARGS__)
+//#define AhciDebugPrint(format, ...) DbgPrint("(%s:%d) " format, __RELFILE__, __LINE__, ##__VA_ARGS__)
+#define AhciDebugPrint(format, ...) do {} while (0)
 
 typedef
 VOID
@@ -221,6 +246,20 @@ typedef struct _AHCI_QUEUE
     ULONG Head;
     ULONG Tail;
 } AHCI_QUEUE, *PAHCI_QUEUE;
+
+FORCEINLINE
+VOID
+AhciInitializeQueue(
+    _Out_ PAHCI_QUEUE Queue
+    )
+{
+    if (Queue != NULL)
+    {
+        Queue->Head = 0;
+        Queue->Tail = 0;
+        RtlZeroMemory(Queue->Buffer, sizeof(Queue->Buffer));
+    }
+}
 
 //////////////////////////////////////////////////////////////
 //              ---------------------------                 //
@@ -479,12 +518,19 @@ typedef struct _AHCI_PORT_EXTENSION
         UCHAR VendorId[41];
         UCHAR RevisionID[9];
         UCHAR SerialNumber[21];
+        UCHAR SerialNumberAscii[22];
+        UCHAR DeviceIdentifier[128];
+        USHORT SerialNumberAsciiLength;
+        USHORT DeviceIdentifierLength;
     } DeviceParams;
 
     STOR_DPC CommandCompletion;
+    STOR_DPC ErrorRecoveryDpc;
     PAHCI_PORT Port;                                    // AHCI Port Infomation
     AHCI_QUEUE SrbQueue;                                // pending Srbs
-    AHCI_QUEUE CompletionQueue;
+    AHCI_QUEUE CompletionQueue;                         // completed Srbs waiting on worker thread
+    volatile LONG CompletionPending;
+    LIST_ENTRY CompletionListEntry;
     PSCSI_REQUEST_BLOCK Slot[MAXIMUM_AHCI_PORT_NCS];    // Srbs which has been alloted a port
     PAHCI_RECEIVED_FIS ReceivedFIS;
     PAHCI_COMMAND_HEADER CommandList;
@@ -492,6 +538,7 @@ typedef struct _AHCI_PORT_EXTENSION
     PIDENTIFY_DEVICE_DATA IdentifyDeviceData;
     STOR_PHYSICAL_ADDRESS IdentifyDeviceDataPhysicalAddress;
     struct _AHCI_ADAPTER_EXTENSION* AdapterExtension;   // Port's Adapter Information
+    volatile LONG ErrorRecoveryScheduled;
 } AHCI_PORT_EXTENSION, *PAHCI_PORT_EXTENSION;
 
 // Holds Adapter Information
@@ -523,6 +570,13 @@ typedef struct _AHCI_ADAPTER_EXTENSION
         ULONG Removed : 1;
         ULONG Reserved : 30; // not in use -- maintain 4 byte alignment
     } StateFlags;
+
+    AHCI_QUEUE AdapterCompletionQueue;
+    LIST_ENTRY PendingPortList;
+    KSPIN_LOCK CompletionListLock;
+    KEVENT CompletionEvent;
+    volatile LONG AdapterCompletionThreadStop;
+    PETHREAD CompletionThreadObject;
 
     PAHCI_MEMORY_REGISTERS ABAR_Address;
     AHCI_PORT_EXTENSION PortExtension[MAXIMUM_AHCI_PORT_COUNT];
@@ -559,10 +613,10 @@ typedef struct _AHCI_SRB_EXTENSION
     LOCAL_SCATTER_GATHER_LIST Sgl;
     PLOCAL_SCATTER_GATHER_LIST pSgl;
     PAHCI_COMPLETION_ROUTINE CompletionRoutine;
+    struct _AHCI_PORT_EXTENSION *OwningPort;
 
-    // for alignment purpose -- 128 byte alignment
-    // do not try to access (R/W) this field
-    UCHAR Reserved[128];
+    // for alignment purpose -- 128 byte alignment including OwningPort
+    UCHAR Reserved[128 - sizeof(PVOID)];
 } AHCI_SRB_EXTENSION, *PAHCI_SRB_EXTENSION;
 
 //////////////////////////////////////////////////////////////
@@ -602,6 +656,18 @@ UCHAR DeviceRequestSense (
     );
 
 UCHAR DeviceRequestReadWrite (
+    __in PAHCI_ADAPTER_EXTENSION AdapterExtension,
+    __in PSCSI_REQUEST_BLOCK Srb,
+    __in PCDB Cdb
+    );
+
+UCHAR DeviceRequestReadWrite16 (
+    __in PAHCI_ADAPTER_EXTENSION AdapterExtension,
+    __in PSCSI_REQUEST_BLOCK Srb,
+    __in PCDB Cdb
+    );
+
+UCHAR DeviceRequestFlush (
     __in PAHCI_ADAPTER_EXTENSION AdapterExtension,
     __in PSCSI_REQUEST_BLOCK Srb,
     __in PCDB Cdb

@@ -1994,12 +1994,14 @@ Return Value:
         RtlInitUnicodeString(&disableMcnValueName, MCN_REG_AUTORUN_DISABLE_INSTANCE_NAME);
 
         // Ignore failures on reading of subkeys
-        (VOID) WdfRegistryQueryULong(subKey,
-                                     &enableMcnValueName,
-                                     &alwaysEnable);
-        (VOID) WdfRegistryQueryULong(subKey,
-                                     &disableMcnValueName,
-                                     &alwaysDisable);
+        NTSTATUS status1 = WdfRegistryQueryULong(subKey,
+                                                 &enableMcnValueName,
+                                                 &alwaysEnable);
+        NTSTATUS status2 = WdfRegistryQueryULong(subKey,
+                                                 &disableMcnValueName,
+                                                 &alwaysDisable);
+        UNREFERENCED_PARAMETER(status1);
+        UNREFERENCED_PARAMETER(status2);
     }
 
     // set return value and cleanup

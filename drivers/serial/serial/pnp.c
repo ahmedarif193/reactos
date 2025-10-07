@@ -4,7 +4,7 @@
  * FILE:            drivers/dd/serial/pnp.c
  * PURPOSE:         Serial IRP_MJ_PNP operations
  *
- * PROGRAMMERS:     Hervé Poussineau (hpoussin@reactos.org)
+ * PROGRAMMERS:     Hervï¿½ Poussineau (hpoussin@reactos.org)
  */
 /* FIXME: call IoAcquireRemoveLock/IoReleaseRemoveLock around each I/O operation */
 
@@ -288,7 +288,7 @@ SerialPnpStartDevice(
 	if (!NT_SUCCESS(Status))
 	{
 		WARN_(SERIAL, "IoConnectInterrupt() failed with status 0x%08x\n", Status);
-		IoSetDeviceInterfaceState(&DeviceExtension->SerialInterfaceName, FALSE);
+		{NTSTATUS status = IoSetDeviceInterfaceState(&DeviceExtension->SerialInterfaceName, FALSE); UNREFERENCED_PARAMETER(status);}
 		IoDeleteSymbolicLink(&LinkName);
 		return Status;
 	}
@@ -317,7 +317,7 @@ SerialPnpStartDevice(
 	WRITE_PORT_UCHAR(SER_MCR(ComPortBase), DeviceExtension->MCR);
 
 	/* Activate serial interface */
-	IoSetDeviceInterfaceState(&DeviceExtension->SerialInterfaceName, TRUE);
+	{NTSTATUS status = IoSetDeviceInterfaceState(&DeviceExtension->SerialInterfaceName, TRUE); UNREFERENCED_PARAMETER(status);}
 	/* We don't really care if the call succeeded or not... */
 
 	return STATUS_SUCCESS;

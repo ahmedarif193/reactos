@@ -429,10 +429,12 @@ ClasspPowerUpCompletion(
                 SrbSetCdbLength(srbHeader, 6);
 
                 cdb = SrbGetCdb(srbHeader);
-                RtlZeroMemory(cdb, sizeof(CDB));
+                if (cdb != NULL) {
+                    RtlZeroMemory(cdb, sizeof(CDB));
 
-                cdb->START_STOP.OperationCode = SCSIOP_START_STOP_UNIT;
-                cdb->START_STOP.Start = 1;
+                    cdb->START_STOP.OperationCode = SCSIOP_START_STOP_UNIT;
+                    cdb->START_STOP.Start = 1;
+                }
 
                 PowerContext->PowerChangeState.PowerUp = PowerUpDeviceOn;
 
@@ -1014,9 +1016,10 @@ ClasspPowerDownCompletion(
                 SrbSetCdbLength(srbHeader, 10);
 
                 cdb = SrbGetCdb(srbHeader);
-
-                RtlZeroMemory(cdb, sizeof(CDB));
-                cdb->SYNCHRONIZE_CACHE10.OperationCode = SCSIOP_SYNCHRONIZE_CACHE;
+                if (cdb != NULL) {
+                    RtlZeroMemory(cdb, sizeof(CDB));
+                    cdb->SYNCHRONIZE_CACHE10.OperationCode = SCSIOP_SYNCHRONIZE_CACHE;
+                }
 
                 IoSetCompletionRoutine(fdoExtension->PrivateFdoData->PowerProcessIrp,
                                        ClasspPowerDownCompletion,
@@ -1240,11 +1243,13 @@ ClasspPowerDownCompletion(
                 SrbSetCdbLength(srbHeader, 6);
 
                 cdb = SrbGetCdb(srbHeader);
-                RtlZeroMemory(cdb, sizeof(CDB));
+                if (cdb != NULL) {
+                    RtlZeroMemory(cdb, sizeof(CDB));
 
-                cdb->START_STOP.OperationCode = SCSIOP_START_STOP_UNIT;
-                cdb->START_STOP.Start = 0;
-                cdb->START_STOP.Immediate = 1;
+                    cdb->START_STOP.OperationCode = SCSIOP_START_STOP_UNIT;
+                    cdb->START_STOP.Start = 0;
+                    cdb->START_STOP.Immediate = 1;
+                }
 
                 IoSetCompletionRoutine(fdoExtension->PrivateFdoData->PowerProcessIrp,
                                        ClasspPowerDownCompletion,

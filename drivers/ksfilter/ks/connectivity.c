@@ -128,11 +128,13 @@ KspValidateConnectRequest(
     /* now check the interface */
     Found = FALSE;
     Index = 0;
-    RtlStringFromGUID(&ConnectDetails->Interface.Set, &GuidString2);
+    NTSTATUS ConvertStatus1 = RtlStringFromGUID(&ConnectDetails->Interface.Set, &GuidString2);
+    UNREFERENCED_PARAMETER(ConvertStatus1);
     do
     {
         UNICODE_STRING GuidString;
-        RtlStringFromGUID(&Interface[Index].Set, &GuidString);
+        NTSTATUS ConvertStatus2 = RtlStringFromGUID(&Interface[Index].Set, &GuidString);
+        UNREFERENCED_PARAMETER(ConvertStatus2);
 
         DPRINT("Driver Interface %S Id %u\n", GuidString.Buffer, Interface[Index].Id);
         DPRINT("Connect Interface %S Id %u\n", GuidString2.Buffer, ConnectDetails->Interface.Id);
@@ -175,11 +177,13 @@ KspValidateConnectRequest(
     /* now check the interface */
     Found = FALSE;
     Index = 0;
-    RtlStringFromGUID(&ConnectDetails->Medium.Set, &GuidString2);
+    NTSTATUS ConvertStatus3 = RtlStringFromGUID(&ConnectDetails->Medium.Set, &GuidString2);
+    UNREFERENCED_PARAMETER(ConvertStatus3);
     do
     {
         UNICODE_STRING GuidString;
-        RtlStringFromGUID(&Medium[Index].Set, &GuidString);
+        NTSTATUS ConvertStatus4 = RtlStringFromGUID(&Medium[Index].Set, &GuidString);
+        UNREFERENCED_PARAMETER(ConvertStatus4);
 
         DPRINT("Driver Medium %S Id %u\n", GuidString.Buffer, Medium[Index].Id);
         DPRINT("Connect Medium %S Id %u\n", GuidString2.Buffer, ConnectDetails->Medium.Id);
@@ -457,13 +461,17 @@ KspPinPropertyHandler(
             {
                 UNICODE_STRING GuidString;
                 /* convert the guid to string */
-                RtlStringFromGUID(&DataRanges[Index]->MajorFormat, &GuidString);
+                NTSTATUS ConvertStatus5 = RtlStringFromGUID(&DataRanges[Index]->MajorFormat, &GuidString);
+                UNREFERENCED_PARAMETER(ConvertStatus5);
                 DPRINT("Index %lu MajorFormat %S\n", Index, GuidString.Buffer);
-                RtlStringFromGUID(&DataRanges[Index]->SubFormat, &GuidString);
+                NTSTATUS ConvertStatus6 = RtlStringFromGUID(&DataRanges[Index]->SubFormat, &GuidString);
+                UNREFERENCED_PARAMETER(ConvertStatus6);
                 DPRINT("Index %lu SubFormat %S\n", Index, GuidString.Buffer);
-                RtlStringFromGUID(&DataRanges[Index]->Specifier, &GuidString);
+                NTSTATUS ConvertStatus7 = RtlStringFromGUID(&DataRanges[Index]->Specifier, &GuidString);
+                UNREFERENCED_PARAMETER(ConvertStatus7);
                 DPRINT("Index %lu Specifier %S\n", Index, GuidString.Buffer);
-                RtlStringFromGUID(&DataRanges[Index]->Specifier, &GuidString);
+                NTSTATUS ConvertStatus8 = RtlStringFromGUID(&DataRanges[Index]->Specifier, &GuidString);
+                UNREFERENCED_PARAMETER(ConvertStatus8);
                 DPRINT("Index %lu FormatSize %lu Flags %lu SampleSize %lu Reserved %lu KSDATAFORMAT %lu\n", Index,
                        DataRanges[Index]->FormatSize, DataRanges[Index]->Flags, DataRanges[Index]->SampleSize, DataRanges[Index]->Reserved, sizeof(KSDATAFORMAT));
 

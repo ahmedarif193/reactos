@@ -217,6 +217,31 @@ typedef struct _MEMORY_DESCRIPTOR
     PFN_NUMBER PageCount;
 } MEMORY_DESCRIPTOR, *PMEMORY_DESCRIPTOR;
 
+typedef struct _LOADER_PARAMETER_FRAMEBUFFER
+{
+    LARGE_INTEGER FrameBufferBase;
+    ULONG FrameBufferSize;
+    ULONG HorizontalResolution;
+    ULONG VerticalResolution;
+    ULONG PixelsPerScanLine;
+    ULONG PixelFormat;
+    ULONG RedMask;
+    ULONG GreenMask;
+    ULONG BlueMask;
+    ULONG Reserved;
+} LOADER_PARAMETER_FRAMEBUFFER, *PLOADER_PARAMETER_FRAMEBUFFER;
+
+typedef struct _LOADER_PARAMETER_BGRT
+{
+    BOOLEAN Valid;
+    UCHAR ImageType;
+    USHORT Reserved;
+    ULONGLONG ImageAddress;
+    ULONG ImageSize;
+    ULONG ImageOffsetX;
+    ULONG ImageOffsetY;
+} LOADER_PARAMETER_BGRT, *PLOADER_PARAMETER_BGRT;
+
 typedef int CONFIGTYPE;
 typedef struct tagFILEINFORMATION
 {
@@ -669,6 +694,10 @@ typedef struct _LOADER_PARAMETER_EXTENSION
     UNICODE_STRING AcpiBiosVersion;
     UNICODE_STRING SmbiosVersion;
     UNICODE_STRING EfiVersion;
+#endif
+#if defined(__REACTOS__)
+    LOADER_PARAMETER_FRAMEBUFFER GopFramebuffer;
+    LOADER_PARAMETER_BGRT BgrtInfo;
 #endif
 #if (NTDDI_VERSION >= NTDDI_WINBLUE)
     DEBUG_DEVICE_DESCRIPTOR *KdDebugDevice;

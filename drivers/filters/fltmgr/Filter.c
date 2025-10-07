@@ -174,7 +174,14 @@ FltRegisterFilter(_In_ PDRIVER_OBJECT DriverObject,
     Filter->Base.Flags = FLT_OBFL_TYPE_FILTER;
     Filter->Base.PointerCount = 1;
     FltpExInitializeRundownProtection(&Filter->Base.RundownRef);
-    FltObjectReference(&Filter->Base);
+
+    /* Take an initial reference on the filter object */
+    Status = FltObjectReference(&Filter->Base);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(Filter, FM_TAG_FILTER);
+        return Status;
+    }
 
     /* Set the callback addresses */
     Filter->FilterUnload = Registration->FilterUnloadCallback;

@@ -455,7 +455,7 @@ SysAudioHandleProperty(
         }
     }
 
-    RtlStringFromGUID(&Property->Set, &GuidString);
+    {NTSTATUS status = RtlStringFromGUID(&Property->Set, &GuidString); UNREFERENCED_PARAMETER(status);}
     DPRINT1("Unhandled property Set |%S| Id %u Flags %x\n", GuidString.Buffer, Property->Id, Property->Flags);
     RtlFreeUnicodeString(&GuidString);
     return SetIrpIoStatus(Irp, STATUS_UNSUCCESSFUL, 0);

@@ -47,6 +47,8 @@ typedef struct _PDO_DEVICE_DATA
     LIST_ENTRY  Link;
     ULONG       InterfaceRefCount;
     UNICODE_STRING InterfaceName;
+    ULONG CachedBusNumber;
+    BOOLEAN HasCachedBusNumber;
 
 } PDO_DEVICE_DATA, *PPDO_DEVICE_DATA;
 

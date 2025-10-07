@@ -365,11 +365,9 @@ end:
 	}
 
     if (buffer.Pointer)
-    {
         AcpiOsFree(buffer.Pointer);
-    }
 
-	return_ACPI_STATUS(status);
+    return_ACPI_STATUS(status);
 }
 
 NTSTATUS

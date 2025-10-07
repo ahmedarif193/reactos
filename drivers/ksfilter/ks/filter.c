@@ -140,12 +140,12 @@ IKsProcessingObject_fnProcessingObjectWork(
     if (KeGetCurrentIrql() == PASSIVE_LEVEL)
     {
         /* acquire processing mutex */
-        KeWaitForSingleObject(&This->ProcessingMutex, Executive, KernelMode, FALSE, NULL);
+        KeWaitForSingleObject(&This->ControlMutex, Executive, KernelMode, FALSE, NULL);
     }
     else
     {
         /* dispatch level processing */
-        if (KeReadStateMutex(&This->ProcessingMutex) == 0)
+        if (KeReadStateMutex(&This->ControlMutex) == 0)
         {
             /* some thread was faster */
             DPRINT1("processing object too slow\n");
@@ -154,7 +154,7 @@ IKsProcessingObject_fnProcessingObjectWork(
 
         /* acquire processing mutex */
         TimeOut.QuadPart = 0LL;
-        Status = KeWaitForSingleObject(&This->ProcessingMutex, Executive, KernelMode, FALSE, &TimeOut);
+        Status = KeWaitForSingleObject(&This->ControlMutex, Executive, KernelMode, FALSE, &TimeOut);
 
         if (Status == STATUS_TIMEOUT)
         {
@@ -862,9 +862,12 @@ KspHandleDataIntersection(
     {
         UNICODE_STRING MajorFormat, SubFormat, Specifier;
         /* convert the guid to string */
-        RtlStringFromGUID(&DataRange->MajorFormat, &MajorFormat);
-        RtlStringFromGUID(&DataRange->SubFormat, &SubFormat);
-        RtlStringFromGUID(&DataRange->Specifier, &Specifier);
+        NTSTATUS ConvertStatus1 = RtlStringFromGUID(&DataRange->MajorFormat, &MajorFormat);
+        UNREFERENCED_PARAMETER(ConvertStatus1);
+        NTSTATUS ConvertStatus2 = RtlStringFromGUID(&DataRange->SubFormat, &SubFormat);
+        UNREFERENCED_PARAMETER(ConvertStatus2);
+        NTSTATUS ConvertStatus3 = RtlStringFromGUID(&DataRange->Specifier, &Specifier);
+        UNREFERENCED_PARAMETER(ConvertStatus3);
 
         DPRINT("KspHandleDataIntersection Index %lu PinId %lu MajorFormat %S SubFormat %S Specifier %S FormatSize %lu SampleSize %lu Align %lu Flags %lx Reserved %lx DataLength %lu\n", Index, Pin->PinId, MajorFormat.Buffer, SubFormat.Buffer, Specifier.Buffer,
                DataRange->FormatSize, DataRange->SampleSize, DataRange->Alignment, DataRange->Flags, DataRange->Reserved, DataLength);
@@ -1123,7 +1126,8 @@ IKsFilter_DispatchDeviceIoControl(
         }
     }
 
-    RtlStringFromGUID(&Property->Set, &GuidString);
+    NTSTATUS ConvertStatus4 = RtlStringFromGUID(&Property->Set, &GuidString);
+    UNREFERENCED_PARAMETER(ConvertStatus4);
     DPRINT("IKsFilter_DispatchDeviceIoControl property PinCount %x\n", FilterInstance->Descriptor->PinDescriptorsCount);
     DPRINT("IKsFilter_DispatchDeviceIoControl property Set |%S| Id %u Flags %x Status %lx ResultLength %lu\n", GuidString.Buffer, Property->Id, Property->Flags, Status, Irp->IoStatus.Information);
     RtlFreeUnicodeString(&GuidString);

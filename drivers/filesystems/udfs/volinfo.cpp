@@ -155,7 +155,7 @@ UDFCommonQueryVolInfo(
     PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation( Irp );
     ULONG Length;
     BOOLEAN CanWait = FALSE;
-    PVCB Vcb;
+    PVCB Vcb = NULL;
     BOOLEAN PostRequest = FALSE;
     BOOLEAN AcquiredVCB = FALSE;
     PFILE_OBJECT            FileObject = NULL;
@@ -672,7 +672,7 @@ UDFCommonSetVolInfo(
     PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation( Irp );
     ULONG Length;
     BOOLEAN CanWait = FALSE;
-    PVCB Vcb;
+    PVCB Vcb = NULL;
     BOOLEAN PostRequest = FALSE;
     BOOLEAN AcquiredVCB = FALSE;
     PFILE_OBJECT            FileObject = NULL;

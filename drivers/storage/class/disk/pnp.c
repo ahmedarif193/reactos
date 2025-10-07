@@ -85,6 +85,12 @@ Return Value:
 
     PAGED_CODE();
 
+    KdPrintEx((DPFLTR_DISK_ID,
+               DPFLTR_INFO_LEVEL,
+               "DiskAddDevice: Driver %p PDO %p\n",
+               DriverObject,
+               PhysicalDeviceObject));
+
     //
     // See if we should be allowing file systems to mount on partition zero.
     //
@@ -224,6 +230,12 @@ Return Value:
     PFUNCTIONAL_DEVICE_EXTENSION fdoExtension = Fdo->DeviceExtension;
     PDISK_DATA diskData = (PDISK_DATA) fdoExtension->CommonExtension.DriverData;
 
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[DISK] DiskInitFdo: FDO=%p DeviceNumber=%lu\n",
+               Fdo,
+               fdoExtension->DeviceNumber);
+
     ULONG srbFlags = 0;
     ULONG timeOut = 0;
     ULONG bytesPerSector;
@@ -302,6 +314,10 @@ Return Value:
         TracePrint((TRACE_LEVEL_ERROR, TRACE_FLAG_PNP, "DiskInitFdo: Can not allocate request sense buffer\n"));
 
         status = STATUS_INSUFFICIENT_RESOURCES;
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_ERROR_LEVEL,
+                   "[DISK] DiskInitFdo: allocation failure, status=%lx\n",
+                   status);
         return status;
     }
 
@@ -381,7 +397,7 @@ Return Value:
     // attempt to determine the BIOS reported geometry.
     //
 
-    (VOID)ClassReadDriveCapacity(Fdo);
+    {NTSTATUS status = ClassReadDriveCapacity(Fdo); UNREFERENCED_PARAMETER(status);}
 
     //
     // Set up sector size fields.
@@ -590,6 +606,10 @@ Return Value:
     // Restore the saved value
     //
     fdoExtension->SrbFlags = srbFlags;
+
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[DISK] DiskInitFdo: success\n");
 
     return STATUS_SUCCESS;
 
@@ -947,6 +967,12 @@ Return Value:
 
     PAGED_CODE();
 
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[DISK] DiskStartFdo: FDO=%p DeviceNumber=%lu\n",
+               Fdo,
+               fdoExtension->DeviceNumber);
+
     //
     // Get the hotplug information, so we can turn off write cache if needed
     //
@@ -1104,7 +1130,10 @@ Return Value:
 
     ADJUST_FUA_FLAG(fdoExtension);
 
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[DISK] DiskStartFdo: success\n");
+
     return STATUS_SUCCESS;
 
 } // end DiskStartFdo()
-

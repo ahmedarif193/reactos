@@ -145,12 +145,18 @@ FltEnumerateVolumes(
             if (NumberOfVolumes < VolumeListSize)
             {
                 /* Reference the volume and return it */
-                FltObjectReference(Volume);
-                VolumeList[NumberOfVolumes] = Volume;
+                if (NT_SUCCESS(FltObjectReference(Volume)))
+                {
+                    VolumeList[NumberOfVolumes] = Volume;
+                    /* We returned one more volume */
+                    ++NumberOfVolumes;
+                }
             }
-
-            /* We returned one more volume */
-            ++NumberOfVolumes;
+            else
+            {
+                /* Count volumes even if we can't return them */
+                ++NumberOfVolumes;
+            }
         }
     }
 

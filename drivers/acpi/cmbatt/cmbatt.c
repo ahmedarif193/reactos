@@ -724,8 +724,8 @@ CmBattIoctl(IN PDEVICE_OBJECT DeviceObject,
                 if (InputBufferLength == sizeof(ULONG))
                 {
                     /* Query it */
-                    Status = CmBattSetTripPoint(DeviceExtension,
-                                                *(PULONG)Irp->AssociatedIrp.SystemBuffer);
+                    Status = CmBattSetTripPpoint(DeviceExtension,
+                                                 *(PULONG)Irp->AssociatedIrp.SystemBuffer);
                     Irp->IoStatus.Information = 0;
                 }
                 else
@@ -895,7 +895,7 @@ CmBattDisableStatusNotify(IN PCMBATT_DEVICE_EXTENSION DeviceExtension)
         {
             /* Reset it back to 0 */
             DeviceExtension->TripPointValue = 0;
-            Status = CmBattSetTripPoint(DeviceExtension, 0);
+            Status = CmBattSetTripPpoint(DeviceExtension, 0);
             if (!NT_SUCCESS(Status))
             {
                 /* If it failed, set unknown/invalid value */
@@ -1029,7 +1029,7 @@ CmBattSetStatusNotify(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
 
     /* Set the trip point with ACPI and check for success */
     DeviceExtension->TripPointValue = NewTripPoint;
-    Status = CmBattSetTripPoint(DeviceExtension, NewTripPoint);
+    Status = CmBattSetTripPpoint(DeviceExtension, NewTripPoint);
     if (!(NewTripPoint) && (Capacity)) Status = STATUS_NOT_SUPPORTED;
     if (!NT_SUCCESS(Status))
     {
@@ -1506,7 +1506,8 @@ CmBattQueryInformation(IN PCMBATT_DEVICE_EXTENSION FdoExtension,
             /* Convert it to Unicode */
             InfoString.Buffer = InfoBuffer;
             InfoString.MaximumLength = sizeof(InfoBuffer);
-            RtlAnsiStringToUnicodeString(&InfoString, &TempString, 0);
+            Status = RtlAnsiStringToUnicodeString(&InfoString, &TempString, 0);
+            if (!NT_SUCCESS(Status)) return Status;
 
             /* Setup a temporary string for concatenation */
             TempString2.Buffer = TempBuffer;
@@ -1527,7 +1528,8 @@ CmBattQueryInformation(IN PCMBATT_DEVICE_EXTENSION FdoExtension,
                 }
 
                 /* Convert it to Unicode and append it */
-                RtlAnsiStringToUnicodeString(&TempString2, &TempString, 0);
+                Status = RtlAnsiStringToUnicodeString(&TempString2, &TempString, 0);
+                if (!NT_SUCCESS(Status)) return Status;
                 RtlAppendUnicodeStringToString(&InfoString, &TempString2);
             }
 
@@ -1542,7 +1544,8 @@ CmBattQueryInformation(IN PCMBATT_DEVICE_EXTENSION FdoExtension,
             }
 
             /* Convert it to Unicode and append it */
-            RtlAnsiStringToUnicodeString(&TempString2, &TempString, 0);
+            Status = RtlAnsiStringToUnicodeString(&TempString2, &TempString, 0);
+            if (!NT_SUCCESS(Status)) return Status;
             RtlAppendUnicodeStringToString(&InfoString, &TempString2);
 
             /* Return the final appended string */

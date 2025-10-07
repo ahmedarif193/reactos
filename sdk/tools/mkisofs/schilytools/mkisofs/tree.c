@@ -385,12 +385,50 @@ sort_n_finish(this_dir)
 			if (d1 > 5)
 				rootname[5] = 0;
 		}
-		new_reclen = strlen(rootname);
-		sprintf(newname, "%s000%s%s",
-				rootname,
-				extname,
-				((s_entry->isorec.flags[0] & ISO_DIRECTORY) ||
-				omit_version_number ? "" : ";1"));
+		{
+			const char	*version_suffix;
+			size_t	name_buf_len;
+			size_t	available_payload;
+			size_t	suffix_len;
+			size_t	ext_len;
+			size_t	required_suffix;
+			size_t	root_limit;
+			size_t	root_len;
+
+			version_suffix = ((s_entry->isorec.flags[0] & ISO_DIRECTORY) ||
+				omit_version_number) ? "" : ";1";
+			name_buf_len = sizeof (newname);
+			available_payload = name_buf_len ? name_buf_len - 1 : 0;
+			suffix_len = strlen(version_suffix);
+			required_suffix = 3 + suffix_len;
+			ext_len = strlen(extname);
+
+			if (available_payload < required_suffix) {
+				extname[0] = '\0';
+				ext_len = 0;
+			} else if (ext_len > available_payload - required_suffix) {
+				ext_len = available_payload - required_suffix;
+				extname[ext_len] = '\0';
+			}
+
+			if (available_payload >= required_suffix + ext_len)
+				root_limit = available_payload - required_suffix - ext_len;
+			else
+				root_limit = 0;
+
+			root_len = strlen(rootname);
+			if (root_len > root_limit) {
+				rootname[root_limit] = '\0';
+				root_len = strlen(rootname);
+			}
+
+			new_reclen = root_len;
+			strlcpy(newname, rootname, sizeof (newname));
+			strlcat(newname, "000", sizeof (newname));
+			strlcat(newname, extname, sizeof (newname));
+			if (suffix_len != 0)
+				strlcat(newname, version_suffix, sizeof (newname));
+		}
 
 		for (d1 = 0; d1 < 36; d1++) {
 			for (d2 = 0; d2 < 36; d2++) {
@@ -2180,13 +2218,17 @@ insert_file_entry(this_dir, whole_path, short_name, statp, have_rsrc)
 			nchar = -1;
 #endif
 			symlink_buff[nchar < 0 ? 0 : nchar] = 0;
-			sprintf(buffer, "L\t%s\t%s\n",
-				s_entry->name, symlink_buff);
+			buffer[0] = '\0';
+			strlcpy(buffer, "L\t", sizeof (buffer));
+			strlcat(buffer, s_entry->name, sizeof (buffer));
+			strlcat(buffer, "\t", sizeof (buffer));
+			strlcat(buffer, symlink_buff, sizeof (buffer));
+			strlcat(buffer, "\n", sizeof (buffer));
 			break;
 #endif
 #ifdef S_IFSOCK
 		case S_IFSOCK:
-			sprintf(buffer, "S\t%s\n",
+			snprintf(buffer, sizeof(buffer), "S\t%s\n",
 				s_entry->name);
 			break;
 #endif

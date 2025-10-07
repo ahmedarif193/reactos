@@ -15,11 +15,12 @@
 #include <stdint.h>
 
 /* Function attributes for GCC */
-#if !defined(_MSC_VER) && !defined(__fastcall)
-#define __fastcall __attribute__((fastcall))
-#endif
 #if !defined(_MSC_VER) && !defined(__cdecl)
-#define __cdecl __attribute__((cdecl))
+#  if (defined(__i386__) || defined(__i386)) && (defined(__GNUC__) || defined(__clang__))
+#    define __cdecl __attribute__((cdecl))
+#  else
+#    define __cdecl
+#  endif
 #endif
 #if !defined(_MSC_VER) && !defined(__stdcall)
 #define __stdcall __attribute__((stdcall))
@@ -273,4 +274,3 @@ typedef const UNICODE_STRING *PCUNICODE_STRING;
 #define RTL_H
 
 #endif
-

@@ -34,6 +34,22 @@ typedef struct _GEOMETRY
 #include <pshpack1.h>
 
 /*
+ * Extended disk geometry (Int13 / AH=48h)
+ * See also ntdddisk.h DISK_EX_INT13_INFO
+ */
+typedef struct _EXTENDED_GEOMETRY
+{
+    USHORT      Size;
+    USHORT      Flags;
+    ULONG       Cylinders;
+    ULONG       Heads;
+    ULONG       SectorsPerTrack;
+    ULONGLONG   Sectors;
+    USHORT      BytesPerSector;
+    ULONG       PDPTE;
+} EXTENDED_GEOMETRY, *PEXTENDED_GEOMETRY;
+
+/*
  * Define the structure of a partition table entry
  */
 typedef struct _PARTITION_TABLE_ENTRY
@@ -105,6 +121,8 @@ VOID __cdecl DiskStopFloppyMotor(VOID);
 /* Buffer for disk reads (hwdisk.c) */
 extern PVOID DiskReadBuffer;
 extern SIZE_T DiskReadBufferSize;
+
+SIZE_T FrLdrGetRecommendedDiskBufferSize(SIZE_T MaximumBufferSize);
 
 
 /* ARC path of the boot drive and partition */

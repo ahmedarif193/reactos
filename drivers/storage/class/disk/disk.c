@@ -32,6 +32,7 @@ Revision History:
 #include "ntddstor.h"
 #include "ntddvol.h"
 #include "ioevent.h"
+#include <debug.h>
 
 #ifdef DEBUG_USE_WPP
 #include "disk.tmh"
@@ -180,6 +181,15 @@ Return Value:
     //
     WPP_INIT_TRACING(DriverObject, RegistryPath);
 
+    KdPrintEx((DPFLTR_DISK_ID,
+               DPFLTR_INFO_LEVEL,
+               "Disk DriverEntry: DriverObject %p RegistryPath %wZ\n",
+               DriverObject,
+               RegistryPath));
+    DPRINT1("DISK DriverEntry: DriverObject=%p RegistryPath=%wZ\n",
+            DriverObject,
+            RegistryPath);
+
 #if defined(_X86_) || defined(_AMD64_)
 
     //
@@ -253,9 +263,10 @@ Return Value:
     classQueryWmiRegInfoExList.Size = sizeof(CLASS_QUERY_WMI_REGINFO_EX_LIST);
     classQueryWmiRegInfoExList.ClassFdoQueryWmiRegInfoEx = DiskFdoQueryWmiRegInfoEx;
 
-    (VOID)ClassInitializeEx(DriverObject,
-                            &guidQueryRegInfoEx,
-                            &classQueryWmiRegInfoExList);
+    ULONG result = ClassInitializeEx(DriverObject,
+                                     &guidQueryRegInfoEx,
+                                     &classQueryWmiRegInfoExList);
+    UNREFERENCED_PARAMETER(result);
 
     //
     // Call class init Ex routine to register SRB support
@@ -6195,5 +6206,3 @@ Return Value:
 
     return;
 }
-
-

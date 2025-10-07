@@ -874,7 +874,10 @@ ClassPnp(
 			else
 				DeviceExtension->FileHandle = NULL;
 			if (DeviceExtension->InterfaceName.Length != 0)
-				IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, TRUE);
+			{
+				NTSTATUS InterfaceStatus = IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, TRUE);
+				UNREFERENCED_PARAMETER(InterfaceStatus);
+			}
 			Irp->IoStatus.Status = Status;
 			IoCompleteRequest(Irp, IO_NO_INCREMENT);
 			return Status;
@@ -890,7 +893,10 @@ ClassPnp(
 
         case IRP_MN_REMOVE_DEVICE:
 			if (DeviceExtension->InterfaceName.Length != 0)
-				IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE);
+			{
+				NTSTATUS InterfaceStatus = IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE);
+				UNREFERENCED_PARAMETER(InterfaceStatus);
+			}
             if (DeviceExtension->FileHandle)
 			{
 				ZwClose(DeviceExtension->FileHandle);

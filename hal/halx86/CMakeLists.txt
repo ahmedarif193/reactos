@@ -1,10 +1,18 @@
 
+get_filename_component(HAL_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
+
+set(HAL_ARCH "${ARCH}" CACHE STRING "HAL architecture (i386|amd64|arm64)")
+set(HAL_ARCH_DIR "${HAL_SOURCE_DIR}/../arch/${HAL_ARCH}")
+set(HAL_I386_DIR "${HAL_SOURCE_DIR}/../arch/i386")
+set(HAL_AMD64_DIR "${HAL_SOURCE_DIR}/../arch/amd64")
+
 add_definitions(
     -D_NTHALDLL_
     -D_NTHAL_)
 
 include_directories(
-    include
+    ${HAL_ARCH_DIR}/include
+    ${HAL_I386_DIR}/include
     ${REACTOS_SOURCE_DIR}/ntoskrnl/include
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/fast486)
 
@@ -22,10 +30,23 @@ function(add_hal _halname)
         ${_haldata_SOURCES}
         ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
 
+    # Stricter warnings for all builds (GCC/Clang only)
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        target_compile_options(${_halname} PRIVATE
+            -UNDEBUG
+            $<$<COMPILE_LANGUAGE:C>:
+                -Wextra -Wformat -Wformat-security
+                -Wcast-align -Wpointer-arith -Wvla
+                
+                -Wsign-compare -Wimplicit-fallthrough>
+            $<$<COMPILE_LANGUAGE:CXX>:
+                -Wextra -Wformat -Wformat-security -Wpointer-arith>)
+    endif()
+
     if(${_halname} STREQUAL "hal")
-        target_link_libraries(${_halname} libcntpr setjmp arbiter fast486 ${PSEH_LIB})
+        target_link_libraries(${_halname} libcntpr arbiter fast486)
     else()
-        target_link_libraries(${_halname} libcntpr setjmp fast486 ${PSEH_LIB})
+        target_link_libraries(${_halname} libcntpr fast486)
     endif()
 
     add_importlibs(${_halname} ntoskrnl)
@@ -47,31 +68,34 @@ include(apic.cmake)
 include(up.cmake)
 include(smp.cmake)
 
-if(ARCH STREQUAL "i386")
+if(HAL_ARCH STREQUAL "i386")
     include(pcidata.cmake)
     include(legacy.cmake)
     include(pic.cmake)
     include(xbox.cmake)
     include(pc98.cmake)
-    add_subdirectory(minihal)
+    add_subdirectory(${HAL_I386_DIR}/minihal ${CMAKE_CURRENT_BINARY_DIR}/minihal)
 
     remove_definitions(-DSARCH_XBOX)
     remove_definitions(-DSARCH_PC98)
 
     # hal
-    add_hal(hal SOURCES pic/halpic.rc COMPONENTS generic legacy up pic)
-    add_hal(halacpi SOURCES acpi/halacpi.rc COMPONENTS generic acpi up pic)
-    add_hal(halaacpi SOURCES apic/halaacpi.rc COMPONENTS generic acpi up apic)
-    add_hal(halapic SOURCES apic/halapic.rc COMPONENTS generic legacy up apic)
-    add_hal(halxbox SOURCES xbox/halxbox.rc COMPONENTS xbox up)
-    add_hal(halpc98 SOURCES pc98/halpc98.rc COMPONENTS pc98 up)
+    add_hal(hal SOURCES ${HAL_I386_DIR}/pic/halpic.rc COMPONENTS generic legacy up pic)
+    add_hal(halacpi SOURCES ${HAL_I386_DIR}/acpi/halacpi.rc COMPONENTS generic acpi up pic)
+    add_hal(halaacpi SOURCES ${HAL_I386_DIR}/apic/halaacpi.rc COMPONENTS generic acpi up apic)
+    add_hal(halapic SOURCES ${HAL_I386_DIR}/apic/halapic.rc COMPONENTS generic legacy up apic)
+    add_hal(halxbox SOURCES ${HAL_I386_DIR}/xbox/halxbox.rc COMPONENTS xbox up)
+    add_hal(halpc98 SOURCES ${HAL_I386_DIR}/pc98/halpc98.rc COMPONENTS pc98 up)
 
-    add_hal(halmacpi SOURCES smp/halmacpi.rc COMPONENTS generic acpi smp apic)
+    add_hal(halmacpi SOURCES ${HAL_I386_DIR}/smp/halmacpi.rc COMPONENTS generic acpi smp apic)
     #add_hal(halmp SOURCES mp/halmp.rc COMPONENTS generic legacy smp apic)
 
-elseif(ARCH STREQUAL "amd64")
+elseif(HAL_ARCH STREQUAL "amd64")
+    include(pcidata.cmake)
 
     add_hal(hal SOURCES ${HAL_SOURCE} COMPONENTS generic acpi up apic)
     add_hal(halmp SOURCES ${HAL_SOURCE} COMPONENTS generic acpi smp apic)
+    # Ship halmacpi.dll on amd64 as well to keep feature parity with the i386 build
+    add_hal(halmacpi SOURCES ${HAL_I386_DIR}/smp/halmacpi.rc COMPONENTS generic acpi smp apic)
 
 endif()

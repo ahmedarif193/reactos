@@ -1182,6 +1182,7 @@ OHCI_MapTransferToTD(IN POHCI_EXTENSION OhciExtension,
                 SGList->SgElementCount);
 
     ASSERT(SgIdx < SGList->SgElementCount);
+    SgElement = &SGList->SgElement[SgIdx];
     ASSERT(TransferedLen == SgElement->SgOffset);
 
     /* The buffer for a TD can be 0 to 8192 bytes long,
@@ -1741,6 +1742,7 @@ OHCI_AbortTransfer(IN PVOID ohciExtension,
 
     if (!IsProcessed)
     {
+        LastTD = NULL;
         for (TD = OhciEndpoint->HcdHeadP; TD->OhciTransfer != OhciTransfer; TD = TD->NextTDVa)
         {
             if (TD == OhciEndpoint->HcdTailP)
@@ -1762,10 +1764,12 @@ OHCI_AbortTransfer(IN PVOID ohciExtension,
                 OHCI_ProcessDoneTD(OhciExtension, TD, FALSE);
         }
 
-        LastTD->OhciTransfer->NextTD = TD;
-
-        LastTD->NextTDVa = TD;
-        LastTD->HwTD.gTD.NextTD = TD->PhysicalAddress;
+        if (LastTD)
+        {
+            LastTD->OhciTransfer->NextTD = TD;
+            LastTD->NextTDVa = TD;
+            LastTD->HwTD.gTD.NextTD = TD->PhysicalAddress;
+        }
     }
 
     *CompletedLength = OhciTransfer->TransferLen;

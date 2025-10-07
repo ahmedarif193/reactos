@@ -74,6 +74,7 @@ C_ASSERT(sizeof(BIOS_MEMORY_MAP) == 24);
 /* FIXME: Should be moved to NDK, and respective ACPI header files */
 typedef struct _ACPI_BIOS_DATA
 {
+    PHYSICAL_ADDRESS RSDPAddress;
     PHYSICAL_ADDRESS RSDTAddress;
     ULONGLONG Count;
     BIOS_MEMORY_MAP MemoryMap[1]; /* Count of BIOS memory map entries */

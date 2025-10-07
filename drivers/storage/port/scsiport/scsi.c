@@ -12,6 +12,48 @@
 #define NDEBUG
 #include <debug.h>
 
+static VOID
+SpiEmitDmaWindowTelemetry(
+    _In_ PSCSI_PORT_DEVICE_EXTENSION DeviceExtension,
+    _Inout_ PSCSI_REQUEST_BLOCK_INFO SrbInfo)
+{
+    PSCSI_REQUEST_BLOCK Srb;
+
+    if (SrbInfo->DmaTelemetryLogged)
+    {
+        return;
+    }
+
+    if (SrbInfo->DmaWindowCount <= 1)
+    {
+        return;
+    }
+
+    Srb = SrbInfo->Srb;
+    if (Srb == NULL)
+    {
+        return;
+    }
+
+    SrbInfo->DmaTelemetryLogged = TRUE;
+
+    if (SrbInfo->DmaBytesFlushed == 0 && Srb->DataTransferLength != 0)
+    {
+        SrbInfo->DmaBytesFlushed = Srb->DataTransferLength;
+    }
+
+    DPRINT1("[scsiport] Multi-window DMA Path %u Target %u Lun %u Tag %u Windows %lu Mapped %lu Flushed %lu\n",
+            Srb->PathId,
+            Srb->TargetId,
+            Srb->Lun,
+            Srb->QueueTag,
+            SrbInfo->DmaWindowCount,
+            SrbInfo->DmaBytesMapped,
+            SrbInfo->DmaBytesFlushed);
+
+    UNREFERENCED_PARAMETER(DeviceExtension);
+}
+
 
 static
 NTSTATUS
@@ -680,25 +722,72 @@ SpiProcessCompletedRequest(
     }
 
     /* Flush adapter if needed */
-    if (SrbInfo->BaseOfMapRegister && SrbInfo->ScatterGather)
+    if (DeviceExtension->MapRegisters)
     {
-        ULONG transferLen = 0;
-        BOOLEAN isWrite = !!(Srb->SrbFlags & SRB_FLAGS_DATA_OUT);
-        ULONG i;
-
-        for (i = 0;
-             i < SrbInfo->NumberOfMapRegisters && transferLen < Srb->DataTransferLength;
-             i++)
+        if (SrbInfo->BaseOfMapRegister && SrbInfo->ScatterGather)
         {
-            transferLen += SrbInfo->ScatterGather[i].Length;
+            ULONG transferLen = 0;
+            BOOLEAN isWrite = !!(Srb->SrbFlags & SRB_FLAGS_DATA_OUT);
+            ULONG i;
+
+            for (i = 0;
+                 i < SrbInfo->NumberOfMapRegisters && transferLen < Srb->DataTransferLength;
+                 i++)
+            {
+                transferLen += SrbInfo->ScatterGather[i].Length;
+            }
+
+            if (SrbInfo->DmaBytesFlushed < Srb->DataTransferLength)
+            {
+                ULONG remaining = Srb->DataTransferLength - SrbInfo->DmaBytesFlushed;
+                if (remaining > transferLen)
+                {
+                    remaining = transferLen;
+                }
+
+                SrbInfo->DmaBytesFlushed += remaining;
+            }
+
+            IoFlushAdapterBuffers(DeviceExtension->AdapterObject,
+                                  Irp->MdlAddress,
+                                  SrbInfo->BaseOfMapRegister,
+                                  Srb->DataBuffer,
+                                  transferLen,
+                                  isWrite);
+        }
+    }
+    else if ((SrbInfo->DmaFlags & SCSI_PORT_DMA_FLAG_MAPPED) &&
+             DeviceExtension->MapRegisterBase != NULL)
+    {
+        BOOLEAN isWrite = (SrbInfo->DmaFlags & SCSI_PORT_DMA_FLAG_WRITE_OUT) != 0;
+
+        if (SrbInfo->DmaTransferLength != 0)
+        {
+            if (SrbInfo->DmaBytesFlushed < Srb->DataTransferLength)
+            {
+                ULONG remaining = Srb->DataTransferLength - SrbInfo->DmaBytesFlushed;
+                ULONG delta = SrbInfo->DmaTransferLength;
+
+                if (delta > remaining)
+                {
+                    delta = remaining;
+                }
+
+                SrbInfo->DmaBytesFlushed += delta;
+            }
         }
 
         IoFlushAdapterBuffers(DeviceExtension->AdapterObject,
                               Irp->MdlAddress,
-                              SrbInfo->BaseOfMapRegister,
-                              Srb->DataBuffer,
-                              transferLen,
+                              DeviceExtension->MapRegisterBase,
+                              SrbInfo->DmaLogicalAddress,
+                              SrbInfo->DmaTransferLength,
                               isWrite);
+
+        SrbInfo->DmaCurrentOffset += SrbInfo->DmaTransferLength;
+        SrbInfo->DmaLogicalAddress = NULL;
+        SrbInfo->DmaTransferLength = 0;
+        SrbInfo->DmaFlags = 0;
     }
 
     /* Clear the request */
@@ -776,6 +865,17 @@ SpiProcessCompletedRequest(
 
     //SequenceNumber = SrbInfo->SequenceNumber;
     SrbInfo->SequenceNumber = 0;
+
+    SpiEmitDmaWindowTelemetry(DeviceExtension, SrbInfo);
+
+    SrbInfo->DmaLogicalAddress = NULL;
+    SrbInfo->DmaTransferLength = 0;
+    SrbInfo->DmaCurrentOffset = 0;
+    SrbInfo->DmaFlags = 0;
+    SrbInfo->DmaTelemetryLogged = 0;
+    SrbInfo->DmaWindowCount = 0;
+    SrbInfo->DmaBytesMapped = 0;
+    SrbInfo->DmaBytesFlushed = 0;
 
     /* Decrement the queue count */
     LunExtension->QueueCount--;
@@ -1285,7 +1385,10 @@ TryAgain:
     Context.InterruptData = &InterruptData;
     Context.DeviceExtension = DeviceExtension;
 
-    if (!KeSynchronizeExecution(DeviceExtension->Interrupt[0],
+    PKINTERRUPT interruptObject = SppGetPrimaryInterruptObject(DeviceExtension);
+
+    if (!interruptObject ||
+        !KeSynchronizeExecution(interruptObject,
                                 SpiSaveInterruptData,
                                 &Context))
     {
@@ -1305,8 +1408,12 @@ TryAgain:
     /* Check for IoMapTransfer */
     if (InterruptData.Flags & SCSI_PORT_MAP_TRANSFER)
     {
-        /* TODO: Implement */
-        ASSERT(FALSE);
+        if (DeviceExtension->Common.DeviceObject != NULL)
+        {
+            ScsiPortFlushDma(DeviceExtension->MiniPortDeviceExtension);
+        }
+
+        InterruptData.Flags &= ~SCSI_PORT_MAP_TRANSFER;
     }
 
     /* Check if timer is needed */
@@ -1443,7 +1550,8 @@ TryAgain:
         KeAcquireSpinLockAtDpcLevel(&DeviceExtension->SpinLock);
 
         /* Request an interrupt */
-        DeviceExtension->HwInterrupt(DeviceExtension->MiniPortDeviceExtension);
+        BOOLEAN result = DeviceExtension->HwInterrupt(DeviceExtension->MiniPortDeviceExtension);
+        UNREFERENCED_PARAMETER(result);
 
         ASSERT(DeviceExtension->Flags & SCSI_PORT_DISABLE_INT_REQUESET);
 
@@ -1617,6 +1725,15 @@ SpiAllocateSrbStructures(
         KeReleaseSpinLockFromDpcLevel(&DeviceExtension->SpinLock);
     }
 
+    SrbInfo->DmaLogicalAddress = NULL;
+    SrbInfo->DmaTransferLength = 0;
+    SrbInfo->DmaCurrentOffset = 0;
+    SrbInfo->DmaFlags = 0;
+    SrbInfo->DmaTelemetryLogged = 0;
+    SrbInfo->DmaWindowCount = 0;
+    SrbInfo->DmaBytesMapped = 0;
+    SrbInfo->DmaBytesFlushed = 0;
+
     return SrbInfo;
 }
 
@@ -1775,7 +1892,10 @@ ScsiPortStartIo(
 
     KeAcquireSpinLockAtDpcLevel(&DeviceExtension->SpinLock);
 
-    if (!KeSynchronizeExecution(DeviceExtension->Interrupt[0],
+    PKINTERRUPT startInterrupt = SppGetPrimaryInterruptObject(DeviceExtension);
+
+    if (!startInterrupt ||
+        !KeSynchronizeExecution(startInterrupt,
                                 ScsiPortStartPacket,
                                 DeviceObject))
     {

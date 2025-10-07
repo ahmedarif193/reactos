@@ -1,0 +1,12 @@
+; PROJECT:         ReactOS UniATA Storage Driver
+; LICENSE:         GPL-2.0-or-later - See COPYING in the top level directory
+; FILE:            drivers/storage/ide/uniata/idedma.def
+; PURPOSE:         Module definition for the DMA helper driver
+; COPYRIGHT:       Copyright (c) Ahmed ARIF (arif.ing@outlook.com)
+;
+; IDEDMA.def
+
+NAME IDEDMA.SYS
+DESCRIPTION 'IDEDMA.SYS'
+
+EXPORTS

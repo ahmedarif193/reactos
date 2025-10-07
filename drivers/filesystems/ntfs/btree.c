@@ -1510,7 +1510,7 @@ DestroyBTreeKey(PB_TREE_KEY Key)
 VOID
 DestroyBTreeNode(PB_TREE_FILENAME_NODE Node)
 {
-    PB_TREE_KEY NextKey;
+    PB_TREE_KEY NextKey = NULL;
     PB_TREE_KEY CurrentKey = Node->FirstKey;
     ULONG i;
     for (i = 0; i < Node->KeyCount; i++)

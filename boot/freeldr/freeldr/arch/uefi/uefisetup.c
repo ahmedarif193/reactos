@@ -47,6 +47,7 @@ MachInit(const char *CmdLine)
     MachVtbl.DiskGetDriveGeometry = UefiDiskGetDriveGeometry;
     MachVtbl.DiskGetCacheableBlockCount = UefiDiskGetCacheableBlockCount;
     MachVtbl.GetTime = UefiGetTime;
+    /* Use the UEFI disk layer to enumerate boot devices. */
     MachVtbl.InitializeBootDevices = UefiInitializeBootDevices;
     MachVtbl.HwDetect = UefiHwDetect;
     MachVtbl.HwIdle = UefiHwIdle;

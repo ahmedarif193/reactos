@@ -118,7 +118,8 @@ NdisInitializeString(
 
   RtlInitAnsiString(&AnsiString, (PCSZ)SourceString);
 
-  RtlAnsiStringToUnicodeString((PUNICODE_STRING)DestinationString, &AnsiString, TRUE);
+  NTSTATUS Status = RtlAnsiStringToUnicodeString((PUNICODE_STRING)DestinationString, &AnsiString, TRUE);
+  UNREFERENCED_PARAMETER(Status);
 }
 
 /*

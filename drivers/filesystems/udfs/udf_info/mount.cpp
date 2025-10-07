@@ -194,8 +194,8 @@ UDFUpdateXSpaceBitmaps(
     int8* bad_bm;
     int8* old_bm;
     int8* new_bm;
-    int8* fpart_bm;
-    int8* upart_bm;
+    int8* fpart_bm = NULL;
+    int8* upart_bm = NULL;
     OSSTATUS status, status2;
     int8* USBM=NULL;
     int8* FSBM=NULL;
@@ -1249,7 +1249,7 @@ UDFLoadLogicalVolInt(
     uint16      ident;
     LogicalVolIntegrityDescImpUse* LVID_iUse;
     LogicalVolHeaderDesc* LVID_hd;
-    extent_ad   last_loc;
+    extent_ad   last_loc = {0};
     BOOLEAN     read_last = FALSE;
     uint32      lvid_count = 0;
 
@@ -1825,7 +1825,7 @@ UDFVerifyFreeSpaceBitmap(
     IN uint32 Lba                   // UnallocSpaceDesc
     )
 {
-    OSSTATUS status;
+    OSSTATUS status = STATUS_SUCCESS;
     uint32 i, l;
     uint16 Ident;
     int8* AllocDesc;
@@ -1914,7 +1914,7 @@ UDFBuildFreeSpaceBitmap(
     IN uint32 Lba                   // UnallocSpaceDesc
     )
 {
-    OSSTATUS status;
+    OSSTATUS status = STATUS_SUCCESS;
     uint32 i, l;
     uint16 Ident;
     int8* AllocDesc;

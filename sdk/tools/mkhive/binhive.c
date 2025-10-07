@@ -21,7 +21,7 @@
  * PROJECT:         ReactOS hive maker
  * FILE:            tools/mkhive/binhive.c
  * PURPOSE:         Binary hive export code
- * PROGRAMMER:      Hervé Poussineau
+ * PROGRAMMER:      Hervï¿½ Poussineau
  */
 
 /* INCLUDES *****************************************************************/
@@ -37,8 +37,6 @@ ExportBinaryHive(
 {
     FILE *File;
     BOOL ret;
-
-    printf("  Creating binary hive: %s\n", FileName);
 
     /* Create new hive file */
     File = fopen(FileName, "wb");

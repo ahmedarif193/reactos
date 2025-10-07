@@ -45,8 +45,12 @@ unpack_iso(char *dir, char *iso)
     else
         fclose(fiso);
 
-    sprintf(Line, UNZIP_FMT, opt_7z, iso_tmp, dir);
-    if (system(Line) < 0)
+    if (snprintf(Line, LINESIZE, UNZIP_FMT, opt_7z, iso_tmp, dir) >= LINESIZE)
+    {
+        l2l_dbg(0, "\nCommand line too long for unpacking %s\n", iso_tmp);
+        res = 1;
+    }
+    else if (system(Line) < 0)
     {
         l2l_dbg(0, "\nCannot unpack %s (check 7z path!)\n", iso_tmp);
         l2l_dbg(1, "Failed to execute: '%s'\n", Line);
@@ -55,8 +59,12 @@ unpack_iso(char *dir, char *iso)
     else
     {
         l2l_dbg(2, "\nUnpacking reactos.cab in %s\n", dir);
-        sprintf(Line, UNZIP_FMT_CAB, opt_7z, dir, dir);
-        if (system(Line) < 0)
+        if (snprintf(Line, LINESIZE, UNZIP_FMT_CAB, opt_7z, dir, dir) >= LINESIZE)
+        {
+            l2l_dbg(0, "\nCommand line too long for unpacking reactos.cab in %s\n", dir);
+            res = 2;
+        }
+        else if (system(Line) < 0)
         {
             l2l_dbg(0, "\nCannot unpack reactos.cab in %s\n", dir);
             l2l_dbg(1, "Failed to execute: '%s'\n", Line);
@@ -99,7 +107,11 @@ check_directory(int force)
         else
             strcpy(compressed_7z_path, "."); // default to current dir
 
-        sprintf(Line, UNZIP_FMT_7Z, opt_7z, opt_dir, compressed_7z_path);
+        if (snprintf(Line, LINESIZE, UNZIP_FMT_7Z, opt_7z, opt_dir, compressed_7z_path) >= LINESIZE)
+        {
+            l2l_dbg(0, "\nCommand line too long for decompressing %s\n", opt_dir);
+            return 2;
+        }
 
         /* This of course only works if the .7z and .iso basenames are identical
          * which is normally true for ReactOS trunk builds:
@@ -127,7 +139,7 @@ check_directory(int force)
             l2l_dbg(2, "ISO image exists: %s\n", opt_dir);
             strcpy(iso_path, opt_dir);
             *check_iso = '\0';
-            sprintf(freeldr_path, "%s" PATH_STR "freeldr.ini", opt_dir);
+            snprintf(freeldr_path, PATH_MAX, "%s" PATH_STR "freeldr.ini", opt_dir);
             if (!file_exists(freeldr_path) || force)
             {
                 l2l_dbg(0, "Unpacking %s to: %s ...", iso_path, opt_dir);

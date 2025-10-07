@@ -2118,7 +2118,7 @@ EHCI_BulkTransfer(IN PEHCI_EXTENSION EhciExtension,
                   IN PUSBPORT_SCATTER_GATHER_LIST SgList)
 {
     PEHCI_HCD_TD PrevTD;
-    PEHCI_HCD_TD FirstTD;
+    PEHCI_HCD_TD FirstTD = NULL;
     PEHCI_HCD_TD TD;
     ULONG TransferedLen;
 
@@ -2277,7 +2277,7 @@ EHCI_InterruptTransfer(IN PEHCI_EXTENSION EhciExtension,
                        IN PUSBPORT_SCATTER_GATHER_LIST SgList)
 {
     PEHCI_HCD_TD TD;
-    PEHCI_HCD_TD FirstTD;
+    PEHCI_HCD_TD FirstTD = NULL;
     PEHCI_HCD_TD PrevTD = NULL;
     ULONG TransferedLen = 0;
 
@@ -2472,7 +2472,7 @@ EHCI_AbortAsyncTransfer(IN PEHCI_EXTENSION EhciExtension,
     PEHCI_TRANSFER CurrentTransfer;
     ULONG FirstTdPA;
     PEHCI_HCD_TD LastTD;
-    PEHCI_HCD_TD PrevTD;
+    PEHCI_HCD_TD PrevTD = NULL;
     ULONG NextTD;
 
     DPRINT("EHCI_AbortAsyncTransfer: EhciEndpoint - %p, EhciTransfer - %p\n",

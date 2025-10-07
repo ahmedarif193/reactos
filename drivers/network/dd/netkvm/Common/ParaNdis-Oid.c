@@ -117,13 +117,13 @@ Common handler of setting packet filter
 ***********************************************************/
 NDIS_STATUS ParaNdis_OnSetPacketFilter(PARANDIS_ADAPTER *pContext, tOidDesc *pOid)
 {
-    ULONG newValue;
+    ULONG newValue = 0;
     NDIS_STATUS status = ParaNdis_OidSetCopy(
         pOid,
         &newValue,
         sizeof(newValue));
 
-    if (newValue & ~PARANDIS_PACKET_FILTERS)
+    if (status == NDIS_STATUS_SUCCESS && (newValue & ~PARANDIS_PACKET_FILTERS))
         status = NDIS_STATUS_INVALID_DATA;
 
     if (status == NDIS_STATUS_SUCCESS)

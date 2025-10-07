@@ -37,11 +37,12 @@ UDFEjectReqWaiter(
     OSSTATUS WRC;
     LARGE_INTEGER delay;
     LARGE_INTEGER time;
+    time.QuadPart = 0;
     BOOLEAN UseEvent = TRUE;
     uint32 d;
     BOOLEAN FlushWCache = FALSE;
     IO_STATUS_BLOCK IoStatus;
-    BOOLEAN VcbAcquired;
+    BOOLEAN VcbAcquired = FALSE;
     BOOLEAN AllFlushed;
     PDEVICE_OBJECT TargetDevObj;
     uint32 BM_FlushPriod;

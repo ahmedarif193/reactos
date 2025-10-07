@@ -13,6 +13,96 @@
 #define NDEBUG
 #include <debug.h>
 
+static BOOLEAN
+SpiFirmwareSupportsPnP(VOID)
+{
+    HAL_ACPI_ROOT_POINTER_INFORMATION AcpiInfo;
+    ULONG ReturnedLength = 0;
+    NTSTATUS Status;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING KeyName;
+    HANDLE KeyHandle;
+    RtlZeroMemory(&AcpiInfo, sizeof(AcpiInfo));
+
+    Status = HalQuerySystemInformation(HalAcpiAuditInformation,
+                                       sizeof(AcpiInfo),
+                                       &AcpiInfo,
+                                       &ReturnedLength);
+    if (NT_SUCCESS(Status) &&
+        AcpiInfo.RsdpPhysicalAddress.QuadPart != 0)
+    {
+        DPRINT1("[scsiport] Firmware ACPI root pointer located @ %I64x\n",
+                AcpiInfo.RsdpPhysicalAddress.QuadPart);
+        return TRUE;
+    }
+
+    RtlInitUnicodeString(&KeyName, L"\\Registry\\Machine\\Hardware\\ACPI");
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &KeyName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+
+    Status = ZwOpenKey(&KeyHandle, KEY_READ, &ObjectAttributes);
+    if (NT_SUCCESS(Status))
+    {
+        ZwClose(KeyHandle);
+        DPRINT1("[scsiport] Firmware ACPI detected via Hardware\\ACPI key\n");
+        return TRUE;
+    }
+
+    RtlInitUnicodeString(&KeyName,
+                         L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\ACPI");
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &KeyName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+
+    Status = ZwOpenKey(&KeyHandle, KEY_READ, &ObjectAttributes);
+    if (NT_SUCCESS(Status))
+    {
+        UCHAR valueBuffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
+        PKEY_VALUE_PARTIAL_INFORMATION ValueInfo;
+        UNICODE_STRING ValueName;
+        ULONG ResultLength;
+
+        ValueInfo = (PKEY_VALUE_PARTIAL_INFORMATION)valueBuffer;
+        RtlInitUnicodeString(&ValueName, L"Start");
+
+        Status = ZwQueryValueKey(KeyHandle,
+                                 &ValueName,
+                                 KeyValuePartialInformation,
+                                 ValueInfo,
+                                 sizeof(valueBuffer),
+                                 &ResultLength);
+
+        ZwClose(KeyHandle);
+
+        if (NT_SUCCESS(Status) &&
+            ValueInfo->Type == REG_DWORD &&
+            ValueInfo->DataLength >= sizeof(ULONG))
+        {
+            ULONG StartType = *(PULONG)(ValueInfo->Data);
+
+            if (StartType <= SERVICE_SYSTEM_START)
+            {
+                DPRINT1("[scsiport] Firmware ACPI detected via Services\\ACPI (Start=%lu)\n",
+                        StartType);
+                return TRUE;
+            }
+        }
+        else if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
+        {
+            /* Service present without an explicit start value: assume ACPI */
+            DPRINT1("[scsiport] Firmware ACPI inferred from Services\\ACPI presence\n");
+            return TRUE;
+        }
+    }
+
+    DPRINT1("[scsiport] Firmware ACPI detection failed; assuming legacy enumeration\n");
+    return FALSE;
+}
 
 VOID
 SpiInitOpenKeys(
@@ -22,9 +112,11 @@ SpiInitOpenKeys(
     OBJECT_ATTRIBUTES ObjectAttributes;
     UNICODE_STRING KeyName;
     NTSTATUS Status;
-    HANDLE parametersKey;
+    HANDLE parametersKey = NULL;
+    BOOLEAN overrideLegacy = FALSE;
 
-    DriverExtension->IsLegacyDriver = TRUE;
+    DriverExtension->IsLegacyDriver = (SCSIPORT_LEGACY_DETECTION != 0);
+    DriverExtension->LegacyOverrideActive = FALSE;
 
     /* Open the service key */
     InitializeObjectAttributes(&ObjectAttributes,
@@ -45,6 +137,32 @@ SpiInitOpenKeys(
     /* If we could open driver's service key, then proceed to the Parameters key */
     if (ConfigInfo->ServiceKey != NULL)
     {
+        UCHAR valueBuffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
+        PKEY_VALUE_PARTIAL_INFORMATION valueInfo;
+        UNICODE_STRING ValueName;
+        ULONG ResultLength;
+
+        valueInfo = (PKEY_VALUE_PARTIAL_INFORMATION)valueBuffer;
+        RtlInitUnicodeString(&ValueName, L"Start");
+        Status = ZwQueryValueKey(ConfigInfo->ServiceKey,
+                                 &ValueName,
+                                 KeyValuePartialInformation,
+                                 valueInfo,
+                                 sizeof(valueBuffer),
+                                 &ResultLength);
+        if (NT_SUCCESS(Status) &&
+            valueInfo->Type == REG_DWORD &&
+            valueInfo->DataLength >= sizeof(ULONG))
+        {
+            ULONG startValue = *(PULONG)(valueInfo->Data);
+
+            if (startValue <= SERVICE_BOOT_START)
+            {
+                DPRINT1("[scsiport] Boot-start service detected (Start=%lu); presuming PnP unless firmware demands legacy\n",
+                        startValue);
+            }
+        }
+
         RtlInitUnicodeString(&KeyName, L"Parameters");
         InitializeObjectAttributes(&ObjectAttributes,
                                    &KeyName,
@@ -52,17 +170,48 @@ SpiInitOpenKeys(
                                    ConfigInfo->ServiceKey,
                                    NULL);
 
-        /* Try to open it */
-        Status = ZwOpenKey(&ConfigInfo->DeviceKey, KEY_READ, &ObjectAttributes);
+        Status = ZwOpenKey(&parametersKey, KEY_READ, &ObjectAttributes);
 
         if (NT_SUCCESS(Status))
         {
-            /* Yes, Parameters key exist, and it must be used instead of
-               the Service key */
-            ZwClose(ConfigInfo->ServiceKey);
-            ConfigInfo->ServiceKey = ConfigInfo->DeviceKey;
+            UCHAR valueBuffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
+            PKEY_VALUE_PARTIAL_INFORMATION ValueInfo;
+            ULONG ResultLength;
+            UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"LegacyDetection");
+
+            ValueInfo = (PKEY_VALUE_PARTIAL_INFORMATION)valueBuffer;
+
+            Status = ZwQueryValueKey(parametersKey,
+                                     &ValueName,
+                                     KeyValuePartialInformation,
+                                     ValueInfo,
+                                     sizeof(valueBuffer),
+                                     &ResultLength);
+            if (NT_SUCCESS(Status) &&
+                ValueInfo->Type == REG_DWORD &&
+                ValueInfo->DataLength >= sizeof(ULONG))
+            {
+                ULONG LegacyRequested = *(PULONG)(ValueInfo->Data);
+
+                DriverExtension->IsLegacyDriver = (LegacyRequested != 0);
+                overrideLegacy = TRUE;
+            }
+
+            if (ConfigInfo->ServiceKey != NULL)
+            {
+                ZwClose(ConfigInfo->ServiceKey);
+            }
+
+            ConfigInfo->ServiceKey = parametersKey;
             ConfigInfo->DeviceKey = NULL;
+            parametersKey = NULL;
         }
+    }
+
+    if (parametersKey != NULL)
+    {
+        ZwClose(parametersKey);
+        parametersKey = NULL;
     }
 
     if (ConfigInfo->ServiceKey != NULL)
@@ -92,10 +241,44 @@ SpiInitOpenKeys(
 
         if (NT_SUCCESS(Status))
         {
-            // if the key exists, it's enough for us for now
-            // (the proper check should iterate over INTERFACE_TYPE values)
-            DriverExtension->IsLegacyDriver = FALSE;
+            if (!overrideLegacy)
+            {
+                DriverExtension->IsLegacyDriver = FALSE;
+            }
             ZwClose(parametersKey);
+        }
+    }
+
+    DriverExtension->FirmwareSupportsPnp = SpiFirmwareSupportsPnP();
+
+    if (overrideLegacy)
+    {
+        DriverExtension->LegacyOverrideActive = TRUE;
+
+        if (!DriverExtension->FirmwareSupportsPnp && !DriverExtension->IsLegacyDriver)
+        {
+            DPRINT1("[scsiport] Firmware lacks ACPI support; overriding requested PnP path with legacy enumeration\n");
+            DriverExtension->IsLegacyDriver = TRUE;
+        }
+        else
+        {
+            DPRINT1("[scsiport] Legacy detection override active: using %s enumeration path\n",
+                    DriverExtension->IsLegacyDriver ? "legacy" : "PnP");
+        }
+    }
+    else
+    {
+        DriverExtension->LegacyOverrideActive = FALSE;
+
+        if (DriverExtension->FirmwareSupportsPnp && DriverExtension->IsLegacyDriver)
+        {
+            DriverExtension->IsLegacyDriver = FALSE;
+            DPRINT1("[scsiport] ACPI firmware detected; enabling PnP enumeration path\n");
+        }
+        else if (!DriverExtension->FirmwareSupportsPnp && !DriverExtension->IsLegacyDriver)
+        {
+            DriverExtension->IsLegacyDriver = TRUE;
+            DPRINT1("[scsiport] Firmware lacks ACPI root pointer; falling back to legacy enumeration\n");
         }
     }
 }

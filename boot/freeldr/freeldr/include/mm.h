@@ -22,7 +22,7 @@
 extern char __ImageBase;
 #ifdef __GNUC__
   #ifdef _M_AMD64
-    /* .text, .edata and .bss */
+    /* .text/.data/.rdata, .edata and .bss */
     #define FREELDR_SECTION_COUNT 3
   #else
     /* .text/.data/.rdata, .edata and .bss */
@@ -102,9 +102,7 @@ extern PFN_NUMBER TotalPagesInLookupTable;
 extern PFN_NUMBER FreePagesInLookupTable;
 extern PFN_NUMBER LastFreePageHint;
 
-#if DBG
 PCSTR MmGetSystemMemoryMapTypeString(TYPE_OF_MEMORY Type);
-#endif
 
 PFN_NUMBER MmGetPageNumberFromAddress(PVOID Address);    // Returns the page number that contains a linear address
 PFN_NUMBER MmGetAddressablePageCountIncludingHoles(VOID);    // Returns the count of addressable pages from address zero including any memory holes and reserved memory regions

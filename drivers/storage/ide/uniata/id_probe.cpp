@@ -31,7 +31,7 @@ Notes:
 Revision History:
 
     Some parts of hardware-specific code were taken from FreeBSD 4.3-6.1 ATA driver by
-         Søren Schmidt, Copyright (c) 1998-2007
+         S�ren Schmidt, Copyright (c) 1998-2007
 
     Some parts of device detection code were taken from from standard ATAPI.SYS from NT4 DDK by
          Mike Glass (MGlass)
@@ -1198,6 +1198,10 @@ UniataFindBusMasterController(
     }
 
     status = UniataChipDetect(HwDeviceExtension, &pciData, i, ConfigInfo, &simplexOnly);
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID,
+               DPFLTR_ERROR_LEVEL,
+               PRINT_PREFIX "UniataChipDetect returned %#x\n",
+               status);
     switch(status) {
     case STATUS_SUCCESS:
         found = TRUE;
@@ -1920,10 +1924,16 @@ exit_findbm:
     return SP_RETURN_FOUND;
 
 exit_error:
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID,
+               DPFLTR_ERROR_LEVEL,
+               PRINT_PREFIX "UniataFindBusMasterController: returning SP_RETURN_ERROR\n");
     UniataFreeLunExt(deviceExtension);
     return SP_RETURN_ERROR;
 
 exit_notfound:
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID,
+               DPFLTR_ERROR_LEVEL,
+               PRINT_PREFIX "UniataFindBusMasterController: returning SP_RETURN_NOT_FOUND\n");
     UniataFreeLunExt(deviceExtension);
     return SP_RETURN_NOT_FOUND;
 
@@ -2261,7 +2271,7 @@ AtapiFindIsaController(
     UCHAR                statusByte, statusByte2;
     BOOLEAN              preConfig = FALSE;
     //
-    PIDE_REGISTERS_1 BaseIoAddress1;
+    PIDE_REGISTERS_1 BaseIoAddress1 = NULL;
     PIDE_REGISTERS_2 BaseIoAddress2 = NULL;
 
     // The following table specifies the ports to be checked when searching for

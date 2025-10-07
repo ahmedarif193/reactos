@@ -173,22 +173,22 @@ KbdHid_ReadCompletion(
                   sizeof(USAGE_AND_PAGE) * DeviceExtension->UsageListLength);
 
     /* translate break usage list */
-    HidP_TranslateUsageAndPagesToI8042ScanCodes(DeviceExtension->BreakUsageList,
+    Status = HidP_TranslateUsageAndPagesToI8042ScanCodes(DeviceExtension->BreakUsageList,
                                                 DeviceExtension->UsageListLength,
                                                 HidP_Keyboard_Break,
                                                 &DeviceExtension->ModifierState,
                                                 KbdHid_InsertScanCodes,
                                                 DeviceExtension);
-    ASSERT(Status == HIDP_STATUS_SUCCESS);
+    UNREFERENCED_PARAMETER(Status);
 
     /* translate new usage list */
-    HidP_TranslateUsageAndPagesToI8042ScanCodes(DeviceExtension->MakeUsageList,
+    Status = HidP_TranslateUsageAndPagesToI8042ScanCodes(DeviceExtension->MakeUsageList,
                                                 DeviceExtension->UsageListLength,
                                                 HidP_Keyboard_Make,
                                                 &DeviceExtension->ModifierState,
                                                 KbdHid_InsertScanCodes,
                                                 DeviceExtension);
-    ASSERT(Status == HIDP_STATUS_SUCCESS);
+    UNREFERENCED_PARAMETER(Status);
 
     /* re-init read */
     KbdHid_InitiateRead(DeviceExtension);

@@ -38,6 +38,7 @@ Revision History:
 #include "ioctl.h"
 #include "mmc.h"
 #include "scratch.h"
+#include <debug.h>
 
 
 #ifdef DEBUG_USE_WPP
@@ -103,6 +104,10 @@ Return Value:
     WDFDRIVER               driverObject = NULL;
 
     PAGED_CODE();
+
+    DPRINT1("CDROM DriverEntry: DriverObject=%p RegistryPath=%wZ\n",
+            DriverObject,
+            RegistryPath);
 
     // Initialize WPP Tracing
     WPP_INIT_TRACING(DriverObject, RegistryPath);
@@ -4239,4 +4244,3 @@ Return Value:
         NT_ASSERT(KeReadStateEvent(requestContext->SyncEvent) != 0);
     }
 }
-

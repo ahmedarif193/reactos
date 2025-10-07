@@ -1,4 +1,7 @@
 
+get_filename_component(HAL_ARM_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
+set(HAL_ARM_ARCH_DIR "${HAL_ARM_SOURCE_DIR}/../arch/arm")
+
 spec2def(hal.dll ../hal.spec ADD_IMPORTLIB)
 
 add_definitions(
@@ -6,12 +9,12 @@ add_definitions(
     -D_NTHAL_)
 
 include_directories(
-    include
+    ${HAL_ARM_ARCH_DIR}/include
     ${REACTOS_SOURCE_DIR}/ntoskrnl/include)
 
 list(APPEND SOURCES
-    omap3/halinit_up.c
-    omap3/halup.rc)
+    ${HAL_ARM_ARCH_DIR}/omap3/halinit_up.c
+    ${HAL_ARM_ARCH_DIR}/omap3/halup.rc)
 
 add_library(hal MODULE
     ${SOURCES})

@@ -2589,7 +2589,7 @@ UDFCreateFile__(
 {
     uint32 l, d;
     uint_di i, j;
-    OSSTATUS status;
+    OSSTATUS status = STATUS_SUCCESS;
     LONG_AD FEicb;
     UDF_DIR_SCAN_CONTEXT ScanContext;
     PDIR_INDEX_HDR hDirNdx = DirInfo->Dloc->DirIndex;
@@ -3868,7 +3868,7 @@ UDFFlushFE(
     )
 {
     int8* NewAllocDescs;
-    OSSTATUS status;
+    OSSTATUS status = STATUS_SUCCESS;
     SIZE_T WrittenBytes;
     uint16 AllocMode;
     uint32 lba;

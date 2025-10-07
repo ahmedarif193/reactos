@@ -31,6 +31,32 @@ ULONG        DriveMapHandlerSegOff = 0;    // Segment:offset style address of ou
 
 #endif // _M_IX86
 
+#ifdef _M_IX86
+static __inline ULONG ReadPhysU32(uintptr_t addr)
+{
+    ULONG value;
+    __asm__ __volatile__("movl (%1), %0" : "=r"(value) : "r"(addr));
+    return value;
+}
+
+static __inline void WritePhysU32(uintptr_t addr, ULONG value)
+{
+    __asm__ __volatile__("movl %1, (%0)" : : "r"(addr), "r"(value) : "memory");
+}
+
+static __inline USHORT ReadPhysU16(uintptr_t addr)
+{
+    USHORT value;
+    __asm__ __volatile__("movw (%1), %0" : "=r"(value) : "r"(addr));
+    return value;
+}
+
+static __inline void WritePhysU16(uintptr_t addr, USHORT value)
+{
+    __asm__ __volatile__("movw %1, (%0)" : : "r"(addr), "r"(value) : "memory");
+}
+#endif
+
 BOOLEAN DriveMapIsValidDriveString(PCSTR DriveString)
 {
     ULONG Index;
@@ -177,9 +203,6 @@ DriveMapMapDrivesInSection(
 
 VOID DriveMapInstallInt13Handler(PDRIVE_MAP_LIST DriveMap)
 {
-    ULONG*  RealModeIVT = (ULONG*)UlongToPtr(0x00000000);
-    USHORT* BiosLowMemorySize = (USHORT*)ULongToPtr(0x00000413);
-
 #if defined(SARCH_PC98)
     /* FIXME */
     return;
@@ -187,14 +210,20 @@ VOID DriveMapInstallInt13Handler(PDRIVE_MAP_LIST DriveMap)
 
     if (!DriveMapInstalled)
     {
+        USHORT BiosMemSize;
+
         // Get the old INT 13h handler address from the vector table
-        OldInt13HandlerAddress = RealModeIVT[0x13];
+        OldInt13HandlerAddress = ReadPhysU32((uintptr_t)(0x13 * sizeof(ULONG)));
+
+        // Read the BIOS low memory size
+        BiosMemSize = ReadPhysU16((uintptr_t)0x00000413);
 
         // Decrease the size of low memory
-        (*BiosLowMemorySize)--;
+        BiosMemSize--;
+        WritePhysU16((uintptr_t)0x00000413, BiosMemSize);
 
         // Get linear address for drive map handler
-        DriveMapHandlerAddress = (ULONG)(*BiosLowMemorySize) << 10;
+        DriveMapHandlerAddress = (ULONG)BiosMemSize << 10;
 
         // Convert to segment:offset style address
         DriveMapHandlerSegOff = (DriveMapHandlerAddress << 12) & 0xffff0000;
@@ -212,7 +241,7 @@ VOID DriveMapInstallInt13Handler(PDRIVE_MAP_LIST DriveMap)
                   ((PUCHAR)&DriveMapInt13HandlerEnd - (PUCHAR)&DriveMapInt13HandlerStart));
 
     // Update the IVT
-    RealModeIVT[0x13] = DriveMapHandlerSegOff;
+    WritePhysU32((uintptr_t)(0x13 * sizeof(ULONG)), DriveMapHandlerSegOff);
 
     CacheInvalidateCacheData();
     DriveMapInstalled = TRUE;
@@ -220,9 +249,6 @@ VOID DriveMapInstallInt13Handler(PDRIVE_MAP_LIST DriveMap)
 
 VOID DriveMapRemoveInt13Handler(VOID)
 {
-    ULONG*  RealModeIVT = (ULONG*)0x00000000;
-    USHORT* BiosLowMemorySize = (USHORT*)0x00000413;
-
 #if defined(SARCH_PC98)
     /* FIXME */
     return;
@@ -230,11 +256,17 @@ VOID DriveMapRemoveInt13Handler(VOID)
 
     if (DriveMapInstalled)
     {
-        // Get the old INT 13h handler address from the vector table
-        RealModeIVT[0x13] = OldInt13HandlerAddress;
+        USHORT BiosMemSize;
+
+        // Restore the old INT 13h handler address in the vector table
+        WritePhysU32((uintptr_t)(0x13 * sizeof(ULONG)), OldInt13HandlerAddress);
+
+        // Read the BIOS low memory size
+        BiosMemSize = ReadPhysU16((uintptr_t)0x00000413);
 
         // Increase the size of low memory
-        (*BiosLowMemorySize)++;
+        BiosMemSize++;
+        WritePhysU16((uintptr_t)0x00000413, BiosMemSize);
 
         CacheInvalidateCacheData();
         DriveMapInstalled = FALSE;

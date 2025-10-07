@@ -33,7 +33,9 @@ BatteryClassUnload(PVOID ClassData)
     BattClass = ClassData;
     if (BattClass->InterfaceName.Length != 0)
     {
-        IoSetDeviceInterfaceState(&BattClass->InterfaceName, FALSE);
+        NTSTATUS Status;
+        Status = IoSetDeviceInterfaceState(&BattClass->InterfaceName, FALSE);
+        UNREFERENCED_PARAMETER(Status);
         RtlFreeUnicodeString(&BattClass->InterfaceName);
     }
 
@@ -292,13 +294,8 @@ BatteryClassIoctl(PVOID ClassData,
                                                                  &BattNotify);
                 if (!NT_SUCCESS(Status))
                 {
-                    DPRINT("SetStatusNotify failed (0x%x)\n", Status);
-                    // HACK: Continue anyway; the non-zero timeout will limit polling rate.
-                    // FIXME: Hardcoded (wait for 5 seconds) because ACPI notifications don't work...
-                    BattWait.Timeout = 5000;
-                    // FIXME 2: All these IOCTLs handled in BatteryClassIoctl() should actually
-                    // be queued and be serviced by a worker thread that also handles the slow
-                    // battery polling, in case the battery doesn't support status notifications.
+                    DPRINT1("SetStatusNotify failed (0x%x)\n", Status);
+                    break;
                 }
 
                 ExAcquireFastMutex(&BattClass->Mutex);
@@ -320,7 +317,8 @@ BatteryClassIoctl(PVOID ClassData,
                 BattClass->Waiting = FALSE;
                 ExReleaseFastMutex(&BattClass->Mutex);
 
-                BattClass->MiniportInfo.DisableStatusNotify(BattClass->MiniportInfo.Context);
+                Status = BattClass->MiniportInfo.DisableStatusNotify(BattClass->MiniportInfo.Context);
+                UNREFERENCED_PARAMETER(Status);
             }
 
             /* Zero the output buffer to prevent leakage of kernel data */

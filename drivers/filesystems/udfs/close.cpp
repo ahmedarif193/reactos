@@ -139,7 +139,7 @@ UDFCommonClose(
     PIRP             Irp
     )
 {
-    NTSTATUS                RC = STATUS_UNSUCCESSFUL;
+    NTSTATUS                RC = STATUS_SUCCESS;
     PIO_STACK_LOCATION      IrpSp = NULL;
     PFILE_OBJECT            FileObject = NULL;
     PtrUDFFCB               Fcb = NULL;
@@ -409,7 +409,7 @@ UDFCleanUpFcbChain(
     PUDF_FILE_INFO ParentFI;
     UDFNTRequiredFCB* NtReqFcb;
     ULONG CleanCode;
-    LONG RefCount, ComRefCount;
+    LONG RefCount = 0, ComRefCount = 0;
     BOOLEAN Delete = FALSE;
     ULONG          ret_val = 0;
 
@@ -476,6 +476,10 @@ UDFCleanUpFcbChain(
                 ASSERT(NtReqFcb->CommonRefCount);
                 RefCount = UDFInterlockedDecrement((PLONG)&(Fcb->ReferenceCount));
                 ComRefCount = UDFInterlockedDecrement((PLONG)&(NtReqFcb->CommonRefCount));
+            } else {
+                // When TreeLength is 0, use current reference counts without decrementing
+                RefCount = Fcb->ReferenceCount;
+                ComRefCount = NtReqFcb->CommonRefCount;
             }
         } else {
             BrutePoint();
@@ -488,6 +492,10 @@ UDFCleanUpFcbChain(
             RefCount = UDFInterlockedDecrement((PLONG)&(Fcb->ReferenceCount));
             ComRefCount = UDFInterlockedDecrement((PLONG)&(NtReqFcb->CommonRefCount));
             TreeLength--;
+        } else {
+            // When TreeLength is 0, use current reference counts without decrementing
+            RefCount = Fcb->ReferenceCount;
+            ComRefCount = NtReqFcb->CommonRefCount;
         }
 #endif
 
@@ -925,7 +933,7 @@ UDFCloseAllXXXDelayedInDir(
     ULONG                   PassedListSize = 0;
     PUDF_FILE_INFO*         FoundList = NULL;
     ULONG                   FoundListSize = 0;
-    NTSTATUS                RC = STATUS_UNSUCCESSFUL;
+    NTSTATUS                RC;
     ULONG                   i;
     _SEH2_VOLATILE BOOLEAN  ResAcq = FALSE;
     _SEH2_VOLATILE BOOLEAN  AcquiredVcb = FALSE;
@@ -1111,7 +1119,7 @@ UDFQueueDelayedClose(
     PtrUDFIrpContextLite    IrpContextLite;
     BOOLEAN                 StartWorker = FALSE;
     _SEH2_VOLATILE BOOLEAN  AcquiredVcb = FALSE;
-    NTSTATUS                RC = STATUS_UNSUCCESSFUL;
+    NTSTATUS                RC = STATUS_SUCCESS;
 
     AdPrint(("  UDFQueueDelayedClose\n"));
 
@@ -1192,3 +1200,4 @@ try_exit:    NOTHING;
     } _SEH2_END;
     return RC;
 } // end UDFQueueDelayedClose()
+

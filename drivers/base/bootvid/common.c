@@ -64,7 +64,7 @@ BitBlt(
     _In_ ULONG Delta)
 {
     ULONG X, Y, Pixel;
-    UCHAR Colors;
+    UCHAR Colors = 0;
     PUCHAR InputBuffer;
     const ULONG Bottom = Top + Height;
     const ULONG Right = Left + Width;

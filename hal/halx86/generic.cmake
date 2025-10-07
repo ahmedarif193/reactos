@@ -1,28 +1,29 @@
 
 list(APPEND HAL_GENERIC_SOURCE
-    generic/beep.c
-    generic/cmos.c
-    generic/display.c
-    generic/dma.c
-    generic/drive.c
-    generic/halinit.c
-    generic/kdpci.c
-    generic/memory.c
-    generic/misc.c
-    generic/nmi.c
-    generic/pic.c
-    generic/reboot.c
-    generic/sysinfo.c
-    generic/usage.c
-    generic/x86bios.c)
+    ${HAL_I386_DIR}/generic/beep.c
+    ${HAL_I386_DIR}/generic/cmos.c
+    ${HAL_I386_DIR}/generic/display.c
+    ${HAL_I386_DIR}/generic/dma.c
+    ${HAL_I386_DIR}/generic/drive.c
+    ${HAL_I386_DIR}/generic/halinit.c
+    ${HAL_I386_DIR}/generic/kdpci.c
+    ${HAL_I386_DIR}/generic/memory.c
+    ${HAL_I386_DIR}/generic/misc.c
+    ${HAL_I386_DIR}/generic/nmi.c
+    ${HAL_I386_DIR}/generic/pic.c
+    ${HAL_I386_DIR}/generic/reboot.c
+    ${HAL_I386_DIR}/generic/sysinfo.c
+    ${HAL_I386_DIR}/generic/usage.c
+    ${HAL_I386_DIR}/generic/x86bios.c)
 
-if(ARCH STREQUAL "i386")
+if(HAL_ARCH STREQUAL "i386")
     list(APPEND HAL_GENERIC_SOURCE
-        generic/bios.c
-        generic/portio.c)
+        ${HAL_I386_DIR}/generic/bios.c
+        ${HAL_I386_DIR}/generic/setjmp_shim.c
+        ${HAL_I386_DIR}/generic/portio.c)
 
     list(APPEND HAL_GENERIC_ASM_SOURCE
-        generic/v86.S)
+        ${HAL_I386_DIR}/generic/v86.S)
 endif()
 
 add_asm_files(lib_hal_generic_asm ${HAL_GENERIC_ASM_SOURCE})

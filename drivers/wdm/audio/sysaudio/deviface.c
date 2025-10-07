@@ -220,7 +220,7 @@ SysAudioRegisterDeviceInterfaces(
     Status = IoRegisterDeviceInterface(DeviceObject, &KSCATEGORY_PREFERRED_MIDIOUT_DEVICE, NULL, &SymbolicLink);
     if (NT_SUCCESS(Status))
     {
-        IoSetDeviceInterfaceState(&SymbolicLink, TRUE);
+        {NTSTATUS status = IoSetDeviceInterfaceState(&SymbolicLink, TRUE); UNREFERENCED_PARAMETER(status);}
         RtlFreeUnicodeString(&SymbolicLink);
     }
     else
@@ -232,7 +232,7 @@ SysAudioRegisterDeviceInterfaces(
     Status = IoRegisterDeviceInterface(DeviceObject, &KSCATEGORY_PREFERRED_WAVEIN_DEVICE, NULL, &SymbolicLink);
     if (NT_SUCCESS(Status))
     {
-        IoSetDeviceInterfaceState(&SymbolicLink, TRUE);
+        {NTSTATUS status = IoSetDeviceInterfaceState(&SymbolicLink, TRUE); UNREFERENCED_PARAMETER(status);}
         RtlFreeUnicodeString(&SymbolicLink);
     }
     else
@@ -244,7 +244,7 @@ SysAudioRegisterDeviceInterfaces(
     Status = IoRegisterDeviceInterface(DeviceObject, &KSCATEGORY_PREFERRED_WAVEOUT_DEVICE, NULL, &SymbolicLink);
     if (NT_SUCCESS(Status))
     {
-        IoSetDeviceInterfaceState(&SymbolicLink, TRUE);
+        {NTSTATUS status = IoSetDeviceInterfaceState(&SymbolicLink, TRUE); UNREFERENCED_PARAMETER(status);}
         RtlFreeUnicodeString(&SymbolicLink);
     }
     else
@@ -255,7 +255,7 @@ SysAudioRegisterDeviceInterfaces(
     Status = IoRegisterDeviceInterface(DeviceObject, &KSCATEGORY_SYSAUDIO, NULL, &SymbolicLink);
     if (NT_SUCCESS(Status))
     {
-        IoSetDeviceInterfaceState(&SymbolicLink, TRUE);
+        {NTSTATUS status = IoSetDeviceInterfaceState(&SymbolicLink, TRUE); UNREFERENCED_PARAMETER(status);}
         RtlFreeUnicodeString(&SymbolicLink);
     }
     else

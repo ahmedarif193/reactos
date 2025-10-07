@@ -215,7 +215,12 @@ PcMemCheckUsableMemorySize(VOID)
     /* Make sure the usable memory is large enough. To do this we check the 16
        bit value at address 0x413 inside the BDA, which gives us the usable size
        in KB */
-    Size = (*(PUSHORT)(ULONG_PTR)0x413) * 1024;
+    union {
+        ULONG_PTR Address;
+        volatile PUSHORT Ptr;
+    } BiosMemSize;
+    BiosMemSize.Address = 0x413;
+    Size = (*BiosMemSize.Ptr) * 1024;
     RequiredSize = FREELDR_BASE + FrLdrImageSize + PAGE_SIZE;
     if (Size < RequiredSize)
     {
@@ -548,6 +553,7 @@ PcMemFinalizeMemoryMap(
     PFREELDR_MEMORY_DESCRIPTOR MemoryMap)
 {
     ULONG i;
+    const SIZE_T PreferredBufferSize = FrLdrGetRecommendedDiskBufferSize(MAX_DISKREADBUFFER_SIZE);
 
     /* Reserve some static ranges for freeldr */
     ReserveMemory(MemoryMap, 0x1000, STACKLOW - 0x1000, LoaderFirmwareTemporary, "BIOS area");
@@ -556,7 +562,7 @@ PcMemFinalizeMemoryMap(
 
     /* Default to 1 page above freeldr for the disk read buffer */
     DiskReadBuffer = (PUCHAR)ALIGN_UP_BY(FREELDR_BASE + FrLdrImageSize, PAGE_SIZE);
-    DiskReadBufferSize = PAGE_SIZE;
+    DiskReadBufferSize = (PreferredBufferSize < PAGE_SIZE) ? PreferredBufferSize : PAGE_SIZE;
 
     /* Scan for free range above freeldr image */
     for (i = 0; i < PcMapCount; i++)
@@ -566,8 +572,10 @@ PcMemFinalizeMemoryMap(
         {
             /* Use this range for the disk read buffer */
             DiskReadBuffer = (PVOID)(MemoryMap[i].BasePage * PAGE_SIZE);
-            DiskReadBufferSize = min(MemoryMap[i].PageCount * PAGE_SIZE,
-                                     MAX_DISKREADBUFFER_SIZE);
+            {
+                SIZE_T AvailableBytes = MemoryMap[i].PageCount * PAGE_SIZE;
+                DiskReadBufferSize = (AvailableBytes < PreferredBufferSize) ? AvailableBytes : PreferredBufferSize;
+            }
             break;
         }
     }

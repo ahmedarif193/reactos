@@ -29,7 +29,10 @@ PartitionCreateDevice(
 
     volumeNum = HarddiskVolumeNextId++;
     swprintf(nameBuf, L"\\Device\\HarddiskVolume%lu", volumeNum);
-    RtlCreateUnicodeString(&deviceName, nameBuf);
+    if (!RtlCreateUnicodeString(&deviceName, nameBuf))
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     /*
      * Create the partition/volume device object.
