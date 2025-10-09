@@ -29,6 +29,7 @@ PFN_NUMBER FreePagesInLookupTable = 0;
 PFN_NUMBER LastFreePageHint = 0;
 PFN_NUMBER MmLowestPhysicalPage = 0xFFFFFFFF;
 PFN_NUMBER MmHighestPhysicalPage = 0;
+PFN_NUMBER MmHighestPhysicalPageFromBios = 0;  // Uncapped value for kernel
 
 PFREELDR_MEMORY_DESCRIPTOR BiosMemoryMap;
 ULONG BiosMemoryMapEntryCount;
@@ -428,6 +429,25 @@ PFN_NUMBER MmGetAddressablePageCountIncludingHoles(VOID)
         }
     }
 
+    //
+    // Save the true highest physical page (uncapped) for passing high memory
+    // descriptors to the kernel. This preserves memory above MM_MAX_PAGE_LOADER.
+    //
+    MmHighestPhysicalPageFromBios = MmHighestPhysicalPage;
+
+    //
+    // Cap the page lookup table size to memory the loader can allocate from.
+    // The loader can allocate memory for the kernel from up to MM_MAX_PAGE_LOADER
+    // (even though it only identity-maps the first 1GB). The page lookup table
+    // itself must be placed within the first 1GB, but it can track more memory.
+    //
+    if (MmHighestPhysicalPage > MM_MAX_PAGE_LOADER)
+    {
+        MmHighestPhysicalPage = MM_MAX_PAGE_LOADER;
+    }
+
+    ERR("MmGetAddressablePageCountIncludingHoles: lo=0x%lx hi=0x%lx (capped) fromBIOS=0x%lx (uncapped)\n",
+        MmLowestPhysicalPage, MmHighestPhysicalPage, MmHighestPhysicalPageFromBios);
     TRACE("lo/hi %lx %lx\n", MmLowestPhysicalPage, MmHighestPhysicalPage);
     PageCount = MmHighestPhysicalPage - MmLowestPhysicalPage;
     TRACE("MmGetAddressablePageCountIncludingHoles() returning 0x%x\n", PageCount);
@@ -460,17 +480,17 @@ PVOID MmFindLocationForPageLookupTable(PFN_NUMBER TotalPageCount)
         // Continue, if it is not at a higher address than previous address
         if (MemoryDescriptor->BasePage < CandidateBasePage) continue;
 
-        // Continue, if the address is too high
-        if (MemoryDescriptor->BasePage + RequiredPages >= MM_MAX_PAGE_LOADER) continue;
+        // Continue, if the address is too high (must fit in loader's mapped range)
+        if (MemoryDescriptor->BasePage + RequiredPages >= MM_MAX_PAGE_LOADER_MAPPED) continue;
 
         // Memory block is more suitable than the previous one
         CandidateBasePage = MemoryDescriptor->BasePage;
         CandidatePageCount = MemoryDescriptor->PageCount;
     }
 
-    // Calculate the end address for the lookup table
+    // Calculate the end address for the lookup table (cap at mapped limit)
     PageLookupTableEndPage = min(CandidateBasePage + CandidatePageCount,
-                                 MM_MAX_PAGE_LOADER);
+                                 MM_MAX_PAGE_LOADER_MAPPED);
 
     // Calculate the virtual address
     PageLookupTableMemAddress = (PVOID)((PageLookupTableEndPage * PAGE_SIZE)
@@ -538,16 +558,15 @@ VOID MmMarkPagesInLookupTable(PVOID PageLookupTable, PFN_NUMBER StartPage, PFN_N
             StartPage, PageCount, MmLowestPhysicalPage, MmHighestPhysicalPage);
         return;
     }
+    TRACE("MmMarkPagesInLookupTable()\n");
 
     StartPage -= MmLowestPhysicalPage;
     for (Index=StartPage; Index<(StartPage+PageCount); Index++)
     {
-#if 0
         if ((Index <= (StartPage + 16)) || (Index >= (StartPage+PageCount-16)))
         {
             TRACE("Index = 0x%x StartPage = 0x%x PageCount = 0x%x\n", Index, StartPage, PageCount);
         }
-#endif
         RealPageLookupTable[Index].PageAllocated = PageAllocated;
         RealPageLookupTable[Index].PageAllocationLength = (PageAllocated != LoaderFree) ? 1 : 0;
     }
@@ -591,9 +610,15 @@ PFN_NUMBER MmFindAvailablePages(PVOID PageLookupTable, PFN_NUMBER TotalPageCount
     PFN_NUMBER AvailablePagesSoFar;
     PFN_NUMBER Index;
 
-    if (LastFreePageHint > TotalPageCount)
+    // The search range is the full size of the page lookup table.
+    // The lookup table tracks memory up to MM_MAX_PAGE_LOADER (4GB),
+    // which is larger than the bootloader's 1GB identity mapping.
+    // Allocations beyond 1GB are for the kernel and passed via descriptors.
+    PFN_NUMBER SearchLimit = TotalPageCount;
+
+    if (LastFreePageHint > SearchLimit)
     {
-        LastFreePageHint = TotalPageCount;
+        LastFreePageHint = SearchLimit;
     }
 
     AvailablePagesSoFar = 0;
@@ -728,4 +753,12 @@ PFN_NUMBER
 MmGetHighestPhysicalPage(VOID)
 {
     return MmHighestPhysicalPage;
+}
+
+PFN_NUMBER
+MmGetHighestPhysicalPageFromBios(VOID)
+{
+    // Return the uncapped value that includes all RAM from BIOS,
+    // including memory above MM_MAX_PAGE_LOADER
+    return MmHighestPhysicalPageFromBios;
 }

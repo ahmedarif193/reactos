@@ -49,6 +49,7 @@
 @ cdecl MmFreeMemory()
 @ cdecl MmGetBiosMemoryMap()
 @ cdecl MmGetHighestPhysicalPage()
+@ cdecl MmGetHighestPhysicalPageFromBios()
 @ cdecl MmGetLoaderPagesSpanned()
 @ cdecl MmGetMemoryMap()
 @ cdecl MmGetSystemMemoryMapTypeString()

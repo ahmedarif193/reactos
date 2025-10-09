@@ -419,7 +419,8 @@ MiSetupPfnForPageTable(
     Pfn = MiGetPfnEntry(PageFrameIndex);
 
     /* Check if it's valid memory */
-    if ((PageFrameIndex <= MmHighestPhysicalPage) &&
+    if ((Pfn != NULL) &&
+        (PageFrameIndex <= MmHighestPhysicalPage) &&
         (MmIsAddressValid(Pfn)) &&
         (Pfn->u3.e1.PageLocation == ActiveAndValid))
     {
@@ -437,7 +438,11 @@ MiSetupPfnForPageTable(
     /* Increase the shared count of the PFN entry for the PDE */
     PointerPde = MiAddressToPde(MiPteToAddress(PointerPte));
     Pfn = MiGetPfnEntry(PFN_FROM_PTE(PointerPde));
-    Pfn->u2.ShareCount++;
+    /* Only update if this is real RAM, not I/O space */
+    if (Pfn != NULL)
+    {
+        Pfn->u2.ShareCount++;
+    }
 }
 
 CODE_SEG("INIT")

@@ -23,9 +23,12 @@ if(ARCH STREQUAL "i386")
     "Generate instructions for this CPU type. Specify one of:
      pentium, pentiumpro")
 elseif(ARCH STREQUAL "amd64")
-    set(OARCH "athlon64" CACHE STRING
+    # Use baseline x86-64 ISA to ensure SSE2-only minimum and broad CPU/VM support.
+    # This avoids emitting newer SIMD instructions (e.g. SSE4.2/AVX) that can
+    # trigger STATUS_ILLEGAL_INSTRUCTION on older/virtual CPUs.
+    set(OARCH "x86-64" CACHE STRING
     "Generate instructions for this CPU type. Specify one of:
-     k8 opteron athlon64 athlon-fx")
+     x86-64 k8 opteron athlon64 athlon-fx")
 elseif(ARCH STREQUAL "arm")
     set(OARCH "armv7-a" CACHE STRING
     "Generate instructions for this CPU type. Specify one of:

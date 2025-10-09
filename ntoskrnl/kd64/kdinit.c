@@ -34,8 +34,8 @@
  *
  * Adapted from mm/ARM3/mminit.c!MiScanMemoryDescriptors().
  **/
-static
 SIZE_T
+NTAPI
 KdpGetMemorySizeInMBs(
     _In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {

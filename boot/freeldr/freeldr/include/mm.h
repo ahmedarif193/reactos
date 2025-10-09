@@ -56,7 +56,12 @@ typedef struct _FREELDR_MEMORY_DESCRIPTOR
 #else
 #define MM_MAX_PAGE        0xFFFFF /* 20 bits for the PFN */
 #endif
-#define MM_MAX_PAGE_LOADER 0xFFFFF /* 4 GB flat address range */
+/*
+ * For i386, the bootloader maps all addressable memory in flat 32-bit mode,
+ * so MM_MAX_PAGE_LOADER and MM_MAX_PAGE_LOADER_MAPPED are the same (4GB limit).
+ */
+#define MM_MAX_PAGE_LOADER        0xFFFFF /* 4 GB allocation range */
+#define MM_MAX_PAGE_LOADER_MAPPED 0xFFFFF /* 4 GB mapped (same as allocation) */
 
 #define MM_SIZE_TO_PAGES(a)  \
     ( ((a) >> MM_PAGE_SHIFT) + ((a) & MM_PAGE_MASK ? 1 : 0) )
@@ -68,10 +73,21 @@ typedef struct _FREELDR_MEMORY_DESCRIPTOR
 #define MM_PAGE_SIZE    4096
 #define MM_PAGE_MASK    0xFFF
 #define MM_PAGE_SHIFT    12
-//HACK: ReactOS AMD64 can't handle the full memory range yet CORE-20265
-//#define MM_MAX_PAGE        0xFFFFFFFFF /* 36 bits for the PFN */
-#define MM_MAX_PAGE        0x1FFFFF
-#define MM_MAX_PAGE_LOADER 0x3FFFF /* on x64 freeldr only maps 1 GB */
+/*
+ * Let the loader keep descriptors up to the current 36-bit PFN limit (~256 TB).
+ * The loader still builds page tables for the first 1 GB only, but the kernel
+ * can now see RAM beyond the previous ~8 GB ceiling (CORE-20265).
+ *
+ * MM_MAX_PAGE: Maximum PFN the system can describe (36-bit = 256TB)
+ * MM_MAX_PAGE_LOADER: Maximum PFN the loader can allocate memory from
+ * MM_MAX_PAGE_LOADER_MAPPED: Maximum PFN the loader has mapped (1GB identity map)
+ *
+ * The page lookup table MUST fit within MM_MAX_PAGE_LOADER_MAPPED (loader's
+ * mapped range), but we pass memory descriptors up to MM_MAX_PAGE to the kernel.
+ */
+#define MM_MAX_PAGE                0xFFFFFFFFFULL /* 36-bit PFN span */
+#define MM_MAX_PAGE_LOADER         0x100000  /* Can allocate from first 4 GB */
+#define MM_MAX_PAGE_LOADER_MAPPED  0x40000   /* Loader maps first 1 GB only */
 
 #define MM_SIZE_TO_PAGES(a)  \
     ( ((a) >> MM_PAGE_SHIFT) + ((a) & MM_PAGE_MASK ? 1 : 0) )
@@ -130,6 +146,7 @@ PVOID    MmAllocateMemoryAtAddress(SIZE_T MemorySize, PVOID DesiredAddress, TYPE
 PVOID    MmAllocateHighestMemoryBelowAddress(SIZE_T MemorySize, PVOID DesiredAddress, TYPE_OF_MEMORY MemoryType);
 
 PFN_NUMBER MmGetHighestPhysicalPage(VOID);
+PFN_NUMBER MmGetHighestPhysicalPageFromBios(VOID);  // Uncapped value including high memory
 PFN_NUMBER MmGetLoaderPagesSpanned(VOID);
 ULONG MmGetBiosMemoryMap(_Out_ PFREELDR_MEMORY_DESCRIPTOR *MemoryMap);
 

@@ -399,6 +399,8 @@ FrLdrHeapAllocateEx(
             NextBlock = Block + 1 + BlockSize;
         }
 
+        TRACE("HeapAllocate: About to update NextBlock=%p, BlockSize=%d\n", NextBlock, BlockSize);
+
         /* Update the next blocks back link */
         NextBlock->PreviousSize = BlockSize;
 
@@ -416,6 +418,8 @@ FrLdrHeapAllocateEx(
 
         /* HACK: zero out the allocation */
         RtlZeroMemory(Block->Data, Block->Size * sizeof(HEAP_BLOCK));
+
+        TRACE("HeapAllocate: RtlZeroMemory done, NextBlock=%p\n", NextBlock);
 
 #ifdef FREELDR_HEAP_VERIFIER
         /* Write size and redzones */

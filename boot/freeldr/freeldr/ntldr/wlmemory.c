@@ -308,17 +308,23 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     BiosMemoryMapEntryCount = MmGetBiosMemoryMap(&BiosMemoryMap);
 
+    ERR("WinLdrSetupMemoryLayout: MmGetHighestPhysicalPage=0x%lx, BiosMapCount=%lu\n",
+        MmGetHighestPhysicalPage(), BiosMemoryMapEntryCount);
+
     /* Now we need to add high descriptors from the bios memory map */
     for (i = 0; i < BiosMemoryMapEntryCount; i++)
     {
-        /* Check if its higher than the lookup table */
-        if (BiosMemoryMap->BasePage > MmGetHighestPhysicalPage())
+        /* Check if its higher than the lookup table (use uncapped BIOS value) */
+        if (BiosMemoryMap[i].BasePage >= MmGetHighestPhysicalPage())
         {
+            ERR("Adding high memory descriptor [%lu]: Base=0x%lx Pages=0x%lx Type=%u\n",
+                i, BiosMemoryMap[i].BasePage, BiosMemoryMap[i].PageCount,
+                BiosMemoryMap[i].MemoryType);
             /* Copy this descriptor */
             MempAddMemoryBlock(LoaderBlock,
-                               BiosMemoryMap->BasePage,
-                               BiosMemoryMap->PageCount,
-                               BiosMemoryMap->MemoryType);
+                               BiosMemoryMap[i].BasePage,
+                               BiosMemoryMap[i].PageCount,
+                               BiosMemoryMap[i].MemoryType);
         }
     }
 

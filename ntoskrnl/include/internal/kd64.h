@@ -88,6 +88,12 @@ KdUpdateDataBlock(
     VOID
 );
 
+SIZE_T
+NTAPI
+KdpGetMemorySizeInMBs(
+    _In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock
+);
+
 //
 // Determines if the kernel debugger must handle a particular trap
 //
