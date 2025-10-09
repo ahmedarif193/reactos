@@ -12,7 +12,16 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/arc/arc.h>
 #include "inbv/logo.h"
+BOOLEAN NTAPI InbvGetGopFrameBufferInfo(_Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo);
+
+/* Theme color indices (BOOTVID palette) */
+#define VID_THEME_CENTER_BG_COLOR   BV_COLOR_LIGHT_GRAY
+#define VID_THEME_FOOTER_BG_COLOR   BV_COLOR_DARK_GRAY
+#define VID_THEME_TEXT_FG_COLOR     BV_COLOR_WHITE
+/* Ensure server text contrasts with the center background */
+#define VID_THEME_TEXT_FG_SERVER    BV_COLOR_WHITE
 
 /* See also mm/ARM3/miarm.h */
 #define MM_READONLY     1   // PAGE_READONLY
@@ -537,6 +546,13 @@ DisplayBootBitmap(
     /* Check if this is text mode */
     if (TextMode)
     {
+        /* Detect whether UEFI GOP is active (to keep BIOS colors untouched) */
+        BOOLEAN UseUefiTheme = FALSE;
+        LOADER_PARAMETER_FRAMEBUFFER FbInfo;
+        RtlZeroMemory(&FbInfo, sizeof(FbInfo));
+        if (InbvGetGopFrameBufferInfo(&FbInfo) && FbInfo.FrameBufferSize)
+            UseUefiTheme = TRUE;
+
         /*
          * Make the kernel resource section temporarily writable,
          * as we are going to change the bitmaps' palette in place.
@@ -546,10 +562,20 @@ DisplayBootBitmap(
         /* Check the type of the OS: workstation or server */
         if (SharedUserData->NtProductType == NtProductWinNt)
         {
-            /* Workstation; set colors */
-            InbvSetTextColor(BV_COLOR_WHITE);
-            InbvSolidColorFill(0, 0, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, BV_COLOR_DARK_GRAY);
-            InbvSolidColorFill(0, VID_FOOTER_BG_TOP, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, BV_COLOR_RED);
+            if (UseUefiTheme)
+            {
+                /* Workstation (UEFI): neutral grey theme */
+                InbvSetTextColor(VID_THEME_TEXT_FG_COLOR);
+                InbvSolidColorFill(0, 0, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, VID_THEME_CENTER_BG_COLOR);
+                InbvSolidColorFill(0, VID_FOOTER_BG_TOP, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, VID_THEME_FOOTER_BG_COLOR);
+            }
+            else
+            {
+                /* Workstation (BIOS): original colors */
+                InbvSetTextColor(BV_COLOR_WHITE);
+                InbvSolidColorFill(0, 0, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, BV_COLOR_DARK_GRAY);
+                InbvSolidColorFill(0, VID_FOOTER_BG_TOP, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, BV_COLOR_RED);
+            }
 
             /* Get resources */
             Header = InbvGetResourceAddress(IDB_WKSTA_HEADER);
@@ -557,10 +583,20 @@ DisplayBootBitmap(
         }
         else
         {
-            /* Server; set colors */
-            InbvSetTextColor(BV_COLOR_LIGHT_CYAN);
-            InbvSolidColorFill(0, 0, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, BV_COLOR_CYAN);
-            InbvSolidColorFill(0, VID_FOOTER_BG_TOP, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, BV_COLOR_RED);
+            if (UseUefiTheme)
+            {
+                /* Server (UEFI): neutral grey theme */
+                InbvSetTextColor(VID_THEME_TEXT_FG_SERVER);
+                InbvSolidColorFill(0, 0, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, VID_THEME_CENTER_BG_COLOR);
+                InbvSolidColorFill(0, VID_FOOTER_BG_TOP, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, VID_THEME_FOOTER_BG_COLOR);
+            }
+            else
+            {
+                /* Server (BIOS): original colors */
+                InbvSetTextColor(BV_COLOR_LIGHT_CYAN);
+                InbvSolidColorFill(0, 0, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, BV_COLOR_CYAN);
+                InbvSolidColorFill(0, VID_FOOTER_BG_TOP, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, BV_COLOR_RED);
+            }
 
             /* Get resources */
             Header = InbvGetResourceAddress(IDB_SERVER_HEADER);

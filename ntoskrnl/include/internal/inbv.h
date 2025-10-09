@@ -10,6 +10,7 @@
 
 /* Native definitions from BOOTVID (Boot Video Driver) */
 #include "bootvid/bootvid.h"
+#include <reactos/arc/arc.h>
 
 //
 // Driver Initialization
@@ -147,4 +148,13 @@ InbvPortInitialize(
     IN PUCHAR PortAddress,
     OUT PULONG PortId,
     IN BOOLEAN IsMMIODevice
+);
+
+//
+// UEFI GOP handoff
+//
+BOOLEAN
+NTAPI
+InbvGetGopFrameBufferInfo(
+    _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo
 );

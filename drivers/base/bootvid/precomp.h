@@ -13,6 +13,10 @@
 #include <ntifs.h>
 #include <ndk/halfuncs.h>
 #include <drivers/bootvid/bootvid.h>
+#include "uefi/uefi.h"
+
+/* Runtime selection flag: use UEFI GOP backend when available */
+extern BOOLEAN g_BootvidUseUefi;
 
 /* Arch specific includes */
 #if defined(_M_IX86) || defined(_M_AMD64)
@@ -20,6 +24,7 @@
 #include "i386/pc98/pc98.h"
 #elif defined(SARCH_XBOX)
 #include "i386/xbox/xbox.h"
+#include "uefi/uefi.h"
 #else
 #include "i386/pc/vga.h"
 #include "i386/pc/pc.h"

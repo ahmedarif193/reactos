@@ -11,9 +11,19 @@ set(KERNEL_VERSION_MINOR "4")
 set(KERNEL_VERSION_PATCH_LEVEL "16")
 set(COPYRIGHT_YEAR "2025")
 
-# KERNEL_VERSION_BUILD_TYPE is "dev" for Git builds
-# or "RC1", "RC2", "" for releases.
-set(KERNEL_VERSION_BUILD_TYPE "dev")
+# KERNEL_VERSION_BUILD_TYPE controls the suffix appended to the version string.
+# Default behavior:
+#   - "dev" for normal Git builds
+#   - "rel" when configuring a Release build (CMAKE_BUILD_TYPE=Release)
+if(NOT DEFINED KERNEL_VERSION_BUILD_TYPE)
+    if(CMAKE_BUILD_TYPE STREQUAL "Release" OR
+       CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo" OR
+       CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
+        set(KERNEL_VERSION_BUILD_TYPE "rel")
+    else()
+        set(KERNEL_VERSION_BUILD_TYPE "dev")
+    endif()
+endif()
 
 set(KERNEL_VERSION "${KERNEL_VERSION_MAJOR}.${KERNEL_VERSION_MINOR}.${KERNEL_VERSION_PATCH_LEVEL}-${WINARCH}")
 if(NOT KERNEL_VERSION_BUILD_TYPE STREQUAL "")

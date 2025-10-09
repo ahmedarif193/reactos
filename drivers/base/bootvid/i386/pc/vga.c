@@ -321,6 +321,11 @@ VOID
 NTAPI
 VidCleanUp(VOID)
 {
+    if (g_BootvidUseUefi)
+    {
+        UefiVidCleanUp();
+        return;
+    }
     /* Select bit mask register and clear it */
     __outpb(VGA_BASE_IO_PORT + GRAPH_ADDRESS_PORT, IND_BIT_MASK);
     __outpb(VGA_BASE_IO_PORT + GRAPH_DATA_PORT, BIT_MASK_DEFAULT);
@@ -336,6 +341,11 @@ VidScreenToBufferBlt(
     _In_ ULONG Height,
     _In_ ULONG Delta)
 {
+    if (g_BootvidUseUefi)
+    {
+        UefiVidScreenToBufferBlt(Buffer, Left, Top, Width, Height, Delta);
+        return;
+    }
     ULONG Plane;
     ULONG XDistance;
     ULONG LeftDelta, RightDelta;
@@ -432,6 +442,11 @@ VidSolidColorFill(
     _In_ ULONG Bottom,
     _In_ UCHAR Color)
 {
+    if (g_BootvidUseUefi)
+    {
+        UefiVidSolidColorFill(Left, Top, Right, Bottom, Color);
+        return;
+    }
     ULONG rMask, lMask;
     ULONG LeftOffset, RightOffset, Distance;
     PUCHAR Offset;

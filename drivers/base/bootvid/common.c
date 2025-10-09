@@ -315,6 +315,10 @@ NTAPI
 VidSetTextColor(
     _In_ ULONG Color)
 {
+    if (g_BootvidUseUefi)
+    {
+        return UefiVidSetTextColor(Color);
+    }
     ULONG OldColor;
 
     /* Save the old color and set the new one */
@@ -331,19 +335,24 @@ VidDisplayStringXY(
     _In_ ULONG Top,
     _In_ BOOLEAN Transparent)
 {
+    if (g_BootvidUseUefi)
+    {
+        UefiVidDisplayStringXY(String, Left, Top, Transparent);
+        return;
+    }
     ULONG BackColor;
 
     /*
      * If the caller wanted transparent, then send the special value (16),
      * else use our default and call the helper routine.
      */
-    BackColor = Transparent ? BV_COLOR_NONE : BV_COLOR_LIGHT_CYAN;
+    BackColor = Transparent ? BV_COLOR_NONE : BV_COLOR_BLACK;
 
     /* Loop every character and adjust the position */
     for (; *String; ++String, Left += BOOTCHAR_WIDTH)
     {
-        /* Display a character */
-        DisplayCharacter(*String, Left, Top, BV_COLOR_LIGHT_BLUE, BackColor);
+        /* Display a character with current text color */
+        DisplayCharacter(*String, Left, Top, VidpTextColor, BackColor);
     }
 }
 
@@ -355,6 +364,11 @@ VidSetScrollRegion(
     _In_ ULONG Right,
     _In_ ULONG Bottom)
 {
+    if (g_BootvidUseUefi)
+    {
+        UefiVidSetScrollRegion(Left, Top, Right, Bottom);
+        return;
+    }
     /* Assert alignment */
     ASSERT((Left % BOOTCHAR_WIDTH) == 0);
     ASSERT((Right % BOOTCHAR_WIDTH) == BOOTCHAR_WIDTH - 1);
@@ -375,6 +389,11 @@ NTAPI
 VidDisplayString(
     _In_z_ PUCHAR String)
 {
+    if (g_BootvidUseUefi)
+    {
+        UefiVidDisplayString(String);
+        return;
+    }
     /* Start looping the string */
     for (; *String; ++String)
     {
@@ -458,6 +477,11 @@ VidBufferToScreenBlt(
     _In_ ULONG Height,
     _In_ ULONG Delta)
 {
+    if (g_BootvidUseUefi)
+    {
+        UefiVidBufferToScreenBlt(Buffer, Left, Top, Width, Height, Delta);
+        return;
+    }
     /* Make sure we have a width and height */
     if (!Width || !Height)
         return;
@@ -473,6 +497,11 @@ VidBitBlt(
     _In_ ULONG Left,
     _In_ ULONG Top)
 {
+    if (g_BootvidUseUefi)
+    {
+        UefiVidBitBlt(Buffer, Left, Top);
+        return;
+    }
     PBITMAPINFOHEADER BitmapInfoHeader;
     LONG Delta;
     PUCHAR BitmapOffset;

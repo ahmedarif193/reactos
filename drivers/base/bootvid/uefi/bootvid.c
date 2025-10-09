@@ -6,19 +6,13 @@
  */
 
 /* UEFI bootvid - standalone driver without VGA dependencies */
-#include <ntifs.h>
-#include <drivers/bootvid/display.h>
-
+#include "precomp.h"
 #include <reactos/arc/arc.h>
-BOOLEAN NTAPI InbvGetGopFrameBufferInfo(_Out_ PGOP_FRAMEBUFFER_INFO FrameBufferInfo);
+BOOLEAN NTAPI InbvGetGopFrameBufferInfo(_Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo);
 /* Memory cache type for MmMapIoSpace */
 #define MmNonCached 0
 
-/* Font data */
-#define BOOTCHAR_HEIGHT 13
-#define BOOTCHAR_WIDTH  8
-typedef ULONG RGBQUAD;
-
+/* We reuse the BOOTVID 8x13 font and default palette from common sources */
 extern UCHAR VidpFontData[];
 extern const RGBQUAD VidpDefaultPalette[BV_MAX_COLORS];
 
@@ -30,35 +24,11 @@ typedef struct _BMP_RGBQUAD
     UCHAR Reserved;
 } BMP_RGBQUAD, *PBMP_RGBQUAD;
 
-typedef struct tagBITMAPINFOHEADER
-{
-    ULONG biSize;
-    LONG biWidth;
-    LONG biHeight;
-    USHORT biPlanes;
-    USHORT biBitCount;
-    ULONG biCompression;
-    ULONG biSizeImage;
-    LONG biXPelsPerMeter;
-    LONG biYPelsPerMeter;
-    ULONG biClrUsed;
-    ULONG biClrImportant;
-} BITMAPINFOHEADER, *PBITMAPINFOHEADER;
+/* BITMAPINFOHEADER and BI_RGB/BI_RLE4 are provided by precomp.h */
 
-#define BI_RGB  0
-#define BI_RLE4 2
+/* No external kernel fallbacks; use InbvGetGopFrameBufferInfo only. */
 
-/* Import framebuffer data from kernel */
-__declspec(dllimport) PHYSICAL_ADDRESS VidpFrameBufferBase;
-__declspec(dllimport) ULONG VidpFrameBufferSize;
-__declspec(dllimport) ULONG VidpScreenWidth;
-__declspec(dllimport) ULONG VidpScreenHeight;
-__declspec(dllimport) ULONG VidpPixelsPerScanLine;
-
-/* Utility macros mirroring common.c helpers */
-#define GetRValue(quad)     ((UCHAR)(((quad) >> 16) & 0xFF))
-#define GetGValue(quad)     ((UCHAR)(((quad) >> 8) & 0xFF))
-#define GetBValue(quad)     ((UCHAR)((quad) & 0xFF))
+/* Color extractors provided by precomp.h */
 
 /* GLOBALS ********************************************************************/
 
@@ -89,7 +59,6 @@ static ULONG ScrollRight = 0;
 static ULONG ScrollBottom = 0;
 static ULONG TextColorIndex = BV_COLOR_WHITE;
 static ULONG TextColorValue = 0xFFFFFFFF;
-static ULONG BackgroundColorIndex = BV_COLOR_BLACK;
 static ULONG BackgroundColorValue = 0x00000000;
 
 /* UEFI GOP Pixel Formats */
@@ -100,7 +69,7 @@ static ULONG BackgroundColorValue = 0x00000000;
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
-static __forceinline ULONG
+static inline ULONG
 UefiLinePitch(VOID)
 {
     return PixelsPerScanLine * sizeof(ULONG);
@@ -141,29 +110,27 @@ UefiMaskMax(ULONG Mask)
 static ULONG
 UefiPackColor(UCHAR Red, UCHAR Green, UCHAR Blue)
 {
+    /* Prefer using masks provided by the loader (covers RGB, BGR and BitMask) */
+    if (RedMask || GreenMask || BlueMask)
+    {
+        ULONG R = RedMask ? ((ULONG)Red * RedMax + 127) / 255 : 0;
+        ULONG G = GreenMask ? ((ULONG)Green * GreenMax + 127) / 255 : 0;
+        ULONG B = BlueMask ? ((ULONG)Blue * BlueMax + 127) / 255 : 0;
+
+        return (RedMask ? (R << RedShift) & RedMask : 0) |
+               (GreenMask ? (G << GreenShift) & GreenMask : 0) |
+               (BlueMask ? (B << BlueShift) & BlueMask : 0);
+    }
+
+    /* Fallback on PixelFormat if masks are unavailable */
     switch (PixelFormat)
     {
         case PixelRedGreenBlueReserved8BitPerColor:
-            return ((ULONG)Red << 16) | ((ULONG)Green << 8) | Blue;
-
+            return ((ULONG)Red << 16) | ((ULONG)Green << 8) | Blue;  /* 0x00RRGGBB */
         case PixelBlueGreenRedReserved8BitPerColor:
-            return ((ULONG)Blue << 16) | ((ULONG)Green << 8) | Red;
-
-        case PixelBitMask:
-        {
-            ULONG R = RedMask ? ((ULONG)Red * RedMax + 127) / 255 : 0;
-            ULONG G = GreenMask ? ((ULONG)Green * GreenMax + 127) / 255 : 0;
-            ULONG B = BlueMask ? ((ULONG)Blue * BlueMax + 127) / 255 : 0;
-
-            return (RedMask ? (R << RedShift) & RedMask : 0) |
-                   (GreenMask ? (G << GreenShift) & GreenMask : 0) |
-                   (BlueMask ? (B << BlueShift) & BlueMask : 0);
-        }
-
-        case PixelBltOnly:
+            return ((ULONG)Blue << 16) | ((ULONG)Green << 8) | Red;  /* 0x00BBGGRR */
         default:
-            /* Fall back to the common BGRA ordering */
-            return ((ULONG)Blue << 16) | ((ULONG)Green << 8) | Red;
+            return ((ULONG)Blue << 16) | ((ULONG)Green << 8) | Red;  /* conservative */
     }
 }
 
@@ -232,37 +199,37 @@ UefiGopSetPixel(ULONG x, ULONG y, ULONG Color)
     *((PULONG)Pixel) = Color;
 }
 
+/* Internal scrolling helper used by DoScroll */
+static VOID
+UefiScrollRegion(ULONG Lines, ULONG Left, ULONG Top, ULONG Right, ULONG Bottom)
+{
+    if (Top >= Bottom) return;
+    ULONG Height = Bottom - Top + 1;
+    if (Lines >= Height)
+    {
+        UefiGopFillRect(Left, Top, Right, Bottom, BackgroundColorValue);
+        return;
+    }
+
+    SIZE_T RowBytes = (SIZE_T)(Right - Left + 1) * sizeof(ULONG);
+    ULONG y = 0;
+    for (; y < Height - Lines; y++)
+    {
+        PUCHAR DestRow = (PUCHAR)FrameBuffer + (Top + y) * UefiLinePitch() + Left * sizeof(ULONG);
+        PUCHAR SrcRow  = (PUCHAR)FrameBuffer + (Top + y + Lines) * UefiLinePitch() + Left * sizeof(ULONG);
+        RtlMoveMemory(DestRow, SrcRow, RowBytes);
+    }
+    for (; y < Height; y++)
+    {
+        PUCHAR DestRow = (PUCHAR)FrameBuffer + (Top + y) * UefiLinePitch() + Left * sizeof(ULONG);
+        RtlFillMemoryUlong(DestRow, (SIZE_T)(Right - Left + 1) * sizeof(ULONG), BackgroundColorValue);
+    }
+}
+
 static VOID
 UefiScroll(ULONG Lines)
 {
-    ULONG Height;
-    SIZE_T RowBytes;
-    ULONG y;
-
-    if (ScrollTop >= ScrollBottom)
-        return;
-
-    Height = ScrollBottom - ScrollTop + 1;
-    if (Lines >= Height)
-    {
-        UefiGopFillRect(ScrollLeft, ScrollTop, ScrollRight, ScrollBottom, BackgroundColorValue);
-        return;
-    }
-
-    RowBytes = (SIZE_T)(ScrollRight - ScrollLeft + 1) * sizeof(ULONG);
-
-    for (y = 0; y < Height - Lines; y++)
-    {
-        PUCHAR DestRow = (PUCHAR)FrameBuffer + (ScrollTop + y) * UefiLinePitch() + ScrollLeft * sizeof(ULONG);
-        PUCHAR SrcRow  = (PUCHAR)FrameBuffer + (ScrollTop + y + Lines) * UefiLinePitch() + ScrollLeft * sizeof(ULONG);
-        RtlMoveMemory(DestRow, SrcRow, RowBytes);
-    }
-
-    for (; y < Height; y++)
-    {
-        PUCHAR DestRow = (PUCHAR)FrameBuffer + (ScrollTop + y) * UefiLinePitch() + ScrollLeft * sizeof(ULONG);
-        RtlFillMemoryUlong(DestRow, (SIZE_T)(ScrollRight - ScrollLeft + 1) * sizeof(ULONG), BackgroundColorValue);
-    }
+    UefiScrollRegion(Lines, ScrollLeft, ScrollTop, ScrollRight, ScrollBottom);
 }
 
 static VOID
@@ -296,9 +263,7 @@ UefiDrawGlyph(ULONG Left, ULONG Top, UCHAR Character, ULONG FgColor, ULONG BgCol
     }
 
     if (Opaque)
-    {
         UefiGopFillRect(Left, Top + BOOTCHAR_HEIGHT, Left + BOOTCHAR_WIDTH - 1, Top + BOOTCHAR_HEIGHT, BgColor);
-    }
 }
 
 static VOID
@@ -455,10 +420,10 @@ UefiLineFeed(VOID)
 
 BOOLEAN
 NTAPI
-VidInitialize(
+UefiVidInitialize(
     _In_ BOOLEAN ResetMode)
 {
-    GOP_FRAMEBUFFER_INFO FbInfo;
+    LOADER_PARAMETER_FRAMEBUFFER FbInfo;
 
     /* Check if already initialized */
     if (DisplayInitialized)
@@ -468,39 +433,21 @@ VidInitialize(
 
     RtlZeroMemory(&FbInfo, sizeof(FbInfo));
 
-    if (InbvGetGopFrameBufferInfo(&FbInfo) && FbInfo.FrameBufferSize != 0)
+    if (!(InbvGetGopFrameBufferInfo(&FbInfo) && FbInfo.FrameBufferSize != 0))
     {
-        FrameBufferBase = FbInfo.FrameBufferBase;
-        FrameBufferSize = FbInfo.FrameBufferSize;
-        ScreenWidth = FbInfo.HorizontalResolution;
-        ScreenHeight = FbInfo.VerticalResolution;
-        PixelsPerScanLine = FbInfo.PixelsPerScanLine ? FbInfo.PixelsPerScanLine : FbInfo.HorizontalResolution;
-        PixelFormat = FbInfo.PixelFormat;
-        RedMask = FbInfo.RedMask;
-        GreenMask = FbInfo.GreenMask;
-        BlueMask = FbInfo.BlueMask;
+        /* No valid GOP info: decline UEFI path so VGA can take over */
+        return FALSE;
     }
-    else if (VidpFrameBufferBase.QuadPart != 0)
-    {
-        FrameBufferBase = VidpFrameBufferBase;
-        FrameBufferSize = VidpFrameBufferSize;
-        ScreenWidth = VidpScreenWidth;
-        ScreenHeight = VidpScreenHeight;
-        PixelsPerScanLine = VidpPixelsPerScanLine;
-        PixelFormat = PixelBlueGreenRedReserved8BitPerColor;
-        RedMask = GreenMask = BlueMask = 0;
-    }
-    else
-    {
-        /* Fallback to defaults */
-        FrameBufferBase.QuadPart = 0xC0000000;
-        FrameBufferSize = 1024 * 768 * 4;
-        ScreenWidth = 1024;
-        ScreenHeight = 768;
-        PixelsPerScanLine = 1024;
-        PixelFormat = PixelBlueGreenRedReserved8BitPerColor;
-        RedMask = GreenMask = BlueMask = 0;
-    }
+
+    FrameBufferBase = FbInfo.FrameBufferBase;
+    FrameBufferSize = FbInfo.FrameBufferSize;
+    ScreenWidth = FbInfo.HorizontalResolution;
+    ScreenHeight = FbInfo.VerticalResolution;
+    PixelsPerScanLine = FbInfo.PixelsPerScanLine ? FbInfo.PixelsPerScanLine : FbInfo.HorizontalResolution;
+    PixelFormat = FbInfo.PixelFormat;
+    RedMask = FbInfo.RedMask;
+    GreenMask = FbInfo.GreenMask;
+    BlueMask = FbInfo.BlueMask;
 
     if (PixelsPerScanLine == 0)
         PixelsPerScanLine = ScreenWidth;
@@ -519,15 +466,18 @@ VidInitialize(
         return FALSE;
     }
 
-    ScrollLeft = 0;
-    ScrollTop = 0;
-    ScrollRight = ScreenWidth ? ScreenWidth - 1 : 0;
-    ScrollBottom = ScreenHeight ? ScreenHeight - 1 : 0;
-    CurrentX = ScrollLeft;
-    CurrentY = ScrollTop;
+    // Initialize scroll region and cursor for common.c
+    extern ULONG VidpScrollRegion[4];
+    extern ULONG VidpCurrentX;
+    extern ULONG VidpCurrentY;
+    VidpScrollRegion[0] = 0;
+    VidpScrollRegion[1] = 0;
+    VidpScrollRegion[2] = ScreenWidth ? ScreenWidth - 1 : 0;
+    VidpScrollRegion[3] = ScreenHeight ? ScreenHeight - 1 : 0;
+    VidpCurrentX = 0;
+    VidpCurrentY = 0;
 
-    TextColorValue = UefiColorFromIndex((UCHAR)TextColorIndex);
-    BackgroundColorValue = UefiColorFromIndex((UCHAR)BackgroundColorIndex);
+    BackgroundColorValue = UefiColorFromIndex(BV_COLOR_BLACK);
 
     /* Clear the screen to the default background */
     UefiGopClearScreen(BackgroundColorValue);
@@ -538,7 +488,7 @@ VidInitialize(
 
 VOID
 NTAPI
-VidCleanUp(VOID)
+UefiVidCleanUp(VOID)
 {
     if (FrameBuffer && DisplayInitialized)
     {
@@ -550,23 +500,19 @@ VidCleanUp(VOID)
 
 VOID
 NTAPI
-VidResetDisplay(
+UefiVidResetDisplay(
     _In_ BOOLEAN HalReset)
 {
     /* Clear screen to black */
     if (DisplayInitialized)
-    {
         UefiGopClearScreen(BackgroundColorValue);
-        CurrentX = ScrollLeft;
-        CurrentY = ScrollTop;
-    }
 
     UNREFERENCED_PARAMETER(HalReset);
 }
 
 VOID
 NTAPI
-VidScreenToBufferBlt(
+UefiVidScreenToBufferBlt(
     _Out_writes_bytes_(Delta * Height) PUCHAR Buffer,
     _In_ ULONG Left,
     _In_ ULONG Top,
@@ -599,7 +545,7 @@ VidScreenToBufferBlt(
 
 VOID
 NTAPI
-VidBufferToScreenBlt(
+UefiVidBufferToScreenBlt(
     _In_reads_bytes_(Delta * Height) PUCHAR Buffer,
     _In_ ULONG Left,
     _In_ ULONG Top,
@@ -607,33 +553,25 @@ VidBufferToScreenBlt(
     _In_ ULONG Height,
     _In_ ULONG Delta)
 {
-    ULONG y;
-
     if (!FrameBuffer || !Buffer || !Width || !Height)
         return;
 
-    for (y = 0; y < Height; y++)
+    for (ULONG y = 0; y < Height; y++)
     {
         ULONG ScreenY = Top + y;
-        ULONG CopyPixels;
-        PULONG Src;
-        PULONG Dest;
+        if (ScreenY >= ScreenHeight) break;
+        if (Left >= ScreenWidth) break;
 
-        if (ScreenY >= ScreenHeight)
-            break;
-        if (Left >= ScreenWidth)
-            break;
-
-        CopyPixels = min(Width, ScreenWidth - Left);
-        Src = (PULONG)(Buffer + y * Delta);
-        Dest = (PULONG)((PUCHAR)FrameBuffer + ScreenY * UefiLinePitch() + Left * sizeof(ULONG));
+        ULONG CopyPixels = min(Width, ScreenWidth - Left);
+        PULONG Src = (PULONG)(Buffer + y * Delta);
+        PULONG Dest = (PULONG)((PUCHAR)FrameBuffer + ScreenY * UefiLinePitch() + Left * sizeof(ULONG));
         RtlCopyMemory(Dest, Src, CopyPixels * sizeof(ULONG));
     }
 }
 
 VOID
 NTAPI
-VidDisplayString(
+UefiVidDisplayString(
     _In_z_ PUCHAR String)
 {
     UCHAR Ch;
@@ -643,45 +581,41 @@ VidDisplayString(
 
     while ((Ch = *String++))
     {
-        switch (Ch)
+        if (Ch == '\r')
         {
-            case '\r':
-                UefiCarriageReturn();
-                break;
-
-            case '\n':
-                UefiLineFeed();
-                UefiCarriageReturn();
-                break;
-
-            default:
-            {
-                if (CurrentX + BOOTCHAR_WIDTH - 1 > ScrollRight)
-                {
-                    UefiLineFeed();
-                    UefiCarriageReturn();
-                }
-
-                UefiDrawGlyph(CurrentX,
-                               CurrentY,
-                               Ch,
-                               TextColorValue,
-                               BackgroundColorValue,
-                               FALSE);
-                CurrentX += BOOTCHAR_WIDTH;
-                break;
-            }
+            UefiCarriageReturn();
+            continue;
         }
+
+        if (Ch == '\n')
+        {
+            UefiLineFeed();
+            UefiCarriageReturn();
+            continue;
+        }
+
+        if (CurrentX + BOOTCHAR_WIDTH - 1 > ScrollRight)
+        {
+            UefiLineFeed();
+            UefiCarriageReturn();
+        }
+
+        UefiDrawGlyph(CurrentX,
+                      CurrentY,
+                      Ch,
+                      TextColorValue,
+                      BackgroundColorValue,
+                      FALSE);
+        CurrentX += BOOTCHAR_WIDTH;
     }
 }
 
 ULONG
 NTAPI
-VidSetTextColor(
+UefiVidSetTextColor(
     _In_ ULONG Color)
 {
     ULONG OldColor = TextColorIndex;
-
     TextColorIndex = Color;
     TextColorValue = UefiColorFromIndex((UCHAR)Color);
     return OldColor;
@@ -689,7 +623,7 @@ VidSetTextColor(
 
 VOID
 NTAPI
-VidSolidColorFill(
+UefiVidSolidColorFill(
     _In_ ULONG Left,
     _In_ ULONG Top,
     _In_ ULONG Right,
@@ -703,11 +637,19 @@ VidSolidColorFill(
 
     FillColor = UefiColorFromIndex(Color);
     UefiGopFillRect(Left, Top, Right, Bottom, FillColor);
+
+    /* If the caller just set the full-screen background, update our scroll fill color */
+    if (Left == 0 && Top == 0 &&
+        Right >= (ScreenWidth ? ScreenWidth - 1 : 0) &&
+        Bottom >= (ScreenHeight ? ScreenHeight - 1 : 0))
+    {
+        BackgroundColorValue = FillColor;
+    }
 }
 
 VOID
 NTAPI
-VidSetScrollRegion(
+UefiVidSetScrollRegion(
     _In_ ULONG Left,
     _In_ ULONG Top,
     _In_ ULONG Right,
@@ -741,7 +683,7 @@ VidSetScrollRegion(
 
 VOID
 NTAPI
-VidDisplayStringXY(
+UefiVidDisplayStringXY(
     _In_z_ PUCHAR String,
     _In_ ULONG Left,
     _In_ ULONG Top,
@@ -777,7 +719,7 @@ VidDisplayStringXY(
 
 VOID
 NTAPI
-VidBitBlt(
+UefiVidBitBlt(
     _In_ PUCHAR Buffer,
     _In_ ULONG Left,
     _In_ ULONG Top)
@@ -813,7 +755,6 @@ VidBitBlt(
 
     if (Header->biCompression != BI_RGB && Header->biCompression != BI_RLE4)
     {
-        // TODO: support additional bitmap encodings if firmware assets require them.
         return;
     }
 
@@ -824,13 +765,41 @@ VidBitBlt(
         PaletteCount = BV_MAX_COLORS;
 
     PaletteBase = (PBMP_RGBQUAD)(Buffer + Header->biSize);
+
+    /* Detect 'NoPalette' case used by INBV: header palette cleared to zeros. */
+    BOOLEAN PaletteAllZero = TRUE;
     for (i = 0; i < PaletteCount; i++)
     {
-        Palette32[i] = UefiPackColor(PaletteBase[i].Red, PaletteBase[i].Green, PaletteBase[i].Blue);
+        if (PaletteBase[i].Red | PaletteBase[i].Green | PaletteBase[i].Blue)
+        {
+            PaletteAllZero = FALSE;
+            break;
+        }
     }
-    for (; i < BV_MAX_COLORS; i++)
+
+    if (PaletteAllZero)
     {
-        Palette32[i] = Palette32[i % PaletteCount];
+        /* Fall back to BOOTVID default palette mapping */
+        for (i = 0; i < min((ULONG)BV_MAX_COLORS, PaletteCount); i++)
+        {
+            ULONG entry = VidpDefaultPalette[i];
+            Palette32[i] = UefiPackColor(GetRValue(entry), GetGValue(entry), GetBValue(entry));
+        }
+        for (; i < BV_MAX_COLORS; i++)
+        {
+            Palette32[i] = Palette32[i % BV_MAX_COLORS];
+        }
+    }
+    else
+    {
+        for (i = 0; i < PaletteCount; i++)
+        {
+            Palette32[i] = UefiPackColor(PaletteBase[i].Red, PaletteBase[i].Green, PaletteBase[i].Blue);
+        }
+        for (; i < BV_MAX_COLORS; i++)
+        {
+            Palette32[i] = Palette32[i % PaletteCount];
+        }
     }
 
     BitmapBits = Buffer + Header->biSize + PaletteCount * sizeof(BMP_RGBQUAD);
@@ -846,3 +815,5 @@ VidBitBlt(
         UefiBlit4bpp(BitmapBits, Left, Top, Width, Height, Delta, TopDown, Palette32);
     }
 }
+
+/* No arch hooks defined here; VGA provides them. UEFI path calls its own entry points. */

@@ -17,7 +17,9 @@ if((ARCH STREQUAL "i386") OR (ARCH STREQUAL "amd64"))
             i386/pc/bootvid.c
             i386/pc/bootdata.c
             i386/pc/vga.h
-            i386/pc/vga.c)
+            i386/pc/vga.c
+            uefi/bootvid.c
+            uefi/uefi.h)
     endif()
 elseif(ARCH STREQUAL "arm")
     list(APPEND SOURCE

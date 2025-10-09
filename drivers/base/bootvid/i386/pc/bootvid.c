@@ -360,11 +360,20 @@ VgaIsPresent(VOID)
 
 /* PUBLIC FUNCTIONS **********************************************************/
 
+BOOLEAN g_BootvidUseUefi = FALSE;
+
 BOOLEAN
 NTAPI
 VidInitialize(
     _In_ BOOLEAN SetMode)
 {
+    /* Try UEFI GOP path first */
+    if (UefiVidInitialize(SetMode))
+    {
+        g_BootvidUseUefi = TRUE;
+        return TRUE;
+    }
+
     ULONG_PTR Context = 0;
     PHYSICAL_ADDRESS TranslatedAddress;
     PHYSICAL_ADDRESS NullAddress = {{0, 0}}, VgaAddress;
@@ -469,6 +478,11 @@ NTAPI
 VidResetDisplay(
     _In_ BOOLEAN HalReset)
 {
+    if (g_BootvidUseUefi)
+    {
+        UefiVidResetDisplay(HalReset);
+        return;
+    }
     /* Clear the current position */
     VidpCurrentX = 0;
     VidpCurrentY = 0;

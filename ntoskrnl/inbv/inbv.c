@@ -10,6 +10,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/arc/arc.h>
 #include "inbv/logo.h"
 
 /* GLOBALS *******************************************************************/
@@ -49,6 +50,13 @@ static BT_PROGRESS_INDICATOR InbvProgressIndicator = {0, 25, 0};
 
 static ULONG ResourceCount = 0;
 static PUCHAR ResourceList[1 + IDB_MAX_RESOURCES]; // First entry == NULL, followed by 'ResourceCount' entries.
+
+/*
+ * UEFI GOP framebuffer information passed by the loader.
+ * If present, this enables boot-time graphics without a display driver.
+ */
+static LOADER_PARAMETER_FRAMEBUFFER InbvGopFramebuffer;
+static BOOLEAN InbvGopInfoValid = FALSE;
 
 
 /*
@@ -183,6 +191,7 @@ InbvDriverInitialize(
     PCHAR CommandLine;
     BOOLEAN ResetMode = FALSE; // By default do not reset the video mode
     ULONG i;
+    PLOADER_PARAMETER_EXTENSION Extension;
 
     /* Quit if we're already installed */
     if (InbvBootDriverInstalled) return TRUE;
@@ -194,6 +203,19 @@ InbvDriverInitialize(
         /* Reset the video mode in case we do not have a custom boot logo */
         CommandLine = (LoaderBlock->LoadOptions ? _strupr(LoaderBlock->LoadOptions) : NULL);
         ResetMode   = (CommandLine == NULL) || (strstr(CommandLine, "BOOTLOGO") == NULL);
+    }
+
+    /* Capture GOP framebuffer info from loader (if available) before video init */
+    Extension = LoaderBlock->Extension;
+    if (Extension &&
+        (Extension->Size >= sizeof(LOADER_PARAMETER_EXTENSION)))
+    {
+        const LOADER_PARAMETER_FRAMEBUFFER* Fb = &Extension->GopFramebuffer;
+        if ((Fb->FrameBufferBase.QuadPart != 0) && (Fb->FrameBufferSize != 0))
+        {
+            RtlCopyMemory(&InbvGopFramebuffer, Fb, sizeof(*Fb));
+            InbvGopInfoValid = TRUE;
+        }
     }
 
     /* Initialize the video */
@@ -706,6 +728,24 @@ InbvUpdateProgressBar(
 
         BootAnimTickProgressBar(TotalProgress);
     }
+}
+
+/*
+ * Query function for bootvid to retrieve GOP framebuffer info captured from the loader.
+ */
+BOOLEAN
+NTAPI
+InbvGetGopFrameBufferInfo(
+    _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo)
+{
+    if (!FrameBufferInfo)
+        return FALSE;
+
+    if (!InbvGopInfoValid)
+        return FALSE;
+
+    RtlCopyMemory(FrameBufferInfo, &InbvGopFramebuffer, sizeof(LOADER_PARAMETER_FRAMEBUFFER));
+    return TRUE;
 }
 
 NTSTATUS

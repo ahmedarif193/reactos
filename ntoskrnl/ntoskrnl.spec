@@ -313,6 +313,7 @@
 @ stdcall InbvEnableDisplayString(long)
 @ stdcall InbvInstallDisplayStringFilter(ptr)
 @ stdcall InbvIsBootDriverInstalled()
+@ stdcall InbvGetGopFrameBufferInfo(ptr)
 @ stdcall InbvNotifyDisplayOwnershipLost(ptr)
 @ stdcall InbvResetDisplay()
 @ stdcall InbvSetScrollRegion(long long long long)
