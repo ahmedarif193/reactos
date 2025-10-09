@@ -161,8 +161,11 @@ int Telnet::Open(const char *szHost1, const char *strPort1){
 	if (bWinsockUp && !bConnected){
 		telSetConsoleTitle(szHost1);
 
-		strncpy (szHost,szHost1, 127);
-		strncpy(strPort, strPort1, sizeof(strPort));
+		// Copy host/port safely and ensure NUL termination
+		strncpy(szHost, szHost1, sizeof(szHost) - 1);
+		szHost[sizeof(szHost) - 1] = '\0';
+		strncpy(strPort, strPort1, sizeof(strPort) - 1);
+		strPort[sizeof(strPort) - 1] = '\0';
 
 		// Determine whether to pipe to an executable or use our own sockets
 		// (Paul Brannan March 18, 1999)
@@ -392,4 +395,3 @@ void Telnet::SetLocalAddress(SOCKET s) {
 
 	Network.SetLocalAddress(addr);
 }
-

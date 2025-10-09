@@ -219,12 +219,12 @@ VdmpStartExecution(VOID)
         if (VdmTib->VdmContext.EFlags & EFLAGS_INTERRUPT_MASK)
         {
             /* Enable them as well */
-            KiVdmSetVdmEFlagsAt(VdmState, EFLAGS_INTERRUPT_MASK);
+            KiVdmSetVdmEFlags(EFLAGS_INTERRUPT_MASK);
         }
         else
         {
             /* Disable them */
-            KiVdmClearVdmEFlagsAt(VdmState, EFLAGS_INTERRUPT_MASK);
+            KiVdmClearVdmEFlags(EFLAGS_INTERRUPT_MASK);
         }
 
         /* Enable the interrupt flag */
@@ -298,9 +298,9 @@ VdmEndExecution(IN PKTRAP_FRAME TrapFrame,
         }
         else
         {
-            /* Set the EFLAGS based on our software copy of EFLAGS */
+            /* Set EFLAGS from the software copy (use KiNtVdmState to avoid aliasing warnings) */
             VdmTib->VdmContext.EFlags = (VdmTib->VdmContext.EFlags & ~EFLAGS_INTERRUPT_MASK) |
-                                        (*VdmState & EFLAGS_INTERRUPT_MASK);
+                                        (*KiNtVdmState & EFLAGS_INTERRUPT_MASK);
         }
     }
 

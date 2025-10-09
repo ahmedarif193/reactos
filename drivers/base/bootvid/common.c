@@ -346,13 +346,13 @@ VidDisplayStringXY(
      * If the caller wanted transparent, then send the special value (16),
      * else use our default and call the helper routine.
      */
-    BackColor = Transparent ? BV_COLOR_NONE : BV_COLOR_BLACK;
+    BackColor = Transparent ? BV_COLOR_NONE : BV_COLOR_LIGHT_CYAN;
 
     /* Loop every character and adjust the position */
     for (; *String; ++String, Left += BOOTCHAR_WIDTH)
     {
-        /* Display a character with current text color */
-        DisplayCharacter(*String, Left, Top, VidpTextColor, BackColor);
+        /* Display a character */
+        DisplayCharacter(*String, Left, Top, BV_COLOR_LIGHT_BLUE, BackColor);
     }
 }
 

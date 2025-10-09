@@ -59,7 +59,15 @@ PITEMID_CHILD ILCreateNetConnectItem(INetConnection * pItem)
 
     /* Copy the connection properties */
     pnetid = ILGetConnData(pidl);
-    memset(pnetid->Unknown, 0, sizeof(pnetid->Unknown));
+    /* Zero reserved bytes explicitly to avoid -Warray-bounds diagnostics */
+    pnetid->Unknown[0] = 0;
+    pnetid->Unknown[1] = 0;
+    pnetid->Unknown[2] = 0;
+    pnetid->Unknown[3] = 0;
+    pnetid->Unknown[4] = 0;
+    pnetid->Unknown[5] = 0;
+    pnetid->Unknown[6] = 0;
+    pnetid->Unknown[7] = 0;
     pnetid->clsidThisObject = pProperties->clsidThisObject;
     pnetid->guidId = pProperties->guidId;
     pnetid->Status = pProperties->Status;

@@ -525,11 +525,13 @@ void TConfig::init_vars() {
 
 void TConfig::inifile_init() {
 	// B. K. Oxley 9/16/98
-	char* env_telnet_ini = getenv (ENV_TELNET_INI);
-	if (env_telnet_ini && *env_telnet_ini) {
-		strncpy (inifile, env_telnet_ini, sizeof(inifile));
-		return;
-	}
+    char* env_telnet_ini = getenv (ENV_TELNET_INI);
+    if (env_telnet_ini && *env_telnet_ini) {
+        // Copy safely and ensure NUL termination
+        strncpy(inifile, env_telnet_ini, sizeof(inifile) - 1);
+        inifile[sizeof(inifile) - 1] = '\0';
+        return;
+    }
 
 	strcpy(inifile, startdir);
 	if (sizeof(inifile) >= strlen(inifile)+strlen("telnet.ini")) {
@@ -587,10 +589,11 @@ void TConfig::keyfile_init() {
 		}
 		////
 
-	} else {
-		// set the keyfile to the value of the environment variable
-		strncpy(keyfile, k, sizeof(keyfile));
-	}
+    } else {
+        // set the keyfile to the value of the environment variable
+        strncpy(keyfile, k, sizeof(keyfile) - 1);
+        keyfile[sizeof(keyfile) - 1] = '\0';
+    }
 }
 
 void TConfig::redir_init() {
@@ -659,8 +662,11 @@ bool TConfig::Process_Params(int argc, char *argv[]) {
 				return FALSE;
 		}
 	}
-	if(optind < argc)
-		set_string(host, argv[optind++], sizeof(host)-1);
+    if(optind < argc)
+    {
+        set_string(host, argv[optind++], sizeof(host));
+    }
+
 	if(!strnicmp(host, "telnet://", 9)) {
 		// we have a URL to parse
 		char *s, *t;
@@ -680,15 +686,10 @@ bool TConfig::Process_Params(int argc, char *argv[]) {
 }
 
 void TConfig::set_string(char *dest, const char *src, const int length) {
-   int l = length;
-   strncpy(dest, src, l);
- //  dest[length-1] = '\0';
- // Ioannou : this messes strings - is this really needed ?
- // The target string, dest, might not be null-terminated
- // if the length of src is length or more.
- // it should be dest[length] = '\0' for strings with length 1
- // (Escape_string etc), but doesn't work with others (like host).
- // dest is long enough to avoid this in all the tested cases
+   if (!dest || !src || length <= 0) return;
+   // Copy at most length-1 characters and always NUL-terminate
+   strncpy(dest, src, (size_t)length - 1);
+   dest[length - 1] = '\0';
 }
 
 // Ioannou : ignore case for true or on
@@ -698,4 +699,3 @@ void TConfig::set_bool(bool *boolval, const char *str) {
    else if(!stricmp(str, "on")) *boolval = true;
 	else *boolval = (bool)atoi(str);
 }
-

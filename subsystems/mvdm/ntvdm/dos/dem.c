@@ -1554,7 +1554,14 @@ demFileFindFirst(
 
     /* Fill the block */
     FindFileBlock->DriveLetter  = DosData->Sda.CurrentDrive + 'A';
-    strncpy(FindFileBlock->Pattern, FileName, _countof(FindFileBlock->Pattern));
+    /* Copy up to the pattern capacity without forcing NUL-termination (11-byte DOS pattern) */
+    {
+        size_t pat_len = 0;
+        while (pat_len < _countof(FindFileBlock->Pattern) && FileName[pat_len] != '\0')
+            pat_len++;
+        if (pat_len)
+            memcpy(FindFileBlock->Pattern, FileName, pat_len);
+    }
     FindFileBlock->AttribMask   = AttribMask;
     FindFileBlock->SearchHandle = SearchHandle;
     FindFileBlock->Attributes   = LOBYTE(FindData.dwFileAttributes);

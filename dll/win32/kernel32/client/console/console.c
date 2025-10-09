@@ -3239,11 +3239,15 @@ IntGetConsoleKeyboardLayoutName(OUT PVOID pszLayoutName,
     /* Retrieve the results */
     _SEH2_TRY
     {
-        /* Copy only KL_NAMELENGTH == 9 characters, ANSI or UNICODE */
+        /* Copy up to KL_NAMELENGTH-1 characters and ensure NULL termination */
         if (bAnsi)
-            strncpy(pszLayoutName, (PCHAR)GetKbdLayoutNameRequest->LayoutBuffer, KL_NAMELENGTH);
+            RtlStringCchCopyNA((PCHAR)pszLayoutName, KL_NAMELENGTH,
+                               (PCHAR)GetKbdLayoutNameRequest->LayoutBuffer,
+                               KL_NAMELENGTH - 1);
         else
-            wcsncpy(pszLayoutName, (PWCHAR)GetKbdLayoutNameRequest->LayoutBuffer, KL_NAMELENGTH);
+            RtlStringCchCopyNW((PWCHAR)pszLayoutName, KL_NAMELENGTH,
+                               (PWCHAR)GetKbdLayoutNameRequest->LayoutBuffer,
+                               KL_NAMELENGTH - 1);
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {

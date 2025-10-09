@@ -4127,7 +4127,11 @@ static GpStatus load_wmf(IStream *stream, GpMetafile **metafile)
     if (hr != S_OK || size != sizeof(mh))
         return GenericError;
 
-    if (((WmfPlaceableFileHeader *)&mh)->Key == WMF_PLACEABLE_KEY)
+    /* Avoid aliasing a larger struct over a smaller object; only read the first DWORD */
+    {
+        UINT32 key;
+        memcpy(&key, &mh, sizeof(key));
+        if (key == WMF_PLACEABLE_KEY)
     {
         seek.QuadPart = 0;
         hr = IStream_Seek(stream, seek, STREAM_SEEK_SET, NULL);
@@ -4142,6 +4146,7 @@ static GpStatus load_wmf(IStream *stream, GpMetafile **metafile)
             return GenericError;
 
         is_placeable = TRUE;
+    }
     }
 
     seek.QuadPart = is_placeable ? sizeof(pfh) : 0;
