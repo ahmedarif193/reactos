@@ -280,7 +280,7 @@ function(add_cd_file)
     list(FIND _CD_FOR "all" __cd)
     if(NOT __cd EQUAL -1)
         list(REMOVE_ITEM _CD_FOR "all")
-        list(APPEND _CD_FOR "bootcd;livecd;regtest")
+        list(APPEND _CD_FOR "bootcd;livecd;regtest;liveimg")
     endif()
 
     # do we add it to bootcd?
@@ -305,6 +305,9 @@ function(add_cd_file)
             # manage dependency
             if(_CD_TARGET)
                 add_dependencies(bootcd ${_CD_TARGET} registry_inf)
+                if(TARGET liveimg_deps)
+                    add_dependencies(liveimg_deps ${_CD_TARGET} registry_inf)
+                endif()
             endif()
         else()
             dir_to_num(${_CD_DESTINATION} _num)
@@ -319,6 +322,9 @@ function(add_cd_file)
             # manage dependency - target level
             if(_CD_TARGET)
                 add_dependencies(reactos_cab_inf ${_CD_TARGET})
+                if(TARGET liveimg_deps)
+                    add_dependencies(liveimg_deps ${_CD_TARGET} registry_inf)
+                endif()
             endif()
         endif()
     endif() #end bootcd
@@ -329,6 +335,11 @@ function(add_cd_file)
         # manage dependency
         if(_CD_TARGET)
             add_dependencies(livecd ${_CD_TARGET} registry_inf)
+            # If a writable installed image target exists, also aggregate the
+            # same dependencies there without triggering ISO creation.
+            if(TARGET liveimg_deps)
+                add_dependencies(liveimg_deps ${_CD_TARGET} registry_inf)
+            endif()
         endif()
         foreach(item ${_CD_FILE})
             if(_CD_NAME_ON_CD)
@@ -344,6 +355,26 @@ function(add_cd_file)
             endif()
         endforeach()
     endif() #end livecd
+
+    # do we add it to liveimg?
+    list(FIND _CD_FOR liveimg __cd)
+    if(NOT __cd EQUAL -1)
+        # liveimg gets all files directly (not in CAB), similar to livecd but also includes bootcd files
+        foreach(item ${_CD_FILE})
+            if(_CD_NAME_ON_CD)
+                set(__file ${_CD_NAME_ON_CD})
+            else()
+                get_filename_component(__file ${item} NAME)
+            endif()
+            set_property(GLOBAL APPEND PROPERTY LIVEIMG_FILE_LIST "${_CD_DESTINATION}/${__file}=${item}")
+        endforeach()
+        # manage dependency
+        if(_CD_TARGET)
+            if(TARGET liveimg_deps)
+                add_dependencies(liveimg_deps ${_CD_TARGET} registry_inf)
+            endif()
+        endif()
+    endif() #end liveimg
 
     # do we need also to add it to hybridcd?
     list(FIND _CD_FOR hybridcd __cd)
@@ -454,6 +485,14 @@ function(create_iso_lists)
     file(GENERATE
          OUTPUT ${REACTOS_BINARY_DIR}/boot/bootcdregtest.$<CONFIG>.lst
          INPUT ${REACTOS_BINARY_DIR}/boot/bootcdregtest.cmake.lst)
+
+    get_property(_filelist GLOBAL PROPERTY LIVEIMG_FILE_LIST)
+    string(REPLACE ";" "\n" _filelist "${_filelist}")
+    file(APPEND ${REACTOS_BINARY_DIR}/boot/liveimg.cmake.lst "${_filelist}")
+    unset(_filelist)
+    file(GENERATE
+         OUTPUT ${REACTOS_BINARY_DIR}/boot/liveimg.$<CONFIG>.lst
+         INPUT ${REACTOS_BINARY_DIR}/boot/liveimg.cmake.lst)
 endfunction()
 
 # Create module_clean targets
@@ -867,6 +906,49 @@ function(create_registry_hives)
         DESTINATION reactos/system32/config
         FOR livecd)
 
+    # LiveIMG hives (prebuilt system - boots straight to desktop)
+    list(APPEND _liveimg_inf_files
+        ${_registry_inf}
+        ${CMAKE_SOURCE_DIR}/boot/bootdata/liveimg.inf
+        ${CMAKE_SOURCE_DIR}/boot/bootdata/caroots.inf)
+    if(SARCH STREQUAL "xbox")
+        list(APPEND _liveimg_inf_files
+            ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst_xbox.inf)
+    elseif(SARCH STREQUAL "pc98")
+        list(APPEND _liveimg_inf_files
+            ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst_pc98.inf)
+    else()
+        list(APPEND _liveimg_inf_files
+            ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst.inf)
+    endif()
+
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/system
+               ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/software
+               ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/default
+               ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/sam
+               ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/security
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg
+        COMMAND native-mkhive -h:SYSTEM,SOFTWARE,DEFAULT,SAM,SECURITY -d:${CMAKE_BINARY_DIR}/boot/bootdata/liveimg ${_liveimg_inf_files}
+        DEPENDS native-mkhive ${_liveimg_inf_files})
+
+    add_custom_target(liveimg_hives
+        DEPENDS ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/system
+                ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/software
+                ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/default
+                ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/sam
+                ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/security)
+
+    add_cd_file(
+        FILE ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/system
+             ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/software
+             ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/default
+             ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/sam
+             ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/security
+        TARGET liveimg_hives
+        DESTINATION reactos/system32/config
+        FOR liveimg)
+
     # BCD Hive
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/boot/bootdata/BCD
@@ -881,7 +963,7 @@ function(create_registry_hives)
         TARGET bcd_hive
         DESTINATION efi/boot
         NO_CAB
-        FOR bootcd regtest livecd)
+        FOR bootcd regtest livecd liveimg)
 
 endfunction()
 

@@ -177,6 +177,25 @@ KdInitSystem(
         return TRUE;
     }
 
+    if (!KdpTimestampConfigured)
+    {
+        KdpInitialPerformanceCounter = KeQueryPerformanceCounter(&KdPerformanceCounterRate);
+        KdpTimestampConfigured = TRUE;
+    }
+    else if (KdPerformanceCounterRate.QuadPart == 0)
+    {
+        KeQueryPerformanceCounter(&KdPerformanceCounterRate);
+    }
+
+    if (LoaderBlock &&
+        LoaderBlock->Extension &&
+        LoaderBlock->Extension->LoaderPerformanceData)
+    {
+        KdpTimeStampOffsetMicroseconds = LoaderBlock->Extension->LoaderPerformanceData->EndTime;
+        /* Debug: Print the received offset value */
+        KdpDprintf("KD: Received bootloader EndTime offset: %llu microseconds\n", KdpTimeStampOffsetMicroseconds);
+    }
+
     /* Check if we already initialized once */
     if (KdDebuggerEnabled)
         return TRUE;

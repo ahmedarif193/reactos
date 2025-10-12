@@ -15,6 +15,7 @@
 @ cdecl DbgPrint2(long long str long str)
 @ cdecl DebugDumpBuffer()
 @ cdecl DebugInit()
+@ cdecl DbgQueryMicrosecondsSinceBoot()
 @ cdecl FrLdrBugCheckWithMessage()
 @ stdcall KeBugCheckEx(long long long long long)
 

@@ -37,15 +37,53 @@ BOOLEAN IniFileInitialize(VOID)
     Status = FsOpenFile("freeldr.ini", FrLdrBootPath, OpenReadOnly, &FileId);
     if (Status != ESUCCESS)
     {
+        CHAR FallbackPath[MAX_PATH];
+        SIZE_T len;
         ERR("Error while opening freeldr.ini, Status: %d\n", Status);
 
-        /* Try to open boot.ini */
-        Status = FsOpenFile("boot.ini", FrLdrBootPath, OpenReadOnly, &FileId);
+        /*
+         * Fallback 1: If the current boot path points to rdisk(>0),
+         * retry with rdisk(0) to guard against off-by-one disk index
+         * issues on some UEFI firmwares.
+         */
+        *FallbackPath = '\0';
+        len = min(sizeof(FallbackPath)/sizeof(CHAR), strlen(FrLdrBootPath));
+        if (len < sizeof(FallbackPath)/sizeof(CHAR))
+        {
+            RtlStringCbCopyA(FallbackPath, sizeof(FallbackPath), FrLdrBootPath);
+            CHAR *p = strstr(FallbackPath, "rdisk(");
+            if (p)
+            {
+                /* Move to the digit and replace any non-zero by '0' */
+                p += 6;
+                if (*p && *p != '0')
+                {
+                    *p = '0';
+                    TRACE("Retrying freeldr.ini with fallback path: '%s'\n", FallbackPath);
+                    Status = FsOpenFile("freeldr.ini", FallbackPath, OpenReadOnly, &FileId);
+                }
+            }
+        }
+
+        /* Fallback 2: Try a canonical first-disk, first-partition path. */
         if (Status != ESUCCESS)
         {
-            ERR("Error while opening boot.ini, Status: %d\n", Status);
-            UiMessageBoxCritical("Error opening freeldr.ini/boot.ini or file not found.\nYou need to re-install FreeLoader.");
-            return FALSE;
+            static const CHAR CanonicalPath[] = "multi(0)disk(0)rdisk(0)partition(1)";
+            TRACE("Retrying freeldr.ini with canonical path: '%s'\n", CanonicalPath);
+            Status = FsOpenFile("freeldr.ini", CanonicalPath, OpenReadOnly, &FileId);
+        }
+
+        if (Status != ESUCCESS)
+        {
+            /* Try to open boot.ini (legacy) before bailing out */
+            ERR("Fallbacks failed for freeldr.ini (Status=%d). Trying boot.ini...\n", Status);
+            Status = FsOpenFile("boot.ini", FrLdrBootPath, OpenReadOnly, &FileId);
+            if (Status != ESUCCESS)
+            {
+                ERR("Error while opening boot.ini, Status: %d\n", Status);
+                UiMessageBoxCritical("Error opening freeldr.ini/boot.ini or file not found.\nYou need to re-install FreeLoader.");
+                return FALSE;
+            }
         }
     }
 

@@ -136,6 +136,9 @@ PCHAR KdPrintCircularBuffer = KdPrintDefaultCircularBuffer;
 ULONG KdPrintBufferSize = sizeof(KdPrintDefaultCircularBuffer);
 ULONG KdPrintBufferChanges = 0;
 KSPIN_LOCK KdpPrintSpinLock;
+ULONGLONG KdpTimeStampOffsetMicroseconds = 0;
+LARGE_INTEGER KdpInitialPerformanceCounter = {0};
+BOOLEAN KdpTimestampConfigured = FALSE;
 
 //
 // Debug Filter Masks

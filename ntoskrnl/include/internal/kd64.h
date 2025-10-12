@@ -514,6 +514,13 @@ NTAPI
 KdLogDbgPrint(
     _In_ PSTRING String);
 
+ULONG
+KdpFormatDebugMessage(
+    _Out_writes_bytes_(BufferLength) PCHAR Buffer,
+    _In_ ULONG BufferLength,
+    _In_reads_bytes_(MessageLength) PCCH Message,
+    _In_ ULONG MessageLength);
+
 //
 // Global KD Data
 //
@@ -548,6 +555,10 @@ extern LARGE_INTEGER KdTimerStop, KdTimerStart, KdTimerDifference;
 
 extern CHAR KdpMessageBuffer[KDP_MSG_BUFFER_SIZE];
 extern CHAR KdpPathBuffer[KDP_MSG_BUFFER_SIZE];
+
+extern ULONGLONG KdpTimeStampOffsetMicroseconds;
+extern LARGE_INTEGER KdpInitialPerformanceCounter;
+extern BOOLEAN KdpTimestampConfigured;
 
 extern CHAR KdPrintDefaultCircularBuffer[KD_DEFAULT_LOG_BUFFER_SIZE];
 extern PCHAR KdPrintWritePointer;

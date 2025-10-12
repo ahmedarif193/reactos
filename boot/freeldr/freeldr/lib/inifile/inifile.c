@@ -19,6 +19,7 @@
 
 #include <freeldr.h>
 
+#define NDEBUG
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(INIFILE);
 
@@ -31,9 +32,6 @@ BOOLEAN IniOpenSection(PCSTR SectionName, ULONG_PTR* SectionId)
 {
     PLIST_ENTRY Entry;
     PINI_SECTION Section;
-
-    TRACE("IniOpenSection() SectionName = %s\n", SectionName);
-
     // Loop through each section and find the one we want
     for (Entry = IniFileSectionListHead.Flink;
          Entry != &IniFileSectionListHead;
@@ -51,9 +49,6 @@ BOOLEAN IniOpenSection(PCSTR SectionName, ULONG_PTR* SectionId)
             return TRUE;
         }
     }
-
-    TRACE("IniOpenSection() Section not found.\n");
-
     return FALSE;
 }
 
@@ -121,9 +116,6 @@ ULONG IniGetSectionSettingValueSize(ULONG_PTR SectionId, ULONG SettingIndex)
 BOOLEAN IniReadSettingByNumber(ULONG_PTR SectionId, ULONG SettingNumber, PCHAR SettingName, ULONG NameSize, PCHAR SettingValue, ULONG ValueSize)
 {
     PINI_SECTION_ITEM    SectionItem;
-    TRACE(".001 NameSize = %d ValueSize = %d\n", NameSize, ValueSize);
-
-    TRACE("IniReadSettingByNumber() SectionId = 0x%x\n", SectionId);
 
     // Retrieve requested setting
     SectionItem = IniGetSettingByNumber(SectionId, SettingNumber);
@@ -132,21 +124,10 @@ BOOLEAN IniReadSettingByNumber(ULONG_PTR SectionId, ULONG SettingNumber, PCHAR S
         TRACE("IniReadSettingByNumber() Setting number %d not found.\n", SettingNumber);
         return FALSE;
     }
-
-    TRACE("IniReadSettingByNumber() Setting number %d found.\n", SettingNumber);
-    TRACE("IniReadSettingByNumber() Setting name = %s\n", SectionItem->ItemName);
-    TRACE("IniReadSettingByNumber() Setting value = %s\n", SectionItem->ItemValue);
-
-    TRACE("1 NameSize = %d ValueSize = %d\n", NameSize, ValueSize);
-    TRACE("2 NameSize = %d ValueSize = %d\n", NameSize, ValueSize);
     strncpy(SettingName, SectionItem->ItemName, NameSize - 1);
     SettingName[NameSize - 1] = '\0';
-    TRACE("3 NameSize = %d ValueSize = %d\n", NameSize, ValueSize);
     strncpy(SettingValue, SectionItem->ItemValue, ValueSize - 1);
     SettingValue[ValueSize - 1] = '\0';
-    TRACE("4 NameSize = %d ValueSize = %d\n", NameSize, ValueSize);
-    DbgDumpBuffer(DPRINT_INIFILE, SettingName, NameSize);
-    DbgDumpBuffer(DPRINT_INIFILE, SettingValue, ValueSize);
 
     return TRUE;
 }
@@ -156,8 +137,6 @@ BOOLEAN IniReadSettingByName(ULONG_PTR SectionId, PCSTR SettingName, PCHAR Buffe
     PINI_SECTION Section = (PINI_SECTION)SectionId;
     PLIST_ENTRY Entry;
     PINI_SECTION_ITEM SectionItem;
-
-    TRACE("IniReadSettingByName() SectionId = 0x%x\n", SectionId);
 
     // Loop through each section item and find the one we want
     for (Entry = Section->SectionItemList.Flink;
@@ -169,18 +148,12 @@ BOOLEAN IniReadSettingByName(ULONG_PTR SectionId, PCSTR SettingName, PCHAR Buffe
         // Check to see if this is the setting we want
         if (_stricmp(SettingName, SectionItem->ItemName) == 0)
         {
-            TRACE("IniReadSettingByName() Setting \'%s\' found.\n", SettingName);
-            TRACE("IniReadSettingByName() Setting value = %s\n", SectionItem->ItemValue);
-
             strncpy(Buffer, SectionItem->ItemValue, BufferSize - 1);
             Buffer[BufferSize - 1] = '\0';
 
             return TRUE;
         }
     }
-
-    WARN("IniReadSettingByName() Setting \'%s\' not found.\n", SettingName);
-
     return FALSE;
 }
 

@@ -455,6 +455,9 @@ KdpPrint(
     NTSTATUS Status;
     BOOLEAN Enable;
     STRING OutputString;
+    CHAR LocalBuffer[KD_PRINT_MAX_BYTES];
+    USHORT PrefixLength = 0;
+    ULONGLONG Microseconds = 0, Seconds = 0, Fractional = 0;
 
     if (NtQueryDebugFilterState(ComponentId, Level) == (NTSTATUS)FALSE)
     {
@@ -487,11 +490,34 @@ KdpPrint(
                                 Handled);
     }
 
-    /* Setup the output string */
-    OutputString.Buffer = String;
-    OutputString.Length = OutputString.MaximumLength = Length;
+    /* Build a timestamp prefix to align all kernel prints with KD banner */
+    Microseconds = KeQueryInterruptTime() / 10ULL; /* 100ns -> usec */
+    if (Microseconds == 0)
+    {
+#if defined(_M_AMD64) || defined(_M_IX86)
+        ULONGLONG Tsc = __rdtsc();
+        Microseconds = Tsc / 2000; /* coarse fallback */
+#else
+        static ULONGLONG FallbackCounter = 0;
+        Microseconds = FallbackCounter++;
+#endif
+    }
+    Microseconds += KdpTimeStampOffsetMicroseconds;
 
-    /* Log the print */
+    Seconds = Microseconds / 1000000ULL;
+    Fractional = Microseconds % 1000000ULL;
+    PrefixLength = (USHORT)_snprintf(LocalBuffer, sizeof(LocalBuffer),
+                                     "[%8llu.%06llu] ",
+                                     Seconds, Fractional);
+    if (PrefixLength >= sizeof(LocalBuffer)) PrefixLength = 0;
+
+    /* Append the original message after the prefix */
+    Length = min((USHORT)(sizeof(LocalBuffer) - PrefixLength - 1), Length);
+    KdpMoveMemory(LocalBuffer + PrefixLength, String, Length);
+    OutputString.Buffer = LocalBuffer;
+    OutputString.Length = OutputString.MaximumLength = PrefixLength + Length;
+
+    /* Log the print (prefixed) */
     KdLogDbgPrint(&OutputString);
 
     /* Check for a debugger */
@@ -533,14 +559,68 @@ KdpDprintf(
     USHORT Length;
     va_list ap;
     CHAR Buffer[512];
+    ULONGLONG Microseconds = 0;
+    ULONGLONG Seconds = 0;
+    ULONGLONG Fractional = 0;
+    USHORT TimestampLength = 0;
+    LARGE_INTEGER Counter;
+    ULONGLONG Frequency;
+    ULONGLONG Delta;
 
-    /* Format the string */
+    /* Get timestamp using performance counter */
+    if (KdPerformanceCounterRate.QuadPart != 0)
+    {
+        Counter = KeQueryPerformanceCounter(NULL);
+        Frequency = (ULONGLONG)KdPerformanceCounterRate.QuadPart;
+
+        /* Calculate time elapsed since kernel start */
+        if (Counter.QuadPart >= KdpInitialPerformanceCounter.QuadPart)
+            Delta = (ULONGLONG)(Counter.QuadPart - KdpInitialPerformanceCounter.QuadPart);
+        else
+            Delta = 0;
+
+        /* Convert to microseconds */
+        Microseconds = (Delta * 1000000ULL) / Frequency;
+
+        /* Add bootloader offset to get continuous timestamp */
+        Microseconds += KdpTimeStampOffsetMicroseconds;
+    }
+    else
+    {
+        /* Fallback: Use TSC if performance counter not initialized */
+#if defined(_M_AMD64) || defined(_M_IX86)
+        ULONGLONG Tsc = __rdtsc();
+        /* Assume ~2GHz CPU (2000 cycles per microsecond) */
+        Microseconds = Tsc / 2000;
+#else
+        /* For other architectures, use a simple counter as fallback */
+        static ULONGLONG Counter = 0;
+        Microseconds = Counter++;
+#endif
+    }
+
+    /* Convert to seconds and fractional part */
+    Seconds = Microseconds / 1000000ULL;
+    Fractional = Microseconds % 1000000ULL;
+
+    /* Format timestamp directly into Buffer */
+    TimestampLength = (USHORT)_snprintf(Buffer, sizeof(Buffer),
+                                        "[%8llu.%06llu] ",
+                                        Seconds, Fractional);
+
+    if (TimestampLength >= sizeof(Buffer))
+        TimestampLength = 0;
+
+    /* Format the actual message after the timestamp */
     va_start(ap, Format);
-    Length = (USHORT)_vsnprintf(Buffer,
-                                sizeof(Buffer),
+    Length = (USHORT)_vsnprintf(Buffer + TimestampLength,
+                                sizeof(Buffer) - TimestampLength,
                                 Format,
                                 ap);
     va_end(ap);
+
+    /* Calculate total length */
+    Length = min(TimestampLength + Length, sizeof(Buffer) - 1);
 
     /* Set it up */
     String.Buffer = Buffer;

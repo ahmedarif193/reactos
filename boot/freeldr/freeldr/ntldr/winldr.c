@@ -105,6 +105,14 @@ AllocateAndInitLPB(
     LoaderBlock = &WinLdrSystemBlock->LoaderBlock;
     LoaderBlock->NlsData = &WinLdrSystemBlock->NlsDataBlock;
 
+    /*
+     * Seed loader performance data for the kernel debugger timestamping.
+     * We start at the current bootloader-relative time (usually 0 on first call)
+     * and set EndTime just before transferring control to the kernel.
+     */
+    WinLdrSystemBlock->LoaderPerformanceData.StartTime = DbgQueryMicrosecondsSinceBoot();
+    WinLdrSystemBlock->LoaderPerformanceData.EndTime = 0;
+
     /* Initialize the Loader Block Extension */
     Extension = &WinLdrSystemBlock->Extension;
     LoaderBlock->Extension = Extension;
@@ -378,14 +386,19 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
     }
 #endif
 
+    /*
+     * Always provide LoaderPerformanceData so the kernel can use it to
+     * continue debugger timestamps seamlessly. Keep BootViaWinload flag
+     * for Vista+ semantics.
+     */
     if (VersionToBoot >= _WIN32_WINNT_VISTA)
     {
         Extension->BootViaWinload = 1;
-        Extension->LoaderPerformanceData = PaToVa(&WinLdrSystemBlock->LoaderPerformanceData);
-
-        InitializeListHead(&Extension->BootApplicationPersistentData);
-        List_PaToVa(&Extension->BootApplicationPersistentData);
     }
+    Extension->LoaderPerformanceData = PaToVa(&WinLdrSystemBlock->LoaderPerformanceData);
+
+    InitializeListHead(&Extension->BootApplicationPersistentData);
+    List_PaToVa(&Extension->BootApplicationPersistentData);
 
 #ifdef _M_IX86
     /* Set headless block pointer */
@@ -1428,6 +1441,12 @@ LoadAndBootWindowsCommon(
 #ifndef _M_AMD64
     WinLdrpDumpArcDisks(LoaderBlockVA);
 #endif
+
+    /*
+     * Finalize loader performance data: record how long the bootloader ran
+     * so the kernel debugger can maintain a continuous timestamp.
+     */
+    WinLdrSystemBlock->LoaderPerformanceData.EndTime = DbgQueryMicrosecondsSinceBoot();
 
     /* Pass control */
     (*KiSystemStartup)(LoaderBlockVA);

@@ -399,12 +399,8 @@ FrLdrHeapAllocateEx(
             NextBlock = Block + 1 + BlockSize;
         }
 
-        TRACE("HeapAllocate: About to update NextBlock=%p, BlockSize=%d\n", NextBlock, BlockSize);
-
-        /* Update the next blocks back link */
         NextBlock->PreviousSize = BlockSize;
 
-        /* Update heap usage */
         Heap->NumAllocs++;
         Heap->CurrentAllocBytes += Block->Size * sizeof(HEAP_BLOCK);
         Heap->MaxAllocBytes = max(Heap->MaxAllocBytes, Heap->CurrentAllocBytes);
@@ -413,13 +409,9 @@ FrLdrHeapAllocateEx(
 #if DBG && !defined(_M_ARM)
         Heap->AllocationTime += (__rdtsc() - Time);
 #endif
-        TRACE("HeapAllocate(%p, %ld, %.4s) -> return %p\n",
-              HeapHandle, ByteSize, &Tag, Block->Data);
 
         /* HACK: zero out the allocation */
         RtlZeroMemory(Block->Data, Block->Size * sizeof(HEAP_BLOCK));
-
-        TRACE("HeapAllocate: RtlZeroMemory done, NextBlock=%p\n", NextBlock);
 
 #ifdef FREELDR_HEAP_VERIFIER
         /* Write size and redzones */
@@ -434,8 +426,6 @@ FrLdrHeapAllocateEx(
         return Block->Data;
     }
 
-    /* We found nothing */
-    WARN("HEAP: nothing suitable found for 0x%lx bytes\n", ByteSize);
     return NULL;
 }
 

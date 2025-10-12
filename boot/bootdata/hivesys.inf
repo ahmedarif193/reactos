@@ -68,6 +68,7 @@ HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\USB#ROOT_HUB20","C
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\GenCdRom","Service",0x00000000,"cdrom"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\GenCdRom","ClassGUID",0x00000000,"{4D36E965-E325-11CE-BFC1-08002BE10318}"
 
+
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\GenDisk","Service",0x00000000,"disk"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\GenDisk","ClassGUID",0x00000000,"{4D36E967-E325-11CE-BFC1-08002BE10318}"
 

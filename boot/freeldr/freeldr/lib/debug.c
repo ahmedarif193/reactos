@@ -25,49 +25,104 @@
 /* Forward declaration for the firmware timer helper used by GetMicrosecondsSinceBoot. */
 ULONG ArcGetRelativeTime(VOID);
 
-/* Track the start time so we can prefix log output with relative timestamps. */
-static ULONGLONG BootStartTimestamp = 0;
+/* Track initialization state for timestamp system. */
 static BOOLEAN TimestampInitialized = FALSE;
 
-/* Return the approximate number of microseconds elapsed since boot. */
+/*
+ * Return microseconds elapsed since bootloader start, similar to Linux printk
+ * time style: a monotonic counter from boot, not wall-clock time.
+ *
+ * On x86/x64 we calibrate TSC frequency via CPUID 0x15/0x16 when available,
+ * falling back to a 1-second calibration using firmware relative seconds.
+ * As a last resort, we fall back to the BIOS second counter resolution.
+ */
 static ULONGLONG
 GetMicrosecondsSinceBoot(VOID)
 {
 #if defined(_M_IX86) || defined(_M_AMD64)
-    ULONGLONG CurrentTimestamp;
-    ULONGLONG ElapsedCycles;
-    ULONGLONG Microseconds;
-    
-    // Initialize boot timestamp on first call
+    static ULONGLONG TscHz = 0;             /* TSC frequency in Hz */
+    static ULONGLONG BootStartTsc = 0;      /* TSC at first call */
+
+    /* Calibrate on first use */
     if (!TimestampInitialized)
     {
-        BootStartTimestamp = __rdtsc();
-        TimestampInitialized = TRUE;
-        return 0;
-    }
-    
-    CurrentTimestamp = __rdtsc();
-    ElapsedCycles = CurrentTimestamp - BootStartTimestamp;
-    
-    // Assume ~2GHz CPU for approximation (2000 cycles per microsecond)
-    // This is a rough estimate that works reasonably well for modern CPUs
-    Microseconds = ElapsedCycles / 2000;
-    
-    return Microseconds;
+        /* Try CPUID 0x15 (TSC/core crystal ratio) */
+#if defined(__GNUC__)
+        unsigned int a=0, b=0, c=0, d=0;
+        __asm__ __volatile__("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0x15) : "cc");
+        if (a != 0 && b != 0 && c != 0)
+        {
+            /* TSC Hz = crystal_hz * (b/a) */
+            TscHz = ((ULONGLONG)c * (ULONGLONG)b) / (ULONGLONG)a;
+        }
+        if (TscHz == 0)
+        {
+            /* Try CPUID 0x16 (base frequency in MHz) */
+            __asm__ __volatile__("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0x16) : "cc");
+            if (a != 0)
+            {
+                /* EAX holds base frequency in MHz */
+                TscHz = (ULONGLONG)a * 1000000ULL;
+            }
+        }
 #else
-    // Fallback for non-x86 architectures: use relative time in seconds
-    ULONG Seconds;
-    
+        /* Non-GNU toolchain: skip CPUID attempts */
+#endif
+        if (TscHz == 0)
+        {
+            /* Calibrate using StallExecutionProcessor (PIT-based) for ~50ms */
+            const ULONG CalibrateMicroseconds = 50 * 1000; /* 50 ms */
+            ULONGLONG t0 = __rdtsc();
+            StallExecutionProcessor(CalibrateMicroseconds);
+            ULONGLONG t1 = __rdtsc();
+            if (t1 > t0)
+            {
+                ULONGLONG delta = t1 - t0;
+                TscHz = (delta * 1000000ULL) / CalibrateMicroseconds;
+            }
+        }
+        if (TscHz == 0)
+        {
+            /* Final fallback: coarse calibration using firmware seconds */
+            ULONG start_s = ArcGetRelativeTime();
+            ULONGLONG t0 = __rdtsc();
+            ULONG s;
+            do { s = ArcGetRelativeTime(); } while (s == start_s);
+            ULONGLONG t1 = __rdtsc();
+            ULONG elapsed_s = (s > start_s) ? (s - start_s) : 1;
+            if (elapsed_s == 0) elapsed_s = 1;
+            if (t1 > t0) TscHz = (t1 - t0) / elapsed_s;
+        }
+
+        BootStartTsc = __rdtsc();
+        TimestampInitialized = TRUE;
+        return 0;
+    }
+
+    /* Convert TSC delta to microseconds using calibrated frequency */
+    {
+        ULONGLONG now = __rdtsc();
+        ULONGLONG delta = now - BootStartTsc;
+        if (delta == 0 || TscHz == 0) return 0;
+        /* microseconds = delta * 1e6 / Hz */
+        return (delta * 1000000ULL) / TscHz;
+    }
+#else
+    /* Non x86/x64: use firmware relative seconds (coarse) */
     if (!TimestampInitialized)
     {
         TimestampInitialized = TRUE;
         return 0;
     }
-    
-    // Use ArcGetRelativeTime as fallback (returns seconds)
-    Seconds = ArcGetRelativeTime();
-    return (ULONGLONG)Seconds * 1000000ULL;
+    return (ULONGLONG)ArcGetRelativeTime() * 1000000ULL;
 #endif
+}
+
+/* Public wrapper used by other bootloader units to query elapsed time */
+ULONGLONG
+DbgQueryMicrosecondsSinceBoot(VOID)
+{
+    return GetMicrosecondsSinceBoot();
 }
 
 #define DEBUG_ALL
@@ -351,6 +406,8 @@ DbgPrint2(ULONG Mask, ULONG Level, const char *File, ULONG Line, char *Format, .
     }
 }
 
+
+
 VOID
 DebugDumpBuffer(ULONG Mask, PVOID Buffer, ULONG Length)
 {
@@ -503,6 +560,13 @@ DbgPrint2(ULONG Mask, ULONG Level, const char *File, ULONG Line, char *Format, .
     UNREFERENCED_PARAMETER(File);
     UNREFERENCED_PARAMETER(Line);
     UNREFERENCED_PARAMETER(Format);
+}
+
+ULONGLONG
+DbgQueryMicrosecondsSinceBoot(VOID)
+{
+    /* No debug timing available in release builds */
+    return 0;
 }
 
 VOID

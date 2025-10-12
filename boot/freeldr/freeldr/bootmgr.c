@@ -255,10 +255,18 @@ BuildArgvForOsLoader(
     for (i = 0; i < Count; ++i)
     {
         Size = IniGetSectionSettingNameSize(SectionId, i);
+        SIZE_T ValueSize = IniGetSectionSettingValueSize(SectionId, i);
         SettingValue = SettingName + Size;
         IniReadSettingByNumber(SectionId, i,
                                SettingName, Size,
-                               SettingValue, IniGetSectionSettingValueSize(SectionId, i));
+                               SettingValue, ValueSize);
+
+        if (FrldrGetBootPartition() == 0xFF &&
+            _stricmp(SettingName, "SystemPartition") == 0)
+        {
+            RtlStringCbCopyA(SettingValue, ValueSize, BootPath);
+        }
+
         SettingName[Size - 1] = '=';
 
         *Args++ = SettingName;

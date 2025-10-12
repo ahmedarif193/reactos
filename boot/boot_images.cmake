@@ -188,3 +188,33 @@ if(DEFINED EFI_PLATFORM_ID)
         NAME_ON_CD boot${EFI_PLATFORM_ID}.efi
         FOR livecd hybridcd)
 endif()
+
+## LiveIMG
+# Create the file list
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/liveimg.cmake.lst "")
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/liveimg.cmake.lst "${CMAKE_CURRENT_BINARY_DIR}/empty\n")
+
+# Create TEMP dir
+file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/liveimg.cmake.lst "reactos/TEMP=${CMAKE_CURRENT_BINARY_DIR}/empty\n")
+
+# Create user profile directories
+add_allusers_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/liveimg.cmake.lst "Profiles")
+add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/liveimg.cmake.lst "Profiles" "Default User")
+
+# LiveIMG: BIOS/UEFI bootable, RW FAT32 disk image with all bootcd and livecd files.
+# - Combines bootcd and livecd file sets to create a complete RW system.
+# - Adds boot code (dosmbr/fat32) and ensures UEFI loader is present.
+# - Incremental: depends on the aggregated file list and collected deps.
+
+# Aggregator for building everything needed by liveimg without invoking ISO tools.
+add_custom_target(liveimg_deps)
+
+add_custom_target(liveimg
+    COMMAND /usr/bin/env bash ${CMAKE_SOURCE_DIR}/boot/tools/make_reactos_img.sh
+            --mode fat32
+            --output ${REACTOS_BINARY_DIR}/liveimg.img
+            --size $<IF:$<CONFIG:Release>,400,600>
+            --build-root ${REACTOS_BINARY_DIR}
+            --list ${CMAKE_CURRENT_BINARY_DIR}/liveimg.$<CONFIG>.lst
+    DEPENDS liveimg_deps dosmbr fat fat32 ${CMAKE_CURRENT_BINARY_DIR}/liveimg.$<CONFIG>.lst
+    VERBATIM)

@@ -507,24 +507,29 @@ UefiSetBootpath(VOID)
          bio->Media->LogicalPartition);
 
    ULONG BootPartition = 0;
-   PARTITION_TABLE_ENTRY PartitionEntry = {0};
+   PARTITION_TABLE_ENTRY PartitionEntry;
    BOOLEAN HasPartitionInfo = FALSE;
    BOOLEAN TreatAsCd = UefiIsCdRomHandle(handles[UefiBootRootIdentifier]);
 
-   if (!TreatAsCd && bio->Media->RemovableMedia == TRUE && bio->Media->BlockSize == 2048)
-   {
-        TreatAsCd = TRUE;
-   }
+   RtlZeroMemory(&PartitionEntry, sizeof(PartitionEntry));
 
    if (UefiGetBootPartitionEntry(FrldrBootDrive, &PartitionEntry, &BootPartition) &&
        BootPartition != 0)
    {
-        HasPartitionInfo = TRUE;
+        HasPartitionInfo = (PartitionEntry.PartitionSectorCount != 0 ||
+                            PartitionEntry.SystemIndicator != PARTITION_ENTRY_UNUSED);
    }
 
-   if (!TreatAsCd && HasPartitionInfo && !bio->Media->LogicalPartition && BootPartition > 1)
+   if (TreatAsCd && HasPartitionInfo)
    {
-        TRACE("Treating boot media as ISO/CD based on partition index %lu\n", BootPartition);
+        TRACE("Boot handle advertises CD but partitioned media detected, treating as HDD\n");
+        TreatAsCd = FALSE;
+   }
+
+   if (!TreatAsCd && bio->Media->RemovableMedia == TRUE &&
+       bio->Media->BlockSize == 2048 && !HasPartitionInfo)
+   {
+        TRACE("Removable 2048-byte media without partitions, treating as ISO/CD\n");
         TreatAsCd = TRUE;
    }
 
@@ -544,27 +549,29 @@ UefiSetBootpath(VOID)
         BootPartition = 1;
    }
 
-   UefiBootHasDiskArc = TRUE;
-   UefiBootDiskArcNumber = PublicBootArcDisk;
-   UefiBootDiskArcPartition = BootPartition;
-
-   TRACE("UEFI boot media classification: TreatAsCd=%d HasPartitionInfo=%d BootPartition=%lu\n",
-         TreatAsCd, HasPartitionInfo, BootPartition);
-
    if (TreatAsCd)
    {
         ULONG CdIndex = MapToCdromIndex(handles[UefiBootRootIdentifier]);
+        UefiBootHasDiskArc = FALSE;
+        UefiBootDiskArcNumber = 0;
+        UefiBootDiskArcPartition = 0;
         FrldrBootPartition = 0xFF;
         RtlStringCbPrintfA(FrLdrBootPath, sizeof(FrLdrBootPath),
                            "multi(0)disk(0)cdrom(%lu)", CdIndex);
    }
    else
    {
+        UefiBootHasDiskArc = TRUE;
+        UefiBootDiskArcNumber = PublicBootArcDisk;
+        UefiBootDiskArcPartition = BootPartition;
         FrldrBootPartition = BootPartition;
         RtlStringCbPrintfA(FrLdrBootPath, sizeof(FrLdrBootPath),
                            "multi(0)disk(0)rdisk(%u)partition(%lu)",
                            PublicBootArcDisk, BootPartition);
    }
+
+   TRACE("UEFI boot media classification: TreatAsCd=%d HasPartitionInfo=%d BootPartition=%lu\n",
+         TreatAsCd, HasPartitionInfo, BootPartition);
 
     return TRUE;
 }

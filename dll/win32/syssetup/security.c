@@ -1576,6 +1576,8 @@ InstallSecurity(VOID)
 //    else
         pszSecurityInf = L"defltwk.inf";
 
+    DPRINT1("InstallSecurity: using %S\n", pszSecurityInf);
+
     InstallBuiltinAccounts();
 
     hSecurityInf = SetupOpenInfFileW(pszSecurityInf,
@@ -1671,6 +1673,10 @@ SetAdministratorPassword(LPCWSTR Password)
         DPRINT1("SamOpenUser() failed (Status %08lx)\n", Status);
         goto done;
     }
+    else
+    {
+        DPRINT1("SetAdministratorPassword: SamOpenUser succeeded\n");
+    }
 
     RtlInitUnicodeString(&PasswordInfo.Password, Password);
     PasswordInfo.PasswordExpired = FALSE;
@@ -1683,6 +1689,10 @@ SetAdministratorPassword(LPCWSTR Password)
         DPRINT1("SamSetInformationUser() failed (Status %08lx)\n", Status);
         goto done;
     }
+    else
+    {
+        DPRINT1("SetAdministratorPassword: SamSetInformationUser success\n");
+    }
 
     Status = SamQueryInformationUser(UserHandle,
                                      UserAccountNameInformation,
@@ -1691,6 +1701,10 @@ SetAdministratorPassword(LPCWSTR Password)
     {
         DPRINT1("SamQueryInformationUser() failed (Status 0x%08lx)\n", Status);
         goto done;
+    }
+    else
+    {
+        DPRINT1("SetAdministratorPassword: SamQueryInformationUser success\n");
     }
 
     AdminInfo.Name = RtlAllocateHeap(RtlGetProcessHeap(),
@@ -1802,4 +1816,3 @@ done:
 
 
 /* EOF */
-

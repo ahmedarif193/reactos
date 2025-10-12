@@ -22,7 +22,7 @@ add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcdregtest/regtest.cmd DESTINATI
 
 # autorun.inf
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/autorun-bootcd.inf DESTINATION root NO_CAB NOT_IN_HYBRIDCD NAME_ON_CD autorun.inf FOR bootcd)
-add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/autorun-livecd.inf DESTINATION root NO_CAB NOT_IN_HYBRIDCD NAME_ON_CD autorun.inf FOR livecd)
+add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/autorun-livecd.inf DESTINATION root NO_CAB NOT_IN_HYBRIDCD NAME_ON_CD autorun.inf FOR livecd liveimg)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/autorun-hybridcd.inf DESTINATION root NO_CAB NOT_IN_HYBRIDCD NAME_ON_CD autorun.inf FOR hybridcd)
 
 # icon.ico
@@ -53,12 +53,14 @@ endif()
 # freeldr.ini
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcd.ini DESTINATION root NO_CAB NOT_IN_HYBRIDCD NAME_ON_CD freeldr.ini FOR bootcd regtest)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/livecd.ini DESTINATION root NOT_IN_HYBRIDCD NAME_ON_CD freeldr.ini FOR livecd)
+add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/liveimg.ini DESTINATION root NOT_IN_HYBRIDCD NAME_ON_CD freeldr.ini FOR liveimg)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/hybridcd.ini DESTINATION root NAME_ON_CD freeldr.ini FOR hybridcd)
 
 # Unattend
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcdregtest/unattend.inf DESTINATION reactos NO_CAB FOR regtest)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcd/unattend.inf DESTINATION reactos NO_CAB FOR bootcd)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/livecd/unattend.inf DESTINATION reactos NO_CAB FOR livecd)
+add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/liveimg/unattend.inf DESTINATION reactos NO_CAB FOR liveimg)
 
 # LiveCD shortcuts
 macro(add_livecd_shortcut name app dest)
@@ -67,12 +69,12 @@ macro(add_livecd_shortcut name app dest)
     add_cd_file(FILE "${CMAKE_CURRENT_BINARY_DIR}/${name}.lnk"
                 TARGET livecd_links
                 DESTINATION ${dest}
-                FOR livecd)
+                FOR livecd liveimg)
 endmacro(add_livecd_shortcut)
 
 ## NOTE: What would be nice is to create this list using /media/inf/shortcuts.inf
 ## and taking their default english translation!
-add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/livecd_start.cmd" DESTINATION "Profiles/Default User/My Documents" FOR livecd)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/livecd_start.cmd" DESTINATION "Profiles/Default User/My Documents" FOR livecd liveimg)
 add_livecd_shortcut("Read Me" readme.txt "Profiles/All Users/Desktop")
 add_livecd_shortcut("Command Prompt" cmd.exe "Profiles/All Users/Desktop")
 add_livecd_shortcut("Device Manager" devmgmt.exe "Profiles/All Users/Start Menu/Programs/Administrative Tools")

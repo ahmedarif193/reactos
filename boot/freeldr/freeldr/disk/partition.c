@@ -19,12 +19,342 @@
 
 #ifndef _M_ARM
 #include <freeldr.h>
+#include <fs/fat.h>
 
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(DISK);
 
 #define MaxDriveNumber 0xFF
 static PARTITION_STYLE DiskPartitionType[MaxDriveNumber + 1];
+
+static BOOLEAN
+DiskDetectRawLayout(
+    IN UCHAR DriveNumber,
+    OUT ULONGLONG *TotalSectors,
+    OUT UCHAR *SystemIndicator)
+{
+    GEOMETRY Geometry;
+    ULONGLONG SectorCount = 0;
+    UCHAR Indicator = PARTITION_IFS;
+
+    if (SystemIndicator)
+        *SystemIndicator = Indicator;
+
+    if (TotalSectors)
+        *TotalSectors = 0;
+
+    if (MachDiskGetDriveGeometry(DriveNumber, &Geometry))
+    {
+        if (Geometry.Sectors != 0)
+        {
+            SectorCount = Geometry.Sectors;
+        }
+        else if (Geometry.Cylinders != 0 &&
+                 Geometry.Heads != 0 &&
+                 Geometry.SectorsPerTrack != 0)
+        {
+            SectorCount = (ULONGLONG)Geometry.Cylinders * Geometry.Heads * Geometry.SectorsPerTrack;
+        }
+    }
+
+    if (MachDiskReadLogicalSectors(DriveNumber, 0, 1, DiskReadBuffer))
+    {
+        const FAT_BOOTSECTOR *FatBoot = (const FAT_BOOTSECTOR *)DiskReadBuffer;
+        const FAT32_BOOTSECTOR *Fat32Boot = (const FAT32_BOOTSECTOR *)DiskReadBuffer;
+        const PUCHAR Raw = (const PUCHAR)DiskReadBuffer;
+        USHORT Signature = *(const USHORT *)(Raw + 510);
+
+        if (Signature == 0xAA55)
+        {
+            if (RtlEqualMemory(Fat32Boot->FileSystemType, "FAT32   ", 8))
+            {
+                Indicator = PARTITION_FAT32;
+            }
+            else if (RtlEqualMemory(FatBoot->FileSystemType, "FAT16   ", 8))
+            {
+                Indicator = PARTITION_FAT_16;
+            }
+            else if (RtlEqualMemory(FatBoot->FileSystemType, "FAT12   ", 8))
+            {
+                Indicator = PARTITION_FAT_12;
+            }
+            else if (RtlEqualMemory(FatBoot->OemName, "NTFS    ", 8) ||
+                     RtlEqualMemory(FatBoot->OemName, "EXFAT   ", 8))
+            {
+                Indicator = PARTITION_IFS;
+            }
+
+            if (SectorCount == 0)
+            {
+                if (FatBoot->TotalSectors != 0)
+                {
+                    SectorCount = FatBoot->TotalSectors;
+                }
+                else if (FatBoot->TotalSectorsBig != 0)
+                {
+                    SectorCount = FatBoot->TotalSectorsBig;
+                }
+                else if (Fat32Boot->TotalSectorsBig != 0)
+                {
+                    SectorCount = Fat32Boot->TotalSectorsBig;
+                }
+            }
+        }
+        else if (RtlEqualMemory(Raw + 3, "NTFS    ", 8))
+        {
+            Indicator = PARTITION_IFS;
+        }
+    }
+
+    if (SectorCount == 0)
+    {
+        return FALSE;
+    }
+
+    if (SystemIndicator)
+        *SystemIndicator = Indicator;
+
+    if (TotalSectors)
+        *TotalSectors = SectorCount;
+
+    return TRUE;
+}
+
+static BOOLEAN
+DiskBuildRawPartitionEntry(
+    IN UCHAR DriveNumber,
+    OUT PPARTITION_TABLE_ENTRY PartitionTableEntry)
+{
+    ULONGLONG SectorCount;
+    UCHAR Indicator;
+
+    if (!DiskDetectRawLayout(DriveNumber, &SectorCount, &Indicator))
+    {
+        TRACE("DiskBuildRawPartitionEntry: failed to detect layout for drive 0x%x\n", DriveNumber);
+        return FALSE;
+    }
+
+    if (SectorCount > MAXULONG)
+        SectorCount = MAXULONG;
+
+    RtlZeroMemory(PartitionTableEntry, sizeof(*PartitionTableEntry));
+    PartitionTableEntry->SystemIndicator = Indicator;
+    PartitionTableEntry->SectorCountBeforePartition = 0;
+    PartitionTableEntry->PartitionSectorCount = (ULONG)SectorCount;
+    return TRUE;
+}
+
+static
+BOOLEAN
+DiskIsValidMbrPartitionEntry(
+    IN const PARTITION_TABLE_ENTRY *Entry)
+{
+    UCHAR Boot = Entry->BootIndicator;
+
+    if (Boot != 0x00 && Boot != 0x80)
+        return FALSE;
+
+    if (Entry->SystemIndicator == PARTITION_ENTRY_UNUSED)
+        return FALSE;
+
+    if (Entry->PartitionSectorCount == 0)
+        return FALSE;
+
+    /* Accept both CHS and LBA-only partitions.
+     * Modern partitioning tools often leave CHS fields as 0 for LBA-only partitions.
+     * Rejecting CHS=0 causes misdetection of valid MBR disks as RAW/CDROM. */
+    return TRUE;
+}
+
+#include <pshpack1.h>
+typedef struct _EFI_PARTITION_HEADER
+{
+    CHAR     Signature[8];
+    ULONG    Revision;
+    ULONG    HeaderSize;
+    ULONG    HeaderCRC32;
+    ULONG    Reserved;
+    ULONGLONG MyLBA;
+    ULONGLONG AlternateLBA;
+    ULONGLONG FirstUsableLBA;
+    ULONGLONG LastUsableLBA;
+    GUID     DiskGuid;
+    ULONGLONG PartitionEntryLBA;
+    ULONG    NumberOfPartitionEntries;
+    ULONG    SizeOfPartitionEntry;
+    ULONG    PartitionEntryArrayCRC32;
+    ULONG    Reserved2;
+} EFI_PARTITION_HEADER, *PEFI_PARTITION_HEADER;
+
+typedef struct _EFI_PARTITION_ENTRY
+{
+    GUID     PartitionTypeGuid;
+    GUID     UniquePartitionGuid;
+    ULONGLONG StartingLBA;
+    ULONGLONG EndingLBA;
+    ULONGLONG Attributes;
+    WCHAR    Name[36];
+} EFI_PARTITION_ENTRY, *PEFI_PARTITION_ENTRY;
+#include <poppack.h>
+
+static const CHAR GptSignature[8] = { 'E','F','I',' ','P','A','R','T' };
+
+static const GUID GptEspTypeGuid =
+    {0xC12A7328, 0xF81F, 0x11D2, {0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B}};
+static const GUID GptMsftBasicDataGuid =
+    {0xEBD0A0A2, 0xB9E5, 0x4433, {0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7}};
+static const GUID GptMsftReservedGuid =
+    {0xE3C9E316, 0x0B5C, 0x4DB8, {0x81, 0x7D, 0xF9, 0x2D, 0xF0, 0x02, 0x15, 0xAE}};
+
+static
+BOOLEAN
+IsEqualGuid(
+    IN const GUID *Guid1,
+    IN const GUID *Guid2)
+{
+    return (RtlCompareMemory(Guid1, Guid2, sizeof(GUID)) == sizeof(GUID));
+}
+
+static
+BOOLEAN
+DiskReadGptHeader(
+    IN UCHAR DriveNumber,
+    OUT PGEOMETRY Geometry,
+    OUT PEFI_PARTITION_HEADER Header)
+{
+    SIZE_T CopySize;
+
+    if (!MachDiskGetDriveGeometry(DriveNumber, Geometry) ||
+        Geometry->BytesPerSector == 0)
+    {
+        RtlZeroMemory(Geometry, sizeof(*Geometry));
+        Geometry->BytesPerSector = 512;
+    }
+
+    if (!MachDiskReadLogicalSectors(DriveNumber, 1ULL, 1, DiskReadBuffer))
+    {
+        return FALSE;
+    }
+
+    CopySize = min(sizeof(*Header), DiskReadBufferSize);
+    RtlZeroMemory(Header, sizeof(*Header));
+    RtlCopyMemory(Header, DiskReadBuffer, CopySize);
+
+    if (RtlCompareMemory(Header->Signature, GptSignature, sizeof(GptSignature)) != sizeof(GptSignature))
+    {
+        TRACE("DiskReadGptHeader: invalid signature\n");
+        return FALSE;
+    }
+
+    if (Header->HeaderSize < sizeof(EFI_PARTITION_HEADER) - sizeof(Header->Reserved2))
+    {
+        TRACE("DiskReadGptHeader: unexpected header size %lu\n", Header->HeaderSize);
+        return FALSE;
+    }
+
+    if (Header->SizeOfPartitionEntry == 0 || Header->NumberOfPartitionEntries == 0)
+    {
+        TRACE("DiskReadGptHeader: empty partition array\n");
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static
+BOOLEAN
+DiskReadGptPartitionEntry(
+    IN UCHAR DriveNumber,
+    IN PEFI_PARTITION_HEADER Header,
+    IN const GEOMETRY *Geometry,
+    IN ULONG EntryIndex,
+    OUT PEFI_PARTITION_ENTRY Entry)
+{
+    ULONGLONG EntryOffset;
+    ULONGLONG SectorNumber;
+    ULONG SectorSize;
+    ULONG OffsetInSector;
+    ULONG BytesNeeded;
+    ULONG SectorCount;
+    SIZE_T CopySize;
+
+    SectorSize = (Geometry && Geometry->BytesPerSector) ? Geometry->BytesPerSector : 512;
+
+    EntryOffset = (ULONGLONG)EntryIndex * Header->SizeOfPartitionEntry;
+    SectorNumber = Header->PartitionEntryLBA + (EntryOffset / SectorSize);
+    OffsetInSector = (ULONG)(EntryOffset % SectorSize);
+    BytesNeeded = OffsetInSector + Header->SizeOfPartitionEntry;
+    SectorCount = (BytesNeeded + SectorSize - 1) / SectorSize;
+
+    if ((ULONGLONG)SectorCount * SectorSize > DiskReadBufferSize)
+    {
+        TRACE("DiskReadGptPartitionEntry: buffer too small (%lu bytes needed)\n", BytesNeeded);
+        return FALSE;
+    }
+
+    if (!MachDiskReadLogicalSectors(DriveNumber, SectorNumber, SectorCount, DiskReadBuffer))
+    {
+        TRACE("DiskReadGptPartitionEntry: read failed (LBA=%llu, Count=%lu)\n",
+              SectorNumber,
+              SectorCount);
+        return FALSE;
+    }
+
+    CopySize = min(sizeof(*Entry), Header->SizeOfPartitionEntry);
+    RtlZeroMemory(Entry, sizeof(*Entry));
+    RtlCopyMemory(Entry, (PUCHAR)DiskReadBuffer + OffsetInSector, CopySize);
+    return TRUE;
+}
+
+static
+UCHAR
+DiskGptTypeToSystemIndicator(
+    IN const GUID *TypeGuid)
+{
+    static const GUID GuidNull = {0};
+
+    if (IsEqualGuid(TypeGuid, &GuidNull))
+        return PARTITION_ENTRY_UNUSED;
+
+    if (IsEqualGuid(TypeGuid, &GptMsftReservedGuid))
+        return PARTITION_ENTRY_UNUSED;
+
+    if (IsEqualGuid(TypeGuid, &GptEspTypeGuid))
+        return PARTITION_FAT32;
+
+    if (IsEqualGuid(TypeGuid, &GptMsftBasicDataGuid))
+        return PARTITION_IFS;
+
+    return PARTITION_IFS;
+}
+
+static
+VOID
+DiskConvertGptEntry(
+    IN PEFI_PARTITION_ENTRY GptEntry,
+    IN UCHAR SystemIndicator,
+    OUT PPARTITION_TABLE_ENTRY PartitionTableEntry)
+{
+    ULONGLONG SectorCount;
+
+    RtlZeroMemory(PartitionTableEntry, sizeof(*PartitionTableEntry));
+    PartitionTableEntry->SystemIndicator = SystemIndicator;
+
+    if (GptEntry->StartingLBA > MAXULONG)
+        PartitionTableEntry->SectorCountBeforePartition = MAXULONG;
+    else
+        PartitionTableEntry->SectorCountBeforePartition = (ULONG)GptEntry->StartingLBA;
+
+    if (GptEntry->EndingLBA >= GptEntry->StartingLBA)
+        SectorCount = (GptEntry->EndingLBA - GptEntry->StartingLBA) + 1;
+    else
+        SectorCount = 0;
+
+    if (SectorCount > MAXULONG)
+        PartitionTableEntry->PartitionSectorCount = MAXULONG;
+    else
+        PartitionTableEntry->PartitionSectorCount = (ULONG)SectorCount;
+}
 
 /* BRFR signature at disk offset 0x600 */
 #define XBOX_SIGNATURE_SECTOR 3
@@ -318,8 +648,9 @@ DiskDetectPartitionType(
     ULONG Index;
     ULONG PartitionCount = 0;
     PPARTITION_TABLE_ENTRY ThisPartitionTableEntry;
-    BOOLEAN GPTProtect = FALSE;
     PARTITION_TABLE_ENTRY PartitionTableEntry;
+    BOOLEAN GPTProtect = FALSE;
+    BOOLEAN HaveValidEntry = FALSE;
 
     /* Probe for Master Boot Record */
     if (DiskReadBootRecord(DriveNumber, 0, &MasterBootRecord))
@@ -340,6 +671,25 @@ DiskDetectPartitionType(
                     GPTProtect = TRUE;
                 }
             }
+
+            if (DiskIsValidMbrPartitionEntry(ThisPartitionTableEntry))
+            {
+                HaveValidEntry = TRUE;
+            }
+        }
+
+        if (PartitionCount == 0)
+        {
+            DiskPartitionType[DriveNumber] = PARTITION_STYLE_RAW;
+            TRACE("Drive 0x%X partition type unknown\n", DriveNumber);
+            return;
+        }
+
+        if (!GPTProtect && !HaveValidEntry)
+        {
+            DiskPartitionType[DriveNumber] = PARTITION_STYLE_RAW;
+            TRACE("Drive 0x%X partition type unknown\n", DriveNumber);
+            return;
         }
 
         if (PartitionCount == 1 && GPTProtect)
@@ -377,13 +727,64 @@ DiskGetBootPartitionEntry(
         }
         case PARTITION_STYLE_GPT:
         {
-            FIXME("DiskGetBootPartitionEntry() unimplemented for GPT\n");
-            return FALSE;
+            EFI_PARTITION_HEADER Header;
+            EFI_PARTITION_ENTRY GptEntry;
+            GEOMETRY Geometry;
+            ULONG Index;
+            ULONG LogicalPartition = 0;
+            BOOLEAN HaveCandidate = FALSE;
+            PARTITION_TABLE_ENTRY CandidateEntry;
+            ULONG CandidateNumber = 0;
+            UCHAR Indicator;
+
+            if (!DiskReadGptHeader(DriveNumber, &Geometry, &Header))
+                return FALSE;
+
+            RtlZeroMemory(&CandidateEntry, sizeof(CandidateEntry));
+
+            for (Index = 0; Index < Header.NumberOfPartitionEntries; ++Index)
+            {
+                if (!DiskReadGptPartitionEntry(DriveNumber, &Header, &Geometry, Index, &GptEntry))
+                    return FALSE;
+
+                Indicator = DiskGptTypeToSystemIndicator(&GptEntry.PartitionTypeGuid);
+                if (Indicator == PARTITION_ENTRY_UNUSED)
+                    continue;
+
+                if (GptEntry.StartingLBA == 0 || GptEntry.EndingLBA < GptEntry.StartingLBA)
+                    continue;
+
+                LogicalPartition++;
+
+                if (!HaveCandidate)
+                {
+                    DiskConvertGptEntry(&GptEntry, Indicator, &CandidateEntry);
+                    CandidateNumber = LogicalPartition;
+                    HaveCandidate = TRUE;
+                }
+
+                if (IsEqualGuid(&GptEntry.PartitionTypeGuid, &GptEspTypeGuid))
+                {
+                    DiskConvertGptEntry(&GptEntry, Indicator, PartitionTableEntry);
+                    *BootPartition = LogicalPartition;
+                    return TRUE;
+                }
+            }
+
+            if (!HaveCandidate)
+                return FALSE;
+
+            RtlCopyMemory(PartitionTableEntry, &CandidateEntry, sizeof(*PartitionTableEntry));
+            *BootPartition = CandidateNumber;
+            return TRUE;
         }
         case PARTITION_STYLE_RAW:
         {
-            FIXME("DiskGetBootPartitionEntry() unimplemented for RAW\n");
-            return FALSE;
+            if (!DiskBuildRawPartitionEntry(DriveNumber, PartitionTableEntry))
+                return FALSE;
+
+            *BootPartition = 1;
+            return TRUE;
         }
         case PARTITION_STYLE_BRFR:
         {
@@ -417,13 +818,44 @@ DiskGetPartitionEntry(
         }
         case PARTITION_STYLE_GPT:
         {
-            FIXME("DiskGetPartitionEntry() unimplemented for GPT\n");
+            EFI_PARTITION_HEADER Header;
+            EFI_PARTITION_ENTRY GptEntry;
+            GEOMETRY Geometry;
+            ULONG Index;
+            ULONG LogicalPartition = 0;
+            UCHAR Indicator;
+
+            if (!DiskReadGptHeader(DriveNumber, &Geometry, &Header))
+                return FALSE;
+
+            for (Index = 0; Index < Header.NumberOfPartitionEntries; ++Index)
+            {
+                if (!DiskReadGptPartitionEntry(DriveNumber, &Header, &Geometry, Index, &GptEntry))
+                    return FALSE;
+
+                Indicator = DiskGptTypeToSystemIndicator(&GptEntry.PartitionTypeGuid);
+                if (Indicator == PARTITION_ENTRY_UNUSED)
+                    continue;
+
+                if (GptEntry.StartingLBA == 0 || GptEntry.EndingLBA < GptEntry.StartingLBA)
+                    continue;
+
+                LogicalPartition++;
+                if (LogicalPartition == PartitionNumber)
+                {
+                    DiskConvertGptEntry(&GptEntry, Indicator, PartitionTableEntry);
+                    return TRUE;
+                }
+            }
+
             return FALSE;
         }
         case PARTITION_STYLE_RAW:
         {
-            FIXME("DiskGetPartitionEntry() unimplemented for RAW\n");
-            return FALSE;
+            if (PartitionNumber != 1)
+                return FALSE;
+
+            return DiskBuildRawPartitionEntry(DriveNumber, PartitionTableEntry);
         }
         case PARTITION_STYLE_BRFR:
         {

@@ -28,17 +28,26 @@ EfiEntry(
 {
     PCSTR CmdLine = ""; // FIXME: Determine a command-line from UEFI boot options
 
-    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI EntryPoint: Starting freeldr from UEFI");
+    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI EntryPoint: Starting freeldr from UEFI\n");
     GlobalImageHandle = ImageHandle;
     GlobalSystemTable = SystemTable;
-
+    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI EntryPoint: Starting freeldr from UEFI0\n");
+    /* Pre-seed a sane default boot path for early INI access */
+    RtlStringCbCopyA(FrLdrBootPath, sizeof(FrLdrBootPath),
+                     "multi(0)disk(0)rdisk(0)partition(1)");
+    FrldrBootPartition = 1;
+  
     /* Load the default settings from the command-line */
     LoadSettings(CmdLine);
+    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI EntryPoint: Starting freeldr from UEFI-\n");
 
     /* Debugger pre-initialization */
     DebugInit(BootMgrInfo.DebugString);
 
+    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI EntryPoint: Starting freeldr from UEFI1\n");
+
     MachInit(CmdLine);
+    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI EntryPoint: Starting freeldr from UEF2\n");
 
     /* UI pre-initialization */
     if (!UiInitialize(FALSE))
@@ -46,6 +55,7 @@ EfiEntry(
         UiMessageBoxCritical("Unable to initialize UI.");
         goto Quit;
     }
+    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI EntryPoint: Starting freeldr from UEF3\n");
 
     /* Initialize memory manager */
     if (!MmInitializeMemoryManager())
@@ -53,9 +63,11 @@ EfiEntry(
         UiMessageBoxCritical("Unable to initialize memory manager.");
         goto Quit;
     }
+    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI EntryPoint: Starting freeldr from UEF4\n");
 
     /* Initialize I/O subsystem */
     FsInit();
+    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI EntryPoint: Starting freeldr from UEFI5\n");
 
     /* Initialize the module list */
     if (!PeLdrInitializeModuleList())
@@ -63,16 +75,19 @@ EfiEntry(
         UiMessageBoxCritical("Unable to initialize module list.");
         goto Quit;
     }
+    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI EntryPoint: Starting freeldr from UEFI6\n");
 
     if (!MachInitializeBootDevices())
     {
         UiMessageBoxCritical("Error when detecting hardware.");
         goto Quit;
     }
+    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI EntryPoint: Starting freeldr from UEFI7\n");
 
     /* 0x32000 is what UEFI defines, but we can go smaller if we want */
     BasicStack = (PVOID)((ULONG_PTR)0x32000 + (ULONG_PTR)MmAllocateMemoryWithType(0x32000, LoaderOsloaderStack));
     _changestack();
+    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI EntryPoint: Starting freeldr from UEFI8\n");
 
 Quit:
     /* If we reach this point, something went wrong before, therefore reboot */

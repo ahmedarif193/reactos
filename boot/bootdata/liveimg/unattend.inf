@@ -1,0 +1,13 @@
+[Unattend]
+Signature = "$ReactOS$"
+
+; LiveIMG is a prebuilt system that boots straight to desktop
+; UnattendSetupEnabled = yes means skip the full setup wizard
+; Option 2 (prebuilt image argument): run "setup -mini" so winlogon bootstraps defaults once.
+;   - First boot: winlogon configures Administrator/autologin, persists settings, lands on desktop.
+;   - Later boots: machine goes straight to desktop using persisted settings.
+; TODO: Replace with wizard that captures username, password, locale, timezone, etc.
+UnattendSetupEnabled = yes
+
+; Default locale (French - France) - TODO: make configurable via first-boot wizard
+LocaleID = 40C

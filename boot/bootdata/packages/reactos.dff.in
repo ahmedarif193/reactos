@@ -119,9 +119,6 @@ Signature = "$Windows NT$"
 "modules/optional/gulim.ttc"                          4  optional
 "modules/optional/batang.ttc"                         4  optional
 "modules/optional/NOTICE_for_Droid_Font.txt"          1  optional
-"modules/optional/viostor.inf"                        6  optional
-"modules/optional/viostor.cat"                        6  optional
-"modules/optional/viostor.sys"                        3  optional
 "modules/optional/qxl.inf"                            6  optional
 "modules/optional/qxl.cat"                            6  optional
 "modules/optional/qxl.sys"                            3  optional

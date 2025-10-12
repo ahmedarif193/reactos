@@ -59,7 +59,7 @@ vDbgPrintExWithPrefixInternal(IN PCCH Prefix,
     NTSTATUS Status;
     STRING DebugString;
     CHAR Buffer[512];
-    SIZE_T Length, PrefixLength;
+    SIZE_T Length, PrefixLength, TimestampLength = 0;
     EXCEPTION_RECORD ExceptionRecord;
 
     /* Check if we should print it or not */
@@ -76,16 +76,51 @@ vDbgPrintExWithPrefixInternal(IN PCCH Prefix,
     /* Guard against incorrect pointers */
     _SEH2_TRY
     {
+
+#ifdef _NTDDK_
+        /* Kernel mode: Add timestamp prefix */
+        extern ULONGLONG KdpTimeStampOffsetMicroseconds;
+        extern LARGE_INTEGER KdpInitialPerformanceCounter;
+        extern LARGE_INTEGER KdPerformanceCounterRate;
+
+        /* Check current IRQL - KeQueryInterruptTime() is safe at any IRQL */
+        {
+            ULONGLONG Microseconds;
+            ULONGLONG Seconds;
+            ULONGLONG Fractional;
+
+            /* Use KeQueryInterruptTime() which is safe at any IRQL including DIRQL */
+            /* Returns 100-nanosecond intervals, convert to microseconds */
+            Microseconds = KeQueryInterruptTime() / 10ULL;
+
+            /* Add bootloader offset to maintain continuity */
+            Microseconds += KdpTimeStampOffsetMicroseconds;
+
+            /* Convert to seconds and fractional part */
+            Seconds = Microseconds / 1000000ULL;
+            Fractional = Microseconds % 1000000ULL;
+
+            /* Format timestamp */
+            TimestampLength = _snprintf(Buffer, sizeof(Buffer),
+                                       "[%8llu.%06llu] ",
+                                       Seconds, Fractional);
+
+            if (TimestampLength >= sizeof(Buffer))
+                TimestampLength = 0;
+        }
+#endif
+
         /* Get the length and normalize it */
         PrefixLength = strlen(Prefix);
-        if (PrefixLength > sizeof(Buffer)) PrefixLength = sizeof(Buffer);
+        if (PrefixLength > (sizeof(Buffer) - TimestampLength))
+            PrefixLength = sizeof(Buffer) - TimestampLength;
 
-        /* Copy it */
-        strncpy(Buffer, Prefix, PrefixLength);
+        /* Copy prefix after timestamp */
+        strncpy(Buffer + TimestampLength, Prefix, PrefixLength);
 
-        /* Do the printf */
-        Length = _vsnprintf(Buffer + PrefixLength,
-                            sizeof(Buffer) - PrefixLength,
+        /* Do the printf after timestamp and prefix */
+        Length = _vsnprintf(Buffer + TimestampLength + PrefixLength,
+                            sizeof(Buffer) - TimestampLength - PrefixLength,
                             Format,
                             ap);
     }
@@ -110,8 +145,8 @@ vDbgPrintExWithPrefixInternal(IN PCCH Prefix,
     }
     else
     {
-        /* Add the prefix */
-        Length += PrefixLength;
+        /* Add the timestamp and prefix lengths */
+        Length += TimestampLength + PrefixLength;
     }
 
     /* Build the string */

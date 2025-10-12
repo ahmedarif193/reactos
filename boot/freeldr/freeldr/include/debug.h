@@ -50,6 +50,14 @@ VOID    DebugDumpBuffer(ULONG Mask, PVOID Buffer, ULONG Length);
 VOID    DebugDisableScreenPort(VOID);
 VOID    DbgParseDebugChannels(PCHAR Value);
 
+/*
+ * Returns the approximate number of microseconds elapsed since
+ * the bootloader started running. Used to provide a continuous
+ * timestamp to the kernel debugger so that timestamps do not
+ * reset when the kernel takes over.
+ */
+ULONGLONG DbgQueryMicrosecondsSinceBoot(VOID);
+
 #define ERR_LEVEL      0x1
 #define FIXME_LEVEL    0x2
 #define WARN_LEVEL     0x4

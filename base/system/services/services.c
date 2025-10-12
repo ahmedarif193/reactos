@@ -70,7 +70,10 @@ CheckForLiveCD(VOID)
                             KEY_QUERY_VALUE,
                             &hSetupKey);
     if (dwError != ERROR_SUCCESS)
+    {
+        DPRINT1("CheckSetup: RegOpenKeyExW failed %lu\n", dwError);
         return dwError;
+    }
 
     /* Read the SetupType value */
     dwSize = sizeof(DWORD);
@@ -85,7 +88,13 @@ CheckForLiveCD(VOID)
         dwType != REG_DWORD ||
         dwSize != sizeof(DWORD) ||
         dwSetupType == 0)
+    {
+        DPRINT1("CheckSetup: SetupType=%lu (type=%lu size=%lu err=%lu)\n",
+                dwSetupType, dwType, dwSize, dwError);
         goto done;
+    }
+
+    DPRINT1("CheckSetup: SetupType reports %lu\n", dwSetupType);
 
     /* Read the CmdLine value */
     dwSize = sizeof(CommandLine);
@@ -100,7 +109,13 @@ CheckForLiveCD(VOID)
         (dwType != REG_SZ &&
          dwType != REG_EXPAND_SZ &&
          dwType != REG_MULTI_SZ))
+    {
+        DPRINT1("CheckSetup: CmdLine query failed type=%lu size=%lu err=%lu\n",
+                dwType, dwSize, dwError);
         goto done;
+    }
+
+    DPRINT1("CheckSetup: CmdLine='%S'\n", CommandLine);
 
     /* Check for the '-mini' option */
     if (wcsstr(CommandLine, L" -mini") != NULL)
@@ -122,9 +137,12 @@ CheckForLiveCD(VOID)
         dwSize != sizeof(DWORD) ||
         dwSetupType == 0)
     {
+        DPRINT1("CheckSetup: SystemSetupInProgress query failed type=%lu size=%lu err=%lu\n",
+                dwType, dwSize, dwError);
         goto done;
     }
 
+    DPRINT1("CheckSetup: SystemSetupInProgress=%lu\n", dwSetupInProgress);
     if (dwSetupInProgress == 1)
     {
         DPRINT1("ReactOS Setup currently in progress!\n");

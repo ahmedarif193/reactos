@@ -786,7 +786,7 @@ ARC_STATUS FatLookupFile(PFAT_VOLUME_INFO Volume, PCSTR FileName, PFAT_FILE_INFO
     RtlZeroMemory(FatFileInfoPointer, sizeof(FAT_FILE_INFO));
 
     /* Skip leading path separator, if any */
-    if (*FileName == '\\' || *FileName == '/')
+    while (*FileName == '\\' || *FileName == '/')
         ++FileName;
     //
     // Figure out how many sub-directories we are nested in
@@ -809,7 +809,9 @@ ARC_STATUS FatLookupFile(PFAT_VOLUME_INFO Volume, PCSTR FileName, PFAT_FILE_INFO
         for (; (*FileName != '\\') && (*FileName != '/') && (*FileName != '\0'); FileName++)
         {
         }
-        FileName++;
+
+        while (*FileName == '\\' || *FileName == '/')
+            FileName++;
 
         //
         // Buffer the directory contents
