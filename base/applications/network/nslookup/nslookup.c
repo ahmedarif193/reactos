@@ -10,10 +10,35 @@
 
 #include <winbase.h>
 #include <iphlpapi.h>
+#include <string.h>
 
 STATE   State;
 HANDLE  ProcessHeap;
 ULONG   RequestID;
+
+static void
+CopyStringTruncatedA(char *destination, size_t destinationSize, const char *source)
+{
+    size_t copyLength;
+
+    if (!destination || destinationSize == 0)
+        return;
+
+    if (!source)
+    {
+        destination[0] = '\0';
+        return;
+    }
+
+    copyLength = strlen(source);
+    if (copyLength >= destinationSize)
+        copyLength = destinationSize - 1;
+
+    if (copyLength != 0)
+        memcpy(destination, source, copyLength);
+
+    destination[copyLength] = '\0';
+}
 
 void PrintState()
 {
@@ -487,20 +512,20 @@ BOOL ParseCommandLine( int argc, char* argv[] )
         {
             if( NoMoreOptions )
             {
-                strncpy( Server, argv[i], 255 );
+                CopyStringTruncatedA(Server, sizeof(Server), argv[i]);
 
                 /* Determine which one to resolve. This is based on whether the
                    DNS server provided was an IP or an FQDN. */
                 if( IsValidIP( Server ) )
                 {
-                    strncpy( State.DefaultServerAddress, Server, 16 );
+                    CopyStringTruncatedA(State.DefaultServerAddress, sizeof(State.DefaultServerAddress), Server);
 
                     PerformInternalLookup( State.DefaultServerAddress,
                                            State.DefaultServer );
                 }
                 else
                 {
-                    strncpy( State.DefaultServer, Server, 255 );
+                    CopyStringTruncatedA(State.DefaultServer, sizeof(State.DefaultServer), Server);
 
                     PerformInternalLookup( State.DefaultServer,
                                            State.DefaultServerAddress );
@@ -719,7 +744,7 @@ BOOL ParseCommandLine( int argc, char* argv[] )
                 {
                     /* Grab the address to resolve. No more options accepted
                        past this point. */
-                    strncpy( AddrToResolve, argv[i], 255 );
+                    CopyStringTruncatedA(AddrToResolve, sizeof(AddrToResolve), argv[i]);
                     NoMoreOptions = TRUE;
                 }
             }
@@ -820,11 +845,10 @@ int main( int argc, char* argv[] )
         return -2;
     }
 
-    strncpy( State.domain, pNetInfo->DomainName, 255 );
-    strncpy( State.srchlist[0], pNetInfo->DomainName, 255 );
-    strncpy( State.DefaultServerAddress,
-             pNetInfo->DnsServerList.IpAddress.String,
-             15 );
+    CopyStringTruncatedA(State.domain, sizeof(State.domain), pNetInfo->DomainName);
+    CopyStringTruncatedA(State.srchlist[0], sizeof(State.srchlist[0]), pNetInfo->DomainName);
+    CopyStringTruncatedA(State.DefaultServerAddress, sizeof(State.DefaultServerAddress),
+             pNetInfo->DnsServerList.IpAddress.String);
 
     HeapFree( ProcessHeap, 0, pNetInfo );
 

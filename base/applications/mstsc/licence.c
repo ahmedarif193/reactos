@@ -65,8 +65,15 @@ licence_generate_keys(uint8 * client_random, uint8 * server_random, uint8 * pre_
 static void
 licence_generate_hwid(uint8 * hwid)
 {
+	size_t copy_length;
+
+	memset(hwid, 0, LICENCE_HWID_SIZE);
 	buf_out_uint32(hwid, 2);
-	strncpy((char *) (hwid + 4), g_hostname, LICENCE_HWID_SIZE - 4);
+	copy_length = strlen(g_hostname);
+	if (copy_length > (LICENCE_HWID_SIZE - 4))
+		copy_length = LICENCE_HWID_SIZE - 4;
+	if (copy_length > 0)
+		memcpy(hwid + 4, g_hostname, copy_length);
 }
 
 /* Send a lincece info packet to server */

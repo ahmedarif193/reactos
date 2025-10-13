@@ -1481,10 +1481,13 @@ C1_SetData(
 
     hFont = CreateFontIndirectW(&lf);
     hFontOld = SelectObject(hMemDC, hFont);
+    const WORD *codeRow0 = &pData->wCode[0][0];
+    const WORD *codeRow1 = codeRow0 + 256;
+
     for (iKey = C1K_OEM_3; iKey < C1K_BACKSPACE; ++iKey)
     {
-        pC1->Data[1][iKey] = pData->wCode[0][(BYTE)gC1K2VK[iKey]];
-        pC1->Data[0][iKey] = pData->wCode[1][(BYTE)gC1K2VK[iKey]];
+        pC1->Data[1][iKey] = codeRow0[(BYTE)gC1K2VK[iKey]];
+        pC1->Data[0][iKey] = codeRow1[(BYTE)gC1K2VK[iKey]];
     }
 
     SetBkColor(hMemDC, RGB(191, 191, 191));

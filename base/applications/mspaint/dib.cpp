@@ -644,9 +644,11 @@ HBITMAP ConvertToBlackAndWhite(HBITMAP hbm)
     bmi.bmiHeader.biHeight = bm.bmHeight;
     bmi.bmiHeader.biPlanes = 1;
     bmi.bmiHeader.biBitCount = 1;
-    bmi.bmiColors[1].rgbBlue = 255;
-    bmi.bmiColors[1].rgbGreen = 255;
-    bmi.bmiColors[1].rgbRed = 255;
+
+    RGBQUAD *palette = reinterpret_cast<RGBQUAD*>(&bmi.bmiColors[0]);
+    palette[1].rgbBlue = 255;
+    palette[1].rgbGreen = 255;
+    palette[1].rgbRed = 255;
     HDC hdc = ::CreateCompatibleDC(NULL);
     LPVOID pvMonoBits;
     HBITMAP hMonoBitmap = ::CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pvMonoBits, NULL, 0);

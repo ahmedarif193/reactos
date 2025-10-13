@@ -1790,9 +1790,12 @@ LPITEMIDLIST _ILCreateDesktop(void)
     LPITEMIDLIST ret;
 
     TRACE("()\n");
-    ret = SHAlloc(2);
+    ret = SHAlloc(sizeof(SHITEMID));
     if (ret)
+    {
+        ZeroMemory(ret, sizeof(SHITEMID));
         ret->mkid.cb = 0;
+    }
     return ret;
 }
 

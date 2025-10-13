@@ -38,6 +38,8 @@
  */
 #include "iphlpapi_private.h"
 
+#include <string.h>
+
 WINE_DEFAULT_DEBUG_CHANNEL(iphlpapi);
 
 /* Functions */
@@ -631,13 +633,25 @@ DWORD getInterfaceEntryByIndex(DWORD index, PMIB_IFROW entry)
 char *toIPAddressString(unsigned int addr, char string[16])
 {
     struct in_addr iAddr;
+    const char *addressString;
 
     iAddr.s_addr = addr;
+    addressString = inet_ntoa(iAddr);
 
     if (string)
-        strncpy(string, inet_ntoa(iAddr), 16);
+    {
+        size_t copyLength = strlen(addressString);
 
-    return inet_ntoa(iAddr);
+        if (copyLength >= 16)
+            copyLength = 15;
+
+        if (copyLength != 0)
+            memcpy(string, addressString, copyLength);
+
+        string[copyLength] = '\0';
+    }
+
+    return (char *)addressString;
 }
 
 NTSTATUS addIPAddress( IPAddr Address, IPMask Mask, DWORD IfIndex,

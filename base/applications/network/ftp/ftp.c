@@ -18,6 +18,7 @@
 #include "precomp.h"
 
 #include <signal.h>
+#include <string.h>
 
 #define L_SET SEEK_SET
 #define L_INCR SEEK_CUR
@@ -26,6 +27,28 @@
 #ifndef lint
 static char sccsid[] = "@(#)ftp.c	5.28 (Berkeley) 4/20/89";
 #endif /* not lint */
+
+static void
+CopyTruncatedString(char *destination, size_t destinationSize, const char *source)
+{
+	if (!destination || destinationSize == 0)
+		return;
+
+	if (!source)
+	{
+		destination[0] = '\0';
+		return;
+	}
+
+	size_t copyLength = strlen(source);
+	if (copyLength >= destinationSize)
+		copyLength = destinationSize - 1;
+
+	if (copyLength != 0)
+		memcpy(destination, source, copyLength);
+
+	destination[copyLength] = '\0';
+}
 
 #ifndef MAXHOSTNAMELEN
 #define MAXHOSTNAMELEN 64
@@ -104,7 +127,7 @@ char *hookup(const char *host, int port)
 	hisctladdr.sin_addr.s_addr = inet_addr(host);
 	if (hisctladdr.sin_addr.s_addr != (unsigned long)-1) {
 		hisctladdr.sin_family = AF_INET;
-		(void) strncpy(hostnamebuf, host, sizeof(hostnamebuf));
+		CopyTruncatedString(hostnamebuf, sizeof(hostnamebuf), host);
 	} else {
 		hp = gethostbyname(host);
 		if (hp == NULL) {
@@ -116,7 +139,7 @@ char *hookup(const char *host, int port)
 		hisctladdr.sin_family = hp->h_addrtype;
 		bcopy(hp->h_addr_list[0],
 			 (caddr_t)&hisctladdr.sin_addr, hp->h_length);
-		(void) strncpy(hostnamebuf, hp->h_name, sizeof(hostnamebuf));
+		CopyTruncatedString(hostnamebuf, sizeof(hostnamebuf), hp->h_name);
 	}
 	hostname = hostnamebuf;
 	s = socket(hisctladdr.sin_family, SOCK_STREAM, 0);
@@ -1351,8 +1374,7 @@ void pswitch(int flag)
 	ip->connect = connected;
 	connected = op->connect;
 	if (hostname) {
-		(void) strncpy(ip->name, hostname, sizeof(ip->name) - 1);
-		ip->name[strlen(ip->name)] = '\0';
+		CopyTruncatedString(ip->name, sizeof(ip->name), hostname);
 	} else
 		ip->name[0] = 0;
 	hostname = op->name;
@@ -1378,19 +1400,15 @@ void pswitch(int flag)
 	mcase = op->mcse;
 	ip->ntflg = ntflag;
 	ntflag = op->ntflg;
-	(void) strncpy(ip->nti, ntin, 16);
-	(ip->nti)[strlen(ip->nti)] = '\0';
+	CopyTruncatedString(ip->nti, sizeof(ip->nti), ntin);
 	(void) strcpy(ntin, op->nti);
-	(void) strncpy(ip->nto, ntout, 16);
-	(ip->nto)[strlen(ip->nto)] = '\0';
+	CopyTruncatedString(ip->nto, sizeof(ip->nto), ntout);
 	(void) strcpy(ntout, op->nto);
 	ip->mapflg = mapflag;
 	mapflag = op->mapflg;
-	(void) strncpy(ip->mi, mapin, MAXPATHLEN - 1);
-	(ip->mi)[strlen(ip->mi)] = '\0';
+	CopyTruncatedString(ip->mi, sizeof(ip->mi), mapin);
 	(void) strcpy(mapin, op->mi);
-	(void) strncpy(ip->mo, mapout, MAXPATHLEN - 1);
-	(ip->mo)[strlen(ip->mo)] = '\0';
+	CopyTruncatedString(ip->mo, sizeof(ip->mo), mapout);
 	(void) strcpy(mapout, op->mo);
 //	(void) signal(SIGINT, oldintr);
 	if (abrtflag) {
