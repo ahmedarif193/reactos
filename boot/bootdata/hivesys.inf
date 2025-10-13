@@ -23,6 +23,8 @@ HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0604","Clas
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0601","Service",0x00000000,"isapnp"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0601","ClassGUID",0x00000000,"{4D36E97D-E325-11CE-BFC1-08002BE10318}"
 
+
+
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1033&DEV_0001","Service",0x00000000,"isapnp"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1033&DEV_0001","ClassGUID",0x00000000,"{4D36E97D-E325-11CE-BFC1-08002BE10318}"
 
@@ -99,9 +101,9 @@ HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0301","Clas
 ; Add IDE controller support for AMD64 so setup can locate boot disks
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0101","Service",0x00000000,"pciide"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0101","ClassGUID",0x00000000,"{4D36E96A-E325-11CE-BFC1-08002BE10318}"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0106","Service",0x00000000,"storahci"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0106","ClassGUID",0x00000000,"{4D36E96A-E325-11CE-BFC1-08002BE10318}"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_8086&DEV_2922","Service",0x00000000,"storahci"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_010601","Service",0x00000000,"ahciport"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_010601","ClassGUID",0x00000000,"{4D36E96A-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_8086&DEV_2922","Service",0x00000000,"ahciport"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_8086&DEV_2922","ClassGUID",0x00000000,"{4D36E96A-E325-11CE-BFC1-08002BE10318}"
 ; End AMD64 IDE controller entries
 
@@ -1864,12 +1866,31 @@ HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Group",0x00000000,"SCSI Miniport
 HKLM,"SYSTEM\CurrentControlSet\Services\atapi","ImagePath",0x00020000,"system32\drivers\atapi.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Type",0x00010001,0x00000001
-; TEMPORARY: disable storahci to avoid LiveCD boot failure
-;HKLM,"SYSTEM\CurrentControlSet\Services\storahci","ErrorControl",0x00010001,0x00000001
-;HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Group",0x00000000,"SCSI Miniport"
-;HKLM,"SYSTEM\CurrentControlSet\Services\storahci","ImagePath",0x00020000,"system32\drivers\storahci.sys"
-;HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Start",0x00010001,0x00000000
-;HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Type",0x00010001,0x00000001
+; storport library (required by storahci and other modern SCSI miniport drivers)
+HKLM,"SYSTEM\CurrentControlSet\Services\storport","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\storport","Group",0x00000000,"SCSI Miniport"
+HKLM,"SYSTEM\CurrentControlSet\Services\storport","ImagePath",0x00020000,"system32\drivers\storport.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\storport","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\storport","Tag",0x00010001,0x00000010
+HKLM,"SYSTEM\CurrentControlSet\Services\storport","Type",0x00010001,0x00000001
+; STORAHCI enabled for AHCI controller support (QEMU Q35, modern hardware)
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Group",0x00000000,"SCSI Miniport"
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","ImagePath",0x00020000,"system32\drivers\storahci.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Tag",0x00010001,0x00000020
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Type",0x00010001,0x00000001
+
+; ahciport miniport (SCSIPORT-based AHCI)
+HKLM,"SYSTEM\CurrentControlSet\Services\ahciport","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\ahciport","Group",0x00000000,"SCSI Miniport"
+HKLM,"SYSTEM\CurrentControlSet\Services\ahciport","ImagePath",0x00020000,"system32\drivers\ahciport.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\ahciport","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\ahciport","Tag",0x00010001,0x00000030
+HKLM,"SYSTEM\CurrentControlSet\Services\ahciport","Type",0x00010001,0x00000001
+
+; UniATA: disable legacy detection to avoid pre-PnP IDE claiming
+HKLM,"SYSTEM\CurrentControlSet\Services\UniATA\Parameters","LegacyDetection",0x00010001,0x00000000
 
 ; pci driver (critical for device enumeration)
 HKLM,"SYSTEM\CurrentControlSet\Services\pci","ErrorControl",0x00010001,0x00000001

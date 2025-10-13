@@ -249,6 +249,9 @@ while IFS= read -r line; do
     continue
   fi
   dest="/${line%%=*}"; src="${line#*=}"
+  if [[ "$dest" == "/reactos/reactos.cab" ]]; then
+    continue
+  fi
   # Directory markers
   if [[ "$src" == */boot/empty ]]; then
     fat_mkdir_p "$dest"

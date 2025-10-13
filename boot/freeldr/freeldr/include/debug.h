@@ -65,6 +65,7 @@ ULONGLONG DbgQueryMicrosecondsSinceBoot(VOID);
 
 #define MAX_LEVEL ERR_LEVEL | FIXME_LEVEL | WARN_LEVEL | TRACE_LEVEL
 
+#undef DBG_DEFAULT_CHANNEL
 #define DBG_DEFAULT_CHANNEL(ch) static int DbgDefaultChannel = DPRINT_##ch
 
 /* Critical boot trace - always enabled for BootMain trace */
@@ -115,6 +116,7 @@ void    MEMORY_WRITE_BREAKPOINT4(unsigned long addr);
 
 #else
     /* In release builds only emit the critical trace macro; all other noise stays quiet. */
+    #undef DBG_DEFAULT_CHANNEL
     #define DBG_DEFAULT_CHANNEL(ch)
 
     #define ERR_CH(ch, fmt, ...)
