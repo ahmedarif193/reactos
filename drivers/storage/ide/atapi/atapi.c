@@ -2879,6 +2879,22 @@ Return Value:
         }
 
         //
+        // Check if this is an AHCI controller (Class 01:06:01) or NVMe (Class 01:08:02)
+        // ATAPI driver cannot handle these, so reject them early
+        //
+        if (pciData.BaseClass == 0x01) {  // Mass Storage Controller
+            if ((pciData.SubClass == 0x06 && pciData.ProgIf == 0x01) ||  // AHCI SATA
+                (pciData.SubClass == 0x08 && pciData.ProgIf == 0x02)) {   // NVMe
+                DebugPrint((0,
+                            "ATAPI: Detected AHCI/NVMe controller (Class %02x:%02x:%02x) - skipping\n",
+                            pciData.BaseClass,
+                            pciData.SubClass,
+                            pciData.ProgIf));
+                return SP_RETURN_NOT_FOUND;
+            }
+        }
+
+        //
         // Translate hex ids to strings.
         //
 

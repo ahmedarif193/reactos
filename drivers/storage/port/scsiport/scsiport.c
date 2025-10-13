@@ -18,6 +18,9 @@ ULONG InternalDebugLevel = 0x03;
 static LONG ScsiPortWarnedNoAccessRanges = 0;
 static const CHAR ScsiPortDriverExtensionKey = 0;
 
+/* Maximum number of consecutive buses returning SP_RETURN_NOT_FOUND before stopping scan */
+#define MAX_CONSECUTIVE_NOT_FOUND 4
+
 #undef ScsiPortMoveMemory
 
 /* GLOBALS *******************************************************************/
@@ -1402,6 +1405,9 @@ ScsiPortInitialize(
     /* Last adapter number = not known */
     ConfigInfo.LastAdapterNumber = SP_UNINITIALIZED_VALUE;
 
+    /* Counter to prevent infinite loops on non-existent PCI buses */
+    ULONG ConsecutiveNotFoundCount = 0;
+
     /* Calculate sizes of DeviceExtension and PortConfig */
     DeviceExtensionSize = sizeof(SCSI_PORT_DEVICE_EXTENSION) +
         HwInitializationData->DeviceExtensionSize;
@@ -1732,6 +1738,25 @@ CreatePortConfig:
                 /* For PCI we probe successive bus numbers, otherwise stop here */
                 if (HwInitializationData->AdapterInterfaceType == PCIBus)
                 {
+                    /* Increment consecutive not-found counter */
+                    ConsecutiveNotFoundCount++;
+
+                    DbgPrintEx(DPFLTR_DEFAULT_ID,
+                               DPFLTR_ERROR_LEVEL,
+                               "[SCSIPORT] ScsiPortInitialize: ConsecutiveNotFoundCount=%lu (max=%lu)\n",
+                               ConsecutiveNotFoundCount,
+                               (ULONG)MAX_CONSECUTIVE_NOT_FOUND);
+
+                    /* Break if too many consecutive not-found results */
+                    if (ConsecutiveNotFoundCount >= MAX_CONSECUTIVE_NOT_FOUND)
+                    {
+                        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                                   DPFLTR_ERROR_LEVEL,
+                                   "[SCSIPORT] ScsiPortInitialize: stopping bus scan after %lu consecutive not-found buses\n",
+                                   ConsecutiveNotFoundCount);
+                        break;
+                    }
+
                     ConfigInfo.BusNumber++;
                     Again = FALSE;
                     goto CreatePortConfig;
@@ -1750,6 +1775,9 @@ CreatePortConfig:
                    "[SCSIPORT] ScsiPortInitialize: adapter found (Bus=%lu Vector=%lu)\n",
                    PortConfig->SystemIoBusNumber,
                    PortConfig->BusInterruptVector);
+
+        /* Reset consecutive not-found counter on successful adapter detection */
+        ConsecutiveNotFoundCount = 0;
 
         /* If the SRB extension size was updated */
         if (!DeviceExtension->NonCachedExtension &&

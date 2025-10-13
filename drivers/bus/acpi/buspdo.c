@@ -366,7 +366,8 @@ BuspBuildStableInstanceId(
         static const WCHAR kFFBId[] = L"FFB0";
         ULONG n = (ULONG)wcslen(kFFBId);
         if (n >= MaxChars) n = MaxChars - 1;
-        RtlCopyMemory(Out, kFFBId, n * sizeof(WCHAR));
+        for (ULONG i = 0; i < n; ++i)
+            Out[i] = kFFBId[i];
         Out[n] = UNICODE_NULL;
         return n;
     }
