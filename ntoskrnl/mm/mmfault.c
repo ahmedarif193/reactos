@@ -327,7 +327,7 @@ Retry:
 #elif defined(_M_IX86)
         DPRINT1("Page fault context: EIP=%p ESP=%p EBP=%p ECX=%p EDX=%p\n",
                 (PVOID)TrapFrame->Eip,
-                (PVOID)TrapFrame->Esp,
+                (PVOID)TrapFrame->HardwareEsp,
                 (PVOID)TrapFrame->Ebp,
                 (PVOID)TrapFrame->Ecx,
                 (PVOID)TrapFrame->Edx);

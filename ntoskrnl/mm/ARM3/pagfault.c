@@ -98,7 +98,7 @@ MiCheckForUserStackOverflow(IN PVOID Address,
 #else
                 DPRINT1("Trap frame during guard fault: EIP=%p ESP=%p EBP=%p ECX=%p EDX=%p\n",
                         (PVOID)TrapFrame->Eip,
-                        (PVOID)TrapFrame->Esp,
+                        (PVOID)TrapFrame->HardwareEsp,
                         (PVOID)TrapFrame->Ebp,
                         (PVOID)TrapFrame->Ecx,
                         (PVOID)TrapFrame->Edx);
@@ -139,7 +139,7 @@ MiCheckForUserStackOverflow(IN PVOID Address,
 #else
                     DPRINT1("Guard overflow context: EIP=%p ESP=%p EBP=%p ECX=%p EDX=%p\n",
                             (PVOID)TrapFrame->Eip,
-                            (PVOID)TrapFrame->Esp,
+                            (PVOID)TrapFrame->HardwareEsp,
                             (PVOID)TrapFrame->Ebp,
                             (PVOID)TrapFrame->Ecx,
                             (PVOID)TrapFrame->Edx);
