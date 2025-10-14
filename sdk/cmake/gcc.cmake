@@ -639,10 +639,23 @@ function(convert_asm_file _source_file _target_file)
     get_filename_component(_source_file_base_name ${_source_file} NAME_WE)
     get_filename_component(_source_file_full_path ${_source_file} ABSOLUTE)
     set(_preprocessed_asm_file ${CMAKE_CURRENT_BINARY_DIR}/${_target_file})
+
+    set(_asmpp_deps)
+    if(TARGET native-asmpp)
+        list(APPEND _asmpp_deps native-asmpp)
+        get_target_property(_asmpp_sources native-asmpp ROS_HOST_TOOL_SOURCES)
+        if(_asmpp_sources AND NOT _asmpp_sources STREQUAL "ROS_HOST_TOOL_SOURCES-NOTFOUND")
+            list(APPEND _asmpp_deps ${_asmpp_sources})
+        endif()
+    else()
+        list(APPEND _asmpp_deps native-asmpp)
+    endif()
+    list(REMOVE_DUPLICATES _asmpp_deps)
+
     add_custom_command(
         OUTPUT ${_preprocessed_asm_file}
         COMMAND native-asmpp ${_source_file_full_path} > ${_preprocessed_asm_file}
-        DEPENDS native-asmpp ${_source_file_full_path})
+        DEPENDS ${_asmpp_deps} ${_source_file_full_path})
 
 endfunction()
 

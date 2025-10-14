@@ -1,6 +1,48 @@
 
 include(ExternalProject)
 
+function(_ros_collect_host_tool_sources _tool _out_var)
+    set(_sources)
+
+    set(_tool_base "${REACTOS_SOURCE_DIR}/sdk/tools/${_tool}")
+    if(IS_DIRECTORY "${_tool_base}")
+        file(GLOB_RECURSE _dir_sources CONFIGURE_DEPENDS LIST_DIRECTORIES FALSE
+            "${_tool_base}/*.c"
+            "${_tool_base}/*.cc"
+            "${_tool_base}/*.cpp"
+            "${_tool_base}/*.cxx"
+            "${_tool_base}/*.h"
+            "${_tool_base}/*.hh"
+            "${_tool_base}/*.hpp"
+            "${_tool_base}/*.hxx"
+            "${_tool_base}/*.inl"
+            "${_tool_base}/*.idl"
+            "${_tool_base}/*.l"
+            "${_tool_base}/*.y"
+            "${_tool_base}/*.lex"
+            "${_tool_base}/*.yacc"
+            "${_tool_base}/*.asm"
+            "${_tool_base}/*.s"
+            "${_tool_base}/*.rc")
+        list(APPEND _sources ${_dir_sources})
+    endif()
+
+    foreach(_ext IN LISTS CMAKE_C_SOURCE_FILE_EXTENSIONS CMAKE_CXX_SOURCE_FILE_EXTENSIONS)
+        if(EXISTS "${_tool_base}.${_ext}")
+            list(APPEND _sources "${_tool_base}.${_ext}")
+        endif()
+    endforeach()
+
+    foreach(_ext h hh hpp hxx inl idl l y lex yacc asm s rc)
+        if(EXISTS "${_tool_base}.${_ext}")
+            list(APPEND _sources "${_tool_base}.${_ext}")
+        endif()
+    endforeach()
+
+    list(REMOVE_DUPLICATES _sources)
+    set(${_out_var} "${_sources}" PARENT_SCOPE)
+endfunction()
+
 function(setup_host_tools)
     list(APPEND HOST_TOOLS asmpp bin2c widl gendib cabman fatten hpp isohybrid mkhive mkisofs obj2bin spec2def geninc mkshelllink txt2nls utf16le xml2sdb)
     if(NOT MSVC)
@@ -9,6 +51,12 @@ function(setup_host_tools)
             list(APPEND HOST_TOOLS rsym)
         endif()
     endif()
+
+    foreach(_tool ${HOST_TOOLS})
+        _ros_collect_host_tool_sources(${_tool} _computed_sources)
+        set(_var_name "HOST_TOOL_SOURCE_FILES_${_tool}")
+        set(${_var_name} "${_computed_sources}")
+    endforeach()
     if ((ARCH STREQUAL "amd64") AND (CMAKE_C_COMPILER_ID STREQUAL "GNU"))
         execute_process(
             COMMAND ${CMAKE_C_COMPILER} --print-file-name=plugin
@@ -123,6 +171,11 @@ function(setup_host_tools)
         add_executable(native-${_tool} IMPORTED)
         set_target_properties(native-${_tool} PROPERTIES IMPORTED_LOCATION ${INSTALL_DIR}/bin/${HOST_EXTRA_DIR}${_tool}${HOST_EXE_SUFFIX})
         add_dependencies(native-${_tool} host-tools ${INSTALL_DIR}/bin/${HOST_EXTRA_DIR}${_tool}${HOST_EXE_SUFFIX})
+
+        set(_sources_var "HOST_TOOL_SOURCE_FILES_${_tool}")
+        if(DEFINED ${_sources_var} AND NOT "${${_sources_var}}" STREQUAL "")
+            set_property(TARGET native-${_tool} PROPERTY ROS_HOST_TOOL_SOURCES "${${_sources_var}}")
+        endif()
     endforeach()
 
     foreach(_module ${HOST_MODULES})
