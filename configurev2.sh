@@ -256,6 +256,11 @@ echo "Creating build directory: $OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
 cd "$OUTPUT_DIR"
 
+# Ensure desired toolchain binaries are picked up by CMake's find_program.
+if [ -d "$TOOLCHAIN_PATH" ]; then
+    export PATH="$TOOLCHAIN_PATH:$PATH"
+fi
+
 if [ -f "CMakeCache.txt" ]; then
     echo "Removing existing CMakeCache.txt..."
     rm -f CMakeCache.txt
