@@ -19,6 +19,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stdint.h>
+#include "crt_reloc_validate.h"
 #include <memory.h>
 #include <internal.h>
 
@@ -45,9 +47,12 @@
 #define __MINGW_LSYMBOL(sym) sym
 #endif
 
-extern char __RUNTIME_PSEUDO_RELOC_LIST__;
-extern char __RUNTIME_PSEUDO_RELOC_LIST_END__;
-extern char __MINGW_LSYMBOL(_image_base__);
+extern char __RUNTIME_PSEUDO_RELOC_LIST__[];
+extern char __RUNTIME_PSEUDO_RELOC_LIST_END__[];
+extern char __MINGW_LSYMBOL(_image_base__)[];
+#ifndef __GNUC__
+extern char __ImageBase[];
+#endif
 
 void _pei386_runtime_relocator (void);
 
@@ -79,7 +84,7 @@ typedef struct {
   DWORD version;
 } runtime_pseudo_reloc_v2;
 
-static void ATTRIBUTE_NORETURN
+ATTRIBUTE_NORETURN void
 __report_error (const char *msg, ...)
 {
 #ifdef __CYGWIN__
@@ -294,7 +299,7 @@ __write_memory (void *addr, const void *src, size_t len)
 #define RP_VERSION_V1 0
 #define RP_VERSION_V2 1
 
-static void
+static int
 do_pseudo_reloc (void * start, void * end, void * base)
 {
   ptrdiff_t addr_imp, reldata;
@@ -307,7 +312,7 @@ do_pseudo_reloc (void * start, void * end, void * base)
    * So, if the relocation list is smaller than 8 bytes, bail.
    */
   if (reloc_target < 8)
-    return;
+    return 1;
 
   /* Check if this is the old pseudo relocation version.  */
   /* There are two kinds of v1 relocation lists:
@@ -355,10 +360,23 @@ do_pseudo_reloc (void * start, void * end, void * base)
 	{
 	  DWORD newval;
 	  reloc_target = (ptrdiff_t) base + o->target;
+
+	  /* Validate that the target address is in user space */
+      if (!is_user_address((void *)reloc_target))
+      {
+        __report_error("ERROR: V1 relocation target %p is in kernel space.\n",
+                       (void *)reloc_target);
+#ifdef PSEUDO_RELOC_STRICT
+        abort();
+#else
+        return 0;
+#endif
+      }
+
 	  newval = (*((DWORD*) reloc_target)) + o->addend;
 	  __write_memory ((void *) reloc_target, &newval, sizeof(DWORD));
 	}
-      return;
+      return 1;
     }
 
   /* If we got this far, then we have relocations of version 2 or newer */
@@ -368,7 +386,7 @@ do_pseudo_reloc (void * start, void * end, void * base)
     {
       __report_error ("  Unknown pseudo relocation protocol version %d.\n",
 		      (int) v2_hdr->version);
-      return;
+      return 0;
     }
 
   /*************************
@@ -383,10 +401,35 @@ do_pseudo_reloc (void * start, void * end, void * base)
       /* location where new address will be written */
       reloc_target = (ptrdiff_t) base + r->target;
 
+      /* Validate that the target address is in user space */
+      if (!is_user_address((void *)reloc_target))
+      {
+        __report_error("ERROR: Relocation target %p is in kernel space.\n",
+                       (void *)reloc_target);
+#ifdef PSEUDO_RELOC_STRICT
+        abort();
+#else
+        return 0;
+#endif
+      }
+
       /* get sym pointer. It points either to the iat entry
        * of the referenced element, or to the stub function.
        */
       addr_imp = (ptrdiff_t) base + r->sym;
+
+      /* Validate that the symbol address is in user space */
+      if (!is_user_address((void *)addr_imp))
+      {
+        __report_error("ERROR: Symbol address %p is in kernel space.\n",
+                       (void *)addr_imp);
+#ifdef PSEUDO_RELOC_STRICT
+        abort();
+#else
+        return 0;
+#endif
+      }
+
       addr_imp = *((ptrdiff_t *) addr_imp);
 
       /* read existing relocation value from image, casting to the
@@ -449,12 +492,15 @@ do_pseudo_reloc (void * start, void * end, void * base)
 #endif
 	}
      }
+
+  return 1;
 }
 
 void
 _pei386_runtime_relocator (void)
 {
   static NO_COPY int was_init = 0;
+  void *base_address;
 #ifdef __MINGW64_VERSION_MAJOR
   int mSecs;
 #endif /* __MINGW64_VERSION_MAJOR */
@@ -468,14 +514,35 @@ _pei386_runtime_relocator (void)
   maxSections = 0;
 #endif /* __MINGW64_VERSION_MAJOR */
 
-  do_pseudo_reloc (&__RUNTIME_PSEUDO_RELOC_LIST__,
-		   &__RUNTIME_PSEUDO_RELOC_LIST_END__,
 #ifdef __GNUC__
-		   &__MINGW_LSYMBOL(_image_base__)
+  base_address = &__MINGW_LSYMBOL(_image_base__);
 #else
-		   &__ImageBase
+  base_address = &__ImageBase;
 #endif
-		   );
+
+  /* Validate that the image base is in user-mode address space */
+  if (!is_user_address(base_address))
+  {
+    __report_error("CRITICAL: Image base %p is in kernel space. Cannot perform pseudo-relocations.\n",
+                   base_address);
+#ifdef PSEUDO_RELOC_STRICT
+    abort();
+#else
+    return;
+#endif
+  }
+
+  if (!do_pseudo_reloc (&__RUNTIME_PSEUDO_RELOC_LIST__,
+		   &__RUNTIME_PSEUDO_RELOC_LIST_END__,
+		   base_address))
+  {
+    __report_error("CRITICAL: Pseudo-relocation failed. Image may be unstable.\n");
+#ifdef PSEUDO_RELOC_STRICT
+    abort();
+#else
+    return;
+#endif
+  }
 #ifdef __MINGW64_VERSION_MAJOR
   restore_modified_sections ();
 #endif /* __MINGW64_VERSION_MAJOR */

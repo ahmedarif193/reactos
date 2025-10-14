@@ -6,19 +6,24 @@
 
 //#include <windows.h>
 #include <stdarg.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <windef.h>
 #include <winbase.h>
 #include <string.h>
+#include "crt_reloc_validate.h"
 
 #if defined (_WIN64) && defined (__ia64__)
 #error FIXME: Unsupported __ImageBase implementation.
 #else
 #ifdef __GNUC__
-/* Hack, for bug in ld.  Will be removed soon.  */
 #define __ImageBase __MINGW_LSYMBOL(_image_base__)
 #endif
-/* This symbol is defined by the linker.  */
-extern IMAGE_DOS_HEADER __ImageBase;
+extern char __ImageBase[];
+#endif
+
+#ifdef PSEUDO_RELOC_STRICT
+void __report_error(const char *msg, ...);
 #endif
 
 WINBOOL _ValidateImageBase (PBYTE);
@@ -43,6 +48,7 @@ _ValidateImageBase (PBYTE pImageBase)
 }
 
 PIMAGE_SECTION_HEADER _FindPESection (PBYTE, DWORD_PTR);
+PBYTE _GetPEImageBase (void);
 
 PIMAGE_SECTION_HEADER
 _FindPESection (PBYTE pImageBase, DWORD_PTR rva)
@@ -78,8 +84,8 @@ _FindPESectionByName (const char *pName)
   if (strlen (pName) > IMAGE_SIZEOF_SHORT_NAME)
     return NULL;
 
-  pImageBase = (PBYTE) &__ImageBase;
-  if (! _ValidateImageBase (pImageBase))
+  pImageBase = _GetPEImageBase ();
+  if (!pImageBase)
     return NULL;
 
   pNTHeader = (PIMAGE_NT_HEADERS) (pImageBase + ((PIMAGE_DOS_HEADER) pImageBase)->e_lfanew);
@@ -103,8 +109,8 @@ __mingw_GetSectionForAddress (LPVOID p)
   PBYTE pImageBase;
   DWORD_PTR rva;
 
-  pImageBase = (PBYTE) &__ImageBase;
-  if (! _ValidateImageBase (pImageBase))
+  pImageBase = _GetPEImageBase ();
+  if (!pImageBase)
     return NULL;
 
   rva = (DWORD_PTR) (((PBYTE) p) - pImageBase);
@@ -117,8 +123,8 @@ __mingw_GetSectionCount (void)
   PBYTE pImageBase;
   PIMAGE_NT_HEADERS pNTHeader;
 
-  pImageBase = (PBYTE) &__ImageBase;
-  if (! _ValidateImageBase (pImageBase))
+  pImageBase = _GetPEImageBase ();
+  if (!pImageBase)
     return 0;
 
   pNTHeader = (PIMAGE_NT_HEADERS) (pImageBase + ((PIMAGE_DOS_HEADER) pImageBase)->e_lfanew);
@@ -137,8 +143,8 @@ _FindPESectionExec (size_t eNo)
   PIMAGE_SECTION_HEADER pSection;
   unsigned int iSection;
 
-  pImageBase = (PBYTE) &__ImageBase;
-  if (! _ValidateImageBase (pImageBase))
+  pImageBase = _GetPEImageBase ();
+  if (!pImageBase)
     return NULL;
 
   pNTHeader = (PIMAGE_NT_HEADERS) (pImageBase + ((PIMAGE_DOS_HEADER) pImageBase)->e_lfanew);
@@ -157,13 +163,22 @@ _FindPESectionExec (size_t eNo)
   return NULL;
 }
 
-PBYTE _GetPEImageBase (void);
-
 PBYTE
 _GetPEImageBase (void)
 {
   PBYTE pImageBase;
   pImageBase = (PBYTE) &__ImageBase;
+
+  /* Validate that the image base is in user-mode address space */
+  if (!is_user_address(pImageBase))
+  {
+#ifdef PSEUDO_RELOC_STRICT
+    __report_error("CRITICAL: Image base %p is in kernel space.\n", pImageBase);
+    abort();
+#endif
+    return NULL;
+  }
+
   if (! _ValidateImageBase (pImageBase))
     return NULL;
   return pImageBase;
@@ -178,8 +193,8 @@ _IsNonwritableInCurrentImage (PBYTE pTarget)
   DWORD_PTR rvaTarget;
   PIMAGE_SECTION_HEADER pSection;
 
-  pImageBase = (PBYTE) &__ImageBase;
-  if (! _ValidateImageBase (pImageBase))
+  pImageBase = _GetPEImageBase ();
+  if (!pImageBase)
     return FALSE;
   rvaTarget = pTarget - pImageBase;
   pSection = _FindPESection (pImageBase, rvaTarget);
@@ -200,8 +215,8 @@ __mingw_enum_import_library_names (int i)
   PIMAGE_SECTION_HEADER pSection;
   DWORD importsStartRVA;
 
-  pImageBase = (PBYTE) &__ImageBase;
-  if (! _ValidateImageBase (pImageBase))
+  pImageBase = _GetPEImageBase ();
+  if (!pImageBase)
     return NULL;
 
   pNTHeader = (PIMAGE_NT_HEADERS) (pImageBase + ((PIMAGE_DOS_HEADER) pImageBase)->e_lfanew);

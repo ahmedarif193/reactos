@@ -3,6 +3,8 @@ include_directories(include)
 #include_directories(.)
 
 add_definitions(-D_CRTBLD)
+# Conservative default; override at configure time for /3GB support if needed
+add_definitions(-DUSER_SPACE_UPPER_BOUND_X86=0x80000000U)
 
 include(conio/conio.cmake)
 include(direct/direct.cmake)
