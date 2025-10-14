@@ -312,7 +312,7 @@ if [ $? -eq 0 ]; then
     echo "To build ReactOS, run one of:"
     if [ "$CMAKE_GENERATOR" = "Ninja" ]; then
         echo "  cd $OUTPUT_DIR && ninja"
-        echo "  cd $OUTPUT_DIR && ninja lviecd"
+        echo "  cd $OUTPUT_DIR && ninja livecd"
     else
         echo "  cd $OUTPUT_DIR && make"
         echo "  cd $OUTPUT_DIR && make livecd"
