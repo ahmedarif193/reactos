@@ -145,7 +145,13 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
          */
         if (Mode != KernelMode)
         {
-            DPRINT1("Address: %x\n", Address);
+            PEPROCESS Process = PsGetCurrentProcess();
+
+            DPRINT1("User-mode fault on system address %p (proc %s pid %lu tid %lu)\n",
+                    Address,
+                    Process ? Process->ImageFileName : "<unknown>",
+                    (ULONG)(ULONG_PTR)PsGetCurrentProcessId(),
+                    (ULONG)(ULONG_PTR)PsGetCurrentThreadId());
             return(STATUS_ACCESS_VIOLATION);
         }
         AddressSpace = MmGetKernelAddressSpace();
@@ -304,6 +310,30 @@ Retry:
         Status = MmNotPresentFault(Mode, (ULONG_PTR)Address, TrapInformation ? FALSE : TRUE);
     }
 
+    if ((Status == STATUS_ACCESS_VIOLATION) &&
+        (Mode != KernelMode) &&
+        (ULONG_PTR)Address >= (ULONG_PTR)MmSystemRangeStart &&
+        TrapInformation != NULL)
+    {
+        PKTRAP_FRAME TrapFrame = (PKTRAP_FRAME)TrapInformation;
+
+#if defined(_M_AMD64)
+        DPRINT1("Page fault context: RIP=%p RSP=%p RBP=%p RCX=%p RDX=%p\n",
+                (PVOID)TrapFrame->Rip,
+                (PVOID)TrapFrame->Rsp,
+                (PVOID)TrapFrame->Rbp,
+                (PVOID)TrapFrame->Rcx,
+                (PVOID)TrapFrame->Rdx);
+#elif defined(_M_IX86)
+        DPRINT1("Page fault context: EIP=%p ESP=%p EBP=%p ECX=%p EDX=%p\n",
+                (PVOID)TrapFrame->Eip,
+                (PVOID)TrapFrame->Esp,
+                (PVOID)TrapFrame->Ebp,
+                (PVOID)TrapFrame->Ecx,
+                (PVOID)TrapFrame->Edx);
+#endif
+    }
+
     if (Status == STATUS_NO_MEMORY)
     {
         MmRebalanceMemoryConsumersAndWait();
@@ -312,4 +342,3 @@ Retry:
 
     return Status;
 }
-

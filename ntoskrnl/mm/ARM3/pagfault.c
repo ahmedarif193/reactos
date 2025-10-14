@@ -74,8 +74,38 @@ MiCheckForUserStackOverflow(IN PVOID Address,
     if ((Address >= StackBase) || (Address < DeallocationStack))
     {
         /* That's odd... */
-        DPRINT1("Faulting address outside of stack bounds. Address=%p, StackBase=%p, DeallocationStack=%p\n",
-                Address, StackBase, DeallocationStack);
+        PEPROCESS Process = PsGetCurrentProcess();
+
+        DPRINT1("Faulting address outside of stack bounds. Address=%p, StackBase=%p, DeallocationStack=%p (proc %s pid %lu tid %lu)\n",
+                Address,
+                StackBase,
+                DeallocationStack,
+                Process ? Process->ImageFileName : "<unknown>",
+                (ULONG)(ULONG_PTR)PsGetCurrentProcessId(),
+                (ULONG)(ULONG_PTR)PsGetCurrentThreadId());
+#if defined(_M_AMD64) || defined(_M_IX86)
+        {
+            PKTRAP_FRAME TrapFrame = KeGetCurrentThread()->TrapFrame;
+            if (TrapFrame)
+            {
+#if defined(_M_AMD64)
+                DPRINT1("Trap frame during guard fault: RIP=%p RSP=%p RBP=%p RCX=%p RDX=%p\n",
+                        (PVOID)TrapFrame->Rip,
+                        (PVOID)TrapFrame->Rsp,
+                        (PVOID)TrapFrame->Rbp,
+                        (PVOID)TrapFrame->Rcx,
+                        (PVOID)TrapFrame->Rdx);
+#else
+                DPRINT1("Trap frame during guard fault: EIP=%p ESP=%p EBP=%p ECX=%p EDX=%p\n",
+                        (PVOID)TrapFrame->Eip,
+                        (PVOID)TrapFrame->Esp,
+                        (PVOID)TrapFrame->Ebp,
+                        (PVOID)TrapFrame->Ecx,
+                        (PVOID)TrapFrame->Edx);
+#endif
+            }
+        }
+#endif
         return STATUS_GUARD_PAGE_VIOLATION;
     }
 
@@ -86,7 +116,38 @@ MiCheckForUserStackOverflow(IN PVOID Address,
     if (((ULONG_PTR)NextStackAddress - PAGE_SIZE) <= (ULONG_PTR)DeallocationStack)
     {
         /* We don't -- Trying to make this guard page valid now */
-        DPRINT1("Close to our death...\n");
+        {
+            PEPROCESS Process = PsGetCurrentProcess();
+
+            DPRINT1("Close to our death... stack exhausted for proc %s pid %lu tid %lu at %p\n",
+                    Process ? Process->ImageFileName : "<unknown>",
+                    (ULONG)(ULONG_PTR)PsGetCurrentProcessId(),
+                    (ULONG)(ULONG_PTR)PsGetCurrentThreadId(),
+                    Address);
+#if defined(_M_AMD64) || defined(_M_IX86)
+            {
+                PKTRAP_FRAME TrapFrame = KeGetCurrentThread()->TrapFrame;
+                if (TrapFrame)
+                {
+#if defined(_M_AMD64)
+                    DPRINT1("Guard overflow context: RIP=%p RSP=%p RBP=%p RCX=%p RDX=%p\n",
+                            (PVOID)TrapFrame->Rip,
+                            (PVOID)TrapFrame->Rsp,
+                            (PVOID)TrapFrame->Rbp,
+                            (PVOID)TrapFrame->Rcx,
+                            (PVOID)TrapFrame->Rdx);
+#else
+                    DPRINT1("Guard overflow context: EIP=%p ESP=%p EBP=%p ECX=%p EDX=%p\n",
+                            (PVOID)TrapFrame->Eip,
+                            (PVOID)TrapFrame->Esp,
+                            (PVOID)TrapFrame->Ebp,
+                            (PVOID)TrapFrame->Ecx,
+                            (PVOID)TrapFrame->Edx);
+#endif
+                }
+            }
+#endif
+        }
 
         /* Calculate the next memory address */
         NextStackAddress = (PVOID)((ULONG_PTR)PAGE_ALIGN(DeallocationStack) + GuaranteedSize);
