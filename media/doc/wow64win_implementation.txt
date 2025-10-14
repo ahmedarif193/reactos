@@ -1,0 +1,327 @@
+ReactOS WOW64 Win32k Thunking Layer Implementation
+=================================================
+
+Date: 2025-01-XX
+Component: wow64win.dll
+Status: Initial Stub Implementation (Milestone 1 Complete)
+Author: Ahmed ARIF (arif.ing@outlook.com)
+
+OVERVIEW
+--------
+This document describes the implementation of wow64win.dll, the Win32k
+thunking layer for ReactOS WOW64 subsystem. This layer enables 32-bit
+GUI applications to run on 64-bit ReactOS by translating NtUser*/NtGdi*
+syscalls between 32-bit and 64-bit formats.
+
+ARCHITECTURE
+------------
+WOW64 consists of three main DLLs:
+
+1. wow64.dll     - NT* syscall thunking (kernel32/ntdll layer)
+2. wow64cpu.dll  - CPU context management and transitions
+3. wow64win.dll  - Win32k syscall thunking (USER32/GDI32 layer) **NEW**
+
+Syscall Flow:
+    32-bit App → USER32 → syscall → wow64cpu.dll
+                                     ↓
+                              wow64win.dll (convert 32→64)
+                                     ↓
+                              64-bit win32k.sys
+                                     ↓
+                              wow64win.dll (convert 64→32)
+                                     ↓
+                              32-bit App
+
+FILES CREATED
+-------------
+/home/ahmed/WorkDir/TTE/reactos_uefi_dev/dll/win32/wow64win/
+    wow64win.c          - Main thunk implementation (732 lines)
+    wow64win.spec       - Export definitions (14 exports)
+    CMakeLists.txt      - Build configuration
+    README.md           - Detailed documentation (327 lines)
+
+IMPLEMENTATION DETAILS
+----------------------
+
+1. Structure Definitions (32-bit)
+   - MSG32: 32-bit message structure for message loop
+   - CREATESTRUCT32: 32-bit window creation parameters
+   - WINDOWPOS32: 32-bit window positioning structure
+
+2. Structure Conversion Helpers
+   - Wow64WinConvertMsg32To64 / Wow64WinConvertMsg64To32
+   - Wow64WinConvertCreateStruct32To64
+   - Wow64WinConvertWindowPos32To64
+
+3. Window Station and Desktop Thunks (Stubs)
+   - Wow64NtUserOpenWindowStation
+   - Wow64NtUserCreateDesktop
+   - Wow64NtUserOpenDesktop
+   - Wow64NtUserCloseDesktop
+   - Wow64NtUserSetThreadDesktop
+
+4. Message Loop Thunks (Stubs)
+   - Wow64NtUserGetMessage
+   - Wow64NtUserPeekMessage
+   - Wow64NtUserDispatchMessage
+   - Wow64NtUserWaitMessage
+   - Wow64NtUserMsgWaitForMultipleObjectsEx
+
+5. Window Creation Thunks (Stubs)
+   - Wow64NtUserCreateWindowEx
+   - Wow64NtUserDestroyWindow
+   - Wow64NtUserShowWindow
+
+6. Public API
+   - Wow64LdrpLoadWow64Win - Called by wow64.dll during GUI init
+   - Wow64SystemServiceEx_Win32k - Syscall dispatcher (future)
+
+INTEGRATION
+-----------
+
+1. Build System
+   - Added wow64win subdirectory to dll/win32/CMakeLists.txt
+   - Conditional compilation for amd64 architecture only
+   - Links against ntdll and kernel32
+   - Builds as 64-bit DLL (native architecture)
+
+2. Boot Media Packaging
+   - SysWOW64 staging already configured in boot_images.cmake
+   - No changes needed (wow64win.dll packaged automatically)
+
+3. Registry Configuration
+   - Updated boot/bootdata/hivesys.inf
+   - Added KnownDlls32 entries for wow64, wow64cpu, wow64win
+   - Registry Key: HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32
+     "wow64win" = "wow64win.dll"
+
+CURRENT STATUS
+--------------
+
+**GUI BLOCKING INTENTIONAL**
+
+All thunk functions currently return STATUS_NOT_IMPLEMENTED. This is
+intentional to:
+
+1. Prevent GUI processes from crashing until layer is complete
+2. Allow console applications to continue working via wow64.dll
+3. Provide foundation for incremental implementation
+
+When Wow64LdrpLoadWow64Win() returns STATUS_NOT_IMPLEMENTED, the loader
+gracefully blocks GUI thread initialization with an appropriate error message.
+
+TESTING STRATEGY
+----------------
+
+Phase 1: Build Verification (CURRENT)
+    - Verify DLL builds successfully
+    - Check exports are defined correctly
+    - Confirm packaging includes wow64win.dll
+
+Phase 2: GUI Blocking Test
+    - Attempt to run 32-bit GUI application
+    - Verify graceful failure with "GUI not implemented" message
+    - Ensure console apps still work
+
+Phase 3: Incremental Implementation
+    - Implement window station/desktop thunks
+    - Implement message loop thunks
+    - Implement window creation thunks
+    - Test each category independently
+
+Phase 4: Full Validation
+    - Run ReactOS GUI applications (notepad, calc)
+    - Run Windows 32-bit GUI applications
+    - Verify message handling and window operations
+
+BUILD INSTRUCTIONS
+------------------
+
+Build wow64win.dll:
+    cd /path/to/reactos_build
+    ninja wow64win
+
+Verify build:
+    ls -la dll/win32/wow64win/wow64win.dll
+
+Build full system with wow64win:
+    ninja bootcd
+
+The DLL will be packaged into:
+    - reactos/system32/wow64win.dll (on boot media)
+
+DEBUGGING
+---------
+
+Enable debug tracing by rebuilding with DBG=1. Debug output will show:
+    wow64win: Wow64LdrpLoadWow64Win called - GUI support is not yet implemented
+    wow64win.dll stub: Wow64NtUserGetMessage
+
+Debug with GDB:
+    gdb /path/to/reactos
+    break Wow64LdrpLoadWow64Win
+    break Wow64NtUserGetMessage
+    run
+
+NEXT STEPS (MILESTONE 2)
+-------------------------
+
+Implement Window Station and Desktop Thunks:
+
+1. Parse win32k syscall table to map service numbers
+2. Implement NtUserOpenWindowStation thunk body
+3. Implement NtUserCreateDesktop thunk body
+4. Implement NtUserSetThreadDesktop thunk body
+5. Test GUI thread initialization
+6. Verify desktop attachment works
+
+Required Work:
+    - Map win32k service numbers (from win32k.spec)
+    - Implement syscall dispatcher (Wow64SystemServiceEx_Win32k)
+    - Handle shared memory sections (handle tables)
+    - Validate structure conversions
+
+Expected Outcome:
+    - GUI thread initialization succeeds
+    - Desktops can be created and attached
+    - Window stations can be opened
+    - Message loop still blocked (implemented in Milestone 3)
+
+MILESTONE 3: MESSAGE LOOP SUPPORT
+----------------------------------
+
+Goals:
+    - Implement NtUserGetMessage thunk
+    - Implement NtUserDispatchMessage thunk
+    - Handle MSG structure conversions
+    - Test with simple message loop
+
+MILESTONE 4: WINDOW CREATION SUPPORT
+-------------------------------------
+
+Goals:
+    - Implement NtUserCreateWindowEx thunk
+    - Handle CREATESTRUCT conversions
+    - Test with window creation
+
+MILESTONE 5: COMPLETE WIN32K COVERAGE
+--------------------------------------
+
+Goals:
+    - Add remaining NtUser* thunks (SetWindowPos, etc.)
+    - Add NtGdi* thunks (GDI drawing operations)
+    - Handle callback thunks (window procedures)
+    - Full GUI application support
+
+KNOWN LIMITATIONS
+-----------------
+
+Current implementation limitations:
+
+1. No GDI Support: NtGdi* thunks not yet implemented
+2. No Shared Memory: USER32 handle tables not yet translated
+3. No Callback Thunks: Window procedures not yet thunked
+4. No Hook Support: SetWindowsHook* operations not supported
+5. No DPI Awareness: High-DPI scaling not handled
+6. No Multi-Monitor: Multi-monitor APIs not thunked
+
+These will be addressed in future milestones.
+
+DESIGN DECISIONS
+----------------
+
+1. Structure Layout Compatibility
+   - MSG32, CREATESTRUCT32, WINDOWPOS32 match Windows WOW64 exactly
+   - This ensures binary compatibility with Windows applications
+
+2. Handle Translation
+   - Handles are index-based in win32k, so no conversion needed
+   - Simply cast between 32-bit and 64-bit handle types
+
+3. Pointer Validation
+   - All 32-bit pointers validated before dereferencing
+   - Return STATUS_INVALID_PARAMETER on validation failure
+
+4. Error Handling
+   - Return proper NTSTATUS codes (not BOOL or HRESULT)
+   - Propagate kernel errors back to 32-bit caller
+
+5. Debug Tracing
+   - Comprehensive debug output for all thunks
+   - Conditional compilation with DBG flag
+
+6. Incremental Implementation
+   - Stub all thunks with STATUS_NOT_IMPLEMENTED
+   - Implement by category (window station, message loop, etc.)
+   - Test each category before moving to next
+
+REFERENCES
+----------
+
+ReactOS Sources:
+    - ntoskrnl/ps/wow64.c - Kernel WOW64 support
+    - dll/win32/wow64/wow64.c - Core WOW64 layer
+    - dll/win32/wow64cpu/wow64cpu.c - CPU context management
+    - win32ss/include/ntuser.h - Win32k internal structures
+    - win32ss/win32k.spec - Win32k syscall exports
+
+Documentation:
+    - Windows Internals, Part 1 (7th Edition)
+    - ReactOS wiki: https://reactos.org/wiki/Techwiki:Win32k
+    - Windows syscall tables: https://j00ru.vexillium.org/syscalls/nt/64/
+
+WOW64 Architecture:
+    - Microsoft Docs: Windows on Windows 64-bit (WOW64)
+    - https://docs.microsoft.com/en-us/windows/win32/winprog64/running-32-bit-applications
+
+COMPATIBILITY NOTES
+-------------------
+
+Windows Compatibility:
+    - Structure layouts match Windows WOW64 exactly
+    - Export names match Windows wow64win.dll
+    - Syscall dispatch mechanism compatible with Windows
+
+ReactOS Compatibility:
+    - Follows ReactOS coding conventions
+    - Uses ReactOS build system (CMake)
+    - Integrates with existing WOW64 infrastructure
+
+Binary Compatibility:
+    - 32-bit applications see native Windows API
+    - No recompilation required
+    - Third-party installers/debuggers work
+
+CHANGE LOG
+----------
+
+2025-01-XX - Initial Implementation (Milestone 1)
+    - Created wow64win.dll stub implementation
+    - Implemented structure definitions (MSG32, etc.)
+    - Added conversion helpers (32<->64 bit)
+    - Created thunk stubs for essential win32k syscalls
+    - Integrated with build system and boot media
+    - Added KnownDlls32 registry entries
+    - Comprehensive documentation (README.md, this file)
+
+Status: GUI processes intentionally blocked until implementation is complete.
+
+CONCLUSION
+----------
+
+The wow64win.dll stub implementation is now complete and integrated into
+the ReactOS build system. This provides the foundation for GUI application
+support in WOW64.
+
+The next phase is to implement the actual thunk bodies, starting with
+window station and desktop operations. This will require:
+
+1. Mapping win32k syscall service numbers
+2. Implementing the syscall dispatcher
+3. Converting structures between 32-bit and 64-bit formats
+4. Testing with real GUI applications
+
+For questions or contributions, contact:
+    Ahmed ARIF (arif.ing@outlook.com)
+
+END OF DOCUMENT

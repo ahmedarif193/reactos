@@ -1,0 +1,248 @@
+WOW64 Smoke Test Integration Summary
+=====================================
+
+Date: 2025-10-15
+Purpose: Integrate wow64smoke.exe test application into ReactOS LiveCD boot scripts
+         and documentation as the first user-mode validation step for WOW64 functionality.
+
+Overview
+--------
+The wow64smoke.exe test application has been integrated into the ReactOS LiveCD
+to provide automatic validation of the WOW64 subsystem on amd64 builds. This
+integration includes:
+
+1. Automatic execution on first boot via Windows RunOnce mechanism
+2. Desktop shortcut for manual testing
+3. Comprehensive testing documentation
+4. Build system integration for proper packaging
+
+Changes Made
+------------
+
+1. Registry Integration (boot/bootdata/hivesft.inf)
+   - Added architecture-specific [AddReg.NTamd64] section
+   - Configured RunOnce entry to execute wow64smoke.exe on first boot (amd64 only)
+   - Entry: HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce\WOW64SmokeTest
+   - Value: %SystemRoot%\system32\wow64smoke.exe
+
+   This ensures the smoke test runs automatically when an amd64 ReactOS system
+   boots for the first time, providing immediate feedback on WOW64 functionality.
+
+2. Desktop Shortcut (media/inf/shortcuts.inf)
+   - Added wow64smoke.exe to [SystemToolsShortcuts] section
+   - Shortcut location: Start Menu -> Accessories -> System Tools
+   - Title: "WOW64 Smoke Test"
+   - Description: "Test WOW64 subsystem functionality (amd64 only)"
+
+   Allows users to manually run the smoke test at any time without needing
+   to navigate to the command line or remember the executable path.
+
+3. Testing Documentation (media/doc/WOW64_TESTING.txt) [NEW FILE]
+   Created comprehensive testing guide covering:
+   - Overview of WOW64 and its purpose in ReactOS
+   - Prerequisites for WOW64 functionality
+   - Automatic smoke test behavior on first boot
+   - Manual testing procedures (command line and desktop shortcut)
+   - Expected output and success criteria
+   - Troubleshooting common issues
+   - Architecture detection and graceful failure on i386
+   - Developer testing workflow
+   - Integration with CI/CD systems
+   - Related files and references
+
+4. Roadmap Updates (media/doc/wow64_roadmap.txt)
+   - Marked smoke test integration task as complete [x]
+   - Added reference to WOW64_TESTING.txt documentation
+   - Updated "Validation & CI" section with implementation details
+   - Updated "Immediate Next 10 Steps" section (step #9 complete)
+   - Added references to new integration files:
+     * base/applications/cmdutils/wow64smoke/
+     * media/doc/WOW64_TESTING.txt
+     * boot/bootdata/hivesft.inf (RunOnce entry)
+     * media/inf/shortcuts.inf (desktop shortcut)
+
+Build System Integration
+------------------------
+The wow64smoke application was already integrated into the build system:
+- CMakeLists.txt in base/applications/cmdutils/wow64smoke/
+- add_cd_file() directive ensures inclusion in LiveCD/bootable media
+- Automatic packaging to reactos/system32 directory
+- No additional build system changes required
+
+Architecture-Specific Behavior
+-------------------------------
+The integration uses Windows INF file architecture-specific sections to ensure
+the RunOnce entry only appears on amd64 builds:
+
+- [AddReg.NTamd64] section in hivesft.inf contains amd64-specific entries
+- The desktop shortcut is present on all architectures but gracefully fails
+  on i386 with a clear error message
+- wow64smoke.exe detects when running on i386 and reports:
+  "Process is not running under WOW64" (exit code 1)
+
+This approach mirrors Windows behavior where WOW64-specific components are
+present but inactive on 32-bit systems.
+
+Testing Workflow
+----------------
+After this integration, the testing workflow becomes:
+
+1. Build amd64 ReactOS with WOW64 support
+2. Boot LiveCD or installed system
+3. System automatically runs wow64smoke.exe via RunOnce
+4. If test passes:
+   - Output window shows "Smoke test PASSED"
+   - WOW64 basic infrastructure is operational
+   - Proceed with testing 32-bit applications
+5. If test fails:
+   - Error message indicates specific failure
+   - Consult WOW64_TESTING.txt for troubleshooting
+   - Check system logs for detailed diagnostics
+
+Manual Re-testing
+-----------------
+Users can re-run the smoke test at any time:
+
+Method 1 (Desktop Shortcut):
+  Start Menu -> Accessories -> System Tools -> WOW64 Smoke Test
+
+Method 2 (Command Line):
+  C:\> %SystemRoot%\system32\wow64smoke.exe
+
+Method 3 (Registry):
+  Re-add the RunOnce entry manually if needed
+
+Expected Output
+---------------
+On successful run on amd64 system:
+
+[wow64smoke] ReactOS WOW64 smoke test
+[wow64smoke] Pointer size (bytes): 4
+[wow64smoke] SysWOW64 directory: C:\ReactOS\SysWOW64
+[wow64smoke] Native page size: 4096
+[wow64smoke] Number of processors: 1
+[wow64smoke] Processor architecture: 9
+[wow64smoke] Smoke test PASSED
+
+Exit code: 0
+
+On failure or i386 system:
+- Error message describing the issue
+- Exit code: 1
+
+CI/CD Integration Points
+------------------------
+For automated testing in continuous integration:
+
+1. VM Boot Test:
+   - Boot amd64 LiveCD in virtual machine
+   - Wait for system initialization
+   - Monitor RunOnce execution
+   - Capture output and exit code
+
+2. Manual Execution Test:
+   - Execute: %SystemRoot%\system32\wow64smoke.exe
+   - Parse stdout for "Smoke test PASSED"
+   - Verify exit code is 0
+
+3. Regression Testing:
+   - Run after any WOW64-related changes
+   - Ensures basic infrastructure remains functional
+   - Early detection of breakage
+
+Future Enhancements
+-------------------
+Potential improvements to the smoke test integration:
+
+1. Scripted VM test (roadmap step #10):
+   - Automate LiveCD boot in QEMU/VirtualBox
+   - Capture smoke test results automatically
+   - Report to CI system
+
+2. Extended smoke tests:
+   - Test actual 32-bit application execution
+   - Verify filesystem and registry redirection
+   - Check APC delivery mechanisms
+   - Validate exception handling
+
+3. Multilingual support:
+   - Add localized strings to shortcuts.inf
+   - Translate test output messages
+   - Support international ReactOS users
+
+4. Logging and diagnostics:
+   - Write results to system log
+   - Create detailed debug output option
+   - Integration with Event Viewer
+
+Files Modified
+--------------
+1. boot/bootdata/hivesft.inf
+   - Added [AddReg.NTamd64] section with RunOnce entry
+
+2. media/inf/shortcuts.inf
+   - Added wow64smoke.exe to SystemToolsShortcuts
+   - Added WOW64SMOKE_TITLE and WOW64SMOKE_DESC strings
+
+3. media/doc/wow64_roadmap.txt
+   - Updated validation section
+   - Marked step #9 complete
+   - Added testing references
+
+Files Created
+-------------
+1. media/doc/WOW64_TESTING.txt
+   - Comprehensive testing guide
+   - Troubleshooting procedures
+   - Expected behavior documentation
+
+Implementation Status
+---------------------
+[x] Add wow64smoke.exe to RunOnce registry (amd64 only)
+[x] Create desktop shortcut in System Tools
+[x] Write comprehensive testing documentation
+[x] Update wow64_roadmap.txt with status
+[x] Verify build system integration
+[x] Document expected behavior and troubleshooting
+
+Testing Checklist
+-----------------
+Before committing changes, verify:
+
+[ ] amd64 build includes wow64smoke.exe in system32
+[ ] RunOnce registry entry present in amd64 hive
+[ ] Desktop shortcut appears in System Tools menu
+[ ] Shortcut executes wow64smoke.exe correctly
+[ ] Test runs automatically on first boot
+[ ] Test output is correct on success/failure
+[ ] Documentation is accurate and complete
+[ ] i386 builds are not affected negatively
+
+Next Steps
+----------
+1. Test integration on actual amd64 LiveCD build
+2. Verify RunOnce execution on first boot
+3. Confirm desktop shortcut functionality
+4. Update any issues found in WOW64_TESTING.txt
+5. Proceed with roadmap step #10 (CI automation)
+6. Continue WOW64 development based on smoke test results
+
+Related Documentation
+---------------------
+- media/doc/WOW64_TESTING.txt (Testing guide)
+- media/doc/wow64_roadmap.txt (Implementation roadmap)
+- media/SysWOW64-README.txt (SysWOW64 directory structure)
+- base/applications/cmdutils/wow64smoke/wow64smoke.c (Source code)
+
+Contact
+-------
+For issues or questions about this integration:
+1. Review WOW64_TESTING.txt for troubleshooting
+2. Check wow64_roadmap.txt for implementation status
+3. Consult ReactOS development team
+
+End of Summary
+--------------
+This integration provides the first automated user-mode validation step for
+WOW64 functionality in ReactOS amd64 builds. It serves as both a diagnostic
+tool for developers and a validation mechanism for end users.

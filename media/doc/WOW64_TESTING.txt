@@ -1,0 +1,190 @@
+ReactOS WOW64 Testing Guide
+============================
+
+This document describes how to test the WOW64 (Windows-on-Windows 64-bit) subsystem
+in ReactOS, which enables 32-bit x86 applications to run on 64-bit amd64 systems.
+
+Overview
+--------
+WOW64 is a compatibility layer that allows 32-bit Windows applications to run on
+64-bit Windows systems. ReactOS implements this functionality to maintain binary
+compatibility with Windows and support the vast ecosystem of 32-bit software.
+
+Prerequisites
+-------------
+- ReactOS amd64 build (not i386)
+- WOW64 subsystem components must be present:
+  * wow64.dll (NT system service thunking)
+  * wow64cpu.dll (CPU transition helpers)
+  * wow64win.dll (Win32k thunking, optional for GUI apps)
+  * 32-bit user-mode binaries in %SystemRoot%\SysWOW64
+
+Quick Start: Automatic Smoke Test
+----------------------------------
+On amd64 builds, the WOW64 smoke test runs automatically on first boot via the
+Windows RunOnce registry mechanism. This provides immediate feedback on WOW64
+subsystem functionality.
+
+The smoke test will:
+1. Verify the process is running under WOW64 using IsWow64Process()
+2. Check the SysWOW64 directory exists and is accessible
+3. Query native system information
+4. Display results in a command prompt window
+
+If the smoke test runs successfully, WOW64 basic infrastructure is operational.
+
+Manual Testing
+--------------
+
+1. Running the Smoke Test Manually
+
+   From a command prompt on an amd64 system:
+
+   C:\> %SystemRoot%\system32\wow64smoke.exe
+
+   Expected output (on successful run):
+
+   [wow64smoke] ReactOS WOW64 smoke test
+   [wow64smoke] Pointer size (bytes): 4
+   [wow64smoke] SysWOW64 directory: C:\ReactOS\SysWOW64
+   [wow64smoke] Native page size: 4096
+   [wow64smoke] Number of processors: 1
+   [wow64smoke] Processor architecture: 9
+   [wow64smoke] Smoke test PASSED
+
+   Note: Pointer size should be 4 bytes (32-bit) even though the process
+   is running on a 64-bit system.
+
+2. Using the Desktop Shortcut
+
+   On amd64 builds, a "WOW64 Smoke Test" shortcut is available in:
+
+   Start Menu -> Accessories -> System Tools -> WOW64 Smoke Test
+
+   Double-click to run the test manually at any time.
+
+3. Testing 32-bit Applications
+
+   Once the smoke test passes, you can test actual 32-bit applications:
+
+   a. Simple console application:
+      C:\> %SystemRoot%\SysWOW64\cmd.exe
+
+   b. 32-bit notepad:
+      C:\> %SystemRoot%\SysWOW64\notepad.exe
+
+   c. Check running processes:
+      - Open Task Manager
+      - Look for processes with "*32" suffix indicating WOW64 execution
+
+Troubleshooting
+---------------
+
+Problem: "Process is not running under WOW64"
+Solution: This error indicates wow64smoke.exe is being executed as a native
+          64-bit process instead of 32-bit. Verify:
+          - You're running an amd64 build (not i386)
+          - wow64smoke.exe is built as 32-bit (check with file command)
+          - WOW64 kernel support is enabled
+
+Problem: "GetSystemWow64DirectoryA failed"
+Solution: The SysWOW64 directory structure is missing or inaccessible. Verify:
+          - %SystemRoot%\SysWOW64 directory exists
+          - 32-bit binaries are present in SysWOW64
+          - Build system correctly populated dual-architecture layout
+
+Problem: Smoke test hangs or crashes
+Solution: This indicates a problem with WOW64 CPU transition layer. Check:
+          - wow64cpu.dll is present in system32
+          - Kernel WOW64 support is properly initialized
+          - System logs (Event Viewer) for crash information
+
+Problem: Test passes but 32-bit apps don't work
+Solution: The smoke test validates basic WOW64 infrastructure only. Full
+          application support requires additional components:
+          - Complete syscall thunk coverage in wow64.dll
+          - Win32k thunking via wow64win.dll (for GUI apps)
+          - Registry and filesystem redirection
+          - Refer to media/doc/wow64_roadmap.txt for implementation status
+
+Architecture Detection
+----------------------
+The smoke test is designed to work correctly on both i386 and amd64 builds:
+
+- On i386: The test will report "Process is not running under WOW64" and exit
+           with error code 1. This is expected behavior on 32-bit systems.
+
+- On amd64: The test validates WOW64 functionality and reports results.
+
+The desktop shortcut and RunOnce entry are present on all builds, but the test
+will gracefully fail on i386 with a clear error message.
+
+Developer Testing Workflow
+---------------------------
+When developing or debugging WOW64 functionality:
+
+1. Build both i386 and amd64 trees
+2. Ensure amd64 build includes 32-bit binaries in SysWOW64
+3. Boot amd64 LiveCD or installed system
+4. Verify automatic smoke test runs on first boot
+5. Check Event Viewer for any WOW64-related errors
+6. Run smoke test manually to verify changes
+7. Test progressively more complex 32-bit applications
+8. Document any failures or regressions
+
+Integration with CI/CD
+----------------------
+For automated testing in continuous integration:
+
+1. Boot amd64 VM with LiveCD
+2. Wait for system initialization
+3. Check RunOnce registry completion
+4. Execute: %SystemRoot%\system32\wow64smoke.exe
+5. Verify exit code is 0 (success)
+6. Parse stdout for "Smoke test PASSED" string
+7. Run additional 32-bit test suite if smoke test passes
+
+See media/doc/wow64_roadmap.txt for detailed implementation status and
+next steps in WOW64 development.
+
+Expected Behavior Summary
+-------------------------
+On amd64 systems with working WOW64:
+- Smoke test returns exit code 0
+- Output shows 4-byte pointer size
+- SysWOW64 directory is detected
+- Native architecture reports as AMD64 (9)
+
+On i386 systems or non-functional WOW64:
+- Smoke test returns exit code 1
+- Error message indicates issue
+- No system damage or side effects
+
+Related Files
+-------------
+Source code:
+  base/applications/cmdutils/wow64smoke/wow64smoke.c
+  base/applications/cmdutils/wow64smoke/CMakeLists.txt
+
+Configuration:
+  boot/bootdata/hivesft.inf (RunOnce registry entry)
+  media/inf/shortcuts.inf (Desktop shortcut definition)
+
+Documentation:
+  media/doc/wow64_roadmap.txt (Implementation roadmap)
+  media/SysWOW64-README.txt (SysWOW64 directory structure)
+
+WOW64 Components:
+  dll/win32/wow64/ (NT syscall thunking)
+  dll/win32/wow64cpu/ (CPU transition layer)
+  ntoskrnl/ps/wow64.c (Kernel support)
+
+Contact and Support
+-------------------
+For issues or questions about WOW64 testing:
+1. Check media/doc/wow64_roadmap.txt for known limitations
+2. Review Event Viewer logs for detailed error information
+3. File bug reports with smoke test output and system configuration
+4. Consult ReactOS development team via IRC or forum
+
+Last Updated: 2025-10-15

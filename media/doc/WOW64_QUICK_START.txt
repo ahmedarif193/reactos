@@ -1,0 +1,128 @@
+═══════════════════════════════════════════════════════════════
+         ReactOS WOW64 Build - Quick Start Guide
+═══════════════════════════════════════════════════════════════
+
+AUTOMATED BUILD (RECOMMENDED)
+══════════════════════════════
+
+1. Build both architectures automatically:
+
+   ./build-wow64.sh release
+
+   This builds:
+   - i386 binaries → ../build-i386-release/
+   - amd64 binaries → ../build-amd64-release/
+   - SysWOW64 populated automatically
+
+2. Create bootable image:
+
+   cd ../build-amd64-release
+   ninja bootcd     # or livecd, liveimg
+
+
+MANUAL BUILD
+════════════
+
+1. Build i386 first:
+
+   mkdir ../build-i386
+   cd ../build-i386
+   cmake -G Ninja -DARCH=i386 -DCMAKE_BUILD_TYPE=Release ../reactos
+   ninja
+
+2. Build amd64 with WOW64:
+
+   mkdir ../build-amd64
+   cd ../build-amd64
+   cmake -G Ninja -DARCH=amd64 -DCMAKE_BUILD_TYPE=Release \
+         -DREACTOS_I386_ROOT=/path/to/build-i386/output-MinGW-i386-Release/reactos \
+         ../reactos
+   ninja
+
+3. Create images:
+
+   ninja bootcd
+
+
+VERIFY WOW64 SETUP
+══════════════════
+
+Check if WOW64 binaries are present:
+
+   # 64-bit WOW64 DLLs (in system32):
+   ls output-MinGW-amd64-Release/reactos/system32/wow64*.dll
+
+   # 32-bit binaries (in SysWOW64):
+   ls output-MinGW-amd64-Release/reactos/SysWOW64/kernel32.dll
+
+
+DIRECTORY STRUCTURE
+═══════════════════
+
+ReactOS\system32\      # 64-bit native binaries
+    ntdll.dll          (64-bit)
+    kernel32.dll       (64-bit)
+    wow64.dll          (64-bit WOW64 core)
+    wow64cpu.dll       (64-bit CPU translator)
+    wow64win.dll       (64-bit Win32k thunker)
+
+ReactOS\SysWOW64\      # 32-bit WOW64 binaries
+    ntdll.dll          (32-bit)
+    kernel32.dll       (32-bit)
+    user32.dll         (32-bit)
+
+
+REGISTRY CONFIGURATION
+══════════════════════
+
+KnownDlls (64-bit):
+    HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls
+    DllDirectory = %SystemRoot%\system32
+    wow64 = wow64.dll
+    wow64cpu = wow64cpu.dll
+    wow64win = wow64win.dll
+
+KnownDlls32 (32-bit):
+    HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32
+    DllDirectory = %SystemRoot%\SysWOW64
+
+
+TROUBLESHOOTING
+═══════════════
+
+"WOW64: No i386 binaries found"
+→ Set REACTOS_I386_ROOT environment variable or CMake parameter
+
+SysWOW64 directory is empty:
+→ Verify i386 build completed successfully
+→ Check i386 path is correct
+→ Re-run CMake configuration
+
+32-bit apps won't run:
+→ Verify wow64*.dll files are in system32
+→ Check KnownDlls registry entries
+→ Ensure SysWOW64 contains ntdll.dll and kernel32.dll
+
+
+DOCUMENTATION
+═════════════
+
+Full build guide:       media/doc/WOW64_BUILD_GUIDE.md
+Implementation details: media/doc/WOW64_IMPLEMENTATION_SUMMARY.md
+SysWOW64 info:          media/SysWOW64-README.txt
+WOW64 roadmap:          media/doc/wow64_roadmap.txt
+
+
+QUICK TIPS
+══════════
+
+- Use --rebuild-i386 to force i386 rebuild
+- Use --skip-i386 to reuse existing i386 binaries
+- Debug builds: ./build-wow64.sh debug
+- Set REACTOS_I386_ROOT to use custom i386 location
+- The build is incremental - ninja only rebuilds changed files
+
+
+═══════════════════════════════════════════════════════════════
+For detailed information, see: media/doc/WOW64_BUILD_GUIDE.md
+═══════════════════════════════════════════════════════════════
