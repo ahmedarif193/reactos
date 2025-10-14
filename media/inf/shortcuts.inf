@@ -47,6 +47,7 @@ QuickLaunchShortcuts=26, Microsoft\Internet Explorer\Quick Launch
 %SystemRoot%\regedit.exe, %REGEDIT_TITLE%, %REGEDIT_DESC%, 0
 %SystemRoot%\system32\taskmgr.exe, %TASKMGR_TITLE%, %TASKMGR_DESC%, 0
 %SystemRoot%\system32\dxdiag.exe, %DXDIAG_TITLE%, %DXDIAG_DESC%, 0
+%SystemRoot%\system32\wow64smoke.exe, %WOW64SMOKE_TITLE%, %WOW64SMOKE_DESC%, 0
 
 [AccessibilityShortcuts]
 %SystemRoot%\system32\magnify.exe, %MAGNIFY_TITLE%, %MAGNIFY_DESC%, 0, %HOMEDRIVE%%HOMEPATH%
@@ -138,6 +139,8 @@ UTILMAN_TITLE=Accessibility Utility Manager
 UTILMAN_DESC=Launch Accessibility Utility Manager
 IEXPLORE_TITLE=Wine Internet Explorer
 IEXPLORE_DESC=Wine Web Browser
+WOW64SMOKE_TITLE=WOW64 Smoke Test
+WOW64SMOKE_DESC=Test WOW64 subsystem functionality (amd64 only)
 
 [Strings.0402]
 ACCESSORIES=Принадлежности

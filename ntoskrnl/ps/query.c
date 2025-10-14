@@ -1340,6 +1340,43 @@ NtSetInformationProcess(IN HANDLE ProcessHandle,
             }
             break;
 
+        /* Wow64 info */
+#ifdef _M_AMD64
+        case ProcessWow64Information:
+        {
+            ULONG_PTR Wow64Info = 0;
+
+            if (ProcessInformationLength != sizeof(ULONG_PTR))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            _SEH2_TRY
+            {
+                Wow64Info = *(PULONG_PTR)ProcessInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            if (WOW64_CPU_AREA_IS_TAGGED(Wow64Info))
+            {
+                Status = PspWow64SetProcessCpuArea(Process,
+                                                   (PVOID)WOW64_CPU_AREA_DECODE_POINTER(Wow64Info));
+            }
+            else
+            {
+                PspWow64SetProcessWow64Info(Process, (PVOID)Wow64Info);
+                Status = STATUS_SUCCESS;
+            }
+            break;
+        }
+#endif
+
         /* Error/Exception Port */
         case ProcessExceptionPort:
 

@@ -157,6 +157,33 @@ PsGetContextThread(IN PETHREAD Thread,
     }
     _SEH2_END;
 
+#ifdef _M_AMD64
+    /*
+     * WOW64 context handling:
+     * If this is a WOW64 thread and the caller is 32-bit (PreviousMode check
+     * isn't sufficient here - we need to detect based on context structure size),
+     * redirect to wow64cpu to retrieve the 32-bit context.
+     *
+     * Note: We detect 32-bit callers by checking if they're in a WOW64 process.
+     */
+    if (PsIsWow64Thread(Thread))
+    {
+        /* Try to get WOW64 context directly */
+        Status = PspWow64GetContext(Thread, ThreadContext);
+        if (NT_SUCCESS(Status))
+        {
+            /* Successfully retrieved 32-bit context */
+            return Status;
+        }
+
+        /*
+         * If WOW64 context retrieval fails, fall through to standard handling.
+         * This allows debugging scenarios where we want the 64-bit context
+         * of a WOW64 thread.
+         */
+    }
+#endif
+
     /* Initialize the wait event */
     KeInitializeEvent(&GetSetContext.Event, NotificationEvent, FALSE);
 
@@ -281,6 +308,29 @@ PsSetContextThread(IN PETHREAD Thread,
         _SEH2_YIELD(return _SEH2_GetExceptionCode());
     }
     _SEH2_END;
+
+#ifdef _M_AMD64
+    /*
+     * WOW64 context handling:
+     * If this is a WOW64 thread, redirect to wow64cpu to set the 32-bit context.
+     */
+    if (PsIsWow64Thread(Thread))
+    {
+        /* Try to set WOW64 context directly */
+        Status = PspWow64SetContext(Thread, ThreadContext);
+        if (NT_SUCCESS(Status))
+        {
+            /* Successfully set 32-bit context */
+            return Status;
+        }
+
+        /*
+         * If WOW64 context setting fails, fall through to standard handling.
+         * This allows debugging scenarios where we want to set the 64-bit context
+         * of a WOW64 thread.
+         */
+    }
+#endif
 
     /* Initialize the wait event */
     KeInitializeEvent(&GetSetContext.Event, NotificationEvent, FALSE);

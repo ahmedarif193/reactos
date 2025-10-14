@@ -11,10 +11,32 @@ extern "C"
 
 /* INTERNAL KERNEL TYPES ****************************************************/
 
+#ifndef _WOW64_PROCESS_DEFINED
+#define _WOW64_PROCESS_DEFINED
 typedef struct _WOW64_PROCESS
 {
-  PVOID Wow64;
+    PVOID Wow64;        /* wow64.dll per-process data block */
+    PVOID Peb32;        /* base address of the 32-bit PEB */
+    PVOID Teb32;        /* template or initial 32-bit TEB */
+    PVOID CpuArea;      /* wow64cpu transition context */
+    ULONG Flags;        /* state flags for future use */
 } WOW64_PROCESS, *PWOW64_PROCESS;
+#endif
+
+#define WOW64_PROCESS_FLAG_INITIALIZED   0x00000001
+#define WOW64_PROCESS_FLAG_INHERITED     0x00000002
+#define WOW64_PROCESS_FLAG_HAS_PEB32     0x00000004
+#define WOW64_PROCESS_FLAG_HAS_TEB32     0x00000008
+#define WOW64_PROCESS_FLAG_HAS_CPU_AREA  0x00000010
+#define WOW64_PROCESS_FLAG_HAS_WOW64INFO 0x00000020
+
+#define WOW64_CPU_AREA_POINTER_TAG ((ULONG_PTR)0x1)
+#define WOW64_CPU_AREA_ENCODE_POINTER(Area) \
+    ((ULONG_PTR)((Area) ? ((ULONG_PTR)(Area) | WOW64_CPU_AREA_POINTER_TAG) : WOW64_CPU_AREA_POINTER_TAG))
+#define WOW64_CPU_AREA_DECODE_POINTER(Value) \
+    ((PVOID)((ULONG_PTR)(Value) & ~(ULONG_PTR)WOW64_CPU_AREA_POINTER_TAG))
+#define WOW64_CPU_AREA_IS_TAGGED(Value) \
+    (((ULONG_PTR)(Value) & WOW64_CPU_AREA_POINTER_TAG) != 0)
 
 typedef struct _KPROFILE_SOURCE_OBJECT
 {

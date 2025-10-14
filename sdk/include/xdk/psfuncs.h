@@ -10,6 +10,19 @@ PsWrapApcWow64Thread(
   _Inout_ PVOID *ApcContext,
   _Inout_ PVOID *ApcRoutine);
 
+#if defined(_M_AMD64)
+NTKERNELAPI
+PWOW64_PROCESS
+NTAPI
+PsGetProcessWow64Process(
+  _In_ PEPROCESS Process);
+
+NTKERNELAPI
+PWOW64_PROCESS
+NTAPI
+PsGetCurrentProcessWow64Process(VOID);
+#endif
+
 /*
  * PEPROCESS
  * PsGetCurrentProcess(VOID)

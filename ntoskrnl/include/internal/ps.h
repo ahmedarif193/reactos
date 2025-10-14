@@ -199,6 +199,121 @@ PspInitializeProcessSecurity(
     IN PEPROCESS Parent OPTIONAL
 );
 
+#ifdef _M_AMD64
+PWOW64_PROCESS
+NTAPI
+PsGetProcessWow64Process(
+    IN PEPROCESS Process
+);
+
+PWOW64_PROCESS
+NTAPI
+PsGetCurrentProcessWow64Process(
+    VOID
+);
+
+NTSTATUS
+NTAPI
+PspWow64InitializeProcess(
+    IN PEPROCESS Process,
+    IN PEPROCESS Parent OPTIONAL
+);
+
+VOID
+NTAPI
+PspWow64DeleteProcess(
+    IN PEPROCESS Process
+);
+
+VOID
+NTAPI
+PspWow64SetProcessWow64Info(
+    IN PEPROCESS Process,
+    IN PVOID Wow64Info OPTIONAL
+);
+
+VOID
+NTAPI
+PspWow64SetProcessPeb32(
+    IN PEPROCESS Process,
+    IN PVOID Peb32 OPTIONAL
+);
+
+VOID
+NTAPI
+PspWow64SetProcessTeb32(
+    IN PEPROCESS Process,
+    IN PVOID Teb32 OPTIONAL
+);
+
+NTSTATUS
+NTAPI
+PspWow64SetProcessCpuArea(
+    IN PEPROCESS Process,
+    IN PVOID CpuArea OPTIONAL
+);
+
+BOOLEAN
+NTAPI
+PsIsWow64Process(
+    IN PEPROCESS Process OPTIONAL
+);
+
+BOOLEAN
+NTAPI
+PsIsWow64Thread(
+    IN PETHREAD Thread OPTIONAL
+);
+
+NTSTATUS
+NTAPI
+Wow64cpuExecuteCompatApc(
+    IN PVOID NormalContext,
+    IN PVOID SystemArgument1,
+    IN PVOID SystemArgument2
+);
+
+NTSTATUS
+NTAPI
+PspWow64GetContext(
+    IN PETHREAD Thread,
+    IN OUT PCONTEXT Context
+);
+
+NTSTATUS
+NTAPI
+PspWow64SetContext(
+    IN PETHREAD Thread,
+    IN PCONTEXT Context
+);
+
+VOID
+NTAPI
+PspWow64InitializeThread(
+    IN PETHREAD Thread
+);
+
+VOID
+NTAPI
+PspWow64DeleteThread(
+    IN PETHREAD Thread
+);
+
+BOOLEAN
+NTAPI
+KiIsWow64TrapFrame(
+    IN PKTRAP_FRAME TrapFrame
+);
+
+NTSTATUS
+NTAPI
+KiDispatchWow64Exception(
+    IN PEXCEPTION_RECORD ExceptionRecord,
+    IN PKTRAP_FRAME TrapFrame,
+    IN PCONTEXT Context
+);
+#endif
+
 VOID
 NTAPI
 PspDeleteProcessSecurity(

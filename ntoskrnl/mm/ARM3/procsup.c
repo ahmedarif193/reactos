@@ -744,6 +744,12 @@ MmCreatePeb(IN PEPROCESS Process,
     // Detach from the Process
     //
     KeDetachProcess();
+#ifdef _M_AMD64
+    if (Process->Wow64Process)
+    {
+        PspWow64SetProcessPeb32(Process, Peb);
+    }
+#endif
     *BasePeb = Peb;
     return STATUS_SUCCESS;
 }
@@ -849,6 +855,12 @@ MmCreateTeb(IN PEPROCESS Process,
     // Return
     //
     KeDetachProcess();
+#ifdef _M_AMD64
+    if (Process->Wow64Process)
+    {
+        PspWow64SetProcessTeb32(Process, Teb);
+    }
+#endif
     *BaseTeb = Teb;
     return Status;
 }

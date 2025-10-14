@@ -592,6 +592,11 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     Status = PspInitializeProcessSecurity(Process, Parent);
     if (!NT_SUCCESS(Status)) goto CleanupWithRef;
 
+#ifdef _M_AMD64
+    Status = PspWow64InitializeProcess(Process, Parent);
+    if (!NT_SUCCESS(Status)) goto CleanupWithRef;
+#endif
+
     /* Set default priority class */
     Process->PriorityClass = PROCESS_PRIORITY_CLASS_NORMAL;
 

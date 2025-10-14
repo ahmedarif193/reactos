@@ -49,6 +49,75 @@ static ULONG GreenMax = 0;
 static ULONG BlueMax = 0;
 static PULONG FrameBuffer = NULL;
 static BOOLEAN DisplayInitialized = FALSE;
+static ULONG BackgroundColorValue = 0x00000000;
+
+static ULONG UefiMaskShift(ULONG Mask);
+static ULONG UefiMaskMax(ULONG Mask);
+static VOID UefiGopClearScreen(ULONG Color);
+static ULONG UefiColorFromIndex(UCHAR Index);
+
+static
+BOOLEAN
+VidpSetupLinearFramebuffer(
+    _In_ const LOADER_PARAMETER_FRAMEBUFFER *FbInfo)
+{
+    extern ULONG VidpScrollRegion[4];
+    extern ULONG VidpCurrentX;
+    extern ULONG VidpCurrentY;
+
+    if (!FbInfo || FbInfo->FrameBufferSize == 0)
+        return FALSE;
+
+    FrameBufferBase = FbInfo->FrameBufferBase;
+    FrameBufferSize = FbInfo->FrameBufferSize;
+    ScreenWidth = FbInfo->HorizontalResolution;
+    ScreenHeight = FbInfo->VerticalResolution;
+    PixelsPerScanLine = FbInfo->PixelsPerScanLine ? FbInfo->PixelsPerScanLine : FbInfo->HorizontalResolution;
+    PixelFormat = FbInfo->PixelFormat;
+    RedMask = FbInfo->RedMask;
+    GreenMask = FbInfo->GreenMask;
+    BlueMask = FbInfo->BlueMask;
+
+    if (PixelsPerScanLine == 0)
+        PixelsPerScanLine = ScreenWidth;
+
+    RedShift = UefiMaskShift(RedMask);
+    GreenShift = UefiMaskShift(GreenMask);
+    BlueShift = UefiMaskShift(BlueMask);
+    RedMax = UefiMaskMax(RedMask >> RedShift);
+    GreenMax = UefiMaskMax(GreenMask >> GreenShift);
+    BlueMax = UefiMaskMax(BlueMask >> BlueShift);
+
+    FrameBuffer = (PULONG)MmMapIoSpace(FrameBufferBase, FrameBufferSize, MmNonCached);
+    if (!FrameBuffer)
+    {
+        return FALSE;
+    }
+
+    VidpScrollRegion[0] = 0;
+    VidpScrollRegion[1] = 0;
+    VidpScrollRegion[2] = ScreenWidth ? ScreenWidth - 1 : 0;
+    VidpScrollRegion[3] = ScreenHeight ? ScreenHeight - 1 : 0;
+    VidpCurrentX = 0;
+    VidpCurrentY = 0;
+
+    BackgroundColorValue = UefiColorFromIndex(BV_COLOR_BLACK);
+    UefiGopClearScreen(BackgroundColorValue);
+
+    DisplayInitialized = TRUE;
+    return TRUE;
+}
+
+BOOLEAN
+NTAPI
+VidInitializeLinearFramebufferFromInfo(
+    _In_ const LOADER_PARAMETER_FRAMEBUFFER *FrameBufferInfo)
+{
+    if (DisplayInitialized)
+        return TRUE;
+
+    return VidpSetupLinearFramebuffer(FrameBufferInfo);
+}
 
 /* Text and scrolling state */
 static ULONG CurrentX = 0;
@@ -59,7 +128,6 @@ static ULONG ScrollRight = 0;
 static ULONG ScrollBottom = 0;
 static ULONG TextColorIndex = BV_COLOR_WHITE;
 static ULONG TextColorValue = 0xFFFFFFFF;
-static ULONG BackgroundColorValue = 0x00000000;
 
 /* UEFI GOP Pixel Formats */
 #define PixelRedGreenBlueReserved8BitPerColor  0
@@ -439,51 +507,7 @@ UefiVidInitialize(
         return FALSE;
     }
 
-    FrameBufferBase = FbInfo.FrameBufferBase;
-    FrameBufferSize = FbInfo.FrameBufferSize;
-    ScreenWidth = FbInfo.HorizontalResolution;
-    ScreenHeight = FbInfo.VerticalResolution;
-    PixelsPerScanLine = FbInfo.PixelsPerScanLine ? FbInfo.PixelsPerScanLine : FbInfo.HorizontalResolution;
-    PixelFormat = FbInfo.PixelFormat;
-    RedMask = FbInfo.RedMask;
-    GreenMask = FbInfo.GreenMask;
-    BlueMask = FbInfo.BlueMask;
-
-    if (PixelsPerScanLine == 0)
-        PixelsPerScanLine = ScreenWidth;
-
-    RedShift = UefiMaskShift(RedMask);
-    GreenShift = UefiMaskShift(GreenMask);
-    BlueShift = UefiMaskShift(BlueMask);
-    RedMax = UefiMaskMax(RedMask >> RedShift);
-    GreenMax = UefiMaskMax(GreenMask >> GreenShift);
-    BlueMax = UefiMaskMax(BlueMask >> BlueShift);
-
-    /* Map the framebuffer */
-    FrameBuffer = (PULONG)MmMapIoSpace(FrameBufferBase, FrameBufferSize, MmNonCached);
-    if (!FrameBuffer)
-    {
-        return FALSE;
-    }
-
-    // Initialize scroll region and cursor for common.c
-    extern ULONG VidpScrollRegion[4];
-    extern ULONG VidpCurrentX;
-    extern ULONG VidpCurrentY;
-    VidpScrollRegion[0] = 0;
-    VidpScrollRegion[1] = 0;
-    VidpScrollRegion[2] = ScreenWidth ? ScreenWidth - 1 : 0;
-    VidpScrollRegion[3] = ScreenHeight ? ScreenHeight - 1 : 0;
-    VidpCurrentX = 0;
-    VidpCurrentY = 0;
-
-    BackgroundColorValue = UefiColorFromIndex(BV_COLOR_BLACK);
-
-    /* Clear the screen to the default background */
-    UefiGopClearScreen(BackgroundColorValue);
-
-    DisplayInitialized = TRUE;
-    return TRUE;
+    return VidpSetupLinearFramebuffer(&FbInfo);
 }
 
 VOID

@@ -10,6 +10,7 @@
 /* INCLUDES ****************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/wow64apc.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -394,6 +395,14 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
      */
     InsertTailList(&Process->ThreadListHead, &Thread->ThreadListEntry);
     Process->ActiveThreads++;
+
+#ifdef _M_AMD64
+    /* Initialize WOW64 thread state if this is a WOW64 process */
+    if (ThreadContext)
+    {
+        PspWow64InitializeThread(Thread);
+    }
+#endif
 
     /* Start the thread */
     KeStartThread(&Thread->Tcb);
@@ -932,8 +941,177 @@ NTAPI
 PsWrapApcWow64Thread(IN OUT PVOID *ApcContext,
                      IN OUT PVOID *ApcRoutine)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+#if defined(_M_AMD64)
+    KPROCESSOR_MODE PreviousMode;
+    PWOW64_PROCESS Wow64Process;
+    PWOW64_PROCESS_INFO UserProcessInfo;
+    WOW64_PROCESS_INFO ProcessInfo;
+    PWOW64_APC_CONTEXT UserContext;
+    WOW64_APC_CONTEXT Context;
+    SIZE_T CopySize, UserBufferSize;
+    PVOID OriginalRoutine;
+
+    PAGED_CODE();
+
+    if (!ApcContext || !ApcRoutine)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    PreviousMode = KeGetPreviousMode();
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForRead(ApcContext, sizeof(PVOID), sizeof(PVOID));
+            ProbeForRead(ApcRoutine, sizeof(PVOID), sizeof(PVOID));
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            return _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+
+    _SEH2_TRY
+    {
+        UserContext = (PWOW64_APC_CONTEXT)*ApcContext;
+        OriginalRoutine = *ApcRoutine;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (!UserContext || !OriginalRoutine)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Wow64Process = PsGetCurrentProcessWow64Process();
+    if (!Wow64Process || !(Wow64Process->Flags & WOW64_PROCESS_FLAG_HAS_WOW64INFO))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    UserProcessInfo = (PWOW64_PROCESS_INFO)Wow64Process->Wow64;
+    if (!UserProcessInfo)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    _SEH2_TRY
+    {
+        ProbeForRead(UserProcessInfo, sizeof(ProcessInfo), sizeof(PVOID));
+        RtlCopyMemory(&ProcessInfo, UserProcessInfo, sizeof(ProcessInfo));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if ((ProcessInfo.Version != WOW64_PROCESS_INFO_VERSION) ||
+        (ProcessInfo.Size < sizeof(WOW64_PROCESS_INFO)) ||
+        (ProcessInfo.Wow64ApcDispatcher == NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForRead(UserContext, sizeof(Context), sizeof(PVOID));
+            RtlCopyMemory(&Context, UserContext, sizeof(Context));
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            return _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+    else
+    {
+        RtlCopyMemory(&Context, UserContext, sizeof(Context));
+    }
+
+    if ((Context.Version != WOW64_APC_CONTEXT_VERSION) ||
+        (Context.Size < sizeof(WOW64_APC_CONTEXT)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Context.Flags |= WOW64_APC_CONTEXT_FLAG_KERNEL_FILLED |
+                     WOW64_APC_CONTEXT_FLAG_HAS_USER_ROUTINE;
+    Context.UserRoutine = (ULONG_PTR)OriginalRoutine;
+
+    if ((Wow64Process->Flags & WOW64_PROCESS_FLAG_HAS_CPU_AREA) &&
+        Wow64Process->CpuArea)
+    {
+        Context.Flags |= WOW64_APC_CONTEXT_FLAG_HAS_CPU_AREA;
+        Context.Wow64CpuArea = (ULONG_PTR)Wow64Process->CpuArea;
+    }
+    else
+    {
+        Context.Flags &= ~WOW64_APC_CONTEXT_FLAG_HAS_CPU_AREA;
+        Context.Wow64CpuArea = 0;
+    }
+
+    UserBufferSize = Context.Size;
+    CopySize = sizeof(WOW64_APC_CONTEXT);
+    if ((UserBufferSize != 0) && (UserBufferSize < CopySize))
+    {
+        CopySize = UserBufferSize;
+    }
+
+    if (CopySize == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Context.Size = sizeof(WOW64_APC_CONTEXT);
+    Context.Reserved = 0;
+    Context.Reserved1 = 0;
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForWrite(UserContext, CopySize, sizeof(PVOID));
+            RtlCopyMemory(UserContext, &Context, CopySize);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            return _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        _SEH2_TRY
+        {
+            ProbeForWrite(ApcRoutine, sizeof(PVOID), sizeof(PVOID));
+            *ApcRoutine = ProcessInfo.Wow64ApcDispatcher;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            return _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+    else
+    {
+        RtlCopyMemory(UserContext, &Context, CopySize);
+        *ApcRoutine = ProcessInfo.Wow64ApcDispatcher;
+    }
+
+    return STATUS_SUCCESS;
+#else
+    UNREFERENCED_PARAMETER(ApcContext);
+    UNREFERENCED_PARAMETER(ApcRoutine);
+    return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 NTSTATUS

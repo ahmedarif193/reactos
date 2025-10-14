@@ -1568,7 +1568,7 @@ HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","windir",0x0
 ;HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","SHIM_DEBUG_LEVEL",0x00000000,"4"
 
 
-; Known DLLs
+; Known DLLs (64-bit system DLLs on amd64, 32-bit on x86)
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls","DllDirectory",0x00020000,"%SystemRoot%\system32"
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls","advapi32",0x00000000,"advapi32.dll"
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls","comdlg32",0x00000000,"comdlg32.dll"
@@ -1591,6 +1591,36 @@ HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls","user32",0x000
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls","version",0x00000000,"version.dll"
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls","wininet",0x00000000,"wininet.dll"
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls","wldap32",0x00000000,"wldap32.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls","wow64",0x00000000,"wow64.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls","wow64cpu",0x00000000,"wow64cpu.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls","wow64win",0x00000000,"wow64win.dll"
+
+; 32-bit Known DLLs (used by WOW64 for 32-bit process emulation on amd64)
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","DllDirectory",0x00020000,"%SystemRoot%\SysWOW64"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","advapi32",0x00000000,"advapi32.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","comdlg32",0x00000000,"comdlg32.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","comctl32",0x00000000,"comctl32.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","gdi32",0x00000000,"gdi32.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","imagehlp",0x00000000,"imagehlp.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","kernel32",0x00000000,"kernel32.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","lz32",0x00000000,"lz32.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","msvcrt",0x00000000,"msvcrt.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","ntdll",0x00000000,"ntdll.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","ole32",0x00000000,"ole32.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","oleaut32",0x00000000,"oleaut32.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","olecli32",0x00000000,"olecli32.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","olesvr32",0x00000000,"olesvr32.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","olethk32",0x00000000,"olethk32.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","rpcrt4",0x00000000,"rpcrt4.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","setupapi",0x00000000,"setupapi.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","shell32",0x00000000,"shell32.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","shlwapi",0x00000000,"shlwapi.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","url",0x00000000,"url.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","urlmon",0x00000000,"urlmon.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","user32",0x00000000,"user32.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","version",0x00000000,"version.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","wininet",0x00000000,"wininet.dll"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls32","wldap32",0x00000000,"wldap32.dll"
 
 ; Memory Management
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management",,0x00000012

@@ -62,9 +62,14 @@ unset(_REACTOS_CREATE_STATIC_LIBRARY)
 # This allows to have CMake test the compiler without linking
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
+# Build position-independent code, required for ASLR
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC" CACHE STRING "C compiler flags")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC" CACHE STRING "C++ compiler flags")
+set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -fPIC" CACHE STRING "ASM compiler flags")
+
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "-nostdlib -Wl,--enable-auto-image-base,--disable-auto-import")
 set(CMAKE_MODULE_LINKER_FLAGS_INIT "-nostdlib -Wl,--enable-auto-image-base,--disable-auto-import")
-set(CMAKE_EXE_LINKER_FLAGS_INIT "-nostdlib -Wl,--enable-auto-image-base,--disable-auto-import")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-nostdlib -pie -Wl,--enable-auto-image-base,--disable-auto-import")
 
 set(CMAKE_USER_MAKE_RULES_OVERRIDE "${CMAKE_CURRENT_LIST_DIR}/overrides-gcc.cmake")
 

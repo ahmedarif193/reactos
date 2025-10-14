@@ -333,6 +333,42 @@ KiDispatchException(IN PEXCEPTION_RECORD ExceptionRecord,
         /* User mode exception, was it first-chance? */
         if (FirstChance)
         {
+#ifdef _M_AMD64
+            /*
+             * Check if this is a WOW64 (32-bit compatibility mode) exception.
+             * WOW64 threads require special handling because:
+             * 1. Exception records must be converted to 32-bit format
+             * 2. Context structures must be converted to WOW64_CONTEXT
+             * 3. Dispatching goes through wow64.dll, not native exception dispatcher
+             */
+            if (KiIsWow64TrapFrame(TrapFrame))
+            {
+                NTSTATUS Wow64Status;
+
+                /* Attempt to dispatch through wow64 subsystem */
+                Wow64Status = KiDispatchWow64Exception(ExceptionRecord,
+                                                       TrapFrame,
+                                                       &Context);
+
+                if (NT_SUCCESS(Wow64Status))
+                {
+                    /*
+                     * WOW64 exception handler prepared the context.
+                     * Convert back to trap frame and return to user mode.
+                     */
+                    goto Handled;
+                }
+
+                /*
+                 * If wow64 dispatch fails, fall through to standard handling.
+                 * This ensures we don't lose exceptions even if wow64.dll isn't
+                 * fully initialized.
+                 */
+                DPRINT1("WOW64 exception dispatch failed: 0x%08lx, using native handler\n",
+                        Wow64Status);
+            }
+#endif
+
             /*
              * Break into the kernel debugger unless a user mode debugger
              * is present or user mode exceptions are ignored, except if this

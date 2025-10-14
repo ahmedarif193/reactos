@@ -160,6 +160,102 @@ add_custom_target(livecd
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/hybridcd.cmake.lst "")
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/hybridcd.cmake.lst "${CMAKE_CURRENT_BINARY_DIR}/empty\n")
 
+# SysWOW64 Binary Mirroring for WOW64 support on amd64
+# This section populates reactos/SysWOW64 with 32-bit binaries for WOW64 emulation
+if(ARCH STREQUAL "amd64")
+    # Search for i386 build output in common locations
+    set(_I386_SEARCH_PATHS
+        "${REACTOS_BINARY_DIR}/../output-MinGW-i386-Release"
+        "${REACTOS_BINARY_DIR}/../output-MinGW-i386-Debug"
+        "${REACTOS_BINARY_DIR}/../build-i386/output-MinGW-i386-Release"
+        "${REACTOS_BINARY_DIR}/../build-i386/output-MinGW-i386-Debug"
+        "$ENV{REACTOS_I386_ROOT}"
+    )
+
+    set(_I386_SYSROOT "")
+    foreach(_search_path IN LISTS _I386_SEARCH_PATHS)
+        if(EXISTS "${_search_path}/reactos/system32")
+            set(_I386_SYSROOT "${_search_path}/reactos")
+            message(STATUS "WOW64: Found i386 binaries at ${_I386_SYSROOT}")
+            break()
+        endif()
+    endforeach()
+
+    if(_I386_SYSROOT)
+        # Define file extensions to exclude (developer artifacts)
+        set(_SYSWOW64_SKIP_EXT
+            ".a" ".lib" ".pdb" ".exp" ".map" ".obj" ".ilk" ".idb" ".log"
+            ".txt" ".cmake" ".py" ".pl" ".bat" ".sh" ".c" ".cpp" ".h"
+            ".hpp" ".idl" ".inf" ".ini" ".md")
+
+        # Collect 32-bit binaries from system32 directory
+        file(GLOB_RECURSE _SYSWOW64_SOURCE LIST_DIRECTORIES FALSE
+            RELATIVE "${_I386_SYSROOT}/system32" "${_I386_SYSROOT}/system32/*")
+
+        foreach(_rel_path IN LISTS _SYSWOW64_SOURCE)
+            set(_src "${_I386_SYSROOT}/system32/${_rel_path}")
+            string(REGEX MATCH "\\.[^.]*$" _rel_ext "${_rel_path}")
+            string(TOLOWER "${_rel_ext}" _rel_ext)
+
+            # Skip developer artifacts
+            set(_skip_file FALSE)
+            foreach(_bad_ext IN LISTS _SYSWOW64_SKIP_EXT)
+                if(_rel_ext STREQUAL _bad_ext)
+                    set(_skip_file TRUE)
+                    break()
+                endif()
+            endforeach()
+
+            if(_skip_file)
+                continue()
+            endif()
+
+            # Mirror to SysWOW64 directory
+            set(_dest "reactos/SysWOW64/${_rel_path}")
+            file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/bootcd.cmake.lst "${_dest}=${_src}\n")
+            file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/bootcdregtest.cmake.lst "${_dest}=${_src}\n")
+            file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "${_dest}=${_src}\n")
+            file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/liveimg.cmake.lst "${_dest}=${_src}\n")
+            file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/hybridcd.cmake.lst "${_dest}=${_src}\n")
+            set_property(GLOBAL APPEND PROPERTY HYBRIDCD_FILE_LIST "${_dest}=${_src}")
+        endforeach()
+
+        # Also collect SxS assemblies for 32-bit (if they exist)
+        if(EXISTS "${_I386_SYSROOT}/winsxs")
+            file(GLOB_RECURSE _SYSWOW64_SXS_SOURCE LIST_DIRECTORIES FALSE
+                RELATIVE "${_I386_SYSROOT}/winsxs" "${_I386_SYSROOT}/winsxs/*")
+
+            foreach(_rel_path IN LISTS _SYSWOW64_SXS_SOURCE)
+                set(_src "${_I386_SYSROOT}/winsxs/${_rel_path}")
+                string(REGEX MATCH "\\.[^.]*$" _rel_ext "${_rel_path}")
+                string(TOLOWER "${_rel_ext}" _rel_ext)
+
+                # Skip developer artifacts
+                set(_skip_file FALSE)
+                foreach(_bad_ext IN LISTS _SYSWOW64_SKIP_EXT)
+                    if(_rel_ext STREQUAL _bad_ext)
+                        set(_skip_file TRUE)
+                        break()
+                    endif()
+                endforeach()
+
+                if(_skip_file)
+                    continue()
+                endif()
+
+                # Mirror to winsxs directory (SxS assemblies stay in winsxs)
+                set(_dest "reactos/winsxs/${_rel_path}")
+                file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "${_dest}=${_src}\n")
+                file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/liveimg.cmake.lst "${_dest}=${_src}\n")
+                file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/hybridcd.cmake.lst "${_dest}=${_src}\n")
+            endforeach()
+        endif()
+    else()
+        message(STATUS "WOW64: No i386 binaries found. Set REACTOS_I386_ROOT to specify location.")
+        message(STATUS "        SysWOW64 directory will be empty. 32-bit executables will not run.")
+    endif()
+endif()
+
 # Create user profile directories
 add_allusers_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/hybridcd.cmake.lst "livecd/Profiles")
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/hybridcd.cmake.lst "livecd/Profiles" "Default User")

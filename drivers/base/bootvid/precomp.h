@@ -12,6 +12,7 @@
 
 #include <ntifs.h>
 #include <ndk/halfuncs.h>
+#include <reactos/arc/arc.h>
 #include <drivers/bootvid/bootvid.h>
 #include "uefi/uefi.h"
 
@@ -78,6 +79,30 @@ extern const RGBQUAD VidpDefaultPalette[BV_MAX_COLORS];
 #define GetRValue(quad)     ((UCHAR)(((quad)>>16) & 0xFF))
 #define GetGValue(quad)     ((UCHAR)(((quad)>>8) & 0xFF))
 #define GetBValue(quad)     ((UCHAR)((quad) & 0xFF))
+
+#if defined(_M_IX86)
+NTHALAPI
+BOOLEAN
+NTAPI
+HalGetBootDisplayInformation(
+    _Out_ PHALP_BIOS_DISPLAY_INFORMATION Information
+    );
+#else
+FORCEINLINE
+BOOLEAN
+HalGetBootDisplayInformation(
+    _Out_ PHALP_BIOS_DISPLAY_INFORMATION Information)
+{
+    UNREFERENCED_PARAMETER(Information);
+    return FALSE;
+}
+#endif
+
+BOOLEAN
+NTAPI
+VidInitializeLinearFramebufferFromInfo(
+    _In_ const LOADER_PARAMETER_FRAMEBUFFER *FrameBufferInfo
+    );
 
 #define InitializePalette() InitPaletteWithTable((PULONG)VidpDefaultPalette, BV_MAX_COLORS)
 

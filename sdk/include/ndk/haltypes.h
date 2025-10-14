@@ -197,6 +197,21 @@ typedef struct _HAL_PRIVATE_DISPATCH
 #endif
 } HAL_PRIVATE_DISPATCH, *PHAL_PRIVATE_DISPATCH;
 
+typedef struct _HALP_BIOS_DISPLAY_INFORMATION
+{
+    PHYSICAL_ADDRESS FrameBufferBase;
+    ULONG FrameBufferSize;
+    ULONG Width;
+    ULONG Height;
+    ULONG Pitch;
+    ULONG PixelsPerScanLine;
+    ULONG BitsPerPixel;
+    ULONG PixelFormat;
+    ULONG RedMask;
+    ULONG GreenMask;
+    ULONG BlueMask;
+} HALP_BIOS_DISPLAY_INFORMATION, *PHALP_BIOS_DISPLAY_INFORMATION;
+
 //
 // HAL Supported Range
 //
@@ -304,6 +319,5 @@ typedef struct _X86_BIOS_REGISTERS
 
 #endif
 #endif
-
 
 

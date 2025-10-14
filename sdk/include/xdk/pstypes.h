@@ -3,6 +3,18 @@
  ******************************************************************************/
 $if (_WDMDDK_)
 
+#if defined(_M_AMD64) && !defined(_WOW64_PROCESS_DEFINED)
+#define _WOW64_PROCESS_DEFINED
+typedef struct _WOW64_PROCESS
+{
+  PVOID Wow64;
+  PVOID Peb32;
+  PVOID Teb32;
+  PVOID CpuArea;
+  ULONG Flags;
+} WOW64_PROCESS, *PWOW64_PROCESS;
+#endif
+
 #define QUOTA_LIMITS_HARDWS_MIN_ENABLE  0x00000001
 #define QUOTA_LIMITS_HARDWS_MIN_DISABLE 0x00000002
 #define QUOTA_LIMITS_HARDWS_MAX_ENABLE  0x00000004
@@ -431,4 +443,3 @@ typedef struct _PROCESS_HANDLE_TRACING_QUERY {
 extern NTKERNELAPI PEPROCESS PsInitialSystemProcess;
 
 $endif (_NTDDK_)
-

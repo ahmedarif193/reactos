@@ -14,6 +14,69 @@
 
 #include <fast486.h>
 
+#pragma pack(push,1)
+typedef struct _VBE_INFO_BLOCK
+{
+    CHAR Signature[4];
+    USHORT Version;
+    ULONG OemStringPtr;
+    ULONG Capabilities;
+    ULONG VideoModePtr;
+    USHORT TotalMemory;
+    UCHAR Reserved[236];
+} VBE_INFO_BLOCK, *PVBE_INFO_BLOCK;
+
+typedef struct _VBE_MODE_INFO
+{
+    USHORT ModeAttributes;
+    UCHAR WinAAttributes;
+    UCHAR WinBAttributes;
+    USHORT WinGranularity;
+    USHORT WinSize;
+    USHORT WinASegment;
+    USHORT WinBSegment;
+    ULONG WinFuncPtr;
+    USHORT BytesPerScanLine;
+    USHORT XResolution;
+    USHORT YResolution;
+    UCHAR XCharSize;
+    UCHAR YCharSize;
+    UCHAR NumberOfPlanes;
+    UCHAR BitsPerPixel;
+    UCHAR NumberOfBanks;
+    UCHAR MemoryModel;
+    UCHAR BankSize;
+    UCHAR NumberOfImagePages;
+    UCHAR Reserved1;
+    UCHAR RedMaskSize;
+    UCHAR RedFieldPosition;
+    UCHAR GreenMaskSize;
+    UCHAR GreenFieldPosition;
+    UCHAR BlueMaskSize;
+    UCHAR BlueFieldPosition;
+    UCHAR RsvdMaskSize;
+    UCHAR RsvdFieldPosition;
+    UCHAR DirectColorModeInfo;
+    ULONG PhysBasePtr;
+    ULONG OffScreenMemOffset;
+    USHORT OffScreenMemSize;
+    USHORT LinBytesPerScanLine;
+    UCHAR BnkNumberOfImagePages;
+    UCHAR LinNumberOfImagePages;
+    UCHAR LinRedMaskSize;
+    UCHAR LinRedFieldPosition;
+    UCHAR LinGreenMaskSize;
+    UCHAR LinGreenFieldPosition;
+    UCHAR LinBlueMaskSize;
+    UCHAR LinBlueFieldPosition;
+    UCHAR LinRsvdMaskSize;
+    UCHAR LinRsvdFieldPosition;
+    ULONG MaxPixelClock;
+    UCHAR Reserved2[189];
+    UCHAR Reserved3[1];
+} VBE_MODE_INFO, *PVBE_MODE_INFO;
+#pragma pack(pop)
+
 /* GLOBALS *******************************************************************/
 
 /* This page serves as fallback for pages used by Mm */
@@ -26,6 +89,186 @@ PUCHAR x86BiosMemoryMapping;
 /* This the physical address of the bios buffer */
 ULONG64 x86BiosBufferPhysical;
 
+#if defined(_M_AMD64)
+/*
+ * The amd64 HAL does not link in bios.c, so provide the framebuffer state
+ * storage here to satisfy the references in the generic BIOS helpers.
+ */
+HALP_BIOS_DISPLAY_INFORMATION HalpBiosDisplayInformation;
+BOOLEAN HalpBiosDisplayInformationValid = FALSE;
+#endif
+
+static
+ULONG
+HalpCreateColorMask(
+    _In_ UCHAR MaskSize,
+    _In_ UCHAR FieldPosition)
+{
+    ULONG Mask;
+
+    if (MaskSize == 0 || MaskSize >= 32)
+        return 0;
+
+    Mask = (1u << MaskSize) - 1u;
+    return Mask << FieldPosition;
+}
+
+BOOLEAN
+NTAPI
+HalpTryVbeMode(VOID)
+{
+    static const USHORT PreferredModes[] =
+    {
+        /* Probe common high-resolution true-colour modes first (skipping unsupported entries). */
+        0x14C, /* 1920x1200 */
+        0x14B, /* 1920x1080 */
+        0x149, /* 1680x1050 */
+        0x148, /* 1400x1050 */
+        0x146, /* 1366x768 */
+        0x145, /* 1360x768 */
+        0x144, /* 1280x1024 */
+        0x142, /* 1280x960 */
+        0x141, /* 1280x720 */
+        0x140, /* 1280x1024 (vendor extensions) */
+        0x11F, /* 1600x1200 */
+        0x118, /* 1024x768 */
+        0x115, /* 800x600 */
+        0x112, /* 640x480 */
+        0
+    };
+    USHORT Segment, Offset;
+    ULONG BufferSize;
+    PVBE_INFO_BLOCK InfoBlock;
+    PVBE_MODE_INFO ModeInfo;
+    X86_BIOS_REGISTERS Regs;
+    BOOLEAN Success = FALSE;
+    ULONG Index;
+
+    HalpBiosDisplayInformationValid = FALSE;
+    RtlZeroMemory(&HalpBiosDisplayInformation, sizeof(HALP_BIOS_DISPLAY_INFORMATION));
+
+    if (!x86BiosIsInitialized)
+    {
+        return FALSE;
+    }
+
+    BufferSize = PAGE_SIZE;
+    if (!NT_SUCCESS(x86BiosAllocateBuffer(&BufferSize, &Segment, &Offset)))
+    {
+        return FALSE;
+    }
+
+    InfoBlock = (PVBE_INFO_BLOCK)(x86BiosMemoryMapping + (Segment << 4) + Offset);
+    ModeInfo = (PVBE_MODE_INFO)InfoBlock;
+
+    RtlZeroMemory(InfoBlock, BufferSize);
+    InfoBlock->Signature[0] = 'V';
+    InfoBlock->Signature[1] = 'B';
+    InfoBlock->Signature[2] = 'E';
+    InfoBlock->Signature[3] = '2';
+
+    RtlZeroMemory(&Regs, sizeof(Regs));
+    Regs.Eax = 0x4F00;
+    Regs.SegEs = Segment;
+    Regs.Edi = Offset;
+
+    if (!x86BiosCall(0x10, &Regs) || (Regs.Eax & 0xFFFF) != 0x004F)
+    {
+        goto Cleanup;
+    }
+
+    for (Index = 0; PreferredModes[Index] != 0; Index++)
+    {
+        USHORT Mode = PreferredModes[Index];
+        ULONG Pitch;
+        ULONG RedMask, GreenMask, BlueMask;
+
+        RtlZeroMemory(ModeInfo, sizeof(VBE_MODE_INFO));
+
+        RtlZeroMemory(&Regs, sizeof(Regs));
+        Regs.Eax = 0x4F01;
+        Regs.Ecx = Mode;
+        Regs.SegEs = Segment;
+        Regs.Edi = Offset;
+
+        if (!x86BiosCall(0x10, &Regs) || (Regs.Eax & 0xFFFF) != 0x004F)
+        {
+            continue;
+        }
+
+        if ((ModeInfo->ModeAttributes & 0x0081) != 0x0081)
+        {
+            continue;
+        }
+
+        if ((ModeInfo->LinBytesPerScanLine == 0) && (ModeInfo->BytesPerScanLine == 0))
+        {
+            continue;
+        }
+
+        if (ModeInfo->BitsPerPixel < 32)
+        {
+            continue;
+        }
+
+        RtlZeroMemory(&Regs, sizeof(Regs));
+        Regs.Eax = 0x4F02;
+        Regs.Ebx = 0x4000 | Mode;
+
+        if (!x86BiosCall(0x10, &Regs) || (Regs.Eax & 0xFFFF) != 0x004F)
+        {
+            continue;
+        }
+
+        Pitch = ModeInfo->LinBytesPerScanLine ? ModeInfo->LinBytesPerScanLine : ModeInfo->BytesPerScanLine;
+
+        if (Pitch == 0 || ModeInfo->YResolution == 0)
+        {
+            continue;
+        }
+
+        RedMask = HalpCreateColorMask(ModeInfo->LinRedMaskSize ? ModeInfo->LinRedMaskSize : ModeInfo->RedMaskSize,
+                                      ModeInfo->LinRedFieldPosition ? ModeInfo->LinRedFieldPosition : ModeInfo->RedFieldPosition);
+        GreenMask = HalpCreateColorMask(ModeInfo->LinGreenMaskSize ? ModeInfo->LinGreenMaskSize : ModeInfo->GreenMaskSize,
+                                        ModeInfo->LinGreenFieldPosition ? ModeInfo->LinGreenFieldPosition : ModeInfo->GreenFieldPosition);
+        BlueMask = HalpCreateColorMask(ModeInfo->LinBlueMaskSize ? ModeInfo->LinBlueMaskSize : ModeInfo->BlueMaskSize,
+                                       ModeInfo->LinBlueFieldPosition ? ModeInfo->LinBlueFieldPosition : ModeInfo->BlueFieldPosition);
+
+        HalpBiosDisplayInformation.FrameBufferBase.QuadPart = ModeInfo->PhysBasePtr;
+        HalpBiosDisplayInformation.Width = ModeInfo->XResolution;
+        HalpBiosDisplayInformation.Height = ModeInfo->YResolution;
+        HalpBiosDisplayInformation.BitsPerPixel = ModeInfo->BitsPerPixel;
+        HalpBiosDisplayInformation.Pitch = Pitch;
+        HalpBiosDisplayInformation.PixelsPerScanLine = (ModeInfo->BitsPerPixel != 0)
+                                                       ? (Pitch * 8) / ModeInfo->BitsPerPixel
+                                                       : ModeInfo->XResolution;
+        HalpBiosDisplayInformation.FrameBufferSize = Pitch * ModeInfo->YResolution;
+        HalpBiosDisplayInformation.RedMask = RedMask;
+        HalpBiosDisplayInformation.GreenMask = GreenMask;
+        HalpBiosDisplayInformation.BlueMask = BlueMask;
+
+        if (RedMask == 0x00FF0000 && GreenMask == 0x0000FF00 && BlueMask == 0x000000FF)
+        {
+            HalpBiosDisplayInformation.PixelFormat = 0;
+        }
+        else if (RedMask == 0x000000FF && GreenMask == 0x0000FF00 && BlueMask == 0x00FF0000)
+        {
+            HalpBiosDisplayInformation.PixelFormat = 1;
+        }
+        else
+        {
+            HalpBiosDisplayInformation.PixelFormat = 2;
+        }
+
+        HalpBiosDisplayInformationValid = TRUE;
+        Success = TRUE;
+        break;
+    }
+
+Cleanup:
+    x86BiosFreeBuffer(Segment, Offset);
+    return Success;
+}
 VOID
 NTAPI
 DbgDumpPage(PUCHAR MemBuffer, USHORT Segment)
@@ -539,62 +782,39 @@ x86BiosCall(
     return TRUE;
 }
 
-#ifdef _M_AMD64
 BOOLEAN
 NTAPI
-HalpBiosDisplayReset(VOID)
+HalpProgramVgaMode12(VOID)
 {
-    if (!x86BiosIsInitialized)
-    {
-        DPRINT("HalpBiosDisplayReset: x86 BIOS services are unavailable\n");
-        return FALSE;
-    }
+    ULONG i;
+    PHYSICAL_ADDRESS VgaPhysical;
+    PUCHAR VgaBase;
 
-#if 0
-    X86_BIOS_REGISTERS Registers;
-    ULONG OldEflags;
+    HalpBiosDisplayInformationValid = FALSE;
+    RtlZeroMemory(&HalpBiosDisplayInformation, sizeof(HALP_BIOS_DISPLAY_INFORMATION));
 
-    /* Save flags and disable interrupts */
-    OldEflags = __readeflags();
-    _disable();
-
-    /* Set AH = 0 (Set video mode), AL = 0x12 (640x480x16 vga) */
-    Registers.Eax = 0x12;
-
-    /* Call INT 0x10 */
-    x86BiosCall(0x10, &Registers);
-
-    // FIXME: check result
-
-    /* Restore previous flags */
-    __writeeflags(OldEflags);
-    return TRUE;
-#else
-    /* AMD64: Initialize VGA directly for 640x480 16-color mode (mode 0x12) */
-    DPRINT1("HalpBiosDisplayReset: AMD64 - Initializing VGA for graphics mode\n");
-
-    /* First, reset the VGA to a known state */
+    DPRINT1("HalpBiosDisplayReset: Programming VGA mode 0x12 directly\n");
 
     /* Reset Attribute Controller */
-    (VOID)READ_PORT_UCHAR((PUCHAR)0x3DA);  /* Reset flip-flop */
-    WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x00); /* Disable video */
+    (VOID)READ_PORT_UCHAR((PUCHAR)0x3DA);
+    WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x00);
 
     /* Synchronous reset on */
     WRITE_PORT_UCHAR((PUCHAR)0x3C4, 0x00);
     WRITE_PORT_UCHAR((PUCHAR)0x3C5, 0x01);
 
-    /* Write Miscellaneous Output Register */
-    WRITE_PORT_UCHAR((PUCHAR)0x3C2, 0xE3);  /* 640x480, 25MHz clock, -hsync, -vsync */
+    /* Miscellaneous Output Register */
+    WRITE_PORT_UCHAR((PUCHAR)0x3C2, 0xE3);
 
     /* Sequencer registers */
     WRITE_PORT_UCHAR((PUCHAR)0x3C4, 0x01);
-    WRITE_PORT_UCHAR((PUCHAR)0x3C5, 0x01);  /* Clock mode */
+    WRITE_PORT_UCHAR((PUCHAR)0x3C5, 0x01);
     WRITE_PORT_UCHAR((PUCHAR)0x3C4, 0x02);
-    WRITE_PORT_UCHAR((PUCHAR)0x3C5, 0x0F);  /* Enable all planes */
+    WRITE_PORT_UCHAR((PUCHAR)0x3C5, 0x0F);
     WRITE_PORT_UCHAR((PUCHAR)0x3C4, 0x03);
-    WRITE_PORT_UCHAR((PUCHAR)0x3C5, 0x00);  /* Character map */
+    WRITE_PORT_UCHAR((PUCHAR)0x3C5, 0x00);
     WRITE_PORT_UCHAR((PUCHAR)0x3C4, 0x04);
-    WRITE_PORT_UCHAR((PUCHAR)0x3C5, 0x06);  /* Chain-4 off, extended memory */
+    WRITE_PORT_UCHAR((PUCHAR)0x3C5, 0x06);
 
     /* Synchronous reset off */
     WRITE_PORT_UCHAR((PUCHAR)0x3C4, 0x00);
@@ -604,37 +824,37 @@ HalpBiosDisplayReset(VOID)
     WRITE_PORT_UCHAR((PUCHAR)0x3D4, 0x11);
     WRITE_PORT_UCHAR((PUCHAR)0x3D5, 0x00);
 
-    /* CRTC registers for 640x480 */
     static const UCHAR crtc_regs[] = {
         0x5F, 0x4F, 0x50, 0x82, 0x54, 0x80, 0x0B, 0x3E,
         0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0xEA, 0x8C, 0xDF, 0x28, 0x00, 0xE7, 0x04, 0xE3, 0xFF
     };
-    ULONG i;
-    for (i = 0; i < sizeof(crtc_regs); i++) {
+
+    for (i = 0; i < sizeof(crtc_regs); i++)
+    {
         WRITE_PORT_UCHAR((PUCHAR)0x3D4, (UCHAR)i);
         WRITE_PORT_UCHAR((PUCHAR)0x3D5, crtc_regs[i]);
     }
 
     /* Graphics Controller registers */
     WRITE_PORT_UCHAR((PUCHAR)0x3CE, 0x00);
-    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x00);  /* Set/Reset */
+    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x00);
     WRITE_PORT_UCHAR((PUCHAR)0x3CE, 0x01);
-    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x00);  /* Enable Set/Reset */
+    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x00);
     WRITE_PORT_UCHAR((PUCHAR)0x3CE, 0x02);
-    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x00);  /* Color Compare */
+    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x00);
     WRITE_PORT_UCHAR((PUCHAR)0x3CE, 0x03);
-    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x00);  /* Data Rotate */
+    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x00);
     WRITE_PORT_UCHAR((PUCHAR)0x3CE, 0x04);
-    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x00);  /* Read Map Select */
+    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x00);
     WRITE_PORT_UCHAR((PUCHAR)0x3CE, 0x05);
-    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x00);  /* Graphics Mode: Write Mode 0 */
+    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x00);
     WRITE_PORT_UCHAR((PUCHAR)0x3CE, 0x06);
-    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x05);  /* Miscellaneous: A0000-AFFFF, graphics mode */
+    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x05);
     WRITE_PORT_UCHAR((PUCHAR)0x3CE, 0x07);
-    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x0F);  /* Color Don't Care */
+    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0x0F);
     WRITE_PORT_UCHAR((PUCHAR)0x3CE, 0x08);
-    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0xFF);  /* Bit Mask */
+    WRITE_PORT_UCHAR((PUCHAR)0x3CF, 0xFF);
 
     /* Attribute Controller registers */
     static const UCHAR attr_regs[] = {
@@ -642,55 +862,63 @@ HalpBiosDisplayReset(VOID)
         0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F
     };
 
-    (VOID)READ_PORT_UCHAR((PUCHAR)0x3DA);  /* Reset flip-flop */
-    for (i = 0; i < 16; i++) {
+    (VOID)READ_PORT_UCHAR((PUCHAR)0x3DA);
+    for (i = 0; i < 16; i++)
+    {
         WRITE_PORT_UCHAR((PUCHAR)0x3C0, (UCHAR)i);
         WRITE_PORT_UCHAR((PUCHAR)0x3C0, attr_regs[i]);
     }
     WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x10);
-    WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x01);  /* Graphics mode */
+    WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x01);
     WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x11);
-    WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x00);  /* Overscan color */
+    WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x00);
     WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x12);
-    WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x0F);  /* Color plane enable */
+    WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x0F);
     WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x13);
-    WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x00);  /* Horizontal pixel panning */
+    WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x00);
     WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x14);
-    WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x00);  /* Color select */
-
-    /* Enable video display */
+    WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x00);
     WRITE_PORT_UCHAR((PUCHAR)0x3C0, 0x20);
 
     /* Set DAC mask */
     WRITE_PORT_UCHAR((PUCHAR)0x3C6, 0xFF);
 
-    /* Clear screen by writing to VGA memory */
-    /* On AMD64, we need to map the VGA memory properly */
-    PHYSICAL_ADDRESS VgaPhysical;
-    PUCHAR VgaBase;
-    ULONG j;
-
     VgaPhysical.QuadPart = 0xA0000;
     VgaBase = (PUCHAR)MmMapIoSpace(VgaPhysical, 0x10000, MmNonCached);
 
-    if (VgaBase) {
-        /* Select all planes for writing */
+    if (VgaBase)
+    {
+        ULONG j;
+
         WRITE_PORT_UCHAR((PUCHAR)0x3C4, 0x02);
         WRITE_PORT_UCHAR((PUCHAR)0x3C5, 0x0F);
 
-        /* Clear video memory */
-        for (j = 0; j < 0x10000; j++) {
+        for (j = 0; j < 0x10000; j++)
+        {
             WRITE_REGISTER_UCHAR(VgaBase + j, 0x00);
         }
 
-        /* Unmap the memory */
         MmUnmapIoSpace(VgaBase, 0x10000);
-    } else {
+    }
+    else
+    {
         DPRINT1("HalpBiosDisplayReset: Failed to map VGA memory\n");
     }
 
-    DPRINT1("HalpBiosDisplayReset: AMD64 VGA graphics mode initialization complete\n");
+    DPRINT1("HalpBiosDisplayReset: VGA graphics mode initialization complete\n");
     return TRUE;
-#endif
+}
+
+#ifdef _M_AMD64
+BOOLEAN
+NTAPI
+HalpBiosDisplayReset(VOID)
+{
+    if (!x86BiosIsInitialized)
+    {
+        DPRINT("HalpBiosDisplayReset: x86 BIOS services are unavailable\n");
+    }
+
+    return HalpProgramVgaMode12();
 }
 #endif // _M_AMD64

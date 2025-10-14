@@ -3,6 +3,12 @@ Signature = "$Windows NT$"
 
 [AddReg]
 
+; SysWOW64 base key structure
+HKLM,"SOFTWARE\Wow6432Node",,0x00000010
+HKLM,"SOFTWARE\Wow6432Node\Microsoft",,0x00000010
+HKLM,"SOFTWARE\Wow6432Node\Microsoft\Windows NT",,0x00000010
+HKLM,"SOFTWARE\Wow6432Node\Microsoft\Windows NT\CurrentVersion",,0x00000010
+
 ; Applications
 HKLM,"SOFTWARE\Classes\Applications\notepad.exe\shell\open\command","",0x00020000,"%SystemRoot%\system32\notepad.exe ""%1"""
 HKLM,"SOFTWARE\Classes\Applications\mspaint.exe\shell\open\command","",0x00020000,"%SystemRoot%\system32\mspaint.exe ""%1"""
@@ -569,6 +575,13 @@ HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\ShellServiceObjectDelayLoad",,0x
 
 ; FIXME - Setup doesn't handle extra paths
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnceEx\Finalize","1",,"||rundll32.exe setupapi.dll,InstallHinfSection Finalize 128 %systemroot%\inf\syssetup.inf"
+
+[AddReg.NTamd64]
+; WOW64 smoke test - First user-mode validation step for WOW64 functionality
+; This will run automatically on first boot of amd64 builds to validate WOW64 subsystem
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce","WOW64SmokeTest",0x00020000,"%SystemRoot%\system32\wow64smoke.exe"
+
+[AddReg]
 
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons",,0x00000012
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\ClassicStartMenu",,0x00000012

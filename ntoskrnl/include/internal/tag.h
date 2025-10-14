@@ -134,6 +134,7 @@
 #define TAG_TERMINATE_APC       'CPAT'
 #define TAG_KAPC                'papk' /* kpap - kernel ps apc */
 #define TAG_PS_APC              'pasP' /* Psap - Ps APC */
+#define TAG_WOW64_PROCESS       'pWoW'
 #define TAG_SHIM                'MIHS'
 #define TAG_QUOTA_BLOCK         'bQsP'
 

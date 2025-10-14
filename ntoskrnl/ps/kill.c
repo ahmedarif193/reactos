@@ -316,6 +316,10 @@ PspDeleteProcess(IN PVOID ObjectBody)
         Process->SectionObject = NULL;
     }
 
+#ifdef _M_AMD64
+    PspWow64DeleteProcess(Process);
+#endif
+
 #if defined(_X86_)
     /* Clean Ldt and Vdm objects */
     PspDeleteLdt(Process);
@@ -743,6 +747,11 @@ PspExitThread(IN NTSTATUS ExitStatus)
     /* Rundown Win32 Thread if there is one */
     if (Thread->Tcb.Win32Thread) PspW32ThreadCallout(Thread,
                                                      PsW32ThreadCalloutExit);
+
+#ifdef _M_AMD64
+    /* Clean up WOW64 thread state if this is a WOW64 thread */
+    PspWow64DeleteThread(Thread);
+#endif
 
     /* If we are the last thread and have a W32 Process */
     if ((Last) && (CurrentProcess->Win32Process))
