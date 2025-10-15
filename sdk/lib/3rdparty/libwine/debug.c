@@ -27,6 +27,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <excpt.h>
+#include <windows.h>
 
 #define WIN32_NO_STATUS
 #include "wine/debug.h"
@@ -36,6 +37,70 @@
 
 WINE_DECLARE_DEBUG_CHANNEL(pid);
 WINE_DECLARE_DEBUG_CHANNEL(tid);
+
+static int ros_vsnprintf(char *buffer, size_t count, const char *format, va_list args)
+{
+    va_list copy;
+    int length;
+
+    if (buffer && count)
+    {
+        va_copy(copy, args);
+        length = _vsnprintf(buffer, count, format, copy);
+        va_end(copy);
+
+        if (length >= 0 && (size_t)length < count)
+        {
+            buffer[length] = '\0';
+            return length;
+        }
+    }
+
+    size_t size = 512;
+    for (;;)
+    {
+        char *heap_buf = (char*)HeapAlloc(GetProcessHeap(), 0, size);
+        if (!heap_buf)
+        {
+            return -1;
+        }
+
+        va_copy(copy, args);
+        length = _vsnprintf(heap_buf, size, format, copy);
+        va_end(copy);
+
+        if (length >= 0 && length < (int)size)
+        {
+            if (buffer && count)
+            {
+                size_t copy_len = (size_t)length;
+                if (copy_len >= count)
+                {
+                    if (count)
+                    {
+                        copy_len = count - 1;
+                        memcpy(buffer, heap_buf, copy_len);
+                        buffer[copy_len] = '\0';
+                    }
+                }
+                else if (copy_len)
+                {
+                    memcpy(buffer, heap_buf, copy_len);
+                    buffer[copy_len] = '\0';
+                }
+                else if (count)
+                {
+                    buffer[0] = '\0';
+                }
+            }
+            HeapFree(GetProcessHeap(), 0, heap_buf);
+            return length;
+        }
+
+        HeapFree(GetProcessHeap(), 0, heap_buf);
+        size *= 2;
+    }
+}
 
 static const char * const debug_classes[] = { "fixme", "err", "warn", "trace" };
 
@@ -280,7 +345,7 @@ const char *wine_dbg_sprintf( const char *format, ... )
 
     va_start(valist, format);
     ret = funcs.get_temp_buffer( max_size );
-    len = vsnprintf( ret, max_size, format, valist );
+    len = ros_vsnprintf(ret, max_size, format, valist);
     if (len == -1 || len >= max_size) ret[max_size-1] = 0;
     else funcs.release_temp_buffer( ret, len + 1 );
     va_end(valist);

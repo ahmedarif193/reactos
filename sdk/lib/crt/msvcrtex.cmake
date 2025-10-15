@@ -32,11 +32,17 @@ endif()
 
 if(ARCH STREQUAL "i386")
     # Clang wants __aulldiv for its optimizations
+    # GCC 15.2+ needs these runtime functions
     list(APPEND MSVCRTEX_ASM_SOURCE
         except/i386/chkstk_asm.s
         except/i386/chkstk_ms.s
         math/i386/alldiv_asm.s
+        math/i386/alldvrm_asm.s
+        math/i386/allrem_asm.s
         math/i386/aulldiv_asm.s
+        math/i386/aulldvrm_asm.s
+        math/i386/aullrem_asm.s
+        math/i386/gcc_compat.s
         )
     if (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT MSVC)
         list(APPEND MSVCRTEX_ASM_SOURCE

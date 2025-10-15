@@ -233,6 +233,8 @@ extern "C" {
   __CRT_INLINE void __cdecl _Exit(int status)
   {  _exit(status); }
 #endif
+  int __cdecl at_quick_exit(void (__cdecl *)(void));
+  __declspec(noreturn) void __cdecl quick_exit(int);
 #if __MINGW_GNUC_PREREQ(4,4)
 #pragma push_macro("abort")
 #undef abort

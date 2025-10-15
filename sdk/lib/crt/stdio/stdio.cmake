@@ -1,5 +1,10 @@
 
+list(APPEND LIBCNTPR_STDIO_SOURCE
+    stdio/snprintf.c
+)
+
 list(APPEND CRT_STDIO_SOURCE
+    ${LIBCNTPR_STDIO_SOURCE}
     stdio/_flsbuf.c
     stdio/_flswbuf.c
     stdio/access.c

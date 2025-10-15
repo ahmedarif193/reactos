@@ -793,6 +793,7 @@ strncat_s(
     return ENOTSUP;
 }
 
+#ifndef __REACTOS__
 _Check_return_opt_
 _CRTIMP
 _CRT_INSECURE_DEPRECATE(vsnprintf_s)
@@ -807,6 +808,7 @@ vsnprintf_(
     UNIMPLEMENTED;
     return 0;
 }
+#endif
 
 _Check_return_
 _CRTIMP
@@ -903,6 +905,7 @@ _wcsupr_s_l(
     return 0;
 }
 
+#ifndef __REACTOS__
 _Check_return_opt_
 _CRTIMP
 _CRT_INSECURE_DEPRECATE(vsnprintf_s)
@@ -917,6 +920,6 @@ vsnprintf(
     UNIMPLEMENTED;
     return 0;
 }
-
+#endif
 
 

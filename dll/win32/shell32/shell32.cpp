@@ -123,34 +123,42 @@ HRESULT IDefClF_fnConstructor(LPFNCREATEINSTANCE lpfnCI, PLONG pcRefDll, const I
  *  When the CreateInstance of the cf is called the callback is executed.
  */
 
-class IDefClFImpl :
-    public CComObjectRootEx<CComMultiThreadModelNoCS>,
-    public IClassFactory
+class IDefClFImpl : public IClassFactory
 {
 private:
+    LONG                     m_cRefs;
     CLSID                    *rclsid;
     LPFNCREATEINSTANCE        lpfnCI;
     const IID                *riidInst;
     LONG                    *pcRefDll;        /* pointer to refcounter in external dll (ugrrr...) */
 public:
     IDefClFImpl();
+    virtual ~IDefClFImpl();
     HRESULT Initialize(LPFNCREATEINSTANCE lpfnCI, PLONG pcRefDll, const IID *riidInstx);
 
     // IClassFactory
     STDMETHOD(CreateInstance)(IUnknown * pUnkOuter, REFIID riid, LPVOID *ppvObject) override;
     STDMETHOD(LockServer)(BOOL fLock) override;
 
-BEGIN_COM_MAP(IDefClFImpl)
-    COM_INTERFACE_ENTRY_IID(IID_IClassFactory, IClassFactory)
-END_COM_MAP()
+    // IUnknown
+    STDMETHOD(QueryInterface)(REFIID riid, void **ppvObject) override;
+    STDMETHOD_(ULONG, AddRef)() override;
+    STDMETHOD_(ULONG, Release)() override;
 };
 
 IDefClFImpl::IDefClFImpl()
 {
+    m_cRefs = 1;
     lpfnCI = NULL;
     riidInst = NULL;
     pcRefDll = NULL;
     rclsid = NULL;
+}
+
+IDefClFImpl::~IDefClFImpl()
+{
+    if (pcRefDll)
+        InterlockedDecrement(pcRefDll);
 }
 
 HRESULT IDefClFImpl::Initialize(LPFNCREATEINSTANCE lpfnCIx, PLONG pcRefDllx, const IID *riidInstx)
@@ -164,6 +172,35 @@ HRESULT IDefClFImpl::Initialize(LPFNCREATEINSTANCE lpfnCIx, PLONG pcRefDllx, con
 
     TRACE("(%p)%s\n", this, shdebugstr_guid(riidInst));
     return S_OK;
+}
+
+STDMETHODIMP IDefClFImpl::QueryInterface(REFIID riid, void **ppvObject)
+{
+    if (!ppvObject)
+        return E_POINTER;
+
+    if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_IClassFactory))
+    {
+        *ppvObject = static_cast<IClassFactory*>(this);
+        AddRef();
+        return S_OK;
+    }
+
+    *ppvObject = NULL;
+    return E_NOINTERFACE;
+}
+
+STDMETHODIMP_(ULONG) IDefClFImpl::AddRef()
+{
+    return InterlockedIncrement(&m_cRefs);
+}
+
+STDMETHODIMP_(ULONG) IDefClFImpl::Release()
+{
+    ULONG refs = InterlockedDecrement(&m_cRefs);
+    if (refs == 0)
+        delete this;
+    return refs;
 }
 
 /******************************************************************************
@@ -199,7 +236,25 @@ HRESULT WINAPI IDefClFImpl::LockServer(BOOL fLock)
 
 HRESULT IDefClF_fnConstructor(LPFNCREATEINSTANCE lpfnCI, PLONG pcRefDll, const IID *riidInst, IClassFactory **theFactory)
 {
-    return ShellObjectCreatorInit<IDefClFImpl>(lpfnCI, pcRefDll, riidInst, IID_PPV_ARG(IClassFactory, theFactory));
+    if (!theFactory)
+        return E_POINTER;
+
+    *theFactory = NULL;
+
+    IDefClFImpl *factory = NULL;
+    ATLTRY(factory = new IDefClFImpl());
+    if (!factory)
+        return E_OUTOFMEMORY;
+
+    HRESULT hr = factory->Initialize(lpfnCI, pcRefDll, riidInst);
+    if (FAILED(hr))
+    {
+        factory->Release();
+        return hr;
+    }
+
+    *theFactory = factory;
+    return S_OK;
 }
 
 /******************************************************************************

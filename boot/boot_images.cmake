@@ -1,19 +1,16 @@
 ## efisys.bin
 
 # EFI platform ID, used in environ/CMakelists.txt for bootmgfw filename naming also.
+# UEFI bootloader is not built for i386
 if(ARCH STREQUAL "amd64")
     set(EFI_PLATFORM_ID "x64")
-elseif(ARCH STREQUAL "i386")
-    if(NOT (SARCH STREQUAL "pc98" OR SARCH STREQUAL "xbox"))
-        set(EFI_PLATFORM_ID "ia32")
-    endif()
 elseif(ARCH STREQUAL "ia64")
     set(EFI_PLATFORM_ID "ia64")
 elseif(ARCH STREQUAL "arm")
     set(EFI_PLATFORM_ID "arm")
 elseif(ARCH STREQUAL "arm64")
     set(EFI_PLATFORM_ID "aa64")
-else()
+elseif(NOT ARCH STREQUAL "i386")
     message(FATAL_ERROR "Unknown ARCH '" ${ARCH} "', cannot generate a valid UEFI boot filename.")
 endif()
 

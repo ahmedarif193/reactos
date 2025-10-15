@@ -28,6 +28,7 @@ list(APPEND CRT_STDLIB_SOURCE
     stdlib/mbstowcs.c
     stdlib/obsol.c
     stdlib/putenv.c
+    stdlib/quick_exit.c
     stdlib/rand.c
     stdlib/rand_s.c
     stdlib/rot.c
@@ -39,6 +40,11 @@ list(APPEND CRT_STDLIB_SOURCE
     stdlib/wmakpath.c
     stdlib/wmakpath_s.c
 )
+
+# int128 support is only available on 64-bit architectures
+if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
+    list(APPEND CRT_STDLIB_SOURCE stdlib/int128.c)
+endif()
 
 if(MSVC AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
     if(ARCH STREQUAL "i386")

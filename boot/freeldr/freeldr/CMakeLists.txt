@@ -122,6 +122,7 @@ endif()
 
 include(pcat.cmake)
 include(rosload.cmake)
-if(NOT ARCH STREQUAL "i386" OR NOT (SARCH STREQUAL "pc98" OR SARCH STREQUAL "xbox"))
+# UEFI bootloader is only for non-i386 architectures (amd64, arm64, etc.)
+if(NOT ARCH STREQUAL "i386")
     include(uefi.cmake)
 endif()

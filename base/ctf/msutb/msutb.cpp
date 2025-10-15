@@ -1282,6 +1282,8 @@ protected:
 public:
     CLBarInatItem(DWORD dwThreadId);
 
+    using CLBarItemButtonBase::OnMenuSelect;
+
     STDMETHOD(InitMenu)(ITfMenu *pMenu) override;
     STDMETHOD(OnMenuSelect)(INT nCommandId);
     STDMETHOD(GetIcon)(HICON *phIcon) override;

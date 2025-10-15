@@ -197,9 +197,13 @@ static int parse_symlink(unsigned char *buffer, uint32_t length, nfs41_upcall *u
     status = safe_read(&buffer, &length, &args->set, sizeof(BOOLEAN));
     if (status) goto out;
 
-    if (args->set)
-        status = get_name(&buffer, &length, &args->target_set);
-    else
+    if (args->set) {
+        const char *target_tmp;
+        status = get_name(&buffer, &length, &target_tmp);
+        if (status)
+            goto out;
+        args->target_set = (char *)target_tmp;
+    } else
         args->target_set = NULL;
 
     dprintf(1, "parsing NFS41_SYMLINK: path='%s' set=%u target='%s'\n",

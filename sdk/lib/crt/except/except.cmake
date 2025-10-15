@@ -66,7 +66,7 @@ list(APPEND CRT_EXCEPT_SOURCE
 )
 
 if(ARCH STREQUAL "i386")
-    list(APPEND CHKSTK_ASM_SOURCE except/i386/chkstk_asm.s)
+    list(APPEND CHKSTK_ASM_SOURCE except/i386/chkstk_asm.s except/i386/chkstk_ms.s)
 elseif(ARCH STREQUAL "amd64")
     list(APPEND CHKSTK_ASM_SOURCE except/amd64/chkstk_ms.s)
 elseif(ARCH STREQUAL "arm")

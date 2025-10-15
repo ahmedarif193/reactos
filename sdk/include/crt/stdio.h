@@ -702,12 +702,14 @@ extern _CRTIMP int _commode;
 #pragma pop_macro("vsnprintf")
 #endif
 
+#ifndef __REACTOS__
 #ifndef vsnprintf
   #define vsnprintf _vsnprintf
 #endif
 #ifndef snprintf
   #define snprintf _snprintf
 #endif
+#endif /* __REACTOS__ */
 
   _Check_return_
   _CRTIMP

@@ -164,10 +164,11 @@ if [ -z "$ARCH" ] && [ -n "$ROS_ARCH" ]; then
     ARCH="$ROS_ARCH"
 fi
 
+#make ENABLE_CCACHE the default behavior, ccache became robust since years (2025 update) 
 [ -z "$ARCH" ] && ARCH="i386"
 [ -z "$BUILD_TYPE" ] && BUILD_TYPE="RelWithDebInfo"
 [ -z "$CMAKE_GENERATOR" ] && CMAKE_GENERATOR="Ninja"
-[ -z "$ENABLE_CCACHE" ] && ENABLE_CCACHE="OFF"
+[ -z "$ENABLE_CCACHE" ] && ENABLE_CCACHE="ON"
 if [ -z "$TOOLCHAIN_PREFIX" ]; then
     case "$ARCH" in
         amd64|x86_64)

@@ -85,6 +85,7 @@ endif()
 
 list(APPEND CRT_STRING_SOURCE
     ${LIBCNTPR_STRING_SOURCE}
+    string/btowc.c
     string/_mbsnlen.c
     string/_mbstrnlen.c
     string/_splitpath_s.c
@@ -102,6 +103,8 @@ list(APPEND CRT_STRING_SOURCE
     string/strtok_s.c
     string/strtoul.c
     string/strxfrm.c
+    string/mbsrtowcs.c
+    string/wctype_fn.c
     string/wcstombs_s.c
     string/wtof.c
 )

@@ -39,6 +39,20 @@ static enum clnt_stat send_null(CLIENT *client)
                      (xdrproc_t)xdr_void, NULL, timeout);
 }
 
+#ifdef __REACTOS__
+static int
+nfs41_cb_compound_res_xdr_bridge(void *xdr, void *res)
+{
+    return proc_cb_compound_res((XDR *)xdr, (struct cb_compound_res *)res) ? 1 : 0;
+}
+
+static int
+nfs41_callback_bridge(void *rpc_clnt, void *cb, void **reply)
+{
+    return nfs41_handle_callback(rpc_clnt, cb, reply);
+}
+#endif
+
 static int get_client_for_netaddr(
     IN const netaddr4 *netaddr,
     IN uint32_t wsize,
@@ -65,9 +79,16 @@ static int get_client_for_netaddr(
         dprintf(1, "servername is %s\n", server_name);
     }
     dprintf(1, "callback function %p args %p\n", nfs41_handle_callback, rpc);
-    client = clnt_tli_create(RPC_ANYFD, nconf, addr, NFS41_RPC_PROGRAM, 
-        NFS41_RPC_VERSION, wsize, rsize, rpc ? proc_cb_compound_res : NULL, 
-        rpc ? nfs41_handle_callback : NULL, rpc ? rpc : NULL);
+    client = clnt_tli_create(RPC_ANYFD, nconf, addr, NFS41_RPC_PROGRAM,
+        NFS41_RPC_VERSION, wsize, rsize,
+#ifdef __REACTOS__
+        rpc ? nfs41_cb_compound_res_xdr_bridge : NULL,
+        rpc ? nfs41_callback_bridge : NULL,
+#else
+        rpc ? proc_cb_compound_res : NULL,
+        rpc ? nfs41_handle_callback : NULL,
+#endif
+        rpc ? rpc : NULL);
     if (client) {
         *client_out = client;
         status = NO_ERROR;

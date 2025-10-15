@@ -157,6 +157,15 @@ add_library(freeldr_common
     ${PCATLDR_BOOTMGR_SOURCE}
 )
 
+if(NOT MSVC)
+    target_compile_options(freeldr_common PRIVATE
+        -ffreestanding
+        -fno-asynchronous-unwind-tables
+        -fno-unwind-tables
+        -fno-stack-protector
+        -fno-exceptions)
+endif()
+
 if(MSVC AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # We need to reduce the binary size
     target_compile_options(freeldr_common PRIVATE "/Os")
@@ -192,6 +201,16 @@ set_target_properties(freeldr_pe
     PROPERTIES
     ENABLE_EXPORTS TRUE
     DEFINE_SYMBOL "")
+
+if(NOT MSVC)
+    target_compile_options(freeldr_pe PRIVATE
+        -ffreestanding
+        -fno-asynchronous-unwind-tables
+        -fno-unwind-tables
+        -fno-stack-protector
+        -fno-exceptions)
+    target_link_options(freeldr_pe PRIVATE -nostdlib -nodefaultlibs -Wl,--gc-sections)
+endif()
 
 if(MSVC)
     if(ARCH STREQUAL "arm")
@@ -244,6 +263,10 @@ endif()
 if(RUNTIME_CHECKS)
     target_link_libraries(freeldr_pe runtmchk)
     target_link_options(freeldr_pe PRIVATE "/MERGE:.rtc=.text")
+endif()
+
+if(ARCH STREQUAL "i386" AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(freeldr_pe gcc-compat)
 endif()
 
 add_dependencies(freeldr_pe asm)

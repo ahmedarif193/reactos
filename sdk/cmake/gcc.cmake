@@ -255,7 +255,8 @@ elseif(ARCH STREQUAL "arm")
 endif()
 
 # Fix build with GLIBCXX + our c++ headers
-add_definitions(-D_GLIBCXX_HAVE_BROKEN_VSWPRINTF)
+add_definitions(-D_GLIBCXX_HAVE_BROKEN_VSWPRINTF -D_GLIBCXX_HAVE_QUICK_EXIT=0 -D_GLIBCXX_HAVE_AT_QUICK_EXIT=0)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -include reactos/quick_exit_compat.h")
 
 # Fix build with UCRT headers
 add_definitions(-D_CRT_SUPPRESS_RESTRICT)
@@ -416,7 +417,17 @@ function(set_module_type_toolchain MODULE TYPE)
         # Believe it or not, cmake doesn't do that
         set_property(TARGET ${MODULE} APPEND PROPERTY LINK_DEPENDS $<TARGET_PROPERTY:native-pefixup,IMPORTED_LOCATION>)
     endif()
-    
+
+    # Hosted i386 modules compiled with GCC still need libgcc helper thunks,
+    # but boot/kernellike binaries stay freestanding and opt out.
+    if(ARCH STREQUAL "i386" AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        set(_gcc_compat_host_types win32cui win32gui win32dll win32ocx cpl nativedll kernel kerneldll kernelmodedriver wdmdriver)
+        if(TYPE IN_LIST _gcc_compat_host_types)
+            target_link_options(${MODULE} PRIVATE "-Wl,--whole-archive" "$<TARGET_FILE:gcc-compat>" "-Wl,--no-whole-archive")
+            add_dependencies(${MODULE} gcc-compat)
+        endif()
+    endif()
+
     # FIXME: For amd64, we need to provide CRT startup symbols
     # This is a temporary workaround - the proper fix would be to ensure
     # msvcrt.dll exports all needed startup symbols for amd64

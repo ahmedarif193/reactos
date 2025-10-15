@@ -61,6 +61,7 @@ if(ARCH STREQUAL "i386")
         math/i386/ftol_asm.s
         math/i386/ftol2_asm.s
         math/i386/ftoul2_legacy_asm.s
+        math/i386/gcc_compat.s
         math/i386/log_asm.s
         math/i386/log10_asm.s
         math/i386/pow_asm.s
@@ -74,6 +75,7 @@ if(ARCH STREQUAL "i386")
         math/i386/exp_asm.s
         math/i386/fmod_asm.s
         math/i386/fmodf_asm.s
+        math/i386/gcc_compat.s
     )
     list(APPEND CRT_MATH_SOURCE
         math/_hypotf.c

@@ -1766,6 +1766,7 @@
 @ cdecl -arch=i386 _CIsqrt()
 @ cdecl -arch=x86_64,arm,arm64 __C_specific_handler(ptr long ptr ptr)
 @ cdecl -arch=x86_64,arm,arm64 __chkstk()
+@ cdecl -arch=x86_64 ___chkstk_ms() __chkstk
 @ cdecl __isascii(long)
 @ cdecl __iscsym(long)
 @ cdecl __iscsymf(long)

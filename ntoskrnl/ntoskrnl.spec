@@ -1537,6 +1537,7 @@
 @ cdecl -arch=x86_64,arm __C_specific_handler(ptr long ptr ptr)
 @ cdecl -arch=arm __jump_unwind()
 @ cdecl -arch=x86_64 __chkstk()
+@ cdecl -arch=x86_64 ___chkstk_ms() __chkstk
 ;@ cdecl -arch=x86_64 __misaligned_access()
 @ cdecl -arch=i386 _CIcos()
 @ cdecl -arch=i386 _CIsin()

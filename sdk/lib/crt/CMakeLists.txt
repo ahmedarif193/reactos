@@ -29,6 +29,7 @@ include(crt.cmake)
 include(crtmath.cmake)
 include(libcntpr.cmake)
 include(msvcrtex.cmake)
+include(libgcc-compat.cmake)
 include(oldnames.cmake)
 include(ucrtsupport.cmake)
 

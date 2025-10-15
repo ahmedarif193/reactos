@@ -56,10 +56,8 @@ set(CMAKE_ASM_CREATE_STATIC_LIBRARY "${_REACTOS_CREATE_STATIC_LIBRARY}")
 unset(_REACTOS_CREATE_STATIC_LIBRARY)
 
 # Don't link with anything by default unless we say so
-set(CMAKE_C_STANDARD_LIBRARIES "-lgcc" CACHE STRING "Standard C Libraries")
-
-#MARK_AS_ADVANCED(CLEAR CMAKE_CXX_STANDARD_LIBRARIES)
-set(CMAKE_CXX_STANDARD_LIBRARIES "-lgcc" CACHE STRING "Standard C++ Libraries")
+# Allow MinGW toolchain to provide its default startup/CRT libraries.
+# (ReactOS modules will explicitly drop unwanted imports as needed.)
 
 # This allows to have CMake test the compiler without linking
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)

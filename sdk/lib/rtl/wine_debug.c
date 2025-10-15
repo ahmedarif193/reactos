@@ -1,6 +1,7 @@
 
 #define WIN32_NO_STATUS
 #include <windef.h>
+#include <stdio.h>
 #include <ndk/rtlfuncs.h>
 #include <wine/debug.h>
 
@@ -11,6 +12,81 @@ static struct
     HANDLE thread;
     void* allocations;
 } s_alloactions[32];
+
+static int ros_vscprintf(const char *format, va_list args)
+{
+    char stack_buf[256];
+    va_list copy;
+    int length;
+
+    va_copy(copy, args);
+    length = _vsnprintf(stack_buf, sizeof(stack_buf), format, copy);
+    va_end(copy);
+    if (length >= 0 && length < (int)sizeof(stack_buf))
+    {
+        return length;
+    }
+
+    size_t size = 512;
+    for (;;)
+    {
+        char *buffer = (char*)RtlAllocateHeap(RtlGetProcessHeap(), 0, size);
+        if (!buffer)
+        {
+            return -1;
+        }
+
+        va_copy(copy, args);
+        length = _vsnprintf(buffer, size, format, copy);
+        va_end(copy);
+        RtlFreeHeap(RtlGetProcessHeap(), 0, buffer);
+
+        if (length >= 0 && length < (int)size)
+        {
+            return length;
+        }
+
+        size *= 2;
+    }
+}
+
+static int ros_vsnprintf(char *buffer, size_t count, const char *format, va_list args)
+{
+    va_list copy;
+    int length;
+
+    if (buffer && count)
+    {
+        va_copy(copy, args);
+        length = _vsnprintf(buffer, count, format, copy);
+        va_end(copy);
+
+        if (length >= 0 && (size_t)length < count)
+        {
+            buffer[length] = '\0';
+            return length;
+        }
+    }
+
+    length = ros_vscprintf(format, args);
+
+    if (buffer && count)
+    {
+        va_copy(copy, args);
+        _vsnprintf(buffer, count, format, copy);
+        va_end(copy);
+
+        if (length >= (int)count)
+        {
+            buffer[count - 1] = '\0';
+            return (int)count - 1;
+        }
+
+        buffer[length] = '\0';
+    }
+
+    return length;
+}
 
 static int find_thread_slot()
 {
@@ -93,13 +169,13 @@ const char *wine_dbg_vsprintf(const char *format, va_list valist)
     char* buffer;
     int len;
 
-    len = vsnprintf(NULL, 0, format, valist);
+    len = ros_vsnprintf(NULL, 0, format, valist);
     buffer = alloc_buffer(len + 1);
     if (buffer == NULL)
     {
         return "<allocation failed>";
     }
-    len = vsnprintf(buffer, len, format, valist);
+    len = ros_vsnprintf(buffer, len + 1, format, valist);
     buffer[len] = 0;
     return buffer;
 }

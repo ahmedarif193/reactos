@@ -80,6 +80,16 @@ set_target_properties(rosload
     ENABLE_EXPORTS TRUE
     DEFINE_SYMBOL "")
 
+if(NOT MSVC)
+    target_compile_options(rosload PRIVATE
+        -ffreestanding
+        -fno-asynchronous-unwind-tables
+        -fno-unwind-tables
+        -fno-stack-protector
+        -fno-exceptions)
+    target_link_options(rosload PRIVATE -nostdlib -nodefaultlibs -Wl,--gc-sections)
+endif()
+
 set_image_base(rosload 0x10000) # 0x200000
 set_subsystem(rosload native)
 set_entrypoint(rosload RunLoader)
@@ -98,6 +108,10 @@ endif()
 
 if(RUNTIME_CHECKS)
     target_link_libraries(rosload runtmchk)
+endif()
+
+if(ARCH STREQUAL "i386" AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(rosload gcc-compat)
 endif()
 
 add_dependencies(rosload bugcodes asm xdk)

@@ -536,6 +536,10 @@ public:
     CUIFWindow(HINSTANCE hInst, DWORD style);
     ~CUIFWindow() override;
 
+    // Re-expose the parameterless overload so the WPARAM variant below
+    // does not trigger -Woverloaded-virtual under -Werror.
+    using CUIFObject::OnTimer;
+
     static CUIFWindow* GetThis(HWND hWnd);
     static void SetThis(HWND hWnd, LONG_PTR dwNewLong);
 
