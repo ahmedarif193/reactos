@@ -731,6 +731,24 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI Extensions","wvx",0x00000
 ; User Profile List
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","ProfilesDirectory",0x00020000,"%SystemDrive%\Documents and Settings"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-18",,0x00000010
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-18","ProfileImagePath",0x00020000,"%SystemRoot%\System32\Config\SystemProfile"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-18","Sid",0x00000001,01,01,00,00,00,00,00,05,12,00,00,00
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-18","RefCount",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-18","Flags",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-18","State",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-19",,0x00000010
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-19","ProfileImagePath",0x00020000,"%SystemRoot%\ServiceProfiles\LocalService"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-19","Sid",0x00000001,01,01,00,00,00,00,00,05,13,00,00,00
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-19","RefCount",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-19","Flags",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-19","State",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-20",,0x00000010
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-20","ProfileImagePath",0x00020000,"%SystemRoot%\ServiceProfiles\NetworkService"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-20","Sid",0x00000001,01,01,00,00,00,00,00,05,14,00,00,00
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-20","RefCount",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-20","Flags",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-20","State",0x00010001,0x00000000
 
 ; Font substitutes
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts",,0x00000012
