@@ -12,6 +12,7 @@
 #include <reactos/wow64cpu.h>
 #include <ntstatus.h>
 #include <string.h>
+#include <strsafe.h>
 
 #ifndef NT_SUCCESS
 #define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
@@ -413,14 +414,14 @@ Wow64cpuDebugTraceTransition(
             TypeString = "Unknown Transition";
             break;
     }
-
-    _snprintf(Buffer,
-              sizeof(Buffer),
-              "wow64cpu: CPU Transition - Type: %s, Param: 0x%p\r\n",
-              TypeString,
-              (PVOID)Parameter);
-    Buffer[sizeof(Buffer) - 1] = '\0';
-    OutputDebugStringA(Buffer);
+    if (SUCCEEDED(StringCchPrintfA(Buffer,
+                                   ARRAYSIZE(Buffer),
+                                   "wow64cpu: CPU Transition - Type: %s, Param: 0x%p\r\n",
+                                   TypeString,
+                                   (PVOID)Parameter)))
+    {
+        OutputDebugStringA(Buffer);
+    }
 #else
     UNREFERENCED_PARAMETER(TransitionType);
     UNREFERENCED_PARAMETER(Parameter);
