@@ -42,6 +42,7 @@ add_definitions(
 set(MSVCRT_SOURCES
     dllmain.c
     stubs.c
+    wctob.c
     msvcrt.rc
     ${CMAKE_CURRENT_BINARY_DIR}/msvcrt_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/msvcrt.def)

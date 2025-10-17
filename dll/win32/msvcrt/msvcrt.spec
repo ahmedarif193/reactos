@@ -1564,7 +1564,7 @@
 @ stub -version=0x600+ wcstombs_s
 @ cdecl wcstoul(wstr ptr long)
 @ cdecl wcsxfrm(ptr wstr long)
-@ cdecl -version=0x600+ wctob(long) ucrtbase.wctob
+@ cdecl -version=0x600+ wctob(long)
 @ cdecl wctomb(ptr long)
 @ stub -version=0x600+ wctomb_s
 @ varargs wprintf(wstr)
