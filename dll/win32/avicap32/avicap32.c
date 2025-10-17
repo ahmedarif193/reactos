@@ -10,6 +10,8 @@
 #define COM_NO_WINDOWS_H
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <wchar.h>
 #include <windef.h>
 #include <winbase.h>
 #include <winreg.h>
@@ -17,6 +19,7 @@
 #include <winnls.h>
 #include <wingdi.h>
 #include <winternl.h>
+#include <strsafe.h>
 #include <vfw.h>
 #include <wine/debug.h>
 
@@ -26,6 +29,505 @@ WINE_DEFAULT_DEBUG_CHANNEL(avicap32);
 
 
 HINSTANCE hInstance;
+
+typedef struct _CAP_DRIVER_ENTRY
+{
+    WCHAR FileName[MAX_PATH];
+    WCHAR FriendlyName[MAX_PATH];
+} CAP_DRIVER_ENTRY, *PCAP_DRIVER_ENTRY;
+
+static VOID
+NormalizeDriverFileName(LPWSTR FileName)
+{
+    SIZE_T Length;
+    WCHAR *Ptr;
+
+    if (!FileName)
+        return;
+
+    while (*FileName == L' ' || *FileName == L'\t')
+        RtlMoveMemory(FileName, FileName + 1, (lstrlenW(FileName) + 1) * sizeof(WCHAR));
+
+    Length = lstrlenW(FileName);
+    while (Length > 0 && (FileName[Length - 1] == L' ' || FileName[Length - 1] == L'\t'))
+    {
+        FileName[Length - 1] = L'\0';
+        Length--;
+    }
+
+    Ptr = wcschr(FileName, L',');
+    if (Ptr)
+        *Ptr = L'\0';
+
+    if (FileName[0] == L'"')
+    {
+        Length = lstrlenW(FileName);
+        if (Length > 1 && FileName[Length - 1] == L'"')
+            FileName[Length - 1] = L'\0';
+        RtlMoveMemory(FileName, FileName + 1, (lstrlenW(FileName) + 1) * sizeof(WCHAR));
+    }
+}
+
+static VOID
+DeriveFriendlyName(LPWSTR Destination,
+                   DWORD cchDestination,
+                   LPCWSTR FileName)
+{
+    LPCWSTR BaseName;
+
+    if (!Destination || !cchDestination)
+        return;
+
+    Destination[0] = L'\0';
+
+    if (!FileName || !FileName[0])
+        return;
+
+    BaseName = wcsrchr(FileName, L'\\');
+    if (BaseName)
+        BaseName++;
+    else
+        BaseName = FileName;
+
+    lstrcpynW(Destination, BaseName, cchDestination);
+}
+
+static VOID
+DeduplicateDriverEntries(PCAP_DRIVER_ENTRY Entries,
+                         DWORD *Count);
+
+static BOOL
+LoadIndirectFriendlyName(LPCWSTR Source,
+                         LPWSTR Destination,
+                         DWORD cchDestination)
+{
+    WCHAR PathBuffer[MAX_PATH];
+    WCHAR ExpandedPath[MAX_PATH];
+    DWORD ExpandedLength;
+    LPCWSTR Comma;
+    INT ResourceId;
+    HMODULE hModule;
+
+    if (!Source || Source[0] != L'@')
+        return FALSE;
+
+    Comma = wcsrchr(Source, L',');
+    if (!Comma || Comma <= Source + 1)
+        return FALSE;
+
+    {
+        const WCHAR *IdPtr = Comma + 1;
+        WCHAR *EndPtr;
+        LONG ParsedId;
+
+        while (*IdPtr == L' ' || *IdPtr == L'\t')
+            IdPtr++;
+
+        if (!*IdPtr)
+            return FALSE;
+
+        ParsedId = wcstol(IdPtr, &EndPtr, 10);
+        if (EndPtr == IdPtr)
+            return FALSE;
+
+        if (ParsedId < 0)
+            ParsedId = -ParsedId;
+
+        if (ParsedId == 0)
+            return FALSE;
+
+        ResourceId = (INT)ParsedId;
+    }
+
+    if ((Comma - (Source + 1)) >= ARRAYSIZE(PathBuffer))
+        return FALSE;
+
+    RtlZeroMemory(PathBuffer, sizeof(PathBuffer));
+    RtlMoveMemory(PathBuffer, Source + 1, (Comma - (Source + 1)) * sizeof(WCHAR));
+
+    ExpandedLength = ExpandEnvironmentStringsW(PathBuffer, ExpandedPath, ARRAYSIZE(ExpandedPath));
+    if (!ExpandedLength || ExpandedLength >= ARRAYSIZE(ExpandedPath))
+        return FALSE;
+
+    hModule = LoadLibraryExW(ExpandedPath, NULL, LOAD_LIBRARY_AS_DATAFILE);
+    if (!hModule)
+        return FALSE;
+
+    if (!LoadStringW(hModule, (UINT)ResourceId, Destination, cchDestination))
+    {
+        Destination[0] = L'\0';
+        FreeLibrary(hModule);
+        return FALSE;
+    }
+
+    FreeLibrary(hModule);
+    return TRUE;
+}
+
+static BOOL
+ResolveDriverPath(LPCWSTR FileName,
+                  LPWSTR ResolvedPath,
+                  DWORD cchResolvedPath)
+{
+    DWORD Length;
+
+    if (!FileName || !FileName[0] || !ResolvedPath || !cchResolvedPath)
+        return FALSE;
+
+    Length = SearchPathW(NULL, FileName, NULL, cchResolvedPath, ResolvedPath, NULL);
+    if (Length && Length < cchResolvedPath)
+        return TRUE;
+
+    return FALSE;
+}
+
+static VOID
+QueryDriverVersionString(LPCWSTR FileName,
+                         LPWSTR Destination,
+                         INT cchDestination)
+{
+    LPVOID VersionData;
+    DWORD InfoSize;
+    VS_FIXEDFILEINFO *FixedInfo;
+    UINT QuerySize;
+    WCHAR ResolvedPath[MAX_PATH];
+    WCHAR VersionBuffer[64];
+
+    if (!Destination || cchDestination <= 0)
+        return;
+
+    Destination[0] = L'\0';
+
+    if (!FileName || !FileName[0])
+        return;
+
+    if (!ResolveDriverPath(FileName, ResolvedPath, ARRAYSIZE(ResolvedPath)))
+        lstrcpynW(ResolvedPath, FileName, ARRAYSIZE(ResolvedPath));
+
+    InfoSize = GetFileVersionInfoSizeW(ResolvedPath, NULL);
+    if (!InfoSize)
+        return;
+
+    VersionData = HeapAlloc(GetProcessHeap(), 0, InfoSize);
+    if (!VersionData)
+        return;
+
+    if (GetFileVersionInfoW(ResolvedPath, 0, InfoSize, VersionData) &&
+        VerQueryValueW(VersionData, L"\\", (LPVOID *)&FixedInfo, &QuerySize))
+    {
+        swprintf(VersionBuffer, L"Version: %d.%d.%d.%d",
+                 HIWORD(FixedInfo->dwFileVersionMS),
+                 LOWORD(FixedInfo->dwFileVersionMS),
+                 HIWORD(FixedInfo->dwFileVersionLS),
+                 LOWORD(FixedInfo->dwFileVersionLS));
+
+        lstrcpynW(Destination, VersionBuffer, cchDestination);
+    }
+
+    HeapFree(GetProcessHeap(), 0, VersionData);
+}
+
+static BOOL
+EnsureCapacity(PCAP_DRIVER_ENTRY *Entries,
+               DWORD *Count,
+               DWORD *Capacity)
+{
+    PCAP_DRIVER_ENTRY NewEntries;
+    DWORD NewCapacity;
+
+    if (*Count < *Capacity)
+        return TRUE;
+
+    NewCapacity = (*Capacity == 0) ? 4 : (*Capacity * 2);
+
+    if (*Entries)
+        NewEntries = HeapReAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, *Entries, sizeof(CAP_DRIVER_ENTRY) * NewCapacity);
+    else
+        NewEntries = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(CAP_DRIVER_ENTRY) * NewCapacity);
+
+    if (!NewEntries)
+        return FALSE;
+
+    *Entries = NewEntries;
+    *Capacity = NewCapacity;
+    return TRUE;
+}
+
+static BOOL
+AddDriverEntry(PCAP_DRIVER_ENTRY *Entries,
+               DWORD *Count,
+               DWORD *Capacity,
+               LPCWSTR FileName,
+               LPCWSTR FriendlyName)
+{
+    CAP_DRIVER_ENTRY *EntryArray;
+    WCHAR NormalizedFile[MAX_PATH];
+    WCHAR LocalFriendly[MAX_PATH];
+
+    if (!FileName || !FileName[0])
+        return FALSE;
+
+    lstrcpynW(NormalizedFile, FileName, ARRAYSIZE(NormalizedFile));
+    NormalizeDriverFileName(NormalizedFile);
+    if (!NormalizedFile[0])
+        return FALSE;
+
+    if (!EnsureCapacity(Entries, Count, Capacity))
+        return FALSE;
+
+    EntryArray = *Entries;
+    lstrcpynW(EntryArray[*Count].FileName, NormalizedFile, ARRAYSIZE(EntryArray[*Count].FileName));
+
+    RtlZeroMemory(LocalFriendly, sizeof(LocalFriendly));
+    if (FriendlyName && FriendlyName[0])
+    {
+        if (!LoadIndirectFriendlyName(FriendlyName, LocalFriendly, ARRAYSIZE(LocalFriendly)))
+        {
+            lstrcpynW(LocalFriendly, FriendlyName, ARRAYSIZE(LocalFriendly));
+        }
+    }
+
+    if (!LocalFriendly[0])
+        DeriveFriendlyName(LocalFriendly, ARRAYSIZE(LocalFriendly), NormalizedFile);
+
+    lstrcpynW(EntryArray[*Count].FriendlyName, LocalFriendly, ARRAYSIZE(EntryArray[*Count].FriendlyName));
+    (*Count)++;
+
+    return TRUE;
+}
+
+static VOID
+EnumerateMediaResourceDrivers(PCAP_DRIVER_ENTRY *Entries,
+                              DWORD *Count,
+                              DWORD *Capacity)
+{
+    DWORD Index = 0;
+    HKEY hKey;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                      L"SYSTEM\\CurrentControlSet\\Control\\MediaResources\\msvideo",
+                      0,
+                      KEY_READ,
+                      &hKey) != ERROR_SUCCESS)
+    {
+        return;
+    }
+
+    for (;;)
+    {
+        WCHAR SubKeyName[MAX_PATH];
+        DWORD SubKeyLength = ARRAYSIZE(SubKeyName);
+        HKEY hSubKey;
+
+        if (RegEnumKeyExW(hKey,
+                          Index,
+                          SubKeyName,
+                          &SubKeyLength,
+                          NULL,
+                          NULL,
+                          NULL,
+                          NULL) != ERROR_SUCCESS)
+        {
+            break;
+        }
+
+        if (RegOpenKeyExW(hKey, SubKeyName, 0, KEY_READ, &hSubKey) == ERROR_SUCCESS)
+        {
+            WCHAR DriverPath[MAX_PATH];
+            WCHAR FriendlyName[MAX_PATH];
+            DWORD DataSize;
+
+            RtlZeroMemory(DriverPath, sizeof(DriverPath));
+            DataSize = sizeof(DriverPath);
+            if (RegQueryValueExW(hSubKey,
+                                 L"Driver",
+                                 NULL,
+                                 NULL,
+                                 (LPBYTE)DriverPath,
+                                 &DataSize) == ERROR_SUCCESS)
+            {
+                RtlZeroMemory(FriendlyName, sizeof(FriendlyName));
+                DataSize = sizeof(FriendlyName);
+
+                if (RegQueryValueExW(hSubKey,
+                                     L"FriendlyName",
+                                     NULL,
+                                     NULL,
+                                     (LPBYTE)FriendlyName,
+                                     &DataSize) == ERROR_SUCCESS)
+                {
+                    AddDriverEntry(Entries, Count, Capacity, DriverPath, FriendlyName);
+                }
+                else
+                {
+                    AddDriverEntry(Entries, Count, Capacity, DriverPath, NULL);
+                }
+            }
+
+            RegCloseKey(hSubKey);
+        }
+
+        Index++;
+    }
+
+    RegCloseKey(hKey);
+}
+
+static VOID
+EnumerateDrivers32Registry(PCAP_DRIVER_ENTRY *Entries,
+                           DWORD *Count,
+                           DWORD *Capacity)
+{
+    HKEY hDriversKey;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                      L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Drivers32",
+                      0,
+                      KEY_READ,
+                      &hDriversKey) == ERROR_SUCCESS)
+    {
+        HKEY hDescKey = NULL;
+
+        RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                      L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Drivers.desc",
+                      0,
+                      KEY_READ,
+                      &hDescKey);
+
+        for (DWORD Index = 0;; Index++)
+        {
+            WCHAR ValueName[128];
+            BYTE DataBuffer[MAX_PATH * sizeof(WCHAR)];
+            DWORD ValueNameLength = ARRAYSIZE(ValueName);
+            DWORD DataSize = sizeof(DataBuffer);
+            DWORD Type;
+
+            if (RegEnumValueW(hDriversKey,
+                              Index,
+                              ValueName,
+                              &ValueNameLength,
+                              NULL,
+                              &Type,
+                              DataBuffer,
+                              &DataSize) != ERROR_SUCCESS)
+            {
+                break;
+            }
+
+            if (Type == REG_SZ || Type == REG_EXPAND_SZ)
+            {
+                WCHAR DriverPath[MAX_PATH];
+                WCHAR FriendlyName[MAX_PATH];
+
+                RtlZeroMemory(DriverPath, sizeof(DriverPath));
+                if (Type == REG_EXPAND_SZ)
+                {
+                    DWORD Expanded = ExpandEnvironmentStringsW((LPCWSTR)DataBuffer,
+                                                               DriverPath,
+                                                               ARRAYSIZE(DriverPath));
+                    if (!Expanded || Expanded >= ARRAYSIZE(DriverPath))
+                        lstrcpynW(DriverPath, (LPCWSTR)DataBuffer, ARRAYSIZE(DriverPath));
+                }
+                else
+                {
+                    lstrcpynW(DriverPath, (LPCWSTR)DataBuffer, ARRAYSIZE(DriverPath));
+                }
+
+                RtlZeroMemory(FriendlyName, sizeof(FriendlyName));
+                if (hDescKey)
+                {
+                    DWORD DescSize = sizeof(FriendlyName);
+                    if (RegQueryValueExW(hDescKey,
+                                         ValueName,
+                                         NULL,
+                                         NULL,
+                                         (LPBYTE)FriendlyName,
+                                         &DescSize) != ERROR_SUCCESS)
+                    {
+                        FriendlyName[0] = L'\0';
+                    }
+                }
+
+                AddDriverEntry(Entries, Count, Capacity, DriverPath, FriendlyName[0] ? FriendlyName : NULL);
+            }
+        }
+
+        if (hDescKey)
+            RegCloseKey(hDescKey);
+
+        RegCloseKey(hDriversKey);
+    }
+}
+
+static VOID
+EnumerateSystemIniDrivers(PCAP_DRIVER_ENTRY *Entries,
+                          DWORD *Count,
+                          DWORD *Capacity)
+{
+    DWORD BufferSize = 32 * 1024;
+    LPWSTR SectionBuffer;
+    DWORD Characters;
+
+    SectionBuffer = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, BufferSize * sizeof(WCHAR));
+    if (!SectionBuffer)
+        return;
+
+    Characters = GetPrivateProfileSectionW(L"drivers32",
+                                           SectionBuffer,
+                                           BufferSize,
+                                           L"system.ini");
+
+    if (!Characters)
+    {
+        HeapFree(GetProcessHeap(), 0, SectionBuffer);
+        return;
+    }
+
+    for (LPWSTR Entry = SectionBuffer; *Entry; Entry += lstrlenW(Entry) + 1)
+    {
+        LPCWSTR EqualSign = wcschr(Entry, L'=');
+        WCHAR KeyName[64];
+        WCHAR DriverPath[MAX_PATH];
+        WCHAR FriendlyName[MAX_PATH];
+
+        if (!EqualSign)
+        {
+            continue;
+        }
+
+        RtlZeroMemory(KeyName, sizeof(KeyName));
+        RtlZeroMemory(DriverPath, sizeof(DriverPath));
+        RtlZeroMemory(FriendlyName, sizeof(FriendlyName));
+
+        {
+            SIZE_T KeyLength = EqualSign - Entry;
+            if (KeyLength >= ARRAYSIZE(KeyName))
+                KeyLength = ARRAYSIZE(KeyName) - 1;
+
+            RtlMoveMemory(KeyName, Entry, KeyLength * sizeof(WCHAR));
+            KeyName[KeyLength] = L'\0';
+        }
+
+        lstrcpynW(DriverPath, EqualSign + 1, ARRAYSIZE(DriverPath));
+        NormalizeDriverFileName(DriverPath);
+
+        if (!DriverPath[0])
+        {
+            continue;
+        }
+
+        GetPrivateProfileStringW(L"drivers.desc",
+                                 KeyName,
+                                 L"",
+                                 FriendlyName,
+                                 ARRAYSIZE(FriendlyName),
+                                 L"system.ini");
+
+        AddDriverEntry(Entries, Count, Capacity, DriverPath, FriendlyName[0] ? FriendlyName : NULL);
+    }
+
+    HeapFree(GetProcessHeap(), 0, SectionBuffer);
+}
 
 
 /* INTRENAL FUNCTIONS **************************************************/
@@ -145,15 +647,10 @@ capGetDriverDescriptionW(WORD wDriverIndex,
                          LPWSTR lpszVer,
                          INT cbVer)
 {
-    DWORD dwSize, dwIndex = 0;
-    WCHAR szDriver[MAX_PATH];
-    WCHAR szDriverName[MAX_PATH];
-    WCHAR szFileName[MAX_PATH];
-    WCHAR szVersion[MAX_PATH];
-    HKEY hKey, hSubKey;
-
-    /* TODO: Add support of data acquisition from system.ini */
-    FIXME("capGetDriverDescriptionW() not fully implemented!\n");
+    PCAP_DRIVER_ENTRY Entries = NULL;
+    DWORD EntryCount = 0;
+    DWORD Capacity = 0;
+    BOOL Result = FALSE;
 
     if (lpszName && cbName)
         lpszName[0] = L'\0';
@@ -161,100 +658,34 @@ capGetDriverDescriptionW(WORD wDriverIndex,
     if (lpszVer && cbVer)
         lpszVer[0] = L'\0';
 
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                      L"SYSTEM\\CurrentControlSet\\Control\\MediaResources\\msvideo",
-                      0,
-                      KEY_READ,
-                      &hKey) != ERROR_SUCCESS)
+    EnumerateMediaResourceDrivers(&Entries, &EntryCount, &Capacity);
+    EnumerateDrivers32Registry(&Entries, &EntryCount, &Capacity);
+    EnumerateSystemIniDrivers(&Entries, &EntryCount, &Capacity);
+
+    DeduplicateDriverEntries(Entries, &EntryCount);
+
+    if (wDriverIndex < EntryCount)
     {
-        return FALSE;
+        PCAP_DRIVER_ENTRY Entry = &Entries[wDriverIndex];
+
+        TRACE("Returning capture driver %u -> %S (%S)\n",
+              wDriverIndex,
+              Entry->FriendlyName,
+              Entry->FileName);
+
+        if (lpszName && cbName)
+            lstrcpynW(lpszName, Entry->FriendlyName, cbName);
+
+        if (lpszVer && cbVer)
+            QueryDriverVersionString(Entry->FileName, lpszVer, cbVer);
+
+        Result = TRUE;
     }
 
-    dwSize = sizeof(szDriver) / sizeof(WCHAR);
+    if (Entries)
+        HeapFree(GetProcessHeap(), 0, Entries);
 
-    while (RegEnumKeyExW(hKey, dwIndex,
-                         szDriver, &dwSize,
-                         NULL, NULL,
-                         NULL, NULL) == ERROR_SUCCESS)
-    {
-        if (RegOpenKeyW(hKey, szDriver, &hSubKey) == ERROR_SUCCESS)
-        {
-            dwSize = sizeof(szFileName);
-
-            if (RegQueryValueExW(hSubKey,
-                                 L"Driver",
-                                 NULL,
-                                 NULL,
-                                 (LPBYTE)&szFileName,
-                                 &dwSize) == ERROR_SUCCESS)
-            {
-                dwSize = sizeof(szDriverName);
-
-                if (RegQueryValueExW(hSubKey,
-                                     L"FriendlyName",
-                                     NULL,
-                                     NULL,
-                                     (LPBYTE)&szDriverName,
-                                     &dwSize) != ERROR_SUCCESS)
-                {
-                    wcscpy(szDriverName, L"Unknown Driver Name");
-                }
-
-                if (dwIndex == (DWORD)wDriverIndex)
-                {
-                    if (lpszName && cbName)
-                    {
-                        lstrcpynW(lpszName, szDriverName, cbName);
-                    }
-
-                    if (lpszVer && cbVer)
-                    {
-                        LPVOID Version, Ms;
-                        DWORD dwInfoSize;
-                        VS_FIXEDFILEINFO FileInfo;
-                        UINT Ls;
-
-                        dwInfoSize = GetFileVersionInfoSize(szFileName, NULL);
-                        if (dwInfoSize)
-                        {
-                            Version = HeapAlloc(GetProcessHeap(), 0, dwInfoSize);
-
-                            if (Version != NULL)
-                            {
-                                GetFileVersionInfo(szFileName, 0, dwInfoSize, Version);
-
-                                if (VerQueryValueW(Version, L"\\", &Ms, &Ls))
-                                {
-                                    memmove(&FileInfo, Ms, Ls);
-                                    swprintf(szVersion, L"Version: %d.%d.%d.%d",
-                                             HIWORD(FileInfo.dwFileVersionMS),
-                                             LOWORD(FileInfo.dwFileVersionMS),
-                                             HIWORD(FileInfo.dwFileVersionLS),
-                                             LOWORD(FileInfo.dwFileVersionLS));
-
-                                    lstrcpynW(lpszVer, szVersion, cbVer);
-                                }
-                                HeapFree(GetProcessHeap(), 0, Version);
-                            }
-                        }
-                    }
-
-                    RegCloseKey(hSubKey);
-                    RegCloseKey(hKey);
-                    return TRUE;
-                }
-            }
-
-            RegCloseKey(hSubKey);
-        }
-
-        dwSize = sizeof(szDriver) / sizeof(WCHAR);
-        dwIndex++;
-    }
-
-    RegCloseKey(hKey);
-
-    return FALSE;
+    return Result;
 }
 
 
@@ -321,4 +752,32 @@ DllMain(IN HINSTANCE hinstDLL,
     }
 
     return TRUE;
+}
+static VOID
+DeduplicateDriverEntries(PCAP_DRIVER_ENTRY Entries,
+                         DWORD *Count)
+{
+    if (!Entries || !Count || *Count < 2)
+        return;
+
+    for (DWORD i = 0; i < *Count; ++i)
+    {
+        for (DWORD j = i + 1; j < *Count;)
+        {
+            if (_wcsicmp(Entries[i].FileName, Entries[j].FileName) == 0)
+            {
+                if (j + 1 < *Count)
+                {
+                    RtlMoveMemory(&Entries[j],
+                                  &Entries[j + 1],
+                                  (*Count - (j + 1)) * sizeof(CAP_DRIVER_ENTRY));
+                }
+                (*Count)--;
+            }
+            else
+            {
+                j++;
+            }
+        }
+    }
 }
