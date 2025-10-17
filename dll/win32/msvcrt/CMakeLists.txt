@@ -63,6 +63,7 @@ if(USE_NATIVE_MINGW_CRT)
     target_link_libraries(msvcrt ${USE_NATIVE_MINGW_CRT_LIBS})
 else()
     target_link_libraries(msvcrt crt vcruntime cpprt wine ${PSEH_LIB})
+    target_link_options(msvcrt PRIVATE "-Wl,--exclude-libs,libmsvcrt.a" "-Wl,--allow-multiple-definition")
 endif()
 
 if(MSVC)
