@@ -29,6 +29,15 @@ NtCreateTimer(PHANDLE TimerHandle,
               POBJECT_ATTRIBUTES ObjectAttributes,
               TIMER_TYPE TimerType);
 
+NTSYSAPI
+NTSTATUS
+NTAPI
+NtQuerySystemInformation(
+    _In_ SYSTEM_INFORMATION_CLASS SystemInformationClass,
+    _Out_writes_bytes_to_opt_(SystemInformationLength, *ReturnLength) PVOID SystemInformation,
+    _In_ ULONG SystemInformationLength,
+    _Out_opt_ PULONG ReturnLength);
+
 VOID
 WINAPI
 AcquireSRWLockExclusive(PSRWLOCK Lock)
@@ -124,6 +133,48 @@ WINAPI
 WakeConditionVariable(PCONDITION_VARIABLE ConditionVariable)
 {
     RtlWakeConditionVariable((PRTL_CONDITION_VARIABLE)ConditionVariable);
+}
+
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+QueryIdleProcessorCycleTime(PULONG BufferLength, PULONGLONG CycleTimes)
+{
+    NTSTATUS Status;
+    ULONG ReturnLength = 0;
+    PVOID Buffer;
+
+    if (!BufferLength)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (*BufferLength && !CycleTimes)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    Buffer = *BufferLength ? (PVOID)CycleTimes : NULL;
+
+    Status = NtQuerySystemInformation(SystemProcessorIdleCycleTimeInformation,
+                                      Buffer,
+                                      *BufferLength,
+                                      &ReturnLength);
+
+    *BufferLength = ReturnLength;
+
+    if (!NT_SUCCESS(Status))
+    {
+        SetLastError(RtlNtStatusToDosError(Status));
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 
