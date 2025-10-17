@@ -139,7 +139,7 @@ HRESULT security_get_sd( IWbemClassObject *obj, IWbemClassObject *in, IWbemClass
 
     TRACE("%p, %p\n", in, out);
 
-    hr = create_signature( class_systemsecurityW, method_getsdW, PARAM_OUT, &sig );
+    hr = create_signature( class_systemsecurityW, method_getsdW, PARAM_OUT, NULL, &sig );
 
     if (SUCCEEDED(hr))
     {
@@ -192,7 +192,7 @@ HRESULT security_set_sd( IWbemClassObject *obj, IWbemClassObject *in, IWbemClass
 
     FIXME("stub\n");
 
-    hr = create_signature( class_systemsecurityW, method_setsdW, PARAM_OUT, &sig );
+    hr = create_signature( class_systemsecurityW, method_setsdW, PARAM_OUT, NULL, &sig );
 
     if (SUCCEEDED(hr))
     {

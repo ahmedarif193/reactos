@@ -87,7 +87,7 @@ HRESULT service_pause_service( IWbemClassObject *obj, IWbemClassObject *in, IWbe
     hr = IWbemClassObject_Get( obj, prop_nameW, 0, &name, NULL, NULL );
     if (hr != S_OK) return hr;
 
-    hr = create_signature( class_serviceW, method_pauseserviceW, PARAM_OUT, &sig );
+    hr = create_signature( class_serviceW, method_pauseserviceW, PARAM_OUT, NULL, &sig );
     if (hr != S_OK)
     {
         VariantClear( &name );
@@ -132,7 +132,7 @@ HRESULT service_resume_service( IWbemClassObject *obj, IWbemClassObject *in, IWb
     hr = IWbemClassObject_Get( obj, prop_nameW, 0, &name, NULL, NULL );
     if (hr != S_OK) return hr;
 
-    hr = create_signature( class_serviceW, method_resumeserviceW, PARAM_OUT, &sig );
+    hr = create_signature( class_serviceW, method_resumeserviceW, PARAM_OUT, NULL, &sig );
     if (hr != S_OK)
     {
         VariantClear( &name );
@@ -201,7 +201,7 @@ HRESULT service_start_service( IWbemClassObject *obj, IWbemClassObject *in, IWbe
     hr = IWbemClassObject_Get( obj, prop_nameW, 0, &name, NULL, NULL );
     if (hr != S_OK) return hr;
 
-    hr = create_signature( class_serviceW, method_startserviceW, PARAM_OUT, &sig );
+    hr = create_signature( class_serviceW, method_startserviceW, PARAM_OUT, NULL, &sig );
     if (hr != S_OK)
     {
         VariantClear( &name );
@@ -246,7 +246,7 @@ HRESULT service_stop_service( IWbemClassObject *obj, IWbemClassObject *in, IWbem
     hr = IWbemClassObject_Get( obj, prop_nameW, 0, &name, NULL, NULL );
     if (hr != S_OK) return hr;
 
-    hr = create_signature( class_serviceW, method_stopserviceW, PARAM_OUT, &sig );
+    hr = create_signature( class_serviceW, method_stopserviceW, PARAM_OUT, NULL, &sig );
     if (hr != S_OK)
     {
         VariantClear( &name );

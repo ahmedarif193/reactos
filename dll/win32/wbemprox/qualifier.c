@@ -131,7 +131,7 @@ static HRESULT create_qualifier_enum( const WCHAR *class, const WCHAR *member, c
         swprintf( query, fmt3W, class );
     }
 
-    hr = exec_query( query, iter );
+    hr = exec_query( query, NULL, iter );
     heap_free( query );
     return hr;
 }
@@ -152,7 +152,7 @@ static HRESULT get_qualifier_value( const WCHAR *class, const WCHAR *member, con
     hr = create_qualifier_enum( class, member, name, &iter );
     if (FAILED( hr )) return hr;
 
-    hr = create_class_object( NULL, iter, 0, NULL, &obj );
+    hr = create_class_object( NULL, iter, 0, NULL, NULL, &obj );
     IEnumWbemClassObject_Release( iter );
     if (FAILED( hr )) return hr;
 
@@ -241,7 +241,7 @@ static HRESULT WINAPI qualifier_set_GetNames(
     hr = create_qualifier_enum( set->class, set->member, NULL, &iter );
     if (FAILED( hr )) return hr;
 
-    hr = create_class_object( NULL, iter, 0, NULL, &obj );
+    hr = create_class_object( NULL, iter, 0, NULL, NULL, &obj );
     IEnumWbemClassObject_Release( iter );
     if (FAILED( hr )) return hr;
 

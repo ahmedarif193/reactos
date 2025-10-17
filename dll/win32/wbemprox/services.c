@@ -19,6 +19,7 @@
 #define COBJMACROS
 
 #include <stdarg.h>
+#include <string.h>
 #ifdef __REACTOS__
 #include <wchar.h>
 #endif
@@ -27,20 +28,256 @@
 #include "winbase.h"
 #include "objbase.h"
 #include "wbemcli.h"
+#include "rpcdce.h"
+#include "sspi.h"
 
 #include "wine/debug.h"
 #include "wbemprox_private.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(wbemprox);
 
-struct client_security
-{
-    IClientSecurity IClientSecurity_iface;
-};
-
 static inline struct client_security *impl_from_IClientSecurity( IClientSecurity *iface )
 {
     return CONTAINING_RECORD( iface, struct client_security, IClientSecurity_iface );
+}
+
+static WCHAR *duplicate_server_principal_name( const WCHAR *src )
+{
+    size_t len;
+    WCHAR *dst;
+
+    if (!src) return NULL;
+    len = lstrlenW( src );
+    dst = CoTaskMemAlloc( (len + 1) * sizeof(WCHAR) );
+    if (!dst) return NULL;
+    memcpy( dst, src, (len + 1) * sizeof(WCHAR) );
+    return dst;
+}
+
+static void free_auth_identity( void *identity )
+{
+    ULONG flags;
+
+    if (!identity) return;
+
+    flags = ((SEC_WINNT_AUTH_IDENTITY_W *)identity)->Flags;
+    if (flags == SEC_WINNT_AUTH_IDENTITY_UNICODE)
+    {
+        SEC_WINNT_AUTH_IDENTITY_W *id = identity;
+
+        if (id->User) CoTaskMemFree( id->User );
+        if (id->Domain) CoTaskMemFree( id->Domain );
+        if (id->Password) CoTaskMemFree( id->Password );
+        CoTaskMemFree( id );
+    }
+    else if (flags == SEC_WINNT_AUTH_IDENTITY_ANSI)
+    {
+        SEC_WINNT_AUTH_IDENTITY_A *id = identity;
+
+        if (id->User) CoTaskMemFree( id->User );
+        if (id->Domain) CoTaskMemFree( id->Domain );
+        if (id->Password) CoTaskMemFree( id->Password );
+        CoTaskMemFree( id );
+    }
+    else
+    {
+        CoTaskMemFree( identity );
+    }
+}
+
+static HRESULT copy_auth_identity( void **dst, const void *src )
+{
+    ULONG flags;
+
+    *dst = NULL;
+    if (!src) return S_OK;
+
+    flags = ((const SEC_WINNT_AUTH_IDENTITY_W *)src)->Flags;
+    if (flags == SEC_WINNT_AUTH_IDENTITY_UNICODE)
+    {
+        const SEC_WINNT_AUTH_IDENTITY_W *srcW = src;
+        SEC_WINNT_AUTH_IDENTITY_W *dstW;
+
+        dstW = CoTaskMemAlloc( sizeof(*dstW) );
+        if (!dstW) return E_OUTOFMEMORY;
+        memset( dstW, 0, sizeof(*dstW) );
+        dstW->Flags = srcW->Flags;
+
+        if (srcW->User && srcW->UserLength)
+        {
+            dstW->User = CoTaskMemAlloc( srcW->UserLength * sizeof(WCHAR) );
+            if (!dstW->User)
+            {
+                free_auth_identity( dstW );
+                return E_OUTOFMEMORY;
+            }
+            memcpy( dstW->User, srcW->User, srcW->UserLength * sizeof(WCHAR) );
+        }
+        dstW->UserLength = srcW->UserLength;
+
+        if (srcW->Domain && srcW->DomainLength)
+        {
+            dstW->Domain = CoTaskMemAlloc( srcW->DomainLength * sizeof(WCHAR) );
+            if (!dstW->Domain)
+            {
+                free_auth_identity( dstW );
+                return E_OUTOFMEMORY;
+            }
+            memcpy( dstW->Domain, srcW->Domain, srcW->DomainLength * sizeof(WCHAR) );
+        }
+        dstW->DomainLength = srcW->DomainLength;
+
+        if (srcW->Password && srcW->PasswordLength)
+        {
+            dstW->Password = CoTaskMemAlloc( srcW->PasswordLength * sizeof(WCHAR) );
+            if (!dstW->Password)
+            {
+                free_auth_identity( dstW );
+                return E_OUTOFMEMORY;
+            }
+            memcpy( dstW->Password, srcW->Password, srcW->PasswordLength * sizeof(WCHAR) );
+        }
+        dstW->PasswordLength = srcW->PasswordLength;
+
+        *dst = dstW;
+        return S_OK;
+    }
+    else if (flags == SEC_WINNT_AUTH_IDENTITY_ANSI)
+    {
+        const SEC_WINNT_AUTH_IDENTITY_A *srcA = src;
+        SEC_WINNT_AUTH_IDENTITY_A *dstA;
+
+        dstA = CoTaskMemAlloc( sizeof(*dstA) );
+        if (!dstA) return E_OUTOFMEMORY;
+        memset( dstA, 0, sizeof(*dstA) );
+        dstA->Flags = srcA->Flags;
+
+        if (srcA->User && srcA->UserLength)
+        {
+            dstA->User = CoTaskMemAlloc( srcA->UserLength * sizeof(CHAR) );
+            if (!dstA->User)
+            {
+                free_auth_identity( dstA );
+                return E_OUTOFMEMORY;
+            }
+            memcpy( dstA->User, srcA->User, srcA->UserLength * sizeof(CHAR) );
+        }
+        dstA->UserLength = srcA->UserLength;
+
+        if (srcA->Domain && srcA->DomainLength)
+        {
+            dstA->Domain = CoTaskMemAlloc( srcA->DomainLength * sizeof(CHAR) );
+            if (!dstA->Domain)
+            {
+                free_auth_identity( dstA );
+                return E_OUTOFMEMORY;
+            }
+            memcpy( dstA->Domain, srcA->Domain, srcA->DomainLength * sizeof(CHAR) );
+        }
+        dstA->DomainLength = srcA->DomainLength;
+
+        if (srcA->Password && srcA->PasswordLength)
+        {
+            dstA->Password = CoTaskMemAlloc( srcA->PasswordLength * sizeof(CHAR) );
+            if (!dstA->Password)
+            {
+                free_auth_identity( dstA );
+                return E_OUTOFMEMORY;
+            }
+            memcpy( dstA->Password, srcA->Password, srcA->PasswordLength * sizeof(CHAR) );
+        }
+        dstA->PasswordLength = srcA->PasswordLength;
+
+        *dst = dstA;
+        return S_OK;
+    }
+
+    WARN( "unsupported auth identity flags %#lx\n", flags );
+    return E_INVALIDARG;
+}
+
+static const IClientSecurityVtbl client_security_vtbl;
+
+HRESULT client_security_init( struct client_security *security, IUnknown *outer,
+                              const struct client_security *template_security )
+{
+    HRESULT hr = S_OK;
+
+    security->IClientSecurity_iface.lpVtbl = &client_security_vtbl;
+    security->outer = outer;
+    security->server_princ_name = NULL;
+    security->auth_identity = NULL;
+
+    InitializeCriticalSection( &security->cs );
+    security->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": wbemprox_client_security.cs");
+
+    if (template_security)
+    {
+        struct client_security *parent = (struct client_security *)template_security;
+        WCHAR *princ_copy = NULL;
+        void *identity_copy = NULL;
+
+        EnterCriticalSection( &parent->cs );
+        security->authn_svc = parent->authn_svc;
+        security->authz_svc = parent->authz_svc;
+        security->authn_level = parent->authn_level;
+        security->imp_level = parent->imp_level;
+        security->capabilities = parent->capabilities;
+
+        if (parent->server_princ_name)
+        {
+            princ_copy = duplicate_server_principal_name( parent->server_princ_name );
+            if (!princ_copy)
+            {
+                LeaveCriticalSection( &parent->cs );
+                hr = E_OUTOFMEMORY;
+                goto fail;
+            }
+        }
+
+        hr = copy_auth_identity( &identity_copy, parent->auth_identity );
+        LeaveCriticalSection( &parent->cs );
+        if (FAILED( hr ))
+        {
+            if (princ_copy) CoTaskMemFree( princ_copy );
+            goto fail;
+        }
+
+        security->server_princ_name = princ_copy;
+        security->auth_identity = identity_copy;
+    }
+    else
+    {
+        security->authn_svc = RPC_C_AUTHN_DEFAULT;
+        security->authz_svc = RPC_C_AUTHZ_DEFAULT;
+        security->authn_level = RPC_C_AUTHN_LEVEL_DEFAULT;
+        security->imp_level = RPC_C_IMP_LEVEL_IMPERSONATE;
+        security->capabilities = EOAC_NONE;
+    }
+
+    return hr;
+
+fail:
+    client_security_cleanup( security );
+    return hr;
+}
+
+void client_security_cleanup( struct client_security *security )
+{
+    if (!security) return;
+
+    if (security->server_princ_name)
+    {
+        CoTaskMemFree( security->server_princ_name );
+        security->server_princ_name = NULL;
+    }
+    if (security->auth_identity)
+    {
+        free_auth_identity( security->auth_identity );
+        security->auth_identity = NULL;
+    }
+    DeleteCriticalSection( &security->cs );
+    security->outer = NULL;
 }
 
 static HRESULT WINAPI client_security_QueryInterface(
@@ -52,32 +289,29 @@ static HRESULT WINAPI client_security_QueryInterface(
 
     TRACE("%p %s %p\n", cs, debugstr_guid( riid ), ppvObject );
 
-    if ( IsEqualGUID( riid, &IID_IClientSecurity ) ||
-         IsEqualGUID( riid, &IID_IUnknown ) )
+    if (IsEqualGUID( riid, &IID_IClientSecurity ) ||
+        IsEqualGUID( riid, &IID_IUnknown ))
     {
-        *ppvObject = cs;
+        *ppvObject = &cs->IClientSecurity_iface;
+        IClientSecurity_AddRef( iface );
+        return S_OK;
     }
-    else
-    {
-        FIXME("interface %s not implemented\n", debugstr_guid(riid));
-        return E_NOINTERFACE;
-    }
-    IClientSecurity_AddRef( iface );
-    return S_OK;
+
+    WARN("interface %s not supported\n", debugstr_guid( riid ));
+    *ppvObject = NULL;
+    return E_NOINTERFACE;
 }
 
-static ULONG WINAPI client_security_AddRef(
-    IClientSecurity *iface )
+static ULONG WINAPI client_security_AddRef( IClientSecurity *iface )
 {
-    FIXME("%p\n", iface);
-    return 2;
+    struct client_security *cs = impl_from_IClientSecurity( iface );
+    return IUnknown_AddRef( cs->outer );
 }
 
-static ULONG WINAPI client_security_Release(
-    IClientSecurity *iface )
+static ULONG WINAPI client_security_Release( IClientSecurity *iface )
 {
-    FIXME("%p\n", iface);
-    return 1;
+    struct client_security *cs = impl_from_IClientSecurity( iface );
+    return IUnknown_Release( cs->outer );
 }
 
 static HRESULT WINAPI client_security_QueryBlanket(
@@ -91,8 +325,57 @@ static HRESULT WINAPI client_security_QueryBlanket(
     void **pAuthInfo,
     DWORD *pCapabilities )
 {
-    FIXME("\n");
-    return WBEM_E_FAILED;
+    struct client_security *cs = impl_from_IClientSecurity( iface );
+    WCHAR *name_copy = NULL;
+    void *identity_copy = NULL;
+    HRESULT hr = S_OK;
+
+    EnterCriticalSection( &cs->cs );
+
+    if (pAuthnSvc) *pAuthnSvc = cs->authn_svc;
+    if (pAuthzSvc) *pAuthzSvc = cs->authz_svc;
+    if (pAuthnLevel) *pAuthnLevel = cs->authn_level;
+    if (pImpLevel) *pImpLevel = cs->imp_level;
+    if (pCapabilities) *pCapabilities = cs->capabilities;
+
+    if (pServerPrincName && cs->server_princ_name)
+    {
+        name_copy = duplicate_server_principal_name( cs->server_princ_name );
+        if (!name_copy)
+        {
+            hr = E_OUTOFMEMORY;
+            goto done;
+        }
+    }
+
+    if (pAuthInfo)
+    {
+        hr = copy_auth_identity( &identity_copy, cs->auth_identity );
+        if (FAILED( hr ))
+            goto done;
+    }
+
+done:
+    LeaveCriticalSection( &cs->cs );
+
+    if (FAILED( hr ))
+    {
+        if (name_copy) CoTaskMemFree( name_copy );
+        if (identity_copy) free_auth_identity( identity_copy );
+        return hr;
+    }
+
+    if (pServerPrincName)
+        *pServerPrincName = name_copy;
+    else if (name_copy)
+        CoTaskMemFree( name_copy );
+
+    if (pAuthInfo)
+        *pAuthInfo = identity_copy;
+    else if (identity_copy)
+        free_auth_identity( identity_copy );
+
+    return WBEM_NO_ERROR;
 }
 
 static HRESULT WINAPI client_security_SetBlanket(
@@ -106,12 +389,48 @@ static HRESULT WINAPI client_security_SetBlanket(
     void *pAuthInfo,
     DWORD Capabilities )
 {
-    static const OLECHAR defaultW[] =
-        {'<','C','O','L','E','_','D','E','F','A','U','L','T','_','P','R','I','N','C','I','P','A','L','>',0};
-    const OLECHAR *princname = (pServerPrincName == COLE_DEFAULT_PRINCIPAL) ? defaultW : pServerPrincName;
+    struct client_security *cs = impl_from_IClientSecurity( iface );
+    WCHAR *name_copy = NULL;
+    void *identity_copy = NULL;
+    HRESULT hr;
 
-    FIXME("%p, %p, %u, %u, %s, %u, %u, %p, 0x%08x\n", iface, pProxy, AuthnSvc, AuthzSvc,
-          debugstr_w(princname), AuthnLevel, ImpLevel, pAuthInfo, Capabilities);
+    if (pServerPrincName && pServerPrincName != COLE_DEFAULT_PRINCIPAL)
+    {
+        name_copy = duplicate_server_principal_name( pServerPrincName );
+        if (!name_copy) return E_OUTOFMEMORY;
+    }
+
+    hr = copy_auth_identity( &identity_copy, pAuthInfo );
+    if (FAILED( hr ))
+    {
+        if (name_copy) CoTaskMemFree( name_copy );
+        return hr;
+    }
+
+    EnterCriticalSection( &cs->cs );
+
+    if (cs->server_princ_name)
+        CoTaskMemFree( cs->server_princ_name );
+    if (cs->auth_identity)
+        free_auth_identity( cs->auth_identity );
+
+    cs->server_princ_name = (pServerPrincName == COLE_DEFAULT_PRINCIPAL) ? NULL : name_copy;
+    if (cs->server_princ_name) name_copy = NULL;
+
+    cs->auth_identity = identity_copy;
+    identity_copy = NULL;
+
+    cs->authn_svc = AuthnSvc;
+    cs->authz_svc = AuthzSvc;
+    cs->authn_level = AuthnLevel;
+    cs->imp_level = ImpLevel;
+    cs->capabilities = Capabilities;
+
+    LeaveCriticalSection( &cs->cs );
+
+    if (name_copy) CoTaskMemFree( name_copy );
+    if (identity_copy) free_auth_identity( identity_copy );
+
     return WBEM_NO_ERROR;
 }
 
@@ -120,8 +439,12 @@ static HRESULT WINAPI client_security_CopyProxy(
     IUnknown *pProxy,
     IUnknown **ppCopy )
 {
-    FIXME("\n");
-    return WBEM_E_FAILED;
+    if (!ppCopy) return E_POINTER;
+    if (!pProxy) return E_INVALIDARG;
+
+    *ppCopy = pProxy;
+    IUnknown_AddRef( pProxy );
+    return S_OK;
 }
 
 static const IClientSecurityVtbl client_security_vtbl =
@@ -133,8 +456,6 @@ static const IClientSecurityVtbl client_security_vtbl =
     client_security_SetBlanket,
     client_security_CopyProxy
 };
-
-IClientSecurity client_security = { &client_security_vtbl };
 
 struct async_header
 {
@@ -148,6 +469,7 @@ struct async_query
 {
     struct async_header hdr;
     WCHAR *str;
+    struct client_security *security;
 };
 
 static void free_async( struct async_header *async )
@@ -198,6 +520,7 @@ struct wbem_services
     CRITICAL_SECTION cs;
     WCHAR *namespace;
     struct async_header *async;
+    struct client_security security;
 };
 
 static inline struct wbem_services *impl_from_IWbemServices( IWbemServices *iface )
@@ -231,6 +554,7 @@ static ULONG WINAPI wbem_services_Release(
         }
         ws->cs.DebugInfo->Spare[0] = 0;
         DeleteCriticalSection( &ws->cs );
+        client_security_cleanup( &ws->security );
         heap_free( ws->namespace );
         heap_free( ws );
     }
@@ -250,19 +574,18 @@ static HRESULT WINAPI wbem_services_QueryInterface(
          IsEqualGUID( riid, &IID_IUnknown ) )
     {
         *ppvObject = ws;
-    }
-    else if ( IsEqualGUID( riid, &IID_IClientSecurity ) )
-    {
-        *ppvObject = &client_security;
+        IWbemServices_AddRef( iface );
         return S_OK;
     }
-    else
+    if ( IsEqualGUID( riid, &IID_IClientSecurity ) )
     {
-        FIXME("interface %s not implemented\n", debugstr_guid(riid));
-        return E_NOINTERFACE;
+        *ppvObject = &ws->security.IClientSecurity_iface;
+        IClientSecurity_AddRef( &ws->security.IClientSecurity_iface );
+        return S_OK;
     }
-    IWbemServices_AddRef( iface );
-    return S_OK;
+
+    FIXME("interface %s not implemented\n", debugstr_guid(riid));
+    return E_NOINTERFACE;
 }
 
 static HRESULT WINAPI wbem_services_OpenNamespace(
@@ -444,18 +767,20 @@ WCHAR *query_from_path( const struct path *path )
     return query;
 }
 
-static HRESULT create_instance_enum( const struct path *path, IEnumWbemClassObject **iter )
+static HRESULT create_instance_enum( const struct path *path, struct client_security *parent_security,
+                                     IEnumWbemClassObject **iter )
 {
     WCHAR *query;
     HRESULT hr;
 
     if (!(query = query_from_path( path ))) return E_OUTOFMEMORY;
-    hr = exec_query( query, iter );
+    hr = exec_query( query, parent_security, iter );
     heap_free( query );
     return hr;
 }
 
-HRESULT get_object( const WCHAR *object_path, IWbemClassObject **obj )
+HRESULT get_object( const WCHAR *object_path, struct client_security *parent_security,
+                    IWbemClassObject **obj )
 {
     IEnumWbemClassObject *iter;
     struct path *path;
@@ -464,13 +789,13 @@ HRESULT get_object( const WCHAR *object_path, IWbemClassObject **obj )
     hr = parse_path( object_path, &path );
     if (hr != S_OK) return hr;
 
-    hr = create_instance_enum( path, &iter );
+    hr = create_instance_enum( path, parent_security, &iter );
     if (hr != S_OK)
     {
         free_path( path );
         return hr;
     }
-    hr = create_class_object( path->class, iter, 0, NULL, obj );
+    hr = create_class_object( path->class, iter, 0, NULL, parent_security, obj );
     IEnumWbemClassObject_Release( iter );
     free_path( path );
     return hr;
@@ -484,15 +809,17 @@ static HRESULT WINAPI wbem_services_GetObject(
     IWbemClassObject **ppObject,
     IWbemCallResult **ppCallResult )
 {
+    struct wbem_services *services = impl_from_IWbemServices( iface );
+
     TRACE("%p, %s, 0x%08x, %p, %p, %p\n", iface, debugstr_w(strObjectPath), lFlags,
           pCtx, ppObject, ppCallResult);
 
     if (lFlags) FIXME("unsupported flags 0x%08x\n", lFlags);
 
     if (!strObjectPath || !strObjectPath[0])
-        return create_class_object( NULL, NULL, 0, NULL, ppObject );
+        return create_class_object( NULL, NULL, 0, NULL, &services->security, ppObject );
 
-    return get_object( strObjectPath, ppObject );
+    return get_object( strObjectPath, &services->security, ppObject );
 }
 
 static HRESULT WINAPI wbem_services_GetObjectAsync(
@@ -623,17 +950,18 @@ static HRESULT WINAPI wbem_services_CreateInstanceEnum(
     IWbemContext *pCtx,
     IEnumWbemClassObject **ppEnum )
 {
+    struct wbem_services *services = impl_from_IWbemServices( iface );
     struct path *path;
     HRESULT hr;
 
-    TRACE("%p, %s, 0%08x, %p, %p\n", iface, debugstr_w(strClass), lFlags, pCtx, ppEnum);
+    TRACE("%p, %s, 0x%08x, %p, %p\n", iface, debugstr_w(strClass), lFlags, pCtx, ppEnum);
 
     if (lFlags) FIXME("unsupported flags 0x%08x\n", lFlags);
 
     hr = parse_path( strClass, &path );
     if (hr != S_OK) return hr;
 
-    hr = create_instance_enum( path, ppEnum );
+    hr = create_instance_enum( path, &services->security, ppEnum );
     free_path( path );
     return hr;
 }
@@ -658,13 +986,14 @@ static HRESULT WINAPI wbem_services_ExecQuery(
     IEnumWbemClassObject **ppEnum )
 {
     static const WCHAR wqlW[] = {'W','Q','L',0};
+    struct wbem_services *ws = impl_from_IWbemServices( iface );
 
     TRACE("%p, %s, %s, 0x%08x, %p, %p\n", iface, debugstr_w(strQueryLanguage),
           debugstr_w(strQuery), lFlags, pCtx, ppEnum);
 
     if (!strQueryLanguage || !strQuery || !strQuery[0]) return WBEM_E_INVALID_PARAMETER;
     if (wcsicmp( strQueryLanguage, wqlW )) return WBEM_E_INVALID_QUERY_TYPE;
-    return exec_query( strQuery, ppEnum );
+    return exec_query( strQuery, &ws->security, ppEnum );
 }
 
 static void async_exec_query( struct async_header *hdr )
@@ -675,7 +1004,7 @@ static void async_exec_query( struct async_header *hdr )
     ULONG count;
     HRESULT hr;
 
-    hr = exec_query( query->str, &result );
+    hr = exec_query( query->str, query->security, &result );
     if (hr == S_OK)
     {
         for (;;)
@@ -723,6 +1052,7 @@ static HRESULT WINAPI wbem_services_ExecQueryAsync(
     }
     if (!(query = heap_alloc_zero( sizeof(*query) ))) goto done;
     async = (struct async_header *)query;
+    query->security = &services->security;
 
     if (!(init_async( async, sink, async_exec_query )))
     {
@@ -835,6 +1165,7 @@ static HRESULT WINAPI wbem_services_ExecMethod(
     class_method *func;
     struct table *table;
     HRESULT hr;
+    struct wbem_services *services = impl_from_IWbemServices( iface );
 
     TRACE("%p, %s, %s, %08x, %p, %p, %p, %p\n", iface, debugstr_w(strObjectPath),
           debugstr_w(strMethodName), lFlags, pCtx, pInParams, ppOutParams, ppCallResult);
@@ -858,11 +1189,11 @@ static HRESULT WINAPI wbem_services_ExecMethod(
     hr = execute_view( query->view );
     if (hr != S_OK) goto done;
 
-    hr = EnumWbemClassObject_create( query, (void **)&result );
+    hr = EnumWbemClassObject_create( query, &services->security, (void **)&result );
     if (hr != S_OK) goto done;
 
     table = get_view_table( query->view, 0 );
-    hr = create_class_object( table->name, result, 0, NULL, &obj );
+    hr = create_class_object( table->name, result, 0, NULL, &services->security, &obj );
     if (hr != S_OK) goto done;
 
     hr = get_method( table, strMethodName, &func );
@@ -925,6 +1256,7 @@ static const IWbemServicesVtbl wbem_services_vtbl =
 HRESULT WbemServices_create( const WCHAR *namespace, LPVOID *ppObj )
 {
     struct wbem_services *ws;
+    HRESULT hr;
 
     TRACE("(%p)\n", ppObj);
 
@@ -934,9 +1266,24 @@ HRESULT WbemServices_create( const WCHAR *namespace, LPVOID *ppObj )
     ws->IWbemServices_iface.lpVtbl = &wbem_services_vtbl;
     ws->refs      = 1;
     ws->namespace = heap_strdupW( namespace );
+    if (!ws->namespace)
+    {
+        heap_free( ws );
+        return E_OUTOFMEMORY;
+    }
     ws->async     = NULL;
     InitializeCriticalSection( &ws->cs );
     ws->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": wbemprox_services.cs");
+
+    hr = client_security_init( &ws->security, (IUnknown *)&ws->IWbemServices_iface, NULL );
+    if (FAILED( hr ))
+    {
+        ws->cs.DebugInfo->Spare[0] = 0;
+        DeleteCriticalSection( &ws->cs );
+        heap_free( ws->namespace );
+        heap_free( ws );
+        return hr;
+    }
 
     *ppObj = &ws->IWbemServices_iface;
 

@@ -109,7 +109,7 @@ HRESULT reg_create_key( IWbemClassObject *obj, IWbemClassObject *in, IWbemClassO
     hr = IWbemClassObject_Get( in, param_subkeynameW, 0, &subkey, NULL, NULL );
     if (hr != S_OK) return hr;
 
-    hr = create_signature( class_stdregprovW, method_createkeyW, PARAM_OUT, &sig );
+    hr = create_signature( class_stdregprovW, method_createkeyW, PARAM_OUT, NULL, &sig );
     if (hr != S_OK)
     {
         VariantClear( &subkey );
@@ -208,7 +208,7 @@ HRESULT reg_enum_key( IWbemClassObject *obj, IWbemClassObject *in, IWbemClassObj
     hr = IWbemClassObject_Get( in, param_subkeynameW, 0, &subkey, NULL, NULL );
     if (hr != S_OK) return hr;
 
-    hr = create_signature( class_stdregprovW, method_enumkeyW, PARAM_OUT, &sig );
+    hr = create_signature( class_stdregprovW, method_enumkeyW, PARAM_OUT, NULL, &sig );
     if (hr != S_OK)
     {
         VariantClear( &subkey );
@@ -318,7 +318,7 @@ HRESULT reg_enum_values( IWbemClassObject *obj, IWbemClassObject *in, IWbemClass
     hr = IWbemClassObject_Get( in, param_subkeynameW, 0, &subkey, NULL, NULL );
     if (hr != S_OK) return hr;
 
-    hr = create_signature( class_stdregprovW, method_enumvaluesW, PARAM_OUT, &sig );
+    hr = create_signature( class_stdregprovW, method_enumvaluesW, PARAM_OUT, NULL, &sig );
     if (hr != S_OK)
     {
         VariantClear( &subkey );
@@ -403,7 +403,7 @@ HRESULT reg_get_stringvalue( IWbemClassObject *obj, IWbemClassObject *in, IWbemC
     hr = IWbemClassObject_Get( in, param_valuenameW, 0, &name, NULL, NULL );
     if (hr != S_OK) return hr;
 
-    hr = create_signature( class_stdregprovW, method_getstringvalueW, PARAM_OUT, &sig );
+    hr = create_signature( class_stdregprovW, method_getstringvalueW, PARAM_OUT, NULL, &sig );
     if (hr != S_OK)
     {
         VariantClear( &name );

@@ -21,12 +21,30 @@
 #include "wine/debug.h"
 #include "wine/heap.h"
 #include "wine/list.h"
+#include "wbemcli.h"
 #ifdef __REACTOS__
 #include <winnls.h>
 #endif
 
-extern IClientSecurity client_security DECLSPEC_HIDDEN;
 extern struct list *table_list DECLSPEC_HIDDEN;
+
+struct client_security
+{
+    IClientSecurity IClientSecurity_iface;
+    IUnknown *outer;
+    CRITICAL_SECTION cs;
+    WCHAR *server_princ_name;
+    void *auth_identity;
+    DWORD authn_svc;
+    DWORD authz_svc;
+    DWORD authn_level;
+    DWORD imp_level;
+    DWORD capabilities;
+};
+
+HRESULT client_security_init( struct client_security *security, IUnknown *outer,
+                              const struct client_security *template_security ) DECLSPEC_HIDDEN;
+void client_security_cleanup( struct client_security *security ) DECLSPEC_HIDDEN;
 
 enum param_direction
 {
@@ -200,7 +218,7 @@ struct query *create_query(void) DECLSPEC_HIDDEN;
 void free_query( struct query * ) DECLSPEC_HIDDEN;
 struct query *addref_query( struct query * ) DECLSPEC_HIDDEN;
 void release_query( struct query *query ) DECLSPEC_HIDDEN;
-HRESULT exec_query( const WCHAR *, IEnumWbemClassObject ** ) DECLSPEC_HIDDEN;
+HRESULT exec_query( const WCHAR *, struct client_security *, IEnumWbemClassObject ** ) DECLSPEC_HIDDEN;
 HRESULT parse_query( const WCHAR *, struct view **, struct list * ) DECLSPEC_HIDDEN;
 HRESULT create_view( enum view_type, const WCHAR *, const struct keyword *, const WCHAR *, const struct property *,
                      const struct expr *, struct view ** ) DECLSPEC_HIDDEN;
@@ -234,17 +252,17 @@ VARTYPE to_vartype( CIMTYPE ) DECLSPEC_HIDDEN;
 void destroy_array( struct array *, CIMTYPE ) DECLSPEC_HIDDEN;
 BOOL is_result_prop( const struct view *, const WCHAR * ) DECLSPEC_HIDDEN;
 HRESULT get_properties( const struct view *, UINT, LONG, SAFEARRAY ** ) DECLSPEC_HIDDEN;
-HRESULT get_object( const WCHAR *, IWbemClassObject ** ) DECLSPEC_HIDDEN;
+HRESULT get_object( const WCHAR *, struct client_security *, IWbemClassObject ** ) DECLSPEC_HIDDEN;
 BSTR get_method_name( const WCHAR *, UINT ) DECLSPEC_HIDDEN;
 void set_variant( VARTYPE, LONGLONG, void *, VARIANT * ) DECLSPEC_HIDDEN;
 HRESULT create_signature( const WCHAR *, const WCHAR *, enum param_direction,
-                          IWbemClassObject ** ) DECLSPEC_HIDDEN;
+                          struct client_security *, IWbemClassObject ** ) DECLSPEC_HIDDEN;
 
 HRESULT WbemLocator_create(LPVOID *) DECLSPEC_HIDDEN;
 HRESULT WbemServices_create(const WCHAR *, LPVOID *) DECLSPEC_HIDDEN;
 HRESULT create_class_object(const WCHAR *, IEnumWbemClassObject *, UINT,
-                            struct record *, IWbemClassObject **) DECLSPEC_HIDDEN;
-HRESULT EnumWbemClassObject_create(struct query *, LPVOID *) DECLSPEC_HIDDEN;
+                            struct record *, struct client_security *, IWbemClassObject **) DECLSPEC_HIDDEN;
+HRESULT EnumWbemClassObject_create(struct query *, struct client_security *, LPVOID *) DECLSPEC_HIDDEN;
 HRESULT WbemQualifierSet_create(const WCHAR *, const WCHAR *, LPVOID *) DECLSPEC_HIDDEN;
 
 HRESULT process_get_owner(IWbemClassObject *, IWbemClassObject *, IWbemClassObject **) DECLSPEC_HIDDEN;

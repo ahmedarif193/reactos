@@ -39,6 +39,7 @@ struct enum_class_object
     LONG refs;
     struct query *query;
     UINT index;
+    struct client_security security;
 };
 
 static inline struct enum_class_object *impl_from_IEnumWbemClassObject(
@@ -63,6 +64,7 @@ static ULONG WINAPI enum_class_object_Release(
     {
         TRACE("destroying %p\n", ec);
         release_query( ec->query );
+        client_security_cleanup( &ec->security );
         heap_free( ec );
     }
     return refs;
@@ -81,19 +83,19 @@ static HRESULT WINAPI enum_class_object_QueryInterface(
          IsEqualGUID( riid, &IID_IUnknown ) )
     {
         *ppvObject = ec;
-    }
-    else if ( IsEqualGUID( riid, &IID_IClientSecurity ) )
-    {
-        *ppvObject = &client_security;
+        IEnumWbemClassObject_AddRef( iface );
         return S_OK;
     }
-    else
+    if ( IsEqualGUID( riid, &IID_IClientSecurity ) )
     {
-        FIXME("interface %s not implemented\n", debugstr_guid(riid));
-        return E_NOINTERFACE;
+        *ppvObject = &ec->security.IClientSecurity_iface;
+        IClientSecurity_AddRef( &ec->security.IClientSecurity_iface );
+        return S_OK;
     }
-    IEnumWbemClassObject_AddRef( iface );
-    return S_OK;
+
+    FIXME("interface %s not implemented\n", debugstr_guid(riid));
+    *ppvObject = NULL;
+    return E_NOINTERFACE;
 }
 
 static HRESULT WINAPI enum_class_object_Reset(
@@ -130,7 +132,7 @@ static HRESULT WINAPI enum_class_object_Next(
     if (ec->index >= view->result_count) return WBEM_S_FALSE;
 
     table = get_view_table( view, ec->index );
-    hr = create_class_object( table->name, iface, ec->index, NULL, apObjects );
+    hr = create_class_object( table->name, iface, ec->index, NULL, &ec->security, apObjects );
     if (hr != S_OK) return hr;
 
     ec->index++;
@@ -157,7 +159,7 @@ static HRESULT WINAPI enum_class_object_Clone(
 
     TRACE("%p, %p\n", iface, ppEnum);
 
-    return EnumWbemClassObject_create( ec->query, (void **)ppEnum );
+    return EnumWbemClassObject_create( ec->query, &ec->security, (void **)ppEnum );
 }
 
 static HRESULT WINAPI enum_class_object_Skip(
@@ -196,9 +198,11 @@ static const IEnumWbemClassObjectVtbl enum_class_object_vtbl =
     enum_class_object_Skip
 };
 
-HRESULT EnumWbemClassObject_create( struct query *query, LPVOID *ppObj )
+HRESULT EnumWbemClassObject_create( struct query *query, struct client_security *parent_security,
+                                    LPVOID *ppObj )
 {
     struct enum_class_object *ec;
+    HRESULT hr;
 
     TRACE("%p\n", ppObj);
 
@@ -209,6 +213,14 @@ HRESULT EnumWbemClassObject_create( struct query *query, LPVOID *ppObj )
     ec->refs  = 1;
     ec->query = addref_query( query );
     ec->index = 0;
+
+    hr = client_security_init( &ec->security, (IUnknown *)&ec->IEnumWbemClassObject_iface, parent_security );
+    if (FAILED( hr ))
+    {
+        release_query( ec->query );
+        heap_free( ec );
+        return hr;
+    }
 
     *ppObj = &ec->IEnumWbemClassObject_iface;
 
@@ -271,6 +283,7 @@ struct class_object
 {
     IWbemClassObject IWbemClassObject_iface;
     LONG refs;
+    struct client_security security;
     WCHAR *name;
     IEnumWbemClassObject *iter;
     UINT index;
@@ -303,6 +316,7 @@ static ULONG WINAPI class_object_Release(
         if (co->iter) IEnumWbemClassObject_Release( co->iter );
         destroy_record( co->record );
         heap_free( co->name );
+        client_security_cleanup( &co->security );
         heap_free( co );
     }
     return refs;
@@ -321,19 +335,19 @@ static HRESULT WINAPI class_object_QueryInterface(
          IsEqualGUID( riid, &IID_IUnknown ) )
     {
         *ppvObject = co;
-    }
-    else if (IsEqualGUID( riid, &IID_IClientSecurity ))
-    {
-        *ppvObject = &client_security;
+        IWbemClassObject_AddRef( iface );
         return S_OK;
     }
-    else
+    if (IsEqualGUID( riid, &IID_IClientSecurity ))
     {
-        FIXME("interface %s not implemented\n", debugstr_guid(riid));
-        return E_NOINTERFACE;
+        *ppvObject = &co->security.IClientSecurity_iface;
+        IClientSecurity_AddRef( &co->security.IClientSecurity_iface );
+        return S_OK;
     }
-    IWbemClassObject_AddRef( iface );
-    return S_OK;
+
+    FIXME("interface %s not implemented\n", debugstr_guid(riid));
+    *ppvObject = NULL;
+    return E_NOINTERFACE;
 }
 
 static HRESULT WINAPI class_object_GetQualifierSet(
@@ -670,7 +684,7 @@ static HRESULT WINAPI class_object_SpawnInstance(
 
     if (!(record = create_record( table ))) return E_OUTOFMEMORY;
 
-    return create_class_object( co->name, NULL, 0, record, ppNewInstance );
+    return create_class_object( co->name, NULL, 0, record, &co->security, ppNewInstance );
 }
 
 static HRESULT WINAPI class_object_CompareTo(
@@ -817,6 +831,7 @@ static WCHAR *build_signature_table_name( const WCHAR *class, const WCHAR *metho
 }
 
 HRESULT create_signature( const WCHAR *class, const WCHAR *method, enum param_direction dir,
+                          struct client_security *parent_security,
                           IWbemClassObject **sig )
 {
     static const WCHAR selectW[] =
@@ -836,7 +851,7 @@ HRESULT create_signature( const WCHAR *class, const WCHAR *method, enum param_di
     if (!(query = heap_alloc( len * sizeof(WCHAR) ))) return E_OUTOFMEMORY;
     swprintf( query, selectW, class, method, dir >= 0 ? geW : leW );
 
-    hr = exec_query( query, &iter );
+    hr = exec_query( query, NULL, &iter );
     heap_free( query );
     if (hr != S_OK) return hr;
 
@@ -855,7 +870,7 @@ HRESULT create_signature( const WCHAR *class, const WCHAR *method, enum param_di
     hr = create_signature_table( iter, name );
     IEnumWbemClassObject_Release( iter );
     if (hr == S_OK)
-        hr = get_object( name, sig );
+        hr = get_object( name, parent_security, sig );
 
     heap_free( name );
     return hr;
@@ -874,10 +889,10 @@ static HRESULT WINAPI class_object_GetMethod(
 
     TRACE("%p, %s, %08x, %p, %p\n", iface, debugstr_w(wszName), lFlags, ppInSignature, ppOutSignature);
 
-    hr = create_signature( co->name, wszName, PARAM_IN, &in );
+    hr = create_signature( co->name, wszName, PARAM_IN, &co->security, &in );
     if (hr != S_OK) return hr;
 
-    hr = create_signature( co->name, wszName, PARAM_OUT, &out );
+    hr = create_signature( co->name, wszName, PARAM_OUT, &co->security, &out );
     if (hr == S_OK)
     {
         if (ppInSignature) *ppInSignature = in;
@@ -937,13 +952,13 @@ static HRESULT WINAPI class_object_NextMethod(
 
     if (!(method = get_method_name( co->name, co->index_method ))) return WBEM_S_NO_MORE_DATA;
 
-    hr = create_signature( co->name, method, PARAM_IN, ppInSignature );
+    hr = create_signature( co->name, method, PARAM_IN, &co->security, ppInSignature );
     if (hr != S_OK)
     {
         SysFreeString( method );
         return hr;
     }
-    hr = create_signature( co->name, method, PARAM_OUT, ppOutSignature );
+    hr = create_signature( co->name, method, PARAM_OUT, &co->security, ppOutSignature );
     if (hr != S_OK)
     {
         SysFreeString( method );
@@ -1019,9 +1034,11 @@ static const IWbemClassObjectVtbl class_object_vtbl =
 };
 
 HRESULT create_class_object( const WCHAR *name, IEnumWbemClassObject *iter, UINT index,
-                             struct record *record, IWbemClassObject **obj )
+                             struct record *record, struct client_security *parent_security,
+                             IWbemClassObject **obj )
 {
     struct class_object *co;
+    HRESULT hr;
 
     TRACE("%s, %p\n", debugstr_w(name), obj);
 
@@ -1030,9 +1047,19 @@ HRESULT create_class_object( const WCHAR *name, IEnumWbemClassObject *iter, UINT
 
     co->IWbemClassObject_iface.lpVtbl = &class_object_vtbl;
     co->refs  = 1;
-    if (!name) co->name = NULL;
+
+    hr = client_security_init( &co->security, (IUnknown *)&co->IWbemClassObject_iface, parent_security );
+    if (FAILED( hr ))
+    {
+        heap_free( co );
+        return hr;
+    }
+
+    if (!name)
+        co->name = NULL;
     else if (!(co->name = heap_strdupW( name )))
     {
+        client_security_cleanup( &co->security );
         heap_free( co );
         return E_OUTOFMEMORY;
     }

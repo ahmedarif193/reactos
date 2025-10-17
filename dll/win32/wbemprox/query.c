@@ -497,7 +497,7 @@ static HRESULT create_assoc_enum( const WCHAR *class, UINT class_len, IEnumWbemC
     HRESULT hr;
 
     if (!(query = build_assoc_query( class, class_len ))) return E_OUTOFMEMORY;
-    hr = exec_query( query, iter );
+    hr = exec_query( query, NULL, iter );
     heap_free( query );
     return hr;
 }
@@ -574,7 +574,7 @@ static HRESULT get_antecedent( const WCHAR *assocclass, const WCHAR *dependent, 
 
     if (!(fullpath = build_canonical_path( dependent ))) return E_OUTOFMEMORY;
     if (!(str = build_antecedent_query( assocclass, fullpath ))) goto done;
-    if ((hr = exec_query( str, &iter )) != S_OK) goto done;
+    if ((hr = exec_query( str, NULL, &iter )) != S_OK) goto done;
 
     IEnumWbemClassObject_Next( iter, WBEM_INFINITE, 1, &obj, &count );
     if (!count)
@@ -783,7 +783,8 @@ void release_query( struct query *query )
     if (!InterlockedDecrement( &query->refs )) free_query( query );
 }
 
-HRESULT exec_query( const WCHAR *str, IEnumWbemClassObject **result )
+HRESULT exec_query( const WCHAR *str, struct client_security *parent_security,
+                    IEnumWbemClassObject **result )
 {
     HRESULT hr;
     struct query *query;
@@ -794,7 +795,7 @@ HRESULT exec_query( const WCHAR *str, IEnumWbemClassObject **result )
     if (hr != S_OK) goto done;
     hr = execute_view( query->view );
     if (hr != S_OK) goto done;
-    hr = EnumWbemClassObject_create( query, (void **)result );
+    hr = EnumWbemClassObject_create( query, parent_security, (void **)result );
 
 done:
     release_query( query );
