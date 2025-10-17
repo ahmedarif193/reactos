@@ -16,6 +16,8 @@ endif()
 
 project(REACTOS)
 
+option(USE_NATIVE_MINGW_CRT "Link ReactOS user CRTs against the MinGW-w64 runtime instead of the in-tree implementation" OFF)
+
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_INCLUDE_DIRECTORIES_PROJECT_BEFORE ON)
 set(CMAKE_SHARED_LIBRARY_PREFIX "")
