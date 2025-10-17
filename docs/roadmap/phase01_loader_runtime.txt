@@ -1,0 +1,91 @@
+Phase 01 – Loader & Runtime Survival
+===================================
+Goal: eliminate the stubbed exports that crash MinGW/libstdc++-based binaries during
+CRT startup. ReactOS must provide real implementations for these kernel32 entry points
+so DLL_PROCESS_ATTACH completes without raising EXCEPTION_WINE_STUB.
+
+Functions to Implement
+----------------------
+1. CancelIoEx / CancelSynchronousIo
+   Why: libstdc++ calls CancelIoEx when cleaning up file descriptors; the current stub
+   raises 0x80000100 before user code runs.
+   How: wrap NtCancelIoFileEx/NtCancelIoFile and fall back to emulating behaviour when
+   overlapped == NULL. Synchronous version can call CancelIoEx and translate errors.
+
+2. CreateEventExA/W, CreateMutexExA/W, CreateWaitableTimerExA/W
+   Why: MinGW’s concurrency primitives use the *Ex flavour to request INITIAL_STATE and
+   security attributes. Present stubs abort the load.
+   How: delegate to NtCreateEvent/NtCreateMutant/NtCreateTimer with attribute flags
+   derived from dwFlags, then duplicate HANDLE semantics for ANSI entry points.
+
+3. InitializeProcThreadAttributeList / UpdateProcThreadAttribute /
+   DeleteProcThreadAttributeList / SetThreadErrorMode / GetThreadErrorMode
+   Why: the CRT builds process startup attribute lists for TLS, DEP and parent process
+   handles. The current stubs poison thread creation.
+   How: mirror Windows Vista data structures. Use RtlProcessReflection APIs or implement
+   minimal attribute storage; honour STARTUPINFOEX contract. Track per-thread error mode
+   in the PEB (see Wine implementation for reference).
+
+4. SetFileInformationByHandle / GetFileInformationByHandleEx / GetFileMUI* family
+   Why: C++ iostreams and filesystem utilities call SetFileInformationByHandle to manage
+   file size and rename actions; failure prevents STL file use.
+   How: already partially re-implemented in kernel32_vista – migrate Wine’s code or call
+   NtSetInformationFile/NtQueryInformationFile with appropriate FILE_* classes.
+
+5. GetProcessDEPPolicy / SetProcessDEPPolicy / FlushProcessWriteBuffers /
+   GetSystemDEPPolicy
+   Why: the runtime probes DEP settings during process initialization; the stubs return
+   default values and raise exceptions on access.
+   How: expose ntoskrnl’s DEP flags via KeFlushProcessWriteBuffers and the global DEP
+   policy stored by Mm. Maintain per-process cached policy.
+
+6. GetQueuedCompletionStatusEx / CreateIoCompletionPort Enhancements
+   Why: Win32 thread pools rely on GQCSEx for high-performance waits.
+   How: extend existing completion port implementation to support the multi-entry dequeue
+   parameters defined in Vista. Use IoRemoveIoCompletion for kernel interaction.
+
+7. MapViewOfFileExNuma / VirtualAllocExNuma / CreateFileMappingNuma*
+   Why: MinGW can request NUMA-aware memory when allocating TLS blocks; stubbed functions
+   break when the runtime asks for them.
+   How: extend MmAllocate* wrappers to honour preferred node. If NUMA not ready, accept
+   the call but ignore the preferred node (documented) while returning success.
+
+8. GetSystemDefaultLocaleName / NormalizeString / IsNormalizedString / IdnTo* /
+   GetStringScripts / VerifyScripts
+   Why: locale validation runs before user DLL initialisation; stubs raise exceptions.
+   How: reuse NLS tables from ntoskrnl or integrate ICU-lite routines; fall back to
+   existing ReactOS string normalization helpers until full coverage is ready.
+
+9. EnumResourceNamesExW/A / EnumResourceTypesExW/A / EnumResourceLanguagesExW/A
+   Why: shellbtrfs requests resource strings via the revived Ex APIs; stubs crash.
+   How: call existing EnumResourceNamesW/T types with additional filtering logic. Accept
+   dwFlags and language fallback parameters as per MSDN.
+
+10. FindFirstFileNameW / FindFirstFileNameTransactedW / FindFirstStreamTransactedW /
+    FindNextFileNameW / FindFirstFileTransactedW / GetFullPathNameTransactedW
+    Why: libstdc++’s filesystem::path uses stream enumeration and file-link queries to
+    implement canonical()/hardlink count.
+    How: forward to NtQueryDirectoryFile with FileIdBothDirectoryInformation and
+    FileStreamInformation; implement TxF variant in terms of handle opened with
+    CreateFileTransactedW (or fallback when TxF disabled).
+
+11. GetPhysicallyInstalledSystemMemory
+    Why: emitted during CRT diagnostics; the stub returns 0 and raises exception.
+    How: ask the memory manager for MmNumberOfPhysicalPages and convert to KB.
+
+Progress Snapshot (2025-10-17)
+------------------------------
+- Items 1–7 already landed in `kernel32_vista`; loader startup no longer trips stub exceptions.
+- Item 4: `GetFileMUIInfo`/`GetFileMUIPath` now return basic metadata and locate side-by-side `.mui` payloads; resource-type reporting still TODO.
+- Item 8: Locale normalization suite (`NormalizeString`/`IsNormalizedString`, `IdnTo*`, `GetStringScripts`/`VerifyScripts`) implemented; `GetFileMUI*` accounted above.
+- Item 9: `EnumResource*Ex` variants present – flags beyond locale-neutral still ignored.
+- Item 10: `FindFirstFileNameW`, `FindNextFileNameW`, `FindFirstFileNameTransactedW`, `FindFirstStreamTransactedW`, `FindFirstFileTransacted*`, and `GetFullPathNameTransacted*` now enumerate hardlinks and TxF shims (TxF handles still return `ERROR_NOT_SUPPORTED`).
+- Item 11: `GetPhysicallyInstalledSystemMemory` implemented wiring to `NtQuerySystemInformation`.
+
+Implementation Notes
+--------------------
+- Follow Wine’s kernel32_vista sources for reference but avoid importing their stub code
+  directly; ReactOS requires native functionality.
+- Add targeted winetest coverage (kernel32:pipe, locale, file tests) and an integration
+  smoke test that loads a MinGW-built DLL.
+- Update docs/vista_stub_exports.txt as each function graduates from the stub list.

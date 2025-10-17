@@ -1,0 +1,47 @@
+Phase 05 – Windows Error Reporting (WER) Compatibility
+======================================================
+Goal: implement the Windows Error Reporting (WER) APIs introduced in Vista so
+applications can register custom crash data and ReactOS can interoperate with modern
+error-handling frameworks.
+
+Key Functions
+-------------
+- RegisterApplicationRecoveryCallback / UnregisterApplicationRecoveryCallback
+- RegisterApplicationRestart / UnregisterApplicationRestart /
+  GetApplicationRestartSettings
+- ApplicationRecoveryInProgress / ApplicationRecoveryFinished
+- WerRegisterFile / WerUnregisterFile
+- WerRegisterMemoryBlock / WerUnregisterMemoryBlock
+- WerSetFlags / WerGetFlags
+- WerpInitiateRemoteRecovery / WerpCleanupMessageMapping /
+  WerpNotifyLoadStringResource / WerpNotifyLoadStringResourceEx /
+  WerpNotifyUseStringResource / WerpStringLookup
+
+Rationale
+---------
+- Many desktop applications use WER callbacks to auto-save data after crashes. Without
+  these, they fail to register recovery routines or assume WER is unavailable.
+- Implementing WER APIs lets ReactOS integrate crash reporting into a familiar workflow
+  and improves compatibility with Windows tools.
+
+Implementation Strategy
+-----------------------
+1. State Management: maintain per-process registration data (callback pointers, restart
+   command lines, registered files/memory). Store in a dedicated structure referenced from
+   the PEB or a global list protected by a critical section.
+2. Crash Handling: hook the unhandled-exception filter to trigger registered recovery
+   callbacks in a worker thread, respecting the ping interval and cancellation flag.
+3. Restart Logic: integrate with Session Manager to relaunch applications after crash with
+   the requested command line. Honour `WER_RESTART_NO_REBOOT` and other flags.
+4. Resource Notifications: For `WerpNotify*` helpers, interact with WER UI modules and
+   maintain message tables to inform the crash uploader. If the full WER UI is not yet
+   available, stub these helpers but return success to keep clients satisfied.
+5. Testing: build APITESTs simulating a crash and verifying the recovery callback is
+   invoked. Ensure restart settings persist across process termination.
+
+Exit Criteria
+-------------
+- All WER-related exports implemented and documented.
+- Recovery and restart scenarios validated through automated tests.
+- Optional: integrate ReactOS crash reporter with WER registration data for an improved
+  user experience.

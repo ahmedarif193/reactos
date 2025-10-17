@@ -1,0 +1,252 @@
+ReactOS Vista-Era Stub Export Inventory
+=======================================
+
+This document lists every exported entry that is still implemented as a stub in the
+Vista compatibility layers of kernel32 and advapi32. Data pulled from the *.spec
+files in the current tree; each line reproduces the spec declaration so calling
+conventions, version gates, aliases and comments remain visible.
+
+kernel32.dll (193 stub exports)
+---------------------------------
+@ stdcall -stub -version=0x600+ AddSIDToBoundaryDescriptor(ptr ptr)
+@ stdcall -stub -version=0x600+ AddSecureMemoryCacheCallback(ptr)
+@ stdcall -stub -version=0x600+ AdjustCalendarDate(ptr long long)
+@ stdcall -stub -version=0x600+ AllocateUserPhysicalPagesNuma(ptr ptr ptr long)
+@ stdcall -stub -version=0x600+ CheckElevation(ptr ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ CheckElevationEnabled(ptr)
+@ stdcall -stub -version=0x600+ ClosePrivateNamespace(ptr long)
+@ stdcall -stub -version=0x600+ CompareCalendarDates(ptr ptr ptr)
+@ stdcall -stub -version=0x600+ ConvertCalDateTimeToSystemTime(ptr ptr)
+@ stdcall -stub -version=0x600+ ConvertNLSDayOfWeekToWin32DayOfWeek(long)
+@ stdcall -stub -version=0x600+ ConvertSystemTimeToCalDateTime(ptr long ptr)
+@ stdcall -stub -version=0x600+ CopyFileTransactedA(str str ptr ptr ptr long ptr)
+@ stdcall -stub -version=0x600+ CopyFileTransactedW(wstr wstr ptr ptr ptr long ptr)
+@ stdcall -stub -version=0x600+ CreateBoundaryDescriptorA(str long)
+@ stdcall -stub -version=0x600+ CreateBoundaryDescriptorW(wstr long)
+@ stdcall -stub -version=0x600+ CreateDirectoryTransactedA(str str ptr ptr)
+@ stdcall -stub -version=0x600+ CreateDirectoryTransactedW(wstr wstr ptr ptr)
+@ stdcall -stub -version=0x600+ CreateFileTransactedA(str long long ptr long long ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ CreateFileTransactedW(wstr long long ptr long long ptr ptr ptr ptr)
+@ stdcall -stub -version=0x600+ CreateHardLinkTransactedA(str str ptr ptr)
+@ stdcall -stub -version=0x600+ CreateHardLinkTransactedW(wstr wstr ptr ptr)
+@ stdcall -stub -version=0x600+ CreatePrivateNamespaceA(ptr ptr str)
+@ stdcall -stub -version=0x600+ CreatePrivateNamespaceW(ptr ptr wstr)
+@ stdcall -stub -version=0x600+ CreateSymbolicLinkTransactedA(str str long ptr)
+@ stdcall -stub -version=0x600+ CreateSymbolicLinkTransactedW(wstr wstr long ptr)
+@ stdcall -stub -version=0x600+ GetTimeZoneInformationForYear(long ptr ptr)
+@ stdcall -stub -version=0x600+ NotifyUILanguageChange(long wstr wstr long ptr)
+@ stdcall -stub -version=0x601+ K32EnumProcessModulesEx(long ptr long ptr long); EnumProcessModulesEx
+@ stdcall -stub -version=0x601+ K32GetWsChangesEx(long ptr ptr); GetWsChangesEx
+@ stub -version=0x600+ BaseGenerateAppCompatData
+@ stub -version=0x600+ BaseThreadInitThunk
+@ stub -version=0x600+ CheckForReadOnlyResource
+@ stub -version=0x600+ DeleteBoundaryDescriptor
+@ stub -version=0x600+ DeleteFileTransactedA
+@ stub -version=0x600+ DeleteFileTransactedW
+@ stub -version=0x600+ FindNLSString
+@ stub -version=0x600+ FindNLSStringEx
+@ stub -version=0x600+ GetApplicationRestartSettings
+@ stub -version=0x600+ GetCalendarDateFormat
+@ stub -version=0x600+ GetCalendarDateFormatEx
+@ stub -version=0x600+ GetCalendarDaysInMonth
+@ stub -version=0x600+ GetCalendarDifferenceInDays
+@ stub -version=0x600+ GetCalendarMonthsInYear
+@ stub -version=0x600+ GetCalendarSupportedDateRange
+@ stub -version=0x600+ GetCalendarWeekNumber
+@ stub -version=0x600+ GetCompressedFileSizeTransactedA
+@ stub -version=0x600+ GetCompressedFileSizeTransactedW
+@ stub -version=0x600+ GetDurationFormat
+@ stub -version=0x600+ GetDurationFormatEx
+@ stub -version=0x600+ GetDynamicTimeZoneInformation
+@ stub -version=0x600+ GetFileAttributesTransactedA
+@ stub -version=0x600+ GetFileAttributesTransactedW
+@ stub -version=0x600+ GetLongPathNameTransactedA
+@ stub -version=0x600+ GetLongPathNameTransactedW
+@ stub -version=0x600+ GetNamedPipeAttribute
+@ stub -version=0x600+ GetNamedPipeClientComputerNameA
+@ stub -version=0x600+ GetNamedPipeClientComputerNameW
+@ stub -version=0x600+ GetNamedPipeClientProcessId
+@ stub -version=0x600+ GetNamedPipeClientSessionId
+@ stub -version=0x600+ GetNamedPipeServerProcessId
+@ stub -version=0x600+ GetNamedPipeServerSessionId
+@ stub -version=0x600+ GetNumaProximityNode
+@ stub -version=0x600+ GetProductInfo
+@ stub -version=0x600+ GetVolumeInformationByHandleW
+@ stub -version=0x600+ IsCalendarLeapDay
+@ stub -version=0x600+ IsCalendarLeapMonth
+@ stub -version=0x600+ IsCalendarLeapYear
+@ stub -version=0x600+ IsValidCalDateTime
+@ stub -version=0x600+ LoadStringBaseExW
+@ stub -version=0x600+ LoadStringBaseW
+@ stub -version=0x600+ MoveFileTransactedA
+@ stub -version=0x600+ MoveFileTransactedW
+@ stub -version=0x600+ NlsCheckPolicy
+@ stub -version=0x600+ NlsEventDataDescCreate
+@ stub -version=0x600+ NlsUpdateLocale
+@ stub -version=0x600+ NlsUpdateSystemLocale
+@ stub -version=0x600+ NlsWriteEtwEvent
+@ stub -version=0x600+ OpenPrivateNamespaceA
+@ stub -version=0x600+ OpenPrivateNamespaceW
+@ stub -version=0x600+ QueryActCtxSettingsW
+@ stub -version=0x600+ QueryIdleProcessorCycleTime
+@ stub -version=0x600+ QueryProcessAffinityUpdateMode
+@ stub -version=0x600+ QueryProcessCycleTime
+@ stub -version=0x600+ QueryThreadCycleTime
+@ stub -version=0x600+ RemoveDirectoryTransactedA
+@ stub -version=0x600+ RemoveDirectoryTransactedW
+@ stub -version=0x600+ RemoveSecureMemoryCacheCallback
+@ stub -version=0x600+ ReplacePartitionUnit
+@ stub -version=0x600+ SetCurrentConsoleFontEx
+@ stub -version=0x600+ SetDynamicTimeZoneInformation
+@ stub -version=0x600+ SetFileAttributesTransactedA
+@ stub -version=0x600+ SetFileAttributesTransactedW
+@ stub -version=0x600+ SetFileIoOverlappedRange
+@ stub -version=0x600+ SetNamedPipeAttribute
+@ stub -version=0x600+ SetProcessAffinityUpdateMode
+@ stub -version=0x600+ SetStdHandleEx
+@ stub -version=0x600+ UnregisterApplicationRecoveryCallback
+@ stub -version=0x600+ UnregisterApplicationRestart
+@ stub -version=0x600+ UpdateCalendarDayOfWeek
+@ stub -version=0x600+ WerGetFlags
+@ stub -version=0x600+ WerRegisterFile
+@ stub -version=0x600+ WerRegisterMemoryBlock
+@ stub -version=0x600+ WerSetFlags
+@ stub -version=0x600+ WerUnregisterFile
+@ stub -version=0x600+ WerUnregisterMemoryBlock
+@ stub -version=0x600+ WerpCleanupMessageMapping
+@ stub -version=0x600+ WerpInitiateRemoteRecovery
+@ stub -version=0x600+ WerpNotifyLoadStringResource
+@ stub -version=0x600+ WerpNotifyLoadStringResourceEx
+@ stub -version=0x600+ WerpNotifyUseStringResource
+@ stub -version=0x600+ WerpStringLookup
+@ stub -version=0x600+ Wow64GetThreadContext
+@ stub -version=0x600+ Wow64SetThreadContext
+@ stub -version=0x600+ Wow64SuspendThread
+
+advapi32.dll (125 stub exports)
+---------------------------------
+@ stdcall -stub -version=0x600+ EnumerateTraceGuids(ptr long ptr) # EtwEnumerateTraceGuids
+@ stdcall -stub -version=0x600+ WmiNotificationRegistrationA(ptr long ptr long long) # EtwNotificationRegistrationA
+@ stdcall -stub -version=0x600+ WmiNotificationRegistrationW(ptr long ptr long long) # EtwNotificationRegistrationW
+@ stdcall -stub -version=0x600+ WmiReceiveNotificationsA(long long long long) # EtwReceiveNotificationsA
+@ stdcall -stub -version=0x600+ WmiReceiveNotificationsW(long long long long) # EtwReceiveNotificationsW
+@ stub CancelOverlappedAccess
+@ stub CloseCodeAuthzLevel
+@ stub CloseTrace
+@ stub ComputeAccessTokenFromCodeAuthzLevel
+@ stub ConvertAccessToSecurityDescriptorA
+@ stub ConvertAccessToSecurityDescriptorW
+@ stub ConvertSDToStringSDRootDomainA
+@ stub ConvertSDToStringSDRootDomainW
+@ stub ConvertSecurityDescriptorToAccessA
+@ stub ConvertSecurityDescriptorToAccessNamedA #ConvertSecurityDescriptorToAccessA
+@ stub ConvertSecurityDescriptorToAccessNamedW #ConvertSecurityDescriptorToAccessW
+@ stub ConvertSecurityDescriptorToAccessW
+@ stub ConvertStringSDToSDDomainA
+@ stub ConvertStringSDToSDDomainW
+@ stub ConvertStringSDToSDRootDomainA
+@ stub ConvertStringSDToSDRootDomainW
+@ stub CreateCodeAuthzLevel
+@ stub CredGetTargetInfoA
+@ stub CredGetTargetInfoW
+@ stub CredProfileLoaded
+@ stub CredRenameA
+@ stub CredRenameW
+@ stub CredWriteDomainCredentialsA
+@ stub CredWriteDomainCredentialsW
+@ stub CredpConvertCredential
+@ stub CredpConvertTargetInfo
+@ stub CredpDecodeCredential
+@ stub CredpEncodeCredential
+@ stub DuplicateEncryptionInfoFile
+@ stub EncryptedFileKeyInfo
+@ stub FreeEncryptedFileKeyInfo
+@ stub GetAccessPermissionsForObjectA
+@ stub GetAccessPermissionsForObjectW
+@ stub GetInformationCodeAuthzLevelW
+@ stub GetInformationCodeAuthzPolicyW
+@ stub GetLocalManagedApplicationData
+@ stub GetLocalManagedApplications
+@ stub GetManagedApplicationCategories
+@ stub GetManagedApplications
+@ stub GetNamedSecurityInfoExA
+@ stub GetNamedSecurityInfoExW
+@ stub GetOverlappedAccessResults
+@ stub I_ScSendTSMessage
+@ stub IdentifyCodeAuthzLevelW
+@ stub InstallApplication
+@ stub IsTokenUntrusted
+@ stub LookupSecurityDescriptorPartsA
+@ stub LookupSecurityDescriptorPartsW
+@ stub LsaICLookupNames
+@ stub LsaICLookupNamesWithCreds
+@ stub LsaICLookupSids
+@ stub LsaICLookupSidsWithCreds
+@ stub MSChapSrvChangePassword
+@ stub MSChapSrvChangePassword2
+@ stub ProcessIdleTasks
+@ stub RegConnectRegistryExA
+@ stub RegConnectRegistryExW
+@ stub RegisterIdleTask
+@ stub RemoveTraceCallback
+@ stub SaferGetLevelInformation
+@ stub SaferSetLevelInformation
+@ stub SaferSetPolicyInformation
+@ stub SaferiChangeRegistryScope
+@ stub SaferiCompareTokenLevels
+@ stub SaferiIsExecutableFileType
+@ stub SaferiPopulateDefaultsInRegistry
+@ stub SaferiRecordEventLogEntry
+@ stub SaferiReplaceProcessThreadTokens
+@ stub SaferiSearchMatchingHashRules
+@ stub SetEntriesInAccessListA
+@ stub SetEntriesInAccessListW
+@ stub SetEntriesInAuditListA
+@ stub SetEntriesInAuditListW
+@ stub SetInformationCodeAuthzLevelW
+@ stub SetInformationCodeAuthzPolicyW
+@ stub SetNamedSecurityInfoExA
+@ stub SetNamedSecurityInfoExW
+@ stub SetPrivateObjectSecurityEx
+@ stub SetSecurityInfoExA
+@ stub SetSecurityInfoExW
+@ stub SetTraceCallback
+@ stub SetUserFileEncryptionKey
+@ stub TrusteeAccessToObjectA
+@ stub TrusteeAccessToObjectW
+@ stub UninstallApplication
+@ stub UnregisterIdleTask
+@ stub WdmWmiServiceMain
+@ stub WmiCloseBlock
+@ stub WmiCloseTraceWithCursor
+@ stub WmiConvertTimestamp
+@ stub WmiDevInstToInstanceNameA
+@ stub WmiDevInstToInstanceNameW
+@ stub WmiEnumerateGuids
+@ stub WmiExecuteMethodA
+@ stub WmiExecuteMethodW
+@ stub WmiFileHandleToInstanceNameA
+@ stub WmiFileHandleToInstanceNameW
+@ stub WmiFreeBuffer
+@ stub WmiGetFirstTraceOffset
+@ stub WmiGetNextEvent
+@ stub WmiGetTraceHeader
+@ stub WmiMofEnumerateResourcesA
+@ stub WmiMofEnumerateResourcesW
+@ stub WmiOpenBlock
+@ stub WmiOpenTraceWithCursor
+@ stub WmiParseTraceEvent
+@ stub WmiQueryAllDataA
+@ stub WmiQueryAllDataMultipleA
+@ stub WmiQueryAllDataMultipleW
+@ stub WmiQueryAllDataW
+@ stub WmiQueryGuidInformation
+@ stub WmiQuerySingleInstanceA
+@ stub WmiQuerySingleInstanceMultipleA
+@ stub WmiQuerySingleInstanceMultipleW
+@ stub WmiQuerySingleInstanceW
+@ stub WmiSetSingleInstanceA
+@ stub WmiSetSingleInstanceW
+@ stub WmiSetSingleItemA
+@ stub WmiSetSingleItemW
+@ stub Wow64Win32ApiEntry

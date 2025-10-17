@@ -1,0 +1,38 @@
+AMD64 Loader Exception Handling To-Do
+=====================================
+Objective: ensure amd64 reports DLL init failures with the same clarity as i386, instead of
+terminating with the stack-exhaustion warning. This improves debugging for x64-specific issues
+while the missing Vista exports are being implemented.
+
+Tasks
+-----
+1. Investigate current behaviour
+   - Trace the exception path in amd64: record call stack from `__wine_spec_unimplemented_stub`
+     through `LdrpCallInitRoutine` to the guard-page hit.
+   - Confirm differences with i386 handling (where the warning is printed once and the loader
+     returns `STATUS_DLL_INIT_FAILED`).
+
+2. Choose mitigation strategy
+   - Option A: modify `__wine_spec_unimplemented_stub` to detect re-entry on the same thread
+     (TLS flag) and return a safe `STATUS_NOT_IMPLEMENTED` instead of re-raising.
+   - Option B: teach `LdrpCallInitRoutine` to trap `0x80000100` exceptions before SEH retries,
+     mirroring the x86 code path.
+   - Option C (fallback): adjust the MinGW CRT glue to stop retrying when the stub code is
+     encountered, keeping behaviour consistent with Windows.
+
+3. Implement chosen fix
+   - Update the relevant source (`sdk/include/reactos/stubs.h`, `dll/ntdll/ldr/ldrinit.c`, or
+     CRT glue) with detailed comments explaining the rationale.
+   - Guard the change behind an explicit constant (`EXCEPTION_WINE_STUB`) for readability.
+
+4. Validation
+   - Rebuild amd64 `ntdll` (and CRT if modified) and rerun ReactOS setup in the scenario that
+     currently fails.
+   - Confirm the loader prints the clear “DLL_PROCESS_ATTACH failed for shellbtrfs.dll” message
+     and aborts gracefully without guard-page exhaustion.
+   - Ensure i386 behaviour is unchanged (no regressions).
+
+5. Follow-up
+   - Once Phase 01 Vista exports are implemented, revisit the guard to verify it remains benign
+     (should not trigger when APIs exist).
+   - Document the change in the roadmap/status notes.

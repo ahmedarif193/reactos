@@ -1,0 +1,43 @@
+Phase 07 – Windows 7+ Enhancements & Tail Cleanup
+=================================================
+Goal: after Vista parity is reached, implement the remaining exports introduced in Windows
+7 and tidy up any stubbed helpers that were deferred earlier. These functions are not
+required for shellbtrfs, but they improve overall compatibility.
+
+Win7-Specific Kernel32 Additions
+--------------------------------
+- K32EnumProcessModulesEx / K32GetWsChangesEx (alias exports for psapi v2)
+- QueryIdleProcessorCycleTime / QueryProcessCycleTime / QueryThreadCycleTime
+- Wow64GetThreadContext / Wow64SetThreadContext / Wow64SuspendThread / Wow64Win32ApiEntry
+- Additional Wer (remote recovery) helpers if not completed in Phase 05
+
+Extended NLS & Misc Helpers
+---------------------------
+- NlsEventDataDescCreate / NlsWriteEtwEvent (if deferred)
+- GetNamedPipeClientProcessId / GetNamedPipeServerProcessId /
+  GetNamedPipeClientSessionId / GetNamedPipeServerSessionId
+- ReplacePartitionUnit / GetFileIoOverlappedRange / SetStdHandleEx
+
+Advapi32 Enhancements
+---------------------
+- WmiMofEnumerateResourcesA/W and other WMI helpers not covered in Phase 06
+- SaferiSearchMatchingHashRules (needed for advanced AppLocker scenarios)
+- Additional DPAPI / credential utilities if still stubbed
+
+Rationale
+---------
+- These APIs mainly target diagnostics, debugging, or WoW64 hosting. Implementing them
+  rounds off compatibility with Windows 7-era applications without blocking earlier phases.
+
+Implementation Strategy
+-----------------------
+- Reuse existing infrastructure from earlier phases (ETW, credential manager, threadpool).
+- For WoW64 context functions, mirror Windows behaviour by proxying to the WOW64 CPU
+  emulation layer. Ensure x64 builds expose the correct calling convention.
+- Validate using Wine test suites (`kernel32:process`, `kernel32:pipe`, `advapi32:wmi`).
+
+Exit Criteria
+-------------
+- `docs/vista_stub_exports.txt` reduced to zero entries or only contains consciously
+  unsupported features documented elsewhere.
+- ReactOS passes relevant Wine/Win7 API tests, and WoW64 debugging scenarios succeed.

@@ -1,0 +1,58 @@
+Phase 04 – Locale, Calendar, and MUI Enhancements
+===============================================
+Goal: deliver the Vista NLS/MUI API surface so applications relying on advanced locale
+features operate correctly. These functions are heavily used by globalization libraries
+and .NET.
+
+Locale & Normalization APIs
+---------------------------
+- NormalizeString / IsNormalizedString (all forms)
+- IdnToAscii / IdnToUnicode / IdnToNameprepUnicode
+- GetStringScripts / VerifyScripts
+- GetCalendarDateFormat / GetCalendarDateFormatEx
+- GetDurationFormat / GetDurationFormatEx
+- GetCalendarDaysInMonth / GetCalendarDifferenceInDays /
+  GetCalendarMonthsInYear / GetCalendarSupportedDateRange /
+  GetCalendarWeekNumber / UpdateCalendarDayOfWeek
+- IsCalendarLeapDay / IsCalendarLeapMonth / IsCalendarLeapYear /
+  IsValidCalDateTime / ConvertCalDateTimeToSystemTime /
+  ConvertSystemTimeToCalDateTime / AdjustCalendarDate /
+  CompareCalendarDates / NlsCheckPolicy / NlsEventDataDescCreate /
+  NlsUpdateLocale / NlsUpdateSystemLocale / NlsWriteEtwEvent
+
+UI Language & Preference APIs
+-----------------------------
+- GetSystemDefaultLocaleName
+- GetThreadPreferredUILanguages / SetThreadPreferredUILanguages
+- GetSystemPreferredUILanguages / GetUserPreferredUILanguages
+- GetUILanguageInfo / GetThreadUILanguage / NotifyUILanguageChange
+- GetApplicationRestartSettings / RegisterApplicationRestart /
+  UnregisterApplicationRestart (if deferred, document in Phase 05)
+
+Rationale
+---------
+- Libraries such as ICU, .NET, and modern web engines expect Unicode normalization and
+  IDN conversions to behave like Vista+. Missing APIs break URL handling and string
+  comparisons.
+- Globalization settings UI uses the calendar APIs for regional formatting.
+
+Implementation Strategy
+-----------------------
+1. Normalization: integrate the existing NLS data or adopt Wine’s normalization tables.
+   Provide NFC, NFD, NFKC, NFKD algorithms with buffer size checks.
+2. IDN: implement Punycode conversion and Nameprep rules. ReactOS already stores Unicode
+   data tables in `ntdll`; expose them via kernel32 wrappers.
+3. Calendar Math: use the `CALINFO` data ReactOS already maintains. Ensure conversions
+   match Windows results for Gregorian, Hijri, Japanese calendars, etc.
+4. MUI Storage: maintain per-thread and per-process preferred language lists under the
+   user profile. Integrate with registry keys `HKCU\Control Panel\International`. Ensure
+   notifications propagate via `NotifyUILanguageChange`.
+5. Testing: expand `winetests/kernel32/locale.c` and add APITEST cases for calendars,
+   normalization, and IDN conversions across cultures.
+
+Exit Criteria
+-------------
+- All locale/MUI exports removed from stub list.
+- URL canonicalisation (IDN), calendar formatting, and UI language settings behave like
+  Windows Vista in regression tests.
+- Document any unsupported calendars or limitations in `docs/roadmap/status.md`.

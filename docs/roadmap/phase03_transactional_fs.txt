@@ -1,0 +1,57 @@
+Phase 03 – Transactional Filesystem & Link Management
+====================================================
+Goal: implement the Vista Transactional NTFS (TxF) user-mode entry points and associated
+link/query helpers so C++ filesystem features, installers, and administrative tools can
+function without hitting stubs.
+
+Core TxF File APIs
+------------------
+- CreateFileTransactedA/W
+- MoveFileTransactedA/W
+- CopyFileTransactedA/W
+- DeleteFileTransactedA/W
+- CreateHardLinkTransactedA/W
+- CreateSymbolicLinkTransactedA/W
+- CreateDirectoryTransactedA/W
+- RemoveDirectoryTransactedA/W
+- FindFirstFileTransactedA/W
+- FindFirstFileNameTransactedW, FindNextFileNameW
+- FindFirstStreamTransactedW
+- GetFullPathNameTransactedA/W
+- GetFileAttributesTransactedA/W / SetFileAttributesTransactedA/W
+- GetCompressedFileSizeTransactedA/W
+
+Link & Stream Enumeration
+-------------------------
+- FindFirstFileNameW / FindNextFileNameW (non-transacted versions)
+- GetFileInformationByHandleEx (backup: FILE_ID_* info should support stream enumeration)
+- CreateSymbolicLinkTransacted* relies on base symlink support from Phase 01.
+
+Rationale
+---------
+- Modern installer frameworks and std::filesystem use these APIs for robust file handling.
+- Even if TxF support is partial, ReactOS must fail gracefully instead of raising
+  EXCEPTION_WINE_STUB.
+
+Implementation Strategy
+-----------------------
+1. Kernel Support Assessment: confirm the TxF kernel components (`tm`, `kuser` support)
+   are present. If TxF is not yet implemented in the kernel, provide a compatibility mode
+   that executes non-transactionally but returns success when possible, documenting the
+   limitation.
+2. Transaction Handles: `CreateFileTransacted` returns a handle bound to a transaction
+   object. Use `NtCreateTransaction`, `NtCreateFile` with TRANSACTION_NOTIFY parameter, or
+   emulate with a lightweight transaction manager.
+3. File Enumeration: use `NtQueryDirectoryFile` with `FileIdBothDirectoryInformation` or
+   `FileStreamInformation` to enumerate link names and streams. Provide transacted flavour
+   by opening the directory through `CreateFileTransacted` first.
+4. Error Mapping: ensure proper `ERROR_TRANSACTION_NOT_SUPPORTED` for volumes lacking TxF.
+5. Tests: add coverage in `winetests/kernel32/path.c` or new APITEST suites to verify
+   rename/copy semantics under active transactions.
+
+Exit Criteria
+-------------
+- All transactional exports implemented and removed from the stub inventory.
+- std::filesystem canonical(), hardlink_count(), and rename() succeed on NTFS-formatted
+  volumes in ReactOS.
+- Document behaviour when TxF is unavailable; ensure fallback paths do not crash.
