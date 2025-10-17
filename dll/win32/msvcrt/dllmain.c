@@ -19,6 +19,8 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(msvcrt);
 
+#ifndef USE_NATIVE_MINGW_CRT
+
 /* EXTERNAL PROTOTYPES ********************************************************/
 
 BOOL crt_process_init(void);
@@ -95,6 +97,51 @@ DllMain(PVOID hinstDll, ULONG dwReason, PVOID reserved)
 
     return TRUE;
 }
+
+#else /* USE_NATIVE_MINGW_CRT */
+
+/* EXTERNAL PROTOTYPES ********************************************************/
+
+#ifdef USE_NATIVE_MINGW_CRT
+extern void __cdecl __msvcrt_native_attach(void);
+#else
+static void __cdecl __msvcrt_native_attach(void) {}
+#endif
+
+/* LIBRARY ENTRY POINT ********************************************************/
+
+BOOL
+WINAPI
+DllMain(PVOID hinstDll, ULONG dwReason, PVOID reserved)
+{
+    switch (dwReason)
+    {
+    case DLL_PROCESS_ATTACH:
+        /* Synchronize our exported globals with the native MinGW CRT. */
+        __msvcrt_native_attach();
+        break;
+
+    case DLL_THREAD_ATTACH:
+        /* MinGW CRT handles thread-local storage initialization */
+        break;
+
+    case DLL_THREAD_DETACH:
+        /* MinGW CRT handles thread-local storage cleanup */
+        break;
+
+    case DLL_PROCESS_DETACH:
+        /* MinGW CRT handles cleanup of its internal state.
+         * We don't need to manually free _environ, _wenviron, etc.
+         * because they are managed by the MinGW CRT library. */
+        break;
+    }
+
+    UNREFERENCED_PARAMETER(hinstDll);
+    UNREFERENCED_PARAMETER(reserved);
+    return TRUE;
+}
+
+#endif /* USE_NATIVE_MINGW_CRT */
 
 /* FIXME: This hack is required to prevent the VC linker from linking these
    exports to the functions from libntdll. See CORE-10753 */

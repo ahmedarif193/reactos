@@ -2,9 +2,19 @@
 include_directories(${REACTOS_SOURCE_DIR}/sdk/lib/crt/include)
 spec2def(msvcrt.dll msvcrt.spec ADD_IMPORTLIB)
 
-# Let consumers of msvcrt have the right defines
 target_compile_definitions(libmsvcrt INTERFACE _DLL __USE_CRTIMP)
-# Embed msvcrtex into libmsvcrt
+
+if(USE_NATIVE_MINGW_CRT AND NOT MINGW)
+    message(FATAL_ERROR "USE_NATIVE_MINGW_CRT requires a MinGW-w64 toolchain")
+endif()
+
+if(USE_NATIVE_MINGW_CRT)
+    include(MinGWCRT)
+    mingwcrt_import_default_libs(USE_NATIVE_MINGW_CRT_LIBS NO_MSVCRT)
+endif()
+
+# Always embed the startup objects into libmsvcrt so importers keep
+# functioning regardless of the CRT backend being used.
 target_sources(libmsvcrt PRIVATE $<TARGET_OBJECTS:msvcrtex>)
 add_custom_command(TARGET libmsvcrt POST_BUILD
     COMMAND ${CMAKE_AR} q $<TARGET_FILE:libmsvcrt> $<TARGET_OBJECTS:msvcrtex>
@@ -13,7 +23,7 @@ add_custom_command(TARGET libmsvcrt POST_BUILD
     COMMAND_EXPAND_LISTS
     COMMENT "Appending CRT startup objects to libmsvcrt")
 
-# Embed RTC libs
+# Embed RTC libs when available for stack protector support.
 if (STACK_PROTECTOR)
     target_sources(libmsvcrt PRIVATE $<TARGET_OBJECTS:gcc_ssp_msvcrt>)
     target_link_libraries(libmsvcrt INTERFACE libkernel32) # For OutputDebugStringA
@@ -29,17 +39,31 @@ add_definitions(
     -DCRTDLL
     -D__MINGW_IMPORT="")
 
-list(APPEND SOURCE
+set(MSVCRT_SOURCES
     dllmain.c
     stubs.c
     msvcrt.rc
     ${CMAKE_CURRENT_BINARY_DIR}/msvcrt_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/msvcrt.def)
 
-add_library(msvcrt MODULE ${SOURCE})
+if(USE_NATIVE_MINGW_CRT)
+    list(APPEND MSVCRT_SOURCES native_shims.c)
+endif()
+
+add_library(msvcrt MODULE ${MSVCRT_SOURCES})
 set_module_type(msvcrt win32dll ENTRYPOINT DllMain 12)
 add_dependencies(msvcrt psdk)
-target_link_libraries(msvcrt crt vcruntime cpprt wine ${PSEH_LIB})
+if(USE_NATIVE_MINGW_CRT)
+    add_dependencies(msvcrt ucrtbase)
+endif()
+
+if(USE_NATIVE_MINGW_CRT)
+    target_link_libraries(msvcrt libmsvcrt)
+    target_compile_definitions(msvcrt PRIVATE USE_NATIVE_MINGW_CRT=1)
+    target_link_libraries(msvcrt ${USE_NATIVE_MINGW_CRT_LIBS})
+else()
+    target_link_libraries(msvcrt crt vcruntime cpprt wine ${PSEH_LIB})
+endif()
 
 if(MSVC)
     # export of deleting destructor "name"

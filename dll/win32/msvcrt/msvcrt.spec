@@ -251,6 +251,14 @@
 @ cdecl __RTCastToVoid(ptr) __RTCastToVoid
 @ cdecl __RTDynamicCast(ptr long ptr ptr long) __RTDynamicCast
 @ cdecl __RTtypeid(ptr) __RTtypeid
+@ cdecl -arch=x86_64 __divti3()
+@ cdecl -arch=x86_64 __modti3()
+@ cdecl -arch=x86_64 __udivti3()
+@ cdecl -arch=x86_64 __umodti3()
+@ cdecl -arch=arm64 __divti3()
+@ cdecl -arch=arm64 __modti3()
+@ cdecl -arch=arm64 __udivti3()
+@ cdecl -arch=arm64 __umodti3()
 @ cdecl __STRINGTOLD(ptr ptr str long)
 @ cdecl ___lc_codepage_func()
 @ cdecl ___lc_collate_cp_func()
@@ -267,10 +275,10 @@
 @ cdecl __crtGetStringTypeW(long long wstr long ptr)
 @ cdecl __crtLCMapStringA(long long str long str long long long)
 @ cdecl __crtLCMapStringW(long long wstr long wstr long long long)
-@ stub -version=0x600+ __daylight
+@ extern -version=0x600+ __daylight ucrtbase.__daylight
 @ cdecl __dllonexit(ptr ptr ptr)
 @ cdecl __doserrno()
-@ stub -version=0x600+ __dstbias
+@ extern -version=0x600+ __dstbias ucrtbase.__dstbias
 @ cdecl __fpecode()
 @ cdecl __getmainargs(ptr ptr ptr long ptr)
 @ extern -arch=i386,x86_64 __initenv
@@ -523,7 +531,7 @@
 @ stub -version=0x600+ _freea_s
 @ stub -version=0x600+ _fscanf_l
 @ stub -version=0x600+ _fscanf_s_l
-@ cdecl _fseeki64(ptr int64 long)
+@ cdecl -version=0x600+ _fseeki64(ptr int64 long)
 @ cdecl _fsopen(str str long)
 @ cdecl _fstat(long ptr)
 @ cdecl _fstat64(long ptr)
@@ -949,18 +957,19 @@
 @ cdecl -norelay _setjmp(ptr)
 @ cdecl -arch=i386 -norelay _setjmp3(ptr long)
 @ cdecl -arch=x86_64,arm -norelay _setjmpex(ptr ptr)
-@ cdecl -arch=!i386 -norelay __intrinsic_setjmpex(ptr ptr) _setjmpex
+@ cdecl -arch=x86_64,arm __intrinsic_setjmpex(ptr ptr) _setjmpex
 @ cdecl _setmaxstdio(long)
 @ cdecl _setmbcp(long)
 @ cdecl _setmode(long long)
 @ cdecl _setsystime(ptr long)
 @ cdecl _sleep(long)
 @ varargs _snprintf(ptr long str)
+@ varargs snprintf(ptr long str) _snprintf
 @ stub -version=0x600+ _snprintf_c
 @ stub -version=0x600+ _snprintf_c_l
 @ stub -version=0x600+ _snprintf_l
-@ stub -version=0x600+ _snprintf_s
-@ stub -version=0x600+ _snprintf_s_l
+@ varargs -version=0x600+ _snprintf_s(ptr long long str)
+@ varargs -version=0x600+ _snprintf_s_l(ptr long long str ptr)
 @ varargs _snscanf(str long str)
 @ stub -version=0x600+ _snscanf_l
 @ stub -version=0x600+ _snscanf_s
@@ -1114,8 +1123,8 @@
 @ stub -version=0x600+ _vsnprintf_c
 @ stub -version=0x600+ _vsnprintf_c_l
 @ stub -version=0x600+ _vsnprintf_l
-@ stub -version=0x600+ _vsnprintf_s
-@ stub -version=0x600+ _vsnprintf_s_l
+@ cdecl -version=0x600+ _vsnprintf_s(ptr long long str ptr)
+@ cdecl -version=0x600+ _vsnprintf_s_l(ptr long long str ptr ptr)
 @ cdecl _vsnwprintf(ptr long wstr ptr)
 @ stub -version=0x600+ _vsnwprintf_l
 @ stub -version=0x600+ _vsnwprintf_s
@@ -1286,8 +1295,6 @@
 @ cdecl _y1(double)
 @ cdecl _yn(long double )
 @ cdecl abort()
-@ cdecl at_quick_exit(ptr)
-@ cdecl quick_exit(long)
 @ cdecl abs(long)
 @ cdecl acos(double)
 @ cdecl -arch=x86_64,arm acosf(long)
@@ -1305,7 +1312,7 @@
 @ cdecl atol(str)
 @ cdecl bsearch(ptr ptr long long ptr)
 @ stub -version=0x600+ bsearch_s
-@ cdecl btowc(long)
+@ stub -version=0x600+ btowc
 @ cdecl calloc(long long)
 @ cdecl ceil(double)
 @ cdecl -arch=x86_64,arm ceilf(long)
@@ -1356,7 +1363,6 @@
 @ cdecl fsetpos(ptr ptr)
 @ cdecl ftell(ptr)
 @ cdecl -ret64 _ftelli64(ptr)
-@ cdecl -ret64 _ftelli64_nolock(ptr)
 @ varargs fwprintf(ptr wstr)
 @ stub -version=0x600+ fwprintf_s
 @ cdecl fwrite(ptr long long ptr)
@@ -1387,6 +1393,7 @@
 @ cdecl iswascii(long)
 @ cdecl iswcntrl(long)
 @ cdecl iswctype(long long)
+@ cdecl wctype(str)
 @ cdecl iswdigit(long)
 @ cdecl iswgraph(long)
 @ cdecl iswlower(long)
@@ -1411,8 +1418,8 @@
 @ cdecl -version=0x600+ mbrlen(str long ptr)
 @ cdecl -version=0x600+ mbrtowc(ptr str long ptr)
 @ stub -version=0x600+ mbsdup_dbg
-@ cdecl mbsrtowcs(ptr ptr long ptr)
-@ cdecl mbsrtowcs_s(ptr ptr long ptr long ptr)
+@ stub -version=0x600+ mbsrtowcs
+@ stub -version=0x600+ mbsrtowcs_s
 @ cdecl mbstowcs(ptr str long)
 @ stub -version=0x600+ mbstowcs_s
 @ cdecl mbtowc(wstr str long)
@@ -1457,7 +1464,6 @@
 @ cdecl sinh(double)
 @ cdecl -arch=x86_64,arm sinhf(long)
 @ varargs sprintf(ptr str)
-@ varargs snprintf(ptr long str)
 @ varargs -version=0x600+ sprintf_s(ptr long str)
 @ cdecl sqrt(double)
 @ cdecl -arch=x86_64,arm sqrtf(long)
@@ -1481,7 +1487,7 @@
 @ cdecl strncmp(str str long)
 @ cdecl strncpy(ptr str long)
 @ cdecl -version=0x600+ strncpy_s(ptr long str long)
-@ cdecl strnlen(str long)
+@ cdecl -version=0x600+ strnlen(str long)
 @ cdecl strpbrk(str str)
 @ cdecl strrchr(str long)
 @ cdecl strspn(str str)
@@ -1521,7 +1527,6 @@
 @ stub -version=0x600+ vprintf_s
 @ cdecl -version=0x600+ vsnprintf(ptr long str ptr)
 @ cdecl vsprintf(ptr str ptr)
-@ cdecl vsnprintf(ptr long str ptr)
 @ stub -version=0x600+ vsprintf_s
 @ cdecl vswprintf(ptr wstr ptr)
 @ stub -version=0x600+ vswprintf_s
@@ -1544,7 +1549,7 @@
 @ cdecl wcsncmp(wstr wstr long)
 @ cdecl wcsncpy(ptr wstr long)
 @ cdecl -version=0x600+ wcsncpy_s(ptr long wstr long)
-@ cdecl wcsnlen(wstr long)
+@ cdecl -version=0x600+ wcsnlen(wstr long)
 @ cdecl wcspbrk(wstr wstr)
 @ cdecl wcsrchr(wstr long)
 @ stub -version=0x600+ wcsrtombs
@@ -1559,15 +1564,10 @@
 @ stub -version=0x600+ wcstombs_s
 @ cdecl wcstoul(wstr ptr long)
 @ cdecl wcsxfrm(ptr wstr long)
-@ cdecl wctob(long)
-@ cdecl wctype(str)
+@ stub -version=0x600+ wctob
 @ cdecl wctomb(ptr long)
 @ stub -version=0x600+ wctomb_s
 @ varargs wprintf(wstr)
 @ stub -version=0x600+ wprintf_s
 @ varargs wscanf(wstr)
 @ stub -version=0x600+ wscanf_s
-@ cdecl -arch=x86_64 __divti3()
-@ cdecl -arch=x86_64 __modti3()
-@ cdecl -arch=x86_64 __udivti3()
-@ cdecl -arch=x86_64 __umodti3()

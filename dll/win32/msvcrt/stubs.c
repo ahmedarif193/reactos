@@ -2,30 +2,63 @@
 #include <windef.h>
 #include <stubs.h>
 
+#include <errno.h>
+#include <locale.h>
+#include <stdarg.h>
+#include <stdio.h>
+
 #undef UNIMPLEMENTED
 #define UNIMPLEMENTED __wine_spec_unimplemented_stub("msvcrt.dll", __FUNCTION__)
 
+#ifndef USE_NATIVE_MINGW_CRT
 int __get_app_type()
 {
     UNIMPLEMENTED;
     return 0;
 }
+#endif
+
+#ifndef USE_NATIVE_MINGW_CRT
 
 int _fileinfo = -1;
 
-void *
-__p__fileinfo()
+void *__p__fileinfo(void)
 {
     return &_fileinfo;
 }
 
 unsigned char _mbcasemap[1];
 
-void *
-__p__mbcasemap()
+void *__p__mbcasemap(void)
 {
     return _mbcasemap;
 }
+
+extern char *_sys_errlist[];
+char **__sys_errlist = _sys_errlist;
+extern int _sys_nerr;
+int *__sys_nerr = &_sys_nerr;
+
+typedef int (__cdecl *_onexit_t)(void);
+__declspec(dllimport) _onexit_t __cdecl _onexit(_onexit_t func);
+
+int __cdecl __crt_atexit(void (__cdecl *func)(void))
+{
+    if (!func)
+        return -1;
+
+    return (_onexit((_onexit_t)func) == NULL) ? -1 : 0;
+}
+
+int __cdecl __crt_at_quick_exit(void (__cdecl *func)(void))
+{
+    if (!func)
+        return -1;
+
+    return __crt_atexit(func);
+}
+
+#endif /* !USE_NATIVE_MINGW_CRT */
 
 int _atodbl(
    void * value,
@@ -921,5 +954,3 @@ vsnprintf(
     return 0;
 }
 #endif
-
-
