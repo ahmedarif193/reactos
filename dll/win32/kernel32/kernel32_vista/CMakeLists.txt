@@ -14,10 +14,19 @@ list(APPEND SOURCE
     GetFinalPathNameByHandle.c
     GetTickCount64.c
     GetUserDefaultLocaleName.c
+    helpers.c
     InitOnce.c
     IsValidLocaleName.c
     LCIDToLocaleName.c
     LocaleNameToLCID.c
+    locale_norm.c
+    locale_scripts.c
+    io.c
+    completion.c
+    resources.c
+    memory_num.c
+    procattr.c
+    threadpool.c
     sync.c
     vista.c)
 

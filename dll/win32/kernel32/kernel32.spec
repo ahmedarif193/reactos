@@ -29,6 +29,7 @@
 @ stdcall BaseCleanupAppcompatCacheSupport(ptr)
 @ stdcall BaseDumpAppcompatCache()
 @ stdcall BaseFlushAppcompatCache()
+@ stdcall BaseFormatObjectAttributes(ptr ptr ptr)
 @ stub -version=0x600+ BaseGenerateAppCompatData
 @ stdcall BaseInitAppcompatCacheSupport()
 @ stdcall BaseIsAppcompatInfrastructureDisabled() IsShimInfrastructureDisabled
@@ -52,12 +53,12 @@
 @ stdcall BuildCommDCBW(wstr ptr)
 @ stdcall CallNamedPipeA(str ptr long ptr long ptr long)
 @ stdcall CallNamedPipeW(wstr ptr long ptr long ptr long)
-@ stdcall -stub -version=0x600+ CallbackMayRunLong(ptr)
+@ stdcall -version=0x600+ CallbackMayRunLong(ptr)
 @ stdcall CancelDeviceWakeupRequest(long)
 @ stdcall CancelIo(long)
-@ stdcall -stub -version=0x600+ CancelIoEx(ptr ptr)
-@ stdcall -stub -version=0x600+ CancelSynchronousIo(ptr)
-@ stdcall -stub -version=0x600+ CancelThreadpoolIo(ptr)
+@ stdcall -version=0x600+ CancelIoEx(long ptr)
+@ stdcall -version=0x600+ CancelSynchronousIo(long)
+@ stdcall -version=0x600+ CancelThreadpoolIo(ptr)
 @ stdcall CancelTimerQueueTimer(long long)
 @ stdcall CancelWaitableTimer(long)
 @ stdcall ChangeTimerQueueTimer(ptr ptr long long)
@@ -73,13 +74,13 @@
 @ stdcall CloseHandle(long)
 @ stdcall -stub -version=0x600+ ClosePrivateNamespace(ptr long)
 @ stdcall CloseProfileUserMapping()
-@ stdcall -stub -version=0x600+ CloseThreadpool(ptr)
-@ stdcall -stub -version=0x600+ CloseThreadpoolCleanupGroup(ptr)
-@ stdcall -stub -version=0x600+ CloseThreadpoolCleanupGroupMembers(ptr long ptr)
-@ stdcall -stub -version=0x600+ CloseThreadpoolIo(ptr)
-@ stdcall -stub -version=0x600+ CloseThreadpoolTimer(ptr)
-@ stdcall -stub -version=0x600+ CloseThreadpoolWait(ptr)
-@ stdcall -stub -version=0x600+ CloseThreadpoolWork(ptr)
+@ stdcall -version=0x600+ CloseThreadpool(ptr)
+@ stdcall -version=0x600+ CloseThreadpoolCleanupGroup(ptr)
+@ stdcall -version=0x600+ CloseThreadpoolCleanupGroupMembers(ptr long ptr)
+@ stdcall -version=0x600+ CloseThreadpoolIo(ptr)
+@ stdcall -version=0x600+ CloseThreadpoolTimer(ptr)
+@ stdcall -version=0x600+ CloseThreadpoolWait(ptr)
+@ stdcall -version=0x600+ CloseThreadpoolWork(ptr)
 @ stdcall CmdBatNotification(long)
 @ stdcall CommConfigDialogA(str long ptr)
 @ stdcall CommConfigDialogW(wstr long ptr)
@@ -119,15 +120,15 @@
 @ stdcall -stub -version=0x600+ CreateDirectoryTransactedW(wstr wstr ptr ptr)
 @ stdcall CreateDirectoryW(wstr ptr)
 @ stdcall CreateEventA(ptr long long str)
-@ stdcall -stub -version=0x600+ CreateEventExA(ptr str long long)
-@ stdcall -stub -version=0x600+ CreateEventExW(ptr wstr long long)
+@ stdcall -version=0x600+ CreateEventExA(ptr str long long)
+@ stdcall -version=0x600+ CreateEventExW(ptr wstr long long)
 @ stdcall CreateEventW(ptr long long wstr)
 @ stdcall CreateFiber(long ptr ptr)
 @ stdcall CreateFiberEx(long long long ptr ptr)
 @ stdcall CreateFileA(str long long ptr long long long)
 @ stdcall CreateFileMappingA(long ptr long long long str)
-@ stdcall -stub -version=0x600+ CreateFileMappingNumaA(ptr ptr long long long str long)
-@ stdcall -stub -version=0x600+ CreateFileMappingNumaW(ptr ptr long long long wstr long)
+@ stdcall -version=0x600+ CreateFileMappingNumaA(ptr ptr long long long str long)
+@ stdcall -version=0x600+ CreateFileMappingNumaW(ptr ptr long long long wstr long)
 @ stdcall CreateFileMappingW(long ptr long long long wstr)
 @ stdcall -stub -version=0x600+ CreateFileTransactedA(str long long ptr long long ptr ptr ptr ptr)
 @ stdcall -stub -version=0x600+ CreateFileTransactedW(wstr long long ptr long long ptr ptr ptr ptr)
@@ -144,8 +145,8 @@
 @ stdcall CreateMailslotW(ptr long long ptr)
 @ stdcall CreateMemoryResourceNotification(long)
 @ stdcall CreateMutexA(ptr long str)
-@ stdcall -stub -version=0x600+ CreateMutexExA(ptr str long long)
-@ stdcall -stub -version=0x600+ CreateMutexExW(ptr wstr long long)
+@ stdcall -version=0x600+ CreateMutexExA(ptr str long long)
+@ stdcall -version=0x600+ CreateMutexExW(ptr wstr long long)
 @ stdcall CreateMutexW(ptr long wstr)
 @ stdcall CreateNamedPipeA(str long long long long long long ptr)
 @ stdcall CreateNamedPipeW(wstr long long long long long long ptr)
@@ -169,18 +170,18 @@
 @ stdcall -version=0x600+ CreateSymbolicLinkW(wstr wstr long)
 @ stdcall CreateTapePartition(long long long long)
 @ stdcall CreateThread(ptr long ptr long long ptr)
-@ stdcall -stub -version=0x600+ CreateThreadpool(ptr)
-@ stdcall -stub -version=0x600+ CreateThreadpoolCleanupGroup()
-@ stdcall -stub -version=0x600+ CreateThreadpoolIo(ptr ptr ptr ptr)
-@ stdcall -stub -version=0x600+ CreateThreadpoolTimer(ptr ptr ptr)
-@ stdcall -stub -version=0x600+ CreateThreadpoolWait(ptr ptr ptr)
-@ stdcall -stub -version=0x600+ CreateThreadpoolWork(ptr ptr ptr)
+@ stdcall -version=0x600+ CreateThreadpool(ptr)
+@ stdcall -version=0x600+ CreateThreadpoolCleanupGroup()
+@ stdcall -version=0x600+ CreateThreadpoolIo(ptr ptr ptr ptr)
+@ stdcall -version=0x600+ CreateThreadpoolTimer(ptr ptr ptr)
+@ stdcall -version=0x600+ CreateThreadpoolWait(ptr ptr ptr)
+@ stdcall -version=0x600+ CreateThreadpoolWork(ptr ptr ptr)
 @ stdcall CreateTimerQueue()
 @ stdcall CreateTimerQueueTimer(ptr long ptr ptr long long long)
 @ stdcall CreateToolhelp32Snapshot(long long)
 @ stdcall CreateWaitableTimerA(ptr long str)
-@ stub -version=0x600+ CreateWaitableTimerExA
-@ stub -version=0x600+ CreateWaitableTimerExW
+@ stdcall -version=0x600+ CreateWaitableTimerExA(ptr str long long)
+@ stdcall -version=0x600+ CreateWaitableTimerExW(ptr wstr long long)
 @ stdcall CreateWaitableTimerW(ptr long wstr)
 ;@ stdcall -arch=x86_64 CtrlRoutine()
 @ stdcall DeactivateActCtx(long ptr)
@@ -202,7 +203,7 @@
 @ stub -version=0x600+ DeleteFileTransactedA
 @ stub -version=0x600+ DeleteFileTransactedW
 @ stdcall DeleteFileW(wstr)
-@ stdcall -stub -version=0x600+ DeleteProcThreadAttributeList(ptr)
+@ stdcall -version=0x600+ DeleteProcThreadAttributeList(ptr)
 @ stdcall DeleteTimerQueue(long)
 @ stdcall DeleteTimerQueueEx(long long)
 @ stdcall DeleteTimerQueueTimer(long long long)
@@ -210,7 +211,7 @@
 @ stdcall DeleteVolumeMountPointW(wstr) ;check
 @ stdcall DeviceIoControl(long long ptr long ptr long ptr ptr)
 @ stdcall DisableThreadLibraryCalls(ptr)
-@ stub -version=0x600+ DisassociateCurrentThreadFromCallback
+@ stdcall -version=0x600+ DisassociateCurrentThreadFromCallback(ptr)
 @ stdcall DisconnectNamedPipe(long)
 @ stdcall DnsHostnameToComputerNameA(str ptr ptr)
 @ stdcall DnsHostnameToComputerNameW(wstr ptr ptr)
@@ -237,16 +238,16 @@
 @ stdcall EnumLanguageGroupLocalesA(ptr long long ptr)
 @ stdcall EnumLanguageGroupLocalesW(ptr long long ptr)
 @ stdcall EnumResourceLanguagesA(long str str ptr long)
-@ stub -version=0x600+ EnumResourceLanguagesExA
-@ stub -version=0x600+ EnumResourceLanguagesExW
+@ stdcall -version=0x600+ EnumResourceLanguagesExA(long str str ptr long long long)
+@ stdcall -version=0x600+ EnumResourceLanguagesExW(long wstr wstr ptr long long long)
 @ stdcall EnumResourceLanguagesW(long wstr wstr ptr long)
 @ stdcall EnumResourceNamesA(long str ptr long)
-@ stub -version=0x600+ EnumResourceNamesExA
-@ stub -version=0x600+ EnumResourceNamesExW
+@ stdcall -version=0x600+ EnumResourceNamesExA(long str ptr long long long)
+@ stdcall -version=0x600+ EnumResourceNamesExW(long wstr ptr long long long)
 @ stdcall EnumResourceNamesW(long wstr ptr long)
 @ stdcall EnumResourceTypesA(long ptr long)
-@ stub -version=0x600+ EnumResourceTypesExA
-@ stub -version=0x600+ EnumResourceTypesExW
+@ stdcall -version=0x600+ EnumResourceTypesExA(long ptr long long long)
+@ stdcall -version=0x600+ EnumResourceTypesExW(long ptr long long long)
 @ stdcall EnumResourceTypesW(long ptr long)
 @ stdcall EnumSystemCodePagesA(ptr long)
 @ stdcall EnumSystemCodePagesW(ptr long)
@@ -294,12 +295,12 @@
 @ stdcall FindFirstFileA(str ptr)
 @ stdcall FindFirstFileExA(str long ptr long ptr long)
 @ stdcall FindFirstFileExW(wstr long ptr long ptr long)
-@ stub -version=0x600+ FindFirstFileNameTransactedW
-@ stub -version=0x600+ FindFirstFileNameW
-@ stub -version=0x600+ FindFirstFileTransactedA
-@ stub -version=0x600+ FindFirstFileTransactedW
+@ stdcall -version=0x600+ FindFirstFileNameTransactedW(wstr long ptr ptr long)
+@ stdcall -version=0x600+ FindFirstFileNameW(wstr long ptr ptr)
+@ stdcall -version=0x600+ FindFirstFileTransactedA(str long ptr long ptr long long)
+@ stdcall -version=0x600+ FindFirstFileTransactedW(wstr long ptr long ptr long long)
 @ stdcall FindFirstFileW(wstr ptr)
-@ stub -version=0x600+ FindFirstStreamTransactedW
+@ stdcall -version=0x600+ FindFirstStreamTransactedW(wstr long ptr long long)
 @ stdcall FindFirstStreamW(wstr ptr ptr long)
 @ stdcall FindFirstVolumeA(ptr long)
 @ stdcall FindFirstVolumeMountPointA(str ptr long)
@@ -309,7 +310,7 @@
 @ stub -version=0x600+ FindNLSStringEx
 @ stdcall FindNextChangeNotification(long)
 @ stdcall FindNextFileA(long ptr)
-@ stub -version=0x600+ FindNextFileNameW
+@ stdcall -version=0x600+ FindNextFileNameW(long ptr ptr)
 @ stdcall FindNextFileW(long ptr)
 @ stdcall FindNextStreamW(ptr ptr)
 @ stdcall FindNextVolumeA(long ptr long)
@@ -329,7 +330,7 @@
 @ stdcall FlushConsoleInputBuffer(long)
 @ stdcall FlushFileBuffers(long)
 @ stdcall FlushInstructionCache(long long long)
-@ stub -version=0x600+ FlushProcessWriteBuffers
+@ stdcall -version=0x600+ FlushProcessWriteBuffers()
 @ stdcall FlushViewOfFile(ptr long)
 @ stdcall FoldStringA(long str long ptr long)
 @ stdcall FoldStringW(long wstr long ptr long)
@@ -340,7 +341,7 @@
 @ stdcall FreeEnvironmentStringsW(ptr)
 @ stdcall FreeLibrary(long)
 @ stdcall FreeLibraryAndExitThread(long long)
-@ stub -version=0x600+ FreeLibraryWhenCallbackReturns
+@ stdcall -version=0x600+ FreeLibraryWhenCallbackReturns(ptr long)
 @ stdcall FreeResource(long)
 @ stdcall FreeUserPhysicalPages(long long long)
 @ stdcall GenerateConsoleCtrlEvent(long long)
@@ -488,8 +489,8 @@
 @ stdcall GetFirmwareEnvironmentVariableW(wstr wstr ptr long)
 @ stdcall -version=0x602+ GetFirmwareType(ptr)
 @ stdcall GetFullPathNameA(str long ptr ptr)
-@ stub -version=0x600+ GetFullPathNameTransactedA
-@ stub -version=0x600+ GetFullPathNameTransactedW
+@ stdcall -version=0x600+ GetFullPathNameTransactedA(str long ptr ptr long)
+@ stdcall -version=0x600+ GetFullPathNameTransactedW(wstr long ptr ptr long)
 @ stdcall GetFullPathNameW(wstr long ptr ptr)
 @ stdcall GetGeoInfoA(long long ptr long long)
 @ stdcall GetGeoInfoW(long long ptr long long)
@@ -547,7 +548,7 @@
 @ stdcall GetNumberOfConsoleMouseButtons(ptr)
 @ stdcall GetOEMCP()
 @ stdcall GetOverlappedResult(long ptr ptr long)
-@ stdcall -stub -version=0x600+ GetPhysicallyInstalledSystemMemory(ptr)
+@ stdcall -version=0x600+ GetPhysicallyInstalledSystemMemory(ptr)
 @ stdcall GetPriorityClass(long)
 @ stdcall GetPrivateProfileIntA(str str long str)
 @ stdcall GetPrivateProfileIntW(wstr wstr long wstr)
@@ -561,7 +562,7 @@
 @ stdcall GetPrivateProfileStructW(wstr wstr ptr long wstr)
 @ stdcall GetProcAddress(long str)
 @ stdcall GetProcessAffinityMask(long ptr ptr)
-@ stub -version=0x600+ GetProcessDEPPolicy
+@ stdcall -version=0x600+ GetProcessDEPPolicy(long ptr ptr)
 @ stdcall GetProcessHandleCount(long ptr)
 @ stdcall -norelay GetProcessHeap()
 @ stdcall GetProcessHeaps(long ptr)
@@ -574,7 +575,7 @@
 @ stdcall GetProcessVersion(long)
 @ stdcall GetProcessWorkingSetSize(long ptr ptr)
 @ stdcall GetProcessWorkingSetSizeEx(long ptr ptr long)
-@ stub -version=0x600+ GetProductInfo
+@ cdecl -version=0x600+ GetProductInfo(long long long long ptr)
 @ stdcall GetProfileIntA(str str long)
 @ stdcall GetProfileIntW(wstr wstr long)
 @ stdcall GetProfileSectionA(str ptr long)
@@ -582,21 +583,21 @@
 @ stdcall GetProfileStringA(str str str ptr long)
 @ stdcall GetProfileStringW(wstr wstr wstr ptr long)
 @ stdcall GetQueuedCompletionStatus(long ptr ptr ptr long)
-@ stub -version=0x600+ GetQueuedCompletionStatusEx
+@ stdcall -version=0x600+ GetQueuedCompletionStatusEx(ptr ptr long ptr long long)
 @ stdcall GetShortPathNameA(str ptr long)
 @ stdcall GetShortPathNameW(wstr ptr long)
 @ stdcall GetStartupInfoA(ptr)
 @ stdcall GetStartupInfoW(ptr)
 @ stdcall GetStdHandle(long)
-@ stub -version=0x600+ GetStringScripts
+@ stdcall -version=0x600+ GetStringScripts(long wstr long ptr long)
 @ stdcall GetStringTypeA(long long str long ptr)
 @ stdcall GetStringTypeExA(long long str long ptr)
 @ stdcall GetStringTypeExW(long long wstr long ptr)
 @ stdcall GetStringTypeW(long wstr long ptr)
-@ stub -version=0x600+ GetSystemDEPPolicy
+@ stdcall -version=0x600+ GetSystemDEPPolicy()
 @ stdcall GetSystemDefaultLCID()
 @ stdcall GetSystemDefaultLangID()
-@ stdcall -stub -version=0x600+ GetSystemDefaultLocaleName(ptr long)
+@ stdcall -version=0x600+ GetSystemDefaultLocaleName(ptr long)
 @ stdcall GetSystemDefaultUILanguage()
 @ stdcall GetSystemDirectoryA(ptr long)
 @ stdcall GetSystemDirectoryW(ptr long)
@@ -623,7 +624,7 @@
 @ stdcall GetTempPathA(long ptr)
 @ stdcall GetTempPathW(long ptr)
 @ stdcall GetThreadContext(long ptr)
-@ stdcall -stub -version=0x600+ GetThreadErrorMode()
+@ stdcall -version=0x600+ GetThreadErrorMode()
 @ stdcall GetThreadIOPendingFlag(long ptr)
 @ stdcall GetThreadId(ptr)
 @ stdcall GetThreadLocale()
@@ -707,9 +708,9 @@
 @ stdcall -version=0x351-0x502 HeapUsage(long long long long ptr)
 @ stdcall HeapValidate(long long ptr)
 @ stdcall HeapWalk(long ptr)
-@ stdcall -stub -version=0x600+ IdnToAscii(long wstr long ptr long)
-@ stdcall -stub -version=0x600+ IdnToNameprepUnicode(long wstr long ptr long)
-@ stdcall -stub -version=0x600+ IdnToUnicode(long wstr long ptr long)
+@ stdcall -version=0x600+ IdnToAscii(long wstr long ptr long)
+@ stdcall -version=0x600+ IdnToNameprepUnicode(long wstr long ptr long)
+@ stdcall -version=0x600+ IdnToUnicode(long wstr long ptr long)
 @ stdcall InitAtomTable(long)
 @ stdcall InitOnceBeginInitialize(ptr long ptr ptr)
 @ stdcall InitOnceComplete(ptr long ptr)
@@ -719,7 +720,7 @@
 @ stdcall InitializeCriticalSection(ptr)
 @ stdcall InitializeCriticalSectionAndSpinCount(ptr long)
 @ stdcall InitializeCriticalSectionEx(ptr long long)
-@ stdcall -stub -version=0x600+ InitializeProcThreadAttributeList(ptr long long ptr)
+@ stdcall -version=0x600+ InitializeProcThreadAttributeList(ptr long long ptr)
 @ stdcall InitializeSListHead(ptr) ntdll.RtlInitializeSListHead
 @ stdcall InitializeSRWLock(ptr) ntdll.RtlInitializeSRWLock
 @ stdcall -arch=i386 -ret64 InterlockedCompareExchange64(ptr double double) ntdll.RtlInterlockedCompareExchange64
@@ -747,12 +748,12 @@
 @ stdcall IsDBCSLeadByteEx(long long)
 @ stdcall IsDebuggerPresent()
 @ stdcall IsNLSDefinedString(long long ptr long long)
-@ stdcall -stub -version=0x600+ IsNormalizedString(long wstr long)
+@ stdcall -version=0x600+ IsNormalizedString(long wstr long)
 @ stdcall IsProcessInJob(long long ptr)
 @ stdcall IsProcessorFeaturePresent(long)
 @ stdcall IsSystemResumeAutomatic()
 @ stdcall -version=0x600+ IsThreadAFiber()
-@ stub -version=0x600+ IsThreadpoolTimerSet
+@ stdcall -version=0x600+ IsThreadpoolTimerSet(ptr)
 @ stdcall IsTimeZoneRedirectionEnabled()
 @ stub -version=0x600+ IsValidCalDateTime
 @ stdcall IsValidCodePage(long)
@@ -803,7 +804,7 @@
 @ stdcall LZSeek(long long long)
 @ stdcall LZStart()
 @ stdcall LeaveCriticalSection(ptr) ntdll.RtlLeaveCriticalSection
-@ stub -version=0x600+ LeaveCriticalSectionWhenCallbackReturns
+@ stdcall -version=0x600+ LeaveCriticalSectionWhenCallbackReturns(ptr ptr)
 @ stdcall LoadLibraryA(str)
 @ stdcall LoadLibraryExA(str long long)
 @ stdcall LoadLibraryExW(wstr long long)
@@ -831,7 +832,7 @@
 @ stdcall MapUserPhysicalPagesScatter(ptr long ptr)
 @ stdcall MapViewOfFile(long long long long long)
 @ stdcall MapViewOfFileEx(long long long long long ptr)
-@ stub -version=0x600+ MapViewOfFileExNuma
+@ stdcall -version=0x600+ MapViewOfFileExNuma(long long long long long ptr long)
 @ stdcall Module32First(long ptr)
 @ stdcall Module32FirstW(long ptr)
 @ stdcall Module32Next(long ptr)
@@ -856,7 +857,7 @@
 @ stub -version=0x600+ NlsUpdateLocale
 @ stub -version=0x600+ NlsUpdateSystemLocale
 @ stub -version=0x600+ NlsWriteEtwEvent
-@ stdcall -stub -version=0x600+ NormalizeString(long wstr long ptr long)
+@ stdcall -version=0x600+ NormalizeString(long wstr long ptr long)
 @ stdcall -stub -version=0x600+ NotifyUILanguageChange(long wstr wstr long ptr)
 @ stdcall OpenConsoleW(wstr long long long)
 @ stdcall -version=0x500-0x502 OpenDataFile(long long)
@@ -942,11 +943,11 @@
 @ stdcall RegisterWowExec(long)
 @ stdcall ReleaseActCtx(ptr)
 @ stdcall ReleaseMutex(long)
-@ stub -version=0x600+ ReleaseMutexWhenCallbackReturns
+@ stdcall -version=0x600+ ReleaseMutexWhenCallbackReturns(ptr long)
 @ stdcall ReleaseSRWLockExclusive(ptr) ntdll.RtlReleaseSRWLockExclusive
 @ stdcall ReleaseSRWLockShared(ptr) ntdll.RtlReleaseSRWLockShared
 @ stdcall ReleaseSemaphore(long long ptr)
-@ stub -version=0x600+ ReleaseSemaphoreWhenCallbackReturns
+@ stdcall -version=0x600+ ReleaseSemaphoreWhenCallbackReturns(ptr long long)
 @ stdcall RemoveDirectoryA(str)
 @ stub -version=0x600+ RemoveDirectoryTransactedA
 @ stub -version=0x600+ RemoveDirectoryTransactedW
@@ -1049,7 +1050,7 @@
 @ stdcall SetEnvironmentVariableW(wstr wstr)
 @ stdcall SetErrorMode(long)
 @ stdcall SetEvent(long)
-@ stub -version=0x600+ SetEventWhenCallbackReturns
+@ stdcall -version=0x600+ SetEventWhenCallbackReturns(ptr long)
 @ stdcall SetFileApisToANSI()
 @ stdcall SetFileApisToOEM()
 @ stdcall SetFileAttributesA(str long)
@@ -1058,7 +1059,7 @@
 @ stdcall SetFileAttributesW(wstr long)
 @ stdcall -version=0x600+ SetFileBandwidthReservation(ptr long long long ptr ptr)
 @ stdcall SetFileCompletionNotificationModes(ptr long)
-@ stub -version=0x600+ SetFileInformationByHandle
+@ stdcall -version=0x600+ SetFileInformationByHandle(ptr long ptr long)
 @ stub -version=0x600+ SetFileIoOverlappedRange
 @ stdcall SetFilePointer(long long ptr long)
 @ stdcall SetFilePointerEx(long double ptr long)
@@ -1088,7 +1089,7 @@
 @ stdcall SetPriorityClass(long long)
 @ stdcall SetProcessAffinityMask(long long)
 @ stub -version=0x600+ SetProcessAffinityUpdateMode
-@ stub -version=0x600+ SetProcessDEPPolicy
+@ stdcall -version=0x600+ SetProcessDEPPolicy(long)
 @ stdcall SetProcessPriorityBoost(long long)
 @ stdcall SetProcessShutdownParameters(long long)
 @ stdcall SetProcessWorkingSetSize(long long long)
@@ -1104,7 +1105,7 @@
 @ stdcall SetTermsrvAppInstallMode(long)
 @ stdcall SetThreadAffinityMask(long long)
 @ stdcall SetThreadContext(long ptr)
-@ stdcall -stub -version=0x600+ SetThreadErrorMode(long ptr)
+@ stdcall -version=0x600+ SetThreadErrorMode(long ptr)
 @ stdcall SetThreadExecutionState(long)
 @ stdcall SetThreadIdealProcessor(long long)
 @ stdcall SetThreadLocale(long)
@@ -1113,10 +1114,10 @@
 @ stdcall SetThreadPriorityBoost(long long)
 @ stdcall SetThreadStackGuarantee(ptr)
 @ stdcall SetThreadUILanguage(long)
-@ stub -version=0x600+ SetThreadpoolThreadMaximum
-@ stub -version=0x600+ SetThreadpoolThreadMinimum
-@ stub -version=0x600+ SetThreadpoolTimer
-@ stub -version=0x600+ SetThreadpoolWait
+@ stdcall -version=0x600+ SetThreadpoolThreadMaximum(ptr long)
+@ stdcall -version=0x600+ SetThreadpoolThreadMinimum(ptr long)
+@ stdcall -version=0x600+ SetThreadpoolTimer(ptr ptr long long)
+@ stdcall -version=0x600+ SetThreadpoolWait(ptr long ptr)
 @ stdcall SetTimeZoneInformation(ptr)
 @ stdcall SetTimerQueueTimer(long ptr ptr long long long)
 @ stdcall SetUnhandledExceptionFilter(ptr)
@@ -1135,8 +1136,8 @@
 @ stdcall SleepConditionVariableCS(ptr ptr long)
 @ stdcall SleepConditionVariableSRW(ptr ptr long long)
 @ stdcall SleepEx(long long)
-@ stub -version=0x600+ StartThreadpoolIo
-@ stdcall -stub -version=0x600+ SubmitThreadpoolWork(ptr)
+@ stdcall -version=0x600+ StartThreadpoolIo(ptr)
+@ stdcall -version=0x600+ SubmitThreadpoolWork(ptr)
 @ stdcall SuspendThread(long)
 @ stdcall SwitchToFiber(ptr)
 @ stdcall SwitchToThread()
@@ -1156,7 +1157,7 @@
 @ stdcall TransactNamedPipe(long ptr long ptr long ptr ptr)
 @ stdcall TransmitCommChar(long long)
 @ stdcall TryEnterCriticalSection(ptr) ntdll.RtlTryEnterCriticalSection
-@ stub -version=0x600+ TrySubmitThreadpoolCallback
+@ stdcall -version=0x600+ TrySubmitThreadpoolCallback(ptr ptr ptr)
 @ stdcall TzSpecificLocalTimeToSystemTime(ptr ptr ptr)
 @ stdcall UTRegister(long str str str ptr ptr ptr)
 @ stdcall UTUnRegister(long)
@@ -1170,7 +1171,7 @@
 @ stdcall UnregisterWait(long)
 @ stdcall UnregisterWaitEx(long long)
 @ stub -version=0x600+ UpdateCalendarDayOfWeek
-@ stdcall -stub -version=0x600+ UpdateProcThreadAttribute(ptr long ptr ptr ptr ptr ptr)
+@ stdcall -version=0x600+ UpdateProcThreadAttribute(ptr long ptr ptr ptr ptr ptr)
 @ stdcall UpdateResourceA(long str str long ptr long)
 @ stdcall UpdateResourceW(long wstr wstr long ptr long)
 @ stdcall VDMConsoleOperation(long long)
@@ -1181,12 +1182,12 @@
 @ stdcall VerLanguageNameW(long wstr long)
 @ stdcall -ret64 VerSetConditionMask(long long long long) ntdll.VerSetConditionMask
 @ stdcall VerifyConsoleIoHandle(long)
-@ stub -version=0x600+ VerifyScripts
+@ stdcall -version=0x600+ VerifyScripts(long wstr long wstr long)
 @ stdcall VerifyVersionInfoA(long long double)
 @ stdcall VerifyVersionInfoW(long long double)
 @ stdcall VirtualAlloc(ptr long long long)
 @ stdcall VirtualAllocEx(long ptr long long long)
-@ stub -version=0x600+ VirtualAllocExNuma
+@ stdcall -version=0x600+ VirtualAllocExNuma(long ptr long long long long)
 @ stdcall VirtualFree(ptr long long)
 @ stdcall VirtualFreeEx(long ptr long long)
 @ stdcall VirtualLock(ptr long)
@@ -1202,10 +1203,10 @@
 @ stdcall WaitForMultipleObjectsEx(long ptr long long long)
 @ stdcall WaitForSingleObject(long long)
 @ stdcall WaitForSingleObjectEx(long long long)
-@ stub -version=0x600+ WaitForThreadpoolIoCallbacks
-@ stub -version=0x600+ WaitForThreadpoolTimerCallbacks
-@ stub -version=0x600+ WaitForThreadpoolWaitCallbacks
-@ stdcall -stub -version=0x600+ WaitForThreadpoolWorkCallbacks(ptr long)
+@ stdcall -version=0x600+ WaitForThreadpoolIoCallbacks(ptr long)
+@ stdcall -version=0x600+ WaitForThreadpoolTimerCallbacks(ptr long)
+@ stdcall -version=0x600+ WaitForThreadpoolWaitCallbacks(ptr long)
+@ stdcall -version=0x600+ WaitForThreadpoolWorkCallbacks(ptr long)
 @ stdcall WaitNamedPipeA(str long)
 @ stdcall WaitNamedPipeW(wstr long)
 @ stdcall WakeAllConditionVariable(ptr) ntdll.RtlWakeAllConditionVariable

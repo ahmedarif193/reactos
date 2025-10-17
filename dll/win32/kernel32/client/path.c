@@ -1120,6 +1120,44 @@ GetFullPathNameW(IN LPCWSTR lpFileName,
  */
 DWORD
 WINAPI
+GetFullPathNameTransactedA(IN LPCSTR lpFileName,
+                           IN DWORD nBufferLength,
+                           OUT LPSTR lpBuffer,
+                           OUT LPSTR *lpFilePart,
+                           HANDLE hTransaction)
+{
+    UNREFERENCED_PARAMETER(hTransaction);
+
+    return GetFullPathNameA(lpFileName,
+                             nBufferLength,
+                             lpBuffer,
+                             lpFilePart);
+}
+
+/*
+ * @implemented
+ */
+DWORD
+WINAPI
+GetFullPathNameTransactedW(IN LPCWSTR lpFileName,
+                           IN DWORD nBufferLength,
+                           OUT LPWSTR lpBuffer,
+                           OUT LPWSTR *lpFilePart,
+                           HANDLE hTransaction)
+{
+    UNREFERENCED_PARAMETER(hTransaction);
+
+    return GetFullPathNameW(lpFileName,
+                             nBufferLength,
+                             lpBuffer,
+                             lpFilePart);
+}
+
+/*
+ * @implemented
+ */
+DWORD
+WINAPI
 SearchPathA(IN LPCSTR lpPath OPTIONAL,
             IN LPCSTR lpFileName,
             IN LPCSTR lpExtension OPTIONAL,

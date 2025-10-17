@@ -6,9 +6,9 @@
 #include <windef.h>
 #include <winbase.h>
 
-/* Redefine NTDDI_VERSION to 2K3 SP1 to get correct NDK definitions */
+/* Force NTDDI_VERSION to Vista so the NDK exposes NT6 entry points */
 #undef NTDDI_VERSION
-#define NTDDI_VERSION NTDDI_WS03SP1
+#define NTDDI_VERSION NTDDI_VISTA
 
 #define NTOS_MODE_USER
 #include <ndk/iofuncs.h>
@@ -22,3 +22,6 @@
 
 /* Internal Kernel32 Header */
 #include "../include/kernel32.h"
+
+PUNICODE_STRING
+K32VistaAnsiToStaticUnicode(LPCSTR Name);

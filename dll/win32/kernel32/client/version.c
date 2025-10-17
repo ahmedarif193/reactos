@@ -9,6 +9,14 @@
 
 #include <k32.h>
 
+BOOLEAN
+NTAPI
+RtlGetProductInfo(IN ULONG OSMajorVersion,
+                  IN ULONG OSMinorVersion,
+                  IN ULONG SpMajorVersion,
+                  IN ULONG SpMinorVersion,
+                  OUT PDWORD ReturnedProductType);
+
 #define NDEBUG
 #include <debug.h>
 
@@ -176,4 +184,31 @@ VerifyVersionInfoA(IN LPOSVERSIONINFOEXA lpVersionInformation,
     viex.wProductType = lpVersionInformation->wProductType;
     viex.wReserved = lpVersionInformation->wReserved;
     return VerifyVersionInfoW(&viex, dwTypeMask, dwlConditionMask);
+}
+
+BOOL
+WINAPI
+GetProductInfo(IN DWORD dwOSMajorVersion,
+               IN DWORD dwOSMinorVersion,
+               IN DWORD dwSpMajorVersion,
+               IN DWORD dwSpMinorVersion,
+               OUT PDWORD pdwReturnedProductType)
+{
+    if (!pdwReturnedProductType)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (!RtlGetProductInfo(dwOSMajorVersion,
+                           dwOSMinorVersion,
+                           dwSpMajorVersion,
+                           dwSpMinorVersion,
+                           pdwReturnedProductType))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    return TRUE;
 }

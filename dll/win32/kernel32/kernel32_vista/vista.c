@@ -8,6 +8,9 @@
 /* INCLUDES *******************************************************************/
 
 #include <k32_vista.h>
+#include <ndk/ntndk.h>
+#include <stdio.h>
+#include <wchar.h>
 
 #if _WIN32_WINNT != _WIN32_WINNT_VISTA
 #error "This file must be compiled with _WIN32_WINNT == _WIN32_WINNT_VISTA"
@@ -18,6 +21,20 @@
 
 #define NDEBUG
 #include <debug.h>
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+NtSetInformationProcess(
+    _In_ HANDLE ProcessHandle,
+    _In_ PROCESSINFOCLASS ProcessInformationClass,
+    _In_reads_bytes_(ProcessInformationLength) PVOID ProcessInformation,
+    _In_ ULONG ProcessInformationLength);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+NtFlushProcessWriteBuffers(VOID);
 
 /* PUBLIC FUNCTIONS ***********************************************************/
 
@@ -122,6 +139,154 @@ QueryFullProcessImageNameA(HANDLE hProcess,
 
     RtlFreeHeap(RtlGetProcessHeap(), 0, lpExeNameW);
     return Result;
+}
+
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+GetPhysicallyInstalledSystemMemory(PULONGLONG TotalMemoryInKilobytes)
+{
+    SYSTEM_BASIC_INFORMATION BasicInfo;
+    NTSTATUS Status;
+
+    if (!TotalMemoryInKilobytes)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    Status = NtQuerySystemInformation(SystemBasicInformation,
+                                      &BasicInfo,
+                                      sizeof(BasicInfo),
+                                      NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    *TotalMemoryInKilobytes = ((ULONGLONG)BasicInfo.NumberOfPhysicalPages *
+                               (ULONGLONG)BasicInfo.PageSize) / 1024ULL;
+    return TRUE;
+}
+
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+GetProcessDEPPolicy(HANDLE hProcess,
+                    LPDWORD lpFlags,
+                    PBOOL lpPermanent)
+{
+    ULONG ExecuteFlags;
+    NTSTATUS Status;
+
+    if (!lpFlags && !lpPermanent)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    Status = NtQueryInformationProcess(hProcess,
+                                       ProcessExecuteFlags,
+                                       &ExecuteFlags,
+                                       sizeof(ExecuteFlags),
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    if (lpFlags)
+    {
+        DWORD Result = 0;
+
+        if (ExecuteFlags & MEM_EXECUTE_OPTION_DISABLE)
+            Result |= PROCESS_DEP_ENABLE;
+        if (ExecuteFlags & MEM_EXECUTE_OPTION_DISABLE_THUNK_EMULATION)
+            Result |= PROCESS_DEP_DISABLE_ATL_THUNK_EMULATION;
+
+        *lpFlags = Result;
+    }
+
+    if (lpPermanent)
+        *lpPermanent = (ExecuteFlags & MEM_EXECUTE_OPTION_PERMANENT) != 0;
+
+    return TRUE;
+}
+
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+SetProcessDEPPolicy(DWORD dwFlags)
+{
+    ULONG ExecuteFlags = 0;
+    NTSTATUS Status;
+
+    if (dwFlags & ~(PROCESS_DEP_ENABLE | PROCESS_DEP_DISABLE_ATL_THUNK_EMULATION))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if ((dwFlags & PROCESS_DEP_ENABLE) == 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    ExecuteFlags |= MEM_EXECUTE_OPTION_DISABLE | MEM_EXECUTE_OPTION_PERMANENT;
+    if (dwFlags & PROCESS_DEP_DISABLE_ATL_THUNK_EMULATION)
+        ExecuteFlags |= MEM_EXECUTE_OPTION_DISABLE_THUNK_EMULATION;
+
+    Status = NtSetInformationProcess(GetCurrentProcess(),
+                                     ProcessExecuteFlags,
+                                     &ExecuteFlags,
+                                     sizeof(ExecuteFlags));
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+
+/*
+ * @implemented
+ */
+DEP_SYSTEM_POLICY_TYPE
+WINAPI
+GetSystemDEPPolicy(VOID)
+{
+    return (DEP_SYSTEM_POLICY_TYPE)SharedUserData->NXSupportPolicy;
+}
+
+
+/*
+ * @implemented
+ */
+VOID
+WINAPI
+FlushProcessWriteBuffers(VOID)
+{
+    NTSTATUS Status;
+
+    Status = NtFlushProcessWriteBuffers();
+    if (!NT_SUCCESS(Status))
+    {
+        RtlRaiseStatus(Status);
+    }
 }
 
 
@@ -586,14 +751,122 @@ GetFileMUIInfo(
     PFILEMUIINFO pFileMUIInfo,
     DWORD *pcbFileMUIInfo)
 {
-    DPRINT1("%x %p %p %p\n", dwFlags, pcwszFilePath, pFileMUIInfo, pcbFileMUIInfo);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    static const DWORD AllowedFlags =
+        MUI_QUERY_TYPE | MUI_QUERY_CHECKSUM | MUI_QUERY_LANGUAGE_NAME | MUI_QUERY_RESOURCE_TYPES;
+    DWORD EffectiveFlags;
+    DWORD RequiredSize;
+    DWORD Attributes;
+    WCHAR LanguageBuffer[LOCALE_NAME_MAX_LENGTH];
+    ULONG LanguageLength;
+    ULONG LanguageBytes;
+    ULONG Offset;
+
+    if (!pcwszFilePath || !pcbFileMUIInfo)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if ((dwFlags & ~AllowedFlags) != 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    Attributes = GetFileAttributesW(pcwszFilePath);
+    if (Attributes == INVALID_FILE_ATTRIBUTES)
+        return FALSE;
+
+    EffectiveFlags = dwFlags;
+    if (EffectiveFlags == 0)
+        EffectiveFlags = MUI_QUERY_TYPE | MUI_QUERY_LANGUAGE_NAME;
+
+    LanguageLength = 0;
+    LanguageBytes = 0;
+    if (EffectiveFlags & MUI_QUERY_LANGUAGE_NAME)
+    {
+        int Copied = GetUserDefaultLocaleName(LanguageBuffer, ARRAYSIZE(LanguageBuffer));
+        if (Copied <= 0)
+        {
+            wcscpy(LanguageBuffer, L"en-US");
+            LanguageLength = 6;
+        }
+        else
+        {
+            LanguageLength = (ULONG)Copied;
+        }
+
+        LanguageBytes = LanguageLength * sizeof(WCHAR);
+    }
+
+    Offset = FIELD_OFFSET(FILEMUIINFO, abBuffer);
+    RequiredSize = Offset + LanguageBytes;
+
+    if (!pFileMUIInfo || *pcbFileMUIInfo < RequiredSize)
+    {
+        *pcbFileMUIInfo = RequiredSize;
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    RtlZeroMemory(pFileMUIInfo, *pcbFileMUIInfo);
+    pFileMUIInfo->dwSize = RequiredSize;
+    pFileMUIInfo->dwVersion = MUI_FILEINFO_VERSION;
+
+    if (EffectiveFlags & MUI_QUERY_TYPE)
+        pFileMUIInfo->dwFileType = MUI_FILETYPE_NOT_LANGUAGE_NEUTRAL;
+
+    if (EffectiveFlags & MUI_QUERY_LANGUAGE_NAME)
+    {
+        pFileMUIInfo->dwLanguageNameOffset = Offset;
+        RtlCopyMemory((PBYTE)pFileMUIInfo + Offset, LanguageBuffer, LanguageBytes);
+    }
+
+    if (EffectiveFlags & MUI_QUERY_CHECKSUM)
+    {
+        RtlZeroMemory(pFileMUIInfo->pChecksum, sizeof(pFileMUIInfo->pChecksum));
+        RtlZeroMemory(pFileMUIInfo->pServiceChecksum, sizeof(pFileMUIInfo->pServiceChecksum));
+    }
+
+    *pcbFileMUIInfo = RequiredSize;
+    return TRUE;
 }
 
-/*
- * @unimplemented
- */
+static BOOL
+K32VistaCopyMuiString(PCWSTR Source,
+                      PWSTR Destination,
+                      PULONG InOutLength)
+{
+    ULONG Required;
+
+    if (!InOutLength)
+        return FALSE;
+
+    Required = (ULONG)(wcslen(Source) + 1);
+    if (!Destination || *InOutLength < Required)
+    {
+        *InOutLength = Required;
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    wmemcpy(Destination, Source, Required);
+    *InOutLength = Required;
+    return TRUE;
+}
+
+static BOOL
+K32VistaMuiCandidateExists(PCWSTR Candidate)
+{
+    DWORD Attributes;
+
+    if (!Candidate)
+        return FALSE;
+
+    Attributes = GetFileAttributesW(Candidate);
+    return Attributes != INVALID_FILE_ATTRIBUTES && !(Attributes & FILE_ATTRIBUTE_DIRECTORY);
+}
+
 BOOL
 WINAPI
 GetFileMUIPath(
@@ -605,9 +878,169 @@ GetFileMUIPath(
     PULONG pcchFileMUIPath,
     PULONGLONG pululEnumerator)
 {
-    DPRINT1("%x %p %p %p %p %p\n", dwFlags, pcwszFilePath, pwszLanguage, pwszFileMUIPath, pcchFileMUIPath, pululEnumerator);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    static const DWORD AllowedFlags = MUI_LANGUAGE_NAME | MUI_LANGUAGE_ID | MUI_MACHINE_LANGUAGE_SETTINGS;
+    WCHAR LanguageName[LOCALE_NAME_MAX_LENGTH];
+    WCHAR LanguageId[5];
+    const WCHAR *LanguageValue = L"";
+    ULONG LanguageChars = 1; /* include terminator */
+    WCHAR *FullPath = NULL;
+    WCHAR *CandidatePrimary = NULL;
+    WCHAR *CandidateAlt = NULL;
+    WCHAR *FilePart = NULL;
+    DWORD FullLength;
+    DWORD ActualLength;
+    BOOL AppendSlash;
+    BOOL Success = FALSE;
+
+    if (!pcwszFilePath || !pcchFileMUIPath)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if ((dwFlags & ~AllowedFlags) != 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if ((dwFlags & (MUI_LANGUAGE_NAME | MUI_LANGUAGE_ID)) == (MUI_LANGUAGE_NAME | MUI_LANGUAGE_ID))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (pwszLanguage && !pcchLanguage)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if ((dwFlags & (MUI_LANGUAGE_NAME | MUI_LANGUAGE_ID)) && !pcchLanguage)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (dwFlags & MUI_LANGUAGE_ID)
+    {
+        LANGID LangId = GetUserDefaultUILanguage();
+        _snwprintf(LanguageId, ARRAYSIZE(LanguageId), L"%04x", LangId);
+        LanguageValue = LanguageId;
+        LanguageChars = (ULONG)wcslen(LanguageValue) + 1;
+    }
+    else
+    {
+        int Copied = GetUserDefaultLocaleName(LanguageName, ARRAYSIZE(LanguageName));
+        if (Copied <= 0)
+        {
+            wcscpy(LanguageName, L"en-US");
+            LanguageChars = 6;
+        }
+        else
+        {
+            LanguageChars = (ULONG)Copied;
+        }
+
+        LanguageValue = LanguageName;
+    }
+
+    FullLength = GetFullPathNameW(pcwszFilePath, 0, NULL, NULL);
+    if (FullLength == 0)
+        goto Cleanup;
+
+    FullPath = RtlAllocateHeap(RtlGetProcessHeap(), 0, (FullLength + 1) * sizeof(WCHAR));
+    if (!FullPath)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        goto Cleanup;
+    }
+
+    ActualLength = GetFullPathNameW(pcwszFilePath, FullLength + 1, FullPath, &FilePart);
+    if (ActualLength == 0 || ActualLength > FullLength)
+        goto Cleanup;
+
+    CandidatePrimary = RtlAllocateHeap(RtlGetProcessHeap(), 0, (ActualLength + 5) * sizeof(WCHAR));
+    if (!CandidatePrimary)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        goto Cleanup;
+    }
+
+    if (_snwprintf(CandidatePrimary, ActualLength + 5, L"%ls.mui", FullPath) < 0)
+        goto Cleanup;
+
+    if (FilePart && *LanguageValue)
+    {
+        SIZE_T DirectoryChars = (SIZE_T)(FilePart - FullPath);
+        SIZE_T FileNameChars = wcslen(FilePart);
+        AppendSlash = DirectoryChars > 0 && FullPath[DirectoryChars - 1] != L'\\';
+
+        SIZE_T TotalChars = DirectoryChars + (AppendSlash ? 1 : 0) + (LanguageChars - 1) + 1 + FileNameChars + 4 + 1;
+        CandidateAlt = RtlAllocateHeap(RtlGetProcessHeap(), 0, TotalChars * sizeof(WCHAR));
+        if (!CandidateAlt)
+        {
+            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            goto Cleanup;
+        }
+
+        if (_snwprintf(CandidateAlt, TotalChars, L"%.*ls%ls%ls\\%ls.mui",
+                     (int)DirectoryChars,
+                     FullPath,
+                     AppendSlash ? L"\\" : L"",
+                     LanguageValue,
+                     FilePart) < 0)
+        {
+            goto Cleanup;
+        }
+    }
+
+    if (K32VistaMuiCandidateExists(CandidatePrimary))
+    {
+        Success = TRUE;
+    }
+    else if (K32VistaMuiCandidateExists(CandidateAlt))
+    {
+        Success = TRUE;
+        RtlFreeHeap(RtlGetProcessHeap(), 0, CandidatePrimary);
+        CandidatePrimary = CandidateAlt;
+        CandidateAlt = NULL;
+    }
+    else
+    {
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        goto Cleanup;
+    }
+
+    if (pcchLanguage)
+    {
+        if (!K32VistaCopyMuiString(LanguageValue, pwszLanguage, pcchLanguage))
+        {
+            Success = FALSE;
+            goto Cleanup;
+        }
+    }
+
+    if (!K32VistaCopyMuiString(CandidatePrimary, pwszFileMUIPath, pcchFileMUIPath))
+    {
+        Success = FALSE;
+        goto Cleanup;
+    }
+
+    if (pululEnumerator)
+        *pululEnumerator = 0;
+
+    Success = TRUE;
+
+Cleanup:
+    if (CandidateAlt)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, CandidateAlt);
+    if (CandidatePrimary)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, CandidatePrimary);
+    if (FullPath)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, FullPath);
+
+    return Success;
 }
 
 /*
@@ -738,4 +1171,3 @@ SetThreadPreferredUILanguages(
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return FALSE;
 }
-
