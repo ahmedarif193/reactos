@@ -3,6 +3,7 @@
  * LICENSE:     MIT (https://spdx.org/licenses/MIT)
  * PURPOSE:     SEH support helpers for AMD64
  * COPYRIGHT:   Copyright 2025 ReactOS contributors
+ *               Copyright 2025 Ahmed ARIF (arif.ing@outlook.com)
  */
 
 #include <excpt.h>

@@ -1,3 +1,10 @@
+/*
+ * PROJECT:         ReactOS system libraries
+ * LICENSE:         GPL-2.0-or-later - See COPYING in the top level directory
+ * PURPOSE:         Vista NUMA memory APIs
+ * COPYRIGHT:       2025 Ahmed ARIF (arif.ing@outlook.com)
+ */
+
 #include "k32_vista.h"
 
 #define NDEBUG

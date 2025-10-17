@@ -1,3 +1,10 @@
+/*
+ * PROJECT:         ReactOS CRT
+ * LICENSE:         MIT (https://spdx.org/licenses/MIT)
+ * PURPOSE:         Native MinGW CRT bridge shims
+ * COPYRIGHT:       2025 Ahmed ARIF (arif.ing@outlook.com)
+ */
+
 #include <windef.h>
 
 #ifdef USE_NATIVE_MINGW_CRT

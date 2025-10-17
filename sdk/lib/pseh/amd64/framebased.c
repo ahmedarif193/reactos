@@ -3,6 +3,7 @@
  * LICENSE:         MIT (https://spdx.org/licenses/MIT)
  * FILE:            sdk/lib/pseh/amd64/framebased.c
  * PURPOSE:         Frame-based SEH support for AMD64
+ * COPYRIGHT:       2025 Ahmed ARIF (arif.ing@outlook.com)
  */
 
 #include <windef.h>

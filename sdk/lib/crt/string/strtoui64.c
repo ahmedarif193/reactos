@@ -1,3 +1,10 @@
+/*
+ * PROJECT:         ReactOS CRT
+ * LICENSE:         MIT (https://spdx.org/licenses/MIT)
+ * PURPOSE:         _strtoui64 wrapper implementations
+ * COPYRIGHT:       2025 Ahmed ARIF (arif.ing@outlook.com)
+ */
+
 #include <precomp.h>
 
 /*********************************************************************
