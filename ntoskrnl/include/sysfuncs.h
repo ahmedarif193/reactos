@@ -180,6 +180,7 @@
     SVC_(QuerySystemEnvironmentValue, 4)
     SVC_(QuerySystemEnvironmentValueEx, 5)
     SVC_(QuerySystemInformation, 4)
+    SVC_(QuerySystemInformationEx, 6)
     SVC_(QuerySystemTime, 1)
     SVC_(QueryTimer, 5)
     SVC_(QueryTimerResolution, 3)

@@ -1498,6 +1498,7 @@
 @ stdcall ZwQuerySecurityObject(ptr long ptr long ptr)
 @ stdcall ZwQuerySymbolicLinkObject(ptr ptr ptr)
 @ stdcall ZwQuerySystemInformation(long ptr long ptr)
+@ stdcall ZwQuerySystemInformationEx(long ptr long ptr long ptr)
 @ stdcall ZwQueryValueKey(ptr ptr long ptr long ptr)
 @ stdcall ZwQueryVolumeInformationFile(ptr ptr ptr long long)
 @ stdcall ZwReadFile(ptr ptr ptr ptr ptr ptr long ptr ptr)

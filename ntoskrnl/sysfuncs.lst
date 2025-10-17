@@ -180,6 +180,7 @@ NtQuerySymbolicLinkObject 3
 NtQuerySystemEnvironmentValue 4
 NtQuerySystemEnvironmentValueEx 5
 NtQuerySystemInformation 4
+NtQuerySystemInformationEx 6
 NtQuerySystemTime 1
 NtQueryTimer 5
 NtQueryTimerResolution 3
