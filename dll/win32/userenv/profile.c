@@ -14,6 +14,8 @@
 #define NDEBUG
 #include <debug.h>
 
+#define MAX_SID_STRING_LENGTH 196
+
 /* FUNCTIONS ***************************************************************/
 
 BOOL
@@ -558,6 +560,537 @@ done:
 }
 
 
+
+static BOOL
+GetWellKnownProfileTemplate(LPCWSTR SidString,
+                            LPCWSTR *RawProfilePath)
+{
+    static const struct
+    {
+        LPCWSTR Sid;
+        LPCWSTR RawPath;
+    } s_WellKnownProfiles[] =
+    {
+        { L"S-1-5-18", L"%SystemRoot%\\System32\\Config\\SystemProfile" },
+        { L"S-1-5-19", L"%SystemRoot%\\ServiceProfiles\\LocalService" },
+        { L"S-1-5-20", L"%SystemRoot%\\ServiceProfiles\\NetworkService" },
+    };
+    UINT i;
+
+    if (!SidString || !RawProfilePath)
+        return FALSE;
+
+    for (i = 0; i < ARRAYSIZE(s_WellKnownProfiles); i++)
+    {
+        if (_wcsicmp(SidString, s_WellKnownProfiles[i].Sid) == 0)
+        {
+            *RawProfilePath = s_WellKnownProfiles[i].RawPath;
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static BOOL
+EnsureDirectoryHierarchyExists(LPWSTR Path,
+                               BOOL *pbCreated)
+{
+    LPWSTR Cursor;
+    BOOL Created = FALSE;
+
+    if (!Path || !Path[0])
+        return FALSE;
+
+    if (Path[1] == L':')
+        Cursor = Path + 3;
+    else
+        Cursor = Path + 1;
+
+    for (; *Cursor; ++Cursor)
+    {
+        if (*Cursor == L'\\')
+        {
+            WCHAR Temp = *Cursor;
+            *Cursor = L'\0';
+
+            if (!CreateDirectoryW(Path, NULL))
+            {
+                DWORD dwError = GetLastError();
+                if (dwError != ERROR_ALREADY_EXISTS)
+                {
+                    *Cursor = Temp;
+                    return FALSE;
+                }
+            }
+
+            *Cursor = Temp;
+        }
+    }
+
+    if (!CreateDirectoryW(Path, NULL))
+    {
+        DWORD dwError = GetLastError();
+        if (dwError != ERROR_ALREADY_EXISTS)
+            return FALSE;
+    }
+    else
+    {
+        Created = TRUE;
+    }
+
+    if (pbCreated)
+        *pbCreated = Created;
+
+    return TRUE;
+}
+
+static BOOL
+EnsureWellKnownProfileEntry(HANDLE hToken,
+                            LPCWSTR SidString)
+{
+    LPCWSTR RawProfilePath;
+    WCHAR szKeyName[MAX_PATH];
+    WCHAR szExpandedProfilePath[MAX_PATH];
+    HKEY hProfileKey = NULL;
+    DWORD dwDisposition;
+    LONG Error;
+    BOOL bDirectoryCreated = FALSE;
+    PSID pUserSid = NULL;
+    BOOL bUserSidAllocated = FALSE;
+    BOOL bResult = FALSE;
+
+    if (!GetWellKnownProfileTemplate(SidString, &RawProfilePath))
+        return FALSE;
+
+    StringCbCopyW(szKeyName, sizeof(szKeyName),
+                  L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\");
+    StringCbCatW(szKeyName, sizeof(szKeyName), SidString);
+
+    Error = RegCreateKeyExW(HKEY_LOCAL_MACHINE,
+                            szKeyName,
+                            0,
+                            NULL,
+                            0,
+                            KEY_READ | KEY_WRITE,
+                            NULL,
+                            &hProfileKey,
+                            &dwDisposition);
+    if (Error != ERROR_SUCCESS)
+        return FALSE;
+
+    if (dwDisposition == REG_OPENED_EXISTING_KEY)
+    {
+        DWORD dwExistingType = 0;
+        DWORD cbExisting = sizeof(szExpandedProfilePath);
+
+        Error = RegQueryValueExW(hProfileKey,
+                                 L"ProfileImagePath",
+                                 NULL,
+                                 &dwExistingType,
+                                 (LPBYTE)szExpandedProfilePath,
+                                 &cbExisting);
+        if (Error == ERROR_SUCCESS &&
+            (dwExistingType == REG_SZ || dwExistingType == REG_EXPAND_SZ) &&
+            szExpandedProfilePath[0] != L'\0')
+        {
+            bResult = TRUE;
+            goto cleanup;
+        }
+    }
+
+    {
+        DWORD dwExpanded = ExpandEnvironmentStringsW(RawProfilePath,
+                                                     szExpandedProfilePath,
+                                                     ARRAYSIZE(szExpandedProfilePath));
+
+        if (!dwExpanded || dwExpanded >= ARRAYSIZE(szExpandedProfilePath))
+            goto cleanup;
+    }
+
+    if (!EnsureDirectoryHierarchyExists(szExpandedProfilePath, &bDirectoryCreated))
+        goto cleanup;
+
+    if (bDirectoryCreated)
+    {
+        WCHAR szDefaultProfilePath[MAX_PATH];
+        DWORD cchDefaultProfile = ARRAYSIZE(szDefaultProfilePath);
+
+        if (GetDefaultUserProfileDirectoryW(szDefaultProfilePath, &cchDefaultProfile))
+        {
+            if (!CopyProfileDirectoryW(szDefaultProfilePath, szExpandedProfilePath, 0))
+            {
+                DWORD dwCopyError = GetLastError();
+                DPRINT1("CopyProfileDirectoryW(%S <- %S) failed (%lu)\n",
+                        szExpandedProfilePath,
+                        szDefaultProfilePath,
+                        dwCopyError);
+            }
+        }
+    }
+
+    Error = RegSetValueExW(hProfileKey,
+                           L"ProfileImagePath",
+                           0,
+                           REG_EXPAND_SZ,
+                           (const BYTE *)RawProfilePath,
+                           (DWORD)((wcslen(RawProfilePath) + 1) * sizeof(WCHAR)));
+    if (Error != ERROR_SUCCESS)
+        goto cleanup;
+
+    pUserSid = GetUserSid(hToken);
+    if (!pUserSid)
+    {
+        if (!ConvertStringSidToSidW(SidString, &pUserSid))
+            goto cleanup;
+
+        bUserSidAllocated = TRUE;
+    }
+
+    Error = RegSetValueExW(hProfileKey,
+                           L"Sid",
+                           0,
+                           REG_BINARY,
+                           (const BYTE *)pUserSid,
+                           GetLengthSid(pUserSid));
+    if (Error != ERROR_SUCCESS)
+        goto cleanup;
+
+    {
+        DWORD dwRefCount = 0;
+        RegSetValueExW(hProfileKey,
+                       L"RefCount",
+                       0,
+                       REG_DWORD,
+                       (const BYTE *)&dwRefCount,
+                       sizeof(dwRefCount));
+    }
+
+    bResult = TRUE;
+
+cleanup:
+    if (bUserSidAllocated && pUserSid)
+        LocalFree(pUserSid);
+
+    if (hProfileKey)
+        RegCloseKey(hProfileKey);
+
+    if (!bResult)
+        return FALSE;
+
+    if (SetProfileData((PWSTR)SidString, 0, hToken) != ERROR_SUCCESS)
+    {
+        DPRINT1("SetProfileData() failed for %S\n", SidString);
+    }
+
+    return TRUE;
+}
+
+static BOOL
+EnsureProfileEntryForSid(HANDLE hToken,
+                         LPCWSTR SidString,
+                         LPWSTR szRawImagePath,
+                         SIZE_T cchRawImagePath)
+{
+    HKEY hProfilesKey = NULL, hProfileKey = NULL;
+    LONG Error;
+    DWORD dwType, dwLength;
+    WCHAR szRawProfilesPath[MAX_PATH];
+    WCHAR szExpandedProfilePath[MAX_PATH];
+    WCHAR szDefaultProfilePath[MAX_PATH];
+    DWORD cchDefaultProfile;
+    BOOL bDirectoryCreated = FALSE;
+    BOOL bResult = FALSE;
+    WCHAR szAccountName[256];
+    WCHAR szDomainName[256];
+    WCHAR szFallbackName[MAX_PATH];
+    LPWSTR lpProfileName = NULL;
+    DWORD cchAccountName;
+    DWORD cchDomainName;
+    SID_NAME_USE SidUse;
+    PSID pSid = NULL;
+    WCHAR szKeyName[MAX_PATH];
+    DWORD dwFlags = 0;
+    DWORD dwState = 0;
+    DWORD dwRefCount = 0;
+    HRESULT hr;
+
+    if (!SidString || !szRawImagePath || cchRawImagePath == 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    Error = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                          L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList",
+                          0,
+                          KEY_QUERY_VALUE,
+                          &hProfilesKey);
+    if (Error != ERROR_SUCCESS)
+    {
+        SetLastError((DWORD)Error);
+        return FALSE;
+    }
+
+    dwLength = sizeof(szRawProfilesPath);
+    Error = RegQueryValueExW(hProfilesKey,
+                             L"ProfilesDirectory",
+                             NULL,
+                             &dwType,
+                             (LPBYTE)szRawProfilesPath,
+                             &dwLength);
+    if ((Error != ERROR_SUCCESS) || (dwType != REG_SZ && dwType != REG_EXPAND_SZ))
+    {
+        SetLastError((DWORD)Error);
+        goto cleanup;
+    }
+
+    if (!ConvertStringSidToSidW(SidString, &pSid))
+    {
+        goto cleanup;
+    }
+
+    cchAccountName = ARRAYSIZE(szAccountName);
+    cchDomainName = ARRAYSIZE(szDomainName);
+    if (LookupAccountSidW(NULL,
+                          pSid,
+                          szAccountName,
+                          &cchAccountName,
+                          szDomainName,
+                          &cchDomainName,
+                          &SidUse))
+    {
+        lpProfileName = szAccountName;
+    }
+    else
+    {
+        const WCHAR *LastComponent = wcsrchr(SidString, L'-');
+        if (LastComponent && LastComponent[1] != L'\0')
+        {
+            hr = StringCbPrintfW(szFallbackName,
+                                 sizeof(szFallbackName),
+                                 L"SID-%s",
+                                 LastComponent + 1);
+        }
+        else
+        {
+            hr = StringCbCopyW(szFallbackName,
+                               sizeof(szFallbackName),
+                               SidString);
+        }
+
+        if (FAILED(hr))
+        {
+            SetLastError(HRESULT_CODE(hr));
+            goto cleanup;
+        }
+
+        lpProfileName = szFallbackName;
+    }
+
+    hr = StringCbCopyW(szRawImagePath,
+                       cchRawImagePath * sizeof(WCHAR),
+                       szRawProfilesPath);
+    if (FAILED(hr))
+    {
+        SetLastError(HRESULT_CODE(hr));
+        goto cleanup;
+    }
+
+    size_t cchCurrent = 0;
+    hr = StringCchLengthW(szRawImagePath,
+                          cchRawImagePath,
+                          &cchCurrent);
+    if (FAILED(hr))
+    {
+        SetLastError(HRESULT_CODE(hr));
+        goto cleanup;
+    }
+
+    if (cchCurrent > 0 && szRawImagePath[cchCurrent - 1] != L'\\')
+    {
+        hr = StringCchCatW(szRawImagePath,
+                           cchRawImagePath,
+                           L"\\");
+        if (FAILED(hr))
+        {
+            SetLastError(HRESULT_CODE(hr));
+            goto cleanup;
+        }
+    }
+
+    hr = StringCchCatW(szRawImagePath,
+                       cchRawImagePath,
+                       lpProfileName);
+    if (FAILED(hr))
+    {
+        SetLastError(HRESULT_CODE(hr));
+        goto cleanup;
+    }
+
+    {
+        DWORD dwExpanded = ExpandEnvironmentStringsW(szRawImagePath,
+                                                     szExpandedProfilePath,
+                                                     ARRAYSIZE(szExpandedProfilePath));
+
+        if (!dwExpanded || dwExpanded >= ARRAYSIZE(szExpandedProfilePath))
+        {
+            SetLastError(ERROR_BUFFER_OVERFLOW);
+            goto cleanup;
+        }
+    }
+
+    if (!EnsureDirectoryHierarchyExists(szExpandedProfilePath,
+                                        &bDirectoryCreated))
+    {
+        goto cleanup;
+    }
+
+    if (bDirectoryCreated)
+    {
+        cchDefaultProfile = ARRAYSIZE(szDefaultProfilePath);
+        if (GetDefaultUserProfileDirectoryW(szDefaultProfilePath,
+                                            &cchDefaultProfile))
+        {
+            if (!CopyProfileDirectoryW(szDefaultProfilePath,
+                                       szExpandedProfilePath,
+                                       0))
+            {
+                DPRINT1("EnsureProfileEntryForSid: CopyProfileDirectoryW(%S <- %S) failed (%lu)\n",
+                        szExpandedProfilePath,
+                        szDefaultProfilePath,
+                        GetLastError());
+            }
+        }
+    }
+
+    hr = StringCbCopyW(szKeyName,
+                       sizeof(szKeyName),
+                       L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\");
+    if (FAILED(hr))
+    {
+        SetLastError(HRESULT_CODE(hr));
+        goto cleanup;
+    }
+
+    hr = StringCbCatW(szKeyName,
+                      sizeof(szKeyName),
+                      SidString);
+    if (FAILED(hr))
+    {
+        SetLastError(HRESULT_CODE(hr));
+        goto cleanup;
+    }
+
+    Error = RegCreateKeyExW(HKEY_LOCAL_MACHINE,
+                            szKeyName,
+                            0,
+                            NULL,
+                            0,
+                            KEY_READ | KEY_WRITE,
+                            NULL,
+                            &hProfileKey,
+                            NULL);
+    if (Error != ERROR_SUCCESS)
+    {
+        SetLastError((DWORD)Error);
+        goto cleanup;
+    }
+
+    Error = RegSetValueExW(hProfileKey,
+                           L"ProfileImagePath",
+                           0,
+                           REG_EXPAND_SZ,
+                           (const BYTE *)szRawImagePath,
+                           (DWORD)((wcslen(szRawImagePath) + 1) * sizeof(WCHAR)));
+    if (Error != ERROR_SUCCESS)
+    {
+        SetLastError((DWORD)Error);
+        goto cleanup;
+    }
+
+    if (pSid != NULL)
+    {
+        Error = RegSetValueExW(hProfileKey,
+                               L"Sid",
+                               0,
+                               REG_BINARY,
+                               (const BYTE *)pSid,
+                               GetLengthSid(pSid));
+        if (Error != ERROR_SUCCESS)
+        {
+            SetLastError((DWORD)Error);
+            goto cleanup;
+        }
+    }
+
+    Error = RegSetValueExW(hProfileKey,
+                           L"RefCount",
+                           0,
+                           REG_DWORD,
+                           (const BYTE *)&dwRefCount,
+                           sizeof(dwRefCount));
+    if (Error != ERROR_SUCCESS)
+    {
+        SetLastError((DWORD)Error);
+        goto cleanup;
+    }
+
+    Error = RegSetValueExW(hProfileKey,
+                           L"Flags",
+                           0,
+                           REG_DWORD,
+                           (const BYTE *)&dwFlags,
+                           sizeof(dwFlags));
+    if (Error != ERROR_SUCCESS)
+    {
+        SetLastError((DWORD)Error);
+        goto cleanup;
+    }
+
+    Error = RegSetValueExW(hProfileKey,
+                           L"State",
+                           0,
+                           REG_DWORD,
+                           (const BYTE *)&dwState,
+                           sizeof(dwState));
+    if (Error != ERROR_SUCCESS)
+    {
+        SetLastError((DWORD)Error);
+        goto cleanup;
+    }
+
+    bResult = TRUE;
+
+    DPRINT("EnsureProfileEntryForSid: created entry %S -> %S\n",
+           SidString,
+           szRawImagePath);
+
+cleanup:
+    if (hProfileKey)
+        RegCloseKey(hProfileKey);
+
+    if (hProfilesKey)
+        RegCloseKey(hProfilesKey);
+
+    if (pSid)
+        LocalFree(pSid);
+
+    if (bResult)
+    {
+        DWORD dwStatus = SetProfileData((PWSTR)SidString, 0, hToken);
+        if (dwStatus != ERROR_SUCCESS)
+        {
+            DPRINT1("EnsureProfileEntryForSid: SetProfileData failed for %S (%lu)\n",
+                    SidString,
+                    dwStatus);
+        }
+    }
+
+    return bResult;
+}
+
+
 /* PUBLIC FUNCTIONS ********************************************************/
 
 BOOL
@@ -572,6 +1105,7 @@ CopySystemProfile(
     UNICODE_STRING SidString = {0, 0, NULL};
     HANDLE hToken = NULL;
     PSID pUserSid = NULL;
+    BOOL bSidAllocated = FALSE;
     HKEY hProfileKey = NULL;
     DWORD dwDisposition;
     BOOL bResult = FALSE;
@@ -679,7 +1213,7 @@ CopySystemProfile(
 
     /* Copy the default profile into the new profile directory */
     // FIXME: Security!
-    if (!CopyDirectory(szProfilePath, szDefaultProfilePath))
+    if (!CopyProfileDirectoryW(szDefaultProfilePath, szProfilePath, 0))
     {
         DPRINT1("Failed to copy the default profile directory (Error %lu)\n", GetLastError());
         goto done;
@@ -693,7 +1227,7 @@ done:
 
     RtlFreeUnicodeString(&SidString);
 
-    if (pUserSid != NULL)
+    if (bSidAllocated && pUserSid != NULL)
         LocalFree(pUserSid);
 
     if (hToken != NULL)
@@ -997,7 +1531,7 @@ CreateUserProfileExW(
     StringCbCatW(szDefaultUserPath, sizeof(szDefaultUserPath), szBuffer);
 
     // FIXME: Security!
-    if (!CopyDirectory(szUserProfilePath, szDefaultUserPath))
+    if (!CopyProfileDirectoryW(szDefaultUserPath, szUserProfilePath, 0))
     {
         DPRINT1("Error: %lu\n", GetLastError());
         return FALSE;
@@ -1795,12 +2329,17 @@ GetUserProfileDirectoryW(
     _Inout_ LPDWORD lpcchSize)
 {
     UNICODE_STRING SidString;
+    WCHAR szSidString[MAX_SID_STRING_LENGTH];
     WCHAR szKeyName[MAX_PATH];
     WCHAR szRawImagePath[MAX_PATH];
     WCHAR szImagePath[MAX_PATH];
     DWORD dwType, dwLength;
-    HKEY hKey;
+    HKEY hKey = NULL;
     LONG Error;
+    BOOL bHaveRawImagePath = FALSE;
+    DWORD dwHelperError = ERROR_SUCCESS;
+
+    szSidString[0] = L'\0';
 
     if (!hToken)
     {
@@ -1823,9 +2362,17 @@ GetUserProfileDirectoryW(
 
     DPRINT("SidString: '%wZ'\n", &SidString);
 
+    if (FAILED(StringCbCopyW(szSidString, sizeof(szSidString), SidString.Buffer)))
+    {
+        DPRINT1("Failed to copy SID string\n");
+        RtlFreeUnicodeString(&SidString);
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
     StringCbCopyW(szKeyName, sizeof(szKeyName),
                   L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\");
-    StringCbCatW(szKeyName, sizeof(szKeyName), SidString.Buffer);
+    StringCbCatW(szKeyName, sizeof(szKeyName), szSidString);
 
     RtlFreeUnicodeString(&SidString);
 
@@ -1836,29 +2383,115 @@ GetUserProfileDirectoryW(
                           0,
                           KEY_QUERY_VALUE,
                           &hKey);
-    if (Error != ERROR_SUCCESS)
+    if (Error == ERROR_FILE_NOT_FOUND && szSidString[0] != L'\0')
     {
-        DPRINT1("Error: %lu\n", Error);
-        SetLastError((DWORD)Error);
+        if (EnsureWellKnownProfileEntry(hToken, szSidString))
+        {
+            Error = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                                  szKeyName,
+                                  0,
+                                  KEY_QUERY_VALUE,
+                                  &hKey);
+        }
+        else if (EnsureProfileEntryForSid(hToken,
+                                          szSidString,
+                                          szRawImagePath,
+                                          ARRAYSIZE(szRawImagePath)))
+        {
+            bHaveRawImagePath = TRUE;
+            dwType = REG_EXPAND_SZ;
+            Error = ERROR_SUCCESS;
+        }
+        else
+        {
+            dwHelperError = GetLastError();
+        }
+    }
+
+    if (!bHaveRawImagePath && Error != ERROR_SUCCESS)
+    {
+        DWORD dwLastError = (dwHelperError != ERROR_SUCCESS) ? dwHelperError : (DWORD)Error;
+        DPRINT1("GetUserProfileDirectoryW: unable to open %S for %S (error %lu)\n",
+                szKeyName,
+                szSidString,
+                dwLastError);
+        SetLastError(dwLastError);
         return FALSE;
     }
 
-    dwLength = sizeof(szRawImagePath);
-    Error = RegQueryValueExW(hKey,
-                             L"ProfileImagePath",
-                             NULL,
-                             &dwType,
-                             (LPBYTE)szRawImagePath,
-                             &dwLength);
-    if ((Error != ERROR_SUCCESS) || (dwType != REG_SZ && dwType != REG_EXPAND_SZ))
+    if (!bHaveRawImagePath)
     {
-        DPRINT1("Error: %lu\n", Error);
+        dwLength = sizeof(szRawImagePath);
+        Error = RegQueryValueExW(hKey,
+                                 L"ProfileImagePath",
+                                 NULL,
+                                 &dwType,
+                                 (LPBYTE)szRawImagePath,
+                                 &dwLength);
+        if ((Error != ERROR_SUCCESS) || (dwType != REG_SZ && dwType != REG_EXPAND_SZ))
+        {
+            if (hKey)
+            {
+                RegCloseKey(hKey);
+                hKey = NULL;
+            }
+
+            if (Error == ERROR_FILE_NOT_FOUND && EnsureWellKnownProfileEntry(hToken, szSidString))
+            {
+                Error = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                                      szKeyName,
+                                      0,
+                                      KEY_QUERY_VALUE,
+                                      &hKey);
+                if (Error == ERROR_SUCCESS)
+                {
+                    dwLength = sizeof(szRawImagePath);
+                    Error = RegQueryValueExW(hKey,
+                                             L"ProfileImagePath",
+                                             NULL,
+                                             &dwType,
+                                             (LPBYTE)szRawImagePath,
+                                             &dwLength);
+                }
+            }
+
+            if ((Error != ERROR_SUCCESS) || (dwType != REG_SZ && dwType != REG_EXPAND_SZ))
+            {
+                if (EnsureProfileEntryForSid(hToken,
+                                             szSidString,
+                                             szRawImagePath,
+                                             ARRAYSIZE(szRawImagePath)))
+                {
+                    bHaveRawImagePath = TRUE;
+                    dwType = REG_EXPAND_SZ;
+                    Error = ERROR_SUCCESS;
+                }
+                else
+                {
+                    dwHelperError = GetLastError();
+                }
+            }
+        }
+    }
+
+    if (!bHaveRawImagePath && ((Error != ERROR_SUCCESS) || (dwType != REG_SZ && dwType != REG_EXPAND_SZ)))
+    {
+        DWORD dwLastError = (Error != ERROR_SUCCESS) ? (DWORD)Error :
+                             (dwHelperError != ERROR_SUCCESS ? dwHelperError : ERROR_FILE_NOT_FOUND);
+
+        if (hKey)
+            RegCloseKey(hKey);
+
+        DPRINT1("GetUserProfileDirectoryW: missing ProfileImagePath for %S (key %S, error %lu)\n",
+                szSidString,
+                szKeyName,
+                dwLastError);
+        SetLastError(dwLastError);
+        return FALSE;
+    }
+
+    if (hKey)
         RegCloseKey(hKey);
-        SetLastError((DWORD)Error);
-        return FALSE;
-    }
-
-    RegCloseKey(hKey);
 
     DPRINT("RawImagePath: '%S'\n", szRawImagePath);
 
