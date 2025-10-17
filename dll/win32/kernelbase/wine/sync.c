@@ -250,11 +250,27 @@ void WINAPI DECLSPEC_HOTPATCH QueryUnbiasedInterruptTimePrecise( ULONGLONG *time
  */
 BOOL WINAPI QueryIdleProcessorCycleTime( ULONG *size, ULONG64 *times )
 {
-    ULONG ret_size;
-    NTSTATUS status = NtQuerySystemInformation( SystemProcessorIdleCycleTimeInformation, times, *size, &ret_size );
+    ULONG ret_size = 0;
+    PVOID buffer;
+    NTSTATUS status;
 
-    if (!*size || !status) *size = ret_size;
-    return TRUE;
+    if (!size)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+
+    if (*size && !times)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+
+    buffer = *size ? (PVOID)times : NULL;
+    status = NtQuerySystemInformation( SystemProcessorIdleCycleTimeInformation, buffer, *size, &ret_size );
+    *size = ret_size;
+
+    return set_ntstatus( status );
 }
 
 
@@ -263,11 +279,28 @@ BOOL WINAPI QueryIdleProcessorCycleTime( ULONG *size, ULONG64 *times )
  */
 BOOL WINAPI QueryIdleProcessorCycleTimeEx( USHORT group_id, ULONG *size, ULONG64 *times )
 {
-    ULONG ret_size;
-    NTSTATUS status = NtQuerySystemInformationEx( SystemProcessorIdleCycleTimeInformation, &group_id, sizeof(group_id),
-                                                  times, *size, &ret_size );
-    if (!*size || !status) *size = ret_size;
-    return TRUE;
+    ULONG ret_size = 0;
+    PVOID buffer;
+    NTSTATUS status;
+
+    if (!size)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+
+    if (*size && !times)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+
+    buffer = *size ? (PVOID)times : NULL;
+    status = NtQuerySystemInformationEx( SystemProcessorIdleCycleTimeInformation, &group_id, sizeof(group_id),
+                                         buffer, *size, &ret_size );
+    *size = ret_size;
+
+    return set_ntstatus( status );
 }
 
 
