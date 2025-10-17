@@ -857,9 +857,25 @@ LdrpRunInitializeRoutines(IN PCONTEXT Context OPTIONAL)
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
+                ULONG ExceptionCode = _SEH2_GetExceptionCode();
+
+#ifndef EXCEPTION_WINE_STUB
+#define EXCEPTION_WINE_STUB 0x80000100
+#endif
+
+                if (ExceptionCode == EXCEPTION_WINE_STUB)
+                {
+                    DPRINT1("WARNING: Unimplemented export was invoked during initialization of %wZ\n",
+                            &LdrEntry->BaseDllName);
+                }
+                else
+                {
+                    DPRINT1("WARNING: Exception 0x%x during LdrpCallInitRoutine(DLL_PROCESS_ATTACH) for %wZ\n",
+                            ExceptionCode, &LdrEntry->BaseDllName);
+                }
+
                 DllStatus = FALSE;
-                DPRINT1("WARNING: Exception 0x%x during LdrpCallInitRoutine(DLL_PROCESS_ATTACH) for %wZ\n",
-                        _SEH2_GetExceptionCode(), &LdrEntry->BaseDllName);
+                Status = STATUS_DLL_INIT_FAILED;
             }
             _SEH2_END;
 

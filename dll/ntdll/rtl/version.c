@@ -228,4 +228,72 @@ RtlGetVersion(IN OUT PRTL_OSVERSIONINFOW lpVersionInformation)
     return STATUS_SUCCESS;
 }
 
+BOOLEAN
+NTAPI
+RtlGetProductInfo(IN ULONG OSMajorVersion,
+                  IN ULONG OSMinorVersion,
+                  IN ULONG SpMajorVersion,
+                  IN ULONG SpMinorVersion,
+                  OUT PDWORD ReturnedProductType)
+{
+    NT_PRODUCT_TYPE ProductType;
+    USHORT SuiteMask;
+    DWORD Result = PRODUCT_UNDEFINED;
+
+    UNREFERENCED_PARAMETER(OSMajorVersion);
+    UNREFERENCED_PARAMETER(OSMinorVersion);
+    UNREFERENCED_PARAMETER(SpMajorVersion);
+    UNREFERENCED_PARAMETER(SpMinorVersion);
+
+    if (!ReturnedProductType)
+    {
+        return FALSE;
+    }
+
+    if (!RtlGetNtProductType(&ProductType))
+    {
+        ProductType = NtProductWinNt;
+    }
+
+    SuiteMask = SharedUserData->SuiteMask & 0xFFFF;
+
+    if (ProductType == NtProductWinNt)
+    {
+        if (SuiteMask & VER_SUITE_PERSONAL)
+        {
+            Result = PRODUCT_HOME_PREMIUM;
+        }
+        else if (SuiteMask & VER_SUITE_ENTERPRISE)
+        {
+            Result = PRODUCT_ENTERPRISE;
+        }
+        else
+        {
+            Result = PRODUCT_PROFESSIONAL;
+        }
+    }
+    else
+    {
+        if (SuiteMask & VER_SUITE_DATACENTER)
+        {
+            Result = PRODUCT_DATACENTER_SERVER;
+        }
+        else if (SuiteMask & VER_SUITE_ENTERPRISE)
+        {
+            Result = PRODUCT_ENTERPRISE_SERVER;
+        }
+        else if (SuiteMask & VER_SUITE_SMALLBUSINESS)
+        {
+            Result = PRODUCT_SMALLBUSINESS_SERVER;
+        }
+        else
+        {
+            Result = PRODUCT_STANDARD_SERVER;
+        }
+    }
+
+    *ReturnedProductType = Result;
+    return TRUE;
+}
+
 /* EOF */
