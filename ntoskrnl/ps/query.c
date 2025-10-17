@@ -1198,6 +1198,44 @@ NtQueryInformationProcess(
             Status = STATUS_NOT_IMPLEMENTED;
             break;
 
+        case ProcessProtectionInformation:
+        {
+            PS_PROTECTION Protection = { 0 };
+
+            if (ProcessInformationLength != sizeof(PS_PROTECTION))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Length = sizeof(PS_PROTECTION);
+
+            Status = ObReferenceObjectByHandle(ProcessHandle,
+                                               PROCESS_QUERY_INFORMATION,
+                                               PsProcessType,
+                                               PreviousMode,
+                                               (PVOID*)&Process,
+                                               NULL);
+            if (!NT_SUCCESS(Status)) break;
+
+            Protection = Process->Protection;
+
+            ObDereferenceObject(Process);
+
+            Status = STATUS_SUCCESS;
+
+            _SEH2_TRY
+            {
+                *(PPS_PROTECTION)ProcessInformation = Protection;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            break;
+        }
+
         /* Not supported by Server 2003 */
         default:
             DPRINT1("Unsupported info class: %lu\n", ProcessInformationClass);
