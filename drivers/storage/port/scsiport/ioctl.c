@@ -290,6 +290,231 @@ completeIrp:
 
 static
 NTSTATUS
+NTAPI
+SpiMiniportIoctlCompletion(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _In_reads_opt_(_Inexpressible_("varies")) PVOID Context)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    if (Irp->PendingReturned)
+        KeSetEvent((PKEVENT)Context, IO_NO_INCREMENT, FALSE);
+
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+static
+NTSTATUS
+SpiSendMiniportSrb(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PSCSI_REQUEST_BLOCK Srb,
+    _Out_opt_ PULONG DataTransferred)
+{
+    KEVENT Event;
+    PIRP Irp;
+    PIO_STACK_LOCATION ioStack;
+    NTSTATUS status;
+
+    ASSERT(Srb);
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+
+    if (DataTransferred)
+        *DataTransferred = 0;
+
+    Irp = IoAllocateIrp(DeviceObject->StackSize, FALSE);
+    if (!Irp)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Irp->Tail.Overlay.Thread = PsGetCurrentThread();
+    Irp->Flags |= IRP_NOCACHE | IRP_SYNCHRONOUS_API;
+    Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+    Irp->IoStatus.Information = 0;
+
+    IoSetCompletionRoutine(Irp,
+                           SpiMiniportIoctlCompletion,
+                           &Event,
+                           TRUE,
+                           TRUE,
+                           TRUE);
+
+    ioStack = IoGetNextIrpStackLocation(Irp);
+    ioStack->MajorFunction = IRP_MJ_SCSI;
+    ioStack->MinorFunction = 0;
+    ioStack->Parameters.Scsi.Srb = Srb;
+
+    Srb->OriginalRequest = Irp;
+
+    status = IoCallDriver(DeviceObject, Irp);
+    if (status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        status = Irp->IoStatus.Status;
+    }
+
+    if (DataTransferred)
+        *DataTransferred = (ULONG)Irp->IoStatus.Information;
+
+    IoFreeIrp(Irp);
+
+    return status;
+}
+
+static
+NTSTATUS
+PdoHandleScsiMiniport(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp)
+{
+    PSCSI_PORT_LUN_EXTENSION lunExt = DeviceObject->DeviceExtension;
+    PIO_STACK_LOCATION ioStack;
+    PSRB_IO_CONTROL srbControl;
+    PSCSI_REQUEST_BLOCK srb;
+    NTSTATUS status;
+    ULONG inputLength, outputLength, availableLength, transferLength, timeout;
+
+    ASSERT(!lunExt->Common.IsFDO);
+    ASSERT(Irp->AssociatedIrp.SystemBuffer);
+
+    ioStack = IoGetCurrentIrpStackLocation(Irp);
+    inputLength = ioStack->Parameters.DeviceIoControl.InputBufferLength;
+    outputLength = ioStack->Parameters.DeviceIoControl.OutputBufferLength;
+
+    if (!VerifyIrpInBufferSize(Irp, sizeof(SRB_IO_CONTROL)))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    srbControl = Irp->AssociatedIrp.SystemBuffer;
+
+    if (srbControl->HeaderLength < sizeof(SRB_IO_CONTROL))
+        return STATUS_INVALID_PARAMETER;
+
+    if (inputLength < srbControl->HeaderLength)
+    {
+        Irp->IoStatus.Information = srbControl->HeaderLength;
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    availableLength = (inputLength > outputLength) ? inputLength : outputLength;
+    if (availableLength < srbControl->HeaderLength)
+    {
+        Irp->IoStatus.Information = srbControl->HeaderLength;
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    if (srbControl->Length > availableLength - srbControl->HeaderLength)
+    {
+        Irp->IoStatus.Information = srbControl->HeaderLength + srbControl->Length;
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    transferLength = srbControl->HeaderLength + srbControl->Length;
+
+    srb = ExAllocatePoolZero(NonPagedPool, sizeof(*srb), TAG_SCSIPORT);
+    if (!srb)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    srb->Length = sizeof(SCSI_REQUEST_BLOCK);
+    srb->Function = SRB_FUNCTION_IO_CONTROL;
+    srb->PathId = lunExt->PathId;
+    srb->TargetId = lunExt->TargetId;
+    srb->Lun = lunExt->Lun;
+    srb->DataBuffer = srbControl;
+    srb->DataTransferLength = transferLength;
+    srb->SrbFlags = SRB_FLAGS_UNSPECIFIED_DIRECTION | SRB_FLAGS_NO_QUEUE_FREEZE;
+    srb->QueueTag = SP_UNTAGGED;
+    srb->SrbStatus = SRB_STATUS_PENDING;
+    srb->SenseInfoBuffer = NULL;
+    srb->SenseInfoBufferLength = 0;
+
+    timeout = srbControl->Timeout;
+    if (timeout == 0)
+        timeout = 10;
+    srb->TimeOutValue = timeout;
+
+    status = SpiSendMiniportSrb(DeviceObject, srb, &transferLength);
+
+    if (NT_SUCCESS(status))
+    {
+        Irp->IoStatus.Information = (transferLength < outputLength) ? transferLength : outputLength;
+    }
+    else
+    {
+        Irp->IoStatus.Information = 0;
+    }
+
+    ExFreePoolWithTag(srb, TAG_SCSIPORT);
+
+    return status;
+}
+
+static
+NTSTATUS
+FdoHandleScsiMiniport(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(Irp);
+
+    return STATUS_INVALID_DEVICE_REQUEST;
+}
+
+static
+NTSTATUS
+PdoHandleAtaPassthrough(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp)
+{
+    PSCSI_PORT_LUN_EXTENSION lunExt = DeviceObject->DeviceExtension;
+    PSCSI_PORT_DEVICE_EXTENSION portExt;
+
+    ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
+    ASSERT(!lunExt->Common.IsFDO);
+
+    if ((IoGetCurrentIrpStackLocation(Irp)->MinorFunction == 0) && lunExt->DeviceClaimed)
+        return STATUS_INVALID_DEVICE_REQUEST;
+
+    portExt = lunExt->Common.LowerDevice->DeviceExtension;
+
+    return SptiHandleAtaPassthru(DeviceObject,
+                                 Irp,
+                                 portExt->PortCapabilities.MaximumTransferLength,
+                                 portExt->PortCapabilities.MaximumPhysicalPages);
+}
+
+static
+NTSTATUS
+FdoHandleAtaPassthrough(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp)
+{
+    PSCSI_PORT_DEVICE_EXTENSION portExt = DeviceObject->DeviceExtension;
+    PIO_STACK_LOCATION ioStack = IoGetCurrentIrpStackLocation(Irp);
+    ULONG minLength;
+    PATA_PASS_THROUGH_EX apt;
+    PSCSI_PORT_LUN_EXTENSION lunExt;
+
+    ASSERT(portExt->Common.IsFDO);
+
+    if (ioStack->Parameters.DeviceIoControl.IoControlCode == IOCTL_ATA_PASS_THROUGH_DIRECT)
+        minLength = RTL_SIZEOF_THROUGH_FIELD(ATA_PASS_THROUGH_DIRECT, CurrentTaskFile);
+    else
+        minLength = RTL_SIZEOF_THROUGH_FIELD(ATA_PASS_THROUGH_EX, CurrentTaskFile);
+
+    if (!VerifyIrpInBufferSize(Irp, minLength))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    apt = Irp->AssociatedIrp.SystemBuffer;
+    lunExt = GetLunByPath(portExt, apt->PathId, apt->TargetId, apt->Lun);
+    if (!lunExt)
+        return STATUS_NO_SUCH_DEVICE;
+
+    return PdoHandleAtaPassthrough(lunExt->Common.DeviceObject, Irp);
+}
+
+static
+NTSTATUS
 PdoHandleScsiPassthrough(
     _In_ PDEVICE_OBJECT DeviceObject,
     _Inout_ PIRP Irp)
@@ -581,9 +806,15 @@ ScsiPortDeviceControl(
             break;
         }
         case IOCTL_SCSI_MINIPORT:
-            DPRINT1("IOCTL_SCSI_MINIPORT unimplemented!\n");
-            status = STATUS_NOT_IMPLEMENTED;
+        {
+            DPRINT("  IOCTL_SCSI_MINIPORT\n");
+
+            if (comExt->IsFDO)
+                status = FdoHandleScsiMiniport(DeviceObject, Irp);
+            else
+                status = PdoHandleScsiMiniport(DeviceObject, Irp);
             break;
+        }
 
         case IOCTL_SCSI_PASS_THROUGH:
         case IOCTL_SCSI_PASS_THROUGH_DIRECT:
@@ -600,10 +831,16 @@ ScsiPortDeviceControl(
 
         case IOCTL_ATA_PASS_THROUGH:
         case IOCTL_ATA_PASS_THROUGH_DIRECT:
-            /* ATA passthrough IOCTLs not supported by MS scsiport */
-            DPRINT1("ATA passthrough IOCTLs not supported: 0x%lX\n", IoControlCode);
-            status = STATUS_NOT_SUPPORTED;
+        {
+            DPRINT("  IOCTL_ATA_PASS_THROUGH%s\n",
+                   IoControlCode == IOCTL_ATA_PASS_THROUGH_DIRECT ? "_DIRECT" : "");
+
+            if (comExt->IsFDO)
+                status = FdoHandleAtaPassthrough(DeviceObject, Irp);
+            else
+                status = PdoHandleAtaPassthrough(DeviceObject, Irp);
             break;
+        }
 
         default:
             DPRINT1("unknown ioctl code: 0x%lX\n", IoControlCode);
