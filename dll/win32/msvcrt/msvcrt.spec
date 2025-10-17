@@ -1028,7 +1028,7 @@
 @ cdecl -version=0x600+ _strtoi64_l(str ptr long ptr)
 @ stub -version=0x600+ _strtol_l
 @ cdecl _strtoui64(str ptr long) strtoull
-@ stub -version=0x600+ _strtoui64_l
+@ cdecl -ret64 -version=0x600+ _strtoui64_l(str ptr long ptr)
 @ cdecl -version=0x600+ _strtoul_l(str ptr long ptr)
 @ cdecl _strupr(str)
 @ cdecl -version=0x600+ _strupr_l(str ptr)
