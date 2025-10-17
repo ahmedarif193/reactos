@@ -39,81 +39,13 @@ static BOOLEAN GopConsoleInitialized = FALSE;
 
 /* FUNCTIONS ******************************************************************/
 
-static UINT32
-UefiFindOptimalGopMode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop)
-{
-    EFI_STATUS Status;
-    UINT32 BestMode = 0;
-    UINT32 BestScore = 0;
-    UINT32 CurrentMode;
-    UINTN SizeOfInfo;
-    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* Info;
-    
-    TRACE("UEFI GOP: Searching for optimal mode\n");
-    TRACE("  Total modes available: %d\n", gop->Mode->MaxMode);
-    
-    for (CurrentMode = 0; CurrentMode < gop->Mode->MaxMode; CurrentMode++)
-    {
-        Status = gop->QueryMode(gop, CurrentMode, &SizeOfInfo, &Info);
-        if (Status == EFI_SUCCESS)
-        {
-            UINT32 Width = Info->HorizontalResolution;
-            UINT32 Height = Info->VerticalResolution;
-            UINT32 Score = 0;
-            
-            TRACE("  Mode %d: %dx%d, PixelFormat=%d\n", 
-                  CurrentMode, Width, Height, Info->PixelFormat);
-            
-            /* Skip modes without framebuffer support */
-            if (Info->PixelFormat == PixelBltOnly)
-            {
-                TRACE("    Skipping - no framebuffer\n");
-                continue;
-            }
-            
-            /* Preferred resolutions (in order of preference) */
-            if (Width == 1024 && Height == 768)
-                Score = 100;  /* Most preferred */
-            else if (Width == 1280 && Height == 1024)
-                Score = 95;
-            else if (Width == 1280 && Height == 800)
-                Score = 90;
-            else if (Width == 800 && Height == 600)
-                Score = 85;
-            else if (Width == 1366 && Height == 768)
-                Score = 80;
-            else if (Width == 1440 && Height == 900)
-                Score = 75;
-            else if (Width == 640 && Height == 480)
-                Score = 50;  /* Fallback */
-            else if (Width >= PREFERRED_WIDTH_MIN && Width <= PREFERRED_WIDTH_MAX &&
-                     Height >= PREFERRED_HEIGHT_MIN && Height <= PREFERRED_HEIGHT_MAX)
-            {
-                /* Other acceptable resolutions */
-                Score = 60;
-            }
-            
-            if (Score > BestScore)
-            {
-                BestScore = Score;
-                BestMode = CurrentMode;
-                TRACE("    New best mode (score=%d)\n", Score);
-            }
-        }
-    }
-    
-    TRACE("UEFI GOP: Selected mode %d with score %d\n", BestMode, BestScore);
-    return BestMode;
-}
 
 EFI_STATUS
 UefiInitializeVideo(VOID)
 {
     EFI_STATUS Status;
     EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
-    UINT32 OptimalMode;
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* CurrentInfo;
-    BOOLEAN UseFallbackMode = FALSE;
 
     RtlZeroMemory(&framebufferData, sizeof(framebufferData));
     Status = GlobalSystemTable->BootServices->LocateProtocol(&EfiGraphicsOutputProtocol, 0, (void**)&gop);
@@ -127,39 +59,27 @@ UefiInitializeVideo(VOID)
     TRACE("  MaxMode: %d\n", gop->Mode->MaxMode);
     TRACE("  Current Mode: %d\n", gop->Mode->Mode);
     
-    CurrentInfo = gop->Mode->Info;
-    if ((CurrentInfo == NULL) || (CurrentInfo->PixelFormat == PixelBltOnly))
+    CurrentInfo = gop->Mode->Info; /* Inspect firmware-provided mode but never change it. */
+    if (CurrentInfo && CurrentInfo->PixelFormat != PixelBltOnly)
     {
-        TRACE("UEFI GOP: Current mode lacks linear framebuffer -- searching fallback\n");
-        UseFallbackMode = TRUE;
-    }
-
-    if (UseFallbackMode)
-    {
-        OptimalMode = UefiFindOptimalGopMode(gop);
-        if (OptimalMode != gop->Mode->Mode)
-        {
-            Status = gop->SetMode(gop, OptimalMode);
-            if (Status != EFI_SUCCESS)
-            {
-                TRACE("UEFI GOP: Failed to set fallback mode %d, continuing with firmware default\n", OptimalMode);
-            }
-            else
-            {
-                TRACE("UEFI GOP: Fallback mode %d activated\n", OptimalMode);
-            }
-        }
-        else
-        {
-            TRACE("UEFI GOP: Firmware default already matches fallback candidate\n");
-        }
+        TRACE("UEFI GOP: Firmware mode %d (%ux%u) kept intact\n",
+              gop->Mode->Mode,
+              CurrentInfo->HorizontalResolution,
+              CurrentInfo->VerticalResolution);
     }
     else
     {
-        TRACE("UEFI GOP: Keeping firmware default mode %d (%ux%u)\n",
-              gop->Mode->Mode,
-              CurrentInfo ? CurrentInfo->HorizontalResolution : 0,
-              CurrentInfo ? CurrentInfo->VerticalResolution : 0);
+        TRACE("UEFI GOP: Firmware mode lacks linear framebuffer; not changing resolution\n");
+        if (!CurrentInfo)
+        {
+            UINTN InfoSize = 0;
+            EFI_STATUS ModeStatus = gop->QueryMode(gop, gop->Mode->Mode, &InfoSize, &CurrentInfo);
+            if (EFI_ERROR(ModeStatus))
+            {
+                TRACE("UEFI GOP: QueryMode failed (%d); aborting video init\n", ModeStatus);
+                return ModeStatus;
+            }
+        }
     }
 
     framebufferData.BaseAddress        = (ULONG_PTR)gop->Mode->FrameBufferBase;

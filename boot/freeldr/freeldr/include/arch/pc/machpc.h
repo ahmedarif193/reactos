@@ -24,6 +24,8 @@
 #include "mm.h"
 #endif
 
+#include <framebuffer.h>
+
 VOID PcBeep(VOID);
 
 VOID PcConsPutChar(int Ch);
@@ -43,6 +45,7 @@ BOOLEAN PcVideoIsPaletteFixed(VOID);
 VOID PcVideoSetPaletteColor(UCHAR Color, UCHAR Red, UCHAR Green, UCHAR Blue);
 VOID PcVideoGetPaletteColor(UCHAR Color, UCHAR* Red, UCHAR* Green, UCHAR* Blue);
 VOID PcVideoSync(VOID);
+
 VOID PcVideoPrepareForReactOS(VOID);
 VOID PcPrepareForReactOS(VOID);
 
@@ -75,5 +78,7 @@ VOID PcHwIdle(VOID);
 
 extern BIOS_MEMORY_MAP PcBiosMemoryMap[];
 extern ULONG PcBiosMapCount;
+
+extern FREELDR_FRAMEBUFFER_INFO PcFramebufferInfo;
 
 /* EOF */

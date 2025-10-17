@@ -23,18 +23,9 @@
 #include <machuefi.h>
 
 //TODO: this version of the struct is temporary
-typedef struct _REACTOS_INTERNAL_BGCONTEXT
-{
-    ULONG_PTR    BaseAddress;
-    ULONG        BufferSize;
-    UINT32       ScreenWidth;
-    UINT32       ScreenHeight;
-    UINT32       PixelsPerScanLine;
-    UINT32       PixelFormat;
-    UINT32       RedMask;
-    UINT32       GreenMask;
-    UINT32       BlueMask;
-    UINT32       ReservedMask;
-} REACTOS_INTERNAL_BGCONTEXT, *PREACTOS_INTERNAL_BGCONTEXT;
+#include <framebuffer.h>
+
+typedef FREELDR_FRAMEBUFFER_INFO REACTOS_INTERNAL_BGCONTEXT;
+typedef FREELDR_FRAMEBUFFER_INFO *PREACTOS_INTERNAL_BGCONTEXT;
 
 VOID __cdecl BootMain(IN PCCH CmdLine);

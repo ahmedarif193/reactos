@@ -11,6 +11,7 @@
 #include "ntldropts.h"
 #include "registry.h"
 #include "ramdisk.h"
+#include <framebuffer.h>
 #include <internal/cmboot.h>
 
 #ifdef UEFIBOOT
@@ -385,7 +386,41 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
             TRACE("No BGRT table found, boot logo support disabled\n");
         }
     }
+#else
+    {
+        extern FREELDR_FRAMEBUFFER_INFO PcFramebufferInfo;
+
+        if ((PcFramebufferInfo.BaseAddress != 0) &&
+            (PcFramebufferInfo.BufferSize != 0) &&
+            (PcFramebufferInfo.ScreenWidth != 0) &&
+            (PcFramebufferInfo.ScreenHeight != 0))
+        {
+            Extension->GopFramebuffer.FrameBufferBase.QuadPart = PcFramebufferInfo.BaseAddress;
+            Extension->GopFramebuffer.FrameBufferSize = PcFramebufferInfo.BufferSize;
+            Extension->GopFramebuffer.HorizontalResolution = PcFramebufferInfo.ScreenWidth;
+            Extension->GopFramebuffer.VerticalResolution = PcFramebufferInfo.ScreenHeight;
+            Extension->GopFramebuffer.PixelsPerScanLine = PcFramebufferInfo.PixelsPerScanLine;
+            Extension->GopFramebuffer.PixelFormat = PcFramebufferInfo.PixelFormat;
+            Extension->GopFramebuffer.RedMask = PcFramebufferInfo.RedMask;
+            Extension->GopFramebuffer.GreenMask = PcFramebufferInfo.GreenMask;
+            Extension->GopFramebuffer.BlueMask = PcFramebufferInfo.BlueMask;
+            Extension->GopFramebuffer.Reserved = PcFramebufferInfo.ReservedMask;
+
+            TRACE("Passing VESA framebuffer to kernel:\n");
+            TRACE("  BaseAddress: 0x%llx\n", Extension->GopFramebuffer.FrameBufferBase.QuadPart);
+            TRACE("  Size: 0x%x\n", Extension->GopFramebuffer.FrameBufferSize);
+            TRACE("  Resolution: %dx%d\n", Extension->GopFramebuffer.HorizontalResolution,
+                  Extension->GopFramebuffer.VerticalResolution);
+            TRACE("  PixelsPerScanLine: %d\n", Extension->GopFramebuffer.PixelsPerScanLine);
+            TRACE("  PixelFormat: %d\n", Extension->GopFramebuffer.PixelFormat);
+            TRACE("  Masks: R=0x%08x G=0x%08x B=0x%08x\n",
+                  Extension->GopFramebuffer.RedMask,
+                  Extension->GopFramebuffer.GreenMask,
+                  Extension->GopFramebuffer.BlueMask);
+        }
+    }
 #endif
+
 
     /*
      * Always provide LoaderPerformanceData so the kernel can use it to

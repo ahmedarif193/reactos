@@ -20,6 +20,7 @@
 #include <suppress.h>
 
 #include <debug.h>
+#include <framebuffer.h>
 DBG_DEFAULT_CHANNEL(UI);
 
 #define VIDEOPORT_PALETTE_READ        0x03C7
@@ -118,6 +119,109 @@ static VIDEODISPLAYMODE DisplayMode = VideoTextMode;   /* Current display mode *
 static BOOLEAN VesaVideoMode = FALSE;                     /* Are we using a VESA mode? */
 static SVGA_MODE_INFORMATION VesaVideoModeInformation; /* Only valid when in VESA mode */
 static ULONG CurrentMemoryBank = 0;                      /* Currently selected VESA bank */
+
+FREELDR_FRAMEBUFFER_INFO PcFramebufferInfo = {0};
+
+static VOID
+PcVideoClearFramebufferInfo(VOID)
+{
+    RtlZeroMemory(&PcFramebufferInfo, sizeof(PcFramebufferInfo));
+}
+
+static ULONG
+PcVideoBuildMask(UCHAR Size, UCHAR Position)
+{
+    ULONG Mask;
+
+    if (Size == 0 || Size >= 32)
+    {
+        return 0;
+    }
+
+    Mask = (1u << Size) - 1u;
+    return Mask << Position;
+}
+
+static VOID
+PcVideoUpdateFramebufferInfo(VOID)
+{
+    ULONG_PTR BaseAddress;
+    ULONG Pitch;
+    ULONG BitsPerPixel;
+    ULONG PixelsPerScanLine;
+    ULONG Width;
+    ULONG Height;
+
+    if (!VesaVideoMode)
+    {
+        PcVideoClearFramebufferInfo();
+        return;
+    }
+
+    Width = VesaVideoModeInformation.WidthInPixels;
+    Height = VesaVideoModeInformation.HeightInPixels;
+    BitsPerPixel = VesaVideoModeInformation.BitsPerPixel;
+
+    if ((Width == 0) || (Height == 0) || (BitsPerPixel < 15))
+    {
+        PcVideoClearFramebufferInfo();
+        return;
+    }
+
+    BaseAddress = VesaVideoModeInformation.LinearVideoBufferAddress;
+    if (BaseAddress == 0)
+    {
+        BaseAddress = ((ULONG_PTR)VesaVideoModeInformation.WindowAStartSegment) << 4;
+    }
+
+    if (BaseAddress == 0)
+    {
+        PcVideoClearFramebufferInfo();
+        return;
+    }
+
+    if (VesaVideoModeInformation.LinearBytesPerScanLine != 0)
+    {
+        Pitch = VesaVideoModeInformation.LinearBytesPerScanLine;
+    }
+    else
+    {
+        Pitch = VesaVideoModeInformation.BytesPerScanLine;
+    }
+
+    if (Pitch == 0)
+    {
+        PcVideoClearFramebufferInfo();
+        return;
+    }
+
+    PixelsPerScanLine = Pitch / ((BitsPerPixel + 7) / 8);
+    if (PixelsPerScanLine == 0)
+    {
+        PcVideoClearFramebufferInfo();
+        return;
+    }
+
+    PcFramebufferInfo.BaseAddress = BaseAddress;
+    PcFramebufferInfo.BufferSize = Pitch * Height;
+    PcFramebufferInfo.ScreenWidth = Width;
+    PcFramebufferInfo.ScreenHeight = Height;
+    PcFramebufferInfo.PixelsPerScanLine = PixelsPerScanLine;
+    PcFramebufferInfo.PixelFormat = 2;
+    PcFramebufferInfo.RedMask = PcVideoBuildMask(
+        VesaVideoModeInformation.LinearRedMaskSize ? VesaVideoModeInformation.LinearRedMaskSize : VesaVideoModeInformation.RedMaskSize,
+        VesaVideoModeInformation.LinearRedMaskPosition ? VesaVideoModeInformation.LinearRedMaskPosition : VesaVideoModeInformation.RedMaskPosition);
+    PcFramebufferInfo.GreenMask = PcVideoBuildMask(
+        VesaVideoModeInformation.LinearGreenMaskSize ? VesaVideoModeInformation.LinearGreenMaskSize : VesaVideoModeInformation.GreenMaskSize,
+        VesaVideoModeInformation.LinearGreenMaskPosition ? VesaVideoModeInformation.LinearGreenMaskPosition : VesaVideoModeInformation.GreenMaskPosition);
+    PcFramebufferInfo.BlueMask = PcVideoBuildMask(
+        VesaVideoModeInformation.LinearBlueMaskSize ? VesaVideoModeInformation.LinearBlueMaskSize : VesaVideoModeInformation.BlueMaskSize,
+        VesaVideoModeInformation.LinearBlueMaskPosition ? VesaVideoModeInformation.LinearBlueMaskPosition : VesaVideoModeInformation.BlueMaskPosition);
+    PcFramebufferInfo.ReservedMask = PcVideoBuildMask(
+        VesaVideoModeInformation.LinearReservedMaskSize ? VesaVideoModeInformation.LinearReservedMaskSize : VesaVideoModeInformation.ReservedMaskSize,
+        VesaVideoModeInformation.LinearReservedMaskPosition ? VesaVideoModeInformation.LinearReservedMaskPosition : VesaVideoModeInformation.ReservedMaskPosition);
+}
+
 
 enum
 {
@@ -728,6 +832,7 @@ PcVideoSetMode(USHORT NewMode)
   BytesPerScanLine = 160;
   DisplayMode = VideoTextMode;
   VesaVideoMode = FALSE;
+  PcVideoClearFramebufferInfo();
 
   switch (NewMode)
     {
@@ -792,6 +897,7 @@ PcVideoSetMode(USHORT NewMode)
       BiosVideoMode = NewMode;
       DisplayMode = VideoTextMode;
       VesaVideoMode = TRUE;
+      PcVideoClearFramebufferInfo();
 
       return TRUE;
     }
@@ -814,6 +920,7 @@ PcVideoSetMode(USHORT NewMode)
       BiosVideoMode = NewMode;
       DisplayMode = VideoGraphicsMode;
       VesaVideoMode = TRUE;
+      PcVideoUpdateFramebufferInfo();
 
       return TRUE;
     }
@@ -1161,7 +1268,10 @@ VOID
 PcVideoPrepareForReactOS(VOID)
 {
     // PcVideoSetMode80x50_80x43();
-    PcVideoSetMode80x25();
+    if (!VesaVideoMode)
+    {
+        PcVideoSetMode80x25();
+    }
     PcVideoHideShowTextCursor(FALSE);
 }
 

@@ -17,6 +17,7 @@ list(APPEND ROSLOAD_SOURCE
     options.c
     oslist.c
     lib/rtl/libsupp.c
+    rosload_fb_stub.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmboot.c
     ntldr/conversion.c
     ntldr/inffile.c
