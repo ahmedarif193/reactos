@@ -22,6 +22,60 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
+static HRESULT EnsureSpecialFolderPidl(HWND hwnd, int csidl, PIDLIST_ABSOLUTE *ppidl)
+{
+    TRACE("EnsureSpecialFolderPidl(hwnd=%p, csidl=%#x)\n", hwnd, csidl);
+    if (!ppidl)
+        return E_POINTER;
+
+    *ppidl = NULL;
+
+    PIDLIST_ABSOLUTE pidl = NULL;
+    HRESULT hr = SHGetSpecialFolderLocation(hwnd, csidl, &pidl);
+    if (SUCCEEDED(hr) && pidl)
+    {
+        TRACE("EnsureSpecialFolderPidl: existing pidl found\n");
+        *ppidl = pidl;
+        return S_OK;
+    }
+
+    if (pidl)
+    {
+        CoTaskMemFree(pidl);
+        pidl = NULL;
+    }
+
+    if (FAILED(hr) && hr != E_FAIL)
+    {
+        ERR("EnsureSpecialFolderPidl: SHGetSpecialFolderLocation(hwnd=%p, csidl=%#x) failed hr=0x%08lX\n",
+            hwnd, csidl, hr);
+        FAILED_UNEXPECTEDLY(hr);
+        return hr;
+    }
+
+    WCHAR szFolderPath[MAX_PATH] = { 0 };
+    hr = SHGetFolderPathW(hwnd, csidl | CSIDL_FLAG_CREATE, NULL, SHGFP_TYPE_CURRENT, szFolderPath);
+    if (FAILED(hr))
+    {
+        ERR("EnsureSpecialFolderPidl: SHGetFolderPathW(CREATE) failed for csidl=%#x, hr=0x%08lX\n",
+            csidl, hr);
+        return hr;
+    }
+
+    TRACE("EnsureSpecialFolderPidl: resolved path '%S'\n", szFolderPath);
+
+    pidl = ILCreateFromPathW(szFolderPath);
+    if (!pidl)
+    {
+        ERR("EnsureSpecialFolderPidl: ILCreateFromPathW failed for '%S'\n", szFolderPath);
+        return E_OUTOFMEMORY;
+    }
+
+    TRACE("EnsureSpecialFolderPidl: created pidl for '%S'\n", szFolderPath);
+    *ppidl = pidl;
+    return S_OK;
+}
+
 CSendToMenu::CSendToMenu()
     : m_hSubMenu(NULL)
     , m_pItems(NULL)
@@ -100,27 +154,35 @@ HRESULT
 CSendToMenu::GetSpecialFolder(HWND hwnd, IShellFolder **ppFolder,
                               int csidl, PIDLIST_ABSOLUTE *ppidl)
 {
+    TRACE("CSendToMenu::GetSpecialFolder(hwnd=%p, csidl=%#x)\n", hwnd, csidl);
     if (!ppFolder)
         return E_POINTER;
+
     *ppFolder = NULL;
 
     if (ppidl)
         *ppidl = NULL;
 
     CComHeapPtr<ITEMIDLIST_ABSOLUTE> pidl;
-    HRESULT hr = SHGetSpecialFolderLocation(hwnd, csidl, &pidl);
+    PIDLIST_ABSOLUTE rawPidl = NULL;
+    HRESULT hr = EnsureSpecialFolderPidl(hwnd, csidl, &rawPidl);
     if (FAILED_UNEXPECTEDLY(hr))
         return hr;
 
+    pidl.Attach(rawPidl);
+
     IShellFolder *pFolder = NULL;
     hr = m_pDesktop->BindToObject(pidl, NULL, IID_PPV_ARG(IShellFolder, &pFolder));
+    if (FAILED_UNEXPECTEDLY(hr))
+    {
+        ERR("CSendToMenu::GetSpecialFolder: BindToObject failed (csidl=%#x, hr=0x%08lX)\n", csidl, hr);
+        return hr;
+    }
 
     if (ppidl)
         *ppidl = pidl.Detach();
 
-    if (FAILED_UNEXPECTEDLY(hr))
-        return hr;
-
+    TRACE("CSendToMenu::GetSpecialFolder: returning folder=%p\n", pFolder);
     *ppFolder = pFolder;
     return hr;
 }
@@ -160,6 +222,14 @@ HRESULT CSendToMenu::LoadAllItems(HWND hwnd)
     if (FAILED_UNEXPECTEDLY(hr))
         return hr;
 
+    if (!m_pSendTo)
+    {
+        ERR("CSendToMenu::LoadAllItems: missing SendTo folder interface\n");
+        return E_FAIL;
+    }
+
+    TRACE("CSendToMenu::LoadAllItems: enumerating SendTo items (folder=%p)\n", m_pSendTo.p);
+
     CComPtr<IEnumIDList> pEnumIDList;
     hr = m_pSendTo->EnumObjects(hwnd,
                                 SHCONTF_FOLDERS | SHCONTF_NONFOLDERS,
@@ -185,6 +255,13 @@ HRESULT CSendToMenu::LoadAllItems(HWND hwnd)
 
         CComHeapPtr<ITEMIDLIST_ABSOLUTE> pidlAbsolute;
         pidlAbsolute.Attach(ILCombine(pidlSendTo, pidlChild));
+        if (!pidlAbsolute)
+        {
+            PCWSTR pszEntry = pszText ? static_cast<PCWSTR>(pszText) : L"";
+            ERR("CSendToMenu::LoadAllItems: ILCombine failed for entry '%S'\n", pszEntry);
+            hr = E_OUTOFMEMORY;
+            break;
+        }
 
         SHFILEINFOW fi = { NULL };
         const UINT uFlags = SHGFI_PIDL | SHGFI_TYPENAME |
@@ -199,8 +276,8 @@ HRESULT CSendToMenu::LoadAllItems(HWND hwnd)
             pNewItem->pNext = m_pItems;
         }
         m_pItems = pNewItem;
+        TRACE("CSendToMenu::LoadAllItems: added entry '%S'\n", pNewItem->pszText);
     }
-
     return hr;
 }
 
