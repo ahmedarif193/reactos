@@ -674,6 +674,68 @@ Test_ProcessWx86Information(void)
 
 static
 void
+Test_ProcessProtectionInformation(void)
+{
+    NTSTATUS Status;
+    PS_PROTECTION Protection;
+    ULONG ReturnLength;
+
+    RtlFillMemory(&Protection, sizeof(Protection), 0xCC);
+    Status = NtQueryInformationProcess(NtCurrentProcess(),
+                                       ProcessProtectionInformation,
+                                       &Protection,
+                                       sizeof(Protection),
+                                       NULL);
+    if (Status == STATUS_INVALID_INFO_CLASS)
+    {
+        skip("ProcessProtectionInformation is not supported\n");
+        return;
+    }
+
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+    {
+        skip("ProcessProtectionInformation query failed with %lx\n", Status);
+        return;
+    }
+
+    ok(Protection.Level == 0,
+       "Unexpected protection level %u\n",
+       Protection.Level);
+
+    Status = NtQueryInformationProcess(NULL,
+                                       ProcessProtectionInformation,
+                                       &Protection,
+                                       sizeof(Protection),
+                                       NULL);
+    ok_hex(Status, STATUS_INVALID_HANDLE);
+
+    Status = NtQueryInformationProcess(NtCurrentProcess(),
+                                       ProcessProtectionInformation,
+                                       NULL,
+                                       0,
+                                       NULL);
+    ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+
+    ReturnLength = 0;
+    Status = NtQueryInformationProcess(NtCurrentProcess(),
+                                       ProcessProtectionInformation,
+                                       NULL,
+                                       sizeof(Protection) - 1,
+                                       &ReturnLength);
+    ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+    ok_dec(ReturnLength, sizeof(Protection));
+
+    Status = NtQueryInformationProcess(NtCurrentProcess(),
+                                       ProcessProtectionInformation,
+                                       NULL,
+                                       sizeof(Protection),
+                                       NULL);
+    ok_hex(Status, STATUS_ACCESS_VIOLATION);
+}
+
+static
+void
 Test_ProcQueryAlignmentProbe(void)
 {
     ULONG InfoClass;
@@ -720,5 +782,6 @@ START_TEST(NtQueryInformationProcess)
     Test_ProcessQuotaLimitsEx();
     Test_ProcessPriorityClassAlignment();
     Test_ProcessWx86Information();
+    Test_ProcessProtectionInformation();
     Test_ProcQueryAlignmentProbe();
 }
