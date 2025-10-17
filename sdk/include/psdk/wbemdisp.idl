@@ -1192,6 +1192,101 @@ interface ISWbemServices : IDispatch
 };
 
 [
+    object,
+    local,
+    uuid(14d8250e-d9c2-11d3-b38f-00105a1f473a),
+    dual,
+    oleautomation,
+    pointer_default(unique)
+]
+interface ISWbemRefresher : IDispatch
+{
+    [ id(DISPID_NEWENUM), propget, restricted ]
+    HRESULT _NewEnum(
+        [out, retval] IUnknown **pUnk);
+
+    [ id(DISPID_VALUE) ]
+    HRESULT Item(
+        [in] long iIndex,
+        [out, retval] ISWbemRefreshableItem **objWbemRefreshableItem);
+
+    [ id(1), propget ]
+    HRESULT Count(
+        [out, retval] long *iCount);
+
+    [ id(2) ]
+    HRESULT Add(
+        [in] ISWbemServices *objWbemServices,
+        [in] BSTR bsInstancePath,
+        [in, defaultvalue(0)] long iFlags,
+        [in, defaultvalue(NULL)] IDispatch *objWbemNamedValueSet,
+        [out, retval] ISWbemRefreshableItem **objWbemRefreshableItem);
+
+    [ id(3) ]
+    HRESULT AddEnum(
+        [in] ISWbemServices *objWbemServices,
+        [in] BSTR bsClassName,
+        [in, defaultvalue(0)] long iFlags,
+        [in, defaultvalue(NULL)] IDispatch *objWbemNamedValueSet,
+        [out, retval] ISWbemRefreshableItem **objWbemRefreshableItem);
+
+    [ id(4) ]
+    HRESULT Remove(
+        [in] long iIndex,
+        [in, defaultvalue(0)] long iFlags);
+
+    [ id(5) ]
+    HRESULT Refresh(
+        [in, defaultvalue(0)] long iFlags);
+
+    [ id(6), propget ]
+    HRESULT AutoReconnect(
+        [out, retval] VARIANT_BOOL *bAutoReconnect);
+
+    [ id(6), propput ]
+    HRESULT AutoReconnect(
+        [in] VARIANT_BOOL bAutoReconnect);
+
+    [ id(7) ]
+    HRESULT DeleteAll();
+};
+
+[
+    object,
+    local,
+    uuid(5ad4bf92-daab-11d3-b38f-00105a1f473a),
+    dual,
+    oleautomation,
+    pointer_default(unique)
+]
+interface ISWbemRefreshableItem : IDispatch
+{
+    [ id(1), propget ]
+    HRESULT Index(
+        [out, retval] long *iIndex);
+
+    [ id(2), propget ]
+    HRESULT Refresher(
+        [out, retval] ISWbemRefresher **objWbemRefresher);
+
+    [ id(3), propget ]
+    HRESULT IsSet(
+        [out, retval] VARIANT_BOOL *bIsSet);
+
+    [ id(4), propget ]
+    HRESULT Object(
+        [out, retval] ISWbemObject **objWbemObject);
+
+    [ id(5), propget ]
+    HRESULT ObjectSet(
+        [out, retval] ISWbemObjectSet **objWbemObjectSet);
+
+    [ id(6) ]
+    HRESULT Remove(
+        [in, defaultvalue(0)] long iFlags);
+};
+
+[
     threading(apartment),
     uuid(76a64158-cb41-11d1-8b02-00600806d9b6),
     progid("WbemScripting.SWbemLocator.1"),

@@ -506,6 +506,9 @@ static const struct IClassFactoryVtbl factory_vtbl =
 
 static struct factory swbem_locator_cf = { { &factory_vtbl }, SWbemLocator_create };
 static struct factory winmgmts_cf = { { &factory_vtbl }, WinMGMTS_create };
+static struct factory wbem_refresher_cf = { { &factory_vtbl }, WbemRefresher_create };
+static struct factory swbem_refresher_cf = { { &factory_vtbl }, SWbemRefresher_create };
+static struct factory swbem_refreshable_item_cf = { { &factory_vtbl }, SWbemRefreshableItem_create };
 
 BOOL WINAPI DllMain( HINSTANCE hinst, DWORD reason, LPVOID reserved )
 {
@@ -534,6 +537,12 @@ HRESULT WINAPI DllGetClassObject( REFCLSID rclsid, REFIID iid, LPVOID *obj )
         cf = &swbem_locator_cf.IClassFactory_iface;
     else if (IsEqualGUID( rclsid, &CLSID_WinMGMTS ))
         cf = &winmgmts_cf.IClassFactory_iface;
+    else if (IsEqualGUID( rclsid, &CLSID_WbemRefresher ))
+        cf = &wbem_refresher_cf.IClassFactory_iface;
+    else if (IsEqualGUID( rclsid, &CLSID_SWbemRefresher ))
+        cf = &swbem_refresher_cf.IClassFactory_iface;
+    else if (IsEqualGUID( rclsid, &CLSID_SWbemRefreshableItem ))
+        cf = &swbem_refreshable_item_cf.IClassFactory_iface;
     else
         return CLASS_E_CLASSNOTAVAILABLE;
 

@@ -20,6 +20,8 @@
 
 #pragma makedep register
 
+import "wbemdisp.idl";
+
 [
     threading(apartment),
     uuid(172bddf8-ceea-11d1-8b05-00600806d9b6),
@@ -27,3 +29,19 @@
     vi_progid("WINMGMTS")
 ]
 coclass WinMGMTS { interface IParseDisplayName; }
+
+[
+    threading(apartment),
+    uuid(d269bf5c-d9c1-11d3-b38f-00105a1f473a),
+    progid("WbemScripting.SWbemRefresher.1"),
+    vi_progid("WbemScripting.SWbemRefresher")
+]
+coclass SWbemRefresher { interface ISWbemRefresher; }
+
+[
+    threading(apartment),
+    uuid(8c6854bc-de4b-11d3-b390-00105a1f473a),
+    progid("WbemScripting.SWbemRefreshableItem.1"),
+    vi_progid("WbemScripting.SWbemRefreshableItem")
+]
+coclass SWbemRefreshableItem { interface ISWbemRefreshableItem; }

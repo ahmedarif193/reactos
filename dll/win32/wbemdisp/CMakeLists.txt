@@ -3,7 +3,8 @@ spec2def(wbemdisp.dll wbemdisp.spec)
 
 list(APPEND SOURCE
     locator.c
-    main.c)
+    main.c
+    refresher.c)
 
 list(APPEND PCH_SKIP_SOURCE
     guid.c)

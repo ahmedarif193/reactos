@@ -11,6 +11,22 @@ HKCR
             ProgId = s 'WINMGMTS.1'
             VersionIndependentProgId = s 'WINMGMTS'
         }
+        '{C71566F2-561E-11D1-AD87-00C04FD8FDFF}' = s 'WbemRefresher'
+        {
+            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Apartment' }
+        }
+        '{D269BF5C-D9C1-11D3-B38F-00105A1F473A}' = s 'SWbemRefresher'
+        {
+            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Apartment' }
+            ProgId = s 'WbemScripting.SWbemRefresher.1'
+            VersionIndependentProgId = s 'WbemScripting.SWbemRefresher'
+        }
+        '{8C6854BC-DE4B-11D3-B390-00105A1F473A}' = s 'SWbemRefreshableItem'
+        {
+            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Apartment' }
+            ProgId = s 'WbemScripting.SWbemRefreshableItem.1'
+            VersionIndependentProgId = s 'WbemScripting.SWbemRefreshableItem'
+        }
     }
     'WINMGMTS.1' = s 'WinMGMTS'
     {
@@ -20,5 +36,23 @@ HKCR
     {
         CLSID = s '{172BDDF8-CEEA-11D1-8B05-00600806D9B6}'
         CurVer = s 'WINMGMTS.1'
+    }
+    'WbemScripting.SWbemRefresher.1' = s 'SWbemRefresher'
+    {
+        CLSID = s '{D269BF5C-D9C1-11D3-B38F-00105A1F473A}'
+    }
+    'WbemScripting.SWbemRefresher' = s 'SWbemRefresher'
+    {
+        CLSID = s '{D269BF5C-D9C1-11D3-B38F-00105A1F473A}'
+        CurVer = s 'WbemScripting.SWbemRefresher.1'
+    }
+    'WbemScripting.SWbemRefreshableItem.1' = s 'SWbemRefreshableItem'
+    {
+        CLSID = s '{8C6854BC-DE4B-11D3-B390-00105A1F473A}'
+    }
+    'WbemScripting.SWbemRefreshableItem' = s 'SWbemRefreshableItem'
+    {
+        CLSID = s '{8C6854BC-DE4B-11D3-B390-00105A1F473A}'
+        CurVer = s 'WbemScripting.SWbemRefreshableItem.1'
     }
 }

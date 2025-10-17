@@ -17,3 +17,8 @@
  */
 
 HRESULT SWbemLocator_create(LPVOID *) DECLSPEC_HIDDEN;
+HRESULT WbemRefresher_create(LPVOID *) DECLSPEC_HIDDEN;
+HRESULT SWbemRefresher_create(LPVOID *) DECLSPEC_HIDDEN;
+HRESULT SWbemRefreshableItem_create(LPVOID *) DECLSPEC_HIDDEN;
+
+EXTERN_C const CLSID CLSID_WbemRefresher;
