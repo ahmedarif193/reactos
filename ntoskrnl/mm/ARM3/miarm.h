@@ -1242,22 +1242,68 @@ VOID
 MiUnlockProcessWorkingSetUnsafe(IN PEPROCESS Process,
                                 IN PETHREAD Thread)
 {
+    const CHAR *imageName = "<no-image>";
+    KIRQL currentIrql;
+    BOOLEAN apcsDisabled;
+    BOOLEAN processOwner;
+    BOOLEAN processUnsafe;
+    BOOLEAN ownsExclusive;
+
+    if (Process && Process->ImageFileName[0] != '\0')
+    {
+        imageName = (const CHAR *)Process->ImageFileName;
+    }
+
+    currentIrql = KeGetCurrentIrql();
+    apcsDisabled = KeAreAllApcsDisabled();
+    processOwner = MI_WS_OWNER(Process);
+    processUnsafe = MI_IS_WS_UNSAFE(Process);
+    ownsExclusive = Thread->OwnsProcessWorkingSetExclusive;
+
+    if ((currentIrql > APC_LEVEL) ||
+        (apcsDisabled != TRUE) ||
+        !processOwner ||
+        !processUnsafe ||
+        !ownsExclusive)
+    {
+        DPRINT1("MiUnlockProcessWorkingSetUnsafe: state mismatch Irql=%lu APCs=%d Owner=%d Unsafe=%d OwnsEx=%d Proc=%p (%s) Thread=%p Caller=%p\n",
+                (ULONG)currentIrql,
+                apcsDisabled,
+                processOwner,
+                processUnsafe,
+                ownsExclusive,
+                Process,
+                imageName,
+                Thread,
+                _ReturnAddress());
+    }
+
     /* Make sure we are the owner of an unsafe acquisition */
-    ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
-    ASSERT(KeAreAllApcsDisabled() == TRUE);
-    ASSERT(MI_WS_OWNER(Process));
-    ASSERT(MI_IS_WS_UNSAFE(Process));
+    ASSERT(currentIrql <= APC_LEVEL);
+    ASSERT(apcsDisabled == TRUE);
+    ASSERT(processOwner);
+    ASSERT(processUnsafe);
 
     /* No longer unsafe */
     Process->Vm.Flags.AcquiredUnsafe = 0;
 
     /* The thread doesn't own it anymore */
-    ASSERT(Thread->OwnsProcessWorkingSetExclusive == TRUE);
+    ASSERT(ownsExclusive == TRUE);
     Thread->OwnsProcessWorkingSetExclusive = FALSE;
 
     /* Release the lock but don't touch APC state */
     ExReleasePushLockExclusive(&Process->Vm.WorkingSetMutex);
-    ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+    currentIrql = KeGetCurrentIrql();
+    if (currentIrql > APC_LEVEL)
+    {
+        DPRINT1("MiUnlockProcessWorkingSetUnsafe: exit Irql=%lu Proc=%p (%s) Thread=%p Caller=%p\n",
+                (ULONG)currentIrql,
+                Process,
+                imageName,
+                Thread,
+                _ReturnAddress());
+    }
+    ASSERT(currentIrql <= APC_LEVEL);
 }
 
 //
