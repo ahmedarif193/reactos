@@ -5,7 +5,6 @@ if(ARCH STREQUAL "i386")
         i386/seh_prolog.s)
 elseif(ARCH STREQUAL "amd64")
     list(APPEND ASM_SOURCE
-        amd64/seh.s
         amd64/seh_prolog.s)
 elseif(ARCH STREQUAL "arm")
     list(APPEND ASM_SOURCE
@@ -13,6 +12,9 @@ elseif(ARCH STREQUAL "arm")
 endif()
 
 if(MSVC OR ((CMAKE_C_COMPILER_ID STREQUAL "Clang") AND (ARCH STREQUAL "amd64")))
+    if(ARCH STREQUAL "amd64")
+        list(APPEND SOURCE amd64/framebased.c)
+    endif()
     list(APPEND SOURCE dummy.c)
     add_asm_files(pseh_asm ${ASM_SOURCE})
     add_library(pseh ${SOURCE} ${pseh_asm})
@@ -42,7 +44,7 @@ else()
             i386/framebased-gcchack.c
             i386/framebased-gcchack-asm.S)
     elseif(ARCH STREQUAL "amd64")
-        list(APPEND SOURCE amd64/framebased.S)
+        list(APPEND SOURCE amd64/framebased.c)
     endif()
 
 add_library(pseh ${SOURCE} ${ASM_SOURCE})
