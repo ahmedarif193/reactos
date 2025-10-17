@@ -88,7 +88,6 @@ kernel32.dll (193 stub exports)
 @ stub -version=0x600+ OpenPrivateNamespaceA
 @ stub -version=0x600+ OpenPrivateNamespaceW
 @ stub -version=0x600+ QueryActCtxSettingsW
-@ stub -version=0x600+ QueryIdleProcessorCycleTime
 @ stub -version=0x600+ QueryProcessAffinityUpdateMode
 @ stub -version=0x600+ QueryProcessCycleTime
 @ stub -version=0x600+ QueryThreadCycleTime
