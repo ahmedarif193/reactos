@@ -18,10 +18,12 @@
 @ stub _Cmulcc
 @ stub _Cmulcr
 @ cdecl _CreateFrameInfo(ptr ptr)
-@ cdecl -dbg _CrtCheckMemory()
-@ cdecl -dbg _CrtDbgReport(long str long str str)
-@ cdecl -dbg _CrtDbgReportW(long wstr long wstr wstr)
-@ cdecl -dbg _CrtDoForAllClientObjects(ptr ptr)
+@ cdecl _CrtCheckMemory()
+@ cdecl _CrtDbgReport(long str long str str)
+@ cdecl _CrtDbgReportV(long str long str str ptr)
+@ cdecl _CrtDbgReportW(long wstr long wstr wstr)
+@ cdecl _CrtDbgReportWV(long wstr long wstr wstr ptr)
+@ cdecl _CrtDoForAllClientObjects(ptr ptr)
 @ cdecl -dbg _CrtDumpMemoryLeaks()
 @ cdecl -dbg _CrtGetAllocHook()
 @ cdecl -dbg _CrtGetDebugFillThreshold(long)
@@ -69,8 +71,8 @@
 @ stub _NLG_Return2
 @ cdecl -stub _SetWinRTOutOfMemoryExceptionCallback(ptr)
 @ cdecl _Strftime(ptr long str ptr ptr)
-@ cdecl -dbg _VCrtDbgReportA(long ptr str long str str ptr)
-@ cdecl -dbg _VCrtDbgReportW(long ptr wstr long wstr wstr ptr)
+@ cdecl _VCrtDbgReportA(long ptr str long str str ptr)
+@ cdecl _VCrtDbgReportW(long ptr wstr long wstr wstr ptr)
 @ cdecl _W_Getdays()
 @ cdecl _W_Getmonths()
 @ cdecl _W_Gettnames()

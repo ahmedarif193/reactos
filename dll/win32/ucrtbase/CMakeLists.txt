@@ -15,12 +15,23 @@ add_compile_definitions(
     CRTDLL
 )
 
-add_library(ucrtbase SHARED
+set(UCRTBASE_SOURCES
     printf.c
     stubs.c
     ucrtbase_stubs.c
     ucrtbase.def
 )
+
+if(USE_NATIVE_MINGW_CRT AND NOT MINGW)
+    message(FATAL_ERROR "USE_NATIVE_MINGW_CRT requires a MinGW-w64 toolchain")
+endif()
+
+if(USE_NATIVE_MINGW_CRT)
+    include(MinGWCRT)
+    mingwcrt_import_default_libs(USE_NATIVE_MINGW_CRT_LIBS NO_MSVCRT)
+endif()
+
+add_library(ucrtbase SHARED ${UCRTBASE_SOURCES})
 
 if(NOT MSVC)
     target_compile_options(ucrtbase PRIVATE -Wno-builtin-declaration-mismatch)
@@ -31,21 +42,31 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(ucrtbase PRIVATE -Wno-incompatible-library-redeclaration)
 endif()
 
+if(USE_NATIVE_MINGW_CRT)
+    target_compile_definitions(ucrtbase PRIVATE USE_NATIVE_MINGW_CRT=1)
+endif()
+
 set_entrypoint(ucrtbase __acrt_DllMain 12)
 
-target_link_libraries(ucrtbase
-    ucrt
-    ucrtsupport
-    crtmath
-    vcruntime
-    wine
-)
+if(USE_NATIVE_MINGW_CRT)
+    target_link_libraries(ucrtbase ${USE_NATIVE_MINGW_CRT_LIBS})
+else()
+    target_link_libraries(ucrtbase
+        ucrt
+        ucrtsupport
+        crtmath
+        vcruntime
+        wine
+    )
+endif()
 
 # Implicitly link to vcstartup
 target_link_libraries(libucrtbase vcstartup)
 
 if(MSVC)
     target_link_libraries(ucrtbase runtmchk)
+elseif(USE_NATIVE_MINGW_CRT)
+    # MinGW CRT already provides the guard helpers via mingw_supcxx
 else()
     # For __cxa_guard_acquire / __cxa_guard_release
     target_link_libraries(ucrtbase libsupc++)

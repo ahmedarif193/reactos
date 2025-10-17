@@ -8,6 +8,8 @@
 #define _NO_CRT_STDIO_INLINE
 #include <stdio.h>
 
+#ifndef USE_NATIVE_MINGW_CRT
+
 // These 2 functions are inlined in UCRT headers, but they are referenced by
 // external code in the legacy CRT, so we need to provide them as non-inline
 // functions here.
@@ -47,3 +49,5 @@ int __CRTDECL _vsnprintf(
 
     return _Result < 0 ? -1 : _Result;
 }
+
+#endif /* !USE_NATIVE_MINGW_CRT */
