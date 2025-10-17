@@ -35,6 +35,9 @@ static void init_function_pointers(void)
     hmod = GetModuleHandleA("kernel32.dll");
 
     GET_PROC(GetProductInfo);
+#ifdef _WIN64
+    ok(pGetProductInfo != NULL, "GetProductInfo should be exported on 64-bit builds\n");
+#endif
 
     hmod = GetModuleHandleA("ntdll.dll");
 

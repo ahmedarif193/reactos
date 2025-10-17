@@ -5100,6 +5100,9 @@ START_TEST(string)
     p_mbslwr_s = (void*)GetProcAddress(hMsvcrt, "_mbslwr_s");
     p_btowc = (void*)GetProcAddress(hMsvcrt, "btowc");
     p_wctob = (void*)GetProcAddress(hMsvcrt, "wctob");
+#ifdef _WIN64
+    ok(p_wctob != NULL, "wctob should be exported on 64-bit builds\n");
+#endif
     p_wcrtomb = (void*)GetProcAddress(hMsvcrt, "wcrtomb");
     p_wcrtomb_s = (void*)GetProcAddress(hMsvcrt, "wcrtomb_s");
     p_tolower = (void*)GetProcAddress(hMsvcrt, "tolower");
