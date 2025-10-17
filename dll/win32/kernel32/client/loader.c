@@ -374,19 +374,34 @@ LoadLibraryExW(LPCWSTR lpLibFileName,
 
 
 done:
+    /* Set last error in failure case */
+    if (!NT_SUCCESS(Status))
+    {
+        PCWSTR FailureName = lpLibFileName;
+
+        if (!FailureName && DllName.Buffer && DllName.Length)
+            FailureName = DllName.Buffer;
+
+        DPRINT1("LoadLibraryExW(%ls) failing with status %lx (flags 0x%lx, characteristics 0x%lx, search path %ls)\n",
+                FailureName ? FailureName : L"<unnamed>",
+                Status,
+                dwFlags,
+                DllCharacteristics,
+                SearchPath ? SearchPath : L"<null>");
+
+        BaseSetLastNTError(Status);
+
+        /* Free resources before returning */
+        RtlFreeHeap(RtlGetProcessHeap(), 0, SearchPath);
+        if (FreeString) RtlFreeUnicodeString(&DllName);
+        return NULL;
+    }
+
     /* Free SearchPath buffer */
     RtlFreeHeap(RtlGetProcessHeap(), 0, SearchPath);
 
     /* Free DllName string if it was dynamically allocated */
     if (FreeString) RtlFreeUnicodeString(&DllName);
-
-    /* Set last error in failure case */
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("LoadLibraryExW(%ls) failing with status %lx\n", lpLibFileName, Status);
-        BaseSetLastNTError(Status);
-        return NULL;
-    }
 
     /* Return loaded module handle */
     return hInst;
