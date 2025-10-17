@@ -3,7 +3,8 @@
  *
  * Copyright 1998 Marcus Meissner
  * Copyright 1998 Juergen Schmied (jsch)  *  <juergen.schmied@metronet.de>
- *
+ * Copyright 2025 Ahmed ARIF <arif.ing@outlook.com>
+ * 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
@@ -22,6 +23,8 @@
 #include "precomp.h"
 
 #include "shell32_version.h"
+
+#include "CInternetContextMenu.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
@@ -347,6 +350,7 @@ BEGIN_OBJECT_MAP(ObjectMap)
     OBJECT_ENTRY(CLSID_RecycleBin, CRecycleBin)
     OBJECT_ENTRY(CLSID_OpenWithMenu, COpenWithMenu)
     OBJECT_ENTRY(CLSID_NewMenu, CNewMenu)
+    OBJECT_ENTRY(CLSID_Internet, CInternetContextMenu)
     OBJECT_ENTRY(CLSID_SendToMenu, CSendToMenu)
     OBJECT_ENTRY(CLSID_CopyAsPathMenu, CCopyAsPathMenu)
     OBJECT_ENTRY(CLSID_CopyToMenu, CCopyToMenu)

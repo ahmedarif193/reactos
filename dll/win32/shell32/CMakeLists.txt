@@ -75,6 +75,7 @@ list(APPEND SOURCE
     CUserNotification.cpp
     CDefaultContextMenu.cpp
     COpenWithMenu.cpp
+    CInternetContextMenu.cpp
     CNewMenu.cpp
     CSendToMenu.cpp
     CCopyMoveToMenu.cpp
