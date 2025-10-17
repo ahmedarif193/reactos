@@ -262,8 +262,24 @@ PeLdrpBindImportName(
             /* If high boundary is less than low boundary, then no result found */
             if (High < Low)
             {
-                ERR("Did not find export '%s'!\n", (PCHAR)ImportData->Name);
-                return FALSE;
+                ULONG Index;
+
+                for (Index = 0; Index < ExportDirectory->NumberOfNames; ++Index)
+                {
+                    ExportName = VaToPa(RVA(DllBase, NameTable[Index]));
+                    if (strcmp(ExportName, (PCHAR)ImportData->Name) == 0)
+                    {
+                        Middle = Index;
+                        Result = 0;
+                        break;
+                    }
+                }
+
+                if (Result != 0)
+                {
+                    ERR("Did not find export '%s'!\n", (PCHAR)ImportData->Name);
+                    return FALSE;
+                }
             }
 
             /* Everything alright, get the ordinal */
