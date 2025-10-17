@@ -3130,10 +3130,21 @@ HandleTrayContextMenu:
             return FALSE;
         }
 
-        if (m_TrayBandSite == NULL || FAILED_UNEXPECTEDLY(m_TrayBandSite->ProcessMessage(m_hWnd, uMsg, wParam, lParam, &Ret)))
+        if (!m_TrayBandSite)
         {
+            ERR("TrayWnd::OnCommand: m_TrayBandSite is NULL (msg=0x%X, wParam=0x%p, lParam=0x%p)\n", uMsg, (PVOID)wParam, (PVOID)lParam);
             return HandleCommand(LOWORD(wParam));
         }
+
+        HRESULT hrBand = m_TrayBandSite->ProcessMessage(m_hWnd, uMsg, wParam, lParam, &Ret);
+        if (FAILED(hrBand))
+        {
+            ERR("TrayWnd::OnCommand: ProcessMessage failed (msg=0x%X, wParam=0x%p, lParam=0x%p) hr=0x%08lX\n", uMsg, (PVOID)wParam, (PVOID)lParam, hrBand);
+            FAILED_UNEXPECTEDLY(hrBand);
+            return HandleCommand(LOWORD(wParam));
+        }
+
+        TRACE("TrayWnd::OnCommand: ProcessMessage handled (msg=0x%X) Ret=%ld\n", uMsg, Ret);
         return Ret;
     }
 
