@@ -12,6 +12,9 @@
 
 #define FIXME DPRINT1
 
+
+ULONG WINAPI EtwControlTraceA( TRACEHANDLE hSession, LPCSTR SessionName, PEVENT_TRACE_PROPERTIES Properties, ULONG control );
+
 /*
  * @unimplemented
  */
@@ -148,8 +151,33 @@ ULONG WINAPI EtwStartTraceA( PTRACEHANDLE pSessionHandle, LPCSTR SessionName, PE
  */
 ULONG WINAPI EtwControlTraceW( TRACEHANDLE hSession, LPCWSTR SessionName, PEVENT_TRACE_PROPERTIES Properties, ULONG control )
 {
-    FIXME("(%I64x, %s, %p, %d) stub\n", hSession, SessionName, Properties, control);
-    return ERROR_SUCCESS;
+    ANSI_STRING SessionNameA = {0};
+    LPCSTR SessionNameAnsi = NULL;
+    NTSTATUS Status;
+    ULONG Result;
+
+    if (SessionName)
+    {
+        UNICODE_STRING SessionNameW;
+
+        RtlInitUnicodeString(&SessionNameW, SessionName);
+        Status = RtlUnicodeStringToAnsiString(&SessionNameA, &SessionNameW, TRUE);
+        if (!NT_SUCCESS(Status))
+        {
+            return RtlNtStatusToDosError(Status);
+        }
+
+        SessionNameAnsi = SessionNameA.Buffer;
+    }
+
+    Result = EtwControlTraceA(hSession, SessionNameAnsi, Properties, control);
+
+    if (SessionNameA.Buffer)
+    {
+        RtlFreeAnsiString(&SessionNameA);
+    }
+
+    return Result;
 }
 
 /******************************************************************************
