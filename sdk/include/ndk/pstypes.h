@@ -379,6 +379,21 @@ typedef enum _PROCESSINFOCLASS
     ProcessImageFileMapping,
     ProcessAffinityUpdateMode,
     ProcessMemoryAllocationMode,
+    ProcessGroupInformation,
+    ProcessTokenVirtualizationEnabled,
+    ProcessConsoleHostProcess,
+    ProcessWindowInformation,
+    ProcessHandleInformation,
+    ProcessMitigationPolicy,
+    ProcessDynamicFunctionTableInformation,
+    ProcessHandleCheckingMode,
+    ProcessKeepAliveCount,
+    ProcessRevokeFileHandles,
+    ProcessWorkingSetControl,
+    ProcessHandleTable,
+    ProcessCheckStackExtentsMode,
+    ProcessCommandLineInformation,
+    ProcessProtectionInformation,
     MaxProcessInfoClass
 } PROCESSINFOCLASS;
 
@@ -1300,6 +1315,17 @@ typedef struct _ETHREAD
 #endif
 } ETHREAD;
 
+typedef union _PS_PROTECTION
+{
+    UCHAR Level;
+    struct
+    {
+        UCHAR Type  : 3;
+        UCHAR Audit : 1;
+        UCHAR Signer: 4;
+    } DUMMYSTRUCTNAME;
+} PS_PROTECTION, *PPS_PROTECTION;
+
 //
 // Executive Process (EPROCESS)
 //
@@ -1498,6 +1524,7 @@ typedef struct _EPROCESS
     UCHAR PriorityClass;
     MM_AVL_TABLE VadRoot;
     ULONG Cookie;
+    PS_PROTECTION Protection;
 } EPROCESS;
 
 //

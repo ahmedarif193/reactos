@@ -354,6 +354,56 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
 
     /* ProcessMemoryAllocationMode */
     IQS_NONE,
+
+    /* ProcessGroupInformation */
+    IQS_NONE,
+
+    /* ProcessTokenVirtualizationEnabled */
+    IQS_NONE,
+
+    /* ProcessConsoleHostProcess */
+    IQS_NONE,
+
+    /* ProcessWindowInformation */
+    IQS_NONE,
+
+    /* ProcessHandleInformation */
+    IQS_NONE,
+
+    /* ProcessMitigationPolicy */
+    IQS_NONE,
+
+    /* ProcessDynamicFunctionTableInformation */
+    IQS_NONE,
+
+    /* ProcessHandleCheckingMode */
+    IQS_NONE,
+
+    /* ProcessKeepAliveCount */
+    IQS_NONE,
+
+    /* ProcessRevokeFileHandles */
+    IQS_NONE,
+
+    /* ProcessWorkingSetControl */
+    IQS_NONE,
+
+    /* ProcessHandleTable */
+    IQS_NONE,
+
+    /* ProcessCheckStackExtentsMode */
+    IQS_NONE,
+
+    /* ProcessCommandLineInformation */
+    IQS_NONE,
+
+    /* ProcessProtectionInformation */
+    IQS_SAME
+    (
+        PS_PROTECTION,
+        UCHAR,
+        ICIF_QUERY
+    ),
 };
 
 //
