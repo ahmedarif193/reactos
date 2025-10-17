@@ -50,7 +50,7 @@
 @ stdcall WinStationGetLanAdapterNameW(ptr ptr ptr ptr ptr ptr)
 @ stdcall WinStationGetLoggedOnCount(ptr ptr)
 @ stdcall WinStationGetMachinePolicy(ptr ptr)
-@ stdcall WinStationGetProcessSid(ptr ptr ptr ptr ptr ptr)
+@ stdcall WinStationGetProcessSid(ptr long int64 ptr ptr)
 @ stdcall WinStationGetTermSrvCountersValue(ptr ptr ptr)
 @ stdcall WinStationGetUserCertificates(ptr)
 @ stdcall WinStationGetUserCredentials(ptr)
@@ -122,4 +122,3 @@
 @ stdcall _WinStationUpdateSettings(ptr ptr ptr)
 @ stdcall _WinStationUpdateUserConfig(ptr)
 @ stdcall _WinStationWaitForConnect()
-

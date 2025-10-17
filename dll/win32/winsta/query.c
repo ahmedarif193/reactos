@@ -8,6 +8,14 @@
 
 #include "winsta.h"
 
+#ifndef NT_SUCCESS
+#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+#endif
+
+#ifndef STATUS_BUFFER_TOO_SMALL
+#define STATUS_BUFFER_TOO_SMALL ((NTSTATUS)0xC0000023L)
+#endif
+
 VOID
 WINSTAAPI
 WinStationQueryLogonCredentialsW(PVOID A)
@@ -185,15 +193,135 @@ WINSTAAPI WinStationGetInitialApplication(PVOID A,
     UNIMPLEMENTED;
 }
 
-VOID
-WINSTAAPI WinStationGetProcessSid(PVOID A,
-                                  PVOID B,
-                                  PVOID C,
-                                  PVOID D,
-                                  PVOID E,
-                                  PVOID F)
+BOOLEAN
+WINSTAAPI
+WinStationGetProcessSid(
+    _In_opt_ HANDLE hServer,
+    _In_ ULONG ProcessId,
+    _In_ LARGE_INTEGER ProcessStartTime,
+    _Out_writes_bytes_opt_(*SidLength) PSID ProcessUserSid,
+    _Inout_ PULONG SidLength)
 {
-    UNIMPLEMENTED;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    CLIENT_ID ClientId;
+    HANDLE ProcessHandle = NULL;
+    HANDLE TokenHandle = NULL;
+    PTOKEN_USER TokenUserInfo = NULL;
+    ULONG TokenInformationLength = 0;
+    ULONG RequiredSidLength = 0;
+    ULONG ProvidedSidLength = 0;
+    KERNEL_USER_TIMES ProcessTimeInfo;
+    NTSTATUS Status;
+    BOOLEAN Result = FALSE;
+
+    UNREFERENCED_PARAMETER(hServer);
+
+    if (SidLength == NULL)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    ProvidedSidLength = *SidLength;
+    *SidLength = 0;
+
+    InitializeObjectAttributes(&ObjectAttributes, NULL, 0, NULL, NULL);
+    ClientId.UniqueProcess = (HANDLE)(ULONG_PTR)ProcessId;
+    ClientId.UniqueThread = NULL;
+
+    Status = NtOpenProcess(&ProcessHandle,
+                           PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+                           &ObjectAttributes,
+                           &ClientId);
+    if (!NT_SUCCESS(Status))
+    {
+        SetLastError(RtlNtStatusToDosError(Status));
+        goto Cleanup;
+    }
+
+    Status = NtQueryInformationProcess(ProcessHandle,
+                                       ProcessTimes,
+                                       &ProcessTimeInfo,
+                                       sizeof(ProcessTimeInfo),
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        SetLastError(RtlNtStatusToDosError(Status));
+        goto Cleanup;
+    }
+
+    if ((ProcessStartTime.QuadPart != 0) &&
+        (ProcessStartTime.QuadPart != ProcessTimeInfo.CreateTime.QuadPart))
+    {
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        goto Cleanup;
+    }
+
+    Status = NtOpenProcessToken(ProcessHandle, TOKEN_QUERY, &TokenHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        SetLastError(RtlNtStatusToDosError(Status));
+        goto Cleanup;
+    }
+
+    Status = NtQueryInformationToken(TokenHandle,
+                                     TokenUser,
+                                     NULL,
+                                     0,
+                                     &TokenInformationLength);
+    if (Status != STATUS_BUFFER_TOO_SMALL)
+    {
+        SetLastError(RtlNtStatusToDosError(Status));
+        goto Cleanup;
+    }
+
+    TokenUserInfo = HeapAlloc(GetProcessHeap(), 0, TokenInformationLength);
+    if (TokenUserInfo == NULL)
+    {
+        SetLastError(ERROR_OUTOFMEMORY);
+        goto Cleanup;
+    }
+
+    Status = NtQueryInformationToken(TokenHandle,
+                                     TokenUser,
+                                     TokenUserInfo,
+                                     TokenInformationLength,
+                                     &TokenInformationLength);
+    if (!NT_SUCCESS(Status))
+    {
+        SetLastError(RtlNtStatusToDosError(Status));
+        goto Cleanup;
+    }
+
+    RequiredSidLength = GetLengthSid(TokenUserInfo->User.Sid);
+    *SidLength = RequiredSidLength;
+
+    if ((ProcessUserSid == NULL) || (ProvidedSidLength < RequiredSidLength))
+    {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        goto Cleanup;
+    }
+
+    if (!CopySid(ProvidedSidLength, ProcessUserSid, TokenUserInfo->User.Sid))
+    {
+        /* CopySid already sets the thread's last error */
+        goto Cleanup;
+    }
+
+    Result = TRUE;
+    SetLastError(ERROR_SUCCESS);
+
+Cleanup:
+    if (TokenUserInfo != NULL)
+        HeapFree(GetProcessHeap(), 0, TokenUserInfo);
+
+    if (TokenHandle != NULL)
+        NtClose(TokenHandle);
+
+    if (ProcessHandle != NULL)
+        NtClose(ProcessHandle);
+
+    return Result;
 }
 
 VOID
@@ -228,4 +356,3 @@ WINSTAAPI _WinStationGetApplicationInfo(PVOID A,
 {
     UNIMPLEMENTED;
 }
-

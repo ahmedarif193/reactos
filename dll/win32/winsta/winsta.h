@@ -23,4 +23,17 @@ WINE_DEFAULT_DEBUG_CHANNEL(winsta);
 /* WinSta calling convention */
 #define WINSTAAPI WINAPI
 
+/*
+ * Exported WinStation APIs that are actually implemented in this module.
+ */
+
+BOOLEAN
+WINSTAAPI
+WinStationGetProcessSid(
+    _In_opt_ HANDLE hServer,
+    _In_ ULONG ProcessId,
+    _In_ LARGE_INTEGER ProcessStartTime,
+    _Out_writes_bytes_opt_(*SidLength) PSID ProcessUserSid,
+    _Inout_ PULONG SidLength);
+
 #endif /* _WINSTA_H */
