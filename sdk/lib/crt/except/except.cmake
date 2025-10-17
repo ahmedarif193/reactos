@@ -19,13 +19,10 @@ if(ARCH STREQUAL "i386")
 elseif(ARCH STREQUAL "amd64")
     list(APPEND LIBCNTPR_EXCEPT_SOURCE
         except/amd64/ehandler.c
+        except/amd64/seh.c
     )
     list(APPEND LIBCNTPR_EXCEPT_ASM_SOURCE
         except/amd64/chkstk_ms.s
-        except/amd64/seh.s
-    )
-    list(APPEND CRT_EXCEPT_ASM_SOURCE
-        except/amd64/seh.s
     )
     if(MSVC)
         list(APPEND CRT_EXCEPT_ASM_SOURCE

@@ -8,6 +8,10 @@
 #include <precomp.h>
 #include <winnt.h>
 
+#define SEH_TLS_SPEC __declspec(thread)
+
+extern SEH_TLS_SPEC LONG __seh_abnormal_termination_flag;
+
 
 _CRTIMP
 EXCEPTION_DISPOSITION
@@ -22,6 +26,7 @@ __C_specific_handler(
     ULONG i, BeginAddress, EndAddress, Handler;
     ULONG64 ImageBase, JumpTarget, IpOffset, TargetIpOffset;
     EXCEPTION_POINTERS ExceptionPointers;
+    LONG PreviousAbnormalState;
     PTERMINATION_HANDLER TerminationHandler;
     PEXCEPTION_FILTER ExceptionFilter;
     LONG FilterResult;
@@ -76,7 +81,11 @@ __C_specific_handler(
                 /* Call the handler */
                 Handler = ScopeTable->ScopeRecord[i].HandlerAddress;
                 TerminationHandler = (PTERMINATION_HANDLER)(ImageBase + Handler);
+
+                PreviousAbnormalState = __seh_abnormal_termination_flag;
+                __seh_abnormal_termination_flag = TRUE;
                 TerminationHandler(TRUE, EstablisherFrame);
+                __seh_abnormal_termination_flag = PreviousAbnormalState;
             }
             else if (ScopeTable->ScopeRecord[i].JumpTarget == TargetIpOffset)
             {
@@ -104,7 +113,10 @@ __C_specific_handler(
             {
                 /* Otherwise we need to call the handler */
                 ExceptionFilter = (PEXCEPTION_FILTER)(ImageBase + Handler);
+                PreviousAbnormalState = __seh_abnormal_termination_flag;
+                __seh_abnormal_termination_flag = FALSE;
                 FilterResult = ExceptionFilter(&ExceptionPointers, EstablisherFrame);
+                __seh_abnormal_termination_flag = PreviousAbnormalState;
             }
 
             if (FilterResult < 0 /* EXCEPTION_CONTINUE_EXECUTION */)
