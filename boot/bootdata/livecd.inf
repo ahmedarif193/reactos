@@ -29,12 +29,39 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","ProfilesDirectory",0x00020000,"%SystemDrive%\Profiles"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","AllUsersProfile",0x00000000,"All Users"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","DefaultUserProfile",0x00000000,"Default User"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-18","ProfileImagePath",0x00020000,"%SystemDrive%\Profiles\Default User"
 
 ; Shell Folders
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders","Common Documents",0x00020000,""
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders","Common Desktop",0x00020000,"%SystemDrive%\Profiles\All Users\Desktop"
-HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Desktop",0x00020000,"%SystemDrive%\Profiles\Default User\Desktop"
-HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Personal",0x00020000,"%SystemDrive%\Profiles\Default User\My Documents"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders","Common Programs",0x00020000,"%SystemDrive%\Profiles\All Users\Start Menu\Programs"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders","Common Start Menu",0x00020000,"%SystemDrive%\Profiles\All Users\Start Menu"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders","Common Startup",0x00020000,"%SystemDrive%\Profiles\All Users\Start Menu\Programs\Startup"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders","Common AppData",0x00020000,"%SystemDrive%\Profiles\All Users\Application Data"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Desktop",0x00020000,"%USERPROFILE%\Desktop"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Personal",0x00020000,"%USERPROFILE%\My Documents"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Start Menu",0x00020000,"%USERPROFILE%\Start Menu"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Programs",0x00020000,"%USERPROFILE%\Start Menu\Programs"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Startup",0x00020000,"%USERPROFILE%\Start Menu\Programs\Startup"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","AppData",0x00020000,"%USERPROFILE%\Application Data"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Favorites",0x00020000,"%USERPROFILE%\Favorites"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Recent",0x00020000,"%USERPROFILE%\Recent"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","SendTo",0x00020000,"%USERPROFILE%\SendTo"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Cookies",0x00020000,"%USERPROFILE%\Cookies"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","History",0x00020000,"%USERPROFILE%\Local Settings\History"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Cache",0x00020000,"%USERPROFILE%\Local Settings\Temporary Internet Files"
+HKU,".DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Desktop",0x00020000,"%USERPROFILE%\Desktop"
+HKU,".DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Personal",0x00020000,"%USERPROFILE%\My Documents"
+HKU,".DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Favorites",0x00020000,"%USERPROFILE%\Favorites"
+HKU,".DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Start Menu",0x00020000,"%USERPROFILE%\Start Menu"
+HKU,".DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Programs",0x00020000,"%USERPROFILE%\Start Menu\Programs"
+HKU,".DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Startup",0x00020000,"%USERPROFILE%\Start Menu\Programs\Startup"
+HKU,".DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","AppData",0x00020000,"%USERPROFILE%\Application Data"
+HKU,".DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Recent",0x00020000,"%USERPROFILE%\Recent"
+HKU,".DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","SendTo",0x00020000,"%USERPROFILE%\SendTo"
+HKU,".DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Cookies",0x00020000,"%USERPROFILE%\Cookies"
+HKU,".DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","History",0x00020000,"%USERPROFILE%\Local Settings\History"
+HKU,".DEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Cache",0x00020000,"%USERPROFILE%\Local Settings\Temporary Internet Files"
 
 ; ComDlg32
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32",,0x00000012
@@ -43,6 +70,8 @@ HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\OpenSaveMRU",,
 
 ; User Profile environment variables
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","USERPROFILE",0x00020000,"%SystemDrive%\Profiles\Default User"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","HOMEDRIVE",0x00020000,"%SystemDrive%"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","HOMEPATH",0x00020000,"\Profiles\Default User"
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","ALLUSERSPROFILE",0x00020000,"%SystemDrive%\Profiles\All Users"
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management","PagingFiles",0x00000000,""
 
