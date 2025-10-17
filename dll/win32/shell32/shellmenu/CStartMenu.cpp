@@ -25,6 +25,56 @@ WINE_DEFAULT_DEBUG_CHANNEL(CStartMenu);
 
 //#define TEST_TRACKPOPUPMENU_SUBMENUS
 
+static HRESULT EnsureFolderLocationPidl(INT csidl, PIDLIST_ABSOLUTE *ppidl)
+{
+    TRACE("EnsureFolderLocationPidl(csidl=%#x)\n", csidl);
+    if (!ppidl)
+        return E_POINTER;
+
+    *ppidl = NULL;
+
+    PIDLIST_ABSOLUTE pidl = NULL;
+    HRESULT hr = SHGetFolderLocation(NULL, csidl, 0, 0, &pidl);
+    if (SUCCEEDED(hr) && pidl)
+    {
+        TRACE("EnsureFolderLocationPidl: existing pidl found\n");
+        *ppidl = pidl;
+        return S_OK;
+    }
+
+    if (pidl)
+    {
+        CoTaskMemFree(pidl);
+        pidl = NULL;
+    }
+
+    if (FAILED(hr) && hr != E_FAIL)
+    {
+        ERR("EnsureFolderLocationPidl: SHGetFolderLocation(csidl=%#x) failed hr=0x%08lX\n", csidl, hr);
+        FAILED_UNEXPECTEDLY(hr);
+        return hr;
+    }
+
+    WCHAR szPath[MAX_PATH] = { 0 };
+    hr = SHGetFolderPathW(NULL, csidl | CSIDL_FLAG_CREATE, NULL, SHGFP_TYPE_CURRENT, szPath);
+    if (FAILED(hr))
+    {
+        ERR("EnsureFolderLocationPidl: SHGetFolderPathW(CREATE) failed hr=0x%08lX\n", hr);
+        return hr;
+    }
+
+    pidl = ILCreateFromPathW(szPath);
+    if (!pidl)
+    {
+        ERR("EnsureFolderLocationPidl: ILCreateFromPathW failed for '%S'\n", szPath);
+        return E_OUTOFMEMORY;
+    }
+
+    TRACE("EnsureFolderLocationPidl: created pidl for '%S'\n", szPath);
+    *ppidl = pidl;
+    return S_OK;
+}
+
 
 /* NOTE: The following constants *MUST NOT* be changed because
          they're hardcoded and need to be the exact values
@@ -162,14 +212,12 @@ private:
         SHFILEINFOW fileInfo = { 0 };
         if (bAdd || bSetText)
         {
-            LPITEMIDLIST pidl;
-            if (SHGetSpecialFolderLocation(NULL, csidl, &pidl) != S_OK)
-            {
-                ERR("SHGetSpecialFolderLocation failed\n");
+            PIDLIST_ABSOLUTE pidl = NULL;
+            HRESULT hrFolder = EnsureFolderLocationPidl(csidl, &pidl);
+            if (FAILED_UNEXPECTEDLY(hrFolder))
                 return;
-            }
 
-            SHGetFileInfoW((LPWSTR)pidl, 0, &fileInfo, sizeof(fileInfo),
+            SHGetFileInfoW(reinterpret_cast<LPCWSTR>(pidl), 0, &fileInfo, sizeof(fileInfo),
                            SHGFI_PIDL | SHGFI_DISPLAYNAME);
             CoTaskMemFree(pidl);
 
@@ -239,14 +287,17 @@ private:
 
     HRESULT AddStartMenuItems(IShellMenu *pShellMenu, INT csidl, DWORD dwFlags, IShellFolder *psf = NULL)
     {
-        CComHeapPtr<ITEMIDLIST> pidlFolder;
+        CComHeapPtr<ITEMIDLIST_ABSOLUTE> pidlFolder;
         CComPtr<IShellFolder> psfDesktop;
         CComPtr<IShellFolder> pShellFolder;
         HRESULT hr;
 
-        hr = SHGetFolderLocation(NULL, csidl, 0, 0, &pidlFolder);
+        PIDLIST_ABSOLUTE pidlRaw = NULL;
+        hr = EnsureFolderLocationPidl(csidl, &pidlRaw);
         if (FAILED_UNEXPECTEDLY(hr))
             return hr;
+
+        pidlFolder.Attach(pidlRaw);
 
         if (psf)
         {

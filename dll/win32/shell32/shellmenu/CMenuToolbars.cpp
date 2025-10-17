@@ -1288,6 +1288,12 @@ HRESULT CMenuStaticToolbar::InternalPopupItem(INT iItem, INT index, DWORD_PTR dw
         if (FAILED_UNEXPECTEDLY(hr))
             return hr;
 
+        if (!shellMenu)
+        {
+            ERR("CMenuStaticToolbar::InternalPopupItem: callback returned NULL shell menu for item=%d index=%d\n", iItem, index);
+            return E_FAIL;
+        }
+
         return PopupSubMenu(iItem, index, shellMenu, keyInitiated);
     }
 }
