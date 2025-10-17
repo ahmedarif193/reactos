@@ -14,6 +14,7 @@ list(APPEND SOURCE
     prnfldr.c
     shdocvw.c
     shell32.c
+    wbemdisp.c
     windows_storage.c
     zipfldr.c)
 

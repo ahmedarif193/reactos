@@ -14,6 +14,7 @@ extern void func_ole32(void);
 extern void func_prnfldr(void);
 extern void func_shdocvw(void);
 extern void func_shell32(void);
+extern void func_wbemdisp(void);
 extern void func_windows_storage(void);
 extern void func_zipfldr(void);
 
@@ -31,6 +32,7 @@ const struct test winetest_testlist[] =
     { "prnfldr", func_prnfldr },
     { "shdocvw", func_shdocvw },
     { "shell32", func_shell32 },
+    { "wbemdisp", func_wbemdisp },
     { "windows_storage", func_windows_storage },
     { "zipfldr", func_zipfldr },
 
