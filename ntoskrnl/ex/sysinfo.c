@@ -11,6 +11,7 @@
 /* INCLUDES *****************************************************************/
 
 #include <ntoskrnl.h>
+#include <limits.h>
 #include <wmidata.h>
 #include <wmistr.h>
 #define NDEBUG
@@ -1199,6 +1200,78 @@ QSI_DEF(SystemProcessorPerformanceInformation)
         Spi->InterruptTime.QuadPart = UInt32x32To64(Prcb->InterruptTime, KeMaximumIncrement);
         Spi->InterruptCount = Prcb->InterruptCount;
         Spi++;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+/* Class 83 - Processor Idle Cycle Time Information */
+QSI_DEF(SystemProcessorIdleCycleTimeInformation)
+{
+    PULONGLONG IdleCycleTimes = (PULONGLONG)Buffer;
+    ULONG ProcessorCount = KeNumberProcessors;
+    ULONG RequiredSize = ProcessorCount * sizeof(ULONGLONG);
+    ULONG ProcessorIndex;
+
+    *ReqSize = RequiredSize;
+
+    if (Size < RequiredSize)
+    {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    if (Buffer == NULL)
+    {
+        return STATUS_ACCESS_VIOLATION;
+    }
+
+    for (ProcessorIndex = 0; ProcessorIndex < ProcessorCount; ++ProcessorIndex)
+    {
+        PKPRCB Prcb = KiProcessorBlock[ProcessorIndex];
+        ULONGLONG IdleTime100ns;
+        ULONG TotalTime;
+        ULONG Mhz;
+        ULONGLONG Quotient;
+        ULONGLONG Remainder;
+        ULONGLONG Cycles;
+
+        TotalTime = Prcb->IdleThread->KernelTime + Prcb->IdleThread->UserTime;
+        IdleTime100ns = UInt32x32To64(TotalTime, KeMaximumIncrement);
+        Mhz = Prcb->MHz;
+
+        if (Mhz == 0)
+        {
+            IdleCycleTimes[ProcessorIndex] = 0;
+            continue;
+        }
+
+        Quotient = IdleTime100ns / 10;
+        Remainder = IdleTime100ns % 10;
+
+        if (Quotient > ULLONG_MAX / Mhz)
+        {
+            Cycles = ULLONG_MAX;
+        }
+        else
+        {
+            Cycles = Quotient * Mhz;
+
+            if (Cycles != ULLONG_MAX)
+            {
+                ULONGLONG Addend = (Remainder * Mhz) / 10;
+
+                if (Cycles > ULLONG_MAX - Addend)
+                {
+                    Cycles = ULLONG_MAX;
+                }
+                else
+                {
+                    Cycles += Addend;
+                }
+            }
+        }
+
+        IdleCycleTimes[ProcessorIndex] = Cycles;
     }
 
     return STATUS_SUCCESS;
@@ -2923,6 +2996,15 @@ CallQS[] =
     SI_XX(SystemWow64SharedInformationObsolete), /* FIXME: not implemented */
     SI_XX(SystemRegisterFirmwareTableInformationHandler), /* FIXME: not implemented */
     SI_QX(SystemFirmwareTableInformation),
+#if (NTDDI_VERSION >= NTDDI_VISTA) || defined(__REACTOS__)
+    SI_XX(SystemModuleInformationEx), /* FIXME: not implemented */
+    SI_XX(SystemVerifierTriageInformation), /* FIXME: not implemented */
+    SI_XX(SystemSuperfetchInformation), /* FIXME: not implemented */
+    SI_XX(SystemMemoryListInformation), /* FIXME: not implemented */
+    SI_XX(SystemFileCacheInformationEx), /* FIXME: not implemented */
+    SI_XX(SystemThreadPriorityClientIdInformation), /* FIXME: not implemented */
+    SI_QX(SystemProcessorIdleCycleTimeInformation),
+#endif
 };
 
 C_ASSERT(SystemBasicInformation == 0);
@@ -2999,6 +3081,77 @@ NtQuerySystemInformation(
             if (ReturnLength)
                 *ReturnLength = CapturedResultLength;
         }
+    }
+    _SEH2_EXCEPT(ExSystemExceptionFilter())
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+/*
+ * @implemented
+ */
+__kernel_entry
+NTSTATUS
+NTAPI
+NtQuerySystemInformationEx(
+    _In_ SYSTEM_INFORMATION_CLASS SystemInformationClass,
+    _In_reads_bytes_opt_(InputBufferLength) PVOID InputBuffer,
+    _In_ ULONG InputBufferLength,
+    _Out_writes_bytes_to_opt_(SystemInformationLength, *ReturnLength) PVOID SystemInformation,
+    _In_ ULONG SystemInformationLength,
+    _Out_opt_ PULONG ReturnLength)
+{
+    NTSTATUS Status = STATUS_INVALID_INFO_CLASS;
+    KPROCESSOR_MODE PreviousMode;
+    ULONG Alignment = TYPE_ALIGNMENT(ULONG);
+    USHORT Group = 0;
+
+    PAGED_CODE();
+
+    PreviousMode = ExGetPreviousMode();
+
+    _SEH2_TRY
+    {
+        if (PreviousMode != KernelMode)
+        {
+            if (InputBufferLength)
+                ProbeForRead(InputBuffer, InputBufferLength, sizeof(USHORT));
+            if (SystemInformationLength)
+                ProbeForWrite(SystemInformation, SystemInformationLength, Alignment);
+            if (ReturnLength)
+                ProbeForWriteUlong(ReturnLength);
+        }
+
+        if (ReturnLength)
+            *ReturnLength = 0;
+
+        if (SystemInformationClass != SystemProcessorIdleCycleTimeInformation)
+        {
+            _SEH2_LEAVE;
+        }
+
+        if (InputBufferLength != sizeof(USHORT) || InputBuffer == NULL)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            _SEH2_LEAVE;
+        }
+
+        Group = *(PUSHORT)InputBuffer;
+
+        if (Group != 0)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            _SEH2_LEAVE;
+        }
+
+        Status = NtQuerySystemInformation(SystemProcessorIdleCycleTimeInformation,
+                                          SystemInformation,
+                                          SystemInformationLength,
+                                          ReturnLength);
     }
     _SEH2_EXCEPT(ExSystemExceptionFilter())
     {
