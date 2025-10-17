@@ -36,3 +36,11 @@ NtLdrAddOptions(
     IN ULONG BufferSize,
     IN BOOLEAN Append,
     IN PCSTR NewOptions OPTIONAL);
+
+VOID
+NtLdrUpdateLoadOptions(
+    IN OUT PSTR LoadOptions,
+    IN ULONG BufferSize,
+    IN BOOLEAN Append,
+    IN PCSTR const *OptionsToAdd OPTIONAL,
+    IN PCSTR const *OptionsToRemove OPTIONAL);

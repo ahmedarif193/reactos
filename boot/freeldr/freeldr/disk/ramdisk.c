@@ -10,7 +10,16 @@
 /* INCLUDES *******************************************************************/
 
 #include <freeldr.h>
+#include <debug.h>
+#include <ctype.h>
+#include <limits.h>
 #include "../ntldr/ntldropts.h"
+
+DBG_DEFAULT_CHANNEL(DISK);
+
+#define RAMDISK_ALLOCATION_ALIGNMENT 0x1000ULL
+#define ALIGN_UP_BY_ULL(Value, Alignment) \
+    (((Value) + ((Alignment) - 1ULL)) & ~((Alignment) - 1ULL))
 
 /* GLOBALS ********************************************************************/
 
@@ -23,6 +32,209 @@ static ULONGLONG RamDiskFileSize;    // FIXME: RAM disks currently limited to 4G
 static ULONGLONG RamDiskImageLength; // Size of valid data in the Ramdisk (usually == RamDiskFileSize - RamDiskImageOffset)
 static ULONG     RamDiskImageOffset; // Starting offset from the Ramdisk base.
 static ULONGLONG RamDiskOffset;      // Current position in the Ramdisk.
+static ULONGLONG RamDiskRequestedSize = 0;
+static PVOID     RamDiskWritableBase = NULL;
+static ULONGLONG RamDiskWritableSize = 0;
+
+static
+ULONGLONG
+RamDiskParseSizeString(
+    PCSTR ValueString,
+    ULONG ValueLength)
+{
+    ULONGLONG Value = 0;
+    ULONGLONG Multiplier = 1;
+    BOOLEAN SawDigit = FALSE;
+    ULONG Index = 0;
+
+    if (!ValueString || ValueLength == 0)
+        return 0;
+
+    /* Skip leading whitespace */
+    while (Index < ValueLength && isspace((unsigned char)ValueString[Index]))
+        ++Index;
+
+    /* Parse the numeric component */
+    while (Index < ValueLength && isdigit((unsigned char)ValueString[Index]))
+    {
+        int Digit = ValueString[Index] - '0';
+
+        if (Value > (ULLONG_MAX - Digit) / 10ULL)
+            return 0;
+
+        Value = Value * 10ULL + (ULONGLONG)Digit;
+        SawDigit = TRUE;
+        ++Index;
+    }
+
+    if (!SawDigit)
+        return 0;
+
+    /* Skip any whitespace between the number and the optional suffix */
+    while (Index < ValueLength && isspace((unsigned char)ValueString[Index]))
+        ++Index;
+
+    if (Index < ValueLength)
+    {
+        char Suffix = (char)toupper((unsigned char)ValueString[Index]);
+
+        switch (Suffix)
+        {
+            case 'B':
+                Multiplier = 1ULL;
+                ++Index;
+                break;
+
+            case 'K':
+                Multiplier = 1024ULL;
+                ++Index;
+                break;
+
+            case 'M':
+                Multiplier = 1024ULL * 1024ULL;
+                ++Index;
+                break;
+
+            case 'G':
+                Multiplier = 1024ULL * 1024ULL * 1024ULL;
+                ++Index;
+                break;
+
+            case 'T':
+                Multiplier = 1024ULL * 1024ULL * 1024ULL * 1024ULL;
+                ++Index;
+                break;
+
+            default:
+                return 0;
+        }
+
+        /* Optional trailing 'B' (e.g. "MB", "GiB") */
+        if (Index < ValueLength)
+        {
+            char SecondSuffix = (char)toupper((unsigned char)ValueString[Index]);
+
+            if (SecondSuffix == 'I')
+            {
+                /* Accept IEC-style suffixes like MiB/GiB */
+                ++Index;
+                if (Index < ValueLength)
+                {
+                    SecondSuffix = (char)toupper((unsigned char)ValueString[Index]);
+                }
+                else
+                {
+                    SecondSuffix = '\0';
+                }
+            }
+
+            if (SecondSuffix == 'B')
+            {
+                ++Index;
+            }
+        }
+
+        while (Index < ValueLength && isspace((unsigned char)ValueString[Index]))
+            ++Index;
+
+        /* Reject unknown trailing characters */
+        if (Index < ValueLength)
+            return 0;
+
+        if (Multiplier != 1ULL && Value > ULLONG_MAX / Multiplier)
+            return 0;
+
+        Value *= Multiplier;
+    }
+
+    return Value;
+}
+
+ULONGLONG
+RamDiskGetRequestedSize(VOID)
+{
+    return RamDiskRequestedSize;
+}
+
+ULONGLONG
+RamDiskGetImageLength(VOID)
+{
+    return RamDiskImageLength;
+}
+
+ULONG
+RamDiskGetImageOffset(VOID)
+{
+    return RamDiskImageOffset;
+}
+
+#if defined(__GNUC__)
+__attribute__((unused))
+#endif
+static
+BOOLEAN
+RamDiskReserveWritableBuffer(ULONGLONG RequestedSize)
+{
+    ULONGLONG AllocationSize;
+    PVOID Base;
+
+    if (RequestedSize == 0)
+        return FALSE;
+
+    AllocationSize = ALIGN_UP_BY_ULL(RequestedSize, RAMDISK_ALLOCATION_ALIGNMENT);
+    if (AllocationSize == 0 || AllocationSize < RequestedSize)
+        return FALSE;
+
+    if (RamDiskWritableBase && RamDiskWritableSize >= AllocationSize)
+        return TRUE;
+
+    if (RamDiskWritableBase)
+    {
+        MmFreeMemory(RamDiskWritableBase);
+        RamDiskWritableBase = NULL;
+        RamDiskWritableSize = 0;
+    }
+
+    if ((ULONGLONG)(SIZE_T)AllocationSize != AllocationSize)
+    {
+        WARN("Requested ramdisk size (%llu) exceeds allocator limits\n", AllocationSize);
+        return FALSE;
+    }
+
+    Base = MmAllocateMemoryWithType((SIZE_T)AllocationSize, LoaderXIPRom);
+    if (!Base)
+    {
+        WARN("Failed to reserve writable ramdisk buffer (%llu bytes)\n", AllocationSize);
+        return FALSE;
+    }
+
+    RamDiskWritableBase = Base;
+    RamDiskWritableSize = AllocationSize;
+    TRACE("Reserved writable ramdisk buffer at %p (%llu bytes)\n", Base, AllocationSize);
+    return TRUE;
+}
+
+BOOLEAN
+RamDiskGetReservedBuffer(
+    IN ULONGLONG MinimumSize,
+    OUT PVOID *BaseAddress,
+    OUT PULONGLONG ActualSize)
+{
+    if (!BaseAddress || !ActualSize)
+        return FALSE;
+
+    if (RamDiskWritableBase && RamDiskWritableSize >= MinimumSize)
+    {
+        *BaseAddress = RamDiskWritableBase;
+        *ActualSize = RamDiskWritableSize;
+
+        RamDiskWritableBase = NULL;
+        RamDiskWritableSize = 0;
+        return TRUE;
+    }
+
+    return FALSE;
+}
 
 /* FUNCTIONS ******************************************************************/
 
@@ -221,6 +433,8 @@ RamDiskInitialize(
     RamDiskImageLength = 0;
     RamDiskImageOffset = 0;
     RamDiskOffset = 0;
+    RamDiskRequestedSize = 0;
+    RamDiskRequestedSize = 0;
 
     if (InitRamDisk)
     {
@@ -245,6 +459,27 @@ RamDiskInitialize(
         {
             PCSTR Option;
             ULONG FileNameLength;
+            ULONG OptionLength;
+
+            Option = NtLdrGetOptionEx(LoadOptions, "RDRAMSIZE=", &OptionLength);
+            if (Option && OptionLength > (sizeof("RDRAMSIZE=") - 1))
+            {
+                ULONGLONG ParsedSize;
+
+                ParsedSize = RamDiskParseSizeString(
+                                Option + (sizeof("RDRAMSIZE=") - 1),
+                                OptionLength - (sizeof("RDRAMSIZE=") - 1));
+                if (ParsedSize != 0)
+                {
+                    RamDiskRequestedSize = ParsedSize;
+                    TRACE("Requested writable ramdisk size: %llu bytes\n",
+                          RamDiskRequestedSize);
+                }
+                else
+                {
+                    WARN("Ignoring invalid RDRAMSIZE option value\n");
+                }
+            }
 
             /* Ramdisk image file name */
             Option = NtLdrGetOptionEx(LoadOptions, "RDPATH=", &FileNameLength);

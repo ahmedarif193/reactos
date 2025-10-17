@@ -259,8 +259,8 @@ NtLdrUpdateLoadOptions(
     IN OUT PSTR LoadOptions,
     IN ULONG BufferSize,
     IN BOOLEAN Append,
-    IN PCSTR OptionsToAdd[] OPTIONAL,
-    IN PCSTR OptionsToRemove[] OPTIONAL)
+    IN PCSTR const *OptionsToAdd OPTIONAL,
+    IN PCSTR const *OptionsToRemove OPTIONAL)
 {
     PCSTR NextOptions, NextOpt;
     PSTR Options, Option;

@@ -10,6 +10,7 @@
 #include "winldr.h"
 #include "ntldropts.h"
 #include "registry.h"
+#include "ramdisk.h"
 #include <internal/cmboot.h>
 
 #ifdef UEFIBOOT
@@ -1249,18 +1250,83 @@ LoadAndBootWindows(
 
     TRACE("BootOptions: '%s'\n", BootOptions);
 
+    BOOLEAN ForceRamDisk = FALSE;
+    PCSTR RamDiskSizeOpt;
+    ULONG RamDiskSizeOptLen = 0;
+
+    RamDiskSizeOpt = NtLdrGetOptionEx(BootOptions, "RDRAMSIZE=", &RamDiskSizeOptLen);
+    if (RamDiskSizeOpt &&
+        RamDiskSizeOptLen >= (sizeof("RDRAMSIZE=") - 1) &&
+        _strnicmp(RamDiskSizeOpt, "RDRAMSIZE=", sizeof("RDRAMSIZE=") - 1) == 0)
+    {
+        ForceRamDisk = TRUE;
+    }
+
     /* Check if a RAM disk file was given */
     FileName = NtLdrGetOptionEx(BootOptions, "RDPATH=", &FileNameLength);
-    if (FileName && (FileNameLength >= 7))
+    if (FileName &&
+        FileNameLength >= (sizeof("RDPATH=") - 1) &&
+        _strnicmp(FileName, "RDPATH=", sizeof("RDPATH=") - 1) == 0)
     {
-        /* Load the RAM disk */
+        ForceRamDisk = TRUE;
+    }
+
+    if (ForceRamDisk)
+    {
+        /* Load the RAM disk, either from explicit RDPATH or the system partition */
         Status = RamDiskInitialize(FALSE, BootOptions, SystemPartition);
         if (Status != ESUCCESS)
         {
-            FileName += 7; FileNameLength -= 7;
-            UiMessageBox("Failed to load RAM disk file '%.*s'",
-                         FileNameLength, FileName);
+            if (FileName && (FileNameLength >= 7))
+            {
+                FileName += 7;
+                FileNameLength -= 7;
+                UiMessageBox("Failed to load RAM disk file '%.*s'",
+                             FileNameLength, FileName);
+            }
+            else
+            {
+                UiMessageBox("Failed to expand LiveCD into RAM.");
+            }
             return Status;
+        }
+        else if (RamDiskGetRequestedSize() != 0)
+        {
+            CHAR OffsetOption[32];
+            CHAR LengthOption[64];
+            PCSTR OptionsToAdd[3];
+            PCSTR OptionsToRemove[3];
+            CHAR NewBootPath[sizeof(BootPath)];
+            PCSTR SubPath;
+
+            RtlStringCbCopyA(OffsetOption, sizeof(OffsetOption), "/RDIMAGEOFFSET=0");
+            RtlStringCbPrintfA(LengthOption,
+                               sizeof(LengthOption),
+                               "/RDIMAGELENGTH=%llu",
+                               RamDiskGetImageLength());
+
+            OptionsToAdd[0] = OffsetOption;
+            OptionsToAdd[1] = LengthOption;
+            OptionsToAdd[2] = NULL;
+
+            OptionsToRemove[0] = "/RDIMAGEOFFSET=";
+            OptionsToRemove[1] = "/RDIMAGELENGTH=";
+            OptionsToRemove[2] = NULL;
+
+            NtLdrUpdateLoadOptions(BootOptions,
+                                   sizeof(BootOptions),
+                                   TRUE,
+                                   OptionsToAdd,
+                                   OptionsToRemove);
+
+            SubPath = strchr(BootPath, '\\');
+            if (!SubPath)
+                SubPath = "\\";
+
+            RtlStringCbCopyA(NewBootPath, sizeof(NewBootPath), "ramdisk(0)");
+            RtlStringCbCatA(NewBootPath, sizeof(NewBootPath), SubPath);
+            RtlStringCbCopyA(BootPath, sizeof(BootPath), NewBootPath);
+            TRACE("BootPath re-targeted to '%s'\n", BootPath);
         }
     }
 

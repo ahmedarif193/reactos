@@ -8,6 +8,7 @@
 spec2def(rosload.exe rosload.spec)
 
 list(APPEND ROSLOAD_SOURCE
+    disk/ramdisk.c
     include/freeldr.h
     bootmgr.c
     custom.c
@@ -24,6 +25,11 @@ list(APPEND ROSLOAD_SOURCE
     ntldr/winldr.c
     ntldr/wlmemory.c
     ntldr/wlregistry.c
+    lib/ramdisk_format.c
+    lib/ramdisk_fatfs.c
+    lib/fatfs/ff.c
+    lib/fatfs/diskio.c
+    lib/fatfs/ccsbcs.c
 )
 
 if(ARCH STREQUAL "i386")

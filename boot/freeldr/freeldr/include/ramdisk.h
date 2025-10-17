@@ -9,11 +9,49 @@
 
 #pragma once
 
+typedef struct _RAMDISK_FAT32_LAYOUT
+{
+    ULONG BytesPerSector;
+    ULONG SectorsPerCluster;
+    ULONG ReservedSectors;
+    ULONG NumberOfFats;
+    ULONG FatSizeSectors;
+    ULONG FirstDataSector;
+    ULONG RootDirFirstCluster;
+    ULONG TotalSectors;
+} RAMDISK_FAT32_LAYOUT, *PRAMDISK_FAT32_LAYOUT;
+
 ARC_STATUS
 RamDiskInitialize(
     IN BOOLEAN InitRamDisk,
     IN PCSTR LoadOptions OPTIONAL,
     IN PCSTR DefaultPath OPTIONAL);
+
+ULONGLONG
+RamDiskGetRequestedSize(VOID);
+
+BOOLEAN
+RamDiskGetReservedBuffer(IN ULONGLONG MinimumSize,
+                         OUT PVOID *BaseAddress,
+                         OUT PULONGLONG ActualSize);
+
+ULONGLONG
+RamDiskGetImageLength(VOID);
+
+ULONG
+RamDiskGetImageOffset(VOID);
+
+BOOLEAN
+RamDiskFormatFat32(IN PVOID BaseAddress,
+                   IN ULONGLONG DiskSize,
+                   OUT PRAMDISK_FAT32_LAYOUT Layout OPTIONAL);
+
+BOOLEAN
+RamDiskBuildWritableImage(IN PVOID IsoBase,
+                          IN ULONGLONG IsoSize,
+                          IN ULONGLONG RequestedSize,
+                          OUT PVOID *NewBase,
+                          OUT ULONGLONG *NewSize);
 
 extern PVOID gInitRamDiskBase;
 extern ULONG gInitRamDiskSize;

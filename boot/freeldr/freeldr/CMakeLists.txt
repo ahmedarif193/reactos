@@ -48,6 +48,11 @@ list(APPEND FREELDR_BOOTLIB_SOURCE
     lib/fs/fat.c
     lib/fs/fs.c
     lib/fs/iso.c
+    lib/ramdisk_format.c
+    lib/ramdisk_fatfs.c
+    lib/fatfs/ff.c
+    lib/fatfs/diskio.c
+    lib/fatfs/ccsbcs.c
     lib/fs/ntfs.c
     lib/inifile/ini_init.c
     lib/inifile/inifile.c
