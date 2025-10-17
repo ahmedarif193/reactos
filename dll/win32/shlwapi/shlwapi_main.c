@@ -36,6 +36,145 @@ DECLSPEC_HIDDEN DWORD SHLWAPI_ThreadRef_index = TLS_OUT_OF_INDEXES;
 #ifdef __REACTOS__
 extern CRITICAL_SECTION g_csBagCacheLock;
 VOID FreeViewStatePropertyBagCache(VOID);
+
+static VOID
+SHLWAPI_InitViewStateRegistry(VOID)
+{
+    static const WCHAR s_DefaultBagSlots[][2] = { L"1", L"2", L"3", L"4" };
+    HKEY hShellRoot = NULL;
+    HKEY hBagsKey = NULL;
+    HKEY hTempKey = NULL;
+    LONG error;
+
+    error = RegCreateKeyExW(HKEY_CURRENT_USER,
+                             L"Software\\Microsoft\\Windows\\Shell",
+                             0,
+                             NULL,
+                             REG_OPTION_NON_VOLATILE,
+                             KEY_READ | KEY_WRITE,
+                             NULL,
+                             &hShellRoot,
+                             NULL);
+    if (error != ERROR_SUCCESS)
+        return;
+
+    error = RegCreateKeyExW(hShellRoot,
+                             L"BagMRU",
+                             0,
+                             NULL,
+                             REG_OPTION_NON_VOLATILE,
+                             KEY_READ | KEY_WRITE,
+                             NULL,
+                             &hTempKey,
+                             NULL);
+    if (error == ERROR_SUCCESS)
+        RegCloseKey(hTempKey);
+
+    error = RegCreateKeyExW(hShellRoot,
+                             L"Bags",
+                             0,
+                             NULL,
+                             REG_OPTION_NON_VOLATILE,
+                             KEY_READ | KEY_WRITE,
+                             NULL,
+                             &hBagsKey,
+                             NULL);
+    if (error == ERROR_SUCCESS)
+    {
+        error = RegCreateKeyExW(hBagsKey,
+                                 L"AllFolders",
+                                 0,
+                                 NULL,
+                                 REG_OPTION_NON_VOLATILE,
+                                 KEY_READ | KEY_WRITE,
+                                 NULL,
+                                 &hTempKey,
+                                 NULL);
+        if (error == ERROR_SUCCESS)
+        {
+            HKEY hShellDefaults = NULL;
+            HKEY hInherit = NULL;
+
+            if (RegCreateKeyExW(hTempKey,
+                                 L"Shell",
+                                 0,
+                                 NULL,
+                                 REG_OPTION_NON_VOLATILE,
+                                 KEY_READ | KEY_WRITE,
+                                 NULL,
+                                 &hShellDefaults,
+                                 NULL) == ERROR_SUCCESS)
+            {
+                RegCreateKeyExW(hShellDefaults,
+                                 L"Inherit",
+                                 0,
+                                 NULL,
+                                 REG_OPTION_NON_VOLATILE,
+                                 KEY_READ | KEY_WRITE,
+                                 NULL,
+                                 &hInherit,
+                                 NULL);
+            }
+
+            if (hInherit)
+                RegCloseKey(hInherit);
+            if (hShellDefaults)
+                RegCloseKey(hShellDefaults);
+            RegCloseKey(hTempKey);
+        }
+
+        for (SIZE_T i = 0; i < _countof(s_DefaultBagSlots); ++i)
+        {
+            HKEY hSlotKey = NULL;
+            HKEY hShellKey = NULL;
+            HKEY hInheritKey = NULL;
+
+            if (RegCreateKeyExW(hBagsKey,
+                                 s_DefaultBagSlots[i],
+                                 0,
+                                 NULL,
+                                 REG_OPTION_NON_VOLATILE,
+                                 KEY_READ | KEY_WRITE,
+                                 NULL,
+                                 &hSlotKey,
+                                 NULL) != ERROR_SUCCESS)
+            {
+                continue;
+            }
+
+            if (RegCreateKeyExW(hSlotKey,
+                                 L"Shell",
+                                 0,
+                                 NULL,
+                                 REG_OPTION_NON_VOLATILE,
+                                 KEY_READ | KEY_WRITE,
+                                 NULL,
+                                 &hShellKey,
+                                 NULL) == ERROR_SUCCESS)
+            {
+                RegCreateKeyExW(hShellKey,
+                                 L"Inherit",
+                                 0,
+                                 NULL,
+                                 REG_OPTION_NON_VOLATILE,
+                                 KEY_READ | KEY_WRITE,
+                                 NULL,
+                                 &hInheritKey,
+                                 NULL);
+            }
+
+            if (hInheritKey)
+                RegCloseKey(hInheritKey);
+            if (hShellKey)
+                RegCloseKey(hShellKey);
+            RegCloseKey(hSlotKey);
+        }
+
+        RegCloseKey(hBagsKey);
+    }
+
+    RegCloseKey(hShellRoot);
+}
 #endif
 
 /*************************************************************************
@@ -69,6 +208,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID fImpLoad)
 	    SHLWAPI_ThreadRef_index = TlsAlloc();
 #ifdef __REACTOS__
 	    InitializeCriticalSection(&g_csBagCacheLock);
+        SHLWAPI_InitViewStateRegistry();
 #endif
 	    break;
 	  case DLL_PROCESS_DETACH:

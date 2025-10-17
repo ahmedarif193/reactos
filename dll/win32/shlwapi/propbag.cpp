@@ -321,8 +321,18 @@ HRESULT CRegPropertyBag::Init(HKEY hKey, LPCWSTR lpSubKey)
 
     if (error != ERROR_SUCCESS)
     {
-        ERR("%p %s 0x%08X\n", hKey, debugstr_w(lpSubKey), error);
-        return HRESULT_FROM_WIN32(error);
+        HRESULT hr = HRESULT_FROM_WIN32(error);
+
+        if (error == ERROR_FILE_NOT_FOUND)
+        {
+            WARN("%p %s 0x%08X\n", hKey, debugstr_w(lpSubKey), error);
+        }
+        else
+        {
+            ERR("%p %s 0x%08X\n", hKey, debugstr_w(lpSubKey), error);
+        }
+
+        return hr;
     }
 
     return S_OK;
