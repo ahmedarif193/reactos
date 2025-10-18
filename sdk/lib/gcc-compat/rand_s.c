@@ -58,7 +58,7 @@ errno_t rand_s(unsigned int *value)
     return EINVAL;
 }
 
-#if defined(__GNUC__) && !defined(__clang__)
+#if defined(__GNUC__)
 #  ifdef _WIN64
 __attribute__((used))
 errno_t (__cdecl *__imp_rand_s)(unsigned int *) = rand_s;

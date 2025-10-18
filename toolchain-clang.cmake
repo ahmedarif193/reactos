@@ -41,8 +41,10 @@ set(CMAKE_ASM_COMPILER ${GCC_TOOLCHAIN_PREFIX}gcc)
 set(CMAKE_ASM_COMPILER_ID GNU)
 set(CMAKE_MC_COMPILER ${GCC_TOOLCHAIN_PREFIX}windmc)
 set(CMAKE_RC_COMPILER ${GCC_TOOLCHAIN_PREFIX}windres)
-# set(CMAKE_AR ${triplet}-ar)
-# set(CMAKE_DLLTOOL ${triplet}-dlltool)
+set(CMAKE_DLLTOOL ${GCC_TOOLCHAIN_PREFIX}dlltool)
+# Always use binutils from the MinGW toolchain for archive creation.
+# This avoids incompatibilities with llvm-dlltool option handling.
+set(CMAKE_AR ${GCC_TOOLCHAIN_PREFIX}ar)
 
 # This allows to have CMake test the compiler without linking
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)

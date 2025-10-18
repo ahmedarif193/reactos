@@ -65,7 +65,7 @@ Options:
     -o, --output DIR        Set output directory name
     -p, --toolchain-path    Set toolchain binaries path (e.g., $HOME/mingw-toolchains/x86_64-w64-mingw32/bin)
     --toolchain-prefix      Set toolchain prefix (e.g., x86_64-w64-mingw32)
-    --clang                 Configure using the Clang toolchain file
+    --clang[=VER]           Configure using the Clang toolchain file (defaults to clang-19)
     --clang-version VER     Use clang binaries with the specified version suffix (e.g., 18)
     -c, --ccache            Enable ccache
     --clean                 Clean build directory before configuring
@@ -126,10 +126,21 @@ while [[ $# -gt 0 ]]; do
             TOOLCHAIN_PREFIX="$2"
             shift 2
             ;;
+        --clang=*)
+            USE_CLANG=1
+            TOOLCHAIN_FILE="toolchain-clang.cmake"
+            CLANG_VERSION="${1#*=}"
+            shift
+            ;;
         --clang)
             USE_CLANG=1
             TOOLCHAIN_FILE="toolchain-clang.cmake"
-            shift
+            if [ -n "$2" ] && [[ "$2" != -* ]]; then
+                CLANG_VERSION="$2"
+                shift 2
+            else
+                shift
+            fi
             ;;
         --clang-version)
             if [ -z "$2" ] || [[ "$2" == -* ]]; then
@@ -159,6 +170,10 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [ "$USE_CLANG" -eq 1 ] && [ -z "$CLANG_VERSION" ]; then
+    CLANG_VERSION="19"
+fi
 
 if [ -z "$ARCH" ] && [ -n "$ROS_ARCH" ]; then
     ARCH="$ROS_ARCH"
@@ -235,6 +250,11 @@ echo "Output Directory: $OUTPUT_DIR"
 echo "Architecture:     $ARCH"
 echo "Build Type:       $BUILD_TYPE"
 echo "Generator:        $CMAKE_GENERATOR"
+if [ "$USE_CLANG" -eq 1 ]; then
+    echo "Build Environment: Clang (GCC toolchain support)"
+else
+    echo "Build Environment: MinGW"
+fi
 echo "Toolchain Path:   $TOOLCHAIN_PATH"
 echo "Toolchain Prefix: $TOOLCHAIN_PREFIX"
 echo "Toolchain File:   $TOOLCHAIN_FILE"
@@ -290,6 +310,13 @@ CLANG_VERSION_ARG=""
 if [ -n "$CLANG_VERSION" ]; then
     CLANG_VERSION_ARG="-DCLANG_VERSION=\"$CLANG_VERSION\""
 fi
+
+if [ "$USE_CLANG" -eq 1 ]; then
+    BUILD_ENVIRONMENT_VALUE="Clang"
+else
+    BUILD_ENVIRONMENT_VALUE="MinGW"
+fi
+
 CMAKE_COMMAND="cmake -G \"$CMAKE_GENERATOR\" \
     -DCMAKE_BUILD_TYPE=\"$BUILD_TYPE\" \
     -DARCH=\"$ARCH\" \
@@ -297,6 +324,7 @@ CMAKE_COMMAND="cmake -G \"$CMAKE_GENERATOR\" \
     -DTOOLCHAIN_PREFIX=\"$TOOLCHAIN_PREFIX\" \
     -DENABLE_CCACHE:BOOL=\"$ENABLE_CCACHE\" \
     -DCMAKE_TOOLCHAIN_FILE:FILEPATH=\"$REACTOS_SOURCE_DIR/$TOOLCHAIN_FILE\" \
+    -DBUILD_ENVIRONMENT=\"$BUILD_ENVIRONMENT_VALUE\" \
     ${CMAKE_MAKE_PROGRAM_ARG} \
     -C \"$REACTOS_SOURCE_DIR/ReactOS.cmake\" \
     ${CLANG_VERSION_ARG} \

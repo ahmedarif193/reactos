@@ -7,7 +7,7 @@ list(APPEND SOURCE
     __throw_out_of_range_fmt.cpp
     StringCchCopyNA.c)
 
-if (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND WIN32)
+if ((CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang") AND WIN32)
     list(APPEND SOURCE rand_s.c)
 endif()
 

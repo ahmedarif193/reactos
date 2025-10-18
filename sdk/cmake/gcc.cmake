@@ -706,10 +706,8 @@ add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:$<IF:$<BOOL:$<TARGET_PROPERTY:WIT
 # We disable exceptions, unless said so
 add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:$<IF:$<BOOL:$<TARGET_PROPERTY:WITH_CXX_EXCEPTIONS>>,-fexceptions,-fno-exceptions>>")
 
-# G++ shipped with ROSBE uses sjlj exceptions on i386. Tell Clang it is so
-if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND ARCH STREQUAL "i386")
-    add_compile_options("$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<BOOL:$<TARGET_PROPERTY:WITH_CXX_EXCEPTIONS>>>:-fsjlj-exceptions>")
-endif()
+# For Clang targeting 32-bit Windows we rely on its default DWARF exception
+# handling instead of forcing SJLJ, which avoids missing sjlj runtime symbols.
 
 # Find default G++ libraries
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
