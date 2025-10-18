@@ -199,12 +199,26 @@ typedef struct __JUMP_BUFFER {
   ({ void* value; __asm__ __volatile__("movl %%esp, %[value]" : [value] "=r" (value)); value; })
 #endif
 #define setjmp(BUF) _setjmp((BUF),mingw_getsp())
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wincompatible-library-redeclaration"
+#endif
   int __MINGW_NOTHROW __cdecl _setjmp(jmp_buf _Buf,void *_Ctx);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 #else /* _INC_SETJMPEX */
 #undef setjmp
 #define setjmp(BUF) _setjmpex((BUF),mingw_getsp())
 #define setjmpex(BUF) _setjmpex((BUF),mingw_getsp())
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wincompatible-library-redeclaration"
+#endif
   int __MINGW_NOTHROW __cdecl _setjmpex(jmp_buf _Buf,void *_Ctx);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 #endif /* _INC_SETJMPEX */
 #else /* !USE_MINGW_SETJMP_TWO_ARGS */
 #ifndef _INC_SETJMPEX
