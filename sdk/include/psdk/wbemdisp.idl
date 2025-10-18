@@ -54,10 +54,12 @@ interface ISWbemSecurity;
 interface ISWbemServices;
 interface ISWbemRefresher;
 interface ISWbemRefreshableItem;
-/* TODO(ros-wmi): Add full definitions for the Vista refresher extensions. */
-interface ISWbemRefreshableEnum;
-interface ISWbemRefreshableItemEx;
-interface ISWbemConfigureRefresher;
+/*
+ * TODO(ros-wmi): The Vista-era refresher extensions (ISWbemRefreshableEnum,
+ * ISWbemRefreshableItemEx, ISWbemConfigureRefresher) are intentionally omitted
+ * until we can import their authoritative definitions from a captured
+ * wbemdisp.tlb.
+ */
 
 typedef
 [
