@@ -25,13 +25,6 @@ void __cdecl HalpTrap0D();
 ULONG HalpSavedPfn;
 HARDWARE_PTE HalpSavedPte;
 
-/* Page frame number for the HAL reserved low-memory page table */
-PFN_NUMBER HalpLowMemoryPageTablePfn;
-BOOLEAN HalpLowMemoryPageTableValid = FALSE;
-
-HALP_BIOS_DISPLAY_INFORMATION HalpBiosDisplayInformation;
-BOOLEAN HalpBiosDisplayInformationValid = FALSE;
-
 //
 // IDT Data
 //
@@ -290,7 +283,6 @@ HalpBiosCall(VOID)
 
     /* Exit to V86 mode */
     HalpExitToV86((PKTRAP_FRAME)&V86TrapFrame);
-
 }
 
 /* FUNCTIONS ******************************************************************/
@@ -470,8 +462,6 @@ HalpMapRealModeMemory(VOID)
     Pte->Write = 1;
     Pte->Owner = 1;
     Pte->PageFrameNumber = (HalAddressToPde(0xFFC00000))->PageFrameNumber;
-    HalpLowMemoryPageTablePfn = Pte->PageFrameNumber;
-    HalpLowMemoryPageTableValid = TRUE;
 
     //
     // Flush the TLB
@@ -497,12 +487,9 @@ HalpMapRealModeMemory(VOID)
     // Now get the entry for our real mode V86 code and the target
     //
     Pte = HalAddressToPte(0x20000);
-
     V86Pte = HalAddressToPte(&HalpRealModeStart);
-
     do
     {
-
         //
         // Map the physical address into our real-mode region
         //
@@ -519,7 +506,6 @@ HalpMapRealModeMemory(VOID)
     // Flush the TLB
     //
     HalpFlushTLB();
-
 }
 
 VOID
@@ -639,44 +625,16 @@ HalpUnmapRealModeMemory(VOID)
     }
 
     //
-    // Restore the PDE for the lowest megabyte of memory. If the original
-    // entry was not present, keep using the HAL-reserved page table so that
-    // callers that mapped new pages (for example, BootVID) retain their
-    // mappings. Convert the entry back to supervisor-only access to keep the
-    // null page guarded.
+    // Restore the PDE for the lowest megabyte of memory
     //
     Pte = HalAddressToPde(0);
-    if ((HalpSavedPte.Valid == 0) && HalpLowMemoryPageTableValid)
-    {
-        Pte->Valid = 1;
-        Pte->Write = 1;
-        Pte->Owner = 0;
-        Pte->PageFrameNumber = HalpLowMemoryPageTablePfn;
-    }
-    else
-    {
-        *Pte = HalpSavedPte;
-        Pte->PageFrameNumber = HalpSavedPfn;
-    }
+    *Pte = HalpSavedPte;
+    Pte->PageFrameNumber = HalpSavedPfn;
 
     //
     // Flush the TLB
     //
     HalpFlushTLB();
-}
-
-BOOLEAN
-NTAPI
-HalGetBootDisplayInformation(
-    _Out_ PHALP_BIOS_DISPLAY_INFORMATION Information)
-{
-    if (!HalpBiosDisplayInformationValid)
-    {
-        return FALSE;
-    }
-
-    *Information = HalpBiosDisplayInformation;
-    return TRUE;
 }
 
 BOOLEAN
@@ -687,22 +645,6 @@ HalpBiosDisplayReset(VOID)
     /* There is no VGA BIOS on these machine types */
     return FALSE;
 #else
-    if (HalpTryVbeMode())
-    {
-        return TRUE;
-    }
-
-    if (HalpProgramVgaMode12())
-    {
-        return TRUE;
-    }
-
-    /*
-     * Fallback: drive the legacy V86 BIOS path for hardware that cannot be
-     * programmed directly. Once the direct path proves stable across targets
-     * we can remove this block and the supporting V86 helpers.
-     */
-
     ULONG Flags;
     PHARDWARE_PTE IdtPte;
     BOOLEAN RestoreWriteProtection = FALSE;

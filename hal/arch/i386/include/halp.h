@@ -81,9 +81,6 @@ BOOLEAN
     OUT PKIRQL OldIrql
 );
 
-extern HALP_BIOS_DISPLAY_INFORMATION HalpBiosDisplayInformation;
-extern BOOLEAN HalpBiosDisplayInformationValid;
-
 BOOLEAN
 NTAPI
 HalpDismissIrqGeneric(
@@ -372,24 +369,6 @@ BOOLEAN
 NTAPI
 HalpBiosDisplayReset(
     VOID
-);
-
-BOOLEAN
-NTAPI
-HalpProgramVgaMode12(
-    VOID
-);
-
-BOOLEAN
-NTAPI
-HalpTryVbeMode(
-    VOID
-);
-
-BOOLEAN
-NTAPI
-HalGetBootDisplayInformation(
-    _Out_ PHALP_BIOS_DISPLAY_INFORMATION Information
 );
 
 VOID

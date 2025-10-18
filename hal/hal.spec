@@ -24,7 +24,6 @@
 @ stdcall HalGetAdapter(ptr ptr)
 @ stdcall HalGetBusData(long long long ptr long)
 @ stdcall HalGetBusDataByOffset(long long long ptr long long)
-@ stdcall -arch=i386 HalGetBootDisplayInformation(ptr)
 @ stdcall HalGetEnvironmentVariable(str long str)
 @ fastcall -arch=arm HalGetInterruptSource()
 @ stdcall HalGetInterruptVector(long long long long ptr ptr)

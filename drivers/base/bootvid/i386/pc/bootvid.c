@@ -459,45 +459,8 @@ VidInitialize(
         /* Reset the display and initialize it */
         if (HalResetDisplay())
         {
-            HALP_BIOS_DISPLAY_INFORMATION HalDisplayInfo;
-            LOADER_PARAMETER_FRAMEBUFFER FbInfo;
-
-            RtlZeroMemory(&HalDisplayInfo, sizeof(HalDisplayInfo));
-            if (HalGetBootDisplayInformation(&HalDisplayInfo) &&
-                HalDisplayInfo.FrameBufferBase.QuadPart != 0 &&
-                HalDisplayInfo.Width != 0 &&
-                HalDisplayInfo.Height != 0 &&
-                HalDisplayInfo.Pitch != 0 &&
-                HalDisplayInfo.BitsPerPixel >= 32)
-            {
-                RtlZeroMemory(&FbInfo, sizeof(FbInfo));
-                FbInfo.FrameBufferBase = HalDisplayInfo.FrameBufferBase;
-                FbInfo.FrameBufferSize = HalDisplayInfo.FrameBufferSize ?
-                    HalDisplayInfo.FrameBufferSize :
-                    HalDisplayInfo.Pitch * HalDisplayInfo.Height;
-                FbInfo.HorizontalResolution = HalDisplayInfo.Width;
-                FbInfo.VerticalResolution = HalDisplayInfo.Height;
-                FbInfo.PixelsPerScanLine = HalDisplayInfo.PixelsPerScanLine ?
-                    HalDisplayInfo.PixelsPerScanLine : HalDisplayInfo.Width;
-                FbInfo.PixelFormat = HalDisplayInfo.PixelFormat;
-                FbInfo.RedMask = HalDisplayInfo.RedMask;
-                FbInfo.GreenMask = HalDisplayInfo.GreenMask;
-                FbInfo.BlueMask = HalDisplayInfo.BlueMask;
-
-                if (FbInfo.FrameBufferSize != 0 &&
-                    VidInitializeLinearFramebufferFromInfo(&FbInfo))
-                {
-                    g_BootvidUseUefi = TRUE;
-                    return TRUE;
-                }
-            }
-
-            /*
-             * The HAL touched the adapter but we failed to build a linear framebuffer.
-             * Reprogram a full VGA graphics mode so the legacy renderer has a
-             * consistent planar surface instead of leaving the hardware in a VBE mode.
-             */
-            VgaInterpretCmdStream(VGA_640x480);
+            /* The HAL handled the display, re-initialize only the AC registers */
+            VgaInterpretCmdStream(AT_Initialization);
         }
         else
         {
