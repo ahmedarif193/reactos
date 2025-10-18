@@ -168,7 +168,7 @@ fi
 [ -z "$ARCH" ] && ARCH="i386"
 [ -z "$BUILD_TYPE" ] && BUILD_TYPE="RelWithDebInfo"
 [ -z "$CMAKE_GENERATOR" ] && CMAKE_GENERATOR="Ninja"
-[ -z "$ENABLE_CCACHE" ] && ENABLE_CCACHE="ON"
+[ -z "$ENABLE_CCACHE" ] && ENABLE_CCACHE="OFF"
 if [ -z "$TOOLCHAIN_PREFIX" ]; then
     case "$ARCH" in
         amd64|x86_64)
