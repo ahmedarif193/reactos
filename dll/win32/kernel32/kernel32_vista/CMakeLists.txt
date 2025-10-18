@@ -10,6 +10,7 @@ list(APPEND SOURCE
     firmware.c
     EnumSystemLocalesEx.c
     GetLocaleInfoEx.c
+    GetSystemDefaultLocaleName.c
     GetFileInformationByHandleEx.c
     GetFinalPathNameByHandle.c
     GetTickCount64.c
@@ -19,6 +20,7 @@ list(APPEND SOURCE
     IsValidLocaleName.c
     LCIDToLocaleName.c
     LocaleNameToLCID.c
+    Idn.c
     locale_norm.c
     locale_scripts.c
     io.c
