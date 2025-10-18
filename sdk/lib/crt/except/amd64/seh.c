@@ -62,12 +62,24 @@ _local_unwind2(
 
 #undef _abnormal_termination
 
+#if defined(__clang__) && !defined(_MSC_VER)
+#pragma redefine_extname K32SehAbnormalTermination _abnormal_termination
+#define SEH_ABNORMAL_TERMINATION_NAME K32SehAbnormalTermination
+#else
+#if defined(_MSC_VER)
+#pragma function(_abnormal_termination)
+#endif
+#define SEH_ABNORMAL_TERMINATION_NAME _abnormal_termination
+#endif
+
 INT
 __cdecl
-_abnormal_termination(VOID)
+SEH_ABNORMAL_TERMINATION_NAME(VOID)
 {
     return (__seh_abnormal_termination_flag != 0);
 }
+
+#undef SEH_ABNORMAL_TERMINATION_NAME
 
 EXCEPTION_DISPOSITION
 __cdecl

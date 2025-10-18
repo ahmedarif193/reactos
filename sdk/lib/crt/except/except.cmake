@@ -57,10 +57,21 @@ elseif(ARCH STREQUAL "arm")
     endif()
 endif()
 
+list(APPEND LIBCNTPR_EXCEPT_SOURCE
+    except/emutls.c
+)
+
 list(APPEND CRT_EXCEPT_SOURCE
     ${LIBCNTPR_EXCEPT_SOURCE}
     except/stack.c
 )
+
+if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND ARCH STREQUAL "amd64")
+    set_source_files_properties(
+        except/amd64/seh.c
+        except/amd64/ehandler.c
+        PROPERTIES COMPILE_OPTIONS "-femulated-tls")
+endif()
 
 if(ARCH STREQUAL "i386")
     list(APPEND CHKSTK_ASM_SOURCE except/i386/chkstk_asm.s except/i386/chkstk_ms.s)
