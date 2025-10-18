@@ -52,6 +52,12 @@ interface ISWbemQualifier;
 interface ISWbemQualifierSet;
 interface ISWbemSecurity;
 interface ISWbemServices;
+interface ISWbemRefresher;
+interface ISWbemRefreshableItem;
+/* TODO(ros-wmi): Add full definitions for the Vista refresher extensions. */
+interface ISWbemRefreshableEnum;
+interface ISWbemRefreshableItemEx;
+interface ISWbemConfigureRefresher;
 
 typedef
 [
