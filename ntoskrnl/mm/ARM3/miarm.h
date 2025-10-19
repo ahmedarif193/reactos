@@ -2465,11 +2465,11 @@ MiRemoveZeroPageSafe(IN ULONG Color)
     /* Bail out during very early boot before the color tables exist */
     if (MmSecondaryColors == 0) return 0;
 
-    ZeroList = MmFreePagesByColor[ZeroedPageList];
-    if (ZeroList == NULL) return 0;
-
     Color &= MmSecondaryColorMask;
     if (Color >= MmSecondaryColors) return 0;
+
+    ZeroList = MmFreePagesByColor[ZeroedPageList];
+    if (ZeroList == NULL) return 0;
 
     if (ZeroList[Color].Flink != LIST_HEAD) return MiRemoveZeroPage(Color);
     return 0;

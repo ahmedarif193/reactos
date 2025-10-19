@@ -170,7 +170,7 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
     //
     // Do the mapping
     //
-    ULONG RemainingPages = PageCount;
+    SIZE_T RemainingPages = PageCount;
     PFN_NUMBER CurrentPfn = Pfn;
 
     do
@@ -179,9 +179,13 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
 
         if (PointerPte->u.Hard.Valid != 0)
         {
+#if DBG
+            ASSERTMSG("MmMapIoSpace: remapping physical address without prior unmap",
+                      FALSE);
+#endif
             DbgPrintEx(DPFLTR_MM_ID,
                        DPFLTR_ERROR_LEVEL,
-                       "MmMapIoSpace: reusing valid PTE %p (VA %p, raw %p, phys %I64x, bytes %Ix, remaining %lu, cache %u, pfn %Ix)\n",
+                       "MmMapIoSpace: reusing valid PTE %p (VA %p, raw %p, phys %I64x, bytes %Ix, remaining %Iu, cache %u, pfn %Ix)\n",
                        PointerPte,
                        MiPteToAddress(PointerPte),
                        (PVOID)(ULONG_PTR)PointerPte->u.Long,

@@ -49,6 +49,8 @@ MiCreateArm3StaticMemoryArea(PVOID BaseAddress, SIZE_T Size, BOOLEAN Executable)
 
     if (Size == 0)
     {
+        DPRINT1("MiCreateArm3StaticMemoryArea: ignoring zero-sized range at %p\n",
+                BaseAddress);
         return;
     }
 

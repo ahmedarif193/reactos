@@ -409,8 +409,8 @@ MiInitializeNonPagedPool(VOID)
     DPRINT1("MiInitNP: ExpansionStart=%p Pte=%p Max=%I64x Size=%I64x Charge=%lu\n",
             MmNonPagedPoolExpansionStart,
             PointerPte + 1,
-            MmMaximumNonPagedPoolInBytes,
-            MmSizeOfNonPagedPoolInBytes,
+            (ULONGLONG)MmMaximumNonPagedPoolInBytes,
+            (ULONGLONG)MmSizeOfNonPagedPoolInBytes,
             MiExpansionPoolPagesInitialCharge);
 
     if (MiExpansionPoolPagesInitialCharge != 0)
