@@ -37,7 +37,14 @@ MiMapPageInHyperSpace(IN PEPROCESS Process,
     // Never accept page 0 or non-physical pages
     //
     ASSERT(Page != 0);
+#if defined(_M_AMD64)
+    if (MiPfnsInitialized)
+    {
+        ASSERT(MiGetPfnEntry(Page) != NULL);
+    }
+#else
     ASSERT(MiGetPfnEntry(Page) != NULL);
+#endif
 
     //
     // Build the PTE
@@ -206,4 +213,3 @@ MiUnmapPagesInZeroSpace(IN PVOID VirtualAddress,
     //
     RtlZeroMemory(PointerPte, NumberOfPages * sizeof(MMPTE));
 }
-
