@@ -6,6 +6,8 @@
  */
 
 #include "precomp.h"
+#define ROUND_KB_TO_MB(val) ((ULONG)((((ULONGLONG)(val)) + 512ULL) / 1024ULL))
+
 
 int      nlastBarsUsed = 0;
 
@@ -309,10 +311,7 @@ void Graph_DrawMemUsageGraph(HDC hDC, HWND hWnd)
     CommitChargeTotal = (ULONGLONG)PerfDataGetCommitChargeTotalK();
     CommitChargeLimit = (ULONGLONG)PerfDataGetCommitChargeLimitK();
 
-    if (CommitChargeTotal > 1024)
-        wsprintfW(Text, L"%d MB", (int)(CommitChargeTotal / 1024));
-    else
-        wsprintfW(Text, L"%d K", (int)CommitChargeTotal);
+    wsprintfW(Text, L"%d MB", ROUND_KB_TO_MB(CommitChargeTotal));
     /*
      * Draw the font text onto the graph
      */

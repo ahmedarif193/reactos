@@ -11,6 +11,8 @@
 TM_GRAPH_CONTROL PerformancePageCpuUsageHistoryGraph;
 TM_GRAPH_CONTROL PerformancePageMemUsageHistoryGraph;
 
+#define ROUND_KB_TO_MB(val) ((ULONG)((((ULONGLONG)(val)) + 512ULL) / 1024ULL))
+
 HWND hPerformancePage;                /* Performance Property Page */
 static HWND hCpuUsageGraph;                  /* CPU Usage Graph */
 static HWND hMemUsageGraph;                  /* MEM Usage Graph */
@@ -346,11 +348,11 @@ DWORD WINAPI PerformancePageRefreshThread(PVOID Parameter)
             CommitChargeTotal = PerfDataGetCommitChargeTotalK();
             CommitChargeLimit = PerfDataGetCommitChargeLimitK();
             CommitChargePeak  = PerfDataGetCommitChargePeakK();
-            _ultow(CommitChargeTotal, Text, 10);
+            _ultow(ROUND_KB_TO_MB(CommitChargeTotal), Text, 10);
             SetWindowTextW(hCommitChargeTotalEdit, Text);
-            _ultow(CommitChargeLimit, Text, 10);
+            _ultow(ROUND_KB_TO_MB(CommitChargeLimit), Text, 10);
             SetWindowTextW(hCommitChargeLimitEdit, Text);
-            _ultow(CommitChargePeak, Text, 10);
+            _ultow(ROUND_KB_TO_MB(CommitChargePeak), Text, 10);
             SetWindowTextW(hCommitChargePeakEdit, Text);
 
             StrFormatByteSizeW(CommitChargeTotal * 1024,
@@ -374,11 +376,11 @@ DWORD WINAPI PerformancePageRefreshThread(PVOID Parameter)
             KernelMemoryTotal = PerfDataGetKernelMemoryTotalK();
             KernelMemoryPaged = PerfDataGetKernelMemoryPagedK();
             KernelMemoryNonPaged = PerfDataGetKernelMemoryNonPagedK();
-            _ultow(KernelMemoryTotal, Text, 10);
+            _ultow(ROUND_KB_TO_MB(KernelMemoryTotal), Text, 10);
             SetWindowTextW(hKernelMemoryTotalEdit, Text);
-            _ultow(KernelMemoryPaged, Text, 10);
+            _ultow(ROUND_KB_TO_MB(KernelMemoryPaged), Text, 10);
             SetWindowTextW(hKernelMemoryPagedEdit, Text);
-            _ultow(KernelMemoryNonPaged, Text, 10);
+            _ultow(ROUND_KB_TO_MB(KernelMemoryNonPaged), Text, 10);
             SetWindowTextW(hKernelMemoryNonPagedEdit, Text);
 
             /*
@@ -387,11 +389,11 @@ DWORD WINAPI PerformancePageRefreshThread(PVOID Parameter)
             PhysicalMemoryTotal = PerfDataGetPhysicalMemoryTotalK();
             PhysicalMemoryAvailable = PerfDataGetPhysicalMemoryAvailableK();
             PhysicalMemorySystemCache = PerfDataGetPhysicalMemorySystemCacheK();
-            _ultow(PhysicalMemoryTotal, Text, 10);
+            _ultow(ROUND_KB_TO_MB(PhysicalMemoryTotal), Text, 10);
             SetWindowTextW(hPhysicalMemoryTotalEdit, Text);
-            _ultow(PhysicalMemoryAvailable, Text, 10);
+            _ultow(ROUND_KB_TO_MB(PhysicalMemoryAvailable), Text, 10);
             SetWindowTextW(hPhysicalMemoryAvailableEdit, Text);
-            _ultow(PhysicalMemorySystemCache, Text, 10);
+            _ultow(ROUND_KB_TO_MB(PhysicalMemorySystemCache), Text, 10);
             SetWindowTextW(hPhysicalMemorySystemCacheEdit, Text);
 
             /*
@@ -439,7 +441,20 @@ DWORD WINAPI PerformancePageRefreshThread(PVOID Parameter)
 
             PhysicalMemoryTotal = PerfDataGetPhysicalMemoryTotalK();
             PhysicalMemoryAvailable = PerfDataGetPhysicalMemoryAvailableK();
-            nBarsUsed2 = PhysicalMemoryTotal ? ((PhysicalMemoryAvailable * 100) / PhysicalMemoryTotal) : 0;
+            if (PhysicalMemoryTotal)
+            {
+                ULONGLONG ClampedAvailable = PhysicalMemoryAvailable;
+                if (ClampedAvailable > PhysicalMemoryTotal)
+                    ClampedAvailable = PhysicalMemoryTotal;
+                ULONGLONG PhysicalMemoryUsed = PhysicalMemoryTotal - ClampedAvailable;
+                nBarsUsed2 = (int)((PhysicalMemoryUsed * 100ULL) / PhysicalMemoryTotal);
+                if (nBarsUsed2 > 100)
+                    nBarsUsed2 = 100;
+            }
+            else
+            {
+                nBarsUsed2 = 0;
+            }
 
             GraphCtrl_AddPoint(&PerformancePageCpuUsageHistoryGraph, CpuUsage, CpuKernelUsage);
             GraphCtrl_AddPoint(&PerformancePageMemUsageHistoryGraph, nBarsUsed1, nBarsUsed2);
