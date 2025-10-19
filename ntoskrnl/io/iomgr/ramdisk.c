@@ -229,8 +229,9 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             continue;
         }
 
+        /* Prefer LoaderXIPRom descriptors when both types satisfy the checks */
         Score = AvailableLength;
-        if (MemoryDescriptor->MemoryType == LoaderMemoryData)
+        if (MemoryDescriptor->MemoryType == LoaderXIPRom)
             Score |= (1ull << 63);
 
         if (!BestDescriptor || (Score > BestScore))
