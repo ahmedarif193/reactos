@@ -33,7 +33,7 @@ IopIsLoadOptionDelimiter(CHAR Character)
 
 static
 BOOLEAN
-IopParseUnsignedDecimalOption(
+IopParseUnsignedIntegerOption(
     _In_ PCCHAR Value,
     _In_ ULONGLONG MaxValue,
     _Out_ PULONGLONG Result)
@@ -41,6 +41,7 @@ IopParseUnsignedDecimalOption(
     ULONGLONG Accumulator = 0;
     BOOLEAN SeenDigit = FALSE;
     CHAR Current;
+    ULONG Base = 10;
 
     if (!Value || !Result)
     {
@@ -61,6 +62,27 @@ IopParseUnsignedDecimalOption(
         return FALSE;
     }
 
+    if ((Value[0] == '0') && (Value[1] != '\0'))
+    {
+        CHAR Prefix = Value[1];
+
+        if (Prefix == 'X')
+        {
+            Base = 16;
+            Value += 2;
+        }
+        else if (Prefix == 'O')
+        {
+            Base = 8;
+            Value += 2;
+        }
+        else if (Prefix == 'B')
+        {
+            Base = 2;
+            Value += 2;
+        }
+    }
+
     while ((Current = *Value) != '\0')
     {
         if (IopIsLoadOptionDelimiter(Current))
@@ -68,24 +90,36 @@ IopParseUnsignedDecimalOption(
             break;
         }
 
-        if ((Current < '0') || (Current > '9'))
-        {
-            return FALSE;
-        }
-
         ULONGLONG DigitValue;
 
-        DigitValue = (ULONGLONG)(Current - '0');
-        if (Accumulator > (MaxValue / 10))
+        if ((Current >= '0') && (Current <= '9'))
         {
-            return FALSE;
+            DigitValue = (ULONGLONG)(Current - '0');
         }
-        if ((Accumulator == (MaxValue / 10)) && (DigitValue > (MaxValue % 10)))
+        else if ((Base == 16) && (Current >= 'A') && (Current <= 'F'))
+        {
+            DigitValue = 10ull + (ULONGLONG)(Current - 'A');
+        }
+        else
         {
             return FALSE;
         }
 
-        Accumulator = (Accumulator * 10) + DigitValue;
+        if (DigitValue >= Base)
+        {
+            return FALSE;
+        }
+
+        if (Accumulator > (MaxValue / Base))
+        {
+            return FALSE;
+        }
+        if ((Accumulator == (MaxValue / Base)) && (DigitValue > (MaxValue % Base)))
+        {
+            return FALSE;
+        }
+
+        Accumulator = (Accumulator * Base) + DigitValue;
 
         SeenDigit = TRUE;
         Value++;
@@ -129,7 +163,7 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                            : "<null>";
 
     DbgPrintEx(DPFLTR_DEFAULT_ID,
-               DPFLTR_TRACE_LEVEL,
+               DPFLTR_INFO_LEVEL,
                "IopStartRamdisk: entry NtBootPath='%s'\n",
                BootPathString);
 
@@ -148,7 +182,7 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             {
                 ULONGLONG OffsetCandidate;
 
-                if (!IopParseUnsignedDecimalOption(OffsetValue + 1,
+                if (!IopParseUnsignedIntegerOption(OffsetValue + 1,
                                                    MAXLONG,
                                                    &OffsetCandidate))
                 {
@@ -172,7 +206,7 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             {
                 ULONGLONG LengthCandidate;
 
-                if (!IopParseUnsignedDecimalOption(LengthValue + 1,
+                if (!IopParseUnsignedIntegerOption(LengthValue + 1,
                                                    MAXLONGLONG,
                                                    &LengthCandidate))
                 {
@@ -289,7 +323,7 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     {
         RamdiskCreate.DiskOffset = ParsedOffset;
         DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_TRACE_LEVEL,
+                   DPFLTR_INFO_LEVEL,
                    "IopStartRamdisk: parsed RDIMAGEOFFSET=%ld\n",
                    RamdiskCreate.DiskOffset);
     }
@@ -300,7 +334,7 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     {
         RamdiskCreate.DiskLength.QuadPart = (LONGLONG)ParsedLength;
         DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_TRACE_LEVEL,
+                   DPFLTR_INFO_LEVEL,
                    "IopStartRamdisk: parsed RDIMAGELENGTH=%I64d\n",
                    RamdiskCreate.DiskLength.QuadPart);
     }
@@ -310,7 +344,7 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
            SelectedDescriptorLength - (ULONGLONG)RamdiskCreate.DiskOffset);
 
     DbgPrintEx(DPFLTR_DEFAULT_ID,
-               DPFLTR_TRACE_LEVEL,
+               DPFLTR_INFO_LEVEL,
                "IopStartRamdisk: effective length %I64u, offset %ld\n",
                RamdiskCreate.DiskLength.QuadPart,
                RamdiskCreate.DiskOffset);
@@ -349,8 +383,8 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     //
     // Send create command
     //
-    DbgPrintEx(DPFLTR_DEFAULT_ID,
-               DPFLTR_TRACE_LEVEL,
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_INFO_LEVEL,
                "IopStartRamdisk: issuing FSCTL_CREATE_RAM_DISK (%I64u bytes, drive %wc)\n",
                RamdiskCreate.DiskLength.QuadPart,
                RamdiskCreate.DriveLetter);
@@ -437,8 +471,8 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         RtlInitEmptyUnicodeString(&NtSystemRoot,
                                   SharedUserData->NtSystemRoot,
                                   sizeof(SharedUserData->NtSystemRoot));
-    DbgPrintEx(DPFLTR_DEFAULT_ID,
-               DPFLTR_TRACE_LEVEL,
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_INFO_LEVEL,
                "IopStartRamdisk: setting NtSystemRoot to '%s'\n",
                Buffer);
 
@@ -460,7 +494,7 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     KeWaitForSingleObject(&PiEnumerationFinished, Executive, KernelMode, FALSE, NULL);
 
     DbgPrintEx(DPFLTR_DEFAULT_ID,
-               DPFLTR_TRACE_LEVEL,
+               DPFLTR_INFO_LEVEL,
                "IopStartRamdisk: ramdisk initialization complete\n");
 
     //
