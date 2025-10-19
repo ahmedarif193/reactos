@@ -177,7 +177,8 @@ NTSTATUS
 NTAPI
 PspWow64InitializeProcess(
     IN PEPROCESS Process,
-    IN PEPROCESS Parent OPTIONAL)
+    IN PEPROCESS Parent OPTIONAL,
+    IN BOOLEAN ForceCreation)
 {
     PWOW64_PROCESS Wow64;
     PWOW64_PROCESS ParentWow64 = NULL;
@@ -207,11 +208,16 @@ PspWow64InitializeProcess(
     if (Parent)
     {
         ParentWow64 = PsGetProcessWow64Process(Parent);
-        if (!ParentWow64)
+        if (!ParentWow64 && !ForceCreation)
         {
             /* Parent has no WOW64 state; keep the process native for now. */
             return STATUS_SUCCESS;
         }
+    }
+    else if (!ForceCreation)
+    {
+        /* No parent context and no explicit request to create WOW64 state. */
+        return STATUS_SUCCESS;
     }
 
     Wow64 = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Wow64), TAG_WOW64_PROCESS);
@@ -275,7 +281,7 @@ PspWow64SetProcessWow64Info(
 
     if (!Process->Wow64Process)
     {
-        if (!NT_SUCCESS(PspWow64InitializeProcess(Process, NULL)))
+        if (!NT_SUCCESS(PspWow64InitializeProcess(Process, NULL, TRUE)))
         {
             return;
         }
@@ -308,7 +314,7 @@ PspWow64SetProcessPeb32(
 
     if (!Process->Wow64Process)
     {
-        if (!NT_SUCCESS(PspWow64InitializeProcess(Process, NULL)))
+        if (!NT_SUCCESS(PspWow64InitializeProcess(Process, NULL, TRUE)))
         {
             return;
         }
@@ -341,7 +347,7 @@ PspWow64SetProcessTeb32(
 
     if (!Process->Wow64Process)
     {
-        if (!NT_SUCCESS(PspWow64InitializeProcess(Process, NULL)))
+        if (!NT_SUCCESS(PspWow64InitializeProcess(Process, NULL, TRUE)))
         {
             return;
         }
@@ -374,7 +380,7 @@ PspWow64SetProcessCpuArea(
 
     if (!Process->Wow64Process)
     {
-        NTSTATUS Status = PspWow64InitializeProcess(Process, NULL);
+        NTSTATUS Status = PspWow64InitializeProcess(Process, NULL, TRUE);
         if (!NT_SUCCESS(Status))
         {
             return Status;

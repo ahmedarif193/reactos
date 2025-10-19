@@ -593,7 +593,7 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     if (!NT_SUCCESS(Status)) goto CleanupWithRef;
 
 #ifdef _M_AMD64
-    Status = PspWow64InitializeProcess(Process, Parent);
+    Status = PspWow64InitializeProcess(Process, Parent, FALSE);
     if (!NT_SUCCESS(Status)) goto CleanupWithRef;
 #endif
 

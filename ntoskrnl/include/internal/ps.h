@@ -216,7 +216,8 @@ NTSTATUS
 NTAPI
 PspWow64InitializeProcess(
     IN PEPROCESS Process,
-    IN PEPROCESS Parent OPTIONAL
+    IN PEPROCESS Parent OPTIONAL,
+    IN BOOLEAN ForceCreation
 );
 
 VOID
