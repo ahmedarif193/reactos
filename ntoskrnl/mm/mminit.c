@@ -47,6 +47,23 @@ MiCreateArm3StaticMemoryArea(PVOID BaseAddress, SIZE_T Size, BOOLEAN Executable)
     PMEMORY_AREA MArea;
     NTSTATUS Status;
 
+    if (Size == 0)
+    {
+        return;
+    }
+
+    const ULONG_PTR Base = (ULONG_PTR)BaseAddress;
+    const ULONG_PTR End = Base + Size - 1;
+
+    /* Guard against inverted or wrapping spans */
+    if (End < Base)
+    {
+        DPRINT1("MiCreateArm3StaticMemoryArea: span overflow Base=%p Size=%Ix\n",
+                BaseAddress,
+                Size);
+        return;
+    }
+
     Status = MmCreateMemoryArea(MmGetKernelAddressSpace(),
                                 MEMORY_AREA_OWNED_BY_ARM3 | MEMORY_AREA_STATIC,
                                 &pBaseAddress,
@@ -300,4 +317,3 @@ MmInitSystem(IN ULONG Phase,
 
     return TRUE;
 }
-
