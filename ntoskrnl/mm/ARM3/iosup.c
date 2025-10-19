@@ -170,13 +170,33 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
     //
     // Do the mapping
     //
+    ULONG RemainingPages = PageCount;
+    PFN_NUMBER CurrentPfn = Pfn;
+
     do
     {
+        CurrentPfn = Pfn;
+
+        if (PointerPte->u.Hard.Valid != 0)
+        {
+            DbgPrintEx(DPFLTR_MM_ID,
+                       DPFLTR_ERROR_LEVEL,
+                       "MmMapIoSpace: reusing valid PTE %p (VA %p, raw %p, phys %I64x, bytes %Ix, remaining %lu, cache %u, pfn %Ix)\n",
+                       PointerPte,
+                       MiPteToAddress(PointerPte),
+                       (PVOID)(ULONG_PTR)PointerPte->u.Long,
+                       PhysicalAddress.QuadPart,
+                       NumberOfBytes,
+                       RemainingPages,
+                       CacheType,
+                       CurrentPfn);
+        }
         //
         // Write the PFN
         //
         TempPte.u.Hard.PageFrameNumber = Pfn++;
         MI_WRITE_VALID_PTE(PointerPte++, TempPte);
+        RemainingPages--;
     } while (--PageCount);
 
     //
