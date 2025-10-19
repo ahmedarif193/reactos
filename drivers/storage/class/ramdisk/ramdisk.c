@@ -25,6 +25,7 @@
 #include <reactos/drivers/ntddrdsk.h>
 #include "../../../filesystems/fs_rec/fs_rec.h"
 #include <stdio.h>
+#include <wchar.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -302,6 +303,15 @@ RamdiskMapPages(IN PRAMDISK_DRIVE_EXTENSION DeviceExtension,
     /* Get the offset within the page */
     PageOffset = BYTE_OFFSET(ActualOffset.QuadPart);
 
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_TRACE_LEVEL,
+               "RamdiskMapPages: basePage=%lu offset=%I64x length=%lu phys=%I64x spanBytes=%Ix\n",
+               DeviceExtension->BasePage,
+               Offset.QuadPart,
+               Length,
+               PhysicalAddress.QuadPart,
+               ActualLength);
+
     /* Map the I/O Space from the loader */
     MappedBase = MmMapIoSpace(PhysicalAddress, ActualLength, MmCached);
 
@@ -341,6 +351,13 @@ RamdiskUnmapPages(IN PRAMDISK_DRIVE_EXTENSION DeviceExtension,
     BaseAddress = (PVOID)((ULONG_PTR)BaseAddress - PageOffset);
 
     /* Unmap the I/O space we got from the loader */
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_TRACE_LEVEL,
+               "RamdiskUnmapPages: basePage=%lu offset=%I64x length=%lu spanBytes=%Ix\n",
+               DeviceExtension->BasePage,
+               Offset.QuadPart,
+               Length,
+               ActualLength);
     MmUnmapIoSpace(BaseAddress, ActualLength);
 }
 
@@ -366,6 +383,15 @@ RamdiskCreateDiskDevice(IN PRAMDISK_BUS_EXTENSION DeviceExtension,
     LARGE_INTEGER CurrentOffset, CylinderSize, DiskLength;
     ULONG CylinderCount, SizeByCylinders;
 
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_TRACE_LEVEL,
+               "RamdiskCreateDiskDevice: type %lu base %lu length %I64u letter %wc options 0x%08lx\n",
+               Input->DiskType,
+               Input->BasePage,
+               Input->DiskLength.QuadPart,
+               Input->DriveLetter ? Input->DriveLetter : L'-',
+               *(PULONG)&Input->Options);
+
     /* Check if we're a boot RAM disk */
     DiskType = Input->DiskType;
     if (DiskType >= RAMDISK_BOOT_DISK)
@@ -383,7 +409,10 @@ RamdiskCreateDiskDevice(IN PRAMDISK_BUS_EXTENSION DeviceExtension,
                                       Input->Options.Readonly;
             Input->Options.Hidden = FALSE;
             Input->Options.NoDosDevice = FALSE;
-            Input->Options.NoDriveLetter = IsWinPEBoot ? TRUE : FALSE;
+            if (Input->DriveLetter == 0 && IsWinPEBoot)
+            {
+                Input->Options.NoDriveLetter = TRUE;
+            }
         }
         else
         {
@@ -526,6 +555,7 @@ RamdiskCreateDiskDevice(IN PRAMDISK_BUS_EXTENSION DeviceExtension,
         DriveExtension->DiskLength = DiskLength;
         DriveExtension->DiskOffset = Input->DiskOffset;
         DriveExtension->BasePage = Input->BasePage;
+        DriveExtension->DriveLetter = Input->DriveLetter;
         DriveExtension->BytesPerSector = 0;
         DriveExtension->SectorsPerTrack = 0;
         DriveExtension->NumberOfHeads = 0;
@@ -623,6 +653,11 @@ RamdiskCreateDiskDevice(IN PRAMDISK_BUS_EXTENSION DeviceExtension,
 
         /* Clear init flag */
         DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_TRACE_LEVEL,
+                   "RamdiskCreateDiskDevice: GUID %wZ assigned drive %wc\n",
+                   &DriveExtension->GuidString,
+                   DriveExtension->DriveLetter ? DriveExtension->DriveLetter : L'-');
         return STATUS_SUCCESS;
     }
 
@@ -658,6 +693,14 @@ RamdiskCreateRamdisk(IN PDEVICE_OBJECT DeviceObject,
         return STATUS_INVALID_PARAMETER;
     }
 
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_TRACE_LEVEL,
+               "RamdiskCreateRamdisk: create request type %lu length %lu letter %wc options 0x%08lx\n",
+               Input->DiskType,
+               Length,
+               Input->DriveLetter ? Input->DriveLetter : L'-',
+               *(PULONG)&Input->Options);
+
     /* Validate the disk type */
     DiskType = Input->DiskType;
     if (DiskType == RAMDISK_WIM_DISK) return STATUS_INVALID_PARAMETER;
@@ -670,7 +713,8 @@ RamdiskCreateRamdisk(IN PDEVICE_OBJECT DeviceObject,
 
         /* Save command-line flags */
         if (ExportBootDiskAsCd) Input->Options.ExportAsCd = TRUE;
-        if (IsWinPEBoot) Input->Options.NoDriveLetter = TRUE;
+        if (Input->DriveLetter == 0 && IsWinPEBoot)
+            Input->Options.NoDriveLetter = TRUE;
     }
 
     /* Validate the disk type */
@@ -700,6 +744,9 @@ RamdiskCreateRamdisk(IN PDEVICE_OBJECT DeviceObject,
         /* Invalidate and set success */
         IoInvalidateDeviceRelations(DeviceExtension->PhysicalDeviceObject, 0);
         Irp->IoStatus.Information = STATUS_SUCCESS;
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_TRACE_LEVEL,
+                   "RamdiskCreateRamdisk: device creation succeeded\n");
     }
 
     /* We are done */
@@ -1315,12 +1362,97 @@ RamdiskDeviceControl(IN PDEVICE_OBJECT DeviceObject,
                 break;
             }
 
+            case IOCTL_MOUNTDEV_QUERY_UNIQUE_ID:
+            {
+                PMOUNTDEV_UNIQUE_ID UniqueId;
+                USHORT IdLength;
+                ULONG RequiredLength;
+
+                IdLength = sizeof(GUID);
+                RequiredLength = FIELD_OFFSET(MOUNTDEV_UNIQUE_ID, UniqueId) + IdLength;
+
+                if (IoStackLocation->Parameters.DeviceIoControl.OutputBufferLength < RequiredLength)
+                {
+                    Status = STATUS_BUFFER_TOO_SMALL;
+                    Information = RequiredLength;
+                    break;
+                }
+
+                DbgPrintEx(DPFLTR_DEFAULT_ID,
+                           DPFLTR_TRACE_LEVEL,
+                           "RamdiskDeviceControl: IOCTL_MOUNTDEV_QUERY_UNIQUE_ID\n");
+
+                UniqueId = Irp->AssociatedIrp.SystemBuffer;
+                UniqueId->UniqueIdLength = IdLength;
+                RtlCopyMemory(UniqueId->UniqueId, &DriveExtension->DiskGuid, IdLength);
+                Status = STATUS_SUCCESS;
+                Information = RequiredLength;
+                break;
+            }
+
+            case IOCTL_MOUNTDEV_QUERY_STABLE_GUID:
+            {
+                PMOUNTDEV_STABLE_GUID StableGuid;
+
+                if (IoStackLocation->Parameters.DeviceIoControl.OutputBufferLength < sizeof(MOUNTDEV_STABLE_GUID))
+                {
+                    Status = STATUS_BUFFER_TOO_SMALL;
+                    Information = sizeof(MOUNTDEV_STABLE_GUID);
+                    break;
+                }
+
+                DbgPrintEx(DPFLTR_DEFAULT_ID,
+                           DPFLTR_TRACE_LEVEL,
+                           "RamdiskDeviceControl: IOCTL_MOUNTDEV_QUERY_STABLE_GUID\n");
+
+                StableGuid = Irp->AssociatedIrp.SystemBuffer;
+                StableGuid->StableGuid = DriveExtension->DiskGuid;
+                Status = STATUS_SUCCESS;
+                Information = sizeof(MOUNTDEV_STABLE_GUID);
+                break;
+            }
+
+            case IOCTL_MOUNTDEV_QUERY_SUGGESTED_LINK_NAME:
+            {
+                PMOUNTDEV_SUGGESTED_LINK_NAME LinkName;
+                WCHAR SuggestedName[16];
+                WCHAR Letter;
+                USHORT NameLength;
+                ULONG RequiredLength;
+
+                Letter = DriveExtension->DriveLetter ? DriveExtension->DriveLetter : L'X';
+                _snwprintf(SuggestedName,
+                           RTL_NUMBER_OF(SuggestedName),
+                           L"\\DosDevices\\%wc:",
+                           Letter);
+                NameLength = (USHORT)(wcslen(SuggestedName) * sizeof(WCHAR));
+                RequiredLength = FIELD_OFFSET(MOUNTDEV_SUGGESTED_LINK_NAME, Name) + NameLength;
+
+                if (IoStackLocation->Parameters.DeviceIoControl.OutputBufferLength < RequiredLength)
+                {
+                    Status = STATUS_BUFFER_TOO_SMALL;
+                    Information = RequiredLength;
+                    break;
+                }
+
+                DbgPrintEx(DPFLTR_DEFAULT_ID,
+                           DPFLTR_TRACE_LEVEL,
+                           "RamdiskDeviceControl: IOCTL_MOUNTDEV_QUERY_SUGGESTED_LINK_NAME -> %S\n",
+                           SuggestedName);
+
+                LinkName = Irp->AssociatedIrp.SystemBuffer;
+                LinkName->UseOnlyIfThereAreNoOtherLinks = FALSE;
+                LinkName->NameLength = NameLength;
+                RtlCopyMemory(LinkName->Name, SuggestedName, NameLength);
+                Status = STATUS_SUCCESS;
+                Information = RequiredLength;
+                break;
+            }
+
             case IOCTL_DISK_GET_DRIVE_LAYOUT:
             case IOCTL_DISK_IS_WRITABLE:
             case IOCTL_SCSI_MINIPORT:
             case IOCTL_STORAGE_QUERY_PROPERTY:
-            case IOCTL_MOUNTDEV_QUERY_UNIQUE_ID:
-            case IOCTL_MOUNTDEV_QUERY_STABLE_GUID:
             case IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS:
             case IOCTL_VOLUME_SET_GPT_ATTRIBUTES:
             case IOCTL_VOLUME_OFFLINE:
