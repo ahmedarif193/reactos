@@ -12,6 +12,34 @@
 #define NDEBUG
 #include <debug.h>
 
+#if defined(_M_AMD64)
+static
+VOID
+MiZeroPhysicalPageBootstrap(IN PFN_NUMBER PageFrameNumber)
+{
+    KIRQL HyperIrql;
+    PVOID Va;
+    PEPROCESS HyperProcess;
+
+    /*
+     * Early zeroing runs before the PFN database is live, but we are already
+     * executing in the context of the system process.  Assert this invariant so
+     * hyperspace locking has a valid owner while MiPfnsInitialized is FALSE.
+     */
+    HyperProcess = PsGetCurrentProcess();
+    ASSERT(HyperProcess != NULL);
+    if (PsInitialSystemProcess != NULL)
+    {
+        ASSERT(HyperProcess == PsInitialSystemProcess);
+    }
+
+    Va = MiMapPageInHyperSpace(HyperProcess, PageFrameNumber, &HyperIrql);
+    ASSERT(Va != NULL);
+    KeZeroPages(Va, PAGE_SIZE);
+    MiUnmapPageInHyperSpace(HyperProcess, Va, HyperIrql);
+}
+#endif
+
 #define MODULE_INVOLVED_IN_ARM3
 #include <mm/ARM3/miarm.h>
 
@@ -666,6 +694,7 @@ MiResolveDemandZeroFault(IN PVOID Address,
     PFN_NUMBER PageFrameNumber = 0;
     MMPTE TempPte;
     BOOLEAN NeedZero = FALSE, HaveLock = FALSE;
+    BOOLEAN BootstrapAllocation = FALSE;
     ULONG Color;
     PMMPFN Pfn1;
     DPRINT("ARM3 Demand Zero Page Fault Handler for address: %p in process: %p\n",
@@ -728,38 +757,67 @@ MiResolveDemandZeroFault(IN PVOID Address,
     else if (Process) MI_SET_PROCESS2(Process->ImageFileName);
     else MI_SET_PROCESS2("Kernel Demand 0");
 
-    /* Do we need a zero page? */
-    if (Color != 0xFFFFFFFF)
+    /* When the PFN database is still being constructed, fall back to the
+       loader's bootstrap allocator which does not rely on the coloured lists. */
+#ifdef _M_AMD64
+    if (!MiPfnsInitialized)
     {
-        /* Try to get one, if we couldn't grab a free page and zero it */
-        PageFrameNumber = MiRemoveZeroPageSafe(Color);
-        if (!PageFrameNumber)
+        PageFrameNumber = MxGetNextPage(1);
+        if (PageFrameNumber == 0)
         {
-            /* We'll need a free page and zero it manually */
-            PageFrameNumber = MiRemoveAnyPage(Color);
-            NeedZero = TRUE;
+            if (HaveLock)
+            {
+                MiReleasePfnLock(OldIrql);
+                HaveLock = FALSE;
+            }
+            return STATUS_NO_MEMORY;
         }
-        else
+
+        NeedZero = TRUE;
+        BootstrapAllocation = TRUE;
+        if (HaveLock)
         {
-            /* Page guaranteed to be zero-filled */
-            NeedZero = FALSE;
+            MiReleasePfnLock(OldIrql);
+            HaveLock = FALSE;
         }
     }
-    else
+#endif
+
+    if (!BootstrapAllocation)
     {
-        /* Get a color, and see if we should grab a zero or non-zero page */
-        Color = MI_GET_NEXT_COLOR();
-        if (!NeedZero)
+        /* Do we need a zero page? */
+        if (Color != 0xFFFFFFFF)
         {
-            /* Process or system doesn't want a zero page, grab anything */
-            PageFrameNumber = MiRemoveAnyPage(Color);
+            /* Try to get one, if we couldn't grab a free page and zero it */
+            PageFrameNumber = MiRemoveZeroPageSafe(Color);
+            if (!PageFrameNumber)
+            {
+                /* We'll need a free page and zero it manually */
+                PageFrameNumber = MiRemoveAnyPage(Color);
+                NeedZero = TRUE;
+            }
+            else
+            {
+                /* Page guaranteed to be zero-filled */
+                NeedZero = FALSE;
+            }
         }
         else
         {
-            /* System wants a zero page, obtain one */
-            PageFrameNumber = MiRemoveZeroPage(Color);
-            /* No need to zero-fill it */
-            NeedZero = FALSE;
+            /* Get a color, and see if we should grab a zero or non-zero page */
+            Color = MI_GET_NEXT_COLOR();
+            if (!NeedZero)
+            {
+                /* Process or system doesn't want a zero page, grab anything */
+                PageFrameNumber = MiRemoveAnyPage(Color);
+            }
+            else
+            {
+                /* System wants a zero page, obtain one */
+                PageFrameNumber = MiRemoveZeroPage(Color);
+                /* No need to zero-fill it */
+                NeedZero = FALSE;
+            }
         }
     }
 
@@ -769,8 +827,11 @@ MiResolveDemandZeroFault(IN PVOID Address,
         return STATUS_NO_MEMORY;
     }
 
-    /* Initialize it */
-    MiInitializePfn(PageFrameNumber, PointerPte, TRUE);
+    /* Initialize PFN bookkeeping when the database is available */
+    if (!BootstrapAllocation)
+    {
+        MiInitializePfn(PageFrameNumber, PointerPte, TRUE);
+    }
 
     /* Increment demand zero faults */
     KeGetCurrentPrcb()->MmDemandZeroCount++;
@@ -786,7 +847,19 @@ MiResolveDemandZeroFault(IN PVOID Address,
     }
 
     /* Zero the page if need be */
-    if (NeedZero) MiZeroPfn(PageFrameNumber);
+    if (NeedZero)
+    {
+#ifdef _M_AMD64
+        if (BootstrapAllocation)
+        {
+            MiZeroPhysicalPageBootstrap(PageFrameNumber);
+        }
+        else
+#endif
+        {
+            MiZeroPfn(PageFrameNumber);
+        }
+    }
 
     /* Fault on user PDE, or fault on user PTE? */
     if (PointerPte <= MiHighestUserPte)
