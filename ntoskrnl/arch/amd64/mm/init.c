@@ -306,10 +306,17 @@ MiBuildNonPagedPool(VOID)
     /* Check if no registry setting was set, or if the setting was too low */
     if (MmSizeOfNonPagedPoolInBytes < MmMinimumNonPagedPoolSize)
     {
+        SIZE_T AdditionalMb;
+
         /* Start with the minimum (256 KB) and add 32 KB for each MB above 4 */
         MmSizeOfNonPagedPoolInBytes = MmMinimumNonPagedPoolSize;
-        MmSizeOfNonPagedPoolInBytes += (MmNumberOfPhysicalPages - 1024) /
-                                       256 * MmMinAdditionNonPagedPoolPerMb;
+
+        if (MmNumberOfPhysicalPages > 1024)
+        {
+            AdditionalMb = (SIZE_T)((MmNumberOfPhysicalPages - 1024) / 256);
+            MmSizeOfNonPagedPoolInBytes += AdditionalMb *
+                                           (SIZE_T)MmMinAdditionNonPagedPoolPerMb;
+        }
     }
 
     /* Check if the registy setting or our dynamic calculation was too high */
@@ -332,10 +339,17 @@ MiBuildNonPagedPool(VOID)
     /* Now, check if there was a registry size for the maximum size */
     if (!MmMaximumNonPagedPoolInBytes)
     {
+        SIZE_T AdditionalMb;
+
         /* Start with the default (1MB) and add 400 KB for each MB above 4 */
         MmMaximumNonPagedPoolInBytes = MmDefaultMaximumNonPagedPool;
-        MmMaximumNonPagedPoolInBytes += (MmNumberOfPhysicalPages - 1024) /
-                                         256 * MmMaxAdditionNonPagedPoolPerMb;
+
+        if (MmNumberOfPhysicalPages > 1024)
+        {
+            AdditionalMb = (SIZE_T)((MmNumberOfPhysicalPages - 1024) / 256);
+            MmMaximumNonPagedPoolInBytes += AdditionalMb *
+                                             (SIZE_T)MmMaxAdditionNonPagedPoolPerMb;
+        }
     }
 
     /* Don't let the maximum go too high */
@@ -380,6 +394,7 @@ MiBuildSystemPteSpace(VOID)
 {
     PMMPTE PointerPte;
     SIZE_T NonPagedSystemSize;
+    PVOID SystemPteRangeEnd;
 
     /* Use the default number of system PTEs */
     MmNumberOfSystemPtes = MI_NUMBER_SYSTEM_PTES;
@@ -389,9 +404,14 @@ MiBuildSystemPteSpace(VOID)
     MiSystemPteSpaceStart = MmNonPagedSystemStart;
     MiSystemPteSpaceEnd = (PUCHAR)MiSystemPteSpaceStart + NonPagedSystemSize;
 
-    /* Map the PPEs and PDEs for the system PTEs */
-    MiMapPPEs(MiSystemPteSpaceStart, MiSystemPteSpaceEnd);
-    MiMapPDEs(MiSystemPteSpaceStart, MiSystemPteSpaceEnd);
+    /*
+     * MiMap{PP/P/D}Es expect an inclusive end address.  Convert the exclusive
+     * end computed above into the last byte covered by the range.
+     */
+    SystemPteRangeEnd = (PVOID)((PUCHAR)MiSystemPteSpaceEnd - 1);
+    MiMapPPEs(MiSystemPteSpaceStart, SystemPteRangeEnd);
+    MiMapPDEs(MiSystemPteSpaceStart, SystemPteRangeEnd);
+    MiMapPTEs(MiSystemPteSpaceStart, SystemPteRangeEnd);
 
     /* Initialize the system PTE space */
     PointerPte = MiAddressToPte(MiSystemPteSpaceStart);
