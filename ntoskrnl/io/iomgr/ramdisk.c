@@ -134,6 +134,44 @@ IopParseUnsignedIntegerOption(
     return TRUE;
 }
 
+static
+PCCHAR
+IopLocateOptionValue(
+    _In_ PCCHAR CommandLine,
+    _In_ PCSTR OptionName)
+{
+    SIZE_T NameLength = strlen(OptionName);
+    PCCHAR Cursor = CommandLine;
+
+    while ((Cursor = strstr(Cursor, OptionName)) != NULL)
+    {
+        PCCHAR Value;
+
+        if ((Cursor != CommandLine) &&
+            !IopIsLoadOptionDelimiter(Cursor[-1]))
+        {
+            Cursor += NameLength;
+            continue;
+        }
+
+        Value = Cursor + NameLength;
+        while ((*Value == ' ') || (*Value == '\t')) Value++;
+
+        if (*Value != '=')
+        {
+            Cursor += NameLength;
+            continue;
+        }
+
+        Value++;
+        while ((*Value == ' ') || (*Value == '\t')) Value++;
+
+        return Value;
+    }
+
+    return NULL;
+}
+
 CODE_SEG("INIT")
 NTSTATUS
 NTAPI
@@ -174,52 +212,44 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     {
         _strupr(CommandLine);
 
-        Offset = strstr(CommandLine, "RDIMAGEOFFSET");
-        if (Offset)
+        OffsetValue = IopLocateOptionValue(CommandLine, "RDIMAGEOFFSET");
+        if (OffsetValue)
         {
-            OffsetValue = strstr(Offset, "=");
-            if (OffsetValue)
+            ULONGLONG OffsetCandidate;
+
+            if (!IopParseUnsignedIntegerOption(OffsetValue,
+                                               MAXLONG,
+                                               &OffsetCandidate))
             {
-                ULONGLONG OffsetCandidate;
-
-                if (!IopParseUnsignedIntegerOption(OffsetValue + 1,
-                                                   MAXLONG,
-                                                   &OffsetCandidate))
-                {
-                    KeBugCheckEx(RAMDISK_BOOT_INITIALIZATION_FAILED,
-                                 RD_INVALID_OFFSET,
-                                 (ULONG_PTR)(OffsetValue + 1),
-                                 0,
-                                 0);
-                }
-
-                ParsedOffset = (LONG)OffsetCandidate;
-                OffsetSpecified = TRUE;
+                KeBugCheckEx(RAMDISK_BOOT_INITIALIZATION_FAILED,
+                             RD_INVALID_OFFSET,
+                             (ULONG_PTR)OffsetValue,
+                             0,
+                             0);
             }
+
+            ParsedOffset = (LONG)OffsetCandidate;
+            OffsetSpecified = TRUE;
         }
 
-        Length = strstr(CommandLine, "RDIMAGELENGTH");
-        if (Length)
+        LengthValue = IopLocateOptionValue(CommandLine, "RDIMAGELENGTH");
+        if (LengthValue)
         {
-            LengthValue = strstr(Length, "=");
-            if (LengthValue)
+            ULONGLONG LengthCandidate;
+
+            if (!IopParseUnsignedIntegerOption(LengthValue,
+                                               MAXLONGLONG,
+                                               &LengthCandidate))
             {
-                ULONGLONG LengthCandidate;
-
-                if (!IopParseUnsignedIntegerOption(LengthValue + 1,
-                                                   MAXLONGLONG,
-                                                   &LengthCandidate))
-                {
-                    KeBugCheckEx(RAMDISK_BOOT_INITIALIZATION_FAILED,
-                                 RD_INVALID_LENGTH,
-                                 (ULONG_PTR)(LengthValue + 1),
-                                 0,
-                                 0);
-                }
-
-                ParsedLength = LengthCandidate;
-                LengthSpecified = TRUE;
+                KeBugCheckEx(RAMDISK_BOOT_INITIALIZATION_FAILED,
+                             RD_INVALID_LENGTH,
+                             (ULONG_PTR)LengthValue,
+                             0,
+                             0);
             }
+
+            ParsedLength = LengthCandidate;
+            LengthSpecified = TRUE;
         }
     }
 
