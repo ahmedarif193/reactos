@@ -385,22 +385,40 @@ MiInitializeNonPagedPool(VOID)
     //
     // Calculate the size of the expansion region alone
     //
-    MiExpansionPoolPagesInitialCharge = (PFN_COUNT)
-    BYTES_TO_PAGES(MmMaximumNonPagedPoolInBytes - MmSizeOfNonPagedPoolInBytes);
+    if (MmMaximumNonPagedPoolInBytes <= MmSizeOfNonPagedPoolInBytes)
+    {
+        MiExpansionPoolPagesInitialCharge = 0;
+    }
+    else
+    {
+        ULONGLONG ExpansionBytes = MmMaximumNonPagedPoolInBytes -
+                                   MmSizeOfNonPagedPoolInBytes;
 
-    //
-    // Remove 2 pages, since there's a guard page on top and on the bottom
-    //
-    MiExpansionPoolPagesInitialCharge -= 2;
+        MiExpansionPoolPagesInitialCharge = (PFN_COUNT)BYTES_TO_PAGES(ExpansionBytes);
 
-    //
-    // Now initialize the nonpaged pool expansion PTE space. Remember there's a
-    // guard page on top so make sure to skip it. The bottom guard page will be
-    // guaranteed by the fact our size is off by one.
-    //
-    MiInitializeSystemPtes(PointerPte + 1,
-                           MiExpansionPoolPagesInitialCharge,
-                           NonPagedPoolExpansion);
+        if (MiExpansionPoolPagesInitialCharge > 2)
+        {
+            MiExpansionPoolPagesInitialCharge -= 2;
+        }
+        else
+        {
+            MiExpansionPoolPagesInitialCharge = 0;
+        }
+    }
+
+    DPRINT1("MiInitNP: ExpansionStart=%p Pte=%p Max=%I64x Size=%I64x Charge=%lu\n",
+            MmNonPagedPoolExpansionStart,
+            PointerPte + 1,
+            MmMaximumNonPagedPoolInBytes,
+            MmSizeOfNonPagedPoolInBytes,
+            MiExpansionPoolPagesInitialCharge);
+
+    if (MiExpansionPoolPagesInitialCharge != 0)
+    {
+        MiInitializeSystemPtes(PointerPte + 1,
+                               MiExpansionPoolPagesInitialCharge,
+                               NonPagedPoolExpansion);
+    }
 }
 
 POOL_TYPE
