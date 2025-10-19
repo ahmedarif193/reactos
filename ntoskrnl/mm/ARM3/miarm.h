@@ -636,7 +636,13 @@ extern PFN_NUMBER MmSystemPageDirectory[PPE_PER_PAGE];
 extern PMMPTE MmSharedUserDataPte;
 extern LIST_ENTRY MmProcessList;
 extern KEVENT MmZeroingPageEvent;
+#ifdef _M_AMD64
+extern BOOLEAN MiZeroingThreadActive;
+#endif
 extern ULONG MmSystemPageColor;
+#ifdef _M_AMD64
+extern BOOLEAN MiPfnsInitialized;
+#endif
 extern ULONG MmProcessColorSeed;
 extern PMMWSL MmWorkingSetList;
 extern PFN_NUMBER MiNumberOfFreePages;
@@ -2454,7 +2460,18 @@ FORCEINLINE
 PFN_NUMBER
 MiRemoveZeroPageSafe(IN ULONG Color)
 {
-    if (MmFreePagesByColor[ZeroedPageList][Color].Flink != LIST_HEAD) return MiRemoveZeroPage(Color);
+    PMMCOLOR_TABLES ZeroList;
+
+    /* Bail out during very early boot before the color tables exist */
+    if (MmSecondaryColors == 0) return 0;
+
+    ZeroList = MmFreePagesByColor[ZeroedPageList];
+    if (ZeroList == NULL) return 0;
+
+    Color &= MmSecondaryColorMask;
+    if (Color >= MmSecondaryColors) return 0;
+
+    if (ZeroList[Color].Flink != LIST_HEAD) return MiRemoveZeroPage(Color);
     return 0;
 }
 

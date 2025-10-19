@@ -18,6 +18,9 @@
 /* GLOBALS ********************************************************************/
 
 KEVENT MmZeroingPageEvent;
+#ifdef _M_AMD64
+BOOLEAN MiZeroingThreadActive = FALSE;
+#endif
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
@@ -47,6 +50,10 @@ MmZeroPageThread(VOID)
     /* Set our priority to 0 */
     Thread->BasePriority = 0;
     KeSetPriorityThread(Thread, 0);
+
+#ifdef _M_AMD64
+    MiZeroingThreadActive = TRUE;
+#endif
 
     /* Setup the wait objects */
     WaitObjects[0] = &MmZeroingPageEvent;
