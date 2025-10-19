@@ -31,6 +31,7 @@ static ULONG MiMinimumPagesPerRun;
 static CLIENT_ID MiBalancerThreadId;
 static HANDLE MiBalancerThreadHandle = NULL;
 static KEVENT MiBalancerEvent;
+static BOOLEAN MiBalancerInitialized;
 static KEVENT MiBalancerDoneEvent;
 static KTIMER MiBalancerTimer;
 
@@ -289,6 +290,8 @@ VOID
 NTAPI
 MmRebalanceMemoryConsumers(VOID)
 {
+    if (!MiBalancerInitialized) return;
+
     if (InterlockedCompareExchange(&PageOutThreadActive, 1, 0) == 0)
     {
         KeSetEvent(&MiBalancerEvent, IO_NO_INCREMENT, FALSE);
@@ -299,6 +302,12 @@ VOID
 NTAPI
 MmRebalanceMemoryConsumersAndWait(VOID)
 {
+    if (!MiBalancerInitialized)
+    {
+        /* Balancer thread not ready yet; nothing to do */
+        return;
+    }
+
     ASSERT(PsGetCurrentProcess()->AddressCreationLock.Owner != KeGetCurrentThread());
     ASSERT(!MM_ANY_WS_LOCK_HELD(PsGetCurrentThread()));
     ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
@@ -450,6 +459,8 @@ MiInitBalancerThread(VOID)
     {
         KeBugCheck(MEMORY_MANAGEMENT);
     }
+
+    MiBalancerInitialized = TRUE;
 
     Priority = LOW_REALTIME_PRIORITY + 1;
     NtSetInformationThread(MiBalancerThreadHandle,
