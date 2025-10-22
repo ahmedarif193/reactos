@@ -1,19 +1,22 @@
-/* Compatibility macros to ease porting from StorPort to ScsiPort */
+/* Compatibility macros to ease targeting both ScsiPort and StorPort */
 #pragma once
+
+#ifdef AHCI_USE_STORPORT
+
+/* Expect storport.h to be included before this header */
+#define ScsiPortGetUncachedExtension   StorPortGetUncachedExtension
+#define ScsiPortGetPhysicalAddress     StorPortGetPhysicalAddress
+#define ScsiPortStallExecution         StorPortStallExecution
+#define ScsiPortNotification           StorPortNotification
+#define ScsiPortGetDeviceBase          StorPortGetDeviceBase
+#define ScsiPortFreeDeviceBase         StorPortFreeDeviceBase
+#else
 
 #include <srb.h>
 
-/* Memory and DMA */
-#define PortGetUncachedExtension  ScsiPortGetUncachedExtension
-#define PortGetPhysicalAddress    ScsiPortGetPhysicalAddress
+#define PortGetUncachedExtension       ScsiPortGetUncachedExtension
+#define PortGetPhysicalAddress         ScsiPortGetPhysicalAddress
+#define PortStallExecution             ScsiPortStallExecution
+#define PortNotification               ScsiPortNotification
 
-/* Timing */
-#define PortStallExecution        ScsiPortStallExecution
-
-/* MMIO/PIO accessors */
-#define PortReadRegisterUlong     ScsiPortReadRegisterUlong
-#define PortWriteRegisterUlong    ScsiPortWriteRegisterUlong
-
-/* Notifications */
-#define PortNotification          ScsiPortNotification
-
+#endif
