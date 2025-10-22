@@ -61,6 +61,15 @@ typedef struct _DEVICE_ACTION_REQUEST
     DEVICE_ACTION Action;
 } DEVICE_ACTION_REQUEST, *PDEVICE_ACTION_REQUEST;
 
+typedef struct _DEVICE_ACTION_REQUEST_WRAPPER
+{
+    ULONG GuardStart;
+    DEVICE_ACTION_REQUEST Request;
+    ULONG GuardEnd;
+} DEVICE_ACTION_REQUEST_WRAPPER, *PDEVICE_ACTION_REQUEST_WRAPPER;
+
+#define DEVICE_ACTION_GUARD 0xA1D0EACDL
+
 typedef enum _ADD_DEV_DRIVER_TYPE
 {
     LowerFilter,
@@ -2548,6 +2557,7 @@ PipDeviceActionWorker(
 {
     PLIST_ENTRY ListEntry;
     PDEVICE_ACTION_REQUEST Request;
+    PDEVICE_ACTION_REQUEST_WRAPPER Wrapper;
     KIRQL OldIrql;
     PDEVICE_NODE deviceNode;
     NTSTATUS status;
@@ -2557,7 +2567,10 @@ PipDeviceActionWorker(
     {
         ListEntry = RemoveHeadList(&IopDeviceActionRequestList);
         KeReleaseSpinLock(&IopDeviceActionLock, OldIrql);
-        Request = CONTAINING_RECORD(ListEntry, DEVICE_ACTION_REQUEST, RequestListEntry);
+        Wrapper = CONTAINING_RECORD(ListEntry, DEVICE_ACTION_REQUEST_WRAPPER, Request.RequestListEntry);
+        ASSERT(Wrapper->GuardStart == DEVICE_ACTION_GUARD);
+        ASSERT(Wrapper->GuardEnd == DEVICE_ACTION_GUARD);
+        Request = &Wrapper->Request;
 
         ASSERT(Request->DeviceObject);
 
@@ -2647,7 +2660,14 @@ PipDeviceActionWorker(
 
         DPRINT("Finished processing PnP request %p\n", Request);
         ObDereferenceObject(Request->DeviceObject);
-        ExFreePoolWithTag(Request, TAG_IO);
+        DPRINT1("Freeing PnP request %p action %u status 0x%08lx\n",
+                Request,
+                Request->Action,
+                status);
+        ASSERT(Wrapper->GuardStart == DEVICE_ACTION_GUARD);
+        ASSERT(Wrapper->GuardEnd == DEVICE_ACTION_GUARD);
+        Wrapper->GuardStart = Wrapper->GuardEnd = 0;
+        ExFreePoolWithTag(Wrapper, TAG_IO);
         KeAcquireSpinLock(&IopDeviceActionLock, &OldIrql);
     }
     IopDeviceActionInProgress = FALSE;
@@ -2672,12 +2692,19 @@ PiQueueDeviceAction(
     _Out_opt_ NTSTATUS *CompletionStatus)
 {
     PDEVICE_ACTION_REQUEST Request;
+    PDEVICE_ACTION_REQUEST_WRAPPER Wrapper;
     KIRQL OldIrql;
 
-    Request = ExAllocatePoolWithTag(NonPagedPoolMustSucceed, sizeof(*Request), TAG_IO);
+    Wrapper = ExAllocatePoolWithTag(NonPagedPoolMustSucceed, sizeof(*Wrapper), TAG_IO);
+    Wrapper->GuardStart = Wrapper->GuardEnd = DEVICE_ACTION_GUARD;
+    Request = &Wrapper->Request;
 
     DPRINT("PiQueueDeviceAction: DeviceObject - %p, Request - %p, Action - %s\n",
         DeviceObject, Request, ActionToStr(Action));
+    DPRINT1("PiQueueDeviceAction: allocated %p (%lu bytes wrapper) for action %u\n",
+            Wrapper,
+            (ULONG)sizeof(*Wrapper),
+            Action);
 
     ObReferenceObject(DeviceObject);
 
