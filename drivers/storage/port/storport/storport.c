@@ -12,6 +12,10 @@
 #define NDEBUG
 #include <debug.h>
 
+#include <ntddstor.h>
+#include <ntddscsi.h>
+#include <limits.h>
+
 /* MACROS *********************************************************************/
 
 #ifndef ALIGN_UP_BY
@@ -323,15 +327,43 @@ PortDispatchDeviceControl(
     IN PDEVICE_OBJECT DeviceObject,
     IN PIRP Irp)
 {
-    DPRINT("PortDispatchDeviceControl(%p %p)\n",
-            DeviceObject, Irp);
+    PVOID deviceExtension;
+    EXTENSION_TYPE type;
+    PIO_STACK_LOCATION stack;
 
-    Irp->IoStatus.Status = STATUS_SUCCESS;
-    Irp->IoStatus.Information = 0;
+    DbgPrint("storport: PortDispatchDeviceControl(%p %p)\n", DeviceObject, Irp);
 
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    deviceExtension = DeviceObject->DeviceExtension;
+    if (deviceExtension == NULL)
+    {
+        Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
 
-    return STATUS_SUCCESS;
+    type = *((EXTENSION_TYPE *)deviceExtension);
+    stack = IoGetCurrentIrpStackLocation(Irp);
+
+    switch (type)
+    {
+        case FdoExtension:
+            DbgPrint("storport: FDO DeviceControl Ioctl=0x%08lx\n",
+                     stack->Parameters.DeviceIoControl.IoControlCode);
+            return PortFdoDeviceControl((PFDO_DEVICE_EXTENSION)deviceExtension, Irp);
+
+        case PdoExtension:
+            DbgPrint("storport: PDO DeviceControl Ioctl=0x%08lx (Target=%lu)\n",
+                     stack->Parameters.DeviceIoControl.IoControlCode,
+                     ((PPDO_DEVICE_EXTENSION)deviceExtension)->Target);
+            return PortPdoDeviceControl((PPDO_DEVICE_EXTENSION)deviceExtension, Irp);
+
+        default:
+            Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
+            Irp->IoStatus.Information = 0;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return STATUS_INVALID_DEVICE_REQUEST;
+    }
 }
 
 
@@ -817,18 +849,100 @@ StorPortGetPhysicalAddress(
         return PhysicalAddress;
     }
 
-    // FIXME: MmGetPhysicalAddress requires IRQL <= APC_LEVEL
-    // If we're at elevated IRQL (DISPATCH_LEVEL from spinlock), we cannot safely call it
     if (KeGetCurrentIrql() > APC_LEVEL)
     {
-        DPRINT1("StorPortGetPhysicalAddress: Cannot translate address at elevated IRQL=%u\n", KeGetCurrentIrql());
+        PPORT_SRB_EXTENSION portExt;
+        PMDL Mdl;
+
+        portExt = PortGetSrbExtensionContext(Srb);
+        Mdl = (portExt != NULL) ? portExt->Mdl : NULL;
+        if (Mdl != NULL)
+        {
+            PPFN_NUMBER pfnArray = MmGetMdlPfnArray(Mdl);
+            PVOID baseVa;
+            ULONG baseOffset = MmGetMdlByteOffset(Mdl);
+            ULONG totalLength = MmGetMdlByteCount(Mdl);
+            ULONG_PTR vaOffset;
+            ULONG totalOffset;
+            ULONG pageIndex;
+            ULONG pageOffset;
+            ULONG remaining;
+
+        baseVa = (portExt->MappedSystemAddress != NULL)
+                         ? portExt->MappedSystemAddress
+                         : MmGetMdlVirtualAddress(Mdl);
+
+        vaOffset = (ULONG_PTR)VirtualAddress - (ULONG_PTR)baseVa;
+        if ((ULONG_PTR)VirtualAddress < (ULONG_PTR)baseVa)
+        {
+            *Length = 0;
+            PhysicalAddress.QuadPart = 0;
+            DPRINT1("StorPortGetPhysicalAddress: VA %p precedes base %p (MDL=%p MSA=%p Total=%lu)\n",
+                    VirtualAddress,
+                    baseVa,
+                    Mdl,
+                    portExt->MappedSystemAddress,
+                    MmGetMdlByteCount(Mdl));
+            return PhysicalAddress;
+        }
+
+        if (vaOffset >= totalLength)
+        {
+            *Length = 0;
+            PhysicalAddress.QuadPart = 0;
+            DPRINT1("StorPortGetPhysicalAddress: VA offset %lu beyond length %lu (Base=%p MSA=%p MDL=%p ByteOffset=%lu)\n",
+                    (ULONG)vaOffset,
+                    totalLength,
+                    baseVa,
+                    portExt->MappedSystemAddress,
+                    Mdl,
+                    baseOffset);
+            return PhysicalAddress;
+        }
+
+            totalOffset = baseOffset + (ULONG)vaOffset;
+            pageIndex = totalOffset >> PAGE_SHIFT;
+            pageOffset = totalOffset & (PAGE_SIZE - 1);
+
+            PhysicalAddress.QuadPart = ((ULONGLONG)pfnArray[pageIndex] << PAGE_SHIFT) + pageOffset;
+
+            remaining = totalLength - (ULONG)vaOffset;
+            if (totalLength <= 1024)
+            {
+                DPRINT("StorPortGetPhysicalAddress: MDL bytes=%lu BaseOffset=%lu VA=%p BaseVA=%p Offset=%lu Remaining=%lu PageIndex=%lu PageOffset=%lu\n",
+                       totalLength,
+                       baseOffset,
+                       VirtualAddress,
+                       baseVa,
+                       (ULONG)vaOffset,
+                       remaining,
+                       pageIndex,
+                       pageOffset);
+            }
+            *Length = min(PAGE_SIZE - pageOffset, remaining);
+
+            DPRINT("StorPortGetPhysicalAddress: VA=%p -> PA=0x%I64x via MDL (IRQL=%u)\n",
+                   VirtualAddress,
+                   PhysicalAddress.QuadPart,
+                   KeGetCurrentIrql());
+
+            return PhysicalAddress;
+        }
+
+        DPRINT1("StorPortGetPhysicalAddress: Cannot translate address at elevated IRQL=%u (no MDL)\n",
+                KeGetCurrentIrql());
         *Length = 0;
         PhysicalAddress.QuadPart = 0;
         return PhysicalAddress;
     }
 
     PhysicalAddress = MmGetPhysicalAddress(VirtualAddress);
-    *Length = 1;
+    {
+        ULONG_PTR byteOffset = (ULONG_PTR)VirtualAddress & (PAGE_SIZE - 1);
+        *Length = (ULONG)(PAGE_SIZE - byteOffset);
+        if (*Length == 0)
+            *Length = PAGE_SIZE;
+    }
 
     return PhysicalAddress;
 }
@@ -1158,6 +1272,20 @@ StorPortNotification(
                 PIRP Irp = (PIRP)Srb->OriginalRequest;
                 PPORT_SRB_EXTENSION PortExtension = PortGetSrbExtensionContext(Srb);
 
+                if (SRB_STATUS(Srb->SrbStatus) == SRB_STATUS_SUCCESS)
+                {
+                    PIO_STACK_LOCATION stackLocation = IoGetCurrentIrpStackLocation(Irp);
+                    if (stackLocation != NULL && stackLocation->DeviceObject != NULL)
+                    {
+                        PDEVICE_OBJECT deviceObject = stackLocation->DeviceObject;
+                        PPDO_DEVICE_EXTENSION pdoExtension = (PPDO_DEVICE_EXTENSION)deviceObject->DeviceExtension;
+                        if (pdoExtension != NULL && pdoExtension->ExtensionType == PdoExtension)
+                        {
+                            PortpUpdateCapacityFromSrb(pdoExtension, Srb);
+                        }
+                    }
+                }
+
                 Irp->IoStatus.Information = Srb->DataTransferLength;
                 Irp->IoStatus.Status = StorPortSrbStatusToNtStatus(Srb->SrbStatus);
                 if (PortExtension != NULL)
@@ -1237,6 +1365,34 @@ StorPortNotification(
             if (SuccessPointer != NULL)
             {
                 *SuccessPointer = Queued ? TRUE : FALSE;
+            }
+            break;
+        }
+
+        case BusChangeDetected:
+        {
+            ULONG PathId;
+            ULONG TargetId;
+            ULONG Lun;
+
+            PathId = va_arg(ap, ULONG);
+            TargetId = va_arg(ap, ULONG);
+            Lun = va_arg(ap, ULONG);
+
+            UNREFERENCED_PARAMETER(PathId);
+            UNREFERENCED_PARAMETER(TargetId);
+            UNREFERENCED_PARAMETER(Lun);
+
+            DPRINT1("StorPortNotification: BusChangeDetected (Path %lu Target %lu Lun %lu) DevExt=%p PDO=%p\n",
+                    PathId, TargetId, Lun,
+                    DeviceExtension,
+                    DeviceExtension ? DeviceExtension->PhysicalDevice : NULL);
+
+            if ((DeviceExtension != NULL) &&
+                (DeviceExtension->PhysicalDevice != NULL))
+            {
+                IoInvalidateDeviceRelations(DeviceExtension->PhysicalDevice,
+                                            BusRelations);
             }
             break;
         }
@@ -2109,4 +2265,575 @@ PortpBuildScatterGatherList(
     return PortpBuildScatterGatherFromBuffer(PortExtension,
                                              Srb->DataBuffer,
                                              Srb->DataTransferLength);
+}
+static NTSTATUS
+PortCompleteRequest(
+    _Inout_ PIRP Irp,
+    _In_ NTSTATUS Status,
+    _In_ ULONG_PTR Information)
+{
+    Irp->IoStatus.Status = Status;
+    Irp->IoStatus.Information = Information;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return Status;
+}
+
+static ULONG
+PortTrimInquiryString(
+    _In_reads_bytes_(Length) const CHAR *Buffer,
+    _In_ ULONG Length)
+{
+    while (Length > 0 && Buffer[Length - 1] == ' ')
+        Length--;
+    return Length;
+}
+
+static VOID
+PortBuildAdapterDescriptor(
+    _In_ PFDO_DEVICE_EXTENSION DeviceExtension,
+    _Out_ PSTORAGE_ADAPTER_DESCRIPTOR Descriptor)
+{
+    ULONG maxTransfer = DeviceExtension->Miniport.PortConfig.MaximumTransferLength;
+
+    RtlZeroMemory(Descriptor, sizeof(*Descriptor));
+
+    Descriptor->Version = sizeof(*Descriptor);
+    Descriptor->Size = sizeof(*Descriptor);
+
+    if (maxTransfer == 0)
+        maxTransfer = 512 * 1024; /* 512 KiB default */
+
+    Descriptor->MaximumTransferLength = maxTransfer;
+    Descriptor->MaximumPhysicalPages = (maxTransfer + PAGE_SIZE - 1) >> PAGE_SHIFT;
+    if (Descriptor->MaximumPhysicalPages == 0)
+        Descriptor->MaximumPhysicalPages = 1;
+
+    Descriptor->AlignmentMask = DeviceExtension->Miniport.PortConfig.AlignmentMask;
+    Descriptor->AdapterUsesPio = FALSE;
+    Descriptor->AdapterScansDown = FALSE;
+    Descriptor->CommandQueueing = TRUE;
+    Descriptor->AcceleratedTransfer = FALSE;
+    Descriptor->BusType = BusTypeSata;
+    Descriptor->BusMajorVersion = 1;
+    Descriptor->BusMinorVersion = 0;
+
+#if defined(SRB_TYPE_SCSI_REQUEST_BLOCK)
+    Descriptor->SrbType = SRB_TYPE_SCSI_REQUEST_BLOCK;
+#endif
+#if defined(STORAGE_ADDRESS_TYPE_BTL8)
+    Descriptor->AddressType = STORAGE_ADDRESS_TYPE_BTL8;
+#endif
+}
+
+static NTSTATUS
+PortHandleAdapterPropertyQuery(
+    _In_ PFDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG OutputLength,
+    _Inout_updates_bytes_(OutputLength) PVOID OutputBuffer,
+    _Out_ ULONG_PTR *Information)
+{
+    STORAGE_ADAPTER_DESCRIPTOR descriptor;
+
+    if (OutputLength < sizeof(STORAGE_DESCRIPTOR_HEADER))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    PortBuildAdapterDescriptor(DeviceExtension, &descriptor);
+
+    DbgPrint("storport: AdapterProperty query MaxXfer=%lu PhysPages=%lu AlignMask=0x%lx BusType=%u\n",
+             descriptor.MaximumTransferLength,
+             descriptor.MaximumPhysicalPages,
+             descriptor.AlignmentMask,
+             descriptor.BusType);
+
+    if (OutputLength < sizeof(STORAGE_ADAPTER_DESCRIPTOR))
+    {
+        PSTORAGE_DESCRIPTOR_HEADER header = (PSTORAGE_DESCRIPTOR_HEADER)OutputBuffer;
+        header->Version = sizeof(STORAGE_ADAPTER_DESCRIPTOR);
+        header->Size = sizeof(STORAGE_ADAPTER_DESCRIPTOR);
+        *Information = sizeof(STORAGE_DESCRIPTOR_HEADER);
+        return STATUS_SUCCESS;
+    }
+
+    RtlCopyMemory(OutputBuffer, &descriptor, sizeof(descriptor));
+    *Information = sizeof(STORAGE_ADAPTER_DESCRIPTOR);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+PortBuildDeviceDescriptor(
+    _In_opt_ PINQUIRYDATA Inquiry,
+    _In_ ULONG OutputLength,
+    _Inout_updates_bytes_(OutputLength) PVOID OutputBuffer,
+    _Out_ ULONG_PTR *Information)
+{
+    ULONG vendorLength = 0, productLength = 0, revisionLength = 0;
+    ULONG requiredLength;
+    ULONG offset;
+    PSTORAGE_DEVICE_DESCRIPTOR descriptor;
+    BOOLEAN headerOnly;
+
+    if (OutputLength < sizeof(STORAGE_DESCRIPTOR_HEADER))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    if (Inquiry != NULL)
+    {
+        vendorLength = PortTrimInquiryString((const CHAR *)Inquiry->VendorId, sizeof(Inquiry->VendorId));
+        productLength = PortTrimInquiryString((const CHAR *)Inquiry->ProductId, sizeof(Inquiry->ProductId));
+        revisionLength = PortTrimInquiryString((const CHAR *)Inquiry->ProductRevisionLevel, sizeof(Inquiry->ProductRevisionLevel));
+    }
+
+    requiredLength = sizeof(STORAGE_DEVICE_DESCRIPTOR);
+    if (vendorLength > 0)
+        requiredLength += vendorLength + 1;
+    if (productLength > 0)
+        requiredLength += productLength + 1;
+    if (revisionLength > 0)
+        requiredLength += revisionLength + 1;
+
+    descriptor = (PSTORAGE_DEVICE_DESCRIPTOR)OutputBuffer;
+    RtlZeroMemory(OutputBuffer, min(OutputLength, requiredLength));
+
+    descriptor->Version = sizeof(STORAGE_DEVICE_DESCRIPTOR);
+    descriptor->Size = requiredLength;
+
+    headerOnly = (OutputLength < sizeof(STORAGE_DEVICE_DESCRIPTOR));
+    if (headerOnly)
+    {
+        *Information = sizeof(STORAGE_DESCRIPTOR_HEADER);
+        return STATUS_SUCCESS;
+    }
+
+    descriptor->RawPropertiesLength = 0;
+    descriptor->BusType = BusTypeSata;
+    descriptor->SerialNumberOffset = ULONG_MAX;
+    descriptor->VendorIdOffset = ULONG_MAX;
+    descriptor->ProductIdOffset = ULONG_MAX;
+    descriptor->ProductRevisionOffset = ULONG_MAX;
+
+    if (Inquiry != NULL)
+    {
+        descriptor->DeviceType = Inquiry->DeviceType;
+        descriptor->DeviceTypeModifier = Inquiry->DeviceTypeModifier;
+        descriptor->RemovableMedia = (Inquiry->RemovableMedia) ? TRUE : FALSE;
+    }
+    else
+    {
+        descriptor->DeviceType = DIRECT_ACCESS_DEVICE;
+        descriptor->DeviceTypeModifier = 0;
+        descriptor->RemovableMedia = FALSE;
+    }
+
+    descriptor->CommandQueueing = TRUE;
+
+    offset = sizeof(STORAGE_DEVICE_DESCRIPTOR);
+
+    DbgPrint("storport: DeviceProperty query Type=%u Removable=%u VendorLen=%lu ProductLen=%lu RevisionLen=%lu\n",
+             descriptor->DeviceType,
+             descriptor->RemovableMedia,
+             vendorLength,
+             productLength,
+             revisionLength);
+
+    if (vendorLength > 0)
+    {
+        descriptor->VendorIdOffset = offset;
+        if (offset < OutputLength)
+        {
+            ULONG bytes = min(vendorLength, OutputLength - offset - 1);
+            RtlCopyMemory((PUCHAR)OutputBuffer + offset, Inquiry->VendorId, bytes);
+            ((PUCHAR)OutputBuffer + offset)[bytes] = '\0';
+        }
+        offset += vendorLength + 1;
+    }
+
+    if (productLength > 0)
+    {
+        descriptor->ProductIdOffset = offset;
+        if (offset < OutputLength)
+        {
+            ULONG bytes = min(productLength, OutputLength - offset - 1);
+            RtlCopyMemory((PUCHAR)OutputBuffer + offset, Inquiry->ProductId, bytes);
+            ((PUCHAR)OutputBuffer + offset)[bytes] = '\0';
+        }
+        offset += productLength + 1;
+    }
+
+    if (revisionLength > 0)
+    {
+        descriptor->ProductRevisionOffset = offset;
+        if (offset < OutputLength)
+        {
+            ULONG bytes = min(revisionLength, OutputLength - offset - 1);
+            RtlCopyMemory((PUCHAR)OutputBuffer + offset, Inquiry->ProductRevisionLevel, bytes);
+            ((PUCHAR)OutputBuffer + offset)[bytes] = '\0';
+        }
+        offset += revisionLength + 1;
+    }
+
+    if (requiredLength > OutputLength)
+    {
+        *Information = sizeof(STORAGE_DESCRIPTOR_HEADER);
+        return STATUS_SUCCESS;
+    }
+
+    *Information = requiredLength;
+    return STATUS_SUCCESS;
+}
+
+static
+ULONG
+PortpGetBytesPerBlock(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension)
+{
+    if (DeviceExtension->CapacityValid && DeviceExtension->BytesPerBlock != 0)
+        return DeviceExtension->BytesPerBlock;
+
+    return 512;
+}
+
+static
+MEDIA_TYPE
+PortpGetMediaType(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension)
+{
+    if (DeviceExtension->FdoExtension != NULL &&
+        DeviceExtension->FdoExtension->Device != NULL &&
+        (DeviceExtension->FdoExtension->Device->Characteristics & FILE_REMOVABLE_MEDIA))
+    {
+        return RemovableMedia;
+    }
+
+    return FixedMedia;
+}
+
+static
+VOID
+PortpBuildDiskGeometry(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension,
+    _Out_ PDISK_GEOMETRY Geometry)
+{
+    ULONGLONG cylinders = 1;
+    const ULONG sectorsPerTrack = 63;
+    const ULONG tracksPerCylinder = 255;
+    ULONG bytesPerSector;
+
+    RtlZeroMemory(Geometry, sizeof(*Geometry));
+
+    Geometry->MediaType = PortpGetMediaType(DeviceExtension);
+
+    bytesPerSector = PortpGetBytesPerBlock(DeviceExtension);
+    Geometry->BytesPerSector = bytesPerSector;
+    Geometry->SectorsPerTrack = sectorsPerTrack;
+    Geometry->TracksPerCylinder = tracksPerCylinder;
+
+    if (DeviceExtension->CapacityValid && DeviceExtension->DiskSize != 0 && bytesPerSector != 0)
+    {
+        ULONGLONG totalSectors = DeviceExtension->DiskSize / bytesPerSector;
+        ULONGLONG sectorsPerCylinder = (ULONGLONG)sectorsPerTrack * tracksPerCylinder;
+
+        if (sectorsPerCylinder == 0)
+            sectorsPerCylinder = 1;
+
+        if (totalSectors == 0)
+            totalSectors = 1;
+
+        cylinders = totalSectors / sectorsPerCylinder;
+        if (cylinders == 0)
+            cylinders = 1;
+    }
+
+    Geometry->Cylinders.QuadPart = (LONGLONG)cylinders;
+}
+
+NTSTATUS
+PortFdoDeviceControl(
+    _In_ PFDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ PIRP Irp)
+{
+    PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
+    ULONG code = stack->Parameters.DeviceIoControl.IoControlCode;
+    PVOID buffer = Irp->AssociatedIrp.SystemBuffer;
+    ULONG outLen = stack->Parameters.DeviceIoControl.OutputBufferLength;
+    ULONG_PTR information = 0;
+    NTSTATUS status = STATUS_INVALID_DEVICE_REQUEST;
+
+    switch (code)
+    {
+        case IOCTL_SCSI_GET_CAPABILITIES:
+        {
+            PIO_SCSI_CAPABILITIES caps;
+
+            if (buffer == NULL || outLen < sizeof(IO_SCSI_CAPABILITIES))
+            {
+                status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            caps = (PIO_SCSI_CAPABILITIES)buffer;
+            RtlZeroMemory(caps, sizeof(*caps));
+            caps->Length = sizeof(*caps);
+            caps->MaximumTransferLength = DeviceExtension->Miniport.PortConfig.MaximumTransferLength;
+            if (caps->MaximumTransferLength == 0)
+                caps->MaximumTransferLength = 512 * 1024;
+            caps->MaximumPhysicalPages = (caps->MaximumTransferLength + PAGE_SIZE - 1) >> PAGE_SHIFT;
+            if (caps->MaximumPhysicalPages == 0)
+                caps->MaximumPhysicalPages = 1;
+            caps->AlignmentMask = DeviceExtension->Miniport.PortConfig.AlignmentMask;
+            caps->TaggedQueuing = TRUE;
+            caps->AdapterScansDown = FALSE;
+            caps->AdapterUsesPio = FALSE;
+
+            information = sizeof(IO_SCSI_CAPABILITIES);
+            status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_STORAGE_QUERY_PROPERTY:
+        {
+            PSTORAGE_PROPERTY_QUERY query;
+
+            if (buffer == NULL || stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(STORAGE_PROPERTY_QUERY))
+            {
+                status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            query = (PSTORAGE_PROPERTY_QUERY)buffer;
+
+            if (query->QueryType != PropertyStandardQuery &&
+                query->QueryType != PropertyExistsQuery)
+            {
+                status = STATUS_NOT_SUPPORTED;
+                break;
+            }
+
+            switch (query->PropertyId)
+            {
+                case StorageAdapterProperty:
+                    status = PortHandleAdapterPropertyQuery(DeviceExtension, outLen, buffer, &information);
+                    if (status == STATUS_BUFFER_TOO_SMALL && query->QueryType == PropertyExistsQuery)
+                        status = STATUS_SUCCESS;
+                    break;
+
+                case StorageDeviceProperty:
+                {
+                    PPDO_DEVICE_EXTENSION pdo = NULL;
+                    KLOCK_QUEUE_HANDLE lockHandle;
+
+                    KeAcquireInStackQueuedSpinLock(&DeviceExtension->PdoListLock, &lockHandle);
+                    if (!IsListEmpty(&DeviceExtension->PdoListHead))
+                    {
+                        PLIST_ENTRY entry = DeviceExtension->PdoListHead.Flink;
+                        pdo = CONTAINING_RECORD(entry, PDO_DEVICE_EXTENSION, PdoListEntry);
+                    }
+                    KeReleaseInStackQueuedSpinLock(&lockHandle);
+
+                    status = PortBuildDeviceDescriptor(pdo ? pdo->InquiryBuffer : NULL,
+                                                       outLen,
+                                                       buffer,
+                                                       &information);
+                    if (status == STATUS_BUFFER_TOO_SMALL && query->QueryType == PropertyExistsQuery)
+                        status = STATUS_SUCCESS;
+                    break;
+                }
+
+                default:
+                    status = STATUS_NOT_SUPPORTED;
+                    break;
+            }
+
+            break;
+        }
+
+        default:
+            status = STATUS_INVALID_DEVICE_REQUEST;
+            break;
+    }
+
+    return PortCompleteRequest(Irp, status, information);
+}
+
+NTSTATUS
+PortPdoDeviceControl(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ PIRP Irp)
+{
+    PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
+    ULONG code = stack->Parameters.DeviceIoControl.IoControlCode;
+    PVOID buffer = Irp->AssociatedIrp.SystemBuffer;
+    ULONG outLen = stack->Parameters.DeviceIoControl.OutputBufferLength;
+    ULONG_PTR information = 0;
+    NTSTATUS status = STATUS_INVALID_DEVICE_REQUEST;
+
+    switch (code)
+    {
+        case IOCTL_SCSI_GET_ADDRESS:
+        {
+            PSCSI_ADDRESS address;
+
+            if (buffer == NULL || outLen < sizeof(SCSI_ADDRESS))
+            {
+                status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            address = (PSCSI_ADDRESS)buffer;
+            RtlZeroMemory(address, sizeof(*address));
+            address->Length = sizeof(SCSI_ADDRESS);
+            address->PortNumber = 0;
+            address->PathId = (UCHAR)DeviceExtension->Bus;
+            address->TargetId = (UCHAR)DeviceExtension->Target;
+            address->Lun = (UCHAR)DeviceExtension->Lun;
+
+            information = sizeof(SCSI_ADDRESS);
+            status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_STORAGE_GET_DEVICE_NUMBER:
+        {
+            PSTORAGE_DEVICE_NUMBER deviceNumber;
+
+            if (buffer == NULL || outLen < sizeof(STORAGE_DEVICE_NUMBER))
+            {
+                status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            deviceNumber = (PSTORAGE_DEVICE_NUMBER)buffer;
+            deviceNumber->DeviceType = DeviceExtension->Device->DeviceType;
+            deviceNumber->DeviceNumber = DeviceExtension->Target;
+            deviceNumber->PartitionNumber = (ULONG)DeviceExtension->Lun;
+
+            information = sizeof(STORAGE_DEVICE_NUMBER);
+            status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_DISK_GET_DRIVE_GEOMETRY:
+        {
+            if (buffer == NULL || outLen < sizeof(DISK_GEOMETRY))
+            {
+                status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            PortpBuildDiskGeometry(DeviceExtension, (PDISK_GEOMETRY)buffer);
+            information = sizeof(DISK_GEOMETRY);
+            status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_DISK_GET_DRIVE_GEOMETRY_EX:
+        {
+            PDISK_GEOMETRY_EX geometryEx;
+            ULONGLONG computedSize;
+            ULONG headerSize = FIELD_OFFSET(DISK_GEOMETRY_EX, Data);
+
+            if (buffer == NULL || outLen < headerSize)
+            {
+                status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            geometryEx = (PDISK_GEOMETRY_EX)buffer;
+            RtlZeroMemory(geometryEx, headerSize);
+
+            PortpBuildDiskGeometry(DeviceExtension, &geometryEx->Geometry);
+
+            if (DeviceExtension->CapacityValid && DeviceExtension->DiskSize != 0)
+            {
+                geometryEx->DiskSize.QuadPart = DeviceExtension->DiskSize;
+            }
+            else
+            {
+                computedSize = (ULONGLONG)geometryEx->Geometry.Cylinders.QuadPart *
+                               geometryEx->Geometry.TracksPerCylinder *
+                               geometryEx->Geometry.SectorsPerTrack *
+                               geometryEx->Geometry.BytesPerSector;
+                geometryEx->DiskSize.QuadPart = (LONGLONG)computedSize;
+            }
+
+            if (outLen > headerSize)
+            {
+                RtlZeroMemory(geometryEx->Data, outLen - headerSize);
+            }
+
+            information = headerSize;
+            status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_DISK_GET_LENGTH_INFO:
+        {
+            PGET_LENGTH_INFORMATION lengthInfo;
+
+            if (buffer == NULL || outLen < sizeof(GET_LENGTH_INFORMATION))
+            {
+                status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            lengthInfo = (PGET_LENGTH_INFORMATION)buffer;
+            if (DeviceExtension->CapacityValid)
+                lengthInfo->Length.QuadPart = DeviceExtension->DiskSize;
+            else
+                lengthInfo->Length.QuadPart = 0;
+
+            information = sizeof(GET_LENGTH_INFORMATION);
+            status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_STORAGE_QUERY_PROPERTY:
+        {
+            PSTORAGE_PROPERTY_QUERY query;
+
+            if (buffer == NULL || stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(STORAGE_PROPERTY_QUERY))
+            {
+                status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            query = (PSTORAGE_PROPERTY_QUERY)buffer;
+
+            if (query->QueryType != PropertyStandardQuery &&
+                query->QueryType != PropertyExistsQuery)
+            {
+                status = STATUS_NOT_SUPPORTED;
+                break;
+            }
+
+            if (query->PropertyId == StorageDeviceProperty)
+            {
+                status = PortBuildDeviceDescriptor(DeviceExtension->InquiryBuffer,
+                                                   outLen,
+                                                   buffer,
+                                                   &information);
+                if (status == STATUS_BUFFER_TOO_SMALL && query->QueryType == PropertyExistsQuery)
+                    status = STATUS_SUCCESS;
+            }
+            else if (query->PropertyId == StorageAdapterProperty && DeviceExtension->FdoExtension != NULL)
+            {
+                status = PortHandleAdapterPropertyQuery(DeviceExtension->FdoExtension,
+                                                         outLen,
+                                                         buffer,
+                                                         &information);
+                if (status == STATUS_BUFFER_TOO_SMALL && query->QueryType == PropertyExistsQuery)
+                    status = STATUS_SUCCESS;
+            }
+            else
+            {
+                status = STATUS_NOT_SUPPORTED;
+            }
+
+            break;
+        }
+
+        default:
+            status = STATUS_INVALID_DEVICE_REQUEST;
+            break;
+    }
+
+    return PortCompleteRequest(Irp, status, information);
 }

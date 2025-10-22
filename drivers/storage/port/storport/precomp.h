@@ -12,6 +12,7 @@
 #include <ntddk.h>
 #include <stdio.h>
 #include <memory.h>
+#include <ntstrsafe.h>
 
 /* Declare STORPORT_API functions as exports rather than imports */
 #define _STORPORT_
@@ -34,6 +35,8 @@
 #define TAG_SRB_EXT         'rbsP'
 #define TAG_SG_LIST         'LgSP'
 #define TAG_SRB_POOL_BITMAP 'mBsP'
+#define TAG_DEVICE_RELATIONS 'RDtS'
+#define TAG_PDO_ID          'IdtS'
 
 typedef struct _PORT_SRB_EXTENSION
 {
@@ -44,6 +47,7 @@ typedef struct _PORT_SRB_EXTENSION
     PVOID MiniportExtension;
     ULONG MiniportExtensionLength;
     PVOID OriginalDataBuffer;
+    PVOID MappedSystemAddress;
 } PORT_SRB_EXTENSION, *PPORT_SRB_EXTENSION;
 
 FORCEINLINE
@@ -175,6 +179,12 @@ typedef struct _PDO_DEVICE_EXTENSION
     ULONG Target;
     ULONG Lun;
     PINQUIRYDATA InquiryBuffer;
+    BOOLEAN Present;
+
+    ULONGLONG LastBlockAddress;
+    ULONG BytesPerBlock;
+    ULONGLONG DiskSize;
+    BOOLEAN CapacityValid;
 
 
 } PDO_DEVICE_EXTENSION, *PPDO_DEVICE_EXTENSION;
@@ -182,6 +192,11 @@ typedef struct _PDO_DEVICE_EXTENSION
 
 VOID
 PortpCleanupSrbExtension(_Inout_opt_ PIRP Irp);
+
+VOID
+PortpUpdateCapacityFromSrb(
+    _Inout_ PPDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ PSCSI_REQUEST_BLOCK Srb);
 
 PSTOR_SCATTER_GATHER_LIST
 PortpBuildScatterGatherList(
@@ -220,6 +235,11 @@ NTSTATUS
 NTAPI
 PortFdoPnp(
     _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp);
+
+NTSTATUS
+PortFdoDeviceControl(
+    _In_ PFDO_DEVICE_EXTENSION DeviceExtension,
     _In_ PIRP Irp);
 
 
@@ -328,6 +348,11 @@ NTSTATUS
 NTAPI
 PortPdoPnp(
     _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp);
+
+NTSTATUS
+PortPdoDeviceControl(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension,
     _In_ PIRP Irp);
 
 

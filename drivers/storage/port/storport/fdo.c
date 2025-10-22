@@ -9,11 +9,38 @@
 
 #include "precomp.h"
 
-#define NDEBUG
 #include <debug.h>
 
 
 /* FUNCTIONS ******************************************************************/
+
+static
+PPDO_DEVICE_EXTENSION
+PortFindPdo(
+    _In_ PFDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG Bus,
+    _In_ ULONG Target,
+    _In_ ULONG Lun)
+{
+    PLIST_ENTRY Entry = DeviceExtension->PdoListHead.Flink;
+
+    while (Entry != &DeviceExtension->PdoListHead)
+    {
+        PPDO_DEVICE_EXTENSION PdoExtension;
+
+        PdoExtension = CONTAINING_RECORD(Entry, PDO_DEVICE_EXTENSION, PdoListEntry);
+        if (PdoExtension->Bus == Bus &&
+            PdoExtension->Target == Target &&
+            PdoExtension->Lun == Lun)
+        {
+            return PdoExtension;
+        }
+
+        Entry = Entry->Flink;
+    }
+
+    return NULL;
+}
 
 static
 BOOLEAN
@@ -274,6 +301,11 @@ PortSendInquiry(
 //    PFDO_DEVICE_EXTENSION DeviceExtension;
 
     DPRINT("PortSendInquiry(%p)\n", PdoExtension);
+    DPRINT("PortSendInquiry: Bus=%lu Target=%lu Lun=%lu Buffer=%p\n",
+           PdoExtension->Bus,
+           PdoExtension->Target,
+           PdoExtension->Lun,
+           PdoExtension->InquiryBuffer);
 
     /*
      * This function performs synchronous I/O with infinite wait, which requires
@@ -392,19 +424,29 @@ PortSendInquiry(
             Status = IoStatusBlock.Status;
         }
 
-        DPRINT("PortSendInquiry(): Request processed by driver, status = 0x%08X\n", Status);
+    DPRINT("PortSendInquiry(): Request processed by driver, status = 0x%08X\n", Status);
 
-        if (SRB_STATUS(Srb.SrbStatus) == SRB_STATUS_SUCCESS)
-        {
-            DPRINT("Found a device!\n");
+    if (SRB_STATUS(Srb.SrbStatus) == SRB_STATUS_SUCCESS)
+    {
+        DPRINT("Found a device!\n");
+        DPRINT("Inquiry data: Peripheral=0x%02x Vendor=%.8s Product=%.16s Rev=%.4s\n",
+               PdoExtension->InquiryBuffer->DeviceType,
+               PdoExtension->InquiryBuffer->VendorId,
+               PdoExtension->InquiryBuffer->ProductId,
+               PdoExtension->InquiryBuffer->ProductRevisionLevel);
 
-            /* Quit the loop */
-            Status = STATUS_SUCCESS;
-            KeepTrying = FALSE;
-            continue;
+        /* Quit the loop */
+        Status = STATUS_SUCCESS;
+        KeepTrying = FALSE;
+        continue;
         }
 
         DPRINT("Inquiry SRB failed with SrbStatus 0x%08X\n", Srb.SrbStatus);
+        DPRINT("SenseKey=0x%02x ASC=0x%02x ASCQ=0x%02x Retry=%lu\n",
+               SenseBuffer->SenseKey,
+               SenseBuffer->AdditionalSenseCode,
+               SenseBuffer->AdditionalSenseCodeQualifier,
+               RetryCount);
 
         /* Check if the queue is frozen */
         if (Srb.SrbStatus & SRB_STATUS_QUEUE_FROZEN)
@@ -485,6 +527,9 @@ PortSendInquiry(
     ExFreePoolWithTag(SenseBuffer, TAG_SENSE_DATA);
 
     DPRINT("PortSendInquiry() done with Status 0x%08X\n", Status);
+    DPRINT("PortSendInquiry: Final SrbStatus=0x%02x DataLength=%lu\n",
+           Srb.SrbStatus,
+           (ULONG)Srb.DataTransferLength);
 
     return Status;
 }
@@ -499,6 +544,7 @@ PortFdoScanBus(
     PPDO_DEVICE_EXTENSION PdoExtension;
     ULONG Bus, Target; //, Lun;
     NTSTATUS Status;
+    KLOCK_QUEUE_HANDLE LockHandle;
 
     DPRINT("PortFdoScanBus(%p)\n", DeviceExtension);
 
@@ -517,23 +563,33 @@ PortFdoScanBus(
             DPRINT("  Scanning target %ld:%ld\n", Bus, Target);
 
             DPRINT("    Scanning logical unit %ld:%ld:%ld\n", Bus, Target, 0);
-            Status = PortCreatePdo(DeviceExtension, Bus, Target, 0, &PdoExtension);
-            if (NT_SUCCESS(Status))
+            KeAcquireInStackQueuedSpinLock(&DeviceExtension->PdoListLock,
+                                           &LockHandle);
+            PdoExtension = PortFindPdo(DeviceExtension, Bus, Target, 0);
+            KeReleaseInStackQueuedSpinLock(&LockHandle);
+
+            if (PdoExtension == NULL)
             {
-                /* Scan LUN 0 */
-                Status = PortSendInquiry(PdoExtension);
-                DPRINT("PortSendInquiry returned 0x%08lx\n", Status);
+                Status = PortCreatePdo(DeviceExtension, Bus, Target, 0, &PdoExtension);
                 if (!NT_SUCCESS(Status))
-                {
-                    PortDeletePdo(PdoExtension);
-                }
-                else
-                {
-                    DPRINT("VendorId: %.8s\n", PdoExtension->InquiryBuffer->VendorId);
-                    DPRINT("ProductId: %.16s\n", PdoExtension->InquiryBuffer->ProductId);
-                    DPRINT("ProductRevisionLevel: %.4s\n", PdoExtension->InquiryBuffer->ProductRevisionLevel);
-                    DPRINT("VendorSpecific: %.20s\n", PdoExtension->InquiryBuffer->VendorSpecific);
-                }
+                    continue;
+            }
+
+            /* Scan LUN 0 */
+            Status = PortSendInquiry(PdoExtension);
+            DPRINT("PortSendInquiry returned 0x%08lx\n", Status);
+            if (!NT_SUCCESS(Status))
+            {
+                PortDeletePdo(PdoExtension);
+                continue;
+            }
+            else
+            {
+                PdoExtension->Present = TRUE;
+                DPRINT("VendorId: %.8s\n", PdoExtension->InquiryBuffer->VendorId);
+                DPRINT("ProductId: %.16s\n", PdoExtension->InquiryBuffer->ProductId);
+                DPRINT("ProductRevisionLevel: %.4s\n", PdoExtension->InquiryBuffer->ProductRevisionLevel);
+                DPRINT("VendorSpecific: %.20s\n", PdoExtension->InquiryBuffer->VendorSpecific);
             }
 
 #if 0
@@ -563,17 +619,74 @@ PortFdoQueryBusRelations(
     _Out_ PULONG_PTR Information)
 {
     NTSTATUS Status = STATUS_SUCCESS;;
+    PDEVICE_RELATIONS Relations;
+    ULONG RelationSize;
+    ULONG Count = 0;
+    ULONG PresentCount = 0;
+    PLIST_ENTRY Entry;
+    KLOCK_QUEUE_HANDLE LockHandle;
+    PPDO_DEVICE_EXTENSION PdoExtension;
 
     DPRINT("PortFdoQueryBusRelations(%p %p)\n",
             DeviceExtension, Information);
 
     Status = PortFdoScanBus(DeviceExtension);
 
-    DPRINT("Units found: %lu\n", DeviceExtension->PdoCount);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
-    *Information = 0;
+    KeAcquireInStackQueuedSpinLock(&DeviceExtension->PdoListLock,
+                                   &LockHandle);
 
-    return Status;
+    Count = 0;
+    PresentCount = 0;
+    Entry = DeviceExtension->PdoListHead.Flink;
+    while (Entry != &DeviceExtension->PdoListHead)
+    {
+        PdoExtension = CONTAINING_RECORD(Entry, PDO_DEVICE_EXTENSION, PdoListEntry);
+        Count++;
+        if (PdoExtension->Present)
+            PresentCount++;
+        Entry = Entry->Flink;
+    }
+    KeReleaseInStackQueuedSpinLock(&LockHandle);
+
+    RelationSize = sizeof(DEVICE_RELATIONS);
+    if (PresentCount > 0)
+        RelationSize += (PresentCount - 1) * sizeof(PDEVICE_OBJECT);
+
+    Relations = (PDEVICE_RELATIONS)ExAllocatePoolWithTag(PagedPool,
+                                                         RelationSize,
+                                                         TAG_DEVICE_RELATIONS);
+    if (Relations == NULL)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Relations->Count = 0;
+
+    KeAcquireInStackQueuedSpinLock(&DeviceExtension->PdoListLock,
+                                   &LockHandle);
+
+    Entry = DeviceExtension->PdoListHead.Flink;
+    while (Entry != &DeviceExtension->PdoListHead)
+    {
+        PdoExtension = CONTAINING_RECORD(Entry, PDO_DEVICE_EXTENSION, PdoListEntry);
+        if (PdoExtension->Present)
+        {
+            Relations->Objects[Relations->Count] = PdoExtension->Device;
+            ObReferenceObject(Relations->Objects[Relations->Count]);
+            Relations->Count++;
+        }
+        Entry = Entry->Flink;
+    }
+
+    KeReleaseInStackQueuedSpinLock(&LockHandle);
+
+    *Information = (ULONG_PTR)Relations;
+    DPRINT("Units found: %lu (total PDOs: %lu)\n", Relations->Count, Count);
+
+    return STATUS_SUCCESS;
 }
 
 
