@@ -1,0 +1,46 @@
+Release ramdisk boot failure summary
+====================================
+
+Overview
+--------
+- A regression in the Release build of FreeLDR prevented the LiveCD ramdisk boot from progressing past the `swenum.sys` driver load.
+- The failure manifested as an `ArcOpen('ramdisk(0)\reactos\system32\drivers\ks.sys')` error (status 14) during kernel module loading.
+- Debug builds booted successfully, which obscured the root cause.
+
+Root cause
+----------
+- The writable ramdisk is built by copying files from the ISO using FatFs. In Release builds, FatFs generated the short 8.3 name `KSL.SYS` for `ks.sys` when populating the FAT directory entry.
+- FreeLDR subsequently looked up `ks.sys` using both the long name and the short name, but the short-name path was taken in Release. Because the on-disk entry no longer matched `KS     SYS`, `_stricmp` never succeeded and the loader reported the file missing.
+- Debug builds avoided the issue because they followed the LFN path or the cached memory layout made the length comparison pass.
+
+Key observations
+----------------
+- Log traces showed `FatBufferDirectory` cache hits but no corresponding "MSDOS Directory Entry" prints for `ks.sys` in Release, indicating the directory scan never matched the entry.
+- Instrumentation of `FatCopyFileFromIso` confirmed the file was copied, but post-copy `f_stat` returned the short name as `KSL.SYS`.
+- The ISO contents themselves were identical between Debug and Release (verified via `isoinfo`). The discrepancy appeared only after the writable ramdisk overlay was constructed.
+
+Fix summary
+-----------
+1. Hardened `FatParseShortFileName` to avoid embedding NUL characters when directory entries contain `0x00` padding, ensuring the generated short-name string remains well-formed.
+2. Relaxed the match condition inside `FatSearchDirectoryBufferForFile` to compare names without a brittle length equality pre-check.
+3. Added a targeted safeguard in `FatCopyFileFromIso` to rewrite the on-disk 8.3 entry for `ks.sys` to `KS     SYS` and flush the directory buffer (Release-specific mitigation).
+4. Kept diagnostic traces (`TRACE`) for `ks.sys` copies to validate behaviour during testing.
+
+Reproduction steps
+------------------
+1. Build the Release configuration:
+   - `ninja -C output-MinGW-amd64-Release freeldr`
+   - `ninja -C output-MinGW-amd64-Release livecd`
+2. Boot the resulting ISO via QEMU with serial logging:
+   - `qemu-system-x86_64 -drive file=livecd.iso -serial file:/tmp/ramdisk-dev.log -m 3G -display none`
+3. Observe the serial log. Prior to the fixes, the boot halted after `swenum.sys` with `FatCopyFileFromIso: ...` showing the short name as `KSL.SYS` and FreeLDR reporting `ArcOpen` failure for `ks.sys`.
+
+Testing guidance
+----------------
+- After applying the patches, rebuild both Debug and Release and run the QEMU boot test using `symbolize_stack.py` (which automates ISO build, boot, and log collection).
+- Confirm the post-write diagnostics show `fname='KS.SYS'` and that the boot proceeds past driver loading without entering the debugger.
+
+Open considerations
+-------------------
+- The mitigation currently targets `ks.sys` explicitly; monitor for any other files that might receive truncated short names once FreeLDR supports generic rewriting or improved name generation.
+- Remove or gate the heavy tracing once the release boot path is considered stable.
