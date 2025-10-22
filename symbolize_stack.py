@@ -36,7 +36,7 @@ _PATTERN = re.compile(r"<([^:<>]+):([0-9A-Fa-f]+)>")
 
 TAIL_DEFAULT = 200
 DEFAULT_TIMEOUT_SECONDS = 60
-DEFAULT_LOG_PATH = Path("/tmp/outamdclang.log")
+DEFAULT_LOG_PATH = Path("/tmp/out-q35.log")
 
 def _get_image_base(path: Path) -> int:
     """Return the PE ImageBase for *path*.
@@ -250,6 +250,8 @@ def _run_default_capture(log_path: Path, timeout: int) -> List[str]:
         f"file:{log_path}",
         "-m",
         "3G",
+        "-M",
+        "q35",
         "-display",
         "none",
     ]
