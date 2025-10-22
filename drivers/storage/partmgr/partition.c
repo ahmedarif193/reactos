@@ -59,7 +59,7 @@ PartitionCreateDevice(
         return status;
     }
 
-    INFO("Created device object %p %wZ\n", partitionDevice, &deviceName);
+    DPRINT1("PartitionCreateDevice: created DO %p name %wZ\n", partitionDevice, &deviceName);
 
     PPARTITION_EXTENSION partExt = partitionDevice->DeviceExtension;
     RtlZeroMemory(partExt, sizeof(*partExt));
@@ -73,6 +73,8 @@ PartitionCreateDevice(
 
     partitionDevice->StackSize = FDObject->StackSize;
     partitionDevice->Flags |= DO_DIRECT_IO;
+    partitionDevice->Flags |= DO_BUS_ENUMERATED_DEVICE;
+    partitionDevice->Flags |= DO_POWER_PAGABLE;
 
     if (PartitionStyle == PARTITION_STYLE_MBR)
     {
@@ -135,7 +137,7 @@ PartitionHandleStartDevice(
 
     PartExt->SymlinkCreated = TRUE;
 
-    INFO("Symlink created %wZ -> %wZ\n", &partitionSymlink, &PartExt->DeviceName);
+    DPRINT1("Partition symlink %wZ -> %wZ\n", &partitionSymlink, &PartExt->DeviceName);
 
     // Our partition device will have two interfaces:
     // GUID_DEVINTERFACE_PARTITION and GUID_DEVINTERFACE_VOLUME
@@ -151,7 +153,7 @@ PartitionHandleStartDevice(
         return status;
     }
 
-    INFO("Partition interface %wZ\n", &interfaceName);
+    DPRINT1("Partition interface %wZ\n", &interfaceName);
     PartExt->PartitionInterfaceName = interfaceName;
     status = IoSetDeviceInterfaceState(&interfaceName, TRUE);
     if (!NT_SUCCESS(status))
@@ -170,7 +172,7 @@ PartitionHandleStartDevice(
         return status;
     }
 
-    INFO("Volume interface %wZ\n", &interfaceName);
+    DPRINT1("Volume interface %wZ\n", &interfaceName);
     PartExt->VolumeInterfaceName = interfaceName;
     status = IoSetDeviceInterfaceState(&interfaceName, TRUE);
     if (!NT_SUCCESS(status))
@@ -521,11 +523,13 @@ PartitionHandlePnp(
     {
         case IRP_MN_START_DEVICE:
         {
+            DPRINT1("Partition PnP START_DEVICE for %p\n", DeviceObject);
             status = PartitionHandleStartDevice(partExt, Irp);
             break;
         }
         case IRP_MN_QUERY_DEVICE_RELATIONS:
         {
+            DPRINT1("Partition PnP QUERY_DEVICE_RELATIONS for %p\n", DeviceObject);
             status = PartitionHandleDeviceRelations(partExt, Irp);
             break;
         }
@@ -540,11 +544,13 @@ PartitionHandlePnp(
         }
         case IRP_MN_SURPRISE_REMOVAL:
         {
+            DPRINT1("Partition PnP SURPRISE_REMOVAL for %p\n", DeviceObject);
             status = PartitionHandleRemove(partExt, FALSE);
             break;
         }
         case IRP_MN_REMOVE_DEVICE:
         {
+            DPRINT1("Partition PnP REMOVE_DEVICE for %p\n", DeviceObject);
             status = PartitionHandleRemove(partExt, TRUE);
             break;
         }
@@ -560,6 +566,7 @@ PartitionHandlePnp(
         }
         default:
         {
+            DPRINT1("Partition PnP minor %u for %p\n", ioStack->MinorFunction, DeviceObject);
             Irp->IoStatus.Information = 0;
             status = STATUS_NOT_SUPPORTED;
         }

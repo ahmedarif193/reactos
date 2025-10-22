@@ -390,6 +390,7 @@ PartMgrUpdatePartitionDevices(
     }
 
     FdoExtension->EnumeratedPartitionsTotal = totalPartitions;
+    DPRINT1("PartMgrUpdatePartitionDevices: total partitions=%u\n", totalPartitions);
 }
 
 /**
@@ -419,7 +420,48 @@ PartMgrGetDriveLayout(
     PDRIVE_LAYOUT_INFORMATION_EX layoutEx = NULL;
     NTSTATUS status = IoReadPartitionTableEx(FdoExtension->LowerDevice, &layoutEx);
     if (!NT_SUCCESS(status))
+    {
+        DPRINT1("PartMgrGetDriveLayout: IoReadPartitionTableEx(%p) failed with %lx\n",
+                FdoExtension->LowerDevice,
+                status);
+        ERR("IoReadPartitionTableEx failed with %lx for %p\n",
+            status,
+            FdoExtension->LowerDevice);
         return status;
+    }
+
+    DPRINT1("PartMgrGetDriveLayout: style=%u count=%lu disk=%p\n",
+            layoutEx->PartitionStyle,
+            layoutEx->PartitionCount,
+            FdoExtension->LowerDevice);
+    for (UINT32 dbgIndex = 0; dbgIndex < layoutEx->PartitionCount; ++dbgIndex)
+    {
+        PPARTITION_INFORMATION_EX entry = &layoutEx->PartitionEntry[dbgIndex];
+        if (entry->PartitionStyle == PARTITION_STYLE_MBR)
+        {
+            DPRINT1("  MBR[%u]: type=%02x boot=%u recog=%u start=%I64u len=%I64u\n",
+                    dbgIndex,
+                    entry->Mbr.PartitionType,
+                    entry->Mbr.BootIndicator,
+                    entry->Mbr.RecognizedPartition,
+                    entry->StartingOffset.QuadPart,
+                    entry->PartitionLength.QuadPart);
+        }
+        else if (entry->PartitionStyle == PARTITION_STYLE_GPT)
+        {
+            DPRINT1("  GPT[%u]: start=%I64u len=%I64u\n",
+                    dbgIndex,
+                    entry->StartingOffset.QuadPart,
+                    entry->PartitionLength.QuadPart);
+        }
+        else
+        {
+            DPRINT1("  RAW[%u]: start=%I64u len=%I64u\n",
+                    dbgIndex,
+                    entry->StartingOffset.QuadPart,
+                    entry->PartitionLength.QuadPart);
+        }
+    }
 
     if (FdoExtension->LayoutCache)
         ExFreePool(FdoExtension->LayoutCache);
@@ -963,6 +1005,10 @@ FdoHandleStartDevice(
     }
 
     FdoExtension->DiskData.DeviceNumber = deviceNumber.DeviceNumber;
+    DPRINT1("PartMgr: Disk%u start device %p lower=%p\n",
+            FdoExtension->DiskData.DeviceNumber,
+            FdoExtension->DeviceObject,
+            FdoExtension->LowerDevice);
 
     // Register the disk interface.
     // partmgr.sys from Windows 8.1 also registers a mysterious GUID_DEVINTERFACE_HIDDEN_DISK here.
@@ -1016,7 +1062,17 @@ PartMgrRefreshDiskData(
                                        sizeof(geometryEx),
                                        FALSE);
     if (!NT_SUCCESS(status))
+    {
+        ERR("IOCTL_DISK_GET_DRIVE_GEOMETRY_EX failed with %lx for %p\n",
+            status,
+            FdoExtension->LowerDevice);
         return status;
+    }
+
+    DPRINT1("PartMgrRefreshDiskData: bytes=%u size=%I64u for %p\n",
+            geometryEx.Geometry.BytesPerSector,
+            geometryEx.DiskSize.QuadPart,
+            FdoExtension->LowerDevice);
 
     FdoExtension->DiskData.DiskSize = geometryEx.DiskSize.QuadPart;
     FdoExtension->DiskData.BytesPerSector = geometryEx.Geometry.BytesPerSector;
@@ -1025,7 +1081,12 @@ PartMgrRefreshDiskData(
     PDRIVE_LAYOUT_INFORMATION_EX layoutEx = NULL;
     status = PartMgrGetDriveLayout(FdoExtension, &layoutEx);
     if (!NT_SUCCESS(status))
+    {
+        ERR("PartMgrGetDriveLayout failed with %lx for %p\n",
+            status,
+            FdoExtension->LowerDevice);
         return status;
+    }
 
     return STATUS_SUCCESS;
 }
@@ -1084,6 +1145,10 @@ FdoHandleDeviceRelations(
             return Irp->IoStatus.Status;
         }
 
+        DPRINT1("PartMgr: device relations %p count=%u\n",
+                deviceRelations,
+                FdoExtension->EnumeratedPartitionsTotal);
+
         deviceRelations->Count = 0;
 
         PSINGLE_LIST_ENTRY curEntry = FdoExtension->PartitionList.Next;
@@ -1107,6 +1172,9 @@ FdoHandleDeviceRelations(
 
         Irp->IoStatus.Information = (ULONG_PTR)deviceRelations;
         Irp->IoStatus.Status = STATUS_SUCCESS;
+
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_SUCCESS;
     }
 
     IoSkipCurrentIrpStackLocation(Irp);
