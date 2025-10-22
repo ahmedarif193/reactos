@@ -1,0 +1,83 @@
+AMD64 Stack Trace Enablement Roadmap
+===================================
+
+Context
+-------
+ReactOS amd64 builds currently reach bugcheck/ASSERT states without printing
+useful call stacks. The toolchain in use is `~/mingw-toolchains/x86_64-w64-mingw32/bin`.
+The goal is to make LiveCD/liveimg and installed systems emit reliable stack
+traces on AMD64.
+
+Milestones
+----------
+1. Baseline Audit
+   - Capture existing compiler/linker flags for kernel and drivers.
+   - Inventory current implementations of `RtlVirtualUnwind`,
+     `RtlLookupFunctionEntry`, `RtlAddFunctionTable`, and loader code that
+     handles `.pdata/.xdata` in `ntoskrnl`, `ntdll`, and `kdbg`.
+   - Note missing functionality, stubs, or build-time suppressions.
+
+2. Toolchain & Metadata
+   - Ensure mingw-w64 toolchain produces PE+ unwind metadata with either
+     frame-pointer preservation or SEH tables (`.pdata/.xdata`).
+   - Update build scripts/CMake toolchain files to enable the required flags
+     (e.g. `-g`, `-fno-omit-frame-pointer`, `-fasynchronous-unwind-tables`).
+   - Verify ReactOS module packaging keeps the unwind sections in the final
+     binaries and symbol files.
+
+3. Runtime Unwind Support
+   - Finish/port amd64 versions of the unwind helpers in `ntoskrnl` and `ntdll`.
+   - Hook loader paths so every kernel/user module registers its function table,
+     and unregisters on unload.
+   - Implement kernel-mode copies of `RtlLookupFunctionEntry` /
+     `RtlVirtualUnwind` plus any glue for KDBG.
+
+4. Stack Capture APIs
+   - Rework `RtlCaptureStackBackTrace` and `KeRosCaptureStackBackTrace` to call
+     the unwind helpers when running on amd64.
+   - Handle cross-mode unwinds (kernel -> user) and guard against missing
+     metadata with safe fallbacks/logging.
+
+5. Debugger Integration
+   - Update KD64/KDBG to emit the new frames, symbolise addresses, and relax
+     gracefully when metadata is absent.
+   - Extend DPC/ISR/bugcheck paths to request unwind-based stack dumps.
+
+6. Testing & Validation
+   - Add automated tests (unit/integration) that exercise deep stack traces.
+   - Perform on-target validation using WinDbg or kdnet to confirm unwinds.
+   - Generate and verify crash dumps/minidumps to ensure consistent traces.
+
+7. Documentation & Follow-up
+   - Document required compiler flags and module requirements so new drivers do
+     not break unwinding.
+   - Plan follow-on work (NVMe/eMMC storage drivers, user-mode tooling, crash
+     dump analyzers) once AMD64 traces are reliable.
+
+Initial Execution Plan
+----------------------
+A. Complete Milestone 1 audit (toolchain flags, runtime gaps) and publish
+   findings.
+B. Prepare a change list proposal for Milestone 2 flags with impact analysis.
+C. Implement runtime helpers and integrate with KDBG incrementally.
+
+
+Audit Notes (2025-03-21)
+------------------------
+* Build flags captured from `output-MinGW-amd64-Debug/build.ninja` show:
+  - `-fplugin=/home/ahmed/WorkDir/TTE/reactos_boot_ahci/output-MinGW-amd64-Debug/host-tools/bin/gcc_plugin_seh.so`
+    is enabled, so GCC emits `.pdata/.xdata` via the SEH plugin.
+  - No `-fno-omit-frame-pointer`; stack walking must rely on unwind metadata.
+  - Debug builds pass `-gdwarf-2 -gstrict-dwarf` and keep `DBG=1` and `-DKDBG`.
+* `ntoskrnl.exe` produced by the current toolchain contains `.pdata` and `.xdata`
+  sections (verified with `x86_64-w64-mingw32-objdump -h`).
+* Kernel-side support routines exist (`ntoskrnl/rtl/libsupp.c:31` for
+  `RtlPcToFileHeader`, `sdk/lib/rtl/amd64/unwind.c` for `RtlLookupFunctionEntry`
+  and `RtlWalkFrameChain`), so missing metadata—not missing code—is likely
+  blocking stack capture.
+* Bugcheck/KDBG doesn’t currently dump call stacks on amd64 because the only
+  automatic dump in `ntoskrnl/kdbg/kdbg.c:113-133` is compiled out with `#if 0`.
+  Enabling stack dumps here (after wiring the unwinder) will be necessary.
+* Next audit items: confirm loader paths register each module’s exception
+  directory and inspect `RtlCaptureContext`/`RtlCaptureStackBackTrace` at runtime
+  to ensure they return non-zero in kernel mode.

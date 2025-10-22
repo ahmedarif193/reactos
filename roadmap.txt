@@ -1,0 +1,42 @@
+AHCI Integration Roadmap
+========================
+Legend: [ ] pending, [x] complete
+
+1. IRP Completion Guarding
+   [x] Introduce PORT_SRB_EXT_COMPLETED_INLINE flag and clear Srb->OriginalRequest within StorPortNotification(RequestComplete,...).
+   [x] Update PortPdoScsi to honor the inline completion flag or NULL OriginalRequest.
+   [x] Ensure SRB extensions reset the completion flag before reuse and cover with regression/unit tests.
+
+2. StorPort Address Translation Safety
+   [x] Add APC_LEVEL guard returning zero-length when no MDL is present at elevated IRQL.
+   [x] Assert all READ/WRITE SRBs carry a valid MDL and instrument to catch violations.
+   [ ] Validate buffered I/O IOCTL behavior at DISPATCH_LEVEL after applying guard.
+
+3. PnP IRP Ownership
+   [x] Audit FdoHandleDeviceRelations control flow to guarantee completed IRPs never reach IoCallDriver.
+   [x] Document ownership expectations in code comments.
+   [ ] Expand PnP regression coverage for the completed-in-place path.
+
+4. HAL Translation Fallbacks
+   [x] Add build-time detection or guarded import for HalFindBusAddressTranslation.
+   [x] Replace hard assert with logged graceful fallback when translators are unavailable.
+   [ ] Test on builds with and without the HAL symbol to verify runtime behavior.
+
+5. AHCI Miniport Execution Model
+   [x] Document synchronous polling design in HwStartIo and ensure no pending paths go unscheduled.
+   [x] Review timeout handling to prevent StorPort queue starvation under load.
+   [ ] Stress-test polling mode; plan follow-up work to enable interrupt-driven completion.
+
+6. Configuration & INF Policy
+   [x] Revert or gate UniATA service Start/LegacyDetection changes for default installs.
+   [x] Provide configuration guidance or build flag for AHCI-only policy consumers.
+
+7. Adapter Discovery & Resource Handling
+   [x] Refactor access-range handling for readability and correct BAR5 validation.
+   [x] Accept larger BAR lengths while ensuring RangeStart alignment.
+   [x] Broaden AHCI device detection beyond vendor 8086:2922 or rely on INF matching.
+
+8. Validation & Communication
+   [ ] Run targeted regression suites covering storage, PnP rebalance, and HAL pathways.
+   [x] Update developer documentation/changelogs to describe intentional behavioral shifts.
+   [ ] Track outstanding risks and revisit once core fixes are merged.
