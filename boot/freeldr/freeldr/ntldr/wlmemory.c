@@ -310,6 +310,13 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     ERR("WinLdrSetupMemoryLayout: MmGetHighestPhysicalPage=0x%lx, BiosMapCount=%lu\n",
         MmGetHighestPhysicalPage(), BiosMemoryMapEntryCount);
+    TRACE("WinLdrSetupMemoryLayout: LoaderPagesSpanned=0x%Ix (PFN), MmHighestPhysicalPageFromBios=0x%lx\n",
+          MmGetLoaderPagesSpanned(), MmGetHighestPhysicalPageFromBios());
+    if (MmGetLoaderPagesSpanned() > MM_MAX_PAGE_LOADER)
+    {
+        ERR("LoaderPagesSpanned (0x%Ix) exceeds loader PFN limit 0x%lx\n",
+            MmGetLoaderPagesSpanned(), (ULONG)MM_MAX_PAGE_LOADER);
+    }
 
     /* Now we need to add high descriptors from the bios memory map */
     for (i = 0; i < BiosMemoryMapEntryCount; i++)
