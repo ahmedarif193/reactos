@@ -80,10 +80,23 @@ AddReactOSArcDiskInfo(
     IN ULONG Checksum,
     IN BOOLEAN ValidPartitionTable)
 {
+    ULONG Index;
+
+    /* Refresh an existing entry when we re-discover the same ARC path */
+    for (Index = 0; Index < reactos_disk_count; Index++)
+    {
+        if (strcmp(reactos_arc_disk_info[Index].ArcName, ArcName) == 0)
+        {
+            reactos_arc_disk_info[Index].DiskSignature.Signature = Signature;
+            reactos_arc_disk_info[Index].DiskSignature.CheckSum = Checksum;
+            reactos_arc_disk_info[Index].DiskSignature.ValidPartitionTable = ValidPartitionTable;
+            return;
+        }
+    }
+
     ASSERT(reactos_disk_count < sizeof(reactos_arc_disk_info)/sizeof(reactos_arc_disk_info[0]));
 
-    /* Fill out the ARC disk block */
-
+    /* Fill out a new ARC disk block */
     reactos_arc_disk_info[reactos_disk_count].DiskSignature.Signature = Signature;
     reactos_arc_disk_info[reactos_disk_count].DiskSignature.CheckSum = Checksum;
     reactos_arc_disk_info[reactos_disk_count].DiskSignature.ValidPartitionTable = ValidPartitionTable;

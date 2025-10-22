@@ -625,6 +625,25 @@ FsRegisterDevice(
     InsertHeadList(&DeviceListHead, &pNewEntry->ListEntry);
 }
 
+BOOLEAN
+FsIsDeviceRegistered(
+    _In_ PCSTR DeviceName)
+{
+    PLIST_ENTRY Entry;
+
+    for (Entry = DeviceListHead.Flink; Entry != &DeviceListHead; Entry = Entry->Flink)
+    {
+        DEVICE* Device = CONTAINING_RECORD(Entry, DEVICE, ListEntry);
+
+        if (strcmp(Device->DeviceName, DeviceName) == 0)
+        {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
 PCWSTR FsGetServiceName(ULONG FileId)
 {
     if (!IS_VALID_FILEID(FileId))

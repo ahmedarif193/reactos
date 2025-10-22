@@ -417,6 +417,153 @@ DiskIsDriveRemovable(UCHAR DriveNumber)
 }
 
 static BOOLEAN
+EnsureBootDeviceArcRegistration(BOOLEAN BootDriveReported)
+{
+    CHAR Partition0Name[MAX_PATH];
+    ULONG DiskNumber;
+
+    if (FrldrBootDrive == 0x49)
+    {
+        if (!FsIsDeviceRegistered(FrLdrBootPath))
+        {
+            FsRegisterDevice(FrLdrBootPath, &DiskVtbl);
+        }
+        return FsIsDeviceRegistered(FrLdrBootPath);
+    }
+
+    if (FrldrBootDrive < FIRST_BIOS_DISK)
+    {
+        return FsIsDeviceRegistered(FrLdrBootPath);
+    }
+
+    DiskNumber = FrldrBootDrive - FIRST_BIOS_DISK;
+    RtlStringCbPrintfA(Partition0Name,
+                       sizeof(Partition0Name),
+                       "multi(0)disk(0)rdisk(%u)partition(0)",
+                       DiskNumber);
+
+    if (!BootDriveReported || !FsIsDeviceRegistered(Partition0Name))
+    {
+        /* Try to gather partition and signature data for the boot disk */
+        GetHarddiskInformation(FrldrBootDrive);
+    }
+
+    if (!FsIsDeviceRegistered(Partition0Name))
+    {
+        return FALSE;
+    }
+
+    if (!FsIsDeviceRegistered(FrLdrBootPath))
+    {
+        FsRegisterDevice(FrLdrBootPath, &DiskVtbl);
+    }
+
+    return FsIsDeviceRegistered(FrLdrBootPath);
+}
+
+static BOOLEAN
+RegisterBootDeviceFromBootPath(VOID)
+{
+    PMASTER_BOOT_RECORD Mbr;
+    PULONG Buffer;
+    ULONG Checksum = 0;
+    ULONG Signature;
+    SIZE_T Words;
+
+    if (FrldrBootDrive == 0x49)
+    {
+        if (!FsIsDeviceRegistered(FrLdrBootPath))
+        {
+            FsRegisterDevice(FrLdrBootPath, &DiskVtbl);
+        }
+        return FsIsDeviceRegistered(FrLdrBootPath);
+    }
+
+    if (FrldrBootDrive >= FIRST_BIOS_DISK)
+    {
+        CHAR BaseArcName[MAX_PATH];
+        CHAR Partition0Name[MAX_PATH];
+        ULONG DiskNumber;
+        ULONG i;
+        BOOLEAN ValidPartitionTable;
+
+        if (!MachDiskReadLogicalSectors(FrldrBootDrive, 0ULL, 1, DiskReadBuffer))
+        {
+            ERR("Reading MBR failed\n");
+            return FALSE;
+        }
+
+        Buffer = (ULONG*)DiskReadBuffer;
+        Mbr = (PMASTER_BOOT_RECORD)DiskReadBuffer;
+
+        Signature = Mbr->Signature;
+        ValidPartitionTable = (Mbr->MasterBootRecordMagic == 0xAA55);
+
+        Checksum = 0;
+        for (i = 0; i < 512 / sizeof(ULONG); i++)
+        {
+            Checksum += Buffer[i];
+        }
+        Checksum = ~Checksum + 1;
+
+        DiskNumber = FrldrBootDrive - FIRST_BIOS_DISK;
+        RtlStringCbPrintfA(BaseArcName,
+                           sizeof(BaseArcName),
+                           "multi(0)disk(0)rdisk(%u)",
+                           DiskNumber);
+        AddReactOSArcDiskInfo(BaseArcName, Signature, Checksum, ValidPartitionTable);
+
+        RtlStringCbPrintfA(Partition0Name,
+                           sizeof(Partition0Name),
+                           "%spartition(0)",
+                           BaseArcName);
+        if (!FsIsDeviceRegistered(Partition0Name))
+        {
+            FsRegisterDevice(Partition0Name, &DiskVtbl);
+        }
+
+        if (!FsIsDeviceRegistered(FrLdrBootPath))
+        {
+            FsRegisterDevice(FrLdrBootPath, &DiskVtbl);
+        }
+
+        return FsIsDeviceRegistered(FrLdrBootPath);
+    }
+
+    if (!DiskIsDriveRemovable(FrldrBootDrive))
+    {
+        return FsIsDeviceRegistered(FrLdrBootPath);
+    }
+
+    if (!MachDiskReadLogicalSectors(FrldrBootDrive, 16ULL, 1, DiskReadBuffer))
+    {
+        ERR("Reading boot sector failed\n");
+        return FALSE;
+    }
+
+    Buffer = (ULONG*)DiskReadBuffer;
+    Mbr = (PMASTER_BOOT_RECORD)DiskReadBuffer;
+
+    Signature = Mbr->Signature;
+    Words = (FrldrBootPartition == 0xFF) ? (2048 / sizeof(ULONG)) : (512 / sizeof(ULONG));
+    Checksum = 0;
+    while (Words--)
+    {
+        Checksum += *Buffer++;
+    }
+    Checksum = ~Checksum + 1;
+
+    AddReactOSArcDiskInfo(FrLdrBootPath, Signature, Checksum, TRUE);
+
+    if (!FsIsDeviceRegistered(FrLdrBootPath))
+    {
+        FsRegisterDevice(FrLdrBootPath, &DiskVtbl);
+    }
+
+    return FsIsDeviceRegistered(FrLdrBootPath);
+}
+
+static BOOLEAN
 DiskGetBootPath(BOOLEAN IsPxe)
 {
     if (*FrLdrBootPath)
@@ -474,52 +621,31 @@ PcInitializeBootDevices(VOID)
 {
     UCHAR DiskCount;
     BOOLEAN BootDriveReported = FALSE;
-    ULONG i;
+    BOOLEAN BootRegistered;
 
     DiskCount = EnumerateHarddisks(&BootDriveReported);
 
     /* Initialize FrLdrBootPath, the boot path we're booting from (the "SystemPartition") */
     DiskGetBootPath(PxeInit());
 
-    /* Add it, if it's a floppy or cdrom */
-    if ((FrldrBootDrive >= FIRST_BIOS_DISK && !BootDriveReported) ||
-        DiskIsDriveRemovable(FrldrBootDrive))
+    BootRegistered = EnsureBootDeviceArcRegistration(BootDriveReported);
+
+    if (!BootRegistered &&
+        ((FrldrBootDrive >= FIRST_BIOS_DISK && !BootDriveReported) ||
+         DiskIsDriveRemovable(FrldrBootDrive)))
     {
-        /* TODO: Check if it's really a CDROM drive */
-
-        PMASTER_BOOT_RECORD Mbr;
-        PULONG Buffer;
-        ULONG Checksum = 0;
-        ULONG Signature;
-
-        /* Read the MBR */
-        if (!MachDiskReadLogicalSectors(FrldrBootDrive, 16ULL, 1, DiskReadBuffer))
+        if (RegisterBootDeviceFromBootPath())
         {
-            ERR("Reading MBR failed\n");
-            return FALSE;
+            BootRegistered = TRUE;
+            DiskCount++; // This is not accounted for in the number of pre-enumerated BIOS drives!
+            TRACE("Additional boot drive detected: 0x%02X\n", (int)FrldrBootDrive);
         }
-
-        Buffer = (ULONG*)DiskReadBuffer;
-        Mbr = (PMASTER_BOOT_RECORD)DiskReadBuffer;
-
-        Signature = Mbr->Signature;
-        TRACE("Signature: %x\n", Signature);
-
-        /* Calculate the MBR checksum */
-        for (i = 0; i < 2048 / sizeof(ULONG); i++)
-        {
-            Checksum += Buffer[i];
-        }
-        Checksum = ~Checksum + 1;
-        TRACE("Checksum: %x\n", Checksum);
-
-        /* Fill out the ARC disk block */
-        AddReactOSArcDiskInfo(FrLdrBootPath, Signature, Checksum, TRUE);
-
-        FsRegisterDevice(FrLdrBootPath, &DiskVtbl);
-        DiskCount++; // This is not accounted for in the number of pre-enumerated BIOS drives!
-        TRACE("Additional boot drive detected: 0x%02X\n", (int)FrldrBootDrive);
     }
 
-    return (DiskCount != 0);
+    if (!BootRegistered)
+    {
+        WARN("Boot ARC path '%s' was not registered\n", FrLdrBootPath);
+    }
+
+    return (DiskCount != 0) || BootRegistered;
 }

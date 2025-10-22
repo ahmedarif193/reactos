@@ -61,6 +61,10 @@ FsRegisterDevice(
     _In_ PCSTR DeviceName,
     _In_ const DEVVTBL* FuncTable);
 
+BOOLEAN
+FsIsDeviceRegistered(
+    _In_ PCSTR DeviceName);
+
 PCWSTR FsGetServiceName(ULONG FileId);
 VOID  FsSetDeviceSpecific(ULONG FileId, PVOID Specific);
 PVOID FsGetDeviceSpecific(ULONG FileId);
