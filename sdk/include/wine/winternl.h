@@ -5369,7 +5369,7 @@ NTSYSAPI NTSTATUS WINAPI wine_unix_to_nt_file_name( const char *name, WCHAR *buf
 #define InitializeObjectAttributes(p,n,a,r,s) \
     do { \
         POBJECT_ATTRIBUTES _p = (p); \
-        __WINE_WINTERNL_INITIALIZE_OBJECT_ATTRIBUTES_ZERO(_p, sizeof(*_p)); \
+        RtlZeroMemory(_p, sizeof(*_p)); \
         _p->Length = sizeof(OBJECT_ATTRIBUTES); \
         _p->RootDirectory = (r); \
         _p->Attributes = (a); \

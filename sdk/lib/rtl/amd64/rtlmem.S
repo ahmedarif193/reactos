@@ -34,8 +34,8 @@
     mov rsi, rcx
     mov rdi, rdx
 
-    /* Clear direction flag */
-    cli
+    /* Ensure string ops advance forward */
+    cld
 
     /* Get number of qwords */
     mov rcx, r8
@@ -84,4 +84,3 @@ RtlCompareMemory6:
 .endp
 
 END
-
