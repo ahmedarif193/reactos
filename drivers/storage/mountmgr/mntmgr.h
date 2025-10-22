@@ -37,6 +37,8 @@ typedef struct _DEVICE_EXTENSION
     ULONG OnlineNotificationWorkerActive;
     ULONG OnlineNotificationCount;
     KEVENT OnlineNotificationEvent;
+    BOOLEAN BootRamdiskConfigured;
+    BOOLEAN FirmwareDiskOfflined;
 } DEVICE_EXTENSION, *PDEVICE_EXTENSION;
 
 typedef struct _DEVICE_INFORMATION

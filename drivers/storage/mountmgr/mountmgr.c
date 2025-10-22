@@ -39,6 +39,11 @@ LONG Unloading;
 static const WCHAR Cunc[] = L"\\??\\C:";
 #define Cunc_LETTER_POSITION 4
 
+static
+VOID
+MountMgrLoadBootRamdiskInformation(
+    _Inout_ PDEVICE_EXTENSION DeviceExtension);
+
 /**
  * @brief
  * Sends a synchronous IOCTL to the specified device object.
@@ -121,6 +126,154 @@ MountMgrSendSyncDeviceIoCtl(
     }
 
     return Status;
+}
+
+static
+VOID
+MountMgrLoadBootRamdiskInformation(
+    _Inout_ PDEVICE_EXTENSION DeviceExtension)
+{
+    NTSTATUS Status;
+    HANDLE DisksKey;
+    ULONG Index;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING KeyPath;
+
+    RtlInitUnicodeString(&KeyPath,
+                         L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\Ramdisk\\Parameters\\Disks");
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &KeyPath,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+
+    Status = ZwOpenKey(&DisksKey, KEY_READ, &ObjectAttributes);
+    if (!NT_SUCCESS(Status))
+    {
+        return;
+    }
+
+    for (Index = 0; DeviceExtension->DriveLetterData == NULL; Index++)
+    {
+        ULONG Length;
+        PKEY_BASIC_INFORMATION BasicInfo;
+
+        Status = ZwEnumerateKey(DisksKey,
+                                 Index,
+                                 KeyBasicInformation,
+                                 NULL,
+                                 0,
+                                 &Length);
+        if (Status == STATUS_NO_MORE_ENTRIES)
+        {
+            break;
+        }
+
+        if (Status != STATUS_BUFFER_OVERFLOW && Status != STATUS_BUFFER_TOO_SMALL)
+        {
+            continue;
+        }
+
+        BasicInfo = AllocatePool(Length);
+        if (!BasicInfo)
+        {
+            break;
+        }
+
+        Status = ZwEnumerateKey(DisksKey,
+                                 Index,
+                                 KeyBasicInformation,
+                                 BasicInfo,
+                                 Length,
+                                 &Length);
+        if (!NT_SUCCESS(Status))
+        {
+            FreePool(BasicInfo);
+            continue;
+        }
+
+        {
+            HANDLE DiskKey;
+            UNICODE_STRING SubName;
+            OBJECT_ATTRIBUTES SubAttributes;
+
+            SubName.MaximumLength = (USHORT)BasicInfo->NameLength + sizeof(WCHAR);
+            SubName.Buffer = AllocatePool(SubName.MaximumLength);
+            if (!SubName.Buffer)
+            {
+                FreePool(BasicInfo);
+                break;
+            }
+
+            SubName.Length = (USHORT)BasicInfo->NameLength;
+            RtlCopyMemory(SubName.Buffer, BasicInfo->Name, BasicInfo->NameLength);
+            SubName.Buffer[SubName.Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+            InitializeObjectAttributes(&SubAttributes,
+                                       &SubName,
+                                       OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                       DisksKey,
+                                       NULL);
+
+            Status = ZwOpenKey(&DiskKey, KEY_READ, &SubAttributes);
+
+            FreePool(SubName.Buffer);
+            FreePool(BasicInfo);
+
+            if (!NT_SUCCESS(Status))
+            {
+                continue;
+            }
+
+            {
+                ULONG ValueLength;
+                PKEY_VALUE_PARTIAL_INFORMATION ValueInfo;
+                UNICODE_STRING ValueName;
+
+                RtlInitUnicodeString(&ValueName, L"DiskGuid");
+                Status = ZwQueryValueKey(DiskKey,
+                                          &ValueName,
+                                          KeyValuePartialInformation,
+                                          NULL,
+                                          0,
+                                          &ValueLength);
+                if (Status == STATUS_BUFFER_OVERFLOW || Status == STATUS_BUFFER_TOO_SMALL)
+                {
+                    ValueInfo = AllocatePool(ValueLength);
+                    if (ValueInfo)
+                    {
+                        Status = ZwQueryValueKey(DiskKey,
+                                                  &ValueName,
+                                                  KeyValuePartialInformation,
+                                                  ValueInfo,
+                                                  ValueLength,
+                                                  &ValueLength);
+                        if (NT_SUCCESS(Status) &&
+                            ValueInfo->Type == REG_BINARY &&
+                            ValueInfo->DataLength == sizeof(GUID))
+                        {
+                            PMOUNTDEV_UNIQUE_ID UniqueId;
+
+                            UniqueId = AllocatePool(sizeof(MOUNTDEV_UNIQUE_ID) + sizeof(GUID));
+                            if (UniqueId)
+                            {
+                                UniqueId->UniqueIdLength = sizeof(GUID);
+                                RtlCopyMemory(UniqueId->UniqueId, ValueInfo->Data, sizeof(GUID));
+                                DeviceExtension->DriveLetterData = UniqueId;
+                                DeviceExtension->BootRamdiskConfigured = TRUE;
+                            }
+                        }
+
+                        FreePool(ValueInfo);
+                    }
+                }
+
+                ZwClose(DiskKey);
+            }
+        }
+    }
+
+    ZwClose(DisksKey);
 }
 
 /*
@@ -872,6 +1025,7 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
     UNICODE_STRING TargetDeviceName, SuggestedLinkName, DeviceName, VolumeName, DriveLetter, LinkTarget, CSymLink;
     BOOLEAN HasGuid, HasGptDriveLetter, IsFT, UseOnlyIfThereAreNoOtherLinks;
     BOOLEAN IsDrvLetter, IsOff, IsVolumeName, SetOnline;
+    UNICODE_STRING HarddiskPrefix = RTL_CONSTANT_STRING(L"\\Device\\Harddisk");
 
     /* New device = new structure to represent it */
     DeviceInformation = AllocatePool(sizeof(DEVICE_INFORMATION));
@@ -943,6 +1097,50 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
     DeviceInformation->UniqueId = UniqueId;
     DeviceInformation->DeviceName = TargetDeviceName;
     DeviceInformation->KeepLinks = FALSE;
+
+    if (DeviceExtension->BootRamdiskConfigured &&
+        !DeviceExtension->FirmwareDiskOfflined &&
+        DeviceExtension->DriveLetterData &&
+        UniqueId &&
+        UniqueId->UniqueIdLength == DeviceExtension->DriveLetterData->UniqueIdLength &&
+        RtlPrefixUnicodeString(&HarddiskPrefix, &TargetDeviceName, TRUE))
+    {
+        SIZE_T MatchLength;
+        MatchLength = RtlCompareMemory(UniqueId->UniqueId,
+                                       DeviceExtension->DriveLetterData->UniqueId,
+                                       UniqueId->UniqueIdLength);
+
+        if (MatchLength != UniqueId->UniqueIdLength)
+        {
+            PFILE_OBJECT FileObject;
+            PDEVICE_OBJECT DeviceObject;
+            NTSTATUS OfflineStatus;
+
+            OfflineStatus = IoGetDeviceObjectPointer(&TargetDeviceName,
+                                                     FILE_READ_ATTRIBUTES,
+                                                     &FileObject,
+                                                     &DeviceObject);
+            if (NT_SUCCESS(OfflineStatus))
+            {
+                OfflineStatus = MountMgrSendSyncDeviceIoCtl(IOCTL_VOLUME_OFFLINE,
+                                                            DeviceObject,
+                                                            NULL,
+                                                            0,
+                                                            NULL,
+                                                            0,
+                                                            FileObject);
+
+                ObDereferenceObject(FileObject);
+
+                if (NT_SUCCESS(OfflineStatus) ||
+                    OfflineStatus == STATUS_DEVICE_NOT_CONNECTED ||
+                    OfflineStatus == STATUS_INVALID_DEVICE_REQUEST)
+                {
+                    DeviceExtension->FirmwareDiskOfflined = TRUE;
+                }
+            }
+        }
+    }
 
     /* If we found system partition, mark it */
     if (DeviceExtension->DriveLetterData && UniqueId->UniqueIdLength == DeviceExtension->DriveLetterData->UniqueIdLength)
@@ -1766,6 +1964,8 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
     RtlCopyUnicodeString(&(DeviceExtension->RegistryPath), RegistryPath);
 
     DeviceExtension->NoAutoMount = MountmgrReadNoAutoMount(&(DeviceExtension->RegistryPath));
+
+    MountMgrLoadBootRamdiskInformation(DeviceExtension);
 
     GlobalCreateSymbolicLink(&DosDevicesMount, &DeviceMount);
 
