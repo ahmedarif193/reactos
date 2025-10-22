@@ -14,6 +14,16 @@
 #define NDEBUG
 #include <debug.h>
 
+#ifndef FREELDR_VERBOSE_SCSIPORT
+#define FREELDR_VERBOSE_SCSIPORT 0
+#endif
+
+#if FREELDR_VERBOSE_SCSIPORT
+#define SCSIPORT_TRACE(...) DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_TRACE_LEVEL, __VA_ARGS__)
+#else
+#define SCSIPORT_TRACE(...) ((void)0)
+#endif
+
 ULONG InternalDebugLevel = 0x03;
 static LONG ScsiPortWarnedNoAccessRanges = 0;
 static const CHAR ScsiPortDriverExtensionKey = 0;
@@ -230,17 +240,13 @@ ScsiPortAddDevice(
 
     if (DriverExtension == NULL || !DriverExtension->HwInitDataValid)
     {
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-               DPFLTR_ERROR_LEVEL,
-               "[SCSIPORT] ScsiPortAddDevice: missing miniport initialization data\n");
+        SCSIPORT_TRACE("[SCSIPORT] ScsiPortAddDevice: missing miniport initialization data\n");
         return STATUS_INVALID_DEVICE_REQUEST;
     }
 
     if (DriverExtension->IsLegacyDriver)
     {
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "[SCSIPORT] ScsiPortAddDevice: legacy miniport detected, deferring to legacy path\n");
+        SCSIPORT_TRACE("[SCSIPORT] ScsiPortAddDevice: legacy miniport detected, deferring to legacy path\n");
         return STATUS_SUCCESS;
     }
 
@@ -257,9 +263,7 @@ ScsiPortAddDevice(
 
     if (!NT_SUCCESS(Status))
     {
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "[SCSIPORT] ScsiPortAddDevice: IoCreateDevice failed %lx\n",
+        SCSIPORT_TRACE("[SCSIPORT] ScsiPortAddDevice: IoCreateDevice failed %lx\n",
                    Status);
         return Status;
     }
@@ -288,16 +292,12 @@ ScsiPortAddDevice(
 
     if (DeviceExtension->Common.LowerDevice == NULL)
     {
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "[SCSIPORT] ScsiPortAddDevice: IoAttachDeviceToDeviceStack failed\n");
+        SCSIPORT_TRACE("[SCSIPORT] ScsiPortAddDevice: IoAttachDeviceToDeviceStack failed\n");
         IoDeleteDevice(PortDeviceObject);
         return STATUS_NO_SUCH_DEVICE;
     }
 
-    DbgPrintEx(DPFLTR_DEFAULT_ID,
-               DPFLTR_ERROR_LEVEL,
-               "[SCSIPORT] ScsiPortAddDevice: created FDO %p for PDO %p\n",
+    SCSIPORT_TRACE("[SCSIPORT] ScsiPortAddDevice: created FDO %p for PDO %p\n",
                PortDeviceObject,
                PhysicalDeviceObject);
 
@@ -1281,10 +1281,8 @@ ScsiPortInitialize(
 
     PCM_RESOURCE_LIST ResourceList = NULL;
 
-    DbgPrintEx(DPFLTR_DEFAULT_ID,
-               DPFLTR_ERROR_LEVEL,
-               "[SCSIPORT] ScsiPortInitialize enter: AdapterInterfaceType=%lu\n",
-               HwInitializationData->AdapterInterfaceType);
+    SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize enter: AdapterInterfaceType=%lu\n",
+                   HwInitializationData->AdapterInterfaceType);
 
     /* Check params for validity */
     if ((HwInitializationData->HwInitialize == NULL) ||
@@ -1383,16 +1381,12 @@ ScsiPortInitialize(
     /* Open registry keys and fill the driverExtension */
     SpiInitOpenKeys(&ConfigInfo, driverExtension);
 
-    DbgPrintEx(DPFLTR_DEFAULT_ID,
-               DPFLTR_ERROR_LEVEL,
-               "[SCSIPORT] ScsiPortInitialize: IsLegacyDriver=%u\n",
-               driverExtension->IsLegacyDriver);
+    SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: IsLegacyDriver=%u\n",
+                   driverExtension->IsLegacyDriver);
 
     if (!driverExtension->IsLegacyDriver)
     {
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "[SCSIPORT] ScsiPortInitialize: treating driver as PnP-only, skipping legacy detection\n");
+        SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: treating driver as PnP-only, skipping legacy detection\n");
         Status = STATUS_SUCCESS;
         goto Cleanup;
     }
@@ -1427,9 +1421,7 @@ ScsiPortInitialize(
             DPRINT1("Failed to allocate memory for device name!\n");
             Status = STATUS_INSUFFICIENT_RESOURCES;
             PortDeviceObject = NULL;
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_ERROR_LEVEL,
-                       "[SCSIPORT] ScsiPortInitialize: RtlCreateUnicodeString failed Port=%lu\n",
+            SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: RtlCreateUnicodeString failed Port=%lu\n",
                        SystemConfig->ScsiPortCount);
             break;
         }
@@ -1449,9 +1441,7 @@ ScsiPortInitialize(
         {
             DPRINT1("IoCreateDevice call failed! (Status 0x%lX)\n", Status);
             PortDeviceObject = NULL;
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_ERROR_LEVEL,
-                       "[SCSIPORT] ScsiPortInitialize: IoCreateDevice failed Status=0x%08lx\n",
+            SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: IoCreateDevice failed Status=0x%08lx\n",
                        Status);
             break;
         }
@@ -1475,13 +1465,11 @@ ScsiPortInitialize(
 
 CreatePortConfig:
 
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "[SCSIPORT] CreatePortConfig: BusNumber=%lu InterfaceType=%lu NumberOfAccessRanges=%lu FirstCall=%u\n",
-                   ConfigInfo.BusNumber,
-                   HwInitializationData->AdapterInterfaceType,
-                   (ULONG)HwInitializationData->NumberOfAccessRanges,
-                   FirstConfigCall);
+        SCSIPORT_TRACE("[SCSIPORT] CreatePortConfig: BusNumber=%lu InterfaceType=%lu NumberOfAccessRanges=%lu FirstCall=%u\n",
+                       ConfigInfo.BusNumber,
+                       HwInitializationData->AdapterInterfaceType,
+                       (ULONG)HwInitializationData->NumberOfAccessRanges,
+                       FirstConfigCall);
 
         /* Allocate and initialize port configuration info */
         {
@@ -1506,9 +1494,7 @@ CreatePortConfig:
         if (DeviceExtension->PortConfig == NULL)
         {
             Status = STATUS_INSUFFICIENT_RESOURCES;
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_ERROR_LEVEL,
-                       "[SCSIPORT] ScsiPortInitialize: ExAllocatePoolWithTag failed Size=%zu\n",
+            SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: ExAllocatePoolWithTag failed Size=%zu\n",
                        PortConfigSize);
             break;
         }
@@ -1523,31 +1509,25 @@ CreatePortConfig:
 
         if (!NT_SUCCESS(Status))
         {
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_ERROR_LEVEL,
-                       "[SCSIPORT] ScsiPortInitialize: SpiCreatePortConfig failed Status=0x%08lx Bus=%lu Interface=%lu\n",
+            SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: SpiCreatePortConfig failed Status=0x%08lx Bus=%lu Interface=%lu\n",
                        Status,
                        ConfigInfo.BusNumber,
                        HwInitializationData->AdapterInterfaceType);
             break;
         }
 
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "[SCSIPORT] ScsiPortInitialize: PortConfig ready Bus=%lu Interface=%lu Ranges=%lu FirstCall=%u\n",
-                   ConfigInfo.BusNumber,
-                   DeviceExtension->PortConfig->AdapterInterfaceType,
-                   (ULONG)HwInitializationData->NumberOfAccessRanges,
-                   FirstConfigCall);
+        SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: PortConfig ready Bus=%lu Interface=%lu Ranges=%lu FirstCall=%u\n",
+                       ConfigInfo.BusNumber,
+                       DeviceExtension->PortConfig->AdapterInterfaceType,
+                       (ULONG)HwInitializationData->NumberOfAccessRanges,
+                       FirstConfigCall);
 
         PortConfig = DeviceExtension->PortConfig;
 
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "[SCSIPORT] SpiCreatePortConfig: BusNumber=%lu InterfaceType=%lu NumRanges=%lu\n",
-                   PortConfig->SystemIoBusNumber,
-                   PortConfig->AdapterInterfaceType,
-                   (ULONG)HwInitializationData->NumberOfAccessRanges);
+        SCSIPORT_TRACE("[SCSIPORT] SpiCreatePortConfig: BusNumber=%lu InterfaceType=%lu NumRanges=%lu\n",
+                       PortConfig->SystemIoBusNumber,
+                       PortConfig->AdapterInterfaceType,
+                       (ULONG)HwInitializationData->NumberOfAccessRanges);
 
         /* Copy extension sizes into the PortConfig */
         PortConfig->SpecificLuExtensionSize = DeviceExtension->LunExtensionSize;
@@ -1691,9 +1671,7 @@ CreatePortConfig:
 
         /* Note: HwFindAdapter is called once for each bus */
         Again = FALSE;
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "[SCSIPORT] ScsiPortInitialize: calling HwFindAdapter Bus=%lu ConfigBus=%lu Interface=%u\n",
+        SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: calling HwFindAdapter Bus=%lu ConfigBus=%lu Interface=%u\n",
                    PortConfig->SystemIoBusNumber,
                    ConfigInfo.BusNumber,
                    HwInitializationData->AdapterInterfaceType);
@@ -1702,9 +1680,7 @@ CreatePortConfig:
             ConfigInfo.Parameter,                                    /* ArgumentString */
             PortConfig, &Again);
 
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "[SCSIPORT] ScsiPortInitialize: HwFindAdapter result=%lu Again=%lu Bus=%lu\n",
+        SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: HwFindAdapter result=%lu Again=%lu Bus=%lu\n",
                    Result,
                    Again,
                    PortConfig->SystemIoBusNumber);
@@ -1719,17 +1695,13 @@ CreatePortConfig:
         /* If result is nothing good... */
         if (Result != SP_RETURN_FOUND)
         {
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_ERROR_LEVEL,
-                       "[SCSIPORT] ScsiPortInitialize: HwFindAdapter returned %lu (Bus=%lu)\n",
+            SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: HwFindAdapter returned %lu (Bus=%lu)\n",
                        Result,
                        PortConfig->SystemIoBusNumber);
 
             if (Result == SP_RETURN_NOT_FOUND)
             {
-                DbgPrintEx(DPFLTR_DEFAULT_ID,
-                           DPFLTR_ERROR_LEVEL,
-                           "[SCSIPORT] ScsiPortInitialize: no adapter on Bus=%lu, continuing scan\n",
+                SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: no adapter on Bus=%lu, continuing scan\n",
                            ConfigInfo.BusNumber);
 
                 DeviceExtension->PortConfig = NULL;
@@ -1741,18 +1713,14 @@ CreatePortConfig:
                     /* Increment consecutive not-found counter */
                     ConsecutiveNotFoundCount++;
 
-                    DbgPrintEx(DPFLTR_DEFAULT_ID,
-                               DPFLTR_ERROR_LEVEL,
-                               "[SCSIPORT] ScsiPortInitialize: ConsecutiveNotFoundCount=%lu (max=%lu)\n",
+                    SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: ConsecutiveNotFoundCount=%lu (max=%lu)\n",
                                ConsecutiveNotFoundCount,
                                (ULONG)MAX_CONSECUTIVE_NOT_FOUND);
 
                     /* Break if too many consecutive not-found results */
                     if (ConsecutiveNotFoundCount >= MAX_CONSECUTIVE_NOT_FOUND)
                     {
-                        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                                   DPFLTR_ERROR_LEVEL,
-                                   "[SCSIPORT] ScsiPortInitialize: stopping bus scan after %lu consecutive not-found buses\n",
+                        SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: stopping bus scan after %lu consecutive not-found buses\n",
                                    ConsecutiveNotFoundCount);
                         break;
                     }
@@ -1770,9 +1738,7 @@ CreatePortConfig:
             break;
         }
 
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "[SCSIPORT] ScsiPortInitialize: adapter found (Bus=%lu Vector=%lu)\n",
+        SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: adapter found (Bus=%lu Vector=%lu)\n",
                    PortConfig->SystemIoBusNumber,
                    PortConfig->BusInterruptVector);
 
@@ -1857,9 +1823,7 @@ CreatePortConfig:
         {
             DPRINT1("Out of resources!\n");
             Status = STATUS_INSUFFICIENT_RESOURCES;
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_ERROR_LEVEL,
-                       "[SCSIPORT] ScsiPortInitialize: SpiEnsureAdapterObject failed Status=0x%08lx\n",
+            SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: SpiEnsureAdapterObject failed Status=0x%08lx\n",
                        Status);
             break;
         }
@@ -1918,9 +1882,7 @@ CreatePortConfig:
             /* Check for failure */
             if (!NT_SUCCESS(Status))
             {
-                DbgPrintEx(DPFLTR_DEFAULT_ID,
-                           DPFLTR_ERROR_LEVEL,
-                           "[SCSIPORT] ScsiPortInitialize: SpiAllocateCommonBuffer failed Status=0x%08lx\n",
+                SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: SpiAllocateCommonBuffer failed Status=0x%08lx\n",
                            Status);
                 break;
             }
@@ -1996,9 +1958,7 @@ CreatePortConfig:
 
         if (!NT_SUCCESS(Status))
         {
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_ERROR_LEVEL,
-                       "[SCSIPORT] ScsiPortInitialize: FdoStartAdapter failed Status=0x%08lx Port=%lu Bus=%lu Interface=%lu\n",
+            SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: FdoStartAdapter failed Status=0x%08lx Port=%lu Bus=%lu Interface=%lu\n",
                        Status,
                        DeviceExtension->PortNumber,
                        ConfigInfo.BusNumber,
@@ -2006,9 +1966,7 @@ CreatePortConfig:
             break;
         }
 
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "[SCSIPORT] ScsiPortInitialize: Adapter started Port=%lu Bus=%lu Targets=%lu\n",
+        SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: Adapter started Port=%lu Bus=%lu Targets=%lu\n",
                    DeviceExtension->PortNumber,
                    ConfigInfo.BusNumber,
                    PortConfig->MaximumNumberOfTargets);
@@ -2052,9 +2010,7 @@ Cleanup:
     if (ConfigInfo.Parameter != NULL)
         ExFreePool(ConfigInfo.Parameter);
 
-    DbgPrintEx(DPFLTR_DEFAULT_ID,
-               DPFLTR_ERROR_LEVEL,
-               "[SCSIPORT] ScsiPortInitialize exit: Status=0x%08lx DeviceFound=%d\n",
+    SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize exit: Status=0x%08lx DeviceFound=%d\n",
                Status,
                DeviceFound);
 
