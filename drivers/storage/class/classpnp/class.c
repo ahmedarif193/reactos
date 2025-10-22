@@ -131,6 +131,139 @@ PVOID ScreenStateNotificationHandle;
 //
 ULONG DiskIdleTimeoutInMS = 0xFFFFFFFF;
 
+#if DBG
+#define CLASSP_DC_GUARD 0xC0FFEE3Du
+typedef struct _CLASSP_DEVICE_CONTROL_ALLOCATION
+{
+    ULONG GuardStart;
+    ULONG Size;
+    ULONG IoControlCode;
+    ULONG InputLength;
+    ULONG OutputLength;
+    PVOID Caller;
+    UCHAR Buffer[1];
+    /* Trailing guard follows the buffer */
+} CLASSP_DEVICE_CONTROL_ALLOCATION, *PCLASSP_DEVICE_CONTROL_ALLOCATION;
+
+static
+PVOID
+ClasspAllocateDeviceControlBuffer(
+    _In_ SIZE_T Length,
+    _In_ ULONG IoControlCode,
+    _In_ ULONG InputLength,
+    _In_ ULONG OutputLength)
+{
+    SIZE_T totalSize;
+    PCLASSP_DEVICE_CONTROL_ALLOCATION allocation;
+    PULONG endGuard;
+
+    if (Length == 0)
+        Length = sizeof(ULONG);
+
+    totalSize = FIELD_OFFSET(CLASSP_DEVICE_CONTROL_ALLOCATION, Buffer) + Length + sizeof(ULONG);
+    allocation = ExAllocatePoolWithTag(NonPagedPoolNxCacheAligned,
+                                       totalSize,
+                                       CLASS_TAG_DEVICE_CONTROL);
+    if (allocation == NULL)
+        return NULL;
+
+    allocation->GuardStart = CLASSP_DC_GUARD;
+    allocation->Size = (ULONG)Length;
+    allocation->IoControlCode = IoControlCode;
+    allocation->InputLength = InputLength;
+    allocation->OutputLength = OutputLength;
+#if defined(_MSC_VER)
+    allocation->Caller = _ReturnAddress();
+#else
+    allocation->Caller = __builtin_return_address(0);
+#endif
+    endGuard = (PULONG)((PUCHAR)allocation->Buffer + Length);
+    *endGuard = CLASSP_DC_GUARD;
+
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_INFO_LEVEL,
+               "ClasspAllocateDeviceControlBuffer: buf=%p size=%lu ioctl=0x%08lx in=%lu out=%lu caller=%p\n",
+               allocation->Buffer,
+               (ULONG)Length,
+               IoControlCode,
+               InputLength,
+               OutputLength,
+               allocation->Caller);
+
+    return allocation->Buffer;
+}
+
+static
+VOID
+ClasspFreeDeviceControlBuffer(
+    _In_opt_ PVOID Buffer)
+{
+    PCLASSP_DEVICE_CONTROL_ALLOCATION allocation;
+    PULONG endGuard;
+
+    if (Buffer == NULL)
+        return;
+
+    allocation = CONTAINING_RECORD(Buffer, CLASSP_DEVICE_CONTROL_ALLOCATION, Buffer);
+    endGuard = (PULONG)((PUCHAR)allocation->Buffer + allocation->Size);
+
+    if (allocation->GuardStart != CLASSP_DC_GUARD || *endGuard != CLASSP_DC_GUARD)
+    {
+        UCHAR prefix[16] = {0};
+        ULONG prefixLen = min(allocation->Size, (ULONG)sizeof(prefix));
+        if (prefixLen > 0)
+            RtlCopyMemory(prefix, allocation->Buffer, prefixLen);
+
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_ERROR_LEVEL,
+                   "ClasspFreeDeviceControlBuffer: guard corrupted buf=%p size=%lu ioctl=0x%08lx in=%lu out=%lu caller=%p GS=0x%08lx GE=0x%08lx\n",
+                   Buffer,
+                   allocation->Size,
+                   allocation->IoControlCode,
+                   allocation->InputLength,
+                   allocation->OutputLength,
+                   allocation->Caller,
+                   allocation->GuardStart,
+                   *endGuard);
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_ERROR_LEVEL,
+                   "  bytes: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n",
+                   prefix[0], prefix[1], prefix[2], prefix[3],
+                   prefix[4], prefix[5], prefix[6], prefix[7],
+                   prefix[8], prefix[9], prefix[10], prefix[11],
+                   prefix[12], prefix[13], prefix[14], prefix[15]);
+        DbgBreakPoint();
+    }
+
+    allocation->GuardStart = 0;
+    *endGuard = 0;
+
+    ExFreePoolWithTag(allocation, CLASS_TAG_DEVICE_CONTROL);
+}
+#else
+static __inline PVOID
+ClasspAllocateDeviceControlBuffer(
+    _In_ SIZE_T Length,
+    _In_ ULONG IoControlCode,
+    _In_ ULONG InputLength,
+    _In_ ULONG OutputLength)
+{
+    if (Length == 0)
+        return NULL;
+    return ExAllocatePoolWithTag(NonPagedPoolNxCacheAligned,
+                                 Length,
+                                 CLASS_TAG_DEVICE_CONTROL);
+}
+
+static __inline VOID
+ClasspFreeDeviceControlBuffer(
+    _In_opt_ PVOID Buffer)
+{
+    if (Buffer != NULL)
+        ExFreePoolWithTag(Buffer, CLASS_TAG_DEVICE_CONTROL);
+}
+#endif
+
 
 NTSTATUS DllUnload(VOID)
 {
@@ -11164,9 +11297,10 @@ ClassSendDeviceIoControlSynchronous(
         {
             if ((InputBufferLength != 0) || (OutputBufferLength != 0))
             {
-                irp->AssociatedIrp.SystemBuffer = ExAllocatePoolWithTag(NonPagedPoolNxCacheAligned,
-                                                                        max(InputBufferLength, OutputBufferLength),
-                                                                        CLASS_TAG_DEVICE_CONTROL);
+                irp->AssociatedIrp.SystemBuffer = ClasspAllocateDeviceControlBuffer(max(InputBufferLength, OutputBufferLength),
+                                                                                     IoControlCode,
+                                                                                     InputBufferLength,
+                                                                                     OutputBufferLength);
                 if (irp->AssociatedIrp.SystemBuffer == NULL)
                 {
                     IoFreeIrp(irp);
@@ -11297,7 +11431,8 @@ ClassSendDeviceIoControlSynchronous(
             //
 
             if ((InputBufferLength !=0) || (OutputBufferLength != 0)) {
-                FREE_POOL(irp->AssociatedIrp.SystemBuffer);
+                ClasspFreeDeviceControlBuffer(irp->AssociatedIrp.SystemBuffer);
+                irp->AssociatedIrp.SystemBuffer = NULL;
             }
             break;
         }
