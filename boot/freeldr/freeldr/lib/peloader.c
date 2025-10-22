@@ -23,6 +23,17 @@
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(PELOADER);
 
+/* Default to quiet PE loader tracing unless explicitly enabled. */
+#ifndef FREELDR_VERBOSE_PELOADER
+#define FREELDR_VERBOSE_PELOADER 0
+#endif
+
+#if FREELDR_VERBOSE_PELOADER
+#define PELOADER_TRACE(...) TRACE(__VA_ARGS__)
+#else
+#define PELOADER_TRACE(...) ((void)0)
+#endif
+
 /* GLOBALS *******************************************************************/
 
 LIST_ENTRY FrLdrModuleList;
@@ -86,13 +97,13 @@ PeLdrpCompareDllName(
     /* First obvious check: for length of two names */
     Length = strlen(DllName);
 
-#if DBG
+#if DBG && FREELDR_VERBOSE_PELOADER
     {
         UNICODE_STRING UnicodeNamePA;
         UnicodeNamePA.Length = UnicodeName->Length;
         UnicodeNamePA.MaximumLength = UnicodeName->MaximumLength;
         UnicodeNamePA.Buffer = VaToPa(UnicodeName->Buffer);
-        TRACE("PeLdrpCompareDllName: %s and %wZ, Length = %d, UN->Length %d\n",
+        PELOADER_TRACE("PeLdrpCompareDllName: %s and %wZ, Length = %d, UN->Length %d\n",
               DllName, &UnicodeNamePA, Length, UnicodeName->Length);
     }
 #endif
@@ -156,7 +167,7 @@ PeLdrpBindImportName(
     PCHAR ExportName, ForwarderName;
     BOOLEAN Success;
 
-    //TRACE("PeLdrpBindImportName(): "
+    //PELOADER_TRACE("PeLdrpBindImportName(): "
     //      "DllBase 0x%p, ImageBase 0x%p, ThunkName 0x%p, ThunkData 0x%p, ExportDirectory 0x%p, ExportSize %d, ProcessForwards 0x%X\n",
     //      DllBase, ImageBase, ThunkName, ThunkData, ExportDirectory, ExportSize, ProcessForwards);
 
@@ -176,7 +187,7 @@ PeLdrpBindImportName(
     {
         /* Yes, calculate the ordinal */
         Ordinal = (ULONG)(IMAGE_ORDINAL(ThunkName->u1.Ordinal) - (UINT32)ExportDirectory->Base);
-        //TRACE("PeLdrpBindImportName(): Ordinal %d\n", Ordinal);
+        //PELOADER_TRACE("PeLdrpBindImportName(): Ordinal %d\n", Ordinal);
     }
     else
     {
@@ -184,10 +195,10 @@ PeLdrpBindImportName(
         if (!ProcessForwards)
         {
             /* AddressOfData in thunk entry will become a virtual address (from relative) */
-            //TRACE("PeLdrpBindImportName(): ThunkName->u1.AOD was %p\n", ThunkName->u1.AddressOfData);
+            //PELOADER_TRACE("PeLdrpBindImportName(): ThunkName->u1.AOD was %p\n", ThunkName->u1.AddressOfData);
             ThunkName->u1.AddressOfData =
                 (ULONG_PTR)RVA(ImageBase, ThunkName->u1.AddressOfData);
-            //TRACE("PeLdrpBindImportName(): ThunkName->u1.AOD became %p\n", ThunkName->u1.AddressOfData);
+            //PELOADER_TRACE("PeLdrpBindImportName(): ThunkName->u1.AOD became %p\n", ThunkName->u1.AddressOfData);
         }
 
         /* Get the import name, convert it to a physical pointer */
@@ -197,12 +208,12 @@ PeLdrpBindImportName(
         NameTable = VaToPa(RVA(DllBase, ExportDirectory->AddressOfNames));
         OrdinalTable = VaToPa(RVA(DllBase, ExportDirectory->AddressOfNameOrdinals));
 
-        //TRACE("NameTable 0x%X, OrdinalTable 0x%X, ED->AddressOfNames 0x%X, ED->AOFO 0x%X\n",
+        //PELOADER_TRACE("NameTable 0x%X, OrdinalTable 0x%X, ED->AddressOfNames 0x%X, ED->AOFO 0x%X\n",
         //      NameTable, OrdinalTable, ExportDirectory->AddressOfNames, ExportDirectory->AddressOfNameOrdinals);
 
         /* Get the hint */
         Hint = ImportData->Hint;
-        //TRACE("HintIndex %d\n", Hint);
+        //PELOADER_TRACE("HintIndex %d\n", Hint);
 
         /* Get the export name from the hint */
         ExportName = VaToPa(RVA(DllBase, NameTable[Hint]));
@@ -213,14 +224,14 @@ PeLdrpBindImportName(
             (strcmp(ExportName, (PCHAR)ImportData->Name) == 0))
         {
             Ordinal = OrdinalTable[Hint];
-            //TRACE("PeLdrpBindImportName(): Ordinal %d\n", Ordinal);
+            //PELOADER_TRACE("PeLdrpBindImportName(): Ordinal %d\n", Ordinal);
         }
         else
         {
             /* It's not the easy way, we have to lookup import name in the name table.
                Let's use a binary search for this task. */
 
-            //TRACE("PeLdrpBindImportName() looking up the import name using binary search...\n");
+            //PELOADER_TRACE("PeLdrpBindImportName() looking up the import name using binary search...\n");
 
             /* Low boundary is set to 0, and high boundary to the maximum index */
             Low = 0;
@@ -238,7 +249,7 @@ PeLdrpBindImportName(
                 /* Compare the names */
                 Result = strcmp(ExportName, (PCHAR)ImportData->Name);
 
-                // TRACE("Binary search: comparing Import '%s', Export '%s'\n",
+                // PELOADER_TRACE("Binary search: comparing Import '%s', Export '%s'\n",
                       // (PCHAR)ImportData->Name, ExportName);
 
                 /* Depending on result of strcmp, perform different actions */
@@ -284,7 +295,7 @@ PeLdrpBindImportName(
 
             /* Everything alright, get the ordinal */
             Ordinal = OrdinalTable[Middle];
-            //TRACE("PeLdrpBindImportName() found Ordinal %d\n", Ordinal);
+            //PELOADER_TRACE("PeLdrpBindImportName() found Ordinal %d\n", Ordinal);
         }
     }
 
@@ -311,7 +322,7 @@ PeLdrpBindImportName(
         ULONG RefExportSize;
         CHAR ForwardDllName[256];
 
-        TRACE("PeLdrpBindImportName(): ForwarderName %s\n", ForwarderName);
+        PELOADER_TRACE("PeLdrpBindImportName(): ForwarderName %s\n", ForwarderName);
 
         /* Save the name of the forward dll */
         RtlCopyMemory(ForwardDllName, ForwarderName, sizeof(ForwardDllName));
@@ -417,7 +428,7 @@ PeLdrpLoadAndScanReferencedDll(
     RtlStringCbCopyA(FullDllName, sizeof(FullDllName), DirectoryPath);
     RtlStringCbCatA(FullDllName, sizeof(FullDllName), ImportName);
 
-    TRACE("Loading referenced DLL: %s\n", FullDllName);
+    PELOADER_TRACE("Loading referenced DLL: %s\n", FullDllName);
 
     if (PeLdrImportDllLoadCallback)
         PeLdrImportDllLoadCallback(FullDllName);
@@ -450,7 +461,7 @@ PeLdrpLoadAndScanReferencedDll(
     (*DataTableEntry)->Flags |= LDRP_DRIVER_DEPENDENT_DLL;
 
     /* Scan its dependencies too */
-    TRACE("PeLdrScanImportDescriptorTable() calling ourselves for '%.*S'\n",
+    PELOADER_TRACE("PeLdrScanImportDescriptorTable() calling ourselves for '%.*S'\n",
           (*DataTableEntry)->BaseDllName.Length / sizeof(WCHAR),
           VaToPa((*DataTableEntry)->BaseDllName.Buffer));
     Success = PeLdrScanImportDescriptorTable(ModuleListHead, DirectoryPath, *DataTableEntry);
@@ -480,7 +491,7 @@ PeLdrpScanImportAddressTable(
     BOOLEAN Success;
     ULONG ExportSize;
 
-    TRACE("PeLdrpScanImportAddressTable(): "
+    PELOADER_TRACE("PeLdrpScanImportAddressTable(): "
           "DllBase 0x%p, ImageBase 0x%p, ThunkName 0x%p, ThunkData 0x%p\n",
           DllBase, ImageBase, ThunkName, ThunkData);
 
@@ -498,7 +509,7 @@ PeLdrpScanImportAddressTable(
                 IMAGE_DIRECTORY_ENTRY_EXPORT,
                 &ExportSize);
     }
-    TRACE("PeLdrpScanImportAddressTable(): ExportDirectory 0x%p\n", ExportDirectory);
+    PELOADER_TRACE("PeLdrpScanImportAddressTable(): ExportDirectory 0x%p\n", ExportDirectory);
 
     /* Fail if no export directory */
     if (!ExportDirectory)
@@ -607,7 +618,7 @@ PeLdrCheckForLoadedDll(
     PLIST_ENTRY ModuleEntry;
     PLDR_DATA_TABLE_ENTRY DataTableEntry;
 
-    TRACE("PeLdrCheckForLoadedDll: DllName %s\n", DllName);
+    PELOADER_TRACE("PeLdrCheckForLoadedDll: DllName %s\n", DllName);
 
     /* Go through each entry in the LoadOrderList and
      * compare the module's name with the given name */
@@ -620,7 +631,7 @@ PeLdrCheckForLoadedDll(
                                            LDR_DATA_TABLE_ENTRY,
                                            InLoadOrderLinks);
 
-        TRACE("PeLdrCheckForLoadedDll: DTE %p, EP %p, Base %p, Name '%.*S'\n",
+        PELOADER_TRACE("PeLdrCheckForLoadedDll: DTE %p, EP %p, Base %p, Name '%.*S'\n",
               DataTableEntry, DataTableEntry->EntryPoint, DataTableEntry->DllBase,
               DataTableEntry->BaseDllName.Length / sizeof(WCHAR),
               VaToPa(DataTableEntry->BaseDllName.Buffer));
@@ -632,7 +643,7 @@ PeLdrCheckForLoadedDll(
              * DTE to the caller and increase its load count */
             *LoadedEntry = DataTableEntry;
             DataTableEntry->LoadCount++;
-            TRACE("PeLdrCheckForLoadedDll: LoadedEntry 0x%p\n", DataTableEntry);
+            PELOADER_TRACE("PeLdrCheckForLoadedDll: LoadedEntry 0x%p\n", DataTableEntry);
             return TRUE;
         }
     }
@@ -657,13 +668,13 @@ PeLdrScanImportDescriptorTable(
     ImportTable = (PIMAGE_IMPORT_DESCRIPTOR)RtlImageDirectoryEntryToData(VaToPa(ScanDTE->DllBase),
         TRUE, IMAGE_DIRECTORY_ENTRY_IMPORT, &ImportTableSize);
 
-#if DBG
+#if DBG && FREELDR_VERBOSE_PELOADER
     {
         UNICODE_STRING BaseName;
         BaseName.Buffer = VaToPa(ScanDTE->BaseDllName.Buffer);
         BaseName.MaximumLength = ScanDTE->BaseDllName.MaximumLength;
         BaseName.Length = ScanDTE->BaseDllName.Length;
-        TRACE("PeLdrScanImportDescriptorTable(): %wZ ImportTable = 0x%p\n",
+        PELOADER_TRACE("PeLdrScanImportDescriptorTable(): %wZ ImportTable = 0x%p\n",
               &BaseName, ImportTable);
     }
 #endif
@@ -680,7 +691,7 @@ PeLdrScanImportDescriptorTable(
 
         /* Get pointer to the name */
         ImportName = (PCH)VaToPa(RVA(ScanDTE->DllBase, ImportTable->Name));
-        TRACE("PeLdrScanImportDescriptorTable(): Looking at %s\n", ImportName);
+        PELOADER_TRACE("PeLdrScanImportDescriptorTable(): Looking at %s\n", ImportName);
 
         /* In case we get a reference to ourselves - just skip it */
         if (PeLdrpCompareDllName(ImportName, &ScanDTE->BaseDllName))
@@ -735,7 +746,7 @@ PeLdrAllocateDataTableEntry(
     PIMAGE_NT_HEADERS NtHeaders;
     USHORT Length;
 
-    TRACE("PeLdrAllocateDataTableEntry('%s', '%s', %p)\n",
+    PELOADER_TRACE("PeLdrAllocateDataTableEntry('%s', '%s', %p)\n",
           BaseDllName, FullDllName, BasePA);
 
     /* Allocate memory for a data table entry, zero-initialize it */
@@ -826,7 +837,7 @@ PeLdrAllocateDataTableEntry(
 
     /* Insert this DTE to a list in the LPB */
     InsertTailList(ModuleListHead, &DataTableEntry->InLoadOrderLinks);
-    TRACE("Inserting DTE %p, name='%.*S' DllBase=%p\n", DataTableEntry,
+    PELOADER_TRACE("Inserting DTE %p, name='%.*S' DllBase=%p\n", DataTableEntry,
           DataTableEntry->BaseDllName.Length / sizeof(WCHAR),
           VaToPa(DataTableEntry->BaseDllName.Buffer),
           DataTableEntry->DllBase);
@@ -882,7 +893,7 @@ PeLdrLoadImageEx(
     LARGE_INTEGER Position;
     ULONG i, BytesRead;
 
-    TRACE("PeLdrLoadImage('%s', %ld)\n", FilePath, MemoryType);
+    PELOADER_TRACE("PeLdrLoadImage('%s', %ld)\n", FilePath, MemoryType);
     DbgPrint("PeLdrLoadImageEx: Opening file '%s'\n", FilePath);
 
     /* Open the image file */
@@ -947,7 +958,7 @@ PeLdrLoadImageEx(
     /* This is the real image base, in form of a virtual address */
     VirtualBase = KernelMapping ? PaToVa(PhysicalBase) : PhysicalBase;
 
-    TRACE("Base PA: 0x%p, VA: 0x%p\n", PhysicalBase, VirtualBase);
+    PELOADER_TRACE("Base PA: 0x%p, VA: 0x%p\n", PhysicalBase, VirtualBase);
 
     /* Copy headers from already read data */
     RtlCopyMemory(PhysicalBase, HeadersBuffer, min(NtHeaders->OptionalHeader.SizeOfHeaders, sizeof(HeadersBuffer)));
@@ -1006,7 +1017,7 @@ PeLdrLoadImageEx(
             Position.QuadPart = SectionHeader->PointerToRawData;
             Status = ArcSeek(FileId, &Position, SeekAbsolute);
 
-            //TODO keep this TRACE("SH->VA: 0x%X\n", SectionHeader->VirtualAddress);
+            //TODO keep this PELOADER_TRACE("SH->VA: 0x%X\n", SectionHeader->VirtualAddress);
 
             /* Read this section from the file, size = SizeOfRawData */
             Status = ArcRead(FileId, (PUCHAR)PhysicalBase + SectionHeader->VirtualAddress, SizeOfRawData, &BytesRead);
@@ -1020,7 +1031,7 @@ PeLdrLoadImageEx(
         /* Size of data is less than the virtual size: fill up the remainder with zeroes */
         if (SizeOfRawData < VirtualSize)
         {
-            //TODO keep this TRACE("PeLdrLoadImage(): SORD %d < VS %d\n", SizeOfRawData, VirtualSize);
+            //TODO keep this PELOADER_TRACE("PeLdrLoadImage(): SORD %d < VS %d\n", SizeOfRawData, VirtualSize);
             RtlZeroMemory((PVOID)(SectionHeader->VirtualAddress + (ULONG_PTR)PhysicalBase + SizeOfRawData), VirtualSize - SizeOfRawData);
         }
 
@@ -1056,7 +1067,7 @@ PeLdrLoadImageEx(
     /* Fill output parameters */
     *ImageBasePA = PhysicalBase;
 
-    TRACE("PeLdrLoadImage() done, PA = %p\n", *ImageBasePA);
+    PELOADER_TRACE("PeLdrLoadImage() done, PA = %p\n", *ImageBasePA);
     return TRUE;
 
 Failure:
