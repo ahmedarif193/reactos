@@ -25,6 +25,16 @@
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(FILESYSTEM);
 
+#ifndef FREELDR_VERBOSE_FAT_LOOKUP
+#define FREELDR_VERBOSE_FAT_LOOKUP 0
+#endif
+
+#if FREELDR_VERBOSE_FAT_LOOKUP
+#define FS_TRACE(...) FS_TRACE(__VA_ARGS__)
+#else
+#define FS_TRACE(...) ((void)0)
+#endif
+
 /* GLOBALS ********************************************************************/
 
 #define TAG_DEVICE_NAME 'NDsF'
@@ -229,7 +239,7 @@ ARC_STATUS ArcOpen(CHAR* Path, OPENMODE OpenMode, ULONG* FileId)
     ULONG DeviceId;
 
     /* Print status message */
-    TRACE("Opening file '%s'...\n", Path);
+    FS_TRACE("Opening file '%s'...\n", Path);
 
     *FileId = INVALID_FILE_ID;
 
@@ -554,7 +564,7 @@ ULONG FsGetNumPathParts(PCSTR Path)
     }
     num++;
 
-    TRACE("FsGetNumPathParts() Path = %s NumPathParts = %d\n", Path, num);
+    FS_TRACE("FsGetNumPathParts() Path = %s NumPathParts = %d\n", Path, num);
 
     return num;
 }
@@ -589,7 +599,7 @@ VOID FsGetFirstNameFromPath(PCHAR Buffer, PCSTR Path)
 
     Buffer[i] = 0;
 
-    TRACE("FsGetFirstNameFromPath() Path = %s FirstName = %s\n", Path, Buffer);
+    FS_TRACE("FsGetFirstNameFromPath() Path = %s FirstName = %s\n", Path, Buffer);
 }
 
 VOID
@@ -600,7 +610,7 @@ FsRegisterDevice(
     DEVICE* pNewEntry;
     SIZE_T Length;
 
-    TRACE("FsRegisterDevice(%s)\n", DeviceName);
+    FS_TRACE("FsRegisterDevice(%s)\n", DeviceName);
 
     Length = strlen(DeviceName) + 1;
     pNewEntry = FrLdrTempAlloc(sizeof(DEVICE) + Length, TAG_DEVICE);

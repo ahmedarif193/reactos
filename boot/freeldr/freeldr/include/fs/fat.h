@@ -173,3 +173,4 @@ typedef struct
 #define ISFATX(FT) ((FT) == FATX16 || (FT) == FATX32)
 
 const DEVVTBL* FatMount(ULONG DeviceId);
+VOID FatFlushCache(VOID);
