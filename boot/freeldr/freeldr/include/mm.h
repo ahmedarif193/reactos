@@ -117,6 +117,8 @@ extern PVOID PageLookupTableAddress;
 extern PFN_NUMBER TotalPagesInLookupTable;
 extern PFN_NUMBER FreePagesInLookupTable;
 extern PFN_NUMBER LastFreePageHint;
+extern PFN_NUMBER MmLowestPhysicalPage;
+extern PFN_NUMBER MmHighestPhysicalPage;
 
 PCSTR MmGetSystemMemoryMapTypeString(TYPE_OF_MEMORY Type);
 

@@ -441,7 +441,7 @@ FrLdrHeapFreeEx(
     ULONGLONG Time = __rdtsc();
 #endif
 
-    TRACE("HeapFree(%p, %p)\n", HeapHandle, Pointer);
+    //TRACE("HeapFree(%p, %p)\n", HeapHandle, Pointer);
     ASSERT(Tag != 'dnE#');
 
 #ifdef FREELDR_HEAP_VERIFIER

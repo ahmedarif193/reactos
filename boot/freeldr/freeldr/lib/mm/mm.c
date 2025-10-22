@@ -214,6 +214,68 @@ PVOID MmAllocateHighestMemoryBelowAddress(SIZE_T MemorySize, PVOID DesiredAddres
 
 VOID MmFreeMemory(PVOID MemoryPointer)
 {
+    PPAGE_LOOKUP_TABLE_ITEM LookupTable;
+    PFN_NUMBER StartPageNumber;
+    PFN_NUMBER EntryIndex;
+    PFN_NUMBER PageCount;
+
+    if (!MemoryPointer)
+        return;
+
+    LookupTable = (PPAGE_LOOKUP_TABLE_ITEM)PageLookupTableAddress;
+    StartPageNumber = MmGetPageNumberFromAddress(MemoryPointer);
+
+    if (StartPageNumber < MmLowestPhysicalPage ||
+        StartPageNumber > MmHighestPhysicalPage)
+    {
+        WARN("MmFreeMemory(): address %p outside tracked range (%lx-%lx)\n",
+             MemoryPointer,
+             MmLowestPhysicalPage,
+             MmHighestPhysicalPage);
+        return;
+    }
+
+    EntryIndex = StartPageNumber - MmLowestPhysicalPage;
+    PageCount = LookupTable[EntryIndex].PageAllocationLength;
+
+    if (PageCount == 0)
+    {
+        /*
+         * Either the caller passed a non-base pointer or the lookup table was
+         * already reset. Walk backwards to find the allocation head once.
+         */
+        PFN_NUMBER ScanIndex = EntryIndex;
+
+        while (ScanIndex > 0 &&
+               LookupTable[ScanIndex].PageAllocationLength == 0 &&
+               LookupTable[ScanIndex].PageAllocated == LookupTable[EntryIndex].PageAllocated)
+        {
+            --ScanIndex;
+            if (LookupTable[ScanIndex].PageAllocationLength != 0)
+            {
+                EntryIndex = ScanIndex;
+                StartPageNumber = EntryIndex + MmLowestPhysicalPage;
+                PageCount = LookupTable[EntryIndex].PageAllocationLength;
+                break;
+            }
+        }
+    }
+
+    if (PageCount == 0)
+    {
+        WARN("MmFreeMemory(): unable to determine allocation length for %p\n",
+             MemoryPointer);
+        return;
+    }
+
+    MmMarkPagesInLookupTable(PageLookupTableAddress,
+                             StartPageNumber,
+                             PageCount,
+                             LoaderFree);
+
+    FreePagesInLookupTable += PageCount;
+
+    MmUpdateLastFreePageHint(PageLookupTableAddress, TotalPagesInLookupTable);
 }
 
 #if DBG
