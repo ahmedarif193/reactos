@@ -8,7 +8,9 @@
 #include <freeldr.h>
 #include <debug.h>
 #include <fs/fat.h>
+#include <disk.h>
 #include "ramdisk.h"
+#include "ramdisk_signature.h"
 
 #ifndef ARRAYSIZE
 #define ARRAYSIZE(x) (sizeof(x) / sizeof((x)[0]))
@@ -89,10 +91,12 @@ ComputeFatLayout(IN ULONG TotalSectors,
     return FALSE;
 }
 
+static
 BOOLEAN
-RamDiskFormatFat32(IN PVOID BaseAddress,
-                   IN ULONGLONG DiskSize,
-                   OUT PRAMDISK_FAT32_LAYOUT Layout)
+FormatFat32Volume(IN PUCHAR VolumeBase,
+                  IN ULONGLONG VolumeSize,
+                  IN ULONG HiddenSectors,
+                  OUT PRAMDISK_FAT32_LAYOUT Layout)
 {
     static const UCHAR ClusterCandidates[] = { 128, 64, 32, 16, 8, 4, 2, 1 };
     PFAT32_BOOTSECTOR BootSector;
@@ -111,16 +115,16 @@ RamDiskFormatFat32(IN PVOID BaseAddress,
     PUCHAR Buffer;
     PULONG FatTable;
 
-    if (!BaseAddress)
+    if (!VolumeBase)
         return FALSE;
 
-    if (DiskSize == 0 || DiskSize > MAXULONG)
+    if (VolumeSize == 0 || VolumeSize > MAXULONG)
         return FALSE;
 
-    if ((DiskSize % BytesPerSector) != 0)
+    if ((VolumeSize % BytesPerSector) != 0)
         return FALSE;
 
-    TotalSectors = (ULONG)(DiskSize / BytesPerSector);
+    TotalSectors = (ULONG)(VolumeSize / BytesPerSector);
     if (TotalSectors <= (ReservedSectors + NumberOfFats))
         return FALSE;
 
@@ -150,10 +154,10 @@ RamDiskFormatFat32(IN PVOID BaseAddress,
     if (SectorsPerCluster == 0)
         return FALSE;
 
-    ByteSize = (SIZE_T)DiskSize;
-    RtlZeroMemory(BaseAddress, ByteSize);
+    ByteSize = (SIZE_T)VolumeSize;
+    RtlZeroMemory(VolumeBase, ByteSize);
 
-    BootSector = (PFAT32_BOOTSECTOR)BaseAddress;
+    BootSector = (PFAT32_BOOTSECTOR)VolumeBase;
     BootSector->JumpBoot[0] = 0xEB;
     BootSector->JumpBoot[1] = 0x58;
     BootSector->JumpBoot[2] = 0x90;
@@ -168,7 +172,7 @@ RamDiskFormatFat32(IN PVOID BaseAddress,
     BootSector->SectorsPerFat = 0;
     BootSector->SectorsPerTrack = DEFAULT_SECTORS_PER_TRACK;
     BootSector->NumberOfHeads = DEFAULT_NUMBER_OF_HEADS;
-    BootSector->HiddenSectors = 0;
+    BootSector->HiddenSectors = HiddenSectors;
     BootSector->TotalSectorsBig = TotalSectors;
     BootSector->SectorsPerFatBig = FatSize;
     BootSector->ExtendedFlags = 0;
@@ -185,7 +189,7 @@ RamDiskFormatFat32(IN PVOID BaseAddress,
     RtlCopyMemory(BootSector->FileSystemType, "FAT32   ", sizeof(BootSector->FileSystemType));
     BootSector->BootSectorMagic = 0xAA55;
 
-    FsInfo = (PFAT32_FSINFO_RECORD)((PUCHAR)BaseAddress + BytesPerSector * BootSector->FsInfo);
+    FsInfo = (PFAT32_FSINFO_RECORD)(VolumeBase + BytesPerSector * BootSector->FsInfo);
     FsInfo->LeadSignature = 0x41615252;
     RtlZeroMemory(FsInfo->Reserved1, sizeof(FsInfo->Reserved1));
     FsInfo->StructSignature = 0x61417272;
@@ -197,18 +201,18 @@ RamDiskFormatFat32(IN PVOID BaseAddress,
     /* Create backup copies of the boot sector and FSINFO if they fit in the reserved region. */
     if (BootSector->BackupBootSector < ReservedSectors)
     {
-        PUCHAR BackupBoot = (PUCHAR)BaseAddress + BytesPerSector * BootSector->BackupBootSector;
+        PUCHAR BackupBoot = VolumeBase + BytesPerSector * BootSector->BackupBootSector;
         RtlCopyMemory(BackupBoot, BootSector, BytesPerSector);
 
         if (BootSector->BackupBootSector + 1U < ReservedSectors)
         {
-            PUCHAR BackupFsInfo = (PUCHAR)BaseAddress + BytesPerSector * (BootSector->BackupBootSector + 1U);
+            PUCHAR BackupFsInfo = VolumeBase + BytesPerSector * (BootSector->BackupBootSector + 1U);
             RtlCopyMemory(BackupFsInfo, FsInfo, BytesPerSector);
         }
     }
 
     /* Initialize both FATs. */
-    Buffer = (PUCHAR)BaseAddress + (ReservedSectors * BytesPerSector);
+    Buffer = VolumeBase + (ReservedSectors * BytesPerSector);
     for (ULONG FatIndex = 0; FatIndex < NumberOfFats; ++FatIndex)
     {
         FatTable = (PULONG)(Buffer + (FatIndex * FatSize * BytesPerSector));
@@ -230,7 +234,61 @@ RamDiskFormatFat32(IN PVOID BaseAddress,
         Layout->FirstDataSector = FirstDataSector;
         Layout->RootDirFirstCluster = DEFAULT_ROOT_DIR_CLUSTER;
         Layout->TotalSectors = TotalSectors;
+        Layout->HiddenSectors = HiddenSectors;
+        Layout->VolumeSizeBytes = VolumeSize;
     }
+
+    return TRUE;
+}
+
+BOOLEAN
+RamDiskFormatFat32(IN PVOID BaseAddress,
+                   IN ULONGLONG DiskSize,
+                   OUT PRAMDISK_FAT32_LAYOUT Layout)
+{
+    const ULONG BytesPerSector = DEFAULT_BYTES_PER_SECTOR;
+    ULONGLONG MinimumSize;
+    PUCHAR VolumeBase;
+    ULONGLONG VolumeSize;
+    RAMDISK_FAT32_LAYOUT LocalLayout;
+    PRAMDISK_FAT32_LAYOUT LayoutOut;
+    PMASTER_BOOT_RECORD MasterBootRecord;
+    ULONG PartitionSectors;
+
+    if (!BaseAddress)
+        return FALSE;
+
+    MinimumSize = (ULONGLONG)BytesPerSector * 2ULL;
+    if (DiskSize < MinimumSize || (DiskSize % BytesPerSector) != 0)
+        return FALSE;
+
+    VolumeBase = (PUCHAR)BaseAddress + BytesPerSector;
+    VolumeSize = DiskSize - BytesPerSector;
+    LayoutOut = Layout ? Layout : &LocalLayout;
+
+    if (!FormatFat32Volume(VolumeBase, VolumeSize, 1, LayoutOut))
+        return FALSE;
+
+    MasterBootRecord = (PMASTER_BOOT_RECORD)BaseAddress;
+    RtlZeroMemory(MasterBootRecord, BytesPerSector);
+
+    MasterBootRecord->Signature = RamDiskDeriveDiskSignature(BaseAddress, DiskSize);
+    MasterBootRecord->PartitionTable[0].BootIndicator = 0x80;
+    MasterBootRecord->PartitionTable[0].StartHead = 0x00;
+    MasterBootRecord->PartitionTable[0].StartSector = 0x02; /* LBA 1 */
+    MasterBootRecord->PartitionTable[0].StartCylinder = 0x00;
+    MasterBootRecord->PartitionTable[0].SystemIndicator = PARTITION_FAT32_XINT13;
+    MasterBootRecord->PartitionTable[0].EndHead = 0xFE;
+    MasterBootRecord->PartitionTable[0].EndSector = 0xFF;
+    MasterBootRecord->PartitionTable[0].EndCylinder = 0xFF;
+    MasterBootRecord->PartitionTable[0].SectorCountBeforePartition = 1;
+
+    PartitionSectors = LayoutOut->TotalSectors;
+    if (PartitionSectors == 0)
+        return FALSE;
+
+    MasterBootRecord->PartitionTable[0].PartitionSectorCount = PartitionSectors;
+    MasterBootRecord->MasterBootRecordMagic = 0xAA55;
 
     return TRUE;
 }

@@ -19,6 +19,8 @@ typedef struct _RAMDISK_FAT32_LAYOUT
     ULONG FirstDataSector;
     ULONG RootDirFirstCluster;
     ULONG TotalSectors;
+    ULONG HiddenSectors;
+    ULONGLONG VolumeSizeBytes;
 } RAMDISK_FAT32_LAYOUT, *PRAMDISK_FAT32_LAYOUT;
 
 ARC_STATUS
@@ -45,13 +47,6 @@ BOOLEAN
 RamDiskFormatFat32(IN PVOID BaseAddress,
                    IN ULONGLONG DiskSize,
                    OUT PRAMDISK_FAT32_LAYOUT Layout OPTIONAL);
-
-BOOLEAN
-RamDiskBuildWritableImage(IN PVOID IsoBase,
-                          IN ULONGLONG IsoSize,
-                          IN ULONGLONG RequestedSize,
-                          OUT PVOID *NewBase,
-                          OUT ULONGLONG *NewSize);
 
 extern PVOID gInitRamDiskBase;
 extern ULONG gInitRamDiskSize;
