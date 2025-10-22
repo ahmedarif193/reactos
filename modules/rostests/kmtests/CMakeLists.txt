@@ -81,6 +81,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoIrp.c
     ntos_io/IoMdl.c
     ntos_io/IoVolume.c
+    ${REACTOS_SOURCE_DIR}/boot/tests/ramdisk/RamdiskIoctl.c
     ntos_kd/KdSystemDebugControl.c
     ntos_ke/KeApc.c
     ntos_ke/KeDevQueue.c
@@ -178,6 +179,7 @@ list(APPEND KMTEST_SOURCE
     ntos_mm/MmMapLockedPagesSpecifyCache_user.c
     ntos_mm/NtCreateSection_user.c
     ntos_po/PoIrp_user.c
+    ${REACTOS_SOURCE_DIR}/boot/tests/ramdisk/RamdiskIoctl_user.c
     tcpip/TcpIp_user.c
     ${COMMON_SOURCE}
 

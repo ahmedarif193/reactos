@@ -38,6 +38,7 @@ KMT_TESTFUNC Test_IoInterrupt;
 KMT_TESTFUNC Test_IoIrp;
 KMT_TESTFUNC Test_IoMdl;
 KMT_TESTFUNC Test_IoVolume;
+KMT_TESTFUNC Test_RamdiskIoctl;
 KMT_TESTFUNC Test_KdSystemDebugControl;
 KMT_TESTFUNC Test_KeApc;
 KMT_TESTFUNC Test_KeDeviceQueue;
@@ -125,6 +126,7 @@ const KMT_TEST TestList[] =
     { "IoIrp",                              Test_IoIrp },
     { "IoMdl",                              Test_IoMdl },
     { "IoVolume",                           Test_IoVolume },
+    { "RamdiskIoctl",                       Test_RamdiskIoctl },
     { "KdSystemDebugControl",               Test_KdSystemDebugControl },
     { "KeApc",                              Test_KeApc },
     { "KeDeviceQueue",                      Test_KeDeviceQueue },
