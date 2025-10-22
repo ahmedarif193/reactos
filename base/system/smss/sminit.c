@@ -1600,7 +1600,7 @@ SmpInitializeKnownDllsInternal(IN PUNICODE_STRING Directory,
                                    &RegEntry->Value,
                                    OBJ_PERMANENT,
                                    DirHandle,
-                                   SmpLiberalSecurityDescriptor)
+                                   SmpLiberalSecurityDescriptor);
         Status = NtCreateSection(&SectionHandle,
                                  SECTION_ALL_ACCESS,
                                  &ObjectAttributes,
