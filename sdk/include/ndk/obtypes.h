@@ -41,14 +41,30 @@ Author:
 #define OBJ_FORCE_ACCESS_CHECK                  0x00000400L
 #define OBJ_VALID_ATTRIBUTES                    0x000007F2L
 
-#define InitializeObjectAttributes(p,n,a,r,s) { \
-    (p)->Length = sizeof(OBJECT_ATTRIBUTES);    \
-    (p)->RootDirectory = (r);                   \
-    (p)->Attributes = (a);                      \
-    (p)->ObjectName = (n);                      \
-    (p)->SecurityDescriptor = (s);              \
-    (p)->SecurityQualityOfService = NULL;       \
-}
+#ifndef __NTK_OBTYPES_INITIALIZE_OBJECT_ATTRIBUTES_ZERO
+#if defined(RtlZeroMemory)
+#define __NTK_OBTYPES_INITIALIZE_OBJECT_ATTRIBUTES_ZERO(Buffer, Length) \
+    RtlZeroMemory((Buffer), (Length))
+#else
+#define __NTK_OBTYPES_INITIALIZE_OBJECT_ATTRIBUTES_ZERO(Buffer, Length) do { \
+    SIZE_T __ntk_obtypes_init_len = (Length); \
+    unsigned char *__ntk_obtypes_init_ptr = (unsigned char *)(Buffer); \
+    while (__ntk_obtypes_init_len--) \
+        *__ntk_obtypes_init_ptr++ = 0; \
+} while (0)
+#endif
+#endif
+
+#define InitializeObjectAttributes(p,n,a,r,s) do { \
+    POBJECT_ATTRIBUTES _p = (p); \
+    __NTK_OBTYPES_INITIALIZE_OBJECT_ATTRIBUTES_ZERO(_p, sizeof(*_p)); \
+    _p->Length = sizeof(OBJECT_ATTRIBUTES); \
+    _p->RootDirectory = (r); \
+    _p->Attributes = (a); \
+    _p->ObjectName = (n); \
+    _p->SecurityDescriptor = (s); \
+    _p->SecurityQualityOfService = NULL; \
+} while (0)
 
 //
 // Number of custom-defined bits that can be attached to a handle

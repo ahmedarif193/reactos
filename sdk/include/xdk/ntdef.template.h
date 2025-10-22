@@ -301,14 +301,31 @@ typedef CONST OBJECT_ATTRIBUTES64 *PCOBJECT_ATTRIBUTES64;
 #define OBJ_VALID_ATTRIBUTES    0x000007F2L
 
 /* Helper Macro */
-#define InitializeObjectAttributes(p,n,a,r,s) { \
-  (p)->Length = sizeof(OBJECT_ATTRIBUTES); \
-  (p)->RootDirectory = (r); \
-  (p)->ObjectName = (n); \
-  (p)->Attributes = (a); \
-  (p)->SecurityDescriptor = (s); \
-  (p)->SecurityQualityOfService = NULL; \
-}
+#ifndef __NTDEF_INITIALIZE_OBJECT_ATTRIBUTES_ZERO
+#if defined(RtlZeroMemory)
+#define __NTDEF_INITIALIZE_OBJECT_ATTRIBUTES_ZERO(Buffer, Length) \
+    RtlZeroMemory((Buffer), (Length))
+#else
+#define __NTDEF_INITIALIZE_OBJECT_ATTRIBUTES_ZERO(Buffer, Length) do { \
+    SIZE_T __ntdef_init_len = (Length); \
+    unsigned char *__ntdef_init_ptr = (unsigned char *)(Buffer); \
+    while (__ntdef_init_len--) \
+        *__ntdef_init_ptr++ = 0; \
+} while (0)
+#endif
+#define __NTDEF_INITIALIZE_OBJECT_ATTRIBUTES_ZERO_DEFINED
+#endif
+
+#define InitializeObjectAttributes(p,n,a,r,s) do { \
+  POBJECT_ATTRIBUTES _p = (p); \
+  __NTDEF_INITIALIZE_OBJECT_ATTRIBUTES_ZERO(_p, sizeof(*_p)); \
+  _p->Length = sizeof(OBJECT_ATTRIBUTES); \
+  _p->RootDirectory = (r); \
+  _p->Attributes = (a); \
+  _p->ObjectName = (n); \
+  _p->SecurityDescriptor = (s); \
+  _p->SecurityQualityOfService = NULL; \
+} while (0)
 
 #define RTL_CONSTANT_OBJECT_ATTRIBUTES(n,a) { \
   sizeof(OBJECT_ATTRIBUTES), \

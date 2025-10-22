@@ -5350,14 +5350,32 @@ NTSYSAPI NTSTATUS WINAPI wine_unix_to_nt_file_name( const char *name, WCHAR *buf
  * Inline functions
  */
 
+#ifndef __WINE_WINTERNL_INITIALIZE_OBJECT_ATTRIBUTES_ZERO
+#if defined(RtlZeroMemory)
+#define __WINE_WINTERNL_INITIALIZE_OBJECT_ATTRIBUTES_ZERO(Buffer, Length) \
+        RtlZeroMemory((Buffer), (Length))
+#else
+#define __WINE_WINTERNL_INITIALIZE_OBJECT_ATTRIBUTES_ZERO(Buffer, Length) \
+        do { \
+            SIZE_T __wine_winternl_init_len = (Length); \
+            unsigned char *__wine_winternl_init_ptr = (unsigned char *)(Buffer); \
+            while (__wine_winternl_init_len--) \
+                *__wine_winternl_init_ptr++ = 0; \
+        } while (0)
+#endif
+#define __WINE_WINTERNL_INITIALIZE_OBJECT_ATTRIBUTES_ZERO_DEFINED
+#endif
+
 #define InitializeObjectAttributes(p,n,a,r,s) \
     do { \
-        (p)->Length = sizeof(OBJECT_ATTRIBUTES); \
-        (p)->RootDirectory = r; \
-        (p)->Attributes = a; \
-        (p)->ObjectName = n; \
-        (p)->SecurityDescriptor = s; \
-        (p)->SecurityQualityOfService = NULL; \
+        POBJECT_ATTRIBUTES _p = (p); \
+        __WINE_WINTERNL_INITIALIZE_OBJECT_ATTRIBUTES_ZERO(_p, sizeof(*_p)); \
+        _p->Length = sizeof(OBJECT_ATTRIBUTES); \
+        _p->RootDirectory = (r); \
+        _p->Attributes = (a); \
+        _p->ObjectName = (n); \
+        _p->SecurityDescriptor = (s); \
+        _p->SecurityQualityOfService = NULL; \
     } while (0)
 
 #define NtCurrentProcess() ((HANDLE)~(ULONG_PTR)0)

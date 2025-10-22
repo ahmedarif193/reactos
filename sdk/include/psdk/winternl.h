@@ -233,15 +233,36 @@ typedef struct _OBJECT_ATTRIBUTES
 #define OBJ_VALID_ATTRIBUTES   0x000007F2L
 
 #ifndef InitializeObjectAttributes
-#define InitializeObjectAttributes(p, n, a, r, s) \
-{                                                 \
-    (p)->Length = sizeof(OBJECT_ATTRIBUTES);      \
-    (p)->RootDirectory = r;                       \
-    (p)->Attributes = a;                          \
-    (p)->ObjectName = n;                          \
-    (p)->SecurityDescriptor = s;                  \
-    (p)->SecurityQualityOfService = NULL;         \
-}
+#ifndef __PSDK_WINTERNL_INITIALIZE_OBJECT_ATTRIBUTES_ZERO
+#if defined(RtlZeroMemory)
+#define __PSDK_WINTERNL_INITIALIZE_OBJECT_ATTRIBUTES_ZERO(Buffer, Length) \
+    RtlZeroMemory((Buffer), (Length))
+#else
+#define __PSDK_WINTERNL_INITIALIZE_OBJECT_ATTRIBUTES_ZERO(Buffer, Length) do { \
+    SIZE_T __psdk_winternl_init_len = (Length); \
+    unsigned char *__psdk_winternl_init_ptr = (unsigned char *)(Buffer); \
+    while (__psdk_winternl_init_len--) \
+        *__psdk_winternl_init_ptr++ = 0; \
+} while (0)
+#endif
+#define __PSDK_WINTERNL_INITIALIZE_OBJECT_ATTRIBUTES_ZERO_DEFINED
+#endif
+
+#define InitializeObjectAttributes(p, n, a, r, s) do { \
+    POBJECT_ATTRIBUTES _p = (p); \
+    __PSDK_WINTERNL_INITIALIZE_OBJECT_ATTRIBUTES_ZERO(_p, sizeof(*_p)); \
+    _p->Length = sizeof(OBJECT_ATTRIBUTES); \
+    _p->RootDirectory = (r); \
+    _p->Attributes = (a); \
+    _p->ObjectName = (n); \
+    _p->SecurityDescriptor = (s); \
+    _p->SecurityQualityOfService = NULL; \
+} while (0)
+
+#ifdef __PSDK_WINTERNL_INITIALIZE_OBJECT_ATTRIBUTES_ZERO_DEFINED
+#undef __PSDK_WINTERNL_INITIALIZE_OBJECT_ATTRIBUTES_ZERO
+#undef __PSDK_WINTERNL_INITIALIZE_OBJECT_ATTRIBUTES_ZERO_DEFINED
+#endif
 #endif
 
 typedef struct _IO_STATUS_BLOCK {
