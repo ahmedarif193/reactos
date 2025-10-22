@@ -690,6 +690,16 @@ FstubDetectPartitionStyle(IN PDISK_INFORMATION Disk,
 
     /* Get the partition descriptor array */
     PartitionDescriptor = (PPARTITION_DESCRIPTOR)&Disk->Buffer[PARTITION_TABLE_OFFSET];
+    {
+        USHORT Signature = *(PUSHORT)&Disk->Buffer[BOOT_SIGNATURE_OFFSET];
+        DPRINT1("FstubDetectPartitionStyle: sig=%04x types=%02x %02x %02x %02x sectorSize=%lu\n",
+                Signature,
+                PartitionDescriptor[0].PartitionType,
+                PartitionDescriptor[1].PartitionType,
+                PartitionDescriptor[2].PartitionType,
+                PartitionDescriptor[3].PartitionType,
+                Disk->SectorSize);
+    }
     /* If we have not the 0xAA55 then it's raw partition */
     if (*(PUINT16)&Disk->Buffer[BOOT_SIGNATURE_OFFSET] != BOOT_RECORD_SIGNATURE)
     {
