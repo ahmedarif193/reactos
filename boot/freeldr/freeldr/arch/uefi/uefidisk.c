@@ -585,6 +585,12 @@ UefiInitializeBootDevices(VOID)
     /* Use a larger bouncing buffer than a single EFI page to speed up ISO reads */
     {
         SIZE_T PreferredBufferSize = FrLdrGetRecommendedDiskBufferSize(0);
+
+        if (PreferredBufferSize < (SIZE_T)(1024 * 1024))
+            PreferredBufferSize = (SIZE_T)(1024 * 1024);
+
+        PreferredBufferSize = (PreferredBufferSize + EFI_PAGE_SIZE - 1) & ~((SIZE_T)EFI_PAGE_SIZE - 1);
+
         DiskReadBufferSize = PreferredBufferSize;
         DiskReadBuffer = MmAllocateMemoryWithType(DiskReadBufferSize, LoaderFirmwareTemporary);
     }
@@ -639,6 +645,43 @@ UefiInitializeBootDevices(VOID)
         {
             ERR("Failed to query block protocol for boot device (Status=%lx)\n", (ULONG_PTR)Status);
             return FALSE;
+        }
+
+        if (BootBlockIo->Media)
+        {
+            SIZE_T BlockSize = BootBlockIo->Media->BlockSize ? BootBlockIo->Media->BlockSize : 2048;
+            SIZE_T Granularity = BootBlockIo->Media->OptimalTransferLengthGranularity;
+            SIZE_T DesiredSize;
+
+            if (Granularity != 0)
+            {
+                DesiredSize = BlockSize * Granularity;
+            }
+            else
+            {
+                DesiredSize = BlockSize * 512;
+            }
+
+            if (DesiredSize < (SIZE_T)(1024 * 1024))
+                DesiredSize = (SIZE_T)(1024 * 1024);
+
+            if (DesiredSize > (SIZE_T)(8 * 1024 * 1024))
+                DesiredSize = (SIZE_T)(8 * 1024 * 1024);
+
+            DesiredSize = (DesiredSize + EFI_PAGE_SIZE - 1) & ~((SIZE_T)EFI_PAGE_SIZE - 1);
+
+            if (DesiredSize > DiskReadBufferSize)
+            {
+                PVOID NewBuffer = MmAllocateMemoryWithType(DesiredSize, LoaderFirmwareTemporary);
+                if (NewBuffer)
+                {
+                    if (DiskReadBuffer)
+                        MmFreeMemory(DiskReadBuffer);
+
+                    DiskReadBuffer = NewBuffer;
+                    DiskReadBufferSize = DesiredSize;
+                }
+            }
         }
 
         /* Sanity-check read buffer size */
