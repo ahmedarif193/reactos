@@ -18,6 +18,93 @@
 
 extern KEVENT PiEnumerationFinished;
 
+static
+VOID
+IopAcquireBootRamdiskGuid(
+    _Out_ PGUID DiskGuid)
+{
+    static const UNICODE_STRING ParametersKey = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\Ramdisk\\Parameters");
+    static const UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"BootDiskGuid");
+    UNICODE_STRING RamdiskKey = RTL_CONSTANT_STRING(L"Ramdisk");
+    UNICODE_STRING ParametersSubKey = RTL_CONSTANT_STRING(L"Ramdisk\\Parameters");
+    GUID GuidValue = RAMDISK_BOOTDISK_GUID;
+    HANDLE KeyHandle = NULL;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    NTSTATUS Status;
+    BOOLEAN HaveGuid = FALSE;
+
+    RtlCreateRegistryKey(RTL_REGISTRY_SERVICES, RamdiskKey.Buffer);
+    RtlCreateRegistryKey(RTL_REGISTRY_SERVICES, ParametersSubKey.Buffer);
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               (PUNICODE_STRING)&ParametersKey,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+
+    Status = ZwOpenKey(&KeyHandle, KEY_READ | KEY_WRITE, &ObjectAttributes);
+    if (NT_SUCCESS(Status))
+    {
+        ULONG ResultLength = 0;
+        PKEY_VALUE_PARTIAL_INFORMATION ValueInfo = NULL;
+
+        Status = ZwQueryValueKey(KeyHandle,
+                                 (PUNICODE_STRING)&ValueName,
+                                 KeyValuePartialInformation,
+                                 NULL,
+                                 0,
+                                 &ResultLength);
+        if (Status == STATUS_BUFFER_OVERFLOW || Status == STATUS_BUFFER_TOO_SMALL)
+        {
+            ValueInfo = ExAllocatePoolWithTag(PagedPool, ResultLength, 'giRB');
+            if (ValueInfo)
+            {
+                Status = ZwQueryValueKey(KeyHandle,
+                                          (PUNICODE_STRING)&ValueName,
+                                          KeyValuePartialInformation,
+                                          ValueInfo,
+                                          ResultLength,
+                                          &ResultLength);
+                if (NT_SUCCESS(Status) &&
+                    ValueInfo->Type == REG_BINARY &&
+                    ValueInfo->DataLength == sizeof(GUID))
+                {
+                    RtlCopyMemory(&GuidValue, ValueInfo->Data, sizeof(GUID));
+                    HaveGuid = TRUE;
+                }
+
+                ExFreePoolWithTag(ValueInfo, 'giRB');
+            }
+        }
+
+        if (!HaveGuid)
+        {
+            if (!NT_SUCCESS(ExUuidCreate(&GuidValue)))
+            {
+                GuidValue = RAMDISK_BOOTDISK_GUID;
+            }
+
+            ZwSetValueKey(KeyHandle,
+                          (PUNICODE_STRING)&ValueName,
+                          0,
+                          REG_BINARY,
+                          &GuidValue,
+                          sizeof(GuidValue));
+        }
+
+        ZwClose(KeyHandle);
+    }
+    else
+    {
+        if (!NT_SUCCESS(ExUuidCreate(&GuidValue)))
+        {
+            GuidValue = RAMDISK_BOOTDISK_GUID;
+        }
+    }
+
+    *DiskGuid = GuidValue;
+}
+
 /* FUNCTIONS ******************************************************************/
 
 static
@@ -180,7 +267,7 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     PMEMORY_ALLOCATION_DESCRIPTOR MemoryDescriptor;
     PMEMORY_ALLOCATION_DESCRIPTOR BestDescriptor;
     NTSTATUS Status;
-    PCHAR CommandLine, Offset, OffsetValue, Length, LengthValue;
+    PCHAR CommandLine, OffsetValue, LengthValue;
     HANDLE DriverHandle;
     RAMDISK_CREATE_INPUT RamdiskCreate;
     IO_STATUS_BLOCK IoStatusBlock;
@@ -340,7 +427,7 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     RamdiskCreate.BasePage = MemoryDescriptor->BasePage;
     RamdiskCreate.DiskOffset = 0;
     RamdiskCreate.DiskLength.QuadPart = SelectedDescriptorLength;
-    RamdiskCreate.DiskGuid = RAMDISK_BOOTDISK_GUID;
+    IopAcquireBootRamdiskGuid(&RamdiskCreate.DiskGuid);
     RamdiskCreate.DriveLetter = L'X';
     RamdiskCreate.Options.Fixed = TRUE;
     RamdiskCreate.Options.Readonly = FALSE;
@@ -465,6 +552,116 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                sizeof(SourceString)/sizeof(WCHAR),
                L"\\Device\\Ramdisk%wZ",
                &GuidString);
+
+    //
+    // Publish boot ramdisk metadata now that the device path is known.
+    //
+    {
+        WCHAR DiskSubKey[128];
+        WCHAR DosLinkBuffer[32];
+        WCHAR VolumeValueName[72];
+        ULONG DosLetterValue;
+
+        RtlCreateRegistryKey(RTL_REGISTRY_SERVICES, L"Ramdisk");
+        RtlCreateRegistryKey(RTL_REGISTRY_SERVICES, L"Ramdisk\\Parameters");
+        RtlCreateRegistryKey(RTL_REGISTRY_SERVICES, L"Ramdisk\\Parameters\\Disks");
+
+        if (_snwprintf(DiskSubKey,
+                        RTL_NUMBER_OF(DiskSubKey),
+                        L"Ramdisk\\Parameters\\Disks\\%wZ",
+                        &GuidString) >= 0)
+        {
+            DiskSubKey[RTL_NUMBER_OF(DiskSubKey) - 1] = UNICODE_NULL;
+
+            if (NT_SUCCESS(RtlCreateRegistryKey(RTL_REGISTRY_SERVICES, DiskSubKey)))
+            {
+                DosLetterValue = (ULONG)RamdiskCreate.DriveLetter;
+
+                RtlWriteRegistryValue(RTL_REGISTRY_SERVICES,
+                                      DiskSubKey,
+                                      L"DiskGuid",
+                                      REG_BINARY,
+                                      &RamdiskCreate.DiskGuid,
+                                      sizeof(GUID));
+
+                RtlWriteRegistryValue(RTL_REGISTRY_SERVICES,
+                                      DiskSubKey,
+                                      L"DriveLetter",
+                                      REG_DWORD,
+                                      &DosLetterValue,
+                                      sizeof(DosLetterValue));
+
+                RtlWriteRegistryValue(RTL_REGISTRY_SERVICES,
+                                      DiskSubKey,
+                                      L"ServiceName",
+                                      REG_SZ,
+                                      L"ramdisk",
+                                      sizeof(L"ramdisk"));
+
+                RtlWriteRegistryValue(RTL_REGISTRY_SERVICES,
+                                      DiskSubKey,
+                                      L"DevicePath",
+                                      REG_SZ,
+                                      SourceString,
+                                      (ULONG)((wcslen(SourceString) + 1) * sizeof(WCHAR)));
+
+                if (_snwprintf(DosLinkBuffer,
+                                RTL_NUMBER_OF(DosLinkBuffer),
+                                L"\\DosDevices\\%wc:",
+                                RamdiskCreate.DriveLetter ? RamdiskCreate.DriveLetter : L'X') >= 0)
+                {
+                    DosLinkBuffer[RTL_NUMBER_OF(DosLinkBuffer) - 1] = UNICODE_NULL;
+
+                    RtlWriteRegistryValue(RTL_REGISTRY_SERVICES,
+                                          DiskSubKey,
+                                          L"SuggestedDosLink",
+                                          REG_SZ,
+                                          DosLinkBuffer,
+                                          (ULONG)((wcslen(DosLinkBuffer) + 1) * sizeof(WCHAR)));
+                }
+            }
+        }
+
+        RtlCreateRegistryKey(RTL_REGISTRY_ABSOLUTE, L"\\Registry\\Machine\\System\\MountedDevices");
+
+        if (_snwprintf(DosLinkBuffer,
+                        RTL_NUMBER_OF(DosLinkBuffer),
+                        L"\\DosDevices\\%wc:",
+                        RamdiskCreate.DriveLetter ? RamdiskCreate.DriveLetter : L'X') >= 0)
+        {
+            DosLinkBuffer[RTL_NUMBER_OF(DosLinkBuffer) - 1] = UNICODE_NULL;
+
+            RtlWriteRegistryValue(RTL_REGISTRY_ABSOLUTE,
+                                  L"\\Registry\\Machine\\System\\MountedDevices",
+                                  DosLinkBuffer,
+                                  REG_BINARY,
+                                  &RamdiskCreate.DiskGuid,
+                                  sizeof(GUID));
+        }
+
+        if (_snwprintf(VolumeValueName,
+                        RTL_NUMBER_OF(VolumeValueName),
+                        L"\\??\\Volume%wZ",
+                        &GuidString) >= 0)
+        {
+            VolumeValueName[RTL_NUMBER_OF(VolumeValueName) - 1] = UNICODE_NULL;
+
+            RtlWriteRegistryValue(RTL_REGISTRY_ABSOLUTE,
+                                  L"\\Registry\\Machine\\System\\MountedDevices",
+                                  VolumeValueName,
+                                  REG_BINARY,
+                                  &RamdiskCreate.DiskGuid,
+                                  sizeof(GUID));
+        }
+
+        RtlWriteRegistryValue(RTL_REGISTRY_ABSOLUTE,
+                              L"\\Registry\\Machine\\System\\Setup",
+                              L"SystemPartition",
+                              REG_SZ,
+                              SourceString,
+                              (ULONG)((wcslen(SourceString) + 1) * sizeof(WCHAR)));
+    }
+
     SymbolicLinkName.Length = 38;
     SymbolicLinkName.MaximumLength = 38 + sizeof(UNICODE_NULL);
     SymbolicLinkName.Buffer = L"\\ArcName\\ramdisk(0)";
