@@ -9,6 +9,7 @@ REACTOS_SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEFAULT_TOOLCHAIN_ROOT="${HOME}/mingw-toolchains"
 MINGW_X86_64_URL="https://github.com/ahmedarif193/mingw-gcc15.2/releases/download/v15.2/x86_64-w64-mingw32.tar.gz"
 MINGW_I686_URL="https://github.com/ahmedarif193/mingw-gcc15.2/releases/download/v15.2/i686-w64-mingw32.tar.gz"
+MINGW_AARCH64_URL="${MINGW_AARCH64_URL:-}" # Optional external location for the arm64 MinGW toolchain
 MINGW_TOOLCHAIN_BANNER_SHOWN=0
 
 ensure_mingw_toolchain() {
@@ -179,6 +180,9 @@ if [ -z "$ARCH" ] && [ -n "$ROS_ARCH" ]; then
     ARCH="$ROS_ARCH"
 fi
 
+# Normalise architecture to lowercase for downstream matching.
+ARCH="$(echo "$ARCH" | tr '[:upper:]' '[:lower:]')"
+
 #make ENABLE_CCACHE the default behavior, ccache became robust since years (2025 update) 
 [ -z "$ARCH" ] && ARCH="i386"
 [ -z "$BUILD_TYPE" ] && BUILD_TYPE="RelWithDebInfo"
@@ -225,8 +229,27 @@ if [ -z "$TOOLCHAIN_PATH" ]; then
 fi
 
 if [ "$USER_PROVIDED_TOOLCHAIN_PATH" -eq 0 ]; then
-    ensure_mingw_toolchain "x86_64-w64-mingw32" "$MINGW_X86_64_URL"
-    ensure_mingw_toolchain "i686-w64-mingw32" "$MINGW_I686_URL"
+    case "$TOOLCHAIN_PREFIX" in
+        x86_64-w64-mingw32)
+            ensure_mingw_toolchain "x86_64-w64-mingw32" "$MINGW_X86_64_URL"
+            ;;
+        i686-w64-mingw32)
+            ensure_mingw_toolchain "i686-w64-mingw32" "$MINGW_I686_URL"
+            ;;
+        aarch64-w64-mingw32)
+            if [ -n "$MINGW_AARCH64_URL" ]; then
+                ensure_mingw_toolchain "aarch64-w64-mingw32" "$MINGW_AARCH64_URL"
+            fi
+            ;;
+    esac
+fi
+
+if [ ! -d "$TOOLCHAIN_PATH" ]; then
+    cat << EOF >&2
+Error: Toolchain path '$TOOLCHAIN_PATH' does not exist.
+Provide the correct location with --toolchain-path or install the ${TOOLCHAIN_PREFIX} toolchain under ${DEFAULT_TOOLCHAIN_ROOT}.
+EOF
+    exit 1
 fi
 
 ARCH_LOWER=$(echo "$ARCH" | tr '[:upper:]' '[:lower:]')
@@ -280,6 +303,15 @@ cd "$OUTPUT_DIR"
 # Ensure desired toolchain binaries are picked up by CMake's find_program.
 if [ -d "$TOOLCHAIN_PATH" ]; then
     export PATH="$TOOLCHAIN_PATH:$PATH"
+fi
+
+EXPECTED_COMPILER="${TOOLCHAIN_PREFIX}-gcc"
+if ! command -v "$EXPECTED_COMPILER" >/dev/null 2>&1; then
+    cat << EOF >&2
+Error: Expected toolchain binary '$EXPECTED_COMPILER' was not found in PATH.
+Verify that the ${TOOLCHAIN_PREFIX} toolchain is installed in '$TOOLCHAIN_PATH' or pass --toolchain-path to its bin directory.
+EOF
+    exit 1
 fi
 
 if [ -f "CMakeCache.txt" ]; then

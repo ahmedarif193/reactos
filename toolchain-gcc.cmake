@@ -23,6 +23,8 @@ if(NOT DEFINED MINGW_TOOLCHAIN_PREFIX)
         set(MINGW_TOOLCHAIN_PREFIX "x86_64-w64-mingw32-" CACHE STRING "MinGW Toolchain Prefix")
     elseif(ARCH STREQUAL "arm")
         set(MINGW_TOOLCHAIN_PREFIX "arm-mingw32ce-" CACHE STRING "MinGW Toolchain Prefix")
+    elseif(ARCH STREQUAL "arm64")
+        set(MINGW_TOOLCHAIN_PREFIX "aarch64-w64-mingw32-" CACHE STRING "MinGW Toolchain Prefix")
     endif()
 endif()
 
@@ -32,7 +34,20 @@ endif()
 
 # The name of the target operating system
 set(CMAKE_SYSTEM_NAME Windows)
-set(CMAKE_SYSTEM_PROCESSOR i686)
+
+# Select the correct processor triple for the chosen architecture so CMake
+# propagates the right values into try_compile() checks and generated files.
+if(ARCH STREQUAL "i386")
+    set(CMAKE_SYSTEM_PROCESSOR i686)
+elseif(ARCH STREQUAL "amd64")
+    set(CMAKE_SYSTEM_PROCESSOR x86_64)
+elseif(ARCH STREQUAL "arm")
+    set(CMAKE_SYSTEM_PROCESSOR arm)
+elseif(ARCH STREQUAL "arm64")
+    set(CMAKE_SYSTEM_PROCESSOR aarch64)
+else()
+    set(CMAKE_SYSTEM_PROCESSOR i686)
+endif()
 
 # Which tools to use
 require_program(CMAKE_C_COMPILER ${MINGW_TOOLCHAIN_PREFIX}gcc${MINGW_TOOLCHAIN_SUFFIX})
