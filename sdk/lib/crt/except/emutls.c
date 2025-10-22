@@ -9,22 +9,22 @@
 #include <stdint.h>
 #include <string.h>
 
-#include <windef.h>
-#include <winnt.h>
-
-#include <intrin.h>
-
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmacro-redefined"
 #endif
 #define WIN32_NO_STATUS
+#include <windef.h>
+#include <winnt.h>
+#include <intrin.h>
 #include <ndk/rtlfuncs.h>
 #include <ndk/psfuncs.h>
 #undef WIN32_NO_STATUS
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
+
+#include <ntstatus.h>
 
 typedef struct __emutls_control
 {
@@ -234,13 +234,16 @@ EmuTlsGetIndex(__emutls_control *Control)
 
 void *
 __cdecl
-__emutls_get_address(__emutls_control *Control)
+__emutls_get_address(void *ControlPtr)
 {
+    __emutls_control *Control;
     uintptr_t Index;
     PVOID ThreadKey;
     PEMUTLS_THREAD_ENTRY ThreadEntry;
     void **Slot;
     void *Result;
+
+    Control = (__emutls_control *)ControlPtr;
 
     EmuTlsEnsureInitialized();
 
