@@ -1713,7 +1713,9 @@ CreatePortConfig:
                     /* Increment consecutive not-found counter */
                     ConsecutiveNotFoundCount++;
 
-                    SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: ConsecutiveNotFoundCount=%lu (max=%lu)\n",
+                    DbgPrintEx(DPFLTR_DEFAULT_ID,
+                               DPFLTR_ERROR_LEVEL,
+                               "[SCSIPORT] ScsiPortInitialize: ConsecutiveNotFoundCount=%lu (max=%lu)\n",
                                ConsecutiveNotFoundCount,
                                (ULONG)MAX_CONSECUTIVE_NOT_FOUND);
 
