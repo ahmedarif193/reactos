@@ -43,6 +43,38 @@ typedef struct _IO_QUERY
     PVOID Context;
 } IO_QUERY, *PIO_QUERY;
 
+#if defined(__GNUC__)
+#define IOP_NOINLINE __attribute__((noinline))
+#else
+#define IOP_NOINLINE
+#endif
+
+static IOP_NOINLINE NTSTATUS
+IopCreateRegistryKey(
+    _Out_ PHANDLE KeyHandle,
+    _In_ PUNICODE_STRING KeyName,
+    _In_opt_ HANDLE RootHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ ULONG ObjectAttributesFlags,
+    _In_ ULONG CreateOptions,
+    _Out_opt_ PULONG CreateDisposition);
+
+static IOP_NOINLINE NTSTATUS
+IopOpenRegistryKey(
+    _Out_ PHANDLE KeyHandle,
+    _In_ PUNICODE_STRING KeyName,
+    _In_opt_ HANDLE RootHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ ULONG ObjectAttributesFlags);
+
+static IOP_NOINLINE NTSTATUS
+IopOpenSymbolicLink(
+    _Out_ PHANDLE LinkHandle,
+    _In_ PUNICODE_STRING LinkName,
+    _In_opt_ HANDLE RootHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ ULONG ObjectAttributesFlags);
+
 /* Strings corresponding to CONFIGURATION_TYPE */
 PCWSTR ArcTypes[MaximumType + 1] =
 {
@@ -154,8 +186,6 @@ IopQueryDeviceDescription(
     ULONG PeripheralLoop;
     ULONG MaximumPeripheralNumber;
 
-    /* Global Registry data */
-    OBJECT_ATTRIBUTES ObjectAttributes;
     ULONG LenFullInformation;
     ULONG LenKeyFullInformation;
     UNICODE_STRING TempString;
@@ -188,13 +218,11 @@ IopQueryDeviceDescription(
         IORSRCTRACE("    Enumerating controllers in '%wZ'...\n", &ControllerRootRegName);
 
         /* Find out how many controllers there are */
-        InitializeObjectAttributes(&ObjectAttributes,
-                                   &ControllerRootRegName,
-                                   OBJ_CASE_INSENSITIVE,
-                                   NULL,
-                                   NULL);
-
-        Status = ZwOpenKey(&ControllerKeyHandle, KEY_READ, &ObjectAttributes);
+        Status = IopOpenRegistryKey(&ControllerKeyHandle,
+                                    &ControllerRootRegName,
+                                    NULL,
+                                    KEY_READ,
+                                    OBJ_CASE_INSENSITIVE);
 
         if (NT_SUCCESS(Status))
         {
@@ -262,13 +290,11 @@ IopQueryDeviceDescription(
         IORSRCTRACE("    Retrieving controller '%wZ'\n", &ControllerRootRegName);
 
         /* Open the registry key */
-        InitializeObjectAttributes(&ObjectAttributes,
-                                   &ControllerRootRegName,
-                                   OBJ_CASE_INSENSITIVE,
-                                   NULL,
-                                   NULL);
-
-        Status = ZwOpenKey(&ControllerKeyHandle, KEY_READ, &ObjectAttributes);
+        Status = IopOpenRegistryKey(&ControllerKeyHandle,
+                                    &ControllerRootRegName,
+                                    NULL,
+                                    KEY_READ,
+                                    OBJ_CASE_INSENSITIVE);
 
         /* Read the configuration data */
         if (NT_SUCCESS(Status))
@@ -359,13 +385,11 @@ IopQueryDeviceDescription(
             IORSRCTRACE("    Enumerating peripherals in '%wZ'...\n", &ControllerRootRegName);
 
             /* Find out how many peripherals there are */
-            InitializeObjectAttributes(&ObjectAttributes,
-                                       &ControllerRootRegName,
-                                       OBJ_CASE_INSENSITIVE,
-                                       NULL,
-                                       NULL);
-
-            Status = ZwOpenKey(&PeripheralKeyHandle, KEY_READ, &ObjectAttributes);
+            Status = IopOpenRegistryKey(&PeripheralKeyHandle,
+                                        &ControllerRootRegName,
+                                        NULL,
+                                        KEY_READ,
+                                        OBJ_CASE_INSENSITIVE);
 
             if (NT_SUCCESS(Status))
             {
@@ -433,13 +457,11 @@ IopQueryDeviceDescription(
             IORSRCTRACE("    Retrieving peripheral '%wZ'\n", &ControllerRootRegName);
 
             /* Open the registry key */
-            InitializeObjectAttributes(&ObjectAttributes,
-                                       &ControllerRootRegName,
-                                       OBJ_CASE_INSENSITIVE,
-                                       NULL,
-                                       NULL);
-
-            Status = ZwOpenKey(&PeripheralKeyHandle, KEY_READ, &ObjectAttributes);
+            Status = IopOpenRegistryKey(&PeripheralKeyHandle,
+                                        &ControllerRootRegName,
+                                        NULL,
+                                        KEY_READ,
+                                        OBJ_CASE_INSENSITIVE);
 
             if (NT_SUCCESS(Status))
             {
@@ -582,7 +604,6 @@ IopQueryBusDescription(
     HANDLE SubRootKeyHandle;
     PKEY_FULL_INFORMATION FullInformation;
     PKEY_BASIC_INFORMATION BasicInformation = NULL;
-    OBJECT_ATTRIBUTES ObjectAttributes;
     PKEY_VALUE_FULL_INFORMATION BusInformation[IoQueryDeviceMaxData] =
         {NULL, NULL, NULL};
 
@@ -676,13 +697,11 @@ IopQueryBusDescription(
         BusString.MaximumLength = (USHORT)BasicInformation->NameLength;
 
         /* Open a handle to the root registry key */
-        InitializeObjectAttributes(&ObjectAttributes,
-                                   &BusString,
-                                   OBJ_CASE_INSENSITIVE,
-                                   RootKeyHandle,
-                                   NULL);
-
-        Status = ZwOpenKey(&SubRootKeyHandle, KEY_READ, &ObjectAttributes);
+        Status = IopOpenRegistryKey(&SubRootKeyHandle,
+                                    &BusString,
+                                    RootKeyHandle,
+                                    KEY_READ,
+                                    OBJ_CASE_INSENSITIVE);
 
         /* Go on if we failed */
         if (!NT_SUCCESS(Status))
@@ -863,7 +882,6 @@ IopStoreSystemPartitionInformation(
 {
     NTSTATUS Status;
     UNICODE_STRING LinkTarget, KeyName;
-    OBJECT_ATTRIBUTES ObjectAttributes;
     HANDLE LinkHandle, RegistryHandle, KeyHandle;
     WCHAR LinkTargetBuffer[256];
     UNICODE_STRING CmRegistryMachineSystemName = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SYSTEM");
@@ -874,16 +892,12 @@ IopStoreSystemPartitionInformation(
     ASSERT(OsLoaderPathName->Buffer[OsLoaderPathName->Length / sizeof(WCHAR)] == UNICODE_NULL);
 
     /* First define needed stuff to open NtSystemPartitionDeviceName symbolic link */
-    InitializeObjectAttributes(&ObjectAttributes,
-                               NtSystemPartitionDeviceName,
-                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
-                               NULL,
-                               NULL);
-
     /* Open NtSystemPartitionDeviceName symbolic link */
-    Status = ZwOpenSymbolicLinkObject(&LinkHandle,
-                                      SYMBOLIC_LINK_QUERY,
-                                      &ObjectAttributes);
+    Status = IopOpenSymbolicLink(&LinkHandle,
+                                 NtSystemPartitionDeviceName,
+                                 NULL,
+                                 SYMBOLIC_LINK_QUERY,
+                                 OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE);
     if (!NT_SUCCESS(Status))
     {
         DPRINT("Failed to open symlink %wZ, Status=%lx\n", NtSystemPartitionDeviceName, Status);
@@ -1222,7 +1236,6 @@ IoQueryDeviceDescription(
 {
     NTSTATUS Status;
     ULONG BusLoopNumber = -1; /* Root Bus */
-    OBJECT_ATTRIBUTES ObjectAttributes;
     UNICODE_STRING RootRegKey;
     HANDLE RootRegHandle;
     IO_QUERY Query;
@@ -1259,13 +1272,11 @@ IoQueryDeviceDescription(
     RtlAppendUnicodeToString(&RootRegKey, L"\\REGISTRY\\MACHINE\\HARDWARE\\DESCRIPTION\\SYSTEM");
 
     /* Open a handle to the Root Registry Key */
-    InitializeObjectAttributes(&ObjectAttributes,
-                               &RootRegKey,
-                               OBJ_CASE_INSENSITIVE,
-                               NULL,
-                               NULL);
-
-    Status = ZwOpenKey(&RootRegHandle, KEY_READ, &ObjectAttributes);
+    Status = IopOpenRegistryKey(&RootRegHandle,
+                                &RootRegKey,
+                                NULL,
+                                KEY_READ,
+                                OBJ_CASE_INSENSITIVE);
 
     if (NT_SUCCESS(Status))
     {
@@ -1292,6 +1303,83 @@ IoQueryDeviceDescription(
     ExFreePoolWithTag(RootRegKey.Buffer, TAG_IO_RESOURCE);
 
     return Status;
+}
+
+static IOP_NOINLINE NTSTATUS
+IopCreateRegistryKey(
+    _Out_ PHANDLE KeyHandle,
+    _In_ PUNICODE_STRING KeyName,
+    _In_opt_ HANDLE RootHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ ULONG ObjectAttributesFlags,
+    _In_ ULONG CreateOptions,
+    _Out_opt_ PULONG CreateDisposition)
+{
+    OBJECT_ATTRIBUTES LocalAttributes;
+
+    InitializeObjectAttributes(&LocalAttributes,
+                               KeyName,
+                               ObjectAttributesFlags,
+                               RootHandle,
+                               NULL);
+
+    return ZwCreateKey(KeyHandle,
+                       DesiredAccess,
+                       &LocalAttributes,
+                       0,
+                       NULL,
+                       CreateOptions,
+                       CreateDisposition);
+}
+
+static IOP_NOINLINE NTSTATUS
+IopOpenRegistryKey(
+    _Out_ PHANDLE KeyHandle,
+    _In_ PUNICODE_STRING KeyName,
+    _In_opt_ HANDLE RootHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ ULONG ObjectAttributesFlags)
+{
+    OBJECT_ATTRIBUTES LocalAttributes;
+
+    InitializeObjectAttributes(&LocalAttributes,
+                               KeyName,
+                               ObjectAttributesFlags,
+                               RootHandle,
+                               NULL);
+
+    DPRINT1("IopOpenRegistryKey pre: OA@%p len=%lu root=%p name=%wZ attr=%lx sd=%p sqos=%p\n",
+            &LocalAttributes,
+            LocalAttributes.Length,
+            LocalAttributes.RootDirectory,
+            LocalAttributes.ObjectName,
+            LocalAttributes.Attributes,
+            LocalAttributes.SecurityDescriptor,
+            LocalAttributes.SecurityQualityOfService);
+
+    ASSERT(LocalAttributes.SecurityDescriptor == NULL);
+    ASSERT(LocalAttributes.SecurityQualityOfService == NULL);
+
+    return ZwOpenKey(KeyHandle, DesiredAccess, &LocalAttributes);
+}
+
+static IOP_NOINLINE NTSTATUS
+IopOpenSymbolicLink(
+    _Out_ PHANDLE LinkHandle,
+    _In_ PUNICODE_STRING LinkName,
+    _In_opt_ HANDLE RootHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ ULONG ObjectAttributesFlags)
+{
+    OBJECT_ATTRIBUTES LocalAttributes;
+
+    InitializeObjectAttributes(&LocalAttributes,
+                               LinkName,
+                               ObjectAttributesFlags,
+                               RootHandle,
+                               NULL);
+
+    return ZwOpenSymbolicLinkObject(LinkHandle, DesiredAccess, &LocalAttributes);
 }
 
 /**
@@ -1325,7 +1413,6 @@ IoReportHalResourceUsage(
     _In_ ULONG ResourceListSize)
 {
     NTSTATUS Status;
-    OBJECT_ATTRIBUTES ObjectAttributes;
     UNICODE_STRING Name;
     ULONG Disposition;
     HANDLE ResourceMapKey;
@@ -1334,52 +1421,37 @@ IoReportHalResourceUsage(
 
     /* Open/Create 'RESOURCEMAP' key */
     RtlInitUnicodeString(&Name, L"\\Registry\\Machine\\HARDWARE\\RESOURCEMAP");
-    InitializeObjectAttributes(&ObjectAttributes,
-                               &Name,
-                               OBJ_CASE_INSENSITIVE | OBJ_OPENIF,
-                               0,
-                               NULL);
-    Status = ZwCreateKey(&ResourceMapKey,
-                         KEY_ALL_ACCESS,
-                         &ObjectAttributes,
-                         0,
-                         NULL,
-                         REG_OPTION_VOLATILE,
-                         &Disposition);
+    Status = IopCreateRegistryKey(&ResourceMapKey,
+                                  &Name,
+                                  NULL,
+                                  KEY_ALL_ACCESS,
+                                  OBJ_CASE_INSENSITIVE | OBJ_OPENIF,
+                                  REG_OPTION_VOLATILE,
+                                  &Disposition);
     if (!NT_SUCCESS(Status))
         return Status;
 
     /* Open/Create 'Hardware Abstraction Layer' key */
     RtlInitUnicodeString(&Name, L"Hardware Abstraction Layer");
-    InitializeObjectAttributes(&ObjectAttributes,
-                               &Name,
-                               OBJ_CASE_INSENSITIVE | OBJ_OPENIF,
-                               ResourceMapKey,
-                               NULL);
-    Status = ZwCreateKey(&HalKey,
-                         KEY_ALL_ACCESS,
-                         &ObjectAttributes,
-                         0,
-                         NULL,
-                         REG_OPTION_VOLATILE,
-                         &Disposition);
+    Status = IopCreateRegistryKey(&HalKey,
+                                  &Name,
+                                  ResourceMapKey,
+                                  KEY_ALL_ACCESS,
+                                  OBJ_CASE_INSENSITIVE | OBJ_OPENIF,
+                                  REG_OPTION_VOLATILE,
+                                  &Disposition);
     ZwClose(ResourceMapKey);
     if (!NT_SUCCESS(Status))
         return Status;
 
     /* Create 'HalName' key */
-    InitializeObjectAttributes(&ObjectAttributes,
-                               HalName,
-                               OBJ_CASE_INSENSITIVE,
-                               HalKey,
-                               NULL);
-    Status = ZwCreateKey(&DescriptionKey,
-                         KEY_ALL_ACCESS,
-                         &ObjectAttributes,
-                         0,
-                         NULL,
-                         REG_OPTION_VOLATILE,
-                         &Disposition);
+    Status = IopCreateRegistryKey(&DescriptionKey,
+                                  HalName,
+                                  HalKey,
+                                  KEY_ALL_ACCESS,
+                                  OBJ_CASE_INSENSITIVE,
+                                  REG_OPTION_VOLATILE,
+                                  &Disposition);
     ZwClose(HalKey);
     if (!NT_SUCCESS(Status))
         return Status;
