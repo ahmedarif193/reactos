@@ -18,6 +18,16 @@ typedef struct _BL_DEVICE_IO_INFORMATION
     ULONGLONG WriteCount;
 } BL_DEVICE_IO_INFORMATION, *PBL_DEVICE_IO_INFORMATION;
 
+typedef struct _BL_RAMDISK_CONTEXT
+{
+    PVOID MappedBase;
+    PUCHAR DataBase;
+    ULONGLONG MappedLength;
+    ULONGLONG Length;
+    ULONG BlockSize;
+    BOOLEAN OwnsMapping;
+} BL_RAMDISK_CONTEXT, *PBL_RAMDISK_CONTEXT;
+
 LIST_ENTRY DmRegisteredDevices;
 ULONG DmTableEntries;
 LIST_ENTRY DmRegisteredDevices;
@@ -79,6 +89,12 @@ BlockIoRead (
     _In_ PVOID Buffer,
     _In_ ULONG Size,
     _Out_ PULONG BytesRead
+    );
+
+static
+NTSTATUS
+RdDeviceClose (
+    _In_ PBL_DEVICE_ENTRY DeviceEntry
     );
 
 BL_DEVICE_CALLBACKS BlockIoDeviceFunctionTable =
@@ -354,10 +370,93 @@ BlockIopReadWriteVirtualDevice (
     _In_ PVOID Buffer,
     _In_ ULONG Size,
     _In_ ULONG Operation,
-    _Out_ PULONG BytesRead
+    _Out_ PULONG BytesTransferred
     )
 {
-    return STATUS_NOT_IMPLEMENTED;
+    PBL_BLOCK_DEVICE BlockDevice;
+    PBL_RAMDISK_CONTEXT RamDisk;
+    ULONGLONG AbsoluteOffset, Remaining, Transfer;
+    ULONGLONG NewAbsoluteOffset;
+    SIZE_T ByteOffset;
+
+
+    if (!DeviceEntry || !Buffer || !BytesTransferred)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    BlockDevice = DeviceEntry->DeviceSpecificData;
+    if (!BlockDevice)
+    {
+        *BytesTransferred = 0;
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    RamDisk = (PBL_RAMDISK_CONTEXT)BlockDevice->Protocol;
+    if (!RamDisk)
+    {
+        *BytesTransferred = 0;
+        return STATUS_NOT_IMPLEMENTED;
+    }
+
+    if (Operation > 1)
+    {
+        *BytesTransferred = 0;
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    AbsoluteOffset = (BlockDevice->Block * BlockDevice->BlockSize) + BlockDevice->Offset;
+    if (AbsoluteOffset >= RamDisk->Length)
+    {
+        *BytesTransferred = 0;
+        return STATUS_END_OF_FILE;
+    }
+
+    Remaining = RamDisk->Length - AbsoluteOffset;
+    Transfer = Size;
+    if (Transfer > Remaining)
+    {
+        Transfer = Remaining;
+    }
+
+    if (Transfer == 0)
+    {
+        *BytesTransferred = 0;
+        return STATUS_SUCCESS;
+    }
+
+    if (AbsoluteOffset > (ULONGLONG)((SIZE_T)-1))
+    {
+        *BytesTransferred = 0;
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ByteOffset = (SIZE_T)AbsoluteOffset;
+    if (Transfer > ((ULONGLONG)((SIZE_T)-1) - ByteOffset))
+    {
+        Transfer = (ULONGLONG)((SIZE_T)-1) - ByteOffset;
+    }
+
+    if (Operation == 0)
+    {
+        RtlCopyMemory(Buffer,
+                      RamDisk->DataBase + ByteOffset,
+                      (SIZE_T)Transfer);
+    }
+    else
+    {
+        RtlCopyMemory(RamDisk->DataBase + ByteOffset,
+                      Buffer,
+                      (SIZE_T)Transfer);
+    }
+
+    *BytesTransferred = (ULONG)Transfer;
+
+    NewAbsoluteOffset = AbsoluteOffset + Transfer;
+    BlockDevice->Block = (ULONG)(NewAbsoluteOffset / BlockDevice->BlockSize);
+    BlockDevice->Offset = (ULONG)(NewAbsoluteOffset % BlockDevice->BlockSize);
+
+    return (Transfer < Size) ? STATUS_END_OF_FILE : STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -1604,8 +1703,132 @@ RdDeviceOpen (
     _In_ PBL_DEVICE_ENTRY DeviceEntry
     )
 {
-    EfiPrintf(L"Not implemented!\r\n");
-    return STATUS_NOT_IMPLEMENTED;
+    PBL_BLOCK_DEVICE BlockDevice;
+    PBL_RAMDISK_CONTEXT RamDisk;
+    ULONGLONG ImageSize, PhysicalBase, MapStart, MapEnd, MapLength;
+    ULONGLONG BlockCount;
+    PHYSICAL_ADDRESS MapAddress;
+    PVOID MappingBase;
+    PUCHAR DataBase;
+    NTSTATUS Status;
+    ULONG BlockSize;
+
+    if (!Device || !DeviceEntry)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    BlockDevice = DeviceEntry->DeviceSpecificData;
+    if (!BlockDevice)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ImageSize = Device->Local.RamDisk.ImageSize.QuadPart;
+    if (ImageSize == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    PhysicalBase = Device->Local.RamDisk.ImageBase.QuadPart +
+                   Device->Local.RamDisk.ImageOffset;
+
+    MapStart = PhysicalBase & ~((ULONGLONG)EFI_PAGE_SIZE - 1ULL);
+    MapEnd = (PhysicalBase + ImageSize + EFI_PAGE_SIZE - 1ULL) &
+             ~((ULONGLONG)EFI_PAGE_SIZE - 1ULL);
+    MapLength = MapEnd - MapStart;
+
+    MapAddress.QuadPart = MapStart;
+    MappingBase = NULL;
+    Status = BlMmMapPhysicalAddressEx(&MappingBase,
+                                      0,
+                                      MapLength,
+                                      MapAddress);
+    if (!NT_SUCCESS(Status))
+    {
+        MappingBase = PhysicalAddressToPtr(MapAddress);
+    }
+
+    DataBase = (PUCHAR)MappingBase + (UINTN)(PhysicalBase - MapStart);
+
+    RamDisk = BlMmAllocateHeap(sizeof(*RamDisk));
+    if (!RamDisk)
+    {
+        if (NT_SUCCESS(Status))
+        {
+            BlMmUnmapVirtualAddressEx(MappingBase, MapLength);
+        }
+        return STATUS_NO_MEMORY;
+    }
+
+    RamDisk->MappedBase = MappingBase;
+    RamDisk->DataBase = DataBase;
+    RamDisk->MappedLength = MapLength;
+    RamDisk->Length = ImageSize;
+    RamDisk->OwnsMapping = NT_SUCCESS(Status);
+
+    BlockSize = 512;
+    if (BlockSize == 0)
+    {
+        BlockSize = EFI_PAGE_SIZE;
+    }
+    RamDisk->BlockSize = BlockSize;
+
+    BlockDevice->Type = RamDiskDevice;
+    BlockDevice->DeviceFlags = BL_BLOCK_DEVICE_PRESENT_FLAG |
+                               BL_BLOCK_DEVICE_VIRTUAL_FLAG;
+    BlockDevice->Unknown = 0;
+    BlockDevice->PartitionType = RawPartition;
+    BlockDevice->BlockSize = BlockSize;
+    BlockDevice->Alignment = BlockSize;
+    BlockDevice->Offset = 0;
+    BlockDevice->Block = 0;
+    BlockDevice->StartOffset = 0;
+    BlockDevice->Protocol = (EFI_BLOCK_IO*)RamDisk;
+    BlockDevice->Handle = NULL;
+
+    BlockCount = (ImageSize + BlockSize - 1) / BlockSize;
+    BlockDevice->LastBlock = (BlockCount != 0) ? (BlockCount - 1) : 0;
+
+    DeviceEntry->Callbacks.Close = RdDeviceClose;
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+RdDeviceClose (
+    _In_ PBL_DEVICE_ENTRY DeviceEntry
+    )
+{
+    PBL_BLOCK_DEVICE BlockDevice;
+    PBL_RAMDISK_CONTEXT RamDisk;
+
+    if (!DeviceEntry)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    BlockDevice = DeviceEntry->DeviceSpecificData;
+    if (!BlockDevice)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RamDisk = (PBL_RAMDISK_CONTEXT)BlockDevice->Protocol;
+    if (RamDisk)
+    {
+        if (RamDisk->OwnsMapping && RamDisk->MappedBase && RamDisk->MappedLength)
+        {
+            BlMmUnmapVirtualAddressEx(RamDisk->MappedBase, RamDisk->MappedLength);
+        }
+
+        BlMmFreeHeap(RamDisk);
+        BlockDevice->Protocol = NULL;
+    }
+
+    DeviceEntry->DeviceSpecificData = NULL;
+    return BlockIopFreeAllocations(BlockDevice);
 }
 
 NTSTATUS
@@ -2342,4 +2565,3 @@ BlpDeviceInitialize (
     /* Return initialization state */
     return Status;
 }
-

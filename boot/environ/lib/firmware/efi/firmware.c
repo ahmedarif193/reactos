@@ -1849,6 +1849,7 @@ MmFwGetMemoryMap (
 {
     BL_LIBRARY_PARAMETERS LibraryParameters = BlpLibraryParameters;
     BOOLEAN UseEfiBuffer, HaveRamDisk;
+    ULONGLONG RamDiskBasePage, RamDiskEndPage, RamDiskPageCount;
     NTSTATUS Status;
     ULONGLONG Pages, StartPage, EndPage, EfiBufferPage;
     UINTN EfiMemoryMapSize, MapKey, DescriptorSize, DescriptorVersion;
@@ -1865,6 +1866,8 @@ MmFwGetMemoryMap (
     /* Initialize EFI memory map attributes */
     EfiMemoryMapSize = MapKey = DescriptorSize = DescriptorVersion = 0;
     LibraryBuffer = NULL;
+
+    RamDiskBasePage = RamDiskEndPage = RamDiskPageCount = 0;
 
     /* Increment the nesting depth */
     MmDescriptorCallTreeCount++;
@@ -2015,16 +2018,33 @@ MmFwGetMemoryMap (
 
     /* Did we boot from a RAM disk? */
     if ((BlpBootDevice->DeviceType == LocalDevice) &&
-        (BlpBootDevice->Local.Type == RamDiskDevice))
+        (BlpBootDevice->Local.Type == RamDiskDevice) &&
+        (BlpBootDevice->Local.RamDisk.ImageSize.QuadPart != 0))
     {
-        /* We don't handle this yet */
-        EfiPrintf(L"RAM boot not supported\r\n");
-        Status = STATUS_NOT_IMPLEMENTED;
-        goto Quickie;
+        ULONGLONG ImageSize;
+        ULONGLONG PhysicalBase;
+        ULONGLONG MapStart;
+        ULONGLONG MapEnd;
+
+        ImageSize = BlpBootDevice->Local.RamDisk.ImageSize.QuadPart;
+        PhysicalBase = BlpBootDevice->Local.RamDisk.ImageBase.QuadPart +
+                       BlpBootDevice->Local.RamDisk.ImageOffset;
+
+        MapStart = PhysicalBase & ~((ULONGLONG)EFI_PAGE_SIZE - 1ULL);
+        MapEnd = (PhysicalBase + ImageSize + EFI_PAGE_SIZE - 1ULL) &
+                 ~((ULONGLONG)EFI_PAGE_SIZE - 1ULL);
+
+        if (MapEnd > MapStart)
+        {
+            RamDiskBasePage = MapStart >> EFI_PAGE_SHIFT;
+            RamDiskEndPage = MapEnd >> EFI_PAGE_SHIFT;
+            RamDiskPageCount = RamDiskEndPage - RamDiskBasePage;
+        }
+
+        HaveRamDisk = (RamDiskPageCount != 0);
     }
     else
     {
-        /* We didn't, so there won't be any need to find the memory descriptor */
         HaveRamDisk = FALSE;
     }
 
@@ -2154,44 +2174,72 @@ MmFwGetMemoryMap (
             }
         }
 
-        /* Check if we loaded from a RAM disk */
-        if (HaveRamDisk)
+        while (StartPage < EndPage)
         {
-            /* We don't handle this yet */
-            EfiPrintf(L"RAM boot not supported\r\n");
-            Status = STATUS_NOT_IMPLEMENTED;
-            goto Quickie;
+            ULONGLONG RangeEnd;
+            BL_MEMORY_TYPE RangeType;
+
+            RangeEnd = EndPage;
+            RangeType = MemoryType;
+
+            if (HaveRamDisk && (RamDiskPageCount != 0))
+            {
+                if (StartPage < RamDiskBasePage)
+                {
+                    if (RangeEnd > RamDiskBasePage)
+                    {
+                        RangeEnd = RamDiskBasePage;
+                    }
+                }
+                else if (StartPage < RamDiskEndPage)
+                {
+                    if (RangeEnd > RamDiskEndPage)
+                    {
+                        RangeEnd = RamDiskEndPage;
+                    }
+                    RangeType = BlLoaderRamDisk;
+                }
+            }
+
+            if (RangeEnd == StartPage)
+            {
+                StartPage = RangeEnd;
+                continue;
+            }
+
+            Attribute = MmFwpGetOsAttributeType(EfiDescriptor.Attribute);
+            Descriptor = MmMdInitByteGranularDescriptor(Attribute,
+                                                        RangeType,
+                                                        StartPage,
+                                                        0,
+                                                        RangeEnd - StartPage);
+            if (!Descriptor)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+
+            if ((RangeType == BlConventionalMemory) && (RangeEnd <= 0x100))
+            {
+                Descriptor->Flags |= BlMemoryBelow1MB;
+            }
+
+            Status = MmMdAddDescriptorToList(MemoryMap,
+                                             Descriptor,
+                                             BL_MM_ADD_DESCRIPTOR_TRUNCATE_FLAG |
+                                             ((Flags & BL_MM_FLAG_REQUEST_COALESCING) ?
+                                              BL_MM_ADD_DESCRIPTOR_COALESCE_FLAG : 0));
+            if (!NT_SUCCESS(Status))
+            {
+                EfiPrintf(L"Failed to add full descriptor: %lx\r\n", Status);
+                break;
+            }
+
+            StartPage = RangeEnd;
         }
 
-        /* Create a descriptor for the current range */
-        Attribute = MmFwpGetOsAttributeType(EfiDescriptor.Attribute);
-        Descriptor = MmMdInitByteGranularDescriptor(Attribute,
-                                                    MemoryType,
-                                                    StartPage,
-                                                    0,
-                                                    EndPage - StartPage);
-        if (!Descriptor)
-        {
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            break;
-        }
-
-        /* Check if this region is currently free RAM below 1MB */
-        if ((Descriptor->Type == BlConventionalMemory) && (EndPage <= 0x100))
-        {
-            /* Set the appropriate flag on the descriptor */
-            Descriptor->Flags |= BlMemoryBelow1MB;
-        }
-
-        /* Add the descriptor to the list, requesting coalescing as asked */
-        Status = MmMdAddDescriptorToList(MemoryMap,
-                                         Descriptor,
-                                         BL_MM_ADD_DESCRIPTOR_TRUNCATE_FLAG |
-                                         ((Flags & BL_MM_FLAG_REQUEST_COALESCING) ?
-                                          BL_MM_ADD_DESCRIPTOR_COALESCE_FLAG : 0));
         if (!NT_SUCCESS(Status))
         {
-            EfiPrintf(L"Failed to add full descriptor: %lx\r\n", Status);
             break;
         }
 
