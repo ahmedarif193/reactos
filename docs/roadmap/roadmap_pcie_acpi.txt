@@ -1,0 +1,47 @@
+ReactOS PCIe / ACPI Enablement Roadmap
+=====================================
+
+Objective: Enable ReactOS to boot and enumerate devices on systems exposing PCI Express roots (e.g. VirtualBox ICH9, modern laptops) so that AHCI storage and downstream devices function correctly.
+
+Status Legend:
+- Pending: Not yet started
+- In Progress: Work is actively underway
+- Done: Completed and validated
+
+Step 1 – Baseline & Tracing (In Progress)
+  Primary goals:
+    * Capture current ACPI-driven PCI enumeration flow in hal/halx86/acpi/.*
+    * Add temporary KD/KDBG tracing where visibility is poor (HalpSetupPciBus, ACPI PDO creation, PCI FDO start paths).
+    * Compare ReactOS namespace parsing vs. Windows on the same VirtualBox ICH9 VM.
+  Notes:
+    - Begin by identifying key codepaths and existing tracing macros.
+    - 2025-10-23: Added KD tracing in hal/arch/i386/acpi/busemul.c, drivers/bus/acpi/buspdo.c, and drivers/bus/acpi/acpienum.c to log PCI root enumeration behaviour.
+    - 2025-10-23: VBox ICH9 boot shows ACPI root HID=PNP0A03 (no CID exposing PNP0A08) with bus range collapsed to 0..0; HAL scans buses but never discovers PCI bus 0, confirming need for explicit PCIe root hook-up.
+
+Step 2 – HAL Root-Bus Support (Pending)
+  * Teach hal/halx86/acpi/pcibus.c to recognise PNP0A08 and surface PCIe config callbacks.
+  * Discover and map MCFG tables for MMCONFIG access.
+  Notes:
+    - 2025-10-23: Initial mmconfig plumbing added in HAL (MCFG parsing, MMIO config handler scaffold).
+    - 2025-10-23: ACPI enumerator copies _CID entries (and injects PNP0A08 when MCFG is present) so PCI roots surface PCIe compatibility IDs.
+
+Step 3 – ACPI Bus Driver Updates (Pending)
+  * Update drivers/bus/acpi to enumerate PCI root PDOs for PNP0A08 with proper resource ranges.
+  * Ensure _CRS and resource translation feed PCI FDO correctly.
+
+Step 4 – PCI Bus Driver Enhancements (Pending)
+  * Extend drivers/bus/pci to use MMCONFIG when available and support multi-segment buses.
+  * Parse _PRT interrupts and integrate with HAL routing.
+
+Step 5 – Resource & IRQ Routing (Pending)
+  * Validate interrupt translation for PCIe devices; provide fallback when MSI/MSI-X unavailable.
+
+Step 6 – Storage/AHCI Bring-Up (Pending)
+  * Confirm AHCI miniport enumerates and handles DMA with new resource model.
+
+Step 7 – Testing & Hardening (Pending)
+  * Regression testing on VBox ICH9 and real PCIe hardware; add documentation and automated checks.
+
+Revision History:
+- 2025-10-23: Initial roadmap drafted; Step 1 marked In Progress.
+- 2025-10-23: Step 1 tracing instrumentation committed for ACPI PCI root discovery code paths.
