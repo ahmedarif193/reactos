@@ -38,6 +38,42 @@ TAIL_DEFAULT = 200
 DEFAULT_TIMEOUT_SECONDS = 60
 DEFAULT_LOG_PATH = Path("/tmp/out-q35.log")
 
+
+def _locate_build_dir() -> Path:
+    """Return the directory that contains the ReactOS build artifacts."""
+
+    env_override = os.environ.get("SYMBOLIZE_BUILD_DIR")
+    if env_override:
+        candidate = Path(env_override).expanduser().resolve()
+        if (candidate / "build.ninja").exists():
+            return candidate
+        raise FileNotFoundError(
+            f"SYMBOLIZE_BUILD_DIR={candidate} does not contain build.ninja"
+        )
+
+    cwd = Path.cwd().resolve()
+    if (cwd / "build.ninja").exists():
+        return cwd
+
+    script_parent = Path(__file__).resolve().parent
+    default_candidates = [
+        script_parent,
+        script_parent / "output-MinGW-amd64-Release",
+        script_parent / "output-MinGW-x86-Release",
+        script_parent / "output-MinGW-i386-Release",
+        script_parent / "output-MinGW-amd64-Debug",
+        script_parent / "output-MinGW-i386-Debug",
+    ]
+
+    for candidate in default_candidates:
+        candidate = candidate.resolve()
+        if (candidate / "build.ninja").exists():
+            return candidate
+
+    raise FileNotFoundError(
+        "Could not locate build.ninja; set SYMBOLIZE_BUILD_DIR or run from the build directory"
+    )
+
 def _get_image_base(path: Path) -> int:
     """Return the PE ImageBase for *path*.
 
@@ -222,8 +258,9 @@ def _run_default_capture(log_path: Path, timeout: int) -> List[str]:
         log_path.unlink()
 
     log_path = log_path.resolve()
-    build_dir = Path(__file__).resolve().parent
+    build_dir = _locate_build_dir()
 
+    print(f"[symbolize] Using build directory: {build_dir}")
     print("[symbolize] Building livecd.iso …")
     build = subprocess.run(
         ["ninja", "livecd"],
