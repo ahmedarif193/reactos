@@ -36,6 +36,7 @@
 #ifndef __glumystdio_h_
 #define __glumystdio_h_
 
+#ifndef _glu_dprintf
 #ifdef STANDALONE
 inline void _glu_dprintf( char *, ... ) { }
 #endif
@@ -52,6 +53,7 @@ inline void _glu_dprintf( char *, ... ) { }
 #ifdef GLBUILD
 inline void _glu_dprintf( char *, ... ) { }
 #endif
+#endif /* !_glu_dprintf */
 
 #ifndef NULL
 #define NULL		0

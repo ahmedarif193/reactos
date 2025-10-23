@@ -139,6 +139,12 @@ static source_elements_t *source_elements_add_statement(source_elements_t*,state
 
 %}
 
+%glr-parser
+%expect 1
+%expect-rr 18
+
+
+
 %lex-param { parser_ctx_t *ctx }
 %parse-param { parser_ctx_t *ctx }
 %define api.pure

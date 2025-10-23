@@ -86,3 +86,12 @@
 #define WINGDIAPI
 
 #endif
+
+#ifndef _glu_dprintf
+#if defined(LIBRARYBUILD) && !defined(NDEBUG)
+#include <stdio.h>
+#define _glu_dprintf printf
+#else
+#define _glu_dprintf(...) ((void)0)
+#endif
+#endif

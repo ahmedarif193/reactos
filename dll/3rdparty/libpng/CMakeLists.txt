@@ -1,7 +1,6 @@
 
 add_definitions(
     -DWIN32
-    -DNDEBUG=
     -D_WINDOWS
     -DPNG_BUILD_DLL)
 

@@ -40,7 +40,7 @@
 //#include <stdio.h>
 //#include "glimports.h"
 //#include "myassert.h"
-//#include "mystdio.h"
+#include "mystdio.h"
 #include "quilt.h"
 #include "patchlist.h"
 //#include "patch.h"

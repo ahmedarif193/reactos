@@ -39,7 +39,7 @@
 
 //#include "glimports.h"
 //#include "myassert.h"
-//#include "mystdio.h"
+#include "mystdio.h"
 #include "subdivider.h"
 //#include "arc.h"
 #include "bezierarc.h"

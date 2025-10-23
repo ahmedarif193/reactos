@@ -39,7 +39,7 @@
 
 //#include "glimports.h"
 //#include "myassert.h"
-//#include "mystdio.h"
+#include "mystdio.h"
 #include "mymath.h"
 #include "curve.h"
 #include "mapdesc.h"

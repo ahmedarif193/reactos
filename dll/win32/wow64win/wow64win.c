@@ -162,11 +162,17 @@ typedef struct _WINDOWPOS32
  * Structure Conversion Helpers
  * ================================================================ */
 
+#if defined(__GNUC__)
+#define WOW64WIN_UNUSED __attribute__((unused))
+#else
+#define WOW64WIN_UNUSED
+#endif
+
 /*
  * Convert a 32-bit MSG structure to 64-bit MSG
  * Used when returning messages from Get/PeekMessage
  */
-static VOID
+static VOID WOW64WIN_UNUSED
 Wow64WinConvertMsg32To64(
     _In_ PMSG32 Msg32,
     _Out_ PMSG Msg64)
@@ -189,7 +195,7 @@ Wow64WinConvertMsg32To64(
  * Convert a 64-bit MSG structure to 32-bit MSG
  * Used when delivering messages back to 32-bit code
  */
-static VOID
+static VOID WOW64WIN_UNUSED
 Wow64WinConvertMsg64To32(
     _In_ PMSG Msg64,
     _Out_ PMSG32 Msg32)
@@ -212,7 +218,7 @@ Wow64WinConvertMsg64To32(
  * Convert a 32-bit CREATESTRUCT to 64-bit CREATESTRUCT
  * Used during window creation syscall thunking
  */
-static VOID
+static VOID WOW64WIN_UNUSED
 Wow64WinConvertCreateStruct32To64(
     _In_ PCCREATESTRUCT32 Cs32,
     _Out_ LPCREATESTRUCT Cs64)
@@ -240,7 +246,7 @@ Wow64WinConvertCreateStruct32To64(
  * Convert a 32-bit WINDOWPOS to 64-bit WINDOWPOS
  * Used for window positioning operations
  */
-static VOID
+static VOID WOW64WIN_UNUSED
 Wow64WinConvertWindowPos32To64(
     _In_ PWINDOWPOS32 Wp32,
     _Out_ LPWINDOWPOS Wp64)

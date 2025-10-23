@@ -14,6 +14,12 @@
 #include <reactos/wow64apc.h>
 #include <reactos/wow64cpu.h>
 
+#if defined(__GNUC__)
+#define WOW64_UNUSED __attribute__((unused))
+#else
+#define WOW64_UNUSED
+#endif
+
 #ifndef NT_SUCCESS
 #define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
 #endif
@@ -265,7 +271,7 @@ Wow64OpenKnownDllsDirectory(VOID)
     return Status;
 }
 
-static NTSTATUS
+static NTSTATUS WOW64_UNUSED
 Wow64ResolveKnownDll(
     _In_ PCWSTR DllName,
     _Out_ PHANDLE SectionHandle)

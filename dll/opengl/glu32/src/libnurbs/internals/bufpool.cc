@@ -72,7 +72,7 @@ Pool::Pool( int _buffersize, int initpoolsize, const char *n )
 
 Pool::~Pool( void )
 {
-    assert( (this != 0) && (magic == is_allocated) );
+    assert(magic == is_allocated);
 
     while( nextblock ) {
 	delete [] blocklist[--nextblock];
@@ -84,7 +84,7 @@ Pool::~Pool( void )
 
 void Pool::grow( void )
 {
-    assert( (this != 0) && (magic == is_allocated) );
+    assert(magic == is_allocated);
     curblock = new char[nextsize];
     blocklist[nextblock++] = curblock;
     nextfree = nextsize;
@@ -99,7 +99,7 @@ void Pool::grow( void )
 void 
 Pool::clear( void )
 {
-    assert( (this != 0) && (magic == is_allocated) );
+    assert(magic == is_allocated);
 
     while( nextblock ) {
 	delete [] blocklist[--nextblock];

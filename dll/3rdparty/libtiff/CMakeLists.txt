@@ -1,7 +1,6 @@
 
 add_definitions(
     -DWIN32
-    -DNDEBUG=
     -DUSE_WIN32_FILEIO
     -DTIF_PLATFORM_CONSOLE)
 

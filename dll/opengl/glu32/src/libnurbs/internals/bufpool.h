@@ -80,7 +80,7 @@ protected:
 inline void
 Pool::free_buffer( void *b )
 {
-    assert( (this != 0) && (magic == is_allocated) );
+    assert(magic == is_allocated);
 
     /* add buffer to singly connected free list */
 
@@ -99,7 +99,7 @@ Pool::new_buffer( void )
 {
     void *buffer;
 
-    assert( (this != 0) && (magic == is_allocated) );
+    assert(magic == is_allocated);
 
     /* find free buffer */
 

@@ -39,7 +39,7 @@
 
 //#include "glimports.h"
 //#include "myassert.h"
-//#include "mystdio.h"
+#include "mystdio.h"
 //#include "gridvertex.h"
 //#include "gridtrimvertex.h"
 //#include "jarcloc.h"

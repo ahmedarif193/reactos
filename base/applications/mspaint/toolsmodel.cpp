@@ -12,6 +12,7 @@ ToolsModel toolsModel;
 /* FUNCTIONS ********************************************************/
 
 ToolsModel::ToolsModel()
+    : m_pToolObject(NULL)
 {
     m_lineWidth = m_penWidth = 1;
     m_brushWidth = 4;

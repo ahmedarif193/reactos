@@ -56,6 +56,9 @@ static struct expr * EXPR_wildcard( void *info );
 
 %}
 
+%glr-parser
+%expect-rr 1
+
 %lex-param { SQL_input *info }
 %parse-param { SQL_input *info }
 %define api.prefix {sql_}
@@ -290,7 +293,8 @@ onedrop:
 table_def:
     column_def TK_PRIMARY TK_KEY collist
         {
-            if( SQL_MarkPrimaryKeys( &$1, $4 ) )
+            column_info **columns = (column_info **)&$1;
+            if( SQL_MarkPrimaryKeys( columns, $4 ) )
                 $$ = $1;
             else
                 $$ = NULL;

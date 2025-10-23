@@ -38,7 +38,7 @@
  */
 
 //#include "glimports.h"
-//#include "mystdio.h"
+#include "mystdio.h"
 //#include "nurbsconsts.h"
 #include "nurbstess.h"
 //#include "bufpool.h"

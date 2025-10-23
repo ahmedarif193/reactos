@@ -167,18 +167,16 @@ FASTCALL
 KiCompleteTimer(IN PKTIMER Timer,
                 IN PKSPIN_LOCK_QUEUE LockQueue)
 {
-    LIST_ENTRY ListHead;
     BOOLEAN RequestInterrupt = FALSE;
+    PLIST_ENTRY const StackSentinel = (PLIST_ENTRY)1;
     DPRINT("KiCompleteTimer(): Timer %p, LockQueue: %p\n", Timer, LockQueue);
 
     /* Remove it from the timer list */
     KiRemoveEntryTimer(Timer);
 
-    /* Link the timer list to our stack */
-    ListHead.Flink = &Timer->TimerListEntry;
-    ListHead.Blink = &Timer->TimerListEntry;
-    Timer->TimerListEntry.Flink = &ListHead;
-    Timer->TimerListEntry.Blink = &ListHead;
+    /* Mark the entry so we can detect if it remains unlinked */
+    Timer->TimerListEntry.Flink = StackSentinel;
+    Timer->TimerListEntry.Blink = StackSentinel;
 
     /* Release the timer lock */
     KiReleaseTimerLock(LockQueue);
@@ -186,11 +184,11 @@ KiCompleteTimer(IN PKTIMER Timer,
     /* Acquire dispatcher lock */
     KiAcquireDispatcherLockAtSynchLevel();
 
-    /* Signal the timer if it's still on our list */
-    if (!IsListEmpty(&ListHead)) RequestInterrupt = KiSignalTimer(Timer);
+    /* Signal the timer */
+    RequestInterrupt = KiSignalTimer(Timer);
 
-    /* Clean up if the timer is still linked to our stack */
-    if (Timer->TimerListEntry.Flink == &ListHead)
+    /* Clean up if the timer is still tagged with our sentinel */
+    if (Timer->TimerListEntry.Flink == StackSentinel)
     {
         InitializeListHead(&Timer->TimerListEntry);
     }
@@ -345,4 +343,3 @@ KeSetTimerEx(IN OUT PKTIMER Timer,
     /* Return old state */
     return Inserted;
 }
-

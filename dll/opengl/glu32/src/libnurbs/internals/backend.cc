@@ -42,7 +42,7 @@
 */
 //#include <stdio.h>
 //#include "glimports.h"
-//#include "mystdio.h"
+#include "mystdio.h"
 #include "backend.h"
 #include "basiccrveval.h"
 #include "basicsurfeval.h"

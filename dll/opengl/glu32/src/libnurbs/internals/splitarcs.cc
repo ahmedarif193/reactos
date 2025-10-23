@@ -40,7 +40,7 @@
 //#include "glimports.h"
 //#include "myassert.h"
 //#include "mysetjmp.h"
-//#include "mystdio.h"
+#include "mystdio.h"
 #include "subdivider.h"
 #include "arcsorter.h"
 //#include "arc.h"

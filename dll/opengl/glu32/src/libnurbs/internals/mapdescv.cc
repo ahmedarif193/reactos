@@ -38,7 +38,7 @@
  */
 
 //#include "glimports.h"
-//#include "mystdio.h"
+#include "mystdio.h"
 //#include "myassert.h"
 //#include "mystring.h"
 #include "mymath.h"

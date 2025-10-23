@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <math.h>
 
+#include "mystdio.h"
 #include "gluos.h"
 #include "glrenderer.h"
 

@@ -41,7 +41,7 @@
 //#include <stdio.h>
 //#include <math.h>
 //#include "glimports.h"
-//#include "mystdio.h"
+#include "mystdio.h"
 //#include "myassert.h"
 //#include "bufpool.h"
 #include "slicer.h"

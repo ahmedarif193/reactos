@@ -38,7 +38,7 @@
 
 //#include "glimports.h"
 //#include "mysetjmp.h"
-//#include "mystdio.h"
+#include "mystdio.h"
 #include "bufpool.h"
 
 class NurbsTessellator;

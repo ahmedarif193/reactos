@@ -39,7 +39,7 @@
 
 //#include "glimports.h"
 //#include "myassert.h"
-//#include "mystdio.h"
+#include "mystdio.h"
 #include "varray.h"
 #include "arc.h"
 #include "simplemath.h"         // glu_abs()
