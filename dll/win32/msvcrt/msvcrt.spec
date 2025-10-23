@@ -531,7 +531,7 @@
 @ stub -version=0x600+ _freea_s
 @ stub -version=0x600+ _fscanf_l
 @ stub -version=0x600+ _fscanf_s_l
-@ cdecl -version=0x600+ _fseeki64(ptr int64 long)
+@ cdecl _fseeki64(ptr int64 long)
 @ cdecl _fsopen(str str long)
 @ cdecl _fstat(long ptr)
 @ cdecl _fstat64(long ptr)
@@ -1415,11 +1415,11 @@
 @ cdecl longjmp(ptr long)
 @ cdecl malloc(long)
 @ cdecl mblen(ptr long)
-@ cdecl -version=0x600+ mbrlen(str long ptr)
-@ cdecl -version=0x600+ mbrtowc(ptr str long ptr)
+@ cdecl mbrlen(str long ptr)
+@ cdecl mbrtowc(ptr str long ptr)
 @ stub -version=0x600+ mbsdup_dbg
-@ stub -version=0x600+ mbsrtowcs
-@ stub -version=0x600+ mbsrtowcs_s
+@ cdecl mbsrtowcs(ptr ptr long ptr)
+@ cdecl mbsrtowcs_s(ptr ptr long ptr long ptr)
 @ cdecl mbstowcs(ptr str long)
 @ stub -version=0x600+ mbstowcs_s
 @ cdecl mbtowc(wstr str long)
@@ -1487,7 +1487,7 @@
 @ cdecl strncmp(str str long)
 @ cdecl strncpy(ptr str long)
 @ cdecl -version=0x600+ strncpy_s(ptr long str long)
-@ cdecl -version=0x600+ strnlen(str long)
+@ cdecl strnlen(str long)
 @ cdecl strpbrk(str str)
 @ cdecl strrchr(str long)
 @ cdecl strspn(str str)
@@ -1525,7 +1525,7 @@
 @ stub -version=0x600+ vfwprintf_s
 @ cdecl vprintf(str ptr)
 @ stub -version=0x600+ vprintf_s
-@ cdecl -version=0x600+ vsnprintf(ptr long str ptr)
+@ cdecl vsnprintf(ptr long str ptr)
 @ cdecl vsprintf(ptr str ptr)
 @ stub -version=0x600+ vsprintf_s
 @ cdecl vswprintf(ptr wstr ptr)
@@ -1549,7 +1549,7 @@
 @ cdecl wcsncmp(wstr wstr long)
 @ cdecl wcsncpy(ptr wstr long)
 @ cdecl -version=0x600+ wcsncpy_s(ptr long wstr long)
-@ cdecl -version=0x600+ wcsnlen(wstr long)
+@ cdecl wcsnlen(wstr long)
 @ cdecl wcspbrk(wstr wstr)
 @ cdecl wcsrchr(wstr long)
 @ stub -version=0x600+ wcsrtombs
@@ -1564,7 +1564,7 @@
 @ stub -version=0x600+ wcstombs_s
 @ cdecl wcstoul(wstr ptr long)
 @ cdecl wcsxfrm(ptr wstr long)
-@ cdecl -version=0x600+ wctob(long)
+@ cdecl wctob(long)
 @ cdecl wctomb(ptr long)
 @ stub -version=0x600+ wctomb_s
 @ varargs wprintf(wstr)

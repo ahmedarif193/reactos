@@ -121,6 +121,7 @@ typedef void (__cdecl *crt_client_callback)(void *, void *);
 void __cdecl _CrtDoForAllClientObjects(crt_client_callback callback,
                                        void *context)
 {
+    // Do nothing - no client blocks to iterate in release CRT
     (void)callback;
     (void)context;
 }
@@ -174,11 +175,27 @@ unsigned short const _wctype[257] = {0};
 
 #else /* !USE_NATIVE_MINGW_CRT */
 
+typedef void (__cdecl *crt_client_callback)(void *, void *);
+
 // atexit is needed by libsupc++
 extern int __cdecl _crt_atexit(void (__cdecl*)(void));
 int __cdecl atexit(void (__cdecl* function)(void))
 {
     return _crt_atexit(function);
+}
+
+int __cdecl _CrtCheckMemory(void)
+{
+    return 1;  //NOTE Always return "heap is OK"
+    // Real apps use this inside #ifdef _DEBUG blocks
+    // They don't expect it to work in release builds
+}
+
+void __cdecl _CrtDoForAllClientObjects(crt_client_callback callback,
+                                       void *context)
+{
+    (void)callback;
+    (void)context;
 }
 
 int __cdecl _CrtDbgReport(int report_type,
