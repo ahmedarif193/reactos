@@ -1,159 +1,379 @@
 /*
  * PROJECT:         ReactOS ACPI Bus Manager
  * LICENSE:         GPL-2.0-or-later - See COPYING in the top level directory
- * PURPOSE:         Minimal ACPI _PRT provider for HAL PCI routing
+ * PURPOSE:         ACPI-based PCI interrupt routing provider for the HAL
  */
 
+#include <precomp.h>
 #include <ntddk.h>
-#include <acpi.h>
-#include <acpixf.h>
+#include <debug.h>
 
-/* HAL hook: register PCI routing provider. Avoid including hal.h; declare here. */
-typedef BOOLEAN (NTAPI *PHAL_PCI_ROUTE_QUERY)(UCHAR Bus, UCHAR Device, UCHAR Function, UCHAR Pin, PULONG GsiOut);
-NTSYSAPI VOID NTAPI HalpRegisterPciRouteQuery(PHAL_PCI_ROUTE_QUERY Provider);
+#define ACPI_PRT_POOL_TAG 'TRPA'
 
 typedef struct _PRT_MAP_ENTRY
 {
-    UCHAR Bus;    /* PCI bus number (_BBN) */
-    UCHAR Device; /* device number */
-    UCHAR Pin;    /* 1..4 (INTA#..INTD#) */
-    ULONG Gsi;    /* Global System Interrupt */
+    ULONG Segment;
+    UCHAR Bus;
+    UCHAR Device;
+    UCHAR Pin;      /* 1..4 (INTA#..INTD#) */
+    ULONG Gsi;
+    UCHAR Polarity; /* HAL_ACPI_POLARITY_* */
+    UCHAR Trigger;  /* HAL_ACPI_TRIGGER_* */
 } PRT_MAP_ENTRY, *PPRT_MAP_ENTRY;
 
-static PRT_MAP_ENTRY PrtCache[256];
+static PPRT_MAP_ENTRY PrtCache;
 static ULONG PrtCacheCount;
+static ULONG PrtCacheCapacity;
 
-static ACPI_STATUS
-AcpiPrtBuildForHandle(ACPI_HANDLE Handle, UCHAR RootBus)
+static
+VOID
+AcpiPrtResetCache(VOID)
+{
+    if (PrtCache)
+    {
+        ExFreePoolWithTag(PrtCache, ACPI_PRT_POOL_TAG);
+        PrtCache = NULL;
+    }
+
+    PrtCacheCount = 0;
+    PrtCacheCapacity = 0;
+}
+
+static
+BOOLEAN
+AcpiPrtEnsureCapacity(
+    _In_ ULONG Additional)
+{
+    ULONG Required;
+    ULONG NewCapacity;
+    PPRT_MAP_ENTRY NewBuffer;
+
+    if ((PrtCacheCount + Additional) <= PrtCacheCapacity)
+    {
+        return TRUE;
+    }
+
+    Required = PrtCacheCount + Additional;
+    NewCapacity = (PrtCacheCapacity != 0) ? PrtCacheCapacity : 64;
+    while (NewCapacity < Required)
+    {
+        NewCapacity *= 2;
+    }
+
+    NewBuffer = ExAllocatePoolWithTag(NonPagedPool,
+                                      NewCapacity * sizeof(PRT_MAP_ENTRY),
+                                      ACPI_PRT_POOL_TAG);
+    if (!NewBuffer)
+    {
+        DPRINT1("ACPI: Failed to grow PCI routing cache to %lu entries\n", NewCapacity);
+        return FALSE;
+    }
+
+    if (PrtCacheCount)
+    {
+        RtlCopyMemory(NewBuffer, PrtCache, PrtCacheCount * sizeof(PRT_MAP_ENTRY));
+    }
+
+    if (PrtCache)
+    {
+        ExFreePoolWithTag(PrtCache, ACPI_PRT_POOL_TAG);
+    }
+
+    PrtCache = NewBuffer;
+    PrtCacheCapacity = NewCapacity;
+    return TRUE;
+}
+
+static
+UCHAR
+AcpiPrtMapPolarity(
+    _In_ UCHAR AcpiPolarity)
+{
+    switch (AcpiPolarity)
+    {
+        case ACPI_ACTIVE_HIGH:
+            return HAL_ACPI_POLARITY_HIGH;
+        case ACPI_ACTIVE_LOW:
+            return HAL_ACPI_POLARITY_LOW;
+        case ACPI_ACTIVE_BOTH:
+            return HAL_ACPI_POLARITY_BOTH;
+        default:
+            return HAL_ACPI_POLARITY_LOW;
+    }
+}
+
+static
+UCHAR
+AcpiPrtMapTrigger(
+    _In_ UCHAR AcpiTrigger)
+{
+    switch (AcpiTrigger)
+    {
+        case ACPI_LEVEL_SENSITIVE:
+            return HAL_ACPI_TRIGGER_LEVEL;
+        case ACPI_EDGE_SENSITIVE:
+        default:
+            return HAL_ACPI_TRIGGER_EDGE;
+    }
+}
+
+static
+VOID
+AcpiPrtInsertOrUpdate(
+    _In_ const PRT_MAP_ENTRY *Entry)
+{
+    for (ULONG i = 0; i < PrtCacheCount; ++i)
+    {
+        if ((PrtCache[i].Segment == Entry->Segment) &&
+            (PrtCache[i].Bus == Entry->Bus) &&
+            (PrtCache[i].Device == Entry->Device) &&
+            (PrtCache[i].Pin == Entry->Pin))
+        {
+            PrtCache[i] = *Entry;
+            return;
+        }
+    }
+
+    if (!AcpiPrtEnsureCapacity(1))
+    {
+        return;
+    }
+
+    PrtCache[PrtCacheCount++] = *Entry;
+}
+
+static
+BOOLEAN
+AcpiPrtResolveLink(
+    _In_ ACPI_HANDLE LinkHandle,
+    _In_ UINT32 SourceIndex,
+    _Inout_ PPRT_MAP_ENTRY Entry)
+{
+    ACPI_BUFFER ResourceBuffer = { ACPI_ALLOCATE_BUFFER, NULL };
+    ACPI_STATUS Status;
+    BOOLEAN Resolved = FALSE;
+
+    Status = AcpiGetCurrentResources(LinkHandle, &ResourceBuffer);
+    if (ACPI_FAILURE(Status) || !ResourceBuffer.Pointer)
+    {
+        if (Status != AE_NOT_FOUND)
+        {
+            DPRINT1("ACPI: _CRS for PCI link %p failed (0x%X)\n", LinkHandle, Status);
+        }
+        return FALSE;
+    }
+
+    for (ACPI_RESOURCE *Resource = (ACPI_RESOURCE *)ResourceBuffer.Pointer;
+         Resource && Resource->Type != ACPI_RESOURCE_TYPE_END_TAG;
+         Resource = ACPI_NEXT_RESOURCE(Resource))
+    {
+        if (Resource->Type == ACPI_RESOURCE_TYPE_EXTENDED_IRQ)
+        {
+            const ACPI_RESOURCE_EXTENDED_IRQ *ExtIrq = &Resource->Data.ExtendedIrq;
+            if (ExtIrq->InterruptCount == 0)
+            {
+                continue;
+            }
+
+            UINT32 Index = (SourceIndex < ExtIrq->InterruptCount) ? SourceIndex : 0;
+            Entry->Gsi = (ULONG)ExtIrq->Interrupts[Index];
+            Entry->Polarity = AcpiPrtMapPolarity(ExtIrq->Polarity);
+            Entry->Trigger = AcpiPrtMapTrigger(ExtIrq->Triggering);
+            Resolved = TRUE;
+            break;
+        }
+        else if (Resource->Type == ACPI_RESOURCE_TYPE_IRQ)
+        {
+            const ACPI_RESOURCE_IRQ *Irq = &Resource->Data.Irq;
+            if (Irq->InterruptCount == 0)
+            {
+                continue;
+            }
+
+            UINT32 Index = (SourceIndex < Irq->InterruptCount) ? SourceIndex : 0;
+            Entry->Gsi = (ULONG)Irq->Interrupts[Index];
+            Entry->Polarity = AcpiPrtMapPolarity(Irq->Polarity);
+            Entry->Trigger = AcpiPrtMapTrigger(Irq->Triggering);
+            Resolved = TRUE;
+            break;
+        }
+    }
+
+    ACPI_FREE(ResourceBuffer.Pointer);
+    return Resolved;
+}
+
+static
+ACPI_STATUS
+AcpiPrtBuildForHandle(
+    _In_ ACPI_HANDLE Handle,
+    _In_ ULONG Segment,
+    _In_ UCHAR RootBus)
 {
     ACPI_BUFFER Buffer = { ACPI_ALLOCATE_BUFFER, NULL };
     ACPI_STATUS Status;
-    PRT_MAP_ENTRY entry;
 
     Status = AcpiGetIrqRoutingTable(Handle, &Buffer);
-    if (ACPI_FAILURE(Status)) return Status;
-
-    ACPI_PCI_ROUTING_TABLE* p = (ACPI_PCI_ROUTING_TABLE*)Buffer.Pointer;
-    while (p && p->Length)
+    if (ACPI_FAILURE(Status))
     {
-        entry.Bus = RootBus;
-        entry.Device = (UCHAR)((p->Address >> 16) & 0xFF);
-        entry.Pin = (UCHAR)((p->Pin & 0x3) + 1); /* 1..4 */
-
-        if (!p->Source[0])
+        if (Status != AE_NOT_FOUND)
         {
-            /* Direct GSI */
-            entry.Gsi = p->SourceIndex; /* ACPICA maps GSI here when Source==NULL */
-            if (PrtCacheCount < RTL_NUMBER_OF(PrtCache)) PrtCache[PrtCacheCount++] = entry;
+            DPRINT1("ACPI: _PRT query for root %p failed (0x%X)\n", Handle, Status);
+        }
+        return Status;
+    }
+
+    for (ACPI_PCI_ROUTING_TABLE *Route = (ACPI_PCI_ROUTING_TABLE *)Buffer.Pointer;
+         Route && Route->Length;
+         Route = (ACPI_PCI_ROUTING_TABLE *)((PUCHAR)Route + Route->Length))
+    {
+        PRT_MAP_ENTRY Entry = {0};
+        ACPI_HANDLE LinkHandle;
+
+        Entry.Segment = Segment;
+        Entry.Bus = RootBus;
+        Entry.Device = (UCHAR)((Route->Address >> 16) & 0xFF);
+        Entry.Pin = (UCHAR)((Route->Pin & 0x3) + 1); /* INTA#..INTD# */
+        Entry.Polarity = HAL_ACPI_POLARITY_LOW;
+        Entry.Trigger = HAL_ACPI_TRIGGER_LEVEL;
+
+        if (!Route->Source[0])
+        {
+            Entry.Gsi = Route->SourceIndex;
+            AcpiPrtInsertOrUpdate(&Entry);
+            continue;
+        }
+
+        Status = AcpiGetHandle(Handle, Route->Source, &LinkHandle);
+        if (ACPI_FAILURE(Status))
+        {
+            DPRINT1("ACPI: Failed to resolve PCI link %s (0x%X)\n", Route->Source, Status);
+            continue;
+        }
+
+        if (AcpiPrtResolveLink(LinkHandle, Route->SourceIndex, &Entry))
+        {
+            AcpiPrtInsertOrUpdate(&Entry);
         }
         else
         {
-            /* Link device; resolve its current resources */
-            ACPI_HANDLE LinkHandle;
-            ACPI_STATUS st2 = AcpiGetHandle(Handle, p->Source, &LinkHandle);
-            if (ACPI_SUCCESS(st2))
-            {
-                ACPI_BUFFER resBuf = { ACPI_ALLOCATE_BUFFER, NULL };
-                st2 = AcpiGetCurrentResources(LinkHandle, &resBuf);
-                if (ACPI_SUCCESS(st2) && resBuf.Pointer)
-                {
-                    ACPI_RESOURCE* res = (ACPI_RESOURCE*)resBuf.Pointer;
-                    /* Index into the link resource that _PRT references */
-                    UINT32 wantIndex = p->SourceIndex;
-                    while (res && res->Type != ACPI_RESOURCE_TYPE_END_TAG)
-                    {
-                        if (res->Type == ACPI_RESOURCE_TYPE_EXTENDED_IRQ)
-                        {
-                            if (res->Data.ExtendedIrq.InterruptCount >= 1)
-                            {
-                                /* Choose by SourceIndex when available, else first */
-                                UINT32 idx = (wantIndex < res->Data.ExtendedIrq.InterruptCount) ? wantIndex : 0;
-                                entry.Gsi = (ULONG)res->Data.ExtendedIrq.Interrupts[idx];
-                                if (PrtCacheCount < RTL_NUMBER_OF(PrtCache)) PrtCache[PrtCacheCount++] = entry;
-                                break;
-                            }
-                        }
-                        else if (res->Type == ACPI_RESOURCE_TYPE_IRQ)
-                        {
-                            if (res->Data.Irq.InterruptCount >= 1)
-                            {
-                                /* Choose by SourceIndex when available, else first */
-                                UINT32 idx = (wantIndex < res->Data.Irq.InterruptCount) ? wantIndex : 0;
-                                entry.Gsi = (ULONG)res->Data.Irq.Interrupts[idx];
-                                if (PrtCacheCount < RTL_NUMBER_OF(PrtCache)) PrtCache[PrtCacheCount++] = entry;
-                                break;
-                            }
-                        }
-                        res = ACPI_NEXT_RESOURCE(res);
-                    }
-                    AcpiOsFree(resBuf.Pointer);
-                }
-            }
+            DPRINT1("ACPI: Unresolved PCI link %s for device %u pin %u\n",
+                    Route->Source,
+                    Entry.Device,
+                    Entry.Pin);
         }
-        p = (ACPI_PCI_ROUTING_TABLE*)((PUCHAR)p + p->Length);
     }
 
-    AcpiOsFree(Buffer.Pointer);
+    ACPI_FREE(Buffer.Pointer);
     return AE_OK;
 }
 
-static BOOLEAN NTAPI
-HalPciRouteProvider(_In_ UCHAR Bus,
-                    _In_ UCHAR Device,
-                    _In_ UCHAR Function,
-                    _In_ UCHAR Pin,
-                    _Out_ PULONG GsiOut)
+static
+BOOLEAN
+NTAPI
+HalPciRouteProvider(
+    _In_ ULONG Segment,
+    _In_ UCHAR Bus,
+    _In_ UCHAR Device,
+    _In_ UCHAR Function,
+    _In_ UCHAR Pin,
+    _Out_ PULONG Gsi,
+    _Out_opt_ PUCHAR Polarity,
+    _Out_opt_ PUCHAR TriggerMode)
 {
     UNREFERENCED_PARAMETER(Function);
+
     for (ULONG i = 0; i < PrtCacheCount; ++i)
     {
-        if (PrtCache[i].Bus == Bus && PrtCache[i].Device == Device && PrtCache[i].Pin == Pin)
+        if ((PrtCache[i].Segment == Segment) &&
+            (PrtCache[i].Bus == Bus) &&
+            (PrtCache[i].Device == Device) &&
+            (PrtCache[i].Pin == Pin))
         {
-            *GsiOut = PrtCache[i].Gsi;
+            *Gsi = PrtCache[i].Gsi;
+            if (Polarity) *Polarity = PrtCache[i].Polarity;
+            if (TriggerMode) *TriggerMode = PrtCache[i].Trigger;
             return TRUE;
         }
     }
+
     return FALSE;
 }
 
-/* Enumerate all PCI root bridges and cache their PRT */
-static ACPI_STATUS
-AcpiEnumRootBridgeCallback(ACPI_HANDLE ObjHandle, UINT32 NestingLevel, void* Context, void** ReturnValue)
+static
+ACPI_STATUS
+AcpiEnumRootBridgeCallback(
+    _In_ ACPI_HANDLE ObjHandle,
+    _In_ UINT32 NestingLevel,
+    _Inout_opt_ PVOID Context,
+    _Inout_opt_ PVOID *ReturnValue)
 {
-    UNREFERENCED_PARAMETER(NestingLevel);
-    UNREFERENCED_PARAMETER(ReturnValue);
-    ACPI_DEVICE_INFO* Info;
+    ACPI_DEVICE_INFO *Info = NULL;
     ACPI_STATUS Status;
-    UCHAR Bus = 0;
+    ACPI_OBJECT Result;
+    ACPI_BUFFER Buffer = { sizeof(Result), &Result };
+    ULONG Segment = 0;
+    ULONG Bus = 0;
+
+    UNREFERENCED_PARAMETER(NestingLevel);
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(ReturnValue);
 
     Status = AcpiGetObjectInfo(ObjHandle, &Info);
-    if (ACPI_FAILURE(Status)) return AE_OK;
+    if (ACPI_FAILURE(Status))
+    {
+        return AE_OK;
+    }
 
-    /* Get bus number (_BBN) if available */
-    ACPI_OBJECT out;
-    ACPI_BUFFER outBuf = { sizeof(out), &out };
-    Status = AcpiEvaluateObjectTyped(ObjHandle, (char*)"_BBN", NULL, &outBuf, ACPI_TYPE_INTEGER);
+    Status = AcpiEvaluateObjectTyped(ObjHandle, METHOD_NAME__SEG, NULL, &Buffer, ACPI_TYPE_INTEGER);
     if (ACPI_SUCCESS(Status))
     {
-        Bus = (UCHAR)out.Integer.Value;
+        Segment = (ULONG)Result.Integer.Value;
     }
+
+    Status = AcpiEvaluateObjectTyped(ObjHandle, METHOD_NAME__BBN, NULL, &Buffer, ACPI_TYPE_INTEGER);
+    if (ACPI_SUCCESS(Status))
+    {
+        Bus = (ULONG)Result.Integer.Value;
+    }
+
     AcpiOsFree(Info);
 
-    /* Build routing cache for this root bridge */
-    AcpiPrtBuildForHandle(ObjHandle, Bus);
+    if (Bus > 0xFF)
+    {
+        DPRINT1("ACPI: Root bus number %lu out of range, truncating\n", Bus);
+        Bus &= 0xFF;
+    }
+
+    AcpiPrtBuildForHandle(ObjHandle, Segment, (UCHAR)Bus);
     return AE_OK;
 }
 
-VOID
-AcpiRegisterPrtProvider(VOID)
+int
+acpi_pci_link_init(VOID)
 {
-    /* Enumerate PCI/PCIe root bridges by HID */
+    AcpiPrtResetCache();
+
     (void)AcpiGetDevices("PNP0A03", AcpiEnumRootBridgeCallback, NULL, NULL);
     (void)AcpiGetDevices("PNP0A08", AcpiEnumRootBridgeCallback, NULL, NULL);
 
-    /* Register provider if we cached any entries */
     if (PrtCacheCount)
     {
         HalpRegisterPciRouteQuery(HalPciRouteProvider);
+        DPRINT1("ACPI: Registered PCI routing provider with %lu entries\n", PrtCacheCount);
     }
+    else
+    {
+        HalpRegisterPciRouteQuery(NULL);
+        DPRINT1("ACPI: No PCI routing entries discovered\n");
+    }
+
+    return 0;
+}
+
+void
+acpi_pci_link_exit(VOID)
+{
+    HalpRegisterPciRouteQuery(NULL);
+    AcpiPrtResetCache();
 }

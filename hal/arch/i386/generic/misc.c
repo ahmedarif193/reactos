@@ -145,10 +145,10 @@ VOID
 NTAPI
 HalpCheckPowerButton(VOID)
 {
-    //
-    // Nothing to do on non-ACPI
-    //
-    return;
+    if (HalpAcpiQueryPowerButton())
+    {
+        DPRINT1("HAL: ACPI power button press detected.\n");
+    }
 }
 
 VOID

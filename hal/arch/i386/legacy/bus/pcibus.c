@@ -9,6 +9,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <hal.h>
+#include <reactos/hal/acpi_pci.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -16,6 +17,240 @@
 #define HALP_PCI_DEFAULT_IO_LIMIT         0xFFFFULL
 #define HALP_PCI_DEFAULT_MEM_BASE         0xC0000000ULL
 #define HALP_PCI_DEFAULT_MEM_LIMIT        0xFEBFFFFFULL
+#define HALP_PCI_GSI_TAG                  'isGH'
+
+typedef struct _HALP_PCI_GSI_INFO
+{
+    BOOLEAN Valid;
+    UCHAR Polarity;
+    UCHAR Trigger;
+} HALP_PCI_GSI_INFO, *PHALP_PCI_GSI_INFO;
+
+static PHALP_PCI_GSI_INFO HalpPciGsiInfo;
+static ULONG HalpPciGsiCapacity;
+static PHAL_ACPI_PCI_ROUTE_QUERY HalpPciRouteQueryCallback;
+
+static VOID
+HalpPciUpdateBridgeHierarchy(
+    PBUS_HANDLER BusHandler);
+
+static
+VOID
+HalpPciResetGsiTable(VOID)
+{
+    if (HalpPciGsiInfo)
+    {
+        ExFreePoolWithTag(HalpPciGsiInfo, HALP_PCI_GSI_TAG);
+        HalpPciGsiInfo = NULL;
+    }
+
+    HalpPciGsiCapacity = 0;
+}
+
+static
+BOOLEAN
+HalpPciEnsureGsiCapacity(
+    _In_ ULONG Gsi)
+{
+    ULONG Required = Gsi + 1;
+    ULONG NewCapacity;
+    PHALP_PCI_GSI_INFO NewTable;
+
+    if (Required <= HalpPciGsiCapacity)
+    {
+        return TRUE;
+    }
+
+    NewCapacity = (HalpPciGsiCapacity != 0) ? HalpPciGsiCapacity : 64;
+    while (NewCapacity < Required)
+    {
+        NewCapacity *= 2;
+    }
+
+    NewTable = ExAllocatePoolWithTag(NonPagedPool,
+                                     NewCapacity * sizeof(HALP_PCI_GSI_INFO),
+                                     HALP_PCI_GSI_TAG);
+    if (!NewTable)
+    {
+        DPRINT1("HAL: Failed to grow PCI GSI table to %lu entries\n", NewCapacity);
+        return FALSE;
+    }
+
+    RtlZeroMemory(NewTable, NewCapacity * sizeof(HALP_PCI_GSI_INFO));
+    if (HalpPciGsiInfo)
+    {
+        RtlCopyMemory(NewTable,
+                      HalpPciGsiInfo,
+                      HalpPciGsiCapacity * sizeof(HALP_PCI_GSI_INFO));
+        ExFreePoolWithTag(HalpPciGsiInfo, HALP_PCI_GSI_TAG);
+    }
+
+    HalpPciGsiInfo = NewTable;
+    HalpPciGsiCapacity = NewCapacity;
+    return TRUE;
+}
+
+static
+VOID
+HalpPciRecordGsiInfo(
+    _In_ ULONG Gsi,
+    _In_ UCHAR Polarity,
+    _In_ UCHAR Trigger)
+{
+    if (!HalpPciEnsureGsiCapacity(Gsi))
+    {
+        return;
+    }
+
+    HalpPciGsiInfo[Gsi].Valid = TRUE;
+    HalpPciGsiInfo[Gsi].Polarity = Polarity;
+    HalpPciGsiInfo[Gsi].Trigger = Trigger;
+}
+
+BOOLEAN
+HalpPciLookupGsiInfo(
+    _In_ ULONG Gsi,
+    _Out_ PUCHAR Polarity,
+    _Out_ PUCHAR Trigger)
+{
+    if ((Gsi >= HalpPciGsiCapacity) ||
+        !HalpPciGsiInfo ||
+        !HalpPciGsiInfo[Gsi].Valid)
+    {
+        return FALSE;
+    }
+
+    if (Polarity) *Polarity = HalpPciGsiInfo[Gsi].Polarity;
+    if (Trigger) *Trigger = HalpPciGsiInfo[Gsi].Trigger;
+    return TRUE;
+}
+
+VOID
+NTAPI
+HalpRegisterPciRouteQuery(
+    _In_opt_ PHAL_ACPI_PCI_ROUTE_QUERY Provider)
+{
+    HalpPciRouteQueryCallback = Provider;
+    HalpPciResetGsiTable();
+}
+
+VOID
+NTAPI
+HalpConfigurePciRootBridge(
+    _In_ const HAL_ACPI_PCI_ROOT_INFO *Info)
+{
+    PBUS_HANDLER Bus;
+    PPCIPBUSDATA BusData;
+
+    if (!Info)
+    {
+        return;
+    }
+
+    Bus = HalHandlerForBus(PCIBus, Info->Bus);
+    if (!Bus)
+    {
+        DPRINT1("HAL: ACPI reported PCI segment %lu bus %lu which has no handler\n",
+                Info->Segment,
+                Info->Bus);
+        return;
+    }
+
+    BusData = (PPCIPBUSDATA)Bus->BusData;
+    if (!BusData)
+    {
+        return;
+    }
+
+    BusData->PciSegment = (USHORT)Info->Segment;
+
+    if (Info->IoWindow.Present)
+    {
+        BusData->IoWindowBase = Info->IoWindow.Base;
+        BusData->IoWindowLimit = Info->IoWindow.Limit;
+        BusData->IoBase = Info->IoWindow.Base;
+        BusData->IoLimit = Info->IoWindow.Limit;
+        BusData->IoNext = Info->IoWindow.Base;
+    }
+    else
+    {
+        BusData->IoWindowBase = (ULONGLONG)-1;
+        BusData->IoWindowLimit = 0;
+        BusData->IoBase = HALP_PCI_DEFAULT_IO_BASE;
+        BusData->IoLimit = HALP_PCI_DEFAULT_IO_LIMIT;
+        BusData->IoNext = BusData->IoBase;
+    }
+
+    if (Info->MemoryWindow.Present)
+    {
+        BusData->MemoryWindowBase = Info->MemoryWindow.Base;
+        BusData->MemoryWindowLimit = Info->MemoryWindow.Limit;
+        BusData->MemoryBase = Info->MemoryWindow.Base;
+        BusData->MemoryLimit = Info->MemoryWindow.Limit;
+        BusData->MemoryNext = Info->MemoryWindow.Base;
+    }
+    else
+    {
+        BusData->MemoryWindowBase = (ULONGLONG)-1;
+        BusData->MemoryWindowLimit = 0;
+        BusData->MemoryBase = HALP_PCI_DEFAULT_MEM_BASE;
+        BusData->MemoryLimit = HALP_PCI_DEFAULT_MEM_LIMIT;
+        BusData->MemoryNext = BusData->MemoryBase;
+    }
+
+    if (Info->PrefetchWindow.Present)
+    {
+        BusData->PrefetchWindowBase = Info->PrefetchWindow.Base;
+        BusData->PrefetchWindowLimit = Info->PrefetchWindow.Limit;
+    }
+    else
+    {
+        BusData->PrefetchWindowBase = (ULONGLONG)-1;
+        BusData->PrefetchWindowLimit = 0;
+    }
+
+    BusData->AcpiRootConfigured = TRUE;
+    BusData->ResourcesInitialized = TRUE;
+
+    if (Bus->BusAddresses)
+    {
+        PSUPPORTED_RANGES Ranges = Bus->BusAddresses;
+
+        Ranges->Sorted = TRUE;
+        Ranges->IO.Next = NULL;
+        Ranges->Memory.Next = NULL;
+        Ranges->PrefetchMemory.Next = NULL;
+
+        Ranges->NoIO = 1;
+        Ranges->IO.Base = Info->IoWindow.Present ? Info->IoWindow.Base : 0;
+        Ranges->IO.Limit = Info->IoWindow.Present ? Info->IoWindow.Limit : BusData->IoLimit;
+        Ranges->IO.SystemBase = 0;
+        Ranges->IO.SystemAddressSpace = 1;
+
+        Ranges->NoMemory = 1;
+        Ranges->Memory.Base = Info->MemoryWindow.Present ? Info->MemoryWindow.Base : 0;
+        Ranges->Memory.Limit = Info->MemoryWindow.Present ? Info->MemoryWindow.Limit : BusData->MemoryLimit;
+        Ranges->Memory.SystemBase = 0;
+        Ranges->Memory.SystemAddressSpace = 0;
+
+        if (Info->PrefetchWindow.Present)
+        {
+            Ranges->NoPrefetchMemory = 1;
+            Ranges->PrefetchMemory.Base = Info->PrefetchWindow.Base;
+            Ranges->PrefetchMemory.Limit = Info->PrefetchWindow.Limit;
+        }
+        else
+        {
+            Ranges->NoPrefetchMemory = 0;
+            Ranges->PrefetchMemory.Base = 0;
+            Ranges->PrefetchMemory.Limit = 0;
+        }
+        Ranges->PrefetchMemory.SystemBase = 0;
+        Ranges->PrefetchMemory.SystemAddressSpace = 0;
+    }
+
+    HalpPciUpdateBridgeHierarchy(Bus);
+}
 
 static __inline ULONGLONG
 HalpAlignUp(ULONGLONG Value,
@@ -797,13 +1032,35 @@ HalpPCIPin2ISALine(IN PBUS_HANDLER BusHandler,
                    IN PPCI_COMMON_CONFIG PciData)
 {
     static const UCHAR DefaultIrqMap[4] = {10, 11, 9, 5};
+    PPCIPBUSDATA BusData;
     UCHAR Pin;
 
-    UNREFERENCED_PARAMETER(BusHandler);
     UNREFERENCED_PARAMETER(RootHandler);
 
     Pin = PciData->u.type0.InterruptPin;
     if (!Pin || Pin > 4) return;
+
+    BusData = (PPCIPBUSDATA)BusHandler->BusData;
+    if (HalpPciRouteQueryCallback && BusData)
+    {
+        ULONG Gsi;
+        UCHAR Polarity;
+        UCHAR Trigger;
+
+        if (HalpPciRouteQueryCallback(BusData->PciSegment,
+                                       (UCHAR)BusHandler->BusNumber,
+                                       SlotNumber.u.bits.DeviceNumber,
+                                       SlotNumber.u.bits.FunctionNumber,
+                                       Pin,
+                                       &Gsi,
+                                       &Polarity,
+                                       &Trigger))
+        {
+            HalpPciRecordGsiInfo(Gsi, Polarity, Trigger);
+            PciData->u.type0.InterruptLine = (Gsi <= 0xFF) ? (UCHAR)Gsi : 0xFF;
+            return;
+        }
+    }
 
     if ((PciData->u.type0.InterruptLine == 0) ||
         (PciData->u.type0.InterruptLine == 0xFF))
@@ -866,6 +1123,32 @@ HalpGetISAFixedPCIIrq(IN PBUS_HANDLER BusHandler,
     {
         /* Fake success */
         return STATUS_SUCCESS;
+    }
+
+    if (HalpPciRouteQueryCallback)
+    {
+        PPCIPBUSDATA BusData = (PPCIPBUSDATA)BusHandler->BusData;
+        if (BusData)
+        {
+            ULONG Gsi;
+            UCHAR Polarity;
+            UCHAR Trigger;
+
+            if (HalpPciRouteQueryCallback(BusData->PciSegment,
+                                           (UCHAR)BusHandler->BusNumber,
+                                           PciSlot.u.bits.DeviceNumber,
+                                           PciSlot.u.bits.FunctionNumber,
+                                           PciData.u.type0.InterruptPin,
+                                           &Gsi,
+                                           &Polarity,
+                                           &Trigger))
+            {
+                HalpPciRecordGsiInfo(Gsi, Polarity, Trigger);
+                (*Range)->Base = Gsi;
+                (*Range)->Limit = Gsi;
+                return STATUS_SUCCESS;
+            }
+        }
     }
 
     /* Otherwise, the INT# should be valid, return it to the caller */

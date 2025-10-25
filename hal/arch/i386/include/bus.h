@@ -113,7 +113,8 @@ typedef struct _PCIPBUSDATA
     BOOLEAN ResourcesInitialized;
     UCHAR ParentBus;
     UCHAR Subtractive;
-    UCHAR reserved[1];
+    USHORT PciSegment;
+    BOOLEAN AcpiRootConfigured;
     UCHAR SwizzleIn[4];
     RTL_BITMAP DeviceConfigured;
     ULONG ConfiguredBits[PCI_MAX_DEVICES * PCI_MAX_FUNCTION / 32];
@@ -183,6 +184,8 @@ typedef struct _PCI_REGISTRY_INFO_INTERNAL
 #define PCI_TYPE2_CSE_PORT          (PUCHAR)0xCF8
 #define PCI_TYPE2_FORWARD_PORT      (PUCHAR)0xCFA
 #define PCI_TYPE2_ADDRESS_BASE      0xC
+
+#define HALP_INVALID_RANGE_BASE ((ULONGLONG)-1)
 
 //
 // PCI Type 1 Configuration Register
@@ -404,6 +407,23 @@ HalpAssignPCISlotResources(
     IN PDEVICE_OBJECT DeviceObject OPTIONAL,
     IN ULONG Slot,
     IN OUT PCM_RESOURCE_LIST *pAllocatedResources
+);
+
+BOOLEAN
+HalpPciLookupGsiInfo(
+    ULONG Gsi,
+    PUCHAR Polarity,
+    PUCHAR Trigger
+);
+
+VOID
+HalpResetPciBusWindows(
+    PBUS_HANDLER BusHandler
+);
+
+VOID
+HalpFinalizePciBusRanges(
+    PBUS_HANDLER BusHandler
 );
 
 CODE_SEG("INIT")

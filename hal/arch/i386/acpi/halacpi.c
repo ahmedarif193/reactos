@@ -9,8 +9,12 @@
 /* INCLUDES *******************************************************************/
 
 #include <hal.h>
+#include <ntifs.h>
+#include <stdarg.h>
 #define NDEBUG
 #include <debug.h>
+
+NTSYSAPI NTSTATUS NTAPI NtShutdownSystem(_In_ SHUTDOWN_ACTION Action);
 
 /* GLOBALS ********************************************************************/
 
@@ -38,7 +42,99 @@ LIST_ENTRY HalpAcpiTableMatchList;
 
 ULONG HalpInvalidAcpiTable;
 
+#define HALP_ACPI_OVERRIDE_ALIGNMENT   8
+#define ACPI_GAS_SYSTEM_MEMORY         0
+#define ACPI_GAS_SYSTEM_IO             1
+#define ACPI_PM1_STATUS_POWER_BUTTON   0x0100
+#ifndef ACPI_FADT_POWER_BUTTON
+#define ACPI_FADT_POWER_BUTTON         (1 << 4)
+#endif
+
 ULONG HalpPicVectorRedirect[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+
+PHYSICAL_ADDRESS HalpFacsPhysicalAddress;
+GEN_ADDR HalpPmTimerBlock;
+BOOLEAN HalpPmTimerBlockValid;
+ULONG HalpAppliedAcpiOverrides;
+GEN_ADDR HalpPm1EventBlocks[2];
+GEN_ADDR HalpPm1ControlBlocks[2];
+GEN_ADDR HalpPm2ControlBlock;
+GEN_ADDR HalpGeneralPurposeBlocks[2];
+BOOLEAN HalpPm1EventBlockValid[2];
+BOOLEAN HalpPm1ControlBlockValid[2];
+BOOLEAN HalpPm2ControlBlockValid;
+BOOLEAN HalpGeneralPurposeBlockValid[2];
+BOOLEAN HalpAcpiOverrideAttempted;
+BOOLEAN HalpPowerButtonShutdownInitiated;
+
+static
+VOID
+HalpAcpiInstallOverrideTable(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+    _In_ PDESCRIPTION_HEADER TableHeader);
+
+static
+VOID
+HalpAppendFormatA(
+    _Inout_updates_z_(BufferSize) PCHAR Buffer,
+    _In_ SIZE_T BufferSize,
+    _In_z_ PCSTR Format,
+    ...);
+
+static
+VOID
+HalpAcpiApplyLoaderOverrides(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+    _In_reads_bytes_(OverrideSize) PVOID OverrideBuffer,
+    _In_ ULONG OverrideSize);
+
+static
+PFN_COUNT
+HalpAcpiPagesForRange(
+    _In_ PHYSICAL_ADDRESS BaseAddress,
+    _In_ ULONG Length);
+
+static
+PHYSICAL_ADDRESS
+HalpAcpiSelectFadtPointer(
+    _In_ ULONG LegacyPointer,
+    _In_ PHYSICAL_ADDRESS ExtendedPointer);
+
+static
+BOOLEAN
+HalpAcpiGasValid(
+    _In_ const GEN_ADDR *Address);
+
+static
+VOID
+HalpAcpiInitializePmTimerBlock(
+    _In_ PFADT Fadt);
+
+static
+BOOLEAN
+HalpAcpiInitializeGenericBlock(
+    _In_opt_ const GEN_ADDR *Extended,
+    _In_ ULONG LegacyAddress,
+    _In_ UCHAR Length,
+    _In_ UCHAR DefaultBitWidth,
+    _Out_ GEN_ADDR *TargetGas);
+
+static
+VOID
+HalpAcpiInitializePmIoBlocks(
+    _In_ PFADT Fadt);
+
+static
+BOOLEAN
+HalpAcpiReadRegister(
+    _In_ const GEN_ADDR *Gas,
+    _Out_ ULONG *Value);
+
+static
+BOOLEAN
+HalpAcpiWriteRegister(
+    _In_ const GEN_ADDR *Gas,
+    _In_ ULONG Value);
 
 /* This determines the HAL type */
 BOOLEAN HalDisableFirmwareMapper = TRUE;
@@ -139,6 +235,525 @@ HalpAcpiCopyBiosTable(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
     return CopiedTable;
 }
 
+static
+VOID
+HalpAcpiInstallOverrideTable(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+    _In_ PDESCRIPTION_HEADER TableHeader)
+{
+    PACPI_CACHED_TABLE CachedTable;
+    PDESCRIPTION_HEADER CachedHeader;
+
+    CachedHeader = HalpAcpiCopyBiosTable(LoaderBlock, TableHeader);
+    if (!CachedHeader)
+    {
+        DPRINT1("HAL: Failed to cache ACPI override for %c%c%c%c\n",
+                TableHeader->Signature & 0xFF,
+                (TableHeader->Signature >> 8) & 0xFF,
+                (TableHeader->Signature >> 16) & 0xFF,
+                (TableHeader->Signature >> 24) & 0xFF);
+        return;
+    }
+
+    CachedTable = CONTAINING_RECORD(CachedHeader, ACPI_CACHED_TABLE, Header);
+
+    /* Prepend so override supersedes firmware copy */
+    InsertHeadList(&HalpAcpiTableCacheList, &CachedTable->Links);
+
+    ++HalpAppliedAcpiOverrides;
+
+    DPRINT1("HAL: ACPI override applied for %c%c%c%c (len %lu)\n",
+            TableHeader->Signature & 0xFF,
+            (TableHeader->Signature >> 8) & 0xFF,
+            (TableHeader->Signature >> 16) & 0xFF,
+            (TableHeader->Signature >> 24) & 0xFF,
+            TableHeader->Length);
+}
+
+static
+VOID
+HalpAcpiApplyLoaderOverrides(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+    _In_reads_bytes_(OverrideSize) PVOID OverrideBuffer,
+    _In_ ULONG OverrideSize)
+{
+    PUCHAR Current;
+    PUCHAR End;
+    ULONG TableIndex = 0;
+
+    if (!OverrideBuffer || !OverrideSize)
+    {
+        return;
+    }
+
+    HalpAcpiOverrideAttempted = TRUE;
+
+    Current = OverrideBuffer;
+    End = Current + OverrideSize;
+
+    while ((SIZE_T)(End - Current) >= sizeof(DESCRIPTION_HEADER))
+    {
+        PDESCRIPTION_HEADER TableHeader;
+        ULONG TableLength;
+        SIZE_T Advance;
+
+        TableHeader = (PDESCRIPTION_HEADER)Current;
+        TableLength = TableHeader->Length;
+
+        if ((TableLength < sizeof(DESCRIPTION_HEADER)) ||
+            (TableLength > (ULONG)(End - Current)))
+        {
+            DPRINT1("HAL: ACPI override #%lu has invalid length (%lu)\n",
+                    TableIndex,
+                    TableLength);
+            break;
+        }
+
+        if (TableLength == 0)
+        {
+            DPRINT1("HAL: ACPI override #%lu has zero length\n", TableIndex);
+            break;
+        }
+
+        HalpAcpiInstallOverrideTable(LoaderBlock, TableHeader);
+
+        Advance = TableLength;
+        Advance = (Advance + (HALP_ACPI_OVERRIDE_ALIGNMENT - 1)) &
+                  ~(SIZE_T)(HALP_ACPI_OVERRIDE_ALIGNMENT - 1);
+
+        Current += Advance;
+        ++TableIndex;
+    }
+
+    if ((SIZE_T)(End - Current) > 0)
+    {
+        ULONG Remaining;
+
+        Remaining = (ULONG)(End - Current);
+        DPRINT1("HAL: ACPI override data leftover (%lu bytes)\n", Remaining);
+    }
+
+    if (LoaderBlock && HalpAppliedAcpiOverrides)
+    {
+        DPRINT1("HAL: ACPI override tables installed: %lu\n",
+                HalpAppliedAcpiOverrides);
+    }
+}
+
+static
+PFN_COUNT
+HalpAcpiPagesForRange(
+    _In_ PHYSICAL_ADDRESS BaseAddress,
+    _In_ ULONG Length)
+{
+    ULONGLONG Offset;
+    ULONGLONG TotalBytes;
+    ULONGLONG Pages;
+
+    Offset = BaseAddress.QuadPart & (PAGE_SIZE - 1);
+    TotalBytes = Offset + Length;
+    Pages = (TotalBytes + PAGE_SIZE - 1) >> PAGE_SHIFT;
+
+    if (!Pages)
+    {
+        Pages = 1;
+    }
+
+    return (PFN_COUNT)Pages;
+}
+
+static
+PHYSICAL_ADDRESS
+HalpAcpiSelectFadtPointer(
+    _In_ ULONG LegacyPointer,
+    _In_ PHYSICAL_ADDRESS ExtendedPointer)
+{
+    PHYSICAL_ADDRESS Address;
+
+    if (ExtendedPointer.QuadPart)
+    {
+        Address = ExtendedPointer;
+    }
+    else
+    {
+        Address.QuadPart = 0;
+        Address.LowPart = LegacyPointer;
+    }
+
+    return Address;
+}
+
+static
+BOOLEAN
+HalpAcpiGasValid(
+    _In_ const GEN_ADDR *Address)
+{
+    if (!Address)
+    {
+        return FALSE;
+    }
+
+    if (Address->Address.QuadPart == 0)
+    {
+        return FALSE;
+    }
+
+    if ((Address->AddressSpaceID != ACPI_GAS_SYSTEM_MEMORY) &&
+        (Address->AddressSpaceID != ACPI_GAS_SYSTEM_IO))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static
+VOID
+HalpAcpiInitializePmTimerBlock(
+    _In_ PFADT Fadt)
+{
+    UCHAR DefaultWidth;
+
+    DefaultWidth = HalpFixedAcpiDescTable.pm_tmr_len ?
+                   (UCHAR)(HalpFixedAcpiDescTable.pm_tmr_len * 8) :
+                   24;
+
+    HalpPmTimerBlockValid = HalpAcpiInitializeGenericBlock(&Fadt->x_pm_tmr_blk,
+                                                           Fadt->pm_tmr_blk_io_port,
+                                                           HalpFixedAcpiDescTable.pm_tmr_len,
+                                                           DefaultWidth,
+                                                           &HalpPmTimerBlock);
+
+    if (!HalpPmTimerBlockValid)
+    {
+        RtlZeroMemory(&HalpPmTimerBlock, sizeof(HalpPmTimerBlock));
+    }
+}
+
+static
+BOOLEAN
+HalpAcpiInitializeGenericBlock(
+    _In_opt_ const GEN_ADDR *Extended,
+    _In_ ULONG LegacyAddress,
+    _In_ UCHAR Length,
+    _In_ UCHAR DefaultBitWidth,
+    _Out_ GEN_ADDR *TargetGas)
+{
+    GEN_ADDR Gas;
+    UCHAR BitWidth;
+
+    RtlZeroMemory(&Gas, sizeof(Gas));
+
+    BitWidth = Length ? (UCHAR)(Length * 8) : DefaultBitWidth;
+    if (BitWidth == 0)
+    {
+        BitWidth = DefaultBitWidth;
+    }
+    if (BitWidth == 0)
+    {
+        BitWidth = 8;
+    }
+
+    if (Extended && HalpAcpiGasValid(Extended))
+    {
+        Gas = *Extended;
+        if (Gas.BitWidth == 0)
+        {
+            Gas.BitWidth = BitWidth;
+        }
+    }
+    else if (LegacyAddress)
+    {
+        Gas.AddressSpaceID = ACPI_GAS_SYSTEM_IO;
+        Gas.BitWidth = BitWidth;
+        Gas.BitOffset = 0;
+        Gas.Reserved = 0;
+        Gas.Address.QuadPart = LegacyAddress;
+    }
+    else
+    {
+        RtlZeroMemory(TargetGas, sizeof(*TargetGas));
+        return FALSE;
+    }
+
+    if (Gas.BitWidth > 255)
+    {
+        Gas.BitWidth = 255;
+    }
+
+    *TargetGas = Gas;
+    return HalpAcpiGasValid(TargetGas);
+}
+
+static
+VOID
+HalpAcpiInitializePmIoBlocks(
+    _In_ PFADT Fadt)
+{
+    HalpPm1EventBlockValid[0] = HalpAcpiInitializeGenericBlock(&Fadt->x_pm1a_evt_blk,
+                                                               Fadt->pm1a_evt_blk_io_port,
+                                                               HalpFixedAcpiDescTable.pm1_evt_len,
+                                                               16,
+                                                               &HalpPm1EventBlocks[0]);
+
+    HalpPm1EventBlockValid[1] = HalpAcpiInitializeGenericBlock(&Fadt->x_pm1b_evt_blk,
+                                                               Fadt->pm1b_evt_blk_io_port,
+                                                               HalpFixedAcpiDescTable.pm1_evt_len,
+                                                               16,
+                                                               &HalpPm1EventBlocks[1]);
+
+    HalpPm1ControlBlockValid[0] = HalpAcpiInitializeGenericBlock(&Fadt->x_pm1a_ctrl_blk,
+                                                                 Fadt->pm1a_ctrl_blk_io_port,
+                                                                 HalpFixedAcpiDescTable.pm1_ctrl_len,
+                                                                 16,
+                                                                 &HalpPm1ControlBlocks[0]);
+
+    HalpPm1ControlBlockValid[1] = HalpAcpiInitializeGenericBlock(&Fadt->x_pm1b_ctrl_blk,
+                                                                 Fadt->pm1b_ctrl_blk_io_port,
+                                                                 HalpFixedAcpiDescTable.pm1_ctrl_len,
+                                                                 16,
+                                                                 &HalpPm1ControlBlocks[1]);
+
+    HalpPm2ControlBlockValid = HalpAcpiInitializeGenericBlock(&Fadt->x_pm2_ctrl_blk,
+                                                              Fadt->pm2_ctrl_blk_io_port,
+                                                              HalpFixedAcpiDescTable.pm2_ctrl_len,
+                                                              8,
+                                                              &HalpPm2ControlBlock);
+
+    HalpGeneralPurposeBlockValid[0] = HalpAcpiInitializeGenericBlock(&Fadt->x_gp0_blk,
+                                                                     Fadt->gp0_blk_io_port,
+                                                                     HalpFixedAcpiDescTable.gp0_blk_len,
+                                                                     8,
+                                                                     &HalpGeneralPurposeBlocks[0]);
+
+    HalpGeneralPurposeBlockValid[1] = HalpAcpiInitializeGenericBlock(&Fadt->x_gp1_blk,
+                                                                     Fadt->gp1_blk_io_port,
+                                                                     HalpFixedAcpiDescTable.gp1_blk_len,
+                                                                     8,
+                                                                     &HalpGeneralPurposeBlocks[1]);
+}
+
+static
+BOOLEAN
+HalpAcpiReadRegister(
+    _In_ const GEN_ADDR *Gas,
+    _Out_ ULONG *Value)
+{
+    ULONG Bytes;
+
+    if (!Gas || !Value || !HalpAcpiGasValid(Gas))
+    {
+        return FALSE;
+    }
+
+    Bytes = (Gas->BitWidth + 7) >> 3;
+    if (!Bytes)
+    {
+        Bytes = 1;
+    }
+
+    switch (Gas->AddressSpaceID)
+    {
+        case ACPI_GAS_SYSTEM_IO:
+        {
+            ULONG_PTR Port = (ULONG_PTR)Gas->Address.LowPart;
+
+            switch (Bytes)
+            {
+                case 1:
+                    *Value = READ_PORT_UCHAR((PUCHAR)Port);
+                    return TRUE;
+                case 2:
+                    *Value = READ_PORT_USHORT((PUSHORT)Port);
+                    return TRUE;
+                case 4:
+                    *Value = READ_PORT_ULONG((PULONG)Port);
+                    return TRUE;
+                default:
+                    return FALSE;
+            }
+        }
+
+        case ACPI_GAS_SYSTEM_MEMORY:
+        {
+            PHYSICAL_ADDRESS BaseAddress;
+            PFN_COUNT Pages;
+            PVOID Mapping;
+            ULONG Offset;
+            volatile PUCHAR Pointer;
+
+            BaseAddress.QuadPart = Gas->Address.QuadPart & ~((ULONGLONG)PAGE_SIZE - 1);
+            Pages = HalpAcpiPagesForRange(Gas->Address, Bytes);
+            Mapping = HalpMapPhysicalMemory64(BaseAddress, Pages);
+            if (!Mapping)
+            {
+                return FALSE;
+            }
+
+            Offset = (ULONG)(Gas->Address.QuadPart - BaseAddress.QuadPart);
+            Pointer = (volatile PUCHAR)Mapping + Offset;
+
+            switch (Bytes)
+            {
+                case 1:
+                    *Value = READ_REGISTER_UCHAR((volatile UCHAR *)Pointer);
+                    break;
+                case 2:
+                    *Value = READ_REGISTER_USHORT((volatile USHORT *)Pointer);
+                    break;
+                case 4:
+                    *Value = READ_REGISTER_ULONG((volatile ULONG *)Pointer);
+                    break;
+                default:
+                    HalpUnmapVirtualAddress(Mapping, Pages);
+                    return FALSE;
+            }
+
+            HalpUnmapVirtualAddress(Mapping, Pages);
+            return TRUE;
+        }
+
+        default:
+            return FALSE;
+    }
+}
+
+BOOLEAN
+NTAPI
+HalpAcpiQueryPowerButton(VOID)
+{
+    ULONG Index;
+    ULONG Value;
+    BOOLEAN Pressed = FALSE;
+
+    /* If ACPI handles power button via a control method device, nothing to do */
+    if (HalpFixedAcpiDescTable.flags & ACPI_FADT_POWER_BUTTON)
+    {
+        return FALSE;
+    }
+
+    for (Index = 0; Index < RTL_NUMBER_OF(HalpPm1EventBlocks); Index++)
+    {
+        if (!HalpPm1EventBlockValid[Index])
+        {
+            continue;
+        }
+
+        if (!HalpAcpiReadRegister(&HalpPm1EventBlocks[Index], &Value))
+        {
+            continue;
+        }
+
+        if (Value & ACPI_PM1_STATUS_POWER_BUTTON)
+        {
+            HalpAcpiWriteRegister(&HalpPm1EventBlocks[Index], ACPI_PM1_STATUS_POWER_BUTTON);
+            Pressed = TRUE;
+        }
+    }
+
+    if (Pressed && !HalpPowerButtonShutdownInitiated)
+    {
+        NTSTATUS Status;
+
+        HalpPowerButtonShutdownInitiated = TRUE;
+        DPRINT1("HAL: Initiating shutdown sequence after power button press.\n");
+
+        Status = NtShutdownSystem(ShutdownPowerOff);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("HAL: NtShutdownSystem failed with status 0x%08lx\n", Status);
+            HalpPowerButtonShutdownInitiated = FALSE;
+        }
+    }
+
+    return Pressed;
+}
+
+static
+BOOLEAN
+HalpAcpiWriteRegister(
+    _In_ const GEN_ADDR *Gas,
+    _In_ ULONG Value)
+{
+    ULONG Bytes;
+
+    if (!Gas || !HalpAcpiGasValid(Gas))
+    {
+        return FALSE;
+    }
+
+    Bytes = (Gas->BitWidth + 7) >> 3;
+    if (!Bytes)
+    {
+        Bytes = 1;
+    }
+
+    switch (Gas->AddressSpaceID)
+    {
+        case ACPI_GAS_SYSTEM_IO:
+        {
+            ULONG_PTR Port = (ULONG_PTR)Gas->Address.LowPart;
+
+            switch (Bytes)
+            {
+                case 1:
+                    WRITE_PORT_UCHAR((PUCHAR)Port, (UCHAR)Value);
+                    return TRUE;
+                case 2:
+                    WRITE_PORT_USHORT((PUSHORT)Port, (USHORT)Value);
+                    return TRUE;
+                case 4:
+                    WRITE_PORT_ULONG((PULONG)Port, Value);
+                    return TRUE;
+                default:
+                    return FALSE;
+            }
+        }
+
+        case ACPI_GAS_SYSTEM_MEMORY:
+        {
+            PHYSICAL_ADDRESS BaseAddress;
+            PFN_COUNT Pages;
+            PVOID Mapping;
+            ULONG Offset;
+            volatile PUCHAR Pointer;
+
+            BaseAddress.QuadPart = Gas->Address.QuadPart & ~((ULONGLONG)PAGE_SIZE - 1);
+            Pages = HalpAcpiPagesForRange(Gas->Address, Bytes);
+            Mapping = HalpMapPhysicalMemory64(BaseAddress, Pages);
+            if (!Mapping)
+            {
+                return FALSE;
+            }
+
+            Offset = (ULONG)(Gas->Address.QuadPart - BaseAddress.QuadPart);
+            Pointer = (volatile PUCHAR)Mapping + Offset;
+
+            switch (Bytes)
+            {
+                case 1:
+                    WRITE_REGISTER_UCHAR((volatile UCHAR *)Pointer, (UCHAR)Value);
+                    break;
+                case 2:
+                    WRITE_REGISTER_USHORT((volatile USHORT *)Pointer, (USHORT)Value);
+                    break;
+                case 4:
+                    WRITE_REGISTER_ULONG((volatile ULONG *)Pointer, Value);
+                    break;
+                default:
+                    HalpUnmapVirtualAddress(Mapping, Pages);
+                    return FALSE;
+            }
+
+            HalpUnmapVirtualAddress(Mapping, Pages);
+            return TRUE;
+        }
+
+        default:
+            return FALSE;
+    }
+}
+
 PVOID
 NTAPI
 HalpAcpiGetTableFromBios(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
@@ -167,10 +782,12 @@ HalpAcpiGetTableFromBios(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
         if (Fadt)
         {
             /* Grab the DSDT address and assume 2 pages */
-            PhysicalAddress.HighPart = 0;
-            PhysicalAddress.LowPart = Fadt->dsdt;
-            TableLength = 2 * PAGE_SIZE;
-
+            PhysicalAddress = HalpAcpiSelectFadtPointer(Fadt->dsdt, Fadt->x_dsdt);
+            if (!PhysicalAddress.QuadPart)
+            {
+                DPRINT1("HAL: FADT missing DSDT address.\n");
+                return NULL;
+            }
             /* Map it */
             if (LoaderBlock)
             {
@@ -647,7 +1264,7 @@ HalpAcpiTableCacheInit(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     NTSTATUS Status = STATUS_SUCCESS;
     PHYSICAL_ADDRESS PhysicalAddress;
     PVOID MappedAddress;
-    ULONG TableLength;
+    PFN_COUNT TablePages;
     PRSDT Rsdt;
     PLOADER_PARAMETER_EXTENSION LoaderExtension;
 
@@ -695,9 +1312,9 @@ HalpAcpiTableCacheInit(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     /* We assumed two pages -- do we need less or more? */
-    TableLength = ADDRESS_AND_SIZE_TO_SPAN_PAGES(PhysicalAddress.LowPart,
-                                                 Rsdt->Header.Length);
-    if (TableLength != 2)
+    TablePages = HalpAcpiPagesForRange(PhysicalAddress,
+                                       Rsdt->Header.Length);
+    if (TablePages != 2)
     {
         /* Are we in phase 0 or 1? */
         if (!LoaderBlock)
@@ -705,14 +1322,14 @@ HalpAcpiTableCacheInit(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             /* Unmap the old table, remap the new one, using Mm I/O space */
             MmUnmapIoSpace(MappedAddress, 2 * PAGE_SIZE);
             MappedAddress = MmMapIoSpace(PhysicalAddress,
-                                         TableLength << PAGE_SHIFT,
+                                         TablePages << PAGE_SHIFT,
                                          MmNonCached);
         }
         else
         {
             /* Unmap the old table, remap the new one, using HAL heap */
             HalpUnmapVirtualAddress(MappedAddress, 2);
-            MappedAddress = HalpMapPhysicalMemory64(PhysicalAddress, TableLength);
+            MappedAddress = HalpMapPhysicalMemory64(PhysicalAddress, TablePages);
         }
 
         /* Get the remapped table */
@@ -738,14 +1355,14 @@ HalpAcpiTableCacheInit(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     if (LoaderBlock)
     {
         /* Use HAL heap */
-        HalpUnmapVirtualAddress(MappedAddress, TableLength);
+        HalpUnmapVirtualAddress(MappedAddress, TablePages);
 
         LoaderExtension = LoaderBlock->Extension;
     }
     else
     {
         /* Use Mm */
-        MmUnmapIoSpace(MappedAddress, TableLength << PAGE_SHIFT);
+        MmUnmapIoSpace(MappedAddress, TablePages << PAGE_SHIFT);
 
         LoaderExtension = NULL;
     }
@@ -759,8 +1376,9 @@ HalpAcpiTableCacheInit(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         /* Compatible loader: did it provide an ACPI table override? */
         if ((LoaderExtension->AcpiTable) && (LoaderExtension->AcpiTableSize))
         {
-            /* Great, because we don't support it! */
-            DPRINT1("ACPI Table Overrides Not Supported!\n");
+            HalpAcpiApplyLoaderOverrides(LoaderBlock,
+                                         LoaderExtension->AcpiTable,
+                                         LoaderExtension->AcpiTableSize);
         }
     }
 
@@ -779,9 +1397,36 @@ HaliAcpiTimerInit(IN ULONG TimerPort,
     if (!TimerPort)
     {
         /* Get the data from the FADT */
-        TimerPort = HalpFixedAcpiDescTable.pm_tmr_blk_io_port;
         TimerValExt = HalpFixedAcpiDescTable.flags & ACPI_TMR_VAL_EXT;
-        DPRINT1("ACPI Timer at: %lXh (EXT: %lu)\n", TimerPort, TimerValExt);
+        if (HalpPmTimerBlockValid)
+        {
+            if (HalpPmTimerBlock.AddressSpaceID == ACPI_GAS_SYSTEM_IO)
+            {
+                TimerPort = (ULONG)HalpPmTimerBlock.Address.LowPart;
+                DPRINT1("ACPI Timer at: %lXh (EXT: %lu)\n", TimerPort, TimerValExt);
+            }
+            else if (HalpPmTimerBlock.AddressSpaceID == ACPI_GAS_SYSTEM_MEMORY)
+            {
+                DPRINT1("ACPI Timer mapped at 0x%llx (memory, EXT: %lu)\n",
+                        (unsigned long long)HalpPmTimerBlock.Address.QuadPart,
+                        TimerValExt);
+            }
+        }
+
+        if (!TimerPort)
+        {
+            TimerPort = HalpFixedAcpiDescTable.pm_tmr_blk_io_port;
+            if (TimerPort)
+            {
+                DPRINT1("ACPI Timer fallback port at: %lXh (EXT: %lu)\n",
+                        TimerPort,
+                        TimerValExt);
+            }
+            else
+            {
+                DPRINT1("ACPI Timer resource unavailable (EXT: %lu)\n", TimerValExt);
+            }
+        }
     }
 
     /* FIXME: Now proceed to the timer initialization */
@@ -820,6 +1465,12 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Copy it in the HAL static buffer */
     RtlCopyMemory(&HalpFixedAcpiDescTable, Fadt, TableLength);
+
+    /* Resolve key ACPI pointers that may reside above 4GB */
+    HalpFacsPhysicalAddress = HalpAcpiSelectFadtPointer(Fadt->facs,
+                                                       Fadt->x_firmware_ctrl);
+    HalpAcpiInitializePmTimerBlock(Fadt);
+    HalpAcpiInitializePmIoBlocks(Fadt);
 
     /* Anything special this HAL needs to do? */
     HalpAcpiDetectMachineSpecificActions(LoaderBlock, &HalpFixedAcpiDescTable);
@@ -872,6 +1523,19 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Setup the boot table */
     HalpInitBootTable(LoaderBlock);
+
+    if (HalpAcpiOverrideAttempted)
+    {
+        if (HalpAppliedAcpiOverrides)
+        {
+            DPRINT1("HAL: Applied %lu ACPI override table(s).\n",
+                    HalpAppliedAcpiOverrides);
+        }
+        else
+        {
+            DPRINT1("HAL: ACPI override tables were supplied but none matched.\n");
+        }
+    }
 
     /* Log some ACPI data */
     {
@@ -927,63 +1591,103 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
 
         /* Print the ACPI version */
-        DPRINT1("ACPI v");
-        if (AcpiVersion == NULL)
         {
-            // Unknown past values, or newer than v6.6 (documented as 6.5).
-            DbgPrint("Unknown_%u_%u", Fadt->Header.Revision, Fadt->minor_revision);
-        }
-        else
-        {
-            DbgPrint("%s", AcpiVersion);
-        }
-        DbgPrint(" detected. Tables:");
+            CHAR Message[256];
 
-        /* List cached tables */
-        for (NextEntry = HalpAcpiTableCacheList.Flink;
-             NextEntry != &HalpAcpiTableCacheList;
-             NextEntry = NextEntry->Flink)
-        {
-            PACPI_CACHED_TABLE CachedTable = CONTAINING_RECORD(NextEntry, ACPI_CACHED_TABLE, Links);
+            Message[0] = '\0';
+            HalpAppendFormatA(Message, sizeof(Message), "ACPI v");
+            if (AcpiVersion == NULL)
+            {
+                // Unknown past values, or newer than v6.6 (documented as 6.5).
+                HalpAppendFormatA(Message,
+                                  sizeof(Message),
+                                  "Unknown_%u_%u",
+                                  Fadt->Header.Revision,
+                                  Fadt->minor_revision);
+            }
+            else
+            {
+                HalpAppendFormatA(Message, sizeof(Message), "%s", AcpiVersion);
+            }
+            HalpAppendFormatA(Message, sizeof(Message), " detected. Tables:");
 
-            /* Print the table signature */
-            DbgPrint(" [%c%c%c%c]",
-                      CachedTable->Header.Signature & 0x000000FF,
-                     (CachedTable->Header.Signature & 0x0000FF00) >>  8,
-                     (CachedTable->Header.Signature & 0x00FF0000) >> 16,
-                     (CachedTable->Header.Signature & 0xFF000000) >> 24);
+            /* List cached tables */
+            for (NextEntry = HalpAcpiTableCacheList.Flink;
+                 NextEntry != &HalpAcpiTableCacheList;
+                 NextEntry = NextEntry->Flink)
+            {
+                PACPI_CACHED_TABLE CachedTable = CONTAINING_RECORD(NextEntry, ACPI_CACHED_TABLE, Links);
+
+                HalpAppendFormatA(Message,
+                                  sizeof(Message),
+                                  " [%c%c%c%c]",
+                                  CachedTable->Header.Signature & 0x000000FF,
+                                 (CachedTable->Header.Signature & 0x0000FF00) >>  8,
+                                 (CachedTable->Header.Signature & 0x00FF0000) >> 16,
+                                 (CachedTable->Header.Signature & 0xFF000000) >> 24);
+            }
+
+            DPRINT1("%s\n", Message);
         }
-        DbgPrint("\n");
     }
 
     /* Return success */
     return STATUS_SUCCESS;
 }
 
+static
+VOID
+HalpAppendFormatA(
+    _Inout_updates_z_(BufferSize) PCHAR Buffer,
+    _In_ SIZE_T BufferSize,
+    _In_z_ PCSTR Format,
+    ...)
+{
+    SIZE_T Length;
+    INT Written;
+    va_list Args;
+
+    if (BufferSize == 0)
+        return;
+
+    Buffer[BufferSize - 1] = '\0';
+    Length = strlen(Buffer);
+    if (Length >= BufferSize - 1)
+        return;
+
+    va_start(Args, Format);
+    Written = _vsnprintf(Buffer + Length, BufferSize - Length, Format, Args);
+    va_end(Args);
+
+    if (Written < 0)
+        Buffer[BufferSize - 1] = '\0';
+}
+
 /* Helper function to show PCI BAR size */
 CODE_SEG("INIT")
 static VOID
-ShowSize(ULONG Size)
+ShowSize(ULONG Size, PCHAR Buffer, SIZE_T BufferSize)
 {
     if (!Size) return;
-    DbgPrint(" [size=");
+
+    HalpAppendFormatA(Buffer, BufferSize, " [size=");
     if (Size < 1024)
     {
-        DbgPrint("%d", (int)Size);
+        HalpAppendFormatA(Buffer, BufferSize, "%d", (int)Size);
     }
     else if (Size < 1048576)
     {
-        DbgPrint("%dK", (int)(Size / 1024));
+        HalpAppendFormatA(Buffer, BufferSize, "%dK", (int)(Size / 1024));
     }
     else if (Size < 0x80000000)
     {
-        DbgPrint("%dM", (int)(Size / 1048576));
+        HalpAppendFormatA(Buffer, BufferSize, "%dM", (int)(Size / 1048576));
     }
     else
     {
-        DbgPrint("%d", Size);
+        HalpAppendFormatA(Buffer, BufferSize, "%d", Size);
     }
-    DbgPrint("]");
+    HalpAppendFormatA(Buffer, BufferSize, "]");
 }
 
 /* These includes provide the PCI device/vendor lookup tables */
@@ -1150,28 +1854,58 @@ HalpDebugPciDumpBusAcpi(
     }
 
     /* Print out and decode flags */
-    DbgPrint("\tFlags:");
-    if (PciData->Command & PCI_ENABLE_BUS_MASTER) DbgPrint(" bus master,");
-    if (PciData->Status & PCI_STATUS_66MHZ_CAPABLE) DbgPrint(" 66MHz,");
-    if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x000) DbgPrint(" fast devsel,");
-    if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x200) DbgPrint(" medium devsel,");
-    if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x400) DbgPrint(" slow devsel,");
-    if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x600) DbgPrint(" unknown devsel,");
-    DbgPrint(" latency %d", PciData->LatencyTimer);
-    if (PciData->u.type0.InterruptPin != 0 &&
-        PciData->u.type0.InterruptLine != 0 &&
-        PciData->u.type0.InterruptLine != 0xFF) DbgPrint(", IRQ %02d", PciData->u.type0.InterruptLine);
-    else if (PciData->u.type0.InterruptPin != 0) DbgPrint(", IRQ assignment required");
-    DbgPrint("\n");
+    {
+        CHAR FlagsLine[256];
+
+        FlagsLine[0] = '\0';
+        HalpAppendFormatA(FlagsLine, sizeof(FlagsLine), "\tFlags:");
+        if (PciData->Command & PCI_ENABLE_BUS_MASTER) HalpAppendFormatA(FlagsLine, sizeof(FlagsLine), " bus master,");
+        if (PciData->Status & PCI_STATUS_66MHZ_CAPABLE) HalpAppendFormatA(FlagsLine, sizeof(FlagsLine), " 66MHz,");
+        if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x000) HalpAppendFormatA(FlagsLine, sizeof(FlagsLine), " fast devsel,");
+        if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x200) HalpAppendFormatA(FlagsLine, sizeof(FlagsLine), " medium devsel,");
+        if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x400) HalpAppendFormatA(FlagsLine, sizeof(FlagsLine), " slow devsel,");
+        if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x600) HalpAppendFormatA(FlagsLine, sizeof(FlagsLine), " unknown devsel,");
+        HalpAppendFormatA(FlagsLine, sizeof(FlagsLine), " latency %d", PciData->LatencyTimer);
+        if (PciData->u.type0.InterruptPin != 0 &&
+            PciData->u.type0.InterruptLine != 0 &&
+            PciData->u.type0.InterruptLine != 0xFF)
+        {
+            HalpAppendFormatA(FlagsLine,
+                              sizeof(FlagsLine),
+                              ", IRQ %02d",
+                              PciData->u.type0.InterruptLine);
+        }
+        else if (PciData->u.type0.InterruptPin != 0)
+        {
+            HalpAppendFormatA(FlagsLine, sizeof(FlagsLine), ", IRQ assignment required");
+        }
+
+        DbgPrint("%s\n", FlagsLine);
+    }
 
     if (HeaderType == PCI_BRIDGE_TYPE)
     {
-        DbgPrint("\tBridge:");
-        DbgPrint(" primary bus %d,", PciData->u.type1.PrimaryBus);
-        DbgPrint(" secondary bus %d,", PciData->u.type1.SecondaryBus);
-        DbgPrint(" subordinate bus %d,", PciData->u.type1.SubordinateBus);
-        DbgPrint(" secondary latency %d", PciData->u.type1.SecondaryLatency);
-        DbgPrint("\n");
+        CHAR BridgeLine[256];
+
+        BridgeLine[0] = '\0';
+        HalpAppendFormatA(BridgeLine, sizeof(BridgeLine), "\tBridge:");
+        HalpAppendFormatA(BridgeLine,
+                          sizeof(BridgeLine),
+                          " primary bus %d,",
+                          PciData->u.type1.PrimaryBus);
+        HalpAppendFormatA(BridgeLine,
+                          sizeof(BridgeLine),
+                          " secondary bus %d,",
+                          PciData->u.type1.SecondaryBus);
+        HalpAppendFormatA(BridgeLine,
+                          sizeof(BridgeLine),
+                          " subordinate bus %d,",
+                          PciData->u.type1.SubordinateBus);
+        HalpAppendFormatA(BridgeLine,
+                          sizeof(BridgeLine),
+                          " secondary latency %d",
+                          PciData->u.type1.SecondaryLatency);
+        DbgPrint("%s\n", BridgeLine);
     }
 
     /* Scan and display BARs (Base Address Registers) */
@@ -1216,8 +1950,15 @@ HalpDebugPciDumpBusAcpi(
                 while (!(PciBar & Size) && (Size)) Size <<= 1;
 
                 /* Print I/O BAR info */
-                DbgPrint("\tI/O ports at %04lx", Mem & PCI_ADDRESS_IO_ADDRESS_MASK);
-                ShowSize(Size);
+                CHAR BarLine[256];
+
+                BarLine[0] = '\0';
+                HalpAppendFormatA(BarLine,
+                                  sizeof(BarLine),
+                                  "\tI/O ports at %04lx",
+                                  Mem & PCI_ADDRESS_IO_ADDRESS_MASK);
+                ShowSize(Size, BarLine, sizeof(BarLine));
+                DbgPrint("%s\n", BarLine);
             }
             else
             {
@@ -1226,21 +1967,28 @@ HalpDebugPciDumpBusAcpi(
                 while (!(PciBar & Size) && (Size)) Size <<= 1;
 
                 /* Print Memory BAR info */
-                DbgPrint("\tMemory at %08lx (%d-bit, %sprefetchable)",
-                         Mem & PCI_ADDRESS_MEMORY_ADDRESS_MASK,
-                         (Mem & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_32BIT ? 32 : 64,
-                         (Mem & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? "" : "non-");
-                ShowSize(Size);
+                {
+                    CHAR BarLine[256];
+
+                    BarLine[0] = '\0';
+                    HalpAppendFormatA(BarLine,
+                                      sizeof(BarLine),
+                                      "\tMemory at %08lx (%d-bit, %sprefetchable)",
+                                      Mem & PCI_ADDRESS_MEMORY_ADDRESS_MASK,
+                                      (Mem & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_32BIT ? 32 : 64,
+                                      (Mem & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? "" : "non-");
+                    ShowSize(Size, BarLine, sizeof(BarLine));
+                    DbgPrint("%s\n", BarLine);
+                }
             }
-            DbgPrint("\n");
         }
     }
 }
 
 CODE_SEG("INIT")
+static
 VOID
-NTAPI
-HalpInitializePciBus(VOID)
+HalpAcpiEnumeratePciBusDebug(VOID)
 {
     PCI_COMMON_CONFIG PciConfig;
     PCI_SLOT_NUMBER PciSlot;
@@ -1484,7 +2232,7 @@ HalReportResourceUsage(VOID)
     /* FIXME: Initialize MCA bus */
 
     /* Initialize PCI bus. */
-    HalpInitializePciBus();
+    HalpAcpiEnumeratePciBusDebug();
 
     /* What kind of bus is this? */
     switch (HalpBusType)

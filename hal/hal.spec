@@ -57,6 +57,8 @@
 @ fastcall -arch=arm HalSweepDcache()
 @ fastcall HalSystemVectorDispatchEntry(long long long)
 @ stdcall HalTranslateBusAddress(long long long long ptr ptr)
+@ stdcall HalpConfigurePciRootBridge(ptr)
+@ stdcall HalpRegisterPciRouteQuery(ptr)
 @ stdcall -arch=i386,x86_64 IoAssignDriveLetters(ptr str ptr ptr) HalpAssignDriveLetters
 @ stdcall IoFlushAdapterBuffers(ptr ptr ptr ptr long long)
 @ stdcall IoFreeAdapterChannel(ptr)

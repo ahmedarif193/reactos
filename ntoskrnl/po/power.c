@@ -771,7 +771,7 @@ PoUnregisterSystemState(IN PVOID StateHandle)
 }
 
 /*
- * @unimplemented
+ * Minimal shutdown support for NtInitiatePowerAction.
  */
 NTSTATUS
 NTAPI
@@ -780,8 +780,30 @@ NtInitiatePowerAction(IN POWER_ACTION SystemAction,
                       IN ULONG Flags,
                       IN BOOLEAN Asynchronous)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    SHUTDOWN_ACTION ShutdownAction;
+
+    UNREFERENCED_PARAMETER(MinSystemState);
+    UNREFERENCED_PARAMETER(Flags);
+    UNREFERENCED_PARAMETER(Asynchronous);
+
+    PAGED_CODE();
+
+    switch (SystemAction)
+    {
+        case PowerActionShutdownOff:
+        case PowerActionShutdown:
+            ShutdownAction = ShutdownPowerOff;
+            break;
+
+        case PowerActionShutdownReset:
+            ShutdownAction = ShutdownReboot;
+            break;
+
+        default:
+            return STATUS_NOT_IMPLEMENTED;
+    }
+
+    return ZwShutdownSystem(ShutdownAction);
 }
 
 static

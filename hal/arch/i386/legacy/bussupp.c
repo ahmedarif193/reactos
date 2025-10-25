@@ -9,6 +9,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <hal.h>
+#include <reactos/hal/acpi_pci.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -434,6 +435,8 @@ HalpAllocateAndInitPciBusHandler(IN ULONG PciType,
     BusData->MaxDevice = PCI_MAX_DEVICES;
     BusData->GetIrqRange = HalpGetISAFixedPCIIrq;
     BusData->ResourcesInitialized = FALSE;
+    BusData->PciSegment = 0;
+    BusData->AcpiRootConfigured = FALSE;
 
     /* Initialize the bitmap */
     RtlZeroMemory(BusData->ConfiguredBits, sizeof(BusData->ConfiguredBits));
@@ -544,13 +547,11 @@ HalpIsValidPCIDevice(IN PBUS_HANDLER BusHandler,
     return TRUE;
 }
 
-#define HALP_INVALID_RANGE_BASE ((ULONGLONG)-1)
 #define HALP_DEFAULT_IO_LIMIT   0xFFFFULL
 #define HALP_MAX_IO_LIMIT       0xFFFFFFFFULL
 #define HALP_DEFAULT_MEM_BASE   0xC0000000ULL
 #define HALP_DEFAULT_MEM_LIMIT  0xFEBFFFFFULL
 
-static
 VOID
 HalpResetPciBusWindows(
     PBUS_HANDLER BusHandler)
@@ -564,6 +565,48 @@ HalpResetPciBusWindows(
     }
 
     BusData->ResourcesInitialized = TRUE;
+
+    if (BusData->AcpiRootConfigured)
+    {
+        if ((BusData->IoWindowBase != HALP_INVALID_RANGE_BASE) &&
+            (BusData->IoWindowBase <= BusData->IoWindowLimit))
+        {
+            BusData->IoBase = BusData->IoWindowBase;
+            BusData->IoLimit = BusData->IoWindowLimit;
+        }
+        else
+        {
+            BusData->IoBase = 0;
+            BusData->IoLimit = HALP_DEFAULT_IO_LIMIT;
+        }
+        BusData->IoNext = BusData->IoBase;
+
+        if ((BusData->MemoryWindowBase != HALP_INVALID_RANGE_BASE) &&
+            (BusData->MemoryWindowBase <= BusData->MemoryWindowLimit))
+        {
+            BusData->MemoryBase = BusData->MemoryWindowBase;
+            BusData->MemoryLimit = BusData->MemoryWindowLimit;
+        }
+        else
+        {
+            BusData->MemoryBase = HALP_DEFAULT_MEM_BASE;
+            BusData->MemoryLimit = HALP_DEFAULT_MEM_LIMIT;
+        }
+        BusData->MemoryNext = BusData->MemoryBase;
+
+        if ((BusData->PrefetchWindowBase != HALP_INVALID_RANGE_BASE) &&
+            (BusData->PrefetchWindowBase <= BusData->PrefetchWindowLimit))
+        {
+            /* Leave as configured */
+        }
+        else
+        {
+            BusData->PrefetchWindowBase = HALP_INVALID_RANGE_BASE;
+            BusData->PrefetchWindowLimit = 0;
+        }
+        return;
+    }
+
     BusData->IoBase = 0;
     BusData->IoLimit = HALP_DEFAULT_IO_LIMIT;
     BusData->IoNext = BusData->IoBase;
@@ -794,7 +837,6 @@ HalpCollectPciBusWindows(
     }
 }
 
-static
 VOID
 HalpFinalizePciBusRanges(
     PBUS_HANDLER BusHandler)

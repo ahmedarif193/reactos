@@ -16,5 +16,6 @@
 #include <wdmguid.h>
 #include <acpiioct.h>
 #include <ntintsafe.h>
+#include <reactos/hal/acpi_pci.h>
 
 #endif /* _ACPI_PCH_ */

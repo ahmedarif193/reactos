@@ -271,6 +271,12 @@ HalpCheckPowerButton(
     VOID
 );
 
+BOOLEAN
+NTAPI
+HalpAcpiQueryPowerButton(
+    VOID
+);
+
 CODE_SEG("INIT")
 VOID
 NTAPI

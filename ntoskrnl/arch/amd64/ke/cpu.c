@@ -12,6 +12,7 @@
 #include <ntoskrnl.h>
 #include <x86x64/Cpuid.h>
 #include <x86x64/Msr.h>
+#include <stdarg.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -350,12 +351,45 @@ KiGetFeatureBits(VOID)
 }
 
 #if DBG
+
+static
+VOID
+KiAppendFormatA(
+    _Inout_updates_z_(BufferSize) PCHAR Buffer,
+    _In_ SIZE_T BufferSize,
+    _In_z_ PCSTR Format,
+    ...)
+{
+    SIZE_T Length;
+    INT Written;
+    va_list Args;
+
+    if (BufferSize == 0)
+        return;
+
+    Buffer[BufferSize - 1] = '\0';
+    Length = strlen(Buffer);
+    if (Length >= BufferSize - 1)
+        return;
+
+    va_start(Args, Format);
+    Written = _vsnprintf(Buffer + Length, BufferSize - Length, Format, Args);
+    va_end(Args);
+
+    if (Written < 0)
+        Buffer[BufferSize - 1] = '\0';
+}
+
 VOID
 KiReportCpuFeatures(IN PKPRCB Prcb)
 {
     ULONG64 FeatureBits = Prcb->FeatureBits | ((ULONG64)Prcb->FeatureBitsHigh << 32);
     ULONG CpuFeatures = 0;
     CPU_INFO CpuInfo;
+    CHAR FeatureLine[512];
+
+    FeatureLine[0] = '\0';
+    KiAppendFormatA(FeatureLine, sizeof(FeatureLine), "Supported CPU features:");
 
     if (Prcb->CpuVendor)
     {
@@ -363,62 +397,60 @@ KiReportCpuFeatures(IN PKPRCB Prcb)
         CpuFeatures = CpuInfo.Edx;
     }
 
-    DPRINT1("Supported CPU features:");
+#define append_kf_bit(kf_value) if (FeatureBits & kf_value) KiAppendFormatA(FeatureLine, sizeof(FeatureLine), " " #kf_value)
+    append_kf_bit(KF_SMEP);
+    append_kf_bit(KF_RDTSC);
+    append_kf_bit(KF_CR4);
+    append_kf_bit(KF_CMOV);
+    append_kf_bit(KF_GLOBAL_PAGE);
+    append_kf_bit(KF_LARGE_PAGE);
+    append_kf_bit(KF_MTRR);
+    append_kf_bit(KF_CMPXCHG8B);
+    append_kf_bit(KF_MMX);
+    append_kf_bit(KF_DTS);
+    append_kf_bit(KF_PAT);
+    append_kf_bit(KF_FXSR);
+    append_kf_bit(KF_FAST_SYSCALL);
+    append_kf_bit(KF_XMMI);
+    append_kf_bit(KF_3DNOW);
+    append_kf_bit(KF_XSAVEOPT);
+    append_kf_bit(KF_XMMI64);
+    append_kf_bit(KF_BRANCH);
+    append_kf_bit(KF_00040000);
+    append_kf_bit(KF_SSE3);
+    append_kf_bit(KF_CMPXCHG16B);
+    append_kf_bit(KF_AUTHENTICAMD);
+    append_kf_bit(KF_ACNT2);
+    append_kf_bit(KF_XSTATE);
+    append_kf_bit(KF_GENUINE_INTEL);
+    append_kf_bit(KF_SLAT);
+    append_kf_bit(KF_VIRT_FIRMWARE_ENABLED);
+    append_kf_bit(KF_RDWRFSGSBASE);
+    append_kf_bit(KF_NX_BIT);
+    append_kf_bit(KF_NX_DISABLED);
+    append_kf_bit(KF_NX_ENABLED);
+    append_kf_bit(KF_RDRAND);
+    append_kf_bit(KF_SMAP);
+    append_kf_bit(KF_RDTSCP);
+    append_kf_bit(KF_HUGEPAGE);
+    append_kf_bit(KF_XSAVES);
+    append_kf_bit(KF_FPU_LEAKAGE);
+    append_kf_bit(KF_CAT);
+    append_kf_bit(KF_CET_SS);
+    append_kf_bit(KF_SSSE3);
+    append_kf_bit(KF_SSE4_1);
+    append_kf_bit(KF_SSE4_2);
+    append_kf_bit(KF_AVX);
+    append_kf_bit(KF_AVX2);
+    append_kf_bit(KF_AVX512F);
+#undef append_kf_bit
 
-#define print_kf_bit(kf_value) if (FeatureBits & kf_value) DbgPrint(" " #kf_value)
-    print_kf_bit(KF_SMEP);
-    print_kf_bit(KF_RDTSC);
-    print_kf_bit(KF_CR4);
-    print_kf_bit(KF_CMOV);
-    print_kf_bit(KF_GLOBAL_PAGE);
-    print_kf_bit(KF_LARGE_PAGE);
-    print_kf_bit(KF_MTRR);
-    print_kf_bit(KF_CMPXCHG8B);
-    print_kf_bit(KF_MMX);
-    print_kf_bit(KF_DTS);
-    print_kf_bit(KF_PAT);
-    print_kf_bit(KF_FXSR);
-    print_kf_bit(KF_FAST_SYSCALL);
-    print_kf_bit(KF_XMMI);
-    print_kf_bit(KF_3DNOW);
-    print_kf_bit(KF_XSAVEOPT);
-    print_kf_bit(KF_XMMI64);
-    print_kf_bit(KF_BRANCH);
-    print_kf_bit(KF_00040000);
-    print_kf_bit(KF_SSE3);
-    print_kf_bit(KF_CMPXCHG16B);
-    print_kf_bit(KF_AUTHENTICAMD);
-    print_kf_bit(KF_ACNT2);
-    print_kf_bit(KF_XSTATE);
-    print_kf_bit(KF_GENUINE_INTEL);
-    print_kf_bit(KF_SLAT);
-    print_kf_bit(KF_VIRT_FIRMWARE_ENABLED);
-    print_kf_bit(KF_RDWRFSGSBASE);
-    print_kf_bit(KF_NX_BIT);
-    print_kf_bit(KF_NX_DISABLED);
-    print_kf_bit(KF_NX_ENABLED);
-    print_kf_bit(KF_RDRAND);
-    print_kf_bit(KF_SMAP);
-    print_kf_bit(KF_RDTSCP);
-    print_kf_bit(KF_HUGEPAGE);
-    print_kf_bit(KF_XSAVES);
-    print_kf_bit(KF_FPU_LEAKAGE);
-    print_kf_bit(KF_CAT);
-    print_kf_bit(KF_CET_SS);
-    print_kf_bit(KF_SSSE3);
-    print_kf_bit(KF_SSE4_1);
-    print_kf_bit(KF_SSE4_2);
-    print_kf_bit(KF_AVX);
-    print_kf_bit(KF_AVX2);
-    print_kf_bit(KF_AVX512F);
-#undef print_kf_bit
+#define append_cf(cpu_flag) if (CpuFeatures & cpu_flag) KiAppendFormatA(FeatureLine, sizeof(FeatureLine), " " #cpu_flag)
+    append_cf(X86_FEATURE_PAE);
+    append_cf(X86_FEATURE_HT);
+#undef append_cf
 
-#define print_cf(cpu_flag) if (CpuFeatures & cpu_flag) DbgPrint(" " #cpu_flag)
-    print_cf(X86_FEATURE_PAE);
-    print_cf(X86_FEATURE_HT);
-#undef print_cf
-
-    DbgPrint("\n");
+    DPRINT1("%s\n", FeatureLine);
 }
 #endif // DBG
 

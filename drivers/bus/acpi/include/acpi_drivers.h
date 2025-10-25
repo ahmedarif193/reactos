@@ -28,6 +28,11 @@
 
 #define ACPI_MAX_STRING			80
 
+/* Temporary toggle while ReactOS brings up ACPI PCI support */
+#ifndef CONFIG_ACPI_PCI
+#define CONFIG_ACPI_PCI 1
+#endif
+
 
 /* --------------------------------------------------------------------------
                                     ACPI Bus

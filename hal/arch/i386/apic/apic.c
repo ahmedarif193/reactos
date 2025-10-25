@@ -14,6 +14,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <hal.h>
+#include <reactos/hal/acpi_pci.h>
 #include "apicp.h"
 #define NDEBUG
 #include <debug.h>
@@ -394,6 +395,28 @@ HalpAllocateSystemInterrupt(
     ReDirReg.Mask = 1;
     ReDirReg.Reserved = 0;
     ReDirReg.Destination = ApicRead(APIC_ID) >> 24;
+
+    {
+        UCHAR Polarity;
+        UCHAR Trigger;
+
+        if (HalpPciLookupGsiInfo(Irq, &Polarity, &Trigger))
+        {
+            if (Polarity == HAL_ACPI_POLARITY_LOW ||
+                Polarity == HAL_ACPI_POLARITY_BOTH)
+            {
+                ReDirReg.Polarity = 1;
+            }
+            else
+            {
+                ReDirReg.Polarity = 0;
+            }
+
+            ReDirReg.TriggerMode = (Trigger == HAL_ACPI_TRIGGER_LEVEL)
+                                        ? APIC_TGM_Level
+                                        : APIC_TGM_Edge;
+        }
+    }
 
     /* Initialize entry */
     ApicWriteIORedirectionEntry(Irq, ReDirReg);
