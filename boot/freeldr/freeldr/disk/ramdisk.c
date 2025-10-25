@@ -68,6 +68,35 @@ ULONGLONG DbgQueryMicrosecondsSinceBoot(VOID);
 
 DBG_DEFAULT_CHANNEL(DISK);
 
+#if DBG
+static
+VOID
+RamDiskTraceSample(IN PCSTR Label,
+                   IN const VOID *Address)
+{
+    const UCHAR *Bytes;
+
+    if (!Label || !Address)
+    {
+        return;
+    }
+
+    Bytes = (const UCHAR *)Address;
+    TRACE("%s [%p]: %02X %02X %02X %02X %02X %02X %02X %02X\n",
+          Label,
+          Address,
+          Bytes[0], Bytes[1], Bytes[2], Bytes[3],
+          Bytes[4], Bytes[5], Bytes[6], Bytes[7]);
+}
+
+static
+PFN_NUMBER
+RamDiskPointerToPfn(IN const VOID *Address)
+{
+    return Address ? (PFN_NUMBER)(((ULONG_PTR)Address) >> MM_PAGE_SHIFT) : 0;
+}
+#endif
+
 #define RAMDISK_ALLOCATION_ALIGNMENT 0x1000ULL
 #define ALIGN_UP_BY_ULL(Value, Alignment) \
     (((Value) + ((Alignment) - 1ULL)) & ~((Alignment) - 1ULL))
@@ -997,7 +1026,13 @@ RamDiskOpenIsoSource(
 
     FileSize = Information.EndingAddress.QuadPart;
 
-    if (FileSize == 0 && OpenedRawDevice)
+    /*
+     * Some firmware/device paths report the raw device capacity here,
+     * which for 2KiB-block optical media can be 4x the ISO size when
+     * combined with 512-byte sector-based partition metadata. Read the
+     * ISO9660 Primary Volume Descriptor to obtain an authoritative size
+     * and prefer it when available.
+     */
     {
         ULONGLONG PvdOffset = ImageOffset + (ULONGLONG)16 * ISO_SECTOR_SIZE;
 
@@ -1012,11 +1047,21 @@ RamDiskOpenIsoSource(
                     RtlEqualMemory(Pvd->StandardId, "CD001", 5) &&
                     Pvd->VdVersion == 1)
                 {
-                    FileSize = (ULONGLONG)Pvd->VolumeSpaceSizeL * ISO_SECTOR_SIZE;
+                    USHORT LogicalBlockSize = Pvd->LogicalBlockSizeL;
+                    if (LogicalBlockSize == 0)
+                        LogicalBlockSize = ISO_SECTOR_SIZE; /* Fallback to default */
+
+                    /* Compute the ISO byte length from the PVD */
+                    ULONGLONG IsoLength = (ULONGLONG)Pvd->VolumeSpaceSizeL * LogicalBlockSize;
+
+                    /* Prefer the PVD-declared size when sensible (never larger than reported file size if nonzero). */
+                    if (IsoLength != 0 && (FileSize == 0 || IsoLength <= FileSize))
+                        FileSize = IsoLength;
                 }
             }
         }
 
+        /* Restore the caller's requested starting position */
         Position.QuadPart = ImageOffset;
         ArcSeek(FileId, &Position, SeekAbsolute);
     }
@@ -1719,6 +1764,45 @@ RamDiskBuildWritableImage(
         }
 
         RamDiskSetVisibleRegion(VolumeOffset, VolumeSize);
+
+#if DBG
+        {
+            PFN_NUMBER BasePfn = RamDiskPointerToPfn(WritableBase);
+            PFN_NUMBER EndPfn = RamDiskPointerToPfn((const VOID *)((ULONG_PTR)WritableBase + (ULONG_PTR)(WritableSize - 1)));
+            PVOID VolumePointer = (PUCHAR)WritableBase + VolumeOffset;
+            TRACE("RamDiskBuildWritableImage: PFN span %lx-%lx hidden=%lu reserved=%lu fat=%lu data=%lu\n",
+                  BasePfn,
+                  EndPfn,
+                  Layout.HiddenSectors,
+                  Layout.ReservedSectors,
+                  Layout.FatSizeSectors,
+                  Layout.FirstDataSector);
+            RamDiskTraceSample("  writable[boot]", WritableBase);
+            RamDiskTraceSample("  writable[volume]", VolumePointer);
+
+            if (Layout.ReservedSectors < WritableSize / Layout.BytesPerSector)
+            {
+                ULONGLONG FatOffset = VolumeOffset + ((ULONGLONG)Layout.ReservedSectors * Layout.BytesPerSector);
+                if (FatOffset + (16 * sizeof(ULONG)) <= WritableSize)
+                {
+                    const ULONG *FatWords = (const ULONG *)((PUCHAR)WritableBase + FatOffset);
+                    TRACE("  writable[FAT0..7]=%08lX %08lX %08lX %08lX %08lX %08lX %08lX %08lX\n",
+                          FatWords[0], FatWords[1], FatWords[2], FatWords[3],
+                          FatWords[4], FatWords[5], FatWords[6], FatWords[7]);
+                }
+            }
+
+            if (Source->MemoryBase)
+            {
+                PFN_NUMBER SourceBasePfn = RamDiskPointerToPfn(Source->MemoryBase);
+                TRACE("  source: base=%p size=%llu basePFN=%lx\n",
+                      Source->MemoryBase,
+                      Source->Size,
+                      SourceBasePfn);
+                RamDiskTraceSample("  source[0]", Source->MemoryBase);
+            }
+        }
+#endif
     }
 
     *NewBase = WritableBase;
@@ -1859,6 +1943,12 @@ ULONG
 RamDiskGetImageOffset(VOID)
 {
     return RamDiskImageOffset;
+}
+
+ULONGLONG
+RamDiskGetVolumeOffset(VOID)
+{
+    return RamDiskVolumeOffset;
 }
 
 #if defined(__GNUC__)
@@ -2420,27 +2510,87 @@ RamDiskInitialize(
                                                     RamDiskImageOffset,
                                                     RamDiskImageLength,
                                                     &StreamSource);
+                if (StreamStatus != ESUCCESS)
+                {
+                    /* BIOS/legacy fallback: if opening by file/path failed (e.g. DefaultPath
+                     * is 'ramdisk(0)' or not a real ISO path), try raw firmware CD devices. */
+                    static const PCSTR CdCandidates[] = { "cdrom(0)", "cdrom(1)", NULL };
+                    for (int i = 0; CdCandidates[i]; ++i)
+                    {
+                        StreamStatus = RamDiskOpenIsoSource(CdCandidates[i],
+                                                            NULL,
+                                                            0, /* ISO starts at LBA 0 */
+                                                            0,
+                                                            &StreamSource);
+                        if (StreamStatus == ESUCCESS)
+                            break;
+                    }
+                }
+
                 if (StreamStatus == ESUCCESS)
                 {
                     StreamIsoSize = StreamSource.Size;
-                    if (RamDiskBuildWritableImage(&StreamSource,
-                                                   RamDiskRequestedSize,
-                                                   &WritableBase,
-                                                   &WritableSize))
                     {
-                        RamDiskCloseIsoSource(&StreamSource);
-                        RamDiskBase = WritableBase;
-                        RamDiskFileSize = WritableSize;
-                        RamDiskImageOffset = 0;
-                        RamDiskImageLength = WritableSize;
-                        StreamingSucceeded = TRUE;
-                        TRACE("RamDiskInitialize: writable ramdisk ready from streaming (%llu bytes)\n",
-                              RamDiskFileSize);
-                    }
-                    else
-                    {
-                        RamDiskCloseIsoSource(&StreamSource);
-                        TRACE("RamDiskInitialize: streaming writable expansion failed, falling back to in-memory copy\n");
+                        ULONGLONG ExtraBytes = RamDiskRequestedSize;
+                        if (ExtraBytes < (64ULL * 1024ULL * 1024ULL))
+                            ExtraBytes = (64ULL * 1024ULL * 1024ULL);
+                        ULONGLONG TotalTarget = StreamIsoSize + ExtraBytes;
+
+                        if (RamDiskBuildWritableImage(&StreamSource,
+                                                       TotalTarget,
+                                                       &WritableBase,
+                                                       &WritableSize))
+                        {
+                            RamDiskCloseIsoSource(&StreamSource);
+                            RamDiskBase = WritableBase;
+                            RamDiskFileSize = WritableSize;
+                            RamDiskImageOffset = 0;
+                            RamDiskImageLength = WritableSize;
+                            StreamingSucceeded = TRUE;
+                            TRACE("RamDiskInitialize: writable ramdisk ready from streaming (%llu bytes, ISO=%llu extra=%llu)\n",
+                                  RamDiskFileSize, StreamIsoSize, ExtraBytes);
+                        }
+                        else
+                        {
+                            /* Try to adaptively shrink the extra overlay to fit the low-memory budget. */
+                            ULONGLONG AllocationLimit = RamDiskWritableAllocationLimit();
+                            ULONGLONG MaxExtra = (AllocationLimit > StreamIsoSize)
+                                                   ? (AllocationLimit - StreamIsoSize)
+                                                   : 0;
+                            if (MaxExtra >= (64ULL * 1024ULL * 1024ULL) && MaxExtra < ExtraBytes)
+                            {
+                                ULONGLONG ShrunkTotal = StreamIsoSize + MaxExtra;
+                                TRACE("RamDiskInitialize: streaming expansion failed; retrying with shrunk extra %llu (total %llu)\n",
+                                      MaxExtra, ShrunkTotal);
+
+                                if (RamDiskBuildWritableImage(&StreamSource,
+                                                               ShrunkTotal,
+                                                               &WritableBase,
+                                                               &WritableSize))
+                                {
+                                    RamDiskCloseIsoSource(&StreamSource);
+                                    RamDiskBase = WritableBase;
+                                    RamDiskFileSize = WritableSize;
+                                    RamDiskImageOffset = 0;
+                                    RamDiskImageLength = WritableSize;
+                                    /* Record the effective requested size so boot path gets retargeted. */
+                                    RamDiskRequestedSize = MaxExtra;
+                                    StreamingSucceeded = TRUE;
+                                    TRACE("RamDiskInitialize: writable ramdisk ready from streaming after shrink (%llu bytes, ISO=%llu extra=%llu)\n",
+                                          RamDiskFileSize, StreamIsoSize, MaxExtra);
+                                }
+                                else
+                                {
+                                    RamDiskCloseIsoSource(&StreamSource);
+                                    TRACE("RamDiskInitialize: streaming expansion failed even after shrink; falling back to in-memory copy\n");
+                                }
+                            }
+                            else
+                            {
+                                RamDiskCloseIsoSource(&StreamSource);
+                                TRACE("RamDiskInitialize: streaming writable expansion failed, falling back to in-memory copy\n");
+                            }
+                        }
                     }
                 }
             }
@@ -2450,13 +2600,19 @@ RamDiskInitialize(
 
             if (RamDiskRequestedSize != 0 && StreamIsoSize != 0)
             {
-                ULONGLONG RequiredSize = RamDiskRequestedSize;
                 ULONGLONG IsoSize = StreamIsoSize;
                 ULONGLONG ResidentIsoBytes;
                 ULONGLONG AllocationLimit = RamDiskWritableAllocationLimit();
+                ULONGLONG ExtraBytes = RamDiskRequestedSize;
+                ULONGLONG RequiredSize;
 
-                if (RequiredSize < IsoSize + (64ULL * 1024ULL * 1024ULL))
-                    RequiredSize = IsoSize + (64ULL * 1024ULL * 1024ULL);
+                /* New semantics: RDRAMSIZE denotes extra writable bytes
+                   beyond the ISO contents. Enforce a minimum of 64 MiB
+                   headroom if the request is smaller. */
+                if (ExtraBytes < (64ULL * 1024ULL * 1024ULL))
+                    ExtraBytes = (64ULL * 1024ULL * 1024ULL);
+
+                RequiredSize = IsoSize + ExtraBytes;
 
                 if (RequiredSize > AllocationLimit)
                 {
@@ -2477,9 +2633,9 @@ RamDiskInitialize(
                     if (ResidentIsoBytes > AllocationLimit ||
                         RequiredSize > AllocationLimit - ResidentIsoBytes)
                     {
-                        WARN("RamDiskInitialize: %llu-byte ISO plus writable request %llu would exceed low-memory budget %llu\n",
+                        WARN("RamDiskInitialize: ISO (%llu) + writable extra (%llu) would exceed low-memory budget %llu\n",
                              IsoSize,
-                             RequiredSize,
+                             ExtraBytes,
                              (ULONGLONG)RAMDISK_LOW_ALLOC_MAX);
                         if (!RamDiskErrorShown)
                         {
@@ -2500,15 +2656,15 @@ RamDiskInitialize(
             return Status;
 
         OriginalBase = RamDiskBase;
-        if (RamDiskRequestedSize != 0)
-        {
-            TRACE("RamDiskInitialize: expanding to writable RAMFS (%llu bytes requested)\n",
+            if (RamDiskRequestedSize != 0)
+            {
+            TRACE("RamDiskInitialize: expanding to writable RAMFS (extra %llu bytes requested)\n",
                   RamDiskRequestedSize);
-            PVOID WritableBase;
-            ULONGLONG WritableSize;
-            PVOID IsoImageBase;
-            ULONGLONG IsoImageLength;
-            ISO_SOURCE MemorySource;
+                PVOID WritableBase;
+                ULONGLONG WritableSize;
+                PVOID IsoImageBase;
+                ULONGLONG IsoImageLength;
+                ISO_SOURCE MemorySource;
 
             IsoImageBase = (PVOID)((ULONG_PTR)OriginalBase + RamDiskImageOffset);
             IsoImageLength = RamDiskFileSize - RamDiskImageOffset;
@@ -2522,22 +2678,30 @@ RamDiskInitialize(
             MemorySource.ArcOffset = 0;
             MemorySource.ArcPosition = 0;
 
-            if (!RamDiskBuildWritableImage(&MemorySource,
-                                           RamDiskRequestedSize,
-                                           &WritableBase,
-                                           &WritableSize))
+            /* New semantics: total target = ISO length + extra (>=64MiB) */
             {
-                if (!RamDiskErrorShown)
+                ULONGLONG ExtraBytes = RamDiskRequestedSize;
+                if (ExtraBytes < (64ULL * 1024ULL * 1024ULL))
+                    ExtraBytes = (64ULL * 1024ULL * 1024ULL);
+                ULONGLONG TotalTarget = MemorySource.Size + ExtraBytes;
+
+                if (!RamDiskBuildWritableImage(&MemorySource,
+                                               TotalTarget,
+                                               &WritableBase,
+                                               &WritableSize))
                 {
-                    UiMessageBox("Failed to expand LiveCD into writable RAM.");
-                    RamDiskErrorShown = TRUE;
+                    if (!RamDiskErrorShown)
+                    {
+                        UiMessageBox("Failed to expand LiveCD into writable RAM.");
+                        RamDiskErrorShown = TRUE;
+                    }
+                    RamDiskRequestedSize = 0;
+                    TRACE("RamDiskInitialize: continuing with read-only ISO because writable buffer allocation failed\n");
+                    RamDiskBase = OriginalBase;
+                    RamDiskVolumeOffset = 0;
+                    RamDiskVolumeLength = 0;
+                    goto WritableFallback;
                 }
-                RamDiskRequestedSize = 0;
-                TRACE("RamDiskInitialize: continuing with read-only ISO because writable buffer allocation failed\n");
-                RamDiskBase = OriginalBase;
-                RamDiskVolumeOffset = 0;
-                RamDiskVolumeLength = 0;
-                goto WritableFallback;
             }
 
             if ((OriginalBase != gInitRamDiskBase) &&
@@ -2578,6 +2742,33 @@ WritableFallback:
         FsRegisterDevice("ramdisk(0)", &RamDiskVtbl);
         RamDiskDeviceRegistered = TRUE;
     }
+
+#if DBG
+    if (RamDiskBase && RamDiskFileSize != 0)
+    {
+        PFN_NUMBER BasePfn = RamDiskPointerToPfn(RamDiskBase);
+        PFN_NUMBER EndPfn = RamDiskPointerToPfn((const VOID *)((ULONG_PTR)RamDiskBase + (ULONG_PTR)(RamDiskFileSize - 1)));
+        TRACE("RamDiskInitialize: base=%p size=%llu basePFN=%lx endPFN=%lx imageOffset=%lu imageLength=%llu volumeOffset=%llu volumeLength=%llu requested=%llu\n",
+              RamDiskBase,
+              RamDiskFileSize,
+              BasePfn,
+              EndPfn,
+              RamDiskImageOffset,
+              RamDiskImageLength,
+              RamDiskVolumeOffset,
+              RamDiskVolumeLength,
+              RamDiskRequestedSize);
+        RamDiskTraceSample("  disk[0]", RamDiskBase);
+        if (RamDiskImageOffset < RamDiskFileSize)
+        {
+            RamDiskTraceSample("  disk[image]", (PUCHAR)RamDiskBase + RamDiskImageOffset);
+        }
+        if (RamDiskVolumeOffset < RamDiskFileSize)
+        {
+            RamDiskTraceSample("  disk[volume]", (PUCHAR)RamDiskBase + RamDiskVolumeOffset);
+        }
+    }
+#endif
 
     return ESUCCESS;
 }

@@ -1001,6 +1001,39 @@ MountmgrReadNoAutoMount(
     return (Result != 0);
 }
 
+/**
+ * @brief   Retrieves the "DisableFirmwareDiskOffline" setting.
+ *          When TRUE and booting from a ramdisk, mountmgr will not attempt to
+ *          offline the firmware enumerated disk that would otherwise contend.
+ */
+CODE_SEG("INIT")
+BOOLEAN
+MountmgrReadDisableFirmwareDiskOffline(
+    _In_ PUNICODE_STRING RegistryPath)
+{
+    NTSTATUS Status;
+    ULONG Result, Default = 0;
+    RTL_QUERY_REGISTRY_TABLE QueryTable[2];
+
+    RtlZeroMemory(QueryTable, sizeof(QueryTable));
+    QueryTable[0].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    QueryTable[0].Name = L"DisableFirmwareDiskOffline";
+    QueryTable[0].EntryContext = &Result;
+    QueryTable[0].DefaultType = REG_DWORD;
+    QueryTable[0].DefaultData = &Default;
+    QueryTable[0].DefaultLength = sizeof(Default);
+
+    Status = RtlQueryRegistryValues(RTL_REGISTRY_ABSOLUTE,
+                                    RegistryPath->Buffer,
+                                    QueryTable,
+                                    NULL,
+                                    NULL);
+    if (!NT_SUCCESS(Status))
+        Result = Default;
+
+    return (Result != 0);
+}
+
 /*
  * @implemented
  */
@@ -1099,6 +1132,7 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
     DeviceInformation->KeepLinks = FALSE;
 
     if (DeviceExtension->BootRamdiskConfigured &&
+        !DeviceExtension->DisableFirmwareDiskOffline &&
         !DeviceExtension->FirmwareDiskOfflined &&
         DeviceExtension->DriveLetterData &&
         UniqueId &&
@@ -1326,7 +1360,7 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
             }
         }
 
-        /* And recreate the symlink to our device */
+        /* Recreate the symlink to our device */
         Status = GlobalCreateSymbolicLink(&(SymLinks[i]), &TargetDeviceName);
         if (!NT_SUCCESS(Status))
         {
@@ -1964,6 +1998,9 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
     RtlCopyUnicodeString(&(DeviceExtension->RegistryPath), RegistryPath);
 
     DeviceExtension->NoAutoMount = MountmgrReadNoAutoMount(&(DeviceExtension->RegistryPath));
+
+    DeviceExtension->DisableFirmwareDiskOffline =
+        MountmgrReadDisableFirmwareDiskOffline(&(DeviceExtension->RegistryPath));
 
     MountMgrLoadBootRamdiskInformation(DeviceExtension);
 

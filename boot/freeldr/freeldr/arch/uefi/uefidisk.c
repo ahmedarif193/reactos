@@ -18,6 +18,7 @@ DBG_DEFAULT_CHANNEL(WARNING);
 #define TAG_HW_RESOURCE_LIST    'lRwH'
 #define TAG_HW_DISK_CONTEXT     'cDwH'
 #define FIRST_PARTITION 1
+#define MAX_PARTITION_SEARCH 128
 
 typedef struct tagDISKCONTEXT
 {
@@ -98,6 +99,89 @@ UefiIsCdRomHandle(IN EFI_HANDLE Handle)
     return FALSE;
 }
 
+static
+BOOLEAN
+UefiIsUsbHandle(IN EFI_HANDLE Handle)
+{
+    EFI_DEVICE_PATH_PROTOCOL* DevicePath = NULL;
+
+    if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+            Handle, &DevicePathProtocolGuid, (VOID**)&DevicePath)) ||
+        !DevicePath)
+    {
+        return FALSE;
+    }
+
+    EFI_DEVICE_PATH_PROTOCOL* Node = DevicePath;
+    while (!IsDevicePathEnd(Node))
+    {
+        if (Node->Type == MESSAGING_DEVICE_PATH)
+        {
+#ifdef MSG_USB_DP
+            if (Node->SubType == MSG_USB_DP)
+                return TRUE;
+#endif
+#ifdef MSG_USB_CLASS_DP
+            if (Node->SubType == MSG_USB_CLASS_DP)
+                return TRUE;
+#endif
+#ifdef MSG_USB_WWID_DP
+            if (Node->SubType == MSG_USB_WWID_DP)
+                return TRUE;
+#endif
+#ifdef MSG_USB_HOST_DP
+            if (Node->SubType == MSG_USB_HOST_DP)
+                return TRUE;
+#endif
+        }
+        Node = NextDevicePathNode(Node);
+    }
+
+    return FALSE;
+}
+
+static
+BOOLEAN
+UefiHandleGetPartitionInfo(
+    IN EFI_HANDLE Handle,
+    OUT PULONG PartitionNumber OPTIONAL,
+    OUT PUINT64 PartitionStart OPTIONAL)
+{
+    EFI_DEVICE_PATH_PROTOCOL* DevicePath = NULL;
+
+    if (PartitionNumber)
+        *PartitionNumber = 0;
+    if (PartitionStart)
+        *PartitionStart = 0;
+
+    if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+            Handle, &DevicePathProtocolGuid, (VOID**)&DevicePath)) ||
+        !DevicePath)
+    {
+        return FALSE;
+    }
+
+    EFI_DEVICE_PATH_PROTOCOL* Node = DevicePath;
+    while (!IsDevicePathEnd(Node))
+    {
+        if ((Node->Type == MEDIA_DEVICE_PATH) && (Node->SubType == MEDIA_HARDDRIVE_DP))
+        {
+            HARDDRIVE_DEVICE_PATH* Hd = (HARDDRIVE_DEVICE_PATH*)Node;
+            if (PartitionNumber)
+                *PartitionNumber = Hd->PartitionNumber;
+            if (PartitionStart)
+                *PartitionStart = Hd->PartitionStart;
+            TRACE("UefiHandleGetPartitionInfo: PartitionNumber=%lu StartLBA=%I64u\n",
+                  Hd->PartitionNumber, Hd->PartitionStart);
+            return TRUE;
+        }
+
+        Node = NextDevicePathNode(Node);
+    }
+
+    return FALSE;
+}
+
 /* FUNCTIONS *****************************************************************/
 
 PCHAR
@@ -125,21 +209,135 @@ UefiGetBootPartitionEntry(
     OUT PULONG BootPartition)
 {
     ULONG PartitionNum;
+    BOOLEAN HasEntry = FALSE;
+    PARTITION_TABLE_ENTRY LocalEntry;
+    PPARTITION_TABLE_ENTRY TargetEntry;
+    ULONG DevicePathPartition = 0;
+    UINT64 DevicePathStartLba = 0;
+    BOOLEAN HaveDevicePathInfo = FALSE;
 
     TRACE("UefiGetBootPartitionEntry: DriveNumber: %d\n", DriveNumber - FIRST_BIOS_DISK);
     /* UefiBootRoot is the offset into the array of handles where the raw disk of the boot drive is.
      * Partitions start with 1 in ARC, but UEFI root drive identitfier is also first partition. */
     PartitionNum = (OffsetToBoot - UefiBootRootIdentifier);
-    if (PartitionNum == 0)
+
+    if (PublicBootHandle != NULL)
     {
-        TRACE("Boot PartitionNumber is 0\n");
-        /* The OffsetToBoot is equal to the RootIdentifier */
+        HaveDevicePathInfo = UefiHandleGetPartitionInfo(PublicBootHandle,
+                                                        &DevicePathPartition,
+                                                        &DevicePathStartLba);
+        if (HaveDevicePathInfo && DevicePathPartition != 0)
+        {
+            TRACE("UefiGetBootPartitionEntry: DevicePath reports partition %lu (start LBA %I64u)\n",
+                  DevicePathPartition, DevicePathStartLba);
+            PartitionNum = DevicePathPartition;
+        }
+        else if (HaveDevicePathInfo)
+        {
+            TRACE("UefiGetBootPartitionEntry: DevicePath reports no partition number (start LBA %I64u)\n",
+                  DevicePathStartLba);
+        }
+    }
+
+    if (PartitionNum == 0 || PartitionNum == 0xFF)
+    {
+        TRACE("Boot PartitionNumber fallback (PartitionNum=%lu)\n", PartitionNum);
         PartitionNum = FIRST_PARTITION;
     }
 
+    TargetEntry = PartitionTableEntry ? PartitionTableEntry : &LocalEntry;
+    RtlZeroMemory(TargetEntry, sizeof(*TargetEntry));
+
+    DiskDetectPartitionType(DriveNumber);
+
+    if (PartitionNum >= FIRST_PARTITION && PartitionNum != 0xFF)
+    {
+        HasEntry = DiskGetPartitionEntry(DriveNumber, PartitionNum, TargetEntry);
+    }
+
+    if (!HasEntry && HaveDevicePathInfo && DevicePathStartLba != 0)
+    {
+        TRACE("UefiGetBootPartitionEntry: searching by start LBA %I64u\n", DevicePathStartLba);
+        for (ULONG idx = FIRST_PARTITION; idx < FIRST_PARTITION + MAX_PARTITION_SEARCH; ++idx)
+        {
+            PARTITION_TABLE_ENTRY SearchEntry;
+            RtlZeroMemory(&SearchEntry, sizeof(SearchEntry));
+
+            if (!DiskGetPartitionEntry(DriveNumber, idx, &SearchEntry))
+                continue;
+
+            if (SearchEntry.PartitionSectorCount == 0 &&
+                SearchEntry.SystemIndicator == PARTITION_ENTRY_UNUSED)
+            {
+                continue;
+            }
+
+            if (SearchEntry.SectorCountBeforePartition == DevicePathStartLba)
+            {
+                RtlCopyMemory(TargetEntry, &SearchEntry, sizeof(*TargetEntry));
+                PartitionNum = idx;
+                HasEntry = TRUE;
+                TRACE("UefiGetBootPartitionEntry: matched partition index %lu via start LBA\n", idx);
+                break;
+            }
+        }
+    }
+
+    if (!PartitionTableEntry)
+    {
+        RtlZeroMemory(&LocalEntry, sizeof(LocalEntry));
+    }
+
     *BootPartition = PartitionNum;
-    TRACE("UefiGetBootPartitionEntry: Boot Partition is: %d\n", PartitionNum);
-    return TRUE;
+    TRACE("UefiGetBootPartitionEntry: Boot Partition is: %d (entry %s)\n",
+          PartitionNum,
+          HasEntry ? "ok" : "missing");
+
+    return HasEntry;
+}
+
+BOOLEAN
+UefiDiskIsUsb(IN UCHAR DriveNumber)
+{
+    ULONG UefiDriveNumber;
+    BOOLEAN Result;
+
+    TRACE("UefiDiskIsUsb: DriveNumber=0x%02x\n", DriveNumber);
+
+    /* Check if this is a BIOS disk */
+    if (DriveNumber < FIRST_BIOS_DISK)
+    {
+        TRACE("UefiDiskIsUsb: Not a BIOS disk (< 0x80)\n");
+        return FALSE;
+    }
+
+    /* Convert to UEFI drive number */
+    UefiDriveNumber = DriveNumber - FIRST_BIOS_DISK;
+    TRACE("UefiDiskIsUsb: UefiDriveNumber=%lu, PcBiosDiskCount=%u\n", UefiDriveNumber, PcBiosDiskCount);
+
+    /* Check if the drive number is valid */
+    if (UefiDriveNumber >= PcBiosDiskCount)
+    {
+        TRACE("UefiDiskIsUsb: Drive number out of range\n");
+        return FALSE;
+    }
+
+    /* Check if we have the internal disk info */
+    if (InternalUefiDisk == NULL || handles == NULL)
+    {
+        TRACE("UefiDiskIsUsb: No internal disk info available\n");
+        return FALSE;
+    }
+
+    /* Get the UEFI handle index for this disk */
+    ULONG UefiHandleIndex = InternalUefiDisk[UefiDriveNumber].UefiRootNumber;
+    TRACE("UefiDiskIsUsb: UefiHandleIndex=%lu\n", UefiHandleIndex);
+
+    /* Check if this handle represents a USB device */
+    Result = UefiIsUsbHandle(handles[UefiHandleIndex]);
+    TRACE("UefiDiskIsUsb: UefiIsUsbHandle returned %s\n", Result ? "TRUE" : "FALSE");
+
+    return Result;
 }
 
 static
@@ -510,27 +708,89 @@ UefiSetBootpath(VOID)
    PARTITION_TABLE_ENTRY PartitionEntry;
    BOOLEAN HasPartitionInfo = FALSE;
    BOOLEAN TreatAsCd = UefiIsCdRomHandle(handles[UefiBootRootIdentifier]);
+   BOOLEAN IsUsbBoot = UefiIsUsbHandle(handles[UefiBootRootIdentifier]);
+   ULONG DevPathPartition = 0;
+   UINT64 DevPathStart = 0;
+   BOOLEAN DevPathHasPartition =
+       UefiHandleGetPartitionInfo(handles[UefiBootRootIdentifier],
+                                  &DevPathPartition,
+                                  &DevPathStart);
 
    RtlZeroMemory(&PartitionEntry, sizeof(PartitionEntry));
 
    if (UefiGetBootPartitionEntry(FrldrBootDrive, &PartitionEntry, &BootPartition) &&
        BootPartition != 0)
    {
-        HasPartitionInfo = (PartitionEntry.PartitionSectorCount != 0 ||
-                            PartitionEntry.SystemIndicator != PARTITION_ENTRY_UNUSED);
+        BOOLEAN PartitionLooksValid = (PartitionEntry.PartitionSectorCount != 0 &&
+                                       PartitionEntry.SystemIndicator != PARTITION_ENTRY_UNUSED);
+
+        TRACE("Boot partition entry: type=0x%02x offset=0x%I64x length=0x%I64x (valid=%d)\n",
+              PartitionEntry.SystemIndicator,
+              PartitionEntry.SectorCountBeforePartition,
+              PartitionEntry.PartitionSectorCount,
+              PartitionLooksValid);
+
+        HasPartitionInfo = PartitionLooksValid;
    }
+
+   TRACE("Device path partition info: has=%d partition=%lu start=%I64u\n",
+         DevPathHasPartition,
+         DevPathPartition,
+         DevPathStart);
 
    if (TreatAsCd && HasPartitionInfo)
    {
-        TRACE("Boot handle advertises CD but partitioned media detected, treating as HDD\n");
-        TreatAsCd = FALSE;
+        if (DevPathHasPartition && DevPathPartition != 0)
+        {
+            TRACE("UEFI device path targets a partition; CD->HDD\n");
+            TreatAsCd = FALSE;
+        }
+        else
+        {
+            TRACE("Partitions exist, but boot path is not partition-specific; stay as CD\n");
+        }
    }
 
+   /*
+    * Treat removable 2048-byte block media without partition info as ISO/CD
+    * regardless of whether it is attached via USB. Windows and Linux both
+    * classify USB CD-ROMs as optical media. Keep CD semantics here so that
+    * ISO9660 handling and sizing is consistent and does not rely on HDD paths.
+    */
    if (!TreatAsCd && bio->Media->RemovableMedia == TRUE &&
        bio->Media->BlockSize == 2048 && !HasPartitionInfo)
    {
         TRACE("Removable 2048-byte media without partitions, treating as ISO/CD\n");
         TreatAsCd = TRUE;
+   }
+
+   /* For USB boot media, prefer HDD mode only when firmware targeted a partition */
+   if (IsUsbBoot)
+   {
+        TRACE("USB boot media detected by UefiIsUsbHandle\n");
+        if (HasPartitionInfo)
+        {
+            if (DevPathHasPartition && DevPathPartition != 0)
+            {
+                TRACE("USB device path names partition %lu; forcing HDD mode\n",
+                      DevPathPartition);
+                TreatAsCd = FALSE;
+            }
+            else
+            {
+                TRACE("USB partitions present but boot path is not partition-specific; keeping CD semantics\n");
+            }
+        }
+        else
+        {
+            /* USB without partitions - typically ISO (USB CD-ROM) or raw FAT */
+            TRACE("USB boot media without partition info detected\n");
+            /* If removable 2K-block media, TreatAsCd was already set above. */
+        }
+   }
+   else
+   {
+        TRACE("Not USB boot media (IsUsbBoot=%d)\n", IsUsbBoot);
    }
 
    if (!HasPartitionInfo)

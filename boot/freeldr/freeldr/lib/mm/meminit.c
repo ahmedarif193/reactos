@@ -548,7 +548,7 @@ VOID MmMarkPagesInLookupTable(PVOID PageLookupTable, PFN_NUMBER StartPage, PFN_N
 {
     PPAGE_LOOKUP_TABLE_ITEM RealPageLookupTable = (PPAGE_LOOKUP_TABLE_ITEM)PageLookupTable;
     PFN_NUMBER Index;
-    TRACE("MmMarkPagesInLookupTable()\n");
+    //TRACE("MmMarkPagesInLookupTable()\n");
 
     /* Validate the range */
     if ((StartPage < MmLowestPhysicalPage) ||
@@ -558,19 +558,19 @@ VOID MmMarkPagesInLookupTable(PVOID PageLookupTable, PFN_NUMBER StartPage, PFN_N
             StartPage, PageCount, MmLowestPhysicalPage, MmHighestPhysicalPage);
         return;
     }
-    TRACE("MmMarkPagesInLookupTable()\n");
+    //TRACE("MmMarkPagesInLookupTable()\n");
 
     StartPage -= MmLowestPhysicalPage;
     for (Index=StartPage; Index<(StartPage+PageCount); Index++)
     {
         if ((Index <= (StartPage + 16)) || (Index >= (StartPage+PageCount-16)))
         {
-            TRACE("Index = 0x%x StartPage = 0x%x PageCount = 0x%x\n", Index, StartPage, PageCount);
+            //TRACE("Index = 0x%x StartPage = 0x%x PageCount = 0x%x\n", Index, StartPage, PageCount);
         }
         RealPageLookupTable[Index].PageAllocated = PageAllocated;
         RealPageLookupTable[Index].PageAllocationLength = (PageAllocated != LoaderFree) ? 1 : 0;
     }
-    TRACE("MmMarkPagesInLookupTable() Done\n");
+    //TRACE("MmMarkPagesInLookupTable() Done\n");
 }
 
 VOID MmAllocatePagesInLookupTable(PVOID PageLookupTable, PFN_NUMBER StartPage, PFN_NUMBER PageCount, TYPE_OF_MEMORY MemoryType)

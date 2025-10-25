@@ -43,6 +43,9 @@ RamDiskGetImageLength(VOID);
 ULONG
 RamDiskGetImageOffset(VOID);
 
+ULONGLONG
+RamDiskGetVolumeOffset(VOID);
+
 BOOLEAN
 RamDiskFormatFat32(IN PVOID BaseAddress,
                    IN ULONGLONG DiskSize,

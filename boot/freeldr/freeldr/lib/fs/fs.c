@@ -22,6 +22,10 @@
 
 #include <freeldr.h>
 
+#ifdef UEFIBOOT
+#include <uefi/uefiarcname.h>
+#endif
+
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(FILESYSTEM);
 
@@ -341,11 +345,72 @@ ARC_STATUS ArcOpen(CHAR* Path, OPENMODE OpenMode, ULONG* FileId)
      * Try to detect the file system if not already done. */
     if (!pDevice->FileFuncTable && (pDevice->ReferenceCount <= 1))
     {
-        for (ULONG fs = 0; fs < _countof(FileSystems); ++fs)
+#ifdef UEFIBOOT
+        /* For USB devices, try FAT/NTFS/BTRFS/EXT before ISO */
+        BOOLEAN IsUsb = FALSE;
+        BOOLEAN UsbPathTargetsPartition = FALSE;
+
+        TRACE("Detecting filesystem for device: %s\n", pDevice->DeviceName ? pDevice->DeviceName : "NULL");
+
+        /* Try to extract drive number from device path */
+        /* Device path format is like: multi(0)disk(0)rdisk(0) */
+        if (pDevice->DeviceName && strstr(pDevice->DeviceName, "rdisk("))
         {
-            pDevice->FileFuncTable = FileSystems[fs](DeviceId);
-            if (pDevice->FileFuncTable)
-                break;
+            PCCH p = strstr(pDevice->DeviceName, "rdisk(");
+            if (p)
+            {
+                p += 6; /* Skip "rdisk(" */
+                ULONG DriveNum = atoi(p);
+                TRACE("Extracted drive number: %lu\n", DriveNum);
+                if (DriveNum < 256)
+                {
+                    UCHAR BiosDriveNum = FIRST_BIOS_DISK + (UCHAR)DriveNum;
+                    IsUsb = UefiDiskIsUsb(BiosDriveNum);
+                    TRACE("UefiDiskIsUsb(0x%02x) returned: %s\n", BiosDriveNum, IsUsb ? "TRUE" : "FALSE");
+                    if (IsUsb)
+                    {
+                        TRACE("USB device detected for %s (drive 0x%02x)\n",
+                              pDevice->DeviceName, BiosDriveNum);
+                    }
+                }
+            }
+
+            UsbPathTargetsPartition = (strstr(pDevice->DeviceName, "partition(") != NULL);
+        }
+
+        if (IsUsb && UsbPathTargetsPartition)
+        {
+            /* USB device: Try FAT first, then other filesystems, ISO last */
+            /* FileSystems array order: IsoMount(0), FatMount(1), BtrFsMount(2), NtfsMount(3), ExtMount(4) */
+            static const ULONG UsbFsOrder[] = { 1, 3, 2, 4, 0 }; /* FatMount, NtfsMount, BtrFsMount, ExtMount, IsoMount */
+            for (ULONG i = 0; i < _countof(UsbFsOrder); ++i)
+            {
+                ULONG fs = UsbFsOrder[i];
+                if (fs < _countof(FileSystems))
+                {
+                    pDevice->FileFuncTable = FileSystems[fs](DeviceId);
+                    if (pDevice->FileFuncTable)
+                    {
+                        TRACE("USB filesystem detected using mount function %lu\n", fs);
+                        break;
+                    }
+                }
+            }
+        }
+        else if (IsUsb)
+        {
+            TRACE("USB heuristic skipped: device path lacks partition() component\n");
+        }
+        else
+#endif
+        {
+            /* Non-USB device or non-UEFI: Use default order */
+            for (ULONG fs = 0; fs < _countof(FileSystems); ++fs)
+            {
+                pDevice->FileFuncTable = FileSystems[fs](DeviceId);
+                if (pDevice->FileFuncTable)
+                    break;
+            }
         }
     }
     if (!pDevice->FileFuncTable)

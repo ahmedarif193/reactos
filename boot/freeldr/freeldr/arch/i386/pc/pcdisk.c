@@ -101,6 +101,24 @@ typedef struct _PC_DISK_DRIVE
 #endif
 } PC_DISK_DRIVE, *PPC_DISK_DRIVE;
 
+static
+ULONG
+PcDiskFallbackBytesPerSector(UCHAR DriveNumber, BOOLEAN IsRemovable)
+{
+    /*
+     * BIOS numbers CD/DVD units from 0xE0.  Optical media uses 2048-byte sectors,
+     * while floppies and hard disks stick with 512 bytes.  Treat any other device
+     * the same way as a traditional disk so we never hand zero back to callers.
+     */
+    if (DriveNumber >= 0xE0)
+        return 2048;
+
+    if (IsRemovable)
+        return 512;
+
+    return 512;
+}
+
 #ifdef CACHE_MULTI_DRIVES
 /* Cache of all possible PC disk drives */
 // Maximum number of disks is 0x100, indexed from 0x00 to 0xFF.
@@ -449,6 +467,31 @@ InitDriveGeometry(
     DiskDrive->Geometry.Sectors = (ULONGLONG)DiskDrive->Geometry.Cylinders *
                                              DiskDrive->Geometry.Heads *
                                              DiskDrive->Geometry.SectorsPerTrack;
+
+    if ((DiskDrive->ExtGeometry.Size == sizeof(DiskDrive->ExtGeometry) &&
+         DiskDrive->ExtGeometry.BytesPerSector == 0) ||
+        DiskDrive->Geometry.BytesPerSector == 0)
+    {
+        ULONG FallbackBytes = PcDiskFallbackBytesPerSector(DriveNumber,
+                                                           DiskDrive->IsRemovable);
+
+        if (DiskDrive->ExtGeometry.Size == sizeof(DiskDrive->ExtGeometry) &&
+            DiskDrive->ExtGeometry.BytesPerSector == 0)
+        {
+            WARN("Drive 0x%x reported 0-byte sectors via INT13 extensions, forcing %lu.\n",
+                 DriveNumber,
+                 FallbackBytes);
+            DiskDrive->ExtGeometry.BytesPerSector = (USHORT)FallbackBytes;
+        }
+
+        if (DiskDrive->Geometry.BytesPerSector == 0)
+        {
+            WARN("Drive 0x%x reported 0-byte sectors via legacy INT13, forcing %lu.\n",
+                 DriveNumber,
+                 FallbackBytes);
+            DiskDrive->Geometry.BytesPerSector = FallbackBytes;
+        }
+    }
 
     TRACE("Regular Int13h(0x%x) returned:\n"
           "Cylinders  : 0x%x\n"

@@ -143,6 +143,12 @@ FsRecGetDeviceSectorSize(IN PDEVICE_OBJECT DeviceObject,
 
     /* Return the sector size if it's valid */
     if (!DiskGeometry.BytesPerSector) return FALSE;
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_TRACE_LEVEL,
+               "FsRecGetDeviceSectorSize: device %p type %u sector=%lu\n",
+               DeviceObject,
+               DeviceObject->DeviceType,
+               DiskGeometry.BytesPerSector);
     *SectorSize = DiskGeometry.BytesPerSector;
     return TRUE;
 }

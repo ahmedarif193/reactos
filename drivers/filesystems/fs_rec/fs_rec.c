@@ -324,6 +324,11 @@ NTAPI
 DriverEntry(IN PDRIVER_OBJECT DriverObject,
             IN PUNICODE_STRING RegistryPath)
 {
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_TRACE_LEVEL,
+               "FsRec DriverEntry invoked: DriverObject=%p RegistryPath=%wZ\n",
+               DriverObject,
+               RegistryPath);
     NTSTATUS Status;
     ULONG DeviceCount = 0;
     PDEVICE_OBJECT CdfsObject;

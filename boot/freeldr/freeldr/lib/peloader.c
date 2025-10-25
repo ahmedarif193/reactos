@@ -937,22 +937,71 @@ PeLdrLoadImageEx(
     NumberOfSections = NtHeaders->FileHeader.NumberOfSections;
     SectionHeader = IMAGE_FIRST_SECTION(NtHeaders);
 
-    /* Try to allocate this memory; if it fails, allocate somewhere else */
-    PhysicalBase = MmAllocateMemoryAtAddress(NtHeaders->OptionalHeader.SizeOfImage,
-                       (PVOID)((ULONG_PTR)NtHeaders->OptionalHeader.ImageBase & (KSEG0_BASE - 1)),
-                       MemoryType);
+    /*
+     * Placement policy:
+     * - LoaderBootDriver: skip preferred address; allocate directly (relocations expected anyway).
+     * - PE images that request 0x10000: try it only once globally (common base for hal/kdcom/bootvid),
+     *   otherwise go straight to fallback to avoid repeated allocation failures + log spam.
+     * - All other bases: try preferred once, then fallback.
+     */
+    ULONG_PTR RawImageBase = (ULONG_PTR)NtHeaders->OptionalHeader.ImageBase;
+    /* Mask off KSEG0 like the original code did. */
+    ULONG_PTR PreferredBase = RawImageBase & (KSEG0_BASE - 1);
 
-    if (PhysicalBase == NULL)
+    /* Normalize: page-align and reject tiny/zero bases to avoid passing bad addresses. */
+    if (PreferredBase < 0x10000)
+        PreferredBase = 0;  /* treat as "no sensible preferred base" */
+    else
+        PreferredBase = (ULONG_PTR)PAGE_ALIGN(PreferredBase);
+
+    PhysicalBase = NULL;
+
+    if (MemoryType == LoaderBootDriver)
     {
-        /* Don't fail, allocate again at any other "low" place */
+        /* Boot drivers: allocate from free pool; we'll relocate. */
         PhysicalBase = MmAllocateMemoryWithType(NtHeaders->OptionalHeader.SizeOfImage, MemoryType);
+    }
+    else if (PreferredBase == 0x10000)
+    {
+        /* Global loader flag: only attempt the 0x10000 base once per boot. */
+        static BOOLEAN gTriedBase10000 = FALSE;
+
+        if (!gTriedBase10000)
+        {
+            gTriedBase10000 = TRUE; /* mark as tried regardless of outcome */
+            PhysicalBase = MmAllocateMemoryAtAddress(NtHeaders->OptionalHeader.SizeOfImage,
+                                                     (PVOID)PreferredBase,
+                                                     MemoryType);
+            if (PhysicalBase == NULL)
+            {
+                PhysicalBase = MmAllocateMemoryWithType(NtHeaders->OptionalHeader.SizeOfImage, MemoryType);
+            }
+        }
+        else
+        {
+            PhysicalBase = MmAllocateMemoryWithType(NtHeaders->OptionalHeader.SizeOfImage, MemoryType);
+        }
+    }
+    else
+    {
+        if (PreferredBase)
+        {
+            PhysicalBase = MmAllocateMemoryAtAddress(NtHeaders->OptionalHeader.SizeOfImage,
+                                                     (PVOID)PreferredBase,
+                                                     MemoryType);
+        }
 
         if (PhysicalBase == NULL)
         {
-            ERR("Failed to alloc %lu bytes for image %s\n", NtHeaders->OptionalHeader.SizeOfImage, FilePath);
-            ArcClose(FileId);
-            return FALSE;
+            PhysicalBase = MmAllocateMemoryWithType(NtHeaders->OptionalHeader.SizeOfImage, MemoryType);
         }
+    }
+
+    if (PhysicalBase == NULL)
+    {
+        ERR("Failed to alloc %lu bytes for image %s\n", NtHeaders->OptionalHeader.SizeOfImage, FilePath);
+        ArcClose(FileId);
+        return FALSE;
     }
 
     /* This is the real image base, in form of a virtual address */

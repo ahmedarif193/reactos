@@ -155,6 +155,33 @@ add_custom_target(livecd
     DEPENDS isombr native-isohybrid native-mkisofs
     VERBATIM)
 
+# Optional LiveUSB helper bundle: copy the ISO alongside a pre-formatted
+# writable FAT image that can be appended on removable media.
+set(LIVEUSB_RW_SIZE_MB 64)
+math(EXPR LIVEUSB_RW_SECTORS "${LIVEUSB_RW_SIZE_MB} * 1024 * 1024 / 512")
+set(LIVEUSB_RW_LABEL "REACTOS_RW")
+set(LIVEUSB_OUTPUT_DIR ${REACTOS_BINARY_DIR})
+set(LIVEUSB_ISO_COPY ${LIVEUSB_OUTPUT_DIR}/liveusb.iso)
+set(LIVEUSB_RW_IMAGE ${LIVEUSB_OUTPUT_DIR}/liveusb_rw.fat)
+
+add_custom_command(
+    OUTPUT ${LIVEUSB_ISO_COPY}
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${REACTOS_BINARY_DIR}/livecd.iso ${LIVEUSB_ISO_COPY}
+    DEPENDS livecd ${REACTOS_BINARY_DIR}/livecd.iso
+    COMMENT "Copying livecd.iso to ${LIVEUSB_ISO_COPY}"
+    VERBATIM)
+
+add_custom_command(
+    OUTPUT ${LIVEUSB_RW_IMAGE}
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${LIVEUSB_RW_IMAGE}
+    COMMAND native-fatten ${LIVEUSB_RW_IMAGE} -format ${LIVEUSB_RW_SECTORS} ${LIVEUSB_RW_LABEL}
+    DEPENDS native-fatten
+    COMMENT "Generating ${LIVEUSB_RW_SIZE_MB} MiB writable FAT image"
+    VERBATIM)
+
+add_custom_target(liveusb
+    DEPENDS ${LIVEUSB_ISO_COPY} ${LIVEUSB_RW_IMAGE})
+
 ## HybridCD
 # Create the file list
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/hybridcd.cmake.lst "")

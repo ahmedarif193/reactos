@@ -792,12 +792,13 @@ IopCreateArcNames(
 );
 
 CODE_SEG("INIT")
+_IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS
 NTAPI
 IopReassignSystemRoot(
     IN PLOADER_PARAMETER_BLOCK LoaderBlock,
     OUT PANSI_STRING NtBootPath
-);
+    );
 
 CODE_SEG("INIT")
 BOOLEAN

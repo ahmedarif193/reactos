@@ -130,7 +130,7 @@ DiskBuildRawPartitionEntry(
 
     if (!DiskDetectRawLayout(DriveNumber, &SectorCount, &Indicator))
     {
-        TRACE("DiskBuildRawPartitionEntry: failed to detect layout for drive 0x%x\n", DriveNumber);
+        //TRACE("DiskBuildRawPartitionEntry: failed to detect layout for drive 0x%x\n", DriveNumber);
         return FALSE;
     }
 
@@ -242,19 +242,19 @@ DiskReadGptHeader(
 
     if (RtlCompareMemory(Header->Signature, GptSignature, sizeof(GptSignature)) != sizeof(GptSignature))
     {
-        TRACE("DiskReadGptHeader: invalid signature\n");
+        //TRACE("DiskReadGptHeader: invalid signature\n");
         return FALSE;
     }
 
     if (Header->HeaderSize < sizeof(EFI_PARTITION_HEADER) - sizeof(Header->Reserved2))
     {
-        TRACE("DiskReadGptHeader: unexpected header size %lu\n", Header->HeaderSize);
+        //TRACE("DiskReadGptHeader: unexpected header size %lu\n", Header->HeaderSize);
         return FALSE;
     }
 
     if (Header->SizeOfPartitionEntry == 0 || Header->NumberOfPartitionEntries == 0)
     {
-        TRACE("DiskReadGptHeader: empty partition array\n");
+        //TRACE("DiskReadGptHeader: empty partition array\n");
         return FALSE;
     }
 
@@ -288,15 +288,15 @@ DiskReadGptPartitionEntry(
 
     if ((ULONGLONG)SectorCount * SectorSize > DiskReadBufferSize)
     {
-        TRACE("DiskReadGptPartitionEntry: buffer too small (%lu bytes needed)\n", BytesNeeded);
+        //TRACE("DiskReadGptPartitionEntry: buffer too small (%lu bytes needed)\n", BytesNeeded);
         return FALSE;
     }
 
     if (!MachDiskReadLogicalSectors(DriveNumber, SectorNumber, SectorCount, DiskReadBuffer))
     {
-        TRACE("DiskReadGptPartitionEntry: read failed (LBA=%llu, Count=%lu)\n",
-              SectorNumber,
-              SectorCount);
+        // TRACE("DiskReadGptPartitionEntry: read failed (LBA=%llu, Count=%lu)\n",
+        //       SectorNumber,
+        //       SectorCount);
         return FALSE;
     }
 
@@ -393,24 +393,24 @@ DiskReadBootRecord(
     }
     RtlCopyMemory(BootRecord, DiskReadBuffer, sizeof(MASTER_BOOT_RECORD));
 
-    TRACE("Dumping partition table for drive 0x%x:\n", DriveNumber);
-    TRACE("Boot record logical start sector = %d\n", LogicalSectorNumber);
-    TRACE("sizeof(MASTER_BOOT_RECORD) = 0x%x.\n", sizeof(MASTER_BOOT_RECORD));
+    //TRACE("Dumping partition table for drive 0x%x:\n", DriveNumber);
+    //TRACE("Boot record logical start sector = %d\n", LogicalSectorNumber);
+    //TRACE("sizeof(MASTER_BOOT_RECORD) = 0x%x.\n", sizeof(MASTER_BOOT_RECORD));
 
     for (Index = 0; Index < 4; Index++)
     {
-        TRACE("-------------------------------------------\n");
-        TRACE("Partition %d\n", (Index + 1));
-        TRACE("BootIndicator: 0x%x\n", BootRecord->PartitionTable[Index].BootIndicator);
-        TRACE("StartHead: 0x%x\n", BootRecord->PartitionTable[Index].StartHead);
-        TRACE("StartSector (Plus 2 cylinder bits): 0x%x\n", BootRecord->PartitionTable[Index].StartSector);
-        TRACE("StartCylinder: 0x%x\n", BootRecord->PartitionTable[Index].StartCylinder);
-        TRACE("SystemIndicator: 0x%x\n", BootRecord->PartitionTable[Index].SystemIndicator);
-        TRACE("EndHead: 0x%x\n", BootRecord->PartitionTable[Index].EndHead);
-        TRACE("EndSector (Plus 2 cylinder bits): 0x%x\n", BootRecord->PartitionTable[Index].EndSector);
-        TRACE("EndCylinder: 0x%x\n", BootRecord->PartitionTable[Index].EndCylinder);
-        TRACE("SectorCountBeforePartition: 0x%x\n", BootRecord->PartitionTable[Index].SectorCountBeforePartition);
-        TRACE("PartitionSectorCount: 0x%x\n", BootRecord->PartitionTable[Index].PartitionSectorCount);
+        //TRACE("-------------------------------------------\n");
+        //TRACE("Partition %d\n", (Index + 1));
+        //TRACE("BootIndicator: 0x%x\n", BootRecord->PartitionTable[Index].BootIndicator);
+        //TRACE("StartHead: 0x%x\n", BootRecord->PartitionTable[Index].StartHead);
+        //TRACE("StartSector (Plus 2 cylinder bits): 0x%x\n", BootRecord->PartitionTable[Index].StartSector);
+        //TRACE("StartCylinder: 0x%x\n", BootRecord->PartitionTable[Index].StartCylinder);
+        //TRACE("SystemIndicator: 0x%x\n", BootRecord->PartitionTable[Index].SystemIndicator);
+        //TRACE("EndHead: 0x%x\n", BootRecord->PartitionTable[Index].EndHead);
+        //TRACE("EndSector (Plus 2 cylinder bits): 0x%x\n", BootRecord->PartitionTable[Index].EndSector);
+        //TRACE("EndCylinder: 0x%x\n", BootRecord->PartitionTable[Index].EndCylinder);
+        //TRACE("SectorCountBeforePartition: 0x%x\n", BootRecord->PartitionTable[Index].SectorCountBeforePartition);
+        //TRACE("PartitionSectorCount: 0x%x\n", BootRecord->PartitionTable[Index].PartitionSectorCount);
     }
 
     /* Check the partition table magic value */
@@ -681,14 +681,14 @@ DiskDetectPartitionType(
         if (PartitionCount == 0)
         {
             DiskPartitionType[DriveNumber] = PARTITION_STYLE_RAW;
-            TRACE("Drive 0x%X partition type unknown\n", DriveNumber);
+            //TRACE("Drive 0x%X partition type unknown\n", DriveNumber);
             return;
         }
 
         if (!GPTProtect && !HaveValidEntry)
         {
             DiskPartitionType[DriveNumber] = PARTITION_STYLE_RAW;
-            TRACE("Drive 0x%X partition type unknown\n", DriveNumber);
+            //TRACE("Drive 0x%X partition type unknown\n", DriveNumber);
             return;
         }
 
@@ -696,7 +696,7 @@ DiskDetectPartitionType(
         {
             DiskPartitionType[DriveNumber] = PARTITION_STYLE_GPT;
         }
-        TRACE("Drive 0x%X partition type %s\n", DriveNumber, DiskPartitionType[DriveNumber] == PARTITION_STYLE_MBR ? "MBR" : "GPT");
+        //TRACE("Drive 0x%X partition type %s\n", DriveNumber, DiskPartitionType[DriveNumber] == PARTITION_STYLE_MBR ? "MBR" : "GPT");
         return;
     }
 
@@ -704,13 +704,13 @@ DiskDetectPartitionType(
     if (DiskGetBrfrPartitionEntry(DriveNumber, FATX_DATA_PARTITION, &PartitionTableEntry))
     {
         DiskPartitionType[DriveNumber] = PARTITION_STYLE_BRFR;
-        TRACE("Drive 0x%X partition type Xbox-BRFR\n", DriveNumber);
+        //TRACE("Drive 0x%X partition type Xbox-BRFR\n", DriveNumber);
         return;
     }
 
     /* Failed to detect partitions, assume partitionless disk */
     DiskPartitionType[DriveNumber] = PARTITION_STYLE_RAW;
-    TRACE("Drive 0x%X partition type unknown\n", DriveNumber);
+    //TRACE("Drive 0x%X partition type unknown\n", DriveNumber);
 }
 
 BOOLEAN

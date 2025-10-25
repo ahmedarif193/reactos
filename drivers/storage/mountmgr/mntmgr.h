@@ -39,6 +39,7 @@ typedef struct _DEVICE_EXTENSION
     KEVENT OnlineNotificationEvent;
     BOOLEAN BootRamdiskConfigured;
     BOOLEAN FirmwareDiskOfflined;
+    BOOLEAN DisableFirmwareDiskOffline;
 } DEVICE_EXTENSION, *PDEVICE_EXTENSION;
 
 typedef struct _DEVICE_INFORMATION

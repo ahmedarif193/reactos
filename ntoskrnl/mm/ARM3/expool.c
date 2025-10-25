@@ -215,7 +215,7 @@ ExpCheckPoolHeader(IN PPOOL_HEADER Entry)
         if (PreviousEntry->BlockSize != Entry->PreviousSize)
         {
             /* Otherwise, someone corrupted one of the sizes */
-            DPRINT1("PreviousEntry BlockSize %lu, tag %.4s. Entry PreviousSize %lu, tag %.4s\n",
+            DPRINT1("PreviousEntry BlockSize %hu, tag %.4s. Entry PreviousSize %hu, tag %.4s\n",
                     PreviousEntry->BlockSize, (char *)&PreviousEntry->PoolTag,
                     Entry->PreviousSize, (char *)&Entry->PoolTag);
             KeBugCheckEx(BAD_POOL_HEADER,
@@ -279,9 +279,13 @@ ExpCheckPoolHeader(IN PPOOL_HEADER Entry)
         if (NextEntry->PreviousSize != Entry->BlockSize)
         {
             /* Otherwise, someone corrupted the field */
-            DPRINT1("Entry BlockSize %lu, tag %.4s. NextEntry PreviousSize %lu, tag %.4s\n",
-                    Entry->BlockSize, (char *)&Entry->PoolTag,
-                    NextEntry->PreviousSize, (char *)&NextEntry->PoolTag);
+            DPRINT1("Entry=%p BlockSize %hu, tag %.4s. NextEntry=%p PreviousSize %hu, tag %.4s\n",
+                    Entry,
+                    Entry->BlockSize,
+                    (char *)&Entry->PoolTag,
+                    NextEntry,
+                    NextEntry->PreviousSize,
+                    (char *)&NextEntry->PoolTag);
             KeBugCheckEx(BAD_POOL_HEADER,
                          5,
                          (ULONG_PTR)NextEntry,
@@ -456,18 +460,22 @@ FORCEINLINE
 ULONG
 ExpComputePartialHashForAddress(IN PVOID BaseAddress)
 {
-    ULONG Result;
+    ULONGLONG pfn;
+
     //
     // Compute the hash by converting the address into a page number, and then
-    // XORing each nibble with the next one.
+    // XOR-fold the 64-bit PFN down to 32 bits.
     //
-    // We do *NOT* AND with the bucket mask at this point because big table expansion
-    // might happen. Therefore, the final step of the hash must be performed
-    // while holding the expansion pushlock, and this is why we call this a
-    // "partial" hash only.
+    // We do *NOT* AND with the bucket mask at this point because big table
+    // expansion might happen. Therefore, the final step of the hash must be
+    // performed while holding the expansion pushlock, and this is why we call
+    // this a "partial" hash only.
     //
-    Result = (ULONG)((ULONG_PTR)BaseAddress >> PAGE_SHIFT);
-    return (Result >> 24) ^ (Result >> 16) ^ (Result >> 8) ^ Result;
+    pfn = ((ULONGLONG)(ULONG_PTR)BaseAddress) >> PAGE_SHIFT;
+    pfn ^= pfn >> 32;
+    pfn ^= pfn >> 16;
+    pfn ^= pfn >> 8;
+    return (ULONG)pfn;
 }
 
 #if DBG
@@ -825,8 +833,8 @@ ExpRemovePoolTracker(IN ULONG Key,
         //
         if (!TableEntry->Key)
         {
-            DPRINT1("Empty item reached in tracker table. Hash=0x%lx, TableMask=0x%lx, Tag=0x%08lx, NumberOfBytes=%lu, PoolType=%d\n",
-                    Hash, TableMask, Key, (ULONG)NumberOfBytes, PoolType);
+            DPRINT1("Empty item reached in tracker table. Hash=0x%lx, TableMask=0x%Ix, Tag=0x%08lx, NumberOfBytes=%Iu, PoolType=%d\n",
+                    Hash, TableMask, Key, NumberOfBytes, PoolType);
             ASSERT(Hash == TableMask);
         }
 
@@ -1187,9 +1195,9 @@ InitializePool(IN POOL_TYPE PoolType,
         //
         // During development, print this out so we can see what's happening
         //
-        DPRINT("EXPOOL: Pool Tracker Table at: 0x%p with 0x%lx bytes\n",
+        DPRINT("EXPOOL: Pool Tracker Table at: 0x%p with 0x%Ix bytes\n",
                 PoolTrackTable, PoolTrackTableSize * sizeof(POOL_TRACKER_TABLE));
-        DPRINT("EXPOOL: Big Pool Tracker Table at: 0x%p with 0x%lx bytes\n",
+        DPRINT("EXPOOL: Big Pool Tracker Table at: 0x%p with 0x%Ix bytes\n",
                 PoolBigPageTable, PoolBigPageTableSize * sizeof(POOL_TRACKER_BIG_PAGES));
 
         //
@@ -1328,7 +1336,9 @@ ExpGetPoolTagInfoTarget(IN PKDPC Dpc,
     ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
 
     //
-    // Make sure we win the race, and if we did, copy the data atomically
+    // Make sure we win the race, and if we did, copy the data atomically.
+    // Windows uses a two-phase barrier: one winner does the work,
+    // then all CPUs synchronize before signaling Done.
     //
     if (KeSignalCallDpcSynchronize(SystemArgument2))
     {
@@ -1343,11 +1353,13 @@ ExpGetPoolTagInfoTarget(IN PKDPC Dpc,
     }
 
     //
-    // Regardless of whether we won or not, we must now synchronize and then
-    // decrement the barrier since this is one more processor that has completed
-    // the callback.
+    // Phase 2: wait for the winner before completing the callback.
     //
     KeSignalCallDpcSynchronize(SystemArgument2);
+
+    //
+    // One more processor completed the callback.
+    //
     KeSignalCallDpcDone(SystemArgument1);
 }
 
@@ -1498,7 +1510,7 @@ ExpReallocateBigPageTable(
     {
         if (!NT_SUCCESS(RtlSIZETMult(2, OldSize, &NewSize)))
         {
-            DPRINT1("Overflow expanding big page table. Size=%lu\n", OldSize);
+            DPRINT1("Overflow expanding big page table. Size=%Iu\n", OldSize);
             KeReleaseSpinLock(&ExpLargePoolTableLock, OldIrql);
             return FALSE;
         }
@@ -1510,7 +1522,7 @@ ExpReallocateBigPageTable(
 
     if (!NT_SUCCESS(RtlSIZETMult(sizeof(POOL_TRACKER_BIG_PAGES), NewSize, &NewSizeInBytes)))
     {
-        DPRINT1("Overflow while calculating big page table size. Size=%lu\n", OldSize);
+        DPRINT1("Overflow while calculating big page table size. Size=%Iu\n", OldSize);
         KeReleaseSpinLock(&ExpLargePoolTableLock, OldIrql);
         return FALSE;
     }
@@ -1518,12 +1530,12 @@ ExpReallocateBigPageTable(
     NewTable = MiAllocatePoolPages(NonPagedPool, NewSizeInBytes);
     if (NewTable == NULL)
     {
-        DPRINT("Could not allocate %lu bytes for new big page table\n", NewSizeInBytes);
+        DPRINT("Could not allocate %Iu bytes for new big page table\n", NewSizeInBytes);
         KeReleaseSpinLock(&ExpLargePoolTableLock, OldIrql);
         return FALSE;
     }
 
-    DPRINT("%s big pool tracker table to %lu entries\n", Shrink ? "Shrinking" : "Expanding", NewSize);
+    DPRINT("%s big pool tracker table to %Iu entries\n", Shrink ? "Shrinking" : "Expanding", NewSize);
 
     /* Initialize the new table */
     RtlZeroMemory(NewTable, NewSizeInBytes);
@@ -1544,7 +1556,7 @@ ExpReallocateBigPageTable(
         }
 
         /* Recalculate the hash due to the new table size */
-        Hash = ExpComputePartialHashForAddress(OldTable[i].Va) % HashMask;
+        Hash = ExpComputePartialHashForAddress(OldTable[i].Va) & HashMask;
 
         /* Find the location in the new table */
         while (!((ULONG_PTR)NewTable[Hash].Va & POOL_BIG_TABLE_ENTRY_FREE))
@@ -2019,7 +2031,7 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
             //
             if (ExpPoolFlags & POOL_FLAG_DBGPRINT_ON_FAILURE)
             {
-                DPRINT1("EX: ExAllocatePool (%lu, 0x%x) returning NULL\n",
+                DPRINT1("EX: ExAllocatePool (%Iu, 0x%x) returning NULL\n",
                         NumberOfBytes,
                         OriginalType);
                 if (ExpPoolFlags & POOL_FLAG_CRASH_ON_FAILURE) DbgBreakPoint();
@@ -2361,7 +2373,7 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
         //
         if (ExpPoolFlags & POOL_FLAG_DBGPRINT_ON_FAILURE)
         {
-            DPRINT1("EX: ExAllocatePool (%lu, 0x%x) returning NULL\n",
+            DPRINT1("EX: ExAllocatePool (%Iu, 0x%x) returning NULL\n",
                     NumberOfBytes,
                     OriginalType);
             if (ExpPoolFlags & POOL_FLAG_CRASH_ON_FAILURE) DbgBreakPoint();

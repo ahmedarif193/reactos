@@ -37,6 +37,28 @@ FsRecIsCdfsVolume(IN PDEVICE_OBJECT DeviceObject,
     }
 
     // Verify the fields.
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_TRACE_LEVEL,
+               "FsRecIsCdfsVolume: raw=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+               ((PUCHAR)pVdHeader)[0],
+               ((PUCHAR)pVdHeader)[1],
+               ((PUCHAR)pVdHeader)[2],
+               ((PUCHAR)pVdHeader)[3],
+               ((PUCHAR)pVdHeader)[4],
+               ((PUCHAR)pVdHeader)[5],
+               ((PUCHAR)pVdHeader)[6],
+               ((PUCHAR)pVdHeader)[7]);
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_TRACE_LEVEL,
+               "FsRecIsCdfsVolume: type=%u id=%c%c%c%c%c version=%u\n",
+               pVdHeader->Type,
+               pVdHeader->Identifier[0],
+               pVdHeader->Identifier[1],
+               pVdHeader->Identifier[2],
+               pVdHeader->Identifier[3],
+               pVdHeader->Identifier[4],
+               pVdHeader->Version);
+
     if (pVdHeader->Type != VD_TYPE_PRIMARY)
         goto Cleanup;
 
@@ -83,14 +105,37 @@ FsRecCdfsFsControl(IN PDEVICE_OBJECT DeviceObject,
 
             /* Get the device object and request the sector size */
             MountDevice = Stack->Parameters.MountVolume.DeviceObject;
+            DbgPrintEx(DPFLTR_DEFAULT_ID,
+                       DPFLTR_TRACE_LEVEL,
+                       "FsRecCdfsFsControl: probing device %p\n",
+                       MountDevice);
             if (FsRecGetDeviceSectorSize(MountDevice, &SectorSize))
             {
+                DbgPrintEx(DPFLTR_DEFAULT_ID,
+                           DPFLTR_TRACE_LEVEL,
+                           "FsRecCdfsFsControl: sector size=%lu\n",
+                           SectorSize);
                 /* Check if it's an actual CDFS (ISO-9660) volume */
                 if (FsRecIsCdfsVolume(MountDevice, SectorSize))
                 {
                     /* It is! */
+                    DbgPrintEx(DPFLTR_DEFAULT_ID,
+                               DPFLTR_TRACE_LEVEL,
+                               "FsRecCdfsFsControl: ISO-9660 signature detected\n");
                     Status = STATUS_FS_DRIVER_REQUIRED;
                 }
+                else
+                {
+                    DbgPrintEx(DPFLTR_DEFAULT_ID,
+                               DPFLTR_TRACE_LEVEL,
+                               "FsRecCdfsFsControl: ISO-9660 probe failed\n");
+                }
+            }
+            else
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID,
+                           DPFLTR_TRACE_LEVEL,
+                           "FsRecCdfsFsControl: sector size query failed\n");
             }
 
             break;

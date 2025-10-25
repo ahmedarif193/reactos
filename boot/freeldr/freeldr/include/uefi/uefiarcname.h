@@ -15,6 +15,12 @@
 #define FIRST_BIOS_DISK 0x80
 #endif
 
+#ifdef UEFIBOOT
+/* Forward declaration for EFI_HANDLE when UEFI headers aren't included */
+#ifndef __EFI_TYPES_H__
+typedef PVOID EFI_HANDLE;
+#endif
+
 BOOLEAN UefiEnumerateArcDisks(VOID);
 BOOLEAN UefiInitializeArcDisks(PLOADER_PARAMETER_BLOCK LoaderBlock);
 BOOLEAN UefiGetBootPartitionInfo(OUT PULONG RDiskNumber,
@@ -24,11 +30,13 @@ BOOLEAN UefiGetBootPartitionInfo(OUT PULONG RDiskNumber,
 BOOLEAN UefiGetBootPartitionEntry(IN UCHAR DriveNumber,
                                   OUT PPARTITION_TABLE_ENTRY PartitionTableEntry,
                                   OUT PULONG BootPartition);
+BOOLEAN UefiDiskIsUsb(IN UCHAR DriveNumber);
 
 extern BOOLEAN UefiBootHasDiskArc;
 extern ULONG UefiBootDiskArcNumber;
 extern ULONG UefiBootDiskArcPartition;
 ULONG MapToRdiskIndex(IN EFI_HANDLE DiskHandle);
 ULONG MapToCdromIndex(IN EFI_HANDLE CdHandle);
+#endif /* UEFIBOOT */
 
 #endif /* _UEFI_ARCNAME_H_ */

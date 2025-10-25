@@ -169,36 +169,27 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
     CHAR  ArcBoot[MAX_PATH+1];
     CHAR  MiscFiles[MAX_PATH+1];
     ULONG i;
-    ULONG_PTR PathSeparator;
     PLOADER_PARAMETER_EXTENSION Extension;
 
     /* Prefer the UEFI-specific helpers when we are running under UEFI firmware. */
-#ifdef UEFIBOOT
-    if (GlobalSystemTable != NULL)
+    /*
+     * General rule: derive ArcBoot directly from the finalized BootPath.
+     * This ensures ArcBootDeviceName/ArcHalDeviceName reflect the actual
+     * device used for the system root (e.g. ramdisk(0), cdrom(0), rdisk(n)).
+     */
     {
-        ULONG RDiskNumber = 0;
-        ULONG PartitionNumber = 1;
-        
-        /* Get boot partition info from UEFI */
-        if (UefiGetBootPartitionInfo(&RDiskNumber, &PartitionNumber, ArcBoot, sizeof(ArcBoot)))
+        PCSTR Sep = strstr(BootPath, "\\");
+        if (!Sep)
         {
-            TRACE("UEFI Boot Device: %s\n", ArcBoot);
+            RtlStringCbCopyA(ArcBoot, sizeof(ArcBoot), BootPath);
         }
         else
         {
-            /* Fallback to parsing the BootPath */
-            PathSeparator = strstr(BootPath, "\\") - BootPath;
-            RtlStringCbCopyNA(ArcBoot, sizeof(ArcBoot), BootPath, PathSeparator);
-            TRACE("Using fallback ArcBoot: '%s'\n", ArcBoot);
+            SIZE_T PrefixLength = (SIZE_T)(Sep - BootPath);
+            RtlStringCbCopyNA(ArcBoot, sizeof(ArcBoot), BootPath, PrefixLength);
         }
     }
-    else
-#endif
-    {
-        /* Construct SystemRoot and ArcBoot from SystemPath */
-        PathSeparator = strstr(BootPath, "\\") - BootPath;
-        RtlStringCbCopyNA(ArcBoot, sizeof(ArcBoot), BootPath, PathSeparator);
-    }
+    TRACE("ArcBoot derived from BootPath: '%s'\n", ArcBoot);
 
     TRACE("ArcBoot: '%s'\n", ArcBoot);
     TRACE("SystemRoot: '%s'\n", SystemRoot);
@@ -1334,11 +1325,35 @@ LoadAndBootWindows(
             CHAR NewBootPath[sizeof(BootPath)];
             PCSTR SubPath;
 
-            RtlStringCbCopyA(OffsetOption, sizeof(OffsetOption), "/RDIMAGEOFFSET=0");
-            RtlStringCbPrintfA(LengthOption,
-                               sizeof(LengthOption),
-                               "/RDIMAGELENGTH=%llu",
-                               RamDiskGetImageLength());
+            {
+                /* NT5-style handoff: expose the real filesystem volume start/length */
+                ULONGLONG ImageOffset64 = (ULONGLONG)RamDiskGetImageOffset();
+                ULONGLONG VolumeOffset64 = RamDiskGetVolumeOffset();
+                ULONGLONG ImageLength64 = RamDiskGetImageLength();
+                ULONGLONG EffectiveOffset64 = ImageOffset64 + VolumeOffset64;
+
+                if (EffectiveOffset64 > (ULONGLONG)MAXLONG)
+                {
+                    WARN("Computed /RDIMAGEOFFSET=%llu exceeds 32-bit loader limit\n",
+                         EffectiveOffset64);
+                    UiMessageBox("Computed RAM disk offset exceeds 2GB limit; boot aborted.");
+                    return EINVAL;
+                }
+
+                ULONGLONG VisibleLength64 = (ImageLength64 > EffectiveOffset64)
+                                             ? (ImageLength64 - EffectiveOffset64)
+                                             : 0;
+                ULONG Offset32 = (ULONG)EffectiveOffset64;
+
+                RtlStringCbPrintfA(OffsetOption,
+                                   sizeof(OffsetOption),
+                                   "/RDIMAGEOFFSET=%lu",
+                                   Offset32);
+                RtlStringCbPrintfA(LengthOption,
+                                   sizeof(LengthOption),
+                                   "/RDIMAGELENGTH=%llu",
+                                   VisibleLength64);
+            }
 
             OptionsToAdd[0] = OffsetOption;
             OptionsToAdd[1] = LengthOption;

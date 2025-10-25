@@ -494,7 +494,8 @@ FstubCreateDiskRaw(IN PDEVICE_OBJECT DeviceObject)
     /* Only zero useful stuff */
     MasterBootRecord = (PMASTER_BOOT_RECORD)Disk->Buffer;
     MasterBootRecord->Signature = 0;
-    RtlZeroMemory(MasterBootRecord->PartitionTable, sizeof(PARTITION_TABLE_ENTRY));
+    RtlZeroMemory(MasterBootRecord->PartitionTable,
+                  sizeof(MasterBootRecord->PartitionTable));
     MasterBootRecord->MasterBootRecordMagic = 0;
 
     /* Write back that destroyed MBR */
@@ -672,6 +673,7 @@ FstubDetectPartitionStyle(IN PDISK_INFORMATION Disk,
 {
     NTSTATUS Status;
     PPARTITION_DESCRIPTOR PartitionDescriptor;
+    BOOLEAN ForceElToritoSectorSize = FALSE;
 
     PAGED_CODE();
 
@@ -690,6 +692,48 @@ FstubDetectPartitionStyle(IN PDISK_INFORMATION Disk,
 
     /* Get the partition descriptor array */
     PartitionDescriptor = (PPARTITION_DESCRIPTOR)&Disk->Buffer[PARTITION_TABLE_OFFSET];
+
+    if ((PartitionDescriptor[0].PartitionType == 0x96) &&
+        (Disk->DiskGeometry.Geometry.BytesPerSector < 2048))
+    {
+        ForceElToritoSectorSize = TRUE;
+    }
+
+    if (ForceElToritoSectorSize)
+    {
+        PUCHAR NewBuffer;
+
+        DPRINT1("FstubDetectPartitionStyle: forcing sector size to 2048 for El-Torito volume\n");
+
+        /* Update geometry and cached values to keep them in sync */
+        Disk->DiskGeometry.Geometry.BytesPerSector = 2048;
+        Disk->SectorSize = 2048;
+        Disk->SectorCount = Disk->DiskGeometry.DiskSize.QuadPart / Disk->SectorSize;
+
+        /* Grow the scratch buffer so future reads match the new sector size */
+        NewBuffer = ExAllocatePoolWithTag(NonPagedPoolCacheAligned,
+                                          Disk->SectorSize,
+                                          TAG_FSTUB);
+        if (!NewBuffer)
+        {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        ExFreePoolWithTag(Disk->Buffer, TAG_FSTUB);
+        Disk->Buffer = NewBuffer;
+
+        Status = FstubReadSector(Disk->DeviceObject,
+                                 Disk->SectorSize,
+                                 0,
+                                 Disk->Buffer);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+
+        PartitionDescriptor = (PPARTITION_DESCRIPTOR)&Disk->Buffer[PARTITION_TABLE_OFFSET];
+    }
+
     {
         USHORT Signature = *(PUSHORT)&Disk->Buffer[BOOT_SIGNATURE_OFFSET];
         DPRINT1("FstubDetectPartitionStyle: sig=%04x types=%02x %02x %02x %02x sectorSize=%lu\n",
@@ -840,7 +884,7 @@ FstubReadHeaderEFI(IN PDISK_INFORMATION Disk,
     PUCHAR Sector = NULL;
     ULONGLONG StartingSector;
     PEFI_PARTITION_HEADER EFIHeader;
-    ULONG i, HeaderCRC32, PreviousCRC32, SectoredPartitionEntriesSize, LonelyPartitions;
+    ULONG HeaderCRC32, PreviousCRC32, EntriesBytes, FullSectors, Remainder, i;
 
     PAGED_CODE();
 
@@ -917,10 +961,13 @@ FstubReadHeaderEFI(IN PDISK_INFORMATION Disk,
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    /* Count how much sectors we'll have to read to read the whole partition table */
-    SectoredPartitionEntriesSize = (EFIHeader->NumberOfEntries * PARTITION_ENTRY_SIZE) / Disk->SectorSize;
+    /* Count how many full sectors of entries we need to read */
+    EntriesBytes = EFIHeader->NumberOfEntries * PARTITION_ENTRY_SIZE;
+    FullSectors = EntriesBytes / Disk->SectorSize;
+    Remainder = EntriesBytes % Disk->SectorSize;
+
     /* Compute partition table checksum */
-    for (i = 0, PreviousCRC32 = 0; i < SectoredPartitionEntriesSize; i++)
+    for (i = 0, PreviousCRC32 = 0; i < FullSectors; i++)
     {
         Status = FstubReadSector(Disk->DeviceObject,
                                  Disk->SectorSize,
@@ -936,15 +983,13 @@ FstubReadHeaderEFI(IN PDISK_INFORMATION Disk,
         PreviousCRC32 = RtlComputeCrc32(PreviousCRC32, Sector, Disk->SectorSize);
     }
 
-    /* Check whether we have a last sector not full of partitions */
-    LonelyPartitions = (EFIHeader->NumberOfEntries * PARTITION_ENTRY_SIZE) % Disk->SectorSize;
-    /* In such case, we have to complete checksum computation */
-    if (LonelyPartitions != 0)
+    /* Check whether we have remaining bytes beyond full sectors */
+    if (Remainder != 0)
     {
-        /* Read the sector that contains those partitions */
+        /* Read the sector that contains those remaining entries */
         Status = FstubReadSector(Disk->DeviceObject,
                                  Disk->SectorSize,
-                                 EFIHeader->PartitionEntryLBA + i,
+                                 EFIHeader->PartitionEntryLBA + FullSectors,
                                  Sector);
         if (!NT_SUCCESS(Status))
         {
@@ -953,11 +998,8 @@ FstubReadHeaderEFI(IN PDISK_INFORMATION Disk,
             return Status;
         }
 
-        /* Then complete checksum by computing on each partition */
-        for (i = 0; i < LonelyPartitions; i++)
-        {
-            PreviousCRC32 = RtlComputeCrc32(PreviousCRC32, Sector + i * PARTITION_ENTRY_SIZE, PARTITION_ENTRY_SIZE);
-        }
+        /* Complete checksum with leftover bytes */
+        PreviousCRC32 = RtlComputeCrc32(PreviousCRC32, Sector, Remainder);
     }
 
     /* Finally, release memory */
@@ -988,6 +1030,7 @@ FstubReadPartitionTableEFI(IN PDISK_INFORMATION Disk,
     ULONG NumberOfEntries;
     PEFI_PARTITION_HEADER EfiHeader;
     EFI_PARTITION_ENTRY PartitionEntry;
+    static const GUID GuidZero = {0};
 #if 0
     BOOLEAN UpdatedPartitionTable = FALSE;
     ULONGLONG SectorsForPartitions, PartitionEntryLBA;
@@ -1051,7 +1094,8 @@ FstubReadPartitionTableEFI(IN PDISK_INFORMATION Disk,
     DriveLayoutEx->PartitionStyle = PARTITION_STYLE_GPT;
     /* Translate LBA -> Offset */
     DriveLayoutEx->Gpt.StartingUsableOffset.QuadPart = EfiHeader->FirstUsableLBA * Disk->SectorSize;
-    DriveLayoutEx->Gpt.UsableLength.QuadPart = EfiHeader->LastUsableLBA - EfiHeader->FirstUsableLBA * Disk->SectorSize;
+    DriveLayoutEx->Gpt.UsableLength.QuadPart =
+        (EfiHeader->LastUsableLBA - EfiHeader->FirstUsableLBA + 1) * (ULONGLONG)Disk->SectorSize;
     DriveLayoutEx->Gpt.MaxPartitionCount = EfiHeader->NumberOfEntries;
     DriveLayoutEx->Gpt.DiskId = EfiHeader->DiskGUID;
 
@@ -1087,10 +1131,9 @@ FstubReadPartitionTableEFI(IN PDISK_INFORMATION Disk,
         PartitionIndex++;
 
         /* If partition GUID is 00000000-0000-0000-0000-000000000000, then it's unused, skip it */
-        if (PartitionEntry.PartitionType.Data1 == 0 &&
-            PartitionEntry.PartitionType.Data2 == 0 &&
-            PartitionEntry.PartitionType.Data3 == 0 &&
-            ((PULONGLONG)PartitionEntry.PartitionType.Data4)[0] == 0)
+        if (RtlCompareMemory(&PartitionEntry.PartitionType,
+                             &GuidZero,
+                             sizeof(GUID)) == sizeof(GUID))
         {
             continue;
         }
@@ -1858,6 +1901,7 @@ IoGetBootDiskInformation(IN OUT PBOOTDISK_INFORMATION BootDiskInformation,
     IO_STATUS_BLOCK IoStatusBlock;
     CHAR Buffer[128], ArcBuffer[128];
     BOOLEAN SingleDisk, IsBootDiskInfoEx;
+    INT Length;
     PARC_DISK_SIGNATURE ArcDiskSignature;
     PARC_DISK_INFORMATION ArcDiskInformation;
     PARTITION_INFORMATION_EX PartitionInformation;
@@ -1906,7 +1950,14 @@ IoGetBootDiskInformation(IN OUT PBOOTDISK_INFORMATION BootDiskInformation,
     for (DiskNumber = 0; DiskNumber < DiskCount; DiskNumber++)
     {
         /* Create the device name */
-        sprintf(Buffer, "\\Device\\Harddisk%lu\\Partition0", DiskNumber);
+        Length = _snprintf(Buffer,
+                           sizeof(Buffer),
+                           "\\Device\\Harddisk%lu\\Partition0",
+                           DiskNumber);
+        if ((Length < 0) || ((SIZE_T)Length >= sizeof(Buffer)))
+        {
+            continue;
+        }
         RtlInitAnsiString(&DeviceStringA, Buffer);
         Status = RtlAnsiStringToUnicodeString(&DeviceStringW, &DeviceStringA, TRUE);
         if (!NT_SUCCESS(Status))
@@ -1992,14 +2043,30 @@ IoGetBootDiskInformation(IN OUT PBOOTDISK_INFORMATION BootDiskInformation,
                 (DriveLayout->PartitionStyle == PARTITION_STYLE_MBR))
             {
                 /* Create ARC name */
-                sprintf(ArcBuffer, "\\ArcName\\%s", ArcDiskSignature->ArcName);
+                Length = _snprintf(ArcBuffer,
+                                   sizeof(ArcBuffer),
+                                   "\\ArcName\\%s",
+                                   ArcDiskSignature->ArcName);
+                if ((Length < 0) || ((SIZE_T)Length >= sizeof(ArcBuffer)))
+                {
+                    Status = STATUS_BUFFER_OVERFLOW;
+                    continue;
+                }
                 RtlInitAnsiString(&ArcNameStringA, ArcBuffer);
 
                 /* Browse all partitions */
                 for (PartitionNumber = 1; PartitionNumber <= DriveLayout->PartitionCount; PartitionNumber++)
                 {
                     /* Create its device name */
-                    sprintf(Buffer, "\\Device\\Harddisk%lu\\Partition%lu", DiskNumber, PartitionNumber);
+                    Length = _snprintf(Buffer,
+                                        sizeof(Buffer),
+                                        "\\Device\\Harddisk%lu\\Partition%lu",
+                                        DiskNumber,
+                                        PartitionNumber);
+                    if ((Length < 0) || ((SIZE_T)Length >= sizeof(Buffer)))
+                    {
+                        continue;
+                    }
                     RtlInitAnsiString(&DeviceStringA, Buffer);
                     Status = RtlAnsiStringToUnicodeString(&DeviceStringW, &DeviceStringA, TRUE);
                     if (!NT_SUCCESS(Status))
@@ -2014,7 +2081,18 @@ IoGetBootDiskInformation(IN OUT PBOOTDISK_INFORMATION BootDiskInformation,
                     }
 
                     /* Create partial ARC name */
-                    sprintf(ArcBuffer, "%spartition(%lu)", ArcDiskSignature->ArcName, PartitionNumber);
+                    Length = _snprintf(ArcBuffer,
+                                       sizeof(ArcBuffer),
+                                       "%spartition(%lu)",
+                                       ArcDiskSignature->ArcName,
+                                       PartitionNumber);
+                    if ((Length < 0) || ((SIZE_T)Length >= sizeof(ArcBuffer)))
+                    {
+                        DPRINT1("fstub: ARC partition name too long or truncated: %s\n",
+                                ArcDiskSignature->ArcName);
+                        RtlFreeUnicodeString(&DeviceStringW);
+                        continue;
+                    }
                     RtlInitAnsiString(&ArcNameStringA, ArcBuffer);
 
                     /* If it's matching boot string */
