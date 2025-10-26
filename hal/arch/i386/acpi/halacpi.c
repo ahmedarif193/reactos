@@ -9,10 +9,13 @@
 /* INCLUDES *******************************************************************/
 
 #include <hal.h>
+#include <halacpi.h>
 #include <ntifs.h>
 #include <stdarg.h>
 #define NDEBUG
 #include <debug.h>
+
+extern VOID HalpPciLogEcamCoverage(VOID);
 
 NTSYSAPI NTSTATUS NTAPI NtShutdownSystem(_In_ SHUTDOWN_ACTION Action);
 
@@ -42,6 +45,29 @@ LIST_ENTRY HalpAcpiTableMatchList;
 
 ULONG HalpInvalidAcpiTable;
 
+PHALP_ACPI_MCFG HalpAcpiMcfgTable;
+PHALP_ACPI_MCFG_ALLOCATION HalpAcpiMcfgAllocations;
+ULONG HalpAcpiMcfgAllocationCount;
+volatile LONG HalpAcpiEcamCoverageFlags;
+BOOLEAN HalpAcpiEcamDisabled;
+
+static
+LONG
+HalpAcpiRecordEcamEvent(
+    _In_ ULONG Flag,
+    _In_opt_z_ PCSTR Message)
+{
+    LONG PreviousFlags;
+
+    PreviousFlags = InterlockedOr(&HalpAcpiEcamCoverageFlags, Flag);
+    if (Message && !(PreviousFlags & Flag))
+    {
+        DPRINT1("%s\n", Message);
+    }
+
+    return PreviousFlags;
+}
+
 #define HALP_ACPI_OVERRIDE_ALIGNMENT   8
 #define ACPI_GAS_SYSTEM_MEMORY         0
 #define ACPI_GAS_SYSTEM_IO             1
@@ -55,6 +81,15 @@ ULONG HalpPicVectorRedirect[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1
 PHYSICAL_ADDRESS HalpFacsPhysicalAddress;
 GEN_ADDR HalpPmTimerBlock;
 BOOLEAN HalpPmTimerBlockValid;
+BOOLEAN HalpPmTimerInitialized;
+BOOLEAN HalpPmTimerMemoryMapped;
+volatile ULONG *HalpPmTimerRegister;
+PVOID HalpPmTimerMappingBase;
+PFN_COUNT HalpPmTimerMappingPages;
+ULONG HalpPmTimerPort;
+ULONG HalpPmTimerMask;
+ULONG HalpPmTimerBitShift;
+ULONG HalpAcpiPmTimerFrequency = 3579545UL;
 ULONG HalpAppliedAcpiOverrides;
 GEN_ADDR HalpPm1EventBlocks[2];
 GEN_ADDR HalpPm1ControlBlocks[2];
@@ -135,6 +170,27 @@ BOOLEAN
 HalpAcpiWriteRegister(
     _In_ const GEN_ADDR *Gas,
     _In_ ULONG Value);
+
+static
+ULONG
+HalpAcpiGetRegisterByteWidth(
+    _In_ const GEN_ADDR *Gas)
+{
+    ULONG Bytes;
+
+    if (!Gas)
+    {
+        return sizeof(ULONG);
+    }
+
+    Bytes = (Gas->BitWidth + 7) >> 3;
+    if (Bytes < sizeof(ULONG))
+    {
+        Bytes = sizeof(ULONG);
+    }
+
+    return Bytes;
+}
 
 /* This determines the HAL type */
 BOOLEAN HalDisableFirmwareMapper = TRUE;
@@ -1391,46 +1447,154 @@ NTAPI
 HaliAcpiTimerInit(IN ULONG TimerPort,
                   IN ULONG TimerValExt)
 {
+    PHYSICAL_ADDRESS BaseAddress;
+    PVOID Mapping;
+    PFN_COUNT MappingPages;
+    ULONG RegisterBytes;
+    ULONG Offset;
+    ULONG Width;
+    ULONG LocalTimerPort;
+    BOOLEAN TimerExtended;
+    BOOLEAN AttemptMemory;
+
     PAGED_CODE();
 
-    /* Is this in the init phase? */
-    if (!TimerPort)
+    if (HalpPmTimerInitialized)
     {
-        /* Get the data from the FADT */
-        TimerValExt = HalpFixedAcpiDescTable.flags & ACPI_TMR_VAL_EXT;
+        return;
+    }
+
+    HalpPmTimerMemoryMapped = FALSE;
+    HalpPmTimerRegister = NULL;
+    HalpPmTimerMappingBase = NULL;
+    HalpPmTimerMappingPages = 0;
+    HalpPmTimerPort = 0;
+    HalpPmTimerBitShift = 0;
+
+    LocalTimerPort = TimerPort;
+    TimerExtended = (TimerValExt != 0);
+    AttemptMemory = FALSE;
+
+    if (!LocalTimerPort)
+    {
+        TimerExtended = (HalpFixedAcpiDescTable.flags & ACPI_TMR_VAL_EXT) != 0;
+
         if (HalpPmTimerBlockValid)
         {
+            HalpPmTimerBitShift = HalpPmTimerBlock.BitOffset;
+
             if (HalpPmTimerBlock.AddressSpaceID == ACPI_GAS_SYSTEM_IO)
             {
-                TimerPort = (ULONG)HalpPmTimerBlock.Address.LowPart;
-                DPRINT1("ACPI Timer at: %lXh (EXT: %lu)\n", TimerPort, TimerValExt);
+                LocalTimerPort = (ULONG)HalpPmTimerBlock.Address.LowPart;
             }
             else if (HalpPmTimerBlock.AddressSpaceID == ACPI_GAS_SYSTEM_MEMORY)
             {
-                DPRINT1("ACPI Timer mapped at 0x%llx (memory, EXT: %lu)\n",
-                        (unsigned long long)HalpPmTimerBlock.Address.QuadPart,
-                        TimerValExt);
-            }
-        }
-
-        if (!TimerPort)
-        {
-            TimerPort = HalpFixedAcpiDescTable.pm_tmr_blk_io_port;
-            if (TimerPort)
-            {
-                DPRINT1("ACPI Timer fallback port at: %lXh (EXT: %lu)\n",
-                        TimerPort,
-                        TimerValExt);
-            }
-            else
-            {
-                DPRINT1("ACPI Timer resource unavailable (EXT: %lu)\n", TimerValExt);
+                AttemptMemory = TRUE;
             }
         }
     }
 
-    /* FIXME: Now proceed to the timer initialization */
-    //HalaAcpiTimerInit(TimerPort, TimerValExt);
+    if (!LocalTimerPort && !AttemptMemory)
+    {
+        LocalTimerPort = HalpFixedAcpiDescTable.pm_tmr_blk_io_port;
+        HalpPmTimerBitShift = 0;
+    }
+
+    if (AttemptMemory)
+    {
+        RegisterBytes = HalpAcpiGetRegisterByteWidth(&HalpPmTimerBlock);
+        BaseAddress.QuadPart = HalpPmTimerBlock.Address.QuadPart & ~((ULONGLONG)PAGE_SIZE - 1);
+        Offset = (ULONG)(HalpPmTimerBlock.Address.QuadPart - BaseAddress.QuadPart);
+        MappingPages = HalpAcpiPagesForRange(HalpPmTimerBlock.Address, RegisterBytes);
+
+        Mapping = HalpMapPhysicalMemory64(BaseAddress, MappingPages);
+        if (Mapping)
+        {
+            HalpPmTimerMappingBase = Mapping;
+            HalpPmTimerMappingPages = MappingPages;
+            HalpPmTimerRegister = (volatile ULONG *)((volatile PUCHAR)Mapping + Offset);
+            HalpPmTimerMemoryMapped = TRUE;
+            DPRINT1("ACPI Timer mapped at 0x%llx (EXT: %u)\n",
+                    (unsigned long long)HalpPmTimerBlock.Address.QuadPart,
+                    TimerExtended ? 1U : 0U);
+        }
+        else
+        {
+            DPRINT1("HAL: Failed to map ACPI PM timer at 0x%llx -- falling back to I/O port\n",
+                    (unsigned long long)HalpPmTimerBlock.Address.QuadPart);
+            LocalTimerPort = HalpFixedAcpiDescTable.pm_tmr_blk_io_port;
+            HalpPmTimerBitShift = 0;
+        }
+    }
+
+    if (!HalpPmTimerMemoryMapped)
+    {
+        if (LocalTimerPort)
+        {
+            HalpPmTimerPort = LocalTimerPort;
+            DPRINT1("ACPI Timer port at: %lXh (EXT: %u)\n",
+                    HalpPmTimerPort,
+                    TimerExtended ? 1U : 0U);
+        }
+        else
+        {
+            DPRINT1("ACPI Timer resource unavailable (EXT: %u)\n", TimerExtended ? 1U : 0U);
+            return;
+        }
+    }
+
+    Width = TimerExtended ? 32 : 24;
+    if (HalpPmTimerBlockValid && HalpPmTimerBlock.BitWidth)
+    {
+        Width = HalpPmTimerBlock.BitWidth;
+    }
+    if (Width > 32)
+    {
+        Width = 32;
+    }
+    else if (Width == 0)
+    {
+        Width = 24;
+    }
+
+    if (Width == 32)
+    {
+        HalpPmTimerMask = 0xFFFFFFFFUL;
+    }
+    else
+    {
+        HalpPmTimerMask = (1UL << Width) - 1;
+    }
+
+    HalpPmTimerInitialized = TRUE;
+}
+
+ULONG
+NTAPI
+HalpAcpiTimerRead(VOID)
+{
+    ULONG Value;
+
+    if (!HalpPmTimerInitialized)
+    {
+        return 0;
+    }
+
+    if (HalpPmTimerMemoryMapped && HalpPmTimerRegister)
+    {
+        Value = READ_REGISTER_ULONG(HalpPmTimerRegister);
+    }
+    else
+    {
+        Value = READ_PORT_ULONG((PULONG)(ULONG_PTR)HalpPmTimerPort);
+    }
+
+    if (HalpPmTimerBitShift)
+    {
+        Value >>= HalpPmTimerBitShift;
+    }
+
+    return Value & HalpPmTimerMask;
 }
 
 CODE_SEG("INIT")
@@ -1477,6 +1641,69 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Get the debug table for KD */
     HalpDebugPortTable = HalAcpiGetTable(LoaderBlock, DBGP_SIGNATURE);
+
+    /* Cache the PCI Express MMCONFIG information if present */
+    {
+        PHALP_ACPI_MCFG Mcfg;
+
+        HalpAcpiMcfgTable = NULL;
+        HalpAcpiMcfgAllocations = NULL;
+        HalpAcpiMcfgAllocationCount = 0;
+
+        Mcfg = HalAcpiGetTable(LoaderBlock, MCFG_SIGNATURE);
+        if (Mcfg)
+        {
+            ULONG EntryBytes;
+            ULONG EntryCount;
+            ULONG Remainder;
+
+            if (Mcfg->Header.Length < sizeof(*Mcfg))
+            {
+                DPRINT1("HAL: ACPI MCFG length %lu is smaller than header\n",
+                        Mcfg->Header.Length);
+            }
+            else
+            {
+                EntryBytes = Mcfg->Header.Length - sizeof(*Mcfg);
+                EntryCount = EntryBytes / sizeof(HALP_ACPI_MCFG_ALLOCATION);
+                Remainder = EntryBytes % sizeof(HALP_ACPI_MCFG_ALLOCATION);
+
+                if (Remainder != 0)
+                {
+                    DPRINT1("HAL: ACPI MCFG length %lu leaves %lu leftover bytes\n",
+                            Mcfg->Header.Length,
+                            Remainder);
+                }
+
+                if (EntryCount != 0)
+                {
+                    ULONG Index;
+
+                    HalpAcpiMcfgTable = Mcfg;
+                    HalpAcpiMcfgAllocations =
+                        (PHALP_ACPI_MCFG_ALLOCATION)((PUCHAR)Mcfg + sizeof(*Mcfg));
+                    HalpAcpiMcfgAllocationCount = EntryCount;
+
+                    for (Index = 0; Index < EntryCount; ++Index)
+                    {
+                        const HALP_ACPI_MCFG_ALLOCATION *Allocation =
+                            &HalpAcpiMcfgAllocations[Index];
+
+                        DPRINT1("HAL: ACPI MCFG[%lu] Segment %u Buses %u-%u Base %I64x\n",
+                                Index,
+                                Allocation->PciSegment,
+                                Allocation->StartBusNumber,
+                                Allocation->EndBusNumber,
+                                Allocation->BaseAddress);
+                    }
+                }
+                else
+                {
+                    DPRINT1("HAL: ACPI MCFG present but contains no allocations\n");
+                }
+            }
+        }
+    }
 
     /* Initialize NUMA through the SRAT */
     HalpNumaInitializeStaticConfiguration(LoaderBlock);
@@ -1688,6 +1915,257 @@ ShowSize(ULONG Size, PCHAR Buffer, SIZE_T BufferSize)
         HalpAppendFormatA(Buffer, BufferSize, "%d", Size);
     }
     HalpAppendFormatA(Buffer, BufferSize, "]");
+}
+
+BOOLEAN
+NTAPI
+HalpAcpiAccessConfigEcam(
+    _In_ BOOLEAN Write,
+    _In_ USHORT Segment,
+    _In_ ULONG BusNumber,
+    _In_ PCI_SLOT_NUMBER Slot,
+    _Inout_updates_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length)
+{
+    PHALP_ACPI_MCFG_ALLOCATION Allocation;
+    ULONGLONG FunctionBase;
+    PHYSICAL_ADDRESS PhysicalAddress;
+    ULONG BytesLeft;
+    ULONG CurrentOffset;
+    PUCHAR BufferPtr;
+    BOOLEAN ForceLegacy;
+
+    if (HalpAcpiEcamDisabled)
+    {
+        HalpAcpiRecordEcamEvent(
+            HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL,
+            "HAL: PCI Express MMCONFIG access requested after ECAM was globally disabled; using legacy configuration space.");
+        return FALSE;
+    }
+
+    if (!HalpAcpiMcfgAllocations || !HalpAcpiMcfgAllocationCount)
+    {
+        HalpAcpiRecordEcamEvent(
+            HALP_ACPI_ECAM_COVERAGE_NO_TABLE,
+            "HAL: PCI Express MMCONFIG unavailable because the ACPI MCFG table is missing or empty.");
+        return FALSE;
+    }
+
+    if (BusNumber > 0xFF)
+    {
+        HalpAcpiRecordEcamEvent(
+            HALP_ACPI_ECAM_COVERAGE_BUS_TOO_HIGH,
+            "HAL: PCI Express MMCONFIG request exceeded the maximum bus number (0xFF); using legacy configuration space.");
+        return FALSE;
+    }
+
+    if (Offset >= 0x1000)
+    {
+        HalpAcpiRecordEcamEvent(
+            HALP_ACPI_ECAM_COVERAGE_OFFSET_TOO_HIGH,
+            "HAL: PCI Express MMCONFIG offset went past the 4KB configuration window.");
+        return FALSE;
+    }
+
+    if (Length == 0)
+    {
+        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_ZERO_LENGTH, NULL);
+        return TRUE;
+    }
+
+    if ((ULONGLONG)Offset + Length > 0x1000)
+    {
+        HalpAcpiRecordEcamEvent(
+            HALP_ACPI_ECAM_COVERAGE_RANGE_OVERRUN,
+            "HAL: PCI Express MMCONFIG request crossed a 4KB boundary; reverting to legacy configuration space.");
+        return FALSE;
+    }
+
+    if (Segment == HALP_ACPI_SEGMENT_ANY)
+    {
+        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_SEGMENT_ANY, NULL);
+    }
+
+    Allocation = HalpAcpiGetMcfgAllocation(Segment, (UCHAR)BusNumber);
+    if (!Allocation)
+    {
+        HalpAcpiRecordEcamEvent(
+            HALP_ACPI_ECAM_COVERAGE_NO_ALLOCATION,
+            "HAL: PCI Express MMCONFIG has no allocation that covers the requested bus; using legacy configuration space.");
+        return FALSE;
+    }
+
+    FunctionBase = Allocation->BaseAddress;
+    FunctionBase += ((ULONGLONG)(BusNumber - Allocation->StartBusNumber) << 20);
+    FunctionBase += ((ULONGLONG)Slot.u.bits.DeviceNumber << 15);
+    FunctionBase += ((ULONGLONG)Slot.u.bits.FunctionNumber << 12);
+
+    BufferPtr = Buffer;
+    CurrentOffset = Offset;
+    BytesLeft = Length;
+    ForceLegacy = FALSE;
+
+    while (BytesLeft)
+    {
+        ULONG Chunk;
+        ULONG PageOffset;
+        PVOID Mapping;
+        PHYSICAL_ADDRESS PageBase;
+
+        PhysicalAddress.QuadPart = FunctionBase + CurrentOffset;
+        PageBase.QuadPart = PhysicalAddress.QuadPart & ~((ULONGLONG)PAGE_SIZE - 1);
+        PageOffset = (ULONG)(PhysicalAddress.QuadPart - PageBase.QuadPart);
+        Chunk = min(BytesLeft, PAGE_SIZE - PageOffset);
+
+        Mapping = MmMapIoSpace(PageBase, PAGE_SIZE, MmNonCached);
+        if (!Mapping)
+        {
+            HalpAcpiRecordEcamEvent(
+                HALP_ACPI_ECAM_COVERAGE_MAP_FAILURE,
+                "HAL: Failed to map a PCI Express MMCONFIG page; using legacy configuration space instead.");
+            return FALSE;
+        }
+
+        if (Write)
+        {
+            RtlCopyMemory((PUCHAR)Mapping + PageOffset, BufferPtr, Chunk);
+        }
+        else
+        {
+            RtlCopyMemory(BufferPtr, (PUCHAR)Mapping + PageOffset, Chunk);
+
+            if (!ForceLegacy &&
+                BusNumber == 0 &&
+                Slot.u.AsULONG == 0 &&
+                Offset == 0 &&
+                PageOffset == 0 &&
+                Chunk >= sizeof(ULONG))
+            {
+                ULONG Value;
+
+                Value = *(UNALIGNED PULONG)BufferPtr;
+                if ((Value & 0xFFFF) == 0xFFFF)
+                {
+                    ForceLegacy = TRUE;
+                }
+            }
+        }
+
+        MmUnmapIoSpace(Mapping, PAGE_SIZE);
+
+        BufferPtr += Chunk;
+        CurrentOffset += Chunk;
+        BytesLeft -= Chunk;
+    }
+
+    if (ForceLegacy)
+    {
+        LONG PreviousFlags;
+        BOOLEAN FirstVendorFailure;
+
+        PreviousFlags = HalpAcpiRecordEcamEvent(
+            HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES,
+            NULL);
+        FirstVendorFailure = !(PreviousFlags & HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES);
+
+        if (Segment != HALP_ACPI_SEGMENT_ANY)
+        {
+            if (!HalpAcpiEcamDisabled)
+            {
+                HalpAcpiEcamDisabled = TRUE;
+                HalpAcpiRecordEcamEvent(
+                    HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL,
+                    "HAL: MMCONFIG read of 00:00.0 vendor returned 0xFFFF; disabling ECAM access.");
+            }
+        }
+        else if (FirstVendorFailure)
+        {
+            DPRINT1("HAL: MMCONFIG read of 00:00.0 vendor returned 0xFFFF during bootstrap; deferring ECAM disable.\n");
+        }
+
+        return FALSE;
+    }
+
+    HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_USED, NULL);
+    return TRUE;
+}
+
+PHALP_ACPI_MCFG_ALLOCATION
+NTAPI
+HalpAcpiGetMcfgAllocation(
+    _In_ USHORT Segment,
+    _In_ UCHAR BusNumber)
+{
+    ULONG Index;
+
+    if (!HalpAcpiMcfgAllocations || !HalpAcpiMcfgAllocationCount)
+    {
+        return NULL;
+    }
+
+    for (Index = 0; Index < HalpAcpiMcfgAllocationCount; ++Index)
+    {
+        PHALP_ACPI_MCFG_ALLOCATION Allocation;
+
+        Allocation = &HalpAcpiMcfgAllocations[Index];
+        if ((Segment != HALP_ACPI_SEGMENT_ANY) &&
+            (Allocation->PciSegment != Segment))
+        {
+            continue;
+        }
+
+        if (BusNumber < Allocation->StartBusNumber ||
+            BusNumber > Allocation->EndBusNumber)
+        {
+            continue;
+        }
+
+        return Allocation;
+    }
+
+    return NULL;
+}
+
+BOOLEAN
+NTAPI
+HalpAcpiGetEcamAddress(
+    _In_ USHORT Segment,
+    _In_ UCHAR BusNumber,
+    _In_ UCHAR DeviceNumber,
+    _In_ UCHAR FunctionNumber,
+    _In_ ULONG RegisterOffset,
+    _Out_ PPHYSICAL_ADDRESS Address)
+{
+    PHALP_ACPI_MCFG_ALLOCATION Allocation;
+    ULONGLONG Base;
+
+    if (!Address)
+    {
+        return FALSE;
+    }
+
+    Allocation = HalpAcpiGetMcfgAllocation(Segment, BusNumber);
+    if (!Allocation)
+    {
+        return FALSE;
+    }
+
+    if (DeviceNumber >= PCI_MAX_DEVICES ||
+        FunctionNumber >= PCI_MAX_FUNCTION ||
+        RegisterOffset >= 0x1000)
+    {
+        return FALSE;
+    }
+
+    Base = Allocation->BaseAddress;
+    Base += ((ULONGLONG)(BusNumber - Allocation->StartBusNumber) << 20);
+    Base += ((ULONGLONG)DeviceNumber << 15);
+    Base += ((ULONGLONG)FunctionNumber << 12);
+    Base += RegisterOffset;
+
+    Address->QuadPart = Base;
+    return TRUE;
 }
 
 /* These includes provide the PCI device/vendor lookup tables */
@@ -2069,6 +2547,7 @@ HalpAcpiEnumeratePciBusDebug(VOID)
         }
     }
 
+    HalpPciLogEcamCoverage();
     DbgPrint("\n====== END PCI BUS DETECTION =======\n\n");
 }
 

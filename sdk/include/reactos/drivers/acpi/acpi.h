@@ -41,6 +41,7 @@ typedef struct _ACPI_BIOS_MULTI_NODE
 #define BOOT_SIGNATURE 'TOOB'
 #define SRAT_SIGNATURE 'TARS'
 #define WDRT_SIGNATURE 'TRDW'
+#define MCFG_SIGNATURE 'GFCM'
 #define BGRT_SIGNATURE  0x54524742      	// "BGRT"
 
 //
@@ -71,7 +72,11 @@ typedef struct _GEN_ADDR
     UCHAR AddressSpaceID;
     UCHAR BitWidth;
     UCHAR BitOffset;
-    UCHAR Reserved;
+    union
+    {
+        UCHAR AccessSize;
+        UCHAR Reserved;
+    } DUMMYUNIONNAME;
     PHYSICAL_ADDRESS Address;
 } GEN_ADDR, *PGEN_ADDR;
 

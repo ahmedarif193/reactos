@@ -1,0 +1,47 @@
+RAMDISK Fix Roadmap
+-------------------
+
+Status Update (2025-10-25)
+- Writable boot ramdisk is working: X: is the active RW volume during runtime.
+- Read-only ISO currently appears as C:. This is acceptable in environments with no other storage; no remap is enforced.
+- Extra D: letter from the ramdisk is gone; mountmgr exclusively assigns letters using our suggestion.
+- UNIQUE_ID change-notify spam resolved via proper pending/cancel handling.
+- Noisy I/O tracing reduced to keep logs readable.
+
+
+Next Steps
+- [ ] Validate capacity reporting: X: size = ISO size + max(RDRAMSIZE, 64 MiB).
+- [ ] Ensure updated ramdisk.sys is included in boot media; scrub stale MountedDevices entries if legacy letters reappear.
+- [ ] Extend tests around UNIQUE_ID notify lifecycle and map/copy spans across page boundaries.
+
+1. [x] Plug IOCTL buffer overruns
+   - Rework IOCTL_MOUNTDEV_QUERY_DEVICE_NAME in drivers/storage/class/ramdisk/ramdisk.c to clamp copies, avoid terminators, and report required size correctly.
+   - Apply the same contract to IOCTL_MOUNTDEV_QUERY_UNIQUE_ID, IOCTL_MOUNTDEV_QUERY_STABLE_GUID, IOCTL_MOUNTDEV_QUERY_SUGGESTED_LINK_NAME, and IOCTL_MOUNTDEV_UNIQUE_ID_CHANGE_NOTIFY.
+   - Keep control-path IOCTLs (LINK_* / UNIQUE_ID_CHANGE_NOTIFY) input-only when appropriate and guard every RtlCopyMemory with DBG asserts to enforce FIELD_OFFSET limits.
+   - UNIQUE_ID_CHANGE_NOTIFY now returns old/new GUIDs, refreshes the cached GuidString, and persists the updated disk state.
+   - Accept both FILE_ANY_ACCESS and FILE_READ/WRITE_ACCESS variants for MountDev link and change-notify IOCTLs so legacy callers log and execute correctly.
+
+2. [x] Straighten mapper/unmapper contract
+   - Return both sharable copy bytes and full map span from RamdiskMapPages, and pass the span back to RamdiskUnmapPages.
+   - Keep CopyLength = min(BytesMapped, BytesLeft) in RamdiskReadWriteReal with assertions to enforce the contract.
+
+3. [x] Normalize partial-transfer semantics
+   - Ensure the read/write loop only returns an error when zero bytes have transferred; EOF and DISK_FULL should still propagate when appropriate.
+
+4. Confirm the correct interface is published
+   - Verify IoSetDeviceInterfaceState targets DriveDeviceName after start and add debug coverage for unexpected empty strings.
+
+5. Audit PnP and power flows
+   - Double-check RamdiskPower and other dispatch routines always return the downstream status and never fall through with an undefined value.
+
+6. Regression tests
+   - Reboot with special pool or driver verifier on RAMDISK and rerun MountMgr queries.
+   - Script randomized boundary I/O plus IOCTL_MOUNTDEV_* calls to confirm short-transfer handling and required-size reporting.
+   - Confirm the volume interface appears while the bus interface remains scoped to the bus PDO.
+   - For tail-overrun forensics, drop a hardware watchpoint on the corrupted pool header (e.g. `ba w2 <addr>`) during boot to catch the first offending write.
+
+7. Follow-up hygiene
+   - Added RamdiskLogBufferedReply DBG instrumentation for MountDev IOCTL outputs to enforce FIELD_OFFSET semantics.
+   - Hardened early disk/volume information IOCTLs to report required lengths on BUFFER_TOO_SMALL exits.
+   - Add DBG-only instrumentation for buffer sizes in the IOCTL path and add targeted tests around MountDev helper routines.
+   - Updated RamdiskGetIoctlName coverage to include IOCTL_VOLUME_QUERY_FAILOVER_SET so the DBG assert remains quiet.

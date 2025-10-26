@@ -1,0 +1,13 @@
+MMCONFIG Roadmap
+- [x] Inventory current PCI config paths (`HalpPhase0*`, `HalpRead/WritePCIConfig`) and document call-sites so we know every place that must be MMIO-aware.
+- [x] Parse and cache the ACPI `MCFG` table in the ACPI HAL init path; capture base/segment/bus ranges per allocation entry.
+- [x] Provide helpers that translate a `(segment, bus, device, function, offset)` tuple into an ECAM MMIO address and guard against misalignment/out-of-range access.
+- [x] Extend the phase-0 get/set routines (and later non-phase-0 handlers) to select ECAM when a matching `MCFG` allocation exists, falling back to legacy CF8/CFC only when necessary.
+- [x] Ensure the fake PCI bus handler (`HalpFakePciBusHandler`) keeps the segment/bus limit information so the rest of the HAL knows which buses are valid under MMCONFIG.
+- [x] Capture ACPI `_CRS` translation offsets and expose them through HAL supported ranges so MMCONFIG windows carry the firmware CPU base.
+- [x] Tighten HAL's per-segment PCI bus propagation to ACPI-advertised windows instead of global min/max.
+- [ ] Add regression coverage: boot-time logs summarizing the selected config mechanism and ECAM fallback reasons, with guards for invalid access patterns.
+- [x] Emit real-time diagnostics when ECAM is skipped (missing MCFG data, MMIO map failures, 0xFFFF vendor reads) so bring-up logs capture the root cause immediately.
+- [x] Let early-phase (segment wildcard) vendor probes fall back without permanently disabling ECAM so later accesses can succeed once firmware enables the window.
+- [ ] Validate MMCONFIG on hardware or a VM that requires ECAM (e.g., VirtualBox ICH9/Q35) and capture the new coverage logs for reference.
+- [ ] Extend the same coverage to ARM64 DT/MCFG flows once the ACPI path is validated.

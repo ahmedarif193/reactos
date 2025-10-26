@@ -1,5 +1,7 @@
 #pragma once
 
+#include <reactos/hal/acpi_pci.h>
+
 #define PCI_ADDRESS_MEMORY_SPACE            0x00000000
 
 //
@@ -90,6 +92,9 @@ typedef NTSTATUS
     OUT PSUPPORTED_RANGE *Interrupt
 );
 
+struct _HAL_ACPI_PCI_ROOT_INFO;
+typedef struct _HAL_ACPI_PCI_ROOT_INFO HAL_ACPI_PCI_ROOT_INFO, *PHAL_ACPI_PCI_ROOT_INFO;
+
 typedef struct _PCIPBUSDATA
 {
     PCIBUSDATA CommonData;
@@ -115,6 +120,7 @@ typedef struct _PCIPBUSDATA
     UCHAR Subtractive;
     USHORT PciSegment;
     BOOLEAN AcpiRootConfigured;
+    PHAL_ACPI_PCI_ROOT_INFO AcpiRootInfo;
     UCHAR SwizzleIn[4];
     RTL_BITMAP DeviceConfigured;
     ULONG ConfiguredBits[PCI_MAX_DEVICES * PCI_MAX_FUNCTION / 32];
@@ -130,6 +136,18 @@ typedef struct _PCIPBUSDATA
     ULONGLONG MemoryWindowLimit;
     ULONGLONG PrefetchWindowBase;
     ULONGLONG PrefetchWindowLimit;
+    BOOLEAN BusNumbersConfigured;
+    UCHAR BusNumberStart;
+    UCHAR BusNumberEnd;
+    HAL_ACPI_PCI_OSC_INFO OscInfo;
+    ULONG OscSupportSet;
+    ULONG OscControlRequest;
+    ULONG OscControlGranted;
+    BOOLEAN OscNativeHotPlug;
+    BOOLEAN OscNativePme;
+    BOOLEAN OscNativeAer;
+    BOOLEAN OscExpressCapability;
+    BOOLEAN NativeExpressServicesConfigured;
 } PCIPBUSDATA, *PPCIPBUSDATA;
 
 typedef ULONG
@@ -476,6 +494,11 @@ NTAPI
 HalpInitializePciBus(
     VOID
 );
+
+VOID
+HalpPciLogEcamCoverage(
+    VOID
+    );
 
 CODE_SEG("INIT")
 VOID

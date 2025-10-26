@@ -9,6 +9,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <hal.h>
+#include <halacpi.h>
 #include <reactos/hal/acpi_pci.h>
 #define NDEBUG
 #include <debug.h>
@@ -18,6 +19,7 @@
 #define HALP_PCI_DEFAULT_MEM_BASE         0xC0000000ULL
 #define HALP_PCI_DEFAULT_MEM_LIMIT        0xFEBFFFFFULL
 #define HALP_PCI_GSI_TAG                  'isGH'
+#define HALP_PCI_ROOT_TAG                 'rciP'
 
 typedef struct _HALP_PCI_GSI_INFO
 {
@@ -29,10 +31,676 @@ typedef struct _HALP_PCI_GSI_INFO
 static PHALP_PCI_GSI_INFO HalpPciGsiInfo;
 static ULONG HalpPciGsiCapacity;
 static PHAL_ACPI_PCI_ROUTE_QUERY HalpPciRouteQueryCallback;
+static BOOLEAN HalpPciBusRangeKnown;
+
+static BOOLEAN
+HalpPciBusBelongsToRoot(
+    _In_ PBUS_HANDLER BusHandler,
+    _In_ PBUS_HANDLER RootBus);
+
+static VOID
+HalpPciApplyConfiguredWindows(
+    _In_ PBUS_HANDLER BusHandler);
 
 static VOID
 HalpPciUpdateBridgeHierarchy(
     PBUS_HANDLER BusHandler);
+
+static BOOLEAN
+HalpPciFindCapability(
+    _In_ PBUS_HANDLER BusHandler,
+    _In_ PCI_SLOT_NUMBER Slot,
+    _In_ UCHAR HeaderType,
+    _In_ UCHAR CapabilityId,
+    _Out_ USHORT *Offset);
+
+static BOOLEAN
+HalpPciFindExtendedCapability(
+    _In_ PBUS_HANDLER BusHandler,
+    _In_ PCI_SLOT_NUMBER Slot,
+    _In_ USHORT CapabilityId,
+    _Out_ USHORT *Offset);
+
+static VOID
+HalpPciConfigureNativeExpressServices(
+    _In_ PBUS_HANDLER BusHandler,
+    _Inout_ PPCIPBUSDATA BusData);
+
+VOID
+HalpPciLogEcamCoverage(
+    VOID)
+{
+    LONG Flags;
+
+    Flags = HalpAcpiEcamCoverageFlags;
+    if (Flags == 0)
+    {
+        DbgPrint("HAL: PCI ECAM path not exercised; using legacy configuration space.\n");
+        return;
+    }
+
+    if (Flags & HALP_ACPI_ECAM_COVERAGE_USED)
+    {
+        DbgPrint("HAL: PCI Express MMCONFIG (ECAM) active for configuration space.\n");
+    }
+    else
+    {
+        DbgPrint("HAL: PCI Express MMCONFIG unavailable; falling back to CF8/CFC ports.\n");
+    }
+
+    if (Flags & HALP_ACPI_ECAM_COVERAGE_NO_TABLE)
+    {
+        DbgPrint("HAL:   ECAM fallback reason: ACPI MCFG table missing or empty.\n");
+    }
+
+    if (Flags & HALP_ACPI_ECAM_COVERAGE_NO_ALLOCATION)
+    {
+        DbgPrint("HAL:   ECAM fallback reason: no MCFG allocation matched the requested bus.\n");
+    }
+
+    if (Flags & HALP_ACPI_ECAM_COVERAGE_BUS_TOO_HIGH)
+    {
+        DbgPrint("HAL:   ECAM fallback reason: bus number exceeded 0xFF.\n");
+    }
+
+    if (Flags & HALP_ACPI_ECAM_COVERAGE_OFFSET_TOO_HIGH)
+    {
+        DbgPrint("HAL:   ECAM fallback reason: offset reached beyond 4KB window.\n");
+    }
+
+    if (Flags & HALP_ACPI_ECAM_COVERAGE_RANGE_OVERRUN)
+    {
+        DbgPrint("HAL:   ECAM fallback reason: access spanned multiple 4KB windows.\n");
+    }
+
+    if (Flags & HALP_ACPI_ECAM_COVERAGE_MAP_FAILURE)
+    {
+        DbgPrint("HAL:   ECAM fallback reason: failed to map ECAM page.\n");
+    }
+
+    if (Flags & HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES)
+    {
+        DbgPrint("HAL:   ECAM fallback reason: configuration space read returned 0xFFFF.\n");
+    }
+
+    if (Flags & HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL)
+    {
+        DbgPrint("HAL:   ECAM note: access path disabled globally after firmware failure.\n");
+    }
+
+    if (Flags & HALP_ACPI_ECAM_COVERAGE_ZERO_LENGTH)
+    {
+        DbgPrint("HAL:   ECAM note: zero-length configuration request observed.\n");
+    }
+
+    if (Flags & HALP_ACPI_ECAM_COVERAGE_SEGMENT_ANY)
+    {
+        DbgPrint("HAL:   ECAM note: callers used wildcard segment selection.\n");
+    }
+}
+
+static BOOLEAN
+HalpPciFindCapability(
+    _In_ PBUS_HANDLER BusHandler,
+    _In_ PCI_SLOT_NUMBER Slot,
+    _In_ UCHAR HeaderType,
+    _In_ UCHAR CapabilityId,
+    _Out_ USHORT *Offset)
+{
+    PCI_CAPABILITIES_HEADER Header;
+    UCHAR CapabilityPointer;
+    USHORT Status;
+    UCHAR ConfigType;
+    ULONG GuardCount;
+
+    if (!Offset)
+    {
+        return FALSE;
+    }
+
+    *Offset = 0;
+
+    HalpReadPCIConfig(BusHandler,
+                      Slot,
+                      &Status,
+                      FIELD_OFFSET(PCI_COMMON_CONFIG, Status),
+                      sizeof(Status));
+    if (!(Status & PCI_STATUS_CAPABILITIES_LIST))
+    {
+        return FALSE;
+    }
+
+    ConfigType = HeaderType & (UCHAR)~PCI_MULTIFUNCTION;
+
+    switch (ConfigType)
+    {
+        case PCI_DEVICE_TYPE:
+            HalpReadPCIConfig(BusHandler,
+                              Slot,
+                              &CapabilityPointer,
+                              FIELD_OFFSET(PCI_COMMON_CONFIG, u.type0.CapabilitiesPtr),
+                              sizeof(CapabilityPointer));
+            break;
+
+        case PCI_BRIDGE_TYPE:
+            HalpReadPCIConfig(BusHandler,
+                              Slot,
+                              &CapabilityPointer,
+                              FIELD_OFFSET(PCI_COMMON_CONFIG, u.type1.CapabilitiesPtr),
+                              sizeof(CapabilityPointer));
+            break;
+
+        case PCI_CARDBUS_BRIDGE_TYPE:
+            HalpReadPCIConfig(BusHandler,
+                              Slot,
+                              &CapabilityPointer,
+                              FIELD_OFFSET(PCI_COMMON_CONFIG, u.type2.CapabilitiesPtr),
+                              sizeof(CapabilityPointer));
+            break;
+
+        default:
+            return FALSE;
+    }
+
+    CapabilityPointer &= (UCHAR)~0x3;
+
+    for (GuardCount = 0;
+         GuardCount < 64 &&
+         CapabilityPointer >= 0x40;
+         GuardCount++)
+    {
+        HalpReadPCIConfig(BusHandler,
+                          Slot,
+                          &Header,
+                          CapabilityPointer,
+                          sizeof(Header));
+
+        if ((Header.CapabilityID == 0xFF) ||
+            (Header.CapabilityID == 0))
+        {
+            break;
+        }
+
+        if (Header.CapabilityID == CapabilityId)
+        {
+            *Offset = CapabilityPointer;
+            return TRUE;
+        }
+
+        if (!Header.Next)
+        {
+            break;
+        }
+
+        if ((Header.Next & ~0x3) == CapabilityPointer)
+        {
+            break;
+        }
+
+        CapabilityPointer = Header.Next & (UCHAR)~0x3;
+    }
+
+    return FALSE;
+}
+
+static BOOLEAN
+HalpPciFindExtendedCapability(
+    _In_ PBUS_HANDLER BusHandler,
+    _In_ PCI_SLOT_NUMBER Slot,
+    _In_ USHORT CapabilityId,
+    _Out_ USHORT *Offset)
+{
+    ULONG Header;
+    USHORT Current;
+    ULONG GuardCount;
+
+    if (!Offset)
+    {
+        return FALSE;
+    }
+
+    *Offset = 0;
+    Current = 0x100;
+
+    for (GuardCount = 0;
+         GuardCount < 256 &&
+         Current >= 0x100 &&
+         Current < PCI_EXTENDED_CONFIG_LENGTH;
+         GuardCount++)
+    {
+        HalpReadPCIConfig(BusHandler,
+                          Slot,
+                          &Header,
+                          Current,
+                          sizeof(Header));
+
+        if ((Header == 0) || (Header == 0xFFFFFFFF))
+        {
+            break;
+        }
+
+        if ((USHORT)(Header & 0xFFFF) == CapabilityId)
+        {
+            *Offset = Current;
+            return TRUE;
+        }
+
+        USHORT Upper = (USHORT)((Header >> 16) & 0xFFFF);
+        USHORT Next = (USHORT)(((Upper >> 4) & 0x0FFF) << 2);
+
+        if (!Next || Next == Current)
+        {
+            break;
+        }
+
+        Current = Next;
+    }
+
+    return FALSE;
+}
+
+static VOID
+HalpPciConfigureNativeExpressServices(
+    _In_ PBUS_HANDLER BusHandler,
+    _Inout_ PPCIPBUSDATA BusData)
+{
+    PCI_SLOT_NUMBER Slot;
+    UCHAR Device;
+    UCHAR Function;
+    UCHAR MaxFunction;
+    BOOLEAN HotPlugConfigured = FALSE;
+    BOOLEAN PmeConfigured = FALSE;
+    BOOLEAN AerConfigured = FALSE;
+
+    if (!BusHandler || !BusData)
+    {
+        return;
+    }
+
+    if (BusData->NativeExpressServicesConfigured)
+    {
+        return;
+    }
+
+    if (!BusData->OscExpressCapability ||
+        (!BusData->OscNativeHotPlug &&
+         !BusData->OscNativePme &&
+         !BusData->OscNativeAer))
+    {
+        BusData->NativeExpressServicesConfigured = TRUE;
+        return;
+    }
+
+    Slot.u.AsULONG = 0;
+
+    for (Device = 0; Device < BusData->MaxDevice; Device++)
+    {
+        MaxFunction = 1;
+
+        for (Function = 0; Function < MaxFunction; Function++)
+        {
+            USHORT VendorId;
+            UCHAR HeaderType;
+            UCHAR BaseClass;
+            UCHAR SubClass;
+            USHORT ExpressOffset;
+            PCI_EXPRESS_CAPABILITIES_REGISTER ExpressCaps;
+            PCI_EXPRESS_DEVICE_TYPE DeviceType;
+            BOOLEAN LocalHotPlugConfigured = FALSE;
+            BOOLEAN LocalPmeConfigured = FALSE;
+            BOOLEAN LocalAerConfigured = FALSE;
+
+            Slot.u.AsULONG = 0;
+            Slot.u.bits.DeviceNumber = Device;
+            Slot.u.bits.FunctionNumber = Function;
+
+            HalpReadPCIConfig(BusHandler,
+                              Slot,
+                              &VendorId,
+                              FIELD_OFFSET(PCI_COMMON_CONFIG, VendorID),
+                              sizeof(VendorId));
+            if (VendorId == PCI_INVALID_VENDORID)
+            {
+                if (Function == 0)
+                {
+                    break;
+                }
+
+                continue;
+            }
+
+            HalpReadPCIConfig(BusHandler,
+                              Slot,
+                              &HeaderType,
+                              FIELD_OFFSET(PCI_COMMON_CONFIG, HeaderType),
+                              sizeof(HeaderType));
+
+            if (Function == 0 && (HeaderType & PCI_MULTIFUNCTION))
+            {
+                MaxFunction = PCI_MAX_FUNCTION;
+            }
+
+            if ((HeaderType & ~PCI_MULTIFUNCTION) != PCI_BRIDGE_TYPE)
+            {
+                continue;
+            }
+
+            HalpReadPCIConfig(BusHandler,
+                              Slot,
+                              &BaseClass,
+                              FIELD_OFFSET(PCI_COMMON_CONFIG, BaseClass),
+                              sizeof(BaseClass));
+            HalpReadPCIConfig(BusHandler,
+                              Slot,
+                              &SubClass,
+                              FIELD_OFFSET(PCI_COMMON_CONFIG, SubClass),
+                              sizeof(SubClass));
+
+            if ((BaseClass != PCI_CLASS_BRIDGE_DEV) ||
+                (SubClass != PCI_SUBCLASS_BR_PCI_TO_PCI))
+            {
+                continue;
+            }
+
+            if (!HalpPciFindCapability(BusHandler,
+                                       Slot,
+                                       HeaderType,
+                                       PCI_CAPABILITY_ID_PCI_EXPRESS,
+                                       &ExpressOffset))
+            {
+                continue;
+            }
+
+            HalpReadPCIConfig(BusHandler,
+                              Slot,
+                              &ExpressCaps,
+                              ExpressOffset + FIELD_OFFSET(PCI_EXPRESS_CAPABILITY, ExpressCapabilities),
+                              sizeof(ExpressCaps));
+
+            DeviceType = (PCI_EXPRESS_DEVICE_TYPE)ExpressCaps.DeviceType;
+            if ((DeviceType != PciExpressRootPort) &&
+                (DeviceType != PciExpressRootComplexEventCollector))
+            {
+                continue;
+            }
+
+            if (BusData->OscNativeHotPlug && ExpressCaps.SlotImplemented)
+            {
+                PCI_EXPRESS_SLOT_CAPABILITIES_REGISTER SlotCaps;
+                PCI_EXPRESS_SLOT_CONTROL_REGISTER SlotControl;
+                PCI_EXPRESS_SLOT_STATUS_REGISTER SlotStatus;
+                PCI_EXPRESS_LINK_CAPABILITIES_REGISTER LinkCaps;
+                BOOLEAN Updated = FALSE;
+
+                HalpReadPCIConfig(BusHandler,
+                                  Slot,
+                                  &SlotCaps,
+                                  ExpressOffset + FIELD_OFFSET(PCI_EXPRESS_CAPABILITY, SlotCapabilities),
+                                  sizeof(SlotCaps));
+                HalpReadPCIConfig(BusHandler,
+                                  Slot,
+                                  &SlotControl,
+                                  ExpressOffset + FIELD_OFFSET(PCI_EXPRESS_CAPABILITY, SlotControl),
+                                  sizeof(SlotControl));
+                HalpReadPCIConfig(BusHandler,
+                                  Slot,
+                                  &LinkCaps,
+                                  ExpressOffset + FIELD_OFFSET(PCI_EXPRESS_CAPABILITY, LinkCapabilities),
+                                  sizeof(LinkCaps));
+
+                if (SlotCaps.AttentionButtonPresent && !SlotControl.AttentionButtonEnable)
+                {
+                    SlotControl.AttentionButtonEnable = 1;
+                    Updated = TRUE;
+                }
+
+                if (SlotCaps.PowerControllerPresent && !SlotControl.PowerFaultDetectEnable)
+                {
+                    SlotControl.PowerFaultDetectEnable = 1;
+                    Updated = TRUE;
+                }
+
+                if (SlotCaps.MRLSensorPresent && !SlotControl.MRLSensorEnable)
+                {
+                    SlotControl.MRLSensorEnable = 1;
+                    Updated = TRUE;
+                }
+
+                if (!SlotControl.PresenceDetectEnable)
+                {
+                    SlotControl.PresenceDetectEnable = 1;
+                    Updated = TRUE;
+                }
+
+                if (!SlotCaps.NoCommandCompletedSupport && !SlotControl.CommandCompletedEnable)
+                {
+                    SlotControl.CommandCompletedEnable = 1;
+                    Updated = TRUE;
+                }
+
+                if (!SlotControl.HotPlugInterruptEnable)
+                {
+                    SlotControl.HotPlugInterruptEnable = 1;
+                    Updated = TRUE;
+                }
+
+                if (LinkCaps.DataLinkLayerActiveReportingCapable &&
+                    !SlotControl.DataLinkStateChangeEnable)
+                {
+                    SlotControl.DataLinkStateChangeEnable = 1;
+                    Updated = TRUE;
+                }
+
+                if (Updated)
+                {
+                    HalpWritePCIConfig(BusHandler,
+                                       Slot,
+                                       &SlotControl,
+                                       ExpressOffset + FIELD_OFFSET(PCI_EXPRESS_CAPABILITY, SlotControl),
+                                       sizeof(SlotControl));
+
+                    DPRINT1("HAL: PCIe hotplug armed for %04lx:%02x:%02x.%u (SlotCtrl=0x%04x)\n",
+                            (ULONG)BusData->PciSegment,
+                            BusHandler->BusNumber,
+                            Device,
+                            Function,
+                            SlotControl.AsUSHORT);
+                }
+
+                HalpReadPCIConfig(BusHandler,
+                                  Slot,
+                                  &SlotStatus,
+                                  ExpressOffset + FIELD_OFFSET(PCI_EXPRESS_CAPABILITY, SlotStatus),
+                                  sizeof(SlotStatus));
+                if (SlotStatus.AsUSHORT)
+                {
+                    if (SlotStatus.AttentionButtonPressed) SlotStatus.AttentionButtonPressed = 1;
+                    if (SlotStatus.PowerFaultDetected) SlotStatus.PowerFaultDetected = 1;
+                    if (SlotStatus.MRLSensorChanged) SlotStatus.MRLSensorChanged = 1;
+                    if (SlotStatus.PresenceDetectChanged) SlotStatus.PresenceDetectChanged = 1;
+                    if (SlotStatus.CommandCompleted) SlotStatus.CommandCompleted = 1;
+                    if (SlotStatus.DataLinkStateChanged) SlotStatus.DataLinkStateChanged = 1;
+
+                    HalpWritePCIConfig(BusHandler,
+                                       Slot,
+                                       &SlotStatus,
+                                       ExpressOffset + FIELD_OFFSET(PCI_EXPRESS_CAPABILITY, SlotStatus),
+                                       sizeof(SlotStatus));
+                }
+
+                if (SlotCaps.HotPlugCapable || SlotCaps.HotPlugSurprise)
+                {
+                    LocalHotPlugConfigured = SlotControl.HotPlugInterruptEnable ? TRUE : FALSE;
+                }
+            }
+
+            if (BusData->OscNativePme || BusData->OscNativeAer)
+            {
+                PCI_EXPRESS_ROOT_CONTROL_REGISTER RootControl;
+                BOOLEAN RootUpdated = FALSE;
+
+                HalpReadPCIConfig(BusHandler,
+                                  Slot,
+                                  &RootControl,
+                                  ExpressOffset + FIELD_OFFSET(PCI_EXPRESS_CAPABILITY, RootControl),
+                                  sizeof(RootControl));
+
+                if (BusData->OscNativePme && !RootControl.PMEInterruptEnable)
+                {
+                    RootControl.PMEInterruptEnable = 1;
+                    RootUpdated = TRUE;
+                }
+
+                if (BusData->OscNativeAer)
+                {
+                    if (!RootControl.CorrectableSerrEnable)
+                    {
+                        RootControl.CorrectableSerrEnable = 1;
+                        RootUpdated = TRUE;
+                    }
+
+                    if (!RootControl.NonFatalSerrEnable)
+                    {
+                        RootControl.NonFatalSerrEnable = 1;
+                        RootUpdated = TRUE;
+                    }
+
+                    if (!RootControl.FatalSerrEnable)
+                    {
+                        RootControl.FatalSerrEnable = 1;
+                        RootUpdated = TRUE;
+                    }
+                }
+
+                if (RootUpdated)
+                {
+                    HalpWritePCIConfig(BusHandler,
+                                       Slot,
+                                       &RootControl,
+                                       ExpressOffset + FIELD_OFFSET(PCI_EXPRESS_CAPABILITY, RootControl),
+                                       sizeof(RootControl));
+
+                    DPRINT1("HAL: PCIe root control enabled for %04lx:%02x:%02x.%u (RootCtrl=0x%04x)\n",
+                            (ULONG)BusData->PciSegment,
+                            BusHandler->BusNumber,
+                            Device,
+                            Function,
+                            RootControl.AsUSHORT);
+                }
+
+                if (BusData->OscNativePme && RootControl.PMEInterruptEnable)
+                {
+                    LocalPmeConfigured = TRUE;
+                }
+
+                if (BusData->OscNativeAer)
+                {
+                    USHORT AerOffset;
+
+                    if (HalpPciFindExtendedCapability(BusHandler,
+                                                       Slot,
+                                                       PCI_EXPRESS_ADVANCED_ERROR_REPORTING_CAP_ID,
+                                                       &AerOffset))
+                    {
+                        PCI_EXPRESS_ROOT_ERROR_COMMAND RootCommand;
+                        PCI_EXPRESS_ROOT_ERROR_STATUS RootStatus;
+                        BOOLEAN AerUpdated = FALSE;
+
+                        HalpReadPCIConfig(BusHandler,
+                                          Slot,
+                                          &RootCommand,
+                                          AerOffset + FIELD_OFFSET(PCI_EXPRESS_ROOTPORT_AER_CAPABILITY, RootErrorCommand),
+                                          sizeof(RootCommand));
+
+                        if (!RootCommand.CorrectableErrorReportingEnable)
+                        {
+                            RootCommand.CorrectableErrorReportingEnable = 1;
+                            AerUpdated = TRUE;
+                        }
+
+                        if (!RootCommand.NonFatalErrorReportingEnable)
+                        {
+                            RootCommand.NonFatalErrorReportingEnable = 1;
+                            AerUpdated = TRUE;
+                        }
+
+                        if (!RootCommand.FatalErrorReportingEnable)
+                        {
+                            RootCommand.FatalErrorReportingEnable = 1;
+                            AerUpdated = TRUE;
+                        }
+
+                        if (AerUpdated)
+                        {
+                            HalpWritePCIConfig(BusHandler,
+                                               Slot,
+                                               &RootCommand,
+                                               AerOffset + FIELD_OFFSET(PCI_EXPRESS_ROOTPORT_AER_CAPABILITY, RootErrorCommand),
+                                               sizeof(RootCommand));
+                        }
+
+                        HalpReadPCIConfig(BusHandler,
+                                          Slot,
+                                          &RootStatus,
+                                          AerOffset + FIELD_OFFSET(PCI_EXPRESS_ROOTPORT_AER_CAPABILITY, RootErrorStatus),
+                                          sizeof(RootStatus));
+
+                        if (RootStatus.AsULONG)
+                        {
+                            if (RootStatus.CorrectableErrorReceived) RootStatus.CorrectableErrorReceived = 1;
+                            if (RootStatus.MultipleCorrectableErrorsReceived) RootStatus.MultipleCorrectableErrorsReceived = 1;
+                            if (RootStatus.UncorrectableErrorReceived) RootStatus.UncorrectableErrorReceived = 1;
+                            if (RootStatus.MultipleUncorrectableErrorsReceived) RootStatus.MultipleUncorrectableErrorsReceived = 1;
+                            if (RootStatus.FirstUncorrectableFatal) RootStatus.FirstUncorrectableFatal = 1;
+                            if (RootStatus.NonFatalErrorMessagesReceived) RootStatus.NonFatalErrorMessagesReceived = 1;
+                            if (RootStatus.FatalErrorMessagesReceived) RootStatus.FatalErrorMessagesReceived = 1;
+
+                            HalpWritePCIConfig(BusHandler,
+                                               Slot,
+                                               &RootStatus,
+                                               AerOffset + FIELD_OFFSET(PCI_EXPRESS_ROOTPORT_AER_CAPABILITY, RootErrorStatus),
+                                               sizeof(RootStatus));
+                        }
+
+                        LocalAerConfigured = TRUE;
+                    }
+                    else
+                    {
+                        DPRINT1("HAL: PCIe root port %04lx:%02x:%02x.%u missing AER capability while native control granted.\n",
+                                (ULONG)BusData->PciSegment,
+                                BusHandler->BusNumber,
+                                Device,
+                                Function);
+                    }
+                }
+            }
+
+            HotPlugConfigured |= LocalHotPlugConfigured;
+            PmeConfigured |= LocalPmeConfigured;
+            AerConfigured |= LocalAerConfigured;
+        }
+    }
+
+    if (BusData->OscNativeHotPlug && !HotPlugConfigured)
+    {
+        DPRINT1("HAL: No PCIe slots on bus %lu accepted native hotplug control.\n",
+                BusHandler->BusNumber);
+    }
+
+    if (BusData->OscNativePme && !PmeConfigured)
+    {
+        DPRINT1("HAL: No PCIe root ports on bus %lu exposed native PME routing.\n",
+                BusHandler->BusNumber);
+    }
+
+    if (BusData->OscNativeAer && !AerConfigured)
+    {
+        DPRINT1("HAL: No PCIe root ports on bus %lu enabled native AER reporting.\n",
+                BusHandler->BusNumber);
+    }
+
+    BusData->NativeExpressServicesConfigured = TRUE;
+}
 
 static
 VOID
@@ -107,6 +775,86 @@ HalpPciRecordGsiInfo(
     HalpPciGsiInfo[Gsi].Trigger = Trigger;
 }
 
+static VOID
+HalpPciPropagateRootConfiguration(
+    _In_ PBUS_HANDLER RootBus)
+{
+    ULONG BusNumber;
+    PBUS_HANDLER Child;
+    PPCIPBUSDATA RootData;
+
+    if (!RootBus)
+    {
+        return;
+    }
+
+    RootData = (PPCIPBUSDATA)RootBus->BusData;
+    if (!RootData)
+    {
+        return;
+    }
+
+    ULONG StartBus;
+    ULONG EndBus;
+
+    if (RootData->BusNumbersConfigured)
+    {
+        StartBus = RootData->BusNumberStart;
+        EndBus = RootData->BusNumberEnd;
+    }
+    else
+    {
+        StartBus = HalpMinPciBus;
+        EndBus = HalpMaxPciBus;
+    }
+
+    for (BusNumber = StartBus; BusNumber <= EndBus; ++BusNumber)
+    {
+        Child = HalHandlerForBus(PCIBus, BusNumber);
+        if (!Child || Child == RootBus)
+        {
+            continue;
+        }
+
+        if (!HalpPciBusBelongsToRoot(Child, RootBus))
+        {
+            continue;
+        }
+
+        if (!Child->BusData)
+        {
+            continue;
+        }
+
+        ((PPCIPBUSDATA)Child->BusData)->PciSegment = RootData->PciSegment;
+        ((PPCIPBUSDATA)Child->BusData)->AcpiRootInfo = RootData->AcpiRootInfo;
+        ((PPCIPBUSDATA)Child->BusData)->OscInfo = RootData->OscInfo;
+        ((PPCIPBUSDATA)Child->BusData)->OscSupportSet = RootData->OscSupportSet;
+        ((PPCIPBUSDATA)Child->BusData)->OscControlRequest = RootData->OscControlRequest;
+        ((PPCIPBUSDATA)Child->BusData)->OscControlGranted = RootData->OscControlGranted;
+        ((PPCIPBUSDATA)Child->BusData)->OscNativeHotPlug = RootData->OscNativeHotPlug;
+        ((PPCIPBUSDATA)Child->BusData)->OscNativePme = RootData->OscNativePme;
+        ((PPCIPBUSDATA)Child->BusData)->OscNativeAer = RootData->OscNativeAer;
+        ((PPCIPBUSDATA)Child->BusData)->OscExpressCapability = RootData->OscExpressCapability;
+        ((PPCIPBUSDATA)Child->BusData)->NativeExpressServicesConfigured = RootData->NativeExpressServicesConfigured;
+        ((PPCIPBUSDATA)Child->BusData)->BusNumbersConfigured =
+            RootData->BusNumbersConfigured;
+        ((PPCIPBUSDATA)Child->BusData)->BusNumberStart =
+            RootData->BusNumberStart;
+        ((PPCIPBUSDATA)Child->BusData)->BusNumberEnd =
+            RootData->BusNumberEnd;
+
+        if (!((PPCIPBUSDATA)Child->BusData)->AcpiRootConfigured)
+        {
+            ((PPCIPBUSDATA)Child->BusData)->AcpiRootConfigured = TRUE;
+        }
+
+        HalpPciApplyConfiguredWindows(Child);
+    }
+}
+
+
+
 BOOLEAN
 HalpPciLookupGsiInfo(
     _In_ ULONG Gsi,
@@ -123,6 +871,206 @@ HalpPciLookupGsiInfo(
     if (Polarity) *Polarity = HalpPciGsiInfo[Gsi].Polarity;
     if (Trigger) *Trigger = HalpPciGsiInfo[Gsi].Trigger;
     return TRUE;
+}
+
+static
+BOOLEAN
+HalpPciBusBelongsToRoot(
+    _In_ PBUS_HANDLER BusHandler,
+    _In_ PBUS_HANDLER RootBus)
+{
+    PBUS_HANDLER Current;
+    PPCIPBUSDATA RootData;
+    PPCIPBUSDATA BusData;
+
+    if (!BusHandler || !RootBus)
+    {
+        return FALSE;
+    }
+
+    if (BusHandler == RootBus)
+    {
+        return TRUE;
+    }
+
+    Current = BusHandler;
+    while (Current && (Current->InterfaceType == PCIBus))
+    {
+        if (Current == RootBus)
+        {
+            return TRUE;
+        }
+
+        Current = Current->ParentHandler;
+    }
+
+    RootData = (PPCIPBUSDATA)RootBus->BusData;
+    BusData = (PPCIPBUSDATA)BusHandler->BusData;
+
+    if (!RootData)
+    {
+        return FALSE;
+    }
+
+    if (RootData->BusNumbersConfigured)
+    {
+        if ((BusHandler->BusNumber < RootData->BusNumberStart) ||
+            (BusHandler->BusNumber > RootData->BusNumberEnd))
+        {
+            return FALSE;
+        }
+    }
+
+    if (BusData && (BusData->PciSegment != RootData->PciSegment))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static
+VOID
+HalpPciApplyConfiguredWindows(
+    _In_ PBUS_HANDLER BusHandler)
+{
+    PPCIPBUSDATA BusData;
+    PSUPPORTED_RANGES Ranges;
+
+    if (!BusHandler)
+    {
+        return;
+    }
+
+    BusData = (PPCIPBUSDATA)BusHandler->BusData;
+    if (!BusData)
+    {
+        return;
+    }
+
+    PHAL_ACPI_PCI_ROOT_INFO RootInfo = BusData->AcpiRootInfo;
+
+    BusData->ResourcesInitialized = TRUE;
+
+    if (BusData->AcpiRootConfigured &&
+        (BusData->IoWindowBase != HALP_INVALID_RANGE_BASE) &&
+        (BusData->IoWindowBase <= BusData->IoWindowLimit))
+    {
+        BusData->IoBase = BusData->IoWindowBase;
+        BusData->IoLimit = BusData->IoWindowLimit;
+    }
+    else
+    {
+        BusData->IoBase = HALP_PCI_DEFAULT_IO_BASE;
+        BusData->IoLimit = HALP_PCI_DEFAULT_IO_LIMIT;
+    }
+    BusData->IoNext = BusData->IoBase;
+
+    if (BusData->AcpiRootConfigured &&
+        (BusData->MemoryWindowBase != HALP_INVALID_RANGE_BASE) &&
+        (BusData->MemoryWindowBase <= BusData->MemoryWindowLimit))
+    {
+        BusData->MemoryBase = BusData->MemoryWindowBase;
+        BusData->MemoryLimit = BusData->MemoryWindowLimit;
+    }
+    else
+    {
+        BusData->MemoryBase = HALP_PCI_DEFAULT_MEM_BASE;
+        BusData->MemoryLimit = HALP_PCI_DEFAULT_MEM_LIMIT;
+    }
+    BusData->MemoryNext = BusData->MemoryBase;
+
+    if (!BusData->AcpiRootConfigured ||
+        (BusData->PrefetchWindowBase == HALP_INVALID_RANGE_BASE) ||
+        (BusData->PrefetchWindowBase > BusData->PrefetchWindowLimit))
+    {
+        BusData->PrefetchWindowBase = HALP_INVALID_RANGE_BASE;
+        BusData->PrefetchWindowLimit = 0;
+    }
+
+    Ranges = BusHandler->BusAddresses;
+    if (!Ranges)
+    {
+        return;
+    }
+
+    Ranges->Sorted = TRUE;
+    Ranges->IO.Next = NULL;
+    Ranges->Memory.Next = NULL;
+    Ranges->PrefetchMemory.Next = NULL;
+
+    Ranges->NoIO = 1;
+    if (BusData->AcpiRootConfigured &&
+        (BusData->IoWindowBase != HALP_INVALID_RANGE_BASE) &&
+        (BusData->IoWindowBase <= BusData->IoWindowLimit))
+    {
+        Ranges->IO.Base = BusData->IoWindowBase;
+        Ranges->IO.Limit = BusData->IoWindowLimit;
+    }
+    else
+    {
+        Ranges->IO.Base = 0;
+        Ranges->IO.Limit = BusData->IoLimit;
+    }
+    if (BusData->AcpiRootConfigured && RootInfo && RootInfo->IoWindow.HasTranslation &&
+        (BusData->IoWindowBase != HALP_INVALID_RANGE_BASE))
+    {
+        Ranges->IO.SystemBase = (LONGLONG)(BusData->IoWindowBase + RootInfo->IoWindow.Translation);
+    }
+    else
+    {
+        Ranges->IO.SystemBase = 0;
+    }
+    Ranges->IO.SystemAddressSpace = 1;
+
+    Ranges->NoMemory = 1;
+    if (BusData->AcpiRootConfigured &&
+        (BusData->MemoryWindowBase != HALP_INVALID_RANGE_BASE) &&
+        (BusData->MemoryWindowBase <= BusData->MemoryWindowLimit))
+    {
+        Ranges->Memory.Base = BusData->MemoryWindowBase;
+        Ranges->Memory.Limit = BusData->MemoryWindowLimit;
+    }
+    else
+    {
+        Ranges->Memory.Base = 0;
+        Ranges->Memory.Limit = BusData->MemoryLimit;
+    }
+    if (BusData->AcpiRootConfigured && RootInfo && RootInfo->MemoryWindow.HasTranslation &&
+        (BusData->MemoryWindowBase != HALP_INVALID_RANGE_BASE))
+    {
+        Ranges->Memory.SystemBase = (LONGLONG)(BusData->MemoryWindowBase + RootInfo->MemoryWindow.Translation);
+    }
+    else
+    {
+        Ranges->Memory.SystemBase = 0;
+    }
+    Ranges->Memory.SystemAddressSpace = 0;
+
+    if (BusData->PrefetchWindowBase != HALP_INVALID_RANGE_BASE &&
+        BusData->PrefetchWindowBase <= BusData->PrefetchWindowLimit)
+    {
+        Ranges->NoPrefetchMemory = 1;
+        Ranges->PrefetchMemory.Base = BusData->PrefetchWindowBase;
+        Ranges->PrefetchMemory.Limit = BusData->PrefetchWindowLimit;
+    }
+    else
+    {
+        Ranges->NoPrefetchMemory = 0;
+        Ranges->PrefetchMemory.Base = 0;
+        Ranges->PrefetchMemory.Limit = 0;
+    }
+    if (BusData->AcpiRootConfigured && RootInfo && RootInfo->PrefetchWindow.HasTranslation &&
+        (BusData->PrefetchWindowBase != HALP_INVALID_RANGE_BASE) &&
+        (BusData->PrefetchWindowBase <= BusData->PrefetchWindowLimit))
+    {
+        Ranges->PrefetchMemory.SystemBase = (LONGLONG)(BusData->PrefetchWindowBase + RootInfo->PrefetchWindow.Translation);
+    }
+    else
+    {
+        Ranges->PrefetchMemory.SystemBase = 0;
+    }
+    Ranges->PrefetchMemory.SystemAddressSpace = 0;
 }
 
 VOID
@@ -163,39 +1111,129 @@ HalpConfigurePciRootBridge(
     }
 
     BusData->PciSegment = (USHORT)Info->Segment;
+    if (BusData->AcpiRootInfo)
+    {
+        ExFreePoolWithTag(BusData->AcpiRootInfo, HALP_PCI_ROOT_TAG);
+        BusData->AcpiRootInfo = NULL;
+    }
+
+    BusData->AcpiRootInfo = ExAllocatePoolWithTag(NonPagedPool,
+                                                  sizeof(*Info),
+                                                  HALP_PCI_ROOT_TAG);
+    if (BusData->AcpiRootInfo)
+    {
+        *BusData->AcpiRootInfo = *Info;
+    }
+    else
+    {
+        DPRINT1("HAL: Failed to cache ACPI info for PCI segment %lu bus %lu\n",
+                Info->Segment,
+                Info->Bus);
+    }
+
+    BusData->OscInfo = Info->Osc;
+    BusData->OscSupportSet = Info->Osc.SupportSet;
+    BusData->OscControlRequest = Info->Osc.ControlRequest;
+    BusData->OscControlGranted = Info->Osc.ControlGranted;
+    BusData->OscNativeHotPlug = (Info->Osc.ControlGranted & HAL_ACPI_OSC_CONTROL_NATIVE_HOTPLUG) != 0;
+    BusData->OscNativePme = (Info->Osc.ControlGranted & HAL_ACPI_OSC_CONTROL_NATIVE_PME) != 0;
+    BusData->OscNativeAer = (Info->Osc.ControlGranted & HAL_ACPI_OSC_CONTROL_NATIVE_AER) != 0;
+    BusData->OscExpressCapability = (Info->Osc.ControlGranted & HAL_ACPI_OSC_CONTROL_EXPRESS_CAP) != 0;
+
+    if (BusData->OscControlRequest && !BusData->OscExpressCapability)
+    {
+        DPRINT1("HAL: PCI segment %lu bus %lu: firmware kept PCIe capability control; falling back to legacy config path.\n",
+                Info->Segment,
+                Info->Bus);
+        if (!HalpAcpiEcamDisabled)
+        {
+            HalpAcpiEcamDisabled = TRUE;
+            InterlockedOr(&HalpAcpiEcamCoverageFlags, HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL);
+        }
+    }
+
+    if (BusData->OscControlRequest & HAL_ACPI_OSC_CONTROL_NATIVE_HOTPLUG)
+    {
+        if (!BusData->OscNativeHotPlug)
+        {
+            DPRINT1("HAL: PCI segment %lu bus %lu: using legacy hotplug helpers (firmware withheld native control).\n",
+                    Info->Segment,
+                    Info->Bus);
+        }
+    }
+
+    if (BusData->OscControlRequest & HAL_ACPI_OSC_CONTROL_NATIVE_PME)
+    {
+        if (!BusData->OscNativePme)
+        {
+            DPRINT1("HAL: PCI segment %lu bus %lu: keeping legacy PME routing (firmware withheld native PME control).\n",
+                    Info->Segment,
+                    Info->Bus);
+        }
+    }
+
+    if (BusData->OscControlRequest & HAL_ACPI_OSC_CONTROL_NATIVE_AER)
+    {
+        if (!BusData->OscNativeAer)
+        {
+            DPRINT1("HAL: PCI segment %lu bus %lu: firmware retained PCIe AER handling, leaving HAL in legacy mode.\n",
+                    Info->Segment,
+                    Info->Bus);
+        }
+    }
+
+    if (Info->BusRangePresent)
+    {
+        BusData->BusNumbersConfigured = TRUE;
+        BusData->BusNumberStart = (UCHAR)Info->BusStart;
+        BusData->BusNumberEnd = (UCHAR)Info->BusEnd;
+
+        if (!HalpPciBusRangeKnown)
+        {
+            HalpMinPciBus = BusData->BusNumberStart;
+            HalpMaxPciBus = BusData->BusNumberEnd;
+            HalpPciBusRangeKnown = TRUE;
+        }
+        else
+        {
+            if (BusData->BusNumberStart < HalpMinPciBus)
+            {
+                HalpMinPciBus = BusData->BusNumberStart;
+            }
+
+            if (BusData->BusNumberEnd > HalpMaxPciBus)
+            {
+                HalpMaxPciBus = BusData->BusNumberEnd;
+            }
+        }
+    }
+    else
+    {
+        BusData->BusNumbersConfigured = FALSE;
+        BusData->BusNumberStart = (UCHAR)Info->Bus;
+        BusData->BusNumberEnd = (UCHAR)Info->Bus;
+    }
 
     if (Info->IoWindow.Present)
     {
         BusData->IoWindowBase = Info->IoWindow.Base;
         BusData->IoWindowLimit = Info->IoWindow.Limit;
-        BusData->IoBase = Info->IoWindow.Base;
-        BusData->IoLimit = Info->IoWindow.Limit;
-        BusData->IoNext = Info->IoWindow.Base;
     }
     else
     {
-        BusData->IoWindowBase = (ULONGLONG)-1;
+        BusData->IoWindowBase = HALP_INVALID_RANGE_BASE;
         BusData->IoWindowLimit = 0;
-        BusData->IoBase = HALP_PCI_DEFAULT_IO_BASE;
-        BusData->IoLimit = HALP_PCI_DEFAULT_IO_LIMIT;
-        BusData->IoNext = BusData->IoBase;
     }
 
     if (Info->MemoryWindow.Present)
     {
         BusData->MemoryWindowBase = Info->MemoryWindow.Base;
         BusData->MemoryWindowLimit = Info->MemoryWindow.Limit;
-        BusData->MemoryBase = Info->MemoryWindow.Base;
-        BusData->MemoryLimit = Info->MemoryWindow.Limit;
-        BusData->MemoryNext = Info->MemoryWindow.Base;
     }
     else
     {
-        BusData->MemoryWindowBase = (ULONGLONG)-1;
+        BusData->MemoryWindowBase = HALP_INVALID_RANGE_BASE;
         BusData->MemoryWindowLimit = 0;
-        BusData->MemoryBase = HALP_PCI_DEFAULT_MEM_BASE;
-        BusData->MemoryLimit = HALP_PCI_DEFAULT_MEM_LIMIT;
-        BusData->MemoryNext = BusData->MemoryBase;
     }
 
     if (Info->PrefetchWindow.Present)
@@ -205,50 +1243,37 @@ HalpConfigurePciRootBridge(
     }
     else
     {
-        BusData->PrefetchWindowBase = (ULONGLONG)-1;
+        BusData->PrefetchWindowBase = HALP_INVALID_RANGE_BASE;
         BusData->PrefetchWindowLimit = 0;
     }
 
-    BusData->AcpiRootConfigured = TRUE;
-    BusData->ResourcesInitialized = TRUE;
-
-    if (Bus->BusAddresses)
+    if (!BusData->AcpiRootConfigured)
     {
-        PSUPPORTED_RANGES Ranges = Bus->BusAddresses;
+        PHALP_ACPI_MCFG_ALLOCATION Allocation;
 
-        Ranges->Sorted = TRUE;
-        Ranges->IO.Next = NULL;
-        Ranges->Memory.Next = NULL;
-        Ranges->PrefetchMemory.Next = NULL;
-
-        Ranges->NoIO = 1;
-        Ranges->IO.Base = Info->IoWindow.Present ? Info->IoWindow.Base : 0;
-        Ranges->IO.Limit = Info->IoWindow.Present ? Info->IoWindow.Limit : BusData->IoLimit;
-        Ranges->IO.SystemBase = 0;
-        Ranges->IO.SystemAddressSpace = 1;
-
-        Ranges->NoMemory = 1;
-        Ranges->Memory.Base = Info->MemoryWindow.Present ? Info->MemoryWindow.Base : 0;
-        Ranges->Memory.Limit = Info->MemoryWindow.Present ? Info->MemoryWindow.Limit : BusData->MemoryLimit;
-        Ranges->Memory.SystemBase = 0;
-        Ranges->Memory.SystemAddressSpace = 0;
-
-        if (Info->PrefetchWindow.Present)
+        Allocation = HalpAcpiGetMcfgAllocation((USHORT)Info->Segment,
+                                               (UCHAR)Info->Bus);
+        if (Allocation)
         {
-            Ranges->NoPrefetchMemory = 1;
-            Ranges->PrefetchMemory.Base = Info->PrefetchWindow.Base;
-            Ranges->PrefetchMemory.Limit = Info->PrefetchWindow.Limit;
+            DbgPrint("HAL: ACPI root %04lu:%02lu using MMCONFIG base %I64x (buses %u-%u).\n",
+                     Info->Segment,
+                     Info->Bus,
+                     Allocation->BaseAddress,
+                     Allocation->StartBusNumber,
+                     Allocation->EndBusNumber);
         }
         else
         {
-            Ranges->NoPrefetchMemory = 0;
-            Ranges->PrefetchMemory.Base = 0;
-            Ranges->PrefetchMemory.Limit = 0;
+            DbgPrint("HAL: ACPI root %04lu:%02lu using legacy PCI configuration access.\n",
+                     Info->Segment,
+                     Info->Bus);
         }
-        Ranges->PrefetchMemory.SystemBase = 0;
-        Ranges->PrefetchMemory.SystemAddressSpace = 0;
     }
 
+    BusData->AcpiRootConfigured = TRUE;
+    HalpPciConfigureNativeExpressServices(Bus, BusData);
+    HalpPciApplyConfiguredWindows(Bus);
+    HalpPciPropagateRootConfiguration(Bus);
     HalpPciUpdateBridgeHierarchy(Bus);
 }
 
@@ -611,6 +1636,20 @@ HalpReadPCIConfig(IN PBUS_HANDLER BusHandler,
     }
     else
     {
+        PPCIPBUSDATA BusData = (PPCIPBUSDATA)BusHandler->BusData;
+
+        if (Length && BusData && BusData->AcpiRootConfigured &&
+            HalpAcpiAccessConfigEcam(FALSE,
+                                     BusData->PciSegment,
+                                     BusHandler->BusNumber,
+                                     Slot,
+                                     Buffer,
+                                     Offset,
+                                     Length))
+        {
+            return;
+        }
+
         /* Send the request */
         HalpPCIConfig(BusHandler,
                       Slot,
@@ -632,6 +1671,20 @@ HalpWritePCIConfig(IN PBUS_HANDLER BusHandler,
     /* Validate the PCI Slot */
     if (HalpValidPCISlot(BusHandler, Slot))
     {
+        PPCIPBUSDATA BusData = (PPCIPBUSDATA)BusHandler->BusData;
+
+        if (Length && BusData && BusData->AcpiRootConfigured &&
+            HalpAcpiAccessConfigEcam(TRUE,
+                                     BusData->PciSegment,
+                                     BusHandler->BusNumber,
+                                     Slot,
+                                     Buffer,
+                                     Offset,
+                                     Length))
+        {
+            return;
+        }
+
         /* Send the request */
         HalpPCIConfig(BusHandler,
                       Slot,
@@ -719,6 +1772,18 @@ HalpPhase0GetPciDataByOffset(
     PUCHAR BufferPtr = Buffer;
     PCI_TYPE1_CFG_BITS PciCfg;
 
+    if (Length &&
+        HalpAcpiAccessConfigEcam(FALSE,
+                                 HALP_ACPI_SEGMENT_ANY,
+                                 Bus,
+                                 PciSlot,
+                                 Buffer,
+                                 Offset,
+                                 Length))
+    {
+        return Length;
+    }
+
 #ifdef SARCH_XBOX
     if (HalpXboxBlacklistedPCISlot(Bus, PciSlot))
     {
@@ -787,6 +1852,18 @@ HalpPhase0SetPciDataByOffset(
     ULONG BytesLeft = Length;
     PUCHAR BufferPtr = Buffer;
     PCI_TYPE1_CFG_BITS PciCfg;
+
+    if (Length &&
+        HalpAcpiAccessConfigEcam(TRUE,
+                                 HALP_ACPI_SEGMENT_ANY,
+                                 Bus,
+                                 PciSlot,
+                                 Buffer,
+                                 Offset,
+                                 Length))
+    {
+        return Length;
+    }
 
 #ifdef SARCH_XBOX
     if (HalpXboxBlacklistedPCISlot(Bus, PciSlot))
@@ -2250,6 +3327,20 @@ HalpInitializePciStubs(VOID)
         DPRINT1("HAL: HalpInitializePciStubs has no bus data for fake PCI handler\n");
         return;
     }
+
+    HalpPciBusRangeKnown = FALSE;
+    BusData->BusNumbersConfigured = FALSE;
+    BusData->BusNumberStart = 0;
+    BusData->BusNumberEnd = 0;
+    RtlZeroMemory(&BusData->OscInfo, sizeof(BusData->OscInfo));
+    BusData->OscSupportSet = 0;
+    BusData->OscControlRequest = 0;
+    BusData->OscControlGranted = 0;
+    BusData->OscNativeHotPlug = FALSE;
+    BusData->OscNativePme = FALSE;
+    BusData->OscNativeAer = FALSE;
+    BusData->OscExpressCapability = FALSE;
+    BusData->NativeExpressServicesConfigured = FALSE;
 
     RtlZeroMemory(BusData->ConfiguredBits, sizeof(BusData->ConfiguredBits));
     RtlInitializeBitMap(&BusData->DeviceConfigured,

@@ -92,6 +92,27 @@ HalpAllocateAndInitPciChildBusHandler(
     BusData->MaxDevice = PCI_MAX_DEVICES;
     BusData->GetIrqRange = HalpGetISAFixedPCIIrq;
     BusData->ResourcesInitialized = FALSE;
+    BusData->PciSegment = 0;
+    BusData->AcpiRootConfigured = FALSE;
+    BusData->AcpiRootInfo = NULL;
+    BusData->IoWindowBase = HALP_INVALID_RANGE_BASE;
+    BusData->IoWindowLimit = 0;
+    BusData->MemoryWindowBase = HALP_INVALID_RANGE_BASE;
+    BusData->MemoryWindowLimit = 0;
+    BusData->PrefetchWindowBase = HALP_INVALID_RANGE_BASE;
+    BusData->PrefetchWindowLimit = 0;
+    BusData->BusNumbersConfigured = FALSE;
+    BusData->BusNumberStart = 0;
+    BusData->BusNumberEnd = 0;
+    RtlZeroMemory(&BusData->OscInfo, sizeof(BusData->OscInfo));
+    BusData->OscSupportSet = 0;
+    BusData->OscControlRequest = 0;
+    BusData->OscControlGranted = 0;
+    BusData->OscNativeHotPlug = FALSE;
+    BusData->OscNativePme = FALSE;
+    BusData->OscNativeAer = FALSE;
+    BusData->OscExpressCapability = FALSE;
+    BusData->NativeExpressServicesConfigured = FALSE;
 
     RtlZeroMemory(BusData->ConfiguredBits, sizeof(BusData->ConfiguredBits));
     RtlInitializeBitMap(&BusData->DeviceConfigured,
@@ -114,6 +135,43 @@ HalpAllocateAndInitPciChildBusHandler(
             break;
         default:
             DbgPrint("HAL: Unknown PCI type for child bus\n");
+    }
+
+    if (Bus->ParentHandler && Bus->ParentHandler->InterfaceType == PCIBus)
+    {
+        PPCIPBUSDATA ParentData = (PPCIPBUSDATA)Bus->ParentHandler->BusData;
+
+        if (ParentData)
+        {
+            BusData->PciSegment = ParentData->PciSegment;
+
+            if (ParentData->AcpiRootConfigured)
+            {
+                BusData->AcpiRootConfigured = TRUE;
+                BusData->AcpiRootInfo = ParentData->AcpiRootInfo;
+                BusData->IoWindowBase = ParentData->IoWindowBase;
+                BusData->IoWindowLimit = ParentData->IoWindowLimit;
+                BusData->MemoryWindowBase = ParentData->MemoryWindowBase;
+                BusData->MemoryWindowLimit = ParentData->MemoryWindowLimit;
+                BusData->PrefetchWindowBase = ParentData->PrefetchWindowBase;
+                BusData->PrefetchWindowLimit = ParentData->PrefetchWindowLimit;
+                BusData->BusNumbersConfigured = ParentData->BusNumbersConfigured;
+                BusData->BusNumberStart = ParentData->BusNumberStart;
+                BusData->BusNumberEnd = ParentData->BusNumberEnd;
+                BusData->OscInfo = ParentData->OscInfo;
+                BusData->OscSupportSet = ParentData->OscSupportSet;
+                BusData->OscControlRequest = ParentData->OscControlRequest;
+                BusData->OscControlGranted = ParentData->OscControlGranted;
+                BusData->OscNativeHotPlug = ParentData->OscNativeHotPlug;
+                BusData->OscNativePme = ParentData->OscNativePme;
+                BusData->OscNativeAer = ParentData->OscNativeAer;
+                BusData->OscExpressCapability = ParentData->OscExpressCapability;
+                BusData->NativeExpressServicesConfigured = ParentData->NativeExpressServicesConfigured;
+
+                HalpResetPciBusWindows(Bus);
+                HalpFinalizePciBusRanges(Bus);
+            }
+        }
     }
 
     return Bus;
@@ -1792,6 +1850,7 @@ HalpInitializePciBus(VOID)
 
     /* Tell PnP if this hard supports correct decoding */
     HalpMarkChipsetDecode(ExtendedAddressDecoding);
+    HalpPciLogEcamCoverage();
     DbgPrint("====== PCI BUS DETECTION COMPLETE =======\n\n");
 #endif
 }

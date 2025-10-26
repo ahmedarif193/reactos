@@ -9,10 +9,22 @@
 
 #ifdef CONFIG_ACPI_PCI
 
+
 typedef struct _ACPI_PCI_ROOT_ENUM_CONTEXT
 {
     ULONG RootCount;
 } ACPI_PCI_ROOT_ENUM_CONTEXT, *PACPI_PCI_ROOT_ENUM_CONTEXT;
+
+#define OSC_FIRMWARE_FAILURE          0x02
+#define OSC_UNRECOGNIZED_UUID         0x04
+#define OSC_UNRECOGNIZED_REVISION     0x08
+#define OSC_CAPABILITIES_MASKED       0x10
+
+#define PCI_ROOT_BUS_OSC_METHOD_CAPABILITY_REVISION 0x01
+
+#define OSC_SUPPORT_EXTENDED_CONFIG_REGIONS   (1u << 0)
+#define OSC_SUPPORT_SEGMENT_GROUPS            (1u << 3)
+#define OSC_CONTROL_EXPRESS_CAP_STRUCTURE     (1u << 4)
 
 static
 VOID
@@ -20,8 +32,12 @@ AcpiPciRootInitWindow(
     _Out_ PHAL_ACPI_PCI_WINDOW Window)
 {
     Window->Present = FALSE;
+    Window->HasTranslation = FALSE;
+    Window->TranslationType = 0;
+    Window->Reserved = 0;
     Window->Base = 0;
     Window->Limit = 0;
+    Window->Translation = 0;
 }
 
 static
@@ -73,6 +89,158 @@ AcpiPciRootAccumulateAddress(
 
 static
 VOID
+AcpiPciRootAccumulateBusRange(
+    _Inout_ PHAL_ACPI_PCI_ROOT_INFO RootInfo,
+    _In_ ULONGLONG Minimum,
+    _In_ ULONGLONG Maximum,
+    _In_ ULONGLONG Length)
+{
+    if (!Length)
+    {
+        return;
+    }
+
+    if ((Maximum < Minimum) ||
+        ((Maximum - Minimum + 1) < Length))
+    {
+        Maximum = Minimum + Length - 1;
+    }
+
+    if (!RootInfo->BusRangePresent)
+    {
+        RootInfo->BusRangePresent = TRUE;
+        RootInfo->BusStart = (ULONG)Minimum;
+        RootInfo->BusEnd = (ULONG)Maximum;
+    }
+    else
+    {
+        if (Minimum < RootInfo->BusStart) RootInfo->BusStart = (ULONG)Minimum;
+        if (Maximum > RootInfo->BusEnd) RootInfo->BusEnd = (ULONG)Maximum;
+    }
+}
+
+static
+VOID
+AcpiPciRootSetTranslation(
+    _Inout_ PHAL_ACPI_PCI_WINDOW Window,
+    _In_ ULONGLONG Translation,
+    _In_ UINT8 TranslationType)
+{
+    Window->HasTranslation = TRUE;
+    Window->Translation = Translation;
+    Window->TranslationType = TranslationType;
+}
+
+static
+VOID
+AcpiPciRootEvaluateOsc(
+    _In_ ACPI_HANDLE Handle,
+    _Inout_ PHAL_ACPI_PCI_ROOT_INFO RootInfo)
+{
+    static const UINT8 PciExpressUuid[16] = { 0x33, 0xDB, 0x4D, 0x5B, 0x1F, 0xF7, 0x40, 0x1C, 0x96, 0x57, 0x74, 0x41, 0xC0, 0x3D, 0xD7, 0x66 };
+    ULONG SupportValue = 0;
+    ULONG ControlValue = 0;
+    ACPI_OBJECT Parameters[4];
+    ACPI_OBJECT_LIST ArgumentList = { 4, Parameters };
+    ACPI_BUFFER ReturnBuffer = { ACPI_ALLOCATE_BUFFER, NULL };
+    ULONG ControlData;
+    ACPI_STATUS Status;
+
+    SupportValue |= OSC_SUPPORT_EXTENDED_CONFIG_REGIONS;
+    SupportValue |= OSC_SUPPORT_SEGMENT_GROUPS;
+
+    ControlValue |= OSC_CONTROL_EXPRESS_CAP_STRUCTURE;
+
+    ControlData = ControlValue;
+
+    Parameters[0].Type = ACPI_TYPE_BUFFER;
+    Parameters[0].Buffer.Length = sizeof(PciExpressUuid);
+    Parameters[0].Buffer.Pointer = (UINT8 *)PciExpressUuid;
+
+    Parameters[1].Type = ACPI_TYPE_INTEGER;
+    Parameters[1].Integer.Value = PCI_ROOT_BUS_OSC_METHOD_CAPABILITY_REVISION;
+
+    Parameters[2].Type = ACPI_TYPE_INTEGER;
+    Parameters[2].Integer.Value = SupportValue;
+
+    Parameters[3].Type = ACPI_TYPE_BUFFER;
+    Parameters[3].Buffer.Length = sizeof(ControlData);
+    Parameters[3].Buffer.Pointer = (UINT8 *)&ControlData;
+
+    RootInfo->Osc.Evaluated = TRUE;
+    RootInfo->Osc.SupportSet = SupportValue;
+    RootInfo->Osc.ControlRequest = ControlValue;
+    RootInfo->Osc.StatusFlags = 0;
+    RootInfo->Osc.ControlGranted = 0;
+    RootInfo->Osc.Failed = TRUE;
+
+    Status = AcpiEvaluateObject(Handle, "_OSC", &ArgumentList, &ReturnBuffer);
+    if (ACPI_FAILURE(Status))
+    {
+        DPRINT1("ACPI: _OSC evaluation failed (Status 0x%X)\n", Status);
+        goto Cleanup;
+    }
+
+    if (!ReturnBuffer.Pointer)
+    {
+        DPRINT1("ACPI: _OSC returned empty buffer\n");
+        goto Cleanup;
+    }
+
+    ACPI_OBJECT *Result = ReturnBuffer.Pointer;
+    if (Result->Type != ACPI_TYPE_BUFFER || Result->Buffer.Length < sizeof(ULONG))
+    {
+        DPRINT1("ACPI: _OSC returned unexpected object type %u length %u\n",
+                Result->Type,
+                Result->Type == ACPI_TYPE_BUFFER ? Result->Buffer.Length : 0);
+        goto Cleanup;
+    }
+
+    const ULONG *Data = (const ULONG *)Result->Buffer.Pointer;
+    ULONG StatusFlags = Data[0];
+
+    RootInfo->Osc.StatusFlags = StatusFlags;
+    RootInfo->Osc.Failed = FALSE;
+
+    if (Result->Buffer.Length >= (2 * sizeof(ULONG)))
+    {
+        RootInfo->Osc.ControlGranted = Data[1];
+    }
+
+    if (StatusFlags & (OSC_FIRMWARE_FAILURE |
+                       OSC_UNRECOGNIZED_UUID |
+                       OSC_UNRECOGNIZED_REVISION))
+    {
+        RootInfo->Osc.Failed = TRUE;
+    }
+
+    if (StatusFlags & OSC_CAPABILITIES_MASKED)
+    {
+        RootInfo->Osc.Failed = TRUE;
+    }
+
+    if (RootInfo->Osc.Failed)
+    {
+        DPRINT1("ACPI: _OSC returned status 0x%lx (control 0x%lx)\n",
+                StatusFlags,
+                RootInfo->Osc.ControlGranted);
+    }
+    else
+    {
+        DPRINT1("ACPI: _OSC granted control 0x%lx (status 0x%lx)\n",
+                RootInfo->Osc.ControlGranted,
+                StatusFlags);
+    }
+
+Cleanup:
+    if (ReturnBuffer.Pointer)
+    {
+        ACPI_FREE(ReturnBuffer.Pointer);
+    }
+}
+
+static
+VOID
 AcpiPciRootProcessResource(
     _Inout_ PHAL_ACPI_PCI_ROOT_INFO RootInfo,
     _In_ const ACPI_RESOURCE *Resource)
@@ -84,17 +252,34 @@ AcpiPciRootProcessResource(
             const ACPI_RESOURCE_ADDRESS16 *Addr = &Resource->Data.Address16;
             switch (Addr->ResourceType)
             {
+                case ACPI_BUS_NUMBER_RANGE:
+                    AcpiPciRootAccumulateBusRange(RootInfo,
+                                                  Addr->Address.Minimum,
+                                                  Addr->Address.Maximum,
+                                                  Addr->Address.AddressLength);
+                    break;
+
                 case ACPI_MEMORY_RANGE:
                     if (Addr->Info.Mem.Caching == ACPI_PREFETCHABLE_MEMORY)
+                    {
                         AcpiPciRootAccumulateAddress(&RootInfo->PrefetchWindow,
                                                      Addr->Address.Minimum,
                                                      Addr->Address.Maximum,
                                                      Addr->Address.AddressLength);
+                        AcpiPciRootSetTranslation(&RootInfo->PrefetchWindow,
+                                                  Addr->Address.TranslationOffset,
+                                                  0);
+                    }
                     else
+                    {
                         AcpiPciRootAccumulateAddress(&RootInfo->MemoryWindow,
                                                      Addr->Address.Minimum,
                                                      Addr->Address.Maximum,
                                                      Addr->Address.AddressLength);
+                        AcpiPciRootSetTranslation(&RootInfo->MemoryWindow,
+                                                  Addr->Address.TranslationOffset,
+                                                  0);
+                    }
                     break;
 
                 case ACPI_IO_RANGE:
@@ -102,6 +287,9 @@ AcpiPciRootProcessResource(
                                                  Addr->Address.Minimum,
                                                  Addr->Address.Maximum,
                                                  Addr->Address.AddressLength);
+                    AcpiPciRootSetTranslation(&RootInfo->IoWindow,
+                                              Addr->Address.TranslationOffset,
+                                              Addr->Info.Io.TranslationType);
                     break;
 
                 default:
@@ -115,17 +303,34 @@ AcpiPciRootProcessResource(
             const ACPI_RESOURCE_ADDRESS32 *Addr = &Resource->Data.Address32;
             switch (Addr->ResourceType)
             {
+                case ACPI_BUS_NUMBER_RANGE:
+                    AcpiPciRootAccumulateBusRange(RootInfo,
+                                                  Addr->Address.Minimum,
+                                                  Addr->Address.Maximum,
+                                                  Addr->Address.AddressLength);
+                    break;
+
                 case ACPI_MEMORY_RANGE:
                     if (Addr->Info.Mem.Caching == ACPI_PREFETCHABLE_MEMORY)
+                    {
                         AcpiPciRootAccumulateAddress(&RootInfo->PrefetchWindow,
                                                      Addr->Address.Minimum,
                                                      Addr->Address.Maximum,
                                                      Addr->Address.AddressLength);
+                        AcpiPciRootSetTranslation(&RootInfo->PrefetchWindow,
+                                                  Addr->Address.TranslationOffset,
+                                                  0);
+                    }
                     else
+                    {
                         AcpiPciRootAccumulateAddress(&RootInfo->MemoryWindow,
                                                      Addr->Address.Minimum,
                                                      Addr->Address.Maximum,
                                                      Addr->Address.AddressLength);
+                        AcpiPciRootSetTranslation(&RootInfo->MemoryWindow,
+                                                  Addr->Address.TranslationOffset,
+                                                  0);
+                    }
                     break;
 
                 case ACPI_IO_RANGE:
@@ -133,6 +338,9 @@ AcpiPciRootProcessResource(
                                                  Addr->Address.Minimum,
                                                  Addr->Address.Maximum,
                                                  Addr->Address.AddressLength);
+                    AcpiPciRootSetTranslation(&RootInfo->IoWindow,
+                                              Addr->Address.TranslationOffset,
+                                              Addr->Info.Io.TranslationType);
                     break;
 
                 default:
@@ -146,17 +354,34 @@ AcpiPciRootProcessResource(
             const ACPI_RESOURCE_ADDRESS64 *Addr = &Resource->Data.Address64;
             switch (Addr->ResourceType)
             {
+                case ACPI_BUS_NUMBER_RANGE:
+                    AcpiPciRootAccumulateBusRange(RootInfo,
+                                                  Addr->Address.Minimum,
+                                                  Addr->Address.Maximum,
+                                                  Addr->Address.AddressLength);
+                    break;
+
                 case ACPI_MEMORY_RANGE:
                     if (Addr->Info.Mem.Caching == ACPI_PREFETCHABLE_MEMORY)
+                    {
                         AcpiPciRootAccumulateAddress(&RootInfo->PrefetchWindow,
                                                      Addr->Address.Minimum,
                                                      Addr->Address.Maximum,
                                                      Addr->Address.AddressLength);
+                        AcpiPciRootSetTranslation(&RootInfo->PrefetchWindow,
+                                                  Addr->Address.TranslationOffset,
+                                                  0);
+                    }
                     else
+                    {
                         AcpiPciRootAccumulateAddress(&RootInfo->MemoryWindow,
                                                      Addr->Address.Minimum,
                                                      Addr->Address.Maximum,
                                                      Addr->Address.AddressLength);
+                        AcpiPciRootSetTranslation(&RootInfo->MemoryWindow,
+                                                  Addr->Address.TranslationOffset,
+                                                  0);
+                    }
                     break;
 
                 case ACPI_IO_RANGE:
@@ -164,6 +389,9 @@ AcpiPciRootProcessResource(
                                                  Addr->Address.Minimum,
                                                  Addr->Address.Maximum,
                                                  Addr->Address.AddressLength);
+                    AcpiPciRootSetTranslation(&RootInfo->IoWindow,
+                                              Addr->Address.TranslationOffset,
+                                              Addr->Info.Io.TranslationType);
                     break;
 
                 default:
@@ -177,17 +405,34 @@ AcpiPciRootProcessResource(
             const ACPI_RESOURCE_EXTENDED_ADDRESS64 *Addr = &Resource->Data.ExtAddress64;
             switch (Addr->ResourceType)
             {
+                case ACPI_BUS_NUMBER_RANGE:
+                    AcpiPciRootAccumulateBusRange(RootInfo,
+                                                  Addr->Address.Minimum,
+                                                  Addr->Address.Maximum,
+                                                  Addr->Address.AddressLength);
+                    break;
+
                 case ACPI_MEMORY_RANGE:
                     if (Addr->Info.Mem.Caching == ACPI_PREFETCHABLE_MEMORY)
+                    {
                         AcpiPciRootAccumulateAddress(&RootInfo->PrefetchWindow,
                                                      Addr->Address.Minimum,
                                                      Addr->Address.Maximum,
                                                      Addr->Address.AddressLength);
+                        AcpiPciRootSetTranslation(&RootInfo->PrefetchWindow,
+                                                  Addr->Address.TranslationOffset,
+                                                  0);
+                    }
                     else
+                    {
                         AcpiPciRootAccumulateAddress(&RootInfo->MemoryWindow,
                                                      Addr->Address.Minimum,
                                                      Addr->Address.Maximum,
                                                      Addr->Address.AddressLength);
+                        AcpiPciRootSetTranslation(&RootInfo->MemoryWindow,
+                                                  Addr->Address.TranslationOffset,
+                                                  0);
+                    }
                     break;
 
                 case ACPI_IO_RANGE:
@@ -195,6 +440,9 @@ AcpiPciRootProcessResource(
                                                  Addr->Address.Minimum,
                                                  Addr->Address.Maximum,
                                                  Addr->Address.AddressLength);
+                    AcpiPciRootSetTranslation(&RootInfo->IoWindow,
+                                              Addr->Address.TranslationOffset,
+                                              Addr->Info.Io.TranslationType);
                     break;
 
                 default:
@@ -323,6 +571,7 @@ AcpiPciRootEnumerateCallback(
         RootInfo.Bus = (ULONG)BusValue;
 
         AcpiPciRootExtractResources(Handle, &RootInfo);
+        AcpiPciRootEvaluateOsc(Handle, &RootInfo);
 
         DPRINT1("ACPI: PCI Root %lu: HID=%s UID=%s SEG=%lu BUS=%lu\n",
                 Context ? (Context->RootCount + 1) : 0,
@@ -331,23 +580,55 @@ AcpiPciRootEnumerateCallback(
                 RootInfo.Segment,
                 RootInfo.Bus);
 
+        if (RootInfo.BusRangePresent)
+        {
+            DPRINT1("    Bus range  : [%lu - %lu]\n",
+                    RootInfo.BusStart,
+                    RootInfo.BusEnd);
+        }
+
         if (RootInfo.IoWindow.Present)
         {
             DPRINT1("    IO window   : [%I64x - %I64x]\n",
                     RootInfo.IoWindow.Base,
                     RootInfo.IoWindow.Limit);
+            if (RootInfo.IoWindow.HasTranslation)
+            {
+                DPRINT1("      translation: +%I64x (type %u)\n",
+                        RootInfo.IoWindow.Translation,
+                        RootInfo.IoWindow.TranslationType);
+            }
         }
         if (RootInfo.MemoryWindow.Present)
         {
             DPRINT1("    Memory window: [%I64x - %I64x]\n",
                     RootInfo.MemoryWindow.Base,
                     RootInfo.MemoryWindow.Limit);
+            if (RootInfo.MemoryWindow.HasTranslation)
+            {
+                DPRINT1("      translation: +%I64x\n",
+                        RootInfo.MemoryWindow.Translation);
+            }
         }
         if (RootInfo.PrefetchWindow.Present)
         {
             DPRINT1("    Prefetch window: [%I64x - %I64x]\n",
                     RootInfo.PrefetchWindow.Base,
                     RootInfo.PrefetchWindow.Limit);
+            if (RootInfo.PrefetchWindow.HasTranslation)
+            {
+                DPRINT1("      translation: +%I64x\n",
+                        RootInfo.PrefetchWindow.Translation);
+            }
+        }
+
+        if (RootInfo.Osc.Evaluated)
+        {
+            DPRINT1("    _OSC status 0x%lx request 0x%lx grant 0x%lx%s\n",
+                    RootInfo.Osc.StatusFlags,
+                    RootInfo.Osc.ControlRequest,
+                    RootInfo.Osc.ControlGranted,
+                    RootInfo.Osc.Failed ? " (firmware retained control)" : "");
         }
 
         HalpConfigurePciRootBridge(&RootInfo);

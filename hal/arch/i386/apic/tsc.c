@@ -9,6 +9,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <hal.h>
+#include <halacpi.h>
 #include "tsc.h"
 #include "apicp.h"
 #define NDEBUG
@@ -121,11 +122,63 @@ HalpCalibrateStallExecution(VOID)
 {
     // Timer interrupt is now active
 #ifdef _M_AMD64
-    /* Avoid early IDT programming during calibration on AMD64 */
+    if (HalpPmTimerInitialized)
+    {
+        ULONG_PTR Flags;
+        ULONG StartTick, CurrentTick, DeltaTicks;
+        ULONGLONG StartTsc, EndTsc, DeltaTsc, Frequency;
+        ULONG TargetTicks;
+        ULONG Guard;
+
+        TargetTicks = (HalpAcpiPmTimerFrequency / 100); /* ~10 ms window */
+        if (TargetTicks == 0)
+        {
+            TargetTicks = HalpAcpiPmTimerFrequency ? HalpAcpiPmTimerFrequency : 1;
+        }
+
+        Flags = __readeflags();
+        _disable();
+
+        StartTick = HalpAcpiTimerRead();
+        CurrentTick = StartTick;
+        Guard = 0;
+        while (((CurrentTick - StartTick) & HalpPmTimerMask) == 0 && Guard < (1u << 20))
+        {
+            CurrentTick = HalpAcpiTimerRead();
+            ++Guard;
+        }
+
+        StartTick = CurrentTick;
+        StartTsc = __rdtsc();
+
+        Guard = 0;
+        do
+        {
+            CurrentTick = HalpAcpiTimerRead();
+            DeltaTicks = (CurrentTick - StartTick) & HalpPmTimerMask;
+            ++Guard;
+        } while ((DeltaTicks < TargetTicks) && (Guard < (1u << 25)));
+
+        EndTsc = __rdtsc();
+
+        __writeeflags(Flags);
+
+        if (DeltaTicks != 0)
+        {
+            DeltaTsc = EndTsc - StartTsc;
+            Frequency = (DeltaTsc * (ULONGLONG)HalpAcpiPmTimerFrequency + (DeltaTicks / 2)) / DeltaTicks;
+            if (Frequency != 0)
+            {
+                HalpCpuClockFrequency.QuadPart = Frequency;
+            }
+        }
+    }
+
     if (HalpCpuClockFrequency.QuadPart == 0)
     {
         HalpCpuClockFrequency.QuadPart = 1000000000ULL; /* 1 GHz fallback */
     }
+
     KeGetPcr()->StallScaleFactor = (ULONG)(HalpCpuClockFrequency.QuadPart / 1000000ULL);
 #else
     HalpInitializeTsc();
