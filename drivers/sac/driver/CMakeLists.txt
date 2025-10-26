@@ -19,6 +19,8 @@ list(APPEND SOURCE
 add_library(sacdrv MODULE ${SOURCE} sacdrv.rc)
 set_module_type(sacdrv kernelmodedriver)
 add_importlibs(sacdrv ntoskrnl hal)
+# Link kernel C runtime primitives (e.g., memcmp/memcpy) for Clang builds
+target_link_libraries(sacdrv libcntpr)
 add_dependencies(sacdrv sacmsg)
 add_pch(sacdrv sacdrv.h SOURCE)
 add_cd_file(TARGET sacdrv DESTINATION reactos/system32/drivers NO_CAB FOR all)

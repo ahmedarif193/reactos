@@ -59,8 +59,12 @@ set(CMAKE_CXX_CREATE_STATIC_LIBRARY "${_REACTOS_CREATE_STATIC_LIBRARY}")
 set(CMAKE_ASM_CREATE_STATIC_LIBRARY "${_REACTOS_CREATE_STATIC_LIBRARY}")
 unset(_REACTOS_CREATE_STATIC_LIBRARY)
 
-set(CMAKE_C_STANDARD_LIBRARIES "-lgcc" CACHE STRING "Standard C Libraries")
-set(CMAKE_CXX_STANDARD_LIBRARIES "-lgcc" CACHE STRING "Standard C++ Libraries")
+# Do not inject generic -lgcc/-lgcc_eh here: it can pull in host libgcc
+# and clash with the MinGW toolchain libraries selected below. Our build
+# system already links the correct libgcc/libgcc_eh via imported targets
+# (see sdk/cmake/gcc.cmake). Leave the standard libraries empty.
+set(CMAKE_C_STANDARD_LIBRARIES "" CACHE STRING "Standard C Libraries")
+set(CMAKE_CXX_STANDARD_LIBRARIES "" CACHE STRING "Standard C++ Libraries")
 
 find_program (LD_EXECUTABLE ${GCC_TOOLCHAIN_PREFIX}ld)
 message(STATUS "Using linker ${LD_EXECUTABLE}")

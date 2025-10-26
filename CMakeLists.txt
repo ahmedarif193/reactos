@@ -79,6 +79,21 @@ add_definitions(
     -D_CRT_NON_CONFORMING_SWPRINTFS
 )
 
+# Remove implicit -DNDEBUG injected by CMake for non-Debug configurations
+# so assertions and debug logging remain available unless a target opts in.
+foreach(_lang C CXX ASM)
+    foreach(_cfg MinSizeRel RelWithDebInfo Release)
+        string(TOUPPER "${_cfg}" _CFG)
+        if(DEFINED CMAKE_${_lang}_FLAGS_${_CFG})
+            string(REPLACE "-DNDEBUG" "" CMAKE_${_lang}_FLAGS_${_CFG} "${CMAKE_${_lang}_FLAGS_${_CFG}}")
+            string(REPLACE " -DNDEBUG" "" CMAKE_${_lang}_FLAGS_${_CFG} "${CMAKE_${_lang}_FLAGS_${_CFG}}")
+            string(REPLACE "-DNDEBUG=" "" CMAKE_${_lang}_FLAGS_${_CFG} "${CMAKE_${_lang}_FLAGS_${_CFG}}")
+            string(REPLACE " -DNDEBUG=" "" CMAKE_${_lang}_FLAGS_${_CFG} "${CMAKE_${_lang}_FLAGS_${_CFG}}")
+            set(CMAKE_${_lang}_FLAGS_${_CFG} "${CMAKE_${_lang}_FLAGS_${_CFG}}" CACHE STRING "" FORCE)
+        endif()
+    endforeach()
+endforeach()
+
 # There doesn't seem to be a standard for __FILE__ being relative or absolute, so detect it at runtime.
 file(RELATIVE_PATH _PATH_PREFIX ${REACTOS_BINARY_DIR} ${REACTOS_SOURCE_DIR})
 if (NOT MSVC AND ((CMAKE_C_COMPILER_ID STREQUAL "GNU") AND (CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL "8.0.0")

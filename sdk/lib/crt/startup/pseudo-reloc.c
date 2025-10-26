@@ -24,6 +24,17 @@
 #include <memory.h>
 #include <internal.h>
 
+/*
+ * Clang (MinGW) may not treat _alloca as an intrinsic unless declared.
+ * Map it to the built-in so we don't depend on an external symbol.
+ */
+#if defined(__clang__) && (defined(__MINGW32__) || defined(__MINGW64__))
+#include <malloc.h>
+#ifndef _alloca
+#define _alloca __builtin_alloca
+#endif
+#endif
+
 #if defined(__CYGWIN__)
 #include <wchar.h>
 #include <ntdef.h>
@@ -510,7 +521,20 @@ _pei386_runtime_relocator (void)
   ++was_init;
 #ifdef __MINGW64_VERSION_MAJOR
   mSecs = __mingw_GetSectionCount ();
-  the_secs = (sSecInfo *) _alloca (sizeof (sSecInfo) * (size_t) mSecs);
+  /*
+   * Use heap allocation instead of _alloca to avoid relying on
+   * MSVC-specific _alloca symbol when building with Clang/MinGW.
+   */
+  the_secs = (sSecInfo *)malloc(sizeof(sSecInfo) * (size_t)mSecs);
+  if (!the_secs)
+  {
+    __report_error("CRITICAL: Failed to allocate section info buffer.\n");
+#ifdef PSEUDO_RELOC_STRICT
+    abort();
+#else
+    return;
+#endif
+  }
   maxSections = 0;
 #endif /* __MINGW64_VERSION_MAJOR */
 
@@ -545,5 +569,7 @@ _pei386_runtime_relocator (void)
   }
 #ifdef __MINGW64_VERSION_MAJOR
   restore_modified_sections ();
+  free(the_secs);
+  the_secs = NULL;
 #endif /* __MINGW64_VERSION_MAJOR */
 }

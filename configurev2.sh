@@ -107,7 +107,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -r|--release)
-            BUILD_TYPE="Release"
+            BUILD_TYPE="MinSizeRel"
             shift
             ;;
         -g|--generator)

@@ -4,6 +4,8 @@
 /*
     Hacky debug macro
 */
+#include <winuser.h>
+#include <winbase.h>
 // TODO: Use a string-safe function instead of wsprintf().
 
 // FIXME: sdk\lib\...\mmebuddy compilation would fail: wsprintf() and MessageBoxW() are undefined!

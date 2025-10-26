@@ -10,6 +10,7 @@ list(APPEND MINI_HAL_SOURCE
     ../legacy/bus/isabus.c
     ../legacy/bus/pcibus.c
     ../legacy/bussupp.c
+    acpi_ecam_stubs.c
     ../generic/dma.c
     ../generic/drive.c
     ../generic/misc.c

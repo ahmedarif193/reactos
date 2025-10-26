@@ -4,6 +4,7 @@ list(APPEND HAL_LEGACY_SOURCE
     ${HAL_I386_DIR}/legacy/bus/cmosbus.c
     ${HAL_I386_DIR}/legacy/bus/isabus.c
     ${HAL_I386_DIR}/legacy/bus/pcibus.c
+    ${HAL_I386_DIR}/legacy/acpi_ecam_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/pci_classes.c
     ${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.c
     ${HAL_I386_DIR}/legacy/bus/sysbus.c

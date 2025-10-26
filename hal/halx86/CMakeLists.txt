@@ -43,10 +43,11 @@ function(add_hal _halname)
                 -Wextra -Wformat -Wformat-security -Wpointer-arith>)
     endif()
 
+    # Link common support libraries. Add 'setjmp' to provide _setjmp/_setjmp3 for x86 BIOS paths.
     if(${_halname} STREQUAL "hal")
-        target_link_libraries(${_halname} libcntpr arbiter fast486)
+        target_link_libraries(${_halname} libcntpr arbiter fast486 setjmp)
     else()
-        target_link_libraries(${_halname} libcntpr fast486)
+        target_link_libraries(${_halname} libcntpr fast486 setjmp)
     endif()
 
     add_importlibs(${_halname} ntoskrnl)

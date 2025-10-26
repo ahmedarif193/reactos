@@ -28,5 +28,6 @@ add_dependencies(cpprt xdk)
 
 # On GCC builds, we need to link against libsupc++
 if(NOT MSVC)
-    target_link_libraries(cpprt libsupc++)
+    # Propagate libsupc++ to dependents so C++ exception helpers are linked in
+    target_link_libraries(cpprt PUBLIC libsupc++)
 endif()

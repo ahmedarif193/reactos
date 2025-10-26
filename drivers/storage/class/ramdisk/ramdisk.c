@@ -241,6 +241,7 @@ RamdiskApplyGptAttributes(IN PRAMDISK_DRIVE_EXTENSION DriveExtension,
 
 static
 VOID
+NTAPI
 RamdiskCancelUniqueIdNotify(IN PDEVICE_OBJECT DeviceObject,
                             IN PIRP Irp)
 {

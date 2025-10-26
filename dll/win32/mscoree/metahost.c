@@ -363,6 +363,7 @@ static HRESULT WINAPI CLRRuntimeInfo_GetVersionString(ICLRRuntimeInfo* iface,
     TRACE("%p %p %p\n", iface, pwzBuffer, pcchBuffer);
 
     size = snprintf(version, sizeof(version), "v%u.%u.%u", This->major, This->minor, This->build);
+    (void)size; /* suppress unused in non-assert builds */
 
     assert(size <= sizeof(version));
 

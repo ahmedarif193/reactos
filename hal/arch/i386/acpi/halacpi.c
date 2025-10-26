@@ -652,13 +652,13 @@ HalpAcpiReadRegister(
             switch (Bytes)
             {
                 case 1:
-                    *Value = READ_REGISTER_UCHAR((volatile UCHAR *)Pointer);
+                    *Value = READ_REGISTER_UCHAR((PUCHAR)Pointer);
                     break;
                 case 2:
-                    *Value = READ_REGISTER_USHORT((volatile USHORT *)Pointer);
+                    *Value = READ_REGISTER_USHORT((PUSHORT)Pointer);
                     break;
                 case 4:
-                    *Value = READ_REGISTER_ULONG((volatile ULONG *)Pointer);
+                    *Value = READ_REGISTER_ULONG((PULONG)Pointer);
                     break;
                 default:
                     HalpUnmapVirtualAddress(Mapping, Pages);
@@ -788,13 +788,13 @@ HalpAcpiWriteRegister(
             switch (Bytes)
             {
                 case 1:
-                    WRITE_REGISTER_UCHAR((volatile UCHAR *)Pointer, (UCHAR)Value);
+                    WRITE_REGISTER_UCHAR((PUCHAR)Pointer, (UCHAR)Value);
                     break;
                 case 2:
-                    WRITE_REGISTER_USHORT((volatile USHORT *)Pointer, (USHORT)Value);
+                    WRITE_REGISTER_USHORT((PUSHORT)Pointer, (USHORT)Value);
                     break;
                 case 4:
-                    WRITE_REGISTER_ULONG((volatile ULONG *)Pointer, Value);
+                    WRITE_REGISTER_ULONG((PULONG)Pointer, Value);
                     break;
                 default:
                     HalpUnmapVirtualAddress(Mapping, Pages);
@@ -1582,7 +1582,7 @@ HalpAcpiTimerRead(VOID)
 
     if (HalpPmTimerMemoryMapped && HalpPmTimerRegister)
     {
-        Value = READ_REGISTER_ULONG(HalpPmTimerRegister);
+    Value = READ_REGISTER_ULONG((PULONG)HalpPmTimerRegister);
     }
     else
     {

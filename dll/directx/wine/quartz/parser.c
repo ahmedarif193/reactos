@@ -187,9 +187,11 @@ void Parser_Destroy(ParserImpl *This)
     if (connected)
     {
         hr = IPin_Disconnect(connected);
+        (void)hr; /* suppress unused in non-assert builds */
         assert(hr == S_OK);
         IPin_Release(connected);
         hr = IPin_Disconnect(&This->pInputPin->pin.IPin_iface);
+        (void)hr;
         assert(hr == S_OK);
     }
     pinref = IPin_Release(&This->pInputPin->pin.IPin_iface);
