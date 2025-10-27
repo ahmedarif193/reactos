@@ -14,6 +14,32 @@
 
 #include "ndissys.h"
 
+static
+BOOLEAN
+NdisIsPciBusInRange(
+    _In_ ULONG BusNumber)
+{
+    ULONG MinBus, MaxBus;
+
+    if (!HalQueryPciBusRange(&MinBus, &MaxBus))
+    {
+        /* HAL has not published limits yet; fall back to legacy behaviour. */
+        return TRUE;
+    }
+
+    if (BusNumber < MinBus || BusNumber > MaxBus)
+    {
+        NDIS_DbgPrint(MIN_TRACE,
+                      ("NDIS: Skipping PCI configuration access on bus %lu; firmware range is [%lu-%lu].\n",
+                       BusNumber,
+                       MinBus,
+                       MaxBus));
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 /*
  * @implemented
  */
@@ -28,6 +54,10 @@ NdisImmediateReadPciSlotInformation(
 {
   PNDIS_WRAPPER_CONTEXT WrapperContext = (PNDIS_WRAPPER_CONTEXT)WrapperConfigurationContext;
   /* Slot number is ignored. */
+  if (!NdisIsPciBusInRange(WrapperContext->BusNumber))
+  {
+      return 0;
+  }
   return HalGetBusDataByOffset(PCIConfiguration, WrapperContext->BusNumber,
                                WrapperContext->SlotNumber, Buffer, Offset, Length);
 }
@@ -46,6 +76,10 @@ NdisImmediateWritePciSlotInformation(
 {
   PNDIS_WRAPPER_CONTEXT WrapperContext = (PNDIS_WRAPPER_CONTEXT)WrapperConfigurationContext;
   /* Slot number is ignored. */
+  if (!NdisIsPciBusInRange(WrapperContext->BusNumber))
+  {
+      return 0;
+  }
   return HalSetBusDataByOffset(PCIConfiguration, WrapperContext->BusNumber,
                                WrapperContext->SlotNumber, Buffer, Offset, Length);
 }
@@ -186,6 +220,10 @@ NdisReadPciSlotInformation(
 {
   PLOGICAL_ADAPTER Adapter = NdisAdapterHandle;
   /* Slot number is ignored since W2K for all NDIS drivers. */
+  if (!NdisIsPciBusInRange(Adapter->NdisMiniportBlock.BusNumber))
+  {
+      return 0;
+  }
   return HalGetBusDataByOffset(PCIConfiguration,
                                Adapter->NdisMiniportBlock.BusNumber, Adapter->NdisMiniportBlock.SlotNumber,
                                Buffer, Offset, Length);
@@ -205,6 +243,10 @@ NdisWritePciSlotInformation(
 {
   PLOGICAL_ADAPTER Adapter = NdisAdapterHandle;
   /* Slot number is ignored since W2K for all NDIS drivers. */
+  if (!NdisIsPciBusInRange(Adapter->NdisMiniportBlock.BusNumber))
+  {
+      return 0;
+  }
   return HalSetBusDataByOffset(PCIConfiguration,
                                Adapter->NdisMiniportBlock.BusNumber, Adapter->NdisMiniportBlock.SlotNumber,
                                Buffer, Offset, Length);
