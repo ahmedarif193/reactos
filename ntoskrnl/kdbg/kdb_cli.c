@@ -71,6 +71,7 @@ static BOOLEAN KdbpCmdProc(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdMod(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdGdtLdtIdt(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdPcr(ULONG Argc, PCHAR Argv[]);
+static BOOLEAN KdbpCmdPciRange(ULONG Argc, PCHAR Argv[]);
 #ifdef _M_IX86
 static BOOLEAN KdbpCmdTss(ULONG Argc, PCHAR Argv[]);
 #endif
@@ -386,6 +387,7 @@ static const struct
     { "ldt", "ldt", "Display the local descriptor table.", KdbpCmdGdtLdtIdt },
     { "idt", "idt", "Display the interrupt descriptor table.", KdbpCmdGdtLdtIdt },
     { "pcr", "pcr", "Display the processor control region.", KdbpCmdPcr },
+    { "pcirange", "pcirange", "Display the HAL-advertised PCI bus span.", KdbpCmdPciRange },
 #ifdef _M_IX86
     { "tss", "tss [selector|*descaddr]", "Display the current task state segment, or the one specified by its selector number or descriptor address.", KdbpCmdTss },
 #endif
@@ -2463,6 +2465,28 @@ KdbpCmdPcr(
     KdbpPrint("  SecondLevelCacheSize:          0x%lx\n", Pcr->SecondLevelCacheSize);
     KdbpPrint("  KdVersionBlock:                0x%p\n", Pcr->KdVersionBlock);
 #endif
+
+    return TRUE;
+}
+
+static BOOLEAN
+KdbpCmdPciRange(
+    ULONG Argc,
+    PCHAR Argv[])
+{
+    ULONG MinBus, MaxBus;
+
+    UNREFERENCED_PARAMETER(Argc);
+    UNREFERENCED_PARAMETER(Argv);
+
+    if (HalQueryPciBusRange(&MinBus, &MaxBus))
+    {
+        KdbpPrint("HAL PCI bus span : [%lu - %lu]\n", MinBus, MaxBus);
+    }
+    else
+    {
+        KdbpPrint("HAL has not published a PCI bus range (legacy firmware path).\n");
+    }
 
     return TRUE;
 }

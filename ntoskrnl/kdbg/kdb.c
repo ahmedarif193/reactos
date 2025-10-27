@@ -120,11 +120,11 @@ KdbpKdbTrapFrameFromKernelStack(
     PVOID KernelStack,
     PKDB_KTRAP_FRAME KdbTrapFrame)
 {
+    RtlZeroMemory(KdbTrapFrame, sizeof(KDB_KTRAP_FRAME));
+#ifdef _M_IX86
     ULONG_PTR *StackPtr;
 
-    RtlZeroMemory(KdbTrapFrame, sizeof(KDB_KTRAP_FRAME));
-    StackPtr = (ULONG_PTR *) KernelStack;
-#ifdef _M_IX86
+    StackPtr = (ULONG_PTR *)KernelStack;
     KdbTrapFrame->Ebp = StackPtr[3];
     KdbTrapFrame->Edi = StackPtr[4];
     KdbTrapFrame->Esi = StackPtr[5];
@@ -136,6 +136,8 @@ KdbpKdbTrapFrameFromKernelStack(
     KdbTrapFrame->SegDs = KGDT_R0_DATA;
     KdbTrapFrame->SegEs = KGDT_R0_DATA;
     KdbTrapFrame->SegGs = KGDT_R0_DATA;
+#else
+    UNREFERENCED_PARAMETER(KernelStack);
 #endif
 
     /* FIXME: what about the other registers??? */
