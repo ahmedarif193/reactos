@@ -36,6 +36,16 @@ VmIsVbox(VOID)
     Slot.u.bits.DeviceNumber = 4;
     Slot.u.bits.FunctionNumber = 0;
 
+    {
+        ULONG MinBus, MaxBus;
+
+        if (HalQueryPciBusRange(&MinBus, &MaxBus) &&
+            (0 < MinBus || 0 > MaxBus))
+        {
+            return FALSE;
+        }
+    }
+
     BytesRead = HalGetBusDataByOffset(PCIConfiguration,
                                       0,
                                       Slot.u.AsULONG,
