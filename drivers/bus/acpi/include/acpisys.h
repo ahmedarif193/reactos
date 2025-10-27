@@ -33,6 +33,15 @@ typedef struct _COMMON_DEVICE_DATA
     DEVICE_POWER_STATE  DevicePowerState;
 } COMMON_DEVICE_DATA, *PCOMMON_DEVICE_DATA;
 
+typedef struct _ACPI_NOTIFICATION_ENTRY
+{
+    LIST_ENTRY ListEntry;
+    PDEVICE_NOTIFY_CALLBACK Callback;
+    PVOID Context;
+} ACPI_NOTIFICATION_ENTRY, *PACPI_NOTIFICATION_ENTRY;
+
+#define ACPI_NOTIFY_TAG 'nIcA'
+
 typedef struct _PDO_DEVICE_DATA
 {
     COMMON_DEVICE_DATA Common;
@@ -49,6 +58,13 @@ typedef struct _PDO_DEVICE_DATA
     UNICODE_STRING InterfaceName;
     ULONG CachedBusNumber;
     BOOLEAN HasCachedBusNumber;
+    BOOLEAN HasPciRootBusRange;
+    ULONG PciRootMinBus;
+    ULONG PciRootMaxBus;
+    LIST_ENTRY NotificationList;
+    KSPIN_LOCK NotificationLock;
+    ULONG NotificationRegistrationCount;
+    BOOLEAN NotificationHandlersInstalled;
 
 } PDO_DEVICE_DATA, *PPDO_DEVICE_DATA;
 
@@ -156,6 +172,11 @@ NTSTATUS
 Bus_DestroyPdo (
     PDEVICE_OBJECT      Device,
     PPDO_DEVICE_DATA    PdoData
+    );
+
+VOID
+AcpiInterfaceResetNotifications(
+    PPDO_DEVICE_DATA DeviceData
     );
 
 

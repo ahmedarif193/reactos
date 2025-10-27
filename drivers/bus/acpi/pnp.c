@@ -375,6 +375,8 @@ Bus_DestroyPdo (
         PdoData->HardwareIDs = NULL;
     }
 
+    AcpiInterfaceResetNotifications(PdoData);
+
     DPRINT("\tDeleting PDO: 0x%p\n", Device);
     IoDeleteDevice(Device);
     return STATUS_SUCCESS;
