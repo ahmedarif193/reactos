@@ -74,6 +74,17 @@ BOOLEAN
     _Out_opt_ PUCHAR TriggerMode
     );
 
+typedef struct _HAL_ACPI_PCI_ROUTE_ENTRY
+{
+    ULONG Segment;
+    UCHAR Bus;
+    UCHAR Device;
+    UCHAR Pin;
+    ULONG Gsi;
+    UCHAR Polarity;
+    UCHAR TriggerMode;
+} HAL_ACPI_PCI_ROUTE_ENTRY, *PHAL_ACPI_PCI_ROUTE_ENTRY;
+
 NTHALAPI
 VOID
 NTAPI
@@ -86,6 +97,14 @@ VOID
 NTAPI
 HalpRegisterPciRouteQuery(
     _In_opt_ PHAL_ACPI_PCI_ROUTE_QUERY Provider
+    );
+
+NTHALAPI
+VOID
+NTAPI
+HalpSetPciRoutingMap(
+    _In_reads_opt_(EntryCount) const HAL_ACPI_PCI_ROUTE_ENTRY *Entries,
+    _In_ ULONG EntryCount
     );
 
 #ifdef __cplusplus

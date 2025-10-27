@@ -9,9 +9,46 @@
 /* INCLUDES *******************************************************************/
 
 #include <hal.h>
+#include <intrin.h>
 #include <reactos/hal/acpi_pci.h>
 #define NDEBUG
 #include <debug.h>
+
+extern BOOLEAN HalpPciBusRangeKnown;
+extern ULONG HalpMinPciBus, HalpMaxPciBus;
+
+static
+VOID
+HalpTracePciRangeViolation(
+    _In_z_ PCSTR ApiName,
+    _In_ ULONG BusNumber,
+    _In_ PVOID Caller)
+{
+    PVOID ImageBase = NULL;
+    ULONG_PTR ImageOffset = 0;
+
+    if (Caller && RtlPcToFileHeader(Caller, &ImageBase))
+    {
+        ImageOffset = (ULONG_PTR)Caller - (ULONG_PTR)ImageBase;
+        DPRINT1("HAL: %s request for PCI bus %lu outside ACPI range [%lu-%lu] rejected (caller=%p image=%p+0x%Ix).\n",
+                ApiName,
+                BusNumber,
+                HalpMinPciBus,
+                HalpMaxPciBus,
+                Caller,
+                ImageBase,
+                ImageOffset);
+    }
+    else
+    {
+        DPRINT1("HAL: %s request for PCI bus %lu outside ACPI range [%lu-%lu] rejected (caller=%p image=<unknown>).\n",
+                ApiName,
+                BusNumber,
+                HalpMinPciBus,
+                HalpMaxPciBus,
+                Caller);
+    }
+}
 
 CODE_SEG("INIT")
 PBUS_HANDLER
@@ -2156,6 +2193,17 @@ HalGetBusDataByOffset(IN BUS_DATA_TYPE BusDataType,
     ULONG Status;
 
     /* Find the handler */
+    if ((BusDataType == PCIConfiguration) &&
+        HalpPciBusRangeKnown &&
+        (BusNumber < HalpMinPciBus || BusNumber > HalpMaxPciBus))
+    {
+        PVOID Caller = _ReturnAddress();
+        HalpTracePciRangeViolation("HalGetBusDataByOffset",
+                                   BusNumber,
+                                   Caller);
+        return 0;
+    }
+
     Handler = HaliReferenceHandlerForConfigSpace(BusDataType, BusNumber);
     if (!Handler) return 0;
 
@@ -2170,6 +2218,33 @@ HalGetBusDataByOffset(IN BUS_DATA_TYPE BusDataType,
     /* Dereference the handler and return */
     HalDereferenceBusHandler(Handler);
     return Status;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+HalQueryPciBusRange(
+    _Out_opt_ PULONG MinBus,
+    _Out_opt_ PULONG MaxBus)
+{
+    if (!HalpPciBusRangeKnown)
+    {
+        return FALSE;
+    }
+
+    if (MinBus)
+    {
+        *MinBus = HalpMinPciBus;
+    }
+
+    if (MaxBus)
+    {
+        *MaxBus = HalpMaxPciBus;
+    }
+
+    return TRUE;
 }
 
 #ifndef _MINIHAL_
@@ -2255,6 +2330,17 @@ HalSetBusDataByOffset(IN BUS_DATA_TYPE BusDataType,
     ULONG Status;
 
     /* Find the handler */
+    if ((BusDataType == PCIConfiguration) &&
+        HalpPciBusRangeKnown &&
+        (BusNumber < HalpMinPciBus || BusNumber > HalpMaxPciBus))
+    {
+        PVOID Caller = _ReturnAddress();
+        HalpTracePciRangeViolation("HalSetBusDataByOffset",
+                                   BusNumber,
+                                   Caller);
+        return 0;
+    }
+
     Handler = HaliReferenceHandlerForConfigSpace(BusDataType, BusNumber);
     if (!Handler) return 0;
 

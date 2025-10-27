@@ -230,6 +230,33 @@ HalGetBusDataByOffset(IN BUS_DATA_TYPE BusDataType,
 /*
  * @implemented
  */
+BOOLEAN
+NTAPI
+HalQueryPciBusRange(
+    _Out_opt_ PULONG MinBus,
+    _Out_opt_ PULONG MaxBus)
+{
+    if (!HalpPCIConfigInitialized)
+    {
+        return FALSE;
+    }
+
+    if (MinBus)
+    {
+        *MinBus = HalpMinPciBus;
+    }
+
+    if (MaxBus)
+    {
+        *MaxBus = HalpMaxPciBus;
+    }
+
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
 ULONG
 NTAPI
 HalGetInterruptVector(IN INTERFACE_TYPE InterfaceType,

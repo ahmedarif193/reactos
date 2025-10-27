@@ -231,6 +231,13 @@ HalGetBusDataByOffset(
   _In_ ULONG Length);
 
 NTHALAPI
+BOOLEAN
+NTAPI
+HalQueryPciBusRange(
+  _Out_opt_ PULONG MinBus,
+  _Out_opt_ PULONG MaxBus);
+
+NTHALAPI
 ULONG
 NTAPI
 HalSetBusDataByOffset(

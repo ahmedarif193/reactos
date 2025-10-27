@@ -4,6 +4,10 @@
 
 #define PCI_ADDRESS_MEMORY_SPACE            0x00000000
 
+extern BOOLEAN HalpPciBusRangeKnown;
+extern ULONG HalpMinPciBus;
+extern ULONG HalpMaxPciBus;
+
 //
 // Helper Macros
 //
@@ -434,6 +438,22 @@ HalpPciLookupGsiInfo(
     PUCHAR Trigger
 );
 
+typedef struct _HALP_PCI_GSI_DIAG
+{
+    BOOLEAN FromFirmware;
+    USHORT Segment;
+    UCHAR Bus;
+    UCHAR Device;
+    UCHAR Function;
+    UCHAR Pin;
+} HALP_PCI_GSI_DIAG, *PHALP_PCI_GSI_DIAG;
+
+BOOLEAN
+HalpPciDescribeGsi(
+    ULONG Gsi,
+    PHALP_PCI_GSI_DIAG Diag
+    );
+
 VOID
 HalpResetPciBusWindows(
     PBUS_HANDLER BusHandler
@@ -672,6 +692,15 @@ HalpTranslateIsaBusAddress(
     IN PHYSICAL_ADDRESS BusAddress,
     IN OUT PULONG AddressSpace,
     OUT PPHYSICAL_ADDRESS TranslatedAddress
+);
+
+BOOLEAN
+NTAPI
+HalpAddPciMmConfigRange(
+    IN PHYSICAL_ADDRESS Base,
+    IN USHORT Segment,
+    IN ULONG StartBus,
+    IN ULONG EndBus
 );
 
 ULONG

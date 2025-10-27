@@ -24,6 +24,7 @@
 @ stdcall HalGetAdapter(ptr ptr)
 @ stdcall HalGetBusData(long long long ptr long)
 @ stdcall HalGetBusDataByOffset(long long long ptr long long)
+@ stdcall HalQueryPciBusRange(ptr ptr)
 @ stdcall HalGetEnvironmentVariable(str long str)
 @ fastcall -arch=arm HalGetInterruptSource()
 @ stdcall HalGetInterruptVector(long long long long ptr ptr)
@@ -59,6 +60,7 @@
 @ stdcall HalTranslateBusAddress(long long long long ptr ptr)
 @ stdcall HalpConfigurePciRootBridge(ptr)
 @ stdcall HalpRegisterPciRouteQuery(ptr)
+@ stdcall HalpSetPciRoutingMap(ptr long)
 @ stdcall -arch=i386,x86_64 IoAssignDriveLetters(ptr str ptr ptr) HalpAssignDriveLetters
 @ stdcall IoFlushAdapterBuffers(ptr ptr ptr ptr long long)
 @ stdcall IoFreeAdapterChannel(ptr)
