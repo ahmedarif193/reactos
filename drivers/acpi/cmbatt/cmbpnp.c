@@ -188,6 +188,11 @@ CmBattRemoveDevice(IN PDEVICE_OBJECT DeviceObject,
         AcAdapterPdo = NULL;
     }
 
+    if (DeviceExtension->AcpiInterface.InterfaceDereference)
+    {
+        DeviceExtension->AcpiInterface.InterfaceDereference(Context);
+    }
+
     /* Detach and delete */
     IoDetachDevice(DeviceExtension->AttachedDevice);
     IoDeleteDevice(DeviceExtension->DeviceObject);
@@ -701,6 +706,10 @@ CmBattAddBattery(IN PDRIVER_OBJECT DriverObject,
     {
         IoDetachDevice(FdoExtension->AttachedDevice);
         CmBattDestroyFdo(FdoExtension->FdoDeviceObject);
+        if (FdoExtension->AcpiInterface.InterfaceDereference)
+        {
+            FdoExtension->AcpiInterface.InterfaceDereference(FdoExtension->AcpiInterface.Context);
+        }
         if (CmBattDebug & 0xC)
             DbgPrint("CmBattAddBattery: error (0x%x) registering with class\n", Status);
         return Status;
@@ -710,6 +719,10 @@ CmBattAddBattery(IN PDRIVER_OBJECT DriverObject,
     Status = CmBattWmiRegistration(FdoExtension);
     if (!NT_SUCCESS(Status))
     {
+        if (FdoExtension->AcpiInterface.InterfaceDereference)
+        {
+            FdoExtension->AcpiInterface.InterfaceDereference(FdoExtension->AcpiInterface.Context);
+        }
         if (CmBattDebug & 0xC)
             DbgPrint("CmBattAddBattery: Could not register as a WMI provider, status = %Lx\n", Status);
         return Status;
@@ -725,6 +738,10 @@ CmBattAddBattery(IN PDRIVER_OBJECT DriverObject,
         BatteryClassUnload(FdoExtension->ClassData);
         IoDetachDevice(FdoExtension->AttachedDevice);
         CmBattDestroyFdo(FdoExtension->FdoDeviceObject);
+        if (FdoExtension->AcpiInterface.InterfaceDereference)
+        {
+            FdoExtension->AcpiInterface.InterfaceDereference(FdoExtension->AcpiInterface.Context);
+        }
         if (CmBattDebug & 0xC)
             DbgPrint("CmBattAddBattery: Could not register for battery notify, status = %Lx\n", Status);
     }
@@ -788,6 +805,10 @@ CmBattAddAcAdapter(IN PDRIVER_OBJECT DriverObject,
                                                                            DeviceExtension);
     if (!(NT_SUCCESS(Status)) && (CmBattDebug & 0xC))
         DbgPrint("CmBattAddAcAdapter: Could not register for power notify, status = %Lx\n", Status);
+    if (!NT_SUCCESS(Status) && DeviceExtension->AcpiInterface.InterfaceDereference)
+    {
+        DeviceExtension->AcpiInterface.InterfaceDereference(DeviceExtension->AcpiInterface.Context);
+    }
 
     /* Send the first manual notification */
     CmBattNotifyHandler(DeviceExtension, ACPI_BATT_NOTIFY_STATUS);

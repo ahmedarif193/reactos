@@ -308,9 +308,15 @@ CompBattPnpEventHandler(
     }
     else if (IsEqualGUIDAligned(&Notification->Event, &GUID_DEVICE_INTERFACE_REMOVAL))
     {
-        /* Don't do anything */
+        /* Remove the departing battery */
         if (CompBattDebug & COMPBATT_DEBUG_WARN)
             DbgPrint("CompBatt: Received notification of battery removal\n");
+
+        if (Notification->SymbolicLinkName != NULL)
+        {
+            CompBattRemoveBattery((PUNICODE_STRING)Notification->SymbolicLinkName,
+                                  DeviceExtension);
+        }
     }
     else
     {
@@ -427,19 +433,25 @@ CompBattPnpDispatch(
         case IRP_MN_START_DEVICE:
 
             /* Device is starting, register for new batteries and pick up current ones */
+            DeviceExtension->NotificationEntry = NULL;
             Status = IoRegisterPlugPlayNotification(EventCategoryDeviceInterfaceChange,
-                                                    0,
-                                                    (PVOID)&GUID_DEVICE_BATTERY,
-                                                    DeviceObject->DriverObject,
-                                                    (PDRIVER_NOTIFICATION_CALLBACK_ROUTINE)CompBattPnpEventHandler,
-                                                    DeviceExtension,
-                                                    &DeviceExtension->NotificationEntry);
+                                                     0,
+                                                     (PVOID)&GUID_DEVICE_BATTERY,
+                                                     DeviceObject->DriverObject,
+                                                     (PDRIVER_NOTIFICATION_CALLBACK_ROUTINE)CompBattPnpEventHandler,
+                                                     DeviceExtension,
+                                                     &DeviceExtension->NotificationEntry);
             if (NT_SUCCESS(Status))
             {
                 /* Now go get the batteries */
                 if (CompBattDebug & COMPBATT_DEBUG_WARN)
                     DbgPrint("CompBatt: Successfully registered for PnP notification\n");
                 Status = CompBattGetBatteries(DeviceExtension);
+                if (!NT_SUCCESS(Status) && DeviceExtension->NotificationEntry)
+                {
+                    IoUnregisterPlugPlayNotification(DeviceExtension->NotificationEntry);
+                    DeviceExtension->NotificationEntry = NULL;
+                }
             }
             else
             {
@@ -460,6 +472,45 @@ CompBattPnpDispatch(
             /* Explicitly say ok */
             Status = STATUS_SUCCESS;
             break;
+
+        case IRP_MN_REMOVE_DEVICE:
+        {
+            UNICODE_STRING SymbolicLinkName;
+
+            if (CompBattDebug & COMPBATT_DEBUG_WARN)
+                DbgPrint("CompBatt: Processing REMOVE_DEVICE\n");
+
+            if (DeviceExtension->NotificationEntry)
+            {
+                IoUnregisterPlugPlayNotification(DeviceExtension->NotificationEntry);
+                DeviceExtension->NotificationEntry = NULL;
+            }
+
+            while (!IsListEmpty(&DeviceExtension->BatteryList))
+            {
+                PLIST_ENTRY Entry = DeviceExtension->BatteryList.Flink;
+                PCOMPBATT_BATTERY_DATA BatteryData =
+                    CONTAINING_RECORD(Entry, COMPBATT_BATTERY_DATA, BatteryLink);
+                CompBattRemoveBattery(&BatteryData->BatteryName, DeviceExtension);
+            }
+
+            if (DeviceExtension->ClassData)
+            {
+                BatteryClassUnload(DeviceExtension->ClassData);
+                DeviceExtension->ClassData = NULL;
+            }
+
+            RtlInitUnicodeString(&SymbolicLinkName, L"\\DosDevices\\CompositeBattery");
+            IoDeleteSymbolicLink(&SymbolicLinkName);
+
+            IoSkipCurrentIrpStackLocation(Irp);
+            Status = IoCallDriver(DeviceExtension->AttachedDevice, Irp);
+
+            IoDetachDevice(DeviceExtension->AttachedDevice);
+            DeviceExtension->AttachedDevice = NULL;
+            IoDeleteDevice(DeviceObject);
+            return Status;
+        }
 
         case IRP_MN_SURPRISE_REMOVAL:
 

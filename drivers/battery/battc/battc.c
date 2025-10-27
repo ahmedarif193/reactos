@@ -210,6 +210,7 @@ BatteryClassIoctl(PVOID ClassData,
     LARGE_INTEGER Timeout;
     PBATTERY_STATUS BattStatus;
     BATTERY_NOTIFY BattNotify;
+    BOOLEAN NotificationsEnabled;
     ULONG ReturnedLength;
 
     DPRINT("BatteryClassIoctl(%p %p)\n", ClassData, Irp);
@@ -283,6 +284,8 @@ BatteryClassIoctl(PVOID ClassData,
 
             BattWait = *(PBATTERY_WAIT_STATUS)Irp->AssociatedIrp.SystemBuffer;
 
+            NotificationsEnabled = FALSE;
+
             if (BattWait.Timeout != 0)
             {
                 BattNotify.PowerState = BattWait.PowerState;
@@ -292,10 +295,20 @@ BatteryClassIoctl(PVOID ClassData,
                 Status = BattClass->MiniportInfo.SetStatusNotify(BattClass->MiniportInfo.Context,
                                                                  BattWait.BatteryTag,
                                                                  &BattNotify);
-                if (!NT_SUCCESS(Status))
+                if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
+                {
+                    DPRINT("SetStatusNotify not supported by miniport (0x%x); falling back to immediate query\n",
+                           Status);
+                    Status = STATUS_SUCCESS;
+                }
+                else if (!NT_SUCCESS(Status))
                 {
                     DPRINT1("SetStatusNotify failed (0x%x)\n", Status);
                     break;
+                }
+                else
+                {
+                    NotificationsEnabled = TRUE;
                 }
 
                 ExAcquireFastMutex(&BattClass->Mutex);
@@ -317,8 +330,11 @@ BatteryClassIoctl(PVOID ClassData,
                 BattClass->Waiting = FALSE;
                 ExReleaseFastMutex(&BattClass->Mutex);
 
-                Status = BattClass->MiniportInfo.DisableStatusNotify(BattClass->MiniportInfo.Context);
-                UNREFERENCED_PARAMETER(Status);
+                if (NotificationsEnabled)
+                {
+                    Status = BattClass->MiniportInfo.DisableStatusNotify(BattClass->MiniportInfo.Context);
+                    UNREFERENCED_PARAMETER(Status);
+                }
             }
 
             /* Zero the output buffer to prevent leakage of kernel data */
