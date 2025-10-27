@@ -68,6 +68,236 @@ HalpAcpiRecordEcamEvent(
     return PreviousFlags;
 }
 
+static
+BOOLEAN
+HalpPciVendorIdLooksSane(
+    _In_ ULONG VendorDword,
+    _In_ USHORT VendorWord)
+{
+    USHORT Candidate;
+
+    Candidate = (USHORT)(VendorDword & 0xFFFF);
+    if ((VendorWord != 0) && (VendorWord != PCI_INVALID_VENDORID))
+    {
+        Candidate = VendorWord;
+    }
+
+    if ((Candidate == 0) || (Candidate == PCI_INVALID_VENDORID))
+    {
+        return FALSE;
+    }
+
+    if ((Candidate & 0xFF00) == 0xFF00)
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static const CHAR HalpAcpiVBoxOemId[6] = {'V','B','O','X',' ',' '};
+static const CHAR HalpAcpiVBoxMcfgId[8] = {'V','B','O','X','M','C','F','G'};
+
+static
+BOOLEAN
+HalpAcpiIsVirtualBoxMcfg(
+    _In_ PHALP_ACPI_MCFG Mcfg,
+    _In_ ULONG EntryCount)
+{
+    const HALP_ACPI_MCFG_ALLOCATION *Allocation;
+
+    if (!Mcfg)
+    {
+        return FALSE;
+    }
+
+    if (RtlCompareMemory(Mcfg->Header.OEMID,
+                         HalpAcpiVBoxOemId,
+                         sizeof(HalpAcpiVBoxOemId)) != sizeof(HalpAcpiVBoxOemId))
+    {
+        return FALSE;
+    }
+
+    if (RtlCompareMemory(Mcfg->Header.OEMTableID,
+                         HalpAcpiVBoxMcfgId,
+                         sizeof(HalpAcpiVBoxMcfgId)) != sizeof(HalpAcpiVBoxMcfgId))
+    {
+        return FALSE;
+    }
+
+    if (EntryCount == 0)
+    {
+        return TRUE;
+    }
+
+    Allocation = (const HALP_ACPI_MCFG_ALLOCATION *)((const PUCHAR)Mcfg + sizeof(*Mcfg));
+
+    if ((Allocation->BaseAddress == 0x00000000DC000000ULL) &&
+        (Allocation->StartBusNumber == 0x00) &&
+        (Allocation->EndBusNumber == 0x3F))
+    {
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+CODE_SEG("INIT")
+static
+BOOLEAN
+HalpAcpiForceVirtualBoxPciExpress(
+    _In_ ULONGLONG BaseAddress,
+    _In_ ULONGLONG Length,
+    _Out_opt_ PULONG LegacyVendorValue,
+    _Out_opt_ PULONG MmconfigVendorValue)
+{
+    ULONGLONG LengthBits;
+    ULONGLONG Value;
+    ULONG Address;
+    ULONG LowValue;
+    ULONG HighValue;
+    ULONG OldLowValue;
+    ULONG NewLowValue;
+    ULONG OldHighValue;
+    ULONG NewHighValue;
+    ULONG AddressRegisterAfterLow;
+    ULONG AddressRegisterAfterHigh;
+    USHORT OldCommand;
+    USHORT Command;
+    USHORT NewCommand;
+    BOOLEAN Success;
+
+    if (Length >= (256ULL << 20))
+    {
+        LengthBits = 0ULL << 1; /* 256 MB window */
+        Length = 256ULL << 20;
+    }
+    else if (Length >= (128ULL << 20))
+    {
+        LengthBits = 0x1ULL << 1; /* 128 MB window */
+        Length = 128ULL << 20;
+    }
+    else
+    {
+        LengthBits = 0x2ULL << 1; /* 64 MB window */
+        Length = 64ULL << 20;
+    }
+
+    BaseAddress &= ~(Length - 1);
+
+    Value = BaseAddress | LengthBits | 0x1ULL;
+    LowValue = (ULONG)Value;
+    HighValue = (ULONG)(Value >> 32);
+
+    Address = 0x80000000;
+    Address |= (0 << 16); /* Bus 0 */
+    Address |= (0 << 11); /* Device 0 */
+    Address |= (0 << 8);  /* Function 0 */
+    Address |= 0x60;      /* PCIEXBAR low dword */
+
+    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address);
+    OldLowValue = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC);
+    if (OldLowValue != LowValue)
+    {
+        WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address);
+        WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC, LowValue);
+    }
+    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address);
+    NewLowValue = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC);
+    AddressRegisterAfterLow = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8);
+
+    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address + 4);
+    OldHighValue = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC);
+    if (OldHighValue != HighValue)
+    {
+        WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address + 4);
+        WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC, HighValue);
+    }
+    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address + 4);
+    NewHighValue = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC);
+    AddressRegisterAfterHigh = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8);
+
+    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, 0);
+
+    Success = (NewLowValue != 0xFFFFFFFF) && (NewHighValue != 0xFFFFFFFF);
+
+    {
+        ULONG LegacyVendor;
+        ULONG LegacyAddress;
+        volatile ULONG *EcamPtr;
+        ULONG MmconfigVendor;
+        PHYSICAL_ADDRESS MmconfigAddress;
+
+        LegacyAddress = 0x80000000;
+        LegacyAddress |= (0 << 16); /* Bus 0 */
+        LegacyAddress |= (0 << 11); /* Device 0 */
+        LegacyAddress |= (0 << 8);  /* Function 0 */
+        LegacyAddress |= 0;         /* Vendor/Device */
+
+        WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, LegacyAddress);
+        LegacyVendor = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC);
+        WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, 0);
+
+        MmconfigVendor = 0xFFFFFFFF;
+        MmconfigAddress.QuadPart = BaseAddress;
+        EcamPtr = (volatile ULONG *)HalpMapPhysicalMemory64(MmconfigAddress, 1);
+        if (EcamPtr)
+        {
+            MmconfigVendor = READ_REGISTER_ULONG((volatile ULONG *)EcamPtr);
+            HalpUnmapVirtualAddress((PVOID)EcamPtr, 1);
+        }
+
+        DPRINT1("HAL: After forcing PCIEXBAR, legacy vendor read 0x%08lx, ECAM vendor 0x%08lx\n",
+                LegacyVendor,
+                MmconfigVendor);
+
+        if (LegacyVendorValue)
+        {
+            *LegacyVendorValue = LegacyVendor;
+        }
+
+        if (MmconfigVendorValue)
+        {
+            *MmconfigVendorValue = MmconfigVendor;
+        }
+    }
+
+    Address = 0x80000000;
+    Address |= (0 << 16);
+    Address |= (0 << 11);
+    Address |= (0 << 8);
+    Address |= FIELD_OFFSET(PCI_COMMON_HEADER, Command);
+
+    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address);
+    OldCommand = READ_PORT_USHORT((PUSHORT)(ULONG_PTR)0xCFC);
+    Command = OldCommand | PCI_ENABLE_IO_SPACE | PCI_ENABLE_MEMORY_SPACE | PCI_ENABLE_BUS_MASTER;
+    if (Command != OldCommand)
+    {
+        WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address);
+        WRITE_PORT_USHORT((PUSHORT)(ULONG_PTR)0xCFC, Command);
+    }
+
+    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address);
+    NewCommand = READ_PORT_USHORT((PUSHORT)(ULONG_PTR)0xCFC);
+
+    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, 0);
+
+    DPRINT1("HAL: Forced VirtualBox PCIEXBAR to base %I64x length %I64x (low 0x%08lx->0x%08lx, high 0x%08lx->0x%08lx, cmd 0x%04x->0x%04x->0x%04x, addr=0x%08lx/0x%08lx)\n",
+            BaseAddress,
+            Length,
+            OldLowValue,
+            NewLowValue,
+            OldHighValue,
+            NewHighValue,
+            OldCommand,
+            Command,
+            NewCommand,
+            AddressRegisterAfterLow,
+            AddressRegisterAfterHigh);
+
+    return Success;
+}
+
 #define HALP_ACPI_OVERRIDE_ALIGNMENT   8
 #define ACPI_GAS_SYSTEM_MEMORY         0
 #define ACPI_GAS_SYSTEM_IO             1
@@ -1656,7 +1886,6 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             ULONG EntryBytes;
             ULONG EntryCount;
             ULONG Remainder;
-
             if (Mcfg->Header.Length < sizeof(*Mcfg))
             {
                 DPRINT1("HAL: ACPI MCFG length %lu is smaller than header\n",
@@ -1673,6 +1902,101 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                     DPRINT1("HAL: ACPI MCFG length %lu leaves %lu leftover bytes\n",
                             Mcfg->Header.Length,
                             Remainder);
+                }
+
+                if (HalpAcpiIsVirtualBoxMcfg(Mcfg, EntryCount))
+                {
+                    const HALP_ACPI_MCFG_ALLOCATION *FirstAllocation;
+                    ULONGLONG BusCount;
+                    ULONGLONG WindowLength;
+                    ULONG VendorEcam = 0xFFFFFFFF;
+                    BOOLEAN Programmed;
+                    BOOLEAN MmconfigValid;
+
+                    HalpAcpiRecordEcamEvent(
+                        HALP_ACPI_ECAM_COVERAGE_USED,
+                        "HAL: VirtualBox firmware advertises PCI Express MMCONFIG; attempting to keep ECAM online.");
+
+                    /* Leave legacy configuration mechanism 1 enabled */
+                    {
+                        UCHAR LegacyEnable;
+
+                        LegacyEnable = READ_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB);
+                        LegacyEnable |= 0x01;
+                        WRITE_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB, LegacyEnable);
+                        LegacyEnable = READ_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB);
+                        DPRINT1("HAL: Legacy PCI enable port now 0x%02x\n", LegacyEnable);
+                    }
+
+                    FirstAllocation = (const HALP_ACPI_MCFG_ALLOCATION *)((const PUCHAR)Mcfg + sizeof(*Mcfg));
+                    BusCount = (ULONGLONG)(FirstAllocation->EndBusNumber - FirstAllocation->StartBusNumber + 1);
+                    WindowLength = BusCount << 20;
+
+                    Programmed = HalpAcpiForceVirtualBoxPciExpress(FirstAllocation->BaseAddress,
+                                                                   WindowLength,
+                                                                   NULL,
+                                                                   &VendorEcam);
+                    MmconfigValid = HalpPciVendorIdLooksSane(VendorEcam, (USHORT)(VendorEcam & 0xFFFF));
+
+                    if (Programmed && !MmconfigValid)
+                    {
+                        PHYSICAL_ADDRESS TestAddress;
+                        PVOID Mapping;
+
+                        TestAddress.QuadPart = FirstAllocation->BaseAddress;
+                        Mapping = HalpMapPhysicalMemory64(TestAddress, 1);
+                        if (Mapping)
+                        {
+                            VendorEcam = READ_REGISTER_ULONG((volatile ULONG*)Mapping);
+                            HalpUnmapVirtualAddress(Mapping, 1);
+                            MmconfigValid = HalpPciVendorIdLooksSane(VendorEcam, (USHORT)(VendorEcam & 0xFFFF));
+                        }
+                    }
+
+                    if (Programmed && !MmconfigValid)
+                    {
+                        ULONGLONG AltBase = 0x00000000E0000000ULL; /* Common Q35 default */
+                        ULONG AltVendor = 0xFFFFFFFF;
+
+                        DPRINT1("HAL: VBox MMCONFIG vendor at %I64x read 0x%08lx; trying alt base %I64x\n",
+                                FirstAllocation->BaseAddress,
+                                VendorEcam,
+                                AltBase);
+
+                        Programmed = HalpAcpiForceVirtualBoxPciExpress(AltBase,
+                                                                       WindowLength,
+                                                                       NULL,
+                                                                       &AltVendor);
+
+                        if (Programmed &&
+                            HalpPciVendorIdLooksSane(AltVendor, (USHORT)(AltVendor & 0xFFFF)))
+                        {
+                            DPRINT1("HAL: VBox MMCONFIG works at alt base %I64x (vendor 0x%08lx); overriding MCFG base.\n",
+                                    AltBase,
+                                    AltVendor);
+                            ((PHALP_ACPI_MCFG_ALLOCATION)FirstAllocation)->BaseAddress = AltBase;
+                            VendorEcam = AltVendor;
+                            MmconfigValid = TRUE;
+                        }
+                        else
+                        {
+                            DPRINT1("HAL: VBox alt base %I64x still invalid (vendor 0x%08lx).\n",
+                                    AltBase,
+                                    AltVendor);
+                            MmconfigValid = FALSE;
+                        }
+                    }
+
+                    if (!Programmed || !MmconfigValid)
+                    {
+                        if (!HalpAcpiEcamDisabled)
+                        {
+                            HalpAcpiEcamDisabled = TRUE;
+                            HalpAcpiRecordEcamEvent(
+                                HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY,
+                                "HAL: VirtualBox firmware does not decode PCI Express MMCONFIG; forcing legacy configuration space access.");
+                        }
+                    }
                 }
 
                 if (EntryCount != 0)
@@ -1705,6 +2029,7 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
+    /* Ensure legacy PCI handlers are ready when MMCONFIG is unavailable */
     /* Initialize NUMA through the SRAT */
     HalpNumaInitializeStaticConfiguration(LoaderBlock);
 
@@ -2061,27 +2386,16 @@ HalpAcpiAccessConfigEcam(
 
     if (ForceLegacy)
     {
-        LONG PreviousFlags;
-        BOOLEAN FirstVendorFailure;
-
-        PreviousFlags = HalpAcpiRecordEcamEvent(
+        HalpAcpiRecordEcamEvent(
             HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES,
             NULL);
-        FirstVendorFailure = !(PreviousFlags & HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES);
 
-        if (Segment != HALP_ACPI_SEGMENT_ANY)
+        if (!HalpAcpiEcamDisabled)
         {
-            if (!HalpAcpiEcamDisabled)
-            {
-                HalpAcpiEcamDisabled = TRUE;
-                HalpAcpiRecordEcamEvent(
-                    HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL,
-                    "HAL: MMCONFIG read of 00:00.0 vendor returned 0xFFFF; disabling ECAM access.");
-            }
-        }
-        else if (FirstVendorFailure)
-        {
-            DPRINT1("HAL: MMCONFIG read of 00:00.0 vendor returned 0xFFFF during bootstrap; deferring ECAM disable.\n");
+            HalpAcpiEcamDisabled = TRUE;
+            HalpAcpiRecordEcamEvent(
+                HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL,
+                "HAL: MMCONFIG read of 00:00.0 vendor returned 0xFFFF; disabling ECAM access.");
         }
 
         return FALSE;
@@ -2472,9 +2786,16 @@ HalpAcpiEnumeratePciBusDebug(VOID)
     PCI_SLOT_NUMBER PciSlot;
     ULONG BusNumber, DeviceNumber, FunctionNumber;
     ULONG VendorId;
+    USHORT VendorWord;
+    LONG EcamFlags;
+    BOOLEAN ForcedLegacy;
 
+    /* Make sure legacy handlers exist if ECAM access is disabled */
     /* Setup the PCI stub support */
     HalpInitializePciStubs();
+
+    /* Force legacy PCI configuration mechanism 1 to be enabled */
+    WRITE_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB, 0x01);
 
     /* Set the NMI crash flag */
     HalpGetNMICrashFlag();
@@ -2482,27 +2803,59 @@ HalpAcpiEnumeratePciBusDebug(VOID)
     /* Print PCI bus enumeration header */
     DbgPrint("\n====== PCI BUS HARDWARE DETECTION (ACPI HAL) =======\n\n");
 
+    EcamFlags = HalpAcpiEcamCoverageFlags;
+    ForcedLegacy = (EcamFlags & HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY) != 0;
+
     /* Enumerate all PCI buses */
     for (BusNumber = 0; BusNumber < 256; BusNumber++)
     {
-        /* Try to read from bus - if it fails, no more buses */
+        BOOLEAN BusHadAnyDevice = FALSE;
+
+        /* Try to read from bus - if it fails, still try all slots for bus 0 */
         PciSlot.u.AsULONG = 0;
+        VendorId = 0xFFFFFFFF;
+        VendorWord = 0xFFFF;
         HalpPhase0GetPciDataByOffset(BusNumber,
                                      PciSlot,
                                      &VendorId,
                                      0,
                                      sizeof(VendorId));
 
-        /* Check if this bus exists */
-        if (VendorId == 0xFFFFFFFF || VendorId == 0)
+        if (!HalpPciVendorIdLooksSane(VendorId, (USHORT)(VendorId & 0xFFFF)))
         {
-            /* No device on slot 0, likely no bus */
-            if (BusNumber == 0)
+            HalpPhase0GetPciDataByOffset(BusNumber,
+                                         PciSlot,
+                                         &VendorWord,
+                                         0,
+                                         sizeof(VendorWord));
+
+            if (HalpPciVendorIdLooksSane(0xFFFFFFFF, VendorWord))
             {
-                /* Bus 0 must exist */
-                DbgPrint("ERROR: Cannot detect PCI Bus 0!\n");
+                VendorId = VendorWord;
             }
-            break;
+        }
+
+        if (!HalpPciVendorIdLooksSane(VendorId, (USHORT)VendorId))
+        {
+            if ((BusNumber == 0) && ForcedLegacy)
+            {
+                DPRINT("HAL: Bus 0 vendor probe returned 0x%08lx/0x%04x after firmware-forced legacy mode; continuing scan.\n",
+                       VendorId,
+                       VendorWord);
+            }
+            else
+            {
+                DPRINT1("HAL: Legacy config probe failed for bus %u (DWORD vendor=0x%08lx, WORD vendor=0x%04x)\n",
+                        BusNumber,
+                        VendorId,
+                        VendorWord);
+            }
+            /* If not bus 0, assume no more buses and stop */
+            if (BusNumber != 0)
+            {
+                break;
+            }
+            /* For bus 0, continue scanning all devices/functions to see if anyone responds */
         }
 
         /* Enumerate all devices on this bus */
@@ -2517,6 +2870,8 @@ HalpAcpiEnumeratePciBusDebug(VOID)
                 PciSlot.u.bits.FunctionNumber = FunctionNumber;
 
                 /* Read the vendor ID */
+                VendorId = 0xFFFFFFFF;
+                VendorWord = 0xFFFF;
                 HalpPhase0GetPciDataByOffset(BusNumber,
                                              PciSlot,
                                              &VendorId,
@@ -2524,9 +2879,30 @@ HalpAcpiEnumeratePciBusDebug(VOID)
                                              sizeof(VendorId));
 
                 /* Check if device exists */
-                if (VendorId == 0xFFFFFFFF || VendorId == 0)
-                    continue;
+                if (!HalpPciVendorIdLooksSane(VendorId, (USHORT)(VendorId & 0xFFFF)))
+                {
+                    HalpPhase0GetPciDataByOffset(BusNumber,
+                                                 PciSlot,
+                                                 &VendorWord,
+                                                 0,
+                                                 sizeof(VendorWord));
+                    if (!HalpPciVendorIdLooksSane(0xFFFFFFFF, VendorWord))
+                    {
+                        continue;
+                    }
 
+                    VendorId = VendorWord;
+                    DPRINT1("HAL: Legacy config probe resolved via WORD read for %02u:%02u.%u (vendor=0x%04x)\n",
+                            BusNumber,
+                            DeviceNumber,
+                            FunctionNumber,
+                            VendorWord);
+                }
+                else
+                {
+                    /* Any valid response means the bus decodes */
+                }
+                BusHadAnyDevice = TRUE;
                 /* Read full configuration */
                 HalpPhase0GetPciDataByOffset(BusNumber,
                                              PciSlot,
@@ -2544,6 +2920,11 @@ HalpAcpiEnumeratePciBusDebug(VOID)
                     break;
                 }
             }
+        }
+
+        if ((BusNumber == 0) && !BusHadAnyDevice)
+        {
+            DbgPrint("ERROR: Cannot detect PCI Bus 0!\n");
         }
     }
 
