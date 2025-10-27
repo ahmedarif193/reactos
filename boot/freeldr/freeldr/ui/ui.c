@@ -450,6 +450,12 @@ UiSetProgressBarSubset(
     UiProgressBar.State.Bias = Ceiling - Floor;
 }
 
+BOOLEAN
+UiIsProgressBarVisible(VOID)
+{
+    return UiProgressBar.Show;
+}
+
 VOID
 UiUpdateProgressBar(
     _In_ ULONG Percentage,

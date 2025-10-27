@@ -162,6 +162,9 @@ UiSetProgressBarSubset(
     _In_ ULONG Floor,
     _In_ ULONG Ceiling);
 
+BOOLEAN
+UiIsProgressBarVisible(VOID);
+
 /* Update the loading progress percentage within a selected range */
 VOID
 UiUpdateProgressBar(

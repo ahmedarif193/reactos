@@ -504,6 +504,21 @@ IsoEnsureScratchBuffer(
 
 static
 VOID
+IsoProgressDisplay(
+    _Inout_ PISO_COPY_CONTEXT Context,
+    _In_ ULONG Percent)
+{
+    if (!Context)
+        return;
+
+    if (UiIsProgressBarVisible())
+        UiUpdateProgressBar(Percent, Context->ProgressMessage);
+    else
+        UiDrawStatusText(Context->ProgressMessage);
+}
+
+static
+VOID
 IsoProgressInitialize(
     _Inout_ PISO_COPY_CONTEXT Context)
 {
@@ -528,7 +543,7 @@ IsoProgressInitialize(
     RtlStringCbPrintfA(Context->ProgressMessage,
                        sizeof(Context->ProgressMessage),
                        "Copying files...");
-    UiUpdateProgressBar(0, Context->ProgressMessage);
+    IsoProgressDisplay(Context, 0);
 }
 
 static
@@ -688,7 +703,7 @@ IsoProgressAdvance(
                                EstimatedSeconds);
         }
 
-        UiUpdateProgressBar(Percent, Context->ProgressMessage);
+        IsoProgressDisplay(Context, Percent);
         TRACE("IsoProgress: %s\n", Context->ProgressMessage);
         Context->LastPercentShown = Percent;
         Context->LastProgressUpdate = CurrentTime;
@@ -729,7 +744,7 @@ IsoProgressComplete(
     RtlStringCbPrintfA(Context->ProgressMessage,
                        sizeof(Context->ProgressMessage),
                        "Copy complete");
-    UiUpdateProgressBar(100, Context->ProgressMessage);
+    IsoProgressDisplay(Context, 100);
 }
 
 static

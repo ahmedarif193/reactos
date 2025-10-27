@@ -87,6 +87,7 @@
 @ cdecl UiInitialize()
 @ cdecl UiMessageBox()
 @ cdecl UiMessageBoxCritical()
+@ cdecl UiIsProgressBarVisible()
 @ cdecl UiResetForSOS()
 @ cdecl UiSetProgressBarSubset()
 @ cdecl UiSetProgressBarText()
