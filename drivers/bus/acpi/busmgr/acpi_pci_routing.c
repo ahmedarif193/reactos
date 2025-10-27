@@ -21,6 +21,11 @@ typedef struct _PRT_MAP_ENTRY
     UCHAR Trigger;  /* HAL_ACPI_TRIGGER_* */
 } PRT_MAP_ENTRY, *PPRT_MAP_ENTRY;
 
+C_ASSERT(sizeof(PRT_MAP_ENTRY) == sizeof(HAL_ACPI_PCI_ROUTE_ENTRY));
+C_ASSERT(FIELD_OFFSET(PRT_MAP_ENTRY, Gsi) == FIELD_OFFSET(HAL_ACPI_PCI_ROUTE_ENTRY, Gsi));
+C_ASSERT(FIELD_OFFSET(PRT_MAP_ENTRY, Polarity) == FIELD_OFFSET(HAL_ACPI_PCI_ROUTE_ENTRY, Polarity));
+C_ASSERT(FIELD_OFFSET(PRT_MAP_ENTRY, Trigger) == FIELD_OFFSET(HAL_ACPI_PCI_ROUTE_ENTRY, TriggerMode));
+
 static PPRT_MAP_ENTRY PrtCache;
 static ULONG PrtCacheCount;
 static ULONG PrtCacheCapacity;
@@ -360,11 +365,14 @@ acpi_pci_link_init(VOID)
     if (PrtCacheCount)
     {
         HalpRegisterPciRouteQuery(HalPciRouteProvider);
+        HalpSetPciRoutingMap((const HAL_ACPI_PCI_ROUTE_ENTRY *)PrtCache,
+                             PrtCacheCount);
         DPRINT1("ACPI: Registered PCI routing provider with %lu entries\n", PrtCacheCount);
     }
     else
     {
         HalpRegisterPciRouteQuery(NULL);
+        HalpSetPciRoutingMap(NULL, 0);
         DPRINT1("ACPI: No PCI routing entries discovered\n");
     }
 

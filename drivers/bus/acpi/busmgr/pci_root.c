@@ -571,6 +571,25 @@ AcpiPciRootEnumerateCallback(
         RootInfo.Bus = (ULONG)BusValue;
 
         AcpiPciRootExtractResources(Handle, &RootInfo);
+
+        if (!RootInfo.BusRangePresent)
+        {
+            ULONG ClampedBus = (RootInfo.Bus <= 0xFF) ? RootInfo.Bus : 0xFF;
+
+            RootInfo.BusRangePresent = TRUE;
+            RootInfo.BusStart = ClampedBus;
+            RootInfo.BusEnd = ClampedBus;
+        }
+        else
+        {
+            if (RootInfo.BusStart > 0xFF)
+                RootInfo.BusStart = 0xFF;
+            if (RootInfo.BusEnd > 0xFF)
+                RootInfo.BusEnd = 0xFF;
+            if (RootInfo.BusEnd < RootInfo.BusStart)
+                RootInfo.BusEnd = RootInfo.BusStart;
+        }
+
         AcpiPciRootEvaluateOsc(Handle, &RootInfo);
 
         DPRINT1("ACPI: PCI Root %lu: HID=%s UID=%s SEG=%lu BUS=%lu\n",
