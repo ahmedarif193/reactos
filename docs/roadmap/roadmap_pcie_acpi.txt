@@ -18,29 +18,102 @@ Step 1 – Baseline & Tracing (In Progress)
     - 2025-10-23: Added KD tracing in hal/arch/i386/acpi/busemul.c, drivers/bus/acpi/buspdo.c, and drivers/bus/acpi/acpienum.c to log PCI root enumeration behaviour.
     - 2025-10-23: VBox ICH9 boot shows ACPI root HID=PNP0A03 (no CID exposing PNP0A08) with bus range collapsed to 0..0; HAL scans buses but never discovers PCI bus 0, confirming need for explicit PCIe root hook-up.
 
-Step 2 – HAL Root-Bus Support (Pending)
+Step 2 – HAL Root-Bus Support (In Progress – Highest Priority)
   * Teach hal/halx86/acpi/pcibus.c to recognise PNP0A08 and surface PCIe config callbacks.
   * Discover and map MCFG tables for MMCONFIG access.
   Notes:
     - 2025-10-23: Initial mmconfig plumbing added in HAL (MCFG parsing, MMIO config handler scaffold).
     - 2025-10-23: ACPI enumerator copies _CID entries (and injects PNP0A08 when MCFG is present) so PCI roots surface PCIe compatibility IDs.
+    - 2025-10-24: Boot logs still show "ERROR: Cannot detect PCI Bus 0"; phase-0 PCI config still falls back to legacy I/O. Blocking issue – complete MMCONFIG reads before returning to AHCI.
+    - 2025-10-25: Added MMCONFIG sanity checks in HalpPhase0GetPciDataByOffset so invalid reads fall back to legacy Type-1 config, restoring PCI bus 0 detection on ACPI HAL. Dropped local NDEBUG guards so new diagnostics reach the log.
+    - 2025-10-26: HAL now records MCFG MMCONFIG ranges and routes phase-0 config reads through MMIO when available, mapping pages on demand and falling back to legacy Type-1 when MMCONFIG returns an invalid vendor ID.
+    - 2025-10-27: `HalGetBusDataByOffset` now reports the caller when rejecting out-of-range PCI probes so we can track legacy paths that ignore the firmware-advertised bus span.
+    - 2025-10-27: Introduced `HalQueryPciBusRange` so drivers can discover the firmware-advertised bus span without tripping the legacy config guardrails.
+    - 2025-10-28: Bus-range guard now resolves the offending module base/offset when it rejects a PCI probe, tightening forensic breadcrumbs.
+    - 2025-10-28: `HalSetBusDataByOffset` enforces the same clamp, preventing stray config writes beyond the firmware-advertised window.
+    - 2025-10-28: KDBG exposes a `pcirange` command so testers can query the live HAL span without leaving the debugger.
+    - 2025-10-28: Kd64 PCI read/write commands now honor the HAL clamp, preventing debugger-driven probes outside the firmware span.
 
-Step 3 – ACPI Bus Driver Updates (Pending)
-  * Update drivers/bus/acpi to enumerate PCI root PDOs for PNP0A08 with proper resource ranges.
-  * Ensure _CRS and resource translation feed PCI FDO correctly.
+Step 3 – ACPI Bus Driver Updates (In Progress)
+  Deliverables:
+    * Teach `drivers/bus/acpi` to materialise PCI root PDOs for both PNP0A03 and PNP0A08, copying `_CID` data and exposing the MMCONFIG bus window in the PDO resource list.
+    * Parse root `_CRS` packages and translate MEM32/_MMIO ranges into bus resources consumable by the PCI FDO.
+    * Add regression traces (KD prefix `ACPI-PCIROOT`) that log namespace evaluation, bus range discovery, and `_OSC` negotiation results.
+  Notes:
+    - 2025-10-27: `Bus_PDO_QueryResourceRequirements` now reuses `_CRS` output via the new `BuspCreateRequirementsListFromAcpiResources` helper, preserving translation offsets, tagging PCI roots as `PCIBus`, and synthesising a bus window when firmware omits one. Legacy paths still fall back to `_PRS` when `_CRS` is unavailable.
+    - 2025-10-27: `Bus_PDO_QueryResources` was refactored onto `BuspCreateResourceListFromAcpiResources`, so the live resource view mirrors `_CRS` translations and the PCI root reports a consistent bus range to the PCI driver.
+    - 2025-10-27: ACPI now records root bus window minima/maxima and the PCI FDO consumes them, limiting enumeration to the firmware-described bus span instead of blindly scanning a single bus.
+    - 2025-10-27: ACPI falls back to the _BBN bus value when _CRS omits a bus-number window so HAL still receives a bounded [start,end] pair for each root.
+    - 2025-10-27: PCI exposes a ReactOS-specific root bus interface that reports the HAL-clamped min/max bus numbers so downstream callers can avoid probing outside firmware limits.
+    - 2025-10-27: ACPI OSL now skips PCI configuration cycles on buses outside the HAL-reported range, avoiding noisy guard hits while we migrate remaining consumers.
+    - 2025-10-27: In-tree PCI consumers now either guard or funnel configuration cycles through range-aware helpers; remaining work focuses on third-party drivers.
+    - 2025-10-28: PCI PDO interrupt remap defers to the firmware span before touching the parent bus so we never query hidden root bridges.
+    - 2025-10-27: VIDEOPRT respects the HAL bus clamp before touching PCI config space, preventing legacy video miniports from probing outside firmware limits.
+    - 2025-10-28: `_CRS` counting now funnels through `BuspCountRequirementsFromAcpiResources`; both requirements and resource lists consume the shared helper so synthetic bus ranges line up with HAL.
+    - 2025-10-28: `GUID_ACPI_INTERFACE_STANDARD` registration now installs per-PDO system/device notify handlers; ACPI fans out callbacks to registered drivers and tears them down with the PDO, eliminating the STATUS_OBJECT_NAME_NOT_FOUND spam from battc/cmbatt.
+    - 2025-10-28: Battery class fallback treats STATUS_OBJECT_NAME_NOT_FOUND from legacy miniports as a non-fatal path, so SetStatusNotify quietly degrades to polling until ACPI notifications arrive.
+    - 2025-10-28: Control-method battery driver now balances the ACPI interface refcount on registration failures and removal, preventing leaked PDO references when notification wiring fails.
+    - 2025-10-28: Composite battery mirrors Linux/Windows behaviour: interface arrival/removal events now update the aggregate list, unregister notifications, and unload the battery class cleanly.
+  Exit Criteria:
+    * ACPI enumerator surfaces a single PCI root PDO with a non-zero bus range on VBox ICH9 and a modern laptop.
+    * KD log confirms `_CRS` address/interrupt resources are passed intact to the PCI bus driver.
 
-Step 4 – PCI Bus Driver Enhancements (Pending)
-  * Extend drivers/bus/pci to use MMCONFIG when available and support multi-segment buses.
-  * Parse _PRT interrupts and integrate with HAL routing.
+Step 4 – PCI Bus Driver Enhancements (Planned Q2)
+  Deliverables:
+    * Update `drivers/bus/pci` to accept ACPI-supplied bus ranges and honour multi-segment topologies (segment awareness in `PCI_BUS_INTERFACE_STANDARD`).
+    * Integrate the HAL MMCONFIG callbacks so config space reads prefer ECAM when `HalpAcpiEcamDisabled` is false, with per-segment fallback to legacy Type‑1.
+    * Implement parsing of root `_PRT` tables and register interrupt routing descriptors with HAL/IOAPIC code paths.
+    * Add unit-style tests under `rostests/hib` that exercise slot enumeration and config accessor selection.
+  Status:
+    - Pending – interrupt remap guard landed, but driver core still scans a single root and ignores multi-segment interfaces.
+  Exit Criteria:
+    * PCI bus driver enumerates downstream devices on VBox ICH9 without HAL debug fallback messages.
+    * Device manager in a live session shows functional PCI Express bridges/ports with correct bus numbers.
 
-Step 5 – Resource & IRQ Routing (Pending)
-  * Validate interrupt translation for PCIe devices; provide fallback when MSI/MSI-X unavailable.
+Step 5 – Resource & IRQ Routing (Planned Q2/Q3)
+  Deliverables:
+    * Expand HAL/PCI glue to translate `_PRT` output into IOAPIC pin programming; add MSI/MSI-X capability detection and a safe fallback to legacy INTx.
+    * Implement per-device interrupt tracking so bus driver can reprogram vectors during hotplug or resume.
+    * Provide kernel instrumentation (`KeQueryPciRouteInfo`) for the debugger to dump resolved routes.
+  Exit Criteria:
+    * AHCI, e1000, and xHCI devices receive functioning interrupts on both VBox ICH9 and at least one physical laptop.
+    * KD log shows resolved `_PRT` entries without defaulting to ISA compatibility routes.
+  Notes:
+    - 2025-10-27: NDIS now skips PCI configuration accesses outside the HAL-reported range, keeping the network stack aligned with the new bus guardrails.
+    - 2025-10-28: NDIS write helpers now consult HalQueryPciBusRange so outbound config cycles stay inside the firmware-advertised window.
+    - 2025-10-28: SCSIPORT wraps HalGet/SetBusData so PCI miniports inherit the firmware span without tripping the HAL guard.
+    - 2025-10-28: Captured the pending `_PRT` → IOAPIC/MSI tasks in `docs/acpi/pci_irq_routing_plan.md` to guide implementation.
+    - 2025-10-28: HAL now surfaces APIC vectors and default affinity in PCI INTx descriptors (HalpAssignPCISlotResources / HalpQueryResources), and PCI-X code accepts non-equal GSI/vector pairs so upper layers consume the HAL-programmed routing without re-resolving GSIs.
+    - 2025-10-28: UniATA preserves the HAL-provided APIC vector while logging the firmware GSI mismatch, ensuring its ISR registration uses the routed vector.
+    - 2025-10-28: Storport caches the translated (vector/IRQL/affinity) tuple alongside the firmware GSI so miniport drivers stop re-querying HAL when Level/Vector diverge.
+    - TODO: Finish `_PRT` → IOAPIC/MSI routing so ACPI INTx entries always program the redirection table, and wire MSI/MSI-X through the same plumbing.
+    - TODO: Update ScsiPort, legacy class drivers, and any remaining miniports still calling `HalGetInterruptVector` so they consume the HAL-routed tuple or the new `StorPortGetInterruptInfo` helper.
+    - TODO: Complete the `StorPortExtendedFunction` cases (for example `ExtFunctionGetMessageInterruptInformation`) so NT6+ miniports behave exactly as on modern Windows.
+    - TODO: Broaden testing beyond VBox ICH9/Q35—add nightly boots on real PCIe hardware to confirm multi-root, >64 GSI and MSI-only devices behave correctly.
+    - TODO: Keep the Windows 11 driver-parity target in sight: HAL/ACPI/PCI and Storport interfaces must match the current NT contract before we claim modernization is done.
+    - TODO: Map ACPI `_PRT` outputs onto IOAPIC/MSI programming paths; kd64 guards alone do not route interrupts yet.
 
-Step 6 – Storage/AHCI Bring-Up (Pending)
-  * Confirm AHCI miniport enumerates and handles DMA with new resource model.
+Step 6 – Storage/AHCI Bring-Up (Planned Q3)
+  Deliverables:
+    * Re-test `drivers/storage/port/ahciport` with the new resource/IRQ model; ensure DMA buffer allocation honours 64-bit physical addresses.
+    * Add boot-time diagnostics to record PxSSTS/PxCMD state transitions and port resets when link training fails.
+    * Create regression scenario in `rostests/bootreg` that boots from an AHCI disk image on VBox ICH9, capturing storage stack traces.
+  Exit Criteria:
+    * ReactOS boots to desktop from an AHCI-backed disk image on VBox ICH9.
+    * Smoke test on a modern laptop reaches GUI installer and sees the internal SATA controller without manual INF tweaks.
+  Notes:
+    - 2025-10-24: Added SATA link readiness waits (PxSSTS SPD/IPM and PxCMD FR/CR) plus command engine handshakes in ahciport to stop IDENTIFY 0xEC timeouts on ICH9 when the link is still negotiating.
+    - 2025-10-24: Instrumented ahciport to dump PxSSTS/PxCMD/PxTFD/PxSERR state when link bring-up or IDENTIFY fails so we can match VirtualBox traces against real hardware.
+    - 2025-10-27: SCSIPORT now honors the HAL-reported PCI bus range before probing, eliminating out-of-range config cycles during miniport discovery.
+    - 2025-10-27: UniATA routes all PCI config reads through the HAL range guard, keeping IDE/AHCI probing inside the firmware-advertised window.
+    - 2025-10-27: FreeLDR now clamps PCI config reads during boot via the HAL range guard, preventing pre-kernel probes from touching hidden buses.
 
-Step 7 – Testing & Hardening (Pending)
-  * Regression testing on VBox ICH9 and real PCIe hardware; add documentation and automated checks.
+Step 7 – Testing & Hardening (Planned Q3/Q4)
+  * Automate nightly boots on VBox ICH9, Q35, and at least one physical PCIe laptop; capture HAL/PCI logs for diffing.
+  * Extend the Testman farm with a "PCIe bring-up" suite that runs lspci-equivalent diagnostics and basic device I/O (disk, NIC, USB).
+  * Document known firmware quirks (e.g. VirtualBox MCFG limitations) and add guardrails to keep them from regressing.
+  Notes:
+    - Add `pcirange` to the nightly checklist so debugger logs confirm the HAL span before regression triage.
 
 Revision History:
 - 2025-10-23: Initial roadmap drafted; Step 1 marked In Progress.

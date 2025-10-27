@@ -1,0 +1,23 @@
+
+VBoxManage modifyvm ReactOS_VM_VBoxSVGA --memory 1024 --vram 64 --cpus 2 --ioapic on --boot1 dvd
+        --boot2 disk --boot3 none --boot4 none --graphicscontroller VBoxSVGA --uart1 0x3f8 4
+        --uartmode1 file /home/ahmed/WorkDir/TTE/reactos_ramfs/validation_logs/vboxsvga_serial.log
+
+VBoxManage storagectl ReactOS_VM_VBoxSVGA --name "SATA" --add sata --controller IntelAhci
+
+
+VBoxManage createmedium disk --filename /home/ahmed/WorkDir/TTE/reactos_ramfs/validation_logs/
+        vboxsvga.vdi --size 4096 --format VDI
+
+
+VBoxManage storageattach ReactOS_VM_VBoxSVGA --storagectl "SATA" --port 0 --device 0 --type hdd
+        --medium /home/ahmed/WorkDir/TTE/reactos_ramfs/validation_logs/vboxsvga.vdi
+
+VBoxManage storagectl ReactOS_VM_VBoxSVGA --name "IDE" --add ide
+
+
+VBoxManage storageattach ReactOS_VM_VBoxSVGA --storagectl "IDE" --port 0 --device 0 --type
+        dvddrive --medium /home/ahmed/WorkDir/TTE/reactos_ramfs/output-MinGW-i386-Debug/livecd.iso
+
+VBoxManage startvm ReactOS_VM_VBoxSVGA --type headless
+
