@@ -153,7 +153,7 @@ elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang")
 endif()
 
 # Debugging
-if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
     if(SEPARATE_DBG)
         add_compile_options(-gdwarf-2 -ggdb)
     else()
