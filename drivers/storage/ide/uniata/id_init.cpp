@@ -1956,11 +1956,8 @@ AtapiChipInit(
 
         KdPrint2((PRINT_PREFIX "  re-enable IO resources of MasterDev\n" ));
 
-        busDataRead = HalGetBusData
-                      //ScsiPortGetBusData
-                                   (
-                                    //HwDeviceExtension,
-                                    PCIConfiguration, SystemIoBusNumber, slotNumber,
+        busDataRead = UniAtaGetBusData(PCIConfiguration,
+                                    SystemIoBusNumber, slotNumber,
                                     &pciData, PCI_COMMON_HDR_LENGTH);
         if(busDataRead == PCI_COMMON_HDR_LENGTH) {
             UniataEnableIoPCI(SystemIoBusNumber, slotNumber, &pciData);

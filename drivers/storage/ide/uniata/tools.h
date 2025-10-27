@@ -46,6 +46,9 @@ extern "C" {
 //----------------
 
 #ifndef USER_MODE
+BOOLEAN NTAPI UniAtaIsPciBusInRange(_In_ ULONG BusNumber);
+ULONG NTAPI UniAtaGetBusData(_In_ BUS_DATA_TYPE BusDataType, _In_ ULONG BusNumber, _In_ ULONG SlotNumber, _Out_writes_bytes_(Length) PVOID Buffer, _In_ ULONG Length);
+
 #include <ntddk.h>                  // various NT definitions
 #endif //USER_MODE
 

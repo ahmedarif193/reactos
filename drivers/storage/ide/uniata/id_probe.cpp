@@ -50,6 +50,49 @@ Licence:
 
 #include "stdafx.h"
 
+extern "C" {
+
+BOOLEAN NTAPI UniAtaIsPciBusInRange(
+    _In_ ULONG BusNumber)
+{
+    ULONG MinBus, MaxBus;
+
+    if (!HalQueryPciBusRange(&MinBus, &MaxBus))
+    {
+        return TRUE;
+    }
+
+    if (BusNumber < MinBus || BusNumber > MaxBus)
+    {
+        KdPrint2((PRINT_PREFIX "Skipping PCI probe on bus %lu; firmware range is [%lu-%lu].\n",
+                  BusNumber,
+                  MinBus,
+                  MaxBus));
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+ULONG NTAPI UniAtaGetBusData(
+    _In_ BUS_DATA_TYPE BusDataType,
+    _In_ ULONG BusNumber,
+    _In_ ULONG SlotNumber,
+    _Out_writes_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Length)
+{
+    if (BusDataType == PCIConfiguration &&
+        !UniAtaIsPciBusInRange(BusNumber))
+    {
+        return 0;
+    }
+
+    return HalGetBusData(BusDataType, BusNumber, SlotNumber, Buffer, Length);
+}
+
+}
+
+
 PBUSMASTER_CONTROLLER_INFORMATION BMList = NULL;
 ULONG         BMListLen = 0;
 ULONG         IsaCount = 0;
@@ -132,7 +175,7 @@ UniataEnableIoPCI(
                                 sizeof(pciData->Command));
 
         // reread config space
-        busDataRead = HalGetBusData(PCIConfiguration, busNumber, slotNumber,
+        busDataRead = UniAtaGetBusData(PCIConfiguration, busNumber, slotNumber,
                                     pciData, PCI_COMMON_HDR_LENGTH);
         if(busDataRead < PCI_COMMON_HDR_LENGTH) {
             KdPrint2((PRINT_PREFIX "HalGetBusData() failed %#x\n", busDataRead));
@@ -382,7 +425,7 @@ UniataEnumBusMasterController__(
                 slotData.u.bits.DeviceNumber   = slotNumber;
                 slotData.u.bits.FunctionNumber = funcNumber;
 
-                busDataRead = HalGetBusData
+                busDataRead = UniAtaGetBusData
                               //ScsiPortGetBusData
                                            (
                                             //HwDeviceExtension,
@@ -597,7 +640,7 @@ UniataEnumBusMasterController__(
                                                     sizeof(pciData.ProgIf));
 
                             // reread config space
-                            busDataRead = HalGetBusData(PCIConfiguration, busNumber, slotData.u.AsULONG,
+                            busDataRead = UniAtaGetBusData(PCIConfiguration, busNumber, slotData.u.AsULONG,
                                                         &pciData, PCI_COMMON_HDR_LENGTH);
                             // check if the device have switched to Native Mode
                             if(IsMasterDev(&pciData)) {
@@ -622,7 +665,7 @@ UniataEnumBusMasterController__(
                                 }
                                 KdPrint2((PRINT_PREFIX "reread config space\n"));
                                 // reread config space
-                                busDataRead = HalGetBusData(PCIConfiguration, busNumber, slotData.u.AsULONG,
+                                busDataRead = UniAtaGetBusData(PCIConfiguration, busNumber, slotData.u.AsULONG,
                                                             &pciData, PCI_COMMON_HDR_LENGTH);
                                 KdPrint2((PRINT_PREFIX "busDataRead = %#x\n", busDataRead));
                                 KdPrint2((PRINT_PREFIX "reread InterruptLine = %#x\n", pciData.u.type0.InterruptLine));
@@ -645,7 +688,7 @@ UniataEnumBusMasterController__(
                                                             sizeof(pciData.ProgIf));
                                     // reread config space
                                     KdPrint2((PRINT_PREFIX "reread config space on revert\n"));
-                                    busDataRead = HalGetBusData(PCIConfiguration, busNumber, slotData.u.AsULONG,
+                                    busDataRead = UniAtaGetBusData(PCIConfiguration, busNumber, slotData.u.AsULONG,
                                                                 &pciData, PCI_COMMON_HDR_LENGTH);
                                 } else {
                                     KdPrint2((PRINT_PREFIX "Assigned interrupt %#x for device\n", IrqForCompat));
@@ -754,8 +797,7 @@ ScsiPortGetBusDataByOffset(
     if(Offset+Length > 256)
         return 0;
 
-    busDataRead = HalGetBusData(
-        //ScsiPortGetBusData(HwDeviceExtension,
+    busDataRead = UniAtaGetBusData(
                                      BusDataType,
                                      BusNumber,
                                      SlotNumber,
@@ -828,8 +870,7 @@ AtapiFindListedDev(
         slotData.u.bits.DeviceNumber   = slotNumber;
         slotData.u.bits.FunctionNumber = funcNumber;
 
-        busDataRead = HalGetBusData(
-            //ScsiPortGetBusData(HwDeviceExtension,
+        busDataRead = UniAtaGetBusData(
                                     PCIConfiguration, busNumber, slotData.u.AsULONG,
                                     &pciData, PCI_COMMON_HDR_LENGTH);
         // no more buses (this should not happen)
