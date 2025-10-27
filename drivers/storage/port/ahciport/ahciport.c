@@ -297,6 +297,56 @@ AhciWaitForPortSet(
 }
 
 static BOOLEAN
+AhciWaitForPortMaskAny(
+    _In_ PAHCI_ADAPTER_EXTENSION Adapter,
+    _In_ ULONG Port,
+    _In_ ULONG Offset,
+    _In_ ULONG Mask,
+    _In_ ULONG TimeoutUs)
+{
+    volatile ULONG *reg = AhciPortRegPtr(Adapter, Port, Offset);
+    ULONG iterations = (TimeoutUs / 10) + 1;
+
+    while (iterations--)
+    {
+        if (AHCI_READ_REG32(Adapter, reg) & Mask)
+            return TRUE;
+
+        ScsiPortStallExecution(10);
+    }
+
+    return FALSE;
+}
+
+static VOID
+AhciDumpPortState(
+    _In_ PAHCI_ADAPTER_EXTENSION Adapter,
+    _In_ ULONG Port,
+    _In_opt_z_ PCSTR Reason)
+{
+    ULONG ssts = AhciReadPort(Adapter, Port, AHCI_PxSSTS);
+    ULONG sctl = AhciReadPort(Adapter, Port, AHCI_PxSCTL);
+    ULONG cmd = AhciReadPort(Adapter, Port, AHCI_PxCMD);
+    ULONG tfd = AhciReadPort(Adapter, Port, AHCI_PxTFD);
+    ULONG serr = AhciReadPort(Adapter, Port, AHCI_PxSERR);
+    ULONG is = AhciReadPort(Adapter, Port, AHCI_PxIS);
+    ULONG ci = AhciReadPort(Adapter, Port, AHCI_PxCI);
+
+    AHCI_WARN("Port %lu state%s%s%s SSTS=0x%08lx SCTL=0x%08lx CMD=0x%08lx TFD=0x%08lx SERR=0x%08lx IS=0x%08lx CI=0x%08lx",
+              Port,
+              Reason ? " (" : "",
+              Reason ? Reason : "",
+              Reason ? ")" : "",
+              ssts,
+              sctl,
+              cmd,
+              tfd,
+              serr,
+              is,
+              ci);
+}
+
+static BOOLEAN
 AhciWaitForTaskfileReady(
     _In_ PAHCI_ADAPTER_EXTENSION Adapter,
     _In_ ULONG Port,
@@ -390,7 +440,22 @@ AhciResetPort(
     AhciWritePort(Adapter, Port, AHCI_PxSCTL, sctl | AHCI_PxSCTL_DET_NONE);
 
     if (!AhciWaitForPortSet(Adapter, Port, AHCI_PxSSTS, AHCI_PxSSTS_DET_MASK, AHCI_PxSSTS_DET_PRESENT, AHCI_RESET_TIMEOUT_US))
+    {
+        AhciDumpPortState(Adapter, Port, "reset wait DET");
         return FALSE;
+    }
+
+    if (!AhciWaitForPortMaskAny(Adapter, Port, AHCI_PxSSTS, AHCI_PxSSTS_SPD_MASK, AHCI_RESET_TIMEOUT_US))
+    {
+        AhciDumpPortState(Adapter, Port, "reset wait SPD");
+        return FALSE;
+    }
+
+    if (!AhciWaitForPortSet(Adapter, Port, AHCI_PxSSTS, AHCI_PxSSTS_IPM_MASK, AHCI_PxSSTS_IPM_ACTIVE, AHCI_RESET_TIMEOUT_US))
+    {
+        AhciDumpPortState(Adapter, Port, "reset wait IPM active");
+        return FALSE;
+    }
 
     /* Program memory structures */
     if (port->CommandList)
@@ -414,10 +479,22 @@ AhciResetPort(
     /* Enable FIS reception and command processing */
     {
         ULONG cmd = AhciReadPort(Adapter, Port, AHCI_PxCMD);
+
         cmd |= AHCI_PxCMD_SUD | AHCI_PxCMD_POD | AHCI_PxCMD_FRE;
         AhciWritePort(Adapter, Port, AHCI_PxCMD, cmd);
+        if (!AhciWaitForPortSet(Adapter, Port, AHCI_PxCMD, AHCI_PxCMD_FR, AHCI_PxCMD_FR, AHCI_RESET_TIMEOUT_US))
+        {
+            AhciDumpPortState(Adapter, Port, "reset wait FRE");
+            return FALSE;
+        }
+
         cmd |= AHCI_PxCMD_ST;
         AhciWritePort(Adapter, Port, AHCI_PxCMD, cmd);
+        if (!AhciWaitForPortSet(Adapter, Port, AHCI_PxCMD, AHCI_PxCMD_CR, AHCI_PxCMD_CR, AHCI_RESET_TIMEOUT_US))
+        {
+            AhciDumpPortState(Adapter, Port, "reset wait CR");
+            return FALSE;
+        }
     }
 
     port->Busy = FALSE;
@@ -582,6 +659,7 @@ AhciIssueAtaCommand(
     if (!AhciWaitForTaskfileReady(Adapter, Port, AHCI_TFD_STS_BSY | AHCI_TFD_STS_DRQ, AHCI_TASKFILE_TIMEOUT_US))
     {
         AHCI_ERROR("IssueAta: taskfile busy timeout on port %lu", Port);
+        AhciDumpPortState(Adapter, Port, "taskfile busy");
         return FALSE;
     }
 
@@ -650,8 +728,11 @@ AhciIssueAtaCommand(
     {
         port->Busy = FALSE;
         AHCI_ERROR("IssueAta: command timeout (op=0x%02x) on port %lu", Command, Port);
+        AhciDumpPortState(Adapter, Port, "command timeout");
         if (!AhciStopPort(Adapter, Port))
             AHCI_ERROR("IssueAta: soft stop failed after timeout on port %lu", Port);
+        else
+            AhciDumpPortState(Adapter, Port, "after stop");
         return FALSE;
     }
 
@@ -661,6 +742,7 @@ AhciIssueAtaCommand(
     if (tfd & AHCI_TFD_STS_ERR)
     {
         AHCI_WARN("IssueAta: taskfile error (TFD=0x%08lx) on port %lu", tfd, Port);
+        AhciDumpPortState(Adapter, Port, "taskfile error");
         return FALSE;
     }
 
