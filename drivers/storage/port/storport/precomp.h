@@ -114,6 +114,11 @@ typedef struct _MINIPORT
     PHW_INITIALIZATION_DATA InitData;
     PORT_CONFIGURATION_INFORMATION PortConfig;
     PMINIPORT_DEVICE_EXTENSION MiniportExtension;
+    ULONG SystemInterruptVector[2];
+    KIRQL SystemInterruptIrql[2];
+    KAFFINITY SystemInterruptAffinity[2];
+    BOOLEAN SystemInterruptValid[2];
+    ULONG FirmwareInterruptLine[2];
 } MINIPORT, *PMINIPORT;
 
 typedef struct _UNIT_DATA

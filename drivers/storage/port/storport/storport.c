@@ -1106,6 +1106,59 @@ StorPortGetVirtualAddress(
 }
 
 
+STORPORT_API
+BOOLEAN
+NTAPI
+StorPortGetInterruptInfo(
+    _In_ PVOID HwDeviceExtension,
+    _In_ ULONG InterruptIndex,
+    _Out_opt_ PULONG FirmwareInterruptLine,
+    _Out_opt_ PULONG SystemVector,
+    _Out_opt_ PKIRQL SystemIrql,
+    _Out_opt_ PKAFFINITY SystemAffinity)
+{
+    PMINIPORT_DEVICE_EXTENSION MiniportExtension;
+    PMINIPORT Miniport;
+
+    MiniportExtension = CONTAINING_RECORD(HwDeviceExtension,
+                                          MINIPORT_DEVICE_EXTENSION,
+                                          HwDeviceExtension);
+    Miniport = MiniportExtension->Miniport;
+
+    if (InterruptIndex >= RTL_NUMBER_OF(Miniport->SystemInterruptValid))
+    {
+        return FALSE;
+    }
+
+    if (!Miniport->SystemInterruptValid[InterruptIndex])
+    {
+        return FALSE;
+    }
+
+    if (FirmwareInterruptLine)
+    {
+        *FirmwareInterruptLine = Miniport->FirmwareInterruptLine[InterruptIndex];
+    }
+
+    if (SystemVector)
+    {
+        *SystemVector = Miniport->SystemInterruptVector[InterruptIndex];
+    }
+
+    if (SystemIrql)
+    {
+        *SystemIrql = Miniport->SystemInterruptIrql[InterruptIndex];
+    }
+
+    if (SystemAffinity)
+    {
+        *SystemAffinity = Miniport->SystemInterruptAffinity[InterruptIndex];
+    }
+
+    return TRUE;
+}
+
+
 /*
  * @implemented
  */

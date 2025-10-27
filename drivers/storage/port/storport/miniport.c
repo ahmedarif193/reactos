@@ -94,10 +94,12 @@ InitializeConfiguration(
 static
 VOID
 AssignResourcesToConfiguration(
-    _In_ PPORT_CONFIGURATION_INFORMATION PortConfiguration,
-    _In_ PCM_RESOURCE_LIST ResourceList,
+    _Inout_ PMINIPORT Miniport,
+    _In_ PCM_RESOURCE_LIST RawResourceList,
+    _In_opt_ PCM_RESOURCE_LIST TranslatedResourceList,
     _In_ ULONG NumberOfAccessRanges)
 {
+    PPORT_CONFIGURATION_INFORMATION PortConfiguration;
     PCM_FULL_RESOURCE_DESCRIPTOR FullDescriptor;
     PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptor;
     PCM_PARTIAL_RESOURCE_LIST PartialResourceList;
@@ -105,11 +107,22 @@ AssignResourcesToConfiguration(
     INT i, j;
     ULONG RangeNumber = 0, Interrupt = 0, Dma = 0;
 
-    DPRINT("AssignResourceToConfiguration(%p %p %lu)\n",
-            PortConfiguration, ResourceList, NumberOfAccessRanges);
+    PortConfiguration = &Miniport->PortConfig;
 
-    FullDescriptor = &ResourceList->List[0];
-    for (i = 0; i < ResourceList->Count; i++)
+    for (ULONG idx = 0; idx < RTL_NUMBER_OF(Miniport->SystemInterruptValid); idx++)
+    {
+        Miniport->SystemInterruptVector[idx] = 0;
+        Miniport->SystemInterruptIrql[idx] = 0;
+        Miniport->SystemInterruptAffinity[idx] = 0;
+        Miniport->SystemInterruptValid[idx] = FALSE;
+        Miniport->FirmwareInterruptLine[idx] = 0;
+    }
+
+    DPRINT("AssignResourceToConfiguration(%p %p %lu)\n",
+            PortConfiguration, RawResourceList, NumberOfAccessRanges);
+
+    FullDescriptor = &RawResourceList->List[0];
+    for (i = 0; i < RawResourceList->Count; i++)
     {
         PartialResourceList = &FullDescriptor->PartialResourceList;
 
@@ -148,43 +161,106 @@ AssignResourcesToConfiguration(
                     break;
 
                 case CmResourceTypeInterrupt:
+                {
+                    PCM_PARTIAL_RESOURCE_DESCRIPTOR TranslatedInterrupt = NULL;
+                    ULONG firmwareLevel, firmwareVector;
+                    ULONG systemLevel, systemVector;
+                    KAFFINITY systemAffinity;
+                    ULONG flags;
+
                     DPRINT("Interrupt: Level %lu  Vector %lu\n",
                             PartialDescriptor->u.Interrupt.Level,
                             PartialDescriptor->u.Interrupt.Vector);
+
+                    firmwareLevel = PartialDescriptor->u.Interrupt.Level;
+                    firmwareVector = PartialDescriptor->u.Interrupt.Vector;
+                    systemLevel = firmwareLevel;
+                    systemVector = firmwareVector;
+                    systemAffinity = PartialDescriptor->u.Interrupt.Affinity;
+                    flags = PartialDescriptor->Flags;
+
+                    if (TranslatedResourceList)
+                    {
+                        ULONG found = 0;
+                        PCM_FULL_RESOURCE_DESCRIPTOR TranslatedFull = &TranslatedResourceList->List[0];
+
+                        for (INT ti = 0; ti < (INT)TranslatedResourceList->Count && !TranslatedInterrupt; ti++)
+                        {
+                            PCM_PARTIAL_RESOURCE_LIST TranslatedPartialList = &TranslatedFull->PartialResourceList;
+
+                            for (INT tj = 0; tj < (INT)TranslatedPartialList->Count; tj++)
+                            {
+                                PCM_PARTIAL_RESOURCE_DESCRIPTOR Candidate = &TranslatedPartialList->PartialDescriptors[tj];
+
+                                if (Candidate->Type != CmResourceTypeInterrupt)
+                                    continue;
+
+                                if (found == Interrupt)
+                                {
+                                    TranslatedInterrupt = Candidate;
+                                    break;
+                                }
+
+                                found++;
+                            }
+
+                            TranslatedFull = (PCM_FULL_RESOURCE_DESCRIPTOR)(TranslatedFull->PartialResourceList.PartialDescriptors +
+                                                                               TranslatedFull->PartialResourceList.Count);
+                        }
+                    }
+
+                    if (TranslatedInterrupt)
+                    {
+                        systemLevel = TranslatedInterrupt->u.Interrupt.Level;
+                        systemVector = TranslatedInterrupt->u.Interrupt.Vector;
+                        if (TranslatedInterrupt->u.Interrupt.Affinity != 0)
+                            systemAffinity = TranslatedInterrupt->u.Interrupt.Affinity;
+                        flags = TranslatedInterrupt->Flags;
+                    }
+
+                    if (Interrupt < RTL_NUMBER_OF(Miniport->FirmwareInterruptLine))
+                    {
+                        Miniport->FirmwareInterruptLine[Interrupt] = firmwareLevel;
+                        Miniport->SystemInterruptVector[Interrupt] = systemVector;
+                        Miniport->SystemInterruptIrql[Interrupt] =
+                            (systemLevel <= HIGH_LEVEL) ? (KIRQL)systemLevel : DISPATCH_LEVEL;
+                        Miniport->SystemInterruptAffinity[Interrupt] = systemAffinity;
+                        Miniport->SystemInterruptValid[Interrupt] = TRUE;
+
+                        if (TranslatedInterrupt &&
+                            ((systemLevel != firmwareLevel) || (systemVector != firmwareVector)))
+                        {
+                            DPRINT1("Storport: Interrupt %lu GSI %lu -> vector %lu (IRQL %u affinity %p)\n",
+                                    Interrupt,
+                                    firmwareLevel,
+                                    systemVector,
+                                    Miniport->SystemInterruptIrql[Interrupt],
+                                    (PVOID)(ULONG_PTR)systemAffinity);
+                        }
+                    }
+
                     if (Interrupt == 0)
                     {
-                        /* Copy interrupt data */
-                        PortConfiguration->BusInterruptLevel = PartialDescriptor->u.Interrupt.Level;
-                        PortConfiguration->BusInterruptVector = PartialDescriptor->u.Interrupt.Vector;
-
-                        /* Set interrupt mode accordingly to the resource */
-                        if (PartialDescriptor->Flags == CM_RESOURCE_INTERRUPT_LATCHED)
-                        {
-                            PortConfiguration->InterruptMode = Latched;
-                        }
-                        else if (PartialDescriptor->Flags == CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE)
-                        {
-                            PortConfiguration->InterruptMode = LevelSensitive;
-                        }
+                        PortConfiguration->BusInterruptLevel = systemLevel;
+                        PortConfiguration->BusInterruptVector = systemVector;
+                        PortConfiguration->InterruptMode =
+                            ((flags & CM_RESOURCE_INTERRUPT_LEVEL_LATCHED_BITS) == CM_RESOURCE_INTERRUPT_LATCHED)
+                                ? Latched
+                                : LevelSensitive;
                     }
                     else if (Interrupt == 1)
                     {
-                        /* Copy interrupt data */
-                        PortConfiguration->BusInterruptLevel2 = PartialDescriptor->u.Interrupt.Level;
-                        PortConfiguration->BusInterruptVector2 = PartialDescriptor->u.Interrupt.Vector;
-
-                        /* Set interrupt mode accordingly to the resource */
-                        if (PartialDescriptor->Flags == CM_RESOURCE_INTERRUPT_LATCHED)
-                        {
-                            PortConfiguration->InterruptMode2 = Latched;
-                        }
-                        else if (PartialDescriptor->Flags == CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE)
-                        {
-                            PortConfiguration->InterruptMode2 = LevelSensitive;
-                        }
+                        PortConfiguration->BusInterruptLevel2 = systemLevel;
+                        PortConfiguration->BusInterruptVector2 = systemVector;
+                        PortConfiguration->InterruptMode2 =
+                            ((flags & CM_RESOURCE_INTERRUPT_LEVEL_LATCHED_BITS) == CM_RESOURCE_INTERRUPT_LATCHED)
+                                ? Latched
+                                : LevelSensitive;
                     }
+
                     Interrupt++;
                     break;
+                }
 
                 case CmResourceTypeDma:
                     DPRINT("Dma: Channel: %lu  Port: %lu\n",
@@ -260,6 +336,11 @@ MiniportInitialize(
         return STATUS_NO_MEMORY;
 
     RtlZeroMemory(MiniportExtension, Size);
+    RtlZeroMemory(Miniport->SystemInterruptVector, sizeof(Miniport->SystemInterruptVector));
+    RtlZeroMemory(Miniport->SystemInterruptIrql, sizeof(Miniport->SystemInterruptIrql));
+    RtlZeroMemory(Miniport->SystemInterruptAffinity, sizeof(Miniport->SystemInterruptAffinity));
+    RtlZeroMemory(Miniport->SystemInterruptValid, sizeof(Miniport->SystemInterruptValid));
+    RtlZeroMemory(Miniport->FirmwareInterruptLine, sizeof(Miniport->FirmwareInterruptLine));
 
     MiniportExtension->Miniport = Miniport;
     Miniport->MiniportExtension = MiniportExtension;
@@ -273,8 +354,9 @@ MiniportInitialize(
         return Status;
 
     /* Assign the resources to the port configuration */
-    AssignResourcesToConfiguration(&Miniport->PortConfig,
+    AssignResourcesToConfiguration(Miniport,
                                    DeviceExtension->AllocatedResources,
+                                   DeviceExtension->TranslatedResources,
                                    InitData->NumberOfAccessRanges);
 
     return STATUS_SUCCESS;

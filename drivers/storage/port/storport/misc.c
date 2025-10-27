@@ -260,10 +260,14 @@ GetResourceListInterrupt(
 {
     PCM_FULL_RESOURCE_DESCRIPTOR FullDescriptor;
     PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptor;
+    PMINIPORT Miniport;
+    ULONG interruptIndex = 0;
     INT i, j;
 
     DPRINT("GetResourceListInterrupt(%p)\n",
             DeviceExtension);
+
+    Miniport = &DeviceExtension->Miniport;
 
     FullDescriptor = DeviceExtension->TranslatedResources->List;
     for (i = 0; i < DeviceExtension->TranslatedResources->Count; i++)
@@ -279,12 +283,32 @@ GetResourceListInterrupt(
                             PartialDescriptor->u.Interrupt.Level,
                             PartialDescriptor->u.Interrupt.Vector);
 
-                    *Vector = PartialDescriptor->u.Interrupt.Vector;
-                    *Irql = (KIRQL)PartialDescriptor->u.Interrupt.Level;
+                    if ((interruptIndex < RTL_NUMBER_OF(Miniport->SystemInterruptValid)) &&
+                        Miniport->SystemInterruptValid[interruptIndex])
+                    {
+                        *Vector = Miniport->SystemInterruptVector[interruptIndex];
+                        *Irql = Miniport->SystemInterruptIrql[interruptIndex];
+                        if (*Irql == 0)
+                        {
+                            *Irql = (KIRQL)PartialDescriptor->u.Interrupt.Level;
+                        }
+                        *Affinity = Miniport->SystemInterruptAffinity[interruptIndex];
+                        if (*Affinity == 0)
+                        {
+                            *Affinity = PartialDescriptor->u.Interrupt.Affinity;
+                        }
+                    }
+                    else
+                    {
+                        *Vector = PartialDescriptor->u.Interrupt.Vector;
+                        *Irql = (KIRQL)PartialDescriptor->u.Interrupt.Level;
+                        *Affinity = PartialDescriptor->u.Interrupt.Affinity;
+                    }
+
                     *InterruptMode = (PartialDescriptor->Flags & CM_RESOURCE_INTERRUPT_LATCHED) ? Latched : LevelSensitive;
                     *ShareVector = (PartialDescriptor->ShareDisposition == CmResourceShareShared) ? TRUE : FALSE;
-                    *Affinity = PartialDescriptor->u.Interrupt.Affinity;
 
+                    interruptIndex++;
                     return STATUS_SUCCESS;
             }
         }

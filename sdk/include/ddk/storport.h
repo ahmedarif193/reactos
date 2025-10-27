@@ -2550,6 +2550,17 @@ StorPortGetVirtualAddress(
     _In_ STOR_PHYSICAL_ADDRESS PhysicalAddress);
 
 STORPORT_API
+BOOLEAN
+NTAPI
+StorPortGetInterruptInfo(
+    _In_ PVOID HwDeviceExtension,
+    _In_ ULONG InterruptIndex,
+    _Out_opt_ PULONG FirmwareInterruptLine,
+    _Out_opt_ PULONG SystemVector,
+    _Out_opt_ PKIRQL SystemIrql,
+    _Out_opt_ PKAFFINITY SystemAffinity);
+
+STORPORT_API
 ULONG
 NTAPI
 StorPortInitialize(

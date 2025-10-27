@@ -20,6 +20,7 @@
 @ stdcall StorPortGetSrb(ptr long long long long)
 @ stdcall StorPortGetUncachedExtension(ptr ptr long)
 @ stdcall StorPortGetVirtualAddress(ptr long long)
+@ stdcall StorPortGetInterruptInfo(ptr long ptr ptr ptr ptr)
 @ stdcall StorPortInitialize(ptr ptr ptr ptr)
 @ stdcall StorPortLogError(ptr ptr long long long long long)
 @ stdcall StorPortMoveMemory(ptr ptr long)
