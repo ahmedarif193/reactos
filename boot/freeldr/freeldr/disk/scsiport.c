@@ -23,6 +23,8 @@ DBG_DEFAULT_CHANNEL(SCSIPORT);
 #include <stdio.h>
 #include <stdarg.h>
 
+BOOLEAN NTAPI HalQueryPciBusRange(_Out_opt_ PULONG MinBus, _Out_opt_ PULONG MaxBus);
+
 #undef ScsiPortLogError
 #undef ScsiPortMoveMemory
 #undef ScsiPortWritePortBufferUchar
@@ -563,6 +565,15 @@ ScsiPortGetBusData(
     IN PVOID Buffer,
     IN ULONG Length)
 {
+    ULONG MinBus, MaxBus;
+
+    if (BusDataType == PCIConfiguration &&
+        HalQueryPciBusRange(&MinBus, &MaxBus) &&
+        (SystemIoBusNumber < MinBus || SystemIoBusNumber > MaxBus))
+    {
+        return 0;
+    }
+
     return HalGetBusDataByOffset(BusDataType, SystemIoBusNumber, SlotNumber, Buffer, 0, Length);
 }
 
