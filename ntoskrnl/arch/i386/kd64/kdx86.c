@@ -140,6 +140,16 @@ KdpSysReadBusData(
     _In_ ULONG Length,
     _Out_ PULONG ActualLength)
 {
+    ULONG MinBus, MaxBus;
+
+    if (BusDataType == PCIConfiguration &&
+        HalQueryPciBusRange(&MinBus, &MaxBus) &&
+        (BusNumber < MinBus || BusNumber > MaxBus))
+    {
+        *ActualLength = 0;
+        return STATUS_INVALID_PARAMETER;
+    }
+
     /* Just forward to HAL */
     *ActualLength = HalGetBusDataByOffset(BusDataType,
                                           BusNumber,
@@ -163,6 +173,16 @@ KdpSysWriteBusData(
     _In_ ULONG Length,
     _Out_ PULONG ActualLength)
 {
+    ULONG MinBus, MaxBus;
+
+    if (BusDataType == PCIConfiguration &&
+        HalQueryPciBusRange(&MinBus, &MaxBus) &&
+        (BusNumber < MinBus || BusNumber > MaxBus))
+    {
+        *ActualLength = 0;
+        return STATUS_INVALID_PARAMETER;
+    }
+
     /* Just forward to HAL */
     *ActualLength = HalSetBusDataByOffset(BusDataType,
                                           BusNumber,
