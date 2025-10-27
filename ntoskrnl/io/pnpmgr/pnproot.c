@@ -1002,10 +1002,22 @@ PnpRootFdoPnpControl(
             Status = PnpRootQueryDeviceRelations(DeviceObject, Irp);
             break;
 
+        case IRP_MN_QUERY_REMOVE_DEVICE:
+        case IRP_MN_CANCEL_REMOVE_DEVICE:
+        case IRP_MN_QUERY_STOP_DEVICE:
+        case IRP_MN_CANCEL_STOP_DEVICE:
+        case IRP_MN_REMOVE_DEVICE:
+        case IRP_MN_SURPRISE_REMOVAL:
+            /* The root bus is never removed or stopped. Acknowledge with success. */
+            DPRINT("IRP_MJ_PNP / benign minor function 0x%lx ignored for Root bus\n",
+                   IrpSp->MinorFunction);
+            Status = STATUS_SUCCESS;
+            break;
+
         default:
             // The root device object can receive only IRP_MN_QUERY_DEVICE_RELATIONS
-            ASSERT(FALSE);
-            DPRINT("IRP_MJ_PNP / Unknown minor function 0x%lx\n", IrpSp->MinorFunction);
+            DPRINT1("IRP_MJ_PNP / Unknown minor function 0x%lx\n", IrpSp->MinorFunction);
+            Status = STATUS_NOT_SUPPORTED;
             break;
     }
 
