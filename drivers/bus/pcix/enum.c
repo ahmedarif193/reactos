@@ -123,7 +123,13 @@ PciComputeNewCurrentSettings(IN PPCI_PDO_EXTENSION PdoExtension,
 
                     /* Make sure it's a compatible (and the only) PCI interrupt */
                     ASSERT(InterruptResource == NULL);
-                    ASSERT(Partial->u.Interrupt.Level == Partial->u.Interrupt.Vector);
+                    if (Partial->u.Interrupt.Vector != Partial->u.Interrupt.Level)
+                    {
+                        DPRINT1("PCI-X: Interrupt vector %lu differs from GSI %lu for %p; using GSI for legacy bookkeeping.\n",
+                                Partial->u.Interrupt.Vector,
+                                Partial->u.Interrupt.Level,
+                                PdoExtension);
+                    }
                     InterruptResource = Partial;
 
                     /* Only 255 interrupts on x86/x64 hardware */

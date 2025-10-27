@@ -29,9 +29,22 @@ PciGetAdjustedInterruptLine(IN PPCI_PDO_EXTENSION PdoExtension)
     /* Does the device have an interrupt pin? */
     if (PdoExtension->InterruptPin)
     {
+        ULONG BaseBus = PdoExtension->ParentFdoExtension->BaseBus;
+        ULONG MinBus, MaxBus;
+
+        if (HalQueryPciBusRange(&MinBus, &MaxBus) &&
+            (BaseBus < MinBus || BaseBus > MaxBus))
+        {
+            DPRINT1("PCI: Interrupt remap skipped for bus %lu outside firmware range [%lu-%lu].\n",
+                    BaseBus,
+                    MinBus,
+                    MaxBus);
+            return PdoExtension->RawInterruptLine;
+        }
+
         /* Find the associated line on the parent bus */
         Length = HalGetBusDataByOffset(PCIConfiguration,
-                                       PdoExtension->ParentFdoExtension->BaseBus,
+                                       BaseBus,
                                        PdoExtension->Slot.u.AsULONG,
                                        &PciInterruptLine,
                                        FIELD_OFFSET(PCI_COMMON_HEADER,
