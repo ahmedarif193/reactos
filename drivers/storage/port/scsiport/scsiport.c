@@ -44,6 +44,31 @@ SpiGetPciConfigData(IN PDRIVER_OBJECT DriverObject,
                     IN ULONG BusNumber,
                     IN OUT PPCI_SLOT_NUMBER NextSlotNumber);
 
+static
+BOOLEAN
+SpiIsPciBusInRange(
+    _In_ ULONG BusNumber)
+{
+    ULONG MinBus, MaxBus;
+
+    if (!HalQueryPciBusRange(&MinBus, &MaxBus))
+    {
+        /* HAL has not advertised a clamp yet; fall back to a legacy scan. */
+        return TRUE;
+    }
+
+    if (BusNumber < MinBus || BusNumber > MaxBus)
+    {
+        DPRINT1("SCSIPORT: Skipping PCI probe on bus %lu; firmware range is [%lu-%lu].\n",
+                BusNumber,
+                MinBus,
+                MaxBus);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 static NTSTATUS NTAPI
 ScsiPortCreateClose(IN PDEVICE_OBJECT DeviceObject,
             IN PIRP Irp);
@@ -735,6 +760,17 @@ ScsiPortGetBusData(IN PVOID DeviceExtension,
 {
     DPRINT("ScsiPortGetBusData()\n");
 
+    if (BusDataType == PCIConfiguration)
+    {
+        ULONG MinBus, MaxBus;
+
+        if (HalQueryPciBusRange(&MinBus, &MaxBus) &&
+            (SystemIoBusNumber < MinBus || SystemIoBusNumber > MaxBus))
+        {
+            return 0;
+        }
+    }
+
     if (Length)
     {
         /* If Length is non-zero, just forward the call to
@@ -764,6 +800,18 @@ ScsiPortSetBusDataByOffset(IN PVOID DeviceExtension,
                            IN ULONG Length)
 {
     DPRINT("ScsiPortSetBusDataByOffset()\n");
+
+    if (BusDataType == PCIConfiguration)
+    {
+        ULONG MinBus, MaxBus;
+
+        if (HalQueryPciBusRange(&MinBus, &MaxBus) &&
+            (SystemIoBusNumber < MinBus || SystemIoBusNumber > MaxBus))
+        {
+            return 0;
+        }
+    }
+
     return HalSetBusDataByOffset(BusDataType,
                                  SystemIoBusNumber,
                                  SlotNumber,
@@ -2766,6 +2814,11 @@ SpiGetPciConfigData(IN PDRIVER_OBJECT DriverObject,
     NTSTATUS Status;
 
     DPRINT ("SpiGetPciConfiguration() called\n");
+
+    if (!SpiIsPciBusInRange(BusNumber))
+    {
+        return FALSE;
+    }
 
     SlotNumber.u.AsULONG = 0;
 
