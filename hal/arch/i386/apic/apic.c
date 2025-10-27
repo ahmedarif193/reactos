@@ -19,6 +19,22 @@
 #define NDEBUG
 #include <debug.h>
 
+#ifndef IOAPIC_VER_MASK
+#define IOAPIC_VER_MASK       (0xFFu)
+#endif
+
+#ifndef GET_IOAPIC_VERSION
+#define GET_IOAPIC_VERSION(x) ((x) & IOAPIC_VER_MASK)
+#endif
+
+#ifndef IOAPIC_MRE_MASK
+#define IOAPIC_MRE_MASK       (0xFFu << 16)
+#endif
+
+#ifndef GET_IOAPIC_MRE
+#define GET_IOAPIC_MRE(x)     (((x) & IOAPIC_MRE_MASK) >> 16)
+#endif
+
 #ifndef _M_AMD64
 #define APIC_LAZY_IRQL
 #endif
@@ -27,6 +43,49 @@
 
 ULONG ApicVersion;
 UCHAR HalpVectorToIndex[256];
+ULONG HalpIoApicRedirectionCount = HALP_APIC_DEFAULT_REDIR_COUNT;
+
+static
+VOID
+HalpIoApicDeriveAndApplyRouting(
+    _In_ UCHAR Gsi,
+    _Inout_ IOAPIC_REDIRECTION_REGISTER *Entry)
+{
+    UCHAR Polarity;
+    UCHAR Trigger;
+
+    if (HalpPciLookupGsiInfo(Gsi, &Polarity, &Trigger))
+    {
+        if ((Polarity == HAL_ACPI_POLARITY_LOW) || (Polarity == HAL_ACPI_POLARITY_BOTH))
+        {
+            Entry->Polarity = 1;
+        }
+        else
+        {
+            Entry->Polarity = 0;
+        }
+
+        Entry->TriggerMode = (Trigger == HAL_ACPI_TRIGGER_LEVEL)
+                                  ? APIC_TGM_Level
+                                  : APIC_TGM_Edge;
+    }
+    else
+    {
+        HALP_PCI_GSI_DIAG Diag;
+
+        if (HalpPciDescribeGsi(Gsi, &Diag) && Diag.FromFirmware)
+        {
+            DPRINT1("HAL: No cached polarity/trigger data for firmware GSI %u (seg %u bus %u dev %u fn %u pin IN%c); using defaults.\n",
+                    Gsi,
+                    Diag.Segment,
+                    Diag.Bus,
+                    Diag.Device,
+                    Diag.Function,
+                    (Diag.Pin >= 1 && Diag.Pin <= 4) ? ('A' + Diag.Pin - 1) : '?');
+        }
+    }
+}
+
 
 #ifndef _M_AMD64
 const UCHAR
@@ -95,7 +154,7 @@ ULONG
 IOApicRead(UCHAR Register)
 {
     /* Select the register, then do the read */
-    ASSERT(Register <= 0x3F);
+    ASSERT(Register <= 0xFF);
     WRITE_REGISTER_ULONG((PULONG)(IOAPIC_BASE + IOAPIC_IOREGSEL), Register);
     return READ_REGISTER_ULONG((PULONG)(IOAPIC_BASE + IOAPIC_IOWIN));
 }
@@ -105,7 +164,7 @@ VOID
 IOApicWrite(UCHAR Register, ULONG Value)
 {
     /* Select the register, then do the write */
-    ASSERT(Register <= 0x3F);
+    ASSERT(Register <= 0xFF);
     WRITE_REGISTER_ULONG((PULONG)(IOAPIC_BASE + IOAPIC_IOREGSEL), Register);
     WRITE_REGISTER_ULONG((PULONG)(IOAPIC_BASE + IOAPIC_IOWIN), Value);
 }
@@ -116,7 +175,7 @@ ApicWriteIORedirectionEntry(
     UCHAR Index,
     IOAPIC_REDIRECTION_REGISTER ReDirReg)
 {
-    ASSERT(Index < APIC_MAX_IRQ);
+    ASSERT(Index < HalpIoApicRedirectionCount);
     IOApicWrite(IOAPIC_REDTBL + 2 * Index, ReDirReg.Long0);
     IOApicWrite(IOAPIC_REDTBL + 2 * Index + 1, ReDirReg.Long1);
 }
@@ -128,7 +187,7 @@ ApicReadIORedirectionEntry(
 {
     IOAPIC_REDIRECTION_REGISTER ReDirReg;
 
-    ASSERT(Index < APIC_MAX_IRQ);
+    ASSERT(Index < HalpIoApicRedirectionCount);
     ReDirReg.Long0 = IOApicRead(IOAPIC_REDTBL + 2 * Index);
     ReDirReg.Long1 = IOApicRead(IOAPIC_REDTBL + 2 * Index + 1);
 
@@ -380,8 +439,39 @@ HalpAllocateSystemInterrupt(
     _In_ UCHAR Vector)
 {
     IOAPIC_REDIRECTION_REGISTER ReDirReg;
+    HALP_PCI_GSI_DIAG GsiDiag;
+    ULONG RedirectionLimit;
+    ULONG MaxIndex;
 
-    ASSERT(Irq < APIC_MAX_IRQ);
+    RedirectionLimit = (HalpIoApicRedirectionCount != 0)
+                           ? HalpIoApicRedirectionCount
+                           : HALP_APIC_DEFAULT_REDIR_COUNT;
+    MaxIndex = (RedirectionLimit == 0) ? 0 : (RedirectionLimit - 1);
+
+    if (Irq >= RedirectionLimit)
+    {
+        if (HalpPciDescribeGsi(Irq, &GsiDiag))
+        {
+            DPRINT1("HAL: GSI %u (seg %u bus %u dev %u fn %u pin IN%c)%s exceeds IOAPIC limit %u; rejecting allocation.\n",
+                    Irq,
+                    GsiDiag.Segment,
+                    GsiDiag.Bus,
+                    GsiDiag.Device,
+                    GsiDiag.Function,
+                    (GsiDiag.Pin >= 1 && GsiDiag.Pin <= 4) ? ('A' + GsiDiag.Pin - 1) : '?',
+                    GsiDiag.FromFirmware ? " from firmware" : "",
+                    MaxIndex);
+        }
+        else
+        {
+            DPRINT1("HAL: GSI %u exceeds IOAPIC limit %u; rejecting allocation.\n",
+                    Irq,
+                    MaxIndex);
+        }
+
+        return 0;
+    }
+
     ASSERT(HalpVectorToIndex[Vector] == APIC_FREE_VECTOR);
 
     /* Setup a redirection entry */
@@ -396,27 +486,7 @@ HalpAllocateSystemInterrupt(
     ReDirReg.Reserved = 0;
     ReDirReg.Destination = ApicRead(APIC_ID) >> 24;
 
-    {
-        UCHAR Polarity;
-        UCHAR Trigger;
-
-        if (HalpPciLookupGsiInfo(Irq, &Polarity, &Trigger))
-        {
-            if (Polarity == HAL_ACPI_POLARITY_LOW ||
-                Polarity == HAL_ACPI_POLARITY_BOTH)
-            {
-                ReDirReg.Polarity = 1;
-            }
-            else
-            {
-                ReDirReg.Polarity = 0;
-            }
-
-            ReDirReg.TriggerMode = (Trigger == HAL_ACPI_TRIGGER_LEVEL)
-                                        ? APIC_TGM_Level
-                                        : APIC_TGM_Edge;
-        }
-    }
+    HalpIoApicDeriveAndApplyRouting(Irq, &ReDirReg);
 
     /* Initialize entry */
     ApicWriteIORedirectionEntry(Irq, ReDirReg);
@@ -494,6 +564,9 @@ ApicInitializeIOApic(VOID)
     IOAPIC_REDIRECTION_REGISTER ReDirReg;
     UCHAR Index;
     ULONG Vector;
+    ULONG IoApicVersion;
+    ULONG ReportedEntries;
+    ULONG EffectiveEntries;
 
     /* Map the I/O Apic page */
     Pte = HalAddressToPte(IOAPIC_BASE);
@@ -517,8 +590,35 @@ ApicInitializeIOApic(VOID)
     ReDirReg.Reserved = 0;
     ReDirReg.Destination = ApicRead(APIC_ID) >> 24;
 
+    /* Query hardware for supported redirection entries */
+    IoApicVersion = IOApicRead(IOAPIC_VER);
+    ReportedEntries = GET_IOAPIC_MRE(IoApicVersion) + 1;
+
+    if (ReportedEntries == 0)
+    {
+        EffectiveEntries = HALP_APIC_DEFAULT_REDIR_COUNT;
+        DPRINT1("HAL: IOAPIC reported zero redirection entries; defaulting to %lu.\n",
+                EffectiveEntries);
+    }
+    else if (ReportedEntries > HALP_APIC_MAX_SUPPORTED_REDIR)
+    {
+        EffectiveEntries = HALP_APIC_MAX_SUPPORTED_REDIR;
+        DPRINT1("HAL: IOAPIC reports %lu redirection entries; clamping to %lu supported by HAL.\n",
+                ReportedEntries,
+                EffectiveEntries);
+    }
+    else
+    {
+        EffectiveEntries = ReportedEntries;
+    }
+
+    HalpIoApicRedirectionCount = EffectiveEntries;
+    DPRINT1("HAL: IOAPIC version 0x%02lX exposes %lu redirection entries.\n",
+            GET_IOAPIC_VERSION(IoApicVersion),
+            HalpIoApicRedirectionCount);
+
     /* Loop all table entries */
-    for (Index = 0; Index < APIC_MAX_IRQ; Index++)
+    for (Index = 0; Index < HalpIoApicRedirectionCount; Index++)
     {
         /* Initialize entry */
         ApicWriteIORedirectionEntry(Index, ReDirReg);
@@ -740,8 +840,33 @@ HalEnableSystemInterrupt(
     ReDirReg.MessageType = APIC_MT_Fixed;
     ReDirReg.DestinationMode = APIC_DM_Physical;
     ReDirReg.Destination = ApicRead(APIC_ID) >> 24;
-    ReDirReg.TriggerMode = (InterruptMode == LevelSensitive) ?
-        APIC_TGM_Level : APIC_TGM_Edge;
+    HalpIoApicDeriveAndApplyRouting(Index, &ReDirReg);
+
+    if (((InterruptMode == LevelSensitive) && (ReDirReg.TriggerMode != APIC_TGM_Level)) ||
+        ((InterruptMode == Latched) && (ReDirReg.TriggerMode == APIC_TGM_Level)))
+    {
+        HALP_PCI_GSI_DIAG Diag;
+        if (HalpPciDescribeGsi(Index, &Diag))
+        {
+            DPRINT1("HAL: Requested %s interrupt for GSI %u (seg %u bus %u dev %u fn %u pin IN%c) but firmware routing is %s; respecting firmware.\n",
+                    (InterruptMode == LevelSensitive) ? "level" : "edge",
+                    Index,
+                    Diag.Segment,
+                    Diag.Bus,
+                    Diag.Device,
+                    Diag.Function,
+                    (Diag.Pin >= 1 && Diag.Pin <= 4) ? ('A' + Diag.Pin - 1) : '?',
+                    (ReDirReg.TriggerMode == APIC_TGM_Level) ? "level" : "edge");
+        }
+        else
+        {
+            DPRINT1("HAL: Requested %s interrupt for GSI %u but routing is %s; respecting firmware/defaults.\n",
+                    (InterruptMode == LevelSensitive) ? "level" : "edge",
+                    Index,
+                    (ReDirReg.TriggerMode == APIC_TGM_Level) ? "level" : "edge");
+        }
+    }
+
     ReDirReg.Mask = FALSE;
 
     /* Write back the entry */
@@ -805,7 +930,9 @@ HalBeginSystemInterrupt(
         Index = HalpVectorToIndex[Vector];
 
         /* Check if it's valid */
-        if (Index < APIC_MAX_IRQ)
+        if (Index < ((HalpIoApicRedirectionCount != 0)
+                     ? HalpIoApicRedirectionCount
+                     : HALP_APIC_DEFAULT_REDIR_COUNT))
         {
             /* Read the I/O redirection entry */
             RedirReg = ApicReadIORedirectionEntry(Index);

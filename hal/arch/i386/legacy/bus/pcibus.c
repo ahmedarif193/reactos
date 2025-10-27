@@ -11,6 +11,7 @@
 #include <hal.h>
 #include <halacpi.h>
 #include <reactos/hal/acpi_pci.h>
+#include <halirq.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -24,14 +25,21 @@
 typedef struct _HALP_PCI_GSI_INFO
 {
     BOOLEAN Valid;
+    BOOLEAN FromFirmware;
     UCHAR Polarity;
     UCHAR Trigger;
+    USHORT Segment;
+    UCHAR Bus;
+    UCHAR Device;
+    UCHAR Function;
+    UCHAR Pin;
 } HALP_PCI_GSI_INFO, *PHALP_PCI_GSI_INFO;
 
 static PHALP_PCI_GSI_INFO HalpPciGsiInfo;
 static ULONG HalpPciGsiCapacity;
 static PHAL_ACPI_PCI_ROUTE_QUERY HalpPciRouteQueryCallback;
-static BOOLEAN HalpPciBusRangeKnown;
+BOOLEAN HalpPciBusRangeKnown;
+
 
 static BOOLEAN
 HalpPciBusBelongsToRoot(
@@ -79,7 +87,8 @@ HalpPciLogEcamCoverage(
         return;
     }
 
-    if (Flags & HALP_ACPI_ECAM_COVERAGE_USED)
+    if ((Flags & HALP_ACPI_ECAM_COVERAGE_USED) &&
+        !(Flags & (HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL | HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY)))
     {
         DbgPrint("HAL: PCI Express MMCONFIG (ECAM) active for configuration space.\n");
     }
@@ -126,6 +135,11 @@ HalpPciLogEcamCoverage(
     if (Flags & HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL)
     {
         DbgPrint("HAL:   ECAM note: access path disabled globally after firmware failure.\n");
+    }
+
+    if (Flags & HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY)
+    {
+        DbgPrint("HAL:   ECAM note: firmware quirk forced legacy CF8/CFC usage.\n");
     }
 
     if (Flags & HALP_ACPI_ECAM_COVERAGE_ZERO_LENGTH)
@@ -763,7 +777,13 @@ VOID
 HalpPciRecordGsiInfo(
     _In_ ULONG Gsi,
     _In_ UCHAR Polarity,
-    _In_ UCHAR Trigger)
+    _In_ UCHAR Trigger,
+    _In_ ULONG Segment,
+    _In_ UCHAR Bus,
+    _In_ UCHAR Device,
+    _In_ UCHAR Function,
+    _In_ UCHAR Pin,
+    _In_ BOOLEAN FromFirmware)
 {
     if (!HalpPciEnsureGsiCapacity(Gsi))
     {
@@ -773,6 +793,12 @@ HalpPciRecordGsiInfo(
     HalpPciGsiInfo[Gsi].Valid = TRUE;
     HalpPciGsiInfo[Gsi].Polarity = Polarity;
     HalpPciGsiInfo[Gsi].Trigger = Trigger;
+    HalpPciGsiInfo[Gsi].Segment = (USHORT)Segment;
+    HalpPciGsiInfo[Gsi].Bus = Bus;
+    HalpPciGsiInfo[Gsi].Device = Device;
+    HalpPciGsiInfo[Gsi].Function = Function;
+    HalpPciGsiInfo[Gsi].Pin = Pin;
+    HalpPciGsiInfo[Gsi].FromFirmware = FromFirmware;
 }
 
 static VOID
@@ -870,6 +896,28 @@ HalpPciLookupGsiInfo(
 
     if (Polarity) *Polarity = HalpPciGsiInfo[Gsi].Polarity;
     if (Trigger) *Trigger = HalpPciGsiInfo[Gsi].Trigger;
+    return TRUE;
+}
+
+BOOLEAN
+HalpPciDescribeGsi(
+    _In_ ULONG Gsi,
+    _Out_ PHALP_PCI_GSI_DIAG Diag)
+{
+    if (!Diag ||
+        (Gsi >= HalpPciGsiCapacity) ||
+        !HalpPciGsiInfo ||
+        !HalpPciGsiInfo[Gsi].Valid)
+    {
+        return FALSE;
+    }
+
+    Diag->Segment = HalpPciGsiInfo[Gsi].Segment;
+    Diag->Bus = HalpPciGsiInfo[Gsi].Bus;
+    Diag->Device = HalpPciGsiInfo[Gsi].Device;
+    Diag->Function = HalpPciGsiInfo[Gsi].Function;
+    Diag->Pin = HalpPciGsiInfo[Gsi].Pin;
+    Diag->FromFirmware = HalpPciGsiInfo[Gsi].FromFirmware;
     return TRUE;
 }
 
@@ -1084,6 +1132,67 @@ HalpRegisterPciRouteQuery(
 
 VOID
 NTAPI
+HalpSetPciRoutingMap(
+    _In_reads_opt_(EntryCount) const HAL_ACPI_PCI_ROUTE_ENTRY *Entries,
+    _In_ ULONG EntryCount)
+{
+    ULONG Index;
+    ULONG Recorded = 0;
+    ULONG MaxGsi = 0;
+
+    HalpPciResetGsiTable();
+
+    if (!Entries || EntryCount == 0)
+    {
+        DPRINT1("HAL: Cleared PCI routing table (no _PRT entries).\n");
+        return;
+    }
+
+    for (Index = 0; Index < EntryCount; ++Index)
+    {
+        const HAL_ACPI_PCI_ROUTE_ENTRY *Entry = &Entries[Index];
+
+        if ((Entry->Pin < 1) || (Entry->Pin > 4))
+        {
+            DPRINT1("HAL: Ignoring invalid PCI routing entry for bus %u dev %u pin %u (segment %lu).\n",
+                    Entry->Bus,
+                    Entry->Device,
+                    Entry->Pin,
+                    Entry->Segment);
+            continue;
+        }
+
+        HalpPciRecordGsiInfo(Entry->Gsi,
+                             Entry->Polarity,
+                             Entry->TriggerMode,
+                             Entry->Segment,
+                             Entry->Bus,
+                             Entry->Device,
+                             0xFF,
+                             Entry->Pin,
+                             TRUE);
+        ++Recorded;
+
+        if (Entry->Gsi > MaxGsi)
+        {
+            MaxGsi = Entry->Gsi;
+        }
+    }
+
+    if (Recorded == 0)
+    {
+        DPRINT1("HAL: PCI routing map contained only invalid entries; GSI table remains empty.\n");
+    }
+    else
+    {
+        DPRINT1("HAL: Imported %lu PCI routing entries (max GSI %lu).\n",
+                Recorded,
+                MaxGsi);
+    }
+}
+
+VOID
+NTAPI
 HalpConfigurePciRootBridge(
     _In_ const HAL_ACPI_PCI_ROOT_INFO *Info)
 {
@@ -1098,10 +1207,12 @@ HalpConfigurePciRootBridge(
     Bus = HalHandlerForBus(PCIBus, Info->Bus);
     if (!Bus)
     {
-        DPRINT1("HAL: ACPI reported PCI segment %lu bus %lu which has no handler\n",
-                Info->Segment,
+        /* No registered handler yet; use the fake PCI handler for ACPI */
+        extern BUS_HANDLER HalpFakePciBusHandler;
+        Bus = &HalpFakePciBusHandler;
+        Bus->BusNumber = Info->Bus;
+        DPRINT1("HAL: ACPI reported PCI root for bus %lu with no handler; using fake PCI handler.\n",
                 Info->Bus);
-        return;
     }
 
     BusData = (PPCIPBUSDATA)Bus->BusData;
@@ -1784,6 +1895,16 @@ HalpPhase0GetPciDataByOffset(
         return Length;
     }
 
+    {
+        UCHAR ConfigControl;
+
+        ConfigControl = READ_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB);
+        if (!(ConfigControl & 0x01))
+        {
+            WRITE_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB, ConfigControl | 0x01);
+        }
+    }
+
 #ifdef SARCH_XBOX
     if (HalpXboxBlacklistedPCISlot(Bus, PciSlot))
     {
@@ -1863,6 +1984,16 @@ HalpPhase0SetPciDataByOffset(
                                  Length))
     {
         return Length;
+    }
+
+    {
+        UCHAR ConfigControl;
+
+        ConfigControl = READ_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB);
+        if (!(ConfigControl & 0x01))
+        {
+            WRITE_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB, ConfigControl | 0x01);
+        }
     }
 
 #ifdef SARCH_XBOX
@@ -2133,7 +2264,15 @@ HalpPCIPin2ISALine(IN PBUS_HANDLER BusHandler,
                                        &Polarity,
                                        &Trigger))
         {
-            HalpPciRecordGsiInfo(Gsi, Polarity, Trigger);
+            HalpPciRecordGsiInfo(Gsi,
+                                 Polarity,
+                                 Trigger,
+                                 BusData ? BusData->PciSegment : 0,
+                                 (UCHAR)BusHandler->BusNumber,
+                                 SlotNumber.u.bits.DeviceNumber,
+                                 SlotNumber.u.bits.FunctionNumber,
+                                 Pin,
+                                 TRUE);
             PciData->u.type0.InterruptLine = (Gsi <= 0xFF) ? (UCHAR)Gsi : 0xFF;
             return;
         }
@@ -2220,7 +2359,15 @@ HalpGetISAFixedPCIIrq(IN PBUS_HANDLER BusHandler,
                                            &Polarity,
                                            &Trigger))
             {
-                HalpPciRecordGsiInfo(Gsi, Polarity, Trigger);
+                HalpPciRecordGsiInfo(Gsi,
+                                     Polarity,
+                                     Trigger,
+                                     BusData ? BusData->PciSegment : 0,
+                                     (UCHAR)BusHandler->BusNumber,
+                                     PciSlot.u.bits.DeviceNumber,
+                                     PciSlot.u.bits.FunctionNumber,
+                                     PciData.u.type0.InterruptPin,
+                                     TRUE);
                 (*Range)->Base = Gsi;
                 (*Range)->Limit = Gsi;
                 return STATUS_SUCCESS;
@@ -2518,6 +2665,75 @@ HalpAdjustPCIResourceList(IN PBUS_HANDLER BusHandler,
                     Descriptor->u.Port.MinimumAddress.QuadPart = Minimum;
                     Descriptor->u.Port.MaximumAddress.QuadPart = Maximum;
                     Descriptor->u.Port.Alignment = Alignment;
+                    break;
+                }
+
+                case CmResourceTypeInterrupt:
+                {
+                    if (HalpPciRouteQueryCallback)
+                    {
+                        PCI_COMMON_CONFIG PciConfig;
+                        ULONG BytesRead;
+                        UCHAR Pin;
+
+                        RtlZeroMemory(&PciConfig, sizeof(PciConfig));
+                        BytesRead = HalGetBusData(PCIConfiguration,
+                                                  BusHandler->BusNumber,
+                                                  SlotNumber.u.AsULONG,
+                                                  &PciConfig,
+                                                  PCI_COMMON_HDR_LENGTH);
+                        if (BytesRead == PCI_COMMON_HDR_LENGTH)
+                        {
+                            Pin = PciConfig.u.type0.InterruptPin;
+                            if (Pin && Pin <= 4)
+                            {
+                                ULONG Gsi;
+                                UCHAR Polarity;
+                                UCHAR Trigger;
+
+                                if (HalpPciRouteQueryCallback(BusData ? BusData->PciSegment : 0,
+                                                              (UCHAR)BusHandler->BusNumber,
+                                                              SlotNumber.u.bits.DeviceNumber,
+                                                              SlotNumber.u.bits.FunctionNumber,
+                                                              Pin,
+                                                              &Gsi,
+                                                              &Polarity,
+                                                              &Trigger))
+                                {
+                                    HalpPciRecordGsiInfo(Gsi,
+                                                         Polarity,
+                                                         Trigger,
+                                                         BusData ? BusData->PciSegment : 0,
+                                                         (UCHAR)BusHandler->BusNumber,
+                                                         SlotNumber.u.bits.DeviceNumber,
+                                                         SlotNumber.u.bits.FunctionNumber,
+                                                         Pin,
+                                                         TRUE);
+
+                                    Descriptor->u.Interrupt.MinimumVector = Gsi;
+                                    Descriptor->u.Interrupt.MaximumVector = Gsi;
+                                    Descriptor->ShareDisposition = CmResourceShareShared;
+                                    Descriptor->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
+                                    Descriptor->u.Interrupt.PriorityPolicy = IrqPriorityNormal;
+                                    Descriptor->u.Interrupt.TargetedProcessors = HalpDefaultInterruptAffinity;
+
+                                    Descriptor->Flags &= ~CM_RESOURCE_INTERRUPT_LEVEL_LATCHED_BITS;
+                                    Descriptor->Flags |= (Trigger == HAL_ACPI_TRIGGER_LEVEL)
+                                                             ? CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE
+                                                             : CM_RESOURCE_INTERRUPT_LATCHED;
+                                }
+                                else
+                                {
+                                    DPRINT1("HAL: Failed to translate PCI interrupt for %02x:%02x.%u INT%c\n",
+                                            (UCHAR)BusHandler->BusNumber,
+                                            SlotNumber.u.bits.DeviceNumber,
+                                            SlotNumber.u.bits.FunctionNumber,
+                                            'A' + Pin - 1);
+                                }
+                            }
+                        }
+                    }
+
                     break;
                 }
 
@@ -3009,12 +3225,121 @@ HalpAssignPCISlotResources(IN PBUS_HANDLER BusHandler,
             PciConfig.u.type0.InterruptLine &&
             (PciConfig.u.type0.InterruptLine != 0xFF))
         {
+            ULONG InterruptLine = PciConfig.u.type0.InterruptLine;
+            BOOLEAN Routed = FALSE;
+            UCHAR Polarity = HAL_ACPI_POLARITY_LOW;
+            UCHAR Trigger = HAL_ACPI_TRIGGER_LEVEL;
+
+            if (HalpPciRouteQueryCallback && BusData)
+            {
+                ULONG Gsi;
+
+                if (HalpPciRouteQueryCallback(BusData ? BusData->PciSegment : 0,
+                                              (UCHAR)BusHandler->BusNumber,
+                                              SlotNumber.u.bits.DeviceNumber,
+                                              SlotNumber.u.bits.FunctionNumber,
+                                              PciConfig.u.type0.InterruptPin,
+                                              &Gsi,
+                                              &Polarity,
+                                              &Trigger))
+                {
+                    InterruptLine = Gsi;
+                    Routed = TRUE;
+
+                    HalpPciRecordGsiInfo(Gsi,
+                                         Polarity,
+                                         Trigger,
+                                         BusData ? BusData->PciSegment : 0,
+                                         (UCHAR)BusHandler->BusNumber,
+                                         SlotNumber.u.bits.DeviceNumber,
+                                         SlotNumber.u.bits.FunctionNumber,
+                                         PciConfig.u.type0.InterruptPin,
+                                         TRUE);
+                }
+            }
+
             Descriptor[Filled].Type = CmResourceTypeInterrupt;
             Descriptor[Filled].ShareDisposition = CmResourceShareShared;
-            Descriptor[Filled].Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-            Descriptor[Filled].u.Interrupt.Level = PciConfig.u.type0.InterruptLine;
-            Descriptor[Filled].u.Interrupt.Vector = PciConfig.u.type0.InterruptLine;
-            Descriptor[Filled].u.Interrupt.Affinity = (KAFFINITY)-1;
+            Descriptor[Filled].Flags = (Trigger == HAL_ACPI_TRIGGER_LEVEL)
+                                           ? CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE
+                                           : CM_RESOURCE_INTERRUPT_LATCHED;
+            Descriptor[Filled].u.Interrupt.Level = InterruptLine;
+
+            {
+                ULONG SystemVector = 0;
+                KAFFINITY InterruptAffinity;
+
+                InterruptAffinity = (HalpDefaultInterruptAffinity != 0) ?
+                                    HalpDefaultInterruptAffinity :
+                                    (KAFFINITY)-1;
+
+                if (InterruptLine <= 0xFF)
+                {
+                    SystemVector = HalpIrqToVector((UCHAR)InterruptLine);
+
+                    if (SystemVector == 0)
+                    {
+                        KIRQL AllocatedIrql = 0;
+                        KAFFINITY AllocatedAffinity = 0;
+                        ULONG AllocatedVector;
+
+                        AllocatedVector = HalpGetRootInterruptVector(InterruptLine,
+                                                                    InterruptLine,
+                                                                    &AllocatedIrql,
+                                                                    &AllocatedAffinity);
+
+                        if (AllocatedVector != 0)
+                        {
+                            SystemVector = AllocatedVector;
+                            if (AllocatedAffinity != 0)
+                            {
+                                InterruptAffinity = AllocatedAffinity;
+                            }
+                        }
+                    }
+                }
+
+                if ((SystemVector != 0) && (SystemVector <= 0xFF))
+                {
+                    Descriptor[Filled].u.Interrupt.Vector = SystemVector;
+                }
+                else
+                {
+                    if (InterruptLine > 0xFF)
+                    {
+                        DPRINT1("HAL: GSI %u exceeds vector range; using raw value for %02x:%02x.%u INT%c.\n",
+                                InterruptLine,
+                                (UCHAR)BusHandler->BusNumber,
+                                SlotNumber.u.bits.DeviceNumber,
+                                SlotNumber.u.bits.FunctionNumber,
+                                'A' + PciConfig.u.type0.InterruptPin - 1);
+                    }
+                    else if (SystemVector == 0)
+                    {
+                        DPRINT1("HAL: Unable to resolve system vector for GSI %u (%02x:%02x.%u INT%c); using raw value.\n",
+                                InterruptLine,
+                                (UCHAR)BusHandler->BusNumber,
+                                SlotNumber.u.bits.DeviceNumber,
+                                SlotNumber.u.bits.FunctionNumber,
+                                'A' + PciConfig.u.type0.InterruptPin - 1);
+                    }
+
+                    Descriptor[Filled].u.Interrupt.Vector = InterruptLine;
+                }
+
+                Descriptor[Filled].u.Interrupt.Affinity = InterruptAffinity;
+            }
+
+            if (!Routed)
+            {
+                DPRINT1("HAL: Using legacy interrupt line %u for %02x:%02x.%u INT%c (route unavailable).\n",
+                        InterruptLine,
+                        (UCHAR)BusHandler->BusNumber,
+                        SlotNumber.u.bits.DeviceNumber,
+                        SlotNumber.u.bits.FunctionNumber,
+                        'A' + PciConfig.u.type0.InterruptPin - 1);
+            }
+
             Filled++;
         }
 

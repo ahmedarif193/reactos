@@ -9,6 +9,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <hal.h>
+#include <halirq.h>
 
 #include <initguid.h>
 #include <wdmguid.h>
@@ -414,9 +415,48 @@ HalpQueryResources(IN PDEVICE_OBJECT DeviceObject,
                 PartialDesc->Flags = Descriptor->Flags;
                 ASSERT(Descriptor->u.Interrupt.MinimumVector ==
                        Descriptor->u.Interrupt.MaximumVector);
-                PartialDesc->u.Interrupt.Vector = Descriptor->u.Interrupt.MinimumVector;
-                PartialDesc->u.Interrupt.Level = Descriptor->u.Interrupt.MinimumVector;
-                PartialDesc->u.Interrupt.Affinity = 0xFFFFFFFF;
+
+                {
+                    ULONG Gsi;
+                    ULONG SystemVector;
+                    KAFFINITY InterruptAffinity;
+
+                    Gsi = Descriptor->u.Interrupt.MinimumVector;
+                    SystemVector = 0;
+                    InterruptAffinity = (HalpDefaultInterruptAffinity != 0) ?
+                                         HalpDefaultInterruptAffinity :
+                                         (KAFFINITY)-1;
+
+                    if (Gsi <= 0xFF)
+                    {
+                        SystemVector = HalpIrqToVector((UCHAR)Gsi);
+
+                        if (SystemVector == 0)
+                        {
+                            KIRQL AllocatedIrql = 0;
+                            KAFFINITY AllocatedAffinity = 0;
+                            ULONG AllocatedVector;
+
+                            AllocatedVector = HalpGetRootInterruptVector(Gsi,
+                                                                        Gsi,
+                                                                        &AllocatedIrql,
+                                                                        &AllocatedAffinity);
+                            if (AllocatedVector != 0)
+                            {
+                                SystemVector = AllocatedVector;
+                                if (AllocatedAffinity != 0)
+                                {
+                                    InterruptAffinity = AllocatedAffinity;
+                                }
+                            }
+                        }
+                    }
+
+                    PartialDesc->u.Interrupt.Vector =
+                        ((SystemVector != 0) && (SystemVector <= 0xFF)) ? SystemVector : Gsi;
+                    PartialDesc->u.Interrupt.Level = Gsi;
+                    PartialDesc->u.Interrupt.Affinity = InterruptAffinity;
+                }
 
                 ResourceList->List[0].PartialResourceList.Count++;
 
