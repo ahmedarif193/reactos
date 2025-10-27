@@ -32,6 +32,8 @@ PopGetSysButton(
 PKWIN32_POWEREVENT_CALLOUT PopEventCallout;
 extern PCALLBACK_OBJECT SetSystemTimeCallback;
 
+extern LONG PopSystemBatteryCount;
+
 /* FUNCTIONS *****************************************************************/
 
 VOID
@@ -178,6 +180,12 @@ PopAddRemoveSysCapsCallback(IN PVOID NotificationStructure,
 
     if (Arrival && DeviceType == PolicyDeviceBattery)
     {
+        LONG count = InterlockedIncrement(&PopSystemBatteryCount);
+        if (count < 0)
+        {
+            InterlockedExchange(&PopSystemBatteryCount, 1);
+            count = 1;
+        }
         PopCapabilities.SystemBatteriesPresent = TRUE;
         return STATUS_SUCCESS;
     }
@@ -298,7 +306,17 @@ PopAddRemoveSysCapsCallback(IN PVOID NotificationStructure,
     }
     else
     {
-        DPRINT1("Removal of a power capable device not implemented\n");
-        return STATUS_NOT_IMPLEMENTED;
+        if (DeviceType == PolicyDeviceBattery)
+        {
+            LONG count = InterlockedDecrement(&PopSystemBatteryCount);
+            if (count <= 0)
+            {
+                InterlockedExchange(&PopSystemBatteryCount, 0);
+                PopCapabilities.SystemBatteriesPresent = FALSE;
+            }
+            return STATUS_SUCCESS;
+        }
+
+        return STATUS_SUCCESS;
     }
 }

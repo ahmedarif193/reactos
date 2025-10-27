@@ -27,6 +27,7 @@ BOOLEAN PopAcpiPresent = FALSE;
 POP_POWER_ACTION PopAction;
 WORK_QUEUE_ITEM PopShutdownWorkItem;
 SYSTEM_POWER_CAPABILITIES PopCapabilities;
+LONG PopSystemBatteryCount = 0;
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
@@ -818,9 +819,13 @@ PopQueryBatteryState(
     HANDLE CompBattHandle;
     IO_STATUS_BLOCK IoStatusBlock;
     BATTERY_QUERY_INFORMATION BatteryQueryInfo = {0};
-    BATTERY_INFORMATION BatteryInfo = { 0 };
-    BATTERY_STATUS BatteryStatus;
+    BATTERY_INFORMATION BatteryInfo = {0};
+    BATTERY_STATUS BatteryStatus = {0};
+    BOOLEAN BatteryFound = FALSE;
     NTSTATUS Status;
+
+    RtlZeroMemory(BatteryState, sizeof(*BatteryState));
+    BatteryState->AcOnLine = TRUE;
 
     /* Open the CompositeBattery device */
     Status = ZwOpenFile(&CompBattHandle,
@@ -831,6 +836,12 @@ PopQueryBatteryState(
                         FILE_SYNCHRONOUS_IO_NONALERT);
     if (!NT_SUCCESS(Status))
     {
+        if (Status == STATUS_OBJECT_NAME_NOT_FOUND ||
+            Status == STATUS_NO_SUCH_DEVICE)
+        {
+            return STATUS_SUCCESS;
+        }
+
         DPRINT1("Failed to open CompositeBattery device: Status: 0x%08lX\n", Status);
         return Status;
     }
@@ -849,6 +860,12 @@ PopQueryBatteryState(
                                    sizeof(BatteryQueryInfo.BatteryTag));
     if (!NT_SUCCESS(Status))
     {
+        if (Status == STATUS_NO_SUCH_DEVICE)
+        {
+            Status = STATUS_SUCCESS;
+            goto Exit;
+        }
+
         DPRINT1("Failed to query battery tag: Status: 0x%08lX\n", Status);
         goto Exit;
     }
@@ -867,7 +884,14 @@ PopQueryBatteryState(
                                    sizeof(BatteryInfo));
     if (!NT_SUCCESS(Status))
     {
+        if (Status == STATUS_NO_SUCH_DEVICE)
+        {
+            Status = STATUS_SUCCESS;
+            goto Exit;
+        }
+
         DPRINT1("Failed to query battery information: Status: 0x%08lX\n", Status);
+        goto Exit;
     }
 
     /* Query the battery status */
@@ -887,11 +911,17 @@ PopQueryBatteryState(
                                    sizeof(BatteryStatus));
     if (!NT_SUCCESS(Status))
     {
+        if (Status == STATUS_NO_SUCH_DEVICE)
+        {
+            Status = STATUS_SUCCESS;
+            goto Exit;
+        }
+
         DPRINT1("Failed to query battery status: Status: 0x%08lX\n", Status);
         goto Exit;
     }
 
-    RtlZeroMemory(BatteryState, sizeof(*BatteryState));
+    BatteryFound = TRUE;
     BatteryState->BatteryPresent = TRUE;
     BatteryState->AcOnLine = BooleanFlagOn(BatteryStatus.PowerState, BATTERY_POWER_ON_LINE);
     BatteryState->Charging = BooleanFlagOn(BatteryStatus.PowerState, BATTERY_CHARGING);
@@ -911,6 +941,11 @@ PopQueryBatteryState(
 
 Exit:
     ZwClose(CompBattHandle);
+    if (!BatteryFound)
+    {
+        BatteryState->BatteryPresent = FALSE;
+        BatteryState->AcOnLine = TRUE;
+    }
     return Status;
 }
     

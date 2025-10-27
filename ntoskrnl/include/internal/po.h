@@ -340,6 +340,8 @@ PopAddRemoveSysCapsCallback(
     IN PVOID Context
 );
 
+extern LONG PopSystemBatteryCount;
+
 //
 // Notifications
 //
