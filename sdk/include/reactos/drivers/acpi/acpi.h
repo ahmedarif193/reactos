@@ -37,11 +37,11 @@ typedef struct _ACPI_BIOS_MULTI_NODE
 #define PSDT_SIGNATURE 0x54445350               // "PSDT"
 #define SBST_SIGNATURE 0x54534253               // "SBST"
 #define DBGP_SIGNATURE 0x50474244               // "DBGP"
+#define MCFG_SIGNATURE 'GFCM'                   // "MCFG"
 #define XSDT_SIGNATURE 'TDSX'
 #define BOOT_SIGNATURE 'TOOB'
 #define SRAT_SIGNATURE 'TARS'
 #define WDRT_SIGNATURE 'TRDW'
-#define MCFG_SIGNATURE 'GFCM'
 #define BGRT_SIGNATURE  0x54524742      	// "BGRT"
 
 //
