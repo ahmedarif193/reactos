@@ -7,6 +7,8 @@
 
 #define TAG_PCI '0ICP'
 
+EXTERN_C const GUID GUID_REACTOS_PCI_ROOT_BUS_INTERFACE;
+
 typedef struct _PCI_DEVICE
 {
     // Entry on device list
@@ -77,6 +79,13 @@ typedef struct _PDO_DEVICE_EXTENSION
     LONG References;
 } PDO_DEVICE_EXTENSION, *PPDO_DEVICE_EXTENSION;
 
+typedef struct _PCI_ROOT_BUS_INTERFACE
+{
+    INTERFACE Interface;
+    ULONG MinBus;
+    ULONG MaxBus;
+} PCI_ROOT_BUS_INTERFACE, *PPCI_ROOT_BUS_INTERFACE;
+
 /* Functional Device Object device extension for the PCI driver device object */
 typedef struct _FDO_DEVICE_EXTENSION
 {
@@ -84,8 +93,12 @@ typedef struct _FDO_DEVICE_EXTENSION
     COMMON_DEVICE_EXTENSION Common;
     // Entry on device list
     LIST_ENTRY ListEntry;
-    // PCI bus number serviced by this FDO
+    // PCI bus number serviced by this FDO (legacy single-bus view)
     ULONG BusNumber;
+    // Lowest bus number owned by this root bridge
+    ULONG BusRangeStart;
+    // Highest bus number owned by this root bridge
+    ULONG BusRangeEnd;
     // Current state of the driver
     PCI_DEVICE_STATE State;
     // Namespace device list
@@ -97,6 +110,24 @@ typedef struct _FDO_DEVICE_EXTENSION
     // Lower device object
     PDEVICE_OBJECT Ldo;
 } FDO_DEVICE_EXTENSION, *PFDO_DEVICE_EXTENSION;
+
+static __inline BOOLEAN
+PciIsBusInRange(
+    _In_ PFDO_DEVICE_EXTENSION FdoExtension,
+    _In_ ULONG BusNumber)
+{
+    if (!FdoExtension)
+        return TRUE;
+
+    if (FdoExtension->BusRangeStart <= FdoExtension->BusRangeEnd)
+    {
+        if (BusNumber < FdoExtension->BusRangeStart ||
+            BusNumber > FdoExtension->BusRangeEnd)
+            return FALSE;
+    }
+
+    return TRUE;
+}
 
 
 /* Driver extension associated with PCI driver */

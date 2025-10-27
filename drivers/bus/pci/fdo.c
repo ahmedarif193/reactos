@@ -18,6 +18,7 @@ static NTSTATUS
 FdoLocateChildDevice(
     PPCI_DEVICE *Device,
     PFDO_DEVICE_EXTENSION DeviceExtension,
+    ULONG BusNumber,
     PCI_SLOT_NUMBER SlotNumber,
     PPCI_COMMON_CONFIG PciConfig)
 {
@@ -32,7 +33,8 @@ FdoLocateChildDevice(
         CurrentDevice = CONTAINING_RECORD(CurrentEntry, PCI_DEVICE, ListEntry);
 
         /* If both vendor ID and device ID match, it is the same device */
-        if ((PciConfig->VendorID == CurrentDevice->PciConfig.VendorID) &&
+        if ((CurrentDevice->BusNumber == BusNumber) &&
+            (PciConfig->VendorID == CurrentDevice->PciConfig.VendorID) &&
             (PciConfig->DeviceID == CurrentDevice->PciConfig.DeviceID) &&
             (SlotNumber.u.AsULONG == CurrentDevice->SlotNumber.u.AsULONG))
         {
@@ -84,6 +86,7 @@ FdoEnumerateDevices(
     PCI_SLOT_NUMBER SlotNumber;
     ULONG DeviceNumber;
     ULONG FunctionNumber;
+    ULONG Bus;
     ULONG Size;
     NTSTATUS Status;
 
@@ -93,110 +96,120 @@ FdoEnumerateDevices(
 
     DeviceExtension->DeviceListCount = 0;
 
-    /* Enumerate devices on the PCI bus */
-    SlotNumber.u.AsULONG = 0;
-    for (DeviceNumber = 0; DeviceNumber < PCI_MAX_DEVICES; DeviceNumber++)
+    /* Enumerate devices across the root's bus window */
+    for (Bus = DeviceExtension->BusRangeStart; Bus <= DeviceExtension->BusRangeEnd; Bus++)
     {
-        SlotNumber.u.bits.DeviceNumber = DeviceNumber;
-        for (FunctionNumber = 0; FunctionNumber < PCI_MAX_FUNCTION; FunctionNumber++)
+        if (!PciIsBusInRange(DeviceExtension, Bus))
         {
-            SlotNumber.u.bits.FunctionNumber = FunctionNumber;
+            continue;
+        }
 
-            DPRINT("Bus %1lu  Device %2lu  Func %1lu\n",
-                   DeviceExtension->BusNumber,
-                   DeviceNumber,
-                   FunctionNumber);
-
-            RtlZeroMemory(&PciConfig,
-                          sizeof(PCI_COMMON_CONFIG));
-
-            Size = HalGetBusData(PCIConfiguration,
-                                 DeviceExtension->BusNumber,
-                                 SlotNumber.u.AsULONG,
-                                 &PciConfig,
-                                 PCI_COMMON_HDR_LENGTH);
-            DPRINT("Size %lu\n", Size);
-            if (Size != PCI_COMMON_HDR_LENGTH ||
-                PciConfig.VendorID == PCI_INVALID_VENDORID ||
-                PciConfig.VendorID == 0)
+        SlotNumber.u.AsULONG = 0;
+        for (DeviceNumber = 0; DeviceNumber < PCI_MAX_DEVICES; DeviceNumber++)
+        {
+            SlotNumber.u.bits.DeviceNumber = DeviceNumber;
+            for (FunctionNumber = 0; FunctionNumber < PCI_MAX_FUNCTION; FunctionNumber++)
             {
-                if (FunctionNumber == 0)
+                SlotNumber.u.bits.FunctionNumber = FunctionNumber;
+
+                DPRINT("Bus %1lu  Device %2lu  Func %1lu\n",
+                       Bus,
+                       DeviceNumber,
+                       FunctionNumber);
+
+                RtlZeroMemory(&PciConfig,
+                              sizeof(PCI_COMMON_CONFIG));
+
+                Size = HalGetBusData(PCIConfiguration,
+                                     Bus,
+                                     SlotNumber.u.AsULONG,
+                                     &PciConfig,
+                                     PCI_COMMON_HDR_LENGTH);
+                DPRINT("Size %lu\n", Size);
+                if (Size != PCI_COMMON_HDR_LENGTH ||
+                    PciConfig.VendorID == PCI_INVALID_VENDORID ||
+                    PciConfig.VendorID == 0)
                 {
-                    break;
-                }
-                else
-                {
-                    continue;
-                }
-            }
-
-            DPRINT("Bus %1lu  Device %2lu  Func %1lu  VenID 0x%04hx  DevID 0x%04hx\n",
-                   DeviceExtension->BusNumber,
-                   DeviceNumber,
-                   FunctionNumber,
-                   PciConfig.VendorID,
-                   PciConfig.DeviceID);
-
-            Status = FdoLocateChildDevice(&Device, DeviceExtension, SlotNumber, &PciConfig);
-            if (!NT_SUCCESS(Status))
-            {
-                Device = ExAllocatePoolWithTag(NonPagedPool, sizeof(PCI_DEVICE), TAG_PCI);
-                if (!Device)
-                {
-                    /* FIXME: Cleanup resources for already discovered devices */
-                    return STATUS_INSUFFICIENT_RESOURCES;
-                }
-
-                RtlZeroMemory(Device,
-                              sizeof(PCI_DEVICE));
-
-                Device->BusNumber = DeviceExtension->BusNumber;
-
-                if (PciIsDebuggingDevice(DeviceExtension->BusNumber, SlotNumber))
-                {
-                    Device->IsDebuggingDevice = TRUE;
-
-                    /*
-                     * ReactOS-specific: apply a hack
-                     * to prevent driver installation for the debugging device.
-                     * NOTE: Nothing to do for IEEE 1394 devices; NT5.1 and NT5.2
-                     * support IEEE 1394 debugging.
-                     *
-                     * FIXME: We should set the device problem code
-                     * CM_PROB_USED_BY_DEBUGGER instead.
-                     */
-                    if (PciConfig.BaseClass != PCI_CLASS_SERIAL_BUS_CTLR ||
-                        PciConfig.SubClass != PCI_SUBCLASS_SB_IEEE1394)
+                    if (FunctionNumber == 0)
                     {
-                        PciConfig.VendorID = 0xDEAD;
-                        PciConfig.DeviceID = 0xBEEF;
+                        break;
+                    }
+                    else
+                    {
+                        continue;
                     }
                 }
 
-                RtlCopyMemory(&Device->SlotNumber,
-                              &SlotNumber,
-                              sizeof(PCI_SLOT_NUMBER));
+                DPRINT("Bus %1lu  Device %2lu  Func %1lu  VenID 0x%04hx  DevID 0x%04hx\n",
+                       Bus,
+                       DeviceNumber,
+                       FunctionNumber,
+                       PciConfig.VendorID,
+                       PciConfig.DeviceID);
 
-                RtlCopyMemory(&Device->PciConfig,
-                              &PciConfig,
-                              sizeof(PCI_COMMON_CONFIG));
+                Status = FdoLocateChildDevice(&Device, DeviceExtension, Bus, SlotNumber, &PciConfig);
+                if (!NT_SUCCESS(Status))
+                {
+                    Device = ExAllocatePoolWithTag(NonPagedPool, sizeof(PCI_DEVICE), TAG_PCI);
+                    if (!Device)
+                    {
+                        /* FIXME: Cleanup resources for already discovered devices */
+                        return STATUS_INSUFFICIENT_RESOURCES;
+                    }
 
-                ExInterlockedInsertTailList(
-                    &DeviceExtension->DeviceListHead,
-                    &Device->ListEntry,
-                    &DeviceExtension->DeviceListLock);
-            }
+                    RtlZeroMemory(Device,
+                                  sizeof(PCI_DEVICE));
 
-            DeviceExtension->DeviceListCount++;
+                    Device->BusNumber = Bus;
 
-            /* Skip to next device if the current one is not a multifunction device */
-            if ((FunctionNumber == 0) &&
-                ((PciConfig.HeaderType & 0x80) == 0))
-            {
-                break;
+                    if (PciIsDebuggingDevice(Bus, SlotNumber))
+                    {
+                        Device->IsDebuggingDevice = TRUE;
+
+                        /*
+                         * ReactOS-specific: apply a hack
+                         * to prevent driver installation for the debugging device.
+                         * NOTE: Nothing to do for IEEE 1394 devices; NT5.1 and NT5.2
+                         * support IEEE 1394 debugging.
+                         *
+                         * FIXME: We should set the device problem code
+                         * CM_PROB_USED_BY_DEBUGGER instead.
+                         */
+                        if (PciConfig.BaseClass != PCI_CLASS_SERIAL_BUS_CTLR ||
+                            PciConfig.SubClass != PCI_SUBCLASS_SB_IEEE1394)
+                        {
+                            PciConfig.VendorID = 0xDEAD;
+                            PciConfig.DeviceID = 0xBEEF;
+                        }
+                    }
+
+                    RtlCopyMemory(&Device->SlotNumber,
+                                  &SlotNumber,
+                                  sizeof(PCI_SLOT_NUMBER));
+
+                    RtlCopyMemory(&Device->PciConfig,
+                                  &PciConfig,
+                                  sizeof(PCI_COMMON_CONFIG));
+
+                    ExInterlockedInsertTailList(
+                        &DeviceExtension->DeviceListHead,
+                        &Device->ListEntry,
+                        &DeviceExtension->DeviceListLock);
+                }
+
+                DeviceExtension->DeviceListCount++;
+
+                /* Skip to next device if the current one is not a multifunction device */
+                if ((FunctionNumber == 0) &&
+                    ((PciConfig.HeaderType & 0x80) == 0))
+                {
+                    break;
+                }
             }
         }
     }
+
+
 
     DPRINT("Done\n");
 
@@ -425,6 +438,8 @@ FdoStartDevice(
 
     /* By default, use the bus number in the resource list header */
     DeviceExtension->BusNumber = AllocatedResources->List[0].BusNumber;
+    DeviceExtension->BusRangeStart = DeviceExtension->BusNumber;
+    DeviceExtension->BusRangeEnd = DeviceExtension->BusNumber;
 
     for (i = 0; i < AllocatedResources->List[0].PartialResourceList.Count; i++)
     {
@@ -438,7 +453,25 @@ FdoStartDevice(
                 /* Use this one instead */
                 ASSERT(AllocatedResources->List[0].BusNumber == ResourceDescriptor->u.BusNumber.Start);
                 DeviceExtension->BusNumber = ResourceDescriptor->u.BusNumber.Start;
-                DPRINT("Found bus number resource: %lu\n", DeviceExtension->BusNumber);
+                DeviceExtension->BusRangeStart = ResourceDescriptor->u.BusNumber.Start;
+                {
+                    ULONG length = ResourceDescriptor->u.BusNumber.Length;
+                    ULONG endBus = ResourceDescriptor->u.BusNumber.Start;
+
+                    if (length > 0)
+                    {
+                        endBus = ResourceDescriptor->u.BusNumber.Start + length - 1;
+                        if (endBus < ResourceDescriptor->u.BusNumber.Start)
+                            endBus = ResourceDescriptor->u.BusNumber.Start;
+                        if (endBus > 0xFF)
+                            endBus = 0xFF;
+                    }
+
+                    DeviceExtension->BusRangeEnd = endBus;
+                }
+                DPRINT("Found bus number resource: %lu-%lu\n",
+                       DeviceExtension->BusRangeStart,
+                       DeviceExtension->BusRangeEnd);
                 FoundBusNumber = TRUE;
                 break;
 
