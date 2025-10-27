@@ -769,11 +769,41 @@ AcpiOsWritePort (
     return (AE_OK);
 }
 
+static
+BOOLEAN
+OslIsPciBusInRange(
+    _In_ ULONG BusNumber)
+{
+    ULONG MinBus, MaxBus;
+
+    if (!HalQueryPciBusRange(&MinBus, &MaxBus))
+    {
+        /* HAL has not advertised any limits yet; assume full legacy range. */
+        return TRUE;
+    }
+
+    if (BusNumber < MinBus || BusNumber > MaxBus)
+    {
+        DPRINT1("ACPI: Skipping PCI config access on bus %lu; firmware range is [%lu-%lu].\n",
+                BusNumber,
+                MinBus,
+                MaxBus);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 BOOLEAN
 OslIsPciDevicePresent(ULONG BusNumber, ULONG SlotNumber)
 {
     UINT32 ReadLength;
     PCI_COMMON_CONFIG PciConfig;
+
+    if (!OslIsPciBusInRange(BusNumber))
+    {
+        return FALSE;
+    }
 
     /* Detect device presence by reading the PCI configuration space */
 
