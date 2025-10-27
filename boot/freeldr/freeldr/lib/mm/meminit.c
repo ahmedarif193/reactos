@@ -645,7 +645,7 @@ PFN_NUMBER MmFindAvailablePages(PVOID PageLookupTable, PFN_NUMBER TotalPageCount
     }
     else
     {
-        TRACE("Alloc low memory, LastFreePageHint 0x%x, TPC 0x%x\n", LastFreePageHint, TotalPageCount);
+        // TRACE("Alloc low memory, LastFreePageHint 0x%x, TPC 0x%x\n", LastFreePageHint, TotalPageCount);
         /* Allocate "low" pages */
         for (Index=1; Index < LastFreePageHint; Index++)
         {

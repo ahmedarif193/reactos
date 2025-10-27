@@ -60,8 +60,8 @@ MempAddMemoryBlock(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock,
                    PFN_NUMBER PageCount,
                    ULONG Type)
 {
-    TRACE("MempAddMemoryBlock(BasePage=0x%lx, PageCount=0x%lx, Type=%ld)\n",
-          BasePage, PageCount, Type);
+    // TRACE("MempAddMemoryBlock(BasePage=0x%lx, PageCount=0x%lx, Type=%ld)\n",
+    //       BasePage, PageCount, Type);
 
     /* Check for memory block after 4GB - we don't support it yet
        Note: Even last page before 4GB limit is not supported */
@@ -369,8 +369,8 @@ WinLdrInsertDescriptor(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock,
     PLIST_ENTRY PreviousEntry, NextEntry;
     PMEMORY_ALLOCATION_DESCRIPTOR PreviousDescriptor = NULL, NextDescriptor = NULL;
 
-    TRACE("BP=0x%X PC=0x%X %s\n", NewDescriptor->BasePage,
-        NewDescriptor->PageCount, MemTypeDesc[NewDescriptor->MemoryType]);
+    // TRACE("BP=0x%X PC=0x%X %s\n", NewDescriptor->BasePage,
+    //     NewDescriptor->PageCount, MemTypeDesc[NewDescriptor->MemoryType]);
 
     /* Find a place where to insert the new descriptor to */
     PreviousEntry = ListHead;
