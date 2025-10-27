@@ -26,6 +26,32 @@
 
 extern BOOLEAN VpBaseVideo;
 
+static
+BOOLEAN
+VideoPortIsPciBusInRange(
+    _In_ ULONG BusNumber)
+{
+    ULONG MinBus, MaxBus;
+
+    if (!HalQueryPciBusRange(&MinBus, &MaxBus))
+    {
+        /* HAL has not published PCI limits yet; fall back to legacy behaviour. */
+        return TRUE;
+    }
+
+    if (BusNumber < MinBus || BusNumber > MaxBus)
+    {
+        WARN_(VIDEOPRT,
+              "Skipping PCI configuration access on bus %lu; firmware range is [%lu-%lu].\n",
+              BusNumber,
+              MinBus,
+              MaxBus);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 /* PRIVATE FUNCTIONS **********************************************************/
 
 static BOOLEAN
@@ -56,6 +82,12 @@ IntVideoPortGetLegacyResources(
 
     if (DriverExtension->InitializationData.HwGetLegacyResources)
     {
+        if (DeviceExtension->AdapterInterfaceType == PCIBus &&
+            !VideoPortIsPciBusInRange(DeviceExtension->SystemIoBusNumber))
+        {
+            return STATUS_NO_SUCH_DEVICE;
+        }
+
         ReadLength = HalGetBusData(PCIConfiguration,
                                    DeviceExtension->SystemIoBusNumber,
                                    DeviceExtension->SystemIoSlotNumber,
@@ -678,6 +710,11 @@ VideoPortGetAccessRanges(
         if (AllocatedResources == NULL &&
             DeviceExtension->AdapterInterfaceType == PCIBus)
         {
+            if (!VideoPortIsPciBusInRange(DeviceExtension->SystemIoBusNumber))
+            {
+                return ERROR_DEV_NOT_EXIST;
+            }
+
             if (DeviceExtension->PhysicalDeviceObject != NULL)
             {
                 PciSlotNumber.u.AsULONG = DeviceExtension->SystemIoSlotNumber;
@@ -1213,6 +1250,12 @@ VideoPortGetBusData(
          SlotNumber = DeviceExtension->SystemIoSlotNumber;
    }
 
+   if (BusDataType == PCIConfiguration &&
+       !VideoPortIsPciBusInRange(DeviceExtension->SystemIoBusNumber))
+   {
+      return 0;
+   }
+
    return HalGetBusDataByOffset(
       BusDataType,
       DeviceExtension->SystemIoBusNumber,
@@ -1246,6 +1289,12 @@ VideoPortSetBusData(
       /* Legacy vs. PnP behaviour */
       if (DeviceExtension->PhysicalDeviceObject != NULL)
          SlotNumber = DeviceExtension->SystemIoSlotNumber;
+   }
+
+   if (BusDataType == PCIConfiguration &&
+       !VideoPortIsPciBusInRange(DeviceExtension->SystemIoBusNumber))
+   {
+      return 0;
    }
 
    return HalSetBusDataByOffset(
