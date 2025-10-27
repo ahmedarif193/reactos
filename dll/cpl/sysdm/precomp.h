@@ -56,6 +56,7 @@ INT_PTR CALLBACK LicenceDlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM l
 
 /* System information */
 BOOL GetSystemName(PWSTR pBuf, SIZE_T cchBuf);
+BOOL GetInstalledSystemMemoryFromSMBios(PULONGLONG pInstalledBytes);
 
 #define MAX_STR_LENGTH  256
 

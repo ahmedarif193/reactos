@@ -10,6 +10,7 @@
 #include "precomp.h"
 
 #include <udmihelp.h>
+#include <ddk/wmidata.h>
 
 typedef struct GENERIC_NAME
 {
@@ -880,4 +881,90 @@ BOOL GetSystemName(PWSTR pBuf, SIZE_T cchBuf)
     FreeSMBiosData(SMBiosBuf);
 
     return (wcslen(pBuf) > 0);
+}
+
+BOOL
+GetInstalledSystemMemoryFromSMBios(
+    _Out_ PULONGLONG pInstalledBytes)
+{
+    PVOID SMBiosBuf;
+    PCHAR DmiStrings[ID_STRINGS_MAX] = { 0 };
+    PMSSmBios_RawSMBiosTables RawTables;
+    const BYTE *Tables;
+    DWORD TablesLength;
+    DWORD Offset;
+    ULONGLONG TotalBytes = 0;
+
+    if (!pInstalledBytes)
+        return FALSE;
+
+    *pInstalledBytes = 0;
+
+    SMBiosBuf = LoadSMBiosData(DmiStrings);
+    if (!SMBiosBuf)
+        return FALSE;
+
+    RawTables = (PMSSmBios_RawSMBiosTables)SMBiosBuf;
+    Tables = RawTables->SMBiosData;
+    TablesLength = RawTables->Size;
+    Offset = 0;
+
+    while (Offset + 4 <= TablesLength)
+    {
+        const BYTE *Structure = Tables + Offset;
+        BYTE Type = Structure[0];
+        BYTE Length = Structure[1];
+        DWORD NextOffset;
+
+        if (Length < 4 || Offset + Length > TablesLength)
+            break;
+
+        if (Type == 17 && Length >= 0x15)
+        {
+            const BYTE *Type17 = Structure;
+            USHORT SizeField = *(const USHORT *)(Type17 + 0x0C);
+            ULONGLONG ModuleBytes = 0;
+
+            if (SizeField == 0 || SizeField == 0xFFFF)
+            {
+                if (Length >= 0x1C + sizeof(DWORD))
+                {
+                    DWORD ExtendedSize = *(const DWORD *)(Type17 + 0x1C);
+                    ModuleBytes = (ULONGLONG)ExtendedSize * 1024ULL * 1024ULL;
+                }
+            }
+            else if (SizeField == 0x7FFF && Length >= 0x1C + sizeof(DWORD))
+            {
+                DWORD ExtendedSize = *(const DWORD *)(Type17 + 0x1C);
+                ModuleBytes = (ULONGLONG)ExtendedSize * 1024ULL * 1024ULL;
+            }
+            else if (SizeField & 0x8000)
+            {
+                ModuleBytes = (ULONGLONG)(SizeField & 0x7FFF) * 65536ULL;
+            }
+            else
+            {
+                ModuleBytes = (ULONGLONG)SizeField * 1024ULL * 1024ULL;
+            }
+
+            TotalBytes += ModuleBytes;
+        }
+
+        NextOffset = Offset + Length;
+        while (NextOffset + 1 < TablesLength && (Tables[NextOffset] != 0 || Tables[NextOffset + 1] != 0))
+            NextOffset++;
+
+        if (NextOffset + 1 >= TablesLength)
+            break;
+
+        Offset = NextOffset + 2;
+    }
+
+    FreeSMBiosData(SMBiosBuf);
+
+    if (!TotalBytes)
+        return FALSE;
+
+    *pInstalledBytes = TotalBytes;
+    return TRUE;
 }

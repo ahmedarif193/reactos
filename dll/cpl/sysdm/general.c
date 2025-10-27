@@ -14,6 +14,7 @@
 #include <winnls.h>
 #include <powrprof.h>
 #include <buildno.h>
+#include <math.h>
 
 #define ANIM_STEP 2
 #define ANIM_TIME 50
@@ -524,49 +525,84 @@ static VOID GetSystemInformation(HWND hwnd)
 
     if (GlobalMemoryStatusEx(&MemStat))
     {
+        typedef BOOL (WINAPI *PGetPhysicallyInstalledSystemMemory)(PULONGLONG);
+
         TCHAR szStr[32];
-        double dTotalPhys;
+        ULONGLONG bestTotalBytes = MemStat.ullTotalPhys;
+        ULONGLONG smbiosBytes = 0;
+        ULONGLONG installedKB = 0;
+        ULONGLONG installedBytes = 0;
+        HMODULE hKernel32;
+        PGetPhysicallyInstalledSystemMemory pGetPhysInstalledMem = NULL;
 
-        if (MemStat.ullTotalPhys > 1024 * 1024 * 1024)
+        if (GetInstalledSystemMemoryFromSMBios(&installedBytes) && installedBytes > bestTotalBytes)
         {
-            UINT i = 0;
-            static const UINT uStrId[] = { IDS_GIGABYTE, IDS_TERABYTE, IDS_PETABYTE};
-
-            // We're dealing with GBs or more
-            MemStat.ullTotalPhys /= 1024 * 1024;
-
-            if (MemStat.ullTotalPhys > 1024 * 1024)
-            {
-                // We're dealing with TBs or more
-                MemStat.ullTotalPhys /= 1024;
-                i++;
-
-                if (MemStat.ullTotalPhys > 1024 * 1024)
-                {
-                    // We're dealing with PBs or more
-                    MemStat.ullTotalPhys /= 1024;
-                    i++;
-
-                    dTotalPhys = (double)MemStat.ullTotalPhys / 1024;
-                }
-                else
-                {
-                    dTotalPhys = (double)MemStat.ullTotalPhys / 1024;
-                }
-            }
-            else
-            {
-                dTotalPhys = (double)MemStat.ullTotalPhys / 1024;
-            }
-
-            LoadString(hApplet, uStrId[i], szStr, sizeof(szStr) / sizeof(TCHAR));
-            MakeFloatValueString(&dTotalPhys, Buf, szStr);
+            smbiosBytes = installedBytes;
+            bestTotalBytes = installedBytes;
         }
-        else
+
+        hKernel32 = GetModuleHandleW(L"kernel32.dll");
+        if (hKernel32)
         {
-            // We're dealing with MBs, don't show any decimals
-            LoadString(hApplet, IDS_MEGABYTE, szStr, sizeof(szStr) / sizeof(TCHAR));
-            wsprintf(Buf, _T("%u %s"), (UINT)MemStat.ullTotalPhys / 1024 / 1024, szStr);
+            pGetPhysInstalledMem = (PGetPhysicallyInstalledSystemMemory)
+                GetProcAddress(hKernel32, "GetPhysicallyInstalledSystemMemory");
+            if (pGetPhysInstalledMem &&
+                pGetPhysInstalledMem(&installedKB) &&
+                installedKB != 0)
+            {
+                ULONGLONG candidateBytes = installedKB * 1024ULL;
+
+                if (candidateBytes > bestTotalBytes)
+                    bestTotalBytes = candidateBytes;
+            }
+        }
+
+        {
+            WCHAR szDebug[128];
+            StringCchPrintfW(szDebug,
+                             _countof(szDebug),
+                             L"SYSDM RAM: totalPhys=%I64u installedKB=%I64u smbios=%I64u best=%I64u\n",
+                             MemStat.ullTotalPhys,
+                             installedKB,
+                             smbiosBytes,
+                             bestTotalBytes);
+        OutputDebugStringW(szDebug);
+        }
+
+        {
+            static const UINT uStrId[] = { IDS_GIGABYTE, IDS_TERABYTE, IDS_PETABYTE };
+            ULONGLONG displayBytes;
+            double value;
+            UINT unitIndex = 0;
+
+            if (installedKB)
+                displayBytes = installedKB * 1024ULL;
+            else if (smbiosBytes)
+                displayBytes = smbiosBytes;
+            else
+                displayBytes = bestTotalBytes;
+
+            if (displayBytes == 0)
+                displayBytes = bestTotalBytes;
+
+            value = (double)displayBytes / (1024.0 * 1024.0 * 1024.0);
+            value = ceil(value);
+            if (value < 1.0)
+                value = 1.0;
+
+            while (value >= 1024.0 && unitIndex + 1 < ARRAYSIZE(uStrId))
+            {
+                value /= 1024.0;
+                unitIndex++;
+            }
+
+            LoadString(hApplet, uStrId[unitIndex], szStr, sizeof(szStr) / sizeof(TCHAR));
+
+            StringCchPrintf(Buf,
+                            MAX_STR_LENGTH,
+                            _T("%.1f %s"),
+                            value,
+                            szStr);
         }
 
         SetDlgItemText(hwnd, CurMachineLine, Buf);

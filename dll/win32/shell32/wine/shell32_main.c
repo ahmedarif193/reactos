@@ -33,6 +33,7 @@
 #include <shlwapi.h>
 #include <strsafe.h>
 #include <winnls.h>
+#include <ndk/ntndk.h>
 
 #include "undocshell.h"
 #include "pidl.h"
@@ -46,6 +47,134 @@
 #include <reactos/buildno.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
+
+#ifndef SystemPhysicalMemoryInformation
+#define SystemPhysicalMemoryInformation 184
+#endif
+
+#ifndef __SYSTEM_PHYSICAL_MEMORY_INFORMATION_DEFINED
+#define __SYSTEM_PHYSICAL_MEMORY_INFORMATION_DEFINED
+typedef struct _SYSTEM_PHYSICAL_MEMORY_INFORMATION
+{
+    ULONGLONG TotalPhysicalBytes;
+    ULONGLONG LowestPhysicalAddress;
+    ULONGLONG HighestPhysicalAddress;
+} SYSTEM_PHYSICAL_MEMORY_INFORMATION, *PSYSTEM_PHYSICAL_MEMORY_INFORMATION;
+#endif
+
+typedef struct _RAW_SMBIOS_DATA
+{
+    BYTE Used20CallingMethod;
+    BYTE SMBIOSMajorVersion;
+    BYTE SMBIOSMinorVersion;
+    BYTE DmiRevision;
+    DWORD Length;
+    BYTE SMBIOSTableData[1];
+} RAW_SMBIOS_DATA, *PRAW_SMBIOS_DATA;
+
+static BOOL QueryInstalledMemoryFromSmbios(ULONGLONG *installedBytes)
+{
+    typedef UINT (WINAPI *PGetSystemFirmwareTable)(DWORD, DWORD, PVOID, DWORD);
+    const DWORD SmbiosSignature = 'RSMB';
+    PGetSystemFirmwareTable pGetSystemFirmwareTable;
+    HMODULE hKernel;
+    UINT bufferSize;
+    BYTE *buffer = NULL;
+    BOOL result = FALSE;
+    PRAW_SMBIOS_DATA raw;
+    const BYTE *tables;
+    DWORD tablesLength;
+    DWORD offset;
+
+    if (!installedBytes)
+        return FALSE;
+
+    *installedBytes = 0;
+
+    hKernel = GetModuleHandleW(L"KERNEL32.DLL");
+    if (!hKernel)
+        return FALSE;
+
+    pGetSystemFirmwareTable = (PGetSystemFirmwareTable)
+        GetProcAddress(hKernel, "GetSystemFirmwareTable");
+    if (!pGetSystemFirmwareTable)
+        return FALSE;
+
+    bufferSize = pGetSystemFirmwareTable(SmbiosSignature, 0, NULL, 0);
+    if (bufferSize == 0)
+        return FALSE;
+
+    buffer = HeapAlloc(GetProcessHeap(), 0, bufferSize);
+    if (!buffer)
+        return FALSE;
+
+    if (pGetSystemFirmwareTable(SmbiosSignature, 0, buffer, bufferSize) != bufferSize)
+        goto cleanup;
+
+    if (bufferSize < sizeof(RAW_SMBIOS_DATA))
+        goto cleanup;
+
+    raw = (PRAW_SMBIOS_DATA)buffer;
+    tables = raw->SMBIOSTableData;
+    tablesLength = raw->Length;
+    offset = 0;
+
+    if (tablesLength > bufferSize - FIELD_OFFSET(RAW_SMBIOS_DATA, SMBIOSTableData))
+        goto cleanup;
+
+    while (offset + 4 <= tablesLength)
+    {
+        BYTE type = tables[offset];
+        BYTE length = tables[offset + 1];
+        DWORD nextOffset;
+
+        if (length < 4 || offset + length > tablesLength)
+            break;
+
+        if (type == 17 && length >= 0x15)
+        {
+            const BYTE *structure = tables + offset;
+            USHORT sizeField = *(const USHORT *)(structure + 0x0C);
+            ULONGLONG moduleBytes = 0;
+
+            if (sizeField == 0 || sizeField == 0xFFFF)
+            {
+                moduleBytes = 0;
+            }
+            else if (sizeField == 0x7FFF && length >= 0x1C + 4)
+            {
+                DWORD extendedSize = *(const DWORD *)(structure + 0x1C);
+                moduleBytes = (ULONGLONG)extendedSize * 1024ULL * 1024ULL;
+            }
+            else if (sizeField & 0x8000)
+            {
+                moduleBytes = (ULONGLONG)(sizeField & 0x7FFF) * 65536ULL;
+            }
+            else
+            {
+                moduleBytes = (ULONGLONG)sizeField * 1024ULL * 1024ULL;
+            }
+
+            *installedBytes += moduleBytes;
+        }
+
+        nextOffset = offset + length;
+        while (nextOffset + 1 < tablesLength && (tables[nextOffset] != 0 || tables[nextOffset + 1] != 0))
+            nextOffset++;
+
+        if (nextOffset + 1 >= tablesLength)
+            break;
+
+        offset = nextOffset + 2;
+    }
+
+    if (*installedBytes)
+        result = TRUE;
+
+cleanup:
+    HeapFree(GetProcessHeap(), 0, buffer);
+    return result;
+}
 
 const char * const SHELL_Authors[] = { "Copyright 1993-"COPYRIGHT_YEAR" WINE team", "Copyright 1998-"COPYRIGHT_YEAR" ReactOS Team", 0 };
 
@@ -1136,61 +1265,167 @@ static INT_PTR CALLBACK AboutDlgProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM
                 MemStat.dwLength = sizeof(MemStat);
                 if (GlobalMemoryStatusEx(&MemStat))
                 {
-                    WCHAR szBuf[12];
+                    WCHAR szBuf[32];
+                    LPCWSTR pszUnits = L"MB";
+                    BOOL bShowDecimals = FALSE;
+                    double bestTotalBytes = (double)MemStat.ullTotalPhys;
+                    double valueInMiB;
+                    double displayValue;
+                    ULONGLONG ullInstalledKB;
+                    HMODULE hNtDll;
+                    typedef NTSTATUS (WINAPI *PNtQuerySystemInformation)(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+                    PNtQuerySystemInformation pNtQuerySystemInformation;
+                    typedef BOOL (WINAPI *PGetPhysicallyInstalledSystemMemory)(PULONGLONG);
+                    PGetPhysicallyInstalledSystemMemory pGetPhysInstalledMem;
 
-                    if (MemStat.ullTotalPhys > 1024 * 1024 * 1024)
+                    hNtDll = GetModuleHandleW(L"ntdll.dll");
+                    pNtQuerySystemInformation = NULL;
+
+                    ERR("About RAM: GlobalMemoryStatusEx total=%s bytes\n",
+                        wine_dbgstr_longlong(MemStat.ullTotalPhys));
+
+                    if (hNtDll)
                     {
-                        double dTotalPhys;
-                        WCHAR szDecimalSeparator[4];
-                        WCHAR szUnits[3];
+                        pNtQuerySystemInformation = (PNtQuerySystemInformation)
+                            GetProcAddress(hNtDll, "NtQuerySystemInformation");
+                    }
 
-                        // We're dealing with GBs or more
-                        MemStat.ullTotalPhys /= 1024 * 1024;
+                    if (pNtQuerySystemInformation)
+                    {
+                        SYSTEM_PHYSICAL_MEMORY_INFORMATION physInfo;
+                        NTSTATUS status;
 
-                        if (MemStat.ullTotalPhys > 1024 * 1024)
+                        status = pNtQuerySystemInformation(SystemPhysicalMemoryInformation,
+                                                            &physInfo,
+                                                            sizeof(physInfo),
+                                                            NULL);
+                        ERR("About RAM: NtQuerySystemInformation status=0x%08lx total=%s bytes\n",
+                            (ULONG)status,
+                            wine_dbgstr_longlong(physInfo.TotalPhysicalBytes));
+                        if (status >= 0 && physInfo.TotalPhysicalBytes)
                         {
-                            // We're dealing with TBs or more
-                            MemStat.ullTotalPhys /= 1024;
+                            double candidateBytes = (double)physInfo.TotalPhysicalBytes;
 
-                            if (MemStat.ullTotalPhys > 1024 * 1024)
+                            if (candidateBytes > bestTotalBytes)
                             {
-                                // We're dealing with PBs or more
-                                MemStat.ullTotalPhys /= 1024;
-
-                                dTotalPhys = (double)MemStat.ullTotalPhys / 1024;
-                                wcscpy(szUnits, L"PB");
+                                bestTotalBytes = candidateBytes;
+                                ERR("About RAM: Using NtQuerySystemInformation total=%s bytes\n",
+                                    wine_dbgstr_longlong(physInfo.TotalPhysicalBytes));
                             }
-                            else
+                        }
+                    }
+
+                    pGetPhysInstalledMem = (PGetPhysicallyInstalledSystemMemory)
+                        GetProcAddress(GetModuleHandleW(L"KERNEL32.DLL"),
+                                       "GetPhysicallyInstalledSystemMemory");
+
+                    if (pGetPhysInstalledMem &&
+                        pGetPhysInstalledMem(&ullInstalledKB) &&
+                        ullInstalledKB != 0)
+                    {
+                        double candidateBytes = (double)ullInstalledKB * 1024.0;
+
+                        ERR("About RAM: GetPhysicallyInstalledSystemMemory %llu KB (%s bytes)\n",
+                            ullInstalledKB,
+                            wine_dbgstr_longlong((ULONGLONG)candidateBytes));
+
+                        if (candidateBytes > bestTotalBytes)
+                        {
+                            bestTotalBytes = candidateBytes;
+                            ERR("About RAM: Using GetPhysicallyInstalledSystemMemory total=%s bytes\n",
+                                wine_dbgstr_longlong((ULONGLONG)candidateBytes));
+                        }
+                    }
+
+                    {
+                        ULONGLONG smbiosBytes;
+
+                        if (QueryInstalledMemoryFromSmbios(&smbiosBytes))
+                        {
+                            double candidateBytes = (double)smbiosBytes;
+
+                            ERR("About RAM: SMBIOS total=%s bytes\n",
+                                wine_dbgstr_longlong(smbiosBytes));
+
+                            if (candidateBytes > bestTotalBytes)
                             {
-                                dTotalPhys = (double)MemStat.ullTotalPhys / 1024;
-                                wcscpy(szUnits, L"TB");
+                                bestTotalBytes = candidateBytes;
+                                ERR("About RAM: Using SMBIOS total=%s bytes\n",
+                                    wine_dbgstr_longlong(smbiosBytes));
                             }
                         }
                         else
                         {
-                            dTotalPhys = (double)MemStat.ullTotalPhys / 1024;
-                            wcscpy(szUnits, L"GB");
+                            ERR("About RAM: SMBIOS lookup failed\n");
                         }
+                    }
 
-                        // We need the decimal point of the current locale to display the RAM size correctly
-                        if (GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_SDECIMAL,
-                            szDecimalSeparator,
-                            ARRAY_SIZE(szDecimalSeparator)) > 0)
+                    ERR("About RAM: Final best total=%s bytes\n",
+                        wine_dbgstr_longlong((ULONGLONG)bestTotalBytes));
+
+                    valueInMiB = bestTotalBytes / (1024.0 * 1024.0);
+                    displayValue = valueInMiB;
+
+                    if (displayValue >= 1024.0)
+                    {
+                        displayValue /= 1024.0;
+                        pszUnits = L"GB";
+                        bShowDecimals = TRUE;
+
+                        if (displayValue >= 1024.0)
                         {
-                            UCHAR uDecimals;
-                            UINT uIntegral;
+                            displayValue /= 1024.0;
+                            pszUnits = L"TB";
 
-                            uIntegral = (UINT)dTotalPhys;
-                            uDecimals = (UCHAR)((UINT)(dTotalPhys * 100) - uIntegral * 100);
-
-                            // Display the RAM size with 2 decimals
-                            swprintf(szBuf, L"%u%s%02u %s", uIntegral, szDecimalSeparator, uDecimals, szUnits);
+                            if (displayValue >= 1024.0)
+                            {
+                                displayValue /= 1024.0;
+                                pszUnits = L"PB";
+                            }
                         }
+                    }
+
+                    if (bShowDecimals)
+                    {
+                        WCHAR szDecimalSeparator[4] = L".";
+                        double scaledValue;
+                        UINT roundedScaled;
+                        UINT integral;
+                        UINT decimals;
+
+                        GetLocaleInfoW(LOCALE_USER_DEFAULT,
+                                       LOCALE_SDECIMAL,
+                                       szDecimalSeparator,
+                                       ARRAY_SIZE(szDecimalSeparator));
+
+                        scaledValue = displayValue * 100.0;
+                        if (scaledValue < 0.0)
+                            scaledValue = 0.0;
+
+                        roundedScaled = (UINT)(scaledValue + 0.5);
+                        integral = roundedScaled / 100;
+                        decimals = roundedScaled % 100;
+
+                        StringCchPrintfW(szBuf,
+                                         ARRAY_SIZE(szBuf),
+                                         L"%u%s%02u %s",
+                                         integral,
+                                         szDecimalSeparator,
+                                         decimals,
+                                         pszUnits);
                     }
                     else
                     {
-                        // We're dealing with MBs, don't show any decimals
-                        swprintf(szBuf, L"%u MB", (UINT)MemStat.ullTotalPhys / 1024 / 1024);
+                        UINT roundedMiB;
+
+                        if (valueInMiB < 0.0)
+                            valueInMiB = 0.0;
+
+                        roundedMiB = (UINT)(valueInMiB + 0.5);
+                        StringCchPrintfW(szBuf,
+                                         ARRAY_SIZE(szBuf),
+                                         L"%u MB",
+                                         roundedMiB);
                     }
 
                     SetDlgItemTextW(hWnd, IDC_ABOUT_PHYSMEM, szBuf);
