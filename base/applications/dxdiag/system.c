@@ -97,6 +97,96 @@ GetDirectXVersion(WCHAR * szBuffer)
     return TRUE;
 }
 
+#ifndef __MSSMBIOS_RAW_DEFINED
+#define __MSSMBIOS_RAW_DEFINED
+typedef struct _MSSmBios_RawSMBiosTables
+{
+    BOOLEAN Used20CallingMethod;
+    UCHAR SmbiosMajorVersion;
+    UCHAR SmbiosMinorVersion;
+    UCHAR DmiRevision;
+    ULONG Size;
+    UCHAR SMBiosData[1];
+} MSSmBios_RawSMBiosTables, *PMSSmBios_RawSMBiosTables;
+#endif
+
+static
+BOOL
+GetInstalledMemoryFromSmbios(
+    _In_ PMSSmBios_RawSMBiosTables RawTables,
+    _Out_ ULONGLONG *InstalledBytes)
+{
+    const BYTE *Tables;
+    DWORD TablesLength;
+    DWORD Offset;
+    ULONGLONG TotalBytes = 0;
+
+    if (!InstalledBytes)
+        return FALSE;
+
+    *InstalledBytes = 0;
+
+    if (!RawTables)
+        return FALSE;
+
+    Tables = RawTables->SMBiosData;
+    TablesLength = RawTables->Size;
+    Offset = 0;
+
+    while (Offset + 4 <= TablesLength)
+    {
+        const BYTE *Structure = Tables + Offset;
+        BYTE Type = Structure[0];
+        BYTE Length = Structure[1];
+        DWORD NextOffset;
+
+        if (Length < 4 || Offset + Length > TablesLength)
+            break;
+
+        if (Type == 17 && Length >= 0x15)
+        {
+            const BYTE *Type17 = Structure;
+            USHORT SizeField = *(const USHORT *)(Type17 + 0x0C);
+            ULONGLONG ModuleBytes = 0;
+
+            if (SizeField == 0 || SizeField == 0xFFFF)
+            {
+                ModuleBytes = 0;
+            }
+            else if (SizeField == 0x7FFF && Length >= 0x20)
+            {
+                DWORD ExtendedSize = *(const DWORD *)(Type17 + 0x1C);
+                ModuleBytes = (ULONGLONG)ExtendedSize * 1024ULL * 1024ULL;
+            }
+            else if (SizeField & 0x8000)
+            {
+                ModuleBytes = (ULONGLONG)(SizeField & 0x7FFF) * 65536ULL;
+            }
+            else
+            {
+                ModuleBytes = (ULONGLONG)SizeField * 1024ULL * 1024ULL;
+            }
+
+            TotalBytes += ModuleBytes;
+        }
+
+        NextOffset = Offset + Length;
+        while (NextOffset + 1 < TablesLength && (Tables[NextOffset] != 0 || Tables[NextOffset + 1] != 0))
+            NextOffset++;
+
+        if (NextOffset + 1 >= TablesLength)
+            break;
+
+        Offset = NextOffset + 2;
+    }
+
+    if (!TotalBytes)
+        return FALSE;
+
+    *InstalledBytes = TotalBytes;
+    return TRUE;
+}
+
 VOID GetSystemCPU(WCHAR *szBuffer)
 {
     SYSTEM_INFO archInfo;
@@ -195,6 +285,11 @@ InitializeSystemPage(HWND hwndDlg)
     SYSTEM_INFO SysInfo;
     OSVERSIONINFO VersionInfo;
     PVOID SMBiosBuf;
+    PMSSmBios_RawSMBiosTables RawTables;
+    ULONGLONG InstalledBytes = 0;
+    typedef BOOL (WINAPI *PGetPhysicallyInstalledSystemMemory)(PULONGLONG);
+    PGetPhysicallyInstalledSystemMemory pGetPhysInstalledMem;
+    ULONGLONG InstalledKB = 0;
     PCHAR DmiStrings[ID_STRINGS_MAX] = { 0 };
     BOOL Result;
 
@@ -319,9 +414,6 @@ InitializeSystemPage(HWND hwndDlg)
         }
     }
 
-    /* clean SMBIOS data */
-    FreeSMBiosData(SMBiosBuf);
-
     /* set processor string */
     Result = GetRegValue(HKEY_LOCAL_MACHINE, L"Hardware\\Description\\System\\CentralProcessor\\0", L"ProcessorNameString", REG_SZ, szDesc, sizeof(szDesc));
     if (!Result)
@@ -353,11 +445,48 @@ InitializeSystemPage(HWND hwndDlg)
     mem.dwLength = sizeof(mem);
     if (GlobalMemoryStatusEx(&mem))
     {
+        ULONGLONG PreferredBytes = mem.ullTotalPhys;
+
+        RawTables = (PMSSmBios_RawSMBiosTables)SMBiosBuf;
+        if (GetInstalledMemoryFromSmbios(RawTables, &InstalledBytes) &&
+            InstalledBytes > PreferredBytes)
+        {
+            PreferredBytes = InstalledBytes;
+        }
+
+        pGetPhysInstalledMem = (PGetPhysicallyInstalledSystemMemory)
+            GetProcAddress(GetModuleHandleW(L"KERNEL32.DLL"),
+                           "GetPhysicallyInstalledSystemMemory");
+        if (pGetPhysInstalledMem &&
+            pGetPhysInstalledMem(&InstalledKB) &&
+            InstalledKB != 0)
+        {
+            ULONGLONG CandidateBytes = InstalledKB * 1024ULL;
+
+            if (CandidateBytes > PreferredBytes)
+                PreferredBytes = CandidateBytes;
+        }
+
+        {
+            WCHAR szDebug[128];
+            StringCchPrintfW(szDebug,
+                             _countof(szDebug),
+                             L"DXDIAG RAM: totalPhys=%I64u installed=%I64uKB smbios=%I64u preferred=%I64u\n",
+                             mem.ullTotalPhys,
+                             InstalledKB,
+                             InstalledBytes,
+                             PreferredBytes);
+            OutputDebugStringW(szDebug);
+        }
+
         if (LoadStringW(hInst, IDS_FORMAT_MB, szFormat, _countof(szFormat)))
         {
             /* set total mem string */
+            ULONGLONG TotalMiB;
+
             szFormat[_countof(szFormat)-1] = L'\0';
-            wsprintfW(szTime, szFormat, (mem.ullTotalPhys/1048576));
+            TotalMiB = (PreferredBytes + 524288ULL) / 1048576ULL;
+            wsprintfW(szTime, szFormat, TotalMiB);
             SendDlgItemMessageW(hwndDlg, IDC_STATIC_MEM, WM_SETTEXT, 0, (LPARAM)szTime);
         }
 
@@ -386,6 +515,9 @@ InitializeSystemPage(HWND hwndDlg)
             SendDlgItemMessage(hwndDlg, IDC_STATIC_VERSION, WM_SETTEXT, 0, (LPARAM)szTime);
         }
     }
+
+    /* clean SMBIOS data */
+    FreeSMBiosData(SMBiosBuf);
 }
 
 
