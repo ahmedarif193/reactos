@@ -1,6 +1,12 @@
 
 cmake_minimum_required(VERSION 3.17.0)
 
+# Silence Ninja DEPFILE transformation warnings (CMP0116) for add_custom_command
+# Used by Rust build rules and other depfile-emitting commands.
+if(POLICY CMP0116)
+    cmake_policy(SET CMP0116 NEW)
+endif()
+
 if(NOT CMAKE_VERSION MATCHES "ReactOS")
     message(WARNING "Building with \"${CMAKE_COMMAND}\", which is not the custom CMake included in RosBE, might cause build issues...")
 endif()
@@ -327,6 +333,9 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     else()
         include(sdk/cmake/gcc.cmake)
     endif()
+
+    # Rust detection and helpers (Phase 1)
+    include(sdk/cmake/rust.cmake)
 
     # Generic macros
     include(sdk/cmake/CMakeMacros.cmake)

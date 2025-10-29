@@ -20,3 +20,25 @@ UNICODE: provide this if the module was written for unicode API.
 
 TYPICAL USE:
 set_module_type(msvcrt win32dll ENTRYPOINT DllMain 12)
+
+---------------------------------------------------------------------------------------------------------------------------------------------
+ros_add_rust_executable(<target> [CRATE_DIR <path>] [BINARY_NAME <name>] [TARGET_TRIPLE <triple>] [FEATURES f1;f2;...] [PROFILE debug|release] [ENV key=val;...] [DESTINATION <cd-path>] [NAME_ON_CD <name.exe>] [CD_FOR <list>] [NO_CAB] [SKIP_IF_MISSING])
+
+Adds a Rust executable built with cargo, tailored for MinGW windows-gnu targets. It emits a custom target that builds the requested binary and can optionally package it into the ISO using add_cd_file.
+
+ARGUMENTS:
+<target>: CMake target name used to depend on the produced exe.
+CRATE_DIR: Directory containing Cargo.toml (defaults to current source dir).
+BINARY_NAME: The cargo binary name (defaults to <target>).
+TARGET_TRIPLE: Override the Rust target triple (defaults from ARCH: i686-pc-windows-gnu or x86_64-pc-windows-gnu).
+FEATURES: Semicolon-separated list of cargo features.
+PROFILE: Force cargo profile directory (debug or release). Otherwise maps from CMake build type.
+ENV: Extra environment entries passed to cargo (in addition to the cross-linker defaults).
+DESTINATION/NAME_ON_CD/CD_FOR/NO_CAB: Optional packaging parameters forwarded to add_cd_file.
+SKIP_IF_MISSING: Silently skip if Rust is not available.
+
+PREREQUISITES:
+- Host must have cargo/rustc and the appropriate windows-gnu target installed. See scripts/setup-rust-mingw.sh.
+
+EXAMPLE:
+ros_add_rust_executable(mytool CRATE_DIR ${CMAKE_CURRENT_SOURCE_DIR} BINARY_NAME mytool DESTINATION reactos/system32 SKIP_IF_MISSING)

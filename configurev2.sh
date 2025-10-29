@@ -12,6 +12,69 @@ MINGW_I686_URL="https://github.com/ahmedarif193/mingw-gcc15.2/releases/download/
 MINGW_AARCH64_URL="${MINGW_AARCH64_URL:-}" # Optional external location for the arm64 MinGW toolchain
 MINGW_TOOLCHAIN_BANNER_SHOWN=0
 
+# Ensure Rust toolchain (rustup-managed) and required windows-gnu target are installed
+ensure_rust_toolchain() {
+    # Allow opting out
+    if [ "${ROS_SKIP_RUST_SETUP:-}" = "1" ]; then
+        return
+    fi
+
+    # Only relevant for x86 (i386) and x86_64 (amd64)
+    local arch_lc="$1"
+    local rust_target=""
+    case "$arch_lc" in
+        amd64|x86_64)
+            rust_target="x86_64-pc-windows-gnu"
+            ;;
+        i386|x86)
+            rust_target="i686-pc-windows-gnu"
+            ;;
+        *)
+            return
+            ;;
+    esac
+
+    # Make sure curl exists (used by this script anyway)
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Warning: curl not found; skipping Rust setup"
+        return
+    fi
+
+    # Prefer rustup-managed cargo/rustc; install rustup if missing
+    if ! command -v rustup >/dev/null 2>&1; then
+        echo "========================================="
+        echo "Rustup not found; installing user-local rustup + stable toolchain"
+        echo "========================================="
+        curl -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh
+        sh /tmp/rustup-init.sh -y --default-toolchain stable
+        rm -f /tmp/rustup-init.sh
+        # Load cargo env for this shell so CMake finds the rustup-managed cargo
+        if [ -f "$HOME/.cargo/env" ]; then
+            # shellcheck disable=SC1090
+            . "$HOME/.cargo/env"
+        fi
+    else
+        # Ensure stable toolchain exists and is default
+        rustup toolchain install stable >/dev/null 2>&1 || true
+        rustup default stable >/dev/null 2>&1 || true
+    fi
+
+    # Ensure PATH contains rustup-managed cargo for this session
+    if [ -d "$HOME/.cargo/bin" ]; then
+        export PATH="$HOME/.cargo/bin:$PATH"
+    fi
+
+    # Install the target if missing (idempotent)
+    if command -v rustup >/dev/null 2>&1; then
+        echo "Ensuring Rust target '$rust_target' is installed..."
+        rustup target add "$rust_target" || true
+    fi
+
+    # Print versions for visibility
+    if command -v rustc >/dev/null 2>&1; then rustc --version; fi
+    if command -v cargo >/dev/null 2>&1; then cargo --version; fi
+}
+
 ensure_mingw_toolchain() {
     local prefix="$1"
     local url="$2"
@@ -251,6 +314,9 @@ Provide the correct location with --toolchain-path or install the ${TOOLCHAIN_PR
 EOF
     exit 1
 fi
+
+# Prepare Rust toolchain and windows-gnu target for the selected arch
+ensure_rust_toolchain "$ARCH"
 
 ARCH_LOWER=$(echo "$ARCH" | tr '[:upper:]' '[:lower:]')
 
