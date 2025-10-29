@@ -1,0 +1,17 @@
+[package]
+name = "rusthello"
+version = "0.1.0"
+edition = "2021"
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = false
+codegen-units = 16
+
+[dependencies]
+
