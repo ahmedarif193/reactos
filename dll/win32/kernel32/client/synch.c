@@ -18,6 +18,12 @@
 #undef InterlockedExchangeAdd
 #undef InterlockedCompareExchange
 
+/* Forward declaration to avoid prototype gating; implemented in kernel32 */
+#ifndef _REACTOS_K32_GETTICKCOUNT64_DECL
+#define _REACTOS_K32_GETTICKCOUNT64_DECL
+ULONGLONG WINAPI GetTickCount64(VOID);
+#endif
+
 /* FUNCTIONS *****************************************************************/
 
 /*
@@ -259,6 +265,199 @@ WaitForMultipleObjectsEx(IN DWORD nCount,
 
     /* Return wait status */
     return Status;
+}
+
+/* === Windows 8+ WaitOnAddress/WakeByAddress* true semantics using Keyed Events === */
+
+
+typedef NTSTATUS (NTAPI *PFN_NT_CREATE_KEYED_EVENT)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, ULONG);
+typedef NTSTATUS (NTAPI *PFN_NT_WAIT_FOR_KEYED_EVENT)(HANDLE, PVOID, BOOLEAN, PLARGE_INTEGER);
+typedef NTSTATUS (NTAPI *PFN_NT_RELEASE_KEYED_EVENT)(HANDLE, PVOID, BOOLEAN, PLARGE_INTEGER);
+
+static volatile LONG g_WoaInit = 0; /* 0=not init, 1=ok, -1=failed */
+static HANDLE g_hKeyedEvent = NULL;
+static PFN_NT_WAIT_FOR_KEYED_EVENT   g_pNtWaitForKeyedEvent = NULL;
+static PFN_NT_RELEASE_KEYED_EVENT   g_pNtReleaseKeyedEvent = NULL;
+
+static BOOL WoaEnsureInit(void)
+{
+    LONG state = g_WoaInit;
+    if (state == 1) return TRUE;
+    if (state == -1) return FALSE;
+    if (InterlockedCompareExchange(&g_WoaInit, 1, 0) == 0)
+    {
+        HMODULE hNt = GetModuleHandleW(L"ntdll.dll");
+        if (!hNt) { g_WoaInit = -1; return FALSE; }
+        PFN_NT_CREATE_KEYED_EVENT pNtCreateKeyedEvent = (PFN_NT_CREATE_KEYED_EVENT)GetProcAddress(hNt, "NtCreateKeyedEvent");
+        g_pNtWaitForKeyedEvent    = (PFN_NT_WAIT_FOR_KEYED_EVENT)   GetProcAddress(hNt, "NtWaitForKeyedEvent");
+        g_pNtReleaseKeyedEvent    = (PFN_NT_RELEASE_KEYED_EVENT)    GetProcAddress(hNt, "NtReleaseKeyedEvent");
+        if (!pNtCreateKeyedEvent || !g_pNtWaitForKeyedEvent || !g_pNtReleaseKeyedEvent)
+        { g_WoaInit = -1; return FALSE; }
+        NTSTATUS st = pNtCreateKeyedEvent(&g_hKeyedEvent, GENERIC_READ | GENERIC_WRITE, NULL, 0);
+        if (!NT_SUCCESS(st)) { g_hKeyedEvent = NULL; g_WoaInit = -1; return FALSE; }
+        g_WoaInit = 1;
+        return TRUE;
+    }
+    /* Another thread is initializing; spin briefly */
+    while ((state = g_WoaInit) == 0) Sleep(0);
+    return (state == 1);
+}
+
+static __inline BOOL WoaKeyedOk(void)
+{
+    return (g_hKeyedEvent != NULL) && g_pNtWaitForKeyedEvent && g_pNtReleaseKeyedEvent;
+}
+
+static __inline BOOL WoaSizeOk(SIZE_T s)
+{
+    return (s == 1 || s == 2 || s == 4 || s == 8);
+}
+
+static __inline BOOL WoaAligned(const volatile VOID* p, SIZE_T s)
+{
+    return (((ULONG_PTR)p) & (s - 1)) == 0;
+}
+
+/* Ensure visibility around the compare. Writers should use Interlocked/atomics. */
+#if defined(_MSC_VER)
+  #ifndef MemoryBarrier
+    #include <intrin.h>
+    #define MemoryBarrier() _ReadWriteBarrier()
+  #endif
+#else
+  #ifndef MemoryBarrier
+    #define MemoryBarrier() __sync_synchronize()
+  #endif
+#endif
+static __inline BOOL BytesEqual(volatile const VOID* a, const VOID* b, SIZE_T n)
+{
+    MemoryBarrier(); /* acquire */
+    BOOL eq = (RtlCompareMemory((const VOID*)a, b, n) == n);
+    MemoryBarrier(); /* release */
+    return eq;
+}
+
+/* Fallback polling loop if keyed events are unavailable */
+static BOOL WoaPoll(volatile VOID* Address, const VOID* CompareAddress, SIZE_T AddressSize, DWORD dwMilliseconds)
+{
+    if (dwMilliseconds == 0)
+    {
+        if (BytesEqual(Address, CompareAddress, AddressSize))
+        { SetLastError(WAIT_TIMEOUT); return FALSE; }
+        return TRUE;
+    }
+
+    ULONGLONG deadline = (dwMilliseconds == INFINITE) ? 0 : (GetTickCount64() + dwMilliseconds);
+
+    for (;;)
+    {
+        if (!BytesEqual(Address, CompareAddress, AddressSize))
+            return TRUE;
+
+        if (dwMilliseconds != INFINITE)
+        {
+            ULONGLONG now = GetTickCount64();
+            if (now >= deadline)
+            { SetLastError(WAIT_TIMEOUT); return FALSE; }
+            Sleep(1);
+        }
+        else
+        {
+            Sleep(1);
+        }
+    }
+}
+
+BOOL WINAPI
+WaitOnAddress(IN volatile VOID* Address,
+              IN CONST VOID* CompareAddress,
+              IN SIZE_T AddressSize,
+              IN DWORD dwMilliseconds)
+{
+    if (!WoaSizeOk(AddressSize) || !WoaAligned(Address, AddressSize))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (!WoaEnsureInit() || !WoaKeyedOk())
+        return WoaPoll(Address, CompareAddress, AddressSize, dwMilliseconds);
+
+    if (dwMilliseconds == 0)
+    {
+        if (BytesEqual(Address, CompareAddress, AddressSize))
+        { SetLastError(WAIT_TIMEOUT); return FALSE; }
+        return TRUE;
+    }
+
+    /* Track absolute deadline to recompute remaining timeout across spurious wakes */
+    ULONGLONG deadline = (dwMilliseconds == INFINITE) ? 0 : (GetTickCount64() + dwMilliseconds);
+
+    if (!BytesEqual(Address, CompareAddress, AddressSize))
+        return TRUE;
+
+    for (;;)
+    {
+        if (!BytesEqual(Address, CompareAddress, AddressSize))
+            return TRUE;
+
+        LARGE_INTEGER liTimeout, *pTimeout = NULL;
+        if (dwMilliseconds != INFINITE)
+        {
+            ULONGLONG now = GetTickCount64();
+            if (now >= deadline)
+            { SetLastError(WAIT_TIMEOUT); return FALSE; }
+            ULONGLONG remain_ms = deadline - now;
+            liTimeout.QuadPart = -(LONGLONG)remain_ms * 10000LL; /* relative, 100ns */
+            pTimeout = &liTimeout;
+        }
+
+        NTSTATUS st = g_pNtWaitForKeyedEvent(g_hKeyedEvent, (PVOID)Address, FALSE, pTimeout);
+        if (st == STATUS_TIMEOUT)
+        { SetLastError(WAIT_TIMEOUT); return FALSE; }
+        if (!NT_SUCCESS(st))
+        { SetLastError(RtlNtStatusToDosError(st)); return FALSE; }
+
+        if (!BytesEqual(Address, CompareAddress, AddressSize))
+            return TRUE;
+        /* else spurious/already same: loop; remaining time recomputed each pass */
+    }
+}
+
+VOID WINAPI
+WakeByAddressSingle(IN PVOID Address)
+{
+    if (!WoaEnsureInit() || !WoaKeyedOk()) return; /* polling fallback: nothing to do */
+
+    LARGE_INTEGER zero; zero.QuadPart = 0;
+    (void)g_pNtReleaseKeyedEvent(g_hKeyedEvent, Address, FALSE, &zero);
+}
+
+VOID WINAPI
+WakeByAddressAll(IN PVOID Address)
+{
+    if (!WoaEnsureInit() || !WoaKeyedOk()) return;
+
+    LARGE_INTEGER zero; zero.QuadPart = 0;
+    /* Drain ready waiters without blocking; cap iterations to avoid pathologies */
+    for (int i = 0; i < 4096; ++i)
+    {
+        NTSTATUS st = g_pNtReleaseKeyedEvent(g_hKeyedEvent, Address, FALSE, &zero);
+        DWORD err = RtlNtStatusToDosError(st);
+        if (err == WAIT_TIMEOUT) break; /* no waiter ready at this instant */
+        if (!NT_SUCCESS(st)) break;      /* best-effort */
+    }
+}
+
+/* Optional tidy-up called from DllMain on process detach */
+VOID
+BaseSyncCleanup(VOID)
+{
+    if (g_hKeyedEvent)
+    {
+        CloseHandle(g_hKeyedEvent);
+        g_hKeyedEvent = NULL;
+    }
 }
 
 /*

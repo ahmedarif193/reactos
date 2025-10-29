@@ -28,6 +28,9 @@ PPEB Peb;
 ULONG SessionId;
 static BOOL DllInitialized = FALSE;
 
+/* Forward declaration for keyed-event cleanup in synch.c */
+VOID BaseSyncCleanup(VOID);
+
 /* Critical section for various kernel32 data structures */
 RTL_CRITICAL_SECTION BaseDllDirectoryLock;
 
@@ -231,6 +234,9 @@ DllMain(HANDLE hDll,
 
                 /* Insert more dll detach stuff here! */
                 NlsUninit();
+
+                /* Close keyed event handle if created by WaitOnAddress impl */
+                BaseSyncCleanup();
 
                 /* Delete DLL critical section */
                 RtlDeleteCriticalSection(&BaseDllDirectoryLock);

@@ -140,14 +140,61 @@ GetSystemTimeAsFileTime(OUT PFILETIME lpFileTime)
     lpFileTime->dwHighDateTime = SystemTime.HighPart;
 }
 
-/*
- * @unimplemented
- */
+/* Precise system time: prefer ntdll precise API if present, else synthesize via QPC */
+typedef NTSTATUS (NTAPI *PFN_NT_QUERY_SYSTEM_TIME_PRECISE)(PLARGE_INTEGER);
+static volatile LONG g_TimeInit = 0;
+static PFN_NT_QUERY_SYSTEM_TIME_PRECISE g_pNtQuerySystemTimePrecise = NULL;
+
+static void EnsureTimeInit(void)
+{
+    LONG s = g_TimeInit;
+    if (s == 1 || s == -1) return;
+    if (InterlockedCompareExchange(&g_TimeInit, 1, 0) == 0)
+    {
+        HMODULE hNt = GetModuleHandleW(L"ntdll.dll");
+        if (hNt)
+            g_pNtQuerySystemTimePrecise = (PFN_NT_QUERY_SYSTEM_TIME_PRECISE)GetProcAddress(hNt, "NtQuerySystemTimePrecise");
+        if (!g_pNtQuerySystemTimePrecise) g_TimeInit = -1; else g_TimeInit = 1;
+    }
+}
+
 VOID
 WINAPI
 GetSystemTimePreciseAsFileTime(OUT PFILETIME lpFileTime)
 {
-    STUB;
+    EnsureTimeInit();
+
+    if (g_pNtQuerySystemTimePrecise)
+    {
+        LARGE_INTEGER st;
+        if (NT_SUCCESS(g_pNtQuerySystemTimePrecise(&st)))
+        {
+            lpFileTime->dwLowDateTime  = st.LowPart;
+            lpFileTime->dwHighDateTime = st.HighPart;
+            return;
+        }
+    }
+
+    /* Synthesize with QPC */
+    LARGE_INTEGER baseFtLI;
+    FILETIME baseFt;
+    LARGE_INTEGER qpc0, qpc1, freq;
+
+    QueryPerformanceCounter(&qpc0);
+    GetSystemTimeAsFileTime(&baseFt);
+    QueryPerformanceCounter(&qpc1);
+    QueryPerformanceFrequency(&freq);
+
+    baseFtLI.u.LowPart  = baseFt.dwLowDateTime;
+    baseFtLI.u.HighPart = baseFt.dwHighDateTime;
+
+    LONGLONG ticks = qpc1.QuadPart - qpc0.QuadPart; /* small delta */
+    LONGLONG delta100ns = (freq.QuadPart > 0) ? ((ticks * 10000000LL) / freq.QuadPart) : 0;
+    /* Use midpoint of the sampling interval to approximate the instant of the base sample */
+    LARGE_INTEGER precise;
+    precise.QuadPart = baseFtLI.QuadPart + (delta100ns / 2);
+    lpFileTime->dwLowDateTime  = precise.u.LowPart;
+    lpFileTime->dwHighDateTime = precise.u.HighPart;
 }
 
 /*
