@@ -8,7 +8,11 @@
 #include <precomp.h>
 #include <winnt.h>
 
+#if defined(_MSC_VER)
 #define SEH_TLS_SPEC __declspec(thread)
+#else
+#define SEH_TLS_SPEC __thread
+#endif
 
 extern SEH_TLS_SPEC LONG __seh_abnormal_termination_flag;
 

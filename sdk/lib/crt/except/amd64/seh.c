@@ -18,7 +18,11 @@
 #define SEH_RETURN_ADDRESS() __builtin_return_address(0)
 #endif
 
+#if defined(_MSC_VER)
 #define SEH_TLS __declspec(thread)
+#else
+#define SEH_TLS __thread
+#endif
 
 NTSYSAPI
 VOID
