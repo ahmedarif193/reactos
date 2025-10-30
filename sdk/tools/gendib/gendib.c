@@ -366,7 +366,7 @@ CreateGetSource(FILE *Out, unsigned Bpp, PROPINFO RopInfo, int Flags,
 {
     const char *AssignOp;
     const char *Before;
-    char After[8];
+    char After[32];
 
     MARK(Out);
     if (0 == Shift)
@@ -379,7 +379,7 @@ CreateGetSource(FILE *Out, unsigned Bpp, PROPINFO RopInfo, int Flags,
     {
         AssignOp = "|=";
         Before = "(";
-        sprintf(After, ") << %u", Shift);
+        snprintf(After, sizeof(After), ") << %u", Shift);
     }
 
     if (ROPCODE_SRCCOPY != RopInfo->RopCode ||
