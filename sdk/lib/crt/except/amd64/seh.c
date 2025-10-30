@@ -7,6 +7,7 @@
  */
 
 #include <excpt.h>
+#include <stdint.h>
 #include <windef.h>
 #include <winnt.h>
 
@@ -21,7 +22,11 @@
 #if defined(_MSC_VER)
 #define SEH_TLS __declspec(thread)
 #else
-#define SEH_TLS __thread
+/*
+ * Avoid compiler TLS on non-MSVC toolchains to keep
+ * kernel-mode consumers linkable without emu-TLS runtime.
+ */
+#define SEH_TLS
 #endif
 
 NTSYSAPI
@@ -33,11 +38,50 @@ RtlUnwind(
     _In_opt_ PEXCEPTION_RECORD ExceptionRecord,
     _In_opt_ PVOID ReturnValue);
 
-/*
- * TLS flag that tracks whether the currently executing __finally handler
- * is running due to an unwind (abnormal termination).
- */
+#if defined(_MSC_VER)
+/* MSVC still uses compiler-provided TLS. */
 SEH_TLS LONG __seh_abnormal_termination_flag;
+static __inline LONG *
+SehGetAbnormalFlagPointer(VOID)
+{
+    return &__seh_abnormal_termination_flag;
+}
+#else
+typedef struct __emutls_control
+{
+    uintptr_t size;
+    uintptr_t align;
+    union
+    {
+        uintptr_t index;
+        void *address;
+    } object;
+    void *value;
+} __emutls_control;
+
+extern void *__cdecl __emutls_get_address(void *Control);
+
+static __emutls_control __seh_abnormal_termination_flag_control =
+{
+    sizeof(LONG),
+    __alignof__(LONG),
+    { 0 },
+    NULL
+};
+
+static __inline LONG *
+SehGetAbnormalFlagPointer(VOID)
+{
+    return (LONG *)__emutls_get_address(&__seh_abnormal_termination_flag_control);
+}
+#endif
+
+LONG *
+__cdecl
+__seh_get_abnormal_termination_flag_pointer(VOID)
+{
+    return SehGetAbnormalFlagPointer();
+}
 
 VOID
 __cdecl
@@ -80,7 +124,7 @@ INT
 __cdecl
 SEH_ABNORMAL_TERMINATION_NAME(VOID)
 {
-    return (__seh_abnormal_termination_flag != 0);
+    return (*SehGetAbnormalFlagPointer() != 0);
 }
 
 #undef SEH_ABNORMAL_TERMINATION_NAME

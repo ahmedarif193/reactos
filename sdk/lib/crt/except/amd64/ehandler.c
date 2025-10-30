@@ -8,13 +8,7 @@
 #include <precomp.h>
 #include <winnt.h>
 
-#if defined(_MSC_VER)
-#define SEH_TLS_SPEC __declspec(thread)
-#else
-#define SEH_TLS_SPEC __thread
-#endif
-
-extern SEH_TLS_SPEC LONG __seh_abnormal_termination_flag;
+extern LONG *__seh_get_abnormal_termination_flag_pointer(VOID);
 
 
 _CRTIMP
@@ -31,6 +25,7 @@ __C_specific_handler(
     ULONG64 ImageBase, JumpTarget, IpOffset, TargetIpOffset;
     EXCEPTION_POINTERS ExceptionPointers;
     LONG PreviousAbnormalState;
+    LONG *AbnormalFlagPtr;
     PTERMINATION_HANDLER TerminationHandler;
     PEXCEPTION_FILTER ExceptionFilter;
     LONG FilterResult;
@@ -38,6 +33,9 @@ __C_specific_handler(
     /* Set up the EXCEPTION_POINTERS */
     ExceptionPointers.ExceptionRecord = ExceptionRecord;
     ExceptionPointers.ContextRecord = ContextRecord;
+
+    /* Get per-thread abnormal termination flag */
+    AbnormalFlagPtr = __seh_get_abnormal_termination_flag_pointer();
 
     /* Get the image base */
     ImageBase = (ULONG64)DispatcherContext->ImageBase;
@@ -86,10 +84,10 @@ __C_specific_handler(
                 Handler = ScopeTable->ScopeRecord[i].HandlerAddress;
                 TerminationHandler = (PTERMINATION_HANDLER)(ImageBase + Handler);
 
-                PreviousAbnormalState = __seh_abnormal_termination_flag;
-                __seh_abnormal_termination_flag = TRUE;
+                PreviousAbnormalState = *AbnormalFlagPtr;
+                *AbnormalFlagPtr = TRUE;
                 TerminationHandler(TRUE, EstablisherFrame);
-                __seh_abnormal_termination_flag = PreviousAbnormalState;
+                *AbnormalFlagPtr = PreviousAbnormalState;
             }
             else if (ScopeTable->ScopeRecord[i].JumpTarget == TargetIpOffset)
             {
@@ -117,10 +115,10 @@ __C_specific_handler(
             {
                 /* Otherwise we need to call the handler */
                 ExceptionFilter = (PEXCEPTION_FILTER)(ImageBase + Handler);
-                PreviousAbnormalState = __seh_abnormal_termination_flag;
-                __seh_abnormal_termination_flag = FALSE;
+                PreviousAbnormalState = *AbnormalFlagPtr;
+                *AbnormalFlagPtr = FALSE;
                 FilterResult = ExceptionFilter(&ExceptionPointers, EstablisherFrame);
-                __seh_abnormal_termination_flag = PreviousAbnormalState;
+                *AbnormalFlagPtr = PreviousAbnormalState;
             }
 
             if (FilterResult < 0 /* EXCEPTION_CONTINUE_EXECUTION */)

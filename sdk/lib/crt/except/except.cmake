@@ -57,9 +57,12 @@ elseif(ARCH STREQUAL "arm")
     endif()
 endif()
 
-list(APPEND LIBCNTPR_EXCEPT_SOURCE
-    except/emutls.c
-)
+# Non-MSVC amd64 builds rely on the lightweight emulated TLS runtime.
+if(ARCH STREQUAL "amd64" AND NOT MSVC)
+    list(APPEND LIBCNTPR_EXCEPT_SOURCE
+        except/emutls.c
+    )
+endif()
 
 list(APPEND CRT_EXCEPT_SOURCE
     ${LIBCNTPR_EXCEPT_SOURCE}

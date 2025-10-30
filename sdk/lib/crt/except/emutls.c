@@ -26,6 +26,27 @@
 
 #include <ntstatus.h>
 
+/*
+ * Local raise helper to avoid pulling external RtlRaiseStatus symbol
+ * into every consumer of libcntpr. This keeps linkage simple across
+ * user-mode and kernel-mode targets, and still halts execution on
+ * fatal conditions (e.g., out-of-memory during TLS setup).
+ */
+#if defined(_MSC_VER)
+#  include <intrin.h>
+static __forceinline void EmuTlsRaise(NTSTATUS Status)
+{
+    (void)Status;
+    __fastfail(7); /* FAST_FAIL_FATAL_APP_EXIT */
+}
+#else
+static __attribute__((noreturn)) inline void EmuTlsRaise(NTSTATUS Status)
+{
+    (void)Status;
+    __builtin_trap();
+}
+#endif
+
 typedef struct __emutls_control
 {
     uintptr_t size;
@@ -85,7 +106,7 @@ EmuTlsEnsureInitialized(VOID)
         EmuTlsObjectCount = 0;
         EmuTlsHeapHandle = RtlCreateHeap(HEAP_GROWABLE, NULL, 0, 0, NULL, NULL);
         if (EmuTlsHeapHandle == NULL)
-            RtlRaiseStatus(STATUS_NO_MEMORY);
+            EmuTlsRaise(STATUS_NO_MEMORY);
         InterlockedExchange(&EmuTlsInitState, 2);
     }
     else
@@ -110,7 +131,7 @@ EmuTlsAllocateZero(SIZE_T Size)
 
     Block = RtlAllocateHeap(EmuTlsHeapHandle, 0, Size);
     if (Block == NULL)
-        RtlRaiseStatus(STATUS_NO_MEMORY);
+        EmuTlsRaise(STATUS_NO_MEMORY);
 
     RtlZeroMemory(Block, Size);
     return Block;
@@ -168,7 +189,7 @@ EmuTlsAllocateObject(__emutls_control *Control)
         Alignment = sizeof(void *);
 
     if ((Alignment & (Alignment - 1)) != 0)
-        RtlRaiseStatus(STATUS_NO_MEMORY);
+        EmuTlsRaise(STATUS_NO_MEMORY);
 
     Base = EmuTlsAllocateZero(Size + Alignment);
     if (((ULONG_PTR)Base & (Alignment - 1)) != 0)
