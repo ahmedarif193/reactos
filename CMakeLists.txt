@@ -23,6 +23,13 @@ endif()
 project(REACTOS)
 
 option(USE_NATIVE_MINGW_CRT "Link ReactOS user CRTs against the MinGW-w64 runtime instead of the in-tree implementation" OFF)
+option(WOW64_MULTILIB "Build a 32-bit SysWOW64 subset inside amd64 builds (no external i386 root required)" ON)
+
+# Anchor top-level source and binary directories for nested sub-build contexts
+if(NOT DEFINED REACTOS_TOP_SOURCE_DIR)
+    set(REACTOS_TOP_SOURCE_DIR ${CMAKE_SOURCE_DIR} CACHE INTERNAL "")
+    set(REACTOS_TOP_BINARY_DIR ${CMAKE_BINARY_DIR} CACHE INTERNAL "")
+endif()
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_INCLUDE_DIRECTORIES_PROJECT_BEFORE ON)
@@ -78,6 +85,13 @@ include(sdk/cmake/compilerflags.cmake)
 
 # set_wine_module function
 include(sdk/cmake/set_wine_module.cmake)
+
+# WOW64 build helpers (mirroring and multilib support)
+# Include multilib subbuild first so its variables are available to support helpers
+if(ARCH STREQUAL "amd64" AND WOW64_MULTILIB)
+    include(sdk/cmake/wow64-multilib.cmake)
+endif()
+include(sdk/cmake/wow64-support.cmake)
 
 add_definitions(
     -D__REACTOS__
@@ -288,6 +302,12 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
             add_compile_definitions(_M_AMD64 _M_X64)
         endif()
         add_definitions(-D_AMD64_ -D__x86_64__ -D_WIN64)
+
+        # If requested, enable WOW64 in amd64 builds and prepare multilib support.
+        if(WOW64_MULTILIB)
+            message(STATUS "WOW64: Internal multilib mode enabled (building 32-bit SysWOW64 subset)")
+            add_compile_definitions(BUILD_WOW64_ENABLED)
+        endif()
     elseif(ARCH STREQUAL "arm")
         # _M_ARM is already defined by toolchain
         add_definitions(-D_ARM_ -D__arm__ -DWIN32)

@@ -292,17 +292,73 @@ add_custom_target(liveusb
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/hybridcd.cmake.lst "")
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/hybridcd.cmake.lst "${CMAKE_CURRENT_BINARY_DIR}/empty\n")
 
-# SysWOW64 Binary Mirroring for WOW64 support on amd64
-# This section populates reactos/SysWOW64 with 32-bit binaries for WOW64 emulation
 if(ARCH STREQUAL "amd64")
-    # Search for i386 build output in common locations
-    set(_I386_SEARCH_PATHS
-        "${REACTOS_BINARY_DIR}/../output-MinGW-i386-Release"
-        "${REACTOS_BINARY_DIR}/../output-MinGW-i386-Debug"
-        "${REACTOS_BINARY_DIR}/../build-i386/output-MinGW-i386-Release"
-        "${REACTOS_BINARY_DIR}/../build-i386/output-MinGW-i386-Debug"
-        "$ENV{REACTOS_I386_ROOT}"
-    )
+    # SysWOW64 Binary Mirroring for WOW64 support on amd64
+    # This section populates reactos/SysWOW64 with 32-bit binaries for WOW64 emulation
+    if(WOW64_MULTILIB)
+        # In multilib mode, import the subbuild's path lists and remap the 32-bit
+        # system32 entries to SysWOW64 in the main image lists.
+        set(_I386_SYSROOT "${WOW64_I386_ROOT}")
+        get_filename_component(_I386_SUBBUILD_DIR "${_I386_SYSROOT}" DIRECTORY)
+        # Build a keep-regex for core DLLs we expect from the subbuild
+        set(_WOW64_DLLS ${WOW64_MULTILIB_I386_TARGETS})
+        # Convert semicolon list to alternation: ntdll|kernel32|msvcrt|...
+        if(_WOW64_DLLS)
+            list(JOIN _WOW64_DLLS "|" _WOW64_DLLS_ALT)
+            set(_WOW64_KEEP_REGEX "^reactos/system32/(${_WOW64_DLLS_ALT})\\.dll=")
+        else()
+            set(_WOW64_KEEP_REGEX "^reactos/system32/()$")
+        endif()
+
+        foreach(_lst IN ITEMS bootcd livecd liveimg hybridcd bootcdregtest)
+            # Prefer the subbuild's fully generated config-specific list to avoid
+            # copying generator expressions into the main build.
+            if(CMAKE_CONFIGURATION_TYPES)
+                # Multi-config generators: we cannot know $<CONFIG> at configure time.
+                # Defer and rely on packaging-time dependencies; do not import .cmake.lst.
+                set(_sub_list_cfg "")
+            else()
+                set(_sub_list_cfg "${_I386_SUBBUILD_DIR}/boot/${_lst}.${CMAKE_BUILD_TYPE}.lst")
+            endif()
+
+            if(_sub_list_cfg AND EXISTS "${_sub_list_cfg}")
+                file(READ "${_sub_list_cfg}" _sub_contents)
+                # Keep only entries destined for reactos/system32 or winsxs
+                # and remap system32 to SysWOW64 for 32-bit payload.
+                string(REPLACE "\n" ";" _sub_lines "${_sub_contents}")
+                set(_mapped_lines "")
+                foreach(_L IN LISTS _sub_lines)
+                    if(_L STREQUAL "")
+                        continue()
+                    endif()
+                    # Only keep core system32 DLLs we explicitly build; ignore other files
+                    string(REGEX MATCH "${_WOW64_KEEP_REGEX}" _keep "${_L}")
+                    if(NOT _keep)
+                        continue()
+                    endif()
+                    if(_L MATCHES "^reactos/system32/")
+                        string(REPLACE "reactos/system32/" "reactos/SysWOW64/" _L "${_L}")
+                    endif()
+                    list(APPEND _mapped_lines "${_L}")
+                endforeach()
+                if(_mapped_lines)
+                    string(REPLACE ";" "\n" _mapped_contents "${_mapped_lines}")
+                    file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/${_lst}.cmake.lst "${_mapped_contents}\n")
+                endif()
+            else()
+                message(STATUS "WOW64: Subbuild list for '${_lst}' not ready yet; will package after subbuild runs")
+            endif()
+        endforeach()
+    else()
+        # External mirroring (legacy): look for prebuilt i386 sysroot and enumerate files
+        # Search for i386 build output in common locations
+        set(_I386_SEARCH_PATHS
+            "${REACTOS_BINARY_DIR}/../output-MinGW-i386-Release"
+            "${REACTOS_BINARY_DIR}/../output-MinGW-i386-Debug"
+            "${REACTOS_BINARY_DIR}/../build-i386/output-MinGW-i386-Release"
+            "${REACTOS_BINARY_DIR}/../build-i386/output-MinGW-i386-Debug"
+            "$ENV{REACTOS_I386_ROOT}"
+        )
 
     set(_I386_SYSROOT "")
     foreach(_search_path IN LISTS _I386_SEARCH_PATHS)
@@ -313,7 +369,7 @@ if(ARCH STREQUAL "amd64")
         endif()
     endforeach()
 
-    if(_I386_SYSROOT)
+        if(_I386_SYSROOT)
         # Define file extensions to exclude (developer artifacts)
         set(_SYSWOW64_SKIP_EXT
             ".a" ".lib" ".pdb" ".exp" ".map" ".obj" ".ilk" ".idb" ".log"
@@ -382,9 +438,10 @@ if(ARCH STREQUAL "amd64")
                 file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/hybridcd.cmake.lst "${_dest}=${_src}\n")
             endforeach()
         endif()
-    else()
-        message(STATUS "WOW64: No i386 binaries found. Set REACTOS_I386_ROOT to specify location.")
-        message(STATUS "        SysWOW64 directory will be empty. 32-bit executables will not run.")
+        else()
+            message(STATUS "WOW64: No i386 binaries found. Set REACTOS_I386_ROOT to specify location.")
+            message(STATUS "        SysWOW64 directory will be empty. 32-bit executables will not run.")
+        endif()
     endif()
 endif()
 
@@ -443,3 +500,17 @@ add_custom_target(liveimg
             --list ${CMAKE_CURRENT_BINARY_DIR}/liveimg.$<CONFIG>.lst
     DEPENDS liveimg_deps dosmbr fat fat32 ${CMAKE_CURRENT_BINARY_DIR}/liveimg.$<CONFIG>.lst
     VERBATIM)
+
+# Ensure packaging depends on multilib subbuild when enabled
+if(ARCH STREQUAL "amd64" AND WOW64_MULTILIB)
+    # Ensure the i386 subbuild runs before packaging. Depend on both the
+    # aggregate stage target and the ExternalProject target for robustness.
+    add_dependencies(bootcd wow64_multilib_stage)
+    add_dependencies(livecd wow64_multilib_stage)
+    add_dependencies(liveimg_deps wow64_multilib_stage)
+    if(TARGET wow64_multilib_i386)
+        add_dependencies(bootcd wow64_multilib_i386)
+        add_dependencies(livecd wow64_multilib_i386)
+        add_dependencies(liveimg_deps wow64_multilib_i386)
+    endif()
+endif()

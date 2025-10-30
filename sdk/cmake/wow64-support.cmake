@@ -27,9 +27,36 @@
 #
 
 # WOW64_CONFIGURE_PATHS()
-# Searches for and validates i386 binary locations for WOW64 mirroring
+# Searches for and validates i386 binary locations for WOW64 mirroring.
+# When WOW64_MULTILIB is ON, external i386 roots are not used.
 function(WOW64_CONFIGURE_PATHS)
     if(NOT ARCH STREQUAL "amd64")
+        return()
+    endif()
+
+    # In nested sub-builds (e.g. host-tools), do not attempt to enable or
+    # configure multilib paths. This avoids creating subbuilds under host-tools
+    # and prevents noisy status messages.
+    if(WOW64_MULTILIB)
+        if(NOT DEFINED REACTOS_TOP_SOURCE_DIR OR NOT CMAKE_SOURCE_DIR STREQUAL REACTOS_TOP_SOURCE_DIR)
+            set(WOW64_I386_ROOT "" PARENT_SCOPE)
+            set(WOW64_ENABLED FALSE PARENT_SCOPE)
+            return()
+        endif()
+    endif()
+
+    # If multilib is enabled, use the internal subbuild sysroot
+    if(WOW64_MULTILIB)
+        if(NOT WOW64_MULTILIB_SYSROOT)
+            # wow64-multilib.cmake sets this when included by top-level CMakeLists.txt
+            message(FATAL_ERROR "WOW64_MULTILIB is ON but WOW64_MULTILIB_SYSROOT is not set (include wow64-multilib.cmake)")
+        endif()
+        set(WOW64_I386_ROOT "${WOW64_MULTILIB_SYSROOT}" PARENT_SCOPE)
+        set(WOW64_ENABLED TRUE PARENT_SCOPE)
+        # Skip status message in nested or tool sub-builds where it is noisy
+        if(DEFINED REACTOS_TOP_SOURCE_DIR AND CMAKE_SOURCE_DIR STREQUAL REACTOS_TOP_SOURCE_DIR)
+            message(STATUS "WOW64: Multilib mode (internal i386 sysroot at ${WOW64_MULTILIB_SYSROOT})")
+        endif()
         return()
     endif()
 
@@ -82,12 +109,43 @@ function(WOW64_ADD_32BIT_MODULE _target)
         return()
     endif()
 
-    # Currently, we rely on external i386 builds
-    # Future: Support cross-compilation using -m32 or separate toolchain
-    # set_target_properties(${_target} PROPERTIES
-    #     WOW64_32BIT_BUILD TRUE
-    #     COMPILE_OPTIONS "-m32"
-    #     LINK_OPTIONS "-m32")
+    # Mark this target as 32-bit when building on amd64, applying multilib flags.
+    # The target must already exist.
+    get_target_property(_t_exists ${_target} TYPE)
+    if(NOT _t_exists)
+        message(FATAL_ERROR "WOW64_ADD_32BIT_MODULE: target '${_target}' does not exist")
+    endif()
+
+    # Force 32-bit codegen with GCC/Clang using -m32; also fix up defines.
+    set_target_properties(${_target} PROPERTIES REACTOS_TARGET_ARCH i386)
+    if(NOT MSVC)
+        target_compile_options(${_target} PRIVATE -m32 -U_AMD64_ -U__x86_64__ -U_WIN64 -U_M_AMD64 -U_M_X64)
+        target_link_options(${_target} PRIVATE -m32)
+        target_compile_definitions(${_target} PRIVATE _X86_ __i386__)
+    endif()
+endfunction()
+
+# Convenience helpers to define 32-bit WOW64 modules inside amd64 builds.
+# Example usage in a CMakeLists.txt:
+#   wow64_add_dll(ntdll32 MODULE ${SOURCES})
+#   add_importlibs(ntdll32 ...)
+#   add_cd_file(TARGET ntdll32 DESTINATION reactos/SysWOW64 FOR all)
+function(wow64_add_dll _name)
+    if(NOT ARCH STREQUAL "amd64")
+        message(FATAL_ERROR "wow64_add_dll can only be used when building amd64")
+    endif()
+    add_library(${_name} MODULE ${ARGN})
+    set_module_type(${_name} win32dll UNICODE)
+    WOW64_ADD_32BIT_MODULE(${_name})
+endfunction()
+
+function(wow64_add_exe _name)
+    if(NOT ARCH STREQUAL "amd64")
+        message(FATAL_ERROR "wow64_add_exe can only be used when building amd64")
+    endif()
+    add_executable(${_name} ${ARGN})
+    set_module_type(${_name} win32cui)
+    WOW64_ADD_32BIT_MODULE(${_name})
 endfunction()
 
 # WOW64_MIRROR_BINARIES()
@@ -159,12 +217,18 @@ endfunction()
 # Initialize WOW64 paths at configuration time
 if(ARCH STREQUAL "amd64")
     WOW64_CONFIGURE_PATHS()
+    if(WOW64_MULTILIB)
+        message(STATUS "WOW64: Dual-architecture build enabled via multilib")
+        message(STATUS "       64-bit binaries: reactos/system32")
+        message(STATUS "       32-bit binaries: reactos/SysWOW64 (built in-tree)")
+    else()
     if(WOW64_I386_ROOT)
         message(STATUS "WOW64: Dual-architecture build enabled")
         message(STATUS "       64-bit binaries: reactos/system32")
         message(STATUS "       32-bit binaries: reactos/SysWOW64 (from ${WOW64_I386_ROOT})")
-    else()
-        message(STATUS "WOW64: Single-architecture build (64-bit only)")
-        message(STATUS "       32-bit executables will not be supported")
+        else()
+            message(STATUS "WOW64: Single-architecture build (64-bit only)")
+            message(STATUS "       32-bit executables will not be supported")
+        endif()
     endif()
 endif()

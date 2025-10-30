@@ -272,6 +272,16 @@ function(add_cd_file)
         message(FATAL_ERROR "You must provide a cd name (or \"all\" for all of them) to install the file on!")
     endif()
 
+    # If we are going to reference the TARGET's output via generator expressions
+    # (i.e. no explicit FILE was provided), and that TARGET does not exist in
+    # this build (e.g. i386-only modules on amd64), skip to avoid generator
+    # expression evaluation errors at generate time.
+    if(NOT _CD_FILE)
+        if(_CD_TARGET AND (NOT TARGET ${_CD_TARGET}))
+            return()
+        endif()
+    endif()
+
     # get file if we need to
     if(NOT _CD_FILE)
         set(_CD_FILE "$<TARGET_FILE:${_CD_TARGET}>")

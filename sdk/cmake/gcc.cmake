@@ -373,9 +373,14 @@ set(CMAKE_DEPFILE_FLAGS_RC "--preprocessor=\"${CMAKE_C_COMPILER}\" ${RC_PREPROCE
 
 # Optional 3rd parameter: stdcall stack bytes
 function(set_entrypoint MODULE ENTRYPOINT)
+    # Allow per-target arch override via REACTOS_TARGET_ARCH
+    get_target_property(_t_arch ${MODULE} REACTOS_TARGET_ARCH)
+    if(NOT _t_arch)
+        set(_t_arch ${ARCH})
+    endif()
     if(${ENTRYPOINT} STREQUAL "0")
         target_link_options(${MODULE} PRIVATE "-Wl,--entry=0")
-    elseif(ARCH STREQUAL "i386")
+    elseif(_t_arch STREQUAL "i386")
         set(_entrysymbol _${ENTRYPOINT})
         if(${ARGC} GREATER 2)
             set(_entrysymbol ${_entrysymbol}@${ARGV2})
@@ -395,6 +400,12 @@ function(set_image_base MODULE IMAGE_BASE)
 endfunction()
 
 function(set_module_type_toolchain MODULE TYPE)
+    # Allow per-target arch override via REACTOS_TARGET_ARCH
+    get_target_property(_t_arch ${MODULE} REACTOS_TARGET_ARCH)
+    if(NOT _t_arch)
+        set(_t_arch ${ARCH})
+    endif()
+
     target_link_options(${MODULE} PRIVATE
         -Wl,--major-image-version,5 -Wl,--minor-image-version,01 -Wl,--major-os-version,5 -Wl,--minor-os-version,01)
 
@@ -422,7 +433,7 @@ function(set_module_type_toolchain MODULE TYPE)
 
     # Hosted i386 modules compiled with GCC still need libgcc helper thunks,
     # but boot/kernellike binaries stay freestanding and opt out.
-    if(ARCH STREQUAL "i386" AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    if(_t_arch STREQUAL "i386" AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
         set(_gcc_compat_host_types win32cui win32gui win32dll win32ocx cpl nativedll kernel kerneldll kernelmodedriver wdmdriver)
         if(TYPE IN_LIST _gcc_compat_host_types)
             target_link_options(${MODULE} PRIVATE "-Wl,--whole-archive" "$<TARGET_FILE:gcc-compat>" "-Wl,--no-whole-archive")

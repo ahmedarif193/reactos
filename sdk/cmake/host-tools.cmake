@@ -154,6 +154,7 @@ function(setup_host_tools)
         CMAKE_ARGS
             -UCMAKE_TOOLCHAIN_FILE
             -DARCH:STRING=${ARCH}
+            -DWOW64_MULTILIB=OFF
             -DCMAKE_INSTALL_PREFIX=${REACTOS_BINARY_DIR}/host-tools
             -DTOOLS_FOLDER=${REACTOS_BINARY_DIR}/host-tools/bin
             -DTARGET_COMPILER_ID=${CMAKE_C_COMPILER_ID}
