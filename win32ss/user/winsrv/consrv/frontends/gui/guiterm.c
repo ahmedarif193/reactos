@@ -1016,7 +1016,11 @@ GuiSetPalette(IN OUT PFRONTEND This,
     HPALETTE OldPalette;
 
     // if (GetType(GuiData->ActiveBuffer) != GRAPHICS_BUFFER) return FALSE;
-    if (PaletteHandle == NULL) return FALSE;
+    if (PaletteHandle == NULL)
+    {
+        /* Text-mode buffers rely on the default system palette; nothing to update. */
+        return TRUE;
+    }
 
     /* Set the new palette for the framebuffer */
     OldPalette = SelectPalette(GuiData->hMemDC, PaletteHandle, FALSE);
