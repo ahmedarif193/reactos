@@ -57,6 +57,7 @@ typedef struct _CONSOLE_PROCESS_DATA
 
 #include "include/conio.h"
 #include "include/conio_winsrv.h"
+#include "include/vt.h"
 
 #include "api.h" // For the CON_API_* macros.
 #include "include/console.h"
