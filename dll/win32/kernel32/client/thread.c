@@ -930,7 +930,7 @@ GetThreadId(IN HANDLE Thread)
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 LANGID
 WINAPI
@@ -999,15 +999,16 @@ QueueUserAPC(IN PAPCFUNC pfnAPC,
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 BOOL
 WINAPI
 SetThreadStackGuarantee(IN OUT PULONG StackSizeInBytes)
 {
-    PTEB Teb = NtCurrentTeb();
-    ULONG GuaranteedStackBytes;
-    ULONG AllocationSize;
+    PTEB Teb;
+    ULONG PreviousSize;
+    ULONG NewSize;
+    ULONG_PTR StackReserve;
 
     if (!StackSizeInBytes)
     {
@@ -1015,28 +1016,31 @@ SetThreadStackGuarantee(IN OUT PULONG StackSizeInBytes)
         return FALSE;
     }
 
-    AllocationSize = *StackSizeInBytes;
+    Teb = NtCurrentTeb();
+    PreviousSize = Teb->GuaranteedStackBytes;
+    NewSize = (*StackSizeInBytes + 4095) & ~4095;
 
-    /* Retrieve the current stack size */
-    GuaranteedStackBytes = Teb->GuaranteedStackBytes;
-
-    /* Return the size of the previous stack */
-    *StackSizeInBytes = GuaranteedStackBytes;
-
-    /*
-     * If the new stack size is either zero or is less than the current size,
-     * the previous stack size is returned and we return success.
-     */
-    if ((AllocationSize == 0) || (AllocationSize < GuaranteedStackBytes))
+    if ((sizeof(void *) > sizeof(int)) && NewSize)
     {
-        return TRUE;
+        if (NewSize < 8192)
+            NewSize = 8192;
     }
 
-    // FIXME: Unimplemented!
-    UNIMPLEMENTED_ONCE;
+    *StackSizeInBytes = PreviousSize;
 
-    // Temporary HACK for supporting applications!
-    return TRUE; // FALSE;
+    StackReserve = (ULONG_PTR)Teb->NtTib.StackBase - (ULONG_PTR)Teb->DeallocationStack;
+    if (NewSize >= StackReserve)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (NewSize > PreviousSize)
+    {
+        Teb->GuaranteedStackBytes = NewSize;
+    }
+
+    return TRUE;
 }
 
 /*
