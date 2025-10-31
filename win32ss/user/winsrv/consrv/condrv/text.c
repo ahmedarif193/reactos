@@ -88,6 +88,22 @@ TEXTMODE_BUFFER_Initialize(OUT PCONSOLE_SCREEN_BUFFER* Buffer,
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
+    {
+        SIZE_T CellCount = (SIZE_T)TextModeInfo->ScreenBufferSize.X * TextModeInfo->ScreenBufferSize.Y;
+        NewBuffer->FgColors = ConsoleAllocHeap(HEAP_ZERO_MEMORY, CellCount * sizeof(COLORREF));
+        NewBuffer->BgColors = ConsoleAllocHeap(HEAP_ZERO_MEMORY, CellCount * sizeof(COLORREF));
+        if (NewBuffer->FgColors == NULL || NewBuffer->BgColors == NULL)
+        {
+            if (NewBuffer->FgColors) ConsoleFreeHeap(NewBuffer->FgColors);
+            if (NewBuffer->BgColors) ConsoleFreeHeap(NewBuffer->BgColors);
+            ConsoleFreeHeap(NewBuffer->Buffer);
+            CONSOLE_SCREEN_BUFFER_Destroy((PCONSOLE_SCREEN_BUFFER)NewBuffer);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlFillMemory(NewBuffer->FgColors, CellCount * sizeof(COLORREF), 0xFF);
+        RtlFillMemory(NewBuffer->BgColors, CellCount * sizeof(COLORREF), 0xFF);
+    }
+
     NewBuffer->ScreenBufferSize = TextModeInfo->ScreenBufferSize;
     NewBuffer->OldScreenBufferSize = NewBuffer->ScreenBufferSize;
 
@@ -136,6 +152,8 @@ TEXTMODE_BUFFER_Destroy(IN OUT PCONSOLE_SCREEN_BUFFER Buffer)
     Buffer->Header.Type = SCREEN_BUFFER;
 
     ConsoleFreeHeap(Buff->Buffer);
+    if (Buff->FgColors) ConsoleFreeHeap(Buff->FgColors);
+    if (Buff->BgColors) ConsoleFreeHeap(Buff->BgColors);
 
     CONSOLE_SCREEN_BUFFER_Destroy(Buffer);
 }
@@ -160,6 +178,8 @@ ClearLineBuffer(PTEXTMODE_SCREEN_BUFFER Buff)
         /* Fill the cell */
         Ptr->Char.UnicodeChar = L' ';
         Ptr->Attributes = Buff->ScreenDefaultAttrib;
+        ConioSetCellFgColor(Buff, Pos, Buff->CursorPosition.Y, CLR_INVALID);
+        ConioSetCellBgColor(Buff, Pos, Buff->CursorPosition.Y, CLR_INVALID);
     }
 }
 
@@ -284,6 +304,22 @@ ConioCopyRegion(
 #else
         /* RtlMoveMemory() takes into account for the direction of the copy */
         RtlMoveMemory(PtrDst, PtrSrc, Width * sizeof(CHAR_INFO));
+        if (ScreenBuffer->FgColors)
+        {
+            ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, SrcRegion->Left, SY);
+            ULONG DstIndex = ConioCoordToIndex(ScreenBuffer, DstOrigin->X, DY);
+            RtlMoveMemory(ScreenBuffer->FgColors + DstIndex,
+                          ScreenBuffer->FgColors + SrcIndex,
+                          Width * sizeof(COLORREF));
+        }
+        if (ScreenBuffer->BgColors)
+        {
+            ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, SrcRegion->Left, SY);
+            ULONG DstIndex = ConioCoordToIndex(ScreenBuffer, DstOrigin->X, DY);
+            RtlMoveMemory(ScreenBuffer->BgColors + DstIndex,
+                          ScreenBuffer->BgColors + SrcIndex,
+                          Width * sizeof(COLORREF));
+        }
 #endif
     }
 }
@@ -339,6 +375,8 @@ ConioFillRegion(
                 /* We are outside the excluded region, fill the destination */
                 *Ptr = FillChar;
                 // Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                ConioSetCellFgColor(ScreenBuffer, X, Y, CLR_INVALID);
+                ConioSetCellBgColor(ScreenBuffer, X, Y, CLR_INVALID);
             }
 
             ++Ptr;
@@ -399,9 +437,23 @@ ConioResizeBuffer(PCONSOLE Console,
     Buffer = ConsoleAllocHeap(HEAP_ZERO_MEMORY, Size.X * Size.Y * sizeof(CHAR_INFO));
     if (!Buffer) return STATUS_NO_MEMORY;
 
+    COLORREF *NewFg = ConsoleAllocHeap(HEAP_ZERO_MEMORY, Size.X * Size.Y * sizeof(COLORREF));
+    COLORREF *NewBg = ConsoleAllocHeap(HEAP_ZERO_MEMORY, Size.X * Size.Y * sizeof(COLORREF));
+    if (!NewFg || !NewBg)
+    {
+        if (NewFg) ConsoleFreeHeap(NewFg);
+        if (NewBg) ConsoleFreeHeap(NewBg);
+        ConsoleFreeHeap(Buffer);
+        return STATUS_NO_MEMORY;
+    }
+    RtlFillMemory(NewFg, Size.X * Size.Y * sizeof(COLORREF), 0xFF);
+    RtlFillMemory(NewBg, Size.X * Size.Y * sizeof(COLORREF), 0xFF);
+
     DPRINT("Resizing (%d,%d) to (%d,%d)\n", ScreenBuffer->ScreenBufferSize.X, ScreenBuffer->ScreenBufferSize.Y, Size.X, Size.Y);
 
     OldBuffer = ScreenBuffer->Buffer;
+    COLORREF *OldFgColors = ScreenBuffer->FgColors;
+    COLORREF *OldBgColors = ScreenBuffer->BgColors;
 
     for (CurrentY = 0; CurrentY < ScreenBuffer->ScreenBufferSize.Y && CurrentY < Size.Y; CurrentY++)
     {
@@ -411,6 +463,16 @@ ConioResizeBuffer(PCONSOLE Console,
         {
             /* Reduce size */
             RtlCopyMemory(Buffer + Offset, Ptr, Size.X * sizeof(CHAR_INFO));
+            if (ScreenBuffer->FgColors)
+            {
+                ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, 0, CurrentY);
+                RtlMoveMemory(NewFg + Offset, ScreenBuffer->FgColors + SrcIndex, Size.X * sizeof(COLORREF));
+            }
+            if (ScreenBuffer->BgColors)
+            {
+                ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, 0, CurrentY);
+                RtlMoveMemory(NewBg + Offset, ScreenBuffer->BgColors + SrcIndex, Size.X * sizeof(COLORREF));
+            }
             Offset += Size.X;
 
             /* If we have cut a trailing full-width character in half, remove it completely */
@@ -420,12 +482,24 @@ ConioResizeBuffer(PCONSOLE Console,
                 Ptr->Char.UnicodeChar = L' ';
                 /* Keep all the other original attributes intact */
                 Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                if (NewFg) NewFg[Offset - 1] = CLR_INVALID;
+                if (NewBg) NewBg[Offset - 1] = CLR_INVALID;
             }
         }
         else
         {
             /* Enlarge size */
             RtlCopyMemory(Buffer + Offset, Ptr, ScreenBuffer->ScreenBufferSize.X * sizeof(CHAR_INFO));
+            if (ScreenBuffer->FgColors)
+            {
+                ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, 0, CurrentY);
+                RtlMoveMemory(NewFg + Offset, ScreenBuffer->FgColors + SrcIndex, ScreenBuffer->ScreenBufferSize.X * sizeof(COLORREF));
+            }
+            if (ScreenBuffer->BgColors)
+            {
+                ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, 0, CurrentY);
+                RtlMoveMemory(NewBg + Offset, ScreenBuffer->BgColors + SrcIndex, ScreenBuffer->ScreenBufferSize.X * sizeof(COLORREF));
+            }
             Offset += ScreenBuffer->ScreenBufferSize.X;
 
             /* The attribute to be used is the one of the last cell of the current line */
@@ -462,7 +536,11 @@ ConioResizeBuffer(PCONSOLE Console,
     }
 
     (void)InterlockedExchangePointer((PVOID volatile*)&ScreenBuffer->Buffer, Buffer);
-    ConsoleFreeHeap(OldBuffer);
+    (void)InterlockedExchangePointer((PVOID volatile*)&ScreenBuffer->FgColors, NewFg);
+    (void)InterlockedExchangePointer((PVOID volatile*)&ScreenBuffer->BgColors, NewBg);
+    if (OldBuffer) ConsoleFreeHeap(OldBuffer);
+    if (OldFgColors) ConsoleFreeHeap(OldFgColors);
+    if (OldBgColors) ConsoleFreeHeap(OldBgColors);
     ScreenBuffer->ScreenBufferSize = ScreenBuffer->OldScreenBufferSize = Size;
     ScreenBuffer->VirtualY = 0;
 
@@ -689,6 +767,8 @@ ConDrvWriteConsoleOutput(IN PCONSOLE Console,
             }
             // TODO: Sanitize DBCS attributes?
             Ptr->Attributes = CurCharInfo->Attributes;
+            ConioSetCellFgColor(Buffer, X, Y, CLR_INVALID);
+            ConioSetCellBgColor(Buffer, X, Y, CLR_INVALID);
             ++Ptr;
             ++CurCharInfo;
         }
@@ -753,6 +833,8 @@ ConDrvWriteConsoleOutputVDM(IN PCONSOLE Console,
         {
             ConsoleOutputAnsiToUnicodeChar(Console, &Ptr->Char.UnicodeChar, &CurCharInfo->Char);
             Ptr->Attributes = CurCharInfo->Attributes;
+            ConioSetCellFgColor(Buffer, X, Y, CLR_INVALID);
+            ConioSetCellBgColor(Buffer, X, Y, CLR_INVALID);
             ++Ptr;
             ++CurCharInfo;
         }
@@ -1168,6 +1250,8 @@ IntWriteConsoleOutputStringAttribute(
 
             Ptr->Attributes &= COMMON_LVB_SBCSDBCS;
             Ptr->Attributes |= (*StringBuffer & ~COMMON_LVB_SBCSDBCS);
+            ConioSetCellFgColor(Buffer, X, Y, CLR_INVALID);
+            ConioSetCellBgColor(Buffer, X, Y, CLR_INVALID);
 
             ++Ptr;
 
@@ -1369,6 +1453,8 @@ ConDrvFillConsoleOutput(IN PCONSOLE Console,
                 case CODE_ATTRIBUTE:
                     Ptr->Attributes &= COMMON_LVB_SBCSDBCS;
                     Ptr->Attributes |= (Code.Attribute & ~COMMON_LVB_SBCSDBCS);
+                    ConioSetCellFgColor(Buffer, X, Y, CLR_INVALID);
+                    ConioSetCellBgColor(Buffer, X, Y, CLR_INVALID);
                     break;
             }
 
