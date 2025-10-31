@@ -51,6 +51,9 @@ ExternalProject_Add(wow64_multilib_i386
         ${_i386_generator}
         -DARCH=i386
         -DWOW64_MULTILIB=OFF
+        -DREACTOS_TOP_SOURCE_DIR:PATH=${REACTOS_TOP_SOURCE_DIR}
+        -DREACTOS_TOP_BINARY_DIR:PATH=${REACTOS_TOP_BINARY_DIR}
+        -DHOST_TOOLS_DIR:PATH=${REACTOS_TOP_BINARY_DIR}/host-tools/bin
         ${_i386_build_type}
         ${_i386_toolchain}
     BUILD_COMMAND
