@@ -102,6 +102,31 @@ VtEnableAlternateScreen(PCONSOLE Console,
     AltBuffer->VtState.CurrentCursorStyle = PrimaryBuffer->VtState.CurrentCursorStyle;
     AltBuffer->VtState.ScrollTop = min(PrimaryBuffer->VtState.ScrollTop,
                                        (SHORT)max(0, AltBuffer->ScreenBufferSize.Y - 1));
+    AltBuffer->VtState.HyperlinkActive = PrimaryBuffer->VtState.HyperlinkActive;
+    AltBuffer->VtState.HyperlinkUri.Buffer = NULL;
+    AltBuffer->VtState.HyperlinkUri.Length = 0;
+    AltBuffer->VtState.HyperlinkUri.MaximumLength = 0;
+    if (PrimaryBuffer->VtState.HyperlinkActive &&
+        PrimaryBuffer->VtState.HyperlinkUri.Buffer &&
+        PrimaryBuffer->VtState.HyperlinkUri.Length > 0)
+    {
+        ULONG Bytes = PrimaryBuffer->VtState.HyperlinkUri.Length + sizeof(WCHAR);
+        PWCHAR Copy = ConsoleAllocHeap(0, Bytes);
+        if (Copy)
+        {
+            RtlCopyMemory(Copy, PrimaryBuffer->VtState.HyperlinkUri.Buffer,
+                          PrimaryBuffer->VtState.HyperlinkUri.Length);
+            Copy[PrimaryBuffer->VtState.HyperlinkUri.Length / sizeof(WCHAR)] = UNICODE_NULL;
+            AltBuffer->VtState.HyperlinkUri.Buffer = Copy;
+            AltBuffer->VtState.HyperlinkUri.Length = PrimaryBuffer->VtState.HyperlinkUri.Length;
+            AltBuffer->VtState.HyperlinkUri.MaximumLength = (USHORT)Bytes;
+        }
+        else
+        {
+            AltBuffer->VtState.HyperlinkActive = FALSE;
+        }
+    }
+
     AltBuffer->VtState.ScrollBottom = min(PrimaryBuffer->VtState.ScrollBottom,
                                           (SHORT)max(0, AltBuffer->ScreenBufferSize.Y - 1));
     if (AltBuffer->VtState.ScrollBottom < AltBuffer->VtState.ScrollTop)
@@ -169,6 +194,23 @@ VtGetPaletteColor(PCONSOLE Console, UCHAR Index)
     return Cons->Colors[Index & 0x0F];
 }
 
+static VOID
+VtClearHyperlink(PTEXTMODE_SCREEN_BUFFER ScreenBuffer)
+{
+    if (!ScreenBuffer)
+        return;
+
+    if (ScreenBuffer->VtState.HyperlinkUri.Buffer)
+    {
+        ConsoleFreeHeap(ScreenBuffer->VtState.HyperlinkUri.Buffer);
+        ScreenBuffer->VtState.HyperlinkUri.Buffer = NULL;
+    }
+
+    ScreenBuffer->VtState.HyperlinkUri.Length = 0;
+    ScreenBuffer->VtState.HyperlinkUri.MaximumLength = 0;
+    ScreenBuffer->VtState.HyperlinkActive = FALSE;
+}
+
 VOID
 NTAPI
 ConDrvVtInvalidateBufferRgb(PTEXTMODE_SCREEN_BUFFER ScreenBuffer)
@@ -195,6 +237,7 @@ ConDrvVtInvalidateBufferRgb(PTEXTMODE_SCREEN_BUFFER ScreenBuffer)
     ScreenBuffer->VtState.PrivateModes = 0;
     ScreenBuffer->VtState.ScrollTop = 0;
     ScreenBuffer->VtState.ScrollBottom = max(0, ScreenBuffer->ScreenBufferSize.Y - 1);
+    VtClearHyperlink(ScreenBuffer);
 
     Console = ScreenBuffer->Header.Console;
     if (Console)
@@ -814,8 +857,8 @@ VtScrollRegionUp(PCONSOLE Console,
 
 static VOID
 VtScrollRegionDown(PCONSOLE Console,
-                   PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
-                   ULONG Lines)
+                 PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                 ULONG Lines)
 {
     SHORT Top = ScreenBuffer->VtState.ScrollTop;
     SHORT Bottom = ScreenBuffer->VtState.ScrollBottom;
@@ -863,16 +906,517 @@ VtScrollRegionDown(PCONSOLE Console,
 }
 
 static BOOLEAN
+VtSetConsoleTitle(PCONSOLE Console,
+                  const WCHAR *Title,
+                  ULONG Length)
+{
+    PCONSRV_CONSOLE Cons;
+    PWCHAR Buffer;
+    ULONG MaxChars;
+
+    if (!Console || !Title)
+        return FALSE;
+
+    Cons = (PCONSRV_CONSOLE)Console;
+    if (!Cons)
+        return FALSE;
+
+    /* Clamp to what the UNICODE_STRING can represent. */
+    if (Length > (ULONG)((MAXUSHORT / sizeof(WCHAR)) - 1))
+        Length = (ULONG)((MAXUSHORT / sizeof(WCHAR)) - 1);
+
+    MaxChars = Length + 1;
+    Buffer = ConsoleAllocHeap(HEAP_ZERO_MEMORY, MaxChars * sizeof(WCHAR));
+    if (!Buffer)
+        return FALSE;
+
+    if (Length > 0)
+        RtlCopyMemory(Buffer, Title, Length * sizeof(WCHAR));
+    Buffer[Length] = UNICODE_NULL;
+
+    if (Cons->Title.Buffer)
+        ConsoleFreeHeap(Cons->Title.Buffer);
+
+    Cons->Title.Buffer = Buffer;
+    Cons->Title.Length = (USHORT)(Length * sizeof(WCHAR));
+    Cons->Title.MaximumLength = (USHORT)(MaxChars * sizeof(WCHAR));
+
+    TermChangeTitle(Cons);
+    return TRUE;
+}
+
+static BOOLEAN
+VtReportWindowSize(PCONSOLE Console,
+                   PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                   ULONG ReplyPrefix)
+{
+    WCHAR Response[32];
+    SIZE_T Len = 0;
+    SHORT Rows;
+    SHORT Cols;
+
+    if (!Console || !ScreenBuffer)
+        return FALSE;
+
+    Rows = ScreenBuffer->ViewSize.Y;
+    Cols = ScreenBuffer->ViewSize.X;
+    if (Rows <= 0)
+        Rows = ScreenBuffer->ScreenBufferSize.Y;
+    if (Cols <= 0)
+        Cols = ScreenBuffer->ScreenBufferSize.X;
+    if (Rows <= 0) Rows = 1;
+    if (Cols <= 0) Cols = 1;
+
+    Response[Len++] = L'\x1b';
+    Response[Len++] = L'[';
+    Len += VtAppendNumber(Response + Len,
+                          ARRAYSIZE(Response) - Len,
+                          ReplyPrefix);
+    if (Len < ARRAYSIZE(Response))
+        Response[Len++] = L';';
+    Len += VtAppendNumber(Response + Len,
+                          ARRAYSIZE(Response) - Len,
+                          (ULONG)Rows);
+    if (Len < ARRAYSIZE(Response))
+        Response[Len++] = L';';
+    Len += VtAppendNumber(Response + Len,
+                          ARRAYSIZE(Response) - Len,
+                          (ULONG)Cols);
+    if (Len < ARRAYSIZE(Response))
+        Response[Len++] = L't';
+
+    VtSendInputResponse(Console, Response, Len);
+    return TRUE;
+}
+
+static BOOLEAN
+VtResizeWindow(PCONSOLE Console,
+               PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+               ULONG Rows,
+               ULONG Cols)
+{
+    SMALL_RECT WindowRect;
+    COORD Size;
+    NTSTATUS Status;
+
+    if (!Console || !ScreenBuffer)
+        return FALSE;
+
+    if (Rows == 0 || Cols == 0)
+        return TRUE;
+
+    if (Rows > SHRT_MAX) Rows = SHRT_MAX;
+    if (Cols > SHRT_MAX) Cols = SHRT_MAX;
+
+    Size.X = (SHORT)max(1UL, Cols);
+    Size.Y = (SHORT)max(1UL, Rows);
+
+    if (Size.X != ScreenBuffer->ScreenBufferSize.X ||
+        Size.Y != ScreenBuffer->ScreenBufferSize.Y)
+    {
+        Status = ConDrvSetConsoleScreenBufferSize(Console, ScreenBuffer, &Size);
+        if (!NT_SUCCESS(Status))
+            return FALSE;
+    }
+
+    WindowRect.Left = 0;
+    WindowRect.Top = 0;
+    WindowRect.Right = (SHORT)(Size.X - 1);
+    WindowRect.Bottom = (SHORT)(Size.Y - 1);
+
+    Status = ConDrvSetConsoleWindowInfo(Console, ScreenBuffer, TRUE, &WindowRect);
+    return NT_SUCCESS(Status);
+}
+
+static BOOLEAN
+VtParseHexComponent(const WCHAR *Start,
+                    const WCHAR *End,
+                    ULONG *Value,
+                    ULONG *Digits)
+{
+    ULONG Result = 0;
+    ULONG Count = 0;
+
+    if (!Value || !Digits)
+        return FALSE;
+
+    while (Start < End)
+    {
+        WCHAR Ch = *Start++;
+        ULONG Nibble;
+
+        if (Ch >= L'0' && Ch <= L'9')
+            Nibble = Ch - L'0';
+        else if (Ch >= L'a' && Ch <= L'f')
+            Nibble = Ch - L'a' + 10;
+        else if (Ch >= L'A' && Ch <= L'F')
+            Nibble = Ch - L'A' + 10;
+        else
+            return FALSE;
+
+        Result = (Result << 4) | Nibble;
+        if (++Count > 4)
+            return FALSE;
+    }
+
+    if (Count == 0)
+        return FALSE;
+
+    *Value = Result;
+    *Digits = Count;
+    return TRUE;
+}
+
+static BYTE
+VtScaleComponent(ULONG Value, ULONG Digits)
+{
+    ULONG MaxValue;
+
+    if (Digits == 0)
+        return 0;
+
+    MaxValue = (1u << (Digits * 4)) - 1u;
+    if (MaxValue == 0)
+        return 0;
+
+    return (BYTE)((Value * 255u + MaxValue / 2u) / MaxValue);
+}
+
+static BOOLEAN
+VtOscParseRgb(const WCHAR *Value,
+              ULONG Length,
+              COLORREF *Color)
+{
+    const WCHAR *Start = Value;
+    const WCHAR *End = Value + Length;
+
+    if (!Value || !Color)
+        return FALSE;
+
+    /* Trim surrounding whitespace */
+    while (Start < End && (*Start == L' ' || *Start == L'\t'))
+        ++Start;
+    while (Start < End && (End[-1] == L' ' || End[-1] == L'\t'))
+        --End;
+
+    if (Start >= End)
+        return FALSE;
+
+    if (*Start == L'#')
+    {
+        ULONG DigitsPerComponent;
+        ULONG ComponentLength = (ULONG)(End - Start - 1);
+        ULONG RValue, GValue, BValue;
+        ULONG Digits;
+        const WCHAR *Ptr;
+
+        if (ComponentLength == 0 || (ComponentLength % 3) != 0)
+            return FALSE;
+
+        DigitsPerComponent = ComponentLength / 3;
+        Ptr = Start + 1;
+
+        if (!VtParseHexComponent(Ptr, Ptr + DigitsPerComponent, &RValue, &Digits))
+            return FALSE;
+        Ptr += DigitsPerComponent;
+
+        if (!VtParseHexComponent(Ptr, Ptr + DigitsPerComponent, &GValue, &Digits))
+            return FALSE;
+        Ptr += DigitsPerComponent;
+
+        if (!VtParseHexComponent(Ptr, Ptr + DigitsPerComponent, &BValue, &Digits))
+            return FALSE;
+
+        *Color = RGB(VtScaleComponent(RValue, DigitsPerComponent),
+                     VtScaleComponent(GValue, DigitsPerComponent),
+                     VtScaleComponent(BValue, DigitsPerComponent));
+        return TRUE;
+    }
+
+    if ((End - Start) > 4 && Start[0] == L'r' && Start[1] == L'g' && Start[2] == L'b' && Start[3] == L':')
+    {
+        const WCHAR *Ptr = Start + 4;
+        ULONG Values[3];
+        ULONG Digits;
+        ULONG Index = 0;
+        const WCHAR *SegmentStart;
+
+        while (Index < 3 && Ptr <= End)
+        {
+            SegmentStart = Ptr;
+            while (Ptr < End && *Ptr != L'/')
+                ++Ptr;
+
+            if (!VtParseHexComponent(SegmentStart, Ptr, &Values[Index], &Digits))
+                return FALSE;
+
+            Values[Index] = VtScaleComponent(Values[Index], Digits);
+            ++Index;
+
+            if (Ptr < End)
+                ++Ptr; /* Skip '/' */
+        }
+
+        if (Index != 3)
+            return FALSE;
+
+        *Color = RGB((BYTE)Values[0], (BYTE)Values[1], (BYTE)Values[2]);
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+static VOID
+VtRefreshPaletteForBuffer(PCONSOLE Console,
+                          PTEXTMODE_SCREEN_BUFFER Buffer)
+{
+    if (!Console || !Buffer)
+        return;
+
+    if (!Buffer->VtState.UseRgbForeground)
+    {
+        Buffer->VtState.CurrentFgColor = VtGetPaletteColor(Console, Buffer->VtState.CurrentAttributes & 0x0F);
+    }
+
+    if (!Buffer->VtState.UseRgbBackground)
+    {
+        Buffer->VtState.CurrentBgColor = VtGetPaletteColor(Console, (Buffer->VtState.CurrentAttributes >> 4) & 0x0F);
+    }
+
+    if (!Buffer->VtState.SavedUseRgbForeground)
+    {
+        Buffer->VtState.SavedFgColor = VtGetPaletteColor(Console, Buffer->VtState.SavedAttributes & 0x0F);
+    }
+
+    if (!Buffer->VtState.SavedUseRgbBackground)
+    {
+        Buffer->VtState.SavedBgColor = VtGetPaletteColor(Console, (Buffer->VtState.SavedAttributes >> 4) & 0x0F);
+    }
+}
+
+static VOID
+VtApplyPaletteChange(PCONSOLE Console)
+{
+    PCONSOLE_SCREEN_BUFFER Active;
+
+    if (!Console)
+        return;
+
+    Active = Console->ActiveBuffer;
+    if (Active && GetType(Active) == TEXTMODE_BUFFER)
+    {
+        PTEXTMODE_SCREEN_BUFFER TextActive = (PTEXTMODE_SCREEN_BUFFER)Active;
+        SMALL_RECT Region;
+
+        TermSetPalette(Console, TextActive->PaletteHandle, TextActive->PaletteUsage);
+
+        if (TextActive->ScreenBufferSize.X > 0 && TextActive->ScreenBufferSize.Y > 0)
+        {
+            Region.Left = 0;
+            Region.Top = 0;
+            Region.Right = TextActive->ScreenBufferSize.X - 1;
+            Region.Bottom = TextActive->ScreenBufferSize.Y - 1;
+            TermDrawRegion(Console, &Region);
+        }
+    }
+}
+
+static BOOLEAN
+VtHandleOscPalette(PCONSOLE Console,
+                   PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                   const WCHAR *Parameters,
+                   ULONG Length)
+{
+    const WCHAR *Ptr = Parameters;
+    const WCHAR *End = Parameters + Length;
+    BOOLEAN Updated = FALSE;
+    PCONSRV_CONSOLE Cons = (PCONSRV_CONSOLE)Console;
+
+    if (!Console || !Cons)
+        return TRUE;
+
+    while (Ptr < End)
+    {
+        ULONG Index = 0;
+        BOOLEAN HaveDigits = FALSE;
+
+        while (Ptr < End && (*Ptr == L';' || *Ptr == L' ' || *Ptr == L'\t'))
+            ++Ptr;
+
+        if (Ptr >= End)
+            break;
+
+        while (Ptr < End && *Ptr != L';')
+        {
+            if (*Ptr >= L'0' && *Ptr <= L'9')
+            {
+                Index = Index * 10 + (ULONG)(*Ptr - L'0');
+                HaveDigits = TRUE;
+            }
+            else if (*Ptr != L' ' && *Ptr != L'\t')
+            {
+                HaveDigits = FALSE;
+            }
+            ++Ptr;
+        }
+
+        if (!HaveDigits)
+        {
+            if (Ptr < End)
+                ++Ptr;
+            continue;
+        }
+
+        if (Ptr >= End)
+            break;
+
+        ++Ptr; /* Skip ';' */
+        const WCHAR *ColorStart = Ptr;
+        while (Ptr < End && *Ptr != L';')
+            ++Ptr;
+
+        if (ColorStart < Ptr && Index < 16)
+        {
+            COLORREF Parsed;
+
+            if (VtOscParseRgb(ColorStart, (ULONG)(Ptr - ColorStart), &Parsed))
+            {
+                Cons->Colors[Index] = Parsed;
+                Updated = TRUE;
+            }
+        }
+    }
+
+    if (Updated)
+    {
+        VtRefreshPaletteForBuffer(Console, ScreenBuffer);
+        if (ScreenBuffer && ScreenBuffer->VtState.PrimaryBuffer)
+            VtRefreshPaletteForBuffer(Console, ScreenBuffer->VtState.PrimaryBuffer);
+        if (ScreenBuffer && ScreenBuffer->VtState.AlternateBuffer)
+            VtRefreshPaletteForBuffer(Console, ScreenBuffer->VtState.AlternateBuffer);
+
+        VtApplyPaletteChange(Console);
+    }
+
+    return TRUE;
+}
+
+static BOOLEAN
+VtHandleOscHyperlink(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                     const WCHAR *Parameters,
+                     ULONG Length)
+{
+    const WCHAR *Ptr = Parameters;
+    const WCHAR *End = Parameters + Length;
+    const WCHAR *UriStart;
+    ULONG UriLength = 0;
+
+    if (!ScreenBuffer)
+        return TRUE;
+
+    while (Ptr < End && *Ptr != L';')
+        ++Ptr;
+
+    if (Ptr < End)
+        ++Ptr;
+    else
+        Ptr = End;
+
+    UriStart = Ptr;
+    if (UriStart < End)
+        UriLength = (ULONG)(End - UriStart);
+
+    VtClearHyperlink(ScreenBuffer);
+
+    if (UriLength == 0)
+        return TRUE;
+
+    if (UriLength >= (ULONG)((USHRT_MAX / sizeof(WCHAR)) - 1))
+        return TRUE;
+
+    PWCHAR Buffer = ConsoleAllocHeap(0, (UriLength + 1) * sizeof(WCHAR));
+    if (!Buffer)
+        return TRUE;
+
+    RtlCopyMemory(Buffer, UriStart, UriLength * sizeof(WCHAR));
+    Buffer[UriLength] = UNICODE_NULL;
+
+    ScreenBuffer->VtState.HyperlinkUri.Buffer = Buffer;
+    ScreenBuffer->VtState.HyperlinkUri.Length = (USHORT)(UriLength * sizeof(WCHAR));
+    ScreenBuffer->VtState.HyperlinkUri.MaximumLength = (USHORT)((UriLength + 1) * sizeof(WCHAR));
+    ScreenBuffer->VtState.HyperlinkActive = TRUE;
+    return TRUE;
+}
+
+static BOOLEAN
+VtHandleOscClipboard(PCONSOLE Console,
+                     const WCHAR *Parameters,
+                     ULONG Length)
+{
+    UNREFERENCED_PARAMETER(Console);
+    UNREFERENCED_PARAMETER(Parameters);
+    UNREFERENCED_PARAMETER(Length);
+    return TRUE;
+}
+
+static BOOLEAN
 VtHandleOscSequence(PCONSOLE Console,
                     PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
                     const WCHAR *Sequence,
                     ULONG Length)
 {
-    UNREFERENCED_PARAMETER(Console);
-    UNREFERENCED_PARAMETER(ScreenBuffer);
-    UNREFERENCED_PARAMETER(Sequence);
-    UNREFERENCED_PARAMETER(Length);
-    /* OSC sequences are currently ignored. */
+    const WCHAR *End = Sequence + Length;
+    const WCHAR *ParamEnd = Sequence;
+    ULONG Parameter = 0;
+    BOOLEAN HaveParameter = FALSE;
+
+    while (ParamEnd < End && *ParamEnd != L';')
+        ++ParamEnd;
+
+    for (const WCHAR *Ptr = Sequence; Ptr < ParamEnd; ++Ptr)
+    {
+        if (*Ptr >= L'0' && *Ptr <= L'9')
+        {
+            Parameter = Parameter * 10 + (ULONG)(*Ptr - L'0');
+            HaveParameter = TRUE;
+        }
+        else if (*Ptr != L' ' && *Ptr != L'\t')
+        {
+            return TRUE;
+        }
+    }
+
+    if (!HaveParameter)
+        Parameter = 0;
+
+    if (ParamEnd < End)
+        ++ParamEnd;
+
+    switch (Parameter)
+    {
+        case 0:
+        case 1:
+        case 2:
+            if (ParamEnd <= End)
+            {
+                VtSetConsoleTitle(Console, ParamEnd, (ULONG)(End - ParamEnd));
+            }
+            return TRUE;
+
+        case 4:
+            return VtHandleOscPalette(Console, ScreenBuffer, ParamEnd, (ULONG)(End - ParamEnd));
+
+        case 8:
+            return VtHandleOscHyperlink(ScreenBuffer, ParamEnd, (ULONG)(End - ParamEnd));
+
+        case 52:
+            return VtHandleOscClipboard(Console, ParamEnd, (ULONG)(End - ParamEnd));
+
+        default:
+            return TRUE;
+    }
+
     return TRUE;
 }
 
@@ -1321,6 +1865,10 @@ ConDrvVtInitializeBuffer(PTEXTMODE_SCREEN_BUFFER ScreenBuffer)
     ScreenBuffer->VtState.PrimaryVirtualY = 0;
     ScreenBuffer->VtState.DefaultCursorInfo = ScreenBuffer->CursorInfo;
     ScreenBuffer->VtState.CurrentCursorStyle = 0;
+    ScreenBuffer->VtState.HyperlinkActive = FALSE;
+    ScreenBuffer->VtState.HyperlinkUri.Buffer = NULL;
+    ScreenBuffer->VtState.HyperlinkUri.Length = 0;
+    ScreenBuffer->VtState.HyperlinkUri.MaximumLength = 0;
 }
 
 static VOID
@@ -1452,8 +2000,74 @@ VtHandleDecPrivateMode(PCONSOLE Console,
 }
 
 static BOOLEAN
+VtHandleDeviceAttributes(PCONSOLE Console,
+                         WCHAR PrivateIndicator)
+{
+    WCHAR Response[32];
+    SIZE_T Len = 0;
+
+    if (!Console)
+        return FALSE;
+
+    Response[Len++] = L'\x1b';
+    Response[Len++] = L'[';
+
+    switch (PrivateIndicator)
+    {
+        case 0:
+        case L'?':
+            if (Len >= ARRAYSIZE(Response))
+                return FALSE;
+            Response[Len++] = L'?';
+            Len += VtAppendNumber(Response + Len,
+                                  ARRAYSIZE(Response) - Len,
+                                  1);
+            if (Len >= ARRAYSIZE(Response))
+                return FALSE;
+            Response[Len++] = L';';
+            Len += VtAppendNumber(Response + Len,
+                                  ARRAYSIZE(Response) - Len,
+                                  0);
+            break;
+
+        case L'>':
+            if (Len >= ARRAYSIZE(Response))
+                return FALSE;
+            Response[Len++] = L'>';
+            Len += VtAppendNumber(Response + Len,
+                                  ARRAYSIZE(Response) - Len,
+                                  0);
+            if (Len >= ARRAYSIZE(Response))
+                return FALSE;
+            Response[Len++] = L';';
+            Len += VtAppendNumber(Response + Len,
+                                  ARRAYSIZE(Response) - Len,
+                                  136);
+            if (Len >= ARRAYSIZE(Response))
+                return FALSE;
+            Response[Len++] = L';';
+            Len += VtAppendNumber(Response + Len,
+                                  ARRAYSIZE(Response) - Len,
+                                  0);
+            break;
+
+        default:
+            return FALSE;
+    }
+
+    if (Len >= ARRAYSIZE(Response))
+        return FALSE;
+
+    Response[Len++] = L'c';
+
+    VtSendInputResponse(Console, Response, Len);
+    return TRUE;
+}
+
+static BOOLEAN
 VtHandlePrivateCsiSequence(PCONSOLE Console,
                            PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                           WCHAR PrivateIndicator,
                            WCHAR Final,
                            WCHAR Intermediate,
                            const ULONG *Params,
@@ -1478,6 +2092,9 @@ VtHandlePrivateCsiSequence(PCONSOLE Console,
 
             return Handled;
         }
+
+        case L'c':
+            return VtHandleDeviceAttributes(Console, PrivateIndicator);
 
         default:
             return FALSE;
@@ -1530,6 +2147,38 @@ VtHandleCsiSequence(PCONSOLE Console,
         case L'M':
             VtDeleteLines(Console, ScreenBuffer, (Count >= 1) ? Params[0] : 1);
             return TRUE;
+
+        case L'c':
+            if (Intermediate == 0)
+                return VtHandleDeviceAttributes(Console, 0);
+            return FALSE;
+
+        case L't':
+        {
+            ULONG Action = (Count >= 1) ? Params[0] : 0;
+
+            switch (Action)
+            {
+                case 8:
+                    if (Count >= 3)
+                    {
+                        ULONG Rows = Params[1];
+                        ULONG Cols = Params[2];
+                        VtResizeWindow(Console, ScreenBuffer, Rows, Cols);
+                        return TRUE;
+                    }
+                    return TRUE;
+
+                case 18:
+                    return VtReportWindowSize(Console, ScreenBuffer, 8);
+
+                case 19:
+                    return VtReportWindowSize(Console, ScreenBuffer, 4);
+
+                default:
+                    return FALSE;
+            }
+        }
 
         case L'n':
         {
@@ -1726,12 +2375,12 @@ ConDrvVtWriteConsole(PCONSOLE Console,
                 ULONG Count = 0;
                 ULONG Current = 0;
                 BOOLEAN HaveCurrent = FALSE;
-                BOOLEAN Private = FALSE;
+                WCHAR PrivateIndicator = 0;
                 WCHAR Intermediate = 0;
 
                 if (Pos < Length && (Buffer[Pos] == L'?' || Buffer[Pos] == L'>' || Buffer[Pos] == L'<' || Buffer[Pos] == L'='))
                 {
-                    Private = TRUE;
+                    PrivateIndicator = Buffer[Pos];
                     Pos++;
                 }
 
@@ -1786,9 +2435,9 @@ ConDrvVtWriteConsole(PCONSOLE Console,
                     Count++;
                 }
 
-                if ((Private &&
-                     VtHandlePrivateCsiSequence(Console, ScreenBuffer, Final, Intermediate, Params, Count)) ||
-                    (!Private &&
+                if ((PrivateIndicator != 0 &&
+                     VtHandlePrivateCsiSequence(Console, ScreenBuffer, PrivateIndicator, Final, Intermediate, Params, Count)) ||
+                    (PrivateIndicator == 0 &&
                      VtHandleCsiSequence(Console, ScreenBuffer, Final, Intermediate, Params, Count)))
                 {
                     AnyHandled = TRUE;
