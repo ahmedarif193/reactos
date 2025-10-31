@@ -544,6 +544,22 @@ ConioResizeBuffer(PCONSOLE Console,
     ScreenBuffer->ScreenBufferSize = ScreenBuffer->OldScreenBufferSize = Size;
     ScreenBuffer->VirtualY = 0;
 
+    if (ScreenBuffer->ScreenBufferSize.Y <= 0)
+    {
+        ScreenBuffer->VtState.ScrollTop = 0;
+        ScreenBuffer->VtState.ScrollBottom = 0;
+    }
+    else
+    {
+        if (ScreenBuffer->VtState.ScrollTop < 0 || ScreenBuffer->VtState.ScrollTop >= ScreenBuffer->ScreenBufferSize.Y)
+            ScreenBuffer->VtState.ScrollTop = 0;
+        if (ScreenBuffer->VtState.ScrollBottom < ScreenBuffer->VtState.ScrollTop ||
+            ScreenBuffer->VtState.ScrollBottom >= ScreenBuffer->ScreenBufferSize.Y)
+        {
+            ScreenBuffer->VtState.ScrollBottom = ScreenBuffer->ScreenBufferSize.Y - 1;
+        }
+    }
+
     /* Ensure the cursor and the view are within the buffer */
     ScreenBuffer->CursorPosition.X = min(ScreenBuffer->CursorPosition.X, Size.X - 1);
     ScreenBuffer->CursorPosition.Y = min(ScreenBuffer->CursorPosition.Y, Size.Y - 1);
