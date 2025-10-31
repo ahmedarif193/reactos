@@ -101,6 +101,7 @@ static BOOL (WINAPI *pEnumSystemGeoID)(GEOCLASS, GEOID, GEO_ENUMPROC);
 static BOOL (WINAPI *pGetSystemPreferredUILanguages)(DWORD, ULONG*, WCHAR*, ULONG*);
 static BOOL (WINAPI *pGetThreadPreferredUILanguages)(DWORD, ULONG*, WCHAR*, ULONG*);
 static BOOL (WINAPI *pGetUserPreferredUILanguages)(DWORD, ULONG*, WCHAR*, ULONG*);
+static BOOL (WINAPI *pSetThreadPreferredUILanguages)(DWORD, PCZZWSTR, ULONG*);
 static WCHAR (WINAPI *pRtlUpcaseUnicodeChar)(WCHAR);
 static INT (WINAPI *pGetNumberFormatEx)(LPCWSTR, DWORD, LPCWSTR, const NUMBERFMTW *, LPWSTR, int);
 
@@ -134,6 +135,7 @@ static void InitFunctionPointers(void)
   X(GetSystemPreferredUILanguages);
   X(GetThreadPreferredUILanguages);
   X(GetUserPreferredUILanguages);
+  X(SetThreadPreferredUILanguages);
   X(GetNumberFormatEx);
 
   mod = GetModuleHandleA("ntdll");
@@ -5171,11 +5173,35 @@ static void test_GetThreadPreferredUILanguages(void)
     BOOL ret;
     ULONG count, size;
     WCHAR *buf;
+    WCHAR *original_names = NULL;
+    ULONG original_count = 0;
 
     if (!pGetThreadPreferredUILanguages)
     {
         win_skip("GetThreadPreferredUILanguages is not available.\n");
         return;
+    }
+
+    if (pSetThreadPreferredUILanguages)
+    {
+        size = 0;
+        count = 0;
+        ret = pGetThreadPreferredUILanguages(MUI_LANGUAGE_NAME, &count, NULL, &size);
+        if (ret && size)
+        {
+            original_names = HeapAlloc(GetProcessHeap(), 0, size * sizeof(WCHAR));
+            if (original_names)
+            {
+                original_count = count;
+                ret = pGetThreadPreferredUILanguages(MUI_LANGUAGE_NAME, &count, original_names, &size);
+                if (!ret)
+                {
+                    HeapFree(GetProcessHeap(), 0, original_names);
+                    original_names = NULL;
+                    original_count = 0;
+                }
+            }
+        }
     }
 
     size = count = 0;
@@ -5190,6 +5216,92 @@ static void test_GetThreadPreferredUILanguages(void)
     ok(ret, "got %u\n", GetLastError());
     ok(count, "expected count > 0\n");
     HeapFree(GetProcessHeap(), 0, buf);
+
+    if (pSetThreadPreferredUILanguages)
+    {
+        static const WCHAR custom_names[] = L"de-DE\0fr-FR\0\0";
+        const WCHAR *expected_names[] = { L"de-DE", L"fr-FR" };
+        const WCHAR *expected_ids[] = { L"0407", L"040C" };
+        ULONG set_count = 0;
+        const WCHAR *cursor;
+        UINT i;
+
+        ret = pSetThreadPreferredUILanguages(MUI_LANGUAGE_NAME, custom_names, &set_count);
+        ok(ret, "SetThreadPreferredUILanguages failed %u\n", GetLastError());
+        ok(set_count == 2, "expected set_count 2, got %lu\n", set_count);
+
+        size = count = 0;
+        ret = pGetThreadPreferredUILanguages(MUI_LANGUAGE_NAME, &count, NULL, &size);
+        ok(ret, "expected GetThreadPreferredUILanguages to succeed\n");
+        ok(count == 2, "expected two languages, got %lu\n", count);
+
+        buf = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size * sizeof(WCHAR));
+        ok(buf != NULL, "failed to allocate buffer\n");
+        if (buf)
+        {
+            ret = pGetThreadPreferredUILanguages(MUI_LANGUAGE_NAME, &count, buf, &size);
+            ok(ret, "expected GetThreadPreferredUILanguages(names) to succeed\n");
+            ok(count == 2, "expected two languages, got %lu\n", count);
+
+            cursor = buf;
+            for (i = 0; i < ARRAY_SIZE(expected_names); ++i)
+            {
+                ok(*cursor != L'\0', "missing entry %u\n", i);
+                ok(!lstrcmpiW(cursor, expected_names[i]),
+                   "expected '%s', got '%s'\n",
+                   wine_dbgstr_w(expected_names[i]), wine_dbgstr_w(cursor));
+                cursor += wcslen(cursor) + 1;
+            }
+            ok(!*cursor, "multi-sz not terminated\n");
+        }
+
+        size = count = 0;
+        ret = pGetThreadPreferredUILanguages(MUI_LANGUAGE_ID, &count, NULL, &size);
+        ok(ret, "expected GetThreadPreferredUILanguages(id) to succeed\n");
+        ok(count == 2, "expected two ID entries, got %lu\n", count);
+
+        if (buf)
+        {
+            WCHAR *id_buf = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size * sizeof(WCHAR));
+            ok(id_buf != NULL, "failed to allocate id buffer\n");
+            if (id_buf)
+            {
+                ret = pGetThreadPreferredUILanguages(MUI_LANGUAGE_ID, &count, id_buf, &size);
+                ok(ret, "expected GetThreadPreferredUILanguages(id) to succeed\n");
+                ok(count == 2, "expected two ID entries, got %lu\n", count);
+
+                cursor = id_buf;
+                for (i = 0; i < ARRAY_SIZE(expected_ids); ++i)
+                {
+                    ok(*cursor != L'\0', "missing id entry %u\n", i);
+                    ok(!lstrcmpiW(cursor, expected_ids[i]),
+                       "expected id '%s', got '%s'\n",
+                       wine_dbgstr_w(expected_ids[i]), wine_dbgstr_w(cursor));
+                    cursor += wcslen(cursor) + 1;
+                }
+                ok(!*cursor, "id multi-sz not terminated\n");
+
+                HeapFree(GetProcessHeap(), 0, id_buf);
+            }
+        }
+
+        if (buf)
+            HeapFree(GetProcessHeap(), 0, buf);
+
+        if (original_names && original_count)
+        {
+            ret = pSetThreadPreferredUILanguages(MUI_LANGUAGE_NAME, original_names, NULL);
+            ok(ret, "failed to restore thread preferred UI languages (%u)\n", GetLastError());
+        }
+        else
+        {
+            ret = pSetThreadPreferredUILanguages(MUI_LANGUAGE_NAME, NULL, NULL);
+            ok(ret, "failed to reset thread preferred UI languages (%u)\n", GetLastError());
+        }
+    }
+
+    if (original_names)
+        HeapFree(GetProcessHeap(), 0, original_names);
 }
 
 static void test_GetUserPreferredUILanguages(void)
