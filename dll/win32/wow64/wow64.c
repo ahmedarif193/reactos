@@ -1240,6 +1240,43 @@ typedef struct _WOW64_SYSCALL_ENTRY
     LPCSTR ServiceName;
 } WOW64_SYSCALL_ENTRY, *PWOW64_SYSCALL_ENTRY;
 
+static ULONGLONG
+Wow64ReadUlong64Argument(
+    _In_reads_(2) const ULONG_PTR *Args32)
+{
+    ULONGLONG LowPart;
+    ULONGLONG HighPart;
+
+    LowPart = (ULONGLONG)(ULONG)Args32[0];
+    HighPart = (ULONGLONG)(ULONG)Args32[1];
+
+    return (HighPart << 32) | LowPart;
+}
+
+static VOID
+Wow64ConvertUnicodeString32To64(
+    _In_ ULONG_PTR UnicodeString32,
+    _Out_ PUNICODE_STRING UnicodeString64)
+{
+    UNICODE_STRING32 *String32;
+
+    if (!UnicodeString64)
+    {
+        return;
+    }
+
+    if (!UnicodeString32)
+    {
+        RtlZeroMemory(UnicodeString64, sizeof(*UnicodeString64));
+        return;
+    }
+
+    String32 = (UNICODE_STRING32 *)(ULONG_PTR)UnicodeString32;
+    UnicodeString64->Length = String32->Length;
+    UnicodeString64->MaximumLength = String32->MaximumLength;
+    UnicodeString64->Buffer = (PWSTR)(ULONG_PTR)String32->Buffer;
+}
+
 /* Parameter conversion helpers */
 static VOID
 Wow64ConvertObjectAttributes32To64(
@@ -1326,6 +1363,63 @@ Wow64ConvertIoStatusBlock64To32(
  * ================================================================ */
 
 static NTSTATUS NTAPI
+Wow64Thunk_NtCreateFile(
+    _In_ ULONG_PTR *Args32)
+{
+    PHANDLE FileHandle32;
+    ACCESS_MASK DesiredAccess;
+    OBJECT_ATTRIBUTES ObjectAttributes64;
+    IO_STATUS_BLOCK IoStatusBlock64;
+    PLARGE_INTEGER AllocationSize;
+    ULONG FileAttributes;
+    ULONG ShareAccess;
+    ULONG CreateDisposition;
+    ULONG CreateOptions;
+    PVOID EaBuffer;
+    ULONG EaLength;
+    HANDLE FileHandle64 = NULL;
+    NTSTATUS Status;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    FileHandle32 = (PHANDLE)(ULONG_PTR)Args32[0];
+    DesiredAccess = (ACCESS_MASK)Args32[1];
+    Wow64ConvertObjectAttributes32To64(Args32[2], &ObjectAttributes64);
+    Wow64ConvertIoStatusBlock32To64(Args32[3], &IoStatusBlock64);
+    AllocationSize = (PLARGE_INTEGER)(ULONG_PTR)Args32[4];
+    FileAttributes = (ULONG)Args32[5];
+    ShareAccess = (ULONG)Args32[6];
+    CreateDisposition = (ULONG)Args32[7];
+    CreateOptions = (ULONG)Args32[8];
+    EaBuffer = (PVOID)(ULONG_PTR)Args32[9];
+    EaLength = (ULONG)Args32[10];
+
+    Status = NtCreateFile(&FileHandle64,
+                          DesiredAccess,
+                          &ObjectAttributes64,
+                          &IoStatusBlock64,
+                          AllocationSize,
+                          FileAttributes,
+                          ShareAccess,
+                          CreateDisposition,
+                          CreateOptions,
+                          EaBuffer,
+                          EaLength);
+
+    if (FileHandle32)
+    {
+        *(ULONG *)(ULONG_PTR)FileHandle32 = (ULONG)(ULONG_PTR)FileHandle64;
+    }
+
+    Wow64ConvertIoStatusBlock64To32(&IoStatusBlock64, Args32[3]);
+
+    return Status;
+}
+
+static NTSTATUS NTAPI
 Wow64Thunk_NtOpenFile(
     _In_ ULONG_PTR *Args32)
 {
@@ -1370,8 +1464,555 @@ Wow64Thunk_NtOpenFile(
 }
 
 static NTSTATUS NTAPI
-Wow64Thunk_NtReadFile(
+Wow64Thunk_NtQueryInformationFile(
     _In_ ULONG_PTR *Args32)
+{
+    HANDLE FileHandle;
+    IO_STATUS_BLOCK IoStatusBlock64;
+    PVOID FileInformation;
+    ULONG Length;
+    FILE_INFORMATION_CLASS FileInformationClass;
+    NTSTATUS Status;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    FileHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    Wow64ConvertIoStatusBlock32To64(Args32[1], &IoStatusBlock64);
+    FileInformation = (PVOID)(ULONG_PTR)Args32[2];
+    Length = (ULONG)Args32[3];
+    FileInformationClass = (FILE_INFORMATION_CLASS)Args32[4];
+
+    Status = NtQueryInformationFile(FileHandle,
+                                    &IoStatusBlock64,
+                                    FileInformation,
+                                    Length,
+                                    FileInformationClass);
+
+    Wow64ConvertIoStatusBlock64To32(&IoStatusBlock64, Args32[1]);
+
+    return Status;
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtSetInformationFile(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE FileHandle;
+    IO_STATUS_BLOCK IoStatusBlock64;
+    PVOID FileInformation;
+    ULONG Length;
+    FILE_INFORMATION_CLASS FileInformationClass;
+    NTSTATUS Status;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    FileHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    Wow64ConvertIoStatusBlock32To64(Args32[1], &IoStatusBlock64);
+    FileInformation = (PVOID)(ULONG_PTR)Args32[2];
+    Length = (ULONG)Args32[3];
+    FileInformationClass = (FILE_INFORMATION_CLASS)Args32[4];
+
+    Status = NtSetInformationFile(FileHandle,
+                                  &IoStatusBlock64,
+                                  FileInformation,
+                                  Length,
+                                  FileInformationClass);
+
+    Wow64ConvertIoStatusBlock64To32(&IoStatusBlock64, Args32[1]);
+
+    return Status;
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtDeleteFile(
+    _In_ ULONG_PTR *Args32)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes64;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Wow64ConvertObjectAttributes32To64(Args32[0], &ObjectAttributes64);
+
+    return NtDeleteFile(&ObjectAttributes64);
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtFlushBuffersFile(
+    _In_ ULONG_PTR *Args32)
+{
+    IO_STATUS_BLOCK IoStatusBlock64;
+    HANDLE FileHandle;
+    NTSTATUS Status;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    FileHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    Wow64ConvertIoStatusBlock32To64(Args32[1], &IoStatusBlock64);
+
+    Status = NtFlushBuffersFile(FileHandle, &IoStatusBlock64);
+
+    Wow64ConvertIoStatusBlock64To32(&IoStatusBlock64, Args32[1]);
+
+    return Status;
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtQueryDirectoryFile(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE FileHandle;
+    HANDLE Event;
+    PIO_APC_ROUTINE ApcRoutine;
+    PVOID ApcContext;
+    IO_STATUS_BLOCK IoStatusBlock64;
+    PVOID FileInformation;
+    ULONG Length;
+    FILE_INFORMATION_CLASS FileInformationClass;
+    BOOLEAN ReturnSingleEntry;
+    UNICODE_STRING FileName64;
+    PUNICODE_STRING FileName;
+    BOOLEAN RestartScan;
+    NTSTATUS Status;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    FileHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    Event = (HANDLE)(ULONG_PTR)(ULONG)Args32[1];
+    ApcRoutine = (PIO_APC_ROUTINE)(ULONG_PTR)Args32[2];
+    ApcContext = (PVOID)(ULONG_PTR)Args32[3];
+    Wow64ConvertIoStatusBlock32To64(Args32[4], &IoStatusBlock64);
+    FileInformation = (PVOID)(ULONG_PTR)Args32[5];
+    Length = (ULONG)Args32[6];
+    FileInformationClass = (FILE_INFORMATION_CLASS)Args32[7];
+    ReturnSingleEntry = (BOOLEAN)Args32[8];
+    RestartScan = (BOOLEAN)Args32[10];
+
+    if (Args32[9])
+    {
+        Wow64ConvertUnicodeString32To64(Args32[9], &FileName64);
+        FileName = &FileName64;
+    }
+    else
+    {
+        FileName = NULL;
+    }
+
+    Status = NtQueryDirectoryFile(FileHandle,
+                                  Event,
+                                  ApcRoutine,
+                                  ApcContext,
+                                  &IoStatusBlock64,
+                                  FileInformation,
+                                  Length,
+                                  FileInformationClass,
+                                  ReturnSingleEntry,
+                                  FileName,
+                                  RestartScan);
+
+    Wow64ConvertIoStatusBlock64To32(&IoStatusBlock64, Args32[4]);
+
+    return Status;
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtQueryFullAttributesFile(
+    _In_ ULONG_PTR *Args32)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes64;
+    PFILE_NETWORK_OPEN_INFORMATION FileInformation;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Wow64ConvertObjectAttributes32To64(Args32[0], &ObjectAttributes64);
+    FileInformation = (PFILE_NETWORK_OPEN_INFORMATION)(ULONG_PTR)Args32[1];
+
+    return NtQueryFullAttributesFile(&ObjectAttributes64,
+                                     FileInformation);
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtLockFile(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE FileHandle;
+    HANDLE EventHandle;
+    PIO_APC_ROUTINE ApcRoutine;
+    PVOID ApcContext;
+    IO_STATUS_BLOCK IoStatusBlock64;
+    PLARGE_INTEGER ByteOffset;
+    PLARGE_INTEGER Length;
+    ULONG Key;
+    BOOLEAN FailImmediately;
+    BOOLEAN ExclusiveLock;
+    NTSTATUS Status;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    FileHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    EventHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[1];
+    ApcRoutine = (PIO_APC_ROUTINE)(ULONG_PTR)Args32[2];
+    ApcContext = (PVOID)(ULONG_PTR)Args32[3];
+    Wow64ConvertIoStatusBlock32To64(Args32[4], &IoStatusBlock64);
+    ByteOffset = (PLARGE_INTEGER)(ULONG_PTR)Args32[5];
+    Length = (PLARGE_INTEGER)(ULONG_PTR)Args32[6];
+    Key = (ULONG)Args32[7];
+    FailImmediately = (BOOLEAN)Args32[8];
+    ExclusiveLock = (BOOLEAN)Args32[9];
+
+    Status = NtLockFile(FileHandle,
+                        EventHandle,
+                        ApcRoutine,
+                        ApcContext,
+                        &IoStatusBlock64,
+                        ByteOffset,
+                        Length,
+                        Key,
+                        FailImmediately,
+                        ExclusiveLock);
+
+    Wow64ConvertIoStatusBlock64To32(&IoStatusBlock64, Args32[4]);
+
+    return Status;
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtUnlockFile(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE FileHandle;
+    IO_STATUS_BLOCK IoStatusBlock64;
+    PLARGE_INTEGER ByteOffset;
+    PLARGE_INTEGER Length;
+    ULONG Key;
+    NTSTATUS Status;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    FileHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    Wow64ConvertIoStatusBlock32To64(Args32[1], &IoStatusBlock64);
+    ByteOffset = (PLARGE_INTEGER)(ULONG_PTR)Args32[2];
+    Length = (PLARGE_INTEGER)(ULONG_PTR)Args32[3];
+    Key = (ULONG)Args32[4];
+
+    Status = NtUnlockFile(FileHandle,
+                          &IoStatusBlock64,
+                          ByteOffset,
+                          Length,
+                          Key);
+
+    Wow64ConvertIoStatusBlock64To32(&IoStatusBlock64, Args32[1]);
+
+    return Status;
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtFlushVirtualMemory(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE ProcessHandle;
+    PVOID *BaseAddress;
+    PSIZE_T RegionSize;
+    IO_STATUS_BLOCK IoStatusBlock64;
+    NTSTATUS Status;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ProcessHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    BaseAddress = (PVOID *)(ULONG_PTR)Args32[1];
+    RegionSize = (PSIZE_T)(ULONG_PTR)Args32[2];
+    Wow64ConvertIoStatusBlock32To64(Args32[3], &IoStatusBlock64);
+
+    Status = NtFlushVirtualMemory(ProcessHandle,
+                                  BaseAddress,
+                                  RegionSize,
+                                  &IoStatusBlock64);
+
+    Wow64ConvertIoStatusBlock64To32(&IoStatusBlock64, Args32[3]);
+
+    return Status;
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtFlushInstructionCache(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE ProcessHandle;
+    PVOID BaseAddress;
+    ULONG Length;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ProcessHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    BaseAddress = (PVOID)(ULONG_PTR)Args32[1];
+    Length = (ULONG)Args32[2];
+
+    return NtFlushInstructionCache(ProcessHandle,
+                                   BaseAddress,
+                                   Length);
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtProtectVirtualMemory(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE ProcessHandle;
+    PVOID *BaseAddress;
+    PSIZE_T NumberOfBytes;
+    ULONG NewProtect;
+    PULONG OldProtect;
+    NTSTATUS Status;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ProcessHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    BaseAddress = (PVOID *)(ULONG_PTR)Args32[1];
+    NumberOfBytes = (PSIZE_T)(ULONG_PTR)Args32[2];
+    NewProtect = (ULONG)Args32[3];
+    OldProtect = (PULONG)(ULONG_PTR)Args32[4];
+
+    Status = NtProtectVirtualMemory(ProcessHandle,
+                                    BaseAddress,
+                                    NumberOfBytes,
+                                    NewProtect,
+                                    OldProtect);
+
+    return Status;
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtQueryVirtualMemory(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE ProcessHandle;
+    PVOID BaseAddress;
+    MEMORY_INFORMATION_CLASS MemoryInformationClass;
+    PVOID MemoryInformation;
+    SIZE_T MemoryInformationLength;
+    PSIZE_T ReturnLength;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ProcessHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    BaseAddress = (PVOID)(ULONG_PTR)Args32[1];
+    MemoryInformationClass = (MEMORY_INFORMATION_CLASS)Args32[2];
+    MemoryInformation = (PVOID)(ULONG_PTR)Args32[3];
+    MemoryInformationLength = (SIZE_T)Args32[4];
+    ReturnLength = (PSIZE_T)(ULONG_PTR)Args32[5];
+
+    return NtQueryVirtualMemory(ProcessHandle,
+                                BaseAddress,
+                                MemoryInformationClass,
+                                MemoryInformation,
+                                MemoryInformationLength,
+                                ReturnLength);
+}
+
+/* ===================================================================
+ * Registry Thunks
+ * ================================================================ */
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtCreateKey(
+    _In_ ULONG_PTR *Args32)
+{
+    PHANDLE KeyHandle32;
+    ACCESS_MASK DesiredAccess;
+    OBJECT_ATTRIBUTES ObjectAttributes64;
+    ULONG TitleIndex;
+    UNICODE_STRING ClassString64;
+    PUNICODE_STRING ClassString;
+    ULONG CreateOptions;
+    PULONG Disposition;
+    HANDLE KeyHandle64 = NULL;
+    NTSTATUS Status;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KeyHandle32 = (PHANDLE)(ULONG_PTR)Args32[0];
+    DesiredAccess = (ACCESS_MASK)Args32[1];
+    Wow64ConvertObjectAttributes32To64(Args32[2], &ObjectAttributes64);
+    TitleIndex = (ULONG)Args32[3];
+    if (Args32[4])
+    {
+        Wow64ConvertUnicodeString32To64(Args32[4], &ClassString64);
+        ClassString = &ClassString64;
+    }
+    else
+    {
+        ClassString = NULL;
+    }
+    CreateOptions = (ULONG)Args32[5];
+    Disposition = (PULONG)(ULONG_PTR)Args32[6];
+
+    Status = NtCreateKey(&KeyHandle64,
+                         DesiredAccess,
+                         Args32[2] ? &ObjectAttributes64 : NULL,
+                         TitleIndex,
+                         ClassString,
+                         CreateOptions,
+                         Disposition);
+
+    if (KeyHandle32)
+    {
+        *(ULONG *)(ULONG_PTR)KeyHandle32 = (ULONG)(ULONG_PTR)KeyHandle64;
+    }
+
+    return Status;
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtOpenKey(
+    _In_ ULONG_PTR *Args32)
+{
+    PHANDLE KeyHandle32;
+    ACCESS_MASK DesiredAccess;
+    OBJECT_ATTRIBUTES ObjectAttributes64;
+    HANDLE KeyHandle64 = NULL;
+    NTSTATUS Status;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KeyHandle32 = (PHANDLE)(ULONG_PTR)Args32[0];
+    DesiredAccess = (ACCESS_MASK)Args32[1];
+    Wow64ConvertObjectAttributes32To64(Args32[2], &ObjectAttributes64);
+
+    Status = NtOpenKey(&KeyHandle64,
+                       DesiredAccess,
+                       Args32[2] ? &ObjectAttributes64 : NULL);
+
+    if (KeyHandle32)
+    {
+        *(ULONG *)(ULONG_PTR)KeyHandle32 = (ULONG)(ULONG_PTR)KeyHandle64;
+    }
+
+    return Status;
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtQueryValueKey(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE KeyHandle;
+    UNICODE_STRING ValueName64;
+    PUNICODE_STRING ValueName;
+    KEY_VALUE_INFORMATION_CLASS InformationClass;
+    PVOID ValueInformation;
+    ULONG Length;
+    PULONG ResultLength;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KeyHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    if (Args32[1])
+    {
+        Wow64ConvertUnicodeString32To64(Args32[1], &ValueName64);
+        ValueName = &ValueName64;
+    }
+    else
+    {
+        ValueName = NULL;
+    }
+    InformationClass = (KEY_VALUE_INFORMATION_CLASS)Args32[2];
+    ValueInformation = (PVOID)(ULONG_PTR)Args32[3];
+    Length = (ULONG)Args32[4];
+    ResultLength = (PULONG)(ULONG_PTR)Args32[5];
+
+    return NtQueryValueKey(KeyHandle,
+                           ValueName,
+                           InformationClass,
+                           ValueInformation,
+                           Length,
+                           ResultLength);
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtSetValueKey(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE KeyHandle;
+    UNICODE_STRING ValueName64;
+    PUNICODE_STRING ValueName;
+    ULONG TitleIndex;
+    ULONG Type;
+    PVOID Data;
+    ULONG DataSize;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KeyHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    if (Args32[1])
+    {
+        Wow64ConvertUnicodeString32To64(Args32[1], &ValueName64);
+        ValueName = &ValueName64;
+    }
+    else
+    {
+        ValueName = NULL;
+    }
+    TitleIndex = (ULONG)Args32[2];
+    Type = (ULONG)Args32[3];
+    Data = (PVOID)(ULONG_PTR)Args32[4];
+    DataSize = (ULONG)Args32[5];
+
+    return NtSetValueKey(KeyHandle,
+                         ValueName,
+                         TitleIndex,
+                         Type,
+                         Data,
+                         DataSize);
+}
+
+ static NTSTATUS NTAPI
+ Wow64Thunk_NtReadFile(
+     _In_ ULONG_PTR *Args32)
 {
     NTSTATUS Status;
     HANDLE FileHandle;
@@ -1511,6 +2152,31 @@ Wow64Thunk_NtQueryInformationProcess(
 }
 
 static NTSTATUS NTAPI
+Wow64Thunk_NtSetInformationProcess(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE ProcessHandle;
+    PROCESSINFOCLASS ProcessInformationClass;
+    PVOID ProcessInformation;
+    ULONG ProcessInformationLength;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ProcessHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    ProcessInformationClass = (PROCESSINFOCLASS)Args32[1];
+    ProcessInformation = (PVOID)(ULONG_PTR)Args32[2];
+    ProcessInformationLength = (ULONG)Args32[3];
+
+    return NtSetInformationProcess(ProcessHandle,
+                                   ProcessInformationClass,
+                                   ProcessInformation,
+                                   ProcessInformationLength);
+}
+
+static NTSTATUS NTAPI
 Wow64Thunk_NtQuerySystemInformation(
     _In_ ULONG_PTR *Args32)
 {
@@ -1610,6 +2276,42 @@ Wow64Thunk_NtWaitForSingleObject(
 }
 
 static NTSTATUS NTAPI
+Wow64Thunk_NtResumeThread(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE ThreadHandle;
+    PULONG SuspendCount;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ThreadHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    SuspendCount = (PULONG)(ULONG_PTR)Args32[1];
+
+    return NtResumeThread(ThreadHandle, SuspendCount);
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtSuspendThread(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE ThreadHandle;
+    PULONG PreviousSuspendCount;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ThreadHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    PreviousSuspendCount = (PULONG)(ULONG_PTR)Args32[1];
+
+    return NtSuspendThread(ThreadHandle, PreviousSuspendCount);
+}
+
+static NTSTATUS NTAPI
 Wow64Thunk_NtAllocateVirtualMemory(
     _In_ ULONG_PTR *Args32)
 {
@@ -1676,6 +2378,297 @@ Wow64Thunk_NtFreeVirtualMemory(
 }
 
 static NTSTATUS NTAPI
+Wow64Thunk_NtCreateSection(
+    _In_ ULONG_PTR *Args32)
+{
+    PHANDLE SectionHandle32;
+    ACCESS_MASK DesiredAccess;
+    OBJECT_ATTRIBUTES ObjectAttributes64;
+    PLARGE_INTEGER MaximumSize;
+    ULONG SectionPageProtection;
+    ULONG AllocationAttributes;
+    HANDLE FileHandle;
+    HANDLE SectionHandle64 = NULL;
+    NTSTATUS Status;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    SectionHandle32 = (PHANDLE)(ULONG_PTR)Args32[0];
+    DesiredAccess = (ACCESS_MASK)Args32[1];
+    Wow64ConvertObjectAttributes32To64(Args32[2], &ObjectAttributes64);
+    MaximumSize = (PLARGE_INTEGER)(ULONG_PTR)Args32[3];
+    SectionPageProtection = (ULONG)Args32[4];
+    AllocationAttributes = (ULONG)Args32[5];
+    FileHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[6];
+
+    Status = NtCreateSection(&SectionHandle64,
+                             DesiredAccess,
+                             Args32[2] ? &ObjectAttributes64 : NULL,
+                             MaximumSize,
+                             SectionPageProtection,
+                             AllocationAttributes,
+                             FileHandle);
+
+    if (SectionHandle32)
+    {
+        *(ULONG *)(ULONG_PTR)SectionHandle32 = (ULONG)(ULONG_PTR)SectionHandle64;
+    }
+
+    return Status;
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtOpenSection(
+    _In_ ULONG_PTR *Args32)
+{
+    PHANDLE SectionHandle32;
+    ACCESS_MASK DesiredAccess;
+    OBJECT_ATTRIBUTES ObjectAttributes64;
+    HANDLE SectionHandle64 = NULL;
+    NTSTATUS Status;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    SectionHandle32 = (PHANDLE)(ULONG_PTR)Args32[0];
+    DesiredAccess = (ACCESS_MASK)Args32[1];
+    Wow64ConvertObjectAttributes32To64(Args32[2], &ObjectAttributes64);
+
+    Status = NtOpenSection(&SectionHandle64,
+                           DesiredAccess,
+                           Args32[2] ? &ObjectAttributes64 : NULL);
+
+    if (SectionHandle32)
+    {
+        *(ULONG *)(ULONG_PTR)SectionHandle32 = (ULONG)(ULONG_PTR)SectionHandle64;
+    }
+
+    return Status;
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtMapViewOfSection(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE SectionHandle;
+    HANDLE ProcessHandle;
+    PVOID *BaseAddress;
+    ULONG_PTR ZeroBits;
+    SIZE_T CommitSize;
+    PLARGE_INTEGER SectionOffset;
+    PSIZE_T ViewSize;
+    SECTION_INHERIT InheritDisposition;
+    ULONG AllocationType;
+    ULONG Win32Protect;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    SectionHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    ProcessHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[1];
+    BaseAddress = (PVOID *)(ULONG_PTR)Args32[2];
+    ZeroBits = (ULONG_PTR)Args32[3];
+    CommitSize = (SIZE_T)Args32[4];
+    SectionOffset = (PLARGE_INTEGER)(ULONG_PTR)Args32[5];
+    ViewSize = (PSIZE_T)(ULONG_PTR)Args32[6];
+    InheritDisposition = (SECTION_INHERIT)Args32[7];
+    AllocationType = (ULONG)Args32[8];
+    Win32Protect = (ULONG)Args32[9];
+
+    return NtMapViewOfSection(SectionHandle,
+                              ProcessHandle,
+                              BaseAddress,
+                              ZeroBits,
+                              CommitSize,
+                              SectionOffset,
+                              ViewSize,
+                              InheritDisposition,
+                              AllocationType,
+                              Win32Protect);
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtUnmapViewOfSection(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE ProcessHandle;
+    PVOID BaseAddress;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ProcessHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    BaseAddress = (PVOID)(ULONG_PTR)Args32[1];
+
+    return NtUnmapViewOfSection(ProcessHandle, BaseAddress);
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtWow64AllocateVirtualMemory64(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE ProcessHandle;
+    PULONG64 BaseAddress;
+    ULONGLONG ZeroBits;
+    PULONG64 RegionSize;
+    ULONG AllocationType;
+    ULONG Protect;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ProcessHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    BaseAddress = (PULONG64)(ULONG_PTR)Args32[1];
+    ZeroBits = Wow64ReadUlong64Argument(&Args32[2]);
+    RegionSize = (PULONG64)(ULONG_PTR)Args32[4];
+    AllocationType = (ULONG)Args32[5];
+    Protect = (ULONG)Args32[6];
+
+    return NtWow64AllocateVirtualMemory64(ProcessHandle,
+                                          BaseAddress,
+                                          ZeroBits,
+                                          RegionSize,
+                                          AllocationType,
+                                          Protect);
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtWow64ReadVirtualMemory64(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE ProcessHandle;
+    ULONGLONG BaseAddress;
+    PVOID Buffer;
+    ULONGLONG NumberOfBytesToRead;
+    PULONG64 NumberOfBytesRead;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ProcessHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    BaseAddress = Wow64ReadUlong64Argument(&Args32[1]);
+    Buffer = (PVOID)(ULONG_PTR)Args32[3];
+    NumberOfBytesToRead = Wow64ReadUlong64Argument(&Args32[4]);
+    NumberOfBytesRead = (PULONG64)(ULONG_PTR)Args32[6];
+
+    return NtWow64ReadVirtualMemory64(ProcessHandle,
+                                      BaseAddress,
+                                      Buffer,
+                                      NumberOfBytesToRead,
+                                      NumberOfBytesRead);
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtWow64WriteVirtualMemory64(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE ProcessHandle;
+    ULONGLONG BaseAddress;
+    PVOID Buffer;
+    ULONGLONG NumberOfBytesToWrite;
+    PULONG64 NumberOfBytesWritten;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ProcessHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    BaseAddress = Wow64ReadUlong64Argument(&Args32[1]);
+    Buffer = (PVOID)(ULONG_PTR)Args32[3];
+    NumberOfBytesToWrite = Wow64ReadUlong64Argument(&Args32[4]);
+    NumberOfBytesWritten = (PULONG64)(ULONG_PTR)Args32[6];
+
+    return NtWow64WriteVirtualMemory64(ProcessHandle,
+                                       BaseAddress,
+                                       Buffer,
+                                       NumberOfBytesToWrite,
+                                       NumberOfBytesWritten);
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtWow64QueryInformationProcess64(
+    _In_ ULONG_PTR *Args32)
+{
+    HANDLE ProcessHandle;
+    PROCESSINFOCLASS ProcessInformationClass;
+    PVOID ProcessInformation;
+    ULONG ProcessInformationLength;
+    PULONG ReturnLength;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ProcessHandle = (HANDLE)(ULONG_PTR)(ULONG)Args32[0];
+    ProcessInformationClass = (PROCESSINFOCLASS)Args32[1];
+    ProcessInformation = (PVOID)(ULONG_PTR)Args32[2];
+    ProcessInformationLength = (ULONG)Args32[3];
+    ReturnLength = (PULONG)(ULONG_PTR)Args32[4];
+
+    return NtWow64QueryInformationProcess64(ProcessHandle,
+                                            ProcessInformationClass,
+                                            ProcessInformation,
+                                            ProcessInformationLength,
+                                            ReturnLength);
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtWow64GetNativeSystemInformation(
+    _In_ ULONG_PTR *Args32)
+{
+    SYSTEM_INFORMATION_CLASS SystemInformationClass;
+    PVOID SystemInformation;
+    ULONG SystemInformationLength;
+    PULONG ReturnLength;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    SystemInformationClass = (SYSTEM_INFORMATION_CLASS)Args32[0];
+    SystemInformation = (PVOID)(ULONG_PTR)Args32[1];
+    SystemInformationLength = (ULONG)Args32[2];
+    ReturnLength = (PULONG)(ULONG_PTR)Args32[3];
+
+    return NtWow64GetNativeSystemInformation(SystemInformationClass,
+                                             SystemInformation,
+                                             SystemInformationLength,
+                                             ReturnLength);
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtWow64IsProcessorFeaturePresent(
+    _In_ ULONG_PTR *Args32)
+{
+    ULONG ProcessorFeature;
+
+    if (!Args32)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ProcessorFeature = (ULONG)Args32[0];
+
+    return NtWow64IsProcessorFeaturePresent(ProcessorFeature);
+}
+
+static NTSTATUS NTAPI
 Wow64Thunk_NtTerminateProcess(
     _In_ ULONG_PTR *Args32)
 {
@@ -1690,6 +2683,56 @@ Wow64Thunk_NtTerminateProcess(
     ExitStatus = (NTSTATUS)Args32[1];
 
     return NtTerminateProcess(ProcessHandle, ExitStatus);
+}
+
+static NTSTATUS NTAPI
+Wow64Thunk_NtCallbackReturn(
+    _In_ ULONG_PTR *Args32)
+{
+    PVOID ResultBuffer32;
+    ULONG ResultLength32;
+    NTSTATUS CallbackStatus;
+    PWOW64_CALLBACK_FRAME Frame;
+    PVOID ResultPointer64;
+
+    /* Args32[0] = Result buffer pointer
+     * Args32[1] = Result length
+     * Args32[2] = Callback status
+     */
+
+    ResultBuffer32 = (PVOID)(ULONG_PTR)(ULONG)Args32[0];
+    ResultLength32 = (ULONG)Args32[1];
+    CallbackStatus = (NTSTATUS)Args32[2];
+    ResultPointer64 = (PVOID)(ULONG_PTR)ResultBuffer32;
+
+    Frame = Wow64GetCallbackFrame();
+    if (!Frame)
+    {
+        Wow64ReportStub("NtCallbackReturn invoked without active callback frame");
+        return STATUS_INVALID_SYSTEM_SERVICE;
+    }
+
+    if (!(Frame->Flags & WOW64_CALLBACK_FRAME_FLAG_CALLBACK))
+    {
+        Wow64ReportStub("NtCallbackReturn: frame type mismatch");
+        return STATUS_INVALID_SYSTEM_SERVICE;
+    }
+
+    if (Frame->OutputBuffer)
+    {
+        *Frame->OutputBuffer = ResultPointer64;
+    }
+
+    if (Frame->OutputLength)
+    {
+        *Frame->OutputLength = ResultLength32;
+    }
+
+    Wow64SetCallbackFrame(Frame->Previous);
+
+    return NtCallbackReturn(ResultPointer64,
+                             ResultLength32,
+                             CallbackStatus);
 }
 
 /* ===================================================================
@@ -1713,28 +2756,56 @@ Wow64Thunk_Unimplemented(
  * Syscall Dispatch Table
  * ================================================================ */
 
+/*
+ * Service numbers map directly to indices in ntoskrnl/sysfuncs.lst (0-based).
+ * ArgumentCount reflects the number of 32-bit stack slots consumed by the thunk
+ * (64-bit values therefore count as two). Keep this table in sync with the
+ * kernel list whenever new thunks are added.
+*/
 static WOW64_SYSCALL_ENTRY Wow64SyscallTable[] =
 {
-    /* Essential file I/O */
-    { 0, 6, Wow64Thunk_NtOpenFile, "NtOpenFile" },
-    { 0, 9, Wow64Thunk_NtReadFile, "NtReadFile" },
-    { 0, 9, Wow64Thunk_NtWriteFile, "NtWriteFile" },
-    { 0, 1, Wow64Thunk_NtClose, "NtClose" },
-
-    /* Process/System queries */
-    { 0, 5, Wow64Thunk_NtQueryInformationProcess, "NtQueryInformationProcess" },
-    { 0, 4, Wow64Thunk_NtQuerySystemInformation, "NtQuerySystemInformation" },
-
-    /* Synchronization */
-    { 0, 5, Wow64Thunk_NtCreateEvent, "NtCreateEvent" },
-    { 0, 3, Wow64Thunk_NtWaitForSingleObject, "NtWaitForSingleObject" },
-
-    /* Memory management */
-    { 0, 6, Wow64Thunk_NtAllocateVirtualMemory, "NtAllocateVirtualMemory" },
-    { 0, 4, Wow64Thunk_NtFreeVirtualMemory, "NtFreeVirtualMemory" },
-
-    /* Process management */
-    { 0, 2, Wow64Thunk_NtTerminateProcess, "NtTerminateProcess" },
+    { 18, 6, Wow64Thunk_NtAllocateVirtualMemory, "NtAllocateVirtualMemory" },
+    { 22, 3, Wow64Thunk_NtCallbackReturn, "NtCallbackReturn" },
+    { 27, 1, Wow64Thunk_NtClose, "NtClose" },
+    { 37, 5, Wow64Thunk_NtCreateEvent, "NtCreateEvent" },
+    { 39, 11, Wow64Thunk_NtCreateFile, "NtCreateFile" },
+    { 43, 7, Wow64Thunk_NtCreateKey, "NtCreateKey" },
+    { 52, 7, Wow64Thunk_NtCreateSection, "NtCreateSection" },
+    { 65, 1, Wow64Thunk_NtDeleteFile, "NtDeleteFile" },
+    { 81, 2, Wow64Thunk_NtFlushBuffersFile, "NtFlushBuffersFile" },
+    { 82, 3, Wow64Thunk_NtFlushInstructionCache, "NtFlushInstructionCache" },
+    { 84, 4, Wow64Thunk_NtFlushVirtualMemory, "NtFlushVirtualMemory" },
+    { 87, 4, Wow64Thunk_NtFreeVirtualMemory, "NtFreeVirtualMemory" },
+    { 91, 7, Wow64Thunk_NtWow64AllocateVirtualMemory64, "NtWow64AllocateVirtualMemory64" },
+    { 92, 4, Wow64Thunk_NtWow64GetNativeSystemInformation, "NtWow64GetNativeSystemInformation" },
+    { 93, 1, Wow64Thunk_NtWow64IsProcessorFeaturePresent, "NtWow64IsProcessorFeaturePresent" },
+    { 94, 5, Wow64Thunk_NtWow64QueryInformationProcess64, "NtWow64QueryInformationProcess64" },
+    { 95, 7, Wow64Thunk_NtWow64ReadVirtualMemory64, "NtWow64ReadVirtualMemory64" },
+    { 97, 7, Wow64Thunk_NtWow64WriteVirtualMemory64, "NtWow64WriteVirtualMemory64" },
+    { 113, 10, Wow64Thunk_NtLockFile, "NtLockFile" },
+    { 121, 10, Wow64Thunk_NtMapViewOfSection, "NtMapViewOfSection" },
+    { 130, 6, Wow64Thunk_NtOpenFile, "NtOpenFile" },
+    { 133, 3, Wow64Thunk_NtOpenKey, "NtOpenKey" },
+    { 139, 3, Wow64Thunk_NtOpenSection, "NtOpenSection" },
+    { 151, 5, Wow64Thunk_NtProtectVirtualMemory, "NtProtectVirtualMemory" },
+    { 159, 11, Wow64Thunk_NtQueryDirectoryFile, "NtQueryDirectoryFile" },
+    { 164, 2, Wow64Thunk_NtQueryFullAttributesFile, "NtQueryFullAttributesFile" },
+    { 166, 5, Wow64Thunk_NtQueryInformationFile, "NtQueryInformationFile" },
+    { 169, 5, Wow64Thunk_NtQueryInformationProcess, "NtQueryInformationProcess" },
+    { 189, 4, Wow64Thunk_NtQuerySystemInformation, "NtQuerySystemInformation" },
+    { 194, 6, Wow64Thunk_NtQueryValueKey, "NtQueryValueKey" },
+    { 195, 6, Wow64Thunk_NtQueryVirtualMemory, "NtQueryVirtualMemory" },
+    { 200, 9, Wow64Thunk_NtReadFile, "NtReadFile" },
+    { 223, 2, Wow64Thunk_NtResumeThread, "NtResumeThread" },
+    { 242, 5, Wow64Thunk_NtSetInformationFile, "NtSetInformationFile" },
+    { 246, 4, Wow64Thunk_NtSetInformationProcess, "NtSetInformationProcess" },
+    { 265, 6, Wow64Thunk_NtSetValueKey, "NtSetValueKey" },
+    { 272, 2, Wow64Thunk_NtSuspendThread, "NtSuspendThread" },
+    { 275, 2, Wow64Thunk_NtTerminateProcess, "NtTerminateProcess" },
+    { 284, 5, Wow64Thunk_NtUnlockFile, "NtUnlockFile" },
+    { 286, 2, Wow64Thunk_NtUnmapViewOfSection, "NtUnmapViewOfSection" },
+    { 290, 3, Wow64Thunk_NtWaitForSingleObject, "NtWaitForSingleObject" },
+    { 293, 9, Wow64Thunk_NtWriteFile, "NtWriteFile" },
 };
 
 #define WOW64_SYSCALL_TABLE_SIZE (sizeof(Wow64SyscallTable) / sizeof(Wow64SyscallTable[0]))
@@ -1754,8 +2825,7 @@ Wow64DispatchSyscall(
     /* Linear search through syscall table */
     for (Index = 0; Index < WOW64_SYSCALL_TABLE_SIZE; Index++)
     {
-        if (Wow64SyscallTable[Index].ServiceNumber == ServiceNumber ||
-            ServiceNumber < WOW64_SYSCALL_TABLE_SIZE)
+        if (Wow64SyscallTable[Index].ServiceNumber == ServiceNumber)
         {
 #if DBG
             if (Wow64SyscallTable[Index].ServiceName)
