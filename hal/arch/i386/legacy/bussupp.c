@@ -10,9 +10,17 @@
 
 #include <hal.h>
 #include <intrin.h>
+#include <ndk/rtlfuncs.h>
 #include <reactos/hal/acpi_pci.h>
 #define NDEBUG
 #include <debug.h>
+
+NTKERNELAPI
+PVOID
+NTAPI
+RtlPcToFileHeader(
+    _In_ PVOID PcValue,
+    _Out_opt_ PVOID *BaseOfImage);
 
 extern BOOLEAN HalpPciBusRangeKnown;
 extern ULONG HalpMinPciBus, HalpMaxPciBus;
