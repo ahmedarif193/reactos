@@ -154,6 +154,8 @@ TEXTMODE_BUFFER_Destroy(IN OUT PCONSOLE_SCREEN_BUFFER Buffer)
     ConsoleFreeHeap(Buff->Buffer);
     if (Buff->FgColors) ConsoleFreeHeap(Buff->FgColors);
     if (Buff->BgColors) ConsoleFreeHeap(Buff->BgColors);
+    if (Buff->VtState.HyperlinkUri.Buffer)
+        ConsoleFreeHeap(Buff->VtState.HyperlinkUri.Buffer);
 
     CONSOLE_SCREEN_BUFFER_Destroy(Buffer);
 }
@@ -1208,16 +1210,26 @@ IntWriteConsoleOutputStringChars(
                 Ptr->Char.UnicodeChar = *WriteBuffer;
                 Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
                 Ptr->Attributes |= COMMON_LVB_LEADING_BYTE;
+                ConioSetCellFgColor(Buffer, X, Y, CLR_INVALID);
+                ConioSetCellBgColor(Buffer, X, Y, CLR_INVALID);
                 ++Ptr;
 
                 /* Set the trailing byte */
                 Ptr->Char.UnicodeChar = L' ';
                 Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
                 Ptr->Attributes |= COMMON_LVB_TRAILING_BYTE;
+                if (X + 1 < Buffer->ScreenBufferSize.X)
+                {
+                    ConioSetCellFgColor(Buffer, X + 1, Y, CLR_INVALID);
+                    ConioSetCellBgColor(Buffer, X + 1, Y, CLR_INVALID);
+                }
+                ++X;
             }
             else
             {
                 Ptr->Char.UnicodeChar = *WriteBuffer;
+                ConioSetCellFgColor(Buffer, X, Y, CLR_INVALID);
+                ConioSetCellBgColor(Buffer, X, Y, CLR_INVALID);
             }
 
             ++Ptr;
@@ -1472,6 +1484,12 @@ ConDrvFillConsoleOutput(IN PCONSOLE Console,
                     ConioSetCellFgColor(Buffer, X, Y, CLR_INVALID);
                     ConioSetCellBgColor(Buffer, X, Y, CLR_INVALID);
                     break;
+            }
+
+            if (CodeType != CODE_ATTRIBUTE)
+            {
+                ConioSetCellFgColor(Buffer, X, Y, CLR_INVALID);
+                ConioSetCellBgColor(Buffer, X, Y, CLR_INVALID);
             }
 
             ++Ptr;
