@@ -17,6 +17,10 @@
 #define NDEBUG
 #include <debug.h>
 
+#ifndef MAXIMUM_PROCESSOR_FEATURES
+#define MAXIMUM_PROCESSOR_FEATURES 64
+#endif
+
 /* The maximum size of an environment value (in bytes) */
 #define MAX_ENVVAL_SIZE 1024
 
@@ -3161,6 +3165,43 @@ NtQuerySystemInformationEx(
 
     return Status;
 }
+
+#ifdef _M_AMD64
+NTSTATUS
+NTAPI
+NtWow64GetNativeSystemInformation(
+    _In_ SYSTEM_INFORMATION_CLASS SystemInformationClass,
+    _Out_writes_bytes_opt_(SystemInformationLength) PVOID SystemInformation,
+    _In_ ULONG SystemInformationLength,
+    _Out_opt_ PULONG ReturnLength)
+{
+    PAGED_CODE();
+
+    return NtQuerySystemInformation(SystemInformationClass,
+                                    SystemInformation,
+                                    SystemInformationLength,
+                                    ReturnLength);
+}
+
+NTSTATUS
+NTAPI
+NtWow64IsProcessorFeaturePresent(
+    _In_ ULONG ProcessorFeature)
+{
+    PAGED_CODE();
+
+#ifndef MAXIMUM_PROCESSOR_FEATURES
+#define MAXIMUM_PROCESSOR_FEATURES 64
+#endif
+
+    if (ProcessorFeature >= MAXIMUM_PROCESSOR_FEATURES)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return ExIsProcessorFeaturePresent(ProcessorFeature) ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+}
+#endif
 
 __kernel_entry
 NTSTATUS
