@@ -88,6 +88,14 @@ NtFreeUserPhysicalPages 3
 NtFreeVirtualMemory 4
 NtFsControlFile 10
 NtGetContextThread 2
+NtWow64GetContextThread 2
+NtWow64AllocateVirtualMemory64 7
+NtWow64GetNativeSystemInformation 4
+NtWow64IsProcessorFeaturePresent 1
+NtWow64QueryInformationProcess64 5
+NtWow64ReadVirtualMemory64 7
+NtWow64SetContextThread 2
+NtWow64WriteVirtualMemory64 7
 NtGetDevicePowerState 2
 NtGetPlugPlayEvent 4
 NtGetWriteWatch 7
