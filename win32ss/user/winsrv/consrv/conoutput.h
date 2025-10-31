@@ -39,6 +39,14 @@ NTSTATUS ConDrvCreateScreenBuffer(OUT PCONSOLE_SCREEN_BUFFER* Buffer,
                                   IN ULONG BufferType,
                                   IN PVOID ScreenBufferInfo);
 VOID NTAPI ConDrvDeleteScreenBuffer(PCONSOLE_SCREEN_BUFFER Buffer);
+NTSTATUS NTAPI ConDrvSetConsoleActiveScreenBuffer(IN PCONSOLE Console,
+                                                  IN PCONSOLE_SCREEN_BUFFER Buffer);
+NTSTATUS NTAPI ConDrvSetConsoleCursorInfo(IN PCONSOLE Console,
+                                          IN PTEXTMODE_SCREEN_BUFFER Buffer,
+                                          IN PCONSOLE_CURSOR_INFO CursorInfo);
+NTSTATUS NTAPI ConDrvSetConsoleCursorPosition(IN PCONSOLE Console,
+                                              IN PTEXTMODE_SCREEN_BUFFER Buffer,
+                                              IN PCOORD Position);
 // VOID ConioSetActiveScreenBuffer(PCONSOLE_SCREEN_BUFFER Buffer);
 
 PCONSOLE_SCREEN_BUFFER
