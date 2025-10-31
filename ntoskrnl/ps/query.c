@@ -13,6 +13,22 @@
 #include <ntoskrnl.h>
 #define NDEBUG
 #include <debug.h>
+#ifdef _M_AMD64
+#ifndef _PROCESS_BASIC_INFORMATION64_DEFINED
+#define _PROCESS_BASIC_INFORMATION64_DEFINED
+typedef struct _PROCESS_BASIC_INFORMATION64
+{
+    NTSTATUS ExitStatus;
+    ULONG64 PebBaseAddress;
+    ULONG64 AffinityMask;
+    LONG BasePriority;
+    ULONG64 UniqueProcessId;
+    ULONG64 InheritedFromUniqueProcessId;
+} PROCESS_BASIC_INFORMATION64, *PPROCESS_BASIC_INFORMATION64;
+#endif
+#endif
+#include <reactos/wow64apc.h>
+#include <reactos/wow64cpu.h>
 
 /* Debugging Level */
 ULONG PspTraceLevel = 0;
@@ -3281,5 +3297,121 @@ NtQueryInformationThread(IN HANDLE ThreadHandle,
 
     return Status;
 }
+
+#ifdef _M_AMD64
+NTSTATUS
+NTAPI
+NtWow64QueryInformationProcess64(
+    _In_ HANDLE ProcessHandle,
+    _In_ PROCESSINFOCLASS ProcessInformationClass,
+    _Out_writes_bytes_opt_(ProcessInformationLength) PVOID ProcessInformation,
+    _In_ ULONG ProcessInformationLength,
+    _Out_opt_ PULONG ReturnLength)
+{
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    ULONG LocalReturnLength = 0;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if ((ProcessInformationLength != 0) && (ProcessInformation == NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            if (ProcessInformationLength)
+            {
+                ProbeForWrite(ProcessInformation,
+                              ProcessInformationLength,
+                              sizeof(ULONG));
+            }
+
+            if (ReturnLength)
+            {
+                ProbeForWrite(ReturnLength, sizeof(ULONG), sizeof(ULONG));
+            }
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
+    switch (ProcessInformationClass)
+    {
+        case ProcessBasicInformation:
+        {
+            PROCESS_BASIC_INFORMATION BasicInfo;
+            PROCESS_BASIC_INFORMATION64 BasicInfo64;
+
+            Status = ZwQueryInformationProcess(ProcessHandle,
+                                               ProcessBasicInformation,
+                                               &BasicInfo,
+                                               sizeof(BasicInfo),
+                                               &LocalReturnLength);
+            if (!NT_SUCCESS(Status))
+            {
+                break;
+            }
+
+            BasicInfo64.ExitStatus = BasicInfo.ExitStatus;
+            BasicInfo64.PebBaseAddress = (ULONG64)(ULONG_PTR)BasicInfo.PebBaseAddress;
+            BasicInfo64.AffinityMask = (ULONG64)BasicInfo.AffinityMask;
+            BasicInfo64.BasePriority = BasicInfo.BasePriority;
+            BasicInfo64.UniqueProcessId = (ULONG64)BasicInfo.UniqueProcessId;
+            BasicInfo64.InheritedFromUniqueProcessId = (ULONG64)BasicInfo.InheritedFromUniqueProcessId;
+
+            LocalReturnLength = sizeof(BasicInfo64);
+
+            if (ProcessInformationLength < sizeof(BasicInfo64))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            _SEH2_TRY
+            {
+                RtlCopyMemory(ProcessInformation, &BasicInfo64, sizeof(BasicInfo64));
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                break;
+            }
+            _SEH2_END;
+
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
+        default:
+            return NtQueryInformationProcess(ProcessHandle,
+                                             ProcessInformationClass,
+                                             ProcessInformation,
+                                             ProcessInformationLength,
+                                             ReturnLength);
+    }
+
+    if (ReturnLength)
+    {
+        _SEH2_TRY
+        {
+            *ReturnLength = LocalReturnLength;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+
+    return Status;
+}
+#endif
 
 /* EOF */
