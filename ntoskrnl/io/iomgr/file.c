@@ -4149,6 +4149,149 @@ NtCancelIoFile(IN HANDLE FileHandle,
  */
 NTSTATUS
 NTAPI
+NtCancelIoFileEx(IN HANDLE FileHandle,
+                 IN PIO_STATUS_BLOCK IoRequestToCancel OPTIONAL,
+                 OUT PIO_STATUS_BLOCK IoStatusBlock)
+{
+    PFILE_OBJECT FileObject;
+    PETHREAD Thread;
+    PIRP Irp;
+    KIRQL OldIrql;
+    BOOLEAN FoundIrp = FALSE;
+    LARGE_INTEGER Interval;
+    PLIST_ENTRY ListHead, NextEntry;
+    KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    IOTRACE(IO_API_DEBUG, "FileHandle: %p, IoRequestToCancel: %p\n",
+            FileHandle, IoRequestToCancel);
+
+    if (!IoStatusBlock)
+        return STATUS_INVALID_PARAMETER;
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForWriteIoStatusBlock(IoStatusBlock);
+            if (IoRequestToCancel)
+            {
+                ProbeForRead(IoRequestToCancel,
+                              sizeof(IO_STATUS_BLOCK),
+                              sizeof(ULONG));
+            }
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
+    Status = ObReferenceObjectByHandle(FileHandle,
+                                       0,
+                                       IoFileObjectType,
+                                       PreviousMode,
+                                       (PVOID *)&FileObject,
+                                       NULL);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    KeRaiseIrql(APC_LEVEL, &OldIrql);
+
+    Thread = PsGetCurrentThread();
+    IopUpdateOperationCount(IopOtherTransfer);
+
+    ListHead = &Thread->IrpList;
+    NextEntry = ListHead->Flink;
+    while (NextEntry != ListHead)
+    {
+        Irp = CONTAINING_RECORD(NextEntry, IRP, ThreadListEntry);
+        if (Irp->Tail.Overlay.OriginalFileObject == FileObject)
+        {
+            if (!IoRequestToCancel || (Irp->UserIosb == IoRequestToCancel))
+            {
+                IoCancelIrp(Irp);
+                FoundIrp = TRUE;
+
+                if (IoRequestToCancel)
+                {
+                    /* Targeted cancellation only needs to cancel one IRP. */
+                    break;
+                }
+            }
+        }
+
+        NextEntry = NextEntry->Flink;
+    }
+
+    KeLowerIrql(OldIrql);
+
+    if (FoundIrp)
+    {
+        Interval.QuadPart = -100000;
+
+        while (TRUE)
+        {
+            BOOLEAN Pending = FALSE;
+
+            KeRaiseIrql(APC_LEVEL, &OldIrql);
+
+            NextEntry = ListHead->Flink;
+            while (NextEntry != ListHead)
+            {
+                Irp = CONTAINING_RECORD(NextEntry, IRP, ThreadListEntry);
+                if ((Irp->Tail.Overlay.OriginalFileObject == FileObject) &&
+                    (!IoRequestToCancel || (Irp->UserIosb == IoRequestToCancel)))
+                {
+                    Pending = TRUE;
+                    break;
+                }
+
+                NextEntry = NextEntry->Flink;
+            }
+
+            KeLowerIrql(OldIrql);
+
+            if (!Pending)
+                break;
+
+            KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+        }
+
+        _SEH2_TRY
+        {
+            IoStatusBlock->Status = STATUS_SUCCESS;
+            IoStatusBlock->Information = 0;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        _SEH2_END;
+
+        ObDereferenceObject(FileObject);
+        return STATUS_SUCCESS;
+    }
+
+    _SEH2_TRY
+    {
+        IoStatusBlock->Status = STATUS_NOT_FOUND;
+        IoStatusBlock->Information = 0;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    _SEH2_END;
+
+    ObDereferenceObject(FileObject);
+    return STATUS_NOT_FOUND;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
 NtDeleteFile(IN POBJECT_ATTRIBUTES ObjectAttributes)
 {
     NTSTATUS Status;

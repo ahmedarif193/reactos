@@ -15,6 +15,13 @@ NtQuerySystemInformationEx(
     _In_ ULONG SystemInformationLength,
     _Out_opt_ PULONG ReturnLength);
 
+NTSTATUS
+NTAPI
+NtCancelIoFileEx(
+    _In_ HANDLE FileHandle,
+    _In_opt_ PIO_STATUS_BLOCK IoRequestToCancel,
+    _Out_ PIO_STATUS_BLOCK IoStatusBlock);
+
 #define SVC_(name, argcount) (ULONG_PTR)Nt##name,
 ULONG_PTR MainSSDT[] = {
 #include "sysfuncs.h"
