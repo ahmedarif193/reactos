@@ -116,6 +116,8 @@ TEXTMODE_BUFFER_Initialize(OUT PCONSOLE_SCREEN_BUFFER* Buffer,
     }
     NewBuffer->CursorPosition.X = NewBuffer->CursorPosition.Y = 0;
 
+    ConDrvVtInitializeBuffer(NewBuffer);
+
     NewBuffer->Mode = ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT;
 
     *Buffer = (PCONSOLE_SCREEN_BUFFER)NewBuffer;
@@ -812,6 +814,32 @@ ConDrvWriteConsole(IN PCONSOLE Console,
     {
         if (NT_SUCCESS(Status))
         {
+            if ((ScreenBuffer->Mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) &&
+                NumCharsToWrite > 0)
+            {
+                BOOLEAN Handled = FALSE;
+                ULONG VtWritten = 0;
+                NTSTATUS VtStatus = ConDrvVtWriteConsole(Console,
+                                                         ScreenBuffer,
+                                                         Buffer,
+                                                         NumCharsToWrite,
+                                                         &VtWritten,
+                                                         &Handled);
+
+                if (Handled)
+                {
+                    if (!Unicode) ConsoleFreeHeap(Buffer);
+                    if (NumCharsWritten) *NumCharsWritten = VtWritten;
+                    return VtStatus;
+                }
+
+                /* Fall back to legacy path until VT support is implemented. */
+                if (!NT_SUCCESS(VtStatus) && VtStatus != STATUS_NOT_IMPLEMENTED)
+                {
+                    Status = VtStatus;
+                }
+            }
+
             Status = TermWriteStream(Console,
                                      ScreenBuffer,
                                      Buffer,
