@@ -554,8 +554,15 @@ ConioWriteConsole(PFRONTEND FrontEnd,
             /* --- LF --- */
             else if (Buffer[i] == L'\n')
             {
-                Buff->CursorPosition.X = 0; // TODO: Make this behaviour optional!
-                CursorStartX = Buff->CursorPosition.X;
+                if (Buff->Mode & DISABLE_NEWLINE_AUTO_RETURN)
+                {
+                    CursorStartX = Buff->CursorPosition.X;
+                }
+                else
+                {
+                    Buff->CursorPosition.X = 0;
+                    CursorStartX = Buff->CursorPosition.X;
+                }
                 ConioNextLine(Buff, &UpdateRect, &ScrolledLines);
                 continue;
             }
