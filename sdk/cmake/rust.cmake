@@ -15,6 +15,9 @@ endif()
 
 # Verify the toolchain is usable (rustup default set, etc.)
 if(ROS_RUST_FOUND)
+    set(_ros_rust_toolchain_ok TRUE)
+    set(_ros_rust_missing_default FALSE)
+
     execute_process(
         COMMAND ${ROS_RUSTC_EXECUTABLE} --version
         RESULT_VARIABLE _ros_rustc_ver_rv
@@ -23,6 +26,14 @@ if(ROS_RUST_FOUND)
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_STRIP_TRAILING_WHITESPACE
     )
+    if(NOT _ros_rustc_ver_rv EQUAL 0)
+        if(_ros_rustc_err MATCHES "no default is configured")
+            set(_ros_rust_missing_default TRUE)
+        else()
+            set(_ros_rust_toolchain_ok FALSE)
+        endif()
+    endif()
+
     execute_process(
         COMMAND ${ROS_CARGO_EXECUTABLE} --version
         RESULT_VARIABLE _ros_cargo_ver_rv
@@ -31,9 +42,19 @@ if(ROS_RUST_FOUND)
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_STRIP_TRAILING_WHITESPACE
     )
-    if(NOT _ros_rustc_ver_rv EQUAL 0 OR NOT _ros_cargo_ver_rv EQUAL 0)
+    if(NOT _ros_cargo_ver_rv EQUAL 0)
+        if(_ros_cargo_err MATCHES "no default is configured")
+            set(_ros_rust_missing_default TRUE)
+        else()
+            set(_ros_rust_toolchain_ok FALSE)
+        endif()
+    endif()
+
+    if(NOT _ros_rust_toolchain_ok)
         message(WARNING "Rust toolchain not usable; disabling Rust modules. Configure a default toolchain (e.g., 'rustup default stable') to enable.\n rustc: ${_ros_rustc_err}\n cargo: ${_ros_cargo_err}")
         set(ROS_RUST_FOUND FALSE)
+    elseif(_ros_rust_missing_default)
+        message(STATUS "Rust toolchain proxies detected without default; relying on per-target RUSTUP_TOOLCHAIN assignments.")
     endif()
 endif()
 
@@ -82,7 +103,8 @@ if(ROS_RUST_FOUND AND ROS_RUSTUP_EXECUTABLE AND ROS_RUST_TARGET_TRIPLE)
         RESULT_VARIABLE _ros_rustup_list_rv
         OUTPUT_VARIABLE _ros_rustup_targets
         OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET
+        ERROR_VARIABLE _ros_rustup_list_err
+        ERROR_STRIP_TRAILING_WHITESPACE
     )
     if(_ros_rustup_list_rv EQUAL 0)
         if("${_ros_rustup_targets}" MATCHES "(^|\n)${ROS_RUST_TARGET_TRIPLE}(\n|$)")
@@ -108,10 +130,15 @@ if(ROS_RUST_FOUND AND ROS_RUSTUP_EXECUTABLE AND ROS_RUST_TARGET_TRIPLE)
             endif()
         endif()
     else()
-        # rustup present but not configured; warn and continue with Rust disabled
-        set(ROS_RUST_TARGET_INSTALLED UNKNOWN)
-        message(WARNING "rustup is present but no default toolchain is configured; disabling Rust modules. Run 'rustup default stable' to enable.")
-        set(ROS_RUST_FOUND FALSE)
+        if("${_ros_rustup_list_err}" MATCHES "no default is configured")
+            set(ROS_RUST_TARGET_INSTALLED UNKNOWN)
+            message(STATUS "rustup has no default toolchain; will rely on per-target --toolchain directives.")
+        else()
+            # rustup present but not configured; warn and continue with Rust disabled
+            set(ROS_RUST_TARGET_INSTALLED UNKNOWN)
+            message(WARNING "rustup target enumeration failed; disabling Rust modules. ${_ros_rustup_list_err}")
+            set(ROS_RUST_FOUND FALSE)
+        endif()
     endif()
 endif()
 
@@ -173,7 +200,8 @@ function(ros_rust_profile_dir _out_var)
         endif()
     else()
         string(TOLOWER "${CMAKE_BUILD_TYPE}" _bt)
-        if(_bt STREQUAL "release")
+        if(NOT _bt STREQUAL "debug")
+            # Treat any non-Debug configuration (RelWithDebInfo, MinSizeRel, Release, etc.) as release
             set(_profile_dir release)
         endif()
     endif()
@@ -209,12 +237,25 @@ function(ros_add_rust_executable _target)
 
     # Ensure the Rust target is installed at build time; create a stamp
     set(_install_target_stamp)
+    set(_rustup_toolchain_override "")
+    if(_RUST_ENV)
+        foreach(_pair ${_RUST_ENV})
+            if(_pair MATCHES "^RUSTUP_TOOLCHAIN=(.+)$")
+                set(_rustup_toolchain_override "${CMAKE_MATCH_1}")
+            endif()
+        endforeach()
+    endif()
+
     if(ROS_RUSTUP_EXECUTABLE AND ROS_RUST_TARGET_TRIPLE)
+        set(_rustup_toolchain_args)
+        if(NOT _rustup_toolchain_override STREQUAL "")
+            set(_rustup_toolchain_args --toolchain ${_rustup_toolchain_override})
+        endif()
         set(_install_target_stamp ${CMAKE_CURRENT_BINARY_DIR}/cargo-${_target}/.${ROS_RUST_TARGET_TRIPLE}.installed.stamp)
         add_custom_command(
             OUTPUT ${_install_target_stamp}
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/cargo-${_target}
-            COMMAND ${ROS_RUSTUP_EXECUTABLE} target add ${ROS_RUST_TARGET_TRIPLE}
+            COMMAND ${ROS_RUSTUP_EXECUTABLE} target add ${_rustup_toolchain_args} ${ROS_RUST_TARGET_TRIPLE}
             COMMAND ${CMAKE_COMMAND} -E touch ${_install_target_stamp}
             VERBATIM
             COMMENT "Ensuring Rust target '${ROS_RUST_TARGET_TRIPLE}' is installed"
@@ -346,8 +387,14 @@ function(ros_add_rust_executable _target)
     endif()
     # User-provided extra env
     foreach(_pair ${_RUST_ENV})
+        if(_pair MATCHES "^RUSTUP_TOOLCHAIN=")
+            continue()
+        endif()
         list(APPEND _env "${_pair}")
     endforeach()
+    if(NOT _rustup_toolchain_override STREQUAL "")
+        list(APPEND _env "RUSTUP_TOOLCHAIN=${_rustup_toolchain_override}")
+    endif()
 
     # Features handling
     set(_feature_args)
