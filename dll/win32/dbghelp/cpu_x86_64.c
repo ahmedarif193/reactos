@@ -23,11 +23,26 @@
 
 #define NONAMELESSUNION
 #define NONAMELESSSTRUCT
+#ifndef DBGHELP_STATIC_LIB
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
+#endif
 #include "dbghelp_private.h"
+#ifndef DBGHELP_STATIC_LIB
 #include "winternl.h"
 #include "wine/debug.h"
+#endif
+
+#ifdef DBGHELP_STATIC_LIB
+static BOOL sw_read_mem(struct cpu_stack_walk* csw, DWORD64 addr, void* ptr, DWORD sz)
+{
+    DWORD bytes_read = 0;
+    if (csw->is32)
+        return csw->u.s32.f_read_mem(csw->hProcess, addr, ptr, sz, &bytes_read);
+    else
+        return csw->u.s64.f_read_mem(csw->hProcess, addr, ptr, sz, &bytes_read);
+}
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(dbghelp);
 
