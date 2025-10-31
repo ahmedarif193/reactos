@@ -24,9 +24,8 @@
 /* EXTERNAL REFERENCES *******************************************************/
 
 EXTERN Wow64cpuDebugTraceTransition:PROC
-EXTERN Wow64cpuGetThreadArea:PROC
-EXTERN Wow64cpuStoreContext:PROC
-EXTERN Wow64cpuCaptureContext:PROC
+EXTERN Wow64cpuRunCallback:PROC
+EXTERN Wow64cpuDispatchWow64Exception:PROC
 
 /* FUNCTIONS *****************************************************************/
 
@@ -90,25 +89,6 @@ PUBLIC CpupDoCallBack
 
     .endprolog
 
-#if DBG
-    /* Debug trace: entering callback transition */
-    push rcx
-    push rdx
-    push r8
-    push r9
-    sub rsp, HEX(20)
-
-    mov rcx, 1  /* TransitionType = 1 (Callback) */
-    mov rdx, [rbp + HEX(10)]  /* CallbackRoutine from stack */
-    call Wow64cpuDebugTraceTransition
-
-    add rsp, HEX(20)
-    pop r9
-    pop r8
-    pop rdx
-    pop rcx
-#endif
-
     /* Save input parameters to non-volatile registers */
     mov r12, rcx  /* r12 = CallbackRoutine */
     mov r13, rdx  /* r13 = Stack32 */
@@ -116,66 +96,30 @@ PUBLIC CpupDoCallBack
     mov r15, r9   /* r15 = NativeContext */
 
     /* Save current FP/XMM state (AMD64 extended state) */
-    lea rax, [rbp - HEX(240)]  /* Point to FP save area */
-    and rax, HEX(FFFFFFFFFFFFFFF0)  /* Align to 16 bytes */
+    lea rax, [rbp - HEX(240)]
+    and rax, HEX(FFFFFFFFFFFFFFF0)
     fxsave64 [rax]
 
-    /*
-     * Load 32-bit compatibility context into lower 32-bit portions of registers
-     * WOW64_CONTEXT structure layout (from winnt_old.h):
-     * +0x00: ContextFlags
-     * +0x04: Dr0-Dr7
-     * +0x1C: FloatSave (WOW64_FLOATING_SAVE_AREA)
-     * +0x8C: SegGs, SegFs, SegEs, SegDs
-     * +0x9C: Edi, Esi, Ebx, Edx, Ecx, Eax
-     * +0xB4: Ebp, Eip
-     * +0xBC: SegCs, EFlags, Esp, SegSs
-     * +0xCC: ExtendedRegisters[512]
-     */
+#if DBG
+    /* Debug trace: entering callback transition */
+    sub rsp, HEX(20)
+    mov rcx, 1
+    mov rdx, r12
+    call Wow64cpuDebugTraceTransition
+    add rsp, HEX(20)
+#endif
 
-    /* Load 32-bit general purpose registers (zero-extended to 64-bit) */
-    test r14, r14
-    jz .SkipCompatLoad
-
-    mov eax, [r14 + HEX(0B0)]  /* Eax */
-    mov ebx, [r14 + HEX(0A4)]  /* Ebx */
-    mov ecx, [r14 + HEX(0AC)]  /* Ecx */
-    mov edx, [r14 + HEX(0A8)]  /* Edx */
-    mov esi, [r14 + HEX(0A0)]  /* Esi */
-    mov edi, [r14 + HEX(09C)]  /* Edi */
-    mov ebp, [r14 + HEX(0B4)]  /* Ebp */
-
-    /* Load 32-bit FP/XMM state from ExtendedRegisters */
-    lea rdi, [r14 + HEX(0CC)]  /* ExtendedRegisters */
-    lea rsi, [rbp - HEX(240)]
-    and rsi, HEX(FFFFFFFFFFFFFFF0)
-    mov ecx, 512
-    rep movsb
-
-    /* Restore FP state from compatibility context */
-    fxrstor64 [rsi]
-
-.SkipCompatLoad:
-
-    /*
-     * At this point, we have loaded the 32-bit state but we're still in 64-bit mode.
-     * For WOW64, the actual mode switch is handled by the kernel when we return.
-     * Our job is to prepare the register state for the transition.
-     */
-
-    /* Restore native context if needed */
-    test r15, r15
-    jz .SkipNativeRestore
-
-    /* We would restore native context here, but for callbacks,
-     * we typically stay in 64-bit mode and just prepare the parameters */
-
-.SkipNativeRestore:
+    /* Invoke the C helper */
+    mov rcx, r12
+    mov rdx, r13
+    mov r8,  r14
+    mov r9,  r15
+    call Wow64cpuRunCallback
 
 #if DBG
     /* Debug trace: exiting callback transition */
     sub rsp, HEX(20)
-    mov rcx, 2  /* TransitionType = 2 (Callback Return) */
+    mov rcx, 2
     xor rdx, rdx
     call Wow64cpuDebugTraceTransition
     add rsp, HEX(20)
@@ -194,9 +138,6 @@ PUBLIC CpupDoCallBack
     mov r13, [rbp - 40]
     mov r14, [rbp - 48]
     mov r15, [rbp - 56]
-
-    /* Return STATUS_SUCCESS */
-    xor eax, eax
 
     mov rsp, rbp
     pop rbp
@@ -381,6 +322,12 @@ PUBLIC CpupDispatchException
     add rsp, HEX(20)
 #endif
 
+    /* Invoke the C helper to dispatch the exception */
+    mov rcx, r12
+    mov rdx, r13
+    mov r8,  r14
+    call Wow64cpuDispatchWow64Exception
+
     /* Restore FP/XMM state */
     lea rax, [rbp - HEX(280)]
     and rax, HEX(FFFFFFFFFFFFFFF0)
@@ -394,9 +341,6 @@ PUBLIC CpupDispatchException
     mov r13, [rbp - 40]
     mov r14, [rbp - 48]
     mov r15, [rbp - 56]
-
-    /* Return STATUS_SUCCESS */
-    xor eax, eax
 
     mov rsp, rbp
     pop rbp
