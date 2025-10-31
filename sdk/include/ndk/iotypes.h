@@ -827,6 +827,7 @@ typedef struct _FILE_TRACKING_INFORMATION
 //
 // File System Information structures for NtQueryInformationFile
 //
+#ifndef __WINE_WINIOCTL_H
 typedef struct _FILE_FS_DEVICE_INFORMATION
 {
     DEVICE_TYPE DeviceType;
@@ -892,6 +893,7 @@ typedef struct _FILE_PIPE_PEEK_BUFFER
     ULONG MessageLength;
     CHAR Data[1];
 } FILE_PIPE_PEEK_BUFFER, *PFILE_PIPE_PEEK_BUFFER;
+#endif /* __WINE_WINIOCTL_H */
 
 typedef struct _FILE_MODE_INFORMATION
 {
