@@ -426,6 +426,70 @@ gethostname(OUT char FAR * name,
 /*
  * @implemented
  */
+INT
+WSAAPI
+GetHostNameW(OUT LPWSTR name,
+             IN INT namelen)
+{
+    PCHAR AnsiName = NULL;
+    CHAR ResultsBuffer[RNR_BUFFER_SIZE];
+    PCHAR Results = ResultsBuffer;
+    INT Status = ERROR_SUCCESS;
+    INT Required;
+
+    DPRINT("GetHostNameW: %p\n", name);
+
+    if (!name || namelen < 1)
+    {
+        SetLastError(WSAEFAULT);
+        return SOCKET_ERROR;
+    }
+
+    name[0] = L'\0';
+
+    /* Retrieve the ANSI hostname the same way gethostname does */
+    getxyDataEnt(&Results, RNR_BUFFER_SIZE, NULL, &HostnameGuid, &AnsiName);
+
+    if (AnsiName)
+    {
+        Required = MultiByteToWideChar(CP_ACP,
+                                       0,
+                                       AnsiName,
+                                       -1,
+                                       NULL,
+                                       0);
+        if (Required == 0)
+        {
+            DWORD Error = GetLastError();
+            SetLastError(Error == ERROR_INSUFFICIENT_BUFFER ? WSAEFAULT : WSAEINVAL);
+            Status = SOCKET_ERROR;
+        }
+        else if (Required > namelen)
+        {
+            SetLastError(WSAEFAULT);
+            Status = SOCKET_ERROR;
+        }
+        else if (!MultiByteToWideChar(CP_ACP,
+                                       0,
+                                       AnsiName,
+                                       -1,
+                                       name,
+                                       namelen))
+        {
+            DWORD Error = GetLastError();
+            SetLastError(Error == ERROR_INSUFFICIENT_BUFFER ? WSAEFAULT : WSAEINVAL);
+            Status = SOCKET_ERROR;
+        }
+    }
+
+    if (Results != ResultsBuffer) HeapFree(WsSockHeap, 0, Results);
+
+    return Status;
+}
+
+/*
+ * @implemented
+ */
 PSERVENT
 WSAAPI
 getservbyport(IN int port,
