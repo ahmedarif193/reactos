@@ -64,8 +64,11 @@ MiCheckForUserStackOverflow(IN PVOID Address,
 {
     PETHREAD CurrentThread = PsGetCurrentThread();
     PTEB Teb = CurrentThread->Tcb.Teb;
-    PVOID StackBase, DeallocationStack, NextStackAddress;
+    PVOID StackBase, DeallocationStack;
+    PVOID OldGuardBase, GuardAddress, CommitAddress, AlignedDeallocation;
     SIZE_T GuaranteedSize;
+    SIZE_T GuardPageSize, AccessibleBytes, AdditionalCommit;
+    SIZE_T GuardRegionSize, CommitRegionSize;
     NTSTATUS Status;
 
     /* Do we own the address space lock? */
@@ -89,14 +92,70 @@ MiCheckForUserStackOverflow(IN PVOID Address,
     StackBase = Teb->NtTib.StackBase;
     DeallocationStack = Teb->DeallocationStack;
     GuaranteedSize = Teb->GuaranteedStackBytes;
-    DPRINT("Handling guard page fault with Stacks Addresses 0x%p and 0x%p, guarantee: %lx\n",
-            StackBase, DeallocationStack, GuaranteedSize);
+    GuardPageSize = PAGE_SIZE;
 
-    /* Guarantees make this code harder, for now, assume there aren't any */
-    ASSERT(GuaranteedSize == 0);
+    if (GuaranteedSize)
+    {
+        AccessibleBytes = ROUND_TO_PAGES(GuaranteedSize);
+        if (AccessibleBytes < GuardPageSize)
+        {
+            AccessibleBytes = GuardPageSize;
+        }
+    }
+    else
+    {
+        AccessibleBytes = GuardPageSize;
+    }
 
-    /* So allocate only the minimum guard page size */
-    GuaranteedSize = PAGE_SIZE;
+    AdditionalCommit = AccessibleBytes - GuardPageSize;
+    OldGuardBase = (PVOID)PAGE_ALIGN(Address);
+    AlignedDeallocation = PAGE_ALIGN(DeallocationStack);
+    CommitAddress = (PVOID)((ULONG_PTR)OldGuardBase - AdditionalCommit);
+    GuardAddress = (PVOID)((ULONG_PTR)CommitAddress - GuardPageSize);
+
+    DPRINT("Handling guard page fault with Stack Addresses 0x%p and 0x%p, guarantee: %Ix (%Iu commit bytes)\n",
+           StackBase,
+           DeallocationStack,
+           GuaranteedSize,
+           AccessibleBytes);
+
+    if ((ULONG_PTR)OldGuardBase <= (ULONG_PTR)AlignedDeallocation + GuardPageSize)
+    {
+        DPRINT1("Stack near base, cannot place guard page\n");
+        goto StackOverflow;
+    }
+
+    if ((ULONG_PTR)GuardAddress < (ULONG_PTR)AlignedDeallocation)
+    {
+        DPRINT1("Insufficient stack space for requested guarantee\n");
+        goto StackOverflow;
+    }
+
+    if (AdditionalCommit)
+    {
+        CommitRegionSize = AdditionalCommit;
+        Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
+                                         &CommitAddress,
+                                         0,
+                                         &CommitRegionSize,
+                                         MEM_COMMIT,
+                                         PAGE_READWRITE);
+        if (!NT_SUCCESS(Status) && (Status != STATUS_ALREADY_COMMITTED))
+        {
+            DPRINT1("Failed to extend stack by %Iu bytes: %lx\n",
+                    CommitRegionSize,
+                    Status);
+            goto StackOverflow;
+        }
+
+        /* Use the actual region returned by ZwAllocateVirtualMemory */
+        GuardAddress = (PVOID)((ULONG_PTR)CommitAddress - GuardPageSize);
+        if ((ULONG_PTR)GuardAddress < (ULONG_PTR)AlignedDeallocation)
+        {
+            DPRINT1("Stack extension overlapped deallocation region\n");
+            goto StackOverflow;
+        }
+    }
 
     /* Does this faulting stack address actually exist in the stack? */
     if ((Address >= StackBase) || (Address < DeallocationStack))
@@ -137,93 +196,87 @@ MiCheckForUserStackOverflow(IN PVOID Address,
         return STATUS_GUARD_PAGE_VIOLATION;
     }
 
-    /* This is where the stack will start now */
-    NextStackAddress = (PVOID)((ULONG_PTR)PAGE_ALIGN(Address) - GuaranteedSize);
-
-    /* Do we have at least one page between here and the end of the stack? */
-    if (((ULONG_PTR)NextStackAddress - PAGE_SIZE) <= (ULONG_PTR)DeallocationStack)
-    {
-        /* We don't -- Trying to make this guard page valid now */
-        {
-            PEPROCESS Process = PsGetCurrentProcess();
-
-            DPRINT1("Close to our death... stack exhausted for proc %s pid %lu tid %lu at %p\n",
-                    Process ? Process->ImageFileName : "<unknown>",
-                    (ULONG)(ULONG_PTR)PsGetCurrentProcessId(),
-                    (ULONG)(ULONG_PTR)PsGetCurrentThreadId(),
-                    Address);
-#if defined(_M_AMD64) || defined(_M_IX86)
-            {
-                PKTRAP_FRAME TrapFrame = KeGetCurrentThread()->TrapFrame;
-                if (TrapFrame)
-                {
-#if defined(_M_AMD64)
-                    DPRINT1("Guard overflow context: RIP=%p RSP=%p RBP=%p RCX=%p RDX=%p\n",
-                            (PVOID)TrapFrame->Rip,
-                            (PVOID)TrapFrame->Rsp,
-                            (PVOID)TrapFrame->Rbp,
-                            (PVOID)TrapFrame->Rcx,
-                            (PVOID)TrapFrame->Rdx);
-#else
-                    DPRINT1("Guard overflow context: EIP=%p ESP=%p EBP=%p ECX=%p EDX=%p\n",
-                            (PVOID)TrapFrame->Eip,
-                            (PVOID)TrapFrame->HardwareEsp,
-                            (PVOID)TrapFrame->Ebp,
-                            (PVOID)TrapFrame->Ecx,
-                            (PVOID)TrapFrame->Edx);
-#endif
-                }
-            }
-#endif
-        }
-
-        /* Calculate the next memory address */
-        NextStackAddress = (PVOID)((ULONG_PTR)PAGE_ALIGN(DeallocationStack) + GuaranteedSize);
-
-        /* Allocate the memory */
-        Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
-                                         &NextStackAddress,
-                                         0,
-                                         &GuaranteedSize,
-                                         MEM_COMMIT,
-                                         PAGE_READWRITE);
-        if (NT_SUCCESS(Status))
-        {
-            /* Success! */
-            Teb->NtTib.StackLimit = NextStackAddress;
-        }
-        else
-        {
-            DPRINT1("Failed to allocate memory\n");
-        }
-
-        return STATUS_STACK_OVERFLOW;
-    }
-
     /* Don't handle this flag yet */
     ASSERT((PsGetCurrentProcess()->Peb->NtGlobalFlag & FLG_DISABLE_STACK_EXTENSION) == 0);
 
-    /* Update the stack limit */
-    Teb->NtTib.StackLimit = (PVOID)((ULONG_PTR)NextStackAddress + GuaranteedSize);
+    /* Update the stack limit with the committed base */
+    Teb->NtTib.StackLimit = CommitAddress;
 
-    /* Now move the guard page to the next page */
+    /* Install the new guard page */
+    GuardRegionSize = GuardPageSize;
     Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
-                                     &NextStackAddress,
+                                     &GuardAddress,
                                      0,
-                                     &GuaranteedSize,
+                                     &GuardRegionSize,
                                      MEM_COMMIT,
                                      PAGE_READWRITE | PAGE_GUARD);
-    if ((NT_SUCCESS(Status) || (Status == STATUS_ALREADY_COMMITTED)))
+    if ((NT_SUCCESS(Status)) || (Status == STATUS_ALREADY_COMMITTED))
     {
-        /* We did it! */
         DPRINT("Guard page handled successfully for %p\n", Address);
         return STATUS_PAGE_FAULT_GUARD_PAGE;
     }
 
-    /* Fail, we couldn't move the guard page */
     DPRINT1("Guard page failure: %lx\n", Status);
     ASSERT(FALSE);
     return STATUS_STACK_OVERFLOW;
+
+StackOverflow:
+    {
+        SIZE_T RemainingSize;
+        PVOID RemainingBase;
+        PEPROCESS Process = PsGetCurrentProcess();
+
+        DPRINT1("Close to our death... stack exhausted for proc %s pid %lu tid %lu at %p\n",
+                Process ? Process->ImageFileName : "<unknown>",
+                (ULONG)(ULONG_PTR)PsGetCurrentProcessId(),
+                (ULONG)(ULONG_PTR)PsGetCurrentThreadId(),
+                Address);
+#if defined(_M_AMD64) || defined(_M_IX86)
+        {
+            PKTRAP_FRAME TrapFrame = KeGetCurrentThread()->TrapFrame;
+            if (TrapFrame)
+            {
+#if defined(_M_AMD64)
+                DPRINT1("Guard overflow context: RIP=%p RSP=%p RBP=%p RCX=%p RDX=%p\n",
+                        (PVOID)TrapFrame->Rip,
+                        (PVOID)TrapFrame->Rsp,
+                        (PVOID)TrapFrame->Rbp,
+                        (PVOID)TrapFrame->Rcx,
+                        (PVOID)TrapFrame->Rdx);
+#else
+                DPRINT1("Guard overflow context: EIP=%p ESP=%p EBP=%p ECX=%p EDX=%p\n",
+                        (PVOID)TrapFrame->Eip,
+                        (PVOID)TrapFrame->HardwareEsp,
+                        (PVOID)TrapFrame->Ebp,
+                        (PVOID)TrapFrame->Ecx,
+                        (PVOID)TrapFrame->Edx);
+#endif
+            }
+        }
+#endif
+
+        RemainingBase = AlignedDeallocation;
+        RemainingSize = (ULONG_PTR)OldGuardBase - (ULONG_PTR)RemainingBase;
+        if (RemainingSize)
+        {
+            Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
+                                             &RemainingBase,
+                                             0,
+                                             &RemainingSize,
+                                             MEM_COMMIT,
+                                             PAGE_READWRITE);
+            if (NT_SUCCESS(Status) || (Status == STATUS_ALREADY_COMMITTED))
+            {
+                Teb->NtTib.StackLimit = (PVOID)((ULONG_PTR)RemainingBase + RemainingSize);
+            }
+            else
+            {
+                DPRINT1("Failed to allocate remaining stack memory: %lx\n", Status);
+            }
+        }
+
+        return STATUS_STACK_OVERFLOW;
+    }
 }
 
 FORCEINLINE
