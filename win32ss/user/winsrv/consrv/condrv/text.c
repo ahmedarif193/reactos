@@ -1576,6 +1576,25 @@ ConDrvSetConsoleTextAttribute(IN PCONSOLE Console,
     ASSERT(Console == Buffer->Header.Console);
 
     Buffer->ScreenDefaultAttrib = (Attributes & ~COMMON_LVB_SBCSDBCS);
+    Buffer->VtState.CurrentAttributes = Buffer->ScreenDefaultAttrib;
+    Buffer->VtState.SavedAttributes = Buffer->ScreenDefaultAttrib;
+    Buffer->VtState.UseRgbForeground = FALSE;
+    Buffer->VtState.UseRgbBackground = FALSE;
+    Buffer->VtState.SavedUseRgbForeground = FALSE;
+    Buffer->VtState.SavedUseRgbBackground = FALSE;
+
+    if (Console)
+    {
+        PCONSRV_CONSOLE Cons = (PCONSRV_CONSOLE)Console;
+        COLORREF Fg = Cons->Colors[Buffer->ScreenDefaultAttrib & 0x0F];
+        COLORREF Bg = Cons->Colors[(Buffer->ScreenDefaultAttrib >> 4) & 0x0F];
+
+        Buffer->VtState.CurrentFgColor = Fg;
+        Buffer->VtState.CurrentBgColor = Bg;
+        Buffer->VtState.SavedFgColor = Fg;
+        Buffer->VtState.SavedBgColor = Bg;
+    }
+
     return STATUS_SUCCESS;
 }
 

@@ -160,6 +160,19 @@ typedef struct _TEXTMODE_SCREEN_BUFFER
         SHORT   ScrollBottom;                    /* Bottom margin for scrolling (0-based inclusive) */
         BOOLEAN HyperlinkActive;                 /* TRUE when OSC 8 hyperlink is active */
         UNICODE_STRING HyperlinkUri;             /* Current hyperlink target */
+        UCHAR   G0Charset;                       /* Currently designated G0 character set */
+        UCHAR   G1Charset;                       /* Currently designated G1 character set */
+        UCHAR   G2Charset;                       /* Currently designated G2 character set */
+        UCHAR   G3Charset;                       /* Currently designated G3 character set */
+        UCHAR   ActiveCharset;                   /* Active GL charset slot (0-3) */
+        UCHAR   PendingSingleShift;              /* Pending single-shift slot override (SS2/SS3) */
+        UCHAR   SavedG0Charset;                  /* Saved G0 charset for DECSC */
+        UCHAR   SavedG1Charset;                  /* Saved G1 charset for DECSC */
+        UCHAR   SavedG2Charset;                  /* Saved G2 charset for DECSC */
+        UCHAR   SavedG3Charset;                  /* Saved G3 charset for DECSC */
+        UCHAR   SavedActiveCharset;              /* Saved active charset selector for DECSC */
+        WCHAR   LastWrittenChar;                 /* Last printable glyph emitted for REP */
+        BOOLEAN LastCharValid;                   /* Tracks whether LastWrittenChar is valid */
     } VtState;
 } TEXTMODE_SCREEN_BUFFER, *PTEXTMODE_SCREEN_BUFFER;
 
