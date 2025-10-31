@@ -7,10 +7,6 @@ if(POLICY CMP0116)
     cmake_policy(SET CMP0116 NEW)
 endif()
 
-if(NOT CMAKE_VERSION MATCHES "ReactOS")
-    message(WARNING "Building with \"${CMAKE_COMMAND}\", which is not the custom CMake included in RosBE, might cause build issues...")
-endif()
-
 include(CMakeDependentOption)
 
 # CMAKE_CROSSCOMPILING and MSVC_IDE are not set until project() is called, so let's test this instead
@@ -197,10 +193,7 @@ if(NOT CMAKE_CROSSCOMPILING)
 
     set(NATIVE_TARGETS asmpp bin2c widl gendib cabman fatten hpp isohybrid mkhive mkisofs obj2bin spec2def geninc mkshelllink utf16le xml2sdb)
     if(NOT MSVC)
-        list(APPEND NATIVE_TARGETS pefixup)
-        if (ARCH STREQUAL "i386")
-            list(APPEND NATIVE_TARGETS rsym)
-        endif()
+        list(APPEND NATIVE_TARGETS pefixup rsym)
     endif()
 
     install(TARGETS ${NATIVE_TARGETS})
@@ -267,8 +260,8 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
         option(PCH "Whether to use precompiled headers" OFF)
         set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ccache)
     elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-        message(WARNING "-- Disabling precompiled headers on GCC by default CORE-17108.")
-        option(PCH "Whether to use precompiled headers" OFF)
+#        message(WARNING "-- *Disabling*  precompiled headers on GCC by default CORE-17108. (OUTDATED)")
+        option(PCH "Whether to use precompiled headers" ON)
     else()
         option(PCH "Whether to use precompiled headers" ON)
     endif()
