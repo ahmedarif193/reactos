@@ -10,6 +10,8 @@
 #include <consrv.h>
 #include "../conoutput.h"
 
+#include <limits.h>
+
 #define VT_MAX_PARAMS 16
 
 #define FG_ATTR_MASK (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY)
@@ -45,8 +47,10 @@ VtEnableAlternateScreen(PCONSOLE Console,
     PrimaryBuffer->VtState.PrimaryCursorPos = PrimaryBuffer->CursorPosition;
     PrimaryBuffer->VtState.PrimaryViewOrigin = PrimaryBuffer->ViewOrigin;
     PrimaryBuffer->VtState.PrimaryVirtualY = PrimaryBuffer->VirtualY;
-    AltInfo.ScreenBufferSize = PrimaryBuffer->ScreenBufferSize;
-    AltInfo.ViewSize         = PrimaryBuffer->ViewSize;
+    AltInfo.ScreenBufferSize = PrimaryBuffer->ViewSize;
+    AltInfo.ScreenBufferSize.X = max(AltInfo.ScreenBufferSize.X, 1);
+    AltInfo.ScreenBufferSize.Y = max(AltInfo.ScreenBufferSize.Y, 1);
+    AltInfo.ViewSize         = AltInfo.ScreenBufferSize;
     AltInfo.ScreenAttrib     = PrimaryBuffer->ScreenDefaultAttrib;
     AltInfo.PopupAttrib      = PrimaryBuffer->PopupDefaultAttrib;
     AltInfo.CursorSize       = PrimaryBuffer->CursorInfo.dwSize;
@@ -69,6 +73,14 @@ VtEnableAlternateScreen(PCONSOLE Console,
     AltBuffer->VtState.Active = PrimaryBuffer->VtState.Active;
     AltBuffer->VtState.CurrentAttributes = PrimaryBuffer->VtState.CurrentAttributes;
     AltBuffer->VtState.SavedAttributes = PrimaryBuffer->VtState.SavedAttributes;
+    AltBuffer->VtState.UseRgbForeground = PrimaryBuffer->VtState.UseRgbForeground;
+    AltBuffer->VtState.UseRgbBackground = PrimaryBuffer->VtState.UseRgbBackground;
+    AltBuffer->VtState.CurrentFgColor = PrimaryBuffer->VtState.CurrentFgColor;
+    AltBuffer->VtState.CurrentBgColor = PrimaryBuffer->VtState.CurrentBgColor;
+    AltBuffer->VtState.SavedFgColor = PrimaryBuffer->VtState.SavedFgColor;
+    AltBuffer->VtState.SavedBgColor = PrimaryBuffer->VtState.SavedBgColor;
+    AltBuffer->VtState.SavedUseRgbForeground = PrimaryBuffer->VtState.SavedUseRgbForeground;
+    AltBuffer->VtState.SavedUseRgbBackground = PrimaryBuffer->VtState.SavedUseRgbBackground;
     AltBuffer->VtState.DefaultCursorInfo = PrimaryBuffer->VtState.DefaultCursorInfo;
     AltBuffer->VtState.CurrentCursorStyle = PrimaryBuffer->VtState.CurrentCursorStyle;
 
@@ -121,6 +133,66 @@ VtDisableAlternateScreen(PCONSOLE Console,
     return TRUE;
 }
 
+static COLORREF
+VtGetPaletteColor(PCONSOLE Console, UCHAR Index)
+{
+    PCONSRV_CONSOLE Cons = (PCONSRV_CONSOLE)Console;
+    if (!Cons) return 0;
+    return Cons->Colors[Index & 0x0F];
+}
+
+static UCHAR
+VtFindNearestPaletteIndex(PCONSOLE Console, COLORREF Color)
+{
+    PCONSRV_CONSOLE Cons = (PCONSRV_CONSOLE)Console;
+    UCHAR best = 0;
+    ULONG bestDiff = ULONG_MAX;
+    if (!Cons) return 0;
+    for (UCHAR idx = 0; idx < 16; ++idx)
+    {
+        COLORREF ref = Cons->Colors[idx];
+        LONG dr = (LONG)GetRValue(Color) - (LONG)GetRValue(ref);
+        LONG dg = (LONG)GetGValue(Color) - (LONG)GetGValue(ref);
+        LONG db = (LONG)GetBValue(Color) - (LONG)GetBValue(ref);
+        ULONG diff = (ULONG)(dr * dr + dg * dg + db * db);
+        if (diff < bestDiff)
+        {
+            bestDiff = diff;
+            best = idx;
+        }
+    }
+    return best;
+}
+
+static COLORREF
+VtColorFromXtermIndex(ULONG Index)
+{
+    if (Index < 16)
+        return RGB(((Index & 1) ? 0x80 : 0x00) + ((Index & 8) ? 0x80 : 0x00),
+                   ((Index & 2) ? 0x80 : 0x00) + ((Index & 8) ? 0x80 : 0x00),
+                   ((Index & 4) ? 0x80 : 0x00) + ((Index & 8) ? 0x80 : 0x00));
+
+    if (Index >= 16 && Index <= 231)
+    {
+        Index -= 16;
+        ULONG r = (Index / 36) % 6;
+        ULONG g = (Index / 6) % 6;
+        ULONG b = Index % 6;
+        r = r ? r * 40 + 55 : 0;
+        g = g ? g * 40 + 55 : 0;
+        b = b ? b * 40 + 55 : 0;
+        return RGB((BYTE)r, (BYTE)g, (BYTE)b);
+    }
+
+    if (Index >= 232 && Index <= 255)
+    {
+        BYTE shade = (BYTE)((Index - 232) * 10 + 8);
+        return RGB(shade, shade, shade);
+    }
+
+    return 0;
+}
+
 static NTSTATUS
 VtFlushText(PCONSOLE Console,
            PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
@@ -169,83 +241,210 @@ static const USHORT VtAnsiBgMap[8] =
     BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BLUE
 };
 
+static USHORT
+VtIndexToFgAttr(UCHAR Index)
+{
+    USHORT Attr = 0;
+    if (Index & 0x1) Attr |= FOREGROUND_BLUE;
+    if (Index & 0x2) Attr |= FOREGROUND_GREEN;
+    if (Index & 0x4) Attr |= FOREGROUND_RED;
+    if (Index & 0x8) Attr |= FOREGROUND_INTENSITY;
+    return Attr;
+}
+
+static USHORT
+VtIndexToBgAttr(UCHAR Index)
+{
+    USHORT Attr = 0;
+    if (Index & 0x1) Attr |= BACKGROUND_BLUE;
+    if (Index & 0x2) Attr |= BACKGROUND_GREEN;
+    if (Index & 0x4) Attr |= BACKGROUND_RED;
+    if (Index & 0x8) Attr |= BACKGROUND_INTENSITY;
+    return Attr;
+}
+
 static VOID
-VtApplySgr(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+VtApplySgr(PCONSOLE Console,
+           PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
            const ULONG *Params,
            ULONG Count)
 {
-    ULONG i;
     USHORT Attr = ScreenBuffer->VtState.CurrentAttributes;
     const USHORT DefaultAttr = ScreenBuffer->VtState.SavedAttributes;
 
     if (Count == 0)
     {
         Attr = DefaultAttr;
+        ScreenBuffer->VtState.UseRgbForeground = FALSE;
+        ScreenBuffer->VtState.UseRgbBackground = FALSE;
+        ScreenBuffer->VtState.CurrentFgColor = VtGetPaletteColor(Console, Attr & 0x0F);
+        ScreenBuffer->VtState.CurrentBgColor = VtGetPaletteColor(Console, (Attr >> 4) & 0x0F);
         ScreenBuffer->VtState.CurrentAttributes = Attr;
         return;
     }
 
-    for (i = 0; i < Count; ++i)
+    for (ULONG i = 0; i < Count; ++i)
     {
         ULONG Code = Params[i];
         switch (Code)
         {
             case 0:
                 Attr = DefaultAttr;
+                ScreenBuffer->VtState.UseRgbForeground = FALSE;
+                ScreenBuffer->VtState.UseRgbBackground = FALSE;
                 break;
+
             case 1:
                 Attr |= FOREGROUND_INTENSITY;
                 break;
+
             case 22:
                 Attr &= ~FOREGROUND_INTENSITY;
                 break;
+
             case 30: case 31: case 32: case 33:
             case 34: case 35: case 36: case 37:
             {
-                ULONG idx = Code - 30;
+                UCHAR idx = (UCHAR)(Code - 30);
                 Attr &= ~FG_ATTR_MASK;
-                Attr |= VtAnsiFgMap[idx];
+                Attr |= VtIndexToFgAttr(idx);
+                ScreenBuffer->VtState.UseRgbForeground = FALSE;
                 break;
             }
+
             case 39:
                 Attr &= ~FG_ATTR_MASK;
                 Attr |= (DefaultAttr & FG_ATTR_MASK);
+                ScreenBuffer->VtState.UseRgbForeground = FALSE;
                 break;
+
             case 40: case 41: case 42: case 43:
             case 44: case 45: case 46: case 47:
             {
-                ULONG idx = Code - 40;
+                UCHAR idx = (UCHAR)(Code - 40);
                 Attr &= ~BG_ATTR_MASK;
-                Attr |= VtAnsiBgMap[idx];
+                Attr |= VtIndexToBgAttr(idx);
+                ScreenBuffer->VtState.UseRgbBackground = FALSE;
                 break;
             }
+
             case 49:
                 Attr &= ~BG_ATTR_MASK;
                 Attr |= (DefaultAttr & BG_ATTR_MASK);
+                ScreenBuffer->VtState.UseRgbBackground = FALSE;
                 break;
+
             case 90: case 91: case 92: case 93:
             case 94: case 95: case 96: case 97:
             {
-                ULONG idx = Code - 90;
+                UCHAR idx = (UCHAR)((Code - 90) | 0x08);
                 Attr &= ~FG_ATTR_MASK;
-                Attr |= VtAnsiFgMap[idx] | FOREGROUND_INTENSITY;
+                Attr |= VtIndexToFgAttr(idx);
+                ScreenBuffer->VtState.UseRgbForeground = FALSE;
                 break;
             }
+
             case 100: case 101: case 102: case 103:
             case 104: case 105: case 106: case 107:
             {
-                ULONG idx = Code - 100;
+                UCHAR idx = (UCHAR)((Code - 100) | 0x08);
                 Attr &= ~BG_ATTR_MASK;
-                Attr |= VtAnsiBgMap[idx] | BACKGROUND_INTENSITY;
+                Attr |= VtIndexToBgAttr(idx);
+                ScreenBuffer->VtState.UseRgbBackground = FALSE;
                 break;
             }
+
+            case 38:
+            case 48:
+            {
+                BOOL Foreground = (Code == 38);
+                if (i + 1 < Count)
+                {
+                    ULONG mode = Params[++i];
+                    if (mode == 2 && (i + 3) < Count)
+                    {
+                        ULONG r = Params[++i] & 0xFF;
+                        ULONG g = Params[++i] & 0xFF;
+                        ULONG b = Params[++i] & 0xFF;
+                        COLORREF color = RGB((BYTE)r, (BYTE)g, (BYTE)b);
+                        UCHAR nearest = VtFindNearestPaletteIndex(Console, color);
+                        if (Foreground)
+                        {
+                            Attr &= ~FG_ATTR_MASK;
+                            Attr |= VtIndexToFgAttr(nearest);
+                            ScreenBuffer->VtState.UseRgbForeground = TRUE;
+                            ScreenBuffer->VtState.CurrentFgColor = color;
+                        }
+                        else
+                        {
+                            Attr &= ~BG_ATTR_MASK;
+                            Attr |= VtIndexToBgAttr(nearest);
+                            ScreenBuffer->VtState.UseRgbBackground = TRUE;
+                            ScreenBuffer->VtState.CurrentBgColor = color;
+                        }
+                        continue;
+                    }
+                    else if (mode == 5 && (i + 1) < Count)
+                    {
+                        ULONG idx = Params[++i];
+                        COLORREF color = VtColorFromXtermIndex(idx);
+                        if (idx < 16)
+                        {
+                            if (Foreground)
+                            {
+                                Attr &= ~FG_ATTR_MASK;
+                                Attr |= VtIndexToFgAttr((UCHAR)idx);
+                                ScreenBuffer->VtState.UseRgbForeground = FALSE;
+                            }
+                            else
+                            {
+                                Attr &= ~BG_ATTR_MASK;
+                                Attr |= VtIndexToBgAttr((UCHAR)idx);
+                                ScreenBuffer->VtState.UseRgbBackground = FALSE;
+                            }
+                        }
+                        else
+                        {
+                            UCHAR nearest = VtFindNearestPaletteIndex(Console, color);
+                            if (Foreground)
+                            {
+                                Attr &= ~FG_ATTR_MASK;
+                                Attr |= VtIndexToFgAttr(nearest);
+                                ScreenBuffer->VtState.UseRgbForeground = TRUE;
+                                ScreenBuffer->VtState.CurrentFgColor = color;
+                            }
+                            else
+                            {
+                                Attr &= ~BG_ATTR_MASK;
+                                Attr |= VtIndexToBgAttr(nearest);
+                                ScreenBuffer->VtState.UseRgbBackground = TRUE;
+                                ScreenBuffer->VtState.CurrentBgColor = color;
+                            }
+                        }
+                        continue;
+                    }
+                }
+
+                if (Foreground)
+                    ScreenBuffer->VtState.UseRgbForeground = FALSE;
+                else
+                    ScreenBuffer->VtState.UseRgbBackground = FALSE;
+                break;
+            }
+
             default:
                 break;
         }
     }
 
     ScreenBuffer->VtState.CurrentAttributes = Attr;
+
+    if (!ScreenBuffer->VtState.UseRgbForeground)
+        ScreenBuffer->VtState.CurrentFgColor = VtGetPaletteColor(Console, Attr & 0x0F);
+    if (!ScreenBuffer->VtState.UseRgbBackground)
+        ScreenBuffer->VtState.CurrentBgColor = VtGetPaletteColor(Console, (Attr >> 4) & 0x0F);
 }
+
 
 static VOID
 VtEraseLineToEnd(PCONSOLE Console,
@@ -270,6 +469,8 @@ VtEraseLineToEnd(PCONSOLE Console,
     {
         Ptr->Char.UnicodeChar = L' ';
         Ptr->Attributes = Attr;
+        ConioSetCellFgColor(ScreenBuffer, X, Y, ScreenBuffer->VtState.UseRgbForeground ? ScreenBuffer->VtState.CurrentFgColor : CLR_INVALID);
+        ConioSetCellBgColor(ScreenBuffer, X, Y, ScreenBuffer->VtState.UseRgbBackground ? ScreenBuffer->VtState.CurrentBgColor : CLR_INVALID);
     }
 
     Region.Left   = ScreenBuffer->CursorPosition.X;
@@ -299,6 +500,8 @@ VtEraseDisplay(PCONSOLE Console,
         {
             Ptr->Char.UnicodeChar = L' ';
             Ptr->Attributes = Attr;
+            ConioSetCellFgColor(ScreenBuffer, X, Y, ScreenBuffer->VtState.UseRgbForeground ? ScreenBuffer->VtState.CurrentFgColor : CLR_INVALID);
+            ConioSetCellBgColor(ScreenBuffer, X, Y, ScreenBuffer->VtState.UseRgbBackground ? ScreenBuffer->VtState.CurrentBgColor : CLR_INVALID);
         }
     }
 
@@ -325,6 +528,14 @@ ConDrvVtInitializeBuffer(PTEXTMODE_SCREEN_BUFFER ScreenBuffer)
     ScreenBuffer->VtState.SavedCursorPos = Zero;
     ScreenBuffer->VtState.SavedAttributes = ScreenBuffer->ScreenDefaultAttrib;
     ScreenBuffer->VtState.CurrentAttributes = ScreenBuffer->ScreenDefaultAttrib;
+    ScreenBuffer->VtState.UseRgbForeground = FALSE;
+    ScreenBuffer->VtState.UseRgbBackground = FALSE;
+    ScreenBuffer->VtState.CurrentFgColor = VtGetPaletteColor(ScreenBuffer->Header.Console, ScreenBuffer->ScreenDefaultAttrib & 0x0F);
+    ScreenBuffer->VtState.CurrentBgColor = VtGetPaletteColor(ScreenBuffer->Header.Console, (ScreenBuffer->ScreenDefaultAttrib >> 4) & 0x0F);
+    ScreenBuffer->VtState.SavedFgColor = ScreenBuffer->VtState.CurrentFgColor;
+    ScreenBuffer->VtState.SavedBgColor = ScreenBuffer->VtState.CurrentBgColor;
+    ScreenBuffer->VtState.SavedUseRgbForeground = FALSE;
+    ScreenBuffer->VtState.SavedUseRgbBackground = FALSE;
     ScreenBuffer->VtState.PrivateModes = 0;
     ScreenBuffer->VtState.AlternateBuffer = NULL;
     ScreenBuffer->VtState.PrimaryBuffer = NULL;
@@ -508,7 +719,7 @@ VtHandleCsiSequence(PCONSOLE Console,
     switch (Final)
     {
         case L'm':
-            VtApplySgr(ScreenBuffer, Params, Count);
+            VtApplySgr(Console, ScreenBuffer, Params, Count);
             return TRUE;
 
         case L'H':
@@ -548,6 +759,10 @@ VtHandleEscapeSequence(PCONSOLE Console,
         case L's':
             ScreenBuffer->VtState.SavedCursorPos = ScreenBuffer->CursorPosition;
             ScreenBuffer->VtState.SavedAttributes = ScreenBuffer->VtState.CurrentAttributes;
+            ScreenBuffer->VtState.SavedFgColor = ScreenBuffer->VtState.CurrentFgColor;
+            ScreenBuffer->VtState.SavedBgColor = ScreenBuffer->VtState.CurrentBgColor;
+            ScreenBuffer->VtState.SavedUseRgbForeground = ScreenBuffer->VtState.UseRgbForeground;
+            ScreenBuffer->VtState.SavedUseRgbBackground = ScreenBuffer->VtState.UseRgbBackground;
             ScreenBuffer->VtState.CursorSaved = TRUE;
             return TRUE;
 
@@ -558,6 +773,10 @@ VtHandleEscapeSequence(PCONSOLE Console,
                                                ScreenBuffer,
                                                &ScreenBuffer->VtState.SavedCursorPos);
                 ScreenBuffer->VtState.CurrentAttributes = ScreenBuffer->VtState.SavedAttributes;
+                ScreenBuffer->VtState.CurrentFgColor = ScreenBuffer->VtState.SavedFgColor;
+                ScreenBuffer->VtState.CurrentBgColor = ScreenBuffer->VtState.SavedBgColor;
+                ScreenBuffer->VtState.UseRgbForeground = ScreenBuffer->VtState.SavedUseRgbForeground;
+                ScreenBuffer->VtState.UseRgbBackground = ScreenBuffer->VtState.SavedUseRgbBackground;
             }
             return TRUE;
 
