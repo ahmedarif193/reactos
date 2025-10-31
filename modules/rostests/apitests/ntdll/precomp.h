@@ -12,6 +12,20 @@
 #include <ndk/ntndk.h>
 #include <strsafe.h>
 
+#ifndef _PS_PROTECTION_DEFINED
+#define _PS_PROTECTION_DEFINED
+typedef union _PS_PROTECTION
+{
+    UCHAR Level;
+    struct
+    {
+        UCHAR Type  : 3;
+        UCHAR Audit : 1;
+        UCHAR Signer: 4;
+    } DUMMYSTRUCTNAME;
+} PS_PROTECTION, *PPS_PROTECTION;
+#endif
+
 /* probelib.c */
 typedef enum _ALIGNMENT_PROBE_MODE
 {
