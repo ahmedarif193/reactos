@@ -1383,6 +1383,7 @@ BuspCreateResourceListFromAcpiResources(
     return STATUS_SUCCESS;
 }
 
+#ifndef UNIT_TEST
 static
 VOID
 BuspPublishLegacyScsiportConfig(
@@ -1590,6 +1591,7 @@ Cleanup:
     if (driverKeyName.Buffer)
         ExFreePool(driverKeyName.Buffer);
 }
+#endif /* !UNIT_TEST */
 
 /* Build a stable instance ID string for devices that lack _UID.
  * Strategy: prefer _UID; then bus_address (_ADR); otherwise device-type fallback.
@@ -2355,6 +2357,8 @@ Bus_PDO_QueryResources(
 }
 
 
+#endif /* !UNIT_TEST */
+
 NTSTATUS
 Bus_PDO_QueryResourceRequirements(
      PPDO_DEVICE_DATA     DeviceData,
@@ -2453,6 +2457,9 @@ Bus_PDO_QueryResourceRequirements(
     Irp->IoStatus.Information = (ULONG_PTR)RequirementsList;
     return STATUS_SUCCESS;
 }
+
+
+#ifndef UNIT_TEST
 NTSTATUS
 Bus_PDO_QueryDeviceRelations(
      PPDO_DEVICE_DATA     DeviceData,
@@ -2587,4 +2594,4 @@ GetDeviceCapabilitiesExit:
     ObDereferenceObject(targetObject);
     return status;
 }
-#endif /* UNIT_TEST */
+#endif /* !UNIT_TEST */
