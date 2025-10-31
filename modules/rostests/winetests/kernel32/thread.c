@@ -1888,6 +1888,66 @@ static void test_thread_actctx(void)
 }
 
 
+static void test_SetThreadStackGuarantee(void)
+{
+    BOOL ret;
+    ULONG size, original, current, expected;
+    SYSTEM_INFO info;
+
+    SetLastError(0xdeadbeef);
+    ret = SetThreadStackGuarantee(NULL);
+    ok(!ret, "SetThreadStackGuarantee(NULL) succeeded\n");
+    ok(GetLastError() == ERROR_INVALID_PARAMETER,
+       "expected ERROR_INVALID_PARAMETER, got %lu\n", GetLastError());
+
+    size = 0;
+    ret = SetThreadStackGuarantee(&size);
+    ok(ret, "SetThreadStackGuarantee(&size) failed %lu\n", GetLastError());
+    original = size;
+
+    size = 4096;
+    ret = SetThreadStackGuarantee(&size);
+    ok(ret, "SetThreadStackGuarantee grow failed %lu\n", GetLastError());
+    ok(size == original, "expected previous size %u, got %u\n", original, size);
+
+    size = 0;
+    ret = SetThreadStackGuarantee(&size);
+    ok(ret, "SetThreadStackGuarantee query failed %lu\n", GetLastError());
+    current = size;
+
+    GetSystemInfo(&info);
+    expected = 4096;
+    expected = (expected + info.dwPageSize - 1) & ~(info.dwPageSize - 1);
+    if ((sizeof(void *) > sizeof(int)) && expected)
+    {
+        ULONG min64 = info.dwPageSize * 2;
+        if (expected < min64)
+            expected = min64;
+    }
+    if (expected < original)
+        expected = original;
+    ok(current == expected, "expected guarantee %u, got %u\n", expected, current);
+
+    size = original;
+    ret = SetThreadStackGuarantee(&size);
+    ok(ret, "SetThreadStackGuarantee shrink failed %lu\n", GetLastError());
+    ok(size == current, "expected previous size %u, got %u\n", current, size);
+
+    size = 0;
+    ret = SetThreadStackGuarantee(&size);
+    ok(ret, "SetThreadStackGuarantee re-query failed %lu\n", GetLastError());
+    ok(size == current, "expected guarantee %u, got %u\n", current, size);
+
+    size = 0xffffffff;
+    SetLastError(0xdeadbeef);
+    ret = SetThreadStackGuarantee(&size);
+    ok(!ret, "SetThreadStackGuarantee did not fail for oversized request\n");
+    ok(GetLastError() == ERROR_INVALID_PARAMETER,
+       "expected ERROR_INVALID_PARAMETER, got %lu\n", GetLastError());
+    ok(size == current, "expected previous size %u, got %u\n", current, size);
+}
+
+
 static void WINAPI threadpool_workcallback(PTP_CALLBACK_INSTANCE instance, void *context, PTP_WORK work) {
     int *foo = (int*)context;
 
@@ -2172,6 +2232,7 @@ START_TEST(thread)
    test_thread_fpu_cw();
 #endif
    test_thread_actctx();
+   test_SetThreadStackGuarantee();
 
    test_threadpool();
 }
