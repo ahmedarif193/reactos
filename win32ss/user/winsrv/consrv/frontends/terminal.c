@@ -19,6 +19,12 @@
 #define NDEBUG
 #include <debug.h>
 
+#define SET_CELL_COLORS(Buffer, XCoord, YCoord, FgColor, BgColor) \
+    do { \
+        ConioSetCellFgColor((Buffer), (XCoord), (YCoord), (FgColor)); \
+        ConioSetCellBgColor((Buffer), (XCoord), (YCoord), (BgColor)); \
+    } while (0)
+
 
 
 
@@ -610,6 +616,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                     if (Attrib)
                         Ptr->Attributes = Buff->ScreenDefaultAttrib;
                     Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                    SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, CLR_INVALID, CLR_INVALID);
 
                     if (Buff->CursorPosition.X > 0)
                         Buff->CursorPosition.X--;
@@ -621,6 +628,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                 if (Attrib)
                     Ptr->Attributes = Buff->ScreenDefaultAttrib;
                 Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, CLR_INVALID, CLR_INVALID);
 
                 UpdateRect.Left  = min(UpdateRect.Left , Buff->CursorPosition.X);
                 UpdateRect.Right = max(UpdateRect.Right, Buff->CursorPosition.X);
@@ -655,6 +663,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                     if (Attrib)
                         Ptr->Attributes = Buff->ScreenDefaultAttrib;
                     Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                    SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, CLR_INVALID, CLR_INVALID);
 
                     ++Ptr;
                     Buff->CursorPosition.X++;
@@ -668,6 +677,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                         if (Attrib)
                             Ptr->Attributes = Buff->ScreenDefaultAttrib;
                         Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                        SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, CLR_INVALID, CLR_INVALID);
                     }
                 }
                 UpdateRect.Right = max(UpdateRect.Right, Buff->CursorPosition.X);
@@ -701,6 +711,11 @@ ConioWriteConsole(PFRONTEND FrontEnd,
 
         /* For Chinese, Japanese and Korean */
         bFullwidth = (bCJK && IS_FULL_WIDTH(Buffer[i]));
+
+        BOOLEAN UseRgbForeground = (Buff->VtState.Active && Buff->VtState.UseRgbForeground);
+        BOOLEAN UseRgbBackground = (Buff->VtState.Active && Buff->VtState.UseRgbBackground);
+        COLORREF FgColorValue = UseRgbForeground ? Buff->VtState.CurrentFgColor : CLR_INVALID;
+        COLORREF BgColorValue = UseRgbBackground ? Buff->VtState.CurrentBgColor : CLR_INVALID;
 
         /* Check whether we can insert the full-width character */
         if (bFullwidth)
@@ -754,6 +769,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                 if (Attrib)
                     Ptr->Attributes = Buff->ScreenDefaultAttrib;
                 Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                SET_CELL_COLORS(Buff, Buff->CursorPosition.X - 1, Buff->CursorPosition.Y, CLR_INVALID, CLR_INVALID);
             }
             Ptr = ConioCoordToPointer(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y);
         }
@@ -769,6 +785,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                 Ptr->Attributes = Buff->ScreenDefaultAttrib;
             Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
             Ptr->Attributes |= COMMON_LVB_LEADING_BYTE;
+            SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, FgColorValue, BgColorValue);
 
             /* Set the trailing byte */
             Buff->CursorPosition.X++;
@@ -778,6 +795,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                 Ptr->Attributes = Buff->ScreenDefaultAttrib;
             Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
             Ptr->Attributes |= COMMON_LVB_TRAILING_BYTE;
+            SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, FgColorValue, BgColorValue);
         }
         else
         {
@@ -785,6 +803,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
             if (Attrib)
                 Ptr->Attributes = Buff->ScreenDefaultAttrib;
             Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+            SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, FgColorValue, BgColorValue);
         }
 
         ++Ptr;
@@ -799,6 +818,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                 if (Attrib)
                     Ptr->Attributes = Buff->ScreenDefaultAttrib;
                 Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, CLR_INVALID, CLR_INVALID);
             }
         }
 
