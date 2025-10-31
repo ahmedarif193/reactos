@@ -8,7 +8,9 @@
 #include <apitest.h>
 
 #define WIN32_NO_STATUS
+#include <ndk/ntndk.h>
 #include <ndk/rtlfuncs.h>
+#include <ntstatus.h>
 #define UNIT_TEST
 #include <acpi.h>
 
@@ -39,10 +41,22 @@ VOID
 ExFreePoolWithTag(PVOID MemPtr, ULONG Tag)
 {
     PVOID *Mem = MemPtr;
+    ULONG_PTR StoredTag;
 
     Mem -= 2;
-    ok(Mem[1] == (PVOID)(ULONG_PTR)Tag, "Tag is %lx, expected %p\n", Tag, Mem[1]);
+    StoredTag = (ULONG_PTR)Mem[1];
+    ok(Tag == 0 || StoredTag == Tag,
+       "Tag is %lx, expected %p\n",
+       Tag,
+       Mem[1]);
     HeapFree(GetProcessHeap(), 0, Mem);
+}
+
+static
+VOID
+ExFreePool(PVOID MemPtr)
+{
+    ExFreePoolWithTag(MemPtr, 0);
 }
 
 static
@@ -60,7 +74,31 @@ typedef struct _PDO_DEVICE_DATA
 {
     HANDLE AcpiHandle;
     PWCHAR HardwareIDs;
+    BOOLEAN HasCachedBusNumber;
+    ULONG CachedBusNumber;
+    BOOLEAN HasPciRootBusRange;
+    ULONG PciRootMinBus;
+    ULONG PciRootMaxBus;
 } PDO_DEVICE_DATA, *PPDO_DEVICE_DATA;
+
+#ifdef UNIT_TEST
+struct acpi_device
+{
+    struct
+    {
+        UINT8 hardware_id;
+        UINT8 unique_id;
+        UINT8 bus_address;
+    } flags;
+    struct
+    {
+        const char *hardware_id;
+        const char *unique_id;
+        const char *device_name;
+        unsigned long long bus_address;
+    } pnp;
+};
+#endif
 
 /* ACPICA functions (mock) */
 static BOOLEAN AcpiCallExpected;
@@ -104,6 +142,11 @@ AcpiGetPossibleResources (
 
 #include "../../../../drivers/bus/acpi/buspdo.c"
 
+NTSTATUS
+Bus_PDO_QueryResourceRequirements(
+    PPDO_DEVICE_DATA DeviceData,
+    PIRP Irp);
+
 /* ACPI_RESOURCE builder helpers */
 #define MAKE_IRQ(Resource, _DescriptorLength, _Triggering, _Polarity, _Shareable, _WakeCapable) \
     do {                                                                                        \
@@ -145,12 +188,16 @@ START_TEST(Bus_PDO_QueryResourceRequirements)
     PIO_RESOURCE_REQUIREMENTS_LIST ReqList;
     PIO_RESOURCE_LIST ReqList2;
 
+    DeviceData = (PDO_DEVICE_DATA){0};
+
     /* Invalid AcpiHandle */
     AcpiCallExpected = FALSE;
     Irp.IoStatus.Status = STATUS_WAIT_0 + 17;
     DeviceData.AcpiHandle = NULL;
     Status = Bus_PDO_QueryResourceRequirements(&DeviceData, &Irp);
     ok(Status == STATUS_WAIT_0 + 17, "Status = 0x%lx\n", Status);
+
+    DeviceData = (PDO_DEVICE_DATA){0};
 
     /* PCI Bus device */
     AcpiCallExpected = FALSE;
@@ -160,6 +207,8 @@ START_TEST(Bus_PDO_QueryResourceRequirements)
     Status = Bus_PDO_QueryResourceRequirements(&DeviceData, &Irp);
     ok(Status == STATUS_WAIT_0 + 17, "Status = 0x%lx\n", Status);
 
+    DeviceData = (PDO_DEVICE_DATA){0};
+
     /* PCI Bus device #2 */
     AcpiCallExpected = FALSE;
     Irp.IoStatus.Status = STATUS_WAIT_0 + 17;
@@ -168,6 +217,8 @@ START_TEST(Bus_PDO_QueryResourceRequirements)
     Status = Bus_PDO_QueryResourceRequirements(&DeviceData, &Irp);
     ok(Status == STATUS_WAIT_0 + 17, "Status = 0x%lx\n", Status);
 
+    DeviceData = (PDO_DEVICE_DATA){0};
+
     /* Empty buffer */
     AcpiCallExpected = TRUE;
     Irp.IoStatus.Status = STATUS_WAIT_0 + 17;
@@ -175,6 +226,8 @@ START_TEST(Bus_PDO_QueryResourceRequirements)
     DeviceData.HardwareIDs = L"PNP0501\0";
     Status = Bus_PDO_QueryResourceRequirements(&DeviceData, &Irp);
     ok(Status == STATUS_WAIT_0 + 17, "Status = 0x%lx\n", Status);
+
+    DeviceData = (PDO_DEVICE_DATA){0};
 
     /* Simple single-resource list */
     AcpiCallExpected = TRUE;
@@ -216,6 +269,8 @@ START_TEST(Bus_PDO_QueryResourceRequirements)
     ok_int(ReqList->ListSize, (ULONG_PTR)&ReqList->List[0].Descriptors[1] - (ULONG_PTR)ReqList);
     ExFreePoolWithTag(ReqList, 'RpcA');
 
+    DeviceData = (PDO_DEVICE_DATA){0};
+
     /* Two IRQs */
     AcpiCallExpected = TRUE;
     Irp.IoStatus.Status = STATUS_WAIT_0 + 17;
@@ -256,7 +311,9 @@ START_TEST(Bus_PDO_QueryResourceRequirements)
     expect_irq(&ReqList->List[0].Descriptors[1], IO_RESOURCE_ALTERNATIVE, CmResourceShareDeviceExclusive, 7, 7);
     ok_int(ReqList->ListSize, GetPoolAllocSize(ReqList));
     ok_int(ReqList->ListSize, (ULONG_PTR)&ReqList->List[0].Descriptors[2] - (ULONG_PTR)ReqList);
-    ExFreePoolWithTag(ReqList, 'RpcA');
+   ExFreePoolWithTag(ReqList, 'RpcA');
+
+    DeviceData = (PDO_DEVICE_DATA){0};
 
     /* Port */
     AcpiCallExpected = TRUE;
@@ -299,6 +356,8 @@ START_TEST(Bus_PDO_QueryResourceRequirements)
     ok_int(ReqList->ListSize, GetPoolAllocSize(ReqList));
     ok_int(ReqList->ListSize, (ULONG_PTR)&ReqList->List[0].Descriptors[1] - (ULONG_PTR)ReqList);
     ExFreePoolWithTag(ReqList, 'RpcA');
+
+    DeviceData = (PDO_DEVICE_DATA){0};
 
     /* Port + two IRQs */
     AcpiCallExpected = TRUE;
@@ -350,6 +409,8 @@ START_TEST(Bus_PDO_QueryResourceRequirements)
     ok_int(ReqList->ListSize, GetPoolAllocSize(ReqList));
     ok_int(ReqList->ListSize, (ULONG_PTR)&ReqList->List[0].Descriptors[3] - (ULONG_PTR)ReqList);
     ExFreePoolWithTag(ReqList, 'RpcA');
+
+    DeviceData = (PDO_DEVICE_DATA){0};
 
     /* Multiple alternatives for ports + IRQs (VMware COM port, simplified) */
     AcpiCallExpected = TRUE;
