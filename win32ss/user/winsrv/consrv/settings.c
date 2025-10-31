@@ -56,6 +56,13 @@ ConSrvApplyUserSettings(
     // FIXME: Possible buffer overflow if s_colors is bigger than ConsoleInfo->ColorTable.
     RtlCopyMemory(Console->Colors, ConsoleInfo->ColorTable, sizeof(s_Colors));
 
+    if (ActiveBuffer)
+    {
+        TermSetPalette((PCONSOLE)Console,
+                       ActiveBuffer->PaletteHandle,
+                       ActiveBuffer->PaletteUsage);
+    }
+
     /* Apply cursor size */
     ActiveBuffer->CursorInfo.bVisible = (ConsoleInfo->CursorSize != 0);
     ActiveBuffer->CursorInfo.dwSize   = min(max(ConsoleInfo->CursorSize, 0), 100);
@@ -138,6 +145,17 @@ ConSrvApplyUserSettings(
                                            Buffer,
                                            ConsoleInfo->ScreenAttributes,
                                            ConsoleInfo->PopupAttributes);
+
+        if ((PCONSOLE_SCREEN_BUFFER)Buffer == Console->ActiveBuffer)
+        {
+            SMALL_RECT Region;
+            Region.Left = 0;
+            Region.Top = 0;
+            Region.Right = Buffer->ScreenBufferSize.X - 1;
+            Region.Bottom = Buffer->ScreenBufferSize.Y - 1;
+            if (Region.Right >= Region.Left && Region.Bottom >= Region.Top)
+                TermDrawRegion((PCONSOLE)Console, &Region);
+        }
     }
     else // if (GetType(ActiveBuffer) == GRAPHICS_BUFFER)
     {
