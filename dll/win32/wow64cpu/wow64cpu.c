@@ -10,7 +10,10 @@
 #undef WIN32_NO_STATUS
 #include <reactos/wow64apc.h>
 #include <reactos/wow64cpu.h>
+#include <reactos/wow64shared.h>
 #include <ntstatus.h>
+#include <ndk/ntndk.h>
+#include <pseh/pseh2.h>
 #include <string.h>
 #include <strsafe.h>
 
@@ -26,6 +29,23 @@
 
 #define WOW64CPU_MIN(a,b) (((a) < (b)) ? (a) : (b))
 
+#ifndef WOW64_CPU_AREA_POINTER_TAG
+#define WOW64_CPU_AREA_POINTER_TAG ((ULONG_PTR)0x1)
+#define WOW64_CPU_AREA_ENCODE_POINTER(Area) \
+    ((ULONG_PTR)((Area) ? ((ULONG_PTR)(Area) | WOW64_CPU_AREA_POINTER_TAG) : WOW64_CPU_AREA_POINTER_TAG))
+#define WOW64_CPU_AREA_DECODE_POINTER(Value) \
+    ((PWOW64_CPU_AREA)((ULONG_PTR)(Value) & ~(ULONG_PTR)WOW64_CPU_AREA_POINTER_TAG))
+#define WOW64_CPU_AREA_IS_TAGGED(Value) \
+    (((ULONG_PTR)(Value) & WOW64_CPU_AREA_POINTER_TAG) != 0)
+#endif
+
+#define WOW64_UCALLOUT_BUFFER_OFFSET   0x20
+#define WOW64_UCALLOUT_LENGTH_OFFSET   0x28
+#define WOW64_UCALLOUT_APINUM_OFFSET   0x2C
+
+#define WOW64_ALIGNED_STACK_DOWN(Value, Alignment) \
+    ((ULONG_PTR)((Value) & ~((Alignment) - 1)))
+
 #ifndef WOW64_CONTEXT_i386
 #define WOW64_CONTEXT_i386            0x00010000L
 #define WOW64_CONTEXT_CONTROL         (WOW64_CONTEXT_i386 | 0x00000001L)
@@ -34,23 +54,28 @@
 #define WOW64_CONTEXT_FULL            (WOW64_CONTEXT_CONTROL | WOW64_CONTEXT_INTEGER | WOW64_CONTEXT_SEGMENTS)
 #endif
 
-typedef struct _WOW64_CPU_AREA
-{
-    ULONG Size;
-    ULONG Flags;
-    PVOID CompatContext;
-    ULONG CompatContextLength;
-    PVOID NativeContext;
-    ULONG NativeContextLength;
-    PVOID HostContext;
-    ULONG HostContextLength;
-    ULONG_PTR PendingUserContext;
-    ULONG_PTR PendingUserRoutine;
-    ULONG_PTR PendingSystemArgument1;
-    ULONG_PTR PendingSystemArgument2;
-} WOW64_CPU_AREA;
-
 typedef NTSTATUS (NTAPI *PFN_NTSETINFORMATIONPROCESS)(HANDLE, ULONG, PVOID, ULONG);
+
+typedef NTSTATUS (NTAPI *PFN_WOW64_KI_USER_CALLBACK_DISPATCHER)(
+    _In_ ULONG ApiNumber,
+    _In_reads_bytes_opt_(InputLength) PVOID InputBuffer,
+    _In_ ULONG InputLength,
+    _Outptr_result_maybenull_ PVOID *OutputBuffer,
+    _Out_opt_ PULONG OutputLength);
+
+typedef NTSTATUS (NTAPI *PFN_WOW64_KI_USER_APC_DISPATCHER)(
+    _Inout_ PWOW64_CPU_AREA CpuArea,
+    _Inout_ WOW64_CONTEXT *CompatContext,
+    _Inout_ CONTEXT *NativeContext);
+
+typedef NTSTATUS (NTAPI *PFN_WOW64_KI_USER_EXCEPTION_DISPATCHER)(
+    _Inout_ PWOW64_CPU_AREA CpuArea,
+    _In_ PEXCEPTION_RECORD ExceptionRecord,
+    _Inout_ WOW64_CONTEXT *CompatContext,
+    _Inout_ CONTEXT *NativeContext);
+
+typedef NTSTATUS (NTAPI *PFN_WOW64_SET_THREAD_CONTEXT)(
+    _In_ PVOID ThreadContext);
 
 #define WOW64CPU_PROCESS_WOW64_INFORMATION 26
 
@@ -62,10 +87,310 @@ Wow64cpuExecuteCompatApc(
 
 NTSTATUS
 NTAPI
+Wow64cpuRunCallback(
+    _In_ ULONG_PTR CallbackRoutine,
+    _In_ ULONG_PTR Stack32,
+    _Inout_ WOW64_CONTEXT *CompatContext,
+    _Inout_ CONTEXT *NativeContext);
+
+NTSTATUS
+NTAPI
+Wow64cpuDispatchWow64Exception(
+    _Inout_ PWOW64_CPU_AREA CpuArea,
+    _In_ PEXCEPTION_RECORD ExceptionRecord,
+    _Inout_ WOW64_CONTEXT *CompatContext,
+    _Inout_ CONTEXT *NativeContext);
+
+NTSTATUS
+NTAPI
 Wow64cpuApcTrampoline(
     _Inout_ PWOW64_CPU_AREA CpuArea,
     _Inout_ WOW64_CONTEXT *CompatContext,
     _Inout_ CONTEXT *HostContext);
+
+static PWOW64_CPU_AREA
+Wow64cpuQueryThreadArea(VOID);
+
+static NTSTATUS
+Wow64cpuStoreContext(
+    _Inout_ PWOW64_CPU_AREA Area,
+    _In_reads_bytes_(Length) const VOID *Context,
+    _In_ ULONG Length,
+    _In_ BOOLEAN Native);
+
+static HMODULE
+Wow64cpuGetWow64Module(VOID)
+{
+    static HMODULE Wow64Module = NULL;
+
+    if (!Wow64Module)
+    {
+        Wow64Module = GetModuleHandleW(L"wow64.dll");
+    }
+
+    return Wow64Module;
+}
+
+static PFN_WOW64_SET_THREAD_CONTEXT
+Wow64cpuGetWow64SetThreadContext(VOID)
+{
+    static PFN_WOW64_SET_THREAD_CONTEXT SetThreadContext = NULL;
+    static BOOL Resolved = FALSE;
+
+    if (!Resolved)
+    {
+        HMODULE Wow64Module = Wow64cpuGetWow64Module();
+        if (Wow64Module)
+        {
+            SetThreadContext =
+                (PFN_WOW64_SET_THREAD_CONTEXT)GetProcAddress(Wow64Module,
+                                                             "Wow64SetThreadContext");
+        }
+        Resolved = TRUE;
+    }
+
+    return SetThreadContext;
+}
+
+static PFN_WOW64_KI_USER_CALLBACK_DISPATCHER
+Wow64cpuGetCallbackDispatcher(VOID)
+{
+    static PFN_WOW64_KI_USER_CALLBACK_DISPATCHER Dispatcher = NULL;
+    static BOOL Resolved = FALSE;
+
+    if (!Resolved)
+    {
+        HMODULE Wow64Module = Wow64cpuGetWow64Module();
+        if (Wow64Module)
+        {
+            Dispatcher =
+                (PFN_WOW64_KI_USER_CALLBACK_DISPATCHER)GetProcAddress(Wow64Module,
+                                                                      "Wow64KiUserCallbackDispatcher");
+        }
+        Resolved = TRUE;
+    }
+
+    return Dispatcher;
+}
+
+static PFN_WOW64_KI_USER_APC_DISPATCHER
+Wow64cpuGetApcDispatcher(VOID)
+{
+    static PFN_WOW64_KI_USER_APC_DISPATCHER Dispatcher = NULL;
+    static BOOL Resolved = FALSE;
+
+    if (!Resolved)
+    {
+        HMODULE Wow64Module = Wow64cpuGetWow64Module();
+        if (Wow64Module)
+        {
+            Dispatcher =
+                (PFN_WOW64_KI_USER_APC_DISPATCHER)GetProcAddress(Wow64Module,
+                                                                 "Wow64KiUserApcDispatcher");
+        }
+        Resolved = TRUE;
+    }
+
+    return Dispatcher;
+}
+
+static PFN_WOW64_KI_USER_EXCEPTION_DISPATCHER
+Wow64cpuGetExceptionDispatcher(VOID)
+{
+    static PFN_WOW64_KI_USER_EXCEPTION_DISPATCHER Dispatcher = NULL;
+    static BOOL Resolved = FALSE;
+
+    if (!Resolved)
+    {
+        HMODULE Wow64Module = Wow64cpuGetWow64Module();
+        if (Wow64Module)
+        {
+            Dispatcher =
+                (PFN_WOW64_KI_USER_EXCEPTION_DISPATCHER)GetProcAddress(Wow64Module,
+                                                                       "Wow64KiUserExceptionDispatcher");
+        }
+        Resolved = TRUE;
+    }
+
+    return Dispatcher;
+}
+
+static ULONG
+Wow64cpuLookupSharedDispatcher(
+    _In_ WOW64_SHARED_INFORMATION_INDEX Index)
+{
+    PKUSER_SHARED_DATA SharedData;
+
+    if (Index <= Wow64SharedInformationInvalid || Index >= WOW64_SHARED_INFORMATION_COUNT)
+    {
+        return 0;
+    }
+
+    SharedData = (PKUSER_SHARED_DATA)USER_SHARED_DATA;
+    if (!SharedData)
+    {
+        return 0;
+    }
+
+    return SharedData->Wow64SharedInformation[Index];
+}
+
+NTSTATUS
+NTAPI
+Wow64cpuRunCallback(
+    _In_ ULONG_PTR CallbackRoutine,
+    _In_ ULONG_PTR Stack32,
+    _Inout_ WOW64_CONTEXT *CompatContext,
+    _Inout_ CONTEXT *NativeContext)
+{
+    PWOW64_CPU_AREA CpuArea;
+    PFN_WOW64_SET_THREAD_CONTEXT SetThreadContext;
+    PFN_WOW64_KI_USER_CALLBACK_DISPATCHER CallbackDispatcher;
+    PVOID OutputBuffer = NULL;
+    ULONG OutputLength = 0;
+    PUCHAR CalloutFrame;
+    PVOID CallBuffer;
+    ULONG CallLength;
+    ULONG ApiNumber;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(CallbackRoutine);
+
+    if (!CompatContext || !NativeContext)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    CpuArea = Wow64cpuQueryThreadArea();
+    if (!CpuArea)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    Status = Wow64cpuStoreContext(CpuArea,
+                                  CompatContext,
+                                  sizeof(*CompatContext),
+                                  FALSE);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = Wow64cpuStoreContext(CpuArea,
+                                  NativeContext,
+                                  sizeof(*NativeContext),
+                                  TRUE);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    CalloutFrame = (PUCHAR)(ULONG_PTR)Stack32;
+    if (!CalloutFrame)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    CallBuffer = (PVOID)(ULONG_PTR)(*(ULONG_PTR UNALIGNED *)(CalloutFrame + WOW64_UCALLOUT_BUFFER_OFFSET));
+    CallLength = *(ULONG UNALIGNED *)(CalloutFrame + WOW64_UCALLOUT_LENGTH_OFFSET);
+    ApiNumber = *(ULONG UNALIGNED *)(CalloutFrame + WOW64_UCALLOUT_APINUM_OFFSET);
+
+    CallbackDispatcher = Wow64cpuGetCallbackDispatcher();
+    if (!CallbackDispatcher)
+    {
+        return STATUS_PROCEDURE_NOT_FOUND;
+    }
+
+    SetThreadContext = Wow64cpuGetWow64SetThreadContext();
+    if (SetThreadContext)
+    {
+        (void)SetThreadContext(CpuArea);
+    }
+
+    Status = CallbackDispatcher(ApiNumber,
+                                CallBuffer,
+                                CallLength,
+                                &OutputBuffer,
+                                &OutputLength);
+
+    if (Status == STATUS_PENDING)
+    {
+        return Status;
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        /* Unexpected success code other than STATUS_PENDING. */
+        Status = STATUS_UNSUCCESSFUL;
+    }
+
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+Wow64cpuDispatchWow64Exception(
+    _Inout_ PWOW64_CPU_AREA CpuArea,
+    _In_ PEXCEPTION_RECORD ExceptionRecord,
+    _Inout_ WOW64_CONTEXT *CompatContext,
+    _Inout_ CONTEXT *NativeContext)
+{
+    PFN_WOW64_SET_THREAD_CONTEXT SetThreadContext;
+    PFN_WOW64_KI_USER_EXCEPTION_DISPATCHER ExceptionDispatcher;
+    NTSTATUS Status;
+
+    if (!CpuArea || !ExceptionRecord || !CompatContext || !NativeContext)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = Wow64cpuStoreContext(CpuArea,
+                                  CompatContext,
+                                  sizeof(*CompatContext),
+                                  FALSE);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = Wow64cpuStoreContext(CpuArea,
+                                  NativeContext,
+                                  sizeof(*NativeContext),
+                                  TRUE);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    ExceptionDispatcher = Wow64cpuGetExceptionDispatcher();
+    if (!ExceptionDispatcher)
+    {
+        return STATUS_PROCEDURE_NOT_FOUND;
+    }
+
+    SetThreadContext = Wow64cpuGetWow64SetThreadContext();
+    if (SetThreadContext)
+    {
+        (void)SetThreadContext(CpuArea);
+    }
+
+    Status = ExceptionDispatcher(CpuArea,
+                                  ExceptionRecord,
+                                  CompatContext,
+                                  NativeContext);
+
+    if (Status == STATUS_PENDING)
+    {
+        return Status;
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        Status = STATUS_UNSUCCESSFUL;
+    }
+
+    return Status;
+}
 
 static NTSTATUS
 Wow64cpuStoreHostContext(
@@ -594,6 +919,8 @@ Wow64cpuExecuteCompatApc(
     _Inout_ WOW64_CONTEXT *CompatContext,
     _Inout_ CONTEXT *NativeContext)
 {
+    PFN_WOW64_SET_THREAD_CONTEXT SetThreadContext;
+    PFN_WOW64_KI_USER_APC_DISPATCHER ApcDispatcher;
     NTSTATUS Status;
 
     if (!CpuArea || !CompatContext || !NativeContext)
@@ -626,16 +953,48 @@ Wow64cpuExecuteCompatApc(
         return STATUS_INVALID_PARAMETER;
     }
 
-    Wow64cpuDebugTrace("Wow64cpuExecuteCompatApc: compat trampoline not yet implemented");
+    Status = Wow64cpuStoreContext(CpuArea,
+                                  CompatContext,
+                                  sizeof(*CompatContext),
+                                  FALSE);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
 
-    CpuArea->PendingUserContext = 0;
-    CpuArea->PendingUserRoutine = 0;
-    CpuArea->PendingSystemArgument1 = 0;
-    CpuArea->PendingSystemArgument2 = 0;
-    CpuArea->Flags &= ~(WOW64_CPU_AREA_FLAG_PENDING_APC |
-                        WOW64_CPU_AREA_FLAG_APC_IN_PROGRESS);
+    Status = Wow64cpuStoreContext(CpuArea,
+                                  NativeContext,
+                                  sizeof(*NativeContext),
+                                  TRUE);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
 
-    Status = STATUS_NOT_IMPLEMENTED;
+    ApcDispatcher = Wow64cpuGetApcDispatcher();
+    if (!ApcDispatcher)
+    {
+        return STATUS_PROCEDURE_NOT_FOUND;
+    }
+
+    SetThreadContext = Wow64cpuGetWow64SetThreadContext();
+    if (SetThreadContext)
+    {
+        (void)SetThreadContext(CpuArea);
+    }
+
+    Status = ApcDispatcher(CpuArea, CompatContext, NativeContext);
+    if (Status == STATUS_PENDING)
+    {
+        return Status;
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        /* Unexpected success code other than STATUS_PENDING. */
+        Status = STATUS_UNSUCCESSFUL;
+    }
+
     return Status;
 }
 
@@ -955,6 +1314,121 @@ Wow64CpuDispatchPendingApc(
 
 NTSTATUS
 NTAPI
+Wow64CpuPrepareCallback(
+    PWOW64_CPU_AREA CpuArea,
+    WOW64_CONTEXT *CompatContext,
+    ULONG ApiNumber,
+    _In_reads_bytes_opt_(InputLength) const VOID *InputBuffer,
+    ULONG InputLength)
+{
+    ULONG Dispatcher;
+    ULONG ReturnAddress;
+    ULONG_PTR BufferPointer;
+    ULONG_PTR OldEsp;
+    ULONG_PTR NewEsp;
+    PULONG Stack32;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (!CpuArea || !CompatContext)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Dispatcher = Wow64cpuLookupSharedDispatcher(Wow64SharedInformationUserCallbackDispatcher32);
+    if (Dispatcher == 0)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    ReturnAddress = Wow64cpuLookupSharedDispatcher(Wow64SharedInformationUserApcReturn32);
+    if (ReturnAddress == 0)
+    {
+        ReturnAddress = CompatContext->Eip;
+    }
+
+    BufferPointer = (ULONG_PTR)InputBuffer;
+    if (BufferPointer > MAXULONG)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    OldEsp = CompatContext->Esp;
+    if (OldEsp <= (sizeof(ULONG) * 4))
+    {
+        return STATUS_STACK_OVERFLOW;
+    }
+
+    NewEsp = WOW64_ALIGNED_STACK_DOWN(OldEsp - (sizeof(ULONG) * 4), 4);
+    if (NewEsp == 0)
+    {
+        return STATUS_STACK_OVERFLOW;
+    }
+
+    Stack32 = (PULONG)(ULONG_PTR)NewEsp;
+
+    {
+        NTSTATUS WriteStatus = STATUS_SUCCESS;
+
+        _SEH2_TRY
+        {
+            Stack32[0] = ReturnAddress;
+            Stack32[1] = ApiNumber;
+            Stack32[2] = (ULONG)BufferPointer;
+            Stack32[3] = InputLength;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            WriteStatus = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (!NT_SUCCESS(WriteStatus))
+        {
+            return WriteStatus;
+        }
+    }
+
+    CompatContext->Esp = (ULONG)NewEsp;
+    CompatContext->Eip = Dispatcher;
+    CompatContext->ContextFlags |= WOW64_CONTEXT_FULL;
+
+    CompatContext->EFlags |= 0x00000200; /* Ensure IF remains set */
+
+    if (CompatContext->SegCs == 0)
+    {
+        CompatContext->SegCs = 0x23;
+    }
+    if (CompatContext->SegSs == 0)
+    {
+        CompatContext->SegSs = 0x1B;
+    }
+    if (CompatContext->SegDs == 0)
+    {
+        CompatContext->SegDs = 0x23;
+    }
+    if (CompatContext->SegEs == 0)
+    {
+        CompatContext->SegEs = 0x23;
+    }
+    if (CompatContext->SegFs == 0)
+    {
+        CompatContext->SegFs = 0;
+    }
+    if (CompatContext->SegGs == 0)
+    {
+        CompatContext->SegGs = 0;
+    }
+
+    Status = Wow64cpuStoreContext(CpuArea,
+                                  CompatContext,
+                                  sizeof(*CompatContext),
+                                  FALSE);
+
+    return Status;
+}
+
+NTSTATUS
+NTAPI
 Wow64CpuTakePendingApc(
     PWOW64_CPU_AREA CpuArea,
     PWOW64_PENDING_APC PendingApc)
@@ -1036,7 +1510,18 @@ Wow64TransitionToNative(
     }
 
     ZeroMemory(NativeContext, sizeof(*NativeContext));
-    NativeContext->ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_SEGMENTS;
+    NativeContext->ContextFlags = CONTEXT_CONTROL |
+                                  CONTEXT_INTEGER |
+                                  CONTEXT_SEGMENTS |
+                                  CONTEXT_FLOATING_POINT |
+                                  CONTEXT_DEBUG_REGISTERS;
+
+    NativeContext->Dr0 = CompatContext->Dr0;
+    NativeContext->Dr1 = CompatContext->Dr1;
+    NativeContext->Dr2 = CompatContext->Dr2;
+    NativeContext->Dr3 = CompatContext->Dr3;
+    NativeContext->Dr6 = CompatContext->Dr6;
+    NativeContext->Dr7 = CompatContext->Dr7;
 
     NativeContext->Rax = CompatContext->Eax;
     NativeContext->Rbx = CompatContext->Ebx;
@@ -1056,6 +1541,11 @@ Wow64TransitionToNative(
     NativeContext->SegEs = (WORD)CompatContext->SegEs;
     NativeContext->SegFs = (WORD)CompatContext->SegFs;
     NativeContext->SegGs = (WORD)CompatContext->SegGs;
+
+    RtlZeroMemory(&NativeContext->FltSave, sizeof(NativeContext->FltSave));
+    RtlCopyMemory(&NativeContext->FltSave,
+                  &CompatContext->FloatSave,
+                  sizeof(CompatContext->FloatSave));
 
     Status = Wow64cpuStoreContext(CpuArea,
                                   CompatContext,
@@ -1090,6 +1580,13 @@ Wow64TransitionToCompat(
     ZeroMemory(CompatContext, sizeof(*CompatContext));
     CompatContext->ContextFlags = WOW64_CONTEXT_FULL;
 
+    CompatContext->Dr0 = (DWORD)NativeContext->Dr0;
+    CompatContext->Dr1 = (DWORD)NativeContext->Dr1;
+    CompatContext->Dr2 = (DWORD)NativeContext->Dr2;
+    CompatContext->Dr3 = (DWORD)NativeContext->Dr3;
+    CompatContext->Dr6 = (DWORD)NativeContext->Dr6;
+    CompatContext->Dr7 = (DWORD)NativeContext->Dr7;
+
     CompatContext->Eax = (DWORD)NativeContext->Rax;
     CompatContext->Ebx = (DWORD)NativeContext->Rbx;
     CompatContext->Ecx = (DWORD)NativeContext->Rcx;
@@ -1108,6 +1605,19 @@ Wow64TransitionToCompat(
     CompatContext->SegEs = NativeContext->SegEs;
     CompatContext->SegFs = NativeContext->SegFs;
     CompatContext->SegGs = NativeContext->SegGs;
+
+    if (NativeContext->ContextFlags & CONTEXT_FLOATING_POINT)
+    {
+        RtlCopyMemory(&CompatContext->FloatSave,
+                      &NativeContext->FltSave,
+                      sizeof(CompatContext->FloatSave));
+    }
+    else
+    {
+        RtlZeroMemory(&CompatContext->FloatSave, sizeof(CompatContext->FloatSave));
+    }
+
+    RtlZeroMemory(CompatContext->ExtendedRegisters, sizeof(CompatContext->ExtendedRegisters));
 
     Status = Wow64cpuStoreContext(CpuArea,
                                   NativeContext,
