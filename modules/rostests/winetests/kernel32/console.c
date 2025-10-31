@@ -3600,6 +3600,291 @@ static void test_virtual_terminal_newline(HANDLE output_handle)
     restore_console_mode(output_handle, saved_mode);
 }
 
+static void test_virtual_terminal_charsets(HANDLE output_handle)
+{
+    DWORD saved_mode = 0;
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    COORD start;
+    WCHAR buffer[2];
+    DWORD written, read;
+    BOOL vt_out;
+
+    if (output_handle == INVALID_HANDLE_VALUE)
+    {
+        win_skip("No STD_OUTPUT_HANDLE available for VT charset test\n");
+        return;
+    }
+
+    vt_out = try_enable_vt_output(output_handle, &saved_mode);
+    if (!vt_out)
+    {
+        win_skip("VT output not supported on this console\n");
+        return;
+    }
+
+    ok(GetConsoleScreenBufferInfo(output_handle, &info),
+       "GetConsoleScreenBufferInfo failed %u\n", GetLastError());
+    start = info.dwCursorPosition;
+
+    ok(SetConsoleCursorPosition(output_handle, start),
+       "SetConsoleCursorPosition failed %u\n", GetLastError());
+
+    {
+        static const WCHAR seq_g1[] = L"\x1b)0\x0Eq\x0Fq";
+        ok(WriteConsoleW(output_handle, seq_g1, ARRAY_SIZE(seq_g1) - 1, &written, NULL),
+           "WriteConsoleW G1 failed %u\n", GetLastError());
+        ok(written == ARRAY_SIZE(seq_g1) - 1,
+           "Unexpected G1 sequence length %lu\n", written);
+
+        ok(ReadConsoleOutputCharacterW(output_handle, buffer, 2, start, &read),
+           "ReadConsoleOutputCharacterW failed %u\n", GetLastError());
+        ok(read == 2, "Expected to read 2 chars, got %lu\n", read);
+        if (read == 2)
+        {
+            ok(buffer[0] == 0x2500, "Expected U+2500, got U+%04x\n", buffer[0]);
+            ok(buffer[1] == L'q', "Expected 'q', got '%c'\n", buffer[1]);
+        }
+
+        ok(SetConsoleCursorPosition(output_handle, start),
+           "SetConsoleCursorPosition (reset) failed %u\n", GetLastError());
+        ok(WriteConsoleW(output_handle, L"  ", 2, &written, NULL),
+           "WriteConsoleW clear failed %u\n", GetLastError());
+        ok(SetConsoleCursorPosition(output_handle, start),
+           "SetConsoleCursorPosition (restore) failed %u\n", GetLastError());
+    }
+
+    {
+        static const WCHAR seq_g2[] = L"\x1b*0\x1bNqq";
+        ok(WriteConsoleW(output_handle, seq_g2, ARRAY_SIZE(seq_g2) - 1, &written, NULL),
+           "WriteConsoleW G2 failed %u\n", GetLastError());
+        ok(written == ARRAY_SIZE(seq_g2) - 1,
+           "Unexpected G2 sequence length %lu\n", written);
+
+        ok(ReadConsoleOutputCharacterW(output_handle, buffer, 2, start, &read),
+           "ReadConsoleOutputCharacterW failed %u\n", GetLastError());
+        ok(read == 2, "Expected to read 2 chars, got %lu\n", read);
+        if (read == 2)
+        {
+            ok(buffer[0] == 0x2500, "Expected U+2500 from SS2, got U+%04x\n", buffer[0]);
+            ok(buffer[1] == L'q', "Expected 'q' after SS2, got '%c'\n", buffer[1]);
+        }
+
+        ok(SetConsoleCursorPosition(output_handle, start),
+           "SetConsoleCursorPosition (reset) failed %u\n", GetLastError());
+        ok(WriteConsoleW(output_handle, L"  ", 2, &written, NULL),
+           "WriteConsoleW clear failed %u\n", GetLastError());
+        ok(SetConsoleCursorPosition(output_handle, start),
+           "SetConsoleCursorPosition (restore) failed %u\n", GetLastError());
+    }
+
+    {
+        static const WCHAR seq_g3[] = L"\x1b+0\x1bOqq";
+        ok(WriteConsoleW(output_handle, seq_g3, ARRAY_SIZE(seq_g3) - 1, &written, NULL),
+           "WriteConsoleW G3 failed %u\n", GetLastError());
+        ok(written == ARRAY_SIZE(seq_g3) - 1,
+           "Unexpected G3 sequence length %lu\n", written);
+
+        ok(ReadConsoleOutputCharacterW(output_handle, buffer, 2, start, &read),
+           "ReadConsoleOutputCharacterW failed %u\n", GetLastError());
+        ok(read == 2, "Expected to read 2 chars, got %lu\n", read);
+        if (read == 2)
+        {
+            ok(buffer[0] == 0x2500, "Expected U+2500 from SS3, got U+%04x\n", buffer[0]);
+            ok(buffer[1] == L'q', "Expected 'q' after SS3, got '%c'\n", buffer[1]);
+        }
+
+        ok(SetConsoleCursorPosition(output_handle, start),
+           "SetConsoleCursorPosition (reset) failed %u\n", GetLastError());
+        ok(WriteConsoleW(output_handle, L"  ", 2, &written, NULL),
+           "WriteConsoleW clear failed %u\n", GetLastError());
+        ok(SetConsoleCursorPosition(output_handle, start),
+           "SetConsoleCursorPosition (restore) failed %u\n", GetLastError());
+    }
+
+    {
+        static const WCHAR seq_reset[] = L"\x1b(B\x1b)B\x1b*B\x1b+B";
+        ok(WriteConsoleW(output_handle, seq_reset, ARRAY_SIZE(seq_reset) - 1, &written, NULL),
+           "WriteConsoleW reset failed %u\n", GetLastError());
+    }
+
+    restore_console_mode(output_handle, saved_mode);
+}
+
+static void test_virtual_terminal_decaln(HANDLE output_handle)
+{
+    DWORD saved_mode = 0;
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    DWORD written, read_attr, read_char;
+    BOOL vt_out;
+    COORD original_pos, sample;
+    WCHAR ch;
+    WORD attr;
+    DWORD cells;
+    COORD origin = {0, 0};
+
+    if (output_handle == INVALID_HANDLE_VALUE)
+    {
+        win_skip("No STD_OUTPUT_HANDLE available for DECALN test\n");
+        return;
+    }
+
+    vt_out = try_enable_vt_output(output_handle, &saved_mode);
+    if (!vt_out)
+    {
+        win_skip("VT output not supported on this console\n");
+        return;
+    }
+
+    ok(GetConsoleScreenBufferInfo(output_handle, &info),
+       "GetConsoleScreenBufferInfo failed %u\n", GetLastError());
+    original_pos = info.dwCursorPosition;
+
+    sample.X = min(info.dwSize.X - 1, 5);
+    sample.Y = min(info.dwSize.Y - 1, 3);
+
+    ok(SetConsoleCursorPosition(output_handle, sample),
+       "SetConsoleCursorPosition failed %u\n", GetLastError());
+    ok(WriteConsoleW(output_handle, L"Z", 1, &written, NULL),
+       "WriteConsoleW seed failed %u\n", GetLastError());
+    ok(written == 1, "Unexpected seed length %lu\n", written);
+
+    {
+        static const WCHAR seq_decaln[] = L"\x1b#8";
+        ok(WriteConsoleW(output_handle, seq_decaln, ARRAY_SIZE(seq_decaln) - 1, &written, NULL),
+           "WriteConsoleW DECALN failed %u\n", GetLastError());
+        ok(written == ARRAY_SIZE(seq_decaln) - 1,
+           "Unexpected DECALN length %lu\n", written);
+    }
+
+    ok(ReadConsoleOutputCharacterW(output_handle, &ch, 1, origin, &read_char),
+       "ReadConsoleOutputCharacterW origin failed %u\n", GetLastError());
+    ok(read_char == 1, "Expected to read origin char\n");
+    if (read_char == 1)
+        ok(ch == L'E', "Expected 'E' at origin, got '%c'\n", ch);
+
+    ok(ReadConsoleOutputCharacterW(output_handle, &ch, 1, sample, &read_char),
+       "ReadConsoleOutputCharacterW sample failed %u\n", GetLastError());
+    ok(read_char == 1, "Expected to read sample char\n");
+    if (read_char == 1)
+        ok(ch == L'E', "Expected 'E' at sample, got '%c'\n", ch);
+
+    ok(ReadConsoleOutputAttribute(output_handle, &attr, 1, origin, &read_attr),
+       "ReadConsoleOutputAttribute origin failed %u\n", GetLastError());
+    if (read_attr == 1)
+        ok(attr == info.wAttributes,
+           "Expected default attr %#x, got %#x\n", info.wAttributes, attr);
+
+    ok(ReadConsoleOutputAttribute(output_handle, &attr, 1, sample, &read_attr),
+       "ReadConsoleOutputAttribute sample failed %u\n", GetLastError());
+    if (read_attr == 1)
+        ok(attr == info.wAttributes,
+           "Expected default attr %#x at sample, got %#x\n", info.wAttributes, attr);
+
+    cells = (DWORD)info.dwSize.X * info.dwSize.Y;
+    ok(FillConsoleOutputCharacterW(output_handle, L' ', cells, origin, &written),
+       "FillConsoleOutputCharacterW restore failed %u\n", GetLastError());
+    ok(FillConsoleOutputAttribute(output_handle, info.wAttributes, cells, origin, &written),
+       "FillConsoleOutputAttribute restore failed %u\n", GetLastError());
+    ok(SetConsoleCursorPosition(output_handle, original_pos),
+       "SetConsoleCursorPosition restore failed %u\n", GetLastError());
+
+    restore_console_mode(output_handle, saved_mode);
+}
+
+static void test_virtual_terminal_soft_reset(HANDLE output_handle)
+{
+    DWORD saved_mode = 0;
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    DWORD written, read_attr, read_char;
+    BOOL vt_out;
+    COORD original_pos, sample;
+    WCHAR ch;
+    WORD attr;
+    DWORD cells;
+    COORD origin = {0, 0};
+
+    if (output_handle == INVALID_HANDLE_VALUE)
+    {
+        win_skip("No STD_OUTPUT_HANDLE available for soft reset test\n");
+        return;
+    }
+
+    vt_out = try_enable_vt_output(output_handle, &saved_mode);
+    if (!vt_out)
+    {
+        win_skip("VT output not supported on this console\n");
+        return;
+    }
+
+    ok(GetConsoleScreenBufferInfo(output_handle, &info),
+       "GetConsoleScreenBufferInfo failed %u\n", GetLastError());
+    original_pos = info.dwCursorPosition;
+
+    sample.X = min(info.dwSize.X - 1, 7);
+    sample.Y = min(info.dwSize.Y - 1, 4);
+
+    {
+        static const WCHAR seq_sgr[] = L"\x1b[31;47m";
+        ok(WriteConsoleW(output_handle, seq_sgr, ARRAY_SIZE(seq_sgr) - 1, &written, NULL),
+           "WriteConsoleW SGR failed %u\n", GetLastError());
+        ok(written == ARRAY_SIZE(seq_sgr) - 1,
+           "Unexpected SGR length %lu\n", written);
+    }
+
+    ok(SetConsoleCursorPosition(output_handle, sample),
+       "SetConsoleCursorPosition failed %u\n", GetLastError());
+    ok(WriteConsoleW(output_handle, L"A", 1, &written, NULL),
+       "WriteConsoleW data failed %u\n", GetLastError());
+    ok(written == 1, "Unexpected data length %lu\n", written);
+
+    {
+        static const WCHAR seq_decstr[] = L"\x1b[!p";
+        ok(WriteConsoleW(output_handle, seq_decstr, ARRAY_SIZE(seq_decstr) - 1, &written, NULL),
+           "WriteConsoleW DECSTR failed %u\n", GetLastError());
+        ok(written == ARRAY_SIZE(seq_decstr) - 1,
+           "Unexpected DECSTR length %lu\n", written);
+    }
+
+    ok(ReadConsoleOutputCharacterW(output_handle, &ch, 1, sample, &read_char),
+       "ReadConsoleOutputCharacterW post-reset failed %u\n", GetLastError());
+    ok(read_char == 1, "Expected to read post-reset char\n");
+    if (read_char == 1)
+        ok(ch == L' ', "Expected space after reset, got '%c'\n", ch);
+
+    ok(ReadConsoleOutputAttribute(output_handle, &attr, 1, sample, &read_attr),
+       "ReadConsoleOutputAttribute post-reset failed %u\n", GetLastError());
+    if (read_attr == 1)
+        ok(attr == info.wAttributes,
+           "Expected default attr %#x after reset, got %#x\n", info.wAttributes, attr);
+
+    {
+        CONSOLE_SCREEN_BUFFER_INFO after;
+        ok(GetConsoleScreenBufferInfo(output_handle, &after),
+           "GetConsoleScreenBufferInfo post-reset failed %u\n", GetLastError());
+        ok(after.dwCursorPosition.X == 0 && after.dwCursorPosition.Y == 0,
+           "Expected cursor at origin after reset, got (%d,%d)\n",
+           after.dwCursorPosition.X, after.dwCursorPosition.Y);
+    }
+
+    {
+        static const WCHAR seq_reset[] = L"\x1b[0m";
+        ok(WriteConsoleW(output_handle, seq_reset, ARRAY_SIZE(seq_reset) - 1, &written, NULL),
+           "WriteConsoleW reset attributes failed %u\n", GetLastError());
+        ok(written == ARRAY_SIZE(seq_reset) - 1,
+           "Unexpected reset length %lu\n", written);
+    }
+
+    cells = (DWORD)info.dwSize.X * info.dwSize.Y;
+    ok(FillConsoleOutputCharacterW(output_handle, L' ', cells, origin, &written),
+       "FillConsoleOutputCharacterW restore failed %u\n", GetLastError());
+    ok(FillConsoleOutputAttribute(output_handle, info.wAttributes, cells, origin, &written),
+       "FillConsoleOutputAttribute restore failed %u\n", GetLastError());
+    ok(SetConsoleCursorPosition(output_handle, original_pos),
+       "SetConsoleCursorPosition restore failed %u\n", GetLastError());
+
+    restore_console_mode(output_handle, saved_mode);
+}
+
 static void test_virtual_terminal_osc_extras(HANDLE output_handle)
 {
     DWORD saved_mode = 0;
@@ -3672,10 +3957,10 @@ static void test_virtual_terminal_osc_extras(HANDLE output_handle)
     restore_console_mode(output_handle, saved_mode);
 }
 
-static void test_virtual_terminal_osc(HANDLE output_handle)
+static void test_virtual_terminal_osc(HANDLE input_handle, HANDLE output_handle)
 {
-    DWORD saved_mode = 0;
-    BOOL vt_out;
+    DWORD saved_out = 0, saved_in = 0;
+    BOOL vt_out, vt_in = FALSE;
     WCHAR original_title[256];
     WCHAR current_title[256];
     DWORD len;
@@ -3689,12 +3974,15 @@ static void test_virtual_terminal_osc(HANDLE output_handle)
         return;
     }
 
-    vt_out = try_enable_vt_output(output_handle, &saved_mode);
+    vt_out = try_enable_vt_output(output_handle, &saved_out);
     if (!vt_out)
     {
         win_skip("VT output not supported on this console\n");
         return;
     }
+
+    if (input_handle != INVALID_HANDLE_VALUE)
+        vt_in = try_enable_vt_input(input_handle, &saved_in);
 
     len = GetConsoleTitleW(original_title, ARRAY_SIZE(original_title));
     ok(len < ARRAY_SIZE(original_title), "Original title truncated\n");
@@ -3719,7 +4007,9 @@ static void test_virtual_terminal_osc(HANDLE output_handle)
     if (!GetConsoleScreenBufferInfoEx(output_handle, &info))
     {
         skip("GetConsoleScreenBufferInfoEx not supported\n");
-        restore_console_mode(output_handle, saved_mode);
+        restore_console_mode(output_handle, saved_out);
+        if (vt_in)
+            restore_console_mode(input_handle, saved_in);
         return;
     }
 
@@ -3743,7 +4033,83 @@ static void test_virtual_terminal_osc(HANDLE output_handle)
     ok(SetConsoleScreenBufferInfoEx(output_handle, &info),
        "SetConsoleScreenBufferInfoEx failed %u\n", GetLastError());
 
-    restore_console_mode(output_handle, saved_mode);
+    info.cbSize = sizeof(info);
+    ok(GetConsoleScreenBufferInfoEx(output_handle, &info),
+       "GetConsoleScreenBufferInfoEx failed %u\n", GetLastError());
+
+    if (!info.dwSize.X || !info.dwSize.Y)
+        win_skip("Console buffer size unavailable\n");
+    else
+    {
+        WORD default_attr = info.wAttributes;
+        UCHAR default_fg = default_attr & 0x0f;
+        UCHAR default_bg = (default_attr >> 4) & 0x0f;
+        COLORREF original_fg = info.ColorTable[default_fg];
+        COLORREF original_bg = info.ColorTable[default_bg];
+        static const WCHAR osc_fg[] = L"\x1b]10;#445566\x07";
+        static const WCHAR osc_bg[] = L"\x1b]11;#1a2b3c\x07";
+        int expected_len;
+        WCHAR expected_response[32];
+
+        ok(WriteConsoleW(output_handle, osc_fg, ARRAY_SIZE(osc_fg) - 1, &written, NULL),
+           "WriteConsoleW OSC10 failed %u\n", GetLastError());
+        ok(written == ARRAY_SIZE(osc_fg) - 1,
+           "Unexpected OSC10 length %lu\n", written);
+
+        info.cbSize = sizeof(info);
+        ok(GetConsoleScreenBufferInfoEx(output_handle, &info),
+           "GetConsoleScreenBufferInfoEx failed %u\n", GetLastError());
+        ok(info.ColorTable[default_fg] == RGB(0x44, 0x55, 0x66),
+           "Expected default fg #445566, got 0x%08lx\n", info.ColorTable[default_fg]);
+
+        if (vt_in)
+        {
+            WCHAR response[32];
+            static const WCHAR osc_fg_query[] = L"\x1b]10;?\x07";
+            FlushConsoleInputBuffer(input_handle);
+            ok(WriteConsoleW(output_handle, osc_fg_query, ARRAY_SIZE(osc_fg_query) - 1, &written, NULL),
+               "WriteConsoleW OSC10 query failed %u\n", GetLastError());
+            ok(written == ARRAY_SIZE(osc_fg_query) - 1,
+               "Unexpected OSC10 query length %lu\n", written);
+            expected_len = _snwprintf(expected_response, ARRAY_SIZE(expected_response),
+                                     L"\x1b]10;rgb:%04X/%04X/%04X\x07",
+                                     0x44 * 0x101, 0x55 * 0x101, 0x66 * 0x101);
+            ok(expected_len > 0, "swprintf failed for OSC10 response\n");
+            if (expected_len > 0)
+            {
+                DWORD expected_len_dw = (DWORD)expected_len;
+                DWORD collected = read_vt_response(input_handle,
+                                                   response,
+                                                   ARRAY_SIZE(response),
+                                                   expected_len_dw);
+                ok(collected == expected_len_dw,
+                   "OSC10 query collected %lu (expected %u)\n", collected, expected_len_dw);
+                if (collected == expected_len_dw)
+                    ok(!memcmp(response, expected_response, expected_len_dw * sizeof(WCHAR)),
+                       "OSC10 response mismatch\n");
+            }
+        }
+
+        ok(WriteConsoleW(output_handle, osc_bg, ARRAY_SIZE(osc_bg) - 1, &written, NULL),
+           "WriteConsoleW OSC11 failed %u\n", GetLastError());
+        ok(written == ARRAY_SIZE(osc_bg) - 1,
+           "Unexpected OSC11 length %lu\n", written);
+
+        info.cbSize = sizeof(info);
+        ok(GetConsoleScreenBufferInfoEx(output_handle, &info),
+           "GetConsoleScreenBufferInfoEx failed %u\n", GetLastError());
+        ok(info.ColorTable[default_bg] == RGB(0x1a, 0x2b, 0x3c),
+           "Expected default bg #1a2b3c, got 0x%08lx\n", info.ColorTable[default_bg]);
+
+        info.ColorTable[default_fg] = original_fg;
+        info.ColorTable[default_bg] = original_bg;
+        ok(SetConsoleScreenBufferInfoEx(output_handle, &info),
+           "SetConsoleScreenBufferInfoEx restore failed %u\n", GetLastError());
+    }
+
+    restore_console_mode(output_handle, saved_out);
+    if (vt_in)
+        restore_console_mode(input_handle, saved_in);
 }
 
 static void test_virtual_terminal_popups(HANDLE input_handle, HANDLE output_handle)
@@ -3961,13 +4327,16 @@ START_TEST(console)
     test_WriteConsoleInputA(hConIn);
     test_WriteConsoleInputW(hConIn);
     test_virtual_terminal_modes(hConIn, hConOut);
+    test_virtual_terminal_charsets(hConOut);
+    test_virtual_terminal_decaln(hConOut);
+    test_virtual_terminal_soft_reset(hConOut);
     test_virtual_terminal_scrolling(hConOut);
     test_virtual_terminal_erases(hConOut);
     test_virtual_terminal_reports(hConIn, hConOut);
     test_virtual_terminal_window_reports(hConIn, hConOut);
     test_virtual_terminal_newline(hConOut);
     test_virtual_terminal_osc_extras(hConOut);
-    test_virtual_terminal_osc(hConOut);
+    test_virtual_terminal_osc(hConIn, hConOut);
     test_virtual_terminal_popups(hConIn, hConOut);
     test_WriteConsoleOutputCharacterA(hConOut);
     test_WriteConsoleOutputCharacterW(hConOut);
