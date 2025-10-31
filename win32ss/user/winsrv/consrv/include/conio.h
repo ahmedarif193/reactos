@@ -156,6 +156,8 @@ typedef struct _TEXTMODE_SCREEN_BUFFER
         COLORREF SavedBgColor;                   /* Saved background colour for DECSC */
         BOOLEAN SavedUseRgbForeground;           /* Saved RGB flag for foreground */
         BOOLEAN SavedUseRgbBackground;           /* Saved RGB flag for background */
+        SHORT   ScrollTop;                       /* Top margin for scrolling (0-based) */
+        SHORT   ScrollBottom;                    /* Bottom margin for scrolling (0-based inclusive) */
     } VtState;
 } TEXTMODE_SCREEN_BUFFER, *PTEXTMODE_SCREEN_BUFFER;
 
