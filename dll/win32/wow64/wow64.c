@@ -1001,10 +1001,14 @@ Wow64DeliverPendingApc(VOID)
     }
 
     Status = Wow64CpuDispatchPendingApc(CpuArea);
+    if (Status == STATUS_PENDING)
+    {
+        return Status;
+    }
+
     if (!NT_SUCCESS(Status))
     {
-        if (Status != STATUS_NOT_IMPLEMENTED &&
-            Status != STATUS_PENDING)
+        if (Status != STATUS_NOT_IMPLEMENTED)
         {
             Wow64ReportStub("Wow64DeliverPendingApc: dispatcher failed");
         }
@@ -1012,7 +1016,214 @@ Wow64DeliverPendingApc(VOID)
         return Status;
     }
 
-    return STATUS_SUCCESS;
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+Wow64KiUserCallbackDispatcher(
+    _In_ ULONG ApiNumber,
+    _In_reads_bytes_opt_(InputLength) PVOID InputBuffer,
+    _In_ ULONG InputLength,
+    _Outptr_result_maybenull_ PVOID *OutputBuffer,
+    _Out_opt_ PULONG OutputLength)
+{
+    PWOW64_CPU_AREA CpuArea;
+    WOW64_CONTEXT CompatContext;
+    CONTEXT NativeContext;
+    NTSTATUS Status;
+
+    if (OutputBuffer)
+    {
+        *OutputBuffer = NULL;
+    }
+
+    if (OutputLength)
+    {
+        *OutputLength = 0;
+    }
+
+    CpuArea = (PWOW64_CPU_AREA)Wow64GetThreadContext();
+    if (!CpuArea)
+    {
+        CpuArea = Wow64State.CpuArea;
+    }
+
+    if (!CpuArea)
+    {
+        Wow64ReportStub("Wow64KiUserCallbackDispatcher: no CPU area");
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (!Wow64EnsureCallbackTlsIndex())
+    {
+        return STATUS_NO_MEMORY;
+    }
+
+    Status = Wow64CpuGetContext(CpuArea, &CompatContext, sizeof(CompatContext));
+    if (!NT_SUCCESS(Status))
+    {
+        RtlZeroMemory(&CompatContext, sizeof(CompatContext));
+        CompatContext.ContextFlags = WOW64_CONTEXT_FULL;
+        CompatContext.EFlags = 0x00000202;
+        CompatContext.SegCs = 0x23;
+        CompatContext.SegSs = 0x1B;
+        CompatContext.SegDs = 0x23;
+        CompatContext.SegEs = 0x23;
+        CompatContext.SegFs = 0;
+        CompatContext.SegGs = 0;
+    }
+
+    Status = Wow64CpuPrepareCallback(CpuArea,
+                                     &CompatContext,
+                                     ApiNumber,
+                                     InputBuffer,
+                                     InputLength);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = Wow64TransitionToNative(CpuArea, &CompatContext, &NativeContext);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    (void)Wow64SetThreadContext(CpuArea);
+
+    {
+        WOW64_CALLBACK_FRAME CallbackFrame;
+
+        CallbackFrame.Previous = Wow64GetCallbackFrame();
+        CallbackFrame.CpuArea = CpuArea;
+        CallbackFrame.OutputBuffer = OutputBuffer;
+        CallbackFrame.OutputLength = OutputLength;
+        CallbackFrame.Flags = WOW64_CALLBACK_FRAME_FLAG_CALLBACK;
+
+        NTSTATUS ContinueStatus;
+
+        Status = STATUS_PENDING;
+        Wow64SetCallbackFrame(&CallbackFrame);
+
+        ContinueStatus = NtContinue(&NativeContext, FALSE);
+
+        Wow64SetCallbackFrame(CallbackFrame.Previous);
+
+        if (!NT_SUCCESS(ContinueStatus))
+        {
+            Status = ContinueStatus;
+        }
+    }
+
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+Wow64KiUserApcDispatcher(
+    _Inout_ PWOW64_CPU_AREA CpuArea,
+    _Inout_ WOW64_CONTEXT *CompatContext,
+    _Inout_ CONTEXT *NativeContext)
+{
+    NTSTATUS Status;
+
+    if (!CpuArea || !CompatContext || !NativeContext)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!Wow64EnsureCallbackTlsIndex())
+    {
+        return STATUS_NO_MEMORY;
+    }
+
+    (void)Wow64SetThreadContext(CpuArea);
+
+    {
+        WOW64_CALLBACK_FRAME Frame;
+
+        Frame.Previous = Wow64GetCallbackFrame();
+        Frame.CpuArea = CpuArea;
+        Frame.OutputBuffer = NULL;
+        Frame.OutputLength = NULL;
+        Frame.Flags = WOW64_CALLBACK_FRAME_FLAG_APC;
+        NTSTATUS ContinueStatus;
+
+        Status = STATUS_PENDING;
+        Wow64SetCallbackFrame(&Frame);
+
+        ContinueStatus = NtContinue(NativeContext, FALSE);
+
+        Wow64SetCallbackFrame(Frame.Previous);
+
+        if (!NT_SUCCESS(ContinueStatus))
+        {
+            Status = ContinueStatus;
+        }
+    }
+
+    return Status;
+}
+
+VOID
+WINAPI
+Wow64NotifyApcReturn(VOID)
+{
+    PWOW64_CALLBACK_FRAME Frame;
+
+    Frame = Wow64GetCallbackFrame();
+    if (!Frame)
+    {
+        return;
+    }
+
+    if (!(Frame->Flags & WOW64_CALLBACK_FRAME_FLAG_APC))
+    {
+        return;
+    }
+
+    Wow64SetCallbackFrame(Frame->Previous);
+}
+
+NTSTATUS
+NTAPI
+Wow64KiUserExceptionDispatcher(
+    _Inout_ PWOW64_CPU_AREA CpuArea,
+    _In_ PEXCEPTION_RECORD ExceptionRecord,
+    _Inout_ WOW64_CONTEXT *CompatContext,
+    _Inout_ CONTEXT *NativeContext)
+{
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(ExceptionRecord);
+    UNREFERENCED_PARAMETER(CompatContext);
+
+    if (!CpuArea || !NativeContext)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!Wow64EnsureCallbackTlsIndex())
+    {
+        return STATUS_NO_MEMORY;
+    }
+
+    (void)Wow64SetThreadContext(CpuArea);
+
+    Status = STATUS_PENDING;
+
+    {
+        NTSTATUS ContinueStatus;
+
+        ContinueStatus = NtContinue(NativeContext, FALSE);
+        if (!NT_SUCCESS(ContinueStatus))
+        {
+            Status = ContinueStatus;
+        }
+    }
+
+    return Status;
 }
 
 /* ===================================================================
