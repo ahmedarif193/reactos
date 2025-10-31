@@ -130,6 +130,8 @@ typedef struct _TEXTMODE_SCREEN_BUFFER
 
     USHORT ScreenDefaultAttrib; /* Default screen char attribute */
     USHORT PopupDefaultAttrib;  /* Default popup char attribute */
+    COLORREF *FgColors;         /* Extended per-cell foreground colours (CLR_INVALID when unused) */
+    COLORREF *BgColors;         /* Extended per-cell background colours (CLR_INVALID when unused) */
     struct _VT_MODE_STATE
     {
         BOOLEAN Active;             /* VT processing currently enabled */
@@ -146,9 +148,48 @@ typedef struct _TEXTMODE_SCREEN_BUFFER
         USHORT  PrimaryVirtualY;                 /* Saved scrollback origin */
         CONSOLE_CURSOR_INFO DefaultCursorInfo;   /* Default cursor info for DECSCUSR reset */
         UCHAR   CurrentCursorStyle;              /* Last DECSCUSR style parameter */
+        BOOLEAN UseRgbForeground;                /* TRUE when foreground colour uses 24-bit RGB */
+        BOOLEAN UseRgbBackground;                /* TRUE when background colour uses 24-bit RGB */
+        COLORREF CurrentFgColor;                 /* Current 24-bit foreground colour */
+        COLORREF CurrentBgColor;                 /* Current 24-bit background colour */
+        COLORREF SavedFgColor;                   /* Saved foreground colour for DECSC */
+        COLORREF SavedBgColor;                   /* Saved background colour for DECSC */
+        BOOLEAN SavedUseRgbForeground;           /* Saved RGB flag for foreground */
+        BOOLEAN SavedUseRgbBackground;           /* Saved RGB flag for background */
     } VtState;
 } TEXTMODE_SCREEN_BUFFER, *PTEXTMODE_SCREEN_BUFFER;
 
+FORCEINLINE ULONG
+ConioCoordToIndex(PTEXTMODE_SCREEN_BUFFER Buff, ULONG X, ULONG Y)
+{
+    return ((Y + Buff->VirtualY) % Buff->ScreenBufferSize.Y) * Buff->ScreenBufferSize.X + X;
+}
+
+FORCEINLINE COLORREF
+ConioGetCellFgColor(PTEXTMODE_SCREEN_BUFFER Buff, ULONG X, ULONG Y)
+{
+    if (!Buff->FgColors) return CLR_INVALID;
+    return Buff->FgColors[ConioCoordToIndex(Buff, X, Y)];
+}
+
+FORCEINLINE COLORREF
+ConioGetCellBgColor(PTEXTMODE_SCREEN_BUFFER Buff, ULONG X, ULONG Y)
+{
+    if (!Buff->BgColors) return CLR_INVALID;
+    return Buff->BgColors[ConioCoordToIndex(Buff, X, Y)];
+}
+
+FORCEINLINE VOID
+ConioSetCellFgColor(PTEXTMODE_SCREEN_BUFFER Buff, ULONG X, ULONG Y, COLORREF Color)
+{
+    if (Buff->FgColors) Buff->FgColors[ConioCoordToIndex(Buff, X, Y)] = Color;
+}
+
+FORCEINLINE VOID
+ConioSetCellBgColor(PTEXTMODE_SCREEN_BUFFER Buff, ULONG X, ULONG Y, COLORREF Color)
+{
+    if (Buff->BgColors) Buff->BgColors[ConioCoordToIndex(Buff, X, Y)] = Color;
+}
 
 /*
  * See graphics.c for the implementation
