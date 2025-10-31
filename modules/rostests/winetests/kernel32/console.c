@@ -3019,6 +3019,77 @@ static void test_GetConsoleScreenBufferInfoEx(HANDLE std_output)
     ok(GetLastError() == 0xdeadbeef, "got %u, expected 0xdeadbeef\n", GetLastError());
 }
 
+static void test_virtual_terminal_modes(HANDLE input_handle, HANDLE output_handle)
+{
+    DWORD original_in, original_out, mode, flags_out;
+    BOOL ret;
+
+    ret = GetConsoleMode(input_handle, &original_in);
+    ok(ret == TRUE, "Expected GetConsoleMode to return TRUE, got %d\n", ret);
+    if (!ret)
+        return;
+
+    SetLastError(0xdeadbeef);
+    ret = SetConsoleMode(input_handle, original_in | ENABLE_VIRTUAL_TERMINAL_INPUT);
+    if (!ret)
+    {
+        DWORD error = GetLastError();
+        ok(error == ERROR_INVALID_PARAMETER || error == ERROR_INVALID_FUNCTION ||
+           error == ERROR_CALL_NOT_IMPLEMENTED,
+           "Unexpected error when enabling VT input: %u\n", error);
+
+        ret = GetConsoleMode(input_handle, &mode);
+        ok(ret == TRUE, "Expected GetConsoleMode to return TRUE, got %d\n", ret);
+        if (ret)
+            ok((mode & ENABLE_VIRTUAL_TERMINAL_INPUT) == 0,
+               "VT input flag should remain clear when unsupported\n");
+    }
+    else
+    {
+        ret = GetConsoleMode(input_handle, &mode);
+        ok(ret == TRUE, "Expected GetConsoleMode to return TRUE, got %d\n", ret);
+        if (ret)
+            ok(mode & ENABLE_VIRTUAL_TERMINAL_INPUT,
+               "Expected VT input flag to be reported after enabling\n");
+
+        ret = SetConsoleMode(input_handle, original_in);
+        ok(ret == TRUE, "Expected SetConsoleMode to restore mode, got %d\n", ret);
+    }
+
+    ret = GetConsoleMode(output_handle, &original_out);
+    ok(ret == TRUE, "Expected GetConsoleMode to return TRUE, got %d\n", ret);
+    if (!ret)
+        return;
+
+    flags_out = ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+    SetLastError(0xdeadbeef);
+    ret = SetConsoleMode(output_handle, original_out | flags_out);
+    if (!ret)
+    {
+        DWORD error = GetLastError();
+        ok(error == ERROR_INVALID_PARAMETER || error == ERROR_INVALID_FUNCTION ||
+           error == ERROR_CALL_NOT_IMPLEMENTED,
+           "Unexpected error when enabling VT output: %u\n", error);
+
+        ret = GetConsoleMode(output_handle, &mode);
+        ok(ret == TRUE, "Expected GetConsoleMode to return TRUE, got %d\n", ret);
+        if (ret)
+            ok((mode & flags_out) == (original_out & flags_out),
+               "VT output flags should remain unchanged when unsupported\n");
+    }
+    else
+    {
+        ret = GetConsoleMode(output_handle, &mode);
+        ok(ret == TRUE, "Expected GetConsoleMode to return TRUE, got %d\n", ret);
+        if (ret)
+            ok((mode & flags_out) == flags_out,
+               "Expected VT output flags to be reported after enabling\n");
+
+        ret = SetConsoleMode(output_handle, original_out);
+        ok(ret == TRUE, "Expected SetConsoleMode to restore mode, got %d\n", ret);
+    }
+}
+
 START_TEST(console)
 {
     static const char font_name[] = "Lucida Console";
@@ -3155,6 +3226,7 @@ START_TEST(console)
     test_GetNumberOfConsoleInputEvents(hConIn);
     test_WriteConsoleInputA(hConIn);
     test_WriteConsoleInputW(hConIn);
+    test_virtual_terminal_modes(hConIn, hConOut);
     test_WriteConsoleOutputCharacterA(hConOut);
     test_WriteConsoleOutputCharacterW(hConOut);
     test_WriteConsoleOutputAttribute(hConOut);
