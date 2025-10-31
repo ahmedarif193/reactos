@@ -11,6 +11,34 @@
 #include <ctype.h>
 #include <wctype.h>
 
+#if (__STDC__ && !defined(_FORCENAMELESSSTRUCT)) || defined(NONAMELESSSTRUCT)
+#define DUMMYSTRUCTNAME s
+#define DUMMYSTRUCTNAME1 s1
+#define DUMMYSTRUCTNAME2 s2
+#define DUMMYSTRUCTNAME3 s3
+#define DUMMYSTRUCTNAME4 s4
+#define DUMMYSTRUCTNAME5 s5
+#else
+#define DUMMYSTRUCTNAME
+#define DUMMYSTRUCTNAME1
+#define DUMMYSTRUCTNAME2
+#define DUMMYSTRUCTNAME3
+#define DUMMYSTRUCTNAME4
+#define DUMMYSTRUCTNAME5
+#endif
+
+#if (__STDC__ && !defined(_FORCENAMELESSUNION)) || defined(NONAMELESSUNION)
+#define DUMMYUNIONNAME u
+#define DUMMYUNIONNAME1 u1
+#define DUMMYUNIONNAME2 u2
+#define DUMMYUNIONNAME3 u3
+#else
+#define DUMMYUNIONNAME
+#define DUMMYUNIONNAME1
+#define DUMMYUNIONNAME2
+#define DUMMYUNIONNAME3
+#endif
+
 #define wcsnicmp strncmpiW
 #define wcsicmp strcmpiW
 #define wcsrchr strrchrW
@@ -146,6 +174,9 @@ INT __WideCharToMultiByte( UINT page, DWORD flags, LPCWSTR src, INT srclen, LPST
 #define IMAGE_DEBUG_TYPE_FIXUP 6
 #define IMAGE_DEBUG_TYPE_OMAP_TO_SRC 7
 #define IMAGE_DEBUG_TYPE_OMAP_FROM_SRC 8
+#ifndef IMAGE_DIRECTORY_ENTRY_EXCEPTION
+#define IMAGE_DIRECTORY_ENTRY_EXCEPTION 3
+#endif
 #define IMAGE_SYM_CLASS_EXTERNAL 2
 #define IMAGE_SYM_CLASS_FILE 103
 #define IMAGE_DIRECTORY_ENTRY_EXPORT	0
@@ -449,6 +480,46 @@ typedef struct _CONTEXT {
     DWORD64 LastExceptionToRip;
     DWORD64 LastExceptionFromRip;
 } CONTEXT;
+
+typedef struct _RUNTIME_FUNCTION
+{
+    DWORD BeginAddress;
+    DWORD EndAddress;
+    union
+    {
+        DWORD UnwindInfoAddress;
+        DWORD UnwindData;
+    } DUMMYUNIONNAME;
+} RUNTIME_FUNCTION, *PRUNTIME_FUNCTION;
+
+#ifdef NONAMELESSUNION
+#define UnwindInfoAddress DUMMYUNIONNAME.UnwindInfoAddress
+#define UnwindData        DUMMYUNIONNAME.UnwindData
+#endif
+
+#define UNW_FLAG_NHANDLER   0x0
+#define UNW_FLAG_EHANDLER   0x1
+#define UNW_FLAG_UHANDLER   0x2
+#define UNW_FLAG_CHAININFO  0x4
+
+#define UNWIND_HISTORY_TABLE_SIZE 12
+typedef struct _UNWIND_HISTORY_TABLE_ENTRY
+{
+    ULONG_PTR ImageBase;
+    PRUNTIME_FUNCTION FunctionEntry;
+} UNWIND_HISTORY_TABLE_ENTRY, *PUNWIND_HISTORY_TABLE_ENTRY;
+
+typedef struct _UNWIND_HISTORY_TABLE
+{
+    DWORD Count;
+    BYTE  LocalHint;
+    BYTE  GlobalHint;
+    BYTE  Search;
+    BYTE  Once;
+    ULONG_PTR LowAddress;
+    ULONG_PTR HighAddress;
+    UNWIND_HISTORY_TABLE_ENTRY Entry[UNWIND_HISTORY_TABLE_SIZE];
+} UNWIND_HISTORY_TABLE, *PUNWIND_HISTORY_TABLE;
 
 #elif defined TARGET_arm
 
