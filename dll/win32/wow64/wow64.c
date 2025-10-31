@@ -13,6 +13,7 @@
 #include <string.h>
 #include <reactos/wow64apc.h>
 #include <reactos/wow64cpu.h>
+#include <reactos/wow64shared.h>
 
 #if defined(__GNUC__)
 #define WOW64_UNUSED __attribute__((unused))
@@ -58,12 +59,46 @@ typedef struct _WOW64_INTERNAL_STATE
     UCHAR CsrConnectInfo[64];
 } WOW64_INTERNAL_STATE;
 
+PVOID Wow64GetThreadContext(VOID);
 NTSTATUS Wow64SetThreadContext(_In_ PVOID ThreadContext);
 NTSTATUS Wow64ClearThreadContext(VOID);
 NTSTATUS Wow64DeliverPendingApcEx(_In_ BOOLEAN CheckTls);
 
 static WOW64_INTERNAL_STATE Wow64State;
 static LONG Wow64TlsIndex = TLS_OUT_OF_INDEXES;
+static LONG Wow64CallbackTlsIndex = TLS_OUT_OF_INDEXES;
+
+#ifndef USER_SHARED_DATA
+#define USER_SHARED_DATA 0x7FFE0000ULL
+#endif
+
+#ifndef _PEB_LDR_DATA32_DEFINED
+#define _PEB_LDR_DATA32_DEFINED
+typedef struct _PEB_LDR_DATA32
+{
+    ULONG Length;
+    BOOLEAN Initialized;
+    ULONG SsHandle;
+    LIST_ENTRY32 InLoadOrderModuleList;
+    LIST_ENTRY32 InMemoryOrderModuleList;
+    LIST_ENTRY32 InInitializationOrderModuleList;
+    ULONG EntryInProgress;
+    ULONG ShutdownInProgress;
+    ULONG ShutdownThreadId;
+} PEB_LDR_DATA32, *PPEB_LDR_DATA32;
+#endif
+
+typedef struct _LDR_DATA_TABLE_ENTRY32
+{
+    LIST_ENTRY32 InLoadOrderLinks;
+    LIST_ENTRY32 InMemoryOrderLinks;
+    LIST_ENTRY32 InInitializationOrderLinks;
+    ULONG DllBase;
+    ULONG EntryPoint;
+    ULONG SizeOfImage;
+    UNICODE_STRING32 FullDllName;
+    UNICODE_STRING32 BaseDllName;
+} LDR_DATA_TABLE_ENTRY32, *PLDR_DATA_TABLE_ENTRY32;
 
 #define WIN_OBJ_DIR L"\\Windows"
 #define BASESRV_SERVERDLL_INDEX 1
@@ -102,6 +137,18 @@ static WOW64_PROCESS_INFO Wow64ProcessInfo =
     {0, 0, 0, 0}
 };
 
+typedef struct _WOW64_CALLBACK_FRAME
+{
+    struct _WOW64_CALLBACK_FRAME *Previous;
+    PWOW64_CPU_AREA CpuArea;
+    PVOID *OutputBuffer;
+    PULONG OutputLength;
+    ULONG Flags;
+} WOW64_CALLBACK_FRAME, *PWOW64_CALLBACK_FRAME;
+
+#define WOW64_CALLBACK_FRAME_FLAG_CALLBACK 0x00000001
+#define WOW64_CALLBACK_FRAME_FLAG_APC       0x00000002
+
 static NTSTATUS
 Wow64PublishProcessInfo(VOID)
 {
@@ -130,6 +177,199 @@ Wow64PublishProcessInfo(VOID)
     }
 
     return Status;
+}
+
+static BOOLEAN
+Wow64EnsureCallbackTlsIndex(VOID)
+{
+    LONG CurrentIndex;
+
+    CurrentIndex = Wow64CallbackTlsIndex;
+    if (CurrentIndex != TLS_OUT_OF_INDEXES)
+    {
+        return TRUE;
+    }
+
+    CurrentIndex = (LONG)TlsAlloc();
+    if (CurrentIndex == TLS_OUT_OF_INDEXES)
+    {
+        return FALSE;
+    }
+
+    if (InterlockedCompareExchange(&Wow64CallbackTlsIndex,
+                                   CurrentIndex,
+                                   TLS_OUT_OF_INDEXES) != TLS_OUT_OF_INDEXES)
+    {
+        TlsFree((DWORD)CurrentIndex);
+    }
+
+    return Wow64CallbackTlsIndex != TLS_OUT_OF_INDEXES;
+}
+
+static __inline PWOW64_CALLBACK_FRAME
+Wow64GetCallbackFrame(VOID)
+{
+    if (Wow64CallbackTlsIndex == TLS_OUT_OF_INDEXES)
+    {
+        return NULL;
+    }
+
+    return (PWOW64_CALLBACK_FRAME)TlsGetValue((DWORD)Wow64CallbackTlsIndex);
+}
+
+static VOID
+Wow64SetCallbackFrame(
+    _In_opt_ PWOW64_CALLBACK_FRAME Frame)
+{
+    if (Wow64CallbackTlsIndex != TLS_OUT_OF_INDEXES)
+    {
+        TlsSetValue((DWORD)Wow64CallbackTlsIndex, Frame);
+    }
+}
+
+static PVOID
+Wow64FindModuleBase32(
+    _In_ PCWSTR ModuleName)
+{
+    ULONG_PTR Peb32Address = 0;
+    NTSTATUS Status;
+    PPEB32 Peb32;
+    PPEB_LDR_DATA32 Ldr32;
+    UNICODE_STRING TargetName;
+    PLIST_ENTRY32 Head32;
+    PLIST_ENTRY32 Current32;
+
+    Status = NtQueryInformationProcess(NtCurrentProcess(),
+                                       ProcessWow64Information,
+                                       &Peb32Address,
+                                       sizeof(Peb32Address),
+                                       NULL);
+    if (!NT_SUCCESS(Status) || Peb32Address == 0)
+    {
+        return NULL;
+    }
+
+    Peb32 = (PPEB32)(ULONG_PTR)Peb32Address;
+    if (!Peb32->Ldr)
+    {
+        return NULL;
+    }
+
+    Ldr32 = (PPEB_LDR_DATA32)(ULONG_PTR)Peb32->Ldr;
+    Head32 = &Ldr32->InLoadOrderModuleList;
+    Current32 = (PLIST_ENTRY32)(ULONG_PTR)Head32->Flink;
+
+    RtlInitUnicodeString(&TargetName, ModuleName);
+
+    while (Current32 != Head32)
+    {
+        PLDR_DATA_TABLE_ENTRY32 Entry32;
+        UNICODE_STRING BaseName;
+
+        Entry32 = CONTAINING_RECORD(Current32, LDR_DATA_TABLE_ENTRY32, InLoadOrderLinks);
+
+        BaseName.Length = Entry32->BaseDllName.Length;
+        BaseName.MaximumLength = Entry32->BaseDllName.MaximumLength;
+        BaseName.Buffer = (PWSTR)(ULONG_PTR)Entry32->BaseDllName.Buffer;
+
+        if (BaseName.Buffer &&
+            RtlEqualUnicodeString(&BaseName, &TargetName, TRUE))
+        {
+            return (PVOID)(ULONG_PTR)Entry32->DllBase;
+        }
+
+        Current32 = (PLIST_ENTRY32)(ULONG_PTR)Current32->Flink;
+    }
+
+    return NULL;
+}
+
+static ULONG_PTR
+Wow64ResolveExportRva32(
+    _In_ PVOID ModuleBase,
+    _In_ PCSTR ExportName)
+{
+    ULONG ExportSize = 0;
+    PIMAGE_EXPORT_DIRECTORY ExportDir;
+    PULONG NameTable;
+    PULONG FunctionTable;
+    PUSHORT OrdinalTable;
+    ULONG Index;
+
+    ExportDir = (PIMAGE_EXPORT_DIRECTORY)RtlImageDirectoryEntryToData(ModuleBase,
+                                                                      TRUE,
+                                                                      IMAGE_DIRECTORY_ENTRY_EXPORT,
+                                                                      &ExportSize);
+    if (!ExportDir)
+    {
+        return 0;
+    }
+
+    NameTable = (PULONG)((PUCHAR)ModuleBase + ExportDir->AddressOfNames);
+    FunctionTable = (PULONG)((PUCHAR)ModuleBase + ExportDir->AddressOfFunctions);
+    OrdinalTable = (PUSHORT)((PUCHAR)ModuleBase + ExportDir->AddressOfNameOrdinals);
+
+    for (Index = 0; Index < ExportDir->NumberOfNames; Index++)
+    {
+        PCSTR CurrentName = (PCSTR)((PUCHAR)ModuleBase + NameTable[Index]);
+        if (CurrentName && _stricmp(CurrentName, ExportName) == 0)
+        {
+            USHORT Ordinal = OrdinalTable[Index];
+            return (ULONG_PTR)FunctionTable[Ordinal];
+        }
+    }
+
+    return 0;
+}
+
+static VOID
+Wow64PublishSharedInformation(VOID)
+{
+    static const struct
+    {
+        const char *Name;
+        WOW64_SHARED_INFORMATION_INDEX Index;
+    } ExportTargets[] =
+    {
+        { "KiUserApcDispatcher", Wow64SharedInformationUserApcDispatcher32 },
+        { "KiUserCallbackDispatcher", Wow64SharedInformationUserCallbackDispatcher32 },
+        { "KiUserExceptionDispatcher", Wow64SharedInformationUserExceptionDispatcher32 },
+        { "KiUserApcDispatcherContinue", Wow64SharedInformationUserApcReturn32 },
+    };
+
+    PVOID ModuleBase;
+    PKUSER_SHARED_DATA SharedData;
+    SIZE_T i;
+
+    ModuleBase = Wow64FindModuleBase32(L"ntdll.dll");
+    SharedData = (PKUSER_SHARED_DATA)USER_SHARED_DATA;
+
+    if (!SharedData)
+    {
+        return;
+    }
+
+    /* Clear any stale values by default. */
+    RtlZeroMemory(SharedData->Wow64SharedInformation,
+                  sizeof(SharedData->Wow64SharedInformation));
+
+    if (!ModuleBase)
+    {
+        Wow64ReportStub("Wow64PublishSharedInformation: ntdll.dll base not found");
+        return;
+    }
+
+    for (i = 0; i < RTL_NUMBER_OF(ExportTargets); i++)
+    {
+        ULONG_PTR Rva;
+
+        Rva = Wow64ResolveExportRva32(ModuleBase, ExportTargets[i].Name);
+        if (Rva != 0)
+        {
+            ULONG_PTR Absolute = (ULONG_PTR)ModuleBase + Rva;
+            SharedData->Wow64SharedInformation[ExportTargets[i].Index] = (ULONG)Absolute;
+        }
+    }
 }
 
 static NTSTATUS
@@ -409,6 +649,11 @@ Wow64LdrpInitialize(VOID)
         return Status;
     }
 
+    if (!Wow64EnsureCallbackTlsIndex())
+    {
+        return STATUS_NO_MEMORY;
+    }
+
     Wow64ReportStub("Wow64LdrpInitialize");
     return STATUS_SUCCESS;
 }
@@ -516,6 +761,11 @@ Wow64ProcessInit(
         return Status;
     }
 
+    if (!Wow64EnsureCallbackTlsIndex())
+    {
+        return STATUS_NO_MEMORY;
+    }
+
     /* Configure WOW64 environment variables */
     Status = Wow64ConfigureEnvironment();
     if (!NT_SUCCESS(Status))
@@ -523,6 +773,8 @@ Wow64ProcessInit(
         Wow64ReportStub("Wow64ProcessInit: Environment configuration failed");
         /* Non-fatal - continue */
     }
+
+    Wow64PublishSharedInformation();
 
     /* Attempt to open KnownDlls32 directory for later use */
     Status = Wow64OpenKnownDllsDirectory();
@@ -609,6 +861,12 @@ Wow64ProcessTerm(VOID)
     {
         TlsFree((DWORD)Wow64TlsIndex);
         Wow64TlsIndex = TLS_OUT_OF_INDEXES;
+    }
+
+    if (Wow64CallbackTlsIndex != TLS_OUT_OF_INDEXES)
+    {
+        TlsFree((DWORD)Wow64CallbackTlsIndex);
+        Wow64CallbackTlsIndex = TLS_OUT_OF_INDEXES;
     }
 
     Wow64State.CsrConnected = FALSE;
