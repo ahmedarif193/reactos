@@ -20,7 +20,7 @@ add_library(wow64cpu MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/wow64cpu.def)
 
 set_module_type(wow64cpu win32dll UNICODE)
-add_importlibs(wow64cpu msvcrt kernel32 ntdll)
+add_importlibs(wow64cpu msvcrt kernel32 ntdll wow64)
 
 # Install to system32 (64-bit DLLs directory)
 # This DLL performs low-level CPU context translation for WOW64
