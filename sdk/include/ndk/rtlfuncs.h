@@ -2805,7 +2805,10 @@ RtlInitializeContext(
 );
 
 #ifdef _M_AMD64
+#ifndef _PWOW64_CONTEXT_DEFINED
+#define _PWOW64_CONTEXT_DEFINED
 typedef struct _WOW64_CONTEXT *PWOW64_CONTEXT;
+#endif
 
 NTSYSAPI
 NTSTATUS
