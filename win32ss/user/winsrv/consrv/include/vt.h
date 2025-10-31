@@ -13,6 +13,10 @@ VOID
 NTAPI
 ConDrvVtInitializeBuffer(PTEXTMODE_SCREEN_BUFFER ScreenBuffer);
 
+VOID
+NTAPI
+ConDrvVtInvalidateBufferRgb(PTEXTMODE_SCREEN_BUFFER ScreenBuffer);
+
 NTSTATUS
 NTAPI
 ConDrvVtWriteConsole(PCONSOLE Console,
@@ -21,4 +25,3 @@ ConDrvVtWriteConsole(PCONSOLE Console,
                      ULONG Length,
                      PULONG NumCharsProcessed,
                      PBOOLEAN Handled);
-
