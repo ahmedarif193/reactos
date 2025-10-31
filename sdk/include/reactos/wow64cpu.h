@@ -2,7 +2,6 @@
 
 #ifdef _NTOSKRNL_
 #include <ntdef.h>
-#include <xdk/winnt_old.h>
 #else
 #include <winnt.h>
 #endif
@@ -13,8 +12,31 @@
 extern "C" {
 #endif
 
-typedef struct _WOW64_CPU_AREA WOW64_CPU_AREA, *PWOW64_CPU_AREA;
+typedef struct _WOW64_CPU_AREA
+{
+    ULONG Size;
+    ULONG Flags;
+    PVOID CompatContext;
+    ULONG CompatContextLength;
+    PVOID NativeContext;
+    ULONG NativeContextLength;
+    PVOID HostContext;
+    ULONG HostContextLength;
+    ULONG_PTR PendingUserContext;
+    ULONG_PTR PendingUserRoutine;
+    ULONG_PTR PendingSystemArgument1;
+    ULONG_PTR PendingSystemArgument2;
+} WOW64_CPU_AREA, *PWOW64_CPU_AREA;
 
+#ifndef WOW64_CONTEXT_i386
+#define WOW64_CONTEXT_i386            0x00010000L
+#define WOW64_CONTEXT_CONTROL         (WOW64_CONTEXT_i386 | 0x00000001L)
+#define WOW64_CONTEXT_INTEGER         (WOW64_CONTEXT_i386 | 0x00000002L)
+#define WOW64_CONTEXT_SEGMENTS        (WOW64_CONTEXT_i386 | 0x00000004L)
+#define WOW64_CONTEXT_FULL            (WOW64_CONTEXT_CONTROL | WOW64_CONTEXT_INTEGER | WOW64_CONTEXT_SEGMENTS)
+#endif
+
+#ifndef _NTOSKRNL_
 #define WOW64_CPU_AREA_POINTER_TAG ((ULONG_PTR)0x1)
 #define WOW64_CPU_AREA_ENCODE_POINTER(Area) \
     ((ULONG_PTR)((Area) ? ((ULONG_PTR)(Area) | WOW64_CPU_AREA_POINTER_TAG) : WOW64_CPU_AREA_POINTER_TAG))
@@ -22,6 +44,7 @@ typedef struct _WOW64_CPU_AREA WOW64_CPU_AREA, *PWOW64_CPU_AREA;
     ((PWOW64_CPU_AREA)((ULONG_PTR)(Value) & ~(ULONG_PTR)WOW64_CPU_AREA_POINTER_TAG))
 #define WOW64_CPU_AREA_IS_TAGGED(Value) \
     (((ULONG_PTR)(Value) & WOW64_CPU_AREA_POINTER_TAG) != 0)
+#endif
 
 typedef enum _WOW64_CPU_NOTIFY_TYPE
 {
@@ -88,6 +111,15 @@ Wow64CpuDispatchPendingApc(
 
 NTSTATUS
 NTAPI
+Wow64CpuPrepareCallback(
+    _Inout_ PWOW64_CPU_AREA CpuArea,
+    _Inout_ WOW64_CONTEXT *CompatContext,
+    _In_ ULONG ApiNumber,
+    _In_reads_bytes_opt_(InputLength) const VOID *InputBuffer,
+    _In_ ULONG InputLength);
+
+NTSTATUS
+NTAPI
 Wow64CpuTakePendingApc(
     _Inout_ PWOW64_CPU_AREA CpuArea,
     _Inout_ PWOW64_PENDING_APC PendingApc);
@@ -115,6 +147,13 @@ Wow64TransitionToCompat(
 VOID
 NTAPI
 Wow64Transition(VOID);
+
+NTSTATUS
+NTAPI
+CpupDispatchException(
+    _In_ PEXCEPTION_RECORD ExceptionRecord,
+    _Inout_ PWOW64_CONTEXT CompatContext,
+    _Inout_ PCONTEXT NativeContext);
 
 #ifdef __cplusplus
 }
