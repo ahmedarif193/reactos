@@ -1391,46 +1391,54 @@ int main(int argc, char* argv[])
         exit(1);
     }
 
-    if (!UseDbgHelp)
     {
-        StringBase = malloc(1 + StringsLength + CoffStringsLength +
-                            (CoffsLength / sizeof(ROSSYM_ENTRY)) * (E_SYMNMLEN + 1));
-        if (StringBase == NULL)
-        {
-            free(FileData);
-            fprintf(stderr, "Failed to allocate memory for strings table\n");
-            exit(1);
-        }
-        /* Make offset 0 into an empty string */
-        *((char *) StringBase) = '\0';
-        StringsLength = 1;
+        size_t RequiredSize = (size_t)StringsLength +
+                              CoffStringsLength +
+                              1 +
+                              (size_t)(CoffsLength / sizeof(ROSSYM_ENTRY)) * (E_SYMNMLEN + 1);
 
-        if (ConvertStabs(&StabSymbolsCount,
-                         &StabSymbols,
-                         &StringsLength,
-                         StringBase,
-                         StabsLength,
-                         StabBase,
-                         StabStringsLength,
-                         StabStringBase,
-                         ImageBase,
-                         PEFileHeader,
-                         PESectionHeaders))
+        if (!UseDbgHelp)
         {
-            free(StringBase);
-            free(FileData);
-            fprintf(stderr, "Failed to allocate memory for strings table\n");
-            exit(1);
+            StringBase = malloc(RequiredSize);
+            if (StringBase == NULL)
+            {
+                free(FileData);
+                fprintf(stderr, "Failed to allocate memory for strings table\n");
+                exit(1);
+            }
+            /* Make offset 0 into an empty string */
+            *((char *) StringBase) = '\0';
+            StringsLength = 1;
+
+            if (ConvertStabs(&StabSymbolsCount,
+                             &StabSymbols,
+                             &StringsLength,
+                             StringBase,
+                             StabsLength,
+                             StabBase,
+                             StabStringsLength,
+                             StabStringBase,
+                             ImageBase,
+                             PEFileHeader,
+                             PESectionHeaders))
+            {
+                free(StringBase);
+                free(FileData);
+                fprintf(stderr, "Failed to allocate memory for strings table\n");
+                exit(1);
+            }
         }
-    }
-    else
-    {
-        StringBase = realloc(StringBase, StringsLength + CoffStringsLength);
-        if (!StringBase)
+        else
         {
-            free(FileData);
-            fprintf(stderr, "Failed to allocate memory for strings table\n");
-            exit(1);
+            void *NewBase = realloc(StringBase, RequiredSize);
+            if (!NewBase)
+            {
+                free(StringBase);
+                free(FileData);
+                fprintf(stderr, "Failed to allocate memory for strings table\n");
+                exit(1);
+            }
+            StringBase = NewBase;
         }
     }
 
