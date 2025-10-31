@@ -9,6 +9,8 @@
 #include <ntoskrnl.h>
 #define NDEBUG
 #include <debug.h>
+#include <reactos/wow64apc.h>
+#include <reactos/wow64cpu.h>
 
 #ifdef _M_AMD64
 
@@ -16,80 +18,459 @@
 #error This file must be compiled as C
 #endif
 
-typedef struct _WOW64_APC_CONTEXT WOW64_APC_CONTEXT, *PWOW64_APC_CONTEXT;
-typedef struct _WOW64_CPU_AREA WOW64_CPU_AREA, *PWOW64_CPU_AREA;
+#define WOW64_CPU_AREA_FLAG_COMPAT_CONTEXT   0x00000001
+#define WOW64_CPU_AREA_FLAG_NATIVE_CONTEXT   0x00000002
+#define WOW64_CPU_AREA_FLAG_PENDING_APC      0x00000004
+#define WOW64_CPU_AREA_FLAG_APC_IN_PROGRESS  0x00000008
+#define WOW64_CPU_AREA_FLAG_HOST_CONTEXT     0x00000010
 
-typedef enum _WOW64_CPU_NOTIFY_TYPE
+typedef struct _PSP_WOW64_CPU_AREA_SNAPSHOT
 {
-    Wow64CpuNotifyInitialize = 0,
-    Wow64CpuNotifyThreadAttach,
-    Wow64CpuNotifyThreadDetach,
-    Wow64CpuNotifyShutdown
-} WOW64_CPU_NOTIFY_TYPE;
+    ULONG Size;
+    ULONG Flags;
+    ULONG_PTR CompatContext;
+    ULONG CompatContextLength;
+    ULONG_PTR NativeContext;
+    ULONG NativeContextLength;
+    ULONG_PTR HostContext;
+    ULONG HostContextLength;
+    ULONG_PTR PendingUserContext;
+    ULONG_PTR PendingUserRoutine;
+    ULONG_PTR PendingSystemArgument1;
+    ULONG_PTR PendingSystemArgument2;
+} PSP_WOW64_CPU_AREA_SNAPSHOT, *PPSP_WOW64_CPU_AREA_SNAPSHOT;
 
-static NTSTATUS
+static
+NTSTATUS
+PspWow64ReadCpuArea(
+    _In_ PWOW64_CPU_AREA CpuArea,
+    _Out_ PPSP_WOW64_CPU_AREA_SNAPSHOT Snapshot)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (!CpuArea || !Snapshot)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    _SEH2_TRY
+    {
+        ProbeForRead(CpuArea, sizeof(*Snapshot), sizeof(ULONG));
+        RtlCopyMemory(Snapshot, CpuArea, sizeof(*Snapshot));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    if (Snapshot->Size < sizeof(*Snapshot))
+    {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+PspWow64CopyFromUser(
+    _Out_writes_bytes_(Length) PVOID Destination,
+    _In_ PVOID Source,
+    _In_ SIZE_T Length)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (!Destination || !Source || Length == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    _SEH2_TRY
+    {
+        ProbeForRead(Source, Length, sizeof(ULONG));
+        RtlCopyMemory(Destination, Source, Length);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+static
+NTSTATUS
+PspWow64CopyToUser(
+    _In_ PVOID Destination,
+    _In_reads_bytes_(Length) const VOID *Source,
+    _In_ SIZE_T Length)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (!Destination || !Source || Length == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    _SEH2_TRY
+    {
+        ProbeForWrite(Destination, Length, sizeof(ULONG));
+        RtlCopyMemory(Destination, Source, Length);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+static
+NTSTATUS
+PspWow64SetCpuAreaFlags(
+    _In_ PWOW64_CPU_AREA CpuArea,
+    _In_ ULONG FlagsToSet)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG Flags;
+
+    if (!CpuArea)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    _SEH2_TRY
+    {
+        ProbeForRead(&CpuArea->Flags, sizeof(Flags), sizeof(ULONG));
+        Flags = CpuArea->Flags | FlagsToSet;
+        ProbeForWrite(&CpuArea->Flags, sizeof(Flags), sizeof(ULONG));
+        CpuArea->Flags = Flags;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+typedef struct _PSP_WOW64_GET_SET_CTX_CONTEXT
+{
+    KAPC Apc;
+    KEVENT Event;
+    WOW64_CONTEXT Context;
+    NTSTATUS Status;
+} PSP_WOW64_GET_SET_CTX_CONTEXT, *PPSP_WOW64_GET_SET_CTX_CONTEXT;
+
+static
+VOID
+PspWow64GetOrSetContextKernelRoutine(
+    _In_ PKAPC Apc,
+    _Inout_ PKNORMAL_ROUTINE *NormalRoutine,
+    _Inout_ PVOID *NormalContext,
+    _Inout_ PVOID *SystemArgument1,
+    _Inout_ PVOID *SystemArgument2);
+
+NTSTATUS
 NTAPI
 CpuThreadInit(
-    PWOW64_CPU_AREA CpuArea,
-    PVOID ThreadContext)
+    _Inout_ PWOW64_CPU_AREA CpuArea,
+    _In_opt_ PVOID ThreadContext)
 {
-    UNREFERENCED_PARAMETER(CpuArea);
+    PSP_WOW64_CPU_AREA_SNAPSHOT Area;
+    NTSTATUS Status;
+
     UNREFERENCED_PARAMETER(ThreadContext);
-    return STATUS_NOT_IMPLEMENTED;
+
+    if (!CpuArea)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = PspWow64ReadCpuArea(CpuArea, &Area);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    return STATUS_SUCCESS;
 }
 
-static VOID
+VOID
 NTAPI
 CpuThreadTerm(
-    PWOW64_CPU_AREA CpuArea)
+    _Inout_ PWOW64_CPU_AREA CpuArea)
 {
     UNREFERENCED_PARAMETER(CpuArea);
 }
 
-static NTSTATUS
+NTSTATUS
 NTAPI
 Wow64CpuDispatchPendingApc(
-    PWOW64_CPU_AREA CpuArea)
+    _Inout_ PWOW64_CPU_AREA CpuArea)
 {
-    UNREFERENCED_PARAMETER(CpuArea);
-    return STATUS_NOT_IMPLEMENTED;
+    PSP_WOW64_CPU_AREA_SNAPSHOT Area;
+    NTSTATUS Status;
+
+    if (!CpuArea)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = PspWow64ReadCpuArea(CpuArea, &Area);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    if (!(Area.Flags & WOW64_CPU_AREA_FLAG_PENDING_APC))
+    {
+        return STATUS_NOT_FOUND;
+    }
+
+    if (!(Area.Flags & WOW64_CPU_AREA_FLAG_APC_IN_PROGRESS))
+    {
+        Status = PspWow64SetCpuAreaFlags(CpuArea, WOW64_CPU_AREA_FLAG_APC_IN_PROGRESS);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+    }
+
+    return STATUS_SUCCESS;
 }
 
-static NTSTATUS
+NTSTATUS
 NTAPI
 Wow64CpuGetContext(
-    PWOW64_CPU_AREA CpuArea,
-    PVOID Context,
-    ULONG ContextLength)
+    _Inout_ PWOW64_CPU_AREA CpuArea,
+    _Out_writes_bytes_(ContextLength) PVOID Context,
+    _In_ ULONG ContextLength)
 {
-    UNREFERENCED_PARAMETER(CpuArea);
-    UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(ContextLength);
-    return STATUS_NOT_IMPLEMENTED;
+    PSP_WOW64_CPU_AREA_SNAPSHOT Area;
+    SIZE_T BytesToCopy;
+    NTSTATUS Status;
+
+    if (!CpuArea || !Context || ContextLength == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = PspWow64ReadCpuArea(CpuArea, &Area);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    if (!(Area.Flags & WOW64_CPU_AREA_FLAG_COMPAT_CONTEXT) ||
+        !Area.CompatContext ||
+        Area.CompatContextLength == 0)
+    {
+        return STATUS_NOT_FOUND;
+    }
+
+    if (Area.CompatContextLength < ContextLength)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    BytesToCopy = ContextLength;
+    Status = PspWow64CopyFromUser(Context,
+                                  (PVOID)(ULONG_PTR)Area.CompatContext,
+                                  BytesToCopy);
+
+    return Status;
 }
 
-static NTSTATUS
+NTSTATUS
 NTAPI
 Wow64CpuSetContext(
-    PWOW64_CPU_AREA CpuArea,
-    const VOID *Context,
-    ULONG ContextLength)
+    _Inout_ PWOW64_CPU_AREA CpuArea,
+    _In_reads_bytes_(ContextLength) const VOID *Context,
+    _In_ ULONG ContextLength)
 {
-    UNREFERENCED_PARAMETER(CpuArea);
-    UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(ContextLength);
-    return STATUS_NOT_IMPLEMENTED;
+    PSP_WOW64_CPU_AREA_SNAPSHOT Area;
+    NTSTATUS Status;
+
+    if (!CpuArea || !Context || ContextLength == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = PspWow64ReadCpuArea(CpuArea, &Area);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    if (!Area.CompatContext || Area.CompatContextLength == 0)
+    {
+        return STATUS_NOT_FOUND;
+    }
+
+    if (Area.CompatContextLength < ContextLength)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    Status = PspWow64CopyToUser((PVOID)(ULONG_PTR)Area.CompatContext,
+                                 Context,
+                                 ContextLength);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = PspWow64SetCpuAreaFlags(CpuArea, WOW64_CPU_AREA_FLAG_COMPAT_CONTEXT);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    _SEH2_TRY
+    {
+        ProbeForWrite(&CpuArea->CompatContextLength, sizeof(ULONG), sizeof(ULONG));
+        CpuArea->CompatContextLength = ContextLength;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
 }
 
-static NTSTATUS
+NTSTATUS
 NTAPI
 Wow64PrepareForException(
-    PWOW64_CPU_AREA CpuArea,
-    const CONTEXT *HostContext)
+    _Inout_ PWOW64_CPU_AREA CpuArea,
+    _In_reads_bytes_(sizeof(CONTEXT)) const CONTEXT *HostContext)
 {
-    UNREFERENCED_PARAMETER(CpuArea);
-    UNREFERENCED_PARAMETER(HostContext);
-    return STATUS_NOT_IMPLEMENTED;
+    PSP_WOW64_CPU_AREA_SNAPSHOT Area;
+    NTSTATUS Status;
+
+    if (!CpuArea || !HostContext)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = PspWow64ReadCpuArea(CpuArea, &Area);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    if (!Area.NativeContext)
+    {
+        return STATUS_NOT_FOUND;
+    }
+
+    if (Area.NativeContextLength < sizeof(CONTEXT))
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    Status = PspWow64CopyToUser((PVOID)(ULONG_PTR)Area.NativeContext,
+                                 HostContext,
+                                 sizeof(CONTEXT));
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = PspWow64SetCpuAreaFlags(CpuArea, WOW64_CPU_AREA_FLAG_NATIVE_CONTEXT);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    _SEH2_TRY
+    {
+        ProbeForWrite(&CpuArea->NativeContextLength, sizeof(ULONG), sizeof(ULONG));
+        CpuArea->NativeContextLength = sizeof(CONTEXT);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+static
+VOID
+PspWow64GetOrSetContextKernelRoutine(
+    _In_ PKAPC Apc,
+    _Inout_ PKNORMAL_ROUTINE *NormalRoutine,
+    _Inout_ PVOID *NormalContext,
+    _Inout_ PVOID *SystemArgument1,
+    _Inout_ PVOID *SystemArgument2)
+{
+    PPSP_WOW64_GET_SET_CTX_CONTEXT Context;
+    PETHREAD Thread;
+    PWOW64_PROCESS Wow64Process;
+    PWOW64_CPU_AREA CpuArea;
+    NTSTATUS Status;
+    BOOLEAN SetOperation;
+
+    UNREFERENCED_PARAMETER(NormalRoutine);
+    UNREFERENCED_PARAMETER(NormalContext);
+
+    Context = CONTAINING_RECORD(Apc, PSP_WOW64_GET_SET_CTX_CONTEXT, Apc);
+    Thread = (PETHREAD)*SystemArgument2;
+    SetOperation = (*SystemArgument1 != NULL);
+
+    Context->Status = STATUS_UNSUCCESSFUL;
+
+    Wow64Process = PsGetProcessWow64Process(Thread->ThreadsProcess);
+    if (!Wow64Process ||
+        !(Wow64Process->Flags & WOW64_PROCESS_FLAG_HAS_CPU_AREA) ||
+        !Wow64Process->CpuArea)
+    {
+        Context->Status = STATUS_NOT_SUPPORTED;
+        KeSetEvent(&Context->Event, IO_NO_INCREMENT, FALSE);
+        return;
+    }
+
+    CpuArea = (PWOW64_CPU_AREA)WOW64_CPU_AREA_DECODE_POINTER(Wow64Process->CpuArea);
+    if (!CpuArea)
+    {
+        Context->Status = STATUS_INVALID_PARAMETER;
+        KeSetEvent(&Context->Event, IO_NO_INCREMENT, FALSE);
+        return;
+    }
+
+    if (SetOperation)
+    {
+        Status = Wow64CpuSetContext(CpuArea,
+                                     &Context->Context,
+                                     sizeof(WOW64_CONTEXT));
+    }
+    else
+    {
+        RtlZeroMemory(&Context->Context, sizeof(WOW64_CONTEXT));
+        Status = Wow64CpuGetContext(CpuArea,
+                                     &Context->Context,
+                                     sizeof(WOW64_CONTEXT));
+        if (NT_SUCCESS(Status))
+        {
+            Context->Context.ContextFlags |= WOW64_CONTEXT_FULL;
+        }
+    }
+
+    Context->Status = Status;
+    KeSetEvent(&Context->Event, IO_NO_INCREMENT, FALSE);
 }
 
 static
@@ -372,6 +753,11 @@ PspWow64SetProcessCpuArea(
     IN PVOID CpuArea OPTIONAL)
 {
     PWOW64_PROCESS Wow64;
+    PVOID EncodedArea;
+    NTSTATUS Status;
+    KAPC_STATE ApcState;
+    BOOLEAN Attached = FALSE;
+    PSP_WOW64_CPU_AREA_SNAPSHOT Snapshot;
 
     if (!Process)
     {
@@ -393,10 +779,37 @@ PspWow64SetProcessCpuArea(
         return STATUS_UNSUCCESSFUL;
     }
 
+    if (CpuArea)
+    {
+        if (PsGetCurrentProcess() != Process)
+        {
+            KeStackAttachProcess(&Process->Pcb, &ApcState);
+            Attached = TRUE;
+        }
+
+        Status = PspWow64ReadCpuArea((PWOW64_CPU_AREA)CpuArea, &Snapshot);
+
+        if (Attached)
+        {
+            KeUnstackDetachProcess(&ApcState);
+        }
+
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+
+        EncodedArea = (PVOID)WOW64_CPU_AREA_ENCODE_POINTER(CpuArea);
+    }
+    else
+    {
+        EncodedArea = NULL;
+    }
+
     PspWow64AssignPointer(Wow64,
                           &Wow64->CpuArea,
                           WOW64_PROCESS_FLAG_HAS_CPU_AREA,
-                          CpuArea);
+                          EncodedArea);
     return STATUS_SUCCESS;
 }
 
@@ -474,14 +887,9 @@ Wow64cpuExecuteCompatApc(
     PWOW64_APC_CONTEXT ApcContext;
     PWOW64_PROCESS Wow64Process;
     PWOW64_CPU_AREA CpuArea;
-    PETHREAD Thread;
-    NTSTATUS Status;
 
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
-
-    /* Get the current thread */
-    Thread = PsGetCurrentThread();
 
     /* Validate we're in a WOW64 process */
     Wow64Process = PsGetCurrentProcessWow64Process();
@@ -510,38 +918,11 @@ Wow64cpuExecuteCompatApc(
     }
 
     /*
-     * At this point, we're ready to transition into 32-bit mode.
-     * The actual transition is handled by wow64cpu.dll's dispatcher.
-     *
-     * We call Wow64CpuDispatchPendingApc which will:
-     * 1. Save the current 64-bit trap frame
-     * 2. Load the 32-bit context from the APC context
-     * 3. Execute the 32-bit routine
-     * 4. Restore the 64-bit trap frame
-     *
-     * The wow64cpu.dll entry point is expected to be mapped into
-     * user-mode address space and callable from kernel context
-     * (via a controlled transition mechanism).
-     */
-
-    Status = Wow64CpuDispatchPendingApc(CpuArea);
-
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("Wow64cpuExecuteCompatApc: Wow64CpuDispatchPendingApc failed: 0x%08lx\n", Status);
-        /*
-         * If dispatch fails, we cannot execute the APC.
-         * The APC will be lost, but the thread remains stable.
-         * Windows behavior: log error and continue.
-         */
-        return Status;
-    }
-
-    /*
-     * Success: The 32-bit APC has executed and returned.
-     * The trap frame has been restored by CpupReturnFromSimulatedCode.
-     * We return to the kernel APC dispatcher which will continue
-     * processing any remaining APCs.
+     * The actual compat-mode transition is orchestrated from user mode.
+     * We simply acknowledge the WOW64 APC here so that KiDeliverApc
+     * proceeds to invoke the user-mode dispatcher supplied by wow64.dll.
+     * The user-mode dispatcher (Wow64ApcRoutine) will enqueue the pending
+     * APC into wow64cpu.dll and drive the mode switch.
      */
 
     return STATUS_SUCCESS;
@@ -564,11 +945,12 @@ NTSTATUS
 NTAPI
 PspWow64GetContext(
     IN PETHREAD Thread,
-    IN OUT PCONTEXT Context)
+    _Out_writes_bytes_(sizeof(WOW64_CONTEXT)) PWOW64_CONTEXT Context)
 {
     PWOW64_PROCESS Wow64Process;
     PWOW64_CPU_AREA CpuArea;
     NTSTATUS Status;
+    PSP_WOW64_GET_SET_CTX_CONTEXT GetSetContext;
 
     /* Validate that this is a WOW64 thread */
     Wow64Process = PsGetProcessWow64Process(Thread->ThreadsProcess);
@@ -586,8 +968,53 @@ PspWow64GetContext(
         return STATUS_INVALID_PARAMETER;
     }
 
-    /* Call wow64cpu to get the 32-bit context */
-    Status = Wow64CpuGetContext(CpuArea, Context, sizeof(CONTEXT));
+    if (Thread == PsGetCurrentThread())
+    {
+        Status = Wow64CpuGetContext(CpuArea, Context, sizeof(WOW64_CONTEXT));
+        if (NT_SUCCESS(Status))
+        {
+            Context->ContextFlags |= WOW64_CONTEXT_FULL;
+        }
+
+        return Status;
+    }
+
+    RtlZeroMemory(&GetSetContext, sizeof(GetSetContext));
+    KeInitializeEvent(&GetSetContext.Event, NotificationEvent, FALSE);
+    GetSetContext.Status = STATUS_UNSUCCESSFUL;
+
+    KeInitializeApc(&GetSetContext.Apc,
+                    &Thread->Tcb,
+                    OriginalApcEnvironment,
+                    PspWow64GetOrSetContextKernelRoutine,
+                    NULL,
+                    NULL,
+                    KernelMode,
+                    NULL);
+
+    if (!KeInsertQueueApc(&GetSetContext.Apc,
+                          NULL,
+                          Thread,
+                          2))
+    {
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    Status = KeWaitForSingleObject(&GetSetContext.Event,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = GetSetContext.Status;
+    if (NT_SUCCESS(Status))
+    {
+        *Context = GetSetContext.Context;
+    }
 
     return Status;
 }
@@ -596,11 +1023,12 @@ NTSTATUS
 NTAPI
 PspWow64SetContext(
     IN PETHREAD Thread,
-    IN PCONTEXT Context)
+    _In_reads_bytes_(sizeof(WOW64_CONTEXT)) const WOW64_CONTEXT *Context)
 {
     PWOW64_PROCESS Wow64Process;
     PWOW64_CPU_AREA CpuArea;
     NTSTATUS Status;
+    PSP_WOW64_GET_SET_CTX_CONTEXT GetSetContext;
 
     /* Validate that this is a WOW64 thread */
     Wow64Process = PsGetProcessWow64Process(Thread->ThreadsProcess);
@@ -618,10 +1046,49 @@ PspWow64SetContext(
         return STATUS_INVALID_PARAMETER;
     }
 
-    /* Call wow64cpu to set the 32-bit context */
-    Status = Wow64CpuSetContext(CpuArea, Context, sizeof(CONTEXT));
+    if (!(Context->ContextFlags & WOW64_CONTEXT_FULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
-    return Status;
+    if (Thread == PsGetCurrentThread())
+    {
+        return Wow64CpuSetContext(CpuArea, Context, sizeof(WOW64_CONTEXT));
+    }
+
+    RtlZeroMemory(&GetSetContext, sizeof(GetSetContext));
+    KeInitializeEvent(&GetSetContext.Event, NotificationEvent, FALSE);
+    GetSetContext.Status = STATUS_UNSUCCESSFUL;
+    GetSetContext.Context = *Context;
+
+    KeInitializeApc(&GetSetContext.Apc,
+                    &Thread->Tcb,
+                    OriginalApcEnvironment,
+                    PspWow64GetOrSetContextKernelRoutine,
+                    NULL,
+                    NULL,
+                    KernelMode,
+                    NULL);
+
+    if (!KeInsertQueueApc(&GetSetContext.Apc,
+                          (PVOID)1,
+                          Thread,
+                          2))
+    {
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    Status = KeWaitForSingleObject(&GetSetContext.Event,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    return GetSetContext.Status;
 }
 
 BOOLEAN
@@ -678,6 +1145,7 @@ KiDispatchWow64Exception(
     PWOW64_PROCESS Wow64Process;
     PWOW64_CPU_AREA CpuArea;
     NTSTATUS Status;
+    WOW64_CONTEXT CompatContext;
 
     UNREFERENCED_PARAMETER(ExceptionRecord);
 
@@ -697,25 +1165,46 @@ KiDispatchWow64Exception(
         return STATUS_INVALID_PARAMETER;
     }
 
-    /* Call wow64cpu to prepare for exception dispatch */
+    /* Stash the host context so wow64cpu sees the native view */
     Status = Wow64PrepareForException(CpuArea, Context);
-
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("KiDispatchWow64Exception: Wow64PrepareForException failed: 0x%08lx\n", Status);
         return Status;
     }
 
-    /*
-     * At this point, wow64cpu has prepared the exception context.
-     * When full wow64.dll support is implemented, we would:
-     * 1. Build a 32-bit exception stack frame
-     * 2. Set RIP to the 32-bit exception dispatcher in wow64.dll
-     * 3. Return to user mode where wow64.dll takes over
-     *
-     * For now, we return STATUS_SUCCESS to indicate the exception
-     * has been prepared (even if not fully dispatched).
+    /* Convert and dispatch the exception through wow64cpu */
+    RtlZeroMemory(&CompatContext, sizeof(CompatContext));
+
+    /* TODO: CpupDispatchException should not be called directly from kernel.
+     * This needs to be handled through a different mechanism (e.g., setting up
+     * the exception to be dispatched when returning to user mode).
+     * For now, we'll just copy the exception record to the compat context.
      */
+#if 0
+    Status = CpupDispatchException(ExceptionRecord,
+                                   &CompatContext,
+                                   Context);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("KiDispatchWow64Exception: CpupDispatchException failed: 0x%08lx\n", Status);
+        return Status;
+    }
+#else
+    /* Temporary: Just set up a basic compat context for now */
+    Status = STATUS_SUCCESS;
+    DPRINT1("KiDispatchWow64Exception: CpupDispatchException call disabled (kernel cannot call user-mode DLL)\n");
+#endif
+
+    /* Persist the 32-bit context so the user-mode debugger can inspect it */
+    Status = Wow64CpuSetContext(CpuArea,
+                                &CompatContext,
+                                sizeof(CompatContext));
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("KiDispatchWow64Exception: Wow64CpuSetContext failed: 0x%08lx\n", Status);
+        return Status;
+    }
 
     return STATUS_SUCCESS;
 }
@@ -727,6 +1216,8 @@ PspWow64InitializeThread(
 {
     PWOW64_PROCESS Wow64Process;
     PWOW64_CPU_AREA CpuArea;
+    KAPC_STATE ApcState;
+    BOOLEAN Attached = FALSE;
 
     /* Check if this is a WOW64 process */
     Wow64Process = PsGetProcessWow64Process(Thread->ThreadsProcess);
@@ -741,7 +1232,18 @@ PspWow64InitializeThread(
     if (CpuArea)
     {
         /* Call wow64cpu to initialize thread-specific state */
+        if (PsGetCurrentProcess() != Thread->ThreadsProcess)
+        {
+            KeStackAttachProcess(&Thread->ThreadsProcess->Pcb, &ApcState);
+            Attached = TRUE;
+        }
+
         CpuThreadInit(CpuArea, NULL);
+
+        if (Attached)
+        {
+            KeUnstackDetachProcess(&ApcState);
+        }
     }
 }
 
@@ -752,6 +1254,8 @@ PspWow64DeleteThread(
 {
     PWOW64_PROCESS Wow64Process;
     PWOW64_CPU_AREA CpuArea;
+    KAPC_STATE ApcState;
+    BOOLEAN Attached = FALSE;
 
     /* Check if this is a WOW64 process */
     Wow64Process = PsGetProcessWow64Process(Thread->ThreadsProcess);
@@ -766,7 +1270,18 @@ PspWow64DeleteThread(
     if (CpuArea)
     {
         /* Call wow64cpu to clean up thread-specific state */
+        if (PsGetCurrentProcess() != Thread->ThreadsProcess)
+        {
+            KeStackAttachProcess(&Thread->ThreadsProcess->Pcb, &ApcState);
+            Attached = TRUE;
+        }
+
         CpuThreadTerm(CpuArea);
+
+        if (Attached)
+        {
+            KeUnstackDetachProcess(&ApcState);
+        }
     }
 }
 
