@@ -18,6 +18,7 @@
 #pragma once
 
 #include <shlobj.h>
+#include <vector>
 #ifndef __REACTOS__
 #include "../btrfsioctl.h"
 #include "../btrfs.h"
