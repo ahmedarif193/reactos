@@ -19,6 +19,34 @@
 #define MI_POOL_COPY_BYTES    512
 #define MI_MAX_TRANSFER_SIZE  64 * 1024
 
+FORCEINLINE
+BOOLEAN
+MiIsUserAddressRangeValid64(
+    _In_ ULONG64 StartAddress,
+    _In_ SIZE_T Length)
+{
+    ULONG64 HighestUser = (ULONG64)(ULONG_PTR)MmHighestUserAddress;
+    ULONG64 LastAddress;
+
+    if (Length == 0)
+    {
+        return TRUE;
+    }
+
+    if (StartAddress > HighestUser)
+    {
+        return FALSE;
+    }
+
+    if (Length - 1 > HighestUser - StartAddress)
+    {
+        return FALSE;
+    }
+
+    LastAddress = StartAddress + ((ULONG64)Length - 1);
+    return LastAddress <= HighestUser;
+}
+
 NTSTATUS NTAPI
 MiProtectVirtualMemory(IN PEPROCESS Process,
                        IN OUT PVOID *BaseAddress,
@@ -2890,6 +2918,112 @@ NtReadVirtualMemory(IN HANDLE ProcessHandle,
     return Status;
 }
 
+#ifdef _M_AMD64
+NTSTATUS
+NTAPI
+NtWow64ReadVirtualMemory64(IN HANDLE ProcessHandle,
+                           IN ULONG64 BaseAddress,
+                           OUT PVOID Buffer,
+                           IN ULONG64 NumberOfBytesToRead,
+                           OUT PULONG64 NumberOfBytesRead OPTIONAL)
+{
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PEPROCESS Process;
+    NTSTATUS Status = STATUS_SUCCESS;
+    SIZE_T BytesRead = 0;
+    SIZE_T BytesToRead;
+
+    PAGED_CODE();
+
+    if (NumberOfBytesToRead > MAXULONG_PTR)
+    {
+        return STATUS_INVALID_PARAMETER_4;
+    }
+
+    BytesToRead = (SIZE_T)NumberOfBytesToRead;
+
+    if ((BytesToRead != 0) && (Buffer == NULL))
+    {
+        return STATUS_INVALID_PARAMETER_3;
+    }
+
+    if (BytesToRead != 0)
+    {
+        if (!MiIsUserAddressRangeValid64(BaseAddress, BytesToRead))
+        {
+            return STATUS_ACCESS_VIOLATION;
+        }
+    }
+
+    if (PreviousMode != KernelMode)
+    {
+        if (BytesToRead)
+        {
+            if ((((ULONG_PTR)Buffer + BytesToRead) < (ULONG_PTR)Buffer) ||
+                (((ULONG_PTR)Buffer + BytesToRead) > MmUserProbeAddress))
+            {
+                return STATUS_ACCESS_VIOLATION;
+            }
+        }
+
+        _SEH2_TRY
+        {
+            if (BytesToRead)
+            {
+                ProbeForWrite(Buffer, BytesToRead, sizeof(UCHAR));
+            }
+
+            if (NumberOfBytesRead)
+            {
+                ProbeForWrite(NumberOfBytesRead, sizeof(ULONG64), sizeof(ULONG));
+            }
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
+    if (BytesToRead)
+    {
+        Status = ObReferenceObjectByHandle(ProcessHandle,
+                                           PROCESS_VM_READ,
+                                           PsProcessType,
+                                           PreviousMode,
+                                           (PVOID *)&Process,
+                                           NULL);
+        if (NT_SUCCESS(Status))
+        {
+            Status = MmCopyVirtualMemory(Process,
+                                         (PVOID)(ULONG_PTR)BaseAddress,
+                                         PsGetCurrentProcess(),
+                                         Buffer,
+                                         BytesToRead,
+                                         PreviousMode,
+                                         &BytesRead);
+
+            ObDereferenceObject(Process);
+        }
+    }
+
+    if (NumberOfBytesRead)
+    {
+        _SEH2_TRY
+        {
+            *NumberOfBytesRead = (ULONG64)BytesRead;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+
+    return Status;
+}
+#endif
+
 NTSTATUS
 NTAPI
 NtWriteVirtualMemory(IN HANDLE ProcessHandle,
@@ -3003,6 +3137,95 @@ NtWriteVirtualMemory(IN HANDLE ProcessHandle,
     //
     return Status;
 }
+
+#ifdef _M_AMD64
+NTSTATUS
+NTAPI
+NtWow64WriteVirtualMemory64(IN HANDLE ProcessHandle,
+                            IN ULONG64 BaseAddress,
+                            IN PVOID Buffer,
+                            IN ULONG64 NumberOfBytesToWrite,
+                            OUT PULONG64 NumberOfBytesWritten OPTIONAL)
+{
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PEPROCESS Process;
+    NTSTATUS Status = STATUS_SUCCESS;
+    SIZE_T BytesWritten = 0;
+    SIZE_T BytesToWrite;
+
+    PAGED_CODE();
+
+    if (NumberOfBytesToWrite > MAXULONG_PTR)
+    {
+        return STATUS_INVALID_PARAMETER_4;
+    }
+
+    BytesToWrite = (SIZE_T)NumberOfBytesToWrite;
+
+    if ((BytesToWrite != 0) && (Buffer == NULL))
+    {
+        return STATUS_INVALID_PARAMETER_3;
+    }
+
+    if (BytesToWrite != 0)
+    {
+        if (!MiIsUserAddressRangeValid64(BaseAddress, BytesToWrite))
+        {
+            return STATUS_ACCESS_VIOLATION;
+        }
+    }
+
+    if (PreviousMode != KernelMode)
+    {
+        if (BytesToWrite)
+        {
+            ProbeForRead(Buffer, BytesToWrite, sizeof(UCHAR));
+        }
+
+        if (NumberOfBytesWritten)
+        {
+            ProbeForWrite(NumberOfBytesWritten, sizeof(ULONG64), sizeof(ULONG));
+        }
+    }
+
+    if (BytesToWrite)
+    {
+        Status = ObReferenceObjectByHandle(ProcessHandle,
+                                           PROCESS_VM_WRITE | PROCESS_VM_OPERATION,
+                                           PsProcessType,
+                                           PreviousMode,
+                                           (PVOID *)&Process,
+                                           NULL);
+        if (NT_SUCCESS(Status))
+        {
+            Status = MmCopyVirtualMemory(PsGetCurrentProcess(),
+                                         Buffer,
+                                         Process,
+                                         (PVOID)(ULONG_PTR)BaseAddress,
+                                         BytesToWrite,
+                                         PreviousMode,
+                                         &BytesWritten);
+
+            ObDereferenceObject(Process);
+        }
+    }
+
+    if (NumberOfBytesWritten)
+    {
+        _SEH2_TRY
+        {
+            *NumberOfBytesWritten = (ULONG64)BytesWritten;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+
+    return Status;
+}
+#endif
 
 NTSTATUS
 NTAPI
@@ -5183,6 +5406,97 @@ FailPathNoLock:
 
     return Status;
 }
+
+#ifdef _M_AMD64
+NTSTATUS
+NTAPI
+NtWow64AllocateVirtualMemory64(IN HANDLE ProcessHandle,
+                               IN OUT PULONG64 UBaseAddress,
+                               IN ULONG64 ZeroBits,
+                               IN OUT PULONG64 URegionSize,
+                               IN ULONG AllocationType,
+                               IN ULONG Protect)
+{
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    ULONG64 BaseAddress64 = 0;
+    ULONG64 RegionSize64 = 0;
+    PVOID BaseAddress;
+    SIZE_T RegionSize;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (!UBaseAddress || !URegionSize)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    _SEH2_TRY
+    {
+        if (PreviousMode != KernelMode)
+        {
+            ProbeForWrite(UBaseAddress, sizeof(ULONG64), sizeof(ULONG));
+            ProbeForWrite(URegionSize, sizeof(ULONG64), sizeof(ULONG));
+        }
+
+        BaseAddress64 = *UBaseAddress;
+        RegionSize64 = *URegionSize;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    if (RegionSize64 > MAXULONG_PTR)
+    {
+        return STATUS_INVALID_PARAMETER_4;
+    }
+
+    if (BaseAddress64 != 0)
+    {
+        if (!MiIsUserAddressRangeValid64(BaseAddress64, 1))
+        {
+            return STATUS_INVALID_PARAMETER_2;
+        }
+
+        if (RegionSize64 != 0 &&
+            !MiIsUserAddressRangeValid64(BaseAddress64, (SIZE_T)RegionSize64))
+        {
+            return STATUS_INVALID_PARAMETER_4;
+        }
+    }
+
+    BaseAddress = (PVOID)(ULONG_PTR)BaseAddress64;
+    RegionSize = (SIZE_T)RegionSize64;
+
+    Status = ZwAllocateVirtualMemory(ProcessHandle,
+                                     &BaseAddress,
+                                     (ULONG_PTR)ZeroBits,
+                                     &RegionSize,
+                                     AllocationType,
+                                     Protect);
+
+    if (NT_SUCCESS(Status) || Status == STATUS_CONFLICTING_ADDRESSES)
+    {
+        BaseAddress64 = (ULONG64)(ULONG_PTR)BaseAddress;
+        RegionSize64 = (ULONG64)RegionSize;
+
+        _SEH2_TRY
+        {
+            *UBaseAddress = BaseAddress64;
+            *URegionSize = RegionSize64;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+
+    return Status;
+}
+#endif
 
 /*
  * @implemented
