@@ -399,7 +399,16 @@ ConDrvSetConsoleMode(IN PCONSOLE Console,
         }
         else
         {
+            ULONG OldMode = Buffer->Mode;
             Buffer->Mode = (ConsoleMode & CONSOLE_VALID_OUTPUT_MODES);
+
+            if ((OldMode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) &&
+                !(Buffer->Mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) &&
+                GetType(Buffer) == TEXTMODE_BUFFER)
+            {
+                PTEXTMODE_SCREEN_BUFFER TextBuffer = (PTEXTMODE_SCREEN_BUFFER)Buffer;
+                ConDrvVtInvalidateBufferRgb(TextBuffer);
+            }
         }
     }
     else
