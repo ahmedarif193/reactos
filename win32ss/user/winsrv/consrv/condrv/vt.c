@@ -9,8 +9,25 @@
 
 #include <consrv.h>
 #include "../conoutput.h"
+#include "../coninput.h"
 
 #include <limits.h>
+
+NTSTATUS NTAPI ConDrvScrollConsoleScreenBuffer(PCONSOLE Console,
+                                             PTEXTMODE_SCREEN_BUFFER Buffer,
+                                             BOOLEAN Unicode,
+                                             PSMALL_RECT ScrollRectangle,
+                                             BOOLEAN UseClipRectangle,
+                                             PSMALL_RECT ClipRectangle OPTIONAL,
+                                             PCOORD DestinationOrigin,
+                                             CHAR_INFO FillChar);
+
+NTSTATUS NTAPI ConDrvWriteConsoleInput(PCONSOLE Console,
+                                       PCONSOLE_INPUT_BUFFER InputBuffer,
+                                       BOOLEAN AppendToEnd,
+                                       PINPUT_RECORD InputRecord,
+                                       ULONG NumEventsToWrite,
+                                       PULONG NumEventsWritten OPTIONAL);
 
 #define VT_MAX_PARAMS 16
 
@@ -83,6 +100,15 @@ VtEnableAlternateScreen(PCONSOLE Console,
     AltBuffer->VtState.SavedUseRgbBackground = PrimaryBuffer->VtState.SavedUseRgbBackground;
     AltBuffer->VtState.DefaultCursorInfo = PrimaryBuffer->VtState.DefaultCursorInfo;
     AltBuffer->VtState.CurrentCursorStyle = PrimaryBuffer->VtState.CurrentCursorStyle;
+    AltBuffer->VtState.ScrollTop = min(PrimaryBuffer->VtState.ScrollTop,
+                                       (SHORT)max(0, AltBuffer->ScreenBufferSize.Y - 1));
+    AltBuffer->VtState.ScrollBottom = min(PrimaryBuffer->VtState.ScrollBottom,
+                                          (SHORT)max(0, AltBuffer->ScreenBufferSize.Y - 1));
+    if (AltBuffer->VtState.ScrollBottom < AltBuffer->VtState.ScrollTop)
+    {
+        AltBuffer->VtState.ScrollTop = 0;
+        AltBuffer->VtState.ScrollBottom = max(0, AltBuffer->ScreenBufferSize.Y - 1);
+    }
 
     PrimaryBuffer->VtState.AlternateBuffer = AltBuffer;
     PrimaryBuffer->VtState.PrivateModes |= VT_PRIVMODE_ALTERNATE_SCREEN_BUFFER;
@@ -126,6 +152,8 @@ VtDisableAlternateScreen(PCONSOLE Console,
     ActiveBuffer->VtState.PrimaryBuffer = NULL;
     ActiveBuffer->VtState.PrivateModes &= ~VT_PRIVMODE_ALTERNATE_SCREEN_BUFFER;
 
+    ConDrvVtInvalidateBufferRgb(ActiveBuffer);
+
     ConDrvSetConsoleActiveScreenBuffer(Console, (PCONSOLE_SCREEN_BUFFER)PrimaryBuffer);
     ConDrvSetConsoleCursorInfo(Console, PrimaryBuffer, &PrimaryBuffer->CursorInfo);
     ConDrvSetConsoleCursorPosition(Console, PrimaryBuffer, &PrimaryBuffer->CursorPosition);
@@ -139,6 +167,45 @@ VtGetPaletteColor(PCONSOLE Console, UCHAR Index)
     PCONSRV_CONSOLE Cons = (PCONSRV_CONSOLE)Console;
     if (!Cons) return 0;
     return Cons->Colors[Index & 0x0F];
+}
+
+VOID
+NTAPI
+ConDrvVtInvalidateBufferRgb(PTEXTMODE_SCREEN_BUFFER ScreenBuffer)
+{
+    SIZE_T CellCount;
+    PCONSOLE Console;
+
+    if (!ScreenBuffer)
+        return;
+
+    CellCount = (SIZE_T)ScreenBuffer->ScreenBufferSize.X * ScreenBuffer->ScreenBufferSize.Y;
+
+    if (ScreenBuffer->FgColors)
+        RtlFillMemory(ScreenBuffer->FgColors, CellCount * sizeof(COLORREF), 0xFF);
+    if (ScreenBuffer->BgColors)
+        RtlFillMemory(ScreenBuffer->BgColors, CellCount * sizeof(COLORREF), 0xFF);
+
+    ScreenBuffer->VtState.Active = FALSE;
+    ScreenBuffer->VtState.CursorSaved = FALSE;
+    ScreenBuffer->VtState.UseRgbForeground = FALSE;
+    ScreenBuffer->VtState.UseRgbBackground = FALSE;
+    ScreenBuffer->VtState.SavedUseRgbForeground = FALSE;
+    ScreenBuffer->VtState.SavedUseRgbBackground = FALSE;
+    ScreenBuffer->VtState.PrivateModes = 0;
+    ScreenBuffer->VtState.ScrollTop = 0;
+    ScreenBuffer->VtState.ScrollBottom = max(0, ScreenBuffer->ScreenBufferSize.Y - 1);
+
+    Console = ScreenBuffer->Header.Console;
+    if (Console)
+    {
+        COLORREF fg = VtGetPaletteColor(Console, ScreenBuffer->VtState.CurrentAttributes & 0x0F);
+        COLORREF bg = VtGetPaletteColor(Console, (ScreenBuffer->VtState.CurrentAttributes >> 4) & 0x0F);
+        ScreenBuffer->VtState.CurrentFgColor = fg;
+        ScreenBuffer->VtState.CurrentBgColor = bg;
+        ScreenBuffer->VtState.SavedFgColor = fg;
+        ScreenBuffer->VtState.SavedBgColor = bg;
+    }
 }
 
 static UCHAR
@@ -191,6 +258,622 @@ VtColorFromXtermIndex(ULONG Index)
     }
 
     return 0;
+}
+
+static SIZE_T
+VtAppendNumber(WCHAR *Buffer, SIZE_T BufferLength, ULONG Number)
+{
+    WCHAR Temp[12];
+    SIZE_T Count = 0;
+    SIZE_T Written = 0;
+
+    if (BufferLength == 0)
+        return 0;
+
+    do
+    {
+        Temp[Count++] = (WCHAR)(L'0' + (Number % 10));
+        Number /= 10;
+    } while (Number != 0 && Count < ARRAYSIZE(Temp));
+
+    while (Count > 0 && Written < BufferLength)
+    {
+        Buffer[Written++] = Temp[--Count];
+    }
+
+    return Written;
+}
+
+static VOID
+VtSendInputResponse(PCONSOLE Console,
+                    const WCHAR *Response,
+                    SIZE_T Length)
+{
+    PINPUT_RECORD Records;
+    SIZE_T Index;
+    ULONG Total;
+
+    if (Console == NULL || Response == NULL || Length == 0)
+        return;
+
+    Total = (ULONG)(Length * 2);
+    Records = ConsoleAllocHeap(0, Total * sizeof(INPUT_RECORD));
+    if (!Records)
+        return;
+
+    for (Index = 0; Index < Length; ++Index)
+    {
+        PINPUT_RECORD Down = &Records[Index * 2];
+        PINPUT_RECORD Up = &Records[Index * 2 + 1];
+
+        RtlZeroMemory(Down, sizeof(INPUT_RECORD));
+        Down->EventType = KEY_EVENT;
+        Down->Event.KeyEvent.bKeyDown = TRUE;
+        Down->Event.KeyEvent.wRepeatCount = 1;
+        Down->Event.KeyEvent.uChar.UnicodeChar = Response[Index];
+
+        *Up = *Down;
+        Up->Event.KeyEvent.bKeyDown = FALSE;
+    }
+
+    ConDrvWriteConsoleInput(Console,
+                            &Console->InputBuffer,
+                            TRUE,
+                            Records,
+                            Total,
+                            NULL);
+
+    ConsoleFreeHeap(Records);
+}
+
+static VOID
+VtApplyRgbToRegion(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                  SHORT Left,
+                  SHORT Top,
+                  SHORT Right,
+                  SHORT Bottom)
+{
+    SHORT Width = ScreenBuffer->ScreenBufferSize.X;
+    SHORT Height = ScreenBuffer->ScreenBufferSize.Y;
+    SHORT x, y;
+    COLORREF Fg = ScreenBuffer->VtState.UseRgbForeground ? ScreenBuffer->VtState.CurrentFgColor : CLR_INVALID;
+    COLORREF Bg = ScreenBuffer->VtState.UseRgbBackground ? ScreenBuffer->VtState.CurrentBgColor : CLR_INVALID;
+
+    if (Width <= 0 || Height <= 0)
+        return;
+
+    Left = max(Left, 0);
+    Top = max(Top, 0);
+    Right = min(Right, (SHORT)(Width - 1));
+    Bottom = min(Bottom, (SHORT)(Height - 1));
+
+    if (Left > Right || Top > Bottom)
+        return;
+
+    for (y = Top; y <= Bottom; ++y)
+    {
+        for (x = Left; x <= Right; ++x)
+        {
+            ConioSetCellFgColor(ScreenBuffer, x, y, Fg);
+            ConioSetCellBgColor(ScreenBuffer, x, y, Bg);
+        }
+    }
+}
+
+static VOID
+VtFillRectWithCurrentAttr(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                          SHORT Left,
+                          SHORT Top,
+                          SHORT Right,
+                          SHORT Bottom)
+{
+    SHORT Width = ScreenBuffer->ScreenBufferSize.X;
+    SHORT Height = ScreenBuffer->ScreenBufferSize.Y;
+    SHORT X, Y;
+    USHORT Attr = ScreenBuffer->VtState.CurrentAttributes;
+    COLORREF Fg = ScreenBuffer->VtState.UseRgbForeground ? ScreenBuffer->VtState.CurrentFgColor : CLR_INVALID;
+    COLORREF Bg = ScreenBuffer->VtState.UseRgbBackground ? ScreenBuffer->VtState.CurrentBgColor : CLR_INVALID;
+
+    if (Width <= 0 || Height <= 0)
+        return;
+
+    Left = max(Left, 0);
+    Top = max(Top, 0);
+    Right = min(Right, (SHORT)(Width - 1));
+    Bottom = min(Bottom, (SHORT)(Height - 1));
+
+    if (Left > Right || Top > Bottom)
+        return;
+
+    for (Y = Top; Y <= Bottom; ++Y)
+    {
+        PCHAR_INFO Ptr = ConioCoordToPointer(ScreenBuffer, Left, Y);
+        for (X = Left; X <= Right; ++X, ++Ptr)
+        {
+            Ptr->Char.UnicodeChar = L' ';
+            Ptr->Attributes = Attr;
+            ConioSetCellFgColor(ScreenBuffer, X, Y, Fg);
+            ConioSetCellBgColor(ScreenBuffer, X, Y, Bg);
+        }
+    }
+}
+
+static VOID
+VtInsertCharacters(PCONSOLE Console,
+                   PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                   ULONG Count)
+{
+    SHORT Width = ScreenBuffer->ScreenBufferSize.X;
+    SHORT Y = ScreenBuffer->CursorPosition.Y;
+    SHORT X = ScreenBuffer->CursorPosition.X;
+    ULONG Available;
+    ULONG CellsToMove;
+    ULONG RowIndex;
+    SHORT FillCount;
+
+    if (Count == 0)
+        Count = 1;
+
+    if (Width <= 0)
+        return;
+
+    if (Y < 0 || Y >= ScreenBuffer->ScreenBufferSize.Y)
+        return;
+
+    if (X < 0 || X >= Width)
+        return;
+
+    Available = (ULONG)(Width - X);
+    if (Available == 0)
+        return;
+
+    if (Count > Available)
+        Count = Available;
+
+    FillCount = (SHORT)Count;
+
+    CellsToMove = Available - Count;
+    if (CellsToMove > 0)
+    {
+        PCHAR_INFO Row = ConioCoordToPointer(ScreenBuffer, 0, Y);
+        RowIndex = ConioCoordToIndex(ScreenBuffer, 0, Y);
+        RtlMoveMemory(Row + X + Count,
+                      Row + X,
+                      CellsToMove * sizeof(CHAR_INFO));
+
+        if (ScreenBuffer->FgColors)
+        {
+            RtlMoveMemory(ScreenBuffer->FgColors + RowIndex + X + Count,
+                          ScreenBuffer->FgColors + RowIndex + X,
+                          CellsToMove * sizeof(COLORREF));
+        }
+
+        if (ScreenBuffer->BgColors)
+        {
+            RtlMoveMemory(ScreenBuffer->BgColors + RowIndex + X + Count,
+                          ScreenBuffer->BgColors + RowIndex + X,
+                          CellsToMove * sizeof(COLORREF));
+        }
+    }
+
+    VtFillRectWithCurrentAttr(ScreenBuffer,
+                              X,
+                              Y,
+                              (SHORT)(X + FillCount - 1),
+                              Y);
+
+    {
+        SMALL_RECT Region;
+        Region.Left = X;
+        Region.Top = Y;
+        Region.Right = Width > 0 ? Width - 1 : 0;
+        Region.Bottom = Y;
+        TermDrawRegion(Console, &Region);
+    }
+}
+
+static VOID
+VtDeleteCharacters(PCONSOLE Console,
+                   PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                   ULONG Count)
+{
+    SHORT Width = ScreenBuffer->ScreenBufferSize.X;
+    SHORT Y = ScreenBuffer->CursorPosition.Y;
+    SHORT X = ScreenBuffer->CursorPosition.X;
+    ULONG Available;
+    ULONG CellsToMove;
+    ULONG RowIndex;
+    SHORT TailStart;
+    SHORT DeleteCount;
+
+    if (Count == 0)
+        Count = 1;
+
+    if (Width <= 0)
+        return;
+
+    if (Y < 0 || Y >= ScreenBuffer->ScreenBufferSize.Y)
+        return;
+
+    if (X < 0 || X >= Width)
+        return;
+
+    Available = (ULONG)(Width - X);
+    if (Available == 0)
+        return;
+
+    if (Count > Available)
+        Count = Available;
+
+    DeleteCount = (SHORT)Count;
+
+    CellsToMove = Available - Count;
+    if (CellsToMove > 0)
+    {
+        PCHAR_INFO Row = ConioCoordToPointer(ScreenBuffer, 0, Y);
+        RowIndex = ConioCoordToIndex(ScreenBuffer, 0, Y);
+        RtlMoveMemory(Row + X,
+                      Row + X + Count,
+                      CellsToMove * sizeof(CHAR_INFO));
+
+        if (ScreenBuffer->FgColors)
+        {
+            RtlMoveMemory(ScreenBuffer->FgColors + RowIndex + X,
+                          ScreenBuffer->FgColors + RowIndex + X + Count,
+                          CellsToMove * sizeof(COLORREF));
+        }
+
+        if (ScreenBuffer->BgColors)
+        {
+            RtlMoveMemory(ScreenBuffer->BgColors + RowIndex + X,
+                          ScreenBuffer->BgColors + RowIndex + X + Count,
+                          CellsToMove * sizeof(COLORREF));
+        }
+    }
+
+    TailStart = (SHORT)(Width - DeleteCount);
+    VtFillRectWithCurrentAttr(ScreenBuffer,
+                              TailStart,
+                              Y,
+                              Width > 0 ? Width - 1 : 0,
+                              Y);
+
+    {
+        SMALL_RECT Region;
+        Region.Left = X;
+        Region.Top = Y;
+        Region.Right = Width > 0 ? Width - 1 : 0;
+        Region.Bottom = Y;
+        TermDrawRegion(Console, &Region);
+    }
+}
+
+static VOID
+VtEraseCharacters(PCONSOLE Console,
+                  PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                  ULONG Count)
+{
+    SHORT Width = ScreenBuffer->ScreenBufferSize.X;
+    SHORT Y = ScreenBuffer->CursorPosition.Y;
+    SHORT X = ScreenBuffer->CursorPosition.X;
+
+    if (Count == 0)
+        Count = 1;
+
+    if (Width <= 0)
+        return;
+
+    if (Y < 0 || Y >= ScreenBuffer->ScreenBufferSize.Y)
+        return;
+
+    if (X < 0 || X >= Width)
+        return;
+
+    if ((ULONG)(Width - X) < Count)
+        Count = (ULONG)(Width - X);
+
+    if (Count == 0)
+        return;
+
+    {
+        SHORT EraseCount = (SHORT)Count;
+        VtFillRectWithCurrentAttr(ScreenBuffer,
+                                  X,
+                                  Y,
+                                  (SHORT)(X + EraseCount - 1),
+                                  Y);
+
+        {
+            SMALL_RECT Region;
+            Region.Left = X;
+            Region.Top = Y;
+            Region.Right = (SHORT)(X + EraseCount - 1);
+            Region.Bottom = Y;
+            TermDrawRegion(Console, &Region);
+        }
+    }
+}
+
+static VOID
+VtInsertLines(PCONSOLE Console,
+              PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+              ULONG Count)
+{
+    SHORT Width = ScreenBuffer->ScreenBufferSize.X;
+    SHORT CursorY = ScreenBuffer->CursorPosition.Y;
+    SHORT Top = ScreenBuffer->VtState.ScrollTop;
+    SHORT Bottom = ScreenBuffer->VtState.ScrollBottom;
+    SHORT LinesAvailable;
+    SHORT Line;
+
+    if (Count == 0)
+        Count = 1;
+
+    if (Width <= 0)
+        return;
+
+    if (Top < 0)
+        Top = 0;
+    if (Bottom >= ScreenBuffer->ScreenBufferSize.Y)
+        Bottom = ScreenBuffer->ScreenBufferSize.Y - 1;
+
+    if (CursorY < Top || CursorY > Bottom)
+        return;
+
+    LinesAvailable = Bottom - CursorY + 1;
+    if (LinesAvailable <= 0)
+        return;
+
+    if ((ULONG)LinesAvailable < Count)
+        Count = LinesAvailable;
+
+    {
+        SHORT InsertCount = (SHORT)Count;
+
+        if (InsertCount <= 0)
+            return;
+
+        if (InsertCount < LinesAvailable)
+        {
+            for (Line = Bottom - InsertCount; Line >= CursorY; --Line)
+            {
+                PCHAR_INFO Src = ConioCoordToPointer(ScreenBuffer, 0, Line);
+                PCHAR_INFO Dst = ConioCoordToPointer(ScreenBuffer, 0, Line + InsertCount);
+                RtlMoveMemory(Dst, Src, Width * sizeof(CHAR_INFO));
+
+                if (ScreenBuffer->FgColors)
+                {
+                    ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, 0, Line);
+                    ULONG DstIndex = ConioCoordToIndex(ScreenBuffer, 0, Line + InsertCount);
+                    RtlMoveMemory(ScreenBuffer->FgColors + DstIndex,
+                                  ScreenBuffer->FgColors + SrcIndex,
+                                  Width * sizeof(COLORREF));
+                }
+
+                if (ScreenBuffer->BgColors)
+                {
+                    ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, 0, Line);
+                    ULONG DstIndex = ConioCoordToIndex(ScreenBuffer, 0, Line + InsertCount);
+                    RtlMoveMemory(ScreenBuffer->BgColors + DstIndex,
+                                  ScreenBuffer->BgColors + SrcIndex,
+                                  Width * sizeof(COLORREF));
+                }
+            }
+        }
+
+        VtFillRectWithCurrentAttr(ScreenBuffer,
+                                  0,
+                                  CursorY,
+                                  Width > 0 ? Width - 1 : 0,
+                                  (SHORT)(CursorY + InsertCount - 1));
+
+        {
+            SMALL_RECT Region;
+            Region.Left = 0;
+            Region.Right = Width > 0 ? Width - 1 : 0;
+            Region.Top = CursorY;
+            Region.Bottom = Bottom;
+            TermDrawRegion(Console, &Region);
+        }
+    }
+}
+
+static VOID
+VtDeleteLines(PCONSOLE Console,
+              PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+              ULONG Count)
+{
+    SHORT Width = ScreenBuffer->ScreenBufferSize.X;
+    SHORT CursorY = ScreenBuffer->CursorPosition.Y;
+    SHORT Top = ScreenBuffer->VtState.ScrollTop;
+    SHORT Bottom = ScreenBuffer->VtState.ScrollBottom;
+    SHORT LinesAvailable;
+    SHORT Line;
+
+    if (Count == 0)
+        Count = 1;
+
+    if (Width <= 0)
+        return;
+
+    if (Top < 0)
+        Top = 0;
+    if (Bottom >= ScreenBuffer->ScreenBufferSize.Y)
+        Bottom = ScreenBuffer->ScreenBufferSize.Y - 1;
+
+    if (CursorY < Top || CursorY > Bottom)
+        return;
+
+    LinesAvailable = Bottom - CursorY + 1;
+    if (LinesAvailable <= 0)
+        return;
+
+    if ((ULONG)LinesAvailable < Count)
+        Count = LinesAvailable;
+
+    {
+        SHORT DeleteCount = (SHORT)Count;
+
+        if (DeleteCount <= 0)
+            return;
+
+        if (DeleteCount < LinesAvailable)
+        {
+            for (Line = CursorY; Line <= Bottom - DeleteCount; ++Line)
+            {
+                PCHAR_INFO Src = ConioCoordToPointer(ScreenBuffer, 0, Line + DeleteCount);
+                PCHAR_INFO Dst = ConioCoordToPointer(ScreenBuffer, 0, Line);
+                RtlMoveMemory(Dst, Src, Width * sizeof(CHAR_INFO));
+
+                if (ScreenBuffer->FgColors)
+                {
+                    ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, 0, Line + DeleteCount);
+                    ULONG DstIndex = ConioCoordToIndex(ScreenBuffer, 0, Line);
+                    RtlMoveMemory(ScreenBuffer->FgColors + DstIndex,
+                                  ScreenBuffer->FgColors + SrcIndex,
+                                  Width * sizeof(COLORREF));
+                }
+
+                if (ScreenBuffer->BgColors)
+                {
+                    ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, 0, Line + DeleteCount);
+                    ULONG DstIndex = ConioCoordToIndex(ScreenBuffer, 0, Line);
+                    RtlMoveMemory(ScreenBuffer->BgColors + DstIndex,
+                                  ScreenBuffer->BgColors + SrcIndex,
+                                  Width * sizeof(COLORREF));
+                }
+            }
+        }
+
+        VtFillRectWithCurrentAttr(ScreenBuffer,
+                                  0,
+                                  (SHORT)(Bottom - DeleteCount + 1),
+                                  Width > 0 ? Width - 1 : 0,
+                                  Bottom);
+
+        {
+            SMALL_RECT Region;
+            Region.Left = 0;
+            Region.Right = Width > 0 ? Width - 1 : 0;
+            Region.Top = CursorY;
+            Region.Bottom = Bottom;
+            TermDrawRegion(Console, &Region);
+        }
+    }
+}
+
+static VOID
+VtScrollRegionUp(PCONSOLE Console,
+                 PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                 ULONG Lines)
+{
+    SHORT Top = ScreenBuffer->VtState.ScrollTop;
+    SHORT Bottom = ScreenBuffer->VtState.ScrollBottom;
+    SHORT Height = Bottom - Top + 1;
+    SMALL_RECT ScrollRect;
+    COORD DestOrigin;
+    CHAR_INFO FillChar;
+
+    if (Height <= 0)
+        return;
+
+    if (Lines == 0)
+        Lines = 1;
+    if (Lines > (ULONG)Height)
+        Lines = Height;
+
+    ScrollRect.Left = 0;
+    ScrollRect.Top = Top;
+    ScrollRect.Right = ScreenBuffer->ScreenBufferSize.X - 1;
+    ScrollRect.Bottom = Bottom;
+
+    DestOrigin.X = 0;
+    DestOrigin.Y = (SHORT)(Top - (SHORT)Lines);
+
+    FillChar.Char.UnicodeChar = L' ';
+    FillChar.Attributes = ScreenBuffer->VtState.CurrentAttributes;
+
+    if (!NT_SUCCESS(ConDrvScrollConsoleScreenBuffer(Console,
+                                                    ScreenBuffer,
+                                                    TRUE,
+                                                    &ScrollRect,
+                                                    FALSE,
+                                                    NULL,
+                                                    &DestOrigin,
+                                                    FillChar)))
+    {
+        return;
+    }
+
+    VtApplyRgbToRegion(ScreenBuffer,
+                       0,
+                       Bottom - (SHORT)Lines + 1,
+                       ScreenBuffer->ScreenBufferSize.X - 1,
+                       Bottom);
+}
+
+static VOID
+VtScrollRegionDown(PCONSOLE Console,
+                   PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                   ULONG Lines)
+{
+    SHORT Top = ScreenBuffer->VtState.ScrollTop;
+    SHORT Bottom = ScreenBuffer->VtState.ScrollBottom;
+    SHORT Height = Bottom - Top + 1;
+    SMALL_RECT ScrollRect;
+    COORD DestOrigin;
+    CHAR_INFO FillChar;
+
+    if (Height <= 0)
+        return;
+
+    if (Lines == 0)
+        Lines = 1;
+    if (Lines > (ULONG)Height)
+        Lines = Height;
+
+    ScrollRect.Left = 0;
+    ScrollRect.Top = Top;
+    ScrollRect.Right = ScreenBuffer->ScreenBufferSize.X - 1;
+    ScrollRect.Bottom = Bottom;
+
+    DestOrigin.X = 0;
+    DestOrigin.Y = (SHORT)(Top + (SHORT)Lines);
+
+    FillChar.Char.UnicodeChar = L' ';
+    FillChar.Attributes = ScreenBuffer->VtState.CurrentAttributes;
+
+    if (!NT_SUCCESS(ConDrvScrollConsoleScreenBuffer(Console,
+                                                    ScreenBuffer,
+                                                    TRUE,
+                                                    &ScrollRect,
+                                                    FALSE,
+                                                    NULL,
+                                                    &DestOrigin,
+                                                    FillChar)))
+    {
+        return;
+    }
+
+    VtApplyRgbToRegion(ScreenBuffer,
+                       0,
+                       Top,
+                       ScreenBuffer->ScreenBufferSize.X - 1,
+                       Top + (SHORT)Lines - 1);
+}
+
+static BOOLEAN
+VtHandleOscSequence(PCONSOLE Console,
+                    PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                    const WCHAR *Sequence,
+                    ULONG Length)
+{
+    UNREFERENCED_PARAMETER(Console);
+    UNREFERENCED_PARAMETER(ScreenBuffer);
+    UNREFERENCED_PARAMETER(Sequence);
+    UNREFERENCED_PARAMETER(Length);
+    /* OSC sequences are currently ignored. */
+    return TRUE;
 }
 
 static NTSTATUS
@@ -447,34 +1130,58 @@ VtApplySgr(PCONSOLE Console,
 
 
 static VOID
-VtEraseLineToEnd(PCONSOLE Console,
-                 PTEXTMODE_SCREEN_BUFFER ScreenBuffer)
+VtEraseLine(PCONSOLE Console,
+            PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+            ULONG Mode)
 {
     SHORT X;
     SHORT Y = ScreenBuffer->CursorPosition.Y;
     USHORT Attr = ScreenBuffer->VtState.CurrentAttributes;
     SMALL_RECT Region;
     PCHAR_INFO Ptr;
+    SHORT StartX, EndX;
 
     if (Y < 0 || Y >= ScreenBuffer->ScreenBufferSize.Y)
         return;
 
-    Ptr = ConioCoordToPointer(ScreenBuffer,
-                              ScreenBuffer->CursorPosition.X,
-                              Y);
+    switch (Mode)
+    {
+        case 1:
+            StartX = 0;
+            EndX = ScreenBuffer->CursorPosition.X;
+            break;
 
-    for (X = ScreenBuffer->CursorPosition.X;
-         X < ScreenBuffer->ScreenBufferSize.X;
-         ++X, ++Ptr)
+        case 2:
+            StartX = 0;
+            EndX = ScreenBuffer->ScreenBufferSize.X - 1;
+            break;
+
+        case 0:
+        default:
+            StartX = ScreenBuffer->CursorPosition.X;
+            EndX = ScreenBuffer->ScreenBufferSize.X - 1;
+            break;
+    }
+
+    StartX = max(StartX, 0);
+    EndX = min(EndX, (SHORT)(ScreenBuffer->ScreenBufferSize.X - 1));
+    if (EndX < StartX)
+        return;
+
+    Ptr = ConioCoordToPointer(ScreenBuffer, StartX, Y);
+
+    for (X = StartX; X <= EndX; ++X, ++Ptr)
     {
         Ptr->Char.UnicodeChar = L' ';
         Ptr->Attributes = Attr;
-        ConioSetCellFgColor(ScreenBuffer, X, Y, ScreenBuffer->VtState.UseRgbForeground ? ScreenBuffer->VtState.CurrentFgColor : CLR_INVALID);
-        ConioSetCellBgColor(ScreenBuffer, X, Y, ScreenBuffer->VtState.UseRgbBackground ? ScreenBuffer->VtState.CurrentBgColor : CLR_INVALID);
+        ConioSetCellFgColor(ScreenBuffer, X, Y,
+                            ScreenBuffer->VtState.UseRgbForeground ? ScreenBuffer->VtState.CurrentFgColor : CLR_INVALID);
+        ConioSetCellBgColor(ScreenBuffer, X, Y,
+                            ScreenBuffer->VtState.UseRgbBackground ? ScreenBuffer->VtState.CurrentBgColor : CLR_INVALID);
     }
 
-    Region.Left   = ScreenBuffer->CursorPosition.X;
-    Region.Right  = ScreenBuffer->ScreenBufferSize.X - 1;
+    Region.Left   = StartX;
+    Region.Right  = EndX;
     Region.Top    = Y;
     Region.Bottom = Y;
     TermDrawRegion(Console, &Region);
@@ -490,29 +1197,96 @@ VtEraseDisplay(PCONSOLE Console,
     SMALL_RECT Region;
     COORD Origin;
 
-    if (Mode != 2)
-        return; /* Only support CSI 2 J for now */
-
-    for (Y = 0; Y < ScreenBuffer->ScreenBufferSize.Y; ++Y)
+    switch (Mode)
     {
-        PCHAR_INFO Ptr = ConioCoordToPointer(ScreenBuffer, 0, Y);
-        for (X = 0; X < ScreenBuffer->ScreenBufferSize.X; ++X, ++Ptr)
+        case 1:
+        case 0:
         {
-            Ptr->Char.UnicodeChar = L' ';
-            Ptr->Attributes = Attr;
-            ConioSetCellFgColor(ScreenBuffer, X, Y, ScreenBuffer->VtState.UseRgbForeground ? ScreenBuffer->VtState.CurrentFgColor : CLR_INVALID);
-            ConioSetCellBgColor(ScreenBuffer, X, Y, ScreenBuffer->VtState.UseRgbBackground ? ScreenBuffer->VtState.CurrentBgColor : CLR_INVALID);
+            SHORT StartY, EndY;
+            SHORT StartX = 0;
+            SHORT EndX = ScreenBuffer->ScreenBufferSize.X - 1;
+
+            if (Mode == 0)
+            {
+                StartY = ScreenBuffer->CursorPosition.Y;
+                EndY = ScreenBuffer->ScreenBufferSize.Y - 1;
+            }
+            else
+            {
+                StartY = 0;
+                EndY = ScreenBuffer->CursorPosition.Y;
+            }
+
+            StartY = max(StartY, 0);
+            EndY = min(EndY, (SHORT)(ScreenBuffer->ScreenBufferSize.Y - 1));
+            if (EndY < StartY)
+                return;
+
+            for (Y = StartY; Y <= EndY; ++Y)
+            {
+                SHORT LocalStartX = StartX;
+                SHORT LocalEndX = EndX;
+
+                if (Mode == 0 && Y == StartY)
+                    LocalStartX = max(ScreenBuffer->CursorPosition.X, 0);
+                else if (Mode == 1 && Y == EndY)
+                    LocalEndX = min(ScreenBuffer->CursorPosition.X, (SHORT)(ScreenBuffer->ScreenBufferSize.X - 1));
+
+                if (LocalEndX < LocalStartX)
+                    continue;
+
+                PCHAR_INFO Ptr = ConioCoordToPointer(ScreenBuffer, LocalStartX, Y);
+                for (X = LocalStartX; X <= LocalEndX; ++X, ++Ptr)
+                {
+                    Ptr->Char.UnicodeChar = L' ';
+                    Ptr->Attributes = Attr;
+                    ConioSetCellFgColor(ScreenBuffer, X, Y,
+                                        ScreenBuffer->VtState.UseRgbForeground ? ScreenBuffer->VtState.CurrentFgColor : CLR_INVALID);
+                    ConioSetCellBgColor(ScreenBuffer, X, Y,
+                                        ScreenBuffer->VtState.UseRgbBackground ? ScreenBuffer->VtState.CurrentBgColor : CLR_INVALID);
+                }
+            }
+
+            Region.Left   = 0;
+            Region.Right  = ScreenBuffer->ScreenBufferSize.X - 1;
+            Region.Top    = StartY;
+            Region.Bottom = EndY;
+            TermDrawRegion(Console, &Region);
+            break;
         }
+
+        case 2:
+        case 3:
+            for (Y = 0; Y < ScreenBuffer->ScreenBufferSize.Y; ++Y)
+            {
+                PCHAR_INFO Ptr = ConioCoordToPointer(ScreenBuffer, 0, Y);
+                for (X = 0; X < ScreenBuffer->ScreenBufferSize.X; ++X, ++Ptr)
+                {
+                    Ptr->Char.UnicodeChar = L' ';
+                    Ptr->Attributes = Attr;
+                    ConioSetCellFgColor(ScreenBuffer, X, Y,
+                                        ScreenBuffer->VtState.UseRgbForeground ? ScreenBuffer->VtState.CurrentFgColor : CLR_INVALID);
+                    ConioSetCellBgColor(ScreenBuffer, X, Y,
+                                        ScreenBuffer->VtState.UseRgbBackground ? ScreenBuffer->VtState.CurrentBgColor : CLR_INVALID);
+                }
+            }
+
+            Region.Left   = 0;
+            Region.Top    = 0;
+            Region.Right  = ScreenBuffer->ScreenBufferSize.X - 1;
+            Region.Bottom = ScreenBuffer->ScreenBufferSize.Y - 1;
+            TermDrawRegion(Console, &Region);
+
+            Origin.X = Origin.Y = 0;
+            ConDrvSetConsoleCursorPosition(Console, ScreenBuffer, &Origin);
+
+            if (Mode == 3)
+            {
+                ScreenBuffer->VirtualY = 0;
+                ScreenBuffer->ViewOrigin.Y = 0;
+            }
+            break;
     }
-
-    Region.Left   = 0;
-    Region.Top    = 0;
-    Region.Right  = ScreenBuffer->ScreenBufferSize.X - 1;
-    Region.Bottom = ScreenBuffer->ScreenBufferSize.Y - 1;
-    TermDrawRegion(Console, &Region);
-
-    Origin.X = Origin.Y = 0;
-    ConDrvSetConsoleCursorPosition(Console, ScreenBuffer, &Origin);
 }
 
 VOID
@@ -538,6 +1312,8 @@ ConDrvVtInitializeBuffer(PTEXTMODE_SCREEN_BUFFER ScreenBuffer)
     ScreenBuffer->VtState.SavedUseRgbBackground = FALSE;
     ScreenBuffer->VtState.PrivateModes = 0;
     ScreenBuffer->VtState.AlternateBuffer = NULL;
+    ScreenBuffer->VtState.ScrollTop = 0;
+    ScreenBuffer->VtState.ScrollBottom = max(0, ScreenBuffer->ScreenBufferSize.Y - 1);
     ScreenBuffer->VtState.PrimaryBuffer = NULL;
     ScreenBuffer->VtState.PrimaryCursorInfo = ScreenBuffer->CursorInfo;
     ScreenBuffer->VtState.PrimaryCursorPos = Zero;
@@ -732,8 +1508,121 @@ VtHandleCsiSequence(PCONSOLE Console,
             return TRUE;
 
         case L'K':
-            VtEraseLineToEnd(Console, ScreenBuffer);
+            VtEraseLine(Console, ScreenBuffer, (Count >= 1) ? Params[0] : 0);
             return TRUE;
+
+        case L'@':
+            VtInsertCharacters(Console, ScreenBuffer, (Count >= 1) ? Params[0] : 1);
+            return TRUE;
+
+        case L'P':
+            VtDeleteCharacters(Console, ScreenBuffer, (Count >= 1) ? Params[0] : 1);
+            return TRUE;
+
+        case L'X':
+            VtEraseCharacters(Console, ScreenBuffer, (Count >= 1) ? Params[0] : 1);
+            return TRUE;
+
+        case L'L':
+            VtInsertLines(Console, ScreenBuffer, (Count >= 1) ? Params[0] : 1);
+            return TRUE;
+
+        case L'M':
+            VtDeleteLines(Console, ScreenBuffer, (Count >= 1) ? Params[0] : 1);
+            return TRUE;
+
+        case L'n':
+        {
+            ULONG Query = (Count >= 1) ? Params[0] : 0;
+            WCHAR Response[32];
+            SIZE_T Len = 0;
+
+            switch (Query)
+            {
+                case 5:
+                    Response[Len++] = L'\x1b';
+                    Response[Len++] = L'[';
+                    Response[Len++] = L'0';
+                    Response[Len++] = L'n';
+                    break;
+
+                case 6:
+                {
+                    SHORT Row = ScreenBuffer->CursorPosition.Y - ScreenBuffer->ViewOrigin.Y;
+                    SHORT Col = ScreenBuffer->CursorPosition.X - ScreenBuffer->ViewOrigin.X;
+
+                    if (Row < 0) Row = 0;
+                    if (Col < 0) Col = 0;
+
+                    Response[Len++] = L'\x1b';
+                    Response[Len++] = L'[';
+                    Len += VtAppendNumber(Response + Len,
+                                          ARRAYSIZE(Response) - Len,
+                                          (ULONG)Row + 1);
+                    if (Len < ARRAYSIZE(Response))
+                        Response[Len++] = L';';
+                    Len += VtAppendNumber(Response + Len,
+                                          ARRAYSIZE(Response) - Len,
+                                          (ULONG)Col + 1);
+                    if (Len < ARRAYSIZE(Response))
+                        Response[Len++] = L'R';
+                    break;
+                }
+
+                default:
+                    return FALSE;
+            }
+
+            VtSendInputResponse(Console, Response, Len);
+            return TRUE;
+        }
+
+        case L'S':
+        {
+            ULONG Lines = (Count >= 1 && Params[0] != 0) ? Params[0] : 1;
+            VtScrollRegionUp(Console, ScreenBuffer, Lines);
+            return TRUE;
+        }
+
+        case L'T':
+        {
+            ULONG Lines = (Count >= 1 && Params[0] != 0) ? Params[0] : 1;
+            VtScrollRegionDown(Console, ScreenBuffer, Lines);
+            return TRUE;
+        }
+
+        case L'r':
+        {
+            SHORT Top = 0;
+            SHORT Bottom = ScreenBuffer->ScreenBufferSize.Y > 0 ? ScreenBuffer->ScreenBufferSize.Y - 1 : 0;
+
+            if (Count >= 1 && Params[0] != 0)
+                Top = (SHORT)max(0L, (LONG)Params[0] - 1);
+            if (Count >= 2 && Params[1] != 0)
+                Bottom = (SHORT)min((LONG)Bottom, (LONG)Params[1] - 1);
+
+            if (Top < 0)
+                Top = 0;
+            if (Bottom >= ScreenBuffer->ScreenBufferSize.Y)
+                Bottom = ScreenBuffer->ScreenBufferSize.Y - 1;
+
+            if (Bottom < Top)
+            {
+                Top = 0;
+                Bottom = ScreenBuffer->ScreenBufferSize.Y > 0 ? ScreenBuffer->ScreenBufferSize.Y - 1 : 0;
+            }
+
+            ScreenBuffer->VtState.ScrollTop = Top;
+            ScreenBuffer->VtState.ScrollBottom = Bottom;
+
+            {
+                COORD Home;
+                Home.X = 0;
+                Home.Y = Top;
+                ConDrvSetConsoleCursorPosition(Console, ScreenBuffer, &Home);
+            }
+            return TRUE;
+        }
 
         case L'q':
             if (Intermediate == L' ')
@@ -913,6 +1802,58 @@ ConDrvVtWriteConsole(PCONSOLE Console,
                                      ScreenBuffer,
                                      Buffer + EscStart,
                                      Pos - EscStart);
+                SegmentStart = Pos;
+                continue;
+            }
+            else if (Ch == L']')
+            {
+                ULONG OscStart = Pos;
+                ULONG SearchPos = Pos;
+                ULONG TerminatorLen = 0;
+
+                while (SearchPos < Length)
+                {
+                    WCHAR C = Buffer[SearchPos];
+                    if (C == L'\a')
+                    {
+                        TerminatorLen = 1;
+                        break;
+                    }
+                    if (C == L'\u001b' && (SearchPos + 1) < Length && Buffer[SearchPos + 1] == L'\\')
+                    {
+                        TerminatorLen = 2;
+                        break;
+                    }
+                    SearchPos++;
+                }
+
+                if (TerminatorLen == 0)
+                {
+                    Status = VtFlushText(Console,
+                                         ScreenBuffer,
+                                         Buffer + EscStart,
+                                         Pos - EscStart);
+                    SegmentStart = Pos;
+                    continue;
+                }
+
+                if (VtHandleOscSequence(Console,
+                                        ScreenBuffer,
+                                        Buffer + OscStart,
+                                        SearchPos - OscStart))
+                {
+                    AnyHandled = TRUE;
+                    Pos = SearchPos + TerminatorLen;
+                    ScreenBuffer = (PTEXTMODE_SCREEN_BUFFER)Console->ActiveBuffer;
+                    SegmentStart = Pos;
+                    continue;
+                }
+
+                Status = VtFlushText(Console,
+                                     ScreenBuffer,
+                                     Buffer + EscStart,
+                                     (SearchPos + TerminatorLen) - EscStart);
+                Pos = SearchPos + TerminatorLen;
                 SegmentStart = Pos;
                 continue;
             }
