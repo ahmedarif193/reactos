@@ -9,6 +9,7 @@
 @ stdcall Wow64CpuSetContext(ptr ptr long)
 @ stdcall Wow64CpuSetPendingApc(ptr ptr long long)
 @ stdcall Wow64CpuDispatchPendingApc(ptr)
+@ stdcall Wow64CpuPrepareCallback(ptr ptr long ptr long)
 @ stdcall Wow64CpuTakePendingApc(ptr ptr)
 @ stdcall Wow64PrepareForException(ptr ptr)
 @ stdcall Wow64TransitionToCompat(ptr ptr ptr)
