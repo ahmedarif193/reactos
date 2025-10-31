@@ -358,10 +358,13 @@ ConDrvSetConsoleMode(IN PCONSOLE Console,
                      IN PCONSOLE_IO_OBJECT Object,
                      IN ULONG ConsoleMode)
 {
-#define CONSOLE_VALID_INPUT_MODES   ( ENABLE_PROCESSED_INPUT  | ENABLE_LINE_INPUT   | \
-                                      ENABLE_ECHO_INPUT       | ENABLE_WINDOW_INPUT | \
-                                      ENABLE_MOUSE_INPUT )
-#define CONSOLE_VALID_OUTPUT_MODES  ( ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT )
+#define CONSOLE_VALID_INPUT_MODES   ( ENABLE_PROCESSED_INPUT      | ENABLE_LINE_INPUT   | \
+                                      ENABLE_ECHO_INPUT           | ENABLE_WINDOW_INPUT | \
+                                      ENABLE_MOUSE_INPUT          | \
+                                      ENABLE_VIRTUAL_TERMINAL_INPUT )
+#define CONSOLE_VALID_OUTPUT_MODES  ( ENABLE_PROCESSED_OUTPUT     | ENABLE_WRAP_AT_EOL_OUTPUT | \
+                                      ENABLE_VIRTUAL_TERMINAL_PROCESSING | \
+                                      DISABLE_NEWLINE_AUTO_RETURN )
 
     NTSTATUS Status = STATUS_SUCCESS;
 
