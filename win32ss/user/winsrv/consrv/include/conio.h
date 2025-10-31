@@ -158,6 +158,8 @@ typedef struct _TEXTMODE_SCREEN_BUFFER
         BOOLEAN SavedUseRgbBackground;           /* Saved RGB flag for background */
         SHORT   ScrollTop;                       /* Top margin for scrolling (0-based) */
         SHORT   ScrollBottom;                    /* Bottom margin for scrolling (0-based inclusive) */
+        BOOLEAN HyperlinkActive;                 /* TRUE when OSC 8 hyperlink is active */
+        UNICODE_STRING HyperlinkUri;             /* Current hyperlink target */
     } VtState;
 } TEXTMODE_SCREEN_BUFFER, *PTEXTMODE_SCREEN_BUFFER;
 
