@@ -12,7 +12,6 @@
 #include <ntoskrnl.h>
 #define NDEBUG
 #include <debug.h>
-
 /* PRIVATE FUNCTIONS *********************************************************/
 
 #if DBG
@@ -157,33 +156,6 @@ PsGetContextThread(IN PETHREAD Thread,
     }
     _SEH2_END;
 
-#ifdef _M_AMD64
-    /*
-     * WOW64 context handling:
-     * If this is a WOW64 thread and the caller is 32-bit (PreviousMode check
-     * isn't sufficient here - we need to detect based on context structure size),
-     * redirect to wow64cpu to retrieve the 32-bit context.
-     *
-     * Note: We detect 32-bit callers by checking if they're in a WOW64 process.
-     */
-    if (PsIsWow64Thread(Thread))
-    {
-        /* Try to get WOW64 context directly */
-        Status = PspWow64GetContext(Thread, ThreadContext);
-        if (NT_SUCCESS(Status))
-        {
-            /* Successfully retrieved 32-bit context */
-            return Status;
-        }
-
-        /*
-         * If WOW64 context retrieval fails, fall through to standard handling.
-         * This allows debugging scenarios where we want the 64-bit context
-         * of a WOW64 thread.
-         */
-    }
-#endif
-
     /* Initialize the wait event */
     KeInitializeEvent(&GetSetContext.Event, NotificationEvent, FALSE);
 
@@ -317,7 +289,7 @@ PsSetContextThread(IN PETHREAD Thread,
     if (PsIsWow64Thread(Thread))
     {
         /* Try to set WOW64 context directly */
-        Status = PspWow64SetContext(Thread, ThreadContext);
+        Status = PspWow64SetContext(Thread, (const WOW64_CONTEXT *)ThreadContext);
         if (NT_SUCCESS(Status))
         {
             /* Successfully set 32-bit context */
@@ -468,5 +440,141 @@ NtSetContextThread(IN HANDLE ThreadHandle,
     ObDereferenceObject(Thread);
     return Status;
 }
+
+#ifdef _M_AMD64
+
+NTSTATUS
+NTAPI
+NtWow64GetContextThread(IN HANDLE ThreadHandle,
+                        OUT PWOW64_CONTEXT Wow64Context)
+{
+    PETHREAD Thread;
+    NTSTATUS Status;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    WOW64_CONTEXT LocalContext;
+
+    PAGED_CODE();
+
+    if (!Wow64Context)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForWrite(Wow64Context, sizeof(WOW64_CONTEXT), sizeof(ULONG));
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
+    Status = ObReferenceObjectByHandle(ThreadHandle,
+                                       THREAD_GET_CONTEXT,
+                                       PsThreadType,
+                                       PreviousMode,
+                                       (PVOID *)&Thread,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    if (Thread->SystemThread || !PsIsWow64Thread(Thread))
+    {
+        Status = STATUS_NOT_SUPPORTED;
+    }
+    else
+    {
+        Status = PspWow64GetContext(Thread, &LocalContext);
+        if (NT_SUCCESS(Status))
+        {
+            if (PreviousMode != KernelMode)
+            {
+                _SEH2_TRY
+                {
+                    RtlCopyMemory(Wow64Context, &LocalContext, sizeof(LocalContext));
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+            }
+            else
+            {
+                *Wow64Context = LocalContext;
+            }
+        }
+    }
+
+    ObDereferenceObject(Thread);
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+NtWow64SetContextThread(IN HANDLE ThreadHandle,
+                        IN PWOW64_CONTEXT Wow64Context)
+{
+    PETHREAD Thread;
+    NTSTATUS Status;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    WOW64_CONTEXT LocalContext;
+
+    PAGED_CODE();
+
+    if (!Wow64Context)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForRead(Wow64Context, sizeof(WOW64_CONTEXT), sizeof(ULONG));
+            RtlCopyMemory(&LocalContext, Wow64Context, sizeof(LocalContext));
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+    else
+    {
+        LocalContext = *Wow64Context;
+    }
+
+    Status = ObReferenceObjectByHandle(ThreadHandle,
+                                       THREAD_SET_CONTEXT,
+                                       PsThreadType,
+                                       PreviousMode,
+                                       (PVOID *)&Thread,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    if (Thread->SystemThread || !PsIsWow64Thread(Thread))
+    {
+        Status = STATUS_NOT_SUPPORTED;
+    }
+    else
+    {
+        Status = PspWow64SetContext(Thread, &LocalContext);
+    }
+
+    ObDereferenceObject(Thread);
+    return Status;
+}
+
+#endif /* _M_AMD64 */
 
 /* EOF */
