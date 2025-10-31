@@ -26,6 +26,33 @@ Author:
 #include <ketypes.h>
 #include <section_attribs.h>
 
+#ifndef NTOS_MODE_USER
+#include <pstypes.h>
+#include <extypes.h>
+#endif
+
+typedef struct _WOW64_CONTEXT WOW64_CONTEXT;
+#ifndef _PWOW64_CONTEXT_DEFINED
+#define _PWOW64_CONTEXT_DEFINED
+typedef WOW64_CONTEXT *PWOW64_CONTEXT;
+#endif
+
+typedef
+#ifdef NTOS_MODE_USER
+    ULONG
+#else
+    PROCESSINFOCLASS
+#endif
+    KE_PROCESSINFOCLASS;
+
+typedef
+#ifdef NTOS_MODE_USER
+    ULONG
+#else
+    SYSTEM_INFORMATION_CLASS
+#endif
+    KE_SYSTEM_INFORMATION_CLASS;
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -468,6 +495,76 @@ NtGetContextThread(
 );
 
 NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtWow64GetContextThread(
+    _In_ HANDLE ThreadHandle,
+    _Out_ PWOW64_CONTEXT Wow64Context
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtWow64ReadVirtualMemory64(
+    _In_ HANDLE ProcessHandle,
+    _In_ ULONG64 BaseAddress,
+    _Out_writes_bytes_opt_(NumberOfBytesToRead) PVOID Buffer,
+    _In_ ULONG64 NumberOfBytesToRead,
+    _Out_opt_ PULONG64 NumberOfBytesRead
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtWow64WriteVirtualMemory64(
+    _In_ HANDLE ProcessHandle,
+    _In_ ULONG64 BaseAddress,
+    _In_reads_bytes_(NumberOfBytesToWrite) PVOID Buffer,
+    _In_ ULONG64 NumberOfBytesToWrite,
+    _Out_opt_ PULONG64 NumberOfBytesWritten
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtWow64AllocateVirtualMemory64(
+    _In_ HANDLE ProcessHandle,
+    _Inout_ PULONG64 BaseAddress,
+    _In_ ULONG64 ZeroBits,
+    _Inout_ PULONG64 RegionSize,
+    _In_ ULONG AllocationType,
+    _In_ ULONG Protect
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtWow64QueryInformationProcess64(
+    _In_ HANDLE ProcessHandle,
+    _In_ KE_PROCESSINFOCLASS ProcessInformationClass,
+    _Out_writes_bytes_opt_(ProcessInformationLength) PVOID ProcessInformation,
+    _In_ ULONG ProcessInformationLength,
+    _Out_opt_ PULONG ReturnLength
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtWow64GetNativeSystemInformation(
+    _In_ KE_SYSTEM_INFORMATION_CLASS SystemInformationClass,
+    _Out_writes_bytes_opt_(SystemInformationLength) PVOID SystemInformation,
+    _In_ ULONG SystemInformationLength,
+    _Out_opt_ PULONG ReturnLength
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtWow64IsProcessorFeaturePresent(
+    _In_ ULONG ProcessorFeature
+);
+
+NTSYSCALLAPI
 ULONG
 NTAPI
 NtGetTickCount(
@@ -544,6 +641,14 @@ NTAPI
 NtSetContextThread(
     _In_ HANDLE ThreadHandle,
     _In_ PCONTEXT Context
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtWow64SetContextThread(
+    _In_ HANDLE ThreadHandle,
+    _In_ PWOW64_CONTEXT Wow64Context
 );
 
 NTSYSCALLAPI
