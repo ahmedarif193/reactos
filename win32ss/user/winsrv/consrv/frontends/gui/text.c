@@ -36,6 +36,24 @@ PaletteRGBFromAttrib(PCONSRV_CONSOLE Console, WORD Attribute)
     return PALETTERGB(pe.peRed, pe.peGreen, pe.peBlue);
 }
 
+static COLORREF
+GuiResolveColor(PCONSRV_CONSOLE Console,
+               PTEXTMODE_SCREEN_BUFFER Buffer,
+               ULONG X,
+               ULONG Y,
+               WORD Attribute,
+               BOOLEAN Foreground)
+{
+    COLORREF Color = Foreground ? ConioGetCellFgColor(Buffer, X, Y)
+                                : ConioGetCellBgColor(Buffer, X, Y);
+    if (Color != CLR_INVALID)
+        return Color;
+
+    return PaletteRGBFromAttrib(Console, Foreground ?
+                                TextAttribFromAttrib(Attribute) :
+                                BkgdAttribFromAttrib(Attribute));
+}
+
 static VOID
 CopyBlock(PTEXTMODE_SCREEN_BUFFER Buffer,
           PSMALL_RECT Selection)
@@ -390,7 +408,7 @@ GuiPaintCaret(
             if (Attribute == DEFAULT_SCREEN_ATTRIB)
                 Attribute = Buffer->ScreenDefaultAttrib;
 
-            CursorBrush = CreateSolidBrush(PaletteRGBFromAttrib(Console, TextAttribFromAttrib(Attribute)));
+            CursorBrush = CreateSolidBrush(GuiResolveColor(Console, Buffer, CursorX, CursorY, Attribute, TRUE));
             OldBrush    = SelectObject(GuiData->hMemDC, CursorBrush);
 
             if (Attribute & COMMON_LVB_LEADING_BYTE)
@@ -472,8 +490,8 @@ GuiPaintTextModeBuffer(PTEXTMODE_SCREEN_BUFFER Buffer,
 
     LastAttribute = ConioCoordToPointer(Buffer, LeftColumn, TopLine)->Attributes;
 
-    SetTextColor(GuiData->hMemDC, PaletteRGBFromAttrib(Console, TextAttribFromAttrib(LastAttribute)));
-    SetBkColor(GuiData->hMemDC, PaletteRGBFromAttrib(Console, BkgdAttribFromAttrib(LastAttribute)));
+    SetTextColor(GuiData->hMemDC, GuiResolveColor(Console, Buffer, LeftColumn, TopLine, LastAttribute, TRUE));
+    SetBkColor(GuiData->hMemDC, GuiResolveColor(Console, Buffer, LeftColumn, TopLine, LastAttribute, FALSE));
 
     /* We use the underscore flag as a underline flag */
     IsUnderline = !!(LastAttribute & COMMON_LVB_UNDERSCORE);
@@ -489,8 +507,8 @@ GuiPaintTextModeBuffer(PTEXTMODE_SCREEN_BUFFER Buffer,
             {
                 From = ConioCoordToPointer(Buffer, Char, Line);
                 Attribute = From->Attributes;
-                SetTextColor(GuiData->hMemDC, PaletteRGBFromAttrib(Console, TextAttribFromAttrib(Attribute)));
-                SetBkColor(GuiData->hMemDC, PaletteRGBFromAttrib(Console, BkgdAttribFromAttrib(Attribute)));
+                SetTextColor(GuiData->hMemDC, GuiResolveColor(Console, Buffer, Char, Line, Attribute, TRUE));
+                SetBkColor(GuiData->hMemDC, GuiResolveColor(Console, Buffer, Char, Line, Attribute, FALSE));
 
                 /* Change underline state if needed */
                 if (!!(Attribute & COMMON_LVB_UNDERSCORE) != IsUnderline)
@@ -540,8 +558,8 @@ GuiPaintTextModeBuffer(PTEXTMODE_SCREEN_BUFFER Buffer,
                     if (Attribute != LastAttribute)
                     {
                         LastAttribute = Attribute;
-                        SetTextColor(GuiData->hMemDC, PaletteRGBFromAttrib(Console, TextAttribFromAttrib(LastAttribute)));
-                        SetBkColor(GuiData->hMemDC, PaletteRGBFromAttrib(Console, BkgdAttribFromAttrib(LastAttribute)));
+                        SetTextColor(GuiData->hMemDC, GuiResolveColor(Console, Buffer, Char, Line, LastAttribute, TRUE));
+                        SetBkColor(GuiData->hMemDC, GuiResolveColor(Console, Buffer, Char, Line, LastAttribute, FALSE));
 
                         /* Change underline state if needed */
                         if (!!(LastAttribute & COMMON_LVB_UNDERSCORE) != IsUnderline)
