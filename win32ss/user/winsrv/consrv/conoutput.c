@@ -931,6 +931,158 @@ ConDrvGetConsoleScreenBufferInfo(IN  PCONSOLE Console,
                                  OUT PCOORD ViewSize,
                                  OUT PCOORD MaximumViewSize,
                                  OUT PWORD  Attributes);
+
+NTSTATUS NTAPI
+ConDrvSetConsoleTextAttribute(IN PCONSOLE Console,
+                              IN PTEXTMODE_SCREEN_BUFFER Buffer,
+                              IN WORD Attributes);
+
+NTSTATUS NTAPI
+ConDrvSetConsoleScreenBufferSize(IN PCONSOLE Console,
+                                 IN PTEXTMODE_SCREEN_BUFFER Buffer,
+                                 IN PCOORD Size);
+
+NTSTATUS NTAPI
+ConDrvSetConsoleWindowInfo(IN PCONSOLE Console,
+                           IN PTEXTMODE_SCREEN_BUFFER Buffer,
+                           IN BOOLEAN Absolute,
+                           IN PSMALL_RECT WindowRect);
+
+static NTSTATUS
+ConDrvGetConsoleScreenBufferInfoEx(IN  PCONSOLE Console,
+                                   IN  PTEXTMODE_SCREEN_BUFFER Buffer,
+                                   IN  PCONSOLE_GETSCREENBUFFERINFOEX Request)
+{
+    NTSTATUS Status;
+
+    Status = ConDrvGetConsoleScreenBufferInfo(Console,
+                                              Buffer,
+                                              &Request->ScreenBufferSize,
+                                              &Request->CursorPosition,
+                                              &Request->ViewOrigin,
+                                              &Request->ViewSize,
+                                              &Request->MaximumViewSize,
+                                              &Request->Attributes);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Request->PopupAttributes = Buffer->PopupDefaultAttrib;
+    Request->FullscreenSupported = FALSE;
+    RtlCopyMemory(Request->ColorTable,
+                  ((PCONSRV_CONSOLE)Console)->Colors,
+                  sizeof(((PCONSRV_CONSOLE)Console)->Colors));
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+ConDrvSetConsoleScreenBufferInfoEx(IN PCONSOLE Console,
+                                   IN PTEXTMODE_SCREEN_BUFFER Buffer,
+                                   IN const CONSOLE_GETSCREENBUFFERINFOEX *Request)
+{
+    NTSTATUS Status;
+    COORD BufferSize;
+    SMALL_RECT WindowRect;
+    COORD CursorPosition;
+
+    BufferSize = Request->ScreenBufferSize;
+    if (BufferSize.X > 0 && BufferSize.Y > 0 &&
+        (BufferSize.X != Buffer->ScreenBufferSize.X ||
+         BufferSize.Y != Buffer->ScreenBufferSize.Y))
+    {
+        Status = ConDrvSetConsoleScreenBufferSize(Console, Buffer, &BufferSize);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    if (Request->ViewSize.X > 0 && Request->ViewSize.Y > 0)
+    {
+        SHORT Width = (SHORT)max(1, (int)Request->ViewSize.X);
+        SHORT Height = (SHORT)max(1, (int)Request->ViewSize.Y);
+
+        WindowRect.Left   = (SHORT)max(0, Request->ViewOrigin.X);
+        WindowRect.Top    = (SHORT)max(0, Request->ViewOrigin.Y);
+        WindowRect.Right  = WindowRect.Left + Width - 1;
+        WindowRect.Bottom = WindowRect.Top + Height - 1;
+
+        WindowRect.Right = min(WindowRect.Right, Buffer->ScreenBufferSize.X - 1);
+        WindowRect.Bottom = min(WindowRect.Bottom, Buffer->ScreenBufferSize.Y - 1);
+
+        if (WindowRect.Right >= WindowRect.Left &&
+            WindowRect.Bottom >= WindowRect.Top)
+        {
+            Status = ConDrvSetConsoleWindowInfo(Console, Buffer, TRUE, &WindowRect);
+            if (!NT_SUCCESS(Status))
+                return Status;
+        }
+    }
+
+    CursorPosition = Request->CursorPosition;
+    CursorPosition.X = (SHORT)max(0, min((int)CursorPosition.X, Buffer->ScreenBufferSize.X - 1));
+    CursorPosition.Y = (SHORT)max(0, min((int)CursorPosition.Y, Buffer->ScreenBufferSize.Y - 1));
+
+    Status = ConDrvSetConsoleCursorPosition(Console, Buffer, &CursorPosition);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = ConDrvSetConsoleTextAttribute(Console, Buffer, Request->Attributes);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Buffer->PopupDefaultAttrib = Request->PopupAttributes;
+
+    RtlCopyMemory(((PCONSRV_CONSOLE)Console)->Colors,
+                  Request->ColorTable,
+                  sizeof(((PCONSRV_CONSOLE)Console)->Colors));
+
+    if (Buffer->PaletteHandle != NULL)
+    {
+        PALETTEENTRY Entries[16];
+        UINT i;
+
+        for (i = 0; i < 16; ++i)
+        {
+            COLORREF Color = ((PCONSRV_CONSOLE)Console)->Colors[i];
+            Entries[i].peRed   = GetRValue(Color);
+            Entries[i].peGreen = GetGValue(Color);
+            Entries[i].peBlue  = GetBValue(Color);
+            Entries[i].peFlags = 0;
+        }
+
+        SetPaletteEntries(Buffer->PaletteHandle, 0, ARRAYSIZE(Entries), Entries);
+    }
+
+    TermSetPalette(Console, Buffer->PaletteHandle, Buffer->PaletteUsage);
+
+    if ((PCONSOLE_SCREEN_BUFFER)Buffer == Console->ActiveBuffer)
+    {
+        SMALL_RECT Region;
+        Region.Left = 0;
+        Region.Top = 0;
+        Region.Right = Buffer->ScreenBufferSize.X - 1;
+        Region.Bottom = Buffer->ScreenBufferSize.Y - 1;
+        if (Region.Right >= Region.Left && Region.Bottom >= Region.Top)
+            TermDrawRegion(Console, &Region);
+    }
+
+    Buffer->VtState.CurrentAttributes = Request->Attributes;
+    Buffer->VtState.SavedAttributes = Request->Attributes;
+    Buffer->VtState.UseRgbForeground = FALSE;
+    Buffer->VtState.UseRgbBackground = FALSE;
+    {
+        PCONSRV_CONSOLE Cons = (PCONSRV_CONSOLE)Console;
+        if (Cons)
+        {
+            Buffer->VtState.CurrentFgColor = Cons->Colors[Request->Attributes & 0x0F];
+            Buffer->VtState.CurrentBgColor = Cons->Colors[(Request->Attributes >> 4) & 0x0F];
+            Buffer->VtState.SavedFgColor = Buffer->VtState.CurrentFgColor;
+            Buffer->VtState.SavedBgColor = Buffer->VtState.CurrentBgColor;
+            Buffer->VtState.SavedUseRgbForeground = FALSE;
+            Buffer->VtState.SavedUseRgbBackground = FALSE;
+        }
+    }
+
+    return STATUS_SUCCESS;
+}
 /* API_NUMBER: ConsolepGetScreenBufferInfo */
 CON_API(SrvGetConsoleScreenBufferInfo,
         CONSOLE_GETSCREENBUFFERINFO, ScreenBufferInfoRequest)
@@ -954,6 +1106,52 @@ CON_API(SrvGetConsoleScreenBufferInfo,
                                               &ScreenBufferInfoRequest->ViewSize,
                                               &ScreenBufferInfoRequest->MaximumViewSize,
                                               &ScreenBufferInfoRequest->Attributes);
+
+    ConSrvReleaseScreenBuffer(Buffer, TRUE);
+    return Status;
+}
+
+/* API_NUMBER: ConsolepGetScreenBufferInfoEx */
+CON_API(SrvGetConsoleScreenBufferInfoEx,
+        CONSOLE_GETSCREENBUFFERINFOEX, ScreenBufferInfoExRequest)
+{
+    NTSTATUS Status;
+    PTEXTMODE_SCREEN_BUFFER Buffer;
+
+    Status = ConSrvGetTextModeBuffer(ProcessData,
+                                     ScreenBufferInfoExRequest->OutputHandle,
+                                     &Buffer, GENERIC_READ, TRUE);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    ASSERT((PCONSOLE)Console == Buffer->Header.Console);
+
+    Status = ConDrvGetConsoleScreenBufferInfoEx((PCONSOLE)Console,
+                                                Buffer,
+                                                ScreenBufferInfoExRequest);
+
+    ConSrvReleaseScreenBuffer(Buffer, TRUE);
+    return Status;
+}
+
+/* API_NUMBER: ConsolepSetScreenBufferInfoEx */
+CON_API(SrvSetConsoleScreenBufferInfoEx,
+        CONSOLE_GETSCREENBUFFERINFOEX, ScreenBufferInfoExRequest)
+{
+    NTSTATUS Status;
+    PTEXTMODE_SCREEN_BUFFER Buffer;
+
+    Status = ConSrvGetTextModeBuffer(ProcessData,
+                                     ScreenBufferInfoExRequest->OutputHandle,
+                                     &Buffer, GENERIC_WRITE, TRUE);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    ASSERT((PCONSOLE)Console == Buffer->Header.Console);
+
+    Status = ConDrvSetConsoleScreenBufferInfoEx((PCONSOLE)Console,
+                                                Buffer,
+                                                ScreenBufferInfoExRequest);
 
     ConSrvReleaseScreenBuffer(Buffer, TRUE);
     return Status;
