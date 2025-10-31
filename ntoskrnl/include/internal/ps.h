@@ -6,6 +6,60 @@
  * PROGRAMMERS:     Alex Ionescu (alex.ionescu@reactos.org)
  */
 
+#ifdef _M_AMD64
+
+#ifndef WOW64_SIZE_OF_80387_REGISTERS
+#define WOW64_SIZE_OF_80387_REGISTERS 80
+#endif
+
+#ifndef WOW64_MAXIMUM_SUPPORTED_EXTENSION
+#define WOW64_MAXIMUM_SUPPORTED_EXTENSION 512
+#endif
+
+typedef struct _WOW64_FLOATING_SAVE_AREA
+{
+    ULONG   ControlWord;
+    ULONG   StatusWord;
+    ULONG   TagWord;
+    ULONG   ErrorOffset;
+    ULONG   ErrorSelector;
+    ULONG   DataOffset;
+    ULONG   DataSelector;
+    UCHAR   RegisterArea[WOW64_SIZE_OF_80387_REGISTERS];
+    ULONG   Cr0NpxState;
+} WOW64_FLOATING_SAVE_AREA, *PWOW64_FLOATING_SAVE_AREA;
+
+typedef struct _WOW64_CONTEXT
+{
+    ULONG ContextFlags;
+    ULONG Dr0;
+    ULONG Dr1;
+    ULONG Dr2;
+    ULONG Dr3;
+    ULONG Dr6;
+    ULONG Dr7;
+    WOW64_FLOATING_SAVE_AREA FloatSave;
+    ULONG SegGs;
+    ULONG SegFs;
+    ULONG SegEs;
+    ULONG SegDs;
+    ULONG Edi;
+    ULONG Esi;
+    ULONG Ebx;
+    ULONG Edx;
+    ULONG Ecx;
+    ULONG Eax;
+    ULONG Ebp;
+    ULONG Eip;
+    ULONG SegCs;
+    ULONG EFlags;
+    ULONG Esp;
+    ULONG SegSs;
+    UCHAR ExtendedRegisters[WOW64_MAXIMUM_SUPPORTED_EXTENSION];
+} WOW64_CONTEXT, *PWOW64_CONTEXT;
+
+#endif // _M_AMD64
+
 //
 // Define this if you want debugging support
 //
@@ -278,14 +332,14 @@ NTSTATUS
 NTAPI
 PspWow64GetContext(
     IN PETHREAD Thread,
-    IN OUT PCONTEXT Context
+    _Out_writes_bytes_(sizeof(WOW64_CONTEXT)) PWOW64_CONTEXT Context
 );
 
 NTSTATUS
 NTAPI
 PspWow64SetContext(
     IN PETHREAD Thread,
-    IN PCONTEXT Context
+    _In_reads_bytes_(sizeof(WOW64_CONTEXT)) const WOW64_CONTEXT *Context
 );
 
 VOID
