@@ -47,6 +47,13 @@ NTSTATUS NTAPI ConDrvSetConsoleCursorInfo(IN PCONSOLE Console,
 NTSTATUS NTAPI ConDrvSetConsoleCursorPosition(IN PCONSOLE Console,
                                               IN PTEXTMODE_SCREEN_BUFFER Buffer,
                                               IN PCOORD Position);
+NTSTATUS NTAPI ConDrvSetConsoleScreenBufferSize(IN PCONSOLE Console,
+                                                IN PTEXTMODE_SCREEN_BUFFER Buffer,
+                                                IN PCOORD Size);
+NTSTATUS NTAPI ConDrvSetConsoleWindowInfo(IN PCONSOLE Console,
+                                          IN PTEXTMODE_SCREEN_BUFFER Buffer,
+                                          IN BOOLEAN Absolute,
+                                          IN PSMALL_RECT WindowRect);
 // VOID ConioSetActiveScreenBuffer(PCONSOLE_SCREEN_BUFFER Buffer);
 
 PCONSOLE_SCREEN_BUFFER
