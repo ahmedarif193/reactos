@@ -3438,6 +3438,82 @@ static void test_virtual_terminal_reports(HANDLE input_handle, HANDLE output_han
     restore_console_mode(input_handle, saved_in);
 }
 
+static void test_virtual_terminal_window_reports(HANDLE input_handle, HANDLE output_handle)
+{
+    DWORD saved_out = 0, saved_in = 0;
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    WCHAR expected[32];
+    WCHAR response[32];
+    DWORD written;
+    BOOL vt_out, vt_in;
+    DWORD collected;
+    int rows, cols, len;
+
+    if (input_handle == INVALID_HANDLE_VALUE || output_handle == INVALID_HANDLE_VALUE)
+    {
+        win_skip("Console handles unavailable for VT window report test\n");
+        return;
+    }
+
+    vt_out = try_enable_vt_output(output_handle, &saved_out);
+    vt_in = try_enable_vt_input(input_handle, &saved_in);
+    if (!vt_out || !vt_in)
+    {
+        win_skip("VT window reports not supported on this console\n");
+        if (vt_out)
+            restore_console_mode(output_handle, saved_out);
+        if (vt_in)
+            restore_console_mode(input_handle, saved_in);
+        return;
+    }
+
+    ok(GetConsoleScreenBufferInfo(output_handle, &info),
+       "GetConsoleScreenBufferInfo failed %u\n", GetLastError());
+
+    rows = info.srWindow.Bottom - info.srWindow.Top + 1;
+    cols = info.srWindow.Right - info.srWindow.Left + 1;
+
+    len = _snwprintf(expected, ARRAY_SIZE(expected), L"\x1b[8;%d;%dt", rows, cols);
+    ok(len > 0, "swprintf failed for expected window report\n");
+    if ((size_t)len >= ARRAY_SIZE(expected))
+        len = ARRAY_SIZE(expected) - 1;
+    expected[len] = 0;
+
+    FlushConsoleInputBuffer(input_handle);
+    ok(WriteConsoleW(output_handle, L"\x1b[18t", 4, &written, NULL),
+       "WriteConsoleW failed %u\n", GetLastError());
+    ok(written == 4, "Unexpected query length %lu\n", written);
+
+    collected = read_vt_response(input_handle, response, ARRAY_SIZE(response), len);
+    ok(collected == (DWORD)len, "Window report length %lu (expected %d)\n", collected, len);
+    if (collected == (DWORD)len)
+        ok(!memcmp(response, expected, len * sizeof(WCHAR)), "Window report payload mismatch\n");
+
+    /* Exercise CSI 8 ; rows ; cols t with the current dimensions */
+    {
+        WCHAR resize_seq[32];
+        int resize_len = _snwprintf(resize_seq, ARRAY_SIZE(resize_seq), L"\x1b[8;%d;%dt", rows, cols);
+        ok(resize_len > 0, "swprintf failed for resize sequence\n");
+        if ((size_t)resize_len >= ARRAY_SIZE(resize_seq))
+            resize_len = ARRAY_SIZE(resize_seq) - 1;
+        ok(WriteConsoleW(output_handle, resize_seq, resize_len, &written, NULL),
+           "WriteConsoleW resize failed %u\n", GetLastError());
+        ok(written == (DWORD)resize_len, "Unexpected resize length %lu\n", written);
+
+        ok(GetConsoleScreenBufferInfo(output_handle, &info),
+           "GetConsoleScreenBufferInfo (post-resize) failed %u\n", GetLastError());
+        ok(info.srWindow.Bottom - info.srWindow.Top + 1 == rows,
+           "Expected %d rows after resize, got %d\n", rows,
+           info.srWindow.Bottom - info.srWindow.Top + 1);
+        ok(info.srWindow.Right - info.srWindow.Left + 1 == cols,
+           "Expected %d cols after resize, got %d\n", cols,
+           info.srWindow.Right - info.srWindow.Left + 1);
+    }
+
+    restore_console_mode(output_handle, saved_out);
+    restore_console_mode(input_handle, saved_in);
+}
+
 static void test_virtual_terminal_newline(HANDLE output_handle)
 {
     CONSOLE_SCREEN_BUFFER_INFO info;
@@ -3521,6 +3597,78 @@ static void test_virtual_terminal_newline(HANDLE output_handle)
        test_pos.Y + 1, info.dwCursorPosition.Y);
 
     SetConsoleCursorPosition(output_handle, original_pos);
+    restore_console_mode(output_handle, saved_mode);
+}
+
+static void test_virtual_terminal_osc_extras(HANDLE output_handle)
+{
+    DWORD saved_mode = 0;
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    COORD start;
+    WCHAR buffer[2];
+    DWORD read, written;
+    BOOL vt_out;
+
+    if (output_handle == INVALID_HANDLE_VALUE)
+    {
+        win_skip("No STD_OUTPUT_HANDLE available for OSC extras test\n");
+        return;
+    }
+
+    vt_out = try_enable_vt_output(output_handle, &saved_mode);
+    if (!vt_out)
+    {
+        win_skip("VT output not supported on this console\n");
+        return;
+    }
+
+    ok(GetConsoleScreenBufferInfo(output_handle, &info),
+       "GetConsoleScreenBufferInfo failed %u\n", GetLastError());
+    start = info.dwCursorPosition;
+
+    {
+        static const WCHAR osc_hyperlink[] = L"\x1b]8;;https://reactos.org\x07X\x1b]8;;\x07Y";
+        ok(WriteConsoleW(output_handle, osc_hyperlink, ARRAY_SIZE(osc_hyperlink) - 1, &written, NULL),
+       "WriteConsoleW hyperlink failed %u\n", GetLastError());
+        ok(written == ARRAY_SIZE(osc_hyperlink) - 1, "Unexpected OSC8 length %lu\n", written);
+    }
+
+    ok(ReadConsoleOutputCharacterW(output_handle, buffer, 2, start, &read),
+       "ReadConsoleOutputCharacterW failed %u\n", GetLastError());
+    ok(read == 2, "Expected to read 2 chars, got %lu\n", read);
+    if (read == 2)
+    {
+        ok(buffer[0] == L'X', "Expected 'X', got '%c'\n", buffer[0]);
+        ok(buffer[1] == L'Y', "Expected 'Y', got '%c'\n", buffer[1]);
+    }
+
+    ok(SetConsoleCursorPosition(output_handle, start),
+       "SetConsoleCursorPosition failed %u\n", GetLastError());
+    ok(WriteConsoleW(output_handle, L"  ", 2, &written, NULL),
+       "WriteConsoleW clear failed %u\n", GetLastError());
+    ok(SetConsoleCursorPosition(output_handle, start),
+       "SetConsoleCursorPosition (restore) failed %u\n", GetLastError());
+
+    {
+        static const WCHAR osc_clip[] = L"\x1b]52;;U0dWc2JHOGc=\x07Z";
+        ok(WriteConsoleW(output_handle, osc_clip, ARRAY_SIZE(osc_clip) - 1, &written, NULL),
+       "WriteConsoleW clipboard failed %u\n", GetLastError());
+        ok(written == ARRAY_SIZE(osc_clip) - 1, "Unexpected OSC52 length %lu\n", written);
+    }
+
+    ok(ReadConsoleOutputCharacterW(output_handle, buffer, 1, start, &read),
+       "ReadConsoleOutputCharacterW failed %u\n", GetLastError());
+    ok(read == 1, "Expected to read 1 char, got %lu\n", read);
+    if (read == 1)
+        ok(buffer[0] == L'Z', "Expected 'Z', got '%c'\n", buffer[0]);
+
+    ok(SetConsoleCursorPosition(output_handle, start),
+       "SetConsoleCursorPosition failed %u\n", GetLastError());
+    ok(WriteConsoleW(output_handle, L" ", 1, &written, NULL),
+       "WriteConsoleW clear failed %u\n", GetLastError());
+    ok(SetConsoleCursorPosition(output_handle, start),
+       "SetConsoleCursorPosition failed %u\n", GetLastError());
+
     restore_console_mode(output_handle, saved_mode);
 }
 
@@ -3816,7 +3964,9 @@ START_TEST(console)
     test_virtual_terminal_scrolling(hConOut);
     test_virtual_terminal_erases(hConOut);
     test_virtual_terminal_reports(hConIn, hConOut);
+    test_virtual_terminal_window_reports(hConIn, hConOut);
     test_virtual_terminal_newline(hConOut);
+    test_virtual_terminal_osc_extras(hConOut);
     test_virtual_terminal_osc(hConOut);
     test_virtual_terminal_popups(hConIn, hConOut);
     test_WriteConsoleOutputCharacterA(hConOut);
