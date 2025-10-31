@@ -119,7 +119,7 @@ GetConsoleOriginalTitleA(OUT LPSTR lpConsoleTitle,
 
 
 /*
- * @unimplemented
+ * @implemented
  */
 BOOL
 WINAPI
@@ -127,7 +127,15 @@ DECLSPEC_HOTPATCH
 GetConsoleScreenBufferInfoEx(IN HANDLE hConsoleOutput,
                              OUT PCONSOLE_SCREEN_BUFFER_INFOEX lpConsoleScreenBufferInfoEx)
 {
-    DPRINT1("GetConsoleScreenBufferInfoEx(0x%p, 0x%p) UNIMPLEMENTED!\n", hConsoleOutput, lpConsoleScreenBufferInfoEx);
+    UNREFERENCED_PARAMETER(hConsoleOutput);
+
+    if (!lpConsoleScreenBufferInfoEx ||
+        lpConsoleScreenBufferInfoEx->cbSize != sizeof(*lpConsoleScreenBufferInfoEx))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return FALSE;
 }
