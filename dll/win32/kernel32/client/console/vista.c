@@ -89,7 +89,7 @@ SetConsoleHistoryInfo(IN PCONSOLE_HISTORY_INFO lpConsoleHistoryInfo)
 
 
 /*
- * @unimplemented
+ * @implemented
  */
 DWORD
 WINAPI
@@ -127,7 +127,8 @@ DECLSPEC_HOTPATCH
 GetConsoleScreenBufferInfoEx(IN HANDLE hConsoleOutput,
                              OUT PCONSOLE_SCREEN_BUFFER_INFOEX lpConsoleScreenBufferInfoEx)
 {
-    UNREFERENCED_PARAMETER(hConsoleOutput);
+    CONSOLE_API_MESSAGE ApiMessage;
+    PCONSOLE_GETSCREENBUFFERINFOEX ScreenBufferInfoExRequest = &ApiMessage.Data.ScreenBufferInfoExRequest;
 
     if (!lpConsoleScreenBufferInfoEx ||
         lpConsoleScreenBufferInfoEx->cbSize != sizeof(*lpConsoleScreenBufferInfoEx))
@@ -136,8 +137,34 @@ GetConsoleScreenBufferInfoEx(IN HANDLE hConsoleOutput,
         return FALSE;
     }
 
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    ScreenBufferInfoExRequest->ConsoleHandle = NtCurrentPeb()->ProcessParameters->ConsoleHandle;
+    ScreenBufferInfoExRequest->OutputHandle  = hConsoleOutput;
+
+    CsrClientCallServer((PCSR_API_MESSAGE)&ApiMessage,
+                        NULL,
+                        CSR_CREATE_API_NUMBER(CONSRV_SERVERDLL_INDEX, ConsolepGetScreenBufferInfoEx),
+                        sizeof(*ScreenBufferInfoExRequest));
+    if (!NT_SUCCESS(ApiMessage.Status))
+    {
+        BaseSetLastNTError(ApiMessage.Status);
+        return FALSE;
+    }
+
+    lpConsoleScreenBufferInfoEx->dwSize              = ScreenBufferInfoExRequest->ScreenBufferSize;
+    lpConsoleScreenBufferInfoEx->dwCursorPosition    = ScreenBufferInfoExRequest->CursorPosition;
+    lpConsoleScreenBufferInfoEx->wAttributes         = ScreenBufferInfoExRequest->Attributes;
+    lpConsoleScreenBufferInfoEx->srWindow.Left       = ScreenBufferInfoExRequest->ViewOrigin.X;
+    lpConsoleScreenBufferInfoEx->srWindow.Top        = ScreenBufferInfoExRequest->ViewOrigin.Y;
+    lpConsoleScreenBufferInfoEx->srWindow.Right      = ScreenBufferInfoExRequest->ViewOrigin.X + ScreenBufferInfoExRequest->ViewSize.X - 1;
+    lpConsoleScreenBufferInfoEx->srWindow.Bottom     = ScreenBufferInfoExRequest->ViewOrigin.Y + ScreenBufferInfoExRequest->ViewSize.Y - 1;
+    lpConsoleScreenBufferInfoEx->dwMaximumWindowSize = ScreenBufferInfoExRequest->MaximumViewSize;
+    lpConsoleScreenBufferInfoEx->wPopupAttributes    = ScreenBufferInfoExRequest->PopupAttributes;
+    lpConsoleScreenBufferInfoEx->bFullscreenSupported = ScreenBufferInfoExRequest->FullscreenSupported;
+    RtlCopyMemory(lpConsoleScreenBufferInfoEx->ColorTable,
+                  ScreenBufferInfoExRequest->ColorTable,
+                  sizeof(lpConsoleScreenBufferInfoEx->ColorTable));
+
+    return TRUE;
 }
 
 
@@ -150,9 +177,43 @@ DECLSPEC_HOTPATCH
 SetConsoleScreenBufferInfoEx(IN HANDLE hConsoleOutput,
                              IN PCONSOLE_SCREEN_BUFFER_INFOEX lpConsoleScreenBufferInfoEx)
 {
-    DPRINT1("SetConsoleScreenBufferInfoEx(0x%p, 0x%p) UNIMPLEMENTED!\n", hConsoleOutput, lpConsoleScreenBufferInfoEx);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    CONSOLE_API_MESSAGE ApiMessage;
+    PCONSOLE_GETSCREENBUFFERINFOEX ScreenBufferInfoExRequest = &ApiMessage.Data.ScreenBufferInfoExRequest;
+
+    if (!lpConsoleScreenBufferInfoEx ||
+        lpConsoleScreenBufferInfoEx->cbSize != sizeof(*lpConsoleScreenBufferInfoEx))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    ScreenBufferInfoExRequest->ConsoleHandle = NtCurrentPeb()->ProcessParameters->ConsoleHandle;
+    ScreenBufferInfoExRequest->OutputHandle  = hConsoleOutput;
+    ScreenBufferInfoExRequest->ScreenBufferSize = lpConsoleScreenBufferInfoEx->dwSize;
+    ScreenBufferInfoExRequest->CursorPosition   = lpConsoleScreenBufferInfoEx->dwCursorPosition;
+    ScreenBufferInfoExRequest->ViewOrigin.X     = lpConsoleScreenBufferInfoEx->srWindow.Left;
+    ScreenBufferInfoExRequest->ViewOrigin.Y     = lpConsoleScreenBufferInfoEx->srWindow.Top;
+    ScreenBufferInfoExRequest->ViewSize.X       = lpConsoleScreenBufferInfoEx->srWindow.Right - lpConsoleScreenBufferInfoEx->srWindow.Left + 1;
+    ScreenBufferInfoExRequest->ViewSize.Y       = lpConsoleScreenBufferInfoEx->srWindow.Bottom - lpConsoleScreenBufferInfoEx->srWindow.Top + 1;
+    ScreenBufferInfoExRequest->MaximumViewSize  = lpConsoleScreenBufferInfoEx->dwMaximumWindowSize;
+    ScreenBufferInfoExRequest->Attributes       = lpConsoleScreenBufferInfoEx->wAttributes;
+    ScreenBufferInfoExRequest->PopupAttributes  = lpConsoleScreenBufferInfoEx->wPopupAttributes;
+    ScreenBufferInfoExRequest->FullscreenSupported = lpConsoleScreenBufferInfoEx->bFullscreenSupported;
+    RtlCopyMemory(ScreenBufferInfoExRequest->ColorTable,
+                  lpConsoleScreenBufferInfoEx->ColorTable,
+                  sizeof(ScreenBufferInfoExRequest->ColorTable));
+
+    CsrClientCallServer((PCSR_API_MESSAGE)&ApiMessage,
+                        NULL,
+                        CSR_CREATE_API_NUMBER(CONSRV_SERVERDLL_INDEX, ConsolepSetScreenBufferInfoEx),
+                        sizeof(*ScreenBufferInfoExRequest));
+    if (!NT_SUCCESS(ApiMessage.Status))
+    {
+        BaseSetLastNTError(ApiMessage.Status);
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 
