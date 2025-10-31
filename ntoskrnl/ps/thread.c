@@ -11,6 +11,7 @@
 
 #include <ntoskrnl.h>
 #include <reactos/wow64apc.h>
+#include <reactos/wow64cpu.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -1048,11 +1049,21 @@ PsWrapApcWow64Thread(IN OUT PVOID *ApcContext,
                      WOW64_APC_CONTEXT_FLAG_HAS_USER_ROUTINE;
     Context.UserRoutine = (ULONG_PTR)OriginalRoutine;
 
-    if ((Wow64Process->Flags & WOW64_PROCESS_FLAG_HAS_CPU_AREA) &&
-        Wow64Process->CpuArea)
+    if (Wow64Process->Flags & WOW64_PROCESS_FLAG_HAS_CPU_AREA)
     {
-        Context.Flags |= WOW64_APC_CONTEXT_FLAG_HAS_CPU_AREA;
-        Context.Wow64CpuArea = (ULONG_PTR)Wow64Process->CpuArea;
+        PWOW64_CPU_AREA CpuAreaPointer;
+
+        CpuAreaPointer = WOW64_CPU_AREA_DECODE_POINTER(Wow64Process->CpuArea);
+        if (CpuAreaPointer)
+        {
+            Context.Flags |= WOW64_APC_CONTEXT_FLAG_HAS_CPU_AREA;
+            Context.Wow64CpuArea = (ULONG_PTR)CpuAreaPointer;
+        }
+        else
+        {
+            Context.Flags &= ~WOW64_APC_CONTEXT_FLAG_HAS_CPU_AREA;
+            Context.Wow64CpuArea = 0;
+        }
     }
     else
     {
