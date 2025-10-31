@@ -61,6 +61,8 @@ else()
     list(APPEND SOURCE bitmap.c)
 endif()
 
+list(APPEND SOURCE guid.c)
+
 list(APPEND PCH_SKIP_SOURCE
     guid.c
     ${CMAKE_CURRENT_BINARY_DIR}/proxy.dlldata.c
