@@ -9,6 +9,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/wow64shared.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -112,6 +113,15 @@ PspLookupKernelUserEntryPoints(VOID)
     Status = PspLookupSystemDllEntryPoint("ExpInterlockedPopEntrySListResume",
                                           &KeUserPopEntrySListResume);
     if (!NT_SUCCESS(Status)) { DPRINT1("this not found\n"); return Status; }
+
+#if defined(_M_AMD64)
+    /*
+     * Clear the WOW64 dispatcher slots. They will be populated later by the
+     * WOW64 user-mode bootstrap once 32-bit thunks are available.
+     */
+    RtlZeroMemory(SharedUserData->Wow64SharedInformation,
+                  sizeof(SharedUserData->Wow64SharedInformation));
+#endif
 
     /* On x86, there are multiple ways to do a system call, find the right stubs */
 #if defined(_X86_)
