@@ -17,6 +17,8 @@
 #define NDEBUG
 #include <debug.h>
 
+#define CSR_MAX_INPUT_CAPTURE_RECORDS 512UL
+
 
 /* See consrv/include/rect.h */
 #define ConioRectHeight(Rect) \
@@ -235,10 +237,8 @@ IntGetConsoleInput(IN HANDLE hConsoleInput,
                    IN WORD wFlags,
                    IN BOOLEAN bUnicode)
 {
-    BOOL Success;
     CONSOLE_API_MESSAGE ApiMessage;
     PCONSOLE_GETINPUT GetInputRequest = &ApiMessage.Data.GetInputRequest;
-    PCSR_CAPTURE_BUFFER CaptureBuffer = NULL;
 
     if (!IsConsoleHandle(hConsoleInput))
     {
@@ -261,78 +261,134 @@ IntGetConsoleInput(IN HANDLE hConsoleInput,
     /* Set up the data to send to the Console Server */
     GetInputRequest->ConsoleHandle = NtCurrentPeb()->ProcessParameters->ConsoleHandle;
     GetInputRequest->InputHandle   = hConsoleInput;
-    GetInputRequest->NumRecords    = nLength;
     GetInputRequest->Flags         = wFlags;
     GetInputRequest->Unicode       = bUnicode;
 
-    /*
-     * For optimization purposes, Windows (and hence ReactOS, too, for
-     * compatibility reasons) uses a static buffer if no more than five
-     * input records are read. Otherwise a new buffer is allocated.
-     * This behaviour is also expected in the server-side.
-     */
-    if (nLength <= sizeof(GetInputRequest->RecordStaticBuffer)/sizeof(INPUT_RECORD))
+    if (lpNumberOfEventsRead)
     {
-        GetInputRequest->RecordBufPtr = GetInputRequest->RecordStaticBuffer;
-        // CaptureBuffer = NULL;
-    }
-    else
-    {
-        ULONG Size = nLength * sizeof(INPUT_RECORD);
-
-        /* Allocate a Capture Buffer */
-        CaptureBuffer = CsrAllocateCaptureBuffer(1, Size);
-        if (CaptureBuffer == NULL)
+        _SEH2_TRY
         {
-            DPRINT1("CsrAllocateCaptureBuffer failed!\n");
-            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            *lpNumberOfEventsRead = 0;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            SetLastError(ERROR_INVALID_ACCESS);
             return FALSE;
         }
-
-        /* Allocate space in the Buffer */
-        CsrAllocateMessagePointer(CaptureBuffer,
-                                  Size,
-                                  (PVOID*)&GetInputRequest->RecordBufPtr);
+        _SEH2_END;
     }
 
-    /* Call the server */
-    CsrClientCallServer((PCSR_API_MESSAGE)&ApiMessage,
-                        CaptureBuffer,
-                        CSR_CREATE_API_NUMBER(CONSRV_SERVERDLL_INDEX, ConsolepGetConsoleInput),
-                        sizeof(*GetInputRequest));
+    if (nLength == 0)
+        return TRUE;
 
-    /* Check for success */
-    Success = NT_SUCCESS(ApiMessage.Status);
+    DWORD Remaining = nLength;
+    DWORD TotalRead = 0;
+    BOOL OverallSuccess = TRUE;
 
-    /* Retrieve the results */
-    _SEH2_TRY
+    while (Remaining > 0)
     {
-        DPRINT("Events read: %lx\n", GetInputRequest->NumRecords);
-        *lpNumberOfEventsRead = GetInputRequest->NumRecords;
+        ULONG Requested = min(Remaining, CSR_MAX_INPUT_CAPTURE_RECORDS);
+        PCSR_CAPTURE_BUFFER CaptureBuffer = NULL;
+        ULONG StaticCapacity = sizeof(GetInputRequest->RecordStaticBuffer) / sizeof(INPUT_RECORD);
 
-        if (Success)
+        if (Requested <= StaticCapacity)
         {
-            RtlCopyMemory(lpBuffer,
-                          GetInputRequest->RecordBufPtr,
-                          GetInputRequest->NumRecords * sizeof(INPUT_RECORD));
+            GetInputRequest->RecordBufPtr = GetInputRequest->RecordStaticBuffer;
         }
         else
         {
-            BaseSetLastNTError(ApiMessage.Status);
+            ULONG Size = Requested * sizeof(INPUT_RECORD);
+
+            CaptureBuffer = CsrAllocateCaptureBuffer(1, Size);
+            if (CaptureBuffer == NULL)
+            {
+                DPRINT1("IntGetConsoleInput: CsrAllocateCaptureBuffer failed (records=%lu size=%lu)\n",
+                        Requested,
+                        Size);
+                SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+                OverallSuccess = FALSE;
+                break;
+            }
+
+            CsrAllocateMessagePointer(CaptureBuffer,
+                                      Size,
+                                      (PVOID*)&GetInputRequest->RecordBufPtr);
         }
+
+        GetInputRequest->NumRecords = Requested;
+
+        CsrClientCallServer((PCSR_API_MESSAGE)&ApiMessage,
+                            CaptureBuffer,
+                            CSR_CREATE_API_NUMBER(CONSRV_SERVERDLL_INDEX, ConsolepGetConsoleInput),
+                            sizeof(*GetInputRequest));
+
+        BOOL Success = NT_SUCCESS(ApiMessage.Status);
+        ULONG ChunkRead = GetInputRequest->NumRecords;
+        PINPUT_RECORD DestBuffer = (lpBuffer ? lpBuffer + TotalRead : NULL);
+
+        _SEH2_TRY
+        {
+            if (Success && DestBuffer && ChunkRead > 0)
+            {
+                RtlCopyMemory(DestBuffer,
+                              GetInputRequest->RecordBufPtr,
+                              ChunkRead * sizeof(INPUT_RECORD));
+            }
+            else if (!Success)
+            {
+                BaseSetLastNTError(ApiMessage.Status);
+            }
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            SetLastError(ERROR_INVALID_ACCESS);
+            Success = FALSE;
+            ChunkRead = 0;
+        }
+        _SEH2_END;
+
+        if (CaptureBuffer)
+        {
+            CsrFreeCaptureBuffer(CaptureBuffer);
+            CaptureBuffer = NULL;
+        }
+
+        if (!Success)
+        {
+            OverallSuccess = FALSE;
+            break;
+        }
+
+        TotalRead += ChunkRead;
+
+        if (ChunkRead >= Remaining)
+        {
+            Remaining = 0;
+        }
+        else
+        {
+            Remaining -= ChunkRead;
+        }
+
+        if (ChunkRead < Requested || ChunkRead == 0)
+            break; /* No more events available */
     }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+
+    if (lpNumberOfEventsRead)
     {
-        SetLastError(ERROR_INVALID_ACCESS);
-        Success = FALSE;
+        _SEH2_TRY
+        {
+            *lpNumberOfEventsRead = TotalRead;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            SetLastError(ERROR_INVALID_ACCESS);
+            return FALSE;
+        }
+        _SEH2_END;
     }
-    _SEH2_END;
 
-    /* Release the capture buffer if needed */
-    if (CaptureBuffer) CsrFreeCaptureBuffer(CaptureBuffer);
-
-    /* Return success status */
-    return Success;
+    return OverallSuccess;
 }
 
 
