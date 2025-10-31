@@ -3019,6 +3019,77 @@ static void test_GetConsoleScreenBufferInfoEx(HANDLE std_output)
     ok(GetLastError() == 0xdeadbeef, "got %u, expected 0xdeadbeef\n", GetLastError());
 }
 
+static void test_SetConsoleScreenBufferInfoEx(HANDLE std_output)
+{
+    HANDLE hmod;
+    BOOL (WINAPI *pGetConsoleScreenBufferInfoEx)(HANDLE, CONSOLE_SCREEN_BUFFER_INFOEX *);
+    BOOL (WINAPI *pSetConsoleScreenBufferInfoEx)(HANDLE, CONSOLE_SCREEN_BUFFER_INFOEX *);
+    CONSOLE_SCREEN_BUFFER_INFOEX info, original;
+    COLORREF new_colour;
+    BOOL ret;
+    HANDLE std_input = GetStdHandle(STD_INPUT_HANDLE);
+
+    hmod = GetModuleHandleA("kernel32.dll");
+    pGetConsoleScreenBufferInfoEx = (void *)GetProcAddress(hmod, "GetConsoleScreenBufferInfoEx");
+    pSetConsoleScreenBufferInfoEx = (void *)GetProcAddress(hmod, "SetConsoleScreenBufferInfoEx");
+    if (!pGetConsoleScreenBufferInfoEx || !pSetConsoleScreenBufferInfoEx)
+    {
+        win_skip("SetConsoleScreenBufferInfoEx is not available\n");
+        return;
+    }
+
+    /* invalid parameter scenarios */
+    info.cbSize = sizeof(info) - 4;
+    SetLastError(0xdeadbeef);
+    ret = pSetConsoleScreenBufferInfoEx(std_output, &info);
+    ok(!ret, "got %d, expected zero\n", ret);
+    ok(GetLastError() == ERROR_INVALID_PARAMETER, "got %u, expected 87\n", GetLastError());
+
+    info.cbSize = sizeof(info);
+    SetLastError(0xdeadbeef);
+    ret = pSetConsoleScreenBufferInfoEx(NULL, &info);
+    ok(!ret, "got %d, expected zero\n", ret);
+    ok(GetLastError() == ERROR_INVALID_HANDLE, "got %u, expected 6\n", GetLastError());
+
+    SetLastError(0xdeadbeef);
+    ret = pSetConsoleScreenBufferInfoEx(std_input, &info);
+    ok(!ret, "got %d, expected zero\n", ret);
+    ok(GetLastError() == ERROR_INVALID_HANDLE, "got %u, expected 6\n", GetLastError());
+
+    /* capture current state */
+    info.cbSize = sizeof(info);
+    ret = pGetConsoleScreenBufferInfoEx(std_output, &info);
+    ok(ret, "GetConsoleScreenBufferInfoEx failed %u\n", GetLastError());
+    if (!ret)
+        return;
+
+    original = info;
+
+    /* flip the first colour entry */
+    new_colour = info.ColorTable[0] ^ 0x00ffffff;
+    if (new_colour == info.ColorTable[0])
+        new_colour ^= 0x00010101; /* ensure difference */
+    info.ColorTable[0] = new_colour;
+
+    SetLastError(0xdeadbeef);
+    ret = pSetConsoleScreenBufferInfoEx(std_output, &info);
+    ok(ret, "SetConsoleScreenBufferInfoEx failed %u\n", GetLastError());
+    ok(GetLastError() == 0xdeadbeef, "got %u, expected 0xdeadbeef\n", GetLastError());
+
+    info.cbSize = sizeof(info);
+    ret = pGetConsoleScreenBufferInfoEx(std_output, &info);
+    ok(ret, "GetConsoleScreenBufferInfoEx failed %u\n", GetLastError());
+    if (ret)
+        ok(info.ColorTable[0] == new_colour,
+           "Colour table entry not updated: got %#08x expected %#08x\n",
+           info.ColorTable[0], new_colour);
+
+    /* restore original palette */
+    original.cbSize = sizeof(original);
+    ret = pSetConsoleScreenBufferInfoEx(std_output, &original);
+    ok(ret, "Restoring console palette failed %u\n", GetLastError());
+}
+
 static void test_virtual_terminal_modes(HANDLE input_handle, HANDLE output_handle)
 {
     DWORD original_in, original_out, mode, flags_out;
@@ -3242,4 +3313,5 @@ START_TEST(console)
     test_GetConsoleFontInfo(hConOut);
     test_SetConsoleFont(hConOut);
     test_GetConsoleScreenBufferInfoEx(hConOut);
+    test_SetConsoleScreenBufferInfoEx(hConOut);
 }
