@@ -130,6 +130,23 @@ typedef struct _TEXTMODE_SCREEN_BUFFER
 
     USHORT ScreenDefaultAttrib; /* Default screen char attribute */
     USHORT PopupDefaultAttrib;  /* Default popup char attribute */
+    struct _VT_MODE_STATE
+    {
+        BOOLEAN Active;             /* VT processing currently enabled */
+        BOOLEAN CursorSaved;        /* Whether a cursor position was saved */
+        COORD   SavedCursorPos;     /* Last saved cursor position */
+        USHORT  SavedAttributes;    /* Saved SGR attributes */
+        USHORT  CurrentAttributes;  /* Current SGR attributes */
+        ULONG   PrivateModes;       /* Bitmask of active DEC private modes */
+        struct _TEXTMODE_SCREEN_BUFFER* AlternateBuffer; /* Alternate screen buffer */
+        struct _TEXTMODE_SCREEN_BUFFER* PrimaryBuffer;   /* Primary buffer when alternate active */
+        CONSOLE_CURSOR_INFO PrimaryCursorInfo;   /* Saved cursor info for primary buffer */
+        COORD   PrimaryCursorPos;                /* Saved cursor position for primary buffer */
+        COORD   PrimaryViewOrigin;               /* Saved viewport origin */
+        USHORT  PrimaryVirtualY;                 /* Saved scrollback origin */
+        CONSOLE_CURSOR_INFO DefaultCursorInfo;   /* Default cursor info for DECSCUSR reset */
+        UCHAR   CurrentCursorStyle;              /* Last DECSCUSR style parameter */
+    } VtState;
 } TEXTMODE_SCREEN_BUFFER, *PTEXTMODE_SCREEN_BUFFER;
 
 
