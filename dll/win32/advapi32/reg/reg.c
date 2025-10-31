@@ -4826,7 +4826,7 @@ RegSetValueExA(HKEY hKey,
     pValueName = (LPWSTR)ValueName.Buffer;
 
 
-    if (is_string(dwType) && (cbData != 0))
+    if (is_string(dwType) && (cbData != 0) && (lpData != NULL))
     {
         /* Convert ANSI string Data to Unicode */
         /* If last character NOT zero then increment length */
@@ -4898,6 +4898,12 @@ RegSetValueExW(
         return RtlNtStatusToDosError(Status);
     }
 
+    if ((cbData != 0) && (lpData == NULL))
+    {
+        ClosePredefKey(KeyHandle);
+        return ERROR_NOACCESS;
+    }
+
     if (IsHKCRKey(KeyHandle))
     {
         LONG ErrorCode = SetHKCRValue(KeyHandle, lpValueName, Reserved, dwType, lpData, cbData);
@@ -4905,7 +4911,7 @@ RegSetValueExW(
         return ErrorCode;
     }
 
-    if (is_string(dwType) && (cbData != 0))
+    if (is_string(dwType) && (cbData != 0) && (lpData != NULL))
     {
         PWSTR pwsData = (PWSTR)lpData;
 
@@ -4927,12 +4933,21 @@ RegSetValueExW(
 
     RtlInitUnicodeString(&ValueName, lpValueName);
 
-    Status = NtSetValueKey(KeyHandle,
-                           &ValueName,
-                           0,
-                           dwType,
-                           (PVOID)lpData,
-                           (ULONG)cbData);
+    _SEH2_TRY
+    {
+        Status = NtSetValueKey(KeyHandle,
+                               &ValueName,
+                               0,
+                               dwType,
+                               (PVOID)lpData,
+                               (ULONG)cbData);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        ClosePredefKey(KeyHandle);
+        return ERROR_NOACCESS;
+    }
+    _SEH2_END;
 
     ClosePredefKey(KeyHandle);
 
