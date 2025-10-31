@@ -37,6 +37,18 @@ VirtualAllocEx(IN HANDLE hProcess,
         return NULL;
     }
 
+    if (lpAddress != NULL)
+    {
+        ULONG_PTR MaximumUser = BaseStaticServerData->SysInfo.MaximumUserModeAddress;
+        ULONG_PTR Request = (ULONG_PTR)lpAddress;
+
+        if ((Request >= MaximumUser) ||
+            (dwSize > 0 && Request > MaximumUser - min(dwSize, MaximumUser)))
+        {
+            lpAddress = NULL;
+        }
+    }
+
     /* Allocate the memory */
     Status = NtAllocateVirtualMemory(hProcess,
                                      &lpAddress,
