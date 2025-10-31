@@ -935,8 +935,9 @@ VtRepeatCharacter(PCONSOLE Console,
     while (Remaining > 0)
     {
         ULONG Emit = (Remaining > ARRAYSIZE(Chunk)) ? ARRAYSIZE(Chunk) : Remaining;
+        ULONG i;
 
-        for (ULONG i = 0; i < Emit; ++i)
+        for (i = 0; i < Emit; ++i)
             Chunk[i] = ScreenBuffer->VtState.LastWrittenChar;
 
         if (!NT_SUCCESS(VtFlushText(Console, ScreenBuffer, Chunk, Emit)))
@@ -1271,13 +1272,16 @@ VtScrollLeft(PCONSOLE Console,
                           (Width - Shift) * sizeof(COLORREF));
         }
 
-        for (SHORT x = Width - Shift; x < Width; ++x)
         {
-            PCHAR_INFO Cell = Row + x;
-            Cell->Char.UnicodeChar = L' ';
-            Cell->Attributes = Attr;
-            ConioSetCellFgColor(ScreenBuffer, x, Line, ScreenBuffer->VtState.UseRgbForeground ? ScreenBuffer->VtState.CurrentFgColor : CLR_INVALID);
-            ConioSetCellBgColor(ScreenBuffer, x, Line, ScreenBuffer->VtState.UseRgbBackground ? ScreenBuffer->VtState.CurrentBgColor : CLR_INVALID);
+            SHORT x;
+            for (x = Width - Shift; x < Width; ++x)
+            {
+                PCHAR_INFO Cell = Row + x;
+                Cell->Char.UnicodeChar = L' ';
+                Cell->Attributes = Attr;
+                ConioSetCellFgColor(ScreenBuffer, x, Line, ScreenBuffer->VtState.UseRgbForeground ? ScreenBuffer->VtState.CurrentFgColor : CLR_INVALID);
+                ConioSetCellBgColor(ScreenBuffer, x, Line, ScreenBuffer->VtState.UseRgbBackground ? ScreenBuffer->VtState.CurrentBgColor : CLR_INVALID);
+            }
         }
     }
 
@@ -1349,13 +1353,16 @@ VtScrollRight(PCONSOLE Console,
                           (Width - Shift) * sizeof(COLORREF));
         }
 
-        for (SHORT x = 0; x < Shift; ++x)
         {
-            PCHAR_INFO Cell = Row + x;
-            Cell->Char.UnicodeChar = L' ';
-            Cell->Attributes = Attr;
-            ConioSetCellFgColor(ScreenBuffer, x, Line, ScreenBuffer->VtState.UseRgbForeground ? ScreenBuffer->VtState.CurrentFgColor : CLR_INVALID);
-            ConioSetCellBgColor(ScreenBuffer, x, Line, ScreenBuffer->VtState.UseRgbBackground ? ScreenBuffer->VtState.CurrentBgColor : CLR_INVALID);
+            SHORT x;
+            for (x = 0; x < Shift; ++x)
+            {
+                PCHAR_INFO Cell = Row + x;
+                Cell->Char.UnicodeChar = L' ';
+                Cell->Attributes = Attr;
+                ConioSetCellFgColor(ScreenBuffer, x, Line, ScreenBuffer->VtState.UseRgbForeground ? ScreenBuffer->VtState.CurrentFgColor : CLR_INVALID);
+                ConioSetCellBgColor(ScreenBuffer, x, Line, ScreenBuffer->VtState.UseRgbBackground ? ScreenBuffer->VtState.CurrentBgColor : CLR_INVALID);
+            }
         }
     }
 
