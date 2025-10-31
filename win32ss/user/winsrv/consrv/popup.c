@@ -192,6 +192,7 @@ CreatePopupWindow(
     PTEXTMODE_SCREEN_BUFFER Buffer;
     PPOPUP_WINDOW Popup;
     SMALL_RECT Region;
+    SIZE_T CellCount;
 
     ASSERT((PCONSOLE)Console == ScreenBuffer->Header.Console);
 
@@ -209,16 +210,43 @@ CreatePopupWindow(
     Popup->Origin.Y = yTop;
     Popup->Size.X = Width;
     Popup->Size.Y = Height;
+    Popup->OldFgColors = NULL;
+    Popup->OldBgColors = NULL;
+
+    CellCount = (SIZE_T)Popup->Size.X * Popup->Size.Y;
 
     /* Save old contents */
     Popup->OldContents = ConsoleAllocHeap(HEAP_ZERO_MEMORY,
-                                          Popup->Size.X * Popup->Size.Y *
-                                            sizeof(*Popup->OldContents));
+                                          CellCount * sizeof(*Popup->OldContents));
     if (Popup->OldContents == NULL)
     {
         ConsoleFreeHeap(Popup);
         return NULL;
     }
+
+    if (Buffer->FgColors)
+    {
+        Popup->OldFgColors = ConsoleAllocHeap(0, CellCount * sizeof(COLORREF));
+        if (Popup->OldFgColors == NULL)
+        {
+            ConsoleFreeHeap(Popup->OldContents);
+            ConsoleFreeHeap(Popup);
+            return NULL;
+        }
+    }
+
+    if (Buffer->BgColors)
+    {
+        Popup->OldBgColors = ConsoleAllocHeap(0, CellCount * sizeof(COLORREF));
+        if (Popup->OldBgColors == NULL)
+        {
+            if (Popup->OldFgColors) ConsoleFreeHeap(Popup->OldFgColors);
+            ConsoleFreeHeap(Popup->OldContents);
+            ConsoleFreeHeap(Popup);
+            return NULL;
+        }
+    }
+
     Region.Left   = Popup->Origin.X;
     Region.Top    = Popup->Origin.Y;
     Region.Right  = Popup->Origin.X + Popup->Size.X - 1;
@@ -228,6 +256,26 @@ CreatePopupWindow(
                             TRUE,
                             Popup->OldContents,
                             &Region);
+
+    if (Popup->OldFgColors || Popup->OldBgColors)
+    {
+        SIZE_T Index = 0;
+        SHORT LocalY;
+        for (LocalY = 0; LocalY < Popup->Size.Y; ++LocalY)
+        {
+            SHORT LocalX;
+            for (LocalX = 0; LocalX < Popup->Size.X; ++LocalX, ++Index)
+            {
+                ULONG AbsX = Popup->Origin.X + LocalX;
+                ULONG AbsY = Popup->Origin.Y + LocalY;
+
+                if (Popup->OldFgColors)
+                    Popup->OldFgColors[Index] = ConioGetCellFgColor(Buffer, AbsX, AbsY);
+                if (Popup->OldBgColors)
+                    Popup->OldBgColors[Index] = ConioGetCellBgColor(Buffer, AbsX, AbsY);
+            }
+        }
+    }
 
     /* Draw it */
     DrawBox(Buffer,
@@ -262,7 +310,30 @@ DestroyPopupWindow(
                              Popup->OldContents,
                              &Region);
 
+    if (Popup->OldFgColors || Popup->OldBgColors)
+    {
+        SIZE_T Cells = (SIZE_T)Popup->Size.X * Popup->Size.Y;
+        SIZE_T Index = 0;
+        SHORT LocalY;
+        for (LocalY = 0; LocalY < Popup->Size.Y; ++LocalY)
+        {
+            SHORT LocalX;
+            for (LocalX = 0; LocalX < Popup->Size.X && Index < Cells; ++LocalX, ++Index)
+            {
+                ULONG AbsX = Popup->Origin.X + LocalX;
+                ULONG AbsY = Popup->Origin.Y + LocalY;
+
+                if (Popup->OldFgColors)
+                    ConioSetCellFgColor(Popup->ScreenBuffer, AbsX, AbsY, Popup->OldFgColors[Index]);
+                if (Popup->OldBgColors)
+                    ConioSetCellBgColor(Popup->ScreenBuffer, AbsX, AbsY, Popup->OldBgColors[Index]);
+            }
+        }
+    }
+
     /* Free memory */
+    if (Popup->OldFgColors) ConsoleFreeHeap(Popup->OldFgColors);
+    if (Popup->OldBgColors) ConsoleFreeHeap(Popup->OldBgColors);
     ConsoleFreeHeap(Popup->OldContents);
     ConsoleFreeHeap(Popup);
 }
