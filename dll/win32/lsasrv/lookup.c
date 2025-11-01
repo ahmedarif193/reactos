@@ -2021,12 +2021,7 @@ done:
 
 //TRACE("Free DomainsBuffer\n");
         if (DomainsBuffer != NULL)
-        {
-            if (DomainsBuffer->Domains != NULL)
-                MIDL_user_free(DomainsBuffer->Domains);
-
             MIDL_user_free(DomainsBuffer);
-        }
 
 //TRACE("Free SidsBuffer\n");
         if (SidsBuffer != NULL)
@@ -2432,19 +2427,18 @@ LsapLookupSids(PLSAPR_SID_ENUM_BUFFER SidEnumBuffer,
         goto done;
     }
 
-    DomainsBuffer = MIDL_user_allocate(sizeof(LSAPR_REFERENCED_DOMAIN_LIST));
+    DomainsBuffer = MIDL_user_allocate(sizeof(LSAPR_REFERENCED_DOMAIN_LIST) +
+                                       SidEnumBuffer->Entries * sizeof(LSA_TRUST_INFORMATION));
     if (DomainsBuffer == NULL)
     {
         Status = STATUS_INSUFFICIENT_RESOURCES;
         goto done;
     }
 
-    DomainsBuffer->Domains = MIDL_user_allocate(SidEnumBuffer->Entries * sizeof(LSA_TRUST_INFORMATION));
-    if (DomainsBuffer->Domains == NULL)
-    {
-        Status = STATUS_INSUFFICIENT_RESOURCES;
-        goto done;
-    }
+    DomainsBuffer->Domains = (PLSAPR_TRUST_INFORMATION)((PUCHAR)DomainsBuffer +
+                                                        sizeof(LSAPR_REFERENCED_DOMAIN_LIST));
+    RtlZeroMemory(DomainsBuffer->Domains,
+                  SidEnumBuffer->Entries * sizeof(LSA_TRUST_INFORMATION));
 
     DomainsBuffer->Entries = 0;
     DomainsBuffer->MaxEntries = SidEnumBuffer->Entries;
