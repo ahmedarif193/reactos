@@ -25,8 +25,8 @@
 #include <windef.h>
 #include <wingdi.h>
 #include <winddi.h>
-#include <winioctl.h>
 #include <ntddvdeo.h>
+#include <vmware/vmx_ioctl.h>
 
 //#define EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
 
@@ -47,6 +47,8 @@ typedef struct _PDEV
    PVOID ScreenPtr;
    HPALETTE DefaultPalette;
    PALETTEENTRY *PaletteEntries;
+   BOOLEAN VmwareFifo;
+   ULONG VmwareCaps;
 
 #ifdef EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
    VIDEO_POINTER_ATTRIBUTES PointerAttributes;
@@ -151,6 +153,29 @@ DrvMovePointer(
    IN LONG x,
    IN LONG y,
    IN RECTL *prcl);
+
+BOOL APIENTRY
+DrvCopyBits(
+   SURFOBJ *psoDst,
+   SURFOBJ *psoSrc,
+   CLIPOBJ *pco,
+   XLATEOBJ *pxlo,
+   RECTL *prclDst,
+   POINTL *pptlSrc);
+
+BOOL APIENTRY
+DrvBitBlt(
+   SURFOBJ *psoDst,
+   SURFOBJ *psoSrc,
+   SURFOBJ *psoMask,
+   CLIPOBJ *pco,
+   XLATEOBJ *pxlo,
+   RECTL *prclDst,
+   POINTL *pptlSrc,
+   POINTL *pptlMask,
+   BRUSHOBJ *pbo,
+   POINTL *pptlBrush,
+   ROP4 rop4);
 
 BOOL
 IntInitScreenInfo(

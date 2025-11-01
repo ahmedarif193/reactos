@@ -1,6 +1,7 @@
 
 list(APPEND SOURCE
     enable.c
+    accel.c
     palette.c
     pointer.c
     screen.c
@@ -12,6 +13,8 @@ add_library(framebuf MODULE
     framebuf.rc)
 
 set_module_type(framebuf kerneldll ENTRYPOINT DrvEnableDriver 12)
+target_include_directories(framebuf PRIVATE 
+    ${REACTOS_SOURCE_DIR}/win32ss/include)
 add_pch(framebuf framebuf.h SOURCE)
 target_link_libraries(framebuf libcntpr)
 add_importlibs(framebuf win32k)

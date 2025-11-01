@@ -68,6 +68,30 @@ DrvEnableSurface(
 
    ppdev->ScreenPtr = VideoMemoryInfo.FrameBufferBase;
 
+   ppdev->VmwareFifo = FALSE;
+   ppdev->VmwareCaps = 0;
+
+   if (ppdev->BitsPerPixel >= 15)
+   {
+       VMWARE_VIDEO_CAPS caps = {0};
+       DWORD returned = 0;
+
+       if (!EngDeviceIoControl(ppdev->hDriver,
+                               IOCTL_VIDEO_VMWARE_QUERY_CAPS,
+                               NULL,
+                               0,
+                               &caps,
+                               sizeof(caps),
+                               &returned) &&
+           returned >= sizeof(caps) &&
+           caps.Version == VMWARE_VIDEO_CAPS_VERSION &&
+           (caps.Caps & VMWARE_VIDEO_CAP_FIFO))
+       {
+           ppdev->VmwareFifo = TRUE;
+           ppdev->VmwareCaps = caps.Caps;
+       }
+   }
+
    switch (ppdev->BitsPerPixel)
    {
       case 8:
