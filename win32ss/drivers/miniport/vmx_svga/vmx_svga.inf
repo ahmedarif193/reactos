@@ -1,0 +1,56 @@
+; vmx_svga.inf
+;
+; Installation file for the VMware/VirtualBox SVGA-II display adapter
+;
+[Version]
+Signature  = "$Windows NT$"
+LayoutFile = layout.inf
+Class      = Display
+ClassGUID  = {4D36E968-E325-11CE-BFC1-08002BE10318}
+Provider   = %ReactOS%
+DriverVer  = 26/10/2025,1.00
+
+[DestinationDirs]
+DefaultDestDir        = 12
+VBox.Display_CopyFiles = 11
+
+[Manufacturer]
+%VBox% = VBox
+
+[VBox]
+%VBox.DeviceDesc% = VBox_Inst,PCI\VEN_80EE&DEV_BEEF
+
+[VBox_Inst]
+CopyFiles = VBox.Miniport_CopyFiles, VBox.Display_CopyFiles
+AddReg    = VBox.SoftwareSettings
+
+[VBox.Miniport_CopyFiles]
+vmx_svga.sys
+
+[VBox.Display_CopyFiles]
+framebuf.dll
+
+[VBox.SoftwareSettings]
+HKR,, InstalledDisplayDrivers, %REG_MULTI_SZ%, framebuf
+HKR,, VgaCompatible,           %REG_DWORD%,    0
+
+[VBox_Inst.Services]
+AddService = vmx_svga, 0x00000002, VBox_Service
+
+[VBox_Service]
+ServiceType   = 1
+StartType     = 0  ; boot-start so the miniport is active before win32k initializes
+ErrorControl  = 1
+ServiceBinary = %12%\vmx_svga.sys
+LoadOrderGroup = Video
+
+[Strings]
+; Non-localizable
+ReactOS = "ReactOS Project"
+VBox    = "VirtualBox"
+
+REG_MULTI_SZ   = 0x00010000
+REG_DWORD      = 0x00010001
+
+; Localizable
+VBox.DeviceDesc = "VirtualBox SVGA II Adapter"
