@@ -846,8 +846,19 @@ CsrApiRequestThread(IN PVOID Parameter)
                 /* Reply to the death message */
                 NTSTATUS Status2;
                 Status2 = NtReplyPort(ReplyPort, &ReplyMsg->Header);
-                if (!NT_SUCCESS(Status2))
+                if (Status2 == STATUS_REPLY_MESSAGE_MISMATCH)
+                {
+                    /*
+                     * The client side has already torn down its port, which is
+                     * expected for a dead client. Treat this as a successful
+                     * completion to avoid noisy diagnostics.
+                     */
+                    DPRINT("CSRSS: Skipping reply for dead client; port already closed\n");
+                }
+                else if (!NT_SUCCESS(Status2))
+                {
                     DPRINT1("CSRSS: Error while replying to the death message, Status 0x%lx\n", Status2);
+                }
 
                 /* Reply back to the API port now */
                 ReplyMsg = NULL;
