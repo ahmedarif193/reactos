@@ -1333,7 +1333,38 @@ ConSrvConsoleCtrlEventTimeout(IN ULONG CtrlEvent,
             {
                 DPRINT("ProcessData->CtrlRoutine remote thread creation succeeded, ProcessId = %x, Process = 0x%p\n",
                        ProcessData->Process->ClientId.UniqueProcess, ProcessData->Process);
-                WaitForSingleObject(Thread, Timeout);
+                if (Timeout != 0)
+                {
+                    DWORD WaitResult = WaitForSingleObject(Thread, Timeout);
+
+                    if (WaitResult == WAIT_TIMEOUT)
+                    {
+                        DPRINT("CtrlEvent %lu still running in process %x after %lu ms\n",
+                               CtrlEvent,
+                               ProcessData->Process->ClientId.UniqueProcess,
+                               Timeout);
+                        Status = STATUS_TIMEOUT;
+                    }
+                    else if (WaitResult == WAIT_FAILED)
+                    {
+                        DWORD Error = GetLastError();
+                        DPRINT1("WaitForSingleObject(thread) failed for process %x, error %lu\n",
+                                ProcessData->Process->ClientId.UniqueProcess,
+                                Error);
+                        Status = STATUS_UNSUCCESSFUL;
+                    }
+                    else
+                    {
+                        DPRINT("CtrlEvent %lu completed in process %x\n",
+                               CtrlEvent,
+                               ProcessData->Process->ClientId.UniqueProcess);
+                        Status = STATUS_SUCCESS;
+                    }
+                }
+                else
+                {
+                    Status = STATUS_SUCCESS;
+                }
             }
         }
         _SEH2_FINALLY
@@ -1429,7 +1460,76 @@ ConSrvConsoleProcessCtrlEvent(IN PCONSRV_CONSOLE Console,
          */
         if (ProcessGroupId == 0 || current->Process->ProcessGroupId == ProcessGroupId)
         {
-            Status = ConSrvConsoleCtrlEvent(CtrlEvent, current);
+            ULONG Timeout = 0;
+            BOOLEAN ForceKill = FALSE;
+
+            switch (CtrlEvent)
+            {
+                case CTRL_CLOSE_EVENT:
+                case CTRL_LAST_CLOSE_EVENT:
+                case CTRL_LOGOFF_EVENT:
+                case CTRL_SHUTDOWN_EVENT:
+                    Timeout = 5000; /* Give apps up to 5 seconds to exit gracefully */
+                    ForceKill = TRUE;
+                    break;
+
+                default:
+                    break;
+            }
+
+            Status = ConSrvConsoleCtrlEventTimeout(CtrlEvent, current, Timeout);
+
+            if (!NT_SUCCESS(Status) && Status != STATUS_TIMEOUT)
+            {
+                DPRINT1("CtrlEvent %lu delivery to process %x failed with status 0x%08lx\n",
+                        CtrlEvent,
+                        current->Process->ClientId.UniqueProcess,
+                        Status);
+            }
+
+            if (ForceKill && Status == STATUS_TIMEOUT)
+            {
+                NTSTATUS TermStatus;
+                DWORD WaitResult;
+                DWORD ExitCode = STILL_ACTIVE;
+
+                DPRINT1("Process %x did not respond to CtrlEvent %lu in time, terminating\n",
+                        current->Process->ClientId.UniqueProcess,
+                        CtrlEvent);
+
+                TermStatus = NtTerminateProcess(current->Process->ProcessHandle,
+                                                 STATUS_CONTROL_C_EXIT);
+                if (!NT_SUCCESS(TermStatus))
+                {
+                    DPRINT1("NtTerminateProcess failed for %x, status 0x%08lx\n",
+                            current->Process->ClientId.UniqueProcess,
+                            TermStatus);
+                }
+
+                WaitResult = WaitForSingleObject(current->Process->ProcessHandle, 5000);
+                if (WaitResult == WAIT_FAILED)
+                {
+                    DPRINT1("WaitForSingleObject(Process %x) failed, error %lu\n",
+                            current->Process->ClientId.UniqueProcess,
+                            GetLastError());
+                }
+
+                if (!GetExitCodeProcess(current->Process->ProcessHandle, &ExitCode))
+                {
+                    DPRINT1("GetExitCodeProcess failed for %x, error %lu\n",
+                            current->Process->ClientId.UniqueProcess,
+                            GetLastError());
+                }
+                else
+                {
+                    DPRINT1("Process %x termination result: wait=%lu exit=0x%08lx\n",
+                            current->Process->ClientId.UniqueProcess,
+                            WaitResult,
+                            ExitCode);
+                }
+
+                Status = STATUS_SUCCESS;
+            }
         }
     }
 

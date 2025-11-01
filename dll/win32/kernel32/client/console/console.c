@@ -196,7 +196,17 @@ ConsoleControlDispatcher(IN LPVOID lpThreadParameter)
 
     RtlLeaveCriticalSection(&ConsoleLock);
 
-    ExitThread(nExitCode);
+    if (nExitCode != 0)
+    {
+        /*
+         * For close/logoff/shutdown events a handler returning TRUE means
+         * the process should terminate. Match Windows behaviour by forcing
+         * an exit if the handler did not already do so.
+         */
+        ExitProcess(CONTROL_C_EXIT);
+    }
+
+    ExitThread(0);
     return STATUS_SUCCESS;
 }
 
