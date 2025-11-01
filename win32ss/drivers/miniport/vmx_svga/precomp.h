@@ -8,9 +8,14 @@
 
 #include <ntdef.h>
 #include <dderror.h>
+#include <devioctl.h>
 #include <miniport.h>
 #include <video.h>
+#include <ntstatus.h>
+#include <ntstrsafe.h>
+#include <winerror.h>
 #include "vmx_regs.h"
+#include <vmware/vmx_ioctl.h>
 
 typedef struct _HW_DEVICE_EXTENSION
 {
@@ -18,11 +23,15 @@ typedef struct _HW_DEVICE_EXTENSION
     PHYSICAL_ADDRESS FrameBuffer;
     LARGE_INTEGER VramSize;
     PHYSICAL_ADDRESS VramBase;
+    PHYSICAL_ADDRESS FifoPhys;
     ULONG MemSize;
     PULONG IndexPort;
     PULONG ValuePort;
     PVOID FrameBufferBase;
     PVOID Fifo;
+    ULONG FrameBufferLength;
+    ULONG FifoLength;
+    ULONG IoPortBase;
     ULONG InterruptPort;
     ULONG InterruptState;
     PENG_EVENT SyncEvent;
@@ -33,4 +42,14 @@ typedef struct _HW_DEVICE_EXTENSION
     USHORT DisplayIndex;
     ULONG YOrigin;
     ULONG XOrigin;
+    ULONG PciBus;
+    ULONG PciSlot;
+    UCHAR PciInterruptLine;
+    UCHAR PciInterruptPin;
+    USHORT AdapterInterfaceType;
+    volatile ULONG PendingIrqStatus;
+    ULONG LastCompletedFence;
+    ULONG NextFenceValue;
+    VIDEO_POWER_STATE PowerState;
+    ULONG DpmsVersion;
 } HW_DEVICE_EXTENSION, *PHW_DEVICE_EXTENSION;
