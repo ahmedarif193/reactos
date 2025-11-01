@@ -31,6 +31,9 @@
 #include <dderror.h>
 #include <windef.h>
 #include <wdmguid.h>
+#include <wmidata.h>
+#include <wmistr.h>
+#include <wmilib.h>
 
 /* PSEH for SEH Support */
 #include <pseh/pseh2.h>
@@ -67,9 +70,24 @@ typedef struct _VIDEO_PORT_AGP_VIRTUAL_MAPPING
    PVOID MappedAddress;
 } VIDEO_PORT_AGP_VIRTUAL_MAPPING, *PVIDEO_PORT_AGP_VIRTUAL_MAPPING;
 
+#define VP_THUNK_TAG 'TvPI'
+
 typedef struct _VIDEO_PORT_DRIVER_EXTENSION
 {
    VIDEO_HW_INITIALIZATION_DATA InitializationData;
+   ULONG MiniportInitDataSize;
+   struct
+   {
+       PVIDEO_HW_INTERRUPT HwInterrupt;
+       PVIDEO_HW_POWER_SET HwSetPowerState;
+       PVIDEO_HW_POWER_GET HwGetPowerState;
+       PVIDEO_HW_GET_CHILD_DESCRIPTOR HwGetVideoChildDescriptor;
+   } CallbackSnapshot;
+   struct
+   {
+       PVOID CodeBase;
+       ULONG CodeSize;
+   } InterruptThunk;
    PVOID HwContext;
    UNICODE_STRING RegistryPath;
 } VIDEO_PORT_DRIVER_EXTENSION, *PVIDEO_PORT_DRIVER_EXTENSION;
@@ -110,7 +128,15 @@ typedef struct _VIDEO_PORT_DEVICE_EXTENSTION
    USHORT AdapterNumber;
    USHORT DisplayNumber;
    ULONG NumberOfSecondaryDisplays;
-   CHAR POINTER_ALIGNMENT MiniPortDeviceExtension[1];
+   VIDEO_POWER_STATE CurrentPowerState;
+   ULONG DpmsVersion;
+   WMILIB_CONTEXT WmiLibContext;
+   WMIGUIDREGINFO WmiGuidList[1];
+   ULONG VideoPowerdownTimeout;
+   BOOLEAN WmiRegistered;
+    BOOLEAN DeferredSettingsCopy;
+    BOOLEAN SettingsCopyCompleted;
+    CHAR POINTER_ALIGNMENT MiniPortDeviceExtension[1];
 } VIDEO_PORT_DEVICE_EXTENSION, *PVIDEO_PORT_DEVICE_EXTENSION;
 
 typedef struct _VIDEO_PORT_CHILD_EXTENSION
@@ -122,11 +148,17 @@ typedef struct _VIDEO_PORT_CHILD_EXTENSION
     UCHAR ChildDescriptor[256];
 
     BOOLEAN EdidValid;
+    BOOLEAN Present; /* TRUE when miniport reported the child in the latest enumeration */
+    ULONG LastEnumIndex; /* Enumeration slot used during the previous probe */
 
     PDRIVER_OBJECT DriverObject;
     PDEVICE_OBJECT PhysicalDeviceObject;
 
     LIST_ENTRY ListEntry;
+
+    PVIDEO_PORT_DEVICE_EXTENSION ParentDeviceExtension;
+    VIDEO_POWER_STATE CurrentPowerState;
+    ULONG DpmsVersion;
 
     CHAR ChildDeviceExtension[1];
 } VIDEO_PORT_CHILD_EXTENSION, *PVIDEO_PORT_CHILD_EXTENSION;
@@ -170,6 +202,14 @@ IntVideoPortDispatchPdoPnp(
    IN PIRP Irp);
 
 /* dispatch.c */
+
+VOID
+VpInitializeWmi(
+   IN PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension);
+
+VOID
+VpTeardownWmi(
+   IN PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension);
 
 NTSTATUS NTAPI
 IntVideoPortAddDevice(

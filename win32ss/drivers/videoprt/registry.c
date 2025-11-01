@@ -298,62 +298,151 @@ IntSetupDeviceSettingsKey(
     PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension)
 {
     static UNICODE_STRING SettingsKeyName = RTL_CONSTANT_STRING(L"Settings");
-    HANDLE DevInstRegKey, SourceKeyHandle, DestKeyHandle;
+    HANDLE DevInstRegKey = NULL, SourceKeyHandle = NULL;
+    HANDLE ControlKey = NULL, ControlSettingsKey = NULL;
+    HANDLE ClassSettingsKey = NULL;
     OBJECT_ATTRIBUTES ObjectAttributes;
     NTSTATUS Status;
 
-    if (!DeviceExtension->PhysicalDeviceObject)
-        return STATUS_SUCCESS;
+    DeviceExtension->SettingsCopyCompleted = FALSE;
+    DeviceExtension->DeferredSettingsCopy = FALSE;
 
-    /* Open the software key: HKLM\System\CurrentControlSet\Control\Class\<ClassGUID>\<n> */
-    Status = IoOpenDeviceRegistryKey(DeviceExtension->PhysicalDeviceObject,
-                                     PLUGPLAY_REGKEY_DRIVER,
-                                     KEY_ALL_ACCESS,
-                                     &DevInstRegKey);
-    if (Status != STATUS_SUCCESS)
+    INFO_(VIDEOPRT, "Preparing Settings copy from %wZ\n", &DeviceExtension->RegistryPath);
+
+    if (DeviceExtension->NewRegistryPath.Buffer && DeviceExtension->NewRegistryPath.Length != 0)
     {
-        ERR_(VIDEOPRT, "Failed to open device software key. Status 0x%lx\n", Status);
-        return Status;
+        InitializeObjectAttributes(&ObjectAttributes,
+                                   &DeviceExtension->NewRegistryPath,
+                                   OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                                   NULL,
+                                   NULL);
+        Status = ZwOpenKey(&ControlKey, KEY_WRITE, &ObjectAttributes);
+        if (!NT_SUCCESS(Status))
+        {
+            Status = RtlCreateRegistryKey(RTL_REGISTRY_ABSOLUTE,
+                                          DeviceExtension->NewRegistryPath.Buffer);
+            if (NT_SUCCESS(Status))
+            {
+                Status = ZwOpenKey(&ControlKey, KEY_WRITE, &ObjectAttributes);
+            }
+        }
+    }
+    else
+    {
+        Status = STATUS_INVALID_PARAMETER;
     }
 
-    /* Open the 'Settings' sub-key */
+    if (!NT_SUCCESS(Status))
+    {
+        ERR_(VIDEOPRT, "Failed to open Control\\Video key for %wZ (0x%lx)\n",
+              &DeviceExtension->NewRegistryPath,
+              Status);
+        goto Cleanup;
+    }
+
     InitializeObjectAttributes(&ObjectAttributes,
                                &SettingsKeyName,
                                OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
-                               DevInstRegKey,
+                               ControlKey,
                                NULL);
-    Status = ZwOpenKey(&DestKeyHandle, KEY_WRITE, &ObjectAttributes);
-
-    /* Close the device software key */
-    ObCloseHandle(DevInstRegKey, KernelMode);
-
-    if (Status != STATUS_SUCCESS)
+    Status = ZwOpenKey(&ControlSettingsKey, KEY_WRITE, &ObjectAttributes);
+    if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
     {
-        ERR_(VIDEOPRT, "Failed to open settings key. Status 0x%lx\n", Status);
-        return Status;
+        Status = ZwCreateKey(&ControlSettingsKey,
+                             KEY_WRITE,
+                             &ObjectAttributes,
+                             0,
+                             NULL,
+                             REG_OPTION_NON_VOLATILE,
+                             NULL);
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        ERR_(VIDEOPRT, "Failed to create Control\\Video Settings key (0x%lx)\n", Status);
+        goto Cleanup;
     }
 
-    /* Open the device profile key */
     InitializeObjectAttributes(&ObjectAttributes,
                                &DeviceExtension->RegistryPath,
                                OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
                                NULL,
                                NULL);
     Status = ZwOpenKey(&SourceKeyHandle, KEY_READ, &ObjectAttributes);
-    if (Status != STATUS_SUCCESS)
+    if (!NT_SUCCESS(Status))
     {
-        ERR_(VIDEOPRT, "ZwOpenKey failed for settings key: status 0x%lx\n", Status);
-        ObCloseHandle(DestKeyHandle, KernelMode);
-        return Status;
+        WARN_(VIDEOPRT, "Source settings key %wZ missing (0x%lx); using defaults\n",
+              &DeviceExtension->RegistryPath,
+              Status);
     }
 
-    IntCopyRegistryValue(SourceKeyHandle, DestKeyHandle, L"InstalledDisplayDrivers");
-    IntCopyRegistryValue(SourceKeyHandle, DestKeyHandle, L"Attach.ToDesktop");
+    if (SourceKeyHandle)
+    {
+        IntCopyRegistryValue(SourceKeyHandle, ControlSettingsKey, L"InstalledDisplayDrivers");
+        IntCopyRegistryValue(SourceKeyHandle, ControlSettingsKey, L"Attach.ToDesktop");
+    }
 
-    ObCloseHandle(SourceKeyHandle, KernelMode);
-    ObCloseHandle(DestKeyHandle, KernelMode);
+    if (DeviceExtension->PhysicalDeviceObject)
+    {
+        Status = IoOpenDeviceRegistryKey(DeviceExtension->PhysicalDeviceObject,
+                                         PLUGPLAY_REGKEY_DRIVER,
+                                         KEY_ALL_ACCESS,
+                                         &DevInstRegKey);
+        if (NT_SUCCESS(Status))
+        {
+            InitializeObjectAttributes(&ObjectAttributes,
+                                       &SettingsKeyName,
+                                       OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                                       DevInstRegKey,
+                                       NULL);
+            Status = ZwOpenKey(&ClassSettingsKey, KEY_WRITE, &ObjectAttributes);
+            if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
+            {
+                Status = ZwCreateKey(&ClassSettingsKey,
+                                     KEY_WRITE,
+                                     &ObjectAttributes,
+                                     0,
+                                     NULL,
+                                     REG_OPTION_NON_VOLATILE,
+                                     NULL);
+            }
 
-    return STATUS_SUCCESS;
+            if (NT_SUCCESS(Status) && SourceKeyHandle)
+            {
+                IntCopyRegistryValue(SourceKeyHandle, ClassSettingsKey, L"InstalledDisplayDrivers");
+                IntCopyRegistryValue(SourceKeyHandle, ClassSettingsKey, L"Attach.ToDesktop");
+            }
+            else if (!NT_SUCCESS(Status))
+            {
+                WARN_(VIDEOPRT, "Unable to populate class Settings key (0x%lx)\n", Status);
+            }
+        }
+        else if (Status != STATUS_OBJECT_NAME_NOT_FOUND)
+        {
+            WARN_(VIDEOPRT, "IoOpenDeviceRegistryKey failed 0x%lx\n", Status);
+        }
+    }
+
+    INFO_(VIDEOPRT, "Settings copy completed for %wZ\n", &DeviceExtension->NewRegistryPath);
+    DeviceExtension->SettingsCopyCompleted = TRUE;
+    DeviceExtension->DeferredSettingsCopy = FALSE;
+    Status = STATUS_SUCCESS;
+
+Cleanup:
+    if (SourceKeyHandle)
+        ObCloseHandle(SourceKeyHandle, KernelMode);
+    if (ClassSettingsKey)
+        ObCloseHandle(ClassSettingsKey, KernelMode);
+    if (DevInstRegKey)
+        ObCloseHandle(DevInstRegKey, KernelMode);
+    if (ControlSettingsKey)
+        ObCloseHandle(ControlSettingsKey, KernelMode);
+    if (ControlKey)
+        ObCloseHandle(ControlKey, KernelMode);
+
+    if (!NT_SUCCESS(Status))
+        DeviceExtension->DeferredSettingsCopy = TRUE;
+
+    return Status;
 }
 
 NTSTATUS

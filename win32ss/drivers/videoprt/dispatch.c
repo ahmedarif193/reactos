@@ -52,6 +52,501 @@ VideoPortWin32kCallout(
     KeDetachProcess();
 }
 
+#define VP_WMI_POWER_GUID_INDEX 0
+
+static NTSTATUS NTAPI VpWmiQueryRegInfo(
+    _Inout_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PULONG RegFlags,
+    _Inout_ PUNICODE_STRING InstanceName,
+    _Out_ PUNICODE_STRING *RegistryPath OPTIONAL,
+    _Inout_ PUNICODE_STRING MofResourceName,
+    _Out_ PDEVICE_OBJECT *Pdo OPTIONAL);
+
+static NTSTATUS NTAPI VpWmiQueryDataBlock(
+    _Inout_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp,
+    _In_ ULONG GuidIndex,
+    _In_ ULONG InstanceIndex,
+    _In_ ULONG InstanceCount,
+    _Out_ PULONG InstanceLengthArray OPTIONAL,
+    _In_ ULONG BufferAvail,
+    _Out_ PUCHAR Buffer OPTIONAL);
+
+static NTSTATUS NTAPI VpWmiSetDataBlock(
+    _Inout_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp,
+    _In_ ULONG GuidIndex,
+    _In_ ULONG InstanceIndex,
+    _In_ ULONG BufferSize,
+    _In_ PUCHAR Buffer);
+
+static NTSTATUS NTAPI VpWmiSetDataItem(
+    _Inout_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp,
+    _In_ ULONG GuidIndex,
+    _In_ ULONG InstanceIndex,
+    _In_ ULONG DataItemId,
+    _In_ ULONG BufferSize,
+    _In_ PUCHAR Buffer);
+
+static NTSTATUS NTAPI VpWmiFunctionControl(
+    _Inout_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp,
+    _In_ ULONG GuidIndex,
+    _In_ WMIENABLEDISABLECONTROL Function,
+    _In_ BOOLEAN Enable);
+
+VOID
+VpInitializeWmi(
+    _In_ PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension)
+{
+    PWMILIB_CONTEXT Context = &DeviceExtension->WmiLibContext;
+
+    RtlZeroMemory(Context, sizeof(*Context));
+
+    DeviceExtension->WmiGuidList[VP_WMI_POWER_GUID_INDEX].Guid = &GUID_VIDEO_POWERDOWN_TIMEOUT;
+    DeviceExtension->WmiGuidList[VP_WMI_POWER_GUID_INDEX].InstanceCount = 1;
+    DeviceExtension->WmiGuidList[VP_WMI_POWER_GUID_INDEX].Flags = WMIREG_FLAG_INSTANCE_PDO;
+
+    Context->GuidCount = ARRAYSIZE(DeviceExtension->WmiGuidList);
+    DeviceExtension->WmiRegistered = FALSE;
+    Context->GuidList = DeviceExtension->WmiGuidList;
+    Context->QueryWmiRegInfo = VpWmiQueryRegInfo;
+    Context->QueryWmiDataBlock = VpWmiQueryDataBlock;
+    Context->SetWmiDataBlock = VpWmiSetDataBlock;
+    Context->SetWmiDataItem = VpWmiSetDataItem;
+    Context->ExecuteWmiMethod = NULL;
+    Context->WmiFunctionControl = VpWmiFunctionControl;
+
+    if (DeviceExtension->FunctionalDeviceObject != NULL)
+    {
+        NTSTATUS status;
+
+        status = IoWMIRegistrationControl(DeviceExtension->FunctionalDeviceObject,
+                                          WMIREG_ACTION_REGISTER);
+        if (NT_SUCCESS(status))
+        {
+            DeviceExtension->WmiRegistered = TRUE;
+            INFO_(VIDEOPRT, "WMI registered for adapter %u\n", DeviceExtension->AdapterNumber);
+        }
+        else
+        {
+            WARN_(VIDEOPRT, "IoWMIRegistrationControl REGISTER failed: 0x%lx\n", status);
+        }
+    }
+}
+
+VOID
+VpTeardownWmi(
+    _In_ PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension)
+{
+    if (DeviceExtension->WmiRegistered)
+    {
+        NTSTATUS status;
+
+        status = IoWMIRegistrationControl(DeviceExtension->FunctionalDeviceObject,
+                                          WMIREG_ACTION_DEREGISTER);
+        if (NT_SUCCESS(status))
+        {
+            INFO_(VIDEOPRT, "WMI deregistered for adapter %u\n", DeviceExtension->AdapterNumber);
+        }
+        else
+        {
+            WARN_(VIDEOPRT, "IoWMIRegistrationControl DEREGISTER failed: 0x%lx\n", status);
+        }
+
+        DeviceExtension->WmiRegistered = FALSE;
+    }
+}
+
+static NTSTATUS
+VpStatusToNtStatus(VP_STATUS Status)
+{
+    if (Status == NO_ERROR)
+        return STATUS_SUCCESS;
+
+    if (Status < 0)
+        return (NTSTATUS)Status;
+
+    return NTSTATUS_FROM_WIN32(Status);
+}
+
+static BOOLEAN
+VpTranslateDevicePowerState(
+    DEVICE_POWER_STATE DeviceState,
+    PVIDEO_POWER_STATE VideoState)
+{
+    switch (DeviceState)
+    {
+        case PowerDeviceUnspecified:
+            *VideoState = VideoPowerUnspecified;
+            return TRUE;
+        case PowerDeviceD0:
+            *VideoState = VideoPowerOn;
+            return TRUE;
+        case PowerDeviceD1:
+            *VideoState = VideoPowerStandBy;
+            return TRUE;
+        case PowerDeviceD2:
+            *VideoState = VideoPowerSuspend;
+            return TRUE;
+        case PowerDeviceD3:
+#ifdef PowerDeviceD3Final
+        case PowerDeviceD3Final:
+#endif
+            *VideoState = VideoPowerOff;
+            return TRUE;
+        default:
+            break;
+    }
+
+    return FALSE;
+}
+
+static NTSTATUS
+VpMiniportPowerOperation(
+    PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension,
+    ULONG HwId,
+    BOOLEAN SetOperation,
+    PVIDEO_POWER_MANAGEMENT PowerInfo)
+{
+    VIDEO_POWER_MANAGEMENT LocalInfo;
+    PVIDEO_POWER_MANAGEMENT Request = PowerInfo;
+    VP_STATUS VpStatus;
+
+    if (Request)
+    {
+        if (Request->Length < sizeof(VIDEO_POWER_MANAGEMENT))
+            Request->Length = sizeof(VIDEO_POWER_MANAGEMENT);
+    }
+    else
+    {
+        RtlZeroMemory(&LocalInfo, sizeof(LocalInfo));
+        LocalInfo.Length = sizeof(LocalInfo);
+        Request = &LocalInfo;
+    }
+
+    if (SetOperation)
+    {
+        if (!DeviceExtension->DriverExtension->CallbackSnapshot.HwSetPowerState)
+            return STATUS_NOT_SUPPORTED;
+
+        VpStatus = DeviceExtension->DriverExtension->CallbackSnapshot.HwSetPowerState(
+                       DeviceExtension->MiniPortDeviceExtension,
+                       HwId,
+                       Request);
+    }
+    else
+    {
+        if (!DeviceExtension->DriverExtension->CallbackSnapshot.HwGetPowerState)
+            return STATUS_NOT_SUPPORTED;
+
+        VpStatus = DeviceExtension->DriverExtension->CallbackSnapshot.HwGetPowerState(
+                       DeviceExtension->MiniPortDeviceExtension,
+                       HwId,
+                       Request);
+    }
+
+    return VpStatusToNtStatus(VpStatus);
+}
+
+static VOID
+VpCachePowerState(
+    PVIDEO_POWER_MANAGEMENT PowerInfo,
+    VIDEO_POWER_STATE State,
+    ULONG DpmsVersion)
+{
+    PowerInfo->Length = sizeof(VIDEO_POWER_MANAGEMENT);
+    PowerInfo->PowerState = State;
+    PowerInfo->DPMSVersion = DpmsVersion ? DpmsVersion : 0x0100;
+}
+
+static NTSTATUS NTAPI
+VpWmiQueryRegInfo(
+    _Inout_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PULONG RegFlags,
+    _Inout_ PUNICODE_STRING InstanceName,
+    _Out_ PUNICODE_STRING *RegistryPath OPTIONAL,
+    _Inout_ PUNICODE_STRING MofResourceName,
+    _Out_ PDEVICE_OBJECT *Pdo OPTIONAL)
+{
+    PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension = DeviceObject->DeviceExtension;
+
+    if (RegFlags)
+        *RegFlags = WMIREG_FLAG_INSTANCE_PDO;
+
+    if (InstanceName)
+        RtlInitUnicodeString(InstanceName, NULL);
+
+    if (RegistryPath)
+        *RegistryPath = &DeviceExtension->DriverExtension->RegistryPath;
+
+    if (MofResourceName)
+        RtlInitUnicodeString(MofResourceName, NULL);
+
+    if (Pdo)
+        *Pdo = DeviceExtension->PhysicalDeviceObject;
+
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS NTAPI
+VpWmiQueryDataBlock(
+    _Inout_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp,
+    _In_ ULONG GuidIndex,
+    _In_ ULONG InstanceIndex,
+    _In_ ULONG InstanceCount,
+    _Out_ PULONG InstanceLengthArray OPTIONAL,
+    _In_ ULONG BufferAvail,
+    _Out_ PUCHAR Buffer OPTIONAL)
+{
+    PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension = DeviceObject->DeviceExtension;
+    ULONG BufferUsed = sizeof(ULONG);
+    NTSTATUS Status;
+
+    if ((GuidIndex != VP_WMI_POWER_GUID_INDEX) || (InstanceIndex != 0) || (InstanceCount != 1))
+    {
+        Status = STATUS_WMI_GUID_NOT_FOUND;
+        BufferUsed = 0;
+        return WmiCompleteRequest(DeviceObject, Irp, Status, BufferUsed, IO_NO_INCREMENT);
+    }
+
+    if (InstanceLengthArray)
+        InstanceLengthArray[0] = sizeof(ULONG);
+
+    if ((BufferAvail < sizeof(ULONG)) || (Buffer == NULL))
+    {
+        Status = STATUS_BUFFER_TOO_SMALL;
+        return WmiCompleteRequest(DeviceObject, Irp, Status, sizeof(ULONG), IO_NO_INCREMENT);
+    }
+
+    *(PULONG)Buffer = DeviceExtension->VideoPowerdownTimeout;
+    INFO_(VIDEOPRT, "WMI query VideoPowerdownTimeout=%lu\n", DeviceExtension->VideoPowerdownTimeout);
+    Status = STATUS_SUCCESS;
+    return WmiCompleteRequest(DeviceObject, Irp, Status, BufferUsed, IO_NO_INCREMENT);
+}
+
+static NTSTATUS NTAPI
+VpWmiSetDataBlock(
+    _Inout_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp,
+    _In_ ULONG GuidIndex,
+    _In_ ULONG InstanceIndex,
+    _In_ ULONG BufferSize,
+    _In_ PUCHAR Buffer)
+{
+    NTSTATUS Status;
+
+    if ((GuidIndex != VP_WMI_POWER_GUID_INDEX) || (InstanceIndex != 0))
+    {
+        Status = STATUS_WMI_GUID_NOT_FOUND;
+    }
+    else if (BufferSize < sizeof(ULONG))
+    {
+        Status = STATUS_BUFFER_TOO_SMALL;
+    }
+    else
+    {
+        PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension = DeviceObject->DeviceExtension;
+        DeviceExtension->VideoPowerdownTimeout = *(PULONG)Buffer;
+        INFO_(VIDEOPRT, "WMI set datablock VideoPowerdownTimeout=%lu\n", DeviceExtension->VideoPowerdownTimeout);
+        Status = STATUS_SUCCESS;
+    }
+
+    return WmiCompleteRequest(DeviceObject, Irp, Status, 0, IO_NO_INCREMENT);
+}
+
+static NTSTATUS NTAPI
+VpWmiSetDataItem(
+    _Inout_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp,
+    _In_ ULONG GuidIndex,
+    _In_ ULONG InstanceIndex,
+    _In_ ULONG DataItemId,
+    _In_ ULONG BufferSize,
+    _In_ PUCHAR Buffer)
+{
+    NTSTATUS Status;
+
+    if ((GuidIndex != VP_WMI_POWER_GUID_INDEX) || (InstanceIndex != 0) || (DataItemId != 0))
+    {
+        Status = STATUS_WMI_GUID_NOT_FOUND;
+    }
+    else if (BufferSize < sizeof(ULONG))
+    {
+        Status = STATUS_BUFFER_TOO_SMALL;
+    }
+    else
+    {
+        PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension = DeviceObject->DeviceExtension;
+        DeviceExtension->VideoPowerdownTimeout = *(PULONG)Buffer;
+        INFO_(VIDEOPRT, "WMI set dataitem VideoPowerdownTimeout=%lu\n", DeviceExtension->VideoPowerdownTimeout);
+        Status = STATUS_SUCCESS;
+    }
+
+    return WmiCompleteRequest(DeviceObject, Irp, Status, 0, IO_NO_INCREMENT);
+}
+
+static NTSTATUS NTAPI
+VpWmiFunctionControl(
+    _Inout_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp,
+    _In_ ULONG GuidIndex,
+    _In_ WMIENABLEDISABLECONTROL Function,
+    _In_ BOOLEAN Enable)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(Irp);
+    UNREFERENCED_PARAMETER(GuidIndex);
+    UNREFERENCED_PARAMETER(Function);
+    UNREFERENCED_PARAMETER(Enable);
+
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+VpIoctlSetOutputDevicePowerState(
+    PDEVICE_OBJECT DeviceObject,
+    PVIDEO_POWER_MANAGEMENT PowerRequest,
+    ULONG InputLength)
+{
+    PVIDEO_PORT_COMMON_EXTENSION CommonExtension;
+    VIDEO_POWER_STATE RequestedState;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (InputLength < sizeof(VIDEO_POWER_MANAGEMENT) || PowerRequest == NULL)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    if (PowerRequest->Length < sizeof(VIDEO_POWER_MANAGEMENT))
+        PowerRequest->Length = sizeof(VIDEO_POWER_MANAGEMENT);
+
+    RequestedState = (VIDEO_POWER_STATE)PowerRequest->PowerState;
+    if (RequestedState <= VideoPowerUnspecified || RequestedState >= VideoPowerMaximum)
+        return STATUS_INVALID_PARAMETER;
+
+    CommonExtension = DeviceObject->DeviceExtension;
+
+    if (CommonExtension->Fdo)
+    {
+        PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension = (PVIDEO_PORT_DEVICE_EXTENSION)CommonExtension;
+
+        if (DeviceExtension->DriverExtension->CallbackSnapshot.HwSetPowerState)
+        {
+            Status = VpMiniportPowerOperation(DeviceExtension,
+                                              DISPLAY_ADAPTER_HW_ID,
+                                              TRUE,
+                                              PowerRequest);
+        }
+
+        if (NT_SUCCESS(Status))
+        {
+            DeviceExtension->CurrentPowerState = (VIDEO_POWER_STATE)PowerRequest->PowerState;
+            if (PowerRequest->DPMSVersion)
+                DeviceExtension->DpmsVersion = PowerRequest->DPMSVersion;
+        }
+    }
+    else
+    {
+        PVIDEO_PORT_CHILD_EXTENSION ChildExtension = (PVIDEO_PORT_CHILD_EXTENSION)CommonExtension;
+        PVIDEO_PORT_DEVICE_EXTENSION ParentExtension = ChildExtension->ParentDeviceExtension;
+
+        if (ParentExtension && ParentExtension->DriverExtension->CallbackSnapshot.HwSetPowerState)
+        {
+            Status = VpMiniportPowerOperation(ParentExtension,
+                                              ChildExtension->ChildId,
+                                              TRUE,
+                                              PowerRequest);
+        }
+
+        if (NT_SUCCESS(Status))
+        {
+            ChildExtension->CurrentPowerState = (VIDEO_POWER_STATE)PowerRequest->PowerState;
+            if (PowerRequest->DPMSVersion)
+                ChildExtension->DpmsVersion = PowerRequest->DPMSVersion;
+        }
+    }
+
+    return Status;
+}
+
+static NTSTATUS
+VpIoctlGetOutputDevicePowerState(
+    PDEVICE_OBJECT DeviceObject,
+    PVIDEO_POWER_MANAGEMENT PowerInfo,
+    ULONG OutputLength,
+    PULONG BytesReturned)
+{
+    PVIDEO_PORT_COMMON_EXTENSION CommonExtension;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (OutputLength < sizeof(VIDEO_POWER_MANAGEMENT) || PowerInfo == NULL)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    PowerInfo->Length = sizeof(VIDEO_POWER_MANAGEMENT);
+
+    CommonExtension = DeviceObject->DeviceExtension;
+
+    if (CommonExtension->Fdo)
+    {
+        PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension = (PVIDEO_PORT_DEVICE_EXTENSION)CommonExtension;
+
+        if (DeviceExtension->DriverExtension->CallbackSnapshot.HwGetPowerState)
+        {
+            Status = VpMiniportPowerOperation(DeviceExtension,
+                                              DISPLAY_ADAPTER_HW_ID,
+                                              FALSE,
+                                              PowerInfo);
+
+            if (NT_SUCCESS(Status))
+            {
+                DeviceExtension->CurrentPowerState = (VIDEO_POWER_STATE)PowerInfo->PowerState;
+                if (PowerInfo->DPMSVersion)
+                    DeviceExtension->DpmsVersion = PowerInfo->DPMSVersion;
+            }
+        }
+
+        if (!NT_SUCCESS(Status))
+        {
+            Status = STATUS_SUCCESS;
+            VpCachePowerState(PowerInfo,
+                              DeviceExtension->CurrentPowerState,
+                              DeviceExtension->DpmsVersion);
+        }
+    }
+    else
+    {
+        PVIDEO_PORT_CHILD_EXTENSION ChildExtension = (PVIDEO_PORT_CHILD_EXTENSION)CommonExtension;
+        PVIDEO_PORT_DEVICE_EXTENSION ParentExtension = ChildExtension->ParentDeviceExtension;
+
+        if (ParentExtension && ParentExtension->DriverExtension->CallbackSnapshot.HwGetPowerState)
+        {
+            Status = VpMiniportPowerOperation(ParentExtension,
+                                              ChildExtension->ChildId,
+                                              FALSE,
+                                              PowerInfo);
+
+            if (NT_SUCCESS(Status))
+            {
+                ChildExtension->CurrentPowerState = (VIDEO_POWER_STATE)PowerInfo->PowerState;
+                if (PowerInfo->DPMSVersion)
+                    ChildExtension->DpmsVersion = PowerInfo->DPMSVersion;
+            }
+        }
+
+        if (!NT_SUCCESS(Status))
+        {
+            Status = STATUS_SUCCESS;
+            VpCachePowerState(PowerInfo,
+                              ChildExtension->CurrentPowerState,
+                              ChildExtension->DpmsVersion);
+        }
+    }
+
+    *BytesReturned = sizeof(VIDEO_POWER_MANAGEMENT);
+    return Status;
+}
+
 /*
  * Reinitialize the display to base VGA mode.
  *
@@ -640,7 +1135,9 @@ VideoPortEnumMonitorPdo(
     CurrentEntry = DeviceExtension->ChildDeviceList.Flink;
     while (CurrentEntry != &DeviceExtension->ChildDeviceList)
     {
-        i++;
+        ChildExtension = CONTAINING_RECORD(CurrentEntry, VIDEO_PORT_CHILD_EXTENSION, ListEntry);
+        if (ChildExtension->Present)
+            i++;
         CurrentEntry = CurrentEntry->Flink;
     }
 
@@ -657,8 +1154,12 @@ VideoPortEnumMonitorPdo(
     {
         ChildExtension = CONTAINING_RECORD(CurrentEntry, VIDEO_PORT_CHILD_EXTENSION, ListEntry);
 
-        ObReferenceObject(ChildExtension->PhysicalDeviceObject);
-        pMonitorDevices[i++].pdo = ChildExtension->PhysicalDeviceObject;
+        if (ChildExtension->Present)
+        {
+            ObReferenceObject(ChildExtension->PhysicalDeviceObject);
+            pMonitorDevices[i++].pdo = ChildExtension->PhysicalDeviceObject;
+        }
+
         CurrentEntry = CurrentEntry->Flink;
     }
 
@@ -817,9 +1318,27 @@ IntVideoPortDispatchDeviceControl(
             break;
 
         case IOCTL_VIDEO_SET_OUTPUT_DEVICE_POWER_STATE:
+            INFO_(VIDEOPRT, "- IOCTL_VIDEO_SET_OUTPUT_DEVICE_POWER_STATE\n");
+            Status = VpIoctlSetOutputDevicePowerState(
+                         DeviceObject,
+                         (PVIDEO_POWER_MANAGEMENT)Irp->AssociatedIrp.SystemBuffer,
+                         IrpStack->Parameters.DeviceIoControl.InputBufferLength);
+            Irp->IoStatus.Information = 0;
+            break;
+
         case IOCTL_VIDEO_GET_OUTPUT_DEVICE_POWER_STATE:
-            WARN_(VIDEOPRT, "- IOCTL_VIDEO_GET/SET_OUTPUT_DEVICE_POWER_STATE are UNIMPLEMENTED!\n");
-            Status = STATUS_NOT_IMPLEMENTED;
+            INFO_(VIDEOPRT, "- IOCTL_VIDEO_GET_OUTPUT_DEVICE_POWER_STATE\n");
+            {
+                ULONG BytesReturned = 0;
+
+                Status = VpIoctlGetOutputDevicePowerState(
+                             DeviceObject,
+                             (PVIDEO_POWER_MANAGEMENT)Irp->AssociatedIrp.SystemBuffer,
+                             IrpStack->Parameters.DeviceIoControl.OutputBufferLength,
+                             &BytesReturned);
+
+                Irp->IoStatus.Information = BytesReturned;
+            }
             break;
 
         case IOCTL_VIDEO_SET_POWER_MANAGEMENT:
@@ -903,6 +1422,7 @@ IntVideoPortPnPStartDevice(
     PVIDEO_PORT_DRIVER_EXTENSION DriverExtension;
     PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension;
     PCM_RESOURCE_LIST AllocatedResources;
+    NTSTATUS Status;
 
     /* Get the initialization data we saved in VideoPortInitialize.*/
     DriverObject = DeviceObject->DriverObject;
@@ -965,9 +1485,23 @@ IntVideoPortPnPStartDevice(
           DeviceExtension->InterruptVector);
 
     /* Create adapter device object. */
-    return IntVideoPortFindAdapter(DriverObject,
-                                   DriverExtension,
-                                   DeviceObject);
+    Status = IntVideoPortFindAdapter(DriverObject,
+                                     DriverExtension,
+                                     DeviceObject);
+
+    if (NT_SUCCESS(Status) && DeviceExtension->PhysicalDeviceObject)
+    {
+        if (!DeviceExtension->SettingsCopyCompleted)
+        {
+            NTSTATUS SettingsStatus = IntSetupDeviceSettingsKey(DeviceExtension);
+            if (!NT_SUCCESS(SettingsStatus))
+            {
+                WARN_(VIDEOPRT, "Deferred Settings copy failed with status 0x%lx\n", SettingsStatus);
+            }
+        }
+    }
+
+    return Status;
 }
 
 
@@ -1013,7 +1547,9 @@ IntVideoPortQueryBusRelations(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     CurrentEntry = DeviceExtension->ChildDeviceList.Flink;
     while (CurrentEntry != &DeviceExtension->ChildDeviceList)
     {
-        i++;
+        ChildExtension = CONTAINING_RECORD(CurrentEntry, VIDEO_PORT_CHILD_EXTENSION, ListEntry);
+        if (ChildExtension->Present)
+            i++;
         CurrentEntry = CurrentEntry->Flink;
     }
 
@@ -1033,10 +1569,12 @@ IntVideoPortQueryBusRelations(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     {
         ChildExtension = CONTAINING_RECORD(CurrentEntry, VIDEO_PORT_CHILD_EXTENSION, ListEntry);
 
-        ObReferenceObject(ChildExtension->PhysicalDeviceObject);
-        DeviceRelations->Objects[i] = ChildExtension->PhysicalDeviceObject;
+        if (ChildExtension->Present)
+        {
+            ObReferenceObject(ChildExtension->PhysicalDeviceObject);
+            DeviceRelations->Objects[i++] = ChildExtension->PhysicalDeviceObject;
+        }
 
-        i++;
         CurrentEntry = CurrentEntry->Flink;
     }
 
@@ -1126,6 +1664,12 @@ IntVideoPortDispatchFdoPnp(
         case IRP_MN_SURPRISE_REMOVAL:
 
         case IRP_MN_STOP_DEVICE:
+            if ((IrpSp->MinorFunction == IRP_MN_REMOVE_DEVICE) ||
+                (IrpSp->MinorFunction == IRP_MN_SURPRISE_REMOVAL))
+            {
+                VpTeardownWmi(DeviceExtension);
+            }
+
             Status = IntVideoPortForwardIrpAndWait(DeviceObject, Irp);
             if (NT_SUCCESS(Status) && NT_SUCCESS(Irp->IoStatus.Status))
                 Status = STATUS_SUCCESS;
@@ -1190,23 +1734,168 @@ IntVideoPortDispatchPower(
     IN PIRP Irp)
 {
     PIO_STACK_LOCATION IrpSp;
+    PVIDEO_PORT_COMMON_EXTENSION CommonExtension;
     NTSTATUS Status = Irp->IoStatus.Status;
-    PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension = DeviceObject->DeviceExtension;
 
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
+    CommonExtension = DeviceObject->DeviceExtension;
 
-    if (DeviceExtension->Common.Fdo)
+    if (CommonExtension->Fdo)
     {
+        PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension = (PVIDEO_PORT_DEVICE_EXTENSION)CommonExtension;
+        BOOLEAN ForwardIrp = TRUE;
+
+        if (IrpSp->Parameters.Power.Type == DevicePowerState)
+        {
+            VIDEO_POWER_STATE TargetState;
+
+            switch (IrpSp->MinorFunction)
+            {
+                case IRP_MN_QUERY_POWER:
+                    if (DeviceExtension->DriverExtension->CallbackSnapshot.HwGetPowerState &&
+                        VpTranslateDevicePowerState(IrpSp->Parameters.Power.State.DeviceState, &TargetState))
+                    {
+                        VIDEO_POWER_MANAGEMENT PowerRequest;
+
+                        RtlZeroMemory(&PowerRequest, sizeof(PowerRequest));
+                        PowerRequest.Length = sizeof(PowerRequest);
+                        PowerRequest.PowerState = TargetState;
+
+                        Status = VpMiniportPowerOperation(DeviceExtension,
+                                                           DISPLAY_ADAPTER_HW_ID,
+                                                           FALSE,
+                                                           &PowerRequest);
+                        if (!NT_SUCCESS(Status))
+                            ForwardIrp = FALSE;
+                    }
+                    break;
+
+                case IRP_MN_SET_POWER:
+                    if (!VpTranslateDevicePowerState(IrpSp->Parameters.Power.State.DeviceState, &TargetState))
+                    {
+                        Status = STATUS_INVALID_PARAMETER;
+                        ForwardIrp = FALSE;
+                        break;
+                    }
+
+                    {
+                        VIDEO_POWER_MANAGEMENT PowerRequest;
+
+                        RtlZeroMemory(&PowerRequest, sizeof(PowerRequest));
+                        PowerRequest.Length = sizeof(PowerRequest);
+                        PowerRequest.PowerState = TargetState;
+
+                        if (DeviceExtension->DriverExtension->CallbackSnapshot.HwSetPowerState)
+                        {
+                            Status = VpMiniportPowerOperation(DeviceExtension,
+                                                               DISPLAY_ADAPTER_HW_ID,
+                                                               TRUE,
+                                                               &PowerRequest);
+                            if (!NT_SUCCESS(Status))
+                            {
+                                ForwardIrp = FALSE;
+                                break;
+                            }
+
+                            DeviceExtension->DpmsVersion = PowerRequest.DPMSVersion;
+                        }
+                        else
+                        {
+                            Status = STATUS_SUCCESS;
+                        }
+
+                        if (NT_SUCCESS(Status))
+                            DeviceExtension->CurrentPowerState = PowerRequest.PowerState;
+                    }
+
+                    PoSetPowerState(DeviceObject, DevicePowerState, IrpSp->Parameters.Power.State);
+                    break;
+
+                default:
+                    break;
+            }
+        }
+
         PoStartNextPowerIrp(Irp);
+
+        if (!NT_SUCCESS(Status) || !ForwardIrp || DeviceExtension->NextDeviceObject == NULL)
+        {
+            Irp->IoStatus.Status = Status;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return Status;
+        }
+
+        Irp->IoStatus.Status = Status;
         IoSkipCurrentIrpStackLocation(Irp);
         return PoCallDriver(DeviceExtension->NextDeviceObject, Irp);
     }
     else
     {
+        PVIDEO_PORT_CHILD_EXTENSION ChildExtension = (PVIDEO_PORT_CHILD_EXTENSION)CommonExtension;
+        PVIDEO_PORT_DEVICE_EXTENSION ParentExtension = ChildExtension->ParentDeviceExtension;
+        VIDEO_POWER_STATE TargetState;
+
         switch (IrpSp->MinorFunction)
         {
             case IRP_MN_QUERY_POWER:
+                if ((IrpSp->Parameters.Power.Type == DevicePowerState) &&
+                    ParentExtension &&
+                    ParentExtension->DriverExtension->CallbackSnapshot.HwGetPowerState &&
+                    VpTranslateDevicePowerState(IrpSp->Parameters.Power.State.DeviceState, &TargetState))
+                {
+                    VIDEO_POWER_MANAGEMENT PowerRequest;
+
+                    RtlZeroMemory(&PowerRequest, sizeof(PowerRequest));
+                    PowerRequest.Length = sizeof(PowerRequest);
+                    PowerRequest.PowerState = TargetState;
+
+                    Status = VpMiniportPowerOperation(ParentExtension,
+                                                      ChildExtension->ChildId,
+                                                      FALSE,
+                                                      &PowerRequest);
+                }
+                else
+                {
+                    Status = STATUS_SUCCESS;
+                }
+                break;
+
             case IRP_MN_SET_POWER:
+                if (IrpSp->Parameters.Power.Type != DevicePowerState ||
+                    !VpTranslateDevicePowerState(IrpSp->Parameters.Power.State.DeviceState, &TargetState))
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    break;
+                }
+
+                if (ParentExtension &&
+                    ParentExtension->DriverExtension->CallbackSnapshot.HwSetPowerState)
+                {
+                    VIDEO_POWER_MANAGEMENT PowerRequest;
+
+                    RtlZeroMemory(&PowerRequest, sizeof(PowerRequest));
+                    PowerRequest.Length = sizeof(PowerRequest);
+                    PowerRequest.PowerState = TargetState;
+
+                    Status = VpMiniportPowerOperation(ParentExtension,
+                                                      ChildExtension->ChildId,
+                                                      TRUE,
+                                                      &PowerRequest);
+
+                    if (NT_SUCCESS(Status))
+                    {
+                        ChildExtension->CurrentPowerState = PowerRequest.PowerState;
+                        ChildExtension->DpmsVersion = PowerRequest.DPMSVersion;
+                    }
+                }
+                else
+                {
+                    Status = STATUS_SUCCESS;
+                    ChildExtension->CurrentPowerState = TargetState;
+                }
+                break;
+
+            default:
                 Status = STATUS_SUCCESS;
                 break;
         }
@@ -1228,8 +1917,40 @@ IntVideoPortDispatchSystemControl(
 
     if (DeviceExtension->Common.Fdo)
     {
-        IoSkipCurrentIrpStackLocation(Irp);
-        return IoCallDriver(DeviceExtension->NextDeviceObject, Irp);
+        SYSCTL_IRP_DISPOSITION Disposition;
+
+        Status = WmiSystemControl(&DeviceExtension->WmiLibContext,
+                                  DeviceObject,
+                                  Irp,
+                                  &Disposition);
+
+        switch (Disposition)
+        {
+            case IrpProcessed:
+                return Status;
+
+            case IrpNotCompleted:
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                return Status;
+
+            case IrpNotWmi:
+            case IrpForward:
+                if (DeviceExtension->NextDeviceObject)
+                {
+                    IoSkipCurrentIrpStackLocation(Irp);
+                    return IoCallDriver(DeviceExtension->NextDeviceObject, Irp);
+                }
+
+                Irp->IoStatus.Status = Status;
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                return Status;
+
+            default:
+                Status = STATUS_UNSUCCESSFUL;
+                Irp->IoStatus.Status = Status;
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                return Status;
+        }
     }
     else
     {
@@ -1243,4 +1964,13 @@ VOID
 NTAPI
 IntVideoPortUnload(PDRIVER_OBJECT DriverObject)
 {
+    PVIDEO_PORT_DRIVER_EXTENSION DriverExtension;
+
+    DriverExtension = IoGetDriverObjectExtension(DriverObject, DriverObject);
+    if (DriverExtension && DriverExtension->InterruptThunk.CodeBase)
+    {
+        ExFreePoolWithTag(DriverExtension->InterruptThunk.CodeBase, VP_THUNK_TAG);
+        DriverExtension->InterruptThunk.CodeBase = NULL;
+        DriverExtension->InterruptThunk.CodeSize = 0;
+    }
 }
