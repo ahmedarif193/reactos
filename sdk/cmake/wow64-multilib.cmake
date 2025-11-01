@@ -50,6 +50,7 @@ ExternalProject_Add(wow64_multilib_i386
     CMAKE_ARGS
         ${_i386_generator}
         -DARCH=i386
+        -DPCH=OFF
         -DWOW64_MULTILIB=OFF
         -DREACTOS_TOP_SOURCE_DIR:PATH=${REACTOS_TOP_SOURCE_DIR}
         -DREACTOS_TOP_BINARY_DIR:PATH=${REACTOS_TOP_BINARY_DIR}
