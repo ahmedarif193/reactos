@@ -252,67 +252,97 @@ CopyLines(PTEXTMODE_SCREEN_BUFFER Buffer,
 }
 
 
+
+static VOID
+PasteEmitCharacter(
+    IN PCONSRV_CONSOLE Console,
+    IN WCHAR Character)
+{
+    INPUT_RECORD er;
+    USHORT VkKey;
+
+    RtlZeroMemory(&er, sizeof(er));
+    er.EventType = KEY_EVENT;
+    er.Event.KeyEvent.wRepeatCount = 1;
+    er.Event.KeyEvent.uChar.UnicodeChar = Character;
+
+    VkKey = VkKeyScanW(Character);
+    if (VkKey != 0xFFFF)
+    {
+        er.Event.KeyEvent.wVirtualKeyCode = LOBYTE(VkKey);
+        er.Event.KeyEvent.wVirtualScanCode = MapVirtualKeyW(LOBYTE(VkKey), MAPVK_VK_TO_VSC);
+        if (HIBYTE(VkKey) & 1)
+            er.Event.KeyEvent.dwControlKeyState |= SHIFT_PRESSED;
+        if (HIBYTE(VkKey) & 2)
+            er.Event.KeyEvent.dwControlKeyState |= LEFT_CTRL_PRESSED;
+        if (HIBYTE(VkKey) & 4)
+            er.Event.KeyEvent.dwControlKeyState |= LEFT_ALT_PRESSED;
+    }
+    else
+    {
+        er.Event.KeyEvent.wVirtualKeyCode = 0;
+        er.Event.KeyEvent.wVirtualScanCode = 0;
+    }
+
+    er.Event.KeyEvent.bKeyDown = TRUE;
+    ConioProcessInputEvent(Console, &er);
+
+    er.Event.KeyEvent.bKeyDown = FALSE;
+    ConioProcessInputEvent(Console, &er);
+}
+
+static VOID
+PasteEmitString(
+    IN PCONSRV_CONSOLE Console,
+    IN PCWSTR Text)
+{
+    if (!Text)
+        return;
+
+    while (*Text)
+        PasteEmitCharacter(Console, *Text++);
+}
+
+
 VOID
 PasteText(
     IN PCONSRV_CONSOLE Console,
     IN PWCHAR Buffer,
     IN SIZE_T cchSize)
 {
-    USHORT VkKey; // MAKEWORD(low = vkey_code, high = shift_state);
-    INPUT_RECORD er;
     WCHAR CurChar = 0;
+    PTEXTMODE_SCREEN_BUFFER ActiveBuffer = NULL;
+    BOOLEAN BracketedPaste = FALSE;
 
-    /* Do nothing if we have nothing to paste */
     if (!Buffer || (cchSize <= 0))
         return;
 
-    er.EventType = KEY_EVENT;
-    er.Event.KeyEvent.wRepeatCount = 1;
+    if (Console->ActiveBuffer &&
+        GetType(Console->ActiveBuffer) == TEXTMODE_BUFFER)
+    {
+        ActiveBuffer = (PTEXTMODE_SCREEN_BUFFER)Console->ActiveBuffer;
+        if (ActiveBuffer->VtState.PrivateModes & VT_PRIVMODE_BRACKETED_PASTE)
+            BracketedPaste = TRUE;
+    }
+
+    if (BracketedPaste)
+        PasteEmitString(Console, L"[200~");
+
     while (cchSize--)
     {
-        /* \r or \n characters. Go to the line only if we get "\r\n" sequence. */
         if (CurChar == L'\r' && *Buffer == L'\n')
         {
             ++Buffer;
             continue;
         }
+
         CurChar = *Buffer++;
 
-        /* Get the key code (+ shift state) corresponding to the character */
-        VkKey = VkKeyScanW(CurChar);
-        if (VkKey == 0xFFFF)
-        {
-            DPRINT1("FIXME: TODO: VkKeyScanW failed - Should simulate the key!\n");
-            /*
-             * We don't really need the scan/key code because we actually only
-             * use the UnicodeChar for output purposes. It may pose few problems
-             * later on but it's not of big importance. One trick would be to
-             * convert the character to OEM / multibyte and use MapVirtualKey()
-             * on each byte (simulating an Alt-0xxx OEM keyboard press).
-             */
-        }
-
-        /* Pressing some control keys */
-
-        /* Pressing the character key, with the control keys maintained pressed */
-        er.Event.KeyEvent.bKeyDown = TRUE;
-        er.Event.KeyEvent.wVirtualKeyCode = LOBYTE(VkKey);
-        er.Event.KeyEvent.wVirtualScanCode = MapVirtualKeyW(LOBYTE(VkKey), MAPVK_VK_TO_VSC);
-        er.Event.KeyEvent.uChar.UnicodeChar = CurChar;
-        er.Event.KeyEvent.dwControlKeyState = 0;
-        if (HIBYTE(VkKey) & 1)
-            er.Event.KeyEvent.dwControlKeyState |= SHIFT_PRESSED;
-        if (HIBYTE(VkKey) & 2)
-            er.Event.KeyEvent.dwControlKeyState |= LEFT_CTRL_PRESSED; // RIGHT_CTRL_PRESSED;
-        if (HIBYTE(VkKey) & 4)
-            er.Event.KeyEvent.dwControlKeyState |= LEFT_ALT_PRESSED; // RIGHT_ALT_PRESSED;
-
-        ConioProcessInputEvent(Console, &er);
-
-        /* Up all the character and control keys */
-        er.Event.KeyEvent.bKeyDown = FALSE;
-        ConioProcessInputEvent(Console, &er);
+        PasteEmitCharacter(Console, CurChar);
     }
+
+    if (BracketedPaste)
+        PasteEmitString(Console, L"[201~");
 }
 
 VOID

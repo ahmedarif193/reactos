@@ -173,6 +173,10 @@ typedef struct _TEXTMODE_SCREEN_BUFFER
         UCHAR   SavedActiveCharset;              /* Saved active charset selector for DECSC */
         WCHAR   LastWrittenChar;                 /* Last printable glyph emitted for REP */
         BOOLEAN LastCharValid;                   /* Tracks whether LastWrittenChar is valid */
+        ULONG   MouseButtonState;                /* Tracks currently pressed mouse buttons */
+        COORD   LastMousePosition;               /* Last reported mouse position */
+        PUCHAR  TabStops;                        /* Dynamic tab-stop bitmap (one byte per column) */
+        USHORT  TabStopLength;                   /* Number of columns represented in TabStops */
     } VtState;
 } TEXTMODE_SCREEN_BUFFER, *PTEXTMODE_SCREEN_BUFFER;
 
@@ -384,6 +388,9 @@ typedef struct _CONSOLE
     COORD   ConsoleSize;                    /* The current size of the console, for text-mode only */
     BOOLEAN FixedSize;                      /* TRUE if the console is of fixed size */
     BOOLEAN IsCJK;                          /* TRUE if Chinese, Japanese or Korean (CJK) */
+    BOOLEAN AllowVtOscClipboard;            /* TRUE when OSC 52 clipboard access is permitted */
+    BOOLEAN AllowVtOscHyperlinks;           /* TRUE when OSC 8 hyperlinks are permitted */
+    BOOLEAN AllowVtDcsPassthrough;          /* TRUE when raw DCS payloads may be processed */
 } CONSOLE, *PCONSOLE;
 
 /* console.c */

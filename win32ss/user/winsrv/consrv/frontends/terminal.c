@@ -476,7 +476,6 @@ ConSrvTermReadStream(IN OUT PTERMINAL This,
 
 /* GLOBALS ********************************************************************/
 
-#define TAB_WIDTH   8
 
 // See condrv/text.c
 /*static*/ VOID
@@ -520,7 +519,6 @@ ConioWriteConsole(PFRONTEND FrontEnd,
     SHORT CursorStartX, CursorStartY;
     UINT ScrolledLines;
     BOOLEAN bFullwidth;
-    BOOLEAN bCJK = Console->IsCJK;
 
     /* If nothing to write, bail out now */
     if (Length == 0)
@@ -644,6 +642,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
             /* --- TAB --- */
             else if (Buffer[i] == L'\t')
             {
+                SHORT NextStop;
                 UINT EndX;
 
                 Ptr = ConioCoordToPointer(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y);
@@ -661,8 +660,14 @@ ConioWriteConsole(PFRONTEND FrontEnd,
 
                 UpdateRect.Left = min(UpdateRect.Left, Buff->CursorPosition.X);
 
-                EndX = (Buff->CursorPosition.X + TAB_WIDTH) & ~(TAB_WIDTH - 1);
-                EndX = min(EndX, (UINT)Buff->ScreenBufferSize.X);
+                NextStop = VtFindNextTabStop(Buff, Buff->CursorPosition.X);
+                if (NextStop <= Buff->CursorPosition.X)
+                    EndX = (UINT)Buff->ScreenBufferSize.X;
+                else
+                    EndX = (UINT)NextStop;
+
+                if (EndX > (UINT)Buff->ScreenBufferSize.X)
+                    EndX = Buff->ScreenBufferSize.X;
 
                 while ((UINT)Buff->CursorPosition.X < EndX)
                 {
@@ -713,11 +718,16 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                 continue;
             }
         }
+        int CellWidth = mk_wcwidth_cjk(Buffer[i]);
+        if (CellWidth < 0)
+            CellWidth = 1;
+        if (CellWidth == 0)
+            continue;
+
         UpdateRect.Left  = min(UpdateRect.Left , Buff->CursorPosition.X);
         UpdateRect.Right = max(UpdateRect.Right, Buff->CursorPosition.X);
 
-        /* For Chinese, Japanese and Korean */
-        bFullwidth = (bCJK && IS_FULL_WIDTH(Buffer[i]));
+        bFullwidth = (CellWidth == 2);
 
         BOOLEAN UseRgbForeground = (Buff->VtState.Active && Buff->VtState.UseRgbForeground);
         BOOLEAN UseRgbBackground = (Buff->VtState.Active && Buff->VtState.UseRgbBackground);

@@ -8,6 +8,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <consrv.h>
+#include <debug.h>
 #include "../conoutput.h"
 #include "../coninput.h"
 
@@ -32,15 +33,13 @@ NTSTATUS NTAPI ConDrvWriteConsoleInput(PCONSOLE Console,
 VOID NTAPI ConDrvVtInitializeBuffer(PTEXTMODE_SCREEN_BUFFER ScreenBuffer);
 
 #define VT_MAX_PARAMS 16
+#define VT_MAX_INPUT_SEQUENCE_CHARS 32
 
 #define FG_ATTR_MASK (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY)
 #define BG_ATTR_MASK (BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BLUE | BACKGROUND_INTENSITY)
 
-#define VT_PRIVMODE_MOUSE_BUTTON_TRACKING   0x00000001 /* CSI ?1002 h/l */
-#define VT_PRIVMODE_MOUSE_SGR_EXTENDED       0x00000002 /* CSI ?1006 h/l */
-#define VT_PRIVMODE_BRACKETED_PASTE          0x00000004 /* CSI ?2004 h/l */
-#define VT_PRIVMODE_META_SENDS_ESCAPE        0x00000008 /* CSI ?1036 h/l */
-#define VT_PRIVMODE_ALTERNATE_SCREEN_BUFFER  0x00000010 /* CSI ?1049 h/l */
+#define VT_DEFAULT_TAB_WIDTH 8
+
 
 #define VT_CHARSET_SLOT_G0                   0
 #define VT_CHARSET_SLOT_G1                   1
@@ -50,44 +49,557 @@ VOID NTAPI ConDrvVtInitializeBuffer(PTEXTMODE_SCREEN_BUFFER ScreenBuffer);
 
 typedef enum _VT_CHARSET_ID
 {
-    VtCharsetAscii      = 0,
-    VtCharsetDecSpecial = 1,
+    VtCharsetAscii = 0,
+    VtCharsetDecSpecial,
+    VtCharsetUnitedKingdom,
+    VtCharsetDutch,
+    VtCharsetFinnish,
+    VtCharsetFrench,
+    VtCharsetFrenchCanadian,
+    VtCharsetGerman,
+    VtCharsetItalian,
+    VtCharsetNorwegianDanish,
+    VtCharsetSpanish,
+    VtCharsetSwedish,
+    VtCharsetSwiss,
+    VtCharsetPortuguese,
+    VtCharsetDecTechnical
 } VT_CHARSET_ID;
 
-static const WCHAR VtDecSpecialMap[0x1F] =
+#define VT_DEC_SPECIAL_START 0x20
+#define VT_DEC_SPECIAL_COUNT 0x60
+
+static const WCHAR VtDecSpecialMap[VT_DEC_SPECIAL_COUNT] =
 {
-    0x25C6, /* ` */
-    0x2592, /* a */
-    0x2409, /* b */
-    0x240C, /* c */
-    0x240D, /* d */
-    0x240A, /* e */
-    0x00B0, /* f */
-    0x00B1, /* g */
-    0x2424, /* h */
-    0x240B, /* i */
-    0x2518, /* j */
-    0x2510, /* k */
-    0x250C, /* l */
-    0x2514, /* m */
-    0x253C, /* n */
-    0x23BA, /* o */
-    0x23BB, /* p */
-    0x2500, /* q */
-    0x23BC, /* r */
-    0x23BD, /* s */
-    0x251C, /* t */
-    0x2524, /* u */
-    0x2534, /* v */
-    0x252C, /* w */
-    0x2502, /* x */
-    0x2264, /* y */
-    0x2265, /* z */
-    0x03C0, /* { */
-    0x2260, /* | */
-    0x00A3, /* } */
-    0x00B7, /* ~ */
+    0x0020, 0x0021, 0x0022, 0x0023, 0x0024, 0x0025, 0x0026, 0x0027,
+    0x0028, 0x0029, 0x002A, 0x2192, 0x2190, 0x2191, 0x2193, 0x002F,
+    0x2588, 0x0031, 0x0032, 0x0033, 0x0034, 0x0035, 0x0036, 0x0037,
+    0x0038, 0x0039, 0x003A, 0x003B, 0x003C, 0x003D, 0x003E, 0x003F,
+    0x0040, 0x0041, 0x0042, 0x0043, 0x0044, 0x0045, 0x0046, 0x0047,
+    0x0048, 0x0049, 0x004A, 0x004B, 0x004C, 0x004D, 0x004E, 0x004F,
+    0x0050, 0x0051, 0x0052, 0x0053, 0x0054, 0x0055, 0x0056, 0x0057,
+    0x0058, 0x0059, 0x005A, 0x005B, 0x005C, 0x005D, 0x005E, 0x00A0,
+    0x25C6, 0x2592, 0x2409, 0x240C, 0x240D, 0x240A, 0x00B0, 0x00B1,
+    0x2591, 0x240B, 0x2518, 0x2510, 0x250C, 0x2514, 0x253C, 0x23BA,
+    0x23BB, 0x2500, 0x23BC, 0x23BD, 0x251C, 0x2524, 0x2534, 0x252C,
+    0x2502, 0x2264, 0x2265, 0x03C0, 0x2260, 0x00A3, 0x00B7, 0x007F,
 };
+
+typedef struct _VT_CHARSET_OVERRIDE
+{
+    WCHAR Source;
+    WCHAR Target;
+} VT_CHARSET_OVERRIDE;
+
+static const VT_CHARSET_OVERRIDE VtNrcsBritishOverrides[] =
+{
+    { L'#', 0x00A3 }
+};
+
+static const VT_CHARSET_OVERRIDE VtNrcsDutchOverrides[] =
+{
+    { L'#', 0x00A3 },
+    { L'@', 0x00BE },
+    { L'[', 0x0133 },
+    { L'\\', 0x00BD },
+    { L']', 0x007C },
+    { L'{', 0x00A8 },
+    { L'|', 0x0192 },
+    { L'}', 0x00BC },
+    { L'~', 0x00B4 }
+};
+
+static const VT_CHARSET_OVERRIDE VtNrcsFinnishOverrides[] =
+{
+    { L'[', 0x00C4 },
+    { L'\\', 0x00D6 },
+    { L']', 0x00C5 },
+    { L'^', 0x00DC },
+    { L'`', 0x00E9 },
+    { L'{', 0x00E4 },
+    { L'|', 0x00F6 },
+    { L'}', 0x00E5 },
+    { L'~', 0x00FC }
+};
+
+static const VT_CHARSET_OVERRIDE VtNrcsFrenchOverrides[] =
+{
+    { L'#', 0x00A3 },
+    { L'@', 0x00E0 },
+    { L'[', 0x00B0 },
+    { L'\\', 0x00E7 },
+    { L']', 0x00A7 },
+    { L'{', 0x00E9 },
+    { L'|', 0x00F9 },
+    { L'}', 0x00E8 },
+    { L'~', 0x00A8 }
+};
+
+static const VT_CHARSET_OVERRIDE VtNrcsFrenchCanadianOverrides[] =
+{
+    { L'@', 0x00E0 },
+    { L'[', 0x00E2 },
+    { L'\\', 0x00E7 },
+    { L']', 0x00EA },
+    { L'^', 0x00EE },
+    { L'`', 0x00F4 },
+    { L'{', 0x00E9 },
+    { L'|', 0x00F9 },
+    { L'}', 0x00E8 },
+    { L'~', 0x00FB }
+};
+
+static const VT_CHARSET_OVERRIDE VtNrcsGermanOverrides[] =
+{
+    { L'@', 0x00A7 },
+    { L'[', 0x00C4 },
+    { L'\\', 0x00D6 },
+    { L']', 0x00DC },
+    { L'{', 0x00E4 },
+    { L'|', 0x00F6 },
+    { L'}', 0x00FC },
+    { L'~', 0x00DF }
+};
+
+static const VT_CHARSET_OVERRIDE VtNrcsItalianOverrides[] =
+{
+    { L'#', 0x00A3 },
+    { L'@', 0x00A7 },
+    { L'[', 0x00B0 },
+    { L'\\', 0x00E7 },
+    { L']', 0x00E9 },
+    { L'`', 0x00F9 },
+    { L'{', 0x00E0 },
+    { L'|', 0x00F2 },
+    { L'}', 0x00E8 },
+    { L'~', 0x00EC }
+};
+
+static const VT_CHARSET_OVERRIDE VtNrcsNorwegianDanishOverrides[] =
+{
+    { L'@', 0x00C4 },
+    { L'[', 0x00C6 },
+    { L'\\', 0x00D8 },
+    { L']', 0x00C5 },
+    { L'^', 0x00DC },
+    { L'`', 0x00E4 },
+    { L'{', 0x00E6 },
+    { L'|', 0x00F8 },
+    { L'}', 0x00E5 },
+    { L'~', 0x00FC }
+};
+
+static const VT_CHARSET_OVERRIDE VtNrcsSpanishOverrides[] =
+{
+    { L'#', 0x00A3 },
+    { L'@', 0x00A7 },
+    { L'[', 0x00A1 },
+    { L'\\', 0x00D1 },
+    { L']', 0x00BF },
+    { L'{', 0x00B0 },
+    { L'|', 0x00F1 },
+    { L'}', 0x00E7 }
+};
+
+static const VT_CHARSET_OVERRIDE VtNrcsSwedishOverrides[] =
+{
+    { L'@', 0x00C9 },
+    { L'[', 0x00C4 },
+    { L'\\', 0x00D6 },
+    { L']', 0x00C5 },
+    { L'^', 0x00DC },
+    { L'`', 0x00E9 },
+    { L'{', 0x00E4 },
+    { L'|', 0x00F6 },
+    { L'}', 0x00E5 },
+    { L'~', 0x00FC }
+};
+
+static const VT_CHARSET_OVERRIDE VtNrcsSwissOverrides[] =
+{
+    { L'#', 0x00F9 },
+    { L'@', 0x00E0 },
+    { L'[', 0x00E9 },
+    { L'\\', 0x00E7 },
+    { L']', 0x00EA },
+    { L'^', 0x00EE },
+    { L'_', 0x00E8 },
+    { L'`', 0x00F4 },
+    { L'{', 0x00E4 },
+    { L'|', 0x00F6 },
+    { L'}', 0x00FC },
+    { L'~', 0x00FB }
+};
+
+static const VT_CHARSET_OVERRIDE VtNrcsPortugueseOverrides[] =
+{
+    { L'[', 0x00C3 },
+    { L'\\', 0x00C7 },
+    { L']', 0x00D5 },
+    { L'{', 0x00E3 },
+    { L'|', 0x00E7 },
+    { L'}', 0x00F5 }
+};
+
+static const VT_CHARSET_OVERRIDE VtDecTechnicalOverrides[] =
+{
+    { L'!', 0x23B7 },
+    { L'"', 0x250C },
+    { L'#', 0x2500 },
+    { L'$', 0x2320 },
+    { L'%', 0x2321 },
+    { L'&', 0x2502 },
+    { L'\'', 0x23A1 },
+    { L'(', 0x23A3 },
+    { L')', 0x23A4 },
+    { L'*', 0x23A6 },
+    { L'+', 0x239B },
+    { L',', 0x239D },
+    { L'-', 0x239E },
+    { L'.', 0x23A0 },
+    { L'/', 0x23A8 }
+};
+
+
+#ifdef DBG
+
+#define VT_TRACE_PARAM_LIMIT 6
+#define VT_TRACE_LIMIT       64
+
+static VOID
+VtTraceUnhandledCsi(WCHAR PrivateIndicator,
+                    WCHAR Intermediate,
+                    WCHAR Final,
+                    const ULONG *Params,
+                    ULONG Count)
+{
+    static ULONG Logged;
+
+    if (Logged >= VT_TRACE_LIMIT)
+        return;
+
+    Logged++;
+
+    DPRINT1("VT: Unhandled CSI sequence (priv='%lc', inter='%lc', final='%lc', count=%lu)\n",
+            PrivateIndicator ? PrivateIndicator : L' ',
+            Intermediate ? Intermediate : L' ',
+            Final, Count);
+
+    if (Count > 0 && Params)
+    {
+        ULONG i;
+        ULONG Limit = (Count < VT_TRACE_PARAM_LIMIT) ? Count : VT_TRACE_PARAM_LIMIT;
+
+        for (i = 0; i < Limit; ++i)
+            DPRINT1("    param[%lu] = %lu\n", i, Params[i]);
+
+        if (Count > Limit)
+            DPRINT1("    ... %lu more params omitted\n", Count - Limit);
+    }
+}
+
+static VOID
+VtTraceUnhandledEscape(WCHAR Indicator)
+{
+    static ULONG Logged;
+
+    if (Logged >= VT_TRACE_LIMIT)
+        return;
+
+    Logged++;
+
+    DPRINT1("VT: Unhandled ESC sequence (indicator='%lc', code=0x%04x)\n",
+            (Indicator >= L' ' && Indicator <= L'~') ? Indicator : L' ',
+            Indicator);
+}
+
+static VOID
+VtTraceUnhandledOsc(ULONG Parameter)
+{
+    static ULONG Logged;
+
+    if (Logged >= VT_TRACE_LIMIT)
+        return;
+
+    Logged++;
+
+    DPRINT1("VT: Unhandled OSC %lu\n", Parameter);
+}
+
+static VOID
+VtTraceUnhandledDcs(VOID)
+{
+    static ULONG Logged;
+
+    if (Logged >= VT_TRACE_LIMIT)
+        return;
+
+    Logged++;
+
+    DPRINT1("VT: Unhandled DCS sequence\n");
+}
+
+static VOID
+VtTracePolicyBlocked(const char *Feature)
+{
+    static ULONG Logged;
+
+    if (Logged >= VT_TRACE_LIMIT)
+        return;
+
+    Logged++;
+    DPRINT1("VT: %s suppressed by policy\n", Feature);
+}
+
+static VOID
+VtTraceDcsReplayFailure(NTSTATUS Status)
+{
+    static ULONG Logged;
+
+    if (Logged >= VT_TRACE_LIMIT)
+        return;
+
+    Logged++;
+    DPRINT1("VT: DCS passthrough replay failed (Status 0x%08lx)\n", Status);
+}
+
+#else
+
+#define VtTraceUnhandledCsi(Private, Intermediate, Final, Params, Count) ((void)0)
+#define VtTraceUnhandledEscape(Indicator) ((void)0)
+#define VtTraceUnhandledOsc(Parameter) ((void)0)
+#define VtTraceUnhandledDcs()          ((void)0)
+#define VtTracePolicyBlocked(Feature)  ((void)0)
+#define VtTraceDcsReplayFailure(Status) ((void)0)
+
+#endif
+
+static BOOLEAN
+VtEnsureTabStops(PTEXTMODE_SCREEN_BUFFER ScreenBuffer)
+{
+    USHORT Width;
+    PUCHAR NewStops;
+    USHORT CopyLength;
+
+    if (!ScreenBuffer)
+        return FALSE;
+
+    Width = (ScreenBuffer->ScreenBufferSize.X > 0)
+                ? (USHORT)ScreenBuffer->ScreenBufferSize.X
+                : 1;
+
+    if (ScreenBuffer->VtState.TabStops && ScreenBuffer->VtState.TabStopLength == Width)
+        return TRUE;
+
+    NewStops = (PUCHAR)ConsoleAllocHeap(0, Width * sizeof(UCHAR));
+    if (!NewStops)
+        return FALSE;
+
+    RtlZeroMemory(NewStops, Width * sizeof(UCHAR));
+
+    if (ScreenBuffer->VtState.TabStops && ScreenBuffer->VtState.TabStopLength > 0)
+    {
+        CopyLength = min(ScreenBuffer->VtState.TabStopLength, Width);
+        RtlCopyMemory(NewStops,
+                      ScreenBuffer->VtState.TabStops,
+                      CopyLength * sizeof(UCHAR));
+        ConsoleFreeHeap(ScreenBuffer->VtState.TabStops);
+
+        if (Width > CopyLength)
+        {
+            for (USHORT Column = CopyLength; Column < Width; ++Column)
+            {
+                if ((Column % VT_DEFAULT_TAB_WIDTH) == 0 && Column != 0)
+                    NewStops[Column] = 1;
+            }
+        }
+    }
+    else
+    {
+        for (USHORT Column = VT_DEFAULT_TAB_WIDTH; Column < Width; Column += VT_DEFAULT_TAB_WIDTH)
+            NewStops[Column] = 1;
+    }
+
+    ScreenBuffer->VtState.TabStops = NewStops;
+    ScreenBuffer->VtState.TabStopLength = Width;
+    return TRUE;
+}
+
+VOID
+NTAPI
+VtResetTabStops(PTEXTMODE_SCREEN_BUFFER ScreenBuffer)
+{
+    if (!VtEnsureTabStops(ScreenBuffer))
+        return;
+
+    RtlZeroMemory(ScreenBuffer->VtState.TabStops,
+                  ScreenBuffer->VtState.TabStopLength * sizeof(UCHAR));
+
+    for (USHORT Column = VT_DEFAULT_TAB_WIDTH;
+         Column < ScreenBuffer->VtState.TabStopLength;
+         Column += VT_DEFAULT_TAB_WIDTH)
+    {
+        ScreenBuffer->VtState.TabStops[Column] = 1;
+    }
+}
+
+VOID
+NTAPI
+VtSetTabStopAtCursor(PTEXTMODE_SCREEN_BUFFER ScreenBuffer)
+{
+    if (!ScreenBuffer)
+        return;
+
+    if (!VtEnsureTabStops(ScreenBuffer))
+        return;
+
+    if (ScreenBuffer->CursorPosition.X >= 0 &&
+        ScreenBuffer->CursorPosition.X < ScreenBuffer->VtState.TabStopLength)
+    {
+        ScreenBuffer->VtState.TabStops[ScreenBuffer->CursorPosition.X] = 1;
+    }
+}
+
+VOID
+NTAPI
+VtHandleTabClear(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                 ULONG Mode)
+{
+    if (!ScreenBuffer)
+        return;
+
+    if (!VtEnsureTabStops(ScreenBuffer))
+        return;
+
+    switch (Mode)
+    {
+        case 0:
+        case 2:
+        default:
+            if (ScreenBuffer->CursorPosition.X >= 0 &&
+                ScreenBuffer->CursorPosition.X < ScreenBuffer->VtState.TabStopLength)
+            {
+                ScreenBuffer->VtState.TabStops[ScreenBuffer->CursorPosition.X] = 0;
+            }
+            break;
+
+        case 3:
+            RtlZeroMemory(ScreenBuffer->VtState.TabStops,
+                          ScreenBuffer->VtState.TabStopLength * sizeof(UCHAR));
+            break;
+    }
+}
+
+SHORT
+NTAPI
+VtFindNextTabStop(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                  SHORT StartColumn)
+{
+    SHORT Width;
+    SHORT Column;
+
+    if (!ScreenBuffer || ScreenBuffer->ScreenBufferSize.X <= 0)
+        return 0;
+
+    Width = ScreenBuffer->ScreenBufferSize.X;
+
+    if (!VtEnsureTabStops(ScreenBuffer))
+    {
+        SHORT Fallback = ((StartColumn + 1 + (VT_DEFAULT_TAB_WIDTH - 1)) / VT_DEFAULT_TAB_WIDTH) * VT_DEFAULT_TAB_WIDTH;
+        if (Fallback <= StartColumn)
+            Fallback = StartColumn + 1;
+        return (Fallback < Width) ? Fallback : Width;
+    }
+
+    if (StartColumn < -1)
+        StartColumn = -1;
+
+    for (Column = StartColumn + 1; Column < ScreenBuffer->VtState.TabStopLength; ++Column)
+    {
+        if (ScreenBuffer->VtState.TabStops[Column])
+            return Column;
+    }
+
+    /* No configured tab stop found, fall back to the next multiple of the default width. */
+    Column = ((StartColumn + 1 + (VT_DEFAULT_TAB_WIDTH - 1)) / VT_DEFAULT_TAB_WIDTH) * VT_DEFAULT_TAB_WIDTH;
+    if (Column <= StartColumn)
+        Column = StartColumn + 1;
+    return (Column < Width) ? Column : Width;
+}
+
+static BOOLEAN
+VtHandleDcsSequence(PCONSOLE Console,
+                    PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                    const WCHAR *Sequence,
+                    ULONG Length)
+{
+    PTEXTMODE_SCREEN_BUFFER Target;
+
+    if (!Console)
+        return TRUE;
+
+    if (!Console->AllowVtDcsPassthrough)
+    {
+        VtTracePolicyBlocked("VT DCS passthrough");
+        return TRUE;
+    }
+
+    if (!Sequence || Length == 0)
+        return TRUE;
+
+    /* tmux multiplexes escape sequences via DCS "tmux;" wrappers. */
+    if (Length >= 5 &&
+        Sequence[0] == L't' && Sequence[1] == L'm' &&
+        Sequence[2] == L'u' && Sequence[3] == L'x' &&
+        Sequence[4] == L';')
+    {
+        const WCHAR *Payload = Sequence + 5;
+        ULONG PayloadLength = Length - 5;
+        ULONG Processed = 0;
+        BOOLEAN Handled = FALSE;
+        NTSTATUS Status;
+
+        if (PayloadLength == 0)
+            return TRUE;
+
+        Target = (PTEXTMODE_SCREEN_BUFFER)Console->ActiveBuffer;
+        if (!Target)
+            Target = ScreenBuffer;
+
+        if (!Target)
+            return TRUE;
+
+        Status = ConDrvVtWriteConsole(Console,
+                                      Target,
+                                      Payload,
+                                      PayloadLength,
+                                      &Processed,
+                                      &Handled);
+        if (!NT_SUCCESS(Status))
+            VtTraceDcsReplayFailure(Status);
+        return TRUE;
+    }
+
+    VtTraceUnhandledDcs();
+    return TRUE;
+}
+
+static WCHAR
+VtTranslateUsingTable(WCHAR Ch,
+                      const VT_CHARSET_OVERRIDE *Table,
+                      size_t Count)
+{
+    if (Ch < 0x20 || Ch > 0x7F || Table == NULL || Count == 0)
+        return Ch;
+
+    for (size_t i = 0; i < Count; ++i)
+    {
+        if (Table[i].Source == Ch)
+            return Table[i].Target;
+    }
+
+    return Ch;
+}
 
 static VT_CHARSET_ID
 VtGetCharsetSlot(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
@@ -131,23 +643,110 @@ VtSetActiveCharset(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
 static BOOLEAN
 VtDesignateCharset(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
                    UCHAR Slot,
+                   WCHAR Intermediate,
                    WCHAR Designator)
 {
-    VT_CHARSET_ID Charset;
+    VT_CHARSET_ID Charset = VtCharsetAscii;
+    BOOLEAN Logged = FALSE;
 
-    switch (Designator)
+    if (Intermediate == L'%')
     {
-        case L'0':
-            Charset = VtCharsetDecSpecial;
-            break;
+        switch (Designator)
+        {
+            case L'6':
+                Charset = VtCharsetPortuguese;
+                break;
 
-        case L'B':
-        case L'U':
-        case L'K':
-        default:
-            Charset = VtCharsetAscii;
-            break;
+            default:
+                Logged = TRUE;
+                Charset = VtCharsetAscii;
+                break;
+        }
     }
+    else
+    {
+        switch (Designator)
+        {
+            case L'0':
+                Charset = VtCharsetDecSpecial;
+                break;
+
+            case L'A':
+                Charset = VtCharsetUnitedKingdom;
+                break;
+
+            case L'4':
+                Charset = VtCharsetDutch;
+                break;
+
+            case L'5':
+            case L'C':
+                Charset = VtCharsetFinnish;
+                break;
+
+            case L'R':
+            case L'f':
+                Charset = VtCharsetFrench;
+                break;
+
+            case L'Q':
+            case L'9':
+                Charset = VtCharsetFrenchCanadian;
+                break;
+
+            case L'K':
+                Charset = VtCharsetGerman;
+                break;
+
+            case L'Y':
+                Charset = VtCharsetItalian;
+                break;
+
+            case L'E':
+            case L'6':
+            case 0x0060: /* ` */
+                Charset = VtCharsetNorwegianDanish;
+                break;
+
+            case L'Z':
+                Charset = VtCharsetSpanish;
+                break;
+
+            case L'7':
+            case L'H':
+                Charset = VtCharsetSwedish;
+                break;
+
+            case L'=':
+                Charset = VtCharsetSwiss;
+                break;
+
+            case L'>':
+                Charset = VtCharsetDecTechnical;
+                break;
+
+            case L'B':
+            case L'U':
+            default:
+                if (Designator != L'B' && Designator != L'U')
+                    Logged = TRUE;
+                Charset = VtCharsetAscii;
+                break;
+        }
+    }
+
+#ifdef DBG
+    if (Logged)
+    {
+        static ULONG LoggedCount;
+        if (LoggedCount < VT_TRACE_LIMIT)
+        {
+            LoggedCount++;
+            DPRINT1("VT: Unsupported charset designator ESC %c %lc (slot %u)\n",
+                    (Intermediate ? Intermediate : L'(' + Slot), Designator, Slot);
+        }
+    }
+#endif
 
     switch (Slot)
     {
@@ -177,19 +776,67 @@ VtTranslateGlyphSlot(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
                      UCHAR Slot,
                      WCHAR Ch)
 {
-    if (Ch < 0x20 || Ch > 0x7E)
-        return Ch;
+    VT_CHARSET_ID Charset = VtGetCharsetSlot(ScreenBuffer, Slot);
 
-    if (VtGetCharsetSlot(ScreenBuffer, Slot) != VtCharsetDecSpecial)
-        return Ch;
-
-    if (Ch >= 0x60 && Ch <= 0x7E)
+    if (Charset == VtCharsetDecSpecial)
     {
-        WCHAR Mapped = VtDecSpecialMap[Ch - 0x60];
-        return Mapped ? Mapped : Ch;
+        if (Ch < VT_DEC_SPECIAL_START ||
+            Ch >= (VT_DEC_SPECIAL_START + VT_DEC_SPECIAL_COUNT))
+        {
+            return Ch;
+        }
+
+        return VtDecSpecialMap[Ch - VT_DEC_SPECIAL_START];
     }
 
-    return Ch;
+    if (Ch < 0x20 || Ch > 0x7F)
+        return Ch;
+
+    switch (Charset)
+    {
+        case VtCharsetUnitedKingdom:
+            return VtTranslateUsingTable(Ch, VtNrcsBritishOverrides, ARRAYSIZE(VtNrcsBritishOverrides));
+
+        case VtCharsetDutch:
+            return VtTranslateUsingTable(Ch, VtNrcsDutchOverrides, ARRAYSIZE(VtNrcsDutchOverrides));
+
+        case VtCharsetFinnish:
+            return VtTranslateUsingTable(Ch, VtNrcsFinnishOverrides, ARRAYSIZE(VtNrcsFinnishOverrides));
+
+        case VtCharsetFrench:
+            return VtTranslateUsingTable(Ch, VtNrcsFrenchOverrides, ARRAYSIZE(VtNrcsFrenchOverrides));
+
+        case VtCharsetFrenchCanadian:
+            return VtTranslateUsingTable(Ch, VtNrcsFrenchCanadianOverrides, ARRAYSIZE(VtNrcsFrenchCanadianOverrides));
+
+        case VtCharsetGerman:
+            return VtTranslateUsingTable(Ch, VtNrcsGermanOverrides, ARRAYSIZE(VtNrcsGermanOverrides));
+
+        case VtCharsetItalian:
+            return VtTranslateUsingTable(Ch, VtNrcsItalianOverrides, ARRAYSIZE(VtNrcsItalianOverrides));
+
+        case VtCharsetNorwegianDanish:
+            return VtTranslateUsingTable(Ch, VtNrcsNorwegianDanishOverrides, ARRAYSIZE(VtNrcsNorwegianDanishOverrides));
+
+        case VtCharsetSpanish:
+            return VtTranslateUsingTable(Ch, VtNrcsSpanishOverrides, ARRAYSIZE(VtNrcsSpanishOverrides));
+
+        case VtCharsetSwedish:
+            return VtTranslateUsingTable(Ch, VtNrcsSwedishOverrides, ARRAYSIZE(VtNrcsSwedishOverrides));
+
+        case VtCharsetSwiss:
+            return VtTranslateUsingTable(Ch, VtNrcsSwissOverrides, ARRAYSIZE(VtNrcsSwissOverrides));
+
+        case VtCharsetPortuguese:
+            return VtTranslateUsingTable(Ch, VtNrcsPortugueseOverrides, ARRAYSIZE(VtNrcsPortugueseOverrides));
+
+        case VtCharsetDecTechnical:
+            return VtTranslateUsingTable(Ch, VtDecTechnicalOverrides, ARRAYSIZE(VtDecTechnicalOverrides));
+
+        case VtCharsetAscii:
+        default:
+            return Ch;
+    }
 }
 
 static VOID
@@ -331,6 +978,8 @@ VtEnableAlternateScreen(PCONSOLE Console,
             AltBuffer->VtState.HyperlinkActive = FALSE;
         }
     }
+
+    VtResetTabStops(AltBuffer);
 
     AltBuffer->VtState.ScrollBottom = min(PrimaryBuffer->VtState.ScrollBottom,
                                           (SHORT)max(0, AltBuffer->ScreenBufferSize.Y - 1));
@@ -532,6 +1181,251 @@ VtAppendNumber(WCHAR *Buffer, SIZE_T BufferLength, ULONG Number)
     return Written;
 }
 
+static USHORT
+VtGetModifierParameter(const KEY_EVENT_RECORD *KeyEvent)
+{
+    USHORT Parameter = 1;
+
+    if (KeyEvent->dwControlKeyState & SHIFT_PRESSED)
+        Parameter += 1;
+    if (KeyEvent->dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED))
+        Parameter += 2;
+    if (KeyEvent->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))
+        Parameter += 4;
+
+    return Parameter;
+}
+
+static BOOLEAN
+VtComposeCsiTildeSequence(ULONG Parameter,
+                          USHORT ModifierParam,
+                          WCHAR Final,
+                          WCHAR *Buffer,
+                          SIZE_T Capacity,
+                          SIZE_T *Length)
+{
+    SIZE_T Written = 0;
+
+    if (Capacity < 3)
+        return FALSE;
+
+    Buffer[Written++] = L'\x1b';
+    Buffer[Written++] = L'[';
+    Written += VtAppendNumber(Buffer + Written,
+                              Capacity - Written,
+                              Parameter);
+
+    if (ModifierParam > 1)
+    {
+        if (Written >= Capacity)
+            return FALSE;
+        Buffer[Written++] = L';';
+        Written += VtAppendNumber(Buffer + Written,
+                                  Capacity - Written,
+                                  ModifierParam);
+    }
+
+    if (Written >= Capacity)
+        return FALSE;
+
+    Buffer[Written++] = Final;
+    *Length = Written;
+    return TRUE;
+}
+
+static BOOLEAN
+VtComposeCursorKeySequence(BOOLEAN ApplicationMode,
+                           const KEY_EVENT_RECORD *KeyEvent,
+                           WCHAR Final,
+                           WCHAR *Buffer,
+                           SIZE_T Capacity,
+                           SIZE_T *Length)
+{
+    SIZE_T Written = 0;
+    USHORT ModifierParam = VtGetModifierParameter(KeyEvent);
+
+    if (ApplicationMode && ModifierParam == 1)
+    {
+        if (Capacity < 3)
+            return FALSE;
+        Buffer[Written++] = L'\x1b';
+        Buffer[Written++] = L'O';
+        Buffer[Written++] = Final;
+        *Length = Written;
+        return TRUE;
+    }
+
+    if (Capacity < 3)
+        return FALSE;
+
+    Buffer[Written++] = L'\x1b';
+    Buffer[Written++] = L'[';
+
+    if (ModifierParam > 1)
+    {
+        Written += VtAppendNumber(Buffer + Written,
+                                  Capacity - Written,
+                                  1);
+        if (Written >= Capacity)
+            return FALSE;
+        Buffer[Written++] = L';';
+        Written += VtAppendNumber(Buffer + Written,
+                                  Capacity - Written,
+                                  ModifierParam);
+    }
+
+    if (Written >= Capacity)
+        return FALSE;
+
+    Buffer[Written++] = Final;
+    *Length = Written;
+    return TRUE;
+}
+
+static BOOLEAN
+VtComposeSs3FunctionSequence(const KEY_EVENT_RECORD *KeyEvent,
+                             WCHAR Final,
+                             WCHAR *Buffer,
+                             SIZE_T Capacity,
+                             SIZE_T *Length)
+{
+    SIZE_T Written = 0;
+    USHORT ModifierParam = VtGetModifierParameter(KeyEvent);
+
+    if (ModifierParam == 1)
+    {
+        if (Capacity < 3)
+            return FALSE;
+        Buffer[Written++] = L'\x1b';
+        Buffer[Written++] = L'O';
+        Buffer[Written++] = Final;
+        *Length = Written;
+        return TRUE;
+    }
+
+    if (Capacity < 4)
+        return FALSE;
+
+    Buffer[Written++] = L'\x1b';
+    Buffer[Written++] = L'[';
+    Written += VtAppendNumber(Buffer + Written,
+                              Capacity - Written,
+                              1);
+
+    if (Written >= Capacity)
+        return FALSE;
+
+    Buffer[Written++] = L';';
+    Written += VtAppendNumber(Buffer + Written,
+                              Capacity - Written,
+                              ModifierParam);
+
+    if (Written >= Capacity)
+        return FALSE;
+
+    Buffer[Written++] = Final;
+    *Length = Written;
+    return TRUE;
+}
+
+static USHORT
+VtMouseModifierBits(DWORD ControlKeyState)
+{
+    USHORT Bits = 0;
+
+    if (ControlKeyState & SHIFT_PRESSED)
+        Bits |= 4;
+    if (ControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED))
+        Bits |= 8;
+    if (ControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))
+        Bits |= 16;
+
+    return Bits;
+}
+
+static INT
+VtFirstMouseButton(ULONG Mask)
+{
+    if (Mask & FROM_LEFT_1ST_BUTTON_PRESSED) return 0;
+    if (Mask & FROM_LEFT_2ND_BUTTON_PRESSED) return 1;
+    if (Mask & RIGHTMOST_BUTTON_PRESSED) return 2;
+    if (Mask & FROM_LEFT_3RD_BUTTON_PRESSED) return 3;
+    if (Mask & FROM_LEFT_4TH_BUTTON_PRESSED) return 4;
+    return -1;
+}
+
+static BOOLEAN
+VtComposeMouseSgrSequence(ULONG ButtonCode,
+                          ULONG X,
+                          ULONG Y,
+                          BOOLEAN Released,
+                          WCHAR *Buffer,
+                          SIZE_T Capacity,
+                          SIZE_T *Length)
+{
+    SIZE_T Written = 0;
+
+    if (Capacity < 7)
+        return FALSE;
+
+    if (X == 0) X = 1;
+    if (Y == 0) Y = 1;
+
+    Buffer[Written++] = L'\x1b';
+    Buffer[Written++] = L'[';
+    Buffer[Written++] = L'<';
+    Written += VtAppendNumber(Buffer + Written,
+                              Capacity - Written,
+                              ButtonCode);
+    if (Written >= Capacity)
+        return FALSE;
+    Buffer[Written++] = L';';
+    Written += VtAppendNumber(Buffer + Written,
+                              Capacity - Written,
+                              X);
+    if (Written >= Capacity)
+        return FALSE;
+    Buffer[Written++] = L';';
+    Written += VtAppendNumber(Buffer + Written,
+                              Capacity - Written,
+                              Y);
+    if (Written >= Capacity)
+        return FALSE;
+    Buffer[Written++] = Released ? L'm' : L'M';
+    *Length = Written;
+    return TRUE;
+}
+
+static BOOLEAN
+VtComposeMouseLegacySequence(ULONG ButtonCode,
+                             ULONG X,
+                             ULONG Y,
+                             WCHAR *Buffer,
+                             SIZE_T Capacity,
+                             SIZE_T *Length)
+{
+    ULONG AdjustedX;
+    ULONG AdjustedY;
+
+    if (Capacity < 6)
+        return FALSE;
+
+    if (X < 1) X = 1;
+    if (Y < 1) Y = 1;
+
+    AdjustedX = min(223u, X);
+    AdjustedY = min(223u, Y);
+
+    Buffer[0] = L'\x1b';
+    Buffer[1] = L'[';
+    Buffer[2] = L'M';
+    Buffer[3] = (WCHAR)((min(ButtonCode, 255u)) + 32u);
+    Buffer[4] = (WCHAR)(AdjustedX + 32u);
+    Buffer[5] = (WCHAR)(AdjustedY + 32u);
+    *Length = 6;
+    return TRUE;
+}
+
 static VOID
 VtSendInputResponse(PCONSOLE Console,
                     const WCHAR *Response,
@@ -624,6 +1518,169 @@ VtAppendOscRgb(WCHAR *Buffer, SIZE_T BufferLength, COLORREF Color)
 
     return Written;
 }
+
+static INT
+VtBase64Value(WCHAR Ch)
+{
+    if (Ch >= L'A' && Ch <= L'Z') return (INT)(Ch - L'A');
+    if (Ch >= L'a' && Ch <= L'z') return (INT)(Ch - L'a') + 26;
+    if (Ch >= L'0' && Ch <= L'9') return (INT)(Ch - L'0') + 52;
+    if (Ch == L'+') return 62;
+    if (Ch == L'/') return 63;
+    return -1;
+}
+
+static BOOLEAN
+VtDecodeBase64(const WCHAR *Input,
+               ULONG Length,
+               PBYTE *Output,
+               PULONG OutputSize)
+{
+    ULONG Estimate;
+    PBYTE Buffer;
+    ULONG OutIndex = 0;
+    ULONG Quad[4];
+    ULONG QuadCount = 0;
+    ULONG PadCount = 0;
+
+    if (!Output || !OutputSize)
+        return FALSE;
+
+    Estimate = ((Length + 3) / 4) * 3;
+    Buffer = ConsoleAllocHeap(0, Estimate ? Estimate : 1);
+    if (!Buffer)
+        return FALSE;
+
+    for (ULONG i = 0; i < Length; ++i)
+    {
+        WCHAR Ch = Input[i];
+
+        if (Ch == L'\r' || Ch == L'\n' || Ch == L'	' || Ch == L' ')
+            continue;
+
+        if (Ch == L'=')
+        {
+            Quad[QuadCount++] = 0;
+            PadCount++;
+        }
+        else
+        {
+            INT Value = VtBase64Value(Ch);
+            if (Value < 0)
+            {
+                ConsoleFreeHeap(Buffer);
+                return FALSE;
+            }
+
+            Quad[QuadCount++] = (ULONG)Value;
+        }
+
+        if (QuadCount == 4)
+        {
+            Buffer[OutIndex++] = (BYTE)((Quad[0] << 2) | (Quad[1] >> 4));
+            if (PadCount < 2)
+                Buffer[OutIndex++] = (BYTE)(((Quad[1] & 0x0F) << 4) | (Quad[2] >> 2));
+            if (PadCount < 1)
+                Buffer[OutIndex++] = (BYTE)(((Quad[2] & 0x03) << 6) | Quad[3]);
+
+            QuadCount = 0;
+            PadCount = 0;
+        }
+    }
+
+    if (QuadCount != 0)
+    {
+        ConsoleFreeHeap(Buffer);
+        return FALSE;
+    }
+
+    *Output = Buffer;
+    *OutputSize = OutIndex;
+    return TRUE;
+}
+
+static BOOLEAN
+VtEncodeBase64(const BYTE *Input,
+               ULONG Length,
+               PWSTR *Output,
+               PULONG OutputChars)
+{
+    static const WCHAR Table[] =
+        L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    ULONG OutLen;
+    PWSTR Buffer;
+    ULONG Index = 0;
+
+    if (!Output || !OutputChars)
+        return FALSE;
+
+    OutLen = ((Length + 2) / 3) * 4;
+    Buffer = ConsoleAllocHeap(0, (OutLen + 1) * sizeof(WCHAR));
+    if (!Buffer)
+        return FALSE;
+
+    for (ULONG i = 0; i < Length; i += 3)
+    {
+        BYTE b0 = Input[i];
+        BYTE b1 = (i + 1 < Length) ? Input[i + 1] : 0;
+        BYTE b2 = (i + 2 < Length) ? Input[i + 2] : 0;
+
+        Buffer[Index++] = Table[(b0 >> 2) & 0x3F];
+        Buffer[Index++] = Table[((b0 & 0x03) << 4) | ((b1 >> 4) & 0x0F)];
+        Buffer[Index++] = (i + 1 < Length) ? Table[((b1 & 0x0F) << 2) | ((b2 >> 6) & 0x03)] : L'=';
+        Buffer[Index++] = (i + 2 < Length) ? Table[b2 & 0x3F] : L'=';
+    }
+
+    Buffer[Index] = UNICODE_NULL;
+    *Output = Buffer;
+    *OutputChars = Index;
+    return TRUE;
+}
+
+static VOID
+VtSendOscClipboardResponse(PCONSOLE Console,
+                           const WCHAR *TargetStart,
+                           SIZE_T TargetLength,
+                           const WCHAR *Payload)
+{
+    WCHAR StaticTarget = L'c';
+    const WCHAR *Target = TargetStart;
+    SIZE_T Length = TargetLength;
+    SIZE_T PayloadLength = Payload ? wcslen(Payload) : 0;
+    PWSTR Response;
+    SIZE_T Pos = 0;
+
+    if (!Target || Length == 0)
+    {
+        Target = &StaticTarget;
+        Length = 1;
+    }
+
+    Response = ConsoleAllocHeap(0, (5 + Length + PayloadLength + 2) * sizeof(WCHAR));
+    if (!Response)
+        return;
+
+    Response[Pos++] = L'';
+    Response[Pos++] = L']';
+    Response[Pos++] = L'5';
+    Response[Pos++] = L'2';
+    Response[Pos++] = L';';
+
+    for (SIZE_T i = 0; i < Length; ++i)
+        Response[Pos++] = Target[i];
+
+    Response[Pos++] = L';';
+
+    for (SIZE_T i = 0; i < PayloadLength; ++i)
+        Response[Pos++] = Payload[i];
+
+    Response[Pos++] = L'';
+
+    VtSendInputResponse(Console, Response, Pos);
+
+    ConsoleFreeHeap(Response);
+}
+
 
 static VOID
 VtSendOscColorResponse(PCONSOLE Console,
@@ -912,6 +1969,12 @@ VtEraseCharacters(PCONSOLE Console,
         }
     }
 }
+
+static NTSTATUS
+VtFlushText(PCONSOLE Console,
+           PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+           PCWSTR Text,
+           ULONG Length);
 
 static VOID
 VtRepeatCharacter(PCONSOLE Console,
@@ -1844,6 +2907,7 @@ VtHandleOscHyperlink(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
                      const WCHAR *Parameters,
                      ULONG Length)
 {
+    PCONSOLE Console = ScreenBuffer ? ScreenBuffer->Header.Console : NULL;
     const WCHAR *Ptr = Parameters;
     const WCHAR *End = Parameters + Length;
     const WCHAR *UriStart;
@@ -1851,6 +2915,13 @@ VtHandleOscHyperlink(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
 
     if (!ScreenBuffer)
         return TRUE;
+
+    if (Console && !Console->AllowVtOscHyperlinks)
+    {
+        VtTracePolicyBlocked("OSC 8 hyperlink");
+        VtClearHyperlink(ScreenBuffer);
+        return TRUE;
+    }
 
     while (Ptr < End && *Ptr != L';')
         ++Ptr;
@@ -1886,14 +2957,150 @@ VtHandleOscHyperlink(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
     return TRUE;
 }
 
+
 static BOOLEAN
 VtHandleOscClipboard(PCONSOLE Console,
                      const WCHAR *Parameters,
                      ULONG Length)
 {
-    UNREFERENCED_PARAMETER(Console);
-    UNREFERENCED_PARAMETER(Parameters);
-    UNREFERENCED_PARAMETER(Length);
+    const WCHAR *End = Parameters + Length;
+    const WCHAR *TargetStart = Parameters;
+    const WCHAR *TargetEnd = TargetStart;
+    const WCHAR *DataStart;
+    SIZE_T TargetLength;
+
+    if (!Console)
+        return TRUE;
+
+    while (TargetEnd < End && *TargetEnd != L';')
+        ++TargetEnd;
+
+    DataStart = (TargetEnd < End) ? TargetEnd + 1 : End;
+    TargetLength = (SIZE_T)(TargetEnd - TargetStart);
+
+    while (DataStart < End && (*DataStart == L' ' || *DataStart == L'	'))
+        ++DataStart;
+    while (End > DataStart && (End[-1] == L' ' || End[-1] == L'	'))
+        --End;
+
+    if (DataStart >= End)
+        return TRUE;
+
+    if (*DataStart == L'?')
+    {
+        PWSTR Encoded = NULL;
+        BYTE *Utf8Buffer = NULL;
+        BOOL Success = FALSE;
+
+        if (!Console->AllowVtOscClipboard)
+        {
+            VtSendOscClipboardResponse(Console, TargetStart, TargetLength, L"");
+            return TRUE;
+        }
+
+        if (OpenClipboard(NULL))
+        {
+            HANDLE Handle = GetClipboardData(CF_UNICODETEXT);
+            if (Handle)
+            {
+                LPCWSTR ClipText = (LPCWSTR)GlobalLock(Handle);
+                if (ClipText)
+                {
+                    size_t ClipChars = wcslen(ClipText);
+                    if (ClipChars > 0)
+                    {
+                        int Required = WideCharToMultiByte(CP_UTF8, 0, ClipText, (int)ClipChars, NULL, 0, NULL, NULL);
+                        if (Required > 0)
+                        {
+                            Utf8Buffer = ConsoleAllocHeap(0, (ULONG)Required);
+                            if (Utf8Buffer)
+                            {
+                                if (WideCharToMultiByte(CP_UTF8, 0, ClipText, (int)ClipChars, (LPSTR)Utf8Buffer, Required, NULL, NULL) == Required)
+                                {
+                                    ULONG EncodedChars = 0;
+                                    if (VtEncodeBase64(Utf8Buffer, (ULONG)Required, &Encoded, &EncodedChars))
+                                        Success = TRUE;
+                                }
+                                ConsoleFreeHeap(Utf8Buffer);
+                            }
+                        }
+                    }
+                    GlobalUnlock(Handle);
+                }
+            }
+            CloseClipboard();
+        }
+
+        if (Success && Encoded)
+        {
+            VtSendOscClipboardResponse(Console, TargetStart, TargetLength, Encoded);
+            ConsoleFreeHeap(Encoded);
+        }
+        else
+        {
+            VtSendOscClipboardResponse(Console, TargetStart, TargetLength, L"");
+            ConsoleFreeHeap(Encoded);
+        }
+
+        return TRUE;
+    }
+
+    if (!Console->AllowVtOscClipboard)
+        return TRUE;
+
+    {
+        ULONG DataLength = (ULONG)(End - DataStart);
+        BYTE *Decoded = NULL;
+        ULONG DecodedLength = 0;
+
+        if (!VtDecodeBase64(DataStart, DataLength, &Decoded, &DecodedLength))
+            return TRUE;
+
+        if (DecodedLength > 0)
+        {
+            int WideChars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, (LPCSTR)Decoded, (int)DecodedLength, NULL, 0);
+            if (WideChars > 0)
+            {
+                HANDLE Handle = GlobalAlloc(GMEM_MOVEABLE, (WideChars + 1) * sizeof(WCHAR));
+                if (Handle)
+                {
+                    LPWSTR Dest = (LPWSTR)GlobalLock(Handle);
+                    if (Dest)
+                    {
+                        if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, (LPCSTR)Decoded, (int)DecodedLength, Dest, WideChars) == WideChars)
+                        {
+                            Dest[WideChars] = UNICODE_NULL;
+                            GlobalUnlock(Handle);
+
+                            if (OpenClipboard(NULL))
+                            {
+                                EmptyClipboard();
+                                if (!SetClipboardData(CF_UNICODETEXT, Handle))
+                                    GlobalFree(Handle);
+                                CloseClipboard();
+                            }
+                            else
+                            {
+                                GlobalFree(Handle);
+                            }
+                        }
+                        else
+                        {
+                            GlobalUnlock(Handle);
+                            GlobalFree(Handle);
+                        }
+                    }
+                    else
+                    {
+                        GlobalFree(Handle);
+                    }
+                }
+            }
+        }
+
+        ConsoleFreeHeap(Decoded);
+    }
+
     return TRUE;
 }
 
@@ -1979,7 +3186,13 @@ VtHandleOscSequence(PCONSOLE Console,
         case 52:
             return VtHandleOscClipboard(Console, ParamEnd, (ULONG)(End - ParamEnd));
 
+        case 133: /* iTerm2 prompt markers */
+        case 134:
+        case 633:
+            return TRUE;
+
         default:
+            VtTraceUnhandledOsc(Parameter);
             return TRUE;
     }
 
@@ -2003,8 +3216,10 @@ VtFlushText(PCONSOLE Console,
     OriginalAttrib = ScreenBuffer->ScreenDefaultAttrib;
     ScreenBuffer->ScreenDefaultAttrib = ScreenBuffer->VtState.CurrentAttributes;
 
+    VT_CHARSET_ID ActiveCharset = VtGetActiveCharset(ScreenBuffer);
+
     if ((ScreenBuffer->VtState.PendingSingleShift == VT_CHARSET_SLOT_INVALID) &&
-        (VtGetActiveCharset(ScreenBuffer) != VtCharsetDecSpecial))
+        (ActiveCharset == VtCharsetAscii))
     {
         Status = TermWriteStream(Console,
                                  ScreenBuffer,
@@ -2583,6 +3798,15 @@ ConDrvVtInitializeBuffer(PTEXTMODE_SCREEN_BUFFER ScreenBuffer)
     ScreenBuffer->VtState.SavedG2Charset = ScreenBuffer->VtState.G2Charset;
     ScreenBuffer->VtState.SavedG3Charset = ScreenBuffer->VtState.G3Charset;
     ScreenBuffer->VtState.SavedActiveCharset = ScreenBuffer->VtState.ActiveCharset;
+    ScreenBuffer->VtState.MouseButtonState = 0;
+    ScreenBuffer->VtState.LastMousePosition.X = -1;
+    ScreenBuffer->VtState.LastMousePosition.Y = -1;
+
+    if (ScreenBuffer->VtState.TabStops)
+        ConsoleFreeHeap(ScreenBuffer->VtState.TabStops);
+    ScreenBuffer->VtState.TabStops = NULL;
+    ScreenBuffer->VtState.TabStopLength = 0;
+    VtResetTabStops(ScreenBuffer);
 }
 
 static VOID
@@ -2597,10 +3821,33 @@ VtHandleCursorPosition(PCONSOLE Console,
     Row = (Count >= 1) ? (SHORT)max(1UL, Params[0]) : 1;
     Col = (Count >= 2) ? (SHORT)max(1UL, Params[1]) : 1;
 
-    Row = min(Row, ScreenBuffer->ScreenBufferSize.Y);
-    Col = min(Col, ScreenBuffer->ScreenBufferSize.X);
+    if (ScreenBuffer->VtState.PrivateModes & VT_PRIVMODE_ORIGIN_MODE)
+    {
+        SHORT Top = ScreenBuffer->VtState.ScrollTop;
+        SHORT Bottom = ScreenBuffer->VtState.ScrollBottom;
+        SHORT Height = Bottom - Top + 1;
 
-    Position.Y = Row - 1;
+        if (Height <= 0 || Height > ScreenBuffer->ScreenBufferSize.Y)
+            Height = ScreenBuffer->ScreenBufferSize.Y;
+        if (Height <= 0)
+            Height = 1;
+
+        if (Row > Height)
+            Row = Height;
+
+        Position.Y = Top + Row - 1;
+    }
+    else
+    {
+        if (Row > ScreenBuffer->ScreenBufferSize.Y)
+            Row = ScreenBuffer->ScreenBufferSize.Y;
+
+        Position.Y = Row - 1;
+    }
+
+    if (Col > ScreenBuffer->ScreenBufferSize.X)
+        Col = ScreenBuffer->ScreenBufferSize.X;
+
     Position.X = Col - 1;
 
     ConDrvSetConsoleCursorPosition(Console, ScreenBuffer, &Position);
@@ -2662,6 +3909,9 @@ VtHandleDecPrivateMode(PCONSOLE Console,
                        BOOLEAN Enable)
 {
     ULONG Mask = 0;
+    BOOLEAN RequiresWindowResize = FALSE;
+    ULONG NewColumns = 0;
+    BOOLEAN Handled = FALSE;
 
     switch (Mode)
     {
@@ -2675,6 +3925,43 @@ VtHandleDecPrivateMode(PCONSOLE Console,
                                                          &CursorInfo));
         }
 
+        case 1:  /* DECCKM – cursor keys send application sequences */
+            Mask = VT_PRIVMODE_CURSOR_KEYS_APPLICATION;
+            Handled = TRUE;
+            break;
+
+        case 3:  /* DECCOLM – 80/132 column mode */
+            Mask = VT_PRIVMODE_COLUMN_132;
+            Handled = TRUE;
+            RequiresWindowResize = TRUE;
+            NewColumns = Enable ? 132 : 80;
+            break;
+
+        case 6:  /* DECOM – origin mode */
+        {
+            if (Enable)
+                ScreenBuffer->VtState.PrivateModes |= VT_PRIVMODE_ORIGIN_MODE;
+            else
+                ScreenBuffer->VtState.PrivateModes &= ~VT_PRIVMODE_ORIGIN_MODE;
+
+            {
+                COORD Home;
+                Home.X = 0;
+                Home.Y = Enable ? ScreenBuffer->VtState.ScrollTop : 0;
+                ConDrvSetConsoleCursorPosition(Console, ScreenBuffer, &Home);
+            }
+
+            return TRUE;
+        }
+
+        case 1000:
+            Mask = VT_PRIVMODE_MOUSE_X10;
+            break;
+
+        case 1003:
+            Mask = VT_PRIVMODE_MOUSE_ANY_EVENT;
+            break;
+
         case 1002:
             Mask = VT_PRIVMODE_MOUSE_BUTTON_TRACKING;
             break;
@@ -2683,12 +3970,21 @@ VtHandleDecPrivateMode(PCONSOLE Console,
             Mask = VT_PRIVMODE_MOUSE_SGR_EXTENDED;
             break;
 
+        case 1004:
+            Mask = VT_PRIVMODE_FOCUS_EVENT;
+            break;
+
         case 2004:
             Mask = VT_PRIVMODE_BRACKETED_PASTE;
             break;
 
         case 1036:
             Mask = VT_PRIVMODE_META_SENDS_ESCAPE;
+            break;
+
+        case 66: /* DECNKM – keypad application mode */
+            Mask = VT_PRIVMODE_KEYPAD_APPLICATION;
+            Handled = TRUE;
             break;
 
         case 1049:
@@ -2700,17 +3996,38 @@ VtHandleDecPrivateMode(PCONSOLE Console,
             return FALSE;
     }
 
+    if (RequiresWindowResize)
+    {
+        if (NewColumns == 0)
+            NewColumns = ScreenBuffer->ScreenBufferSize.X;
+
+        if (NewColumns < 1)
+            NewColumns = 1;
+
+        if (ScreenBuffer->ScreenBufferSize.X != (SHORT)NewColumns)
+        {
+            ULONG Rows = (ULONG)max(1, ScreenBuffer->ScreenBufferSize.Y);
+            if (!VtResizeWindow(Console, ScreenBuffer, Rows, NewColumns))
+                DPRINT1("VT: Failed to resize console to %lu columns for DECCOLM\n", NewColumns);
+        }
+
+        ScreenBuffer->VtState.ScrollTop = 0;
+        ScreenBuffer->VtState.ScrollBottom = max(0, ScreenBuffer->ScreenBufferSize.Y - 1);
+        VtEraseDisplay(Console, ScreenBuffer, 2);
+        VtResetTabStops(ScreenBuffer);
+
+        {
+            COORD Home = {0, 0};
+            ConDrvSetConsoleCursorPosition(Console, ScreenBuffer, &Home);
+        }
+    }
+
     if (Enable)
         ScreenBuffer->VtState.PrivateModes |= Mask;
     else
         ScreenBuffer->VtState.PrivateModes &= ~Mask;
 
-    /*
-     * These modes currently have no observable effect in the console server,
-     * but they should not leak into the legacy renderer. Track them so we can
-     * implement the behaviours in later roadmap steps.
-     */
-    return TRUE;
+    return Handled || (Mask != 0);
 }
 
 static BOOLEAN
@@ -2729,7 +4046,6 @@ VtHandleDeviceAttributes(PCONSOLE Console,
     switch (PrivateIndicator)
     {
         case 0:
-        case L'?':
             if (Len >= ARRAYSIZE(Response))
                 return FALSE;
             Response[Len++] = L'?';
@@ -2757,6 +4073,27 @@ VtHandleDeviceAttributes(PCONSOLE Console,
             Len += VtAppendNumber(Response + Len,
                                   ARRAYSIZE(Response) - Len,
                                   136);
+            if (Len >= ARRAYSIZE(Response))
+                return FALSE;
+            Response[Len++] = L';';
+            Len += VtAppendNumber(Response + Len,
+                                  ARRAYSIZE(Response) - Len,
+                                  0);
+            break;
+
+        case L'?':
+            if (Len >= ARRAYSIZE(Response))
+                return FALSE;
+            Response[Len++] = L'>';
+            Len += VtAppendNumber(Response + Len,
+                                  ARRAYSIZE(Response) - Len,
+                                  83);
+            if (Len >= ARRAYSIZE(Response))
+                return FALSE;
+            Response[Len++] = L';';
+            Len += VtAppendNumber(Response + Len,
+                                  ARRAYSIZE(Response) - Len,
+                                  40003);
             if (Len >= ARRAYSIZE(Response))
                 return FALSE;
             Response[Len++] = L';';
@@ -2818,6 +4155,7 @@ VtHandlePrivateCsiSequence(PCONSOLE Console,
 static BOOLEAN
 VtHandleCsiSequence(PCONSOLE Console,
                     PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                    WCHAR PrivateIndicator,
                     WCHAR Final,
                     WCHAR Intermediate,
                     const ULONG *Params,
@@ -2835,6 +4173,7 @@ VtHandleCsiSequence(PCONSOLE Console,
                 VtSoftReset(Console, ScreenBuffer);
                 return TRUE;
             }
+            VtTraceUnhandledCsi(PrivateIndicator, Intermediate, Final, Params, Count);
             return FALSE;
 
         case L'H':
@@ -2866,6 +4205,7 @@ VtHandleCsiSequence(PCONSOLE Console,
                 VtScrollRight(Console, ScreenBuffer, Columns);
                 return TRUE;
             }
+            VtTraceUnhandledCsi(PrivateIndicator, Intermediate, Final, Params, Count);
             return FALSE;
 
         case L'P':
@@ -2894,6 +4234,7 @@ VtHandleCsiSequence(PCONSOLE Console,
         case L'c':
             if (Intermediate == 0)
                 return VtHandleDeviceAttributes(Console, 0);
+            VtTraceUnhandledCsi(PrivateIndicator, Intermediate, Final, Params, Count);
             return FALSE;
 
         case L't':
@@ -2919,6 +4260,7 @@ VtHandleCsiSequence(PCONSOLE Console,
                     return VtReportWindowSize(Console, ScreenBuffer, 4);
 
                 default:
+                    VtTraceUnhandledCsi(PrivateIndicator, Intermediate, Final, Params, Count);
                     return FALSE;
             }
         }
@@ -2962,6 +4304,7 @@ VtHandleCsiSequence(PCONSOLE Console,
                 }
 
                 default:
+                    VtTraceUnhandledCsi(PrivateIndicator, Intermediate, Final, Params, Count);
                     return FALSE;
             }
 
@@ -3023,9 +4366,11 @@ VtHandleCsiSequence(PCONSOLE Console,
                 if (VtApplyCursorStyle(Console, ScreenBuffer, Style))
                     return TRUE;
             }
+            VtTraceUnhandledCsi(PrivateIndicator, Intermediate, Final, Params, Count);
             return FALSE;
 
         default:
+            VtTraceUnhandledCsi(PrivateIndicator, Intermediate, Final, Params, Count);
             return FALSE;
     }
 }
@@ -3081,6 +4426,8 @@ VtHandleEscapeSequence(PCONSOLE Console,
         case L'/':
         {
             UCHAR Slot;
+            WCHAR Intermediate;
+            WCHAR Final;
 
             if (!Position || *Position >= Length)
                 return FALSE;
@@ -3097,12 +4444,25 @@ VtHandleEscapeSequence(PCONSOLE Console,
                 default: return FALSE;
             }
 
-            if (VtDesignateCharset(ScreenBuffer, Slot, Buffer[*Position]))
+            Final = Buffer[*Position];
+            Intermediate = 0;
+
+            while (Final >= L' ' && Final <= L'/')
+            {
+                Intermediate = Final;
+                (*Position)++;
+                if (!Position || *Position >= Length)
+                    return FALSE;
+                Final = Buffer[*Position];
+            }
+
+            if (VtDesignateCharset(ScreenBuffer, Slot, Intermediate, Final))
             {
                 (*Position)++;
                 return TRUE;
             }
 
+            VtTraceUnhandledEscape(Indicator);
             return FALSE;
         }
 
@@ -3136,6 +4496,7 @@ ConDrvVtWriteConsole(PCONSOLE Console,
                      PULONG NumCharsProcessed,
                      PBOOLEAN Handled)
 {
+    PWSTR ExpandedBuffer = NULL;
     ULONG Pos = 0;
     ULONG SegmentStart = 0;
     ULONG Processed = 0;
@@ -3148,6 +4509,61 @@ ConDrvVtWriteConsole(PCONSOLE Console,
         if (NumCharsProcessed) *NumCharsProcessed = 0;
         if (Handled) *Handled = FALSE;
         return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Length > 0)
+    {
+        BOOLEAN NeedsExpansion = FALSE;
+
+        for (ULONG i = 0; i < Length; ++i)
+        {
+            WCHAR C = Buffer[i];
+            if (C >= 0x80 && C <= 0x9F)
+            {
+                NeedsExpansion = TRUE;
+                break;
+            }
+        }
+
+        if (NeedsExpansion)
+        {
+            PWSTR Temp = ConsoleAllocHeap(0, (Length * 2 + 1) * sizeof(WCHAR));
+            if (Temp)
+            {
+                ULONG Out = 0;
+
+                for (ULONG i = 0; i < Length; ++i)
+                {
+                    WCHAR C = Buffer[i];
+
+                    switch (C)
+                    {
+                        case 0x90: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = L'P'; break;
+                        case 0x91: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = L'Q'; break;
+                        case 0x92: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = L'R'; break;
+                        case 0x93: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = L'S'; break;
+                        case 0x94: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = L'T'; break;
+                        case 0x95: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = L'U'; break;
+                        case 0x96: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = L'V'; break;
+                        case 0x97: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = L'W'; break;
+                        case 0x98: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = L'X'; break;
+                        case 0x99: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = L'Y'; break;
+                        case 0x9A: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = L'Z'; break;
+                        case 0x9B: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = L'['; break;
+                        case 0x9C: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = (WCHAR)0x5C; break;
+                        case 0x9D: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = L']'; break;
+                        case 0x9E: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = L'^'; break;
+                        case 0x9F: Temp[Out++] = (WCHAR)0x1b; Temp[Out++] = L'_'; break;
+                        default: Temp[Out++] = C; break;
+                    }
+                }
+
+                Buffer = Temp;
+                Length = Out;
+                Temp[Out] = UNICODE_NULL;
+                ExpandedBuffer = Temp;
+            }
+        }
     }
 
     ScreenBuffer->VtState.Active = TRUE;
@@ -3260,7 +4676,7 @@ ConDrvVtWriteConsole(PCONSOLE Console,
                 if ((PrivateIndicator != 0 &&
                      VtHandlePrivateCsiSequence(Console, ScreenBuffer, PrivateIndicator, Final, Intermediate, Params, Count)) ||
                     (PrivateIndicator == 0 &&
-                     VtHandleCsiSequence(Console, ScreenBuffer, Final, Intermediate, Params, Count)))
+                     VtHandleCsiSequence(Console, ScreenBuffer, PrivateIndicator, Final, Intermediate, Params, Count)))
                 {
                     AnyHandled = TRUE;
                     ScreenBuffer = (PTEXTMODE_SCREEN_BUFFER)Console->ActiveBuffer;
@@ -3328,6 +4744,46 @@ ConDrvVtWriteConsole(PCONSOLE Console,
                 SegmentStart = Pos;
                 continue;
             }
+            else if (Ch == L'P')
+            {
+                ULONG SearchPos = Pos;
+                ULONG TerminatorLen = 0;
+
+                while (SearchPos < Length)
+                {
+                    WCHAR C = Buffer[SearchPos];
+                    if (C == L'\u001b' && (SearchPos + 1) < Length && Buffer[SearchPos + 1] == L'\\')
+                    {
+                        TerminatorLen = 2;
+                        break;
+                    }
+                    SearchPos++;
+                }
+
+                if (TerminatorLen == 0)
+                {
+                    Status = VtFlushText(Console,
+                                         ScreenBuffer,
+                                         Buffer + EscStart,
+                                         Pos - EscStart);
+                    SegmentStart = Pos;
+                    continue;
+                }
+
+                if (VtHandleDcsSequence(Console,
+                                        ScreenBuffer,
+                                        Buffer + Pos,
+                                        SearchPos - Pos))
+                {
+                    AnyHandled = TRUE;
+                    Pos = SearchPos + TerminatorLen;
+                    ScreenBuffer = (PTEXTMODE_SCREEN_BUFFER)Console->ActiveBuffer;
+                    SegmentStart = Pos;
+                    continue;
+                }
+
+                VtTraceUnhandledDcs();
+            }
             else
             {
                 ULONG NewPos = Pos;
@@ -3377,5 +4833,731 @@ ConDrvVtWriteConsole(PCONSOLE Console,
     if (NumCharsProcessed) *NumCharsProcessed = Processed;
     if (Handled) *Handled = AnyHandled;
 
+    if (ExpandedBuffer)
+        ConsoleFreeHeap(ExpandedBuffer);
+
     return Status;
+}
+
+typedef enum _VT_INPUT_ACTION
+{
+    VtInputPassThrough = 0,
+    VtInputGenerateSequence,
+    VtInputDrop
+} VT_INPUT_ACTION;
+
+typedef struct _VT_INPUT_TRANSLATION
+{
+    VT_INPUT_ACTION Action;
+    USHORT RepeatCount;
+    SIZE_T SequenceLength;
+    WCHAR Sequence[VT_MAX_INPUT_SEQUENCE_CHARS];
+} VT_INPUT_TRANSLATION, *PVT_INPUT_TRANSLATION;
+
+static BOOLEAN
+VtShouldHandleKeyUp(USHORT VirtualKey)
+{
+    switch (VirtualKey)
+    {
+        case VK_UP:
+        case VK_DOWN:
+        case VK_LEFT:
+        case VK_RIGHT:
+        case VK_HOME:
+        case VK_END:
+        case VK_INSERT:
+        case VK_DELETE:
+        case VK_PRIOR:
+        case VK_NEXT:
+        case VK_F1:
+        case VK_F2:
+        case VK_F3:
+        case VK_F4:
+        case VK_F5:
+        case VK_F6:
+        case VK_F7:
+        case VK_F8:
+        case VK_F9:
+        case VK_F10:
+        case VK_F11:
+        case VK_F12:
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static BOOLEAN
+VtTranslateKeyEvent(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                    const KEY_EVENT_RECORD *KeyEvent,
+                    PVT_INPUT_TRANSLATION Translation)
+{
+    ULONG PrivateModes = ScreenBuffer ? ScreenBuffer->VtState.PrivateModes : 0;
+    SIZE_T Length = 0;
+    USHORT Repeat = (KeyEvent->wRepeatCount != 0) ? KeyEvent->wRepeatCount : 1;
+
+    if (!KeyEvent->bKeyDown)
+    {
+        if (VtShouldHandleKeyUp(KeyEvent->wVirtualKeyCode))
+        {
+            Translation->Action = VtInputDrop;
+            Translation->RepeatCount = 0;
+            Translation->SequenceLength = 0;
+            return TRUE;
+        }
+
+        return FALSE;
+    }
+
+    if (KeyEvent->wVirtualKeyCode == 0 && KeyEvent->uChar.UnicodeChar != 0)
+        return FALSE;
+
+    if ((PrivateModes & VT_PRIVMODE_META_SENDS_ESCAPE) &&
+        (KeyEvent->dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) &&
+        KeyEvent->uChar.UnicodeChar != 0)
+    {
+        Translation->Action = VtInputGenerateSequence;
+        Translation->RepeatCount = Repeat;
+        Translation->Sequence[0] = L'\x1b';
+        Translation->Sequence[1] = KeyEvent->uChar.UnicodeChar;
+        Translation->SequenceLength = 2;
+        return TRUE;
+    }
+
+    if (KeyEvent->uChar.UnicodeChar != 0)
+        return FALSE;
+
+    switch (KeyEvent->wVirtualKeyCode)
+    {
+        case VK_UP:
+            if (!VtComposeCursorKeySequence((PrivateModes & VT_PRIVMODE_CURSOR_KEYS_APPLICATION) != 0,
+                                            KeyEvent,
+                                            L'A',
+                                            Translation->Sequence,
+                                            ARRAYSIZE(Translation->Sequence),
+                                            &Length))
+                return FALSE;
+            break;
+
+        case VK_DOWN:
+            if (!VtComposeCursorKeySequence((PrivateModes & VT_PRIVMODE_CURSOR_KEYS_APPLICATION) != 0,
+                                            KeyEvent,
+                                            L'B',
+                                            Translation->Sequence,
+                                            ARRAYSIZE(Translation->Sequence),
+                                            &Length))
+                return FALSE;
+            break;
+
+        case VK_RIGHT:
+            if (!VtComposeCursorKeySequence((PrivateModes & VT_PRIVMODE_CURSOR_KEYS_APPLICATION) != 0,
+                                            KeyEvent,
+                                            L'C',
+                                            Translation->Sequence,
+                                            ARRAYSIZE(Translation->Sequence),
+                                            &Length))
+                return FALSE;
+            break;
+
+        case VK_LEFT:
+            if (!VtComposeCursorKeySequence((PrivateModes & VT_PRIVMODE_CURSOR_KEYS_APPLICATION) != 0,
+                                            KeyEvent,
+                                            L'D',
+                                            Translation->Sequence,
+                                            ARRAYSIZE(Translation->Sequence),
+                                            &Length))
+                return FALSE;
+            break;
+
+        case VK_HOME:
+        {
+            BOOLEAN AppMode = (PrivateModes & VT_PRIVMODE_KEYPAD_APPLICATION) != 0;
+
+            if (!VtComposeCursorKeySequence(AppMode,
+                                            KeyEvent,
+                                            L'H',
+                                            Translation->Sequence,
+                                            ARRAYSIZE(Translation->Sequence),
+                                            &Length))
+                return FALSE;
+            break;
+        }
+
+        case VK_END:
+        {
+            BOOLEAN AppMode = (PrivateModes & VT_PRIVMODE_KEYPAD_APPLICATION) != 0;
+
+            if (!VtComposeCursorKeySequence(AppMode,
+                                            KeyEvent,
+                                            L'F',
+                                            Translation->Sequence,
+                                            ARRAYSIZE(Translation->Sequence),
+                                            &Length))
+                return FALSE;
+            break;
+        }
+
+        case VK_INSERT:
+            if (!VtComposeCsiTildeSequence(2,
+                                           VtGetModifierParameter(KeyEvent),
+                                           L'~',
+                                           Translation->Sequence,
+                                           ARRAYSIZE(Translation->Sequence),
+                                           &Length))
+                return FALSE;
+            break;
+
+        case VK_DELETE:
+            if (!VtComposeCsiTildeSequence(3,
+                                           VtGetModifierParameter(KeyEvent),
+                                           L'~',
+                                           Translation->Sequence,
+                                           ARRAYSIZE(Translation->Sequence),
+                                           &Length))
+                return FALSE;
+            break;
+
+        case VK_PRIOR: /* Page Up */
+            if (!VtComposeCsiTildeSequence(5,
+                                           VtGetModifierParameter(KeyEvent),
+                                           L'~',
+                                           Translation->Sequence,
+                                           ARRAYSIZE(Translation->Sequence),
+                                           &Length))
+                return FALSE;
+            break;
+
+        case VK_NEXT: /* Page Down */
+            if (!VtComposeCsiTildeSequence(6,
+                                           VtGetModifierParameter(KeyEvent),
+                                           L'~',
+                                           Translation->Sequence,
+                                           ARRAYSIZE(Translation->Sequence),
+                                           &Length))
+                return FALSE;
+            break;
+
+        case VK_F1:
+        case VK_F2:
+        case VK_F3:
+        case VK_F4:
+        {
+            static const WCHAR Finals[] = { L'P', L'Q', L'R', L'S' };
+            ULONG Index = KeyEvent->wVirtualKeyCode - VK_F1;
+
+            if (!VtComposeSs3FunctionSequence(KeyEvent,
+                                              Finals[Index],
+                                              Translation->Sequence,
+                                              ARRAYSIZE(Translation->Sequence),
+                                              &Length))
+                return FALSE;
+            break;
+        }
+
+        case VK_F5:
+        case VK_F6:
+        case VK_F7:
+        case VK_F8:
+        case VK_F9:
+        case VK_F10:
+        case VK_F11:
+        case VK_F12:
+        {
+            static const ULONG Parameters[] = { 15, 17, 18, 19, 20, 21, 23, 24 };
+            ULONG Index = KeyEvent->wVirtualKeyCode - VK_F5;
+
+            if (!VtComposeCsiTildeSequence(Parameters[Index],
+                                           VtGetModifierParameter(KeyEvent),
+                                           L'~',
+                                           Translation->Sequence,
+                                           ARRAYSIZE(Translation->Sequence),
+                                           &Length))
+                return FALSE;
+            break;
+        }
+
+        case VK_NUMPAD0:
+        case VK_NUMPAD1:
+        case VK_NUMPAD2:
+        case VK_NUMPAD3:
+        case VK_NUMPAD4:
+        case VK_NUMPAD5:
+        case VK_NUMPAD6:
+        case VK_NUMPAD7:
+        case VK_NUMPAD8:
+        case VK_NUMPAD9:
+        case VK_DECIMAL:
+        case VK_ADD:
+        case VK_SUBTRACT:
+        case VK_MULTIPLY:
+        case VK_DIVIDE:
+        case VK_RETURN:
+        {
+            if (!(PrivateModes & VT_PRIVMODE_KEYPAD_APPLICATION))
+                return FALSE;
+
+            if (VtGetModifierParameter(KeyEvent) != 1)
+                return FALSE;
+
+            if (KeyEvent->wVirtualKeyCode == VK_RETURN &&
+                !(KeyEvent->dwControlKeyState & ENHANCED_KEY))
+            {
+                return FALSE;
+            }
+
+            {
+                WCHAR Final;
+
+                switch (KeyEvent->wVirtualKeyCode)
+                {
+                    case VK_NUMPAD0: Final = L'p'; break;
+                    case VK_NUMPAD1: Final = L'q'; break;
+                    case VK_NUMPAD2: Final = L'r'; break;
+                    case VK_NUMPAD3: Final = L's'; break;
+                    case VK_NUMPAD4: Final = L't'; break;
+                    case VK_NUMPAD5: Final = L'u'; break;
+                    case VK_NUMPAD6: Final = L'v'; break;
+                    case VK_NUMPAD7: Final = L'w'; break;
+                    case VK_NUMPAD8: Final = L'x'; break;
+                    case VK_NUMPAD9: Final = L'y'; break;
+                    case VK_DECIMAL: Final = L'n'; break;
+                    case VK_ADD:     Final = L'k'; break;
+                    case VK_SUBTRACT:Final = L'm'; break;
+                    case VK_MULTIPLY:Final = L'j'; break;
+                    case VK_DIVIDE:  Final = L'o'; break;
+                    case VK_RETURN:  Final = L'M'; break;
+                    default:
+                        return FALSE;
+                }
+
+                if (ARRAYSIZE(Translation->Sequence) < 3)
+                    return FALSE;
+
+                Translation->Sequence[0] = L'\x1b';
+                Translation->Sequence[1] = L'O';
+                Translation->Sequence[2] = Final;
+                Length = 3;
+            }
+            break;
+        }
+
+        default:
+            return FALSE;
+    }
+
+    Translation->Action = VtInputGenerateSequence;
+    Translation->RepeatCount = Repeat;
+    Translation->SequenceLength = Length;
+    return TRUE;
+}
+
+static BOOLEAN
+VtTranslateMouseEvent(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                      const MOUSE_EVENT_RECORD *MouseEvent,
+                      PVT_INPUT_TRANSLATION Translation)
+{
+    ULONG PrivateModes;
+    ULONG PreviousState;
+    ULONG CurrentState;
+    ULONG ButtonCode = 0;
+    ULONG X;
+    ULONG Y;
+    SIZE_T Length = 0;
+    BOOLEAN Released = FALSE;
+    BOOLEAN UseSgr;
+    ULONG Modifiers;
+    BOOLEAN TrackX10;
+    BOOLEAN TrackButtons;
+    BOOLEAN TrackAny;
+
+    if (!ScreenBuffer)
+        return FALSE;
+
+    PrivateModes = ScreenBuffer->VtState.PrivateModes;
+    TrackX10 = (PrivateModes & VT_PRIVMODE_MOUSE_X10) != 0;
+    TrackButtons = (PrivateModes & VT_PRIVMODE_MOUSE_BUTTON_TRACKING) != 0;
+    TrackAny = (PrivateModes & VT_PRIVMODE_MOUSE_ANY_EVENT) != 0;
+
+    if (!TrackX10 && !TrackButtons && !TrackAny)
+        return FALSE;
+
+    PreviousState = ScreenBuffer->VtState.MouseButtonState;
+    CurrentState = MouseEvent->dwButtonState & 0xFFFF;
+    X = (ULONG)MouseEvent->dwMousePosition.X + 1; /* Convert to 1-based */
+    Y = (ULONG)MouseEvent->dwMousePosition.Y + 1;
+    UseSgr = (PrivateModes & VT_PRIVMODE_MOUSE_SGR_EXTENDED) != 0;
+    Modifiers = VtMouseModifierBits(MouseEvent->dwControlKeyState);
+
+    if (MouseEvent->dwEventFlags == MOUSE_WHEELED ||
+        MouseEvent->dwEventFlags == MOUSE_HWHEELED)
+    {
+        SHORT Delta = (SHORT)HIWORD(MouseEvent->dwButtonState);
+
+        if (Delta == 0)
+            return FALSE;
+
+        if (MouseEvent->dwEventFlags == MOUSE_WHEELED)
+            ButtonCode = (Delta > 0) ? 64 : 65;
+        else
+            ButtonCode = (Delta > 0) ? 66 : 67;
+
+        ButtonCode += Modifiers;
+
+        if (UseSgr)
+        {
+            if (!VtComposeMouseSgrSequence(ButtonCode, X, Y, FALSE,
+                                           Translation->Sequence,
+                                           ARRAYSIZE(Translation->Sequence),
+                                           &Length))
+                return FALSE;
+        }
+        else
+        {
+            if (!VtComposeMouseLegacySequence(ButtonCode, X, Y,
+                                              Translation->Sequence,
+                                              ARRAYSIZE(Translation->Sequence),
+                                              &Length))
+                return FALSE;
+        }
+
+        Translation->Action = VtInputGenerateSequence;
+        Translation->RepeatCount = 1;
+        Translation->SequenceLength = Length;
+        ScreenBuffer->VtState.MouseButtonState = CurrentState;
+        ScreenBuffer->VtState.LastMousePosition.X = (SHORT)(X - 1);
+        ScreenBuffer->VtState.LastMousePosition.Y = (SHORT)(Y - 1);
+        return TRUE;
+    }
+
+    if (MouseEvent->dwEventFlags == MOUSE_MOVED)
+    {
+        if (!TrackAny && !(TrackButtons && CurrentState != 0))
+            return FALSE;
+
+        if (CurrentState != 0)
+        {
+            INT ButtonIndex = VtFirstMouseButton(CurrentState);
+            if (ButtonIndex < 0)
+                return FALSE;
+
+            ButtonCode = (ULONG)ButtonIndex;
+        }
+        else
+        {
+            ButtonCode = 3; /* Motion with no buttons */
+        }
+    }
+    else
+    {
+        ULONG Changed = PreviousState ^ CurrentState;
+        ULONG Pressed = Changed & CurrentState;
+        ULONG ReleasedMask = Changed & ~CurrentState;
+
+        if (Pressed != 0)
+        {
+            INT ButtonIndex = VtFirstMouseButton(Pressed);
+            if (ButtonIndex < 0)
+                ButtonIndex = VtFirstMouseButton(CurrentState);
+            if (ButtonIndex < 0)
+                return FALSE;
+
+            ButtonCode = (ULONG)ButtonIndex;
+        }
+        else if (ReleasedMask != 0)
+        {
+            INT ButtonIndex = VtFirstMouseButton(ReleasedMask);
+            if (ButtonIndex < 0)
+                ButtonIndex = VtFirstMouseButton(PreviousState);
+            if (ButtonIndex < 0)
+                return FALSE;
+
+            ButtonCode = (ULONG)ButtonIndex;
+            Released = TRUE;
+        }
+        else
+        {
+            if (MouseEvent->dwEventFlags == DOUBLE_CLICK)
+            {
+                INT ButtonIndex = VtFirstMouseButton(CurrentState);
+                if (ButtonIndex < 0)
+                    return FALSE;
+
+                ButtonCode = (ULONG)ButtonIndex;
+            }
+            else
+            {
+                return FALSE;
+            }
+        }
+    }
+
+    ButtonCode += Modifiers;
+
+    if (UseSgr)
+    {
+        ULONG Code = ButtonCode;
+
+        if (MouseEvent->dwEventFlags == MOUSE_MOVED)
+            Code |= 32;
+
+        if (!VtComposeMouseSgrSequence(Code, X, Y, Released,
+                                       Translation->Sequence,
+                                       ARRAYSIZE(Translation->Sequence),
+                                       &Length))
+            return FALSE;
+    }
+    else
+    {
+        ULONG Code = ButtonCode;
+
+        if (Released)
+            Code = 3 + Modifiers;
+        else if (MouseEvent->dwEventFlags == MOUSE_MOVED)
+            Code += 32;
+
+        if (!VtComposeMouseLegacySequence(Code, X, Y,
+                                          Translation->Sequence,
+                                          ARRAYSIZE(Translation->Sequence),
+                                          &Length))
+            return FALSE;
+    }
+
+    ScreenBuffer->VtState.MouseButtonState = CurrentState;
+    ScreenBuffer->VtState.LastMousePosition.X = (SHORT)(X - 1);
+    ScreenBuffer->VtState.LastMousePosition.Y = (SHORT)(Y - 1);
+
+    Translation->Action = VtInputGenerateSequence;
+    Translation->RepeatCount = 1;
+    Translation->SequenceLength = Length;
+    return TRUE;
+}
+
+static BOOLEAN
+VtTranslateFocusEvent(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+                      const FOCUS_EVENT_RECORD *FocusEvent,
+                      PVT_INPUT_TRANSLATION Translation)
+{
+    if (!ScreenBuffer)
+        return FALSE;
+
+    if (!(ScreenBuffer->VtState.PrivateModes & VT_PRIVMODE_FOCUS_EVENT))
+        return FALSE;
+
+    if (ARRAYSIZE(Translation->Sequence) < 3)
+        return FALSE;
+
+    Translation->Sequence[0] = L'\x1b';
+    Translation->Sequence[1] = L'[';
+    Translation->Sequence[2] = FocusEvent->bSetFocus ? L'I' : L'O';
+    Translation->Action = VtInputGenerateSequence;
+    Translation->RepeatCount = 1;
+    Translation->SequenceLength = 3;
+    return TRUE;
+}
+
+static VOID
+VtFillKeyEvent(PINPUT_RECORD Destination,
+               WCHAR Character,
+               BOOLEAN KeyDown)
+{
+    RtlZeroMemory(Destination, sizeof(*Destination));
+    Destination->EventType = KEY_EVENT;
+    Destination->Event.KeyEvent.bKeyDown = KeyDown;
+    Destination->Event.KeyEvent.wRepeatCount = 1;
+    Destination->Event.KeyEvent.uChar.UnicodeChar = Character;
+}
+
+NTSTATUS
+NTAPI
+ConDrvVtTranslateInput(PCONSOLE Console,
+                       PINPUT_RECORD InputRecords,
+                       ULONG NumRecords,
+                       PINPUT_RECORD *TranslatedRecords,
+                       PULONG TranslatedCount,
+                       PBOOLEAN AllocatedBuffer)
+{
+    PTEXTMODE_SCREEN_BUFFER ScreenBuffer;
+    PVT_INPUT_TRANSLATION TranslationInfo = NULL;
+    PINPUT_RECORD OutputRecords = NULL;
+    ULONGLONG OutputCount64 = 0;
+    ULONG Index;
+    BOOLEAN AnyTranslated = FALSE;
+
+    if (!TranslatedRecords || !TranslatedCount || !AllocatedBuffer)
+        return STATUS_INVALID_PARAMETER;
+
+    *TranslatedRecords = InputRecords;
+    *TranslatedCount = NumRecords;
+    *AllocatedBuffer = FALSE;
+
+    if (Console == NULL || InputRecords == NULL || NumRecords == 0)
+        return STATUS_SUCCESS;
+
+    if (!(Console->InputBuffer.Mode & ENABLE_VIRTUAL_TERMINAL_INPUT))
+        return STATUS_SUCCESS;
+
+    ScreenBuffer = (Console->ActiveBuffer &&
+                    GetType(Console->ActiveBuffer) == TEXTMODE_BUFFER)
+                       ? (PTEXTMODE_SCREEN_BUFFER)Console->ActiveBuffer
+                       : NULL;
+
+    TranslationInfo = ConsoleAllocHeap(0, sizeof(VT_INPUT_TRANSLATION) * NumRecords);
+    if (!TranslationInfo)
+        return STATUS_NO_MEMORY;
+
+    for (Index = 0; Index < NumRecords; ++Index)
+    {
+        const INPUT_RECORD *Record = &InputRecords[Index];
+        PVT_INPUT_TRANSLATION Info = &TranslationInfo[Index];
+
+        Info->Action = VtInputPassThrough;
+        Info->RepeatCount = 0;
+        Info->SequenceLength = 0;
+
+        switch (Record->EventType)
+        {
+            case KEY_EVENT:
+                if (VtTranslateKeyEvent(ScreenBuffer, &Record->Event.KeyEvent, Info))
+                {
+                    AnyTranslated = TRUE;
+
+                    if (Info->Action == VtInputGenerateSequence)
+                    {
+                        ULONGLONG Repeat = Info->RepeatCount ? Info->RepeatCount : 1;
+                        ULONGLONG SequenceLength = Info->SequenceLength;
+                        OutputCount64 += SequenceLength * 2ull * Repeat;
+                    }
+                    else if (Info->Action == VtInputPassThrough)
+                    {
+                        OutputCount64 += 1;
+                    }
+                    /* Drop case contributes nothing */
+                }
+                else
+                {
+                    OutputCount64 += 1;
+                }
+                break;
+
+            case MOUSE_EVENT:
+                if (VtTranslateMouseEvent(ScreenBuffer, &Record->Event.MouseEvent, Info))
+                {
+                    AnyTranslated = TRUE;
+
+                    if (Info->Action == VtInputGenerateSequence)
+                    {
+                        ULONGLONG SequenceLength = Info->SequenceLength;
+                        OutputCount64 += SequenceLength * 2ull;
+                    }
+                    else if (Info->Action == VtInputPassThrough)
+                    {
+                        OutputCount64 += 1;
+                    }
+                }
+                else
+                {
+                    OutputCount64 += 1;
+                }
+                break;
+
+            case FOCUS_EVENT:
+                if (VtTranslateFocusEvent(ScreenBuffer, &Record->Event.FocusEvent, Info))
+                {
+                    AnyTranslated = TRUE;
+
+                    if (Info->Action == VtInputGenerateSequence)
+                    {
+                        ULONGLONG SequenceLength = Info->SequenceLength;
+                        OutputCount64 += SequenceLength * 2ull;
+                    }
+                    else if (Info->Action == VtInputPassThrough)
+                    {
+                        OutputCount64 += 1;
+                    }
+                }
+                else
+                {
+                    OutputCount64 += 1;
+                }
+                break;
+
+            default:
+                OutputCount64 += 1;
+                break;
+        }
+    }
+
+    if (!AnyTranslated)
+    {
+        ConsoleFreeHeap(TranslationInfo);
+        return STATUS_SUCCESS;
+    }
+
+    if (OutputCount64 > ULONG_MAX)
+    {
+        ConsoleFreeHeap(TranslationInfo);
+        return STATUS_INTEGER_OVERFLOW;
+    }
+
+    if (OutputCount64 == 0)
+    {
+        ConsoleFreeHeap(TranslationInfo);
+        *TranslatedRecords = NULL;
+        *TranslatedCount = 0;
+        *AllocatedBuffer = FALSE;
+        return STATUS_SUCCESS;
+    }
+
+    OutputRecords = ConsoleAllocHeap(0, sizeof(INPUT_RECORD) * (ULONG)OutputCount64);
+    if (!OutputRecords)
+    {
+        ConsoleFreeHeap(TranslationInfo);
+        return STATUS_NO_MEMORY;
+    }
+
+    {
+        ULONG OutIndex = 0;
+
+        for (Index = 0; Index < NumRecords; ++Index)
+        {
+            const INPUT_RECORD *Record = &InputRecords[Index];
+            PVT_INPUT_TRANSLATION Info = &TranslationInfo[Index];
+
+            if (Info->Action == VtInputPassThrough)
+            {
+                OutputRecords[OutIndex++] = *Record;
+                continue;
+            }
+
+            if (Info->Action == VtInputDrop)
+                continue;
+
+            if (Info->Action == VtInputGenerateSequence && Info->SequenceLength > 0)
+            {
+                ULONG Repeat;
+
+                for (Repeat = 0; Repeat < (Info->RepeatCount ? Info->RepeatCount : 1); ++Repeat)
+                {
+                    SIZE_T SeqIndex;
+
+                    for (SeqIndex = 0; SeqIndex < Info->SequenceLength; ++SeqIndex)
+                    {
+                        WCHAR Ch = Info->Sequence[SeqIndex];
+                        VtFillKeyEvent(&OutputRecords[OutIndex++], Ch, TRUE);
+                        VtFillKeyEvent(&OutputRecords[OutIndex++], Ch, FALSE);
+                    }
+                }
+                continue;
+            }
+
+            OutputRecords[OutIndex++] = *Record;
+        }
+    }
+
+    ConsoleFreeHeap(TranslationInfo);
+
+    *TranslatedRecords = OutputRecords;
+    *TranslatedCount = (ULONG)OutputCount64;
+    *AllocatedBuffer = TRUE;
+    return STATUS_SUCCESS;
 }

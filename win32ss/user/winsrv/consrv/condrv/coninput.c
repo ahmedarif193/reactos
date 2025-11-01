@@ -344,13 +344,41 @@ ConDrvWriteConsoleInput(IN PCONSOLE Console,
     /* Now, add the events */
     if (NumEventsWritten) *NumEventsWritten = 0;
 
-    // FIXME: If we add back UNICODE support, it's here that we need to do the translation.
+    {
+        PINPUT_RECORD RecordsToQueue = InputRecord;
+        ULONG RecordCount = NumEventsToWrite;
+        BOOLEAN Allocated = FALSE;
+        NTSTATUS TranslateStatus;
+        NTSTATUS Status;
 
-    return AddInputEvents(Console,
-                          InputRecord,
-                          NumEventsToWrite,
-                          NumEventsWritten,
-                          AppendToEnd);
+        TranslateStatus = ConDrvVtTranslateInput(Console,
+                                                 InputRecord,
+                                                 NumEventsToWrite,
+                                                 &RecordsToQueue,
+                                                 &RecordCount,
+                                                 &Allocated);
+
+        if (RecordCount == 0)
+        {
+            Status = STATUS_SUCCESS;
+        }
+        else
+        {
+            Status = AddInputEvents(Console,
+                                    RecordsToQueue,
+                                    RecordCount,
+                                    NumEventsWritten,
+                                    AppendToEnd);
+        }
+
+        if (Allocated && RecordsToQueue)
+            ConsoleFreeHeap(RecordsToQueue);
+
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        return NT_SUCCESS(TranslateStatus) ? STATUS_SUCCESS : TranslateStatus;
+    }
 }
 
 NTSTATUS NTAPI

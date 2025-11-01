@@ -62,6 +62,68 @@ ConDrvValidateConsoleUnsafe(IN PCONSOLE Console,
 
 /* CONSOLE INITIALIZATION FUNCTIONS *******************************************/
 
+static VOID
+ConDrvLoadVtPolicy(PCONSOLE Console)
+{
+    RTL_QUERY_REGISTRY_TABLE QueryTable[4];
+    ULONG ClipboardValue = 1;
+    ULONG HyperlinkValue = 1;
+    ULONG DcsValue = 1;
+    NTSTATUS Status;
+
+    if (!Console)
+        return;
+
+    RtlZeroMemory(QueryTable, sizeof(QueryTable));
+
+    QueryTable[0].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    QueryTable[0].Name = L"AllowVtOscClipboard";
+    QueryTable[0].EntryContext = &ClipboardValue;
+    QueryTable[0].DefaultType = REG_DWORD;
+    QueryTable[0].DefaultData = &ClipboardValue;
+    QueryTable[0].DefaultLength = sizeof(ClipboardValue);
+
+    QueryTable[1].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    QueryTable[1].Name = L"AllowVtOscHyperlinks";
+    QueryTable[1].EntryContext = &HyperlinkValue;
+    QueryTable[1].DefaultType = REG_DWORD;
+    QueryTable[1].DefaultData = &HyperlinkValue;
+    QueryTable[1].DefaultLength = sizeof(HyperlinkValue);
+
+    QueryTable[2].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    QueryTable[2].Name = L"AllowVtDcsPassthrough";
+    QueryTable[2].EntryContext = &DcsValue;
+    QueryTable[2].DefaultType = REG_DWORD;
+    QueryTable[2].DefaultData = &DcsValue;
+    QueryTable[2].DefaultLength = sizeof(DcsValue);
+
+    Status = RtlQueryRegistryValues(RTL_REGISTRY_USER,
+                                    L"Console\\VT",
+                                    QueryTable,
+                                    NULL,
+                                    NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        Status = RtlQueryRegistryValues(RTL_REGISTRY_USER,
+                                        L"Console",
+                                        QueryTable,
+                                        NULL,
+                                        NULL);
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        Status = RtlQueryRegistryValues(RTL_REGISTRY_CONTROL,
+                                        L"Session Manager\\Console",
+                                        QueryTable,
+                                        NULL,
+                                        NULL);
+    }
+
+    Console->AllowVtOscClipboard = (ClipboardValue != 0);
+    Console->AllowVtOscHyperlinks = (HyperlinkValue != 0);
+    Console->AllowVtDcsPassthrough = (DcsValue != 0);
+}
+
 /* For resetting the terminal - defined in dummyterm.c */
 VOID ResetTerminal(IN PCONSOLE Console);
 
@@ -145,6 +207,10 @@ ConDrvInitConsole(
     /* Make the new screen buffer active */
     Console->ActiveBuffer = NewBuffer;
     Console->ConsolePaused = FALSE;
+    Console->AllowVtOscClipboard = TRUE;
+    Console->AllowVtOscHyperlinks = TRUE;
+    Console->AllowVtDcsPassthrough = TRUE;
+    ConDrvLoadVtPolicy(Console);
 
     DPRINT("Console initialized\n");
 
@@ -328,7 +394,11 @@ ConDrvGetConsoleMode(IN PCONSOLE Console,
     NTSTATUS Status = STATUS_SUCCESS;
 
     if (Console == NULL || Object == NULL || ConsoleMode == NULL)
+    {
+        DPRINT1("ConDrvGetConsoleMode: invalid parameter (Console=%p Object=%p Mode=%p)\n",
+                Console, Object, ConsoleMode);
         return STATUS_INVALID_PARAMETER;
+    }
 
     /* Validity check */
     ASSERT(Console == Object->Console);
@@ -347,6 +417,7 @@ ConDrvGetConsoleMode(IN PCONSOLE Console,
     }
     else
     {
+        DPRINT1("ConDrvGetConsoleMode: unsupported object type %u\n", Object->Type);
         Status = STATUS_INVALID_HANDLE;
     }
 
@@ -369,7 +440,11 @@ ConDrvSetConsoleMode(IN PCONSOLE Console,
     NTSTATUS Status = STATUS_SUCCESS;
 
     if (Console == NULL || Object == NULL)
+    {
+        DPRINT1("ConDrvSetConsoleMode: invalid parameter (Console=%p Object=%p)\n",
+                Console, Object);
         return STATUS_INVALID_PARAMETER;
+    }
 
     /* Validity check */
     ASSERT(Console == Object->Console);
@@ -381,6 +456,8 @@ ConDrvSetConsoleMode(IN PCONSOLE Console,
         /* Only the presence of valid mode flags is allowed */
         if (ConsoleMode & ~CONSOLE_VALID_INPUT_MODES)
         {
+            DPRINT1("ConDrvSetConsoleMode: rejecting input mode 0x%08lx (allowed 0x%08lx)\n",
+                    ConsoleMode, CONSOLE_VALID_INPUT_MODES);
             Status = STATUS_INVALID_PARAMETER;
         }
         else
@@ -395,6 +472,8 @@ ConDrvSetConsoleMode(IN PCONSOLE Console,
         /* Only the presence of valid mode flags is allowed */
         if (ConsoleMode & ~CONSOLE_VALID_OUTPUT_MODES)
         {
+            DPRINT1("ConDrvSetConsoleMode: rejecting output mode 0x%08lx (allowed 0x%08lx)\n",
+                    ConsoleMode, CONSOLE_VALID_OUTPUT_MODES);
             Status = STATUS_INVALID_PARAMETER;
         }
         else
@@ -413,7 +492,13 @@ ConDrvSetConsoleMode(IN PCONSOLE Console,
     }
     else
     {
+        DPRINT1("ConDrvSetConsoleMode: unsupported object type %u\n", Object->Type);
         Status = STATUS_INVALID_HANDLE;
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("ConDrvSetConsoleMode failed with status 0x%08lx\n", Status);
     }
 
     return Status;
@@ -425,7 +510,11 @@ ConDrvGetConsoleCP(IN PCONSOLE Console,
                    IN BOOLEAN OutputCP)
 {
     if (Console == NULL || CodePage == NULL)
+    {
+        DPRINT1("ConDrvGetConsoleCP: invalid parameter (Console=%p CodePage=%p)\n",
+                Console, CodePage);
         return STATUS_INVALID_PARAMETER;
+    }
 
     *CodePage = (OutputCP ? Console->OutputCodePage : Console->InputCodePage);
 
@@ -438,7 +527,11 @@ ConDrvSetConsoleCP(IN PCONSOLE Console,
                    IN BOOLEAN OutputCP)
 {
     if (Console == NULL || !IsValidCodePage(CodePage))
+    {
+        DPRINT1("ConDrvSetConsoleCP: invalid parameter (Console=%p CodePage=%u)\n",
+                Console, CodePage);
         return STATUS_INVALID_PARAMETER;
+    }
 
     if (OutputCP)
     {
