@@ -262,8 +262,20 @@ Quit:
                          &DesktopConsoleThreadInfo,
                          sizeof(DesktopConsoleThreadInfo));
 
-    /* Close the duplicated desktop handle */
-    CloseDesktop(DesktopConsoleThreadInfo.DesktopHandle); // NtUserCloseDesktop
+    /* Close the duplicated desktop handle unless it's the one we are using */
+    if (DesktopConsoleThreadInfo.DesktopHandle)
+    {
+        HDESK hCurrentDesktop = GetThreadDesktop(GetCurrentThreadId());
+
+        if (DesktopConsoleThreadInfo.DesktopHandle != hCurrentDesktop)
+        {
+            CloseDesktop(DesktopConsoleThreadInfo.DesktopHandle); // NtUserCloseDesktop
+        }
+        else
+        {
+            DPRINT("CONSRV: Skipping CloseDesktop on active desktop handle\n");
+        }
+    }
 
     /* Cleanup CSR thread */
     if (pcsrt)

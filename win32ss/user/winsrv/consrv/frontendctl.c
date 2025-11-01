@@ -276,7 +276,18 @@ GetThreadConsoleDesktop(
     /* Retrieve and lock the thread */
     Status = CsrLockThreadByClientId(ULongToHandle(ThreadId), &CsrThread);
     if (!NT_SUCCESS(Status))
+    {
+        /* Thread already went away; report success with NULL desktop */
+        if (Status == STATUS_INVALID_CID)
+        {
+            DPRINT("GetThreadConsoleDesktop: thread %lu vanished before lookup\n", (unsigned long)ThreadId);
+            return STATUS_SUCCESS;
+        }
+
+        DPRINT1("GetThreadConsoleDesktop: CsrLockThreadByClientId(%lu) failed with 0x%08lx\n",
+                (unsigned long)ThreadId, Status);
         return Status;
+    }
 
     ASSERT(CsrThread->Process);
 
@@ -286,7 +297,17 @@ GetThreadConsoleDesktop(
     CsrUnlockThread(CsrThread);
 
     if (!NT_SUCCESS(Status))
+    {
+        if (Status == STATUS_UNSUCCESSFUL || Status == STATUS_INVALID_HANDLE)
+        {
+            DPRINT("GetThreadConsoleDesktop: no console bound to thread %lu\n", (unsigned long)ThreadId);
+            return STATUS_SUCCESS;
+        }
+
+        DPRINT1("GetThreadConsoleDesktop: console lookup failed for thread %lu (status 0x%08lx)\n",
+                (unsigned long)ThreadId, Status);
         return Status;
+    }
 
     /* Retrieve the console desktop handle, and release the console */
     *ConsoleDesktop = TermGetThreadConsoleDesktop(Console);

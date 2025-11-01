@@ -146,7 +146,7 @@ CSR_API(SrvGetThreadConsoleDesktop)
 
     Status = GetThreadConsoleDesktop(GetThreadConsoleDesktopRequest->ThreadId,
                                      &GetThreadConsoleDesktopRequest->ConsoleDesktop);
-    if (!NT_SUCCESS(Status))
+    if (!NT_SUCCESS(Status) && Status != STATUS_INVALID_CID && Status != STATUS_UNSUCCESSFUL && Status != STATUS_INVALID_HANDLE)
     {
         DPRINT1("GetThreadConsoleDesktop(%lu) failed with Status 0x%08x\n",
                 GetThreadConsoleDesktopRequest->ThreadId, Status);
