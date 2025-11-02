@@ -10,6 +10,13 @@
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WARNING);
 
+/* Forward declarations for EDID helpers */
+static BOOLEAN UefiParseEdidPreferred(const UINT8* Edid, UINT32 Size, UINT32* OutW, UINT32* OutH);
+static BOOLEAN UefiGetPreferredResolutionFromEdid(UINT32* OutW, UINT32* OutH);
+static BOOLEAN UefiSelectBestModeByAspect(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
+                                          UINT32 targetW,
+                                          UINT32 targetH);
+
 #define CHAR_WIDTH  8
 #define CHAR_HEIGHT 16
 #define TOP_BOTTOM_LINES 0
@@ -31,11 +38,28 @@ UCHAR MachDefaultTextColor = COLOR_GRAY;
 REACTOS_INTERNAL_BGCONTEXT framebufferData;
 EFI_GUID EfiGraphicsOutputProtocol = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
 
+/* Minimal EDID protocol definitions (declared locally if headers are absent) */
+typedef struct _EFI_EDID_COMMON_PROTOCOL {
+    UINT32 SizeOfEdid;
+    UINT8* Edid;
+} EFI_EDID_COMMON_PROTOCOL;
+
+/* GUIDs for EDID protocols */
+static EFI_GUID EfiEdidDiscoveredProtocolGuid =
+    { 0x1c0c34f6, 0xd380, 0x41fa, {0xa0, 0x49, 0x8a, 0xd0, 0x6c, 0x1a, 0x66, 0xaa} };
+static EFI_GUID EfiEdidActiveProtocolGuid =
+    { 0xbd8c1056, 0x9f36, 0x44ec, {0x92, 0xa8, 0xa6, 0x33, 0x7f, 0x81, 0x79, 0x86} };
+
 static UINT32 ConsoleX = 0;
 static UINT32 ConsoleY = 0;
 static UINT32 MaxConsoleX = 0;
 static UINT32 MaxConsoleY = 0;
 static BOOLEAN GopConsoleInitialized = FALSE;
+
+/* GOP mode enumeration (exported to winldr) */
+PLOADER_PARAMETER_GOP_MODE UefiGopModes = NULL;
+ULONG UefiGopModeCount = 0;
+ULONG UefiGopPreferredMode = 0;
 
 /* FUNCTIONS ******************************************************************/
 
@@ -58,27 +82,85 @@ UefiInitializeVideo(VOID)
     TRACE("UEFI GOP: Protocol located successfully\n");
     TRACE("  MaxMode: %d\n", gop->Mode->MaxMode);
     TRACE("  Current Mode: %d\n", gop->Mode->Mode);
-    
-    CurrentInfo = gop->Mode->Info; /* Inspect firmware-provided mode but never change it. */
-    if (CurrentInfo && CurrentInfo->PixelFormat != PixelBltOnly)
+
+    /* Enumerate all GOP modes, cache minimal descriptors for the kernel */
+    if (gop->Mode->MaxMode > 0)
     {
-        TRACE("UEFI GOP: Firmware mode %d (%ux%u) kept intact\n",
-              gop->Mode->Mode,
-              CurrentInfo->HorizontalResolution,
-              CurrentInfo->VerticalResolution);
-    }
-    else
-    {
-        TRACE("UEFI GOP: Firmware mode lacks linear framebuffer; not changing resolution\n");
-        if (!CurrentInfo)
+        UINT32 i;
+        UefiGopModeCount = (ULONG)gop->Mode->MaxMode;
+        UefiGopPreferredMode = (ULONG)gop->Mode->Mode;
+        UefiGopModes = FrLdrHeapAlloc(sizeof(LOADER_PARAMETER_GOP_MODE) * UefiGopModeCount, 'MPOG');
+        if (UefiGopModes)
         {
-            UINTN InfoSize = 0;
-            EFI_STATUS ModeStatus = gop->QueryMode(gop, gop->Mode->Mode, &InfoSize, &CurrentInfo);
-            if (EFI_ERROR(ModeStatus))
+            RtlZeroMemory(UefiGopModes, sizeof(LOADER_PARAMETER_GOP_MODE) * UefiGopModeCount);
+            for (i = 0; i < UefiGopModeCount; ++i)
             {
-                TRACE("UEFI GOP: QueryMode failed (%d); aborting video init\n", ModeStatus);
-                return ModeStatus;
+                EFI_STATUS ModeStatus;
+                EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* Info = NULL;
+                UINTN InfoSize = 0;
+                ModeStatus = gop->QueryMode(gop, i, &InfoSize, &Info);
+                if (!EFI_ERROR(ModeStatus) && Info)
+                {
+                    UefiGopModes[i].HorizontalResolution = Info->HorizontalResolution;
+                    UefiGopModes[i].VerticalResolution = Info->VerticalResolution;
+                    UefiGopModes[i].PixelsPerScanLine = Info->PixelsPerScanLine;
+                    UefiGopModes[i].PixelFormat = Info->PixelFormat;
+                    if (Info->PixelFormat == PixelBitMask)
+                    {
+                        UefiGopModes[i].RedMask   = Info->PixelInformation.RedMask;
+                        UefiGopModes[i].GreenMask = Info->PixelInformation.GreenMask;
+                        UefiGopModes[i].BlueMask  = Info->PixelInformation.BlueMask;
+                    }
+                    else if (Info->PixelFormat == PixelRedGreenBlueReserved8BitPerColor)
+                    {
+                        UefiGopModes[i].RedMask = 0x000000FF;
+                        UefiGopModes[i].GreenMask = 0x0000FF00;
+                        UefiGopModes[i].BlueMask = 0x00FF0000;
+                    }
+                    else if (Info->PixelFormat == PixelBlueGreenRedReserved8BitPerColor)
+                    {
+                        UefiGopModes[i].RedMask = 0x00FF0000;
+                        UefiGopModes[i].GreenMask = 0x0000FF00;
+                        UefiGopModes[i].BlueMask = 0x000000FF;
+                    }
+                }
             }
+        }
+        else
+        {
+            UefiGopModeCount = 0;
+        }
+    }
+    
+    /* Try EDID-based preferred/native selection; else use aspect-matched best */
+    {
+        UINT32 prefW = 0, prefH = 0;
+        if (UefiGetPreferredResolutionFromEdid(&prefW, &prefH))
+        {
+            TRACE("UEFI EDID: Preferred/native %ux%u\n", prefW, prefH);
+            (void)UefiSelectBestModeByAspect(gop, prefW, prefH);
+        }
+        else
+        {
+            /* No EDID: use current firmware aspect to pick the highest resolution with closest aspect */
+            EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* CurInfo = gop->Mode->Info;
+            if (CurInfo && CurInfo->HorizontalResolution && CurInfo->VerticalResolution)
+            {
+                (void)UefiSelectBestModeByAspect(gop, CurInfo->HorizontalResolution, CurInfo->VerticalResolution);
+            }
+        }
+    }
+
+    /* Refresh current mode info after potential SetMode */
+    CurrentInfo = gop->Mode->Info;
+    if (!CurrentInfo)
+    {
+        UINTN InfoSize = 0;
+        EFI_STATUS ModeStatus = gop->QueryMode(gop, gop->Mode->Mode, &InfoSize, &CurrentInfo);
+        if (EFI_ERROR(ModeStatus))
+        {
+            TRACE("UEFI GOP: QueryMode failed (%d); aborting video init\n", ModeStatus);
+            return ModeStatus;
         }
     }
 
@@ -432,4 +514,110 @@ BOOLEAN
 UefiGopConsoleIsInitialized(VOID)
 {
     return GopConsoleInitialized && (framebufferData.BaseAddress != 0);
+}
+
+/*
+ * Select a GOP video mode whose aspect ratio is closest to targetW:targetH.
+ * On ties, prefer the mode with the larger pixel area. Skip PixelBltOnly modes.
+ * Returns TRUE on success (or when already in the best mode), FALSE otherwise.
+ */
+static BOOLEAN
+UefiSelectBestModeByAspect(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
+                           UINT32 targetW,
+                           UINT32 targetH)
+{
+    UINT32 i;
+    UINT32 bestIndex = gop->Mode->Mode;
+    BOOLEAN found = FALSE;
+    UINT64 bestScore = ~0ULL; /* smaller is better */
+    UINT64 targetRatio = (targetH != 0) ? ((UINT64)targetW * 100000ULL) / (UINT64)targetH : 0ULL;
+
+    if (!gop || !gop->Mode || gop->Mode->MaxMode == 0)
+        return FALSE;
+
+    for (i = 0; i < (UINT32)gop->Mode->MaxMode; ++i)
+    {
+        EFI_STATUS st;
+        EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* info = NULL;
+        UINTN infoSize = 0;
+
+        st = gop->QueryMode(gop, i, &infoSize, &info);
+        if (EFI_ERROR(st) || !info)
+            continue;
+        if (info->PixelFormat == PixelBltOnly)
+            continue; /* no linear framebuffer */
+        if (info->HorizontalResolution == 0 || info->VerticalResolution == 0)
+            continue;
+
+        /* Score by aspect closeness then by larger area */
+        UINT32 w = info->HorizontalResolution;
+        UINT32 h = info->VerticalResolution;
+        UINT64 modeRatio = ((UINT64)w * 100000ULL) / (UINT64)h;
+        UINT64 aspectDelta = (modeRatio > targetRatio) ? (modeRatio - targetRatio) : (targetRatio - modeRatio);
+        UINT64 area = (UINT64)w * (UINT64)h;
+        UINT64 score = (aspectDelta << 32) | (0xFFFFFFFFULL - (UINT64)(area & 0xFFFFFFFFULL));
+
+        if (!found || score < bestScore)
+        {
+            bestScore = score;
+            bestIndex = i;
+            found = TRUE;
+        }
+    }
+
+    if (!found)
+        return FALSE;
+
+    if (bestIndex == (UINT32)gop->Mode->Mode)
+        return TRUE; /* already in best mode */
+
+    if (EFI_ERROR(gop->SetMode(gop, bestIndex)))
+        return FALSE;
+
+    return TRUE;
+}
+static BOOLEAN
+UefiParseEdidPreferred(const UINT8* Edid, UINT32 Size, UINT32* OutW, UINT32* OutH)
+{
+    const UINT8 Header[8] = {0x00,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x00};
+    if (!Edid || Size < 128 || !OutW || !OutH) return FALSE;
+    if (memcmp(Edid, Header, 8) != 0) return FALSE;
+
+    /* First detailed timing descriptor at offset 54 */
+    const UINT8* dtd = Edid + 54;
+    UINT16 pclk = (UINT16)dtd[0] | ((UINT16)dtd[1] << 8);
+    if (pclk == 0) return FALSE; /* no timing here */
+
+    UINT32 ha = dtd[2] | ((UINT32)(dtd[4] & 0xF0) << 4);
+    UINT32 va = dtd[5] | ((UINT32)(dtd[7] & 0xF0) << 4);
+    if (ha == 0 || va == 0) return FALSE;
+    *OutW = ha;
+    *OutH = va;
+    return TRUE;
+}
+
+static BOOLEAN
+UefiGetPreferredResolutionFromEdid(UINT32* OutW, UINT32* OutH)
+{
+    EFI_STATUS Status;
+    EFI_EDID_COMMON_PROTOCOL* EdidProto = NULL;
+    if (!OutW || !OutH) return FALSE;
+
+    /* Try Active EDID first */
+    Status = GlobalSystemTable->BootServices->LocateProtocol(&EfiEdidActiveProtocolGuid, 0, (void**)&EdidProto);
+    if (!EFI_ERROR(Status) && EdidProto && EdidProto->Edid && EdidProto->SizeOfEdid >= 128)
+    {
+        if (UefiParseEdidPreferred(EdidProto->Edid, EdidProto->SizeOfEdid, OutW, OutH))
+            return TRUE;
+    }
+
+    /* Fallback to Discovered EDID */
+    EdidProto = NULL;
+    Status = GlobalSystemTable->BootServices->LocateProtocol(&EfiEdidDiscoveredProtocolGuid, 0, (void**)&EdidProto);
+    if (!EFI_ERROR(Status) && EdidProto && EdidProto->Edid && EdidProto->SizeOfEdid >= 128)
+    {
+        if (UefiParseEdidPreferred(EdidProto->Edid, EdidProto->SizeOfEdid, OutW, OutH))
+            return TRUE;
+    }
+    return FALSE;
 }
