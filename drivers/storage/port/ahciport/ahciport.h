@@ -122,6 +122,7 @@ typedef struct _AHCI_HBA_MEM {
 /* PxSSTS values */
 #define AHCI_PxSSTS_DET_MASK    0x0000000F
 #define AHCI_PxSSTS_DET_PRESENT 0x00000003
+#define AHCI_PxSSTS_DET_NO_DEVICE 0x00000000
 #define AHCI_PxSSTS_SPD_MASK    0x000000F0
 #define AHCI_PxSSTS_IPM_MASK    0x00000F00
 #define AHCI_PxSSTS_IPM_ACTIVE  0x00000100
@@ -226,6 +227,16 @@ AhciIsPortDevicePresent(_In_ PAHCI_ADAPTER_EXTENSION Adapter, _In_ ULONG Port)
 }
 
 #define AHCI_ALIGN_UP(Value, Align)   (((Value) + ((Align) - 1)) & ~((Align) - 1))
+
+/* Alignment requirements from AHCI specification */
+#define AHCI_CMD_LIST_ALIGN       1024  /* CLB must be 1K aligned */
+#define AHCI_RECEIVED_FIS_ALIGN    256  /* FB must be 256-byte aligned */
+#define AHCI_CMD_TABLE_ALIGN       128  /* Command table must be 128-byte aligned */
+#define AHCI_IDENTIFY_ALIGN        512  /* Identify data buffer alignment */
+
+/* AHCI device signatures (PxSIG) */
+#define AHCI_SIGNATURE_SATA       0x00000101
+#define AHCI_SIGNATURE_ATAPI      0xEB140101
 
 
 typedef struct _AHCI_SRB_EXTENSION {

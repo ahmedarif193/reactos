@@ -8,11 +8,16 @@
 
 #define AHCI_CMD_SLOT                0
 #define AHCI_DEFAULT_SECTOR_SIZE     512
+#define AHCI_DEFAULT_PACKET_SECTOR   2048
 #define AHCI_MAX_TRANSFER_LENGTH     (1024 * 1024)
 #define AHCI_COMMAND_TIMEOUT_US      (5 * 1000 * 1000)
 #define AHCI_RESET_TIMEOUT_US        (500 * 1000)
+#define AHCI_NO_DEVICE_DEBOUNCE_US   (100 * 1000)
 #define AHCI_TASKFILE_TIMEOUT_US     (500 * 1000)
 #define AHCI_COMRESET_DELAY_US       1000
+
+#define AHCI_ALIGN_PTR(Ptr, Alignment) \
+    ((PUCHAR)(((ULONG_PTR)(Ptr) + ((Alignment) - 1)) & ~((ULONG_PTR)(Alignment) - 1)))
 
 #ifdef AHCI_USE_STORPORT
 #ifndef STOR_STATUS_SUCCESS
@@ -44,6 +49,19 @@ AhciFinishRequest(
     ScsiPortNotification(NextRequest, Adapter, 0);
 }
 #endif
+
+static BOOLEAN
+AhciIssuePacketCommand(
+    _In_ PAHCI_ADAPTER_EXTENSION Adapter,
+    _In_ ULONG Port,
+    _In_opt_ PSCSI_REQUEST_BLOCK Srb,
+    _In_reads_bytes_(CdbLength) PUCHAR Cdb,
+    _In_ ULONG CdbLength,
+    _In_ BOOLEAN DataOut,
+    _In_opt_ PVOID Buffer,
+    _In_ ULONG Length,
+    _Out_opt_ PULONG BytesTransferred,
+    _Out_opt_ PBOOLEAN TaskfileError);
 
 #ifdef AHCI_USE_STORPORT
 static BOOLEAN
@@ -297,6 +315,47 @@ AhciWaitForPortSet(
 }
 
 static BOOLEAN
+AhciWaitForPortDevicePresence(
+    _In_ PAHCI_ADAPTER_EXTENSION Adapter,
+    _In_ ULONG Port,
+    _In_ ULONG TimeoutUs,
+    _Out_ PBOOLEAN DeviceAbsent)
+{
+    volatile ULONG *reg = AhciPortRegPtr(Adapter, Port, AHCI_PxSSTS);
+    ULONG iterations = (TimeoutUs / 10) + 1;
+    ULONG absentStableUs = 0;
+
+    *DeviceAbsent = FALSE;
+
+    while (iterations--)
+    {
+        ULONG value = AHCI_READ_REG32(Adapter, reg);
+        ULONG det = value & AHCI_PxSSTS_DET_MASK;
+
+        if (det == AHCI_PxSSTS_DET_PRESENT)
+            return TRUE;
+
+        if (det == AHCI_PxSSTS_DET_NO_DEVICE && (value & AHCI_PxSSTS_SPD_MASK) == 0)
+        {
+            absentStableUs += 10;
+            if (absentStableUs >= AHCI_NO_DEVICE_DEBOUNCE_US)
+            {
+                *DeviceAbsent = TRUE;
+                return FALSE;
+            }
+        }
+        else
+        {
+            absentStableUs = 0;
+        }
+
+        ScsiPortStallExecution(10);
+    }
+
+    return FALSE;
+}
+
+static BOOLEAN
 AhciWaitForPortMaskAny(
     _In_ PAHCI_ADAPTER_EXTENSION Adapter,
     _In_ ULONG Port,
@@ -344,6 +403,19 @@ AhciDumpPortState(
               serr,
               is,
               ci);
+
+    AHCI_TRACE_PRINT("ahciport: Port %lu state%s%s%s SSTS=0x%08lx SCTL=0x%08lx CMD=0x%08lx TFD=0x%08lx SERR=0x%08lx IS=0x%08lx CI=0x%08lx\n",
+             Port,
+             Reason ? " (" : "",
+             Reason ? Reason : "",
+             Reason ? ")" : "",
+             ssts,
+             sctl,
+             cmd,
+             tfd,
+             serr,
+             is,
+             ci);
 }
 
 static BOOLEAN
@@ -393,6 +465,106 @@ AhciRecordSense(
     Port->SenseValid = TRUE;
 }
 
+static VOID
+AhciStoreSenseData(
+    _Inout_ PAHCI_PORT_CONTEXT Port,
+    _In_reads_bytes_(Length) PSENSE_DATA Sense,
+    _In_ ULONG Length)
+{
+    ULONG copyLength;
+
+    RtlZeroMemory(&Port->SenseData, sizeof(SENSE_DATA));
+
+    if (Sense == NULL || Length == 0)
+    {
+        Port->SenseData.ErrorCode = 0x70;
+        Port->SenseValid = TRUE;
+        return;
+    }
+
+    copyLength = (Length < sizeof(SENSE_DATA)) ? Length : sizeof(SENSE_DATA);
+    RtlCopyMemory(&Port->SenseData, Sense, copyLength);
+
+    if (copyLength < sizeof(SENSE_DATA))
+    {
+        ULONG offset = offsetof(SENSE_DATA, AdditionalSenseCode);
+
+        Port->SenseData.ErrorCode = 0x70;
+        if (copyLength > offset)
+        {
+            ULONG additional = copyLength - offset;
+            Port->SenseData.AdditionalSenseLength = (additional > 0xFF) ? 0xFF : (UCHAR)additional;
+        }
+    }
+
+    Port->SenseValid = TRUE;
+}
+
+static VOID
+AhciCopySenseToSrb(
+    _Inout_ PSCSI_REQUEST_BLOCK Srb,
+    _In_reads_bytes_(Length) PSENSE_DATA Sense,
+    _In_ ULONG Length)
+{
+    if (Srb == NULL || Sense == NULL || Length == 0)
+        return;
+
+    if (Srb->SenseInfoBuffer != NULL && Srb->SenseInfoBufferLength != 0)
+    {
+        ULONG copy = Srb->SenseInfoBufferLength;
+        if (copy > Length)
+            copy = Length;
+        RtlCopyMemory(Srb->SenseInfoBuffer, Sense, copy);
+    }
+}
+
+static BOOLEAN
+AhciPerformPacketRequestSense(
+    _In_ PAHCI_ADAPTER_EXTENSION Adapter,
+    _In_ ULONG Port,
+    _Out_writes_bytes_(SenseBufferLength) PSENSE_DATA SenseBuffer,
+    _Inout_ PULONG SenseBufferLength)
+{
+    ULONG allocation;
+    UCHAR senseCdb[12] = {0};
+    ULONG bytesTransferred = 0;
+    BOOLEAN taskfileError = FALSE;
+
+    if (SenseBuffer == NULL || SenseBufferLength == NULL || *SenseBufferLength == 0)
+        return FALSE;
+
+    allocation = *SenseBufferLength;
+    if (allocation == 0)
+        allocation = sizeof(SENSE_DATA);
+    if (allocation > 0xFF)
+        allocation = 0xFF;
+
+    RtlZeroMemory(SenseBuffer, allocation);
+
+    senseCdb[0] = SCSIOP_REQUEST_SENSE;
+    senseCdb[4] = (UCHAR)allocation;
+
+    if (!AhciIssuePacketCommand(Adapter,
+                                Port,
+                                NULL,
+                                senseCdb,
+                                sizeof(senseCdb),
+                                FALSE,
+                                SenseBuffer,
+                                allocation,
+                                &bytesTransferred,
+                                &taskfileError))
+    {
+        return FALSE;
+    }
+
+    if (bytesTransferred == 0 || bytesTransferred > allocation)
+        bytesTransferred = allocation;
+
+    *SenseBufferLength = bytesTransferred;
+    return TRUE;
+}
+
 static BOOLEAN
 AhciStopPort(
     _In_ PAHCI_ADAPTER_EXTENSION Adapter,
@@ -428,6 +600,7 @@ AhciResetPort(
 {
     PAHCI_PORT_CONTEXT port = &Adapter->Ports[Port];
     ULONG sctl;
+    BOOLEAN deviceAbsent = FALSE;
 
     if (!AhciStopPort(Adapter, Port))
         return FALSE;
@@ -439,8 +612,18 @@ AhciResetPort(
     ScsiPortStallExecution(AHCI_COMRESET_DELAY_US);
     AhciWritePort(Adapter, Port, AHCI_PxSCTL, sctl | AHCI_PxSCTL_DET_NONE);
 
-    if (!AhciWaitForPortSet(Adapter, Port, AHCI_PxSSTS, AHCI_PxSSTS_DET_MASK, AHCI_PxSSTS_DET_PRESENT, AHCI_RESET_TIMEOUT_US))
+    if (!AhciWaitForPortDevicePresence(Adapter, Port, AHCI_RESET_TIMEOUT_US, &deviceAbsent))
     {
+        if (deviceAbsent)
+        {
+            AHCI_TRACE("ResetPort: port %lu reports no device present after COMRESET", Port);
+            AhciWritePort(Adapter, Port, AHCI_PxIS, 0xFFFFFFFF);
+            AhciWritePort(Adapter, Port, AHCI_PxSERR, 0xFFFFFFFF);
+            AhciWritePort(Adapter, Port, AHCI_PxSACT, 0);
+            AhciWritePort(Adapter, Port, AHCI_PxCI, 0);
+            return TRUE;
+        }
+
         AhciDumpPortState(Adapter, Port, "reset wait DET");
         return FALSE;
     }
@@ -593,7 +776,14 @@ AhciBuildPrdt(
     return entry;
 }
 
-static BOOLEAN
+typedef enum _AHCI_CMD_STATUS
+{
+    AhciCmdStatusSuccess,
+    AhciCmdStatusError,
+    AhciCmdStatusTimeout
+} AHCI_CMD_STATUS;
+
+static AHCI_CMD_STATUS
 AhciWaitForCommandComplete(
     _In_ PAHCI_ADAPTER_EXTENSION Adapter,
     _In_ ULONG Port,
@@ -609,23 +799,23 @@ AhciWaitForCommandComplete(
         ULONG ci = AHCI_READ_REG32(Adapter, pxci);
         ULONG is = AHCI_READ_REG32(Adapter, pxis);
 
-        if ((ci & SlotMask) == 0)
-        {
-            if (is)
-                AhciWritePort(Adapter, Port, AHCI_PxIS, is);
-            return TRUE;
-        }
-
-        if (is & (AHCI_PxIS_TFES | AHCI_PxIS_HBFS | AHCI_PxIS_HBDS))
+        if (is)
         {
             AhciWritePort(Adapter, Port, AHCI_PxIS, is);
-            return FALSE;
+
+            if (is & (AHCI_PxIS_TFES | AHCI_PxIS_HBFS | AHCI_PxIS_HBDS))
+            {
+                return AhciCmdStatusError;
+            }
         }
+
+        if ((ci & SlotMask) == 0)
+            return AhciCmdStatusSuccess;
 
         ScsiPortStallExecution(50);
     }
 
-    return FALSE;
+    return AhciCmdStatusTimeout;
 }
 
 static BOOLEAN
@@ -724,28 +914,213 @@ AhciIssueAtaCommand(
 
     AhciWritePort(Adapter, Port, AHCI_PxCI, slotMask);
 
-    if (!AhciWaitForCommandComplete(Adapter, Port, slotMask, AHCI_COMMAND_TIMEOUT_US))
     {
+        AHCI_CMD_STATUS cmdStatus = AhciWaitForCommandComplete(Adapter, Port, slotMask, AHCI_COMMAND_TIMEOUT_US);
+
+        if (cmdStatus == AhciCmdStatusTimeout)
+        {
+            port->Busy = FALSE;
+            AHCI_ERROR("IssueAta: command timeout (op=0x%02x) on port %lu", Command, Port);
+            AhciDumpPortState(Adapter, Port, "command timeout");
+            if (!AhciStopPort(Adapter, Port))
+                AHCI_ERROR("IssueAta: soft stop failed after timeout on port %lu", Port);
+            else
+                AhciDumpPortState(Adapter, Port, "after stop");
+            return FALSE;
+        }
+
+        tfd = AhciReadPort(Adapter, Port, AHCI_PxTFD);
         port->Busy = FALSE;
-        AHCI_ERROR("IssueAta: command timeout (op=0x%02x) on port %lu", Command, Port);
-        AhciDumpPortState(Adapter, Port, "command timeout");
-        if (!AhciStopPort(Adapter, Port))
-            AHCI_ERROR("IssueAta: soft stop failed after timeout on port %lu", Port);
-        else
-            AhciDumpPortState(Adapter, Port, "after stop");
-        return FALSE;
+
+        if (cmdStatus == AhciCmdStatusError || (tfd & AHCI_TFD_STS_ERR))
+        {
+            AHCI_WARN("IssueAta: taskfile error (TFD=0x%08lx) on port %lu", tfd, Port);
+            AhciDumpPortState(Adapter, Port, "taskfile error");
+            return FALSE;
+        }
     }
 
-    tfd = AhciReadPort(Adapter, Port, AHCI_PxTFD);
-    port->Busy = FALSE;
+    Adapter->AbBase->IS = (1u << Port);
+    return TRUE;
+}
 
-    if (tfd & AHCI_TFD_STS_ERR)
+static BOOLEAN
+AhciIssuePacketCommand(
+    _In_ PAHCI_ADAPTER_EXTENSION Adapter,
+    _In_ ULONG Port,
+    _In_opt_ PSCSI_REQUEST_BLOCK Srb,
+    _In_reads_bytes_(CdbLength) PUCHAR Cdb,
+    _In_ ULONG CdbLength,
+    _In_ BOOLEAN DataOut,
+    _In_opt_ PVOID Buffer,
+    _In_ ULONG Length,
+    _Out_opt_ PULONG BytesTransferred,
+    _Out_opt_ PBOOLEAN TaskfileError)
+{
+    PAHCI_PORT_CONTEXT port = &Adapter->Ports[Port];
+    PAHCI_CMD_HEADER header;
+    PAHCI_CMD_TABLE table;
+    ULONG slotMask = 1u << AHCI_CMD_SLOT;
+    ULONG byteCount;
+    ULONG prdtEntries = 0;
+    BOOLEAN requestErrored = FALSE;
+
+    if (TaskfileError)
+        *TaskfileError = FALSE;
+
+    if (Cdb == NULL || CdbLength == 0)
+        return FALSE;
+
+    if (Length != 0 && Buffer == NULL)
+        return FALSE;
+
+    if (port->CommandList == NULL || port->CommandTable == NULL)
     {
-        AHCI_WARN("IssueAta: taskfile error (TFD=0x%08lx) on port %lu", tfd, Port);
-        AhciDumpPortState(Adapter, Port, "taskfile error");
+        AHCI_ERROR("IssuePacket: missing buffers for port %lu", Port);
         return FALSE;
     }
 
+    if (!AhciWaitForTaskfileReady(Adapter, Port, AHCI_TFD_STS_BSY | AHCI_TFD_STS_DRQ, AHCI_TASKFILE_TIMEOUT_US))
+    {
+        AHCI_ERROR("IssuePacket: taskfile busy timeout on port %lu", Port);
+        AhciDumpPortState(Adapter, Port, "packet taskfile busy");
+        return FALSE;
+    }
+
+    header = &port->CommandList[AHCI_CMD_SLOT];
+    table = port->CommandTable;
+
+    RtlZeroMemory(header, sizeof(AHCI_CMD_HEADER));
+    RtlZeroMemory(table, AHCI_CMD_TABLE_ALLOC_SIZE);
+
+    if (Length)
+    {
+        prdtEntries = AhciBuildPrdt(Adapter, Srb, Buffer, Length, table->PRDT, AHCI_MAX_PRDT_ENTRIES);
+        if (prdtEntries == 0)
+        {
+            AHCI_ERROR("IssuePacket: PRDT build failed (Length=%lu) on port %lu", Length, Port);
+            return FALSE;
+        }
+    }
+
+    header->Flags = (5 & AHCI_CMDH_CFL_MASK) | AHCI_CMDH_A;
+    if (DataOut)
+        header->Flags |= AHCI_CMDH_W;
+    header->PRDTL = (USHORT)prdtEntries;
+    header->PRDBC = 0;
+    header->CTBA = port->CommandTablePhys.LowPart;
+    header->CTBAU = port->CommandTablePhys.HighPart;
+
+    {
+        UCHAR *fis = table->CFIS;
+
+        RtlZeroMemory(fis, 64);
+        fis[0] = AHCI_FIS_TYPE_REG_H2D;
+        fis[1] = 1 << 7;
+        fis[2] = 0xA0; /* PACKET command */
+        fis[7] = 0x40; /* device register: LBA mode */
+
+        if (Length == 0)
+        {
+            byteCount = 0;
+        }
+        else
+        {
+            ULONG wordCount = (Length + 1) >> 1; /* ATAPI byte count is in words */
+            if (wordCount > 0xFFFF)
+                wordCount = 0xFFFF;
+            byteCount = wordCount;
+        }
+
+        fis[5] = (UCHAR)(byteCount & 0xFF);       /* Cylinder Low / LBA Mid */
+        fis[6] = (UCHAR)((byteCount >> 8) & 0xFF);/* Cylinder High / LBA High */
+        fis[9] = 0;   /* Upper byte count */
+        fis[10] = 0;
+        fis[12] = 0;  /* Sector count */
+        fis[13] = 0;
+    }
+
+    {
+        UCHAR acmd[16] = {0};
+        ULONG packetLength = (CdbLength > sizeof(acmd)) ? sizeof(acmd) : CdbLength;
+
+        RtlCopyMemory(acmd, Cdb, packetLength);
+        RtlCopyMemory(table->ACMD, acmd, sizeof(acmd));
+    }
+
+    AhciWritePort(Adapter, Port, AHCI_PxIS, 0xFFFFFFFF);
+    AhciWritePort(Adapter, Port, AHCI_PxSERR, 0xFFFFFFFF);
+
+    {
+        ULONG ci = AhciReadPort(Adapter, Port, AHCI_PxCI);
+        if (ci & slotMask)
+        {
+            AHCI_WARN("IssuePacket: slot busy (CI=0x%08lx) on port %lu", ci, Port);
+            return FALSE;
+        }
+    }
+
+    port->Busy = TRUE;
+
+    AhciWritePort(Adapter, Port, AHCI_PxCI, slotMask);
+
+    {
+        AHCI_CMD_STATUS cmdStatus = AhciWaitForCommandComplete(Adapter, Port, slotMask, AHCI_COMMAND_TIMEOUT_US);
+
+        if (cmdStatus == AhciCmdStatusTimeout)
+        {
+            port->Busy = FALSE;
+            AHCI_ERROR("IssuePacket: command timeout on port %lu", Port);
+            AhciDumpPortState(Adapter, Port, "packet command timeout");
+            if (!AhciStopPort(Adapter, Port))
+                AHCI_ERROR("IssuePacket: soft stop failed after timeout on port %lu", Port);
+            else
+                AhciDumpPortState(Adapter, Port, "packet after stop");
+            return FALSE;
+        }
+
+        {
+            ULONG tfd = AhciReadPort(Adapter, Port, AHCI_PxTFD);
+
+            AHCI_TRACE_PRINT("ahciport: Port %lu packet completion TFD=0x%08lx\n",
+                             Port,
+                             tfd);
+
+            if (cmdStatus == AhciCmdStatusError || (tfd & AHCI_TFD_STS_ERR))
+            {
+                requestErrored = TRUE;
+
+                if (TaskfileError != NULL)
+                {
+                    *TaskfileError = TRUE;
+                }
+                else
+                {
+                    AhciDumpPortState(Adapter, Port, "packet taskfile error");
+                    port->Busy = FALSE;
+                    Adapter->AbBase->IS = (1u << Port);
+                    return FALSE;
+                }
+            }
+        }
+    }
+
+    if (BytesTransferred != NULL)
+    {
+        ULONG transferred = header->PRDBC;
+        if (requestErrored)
+        {
+            transferred = 0;
+        }
+        else if (transferred == 0 && Length != 0 && (port->Atapi || !DataOut))
+        {
+            /* Some controllers leave PRDBC zero for PIO; fall back to caller length */
+            transferred = Length;
+        }
+        *BytesTransferred = transferred;
+    }
+
+    port->Busy = FALSE;
     Adapter->AbBase->IS = (1u << Port);
     return TRUE;
 }
@@ -786,12 +1161,44 @@ AhciIdentifyDevice(
     if (sectors == 0)
         return FALSE;
 
-    port->SectorSize = AHCI_DEFAULT_SECTOR_SIZE;
+    if (!port->Atapi)
+        port->SectorSize = AHCI_DEFAULT_SECTOR_SIZE;
     port->SectorCount = sectors;
     port->Present = TRUE;
     port->Atapi = FALSE;
     AhciClearSense(port);
     AHCI_TRACE("Port %lu: IDENTIFY reports %llu sectors", Port, sectors);
+    return TRUE;
+}
+
+static BOOLEAN
+AhciIdentifyPacketDevice(
+    _In_ PAHCI_ADAPTER_EXTENSION Adapter,
+    _In_ ULONG Port)
+{
+    PAHCI_PORT_CONTEXT port = &Adapter->Ports[Port];
+    USHORT *id;
+
+    if (port->IdentifyBuffer == NULL)
+        return FALSE;
+
+    RtlZeroMemory(port->IdentifyBuffer, 512);
+
+    if (!AhciIssueAtaCommand(Adapter, Port, NULL, 0xA1, 0, 1, FALSE, port->IdentifyBuffer, 512))
+    {
+        AHCI_WARN("IDENTIFY PACKET DEVICE command failed on port %lu", Port);
+        return FALSE;
+    }
+
+    id = (USHORT *)port->IdentifyBuffer;
+
+    port->SectorSize = AHCI_DEFAULT_PACKET_SECTOR;
+    port->SectorCount = 0;
+    port->Present = TRUE;
+    port->Atapi = TRUE;
+    AhciClearSense(port);
+
+    AHCI_TRACE("Port %lu: IDENTIFY PACKET device detected (Config=0x%04x)", Port, id[0]);
     return TRUE;
 }
 
@@ -885,6 +1292,214 @@ AhciReadWriteSectors(
 }
 
 static BOOLEAN
+AhciHandleExecuteScsiPacket(
+    _In_ PAHCI_ADAPTER_EXTENSION Adapter,
+    _In_ ULONG PortNumber,
+    _Inout_ PSCSI_REQUEST_BLOCK Srb)
+{
+    PAHCI_PORT_CONTEXT port = &Adapter->Ports[PortNumber];
+    PVOID dataBuffer = AhciGetSrbDataBuffer(Adapter, Srb);
+    ULONG transferLength = Srb->DataTransferLength;
+    BOOLEAN dataOut = (Srb->SrbFlags & SRB_FLAGS_DATA_OUT) != 0;
+    BOOLEAN dataIn = (Srb->SrbFlags & SRB_FLAGS_DATA_IN) != 0;
+
+    if (transferLength != 0 && dataBuffer == NULL)
+    {
+        Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+        return TRUE;
+    }
+
+    if (!dataOut && !dataIn && transferLength != 0)
+    {
+        dataIn = TRUE;
+    }
+
+    if (Srb->Cdb[0] == SCSIOP_GET_CONFIGURATION)
+    {
+        PUCHAR buffer = (PUCHAR)dataBuffer;
+        ULONG responseLength = (transferLength < 16) ? transferLength : 16;
+
+        if (buffer == NULL || transferLength == 0)
+        {
+            Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+            return TRUE;
+        }
+
+        RtlZeroMemory(buffer, transferLength);
+
+        if (responseLength >= 8)
+        {
+            ULONG dataLength = (responseLength >= 8) ? (responseLength - 4) : 0;
+
+            buffer[0] = (UCHAR)((dataLength >> 24) & 0xFF);
+            buffer[1] = (UCHAR)((dataLength >> 16) & 0xFF);
+            buffer[2] = (UCHAR)((dataLength >> 8) & 0xFF);
+            buffer[3] = (UCHAR)(dataLength & 0xFF);
+
+            buffer[6] = 0x00;
+            buffer[7] = 0x08; /* Current profile: CD-ROM */
+        }
+
+        if (responseLength >= 16)
+        {
+            PUCHAR feature = buffer + 8;
+
+            feature[0] = 0x00;
+            feature[1] = 0x08; /* Profile list feature */
+            feature[2] = 0x00; /* Current, Version 0 */
+            feature[3] = 0x02; /* Additional length */
+            feature[4] = 0x00;
+            feature[5] = 0x08; /* Profile: CD-ROM */
+            feature[6] = 0x00;
+            feature[7] = 0x00;
+        }
+
+        Srb->DataTransferLength = responseLength;
+        Srb->SrbStatus = SRB_STATUS_SUCCESS;
+        Srb->ScsiStatus = SCSISTAT_GOOD;
+        AhciClearSense(port);
+        return TRUE;
+    }
+
+    if (Srb->Cdb[0] == SCSIOP_INQUIRY)
+    {
+        ULONG length = Srb->DataTransferLength;
+        PUCHAR inquiry;
+        const ULONG minimumLength = 36;
+
+        if (dataBuffer == NULL || length < minimumLength)
+        {
+            Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+            return TRUE;
+        }
+
+        RtlZeroMemory(dataBuffer, length);
+        inquiry = (PUCHAR)dataBuffer;
+
+        inquiry[0] = READ_ONLY_DIRECT_ACCESS_DEVICE;
+        inquiry[1] = 0x80; /* Removable */
+        inquiry[2] = 5;    /* SPC-3 */
+        inquiry[3] = 2;    /* Response data format */
+        inquiry[4] = 0x1F; /* Additional length */
+
+        RtlCopyMemory(&inquiry[8], "ReactOS ", 8);
+        RtlCopyMemory(&inquiry[16], "AHCI Optical     ", 16);
+        RtlCopyMemory(&inquiry[32], "0001", 4);
+
+        AhciClearSense(port);
+        Srb->SrbStatus = SRB_STATUS_SUCCESS;
+        Srb->ScsiStatus = SCSISTAT_GOOD;
+        Srb->DataTransferLength = (length < minimumLength) ? length : minimumLength;
+        return TRUE;
+    }
+
+    if (Srb->Cdb[0] == SCSIOP_REQUEST_SENSE)
+    {
+        PSENSE_DATA sense = (PSENSE_DATA)dataBuffer;
+        ULONG length = Srb->DataTransferLength;
+
+        if (sense == NULL || length < sizeof(SENSE_DATA))
+        {
+            Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+            return TRUE;
+        }
+
+        if (port->SenseValid)
+        {
+            ULONG used = (length < sizeof(SENSE_DATA)) ? length : sizeof(SENSE_DATA);
+            RtlCopyMemory(sense, &port->SenseData, used);
+            port->SenseValid = FALSE;
+        }
+        else
+        {
+            ULONG used = (length < sizeof(SENSE_DATA)) ? length : sizeof(SENSE_DATA);
+            RtlZeroMemory(sense, used);
+            sense->ErrorCode = 0x70;
+        }
+
+        Srb->SrbStatus = SRB_STATUS_SUCCESS;
+        Srb->ScsiStatus = SCSISTAT_GOOD;
+        Srb->DataTransferLength = (length < sizeof(SENSE_DATA)) ? length : sizeof(SENSE_DATA);
+        return TRUE;
+    }
+
+    {
+        ULONG bytesTransferred = 0;
+
+        BOOLEAN taskfileError = FALSE;
+
+        if (!AhciIssuePacketCommand(Adapter,
+                                     PortNumber,
+                                     Srb,
+                                     Srb->Cdb,
+                                     Srb->CdbLength,
+                                     dataOut,
+                                     dataBuffer,
+                                     transferLength,
+                                     &bytesTransferred,
+                                     &taskfileError))
+        {
+            ULONG senseLength = sizeof(SENSE_DATA);
+
+            RtlZeroMemory(&port->SenseData, sizeof(SENSE_DATA));
+            port->SenseData.ErrorCode = 0x70;
+            port->SenseData.Valid = 1;
+            port->SenseData.SenseKey = SCSI_SENSE_HARDWARE_ERROR;
+            port->SenseData.AdditionalSenseCode = SCSI_ADSENSE_NO_SENSE;
+            port->SenseData.AdditionalSenseCodeQualifier = 0;
+            port->SenseData.AdditionalSenseLength = (UCHAR)(senseLength - 8);
+            port->SenseValid = TRUE;
+
+            Srb->SrbStatus = SRB_STATUS_ERROR;
+            Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
+            return TRUE;
+        }
+
+        if (taskfileError)
+        {
+            SENSE_DATA senseData;
+            ULONG senseLength = sizeof(SENSE_DATA);
+
+            if (AhciPerformPacketRequestSense(Adapter, PortNumber, &senseData, &senseLength))
+            {
+                AhciStoreSenseData(port, &senseData, senseLength);
+                AhciCopySenseToSrb(Srb, &senseData, senseLength);
+                Srb->SrbStatus = SRB_STATUS_AUTOSENSE_VALID | SRB_STATUS_ERROR;
+                Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
+            }
+            else
+            {
+                AhciRecordSense(port, SCSI_SENSE_HARDWARE_ERROR, SCSI_ADSENSE_NO_SENSE, 0);
+                AhciCopySenseToSrb(Srb, &port->SenseData, sizeof(SENSE_DATA));
+                Srb->SrbStatus = SRB_STATUS_ERROR;
+                Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
+            }
+
+            Srb->DataTransferLength = 0;
+            return TRUE;
+        }
+
+        if (dataIn)
+        {
+            if (bytesTransferred != 0 && bytesTransferred < transferLength)
+                Srb->DataTransferLength = bytesTransferred;
+            else
+                Srb->DataTransferLength = transferLength;
+        }
+        else if (!dataOut)
+        {
+            Srb->DataTransferLength = 0;
+        }
+    }
+
+    Srb->SrbStatus = SRB_STATUS_SUCCESS;
+    Srb->ScsiStatus = SCSISTAT_GOOD;
+
+    AhciClearSense(port);
+    return TRUE;
+}
+
+static BOOLEAN
 AhciHandleExecuteScsi(
     _In_ PAHCI_ADAPTER_EXTENSION Adapter,
     _In_ ULONG PortNumber,
@@ -904,6 +1519,9 @@ AhciHandleExecuteScsi(
         Srb->SrbStatus = SRB_STATUS_NO_DEVICE;
         return TRUE;
     }
+
+    if (port->Atapi)
+        return AhciHandleExecuteScsiPacket(Adapter, PortNumber, Srb);
 
     switch (opcode)
     {
@@ -1377,11 +1995,15 @@ AhciHwFindAdapter(
         ConfigInfo->MaximumNumberOfTargets = adapter->PortCount;
 
         {
-            ULONG clSize = AHCI_ALIGN_UP(sizeof(AHCI_CMD_HEADER) * 32, 1024);
-            ULONG fisSize = AHCI_ALIGN_UP(256, 256);
-            ULONG tableSize = AHCI_ALIGN_UP(AHCI_CMD_TABLE_ALLOC_SIZE, 128);
-            ULONG idSize = AHCI_ALIGN_UP(512, 512);
-            ULONG perPort = clSize + fisSize + tableSize + idSize;
+            ULONG clSize = AHCI_ALIGN_UP(sizeof(AHCI_CMD_HEADER) * 32, AHCI_CMD_LIST_ALIGN);
+            ULONG fisSize = AHCI_ALIGN_UP(256, AHCI_RECEIVED_FIS_ALIGN);
+            ULONG tableSize = AHCI_ALIGN_UP(AHCI_CMD_TABLE_ALLOC_SIZE, AHCI_CMD_TABLE_ALIGN);
+            ULONG idSize = AHCI_ALIGN_UP(512, AHCI_IDENTIFY_ALIGN);
+            ULONG alignmentSlack = (AHCI_CMD_LIST_ALIGN - 1) +
+                                   (AHCI_RECEIVED_FIS_ALIGN - 1) +
+                                   (AHCI_CMD_TABLE_ALIGN - 1) +
+                                   (AHCI_IDENTIFY_ALIGN - 1);
+            ULONG perPort = clSize + fisSize + tableSize + idSize + alignmentSlack;
             ULONG total = perPort * adapter->PortCount;
             PUCHAR block;
 
@@ -1401,30 +2023,41 @@ AhciHwFindAdapter(
             {
                 PAHCI_PORT_CONTEXT port = &adapter->Ports[portIndex];
                 ULONG chunk;
-                PUCHAR ptr = block + (perPort * portIndex);
+                PUCHAR base = block + (perPort * portIndex);
+                PUCHAR ptr = base;
 
                 RtlZeroMemory(port, sizeof(*port));
 
+                ptr = AHCI_ALIGN_PTR(ptr, AHCI_CMD_LIST_ALIGN);
                 port->CommandList = (PAHCI_CMD_HEADER)ptr;
                 chunk = clSize;
                 port->CommandListPhys = ScsiPortGetPhysicalAddress(adapter, NULL, port->CommandList, &chunk);
                 ptr += clSize;
 
+                ptr = AHCI_ALIGN_PTR(ptr, AHCI_RECEIVED_FIS_ALIGN);
                 port->ReceivedFis = ptr;
                 chunk = fisSize;
                 port->ReceivedFisPhys = ScsiPortGetPhysicalAddress(adapter, NULL, port->ReceivedFis, &chunk);
                 ptr += fisSize;
 
+                ptr = AHCI_ALIGN_PTR(ptr, AHCI_CMD_TABLE_ALIGN);
                 port->CommandTable = (PAHCI_CMD_TABLE)ptr;
                 chunk = tableSize;
                 port->CommandTablePhys = ScsiPortGetPhysicalAddress(adapter, NULL, port->CommandTable, &chunk);
                 ptr += tableSize;
 
+                ptr = AHCI_ALIGN_PTR(ptr, AHCI_IDENTIFY_ALIGN);
                 port->IdentifyBuffer = ptr;
                 chunk = idSize;
                 port->IdentifyBufferPhys = ScsiPortGetPhysicalAddress(adapter, NULL, port->IdentifyBuffer, &chunk);
 
                 port->SectorSize = AHCI_DEFAULT_SECTOR_SIZE;
+
+                AHCI_TRACE_PRINT("ahciport: Port %lu buffers CLB=%p FB=%p CT=%p\n",
+                                 portIndex,
+                                 port->CommandList,
+                                 port->ReceivedFis,
+                                 port->CommandTable);
             }
         }
 
@@ -1459,7 +2092,7 @@ AhciHwInitialize(
         if (!(adapter->PortsImplemented & (1u << port)))
             continue;
 
-        AHCI_TRACE("HwInitialize: Resetting port %lu", port);
+        AHCI_TRACE_PRINT("ahciport: HwInitialize resetting port=%lu\n", port);
 
         if (!AhciResetPort(adapter, port))
         {
@@ -1469,12 +2102,29 @@ AhciHwInitialize(
 
         adapter->Ports[port].Signature = AhciReadPort(adapter, port, AHCI_PxSIG);
 
-        if (!AhciIsPortDevicePresent(adapter, port))
-            continue;
+        {
+            ULONG ssts = AhciReadPort(adapter, port, AHCI_PxSSTS);
+            BOOLEAN present = AhciIsPortDevicePresent(adapter, port);
+
+            AHCI_TRACE("HwInitialize: port=%lu signature=0x%08lx SSTS=0x%08lx (DET=%lu SPD=%lu IPM=%lu) present=%u",
+                       port,
+                       adapter->Ports[port].Signature,
+                       ssts,
+                       ssts & AHCI_PxSSTS_DET_MASK,
+                       (ssts & AHCI_PxSSTS_SPD_MASK) >> 4,
+                       (ssts & AHCI_PxSSTS_IPM_MASK) >> 8,
+                       present);
+
+            if (!present)
+            {
+                AhciDumpPortState(adapter, port, "HwInitialize no device");
+                continue;
+            }
+        }
 
         switch (adapter->Ports[port].Signature)
         {
-            case 0x00000101: /* SATA */
+            case AHCI_SIGNATURE_SATA:
                 if (!AhciIdentifyDevice(adapter, port))
                 {
                     AHCI_WARN("HwInitialize: IDENTIFY failed on port %lu", port);
@@ -1482,8 +2132,24 @@ AhciHwInitialize(
                 }
                 break;
 
+            case AHCI_SIGNATURE_ATAPI:
+                adapter->Ports[port].Atapi = TRUE;
+                adapter->Ports[port].Present = TRUE;
+                if (adapter->Ports[port].SectorSize == 0)
+                    adapter->Ports[port].SectorSize = 2048;
+                adapter->Ports[port].SectorCount = 0;
+                AhciClearSense(&adapter->Ports[port]);
+
+                if (!AhciIdentifyPacketDevice(adapter, port))
+                {
+                    AHCI_WARN("HwInitialize: IDENTIFY PACKET failed on port %lu", port);
+                }
+                break;
+
             default:
-                /* Unsupported signature for now */
+                AHCI_WARN("HwInitialize: Unsupported signature 0x%08lx on port %lu",
+                          adapter->Ports[port].Signature,
+                          port);
                 adapter->Ports[port].Present = FALSE;
                 break;
         }
@@ -1677,8 +2343,26 @@ AhciHwResetBus(
             continue;
         }
 
-        if (adapter->Ports[port].Signature == 0x00000101)
-            AhciIdentifyDevice(adapter, port);
+        switch (adapter->Ports[port].Signature)
+        {
+            case AHCI_SIGNATURE_SATA:
+                AhciIdentifyDevice(adapter, port);
+                break;
+
+            case AHCI_SIGNATURE_ATAPI:
+                adapter->Ports[port].Atapi = TRUE;
+                adapter->Ports[port].Present = TRUE;
+                if (adapter->Ports[port].SectorSize == 0)
+                    adapter->Ports[port].SectorSize = 2048;
+                adapter->Ports[port].SectorCount = 0;
+                AhciClearSense(&adapter->Ports[port]);
+
+                AhciIdentifyPacketDevice(adapter, port);
+                break;
+
+            default:
+                break;
+        }
 
         AhciNotifyBusChange(adapter, 0, (UCHAR)port);
     }
