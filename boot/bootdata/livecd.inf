@@ -18,7 +18,46 @@ HKU,".DEFAULT\Keyboard Layout\Toggle","Layout Hotkey",0x00000000,"2"
 ; Cdrom class driver
 HKLM,"SYSTEM\CurrentControlSet\Services\Cdrom","Start",0x00010001,0x00000000
 
+; Seed the UEFI framebuffer root device so uefifb.sys can install on LiveCD
+
 ; Reset BootExecute to an empty value: AutoChk should not start in MiniNT mode
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB","NextInstance",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB","Class",0x00000000,"Display"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB","DeviceDesc",0x00000000,"UEFI Framebuffer Adapter"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000","HardwareID",0x00010000,"ROOT\\UEFIFB"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000","CompatibleIDs",0x00010000,"ROOT\\DISPLAY"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000","Class",0x00000000,"Display"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000","DeviceDesc",0x00000000,"UEFI Framebuffer Adapter"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000","Mfg",0x00000000,"ReactOS Project"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000","Service",0x00000000,"uefifb"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000","ConfigFlags",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000","Capabilities",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000\LogConf",,0x00000012
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000\LogConf","BootConfig",0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000\LogConf","BasicConfigVector",0x00000001
+; Ensure a valid ImagePath and boot-start service so the miniport loads
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","ImagePath",0x00020000,"system32\drivers\uefifb.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","Group",0x00000000,"Video Save"
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","DependOnGroup",0x00010000,"Video"
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","DisplayName",0x00000000,"UEFI Framebuffer Miniport"
+; Match Windows-style XPDM device software settings location under Hardware Profiles
+HKLM,"SYSTEM\CurrentControlSet\Hardware Profiles\Current\System\CurrentControlSet\Services\uefifb\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
+HKLM,"SYSTEM\CurrentControlSet\Hardware Profiles\Current\System\CurrentControlSet\Services\uefifb\Device0","VgaCompatible",0x00010001,0x00000000
+; Also seed the legacy device profile key expected by videoprt for settings copy
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0",,0x00000012
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","VgaCompatible",0x00010001,0x00000000
+; Optional default resolution (used by GDI UI; uefifb uses current GOP until runtime switch is implemented)
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.XResolution",0x00010001,1024
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.YResolution",0x00010001,768
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.BitsPerPel",0x00010001,32
+; Provide the Services\\uefifb\\Video key that win32k queries to resolve the service
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Video","Service",0x00000000,"uefifb"
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager","BootExecute",0x00010000,""
 
 ; Shell
