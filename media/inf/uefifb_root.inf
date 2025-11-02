@@ -33,7 +33,7 @@ HKLM,Enum\Root\UEFIFB\0000\LogConf,"BasicConfigVector",0x00000001
 [UefiFb.Service]
 ; TEMP: disable uefifb to avoid loading on boot while testing GOP behavior
 HKLM,SYSTEM\CurrentControlSet\Services\uefifb,"Type",0x00010001,0x00000001
-HKLM,SYSTEM\CurrentControlSet\Services\uefifb,"Start",0x00010001,0x00000004
+HKLM,SYSTEM\CurrentControlSet\Services\uefifb,"Start",0x00010001,0x00000000
 HKLM,SYSTEM\CurrentControlSet\Services\uefifb,"ErrorControl",0x00010001,0x00000001
 HKLM,SYSTEM\CurrentControlSet\Services\uefifb,"Group",0x00000000,"Video Save"
 HKLM,SYSTEM\CurrentControlSet\Services\uefifb,"DependOnGroup",0x00010000,"Video"
