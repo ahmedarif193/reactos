@@ -23,8 +23,8 @@ IopArbMemUnpackRequirements(
     _In_ PIO_RESOURCE_DESCRIPTOR IoDescriptor,
     _Out_ PUINT64 OutMinimumAddress,
     _Out_ PUINT64 OutMaximumAddress,
-    _Out_ PUINT32 OutLength,
-    _Out_ PUINT32 OutAlignment)
+    _Out_ PULONG OutLength,
+    _Out_ PULONG OutAlignment)
 {
     PAGED_CODE();
     DPRINT("IopArbMemUnpackRequirements: IoDescriptor: %p, OutMinimumAddress: %p, OutMaximumAddress: %p, OutLength: %p, OutAlignment: %p\n",
@@ -60,7 +60,7 @@ NTAPI
 IopArbMemUnpackResource(
     _In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDescriptor,
     _Out_ PUINT64 Start,
-    _Out_ PUINT32 OutLength)
+    _Out_ PULONG OutLength)
 {
     PAGED_CODE();
     DPRINT("IopArbMemUnpackResource: CmDescriptor: %p, Start: %p, OutLength: %p\n",
