@@ -670,6 +670,23 @@ IopCheckResourceDescriptor(
                 {
                     if (ResDesc->u.Interrupt.Vector == ResDesc2->u.Interrupt.Vector)
                     {
+                        /*
+                         * PIC special-case: Allow IRQ9 (SCI) to be shared even when one
+                         * side did not explicitly mark the descriptor as shared. On
+                         * non-APIC systems the SCI commonly sits on IRQ 9 and must
+                         * coexist with legacy devices. The request path already forces
+                         * ShareDisposition=Shared for fixed IRQ9; here we also suppress
+                         * a conflict when both claim IRQ9 and no IOAPIC is present.
+                         */
+                        if ((ResDesc->u.Interrupt.Vector == 9) && !HalIsIoApicPresent())
+                        {
+                            if (!Silent)
+                            {
+                                DPRINT("Treating PIC IRQ9 as shareable; ignoring conflict.\n");
+                            }
+                            break; /* Do not treat as a conflict */
+                        }
+
                         if (!Silent)
                         {
                             DPRINT1("Resource conflict: IRQ (0x%x 0x%x vs. 0x%x 0x%x)\n",
