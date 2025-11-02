@@ -70,6 +70,7 @@ DrvEnableSurface(
 
    ppdev->VmwareFifo = FALSE;
    ppdev->VmwareCaps = 0;
+   ppdev->UefiLinearOnly = FALSE;
 
    if (ppdev->BitsPerPixel >= 15)
    {
@@ -89,6 +90,26 @@ DrvEnableSurface(
        {
            ppdev->VmwareFifo = TRUE;
            ppdev->VmwareCaps = caps.Caps;
+       }
+
+       /* Optionally query UEFIFB caps to detect linear-only fallback */
+       if (!ppdev->VmwareFifo)
+       {
+           UEFIFB_CAPS uefi = {0};
+           returned = 0;
+           if (!EngDeviceIoControl(ppdev->hDriver,
+                                   IOCTL_VIDEO_UEFIFB_QUERY_CAPS,
+                                   NULL,
+                                   0,
+                                   &uefi,
+                                   sizeof(uefi),
+                                   &returned) &&
+               returned >= sizeof(uefi) &&
+               uefi.Version == UEFIFB_CAPS_VERSION &&
+               (uefi.Caps & UEFIFB_CAP_LINEAR_ONLY))
+           {
+               ppdev->UefiLinearOnly = TRUE;
+           }
        }
    }
 
