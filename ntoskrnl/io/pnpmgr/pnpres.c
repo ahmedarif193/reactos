@@ -399,6 +399,16 @@ IopFixupResourceListWithRequirements(
                 {
                     case CmResourceTypeInterrupt:
                         /* Find an available interrupt */
+                        /* PIC fallback: allow sharing on IRQ 9 (SCI) only when no IOAPIC is present */
+                        if (IoDesc->u.Interrupt.MinimumVector == IoDesc->u.Interrupt.MaximumVector &&
+                            IoDesc->u.Interrupt.MinimumVector == 9)
+                        {
+                            /* Query HAL for IOAPIC presence. If none, force shared IRQ9. */
+                            if (!HalIsIoApicPresent())
+                            {
+                                NewDesc.ShareDisposition = CmResourceShareShared;
+                            }
+                        }
                         if (!IopFindInterruptResource(IoDesc, &NewDesc))
                         {
                             DPRINT1("Failed to find an available interrupt resource (0x%x to 0x%x)\n",
@@ -578,9 +588,10 @@ IopCheckResourceDescriptor(
                but only one is allowed and it must be the last one in the list! */
             PCM_PARTIAL_RESOURCE_DESCRIPTOR ResDesc2 = &ResList->PartialDescriptors[ii];
 
-            /* We don't care about shared resources */
-            if (ResDesc->ShareDisposition == CmResourceShareShared &&
-                ResDesc2->ShareDisposition == CmResourceShareShared)
+            /* Only treat explicitly shared claimants as shareable.
+               DriverExclusive remains non-shareable to avoid hiding real conflicts. */
+            if ((ResDesc->ShareDisposition == CmResourceShareShared) &&
+                (ResDesc2->ShareDisposition == CmResourceShareShared))
                 continue;
 
             /* Make sure we're comparing the same types */
@@ -622,6 +633,24 @@ IopCheckResourceDescriptor(
                     UINT64 r2Start = (UINT64)ResDesc2->u.Port.Start.QuadPart;
                     UINT64 r2End = (UINT64)ResDesc2->u.Port.Start.QuadPart
                                    + ResDesc2->u.Port.Length;
+
+                    /* Special-case: PCI Type-1 configuration ports CF8h-CFFh are
+                       globally reserved and may be claimed by HAL and the PCI bus.
+                       Ignore overlaps that involve this window on both sides, even if
+                       one of the requesters only claims a sub-range of it. */
+                    {
+                        const UINT64 cfgStart = 0xCF8, cfgEnd = 0xD00; /* [CF8, D00) */
+                        BOOLEAN rHits = (rStart < cfgEnd && rEnd > cfgStart);
+                        BOOLEAN r2Hits = (r2Start < cfgEnd && r2End > cfgStart);
+                        if (rHits && r2Hits)
+                        {
+                            if (!Silent)
+                            {
+                                DPRINT("Ignoring overlap within PCI config ports [0xCF8,0xD00)\n");
+                            }
+                            continue;
+                        }
+                    }
 
                     if (rStart < r2End && r2Start < rEnd)
                     {
@@ -919,17 +948,62 @@ IopUpdateResourceMap(
 
         RtlAppendUnicodeStringToString(&NameU, &RawSuffix);
 
-        Status = ZwSetValueKey(PnpMgrLevel2,
-                               &NameU,
-                               0,
-                               REG_RESOURCE_LIST,
-                               DeviceNode->ResourceList,
-                               PnpDetermineResourceListSize(DeviceNode->ResourceList));
-        if (!NT_SUCCESS(Status))
+        /* If an identical RAW resource list already exists, skip rewriting */
         {
-            ZwClose(PnpMgrLevel2);
-            ExFreePool(NameU.Buffer);
-            return Status;
+            PKEY_VALUE_PARTIAL_INFORMATION kvpi = NULL;
+            ULONG req = 0;
+            NTSTATUS qst = ZwQueryValueKey(PnpMgrLevel2,
+                                           &NameU,
+                                           KeyValuePartialInformation,
+                                           NULL,
+                                           0,
+                                           &req);
+            if ((qst == STATUS_BUFFER_OVERFLOW || qst == STATUS_BUFFER_TOO_SMALL) && req)
+            {
+                kvpi = ExAllocatePoolWithTag(PagedPool, req, TAG_IO);
+                if (kvpi)
+                {
+                    qst = ZwQueryValueKey(PnpMgrLevel2,
+                                          &NameU,
+                                          KeyValuePartialInformation,
+                                          kvpi,
+                                          req,
+                                          &req);
+                }
+            }
+
+            BOOLEAN same = FALSE;
+            ULONG rawSize = PnpDetermineResourceListSize(DeviceNode->ResourceList);
+            if (NT_SUCCESS(qst) && kvpi &&
+                kvpi->Type == REG_RESOURCE_LIST &&
+                kvpi->DataLength == rawSize &&
+                RtlCompareMemory(kvpi->Data, DeviceNode->ResourceList, rawSize) == rawSize)
+            {
+                same = TRUE;
+            }
+
+            if (kvpi) ExFreePoolWithTag(kvpi, TAG_IO);
+
+            if (!same)
+            {
+                Status = ZwSetValueKey(PnpMgrLevel2,
+                                       &NameU,
+                                       0,
+                                       REG_RESOURCE_LIST,
+                                       DeviceNode->ResourceList,
+                                       rawSize);
+                if (!NT_SUCCESS(Status))
+                {
+                    ZwClose(PnpMgrLevel2);
+                    ExFreePool(NameU.Buffer);
+                    return Status;
+                }
+            }
+            else
+            {
+                /* no-op; identical content */
+                Status = STATUS_SUCCESS;
+            }
         }
 
         /* "Remove" the suffix by setting the length back to what it used to be */
@@ -937,17 +1011,64 @@ IopUpdateResourceMap(
 
         RtlAppendUnicodeStringToString(&NameU, &TranslatedSuffix);
 
-        Status = ZwSetValueKey(PnpMgrLevel2,
-                               &NameU,
-                               0,
-                               REG_RESOURCE_LIST,
-                               DeviceNode->ResourceListTranslated,
-                               PnpDetermineResourceListSize(DeviceNode->ResourceListTranslated));
+        /* If an identical TRANSLATED resource list already exists, skip rewriting */
+        {
+            PKEY_VALUE_PARTIAL_INFORMATION kvpi2 = NULL;
+            ULONG req2 = 0;
+            NTSTATUS qst2 = ZwQueryValueKey(PnpMgrLevel2,
+                                            &NameU,
+                                            KeyValuePartialInformation,
+                                            NULL,
+                                            0,
+                                            &req2);
+            if ((qst2 == STATUS_BUFFER_OVERFLOW || qst2 == STATUS_BUFFER_TOO_SMALL) && req2)
+            {
+                kvpi2 = ExAllocatePoolWithTag(PagedPool, req2, TAG_IO);
+                if (kvpi2)
+                {
+                    qst2 = ZwQueryValueKey(PnpMgrLevel2,
+                                           &NameU,
+                                           KeyValuePartialInformation,
+                                           kvpi2,
+                                           req2,
+                                           &req2);
+                }
+            }
+
+            BOOLEAN same2 = FALSE;
+            ULONG transSize = PnpDetermineResourceListSize(DeviceNode->ResourceListTranslated);
+            if (NT_SUCCESS(qst2) && kvpi2 &&
+                kvpi2->Type == REG_RESOURCE_LIST &&
+                kvpi2->DataLength == transSize &&
+                RtlCompareMemory(kvpi2->Data, DeviceNode->ResourceListTranslated, transSize) == transSize)
+            {
+                same2 = TRUE;
+            }
+
+            if (kvpi2) ExFreePoolWithTag(kvpi2, TAG_IO);
+
+            if (!same2)
+            {
+                Status = ZwSetValueKey(PnpMgrLevel2,
+                                       &NameU,
+                                       0,
+                                       REG_RESOURCE_LIST,
+                                       DeviceNode->ResourceListTranslated,
+                                       transSize);
+                if (!NT_SUCCESS(Status))
+                {
+                    ZwClose(PnpMgrLevel2);
+                    ExFreePool(NameU.Buffer);
+                    return Status;
+                }
+            }
+            else
+            {
+                Status = STATUS_SUCCESS;
+            }
+        }
         ZwClose(PnpMgrLevel2);
         ExFreePool(NameU.Buffer);
-
-        if (!NT_SUCCESS(Status))
-            return Status;
     }
     else
     {
@@ -1495,4 +1616,3 @@ cleanup:
 
    return Status;
 }
-
