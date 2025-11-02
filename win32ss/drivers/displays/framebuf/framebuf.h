@@ -27,6 +27,7 @@
 #include <winddi.h>
 #include <ntddvdeo.h>
 #include <vmware/vmx_ioctl.h>
+#include <uefifb/uefifb_ioctl.h>
 
 //#define EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
 
@@ -49,6 +50,7 @@ typedef struct _PDEV
    PALETTEENTRY *PaletteEntries;
    BOOLEAN VmwareFifo;
    ULONG VmwareCaps;
+   BOOLEAN UefiLinearOnly;
 
 #ifdef EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
    VIDEO_POINTER_ATTRIBUTES PointerAttributes;
