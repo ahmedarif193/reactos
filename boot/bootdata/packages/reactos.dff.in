@@ -150,4 +150,6 @@ Signature = "$Windows NT$"
 "modules/optional/vmxnet3n51x86.sys"                  3  optional
 "modules/optional/wine_gecko-2.40-x86.msi"            1  optional
 "boot/bootdata/bootcdregtest/AHKAppTests.cmd"         7  optional
+"win32ss/drivers/miniport/uefifb/uefifb.sys"          3
+"win32ss/drivers/miniport/uefifb/uefifb.inf"          6
 ; DON'T REMOVE THE FOLLOWING NEW LINE ! THIS MEANS YOU !
