@@ -32,9 +32,15 @@ typedef struct _HALP_ACPI_MCFG_ALLOCATION
 extern PHALP_ACPI_MCFG HalpAcpiMcfgTable;
 extern PHALP_ACPI_MCFG_ALLOCATION HalpAcpiMcfgAllocations;
 extern ULONG HalpAcpiMcfgAllocationCount;
+extern PUCHAR HalpAcpiMcfgSegDisabled; /* Per-allocation disable map: 1 = ECAM disabled for that segment */
+extern ULONG HalpAcpiMcfgSegDisabledCount;
 extern volatile LONG HalpAcpiEcamCoverageFlags;
 extern BOOLEAN HalpAcpiEcamDisabled;
 extern BOOLEAN HalpPmTimerInitialized;
+
+/* Phase 1 ACPI initialization (pool/registry available) */
+VOID
+HalpAcpiPhase1Init(VOID);
 extern ULONG HalpPmTimerMask;
 extern ULONG HalpAcpiPmTimerFrequency;
 
