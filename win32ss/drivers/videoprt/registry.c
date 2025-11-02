@@ -669,6 +669,13 @@ IntCreateNewRegistryPath(
         Status = ZwOpenKey(&SettingsKey, KEY_READ, &ObjectAttributes);
         if (!NT_SUCCESS(Status))
         {
+            if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
+            {
+                /* Legacy device key missing: proceed with defaults and keep new key */
+                WARN_(VIDEOPRT, "Legacy settings key %wZ not found; skipping copy\n", &DeviceExtension->RegistryPath);
+                ObCloseHandle(NewKey, KernelMode);
+                return STATUS_SUCCESS;
+            }
             ERR_(VIDEOPRT, "Failed to open settings key. Status 0x%lx\n", Status);
             ObCloseHandle(NewKey, KernelMode);
             return Status;
