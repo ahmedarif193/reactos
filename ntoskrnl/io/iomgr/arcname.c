@@ -17,6 +17,260 @@
 #define NDEBUG
 #include <debug.h>
 
+#define ARC_TRACE(fmt, ...) DPRINT("ARC: " fmt, ##__VA_ARGS__)
+#define ARC_WARN(fmt, ...) DPRINT1("ARC: " fmt, ##__VA_ARGS__)
+
+static
+NTSTATUS
+IopFormatString(
+    _Out_writes_bytes_(BufferSize) PCHAR Buffer,
+    _In_ SIZE_T BufferSize,
+    _In_z_ _Printf_format_string_ PCSTR Format,
+    ...);
+
+static
+BOOLEAN
+IopParseArcNumberComponent(
+    _In_reads_or_z_(MAXULONG) PCSTR String,
+    _Out_ PULONG Value)
+{
+    ULONG Result = 0;
+    BOOLEAN HaveDigit = FALSE;
+    PCSTR Ptr = String;
+
+    while ((*Ptr >= '0') && (*Ptr <= '9'))
+    {
+        Result = (Result * 10) + (ULONG)(*Ptr - '0');
+        Ptr++;
+        HaveDigit = TRUE;
+    }
+
+    if (!HaveDigit || (*Ptr != ')'))
+    {
+        return FALSE;
+    }
+
+    *Value = Result;
+    return TRUE;
+}
+
+static
+BOOLEAN
+IopExtractArcDiskNumbers(
+    _In_z_ PCSTR ArcName,
+    _Out_ PULONG DiskNumber,
+    _Out_ PULONG PartitionNumber)
+{
+    PCSTR DiskPtr;
+    PCSTR PartitionPtr;
+
+    DiskPtr = strstr(ArcName, "rdisk(");
+    if (!DiskPtr)
+    {
+        DiskPtr = strstr(ArcName, "disk(");
+    }
+
+    PartitionPtr = strstr(ArcName, "partition(");
+
+    if (!DiskPtr || !PartitionPtr)
+    {
+        return FALSE;
+    }
+
+    if (DiskPtr[0] == 'r')
+    {
+        DiskPtr += strlen("rdisk(");
+    }
+    else
+    {
+        DiskPtr += strlen("disk(");
+    }
+
+    if (!IopParseArcNumberComponent(DiskPtr, DiskNumber))
+    {
+        return FALSE;
+    }
+
+    PartitionPtr += strlen("partition(");
+    if (!IopParseArcNumberComponent(PartitionPtr, PartitionNumber))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static
+NTSTATUS
+IopCreateArcBootAliasFallback(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+    _In_ BOOLEAN RamdiskBoot)
+{
+    CHAR ArcBuffer[128];
+    ANSI_STRING ArcAnsi;
+    UNICODE_STRING ArcUnicode;
+    UNICODE_STRING Candidates[8];
+    ULONG CandidateCount = 0;
+    WCHAR HarddiskBuffer[64];
+    UNICODE_STRING HarddiskString;
+    UNICODE_STRING RamdiskDeviceString = RTL_CONSTANT_STRING(L"\\Device\\Ramdisk0");
+    BOOLEAN RamdiskCandidatePresent = FALSE;
+    BOOLEAN RamdiskInitialized = FALSE;
+    ULONG DiskNumber;
+    ULONG PartitionNumber;
+    NTSTATUS Status;
+
+    ARC_WARN("CreateArcNames fallback enter Boot=%s RamdiskBoot=%d\n",
+             LoaderBlock->ArcBootDeviceName,
+             RamdiskBoot);
+
+    Status = IopFormatString(ArcBuffer,
+                             sizeof(ArcBuffer),
+                             "\\ArcName\\%s",
+                             LoaderBlock->ArcBootDeviceName);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    RtlInitAnsiString(&ArcAnsi, ArcBuffer);
+    Status = RtlAnsiStringToUnicodeString(&ArcUnicode, &ArcAnsi, TRUE);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    if (RamdiskBoot && CandidateCount < RTL_NUMBER_OF(Candidates))
+    {
+        RtlInitUnicodeString(&Candidates[CandidateCount++], L"\\Device\\Ramdisk0");
+        RamdiskCandidatePresent = TRUE;
+    }
+
+    if (CandidateCount < RTL_NUMBER_OF(Candidates))
+    {
+        RtlInitUnicodeString(&Candidates[CandidateCount++], L"\\Device\\CdRom0");
+    }
+
+    if (!RamdiskBoot && CandidateCount < RTL_NUMBER_OF(Candidates))
+    {
+        /* Consider the ramdisk even if the boot path isn't explicitly ramdisk. */
+        RtlInitUnicodeString(&Candidates[CandidateCount++], L"\\Device\\Ramdisk0");
+    }
+
+    if (IopExtractArcDiskNumbers(LoaderBlock->ArcBootDeviceName,
+                                 &DiskNumber,
+                                 &PartitionNumber))
+    {
+        Status = RtlStringCbPrintfW(HarddiskBuffer,
+                                    sizeof(HarddiskBuffer),
+                                    L"\\Device\\Harddisk%lu\\Partition%lu",
+                                    DiskNumber,
+                                    PartitionNumber);
+        if (NT_SUCCESS(Status))
+        {
+            HarddiskString.Buffer = HarddiskBuffer;
+            HarddiskString.Length = (USHORT)(wcslen(HarddiskBuffer) * sizeof(WCHAR));
+            HarddiskString.MaximumLength = sizeof(HarddiskBuffer);
+
+            if (CandidateCount < RTL_NUMBER_OF(Candidates))
+            {
+                Candidates[CandidateCount++] = HarddiskString;
+            }
+        }
+    }
+
+    if (CandidateCount < RTL_NUMBER_OF(Candidates))
+    {
+        RtlInitUnicodeString(&Candidates[CandidateCount++], L"\\Device\\Harddisk0\\Partition1");
+    }
+
+    if (CandidateCount < RTL_NUMBER_OF(Candidates))
+    {
+        RtlInitUnicodeString(&Candidates[CandidateCount++], L"\\Device\\HarddiskVolume1");
+    }
+
+    Status = STATUS_UNSUCCESSFUL;
+    for (ULONG Index = 0; Index < CandidateCount; Index++)
+    {
+        UNICODE_STRING *TargetString = &Candidates[Index];
+        PFILE_OBJECT FileObject;
+        PDEVICE_OBJECT DeviceObject;
+        NTSTATUS QueryStatus;
+        NTSTATUS LinkStatus;
+
+RetryOpen:
+        QueryStatus = IoGetDeviceObjectPointer(TargetString,
+                                               FILE_READ_ATTRIBUTES,
+                                               &FileObject,
+                                               &DeviceObject);
+        if (!NT_SUCCESS(QueryStatus))
+        {
+            if (!RamdiskInitialized &&
+                RtlEqualUnicodeString(TargetString, &RamdiskDeviceString, TRUE))
+            {
+                RamdiskInitialized = TRUE;
+                ARC_WARN("CreateArcNames fallback observed missing %wZ; proceeding without ramdisk initialization\n",
+                         TargetString);
+            }
+
+            ARC_WARN("CreateArcNames fallback failed to open %wZ (0x%08lx)\n",
+                     TargetString,
+                     QueryStatus);
+            continue;
+        }
+
+        ObDereferenceObject(FileObject);
+
+        LinkStatus = IoAssignArcName(&ArcUnicode, TargetString);
+        if (NT_SUCCESS(LinkStatus) ||
+            LinkStatus == STATUS_OBJECT_NAME_EXISTS ||
+            LinkStatus == STATUS_OBJECT_NAME_COLLISION)
+        {
+            ARC_WARN("CreateArcNames fallback mapped %s -> %wZ\n",
+                     LoaderBlock->ArcBootDeviceName,
+                     TargetString);
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
+        ARC_WARN("CreateArcNames fallback IoAssignArcName failed (0x%08lx) for %wZ\n",
+                 LinkStatus,
+                 TargetString);
+    }
+
+    ARC_WARN("CreateArcNames fallback status=0x%08lx RamdiskCandidatePresent=%d\n",
+             Status,
+             RamdiskCandidatePresent);
+
+    if (!NT_SUCCESS(Status) && RamdiskBoot && RamdiskCandidatePresent)
+    {
+        UNICODE_STRING RamdiskTarget;
+        NTSTATUS LinkStatus;
+
+        ARC_WARN("CreateArcNames fallback attempting direct map to \\Device\\Ramdisk0\n");
+        RtlInitUnicodeString(&RamdiskTarget, L"\\Device\\Ramdisk0");
+        LinkStatus = IoAssignArcName(&ArcUnicode, &RamdiskTarget);
+        if (NT_SUCCESS(LinkStatus) ||
+            LinkStatus == STATUS_OBJECT_NAME_EXISTS ||
+            LinkStatus == STATUS_OBJECT_NAME_COLLISION)
+        {
+            ARC_WARN("CreateArcNames fallback mapped %s -> %wZ (direct)\n",
+                     LoaderBlock->ArcBootDeviceName,
+                     &RamdiskTarget);
+            Status = STATUS_SUCCESS;
+        }
+        else
+        {
+            ARC_WARN("CreateArcNames fallback direct IoAssignArcName failed (0x%08lx) for %wZ\n",
+                     LinkStatus,
+                     &RamdiskTarget);
+        }
+    }
+
+    RtlFreeUnicodeString(&ArcUnicode);
+    return Status;
+}
+
 /* GLOBALS *******************************************************************/
 
 /* Persist for the life of the kernel; allocated during boot and never freed. */
@@ -77,6 +331,12 @@ IopCreateArcNames(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Check if the list contains exactly one disk entry. */
     SingleDisk = (ListHead->Flink != ListHead) && (ListHead->Flink->Flink == ListHead);
 
+    ARC_TRACE("CreateArcNames start Boot=%s Hal=%s SingleDisk=%d RamdiskBoot=%d\n",
+              LoaderBlock->ArcBootDeviceName,
+              LoaderBlock->ArcHalDeviceName,
+              SingleDisk,
+              RamdiskBoot);
+
     /* Create the global HAL partition name */
     Status = IopFormatString(Buffer,
                              sizeof(Buffer),
@@ -119,6 +379,7 @@ IopCreateArcNames(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     {
         /* Then disable single-disk mode, since there's a CD drive out there */
         SingleDisk = FALSE;
+        ARC_TRACE("CreateArcNames detected boot-from-CD, forcing multi-disk enumeration\n");
     }
 
     /* Build the boot strings */
@@ -156,10 +417,10 @@ IopCreateArcNames(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             NTSTATUS LinkStatus = IoAssignArcName(&BootDeviceName, &SystemDevice);
             if (!NT_SUCCESS(LinkStatus))
             {
-                DPRINT1("IoAssignArcName failed (0x%08lx) for %wZ -> %wZ\n",
-                        LinkStatus,
-                        &BootDeviceName,
-                        &SystemDevice);
+                ARC_WARN("IoAssignArcName failed (0x%08lx) for %wZ -> %wZ\n",
+                         LinkStatus,
+                         &BootDeviceName,
+                         &SystemDevice);
             }
             RtlFreeUnicodeString(&BootDeviceName);
 
@@ -191,11 +452,49 @@ IopCreateArcNames(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Loop every disk and try to find boot disk */
     DiskStatus = IopCreateArcNamesDisk(LoaderBlock, SingleDisk, &FoundBoot);
     Status = DiskStatus;
+    ARC_TRACE("CreateArcNames disk phase -> Status=0x%08lx FoundBoot=%d\n",
+              DiskStatus,
+              FoundBoot);
 
-    /* If it succeeded but we didn't find boot device, try to browse Cds */
-    if (NT_SUCCESS(Status) && !FoundBoot)
+    /* Try the CD path if the boot disk was not found or disk mapping failed */
+    if (!FoundBoot || !NT_SUCCESS(DiskStatus))
     {
-        Status = IopCreateArcNamesCd(LoaderBlock);
+        NTSTATUS CdStatus;
+
+        if (!NT_SUCCESS(DiskStatus))
+        {
+            ARC_WARN("CreateArcNames disk phase failed (Status=0x%08lx); attempting CD enumeration\n",
+                     DiskStatus);
+        }
+
+        CdStatus = IopCreateArcNamesCd(LoaderBlock);
+        ARC_TRACE("CreateArcNames cd phase -> Status=0x%08lx\n", CdStatus);
+
+        /* Prefer a successful CD mapping result */
+        if (NT_SUCCESS(CdStatus))
+        {
+            Status = CdStatus;
+        }
+        else if (!NT_SUCCESS(DiskStatus))
+        {
+            Status = CdStatus;
+        }
+    }
+
+    if (!NT_SUCCESS(Status) || !FoundBoot)
+    {
+        NTSTATUS FallbackStatus;
+
+        FallbackStatus = IopCreateArcBootAliasFallback(LoaderBlock, RamdiskBoot);
+        if (NT_SUCCESS(FallbackStatus))
+        {
+            Status = STATUS_SUCCESS;
+            FoundBoot = TRUE;
+        }
+        else
+        {
+            ARC_WARN("CreateArcNames fallback mapping failed (0x%08lx)\n", FallbackStatus);
+        }
     }
 
     /*
@@ -204,12 +503,85 @@ IopCreateArcNames(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
      * STATUS_OBJECT_PATH_NOT_FOUND as success so initialization
      * continues, since the ramdisk provides the boot volume.
      */
-    if (!NT_SUCCESS(Status) && RamdiskBoot && Status == STATUS_OBJECT_PATH_NOT_FOUND)
+    if (!NT_SUCCESS(Status) && RamdiskBoot)
     {
-        Status = STATUS_SUCCESS;
+        BOOLEAN mapped = FALSE;
+        BOOLEAN tolerateMissingMedia = FALSE;
+        NTSTATUS originalStatus = Status;
+
+        if (Status == STATUS_OBJECT_PATH_NOT_FOUND ||
+            Status == STATUS_OBJECT_NAME_NOT_FOUND ||
+            Status == STATUS_NO_SUCH_DEVICE)
+        {
+            ARC_WARN("CreateArcNames tolerating disk/CD lookup failure (Status=0x%08lx) due to ramdisk boot; attempting direct ramdisk map\n",
+                     Status);
+            tolerateMissingMedia = TRUE;
+        }
+
+        /* Try to bind the ARC path to the ramdisk device explicitly */
+        {
+            ANSI_STRING ArcNameAnsi;
+            UNICODE_STRING ArcNameUnicode;
+            UNICODE_STRING RamdiskDevice;
+            NTSTATUS formatStatus;
+
+            formatStatus = IopFormatString(Buffer,
+                                           sizeof(Buffer),
+                                           "\\ArcName\\%s",
+                                           LoaderBlock->ArcBootDeviceName);
+            if (NT_SUCCESS(formatStatus))
+            {
+                RtlInitAnsiString(&ArcNameAnsi, Buffer);
+                formatStatus = RtlAnsiStringToUnicodeString(&ArcNameUnicode, &ArcNameAnsi, TRUE);
+                if (NT_SUCCESS(formatStatus))
+                {
+                    NTSTATUS linkStatus;
+
+                    RtlInitUnicodeString(&RamdiskDevice, L"\\Device\\Ramdisk0");
+                    linkStatus = IoAssignArcName(&ArcNameUnicode, &RamdiskDevice);
+                    if (NT_SUCCESS(linkStatus))
+                    {
+                        ARC_WARN("CreateArcNames mapped %s to \\Device\\Ramdisk0 for ramdisk boot\n",
+                                 LoaderBlock->ArcBootDeviceName);
+                        Status = STATUS_SUCCESS;
+                        FoundBoot = TRUE;
+                        mapped = TRUE;
+                    }
+                    else
+                    {
+                        ARC_WARN("CreateArcNames ramdisk fallback IoAssignArcName failed (0x%08lx)\n",
+                                 linkStatus);
+                        Status = linkStatus;
+                    }
+
+                    RtlFreeUnicodeString(&ArcNameUnicode);
+                }
+                else
+                {
+                    Status = formatStatus;
+                }
+            }
+            else
+            {
+                Status = formatStatus;
+            }
+        }
+
+        if (!mapped)
+        {
+            if (tolerateMissingMedia)
+            {
+                ARC_WARN("CreateArcNames ramdisk fallback could not establish ARC alias; preserving failure 0x%08lx\n",
+                         originalStatus);
+                Status = originalStatus;
+            }
+        }
     }
 
     /* Return success */
+    ARC_TRACE("CreateArcNames done -> Status=0x%08lx FoundBoot=%d\n",
+              Status,
+              FoundBoot);
     return Status;
 }
 
@@ -242,6 +614,7 @@ IopCreateArcNamesCd(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Get all the Cds present in the system */
     CdRomCount = IoGetConfigurationInformation()->CdRomCount;
+    ARC_TRACE("CreateArcNamesCd start, reported CdRomCount=%lu\n", CdRomCount);
 
     /* Get enabled Cds and check if result matches
      * For the record, enabled Cds (or even disk) are Cds/disks
@@ -261,6 +634,8 @@ IopCreateArcNamesCd(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     if (!NT_SUCCESS(Status))
     {
         NotEnabledPresent = TRUE;
+        ARC_WARN("IopFetchConfigurationInformation(CD) failed 0x%08lx; will probe legacy paths\n",
+                 Status);
     }
     /* Save symbolic link list address in order to free it after */
     lSymbolicLinkList = SymbolicLinkList;
@@ -290,7 +665,8 @@ IopCreateArcNamesCd(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Not found... Not booting from a Cd */
     if (!ArcDiskSignature)
     {
-        DPRINT("Failed finding a cd that could match current boot device\n");
+        ARC_TRACE("CreateArcNamesCd: no ARC entry matches boot device %s\n",
+                  LoaderBlock->ArcBootDeviceName);
         goto Cleanup;
     }
 
@@ -298,7 +674,7 @@ IopCreateArcNamesCd(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     PartitionBuffer = ExAllocatePoolWithTag(NonPagedPoolCacheAligned, 2048, TAG_IO);
     if (!PartitionBuffer)
     {
-        DPRINT("Failed allocating resources!\n");
+        ARC_WARN("CreateArcNamesCd: failed allocating checksum buffer\n");
         /* Here, we fail, BUT we return success, some Microsoft joke */
         goto Cleanup;
     }
@@ -315,9 +691,74 @@ IopCreateArcNamesCd(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         CdRomCount += 5;
     }
 
-    /* Finally, if in spite of all that work, we still don't have Cds, leave */
+    /* Finally, if in spite of all that work, we still don't have Cds, fall back to \Device\CdRomX */
     if (!CdRomCount)
     {
+        ULONG cdIndex;
+
+        for (cdIndex = 0; cdIndex < 4; ++cdIndex)
+        {
+            Status = IopFormatString(Buffer,
+                                     sizeof(Buffer),
+                                     "\\Device\\CdRom%lu",
+                                     cdIndex);
+            if (!NT_SUCCESS(Status))
+                continue;
+
+            RtlInitAnsiString(&DeviceStringA, Buffer);
+            Status = RtlAnsiStringToUnicodeString(&DeviceStringW, &DeviceStringA, TRUE);
+            if (!NT_SUCCESS(Status))
+                continue;
+
+            Status = IoGetDeviceObjectPointer(&DeviceStringW,
+                                              FILE_READ_ATTRIBUTES,
+                                              &FileObject,
+                                              &DeviceObject);
+            if (NT_SUCCESS(Status))
+            {
+                Status = IopFormatString(ArcBuffer,
+                                         sizeof(ArcBuffer),
+                                         "\\ArcName\\%s",
+                                         ArcDiskSignature->ArcName);
+                if (NT_SUCCESS(Status))
+                {
+                    RtlInitAnsiString(&ArcNameStringA, ArcBuffer);
+                    Status = RtlAnsiStringToUnicodeString(&ArcNameStringW, &ArcNameStringA, TRUE);
+                    if (NT_SUCCESS(Status))
+                    {
+                        NTSTATUS LinkStatus = IoAssignArcName(&ArcNameStringW, &DeviceStringW);
+                        if (NT_SUCCESS(LinkStatus))
+                        {
+                            ArcLinkCreated = TRUE;
+                            LastLinkStatus = STATUS_SUCCESS;
+                        }
+                        else
+                        {
+                            ARC_WARN("CreateArcNamesCd fallback IoAssignArcName failed (0x%08lx) for %wZ -> %wZ\n",
+                                     LinkStatus,
+                                     &ArcNameStringW,
+                                     &DeviceStringW);
+                            LastLinkStatus = LinkStatus;
+                        }
+                        RtlFreeUnicodeString(&ArcNameStringW);
+                    }
+                }
+
+                ObDereferenceObject(FileObject);
+                if (ArcLinkCreated)
+                {
+                    RtlFreeUnicodeString(&DeviceStringW);
+                    Status = STATUS_SUCCESS;
+                    goto Cleanup;
+                }
+            }
+
+            RtlFreeUnicodeString(&DeviceStringW);
+        }
+
+        if (!ArcLinkCreated && NT_SUCCESS(Status))
+            Status = STATUS_NO_SUCH_DEVICE;
+
         goto Cleanup;
     }
 
@@ -393,6 +834,10 @@ IopCreateArcNamesCd(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                 ObDereferenceObject(FileObject);
                 goto Cleanup;
             }
+
+            ARC_TRACE("CreateArcNamesCd: using enabled device %wZ (DeviceNumber=%lu)\n",
+                      &DeviceStringW,
+                      DeviceNumber.DeviceNumber);
         }
         else
         {
@@ -412,6 +857,10 @@ IopCreateArcNamesCd(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                 goto Cleanup;
             }
 
+            ARC_TRACE("CreateArcNamesDisk: using enabled device %wZ (DeviceNumber=%lu)\n",
+                      &DeviceStringW,
+                      DeviceNumber.DeviceNumber);
+
             /* Get its device object */
             Status = IoGetDeviceObjectPointer(&DeviceStringW,
                                               FILE_READ_ATTRIBUTES,
@@ -419,9 +868,14 @@ IopCreateArcNamesCd(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                                               &DeviceObject);
             if (!NT_SUCCESS(Status))
             {
+                ARC_WARN("CreateArcNamesDisk: IoGetDeviceObjectPointer failed for legacy device %wZ (status=0x%08lx)\n",
+                         &DeviceStringW,
+                         Status);
                 RtlFreeUnicodeString(&DeviceStringW);
                 goto Cleanup;
             }
+
+            ARC_TRACE("CreateArcNamesCd: probing legacy device %wZ\n", &DeviceStringW);
         }
 
         /* Initiate data for reading cd and compute checksum */
@@ -481,20 +935,23 @@ IopCreateArcNamesCd(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                 LinkStatus = IoAssignArcName(&ArcNameStringW, &DeviceStringW);
                 if (!NT_SUCCESS(LinkStatus))
                 {
-                    DPRINT1("IoAssignArcName failed (0x%08lx) for %wZ -> %wZ\n",
-                            LinkStatus,
-                            &ArcNameStringW,
-                            &DeviceStringW);
+                    ARC_WARN("IoAssignArcName failed (0x%08lx) for %wZ -> %wZ\n",
+                             LinkStatus,
+                             &ArcNameStringW,
+                             &DeviceStringW);
                     LastLinkStatus = LinkStatus;
                 }
                 else
                 {
                     ArcLinkCreated = TRUE;
+                    ARC_TRACE("CreateArcNamesCd: mapped %wZ -> %wZ\n",
+                              &ArcNameStringW,
+                              &DeviceStringW);
                 }
                 RtlFreeUnicodeString(&ArcNameStringW);
                 if (ArcLinkCreated)
                 {
-                    DPRINT("Boot device found\n");
+                    ARC_TRACE("CreateArcNamesCd: boot device confirmed via checksum\n");
                 }
             }
 
@@ -528,6 +985,10 @@ Cleanup:
         Status = LastLinkStatus;
     }
 
+    ARC_TRACE("CreateArcNamesCd done -> Status=0x%08lx ArcLinkCreated=%d LinkAttempted=%d\n",
+              Status,
+              ArcLinkCreated,
+              LinkAttempted);
     return Status;
 }
 
@@ -577,7 +1038,15 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
     if (!NT_SUCCESS(Status))
     {
         NotEnabledPresent = TRUE;
+        ARC_WARN("IopFetchConfigurationInformation(Disk) failed 0x%08lx; will probe legacy disks\n",
+                 Status);
     }
+
+    ARC_TRACE("CreateArcNamesDisk start: DiskCount=%lu EnabledReported=%lu SingleDisk=%d NotEnabledFallback=%d\n",
+              DiskCount,
+              EnabledDisks,
+              SingleDisk,
+              NotEnabledPresent);
 
     /* Save symbolic link list address in order to free it after */
     lSymbolicLinkList = SymbolicLinkList;
@@ -608,6 +1077,9 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
     for (DiskNumber = 0; DiskNumber < DiskCount; DiskNumber++)
     {
         ASSERT(DriveLayout == NULL);
+        ARC_TRACE("CreateArcNamesDisk: probing disk%lu (symbolicAvailable=%d)\n",
+                  DiskNumber,
+                  (lSymbolicLinkList && *lSymbolicLinkList != UNICODE_NULL));
 
         /* Check if we have an enabled disk */
         if (lSymbolicLinkList && *lSymbolicLinkList != UNICODE_NULL)
@@ -654,9 +1126,18 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
                 /* If we didn't get the appropriate data, just skip that disk */
                 if (!NT_SUCCESS(Status))
                 {
-                   ObDereferenceObject(FileObject);
-                   continue;
+                    ARC_WARN("CreateArcNamesDisk: IOCTL_STORAGE_GET_DEVICE_NUMBER failed for %wZ (status=0x%08lx)\n",
+                             &DeviceStringW,
+                             Status);
+                    ObDereferenceObject(FileObject);
+                    continue;
                 }
+            }
+            else
+            {
+                ARC_WARN("CreateArcNamesDisk: IoGetDeviceObjectPointer failed (status=0x%08lx) for enabled path %wZ\n",
+                         Status,
+                         &DeviceStringW);
             }
 
             /* End of enabled disks enumeration */
@@ -702,6 +1183,14 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
                                               &FileObject,
                                               &DeviceObject);
 
+            ARC_TRACE("CreateArcNamesDisk: probing legacy device %wZ\n", &DeviceStringW);
+            if (!NT_SUCCESS(Status))
+            {
+                ARC_WARN("CreateArcNamesDisk: IoGetDeviceObjectPointer failed (status=0x%08lx) for legacy path %wZ\n",
+                         Status,
+                         &DeviceStringW);
+            }
+
             RtlFreeUnicodeString(&DeviceStringW);
             /* This is a security measure, to ensure DiskNumber will be used */
             DeviceNumber.DeviceNumber = ULONG_MAX;
@@ -742,6 +1231,8 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
         /* Failure, skip disk */
         if (!NT_SUCCESS(Status))
         {
+            ARC_WARN("CreateArcNamesDisk: IOCTL_DISK_GET_DRIVE_GEOMETRY failed (status=0x%08lx)\n",
+                     Status);
             ObDereferenceObject(FileObject);
             continue;
         }
@@ -751,6 +1242,8 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
                                         &DriveLayout);
         if (!NT_SUCCESS(Status))
         {
+            ARC_WARN("CreateArcNamesDisk: IoReadPartitionTableEx failed (status=0x%08lx)\n",
+                     Status);
             ObDereferenceObject(FileObject);
             continue;
         }
@@ -837,6 +1330,12 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
 
             SigValue = 0;
             SigVerified = IopVerifyDiskSignature(DriveLayout, ArcDiskSignature, &SigValue);
+            ARC_TRACE("CreateArcNamesDisk: disk%lu ARC=%s SigVerified=%d SigValue=0x%08lx CheckSum=0x%08lx\n",
+                      (DeviceNumber.DeviceNumber != ULONG_MAX) ? DeviceNumber.DeviceNumber : DiskNumber,
+                      ArcDiskSignature->ArcName,
+                      SigVerified,
+                      SigValue,
+                      CheckSum);
 
             /*
              * If this is the only MBR disk in the ARC list and detected
@@ -888,15 +1387,18 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
                 LinkStatus = IoAssignArcName(&ArcNameStringW, &DeviceStringW);
                 if (!NT_SUCCESS(LinkStatus))
                 {
-                    DPRINT1("IoAssignArcName failed (0x%08lx) for %wZ -> %wZ\n",
-                            LinkStatus,
-                            &ArcNameStringW,
-                            &DeviceStringW);
+                    ARC_WARN("IoAssignArcName failed (0x%08lx) for %wZ -> %wZ\n",
+                             LinkStatus,
+                             &ArcNameStringW,
+                             &DeviceStringW);
                     LastLinkStatus = LinkStatus;
                 }
                 else
                 {
                     ArcLinkCreated = TRUE;
+                    ARC_TRACE("CreateArcNamesDisk: mapped %wZ -> %wZ\n",
+                              &ArcNameStringW,
+                              &DeviceStringW);
                 }
 
                 /* And release strings */
@@ -904,10 +1406,10 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
                 RtlFreeUnicodeString(&DeviceStringW);
 
                 /* Now, browse each partition */
-                DPRINT1("IopCreateArcNamesDisk: disk %lu partitions=%lu style=%lu\n",
-                        (DeviceNumber.DeviceNumber != ULONG_MAX) ? DeviceNumber.DeviceNumber : DiskNumber,
-                        DriveLayout->PartitionCount,
-                        DriveLayout->PartitionStyle);
+                ARC_TRACE("CreateArcNamesDisk: disk%lu partitions=%lu style=%lu\n",
+                          (DeviceNumber.DeviceNumber != ULONG_MAX) ? DeviceNumber.DeviceNumber : DiskNumber,
+                          DriveLayout->PartitionCount,
+                          DriveLayout->PartitionStyle);
                 for (i = 1; i <= DriveLayout->PartitionCount; i++)
                 {
                     /* Create device name */
@@ -942,8 +1444,8 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
                                              i);
                     if (!NT_SUCCESS(Status))
                     {
-                        DPRINT1("ARC partition name too long: %s\n",
-                                ArcDiskSignature->ArcName);
+                        ARC_WARN("CreateArcNamesDisk: ARC partition name too long: %s\n",
+                                 ArcDiskSignature->ArcName);
                         RtlFreeUnicodeString(&DeviceStringW);
                         goto Cleanup;
                     }
@@ -952,7 +1454,8 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
                     /* Is that boot device? */
                     if (RtlEqualString(&ArcNameStringA, &ArcBootString, TRUE))
                     {
-                        DPRINT("Found boot device\n");
+                        ARC_TRACE("CreateArcNamesDisk: partition %s identified as boot device\n",
+                                  ArcDiskSignature->ArcName);
                         *FoundBoot = TRUE;
                     }
 
@@ -998,15 +1501,18 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
                     LinkStatus = IoAssignArcName(&ArcNameStringW, &DeviceStringW);
                     if (!NT_SUCCESS(LinkStatus))
                     {
-                        DPRINT1("IoAssignArcName failed (0x%08lx) for %wZ -> %wZ\n",
-                                LinkStatus,
-                                &ArcNameStringW,
-                                &DeviceStringW);
+                        ARC_WARN("IoAssignArcName failed (0x%08lx) for %wZ -> %wZ\n",
+                                 LinkStatus,
+                                 &ArcNameStringW,
+                                 &DeviceStringW);
                         LastLinkStatus = LinkStatus;
                     }
                     else
                     {
                         ArcLinkCreated = TRUE;
+                        ARC_TRACE("CreateArcNamesDisk: mapped %wZ -> %wZ (partition)\n",
+                                  &ArcNameStringW,
+                                  &DeviceStringW);
                     }
 
                     /* Release strings */
@@ -1025,7 +1531,8 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
                     (ArcDiskSignature->Signature == SigValue) &&
                     (ArcDiskSignature->CheckSum + CheckSum != 0))
                 {
-                    DPRINT("Be careful, you have a duplicate disk signature, or a virus altered your MBR!\n");
+                    ARC_WARN("CreateArcNamesDisk: duplicate disk signature or mismatched checksum detected for %s\n",
+                             ArcDiskSignature->ArcName);
                 }
             }
         }
@@ -1055,6 +1562,10 @@ Cleanup:
         ExFreePool(SymbolicLinkList);
     }
 
+    ARC_TRACE("CreateArcNamesDisk done -> Status=0x%08lx ArcLinkCreated=%d LinkAttempted=%d\n",
+              Status,
+              ArcLinkCreated,
+              LinkAttempted);
     return Status;
 }
 
