@@ -69,6 +69,28 @@ SpiIsPciBusInRange(
     return TRUE;
 }
 
+/* Clamp a PCI bus number to the HAL-advertised [Min..Max] range, if available. */
+static
+VOID
+SpiClampPciBusToHalRange(
+    _Inout_ PULONG BusNumber)
+{
+    ULONG MinBus, MaxBus;
+
+    if (!HalQueryPciBusRange(&MinBus, &MaxBus))
+    {
+        /* No clamp available; keep legacy behavior. */
+        return;
+    }
+
+    if (*BusNumber < MinBus || *BusNumber > MaxBus)
+    {
+        DPRINT1("SCSIPORT: Clamping PCI BusNumber %lu to firmware minimum %lu (max=%lu)\n",
+                *BusNumber, MinBus, MaxBus);
+        *BusNumber = MinBus;
+    }
+}
+
 static NTSTATUS NTAPI
 ScsiPortCreateClose(IN PDEVICE_OBJECT DeviceObject,
             IN PIRP Irp);
@@ -1632,6 +1654,10 @@ CreatePortConfig:
             if (!HasValidRange && HwInitializationData->AdapterInterfaceType == PCIBus)
             {
                 DPRINT1("No access ranges discovered from registry, trying PCI fallback\n");
+                /* Clamp bogus bus numbers to the firmware-advertised range */
+                SpiClampPciBusToHalRange(&PortConfig->SystemIoBusNumber);
+                ConfigInfo.BusNumber = PortConfig->SystemIoBusNumber;
+
                 if (!SpiGetPciConfigData(DriverObject,
                                          PortDeviceObject,
                                          HwInitializationData,
@@ -1692,6 +1718,9 @@ CreatePortConfig:
                 HwInitializationData->VendorId, HwInitializationData->DeviceIdLength,
                 HwInitializationData->DeviceId);
 
+            /* Ensure we don't walk invalid bus numbers forever */
+            SpiClampPciBusToHalRange(&ConfigInfo.BusNumber);
+
             if (!SpiGetPciConfigData(
                     DriverObject, PortDeviceObject, HwInitializationData, PortConfig, RegistryPath,
                     ConfigInfo.BusNumber, &SlotNumber))
@@ -1719,19 +1748,24 @@ CreatePortConfig:
 
         /* Note: HwFindAdapter is called once for each bus */
         Again = FALSE;
-        SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: calling HwFindAdapter Bus=%lu ConfigBus=%lu Interface=%u\n",
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL,
+                   "[scsiport] Calling HwFindAdapter=%p Bus=%lu CfgBus=%lu If=%u Ranges=%lu Legacy=%u\n",
+                   HwInitializationData->HwFindAdapter,
                    PortConfig->SystemIoBusNumber,
                    ConfigInfo.BusNumber,
-                   HwInitializationData->AdapterInterfaceType);
+                   HwInitializationData->AdapterInterfaceType,
+                   (ULONG)HwInitializationData->NumberOfAccessRanges,
+                   driverExtension->IsLegacyDriver);
         Result = (HwInitializationData->HwFindAdapter)(
             &DeviceExtension->MiniPortDeviceExtension, HwContext, 0, /* BusInformation */
             ConfigInfo.Parameter,                                    /* ArgumentString */
             PortConfig, &Again);
-
-        SCSIPORT_TRACE("[SCSIPORT] ScsiPortInitialize: HwFindAdapter result=%lu Again=%lu Bus=%lu\n",
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL,
+                   "[scsiport] HwFindAdapter result=%lu Again=%lu Bus=%lu If=%u\n",
                    Result,
                    Again,
-                   PortConfig->SystemIoBusNumber);
+                   PortConfig->SystemIoBusNumber,
+                   HwInitializationData->AdapterInterfaceType);
 
         /* Free MapRegisterBase, it's not needed anymore */
         if (DeviceExtension->MapRegisterBase != NULL)
@@ -3434,6 +3468,26 @@ SpiCreatePortConfig(PSCSI_PORT_DEVICE_EXTENSION DeviceExtension,
 
     /* Store Bus Number */
     ConfigInfo->SystemIoBusNumber = InternalConfigInfo->BusNumber;
+
+    /*
+     * Fast path for legacy (non-PCI) miniports on ACPI systems:
+     * Do not rely on legacy HARDWARE\DESCRIPTION registry layouts that
+     * are absent on ACPI/Q35. Proceed directly to HwFindAdapter and let
+     * the miniport probe fixed ISA compatibility ranges.
+     */
+    if ((ConfigInfo->AdapterInterfaceType != PCIBus))
+    {
+        PSCSI_PORT_DRIVER_EXTENSION DriverExtensionLocal;
+        DriverExtensionLocal = IoGetDriverObjectExtension(DeviceExtension->Common.DeviceObject->DriverObject,
+                                                          HwInitData->HwInitialize);
+        if (DriverExtensionLocal && DriverExtensionLocal->FirmwareSupportsPnp)
+        {
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID,
+                       DPFLTR_INFO_LEVEL,
+                       "[scsiport] ACPI detected; skipping legacy registry scan for non-PCI miniport.\n");
+            return STATUS_SUCCESS;
+        }
+    }
 
 TryNextAd:
 
