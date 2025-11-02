@@ -1,0 +1,58 @@
+; uefifb.inf
+;
+; Installation file for the UEFI framebuffer miniport
+;
+[Version]
+Signature  = "$Windows NT$"
+Class      = Display
+ClassGUID  = {4D36E968-E325-11CE-BFC1-08002BE10318}
+Provider   = %ReactOS%
+DriverVer  = 06/09/2024,0.1
+
+[DestinationDirs]
+DefaultDestDir = 12
+UefiFb.Display_CopyFiles = 11
+
+[Manufacturer]
+%ReactOS% = ReactOS,NTx86,NTamd64
+
+[ReactOS.NTx86]
+%UefiFb.DeviceDesc% = UefiFb_Install,ROOT\UEFIFB
+
+[ReactOS.NTamd64]
+%UefiFb.DeviceDesc% = UefiFb_Install,ROOT\UEFIFB
+
+[UefiFb_Install]
+CopyFiles = UefiFb.CopyFiles, UefiFb.Display_CopyFiles
+AddReg = UefiFb_SoftwareSettings
+
+[UefiFb.CopyFiles]
+uefifb.sys
+
+[UefiFb.Display_CopyFiles]
+framebuf.dll
+
+[UefiFb_SoftwareSettings]
+HKR,, InstalledDisplayDrivers, %REG_MULTI_SZ%, framebuf
+HKR,, VgaCompatible, %REG_DWORD%, 0
+; Optional defaults inherited from service for desired resolution
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.XResolution",%REG_DWORD%,1024
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.YResolution",%REG_DWORD%,768
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.BitsPerPel",%REG_DWORD%,32
+
+[UefiFb_Install.Services]
+AddService = uefifb, 0x00000002, UefiFb_Service
+
+[UefiFb_Service]
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 0
+ServiceBinary = %12%\uefifb.sys
+LoadOrderGroup = Video
+
+[Strings]
+ReactOS = "ReactOS Project"
+UefiFb.DeviceDesc = "UEFI Framebuffer Adapter"
+
+REG_MULTI_SZ   = 0x00010000
+REG_DWORD      = 0x00010001
