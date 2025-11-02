@@ -240,6 +240,12 @@ ScsiPortDispatchScsi(
             if (Srb->SrbFlags & SRB_FLAGS_BYPASS_FROZEN_QUEUE)
             {
                 /* Start IO directly */
+                #if DBG
+                {
+                    KIRQL cur = KeGetCurrentIrql();
+                    DPRINT1("[SCSIPORT] BYPASS_FROZEN_QUEUE: IoStartPacket at IRQL %lu\n", (ULONG)cur);
+                }
+                #endif
                 IoStartPacket(portExt->Common.DeviceObject, Irp, NULL, NULL);
             }
             else
@@ -247,6 +253,11 @@ ScsiPortDispatchScsi(
                 KIRQL oldIrql;
 
                 /* We need to be at DISPATCH_LEVEL */
+                /*
+                 * Note: KeInsertByKeyDeviceQueue requires DISPATCH_LEVEL.
+                 * Avoid chatty per-request logging here; keep anomaly
+                 * detection after lowering IRQL below.
+                 */
                 KeRaiseIrql(DISPATCH_LEVEL, &oldIrql);
 
                 /* Insert IRP into the queue */
@@ -260,6 +271,15 @@ ScsiPortDispatchScsi(
 
                 /* Back to the old IRQL */
                 KeLowerIrql(oldIrql);
+                #if DBG
+                {
+                    KIRQL cur2 = KeGetCurrentIrql();
+                    if (cur2 != oldIrql)
+                    {
+                        DPRINT1("[SCSIPORT] WARNING: IRQL after KeLowerIrql is %lu, expected %lu\n", (ULONG)cur2, (ULONG)oldIrql);
+                    }
+                }
+                #endif
             }
             return STATUS_PENDING;
 
@@ -1817,24 +1837,37 @@ ScsiPortStartIo(
 
     if (Srb->SrbFlags & SRB_FLAGS_UNSPECIFIED_DIRECTION)
     {
-        // Store the MDL virtual address in SrbInfo structure
-        SrbInfo->DataOffset = MmGetMdlVirtualAddress(Irp->MdlAddress);
-
-        if (DeviceExtension->MapBuffers)
+        PMDL mdl = Irp->MdlAddress;
+        /* Guard MDL usage: some internal requests carry no MDL */
+        if (mdl)
         {
-            /* Calculate offset within DataBuffer */
-            SrbInfo->DataOffset = MmGetSystemAddressForMdl(Irp->MdlAddress);
-            Srb->DataBuffer = SrbInfo->DataOffset +
-                (ULONG)((PUCHAR)Srb->DataBuffer -
-                (PUCHAR)MmGetMdlVirtualAddress(Irp->MdlAddress));
+            // Store the MDL virtual address in SrbInfo structure
+            SrbInfo->DataOffset = MmGetMdlVirtualAddress(mdl);
+
+            if (DeviceExtension->MapBuffers)
+            {
+                /* Calculate offset within DataBuffer */
+                SrbInfo->DataOffset = MmGetSystemAddressForMdl(mdl);
+                Srb->DataBuffer = SrbInfo->DataOffset +
+                    (ULONG)((PUCHAR)Srb->DataBuffer -
+                    (PUCHAR)MmGetMdlVirtualAddress(mdl));
+            }
+
+            if (DeviceExtension->AdapterObject)
+            {
+                /* Flush buffers */
+                KeFlushIoBuffers(mdl,
+                                 (Srb->SrbFlags & SRB_FLAGS_DATA_IN) ? TRUE : FALSE,
+                                 TRUE);
+            }
         }
-
-        if (DeviceExtension->AdapterObject)
+        else
         {
-            /* Flush buffers */
-            KeFlushIoBuffers(Irp->MdlAddress,
-                             Srb->SrbFlags & SRB_FLAGS_DATA_IN ? TRUE : FALSE,
-                             TRUE);
+            /* No MDL present: keep DataOffset consistent and avoid MDL operations */
+            SrbInfo->DataOffset = (PUCHAR)Srb->DataBuffer;
+#if DBG
+            DPRINT1("[SCSIPORT] ScsiPortStartIo: No MDL on IRP %p, skipping Mm/IO flush paths\n", Irp);
+#endif
         }
 
         if (DeviceExtension->MapRegisters)
