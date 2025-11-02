@@ -368,6 +368,11 @@ DrvGetModes(
    ULONG ModeInfoSize;
    PVIDEO_MODE_INFORMATION ModeInfo, ModeInfoPtr;
    ULONG OutputSize;
+   VIDEO_MODE_INFORMATION CurrMode;
+   ULONG ulTmp;
+   BOOL haveCurr = FALSE;
+   /* Target aspect ratio in fixed-point (x1000). Defaults to 0 (no preference) */
+   ULONG targetRatio = 0;
 
    ModeCount = GetAvailableModes(hDriver, &ModeInfo, &ModeInfoSize);
    if (ModeCount == 0)
@@ -381,38 +386,103 @@ DrvGetModes(
       return ModeCount * sizeof(DEVMODEW);
    }
 
+   /* Try to obtain the current mode to use its aspect as a preference for ordering */
+   if (!EngDeviceIoControl(hDriver,
+                           IOCTL_VIDEO_QUERY_CURRENT_MODE,
+                           NULL,
+                           0,
+                           &CurrMode,
+                           sizeof(CurrMode),
+                           &ulTmp))
+   {
+      if (CurrMode.VisScreenWidth && CurrMode.VisScreenHeight)
+      {
+         targetRatio = (ULONG)((CurrMode.VisScreenWidth * 1000ULL) / CurrMode.VisScreenHeight);
+         haveCurr = TRUE;
+      }
+   }
+
    /*
-    * Copy the information about supported modes into the output buffer.
+    * Copy the information about supported modes into the output buffer,
+    * preferring modes that match (or are closest to) the current aspect ratio.
+    * We do this in two passes: primary (close aspect), then secondary (others).
     */
 
    OutputSize = 0;
-   ModeInfoPtr = ModeInfo;
-
-   while (ModeCount-- > 0)
+   /* First pass: primary list (aspect close to target) */
+   if (haveCurr)
    {
-      if (ModeInfoPtr->Length == 0)
+      ULONG left = ModeCount;
+      ModeInfoPtr = ModeInfo;
+      while (left-- > 0)
       {
+         if (ModeInfoPtr->Length != 0 &&
+             ModeInfoPtr->VisScreenWidth && ModeInfoPtr->VisScreenHeight)
+         {
+            ULONG modeRatio = (ULONG)((ModeInfoPtr->VisScreenWidth * 1000ULL) / ModeInfoPtr->VisScreenHeight);
+            ULONG diff = (modeRatio > targetRatio) ? (modeRatio - targetRatio) : (targetRatio - modeRatio);
+            if (diff <= 25) /* within 2.5% aspect difference */
+            {
+               memset(pdm, 0, sizeof(DEVMODEW));
+               memcpy(pdm->dmDeviceName, DEVICE_NAME, sizeof(DEVICE_NAME));
+               pdm->dmSpecVersion =
+               pdm->dmDriverVersion = DM_SPECVERSION;
+               pdm->dmSize = sizeof(DEVMODEW);
+               pdm->dmDriverExtra = 0;
+               pdm->dmBitsPerPel = ModeInfoPtr->NumberOfPlanes * ModeInfoPtr->BitsPerPlane;
+               pdm->dmPelsWidth = ModeInfoPtr->VisScreenWidth;
+               pdm->dmPelsHeight = ModeInfoPtr->VisScreenHeight;
+               pdm->dmDisplayFrequency = ModeInfoPtr->Frequency;
+               pdm->dmDisplayFlags = 0;
+               pdm->dmFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT |
+                               DM_DISPLAYFREQUENCY | DM_DISPLAYFLAGS;
+
+               pdm = (LPDEVMODEW)(((ULONG_PTR)pdm) + sizeof(DEVMODEW));
+               OutputSize += sizeof(DEVMODEW);
+            }
+         }
          ModeInfoPtr = (PVIDEO_MODE_INFORMATION)(((ULONG_PTR)ModeInfoPtr) + ModeInfoSize);
-         continue;
       }
+   }
 
-      memset(pdm, 0, sizeof(DEVMODEW));
-      memcpy(pdm->dmDeviceName, DEVICE_NAME, sizeof(DEVICE_NAME));
-      pdm->dmSpecVersion =
-      pdm->dmDriverVersion = DM_SPECVERSION;
-      pdm->dmSize = sizeof(DEVMODEW);
-      pdm->dmDriverExtra = 0;
-      pdm->dmBitsPerPel = ModeInfoPtr->NumberOfPlanes * ModeInfoPtr->BitsPerPlane;
-      pdm->dmPelsWidth = ModeInfoPtr->VisScreenWidth;
-      pdm->dmPelsHeight = ModeInfoPtr->VisScreenHeight;
-      pdm->dmDisplayFrequency = ModeInfoPtr->Frequency;
-      pdm->dmDisplayFlags = 0;
-      pdm->dmFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT |
-                      DM_DISPLAYFREQUENCY | DM_DISPLAYFLAGS;
+   /* Second pass: secondary list (all others) */
+   {
+      ULONG left = ModeCount;
+      ModeInfoPtr = ModeInfo;
+      while (left-- > 0)
+      {
+         if (ModeInfoPtr->Length != 0)
+         {
+            BOOL emit = TRUE;
+            if (haveCurr && ModeInfoPtr->VisScreenWidth && ModeInfoPtr->VisScreenHeight)
+            {
+               ULONG modeRatio = (ULONG)((ModeInfoPtr->VisScreenWidth * 1000ULL) / ModeInfoPtr->VisScreenHeight);
+               ULONG diff = (modeRatio > targetRatio) ? (modeRatio - targetRatio) : (targetRatio - modeRatio);
+               if (diff <= 25)
+                   emit = FALSE; /* already emitted as primary */
+            }
+            if (emit)
+            {
+               memset(pdm, 0, sizeof(DEVMODEW));
+               memcpy(pdm->dmDeviceName, DEVICE_NAME, sizeof(DEVICE_NAME));
+               pdm->dmSpecVersion =
+               pdm->dmDriverVersion = DM_SPECVERSION;
+               pdm->dmSize = sizeof(DEVMODEW);
+               pdm->dmDriverExtra = 0;
+               pdm->dmBitsPerPel = ModeInfoPtr->NumberOfPlanes * ModeInfoPtr->BitsPerPlane;
+               pdm->dmPelsWidth = ModeInfoPtr->VisScreenWidth;
+               pdm->dmPelsHeight = ModeInfoPtr->VisScreenHeight;
+               pdm->dmDisplayFrequency = ModeInfoPtr->Frequency;
+               pdm->dmDisplayFlags = 0;
+               pdm->dmFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT |
+                               DM_DISPLAYFREQUENCY | DM_DISPLAYFLAGS;
 
-      ModeInfoPtr = (PVIDEO_MODE_INFORMATION)(((ULONG_PTR)ModeInfoPtr) + ModeInfoSize);
-      pdm = (LPDEVMODEW)(((ULONG_PTR)pdm) + sizeof(DEVMODEW));
-      OutputSize += sizeof(DEVMODEW);
+               pdm = (LPDEVMODEW)(((ULONG_PTR)pdm) + sizeof(DEVMODEW));
+               OutputSize += sizeof(DEVMODEW);
+            }
+         }
+         ModeInfoPtr = (PVIDEO_MODE_INFORMATION)(((ULONG_PTR)ModeInfoPtr) + ModeInfoSize);
+      }
    }
 
    EngFreeMem(ModeInfo);
