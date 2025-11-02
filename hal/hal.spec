@@ -54,6 +54,7 @@
 @ stdcall HalStartNextProcessor(ptr ptr)
 @ stdcall HalStartProfileInterrupt(long)
 @ stdcall HalStopProfileInterrupt(long)
+@ stdcall HalIsIoApicPresent()
 @ fastcall -arch=arm HalSweepIcache()
 @ fastcall -arch=arm HalSweepDcache()
 @ fastcall HalSystemVectorDispatchEntry(long long long)
