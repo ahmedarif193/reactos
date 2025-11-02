@@ -40,6 +40,28 @@ static ULONG HalpPciGsiCapacity;
 static PHAL_ACPI_PCI_ROUTE_QUERY HalpPciRouteQueryCallback;
 BOOLEAN HalpPciBusRangeKnown;
 
+/* Optional: allocate a concrete PCI bus handler for a given bus number.
+   Not all HAL variants provide this. Avoid hard link-time dependency. */
+static __inline PBUS_HANDLER
+HalpTryAllocateAndInitPciBusHandler(
+    IN ULONG PciType,
+    IN ULONG BusNo,
+    IN BOOLEAN TestAllocation)
+{
+    UNREFERENCED_PARAMETER(PciType);
+    UNREFERENCED_PARAMETER(BusNo);
+    UNREFERENCED_PARAMETER(TestAllocation);
+#if defined(__GNUC__)
+    /* GCC/MinGW: declare weak reference and call only if present */
+    extern PBUS_HANDLER NTAPI HalpAllocateAndInitPciBusHandler(ULONG, ULONG, BOOLEAN) __attribute__((weak));
+    if (HalpAllocateAndInitPciBusHandler)
+    {
+        return HalpAllocateAndInitPciBusHandler(PciType, BusNo, TestAllocation);
+    }
+#endif
+    return NULL;
+}
+
 
 static BOOLEAN
 HalpPciBusBelongsToRoot(
@@ -1207,12 +1229,20 @@ HalpConfigurePciRootBridge(
     Bus = HalHandlerForBus(PCIBus, Info->Bus);
     if (!Bus)
     {
-        /* No registered handler yet; use the fake PCI handler for ACPI */
-        extern BUS_HANDLER HalpFakePciBusHandler;
-        Bus = &HalpFakePciBusHandler;
-        Bus->BusNumber = Info->Bus;
-        DPRINT1("HAL: ACPI reported PCI root for bus %lu with no handler; using fake PCI handler.\n",
-                Info->Bus);
+        /* Try to create a concrete PCI bus handler (Type 1 by default) if available */
+        Bus = HalpTryAllocateAndInitPciBusHandler(1, Info->Bus, FALSE);
+        if (!Bus)
+        {
+            /* Fall back to the fake handler as a last resort */
+            extern BUS_HANDLER HalpFakePciBusHandler;
+            Bus = &HalpFakePciBusHandler;
+            Bus->BusNumber = Info->Bus;
+            DPRINT("HAL: Using temporary PCI handler for ACPI root bus %lu\n", Info->Bus);
+        }
+        else
+        {
+            DPRINT("HAL: Registered PCI bus handler for ACPI root bus %lu\n", Info->Bus);
+        }
     }
 
     BusData = (PPCIPBUSDATA)Bus->BusData;
