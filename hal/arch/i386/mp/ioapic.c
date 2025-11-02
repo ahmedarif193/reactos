@@ -410,6 +410,15 @@ IOAPICEnable(VOID)
 {
    ULONG i, tmp;
 
+   if (IOAPICCount > 0)
+   {
+      DPRINT1("HAL: IOAPICs detected (%lu). APIC IRQ routing active.\n", IOAPICCount);
+   }
+   else
+   {
+      DPRINT1("HAL: No IOAPIC present; falling back to PIC IRQ routing.\n");
+   }
+
    /* Setup IRQ to vector translation map */
    memset(&IRQVectorMap, 0, sizeof(IRQVectorMap));
 
@@ -427,6 +436,7 @@ IOAPICEnable(VOID)
     */
    IOAPICClearAll();
 }
+
 
 VOID
 IOAPICSetupIds(VOID)
