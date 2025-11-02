@@ -900,7 +900,8 @@ function(create_registry_hives)
     list(APPEND _livecd_inf_files
         ${_registry_inf}
         ${CMAKE_SOURCE_DIR}/boot/bootdata/livecd.inf
-        ${CMAKE_SOURCE_DIR}/boot/bootdata/caroots.inf)
+        ${CMAKE_SOURCE_DIR}/boot/bootdata/caroots.inf
+        ${CMAKE_SOURCE_DIR}/media/inf/uefifb_root.inf)
     if(SARCH STREQUAL "xbox")
         list(APPEND _livecd_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst_xbox.inf)
@@ -942,7 +943,11 @@ function(create_registry_hives)
     list(APPEND _liveimg_inf_files
         ${_registry_inf}
         ${CMAKE_SOURCE_DIR}/boot/bootdata/liveimg.inf
-        ${CMAKE_SOURCE_DIR}/boot/bootdata/caroots.inf)
+        ${CMAKE_SOURCE_DIR}/boot/bootdata/caroots.inf
+        ${CMAKE_SOURCE_DIR}/media/inf/uefifb_root.inf)
+    # NOTE: Unlike LiveCD, do NOT include uefifb_root.inf here so uefifb
+    # remains demand-start on LiveIMG to mirror Windows behavior. LiveIMG
+    # still seeds the ROOT\UEFIFB devnode via liveimg.inf.
     if(SARCH STREQUAL "xbox")
         list(APPEND _liveimg_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst_xbox.inf)
