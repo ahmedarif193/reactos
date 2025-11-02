@@ -12,6 +12,23 @@
 #define NDEBUG
 #include <debug.h>
 
+#if defined(_MSC_VER)
+/*
+ * Provide a no-op fallback for builds that do not link in the ACPI phase-1
+ * helpers. The linker will redirect HalpAcpiPhase1Init to this implementation
+ * if no strong symbol is available.
+ */
+VOID
+HalpAcpiPhase1InitFallback(VOID)
+{
+    /* Nothing to do when ACPI support is absent. */
+}
+
+#pragma comment(linker, "/alternatename:HalpAcpiPhase1Init=HalpAcpiPhase1InitFallback")
+#else
+VOID HalpAcpiPhase1Init(VOID) __attribute__((weak));
+#endif
+
 /* GLOBALS *******************************************************************/
 
 /*
@@ -206,6 +223,14 @@ HalInitSystem(
 
         /* Do some HAL-specific initialization */
         HalpInitPhase1();
+
+        /* ACPI late init: allocate ECAM gating map and process registry parameters */
+#if defined(_MSC_VER)
+        HalpAcpiPhase1Init();
+#else
+        if (HalpAcpiPhase1Init)
+            HalpAcpiPhase1Init();
+#endif
 
         /* Initialize Phase 1 of the x86 emulator only for BIOS systems */
         if (LoaderBlock->FirmwareInformation.FirmwareTypeEfi == 0)
