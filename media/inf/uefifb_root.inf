@@ -1,0 +1,49 @@
+; uefifb_root.inf
+;
+; Seeds a root-enumerated fallback device so uefifb.sys can load on LiveCD
+;
+[Version]
+Signature  = "$Windows NT$"
+Class      = Display
+ClassGUID  = {4D36E968-E325-11CE-BFC1-08002BE10318}
+Provider   = %ReactOS%
+DriverVer  = 06/09/2024,0.1
+
+[DefaultInstall]
+AddReg = UefiFb.Enum, UefiFb.Service
+
+[UefiFb.Enum]
+HKLM,Enum\Root\UEFIFB,NextInstance,0x00010001,0x00000001
+HKLM,Enum\Root\UEFIFB,Class,0,"Display"
+HKLM,Enum\Root\UEFIFB,ClassGUID,0,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,Enum\Root\UEFIFB,DeviceDesc,0,"UEFI Framebuffer Adapter"
+HKLM,Enum\Root\UEFIFB\0000,HardwareID,0x00010000,"ROOT\UEFIFB"
+HKLM,Enum\Root\UEFIFB\0000,CompatibleIDs,0x00010000,"ROOT\DISPLAY"
+HKLM,Enum\Root\UEFIFB\0000,Class,0,"Display"
+HKLM,Enum\Root\UEFIFB\0000,ClassGUID,0,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,Enum\Root\UEFIFB\0000,DeviceDesc,0,"UEFI Framebuffer Adapter"
+HKLM,Enum\Root\UEFIFB\0000,Mfg,0,"ReactOS Project"
+HKLM,Enum\Root\UEFIFB\0000,Service,0,"uefifb"
+HKLM,Enum\Root\UEFIFB\0000,ConfigFlags,0x00010001,0x00000000
+HKLM,Enum\Root\UEFIFB\0000,Capabilities,0x00010001,0x00000000
+HKLM,Enum\Root\UEFIFB\0000\LogConf,,0x00000012
+HKLM,Enum\Root\UEFIFB\0000\LogConf,"BootConfig",0x00000001
+HKLM,Enum\Root\UEFIFB\0000\LogConf,"BasicConfigVector",0x00000001
+
+[UefiFb.Service]
+; Seed the demand-start fallback in the standard Video group
+HKLM,SYSTEM\CurrentControlSet\Services\uefifb,"Type",0x00010001,0x00000001
+HKLM,SYSTEM\CurrentControlSet\Services\uefifb,"Start",0x00010001,0x00000000
+HKLM,SYSTEM\CurrentControlSet\Services\uefifb,"ErrorControl",0x00010001,0x00000001
+HKLM,SYSTEM\CurrentControlSet\Services\uefifb,"Group",0x00000000,"Video Save"
+HKLM,SYSTEM\CurrentControlSet\Services\uefifb,"DependOnGroup",0x00010000,"Video"
+HKLM,SYSTEM\CurrentControlSet\Services\uefifb,"ImagePath",0x00020000,"system32\drivers\uefifb.sys"
+; Provide the Services\\uefifb\\Video key used by win32k to resolve the miniport service
+HKLM,SYSTEM\CurrentControlSet\Services\uefifb\Video,"Service",0x00000000,"uefifb"
+; Optional descriptive string under the legacy device profile
+HKLM,SYSTEM\CurrentControlSet\Services\uefifb\Device0,"Device Description",0x00000000,"UEFI Framebuffer Adapter"
+; Enable videoprt's new registry path logic used to locate per-device settings
+HKLM,SYSTEM\CurrentControlSet\Control\GraphicsDrivers\UseNewKey,,0x00000012
+
+[Strings]
+ReactOS = "ReactOS Project"
