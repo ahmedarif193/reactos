@@ -1493,7 +1493,7 @@ typedef struct _RTL_RANGE
     UCHAR Flags;
 } RTL_RANGE, *PRTL_RANGE;
 
-typedef struct _RANGE_LIST_ITERATOR
+typedef struct _RTL_RANGE_LIST_ITERATOR
 {
     PLIST_ENTRY RangeListHead;
     PLIST_ENTRY MergedHead;

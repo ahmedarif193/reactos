@@ -311,6 +311,16 @@ HalSetTimeIncrement(
     _In_ ULONG Increment
 );
 
+//
+// APIC/IOAPIC Query
+//
+NTHALAPI
+BOOLEAN
+NTAPI
+HalIsIoApicPresent(
+    VOID
+);
+
 
 //
 // BIOS call API

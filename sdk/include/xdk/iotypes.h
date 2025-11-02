@@ -4557,6 +4557,7 @@ typedef enum _ARBITER_ACTION {
   ArbiterActionBootAllocation
 } ARBITER_ACTION, *PARBITER_ACTION;
 
+
 typedef struct _ARBITER_CONFLICT_INFO {
   PDEVICE_OBJECT OwningObject;
   ULONGLONG Start;
@@ -4631,6 +4632,7 @@ typedef enum _ARBITER_RESULT {
 typedef struct _ARBITER_LIST_ENTRY {
   LIST_ENTRY ListEntry;
   ULONG AlternativeCount;
+  /* Public shape: array of IO_RESOURCE_DESCRIPTOR alternatives. */
   PIO_RESOURCE_DESCRIPTOR Alternatives;
   PDEVICE_OBJECT PhysicalDeviceObject;
   ARBITER_REQUEST_SOURCE RequestSource;
@@ -4639,6 +4641,7 @@ typedef struct _ARBITER_LIST_ENTRY {
   INTERFACE_TYPE InterfaceType;
   ULONG SlotNumber;
   ULONG BusNumber;
+  /* Public shape: pointer to assignment descriptor. */
   PCM_PARTIAL_RESOURCE_DESCRIPTOR Assignment;
   PIO_RESOURCE_DESCRIPTOR SelectedAlternative;
   ARBITER_RESULT Result;

@@ -28,6 +28,8 @@ BOOLEAN HalpProcessedACPIPhase0;
 BOOLEAN HalpPhysicalMemoryMayAppearAbove4GB;
 
 FADT HalpFixedAcpiDescTable;
+/* Global GSI number for the ACPI SCI (computed from FADT + MADT overrides) */
+ULONG HalpSciGsi = 0xFFFFFFFFu;
 PDEBUG_PORT_TABLE HalpDebugPortTable;
 PACPI_SRAT HalpAcpiSrat;
 PBOOT_TABLE HalpSimpleBootFlagTable;
@@ -48,6 +50,8 @@ ULONG HalpInvalidAcpiTable;
 PHALP_ACPI_MCFG HalpAcpiMcfgTable;
 PHALP_ACPI_MCFG_ALLOCATION HalpAcpiMcfgAllocations;
 ULONG HalpAcpiMcfgAllocationCount;
+PUCHAR HalpAcpiMcfgSegDisabled;
+ULONG HalpAcpiMcfgSegDisabledCount;
 volatile LONG HalpAcpiEcamCoverageFlags;
 BOOLEAN HalpAcpiEcamDisabled;
 
@@ -2008,6 +2012,10 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                         (PHALP_ACPI_MCFG_ALLOCATION)((PUCHAR)Mcfg + sizeof(*Mcfg));
                     HalpAcpiMcfgAllocationCount = EntryCount;
 
+                    /* Defer per-allocation disable-map allocation to Phase 1 (pool ready) */
+                    HalpAcpiMcfgSegDisabled = NULL;
+                    HalpAcpiMcfgSegDisabledCount = 0;
+
                     for (Index = 0; Index < EntryCount; ++Index)
                     {
                         const HALP_ACPI_MCFG_ALLOCATION *Allocation =
@@ -2321,6 +2329,26 @@ HalpAcpiAccessConfigEcam(
         return FALSE;
     }
 
+    /* If this allocation/segment has been disabled due to invalid ECAM, fallback */
+    if (HalpAcpiMcfgSegDisabled && HalpAcpiMcfgAllocations)
+    {
+        ULONG idx;
+        for (idx = 0; idx < HalpAcpiMcfgAllocationCount; ++idx)
+        {
+            if (&HalpAcpiMcfgAllocations[idx] == Allocation)
+            {
+                if (idx < HalpAcpiMcfgSegDisabledCount && HalpAcpiMcfgSegDisabled[idx])
+                {
+                    CHAR msg[128];
+                    _snprintf(msg, sizeof(msg), "HAL: ECAM disabled for segment %u; using legacy configuration space.", Allocation->PciSegment);
+                    HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
+                    return FALSE;
+                }
+                break;
+            }
+        }
+    }
+
     FunctionBase = Allocation->BaseAddress;
     FunctionBase += ((ULONGLONG)(BusNumber - Allocation->StartBusNumber) << 20);
     FunctionBase += ((ULONGLONG)Slot.u.bits.DeviceNumber << 15);
@@ -2386,16 +2414,28 @@ HalpAcpiAccessConfigEcam(
 
     if (ForceLegacy)
     {
-        HalpAcpiRecordEcamEvent(
-            HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES,
-            NULL);
+        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES, NULL);
 
-        if (!HalpAcpiEcamDisabled)
+        /* Disable ECAM for this allocation/segment only */
+        if (HalpAcpiMcfgSegDisabled && HalpAcpiMcfgAllocations)
         {
-            HalpAcpiEcamDisabled = TRUE;
-            HalpAcpiRecordEcamEvent(
-                HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL,
-                "HAL: MMCONFIG read of 00:00.0 vendor returned 0xFFFF; disabling ECAM access.");
+            ULONG idx;
+            for (idx = 0; idx < HalpAcpiMcfgAllocationCount; ++idx)
+            {
+                if (&HalpAcpiMcfgAllocations[idx] == Allocation)
+                {
+                    if (idx < HalpAcpiMcfgSegDisabledCount)
+                    {
+                        HalpAcpiMcfgSegDisabled[idx] = 1;
+                        {
+                            CHAR msg[128];
+                            _snprintf(msg, sizeof(msg), "HAL: MMCONFIG vendor returned 0xFFFF; disabling ECAM for segment %u.", Allocation->PciSegment);
+                            HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
+                        }
+                    }
+                    break;
+                }
+            }
         }
 
         return FALSE;
@@ -3013,6 +3053,8 @@ HalpBuildAcpiResourceList(IN PIO_RESOURCE_REQUIREMENTS_LIST ResourceList)
 
         /* Get the interrupt number */
         Interrupt = HalpPicVectorRedirect[HalpFixedAcpiDescTable.sci_int_vector];
+        /* Cache SCI GSI for downstream components (APIC routing override) */
+        HalpSciGsi = Interrupt;
         ResourceList->List[0].Descriptors[0].u.Interrupt.MinimumVector = Interrupt;
         ResourceList->List[0].Descriptors[0].u.Interrupt.MaximumVector = Interrupt;
 
@@ -3139,3 +3181,69 @@ HalpQueryAcpiRootPointer(
 }
 
 /* EOF */
+/* Phase 1 init: allocate per-segment ECAM disable map and read registry gate */
+CODE_SEG("INIT")
+VOID
+HalpAcpiPhase1Init(VOID)
+{
+    /* Allocate per-allocation disable flags if MCFG present and not yet allocated */
+    if (HalpAcpiMcfgAllocations && HalpAcpiMcfgAllocationCount && !HalpAcpiMcfgSegDisabled)
+    {
+        HalpAcpiMcfgSegDisabled = ExAllocatePoolWithTag(NonPagedPool,
+                                                         HalpAcpiMcfgAllocationCount * sizeof(UCHAR),
+                                                         'gaCE');
+        if (HalpAcpiMcfgSegDisabled)
+        {
+            RtlZeroMemory(HalpAcpiMcfgSegDisabled, HalpAcpiMcfgAllocationCount * sizeof(UCHAR));
+            HalpAcpiMcfgSegDisabledCount = HalpAcpiMcfgAllocationCount;
+        }
+    }
+
+    /* Optional registry gate to disable ECAM globally: HKLM\System\CCS\Services\pci\Parameters\DisableEcam */
+    {
+        UNICODE_STRING KeyName;
+        HANDLE Root = NULL, Key = NULL;
+        NTSTATUS Sts;
+        ULONG Disable = 0;
+        PKEY_VALUE_PARTIAL_INFORMATION Kvpi = NULL;
+        ULONG Req = 0;
+
+        RtlInitUnicodeString(&KeyName, L"\\REGISTRY\\MACHINE\\SYSTEM\\CURRENTCONTROLSET");
+        Sts = HalpOpenRegistryKey(&Root, NULL, &KeyName, KEY_READ, FALSE);
+        if (NT_SUCCESS(Sts))
+        {
+            RtlInitUnicodeString(&KeyName, L"Services\\pci\\Parameters");
+            Sts = HalpOpenRegistryKey(&Key, Root, &KeyName, KEY_READ, FALSE);
+            ZwClose(Root);
+            if (NT_SUCCESS(Sts))
+            {
+                RtlInitUnicodeString(&KeyName, L"DisableEcam");
+                Sts = ZwQueryValueKey(Key, &KeyName, KeyValuePartialInformation, NULL, 0, &Req);
+                if ((Sts == STATUS_BUFFER_OVERFLOW || Sts == STATUS_BUFFER_TOO_SMALL) && Req)
+                {
+                    Kvpi = ExAllocatePoolWithTag(PagedPool, Req, TAG_HAL);
+                    if (Kvpi)
+                    {
+                        Sts = ZwQueryValueKey(Key, &KeyName, KeyValuePartialInformation, Kvpi, Req, &Req);
+                        if (NT_SUCCESS(Sts) && Kvpi->Type == REG_DWORD && Kvpi->DataLength >= sizeof(ULONG))
+                        {
+                            Disable = *(PULONG)Kvpi->Data;
+                        }
+                        ExFreePoolWithTag(Kvpi, TAG_HAL);
+                    }
+                }
+                ZwClose(Key);
+            }
+        }
+
+        if (Disable)
+        {
+            if (!HalpAcpiEcamDisabled)
+            {
+                HalpAcpiEcamDisabled = TRUE;
+                HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL,
+                                        "HAL: Registry forced DisableEcam=1; using legacy PCI configuration.");
+            }
+        }
+    }
+}
