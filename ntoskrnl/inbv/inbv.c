@@ -57,6 +57,9 @@ static PUCHAR ResourceList[1 + IDB_MAX_RESOURCES]; // First entry == NULL, follo
  */
 static LOADER_PARAMETER_FRAMEBUFFER InbvGopFramebuffer;
 static BOOLEAN InbvGopInfoValid = FALSE;
+static PLOADER_PARAMETER_GOP_MODE InbvGopModes = NULL;
+static ULONG InbvGopModeCount = 0;
+static ULONG InbvGopPreferredMode = 0;
 
 
 /*
@@ -215,6 +218,20 @@ InbvDriverInitialize(
         {
             RtlCopyMemory(&InbvGopFramebuffer, Fb, sizeof(*Fb));
             InbvGopInfoValid = TRUE;
+        }
+
+        /* Cache GOP mode enumeration if available */
+        if (Extension->GopModes && Extension->GopModeCount)
+        {
+            SIZE_T bytes = Extension->GopModeCount * sizeof(LOADER_PARAMETER_GOP_MODE);
+            PLOADER_PARAMETER_GOP_MODE list = ExAllocatePoolWithTag(NonPagedPool, bytes, 'MPOG');
+            if (list)
+            {
+                RtlCopyMemory(list, Extension->GopModes, bytes);
+                InbvGopModes = list;
+                InbvGopModeCount = Extension->GopModeCount;
+                InbvGopPreferredMode = Extension->GopPreferredMode;
+            }
         }
     }
 
@@ -746,6 +763,73 @@ InbvGetGopFrameBufferInfo(
 
     RtlCopyMemory(FrameBufferInfo, &InbvGopFramebuffer, sizeof(LOADER_PARAMETER_FRAMEBUFFER));
     return TRUE;
+}
+
+/*
+ * GOP mode enumeration/switching stubs.
+ * For now, only a single mode (current firmware mode) is exposed.
+ */
+BOOLEAN
+NTAPI
+InbvQueryGopModeCount(
+    _Out_ PULONG Count)
+{
+    if (!Count)
+        return FALSE;
+    if (InbvGopModeCount)
+    {
+        *Count = InbvGopModeCount;
+        return TRUE;
+    }
+    if (!InbvGopInfoValid)
+        return FALSE;
+    *Count = 1; /* at least current mode */
+    return TRUE;
+}
+
+BOOLEAN
+NTAPI
+InbvQueryGopModeInfo(
+    _In_ ULONG Index,
+    _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo)
+{
+    if (!FrameBufferInfo)
+        return FALSE;
+    if (InbvGopModeCount && InbvGopModes)
+    {
+        if (Index >= InbvGopModeCount)
+            return FALSE;
+        RtlZeroMemory(FrameBufferInfo, sizeof(*FrameBufferInfo));
+        FrameBufferInfo->FrameBufferBase = InbvGopFramebuffer.FrameBufferBase;
+        FrameBufferInfo->FrameBufferSize = InbvGopFramebuffer.FrameBufferSize;
+        FrameBufferInfo->HorizontalResolution = InbvGopModes[Index].HorizontalResolution;
+        FrameBufferInfo->VerticalResolution = InbvGopModes[Index].VerticalResolution;
+        FrameBufferInfo->PixelsPerScanLine = InbvGopModes[Index].PixelsPerScanLine;
+        FrameBufferInfo->PixelFormat = InbvGopModes[Index].PixelFormat;
+        FrameBufferInfo->RedMask = InbvGopModes[Index].RedMask;
+        FrameBufferInfo->GreenMask = InbvGopModes[Index].GreenMask;
+        FrameBufferInfo->BlueMask = InbvGopModes[Index].BlueMask;
+        FrameBufferInfo->Reserved = 0;
+        return TRUE;
+    }
+    if (!InbvGopInfoValid)
+        return FALSE;
+    if (Index == 0)
+    {
+        RtlCopyMemory(FrameBufferInfo, &InbvGopFramebuffer, sizeof(LOADER_PARAMETER_FRAMEBUFFER));
+        return TRUE;
+    }
+    return FALSE;
+}
+
+BOOLEAN
+NTAPI
+InbvSetGopMode(
+    _In_ ULONG Index)
+{
+    UNREFERENCED_PARAMETER(Index);
+    /* Stub: no runtime GOP mode switching implemented */
+    return FALSE;
 }
 
 NTSTATUS
