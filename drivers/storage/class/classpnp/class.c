@@ -4218,6 +4218,18 @@ ClassSendSrbSynchronous(
     //       queue regardless of the result, just set the NO_FREEZE_QUEUE
     //       flag in the SRB.
     //
+#if DBG
+    {
+        KIRQL cur = KeGetCurrentIrql();
+        if (cur >= DISPATCH_LEVEL) {
+            TracePrint((TRACE_LEVEL_ERROR, TRACE_FLAG_GENERAL,
+                        "ClassSendSrbSynchronous: entered at IRQL %lu (>= DISPATCH_LEVEL)\n", (ULONG)cur));
+        } else {
+            TracePrint((TRACE_LEVEL_VERBOSE, TRACE_FLAG_GENERAL,
+                        "ClassSendSrbSynchronous: entry IRQL %lu\n", (ULONG)cur));
+        }
+    }
+#endif
 
     NT_ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
     NT_ASSERT(fdoExtension->CommonExtension.IsFdo);
@@ -4382,6 +4394,16 @@ retry:
         }
 
         _SEH2_TRY {
+#if DBG
+            {
+                KIRQL cur = KeGetCurrentIrql();
+                if (cur >= DISPATCH_LEVEL) {
+                    TracePrint((TRACE_LEVEL_ERROR, TRACE_FLAG_GENERAL,
+                                "ClassSendSrbSynchronous: MmProbeAndLockPages about to run at IRQL %lu (>= DISPATCH_LEVEL)\n",
+                                (ULONG)cur));
+                }
+            }
+#endif
 
             //
             // the io manager unlocks these pages upon completion
@@ -11972,6 +11994,15 @@ ClasspReleaseQueue(
 
     KeReleaseSpinLockFromDpcLevel(&(fdoExtension->ReleaseQueueSpinLock));
 
+    /*
+     * We no longer need to run at DISPATCH_LEVEL. Lower IRQL now so that
+     * the subsequent IoCallDriver executes at PASSIVE_LEVEL. This avoids
+     * invoking lower drivers while IRQL is elevated, which in turn can
+     * cause IRQL assertions in code paths that require <= APC_LEVEL
+     * (e.g. memory manager working set locks during heavy user activity).
+     */
+    KeLowerIrql(currentIrql);
+
     NT_ASSERT(irp != NULL);
 
     irpStack = IoGetNextIrpStackLocation(irp);
@@ -12014,8 +12045,6 @@ ClasspReleaseQueue(
                            TRUE);
 
     IoCallDriver(lowerDevice, irp);
-
-    KeLowerIrql(currentIrql);
 
     return;
 

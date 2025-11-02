@@ -586,6 +586,16 @@ PMDL ClasspBuildDeviceMdl(PVOID Buffer, ULONG BufferLen, BOOLEAN WriteToDevice)
     mdl = IoAllocateMdl(Buffer, BufferLen, FALSE, FALSE, NULL);
     if (mdl){
         _SEH2_TRY {
+#if DBG
+            {
+                KIRQL cur = KeGetCurrentIrql();
+                if (cur >= DISPATCH_LEVEL) {
+                    TracePrint((TRACE_LEVEL_ERROR, TRACE_FLAG_INIT,
+                                "ClasspBuildDeviceMdl: called at IRQL %lu (>= DISPATCH_LEVEL)\n",
+                                (ULONG)cur));
+                }
+            }
+#endif
             MmProbeAndLockPages(mdl, KernelMode, WriteToDevice ? IoReadAccess : IoWriteAccess);
 #ifdef _MSC_VER
         #pragma warning(suppress: 6320) // We want to handle any exception that MmProbeAndLockPages might throw

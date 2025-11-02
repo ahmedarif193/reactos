@@ -31,6 +31,18 @@
 
 //#define EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
 
+#if DBG
+static __inline VOID FB_DBG(_In_z_ PCCH Format, ...)
+{
+    va_list ap;
+    va_start(ap, Format);
+    EngDebugPrint("FRAMEBUF", (PCHAR)Format, ap);
+    va_end(ap);
+}
+#else
+#define FB_DBG(...) do { } while (0)
+#endif
+
 typedef struct _PDEV
 {
    HANDLE hDriver;

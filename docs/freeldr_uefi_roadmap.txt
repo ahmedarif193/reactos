@@ -1,0 +1,82 @@
+FreeLoader UEFI Performance Roadmap
+===================================
+
+Scope
+-----
+Improve FreeLoader responsiveness and boot throughput when launched in a pure UEFI environment on modern hardware (no CSM fallback), while preserving feature-parity with the current BIOS path.
+
+Short-Term Options (0–2 iterations)
+-----------------------------------
+[ ] Mark the GOP framebuffer write-combining/write-back.
+    - Call `gDS->SetMemorySpaceAttributes` (or equivalent) on `framebufferData.BaseAddress` immediately after `LocateProtocol` succeeds in `boot/freeldr/freeldr/arch/uefi/uefivid.c`.
+    - Detect and log firmware refusal; fall back to manual page-table remapping when possible.
+    - Verify regression-free behavior on boards that already map the buffer cached.
+[ ] Introduce an in-RAM shadow text buffer and batched flush path.
+    - Keep `UefiVideoPutChar` writing into conventional memory and defer GOP updates to a flush routine.
+    - Implement a dirty-span tracker so only touched character cells are copied to VRAM.
+    - Provide a fast path using `GraphicsOutputBlt` or `CopyMem` when the firmware exposes a cached mapping.
+[ ] Decouple input latency from the render loop.
+    - Replace `ReadKeyStroke` busy-wait with `WaitForEvent` + `ReadKeyStroke` in `boot/freeldr/freeldr/arch/uefi/ueficon.c`.
+    - Buffer keys so UI code can poll without blocking rendering.
+[ ] Reduce default console traffic.
+    - Add an INI flag to toggle verbose diagnostics; default UEFI builds to minimal output.
+    - Ensure progress indicators reuse existing text cells instead of redrawing the whole screen.
+[ ] Instrument critical phases.
+    - Record boot timestamps around console init, menu draw, kernel load, and ExitBootServices.
+    - Gate merges on measurable improvement versus current baseline hardware (e.g. Alder Lake / Raptor Lake).
+
+Mid-Term Options (1–2 quarters)
+-------------------------------
+[ ] Rewrite the semi-text console around a dedicated damage-tracking renderer.
+    - Maintain per-row dirty masks and batch glyph uploads.
+    - Share the renderer among menu, progress, and runtime logging clients.
+[ ] Add an adaptive flush scheduler.
+    - Target ~16 ms flush cadence unless the UI is idle; allow a forced flush for blocking prompts.
+    - Provide configuration knobs for headless/serial-only scenarios.
+[ ] Optimize glyph emission.
+    - Precompute BGRA glyph atlases to eliminate bit shifts in the hot path.
+    - Align writes on 16-byte boundaries to benefit from SIMD or firmware-accelerated BLT calls.
+[ ] Modularize input / output / storage.
+    - Abstract console services so BIOS and UEFI share a common interface with backend-specific implementations.
+    - Prepare for eventual mouse pointer and text-input IME support.
+[ ] Integrate continuous validation.
+    - Extend automation (QEMU + OVMF) to measure flush counts and key latency.
+    - Capture perf regressions in CI with thresholds derived from real hardware profiling.
+
+Long-Term Options (6–12 months)
+-------------------------------
+[ ] Introduce a lightweight 2D compositor for FreeLoader.
+    - Support layered widgets, dirty rectangles, and optional GPU-accelerated blits.
+    - Enable richer boot menus and accessibility features without sacrificing speed.
+[ ] Develop a configurable logging backend.
+    - Allow routing boot logs to serial, in-memory ring buffers, or screen with per-target verbosity.
+    - Provide tooling to extract buffered logs post-boot for diagnostics.
+[ ] Explore UEFI HII (Human Interface Infrastructure) adoption.
+    - Assess feasibility of standard text and pointer input services, especially on touch devices.
+    - Prototype a HII-based menu as an optional build flag.
+[ ] Cross-platform performance hardening.
+    - Regularly test on discrete GPU laptops/desktops, integrated GPUs, and ARM64 UEFI boards.
+    - Document firmware quirks and bake workarounds into hardware compatibility notes.
+[ ] Fall-back and failure handling.
+    - Ensure FreeLoader can gracefully degrade to serial-only or minimal display if caching cannot be enabled.
+    - Detect pathological GOP implementations and prompt users with mitigation guidance.
+
+Validation & Tooling Checklist
+------------------------------
+[ ] Maintain a reproducible benchmark harness (serial scripting or automated key injection) for menu navigation and kernel load latency.
+[ ] Collect RDTSC/EFI performance counter samples before and after each milestone.
+[ ] Store baseline metrics per reference machine; require improvements (or explicit justification) before closing roadmap items.
+[ ] Keep a firmware compatibility matrix updated as tasks land.
+
+Dependencies & Risks
+--------------------
+- Access to diverse UEFI hardware for reproducible testing.
+- Potential firmware bugs that ignore memory-attribute changes; mitigated via fallbacks.
+- Coordination with ReactOS build/CI maintainers to integrate new tests.
+- Ensuring BIOS path behavior remains unchanged; guard via shared console abstraction and regression tests.
+
+Ownership & Next Steps
+----------------------
+[ ] Confirm maintainers for framebuffer attribute work and shadow-buffer implementation.
+[ ] Land instrumentation patch first to provide a baseline.
+[ ] Schedule regular syncs to reprioritize tasks based on findings and community feedback.

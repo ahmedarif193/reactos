@@ -6,6 +6,7 @@
  */
 
 #include <uefildr.h>
+#include <Cpu.h>
 
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WARNING);
@@ -16,6 +17,9 @@ static BOOLEAN UefiGetPreferredResolutionFromEdid(UINT32* OutW, UINT32* OutH);
 static BOOLEAN UefiSelectBestModeByAspect(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
                                           UINT32 targetW,
                                           UINT32 targetH);
+static BOOLEAN UefiTrySetExactMode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
+                                   UINT32 w,
+                                   UINT32 h);
 
 #define CHAR_WIDTH  8
 #define CHAR_HEIGHT 16
@@ -60,6 +64,78 @@ static BOOLEAN GopConsoleInitialized = FALSE;
 PLOADER_PARAMETER_GOP_MODE UefiGopModes = NULL;
 ULONG UefiGopModeCount = 0;
 ULONG UefiGopPreferredMode = 0;
+/* Forward declarations ******************************************************/
+static VOID UefiVideoConfigureFramebufferCache(VOID);
+
+static VOID
+UefiVideoConfigureFramebufferCache(VOID)
+{
+    EFI_STATUS Status;
+    EFI_CPU_ARCH_PROTOCOL *CpuProtocol;
+    EFI_GUID CpuProtocolGuid = EFI_CPU_ARCH_PROTOCOL_GUID;
+    EFI_PHYSICAL_ADDRESS FramebufferBase;
+    EFI_PHYSICAL_ADDRESS AttributeBase;
+    UINT64 AttributeLength;
+    UINT64 EndOffset;
+
+    if (framebufferData.BaseAddress == 0 || framebufferData.BufferSize == 0)
+        return;
+
+    if (GlobalSystemTable == NULL || GlobalSystemTable->BootServices == NULL)
+        return;
+
+    FramebufferBase = (EFI_PHYSICAL_ADDRESS)framebufferData.BaseAddress;
+    AttributeBase = FramebufferBase & ~((EFI_PHYSICAL_ADDRESS)EFI_PAGE_SIZE - 1);
+    EndOffset = (FramebufferBase - AttributeBase) + framebufferData.BufferSize;
+    AttributeLength = (EndOffset + EFI_PAGE_SIZE - 1) & ~((UINT64)EFI_PAGE_SIZE - 1);
+
+    Status = GlobalSystemTable->BootServices->LocateProtocol(&CpuProtocolGuid,
+                                                             NULL,
+                                                             (VOID **)&CpuProtocol);
+    if (EFI_ERROR(Status))
+    {
+        TRACE("UEFI GOP: CPU arch protocol unavailable (Status %lx)\n", Status);
+        return;
+    }
+
+    if (CpuProtocol->SetMemoryAttributes == NULL)
+    {
+        TRACE("UEFI GOP: CPU arch protocol lacks SetMemoryAttributes\n");
+        return;
+    }
+
+    Status = CpuProtocol->SetMemoryAttributes(CpuProtocol,
+                                              AttributeBase,
+                                              AttributeLength,
+                                              EFI_MEMORY_WC);
+    if (EFI_ERROR(Status))
+    {
+        TRACE("UEFI GOP: Failed to set framebuffer WC attributes (Status %lx)\n",
+              Status);
+
+        /* Try a write-back fallback for any failure code */
+        {
+            EFI_STATUS FallbackStatus;
+
+            FallbackStatus = CpuProtocol->SetMemoryAttributes(CpuProtocol,
+                                                               AttributeBase,
+                                                               AttributeLength,
+                                                               EFI_MEMORY_WB);
+            if (EFI_ERROR(FallbackStatus))
+            {
+                TRACE("UEFI GOP: Write-back fallback for framebuffer failed (Status %lx)\n",
+                      FallbackStatus);
+            }
+            else
+            {
+                TRACE("UEFI GOP: Framebuffer caching set to write-back fallback\n");
+            }
+        }
+        return;
+    }
+
+    TRACE("UEFI GOP: Framebuffer mapped with write-combining cache attribute\n");
+}
 
 /* FUNCTIONS ******************************************************************/
 
@@ -70,6 +146,7 @@ UefiInitializeVideo(VOID)
     EFI_STATUS Status;
     EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* CurrentInfo;
+    BOOLEAN ModeChosen = FALSE;
 
     RtlZeroMemory(&framebufferData, sizeof(framebufferData));
     Status = GlobalSystemTable->BootServices->LocateProtocol(&EfiGraphicsOutputProtocol, 0, (void**)&gop);
@@ -82,6 +159,19 @@ UefiInitializeVideo(VOID)
     TRACE("UEFI GOP: Protocol located successfully\n");
     TRACE("  MaxMode: %d\n", gop->Mode->MaxMode);
     TRACE("  Current Mode: %d\n", gop->Mode->Mode);
+
+    /*
+     * Temporary: Force a static GOP resolution to make text readable on
+     * high-DPI firmware defaults. We use 1280x800 (16:10) to match common
+     * panels and keep aspect with 2560x1600 displays. This is a stop-gap;
+     * we can instead inherit the UEFI-provided mode (current firmware mode)
+     * or use EDID to select a native/preferred mode once font scaling and
+     * UI are in place.
+     */
+    if (UefiTrySetExactMode(gop, 1280, 800))
+    {
+        ModeChosen = TRUE;
+    }
 
     /* Enumerate all GOP modes, cache minimal descriptors for the kernel */
     if (gop->Mode->MaxMode > 0)
@@ -133,6 +223,7 @@ UefiInitializeVideo(VOID)
     }
     
     /* Try EDID-based preferred/native selection; else use aspect-matched best */
+    if (!ModeChosen)
     {
         UINT32 prefW = 0, prefH = 0;
         if (UefiGetPreferredResolutionFromEdid(&prefW, &prefH))
@@ -201,6 +292,8 @@ UefiInitializeVideo(VOID)
         default:
             break;
     }
+
+    UefiVideoConfigureFramebufferCache();
 
     /* Print GOP framebuffer details */
     TRACE("UEFI GOP: Framebuffer initialized:\n");
@@ -575,6 +668,40 @@ UefiSelectBestModeByAspect(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
         return FALSE;
 
     return TRUE;
+}
+/*
+ * Try to set an exact GOP mode matching the given WxH. Skips PixelBltOnly.
+ */
+static BOOLEAN
+UefiTrySetExactMode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
+                    UINT32 w,
+                    UINT32 h)
+{
+    UINT32 i;
+    if (!gop || !gop->Mode)
+        return FALSE;
+
+    for (i = 0; i < (UINT32)gop->Mode->MaxMode; ++i)
+    {
+        EFI_STATUS st;
+        EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* info = NULL;
+        UINTN infoSize = 0;
+        st = gop->QueryMode(gop, i, &infoSize, &info);
+        if (EFI_ERROR(st) || !info)
+            continue;
+        if (info->PixelFormat == PixelBltOnly)
+            continue;
+        if (info->HorizontalResolution == w && info->VerticalResolution == h)
+        {
+            if (!EFI_ERROR(gop->SetMode(gop, i)))
+            {
+                TRACE("UEFI GOP: Forced exact mode %ux%u at index %u\n", w, h, i);
+                return TRUE;
+            }
+            return FALSE;
+        }
+    }
+    return FALSE;
 }
 static BOOLEAN
 UefiParseEdidPreferred(const UINT8* Edid, UINT32 Size, UINT32* OutW, UINT32* OutH)

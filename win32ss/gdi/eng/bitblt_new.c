@@ -3,6 +3,18 @@
 #include "../diblib/DibLib_interface.h"
 DBG_DEFAULT_CHANNEL(GdiBlt);
 
+#if DBG
+static __inline VOID W32K_DBG(_In_z_ PCCH Format, ...)
+{
+    va_list ap;
+    va_start(ap, Format);
+    EngDebugPrint("WIN32K", (PCHAR)Format, ap);
+    va_end(ap);
+}
+#else
+#define W32K_DBG(...) do { } while (0)
+#endif
+
 #define SURFOBJ_flags(pso) (CONTAINING_RECORD(pso, SURFACE, SurfObj)->flags)
 
 // FIXME this needs to be updated, once we use the new structure
@@ -643,6 +655,36 @@ EngCopyBits(
     POINTL *pptlSrc)
 {
     PFN_DrvCopyBits pfnCopyBits;
+
+#if DBG && defined(_WIN64)
+    /* Safety check for invalid surface bases in LiveCD/minisetup scenarios */
+    {
+        ULONG_PTR va = (ULONG_PTR)psoTrg->pvScan0;
+        ULONG_PTR top = (va >> 47);
+        if (psoTrg->pvScan0 == NULL || (top != 0 && top != 0x1FFFF))
+        {
+            W32K_DBG("EngCopyBits: invalid psoTrg->pvScan0=%p (size %ldx%ld, lDelta=%ld)\n",
+                       psoTrg->pvScan0,
+                       psoTrg->sizlBitmap.cx,
+                       psoTrg->sizlBitmap.cy,
+                       psoTrg->lDelta);
+            return FALSE;
+        }
+        if (psoSrc)
+        {
+            va = (ULONG_PTR)psoSrc->pvScan0; top = (va >> 47);
+            if (psoSrc->pvScan0 == NULL || (top != 0 && top != 0x1FFFF))
+            {
+                W32K_DBG("EngCopyBits: invalid psoSrc->pvScan0=%p (size %ldx%ld, lDelta=%ld)\n",
+                       psoSrc->pvScan0,
+                       psoSrc->sizlBitmap.cx,
+                       psoSrc->sizlBitmap.cy,
+                       psoSrc->lDelta);
+                return FALSE;
+            }
+        }
+    }
+#endif
 
     /* Is the target surface device managed? */
     if (SURFOBJ_flags(psoTrg) & HOOK_COPYBITS)

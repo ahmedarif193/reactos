@@ -107,18 +107,54 @@ PciIdeXPdoStartDevice(
     {
         PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor;
         ULONG Count = ResourceList->List[0].PartialResourceList.Count;
+        BOOLEAN HasCommandPort = FALSE;
+        BOOLEAN HasControlPort = FALSE;
+        BOOLEAN HasInterrupt = FALSE;
 
         Descriptor = ResourceList->List[0].PartialResourceList.PartialDescriptors;
         for (i = 0; i < Count; ++i, ++Descriptor)
         {
             if (Descriptor->Type == CmResourceTypePort)
             {
+                ULONG length = Descriptor->u.Port.Length;
+
                 DbgPrintEx(DPFLTR_DEFAULT_ID,
                            DPFLTR_ERROR_LEVEL,
                            "[PCIIDEX] Channel %lu port resource: Start=0x%llx Length=%lu\n",
                            PdoExtension->Channel,
                            Descriptor->u.Port.Start.QuadPart,
-                           Descriptor->u.Port.Length);
+                           length);
+
+                if (!HasCommandPort && length >= PCIIDE_LEGACY_COMMAND_IO_RANGE_LENGTH)
+                {
+                    HasCommandPort = TRUE;
+                }
+
+                if (!HasControlPort && length >= PCIIDE_LEGACY_CONTROL_IO_RANGE_LENGTH)
+                {
+                    HasControlPort = TRUE;
+                }
+            }
+            else if (Descriptor->Type == CmResourceTypeMemory)
+            {
+                ULONG length = Descriptor->u.Memory.Length;
+
+                DbgPrintEx(DPFLTR_DEFAULT_ID,
+                           DPFLTR_ERROR_LEVEL,
+                           "[PCIIDEX] Channel %lu memory resource: Start=0x%llx Length=%lu\n",
+                           PdoExtension->Channel,
+                           Descriptor->u.Memory.Start.QuadPart,
+                           length);
+
+                if (!HasCommandPort && length >= PCIIDE_LEGACY_COMMAND_IO_RANGE_LENGTH)
+                {
+                    HasCommandPort = TRUE;
+                }
+
+                if (!HasControlPort && length >= PCIIDE_LEGACY_CONTROL_IO_RANGE_LENGTH)
+                {
+                    HasControlPort = TRUE;
+                }
             }
             else if (Descriptor->Type == CmResourceTypeInterrupt)
             {
@@ -128,7 +164,27 @@ PciIdeXPdoStartDevice(
                            PdoExtension->Channel,
                            Descriptor->u.Interrupt.Vector,
                            Descriptor->u.Interrupt.Level);
+                HasInterrupt = TRUE;
             }
+        }
+
+        if (!HasCommandPort || !HasControlPort)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID,
+                       DPFLTR_ERROR_LEVEL,
+                       "[PCIIDEX] Channel %lu legacy resource check: command=%d control=%d interrupt=%d\n",
+                       PdoExtension->Channel,
+                       HasCommandPort,
+                       HasControlPort,
+                       HasInterrupt);
+        }
+
+        if (!HasInterrupt)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID,
+                       DPFLTR_ERROR_LEVEL,
+                       "[PCIIDEX] Channel %lu continuing without legacy interrupt resource\n",
+                       PdoExtension->Channel);
         }
     }
 
@@ -140,6 +196,12 @@ PciIdeXPdoStartDevice(
     DPRINT("Bus Master Base %p\n", IoBase);
 
     PdoExtension->IoBase = IoBase;
+
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[PCIIDEX] Channel %lu start completed (IoBase=%p)\n",
+               PdoExtension->Channel,
+               PdoExtension->IoBase);
 
     return STATUS_SUCCESS;
 }
@@ -410,10 +472,6 @@ PciIdeXPdoQueryResourceRequirements(
         return Irp->IoStatus.Status;
 
     DescriptorCount = PCIIDE_LEGACY_RESOURCE_COUNT;
-    if (FdoExtension->BusMasterPortBase != NULL)
-    {
-        ++DescriptorCount;
-    }
 
     ListSize = sizeof(IO_RESOURCE_REQUIREMENTS_LIST) +
                sizeof(IO_RESOURCE_DESCRIPTOR) * (DescriptorCount - 1);
@@ -466,26 +524,6 @@ PciIdeXPdoQueryResourceRequirements(
     Descriptor->u.Port.MaximumAddress.QuadPart = ControlPortBase +
                                                  PCIIDE_LEGACY_CONTROL_IO_RANGE_LENGTH - 1;
     ++Descriptor;
-
-    if (FdoExtension->BusMasterPortBase != NULL)
-    {
-        ULONGLONG BusMasterBase = (ULONGLONG)(ULONG_PTR)FdoExtension->BusMasterPortBase;
-
-        if (!IS_PRIMARY_CHANNEL(PdoExtension))
-        {
-            BusMasterBase += BM_SECONDARY_CHANNEL_OFFSET;
-        }
-
-        Descriptor->Type = CmResourceTypePort;
-        Descriptor->ShareDisposition = CmResourceShareShared;
-        Descriptor->Flags = CM_RESOURCE_PORT_IO;
-        Descriptor->u.Port.Length = PCIIDE_BUSMASTER_IO_RANGE_LENGTH;
-        Descriptor->u.Port.Alignment = 1;
-        Descriptor->u.Port.MinimumAddress.QuadPart = BusMasterBase;
-        Descriptor->u.Port.MaximumAddress.QuadPart = BusMasterBase +
-                                                     PCIIDE_BUSMASTER_IO_RANGE_LENGTH - 1;
-        ++Descriptor;
-    }
 
     /* Interrupt */
     Descriptor->Type = CmResourceTypeInterrupt;

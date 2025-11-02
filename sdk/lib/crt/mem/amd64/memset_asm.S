@@ -100,4 +100,6 @@ Done:
 
 ENDFUNC
 
+    /* no external references here */
+
 END

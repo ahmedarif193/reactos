@@ -2208,8 +2208,9 @@ static WCHAR *expand_environment( const WCHAR *str )
  */
 static BOOL SHELL_execute(LPSHELLEXECUTEINFOW sei, SHELL_ExecuteW32 execfunc)
 {
+    // Treat NOASYNC/DDEWAIT as benign; don't warn on common callers.
     static const DWORD unsupportedFlags =
-        SEE_MASK_CONNECTNETDRV | SEE_MASK_FLAG_DDEWAIT | SEE_MASK_ASYNCOK;
+        SEE_MASK_CONNECTNETDRV | /* SEE_MASK_FLAG_DDEWAIT | */ SEE_MASK_ASYNCOK;
 
     DWORD len;
     UINT_PTR retval = SE_ERR_NOASSOC;
@@ -2347,7 +2348,7 @@ static BOOL SHELL_execute(LPSHELLEXECUTEINFOW sei, SHELL_ExecuteW32 execfunc)
 
     if (sei_tmp.fMask & unsupportedFlags)
     {
-        FIXME("flags ignored: 0x%08x\n", sei_tmp.fMask & unsupportedFlags);
+        TRACE("flags ignored: 0x%08x\n", sei_tmp.fMask & unsupportedFlags);
     }
 
     /* process the IDList */

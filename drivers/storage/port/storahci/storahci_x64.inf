@@ -21,8 +21,44 @@ DefaultDestDir = 12 ; DIRID_DRIVERS
 %ROS%=STORAHCI,NTamd64
 
 [STORAHCI.NTamd64]
-%SATA_AHCI.DeviceDesc%=storahci_Inst, PCI\CC_010601 ; Standard SATA AHCI Controller
-%Intel_AHCI.DeviceDesc%=storahci_Inst, PCI\VEN_8086&DEV_2922 ; Intel ICH9 AHCI Controller
+%SATA_AHCI.DeviceDesc% = storahci_Inst, PCI\CC_010601 ; Standard SATA AHCI Controller
+; Intel ICH8/ICH9/ICH10/PCH AHCI controllers
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_2820
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_2821
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_2822
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_2824
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_2825
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_2828
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_2829
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_282A
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_2850
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_2920
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_2921
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_2922
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_2923
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_2926
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_2928
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_2929
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_292D
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_292E
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3A00
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3A02
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3A03
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3A06
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3A20
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3A22
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3A23
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3A26
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3B20
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3B21
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3B22
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3B23
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3B26
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3B28
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3B29
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3B2D
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3B2E
+%Intel_AHCI.DeviceDesc% = storahci_Inst, PCI\VEN_8086&DEV_3B2F
 
 [ControlFlags]
 ExcludeFromSelect = *
@@ -64,7 +100,7 @@ HKR,,TypesSupported,%REG_DWORD%,7
 ROS                     = "ReactOS"
 DeviceDesc              = "AHCI SATA Driver"
 SATA_AHCI.DeviceDesc    = "Standard SATA AHCI Controller"
-Intel_AHCI.DeviceDesc   = "Intel ICH9 AHCI Controller"
+Intel_AHCI.DeviceDesc   = "Intel AHCI Controller"
 
 SPSVCINST_ASSOCSERVICE = 0x00000002
 SERVICE_KERNEL_DRIVER  = 1

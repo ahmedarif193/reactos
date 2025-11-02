@@ -133,6 +133,7 @@ DrvEnablePDEV(
    ppdev = EngAllocMem(FL_ZERO_MEMORY, sizeof(PDEV), ALLOC_TAG);
    if (ppdev == NULL)
    {
+      FB_DBG("EngAllocMem for PDEV failed\n");
       return NULL;
    }
 
@@ -140,12 +141,17 @@ DrvEnablePDEV(
 
    if (!IntInitScreenInfo(ppdev, pdm, &GdiInfo, &DevInfo))
    {
+      FB_DBG("IntInitScreenInfo failed (mode %ux%u %ubpp)\n",
+             pdm ? pdm->dmPelsWidth : 0,
+             pdm ? pdm->dmPelsHeight : 0,
+             pdm ? pdm->dmBitsPerPel : 0);
       EngFreeMem(ppdev);
       return NULL;
    }
 
    if (!IntInitDefaultPalette(ppdev, &DevInfo))
    {
+      FB_DBG("IntInitDefaultPalette failed\n");
       EngFreeMem(ppdev);
       return NULL;
    }

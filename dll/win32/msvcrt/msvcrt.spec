@@ -1012,6 +1012,7 @@
 @ cdecl _strerror(long)
 @ cdecl -version=0x600+ _strerror_s(ptr long str)
 @ cdecl _stricmp(str str)
+@ cdecl stricmp(str str) _stricmp
 @ cdecl -version=0x600+ _stricmp_l(str str ptr)
 @ cdecl _stricoll(str str)
 @ cdecl -version=0x600+ _stricoll_l(str str ptr)
@@ -1160,7 +1161,9 @@
 @ cdecl -version=0x600+ _wcserror_s(ptr long long)
 @ stub -version=0x600+ _wcsftime_l
 @ cdecl _wcsicmp(wstr wstr)
+@ cdecl wcsicmp(wstr wstr) _wcsicmp
 @ cdecl -version=0x600+ _wcsicmp_l(wstr wstr ptr)
+@ cdecl wcsicmp_l(wstr wstr ptr) _wcsicmp_l
 @ cdecl _wcsicoll(wstr wstr)
 @ cdecl -version=0x600+ _wcsicoll_l(wstr wstr ptr)
 @ cdecl _wcslwr(wstr)
@@ -1571,3 +1574,5 @@
 @ stub -version=0x600+ wprintf_s
 @ varargs wscanf(wstr)
 @ stub -version=0x600+ wscanf_s
+# Provide non-underscored aliases for MinGW C99/ANSI calls used by Wine modules
+@ cdecl -arch=i386 atexit(ptr)

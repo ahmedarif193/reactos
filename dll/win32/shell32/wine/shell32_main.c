@@ -48,6 +48,11 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
+/* Force local isblank macro to avoid pulling in C99 symbol from msvcrt/ucrt
+ * on i386 multilib. This keeps link constraints simple for WOW64 DLLs. */
+#undef isblank
+#define isblank(c) ((c) == ' ' || (c) == '\t')
+
 #ifndef SystemPhysicalMemoryInformation
 #define SystemPhysicalMemoryInformation 184
 #endif

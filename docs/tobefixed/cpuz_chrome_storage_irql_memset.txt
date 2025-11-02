@@ -1,0 +1,114 @@
+CPU-Z/Chrome: Storage IRQL and memset(NULL) – Findings and Fix Plan
+
+Context
+- Environment: ReactOS amd64 Debug build, testing CPU-Z and Chrome launch.
+- Symptoms observed:
+  - Initial fastfat ASSERT while verifying FAT32 volume (IoGetCurrentIrpStackLocation assert) on Chrome startup.
+  - Reproducible IRQL assertion on CPU-Z startup: KeGetCurrentIrql() <= APC_LEVEL (miarm.h:1163) during Mm working-set lock.
+  - After storage fixes, new last‑chance page fault inside kernel memset (ntoskrnl!QwordFill) due to a NULL destination.
+
+Root Causes and Fixes So Far
+1) Classp IRQL misuse (REAL FIX)
+   - Problem: ClasspReleaseQueue raised IRQL to DISPATCH_LEVEL and called IoCallDriver. Lower drivers may touch pageable code (e.g., VM WS locks), causing IRQL assert.
+   - Fix: Lower IRQL before IoCallDriver; keep the DISPATCH‑level window only around spinlock/queue handling.
+     - File: drivers/storage/class/classpnp/class.c:11973
+
+2) SCSIPORT MDL misuse at DISPATCH_LEVEL (REAL FIX)
+   - Problem: ScsiPortStartIo unconditionally used Irp->MdlAddress (MmGet* and KeFlushIoBuffers) at DISPATCH_LEVEL. METHOD_BUFFERED (miniport) requests commonly have no MDL, and touching pageable mappings at DISPATCH can fault.
+   - Fix: Guard MDL usage. If MDL is NULL, skip Mm* and IO flush; use SystemBuffer logic as needed.
+     - File: drivers/storage/port/scsiport/scsi.c:1839
+
+3) SMART IOCTLs causing StartIo path (WORKAROUND)
+   - Rationale: CPU‑Z issues SMART IOCTLs; to quickly bypass unstable StartIo path during investigation, stub SMART receive/send IOCTLs.
+   - Behavior: Return STATUS_NOT_SUPPORTED with IoStatus.Information = 0.
+     - Files:
+       - drivers/storage/class/disk/disk.c:5674 (DiskIoctlSmartReceiveDriveData)
+       - drivers/storage/class/disk/disk.c:5901 (DiskIoctlSmartSendDriveCommand)
+
+4) Kernel memset defensive guard (WORKAROUND)
+   - Symptom: Last‑chance page fault in ntoskrnl.exe: QwordFill (memset) when dst == NULL.
+   - Temporary Guard: In CRT memset (amd64), early‑return when dst==NULL && count>0 to avoid crash and allow continued testing. No logging to keep CRT linkable for all modules.
+     - File: sdk/lib/crt/mem/amd64/memset_asm.S: early NULL check before fill loops.
+
+Instrumentation Added (to prove/focus the issues)
+- Class layer (entry IRQL + MmProbeAndLockPages guard):
+  - drivers/storage/class/classpnp/class.c:4212 and 4384 (DBG prints in ClassSendSrbSynchronous)
+- ClasspReleaseQueue IRQL window annotated and corrected:
+  - drivers/storage/class/classpnp/class.c:11973 (lower IRQL before IoCallDriver)
+- ScsiPort IRQL raise/queue/lower tracing:
+  - drivers/storage/port/scsiport/scsi.c:246, 259 (DBG prints for BYPASS_FROZEN_QUEUE and raise/lower transitions)
+- ScsiPortStartIo: MDL usage guarded + DBG when no MDL:
+  - drivers/storage/port/scsiport/scsi.c:1839 (prints “No MDL on IRP …, skipping Mm/IO flush paths”)
+
+Current State After Fixes
+- The IRQL assertion (KeGetCurrentIrql() <= APC_LEVEL) is eliminated on CPU‑Z path.
+- A subsequent last‑chance NULL pointer memset fault was observed in ntoskrnl!QwordFill (memset). The defensive memset guard prevents the crash, but it masks the real caller that passed NULL to memset/RtlZeroMemory.
+
+What Remains To Be Fixed (Root Causes)
+1) Identify and fix the NULL memset caller
+   - Goal: Find the code path that invokes RtlZeroMemory/memset(dst=NULL, count>0) and correct it (validate pointers, ensure buffers allocated, validate OutputBufferLength and SystemBuffer, etc.).
+   - Practical approach (KDBG‑limited):
+     - Add targeted ASSERTs/DbgPrintEx at likely sites where buffers are zeroed:
+       - drivers/storage/class/disk/disk.c: Class/DeviceControl IOCTL outputs
+       - drivers/storage/class/classpnp/class.c: ClassDeviceControl, ClassSendSrbSynchronous
+       - drivers/storage/class/ramdisk/ramdisk.c: RamdiskDeviceControl (IOCTL_STORAGE_* and IOCTL_DISK_* handlers)
+       - Filesystems (fastfat/cdfs) where buffers returned to callers are zeroed
+     - Pattern: Only call RtlZeroMemory if (OutputBufferLength >= required && SystemBuffer != NULL); otherwise return STATUS_BUFFER_TOO_SMALL and set Information accordingly.
+
+2) Re‑enable SMART IOCTLs and remove guards once stable
+   - After verifying (1), re‑enable DiskIoctlSmartReceiveDriveData/SendDriveCommand and confirm the StartIo path is safe with the ScsiPort MDL guard.
+   - Keep the ScsiPort MDL guard and ClasspReleaseQueue IRQL fix (they are proper fixes).
+   - Remove the memset early‑return once the caller misuse is fixed.
+
+3) Audit pageability and IRQL in storage stack
+   - Ensure DISPATCH_LEVEL is raised only for minimal queue/spinlock windows in scsiport (raise → queue → lower), then do work at PASSIVE_LEVEL.
+   - Verify no PAGED_CODE() or pageable code/data is reachable from DISPATCH paths (ScsiPortStartIo, KeSynchronizeExecution callbacks).
+   - Mark genuinely PASSIVE‑only helpers with PAGED_CODE() and verify callers adhere to it.
+
+4) Strengthen IOCTL buffer handling
+   - METHOD_BUFFERED: use Irp->AssociatedIrp.SystemBuffer; never assume MDL is present.
+   - METHOD_IN/OUT_DIRECT: ensure MDLs exist; never touch user buffers directly at elevated IRQL.
+   - For DISPATCH‑level DMA paths, if a buffer must be used, allocate a NonPagedPool staging buffer and copy at PASSIVE_LEVEL.
+
+Recommended Next Steps (Debug and Validation)
+1) Add DBG checks around RtlZeroMemory calls in:
+   - drivers/storage/class/ramdisk/ramdisk.c: RamdiskDeviceControl, RamdiskHandleStorageQueryProperty
+   - drivers/storage/class/disk/disk.c: DiskDeviceControl IOCTL handlers
+   - drivers/storage/class/classpnp/class.c: ClassDeviceControlDispatch
+   Assert(dst != NULL || len == 0) and log IOCTL code/device to catch NULL usages.
+
+2) Temporarily re‑enable SMART IOCTLs on a branch and test CPU‑Z again
+   - Keep ScsiPort MDL guard; if faults persist, capture which IOCTL triggers them and instrument that handler.
+
+3) Remove the memset guard after fixing the caller
+   - Rebuild and verify CPU‑Z and Chrome paths remain stable.
+
+What We Fixed (Summary)
+- ClasspReleaseQueue IRQL misuse → fixed: drivers/storage/class/classpnp/class.c:11973
+- ScsiPortStartIo MDL misuse at DISPATCH_LEVEL → fixed: drivers/storage/port/scsiport/scsi.c:1839
+
+What We Temporarily Guarded (Summary)
+- SMART IOCTLs in disk.sys stubbed (STATUS_NOT_SUPPORTED): drivers/storage/class/disk/disk.c:5674, 5901
+- Kernel memset early‑return for dst==NULL && count>0: sdk/lib/crt/mem/amd64/memset_asm.S
+
+Why the Fixes Matter
+- Prevents elevated‑IRQL code from reaching pageable sections, which causes hard asserts or deadlocks.
+- Prevents StartIo from dereferencing non‑existent MDLs or pageable mappings at DISPATCH_LEVEL.
+- Avoids fatal crashes due to NULL buffer zeroing until the actual caller is identified.
+
+Long‑Term Hygiene Checklist
+- Maintain strict IRQL discipline in all storage layers.
+- Always validate IOCTL input/output lengths and buffer pointers before zero/fill.
+- Annotate pageable/nonpageable code and ensure compliance in call sites.
+- Prefer staging buffers (NonPagedPool) when DISPATCH‑level operations require memory access.
+
+References (symbolized observations)
+- ntoskrnl.exe:105cfe → MmAccessFault
+- ntoskrnl.exe:62247 → IoStartPacket
+- ntoskrnl.exe:7a0a3 → IofCallDriver
+- scsiport.sys:8955/87e8 → ScsiPortDispatchScsi
+- scsiport.sys:90b2/8f42 → ScsiPortStartIo
+- classpnp.sys:f6eb → ClassDeviceControlDispatch
+- disk.sys:706f/77bc → DiskIoctlSmartReceiveDriveData/DiskDeviceControl
+- ntoskrnl.exe:1af6c3 → QwordFill (memset)
+

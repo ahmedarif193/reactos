@@ -46,10 +46,17 @@ DrvEnableSurface(
     * Set video mode of our adapter.
     */
 
+   FB_DBG("Setting current mode index %lu (%ux%u %ubpp)\n",
+          (unsigned long)ppdev->ModeIndex,
+          (unsigned int)ppdev->ScreenWidth,
+          (unsigned int)ppdev->ScreenHeight,
+          (unsigned int)ppdev->BitsPerPixel);
    if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_SET_CURRENT_MODE,
                           &(ppdev->ModeIndex), sizeof(ULONG), NULL, 0,
                           &ulTemp))
    {
+      FB_DBG("IOCTL_VIDEO_SET_CURRENT_MODE failed for mode %lu\n",
+             (unsigned long)ppdev->ModeIndex);
       return NULL;
    }
 
@@ -63,10 +70,17 @@ DrvEnableSurface(
                           &VideoMemoryInfo, sizeof(VIDEO_MEMORY_INFORMATION),
                           &ulTemp))
    {
+      FB_DBG("IOCTL_VIDEO_MAP_VIDEO_MEMORY failed\n");
       return NULL;
    }
 
    ppdev->ScreenPtr = VideoMemoryInfo.FrameBufferBase;
+   FB_DBG("Mapped framebuffer @ %p (screen %ux%u delta %u bpp %u)\n",
+          ppdev->ScreenPtr,
+          (unsigned int)ppdev->ScreenWidth,
+          (unsigned int)ppdev->ScreenHeight,
+          (unsigned int)ppdev->ScreenDelta,
+          (unsigned int)ppdev->BitsPerPixel);
 
    ppdev->VmwareFifo = FALSE;
    ppdev->VmwareCaps = 0;
@@ -146,6 +160,13 @@ DrvEnableSurface(
                                      ppdev->ScreenPtr);
    if (hSurface == NULL)
    {
+      FB_DBG("EngCreateBitmap failed (size %ux%u, delta %u, bmf %u, topdown %u, base %p)\n",
+             (unsigned int)ScreenSize.cx,
+             (unsigned int)ScreenSize.cy,
+             (unsigned int)ppdev->ScreenDelta,
+             (unsigned int)BitmapType,
+             (ppdev->ScreenDelta > 0) ? 1u : 0u,
+             ppdev->ScreenPtr);
       return NULL;
    }
 
@@ -156,6 +177,8 @@ DrvEnableSurface(
    if (!EngAssociateSurface(hSurface, ppdev->hDevEng, 0))
    {
       EngDeleteSurface(hSurface);
+      FB_DBG("EngAssociateSurface failed (hdev %p, hsurf %p)\n",
+             ppdev->hDevEng, hSurface);
       return NULL;
    }
 
@@ -222,11 +245,17 @@ DrvAssertMode(
       /*
        * Reinitialize the device to a clean state.
        */
+      FB_DBG("DrvAssertMode(TRUE) mode %lu (%ux%u %ubpp)\n",
+             (unsigned long)ppdev->ModeIndex,
+             (unsigned int)ppdev->ScreenWidth,
+             (unsigned int)ppdev->ScreenHeight,
+             (unsigned int)ppdev->BitsPerPixel);
       if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_SET_CURRENT_MODE,
                              &(ppdev->ModeIndex), sizeof(ULONG), NULL, 0,
                              &ulTemp))
       {
           /* We failed, bail out */
+          FB_DBG("DrvAssertMode(TRUE) IOCTL_VIDEO_SET_CURRENT_MODE failed\n");
           return FALSE;
       }
       if (ppdev->BitsPerPixel == 8)
@@ -241,7 +270,13 @@ DrvAssertMode(
       /*
        * Call the miniport driver to reset the device to a known state.
        */
-      return !EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_RESET_DEVICE,
-                                 NULL, 0, NULL, 0, &ulTemp);
+      FB_DBG("DrvAssertMode(FALSE) reset device\n");
+      if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_RESET_DEVICE,
+                             NULL, 0, NULL, 0, &ulTemp))
+      {
+          FB_DBG("DrvAssertMode(FALSE) IOCTL_VIDEO_RESET_DEVICE failed\n");
+          return FALSE;
+      }
+      return TRUE;
    }
 }

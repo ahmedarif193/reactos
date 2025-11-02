@@ -101,6 +101,71 @@ extern BOOLEAN RtlpUse16ByteSLists;
 #define DEFAULT_SECURITY_COOKIE 0xBB40E64E
 #endif
 
+/* WOW64 loader integration (amd64 only) */
+#ifdef _WIN64
+static PVOID LdrpWow64Module = NULL;
+static NTSTATUS (NTAPI *pWow64LdrpInitialize)(VOID) = NULL;
+static NTSTATUS (NTAPI *pWow64LdrpInitializeProcess)(PVOID Peb32, PVOID LoaderParam) = NULL;
+static NTSTATUS (NTAPI *pWow64LdrpInitializeThread)(PVOID ThreadContext) = NULL;
+
+static BOOLEAN
+LdrpIsWow64Process(_Out_opt_ PVOID* Peb32Out)
+{
+    NTSTATUS Status;
+    PVOID Peb32 = NULL;
+    ULONG RetLen = 0;
+    Status = NtQueryInformationProcess(NtCurrentProcess(),
+                                       ProcessWow64Information,
+                                       &Peb32,
+                                       sizeof(Peb32),
+                                       &RetLen);
+    if (Peb32Out) *Peb32Out = Peb32;
+    return NT_SUCCESS(Status) && Peb32 != NULL;
+}
+
+static NTSTATUS
+LdrpEnsureWow64Loaded(VOID)
+{
+    NTSTATUS Status;
+    ANSI_STRING ProcName;
+    UNICODE_STRING DllName = RTL_CONSTANT_STRING(L"wow64.dll");
+
+    if (!LdrpWow64Module)
+    {
+        Status = LdrLoadDll(NULL, NULL, &DllName, &LdrpWow64Module);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("LDR: Failed to load %wZ, Status=0x%08lx\n", &DllName, Status);
+            return Status;
+        }
+    }
+
+    /* Resolve exports once */
+    if (!pWow64LdrpInitialize)
+    {
+        RtlInitAnsiString(&ProcName, "Wow64LdrpInitialize");
+        Status = LdrGetProcedureAddress(LdrpWow64Module, &ProcName, 0, (PVOID*)&pWow64LdrpInitialize);
+        if (!NT_SUCCESS(Status)) return Status;
+    }
+    if (!pWow64LdrpInitializeProcess)
+    {
+        RtlInitAnsiString(&ProcName, "Wow64LdrpInitializeProcess");
+        Status = LdrGetProcedureAddress(LdrpWow64Module, &ProcName, 0, (PVOID*)&pWow64LdrpInitializeProcess);
+        if (!NT_SUCCESS(Status)) return Status;
+    }
+    if (!pWow64LdrpInitializeThread)
+    {
+        RtlInitAnsiString(&ProcName, "Wow64LdrpInitializeThread");
+        Status = LdrGetProcedureAddress(LdrpWow64Module, &ProcName, 0, (PVOID*)&pWow64LdrpInitializeThread);
+        if (!NT_SUCCESS(Status)) return Status;
+    }
+
+    return STATUS_SUCCESS;
+}
+#else
+#define DEFAULT_SECURITY_COOKIE 0xBB40E64E
+#endif
+
 /* FUNCTIONS *****************************************************************/
 
 /*
@@ -532,6 +597,29 @@ LdrpInitializeThread(IN PCONTEXT Context)
 
     /* Allocate TLS */
     LdrpAllocateTls();
+
+#ifdef _WIN64
+    /* If WOW64, initialize thread-side wow64 state and TLS */
+    {
+        PVOID Peb32 = NULL;
+        if (LdrpIsWow64Process(&Peb32))
+        {
+            NTSTATUS WStatus = LdrpEnsureWow64Loaded();
+            if (NT_SUCCESS(WStatus))
+            {
+                WStatus = pWow64LdrpInitializeThread(NULL);
+                if (!NT_SUCCESS(WStatus) && ShowSnaps)
+                {
+                    DPRINT1("LDR: Wow64LdrpInitializeThread failed: 0x%lx\n", WStatus);
+                }
+            }
+            else if (ShowSnaps)
+            {
+                DPRINT1("LDR: LdrpEnsureWow64Loaded (thread) failed: 0x%lx\n", WStatus);
+            }
+        }
+    }
+#endif
 
     /* Start at the beginning */
     ListHead = &Peb->Ldr->InMemoryOrderModuleList;
@@ -1782,6 +1870,35 @@ NTAPI
 LdrpInitializeProcess(IN PCONTEXT Context,
                       IN PVOID SystemArgument1)
 {
+    #ifdef _WIN64
+    /* If this is a WOW64 process, initialize wow64.dll early */
+    {
+        PVOID Peb32 = NULL;
+        if (LdrpIsWow64Process(&Peb32))
+        {
+            NTSTATUS WStatus = LdrpEnsureWow64Loaded();
+            if (NT_SUCCESS(WStatus))
+            {
+                /* Best-effort wow64 initialization; ignore failures but log */
+                WStatus = pWow64LdrpInitialize();
+                if (!NT_SUCCESS(WStatus) && ShowSnaps)
+                {
+                    DPRINT1("LDR: Wow64LdrpInitialize failed: 0x%lx\n", WStatus);
+                }
+                WStatus = pWow64LdrpInitializeProcess(Peb32, SystemArgument1);
+                if (!NT_SUCCESS(WStatus) && ShowSnaps)
+                {
+                    DPRINT1("LDR: Wow64LdrpInitializeProcess failed: 0x%lx\n", WStatus);
+                }
+            }
+            else if (ShowSnaps)
+            {
+                DPRINT1("LDR: LdrpEnsureWow64Loaded failed: 0x%lx\n", WStatus);
+            }
+        }
+    }
+    #endif
+
     RTL_HEAP_PARAMETERS HeapParameters;
     ULONG ComSectionSize;
     ANSI_STRING BaseProcessInitPostImportName = RTL_CONSTANT_STRING("BaseProcessInitPostImport");

@@ -129,3 +129,12 @@ UefiGopConsoleIsInitialized(VOID);
 
 VOID
 UefiConsMarkBootServicesExited(VOID);
+
+BOOLEAN
+UefiIsCdRomHandle(IN EFI_HANDLE Handle);
+
+EFI_HANDLE
+UefiGetCdromHandle(ULONG Index);
+
+ULONG
+UefiGetCdromCount(VOID);

@@ -112,6 +112,12 @@ UserSetCursor(
     /* Update cursor for this message queue */
     MessageQueue->CursorObject = NewCursor;
 
+    /* Be defensive during early boot or teardown: if global server info is not ready,
+     * avoid touching shared cursor state and just return. This can happen when
+     * the Win32 subsystem hasn't fully initialized (e.g. CSRSS/WINLOGON missing). */
+    if (gpsi == NULL)
+        return OldCursor;
+
     /* If cursor is not visible we have nothing to do */
     if (MessageQueue->iCursorLevel < 0)
         return OldCursor;
@@ -192,6 +198,10 @@ int UserShowCursor(BOOL bShow)
           internally to check if cursor is visible */
         return MessageQueue->iCursorLevel;
     }
+
+    /* If global server info is not ready yet, do not touch shared cursor state */
+    if (gpsi == NULL)
+        return MessageQueue->iCursorLevel;
 
     /* Check if cursor is above window owned by this MessageQueue */
     pWnd = IntTopLevelWindowFromPoint(gpsi->ptCursor.x, gpsi->ptCursor.y);

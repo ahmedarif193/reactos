@@ -1877,25 +1877,25 @@ HKLM,"SYSTEM\CurrentControlSet\Services\usbccgp","Type",0x00010001,0x00000001
 
 ; Include PCI IDE drivers for AMD64 installations
 ; pciide driver
-HKLM,"SYSTEM\CurrentControlSet\Services\pciide","ErrorControl",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\pciide","Group",0x00000000,"System Bus Extender"
-HKLM,"SYSTEM\CurrentControlSet\Services\pciide","ImagePath",0x00020000,"system32\drivers\pciide.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\pciide","Start",0x00010001,0x00000000
-HKLM,"SYSTEM\CurrentControlSet\Services\pciide","Type",0x00010001,0x00000001
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciide","ErrorControl",0x00010001,0x00000001
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciide","Group",0x00000000,"System Bus Extender"
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciide","ImagePath",0x00020000,"system32\drivers\pciide.sys"
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciide","Start",0x00010001,0x00000000
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciide","Type",0x00010001,0x00000001
 
 ; pciidex driver
-HKLM,"SYSTEM\CurrentControlSet\Services\pciidex","ErrorControl",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\pciidex","Group",0x00000000,"System Bus Extender"
-HKLM,"SYSTEM\CurrentControlSet\Services\pciidex","ImagePath",0x00020000,"system32\drivers\pciidex.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\pciidex","Start",0x00010001,0x00000000
-HKLM,"SYSTEM\CurrentControlSet\Services\pciidex","Type",0x00010001,0x00000001
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciidex","ErrorControl",0x00010001,0x00000001
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciidex","Group",0x00000000,"System Bus Extender"
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciidex","ImagePath",0x00020000,"system32\drivers\pciidex.sys"
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciidex","Start",0x00010001,0x00000000
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciidex","Type",0x00010001,0x00000001
 
 ; atapi driver
-HKLM,"SYSTEM\CurrentControlSet\Services\atapi","ErrorControl",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Group",0x00000000,"SCSI Miniport"
-HKLM,"SYSTEM\CurrentControlSet\Services\atapi","ImagePath",0x00020000,"system32\drivers\atapi.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Start",0x00010001,0x00000000
-HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Type",0x00010001,0x00000001
+;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","ErrorControl",0x00010001,0x00000001
+;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Group",0x00000000,"SCSI Miniport"
+;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","ImagePath",0x00020000,"system32\drivers\atapi.sys"
+;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Start",0x00010001,0x00000000
+;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Type",0x00010001,0x00000001
 ; storport library (required by storahci and other modern SCSI miniport drivers)
 HKLM,"SYSTEM\CurrentControlSet\Services\storport","ErrorControl",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\storport","Group",0x00000000,"SCSI Miniport"

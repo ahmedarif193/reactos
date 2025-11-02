@@ -359,10 +359,14 @@ NATIVE_MODE_CONTROLLER_INFORMATION const NativeModeAdapters[] = {
 #define WaitOnBusy(BaseIoAddress, Status) \
 { \
     ULONG i; \
+    ULONG tick = 0; \
     for (i=0; i<20000; i++) { \
         GetStatus(BaseIoAddress, Status); \
         if (Status & IDE_STATUS_BUSY) { \
             ScsiPortStallExecution(150); \
+            if (((++tick) % 6667) == 0) { \
+                ScsiDebugPrint(0, "[ATAPI-V] WaitOnBusy: BUSY still set (i=%lu) base=%p status=0x%02x\n", (ULONG)(20000 - i), BaseIoAddress, Status); \
+            } \
             continue; \
         } else { \
             break; \
@@ -419,11 +423,17 @@ NATIVE_MODE_CONTROLLER_INFORMATION const NativeModeAdapters[] = {
 {\
     UCHAR statusByte; \
     ULONG i = 1000*1000;\
+    ULONG tick = 0;\
     ScsiPortWritePortUchar(&BaseIoAddress->DriveSelect,(UCHAR)(((DeviceNumber & 0x1) << 4) | 0xA0)); \
     ScsiPortStallExecution(500);\
     ScsiPortWritePortUchar(&BaseIoAddress->Command, IDE_COMMAND_ATAPI_RESET); \
-    while ((ScsiPortReadPortUchar(&BaseIoAddress->Command) & IDE_STATUS_BUSY) && i--)\
+    while ((ScsiPortReadPortUchar(&BaseIoAddress->Command) & IDE_STATUS_BUSY) && i--) {\
         ScsiPortStallExecution(30);\
+        /* Emit a heartbeat roughly once per second (30us * 33333 ~= 1s). */ \
+        if ((++tick % 33333) == 0) { \
+            ScsiDebugPrint(0, "[ATAPI-V] AtapiSoftReset: BUSY still set (i=%lu) base=%p dev=%lu\n", i, BaseIoAddress, (ULONG)(DeviceNumber)); \
+        } \
+    }\
     ScsiPortWritePortUchar(&BaseIoAddress->DriveSelect,(UCHAR)((DeviceNumber << 4) | 0xA0)); \
     WaitOnBusy( ((PIDE_REGISTERS_2)((PUCHAR)BaseIoAddress + 0x206)), statusByte); \
     ScsiPortStallExecution(500);\
@@ -458,4 +468,3 @@ NATIVE_MODE_CONTROLLER_INFORMATION const NativeModeAdapters[] = {
     (OperationCode == SCSIOP_SPACE)||\
     (OperationCode == SCSIOP_SEEK)||\
     (OperationCode == SCSIOP_WRITE_FILEMARKS))
-

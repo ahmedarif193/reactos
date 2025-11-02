@@ -124,9 +124,10 @@ storport.sys = 1,,,,,,,4,,,,1,4
 fastfat.sys  = 1,,,,,,x,4,,,,1,4
 btrfs.sys    = 1,,,,,,x,4,,,,1,4
 ramdisk.sys  = 1,,,,,,x,4,,,,1,4
-pciide.sys   = 1,,,,,,x,4,,,,1,4
-pciidex.sys  = 1,,,,,,x,4,,,,1,4
-atapi.sys    = 1,,,,,,x,4,,,,1,4
+; pciide.sys   = 1,,,,,,x,4,,,,1,4
+; pciidex.sys  = 1,,,,,,x,4,,,,1,4
+storahci.sys = 1,,,,,,x,4,,,,1,4
+; atapi.sys    = 1,,,,,,x,4,,,,1,4
 pcix.sys     = 1,,,,,,,4,,,,1,4
 pcmcia.sys   = 1,,,,,,,4,,,,1,4
 swenum.sys   = 1,,,,,,,4,,,,1,4
@@ -156,8 +157,8 @@ acpi.sys     = 1,,,,,,x,4,,,,1,4
 PCI\CC_0601 = isapnp
 PCI\CC_0604 = pci
 PCI\CC_0101 = pciide
-PCI\CC_0106 = ahciport
-PCI\VEN_8086&DEV_2922 = ahciport
+PCI\CC_0106 = storahci
+PCI\VEN_8086&DEV_2922 = storahci
 USB\CLASS_09 = usbhub
 USB\ROOT_HUB = usbhub
 USB\ROOT_HUB20 = usbhub
@@ -198,8 +199,8 @@ i8042prt = i8042prt.sys
 pciide = pciide.sys
 
 [SCSI.Load]
-ahciport = ahciport.sys
-;storahci = storahci.sys
+;ahciport = ahciport.sys
+storahci = storahci.sys
 disk = disk.sys
 
 [MouseDrivers.Load]

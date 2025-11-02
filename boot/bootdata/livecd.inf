@@ -18,7 +18,14 @@ HKU,".DEFAULT\Keyboard Layout\Toggle","Layout Hotkey",0x00000000,"2"
 ; Cdrom class driver
 HKLM,"SYSTEM\CurrentControlSet\Services\Cdrom","Start",0x00010001,0x00000000
 
-; Seed the UEFI framebuffer root device so uefifb.sys can install on LiveCD
+; Disable legacy ATAPI miniport to avoid conflicts with PnP stack
+HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Start",0x00010001,0x00000004
+
+; Ensure storahci boot-start and group on LiveCD
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Group",0x00000000,"SCSI Miniport"
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","ErrorControl",0x00010001,0x00000001
 
 ; Reset BootExecute to an empty value: AutoChk should not start in MiniNT mode
 HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB","NextInstance",0x00010001,0x00000001
@@ -186,5 +193,11 @@ HKCR,"Interface\{00000122-0000-0000-C000-000000000046}\ProxyStubClsid32","",0x00
 HKCR,"CLSID\{00000320-0000-0000-C000-000000000046}","",0x00000000,"PSFactoryBuffer"
 HKCR,"CLSID\{00000320-0000-0000-C000-000000000046}\InProcServer32","",0x00000000,"ole32.dll"
 HKCR,"CLSID\{00000320-0000-0000-C000-000000000046}\InProcServer32","ThreadingModel",0x00000000,"Both"
+
+; Ensure core components registration matches Debug/installed builds for LiveCD and RamFS boots.
+; Use HKLM\RunOnce so it executes even under MiniNT/CleanBoot where RunOnceEx may be skipped.
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce","ROSSetup_Early",0x00020000,"rundll32.exe setupapi.dll,InstallHinfSection EarlyPhaseSetup 128 %systemroot%\inf\syssetup.inf"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce","ROSSetup_Reg2",0x00020000,"rundll32.exe setupapi.dll,InstallHinfSection RegistrationPhase2 128 %systemroot%\inf\syssetup.inf"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce","ROSSetup_Finalize",0x00020000,"rundll32.exe setupapi.dll,InstallHinfSection Finalize 128 %systemroot%\inf\syssetup.inf"
 
 ; EOF

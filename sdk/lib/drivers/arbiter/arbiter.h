@@ -25,16 +25,18 @@ typedef struct _ARBITER_ORDERING_LIST
     PARBITER_ORDERING Orderings;
 } ARBITER_ORDERING_LIST, *PARBITER_ORDERING_LIST;
 
-typedef struct _ARBITER_ALTERNATIVE
-{
-    UINT64 Minimum;
-    UINT64 Maximum;
-    UINT32 Length;
-    UINT32 Alignment;
+/* Internal alternative descriptor used by the arbiter core.
+ * Do NOT expose in public headers; public ARBITER_LIST_ENTRY.Alternatives
+ * remains PIO_RESOURCE_DESCRIPTOR.
+ */
+typedef struct _ARBITER_ALTERNATIVE {
+    ULONGLONG Minimum;
+    ULONGLONG Maximum;
+    ULONG Length;
+    ULONG Alignment;
     INT32 Priority;
-    UINT32 Flags;
+    ULONG Flags;
     PIO_RESOURCE_DESCRIPTOR Descriptor;
-    UINT32 Reserved[3];
 } ARBITER_ALTERNATIVE, *PARBITER_ALTERNATIVE;
 
 typedef struct _ARBITER_ALLOCATION_STATE
@@ -60,8 +62,8 @@ typedef NTSTATUS
     _In_ PIO_RESOURCE_DESCRIPTOR IoDescriptor,
     _Out_ PUINT64 OutMinimumAddress,
     _Out_ PUINT64 OutMaximumAddress,
-    _Out_ PUINT32 OutLength,
-    _Out_ PUINT32 OutAlignment
+    _Out_ PULONG OutLength,
+    _Out_ PULONG OutAlignment
 );
 
 typedef NTSTATUS
@@ -75,7 +77,7 @@ typedef NTSTATUS
 (NTAPI * PARB_UNPACK_RESOURCE)(
     _In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDescriptor,
     _Out_ PUINT64 Start,
-    _Out_ PUINT32 OutLength
+    _Out_ PULONG OutLength
 );
 
 typedef INT32

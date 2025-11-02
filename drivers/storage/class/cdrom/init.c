@@ -28,6 +28,7 @@ Revision History:
 #include "devpkey.h"
 
 #include "cdrom.h"
+#include <debug.h>
 #include "scratch.h"
 #include "mmc.h"
 
@@ -696,6 +697,9 @@ Return Value:
                 "to device %wZ\n",
                 &unicodeLinkName,
                 &(DeviceExtension->DeviceName)));
+    DPRINT1("[CDROM] Symbolic link created: %wZ -> %wZ\n",
+            &unicodeLinkName,
+            &(DeviceExtension->DeviceName));
 
     // Save away the symbolic link name in the driver data block.  We need
     // it so we can delete the link when the device is removed.
@@ -2750,4 +2754,3 @@ Cleanup:
 
 
 #pragma warning(pop) // un-sets any local warning changes
-

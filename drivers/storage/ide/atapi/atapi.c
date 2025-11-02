@@ -15,6 +15,15 @@
 //#define NDEBUG
 #include <debug.h>
 
+#if DBG
+#define ATAPI_VERBOSE(fmt, ...) \
+    ScsiDebugPrint(0, "[ATAPI-V] " fmt, ##__VA_ARGS__)
+#else
+#define ATAPI_VERBOSE(...) ((void)0)
+#endif
+
+static volatile LONG AtapiFindControllerCalls;
+
 //
 // Device extension
 //
@@ -348,16 +357,23 @@ Return Value:
             // We really should wait up to 31 seconds
             // The ATA spec. allows device 0 to come back from BUSY in 31 seconds!
             // (30 seconds for device 1)
-            do {
-
-                //
-                // Wait for Busy to drop.
-                //
-
-                ScsiPortStallExecution(100);
-                GetStatus(baseIoAddress2, statusByte);
-
-            } while ((statusByte & IDE_STATUS_BUSY) && waitCount--);
+            {
+                ULONG spinTicks = 0;
+                do {
+                    // Wait for BUSY to drop.
+                    ScsiPortStallExecution(100); // 100 usec
+                    GetStatus(baseIoAddress2, statusByte);
+                    if ((++spinTicks % 10000) == 0) // ~1s
+                    {
+                        ScsiDebugPrint(0,
+                                       "[ATAPI-V] IssueIdentify: waiting for BUSY to clear (chan=%lu dev=%lu) status=0x%02x waitCount=%lu\n",
+                                       Channel,
+                                       DeviceNumber,
+                                       statusByte,
+                                       waitCount);
+                    }
+                } while ((statusByte & IDE_STATUS_BUSY) && waitCount--);
+            }
 
             ScsiPortWritePortUchar(&baseIoAddress1->DriveSelect,
                                    (UCHAR)((DeviceNumber << 4) | 0xA0));
@@ -1572,8 +1588,10 @@ Return Value:
             continue;
         }
 
+        ATAPI_VERBOSE("FindDevices: soft reset chan=%lu dev=%lu\n", Channel, deviceNumber);
         AtapiSoftReset(baseIoAddress1,deviceNumber);
         WaitOnBusy(baseIoAddress2,statusByte);
+        ATAPI_VERBOSE("FindDevices: post-reset status=0x%02x chan=%lu dev=%lu\n", statusByte, Channel, deviceNumber);
 
         signatureLow = ScsiPortReadPortUchar(&baseIoAddress1->CylinderLow);
         signatureHigh = ScsiPortReadPortUchar(&baseIoAddress1->CylinderHigh);
@@ -2176,13 +2194,14 @@ Return Value:
     UCHAR                statusByte;
     BOOLEAN              preConfig = FALSE;
 
-    ScsiDebugPrint(0,
-                   "[ATAPI] AtapiFindController: entry adapterCount=%lu bus=%lu interface=%u argument=%p preConfig=%u\n",
-                   adapterCount ? *adapterCount : 0,
-                   ConfigInfo ? ConfigInfo->SystemIoBusNumber : 0,
-                   ConfigInfo ? ConfigInfo->AdapterInterfaceType : 0,
-                   ArgumentString,
-                   preConfig);
+    ATAPI_VERBOSE("entry adapterCount=%lu bus=%lu interface=%u argument=%p preConfig=%u\n",
+                  adapterCount ? *adapterCount : 0,
+                  ConfigInfo ? ConfigInfo->SystemIoBusNumber : 0,
+                  ConfigInfo ? ConfigInfo->AdapterInterfaceType : 0,
+                  ArgumentString,
+                  preConfig);
+
+    InterlockedIncrement(&AtapiFindControllerCalls);
 
     //
     // The following table specifies the ports to be checked when searching for
@@ -2204,10 +2223,9 @@ Return Value:
         return SP_RETURN_ERROR;
     }
 
-    ScsiDebugPrint(0,
-                   "[ATAPI] AtapiFindPCIController: AdapterCount=%lu Bus=%lu\n",
-                   adapterCount ? *adapterCount : 0,
-                   ConfigInfo ? ConfigInfo->SystemIoBusNumber : 0);
+    ATAPI_VERBOSE("AdapterCount=%lu Bus=%lu\n",
+                  adapterCount ? *adapterCount : 0,
+                  ConfigInfo ? ConfigInfo->SystemIoBusNumber : 0);
 
     //
     // Check to see if this is a special configuration environment.
@@ -2263,12 +2281,12 @@ Return Value:
         ULONG probeIndex = *adapterCount;
         ULONG probePort = portBase ? portBase : AdapterAddresses[probeIndex];
 
-        ScsiDebugPrint(0,
-                       "[ATAPI] AtapiFindController: probing index=%lu port=0x%lx preConfig=%u portBase=0x%lx\n",
-                       probeIndex,
-                       probePort,
-                       preConfig,
-                       portBase);
+        ATAPI_VERBOSE("probing index=%lu port=0x%lx preConfig=%u portBase=0x%lx irqHint=%lu\n",
+                      probeIndex,
+                      probePort,
+                      preConfig,
+                      portBase,
+                      irq);
 
         retryCount = 4;
 
@@ -2312,11 +2330,10 @@ Return Value:
 
         }// ConfigInfo check
 
-        ScsiDebugPrint(0,
-                       "[ATAPI] AtapiFindController: ioSpace=%p for port=0x%lx (preConfig=%u)\n",
-                       ioSpace,
-                       probePort,
-                       preConfig);
+        ATAPI_VERBOSE("ioSpace=%p for port=0x%lx (preConfig=%u)\n",
+                      ioSpace,
+                      probePort,
+                      preConfig);
 
         //
         // Update the adapter count.
@@ -2329,9 +2346,8 @@ Return Value:
         //
 
         if (!ioSpace) {
-            ScsiDebugPrint(0,
-                           "[ATAPI] AtapiFindController: ScsiPortGetDeviceBase returned NULL for port=0x%lx, continuing\n",
-                           probePort);
+            ATAPI_VERBOSE("ScsiPortGetDeviceBase returned NULL for port=0x%lx, continuing\n",
+                          probePort);
             continue;
         }
 
@@ -2355,10 +2371,9 @@ retryIdentifier:
 
         if ((statusByte = ScsiPortReadPortUchar(&((PIDE_REGISTERS_1)ioSpace)->CylinderLow)) != 0xAA) {
 
-            ScsiDebugPrint(0,
-                           "[ATAPI] AtapiFindController: master readback=0x%02x at port=0x%lx\n",
-                           statusByte,
-                           probePort);
+            ATAPI_VERBOSE("master readback=0x%02x at port=0x%lx\n",
+                          statusByte,
+                          probePort);
 
             statusByte = ScsiPortReadPortUchar(&((PATAPI_REGISTERS_2)ioSpace)->AlternateStatus);
 
@@ -2374,10 +2389,9 @@ retryIdentifier:
                 do {
                     ScsiPortStallExecution(1000);
                     statusByte = ScsiPortReadPortUchar(&((PATAPI_REGISTERS_1)ioSpace)->Command);
-                    ScsiDebugPrint(0,
-                               "[ATAPI] AtapiFindController: status after busy wait=0x%02x at port=0x%lx\n",
-                               statusByte,
-                               probePort);
+                    ATAPI_VERBOSE("status after busy wait=0x%02x at port=0x%lx\n",
+                                   statusByte,
+                                   probePort);
                 } while ((statusByte & IDE_STATUS_BUSY) && ++i < 10);
 
                 if (retryCount-- && (!(statusByte & IDE_STATUS_BUSY))) {
@@ -2399,10 +2413,9 @@ retryIdentifier:
 
             if ((statusByte = ScsiPortReadPortUchar(&((PIDE_REGISTERS_1)ioSpace)->CylinderLow)) != 0xAA) {
 
-                ScsiDebugPrint(0,
-                           "[ATAPI] AtapiFindController: slave readback=0x%02x at port=0x%lx\n",
-                           statusByte,
-                           probePort);
+                ATAPI_VERBOSE("slave readback=0x%02x at port=0x%lx\n",
+                              statusByte,
+                              probePort);
 
                 //
                 //
@@ -2481,10 +2494,17 @@ retryIdentifier:
 
         deviceExtension->BaseIoAddress2[0] = (PIDE_REGISTERS_2)(ioSpace);
 
+        // Default to a single channel until we successfully map the secondary.
         deviceExtension->NumberChannels = 1;
 
         ConfigInfo->NumberOfBuses = 1;
         ConfigInfo->MaximumNumberOfTargets = 2;
+
+        // NOTE:
+        // Do NOT proactively map the secondary (0x170/0x376) into the same
+        // adapter here. SCSIPORT will call HwFindAdapter again with *Again=TRUE
+        // to enumerate the secondary as a separate adapter. Mapping it here
+        // causes duplicate ownership and long INQUIRY stalls during boot.
 
         //
         // Indicate maximum transfer length is 64k.
@@ -2583,18 +2603,26 @@ retryIdentifier:
         deviceExtension->InterruptMode = ConfigInfo->InterruptMode;
 
         //
-        // Search for devices on this controller.
+        // Search for devices on mapped channels (0 and optionally 1).
         //
+        {
+            BOOLEAN anyResponded = FALSE;
+            if (FindDevices(HwDeviceExtension, atapiOnly, 0))
+                anyResponded = TRUE;
+            if (deviceExtension->NumberChannels > 1)
+            {
+                if (FindDevices(HwDeviceExtension, atapiOnly, 1))
+                    anyResponded = TRUE;
+            }
 
-        if (FindDevices(HwDeviceExtension,
-                        atapiOnly,
-                        0)) {
+        if (anyResponded) {
 
-            ScsiDebugPrint(0,
-                           "[ATAPI] AtapiFindController: FindDevices succeeded at port=0x%lx (atapiOnly=%u, adapterCount=%lu)\n",
-                           probePort,
-                           atapiOnly,
-                           *adapterCount);
+            ATAPI_VERBOSE("FindDevices succeeded port=0x%lx atapiOnly=%u adapterCount=%lu interrupt=%lu mode=%lu\n",
+                          probePort,
+                          atapiOnly,
+                          *adapterCount,
+                          ConfigInfo->BusInterruptLevel,
+                          ConfigInfo->InterruptMode);
 
             //
             // Claim primary or secondary ATA IO range.
@@ -2625,11 +2653,13 @@ retryIdentifier:
 
             return(SP_RETURN_FOUND);
         } else {
-            ScsiDebugPrint(0,
-                           "[ATAPI] AtapiFindController: FindDevices failed at port=0x%lx (atapiOnly=%u, adapterCount=%lu)\n",
-                           probePort,
-                           atapiOnly,
-                           *adapterCount);
+            ATAPI_VERBOSE("FindDevices failed port=0x%lx atapiOnly=%u adapterCount=%lu statusByte=0x%02x BaseIo=%p\n",
+                          probePort,
+                          atapiOnly,
+                          *adapterCount,
+                          statusByte,
+                          deviceExtension->BaseIoAddress1[0]);
+        }
         }
     }
 
@@ -2642,8 +2672,7 @@ retryIdentifier:
     *Again = FALSE;
     *(adapterCount) = 0;
 
-    ScsiDebugPrint(0,
-                   "[ATAPI] AtapiFindController: returning SP_RETURN_NOT_FOUND\n");
+    ATAPI_VERBOSE("returning SP_RETURN_NOT_FOUND\n");
 
     return(SP_RETURN_NOT_FOUND);
 
@@ -3145,6 +3174,10 @@ Return Value:
 --*/
 
 {
+    ScsiDebugPrint(0,
+                   "[ATAPI] AtapiFindPCIController: entry Context=%p BusInfo=%p\n",
+                   Context,
+                   BusInformation);
     PHW_DEVICE_EXTENSION deviceExtension = HwDeviceExtension;
     PULONG               adapterCount    = (PULONG)Context;
     ULONG                channel         = 0;
@@ -3841,9 +3874,18 @@ Return Value:
         // Send CDB to device.
         //
 
-        WriteBuffer(baseIoAddress1,
-                    (PUSHORT)srb->Cdb,
-                    6);
+        {
+            UCHAR packet[12];
+            RtlZeroMemory(packet, sizeof(packet));
+            if (srb->CdbLength > 12)
+                RtlCopyMemory(packet, srb->Cdb, 12);
+            else if (srb->CdbLength > 0)
+                RtlCopyMemory(packet, srb->Cdb, srb->CdbLength);
+
+            WriteBuffer(baseIoAddress1,
+                        (PUSHORT)packet,
+                        6);
+        }
 
         return TRUE;
 
@@ -5377,48 +5419,21 @@ Return Value:
     ScsiPortWritePortUchar((PUCHAR)baseIoAddress1 + 1,0);
 
 
-    if (flags & DFLAGS_INT_DRQ) {
+    // Always issue the ATAPI PACKET command and synchronously wait for DRQ
+    // to write the CDB. Some devices do not interrupt to request the packet.
+    ScsiPortWritePortUchar(&baseIoAddress1->Command,
+                           IDE_COMMAND_ATAPI_PACKET);
 
-        //
-        // This device interrupts when ready to receive the packet.
-        //
-        // Write ATAPI packet command.
-        //
+    // Wait for the device to become ready to accept the packet
+    WaitOnBusy(baseIoAddress2, statusByte);
+    WaitForDrq(baseIoAddress2, statusByte);
 
-        ScsiPortWritePortUchar(&baseIoAddress1->Command,
-                               IDE_COMMAND_ATAPI_PACKET);
+    if (!(statusByte & IDE_STATUS_DRQ)) {
 
-        DebugPrint((3,
-                   "AtapiSendCommand: Wait for int. to send packet. Status (%x)\n",
+        DebugPrint((1,
+                   "AtapiSendCommand: DRQ never asserted (%x)\n",
                    statusByte));
-
-        deviceExtension->ExpectingInterrupt = TRUE;
-
-        return SRB_STATUS_PENDING;
-
-    } else {
-
-        //
-        // Write ATAPI packet command.
-        //
-
-        ScsiPortWritePortUchar(&baseIoAddress1->Command,
-                               IDE_COMMAND_ATAPI_PACKET);
-
-        //
-        // Wait for DRQ.
-        //
-
-        WaitOnBusy(baseIoAddress2, statusByte);
-        WaitForDrq(baseIoAddress2, statusByte);
-
-        if (!(statusByte & IDE_STATUS_DRQ)) {
-
-            DebugPrint((1,
-                       "AtapiSendCommand: DRQ never asserted (%x)\n",
-                       statusByte));
-            return SRB_STATUS_ERROR;
-        }
+        return SRB_STATUS_ERROR;
     }
 
     //
@@ -5433,9 +5448,67 @@ Return Value:
 
     WaitOnBusy(baseIoAddress2,statusByte);
 
-    WriteBuffer(baseIoAddress1,
-                (PUSHORT)Srb->Cdb,
-                6);
+    {
+        UCHAR packet[12];
+        RtlZeroMemory(packet, sizeof(packet));
+        if (Srb->CdbLength > 12)
+            RtlCopyMemory(packet, Srb->Cdb, 12);
+        else if (Srb->CdbLength > 0)
+            RtlCopyMemory(packet, Srb->Cdb, Srb->CdbLength);
+
+        WriteBuffer(baseIoAddress1,
+                    (PUSHORT)packet,
+                    6);
+    }
+
+    //
+    // For small data-in commands like INQUIRY, poll and complete synchronously
+    // to avoid stalls (regardless of DFLAGS_INT_DRQ).
+    //
+    if (Srb->Cdb[0] == SCSIOP_INQUIRY)
+    {
+        ULONG pollWords;
+
+        WaitOnBusy(baseIoAddress2, statusByte);
+        WaitForDrq(baseIoAddress2, statusByte);
+        if (!(statusByte & IDE_STATUS_DRQ))
+        {
+            DebugPrint((1,
+                       "AtapiSendCommand: INQUIRY DRQ never asserted (%x)\n",
+                       statusByte));
+            return SRB_STATUS_ERROR;
+        }
+
+        pollWords =
+            ScsiPortReadPortUchar(&baseIoAddress1->ByteCountLow);
+        pollWords |=
+            ScsiPortReadPortUchar(&baseIoAddress1->ByteCountHigh) << 8;
+        pollWords >>= 1; // bytes -> words
+
+        if (pollWords > deviceExtension->WordsLeft)
+            pollWords = deviceExtension->WordsLeft;
+
+        if (pollWords)
+        {
+            ReadBuffer(baseIoAddress1,
+                       deviceExtension->DataBuffer,
+                       pollWords);
+            deviceExtension->DataBuffer += pollWords;
+            deviceExtension->WordsLeft -= pollWords;
+        }
+
+        GetBaseStatus(baseIoAddress1, statusByte);
+
+        deviceExtension->CurrentSrb = NULL;
+        Srb->SrbStatus = SRB_STATUS_SUCCESS;
+        ScsiPortNotification(RequestComplete,
+                             deviceExtension,
+                             Srb);
+        ScsiPortNotification(NextRequest,
+                             deviceExtension,
+                             NULL);
+        return SRB_STATUS_SUCCESS;
+    }
 
     //
     // Indicate expecting an interrupt and wait for it.
@@ -5482,7 +5555,7 @@ Return Value:
     ULONG i;
     PMODE_PARAMETER_HEADER   modeData;
 
-    DebugPrint((2,
+    DebugPrint((1,
                "IdeSendCommand: Command %x to device %d\n",
                Srb->Cdb[0],
                Srb->TargetId));
@@ -5573,6 +5646,7 @@ Return Value:
             }
 
             status = SRB_STATUS_SUCCESS;
+            DebugPrint((1, "IdeSendCommand: INQUIRY immediate complete for TID %d\n", Srb->TargetId));
         }
 
         break;
@@ -6323,6 +6397,9 @@ Return Value:
 
     ScsiDebugPrint(0, "\n\nATAPI IDE MiniPort Driver\n");
 
+    // Marker to verify patched driver is loaded in logs
+    ScsiDebugPrint(0, "[ATAPI] Build marker: patched-no-legacy-secondary-mapping + sync-INQUIRY\n");
+
     statusToReturn = 0xffffffff;
 
     //
@@ -6361,54 +6438,39 @@ Return Value:
     hwInitializationData.MapBuffers = TRUE;
 
     //
-    // Native Mode Devices
-    //
-    for (i=0; i <NUM_NATIVE_MODE_ADAPTERS; i++) {
-        hwInitializationData.HwFindAdapter = AtapiFindNativeModeController;
-        hwInitializationData.NumberOfAccessRanges = 4;
-        hwInitializationData.AdapterInterfaceType = PCIBus;
+    // Perform native-mode PCI adapter scan first, to support native IDE
+    ScsiDebugPrint(0, "[ATAPI] DriverEntry: Performing native-mode PCI adapter scan\n");
 
-        hwInitializationData.VendorId             = NativeModeAdapters[i].VendorId;
-        hwInitializationData.VendorIdLength       = (USHORT) NativeModeAdapters[i].VendorIdLength;
-        hwInitializationData.DeviceId             = NativeModeAdapters[i].DeviceId;
-        hwInitializationData.DeviceIdLength       = (USHORT) NativeModeAdapters[i].DeviceIdLength;
+    // Scan known native-mode adapters
+    hwInitializationData.AdapterInterfaceType = PCIBus;
+    hwInitializationData.HwFindAdapter = AtapiFindNativeModeController;
+    for (i = 0; i < NUM_NATIVE_MODE_ADAPTERS; i++)
+    {
+        hwInitializationData.VendorId       = NativeModeAdapters[i].VendorId;
+        hwInitializationData.VendorIdLength = NativeModeAdapters[i].VendorIdLength;
+        hwInitializationData.DeviceId       = NativeModeAdapters[i].DeviceId;
+        hwInitializationData.DeviceIdLength = NativeModeAdapters[i].DeviceIdLength;
 
+        adapterCount = 0;
         newStatus = ScsiPortInitialize(DriverObject,
                                        Argument2,
                                        &hwInitializationData,
                                        (PVOID)(ULONG_PTR)i);
-        ScsiDebugPrint(0,
-                       "[ATAPI] DriverEntry: Native index=%lu ScsiPortInitialize status=%lu\n",
-                       (ULONG)i,
-                       newStatus);
         if (newStatus < statusToReturn)
             statusToReturn = newStatus;
     }
 
-    hwInitializationData.VendorId             = 0;
-    hwInitializationData.VendorIdLength       = 0;
-    hwInitializationData.DeviceId             = 0;
-    hwInitializationData.DeviceIdLength       = 0;
-
-    //
-    // The adapter count is used by the find adapter routine to track how
-    // which adapter addresses have been tested.
-    //
-
+    // Scan for broken PCI IDE controllers (single FIFO)
+    hwInitializationData.VendorId       = 0;
+    hwInitializationData.VendorIdLength = 0;
+    hwInitializationData.DeviceId       = 0;
+    hwInitializationData.DeviceIdLength = 0;
+    hwInitializationData.HwFindAdapter  = AtapiFindPCIController;
     adapterCount = 0;
-
-    hwInitializationData.HwFindAdapter = AtapiFindPCIController;
-    hwInitializationData.NumberOfAccessRanges = 4;
-    hwInitializationData.AdapterInterfaceType = Isa;
-
     newStatus = ScsiPortInitialize(DriverObject,
                                    Argument2,
                                    &hwInitializationData,
                                    &adapterCount);
-    ScsiDebugPrint(0,
-                   "[ATAPI] DriverEntry: PCI probe status=%lu adapterCount=%lu\n",
-                   newStatus,
-                   adapterCount);
     if (newStatus < statusToReturn)
         statusToReturn = newStatus;
 
@@ -6457,6 +6519,10 @@ Return Value:
                    adapterCount);
     if (newStatus < statusToReturn)
         statusToReturn = newStatus;
+
+    ScsiDebugPrint(0,
+                   "[ATAPI] DriverEntry: HwFindAdapter calls=%ld\n",
+                   AtapiFindControllerCalls);
 
     ScsiDebugPrint(0,
                    "[ATAPI] DriverEntry: returning status=%lu\n",

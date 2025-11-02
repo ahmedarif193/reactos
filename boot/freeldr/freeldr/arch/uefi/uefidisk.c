@@ -9,6 +9,7 @@
 
 #include <uefildr.h>
 #include <uefi/uefiarcname.h>
+#include <arch/uefi/machuefi.h>
 #include <DevicePath.h>  /* EFI_DEVICE_PATH_PROTOCOL, helpers */
 #include <disk.h>
 
@@ -74,26 +75,119 @@ ULONG UefiBootDiskArcPartition = 0;
 #endif
 
 static EFI_GUID DevicePathProtocolGuid = EFI_DEVICE_PATH_PROTOCOL_GUID;
+static EFI_GUID LoadedImageProtocolGuid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
 
 static
+BOOLEAN
+UefiDetectIsoVolume(_In_ EFI_BLOCK_IO* BlockIo)
+{
+    EFI_STATUS Status;
+    VOID* Buffer = NULL;
+    UINT32 BlockSize;
+    UINT64 IsoOffsetBytes;
+    UINT64 ReadLba;
+    UINTN  ReadSize;
+    UINTN  DescriptorOffset;
+    UINTN  BlockCount;
+
+    if (!BlockIo || !BlockIo->Media || BlockIo->Media->BlockSize == 0)
+        return FALSE;
+
+    if (BlockIo->Media->LogicalPartition)
+        return FALSE;
+
+    if (!BlockIo->Media->MediaPresent)
+        return FALSE;
+
+    BlockSize = BlockIo->Media->BlockSize;
+    IsoOffsetBytes = 16ull * 2048ull; /* ISO9660 PVD offset */
+
+    ReadLba = IsoOffsetBytes / BlockSize;
+    DescriptorOffset = (UINTN)(IsoOffsetBytes % BlockSize);
+    ReadSize = 2048 + DescriptorOffset;
+    if (ReadSize % BlockSize)
+    {
+        UINTN BlocksNeeded = (ReadSize + BlockSize - 1) / BlockSize;
+        ReadSize = BlocksNeeded * BlockSize;
+    }
+
+    BlockCount = ReadSize / BlockSize;
+
+    if (BlockIo->Media->LastBlock < ReadLba + BlockCount - 1)
+        return FALSE;
+
+    Status = GlobalSystemTable->BootServices->AllocatePool(EfiLoaderData, ReadSize, &Buffer);
+    if (EFI_ERROR(Status) || !Buffer)
+        return FALSE;
+
+    Status = BlockIo->ReadBlocks(BlockIo,
+                                 BlockIo->Media->MediaId,
+                                 ReadLba,
+                                 ReadSize,
+                                 Buffer);
+    if (EFI_ERROR(Status))
+    {
+        GlobalSystemTable->BootServices->FreePool(Buffer);
+        return FALSE;
+    }
+
+    UINT8* Descriptor = (UINT8*)Buffer + DescriptorOffset;
+    BOOLEAN IsIso = FALSE;
+    if (Descriptor[0] == 0x01 &&
+        Descriptor[1] == 'C' && Descriptor[2] == 'D' &&
+        Descriptor[3] == '0' && Descriptor[4] == '0' && Descriptor[5] == '1')
+    {
+        IsIso = TRUE;
+    }
+
+    GlobalSystemTable->BootServices->FreePool(Buffer);
+    return IsIso;
+}
+
 BOOLEAN
 UefiIsCdRomHandle(IN EFI_HANDLE Handle)
 {
     EFI_DEVICE_PATH_PROTOCOL* DevicePath = NULL;
 
-    if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
-            Handle, &DevicePathProtocolGuid, (VOID**)&DevicePath)) ||
-        !DevicePath)
+    if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+            Handle, &DevicePathProtocolGuid, (VOID**)&DevicePath)) &&
+        DevicePath)
     {
-        return FALSE;
+        EFI_DEVICE_PATH_PROTOCOL* Node = DevicePath;
+        while (!IsDevicePathEnd(Node))
+        {
+            if (Node->Type == MEDIA_DEVICE_PATH && Node->SubType == MEDIA_CDROM_DP)
+                return TRUE;
+            Node = NextDevicePathNode(Node);
+        }
     }
 
-    EFI_DEVICE_PATH_PROTOCOL* Node = DevicePath;
-    while (!IsDevicePathEnd(Node))
+    /*
+     * Some firmware (notably SATA AHCI CD-ROMs) expose optical media via a
+     * hard-drive style device path. Fall back to Block I/O heuristics so these
+     * devices are still classified as CDs.
+     */
+    EFI_BLOCK_IO* BlockIo = NULL;
+    if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+            Handle, &bioGuid, (VOID**)&BlockIo)) &&
+        BlockIo && BlockIo->Media && !BlockIo->Media->LogicalPartition)
     {
-        if (Node->Type == MEDIA_DEVICE_PATH && Node->SubType == MEDIA_CDROM_DP)
+        if (BlockIo->Media->ReadOnly && !BlockIo->Media->LogicalPartition)
+        {
+            if (!BlockIo->Media->MediaPresent)
+                return FALSE;
+
+            if (BlockIo->Media->BlockSize == 2048 ||
+                UefiDetectIsoVolume(BlockIo))
+            {
+                TRACE("UefiIsCdRomHandle: heuristic matched read-only media (BlockSize=%u)\n",
+                      BlockIo->Media->BlockSize);
+                return TRUE;
+            }
+
+            TRACE("UefiIsCdRomHandle: read-only media without ISO signature, assuming CD-ROM\n");
             return TRUE;
-        Node = NextDevicePathNode(Node);
+        }
     }
 
     return FALSE;
@@ -380,6 +474,9 @@ UefiDiskOpen(CHAR *Path, OPENMODE OpenMode, ULONG *FileId)
     ULONGLONG SectorCount = 0;
     ULONG UefiDriveNumber = 0;
     PARTITION_TABLE_ENTRY PartitionTableEntry;
+    BOOLEAN IsCdPath;
+    EFI_HANDLE DeviceHandle = NULL;
+    EFI_BLOCK_IO* BlockIo = NULL;
 
     TRACE("UefiDiskOpen: File ID: %d, Path: %s\n", FileId, Path);
 
@@ -395,31 +492,73 @@ UefiDiskOpen(CHAR *Path, OPENMODE OpenMode, ULONG *FileId)
 
     TRACE("Opening disk: DriveNumber: %d, DrivePartition: %d\n", DriveNumber, DrivePartition);
     UefiDriveNumber = DriveNumber - FIRST_BIOS_DISK;
-    GlobalSystemTable->BootServices->HandleProtocol(handles[UefiDriveNumber], &bioGuid, (void**)&bio);
-    SectorSize = bio->Media->BlockSize;
+    IsCdPath = (DrivePartition == 0xff);
 
-    if (DrivePartition != 0xff && DrivePartition != 0)
+    if (IsCdPath)
     {
-        if (!DiskGetPartitionEntry(DriveNumber, DrivePartition, &PartitionTableEntry))
+        if (UefiDriveNumber >= UefiGetCdromCount())
             return EINVAL;
 
-        SectorOffset = PartitionTableEntry.SectorCountBeforePartition;
-        SectorCount = PartitionTableEntry.PartitionSectorCount;
+        DeviceHandle = UefiGetCdromHandle(UefiDriveNumber);
+        if (!DeviceHandle)
+            return EINVAL;
+
+        if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(DeviceHandle, &bioGuid, (void**)&BlockIo)) ||
+            !BlockIo || !BlockIo->Media)
+        {
+            return EIO;
+        }
+
+        bio = BlockIo;
+        SectorSize = bio->Media->BlockSize ? bio->Media->BlockSize : 2048;
+        SectorOffset = 0;
+        SectorCount = bio->Media->LastBlock + 1;
+
+        /* Remap CD-ROM drive numbers to avoid collisions with HDD 0x80 */
+        DriveNumber = (UCHAR)(0xE0 + UefiDriveNumber);
     }
     else
     {
-        GEOMETRY Geometry;
-        if (!MachDiskGetDriveGeometry(DriveNumber, &Geometry))
+        ULONG RootIndex;
+
+        if (UefiDriveNumber >= PcBiosDiskCount)
             return EINVAL;
 
-        if (SectorSize != Geometry.BytesPerSector)
+        RootIndex = InternalUefiDisk[UefiDriveNumber].UefiRootNumber;
+        DeviceHandle = handles[RootIndex];
+
+        if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(DeviceHandle, &bioGuid, (void**)&BlockIo)) ||
+            !BlockIo || !BlockIo->Media)
         {
-            ERR("SectorSize (%lu) != Geometry.BytesPerSector (%lu), expect problems!\n",
-                SectorSize, Geometry.BytesPerSector);
+            return EIO;
         }
 
-        SectorOffset = 0;
-        SectorCount = Geometry.Sectors;
+        bio = BlockIo;
+        SectorSize = bio->Media->BlockSize;
+
+        if (DrivePartition != 0)
+        {
+            if (!DiskGetPartitionEntry(DriveNumber, DrivePartition, &PartitionTableEntry))
+                return EINVAL;
+
+            SectorOffset = PartitionTableEntry.SectorCountBeforePartition;
+            SectorCount = PartitionTableEntry.PartitionSectorCount;
+        }
+        else
+        {
+            GEOMETRY Geometry;
+            if (!MachDiskGetDriveGeometry(DriveNumber, &Geometry))
+                return EINVAL;
+
+            if (SectorSize != Geometry.BytesPerSector)
+            {
+                ERR("SectorSize (%lu) != Geometry.BytesPerSector (%lu), expect problems!\n",
+                    SectorSize, Geometry.BytesPerSector);
+            }
+
+            SectorOffset = 0;
+            SectorCount = Geometry.Sectors;
+        }
     }
 
     Context = FrLdrTempAlloc(sizeof(DISKCONTEXT), TAG_HW_DISK_CONTEXT);
@@ -699,10 +838,66 @@ UefiSetBootpath(VOID)
    UefiBootDiskArcNumber = 0;
    UefiBootDiskArcPartition = 0;
 
-   TRACE("Boot media: Removable=%d BlockSize=%u LogicalPartition=%d\n",
-         bio->Media->RemovableMedia,
-         bio->Media->BlockSize,
-         bio->Media->LogicalPartition);
+   EFI_LOADED_IMAGE_PROTOCOL* LoadedImage = NULL;
+   EFI_HANDLE BootHandle = NULL;
+   EFI_BLOCK_IO* BootBlockIo = NULL;
+   EFI_BLOCK_IO* BootMediaIo = bio;
+   EFI_BLOCK_IO* BootClassifyIo = bio;
+   BOOLEAN BootHandleIsPartition = FALSE;
+
+   if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+           GlobalImageHandle,
+           &LoadedImageProtocolGuid,
+           (VOID**)&LoadedImage)) &&
+       LoadedImage && LoadedImage->DeviceHandle)
+   {
+        BootHandle = LoadedImage->DeviceHandle;
+        if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+                BootHandle,
+                &bioGuid,
+                (VOID**)&BootBlockIo)) &&
+            BootBlockIo)
+        {
+            BootMediaIo = BootBlockIo;
+            if (BootBlockIo->Media)
+            {
+                TRACE("Boot handle media: Removable=%d BlockSize=%u LogicalPartition=%d ReadOnly=%d\n",
+                      BootBlockIo->Media->RemovableMedia,
+                      BootBlockIo->Media->BlockSize,
+                      BootBlockIo->Media->LogicalPartition,
+                      BootBlockIo->Media->ReadOnly);
+                BootHandleIsPartition = BootBlockIo->Media->LogicalPartition ? TRUE : FALSE;
+                BootClassifyIo = BootBlockIo;
+                if (BootHandleIsPartition)
+                {
+                    TRACE("Boot handle is a logical partition; using partition media for heuristics\n");
+                }
+            }
+        }
+   }
+
+   if (BootMediaIo && BootMediaIo->Media)
+   {
+        TRACE("Boot media: Removable=%d BlockSize=%u LogicalPartition=%d ReadOnly=%d\n",
+              BootMediaIo->Media->RemovableMedia,
+              BootMediaIo->Media->BlockSize,
+              BootMediaIo->Media->LogicalPartition,
+              BootMediaIo->Media->ReadOnly);
+   }
+
+   BOOLEAN BootHandleIsCd = FALSE;
+   if (BootHandle && (!BootBlockIo || !BootBlockIo->Media || !BootHandleIsPartition))
+   {
+        BootHandleIsCd = UefiIsCdRomHandle(BootHandle);
+        if (BootHandleIsCd)
+        {
+            TRACE("Boot device handle classified as CD-ROM; forcing ISO/CD semantics\n");
+        }
+   }
+   else if (BootHandle && BootHandleIsPartition)
+   {
+        TRACE("Boot device handle represents a logical partition; skipping CD-ROM override\n");
+   }
 
    ULONG BootPartition = 0;
    PARTITION_TABLE_ENTRY PartitionEntry;
@@ -711,14 +906,30 @@ UefiSetBootpath(VOID)
    BOOLEAN IsUsbBoot = UefiIsUsbHandle(handles[UefiBootRootIdentifier]);
    ULONG DevPathPartition = 0;
    UINT64 DevPathStart = 0;
+   EFI_HANDLE PartitionInfoHandle = handles[UefiBootRootIdentifier];
+
+   if (BootHandle && BootHandleIsPartition)
+   {
+        PartitionInfoHandle = BootHandle;
+   }
+
+   if (BootHandleIsCd)
+   {
+        TreatAsCd = TRUE;
+        HasPartitionInfo = FALSE;
+        BootPartition = 0;
+        PartitionInfoHandle = BootHandle;
+   }
+
    BOOLEAN DevPathHasPartition =
-       UefiHandleGetPartitionInfo(handles[UefiBootRootIdentifier],
+       UefiHandleGetPartitionInfo(PartitionInfoHandle,
                                   &DevPathPartition,
                                   &DevPathStart);
 
    RtlZeroMemory(&PartitionEntry, sizeof(PartitionEntry));
 
-   if (UefiGetBootPartitionEntry(FrldrBootDrive, &PartitionEntry, &BootPartition) &&
+   if (!TreatAsCd &&
+       UefiGetBootPartitionEntry(FrldrBootDrive, &PartitionEntry, &BootPartition) &&
        BootPartition != 0)
    {
         BOOLEAN PartitionLooksValid = (PartitionEntry.PartitionSectorCount != 0 &&
@@ -752,15 +963,24 @@ UefiSetBootpath(VOID)
    }
 
    /*
-    * Treat removable 2048-byte block media without partition info as ISO/CD
-    * regardless of whether it is attached via USB. Windows and Linux both
-    * classify USB CD-ROMs as optical media. Keep CD semantics here so that
-    * ISO9660 handling and sizing is consistent and does not rely on HDD paths.
+    * Treat removable 2048-byte block media without partition info as ISO/CD.
+    * USB devices only follow this path when firmware reports them read-only,
+    * so writable USB mass storage stays in HDD mode while true USB CD-ROMs
+    * still keep optical semantics.
     */
-   if (!TreatAsCd && bio->Media->RemovableMedia == TRUE &&
-       bio->Media->BlockSize == 2048 && !HasPartitionInfo)
+   if (!TreatAsCd && BootClassifyIo && BootClassifyIo->Media &&
+       BootClassifyIo->Media->RemovableMedia == TRUE &&
+       BootClassifyIo->Media->BlockSize == 2048 && !HasPartitionInfo &&
+       (!IsUsbBoot || BootClassifyIo->Media->ReadOnly))
    {
         TRACE("Removable 2048-byte media without partitions, treating as ISO/CD\n");
+        TreatAsCd = TRUE;
+   }
+
+   if (!TreatAsCd && BootClassifyIo && BootClassifyIo->Media &&
+       BootClassifyIo->Media->ReadOnly && !HasPartitionInfo)
+   {
+        TRACE("Read-only media without partition info, treating as ISO/CD\n");
         TreatAsCd = TRUE;
    }
 
@@ -811,7 +1031,8 @@ UefiSetBootpath(VOID)
 
    if (TreatAsCd)
    {
-        ULONG CdIndex = MapToCdromIndex(handles[UefiBootRootIdentifier]);
+        EFI_HANDLE CdHandle = BootHandleIsCd ? BootHandle : handles[UefiBootRootIdentifier];
+        ULONG CdIndex = MapToCdromIndex(CdHandle);
         UefiBootHasDiskArc = FALSE;
         UefiBootDiskArcNumber = 0;
         UefiBootDiskArcPartition = 0;
@@ -1022,8 +1243,36 @@ UefiDiskReadLogicalSectors(
 {
     ULONG UefiDriveNumber;
 
-    UefiDriveNumber = InternalUefiDisk[DriveNumber - FIRST_BIOS_DISK].UefiRootNumber;
-    //TODO keep this TRACE("UefiDiskReadLogicalSectors: DriveNumber: %d\n", UefiDriveNumber);
+    if (DriveNumber >= 0xE0)
+    {
+        ULONG CdIndex = DriveNumber - 0xE0;
+        EFI_BLOCK_IO* BlockIo;
+        EFI_HANDLE DeviceHandle = UefiGetCdromHandle(CdIndex);
+        if (!DeviceHandle)
+            return FALSE;
+
+        if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(DeviceHandle, &bioGuid, (void**)&BlockIo)) ||
+            !BlockIo || !BlockIo->Media)
+        {
+            return FALSE;
+        }
+
+        BlockIo->ReadBlocks(BlockIo,
+                             BlockIo->Media->MediaId,
+                             SectorNumber,
+                             SectorCount * BlockIo->Media->BlockSize,
+                             Buffer);
+        return TRUE;
+    }
+
+    if (DriveNumber < FIRST_BIOS_DISK)
+        return FALSE;
+
+    UefiDriveNumber = DriveNumber - FIRST_BIOS_DISK;
+    if (UefiDriveNumber >= PcBiosDiskCount)
+        return FALSE;
+
+    UefiDriveNumber = InternalUefiDisk[UefiDriveNumber].UefiRootNumber;
     GlobalSystemTable->BootServices->HandleProtocol(handles[UefiDriveNumber], &bioGuid, (void**)&bio);
 
     /* Devices setup */
@@ -1035,8 +1284,39 @@ BOOLEAN
 UefiDiskGetDriveGeometry(UCHAR DriveNumber, PGEOMETRY Geometry)
 {
     ULONG UefiDriveNumber;
+    EFI_HANDLE DeviceHandle;
 
-    UefiDriveNumber = InternalUefiDisk[DriveNumber - FIRST_BIOS_DISK].UefiRootNumber;
+    if (DriveNumber >= 0xE0)
+    {
+        ULONG CdIndex = DriveNumber - 0xE0;
+        EFI_BLOCK_IO* BlockIo;
+
+        DeviceHandle = UefiGetCdromHandle(CdIndex);
+        if (!DeviceHandle)
+            return FALSE;
+
+        if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(DeviceHandle, &bioGuid, (void**)&BlockIo)) ||
+            !BlockIo || !BlockIo->Media)
+        {
+            return FALSE;
+        }
+
+        Geometry->Cylinders = 1;
+        Geometry->Heads = 1;
+        Geometry->SectorsPerTrack = BlockIo->Media->LastBlock + 1;
+        Geometry->BytesPerSector = BlockIo->Media->BlockSize;
+        Geometry->Sectors = BlockIo->Media->LastBlock + 1;
+        return TRUE;
+    }
+
+    if (DriveNumber < FIRST_BIOS_DISK)
+        return FALSE;
+
+    UefiDriveNumber = DriveNumber - FIRST_BIOS_DISK;
+    if (UefiDriveNumber >= PcBiosDiskCount)
+        return FALSE;
+
+    UefiDriveNumber = InternalUefiDisk[UefiDriveNumber].UefiRootNumber;
     GlobalSystemTable->BootServices->HandleProtocol(handles[UefiDriveNumber], &bioGuid, (void**)&bio);
     Geometry->Cylinders = 1; // Not relevant for the UEFI BIO protocol
     Geometry->Heads = 1;     // Not relevant for the UEFI BIO protocol
@@ -1050,7 +1330,35 @@ UefiDiskGetDriveGeometry(UCHAR DriveNumber, PGEOMETRY Geometry)
 ULONG
 UefiDiskGetCacheableBlockCount(UCHAR DriveNumber)
 {
-    ULONG UefiDriveNumber = InternalUefiDisk[DriveNumber - FIRST_BIOS_DISK].UefiRootNumber;
+    ULONG UefiDriveNumber;
+    EFI_HANDLE DeviceHandle;
+
+    if (DriveNumber >= 0xE0)
+    {
+        ULONG CdIndex = DriveNumber - 0xE0;
+        EFI_BLOCK_IO* BlockIo;
+
+        DeviceHandle = UefiGetCdromHandle(CdIndex);
+        if (!DeviceHandle)
+            return 0;
+
+        if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(DeviceHandle, &bioGuid, (void**)&BlockIo)) ||
+            !BlockIo || !BlockIo->Media)
+        {
+            return 0;
+        }
+
+        return BlockIo->Media->LastBlock + 1;
+    }
+
+    if (DriveNumber < FIRST_BIOS_DISK)
+        return 0;
+
+    UefiDriveNumber = DriveNumber - FIRST_BIOS_DISK;
+    if (UefiDriveNumber >= PcBiosDiskCount)
+        return 0;
+
+    UefiDriveNumber = InternalUefiDisk[UefiDriveNumber].UefiRootNumber;
     TRACE("UefiDiskGetCacheableBlockCount: DriveNumber: %d\n", UefiDriveNumber);
 
     GlobalSystemTable->BootServices->HandleProtocol(handles[UefiDriveNumber], &bioGuid, (void**)&bio);

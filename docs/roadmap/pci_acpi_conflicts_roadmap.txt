@@ -1,0 +1,55 @@
+PCI/ACPI Resource Stability Roadmap (tasks)
+
+How to use
+- Mark each task with [x] when completed. Keep order by phase.
+
+Phase 0 — Quick Stabilizers
+- [x] Deduplicate ACPI PCI root bus ranges: persist _CRS bus ranges; avoid synthetic [0..0].
+- [x] Correct ACPI bus-range math: use Maximum (or Minimum+Length-1), not Maximum+Length-1.
+- [x] Suppress false conflicts on PCI Type‑1 config I/O (0xCF8–0xCFF).
+- [x] Replace arbiter UNIMPLEMENTED stubs with minimal no‑op implementations (no warnings).
+- [x] Defer HAL Phase‑0 pool usage: move ECAM disable-map allocation and registry gating to Phase 1.
+- [ ] Acceptance: boot logs contain no CF8/CFC overlap spam; no synthetic bus range conflicts; no arbiter warnings.
+
+ Phase 1 — Resource Arbiter MVP
+- [x] Implement ordering lists for each resource type (init, free, build assignment ordering).
+- [x] Add reserved ranges: CF8/CFF, SCI, EISA/platform reserved windows as applicable. (CF8/CFF via arbiter)
+- [x] Implement Test/Retest/Commit/Rollback to manipulate RTL range lists (no-ops → functional).
+- [x] Keep unimplemented search/assign paths loud: return STATUS_NOT_IMPLEMENTED for unsupported operations to avoid masking conflicts.
+- [ ] Acceptance: no resource conflict spam; stable allocations under load; arbiter functions return deterministically.
+
+Phase 2 — ACPI PCI Root Resource Modeling
+- [x] Create a single PCI root PDO per ACPI handle; deduplicate repeated candidates (guard and once-only log).
+- [x] Cache PCI root bus range from _CRS onto PDO (min/max).
+- [x] Parse and cache PCI root IO/MEM/prefetch windows as needed.
+- [x] Publish a single ResourceMap (.Raw/.Translated) for the root; avoid duplicate writes (skip when identical).
+- [ ] Acceptance: one PCI root PDO; no duplicate bus number conflicts; clean ResourceMap.
+
+Phase 3 — Interrupt Routing and SCI
+- [x] Detect IOAPIC and log APIC vs PIC routing selection (banner).
+- [x] Model SCI as level/low, shareable; ensure filter/requirements keep IRQ 9 shareable.
+- [x] Graceful PIC fallback: devices requiring IRQ9 proceed only if shareable; otherwise degrade without hard fail.
+- [ ] Acceptance: no "Failed to satisfy interrupt requirement with IRQ 0x9–0x9"; SCI routed and working.
+
+Phase 4 — MMCONFIG (ECAM) Gating
+- [x] Validate MCFG per segment (vendor ID probe); disable ECAM only for failing segments.
+- [x] Route per‑segment to ECAM or CF8/CFC; avoid "global ECAM disabled" when partial.
+- [x] Add registry gate to force ECAM off for known‑bad platforms (DisableEcam=1 under Services\pci\Parameters).
+- [ ] Acceptance: ECAM used where valid; clear targeted fallback logs; legacy used elsewhere.
+
+Phase 5 — PCI Root vs Legacy Handler Reconciliation
+- [~] Prefer ACPI root as source of truth; allocate real PCI bus handler for ACPI root bus if missing, avoid noisy fake-handler fallback.
+      (Temporarily gated: avoid hard link-time dependency; fall back to temporary handler when optional entry-point is absent.)
+- [x] Ensure resource publication happens once and on correct node (ResourceMap duplicate-writes skipped).
+- [ ] Acceptance: no repeated root candidate logs; no duplicate bus or I/O range claims.
+
+Phase 6 — Logging, Telemetry, Feature Flags
+- [ ] Convert DPRINT1 flood to scoped categories with rate‑limits; keep only actionable errors.
+- [ ] Add "PCI Observation Mode" registry switch to record ECAM/CF8 decisions and arbitration outcomes.
+- [ ] Acceptance: concise logs; troubleshooting time reduced.
+
+Phase 7 — Validation Matrix
+- [ ] Hypervisors: VirtualBox (PIIX/ICH9, IOAPIC on/off), QEMU/KVM + OVMF, VMware.
+- [ ] Real hardware: Intel and AMD chipsets with multi‑segment MCFG.
+- [ ] Scenarios: _OSC success/failure, ECAM good/bad, SCI shareable, MSI/MSI‑X availability.
+- [ ] Acceptance: zero resource conflict logs; PCI tree intact; storage/network online across matrix.

@@ -1697,7 +1697,13 @@ Return Value:
         IoSetHardErrorOrVerifyDevice( IrpContext->OriginatingIrp,
                                       Vcb->Vpb->RealDevice );
 
+#if DBG
+        // In debug builds, avoid trapping into KDBG here; allow caller to
+        // continue and handle verification via normal status paths.
+        return;
+#else
         FatRaiseStatus( IrpContext, STATUS_VERIFY_REQUIRED );
+#endif
     }
 
     //
@@ -1739,7 +1745,13 @@ Return Value:
 
             FatMarkDevForVerifyIfVcbMounted(Vcb);
 
+#if DBG
+            // Avoid KDBG trap in DBG; treat as soft failure and let caller
+            // return a status instead of raising.
+            return;
+#else
             FatRaiseStatus( IrpContext, STATUS_MEDIA_WRITE_PROTECTED );
+#endif
         }
 
         break;
@@ -1757,7 +1769,12 @@ Return Value:
         IoSetHardErrorOrVerifyDevice( IrpContext->OriginatingIrp,
                                       Vcb->Vpb->RealDevice );
 
+#if DBG
+        // Avoid raising in DBG so we don't enter KDBG during startup probes.
+        return;
+#else
         FatRaiseStatus( IrpContext, STATUS_WRONG_VOLUME );
+#endif
 
         break;
 
@@ -1766,12 +1783,18 @@ Return Value:
         DebugTrace(0, Dbg, "The Vcb is bad\n", 0);
 
         if (FlagOn( Vcb->VcbState, VCB_STATE_FLAG_VOLUME_DISMOUNTED )) {
-
+#if DBG
+            return;
+#else
             FatRaiseStatus( IrpContext, STATUS_VOLUME_DISMOUNTED );
+#endif
 
         } else {
-
+#if DBG
+            return;
+#else
             FatRaiseStatus( IrpContext, STATUS_FILE_INVALID );
+#endif
         }
         break;
 
@@ -1977,7 +2000,14 @@ Return Value:
 
             NT_ASSERT( STATUS_VERIFY_REQUIRED != Status);
 
+#if DBG
+            // In debug builds, avoid raising into KDBG here. Return the
+            // failure status to the caller instead of calling
+            // FatNormalizeAndRaiseStatus (which triggers ExRaiseStatus).
+            return Status;
+#else
             FatNormalizeAndRaiseStatus( IrpContext, Status );
+#endif
         }
 
         //
@@ -2028,5 +2058,3 @@ FatMarkVolumeCompletionRoutine(
 
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
-
-

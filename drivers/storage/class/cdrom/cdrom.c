@@ -285,6 +285,7 @@ Return Value:
     DEVPROPTYPE                     devicePropertyType = DEVPROP_TYPE_EMPTY;
 
     PAGED_CODE();
+    DPRINT1("[CDROM] DriverEvtDeviceAdd: enter Driver=%p\n", Driver);
 
     driverExtension = DriverGetExtension(Driver);
 
@@ -558,6 +559,7 @@ Return Value:
     // 9. Claim the device, so that port driver will only accept the commands from CDROM.SYS for this device.
     // NOTE: The I/O should be issued after the device is started. But we would like to claim
     // the device as soon as possible, so this legacy behavior is kept.
+    DPRINT1("[CDROM] Claiming device (Device=%p)\n", device);
     status = DeviceClaimRelease(deviceExtension, FALSE);
 
     if (!NT_SUCCESS(status))
@@ -568,6 +570,7 @@ Return Value:
     else
     {
         deviceClaimed = TRUE;
+        DPRINT1("[CDROM] Device claimed (Device=%p)\n", device);
     }
 
     //

@@ -1,13 +1,35 @@
 
 macro(require_program varname execname)
-    find_program(${varname} ${execname})
+    # Respect an explicitly provided path, otherwise try to locate by name
+    if(NOT DEFINED ${varname} OR "${${varname}}" STREQUAL "")
+        find_program(${varname} ${execname})
+    endif()
     if(NOT ${varname})
         message(FATAL_ERROR "${execname} not found")
     endif()
 endmacro()
 
 # pass variables necessary for the toolchain (needed for try_compile)
-set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES ARCH)
+# Include ARCH and the selected toolchain and explicit tool paths, so try_compile
+# uses the same compilers and multilib settings as the parent build.
+set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
+    ARCH
+    MINGW_TOOLCHAIN_PREFIX
+    MINGW_TOOLCHAIN_SUFFIX
+    CMAKE_C_COMPILER
+    CMAKE_CXX_COMPILER
+    CMAKE_ASM_COMPILER
+    CMAKE_MC_COMPILER
+    CMAKE_RC_COMPILER
+    CMAKE_DLLTOOL
+    CMAKE_OBJCOPY
+    CMAKE_AR
+    CMAKE_RANLIB
+    CMAKE_NM
+    CMAKE_OBJDUMP
+    CMAKE_READELF
+    CMAKE_LINKER
+    REACTOS_MULTILIB_I386)
 
 # Choose the right MinGW toolchain prefix
 if(NOT DEFINED MINGW_TOOLCHAIN_PREFIX)
@@ -90,3 +112,18 @@ set(CMAKE_USER_MAKE_RULES_OVERRIDE "${CMAKE_CURRENT_LIST_DIR}/overrides-gcc.cmak
 
 # Get GCC version
 execute_process(COMMAND ${CMAKE_C_COMPILER} -dumpversion OUTPUT_VARIABLE GCC_VERSION)
+
+# Multilib support: allow building i386 code with an amd64 MinGW toolchain
+# When ARCH is i386 but the selected toolchain prefix is x86_64, assume a multilib-enabled toolchain
+# and inject the necessary -m32/pe-i386 flags so compilation, assembly, RC and linking target 32-bit.
+if(ARCH STREQUAL "i386" AND MINGW_TOOLCHAIN_PREFIX MATCHES "^x86_64-w64-mingw32-")
+    # Mark in cache for other CMake modules
+    set(REACTOS_MULTILIB_I386 TRUE CACHE BOOL "Using x86_64 multilib toolchain for i386")
+    message(STATUS "Toolchain: Using x86_64 MinGW (multilib) to build i386 (-m32)")
+    # Force 32-bit codegen and link
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -m32" CACHE STRING "C compiler flags" FORCE)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -m32" CACHE STRING "C++ compiler flags" FORCE)
+    set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -m32" CACHE STRING "ASM compiler flags" FORCE)
+    # Ensure windres emits 32-bit COFF objects
+    set(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} --target=pe-i386" CACHE STRING "RC compiler flags" FORCE)
+endif()

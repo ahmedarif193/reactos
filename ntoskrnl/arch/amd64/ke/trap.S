@@ -1000,9 +1000,147 @@ PUBLIC KiServiceExit3
 
 
 PUBLIC KiSystemCallEntry32
-KiSystemCallEntry32:
+FUNC KiSystemCallEntry32
+    /*
+     * Entry point for syscalls from 32-bit (compat) user mode using SYSCALL.
+     * Mirrors KiSystemCallEntry64 setup but returns via SYSRETL.
+     */
+    .PUSHFRAME
+    .ALLOCSTACK (KTRAP_FRAME_LENGTH + MAX_SYSCALL_PARAM_SIZE - MachineFrameLength)
+    .SAVEREG rbp, MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rbp
+    .ENDPROLOG
+
+    /* Swap GS to kernel to access PCR */
     swapgs
-    int 3
+
+    /* Save user RSP in PCR and switch to kernel stack */
+    mov gs:[PcUserRsp], rsp
+    mov rsp, gs:[PcRspBase]
+
+    /* Allocate TRAP_FRAME and space for syscall parameters */
+    sub rsp, (KTRAP_FRAME_LENGTH + MAX_SYSCALL_PARAM_SIZE)
+
+    /* Save volatile registers and RBP into the trap frame */
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rax], rax   /* Service number or return value */
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rip], rcx   /* User return RIP from SYSCALL */
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rdx], rdx
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_R8],  r8
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_R9],  r9
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rcx], r10   /* First param in r10 (per SYSCALL) */
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_EFlags], r11/* RFLAGS saved by SYSCALL */
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rbp], rbp
+
+    /* Store user stack pointer in the trap frame */
+    mov rax, gs:[PcUserRsp]
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rsp], rax
+
+    /* Set sane segments for kernel */
+    mov ax, (KGDT64_R3_DATA or RPL_MASK)
+    mov ds, ax
+    mov es, ax
+
+    /* Save MXCSR and set kernel value */
+    stmxcsr [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_MxCsr]
+    ldmxcsr gs:[PcMxCsr]
+
+    /* Save previous trap frame in the new one and set current */
+    mov rax, gs:[PcCurrentThread]
+    mov rcx, [rax + ThTrapFrame]
+    lea rdx, [rsp + MAX_SYSCALL_PARAM_SIZE]
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_TrapFrame], rcx
+    mov [rax + ThTrapFrame], rdx
+
+#if DBG
+    /* IRQL should be PASSIVE_LEVEL here */
+    mov rax, cr8
+    test eax, eax
+    jz KiSystemCall32Again
+    int HEX(2C)
+#endif
+
+GLOBAL_LABEL KiSystemCall32Again
+
+    /* Call into the C dispatcher (enables interrupts) */
+    call KiSystemCallHandler
+
+    /* RAX contains the target service function */
+    mov rcx, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rcx]
+    mov rdx, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rdx]
+    mov r8,  [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_R8]
+    mov r9,  [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_R9]
+    call rax
+
+KiSystemServiceExit32:
+
+    ASSERT_TRAP_FRAME_INTS_ENABLED rsp + MAX_SYSCALL_PARAM_SIZE
+
+    /* Pending user APCs? */
+    mov rcx, gs:[PcCurrentThread]
+    cmp byte ptr [rcx + ThApcState + AsUserApcPending], 0
+    jz NoUserApcPending32
+
+    /* Save remaining caller-saved regs into trap frame */
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rax], rax
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rbp], rbp
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_R9],  rbp
+    mov rax, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rsp]
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_R8],  rax
+    mov rax, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rip]
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rcx], rax
+    mov rax, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_EFlags]
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_R11], rax
+    xor rax, rax
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rdx], rax
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_R10], rax
+    pxor xmm0, xmm0
+    movdqa [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Xmm0], xmm0
+    movdqa [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Xmm1], xmm0
+    movdqa [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Xmm2], xmm0
+    movdqa [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Xmm3], xmm0
+    movdqa [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Xmm4], xmm0
+    movdqa [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Xmm5], xmm0
+
+    lea rcx, [rsp + MAX_SYSCALL_PARAM_SIZE]
+    call KiInitiateUserApc
+
+NoUserApcPending32:
+    /* Disable interrupts before return */
+    cli
+
+    /* Restore MXCSR */
+    ldmxcsr [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_MxCsr]
+
+    /* Restore previous trap frame */
+    mov rcx, gs:[PcCurrentThread]
+    mov rdx, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_TrapFrame]
+    mov [rcx + KTHREAD_TrapFrame], rdx
+
+    /* Prepare user RCX (return RIP) and R11 (EFLAGS) for SYSRET */
+    mov rcx, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rip]
+    mov r11, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_EFlags]
+
+    /* Restore user stack pointer */
+    mov rsp, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rsp]
+
+    /* r8 points to user stack; r9 mirrors rbp */
+    mov r8, rsp
+    mov r9, rbp
+
+    /* Swap GS back to user */
+    swapgs
+
+    /* Zero out volatile XMM registers */
+    pxor xmm0, xmm0
+    pxor xmm1, xmm1
+    pxor xmm2, xmm2
+    pxor xmm3, xmm3
+    pxor xmm4, xmm4
+    pxor xmm5, xmm5
+
+    /* Return to 32-bit compat mode (raw opcode to avoid GAS ambiguity) */
+    .byte 0x0F, 0x07 /* SYSRET */
+
+ENDFUNC
 
 
 PUBLIC KiZwSystemService

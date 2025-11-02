@@ -368,6 +368,12 @@ else()
     set(RC_PREPROCESSOR_TARGET "")
 endif()
 
+# When building i386 via an x86_64 multilib toolchain, ensure the RC preprocessor
+# runs in 32-bit mode so macros like _WIN64 are not defined.
+if(ARCH STREQUAL "i386" AND REACTOS_MULTILIB_I386)
+    set(RC_PREPROCESSOR_TARGET "${RC_PREPROCESSOR_TARGET} --preprocessor-arg=-m32")
+endif()
+
 # We have to pass args to windres. one... by... one...
 set(CMAKE_DEPFILE_FLAGS_RC "--preprocessor=\"${CMAKE_C_COMPILER}\" ${RC_PREPROCESSOR_TARGET} --preprocessor-arg=-E --preprocessor-arg=-nostdinc --preprocessor-arg=-xc-header --preprocessor-arg=-MMD --preprocessor-arg=-MF --preprocessor-arg=<DEPFILE> --preprocessor-arg=-MT --preprocessor-arg=<OBJECT>")
 
@@ -462,6 +468,21 @@ if(NOT ARCH STREQUAL "i386")
     set(DECO_OPTION "-@")
 endif()
 
+# If we are building i386 using an x86_64 multilib toolchain, ensure dlltool targets 32-bit
+if(ARCH STREQUAL "i386" AND REACTOS_MULTILIB_I386)
+    # Ensure dlltool generates 32-bit code and assembles with 32-bit mode
+    # Derive the 'as' program from the toolchain path (replace ...-gcc with ...-as)
+    set(_dlltool_as ${CMAKE_ASM_COMPILER})
+    get_filename_component(_dlltool_as_name "${_dlltool_as}" NAME)
+    if(_dlltool_as_name MATCHES "gcc(\\.exe)?$")
+        string(REPLACE "gcc" "as" _dlltool_as "${_dlltool_as}")
+    endif()
+    # x86_64-w64-mingw32-as accepts --32 to assemble 32-bit objects
+    set(DLLTOOL_EXTRA_ARGS -m i386 --as ${_dlltool_as} --as-flags=--32)
+else()
+    set(DLLTOOL_EXTRA_ARGS)
+endif()
+
 function(fixup_load_config _target)
     add_custom_command(TARGET ${_target} POST_BUILD
         COMMAND native-pefixup --loadconfig "$<TARGET_FILE:${_target}>"
@@ -476,26 +497,46 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
         COMMAND native-spec2def ${__version_arg} ${__dbg_arg} -n=${_dllname} -a=${ARCH2} ${ARGN} --implib -d=${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def ${CMAKE_CURRENT_SOURCE_DIR}/${_spec_file}
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${_spec_file} native-spec2def)
 
+    # For msvcrt on i386 multilib, inject aliases for underscore/dunder names used by Wine code
+    # e.g. __assert -> _assert
+    set(_implib_def ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def)
+    if(ARCH STREQUAL "i386" AND REACTOS_MULTILIB_I386 AND ${_dllname} STREQUAL "msvcrt.dll")
+        add_custom_command(
+            OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.patched.def
+            COMMAND ${CMAKE_COMMAND} -E copy ${_implib_def} ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.patched.def
+            COMMAND ${CMAKE_COMMAND} -E echo " __assert=_assert" >> ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.patched.def
+            COMMAND ${CMAKE_COMMAND} -E echo " stricmp=_stricmp" >> ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.patched.def
+            COMMAND ${CMAKE_COMMAND} -E echo " strcmpi=_strcmpi" >> ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.patched.def
+            COMMAND ${CMAKE_COMMAND} -E echo " strnicmp=_strnicmp" >> ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.patched.def
+            DEPENDS ${_implib_def}
+        )
+        set(_implib_def ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.patched.def)
+    endif()
+
     # With this, we let DLLTOOL create an import library
     set(LIBRARY_PRIVATE_DIR ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${_libname}.dir)
     # For amd64, we need to run ranlib after dlltool to add proper index
     # FIXME: For amd64, we need to run ranlib after dlltool to ensure proper index
     if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
+    # Prepare dlltool args per-library
+    set(_dlltool_args ${DLLTOOL_EXTRA_ARGS})
         add_custom_command(
             OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}.a
             # Delete any existing file in the private directory before creating new one
             COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/${_libname}.a
-            COMMAND ${CMAKE_DLLTOOL} --def ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def --kill-at --output-lib=${_libname}.a -t ${_libname}
+            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} --kill-at --output-lib=${_libname}.a -t ${_libname}
             COMMAND ${CMAKE_RANLIB} ${_libname}.a
-            DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
+            DEPENDS ${_implib_def}
             WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
     else()
+    # Prepare dlltool args per-library
+    set(_dlltool_args ${DLLTOOL_EXTRA_ARGS})
         add_custom_command(
             OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}.a
             # Delete any existing file in the private directory before creating new one
             COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/${_libname}.a
-            COMMAND ${CMAKE_DLLTOOL} --def ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def --kill-at --output-lib=${_libname}.a -t ${_libname}
-            DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
+            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} --kill-at --output-lib=${_libname}.a -t ${_libname}
+            DEPENDS ${_implib_def}
             WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
     endif()
 
@@ -535,21 +576,25 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
     set(LIBRARY_PRIVATE_DIR ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${_libname}_delayed.dir)
     # FIXME: For amd64, we need to run ranlib after dlltool to ensure proper index
     if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
+    # Prepare dlltool args per-library
+    set(_dlltool_args ${DLLTOOL_EXTRA_ARGS})
         add_custom_command(
             OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
             # Delete any existing file in the private directory before creating new one
             COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
-            COMMAND ${CMAKE_DLLTOOL} --def ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def --kill-at --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
+            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} --kill-at --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
             COMMAND ${CMAKE_RANLIB} ${_libname}_delayed.a
-            DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
+            DEPENDS ${_implib_def}
             WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
     else()
+    # Prepare dlltool args per-library
+    set(_dlltool_args ${DLLTOOL_EXTRA_ARGS})
         add_custom_command(
             OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
             # Delete any existing file in the private directory before creating new one
             COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
-            COMMAND ${CMAKE_DLLTOOL} --def ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def --kill-at --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
-            DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
+            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} --kill-at --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
+            DEPENDS ${_implib_def}
             WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
     endif()
 

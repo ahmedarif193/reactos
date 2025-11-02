@@ -1292,6 +1292,8 @@
 @ stdcall lstrlen(str) lstrlenA
 @ stdcall lstrlenA(str)
 @ stdcall lstrlenW(wstr)
+; Compatibility forwarder for apps incorrectly importing GradientFill from kernel32 on amd64
+@ stdcall -arch=x86_64 GradientFill(long ptr long ptr long long) msimg32.GradientFill
 ;@ stdcall -arch=x86_64 uaw_lstrcmpW(wstr wstr)
 ;@ stdcall -arch=x86_64 uaw_lstrcmpiW(wstr wstr)
 ;@ stdcall -arch=x86_64 uaw_lstrlenW(wstr)

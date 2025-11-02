@@ -328,11 +328,8 @@ IntVideoPortMapMemory(
    INFO_(VIDEOPRT, "- InIoSpace: %x\n", InIoSpace);
 
    InIoSpace &= ~VIDEO_MEMORY_SPACE_DENSE;
-   if ((InIoSpace & VIDEO_MEMORY_SPACE_P6CACHE) != 0)
-   {
-      INFO_(VIDEOPRT, "VIDEO_MEMORY_SPACE_P6CACHE not supported, turning off\n");
-      InIoSpace &= ~VIDEO_MEMORY_SPACE_P6CACHE;
-   }
+   /* Preserve VIDEO_MEMORY_SPACE_P6CACHE so we can honor write-combined mappings
+    * for linear framebuffers when requested by miniports. */
 
    if (ProcessHandle != NULL && (InIoSpace & VIDEO_MEMORY_SPACE_USER_MODE) == 0)
    {
@@ -421,10 +418,18 @@ IntVideoPortMapMemory(
    }
    else /* kernel space */
    {
+      MEMORY_CACHING_TYPE CacheType = ((InIoSpace & VIDEO_MEMORY_SPACE_P6CACHE) != 0)
+                                        ? MmWriteCombined
+                                        : MmNonCached;
+      INFO_(VIDEOPRT,
+            "Mapping kernel space: PA=%I64x Len=%lu Cache=%s\n",
+            (ULONGLONG)TranslatedAddress.QuadPart,
+            NumberOfUchars,
+            (CacheType == MmWriteCombined) ? "WC" : "NC");
       MappedAddress = MmMapIoSpace(
          TranslatedAddress,
          NumberOfUchars,
-         MmNonCached);
+         CacheType);
    }
 
    if (MappedAddress != NULL)
@@ -457,6 +462,9 @@ IntVideoPortMapMemory(
       return MappedAddress;
    }
 
+   WARN_(VIDEOPRT, "MmMapIoSpace returned NULL for PA=%I64x Len=%lu\n",
+         (ULONGLONG)TranslatedAddress.QuadPart,
+         NumberOfUchars);
    if (Status)
       *Status = NO_ERROR;
 

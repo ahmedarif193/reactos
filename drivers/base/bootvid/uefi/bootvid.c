@@ -9,8 +9,7 @@
 #include "precomp.h"
 #include <reactos/arc/arc.h>
 BOOLEAN NTAPI InbvGetGopFrameBufferInfo(_Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo);
-/* Memory cache type for MmMapIoSpace */
-#define MmNonCached 0
+/* Use write-combined mapping for the linear framebuffer to improve blit throughput */
 
 /* We reuse the BOOTVID 8x13 font and default palette from common sources */
 extern UCHAR VidpFontData[];
@@ -88,10 +87,15 @@ VidpSetupLinearFramebuffer(
     GreenMax = UefiMaskMax(GreenMask >> GreenShift);
     BlueMax = UefiMaskMax(BlueMask >> BlueShift);
 
-    FrameBuffer = (PULONG)MmMapIoSpace(FrameBufferBase, FrameBufferSize, MmNonCached);
+    FrameBuffer = (PULONG)MmMapIoSpace(FrameBufferBase, FrameBufferSize, MmWriteCombined);
     if (!FrameBuffer)
     {
-        return FALSE;
+        /* Fallback: some arch/platforms may not support WC here. Try non-cached. */
+        FrameBuffer = (PULONG)MmMapIoSpace(FrameBufferBase, FrameBufferSize, MmNonCached);
+        if (!FrameBuffer)
+        {
+            return FALSE;
+        }
     }
 
     VidpScrollRegion[0] = 0;

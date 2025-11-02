@@ -71,6 +71,7 @@ Revision History:
 #pragma alloc_text(PAGE, DiskIoctlSmartReceiveDriveData)
 #pragma alloc_text(PAGE, DiskIoctlSmartSendDriveCommand)
 #pragma alloc_text(PAGE, DiskIoctlVerifyThread)
+#pragma alloc_text(INIT, DiskReadGlobalParameters)
 
 #endif
 
@@ -84,6 +85,13 @@ BOOLEAN DiskIsPastReinit = FALSE;
 const GUID GUID_NULL = { 0 };
 #define DiskCompareGuid(_First,_Second) \
     (memcmp ((_First),(_Second), sizeof (GUID)))
+
+//
+// Global switches read from the service Parameters key.
+//
+BOOLEAN DiskDisableSmartMiniport = FALSE;
+
+static VOID DiskReadGlobalParameters(_In_ PUNICODE_STRING RegistryPath);
 
 //
 // This macro is used to work around a bug in the definition of
@@ -117,6 +125,73 @@ DiskDriverReinit(
     UNREFERENCED_PARAMETER(Count);
 
     DiskIsPastReinit = TRUE;
+}
+
+
+static
+VOID
+DiskReadGlobalParameters(
+    _In_ PUNICODE_STRING RegistryPath
+    )
+{
+    RTL_QUERY_REGISTRY_TABLE queryTable[2] = { 0 };
+    ULONG disableSmartValue = 0;
+    NTSTATUS status;
+    PWSTR servicePath = NULL;
+
+    PAGED_CODE();
+
+    if ((RegistryPath == NULL) || (RegistryPath->Length == 0) || (RegistryPath->Buffer == NULL))
+    {
+        DiskDisableSmartMiniport = FALSE;
+        return;
+    }
+
+    servicePath = (PWSTR)ExAllocatePoolWithTag(PagedPool,
+                                               RegistryPath->Length + sizeof(WCHAR),
+                                               DISK_TAG_SMART);
+    if (servicePath != NULL)
+    {
+        RtlCopyMemory(servicePath, RegistryPath->Buffer, RegistryPath->Length);
+        servicePath[RegistryPath->Length / sizeof(WCHAR)] = UNICODE_NULL;
+    }
+
+    queryTable[0].Flags = RTL_QUERY_REGISTRY_DIRECT |
+                          RTL_QUERY_REGISTRY_TYPECHECK |
+                          (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT);
+    queryTable[0].Name = L"DisableSmartMiniport";
+    queryTable[0].EntryContext = &disableSmartValue;
+    queryTable[0].DefaultType = REG_DWORD;
+    queryTable[0].DefaultData = &disableSmartValue;
+    queryTable[0].DefaultLength = sizeof(disableSmartValue);
+
+    status = RtlQueryRegistryValues(RTL_REGISTRY_ABSOLUTE,
+                                    servicePath ? servicePath : RegistryPath->Buffer,
+                                    queryTable,
+                                    NULL,
+                                    NULL);
+
+    if (!NT_SUCCESS(status) &&
+        status != STATUS_OBJECT_NAME_NOT_FOUND &&
+        status != STATUS_OBJECT_PATH_NOT_FOUND)
+    {
+        TracePrint((TRACE_LEVEL_WARNING, TRACE_FLAG_INIT,
+                    "DiskReadGlobalParameters: DisableSmartMiniport query failed %!STATUS!\n",
+                    status));
+    }
+
+    DiskDisableSmartMiniport = (disableSmartValue != 0);
+
+    if (servicePath)
+    {
+        ExFreePoolWithTag(servicePath, DISK_TAG_SMART);
+    }
+
+    if (DiskDisableSmartMiniport)
+    {
+        TracePrint((TRACE_LEVEL_WARNING, TRACE_FLAG_INIT,
+                    "DiskReadGlobalParameters: SMART miniport IOCTLs disabled via registry\n"));
+    }
 }
 
 VOID
@@ -200,6 +275,8 @@ Return Value:
     DiskSaveDetectInfo(DriverObject);
 
 #endif
+
+    DiskReadGlobalParameters(RegistryPath);
 
     InitializationData.InitializationDataSize = sizeof(CLASS_INIT_DATA);
 
@@ -5720,6 +5797,23 @@ Return Value:
     PAGED_CODE();
     CHECK_IRQL();
 
+    if (KeGetCurrentIrql() > PASSIVE_LEVEL)
+    {
+        Irp->IoStatus.Information = 0;
+        TracePrint((TRACE_LEVEL_WARNING, TRACE_FLAG_IOCTL,
+                    "DiskIoctlSmartReceiveDriveData: rejecting at IRQL %lu\n",
+                    KeGetCurrentIrql()));
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    if (DiskDisableSmartMiniport)
+    {
+        Irp->IoStatus.Information = 0;
+        TracePrint((TRACE_LEVEL_WARNING, TRACE_FLAG_IOCTL,
+                    "DiskIoctlSmartReceiveDriveData: disabled via registry switch\n"));
+        return STATUS_NOT_SUPPORTED;
+    }
+
     //
     // Validate the request.
     //
@@ -5946,6 +6040,23 @@ Return Value:
     //
     PAGED_CODE();
     CHECK_IRQL();
+
+    if (KeGetCurrentIrql() > PASSIVE_LEVEL)
+    {
+        Irp->IoStatus.Information = 0;
+        TracePrint((TRACE_LEVEL_WARNING, TRACE_FLAG_IOCTL,
+                    "DiskIoctlSmartSendDriveCommand: rejecting at IRQL %lu\n",
+                    KeGetCurrentIrql()));
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    if (DiskDisableSmartMiniport)
+    {
+        Irp->IoStatus.Information = 0;
+        TracePrint((TRACE_LEVEL_WARNING, TRACE_FLAG_IOCTL,
+                    "DiskIoctlSmartSendDriveCommand: disabled via registry switch\n"));
+        return STATUS_NOT_SUPPORTED;
+    }
 
     //
     // Validate the request.

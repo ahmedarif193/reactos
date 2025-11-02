@@ -215,4 +215,13 @@ HKCR,"CLSID\{00000320-0000-0000-C000-000000000046}","",0x00000000,"PSFactoryBuff
 HKCR,"CLSID\{00000320-0000-0000-C000-000000000046}\InProcServer32","",0x00000000,"ole32.dll"
 HKCR,"CLSID\{00000320-0000-0000-C000-000000000046}\InProcServer32","ThreadingModel",0x00000000,"Both"
 
+; Ensure core IE components are registered on first boot in LiveIMG (Ramdisk) mode.
+; This mirrors what syssetup.inf does for installed/debug builds.
+; We invoke the relevant syssetup.inf sections via setupapi to register all required DLLs
+; (actxprxy, urlmon, shdocvw, ieframe, mshtml, browseui, etc.) and finalize IE.
+; Mirror installed/debug syssetup phases in LiveIMG via HKLM\RunOnce (robust under MiniNT/CleanBoot)
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce","ROSSetup_Early",0x00020000,"rundll32.exe setupapi.dll,InstallHinfSection EarlyPhaseSetup 128 %systemroot%\inf\syssetup.inf"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce","ROSSetup_Reg2",0x00020000,"rundll32.exe setupapi.dll,InstallHinfSection RegistrationPhase2 128 %systemroot%\inf\syssetup.inf"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce","ROSSetup_Finalize",0x00020000,"rundll32.exe setupapi.dll,InstallHinfSection Finalize 128 %systemroot%\inf\syssetup.inf"
+
 ; EOF

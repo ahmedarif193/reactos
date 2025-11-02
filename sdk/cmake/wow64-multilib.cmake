@@ -22,6 +22,8 @@ set(WOW64_MULTILIB_SUBBUILD_DIR "${REACTOS_TOP_BINARY_DIR}/_wow64_i386")
 # Allow overriding modules to build via cache variable
 set(WOW64_MULTILIB_I386_TARGETS
     ntdll;kernel32;msvcrt;advapi32;rpcrt4;user32;gdi32
+    ws2_32;ole32;oleaut32;shell32;shlwapi
+    wow64smoke
     CACHE STRING "i386 targets to build for WOW64 multilib")
 
 # Propagate generator; default to current
@@ -52,6 +54,28 @@ ExternalProject_Add(wow64_multilib_i386
         -DARCH=i386
         -DPCH=OFF
         -DWOW64_MULTILIB=OFF
+        # Ensure C-linkage targets that pull in C++ objects get libstdc++
+        # This avoids undefined references (operator new/delete, atexit,
+        # __cxa_guard_*) when linking mixed C/C++ code as C targets.
+        -DCMAKE_C_STANDARD_LIBRARIES:STRING=-lstdc++
+        # Reuse the same MinGW toolchain prefix/suffix as the top-level build
+        # so an x86_64-w64-mingw32 multilib toolchain can be used to emit i386 code
+        -DMINGW_TOOLCHAIN_PREFIX:STRING=${MINGW_TOOLCHAIN_PREFIX}
+        -DMINGW_TOOLCHAIN_SUFFIX:STRING=${MINGW_TOOLCHAIN_SUFFIX}
+        # Forward explicit tool binaries when available to avoid PATH lookups
+        -DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}
+        -DCMAKE_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER}
+        -DCMAKE_ASM_COMPILER:FILEPATH=${CMAKE_ASM_COMPILER}
+        -DCMAKE_AR:FILEPATH=${CMAKE_AR}
+        -DCMAKE_RANLIB:FILEPATH=${CMAKE_RANLIB}
+        -DCMAKE_NM:FILEPATH=${CMAKE_NM}
+        -DCMAKE_OBJCOPY:FILEPATH=${CMAKE_OBJCOPY}
+        -DCMAKE_OBJDUMP:FILEPATH=${CMAKE_OBJDUMP}
+        -DCMAKE_READELF:FILEPATH=${CMAKE_READELF}
+        -DCMAKE_LINKER:FILEPATH=${CMAKE_LINKER}
+        -DCMAKE_MC_COMPILER:FILEPATH=${CMAKE_MC_COMPILER}
+        -DCMAKE_RC_COMPILER:FILEPATH=${CMAKE_RC_COMPILER}
+        -DCMAKE_DLLTOOL:FILEPATH=${CMAKE_DLLTOOL}
         -DREACTOS_TOP_SOURCE_DIR:PATH=${REACTOS_TOP_SOURCE_DIR}
         -DREACTOS_TOP_BINARY_DIR:PATH=${REACTOS_TOP_BINARY_DIR}
         -DHOST_TOOLS_DIR:PATH=${REACTOS_TOP_BINARY_DIR}/host-tools/bin
@@ -69,3 +93,4 @@ set(WOW64_MULTILIB_SYSROOT "${WOW64_MULTILIB_SUBBUILD_DIR}/reactos" CACHE PATH "
 
 # Convenience target that other packaging targets can depend on
 add_custom_target(wow64_multilib_stage DEPENDS wow64_multilib_i386)
+

@@ -1219,6 +1219,14 @@ FdoCallHWInitialize(
     }
 
     /* Call HwInitialize at DISPATCH_LEVEL */
+    #if DBG
+    {
+        KIRQL cur = KeGetCurrentIrql();
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL,
+                   "[SCSIPORT] FdoStartAdapter: raising IRQL to DISPATCH_LEVEL (current=%lu) before HwInitialize\n",
+                   (ULONG)cur);
+    }
+    #endif
     KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
 
     PKINTERRUPT primaryInterrupt = SppGetPrimaryInterruptObject(DeviceExtension);
@@ -1230,6 +1238,17 @@ FdoCallHWInitialize(
     {
         DPRINT1("HwInitialize() failed!\n");
         KeLowerIrql(OldIrql);
+        #if DBG
+        {
+            KIRQL cur2 = KeGetCurrentIrql();
+            if (cur2 != OldIrql)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[SCSIPORT] FdoStartAdapter: IRQL after failure lower is %lu, expected %lu\n",
+                           (ULONG)cur2, (ULONG)OldIrql);
+            }
+        }
+        #endif
         return STATUS_ADAPTER_HARDWARE_ERROR;
     }
 
@@ -1246,6 +1265,17 @@ FdoCallHWInitialize(
 
     /* Lower irql back to what it was */
     KeLowerIrql(OldIrql);
+    #if DBG
+    {
+        KIRQL cur3 = KeGetCurrentIrql();
+        if (cur3 != OldIrql)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[SCSIPORT] FdoStartAdapter: IRQL after lower is %lu, expected %lu\n",
+                       (ULONG)cur3, (ULONG)OldIrql);
+        }
+    }
+    #endif
 
     return STATUS_SUCCESS;
 }

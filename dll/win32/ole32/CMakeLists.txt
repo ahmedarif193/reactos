@@ -92,4 +92,13 @@ add_importlibs(ole32 advapi32 user32 gdi32 rpcrt4 msvcrt kernel32 kernel32_vista
 add_dependencies(ole32 ole32idl)
 add_pch(ole32 precomp.h "${PCH_SKIP_SOURCE}")
 add_cd_file(TARGET ole32 DESTINATION reactos/system32 FOR all)
+
+# Also package 32-bit WOW64 DLL from the multilib subbuild into SysWOW64
+if(ARCH STREQUAL "amd64" AND WOW64_MULTILIB AND WOW64_MULTILIB_SYSROOT)
+    add_cd_file(
+        TARGET wow64_multilib_stage
+        FILE ${REACTOS_TOP_BINARY_DIR}/_wow64_i386/dll/win32/ole32/ole32.dll
+        DESTINATION reactos/SysWOW64
+        FOR all)
+endif()
 set_wine_module_FIXME(ole32) # CORE-5743: No ARRAY_SIZE and CONST_VTABLE

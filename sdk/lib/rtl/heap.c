@@ -4032,6 +4032,10 @@ RtlExtendHeap(IN HANDLE Heap,
     return 0;
 }
 
+/*
+ * Minimal tag-heap support: many callers (e.g. SMSS) only need a non-zero
+ * tag index to be returned. We do not implement per-tag accounting here.
+ */
 ULONG
 NTAPI
 RtlCreateTagHeap(_In_ HANDLE HeapHandle,
@@ -4039,9 +4043,13 @@ RtlCreateTagHeap(_In_ HANDLE HeapHandle,
                  _In_opt_ PWSTR TagName,
                  _In_ PWSTR TagSubName)
 {
-    /* TODO */
-    UNIMPLEMENTED;
-    return 0;
+    UNREFERENCED_PARAMETER(HeapHandle);
+    UNREFERENCED_PARAMETER(Flags);
+    UNREFERENCED_PARAMETER(TagName);
+    UNREFERENCED_PARAMETER(TagSubName);
+
+    /* Return a dummy, non-zero tag index. */
+    return 1;
 }
 
 NTSTATUS
@@ -4214,4 +4222,3 @@ RtlQueryProcessHeapInformation(
 }
 
 /* EOF */
-

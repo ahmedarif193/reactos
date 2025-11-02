@@ -127,3 +127,12 @@ add_importlibs(shell32 advapi32 gdi32 user32 comctl32 comdlg32 shlwapi msvcrt ke
 add_dependencies(shell32 stdole2) # shell32_shldisp.tlb needs stdole2.tlb
 add_pch(shell32 precomp.h "${PCH_SKIP_SOURCE}")
 add_cd_file(TARGET shell32 DESTINATION reactos/system32 FOR all)
+
+# Also package 32-bit WOW64 DLL from the multilib subbuild into SysWOW64
+if(ARCH STREQUAL "amd64" AND WOW64_MULTILIB AND WOW64_MULTILIB_SYSROOT)
+    add_cd_file(
+        TARGET wow64_multilib_stage
+        FILE ${REACTOS_TOP_BINARY_DIR}/_wow64_i386/dll/win32/shell32/shell32.dll
+        DESTINATION reactos/SysWOW64
+        FOR all)
+endif()

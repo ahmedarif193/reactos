@@ -516,11 +516,24 @@ PDEVOBJ_Create(
     if (ldevtype == LDEV_DEVICE_META)
         pldev = LDEVOBJ_pLoadInternal(MultiEnableDriver, ldevtype);
     else
+    {
+        if (!pdm->dmDeviceName[0])
+        {
+            WARN("Empty display driver name in DEVMODE; cannot load driver.\n");
+        }
         pldev = LDEVOBJ_pLoadDriver(pdm->dmDeviceName, ldevtype);
+    }
     if (!pldev)
     {
-        ERR("Could not load display driver '%S'\n",
-             (ldevtype == LDEV_DEVICE_META) ? L"" : pdm->dmDeviceName);
+        if (ldevtype != LDEV_DEVICE_META)
+        {
+            ERR("Could not load display driver '%S'\n",
+                 pdm->dmDeviceName);
+        }
+        else
+        {
+            WARN("Meta-display driver unavailable; using single-display fallback.\n");
+        }
         return NULL;
     }
 
@@ -982,21 +995,10 @@ PDEVOBJ_lChangeDisplaySettings(
             }
         }
 
-        if (pmdev->cDev == 1)
-        {
-            pmdev->ppdevGlobal = pmdev->dev[0].ppdev;
-        }
-        else
-        {
-            /* Enable MultiDriver */
-            pmdev->ppdevGlobal = PDEVOBJ_Create(NULL, (PDEVMODEW)pmdev, 0, LDEV_DEVICE_META);
-            if (!pmdev->ppdevGlobal)
-            {
-                WARN("Failed to create meta-device. Using only first display\n");
-                PDEVOBJ_vReference(pmdev->dev[0].ppdev);
-                pmdev->ppdevGlobal = pmdev->dev[0].ppdev;
-            }
-        }
+        /* For now, avoid attempting the unimplemented multi-display meta driver.
+         * Always use the first display as the global PDEV. */
+        PDEVOBJ_vReference(pmdev->dev[0].ppdev);
+        pmdev->ppdevGlobal = pmdev->dev[0].ppdev;
 
         if (pmdevOld)
         {

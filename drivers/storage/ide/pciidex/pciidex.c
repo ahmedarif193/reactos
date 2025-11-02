@@ -151,11 +151,13 @@ PciIdeXGetConfigurationInfo(
         }
     }
 
-    DPRINT("Controller %04x:%04x, Interface byte 0x%02x, Native mode %d\n",
-           FdoExtension->VendorId,
-           FdoExtension->DeviceId,
-           PciData.Fields.ProgIf,
-           FdoExtension->InNativeMode);
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[PCIIDEX] Controller %04x:%04x ProgIf=0x%02x NativeMode=%d\n",
+               FdoExtension->VendorId,
+               FdoExtension->DeviceId,
+               PciData.Fields.ProgIf,
+               FdoExtension->InNativeMode);
 
     return STATUS_SUCCESS;
 }

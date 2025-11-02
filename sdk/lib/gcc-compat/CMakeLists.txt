@@ -5,7 +5,8 @@ include_directories(
 list(APPEND SOURCE
     __mingw_vsprintf.c
     __throw_out_of_range_fmt.cpp
-    StringCchCopyNA.c)
+    StringCchCopyNA.c
+    atexit_wrap.c)
 
 if ((CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang") AND WIN32)
     list(APPEND SOURCE rand_s.c)

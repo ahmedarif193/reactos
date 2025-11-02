@@ -13,20 +13,26 @@ if(USE_NATIVE_MINGW_CRT)
     mingwcrt_import_default_libs(USE_NATIVE_MINGW_CRT_LIBS NO_MSVCRT)
 endif()
 
-# Always embed the startup objects into libmsvcrt so importers keep
-# functioning regardless of the CRT backend being used.
-target_sources(libmsvcrt PRIVATE $<TARGET_OBJECTS:msvcrtex>)
-add_custom_command(TARGET libmsvcrt POST_BUILD
-    COMMAND ${CMAKE_AR} q $<TARGET_FILE:libmsvcrt> $<TARGET_OBJECTS:msvcrtex>
-    COMMAND ${CMAKE_AR} s $<TARGET_FILE:libmsvcrt>
-    COMMAND ${CMAKE_RANLIB} $<TARGET_FILE:libmsvcrt>
-    COMMAND_EXPAND_LISTS
-    COMMENT "Appending CRT startup objects to libmsvcrt")
+# On native i386 builds, embed startup objects into libmsvcrt so importers keep
+# functioning regardless of the CRT backend being used. When building i386 via
+# amd64 multilib, avoid mixing real objects into the import library to prevent
+# symbol decoration mismatches and unresolved references.
+if(NOT REACTOS_MULTILIB_I386)
+    target_sources(libmsvcrt PRIVATE $<TARGET_OBJECTS:msvcrtex>)
+    add_custom_command(TARGET libmsvcrt POST_BUILD
+        COMMAND ${CMAKE_AR} q $<TARGET_FILE:libmsvcrt> $<TARGET_OBJECTS:msvcrtex>
+        COMMAND ${CMAKE_AR} s $<TARGET_FILE:libmsvcrt>
+        COMMAND ${CMAKE_RANLIB} $<TARGET_FILE:libmsvcrt>
+        COMMAND_EXPAND_LISTS
+        COMMENT "Appending CRT startup objects to libmsvcrt")
+endif()
 
 # Embed RTC libs when available for stack protector support.
 if (STACK_PROTECTOR)
-    target_sources(libmsvcrt PRIVATE $<TARGET_OBJECTS:gcc_ssp_msvcrt>)
-    target_link_libraries(libmsvcrt INTERFACE libkernel32) # For OutputDebugStringA
+    if(NOT REACTOS_MULTILIB_I386)
+        target_sources(libmsvcrt PRIVATE $<TARGET_OBJECTS:gcc_ssp_msvcrt>)
+        target_link_libraries(libmsvcrt INTERFACE libkernel32) # For OutputDebugStringA
+    endif()
 endif()
 
 add_definitions(
@@ -63,7 +69,11 @@ if(USE_NATIVE_MINGW_CRT)
     target_compile_definitions(msvcrt PRIVATE USE_NATIVE_MINGW_CRT=1)
     target_link_libraries(msvcrt ${USE_NATIVE_MINGW_CRT_LIBS})
 else()
-    target_link_libraries(msvcrt crt vcruntime cpprt wine ${PSEH_LIB})
+    if(REACTOS_MULTILIB_I386)
+        target_link_libraries(msvcrt crt libcntpr vcruntime cpprt wine ${PSEH_LIB})
+    else()
+        target_link_libraries(msvcrt crt vcruntime cpprt wine ${PSEH_LIB})
+    endif()
     target_link_options(msvcrt PRIVATE "-Wl,--exclude-libs,libmsvcrt.a" "-Wl,--allow-multiple-definition")
 endif()
 

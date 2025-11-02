@@ -17,6 +17,19 @@
 #define NDEBUG
 #include <debug.h>
 
+#if DBG
+static __inline VOID W32K_DBG(_In_z_ PCCH Format, ...)
+{
+    va_list ap;
+    va_start(ap, Format);
+    EngDebugPrint("WIN32K", (PCHAR)Format, ap);
+    va_end(ap);
+}
+#else
+#define W32K_DBG(...) do { } while (0)
+#endif
+
+
 XCLIPOBJ gxcoTrivial =
 {
     /* CLIPOBJ */
@@ -357,6 +370,36 @@ EngBitBlt(
     POINTL             AdjustedBrushOrigin;
     LONG               lTmp;
     BOOLEAN            bTopToBottom, bLeftToRight;
+
+#if DBG && defined(_WIN64)
+    /* Basic safety check: ensure destination and source base pointers are canonical VAs */
+    {
+        ULONG_PTR va = (ULONG_PTR)psoTrg->pvScan0;
+        ULONG_PTR top = (va >> 47);
+        if (psoTrg->pvScan0 == NULL || (top != 0 && top != 0x1FFFF))
+        {
+            W32K_DBG("EngBitBlt: invalid psoTrg->pvScan0=%p (size %ldx%ld, lDelta=%ld)\n",
+                     psoTrg->pvScan0,
+                     psoTrg->sizlBitmap.cx,
+                     psoTrg->sizlBitmap.cy,
+                     psoTrg->lDelta);
+            return FALSE;
+        }
+        if (psoSrc)
+        {
+            va = (ULONG_PTR)psoSrc->pvScan0; top = (va >> 47);
+            if (psoSrc->pvScan0 == NULL || (top != 0 && top != 0x1FFFF))
+            {
+                W32K_DBG("EngBitBlt: invalid psoSrc->pvScan0=%p (size %ldx%ld, lDelta=%ld)\n",
+                         psoSrc->pvScan0,
+                         psoSrc->sizlBitmap.cx,
+                         psoSrc->sizlBitmap.cy,
+                         psoSrc->lDelta);
+                return FALSE;
+            }
+        }
+    }
+#endif
 
     UsesSource = ROP4_USES_SOURCE(rop4);
     UsesMask = ROP4_USES_MASK(rop4);

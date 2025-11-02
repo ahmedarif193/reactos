@@ -11,6 +11,7 @@
 #include "ntldr/winldr.h"
 #include <disk.h>
 #include <uefi/uefiarcname.h>
+#include <arch/uefi/machuefi.h>
 
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WARNING);
@@ -92,24 +93,6 @@ UefiSetDevicePathEndNode(OUT EFI_DEVICE_PATH_PROTOCOL* Node)
     /* 16-bit length = 4 */
     Node->Length[0] = 4;
     Node->Length[1] = 0;
-}
-
-static BOOLEAN
-IsCdRomHandle(IN EFI_HANDLE Handle)
-{
-    EFI_DEVICE_PATH_PROTOCOL* Dp = NULL;
-    if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
-            Handle, &EfiDevicePathProtocol, (VOID**)&Dp)) || !Dp)
-        return FALSE;
-
-    EFI_DEVICE_PATH_PROTOCOL* Node = Dp;
-    while (!IsDevicePathEnd(Node))
-    {
-        if (Node->Type == MEDIA_DEVICE_PATH && Node->SubType == MEDIA_CDROM_DP)
-            return TRUE;
-        Node = NextDevicePathNode(Node);
-    }
-    return FALSE;
 }
 
 /* Extract starting LBA from a partition handle’s device path (MEDIA_HARDDRIVE_DP). */
@@ -370,6 +353,20 @@ MapToCdromIndex(IN EFI_HANDLE CdHandle)
     return 0; /* fallback */
 }
 
+EFI_HANDLE
+UefiGetCdromHandle(ULONG Index)
+{
+    if (Index >= UefiCdromCount)
+        return NULL;
+    return UefiCdromHandles[Index];
+}
+
+ULONG
+UefiGetCdromCount(VOID)
+{
+    return UefiCdromCount;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Enumerate disks and register ARC names                                      */
 /* -------------------------------------------------------------------------- */
@@ -428,7 +425,7 @@ UefiEnumerateArcDisks(VOID)
 
         BOOLEAN isPartition = BlockIo->Media->LogicalPartition;
         BOOLEAN isRemovable = BlockIo->Media->RemovableMedia;
-        BOOLEAN isCd        = IsCdRomHandle(H);
+        BOOLEAN isCd        = UefiIsCdRomHandle(H);
 
         /* We only index physical handles (non-partitions) */
         if (isPartition) continue;
@@ -570,7 +567,7 @@ UefiGetBootPartitionInfo(
         goto fallback;
 
     /* CD-ROM boot? Emit cdrom(#) and no partition */
-    if (IsCdRomHandle(BootHandle))
+    if (UefiIsCdRomHandle(BootHandle))
     {
         ULONG cdIndex = MapToCdromIndex(BootHandle);
         if (UefiBootHasDiskArc)

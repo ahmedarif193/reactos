@@ -55,3 +55,12 @@ add_delay_importlibs(shlwapi userenv oleaut32 ole32 comctl32 comdlg32 mpr mlang 
 add_importlibs(shlwapi user32 gdi32 advapi32 wininet msvcrt kernel32 ntdll)
 add_pch(shlwapi precomp.h "${PCH_SKIP_SOURCE}")
 add_cd_file(TARGET shlwapi DESTINATION reactos/system32 FOR all)
+
+# Also package 32-bit WOW64 DLL from the multilib subbuild into SysWOW64
+if(ARCH STREQUAL "amd64" AND WOW64_MULTILIB AND WOW64_MULTILIB_SYSROOT)
+    add_cd_file(
+        TARGET wow64_multilib_stage
+        FILE ${REACTOS_TOP_BINARY_DIR}/_wow64_i386/dll/win32/shlwapi/shlwapi.dll
+        DESTINATION reactos/SysWOW64
+        FOR all)
+endif()

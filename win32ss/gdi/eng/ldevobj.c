@@ -181,7 +181,17 @@ LDEVOBJ_bEnableDriver(
     RtlZeroMemory(&ded, sizeof(ded));
     if (!pfnEnableDriver(GDI_ENGINE_VERSION, sizeof(ded), &ded))
     {
-        ERR("DrvEnableDriver failed\n");
+        if (pldev->ldevtype != LDEV_DEVICE_META)
+        {
+            if (pldev->pGdiDriverInfo)
+                ERR("DrvEnableDriver failed for '%wZ'\n", &pldev->pGdiDriverInfo->DriverName);
+            else
+                ERR("DrvEnableDriver failed (no driver info)\n");
+        }
+        else
+        {
+            WARN("DrvEnableDriver failed for meta-display; falling back.\n");
+        }
         return FALSE;
     }
 

@@ -19,6 +19,9 @@ UNICODE_STRING SmpSubsystemName, PosixName, Os2Name;
 LIST_ENTRY SmpBootExecuteList, SmpSetupExecuteList;
 LIST_ENTRY SmpPagingFileList, SmpDosDevicesList, SmpFileRenameList;
 LIST_ENTRY SmpKnownDllsList, SmpExcludeKnownDllsList;
+#ifdef _AMD64_
+LIST_ENTRY SmpKnownDlls32List;
+#endif
 LIST_ENTRY SmpSubSystemList, SmpSubSystemsToLoad, SmpSubSystemsToDefer;
 LIST_ENTRY SmpExecuteList, NativeProcessList;
 
@@ -27,6 +30,9 @@ ULONG SmBaseTag;
 HANDLE SmpDebugPort, SmpDosDevicesObjectDirectory;
 PWCHAR SmpDefaultEnvironment, SmpDefaultLibPathBuffer;
 UNICODE_STRING SmpKnownDllPath, SmpDefaultLibPath;
+#ifdef _AMD64_
+UNICODE_STRING SmpKnownDllPath32;
+#endif
 ULONG SmpCalledConfigEnv;
 
 ULONG SmpInitProgressByLine;
@@ -478,6 +484,31 @@ SmpConfigureKnownDlls(IN PWSTR ValueName,
     }
 }
 
+#ifdef _AMD64_
+NTSTATUS
+NTAPI
+SmpConfigureKnownDlls32(IN PWSTR ValueName,
+                        IN ULONG ValueType,
+                        IN PVOID ValueData,
+                        IN ULONG ValueLength,
+                        IN PVOID Context,
+                        IN PVOID EntryContext)
+{
+    /* Check which value is being set */
+    if (_wcsicmp(ValueName, L"DllDirectory") == 0)
+    {
+        /* Initialize 32-bit KnownDll path */
+        DPRINT("KnownDll32 Path: %S\n", ValueData);
+        return SmpInitializeKnownDllPath(&SmpKnownDllPath32, ValueData, ValueLength);
+    }
+    else
+    {
+        /* Add to the linked list -- this is a file */
+        return SmpSaveRegistryValue(EntryContext, ValueName, ValueData, TRUE);
+    }
+}
+#endif
+
 /**
  * @remark
  * SmpConfigureEnvironment() should be called twice in order to resolve
@@ -722,6 +753,18 @@ SmpRegistryConfigurationTable[] =
         NULL,
         0
     },
+
+#ifdef _AMD64_
+    {
+        SmpConfigureKnownDlls32,
+        RTL_QUERY_REGISTRY_SUBKEY,
+        L"KnownDlls32",
+        &SmpKnownDlls32List,
+        REG_NONE,
+        NULL,
+        0
+    },
+#endif
 
     /**
      * @remark
@@ -1380,7 +1423,7 @@ SmpInitializeDosDevices(VOID)
 
 VOID
 NTAPI
-SmpProcessModuleImports(IN PVOID Unused,
+SmpProcessModuleImports(IN PVOID Context,
                         IN PCHAR ImportName)
 {
     ULONG Length = 0;
@@ -1416,14 +1459,18 @@ SmpProcessModuleImports(IN PVOID Unused,
                       ImportUnicodeString.MaximumLength - (ImportUnicodeString.Length + sizeof(UNICODE_NULL)),
                       ImportUnicodeString.Buffer, Length);
 
-    /* Add the DLL to the list */
-    SmpSaveRegistryValue(&SmpKnownDllsList, DllName, DllValue, TRUE);
+    /* Add the DLL to the appropriate list */
+    if (Context)
+    {
+        SmpSaveRegistryValue((PLIST_ENTRY)Context, DllName, DllValue, TRUE);
+    }
 }
 
 NTSTATUS
 NTAPI
 SmpInitializeKnownDllsInternal(IN PUNICODE_STRING Directory,
-                               IN PUNICODE_STRING Path)
+                               IN PUNICODE_STRING Path,
+                               IN PLIST_ENTRY KnownList)
 {
     HANDLE DirFileHandle, DirHandle, SectionHandle, FileHandle, LinkHandle;
     UNICODE_STRING NtPath, SymLinkName;
@@ -1528,8 +1575,8 @@ SmpInitializeKnownDllsInternal(IN PUNICODE_STRING Directory,
     ASSERT(NT_SUCCESS(Status1));
 
     /* Now loop the known DLLs */
-    NextEntry = SmpKnownDllsList.Flink;
-    while (NextEntry != &SmpKnownDllsList)
+    NextEntry = KnownList->Flink;
+    while (NextEntry != KnownList)
     {
         /* Get the entry and move on */
         RegEntry = CONTAINING_RECORD(NextEntry, SMP_REGISTRY_VALUE, Entry);
@@ -1565,7 +1612,7 @@ SmpInitializeKnownDllsInternal(IN PUNICODE_STRING Directory,
         /* Checksum it */
         Status = LdrVerifyImageMatchesChecksum((HANDLE)((ULONG_PTR)FileHandle | 1),
                                                SmpProcessModuleImports,
-                                               RegEntry,
+                                               KnownList,
                                                &ImageCharacteristics);
         if (!NT_SUCCESS(Status))
         {
@@ -1658,7 +1705,7 @@ SmpInitializeKnownDlls(VOID)
 
     /* Call the internal function */
     RtlInitUnicodeString(&KnownDllsName, L"\\KnownDlls");
-    Status = SmpInitializeKnownDllsInternal(&KnownDllsName, &SmpKnownDllPath);
+    Status = SmpInitializeKnownDllsInternal(&KnownDllsName, &SmpKnownDllPath, &SmpKnownDllsList);
 
     /* Wipe out the list regardless of success */
     Head = &SmpKnownDllsList;
@@ -1673,6 +1720,26 @@ SmpInitializeKnownDlls(VOID)
         RtlFreeHeap(RtlGetProcessHeap(), 0, RegEntry->Value.Buffer);
         RtlFreeHeap(RtlGetProcessHeap(), 0, RegEntry);
     }
+
+    /* Initialize WOW64 32-bit KnownDLLs on amd64 */
+#ifdef _AMD64_
+    if (NT_SUCCESS(Status))
+    {
+        RtlInitUnicodeString(&KnownDllsName, L"\\KnownDlls32");
+        Status = SmpInitializeKnownDllsInternal(&KnownDllsName, &SmpKnownDllPath32, &SmpKnownDlls32List);
+
+        /* Wipe out the WOW64 list regardless of success */
+        Head = &SmpKnownDlls32List;
+        while (!IsListEmpty(Head))
+        {
+            NextEntry = RemoveHeadList(Head);
+            RegEntry = CONTAINING_RECORD(NextEntry, SMP_REGISTRY_VALUE, Entry);
+            RtlFreeHeap(RtlGetProcessHeap(), 0, RegEntry->AnsiValue);
+            RtlFreeHeap(RtlGetProcessHeap(), 0, RegEntry->Value.Buffer);
+            RtlFreeHeap(RtlGetProcessHeap(), 0, RegEntry);
+        }
+    }
+#endif
 
     /* All done */
     return Status;
@@ -2264,6 +2331,9 @@ SmpLoadDataFromRegistry(OUT PUNICODE_STRING InitialCommand)
     InitializeListHead(&SmpFileRenameList);
     InitializeListHead(&SmpKnownDllsList);
     InitializeListHead(&SmpExcludeKnownDllsList);
+#ifdef _AMD64_
+    InitializeListHead(&SmpKnownDlls32List);
+#endif
     InitializeListHead(&SmpSubSystemList);
     InitializeListHead(&SmpSubSystemsToLoad);
     InitializeListHead(&SmpSubSystemsToDefer);

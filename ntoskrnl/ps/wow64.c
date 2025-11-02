@@ -163,6 +163,47 @@ PspWow64SetCpuAreaFlags(
     return Status;
 }
 
+NTSTATUS
+NTAPI
+Wow64CpuSetPendingApc(
+    _Inout_ PWOW64_CPU_AREA CpuArea,
+    _In_ const WOW64_APC_CONTEXT *ApcContext,
+    _In_ ULONG_PTR SystemArgument1,
+    _In_ ULONG_PTR SystemArgument2)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (!CpuArea || !ApcContext)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    _SEH2_TRY
+    {
+        ProbeForWrite(&CpuArea->PendingUserContext, sizeof(CpuArea->PendingUserContext), sizeof(ULONG));
+        ProbeForWrite(&CpuArea->PendingUserRoutine, sizeof(CpuArea->PendingUserRoutine), sizeof(ULONG));
+        ProbeForWrite(&CpuArea->PendingSystemArgument1, sizeof(CpuArea->PendingSystemArgument1), sizeof(ULONG));
+        ProbeForWrite(&CpuArea->PendingSystemArgument2, sizeof(CpuArea->PendingSystemArgument2), sizeof(ULONG));
+
+        CpuArea->PendingUserContext = ApcContext->UserContext;
+        CpuArea->PendingUserRoutine = ApcContext->UserRoutine;
+        CpuArea->PendingSystemArgument1 = SystemArgument1;
+        CpuArea->PendingSystemArgument2 = SystemArgument2;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    return PspWow64SetCpuAreaFlags(CpuArea, WOW64_CPU_AREA_FLAG_PENDING_APC);
+}
+
 typedef struct _PSP_WOW64_GET_SET_CTX_CONTEXT
 {
     KAPC Apc;
@@ -918,14 +959,14 @@ Wow64cpuExecuteCompatApc(
     }
 
     /*
-     * The actual compat-mode transition is orchestrated from user mode.
-     * We simply acknowledge the WOW64 APC here so that KiDeliverApc
-     * proceeds to invoke the user-mode dispatcher supplied by wow64.dll.
-     * The user-mode dispatcher (Wow64ApcRoutine) will enqueue the pending
-     * APC into wow64cpu.dll and drive the mode switch.
+     * Record the pending APC in the CPU area so that wow64.dll can
+     * pick it up via Wow64CpuTakePendingApc and drive the 32-bit
+     * APC dispatch on return to user mode.
      */
-
-    return STATUS_SUCCESS;
+    return Wow64CpuSetPendingApc(CpuArea,
+                                 (const WOW64_APC_CONTEXT *)ApcContext,
+                                 (ULONG_PTR)SystemArgument1,
+                                 (ULONG_PTR)SystemArgument2);
 }
 
 BOOLEAN
@@ -1173,40 +1214,7 @@ KiDispatchWow64Exception(
         return Status;
     }
 
-    /* Convert and dispatch the exception through wow64cpu */
-    RtlZeroMemory(&CompatContext, sizeof(CompatContext));
-
-    /* TODO: CpupDispatchException should not be called directly from kernel.
-     * This needs to be handled through a different mechanism (e.g., setting up
-     * the exception to be dispatched when returning to user mode).
-     * For now, we'll just copy the exception record to the compat context.
-     */
-#if 0
-    Status = CpupDispatchException(ExceptionRecord,
-                                   &CompatContext,
-                                   Context);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("KiDispatchWow64Exception: CpupDispatchException failed: 0x%08lx\n", Status);
-        return Status;
-    }
-#else
-    /* Temporary: Just set up a basic compat context for now */
-    Status = STATUS_SUCCESS;
-    DPRINT1("KiDispatchWow64Exception: CpupDispatchException call disabled (kernel cannot call user-mode DLL)\n");
-#endif
-
-    /* Persist the 32-bit context so the user-mode debugger can inspect it */
-    Status = Wow64CpuSetContext(CpuArea,
-                                &CompatContext,
-                                sizeof(CompatContext));
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("KiDispatchWow64Exception: Wow64CpuSetContext failed: 0x%08lx\n", Status);
-        return Status;
-    }
-
-    return STATUS_SUCCESS;
+        return STATUS_SUCCESS;
 }
 
 VOID

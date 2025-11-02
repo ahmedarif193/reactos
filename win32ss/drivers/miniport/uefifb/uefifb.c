@@ -250,7 +250,7 @@ UefiFbMapVideoMemory(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
 
     PHYSICAL_ADDRESS PhysicalAddress;
     ULONG Length;
-    ULONG InIoSpace = VIDEO_MEMORY_SPACE_MEMORY;
+    ULONG InIoSpace = VIDEO_MEMORY_SPACE_MEMORY | VIDEO_MEMORY_SPACE_P6CACHE;
     VP_STATUS Status;
 
     /* Fast-path: already mapped, just return the same mapping */
@@ -279,6 +279,11 @@ UefiFbMapVideoMemory(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
                                 &MapInfo->VideoRamBase);
     if (Status != NO_ERROR)
     {
+        VideoPortDebugPrint(0, "UEFIFB: VideoPortMapMemory failed (Status=%lu, PA=%I64x, Len=%lu, Flags=0x%lx)\n",
+                            (unsigned long)Status,
+                            (ULONGLONG)PhysicalAddress.QuadPart,
+                            (unsigned long)MapInfo->VideoRamLength,
+                            (unsigned long)InIoSpace);
         StatusBlock->Status = Status;
         return FALSE;
     }
