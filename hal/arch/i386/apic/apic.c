@@ -16,6 +16,8 @@
 #include <hal.h>
 #include <reactos/hal/acpi_pci.h>
 #include "apicp.h"
+/* Extern from ACPI side for SCI override */
+extern ULONG HalpSciGsi;
 #define NDEBUG
 #include <debug.h>
 
@@ -841,6 +843,20 @@ HalEnableSystemInterrupt(
     ReDirReg.DestinationMode = APIC_DM_Physical;
     ReDirReg.Destination = ApicRead(APIC_ID) >> 24;
     HalpIoApicDeriveAndApplyRouting(Index, &ReDirReg);
+
+    /* Force SCI to level/low if known, regardless of firmware routing */
+    if (HalpSciGsi != 0xFFFFFFFFu && Index == HalpSciGsi)
+    {
+        if ((InterruptMode == LevelSensitive) && (ReDirReg.TriggerMode != APIC_TGM_Level))
+        {
+            DPRINT1("HAL: Overriding SCI GSI %u trigger to level (was %s)\n",
+                    Index,
+                    (ReDirReg.TriggerMode == APIC_TGM_Level) ? "level" : "edge");
+        }
+        /* ACPI SCI is active low */
+        ReDirReg.TriggerMode = APIC_TGM_Level;
+        ReDirReg.Polarity = 1;
+    }
 
     if (((InterruptMode == LevelSensitive) && (ReDirReg.TriggerMode != APIC_TGM_Level)) ||
         ((InterruptMode == Latched) && (ReDirReg.TriggerMode == APIC_TGM_Level)))
