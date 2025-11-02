@@ -61,10 +61,17 @@ typedef struct _PDO_DEVICE_DATA
     BOOLEAN HasPciRootBusRange;
     ULONG PciRootMinBus;
     ULONG PciRootMaxBus;
+    /* Cached PCI root window information (from _CRS) */
+#define ACPI_PCI_MAX_WINDOWS 8
+    ULONG PciRootIoWindowCount;
+    struct { ULONGLONG Start; ULONGLONG End; } PciRootIoWindows[ACPI_PCI_MAX_WINDOWS];
+    ULONG PciRootMemWindowCount;
+    struct { ULONGLONG Start; ULONGLONG End; BOOLEAN Prefetchable; } PciRootMemWindows[ACPI_PCI_MAX_WINDOWS];
     LIST_ENTRY NotificationList;
     KSPIN_LOCK NotificationLock;
     ULONG NotificationRegistrationCount;
     BOOLEAN NotificationHandlersInstalled;
+    BOOLEAN PciRootLogged;
 
 } PDO_DEVICE_DATA, *PPDO_DEVICE_DATA;
 

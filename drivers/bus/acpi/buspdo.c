@@ -39,13 +39,68 @@ BuspIsPciRootDevice(
     if (wcsstr(DeviceData->HardwareIDs, L"PNP0A03") != NULL ||
         wcsstr(DeviceData->HardwareIDs, L"PNP0A08") != NULL)
     {
-        DPRINT1("ACPI: PDO %p (%S) recognised as PCI root candidate\n",
-                DeviceData,
-                DeviceData->HardwareIDs);
+        if (!DeviceData->PciRootLogged)
+        {
+            DPRINT("ACPI: PDO %p (%S) recognised as PCI root candidate\n",
+                   DeviceData,
+                   DeviceData->HardwareIDs);
+            DeviceData->PciRootLogged = TRUE;
+        }
         return TRUE;
     }
 
     return FALSE;
+}
+
+static __inline VOID
+BuspCachePciRootIoWindow(
+    _Inout_ PPDO_DEVICE_DATA DeviceData,
+    _In_ ULONGLONG Start,
+    _In_ ULONGLONG End)
+{
+    if (!DeviceData) return;
+    if (!BuspIsPciRootDevice(DeviceData)) return;
+    if (DeviceData->PciRootIoWindowCount < ACPI_PCI_MAX_WINDOWS)
+    {
+        ULONG i = DeviceData->PciRootIoWindowCount++;
+        DeviceData->PciRootIoWindows[i].Start = Start;
+        DeviceData->PciRootIoWindows[i].End = End;
+    }
+    else
+    {
+        DPRINT1("ACPI: PCI root %S exceeded IO window cache capacity (%u); ignoring window [0x%I64x,0x%I64x]\n",
+                DeviceData->HardwareIDs ? DeviceData->HardwareIDs : L"<unknown>",
+                ACPI_PCI_MAX_WINDOWS,
+                Start,
+                End);
+    }
+}
+
+static __inline VOID
+BuspCachePciRootMemWindow(
+    _Inout_ PPDO_DEVICE_DATA DeviceData,
+    _In_ ULONGLONG Start,
+    _In_ ULONGLONG End,
+    _In_ BOOLEAN Prefetchable)
+{
+    if (!DeviceData) return;
+    if (!BuspIsPciRootDevice(DeviceData)) return;
+    if (DeviceData->PciRootMemWindowCount < ACPI_PCI_MAX_WINDOWS)
+    {
+        ULONG i = DeviceData->PciRootMemWindowCount++;
+        DeviceData->PciRootMemWindows[i].Start = Start;
+        DeviceData->PciRootMemWindows[i].End = End;
+        DeviceData->PciRootMemWindows[i].Prefetchable = Prefetchable ? TRUE : FALSE;
+    }
+    else
+    {
+        DPRINT1("ACPI: PCI root %S exceeded memory window cache capacity (%u); ignoring window [0x%I64x,0x%I64x] prefetch=%d\n",
+                DeviceData->HardwareIDs ? DeviceData->HardwareIDs : L"<unknown>",
+                ACPI_PCI_MAX_WINDOWS,
+                Start,
+                End,
+                Prefetchable ? 1 : 0);
+    }
 }
 
 static
@@ -232,7 +287,12 @@ BuspCountRequirementsFromAcpiResources(
                     NumberOfResources++;
                     if (addr16->ResourceType == ACPI_BUS_NUMBER_RANGE)
                     {
-                        }
+                        FoundBusRange = TRUE;
+                        /* Correct bus range: end is Maximum (or Minimum + Length - 1), not both */
+                        BuspRecordPciRootBusRange(DeviceData,
+                                                  addr16->Address.Minimum,
+                                                  addr16->Address.Maximum);
+                    }
                 }
                 break;
             }
@@ -245,7 +305,11 @@ BuspCountRequirementsFromAcpiResources(
                     NumberOfResources++;
                     if (addr32->ResourceType == ACPI_BUS_NUMBER_RANGE)
                     {
-                        }
+                        FoundBusRange = TRUE;
+                        BuspRecordPciRootBusRange(DeviceData,
+                                                  addr32->Address.Minimum,
+                                                  addr32->Address.Maximum);
+                    }
                 }
                 break;
             }
@@ -258,7 +322,11 @@ BuspCountRequirementsFromAcpiResources(
                     NumberOfResources++;
                     if (addr64->ResourceType == ACPI_BUS_NUMBER_RANGE)
                     {
-                        }
+                        FoundBusRange = TRUE;
+                        BuspRecordPciRootBusRange(DeviceData,
+                                                  (ULONG)addr64->Address.Minimum,
+                                                  (ULONG)addr64->Address.Maximum);
+                    }
                 }
                 break;
             }
@@ -271,7 +339,11 @@ BuspCountRequirementsFromAcpiResources(
                     NumberOfResources++;
                     if (addrx->ResourceType == ACPI_BUS_NUMBER_RANGE)
                     {
-                        }
+                        FoundBusRange = TRUE;
+                        BuspRecordPciRootBusRange(DeviceData,
+                                                  (ULONG)addrx->Address.Minimum,
+                                                  (ULONG)addrx->Address.Maximum);
+                    }
                 }
                 break;
             }
@@ -522,7 +594,8 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->ShareDisposition = CmResourceShareShared;
                     RequirementDescriptor->Flags = 0;
                     RequirementDescriptor->u.BusNumber.MinBusNumber = addr16->Address.Minimum;
-                    RequirementDescriptor->u.BusNumber.MaxBusNumber = addr16->Address.Maximum + addr16->Address.AddressLength - 1;
+                    /* Correct bus range upper bound: use Maximum */
+                    RequirementDescriptor->u.BusNumber.MaxBusNumber = addr16->Address.Maximum;
                     RequirementDescriptor->u.BusNumber.Length = addr16->Address.AddressLength;
                 }
                 else if (addr16->ResourceType == ACPI_IO_RANGE)
@@ -589,7 +662,7 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->ShareDisposition = CmResourceShareShared;
                     RequirementDescriptor->Flags = 0;
                     RequirementDescriptor->u.BusNumber.MinBusNumber = addr32->Address.Minimum;
-                    RequirementDescriptor->u.BusNumber.MaxBusNumber = addr32->Address.Maximum + addr32->Address.AddressLength - 1;
+                    RequirementDescriptor->u.BusNumber.MaxBusNumber = addr32->Address.Maximum;
                     RequirementDescriptor->u.BusNumber.Length = addr32->Address.AddressLength;
                 }
                 else if (addr32->ResourceType == ACPI_IO_RANGE)
@@ -656,7 +729,7 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->ShareDisposition = CmResourceShareShared;
                     RequirementDescriptor->Flags = 0;
                     RequirementDescriptor->u.BusNumber.MinBusNumber = (ULONG)addr64->Address.Minimum;
-                    RequirementDescriptor->u.BusNumber.MaxBusNumber = (ULONG)(addr64->Address.Maximum + addr64->Address.AddressLength - 1);
+                    RequirementDescriptor->u.BusNumber.MaxBusNumber = (ULONG)addr64->Address.Maximum;
                     RequirementDescriptor->u.BusNumber.Length = addr64->Address.AddressLength;
                 }
                 else if (addr64->ResourceType == ACPI_IO_RANGE)
@@ -723,7 +796,7 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->ShareDisposition = CmResourceShareShared;
                     RequirementDescriptor->Flags = 0;
                     RequirementDescriptor->u.BusNumber.MinBusNumber = (ULONG)addrx->Address.Minimum;
-                    RequirementDescriptor->u.BusNumber.MaxBusNumber = (ULONG)(addrx->Address.Maximum + addrx->Address.AddressLength - 1);
+                    RequirementDescriptor->u.BusNumber.MaxBusNumber = (ULONG)addrx->Address.Maximum;
                     RequirementDescriptor->u.BusNumber.Length = addrx->Address.AddressLength;
                 }
                 else if (addrx->ResourceType == ACPI_IO_RANGE)
@@ -1067,6 +1140,12 @@ BuspCreateResourceListFromAcpiResources(
                      CM_RESOURCE_PORT_16_BIT_DECODE : CM_RESOURCE_PORT_10_BIT_DECODE);
                 ResourceDescriptor->u.Port.Start.QuadPart = io->Minimum;
                 ResourceDescriptor->u.Port.Length = io->AddressLength;
+                if (IsPciRoot)
+                {
+                    ULONGLONG s = io->Minimum;
+                    ULONGLONG e = (io->AddressLength) ? (s + io->AddressLength - 1) : s;
+                    BuspCachePciRootIoWindow(DeviceData, s, e);
+                }
                 ResourceDescriptor++;
                 break;
             }
@@ -1080,6 +1159,12 @@ BuspCreateResourceListFromAcpiResources(
                 ResourceDescriptor->Flags = CM_RESOURCE_PORT_IO;
                 ResourceDescriptor->u.Port.Start.QuadPart = io->Address;
                 ResourceDescriptor->u.Port.Length = io->AddressLength;
+                if (IsPciRoot)
+                {
+                    ULONGLONG s = io->Address;
+                    ULONGLONG e = (io->AddressLength) ? (s + io->AddressLength - 1) : s;
+                    BuspCachePciRootIoWindow(DeviceData, s, e);
+                }
                 ResourceDescriptor++;
                 break;
             }
@@ -1117,6 +1202,12 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->u.Port.Start.QuadPart =
                         addr16->Address.Minimum + addr16->Address.TranslationOffset;
                     ResourceDescriptor->u.Port.Length = addr16->Address.AddressLength;
+                    if (IsPciRoot)
+                    {
+                        ULONGLONG s = addr16->Address.Minimum + addr16->Address.TranslationOffset;
+                        ULONGLONG e = (addr16->Address.AddressLength) ? (s + addr16->Address.AddressLength - 1) : s;
+                        BuspCachePciRootIoWindow(DeviceData, s, e);
+                    }
                 }
                 else
                 {
@@ -1133,6 +1224,13 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->u.Memory.Start.QuadPart =
                         addr16->Address.Minimum + addr16->Address.TranslationOffset;
                     ResourceDescriptor->u.Memory.Length = addr16->Address.AddressLength;
+                    if (IsPciRoot)
+                    {
+                        ULONGLONG s = addr16->Address.Minimum + addr16->Address.TranslationOffset;
+                        ULONGLONG e = (addr16->Address.AddressLength) ? (s + addr16->Address.AddressLength - 1) : s;
+                        BOOLEAN prefetch = (ResourceDescriptor->Flags & CM_RESOURCE_MEMORY_PREFETCHABLE) ? TRUE : FALSE;
+                        BuspCachePciRootMemWindow(DeviceData, s, e, prefetch);
+                    }
                 }
                 ResourceDescriptor++;
                 break;
@@ -1171,6 +1269,12 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->u.Port.Start.QuadPart =
                         addr32->Address.Minimum + addr32->Address.TranslationOffset;
                     ResourceDescriptor->u.Port.Length = addr32->Address.AddressLength;
+                    if (IsPciRoot)
+                    {
+                        ULONGLONG s = addr32->Address.Minimum + addr32->Address.TranslationOffset;
+                        ULONGLONG e = (addr32->Address.AddressLength) ? (s + addr32->Address.AddressLength - 1) : s;
+                        BuspCachePciRootIoWindow(DeviceData, s, e);
+                    }
                 }
                 else
                 {
@@ -1187,6 +1291,13 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->u.Memory.Start.QuadPart =
                         addr32->Address.Minimum + addr32->Address.TranslationOffset;
                     ResourceDescriptor->u.Memory.Length = addr32->Address.AddressLength;
+                    if (IsPciRoot)
+                    {
+                        ULONGLONG s = addr32->Address.Minimum + addr32->Address.TranslationOffset;
+                        ULONGLONG e = (addr32->Address.AddressLength) ? (s + addr32->Address.AddressLength - 1) : s;
+                        BOOLEAN prefetch = (ResourceDescriptor->Flags & CM_RESOURCE_MEMORY_PREFETCHABLE) ? TRUE : FALSE;
+                        BuspCachePciRootMemWindow(DeviceData, s, e, prefetch);
+                    }
                 }
                 ResourceDescriptor++;
                 break;
@@ -1215,6 +1326,12 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->u.Port.Start.QuadPart =
                         addr64->Address.Minimum + addr64->Address.TranslationOffset;
                     ResourceDescriptor->u.Port.Length = addr64->Address.AddressLength;
+                    if (IsPciRoot)
+                    {
+                        ULONGLONG s = addr64->Address.Minimum + addr64->Address.TranslationOffset;
+                        ULONGLONG e = (addr64->Address.AddressLength) ? (s + addr64->Address.AddressLength - 1) : s;
+                        BuspCachePciRootIoWindow(DeviceData, s, e);
+                    }
                 }
                 else
                 {
@@ -1231,6 +1348,13 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->u.Memory.Start.QuadPart =
                         addr64->Address.Minimum + addr64->Address.TranslationOffset;
                     ResourceDescriptor->u.Memory.Length = addr64->Address.AddressLength;
+                    if (IsPciRoot)
+                    {
+                        ULONGLONG s = addr64->Address.Minimum + addr64->Address.TranslationOffset;
+                        ULONGLONG e = (addr64->Address.AddressLength) ? (s + addr64->Address.AddressLength - 1) : s;
+                        BOOLEAN prefetch = (ResourceDescriptor->Flags & CM_RESOURCE_MEMORY_PREFETCHABLE) ? TRUE : FALSE;
+                        BuspCachePciRootMemWindow(DeviceData, s, e, prefetch);
+                    }
                 }
                 ResourceDescriptor++;
                 break;
@@ -1259,6 +1383,12 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->u.Port.Start.QuadPart =
                         addrx->Address.Minimum + addrx->Address.TranslationOffset;
                     ResourceDescriptor->u.Port.Length = addrx->Address.AddressLength;
+                    if (IsPciRoot)
+                    {
+                        ULONGLONG s = addrx->Address.Minimum + addrx->Address.TranslationOffset;
+                        ULONGLONG e = (addrx->Address.AddressLength) ? (s + addrx->Address.AddressLength - 1) : s;
+                        BuspCachePciRootIoWindow(DeviceData, s, e);
+                    }
                 }
                 else
                 {
@@ -1275,6 +1405,13 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->u.Memory.Start.QuadPart =
                         addrx->Address.Minimum + addrx->Address.TranslationOffset;
                     ResourceDescriptor->u.Memory.Length = addrx->Address.AddressLength;
+                    if (IsPciRoot)
+                    {
+                        ULONGLONG s = addrx->Address.Minimum + addrx->Address.TranslationOffset;
+                        ULONGLONG e = (addrx->Address.AddressLength) ? (s + addrx->Address.AddressLength - 1) : s;
+                        BOOLEAN prefetch = (ResourceDescriptor->Flags & CM_RESOURCE_MEMORY_PREFETCHABLE) ? TRUE : FALSE;
+                        BuspCachePciRootMemWindow(DeviceData, s, e, prefetch);
+                    }
                 }
                 ResourceDescriptor++;
                 break;
@@ -1290,6 +1427,13 @@ BuspCreateResourceListFromAcpiResources(
                      CM_RESOURCE_MEMORY_READ_ONLY : CM_RESOURCE_MEMORY_READ_WRITE);
                 ResourceDescriptor->u.Memory.Start.QuadPart = mem24->Minimum;
                 ResourceDescriptor->u.Memory.Length = mem24->AddressLength;
+                if (IsPciRoot)
+                {
+                    ULONGLONG s = mem24->Minimum;
+                    ULONGLONG e = (mem24->AddressLength) ? (s + mem24->AddressLength - 1) : s;
+                    BOOLEAN prefetch = (ResourceDescriptor->Flags & CM_RESOURCE_MEMORY_PREFETCHABLE) ? TRUE : FALSE;
+                    BuspCachePciRootMemWindow(DeviceData, s, e, prefetch);
+                }
                 ResourceDescriptor++;
                 break;
             }
@@ -1303,6 +1447,13 @@ BuspCreateResourceListFromAcpiResources(
                     ? CM_RESOURCE_MEMORY_READ_ONLY : CM_RESOURCE_MEMORY_READ_WRITE;
                 ResourceDescriptor->u.Memory.Start.QuadPart = mem32->Minimum;
                 ResourceDescriptor->u.Memory.Length = mem32->AddressLength;
+                if (IsPciRoot)
+                {
+                    ULONGLONG s = mem32->Minimum;
+                    ULONGLONG e = (mem32->AddressLength) ? (s + mem32->AddressLength - 1) : s;
+                    BOOLEAN prefetch = (ResourceDescriptor->Flags & CM_RESOURCE_MEMORY_PREFETCHABLE) ? TRUE : FALSE;
+                    BuspCachePciRootMemWindow(DeviceData, s, e, prefetch);
+                }
                 ResourceDescriptor++;
                 break;
             }
@@ -1316,6 +1467,13 @@ BuspCreateResourceListFromAcpiResources(
                     ? CM_RESOURCE_MEMORY_READ_ONLY : CM_RESOURCE_MEMORY_READ_WRITE;
                 ResourceDescriptor->u.Memory.Start.QuadPart = mfix->Address;
                 ResourceDescriptor->u.Memory.Length = mfix->AddressLength;
+                if (IsPciRoot)
+                {
+                    ULONGLONG s = mfix->Address;
+                    ULONGLONG e = (mfix->AddressLength) ? (s + mfix->AddressLength - 1) : s;
+                    BOOLEAN prefetch = (ResourceDescriptor->Flags & CM_RESOURCE_MEMORY_PREFETCHABLE) ? TRUE : FALSE;
+                    BuspCachePciRootMemWindow(DeviceData, s, e, prefetch);
+                }
                 ResourceDescriptor++;
                 break;
             }
