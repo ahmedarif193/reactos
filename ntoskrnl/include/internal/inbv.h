@@ -158,3 +158,25 @@ NTAPI
 InbvGetGopFrameBufferInfo(
     _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo
 );
+
+//
+// UEFI GOP mode enumeration/switching (stubs for now)
+//
+BOOLEAN
+NTAPI
+InbvQueryGopModeCount(
+    _Out_ PULONG Count
+);
+
+BOOLEAN
+NTAPI
+InbvQueryGopModeInfo(
+    _In_ ULONG Index,
+    _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo
+);
+
+BOOLEAN
+NTAPI
+InbvSetGopMode(
+    _In_ ULONG Index
+);
