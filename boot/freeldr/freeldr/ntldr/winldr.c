@@ -326,6 +326,9 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
     {
         extern REACTOS_INTERNAL_BGCONTEXT framebufferData;
         extern PBGRT_TABLE GetBgrtTable(VOID);
+        extern PLOADER_PARAMETER_GOP_MODE UefiGopModes;
+        extern ULONG UefiGopModeCount;
+        extern ULONG UefiGopPreferredMode;
         
         if (framebufferData.BaseAddress != 0)
         {
@@ -353,6 +356,15 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
                   Extension->GopFramebuffer.BlueMask);
         }
         
+        /* Pass GOP mode enumeration to the kernel (if available) */
+        if (UefiGopModes && UefiGopModeCount)
+        {
+            Extension->GopModes = (PLOADER_PARAMETER_GOP_MODE)PaToVa(UefiGopModes);
+            Extension->GopModeCount = UefiGopModeCount;
+            Extension->GopPreferredMode = UefiGopPreferredMode;
+            TRACE("Passing %lu GOP modes to kernel (preferred=%lu)\n", UefiGopModeCount, UefiGopPreferredMode);
+        }
+
         /* Pass BGRT info to the kernel for seamless boot logo support. */
         PBGRT_TABLE Bgrt = GetBgrtTable();
         if (Bgrt)
