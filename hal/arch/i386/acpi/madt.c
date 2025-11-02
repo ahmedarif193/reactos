@@ -260,3 +260,11 @@ HalpPrintApicTables(VOID)
     }
 #endif
 }
+
+BOOLEAN
+NTAPI
+HalIsIoApicPresent(VOID)
+{
+    /* IOAPIC presence determined during MADT parsing */
+    return (HalpApicInfoTable.IOAPICCount != 0) ? TRUE : FALSE;
+}
