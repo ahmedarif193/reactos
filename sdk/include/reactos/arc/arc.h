@@ -231,6 +231,21 @@ typedef struct _LOADER_PARAMETER_FRAMEBUFFER
     ULONG Reserved;
 } LOADER_PARAMETER_FRAMEBUFFER, *PLOADER_PARAMETER_FRAMEBUFFER;
 
+#if defined(__REACTOS__)
+/* Minimal GOP mode descriptor captured by the loader for enumeration */
+typedef struct _LOADER_PARAMETER_GOP_MODE
+{
+    ULONG HorizontalResolution;
+    ULONG VerticalResolution;
+    ULONG PixelsPerScanLine;
+    ULONG PixelFormat;
+    ULONG RedMask;
+    ULONG GreenMask;
+    ULONG BlueMask;
+    ULONG Reserved;
+} LOADER_PARAMETER_GOP_MODE, *PLOADER_PARAMETER_GOP_MODE;
+#endif
+
 typedef struct _LOADER_PARAMETER_BGRT
 {
     BOOLEAN Valid;
@@ -698,6 +713,12 @@ typedef struct _LOADER_PARAMETER_EXTENSION
 #if defined(__REACTOS__)
     LOADER_PARAMETER_FRAMEBUFFER GopFramebuffer;
     LOADER_PARAMETER_BGRT BgrtInfo;
+#if defined(__REACTOS__)
+    /* Optional: full GOP mode list (loader-provided, pre-ExitBootServices) */
+    ULONG GopModeCount;
+    PLOADER_PARAMETER_GOP_MODE GopModes; /* loader-allocated, valid during init */
+    ULONG GopPreferredMode; /* index, if known; otherwise current mode */
+#endif
 #endif
 #if (NTDDI_VERSION >= NTDDI_WINBLUE)
     DEBUG_DEVICE_DESCRIPTOR *KdDebugDevice;
