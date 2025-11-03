@@ -243,7 +243,12 @@ ScsiPortDispatchScsi(
                 #if DBG
                 {
                     KIRQL cur = KeGetCurrentIrql();
-                    DPRINT1("[SCSIPORT] BYPASS_FROZEN_QUEUE: IoStartPacket at IRQL %lu\n", (ULONG)cur);
+                    /* Throttle noisy debug output: log 1/64 events */
+                    { static volatile LONG s_bypassLogCounter;
+                      LONG c = InterlockedIncrement(&s_bypassLogCounter);
+                      if ((c & 0x3F) == 1)
+                      { DPRINT1("[SCSIPORT] BYPASS_FROZEN_QUEUE: IoStartPacket at IRQL %lu (count=%ld)\n", (ULONG)cur, c); }
+                    }
                 }
                 #endif
                 IoStartPacket(portExt->Common.DeviceObject, Irp, NULL, NULL);
