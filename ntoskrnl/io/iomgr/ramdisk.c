@@ -434,6 +434,10 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     RamdiskCreate.Options.Hidden = FALSE;
     RamdiskCreate.Options.NoDriveLetter = FALSE;
     RamdiskCreate.Options.NoDosDevice = TRUE;
+    /* Default to disk semantics (FAT-friendly 512 BPS). The ramdisk
+       driver will enable ExportAsCd automatically if it detects a
+       true El-Torito ISO (CD001 at LBA 16) or if RDEXPORTASCD is set
+       on the boot command line. */
     RamdiskCreate.Options.ExportAsCd = FALSE;
 
     if (OffsetSpecified)
@@ -667,15 +671,17 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     SymbolicLinkName.Buffer = L"\\ArcName\\ramdisk(0)";
 
     //
-    // Create the symbolic link
+    // Create the symbolic link. If it already exists, treat as success.
     //
     RtlInitUnicodeString(&ObjectName, SourceString);
     Status = IoCreateSymbolicLink(&SymbolicLinkName, &ObjectName);
     RtlFreeUnicodeString(&GuidString);
-    if (!NT_SUCCESS(Status))
+    if (!NT_SUCCESS(Status) &&
+        Status != STATUS_OBJECT_NAME_EXISTS &&
+        Status != STATUS_OBJECT_NAME_COLLISION)
     {
         //
-        // Bugcheck -- symlink create failed
+        // Bugcheck -- symlink create failed for a reason we cannot ignore
         //
         KeBugCheckEx(RAMDISK_BOOT_INITIALIZATION_FAILED,
                      RD_SYMLINK_CREATE_FAILED,
@@ -715,14 +721,64 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     //
-    // Wait for ramdisk relations being initialized
+    // Wait for ramdisk relations being initialized, but do not block forever.
+    // Some UEFI platforms (e.g., VirtualBox) may stall storage enumeration
+    // (CDROM queues frozen) and never signal PiEnumerationFinished, causing
+    // an apparent idle hang during RAMDISK boots. Use a bounded wait and
+    // continue boot even if PnP enumeration hasn't completed yet.
     //
-
-    KeWaitForSingleObject(&PiEnumerationFinished, Executive, KernelMode, FALSE, NULL);
-
-    DbgPrintEx(DPFLTR_DEFAULT_ID,
-               DPFLTR_INFO_LEVEL,
-               "IopStartRamdisk: ramdisk initialization complete\n");
+    {
+        LARGE_INTEGER Timeout;
+        ULONG WaitMs = 2000; // default 2 seconds
+        /* Read optional override: HKLM\System\CurrentControlSet\Control\Session Manager\RamdiskBootPnPWaitMs */
+        {
+            HANDLE Key;
+            OBJECT_ATTRIBUTES oa;
+            UNICODE_STRING KeyPath = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\Session Manager");
+            UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"RamdiskBootPnPWaitMs");
+            InitializeObjectAttributes(&oa, &KeyPath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+            if (NT_SUCCESS(ZwOpenKey(&Key, KEY_READ, &oa)))
+            {
+                ULONG len = 0;
+                PKEY_VALUE_PARTIAL_INFORMATION info = NULL;
+                NTSTATUS qs = ZwQueryValueKey(Key, &ValueName, KeyValuePartialInformation, NULL, 0, &len);
+                if ((qs == STATUS_BUFFER_TOO_SMALL || qs == STATUS_BUFFER_OVERFLOW) && len)
+                {
+                    info = ExAllocatePoolWithTag(PagedPool, len, 'wrPR');
+                    if (info && NT_SUCCESS(ZwQueryValueKey(Key, &ValueName, KeyValuePartialInformation, info, len, &len)))
+                    {
+                        if (info->Type == REG_DWORD && info->DataLength >= sizeof(ULONG))
+                        {
+                            ULONG v = *(PULONG)info->Data;
+                            if (v > 60000) v = 60000; /* clamp to 60s */
+                            WaitMs = v;
+                        }
+                    }
+                    if (info) ExFreePoolWithTag(info, 'wrPR');
+                }
+                ZwClose(Key);
+            }
+        }
+        Timeout.QuadPart = (WaitMs == 0) ? 0 : -(LONGLONG)WaitMs * 10 * 1000;
+        NTSTATUS WaitStatus = KeWaitForSingleObject(&PiEnumerationFinished,
+                                                    Executive,
+                                                    KernelMode,
+                                                    FALSE,
+                                                    &Timeout);
+        if (!NT_SUCCESS(WaitStatus))
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID,
+                       DPFLTR_WARNING_LEVEL,
+                       "IopStartRamdisk: PiEnumerationFinished wait status=0x%08X; continuing\n",
+                       WaitStatus);
+        }
+        else
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID,
+                       DPFLTR_INFO_LEVEL,
+                       "IopStartRamdisk: ramdisk enumeration complete\n");
+        }
+    }
 
     //
     // We made it

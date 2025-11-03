@@ -1816,6 +1816,11 @@ RamdiskCreateDiskDevice(IN PRAMDISK_BUS_EXTENSION DeviceExtension,
         SymbolicLinkName.Buffer = NULL;
         GuidString.Buffer = NULL;
 
+        /* Do not create the \ArcName\ramdisk(0) alias here; kernel boot
+           code sets it up in IopStartRamdisk and tolerates collisions.
+           Creating it here can race and cause STATUS_OBJECT_NAME_COLLISION
+           to be raised as fatal there. */
+
         /* Check if this is a boot disk, or a registry ram drive */
         if (Input->DiskType == RAMDISK_BOOT_DISK)
         {
@@ -1933,7 +1938,7 @@ RamdiskCreateDiskDevice(IN PRAMDISK_BUS_EXTENSION DeviceExtension,
                      * live images with a nonstandard type aren't misclassified. */
                     BOOLEAN IsIso = FALSE;
                     ULONGLONG ProbeOffset = (ULONGLONG)PartitionStartLba * 512ULL + (ULONGLONG)16 * 2048ULL;
-                    SIZE_T ProbeSpan = 0;
+                    ULONG ProbeSpan = 0;
                     PVOID ProbeBase = RamdiskMapPages(DriveExtension,
                                                      *(PLARGE_INTEGER)&ProbeOffset,
                                                      2048,
@@ -1959,8 +1964,7 @@ RamdiskCreateDiskDevice(IN PRAMDISK_BUS_EXTENSION DeviceExtension,
                     {
                         DbgPrintEx(DPFLTR_DEFAULT_ID,
                                    DPFLTR_ERROR_LEVEL,
-                                   "RamdiskCreateDiskDevice: detected El-Torito ISO9660 (0x96) -> exporting as CD (startLba=%I64u len=%lu)
-",
+                                   "RamdiskCreateDiskDevice: detected El-Torito ISO9660 (0x96) -> exporting as CD (startLba=%I64u len=%lu)\n",
                                    PartitionStartLba,
                                    PartitionSectorCount);
                         DriveExtension->DiskOptions.ExportAsCd = TRUE;
@@ -1970,8 +1974,7 @@ RamdiskCreateDiskDevice(IN PRAMDISK_BUS_EXTENSION DeviceExtension,
                     {
                         DbgPrintEx(DPFLTR_DEFAULT_ID,
                                    DPFLTR_ERROR_LEVEL,
-                                   "RamdiskCreateDiskDevice: 0x96 partition does not look like ISO (no CD001 at LBA16); keeping disk semantics
-");
+                                   "RamdiskCreateDiskDevice: 0x96 partition does not look like ISO (no CD001 at LBA16); keeping disk semantics\n");
                     }
                 }
 
@@ -5151,7 +5154,15 @@ RamdiskPnp(IN PDEVICE_OBJECT DeviceObject,
                     RtlZeroMemory(&DriveExtension->DriveDeviceName, sizeof(DriveExtension->DriveDeviceName));
                 }
 
-                if (DriveExtension->DiskType != RAMDISK_REGISTRY_DISK)
+                if (DriveExtension->DiskType == RAMDISK_BOOT_DISK)
+                {
+                    /* Expose a dedicated boot-ramdisk device interface for kernel binding. */
+                    Status = IoRegisterDeviceInterface(DeviceObject,
+                                                       &GUID_DEVINTERFACE_REACTOS_BOOT_RAMDISK,
+                                                       NULL,
+                                                       &DriveExtension->DriveDeviceName);
+                }
+                else if (DriveExtension->DiskType != RAMDISK_REGISTRY_DISK)
                 {
                     Status = IoRegisterDeviceInterface(DeviceObject,
                                                        &GUID_DEVINTERFACE_VOLUME,

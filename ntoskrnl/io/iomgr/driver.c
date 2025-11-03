@@ -1574,8 +1574,68 @@ IopReinitializeBootDrivers(VOID)
                                             &DriverBootReinitListLock);
     }
 
-    /* Wait for all device actions being finished*/
-    KeWaitForSingleObject(&PiEnumerationFinished, Executive, KernelMode, FALSE, NULL);
+    /* Wait for all device actions being finished.
+     * Use a bounded wait only on ramdisk boots to avoid UEFI stalls.
+     */
+    {
+        BOOLEAN RamdiskBoot = FALSE;
+        if (KeLoaderBlock && KeLoaderBlock->ArcBootDeviceName)
+        {
+            const CHAR *name = KeLoaderBlock->ArcBootDeviceName;
+            if ((strlen(name) >= 10) && (!_strnicmp(name, "ramdisk(0)", 10)))
+                RamdiskBoot = TRUE;
+        }
+
+        if (RamdiskBoot)
+        {
+            LARGE_INTEGER Timeout;
+            ULONG WaitMs = 2000; // default 2 seconds
+            /* HKLM\System\CurrentControlSet\Control\Session Manager\RamdiskBootPnPWaitMs */
+            {
+                HANDLE Key;
+                OBJECT_ATTRIBUTES oa;
+                UNICODE_STRING KeyPath = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\Session Manager");
+                UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"RamdiskBootPnPWaitMs");
+                InitializeObjectAttributes(&oa, &KeyPath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+                if (NT_SUCCESS(ZwOpenKey(&Key, KEY_READ, &oa)))
+                {
+                    ULONG len = 0;
+                    PKEY_VALUE_PARTIAL_INFORMATION info = NULL;
+                    NTSTATUS qs = ZwQueryValueKey(Key, &ValueName, KeyValuePartialInformation, NULL, 0, &len);
+                    if ((qs == STATUS_BUFFER_TOO_SMALL || qs == STATUS_BUFFER_OVERFLOW) && len)
+                    {
+                        info = ExAllocatePoolWithTag(PagedPool, len, 'wrPR');
+                        if (info && NT_SUCCESS(ZwQueryValueKey(Key, &ValueName, KeyValuePartialInformation, info, len, &len)))
+                        {
+                            if (info->Type == REG_DWORD && info->DataLength >= sizeof(ULONG))
+                            {
+                                ULONG v = *(PULONG)info->Data;
+                                if (v > 60000) v = 60000; /* cap at 60s */
+                                WaitMs = v;
+                            }
+                        }
+                        if (info) ExFreePoolWithTag(info, 'wrPR');
+                    }
+                    ZwClose(Key);
+                }
+            }
+
+            Timeout.QuadPart = (WaitMs == 0) ? 0 : -(LONGLONG)WaitMs * 10 * 1000;
+            NTSTATUS WaitStatus = KeWaitForSingleObject(&PiEnumerationFinished,
+                                                        Executive,
+                                                        KernelMode,
+                                                        FALSE,
+                                                        &Timeout);
+            if (!NT_SUCCESS(WaitStatus))
+            {
+                DPRINT1("IopReinitializeBootDrivers: PiEnumerationFinished (ramdisk) wait status=0x%08lx; continuing\n", WaitStatus);
+            }
+        }
+        else
+        {
+            KeWaitForSingleObject(&PiEnumerationFinished, Executive, KernelMode, FALSE, NULL);
+        }
+    }
 }
 
 /* PUBLIC FUNCTIONS ***********************************************************/

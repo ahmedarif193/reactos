@@ -14,6 +14,7 @@
 #include <stdarg.h>
 #include <limits.h>
 #include <ntstrsafe.h>
+#include <reactos/drivers/ntddrdsk.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -151,11 +152,7 @@ IopCreateArcBootAliasFallback(
         RtlInitUnicodeString(&Candidates[CandidateCount++], L"\\Device\\CdRom0");
     }
 
-    if (!RamdiskBoot && CandidateCount < RTL_NUMBER_OF(Candidates))
-    {
-        /* Consider the ramdisk even if the boot path isn't explicitly ramdisk. */
-        RtlInitUnicodeString(&Candidates[CandidateCount++], L"\\Device\\Ramdisk0");
-    }
+    /* Do not consider the ramdisk device for non-ramdisk boots. */
 
     if (IopExtractArcDiskNumbers(LoaderBlock->ArcBootDeviceName,
                                  &DiskNumber,
@@ -190,15 +187,169 @@ IopCreateArcBootAliasFallback(
     }
 
     Status = STATUS_UNSUCCESSFUL;
+
+    /* Prefer mapping via registry: Services\Ramdisk\Parameters\Disks\{BootDiskGuid}\DevicePath */
+    if (RamdiskBoot)
+    {
+        static const UNICODE_STRING ParametersKey = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\Ramdisk\\Parameters");
+        static const UNICODE_STRING BootGuidName = RTL_CONSTANT_STRING(L"BootDiskGuid");
+        HANDLE KeyHandle = NULL;
+        OBJECT_ATTRIBUTES ObjectAttributes;
+        NTSTATUS RegStatus;
+
+        InitializeObjectAttributes(&ObjectAttributes,
+                                   (PUNICODE_STRING)&ParametersKey,
+                                   OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                   NULL,
+                                   NULL);
+
+        RegStatus = ZwOpenKey(&KeyHandle, KEY_READ, &ObjectAttributes);
+        if (NT_SUCCESS(RegStatus))
+        {
+            ULONG Length = 0;
+            PKEY_VALUE_PARTIAL_INFORMATION ValueInfo = NULL;
+            RegStatus = ZwQueryValueKey(KeyHandle,
+                                        (PUNICODE_STRING)&BootGuidName,
+                                        KeyValuePartialInformation,
+                                        NULL,
+                                        0,
+                                        &Length);
+            if ((RegStatus == STATUS_BUFFER_TOO_SMALL || RegStatus == STATUS_BUFFER_OVERFLOW) && Length)
+            {
+                ValueInfo = ExAllocatePoolWithTag(PagedPool, Length, 'giRB');
+                if (ValueInfo)
+                {
+                    RegStatus = ZwQueryValueKey(KeyHandle,
+                                                (PUNICODE_STRING)&BootGuidName,
+                                                KeyValuePartialInformation,
+                                                ValueInfo,
+                                                Length,
+                                                &Length);
+                    if (NT_SUCCESS(RegStatus) &&
+                        ValueInfo->Type == REG_BINARY &&
+                        ValueInfo->DataLength == sizeof(GUID))
+                    {
+                        UNICODE_STRING GuidString;
+                        if (NT_SUCCESS(RtlStringFromGUID((PGUID)ValueInfo->Data, &GuidString)))
+                        {
+                            WCHAR DiskKeyBuf[256];
+                            UNICODE_STRING DiskKey;
+                            HANDLE DiskHandle = NULL;
+                            PKEY_VALUE_PARTIAL_INFORMATION DevPathInfo = NULL;
+                            ULONG DevPathLen = 0;
+                            UNICODE_STRING DevPath;
+
+                            if (NT_SUCCESS(RtlStringCbPrintfW(DiskKeyBuf,
+                                                              sizeof(DiskKeyBuf),
+                                                              L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\Ramdisk\\Parameters\\Disks\\%wZ",
+                                                              &GuidString)))
+                            {
+                                DiskKey.Buffer = DiskKeyBuf;
+                                DiskKey.Length = (USHORT)(wcslen(DiskKeyBuf) * sizeof(WCHAR));
+                                DiskKey.MaximumLength = sizeof(DiskKeyBuf);
+                                InitializeObjectAttributes(&ObjectAttributes,
+                                                           &DiskKey,
+                                                           OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                                           NULL,
+                                                           NULL);
+                                if (NT_SUCCESS(ZwOpenKey(&DiskHandle, KEY_READ, &ObjectAttributes)))
+                                {
+                                    UNICODE_STRING DevPathName = RTL_CONSTANT_STRING(L"DevicePath");
+                                    if (ZwQueryValueKey(DiskHandle,
+                                                        &DevPathName,
+                                                        KeyValuePartialInformation,
+                                                        NULL,
+                                                        0,
+                                                        &DevPathLen) == STATUS_BUFFER_TOO_SMALL && DevPathLen)
+                                    {
+                                        DevPathInfo = ExAllocatePoolWithTag(PagedPool, DevPathLen, 'htPR');
+                                        if (DevPathInfo && NT_SUCCESS(ZwQueryValueKey(DiskHandle,
+                                                                                      &DevPathName,
+                                                                                      KeyValuePartialInformation,
+                                                                                      DevPathInfo,
+                                                                                      DevPathLen,
+                                                                                      &DevPathLen)) &&
+                                            DevPathInfo->Type == REG_SZ &&
+                                            DevPathInfo->DataLength >= sizeof(WCHAR))
+                                        {
+                                            DevPath.Buffer = (PWSTR)DevPathInfo->Data;
+                                            DevPath.Length = (USHORT)DevPathInfo->DataLength - sizeof(WCHAR);
+                                            DevPath.MaximumLength = (USHORT)DevPathInfo->DataLength;
+
+                                            /* Map ARC name directly to the recorded DevicePath */
+                                            NTSTATUS LinkStatus = IoAssignArcName(&ArcUnicode, &DevPath);
+                                            if (NT_SUCCESS(LinkStatus) ||
+                                                LinkStatus == STATUS_OBJECT_NAME_EXISTS ||
+                                                LinkStatus == STATUS_OBJECT_NAME_COLLISION)
+                                            {
+                                                ARC_WARN("CreateArcNames fallback mapped %s -> %wZ (via registry)\n",
+                                                         LoaderBlock->ArcBootDeviceName,
+                                                         &DevPath);
+                                                if (DevPathInfo) ExFreePoolWithTag(DevPathInfo, 'htPR');
+                                                ZwClose(DiskHandle);
+                                                RtlFreeUnicodeString(&GuidString);
+                                                ExFreePoolWithTag(ValueInfo, 'giRB');
+                                                ZwClose(KeyHandle);
+                                                RtlFreeUnicodeString(&ArcUnicode);
+                                                return STATUS_SUCCESS;
+                                            }
+                                        }
+                                        if (DevPathInfo) ExFreePoolWithTag(DevPathInfo, 'htPR');
+                                    }
+                                    ZwClose(DiskHandle);
+                                }
+                            }
+                            RtlFreeUnicodeString(&GuidString);
+                        }
+                    }
+                    ExFreePoolWithTag(ValueInfo, 'giRB');
+                }
+            }
+            ZwClose(KeyHandle);
+        }
+    }
+
+    /* Prefer mapping via a dedicated boot-ramdisk device interface, if present */
+    if (RamdiskBoot)
+    {
+        PWSTR SymbolicList = NULL;
+        UNICODE_STRING Target;
+        NTSTATUS IfStatus;
+
+        IfStatus = IoGetDeviceInterfaces(&GUID_DEVINTERFACE_REACTOS_BOOT_RAMDISK,
+                                         NULL,
+                                         0,
+                                         &SymbolicList);
+        if (NT_SUCCESS(IfStatus) && SymbolicList && *SymbolicList)
+        {
+            RtlInitUnicodeString(&Target, SymbolicList);
+            {
+                NTSTATUS LinkStatus = IoAssignArcName(&ArcUnicode, &Target);
+                if (NT_SUCCESS(LinkStatus) ||
+                    LinkStatus == STATUS_OBJECT_NAME_EXISTS ||
+                    LinkStatus == STATUS_OBJECT_NAME_COLLISION)
+                {
+                    ARC_WARN("CreateArcNames fallback mapped %s -> %wZ (via device interface)\n",
+                             LoaderBlock->ArcBootDeviceName,
+                             &Target);
+                    ExFreePool(SymbolicList);
+                    RtlFreeUnicodeString(&ArcUnicode);
+                    return STATUS_SUCCESS;
+                }
+                ARC_WARN("CreateArcNames fallback IoAssignArcName failed (0x%08lx) for %wZ\n",
+                         LinkStatus,
+                         &Target);
+            }
+            ExFreePool(SymbolicList);
+        }
+    }
     for (ULONG Index = 0; Index < CandidateCount; Index++)
     {
-        UNICODE_STRING *TargetString = &Candidates[Index];
-        PFILE_OBJECT FileObject;
-        PDEVICE_OBJECT DeviceObject;
-        NTSTATUS QueryStatus;
-        NTSTATUS LinkStatus;
-
-RetryOpen:
+    UNICODE_STRING *TargetString = &Candidates[Index];
+    PFILE_OBJECT FileObject;
+    PDEVICE_OBJECT DeviceObject;
+    NTSTATUS QueryStatus;
+    NTSTATUS LinkStatus;
         QueryStatus = IoGetDeviceObjectPointer(TargetString,
                                                FILE_READ_ATTRIBUTES,
                                                &FileObject,
@@ -241,6 +392,14 @@ RetryOpen:
     ARC_WARN("CreateArcNames fallback status=0x%08lx RamdiskCandidatePresent=%d\n",
              Status,
              RamdiskCandidatePresent);
+
+    /*
+     * If we are booting from a ramdisk but \Device\Ramdisk0 is not present,
+     * try to discover a GUID-named ramdisk device via the DOS global
+     * symlink directory (e.g. \\GLOBAL??\\Ramdisk{GUID}). The ramdisk driver
+     * creates such a link on successful device creation.
+     */
+    /* GLOBAL?? directory scanning removed in favor of device interfaces. */
 
     if (!NT_SUCCESS(Status) && RamdiskBoot && RamdiskCandidatePresent)
     {
@@ -447,6 +606,22 @@ IopCreateArcNames(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
          * even if it didn't find boot device.
          * It won't reset boot device finding status as well.
          */
+    }
+
+    /* For ramdisk boots, establish the ARC alias early and skip disk/CD enumeration */
+    if (RamdiskBoot)
+    {
+        NTSTATUS EarlyMap = IopCreateArcBootAliasFallback(LoaderBlock, TRUE);
+        if (NT_SUCCESS(EarlyMap))
+        {
+            ARC_TRACE("CreateArcNames: ramdisk early mapping established; skipping disk/CD enumeration\n");
+            return STATUS_SUCCESS;
+        }
+        else
+        {
+            ARC_WARN("CreateArcNames: ramdisk early mapping failed 0x%08lx; continuing with legacy enumeration\n",
+                     EarlyMap);
+        }
     }
 
     /* Loop every disk and try to find boot disk */
