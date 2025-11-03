@@ -1924,16 +1924,55 @@ RamdiskCreateDiskDevice(IN PRAMDISK_BUS_EXTENSION DeviceExtension,
                                MasterBootRecord->Magic);
                 }
 
-                if ((PartitionType == PARTITION_ISO9660) &&
+                                if ((PartitionType == PARTITION_ISO9660) &&
                     !DriveExtension->DiskOptions.ExportAsCd)
                 {
-                    DbgPrintEx(DPFLTR_DEFAULT_ID,
-                               DPFLTR_ERROR_LEVEL,
-                               "RamdiskCreateDiskDevice: detected 0x96 El-Torito partition -> exporting as CD (startLba=%I64u len=%lu)\n",
-                               PartitionStartLba,
-                               PartitionSectorCount);
-                    DriveExtension->DiskOptions.ExportAsCd = TRUE;
-                    Input->Options.ExportAsCd = TRUE;
+                    /* Probe for a true ISO9660 volume by checking for the
+                     * Primary Volume Descriptor signature "CD001" at LBA 16.
+                     * If not present, avoid forcing ExportAsCd=TRUE so FAT-based
+                     * live images with a nonstandard type aren't misclassified. */
+                    BOOLEAN IsIso = FALSE;
+                    ULONGLONG ProbeOffset = (ULONGLONG)PartitionStartLba * 512ULL + (ULONGLONG)16 * 2048ULL;
+                    SIZE_T ProbeSpan = 0;
+                    PVOID ProbeBase = RamdiskMapPages(DriveExtension,
+                                                     *(PLARGE_INTEGER)&ProbeOffset,
+                                                     2048,
+                                                     &BytesRead,
+                                                     &ProbeSpan);
+                    if (ProbeBase && BytesRead >= 6)
+                    {
+                        const UCHAR *p = (const UCHAR *)ProbeBase;
+                        if (p[1] == 'C' && p[2] == 'D' && p[3] == '0' && p[4] == '0' && p[5] == '1')
+                        {
+                            IsIso = TRUE;
+                        }
+                    }
+                    if (ProbeBase)
+                    {
+                        RamdiskUnmapPages(DriveExtension,
+                                          ProbeBase,
+                                          *(PLARGE_INTEGER)&ProbeOffset,
+                                          ProbeSpan);
+                    }
+
+                    if (IsIso)
+                    {
+                        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                                   DPFLTR_ERROR_LEVEL,
+                                   "RamdiskCreateDiskDevice: detected El-Torito ISO9660 (0x96) -> exporting as CD (startLba=%I64u len=%lu)
+",
+                                   PartitionStartLba,
+                                   PartitionSectorCount);
+                        DriveExtension->DiskOptions.ExportAsCd = TRUE;
+                        Input->Options.ExportAsCd = TRUE;
+                    }
+                    else
+                    {
+                        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                                   DPFLTR_ERROR_LEVEL,
+                                   "RamdiskCreateDiskDevice: 0x96 partition does not look like ISO (no CD001 at LBA16); keeping disk semantics
+");
+                    }
                 }
 
                 if (PartitionStartLba != 0)
