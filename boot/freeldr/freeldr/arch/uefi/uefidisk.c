@@ -352,6 +352,19 @@ UefiGetBootPartitionEntry(
     if (!HasEntry && HaveDevicePathInfo && DevicePathStartLba != 0)
     {
         TRACE("UefiGetBootPartitionEntry: searching by start LBA %I64u\n", DevicePathStartLba);
+
+        /* Obtain device block size for proper LBA unit conversion */
+        EFI_BLOCK_IO* QueryBlockIo = NULL;
+        ULONG QueryBlockSize = 512;
+        do {
+            ULONG RootIndex = InternalUefiDisk[(DriveNumber >= FIRST_BIOS_DISK) ? (DriveNumber - FIRST_BIOS_DISK) : 0].UefiRootNumber;
+            EFI_HANDLE H = handles[RootIndex];
+            if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(H, &bioGuid, (void**)&QueryBlockIo)) &&
+                QueryBlockIo && QueryBlockIo->Media && QueryBlockIo->Media->BlockSize)
+            {
+                QueryBlockSize = QueryBlockIo->Media->BlockSize;
+            }
+        } while (0);
         for (ULONG idx = FIRST_PARTITION; idx < FIRST_PARTITION + MAX_PARTITION_SEARCH; ++idx)
         {
             PARTITION_TABLE_ENTRY SearchEntry;
@@ -366,7 +379,9 @@ UefiGetBootPartitionEntry(
                 continue;
             }
 
-            if (SearchEntry.SectorCountBeforePartition == DevicePathStartLba)
+            /* Convert 512-byte based MBR/GPT LBAs to device logical blocks */
+            ULONGLONG SearchStartLbaDev = ((ULONGLONG)SearchEntry.SectorCountBeforePartition * 512ULL) / (ULONGLONG)max(1u, QueryBlockSize);
+            if (SearchStartLbaDev == DevicePathStartLba)
             {
                 RtlCopyMemory(TargetEntry, &SearchEntry, sizeof(*TargetEntry));
                 PartitionNum = idx;
@@ -541,8 +556,22 @@ UefiDiskOpen(CHAR *Path, OPENMODE OpenMode, ULONG *FileId)
             if (!DiskGetPartitionEntry(DriveNumber, DrivePartition, &PartitionTableEntry))
                 return EINVAL;
 
+            /*
+             * MBR/GPT partition LBAs are expressed in 512-byte sectors.
+             * Convert them to the current device's Block I/O sector size
+             * so that subsequent reads using BlockIo are correctly aligned.
+             */
             SectorOffset = PartitionTableEntry.SectorCountBeforePartition;
             SectorCount = PartitionTableEntry.PartitionSectorCount;
+
+            if (SectorSize != 0 && SectorSize != 512)
+            {
+                ULONGLONG offsetBytes = (ULONGLONG)SectorOffset * 512ULL;
+                ULONGLONG countBytes  = (ULONGLONG)SectorCount * 512ULL;
+
+                SectorOffset = (ULONGLONG)(offsetBytes / SectorSize);
+                SectorCount  = (ULONGLONG)(countBytes  / SectorSize);
+            }
         }
         else
         {

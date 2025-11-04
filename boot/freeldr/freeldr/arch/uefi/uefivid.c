@@ -113,7 +113,7 @@ UefiVideoConfigureFramebufferCache(VOID)
         TRACE("UEFI GOP: Failed to set framebuffer WC attributes (Status %lx)\n",
               Status);
 
-        /* Try a write-back fallback for any failure code */
+        if (Status == EFI_UNSUPPORTED || Status == EFI_ACCESS_DENIED)
         {
             EFI_STATUS FallbackStatus;
 
