@@ -25,6 +25,14 @@ if(NOT REACTOS_MULTILIB_I386)
         COMMAND ${CMAKE_RANLIB} $<TARGET_FILE:libmsvcrt>
         COMMAND_EXPAND_LISTS
         COMMENT "Appending CRT startup objects to libmsvcrt")
+else()
+    # Keep the import library pure when building multilib i386, but still
+    # provide CRT startup entry points by archiving the msvcrtex objects
+    # separately and linking them automatically.
+    add_library(msvcrt_multilib_startup STATIC $<TARGET_OBJECTS:msvcrtex>)
+    add_dependencies(msvcrt_multilib_startup msvcrtex)
+    target_link_libraries(msvcrt_multilib_startup PRIVATE oldnames)
+    target_link_libraries(libmsvcrt INTERFACE msvcrt_multilib_startup)
 endif()
 
 # Embed RTC libs when available for stack protector support.

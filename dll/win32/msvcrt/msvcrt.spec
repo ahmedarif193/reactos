@@ -1008,6 +1008,7 @@
 @ cdecl _strdate(ptr)
 @ cdecl -version=0x600+ _strdate_s(ptr long)
 @ cdecl _strdup(str)
+@ cdecl strdup(str) _strdup
 @ stub -version=0x600+ _strdup_dbg
 @ cdecl _strerror(long)
 @ cdecl -version=0x600+ _strerror_s(ptr long str)
