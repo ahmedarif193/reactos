@@ -44,10 +44,10 @@ HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.BitsPer
 AddService = uefifb, 0x00000002, UefiFb_Service
 
 [UefiFb_Service]
-ServiceType   = 1
-StartType     = 3
-ErrorControl  = 0
-ServiceBinary = %12%\uefifb.sys
+ServiceType    = 1           ; SERVICE_KERNEL_DRIVER
+StartType      = 0           ; Boot start: ensure miniport is available early
+ErrorControl   = 1           ; Normal error handling
+ServiceBinary  = %12%\uefifb.sys
 LoadOrderGroup = Video
 
 [Strings]

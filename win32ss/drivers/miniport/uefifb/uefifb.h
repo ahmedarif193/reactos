@@ -48,6 +48,7 @@ typedef struct _UEFIFB_DEVICE_EXTENSION
     PVOID MappedFrameBuffer;
     ULONG MappedLength;
     BOOLEAN ModeSet;
+    VIDEO_ACCESS_RANGE AccessRanges[1];
 } UEFIFB_DEVICE_EXTENSION, *PUEFIFB_DEVICE_EXTENSION;
 
 BOOLEAN

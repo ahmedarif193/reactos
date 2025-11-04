@@ -96,14 +96,15 @@ static BOOLEAN
 UefiFbBuildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
 {
     ULONG count = 0, i, built = 0;
+    BOOLEAN addedFallback = FALSE;
     LOADER_PARAMETER_FRAMEBUFFER fb;
 
-    /* Query mode count (stub returns 1 for now) */
+    /* Query mode count (stub returns 1 for now). Reserve extra slot for a fallback mode. */
     if (!InbvQueryGopModeCount(&count) || count == 0)
         count = 1;
 
     DevExt->ModeTable = (PVIDEO_MODE_INFORMATION)
-        VideoPortAllocatePool(DevExt, 0, sizeof(VIDEO_MODE_INFORMATION) * count, 'bfEU');
+        VideoPortAllocatePool(DevExt, 0, sizeof(VIDEO_MODE_INFORMATION) * (count + 1), 'bfEU');
     if (!DevExt->ModeTable)
         return FALSE;
 
@@ -122,6 +123,40 @@ UefiFbBuildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
 
     /* Restore current FB info */
     InbvGetGopFrameBufferInfo(&DevExt->FrameBufferInfo);
+
+    /* Ensure a conservative 800x600x32 fallback mode exists in the table. */
+    if (built > 0)
+    {
+        BOOLEAN have800x600x32 = FALSE;
+        for (i = 0; i < built; ++i)
+        {
+            if (DevExt->ModeTable[i].VisScreenWidth == 800 &&
+                DevExt->ModeTable[i].VisScreenHeight == 600 &&
+                (DevExt->ModeTable[i].BitsPerPlane * DevExt->ModeTable[i].NumberOfPlanes) == 32)
+            {
+                have800x600x32 = TRUE;
+                break;
+            }
+        }
+
+        if (!have800x600x32)
+        {
+            LOADER_PARAMETER_FRAMEBUFFER fbFallback = DevExt->FrameBufferInfo;
+            fbFallback.HorizontalResolution = 800;
+            fbFallback.VerticalResolution = 600;
+            fbFallback.PixelsPerScanLine = 800;
+            DevExt->FrameBufferInfo = fbFallback;
+            if (UefiFbPopulateModeInformation(DevExt))
+            {
+                VideoPortMoveMemory(&DevExt->ModeTable[built], &DevExt->ModeInfo, sizeof(VIDEO_MODE_INFORMATION));
+                DevExt->ModeTable[built].ModeIndex = built;
+                built++;
+                addedFallback = TRUE;
+            }
+            /* Restore the original current FB info */
+            InbvGetGopFrameBufferInfo(&DevExt->FrameBufferInfo);
+        }
+    }
 
     DevExt->ModeCount = (built != 0) ? built : 1;
     DevExt->CurrentModeIndex = 0;
@@ -146,7 +181,23 @@ UefiFbSetCurrentMode(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
         return TRUE;
     }
 
-    /* Try firmware mode switch via INBV */
+    /*
+     * UEFI linear-only: accept requested mode as a logical mode without
+     * performing a firmware mode switch. The framebuffer mapping stays
+     * valid; only ModeInfo and CurrentModeIndex change.
+     */
+    if (DevExt->ModeTable && RequestedMode < DevExt->ModeCount)
+    {
+        VideoPortMoveMemory(&DevExt->ModeInfo,
+                            &DevExt->ModeTable[RequestedMode],
+                            sizeof(VIDEO_MODE_INFORMATION));
+        DevExt->CurrentModeIndex = RequestedMode;
+        DevExt->ModeSet = TRUE;
+        StatusBlock->Status = NO_ERROR;
+        return TRUE;
+    }
+
+    /* Try firmware mode switch via INBV (not currently supported) */
     if (InbvSetGopMode(RequestedMode))
     {
         /* Tear down any existing mapping (we are at PASSIVE_LEVEL here) */
@@ -287,6 +338,32 @@ UefiFbMapVideoMemory(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
         StatusBlock->Status = Status;
         return FALSE;
     }
+
+#if defined(_M_AMD64)
+    /* Sanity: Ensure we got a kernel-space canonical VA, not a low VA/PA. */
+    if ((ULONG_PTR)MapInfo->VideoRamBase < 0x0000800000000000ULL)
+    {
+        /* Retry without P6CACHE attribute; some firmware/MMIO quirks */
+        (void)VideoPortUnmapMemory(DevExt, MapInfo->VideoRamBase, NULL);
+        MapInfo->VideoRamBase = RequestedAddress->RequestedVirtualAddress;
+        MapInfo->VideoRamLength = Length;
+        InIoSpace = VIDEO_MEMORY_SPACE_MEMORY; /* drop P6 cache flag */
+        Status = VideoPortMapMemory(DevExt,
+                                    PhysicalAddress,
+                                    &MapInfo->VideoRamLength,
+                                    &InIoSpace,
+                                    &MapInfo->VideoRamBase);
+        if (Status != NO_ERROR || (ULONG_PTR)MapInfo->VideoRamBase < 0x0000800000000000ULL)
+        {
+            VideoPortDebugPrint(0,
+                                "UEFIFB: MapMemory returned low VA (%p), status=%lu; aborting map\n",
+                                MapInfo->VideoRamBase,
+                                (unsigned long)Status);
+            StatusBlock->Status = (Status != NO_ERROR) ? Status : ERROR_INVALID_PARAMETER;
+            return FALSE;
+        }
+    }
+#endif
 
     DevExt->MappedFrameBuffer = MapInfo->VideoRamBase;
     DevExt->MappedLength = MapInfo->VideoRamLength;
