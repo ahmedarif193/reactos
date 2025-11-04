@@ -774,7 +774,12 @@ else()
     set(GXX_EXECUTABLE ${CMAKE_CXX_COMPILER})
 endif()
 
-execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libwinpthread.a OUTPUT_VARIABLE LIBWINPTHREAD_LOCATION)
+set(GXX_MULTIARCH_ARGS)
+if(ARCH STREQUAL "i386")
+    set(GXX_MULTIARCH_ARGS -m32)
+endif()
+
+execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libwinpthread.a OUTPUT_VARIABLE LIBWINPTHREAD_LOCATION)
 if(LIBWINPTHREAD_LOCATION MATCHES "mingw32")
     add_library(libwinpthread STATIC IMPORTED)
     string(STRIP ${LIBWINPTHREAD_LOCATION} LIBWINPTHREAD_LOCATION)
@@ -787,21 +792,21 @@ else()
 endif()
 
 add_library(libgcc STATIC IMPORTED)
-execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libgcc.a OUTPUT_VARIABLE LIBGCC_LOCATION)
+execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libgcc.a OUTPUT_VARIABLE LIBGCC_LOCATION)
 string(STRIP ${LIBGCC_LOCATION} LIBGCC_LOCATION)
 set_target_properties(libgcc PROPERTIES IMPORTED_LOCATION ${LIBGCC_LOCATION})
 # libgcc needs kernel32 and winpthread (an appropriate CRT must be linked manually)
 target_link_libraries(libgcc INTERFACE libwinpthread libkernel32)
 
 add_library(libsupc++ STATIC IMPORTED GLOBAL)
-execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libsupc++.a OUTPUT_VARIABLE LIBSUPCXX_LOCATION)
+execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libsupc++.a OUTPUT_VARIABLE LIBSUPCXX_LOCATION)
 string(STRIP ${LIBSUPCXX_LOCATION} LIBSUPCXX_LOCATION)
 set_target_properties(libsupc++ PROPERTIES IMPORTED_LOCATION ${LIBSUPCXX_LOCATION})
 
 # Add libgcc_eh for exception handling on amd64
 if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
     add_library(libgcc_eh STATIC IMPORTED GLOBAL)
-    execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libgcc_eh.a OUTPUT_VARIABLE LIBGCCEH_LOCATION)
+    execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libgcc_eh.a OUTPUT_VARIABLE LIBGCCEH_LOCATION)
     string(STRIP ${LIBGCCEH_LOCATION} LIBGCCEH_LOCATION)
     set_target_properties(libgcc_eh PROPERTIES IMPORTED_LOCATION ${LIBGCCEH_LOCATION})
     # libsupc++ requires libgcc_eh, libgcc and stdc++compat
@@ -812,14 +817,14 @@ else()
 endif()
 
 add_library(libmingwex STATIC IMPORTED)
-execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libmingwex.a OUTPUT_VARIABLE LIBMINGWEX_LOCATION)
+execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libmingwex.a OUTPUT_VARIABLE LIBMINGWEX_LOCATION)
 string(STRIP ${LIBMINGWEX_LOCATION} LIBMINGWEX_LOCATION)
 set_target_properties(libmingwex PROPERTIES IMPORTED_LOCATION ${LIBMINGWEX_LOCATION})
 # libmingwex requires a CRT and imports from kernel32
 target_link_libraries(libmingwex INTERFACE libmsvcrt libkernel32)
 
 add_library(libstdc++ STATIC IMPORTED GLOBAL)
-execute_process(COMMAND ${GXX_EXECUTABLE} -print-file-name=libstdc++.a OUTPUT_VARIABLE LIBSTDCCXX_LOCATION)
+execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libstdc++.a OUTPUT_VARIABLE LIBSTDCCXX_LOCATION)
 string(STRIP ${LIBSTDCCXX_LOCATION} LIBSTDCCXX_LOCATION)
 set_target_properties(libstdc++ PROPERTIES IMPORTED_LOCATION ${LIBSTDCCXX_LOCATION})
 # libstdc++ requires libsupc++ and mingwex provided by GCC
