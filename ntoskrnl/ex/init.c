@@ -10,6 +10,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <ntstrsafe.h>
 #include <reactos/buildno.h>
 #include "inbv/logo.h"
 
@@ -94,6 +95,75 @@ BOOLEAN ExCmosClockIsSane = TRUE;
 BOOLEAN ExpRealTimeIsUniversal;
 
 /* FUNCTIONS ****************************************************************/
+
+static __inline BOOLEAN
+ExpCommandLineIsBoundary(CHAR Character)
+{
+    return (Character == ANSI_NULL) ||
+           (Character == ' ') ||
+           (Character == '\t') ||
+           (Character == '\r') ||
+           (Character == '\n') ||
+           (Character == '/') ||
+           (Character == '-') ||
+           (Character == '"') ||
+           (Character == '=');
+}
+
+CODE_SEG("INIT")
+BOOLEAN
+ExpCommandLineHasOption(_In_opt_ PCSTR Options,
+                        _In_ PCSTR Option)
+{
+    SIZE_T OptionLength;
+    const CHAR *Current;
+
+    if ((Options == NULL) || (Option == NULL))
+    {
+        return FALSE;
+    }
+
+    OptionLength = strlen(Option);
+    if (OptionLength == 0)
+    {
+        return FALSE;
+    }
+
+    for (Current = Options; *Current != ANSI_NULL; Current++)
+    {
+        CHAR PreviousCharacter = (Current == Options) ? ' ' : *(Current - 1);
+        SIZE_T Index;
+
+        if (!ExpCommandLineIsBoundary(PreviousCharacter))
+        {
+            continue;
+        }
+
+        for (Index = 0; Index < OptionLength; Index++)
+        {
+            CHAR OptionCharacter = Current[Index];
+
+            if (OptionCharacter == ANSI_NULL)
+            {
+                break;
+            }
+
+            if (RtlUpperChar(OptionCharacter) !=
+                RtlUpperChar(Option[Index]))
+            {
+                break;
+            }
+        }
+
+        if ((Index == OptionLength) &&
+            ExpCommandLineIsBoundary(Current[Index]))
+        {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
 
 CODE_SEG("INIT")
 NTSTATUS
@@ -1072,7 +1142,16 @@ ExpInitializeExecutive(IN ULONG Cpu,
 #endif
 
     /* Setup NT System Root Path */
-    sprintf(Buffer, "C:%s", LoaderBlock->NtBootPathName);
+    Status = RtlStringCbPrintfA(Buffer,
+                                sizeof(Buffer),
+                                "%c:%s%s",
+                                ExpCommandLineHasOption(LoaderBlock->LoadOptions, "MININT") ? 'X' : 'C',
+                                (LoaderBlock->NtBootPathName && (LoaderBlock->NtBootPathName[0] == '\\')) ? "" : "\\",
+                                LoaderBlock->NtBootPathName ? LoaderBlock->NtBootPathName : "");
+    if (!NT_SUCCESS(Status))
+    {
+        KeBugCheckEx(SESSION3_INITIALIZATION_FAILED, Status, 0, 0, 0);
+    }
 
     /* Convert to ANSI_STRING and null-terminate it */
     RtlInitString(&AnsiPath, Buffer);

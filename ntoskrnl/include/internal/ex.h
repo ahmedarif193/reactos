@@ -26,6 +26,13 @@ extern ULONG ExpUnicodeCaseTableDataOffset;
 extern PVOID ExpNlsSectionPointer;
 extern ULONG NtGlobalFlag;
 extern UNICODE_STRING NtSystemRoot;
+
+/* INIT-only; callable while the INIT section is still resident. */
+BOOLEAN
+ExpCommandLineHasOption(
+    _In_opt_ PCSTR Options,
+    _In_ PCSTR Option);
+
 extern ULONG ExpInitializationPhase;
 extern ULONG ExpAltTimeZoneBias;
 extern LIST_ENTRY ExSystemLookasideListHead;

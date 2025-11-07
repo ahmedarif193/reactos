@@ -920,7 +920,7 @@ xHalIoAssignDriveLetters(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
     WCHAR Buffer[50];
     HANDLE FileHandle;
     UCHAR DriveLetter;
-    BOOLEAN SystemFound;
+    BOOLEAN MiniNtBoot, SystemFound;
     IO_STATUS_BLOCK StatusBlock;
     PARTITION_TYPE PartitionType;
     ANSI_STRING StringA1, StringA2;
@@ -1053,27 +1053,98 @@ xHalIoAssignDriveLetters(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
     ExFreePoolWithTag(Buffer1, TAG_FSTUB);
     ExFreePoolWithTag(Buffer2, TAG_FSTUB);
 
-    /* Upcase our load options, if any */
-    if (LoaderBlock->LoadOptions != NULL)
-    {
-        LoadOptions = _strupr(LoaderBlock->LoadOptions);
-    }
-    else
-    {
-        LoadOptions = NULL;
-    }
+    LoadOptions = LoaderBlock->LoadOptions;
+
+    MiniNtBoot = ExpCommandLineHasOption(LoadOptions, "MININT");
 
     /* If we boot with /MININT (system hive as volatile) option, assign X letter to boot device */
-    if (LoadOptions != NULL &&
-        strstr(LoadOptions, "MININT") != 0 &&
-        NT_SUCCESS(RtlAnsiStringToUnicodeString(&StringU1, NtDeviceName, TRUE)))
+    if (MiniNtBoot)
     {
-        if (NT_SUCCESS(HalpSetMountLetter(&StringU1, 'X')))
+        BOOLEAN XAssigned = FALSE;
+
+        if ((NtDeviceName != NULL) &&
+            NT_SUCCESS(RtlAnsiStringToUnicodeString(&StringU1, NtDeviceName, TRUE)))
+        {
+            PWSTR FirstInnerSlash, LastSlash;
+
+            /* Remove any trailing backslashes */
+            while ((StringU1.Length > sizeof(WCHAR)) &&
+                   (StringU1.Buffer[(StringU1.Length / sizeof(WCHAR)) - 1] == L'\\'))
+            {
+                StringU1.Length -= sizeof(WCHAR);
+                StringU1.Buffer[StringU1.Length / sizeof(WCHAR)] = UNICODE_NULL;
+            }
+
+            /* Trim the trailing path component only if it looks like a directory */
+            FirstInnerSlash = wcschr(StringU1.Buffer + 1, L'\\');
+            LastSlash = wcsrchr(StringU1.Buffer + 1, L'\\');
+            if ((LastSlash != NULL) &&
+                (FirstInnerSlash != NULL) &&
+                (LastSlash != FirstInnerSlash))
+            {
+                const UNICODE_STRING PartitionPrefix = RTL_CONSTANT_STRING(L"Partition");
+                const UNICODE_STRING VolumePrefix = RTL_CONSTANT_STRING(L"HarddiskVolume");
+                const UNICODE_STRING CdromPrefix = RTL_CONSTANT_STRING(L"CdRom");
+                const UNICODE_STRING RamdiskName = RTL_CONSTANT_STRING(L"Ramdisk");
+                UNICODE_STRING Leaf;
+                BOOLEAN LooksLikeVolume;
+                USHORT PrefixBytes;
+
+                Leaf.Buffer = LastSlash + 1;
+                PrefixBytes = (USHORT)((Leaf.Buffer - StringU1.Buffer) * sizeof(WCHAR));
+                if (PrefixBytes < StringU1.Length)
+                {
+                    Leaf.Length = StringU1.Length - PrefixBytes;
+                }
+                else
+                {
+                    Leaf.Length = 0;
+                }
+                Leaf.MaximumLength = Leaf.Length;
+
+                LooksLikeVolume =
+                    RtlPrefixUnicodeString(&PartitionPrefix, &Leaf, TRUE) ||
+                    RtlPrefixUnicodeString(&VolumePrefix, &Leaf, TRUE) ||
+                    RtlPrefixUnicodeString(&CdromPrefix, &Leaf, TRUE) ||
+                    RtlEqualUnicodeString(&RamdiskName, &Leaf, TRUE);
+
+                if (!LooksLikeVolume)
+                {
+                    *LastSlash = UNICODE_NULL;
+                    StringU1.Length = (USHORT)((LastSlash - StringU1.Buffer) * sizeof(WCHAR));
+                }
+            }
+
+            Status = HalpSetMountLetter(&StringU1, 'X');
+            if (NT_SUCCESS(Status))
+            {
+                XAssigned = TRUE;
+            }
+            else
+            {
+                UNICODE_STRING DosDeviceX = RTL_CONSTANT_STRING(L"\\DosDevices\\X:");
+
+                IoDeleteSymbolicLink(&DosDeviceX);
+                Status = IoCreateSymbolicLink(&DosDeviceX, &StringU1);
+                if (NT_SUCCESS(Status))
+                {
+                    XAssigned = TRUE;
+                    DPRINT1("xHalIoAssignDriveLetters: manually created X: mapping\n");
+                }
+                else
+                {
+                    DPRINT1("xHalIoAssignDriveLetters: failed to assign X: (%lx)\n",
+                            Status);
+                }
+            }
+
+            RtlFreeUnicodeString(&StringU1);
+        }
+
+        if (XAssigned && (NtSystemPath != NULL))
         {
             *NtSystemPath = 'X';
         }
-
-        RtlFreeUnicodeString(&StringU1);
     }
 
     /* Compute our disks derangements */
@@ -1319,7 +1390,9 @@ xHalIoAssignDriveLetters(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
     }
 
     /* If not remote boot, handle NtDeviceName */
-    if (!IoRemoteBootClient && NT_SUCCESS(RtlAnsiStringToUnicodeString(&StringU1, NtDeviceName, TRUE)))
+    if (!MiniNtBoot &&
+        !IoRemoteBootClient &&
+        NT_SUCCESS(RtlAnsiStringToUnicodeString(&StringU1, NtDeviceName, TRUE)))
     {
         /* Assign it a drive letter */
         DriveLetter = HalpNextDriveLetter(&StringU1, NULL, NULL, TRUE);
