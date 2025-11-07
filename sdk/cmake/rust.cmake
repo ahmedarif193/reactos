@@ -461,13 +461,20 @@ function(ros_add_rust_executable _target)
             endif()
         endif()
 
+        # Choose rsym vs strip at configure time to avoid generator expressions
+        if(_have_rsym)
+            set(_split_cmd ${_RSYM} -s ${REACTOS_SOURCE_DIR} ${_out_exe} ${_out_exe})
+        else()
+            set(_split_cmd ${CMAKE_STRIP} --strip-debug ${_out_exe})
+        endif()
+
         add_custom_command(
             OUTPUT ${_dbg_stamp}
             COMMAND ${CMAKE_COMMAND} -E make_directory ${REACTOS_BINARY_DIR}/symbols
             COMMAND ${CMAKE_STRIP} --only-keep-debug ${_out_exe} -o ${REACTOS_BINARY_DIR}/symbols/${_bin_name}.exe
             COMMAND ${CMAKE_COMMAND} -E echo "split debug for ${_bin_name}" > ${_dbg_stamp}
             COMMAND ${CMAKE_COMMAND} -E rm -f ${_dbg_stamp}
-            COMMAND $<$<BOOL:${_have_rsym}>:${_RSYM}>$<$<NOT:$<BOOL:${_have_rsym}>>:${CMAKE_STRIP}> $<$<BOOL:${_have_rsym}>:-s ${REACTOS_SOURCE_DIR} ${_out_exe} ${_out_exe}>$<$<NOT:$<BOOL:${_have_rsym}>>:--strip-debug ${_out_exe}>
+            COMMAND ${_split_cmd}
             COMMAND ${CMAKE_COMMAND} -E touch ${_dbg_stamp}
             DEPENDS ${_out_exe}
             VERBATIM
