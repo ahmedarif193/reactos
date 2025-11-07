@@ -30,6 +30,9 @@
 
 #include "rsym.h"
 
+/* dbghelp host prototype missing in compat.h */
+BOOL WINAPI SymUnloadModule64(HANDLE hProcess, DWORD64 BaseOfDll);
+
 #define MAX_PATH 260
 #define MAX_SYM_NAME 2000
 
@@ -459,7 +462,7 @@ ConvertCoffs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
 }
 
 struct DbgHelpLineEntry {
-  ULONG vma;
+  ULONG_PTR vma;
   ULONG fileId;
   ULONG functionId;
   ULONG line;
@@ -472,7 +475,7 @@ struct DbgHelpStringTab {
   ULONG LineEntries, CurLineEntries;
   struct DbgHelpLineEntry *LineEntryData;
   void *process;
-  DWORD module_base;
+  ULONG64 module_base;
   char *PathChop;
   char *SourcePath;
   struct DbgHelpLineEntry *lastLineEntry;
@@ -637,7 +640,7 @@ DbgHelpAddLineNumber(PSRCCODEINFO LineInfo, void *UserContext)
 }
 
 static int
-ConvertDbgHelp(void *process, DWORD module_base, char *SourcePath,
+ConvertDbgHelp(void *process, ULONG64 module_base, char *SourcePath,
                ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
                ULONG *StringsLength, void **StringsBase)
 {
@@ -1258,7 +1261,7 @@ int main(int argc, char* argv[])
     void *FileData;
     ULONG RosSymLength;
     void *RosSymSection;
-    DWORD module_base;
+    ULONG64 module_base;
     void *file;
     char elfhdr[4] = { '\177', 'E', 'L', 'F' };
     BOOLEAN UseDbgHelp = FALSE;
@@ -1360,7 +1363,7 @@ int main(int argc, char* argv[])
         SymSetExtendedOption(SYMOPT_EX_WINE_NATIVE_MODULES, TRUE);
         SymInitialize(FileData, ".", 0);
 
-        module_base = SymLoadModule(FileData, file, path1, path1, 0, FileSize) & 0xffffffff;
+        module_base = SymLoadModuleEx(FileData, file, path1, path1, 0, (DWORD)FileSize, NULL, 0);
 
         if (ConvertDbgHelp(FileData,
                            module_base,
@@ -1375,7 +1378,7 @@ int main(int argc, char* argv[])
         }
 
         UseDbgHelp = TRUE;
-        SymUnloadModule(FileData, module_base);
+        SymUnloadModule64(FileData, module_base);
         SymCleanup(FileData);
     }
 

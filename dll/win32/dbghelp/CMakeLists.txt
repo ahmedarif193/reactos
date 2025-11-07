@@ -22,6 +22,8 @@ if(NOT CMAKE_CROSSCOMPILING)
         list(APPEND SOURCE cpu_i386.c)
     elseif(ARCH STREQUAL "amd64")
         list(APPEND SOURCE cpu_i386.c cpu_x86_64.c)
+    elseif(ARCH STREQUAL "arm64")
+        list(APPEND SOURCE cpu_arm64.c)
     endif()
 
     add_library(dbghelphost ${SOURCE})

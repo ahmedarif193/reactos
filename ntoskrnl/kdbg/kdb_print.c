@@ -14,6 +14,7 @@
 /* FUNCTIONS *****************************************************************/
 
 static KD_CONTEXT KdbgKdContext;
+static ULONGLONG KdbgPerfFrequency;
 
 #undef KdSendPacket
 #define pKdSendPacket KdSendPacket
@@ -164,14 +165,37 @@ KdbPrintf(
     va_list ap;
     SIZE_T Length;
     CHAR Buffer[1024];
+    CHAR *Out = Buffer;
+    SIZE_T Capacity = sizeof(Buffer);
+
+    /* Lazy-init performance counter frequency */
+    if (KdbgPerfFrequency == 0)
+    {
+        LARGE_INTEGER Freq;
+        (void)KeQueryPerformanceCounter(&Freq);
+        KdbgPerfFrequency = (Freq.QuadPart != 0) ? (ULONGLONG)Freq.QuadPart : 1ULL;
+    }
+
+    /* Prepend timestamp in seconds.microseconds */
+    {
+        LARGE_INTEGER Now = KeQueryPerformanceCounter(NULL);
+        ULONGLONG usec = (ULONGLONG)((Now.QuadPart * 1000000ULL) / KdbgPerfFrequency);
+        ULONGLONG secs = usec / 1000000ULL;
+        ULONGLONG micros = usec % 1000000ULL;
+        int n = _snprintf(Out, (int)Capacity, "[%10I64u.%06I64u] ", secs, micros);
+        if (n < 0) n = 0;
+        if ((SIZE_T)n > Capacity) n = (int)Capacity;
+        Out += n;
+        Capacity -= n;
+    }
 
     /* Format the string */
     va_start(ap, Format);
-    Length = _vsnprintf(Buffer,
-                        sizeof(Buffer),
+    Length = _vsnprintf(Out,
+                        Capacity,
                         Format,
                         ap);
-    Length = min(Length, MAXUSHORT - sizeof(ANSI_NULL));
+    Length = min(Length + (Out - Buffer), MAXUSHORT - sizeof(ANSI_NULL));
     va_end(ap);
 
     /* Send it to the debugger directly */

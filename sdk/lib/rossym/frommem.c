@@ -57,6 +57,7 @@ RosSymCreateFromMem(PVOID ImageStart, ULONG_PTR ImageSize, PROSSYM_INFO *RosSymI
       if (0 == memcmp(SectionName, SectionHeader->Name, IMAGE_SIZEOF_SHORT_NAME))
         {
           RosSymSectionFound = TRUE;
+          /* Section located */
           break;
         }
       SectionHeader++;
@@ -83,8 +84,11 @@ RosSymCreateFromMem(PVOID ImageStart, ULONG_PTR ImageSize, PROSSYM_INFO *RosSymI
   }
 
   /* Load it */
+  /* The image in memory is laid out by VirtualAddress/VirtualSize. Use VirtualSize
+     for the section length when reading from memory (not SizeOfRawData, which is file data). */
+  /* Consume .rossym from in-memory image layout */
   return RosSymCreateFromRaw((char *) ImageStart + SectionHeader->VirtualAddress,
-                             SectionHeader->SizeOfRawData, RosSymInfo);
+                             SectionHeader->Misc.VirtualSize, RosSymInfo);
 }
 
 /* EOF */

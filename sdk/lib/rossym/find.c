@@ -130,6 +130,35 @@ RosSymGetAddressInformation(PROSSYM_INFO RosSymInfo,
         {
           Name = (PCHAR) RosSymInfo->Strings + RosSymEntry->FileOffset;
         }
+      else
+        {
+          /* Prefer the nearest previous entry carrying a file name */
+          PROSSYM_ENTRY Prev = RosSymEntry;
+          while (Prev > RosSymInfo->Symbols)
+            {
+              Prev--;
+              if (Prev->FileOffset != 0)
+                {
+                  Name = (PCHAR) RosSymInfo->Strings + Prev->FileOffset;
+                  break;
+                }
+            }
+          /* If still empty, try forward among same-address ties */
+          if (*Name == '\0')
+            {
+              PROSSYM_ENTRY Next = RosSymEntry + 1;
+              PROSSYM_ENTRY End = RosSymInfo->Symbols + RosSymInfo->SymbolsCount;
+              while (Next < End && Next->Address == RosSymEntry->Address)
+                {
+                  if (Next->FileOffset != 0)
+                    {
+                      Name = (PCHAR) RosSymInfo->Strings + Next->FileOffset;
+                      break;
+                    }
+                  ++Next;
+                }
+            }
+        }
       strcpy(FileName, Name);
     }
   if (FunctionName != NULL)
@@ -138,6 +167,35 @@ RosSymGetAddressInformation(PROSSYM_INFO RosSymInfo,
       if (RosSymEntry->FunctionOffset != 0)
         {
           Name = (PCHAR) RosSymInfo->Strings + RosSymEntry->FunctionOffset;
+        }
+      else
+        {
+          /* Prefer the nearest previous entry carrying a function name */
+          PROSSYM_ENTRY Prev = RosSymEntry;
+          while (Prev > RosSymInfo->Symbols)
+            {
+              Prev--;
+              if (Prev->FunctionOffset != 0)
+                {
+                  Name = (PCHAR) RosSymInfo->Strings + Prev->FunctionOffset;
+                  break;
+                }
+            }
+          /* If still empty, try forward among same-address ties */
+          if (*Name == '\0')
+            {
+              PROSSYM_ENTRY Next = RosSymEntry + 1;
+              PROSSYM_ENTRY End = RosSymInfo->Symbols + RosSymInfo->SymbolsCount;
+              while (Next < End && Next->Address == RosSymEntry->Address)
+                {
+                  if (Next->FunctionOffset != 0)
+                    {
+                      Name = (PCHAR) RosSymInfo->Strings + Next->FunctionOffset;
+                      break;
+                    }
+                  ++Next;
+                }
+            }
         }
       strcpy(FunctionName, Name);
     }

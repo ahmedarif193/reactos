@@ -176,8 +176,8 @@ KdbSymPrintAddress(
                                         FileName,
                                         FunctionName))
         {
-            KdbPrintf("<%s:%x (%s:%d (%s))>",
-                      ModuleNameAnsi, RelativeAddress,
+            KdbPrintf("<%s:%Ix (%s:%d (%s))>",
+                      ModuleNameAnsi, (SIZE_T)RelativeAddress,
                       FileName, LineNumber, FunctionName);
             Printed = TRUE;
         }
@@ -186,7 +186,7 @@ KdbSymPrintAddress(
     if (!Printed)
     {
         /* Just print module & address */
-        KdbPrintf("<%s:%x>", ModuleNameAnsi, RelativeAddress);
+        KdbPrintf("<%s:%Ix>", ModuleNameAnsi, (SIZE_T)RelativeAddress);
     }
 
     return TRUE;
@@ -315,7 +315,22 @@ KdbSymProcessSymbols(
 
     if (RosSymCreateFromMem(LdrEntry->DllBase, LdrEntry->SizeOfImage, (PROSSYM_INFO*)&LdrEntry->PatchInformation))
     {
+        CHAR ModuleNameAnsi[64];
+        KdbpSymUnicodeToAnsi(&LdrEntry->BaseDllName, ModuleNameAnsi, sizeof(ModuleNameAnsi));
+        DPRINT1("KdbSymProcessSymbols: loaded rossym from memory for %s (Base=%p Size=%Ix)\n",
+                ModuleNameAnsi,
+                LdrEntry->DllBase,
+                (SIZE_T)LdrEntry->SizeOfImage);
         return;
+    }
+    else
+    {
+        CHAR ModuleNameAnsi[64];
+        KdbpSymUnicodeToAnsi(&LdrEntry->BaseDllName, ModuleNameAnsi, sizeof(ModuleNameAnsi));
+        DPRINT1("KdbSymProcessSymbols: rossym from memory failed for %s (Base=%p Size=%Ix), queueing file load\n",
+                ModuleNameAnsi,
+                LdrEntry->DllBase,
+                (SIZE_T)LdrEntry->SizeOfImage);
     }
 
     /* Add a ref until we really process it */
@@ -355,10 +370,8 @@ KdbSymInit(
         SHORT Found = FALSE;
         CHAR YesNo;
 
-        /* By default, load symbols in DBG builds, but not in REL builds
-           or anything other than x86, because they only work on x86
-           and can cause the system to hang on x64. */
-#if DBG && defined(_M_IX86)
+        /* By default, load symbols in DBG builds on x86 and x64. */
+#if DBG && (defined(_M_IX86) || defined(_M_AMD64) || defined(_AMD64_) || defined(__x86_64__))
         LoadSymbols = TRUE;
 #else
         LoadSymbols = FALSE;

@@ -13,45 +13,46 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 #include "rsym.h"
 
 /* Assume if an offset > ABS_TRESHOLD, then it must be absolute */
-#define ABS_TRESHOLD    0x00400000L
+#define ABS_TRESHOLD    0x00400000ULL
 
-size_t fixup_offset ( size_t ImageBase, size_t offset )
+static uint64_t fixup_offset ( uint64_t ImageBase, uint64_t offset )
 {
-	if (offset > ABS_TRESHOLD)
-		offset -= ImageBase;
+    if (offset > ABS_TRESHOLD)
+        offset -= ImageBase;
 
-	return offset;
+    return offset;
 }
 
-long
-my_atoi ( const char* a )
+static uint64_t
+my_atou64 ( const char* a )
 {
-	int i = 0;
-	const char* fmt = "%x";
+    uint64_t val = 0;
+    const char* fmt = "%llx";
 
-	if ( *a == '0' )
-	{
-		switch ( *++a )
-		{
-		case 'x':
-			fmt = "%x";
-			++a;
-			break;
-		case 'd':
-			fmt = "%d";
-			++a;
-			break;
-		default:
-			fmt = "%o";
-			break;
-		}
-	}
-	sscanf ( a, fmt, &i );
-	return i;
+    if ( *a == '0' )
+    {
+        switch ( *++a )
+        {
+        case 'x':
+            fmt = "%llx";
+            ++a;
+            break;
+        case 'd':
+            fmt = "%lld";
+            ++a;
+            break;
+        default:
+            fmt = "%llo";
+            break;
+        }
+    }
+    sscanf ( a, fmt, &val );
+    return val;
 }
 
 PIMAGE_SECTION_HEADER
@@ -69,14 +70,14 @@ find_rossym_section ( PIMAGE_FILE_HEADER PEFileHeader,
 
 int
 find_and_print_offset (
-	void* data,
-	size_t offset )
+    void* data,
+    uint64_t offset )
 {
-	PSYMBOLFILE_HEADER RosSymHeader = (PSYMBOLFILE_HEADER)data;
-	PROSSYM_ENTRY Entries = (PROSSYM_ENTRY)((char*)data + RosSymHeader->SymbolsOffset);
-	char* Strings = (char*)data + RosSymHeader->StringsOffset;
-	size_t symbols = RosSymHeader->SymbolsLength / sizeof(ROSSYM_ENTRY);
-	size_t i;
+    PSYMBOLFILE_HEADER RosSymHeader = (PSYMBOLFILE_HEADER)data;
+    PROSSYM_ENTRY Entries = (PROSSYM_ENTRY)((char*)data + RosSymHeader->SymbolsOffset);
+    char* Strings = (char*)data + RosSymHeader->StringsOffset;
+    size_t symbols = RosSymHeader->SymbolsLength / sizeof(ROSSYM_ENTRY);
+    size_t i;
 
 	//if ( RosSymHeader->SymbolsOffset )
 
@@ -101,15 +102,15 @@ find_and_print_offset (
 }
 
 int
-process_data ( const void* FileData, size_t offset )
+process_data ( const void* FileData, uint64_t offset )
 {
-	PIMAGE_DOS_HEADER PEDosHeader;
-	PIMAGE_FILE_HEADER PEFileHeader;
-	PIMAGE_OPTIONAL_HEADER PEOptHeader;
-	PIMAGE_SECTION_HEADER PESectionHeaders;
-	PIMAGE_SECTION_HEADER PERosSymSectionHeader;
-	size_t ImageBase;
-	int res;
+    PIMAGE_DOS_HEADER PEDosHeader;
+    PIMAGE_FILE_HEADER PEFileHeader;
+    PIMAGE_OPTIONAL_HEADER PEOptHeader;
+    PIMAGE_SECTION_HEADER PESectionHeaders;
+    PIMAGE_SECTION_HEADER PERosSymSectionHeader;
+    uint64_t ImageBase;
+    int res;
 
 	/* Check if MZ header exists  */
 	PEDosHeader = (PIMAGE_DOS_HEADER)FileData;
@@ -123,9 +124,9 @@ process_data ( const void* FileData, size_t offset )
 	/* sizeof(ULONG) = sizeof(MAGIC) */
 	PEFileHeader = (PIMAGE_FILE_HEADER)((char *)FileData + PEDosHeader->e_lfanew + sizeof(ULONG));
 
-	/* Locate optional header */
-	PEOptHeader = (PIMAGE_OPTIONAL_HEADER)(PEFileHeader + 1);
-	ImageBase = PEOptHeader->ImageBase;
+    /* Locate optional header */
+    PEOptHeader = (PIMAGE_OPTIONAL_HEADER)(PEFileHeader + 1);
+    ImageBase = PEOptHeader->ImageBase;
 
 	/* Locate PE section headers  */
 	PESectionHeaders = (PIMAGE_SECTION_HEADER)((char *) PEOptHeader + PEFileHeader->SizeOfOptionalHeader);
@@ -171,9 +172,9 @@ process_file ( const char* file_name, size_t offset )
 
 int main ( int argc, const char** argv )
 {
-	char* path;
-	size_t offset;
-	int res;
+    char* path;
+    uint64_t offset;
+    int res;
 
 	if ( argc != 3 )
 	{
@@ -182,7 +183,7 @@ int main ( int argc, const char** argv )
 	}
 
 	path = convert_path ( argv[1] );
-	offset = my_atoi ( argv[2] );
+    offset = my_atou64 ( argv[2] );
 
 	res = process_file ( path, offset );
 

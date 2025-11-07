@@ -11,13 +11,17 @@ if(NOT DEFINED SEPARATE_DBG)
     set(SEPARATE_DBG FALSE)
 endif()
 
-# Dwarf based builds (no rsym)
+# Dwarf-based builds toggle (no rsym)
+# Expose NO_ROSSYM in the cache so it can be toggled explicitly.
+if(NOT DEFINED NO_ROSSYM)
+    set(NO_ROSSYM OFF CACHE BOOL "Disable rossym (.rossym) generation; rely on DWARF only")
+endif()
+
+# Force-disable rossym in configurations where it is unsupported or undesired.
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    set(NO_ROSSYM TRUE)
+    set(NO_ROSSYM ON CACHE BOOL "Disable rossym (.rossym) generation; rely on DWARF only" FORCE)
 elseif(NOT ARCH STREQUAL "i386" AND NOT ARCH STREQUAL "amd64")
-    set(NO_ROSSYM TRUE)
-elseif(NOT DEFINED NO_ROSSYM)
-    set(NO_ROSSYM FALSE)
+    set(NO_ROSSYM ON CACHE BOOL "Disable rossym (.rossym) generation; rely on DWARF only" FORCE)
 endif()
 
 if(NOT DEFINED USE_PSEH3)
