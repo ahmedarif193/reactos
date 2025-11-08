@@ -110,6 +110,8 @@ typedef struct _VIDEO_PORT_DEVICE_EXTENSTION
    PKINTERRUPT InterruptObject;
    KSPIN_LOCK InterruptSpinLock;
    PCM_RESOURCE_LIST AllocatedResources;
+   PVIDEO_ACCESS_RANGE MiniportAccessRanges;
+   ULONG MiniportAccessRangeCount;
    ULONG InterruptVector;
    ULONG InterruptLevel;
    BOOLEAN InterruptShared;
