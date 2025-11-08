@@ -791,6 +791,50 @@ InbvGetGopFrameBufferInfo(
     return TRUE;
 }
 
+ULONG
+NTAPI
+InbvGetGopFrameBufferCount(VOID)
+{
+    if (InbvGopFramebufferCount)
+    {
+        if (!InbvGopFramebufferList)
+            return 0;
+
+        return InbvGopFramebufferCount;
+    }
+
+    return InbvGopInfoValid ? 1 : 0;
+}
+
+BOOLEAN
+NTAPI
+InbvGetGopFrameBufferInfoByIndex(
+    _In_ ULONG Index,
+    _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo)
+{
+    if (!FrameBufferInfo)
+        return FALSE;
+
+    if (InbvGopFramebufferCount && InbvGopFramebufferList)
+    {
+        if (Index >= InbvGopFramebufferCount)
+            return FALSE;
+
+        RtlCopyMemory(FrameBufferInfo,
+                      &InbvGopFramebufferList[Index],
+                      sizeof(LOADER_PARAMETER_FRAMEBUFFER));
+        return TRUE;
+    }
+
+    if (!InbvGopInfoValid || Index != 0)
+        return FALSE;
+
+    RtlCopyMemory(FrameBufferInfo,
+                  &InbvGopFramebuffer,
+                  sizeof(LOADER_PARAMETER_FRAMEBUFFER));
+    return TRUE;
+}
+
 /*
  * GOP mode enumeration/switching stubs.
  * For now, only a single mode (current firmware mode) is exposed.
