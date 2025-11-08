@@ -651,7 +651,7 @@ public:
             WdfUsbPipeTypeInterrupt,            // UsbdPipeTypeInterrupt
         };
 
-        if (UsbdPipeType < sizeof(types)/sizeof(types[0])) {
+        if (static_cast<ULONG>(UsbdPipeType) < RTL_NUMBER_OF(types)) {
             return types[UsbdPipeType];
         }
         else {

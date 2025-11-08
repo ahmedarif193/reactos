@@ -45,7 +45,7 @@ set_module_type(ucrtbase_apitest win32cui)
 target_link_libraries(ucrtbase_apitest ${PSEH_LIB} chkstk)
 if(NOT MSVC)
     # Add this manually here, so it can link to ucrtbase.dll and vcstartup
-    target_link_libraries(ucrtbase_apitest -lgcc)
+    target_link_libraries(ucrtbase_apitest libgcc)
 endif()
 
 add_importlibs(ucrtbase_apitest ucrtbase kernel32)

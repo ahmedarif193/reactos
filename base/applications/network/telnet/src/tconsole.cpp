@@ -38,7 +38,7 @@
 //            05. Sep.1997  roryt@hol.gr (I.Ioannou)
 //            11.May,1997   roryt@hol.gr
 //            06.April,1997 roryt@hol.gr
-//            30.M„rz.1997  Titus_Boxberg@public.uni-hamburg.de
+//            30.Mrz.1997  Titus_Boxberg@public.uni-hamburg.de
 //		      5.Dec.1996    jbj@nounname.com
 //            Version 2.0
 //            02.Apr.1995	igor.milavec@uni-lj.si
@@ -333,7 +333,7 @@ void TConsole::ReverseOff() {
 }
 
 unsigned long TConsole::WriteText(const char *pszString, unsigned long cbString) {
-	DWORD Result;
+	DWORD Result = 0;
 
 	if(insert_mode) {
 		InsertCharacter(cbString);
@@ -348,7 +348,7 @@ unsigned long TConsole::WriteText(const char *pszString, unsigned long cbString)
 
 // Formerly ConWriteString (Paul Brannan 6/28/98)
 unsigned long TConsole::WriteStringFast(const char* pszString, unsigned long cbString) {
-	DWORD Result;
+	DWORD Result = 0;
 
 	SetConsoleTextAttribute(hConsole, wAttributes);
 

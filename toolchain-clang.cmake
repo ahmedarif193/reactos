@@ -168,12 +168,31 @@ endif()
 message(STATUS "Using linker ${LD_EXECUTABLE}")
 set(CMAKE_LINKER "${LD_EXECUTABLE}" CACHE FILEPATH "Linker executable" FORCE)
 
+set(_CLANG_MINGW_LINKER_FLAG_VARS
+    CMAKE_SHARED_LINKER_FLAGS_INIT
+    CMAKE_MODULE_LINKER_FLAGS_INIT
+    CMAKE_EXE_LINKER_FLAGS_INIT)
+foreach(_clang_flag_var ${_CLANG_MINGW_LINKER_FLAG_VARS})
+    set(${_clang_flag_var} "-nostdlib -Wl,--enable-auto-image-base,--disable-auto-import")
+endforeach()
+
 get_filename_component(_CLANG_MINGW_TOOL_DIR "${LD_EXECUTABLE}" DIRECTORY)
 if(_CLANG_MINGW_TOOL_DIR)
     _clang_mingw_add_hint_dir("${_CLANG_MINGW_TOOL_DIR}")
     list(REMOVE_DUPLICATES _CLANG_MINGW_TOOL_HINT_DIRS)
     _clang_mingw_refresh_hint_args()
 endif()
+if(_CLANG_MINGW_TOOL_DIR)
+    foreach(_clang_flag_var ${_CLANG_MINGW_LINKER_FLAG_VARS})
+        string(APPEND ${_clang_flag_var} " -B\"${_CLANG_MINGW_TOOL_DIR}\"")
+    endforeach()
+endif()
+set(_CLANG_MINGW_FUSE_LD_ARG "${LD_EXECUTABLE}")
+foreach(_clang_flag_var ${_CLANG_MINGW_LINKER_FLAG_VARS})
+    string(APPEND ${_clang_flag_var} " -fuse-ld=\"${_CLANG_MINGW_FUSE_LD_ARG}\"")
+endforeach()
+unset(_CLANG_MINGW_FUSE_LD_ARG)
+unset(_CLANG_MINGW_LINKER_FLAG_VARS)
 
 macro(_clang_mingw_require_tool _out_var _tool_name)
     find_program(${_out_var}
@@ -204,10 +223,6 @@ _clang_mingw_require_tool(_CLANG_MINGW_NM "nm")
 set(CMAKE_NM ${_CLANG_MINGW_NM} CACHE FILEPATH "MinGW nm" FORCE)
 _clang_mingw_require_tool(_CLANG_MINGW_RANLIB "ranlib")
 set(CMAKE_RANLIB ${_CLANG_MINGW_RANLIB} CACHE FILEPATH "MinGW ranlib" FORCE)
-
-set(CMAKE_SHARED_LINKER_FLAGS_INIT "-nostdlib -Wl,--enable-auto-image-base,--disable-auto-import -fuse-ld=${LD_EXECUTABLE}")
-set(CMAKE_MODULE_LINKER_FLAGS_INIT "-nostdlib -Wl,--enable-auto-image-base,--disable-auto-import -fuse-ld=${LD_EXECUTABLE}")
-set(CMAKE_EXE_LINKER_FLAGS_INIT "-nostdlib -Wl,--enable-auto-image-base,--disable-auto-import -fuse-ld=${LD_EXECUTABLE}")
 
 set(CMAKE_USER_MAKE_RULES_OVERRIDE "${CMAKE_CURRENT_LIST_DIR}/overrides-gcc.cmake")
 

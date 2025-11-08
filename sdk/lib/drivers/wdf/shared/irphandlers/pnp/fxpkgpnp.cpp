@@ -1691,7 +1691,8 @@ FxPkgPnp::QueryForCapabilities(
     if (NT_SUCCESS(status)) {
         ULONG states, i;
 
-        ASSERT(caps.DeviceCaps.DeviceWake <= 0xFF && caps.DeviceCaps.SystemWake <= 0xFF);
+        ASSERT(caps.DeviceCaps.DeviceWake <= PowerDeviceMaximum &&
+               caps.DeviceCaps.SystemWake <= PowerSystemMaximum);
 
         m_SystemWake = (BYTE) caps.DeviceCaps.SystemWake;
 
@@ -6491,4 +6492,3 @@ FxPkgPnp::PowerPolicyGetDeviceDeepestDeviceWakeState(
 
     return dxState;
 }
-

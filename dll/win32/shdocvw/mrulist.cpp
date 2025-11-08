@@ -1308,7 +1308,7 @@ public:
     {
         return ::InterlockedIncrement(&m_cRefs);
     }
-    STDMETHODIMP_(ULONG) Release()
+    STDMETHODIMP_(ULONG) Release() override
     {
         if (::InterlockedDecrement(&m_cRefs) == 0)
         {
@@ -1319,8 +1319,8 @@ public:
     }
 
     // IClassFactory methods
-    STDMETHODIMP CreateInstance(IUnknown *pUnkOuter, REFIID riid, void **ppvObject);
-    STDMETHODIMP LockServer(BOOL fLock);
+    STDMETHODIMP CreateInstance(IUnknown *pUnkOuter, REFIID riid, void **ppvObject) override;
+    STDMETHODIMP LockServer(BOOL fLock) override;
 
     static void* operator new(size_t size)
     {

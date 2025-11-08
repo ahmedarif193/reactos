@@ -195,7 +195,7 @@ PnpRootCreateDevice(
     ULONG NextInstance;
     UNICODE_STRING EnumKeyName = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\" REGSTR_PATH_SYSTEMENUM);
     HANDLE EnumHandle, DeviceKeyHandle = NULL, InstanceKeyHandle;
-    RTL_QUERY_REGISTRY_TABLE QueryTable[2];
+    RTL_QUERY_REGISTRY_TABLE QueryTable[2] = {0};
     OBJECT_ATTRIBUTES ObjectAttributes;
 
     DeviceExtension = &PnpRootDOExtension;
@@ -440,7 +440,7 @@ CreateDeviceFromRegistry(
     NTSTATUS Status;
     PPNPROOT_DEVICE Device;
     HANDLE DeviceKeyHandle = NULL;
-    RTL_QUERY_REGISTRY_TABLE QueryTable[4];
+    RTL_QUERY_REGISTRY_TABLE QueryTable[4] = {0};
     BUFFER Buffer1, Buffer2;
 
     /* If the device already exists, there's nothing to do */

@@ -21,7 +21,7 @@ public:
     virtual ~CFavBand();
 
     STDMETHODIMP GetClassID(CLSID *pClassID) override;
-    STDMETHODIMP OnSelectionChanged(_In_ PCIDLIST_ABSOLUTE pidl);
+    STDMETHODIMP OnSelectionChanged(_In_ PCIDLIST_ABSOLUTE pidl) override;
 
     DECLARE_REGISTRY_RESOURCEID(IDR_FAVBAND)
     DECLARE_NOT_AGGREGATABLE(CFavBand)

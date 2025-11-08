@@ -58,7 +58,7 @@ function(add_hal _halname)
     if(MSVC)
         target_link_options(${_halname} PRIVATE /ignore:4216 /SECTION:INIT,ERWD)
     else()
-        target_link_libraries(${_halname} -lgcc)
+        target_link_libraries(${_halname} libgcc)
     endif()
 endfunction()
 
