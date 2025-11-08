@@ -151,5 +151,6 @@
 @ stdcall -arch=x86_64 VideoPortWriteRegisterUshort(ptr long)
 @ stdcall VideoPortZeroDeviceMemory(ptr long) NTOSKRNL.RtlZeroMemory
 @ stdcall VideoPortZeroMemory(ptr long) NTOSKRNL.RtlZeroMemory
+@ stdcall VideoPortCacheAccessRanges(ptr long ptr)
 @ stdcall VpNotifyEaData(ptr ptr)
 @ stdcall WdDdiWatchdogDpcCallback(ptr ptr ptr ptr)
