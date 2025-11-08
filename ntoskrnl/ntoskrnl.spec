@@ -1644,6 +1644,9 @@
 @ cdecl wcstombs()
 @ cdecl wctomb()
 
+@ stdcall InbvGetGopFrameBufferCount()
+@ stdcall InbvGetGopFrameBufferInfoByIndex(long ptr)
+
 # FIXME: check if this is correct
 @ stdcall -arch=arm __dtoi64()
 @ stdcall -arch=arm __dtou64()
