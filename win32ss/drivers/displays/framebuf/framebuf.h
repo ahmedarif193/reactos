@@ -198,6 +198,12 @@ IntInitScreenInfo(
    PGDIINFO pGdiInfo,
    PDEVINFO pDevInfo);
 
+DWORD
+GetAvailableModes(
+   HANDLE hDriver,
+   PVIDEO_MODE_INFORMATION *ModeInfo,
+   DWORD *ModeInfoSize);
+
 BOOL
 IntInitDefaultPalette(
    PPDEV ppdev,
