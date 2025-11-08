@@ -44,6 +44,23 @@ if(DEFINED CMAKE_TOOLCHAIN_FILE)
     set(_i386_toolchain "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}")
 endif()
 
+set(_i386_toolchain_path_args)
+if(DEFINED TOOLCHAIN_PATH AND NOT "${TOOLCHAIN_PATH}" STREQUAL "")
+    list(APPEND _i386_toolchain_path_args "-DTOOLCHAIN_PATH:PATH=${TOOLCHAIN_PATH}")
+endif()
+if(DEFINED TOOLCHAIN_PREFIX AND NOT "${TOOLCHAIN_PREFIX}" STREQUAL "")
+    list(APPEND _i386_toolchain_path_args "-DTOOLCHAIN_PREFIX:STRING=${TOOLCHAIN_PREFIX}")
+endif()
+
+set(_i386_linker_arg)
+if(DEFINED TOOLCHAIN_PATH AND NOT "${TOOLCHAIN_PATH}" STREQUAL "" AND MINGW_TOOLCHAIN_PREFIX MATCHES "^x86_64-w64-mingw32-")
+    set(_i386_multilib_ld "${TOOLCHAIN_PATH}/${MINGW_TOOLCHAIN_PREFIX}ld")
+    if(EXISTS "${_i386_multilib_ld}")
+        list(APPEND _i386_linker_arg "-DCMAKE_LINKER:FILEPATH=${_i386_multilib_ld}")
+    endif()
+    unset(_i386_multilib_ld)
+endif()
+
 # Configure subbuild
 if(NOT TARGET wow64_multilib_i386)
 ExternalProject_Add(wow64_multilib_i386
@@ -62,6 +79,7 @@ ExternalProject_Add(wow64_multilib_i386
         # so an x86_64-w64-mingw32 multilib toolchain can be used to emit i386 code
         -DMINGW_TOOLCHAIN_PREFIX:STRING=${MINGW_TOOLCHAIN_PREFIX}
         -DMINGW_TOOLCHAIN_SUFFIX:STRING=${MINGW_TOOLCHAIN_SUFFIX}
+        ${_i386_toolchain_path_args}
         # Forward explicit tool binaries when available to avoid PATH lookups
         -DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}
         -DCMAKE_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER}
@@ -72,7 +90,7 @@ ExternalProject_Add(wow64_multilib_i386
         -DCMAKE_OBJCOPY:FILEPATH=${CMAKE_OBJCOPY}
         -DCMAKE_OBJDUMP:FILEPATH=${CMAKE_OBJDUMP}
         -DCMAKE_READELF:FILEPATH=${CMAKE_READELF}
-        -DCMAKE_LINKER:FILEPATH=${CMAKE_LINKER}
+        ${_i386_linker_arg}
         -DCMAKE_MC_COMPILER:FILEPATH=${CMAKE_MC_COMPILER}
         -DCMAKE_RC_COMPILER:FILEPATH=${CMAKE_RC_COMPILER}
         -DCMAKE_DLLTOOL:FILEPATH=${CMAKE_DLLTOOL}
@@ -93,4 +111,3 @@ set(WOW64_MULTILIB_SYSROOT "${WOW64_MULTILIB_SUBBUILD_DIR}/reactos" CACHE PATH "
 
 # Convenience target that other packaging targets can depend on
 add_custom_target(wow64_multilib_stage DEPENDS wow64_multilib_i386)
-

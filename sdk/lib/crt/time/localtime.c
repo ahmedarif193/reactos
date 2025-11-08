@@ -11,9 +11,21 @@
 #include "bitsfixup.h"
 
 //fix me: header?
+#ifndef _MAX__TIME64_T
 #define _MAX__TIME64_T     0x793406fffLL     /* number of seconds from
                                                  00:00:00, 01/01/1970 UTC to
                                                  23:59:59. 12/31/3000 UTC */
+#endif
+
+#ifndef _MAX__TIME32_T
+#define _MAX__TIME32_T     0x7fffffffL       /* number of seconds until 2038 */
+#endif
+
+#if defined(_USE_EXPLICIT_32BIT_TIME) || defined(_USE_32BIT_TIME_T)
+#define _CRT_MAX_TIME_T _MAX__TIME32_T
+#else
+#define _CRT_MAX_TIME_T _MAX__TIME64_T
+#endif
 
 errno_t
 localtime_s(struct tm* _tm, const time_t *ptime)
@@ -32,7 +44,7 @@ localtime_s(struct tm* _tm, const time_t *ptime)
     }
 
     /* Validate input */
-    if (*ptime < 0 || *ptime > _MAX__TIME64_T)
+    if (*ptime < 0 || *ptime > _CRT_MAX_TIME_T)
     {
         memset(_tm, 0xFF, sizeof(struct tm));
         _set_errno(EINVAL);

@@ -21,6 +21,7 @@ add_library(wow64cpu MODULE
 
 set_module_type(wow64cpu win32dll UNICODE)
 add_importlibs(wow64cpu msvcrt kernel32 ntdll wow64)
+target_link_libraries(wow64cpu pseh)
 
 # Install to system32 (64-bit DLLs directory)
 # This DLL performs low-level CPU context translation for WOW64

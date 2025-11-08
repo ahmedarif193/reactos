@@ -377,11 +377,18 @@ extern "C" {
 
 #if !defined (RC_INVOKED) && !defined (_INC_WTIME_INL)
 #define _INC_WTIME_INL
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wignored-attributes"
+#endif
 #ifdef _USE_32BIT_TIME_T
 /* Do it like this to be compatible to msvcrt.dll on 32 bit windows XP and before */
 __CRT_INLINE wchar_t *__cdecl _wctime(const time_t *_Time) { return _wctime32(_Time); }
 #else
 __CRT_INLINE wchar_t *__cdecl _wctime(const time_t *_Time) { return _wctime64(_Time); }
+#endif
+#if defined(__clang__)
+#pragma clang diagnostic pop
 #endif
 #endif
 
@@ -398,6 +405,10 @@ __CRT_INLINE wchar_t *__cdecl _wctime(const time_t *_Time) { return _wctime64(_T
  _CRTIMP time_t __cdecl time(time_t *_Time);
 
 #if !defined(RC_INVOKED)  && !defined(_NO_INLINING)  && !defined(_CRTBLD)
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wignored-attributes"
+#endif
 #ifdef _USE_32BIT_TIME_T
 #if 0
 __CRT_INLINE double __cdecl difftime(time_t _Time1,time_t _Time2) { return _difftime32(_Time1,_Time2); }
@@ -418,6 +429,9 @@ __CRT_INLINE errno_t __cdecl localtime_s(struct tm *_Tm,const time_t *_Time) { r
 __CRT_INLINE time_t __cdecl mktime(struct tm *_Tm) { return _mktime64(_Tm); }
 __CRT_INLINE time_t __cdecl _mkgmtime(struct tm *_Tm) { return _mkgmtime64(_Tm); }
 __CRT_INLINE time_t __cdecl time(time_t *_Time) { return _time64(_Time); }
+#endif
+#if defined(__clang__)
+#pragma clang diagnostic pop
 #endif
 #endif
 

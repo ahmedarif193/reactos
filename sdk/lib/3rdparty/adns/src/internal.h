@@ -574,8 +574,8 @@ adns_status adns__findlabel_next(findlabel_state *fls, int *lablen_r, int *labst
  * Do not then call findlabel_next again.
  */
 
-typedef enum {
-  pdf_quoteok= 0x001
+typedef enum parsedomain_flags {
+  pdf_quoteok = 0x001
 } parsedomain_flags;
 
 adns_status adns__parse_domain(adns_state ads, int serv, adns_query qu,

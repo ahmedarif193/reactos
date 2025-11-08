@@ -344,7 +344,8 @@ static adns_status pap_domain(const parseinfo *pai, int *cbyte_io, int max,
   adns_status st;
   char *dm;
 
-  st= adns__parse_domain(pai->qu->ads, pai->serv, pai->qu, &pai->qu->vb, flags,
+  st= adns__parse_domain(pai->qu->ads, pai->serv, pai->qu, &pai->qu->vb,
+			 (adns_queryflags)flags,
 			 pai->dgram,pai->dglen, cbyte_io, max);
   if (st) return st;
   if (!pai->qu->vb.used) return adns_s_invaliddata;

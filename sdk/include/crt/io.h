@@ -474,6 +474,11 @@ _getcwd(
 #include <string.h>
 #endif
 
+  #if defined(__clang__)
+  #pragma clang diagnostic push
+  #pragma clang diagnostic ignored "-Wignored-attributes"
+  #endif
+
   _Check_return_
   __CRT_INLINE
   intptr_t
@@ -511,6 +516,10 @@ _getcwd(
     strncpy(_FindData->name,fd.name,260);
     return ret;
   }
+
+  #if defined(__clang__)
+  #pragma clang diagnostic pop
+  #endif
 
 #endif /* _INTEGRAL_MAX_BITS >= 64 */
 
@@ -937,4 +946,3 @@ static inline int __mingw_access (const char *__fname, int __mode) {
 #include <sec_api/io_s.h>
 
 #endif /* End _IO_H_ */
-

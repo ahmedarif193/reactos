@@ -262,11 +262,19 @@ extern "C" {
 #if !defined(RC_INVOKED)
 
 #ifdef _USE_32BIT_TIME_T
- #define _fstat32 _fstat
- #define _fstat32i64 _fstati64
- #define _fstat64i32 _fstat64
+
+#define _fstat32 _fstat
+#define _fstat32i64 _fstati64
+#define _fstat64i32 _fstat64
+
 #else
- #define _fstat64i32 _fstat
+
+#define _fstat64i32 _fstat
+
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wignored-attributes"
+#endif
   __CRT_INLINE int __cdecl _fstat32(int _FileDes, struct _stat32 *_Stat)
   {
     struct _stat _Stat64;
@@ -301,6 +309,10 @@ extern "C" {
     _Stat->st_ctime = (__time32_t)_Stat64.st_ctime;
     return ret;
   }
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+
 #endif /* _USE_32BIT_TIME_T */
 
 #endif /* !defined(RC_INVOKED) */
@@ -338,6 +350,11 @@ extern "C" {
   _CRTIMP int __cdecl stat(const char *_Filename,struct stat *_Stat);
   _CRTIMP int __cdecl fstat(int _Desc,struct stat *_Stat);
   _CRTIMP int __cdecl wstat(const wchar_t *_Filename,struct stat *_Stat);
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wignored-attributes"
+#endif
+
 __CRT_INLINE int __cdecl fstat(int _Desc,struct stat *_Stat) {
   return _fstat(_Desc,(struct _stat *)_Stat);
 }
@@ -349,6 +366,10 @@ __CRT_INLINE int __cdecl stat(const char *_Filename,struct stat *_Stat) {
 __CRT_INLINE int __cdecl wstat(const wchar_t *_Filename,struct stat *_Stat) {
   return _wstat(_Filename,(struct _stat *)_Stat);
 }
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 #endif
 

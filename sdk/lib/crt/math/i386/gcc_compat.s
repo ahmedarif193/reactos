@@ -16,6 +16,7 @@ PUBLIC ___moddi3
 PUBLIC ___umoddi3
 PUBLIC ___udivmoddi4
 PUBLIC ___divmoddi4
+PUBLIC __alloca
 
 /* Triple underscores survive the GAS MASM preprocessor and still
  * map to the two-underscore exports expected by msvcrt/msvcrtex. */
@@ -26,6 +27,7 @@ EXTERN __allrem:PROC
 EXTERN __aullrem:PROC
 EXTERN __aulldvrm:PROC
 EXTERN __alldvrm:PROC
+EXTERN __alloca_probe:PROC
 
 .code
 
@@ -123,5 +125,11 @@ ___divmoddi4:
     pop esi
     pop ebx
     ret
+
+/*
+ * __alloca - MS-compatible alloca thunk used by Clang in some builds.
+ */
+__alloca:
+    jmp __alloca_probe
 
 END

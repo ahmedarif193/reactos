@@ -4706,7 +4706,7 @@ ConDrvVtWriteConsole(PCONSOLE Console,
                         TerminatorLen = 1;
                         break;
                     }
-                    if (C == L'\u001b' && (SearchPos + 1) < Length && Buffer[SearchPos + 1] == L'\\')
+                    if (C == L'\x1b' && (SearchPos + 1) < Length && Buffer[SearchPos + 1] == L'\\')
                     {
                         TerminatorLen = 2;
                         break;
@@ -4752,7 +4752,7 @@ ConDrvVtWriteConsole(PCONSOLE Console,
                 while (SearchPos < Length)
                 {
                     WCHAR C = Buffer[SearchPos];
-                    if (C == L'\u001b' && (SearchPos + 1) < Length && Buffer[SearchPos + 1] == L'\\')
+                    if (C == L'\x1b' && (SearchPos + 1) < Length && Buffer[SearchPos + 1] == L'\\')
                     {
                         TerminatorLen = 2;
                         break;
