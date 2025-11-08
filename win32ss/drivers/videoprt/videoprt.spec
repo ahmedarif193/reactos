@@ -106,6 +106,7 @@
 @ stdcall VideoPortReleaseSpinLockFromDpcLevel(ptr ptr)
 @ stdcall VideoPortScanRom(ptr ptr long ptr)
 @ stdcall VideoPortSetBusData(ptr long long ptr long long)
+@ stdcall VideoPortSetAccessRanges(ptr long ptr)
 @ stdcall VideoPortSetBytesUsed(ptr ptr long)
 @ stdcall VideoPortSetDmaContext(ptr ptr ptr)
 @ stdcall VideoPortSetEvent(ptr ptr)
