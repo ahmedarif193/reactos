@@ -49,8 +49,6 @@ MmUnmapIoSpace(
     PVOID BaseAddress,
     SIZE_T NumberOfBytes);
 
-#define UEFIFB_MODE_INDEX 0
-
 /* ------------------------------------------------------------------------- */
 /* Synthetic EDID block (harmless; helps user-mode pick sane defaults)       */
 /* ------------------------------------------------------------------------- */
@@ -256,6 +254,44 @@ UefiFbTableHasMode(_In_reads_(Count) PVIDEO_MODE_INFORMATION Table,
     return FALSE;
 }
 
+static VOID
+UefiFbSelectPreferredMode(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
+{
+    ULONG preferred = InbvGetGopPreferredMode();
+    LOADER_PARAMETER_FRAMEBUFFER fb;
+    ULONG desiredBpp;
+    ULONG i;
+    ULONG gopCount;
+
+    if (preferred == MAXULONG || DevExt->ModeCount == 0 || DevExt->ModeTable == NULL)
+        return;
+
+    if (!InbvQueryGopModeCount(&gopCount) || preferred >= gopCount)
+        return;
+
+    if (!InbvQueryGopModeInfo(preferred, &fb))
+        return;
+
+    if (!UefiFbGetFramebufferBitsPerPixel(&fb, &desiredBpp))
+        return;
+
+    for (i = 0; i < DevExt->ModeCount; ++i)
+    {
+        PVIDEO_MODE_INFORMATION mode = &DevExt->ModeTable[i];
+        ULONG modeBpp = mode->BitsPerPlane * mode->NumberOfPlanes;
+        if (modeBpp == 0)
+            modeBpp = mode->BitsPerPlane;
+
+        if ((mode->VisScreenWidth == fb.HorizontalResolution) &&
+            (mode->VisScreenHeight == fb.VerticalResolution) &&
+            (modeBpp == desiredBpp))
+        {
+            DevExt->CurrentModeIndex = mode->ModeIndex;
+            return;
+        }
+    }
+}
+
 /* ------------------------------------------------------------------------- */
 /* Mode information                                                          */
 /* ------------------------------------------------------------------------- */
@@ -305,7 +341,7 @@ UefiFbPopulateModeInformation(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
 
     VideoPortZeroMemory(Mode, sizeof(*Mode));
     Mode->Length = sizeof(*Mode);
-    Mode->ModeIndex = UEFIFB_MODE_INDEX;
+    Mode->ModeIndex = 0;
     Mode->VisScreenWidth = Fb->HorizontalResolution;
     Mode->VisScreenHeight = Fb->VerticalResolution;
     Mode->ScreenStride = PixelsPerScanLine * (BitsPerPixel / 8);
@@ -424,7 +460,6 @@ UefiFbBuildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
     }
 
     DevExt->ModeCount = built;
-    DevExt->CurrentModeIndex = 0;
     UEFIFB_LOG(1, "BuildModeTable: built %lu modes\n", built);
     return TRUE;
 }
@@ -1187,7 +1222,6 @@ UefiFbInitialize(_In_ PVOID HwDeviceExtension)
                (unsigned long)DevExt->ModeCount,
                DevExt->AccessRanges[0].RangeStart.QuadPart,
                (unsigned long)DevExt->AccessRanges[0].RangeLength);
-    DevExt->CurrentModeIndex = UEFIFB_MODE_INDEX;
     DevExt->ModeSet = FALSE;
     return TRUE;
 }
@@ -1254,6 +1288,8 @@ UefiFbFindAdapter(_In_ PVOID HwDeviceExtension,
     if (!UefiFbBuildModeTable(DevExt))
         return ERROR_NOT_ENOUGH_MEMORY;
 
+    UefiFbSelectPreferredMode(DevExt);
+
     ConfigInfo->NumEmulatorAccessEntries = 0;
     ConfigInfo->EmulatorAccessEntries = NULL;
     ConfigInfo->EmulatorAccessEntriesContext = 0;
@@ -1267,12 +1303,11 @@ UefiFbFindAdapter(_In_ PVOID HwDeviceExtension,
     ConfigInfo->InterruptMode = LevelSensitive;
 
     UEFIFB_LOG(0,
-               "FindAdapter: DevExt=%p GOP base=%I64x size=%lu bus=%lu slot=%lu\n",
+               "FindAdapter: DevExt=%p GOP base=%I64x size=%lu bus=%lu\n",
                DevExt,
                DevExt->FrameBufferInfo.FrameBufferBase.QuadPart,
                (unsigned long)DevExt->FrameBufferInfo.FrameBufferSize,
-               (unsigned long)ConfigInfo->SystemIoBusNumber,
-               (unsigned long)ConfigInfo->SystemIoSlotNumber);
+               (unsigned long)ConfigInfo->SystemIoBusNumber);
     UEFIFB_LOG(0, "FindAdapter: registering access range base=%I64x length=%lu\n",
                DevExt->FrameBufferInfo.FrameBufferBase.QuadPart,
                (unsigned long)DevExt->FrameBufferMapLength);

@@ -719,6 +719,11 @@ typedef struct _LOADER_PARAMETER_EXTENSION
     PLOADER_PARAMETER_GOP_MODE GopModes; /* loader-allocated, valid during init */
     ULONG GopPreferredMode; /* index, if known; otherwise current mode */
 #endif
+#if defined(__REACTOS__)
+    /* Optional: list of GOP framebuffers for multi-output firmware */
+    ULONG GopFramebufferCount;
+    PLOADER_PARAMETER_FRAMEBUFFER GopFramebuffers;
+#endif
 #endif
 #if (NTDDI_VERSION >= NTDDI_WINBLUE)
     DEBUG_DEVICE_DESCRIPTOR *KdDebugDevice;

@@ -175,6 +175,10 @@ InbvQueryGopModeInfo(
     _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo
 );
 
+ULONG
+NTAPI
+InbvGetGopPreferredMode(VOID);
+
 BOOLEAN
 NTAPI
 InbvSetGopMode(

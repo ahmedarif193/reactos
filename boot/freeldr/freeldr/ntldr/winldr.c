@@ -329,6 +329,8 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
         extern PLOADER_PARAMETER_GOP_MODE UefiGopModes;
         extern ULONG UefiGopModeCount;
         extern ULONG UefiGopPreferredMode;
+        extern PLOADER_PARAMETER_FRAMEBUFFER UefiGopFramebuffers;
+        extern ULONG UefiGopFramebufferCount;
         extern BOOLEAN UefiIsFramebufferReady(VOID);
         
         if (framebufferData.BaseAddress != 0)
@@ -364,7 +366,23 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
                 WARN("UEFI GOP never reported a framebuffer (ramdisk/live boot path?)\n");
             }
         }
-        
+
+        if (UefiGopFramebuffers && UefiGopFramebufferCount)
+        {
+            Extension->GopFramebuffers = (PLOADER_PARAMETER_FRAMEBUFFER)PaToVa(UefiGopFramebuffers);
+            Extension->GopFramebufferCount = UefiGopFramebufferCount;
+        }
+        else if (Extension->GopFramebuffer.FrameBufferBase.QuadPart != 0)
+        {
+            Extension->GopFramebuffers = (PLOADER_PARAMETER_FRAMEBUFFER)PaToVa(&Extension->GopFramebuffer);
+            Extension->GopFramebufferCount = 1;
+        }
+        else
+        {
+            Extension->GopFramebuffers = NULL;
+            Extension->GopFramebufferCount = 0;
+        }
+
 
         /* Pass GOP mode enumeration to the kernel (if available) */
         if (UefiGopModes && UefiGopModeCount)

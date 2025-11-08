@@ -73,8 +73,12 @@ static BOOLEAN GopConsoleInitialized = FALSE;
 PLOADER_PARAMETER_GOP_MODE UefiGopModes = NULL;
 ULONG UefiGopModeCount = 0;
 ULONG UefiGopPreferredMode = 0;
+PLOADER_PARAMETER_FRAMEBUFFER UefiGopFramebuffers = NULL;
+ULONG UefiGopFramebufferCount = 0;
 /* Forward declarations ******************************************************/
 static VOID UefiVideoConfigureFramebufferCache(VOID);
+static VOID UefiFillFramebufferDescriptor(EFI_GRAPHICS_OUTPUT_PROTOCOL* Gop,
+                                          PLOADER_PARAMETER_FRAMEBUFFER Descriptor);
 
 static VOID
 UefiVideoConfigureFramebufferCache(VOID)
@@ -146,6 +150,57 @@ UefiVideoConfigureFramebufferCache(VOID)
     TRACE("UEFI GOP: Framebuffer mapped with write-combining cache attribute\n");
 }
 
+static VOID
+UefiFillFramebufferDescriptor(EFI_GRAPHICS_OUTPUT_PROTOCOL* Gop,
+                              PLOADER_PARAMETER_FRAMEBUFFER Descriptor)
+{
+    if (!Descriptor)
+        return;
+
+    RtlZeroMemory(Descriptor, sizeof(*Descriptor));
+
+    if (!Gop || !Gop->Mode || !Gop->Mode->Info)
+        return;
+
+    Descriptor->FrameBufferBase.QuadPart = (ULONGLONG)Gop->Mode->FrameBufferBase;
+    if (Gop->Mode->FrameBufferSize > MAXULONG)
+        Descriptor->FrameBufferSize = MAXULONG;
+    else
+        Descriptor->FrameBufferSize = (ULONG)Gop->Mode->FrameBufferSize;
+
+    Descriptor->HorizontalResolution = Gop->Mode->Info->HorizontalResolution;
+    Descriptor->VerticalResolution = Gop->Mode->Info->VerticalResolution;
+    Descriptor->PixelsPerScanLine = Gop->Mode->Info->PixelsPerScanLine;
+    Descriptor->PixelFormat = Gop->Mode->Info->PixelFormat;
+
+    switch (Gop->Mode->Info->PixelFormat)
+    {
+        case PixelRedGreenBlueReserved8BitPerColor:
+            Descriptor->RedMask      = 0x000000FF;
+            Descriptor->GreenMask    = 0x0000FF00;
+            Descriptor->BlueMask     = 0x00FF0000;
+            Descriptor->Reserved     = 0xFF000000;
+            break;
+
+        case PixelBlueGreenRedReserved8BitPerColor:
+            Descriptor->RedMask      = 0x00FF0000;
+            Descriptor->GreenMask    = 0x0000FF00;
+            Descriptor->BlueMask     = 0x000000FF;
+            Descriptor->Reserved     = 0xFF000000;
+            break;
+
+        case PixelBitMask:
+            Descriptor->RedMask      = Gop->Mode->Info->PixelInformation.RedMask;
+            Descriptor->GreenMask    = Gop->Mode->Info->PixelInformation.GreenMask;
+            Descriptor->BlueMask     = Gop->Mode->Info->PixelInformation.BlueMask;
+            Descriptor->Reserved     = Gop->Mode->Info->PixelInformation.ReservedMask;
+            break;
+
+        default:
+            break;
+    }
+}
+
 /* FUNCTIONS ******************************************************************/
 
 
@@ -155,18 +210,66 @@ UefiInitializeVideo(VOID)
     EFI_STATUS Status;
     EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* CurrentInfo;
+    EFI_HANDLE* GopHandles = NULL;
+    UINTN GopHandleCount = 0;
+    UINTN PrimaryHandleIndex = 0;
+    ULONG MaxFramebufferSlots = 0;
     BOOLEAN ModeChosen = FALSE;
 
     UefiGopFramebufferReady = FALSE;
     RtlZeroMemory(&framebufferData, sizeof(framebufferData));
-    Status = GlobalSystemTable->BootServices->LocateProtocol(&EfiGraphicsOutputProtocol, 0, (void**)&gop);
-    if (Status != EFI_SUCCESS)
+    if (!GlobalSystemTable || !GlobalSystemTable->BootServices)
+        return EFI_UNSUPPORTED;
+
+    Status = GlobalSystemTable->BootServices->LocateHandleBuffer(ByProtocol,
+                                                                 &EfiGraphicsOutputProtocol,
+                                                                 NULL,
+                                                                 &GopHandleCount,
+                                                                 &GopHandles);
+    if (EFI_ERROR(Status) || GopHandleCount == 0)
     {
-        TRACE("Failed to find GOP with status %d\n", Status);
+        TRACE("Failed to enumerate GOP handles (Status %lx)\n", Status);
+        if (GopHandles)
+            GlobalSystemTable->BootServices->FreePool(GopHandles);
+        return EFI_NOT_FOUND;
+    }
+
+    for (PrimaryHandleIndex = 0; PrimaryHandleIndex < GopHandleCount; ++PrimaryHandleIndex)
+    {
+        Status = GlobalSystemTable->BootServices->HandleProtocol(GopHandles[PrimaryHandleIndex],
+                                                                 &EfiGraphicsOutputProtocol,
+                                                                 (VOID**)&gop);
+        if (!EFI_ERROR(Status) && gop && gop->Mode)
+            break;
+    }
+
+    if (EFI_ERROR(Status) || gop == NULL)
+    {
+        TRACE("Failed to acquire GOP protocol from any handle (Status %lx)\n", Status);
+        GlobalSystemTable->BootServices->FreePool(GopHandles);
         return Status;
     }
 
-    TRACE("UEFI GOP: Protocol located successfully\n");
+    MaxFramebufferSlots = (ULONG)GopHandleCount;
+    UefiGopFramebufferCount = 0;
+    if (MaxFramebufferSlots > 0)
+    {
+        UefiGopFramebuffers = FrLdrHeapAlloc(sizeof(LOADER_PARAMETER_FRAMEBUFFER) * MaxFramebufferSlots,
+                                             'FBGP');
+        if (UefiGopFramebuffers)
+        {
+            RtlZeroMemory(UefiGopFramebuffers,
+                          sizeof(LOADER_PARAMETER_FRAMEBUFFER) * MaxFramebufferSlots);
+        }
+        else
+        {
+            MaxFramebufferSlots = 0;
+        }
+    }
+
+    TRACE("UEFI GOP: Protocol located successfully (handles=%lu, primary=%lu)\n",
+          (unsigned long)GopHandleCount,
+          (unsigned long)PrimaryHandleIndex);
     TRACE("  MaxMode: %d\n", gop->Mode->MaxMode);
     TRACE("  Current Mode: %d\n", gop->Mode->Mode);
 
@@ -261,6 +364,8 @@ UefiInitializeVideo(VOID)
         if (EFI_ERROR(ModeStatus))
         {
             TRACE("UEFI GOP: QueryMode failed (%d); aborting video init\n", ModeStatus);
+            if (GopHandles)
+                GlobalSystemTable->BootServices->FreePool(GopHandles);
             return ModeStatus;
         }
     }
@@ -337,7 +442,42 @@ UefiInitializeVideo(VOID)
         WARN("UEFI GOP: Framebuffer info missing after initialization\n");
     }
 
-    return Status;
+    if (MaxFramebufferSlots > 0 && UefiGopFramebuffers)
+    {
+        ULONG recorded = 0;
+
+        if (gop && gop->Mode && gop->Mode->Info)
+        {
+            UefiFillFramebufferDescriptor(gop, &UefiGopFramebuffers[recorded]);
+            recorded++;
+        }
+
+        for (UINTN handleIndex = 0;
+             handleIndex < GopHandleCount && recorded < MaxFramebufferSlots;
+             ++handleIndex)
+        {
+            EFI_GRAPHICS_OUTPUT_PROTOCOL* otherGop = NULL;
+
+            if (handleIndex == PrimaryHandleIndex)
+                continue;
+
+            EFI_STATUS HandleStatus = GlobalSystemTable->BootServices->HandleProtocol(GopHandles[handleIndex],
+                                                                                     &EfiGraphicsOutputProtocol,
+                                                                                     (VOID**)&otherGop);
+            if (EFI_ERROR(HandleStatus) || !otherGop || !otherGop->Mode || !otherGop->Mode->Info)
+                continue;
+
+            UefiFillFramebufferDescriptor(otherGop, &UefiGopFramebuffers[recorded]);
+            recorded++;
+        }
+
+        UefiGopFramebufferCount = recorded;
+    }
+
+    if (GopHandles)
+        GlobalSystemTable->BootServices->FreePool(GopHandles);
+
+    return EFI_SUCCESS;
 }
 
 VOID

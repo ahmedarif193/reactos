@@ -316,6 +316,7 @@
 @ stdcall InbvGetGopFrameBufferInfo(ptr)
 @ stdcall InbvQueryGopModeCount(ptr)
 @ stdcall InbvQueryGopModeInfo(long ptr)
+@ stdcall InbvGetGopPreferredMode()
 @ stdcall InbvSetGopMode(long)
 @ stdcall InbvNotifyDisplayOwnershipLost(ptr)
 @ stdcall InbvResetDisplay()

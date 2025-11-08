@@ -56,10 +56,12 @@ static PUCHAR ResourceList[1 + IDB_MAX_RESOURCES]; // First entry == NULL, follo
  * If present, this enables boot-time graphics without a display driver.
  */
 static LOADER_PARAMETER_FRAMEBUFFER InbvGopFramebuffer;
+static PLOADER_PARAMETER_FRAMEBUFFER InbvGopFramebufferList;
+static ULONG InbvGopFramebufferCount;
 static BOOLEAN InbvGopInfoValid = FALSE;
 static PLOADER_PARAMETER_GOP_MODE InbvGopModes = NULL;
 static ULONG InbvGopModeCount = 0;
-static ULONG InbvGopPreferredMode = 0;
+static ULONG InbvGopPreferredMode = MAXULONG;
 static ULONG InbvGopCurrentMode = MAXULONG;
 
 
@@ -219,6 +221,27 @@ InbvDriverInitialize(
         {
             RtlCopyMemory(&InbvGopFramebuffer, Fb, sizeof(*Fb));
             InbvGopInfoValid = TRUE;
+        }
+
+        if (Extension->GopFramebuffers && Extension->GopFramebufferCount)
+        {
+            SIZE_T bytes = Extension->GopFramebufferCount * sizeof(LOADER_PARAMETER_FRAMEBUFFER);
+            PLOADER_PARAMETER_FRAMEBUFFER fbList = ExAllocatePoolWithTag(NonPagedPool, bytes, 'FBGP');
+            if (fbList)
+            {
+                RtlCopyMemory(fbList, Extension->GopFramebuffers, bytes);
+                InbvGopFramebufferList = fbList;
+                InbvGopFramebufferCount = Extension->GopFramebufferCount;
+
+                if (!InbvGopInfoValid && InbvGopFramebufferCount > 0 &&
+                    fbList[0].FrameBufferBase.QuadPart != 0 && fbList[0].FrameBufferSize != 0)
+                {
+                    RtlCopyMemory(&InbvGopFramebuffer,
+                                  &fbList[0],
+                                  sizeof(LOADER_PARAMETER_FRAMEBUFFER));
+                    InbvGopInfoValid = TRUE;
+                }
+            }
         }
 
         /* Cache GOP mode enumeration if available */
@@ -877,6 +900,13 @@ InbvSetGopMode(
 
     /* TODO: Runtime GOP SetMode support (requires firmware cooperation). */
     return FALSE;
+}
+
+ULONG
+NTAPI
+InbvGetGopPreferredMode(VOID)
+{
+    return InbvGopPreferredMode;
 }
 
 NTSTATUS
