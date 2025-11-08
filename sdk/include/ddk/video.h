@@ -1208,6 +1208,14 @@ VideoPortSetRegistryParameters(
 VPAPI
 VP_STATUS
 NTAPI
+VideoPortCacheAccessRanges(
+  _In_ PVOID HwDeviceExtension,
+  _In_ ULONG NumAccessRanges,
+  _In_reads_opt_(NumAccessRanges) PVIDEO_ACCESS_RANGE AccessRanges);
+
+VPAPI
+VP_STATUS
+NTAPI
 VideoPortSetAccessRanges(
   _In_ PVOID HwDeviceExtension,
   _In_ ULONG NumAccessRanges,
