@@ -42,9 +42,26 @@ typedef struct _LOADER_PARAMETER_FRAMEBUFFER
 #define PixelBitMask                           2
 #endif
 
+#define UEFIFB_EDID_LENGTH 128
+
+typedef struct _UEFIFB_CHILD_OUTPUT
+{
+    LOADER_PARAMETER_FRAMEBUFFER FrameBuffer;
+    UCHAR SyntheticEdid[UEFIFB_EDID_LENGTH];
+    VIDEO_MODE_INFORMATION ModeInfo;
+    PVIDEO_MODE_INFORMATION ModeTable;
+    ULONG ModeCount;
+    ULONG CurrentModeIndex;
+    BOOLEAN ModeSet;
+    ULONG FrameBufferOffset;
+    ULONG FrameBufferMapLength;
+    ULONGLONG FrameBufferLength64;
+} UEFIFB_CHILD_OUTPUT, *PUEFIFB_CHILD_OUTPUT;
+
 typedef struct _UEFIFB_DEVICE_EXTENSION
 {
     LOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo;
+    ULONGLONG FrameBufferLength64;
     VIDEO_MODE_INFORMATION ModeInfo;
     ULONG ModeCount;
     PVIDEO_MODE_INFORMATION ModeTable; /* allocated list of modes; currently 1 (current GOP) */
@@ -55,6 +72,9 @@ typedef struct _UEFIFB_DEVICE_EXTENSION
     ULONG MappingLength;
     ULONG FrameBufferOffset;
     ULONG FrameBufferMapLength;
+    PUEFIFB_CHILD_OUTPUT ChildOutputs;
+    ULONG ChildCount;
+    ULONG ActiveChild;
     BOOLEAN ModeSet;
     BOOLEAN DirectMap;
     BOOLEAN ForceMmMap;
@@ -75,6 +95,16 @@ InbvQueryGopModeCount(
 BOOLEAN
 NTAPI
 InbvQueryGopModeInfo(
+    _In_ ULONG Index,
+    _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo);
+
+ULONG
+NTAPI
+InbvGetGopFrameBufferCount(VOID);
+
+BOOLEAN
+NTAPI
+InbvGetGopFrameBufferInfoByIndex(
     _In_ ULONG Index,
     _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo);
 
