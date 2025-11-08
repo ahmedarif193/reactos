@@ -19,10 +19,15 @@
  */
 
 #include "framebuf.h"
+#include <stdlib.h>
 
 static LOGFONTW SystemFont = { 16, 7, 0, 0, 700, 0, 0, 0, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, VARIABLE_PITCH | FF_DONTCARE, L"System" };
 static LOGFONTW AnsiVariableFont = { 12, 9, 0, 0, 400, 0, 0, 0, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_STROKE_PRECIS, PROOF_QUALITY, VARIABLE_PITCH | FF_DONTCARE, L"MS Sans Serif" };
 static LOGFONTW AnsiFixedFont = { 12, 9, 0, 0, 400, 0, 0, 0, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_STROKE_PRECIS, PROOF_QUALITY, FIXED_PITCH | FF_DONTCARE, L"Courier" };
+
+VOID
+FbEnsureUefiChildSelection(_Inout_ PPDEV ppdev,
+                           _In_opt_ const DEVMODEW *pDevMode);
 
 /*
  * GetAvailableModes
@@ -116,6 +121,178 @@ GetAvailableModes(
    return Modes.NumModes;
 }
 
+static BOOLEAN
+FbFetchChildModes(_Inout_ PPDEV ppdev,
+                  _In_ ULONG ChildIndex,
+                  _Outptr_result_buffer_(*ModeCountOut) PVIDEO_MODE_INFORMATION *ModesOut,
+                  _Out_ ULONG *ModeCountOut)
+{
+   ULONG attempt = 32;
+
+   for (INT tries = 0; tries < 5; ++tries)
+   {
+      SIZE_T bufferSize = FIELD_OFFSET(UEFIFB_CHILD_MODE_RESPONSE, Modes) +
+                          (SIZE_T)attempt * sizeof(VIDEO_MODE_INFORMATION);
+      PUEFIFB_CHILD_MODE_RESPONSE response = EngAllocMem(0, bufferSize, ALLOC_TAG);
+      DWORD returned = 0;
+      UEFIFB_SELECT_CHILD query = { ChildIndex };
+
+      if (!response)
+         return FALSE;
+
+      if (EngDeviceIoControl(ppdev->hDriver,
+                             IOCTL_VIDEO_UEFIFB_QUERY_CHILD_MODES,
+                             &query,
+                             sizeof(query),
+                             response,
+                             bufferSize,
+                             &returned))
+      {
+         EngFreeMem(response);
+         return FALSE;
+      }
+
+      if (response->ModeCount > attempt &&
+          response->ReturnedModes == attempt)
+      {
+         attempt = response->ModeCount;
+         EngFreeMem(response);
+         continue;
+      }
+
+      if (response->ReturnedModes < response->ModeCount)
+      {
+         attempt = response->ModeCount;
+         EngFreeMem(response);
+         continue;
+      }
+
+      SIZE_T copySize = response->ModeCount * sizeof(VIDEO_MODE_INFORMATION);
+      PVIDEO_MODE_INFORMATION copy = EngAllocMem(0, copySize, ALLOC_TAG);
+      if (!copy)
+      {
+         EngFreeMem(response);
+         return FALSE;
+      }
+
+      RtlCopyMemory(copy,
+                    response->Modes,
+                    response->ModeCount * sizeof(VIDEO_MODE_INFORMATION));
+
+      *ModesOut = copy;
+      *ModeCountOut = response->ModeCount;
+      EngFreeMem(response);
+      return TRUE;
+   }
+
+   return FALSE;
+}
+
+VOID
+FbEnsureUefiChildSelection(_Inout_ PPDEV ppdev,
+                           _In_opt_ const DEVMODEW *pdm)
+{
+   DWORD returned = 0;
+
+   if (!FbQueryUefiCaps(ppdev) || ppdev->UefiChildCount <= 1)
+      return;
+
+   ULONG desiredWidth = 0;
+   ULONG desiredHeight = 0;
+   ULONG desiredBpp = 0;
+   BOOLEAN haveDesired = FALSE;
+
+   if (pdm)
+   {
+       if ((pdm->dmFields & DM_PELSWIDTH) &&
+           (pdm->dmFields & DM_PELSHEIGHT) &&
+           pdm->dmPelsWidth && pdm->dmPelsHeight)
+       {
+           desiredWidth = pdm->dmPelsWidth;
+           desiredHeight = pdm->dmPelsHeight;
+           haveDesired = TRUE;
+       }
+
+       if ((pdm->dmFields & DM_BITSPERPEL) && pdm->dmBitsPerPel)
+           desiredBpp = pdm->dmBitsPerPel;
+   }
+
+   ULONG bestChild = ppdev->UefiPrimaryChild;
+   LONG bestScore = LONG_MAX;
+   ULONGLONG bestPixels = 0;
+   ULONG bestBpp = 0;
+
+   for (ULONG child = 0; child < ppdev->UefiChildCount; ++child)
+   {
+       PVIDEO_MODE_INFORMATION modes = NULL;
+       ULONG modeCount = 0;
+
+       if (!FbFetchChildModes(ppdev, child, &modes, &modeCount))
+           continue;
+
+       for (ULONG i = 0; i < modeCount; ++i)
+       {
+           const VIDEO_MODE_INFORMATION *mode = &modes[i];
+           if (mode->Length == 0)
+               continue;
+
+           ULONG modeBpp = mode->BitsPerPlane * mode->NumberOfPlanes;
+           if (modeBpp == 0)
+               modeBpp = mode->BitsPerPlane;
+
+           if (haveDesired)
+           {
+               if (desiredBpp && modeBpp && desiredBpp != modeBpp)
+                   continue;
+
+               LONG score = labs((LONG)mode->VisScreenWidth - (LONG)desiredWidth) +
+                           labs((LONG)mode->VisScreenHeight - (LONG)desiredHeight);
+
+               if (score < bestScore ||
+                   (score == bestScore && modeBpp > bestBpp))
+               {
+                   bestScore = score;
+                   bestChild = child;
+                   bestBpp = modeBpp;
+               }
+           }
+           else
+           {
+               ULONGLONG pixels =
+                   (ULONGLONG)mode->VisScreenWidth * (ULONGLONG)mode->VisScreenHeight;
+
+               if (pixels > bestPixels ||
+                   (pixels == bestPixels && modeBpp > bestBpp))
+               {
+                   bestPixels = pixels;
+                   bestChild = child;
+                   bestBpp = modeBpp;
+               }
+           }
+       }
+
+       EngFreeMem(modes);
+   }
+
+   if (bestChild >= ppdev->UefiChildCount)
+       bestChild = ppdev->UefiPrimaryChild;
+
+   if (ppdev->UefiSelectedChild == bestChild)
+       return;
+
+   UEFIFB_SELECT_CHILD select = { bestChild };
+   if (!EngDeviceIoControl(ppdev->hDriver,
+                           IOCTL_VIDEO_UEFIFB_SELECT_CHILD,
+                           &select,
+                           sizeof(select),
+                           NULL,
+                           0,
+                           &returned))
+   {
+       ppdev->UefiSelectedChild = bestChild;
+   }
+}
+
 BOOL
 IntInitScreenInfo(
    PPDEV ppdev,
@@ -132,9 +309,9 @@ IntInitScreenInfo(
    VIDEO_COLOR_CAPABILITIES ColorCapabilities;
    ULONG Temp;
 
-   /*
-    * Call miniport to get information about video modes.
-    */
+   FbEnsureUefiChildSelection(ppdev, pDevMode);
+
+   /* Call miniport to get information about video modes. */
 
    ModeCount = GetAvailableModes(ppdev->hDriver, &ModeInfo, &ModeInfoSize);
    if (ModeCount == 0)
