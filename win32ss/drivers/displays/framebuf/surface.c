@@ -19,6 +19,117 @@
  */
 
 #include "framebuf.h"
+PVOID APIENTRY
+EngAllocSectionMem(
+    _Outptr_ PVOID *ppvSection,
+    _In_ ULONG fl,
+    _In_ SIZE_T cjSize,
+    _In_ ULONG ulTag);
+
+BOOL APIENTRY
+EngFreeSectionMem(
+    _In_opt_ PVOID pvSection,
+    _In_opt_ PVOID pvMappedBase);
+
+BOOLEAN
+FbQueryUefiCaps(_Inout_ PPDEV ppdev)
+{
+    UEFIFB_CAPS uefi = {0};
+    DWORD returned = 0;
+
+    if (EngDeviceIoControl(ppdev->hDriver,
+                           IOCTL_VIDEO_UEFIFB_QUERY_CAPS,
+                           NULL,
+                           0,
+                           &uefi,
+                           sizeof(uefi),
+                           &returned))
+    {
+        ppdev->UefiCapsValid = FALSE;
+        ppdev->RosUefiFramebuffer = FALSE;
+        ppdev->UefiChildCount = 0;
+        ppdev->UefiLargeFramebuffer = FALSE;
+        ppdev->UefiFramebufferLength = 0;
+        return FALSE;
+    }
+
+    if (returned < (FIELD_OFFSET(UEFIFB_CAPS, Caps) + sizeof(uefi.Caps)) ||
+        uefi.Version == 0)
+    {
+        ppdev->UefiCapsValid = FALSE;
+        ppdev->RosUefiFramebuffer = FALSE;
+        ppdev->UefiChildCount = 0;
+        ppdev->UefiLargeFramebuffer = FALSE;
+        ppdev->UefiFramebufferLength = 0;
+        return FALSE;
+    }
+
+    ppdev->UefiCapsValid = TRUE;
+    ppdev->RosUefiFramebuffer = TRUE;
+    ppdev->UefiChildCount = 1;
+    ppdev->UefiPrimaryChild = 0;
+    ppdev->UefiFramebufferLength = 0;
+    if (ppdev->UefiSelectedChild == (ULONG)-1)
+        ppdev->UefiSelectedChild = 0;
+
+    ppdev->UefiLinearOnly = (uefi.Caps & UEFIFB_CAP_LINEAR_ONLY) ? TRUE : FALSE;
+    ppdev->UefiLargeFramebuffer = (uefi.Caps & UEFIFB_CAP_LARGE_FB) ? TRUE : FALSE;
+
+    if ((uefi.Version >= 2) && (returned >= sizeof(uefi)))
+    {
+        ppdev->UefiChildCount = uefi.OutputCount;
+        ppdev->UefiPrimaryChild = uefi.PrimaryChild;
+        ppdev->UefiFramebufferLength = uefi.FrameBufferLength;
+        if (ppdev->UefiSelectedChild == (ULONG)-1)
+            ppdev->UefiSelectedChild = uefi.PrimaryChild;
+    }
+
+    return TRUE;
+}
+
+static VOID
+FbDestroyFallbackSurface(_Inout_ PPDEV ppdev)
+{
+    if (!ppdev->FallbackMapping && !ppdev->FallbackSection)
+        return;
+
+    EngFreeSectionMem(ppdev->FallbackSection, ppdev->FallbackMapping);
+    ppdev->FallbackSection = NULL;
+
+    ppdev->FallbackMapping = NULL;
+    ppdev->UsingFallbackSurface = FALSE;
+    ppdev->ScreenPtr = NULL;
+}
+
+BOOLEAN
+FbMapFramebufferFallback(_Inout_ PPDEV ppdev,
+                         ULONGLONG Length)
+{
+    SIZE_T allocLength;
+    PVOID mapping;
+
+    if (Length == 0)
+        return FALSE;
+
+    FbDestroyFallbackSurface(ppdev);
+
+    if (Length > (ULONGLONG)~(SIZE_T)0)
+        allocLength = ~(SIZE_T)0;
+    else
+        allocLength = (SIZE_T)Length;
+
+    mapping = EngAllocSectionMem(&ppdev->FallbackSection,
+                                 FL_ZERO_MEMORY,
+                                 allocLength,
+                                 ALLOC_TAG);
+    if (!mapping)
+        return FALSE;
+
+    ppdev->ScreenPtr = mapping;
+    ppdev->UsingFallbackSurface = TRUE;
+    ppdev->FallbackMapping = mapping;
+    return TRUE;
+}
 
 static BOOL
 FbSelectSafeMode(_Inout_ PPDEV ppdev)
@@ -122,10 +233,12 @@ DrvEnableSurface(
    ULONG BitmapType;
    SIZEL ScreenSize;
    VIDEO_MEMORY VideoMemory;
-   VIDEO_MEMORY_INFORMATION VideoMemoryInfo;
-   ULONG ulTemp;
+   VIDEO_MEMORY_INFORMATION64 VideoMemoryInfo;
+   ULONG ulTemp = 0;
    BOOLEAN TriedUefiFallback = FALSE;
    VIDEO_MODE current = {0};
+   PVIDEO_MEMORY_INFORMATION VideoMemoryInfo32 =
+       (PVIDEO_MEMORY_INFORMATION)&VideoMemoryInfo;
 
    /*
     * Set video mode of our adapter.
@@ -153,35 +266,55 @@ DrvEnableSurface(
     * Map the framebuffer into our memory.
     */
 
+   (VOID)FbQueryUefiCaps(ppdev);
+
 MapFramebuffer:
    VideoMemory.RequestedVirtualAddress = NULL;
+   RtlZeroMemory(&VideoMemoryInfo, sizeof(VideoMemoryInfo));
    if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_MAP_VIDEO_MEMORY,
                           &VideoMemory, sizeof(VIDEO_MEMORY),
-                          &VideoMemoryInfo, sizeof(VIDEO_MEMORY_INFORMATION),
+                          &VideoMemoryInfo, sizeof(VIDEO_MEMORY_INFORMATION64),
                           &ulTemp))
    {
       FB_DBG("IOCTL_VIDEO_MAP_VIDEO_MEMORY failed\n");
-      if (!TriedUefiFallback && ppdev->UefiLinearOnly && FbSelectSafeMode(ppdev))
+      if (!TriedUefiFallback && ppdev->RosUefiFramebuffer && FbSelectSafeMode(ppdev))
       {
          TriedUefiFallback = TRUE;
          goto MapFramebuffer;
       }
-      return NULL;
+
+      if (!FbMapFramebufferFallback(ppdev,
+                                     (ULONGLONG)ppdev->ScreenDelta *
+                                     (ULONGLONG)ppdev->ScreenHeight))
+      {
+         return NULL;
+      }
    }
 
-   ppdev->ScreenPtr = VideoMemoryInfo.FrameBufferBase;
-   FB_DBG("Mapped framebuffer @ %p (screen %ux%u delta %u bpp %u)\n",
+   if (!ppdev->UsingFallbackSurface)
+   {
+      if (ulTemp >= sizeof(VIDEO_MEMORY_INFORMATION64))
+          ppdev->ScreenPtr = VideoMemoryInfo.FrameBufferBase;
+      else
+          ppdev->ScreenPtr = VideoMemoryInfo32->FrameBufferBase;
+      ppdev->UsingFallbackSurface = FALSE;
+      ppdev->FallbackMapping = NULL;
+   }
+
+   FB_DBG("Mapped framebuffer @ %p (screen %ux%u delta %u bpp %u)%s\n",
           ppdev->ScreenPtr,
           (unsigned int)ppdev->ScreenWidth,
           (unsigned int)ppdev->ScreenHeight,
           (unsigned int)ppdev->ScreenDelta,
-          (unsigned int)ppdev->BitsPerPixel);
+          (unsigned int)ppdev->BitsPerPixel,
+          ppdev->UsingFallbackSurface ? " (fallback)" : "");
 
    ppdev->VmwareFifo = FALSE;
    ppdev->VmwareCaps = 0;
    ppdev->UefiLinearOnly = FALSE;
+   ppdev->UefiLargeFramebuffer = FALSE;
 
-   if (ppdev->BitsPerPixel >= 15)
+   if (!ppdev->UsingFallbackSurface && ppdev->BitsPerPixel >= 15)
    {
        VMWARE_VIDEO_CAPS caps = {0};
        DWORD returned = 0;
@@ -200,26 +333,21 @@ MapFramebuffer:
            ppdev->VmwareFifo = TRUE;
            ppdev->VmwareCaps = caps.Caps;
        }
+   }
 
-       /* Optionally query UEFIFB caps to detect linear-only fallback */
-       if (!ppdev->VmwareFifo)
-       {
-           UEFIFB_CAPS uefi = {0};
-           returned = 0;
-           if (!EngDeviceIoControl(ppdev->hDriver,
-                                   IOCTL_VIDEO_UEFIFB_QUERY_CAPS,
-                                   NULL,
-                                   0,
-                                   &uefi,
-                                   sizeof(uefi),
-                                   &returned) &&
-               returned >= sizeof(uefi) &&
-               uefi.Version == UEFIFB_CAPS_VERSION &&
-               (uefi.Caps & UEFIFB_CAP_LINEAR_ONLY))
-           {
-               ppdev->UefiLinearOnly = TRUE;
-           }
-       }
+   (VOID)FbQueryUefiCaps(ppdev);
+
+   if (ppdev->UsingFallbackSurface)
+   {
+       ppdev->FramebufferBytes = (ULONGLONG)ppdev->ScreenDelta *
+                                 (ULONGLONG)ppdev->ScreenHeight;
+   }
+   else
+   {
+       ULONGLONG fbLength = VideoMemoryInfo.FrameBufferLength;
+       if (ppdev->UefiCapsValid && ppdev->UefiFramebufferLength > fbLength)
+           fbLength = ppdev->UefiFramebufferLength;
+       ppdev->FramebufferBytes = fbLength;
    }
 
    switch (ppdev->BitsPerPixel)
@@ -308,13 +436,16 @@ DrvDisableSurface(
    DrvSetPointerShape(NULL, NULL, NULL, NULL, 0, 0, 0, 0, NULL, 0);
 #endif
 
-   /*
-    * Unmap the framebuffer.
-    */
+   if (ppdev->UsingFallbackSurface)
+   {
+      FbDestroyFallbackSurface(ppdev);
+      return;
+   }
 
    VideoMemory.RequestedVirtualAddress = ((PPDEV)dhpdev)->ScreenPtr;
    EngDeviceIoControl(((PPDEV)dhpdev)->hDriver, IOCTL_VIDEO_UNMAP_VIDEO_MEMORY,
                       &VideoMemory, sizeof(VIDEO_MEMORY), NULL, 0, &ulTemp);
+   ppdev->ScreenPtr = NULL;
 }
 
 /*
