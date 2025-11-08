@@ -60,6 +60,7 @@ static BOOLEAN InbvGopInfoValid = FALSE;
 static PLOADER_PARAMETER_GOP_MODE InbvGopModes = NULL;
 static ULONG InbvGopModeCount = 0;
 static ULONG InbvGopPreferredMode = 0;
+static ULONG InbvGopCurrentMode = MAXULONG;
 
 
 /*
@@ -221,6 +222,9 @@ InbvDriverInitialize(
         }
 
         /* Cache GOP mode enumeration if available */
+        InbvGopPreferredMode = Extension->GopPreferredMode;
+        InbvGopCurrentMode = Extension->GopPreferredMode;
+
         if (Extension->GopModes && Extension->GopModeCount)
         {
             SIZE_T bytes = Extension->GopModeCount * sizeof(LOADER_PARAMETER_GOP_MODE);
@@ -230,7 +234,6 @@ InbvDriverInitialize(
                 RtlCopyMemory(list, Extension->GopModes, bytes);
                 InbvGopModes = list;
                 InbvGopModeCount = Extension->GopModeCount;
-                InbvGopPreferredMode = Extension->GopPreferredMode;
             }
         }
     }
@@ -827,8 +830,52 @@ NTAPI
 InbvSetGopMode(
     _In_ ULONG Index)
 {
-    UNREFERENCED_PARAMETER(Index);
-    /* Stub: no runtime GOP mode switching implemented */
+    /* No GOP data available? Nothing we can do. */
+    if (!InbvGopInfoValid)
+        return FALSE;
+
+    /*
+     * If the loader did not provide a mode list, we effectively only know
+     * about the current firmware mode (index 0). Allow callers to "switch"
+     * to index 0 so they can treat it as success while keeping the existing
+     * framebuffer parameters intact.
+     */
+    if (InbvGopModeCount == 0 || InbvGopModes == NULL)
+        return (Index == 0);
+
+    /* Reject out-of-range requests up-front. */
+    if (Index >= InbvGopModeCount)
+        return FALSE;
+
+    if (InbvGopCurrentMode < InbvGopModeCount && Index == InbvGopCurrentMode)
+        return TRUE;
+
+    /*
+     * Runtime GOP mode switching is not possible after ExitBootServices.
+     * However, miniports commonly "set" the mode that firmware already
+     * configured. Treat any request that matches the current geometry as a
+     * success so the display stack can continue bringing up the desktop.
+     */
+    if (InbvGopCurrentMode < InbvGopModeCount)
+    {
+        const LOADER_PARAMETER_GOP_MODE *current = &InbvGopModes[InbvGopCurrentMode];
+        const LOADER_PARAMETER_GOP_MODE *requested = &InbvGopModes[Index];
+
+        if ((current->HorizontalResolution == requested->HorizontalResolution) &&
+            (current->VerticalResolution == requested->VerticalResolution) &&
+            (current->PixelsPerScanLine == requested->PixelsPerScanLine) &&
+            (current->PixelFormat == requested->PixelFormat) &&
+            (current->RedMask == requested->RedMask) &&
+            (current->GreenMask == requested->GreenMask) &&
+            (current->BlueMask == requested->BlueMask) &&
+            (current->Reserved == requested->Reserved))
+        {
+            InbvGopCurrentMode = Index;
+            return TRUE;
+        }
+    }
+
+    /* TODO: Runtime GOP SetMode support (requires firmware cooperation). */
     return FALSE;
 }
 
