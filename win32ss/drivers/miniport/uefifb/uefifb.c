@@ -159,35 +159,37 @@ UefiFbEnsureFrameBufferSize(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
 {
     ULONGLONG stride = DevExt->ModeInfo.ScreenStride;
     ULONGLONG height = DevExt->ModeInfo.VisScreenHeight;
-    ULONG aligned;
+    ULONGLONG requiredBytes;
+    ULONG requiredAligned;
+    ULONG reportedAligned;
 
     if ((stride == 0) || (height == 0))
         return;
 
-    aligned = UefiFbRoundToPages(stride * height);
-    if (aligned == 0)
+    if (height != 0 && stride <= (((ULONGLONG)-1) / height))
+        requiredBytes = stride * height;
+    else
+        requiredBytes = (ULONGLONG)-1;
+
+    requiredAligned = UefiFbRoundToPages(requiredBytes);
+    reportedAligned = UefiFbRoundToPages(DevExt->FrameBufferInfo.FrameBufferSize);
+
+    if (requiredAligned == 0)
+        requiredAligned = reportedAligned;
+
+    if (requiredAligned == 0)
         return;
 
-    if (DevExt->FrameBufferInfo.FrameBufferSize == 0 ||
-        DevExt->FrameBufferInfo.FrameBufferSize < aligned)
-    {
-        DevExt->FrameBufferInfo.FrameBufferSize = aligned;
-    }
-    else
-    {
-        DevExt->FrameBufferInfo.FrameBufferSize =
-            UefiFbRoundToPages(DevExt->FrameBufferInfo.FrameBufferSize);
-    }
-
+    DevExt->FrameBufferInfo.FrameBufferSize = requiredAligned;
     DevExt->FrameBufferMapLength =
-        UefiFbRoundToPages((ULONGLONG)DevExt->FrameBufferInfo.FrameBufferSize +
-                           DevExt->FrameBufferOffset);
+        UefiFbRoundToPages((ULONGLONG)requiredAligned + DevExt->FrameBufferOffset);
 
     UEFIFB_LOG(1,
-               "EnsureFrameBufferSize: stride=%I64u height=%I64u fbSize=%lu mapLen=%lu offset=%lu\n",
+               "EnsureFrameBufferSize: stride=%I64u height=%I64u required=%lu reported=%lu mapLen=%lu offset=%lu\n",
                stride,
                height,
-               (unsigned long)DevExt->FrameBufferInfo.FrameBufferSize,
+               (unsigned long)requiredAligned,
+               (unsigned long)reportedAligned,
                (unsigned long)DevExt->FrameBufferMapLength,
                (unsigned long)DevExt->FrameBufferOffset);
 }
@@ -233,27 +235,6 @@ UefiFbRegisterAccessRange(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
     return TRUE;
 }
 
-static BOOLEAN
-UefiFbTableHasMode(_In_reads_(Count) PVIDEO_MODE_INFORMATION Table,
-                   _In_ ULONG Count,
-                   _In_ ULONG Width,
-                   _In_ ULONG Height,
-                   _In_ ULONG BitsPerPixel)
-{
-    ULONG idx;
-    for (idx = 0; idx < Count; ++idx)
-    {
-        if (Table[idx].Length == 0) continue;
-        if ((Table[idx].VisScreenWidth == Width) &&
-            (Table[idx].VisScreenHeight == Height) &&
-            ((Table[idx].BitsPerPlane * Table[idx].NumberOfPlanes) == BitsPerPixel))
-        {
-            return TRUE;
-        }
-    }
-    return FALSE;
-}
-
 static VOID
 UefiFbSelectPreferredMode(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
 {
@@ -265,6 +246,9 @@ UefiFbSelectPreferredMode(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
 
     if (preferred == MAXULONG || DevExt->ModeCount == 0 || DevExt->ModeTable == NULL)
         return;
+
+    if (DevExt->CurrentModeIndex >= DevExt->ModeCount)
+        DevExt->CurrentModeIndex = DevExt->ModeTable[0].ModeIndex;
 
     if (!InbvQueryGopModeCount(&gopCount) || preferred >= gopCount)
         return;
@@ -304,6 +288,8 @@ UefiFbPopulateModeInformation(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
     ULONG RedMask, GreenMask, BlueMask;
     ULONG BitsPerPixel;
     ULONG PixelsPerScanLine;
+    ULONG BytesPerPixel;
+    ULONGLONG StrideBytes;
 
     if (!UefiFbValidateFrameBufferInfo(DevExt))
         return FALSE;
@@ -338,13 +324,26 @@ UefiFbPopulateModeInformation(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
     }
 
     PixelsPerScanLine = Fb->PixelsPerScanLine ? Fb->PixelsPerScanLine : Fb->HorizontalResolution;
+    if (PixelsPerScanLine == 0)
+        return FALSE;
+
+    BytesPerPixel = (BitsPerPixel + 7u) / 8u;
+    StrideBytes = (ULONGLONG)PixelsPerScanLine * (ULONGLONG)BytesPerPixel;
+    if (StrideBytes == 0 || StrideBytes > MAXULONG)
+    {
+        UEFIFB_LOG(0,
+                   "PopulateModeInfo: stride overflow (%lu px, %u bpp)\n",
+                   PixelsPerScanLine,
+                   (unsigned int)BitsPerPixel);
+        return FALSE;
+    }
 
     VideoPortZeroMemory(Mode, sizeof(*Mode));
     Mode->Length = sizeof(*Mode);
     Mode->ModeIndex = 0;
     Mode->VisScreenWidth = Fb->HorizontalResolution;
     Mode->VisScreenHeight = Fb->VerticalResolution;
-    Mode->ScreenStride = PixelsPerScanLine * (BitsPerPixel / 8);
+    Mode->ScreenStride = (ULONG)StrideBytes;
     Mode->NumberOfPlanes = 1;
     Mode->BitsPerPlane = BitsPerPixel;
     Mode->Frequency = 60;
@@ -1287,6 +1286,11 @@ UefiFbFindAdapter(_In_ PVOID HwDeviceExtension,
 
     if (!UefiFbBuildModeTable(DevExt))
         return ERROR_NOT_ENOUGH_MEMORY;
+
+    if (DevExt->ModeCount != 0 && DevExt->ModeTable != NULL)
+        DevExt->CurrentModeIndex = DevExt->ModeTable[0].ModeIndex;
+    else
+        DevExt->CurrentModeIndex = 0;
 
     UefiFbSelectPreferredMode(DevExt);
 

@@ -331,6 +331,8 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
         extern ULONG UefiGopPreferredMode;
         extern PLOADER_PARAMETER_FRAMEBUFFER UefiGopFramebuffers;
         extern ULONG UefiGopFramebufferCount;
+        extern BOOLEAN UefiGopModesPermanent;
+        extern BOOLEAN UefiGopFramebuffersPermanent;
         extern BOOLEAN UefiIsFramebufferReady(VOID);
         
         if (framebufferData.BaseAddress != 0)
@@ -369,8 +371,32 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
 
         if (UefiGopFramebuffers && UefiGopFramebufferCount)
         {
-            Extension->GopFramebuffers = (PLOADER_PARAMETER_FRAMEBUFFER)PaToVa(UefiGopFramebuffers);
-            Extension->GopFramebufferCount = UefiGopFramebufferCount;
+            SIZE_T bytes = (SIZE_T)UefiGopFramebufferCount * sizeof(LOADER_PARAMETER_FRAMEBUFFER);
+
+            if (!UefiGopFramebuffersPermanent)
+            {
+                PVOID permanent = MmAllocateMemoryWithType(bytes, LoaderMemoryData);
+                if (permanent)
+                {
+                    RtlCopyMemory(permanent, UefiGopFramebuffers, bytes);
+                    UefiGopFramebuffers = permanent;
+                    UefiGopFramebuffersPermanent = TRUE;
+                    TRACE("Copied %lu framebuffer descriptors into permanent loader memory\n",
+                          (unsigned long)UefiGopFramebufferCount);
+                }
+                else
+                {
+                    WARN("Failed to allocate permanent storage for GOP framebuffer list; dropping entries\n");
+                    UefiGopFramebuffers = NULL;
+                    UefiGopFramebufferCount = 0;
+                }
+            }
+
+            if (UefiGopFramebuffers && UefiGopFramebuffersPermanent)
+            {
+                Extension->GopFramebuffers = (PLOADER_PARAMETER_FRAMEBUFFER)PaToVa(UefiGopFramebuffers);
+                Extension->GopFramebufferCount = UefiGopFramebufferCount;
+            }
         }
         else if (Extension->GopFramebuffer.FrameBufferBase.QuadPart != 0)
         {
@@ -387,10 +413,34 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
         /* Pass GOP mode enumeration to the kernel (if available) */
         if (UefiGopModes && UefiGopModeCount)
         {
-            Extension->GopModes = (PLOADER_PARAMETER_GOP_MODE)PaToVa(UefiGopModes);
-            Extension->GopModeCount = UefiGopModeCount;
-            Extension->GopPreferredMode = UefiGopPreferredMode;
-            TRACE("Passing %lu GOP modes to kernel (preferred=%lu)\n", UefiGopModeCount, UefiGopPreferredMode);
+            SIZE_T bytes = (SIZE_T)UefiGopModeCount * sizeof(LOADER_PARAMETER_GOP_MODE);
+
+            if (!UefiGopModesPermanent)
+            {
+                PVOID permanent = MmAllocateMemoryWithType(bytes, LoaderMemoryData);
+                if (permanent)
+                {
+                    RtlCopyMemory(permanent, UefiGopModes, bytes);
+                    UefiGopModes = permanent;
+                    UefiGopModesPermanent = TRUE;
+                    TRACE("Copied %lu GOP mode descriptors into permanent loader memory\n",
+                          (unsigned long)UefiGopModeCount);
+                }
+                else
+                {
+                    WARN("Failed to allocate permanent storage for GOP mode list; dropping descriptors\n");
+                    UefiGopModes = NULL;
+                    UefiGopModeCount = 0;
+                }
+            }
+
+            if (UefiGopModes && UefiGopModesPermanent)
+            {
+                Extension->GopModes = (PLOADER_PARAMETER_GOP_MODE)PaToVa(UefiGopModes);
+                Extension->GopModeCount = UefiGopModeCount;
+                Extension->GopPreferredMode = UefiGopPreferredMode;
+                TRACE("Passing %lu GOP modes to kernel (preferred=%lu)\n", UefiGopModeCount, UefiGopPreferredMode);
+            }
         }
 
         /* Pass BGRT info to the kernel for seamless boot logo support. */
