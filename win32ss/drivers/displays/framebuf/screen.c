@@ -126,6 +126,9 @@ IntInitScreenInfo(
    ULONG ModeCount;
    ULONG ModeInfoSize;
    PVIDEO_MODE_INFORMATION ModeInfo, ModeInfoPtr, SelectedMode = NULL;
+   VIDEO_MODE_INFORMATION CurrentModeInfo;
+   BOOLEAN HaveCurrentMode = FALSE;
+   ULONG ReturnedLength = 0;
    VIDEO_COLOR_CAPABILITIES ColorCapabilities;
    ULONG Temp;
 
@@ -146,26 +149,65 @@ IntInitScreenInfo(
    if (pDevMode->dmPelsWidth == 0 && pDevMode->dmPelsHeight == 0 &&
        pDevMode->dmBitsPerPel == 0 && pDevMode->dmDisplayFrequency == 0)
    {
-      ModeInfoPtr = ModeInfo;
-      while (ModeCount-- > 0)
+      if (!EngDeviceIoControl(ppdev->hDriver,
+                              IOCTL_VIDEO_QUERY_CURRENT_MODE,
+                              NULL,
+                              0,
+                              &CurrentModeInfo,
+                              sizeof(CurrentModeInfo),
+                              &ReturnedLength) &&
+          ReturnedLength >= sizeof(CurrentModeInfo))
       {
+         HaveCurrentMode = TRUE;
+      }
+
+      for (ULONG i = 0; i < ModeCount; ++i)
+      {
+         ModeInfoPtr = (PVIDEO_MODE_INFORMATION)(((PUCHAR)ModeInfo) + i * ModeInfoSize);
          if (ModeInfoPtr->Length == 0)
-         {
-            ModeInfoPtr = (PVIDEO_MODE_INFORMATION)
-               (((PUCHAR)ModeInfoPtr) + ModeInfoSize);
             continue;
+
+         if (HaveCurrentMode)
+         {
+            if (ModeInfoPtr->ModeIndex == CurrentModeInfo.ModeIndex ||
+                (ModeInfoPtr->VisScreenWidth == CurrentModeInfo.VisScreenWidth &&
+                 ModeInfoPtr->VisScreenHeight == CurrentModeInfo.VisScreenHeight &&
+                 (ModeInfoPtr->BitsPerPlane * ModeInfoPtr->NumberOfPlanes) ==
+                     (CurrentModeInfo.BitsPerPlane * CurrentModeInfo.NumberOfPlanes)))
+            {
+               SelectedMode = ModeInfoPtr;
+               break;
+            }
          }
-         SelectedMode = ModeInfoPtr;
-         break;
+         else if (!SelectedMode)
+         {
+            SelectedMode = ModeInfoPtr;
+         }
+      }
+
+      if (!SelectedMode)
+      {
+         ModeInfoPtr = ModeInfo;
+         for (ULONG i = 0; i < ModeCount; ++i)
+         {
+            if (ModeInfoPtr->Length != 0)
+            {
+               SelectedMode = ModeInfoPtr;
+               break;
+            }
+            ModeInfoPtr = (PVIDEO_MODE_INFORMATION)(((PUCHAR)ModeInfoPtr) + ModeInfoSize);
+         }
       }
    }
    else
    {
-      ModeInfoPtr = ModeInfo;
-      while (ModeCount-- > 0)
+      for (ULONG i = 0; i < ModeCount; ++i)
       {
-         if (ModeInfoPtr->Length > 0 &&
-             pDevMode->dmPelsWidth == ModeInfoPtr->VisScreenWidth &&
+         ModeInfoPtr = (PVIDEO_MODE_INFORMATION)(((PUCHAR)ModeInfo) + i * ModeInfoSize);
+         if (ModeInfoPtr->Length == 0)
+            continue;
+
+         if (pDevMode->dmPelsWidth == ModeInfoPtr->VisScreenWidth &&
              pDevMode->dmPelsHeight == ModeInfoPtr->VisScreenHeight &&
              pDevMode->dmBitsPerPel == (ModeInfoPtr->BitsPerPlane *
                                         ModeInfoPtr->NumberOfPlanes) &&
@@ -174,14 +216,13 @@ IntInitScreenInfo(
             SelectedMode = ModeInfoPtr;
             break;
          }
-
-         ModeInfoPtr = (PVIDEO_MODE_INFORMATION)
-            (((PUCHAR)ModeInfoPtr) + ModeInfoSize);
       }
    }
 
    if (SelectedMode == NULL)
    {
+      FB_DBG("No usable video mode returned by miniport (ModeCount=%lu)\n",
+             (unsigned long)ModeCount);
       EngFreeMem(ModeInfo);
       return FALSE;
    }
