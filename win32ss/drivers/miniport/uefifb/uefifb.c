@@ -36,6 +36,20 @@ typedef enum _MEMORY_CACHING_TYPE
 #define _MEMORY_CACHING_TYPE_DEFINED
 #endif
 
+static BOOLEAN UefiFbPopulateModeInformation(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt);
+static BOOLEAN UefiFbBuildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt);
+static VOID UefiFbSelectPreferredMode(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt);
+static BOOLEAN UefiFbRegisterAccessRange(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt);
+static BOOLEAN UefiFbUnmapVideoMemory(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
+                                      _In_ PVIDEO_MEMORY VideoMemory,
+                                      _Out_ PSTATUS_BLOCK StatusBlock);
+static VOID UefiFbSetMapInformation(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
+                                    _Inout_ PVOID MapInfoBuffer,
+                                    _In_ ULONG BufferLength,
+                                    _In_ PVOID FrameBufferBase,
+                                    _In_ ULONGLONG VisibleLength,
+                                    _Out_ PSTATUS_BLOCK StatusBlock);
+
 PVOID
 NTAPI
 MmMapIoSpace(
@@ -64,23 +78,447 @@ static const UCHAR UefiFbSyntheticEdid[128] = {
     0x2E,0x08,0x00,0x0A,0x20,0x20,0x20,0x20, 0x20,0x20,0x00,0x00,0x00,0x00,0x00,0x2E
 };
 
+static VOID
+UefiFbFinalizeEdidChecksum(_Inout_updates_(UEFIFB_EDID_LENGTH) PUCHAR Edid)
+{
+    ULONG i;
+    ULONG sum = 0;
+
+    for (i = 0; i < UEFIFB_EDID_LENGTH - 1; ++i)
+        sum += Edid[i];
+
+    Edid[UEFIFB_EDID_LENGTH - 1] = (UCHAR)((256 - (sum & 0xFF)) & 0xFF);
+}
+
+static VOID
+UefiFbBuildEdidForFramebuffer(_In_ const LOADER_PARAMETER_FRAMEBUFFER *Fb,
+                              _In_ ULONG ChildIndex,
+                              _Out_writes_bytes_(UEFIFB_EDID_LENGTH) PUCHAR Edid)
+{
+    ULONG width = Fb->HorizontalResolution ? Fb->HorizontalResolution : 1024;
+    ULONG height = Fb->VerticalResolution ? Fb->VerticalResolution : 768;
+    ULONG refresh = 60;
+    ULONGLONG pixelClock;
+    ULONG pixelClock10KHz;
+    ULONG hBlank;
+    ULONG vBlank;
+    ULONG hTotal;
+    ULONG vTotal;
+    ULONG hFrontPorch;
+    ULONG hSyncWidth;
+    ULONG vFrontPorch;
+    ULONG vSyncWidth;
+    ULONG imageWidthMm;
+    ULONG imageHeightMm;
+
+    VideoPortMoveMemory(Edid, (PVOID)UefiFbSyntheticEdid, sizeof(UefiFbSyntheticEdid));
+
+    hBlank = width / 5;
+    if (hBlank < 80) hBlank = 80;
+    if (hBlank > 0x0FFF) hBlank = 0x0FFF;
+
+    vBlank = height / 10;
+    if (vBlank < 10) vBlank = 10;
+    if (vBlank > 0x0FFF) vBlank = 0x0FFF;
+
+    hTotal = width + hBlank;
+    vTotal = height + vBlank;
+
+    pixelClock = (ULONGLONG)hTotal * (ULONGLONG)vTotal * refresh;
+    pixelClock10KHz = (ULONG)(pixelClock / 10000);
+    if (pixelClock10KHz == 0)
+        pixelClock10KHz = 1;
+    if (pixelClock10KHz > 0xFFFF)
+        pixelClock10KHz = 0xFFFF;
+
+    hFrontPorch = hBlank / 3;
+    if (hFrontPorch < 8) hFrontPorch = 8;
+    if (hFrontPorch > 0x3FF) hFrontPorch = 0x3FF;
+
+    hSyncWidth = hBlank / 4;
+    if (hSyncWidth < 8) hSyncWidth = 8;
+    if (hSyncWidth > 0x3FF) hSyncWidth = 0x3FF;
+
+    if (hFrontPorch + hSyncWidth >= hBlank)
+    {
+        ULONG excess = (hFrontPorch + hSyncWidth) - hBlank + 1;
+        if (hFrontPorch > excess)
+            hFrontPorch -= excess;
+        else if (hSyncWidth > excess)
+            hSyncWidth -= excess;
+    }
+
+    vFrontPorch = vBlank / 3;
+    if (vFrontPorch < 1) vFrontPorch = 1;
+    if (vFrontPorch > 0x3F) vFrontPorch = 0x3F;
+
+    vSyncWidth = vBlank / 4;
+    if (vSyncWidth < 3) vSyncWidth = 3;
+    if (vSyncWidth > 0x3F) vSyncWidth = 0x3F;
+
+    if (vFrontPorch + vSyncWidth >= vBlank)
+    {
+        ULONG excess = (vFrontPorch + vSyncWidth) - vBlank + 1;
+        if (vFrontPorch > excess)
+            vFrontPorch -= excess;
+        else if (vSyncWidth > excess)
+            vSyncWidth -= excess;
+    }
+
+    imageWidthMm = width * 10 / 37;
+    imageHeightMm = height * 10 / 37;
+    if (imageWidthMm > 0x0FFF) imageWidthMm = 0x0FFF;
+    if (imageHeightMm > 0x0FFF) imageHeightMm = 0x0FFF;
+
+    Edid[54] = (UCHAR)(pixelClock10KHz & 0xFF);
+    Edid[55] = (UCHAR)((pixelClock10KHz >> 8) & 0xFF);
+
+    Edid[56] = (UCHAR)(width & 0xFF);
+    Edid[57] = (UCHAR)(hBlank & 0xFF);
+    Edid[58] = (UCHAR)(((width >> 8) & 0xF) << 4 | ((hBlank >> 8) & 0xF));
+
+    Edid[59] = (UCHAR)(height & 0xFF);
+    Edid[60] = (UCHAR)(vBlank & 0xFF);
+    Edid[61] = (UCHAR)(((height >> 8) & 0xF) << 4 | ((vBlank >> 8) & 0xF));
+
+    Edid[62] = (UCHAR)(hFrontPorch & 0xFF);
+    Edid[63] = (UCHAR)(hSyncWidth & 0xFF);
+    Edid[64] = (UCHAR)((((hFrontPorch >> 8) & 0x3) << 6) |
+                       (((hSyncWidth >> 8) & 0x3) << 4) |
+                       (((vFrontPorch >> 4) & 0x3) << 2) |
+                       ((vSyncWidth >> 4) & 0x3));
+    Edid[65] = (UCHAR)(((vFrontPorch & 0xF) << 4) |
+                       (vSyncWidth & 0xF));
+
+    Edid[66] = (UCHAR)(imageWidthMm & 0xFF);
+    Edid[67] = (UCHAR)(imageHeightMm & 0xFF);
+    Edid[68] = (UCHAR)(((imageWidthMm >> 8) & 0xF) << 4 |
+                       ((imageHeightMm >> 8) & 0xF));
+
+    Edid[69] = 0;
+    Edid[70] = 0;
+
+    Edid[0x6E] = (UCHAR)('0' + (ChildIndex % 10));
+
+    UefiFbFinalizeEdidChecksum(Edid);
+}
+
+static PUEFIFB_CHILD_OUTPUT
+UefiFbGetActiveChild(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
+{
+    if (!DevExt->ChildOutputs || DevExt->ChildCount == 0)
+        return NULL;
+
+    if (DevExt->ActiveChild >= DevExt->ChildCount)
+        DevExt->ActiveChild = 0;
+
+    return &DevExt->ChildOutputs[DevExt->ActiveChild];
+}
+
+static VOID
+UefiFbMirrorActiveChildToDevExt(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
+{
+    PUEFIFB_CHILD_OUTPUT child = UefiFbGetActiveChild(DevExt);
+    if (!child)
+        return;
+
+    DevExt->FrameBufferInfo = child->FrameBuffer;
+    DevExt->FrameBufferOffset = child->FrameBufferOffset;
+    DevExt->FrameBufferMapLength = child->FrameBufferMapLength;
+    DevExt->FrameBufferLength64 = child->FrameBufferLength64;
+    DevExt->ModeInfo = child->ModeInfo;
+    DevExt->ModeTable = child->ModeTable;
+    DevExt->ModeCount = child->ModeCount;
+    DevExt->CurrentModeIndex = child->CurrentModeIndex;
+    DevExt->ModeSet = child->ModeSet;
+}
+
+static VOID
+UefiFbMirrorDevExtToActiveChild(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
+{
+    PUEFIFB_CHILD_OUTPUT child = UefiFbGetActiveChild(DevExt);
+    if (!child)
+        return;
+
+    child->FrameBuffer = DevExt->FrameBufferInfo;
+    child->FrameBufferOffset = DevExt->FrameBufferOffset;
+    child->FrameBufferMapLength = DevExt->FrameBufferMapLength;
+    child->FrameBufferLength64 = DevExt->FrameBufferLength64;
+    child->ModeInfo = DevExt->ModeInfo;
+    child->ModeTable = DevExt->ModeTable;
+    child->ModeCount = DevExt->ModeCount;
+    child->CurrentModeIndex = DevExt->CurrentModeIndex;
+    child->ModeSet = DevExt->ModeSet;
+}
+
+static VOID
+UefiFbReleaseChildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
+                            _Inout_ PUEFIFB_CHILD_OUTPUT Child)
+{
+    PVIDEO_MODE_INFORMATION table;
+
+    if (!Child || Child->ModeTable == NULL)
+        return;
+
+    table = Child->ModeTable;
+    Child->ModeTable = NULL;
+    Child->ModeCount = 0;
+    Child->CurrentModeIndex = 0;
+    Child->ModeSet = FALSE;
+
+    if (DevExt->ModeTable == table)
+    {
+        DevExt->ModeTable = NULL;
+        DevExt->ModeCount = 0;
+        DevExt->CurrentModeIndex = 0;
+        DevExt->ModeSet = FALSE;
+    }
+
+    VideoPortFreePool(DevExt, table);
+}
+
+static VOID
+UefiFbDestroyChildOutputs(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
+{
+    ULONG i;
+
+    if (!DevExt->ChildOutputs)
+        return;
+
+    for (i = 0; i < DevExt->ChildCount; ++i)
+        UefiFbReleaseChildModeTable(DevExt, &DevExt->ChildOutputs[i]);
+
+    VideoPortFreePool(DevExt, DevExt->ChildOutputs);
+    DevExt->ChildOutputs = NULL;
+    DevExt->ChildCount = 0;
+    DevExt->ActiveChild = 0;
+}
+
+static ULONG
+UefiFbFindPrimaryChild(_In_ PUEFIFB_DEVICE_EXTENSION DevExt)
+{
+    ULONG i;
+
+    if (!DevExt->ChildOutputs || DevExt->ChildCount == 0)
+        return 0;
+
+    for (i = 0; i < DevExt->ChildCount; ++i)
+    {
+        const LOADER_PARAMETER_FRAMEBUFFER *fb = &DevExt->ChildOutputs[i].FrameBuffer;
+
+        if ((fb->FrameBufferBase.QuadPart == DevExt->FrameBufferInfo.FrameBufferBase.QuadPart) &&
+            (fb->HorizontalResolution == DevExt->FrameBufferInfo.HorizontalResolution) &&
+            (fb->VerticalResolution == DevExt->FrameBufferInfo.VerticalResolution))
+        {
+            return i;
+        }
+    }
+
+    return 0;
+}
+
+static VOID
+UefiFbInitializeChildOutputs(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
+{
+    ULONG fbCount = InbvGetGopFrameBufferCount();
+    ULONG recorded = 0;
+    SIZE_T allocSize;
+    ULONG i;
+    PUEFIFB_CHILD_OUTPUT outputs = NULL;
+
+    UefiFbDestroyChildOutputs(DevExt);
+
+    if (fbCount)
+    {
+        allocSize = sizeof(UEFIFB_CHILD_OUTPUT) * fbCount;
+        outputs = VideoPortAllocatePool(DevExt, 0, allocSize, 'bfEU');
+        if (outputs)
+        {
+            VideoPortZeroMemory(outputs, allocSize);
+            for (i = 0; i < fbCount; ++i)
+            {
+                if (InbvGetGopFrameBufferInfoByIndex(i, &outputs[recorded].FrameBuffer))
+                {
+                    UefiFbBuildEdidForFramebuffer(&outputs[recorded].FrameBuffer,
+                                                  recorded,
+                                                  outputs[recorded].SyntheticEdid);
+                    outputs[recorded].FrameBufferLength64 =
+                        outputs[recorded].FrameBuffer.FrameBufferSize;
+                    recorded++;
+                }
+            }
+        }
+    }
+
+    if (!outputs || recorded == 0)
+    {
+        allocSize = sizeof(UEFIFB_CHILD_OUTPUT);
+        outputs = VideoPortAllocatePool(DevExt, 0, allocSize, 'bfEU');
+        if (!outputs)
+        {
+            DevExt->ChildOutputs = NULL;
+            DevExt->ChildCount = 0;
+            DevExt->ActiveChild = 0;
+            return;
+        }
+
+        VideoPortZeroMemory(outputs, allocSize);
+        outputs[0].FrameBuffer = DevExt->FrameBufferInfo;
+        UefiFbBuildEdidForFramebuffer(&outputs[0].FrameBuffer, 0, outputs[0].SyntheticEdid);
+        outputs[0].FrameBufferLength64 = DevExt->FrameBufferLength64;
+        recorded = 1;
+    }
+
+    DevExt->ChildOutputs = outputs;
+    DevExt->ChildCount = recorded;
+    DevExt->ActiveChild = UefiFbFindPrimaryChild(DevExt);
+    UefiFbMirrorDevExtToActiveChild(DevExt);
+}
+
+static BOOLEAN
+UefiFbActivateChild(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
+                    _In_ ULONG ChildIndex,
+                    _Out_ PSTATUS_BLOCK StatusBlock)
+{
+    ULONG previousChild = DevExt->ActiveChild;
+    PUEFIFB_CHILD_OUTPUT child;
+
+    if (!DevExt->ChildOutputs || ChildIndex >= DevExt->ChildCount)
+    {
+        StatusBlock->Status = ERROR_INVALID_PARAMETER;
+        return FALSE;
+    }
+
+    if (DevExt->ActiveChild == ChildIndex)
+    {
+        StatusBlock->Status = NO_ERROR;
+        return TRUE;
+    }
+
+    if (DevExt->MappedFrameBuffer != NULL)
+    {
+        VIDEO_MEMORY video = {0};
+        STATUS_BLOCK unmap = {0};
+        video.RequestedVirtualAddress = DevExt->MappedFrameBuffer;
+        (VOID)UefiFbUnmapVideoMemory(DevExt, &video, &unmap);
+    }
+
+    DevExt->ActiveChild = ChildIndex;
+    UefiFbMirrorActiveChildToDevExt(DevExt);
+    child = &DevExt->ChildOutputs[ChildIndex];
+
+    if (child->ModeTable && child->ModeCount)
+    {
+        if (!UefiFbRegisterAccessRange(DevExt))
+        {
+            StatusBlock->Status = ERROR_INVALID_PARAMETER;
+            DevExt->ActiveChild = previousChild;
+            UefiFbMirrorActiveChildToDevExt(DevExt);
+            return FALSE;
+        }
+
+        StatusBlock->Status = NO_ERROR;
+        return TRUE;
+    }
+
+    if (!UefiFbPopulateModeInformation(DevExt))
+    {
+        StatusBlock->Status = ERROR_DEV_NOT_EXIST;
+        DevExt->ActiveChild = previousChild;
+        UefiFbMirrorActiveChildToDevExt(DevExt);
+        return FALSE;
+    }
+
+    if (!UefiFbBuildModeTable(DevExt))
+    {
+        StatusBlock->Status = ERROR_NOT_ENOUGH_MEMORY;
+        DevExt->ActiveChild = previousChild;
+        UefiFbMirrorActiveChildToDevExt(DevExt);
+        return FALSE;
+    }
+
+    UefiFbSelectPreferredMode(DevExt);
+    if (!UefiFbRegisterAccessRange(DevExt))
+    {
+        StatusBlock->Status = ERROR_INVALID_PARAMETER;
+        DevExt->ActiveChild = previousChild;
+        UefiFbMirrorActiveChildToDevExt(DevExt);
+        return FALSE;
+    }
+
+    UefiFbMirrorDevExtToActiveChild(DevExt);
+    StatusBlock->Status = NO_ERROR;
+    return TRUE;
+}
+
+static BOOLEAN
+UefiFbEnsureChildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
+                           _In_ ULONG ChildIndex,
+                           _Out_ PSTATUS_BLOCK StatusBlock)
+{
+    ULONG previousChild;
+    STATUS_BLOCK localStatus = {0};
+
+    if (!DevExt->ChildOutputs || ChildIndex >= DevExt->ChildCount)
+    {
+        StatusBlock->Status = ERROR_INVALID_PARAMETER;
+        return FALSE;
+    }
+
+    if (DevExt->ChildOutputs[ChildIndex].ModeTable &&
+        DevExt->ChildOutputs[ChildIndex].ModeCount)
+    {
+        StatusBlock->Status = NO_ERROR;
+        return TRUE;
+    }
+
+    previousChild = DevExt->ActiveChild;
+    if (!UefiFbActivateChild(DevExt, ChildIndex, &localStatus))
+    {
+        *StatusBlock = localStatus;
+        return FALSE;
+    }
+
+    if (!DevExt->ChildOutputs[ChildIndex].ModeTable ||
+        DevExt->ChildOutputs[ChildIndex].ModeCount == 0)
+    {
+        StatusBlock->Status = ERROR_DEV_NOT_EXIST;
+        return FALSE;
+    }
+
+    if (previousChild != ChildIndex)
+    {
+        STATUS_BLOCK restore = {0};
+        if (!UefiFbActivateChild(DevExt, previousChild, &restore))
+        {
+            *StatusBlock = restore;
+            return FALSE;
+        }
+    }
+
+    StatusBlock->Status = NO_ERROR;
+    return TRUE;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Helpers                                                                   */
 /* ------------------------------------------------------------------------- */
 
-static ULONG
+static ULONGLONG
 UefiFbRoundToPages(ULONGLONG Size)
 {
-    ULONGLONG aligned;
+    ULONGLONG mask;
+    ULONGLONG maxAligned;
 
     if (Size == 0)
         return 0;
 
-    aligned = (Size + (PAGE_SIZE - 1)) & ~((ULONGLONG)PAGE_SIZE - 1);
-    if (aligned > MAXULONG)
-        return MAXULONG;
+    mask = PAGE_SIZE - 1;
+    maxAligned = ((ULONGLONG)-1) & ~mask;
+    if (Size > maxAligned)
+        return maxAligned;
 
-    return (ULONG)aligned;
+    return (Size + mask) & ~mask;
 }
 
 static ULONG
@@ -140,10 +578,19 @@ UefiFbValidateFrameBufferInfo(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
     DevExt->FrameBufferOffset = (ULONG)(base & ((ULONGLONG)PAGE_SIZE - 1));
     Fb->FrameBufferBase.QuadPart = base & ~((ULONGLONG)PAGE_SIZE - 1);
 
-    DevExt->FrameBufferMapLength =
-        UefiFbRoundToPages((ULONGLONG)Fb->FrameBufferSize + DevExt->FrameBufferOffset);
-    if (DevExt->FrameBufferMapLength == 0)
-        DevExt->FrameBufferMapLength = UefiFbRoundToPages(Fb->FrameBufferSize);
+    {
+        ULONGLONG mapLength64;
+
+        mapLength64 =
+            UefiFbRoundToPages((ULONGLONG)Fb->FrameBufferSize + DevExt->FrameBufferOffset);
+        if (mapLength64 == 0)
+            mapLength64 = UefiFbRoundToPages(Fb->FrameBufferSize);
+
+        if (mapLength64 > MAXULONG)
+            DevExt->FrameBufferMapLength = MAXULONG;
+        else
+            DevExt->FrameBufferMapLength = (ULONG)mapLength64;
+    }
 
     if ((Fb->PixelsPerScanLine == 0) ||
         (Fb->PixelsPerScanLine < Fb->HorizontalResolution))
@@ -160,6 +607,9 @@ UefiFbEnsureFrameBufferSize(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
     ULONGLONG stride = DevExt->ModeInfo.ScreenStride;
     ULONGLONG height = DevExt->ModeInfo.VisScreenHeight;
     ULONGLONG requiredBytes;
+    ULONGLONG requiredAligned64;
+    ULONGLONG reportedAligned64;
+    ULONGLONG mapLength64;
     ULONG requiredAligned;
     ULONG reportedAligned;
 
@@ -171,18 +621,33 @@ UefiFbEnsureFrameBufferSize(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
     else
         requiredBytes = (ULONGLONG)-1;
 
-    requiredAligned = UefiFbRoundToPages(requiredBytes);
-    reportedAligned = UefiFbRoundToPages(DevExt->FrameBufferInfo.FrameBufferSize);
+    requiredAligned64 = UefiFbRoundToPages(requiredBytes);
+    reportedAligned64 = UefiFbRoundToPages(DevExt->FrameBufferInfo.FrameBufferSize);
 
-    if (requiredAligned == 0)
-        requiredAligned = reportedAligned;
+    if (requiredAligned64 == 0)
+        requiredAligned64 = reportedAligned64;
 
-    if (requiredAligned == 0)
+    if (requiredAligned64 == 0)
         return;
 
+    requiredAligned = (requiredAligned64 > MAXULONG)
+                        ? MAXULONG
+                        : (ULONG)requiredAligned64;
+    reportedAligned = (reportedAligned64 > MAXULONG)
+                        ? MAXULONG
+                        : (ULONG)reportedAligned64;
+
+    DevExt->FrameBufferLength64 = requiredAligned64;
     DevExt->FrameBufferInfo.FrameBufferSize = requiredAligned;
-    DevExt->FrameBufferMapLength =
-        UefiFbRoundToPages((ULONGLONG)requiredAligned + DevExt->FrameBufferOffset);
+
+    mapLength64 = UefiFbRoundToPages(requiredAligned64 + DevExt->FrameBufferOffset);
+    if (mapLength64 == 0)
+        mapLength64 = requiredAligned64;
+
+    if (mapLength64 > MAXULONG)
+        DevExt->FrameBufferMapLength = MAXULONG;
+    else
+        DevExt->FrameBufferMapLength = (ULONG)mapLength64;
 
     UEFIFB_LOG(1,
                "EnsureFrameBufferSize: stride=%I64u height=%I64u required=%lu reported=%lu mapLen=%lu offset=%lu\n",
@@ -192,6 +657,41 @@ UefiFbEnsureFrameBufferSize(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
                (unsigned long)reportedAligned,
                (unsigned long)DevExt->FrameBufferMapLength,
                (unsigned long)DevExt->FrameBufferOffset);
+
+    UefiFbMirrorDevExtToActiveChild(DevExt);
+}
+
+static VOID
+UefiFbSetMapInformation(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
+                                    _Inout_ PVOID MapInfoBuffer,
+                                    _In_ ULONG BufferLength,
+                                    _In_ PVOID FrameBufferBase,
+                                    _In_ ULONGLONG VisibleLength,
+                                    _Out_ PSTATUS_BLOCK StatusBlock)
+{
+    UNREFERENCED_PARAMETER(DevExt);
+
+    if (BufferLength >= sizeof(VIDEO_MEMORY_INFORMATION64))
+    {
+        PVIDEO_MEMORY_INFORMATION64 info64 = MapInfoBuffer;
+        info64->VideoRamBase = FrameBufferBase;
+        info64->VideoRamLength = VisibleLength;
+        info64->FrameBufferBase = FrameBufferBase;
+        info64->FrameBufferLength = VisibleLength;
+        StatusBlock->Information = sizeof(VIDEO_MEMORY_INFORMATION64);
+    }
+    else
+    {
+        PVIDEO_MEMORY_INFORMATION info = MapInfoBuffer;
+        ULONG truncated = (VisibleLength > MAXULONG) ? MAXULONG : (ULONG)VisibleLength;
+        info->VideoRamBase = FrameBufferBase;
+        info->VideoRamLength = truncated;
+        info->FrameBufferBase = FrameBufferBase;
+        info->FrameBufferLength = truncated;
+        StatusBlock->Information = sizeof(VIDEO_MEMORY_INFORMATION);
+    }
+
+    StatusBlock->Status = NO_ERROR;
 }
 
 static BOOLEAN
@@ -210,10 +710,13 @@ UefiFbRegisterAccessRange(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
 
     if (mapLength == 0)
     {
-        mapLength = UefiFbRoundToPages((ULONGLONG)DevExt->FrameBufferInfo.FrameBufferSize +
-                                       DevExt->FrameBufferOffset);
-        if (mapLength == 0)
+        ULONGLONG mapLength64 =
+            UefiFbRoundToPages((ULONGLONG)DevExt->FrameBufferInfo.FrameBufferSize +
+                               DevExt->FrameBufferOffset);
+        if (mapLength64 == 0)
             return FALSE;
+
+        mapLength = (mapLength64 > MAXULONG) ? MAXULONG : (ULONG)mapLength64;
     }
 
     DevExt->AccessRanges[0].RangeStart = DevExt->FrameBufferInfo.FrameBufferBase;
@@ -271,6 +774,7 @@ UefiFbSelectPreferredMode(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
             (modeBpp == desiredBpp))
         {
             DevExt->CurrentModeIndex = mode->ModeIndex;
+            UefiFbMirrorDevExtToActiveChild(DevExt);
             return;
         }
     }
@@ -378,6 +882,8 @@ UefiFbBuildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
 {
     ULONG gopCount = 0, i, built = 0;
     LOADER_PARAMETER_FRAMEBUFFER fb;
+    PVIDEO_MODE_INFORMATION modeTable;
+    SIZE_T allocSize;
 
     if (!InbvQueryGopModeCount(&gopCount) || gopCount == 0)
     {
@@ -387,11 +893,9 @@ UefiFbBuildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
 
     UEFIFB_LOG(1, "BuildModeTable: GOP reports %lu modes\n", gopCount);
 
-    DevExt->ModeTable = (PVIDEO_MODE_INFORMATION)
-        VideoPortAllocatePool(DevExt, 0,
-                              sizeof(VIDEO_MODE_INFORMATION) * gopCount,
-                              'bfEU');
-    if (!DevExt->ModeTable)
+    allocSize = sizeof(VIDEO_MODE_INFORMATION) * gopCount;
+    modeTable = VideoPortAllocatePool(DevExt, 0, allocSize, 'bfEU');
+    if (!modeTable)
         return FALSE;
 
     for (i = 0; i < gopCount; ++i)
@@ -427,10 +931,10 @@ UefiFbBuildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
             }
         }
 
-        VideoPortMoveMemory(&DevExt->ModeTable[built],
+        VideoPortMoveMemory(&modeTable[built],
                             &DevExt->ModeInfo,
                             sizeof(VIDEO_MODE_INFORMATION));
-        DevExt->ModeTable[built].ModeIndex = built;
+        modeTable[built].ModeIndex = built;
         UEFIFB_LOG(1,
                    "  mode[%lu] = %ux%u %ubpp stride=%lu\n",
                    (unsigned long)built,
@@ -443,8 +947,7 @@ UefiFbBuildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
 
     if (!UefiFbRestoreCurrentFrameBufferInfo(DevExt))
     {
-        VideoPortFreePool(DevExt, DevExt->ModeTable);
-        DevExt->ModeTable = NULL;
+        VideoPortFreePool(DevExt, modeTable);
         DevExt->ModeCount = 0;
         return FALSE;
     }
@@ -452,14 +955,15 @@ UefiFbBuildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
     if (built == 0)
     {
         UEFIFB_LOG(0, "BuildModeTable: no usable modes built\n");
-        VideoPortFreePool(DevExt, DevExt->ModeTable);
-        DevExt->ModeTable = NULL;
+        VideoPortFreePool(DevExt, modeTable);
         DevExt->ModeCount = 0;
         return FALSE;
     }
 
+    DevExt->ModeTable = modeTable;
     DevExt->ModeCount = built;
     UEFIFB_LOG(1, "BuildModeTable: built %lu modes\n", built);
+    UefiFbMirrorDevExtToActiveChild(DevExt);
     return TRUE;
 }
 
@@ -636,6 +1140,7 @@ UefiFbSetCurrentMode(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
                (unsigned int)DevExt->ModeInfo.VisScreenHeight,
                (unsigned int)(DevExt->ModeInfo.BitsPerPlane * DevExt->ModeInfo.NumberOfPlanes),
                (unsigned long)DevExt->ModeInfo.ScreenStride);
+    UefiFbMirrorDevExtToActiveChild(DevExt);
     StatusBlock->Status = NO_ERROR;
     return TRUE;
 }
@@ -702,6 +1207,7 @@ UefiFbQueryNumModes(_In_ PUEFIFB_DEVICE_EXTENSION DevExt,
 static BOOLEAN
 UefiFbMapFrameBufferFallback(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
                              _Out_ PVIDEO_MEMORY_INFORMATION MapInfo,
+                             _In_ ULONG OutputBufferLength,
                              _Out_ PSTATUS_BLOCK StatusBlock)
 {
     PVOID BaseAddress;
@@ -716,8 +1222,22 @@ UefiFbMapFrameBufferFallback(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
 
     mapLength = DevExt->FrameBufferMapLength;
     if (mapLength == 0)
-        mapLength = UefiFbRoundToPages((ULONGLONG)DevExt->FrameBufferInfo.FrameBufferSize +
-                                       DevExt->FrameBufferOffset);
+    {
+        ULONGLONG mapLength64 =
+            UefiFbRoundToPages((ULONGLONG)DevExt->FrameBufferInfo.FrameBufferSize +
+                               DevExt->FrameBufferOffset);
+
+        if (mapLength64 == 0)
+            mapLength64 = DevExt->FrameBufferInfo.FrameBufferSize;
+
+        if (mapLength64 == 0)
+        {
+            StatusBlock->Status = ERROR_INVALID_PARAMETER;
+            return FALSE;
+        }
+
+        mapLength = (mapLength64 > MAXULONG) ? MAXULONG : (ULONG)mapLength64;
+    }
 
     BaseAddress = MmMapIoSpace(DevExt->FrameBufferInfo.FrameBufferBase,
                                mapLength,
@@ -741,19 +1261,18 @@ UefiFbMapFrameBufferFallback(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
     DevExt->MappedLength      = DevExt->FrameBufferInfo.FrameBufferSize;
     DevExt->DirectMap         = TRUE;
 
-    MapInfo->VideoRamBase     = DevExt->MappedFrameBuffer;
-    MapInfo->VideoRamLength   = DevExt->MappedLength;
-    MapInfo->FrameBufferBase  = DevExt->MappedFrameBuffer;
-    MapInfo->FrameBufferLength= DevExt->MappedLength;
-
     UEFIFB_LOG(1,
                "MapVideoMemory: MmMapIoSpace base=%p mappedLen=%lu visible=%lu\n",
                DevExt->MappingBase,
                (unsigned long)DevExt->MappingLength,
                (unsigned long)DevExt->MappedLength);
 
-    StatusBlock->Information = sizeof(*MapInfo);
-    StatusBlock->Status = NO_ERROR;
+    UefiFbSetMapInformation(DevExt,
+                             MapInfo,
+                             OutputBufferLength,
+                             DevExt->MappedFrameBuffer,
+                             DevExt->MappedLength,
+                             StatusBlock);
     return TRUE;
 }
 
@@ -761,6 +1280,7 @@ static BOOLEAN NTAPI
 UefiFbMapVideoMemory(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
                      _Inout_ PVIDEO_MEMORY RequestedAddress,
                      _Out_ PVIDEO_MEMORY_INFORMATION MapInfo,
+                     _In_ ULONG OutputBufferLength,
                      _Out_ PSTATUS_BLOCK StatusBlock)
 {
     PHYSICAL_ADDRESS PhysicalAddress;
@@ -789,13 +1309,13 @@ UefiFbMapVideoMemory(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
         UEFIFB_LOG(1, "MapVideoMemory: reusing existing mapping %p len=%lu\n",
                    DevExt->MappedFrameBuffer,
                    (unsigned long)DevExt->MappedLength);
-        MapInfo->VideoRamBase     = DevExt->MappedFrameBuffer;
-        MapInfo->VideoRamLength   = DevExt->MappedLength;
-        MapInfo->FrameBufferBase  = DevExt->MappedFrameBuffer;
-        MapInfo->FrameBufferLength= DevExt->MappedLength;
 
-        StatusBlock->Information = sizeof(*MapInfo);
-        StatusBlock->Status = NO_ERROR;
+        UefiFbSetMapInformation(DevExt,
+                                 MapInfo,
+                                 OutputBufferLength,
+                                 DevExt->MappedFrameBuffer,
+                                 DevExt->MappedLength,
+                                 StatusBlock);
         return TRUE;
     }
 
@@ -829,7 +1349,7 @@ UefiFbMapVideoMemory(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
     if (DevExt->ForceMmMap)
     {
         UEFIFB_LOG(1, "MapVideoMemory: using MmMapIoSpace fallback (VideoPort mapping disabled)\n");
-        return UefiFbMapFrameBufferFallback(DevExt, MapInfo, StatusBlock);
+        return UefiFbMapFrameBufferFallback(DevExt, MapInfo, OutputBufferLength, StatusBlock);
     }
 
     while (TRUE)
@@ -889,18 +1409,17 @@ UefiFbMapVideoMemory(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
                    (unsigned long)VisibleLength,
                    (unsigned long)InIoSpace);
 
-        MapInfo->VideoRamBase     = DevExt->MappedFrameBuffer;
-        MapInfo->VideoRamLength   = VisibleLength;
-        MapInfo->FrameBufferBase  = DevExt->MappedFrameBuffer;
-        MapInfo->FrameBufferLength= VisibleLength;
-
-        StatusBlock->Information = sizeof(*MapInfo);
-        StatusBlock->Status = NO_ERROR;
+        UefiFbSetMapInformation(DevExt,
+                                 MapInfo,
+                                 OutputBufferLength,
+                                 DevExt->MappedFrameBuffer,
+                                 VisibleLength,
+                                 StatusBlock);
         return TRUE;
     }
 
     UEFIFB_LOG(1, "MapVideoMemory: falling back to MmMapIoSpace\n");
-    return UefiFbMapFrameBufferFallback(DevExt, MapInfo, StatusBlock);
+    return UefiFbMapFrameBufferFallback(DevExt, MapInfo, OutputBufferLength, StatusBlock);
 }
 
 static BOOLEAN NTAPI
@@ -936,26 +1455,26 @@ UefiFbUnmapVideoMemory(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
     if (DevExt->DirectMap)
     {
         MmUnmapIoSpace(DevExt->MappingBase, DevExt->MappingLength);
-        DevExt->MappedFrameBuffer = NULL;
-        DevExt->MappedLength = 0;
-        DevExt->MappingBase = NULL;
-        DevExt->MappingLength = 0;
-        DevExt->DirectMap = FALSE;
-        StatusBlock->Status = NO_ERROR;
-        return TRUE;
+        Status = NO_ERROR;
+    }
+    else
+    {
+        Status = VideoPortUnmapMemory(DevExt, DevExt->MappingBase, NULL);
+        if (Status != NO_ERROR)
+            UEFIFB_LOG(0,
+                       "UnmapVideoMemory: VideoPortUnmapMemory failed %lu\n",
+                       (unsigned long)Status);
     }
 
-    Status = VideoPortUnmapMemory(DevExt, DevExt->MappingBase, NULL);
     if (Status == NO_ERROR)
     {
         DevExt->MappedFrameBuffer = NULL;
         DevExt->MappedLength = 0;
         DevExt->MappingBase = NULL;
         DevExt->MappingLength = 0;
+        DevExt->DirectMap = FALSE;
     }
 
-    if (Status != NO_ERROR)
-        UEFIFB_LOG(0, "UnmapVideoMemory: VideoPortUnmapMemory failed %lu\n", (unsigned long)Status);
     StatusBlock->Status = Status;
     return (Status == NO_ERROR);
 }
@@ -1150,6 +1669,7 @@ UefiFbStartIO(_In_ PVOID HwDeviceExtension,
             return UefiFbMapVideoMemory(DevExt,
                                         (PVIDEO_MEMORY)RequestPacket->InputBuffer,
                                         (PVIDEO_MEMORY_INFORMATION)RequestPacket->OutputBuffer,
+                                        RequestPacket->OutputBufferLength,
                                         RequestPacket->StatusBlock);
         }
 
@@ -1186,7 +1706,81 @@ UefiFbStartIO(_In_ PVOID HwDeviceExtension,
             return TRUE;
         }
 
+        case IOCTL_VIDEO_UEFIFB_QUERY_CHILD_MODES:
+        {
+            PUEFIFB_CHILD_MODE_RESPONSE response;
+            ULONG availableModes;
+            ULONG copyModes;
+            ULONG required;
+            PUEFIFB_CHILD_OUTPUT child;
+            UEFIFB_SELECT_CHILD query;
+            STATUS_BLOCK ensure = {0};
+
+            if (RequestPacket->InputBufferLength < sizeof(UEFIFB_SELECT_CHILD) ||
+                RequestPacket->OutputBufferLength <
+                    FIELD_OFFSET(UEFIFB_CHILD_MODE_RESPONSE, Modes))
+            {
+                RequestPacket->StatusBlock->Status = ERROR_INSUFFICIENT_BUFFER;
+                return FALSE;
+            }
+
+            VideoPortMoveMemory(&query,
+                                 RequestPacket->InputBuffer,
+                                 sizeof(query));
+
+            if (!UefiFbEnsureChildModeTable(DevExt, query.ChildIndex, &ensure))
+            {
+                RequestPacket->StatusBlock->Status = ensure.Status;
+                return FALSE;
+            }
+
+            child = &DevExt->ChildOutputs[query.ChildIndex];
+            response = (PUEFIFB_CHILD_MODE_RESPONSE)RequestPacket->OutputBuffer;
+            availableModes = 0;
+            if (RequestPacket->OutputBufferLength >
+                FIELD_OFFSET(UEFIFB_CHILD_MODE_RESPONSE, Modes))
+            {
+                availableModes =
+                    (RequestPacket->OutputBufferLength -
+                     FIELD_OFFSET(UEFIFB_CHILD_MODE_RESPONSE, Modes)) /
+                    sizeof(VIDEO_MODE_INFORMATION);
+            }
+
+            copyModes = (child->ModeCount < availableModes)
+                          ? child->ModeCount
+                          : availableModes;
+            if (copyModes && child->ModeTable)
+            {
+                VideoPortMoveMemory(response->Modes,
+                                     child->ModeTable,
+                                     copyModes * sizeof(VIDEO_MODE_INFORMATION));
+            }
+
+            response->ChildIndex = query.ChildIndex;
+            response->ModeCount = child->ModeCount;
+            response->ReturnedModes = copyModes;
+
+            required = FIELD_OFFSET(UEFIFB_CHILD_MODE_RESPONSE, Modes) +
+                       copyModes * sizeof(VIDEO_MODE_INFORMATION);
+            RequestPacket->StatusBlock->Information = required;
+            RequestPacket->StatusBlock->Status =
+                (copyModes == child->ModeCount) ? NO_ERROR : ERROR_MORE_DATA;
+            return TRUE;
+        }
+
         /* Optional vendor IOCTL: advertise that we DO real mode switches now */
+        case IOCTL_VIDEO_UEFIFB_SELECT_CHILD:
+        {
+            if (RequestPacket->InputBufferLength < sizeof(UEFIFB_SELECT_CHILD))
+            {
+                RequestPacket->StatusBlock->Status = ERROR_INSUFFICIENT_BUFFER;
+                return FALSE;
+            }
+
+            PUEFIFB_SELECT_CHILD select = (PUEFIFB_SELECT_CHILD)RequestPacket->InputBuffer;
+            return UefiFbActivateChild(DevExt, select->ChildIndex, RequestPacket->StatusBlock);
+        }
+
         case IOCTL_VIDEO_UEFIFB_QUERY_CAPS:
         {
             if (RequestPacket->OutputBufferLength < sizeof(UEFIFB_CAPS))
@@ -1197,7 +1791,14 @@ UefiFbStartIO(_In_ PVOID HwDeviceExtension,
 
             PUEFIFB_CAPS caps = (PUEFIFB_CAPS)RequestPacket->OutputBuffer;
             caps->Version = UEFIFB_CAPS_VERSION;
-            caps->Caps = 0; /* no UEFIFB_CAP_LINEAR_ONLY */
+            caps->Caps = 0;
+            if (DevExt->FrameBufferLength64 > MAXULONG)
+                caps->Caps |= UEFIFB_CAP_LARGE_FB;
+            if (DevExt->ChildCount > 1)
+                caps->Caps |= UEFIFB_CAP_MULTI_OUTPUT;
+            caps->OutputCount = DevExt->ChildCount;
+            caps->PrimaryChild = DevExt->ActiveChild;
+            caps->FrameBufferLength = DevExt->FrameBufferLength64;
             RequestPacket->StatusBlock->Information = sizeof(*caps);
             RequestPacket->StatusBlock->Status = NO_ERROR;
             return TRUE;
@@ -1262,6 +1863,7 @@ UefiFbFindAdapter(_In_ PVOID HwDeviceExtension,
     }
 
     DevExt->FrameBufferInfo = Fb;
+    DevExt->FrameBufferLength64 = Fb.FrameBufferSize;
     UEFIFB_LOG(1, "FindAdapter: GOP base=%I64x size=%lu res=%ux%u fmt=%u\n",
                Fb.FrameBufferBase.QuadPart,
                Fb.FrameBufferSize,
@@ -1293,6 +1895,7 @@ UefiFbFindAdapter(_In_ PVOID HwDeviceExtension,
         DevExt->CurrentModeIndex = 0;
 
     UefiFbSelectPreferredMode(DevExt);
+    UefiFbInitializeChildOutputs(DevExt);
 
     ConfigInfo->NumEmulatorAccessEntries = 0;
     ConfigInfo->EmulatorAccessEntries = NULL;
