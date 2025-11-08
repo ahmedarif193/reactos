@@ -34,6 +34,7 @@ static DRVFN DrvFunctionTable[] =
    {INDEX_DrvMovePointer, (PFN)DrvMovePointer},
    {INDEX_DrvCopyBits, (PFN)DrvCopyBits},
    {INDEX_DrvBitBlt, (PFN)DrvBitBlt},
+   {INDEX_DrvRealizeBrush, (PFN)DrvRealizeBrush},
    {INDEX_DrvEnableDirectDraw, (PFN)DrvEnableDirectDraw},
    {INDEX_DrvDisableDirectDraw, (PFN)DrvDisableDirectDraw},
 
@@ -138,6 +139,16 @@ DrvEnablePDEV(
    }
 
    ppdev->hDriver = hDriver;
+   ppdev->UefiCapsValid = FALSE;
+   ppdev->UefiChildCount = 0;
+   ppdev->UefiPrimaryChild = 0;
+   ppdev->UefiSelectedChild = (ULONG)-1;
+   ppdev->UefiFramebufferLength = 0;
+   ppdev->RosUefiFramebuffer = FALSE;
+   ppdev->FramebufferBytes = 0;
+   ppdev->UsingFallbackSurface = FALSE;
+   ppdev->FallbackMapping = NULL;
+    ppdev->FallbackSection = NULL;
 
    if (!IntInitScreenInfo(ppdev, pdm, &GdiInfo, &DevInfo))
    {
