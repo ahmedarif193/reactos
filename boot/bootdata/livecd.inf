@@ -32,7 +32,7 @@ HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB","NextInstance",0x00010001,0x000
 HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB","Class",0x00000000,"Display"
 HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
 HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB","DeviceDesc",0x00000000,"UEFI Framebuffer Adapter"
-HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000","HardwareID",0x00010000,"ROOT\\UEFIFB"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000","HardwareID",0x00010000,"ROOT\\UEFIFB","DISPLAY\\ROSUEFIFB"
 HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000","CompatibleIDs",0x00010000,"ROOT\\DISPLAY"
 HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000","Class",0x00000000,"Display"
 HKLM,"SYSTEM\CurrentControlSet\Enum\Root\UEFIFB\0000","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
@@ -52,6 +52,10 @@ HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","ErrorControl",0x00010001,0x0000
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","Group",0x00000000,"Video Save"
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","DependOnGroup",0x00010000,"Video"
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","DisplayName",0x00000000,"UEFI Framebuffer Miniport"
+HKLM,"SYSTEM\CurrentControlSet\Control\GraphicsDrivers\UseNewKey",,0x00000012
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Enum","0",0x00000000,"ROOT\\UEFIFB\\0000"
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Enum","Count",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Enum","NextInstance",0x00010001,0x00000001
 ; Match Windows-style XPDM device software settings location under Hardware Profiles
 HKLM,"SYSTEM\CurrentControlSet\Hardware Profiles\Current\System\CurrentControlSet\Services\uefifb\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
 HKLM,"SYSTEM\CurrentControlSet\Hardware Profiles\Current\System\CurrentControlSet\Services\uefifb\Device0","VgaCompatible",0x00010001,0x00000000
@@ -65,6 +69,16 @@ HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.YResolu
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.BitsPerPel",0x00010001,32
 ; Provide the Services\\uefifb\\Video key that win32k queries to resolve the service
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Video","Service",0x00000000,"uefifb"
+; Seed Control\\GraphicsDrivers configuration/connection keys so win32k finds the boot adapter
+HKLM,"SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration\ROSUEFIFB\00\00",,0x00000012
+HKLM,"SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration\ROSUEFIFB\00\00","PrimSurfSize.cx",0x00010001,1024
+HKLM,"SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration\ROSUEFIFB\00\00","PrimSurfSize.cy",0x00010001,768
+HKLM,"SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration\ROSUEFIFB\00\00","Scaling",0x00010001,0
+HKLM,"SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration\ROSUEFIFB\00\00","ColorSpace",0x00010001,0
+HKLM,"SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration\ROSUEFIFB\00\00","Active",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration\ROSUEFIFB\00\00","Attached.ToDesktop",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Connectivity\ROSUEFIFB\00\00",,0x00000012
+HKLM,"SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Connectivity\ROSUEFIFB\00\00","Active",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager","BootExecute",0x00010000,""
 
 ; Shell
