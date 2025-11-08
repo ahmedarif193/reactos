@@ -18,9 +18,13 @@ UefiFb.Display_CopyFiles = 11
 
 [ReactOS.NTx86]
 %UefiFb.DeviceDesc% = UefiFb_Install,ROOT\UEFIFB
+%UefiFb.DeviceDesc% = UefiFb_Install,DISPLAY\ROSUEFIFB
+%UefiFb.DeviceDesc% = UefiFb_Install,PCI\VEN_1414&DEV_5101
 
 [ReactOS.NTamd64]
 %UefiFb.DeviceDesc% = UefiFb_Install,ROOT\UEFIFB
+%UefiFb.DeviceDesc% = UefiFb_Install,DISPLAY\ROSUEFIFB
+%UefiFb.DeviceDesc% = UefiFb_Install,PCI\VEN_1414&DEV_5101
 
 [UefiFb_Install]
 CopyFiles = UefiFb.CopyFiles, UefiFb.Display_CopyFiles
