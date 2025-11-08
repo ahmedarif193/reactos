@@ -71,9 +71,6 @@ FrLdrHeapCreate(
     PHEAP_BLOCK Block;
     SIZE_T Remaining;
     USHORT PreviousSize;
-
-    TRACE("HeapCreate(MemoryType=%ld)\n", MemoryType);
-
     /* Allocate some memory for the heap */
     MaximumSize = ALIGN_UP_BY(MaximumSize, MM_PAGE_SIZE);
     Heap = MmAllocateMemoryWithType(MaximumSize, MemoryType);
@@ -94,7 +91,6 @@ FrLdrHeapCreate(
 
     /* Calculate what's left to process */
     Remaining = (MaximumSize - sizeof(HEAP)) / sizeof(HEAP_BLOCK);
-    TRACE("Remaining = %ld\n", Remaining);
 
     /* Substract 2 for the terminating entry (header + free entry) */
     Remaining -= 2;
@@ -119,7 +115,6 @@ FrLdrHeapCreate(
         PreviousSize = Block->Size;
         Block = Block + Block->Size + 1;
 
-        TRACE("Remaining = %ld\n", Remaining);
     }
 
     /* Now finish with a terminating block */
@@ -441,7 +436,6 @@ FrLdrHeapFreeEx(
     ULONGLONG Time = __rdtsc();
 #endif
 
-    //TRACE("HeapFree(%p, %p)\n", HeapHandle, Pointer);
     ASSERT(Tag != 'dnE#');
 
 #ifdef FREELDR_HEAP_VERIFIER
@@ -555,7 +549,6 @@ FrLdrTempFree(
 VOID
 MmInitializeHeap(PVOID PageLookupTable)
 {
-    TRACE("MmInitializeHeap()\n");
 
     /* Create the default heap */
     FrLdrDefaultHeap = FrLdrHeapCreate(DEFAULT_HEAP_SIZE, LoaderOsloaderHeap);
@@ -565,8 +558,6 @@ MmInitializeHeap(PVOID PageLookupTable)
     FrLdrTempHeap = FrLdrHeapCreate(TEMP_HEAP_SIZE, LoaderFirmwareTemporary);
     ASSERT(FrLdrTempHeap);
 
-    TRACE("MmInitializeHeap() done, default heap %p, temp heap %p\n",
-          FrLdrDefaultHeap, FrLdrTempHeap);
 }
 
 PVOID
