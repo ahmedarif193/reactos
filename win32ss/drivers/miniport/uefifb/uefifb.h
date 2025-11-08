@@ -14,6 +14,10 @@
 #include <devioctl.h>
 #include <ntstatus.h>
 
+BOOLEAN
+NTAPI
+MmIsAddressValid(_In_ PVOID VirtualAddress);
+
 #ifndef _LOADER_PARAMETER_FRAMEBUFFER_DEFINED
 #define _LOADER_PARAMETER_FRAMEBUFFER_DEFINED
 typedef struct _LOADER_PARAMETER_FRAMEBUFFER
@@ -46,8 +50,14 @@ typedef struct _UEFIFB_DEVICE_EXTENSION
     PVIDEO_MODE_INFORMATION ModeTable; /* allocated list of modes; currently 1 (current GOP) */
     ULONG CurrentModeIndex;
     PVOID MappedFrameBuffer;
+    PVOID MappingBase;
     ULONG MappedLength;
+    ULONG MappingLength;
+    ULONG FrameBufferOffset;
+    ULONG FrameBufferMapLength;
     BOOLEAN ModeSet;
+    BOOLEAN DirectMap;
+    BOOLEAN ForceMmMap;
     VIDEO_ACCESS_RANGE AccessRanges[1];
 } UEFIFB_DEVICE_EXTENSION, *PUEFIFB_DEVICE_EXTENSION;
 
