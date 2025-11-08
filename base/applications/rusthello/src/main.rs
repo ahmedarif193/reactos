@@ -5,10 +5,12 @@ use std::thread;
 use std::time::Duration;
 
 #[repr(C)]
+#[allow(non_snake_case)]
 struct FILETIME { dwLowDateTime: u32, dwHighDateTime: u32 }
 
 type BOOL = i32;
 type DWORD = u32;
+#[allow(non_camel_case_types)]
 type SIZE_T = usize;
 
 #[link(name = "kernel32")]
