@@ -254,7 +254,50 @@ IntVideoPortReleaseResources(
         DPRINT1("VideoPortReleaseResources IoReportResource failed with 0x%08lx ; ConflictDetected: %s\n",
                 Status, ConflictDetected ? "TRUE" : "FALSE");
     }
+
+    if (DeviceExtension->MiniportAccessRanges)
+    {
+        ExFreePoolWithTag(DeviceExtension->MiniportAccessRanges, TAG_VIDEO_PORT);
+        DeviceExtension->MiniportAccessRanges = NULL;
+        DeviceExtension->MiniportAccessRangeCount = 0;
+    }
     /* Ignore the returned status however... */
+}
+
+static
+BOOLEAN
+VpMiniportRangeCovers(_In_ PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension,
+                      _In_ PHYSICAL_ADDRESS Address,
+                      _In_ ULONG Length)
+{
+    ULONG i;
+    ULONGLONG start, end;
+
+    if (!DeviceExtension->MiniportAccessRanges ||
+        DeviceExtension->MiniportAccessRangeCount == 0)
+    {
+        return FALSE;
+    }
+
+    start = Address.QuadPart;
+    end = start + Length;
+
+    for (i = 0; i < DeviceExtension->MiniportAccessRangeCount; ++i)
+    {
+        const VIDEO_ACCESS_RANGE *range = &DeviceExtension->MiniportAccessRanges[i];
+        ULONGLONG rangeStart, rangeEnd;
+
+        if (range->RangeLength == 0 || range->RangeInIoSpace)
+            continue;
+
+        rangeStart = range->RangeStart.QuadPart;
+        rangeEnd = rangeStart + range->RangeLength;
+
+        if (start >= rangeStart && end <= rangeEnd)
+            return TRUE;
+    }
+
+    return FALSE;
 }
 
 NTSTATUS NTAPI
@@ -322,6 +365,7 @@ IntVideoPortMapMemory(
    ULONG AddressSpace;
    PVOID MappedAddress;
    PLIST_ENTRY Entry;
+   const ULONG OriginalInIoSpace = InIoSpace;
 
    INFO_(VIDEOPRT, "- IoAddress: %lx\n", IoAddress.u.LowPart);
    INFO_(VIDEOPRT, "- NumberOfUchars: %lx\n", NumberOfUchars);
@@ -381,10 +425,51 @@ IntVideoPortMapMemory(
           &AddressSpace,
           &TranslatedAddress) == FALSE)
    {
-      if (Status)
-         *Status = ERROR_NOT_ENOUGH_MEMORY;
+      BOOLEAN AllowIdentityMap = FALSE;
 
-      return NULL;
+      if (DeviceExtension->AdapterInterfaceType == Internal)
+      {
+         AllowIdentityMap = TRUE;
+      }
+      else if ((DeviceExtension->AdapterInterfaceType == PCIBus) &&
+               (DeviceExtension->PhysicalDeviceObject == NULL))
+      {
+         AllowIdentityMap = TRUE;
+      }
+      else if (VpMiniportRangeCovers(DeviceExtension, IoAddress, NumberOfUchars))
+      {
+         AllowIdentityMap = TRUE;
+      }
+
+      if (!AllowIdentityMap)
+      {
+         if (Status)
+            *Status = ERROR_NOT_ENOUGH_MEMORY;
+
+         return NULL;
+      }
+
+      TranslatedAddress = IoAddress;
+      AddressSpace = 0;
+   }
+
+   /*
+    * Some firmware paths (notably the synthetic \"Internal\" GOP miniport) report
+    * framebuffer ranges that HalTranslateBusAddress classifies as I/O space
+    * even though the caller explicitly requested memory. Honor the caller's
+    * intent and map through MmMapIoSpace so display miniports receive a
+    * kernel VA instead of a raw physical address.
+    */
+   if ((AddressSpace != 0) &&
+       ((DeviceExtension->AdapterInterfaceType == Internal) ||
+        VpMiniportRangeCovers(DeviceExtension, IoAddress, NumberOfUchars)) &&
+       ((OriginalInIoSpace & VIDEO_MEMORY_SPACE_IO) == 0))
+   {
+      INFO_(VIDEOPRT,
+            "Forcing memory mapping for adapter (PA=%I64x Len=%lu)\n",
+            (ULONGLONG)TranslatedAddress.QuadPart,
+            NumberOfUchars);
+      AddressSpace = 0;
    }
 
    /* I/O space */
@@ -462,11 +547,12 @@ IntVideoPortMapMemory(
       return MappedAddress;
    }
 
-   WARN_(VIDEOPRT, "MmMapIoSpace returned NULL for PA=%I64x Len=%lu\n",
+   WARN_(VIDEOPRT, "MmMapIoSpace returned NULL for PA=%I64x Len=%lu Cache=%s\n",
          (ULONGLONG)TranslatedAddress.QuadPart,
-         NumberOfUchars);
+         NumberOfUchars,
+         ((InIoSpace & VIDEO_MEMORY_SPACE_P6CACHE) != 0) ? "WC" : "NC");
    if (Status)
-      *Status = NO_ERROR;
+      *Status = ERROR_NOT_ENOUGH_MEMORY;
 
    return NULL;
 }
@@ -711,6 +797,23 @@ VideoPortGetAccessRanges(
     DeviceExtension = VIDEO_PORT_GET_DEVICE_EXTENSION(HwDeviceExtension);
     DriverObject = DeviceExtension->DriverObject;
     DriverExtension = IoGetDriverObjectExtension(DriverObject, DriverObject);
+
+    if (DeviceExtension->MiniportAccessRanges)
+    {
+        if (NumAccessRanges < DeviceExtension->MiniportAccessRangeCount)
+            return ERROR_MORE_DATA;
+
+        if (!AccessRanges)
+            return ERROR_INVALID_PARAMETER;
+
+        RtlCopyMemory(AccessRanges,
+                      DeviceExtension->MiniportAccessRanges,
+                      DeviceExtension->MiniportAccessRangeCount * sizeof(VIDEO_ACCESS_RANGE));
+        if (Slot)
+            *Slot = 0;
+
+        return NO_ERROR;
+    }
 
     if (NumRequestedResources == 0)
     {
@@ -1063,6 +1166,45 @@ VideoPortVerifyAccessRanges(
         return ERROR_INVALID_PARAMETER;
     else
         return NO_ERROR;
+}
+
+VP_STATUS
+NTAPI
+VideoPortSetAccessRanges(
+    _In_ PVOID HwDeviceExtension,
+    _In_ ULONG NumAccessRanges,
+    _In_reads_opt_(NumAccessRanges) PVIDEO_ACCESS_RANGE AccessRanges)
+{
+    PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension;
+    SIZE_T Length;
+    PVIDEO_ACCESS_RANGE CopiedRanges;
+
+    TRACE_(VIDEOPRT, "VideoPortSetAccessRanges(%lu)\n", NumAccessRanges);
+
+    DeviceExtension = VIDEO_PORT_GET_DEVICE_EXTENSION(HwDeviceExtension);
+
+    if (DeviceExtension->MiniportAccessRanges)
+    {
+        ExFreePoolWithTag(DeviceExtension->MiniportAccessRanges, TAG_VIDEO_PORT);
+        DeviceExtension->MiniportAccessRanges = NULL;
+        DeviceExtension->MiniportAccessRangeCount = 0;
+    }
+
+    if ((NumAccessRanges == 0) || (AccessRanges == NULL))
+    {
+        return VideoPortVerifyAccessRanges(HwDeviceExtension, 0, NULL);
+    }
+
+    Length = sizeof(VIDEO_ACCESS_RANGE) * NumAccessRanges;
+    CopiedRanges = ExAllocatePoolWithTag(PagedPool, Length, TAG_VIDEO_PORT);
+    if (!CopiedRanges)
+        return ERROR_NOT_ENOUGH_MEMORY;
+
+    RtlCopyMemory(CopiedRanges, AccessRanges, Length);
+    DeviceExtension->MiniportAccessRanges = CopiedRanges;
+    DeviceExtension->MiniportAccessRangeCount = NumAccessRanges;
+
+    return VideoPortVerifyAccessRanges(HwDeviceExtension, NumAccessRanges, AccessRanges);
 }
 
 /*
