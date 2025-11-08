@@ -63,6 +63,17 @@ typedef struct _PDEV
    BOOLEAN VmwareFifo;
    ULONG VmwareCaps;
    BOOLEAN UefiLinearOnly;
+   BOOLEAN UefiLargeFramebuffer;
+   BOOLEAN UefiCapsValid;
+   BOOLEAN RosUefiFramebuffer;
+   ULONG UefiChildCount;
+   ULONG UefiPrimaryChild;
+   ULONG UefiSelectedChild;
+   ULONGLONG UefiFramebufferLength;
+   ULONGLONG FramebufferBytes;
+   BOOLEAN UsingFallbackSurface;
+   PVOID FallbackMapping;
+   PVOID FallbackSection;
 
 #ifdef EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
    VIDEO_POINTER_ATTRIBUTES PointerAttributes;
@@ -129,6 +140,20 @@ VOID APIENTRY
 DrvDisableSurface(
    IN DHPDEV dhpdev);
 
+BOOLEAN
+FbQueryUefiCaps(
+   _Inout_ PPDEV ppdev);
+
+VOID
+FbEnsureUefiChildSelection(
+   _Inout_ PPDEV ppdev,
+   _In_opt_ const DEVMODEW *pdm);
+
+BOOLEAN
+FbMapFramebufferFallback(
+   _Inout_ PPDEV ppdev,
+   ULONGLONG Length);
+
 BOOL APIENTRY
 DrvAssertMode(
    IN DHPDEV dhpdev,
@@ -190,6 +215,15 @@ DrvBitBlt(
    BRUSHOBJ *pbo,
    POINTL *pptlBrush,
    ROP4 rop4);
+
+BOOL APIENTRY
+DrvRealizeBrush(
+   BRUSHOBJ *pbo,
+   SURFOBJ *psoTarget,
+   SURFOBJ *psoPattern,
+   SURFOBJ *psoMask,
+   XLATEOBJ *pxlo,
+   ULONG iHatch);
 
 BOOL
 IntInitScreenInfo(
