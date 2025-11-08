@@ -329,6 +329,7 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
         extern PLOADER_PARAMETER_GOP_MODE UefiGopModes;
         extern ULONG UefiGopModeCount;
         extern ULONG UefiGopPreferredMode;
+        extern BOOLEAN UefiIsFramebufferReady(VOID);
         
         if (framebufferData.BaseAddress != 0)
         {
@@ -355,7 +356,16 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
                   Extension->GopFramebuffer.GreenMask,
                   Extension->GopFramebuffer.BlueMask);
         }
+        else
+        {
+            WARN("UEFI GOP framebuffer info missing; graphical miniports will stay disabled\n");
+            if (!UefiIsFramebufferReady())
+            {
+                WARN("UEFI GOP never reported a framebuffer (ramdisk/live boot path?)\n");
+            }
+        }
         
+
         /* Pass GOP mode enumeration to the kernel (if available) */
         if (UefiGopModes && UefiGopModeCount)
         {

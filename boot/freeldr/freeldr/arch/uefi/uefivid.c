@@ -41,6 +41,15 @@ extern UCHAR BitmapFont8x16[256 * 16];
 UCHAR MachDefaultTextColor = COLOR_GRAY;
 REACTOS_INTERNAL_BGCONTEXT framebufferData;
 EFI_GUID EfiGraphicsOutputProtocol = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
+static BOOLEAN UefiGopFramebufferReady = FALSE;
+
+BOOLEAN
+UefiIsFramebufferReady(VOID)
+{
+    return UefiGopFramebufferReady &&
+           framebufferData.BaseAddress != 0 &&
+           framebufferData.BufferSize != 0;
+}
 
 /* Minimal EDID protocol definitions (declared locally if headers are absent) */
 typedef struct _EFI_EDID_COMMON_PROTOCOL {
@@ -148,6 +157,7 @@ UefiInitializeVideo(VOID)
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* CurrentInfo;
     BOOLEAN ModeChosen = FALSE;
 
+    UefiGopFramebufferReady = FALSE;
     RtlZeroMemory(&framebufferData, sizeof(framebufferData));
     Status = GlobalSystemTable->BootServices->LocateProtocol(&EfiGraphicsOutputProtocol, 0, (void**)&gop);
     if (Status != EFI_SUCCESS)
@@ -255,6 +265,9 @@ UefiInitializeVideo(VOID)
         }
     }
 
+    /* Record the final firmware mode index after all SetMode attempts */
+    UefiGopPreferredMode = (ULONG)gop->Mode->Mode;
+
     framebufferData.BaseAddress        = (ULONG_PTR)gop->Mode->FrameBufferBase;
     framebufferData.BufferSize         = gop->Mode->FrameBufferSize;
     framebufferData.ScreenWidth        = gop->Mode->Info->HorizontalResolution;
@@ -314,6 +327,15 @@ UefiInitializeVideo(VOID)
     ConsoleY = 0;
     GopConsoleInitialized = TRUE;
     TRACE("UEFI GOP: Console dimensions %dx%d chars\n", MaxConsoleX, MaxConsoleY);
+
+    if (framebufferData.BaseAddress != 0 && framebufferData.BufferSize != 0)
+    {
+        UefiGopFramebufferReady = TRUE;
+    }
+    else
+    {
+        WARN("UEFI GOP: Framebuffer info missing after initialization\n");
+    }
 
     return Status;
 }

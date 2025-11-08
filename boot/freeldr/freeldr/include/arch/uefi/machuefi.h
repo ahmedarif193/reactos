@@ -19,6 +19,9 @@ UefiConsGetCh(void);
 EFI_STATUS
 UefiInitializeVideo(VOID);
 
+BOOLEAN
+UefiIsFramebufferReady(VOID);
+
 VOID
 UefiVideoClearScreen(UCHAR Attr);
 
