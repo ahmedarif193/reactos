@@ -20,6 +20,89 @@
 
 #include "framebuf.h"
 
+static BOOL
+FbSelectSafeMode(_Inout_ PPDEV ppdev)
+{
+    PVIDEO_MODE_INFORMATION modes = NULL;
+    DWORD modeInfoSize = 0;
+    DWORD modeCount;
+    PVIDEO_MODE_INFORMATION entry;
+    PVIDEO_MODE_INFORMATION best = NULL;
+    VIDEO_MODE_INFORMATION safeMode;
+    VIDEO_MODE set = {0};
+    ULONG ulTemp;
+    DWORD idx;
+
+    modeCount = GetAvailableModes(ppdev->hDriver, &modes, &modeInfoSize);
+    if ((modeCount == 0) || (modes == NULL))
+        return FALSE;
+
+    entry = modes;
+    for (idx = 0; idx < modeCount; ++idx)
+    {
+        if (entry->Length == 0)
+        {
+            entry = (PVIDEO_MODE_INFORMATION)(((PUCHAR)entry) + modeInfoSize);
+            continue;
+        }
+
+        if (best == NULL)
+        {
+            best = entry;
+        }
+
+        if (entry->VisScreenWidth == 800 &&
+            entry->VisScreenHeight == 600 &&
+            (entry->BitsPerPlane * entry->NumberOfPlanes) == 32)
+        {
+            best = entry;
+            break;
+        }
+
+        entry = (PVIDEO_MODE_INFORMATION)(((PUCHAR)entry) + modeInfoSize);
+    }
+
+    if (best == NULL)
+    {
+        EngFreeMem(modes);
+        return FALSE;
+    }
+
+    safeMode = *best;
+    EngFreeMem(modes);
+
+    set.RequestedMode = safeMode.ModeIndex;
+
+    if (EngDeviceIoControl(ppdev->hDriver,
+                           IOCTL_VIDEO_SET_CURRENT_MODE,
+                           &set,
+                           sizeof(set),
+                           NULL,
+                           0,
+                           &ulTemp))
+    {
+        return FALSE;
+    }
+
+    ppdev->ModeIndex = safeMode.ModeIndex;
+    ppdev->ScreenWidth = safeMode.VisScreenWidth;
+    ppdev->ScreenHeight = safeMode.VisScreenHeight;
+    ppdev->ScreenDelta = safeMode.ScreenStride;
+    ppdev->BitsPerPixel = (UCHAR)(safeMode.BitsPerPlane * safeMode.NumberOfPlanes);
+    ppdev->MemWidth = safeMode.VideoMemoryBitmapWidth;
+    ppdev->MemHeight = safeMode.VideoMemoryBitmapHeight;
+    ppdev->RedMask = safeMode.RedMask;
+    ppdev->GreenMask = safeMode.GreenMask;
+    ppdev->BlueMask = safeMode.BlueMask;
+
+    FB_DBG("Fallback to safe mode %lux%lu %ubpp (mode %lu)\n",
+           (unsigned long)ppdev->ScreenWidth,
+           (unsigned long)ppdev->ScreenHeight,
+           (unsigned int)ppdev->BitsPerPixel,
+           (unsigned long)ppdev->ModeIndex);
+    return TRUE;
+}
+
 /*
  * DrvEnableSurface
  *
@@ -41,6 +124,8 @@ DrvEnableSurface(
    VIDEO_MEMORY VideoMemory;
    VIDEO_MEMORY_INFORMATION VideoMemoryInfo;
    ULONG ulTemp;
+   BOOLEAN TriedUefiFallback = FALSE;
+   VIDEO_MODE current = {0};
 
    /*
     * Set video mode of our adapter.
@@ -51,8 +136,12 @@ DrvEnableSurface(
           (unsigned int)ppdev->ScreenWidth,
           (unsigned int)ppdev->ScreenHeight,
           (unsigned int)ppdev->BitsPerPixel);
+   current.RequestedMode = ppdev->ModeIndex;
    if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_SET_CURRENT_MODE,
-                          &(ppdev->ModeIndex), sizeof(ULONG), NULL, 0,
+                          &current,
+                          sizeof(current),
+                          NULL,
+                          0,
                           &ulTemp))
    {
       FB_DBG("IOCTL_VIDEO_SET_CURRENT_MODE failed for mode %lu\n",
@@ -64,6 +153,7 @@ DrvEnableSurface(
     * Map the framebuffer into our memory.
     */
 
+MapFramebuffer:
    VideoMemory.RequestedVirtualAddress = NULL;
    if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_MAP_VIDEO_MEMORY,
                           &VideoMemory, sizeof(VIDEO_MEMORY),
@@ -71,6 +161,11 @@ DrvEnableSurface(
                           &ulTemp))
    {
       FB_DBG("IOCTL_VIDEO_MAP_VIDEO_MEMORY failed\n");
+      if (!TriedUefiFallback && ppdev->UefiLinearOnly && FbSelectSafeMode(ppdev))
+      {
+         TriedUefiFallback = TRUE;
+         goto MapFramebuffer;
+      }
       return NULL;
    }
 
