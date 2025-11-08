@@ -1168,20 +1168,18 @@ VideoPortVerifyAccessRanges(
         return NO_ERROR;
 }
 
+static
 VP_STATUS
-NTAPI
-VideoPortSetAccessRanges(
-    _In_ PVOID HwDeviceExtension,
-    _In_ ULONG NumAccessRanges,
+VpCacheMiniportAccessRanges(
+    _In_ PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension,
+    _In_opt_ ULONG NumAccessRanges,
     _In_reads_opt_(NumAccessRanges) PVIDEO_ACCESS_RANGE AccessRanges)
 {
-    PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension;
     SIZE_T Length;
     PVIDEO_ACCESS_RANGE CopiedRanges;
 
-    TRACE_(VIDEOPRT, "VideoPortSetAccessRanges(%lu)\n", NumAccessRanges);
-
-    DeviceExtension = VIDEO_PORT_GET_DEVICE_EXTENSION(HwDeviceExtension);
+    if (NumAccessRanges && AccessRanges == NULL)
+        return ERROR_INVALID_PARAMETER;
 
     if (DeviceExtension->MiniportAccessRanges)
     {
@@ -1191,9 +1189,7 @@ VideoPortSetAccessRanges(
     }
 
     if ((NumAccessRanges == 0) || (AccessRanges == NULL))
-    {
-        return VideoPortVerifyAccessRanges(HwDeviceExtension, 0, NULL);
-    }
+        return NO_ERROR;
 
     Length = sizeof(VIDEO_ACCESS_RANGE) * NumAccessRanges;
     CopiedRanges = ExAllocatePoolWithTag(PagedPool, Length, TAG_VIDEO_PORT);
@@ -1204,7 +1200,46 @@ VideoPortSetAccessRanges(
     DeviceExtension->MiniportAccessRanges = CopiedRanges;
     DeviceExtension->MiniportAccessRangeCount = NumAccessRanges;
 
-    return VideoPortVerifyAccessRanges(HwDeviceExtension, NumAccessRanges, AccessRanges);
+    return NO_ERROR;
+}
+
+VP_STATUS
+NTAPI
+VideoPortSetAccessRanges(
+    _In_ PVOID HwDeviceExtension,
+    _In_ ULONG NumAccessRanges,
+    _In_reads_opt_(NumAccessRanges) PVIDEO_ACCESS_RANGE AccessRanges)
+{
+    PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension;
+    VP_STATUS Status;
+
+    TRACE_(VIDEOPRT, "VideoPortSetAccessRanges(%lu)\n", NumAccessRanges);
+
+    DeviceExtension = VIDEO_PORT_GET_DEVICE_EXTENSION(HwDeviceExtension);
+
+    Status = VideoPortVerifyAccessRanges(
+        HwDeviceExtension,
+        NumAccessRanges,
+        AccessRanges);
+    if (Status != NO_ERROR)
+        return Status;
+
+    return VpCacheMiniportAccessRanges(DeviceExtension, NumAccessRanges, AccessRanges);
+}
+
+VP_STATUS
+NTAPI
+VideoPortCacheAccessRanges(
+    _In_ PVOID HwDeviceExtension,
+    _In_ ULONG NumAccessRanges,
+    _In_reads_opt_(NumAccessRanges) PVIDEO_ACCESS_RANGE AccessRanges)
+{
+    PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension;
+
+    TRACE_(VIDEOPRT, "VideoPortCacheAccessRanges(%lu)\n", NumAccessRanges);
+
+    DeviceExtension = VIDEO_PORT_GET_DEVICE_EXTENSION(HwDeviceExtension);
+    return VpCacheMiniportAccessRanges(DeviceExtension, NumAccessRanges, AccessRanges);
 }
 
 /*
