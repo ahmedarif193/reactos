@@ -335,6 +335,9 @@ function(ros_add_rust_executable _target)
     if(_triple STREQUAL "i686-pc-windows-gnu")
         # 32-bit MinGW: prefer abort-on-panic to avoid unwinder dependency.
         set(_rust_target_extra "${_rust_target_extra} -C panic=abort")
+        # Win8+ sync primitives (WaitOnAddress/WakeByAddress*) live in Synchronization.lib
+        # which is not re-exported by kernel32 on i686, so link it explicitly.
+        set(_rust_target_extra "${_rust_target_extra} -C link-arg=-lsynchronization")
         # Only add libgcc_s and shim for GNU toolchain builds. Clang builds
         # typically use DWARF unwinder (libgcc_eh) which already provides
         # _Unwind_* symbols; adding a shim would cause duplicate definitions.
