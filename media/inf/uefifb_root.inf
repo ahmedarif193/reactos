@@ -17,8 +17,8 @@ HKLM,Enum\Root\UEFIFB,NextInstance,0x00010001,0x00000001
 HKLM,Enum\Root\UEFIFB,Class,0,"Display"
 HKLM,Enum\Root\UEFIFB,ClassGUID,0,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
 HKLM,Enum\Root\UEFIFB,DeviceDesc,0,"UEFI Framebuffer Adapter"
-HKLM,Enum\Root\UEFIFB\0000,HardwareID,0x00010000,"ROOT\UEFIFB","DISPLAY\ROSUEFIFB","PCI\VEN_1414&DEV_5101"
-HKLM,Enum\Root\UEFIFB\0000,CompatibleIDs,0x00010000,"ROOT\DISPLAY","PCI\VEN_1414&DEV_5101"
+HKLM,Enum\Root\UEFIFB\0000,HardwareID,0x00010000,"ROOT\UEFIFB","DISPLAY\ROSUEFIFB"
+HKLM,Enum\Root\UEFIFB\0000,CompatibleIDs,0x00010000,"ROOT\DISPLAY"
 HKLM,Enum\Root\UEFIFB\0000,Class,0,"Display"
 HKLM,Enum\Root\UEFIFB\0000,ClassGUID,0,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
 HKLM,Enum\Root\UEFIFB\0000,DeviceDesc,0,"UEFI Framebuffer Adapter"
@@ -42,8 +42,22 @@ HKLM,SYSTEM\CurrentControlSet\Services\uefifb,"ImagePath",0x00020000,"system32\d
 HKLM,SYSTEM\CurrentControlSet\Services\uefifb\Video,"Service",0x00000000,"uefifb"
 ; Optional descriptive string under the legacy device profile
 HKLM,SYSTEM\CurrentControlSet\Services\uefifb\Device0,"Device Description",0x00000000,"UEFI Framebuffer Adapter"
+; Mirror Windows' BasicDisplay-style Enum bookkeeping so SCM reports the binding
+HKLM,SYSTEM\CurrentControlSet\Services\uefifb\Enum,"0",0x00000000,"ROOT\UEFIFB\0000"
+HKLM,SYSTEM\CurrentControlSet\Services\uefifb\Enum,"Count",0x00010001,0x00000001
+HKLM,SYSTEM\CurrentControlSet\Services\uefifb\Enum,"NextInstance",0x00010001,0x00000001
 ; Enable videoprt's new registry path logic used to locate per-device settings
 HKLM,SYSTEM\CurrentControlSet\Control\GraphicsDrivers\UseNewKey,,0x00000012
+; Seed Control\\GraphicsDrivers entries so win32k can discover the boot adapter just like BasicDisplay
+HKLM,SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration\ROSUEFIFB\00\00,,0x00000012
+HKLM,SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration\ROSUEFIFB\00\00,"PrimSurfSize.cx",0x00010001,1024
+HKLM,SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration\ROSUEFIFB\00\00,"PrimSurfSize.cy",0x00010001,768
+HKLM,SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration\ROSUEFIFB\00\00,"Scaling",0x00010001,0
+HKLM,SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration\ROSUEFIFB\00\00,"ColorSpace",0x00010001,0
+HKLM,SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration\ROSUEFIFB\00\00,"Active",0x00010001,0x00000001
+HKLM,SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration\ROSUEFIFB\00\00,"Attached.ToDesktop",0x00010001,0x00000001
+HKLM,SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Connectivity\ROSUEFIFB\00\00,,0x00000012
+HKLM,SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Connectivity\ROSUEFIFB\00\00,"Active",0x00010001,0x00000001
 
 [Strings]
 ReactOS = "ReactOS Project"
