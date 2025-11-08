@@ -16,9 +16,18 @@ HalIsIoApicPresentFallback(VOID)
 #if defined(_MSC_VER)
 #pragma comment(linker, "/alternatename:HalIsIoApicPresent=HalIsIoApicPresentFallback")
 #else
+/*
+ * GCC doesn't support /alternatename. Instead provide a concrete definition
+ * that will be the only one linked into non-ACPI HAL targets. The ACPI-aware
+ * HAL variants do not compile this file, so there is no conflict with the
+ * real implementation that lives in madt.c.
+ */
 BOOLEAN
 NTAPI
-HalIsIoApicPresent(VOID) __attribute__((weak, alias("HalIsIoApicPresentFallback")));
+HalIsIoApicPresent(VOID)
+{
+    return HalIsIoApicPresentFallback();
+}
 #endif
 
 /*
@@ -28,7 +37,7 @@ HalIsIoApicPresent(VOID) __attribute__((weak, alias("HalIsIoApicPresentFallback"
 #if defined(_MSC_VER)
 __declspec(selectany) unsigned long HalpSciGsi = 0xFFFFFFFFul;
 #else
-unsigned long HalpSciGsi __attribute__((weak)) = 0xFFFFFFFFul;
+unsigned long HalpSciGsi = 0xFFFFFFFFul;
 #endif
 
 /* EOF */

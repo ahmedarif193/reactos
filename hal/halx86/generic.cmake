@@ -13,7 +13,6 @@ list(APPEND HAL_GENERIC_SOURCE
     ${HAL_I386_DIR}/generic/pic.c
     ${HAL_I386_DIR}/generic/reboot.c
     ${HAL_I386_DIR}/generic/sysinfo.c
-    ${HAL_I386_DIR}/generic/apic_stubs.c
     ${HAL_I386_DIR}/generic/usage.c
     ${HAL_I386_DIR}/generic/x86bios.c)
 

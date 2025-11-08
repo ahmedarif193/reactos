@@ -1869,7 +1869,7 @@ ScsiPortStartIo(
         else
         {
             /* No MDL present: keep DataOffset consistent and avoid MDL operations */
-            SrbInfo->DataOffset = (PUCHAR)Srb->DataBuffer;
+            SrbInfo->DataOffset = (PCHAR)Srb->DataBuffer;
 #if DBG
             DPRINT1("[SCSIPORT] ScsiPortStartIo: No MDL on IRP %p, skipping Mm/IO flush paths\n", Irp);
 #endif

@@ -288,6 +288,7 @@
     SVC_(WriteFileGather, 9)
     SVC_(WriteRequestData, 6)
     SVC_(WriteVirtualMemory, 5)
+#if defined(_M_AMD64)
     SVC_(Wow64AllocateVirtualMemory64, 7)
     SVC_(Wow64GetContextThread, 2)
     SVC_(Wow64GetNativeSystemInformation, 4)
@@ -296,6 +297,7 @@
     SVC_(Wow64ReadVirtualMemory64, 7)
     SVC_(Wow64SetContextThread, 2)
     SVC_(Wow64WriteVirtualMemory64, 7)
+#endif /* _M_AMD64 */
     SVC_(YieldExecution, 0)
     SVC_(CreateKeyedEvent, 4)
     SVC_(OpenKeyedEvent, 3)

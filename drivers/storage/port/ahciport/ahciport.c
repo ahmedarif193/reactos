@@ -1177,7 +1177,9 @@ AhciIdentifyPacketDevice(
     _In_ ULONG Port)
 {
     PAHCI_PORT_CONTEXT port = &Adapter->Ports[Port];
+#if AHCI_ENABLE_TRACE
     USHORT *id;
+#endif
 
     if (port->IdentifyBuffer == NULL)
         return FALSE;
@@ -1190,7 +1192,9 @@ AhciIdentifyPacketDevice(
         return FALSE;
     }
 
+#if AHCI_ENABLE_TRACE
     id = (USHORT *)port->IdentifyBuffer;
+#endif
 
     port->SectorSize = AHCI_DEFAULT_PACKET_SECTOR;
     port->SectorCount = 0;
@@ -1198,7 +1202,13 @@ AhciIdentifyPacketDevice(
     port->Atapi = TRUE;
     AhciClearSense(port);
 
-    AHCI_TRACE("Port %lu: IDENTIFY PACKET device detected (Config=0x%04x)", Port, id[0]);
+#if AHCI_ENABLE_TRACE
+    AHCI_TRACE("Port %lu: IDENTIFY PACKET device detected (Config=0x%04x)",
+               Port,
+               id[0]);
+#else
+    AHCI_TRACE("Port %lu: IDENTIFY PACKET device detected", Port);
+#endif
     return TRUE;
 }
 
@@ -2103,8 +2113,9 @@ AhciHwInitialize(
         adapter->Ports[port].Signature = AhciReadPort(adapter, port, AHCI_PxSIG);
 
         {
-            ULONG ssts = AhciReadPort(adapter, port, AHCI_PxSSTS);
             BOOLEAN present = AhciIsPortDevicePresent(adapter, port);
+#if DBG && AHCI_ENABLE_TRACE
+            ULONG ssts = AhciReadPort(adapter, port, AHCI_PxSSTS);
 
             AHCI_TRACE("HwInitialize: port=%lu signature=0x%08lx SSTS=0x%08lx (DET=%lu SPD=%lu IPM=%lu) present=%u",
                        port,
@@ -2114,6 +2125,12 @@ AhciHwInitialize(
                        (ssts & AHCI_PxSSTS_SPD_MASK) >> 4,
                        (ssts & AHCI_PxSSTS_IPM_MASK) >> 8,
                        present);
+#else
+            AHCI_TRACE("HwInitialize: port=%lu signature=0x%08lx present=%u",
+                       port,
+                       adapter->Ports[port].Signature,
+                       present);
+#endif
 
             if (!present)
             {

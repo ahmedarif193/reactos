@@ -10,6 +10,7 @@ list(APPEND HAL_PC98_SOURCE
     ${HAL_I386_DIR}/pc98/reboot.c
     ${HAL_I386_DIR}/generic/bios.c
     ${HAL_I386_DIR}/generic/setjmp_shim.c
+    ${HAL_I386_DIR}/generic/apic_stubs.c
     ${HAL_I386_DIR}/generic/display.c
     ${HAL_I386_DIR}/generic/dma.c
     ${HAL_I386_DIR}/generic/drive.c

@@ -40,9 +40,9 @@ static BOOLEAN UefiFbPopulateModeInformation(_Inout_ PUEFIFB_DEVICE_EXTENSION De
 static BOOLEAN UefiFbBuildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt);
 static VOID UefiFbSelectPreferredMode(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt);
 static BOOLEAN UefiFbRegisterAccessRange(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt);
-static BOOLEAN UefiFbUnmapVideoMemory(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
-                                      _In_ PVIDEO_MEMORY VideoMemory,
-                                      _Out_ PSTATUS_BLOCK StatusBlock);
+static BOOLEAN NTAPI UefiFbUnmapVideoMemory(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
+                                            _In_ PVIDEO_MEMORY VideoMemory,
+                                            _Out_ PSTATUS_BLOCK StatusBlock);
 static VOID UefiFbSetMapInformation(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
                                     _Inout_ PVOID MapInfoBuffer,
                                     _In_ ULONG BufferLength,

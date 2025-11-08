@@ -335,7 +335,6 @@ MmCheckFreeldrImageFile(VOID)
 BOOLEAN MmInitializeMemoryManager(VOID)
 {
 #if DBG
-    const FREELDR_MEMORY_DESCRIPTOR* MemoryDescriptor = NULL;
 #endif
 
     /* Check the freeldr binary */

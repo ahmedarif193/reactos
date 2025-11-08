@@ -247,7 +247,7 @@ HalpAcpiForceVirtualBoxPciExpress(
         EcamPtr = (volatile ULONG *)HalpMapPhysicalMemory64(MmconfigAddress, 1);
         if (EcamPtr)
         {
-            MmconfigVendor = READ_REGISTER_ULONG((volatile ULONG *)EcamPtr);
+            MmconfigVendor = READ_REGISTER_ULONG((PULONG)(ULONG_PTR)EcamPtr);
             HalpUnmapVirtualAddress((PVOID)EcamPtr, 1);
         }
 
@@ -1951,7 +1951,7 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                         Mapping = HalpMapPhysicalMemory64(TestAddress, 1);
                         if (Mapping)
                         {
-                            VendorEcam = READ_REGISTER_ULONG((volatile ULONG*)Mapping);
+                            VendorEcam = READ_REGISTER_ULONG((PULONG)(ULONG_PTR)Mapping);
                             HalpUnmapVirtualAddress(Mapping, 1);
                             MmconfigValid = HalpPciVendorIdLooksSane(VendorEcam, (USHORT)(VendorEcam & 0xFFFF));
                         }

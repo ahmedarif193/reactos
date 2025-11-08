@@ -13,6 +13,9 @@ list(APPEND HAL_LEGACY_SOURCE
     ${HAL_I386_DIR}/legacy/halpcat.c
     ${HAL_I386_DIR}/smp/mps/mps.c)
 
+list(APPEND HAL_LEGACY_SOURCE
+    ${HAL_I386_DIR}/generic/apic_stubs.c)
+
 add_library(lib_hal_legacy OBJECT ${HAL_LEGACY_SOURCE})
 add_dependencies(lib_hal_legacy bugcodes xdk)
 #add_pch(lib_hal_legacy include/hal.h)

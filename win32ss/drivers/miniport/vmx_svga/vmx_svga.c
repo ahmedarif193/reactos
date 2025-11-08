@@ -1181,7 +1181,7 @@ VmxPersistMonitorIdentity(_In_ PHW_DEVICE_EXTENSION DevExt,
                                              model);
                 if (NT_SUCCESS(status))
                 {
-                    SIZE_T chars = 0;
+                    size_t chars = 0;
 
                     status = RtlStringCchLengthW(monitorKey,
                                                  RTL_NUMBER_OF(monitorKey),

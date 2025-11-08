@@ -17,6 +17,7 @@ list(APPEND HAL_XBOX_SOURCE
     ${HAL_I386_DIR}/generic/misc.c
     ${HAL_I386_DIR}/generic/nmi.c
     ${HAL_I386_DIR}/generic/pic.c
+    ${HAL_I386_DIR}/generic/apic_stubs.c
     ${HAL_I386_DIR}/generic/sysinfo.c
     ${HAL_I386_DIR}/generic/usage.c
     ${HAL_I386_DIR}/generic/bios.c

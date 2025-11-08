@@ -420,7 +420,14 @@ public:
   operator IUnknown*() const;
   operator DECIMAL() const;
   operator BYTE() const;
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wclass-conversion"
+#endif
   operator VARIANT() const throw();
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
   operator char() const;
   operator unsigned short() const;
   operator unsigned long() const;
@@ -688,7 +695,14 @@ inline _variant_t::operator BYTE() const {
   varDest.ChangeType(VT_UI1,this);
   return V_UI1(&varDest);
 }
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wclass-conversion"
+#endif
 inline _variant_t::operator VARIANT() const throw() { return *(VARIANT*) this; }
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 inline _variant_t::operator char() const {
   if(V_VT(this)==VT_I1) return V_I1(this);
   _variant_t varDest;
