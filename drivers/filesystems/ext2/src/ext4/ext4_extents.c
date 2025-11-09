@@ -2211,7 +2211,7 @@ fix_extent_len:
  * returns 1 if current index have to be freed (even partial)
  */
 #ifdef __REACTOS__
-inline int
+static inline int
 #else
 static int inline
 #endif
@@ -2555,4 +2555,3 @@ int ext4_ext_truncate(void *icb, struct inode *inode, unsigned long start)
 #if defined(_MSC_VER) && defined(__REACTOS__)
 #pragma warning(pop)
 #endif
-
