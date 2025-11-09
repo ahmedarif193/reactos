@@ -16,8 +16,39 @@ EFI_HANDLE GlobalImageHandle;
 EFI_SYSTEM_TABLE *GlobalSystemTable;
 PVOID UefiServiceStack;
 PVOID BasicStack;
+static BOOLEAN UefiEarlyLogForwardingActive;
+static BOOLEAN UefiEarlyLogScreenWasEnabled;
 
 void _changestack(VOID);
+
+VOID
+FrLdrUefiBeginEarlyLogForwarding(VOID)
+{
+    if (UefiEarlyLogForwardingActive)
+        return;
+
+    UefiEarlyLogScreenWasEnabled = DebugIsScreenPortEnabled();
+    if (!UefiEarlyLogScreenWasEnabled)
+    {
+        DebugEnableScreenPort();
+    }
+
+    UefiEarlyLogForwardingActive = TRUE;
+}
+
+VOID
+FrLdrUefiEndEarlyLogForwarding(VOID)
+{
+    if (!UefiEarlyLogForwardingActive)
+        return;
+
+    if (!UefiEarlyLogScreenWasEnabled)
+    {
+        DebugDisableScreenPort();
+    }
+
+    UefiEarlyLogForwardingActive = FALSE;
+}
 
 /* FUNCTIONS ******************************************************************/
 
@@ -40,6 +71,7 @@ EfiEntry(
 
     /* Debugger pre-initialization */
     DebugInit(BootMgrInfo.DebugString);
+    //FrLdrUefiBeginEarlyLogForwarding();
 
 
     MachInit(CmdLine);

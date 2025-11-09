@@ -48,6 +48,8 @@ ULONG   DbgPrint(const char *Format, ...);
 VOID    DbgPrint2(ULONG Mask, ULONG Level, const char *File, ULONG Line, char *Format, ...);
 VOID    DebugDumpBuffer(ULONG Mask, PVOID Buffer, ULONG Length);
 VOID    DebugDisableScreenPort(VOID);
+VOID    DebugEnableScreenPort(VOID);
+BOOLEAN DebugIsScreenPortEnabled(VOID);
 VOID    DbgParseDebugChannels(PCHAR Value);
 
 /*
@@ -135,7 +137,9 @@ void    MEMORY_WRITE_BREAKPOINT4(unsigned long addr);
     /* DebugInit is already declared above and remains available in release builds. */
     #define BugCheck(fmt, ...)
     #define DbgDumpBuffer(mask, buf, len)
+    #define DebugEnableScreenPort()
     #define DebugDisableScreenPort()
+    #define DebugIsScreenPortEnabled() (FALSE)
     #define DbgParseDebugChannels(val)
 
 #endif // DBG

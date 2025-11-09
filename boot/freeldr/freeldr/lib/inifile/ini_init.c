@@ -22,6 +22,77 @@
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(INIFILE);
 
+#ifdef UEFIBOOT
+#include <uefildr.h>
+#include <arch/uefi/machuefi.h>
+
+static
+BOOLEAN
+IniExtractRdiskIndex(
+    _Out_ PULONG DiskIndex)
+{
+    static const CHAR RDiskToken[] = "rdisk(";
+    PCSTR Token;
+    ULONG Value = 0;
+
+    Token = strstr(FrLdrBootPath, RDiskToken);
+    if (!Token)
+        return FALSE;
+
+    Token += strlen(RDiskToken);
+    if (!isdigit((unsigned char)*Token))
+        return FALSE;
+
+    while (isdigit((unsigned char)*Token))
+    {
+        Value = (Value * 10) + (*Token - '0');
+        ++Token;
+    }
+
+    if (*Token != ')')
+        return FALSE;
+
+    *DiskIndex = Value;
+    return TRUE;
+}
+
+static
+BOOLEAN
+IniBuildDiskLevelBootPath(
+    _Out_writes_z_(BufferSize) PCHAR Buffer,
+    _In_ SIZE_T BufferSize)
+{
+    static const CHAR PartitionToken[] = "partition(";
+    NTSTATUS Status;
+    PCHAR Token;
+    PCHAR Digits;
+    PCHAR Closing;
+
+    Status = RtlStringCbCopyA(Buffer, BufferSize, FrLdrBootPath);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    Token = strstr(Buffer, PartitionToken);
+    if (!Token)
+        return FALSE;
+
+    Digits = Token + strlen(PartitionToken);
+    Closing = strchr(Digits, ')');
+    if (!Closing)
+        return FALSE;
+
+    if (Digits[0] == '0' && Digits + 1 == Closing)
+    {
+        /* Already pointing to partition(0); nothing to do. */
+        return FALSE;
+    }
+
+    Digits[0] = '0';
+    memmove(Digits + 1, Closing, strlen(Closing) + 1);
+    return TRUE;
+}
+#endif // UEFIBOOT
+
 BOOLEAN IniFileInitialize(VOID)
 {
     FILEINFORMATION FileInformation;
@@ -73,6 +144,84 @@ BOOLEAN IniFileInitialize(VOID)
             Status = FsOpenFile("freeldr.ini", CanonicalPath, OpenReadOnly, &FileId);
         }
 
+#ifdef UEFIBOOT
+        /*
+         * Fallback 3: Some firmware expose the UEFI boot image partition
+         * (FAT ESP) instead of the ISO root. If all previous attempts fail,
+         * try reopening the raw disk (partition 0) so the ISO filesystem
+         * can be detected.
+         */
+        if (Status != ESUCCESS)
+        {
+            CHAR DiskPath[MAX_PATH];
+
+            if (IniBuildDiskLevelBootPath(DiskPath, sizeof(DiskPath)))
+            {
+                TRACE("Retrying freeldr.ini with disk-level path: '%s'\n", DiskPath);
+                if (FsOpenFile("freeldr.ini", DiskPath, OpenReadOnly, &FileId) == ESUCCESS)
+                {
+                    Status = ESUCCESS;
+                    RtlStringCbCopyA(FrLdrBootPath, sizeof(FrLdrBootPath), DiskPath);
+                    FrldrBootPartition = 0;
+                }
+            }
+        }
+
+        if (Status != ESUCCESS)
+        {
+            CHAR PartitionPath[MAX_PATH];
+            ULONG BootDisk;
+
+            if (IniExtractRdiskIndex(&BootDisk))
+            {
+                for (ULONG Partition = 1; Partition <= 16 && Status != ESUCCESS; ++Partition)
+                {
+                    if (Partition == FrldrBootPartition)
+                        continue;
+
+                    RtlStringCbPrintfA(PartitionPath, sizeof(PartitionPath),
+                                       "multi(0)disk(0)rdisk(%lu)partition(%lu)",
+                                       BootDisk, Partition);
+
+                    if (!FsIsDeviceRegistered(PartitionPath))
+                        continue;
+
+                    TRACE("Retrying freeldr.ini with alternate partition path: '%s'\n",
+                          PartitionPath);
+                    if (FsOpenFile("freeldr.ini", PartitionPath, OpenReadOnly, &FileId) == ESUCCESS)
+                    {
+                        Status = ESUCCESS;
+                        RtlStringCbCopyA(FrLdrBootPath, sizeof(FrLdrBootPath), PartitionPath);
+                        FrldrBootPartition = Partition;
+                    }
+                }
+            }
+        }
+
+        if (Status != ESUCCESS)
+        {
+            ULONG CdromCount = UefiGetCdromCount();
+            for (ULONG CdIndex = 0; CdIndex < CdromCount && Status != ESUCCESS; ++CdIndex)
+            {
+                CHAR CdPath[MAX_PATH];
+
+                RtlStringCbPrintfA(CdPath, sizeof(CdPath),
+                                   "multi(0)disk(0)cdrom(%lu)", CdIndex);
+
+                if (!FsIsDeviceRegistered(CdPath))
+                    continue;
+
+                TRACE("Retrying freeldr.ini with cdrom path: '%s'\n", CdPath);
+                if (FsOpenFile("freeldr.ini", CdPath, OpenReadOnly, &FileId) == ESUCCESS)
+                {
+                    Status = ESUCCESS;
+                    RtlStringCbCopyA(FrLdrBootPath, sizeof(FrLdrBootPath), CdPath);
+                    FrldrBootPartition = 0xFF;
+                }
+            }
+        }
+#endif
+
         if (Status != ESUCCESS)
         {
             /* Try to open boot.ini (legacy) before bailing out */
@@ -118,6 +267,9 @@ BOOLEAN IniFileInitialize(VOID)
     }
 
     /* Parse the .ini file data */
+// #ifdef UEFIBOOT
+//     FrLdrUefiEndEarlyLogForwarding();
+// #endif
     Success = IniParseFile(FreeLoaderIniFileData, FreeLoaderIniFileSize);
 
     /* Do some cleanup, and return */

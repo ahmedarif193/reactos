@@ -77,6 +77,48 @@ ULONG UefiBootDiskArcPartition = 0;
 static EFI_GUID DevicePathProtocolGuid = EFI_DEVICE_PATH_PROTOCOL_GUID;
 static EFI_GUID LoadedImageProtocolGuid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
 
+#ifndef DevicePathNodeLength
+#define DevicePathNodeLength(Node) ((Node)->Length[0] | ((Node)->Length[1] << 8))
+#endif
+
+static
+BOOLEAN
+UefiDevicePathMatchesParentDisk(
+    _In_ EFI_DEVICE_PATH_PROTOCOL* CandidateDiskPath,
+    _In_ EFI_DEVICE_PATH_PROTOCOL* PartitionPath)
+{
+    EFI_DEVICE_PATH_PROTOCOL* DiskNode = CandidateDiskPath;
+    EFI_DEVICE_PATH_PROTOCOL* PartNode = PartitionPath;
+
+    if (!CandidateDiskPath || !PartitionPath)
+        return FALSE;
+
+    while (!IsDevicePathEnd(PartNode))
+    {
+        if (PartNode->Type == MEDIA_DEVICE_PATH && PartNode->SubType == MEDIA_HARDDRIVE_DP)
+        {
+            /* The disk path should end before the hard-drive node */
+            return IsDevicePathEnd(DiskNode);
+        }
+
+        if (IsDevicePathEnd(DiskNode))
+            return FALSE;
+
+        UINTN LenPart = DevicePathNodeLength(PartNode);
+        UINTN LenDisk = DevicePathNodeLength(DiskNode);
+        if (LenPart != LenDisk)
+            return FALSE;
+
+        if (memcmp(PartNode, DiskNode, LenPart) != 0)
+            return FALSE;
+
+        PartNode = NextDevicePathNode(PartNode);
+        DiskNode = NextDevicePathNode(DiskNode);
+    }
+
+    return FALSE;
+}
+
 static
 BOOLEAN
 UefiDetectIsoVolume(_In_ EFI_BLOCK_IO* BlockIo)
@@ -163,7 +205,7 @@ UefiIsCdRomHandle(IN EFI_HANDLE Handle)
     }
 
     /*
-     * Some firmware (notably SATA AHCI CD-ROMs) expose optical media via a
+     * Some firmware (notably SATA/USB bridges) expose optical media via a
      * hard-drive style device path. Fall back to Block I/O heuristics so these
      * devices are still classified as CDs.
      */
@@ -172,11 +214,11 @@ UefiIsCdRomHandle(IN EFI_HANDLE Handle)
             Handle, &bioGuid, (VOID**)&BlockIo)) &&
         BlockIo && BlockIo->Media && !BlockIo->Media->LogicalPartition)
     {
-        if (BlockIo->Media->ReadOnly && !BlockIo->Media->LogicalPartition)
-        {
-            if (!BlockIo->Media->MediaPresent)
-                return FALSE;
+        if (!BlockIo->Media->MediaPresent)
+            return FALSE;
 
+        if (BlockIo->Media->ReadOnly)
+        {
             if (BlockIo->Media->BlockSize == 2048 ||
                 UefiDetectIsoVolume(BlockIo))
             {
@@ -186,6 +228,12 @@ UefiIsCdRomHandle(IN EFI_HANDLE Handle)
             }
 
             TRACE("UefiIsCdRomHandle: read-only media without ISO signature, assuming CD-ROM\n");
+            return TRUE;
+        }
+
+        if (UefiDetectIsoVolume(BlockIo))
+        {
+            TRACE("UefiIsCdRomHandle: detected ISO9660 volume on writable/removable media\n");
             return TRUE;
         }
     }
@@ -229,6 +277,19 @@ UefiIsUsbHandle(IN EFI_HANDLE Handle)
 #endif
         }
         Node = NextDevicePathNode(Node);
+    }
+
+    /*
+     * Fall back to Block I/O heuristics: many USB mass-storage bridges expose
+     * themselves as hard disks but still flag the media as removable.
+     */
+    EFI_BLOCK_IO* BlockIo = NULL;
+    if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+            Handle, &bioGuid, (VOID**)&BlockIo)) &&
+        BlockIo && BlockIo->Media && BlockIo->Media->RemovableMedia)
+    {
+        TRACE("UefiIsUsbHandle: Block I/O reports removable media; treating as USB\n");
+        return TRUE;
     }
 
     return FALSE;
@@ -841,7 +902,7 @@ UefiSetupBlockDevices(VOID)
                 TRACE("Found root at index %u\n", i);
                 UefiBootRootIdentifier = i;
 
-                for (j = 0; j <= PcBiosDiskCount; ++j)
+                for (j = 0; j < PcBiosDiskCount; ++j)
                 {
                     /* Now only of the root drive number is equal to this drive we found above */
                     if (InternalUefiDisk[j].UefiRootNumber == UefiBootRootIdentifier)
@@ -851,10 +912,57 @@ UefiSetupBlockDevices(VOID)
                         TRACE("Found Boot drive\n");
                     }
                 }
+                }
+            }
+            else
+            {
+                EFI_DEVICE_PATH_PROTOCOL* BootPartitionPath = NULL;
+                if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+                        handles[i], &DevicePathProtocolGuid, (VOID**)&BootPartitionPath)) &&
+                    BootPartitionPath)
+                {
+                    for (ULONG root = 0; root < SystemHandleCount; ++root)
+                    {
+                        EFI_BLOCK_IO* RootBio;
+                        EFI_DEVICE_PATH_PROTOCOL* RootPath = NULL;
+
+                        if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+                                handles[root], &bioGuid, (VOID**)&RootBio)) ||
+                            !RootBio || RootBio->Media->LogicalPartition)
+                        {
+                            continue;
+                        }
+
+                        if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+                                handles[root], &DevicePathProtocolGuid, (VOID**)&RootPath)) ||
+                            !RootPath)
+                        {
+                            continue;
+                        }
+
+                        if (UefiDevicePathMatchesParentDisk(RootPath, BootPartitionPath))
+                        {
+                            ULONG j;
+
+                            TRACE("Boot partition maps to root index %lu\n", root);
+                            UefiBootRootIdentifier = root;
+                            for (j = 0; j < PcBiosDiskCount; ++j)
+                            {
+                                if (InternalUefiDisk[j].UefiRootNumber == UefiBootRootIdentifier)
+                                {
+                                    InternalUefiDisk[j].IsThisTheBootDrive = TRUE;
+                                    PublicBootArcDisk = j;
+                                    TRACE("Found Boot drive via partition mapping\n");
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
             }
         }
     }
-}
 
 static
 BOOLEAN
@@ -871,6 +979,7 @@ UefiSetBootpath(VOID)
    EFI_HANDLE BootHandle = NULL;
    EFI_BLOCK_IO* BootBlockIo = NULL;
    EFI_BLOCK_IO* BootMediaIo = bio;
+   EFI_BLOCK_IO* RootDiskIo = NULL;
    EFI_BLOCK_IO* BootClassifyIo = bio;
    BOOLEAN BootHandleIsPartition = FALSE;
 
@@ -903,6 +1012,23 @@ UefiSetBootpath(VOID)
                 }
             }
         }
+   }
+
+   if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+           handles[UefiBootRootIdentifier],
+           &bioGuid,
+           (VOID**)&RootDiskIo)) &&
+       RootDiskIo && RootDiskIo->Media && RootDiskIo->Media->MediaPresent)
+   {
+        TRACE("Root disk media: Removable=%d BlockSize=%u LogicalPartition=%d ReadOnly=%d\n",
+              RootDiskIo->Media->RemovableMedia,
+              RootDiskIo->Media->BlockSize,
+              RootDiskIo->Media->LogicalPartition,
+              RootDiskIo->Media->ReadOnly);
+   }
+   else
+   {
+        RootDiskIo = NULL;
    }
 
    if (BootMediaIo && BootMediaIo->Media)
@@ -950,6 +1076,35 @@ UefiSetBootpath(VOID)
         PartitionInfoHandle = BootHandle;
    }
 
+   /*
+    * Some firmwares report a logical partition even when booting from a
+    * raw ISO-on-disk image. Probe the parent disk for an ISO9660 PVD before
+    * trusting any partition metadata.
+    */
+   if (!TreatAsCd && RootDiskIo &&
+       !RootDiskIo->Media->LogicalPartition && RootDiskIo->Media->MediaPresent)
+   {
+        if (UefiDetectIsoVolume(RootDiskIo))
+        {
+            TRACE("Root disk contains ISO9660 data; switching to CD semantics\n");
+            TreatAsCd = TRUE;
+            HasPartitionInfo = FALSE;
+            BootPartition = 0;
+            PartitionInfoHandle = handles[UefiBootRootIdentifier];
+            BootHandleIsPartition = FALSE;
+            BootClassifyIo = RootDiskIo;
+        }
+   }
+
+   if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+           handles[UefiBootRootIdentifier],
+           &bioGuid,
+           (VOID**)&RootDiskIo)) &&
+       RootDiskIo && RootDiskIo->Media && !RootDiskIo->Media->MediaPresent)
+   {
+        RootDiskIo = NULL;
+   }
+
    BOOLEAN DevPathHasPartition =
        UefiHandleGetPartitionInfo(PartitionInfoHandle,
                                   &DevPathPartition,
@@ -972,6 +1127,17 @@ UefiSetBootpath(VOID)
 
         HasPartitionInfo = PartitionLooksValid;
    }
+   else if (BootHandleIsPartition && !HasPartitionInfo)
+   {
+        TRACE("Boot handle reports a partition but no valid entry was found; reusing root disk for heuristics\n");
+        BootHandleIsPartition = FALSE;
+        PartitionInfoHandle = handles[UefiBootRootIdentifier];
+        if (RootDiskIo)
+        {
+            BootClassifyIo = RootDiskIo;
+            TRACE("Using root disk Block I/O (%p) for media classification\n", RootDiskIo);
+        }
+   }
 
    TRACE("Device path partition info: has=%d partition=%lu start=%I64u\n",
          DevPathHasPartition,
@@ -988,6 +1154,24 @@ UefiSetBootpath(VOID)
         else
         {
             TRACE("Partitions exist, but boot path is not partition-specific; stay as CD\n");
+        }
+   }
+
+   EFI_BLOCK_IO* IsoProbeIo = BootClassifyIo;
+   if (BootHandleIsPartition && RootDiskIo)
+   {
+        IsoProbeIo = RootDiskIo;
+   }
+
+   if (!TreatAsCd && IsoProbeIo && IsoProbeIo->Media &&
+       !IsoProbeIo->Media->LogicalPartition && IsoProbeIo->Media->MediaPresent)
+   {
+        if (UefiDetectIsoVolume(IsoProbeIo))
+        {
+            TRACE("Detected ISO9660 signature on boot media; forcing ISO/CD semantics\n");
+            TreatAsCd = TRUE;
+            HasPartitionInfo = FALSE;
+            BootPartition = 0;
         }
    }
 

@@ -150,4 +150,9 @@ EditOperatingSystemEntry(
 VOID RunLoader(VOID);
 VOID FrLdrCheckCpuCompatibility(VOID);
 
+#ifdef UEFIBOOT
+VOID FrLdrUefiBeginEarlyLogForwarding(VOID);
+VOID FrLdrUefiEndEarlyLogForwarding(VOID);
+#endif
+
 #endif  /* __FREELDR_H */
