@@ -17,7 +17,8 @@ typedef struct _TABLE_ENTRY_HEADER
 {
     RTL_SPLAY_LINKS SplayLinks;
     LIST_ENTRY ListEntry;
-    LONGLONG UserData;
+    ULONGLONG Alignment; /* keep user data naturally aligned */
+    UCHAR UserData[];
 } TABLE_ENTRY_HEADER, *PTABLE_ENTRY_HEADER;
 
 /* PRIVATE FUNCTIONS *********************************************************/
@@ -37,16 +38,20 @@ RtlpFindGenericTableNodeOrParent(IN PRTL_GENERIC_TABLE Table,
         return TableEmptyTree;
     }
 
-    /* Set the current node */
+    /* Set the current node and double-check */
     CurrentNode = Table->TableRoot;
+    if (CurrentNode == NULL)
+    {
+        *NodeOrParent = NULL;
+        return TableEmptyTree;
+    }
 
     /* Start compare loop */
     while (TRUE)
     {
-        /* Do the compare */
         Result = Table->CompareRoutine(Table,
                                        Buffer,
-                                       &((PTABLE_ENTRY_HEADER)CurrentNode)->
+                                       ((PTABLE_ENTRY_HEADER)CurrentNode)->
                                        UserData);
         if (Result == GenericLessThan)
         {
@@ -198,7 +203,7 @@ RtlInsertElementGenericTableFull(IN PRTL_GENERIC_TABLE Table,
         }
 
         /* Copy user buffer */
-        RtlCopyMemory(&((PTABLE_ENTRY_HEADER)NewNode)->UserData,
+        RtlCopyMemory(((PTABLE_ENTRY_HEADER)NewNode)->UserData,
                       Buffer,
                       BufferSize);
     }
@@ -215,7 +220,7 @@ RtlInsertElementGenericTableFull(IN PRTL_GENERIC_TABLE Table,
     if (NewElement) *NewElement = (SearchResult != TableFoundNode);
 
     /* Return pointer to user data */
-    return &((PTABLE_ENTRY_HEADER)NewNode)->UserData;
+    return ((PTABLE_ENTRY_HEADER)NewNode)->UserData;
 }
 
 /*
@@ -283,7 +288,7 @@ RtlLookupElementGenericTableFull(IN PRTL_GENERIC_TABLE Table,
 
     /* Otherwise, splay the tree and return this entry */
     Table->TableRoot = RtlSplay(*NodeOrParent);
-    return &((PTABLE_ENTRY_HEADER)*NodeOrParent)->UserData;
+    return ((PTABLE_ENTRY_HEADER)*NodeOrParent)->UserData;
 }
 
 /*
@@ -355,7 +360,7 @@ RtlEnumerateGenericTable(IN PRTL_GENERIC_TABLE Table,
     }
 
     /* Check if we found the node and return it */
-    return FoundNode ? &((PTABLE_ENTRY_HEADER)FoundNode)->UserData : NULL;
+    return FoundNode ? ((PTABLE_ENTRY_HEADER)FoundNode)->UserData : NULL;
 }
 
 /*
@@ -393,7 +398,7 @@ RtlEnumerateGenericTableWithoutSplaying(IN PRTL_GENERIC_TABLE Table,
     }
 
     /* Check if we found the node and return it */
-    return FoundNode ? &((PTABLE_ENTRY_HEADER)FoundNode)->UserData : NULL;
+    return FoundNode ? ((PTABLE_ENTRY_HEADER)FoundNode)->UserData : NULL;
 }
 
 /*
@@ -424,7 +429,8 @@ RtlGetElementGenericTable(IN PRTL_GENERIC_TABLE Table,
     ULONG OrderedElement, ElementCount;
     PLIST_ENTRY OrderedNode;
     ULONG DeltaUp, DeltaDown;
-    ULONG NextI = I + 1;
+    const ULONG TargetIndex = I + 1;
+    ULONG WorkingIndex = TargetIndex;
 
     /* Setup current accounting data */
     OrderedNode = Table->OrderedPointer;
@@ -432,25 +438,25 @@ RtlGetElementGenericTable(IN PRTL_GENERIC_TABLE Table,
     ElementCount = Table->NumberGenericTableElements;
 
     /* Sanity checks */
-    if ((I == MAXULONG) || (NextI > ElementCount)) return NULL;
+    if ((I == MAXULONG) || (TargetIndex > ElementCount)) return NULL;
 
     /* Check if we already found the entry */
-    if (NextI == OrderedElement)
+    if (TargetIndex == OrderedElement)
     {
         /* Return it */
-        return &CONTAINING_RECORD(OrderedNode,
-                                  TABLE_ENTRY_HEADER,
-                                  ListEntry)->UserData;
+        return CONTAINING_RECORD(OrderedNode,
+                                 TABLE_ENTRY_HEADER,
+                                 ListEntry)->UserData;
     }
 
     /* Now check if we're farther behind */
-    if (OrderedElement > NextI)
+    if (OrderedElement > TargetIndex)
     {
         /* Find out if the distance is more then the half-way point */
-        if (NextI > (OrderedElement / 2))
+        if (TargetIndex > (OrderedElement / 2))
         {
             /* Do the search backwards, since this takes less iterations */
-            DeltaDown = OrderedElement - NextI;
+            DeltaDown = OrderedElement - TargetIndex;
             while (DeltaDown)
             {
                 /* Get next node */
@@ -462,19 +468,19 @@ RtlGetElementGenericTable(IN PRTL_GENERIC_TABLE Table,
         {
             /* Follow the list directly instead */
             OrderedNode = &Table->InsertOrderList;
-            while (NextI)
+            while (WorkingIndex)
             {
                 /* Get next node */
                 OrderedNode = OrderedNode->Flink;
-                NextI--;
+                WorkingIndex--;
             }
         }
     }
     else
     {
         /* We are farther ahead, calculate distances */
-        DeltaUp = NextI - OrderedElement;
-        DeltaDown = (ElementCount - NextI) + 1;
+        DeltaUp = TargetIndex - OrderedElement;
+        DeltaDown = (ElementCount - TargetIndex) + 1;
 
         /* Check if the up distance is smaller then the down distance */
         if (DeltaUp <= DeltaDown)
@@ -483,7 +489,7 @@ RtlGetElementGenericTable(IN PRTL_GENERIC_TABLE Table,
             while (DeltaUp)
             {
                 /* Get next node */
-                OrderedNode = OrderedNode->Blink;
+                OrderedNode = OrderedNode->Flink;
                 DeltaUp--;
             }
         }
@@ -502,12 +508,12 @@ RtlGetElementGenericTable(IN PRTL_GENERIC_TABLE Table,
 
     /* Got the element, save it */
     Table->OrderedPointer = OrderedNode;
-    Table->WhichOrderedElement = NextI;
+    Table->WhichOrderedElement = TargetIndex;
 
     /* Return the element */
-    return &CONTAINING_RECORD(OrderedNode,
-                              TABLE_ENTRY_HEADER,
-                              ListEntry)->UserData;
+    return CONTAINING_RECORD(OrderedNode,
+                             TABLE_ENTRY_HEADER,
+                             ListEntry)->UserData;
 }
 
 /* EOF */
