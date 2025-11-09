@@ -261,7 +261,7 @@ def _run_default_capture(log_path: Path, timeout: int) -> List[str]:
     build_dir = _locate_build_dir()
 
     print(f"[symbolize] Using build directory: {build_dir}")
-    print("[symbolize] Building livecd.iso …")
+    print("[symbolize] Building livecd_freeldr-dell-dev.iso …")
     build = subprocess.run(
         ["ninja", "livecd"],
         cwd=build_dir,
@@ -275,9 +275,9 @@ def _run_default_capture(log_path: Path, timeout: int) -> List[str]:
         raise subprocess.CalledProcessError(build.returncode, build.args)
     print("[symbolize] Build complete.")
 
-    livecd = build_dir / "livecd.iso"
+    livecd = build_dir / "livecd_freeldr-dell-dev.iso"
     if not livecd.exists():
-        raise FileNotFoundError("livecd.iso not found; run the script from the build directory")
+        raise FileNotFoundError("livecd_freeldr-dell-dev.iso not found; run the script from the build directory")
 
     qemu_cmd = [
         "qemu-system-x86_64",
@@ -307,6 +307,8 @@ def _run_default_capture(log_path: Path, timeout: int) -> List[str]:
     lines_cache: List[str] = []
     poll_interval = 0.5
 
+    entered_debugger_at: Optional[float] = None
+
     try:
         while True:
             if log_path.exists():
@@ -318,6 +320,9 @@ def _run_default_capture(log_path: Path, timeout: int) -> List[str]:
                             stop_reason = "assertion"
                         elif _PATTERN.search(line):
                             stop_reason = "backtrace"
+                        elif "Entered debugger" in line and entered_debugger_at is None:
+                            entered_debugger_at = time.monotonic()
+                            print("[symbolize] 'Entered debugger' detected; waiting 1s before stopping QEMU …")
                         if stop_reason:
                             if stop_reason == "assertion":
                                 print("[symbolize] Assertion detected; stopping QEMU.")
@@ -332,6 +337,17 @@ def _run_default_capture(log_path: Path, timeout: int) -> List[str]:
                     lines_cache = current_lines
                     seen_lines = len(current_lines)
                 if stop_reason:
+                    break
+            if entered_debugger_at is not None and stop_reason is None:
+                if time.monotonic() - entered_debugger_at >= 1.0:
+                    stop_reason = "entered-debugger"
+                    print("[symbolize] Stopping QEMU after debugger entry.")
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    lines_cache = _read_lines_from_path(log_path) if log_path.exists() else []
                     break
             if proc.poll() is not None:
                 lines_cache = _read_lines_from_path(log_path) if log_path.exists() else []
