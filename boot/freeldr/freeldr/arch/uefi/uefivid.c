@@ -71,7 +71,7 @@ static BOOLEAN GopConsoleInitialized = FALSE;
 
 /* GOP mode enumeration (exported to winldr) */
 PLOADER_PARAMETER_GOP_MODE UefiGopModes = NULL;
-ULONG UefiGopModeCount = 0;
+SIZE_T UefiGopModeCount = 0;
 ULONG UefiGopPreferredMode = 0;
 PLOADER_PARAMETER_FRAMEBUFFER UefiGopFramebuffers = NULL;
 ULONG UefiGopFramebufferCount = 0;
@@ -329,14 +329,16 @@ UefiInitializeVideo(VOID)
     {
         UINT32 i;
         SIZE_T modeBytes;
+        SIZE_T modeCount;
 
-        UefiGopModeCount = (ULONG)gop->Mode->MaxMode;
+        modeCount = gop->Mode->MaxMode;
+        UefiGopModeCount = modeCount;
         UefiGopPreferredMode = (ULONG)gop->Mode->Mode;
 
-        if (UefiGopModeCount > 0 &&
-            UefiGopModeCount <= ((SIZE_T)-1) / sizeof(LOADER_PARAMETER_GOP_MODE))
+        if (modeCount > 0 &&
+            modeCount <= ((SIZE_T)-1) / sizeof(LOADER_PARAMETER_GOP_MODE))
         {
-            modeBytes = (SIZE_T)UefiGopModeCount * sizeof(LOADER_PARAMETER_GOP_MODE);
+            modeBytes = modeCount * sizeof(LOADER_PARAMETER_GOP_MODE);
             UefiGopModes = FrLdrHeapAlloc(modeBytes, 'MPOG');
         }
         else

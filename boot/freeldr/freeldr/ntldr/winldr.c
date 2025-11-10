@@ -327,7 +327,7 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
         extern REACTOS_INTERNAL_BGCONTEXT framebufferData;
         extern PBGRT_TABLE GetBgrtTable(VOID);
         extern PLOADER_PARAMETER_GOP_MODE UefiGopModes;
-        extern ULONG UefiGopModeCount;
+        extern SIZE_T UefiGopModeCount;
         extern ULONG UefiGopPreferredMode;
         extern PLOADER_PARAMETER_FRAMEBUFFER UefiGopFramebuffers;
         extern ULONG UefiGopFramebufferCount;
@@ -413,7 +413,7 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
         /* Pass GOP mode enumeration to the kernel (if available) */
         if (UefiGopModes && UefiGopModeCount)
         {
-            SIZE_T bytes = (SIZE_T)UefiGopModeCount * sizeof(LOADER_PARAMETER_GOP_MODE);
+            SIZE_T bytes = UefiGopModeCount * sizeof(LOADER_PARAMETER_GOP_MODE);
 
             if (!UefiGopModesPermanent)
             {
@@ -423,8 +423,8 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
                     RtlCopyMemory(permanent, UefiGopModes, bytes);
                     UefiGopModes = permanent;
                     UefiGopModesPermanent = TRUE;
-                    TRACE("Copied %lu GOP mode descriptors into permanent loader memory\n",
-                          (unsigned long)UefiGopModeCount);
+                    TRACE("Copied %Iu GOP mode descriptors into permanent loader memory\n",
+                          UefiGopModeCount);
                 }
                 else
                 {
@@ -436,10 +436,24 @@ WinLdrInitializePhase1(PLOADER_PARAMETER_BLOCK LoaderBlock,
 
             if (UefiGopModes && UefiGopModesPermanent)
             {
+                ULONG GopModeCountClamped;
+
                 Extension->GopModes = (PLOADER_PARAMETER_GOP_MODE)PaToVa(UefiGopModes);
-                Extension->GopModeCount = UefiGopModeCount;
+                if (UefiGopModeCount > MAXULONG)
+                {
+                    WARN("Truncating GOP mode count %Iu to %lu for loader block\n",
+                         UefiGopModeCount,
+                         (ULONG)MAXULONG);
+                    GopModeCountClamped = MAXULONG;
+                }
+                else
+                {
+                    GopModeCountClamped = (ULONG)UefiGopModeCount;
+                }
+
+                Extension->GopModeCount = GopModeCountClamped;
                 Extension->GopPreferredMode = UefiGopPreferredMode;
-                TRACE("Passing %lu GOP modes to kernel (preferred=%lu)\n", UefiGopModeCount, UefiGopPreferredMode);
+                TRACE("Passing %Iu GOP modes to kernel (preferred=%lu)\n", UefiGopModeCount, UefiGopPreferredMode);
             }
         }
 
