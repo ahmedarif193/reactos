@@ -1652,7 +1652,10 @@ LoadAndBootWindowsCommon(
           KiSystemStartup, LoaderBlockVA);
 
     /* Zero KI_USER_SHARED_DATA page */
-    RtlZeroMemory((PVOID)KI_USER_SHARED_DATA, MM_PAGE_SIZE);
+    {
+        volatile PVOID SharedUserDataVa = (PVOID)KI_USER_SHARED_DATA;
+        RtlZeroMemory((PVOID)SharedUserDataVa, MM_PAGE_SIZE);
+    }
 
     WinLdrpDumpMemoryDescriptors(LoaderBlockVA);
     WinLdrpDumpBootDriver(LoaderBlockVA);

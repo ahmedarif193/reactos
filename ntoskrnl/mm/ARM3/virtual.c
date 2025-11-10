@@ -836,8 +836,8 @@ MiDoMappedCopy(IN PEPROCESS SourceProcess,
     PVOID CurrentAddress = SourceAddress, CurrentTargetAddress = TargetAddress;
     volatile PVOID MdlAddress = NULL;
     KAPC_STATE ApcState;
-    BOOLEAN HaveBadAddress;
-    ULONG_PTR BadAddress;
+    BOOLEAN HaveBadAddress = FALSE;
+    ULONG_PTR BadAddress = 0;
     NTSTATUS Status = STATUS_SUCCESS;
     PAGED_CODE();
 
@@ -1059,8 +1059,8 @@ MiDoPoolCopy(IN PEPROCESS SourceProcess,
     PVOID CurrentAddress = SourceAddress, CurrentTargetAddress = TargetAddress;
     PVOID PoolAddress;
     KAPC_STATE ApcState;
-    BOOLEAN HaveBadAddress;
-    ULONG_PTR BadAddress;
+    BOOLEAN HaveBadAddress = FALSE;
+    ULONG_PTR BadAddress = 0;
     NTSTATUS Status = STATUS_SUCCESS;
     PAGED_CODE();
 

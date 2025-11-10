@@ -397,7 +397,11 @@ MiBalancerThread(PVOID Unused)
                 }
 
                 /* Trim cache */
-                Target = max(InitialTarget, abs(MiMinimumAvailablePages - MmAvailablePages));
+                {
+                    LONGLONG Delta = (LONGLONG)MiMinimumAvailablePages - (LONGLONG)MmAvailablePages;
+                    PFN_NUMBER DeltaAbs = (PFN_NUMBER)((Delta >= 0) ? Delta : -Delta);
+                    Target = max(InitialTarget, DeltaAbs);
+                }
                 if (Target)
                 {
                     CcRosTrimCache(Target, &NrFreedPages);

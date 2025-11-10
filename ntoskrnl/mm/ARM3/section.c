@@ -923,12 +923,19 @@ NTSTATUS
 MiSessionCommitPageTables(IN PVOID StartVa,
                           IN PVOID EndVa)
 {
+#ifdef _M_AMD64
+    UNREFERENCED_PARAMETER(StartVa);
+    UNREFERENCED_PARAMETER(EndVa);
+    _WARN("MiSessionCommitPageTables halfplemented for amd64");
+    return STATUS_NOT_IMPLEMENTED;
+#else
     KIRQL OldIrql;
-    ULONG Color, Index;
+    ULONG Color;
     PMMPDE StartPde, EndPde;
     MMPDE TempPde = ValidKernelPdeLocal;
     PMMPFN Pfn1;
     PFN_NUMBER PageCount = 0, ActualPages = 0, PageFrameNumber;
+    ULONG Index;
 
     /* Windows sanity checks */
     ASSERT(StartVa >= (PVOID)MmSessionBase);
@@ -960,15 +967,6 @@ MiSessionCommitPageTables(IN PVOID StartVa,
     /* Loop each PDE while holding the working set lock */
 //  MiLockWorkingSet(PsGetCurrentThread(),
 //                   &MmSessionSpace->GlobalVirtualAddress->Vm);
-#ifdef _M_AMD64
-_WARN("MiSessionCommitPageTables halfplemented for amd64")
-    DBG_UNREFERENCED_LOCAL_VARIABLE(OldIrql);
-    DBG_UNREFERENCED_LOCAL_VARIABLE(Color);
-    DBG_UNREFERENCED_LOCAL_VARIABLE(TempPde);
-    DBG_UNREFERENCED_LOCAL_VARIABLE(Pfn1);
-    DBG_UNREFERENCED_LOCAL_VARIABLE(PageFrameNumber);
-    ASSERT(FALSE);
-#else
     while (StartPde <= EndPde)
     {
         /* Check if we already have a page table */
@@ -1013,7 +1011,6 @@ _WARN("MiSessionCommitPageTables halfplemented for amd64")
         StartPde++;
         Index++;
     }
-#endif
 
     /* Make sure we didn't do more pages than expected */
     ASSERT(ActualPages <= PageCount);
@@ -1033,6 +1030,7 @@ _WARN("MiSessionCommitPageTables halfplemented for amd64")
 
     /* Return status */
     return STATUS_SUCCESS;
+#endif
 }
 
 NTSTATUS

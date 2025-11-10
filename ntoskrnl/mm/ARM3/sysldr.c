@@ -343,7 +343,7 @@ RtlpFindExportedRoutineByName(
                             OrdinalTable);
 
     /* Check if we couldn't find it */
-    if (Ordinal == -1)
+    if (Ordinal == 0xFFFF)
         return NotFoundStatus;
 
     /* Validate the ordinal */
@@ -821,7 +821,7 @@ MiSnapThunk(IN PVOID DllBase,
                                     OrdinalTable);
 
             /* Check if we couldn't find it */
-            if (Ordinal == -1)
+            if (Ordinal == 0xFFFF)
             {
                 DPRINT1("Warning: Driver failed to load, %s not found\n", NameImport->Name);
                 return STATUS_DRIVER_ENTRYPOINT_NOT_FOUND;
