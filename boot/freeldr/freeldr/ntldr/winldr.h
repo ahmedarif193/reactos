@@ -157,6 +157,17 @@ MempSetupPaging(IN PFN_NUMBER StartPage,
                 IN PFN_NUMBER NumberOfPages,
                 IN BOOLEAN KernelMapping);
 
+#if defined(_M_IX86)
+#define MI_LOADER_MAX_KERNEL_MAPPING_SIZE   0x30000000UL /* 768MB => keeps PDEs 0x2C0-0x2FF (256MB) free */
+#define MI_LOADER_MAX_KERNEL_MAPPING_PAGES  (MI_LOADER_MAX_KERNEL_MAPPING_SIZE >> MM_PAGE_SHIFT)
+BOOLEAN
+MiSetupPagingWithKernelLimit(IN PFN_NUMBER StartPage,
+                             IN PFN_NUMBER NumberOfPages,
+                             IN BOOLEAN KernelMapping);
+VOID
+MiLoaderTrimKernelMappings(VOID);
+#endif
+
 VOID
 MempUnmapPage(PFN_NUMBER Page);
 

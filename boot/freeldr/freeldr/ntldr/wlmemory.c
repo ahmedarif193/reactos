@@ -14,6 +14,14 @@
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WINDOWS);
 
+#if defined(_M_IX86)
+#define MI_LOADER_SETUP_PAGING(BasePage, PageCount, KernelMap) \
+    MiSetupPagingWithKernelLimit((BasePage), (PageCount), (KernelMap))
+#else
+#define MI_LOADER_SETUP_PAGING(BasePage, PageCount, KernelMap) \
+    MempSetupPaging((BasePage), (PageCount), (KernelMap))
+#endif
+
 static const PCSTR MemTypeDesc[] = {
     "ExceptionBlock    ", // ?
     "SystemBlock       ", // ?
@@ -139,7 +147,7 @@ MempSetupPagingForRegion(
         case LoaderXIPRom:
         case LoaderOsloaderHeap: // FIXME
             /* Map these pages into kernel mode */
-            Status = MempSetupPaging(BasePage, PageCount, TRUE);
+            Status = MI_LOADER_SETUP_PAGING(BasePage, PageCount, TRUE);
             break;
 
         /* Pages not in use */
@@ -354,6 +362,10 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
 
 #if DBG
     MempDump();
+#endif
+
+#if defined(_M_IX86)
+    MiLoaderTrimKernelMappings();
 #endif
 
     return TRUE;

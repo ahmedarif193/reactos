@@ -22,6 +22,7 @@ DBG_DEFAULT_CHANNEL(WINDOWS);
 
 #define SELFMAP_ENTRY       0x300
 
+
 // This is needed only for SetProcessorContext routine
 #pragma pack(2)
 typedef struct
@@ -94,6 +95,7 @@ DumpGDTEntry(ULONG_PTR Base, ULONG Selector)
 
 PHARDWARE_PTE PDE;
 PHARDWARE_PTE HalPageTable;
+ULONG_PTR MiPageDirectoryPhysical;
 
 PUCHAR PhysicalPageTablesBuffer;
 PUCHAR KernelPageTablesBuffer;
@@ -152,6 +154,7 @@ MempAllocatePageTables(VOID)
 
     // Set up pointers correctly now
     PDE = (PHARDWARE_PTE)Buffer;
+    MiPageDirectoryPhysical = (ULONG_PTR)Buffer;
 
     // Map the page directory at 0xC0000000 (maps itself)
     PDE[SELFMAP_ENTRY].PageFrameNumber = (ULONG)PDE >> MM_PAGE_SHIFT;
@@ -206,7 +209,7 @@ MempAllocatePTE(ULONG Entry, PHARDWARE_PTE *PhysicalPT, PHARDWARE_PTE *KernelPT)
 
 BOOLEAN
 MempSetupPaging(IN PFN_NUMBER StartPage,
-                IN PFN_COUNT NumberOfPages,
+                IN PFN_NUMBER NumberOfPages,
                 IN BOOLEAN KernelMapping)
 {
     PHARDWARE_PTE PhysicalPT;
@@ -258,6 +261,79 @@ MempSetupPaging(IN PFN_NUMBER StartPage,
     }
 
     return TRUE;
+}
+
+BOOLEAN
+MiSetupPagingWithKernelLimit(IN PFN_NUMBER StartPage,
+                             IN PFN_NUMBER NumberOfPages,
+                             IN BOOLEAN KernelMapping)
+{
+    PFN_NUMBER CurrentPage, RemainingPages;
+
+    if (!KernelMapping || (NumberOfPages == 0))
+        return MempSetupPaging(StartPage, NumberOfPages, KernelMapping);
+
+    CurrentPage = StartPage;
+    RemainingPages = NumberOfPages;
+
+    if (CurrentPage < MI_LOADER_MAX_KERNEL_MAPPING_PAGES)
+    {
+        PFN_NUMBER KernelPages = MI_LOADER_MAX_KERNEL_MAPPING_PAGES - CurrentPage;
+        if (KernelPages > RemainingPages)
+            KernelPages = RemainingPages;
+
+        if (!MempSetupPaging(CurrentPage, KernelPages, TRUE))
+            return FALSE;
+
+        CurrentPage += KernelPages;
+        RemainingPages -= KernelPages;
+    }
+    else
+    {
+        TRACE("MiSetupPagingWithKernelLimit: BasePage %Ix skipped for kernel mapping\n",
+              (ULONG_PTR)CurrentPage);
+    }
+
+    if (RemainingPages != 0)
+    {
+        TRACE("MiSetupPagingWithKernelLimit: mapping %Ix pages without kernel mapping (BasePage=%Ix)\n",
+              (ULONG_PTR)RemainingPages,
+              (ULONG_PTR)CurrentPage);
+        if (!MempSetupPaging(CurrentPage, RemainingPages, FALSE))
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+VOID
+MiLoaderTrimKernelMappings(VOID)
+{
+    const ULONG FirstKernelEntry = (KSEG0_BASE >> 22);
+    const ULONG MaxKernelEntry = FirstKernelEntry + (MI_LOADER_MAX_KERNEL_MAPPING_PAGES >> 10);
+    ULONG Entry;
+
+    TRACE("MiLoaderTrimKernelMappings: trimming kernel PDEs >= %Ix\n", (ULONG_PTR)MaxKernelEntry);
+
+    for (Entry = MaxKernelEntry; Entry < SELFMAP_ENTRY; Entry++)
+    {
+        if (PDE[Entry].Valid)
+        {
+            TRACE("MiLoaderTrimKernelMappings: clearing PDE %lx (LargePage=%u)\n",
+                  Entry,
+                  PDE[Entry].LargePage);
+
+            if (!PDE[Entry].LargePage)
+            {
+                /* Leave the old PT page alone; the kernel will rebuild fresh tables. */
+            }
+
+            RtlZeroMemory(&PDE[Entry], sizeof(PDE[Entry]));
+        }
+    }
+
+    /* Ensure stale TLB entries for the trimmed range are flushed. */
+    __writecr3(__readcr3());
 }
 
 VOID
@@ -468,8 +544,8 @@ WinLdrSetProcessorContext(
     /* Re-initialize EFLAGS */
     __writeeflags(0);
 
-    /* Set the PDBR */
-    __writecr3((ULONG_PTR)PDE);
+    /* Set the PDBR to the physical base of the page directory we built */
+    __writecr3(MiPageDirectoryPhysical);
 
     /* Enable paging by modifying CR0 */
     __writecr0(__readcr0() | CR0_PG);

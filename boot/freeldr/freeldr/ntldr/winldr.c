@@ -1634,7 +1634,19 @@ LoadAndBootWindowsCommon(
     WinLdrSetProcessorContext(OperatingSystemVersion);
 
     /* Save final value of LoaderPagesSpanned */
-    LoaderBlock->Extension->LoaderPagesSpanned = MmGetLoaderPagesSpanned();
+    {
+        PFN_NUMBER LoaderPages = MmGetLoaderPagesSpanned();
+#if defined(_M_IX86)
+        if (LoaderPages > MI_LOADER_MAX_KERNEL_MAPPING_PAGES)
+        {
+            TRACE("WinLdr: Clamping LoaderPagesSpanned from 0x%Ix to 0x%Ix\n",
+                  LoaderPages,
+                  (PFN_NUMBER)MI_LOADER_MAX_KERNEL_MAPPING_PAGES);
+            LoaderPages = MI_LOADER_MAX_KERNEL_MAPPING_PAGES;
+        }
+#endif
+        LoaderBlock->Extension->LoaderPagesSpanned = LoaderPages;
+    }
 
     TRACE("Hello from paged mode, KiSystemStartup %p, LoaderBlockVA %p!\n",
           KiSystemStartup, LoaderBlockVA);
