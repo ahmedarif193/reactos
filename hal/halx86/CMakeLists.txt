@@ -10,6 +10,9 @@ add_definitions(
     -D_NTHALDLL_
     -D_NTHAL_)
 
+add_library(lib_hal_rtlpc OBJECT rtlpc_shim.c)
+add_dependencies(lib_hal_rtlpc bugcodes psdk xdk)
+
 include_directories(
     ${HAL_ARCH_DIR}/include
     ${HAL_I386_DIR}/include
@@ -26,6 +29,7 @@ function(add_hal _halname)
     foreach(_component ${_haldata_COMPONENTS})
         list(APPEND _haldata_SOURCES "$<TARGET_OBJECTS:lib_hal_${_component}>")
     endforeach()
+    list(APPEND _haldata_SOURCES "$<TARGET_OBJECTS:lib_hal_rtlpc>")
     add_library(${_halname} MODULE
         ${_haldata_SOURCES}
         ${CMAKE_CURRENT_BINARY_DIR}/hal.def)

@@ -24,6 +24,7 @@ list(APPEND SOURCE
     ## message.c
     # ${NTOS_RTL_SOURCE_DIR}/nls.c      ## Requires a local implementation.
     nlsboot.c
+    rtlpc.c
     ${NTOS_RTL_SOURCE_DIR}/random.c
     ## res.c    ## Optional? Needs SEH
     # ${NTOS_RTL_SOURCE_DIR}/time.c     ## Optional

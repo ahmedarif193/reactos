@@ -52,6 +52,35 @@ if(DEFINED TOOLCHAIN_PREFIX AND NOT "${TOOLCHAIN_PREFIX}" STREQUAL "")
     list(APPEND _i386_toolchain_path_args "-DTOOLCHAIN_PREFIX:STRING=${TOOLCHAIN_PREFIX}")
 endif()
 
+set(_i386_stdlibs "-lstdc++")
+set(_i386_gxx "${GXX_EXECUTABLE}")
+if(NOT _i386_gxx AND DEFINED TOOLCHAIN_PATH AND NOT "${TOOLCHAIN_PATH}" STREQUAL "" AND DEFINED MINGW_TOOLCHAIN_PREFIX AND NOT "${MINGW_TOOLCHAIN_PREFIX}" STREQUAL "")
+    set(_i386_gxx "${TOOLCHAIN_PATH}/${MINGW_TOOLCHAIN_PREFIX}g++")
+    if(NOT EXISTS "${_i386_gxx}")
+        unset(_i386_gxx)
+    endif()
+endif()
+if(_i386_gxx)
+    execute_process(
+        COMMAND ${_i386_gxx} -m32 -print-file-name=libstdc++.a
+        OUTPUT_VARIABLE _i386_libstdcxx_location
+        ERROR_QUIET)
+    string(STRIP "${_i386_libstdcxx_location}" _i386_libstdcxx_location)
+    if(_i386_libstdcxx_location AND EXISTS "${_i386_libstdcxx_location}")
+        get_filename_component(_i386_libstdcxx_dir "${_i386_libstdcxx_location}" DIRECTORY)
+        set(_i386_stdlibs "-L${_i386_libstdcxx_dir} -lstdc++")
+    endif()
+    unset(_i386_libstdcxx_location)
+    unset(_i386_libstdcxx_dir)
+endif()
+
+set(_i386_compiler_args)
+if(NOT CMAKE_TOOLCHAIN_FILE)
+    list(APPEND _i386_compiler_args
+        -DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}
+        -DCMAKE_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER})
+endif()
+
 set(_i386_linker_arg)
 if(DEFINED TOOLCHAIN_PATH AND NOT "${TOOLCHAIN_PATH}" STREQUAL "" AND MINGW_TOOLCHAIN_PREFIX MATCHES "^x86_64-w64-mingw32-")
     set(_i386_multilib_ld "${TOOLCHAIN_PATH}/${MINGW_TOOLCHAIN_PREFIX}ld")
@@ -74,15 +103,15 @@ ExternalProject_Add(wow64_multilib_i386
         # Ensure C-linkage targets that pull in C++ objects get libstdc++
         # This avoids undefined references (operator new/delete, atexit,
         # __cxa_guard_*) when linking mixed C/C++ code as C targets.
-        -DCMAKE_C_STANDARD_LIBRARIES:STRING=-lstdc++
+        "-DCMAKE_C_STANDARD_LIBRARIES:STRING=${_i386_stdlibs}"
+        "-DCMAKE_CXX_STANDARD_LIBRARIES:STRING=${_i386_stdlibs}"
         # Reuse the same MinGW toolchain prefix/suffix as the top-level build
         # so an x86_64-w64-mingw32 multilib toolchain can be used to emit i386 code
         -DMINGW_TOOLCHAIN_PREFIX:STRING=${MINGW_TOOLCHAIN_PREFIX}
         -DMINGW_TOOLCHAIN_SUFFIX:STRING=${MINGW_TOOLCHAIN_SUFFIX}
         ${_i386_toolchain_path_args}
         # Forward explicit tool binaries when available to avoid PATH lookups
-        -DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}
-        -DCMAKE_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER}
+        ${_i386_compiler_args}
         -DCMAKE_ASM_COMPILER:FILEPATH=${CMAKE_ASM_COMPILER}
         -DCMAKE_AR:FILEPATH=${CMAKE_AR}
         -DCMAKE_RANLIB:FILEPATH=${CMAKE_RANLIB}
@@ -105,6 +134,8 @@ ExternalProject_Add(wow64_multilib_i386
     USES_TERMINAL_BUILD TRUE
 )
 endif()
+
+unset(_i386_compiler_args)
 
 # Expose the produced sysroot path to the including scope
 set(WOW64_MULTILIB_SYSROOT "${WOW64_MULTILIB_SUBBUILD_DIR}/reactos" CACHE PATH "Multilib i386 sysroot")

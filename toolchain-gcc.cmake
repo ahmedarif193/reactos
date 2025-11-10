@@ -110,6 +110,12 @@ set(CMAKE_EXE_LINKER_FLAGS_INIT "-nostdlib -pie -Wl,--enable-auto-image-base,--d
 
 set(CMAKE_USER_MAKE_RULES_OVERRIDE "${CMAKE_CURRENT_LIST_DIR}/overrides-gcc.cmake")
 
+# Do not let CMake inject host C runtime/linker defaults; freestanding
+# components (boot loaders, early kernel pieces, etc.) link everything
+# explicitly and must not acquire user-mode DLL dependencies.
+set(CMAKE_C_STANDARD_LIBRARIES "" CACHE STRING "Standard C Libraries" FORCE)
+set(CMAKE_CXX_STANDARD_LIBRARIES "" CACHE STRING "Standard C++ Libraries" FORCE)
+
 # Get GCC version
 execute_process(COMMAND ${CMAKE_C_COMPILER} -dumpversion OUTPUT_VARIABLE GCC_VERSION)
 
