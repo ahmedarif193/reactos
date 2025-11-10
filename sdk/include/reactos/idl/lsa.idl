@@ -1015,7 +1015,7 @@ cpp_quote("#if _WIN32_WINNT >= 0x0500")
     LsarQueryTrustedDomainInfoByName(
         [in] LSAPR_HANDLE PolicyHandle,
         [in] PRPC_UNICODE_STRING TrustedDomainName,
-        [in] POLICY_INFORMATION_CLASS InformationClass,
+        [in] TRUSTED_INFORMATION_CLASS InformationClass,
         [out, switch_is(InformationClass)] PLSAPR_TRUSTED_DOMAIN_INFO *PolicyInformation);
 
     /* Function 49 */
@@ -1024,7 +1024,7 @@ cpp_quote("#if _WIN32_WINNT >= 0x0500")
     LsarSetTrustedDomainInfoByName(
         [in] LSAPR_HANDLE PolicyHandle,
         [in] PRPC_UNICODE_STRING TrustedDomainName,
-        [in] POLICY_INFORMATION_CLASS InformationClass,
+        [in] TRUSTED_INFORMATION_CLASS InformationClass,
         [in, switch_is(InformationClass)] PLSAPR_TRUSTED_DOMAIN_INFO PolicyInformation);
 
     /* Function 50 */
@@ -1057,7 +1057,7 @@ cpp_quote("#if _WIN32_WINNT >= 0x0500")
     __stdcall
     LsarQueryDomainInformationPolicy(
         [in] LSAPR_HANDLE PolicyHandle,
-        [in] POLICY_INFORMATION_CLASS InformationClass,
+        [in] POLICY_DOMAIN_INFORMATION_CLASS InformationClass,
         [out, switch_is(InformationClass)] PLSAPR_POLICY_DOMAIN_INFORMATION *PolicyInformation);
 
     /* Function 54 */
@@ -1065,7 +1065,7 @@ cpp_quote("#if _WIN32_WINNT >= 0x0500")
     __stdcall
     LsarSetDomainInformationPolicy(
         [in] LSAPR_HANDLE PolicyHandle,
-        [in] POLICY_INFORMATION_CLASS InformationClass,
+        [in] POLICY_DOMAIN_INFORMATION_CLASS InformationClass,
         [in, switch_is(InformationClass)] PLSAPR_POLICY_DOMAIN_INFORMATION PolicyInformation);
 
     /* Function 55 */

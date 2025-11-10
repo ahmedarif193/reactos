@@ -217,8 +217,8 @@ static void do_blend( GLcontext* ctx, GLuint n, const GLubyte mask[],
 	       if (mask[i]) {
 		  GLint Rs, Gs, Bs, As;	 /* Source colors */
 		  GLint Rd, Gd, Bd, Ad;	 /* Dest colors */
-		  GLint Rss, Gss, Bss, Ass;  /* Source colors scaled */
-		  GLint Rds, Gds, Bds, Ads;  /* Dest colors scaled */
+		  GLint Rss = 0, Gss = 0, Bss = 0, Ass = 0;  /* Source colors scaled */
+		  GLint Rds = 0, Gds = 0, Bds = 0, Ads = 0;  /* Dest colors scaled */
 
 		  /* Source Color */
 		  Rs = red[i];
@@ -366,8 +366,8 @@ static void do_blend( GLcontext* ctx, GLuint n, const GLubyte mask[],
 	       if (mask[i]) {
 		  GLint Rs, Gs, Bs, As;	 /* Source colors */
 		  GLint Rd, Gd, Bd, Ad;	 /* Dest colors */
-		  GLfloat sR, sG, sB, sA;  /* Source scaling */
-		  GLfloat dR, dG, dB, dA;  /* Dest scaling */
+		  GLfloat sR = 0.0F, sG = 0.0F, sB = 0.0F, sA = 0.0F;  /* Source scaling */
+		  GLfloat dR = 0.0F, dG = 0.0F, dB = 0.0F, dA = 0.0F;  /* Dest scaling */
 		  GLfloat r, g, b, a;
 
 		  /* Source Color */

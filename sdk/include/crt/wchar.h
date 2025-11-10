@@ -6,6 +6,16 @@
 #ifndef _INC_WCHAR
 #define _INC_WCHAR
 
+/*
+ * When building with compilers other than MSVC, importing getwchar/putwchar
+ * and then providing inline definitions for the same symbols triggers
+ * warnings. Force the macro-based implementations in that case unless the
+ * caller explicitly opts into the inline version.
+ */
+#if (defined(__clang__) || defined(__GNUC__)) && !defined(_CRT_GETPUTWCHAR_NOINLINE)
+#define _CRT_GETPUTWCHAR_NOINLINE 1
+#endif
+
 #include <corecrt.h>
 
 #define __need___va_list
@@ -1596,8 +1606,6 @@ _CRTIMP int __cdecl iswblank(wint_t _C);
     _In_ wint_t _Ch,
     _Inout_ FILE *_File);
 
-#undef _CRT_GETPUTWCHAR_NOINLINE
-
 #if !defined(__cplusplus) || defined(_CRT_GETPUTWCHAR_NOINLINE)
 #define getwchar() fgetwc(stdin)
 #define putwchar(_c) fputwc((_c),stdout)
@@ -1605,6 +1613,8 @@ _CRTIMP int __cdecl iswblank(wint_t _C);
   _Check_return_ __CRT_INLINE wint_t __cdecl getwchar() {return (fgetwc(stdin)); }
   _Check_return_opt_ __CRT_INLINE wint_t __cdecl putwchar(_In_ wchar_t _C) {return (fputwc(_C,stdout)); }
 #endif
+
+#undef _CRT_GETPUTWCHAR_NOINLINE
 
 #define getwc(_stm) fgetwc(_stm)
 #define putwc(_c,_stm) fputwc(_c,_stm)

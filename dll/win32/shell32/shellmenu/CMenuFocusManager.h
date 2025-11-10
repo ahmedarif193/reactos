@@ -23,7 +23,8 @@ class CMenuBand;
 
 class CMenuFocusManager :
     public CComCoClass<CMenuFocusManager>,
-    public CComObjectRootEx<CComMultiThreadModelNoCS>
+    public CComObjectRootEx<CComMultiThreadModelNoCS>,
+    public IUnknown
 {
 private:
     static DWORD TlsIndex;
@@ -100,6 +101,7 @@ public:
     DECLARE_NOT_AGGREGATABLE(CMenuFocusManager)
     DECLARE_PROTECT_FINAL_CONSTRUCT()
     BEGIN_COM_MAP(CMenuFocusManager)
+        COM_INTERFACE_ENTRY_IID(IID_IUnknown, IUnknown)
     END_COM_MAP()
 
 private:

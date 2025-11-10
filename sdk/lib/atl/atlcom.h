@@ -24,6 +24,23 @@
 #include <cguid.h>          // for GUID_NULL
 #include <pseh/pseh2.h>
 
+/*
+ * Older compilers that consume this ATL clone might not understand the C++11
+ * 'override' specifier. Provide a helper macro so we can opt-in whenever the
+ * compiler supports it without sprinkling '#if' guards at every use site.
+ */
+#ifndef ATL_OVERRIDE
+#if defined(__cplusplus)
+#if (__cplusplus >= 201103L) || defined(_MSC_VER)
+#define ATL_OVERRIDE override
+#else
+#define ATL_OVERRIDE
+#endif
+#else
+#define ATL_OVERRIDE
+#endif
+#endif
+
 namespace ATL
 {
 
@@ -594,9 +611,9 @@ public:                                                                         
         };                                                                        \
         return _entries;                                                        \
     }                                                                            \
-    virtual ULONG STDMETHODCALLTYPE AddRef() = 0;                                \
-    virtual ULONG STDMETHODCALLTYPE Release() = 0;                                \
-    STDMETHOD(QueryInterface)(REFIID, void **) = 0;
+    virtual ULONG STDMETHODCALLTYPE AddRef() ATL_OVERRIDE = 0;                    \
+    virtual ULONG STDMETHODCALLTYPE Release() ATL_OVERRIDE = 0;                    \
+    STDMETHOD(QueryInterface)(REFIID, void **) ATL_OVERRIDE = 0;
 
 #define COM_INTERFACE_ENTRY_IID(iid, x)                                            \
     {&iid, offsetofclass(x, _ComMapClass), _ATL_SIMPLEMAPENTRY},
@@ -732,7 +749,7 @@ public:
     }
 
 public:
-    STDMETHOD(CreateInstance)(LPUNKNOWN pUnkOuter, REFIID riid, void **ppvObj)
+    STDMETHOD(CreateInstance)(LPUNKNOWN pUnkOuter, REFIID riid, void **ppvObj) ATL_OVERRIDE
     {
         HRESULT hResult;
 
@@ -749,7 +766,7 @@ public:
         return hResult;
     }
 
-    STDMETHOD(LockServer)(BOOL fLock)
+    STDMETHOD(LockServer)(BOOL fLock) ATL_OVERRIDE
     {
         if (fLock)
             _pAtlModule->Lock();

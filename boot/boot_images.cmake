@@ -282,7 +282,6 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E remove -f ${LIVEUSB_RW_IMAGE}
     COMMAND native-fatten ${LIVEUSB_RW_IMAGE} -format ${LIVEUSB_RW_SECTORS} ${LIVEUSB_RW_LABEL}
     DEPENDS native-fatten
-    COMMENT "Generating ${LIVEUSB_RW_SIZE_MB} MiB writable FAT image"
     VERBATIM)
 
 add_custom_target(liveusb

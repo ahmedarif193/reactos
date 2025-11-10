@@ -132,9 +132,9 @@ CreateDefaultProcessSecurityCommon(
 {
     NTSTATUS Status;
     BOOL Success;
-    PACL Dacl;
-    PTOKEN_OWNER OwnerOfToken;
-    PTOKEN_PRIMARY_GROUP PrimaryGroupOfToken;
+    PACL Dacl = NULL;
+    PTOKEN_OWNER OwnerOfToken = NULL;
+    PTOKEN_PRIMARY_GROUP PrimaryGroupOfToken = NULL;
     SECURITY_DESCRIPTOR AbsoluteSd;
     ULONG DaclSize, TokenOwnerSize, PrimaryGroupSize, RelativeSDSize = 0;
     PSID OwnerSid = NULL, SystemSid = NULL, PrimaryGroupSid = NULL;
@@ -1194,6 +1194,7 @@ LogonUserExW(
     SECURITY_LOGON_TYPE LogonType;
     NTSTATUS SubStatus = STATUS_SUCCESS;
     NTSTATUS Status;
+    PSID_AND_ATTRIBUTES Groups;
 
     if ((ppProfileBuffer != NULL && pdwProfileLength == NULL) ||
         (ppProfileBuffer == NULL && pdwProfileLength != NULL))
@@ -1344,12 +1345,13 @@ LogonUserExW(
     }
 
     TokenGroups->GroupCount = 2;
-    TokenGroups->Groups[0].Sid = LogonSid;
-    TokenGroups->Groups[0].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED |
-                                        SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_LOGON_ID;
-    TokenGroups->Groups[1].Sid = LocalSid;
-    TokenGroups->Groups[1].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED |
-                                        SE_GROUP_ENABLED_BY_DEFAULT;
+    Groups = TokenGroups->Groups;
+    Groups[0].Sid = LogonSid;
+    Groups[0].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED |
+                           SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_LOGON_ID;
+    Groups[1].Sid = LocalSid;
+    Groups[1].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED |
+                           SE_GROUP_ENABLED_BY_DEFAULT;
 
     /* Set the token source */
     RtlCopyMemory(TokenSource.SourceName,

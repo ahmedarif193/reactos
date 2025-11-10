@@ -20,6 +20,18 @@
 
 #pragma once
 
+#ifndef ATL_OVERRIDE
+#if defined(__cplusplus)
+#if (__cplusplus >= 201103L) || defined(_MSC_VER)
+#define ATL_OVERRIDE override
+#else
+#define ATL_OVERRIDE
+#endif
+#else
+#define ATL_OVERRIDE
+#endif
+#endif
+
 #if defined(__GNUC__) || defined(__clang__)
 #define GCCU(x)    x __attribute__((unused))
 #define Unused(x)
@@ -1897,7 +1909,7 @@ typedef CContainedWindowT<CWindow> CContainedWindow;
 
 #define BEGIN_MSG_MAP(theClass)     \
 public:                             \
-    BOOL ProcessWindowMessage(HWND GCCU(hWnd), UINT GCCU(uMsg), WPARAM GCCU(wParam), LPARAM GCCU(lParam), LRESULT &GCCU(lResult), DWORD dwMsgMapID = 0) \
+    BOOL ProcessWindowMessage(HWND GCCU(hWnd), UINT GCCU(uMsg), WPARAM GCCU(wParam), LPARAM GCCU(lParam), LRESULT &GCCU(lResult), DWORD dwMsgMapID = 0) ATL_OVERRIDE \
     {                               \
         BOOL GCCU(bHandled) = TRUE; \
         Unused(hWnd);               \
@@ -2044,4 +2056,3 @@ struct _ATL_WNDCLASSINFOW
 }; // namespace ATL
 
 #pragma pop_macro("SubclassWindow")
-

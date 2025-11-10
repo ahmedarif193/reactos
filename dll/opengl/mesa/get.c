@@ -98,7 +98,7 @@
 
 
 
-#define FLOAT_TO_BOOL(X)	( (X)==0.0F ? GL_FALSE : GL_TRUE )
+#define FLOAT_TO_BOOL(X)	( (X) ? GL_TRUE : GL_FALSE )
 #define INT_TO_BOOL(I)		( (I)==0 ? GL_FALSE : GL_TRUE )
 #define ENUM_TO_BOOL(E)		( (E)==0 ? GL_FALSE : GL_TRUE )
 
