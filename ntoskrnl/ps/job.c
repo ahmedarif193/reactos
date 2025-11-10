@@ -924,7 +924,8 @@ PsSetJobUIRestrictionsClass(PEJOB Job,
     ULONG UIRestrictionsClass)
 {
     ASSERT(Job);
-    (void)InterlockedExchangeUL(&Job->UIRestrictionsClass, UIRestrictionsClass);
+    /* EJOB is packed to 1 byte, so use a plain store to avoid misaligned atomics. */
+    Job->UIRestrictionsClass = UIRestrictionsClass;
     /* FIXME - walk through the job process list and update the restrictions? */
 }
 

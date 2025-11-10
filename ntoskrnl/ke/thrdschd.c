@@ -512,7 +512,7 @@ KiReadyThread(IN PKTHREAD Thread)
     else if (!Thread->KernelStackResident)
     {
         /* Increase the stack count */
-        ASSERT(Process->StackCount != MAXULONG_PTR);
+        ASSERT(Process->StackCount != MAXULONG);
         Process->StackCount++;
 
         /* Set the thread to transition */

@@ -119,8 +119,13 @@ PspLookupKernelUserEntryPoints(VOID)
      * Clear the WOW64 dispatcher slots. They will be populated later by the
      * WOW64 user-mode bootstrap once 32-bit thunks are available.
      */
-    RtlZeroMemory(SharedUserData->Wow64SharedInformation,
-                  sizeof(SharedUserData->Wow64SharedInformation));
+    {
+        ULONG i;
+        for (i = 0; i < RTL_NUMBER_OF(SharedUserData->Wow64SharedInformation); i++)
+        {
+            SharedUserData->Wow64SharedInformation[i] = 0;
+        }
+    }
 #endif
 
     /* On x86, there are multiple ways to do a system call, find the right stubs */

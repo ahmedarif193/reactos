@@ -105,6 +105,8 @@ PspDumpThreads(BOOLEAN IncludeSystem)
         /* Move to the next Process */
         CurrentProcess = CurrentProcess->Flink;
     }
+
+    DbgPrint("PspDumpThreads: enumerated %lu threads\n", nThreads);
 }
 #endif
 

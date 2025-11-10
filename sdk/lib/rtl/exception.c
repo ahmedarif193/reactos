@@ -72,11 +72,6 @@ RtlRaiseException(IN PEXCEPTION_RECORD ExceptionRecord)
 
 #if !defined(_M_IX86)
 
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable:4717) // RtlRaiseStatus is recursive by design
-#endif
-
 /*
  * @implemented
  */
@@ -84,44 +79,40 @@ VOID
 NTAPI
 RtlRaiseStatus(IN NTSTATUS Status)
 {
-    EXCEPTION_RECORD ExceptionRecord;
-    CONTEXT Context;
-
-    /* Capture the context */
-    RtlCaptureContext(&Context);
-
-    /* Create an exception record */
-    ExceptionRecord.ExceptionAddress = _ReturnAddress();
-    ExceptionRecord.ExceptionCode  = Status;
-    ExceptionRecord.ExceptionRecord = NULL;
-    ExceptionRecord.NumberParameters = 0;
-    ExceptionRecord.ExceptionFlags = EXCEPTION_NONCONTINUABLE;
-
-    /* Write the context flag */
-    Context.ContextFlags = CONTEXT_FULL;
-
-    /* Check if user mode debugger is active */
-    if (RtlpCheckForActiveDebugger())
+    for (;;)
     {
-        /* Raise an exception immediately */
-        ZwRaiseException(&ExceptionRecord, &Context, TRUE);
-    }
-    else
-    {
-        /* Dispatch the exception */
-        RtlDispatchException(&ExceptionRecord, &Context);
+        EXCEPTION_RECORD ExceptionRecord;
+        CONTEXT Context;
 
-        /* Raise exception if we got here */
-        Status = ZwRaiseException(&ExceptionRecord, &Context, FALSE);
-    }
+        /* Capture the context */
+        RtlCaptureContext(&Context);
 
-    /* If we returned, raise a status */
-    RtlRaiseStatus(Status);
+        /* Create an exception record */
+        ExceptionRecord.ExceptionAddress = _ReturnAddress();
+        ExceptionRecord.ExceptionCode  = Status;
+        ExceptionRecord.ExceptionRecord = NULL;
+        ExceptionRecord.NumberParameters = 0;
+        ExceptionRecord.ExceptionFlags = EXCEPTION_NONCONTINUABLE;
+
+        /* Write the context flag */
+        Context.ContextFlags = CONTEXT_FULL;
+
+        /* Check if user mode debugger is active */
+        if (RtlpCheckForActiveDebugger())
+        {
+            /* Raise an exception immediately */
+            Status = ZwRaiseException(&ExceptionRecord, &Context, TRUE);
+        }
+        else
+        {
+            /* Dispatch the exception */
+            RtlDispatchException(&ExceptionRecord, &Context);
+
+            /* Raise exception if we got here */
+            Status = ZwRaiseException(&ExceptionRecord, &Context, FALSE);
+        }
+    }
 }
-
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
 
 #endif
 

@@ -550,7 +550,7 @@ KeStartThread(IN OUT PKTHREAD Thread)
     InsertTailList(&Process->ThreadListHead, &Thread->ThreadListEntry);
 
     /* Increase the stack count */
-    ASSERT(Process->StackCount != MAXULONG_PTR);
+    ASSERT(Process->StackCount != MAXULONG);
     Process->StackCount++;
 
     /* Release locks and return */

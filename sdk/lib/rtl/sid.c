@@ -314,19 +314,24 @@ RtlAllocateAndInitializeSid(IN PSID_IDENTIFIER_AUTHORITY IdentifierAuthority,
     pSid->SubAuthorityCount = SubAuthorityCount;
     pSid->IdentifierAuthority = *IdentifierAuthority;
 
-    /* Iteraratively drop into each successive lower count */
-    switch (SubAuthorityCount)
     {
-        /* And copy the needed subahority */
-        case 8: pSid->SubAuthority[7] = SubAuthority7;
-        case 7: pSid->SubAuthority[6] = SubAuthority6;
-        case 6: pSid->SubAuthority[5] = SubAuthority5;
-        case 5: pSid->SubAuthority[4] = SubAuthority4;
-        case 4: pSid->SubAuthority[3] = SubAuthority3;
-        case 3: pSid->SubAuthority[2] = SubAuthority2;
-        case 2: pSid->SubAuthority[1] = SubAuthority1;
-        case 1: pSid->SubAuthority[0] = SubAuthority0;
-        default: break;
+        ULONG SubAuthIndex;
+        const ULONG SubAuthorities[8] =
+        {
+            SubAuthority0,
+            SubAuthority1,
+            SubAuthority2,
+            SubAuthority3,
+            SubAuthority4,
+            SubAuthority5,
+            SubAuthority6,
+            SubAuthority7
+        };
+
+        for (SubAuthIndex = 0; SubAuthIndex < SubAuthorityCount; SubAuthIndex++)
+        {
+            pSid->SubAuthority[SubAuthIndex] = SubAuthorities[SubAuthIndex];
+        }
     }
 
     /* Return the allocated SID */

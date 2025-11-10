@@ -1077,7 +1077,7 @@ FsRtlUninitializeBaseMcb(IN PBASE_MCB Mcb)
 
     FsRtlResetBaseMcb(Mcb);
 
-    if ((Mcb->PoolType == PagedPool)/* && (Mcb->MaximumPairCount == MAXIMUM_PAIR_COUNT)*/)
+    if (Mcb->PoolType == PagedPool /* && (Mcb->MaximumPairCount == MAXIMUM_PAIR_COUNT)*/)
     {
         ExFreeToPagedLookasideList(&FsRtlFirstMappingLookasideList,
                                    Mcb->Mapping);

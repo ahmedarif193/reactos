@@ -1186,8 +1186,6 @@ KiDispatchWow64Exception(
     PWOW64_PROCESS Wow64Process;
     PWOW64_CPU_AREA CpuArea;
     NTSTATUS Status;
-    WOW64_CONTEXT CompatContext;
-
     UNREFERENCED_PARAMETER(ExceptionRecord);
 
     /* Verify we're in a WOW64 process */

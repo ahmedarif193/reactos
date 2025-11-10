@@ -46,6 +46,11 @@ FstubTranslateResource(IN OUT PVOID Context OPTIONAL,
     PIO_RESOURCE_DESCRIPTOR Alternative;
     NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PAGED_CODE();
+    INTERFACE_TYPE InterfaceType;
+
+    InterfaceType = (Context != NULL) ?
+                    (INTERFACE_TYPE)(ULONG_PTR)Context :
+                    InterfaceTypeUndefined;
 
     ASSERT(Source->Type == CmResourceTypeInterrupt);
 
@@ -57,7 +62,7 @@ FstubTranslateResource(IN OUT PVOID Context OPTIONAL,
     if (Direction == TranslateChildToParent)
     {
         /* Get IRQL, affinity & system vector for the device vector */
-        Target->u.Interrupt.Vector = HalGetInterruptVector((INTERFACE_TYPE)Context, 0,
+        Target->u.Interrupt.Vector = HalGetInterruptVector(InterfaceType, 0,
                                                            Source->u.Interrupt.Vector,
                                                            Source->u.Interrupt.Vector,
                                                            &Irql, &Affinity);
@@ -81,7 +86,7 @@ FstubTranslateResource(IN OUT PVOID Context OPTIONAL,
             while (MinimumVector <= Alternative->u.Interrupt.MaximumVector)
             {
                 /* Translate the vector */
-                Vector = HalGetInterruptVector((INTERFACE_TYPE)Context, 0,
+                Vector = HalGetInterruptVector(InterfaceType, 0,
                                                MinimumVector,
                                                MinimumVector,
                                                &Irql, &Affinity);
@@ -119,6 +124,11 @@ FstubTranslateRequirement(IN OUT PVOID Context OPTIONAL,
     KIRQL Irql;
     KAFFINITY Affinity;
     PAGED_CODE();
+    INTERFACE_TYPE InterfaceType;
+
+    InterfaceType = (Context != NULL) ?
+                    (INTERFACE_TYPE)(ULONG_PTR)Context :
+                    InterfaceTypeUndefined;
 
     ASSERT(Source->Type == CmResourceTypeInterrupt);
 
@@ -134,13 +144,13 @@ FstubTranslateRequirement(IN OUT PVOID Context OPTIONAL,
     *TargetCount = 1;
 
     /* Translate minimum interrupt vector */
-    (*Target)->u.Interrupt.MinimumVector = HalGetInterruptVector((INTERFACE_TYPE)Context, 0,
+    (*Target)->u.Interrupt.MinimumVector = HalGetInterruptVector(InterfaceType, 0,
                                                                  Source->u.Interrupt.MinimumVector,
                                                                  Source->u.Interrupt.MinimumVector,
                                                                  &Irql, &Affinity);
 
     /* Translate maximum interrupt vector */
-    (*Target)->u.Interrupt.MaximumVector = HalGetInterruptVector((INTERFACE_TYPE)Context, 0,
+    (*Target)->u.Interrupt.MaximumVector = HalGetInterruptVector(InterfaceType, 0,
                                                                  Source->u.Interrupt.MaximumVector,
                                                                  Source->u.Interrupt.MaximumVector,
                                                                  &Irql, &Affinity);
