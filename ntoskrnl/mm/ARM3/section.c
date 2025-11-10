@@ -918,23 +918,127 @@ Quickie:
     return Status;
 }
 
+
 static
 NTSTATUS
 MiSessionCommitPageTables(IN PVOID StartVa,
                           IN PVOID EndVa)
 {
-#ifdef _M_AMD64
-    UNREFERENCED_PARAMETER(StartVa);
-    UNREFERENCED_PARAMETER(EndVa);
-    _WARN("MiSessionCommitPageTables halfplemented for amd64");
-    return STATUS_NOT_IMPLEMENTED;
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    KIRQL OldIrql;
+    ULONG Color;
+    PMMPDE StartPde, EndPde, PointerPde;
+    PMMPDE StartPpe, EndPpe, PointerPpe;
+    MMPDE TempPde = ValidKernelPdeLocal;
+    PFN_NUMBER PageFrameNumber, ParentPage;
+    SIZE_T NewPages = 0;
+
+    /* Windows sanity checks */
+    ASSERT(StartVa >= (PVOID)MmSessionBase);
+    ASSERT(EndVa   <  (PVOID)MiSessionSpaceEnd);
+    ASSERT(PAGE_ALIGN(EndVa) == EndVa);
+
+    /*
+     * Phase 1: Ensure all PPEs (PD pages) covering [StartVa, EndVa) exist.
+     * On 4-level paging, PPE entries are written via MI_WRITE_VALID_PTE.
+     */
+    StartPpe = (PMMPDE)MiAddressToPpe(StartVa);
+    EndPpe   = (PMMPDE)MiAddressToPpe((PVOID)((ULONG_PTR)EndVa - 1));
+    for (PointerPpe = StartPpe; PointerPpe <= EndPpe; PointerPpe++)
+    {
+        if (PointerPpe->u.Hard.Valid == 0)
+        {
+            /* ReactOS check to avoid MiEnsureAvailablePageOrWait like x86 path */
+            ASSERT(MmAvailablePages >= 32);
+
+            OldIrql = MiAcquirePfnLock();
+            MI_SET_USAGE(MI_USAGE_PAGE_TABLE);
+            MI_SET_PROCESS2(PsGetCurrentProcess()->ImageFileName);
+
+            Color = (++MmSessionSpace->Color) & MmSecondaryColorMask;
+            PageFrameNumber = MiRemoveZeroPage(Color);
+            ASSERT(PageFrameNumber);
+
+            /* Wire the PD page under the PXE (PML4) parent */
+            TempPde.u.Hard.PageFrameNumber = PageFrameNumber;
+            MI_WRITE_VALID_PPE(PointerPpe, TempPde);
+
+            /* Parent is the PXE that maps this PPE */
+            ParentPage = MiPteToPxe((PMMPTE)PointerPpe)->u.Hard.PageFrameNumber;
+            MiInitializePfnForOtherProcess(PageFrameNumber,
+                                           (PMMPTE)PointerPpe,
+                                           ParentPage);
+
+            MiReleasePfnLock(OldIrql);
+
+            /* Sanity */
+            {
+                PMMPFN Pfn1 = MI_PFN_ELEMENT(PageFrameNumber);
+                ASSERT(Pfn1->u1.Event == NULL);
+            }
+
+            NewPages++;
+        }
+    }
+
+    /*
+     * Phase 2: Ensure all PDEs (PT pages) covering [StartVa, EndVa) exist.
+     */
+    StartPde = MiAddressToPde(StartVa);
+    EndPde   = MiAddressToPde((PVOID)((ULONG_PTR)EndVa - 1));
+    for (PointerPde = StartPde; PointerPde <= EndPde; PointerPde++)
+    {
+        if (PointerPde->u.Hard.Valid == 0)
+        {
+            /* ReactOS check to avoid MiEnsureAvailablePageOrWait like x86 path */
+            ASSERT(MmAvailablePages >= 32);
+
+            OldIrql = MiAcquirePfnLock();
+            MI_SET_USAGE(MI_USAGE_PAGE_TABLE);
+            MI_SET_PROCESS2(PsGetCurrentProcess()->ImageFileName);
+
+            Color = (++MmSessionSpace->Color) & MmSecondaryColorMask;
+            PageFrameNumber = MiRemoveZeroPage(Color);
+            ASSERT(PageFrameNumber);
+
+            /* Wire the PT page under its PD (PPE) parent */
+            TempPde.u.Hard.PageFrameNumber = PageFrameNumber;
+            MI_WRITE_VALID_PDE(PointerPde, TempPde);
+
+            ParentPage = MiPdeToPpe(PointerPde)->u.Hard.PageFrameNumber;
+            MiInitializePfnForOtherProcess(PageFrameNumber,
+                                           (PMMPTE)PointerPde,
+                                           ParentPage);
+
+            MiReleasePfnLock(OldIrql);
+
+            /* Sanity */
+            {
+                PMMPFN Pfn1 = MI_PFN_ELEMENT(PageFrameNumber);
+                ASSERT(Pfn1->u1.Event == NULL);
+            }
+
+            NewPages++;
+        }
+    }
+
+    /* If we created anything, update per-session accounting like the x86 path */
+    if (NewPages)
+    {
+        InterlockedExchangeAddSizeT(&MmSessionSpace->NonPageablePages, NewPages);
+        InterlockedExchangeAddSizeT(&MmSessionSpace->CommittedPages,   NewPages);
+    }
+
+    return STATUS_SUCCESS;
+
 #else
     KIRQL OldIrql;
     ULONG Color;
     PMMPDE StartPde, EndPde;
     MMPDE TempPde = ValidKernelPdeLocal;
     PMMPFN Pfn1;
-    PFN_NUMBER PageCount = 0, ActualPages = 0, PageFrameNumber;
+    PFN_NUMBER PageFrameNumber;
+    PFN_NUMBER PageCount = 0, ActualPages = 0;
     ULONG Index;
 
     /* Windows sanity checks */
@@ -948,37 +1052,23 @@ MiSessionCommitPageTables(IN PVOID StartVa,
     Index = ((ULONG_PTR)StartVa - (ULONG_PTR)MmSessionBase) >> 22;
     while (StartPde <= EndPde)
     {
-#ifndef _M_AMD64
-        /* If we don't already have a page table for it, increment count */
         if (MmSessionSpace->PageTables[Index].u.Long == 0) PageCount++;
-#endif
-        /* Move to the next one */
         StartPde++;
         Index++;
     }
 
-    /* If there's no page tables to create, bail out */
     if (PageCount == 0) return STATUS_SUCCESS;
 
-    /* Reset the start PDE and index */
     StartPde = MiAddressToPde(StartVa);
     Index = ((ULONG_PTR)StartVa - (ULONG_PTR)MmSessionBase) >> 22;
 
-    /* Loop each PDE while holding the working set lock */
-//  MiLockWorkingSet(PsGetCurrentThread(),
-//                   &MmSessionSpace->GlobalVirtualAddress->Vm);
     while (StartPde <= EndPde)
     {
-        /* Check if we already have a page table */
         if (MmSessionSpace->PageTables[Index].u.Long == 0)
         {
-            /* We don't, so the PDE shouldn't be ready yet */
             ASSERT(StartPde->u.Hard.Valid == 0);
-
-            /* ReactOS check to avoid MiEnsureAvailablePageOrWait */
             ASSERT(MmAvailablePages >= 32);
 
-            /* Acquire the PFN lock and grab a zero page */
             OldIrql = MiAcquirePfnLock();
             MI_SET_USAGE(MI_USAGE_PAGE_TABLE);
             MI_SET_PROCESS2(PsGetCurrentProcess()->ImageFileName);
@@ -987,48 +1077,33 @@ MiSessionCommitPageTables(IN PVOID StartVa,
             TempPde.u.Hard.PageFrameNumber = PageFrameNumber;
             MI_WRITE_VALID_PDE(StartPde, TempPde);
 
-            /* Write the page table in session space structure */
             ASSERT(MmSessionSpace->PageTables[Index].u.Long == 0);
             MmSessionSpace->PageTables[Index] = TempPde;
 
-            /* Initialize the PFN */
             MiInitializePfnForOtherProcess(PageFrameNumber,
                                            StartPde,
                                            MmSessionSpace->SessionPageDirectoryIndex);
 
-            /* And now release the lock */
             MiReleasePfnLock(OldIrql);
 
-            /* Get the PFN entry and make sure there's no event for it */
             Pfn1 = MI_PFN_ELEMENT(PageFrameNumber);
             ASSERT(Pfn1->u1.Event == NULL);
 
-            /* Increment the number of pages */
             ActualPages++;
         }
 
-        /* Move to the next PDE */
         StartPde++;
         Index++;
     }
 
-    /* Make sure we didn't do more pages than expected */
     ASSERT(ActualPages <= PageCount);
 
-    /* Release the working set lock */
-//  MiUnlockWorkingSet(PsGetCurrentThread(),
-//                     &MmSessionSpace->GlobalVirtualAddress->Vm);
-
-
-    /* If we did at least one page... */
     if (ActualPages)
     {
-        /* Update the performance counters! */
         InterlockedExchangeAddSizeT(&MmSessionSpace->NonPageablePages, ActualPages);
-        InterlockedExchangeAddSizeT(&MmSessionSpace->CommittedPages, ActualPages);
+        InterlockedExchangeAddSizeT(&MmSessionSpace->CommittedPages,   ActualPages);
     }
 
-    /* Return status */
     return STATUS_SUCCESS;
 #endif
 }
