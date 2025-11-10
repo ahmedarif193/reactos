@@ -274,6 +274,7 @@ static HMODULE __cdecl try_get_module(module_id const id) throw()
         if (HMODULE const cached_handle = __crt_interlocked_exchange_pointer(module_handles + id, INVALID_HANDLE_VALUE))
         {
             _ASSERTE(cached_handle == INVALID_HANDLE_VALUE);
+            (void)cached_handle;
         }
 
         return nullptr;
@@ -286,6 +287,7 @@ static HMODULE __cdecl try_get_module(module_id const id) throw()
     if (HMODULE const cached_handle = __crt_interlocked_exchange_pointer(module_handles + id, new_handle))
     {
         _ASSERTE(cached_handle == new_handle);
+        (void)cached_handle;
         FreeLibrary(new_handle);
     }
 
