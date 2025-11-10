@@ -7,10 +7,17 @@
 
 class TScript {
 public:
-	TScript(TNetwork &RefNetwork):Network(RefNetwork) {fp = NULL;}
+	TScript(TNetwork &RefNetwork)
+		: fp(NULL)
+		, script(NULL)
+		, Network(RefNetwork)
+	{
+	}
+
 	~TScript() {}
 	BOOL processScript(char *data);
 	void initScript(char *filename);
+
 private:
 	FILE *fp;
 	char *script;

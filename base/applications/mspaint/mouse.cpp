@@ -908,7 +908,7 @@ struct BezierTool : ToolBase
 {
     BOOL m_bLeftButton = FALSE;
 
-    void OnDrawOverlayOnImage(HDC hdc)
+    void OnDrawOverlayOnImage(HDC hdc) override
     {
         COLORREF rgb = (m_bLeftButton ? m_fg : m_bg);
         switch (s_cPoints)
@@ -1002,7 +1002,7 @@ struct ShapeTool : ToolBase
     BOOL m_bLeftButton = FALSE;
     BOOL m_bClosed = FALSE;
 
-    void OnDrawOverlayOnImage(HDC hdc)
+    void OnDrawOverlayOnImage(HDC hdc) override
     {
         if (s_cPoints <= 0)
             return;

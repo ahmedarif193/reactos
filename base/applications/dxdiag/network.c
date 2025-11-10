@@ -63,6 +63,13 @@ static DIRECTPLAY_GUID DirectPlaySP[] =
     }
 };
 
+enum
+{
+    DIRECTPLAY_PROVIDER_COUNT = sizeof(DirectPlay8SP) / sizeof(DirectPlay8SP[0])
+};
+
+C_ASSERT(DIRECTPLAY_PROVIDER_COUNT == (sizeof(DirectPlaySP) / sizeof(DirectPlaySP[0])));
+
 static
 VOID
 InitListViewColumns(HWND hDlgCtrl)
@@ -185,6 +192,8 @@ EnumerateServiceProviders(HKEY hKey, HWND hDlgCtrl, DIRECTPLAY_GUID * PreDefProv
     WCHAR szTemp[63];
     WCHAR szResult[MAX_PATH+20] = {0};
     DWORD RegProviders = 0;
+    const DWORD RequiredProviderMask = (1u << DIRECTPLAY_PROVIDER_COUNT) - 1;
+    BOOL bAllProvidersRegistered = FALSE;
     DWORD ProviderIndex;
     DWORD dwName;
     LVITEMW Item;
@@ -280,7 +289,14 @@ EnumerateServiceProviders(HKEY hKey, HWND hDlgCtrl, DIRECTPLAY_GUID * PreDefProv
 
              if (ProviderIndex != UINT_MAX)
                 {
-                    RegProviders |= (1 << ProviderIndex);
+                    if (ProviderIndex < DIRECTPLAY_PROVIDER_COUNT)
+                    {
+                        RegProviders |= (1u << ProviderIndex);
+                        if ((RegProviders & RequiredProviderMask) == RequiredProviderMask)
+                        {
+                            bAllProvidersRegistered = TRUE;
+                        }
+                    }
                     szResult[0] = L'\0';
                     LoadStringW(hInst, IDS_REG_SUCCESS, szResult, sizeof(szResult) / sizeof(WCHAR));
                     Item.iSubItem = 1;
@@ -294,9 +310,7 @@ EnumerateServiceProviders(HKEY hKey, HWND hDlgCtrl, DIRECTPLAY_GUID * PreDefProv
     }while(result != ERROR_NO_MORE_ITEMS);
 
     /* check if all providers have been registered */
-//    if (RegProviders == 15)
-        return TRUE;
-    return FALSE;
+    return bAllProvidersRegistered;
 }
 
 

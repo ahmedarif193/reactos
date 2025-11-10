@@ -1262,10 +1262,12 @@ HEXEDIT_WM_CHAR(PHEXEDIT_DATA hed, WCHAR wch)
         i0 = hed->SelEnd;
         i1 = hed->SelStart;
     }
-    if (!hed->EditingField)
-    {
-        if (0x20 <= ch && ch <= 0xFF)
-        {
+	const UCHAR uch = (UCHAR)ch;
+
+	if (!hed->EditingField)
+	{
+		if (uch >= 0x20 && uch <= 0xFF)
+		{
             if (hed->SelStart != hed->SelEnd)
             {
                 buf = (PBYTE) LocalLock(hed->hBuffer);

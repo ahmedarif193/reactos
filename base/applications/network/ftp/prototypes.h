@@ -22,12 +22,17 @@ void proxtrans(const char *cmd, const char *local, const char *remote);
 int null(void);
 int initconn(void);
 void disconnect(int argc, const char *argv[]);
-void ptransfer(const char *direction, long bytes, struct timeval *t0, struct timeval *t1);
+void ptransfer(const char *direction,
+               long bytes,
+               const struct timeval *t0,
+               const struct timeval *t1);
 void setascii(int argc, const char *argv[]);
 void setbinary(int argc, const char *argv[]);
 void setebcdic(void);
 void settenex(int argc, const char *argv[]);
-void tvsub(struct timeval *tdiff, struct timeval *t1, struct timeval *t0);
+void tvsub(struct timeval *tdiff,
+           const struct timeval *t1,
+           const struct timeval *t0);
 void setpassive(int argc, const char *argv[]);
 void setpeer(int argc, const char *argv[]);
 void cmdscanner(int top);

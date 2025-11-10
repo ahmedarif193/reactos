@@ -10,25 +10,40 @@
 struct CEmptyVolumeCacheCallBack
     : public IEmptyVolumeCacheCallBack
 {
-
-    STDMETHOD_(ULONG, AddRef)() throw()
+    CEmptyVolumeCacheCallBack() throw()
+        : m_refCount(1)
     {
-        return 2;
     }
-    STDMETHOD_(ULONG, Release)() throw()
+
+    virtual ~CEmptyVolumeCacheCallBack() throw() = default;
+
+    STDMETHOD_(ULONG, AddRef)() throw() override
     {
-        return 1;
+        return static_cast<ULONG>(InterlockedIncrement(&m_refCount));
+    }
+    STDMETHOD_(ULONG, Release)() throw() override
+    {
+        ULONG newRef = static_cast<ULONG>(InterlockedDecrement(&m_refCount));
+        if (newRef == 0)
+        {
+            delete this;
+        }
+        return newRef;
     }
     STDMETHOD(QueryInterface)(
         REFIID riid,
-        _COM_Outptr_ void** ppvObject) throw()
+        _COM_Outptr_ void** ppvObject) throw() override
     {
+        if (!ppvObject)
+            return E_POINTER;
+
+        *ppvObject = nullptr;
         if (riid == IID_IUnknown || riid == IID_IEmptyVolumeCacheCallBack)
         {
-            *ppvObject = (IUnknown*)this;
+            *ppvObject = static_cast<IEmptyVolumeCacheCallBack*>(this);
+            AddRef();
             return S_OK;
         }
-        *ppvObject = NULL;
         return E_NOINTERFACE;
     }
 
@@ -51,4 +66,7 @@ struct CEmptyVolumeCacheCallBack
         DPRINT("dwlSpaceFreed: %lld, dwlSpaceToFree: %lld, dwFlags: %x\n", dwlSpaceFreed, dwlSpaceToFree, dwFlags);
         return S_OK;
     }
+
+private:
+    volatile LONG m_refCount;
 };

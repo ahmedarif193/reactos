@@ -868,29 +868,46 @@ static INT_PTR CALLBACK AddToFavoritesDlgProc(HWND hWnd, UINT uMsg, WPARAM wPara
             {
                 case IDOK:
                     {
-                        LPWSTR path;
-                        HKEY hKey;
+                        LPWSTR path = NULL;
+                        HKEY hKey = NULL;
                         DWORD err;
+
                         if (!GetWindowTextW(hName, name, _countof(name)))
                         {
                             err = GetLastError();
                             goto failed;
                         }
+
                         path = GetItemFullPath(NULL);
                         if (!path)
                         {
                             err = ERROR_NOT_ENOUGH_MEMORY;
                             goto failed;
                         }
+
                         err = RegCreateKeyExW(HKEY_CURRENT_USER, s_szFavoritesRegKey, 0,
                                               NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL);
-                        if (err)
+                        if (err != ERROR_SUCCESS)
                             goto failed;
-                        err = RegSetValueExW(hKey, name, 0, REG_SZ, (BYTE*)path, (lstrlenW(path) + 1) * sizeof(WCHAR));
+
+                        err = RegSetValueExW(hKey, name, 0, REG_SZ,
+                                              (BYTE*)path,
+                                              (lstrlenW(path) + 1) * sizeof(WCHAR));
+                        if (err != ERROR_SUCCESS)
+                            goto failed;
+
                         RegCloseKey(hKey);
-                        if (err) failed:
-                            ErrorBox(hWnd, err);
+                        hKey = NULL;
                         free(path);
+                        return EndDialog(hWnd, ERROR_SUCCESS);
+
+failed:
+                        if (path)
+                            free(path);
+                        if (hKey)
+                            RegCloseKey(hKey);
+                        if (err != ERROR_SUCCESS)
+                            ErrorBox(hWnd, err);
                         return EndDialog(hWnd, err);
                     }
                 case IDCANCEL:

@@ -18,3 +18,5 @@ struct timezone {
 
   extern int __cdecl gettimeofday (struct timeval *p, struct timezone *z);
 #endif
+
+char *getpass(const char *prompt);

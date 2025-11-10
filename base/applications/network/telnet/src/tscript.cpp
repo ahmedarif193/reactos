@@ -34,7 +34,11 @@
 
 // processScript by Bryan Montgomery
 // modified to handle script file by Paul Brannan
-BOOL TScript::processScript (char* data) {
+BOOL TScript::processScript(char* data)
+{
+	UNREFERENCED_PARAMETER(data);
+	(void)script;
+	(void)Network;
 /*    char* end = strchr(script,TERMINATOR);
 	if (0 == end) {
 		return true;
@@ -55,11 +59,10 @@ BOOL TScript::processScript (char* data) {
 		}
 	delete current;
 	}*/
-	return TRUE;
+	return FALSE; // TODO: restore original logic when scripting is re-enabled
 }
 
 void TScript::initScript (char *filename) {
 	if(fp) fclose(fp);
 	fp = fopen(filename, "rt");
 }
-

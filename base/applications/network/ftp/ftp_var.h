@@ -5,7 +5,7 @@
 #include "fake.h"
 #include "prototypes.h"
 
-//typedef void (*Sig_t)(int);
+typedef void (*Sig_t)(int);
 
 /* The following defines are from ftp.h and telnet.h from bsd.h */
 /* All relevent copyrights below apply.                         */
@@ -155,11 +155,4 @@ extern int macnum;			/* number of defined macros */
 extern struct macel macros[16];
 extern char macbuf[4096];
 
-#if	defined(__ANSI__) || defined(sparc)
-typedef void sig_t;
-#else
-typedef int sig_t;
-#endif
-
 typedef int uid_t;
-

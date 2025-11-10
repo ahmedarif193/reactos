@@ -96,11 +96,7 @@ int	ptflag = 0;
 int	allbinary;
 struct	sockaddr_in myctladdr;
 uid_t	getuid();
-#ifdef __REACTOS__
 void lostpeer(void);
-#else
-sig_t	lostpeer();
-#endif
 off_t	restart_point = 0;
 
 SOCKET cin, cout;
@@ -110,7 +106,7 @@ int command(const char *fmt, ...);
 
 char *hostname;
 
-typedef void (*Sig_t)(int);
+typedef int (*closefunc_t)(FILE *);
 
 // Signal Handlers
 
@@ -290,7 +286,7 @@ int command(const char *fmt, ...)
 {
 	va_list ap;
 	int r;
-	void (*oldintr)(int);
+	Sig_t oldintr;
 
 	abrtflag = 0;
 	if (debug) {
@@ -334,14 +330,13 @@ char reply_string[BUFSIZ];		/* last line of previous reply */
 #include <ctype.h>
 
 int
-getreply(expecteof)
-	int expecteof;
+getreply(int expecteof)
 {
 	register int c, n;
 	register int dig;
 	register char *cp;
 	int originalcode = 0, continuation = 0;
-	void (*oldintr)(int);
+	Sig_t oldintr;
 	int pflag = 0;
 	char *pt = pasv;
 
@@ -436,9 +431,7 @@ getreply(expecteof)
 }
 
 static int
-empty(mask, sec)
-	struct fd_set *mask;
-	int sec;
+empty(struct fd_set *mask, int sec)
 {
 	struct timeval t;
 
@@ -467,8 +460,9 @@ void sendrequest(const char *cmd, const char *local, const char *remote, int pri
 {
 	FILE *fin;
 	int dout = 0;
-	int (*closefunc)();
-	sig_t (*oldintr)(), (*oldintp)();
+	closefunc_t closefunc;
+	Sig_t oldintr = NULL;
+	Sig_t oldintp = NULL;
 	char buf[BUFSIZ], *bufp;
 	long bytes = 0, hashbytes = HASHBYTES;
 	register int c, d;
@@ -742,8 +736,9 @@ void recvrequest(const char *cmd, const char *local, const char *remote, const c
 {
 	FILE *fout = stdout;
 	int din = 0;
-	int (*closefunc)();
-	void (*oldintr)(int), (*oldintp)(int);
+	closefunc_t closefunc;
+	Sig_t oldintr = NULL;
+	Sig_t oldintp = NULL;
 	int oldverbose = 0, oldtype = 0, is_retr, tcrflag, nfnd, bare_lfs = 0;
 	char msg;
 //	static char *buf; // Szurgot: Shouldn't this go SOMEWHERE?
@@ -769,8 +764,6 @@ void recvrequest(const char *cmd, const char *local, const char *remote, const c
 		return;
 	}
 	closefunc = NULL;
-	oldintr = NULL;
-	oldintp = NULL;
 	tcrflag = !crflag && is_retr;
 	if (setjmp(recvabort)) {
 		while (cpend) {
@@ -1284,10 +1277,10 @@ int dataconn(const char *mode)
 	return (data);
 }
 
-void ptransfer(direction, bytes, t0, t1)
-	const char *direction;
-	long bytes;
-	struct timeval *t0, *t1;
+void ptransfer(const char *direction,
+			 long bytes,
+			 const struct timeval *t0,
+			 const struct timeval *t1)
 {
 	struct timeval td;
 	double s, bs;
@@ -1313,8 +1306,9 @@ void ptransfer(direction, bytes, t0, t1)
 		tsum->tv_sec++, tsum->tv_usec -= 1000000;
 } */
 
-void tvsub(tdiff, t1, t0)
-	struct timeval *tdiff, *t1, *t0;
+void tvsub(struct timeval *tdiff,
+		 const struct timeval *t1,
+		 const struct timeval *t0)
 {
 
 	tdiff->tv_sec = t1->tv_sec - t0->tv_sec;
@@ -1433,8 +1427,9 @@ abortpt()
 }
 #endif
 
-void proxtrans(cmd, local, remote)
-	const char *cmd, *local, *remote;
+void proxtrans(const char *cmd,
+			const char *local,
+			const char *remote)
 {
 //	void (*oldintr)(int);
 	int tmptype, oldtype = 0, secndflag = 0, nfnd;

@@ -287,10 +287,13 @@ public:
         }
 
         CCleanupHandlerList Handlers;
-        CEmptyVolumeCacheCallBack CacheCallBack;
+        CComPtr<IEmptyVolumeCacheCallBack> spCacheCallBack;
+        spCacheCallBack.Attach(new CEmptyVolumeCacheCallBack());
+        if (!spCacheCallBack)
+            return E_OUTOFMEMORY;
 
         Handlers.LoadHandlers(m_Drive);
-        DWORDLONG TotalSpaceUsed = Handlers.ScanDrive(&CacheCallBack);
+        DWORDLONG TotalSpaceUsed = Handlers.ScanDrive(spCacheCallBack);
 
         CCleanMgrProperties cleanMgr(m_Drive, TotalSpaceUsed, &Handlers);
         HPROPSHEETPAGE hpsp[1] = { cleanMgr.Create() };
@@ -307,7 +310,7 @@ public:
         if (PropertySheetW(&psh) >= 1)
         {
             ::DestroyWindow(hWndInstance); // Allow new "cleanmgr /D" without waiting for these handlers
-            Handlers.ExecuteCleanup(&CacheCallBack);
+            Handlers.ExecuteCleanup(spCacheCallBack);
         }
         else
         {

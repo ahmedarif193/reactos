@@ -30,7 +30,7 @@ void domacro(int argc, const char *argv[])
     char *cp2;
 	int count = 2, loopflg = 0;
 	char line2[200];
-	struct cmd *getcmd(), *c;
+	struct cmd *c;
 
 	if (argc < 2) {
 		(void) strcat(line, " ");
