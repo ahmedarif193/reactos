@@ -203,7 +203,7 @@ typedef _ATL_WIN_MODULE70 _ATL_WIN_MODULE;
 
 /* GCC/Clang may drop an unused reference to __pobjMap_. Force a visible
  * side-effect with a tiny helper so the linker keeps the object map. */
-static int __attribute__((noinline))
+static int __attribute__((noinline, unused))
 hack_for_gcc(const _ATL_OBJMAP_ENTRY * const *entry)
 {
     __asm__ __volatile__("" :: "r"(entry) : "memory");
