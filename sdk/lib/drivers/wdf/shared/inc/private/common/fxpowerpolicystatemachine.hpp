@@ -178,7 +178,7 @@ typedef struct POWER_POLICY_STATE_TABLE {
     // dot state, FALSE.  D state events (PwrPolPowerUp, PwrPolPowerDown)
     // are never affected by the queue state and are always processed.
     //
-    FxPwrPolStateInfo StateInfo;
+    FxPwrPolStateInfo StateInfo; // Keep nested brace initializers when populating the state tables
 
 } *PPOWER_POLICY_STATE_TABLE;
 
