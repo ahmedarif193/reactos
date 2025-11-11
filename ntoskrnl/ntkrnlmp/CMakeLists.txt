@@ -26,6 +26,11 @@ add_executable(ntkrnlmp
     ${NTKRNLMP_PCH_SKIP_SOURCE}
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ntoskrnl.rc
     ${CMAKE_CURRENT_BINARY_DIR}/ntkrnlmp.def)
+target_sources(ntkrnlmp PRIVATE ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/intrin_llshift.c)
+if((NT_ARCH STREQUAL "i386" OR NT_ARCH STREQUAL "amd64") AND
+   (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang"))
+    target_sources(ntkrnlmp PRIVATE ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/intrin_msr.c)
+endif()
 set_module_type(ntkrnlmp kernel)
 target_compile_definitions(ntkrnlmp PRIVATE CONFIG_SMP)
 
