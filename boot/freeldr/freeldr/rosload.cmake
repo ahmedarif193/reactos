@@ -10,6 +10,7 @@ spec2def(rosload.exe rosload.spec)
 list(APPEND ROSLOAD_SOURCE
     disk/ramdisk.c
     include/freeldr.h
+    lib/addrconv.c
     bootmgr.c
     custom.c
     linuxboot.c
