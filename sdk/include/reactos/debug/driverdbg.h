@@ -68,7 +68,7 @@ GetIRPMinorFunctionString(
     }
 }
 
-inline
+FORCEINLINE
 PCHAR
 DbgGetDeviceRelationString(
     DEVICE_RELATION_TYPE Type)
@@ -88,7 +88,7 @@ DbgGetDeviceRelationString(
     }
 }
 
-inline
+FORCEINLINE
 PCHAR
 DbgGetDeviceIDString(
     BUS_QUERY_ID_TYPE Type)
