@@ -86,6 +86,7 @@ add_compile_options(-mlong-double-64)
 add_compile_options("$<$<NOT:$<COMPILE_LANGUAGE:CXX>>:-nostdinc>")
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    add_compile_options($<$<COMPILE_LANGUAGE:C>:-fgnu89-inline>)
     add_compile_options("-Wno-unknown-pragmas")
     add_compile_options(-fno-aggressive-loop-optimizations)
     if (DBG)
@@ -164,6 +165,7 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
 
 elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     add_compile_options("$<$<COMPILE_LANGUAGE:C>:-Wno-microsoft>")
+    add_compile_options($<$<COMPILE_LANGUAGE:C>:-fgnu89-inline>)
     add_compile_options(-Wno-pragma-pack)
     add_compile_options(-fno-associative-math)
 
