@@ -487,40 +487,55 @@ function(create_iso_lists)
         FOR hybridcd)
 
     get_property(_filelist GLOBAL PROPERTY BOOTCD_FILE_LIST)
-    string(REPLACE ";" "\n" _filelist "${_filelist}")
-    file(APPEND ${REACTOS_BINARY_DIR}/boot/bootcd.cmake.lst "${_filelist}")
+    if(_filelist)
+        foreach(_entry IN LISTS _filelist)
+            file(APPEND ${REACTOS_BINARY_DIR}/boot/bootcd.cmake.lst "${_entry}\n")
+        endforeach()
+    endif()
     unset(_filelist)
     file(GENERATE
          OUTPUT ${REACTOS_BINARY_DIR}/boot/bootcd.$<CONFIG>.lst
          INPUT ${REACTOS_BINARY_DIR}/boot/bootcd.cmake.lst)
 
     get_property(_filelist GLOBAL PROPERTY LIVECD_FILE_LIST)
-    string(REPLACE ";" "\n" _filelist "${_filelist}")
-    file(APPEND ${REACTOS_BINARY_DIR}/boot/livecd.cmake.lst "${_filelist}")
+    if(_filelist)
+        foreach(_entry IN LISTS _filelist)
+            file(APPEND ${REACTOS_BINARY_DIR}/boot/livecd.cmake.lst "${_entry}\n")
+        endforeach()
+    endif()
     unset(_filelist)
     file(GENERATE
          OUTPUT ${REACTOS_BINARY_DIR}/boot/livecd.$<CONFIG>.lst
          INPUT ${REACTOS_BINARY_DIR}/boot/livecd.cmake.lst)
 
     get_property(_filelist GLOBAL PROPERTY HYBRIDCD_FILE_LIST)
-    string(REPLACE ";" "\n" _filelist "${_filelist}")
-    file(APPEND ${REACTOS_BINARY_DIR}/boot/hybridcd.cmake.lst "${_filelist}")
+    if(_filelist)
+        foreach(_entry IN LISTS _filelist)
+            file(APPEND ${REACTOS_BINARY_DIR}/boot/hybridcd.cmake.lst "${_entry}\n")
+        endforeach()
+    endif()
     unset(_filelist)
     file(GENERATE
          OUTPUT ${REACTOS_BINARY_DIR}/boot/hybridcd.$<CONFIG>.lst
          INPUT ${REACTOS_BINARY_DIR}/boot/hybridcd.cmake.lst)
 
     get_property(_filelist GLOBAL PROPERTY BOOTCDREGTEST_FILE_LIST)
-    string(REPLACE ";" "\n" _filelist "${_filelist}")
-    file(APPEND ${REACTOS_BINARY_DIR}/boot/bootcdregtest.cmake.lst "${_filelist}")
+    if(_filelist)
+        foreach(_entry IN LISTS _filelist)
+            file(APPEND ${REACTOS_BINARY_DIR}/boot/bootcdregtest.cmake.lst "${_entry}\n")
+        endforeach()
+    endif()
     unset(_filelist)
     file(GENERATE
          OUTPUT ${REACTOS_BINARY_DIR}/boot/bootcdregtest.$<CONFIG>.lst
          INPUT ${REACTOS_BINARY_DIR}/boot/bootcdregtest.cmake.lst)
 
     get_property(_filelist GLOBAL PROPERTY LIVEIMG_FILE_LIST)
-    string(REPLACE ";" "\n" _filelist "${_filelist}")
-    file(APPEND ${REACTOS_BINARY_DIR}/boot/liveimg.cmake.lst "${_filelist}")
+    if(_filelist)
+        foreach(_entry IN LISTS _filelist)
+            file(APPEND ${REACTOS_BINARY_DIR}/boot/liveimg.cmake.lst "${_entry}\n")
+        endforeach()
+    endif()
     unset(_filelist)
     file(GENERATE
          OUTPUT ${REACTOS_BINARY_DIR}/boot/liveimg.$<CONFIG>.lst
