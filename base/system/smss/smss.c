@@ -290,6 +290,10 @@ SmpExecuteInitialCommand(IN ULONG MuSessionId,
     UNICODE_STRING Arguments, Directory, FileName;
     ULONG Flags = 0;
 
+    DPRINT1("SMSS: SmpExecuteInitialCommand MuSessionId=%lu Command='%wZ'\n",
+            MuSessionId,
+            InitialCommand);
+
     /* Check if we haven't yet connected to ourselves */
     if (!SmApiPort)
     {
@@ -331,6 +335,13 @@ SmpExecuteInitialCommand(IN ULONG MuSessionId,
                              MuSessionId,
                              SMP_DEFERRED_FLAG,
                              &ProcessInfo);
+    if (NT_SUCCESS(Status))
+    {
+        DPRINT1("SMSS: Spawned initial command image '%wZ' (Process=%p Thread=%p)\n",
+                &FileName,
+                ProcessInfo.ProcessHandle,
+                ProcessInfo.ThreadHandle);
+    }
 
     /* Free all the token parameters */
     if (FileName.Buffer)  RtlFreeHeap(RtlGetProcessHeap(), 0, FileName.Buffer);
@@ -443,6 +454,8 @@ _main(IN INT argc,
     PROCESS_BASIC_INFORMATION ProcessInfo;
     UNICODE_STRING DbgString, InitialCommand;
 
+    DPRINT1("SMSS: _main entry argc=%d DebugFlag=0x%lx\n", argc, DebugFlag);
+
     /* Make us critical */
     RtlSetProcessIsCritical(TRUE, NULL, FALSE);
     RtlSetThreadIsCritical(TRUE, NULL, FALSE);
@@ -475,6 +488,8 @@ _main(IN INT argc,
             _SEH2_LEAVE;
         }
 
+        DPRINT1("SMSS: SmpInit complete, InitialCommand='%wZ'\n", &InitialCommand);
+
         /* Get the global flags */
         Status = NtQuerySystemInformation(SystemFlagsInformation,
                                           &Flags,
@@ -500,6 +515,10 @@ _main(IN INT argc,
             Parameters[1] = Status;
             _SEH2_LEAVE;
         }
+
+        DPRINT1("SMSS: Initial command '%wZ' launched (ProcessHandle=%p)\n",
+                &InitialCommand,
+                Handles[1]);
 
         /*  Check if we're already attached to a session */
         Status = SmpAcquirePrivilege(SE_LOAD_DRIVER_PRIVILEGE, &State);
