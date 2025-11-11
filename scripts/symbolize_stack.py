@@ -253,7 +253,7 @@ def _read_lines_from_path(path: Path) -> List[str]:
         return [line.rstrip("\n") for line in handle]
 
 
-def _run_default_capture(log_path: Path, timeout: int) -> List[str]:
+def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[int]) -> List[str]:
     if log_path.exists():
         log_path.unlink()
 
@@ -261,7 +261,7 @@ def _run_default_capture(log_path: Path, timeout: int) -> List[str]:
     build_dir = _locate_build_dir()
 
     print(f"[symbolize] Using build directory: {build_dir}")
-    print("[symbolize] Building livecd_freeldr-dell-dev.iso …")
+    print("[symbolize] Building livecd_clang-sprint2.iso …")
     build = subprocess.run(
         ["ninja", "livecd"],
         cwd=build_dir,
@@ -275,9 +275,9 @@ def _run_default_capture(log_path: Path, timeout: int) -> List[str]:
         raise subprocess.CalledProcessError(build.returncode, build.args)
     print("[symbolize] Build complete.")
 
-    livecd = build_dir / "livecd_freeldr-dell-dev.iso"
+    livecd = build_dir / "livecd_clang-sprint2.iso"
     if not livecd.exists():
-        raise FileNotFoundError("livecd_freeldr-dell-dev.iso not found; run the script from the build directory")
+        raise FileNotFoundError("livecd_clang-sprint2.iso not found; run the script from the build directory")
 
     qemu_cmd = [
         "qemu-system-x86_64",
@@ -308,6 +308,9 @@ def _run_default_capture(log_path: Path, timeout: int) -> List[str]:
     poll_interval = 0.5
 
     entered_debugger_at: Optional[float] = None
+    bootmain_count = 0
+    bootmain_truncate_at: Optional[int] = None
+    bootmain_threshold = bootmain_limit or 0
 
     try:
         while True:
@@ -315,7 +318,22 @@ def _run_default_capture(log_path: Path, timeout: int) -> List[str]:
                 current_lines = _read_lines_from_path(log_path)
                 if len(current_lines) > seen_lines:
                     new_lines = current_lines[seen_lines:]
-                    for line in new_lines:
+                    for idx, line in enumerate(new_lines):
+                        if bootmain_threshold and "BootMain() called" in line:
+                            bootmain_count += 1
+                            if bootmain_count >= bootmain_threshold and bootmain_truncate_at is None:
+                                bootmain_truncate_at = len(current_lines) - len(new_lines) + idx
+                                stop_reason = "bootmain-repeat"
+                                print(
+                                    f"[symbolize] BootMain() hit {bootmain_count} times (limit {bootmain_threshold}); "
+                                    "stopping QEMU and truncating log."
+                                )
+                                proc.terminate()
+                                try:
+                                    proc.wait(timeout=5)
+                                except subprocess.TimeoutExpired:
+                                    proc.kill()
+                                break
                         if "Assertion failed" in line:
                             stop_reason = "assertion"
                         elif _PATTERN.search(line):
@@ -372,6 +390,13 @@ def _run_default_capture(log_path: Path, timeout: int) -> List[str]:
 
     if not lines_cache and log_path.exists():
         lines_cache = _read_lines_from_path(log_path)
+
+    if bootmain_truncate_at is not None and bootmain_truncate_at >= 0:
+        lines_cache = lines_cache[:bootmain_truncate_at]
+        if log_path.exists():
+            with log_path.open("w", encoding="utf-8") as handle:
+                for line in lines_cache:
+                    handle.write(line + "\n")
 
     print("[symbolize] QEMU run finished.")
     print(f"[symbolize] Log available at {log_path}")
@@ -447,6 +472,12 @@ def main() -> int:
     parser.add_argument("--tail-from", help="Discard input until this marker text is seen")
     parser.add_argument("--only-prefix", action="append", help="Only process lines that begin with this prefix (whitespace ignored)")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS, help="Timeout (seconds) for the default QEMU run")
+    parser.add_argument(
+        "--bootmain-limit",
+        type=int,
+        default=None,
+        help="Stop the default capture after this many 'BootMain() called' lines (omit to disable)",
+    )
     parser.add_argument("input", nargs="?", help="Log file path. Omit to build and boot automatically.")
 
     args = parser.parse_args()
@@ -468,7 +499,7 @@ def main() -> int:
 
     if args.input is None:
         try:
-            lines = _run_default_capture(DEFAULT_LOG_PATH, args.timeout)
+            lines = _run_default_capture(DEFAULT_LOG_PATH, args.timeout, args.bootmain_limit)
         except Exception as exc:  # pylint: disable=broad-except
             print(f"Failed to collect log: {exc}", file=sys.stderr)
             return 1
