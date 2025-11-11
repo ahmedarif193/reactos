@@ -8,33 +8,8 @@
 
 #pragma once
 
-#ifndef _ZOOM2_
-/* Arch-specific addresses translation implementation */
-FORCEINLINE
 PVOID
-VaToPa(PVOID Va)
-{
-    return (PVOID)((ULONG_PTR)Va & ~KSEG0_BASE);
-}
+VaToPa(PVOID Va);
 
-FORCEINLINE
 PVOID
-PaToVa(PVOID Pa)
-{
-    return (PVOID)((ULONG_PTR)Pa | KSEG0_BASE);
-}
-#else
-FORCEINLINE
-PVOID
-VaToPa(PVOID Va)
-{
-    return Va;
-}
-
-FORCEINLINE
-PVOID
-PaToVa(PVOID Pa)
-{
-    return Pa;
-}
-#endif
+PaToVa(PVOID Pa);
