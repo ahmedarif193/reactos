@@ -93,7 +93,7 @@ void* __cdecl _alloca(_In_ size_t _Size);
     #pragma warning(disable: 6540) // C6540: attribute annotations on this function will invalidate all
                                    // of its existing __declspec annotations
 
-    __inline void* _MarkAllocaS(_Out_opt_ __crt_typefix(unsigned int*) void* _Ptr, unsigned int _Marker)
+    static __inline void* _MarkAllocaS(_Out_opt_ __crt_typefix(unsigned int*) void* _Ptr, unsigned int _Marker)
     {
         if (_Ptr)
         {
@@ -103,7 +103,7 @@ void* __cdecl _alloca(_In_ size_t _Size);
         return _Ptr;
     }
 
-    __inline size_t _MallocaComputeSize(size_t _Size)
+    static __inline size_t _MallocaComputeSize(size_t _Size)
     {
         size_t _MarkedSize = _Size + _ALLOCA_S_MARKER_SIZE;
         return _MarkedSize > _Size ? _MarkedSize : 0;
@@ -150,7 +150,7 @@ void* __cdecl _alloca(_In_ size_t _Size);
 
     #pragma warning(push)
     #pragma warning(disable: 6014) // leaking memory
-    __inline void __CRTDECL _freea(_Pre_maybenull_ _Post_invalid_ void* _Memory)
+    static __inline void __CRTDECL _freea(_Pre_maybenull_ _Post_invalid_ void* _Memory)
     {
         unsigned int _Marker;
         if (_Memory)
