@@ -1,6 +1,7 @@
 
 list(APPEND LIBCNTPT_MISC_SOURCE
     misc/fltused.c
+    misc/intrin_llshift.c
 )
 
 if(ARCH STREQUAL "i386")
