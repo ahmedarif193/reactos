@@ -336,6 +336,7 @@ check_managed_app (void)
   PIMAGE_NT_HEADERS pPEHeader;
   PIMAGE_OPTIONAL_HEADER32 pNTHeader32;
   PIMAGE_OPTIONAL_HEADER64 pNTHeader64;
+  ULONG_PTR imageBase;
 
   /* Force to be linked.  */
   mingw_initltsdrot_force=1;
@@ -343,11 +344,15 @@ check_managed_app (void)
   mingw_initltssuo_force=1;
   mingw_initcharmax=1;
 
-  pDOSHeader = (PIMAGE_DOS_HEADER) &__ImageBase;
+  imageBase = (ULONG_PTR)&__ImageBase;
+  pDOSHeader = (PIMAGE_DOS_HEADER)imageBase;
   if (pDOSHeader->e_magic != IMAGE_DOS_SIGNATURE)
     return 0;
 
-  pPEHeader = (PIMAGE_NT_HEADERS)((char *)pDOSHeader + pDOSHeader->e_lfanew);
+  if (pDOSHeader->e_lfanew < (LONG)sizeof(*pDOSHeader))
+    return 0;
+
+  pPEHeader = (PIMAGE_NT_HEADERS)(imageBase + (ULONG)pDOSHeader->e_lfanew);
   if (pPEHeader->Signature != IMAGE_NT_SIGNATURE)
     return 0;
 
