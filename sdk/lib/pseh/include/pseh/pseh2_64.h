@@ -43,8 +43,12 @@ __asm__(
     "\t.seh_endproc");
 
 #define STRINGIFY(a) #a
+#ifdef __clang__
+#define EMIT_PRAGMA_(params)
+#else
 #define EMIT_PRAGMA_(params) \
     _Pragma( STRINGIFY(params) )
+#endif
 #define EMIT_PRAGMA(type,line) \
     EMIT_PRAGMA_(REACTOS seh(type,line))
 
