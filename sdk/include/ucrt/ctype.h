@@ -82,7 +82,7 @@ _Check_return_ _ACRTIMP int __cdecl __iscsym(_In_ int _C);
 // Character Classification Macro Definitions
 //
 //-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-__inline int __CRTDECL __acrt_locale_get_ctype_array_value(
+__CRT_INLINE int __CRTDECL __acrt_locale_get_ctype_array_value(
     _In_reads_(_Char_value + 1) unsigned short const * const _Locale_pctype_array,
     _In_range_(-1, 255)         int                    const _Char_value,
     _In_                        int                    const _Mask
@@ -205,7 +205,7 @@ __inline int __CRTDECL __acrt_locale_get_ctype_array_value(
         #define iscntrl(c)  (MB_CUR_MAX > 1 ? _isctype(c, _CONTROL) : __chvalidchk(c, _CONTROL))
     #endif
 
-    __inline __crt_locale_data_public* __CRTDECL __acrt_get_locale_data_prefix(void const volatile* const _LocalePointers)
+    __CRT_INLINE __crt_locale_data_public* __CRTDECL __acrt_get_locale_data_prefix(void const volatile* const _LocalePointers)
     {
         _locale_t const _TypedLocalePointers = (_locale_t)_LocalePointers;
         return (__crt_locale_data_public*)_TypedLocalePointers->locinfo;
@@ -215,7 +215,7 @@ __inline int __CRTDECL __acrt_locale_get_ctype_array_value(
     _ACRTIMP int __cdecl _chvalidator_l(_In_opt_ _locale_t, _In_ int _Ch, _In_ int _Mask);
     #endif
 
-    __inline int __CRTDECL _chvalidchk_l(
+    __CRT_INLINE int __CRTDECL _chvalidchk_l(
         _In_     int       const _C,
         _In_     int       const _Mask,
         _In_opt_ _locale_t const _Locale
@@ -236,7 +236,7 @@ __inline int __CRTDECL __acrt_locale_get_ctype_array_value(
     #define __ascii_isalpha_l(c, locale) (_chvalidchk_l(c, _ALPHA, locale))
     #define __ascii_isdigit_l(c, locale) (_chvalidchk_l(c, _DIGIT, locale))
 
-    __inline int __CRTDECL _ischartype_l(
+    __CRT_INLINE int __CRTDECL _ischartype_l(
         _In_     int       const _C,
         _In_     int       const _Mask,
         _In_opt_ _locale_t const _Locale
