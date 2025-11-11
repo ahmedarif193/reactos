@@ -1314,9 +1314,10 @@ SetupDiCreateDeviceInfoListExW(const GUID *ClassGuid,
             goto cleanup;
         }
 
-        list->szData[0] = list->szData[1] = '\\';
-        strcpyW(list->szData + 2, MachineName);
-        list->MachineName = list->szData;
+        WCHAR *machineNameBuffer = list->szData;
+        machineNameBuffer[0] = machineNameBuffer[1] = L'\\';
+        strcpyW(machineNameBuffer + 2, MachineName);
+        list->MachineName = machineNameBuffer;
     }
     else
     {

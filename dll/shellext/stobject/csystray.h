@@ -30,7 +30,6 @@ class CSysTray :
 
     DWORD dwServicesEnabled;
     UINT wm_SHELLHOOK;
-    UINT wm_DESTROYWINDOW;
 
     static DWORD WINAPI s_SysTrayThreadProc(PVOID param);
     HRESULT SysTrayMessageLoop();
@@ -61,15 +60,15 @@ public:
     static void RunAccessCpl(PCSTR Parameters);
 
 protected:
-    BOOL ProcessWindowMessage(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, LRESULT &lResult, DWORD dwMsgMapID = 0);
+    BOOL ProcessWindowMessage(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, LRESULT &lResult, DWORD dwMsgMapID = 0) override;
 
 public:
     CSysTray();
     virtual ~CSysTray();
 
     // *** IOleCommandTarget methods ***
-    virtual HRESULT STDMETHODCALLTYPE QueryStatus(const GUID *pguidCmdGroup, ULONG cCmds, OLECMD prgCmds [], OLECMDTEXT *pCmdText);
-    virtual HRESULT STDMETHODCALLTYPE Exec(const GUID *pguidCmdGroup, DWORD nCmdID, DWORD nCmdexecopt, VARIANT *pvaIn, VARIANT *pvaOut);
+    HRESULT STDMETHODCALLTYPE QueryStatus(const GUID *pguidCmdGroup, ULONG cCmds, OLECMD prgCmds [], OLECMDTEXT *pCmdText) override;
+    HRESULT STDMETHODCALLTYPE Exec(const GUID *pguidCmdGroup, DWORD nCmdID, DWORD nCmdexecopt, VARIANT *pvaIn, VARIANT *pvaOut) override;
 
     DECLARE_WND_CLASS_EX(_T("SystemTray_Main"), CS_GLOBALCLASS, COLOR_3DFACE)
 

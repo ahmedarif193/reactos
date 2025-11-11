@@ -42,6 +42,26 @@
 extern const struct wined3d_parent_ops ddraw_null_wined3d_parent_ops DECLSPEC_HIDDEN;
 extern DWORD force_refresh_rate DECLSPEC_HIDDEN;
 
+static inline enum wined3d_render_state wined3d_render_state_from_d3d(D3DRENDERSTATETYPE state)
+{
+    return (enum wined3d_render_state)state;
+}
+
+static inline enum wined3d_transform_state wined3d_transform_state_from_d3d(D3DTRANSFORMSTATETYPE state)
+{
+    return (enum wined3d_transform_state)state;
+}
+
+static inline enum wined3d_primitive_type wined3d_primitive_type_from_d3d(D3DPRIMITIVETYPE type)
+{
+    return (enum wined3d_primitive_type)type;
+}
+
+static inline enum wined3d_stateblock_type wined3d_stateblock_type_from_d3d(D3DSTATEBLOCKTYPE type)
+{
+    return (enum wined3d_stateblock_type)type;
+}
+
 /*****************************************************************************
  * IDirectDraw implementation structure
  *****************************************************************************/

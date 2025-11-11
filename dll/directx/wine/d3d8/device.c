@@ -46,7 +46,8 @@ D3DFORMAT d3dformat_from_wined3dformat(enum wined3d_format_id format)
     BYTE *c = (BYTE *)&format;
 
     /* Don't translate FOURCC formats */
-    if (isprint(c[0]) && isprint(c[1]) && isprint(c[2]) && isprint(c[3])) return format;
+    if (isprint(c[0]) && isprint(c[1]) && isprint(c[2]) && isprint(c[3]))
+        return (D3DFORMAT)format;
 
     switch(format)
     {
@@ -96,7 +97,8 @@ enum wined3d_format_id wined3dformat_from_d3dformat(D3DFORMAT format)
     BYTE *c = (BYTE *)&format;
 
     /* Don't translate FOURCC formats */
-    if (isprint(c[0]) && isprint(c[1]) && isprint(c[2]) && isprint(c[3])) return format;
+    if (isprint(c[0]) && isprint(c[1]) && isprint(c[2]) && isprint(c[3]))
+        return (enum wined3d_format_id)format;
 
     switch(format)
     {
@@ -215,7 +217,7 @@ static void present_parameters_from_wined3d_swapchain_desc(D3DPRESENT_PARAMETERS
     present_parameters->BackBufferHeight = swapchain_desc->backbuffer_height;
     present_parameters->BackBufferFormat = d3dformat_from_wined3dformat(swapchain_desc->backbuffer_format);
     present_parameters->BackBufferCount = swapchain_desc->backbuffer_count;
-    present_parameters->MultiSampleType = swapchain_desc->multisample_type;
+    present_parameters->MultiSampleType = d3d_multisample_type_from_wined3d(swapchain_desc->multisample_type);
     present_parameters->SwapEffect = d3dswapeffect_from_wined3dswapeffect(swapchain_desc->swap_effect);
     present_parameters->hDeviceWindow = swapchain_desc->device_window;
     present_parameters->Windowed = swapchain_desc->windowed;
@@ -267,7 +269,7 @@ static BOOL wined3d_swapchain_desc_from_present_parameters(struct wined3d_swapch
     swapchain_desc->backbuffer_format = wined3dformat_from_d3dformat(present_parameters->BackBufferFormat);
     swapchain_desc->backbuffer_count = max(1, present_parameters->BackBufferCount);
     swapchain_desc->backbuffer_usage = WINED3DUSAGE_RENDERTARGET;
-    swapchain_desc->multisample_type = present_parameters->MultiSampleType;
+    swapchain_desc->multisample_type = wined3d_multisample_type_from_d3d(present_parameters->MultiSampleType);
     swapchain_desc->multisample_quality = 0; /* d3d9 only */
     swapchain_desc->swap_effect = wined3dswapeffect_from_d3dswapeffect(present_parameters->SwapEffect);
     swapchain_desc->device_window = present_parameters->hDeviceWindow;
@@ -1072,7 +1074,7 @@ static HRESULT d3d8_device_create_surface(struct d3d8_device *device, UINT width
 
     desc.resource_type = WINED3D_RTYPE_TEXTURE_2D;
     desc.format = wined3dformat_from_d3dformat(format);
-    desc.multisample_type = multisample_type;
+    desc.multisample_type = wined3d_multisample_type_from_d3d(multisample_type);
     desc.multisample_quality = multisample_quality;
     desc.usage = usage & WINED3DUSAGE_MASK;
     if (pool == D3DPOOL_SCRATCH)
@@ -1492,7 +1494,8 @@ static HRESULT WINAPI d3d8_device_SetTransform(IDirect3DDevice8 *iface,
 
     /* Note: D3DMATRIX is compatible with struct wined3d_matrix. */
     wined3d_mutex_lock();
-    wined3d_device_set_transform(device->wined3d_device, state, (const struct wined3d_matrix *)matrix);
+    wined3d_device_set_transform(device->wined3d_device,
+            (enum wined3d_transform_state)state, (const struct wined3d_matrix *)matrix);
     wined3d_mutex_unlock();
 
     return D3D_OK;
@@ -1507,7 +1510,8 @@ static HRESULT WINAPI d3d8_device_GetTransform(IDirect3DDevice8 *iface,
 
     /* Note: D3DMATRIX is compatible with struct wined3d_matrix. */
     wined3d_mutex_lock();
-    wined3d_device_get_transform(device->wined3d_device, state, (struct wined3d_matrix *)matrix);
+    wined3d_device_get_transform(device->wined3d_device,
+            (enum wined3d_transform_state)state, (struct wined3d_matrix *)matrix);
     wined3d_mutex_unlock();
 
     return D3D_OK;
@@ -1522,7 +1526,8 @@ static HRESULT WINAPI d3d8_device_MultiplyTransform(IDirect3DDevice8 *iface,
 
     /* Note: D3DMATRIX is compatible with struct wined3d_matrix. */
     wined3d_mutex_lock();
-    wined3d_device_multiply_transform(device->wined3d_device, state, (const struct wined3d_matrix *)matrix);
+    wined3d_device_multiply_transform(device->wined3d_device,
+            (enum wined3d_transform_state)state, (const struct wined3d_matrix *)matrix);
     wined3d_mutex_unlock();
 
     return D3D_OK;
@@ -1699,7 +1704,8 @@ static HRESULT WINAPI d3d8_device_SetRenderState(IDirect3DDevice8 *iface,
             break;
 
         default:
-            wined3d_device_set_render_state(device->wined3d_device, state, value);
+            wined3d_device_set_render_state(device->wined3d_device,
+                    (enum wined3d_render_state)state, value);
     }
     wined3d_mutex_unlock();
 
@@ -1721,7 +1727,8 @@ static HRESULT WINAPI d3d8_device_GetRenderState(IDirect3DDevice8 *iface,
             break;
 
         default:
-            *value = wined3d_device_get_render_state(device->wined3d_device, state);
+            *value = wined3d_device_get_render_state(device->wined3d_device,
+                    (enum wined3d_render_state)state);
     }
     wined3d_mutex_unlock();
 
@@ -1993,19 +2000,19 @@ tss_lookup[] =
     {FALSE, {WINED3D_TSS_BUMPENV_MAT11}},             /* 10, D3DTSS_BUMPENVMAT11 */
     {FALSE, {WINED3D_TSS_TEXCOORD_INDEX}},            /* 11, D3DTSS_TEXCOORDINDEX */
     {FALSE, {WINED3D_TSS_INVALID}},                   /* 12, unused */
-    {TRUE,  {WINED3D_SAMP_ADDRESS_U}},                /* 13, D3DTSS_ADDRESSU */
-    {TRUE,  {WINED3D_SAMP_ADDRESS_V}},                /* 14, D3DTSS_ADDRESSV */
-    {TRUE,  {WINED3D_SAMP_BORDER_COLOR}},             /* 15, D3DTSS_BORDERCOLOR */
-    {TRUE,  {WINED3D_SAMP_MAG_FILTER}},               /* 16, D3DTSS_MAGFILTER */
-    {TRUE,  {WINED3D_SAMP_MIN_FILTER}},               /* 17, D3DTSS_MINFILTER */
-    {TRUE,  {WINED3D_SAMP_MIP_FILTER}},               /* 18, D3DTSS_MIPFILTER */
-    {TRUE,  {WINED3D_SAMP_MIPMAP_LOD_BIAS}},          /* 19, D3DTSS_MIPMAPLODBIAS */
-    {TRUE,  {WINED3D_SAMP_MAX_MIP_LEVEL}},            /* 20, D3DTSS_MAXMIPLEVEL */
-    {TRUE,  {WINED3D_SAMP_MAX_ANISOTROPY}},           /* 21, D3DTSS_MAXANISOTROPY */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_ADDRESS_U}},                /* 13, D3DTSS_ADDRESSU */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_ADDRESS_V}},                /* 14, D3DTSS_ADDRESSV */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_BORDER_COLOR}},             /* 15, D3DTSS_BORDERCOLOR */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_MAG_FILTER}},               /* 16, D3DTSS_MAGFILTER */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_MIN_FILTER}},               /* 17, D3DTSS_MINFILTER */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_MIP_FILTER}},               /* 18, D3DTSS_MIPFILTER */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_MIPMAP_LOD_BIAS}},          /* 19, D3DTSS_MIPMAPLODBIAS */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_MAX_MIP_LEVEL}},            /* 20, D3DTSS_MAXMIPLEVEL */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_MAX_ANISOTROPY}},           /* 21, D3DTSS_MAXANISOTROPY */
     {FALSE, {WINED3D_TSS_BUMPENV_LSCALE}},            /* 22, D3DTSS_BUMPENVLSCALE */
     {FALSE, {WINED3D_TSS_BUMPENV_LOFFSET}},           /* 23, D3DTSS_BUMPENVLOFFSET */
     {FALSE, {WINED3D_TSS_TEXTURE_TRANSFORM_FLAGS}},   /* 24, D3DTSS_TEXTURETRANSFORMFLAGS */
-    {TRUE,  {WINED3D_SAMP_ADDRESS_W}},                /* 25, D3DTSS_ADDRESSW */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_ADDRESS_W}},                /* 25, D3DTSS_ADDRESSW */
     {FALSE, {WINED3D_TSS_COLOR_ARG0}},                /* 26, D3DTSS_COLORARG0 */
     {FALSE, {WINED3D_TSS_ALPHA_ARG0}},                /* 27, D3DTSS_ALPHAARG0 */
     {FALSE, {WINED3D_TSS_RESULT_ARG}},                /* 28, D3DTSS_RESULTARG */
@@ -2128,7 +2135,8 @@ static HRESULT WINAPI d3d8_device_DrawPrimitive(IDirect3DDevice8 *iface,
             iface, primitive_type, start_vertex, primitive_count);
 
     wined3d_mutex_lock();
-    wined3d_device_set_primitive_type(device->wined3d_device, primitive_type, 0);
+    wined3d_device_set_primitive_type(device->wined3d_device,
+            (enum wined3d_primitive_type)primitive_type, 0);
     hr = wined3d_device_draw_primitive(device->wined3d_device, start_vertex,
             vertex_count_from_primitive_count(primitive_type, primitive_count));
     wined3d_mutex_unlock();
@@ -2147,7 +2155,8 @@ static HRESULT WINAPI d3d8_device_DrawIndexedPrimitive(IDirect3DDevice8 *iface,
             iface, primitive_type, min_vertex_idx, vertex_count, start_idx, primitive_count);
 
     wined3d_mutex_lock();
-    wined3d_device_set_primitive_type(device->wined3d_device, primitive_type, 0);
+    wined3d_device_set_primitive_type(device->wined3d_device,
+            (enum wined3d_primitive_type)primitive_type, 0);
     hr = wined3d_device_draw_indexed_primitive(device->wined3d_device, start_idx,
             vertex_count_from_primitive_count(primitive_type, primitive_count));
     wined3d_mutex_unlock();
@@ -2241,7 +2250,8 @@ static HRESULT WINAPI d3d8_device_DrawPrimitiveUP(IDirect3DDevice8 *iface,
     if (FAILED(hr))
         goto done;
 
-    wined3d_device_set_primitive_type(device->wined3d_device, primitive_type, 0);
+    wined3d_device_set_primitive_type(device->wined3d_device,
+            (enum wined3d_primitive_type)primitive_type, 0);
     hr = wined3d_device_draw_primitive(device->wined3d_device, vb_pos / stride, vtx_count);
     wined3d_device_set_stream_source(device->wined3d_device, 0, NULL, 0, 0);
 
@@ -2368,7 +2378,8 @@ static HRESULT WINAPI d3d8_device_DrawIndexedPrimitiveUP(IDirect3DDevice8 *iface
             wined3dformat_from_d3dformat(index_format), 0);
     wined3d_device_set_base_vertex_index(device->wined3d_device, vb_pos / vertex_stride - min_vertex_idx);
 
-    wined3d_device_set_primitive_type(device->wined3d_device, primitive_type, 0);
+    wined3d_device_set_primitive_type(device->wined3d_device,
+            (enum wined3d_primitive_type)primitive_type, 0);
     hr = wined3d_device_draw_indexed_primitive(device->wined3d_device, ib_pos / idx_fmt_size, idx_count);
 
     wined3d_device_set_stream_source(device->wined3d_device, 0, NULL, 0, 0);
@@ -3297,7 +3308,8 @@ HRESULT device_init(struct d3d8_device *device, struct d3d8 *parent, struct wine
     if (!(flags & D3DCREATE_FPU_PRESERVE)) setup_fpu();
 
     wined3d_mutex_lock();
-    hr = wined3d_device_create(wined3d, adapter, device_type, focus_window, flags, 4,
+    hr = wined3d_device_create(wined3d, adapter, (enum wined3d_device_type)device_type,
+            focus_window, flags, 4,
             &device->device_parent, &device->wined3d_device);
     if (FAILED(hr))
     {

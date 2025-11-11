@@ -47,7 +47,6 @@ UDFEjectReqWaiter(
     PDEVICE_OBJECT TargetDevObj;
     uint32 BM_FlushPriod;
     uint32 Tree_FlushPriod;
-    uint32 SkipCount = 0;
     uint32 SkipEjectCount = 0;
     uint32 flags = 0;
     uint32 flush_stat = 0;
@@ -156,7 +155,6 @@ stop_waiter:
             space_check_counter++;
 
             if(Vcb->VCBFlags & UDF_VCB_SKIP_EJECT_CHECK) {
-                SkipCount++;
                 SkipEjectCount++;
                 SkipEject = (SkipEjectCount <= Vcb->SkipEjectCountLimit);
                 SkipFlush = (SkipEjectCount <= Vcb->SkipCountLimit);
@@ -177,7 +175,6 @@ stop_waiter:
                 Vcb->BM_FlushTime =
                 Vcb->Tree_FlushTime = 0;
             } else {
-                SkipCount = 0;
             }
             if(!SkipEject) {
                 SkipEjectCount = 0;
@@ -280,9 +277,11 @@ wait_eject:
 
                     AllFlushed = FALSE;
 
-                    UDFPrint(("    SkipCount=%x, SkipCountLimit=%x\n",
-                        SkipCount,
+#if DBG
+                    UDFPrint(("    SkipEjectCount=%x, SkipCountLimit=%x\n",
+                        SkipEjectCount,
                         Vcb->SkipCountLimit));
+#endif
 
                     if( Tree_FlushPriod &&
                        (Tree_FlushPriod < Vcb->Tree_FlushTime)) {
@@ -418,10 +417,13 @@ skip_BM_flush2:
                     }
                     if(!Vcb->Tree_FlushTime &&
                        !Vcb->BM_FlushTime)
-                        SkipCount = 0;
+                    {
+#if DBG
+                        SkipEjectCount = 0;
+#endif
+                    }
                 }
             } else {
-                //SkipCount = 0;
             }
 
             if(!(Vcb->VCBFlags & UDF_VCB_FLAGS_REMOVABLE_MEDIA))
@@ -842,4 +844,3 @@ UDFDoDismountSequence(
 
     return STATUS_SUCCESS;
 } // end UDFDoDismountSequence()
-

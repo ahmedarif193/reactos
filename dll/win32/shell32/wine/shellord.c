@@ -1840,14 +1840,14 @@ BOOL WINAPI ReadCabinetState(CABINETSTATE *cs, int length)
 		cs->cLength          = sizeof(*cs);
 		cs->nVersion         = 2;
 		cs->fFullPathTitle   = FALSE;
-		cs->fSaveLocalView   = TRUE;
+		cs->fSaveLocalView   = -1;
 		cs->fNotShell        = FALSE;
-		cs->fSimpleDefault   = TRUE;
+		cs->fSimpleDefault   = -1;
 		cs->fDontShowDescBar = FALSE;
 		cs->fNewWindowMode   = shellstate.fWin95Classic;
 		cs->fShowCompColor   = FALSE;
 		cs->fDontPrettyNames = FALSE;
-		cs->fAdminsCreateCommonGroups = TRUE;
+		cs->fAdminsCreateCommonGroups = -1;
 		cs->fMenuEnumFilter  = SHCONTF_FOLDERS | SHCONTF_NONFOLDERS;
 	}
 

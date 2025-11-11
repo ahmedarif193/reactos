@@ -75,6 +75,11 @@ static void xslpattern_error(parser_param* param, void const* scanner, char cons
 %parse-param {void* scanner}
 %lex-param {yyscan_t* scanner}
 
+%initial-action
+{
+    YY_USE(yynerrs);
+}
+
 %left TOK_OpAnd TOK_OpOr
 %left TOK_OpEq TOK_OpIEq TOK_OpNEq TOK_OpINEq
 %left TOK_OpLt TOK_OpILt TOK_OpGt TOK_OpIGt TOK_OpLEq TOK_OpILEq TOK_OpGEq TOK_OpIGEq

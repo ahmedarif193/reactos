@@ -797,7 +797,7 @@ FdoScanAdapter(
             /* TODO: Support scan bottom-up */
 
             /* Skip if it's the same address */
-            if (currentBus->BusIdentifier != SP_UNINITIALIZED_VALUE &&
+            if (currentBus->BusIdentifier != (UCHAR)SP_UNINITIALIZED_VALUE &&
                 targetId == currentBus->BusIdentifier)
                 continue;
 

@@ -11,9 +11,6 @@ if(ARCH STREQUAL "i386")
         mem/i386/memmove_asm.s
         mem/i386/memset_asm.s
     )
-    list(APPEND CRT_MEM_ASM_SOURCE
-        ${LIBCNTPR_MEM_ASM_SOURCE}
-    )
 elseif(ARCH STREQUAL "amd64")
     list(APPEND LIBCNTPR_MEM_ASM_SOURCE
         mem/amd64/memcpy_asm.S

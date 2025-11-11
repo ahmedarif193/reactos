@@ -1,8 +1,23 @@
 
 macro(require_program varname execname)
-    # Respect an explicitly provided path, otherwise try to locate by name
+    # Respect an explicitly provided path, otherwise try to locate by name.
+    # Also honor TOOLCHAIN_PATH if provided by the superbuild.
+    # If a cached NOTFOUND is present, clear it and retry with our hints.
+    if(DEFINED ${varname})
+        if(${varname} MATCHES "-NOTFOUND$" OR (EXISTS "${${varname}}" ) STREQUAL "0")
+            unset(${varname} CACHE)
+            unset(${varname})
+        endif()
+    endif()
+
     if(NOT DEFINED ${varname} OR "${${varname}}" STREQUAL "")
-        find_program(${varname} ${execname})
+        if(DEFINED TOOLCHAIN_PATH AND NOT "${TOOLCHAIN_PATH}" STREQUAL "")
+            # Prefer an explicit toolchain path when provided
+            find_program(${varname} NAMES ${execname} HINTS "${TOOLCHAIN_PATH}" PATHS "${TOOLCHAIN_PATH}" NO_DEFAULT_PATH)
+        endif()
+        if(NOT ${varname})
+            find_program(${varname} NAMES ${execname})
+        endif()
     endif()
     if(NOT ${varname})
         message(FATAL_ERROR "${execname} not found")

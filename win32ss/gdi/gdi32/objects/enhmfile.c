@@ -73,7 +73,7 @@ HENHMETAFILE
 WINAPI
 GdiCreateLocalEnhMetaFile(HANDLE hmo)
 {
-    HENHMETAFILE hEMF;
+    HENHMETAFILE hEMF = NULL;
     BYTE *       Buffer = NULL;
     UINT         nSize;
     DWORD        iType, mm, xExt, yExt;

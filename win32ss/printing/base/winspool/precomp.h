@@ -38,14 +38,14 @@ WINE_DEFAULT_DEBUG_CHANNEL(winspool);
 typedef struct _SPOOLER_HANDLE
 {
     DWORD_PTR Sig;
-    BOOL bStartedDoc : 1;
-    BOOL bJob : 1;
-    BOOL bAnsi : 1;
-    BOOL bDocEvent : 1;
-    BOOL bTrayIcon : 1;
-    BOOL bNoColorProfile : 1;
-    BOOL bShared : 1;
-    BOOL bClosed : 1;
+    unsigned bStartedDoc : 1;
+    unsigned bJob : 1;
+    unsigned bAnsi : 1;
+    unsigned bDocEvent : 1;
+    unsigned bTrayIcon : 1;
+    unsigned bNoColorProfile : 1;
+    unsigned bShared : 1;
+    unsigned bClosed : 1;
     DWORD dwJobID;
     HANDLE hPrinter;
     HANDLE hSPLFile;

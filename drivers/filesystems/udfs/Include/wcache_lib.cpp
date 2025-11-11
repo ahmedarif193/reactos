@@ -391,7 +391,6 @@ WCacheFindFrameToRelease(
     ULONG frame = 0;
     ULONG prev_uc = -1;
     ULONG uc = -1;
-    lba_t lba;
     BOOLEAN mod = FALSE;
 
     if(!(Cache->FrameCount))
@@ -414,11 +413,21 @@ WCacheFindFrameToRelease(
     }
     if(!mod) {
         frame = Cache->CachedFramesList[((ULONG)WCacheRandom() % Cache->FrameCount)];
-        lba = frame << Cache->BlocksPerFrameSh;
-        WcPrint(("WC:-frm %x\n", lba));
+#if DBG
+        {
+            lba_t lba = frame << Cache->BlocksPerFrameSh;
+            (void)lba;
+            WcPrint(("WC:-frm %x\n", lba));
+        }
+#endif
     } else {
-        lba = frame << Cache->BlocksPerFrameSh;
-        WcPrint(("WC:-frm(mod) %x\n", lba));
+        #if DBG
+        {
+            lba_t lba = frame << Cache->BlocksPerFrameSh;
+            (void)lba;
+            WcPrint(("WC:-frm(mod) %x\n", lba));
+        }
+        #endif
         for(i=0; i<Cache->FrameCount; i++) {
 
             j = Cache->CachedFramesList[i];

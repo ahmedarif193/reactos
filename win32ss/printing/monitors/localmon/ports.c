@@ -169,7 +169,7 @@ _CreateNonspooledPort(PLOCALMON_PORT pPort)
 
     BOOL bReturnValue = FALSE;
     DWORD cchPortNameWithoutColon;
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = ERROR_SUCCESS;
     HANDLE hToken = NULL;
     PWSTR p;
     PWSTR pwszDeviceMappings = NULL;
@@ -529,7 +529,7 @@ LocalmonEndDocPort(HANDLE hPort)
 BOOL WINAPI
 LocalmonEnumPorts(HANDLE hMonitor, PWSTR pName, DWORD Level, PBYTE pPorts, DWORD cbBuf, PDWORD pcbNeeded, PDWORD pcReturned)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = ERROR_SUCCESS;
     PBYTE pPortInfoEnd;
     PLIST_ENTRY pEntry;
     PLOCALMON_HANDLE pLocalmon = (PLOCALMON_HANDLE)hMonitor;
@@ -630,7 +630,7 @@ BOOL WINAPI
 LocalmonGetPrinterDataFromPort(HANDLE hPort, DWORD ControlID, PWSTR pValueName, PWSTR lpInBuffer, DWORD cbInBuffer, PWSTR lpOutBuffer, DWORD cbOutBuffer, PDWORD lpcbReturned)
 {
     BOOL bOpenedPort = FALSE;
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = ERROR_SUCCESS;
     PLOCALMON_PORT pPort = (PLOCALMON_PORT)hPort;
 
     TRACE("LocalmonGetPrinterDataFromPort(%p, %lu, %p, %p, %lu, %p, %lu, %p)\n", hPort, ControlID, pValueName, lpInBuffer, cbInBuffer, lpOutBuffer, cbOutBuffer, lpcbReturned);
@@ -789,7 +789,7 @@ BOOL WINAPI
 LocalmonSetPortTimeOuts(HANDLE hPort, LPCOMMTIMEOUTS lpCTO, DWORD Reserved)
 {
     BOOL bOpenedPort = FALSE;
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = ERROR_SUCCESS;
     PLOCALMON_PORT pPort = (PLOCALMON_PORT)hPort;
 
     TRACE("LocalmonSetPortTimeOuts(%p, %p, %lu)\n", hPort, lpCTO, Reserved);
@@ -843,7 +843,7 @@ BOOL WINAPI
 LocalmonReadPort(HANDLE hPort, PBYTE pBuffer, DWORD cbBuffer, PDWORD pcbRead)
 {
     BOOL bOpenedPort = FALSE;
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = ERROR_SUCCESS;
     PLOCALMON_PORT pPort = (PLOCALMON_PORT)hPort;
 
     TRACE("LocalmonReadPort(%p, %p, %lu, %p)\n", hPort, pBuffer, cbBuffer, pcbRead);

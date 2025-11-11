@@ -186,7 +186,7 @@ NTSTATUS NTAPI FreeBT_DispatchPower(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 
 NTSTATUS NTAPI HandleSystemQueryPower(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 {
-    NTSTATUS           ntStatus;
+    NTSTATUS           status;
     PDEVICE_EXTENSION  deviceExtension;
     SYSTEM_POWER_STATE systemState;
     PIO_STACK_LOCATION irpStack;
@@ -209,14 +209,14 @@ NTSTATUS NTAPI HandleSystemQueryPower(IN PDEVICE_OBJECT DeviceObject, IN PIRP Ir
         FreeBT_DbgPrint(1, ("FBTUSB: HandleSystemQueryPower: Query for an incompatible system power state\n"));
 
         PoStartNextPowerIrp(Irp);
-        Irp->IoStatus.Status = ntStatus = STATUS_INVALID_DEVICE_STATE;
+        Irp->IoStatus.Status = STATUS_INVALID_DEVICE_STATE;
         Irp->IoStatus.Information = 0;
         IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
         FreeBT_DbgPrint(3, ("FBTUSB: HandleSystemQueryPower::"));
         FreeBT_IoDecrement(deviceExtension);
 
-        return ntStatus;
+        return STATUS_INVALID_DEVICE_STATE;
 
     }
 
@@ -236,7 +236,11 @@ NTSTATUS NTAPI HandleSystemQueryPower(IN PDEVICE_OBJECT DeviceObject, IN PIRP Ir
             TRUE,
             TRUE);
 
-    ntStatus = PoCallDriver(deviceExtension->TopOfStackDeviceObject, Irp);
+    status = PoCallDriver(deviceExtension->TopOfStackDeviceObject, Irp);
+    if (!NT_SUCCESS(status))
+    {
+        FreeBT_DbgPrint(1, ("FBTUSB: HandleSystemQueryPower: PoCallDriver failed with 0x%08lx\n", status));
+    }
     FreeBT_DbgPrint(3, ("FBTUSB: HandleSystemQueryPower: Leaving\n"));
 
     return STATUS_PENDING;
@@ -271,6 +275,10 @@ NTSTATUS NTAPI HandleSystemSetPower(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp 
             TRUE);
 
     ntStatus = PoCallDriver(deviceExtension->TopOfStackDeviceObject, Irp);
+    if (!NT_SUCCESS(ntStatus) && ntStatus != STATUS_PENDING)
+    {
+        FreeBT_DbgPrint(1, ("FBTUSB: HandleSystemSetPower: PoCallDriver failed with %X\n", ntStatus));
+    }
     FreeBT_DbgPrint(3, ("FBTUSB: HandleSystemSetPower: Leaving\n"));
 
     return STATUS_PENDING;
@@ -495,12 +503,12 @@ VOID NTAPI DevPoCompletionRoutine(
 NTSTATUS NTAPI HandleDeviceSetPower(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 {
     KIRQL              oldIrql;
-    NTSTATUS           ntStatus;
     POWER_STATE        newState;
     PIO_STACK_LOCATION irpStack;
     PDEVICE_EXTENSION  deviceExtension;
     DEVICE_POWER_STATE newDevState,
                        oldDevState;
+    NTSTATUS           ntStatus;
 
     FreeBT_DbgPrint(3, ("FBTUSB: HandleDeviceSetPower: Entered\n"));
 
@@ -644,16 +652,13 @@ NTSTATUS NTAPI FinishDevPoUpIrp(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp, IN 
 NTSTATUS NTAPI SetDeviceFunctional(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp, IN PDEVICE_EXTENSION DeviceExtension)
 {
     KIRQL              oldIrql;
-    NTSTATUS           ntStatus;
     POWER_STATE        newState;
     PIO_STACK_LOCATION irpStack;
-    DEVICE_POWER_STATE newDevState, oldDevState;
+    DEVICE_POWER_STATE newDevState;
 
-    ntStatus = Irp->IoStatus.Status;
     irpStack = IoGetCurrentIrpStackLocation(Irp);
     newState = irpStack->Parameters.Power.State;
     newDevState = newState.DeviceState;
-    oldDevState = DeviceExtension->DevPower;
 
     FreeBT_DbgPrint(3, ("FBTUSB: SetDeviceFunctional: Entered\n"));
 
@@ -1025,6 +1030,13 @@ VOID NTAPI WaitWakeCallback(
                                  (PREQUEST_POWER_COMPLETE) WWIrpCompletionFunc,
                                  deviceExtension,
                                  NULL);
+
+    if (!NT_SUCCESS(ntStatus))
+    {
+        FreeBT_DbgPrint(1, ("FBTUSB: WaitWakeCallback: PoRequestPowerIrp failed %X\n", ntStatus));
+        FreeBT_IoDecrement(deviceExtension);
+        return;
+    }
 
     if(deviceExtension->WaitWakeEnable)
     {

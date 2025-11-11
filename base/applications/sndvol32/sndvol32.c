@@ -801,7 +801,8 @@ MixerControlChangeCallback(PSND_MIXER Mixer, DWORD LineID, LPMIXERLINE Line, PVO
                 {
                     /* update dialog control */
                     DWORD volumePosition, volumeStep, maxVolume, i;
-                    DWORD balancePosition, balanceStep;
+                    DWORD balancePosition = BALANCE_CENTER, balanceStep;
+                    BOOL updateBalanceSlider = FALSE;
 
                     volumeStep = (Control[Index].Bounds.dwMaximum - Control[Index].Bounds.dwMinimum) / (VOLUME_MAX - VOLUME_MIN);
 
@@ -816,10 +817,13 @@ MixerControlChangeCallback(PSND_MIXER Mixer, DWORD LineID, LPMIXERLINE Line, PVO
 
                     if (Line->cChannels == 1)
                     {
+                        updateBalanceSlider = TRUE;
                         balancePosition = BALANCE_CENTER;
                     }
                     else if (Line->cChannels == 2)
                     {
+                        updateBalanceSlider = TRUE;
+
                         if (pVolumeDetails[0].dwValue == pVolumeDetails[1].dwValue)
                         {
                             balancePosition = BALANCE_CENTER;
@@ -841,7 +845,7 @@ MixerControlChangeCallback(PSND_MIXER Mixer, DWORD LineID, LPMIXERLINE Line, PVO
                                 balancePosition = (pVolumeDetails[0].dwValue - Control[Index].Bounds.dwMinimum) / balanceStep;
                                 balancePosition = BALANCE_RIGHT - balancePosition;
                             }
-                            else if (pVolumeDetails[1].dwValue < pVolumeDetails[0].dwValue)
+                            else
                             {
                                 balancePosition = (pVolumeDetails[1].dwValue - Control[Index].Bounds.dwMinimum) / balanceStep;
                                 balancePosition = BALANCE_LEFT + balancePosition;
@@ -853,7 +857,10 @@ MixerControlChangeCallback(PSND_MIXER Mixer, DWORD LineID, LPMIXERLINE Line, PVO
                     UpdateDialogLineSliderControl(&Preferences, Line, IDC_LINE_SLIDER_VERT, VOLUME_MAX - volumePosition);
 
                     /* Update the balance control slider */
-                    UpdateDialogLineSliderControl(&Preferences, Line, IDC_LINE_SLIDER_HORZ, balancePosition);
+                    if (updateBalanceSlider)
+                    {
+                        UpdateDialogLineSliderControl(&Preferences, Line, IDC_LINE_SLIDER_HORZ, balancePosition);
+                    }
                 }
             }
             break;

@@ -108,7 +108,7 @@ protected:
     STDMETHOD_(BOOL, IsFolder)(const NtPidlEntry * info) override;
     STDMETHOD_(BOOL, IsSymLink)(const NtPidlEntry * info) override;
 
-    virtual HRESULT GetInfoFromPidl(LPCITEMIDLIST pcidl, const NtPidlEntry ** pentry);
+    virtual HRESULT GetInfoFromPidl(LPCITEMIDLIST pcidl, const NtPidlEntry ** pentry) override;
 
     HRESULT FormatValueData(DWORD contentType, PVOID td, DWORD contentsLength, PCWSTR * strContents);
 

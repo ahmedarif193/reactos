@@ -31,6 +31,9 @@ else()
     # separately and linking them automatically.
     add_library(msvcrt_multilib_startup STATIC $<TARGET_OBJECTS:msvcrtex>)
     add_dependencies(msvcrt_multilib_startup msvcrtex)
+    # Startup objects reference Kernel32 APIs (e.g. TLS helpers). Ensure
+    # consumers pulling this static archive also pull the import lib.
+    target_link_libraries(msvcrt_multilib_startup PUBLIC libkernel32)
     target_link_libraries(msvcrt_multilib_startup PRIVATE oldnames)
     target_link_libraries(libmsvcrt INTERFACE msvcrt_multilib_startup)
 endif()

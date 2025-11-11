@@ -60,7 +60,7 @@ public:
     UINT GetCount() const { return m_Items ? DPA_GetPtrCount(m_Items) : 0; }
 
     // IEnumIDList
-    IFACEMETHODIMP Next(ULONG celt, PITEMID_CHILD *rgelt, ULONG *pceltFetched)
+    IFACEMETHODIMP Next(ULONG celt, PITEMID_CHILD *rgelt, ULONG *pceltFetched) ATL_OVERRIDE
     {
         if (!rgelt)
             return E_INVALIDARG;
@@ -77,13 +77,13 @@ public:
         return FAILED(hr) ? hr : (celt == fetched && fetched) ? S_OK : S_FALSE;
     }
 
-    IFACEMETHODIMP Reset()
+    IFACEMETHODIMP Reset() ATL_OVERRIDE
     {
         m_Pos = 0;
         return S_OK;
     }
 
-    IFACEMETHODIMP Skip(ULONG celt)
+    IFACEMETHODIMP Skip(ULONG celt) ATL_OVERRIDE
     {
         UINT count = GetCount(), newpos = m_Pos + celt;
         if (celt > count || newpos >= count)
@@ -92,7 +92,7 @@ public:
         return S_OK;
     }
 
-    IFACEMETHODIMP Clone(IEnumIDList **ppenum)
+    IFACEMETHODIMP Clone(IEnumIDList **ppenum) ATL_OVERRIDE
     {
         UNIMPLEMENTED;
         *ppenum = NULL;

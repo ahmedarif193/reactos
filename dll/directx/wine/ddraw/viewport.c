@@ -431,7 +431,8 @@ static HRESULT WINAPI d3d_viewport_TransformVertices(IDirect3DViewport3 *iface,
         viewport_activate(viewport, TRUE);
 
     wined3d_device_get_transform(device->wined3d_device,
-            D3DTRANSFORMSTATE_VIEW, (struct wined3d_matrix *)&view_mat);
+            wined3d_transform_state_from_d3d(D3DTRANSFORMSTATE_VIEW),
+            (struct wined3d_matrix *)&view_mat);
     wined3d_device_get_transform(device->wined3d_device,
             WINED3D_TS_WORLD_MATRIX(0), (struct wined3d_matrix *)&world_mat);
     wined3d_device_get_transform(device->wined3d_device,

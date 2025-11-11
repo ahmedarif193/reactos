@@ -774,15 +774,18 @@ VBEMapVideoMemory(
 {
    PHYSICAL_ADDRESS FrameBuffer;
    ULONG inIoSpace = VIDEO_MEMORY_SPACE_MEMORY;
+   BOOLEAN HasMapping = FALSE;
 
    StatusBlock->Information = sizeof(VIDEO_MEMORY_INFORMATION);
+   FrameBuffer.QuadPart = 0;
+   MapInformation->VideoRamLength = 0;
+   MapInformation->VideoRamBase = RequestedAddress->RequestedVirtualAddress;
 
    if (DeviceExtension->ModeInfo[DeviceExtension->CurrentMode].ModeAttributes &
        VBE_MODEATTR_LINEAR)
    {
       FrameBuffer.QuadPart =
          DeviceExtension->ModeInfo[DeviceExtension->CurrentMode].PhysBasePtr;
-      MapInformation->VideoRamBase = RequestedAddress->RequestedVirtualAddress;
       if (DeviceExtension->VbeInfo.Version < 0x300)
       {
          MapInformation->VideoRamLength =
@@ -795,15 +798,22 @@ VBEMapVideoMemory(
             DeviceExtension->ModeInfo[DeviceExtension->CurrentMode].LinBytesPerScanLine *
             DeviceExtension->ModeInfo[DeviceExtension->CurrentMode].YResolution;
       }
+      HasMapping = TRUE;
    }
 #ifdef VBE12_SUPPORT
    else
    {
       FrameBuffer.QuadPart = 0xA0000;
-      MapInformation->VideoRamBase = RequestedAddress->RequestedVirtualAddress;
       MapInformation->VideoRamLength = 0x10000;
+      HasMapping = TRUE;
    }
 #endif
+
+   if (!HasMapping)
+   {
+      StatusBlock->Status = ERROR_INVALID_FUNCTION;
+      return FALSE;
+   }
 
    VideoPortMapMemory(DeviceExtension, FrameBuffer,
       &MapInformation->VideoRamLength, &inIoSpace,

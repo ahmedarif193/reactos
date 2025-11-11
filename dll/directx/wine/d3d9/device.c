@@ -37,7 +37,8 @@ D3DFORMAT d3dformat_from_wined3dformat(enum wined3d_format_id format)
     BYTE *c = (BYTE *)&format;
 
     /* Don't translate FOURCC formats */
-    if (isprint(c[0]) && isprint(c[1]) && isprint(c[2]) && isprint(c[3])) return format;
+    if (isprint(c[0]) && isprint(c[1]) && isprint(c[2]) && isprint(c[3]))
+        return (D3DFORMAT)format;
 
     switch(format)
     {
@@ -101,7 +102,8 @@ enum wined3d_format_id wined3dformat_from_d3dformat(D3DFORMAT format)
     BYTE *c = (BYTE *)&format;
 
     /* Don't translate FOURCC formats */
-    if (isprint(c[0]) && isprint(c[1]) && isprint(c[2]) && isprint(c[3])) return format;
+    if (isprint(c[0]) && isprint(c[1]) && isprint(c[2]) && isprint(c[3]))
+        return (enum wined3d_format_id)format;
 
     switch(format)
     {
@@ -237,7 +239,7 @@ void present_parameters_from_wined3d_swapchain_desc(D3DPRESENT_PARAMETERS *prese
     present_parameters->BackBufferHeight = swapchain_desc->backbuffer_height;
     present_parameters->BackBufferFormat = d3dformat_from_wined3dformat(swapchain_desc->backbuffer_format);
     present_parameters->BackBufferCount = swapchain_desc->backbuffer_count;
-    present_parameters->MultiSampleType = swapchain_desc->multisample_type;
+    present_parameters->MultiSampleType = d3d_multisample_type_from_wined3d(swapchain_desc->multisample_type);
     present_parameters->MultiSampleQuality = swapchain_desc->multisample_quality;
     present_parameters->SwapEffect = d3dswapeffect_from_wined3dswapeffect(swapchain_desc->swap_effect);
     present_parameters->hDeviceWindow = swapchain_desc->device_window;
@@ -294,7 +296,7 @@ static BOOL wined3d_swapchain_desc_from_present_parameters(struct wined3d_swapch
     swapchain_desc->backbuffer_format = wined3dformat_from_d3dformat(present_parameters->BackBufferFormat);
     swapchain_desc->backbuffer_count = max(1, present_parameters->BackBufferCount);
     swapchain_desc->backbuffer_usage = WINED3DUSAGE_RENDERTARGET;
-    swapchain_desc->multisample_type = present_parameters->MultiSampleType;
+    swapchain_desc->multisample_type = wined3d_multisample_type_from_d3d(present_parameters->MultiSampleType);
     swapchain_desc->multisample_quality = present_parameters->MultiSampleQuality;
     swapchain_desc->swap_effect = wined3dswapeffect_from_d3dswapeffect(present_parameters->SwapEffect);
     swapchain_desc->device_window = present_parameters->hDeviceWindow;
@@ -895,7 +897,7 @@ static HRESULT d3d9_device_reset(struct d3d9_device *device,
         wined3d_mode.height = mode->Height;
         wined3d_mode.refresh_rate = mode->RefreshRate;
         wined3d_mode.format_id = wined3dformat_from_d3dformat(mode->Format);
-        wined3d_mode.scanline_ordering = mode->ScanLineOrdering;
+        wined3d_mode.scanline_ordering = wined3d_scanline_ordering_from_d3d(mode->ScanLineOrdering);
     }
 
     if (!wined3d_swapchain_desc_from_present_parameters(&swapchain_desc, present_parameters, extended))
@@ -1343,7 +1345,7 @@ static HRESULT d3d9_device_create_surface(struct d3d9_device *device, UINT width
 
     desc.resource_type = WINED3D_RTYPE_TEXTURE_2D;
     desc.format = wined3dformat_from_d3dformat(format);
-    desc.multisample_type = multisample_type;
+    desc.multisample_type = wined3d_multisample_type_from_d3d(multisample_type);
     desc.multisample_quality = multisample_quality;
     desc.usage = usage & WINED3DUSAGE_MASK;
     if (pool == D3DPOOL_SCRATCH)
@@ -1377,7 +1379,8 @@ static HRESULT d3d9_device_create_surface(struct d3d9_device *device, UINT width
 
     if (user_mem)
         wined3d_texture_update_desc(texture, width, height,
-                desc.format, multisample_type, multisample_quality, user_mem, 0);
+                desc.format, wined3d_multisample_type_from_d3d(multisample_type),
+                multisample_quality, user_mem, 0);
 
     wined3d_texture_decref(texture);
 
@@ -1661,7 +1664,8 @@ static HRESULT WINAPI d3d9_device_StretchRect(IDirect3DDevice9Ex *iface, IDirect
     }
 
     hr = wined3d_texture_blt(dst->wined3d_texture, dst->sub_resource_idx, dst_rect,
-            src->wined3d_texture, src->sub_resource_idx, src_rect, 0, NULL, filter);
+            src->wined3d_texture, src->sub_resource_idx, src_rect, 0, NULL,
+            (enum wined3d_texture_filter_type)filter);
     if (hr == WINEDDERR_INVALIDRECT)
         hr = D3DERR_INVALIDCALL;
     if (SUCCEEDED(hr) && dst->texture)
@@ -1981,7 +1985,8 @@ static HRESULT WINAPI d3d9_device_SetTransform(IDirect3DDevice9Ex *iface,
 
     /* Note: D3DMATRIX is compatible with struct wined3d_matrix. */
     wined3d_mutex_lock();
-    wined3d_device_set_transform(device->wined3d_device, state, (const struct wined3d_matrix *)matrix);
+    wined3d_device_set_transform(device->wined3d_device,
+            (enum wined3d_transform_state)state, (const struct wined3d_matrix *)matrix);
     wined3d_mutex_unlock();
 
     return D3D_OK;
@@ -1996,7 +2001,8 @@ static HRESULT WINAPI d3d9_device_GetTransform(IDirect3DDevice9Ex *iface,
 
     /* Note: D3DMATRIX is compatible with struct wined3d_matrix. */
     wined3d_mutex_lock();
-    wined3d_device_get_transform(device->wined3d_device, state, (struct wined3d_matrix *)matrix);
+    wined3d_device_get_transform(device->wined3d_device,
+            (enum wined3d_transform_state)state, (struct wined3d_matrix *)matrix);
     wined3d_mutex_unlock();
 
     return D3D_OK;
@@ -2011,7 +2017,8 @@ static HRESULT WINAPI d3d9_device_MultiplyTransform(IDirect3DDevice9Ex *iface,
 
     /* Note: D3DMATRIX is compatible with struct wined3d_matrix. */
     wined3d_mutex_lock();
-    wined3d_device_multiply_transform(device->wined3d_device, state, (const struct wined3d_matrix *)matrix);
+    wined3d_device_multiply_transform(device->wined3d_device,
+            (enum wined3d_transform_state)state, (const struct wined3d_matrix *)matrix);
     wined3d_mutex_unlock();
 
     return D3D_OK;
@@ -2185,7 +2192,8 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH d3d9_device_SetRenderState(IDirect3DDevi
     TRACE("iface %p, state %#x, value %#x.\n", iface, state, value);
 
     wined3d_mutex_lock();
-    wined3d_device_set_render_state(device->wined3d_device, state, value);
+    wined3d_device_set_render_state(device->wined3d_device,
+            (enum wined3d_render_state)state, value);
     wined3d_mutex_unlock();
 
     return D3D_OK;
@@ -2199,7 +2207,8 @@ static HRESULT WINAPI d3d9_device_GetRenderState(IDirect3DDevice9Ex *iface,
     TRACE("iface %p, state %#x, value %p.\n", iface, state, value);
 
     wined3d_mutex_lock();
-    *value = wined3d_device_get_render_state(device->wined3d_device, state);
+    *value = wined3d_device_get_render_state(device->wined3d_device,
+            (enum wined3d_render_state)state);
     wined3d_mutex_unlock();
 
     return D3D_OK;
@@ -2459,7 +2468,8 @@ static HRESULT WINAPI d3d9_device_GetSamplerState(IDirect3DDevice9Ex *iface,
     TRACE("iface %p, sampler %u, state %#x, value %p.\n", iface, sampler, state, value);
 
     wined3d_mutex_lock();
-    *value = wined3d_device_get_sampler_state(device->wined3d_device, sampler, state);
+    *value = wined3d_device_get_sampler_state(device->wined3d_device, sampler,
+            (enum wined3d_sampler_state)state);
     wined3d_mutex_unlock();
 
     return D3D_OK;
@@ -2473,7 +2483,8 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH d3d9_device_SetSamplerState(IDirect3DDev
     TRACE("iface %p, sampler %u, state %#x, value %#x.\n", iface, sampler, state, value);
 
     wined3d_mutex_lock();
-    wined3d_device_set_sampler_state(device->wined3d_device, sampler, state, value);
+    wined3d_device_set_sampler_state(device->wined3d_device, sampler,
+            (enum wined3d_sampler_state)state, value);
     wined3d_mutex_unlock();
 
     return D3D_OK;
@@ -2636,7 +2647,8 @@ static HRESULT WINAPI d3d9_device_DrawPrimitive(IDirect3DDevice9Ex *iface,
         return D3DERR_INVALIDCALL;
     }
     d3d9_generate_auto_mipmaps(device);
-    wined3d_device_set_primitive_type(device->wined3d_device, primitive_type, 0);
+    wined3d_device_set_primitive_type(device->wined3d_device,
+            (enum wined3d_primitive_type)primitive_type, 0);
     hr = wined3d_device_draw_primitive(device->wined3d_device, start_vertex,
             vertex_count_from_primitive_count(primitive_type, primitive_count));
     if (SUCCEEDED(hr))
@@ -2667,7 +2679,8 @@ static HRESULT WINAPI d3d9_device_DrawIndexedPrimitive(IDirect3DDevice9Ex *iface
     }
     d3d9_generate_auto_mipmaps(device);
     wined3d_device_set_base_vertex_index(device->wined3d_device, base_vertex_idx);
-    wined3d_device_set_primitive_type(device->wined3d_device, primitive_type, 0);
+    wined3d_device_set_primitive_type(device->wined3d_device,
+            (enum wined3d_primitive_type)primitive_type, 0);
     hr = wined3d_device_draw_indexed_primitive(device->wined3d_device, start_idx,
             vertex_count_from_primitive_count(primitive_type, primitive_count));
     if (SUCCEEDED(hr))
@@ -2771,7 +2784,8 @@ static HRESULT WINAPI d3d9_device_DrawPrimitiveUP(IDirect3DDevice9Ex *iface,
         goto done;
 
     d3d9_generate_auto_mipmaps(device);
-    wined3d_device_set_primitive_type(device->wined3d_device, primitive_type, 0);
+    wined3d_device_set_primitive_type(device->wined3d_device,
+            (enum wined3d_primitive_type)primitive_type, 0);
     hr = wined3d_device_draw_primitive(device->wined3d_device, vb_pos / stride, vtx_count);
     wined3d_device_set_stream_source(device->wined3d_device, 0, NULL, 0, 0);
     if (SUCCEEDED(hr))
@@ -2908,7 +2922,8 @@ static HRESULT WINAPI d3d9_device_DrawIndexedPrimitiveUP(IDirect3DDevice9Ex *ifa
             wined3dformat_from_d3dformat(index_format), 0);
     wined3d_device_set_base_vertex_index(device->wined3d_device, vb_pos / vertex_stride - min_vertex_idx);
 
-    wined3d_device_set_primitive_type(device->wined3d_device, primitive_type, 0);
+    wined3d_device_set_primitive_type(device->wined3d_device,
+            (enum wined3d_primitive_type)primitive_type, 0);
     hr = wined3d_device_draw_indexed_primitive(device->wined3d_device, ib_pos / idx_fmt_size, idx_count);
 
     wined3d_device_set_stream_source(device->wined3d_device, 0, NULL, 0, 0);
@@ -3870,7 +3885,7 @@ static HRESULT WINAPI d3d9_device_GetDisplayModeEx(IDirect3DDevice9Ex *iface,
         mode->Height = wined3d_mode.height;
         mode->RefreshRate = wined3d_mode.refresh_rate;
         mode->Format = d3dformat_from_wined3dformat(wined3d_mode.format_id);
-        mode->ScanLineOrdering = wined3d_mode.scanline_ordering;
+        mode->ScanLineOrdering = d3d_scanline_ordering_from_wined3d(wined3d_mode.scanline_ordering);
     }
 
     return hr;
@@ -4190,7 +4205,8 @@ HRESULT device_init(struct d3d9_device *device, struct d3d9 *parent, struct wine
     if (!(flags & D3DCREATE_FPU_PRESERVE)) setup_fpu();
 
     wined3d_mutex_lock();
-    if (FAILED(hr = wined3d_device_create(wined3d, adapter, device_type, focus_window, flags, 4,
+    if (FAILED(hr = wined3d_device_create(wined3d, adapter,
+            (enum wined3d_device_type)device_type, focus_window, flags, 4,
             &device->device_parent, &device->wined3d_device)))
     {
         WARN("Failed to create wined3d device, hr %#x.\n", hr);
@@ -4198,7 +4214,7 @@ HRESULT device_init(struct d3d9_device *device, struct d3d9 *parent, struct wine
         return hr;
     }
 
-    wined3d_get_device_caps(wined3d, adapter, device_type, &caps);
+    wined3d_get_device_caps(wined3d, adapter, (enum wined3d_device_type)device_type, &caps);
     device->max_user_clip_planes = caps.MaxUserClipPlanes;
     if (flags & D3DCREATE_ADAPTERGROUP_DEVICE)
         count = caps.NumberOfAdaptersInGroup;

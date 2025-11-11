@@ -60,10 +60,7 @@ struct hash_table *new_hash ()
 	return rv;
 }
 
-static __inline int do_hash (name, len, size)
-	unsigned char *name;
-	int len;
-	int size;
+static __inline int do_hash(unsigned char *name, int len, int size)
 {
 	register int accum = 0;
 	register unsigned char *s = name;
@@ -79,11 +76,8 @@ static __inline int do_hash (name, len, size)
 	return accum % size;
 }
 
-void add_hash (table, name, len, pointer)
-	struct hash_table *table;
-	int len;
-	unsigned char *name;
-	unsigned char *pointer;
+void add_hash(struct hash_table *table, unsigned char *name, int len,
+	    unsigned char *pointer)
 {
 	int hashno;
 	struct hash_bucket *bp;
@@ -107,10 +101,7 @@ void add_hash (table, name, len, pointer)
 	table -> buckets [hashno] = bp;
 }
 
-void delete_hash_entry (table, name, len)
-	struct hash_table *table;
-	int len;
-	unsigned char *name;
+void delete_hash_entry(struct hash_table *table, unsigned char *name, int len)
 {
 	int hashno;
 	struct hash_bucket *bp, *pbp = (struct hash_bucket *)0;
@@ -141,10 +132,8 @@ void delete_hash_entry (table, name, len)
 	}
 }
 
-unsigned char *hash_lookup (table, name, len)
-	struct hash_table *table;
-	unsigned char *name;
-	int len;
+unsigned char *hash_lookup(struct hash_table *table, unsigned char *name,
+	    int len)
 {
 	int hashno;
 	struct hash_bucket *bp;

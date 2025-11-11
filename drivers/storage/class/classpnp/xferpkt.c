@@ -972,6 +972,7 @@ TransferPktComplete(IN PDEVICE_OBJECT NullFdo, IN PIRP Irp, IN PVOID Context)
     lastIoCompletionTime = InterlockedExchangeNoFence64((volatile LONG64*)&fdoData->LastIoCompletionTime.QuadPart,
                                                         completionTime.QuadPart);
 #endif
+    (void)lastIoCompletionTime;
 
     if (fdoData->IdlePrioritySupported == TRUE) {
         idleRequest = ClasspIsIdleRequest(pkt->OriginalIrp);
@@ -2084,5 +2085,3 @@ Return Value:
 
     return;
 }
-
-

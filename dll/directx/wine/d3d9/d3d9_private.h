@@ -40,6 +40,46 @@
 #include "d3d9.h"
 #include "wine/wined3d.h"
 
+static inline enum wined3d_multisample_type wined3d_multisample_type_from_d3d(D3DMULTISAMPLE_TYPE type)
+{
+    return (enum wined3d_multisample_type)type;
+}
+
+static inline D3DMULTISAMPLE_TYPE d3d_multisample_type_from_wined3d(enum wined3d_multisample_type type)
+{
+    return (D3DMULTISAMPLE_TYPE)type;
+}
+
+static inline enum wined3d_scanline_ordering wined3d_scanline_ordering_from_d3d(D3DSCANLINEORDERING ordering)
+{
+    return (enum wined3d_scanline_ordering)ordering;
+}
+
+static inline D3DSCANLINEORDERING d3d_scanline_ordering_from_wined3d(enum wined3d_scanline_ordering ordering)
+{
+    return (D3DSCANLINEORDERING)ordering;
+}
+
+static inline enum wined3d_query_type wined3d_query_type_from_d3d(D3DQUERYTYPE type)
+{
+    return (enum wined3d_query_type)type;
+}
+
+static inline D3DQUERYTYPE d3d_query_type_from_wined3d(enum wined3d_query_type type)
+{
+    return (D3DQUERYTYPE)type;
+}
+
+static inline enum wined3d_device_type wined3d_device_type_from_d3ddevtype(D3DDEVTYPE type)
+{
+    return (enum wined3d_device_type)type;
+}
+
+static inline D3DDEVTYPE d3d_device_type_from_wined3d(enum wined3d_device_type type)
+{
+    return (D3DDEVTYPE)type;
+}
+
 #define D3D9_MAX_VERTEX_SHADER_CONSTANTF 256
 #define D3D9_MAX_TEXTURE_UNITS 20
 

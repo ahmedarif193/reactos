@@ -2403,7 +2403,8 @@ static HRESULT d3d_device7_GetRenderState(IDirect3DDevice7 *iface,
                 hr = E_NOTIMPL;
                 break;
             }
-            *value = wined3d_device_get_render_state(device->wined3d_device, state);
+            *value = wined3d_device_get_render_state(device->wined3d_device,
+                    wined3d_render_state_from_d3d(state));
     }
     wined3d_mutex_unlock();
 
@@ -2690,7 +2691,8 @@ static HRESULT d3d_device7_SetRenderState(IDirect3DDevice7 *iface,
                 break;
             }
 
-            wined3d_device_set_render_state(device->wined3d_device, state, value);
+            wined3d_device_set_render_state(device->wined3d_device,
+                    wined3d_render_state_from_d3d(state), value);
             break;
     }
     wined3d_mutex_unlock();
@@ -3155,7 +3157,7 @@ static HRESULT d3d_device7_SetTransform(IDirect3DDevice7 *iface,
             wined3d_state = WINED3D_TS_WORLD_MATRIX(3);
             break;
         default:
-            wined3d_state = state;
+            wined3d_state = wined3d_transform_state_from_d3d(state);
     }
 
     if (!matrix)
@@ -3264,7 +3266,7 @@ static HRESULT d3d_device7_GetTransform(IDirect3DDevice7 *iface,
             wined3d_state = WINED3D_TS_WORLD_MATRIX(3);
             break;
         default:
-            wined3d_state = state;
+            wined3d_state = wined3d_transform_state_from_d3d(state);
     }
 
     if (!matrix)
@@ -3368,7 +3370,7 @@ static HRESULT d3d_device7_MultiplyTransform(IDirect3DDevice7 *iface,
             wined3d_state = WINED3D_TS_WORLD_MATRIX(3);
             break;
         default:
-            wined3d_state = state;
+            wined3d_state = wined3d_transform_state_from_d3d(state);
     }
 
     /* Note: D3DMATRIX is compatible with struct wined3d_matrix. */
@@ -3544,7 +3546,8 @@ static HRESULT d3d_device7_DrawPrimitive(IDirect3DDevice7 *iface,
         goto done;
 
     wined3d_device_set_vertex_declaration(device->wined3d_device, ddraw_find_decl(device->ddraw, fvf));
-    wined3d_device_set_primitive_type(device->wined3d_device, primitive_type, 0);
+    wined3d_device_set_primitive_type(device->wined3d_device,
+            wined3d_primitive_type_from_d3d(primitive_type), 0);
     hr = wined3d_device_draw_primitive(device->wined3d_device, vb_pos / stride, vertex_count);
 
 done:
@@ -3754,7 +3757,8 @@ static HRESULT d3d_device7_DrawIndexedPrimitive(IDirect3DDevice7 *iface,
     wined3d_device_set_index_buffer(device->wined3d_device, device->index_buffer, WINED3DFMT_R16_UINT, 0);
 
     wined3d_device_set_vertex_declaration(device->wined3d_device, ddraw_find_decl(device->ddraw, fvf));
-    wined3d_device_set_primitive_type(device->wined3d_device, primitive_type, 0);
+    wined3d_device_set_primitive_type(device->wined3d_device,
+            wined3d_primitive_type_from_d3d(primitive_type), 0);
     wined3d_device_set_base_vertex_index(device->wined3d_device, vb_pos / stride);
     hr = wined3d_device_draw_indexed_primitive(device->wined3d_device, ib_pos / sizeof(*indices), index_count);
 
@@ -4067,7 +4071,8 @@ static HRESULT d3d_device7_DrawPrimitiveStrided(IDirect3DDevice7 *iface, D3DPRIM
         goto done;
     wined3d_device_set_vertex_declaration(device->wined3d_device, ddraw_find_decl(device->ddraw, fvf));
 
-    wined3d_device_set_primitive_type(device->wined3d_device, primitive_type, 0);
+    wined3d_device_set_primitive_type(device->wined3d_device,
+            wined3d_primitive_type_from_d3d(primitive_type), 0);
     hr = wined3d_device_draw_primitive(device->wined3d_device, vb_pos / dst_stride, vertex_count);
 
 done:
@@ -4202,7 +4207,8 @@ static HRESULT d3d_device7_DrawIndexedPrimitiveStrided(IDirect3DDevice7 *iface,
     wined3d_device_set_base_vertex_index(device->wined3d_device, vb_pos / vtx_dst_stride);
 
     wined3d_device_set_vertex_declaration(device->wined3d_device, ddraw_find_decl(device->ddraw, fvf));
-    wined3d_device_set_primitive_type(device->wined3d_device, primitive_type, 0);
+    wined3d_device_set_primitive_type(device->wined3d_device,
+            wined3d_primitive_type_from_d3d(primitive_type), 0);
     hr = wined3d_device_draw_indexed_primitive(device->wined3d_device, ib_pos / sizeof(WORD), index_count);
 
 done:
@@ -4300,7 +4306,8 @@ static HRESULT d3d_device7_DrawPrimitiveVB(IDirect3DDevice7 *iface, D3DPRIMITIVE
     }
 
     /* Now draw the primitives */
-    wined3d_device_set_primitive_type(device->wined3d_device, primitive_type, 0);
+    wined3d_device_set_primitive_type(device->wined3d_device,
+            wined3d_primitive_type_from_d3d(primitive_type), 0);
     hr = wined3d_device_draw_primitive(device->wined3d_device, start_vertex, vertex_count);
 
     wined3d_mutex_unlock();
@@ -4432,7 +4439,8 @@ static HRESULT d3d_device7_DrawIndexedPrimitiveVB(IDirect3DDevice7 *iface,
         return hr;
     }
 
-    wined3d_device_set_primitive_type(device->wined3d_device, primitive_type, 0);
+    wined3d_device_set_primitive_type(device->wined3d_device,
+            wined3d_primitive_type_from_d3d(primitive_type), 0);
     hr = wined3d_device_draw_indexed_primitive(device->wined3d_device, ib_pos / sizeof(WORD), index_count);
 
     wined3d_mutex_unlock();
@@ -4879,16 +4887,16 @@ tss_lookup[] =
     {FALSE, {WINED3D_TSS_BUMPENV_MAT10}},             /*  9, D3DTSS_BUMPENVMAT10 */
     {FALSE, {WINED3D_TSS_BUMPENV_MAT11}},             /* 10, D3DTSS_BUMPENVMAT11 */
     {FALSE, {WINED3D_TSS_TEXCOORD_INDEX}},            /* 11, D3DTSS_TEXCOORDINDEX */
-    {TRUE,  {WINED3D_SAMP_ADDRESS_U}},                /* 12, D3DTSS_ADDRESS */
-    {TRUE,  {WINED3D_SAMP_ADDRESS_U}},                /* 13, D3DTSS_ADDRESSU */
-    {TRUE,  {WINED3D_SAMP_ADDRESS_V}},                /* 14, D3DTSS_ADDRESSV */
-    {TRUE,  {WINED3D_SAMP_BORDER_COLOR}},             /* 15, D3DTSS_BORDERCOLOR */
-    {TRUE,  {WINED3D_SAMP_MAG_FILTER}},               /* 16, D3DTSS_MAGFILTER */
-    {TRUE,  {WINED3D_SAMP_MIN_FILTER}},               /* 17, D3DTSS_MINFILTER */
-    {TRUE,  {WINED3D_SAMP_MIP_FILTER}},               /* 18, D3DTSS_MIPFILTER */
-    {TRUE,  {WINED3D_SAMP_MIPMAP_LOD_BIAS}},          /* 19, D3DTSS_MIPMAPLODBIAS */
-    {TRUE,  {WINED3D_SAMP_MAX_MIP_LEVEL}},            /* 20, D3DTSS_MAXMIPLEVEL */
-    {TRUE,  {WINED3D_SAMP_MAX_ANISOTROPY}},           /* 21, D3DTSS_MAXANISOTROPY */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_ADDRESS_U}},        /* 12, D3DTSS_ADDRESS */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_ADDRESS_U}},        /* 13, D3DTSS_ADDRESSU */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_ADDRESS_V}},        /* 14, D3DTSS_ADDRESSV */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_BORDER_COLOR}},     /* 15, D3DTSS_BORDERCOLOR */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_MAG_FILTER}},       /* 16, D3DTSS_MAGFILTER */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_MIN_FILTER}},       /* 17, D3DTSS_MINFILTER */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_MIP_FILTER}},       /* 18, D3DTSS_MIPFILTER */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_MIPMAP_LOD_BIAS}},  /* 19, D3DTSS_MIPMAPLODBIAS */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_MAX_MIP_LEVEL}},    /* 20, D3DTSS_MAXMIPLEVEL */
+    {TRUE,  {.sampler_state = WINED3D_SAMP_MAX_ANISOTROPY}},   /* 21, D3DTSS_MAXANISOTROPY */
     {FALSE, {WINED3D_TSS_BUMPENV_LSCALE}},            /* 22, D3DTSS_BUMPENVLSCALE */
     {FALSE, {WINED3D_TSS_BUMPENV_LOFFSET}},           /* 23, D3DTSS_BUMPENVLOFFSET */
     {FALSE, {WINED3D_TSS_TEXTURE_TRANSFORM_FLAGS}},   /* 24, D3DTSS_TEXTURETRANSFORMFLAGS */
@@ -5969,7 +5977,8 @@ static HRESULT d3d_device7_CreateStateBlock(IDirect3DDevice7 *iface,
     wined3d_mutex_lock();
 
     /* The D3DSTATEBLOCKTYPE enum is fine here. */
-    hr = wined3d_stateblock_create(device->wined3d_device, type, &wined3d_sb);
+    hr = wined3d_stateblock_create(device->wined3d_device,
+            wined3d_stateblock_type_from_d3d(type), &wined3d_sb);
     if (FAILED(hr))
     {
         WARN("Failed to create stateblock, hr %#x.\n", hr);

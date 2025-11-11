@@ -29,7 +29,7 @@ static PCWSTR _pwszDatatypes[] = {
 BOOL WINAPI
 ClosePrintProcessor(HANDLE hPrintProcessor)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = ERROR_INVALID_DATATYPE;
     PWINPRINT_HANDLE pHandle;
 
     TRACE("ClosePrintProcessor(%p)\n", hPrintProcessor);
@@ -188,7 +188,7 @@ GetPrintProcessorCapabilities(PWSTR pValueName, DWORD dwAttributes, PBYTE pData,
 HANDLE WINAPI
 OpenPrintProcessor(PWSTR pPrinterName, PPRINTPROCESSOROPENDATA pPrintProcessorOpenData)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = ERROR_INVALID_DATATYPE;
     HANDLE hReturnValue = NULL;
     PWINPRINT_HANDLE pHandle = NULL;
 
@@ -254,7 +254,7 @@ Cleanup:
 BOOL WINAPI
 PrintDocumentOnPrintProcessor(HANDLE hPrintProcessor, PWSTR pDocumentName)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = ERROR_INVALID_DATATYPE;
     PWINPRINT_HANDLE pHandle;
 
     TRACE("PrintDocumentOnPrintProcessor(%p, %S)\n", hPrintProcessor, pDocumentName);

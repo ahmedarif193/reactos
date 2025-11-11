@@ -57,11 +57,13 @@ static NTSTATUS OpenCurrentConfigKey(PHANDLE KeyHandle);
 
 
 /* FUNCTIONS ****************************************************************/
+#ifndef _ADVAPI32_VISTA_
 /* check if value type needs string conversion (Ansi<->Unicode) */
 __inline static int is_string( DWORD type )
 {
     return (type == REG_SZ) || (type == REG_EXPAND_SZ) || (type == REG_MULTI_SZ);
 }
+#endif
 
 /************************************************************************
  *  RegInitDefaultHandles

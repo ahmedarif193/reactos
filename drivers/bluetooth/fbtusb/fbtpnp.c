@@ -1303,7 +1303,6 @@ VOID NTAPI DpcRoutine(IN PKDPC Dpc, IN PVOID DeferredContext, IN PVOID SystemArg
 
  --*/
 {
-    NTSTATUS          ntStatus;
     PDEVICE_OBJECT    deviceObject;
     PDEVICE_EXTENSION deviceExtension;
     PIO_WORKITEM      item;
@@ -1324,14 +1323,12 @@ VOID NTAPI DpcRoutine(IN PKDPC Dpc, IN PVOID DeferredContext, IN PVOID SystemArg
         if (item)
         {
             IoQueueWorkItem(item, IdleRequestWorkerRoutine, DelayedWorkQueue, item);
-            ntStatus = STATUS_PENDING;
 
         }
 
         else
         {
             FreeBT_DbgPrint(3, ("FBTUSB: DpcRoutine: Cannot alloc memory for work item\n"));
-            ntStatus = STATUS_INSUFFICIENT_RESOURCES;
             KeSetEvent(&deviceExtension->NoDpcWorkItemPendingEvent, IO_NO_INCREMENT, FALSE);
 
         }
@@ -1907,4 +1904,3 @@ PCHAR NTAPI PnPMinorFunctionString (UCHAR MinorFunction)
     }
 
 }
-

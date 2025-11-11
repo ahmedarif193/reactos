@@ -600,7 +600,6 @@ T1_InvertButton(
                 cxWidth = pT1->cxWidth48;
                 break;
             case T1K_ENTER:
-                pT1 = pT1;
                 cxWidth = pT1->cxWidth50;
                 cyHeight = pT1->cyHeight50;
                 break;

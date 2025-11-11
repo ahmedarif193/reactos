@@ -48,7 +48,12 @@ typedef struct tagWINE_JOYSTICK {
     HDRVR	hDriver;
 } WINE_JOYSTICK;
 
-static	WINE_JOYSTICK	JOY_Sticks[MAXJOYSTICK];
+static WINE_JOYSTICK JOY_Sticks[MAXJOYSTICK];
+
+static inline UINT abs_diff(UINT lhs, UINT rhs)
+{
+    return (lhs > rhs) ? (lhs - rhs) : (rhs - lhs);
+}
 
 /**************************************************************************
  * 				JOY_LoadDriver		[internal]
@@ -95,14 +100,14 @@ static	void	CALLBACK	JOY_Timer(HWND hWnd, UINT wMsg, UINT_PTR wTimer, DWORD dwTi
 	pos = MAKELONG(ji.wXpos, ji.wYpos);
 
 	if (!joy->bChanged ||
-	    abs(joy->ji.wXpos - ji.wXpos) > joy->threshold ||
-	    abs(joy->ji.wYpos - ji.wYpos) > joy->threshold) {
+	    abs_diff(joy->ji.wXpos, ji.wXpos) > joy->threshold ||
+	    abs_diff(joy->ji.wYpos, ji.wYpos) > joy->threshold) {
 	    SendMessageA(joy->hCapture, MM_JOY1MOVE + i, ji.wButtons, pos);
 	    joy->ji.wXpos = ji.wXpos;
 	    joy->ji.wYpos = ji.wYpos;
 	}
 	if (!joy->bChanged ||
-	    abs(joy->ji.wZpos - ji.wZpos) > joy->threshold) {
+	    abs_diff(joy->ji.wZpos, ji.wZpos) > joy->threshold) {
 	    SendMessageA(joy->hCapture, MM_JOY1ZMOVE + i, ji.wButtons, pos);
 	    joy->ji.wZpos = ji.wZpos;
 	}

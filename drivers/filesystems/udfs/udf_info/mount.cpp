@@ -2029,6 +2029,9 @@ UDFLoadPartDesc(
     uint32 i;
     OSSTATUS RC;
     BOOLEAN Found = FALSE;
+#ifndef UDF_DBG
+    UNREFERENCED_PARAMETER(Found);
+#endif
     UDFPrint(("UDF: Pard Descr:\n"));
     UDFPrint((" volDescSeqNum   = %x\n", p->volDescSeqNum));
     UDFPrint((" partitionFlags  = %x\n", p->partitionFlags));
@@ -2132,6 +2135,9 @@ UDFVerifyPartDesc(
     uint32 i;
     OSSTATUS RC;
     BOOLEAN Found = FALSE;
+#ifndef UDF_DBG
+    UNREFERENCED_PARAMETER(Found);
+#endif
     UDFPrint(("UDF: Verify Part Descr:\n"));
     UDFPrint((" volDescSeqNum   = %x\n", p->volDescSeqNum));
     UDFPrint((" partitionFlags  = %x\n", p->partitionFlags));
@@ -3060,4 +3066,3 @@ try_exit:   NOTHING;
     return(RC);
 
 } // end UDFGetDiskInfoAndVerify()
-

@@ -2550,7 +2550,7 @@ KsRegisterFilterWithNoKSPins(
     IN KSPIN_MEDIUM*  MediumList,
     IN GUID*  CategoryList OPTIONAL)
 {
-    ULONG Size, Index;
+    ULONG Index;
     NTSTATUS Status;
     PWSTR SymbolicLinkList;
     //PUCHAR Buffer;
@@ -2562,14 +2562,6 @@ KsRegisterFilterWithNoKSPins(
     {
         /* all these parameters are required */
         return STATUS_INVALID_PARAMETER;
-    }
-
-    /* calculate filter data value size */
-    Size = PinCount * sizeof(KSPIN_MEDIUM);
-    if (CategoryList)
-    {
-        /* add category list */
-        Size += PinCount * sizeof(GUID);
     }
 
     /* FIXME generate filter data blob */

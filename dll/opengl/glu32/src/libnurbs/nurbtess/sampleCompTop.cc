@@ -511,26 +511,6 @@ void sampleCompTop(Real* topVertex,
     }
   else if(up_rightCornerWhere != 2)
     {
-      Real* tempTop;
-      Int tempLeftStart;
-      if(up_rightCornerWhere == 1)
-	{
-	  tempLeftStart = leftStartIndex;
-	  tempTop = topVertex;
-	}
-      else //0
-	{
-	  tempLeftStart = up_rightCornerIndex+1;
-	  tempTop = leftChain->getVertex(up_rightCornerIndex);
-	}
-/*
-      sampleTopLeftWithGridLine(tempTop, leftChain, tempLeftStart, up_leftCornerIndex,
-				leftGridChain->getGrid(),
-				 leftGridChain->getVlineIndex(gridIndex1),
-				 leftGridChain->getUlineIndex(gridIndex1),
-				 rightGridChain->getUlineIndex(gridIndex1),
-				 pStream);
-*/
       sampleCompTopSimple(topVertex,
 			  leftChain,
 			  leftStartIndex,

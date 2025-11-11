@@ -545,11 +545,16 @@ cleanup:
 }
 
 #define SKIPWS(ptr, act) \
-{while(*ptr && isspace(*ptr)) ptr++; if(!*ptr) act;}
+    do { \
+        while (*(ptr) && isspace(*(ptr))) (ptr)++; \
+        if (!*(ptr)) { act; } \
+    } while (0)
 
 #define SKIPANDMARKSTR(ptr, act) \
-{while(*ptr && !isspace(*ptr)) ptr++; \
- if(!*ptr) {act;} else { *ptr = 0; ptr++; }}
+    do { \
+        while (*(ptr) && !isspace(*(ptr))) (ptr)++; \
+        if (!*(ptr)) { act; } else { *(ptr) = 0; (ptr)++; } \
+    } while (0)
 
 static
 BOOL

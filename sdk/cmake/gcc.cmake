@@ -554,11 +554,19 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
     if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
     # Prepare dlltool args per-library
     set(_dlltool_args ${DLLTOOL_EXTRA_ARGS})
+        # Using --kill-at on i386 can drop stdcall decoration (@N) from
+        # import symbols. With --disable-stdcall-fixup enabled for linkers
+        # in our multilib subbuild, that causes unresolved references.
+        # Avoid --kill-at for i386 multilib builds to preserve decoration.
+        set(_dlltool_killat_flag --kill-at)
+        if(ARCH STREQUAL "i386" AND REACTOS_MULTILIB_I386)
+            set(_dlltool_killat_flag)
+        endif()
         add_custom_command(
             OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}.a
             # Delete any existing file in the private directory before creating new one
             COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/${_libname}.a
-            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} --kill-at --output-lib=${_libname}.a -t ${_libname}
+            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} ${_dlltool_killat_flag} --output-lib=${_libname}.a -t ${_libname}
             COMMAND ${CMAKE_RANLIB} ${_libname}.a
             DEPENDS ${_implib_def}
             WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
@@ -569,7 +577,7 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
             OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}.a
             # Delete any existing file in the private directory before creating new one
             COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/${_libname}.a
-            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} --kill-at --output-lib=${_libname}.a -t ${_libname}
+            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} ${_dlltool_killat_flag} --output-lib=${_libname}.a -t ${_libname}
             DEPENDS ${_implib_def}
             WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
     endif()
@@ -616,7 +624,7 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
             OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
             # Delete any existing file in the private directory before creating new one
             COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
-            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} --kill-at --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
+            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} ${_dlltool_killat_flag} --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
             COMMAND ${CMAKE_RANLIB} ${_libname}_delayed.a
             DEPENDS ${_implib_def}
             WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
@@ -627,7 +635,7 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
             OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
             # Delete any existing file in the private directory before creating new one
             COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
-            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} --kill-at --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
+            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} ${_dlltool_killat_flag} --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
             DEPENDS ${_implib_def}
             WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
     endif()

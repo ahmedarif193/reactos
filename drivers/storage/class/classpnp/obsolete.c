@@ -405,6 +405,10 @@ RetryRequest(
         transferByteCount = 0;
     }
 
+    if (transferByteCount > dataTransferLength) {
+        transferByteCount = dataTransferLength;
+    }
+
     //
     // this is a safety net.  this should not normally be hit, since we are
     // not guaranteed to be an fdoExtension

@@ -1106,6 +1106,7 @@ LZWPostEncode(TIFF* tif)
                 }
 	}
 	PutNextCode(op, CODE_EOI);
+	sp->enc_outcount = outcount;
         /* Explicit 0xff masking to make icc -check=conversions happy */
 	if (nextbits > 0) 
 		*op++ = (unsigned char)((nextdata << (8-nextbits))&0xff);

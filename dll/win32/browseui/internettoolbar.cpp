@@ -1269,16 +1269,14 @@ HRESULT STDMETHODCALLTYPE CInternetToolbar::GetIDsOfNames(REFIID riid, LPOLESTR 
 HRESULT STDMETHODCALLTYPE CInternetToolbar::Invoke(DISPID dispIdMember, REFIID riid, LCID lcid,
     WORD wFlags, DISPPARAMS *pDispParams, VARIANT *pVarResult, EXCEPINFO *pExcepInfo, UINT *puArgErr)
 {
-    HRESULT                                 hResult;
-
     switch(dispIdMember)
     {
         case DISPID_BEFORENAVIGATE:
-            hResult = S_OK;
-            break;
         case DISPID_DOWNLOADCOMPLETE:
-            hResult = S_OK;
-            break;
+        case DISPID_DOWNLOADBEGIN:
+        case DISPID_NAVIGATECOMPLETE2:
+        case DISPID_DOCUMENTCOMPLETE:
+            return S_OK;
         case DISPID_COMMANDSTATECHANGE:
             if (pDispParams->cArgs != 2)
                 return E_INVALIDARG;
@@ -1286,14 +1284,7 @@ HRESULT STDMETHODCALLTYPE CInternetToolbar::Invoke(DISPID dispIdMember, REFIID r
                 return E_INVALIDARG;
             return CommandStateChanged(V_BOOL(&pDispParams->rgvarg[0]) != VARIANT_FALSE,
                 V_I4(&pDispParams->rgvarg[1]));
-        case DISPID_DOWNLOADBEGIN:
-            hResult = S_OK;
-            break;
-        case DISPID_NAVIGATECOMPLETE2:
-            hResult = S_OK;
-            break;
-        case DISPID_DOCUMENTCOMPLETE:
-            hResult = S_OK;
+        default:
             break;
     }
     return S_OK;
@@ -1645,7 +1636,6 @@ LRESULT CInternetToolbar::OnMenuDropDown(UINT idControl, NMHDR *pNMHDR, BOOL &bH
     int                                     selectedItem;
     VARIANT                                 parmIn;
     OLECMD                                  commandInfo;
-    HRESULT                                 hResult;
     wchar_t                                 templateString[200];
 
     notifyInfo = (NMTOOLBARW *)pNMHDR;
@@ -1660,59 +1650,58 @@ LRESULT CInternetToolbar::OnMenuDropDown(UINT idControl, NMHDR *pNMHDR, BOOL &bH
     switch (notifyInfo->iItem)
     {
         case IDM_GOTO_BACK:
-            newMenu = CreatePopupMenu();
-            hResult = IUnknown_QueryService(fSite, SID_SShellBrowser, IID_PPV_ARG(IBrowserService, &browserService));
-            hResult = browserService->GetTravelLog(&travelLog);
-            hResult = travelLog->InsertMenuEntries(browserService, newMenu, 0, 1, 9, TLMENUF_BACK);
-            commandInfo.cmdID = 0x1d;
-            hResult = IUnknown_QueryStatus(browserService, CGID_Explorer, 1, &commandInfo, NULL);
-            if ((commandInfo.cmdf & (OLECMDF_ENABLED | OLECMDF_LATCHED)) == OLECMDF_ENABLED &&
-                travelLog->CountEntries(browserService) > 1)
-            {
-                AppendMenuW(newMenu, MF_SEPARATOR, -1, L"");
-
-                if (LoadStringW(_AtlBaseModule.GetResourceInstance(),
-                                IDS_HISTORYTEXT, templateString, sizeof(templateString) / sizeof(wchar_t)) == 0)
-                    StringCbCopyW(templateString, sizeof(templateString), L"&History\tCtrl+H");
-
-                AppendMenuW(newMenu, MF_STRING /* | MF_OWNERDRAW */, IDM_EXPLORERBAR_HISTORY, templateString);
-            }
-            params.cbSize = sizeof(params);
-            params.rcExclude = bounds;
-            selectedItem = TrackPopupMenuEx(newMenu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD,
-                                    bounds.left, bounds.bottom, m_hWnd, &params);
-            if (selectedItem == IDM_EXPLORERBAR_HISTORY)
-            {
-                V_VT(&parmIn) = VT_I4;
-                V_I4(&parmIn) = 1;
-                Exec(&CGID_Explorer, 0x1d, 2, &parmIn, NULL);
-            }
-            else if (selectedItem != 0)
-                hResult = travelLog->Travel(browserService, -selectedItem);
-            DestroyMenu(newMenu);
-            break;
         case IDM_GOTO_FORWARD:
+        {
+            const BOOL browseForward = (notifyInfo->iItem == IDM_GOTO_FORWARD);
+            HRESULT hr;
+
             newMenu = CreatePopupMenu();
-            hResult = IUnknown_QueryService(fSite, SID_SShellBrowser, IID_PPV_ARG(IBrowserService, &browserService));
-            hResult = browserService->GetTravelLog(&travelLog);
-            hResult = travelLog->InsertMenuEntries(browserService, newMenu, 0, 1, 9, TLMENUF_FORE);
+            if (!newMenu)
+                break;
+
+            hr = IUnknown_QueryService(fSite, SID_SShellBrowser, IID_PPV_ARG(IBrowserService, &browserService));
+            if (FAILED_UNEXPECTEDLY(hr))
+            {
+                DestroyMenu(newMenu);
+                break;
+            }
+
+            hr = browserService->GetTravelLog(&travelLog);
+            if (FAILED_UNEXPECTEDLY(hr))
+            {
+                DestroyMenu(newMenu);
+                break;
+            }
+
+            hr = travelLog->InsertMenuEntries(browserService, newMenu, 0, 1, 9,
+                                              browseForward ? TLMENUF_FORE : TLMENUF_BACK);
+            if (FAILED_UNEXPECTEDLY(hr))
+            {
+                DestroyMenu(newMenu);
+                break;
+            }
+
             commandInfo.cmdID = 0x1d;
-            hResult = IUnknown_QueryStatus(browserService, CGID_Explorer, 1, &commandInfo, NULL);
-            if ((commandInfo.cmdf & (OLECMDF_ENABLED | OLECMDF_LATCHED)) == OLECMDF_ENABLED &&
+            hr = IUnknown_QueryStatus(browserService, CGID_Explorer, 1, &commandInfo, NULL);
+            if (SUCCEEDED(hr) &&
+                (commandInfo.cmdf & (OLECMDF_ENABLED | OLECMDF_LATCHED)) == OLECMDF_ENABLED &&
                 travelLog->CountEntries(browserService) > 1)
             {
                 AppendMenuW(newMenu, MF_SEPARATOR, -1, L"");
 
                 if (LoadStringW(_AtlBaseModule.GetResourceInstance(),
                                 IDS_HISTORYTEXT, templateString, sizeof(templateString) / sizeof(wchar_t)) == 0)
+                {
                     StringCbCopyW(templateString, sizeof(templateString), L"&History\tCtrl+H");
+                }
 
                 AppendMenuW(newMenu, MF_STRING /* | MF_OWNERDRAW */, IDM_EXPLORERBAR_HISTORY, templateString);
             }
+
             params.cbSize = sizeof(params);
             params.rcExclude = bounds;
             selectedItem = TrackPopupMenuEx(newMenu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD,
-                                    bounds.left, bounds.bottom, m_hWnd, &params);
+                                            bounds.left, bounds.bottom, m_hWnd, &params);
             if (selectedItem == IDM_EXPLORERBAR_HISTORY)
             {
                 V_VT(&parmIn) = VT_I4;
@@ -1720,21 +1709,30 @@ LRESULT CInternetToolbar::OnMenuDropDown(UINT idControl, NMHDR *pNMHDR, BOOL &bH
                 Exec(&CGID_Explorer, 0x1d, 2, &parmIn, NULL);
             }
             else if (selectedItem != 0)
-                hResult = travelLog->Travel(browserService, selectedItem);
+            {
+                hr = travelLog->Travel(browserService, browseForward ? selectedItem : -selectedItem);
+                FAILED_UNEXPECTEDLY(hr);
+            }
             DestroyMenu(newMenu);
             break;
+        }
         case gViewsCommandID:
+        {
             VARIANT                     inValue;
             CComVariant                 outValue;
-            HRESULT                     hResult;
 
             V_VT(&inValue) = VT_INT_PTR;
             V_INTREF(&inValue) = reinterpret_cast<INT *>(&bounds);
 
             if (fCommandTarget.p != NULL)
-                hResult = fCommandTarget->Exec(&fCommandCategory, FCIDM_SHVIEW_AUTOARRANGE, 1, &inValue, &outValue);
+            {
+                HRESULT hr = fCommandTarget->Exec(&fCommandCategory, FCIDM_SHVIEW_AUTOARRANGE,
+                                                  1, &inValue, &outValue);
+                FAILED_UNEXPECTEDLY(hr);
+            }
             // pvaOut is VT_I4 with value 0x403
             break;
+        }
     }
     return TBDDRET_DEFAULT;
 }

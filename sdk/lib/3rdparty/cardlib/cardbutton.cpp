@@ -358,12 +358,10 @@ CardButton *CardWindow::CreateButton(int id, TCHAR *szText, UINT uStyle, bool fV
 
 void CardButton::SetText(TCHAR *lpszFormat, ...)
 {
-    int count;
-
     va_list args;
     va_start(args, lpszFormat);
 
-    count = wvsprintf(szText, lpszFormat, args);
+    (void)wvsprintf(szText, lpszFormat, args);
     va_end(args);
 }
 

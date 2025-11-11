@@ -28,9 +28,7 @@ NTSTATUS NTAPI FreeBT_DispatchRead(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
     ULONG                   stageLength;
     NTSTATUS                ntStatus;
     ULONG_PTR               virtualAddress;
-    PFILE_OBJECT            fileObject;
     PDEVICE_EXTENSION       deviceExtension;
-    PIO_STACK_LOCATION      irpStack;
     PIO_STACK_LOCATION      nextStack;
     PFREEBT_RW_CONTEXT      rwContext;
     //ULONG                   maxLength=0;
@@ -39,8 +37,6 @@ NTSTATUS NTAPI FreeBT_DispatchRead(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
     mdl = NULL;
     rwContext = NULL;
     totalLength = 0;
-    irpStack = IoGetCurrentIrpStackLocation(Irp);
-    fileObject = irpStack->FileObject;
     deviceExtension = (PDEVICE_EXTENSION) DeviceObject->DeviceExtension;
 
     FreeBT_DbgPrint(3, ("FBTUSB: FreeBT_DispatchRead: Entered\n"));
@@ -258,9 +254,7 @@ NTSTATUS NTAPI FreeBT_DispatchWrite(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
     ULONG                   stageLength;
     NTSTATUS                ntStatus;
     ULONG_PTR               virtualAddress;
-    PFILE_OBJECT            fileObject;
     PDEVICE_EXTENSION       deviceExtension;
-    PIO_STACK_LOCATION      irpStack;
     PIO_STACK_LOCATION      nextStack;
     PFREEBT_RW_CONTEXT      rwContext;
     //ULONG                   maxLength=0;
@@ -269,8 +263,6 @@ NTSTATUS NTAPI FreeBT_DispatchWrite(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
     mdl = NULL;
     rwContext = NULL;
     totalLength = 0;
-    irpStack = IoGetCurrentIrpStackLocation(Irp);
-    fileObject = irpStack->FileObject;
     deviceExtension = (PDEVICE_EXTENSION) DeviceObject->DeviceExtension;
 
     FreeBT_DbgPrint(3, ("FBTUSB: FreeBT_DispatchWrite: Entered\n"));
@@ -540,4 +532,3 @@ NTSTATUS NTAPI FreeBT_WriteCompletion(IN PDEVICE_OBJECT DeviceObject, IN PIRP Ir
     return ntStatus;
 
 }
-

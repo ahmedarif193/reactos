@@ -47,9 +47,6 @@
 #include "basiccrveval.h"
 #include "basicsurfeval.h"
 
-#define NOWIREFRAME
-
-
 /*-------------------------------------------------------------------------
  * bgnsurf - preamble to surface definition and evaluations
  *-------------------------------------------------------------------------

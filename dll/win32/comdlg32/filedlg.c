@@ -333,16 +333,22 @@ static BOOL get_config_key_dword(HKEY hkey, const WCHAR *name, DWORD *value)
 
 static BOOL get_config_key_string(HKEY hkey, const WCHAR *name, WCHAR **value)
 {
-    DWORD type, size;
+    DWORD type, size = 0;
     WCHAR *str;
 
-    if (hkey && !RegQueryValueExW(hkey, name, 0, &type, NULL, &size))
-    {
-        if (type != REG_SZ && type != REG_EXPAND_SZ)
-            return FALSE;
-    }
+    if (!hkey)
+        return FALSE;
+
+    if (RegQueryValueExW(hkey, name, 0, &type, NULL, &size))
+        return FALSE;
+
+    if (type != REG_SZ && type != REG_EXPAND_SZ)
+        return FALSE;
 
     str = heap_alloc(size);
+    if (!str)
+        return FALSE;
+
     if (RegQueryValueExW(hkey, name, 0, &type, (BYTE *)str, &size))
     {
         heap_free(str);
@@ -1158,7 +1164,7 @@ static INT_PTR FILEDLG95_HandleCustomDialogMessages(HWND hwnd, UINT uMsg, WPARAM
 {
     FileOpenDlgInfos *fodInfos = get_filedlg_infoptr(hwnd);
     WCHAR lpstrPath[MAX_PATH];
-    INT_PTR retval;
+    INT_PTR retval = 0;
 
     if(!fodInfos) return FALSE;
 
@@ -1247,6 +1253,7 @@ static INT_PTR FILEDLG95_HandleCustomDialogMessages(HWND hwnd, UINT uMsg, WPARAM
             }
 
             heap_free(olddefext);
+            retval = TRUE;
             break;
         }
 #endif

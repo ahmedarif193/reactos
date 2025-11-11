@@ -14028,8 +14028,6 @@ Return Value:
     NTSTATUS status;
     DEVICE_DATA_SET_RANGE tempDataSetRange;
     BOOLEAN tempDataSetRangeFullyConverted;
-    PUCHAR token;
-    ULONG tokenLength;
     ULONG tokenOperationBufferLength;
     ULONGLONG totalSectorCount;
     ULONGLONG totalSectorsToProcess;
@@ -14053,8 +14051,6 @@ Return Value:
     dataSetRanges = Add2Ptr(dsmAttributes, dsmAttributes->DataSetRangesOffset);
     dataSetRangesCount = dsmAttributes->DataSetRangesLength / sizeof(DEVICE_DATA_SET_RANGE);
     totalSectorsToProcess = 0;
-    token = NULL;
-    tokenLength = 0;
     bufferLength = 0;
     offloadReadContext = NULL;
 
@@ -15101,8 +15097,6 @@ Return Value:
     PDEVICE_DSM_OFFLOAD_WRITE_PARAMETERS offloadWriteParameters;
     ULONG receiveTokenInformationBufferLength;
     NTSTATUS status;
-    NTSTATUS tempStatus;
-    BOOLEAN tokenInvalidated;
     ULONG tokenOperationBufferLength;
     PMDL writeUsingTokenMdl;
 
@@ -15116,7 +15110,6 @@ Return Value:
 
     fdoExt = Fdo->DeviceExtension;
     status = STATUS_SUCCESS;
-    tempStatus = STATUS_SUCCESS;
     dsmAttributes = Irp->AssociatedIrp.SystemBuffer;
     buffer = NULL;
     writeUsingTokenMdl = NULL;
@@ -15124,7 +15117,6 @@ Return Value:
     dataSetRanges = Add2Ptr(dsmAttributes, dsmAttributes->DataSetRangesOffset);
     dataSetRangesCount = dsmAttributes->DataSetRangesLength / sizeof(DEVICE_DATA_SET_RANGE);
     logicalBlockOffset = offloadWriteParameters->TokenOffset / fdoExt->DiskGeometry.BytesPerSector;
-    tokenInvalidated = FALSE;
     bufferLength = 0;
 
 
@@ -15405,7 +15397,6 @@ Return Value:
     ULONGLONG entireXferLen;
     PDEVICE_OBJECT fdo;
     PFUNCTIONAL_DEVICE_EXTENSION fdoExt;
-    PIRP irp;
     ULONG lbaCount;
     ULONG listIdentifier;
     ULONGLONG logicalBlockOffset;
@@ -15433,7 +15424,6 @@ Return Value:
     allDataSetRangeFullyConverted = FALSE;
     fdo = OffloadWriteContext->Fdo;
     fdoExt = fdo->DeviceExtension;
-    irp = OffloadWriteContext->OffloadWriteDsmIrp;
     buffer = OffloadWriteContext + 1;
     bufferLength = OffloadWriteContext->BufferLength;
     dataSetRanges = OffloadWriteContext->DataSetRanges;
@@ -16021,9 +16011,9 @@ Return Value:
     dsmAttributes = OffloadWriteContext->DsmAttributes;
     totalSectorsProcessedSuccessfully = &OffloadWriteContext->TotalSectorsProcessedSuccessfully;
     entireXferLen = OffloadWriteContext->EntireXferLen;
-    irp = OffloadWriteContext->OffloadWriteDsmIrp;
     tokenInvalidated = &OffloadWriteContext->TokenInvalidated;
     listIdentifier = OffloadWriteContext->ListIdentifier;
+    irp = OffloadWriteContext->OffloadWriteDsmIrp;
     totalSectorsProcessed = OffloadWriteContext->TotalSectorsProcessed;
     status = CompletionCausingStatus;
 

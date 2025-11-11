@@ -1742,11 +1742,10 @@ tCopyPacketResult ParaNdis_DoSubmitPacket(PARANDIS_ADAPTER *pContext, tTxOperati
                         PVOID pCopy = ParaNdis_AllocateMemory(pContext, Params->ulDataSize);
                         if (pCopy)
                         {
-                            tTcpIpPacketParsingResult ppr;
                             // duplicate entire packet
                             ParaNdis_PacketCopier(Params->packet, pCopy, Params->ulDataSize, Params->ReferenceValue, FALSE);
                             // calculate complete TCP/UDP checksum
-                            ppr = ParaNdis_CheckSumVerify(
+                            ParaNdis_CheckSumVerify(
                                 RtlOffsetToPointer(pCopy, pContext->Offload.ipHeaderOffset + addPriorityLen),
                                 Params->ulDataSize - pContext->Offload.ipHeaderOffset - addPriorityLen,
                                 pcrAnyChecksum | pcrFixXxpChecksum,

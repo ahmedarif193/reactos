@@ -1593,7 +1593,7 @@ RamdiskCreateDiskDevice(IN PRAMDISK_BUS_EXTENSION DeviceExtension,
 {
     ULONG BasePage, DiskType, Length;
     //ULONG ViewCount;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PDEVICE_OBJECT DeviceObject;
     PRAMDISK_DRIVE_EXTENSION DriveExtension;
     PVOID Buffer;
@@ -1608,6 +1608,9 @@ RamdiskCreateDiskDevice(IN PRAMDISK_BUS_EXTENSION DeviceExtension,
     BOOLEAN IsoImage = FALSE;
 
     CurrentOffset.QuadPart = 0;
+    RtlZeroMemory(&SymbolicLinkName, sizeof(SymbolicLinkName));
+    RtlZeroMemory(&GuidString, sizeof(GuidString));
+    RtlZeroMemory(&DeviceName, sizeof(DeviceName));
 
     DbgPrintEx(DPFLTR_DEFAULT_ID,
                DPFLTR_INFO_LEVEL,

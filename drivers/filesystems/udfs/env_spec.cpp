@@ -249,6 +249,8 @@ try_exit: NOTHING;
     dt = (ULONG)((IoExitTime-IoEnterTime)/10/1000);
     dtm = (ULONG)(((IoExitTime-IoEnterTime)/10)%1000);
     PerfPrint(("\nUDFPhReadSynchronous() exit: %08X, after %d.%4.4d msec.\n", RC, dt, dtm));
+    UNREFERENCED_PARAMETER(dt);
+    UNREFERENCED_PARAMETER(dtm);
 #else
     UDFPrint(("UDFPhReadSynchronous() exit: %08X\n", RC));
 #endif //MEASURE_IO_PERFORMANCE
@@ -410,6 +412,8 @@ try_exit: NOTHING;
     dt = (ULONG)((IoExitTime-IoEnterTime)/10/1000);
     dtm = (ULONG)(((IoExitTime-IoEnterTime)/10)%1000);
     PerfPrint(("\nUDFPhWriteSynchronous() exit: %08X, after %d.%4.4d msec.\n", RC, dt, dtm));
+    UNREFERENCED_PARAMETER(dt);
+    UNREFERENCED_PARAMETER(dtm);
 #else
     UDFPrint(("nUDFPhWriteSynchronous() exit: %08X\n", RC));
 #endif //MEASURE_IO_PERFORMANCE
@@ -631,4 +635,3 @@ UDFNotifyVolumeEvent(
     //FsRtlNotifyVolumeEvent(FileObject, EventCode);
 } // end UDFNotifyVolumeEvent()
 #endif // UDF_DBG
-

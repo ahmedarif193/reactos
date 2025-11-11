@@ -552,7 +552,7 @@ Ext2QueryDirectory (IN PEXT2_IRP_CONTEXT IrpContext)
     UNICODE_STRING          Unicode = { 0 };
     PEXT2_DIR_ENTRY2        pDir = NULL;
 
-    ULONG                   ByteOffset;
+    ULONG                   ByteOffset = 0;
     ULONG                   RecLen = 0;
     ULONG                   EntrySize = 0;
 

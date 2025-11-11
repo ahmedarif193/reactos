@@ -194,7 +194,7 @@ static HRESULT WINAPI d3d8_surface_GetDesc(IDirect3DSurface8 *iface, D3DSURFACE_
     desc->Usage = d3dusage_from_wined3dusage(wined3d_desc.usage);
     desc->Pool = d3dpool_from_wined3daccess(wined3d_desc.access, wined3d_desc.usage);
     desc->Size = wined3d_desc.size;
-    desc->MultiSampleType = wined3d_desc.multisample_type;
+    desc->MultiSampleType = d3d_multisample_type_from_wined3d(wined3d_desc.multisample_type);
     desc->Width = wined3d_desc.width;
     desc->Height = wined3d_desc.height;
 

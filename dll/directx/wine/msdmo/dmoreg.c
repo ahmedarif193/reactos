@@ -518,7 +518,12 @@ static HRESULT WINAPI IEnumDMO_fnNext(
     WCHAR szNextKey[MAX_PATH];
     WCHAR szGuidKey[64];
     WCHAR szKey[MAX_PATH];
-    WCHAR szValue[MAX_PATH];
+    enum { DMO_TYPE_CAPACITY = (MAX_PATH * sizeof(WCHAR) + sizeof(DMO_PARTIAL_MEDIATYPE) - 1) / sizeof(DMO_PARTIAL_MEDIATYPE) };
+    union
+    {
+        WCHAR text[MAX_PATH];
+        DMO_PARTIAL_MEDIATYPE mediaTypes[DMO_TYPE_CAPACITY];
+    } value;
     DWORD len;
     UINT count = 0;
     HRESULT hres = S_OK;
@@ -575,8 +580,8 @@ static HRESULT WINAPI IEnumDMO_fnNext(
             DMO_PARTIAL_MEDIATYPE* pInTypes;
 
             hres = read_types(hkey, szDMOInputType, &cInTypes,
-                    sizeof(szValue)/sizeof(DMO_PARTIAL_MEDIATYPE),
-                    (DMO_PARTIAL_MEDIATYPE*)szValue);
+                    ARRAY_SIZE(value.mediaTypes),
+                    value.mediaTypes);
 
             if (FAILED(hres))
             {
@@ -584,7 +589,7 @@ static HRESULT WINAPI IEnumDMO_fnNext(
                 continue;
             }
 
-            pInTypes = (DMO_PARTIAL_MEDIATYPE *)szValue;
+            pInTypes = value.mediaTypes;
 
             TRACE("read %d intypes for %s:\n", cInTypes, debugstr_w(szKey));
             for (i = 0; i < cInTypes; i++) {
@@ -618,8 +623,8 @@ static HRESULT WINAPI IEnumDMO_fnNext(
             DMO_PARTIAL_MEDIATYPE* pOutTypes;
 
             hres = read_types(hkey, szDMOOutputType, &cOutTypes,
-                    sizeof(szValue)/sizeof(DMO_PARTIAL_MEDIATYPE),
-                    (DMO_PARTIAL_MEDIATYPE*)szValue);
+                    ARRAY_SIZE(value.mediaTypes),
+                    value.mediaTypes);
 
             if (FAILED(hres))
             {
@@ -627,7 +632,7 @@ static HRESULT WINAPI IEnumDMO_fnNext(
                 continue;
             }
 
-            pOutTypes = (DMO_PARTIAL_MEDIATYPE *)szValue;
+            pOutTypes = value.mediaTypes;
 
             TRACE("read %d outtypes for %s:\n", cOutTypes, debugstr_w(szKey));
             for (i = 0; i < cOutTypes; i++) {
@@ -656,21 +661,21 @@ static HRESULT WINAPI IEnumDMO_fnNext(
 
         /* Media object wasn't filtered so add it to return list */
         len = MAX_PATH * sizeof(WCHAR);
-        ret = RegQueryValueExW(hkey, NULL, NULL, NULL, (LPBYTE)szValue, &len);
+        ret = RegQueryValueExW(hkey, NULL, NULL, NULL, (LPBYTE)value.text, &len);
         if (Names)
         {
             Names[count] = NULL;
             if (ret == ERROR_SUCCESS)
             {
-                Names[count] = CoTaskMemAlloc((lstrlenW(szValue) + 1) * sizeof(WCHAR));
+                Names[count] = CoTaskMemAlloc((lstrlenW(value.text) + 1) * sizeof(WCHAR));
                 if (Names[count])
-                    lstrcpyW(Names[count], szValue);
+                    lstrcpyW(Names[count], value.text);
             }
         }
         wsprintfW(szGuidKey,szToGuidFmt,szNextKey);
         CLSIDFromString(szGuidKey, &pCLSID[count]);
 
-        TRACE("found match %s %s\n", debugstr_w(szValue), debugstr_w(szNextKey));
+        TRACE("found match %s %s\n", debugstr_w(value.text), debugstr_w(szNextKey));
         RegCloseKey(hkey);
         count++;
     }

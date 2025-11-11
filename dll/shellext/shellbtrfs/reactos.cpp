@@ -193,7 +193,7 @@ SetFileInformationByHandle(HANDLE hFile,
     }
 
     /* If wrong, bail out */
-    if (FileInfoClass == -1)
+    if (FileInfoClass == (FILE_INFORMATION_CLASS)-1)
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;

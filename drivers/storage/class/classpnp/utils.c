@@ -3213,7 +3213,6 @@ Return Value:
     ULONG                   i;
 
     BOOLEAN                 allDataSetRangeFullyConverted;
-    BOOLEAN                 needToSendCommand;
     BOOLEAN                 tempDataSetRangeFullyConverted;
 
     ULONG                   dataSetRangeIndex;
@@ -3340,7 +3339,6 @@ Return Value:
     blockDescrPointer = &buffer->Descriptors[0];
 
     allDataSetRangeFullyConverted = FALSE;
-    needToSendCommand = FALSE;
     tempDataSetRangeFullyConverted = TRUE;
     dataSetRangeIndex = 0;
     RtlZeroMemory(&tempDataSetRange, sizeof(tempDataSetRange));

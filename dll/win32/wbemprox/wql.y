@@ -28,6 +28,10 @@
 #include "wine/list.h"
 #include "wine/debug.h"
 
+#ifndef YYUSE
+#define YYUSE(x) (void)(x)
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(wbemprox);
 
 struct parser
@@ -217,6 +221,10 @@ static int wql_lex( void *val, struct parser *parser );
 %parse-param { struct parser *ctx }
 %define parse.error verbose
 %define api.pure
+%initial-action
+{
+    YYUSE(yynerrs);
+}
 
 %union
 {

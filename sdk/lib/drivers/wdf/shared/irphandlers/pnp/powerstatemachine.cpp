@@ -5314,10 +5314,11 @@ Return Value:
     m_DevicePowerStateOld = m_DevicePowerState;
 
     //
-    // Set our new state
+    // Set our new state. Ensure the enum fits in the BYTE we store.
     //
-    ASSERT(State <= 0xFF);
-    m_DevicePowerState = (BYTE) State;
+    static_assert(WdfPowerDeviceMaximum <= 0xFF,
+                  "WDF power device states must fit in a BYTE");
+    m_DevicePowerState = (BYTE)State;
 
     //
     // Notify the system of the new power state.

@@ -1268,7 +1268,7 @@ PciDecodeEnable(IN PPCI_PDO_EXTENSION PdoExtension,
                 IN BOOLEAN Enable,
                 OUT PUSHORT Command)
 {
-    USHORT CommandValue;
+    USHORT CommandValue = 0;
 
     /*
      * If decodes are being disabled, make sure it's allowed, and in both cases,
@@ -1287,7 +1287,7 @@ PciDecodeEnable(IN PPCI_PDO_EXTENSION PdoExtension,
         {
             /* Otherwise, read the current command */
             PciReadDeviceConfig(PdoExtension,
-                                &Command,
+                                &CommandValue,
                                 FIELD_OFFSET(PCI_COMMON_HEADER, Command),
                                 sizeof(USHORT));
         }

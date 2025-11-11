@@ -175,7 +175,8 @@ void GetSinkCols(COLORREF crBase, COLORREF *fg, COLORREF *bg, COLORREF *sh1, COL
 
 HBITMAP CreateSinkBmp(HDC hdcCompat, HDC hdc, COLORREF col, int width, int height)
 {
-    HANDLE hold, hpold;
+    HGDIOBJ hold;
+    HPEN hpold;
     HBITMAP hbm = CreateCompatibleBitmap(hdcCompat, width, height);
 
     HPEN hpfg, hpbg, hpsh, hpsh2;
@@ -197,19 +198,19 @@ HBITMAP CreateSinkBmp(HDC hdcCompat, HDC hdc, COLORREF col, int width, int heigh
     hpsh = CreatePen(PS_SOLID, 0, MAKE_PALETTERGB(shadow));
     hpsh2= CreatePen(PS_SOLID, 0, MAKE_PALETTERGB(shadow2));
 
-    hpold = SelectObject(hdc, hpsh);
+    hpold = (HPEN)SelectObject(hdc, hpsh);
     MoveToEx(hdc, 2, 0, NULL);
     LineTo  (hdc, width-3,0);
     LineTo  (hdc, width-1, 2);
 
     SelectObject(hdc, hpold);
-    hpold = SelectObject(hdc, hpsh2);
+    hpold = (HPEN)SelectObject(hdc, hpsh2);
     LineTo  (hdc, width-1, height-3);    //vertical
     LineTo  (hdc, width-3, height-1);
     LineTo  (hdc, 2, height-1);
     LineTo  (hdc, 0, height-3);
     SelectObject(hdc, hpold);
-    hpold = SelectObject(hdc, hpsh);
+    hpold = (HPEN)SelectObject(hdc, hpsh);
 
     //MoveToEx( hdc, 0, height-3,0);
     LineTo  (hdc, 0, 2);
@@ -218,7 +219,7 @@ HBITMAP CreateSinkBmp(HDC hdcCompat, HDC hdc, COLORREF col, int width, int heigh
     SelectObject(hdc, hpold);
 
     //draw the highlight (vertical)
-    hpold = SelectObject(hdc, hpfg);
+    hpold = (HPEN)SelectObject(hdc, hpfg);
     MoveToEx(hdc, width - 2, 3, NULL);
     LineTo  (hdc, width - 2, height - 2);
 
@@ -239,6 +240,8 @@ HBITMAP CreateSinkBmp(HDC hdcCompat, HDC hdc, COLORREF col, int width, int heigh
     DeleteObject(hpfg);
     DeleteObject(hpbg);
 
+    /* Restore original bitmap before returning. */
+    SelectObject(hdc, hold);
 
     return hbm;
 }

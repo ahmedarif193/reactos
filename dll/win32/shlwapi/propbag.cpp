@@ -82,6 +82,9 @@ public:
     }
 
 #if (_WIN32_WINNT < _WIN32_WINNT_VISTA)
+    using IPropertyBag::Read;
+    using IPropertyBag::Write;
+
     // IPropertyBag2 interface (stubs)
     STDMETHODIMP Read(
         _In_ ULONG cProperties,
@@ -95,7 +98,7 @@ public:
     STDMETHODIMP Write(
         _In_ ULONG cProperties,
         _In_ PROPBAG2 *pPropBag,
-        _In_ VARIANT *pvarValue)
+        _In_ VARIANT *pvarValue) override
     {
         return E_NOTIMPL;
     }
@@ -517,7 +520,8 @@ CRegPropertyBag::Write(_In_z_ LPCWSTR pszPropName, _In_ VARIANT *pvari)
 
     HRESULT hr;
     LONG error;
-    VARIANTARG vargTemp = { 0 };
+    VARIANTARG vargTemp;
+    VariantInit(&vargTemp);
     switch (V_VT(pvari))
     {
         case VT_EMPTY:
@@ -933,7 +937,8 @@ CIniPropertyBag::Write(_In_z_ LPCWSTR pszPropName, _In_ VARIANT *pvari)
 
     HRESULT hr;
     BSTR bstr;
-    VARIANTARG vargTemp = { 0 };
+    VARIANTARG vargTemp;
+    VariantInit(&vargTemp);
     switch (V_VT(pvari))
     {
         case VT_EMPTY:

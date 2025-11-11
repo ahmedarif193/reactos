@@ -312,13 +312,19 @@ ScmEnableBackupRestorePrivileges(
     _In_ HANDLE hToken,
     _In_ BOOL bEnable)
 {
-    PTOKEN_PRIVILEGES pTokenPrivileges = NULL;
+    typedef struct _TOKEN_PRIVILEGES_PAIR
+    {
+        DWORD PrivilegeCount;
+        LUID_AND_ATTRIBUTES Privileges[2];
+    } TOKEN_PRIVILEGES_PAIR, *PTOKEN_PRIVILEGES_PAIR;
+
+    PTOKEN_PRIVILEGES_PAIR pTokenPrivileges = NULL;
     DWORD dwSize;
     BOOL bRet = FALSE;
 
     DPRINT("ScmEnableBackupRestorePrivileges(%p %d)\n", hToken, bEnable);
 
-    dwSize = sizeof(TOKEN_PRIVILEGES) + 2 * sizeof(LUID_AND_ATTRIBUTES);
+    dwSize = sizeof(*pTokenPrivileges);
     pTokenPrivileges = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, dwSize);
     if (pTokenPrivileges == NULL)
     {
@@ -334,7 +340,12 @@ ScmEnableBackupRestorePrivileges(
     pTokenPrivileges->Privileges[1].Luid.HighPart = 0;
     pTokenPrivileges->Privileges[1].Attributes = (bEnable ? SE_PRIVILEGE_ENABLED : 0);
 
-    bRet = AdjustTokenPrivileges(hToken, FALSE, pTokenPrivileges, 0, NULL, NULL);
+    bRet = AdjustTokenPrivileges(hToken,
+                                FALSE,
+                                (PTOKEN_PRIVILEGES)pTokenPrivileges,
+                                0,
+                                NULL,
+                                NULL);
     if (!bRet)
     {
         DPRINT1("AdjustTokenPrivileges() failed with error %lu\n", GetLastError());

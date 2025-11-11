@@ -4742,8 +4742,13 @@ HRESULT CDECL wined3d_find_closest_matching_adapter_mode(const struct wined3d *w
     closest = ~0u;
     for (i = 0, j = 0; i < matching_mode_count; ++i)
     {
-        unsigned int d = abs(mode->width - matching_modes[i]->width)
-                + abs(mode->height - matching_modes[i]->height);
+        unsigned int width_diff = mode->width > matching_modes[i]->width
+                ? mode->width - matching_modes[i]->width
+                : matching_modes[i]->width - mode->width;
+        unsigned int height_diff = mode->height > matching_modes[i]->height
+                ? mode->height - matching_modes[i]->height
+                : matching_modes[i]->height - mode->height;
+        unsigned int d = width_diff + height_diff;
 
         if (closest > d)
         {

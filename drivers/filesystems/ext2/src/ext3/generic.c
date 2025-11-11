@@ -737,7 +737,7 @@ Ext2LoadBuffer( IN PEXT2_IRP_CONTEXT    IrpContext,
                 IN PVOID                buf )
 {
     struct buffer_head *bh = NULL;
-    BOOLEAN             rc;
+    BOOLEAN             rc = FALSE;
 
     _SEH2_TRY {
 

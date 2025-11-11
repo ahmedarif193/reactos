@@ -202,7 +202,7 @@ static BOOL	MIDIMAP_LoadSettingsScheme(MIDIMAPDATA* mom, const WCHAR* scheme)
 
 static BOOL	MIDIMAP_LoadSettings(MIDIMAPDATA* mom)
 {
-    HKEY 	hUserKey, hKey;
+	HKEY 	hUserKey = NULL, hKey = NULL;
     DWORD   err;
     BOOL	ret;
 
@@ -226,7 +226,7 @@ static BOOL	MIDIMAP_LoadSettings(MIDIMAPDATA* mom)
 
 	ret = 2;
 	size = sizeof(out);
-	if (!RegQueryValueExA(hKey, "UseScheme", 0, &type, (void*)&out, &size) && out)
+	if (hKey && !RegQueryValueExA(hKey, "UseScheme", 0, &type, (void*)&out, &size) && out)
 	{
             static const WCHAR cs[] = {'C','u','r','r','e','n','t','S','c','h','e','m','e',0};
 	    size = sizeof(buffer);
@@ -244,11 +244,11 @@ static BOOL	MIDIMAP_LoadSettings(MIDIMAPDATA* mom)
 	{
             static const WCHAR ci[] = {'C','u','r','r','e','n','t','I','n','s','t','r','u','m','e','n','t',0};
 	    size = sizeof(buffer);
-	    if (!RegQueryValueExW(hKey, ci, 0, &type, (void*)buffer, &size) && *buffer)
+	    if (hKey && !RegQueryValueExW(hKey, ci, 0, &type, (void*)buffer, &size) && *buffer)
 	    {
 		ret = MIDIMAP_LoadSettingsDefault(mom, buffer);
 	    }
-	    else if (!RegQueryValueExW(hKey, L"szPname", 0, &type, (void*)buffer, &size) && *buffer)
+	    else if (hKey && !RegQueryValueExW(hKey, L"szPname", 0, &type, (void*)buffer, &size) && *buffer)
 	    {
 		/* Windows XP and higher setting */
 		ret = MIDIMAP_LoadSettingsDefault(mom, buffer);
@@ -259,7 +259,8 @@ static BOOL	MIDIMAP_LoadSettings(MIDIMAPDATA* mom)
 	    }
 	}
     }
-    RegCloseKey(hKey);
+	if (hKey)
+	    RegCloseKey(hKey);
 
     if (ret && TRACE_ON(msacm))
     {

@@ -4980,7 +4980,7 @@ Return Value:
     PDIRENT FirstPageDirent = 0;
 
     PBCB SecondPageBcb = NULL;
-    ULONG SecondPageOffset;
+    ULONG SecondPageOffset = 0;
     PDIRENT SecondPageDirent = NULL;
 
     BOOLEAN DirentFromPool = FALSE;
@@ -5087,10 +5087,6 @@ Return Value:
 
         if ((DirentByteOffset / PAGE_SIZE) !=
             ((DirentByteOffset + (DirentsNeeded - 1) * sizeof(DIRENT)) / PAGE_SIZE)) {
-
-            SecondPageBcb;
-            SecondPageOffset;
-            SecondPageDirent;
 
             SecondPageOffset = (DirentByteOffset & ~(PAGE_SIZE - 1)) + PAGE_SIZE;
 
@@ -5707,7 +5703,7 @@ Return Value:
     PDIRENT FirstPageDirent = NULL;
 
     PBCB SecondPageBcb = NULL;
-    ULONG SecondPageOffset;
+    ULONG SecondPageOffset = 0;
     PDIRENT SecondPageDirent = NULL;
 
     BOOLEAN DirentFromPool = FALSE;
@@ -5889,10 +5885,6 @@ Return Value:
 
         if ((DirentByteOffset / PAGE_SIZE) !=
             ((DirentByteOffset + (DirentsNeeded - 1) * sizeof(DIRENT)) / PAGE_SIZE)) {
-
-            SecondPageBcb;
-            SecondPageOffset;
-            SecondPageDirent;
 
             SecondPageOffset = (DirentByteOffset & ~(PAGE_SIZE - 1)) + PAGE_SIZE;
 

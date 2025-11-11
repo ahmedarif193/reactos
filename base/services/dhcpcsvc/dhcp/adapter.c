@@ -295,7 +295,7 @@ DWORD WINAPI AdapterDiscoveryThread(LPVOID Context) {
     HANDLE hStopEvent = (HANDLE)Context;
     struct interface_info *ifi = NULL;
     struct protocol *proto;
-    int i, AdapterCount = 0, Broadcast;
+    int i, Broadcast;
 
     while (TRUE)
     {
@@ -449,7 +449,6 @@ DWORD WINAPI AdapterDiscoveryThread(LPVOID Context) {
 
                     ApiLock();
                     InsertTailList( &AdapterList, &Adapter->ListEntry );
-                    AdapterCount++;
                     SetEvent(hAdapterStateChangedEvent);
                     ApiUnlock();
                 } else { free( Adapter ); Adapter = 0; }

@@ -23,6 +23,10 @@
 
 #include "wine/debug.h"
 
+#ifndef YYUSE
+#define YYUSE(x) (void)(x)
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(vbscript);
 
 static int parser_error(parser_ctx_t *,const char*);
@@ -82,6 +86,10 @@ static statement_t *link_statements(statement_t*,statement_t*);
 %lex-param { parser_ctx_t *ctx }
 %parse-param { parser_ctx_t *ctx }
 %define api.pure
+%initial-action
+{
+    YYUSE(yynerrs);
+}
 %expect 9
 %start Program
 

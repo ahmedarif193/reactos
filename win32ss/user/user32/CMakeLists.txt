@@ -38,6 +38,7 @@ list(APPEND SOURCE
     misc/timer.c
     misc/usrapihk.c
     misc/winhelp.c
+    misc/wvsprintf.c
     misc/winsta.c
     windows/accel.c
     windows/caret.c

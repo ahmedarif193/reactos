@@ -24,6 +24,10 @@
 
 #include "wine/debug.h"
 
+#ifndef YYUSE
+#define YYUSE(x) (void)(x)
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(jscript);
 
 %}

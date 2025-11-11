@@ -273,7 +273,7 @@ Cleanup:
 BOOL WINAPI
 GetFormA(HANDLE hPrinter, PSTR pFormName, DWORD Level, PBYTE pForm, DWORD cbBuf, PDWORD pcbNeeded)
 {
-    DWORD dwErrorCode, len;
+    DWORD dwErrorCode = ERROR_SUCCESS, len;
     LPWSTR FormNameW = NULL;
     PFORM_INFO_1W pfi1w = (PFORM_INFO_1W)pForm;
     PFORM_INFO_2W pfi2w = (PFORM_INFO_2W)pForm;
@@ -287,42 +287,51 @@ GetFormA(HANDLE hPrinter, PSTR pFormName, DWORD Level, PBYTE pForm, DWORD cbBuf,
         MultiByteToWideChar(CP_ACP, 0, pFormName, -1, FormNameW, len);
     }
 
-    if ( GetFormW( hPrinter, FormNameW, Level, pForm, cbBuf, pcbNeeded ) )
+    if (!GetFormW(hPrinter, FormNameW, Level, pForm, cbBuf, pcbNeeded))
     {
-        switch ( Level )
-        {
-            case 2:
-                dwErrorCode = UnicodeToAnsiInPlace((LPWSTR)pfi2w->pKeyword);
-                if (dwErrorCode != ERROR_SUCCESS)
-                {
-                    goto Cleanup;
-                }
-                dwErrorCode = UnicodeToAnsiInPlace((LPWSTR)pfi2w->pMuiDll);
-                if (dwErrorCode != ERROR_SUCCESS)
-                {
-                    goto Cleanup;
-                }
-                dwErrorCode = UnicodeToAnsiInPlace((LPWSTR)pfi2w->pDisplayName);
-                if (dwErrorCode != ERROR_SUCCESS)
-                {
-                    goto Cleanup;
-                }
-                dwErrorCode = UnicodeToAnsiInPlace(pfi2w->pName);
-                if (dwErrorCode != ERROR_SUCCESS)
-                {
-                    goto Cleanup;
-                }
-                break;
-            case 1:
-                dwErrorCode = UnicodeToAnsiInPlace(pfi1w->pName);
-                if (dwErrorCode != ERROR_SUCCESS)
-                {
-                    goto Cleanup;
-                }
-        }
+        dwErrorCode = GetLastError();
+        goto Cleanup;
+    }
+
+    switch (Level)
+    {
+        case 2:
+            dwErrorCode = UnicodeToAnsiInPlace((LPWSTR)pfi2w->pKeyword);
+            if (dwErrorCode != ERROR_SUCCESS)
+            {
+                goto Cleanup;
+            }
+            dwErrorCode = UnicodeToAnsiInPlace((LPWSTR)pfi2w->pMuiDll);
+            if (dwErrorCode != ERROR_SUCCESS)
+            {
+                goto Cleanup;
+            }
+            dwErrorCode = UnicodeToAnsiInPlace((LPWSTR)pfi2w->pDisplayName);
+            if (dwErrorCode != ERROR_SUCCESS)
+            {
+                goto Cleanup;
+            }
+            dwErrorCode = UnicodeToAnsiInPlace(pfi2w->pName);
+            if (dwErrorCode != ERROR_SUCCESS)
+            {
+                goto Cleanup;
+            }
+            break;
+        case 1:
+            dwErrorCode = UnicodeToAnsiInPlace(pfi1w->pName);
+            if (dwErrorCode != ERROR_SUCCESS)
+            {
+                goto Cleanup;
+            }
+            break;
+        default:
+            break;
     }
 Cleanup:
-    if (FormNameW) HeapFree(GetProcessHeap(), 0, FormNameW);
+    if (FormNameW)
+        HeapFree(GetProcessHeap(), 0, FormNameW);
+    if (dwErrorCode != ERROR_SUCCESS)
+        SetLastError(dwErrorCode);
     return (dwErrorCode == ERROR_SUCCESS);
 }
 

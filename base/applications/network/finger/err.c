@@ -92,9 +92,7 @@ warn(const char *fmt, ...)
 }
 
 void
-vwarn(fmt, ap)
-	const char *fmt;
-	va_list ap;
+vwarn(const char *fmt, va_list ap)
 {
 	int sverrno;
 
@@ -117,9 +115,7 @@ warnx(const char *fmt, ...)
 }
 
 void
-vwarnx(fmt, ap)
-	const char *fmt;
-	va_list ap;
+vwarnx(const char *fmt, va_list ap)
 {
 	(void)fprintf(stderr, "%s: ", __progname);
 	if (fmt != NULL)

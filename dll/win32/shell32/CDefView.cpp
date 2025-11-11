@@ -1551,15 +1551,22 @@ HRESULT CDefView::FillList(BOOL IsRefreshCommand)
 
     SHELLSTATE shellstate;
     SHGetSetSettings(&shellstate, SSF_SHOWALLOBJECTS | SSF_SHOWSUPERHIDDEN, FALSE);
-    if (GetCommDlgViewFlags() & CDB2GVF_SHOWALLFILES)
-        shellstate.fShowAllObjects = shellstate.fShowSuperHidden = TRUE;
 
-    if (shellstate.fShowAllObjects)
+    BOOL showAllObjects = shellstate.fShowAllObjects;
+    BOOL showSuperHidden = shellstate.fShowSuperHidden;
+
+    if (GetCommDlgViewFlags() & CDB2GVF_SHOWALLFILES)
+    {
+        showAllObjects = TRUE;
+        showSuperHidden = TRUE;
+    }
+
+    if (showAllObjects)
     {
         dFlags |= SHCONTF_INCLUDEHIDDEN;
         m_ListView.SendMessageW(LVM_SETCALLBACKMASK, LVIS_CUT, 0);
     }
-    if (shellstate.fShowSuperHidden)
+    if (showSuperHidden)
     {
         dFlags |= SHCONTF_INCLUDESUPERHIDDEN;
         m_ListView.SendMessageW(LVM_SETCALLBACKMASK, LVIS_CUT, 0);

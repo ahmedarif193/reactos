@@ -100,11 +100,11 @@ public:
     STDMETHOD(Initialize)(PCIDLIST_ABSOLUTE pidl, PCWSTR ntPath, HKEY hRoot);
 
 protected:
-    STDMETHOD(CompareIDs)(LPARAM lParam, const RegPidlEntry * first, const RegPidlEntry * second);
-    STDMETHOD_(ULONG, ConvertAttributes)(const RegPidlEntry * entry, PULONG inMask);
-    STDMETHOD_(BOOL, IsFolder)(const RegPidlEntry * info);
+    STDMETHOD(CompareIDs)(LPARAM lParam, const RegPidlEntry * first, const RegPidlEntry * second) override;
+    STDMETHOD_(ULONG, ConvertAttributes)(const RegPidlEntry * entry, PULONG inMask) override;
+    STDMETHOD_(BOOL, IsFolder)(const RegPidlEntry * info) override;
 
-    virtual HRESULT GetInfoFromPidl(LPCITEMIDLIST pcidl, const RegPidlEntry ** pentry);
+    virtual HRESULT GetInfoFromPidl(LPCITEMIDLIST pcidl, const RegPidlEntry ** pentry) override;
 
     HRESULT FormatValueData(DWORD contentType, PVOID td, DWORD contentsLength, PCWSTR * strContents);
 

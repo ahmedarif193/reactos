@@ -27,6 +27,8 @@ static const LPCWSTR s_pszExplorerKey = REGSTR_PATH_EXPLORER;
 
 enum { UNDERLINE_ON, UNDERLINE_OFF, UNDERLINE_HOVER, UNDERLINE_IE };
 
+static const BOOL SHELLSTATE_TRUE = (BOOL)-1;
+
 /////////////////////////////////////////////////////////////////////////////
 // Shell settings
 
@@ -34,12 +36,12 @@ EXTERN_C void
 SHELL32_GetDefaultShellState(LPSHELLSTATE pss)
 {
     ZeroMemory(pss, sizeof(*pss));
-    pss->fShowAllObjects = TRUE;
-    pss->fShowExtensions = TRUE;
-    pss->fShowCompColor = TRUE;
-    pss->fDoubleClickInWebView = TRUE;
-    pss->fShowAttribCol = TRUE; // ROS defaults to Details view with this column on
-    pss->fShowInfoTip = TRUE;
+    pss->fShowAllObjects = SHELLSTATE_TRUE;
+    pss->fShowExtensions = SHELLSTATE_TRUE;
+    pss->fShowCompColor = SHELLSTATE_TRUE;
+    pss->fDoubleClickInWebView = SHELLSTATE_TRUE;
+    pss->fShowAttribCol = SHELLSTATE_TRUE; // ROS defaults to Details view with this column on
+    pss->fShowInfoTip = SHELLSTATE_TRUE;
     pss->fShowSuperHidden = FALSE;
     pss->lParamSort = SHFSF_COL_NAME;
     pss->iSortDirection = 1;

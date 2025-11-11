@@ -37,6 +37,26 @@
 #include "d3d8.h"
 #include "wine/wined3d.h"
 
+static inline enum wined3d_multisample_type wined3d_multisample_type_from_d3d(D3DMULTISAMPLE_TYPE type)
+{
+    return (enum wined3d_multisample_type)type;
+}
+
+static inline D3DMULTISAMPLE_TYPE d3d_multisample_type_from_wined3d(enum wined3d_multisample_type type)
+{
+    return (D3DMULTISAMPLE_TYPE)type;
+}
+
+static inline enum wined3d_device_type wined3d_device_type_from_d3ddevtype(D3DDEVTYPE type)
+{
+    return (enum wined3d_device_type)type;
+}
+
+static inline D3DDEVTYPE d3d_device_type_from_wined3d(enum wined3d_device_type type)
+{
+    return (D3DDEVTYPE)type;
+}
+
 #define D3DPRESENTFLAGS_MASK 0x00000fffu
 
 /* CreateVertexShader can return > 0xFFFF */

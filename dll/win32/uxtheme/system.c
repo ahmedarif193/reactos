@@ -665,7 +665,7 @@ typedef HRESULT (WINAPI* DWMISCOMPOSITIONENABLED)(BOOL *enabled);
 BOOL WINAPI IsCompositionActive(void)
 {
     BOOL bIsCompositionActive;
-    DWMISCOMPOSITIONENABLED pDwmIsCompositionEnabled;
+    DWMISCOMPOSITIONENABLED pDwmIsCompositionEnabled = NULL;
     HMODULE hdwmapi = GetModuleHandleW(L"dwmapi.dll");
 
     if (!hdwmapi)
@@ -676,9 +676,9 @@ BOOL WINAPI IsCompositionActive(void)
             ERR("Failed to load dwmapi\n");
             return FALSE;
         }
-
-        pDwmIsCompositionEnabled = (DWMISCOMPOSITIONENABLED)GetProcAddress(hdwmapi, "DwmIsCompositionEnabled");
     }
+
+    pDwmIsCompositionEnabled = (DWMISCOMPOSITIONENABLED)GetProcAddress(hdwmapi, "DwmIsCompositionEnabled");
     if (!pDwmIsCompositionEnabled)
         return FALSE;
     

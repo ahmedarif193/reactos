@@ -224,7 +224,9 @@ static HRESULT WINAPI d3d8_CheckDeviceType(IDirect3D8 *iface, UINT adapter, D3DD
         return WINED3DERR_NOTAVAILABLE;
 
     wined3d_mutex_lock();
-    hr = wined3d_check_device_type(d3d8->wined3d, adapter, device_type, wined3dformat_from_d3dformat(display_format),
+    hr = wined3d_check_device_type(d3d8->wined3d, adapter,
+            wined3d_device_type_from_d3ddevtype(device_type),
+            wined3dformat_from_d3dformat(display_format),
             wined3dformat_from_d3dformat(backbuffer_format), windowed);
     wined3d_mutex_unlock();
 
@@ -275,7 +277,9 @@ static HRESULT WINAPI d3d8_CheckDeviceFormat(IDirect3D8 *iface, UINT adapter, D3
     }
 
     wined3d_mutex_lock();
-    hr = wined3d_check_device_format(d3d8->wined3d, adapter, device_type, wined3dformat_from_d3dformat(adapter_format),
+    hr = wined3d_check_device_format(d3d8->wined3d, adapter,
+            wined3d_device_type_from_d3ddevtype(device_type),
+            wined3dformat_from_d3dformat(adapter_format),
             usage, wined3d_rtype, wined3dformat_from_d3dformat(format));
     wined3d_mutex_unlock();
 
@@ -295,9 +299,10 @@ static HRESULT WINAPI d3d8_CheckDeviceMultiSampleType(IDirect3D8 *iface, UINT ad
         return D3DERR_INVALIDCALL;
 
     wined3d_mutex_lock();
-    hr = wined3d_check_device_multisample_type(d3d8->wined3d, adapter, device_type,
+    hr = wined3d_check_device_multisample_type(d3d8->wined3d, adapter,
+            wined3d_device_type_from_d3ddevtype(device_type),
             wined3dformat_from_d3dformat(format), windowed,
-            (enum wined3d_multisample_type)multisample_type, NULL);
+            wined3d_multisample_type_from_d3d(multisample_type), NULL);
     wined3d_mutex_unlock();
 
     return hr;
@@ -313,7 +318,8 @@ static HRESULT WINAPI d3d8_CheckDepthStencilMatch(IDirect3D8 *iface, UINT adapte
             iface, adapter, device_type, adapter_format, rt_format, ds_format);
 
     wined3d_mutex_lock();
-    hr = wined3d_check_depth_stencil_match(d3d8->wined3d, adapter, device_type,
+    hr = wined3d_check_depth_stencil_match(d3d8->wined3d, adapter,
+            wined3d_device_type_from_d3ddevtype(device_type),
             wined3dformat_from_d3dformat(adapter_format), wined3dformat_from_d3dformat(rt_format),
             wined3dformat_from_d3dformat(ds_format));
     wined3d_mutex_unlock();
@@ -333,7 +339,8 @@ static HRESULT WINAPI d3d8_GetDeviceCaps(IDirect3D8 *iface, UINT adapter, D3DDEV
         return D3DERR_INVALIDCALL;
 
     wined3d_mutex_lock();
-    hr = wined3d_get_device_caps(d3d8->wined3d, adapter, device_type, &wined3d_caps);
+    hr = wined3d_get_device_caps(d3d8->wined3d, adapter,
+            wined3d_device_type_from_d3ddevtype(device_type), &wined3d_caps);
     wined3d_mutex_unlock();
 
     d3dcaps_from_wined3dcaps(caps, &wined3d_caps);

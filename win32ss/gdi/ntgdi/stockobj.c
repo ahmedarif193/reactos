@@ -116,7 +116,7 @@ IntCreateStockPen(DWORD dwPenStyle,
     if ((dwPenStyle & PS_STYLE_MASK) == PS_NULL) dwWidth = 1;
 
     pbrushPen->iHatch = 0;
-    pbrushPen->lWidth = abs(dwWidth);
+    pbrushPen->lWidth = (LONG)dwWidth;
     FLOATOBJ_SetLong(&pbrushPen->eWidth, pbrushPen->lWidth);
     pbrushPen->ulPenStyle = dwPenStyle;
     pbrushPen->BrushAttr.lbColor = ulColor;

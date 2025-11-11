@@ -727,7 +727,7 @@ SetDIBitsToDevice(
     UINT cjBmpScanSize = 0;
     BOOL Hit = FALSE;
     PVOID pvSafeBits = (PVOID) Bits;
-    UINT bmiHeight;
+    UINT bmiHeight, destHeight;
     BOOL top_down;
     INT src_y = 0;
     ULONG iFormat, cBitsPixel, cjBits, cjWidth;
@@ -937,9 +937,10 @@ SetDIBitsToDevice(
     }
 
     /* Calculation of ScanLines for NtGdiSetDIBitsToDeviceInternal */
+    destHeight = Height;
     if (YDest >= 0)
     {
-        ScanLines = min(abs(Height), ScanLines);
+        ScanLines = min(destHeight, ScanLines);
         if (YSrc > 0)
             ScanLines += YSrc;
     }
@@ -984,7 +985,7 @@ SetDIBitsToDevice(
 
     if (YDest >= 0)
     {
-        ScanLines = min(abs(Height), ScanLines);
+        ScanLines = min(destHeight, ScanLines);
         if (YSrc > 0)
         {
             ScanLines += YSrc;
@@ -1214,5 +1215,3 @@ ClearBitmapAttributes(HBITMAP hbm, DWORD dwFlags)
     }
     return NtGdiClearBitmapAttributes( hbm, dwFlags );;
 }
-
-

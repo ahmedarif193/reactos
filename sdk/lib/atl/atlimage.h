@@ -933,34 +933,69 @@ private:
             if (m_dwToken == 0)
             {
                 if (!m_hInst)
+                {
                     m_hInst = ::LoadLibrary(TEXT("gdiplus.dll"));
+                    if (!m_hInst)
+                        m_dwLastError = ::GetLastError();
+                }
 
-                if (m_hInst &&
-                    _get_fun(Startup, "GdiplusStartup") &&
-                    _get_fun(Shutdown, "GdiplusShutdown") &&
-                    _get_fun(CreateBitmapFromFile, "GdipCreateBitmapFromFile") &&
-                    _get_fun(CreateBitmapFromHBITMAP, "GdipCreateBitmapFromHBITMAP") &&
-                    _get_fun(CreateBitmapFromStream, "GdipCreateBitmapFromStream") &&
-                    _get_fun(CreateHBITMAPFromBitmap, "GdipCreateHBITMAPFromBitmap") &&
-                    _get_fun(DisposeImage, "GdipDisposeImage") &&
-                    _get_fun(GetImageDecoders, "GdipGetImageDecoders") &&
-                    _get_fun(GetImageDecodersSize, "GdipGetImageDecodersSize") &&
-                    _get_fun(GetImageEncoders, "GdipGetImageEncoders") &&
-                    _get_fun(GetImageEncodersSize, "GdipGetImageEncodersSize") &&
-                    _get_fun(SaveImageToFile, "GdipSaveImageToFile") &&
-                    _get_fun(SaveImageToStream, "GdipSaveImageToStream"))
+                bool have_funcs = false;
+                if (m_hInst)
+                {
+                    have_funcs =
+                        _get_fun(Startup, "GdiplusStartup") &&
+                        _get_fun(Shutdown, "GdiplusShutdown") &&
+                        _get_fun(CreateBitmapFromFile, "GdipCreateBitmapFromFile") &&
+                        _get_fun(CreateBitmapFromHBITMAP, "GdipCreateBitmapFromHBITMAP") &&
+                        _get_fun(CreateBitmapFromStream, "GdipCreateBitmapFromStream") &&
+                        _get_fun(CreateHBITMAPFromBitmap, "GdipCreateHBITMAPFromBitmap") &&
+                        _get_fun(DisposeImage, "GdipDisposeImage") &&
+                        _get_fun(GetImageDecoders, "GdipGetImageDecoders") &&
+                        _get_fun(GetImageDecodersSize, "GdipGetImageDecodersSize") &&
+                        _get_fun(GetImageEncoders, "GdipGetImageEncoders") &&
+                        _get_fun(GetImageEncodersSize, "GdipGetImageEncodersSize") &&
+                        _get_fun(SaveImageToFile, "GdipSaveImageToFile") &&
+                        _get_fun(SaveImageToStream, "GdipSaveImageToStream");
+                    if (!have_funcs)
+                        m_dwLastError = ::GetLastError();
+                }
+
+                if (have_funcs)
                 {
                     using namespace Gdiplus;
                     GdiplusStartupInput input;
                     GdiplusStartupOutput output;
-                    Startup(&m_dwToken, &input, &output);
+                    Status status = Startup(&m_dwToken, &input, &output);
+                    if (status == Ok)
+                        m_dwLastError = ERROR_SUCCESS;
+                    else
+                    {
+                        m_dwToken = 0;
+                        m_dwLastError = static_cast<DWORD>(status);
+                    }
                 }
             }
 
             bool ret = (m_dwToken != 0);
+            if (!ret)
+            {
+                if (m_dwLastError == ERROR_SUCCESS)
+                    m_dwLastError = ERROR_GEN_FAILURE;
+                ::SetLastError(m_dwLastError);
+            }
+            else
+            {
+                m_dwLastError = ERROR_SUCCESS;
+            }
+
             ::LeaveCriticalSection(&m_sect);
 
             return ret;
+        }
+
+        DWORD GetInitError() const noexcept
+        {
+            return m_dwLastError;
         }
 
         void ReleaseGDIPlus() noexcept
@@ -979,6 +1014,7 @@ private:
                 m_hInst = NULL;
             }
             _clear_funs();
+            m_dwLastError = ERROR_SUCCESS;
             ::LeaveCriticalSection(&m_sect);
         }
 

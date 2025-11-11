@@ -6764,24 +6764,6 @@ NtGdiGetFontFamilyInfo(
     return GotCount;
 }
 
-static inline
-LONG
-ScaleLong(LONG lValue, PFLOATOBJ pef)
-{
-    FLOATOBJ efTemp;
-
-    /* Check if we have scaling different from 1 */
-    if (!FLOATOBJ_Equal(pef, (PFLOATOBJ)&gef1))
-    {
-        /* Need to multiply */
-        FLOATOBJ_SetLong(&efTemp, lValue);
-        FLOATOBJ_Mul(&efTemp, pef);
-        lValue = FLOATOBJ_GetLong(&efTemp);
-    }
-
-    return lValue;
-}
-
 /*
  * Calculate X and Y disposition of the text.
  * NOTE: The disposition can be negative.

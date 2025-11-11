@@ -7,6 +7,8 @@
 
 #include <ddkmapi.h>
 
+typedef VOID (NTAPI *PDXAPI_FUNCTION)(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+
 /* Prototypes */
 VOID DxGetVersionNumber(PVOID lpvInBuffer, LPDDGETVERSIONNUMBER lpvOutBuffer);
 VOID DxCloseHandle(PVOID lpvInBuffer, PVOID lpvOutBuffer);

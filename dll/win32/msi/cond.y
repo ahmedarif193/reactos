@@ -150,11 +150,13 @@ condition:
         {
             COND_input* cond = (COND_input*) info;
             cond->result = $1;
+            YY_USE(yynerrs);
         }
   | /* empty */
         {
             COND_input* cond = (COND_input*) info;
             cond->result = MSICONDITION_NONE;
+            YY_USE(yynerrs);
         }
     ;
 

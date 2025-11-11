@@ -186,7 +186,7 @@ static void set_blocking( struct netconn *conn, BOOL blocking )
 struct netconn *netconn_create( struct hostdata *host, const struct sockaddr_storage *sockaddr, int timeout )
 {
     struct netconn *conn;
-    unsigned int addr_len;
+    unsigned int addr_len = 0;
     BOOL ret = FALSE;
 
 #ifndef __REACTOS__

@@ -114,7 +114,7 @@ DxApi(IN DWORD dwFunctionNum,
         return 0;
     }
 
-    gDxApiEntryPoint[dwFunctionNum].pfn(lpvInBuffer, lpvOutBuffer);
+    ((PDXAPI_FUNCTION)gDxApiEntryPoint[dwFunctionNum].pfn)(lpvInBuffer, lpvOutBuffer);
     return 0;
 }
 
@@ -320,6 +320,5 @@ DxFlushVpCaptureBuffs(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
-
 
 

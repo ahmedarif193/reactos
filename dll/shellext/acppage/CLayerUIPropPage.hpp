@@ -21,11 +21,11 @@ public:
     ~CLayerUIPropPage();
 
     // IShellExtInit
-    STDMETHODIMP Initialize(PCIDLIST_ABSOLUTE pidlFolder, LPDATAOBJECT pdtobj, HKEY hkeyProgID);
+    STDMETHODIMP Initialize(PCIDLIST_ABSOLUTE pidlFolder, LPDATAOBJECT pdtobj, HKEY hkeyProgID) override;
 
 
     // IShellPropSheetExt
-    STDMETHODIMP AddPages(LPFNADDPROPSHEETPAGE pfnAddPage, LPARAM lParam)
+    STDMETHODIMP AddPages(LPFNADDPROPSHEETPAGE pfnAddPage, LPARAM lParam) override
     {
         HPROPSHEETPAGE hPage = Create();
         if (hPage && !pfnAddPage(hPage, lParam))
@@ -34,7 +34,7 @@ public:
         return S_OK;
     }
 
-    STDMETHODIMP ReplacePage(UINT, LPFNADDPROPSHEETPAGE, LPARAM)
+    STDMETHODIMP ReplacePage(UINT, LPFNADDPROPSHEETPAGE, LPARAM) override
     {
         return E_NOTIMPL;
     }

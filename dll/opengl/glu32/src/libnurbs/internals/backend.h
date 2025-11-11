@@ -36,6 +36,15 @@
 #ifndef __glubackend_h_
 #define __glubackend_h_
 
+/*
+ * Wireframe rendering paths are currently disabled by default to match the
+ * existing backend implementation.  Define GLU_ENABLE_WIREFRAME before
+ * including this header to re-enable the legacy code paths.
+ */
+#if !defined(GLU_ENABLE_WIREFRAME) && !defined(NOWIREFRAME)
+#define NOWIREFRAME
+#endif
+
 //#include "trimvertex.h"
 //#include "gridvertex.h"
 #include "gridtrimvertex.h"
@@ -101,9 +110,9 @@ public:
     void		endline( void );
     void		endcurv( void );
 private:
-#ifndef NOWIREFRAME
     int			wireframetris;
     int			wireframequads;
+#ifndef NOWIREFRAME
     int			npts;
     REAL		mesh[3][4];
     int			meshindex;

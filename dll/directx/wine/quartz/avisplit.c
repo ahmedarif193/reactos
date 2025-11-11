@@ -161,9 +161,9 @@ static HRESULT AVISplitter_next_request(AVISplitterImpl *This, DWORD streamnumbe
 
     if (SUCCEEDED(hr))
     {
-        LONGLONG rtSampleStart;
+        LONGLONG rtSampleStart = 0;
         /* Add 4 for the next header, which should hopefully work */
-        LONGLONG rtSampleStop;
+        LONGLONG rtSampleStop = 0;
 
         stream->pos = stream->pos_next;
         stream->index = stream->index_next;

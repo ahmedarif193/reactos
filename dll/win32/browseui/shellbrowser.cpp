@@ -4061,49 +4061,43 @@ LRESULT CShellBrowser::OnToggleStatusBarVisible(WORD wNotifyCode, WORD wID, HWND
 
 LRESULT CShellBrowser::OnToggleToolbarLock(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL &bHandled)
 {
-    HRESULT hResult;
-    hResult = IUnknown_Exec(fClientBars[BIInternetToolbar].clientBar,
-                            CGID_PrivCITCommands, ITID_TOOLBARLOCKED, 0, NULL, NULL);
+    (void)IUnknown_Exec(fClientBars[BIInternetToolbar].clientBar,
+                        CGID_PrivCITCommands, ITID_TOOLBARLOCKED, 0, NULL, NULL);
     return 0;
 }
 
 LRESULT CShellBrowser::OnToggleToolbarBandVisible(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL &bHandled)
 {
-    HRESULT hResult;
-    hResult = IUnknown_Exec(fClientBars[BIInternetToolbar].clientBar,
-                            CGID_PrivCITCommands, ITID_TOOLBARBANDSHOWN, 0, NULL, NULL);
+    (void)IUnknown_Exec(fClientBars[BIInternetToolbar].clientBar,
+                        CGID_PrivCITCommands, ITID_TOOLBARBANDSHOWN, 0, NULL, NULL);
     return 0;
 }
 
 LRESULT CShellBrowser::OnToggleAddressBandVisible(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL &bHandled)
 {
-    HRESULT hResult;
-    hResult = IUnknown_Exec(fClientBars[BIInternetToolbar].clientBar,
-                            CGID_PrivCITCommands, ITID_ADDRESSBANDSHOWN, 0, NULL, NULL);
+    (void)IUnknown_Exec(fClientBars[BIInternetToolbar].clientBar,
+                        CGID_PrivCITCommands, ITID_ADDRESSBANDSHOWN, 0, NULL, NULL);
     return 0;
 }
 
 LRESULT CShellBrowser::OnToggleLinksBandVisible(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL &bHandled)
 {
-    HRESULT hResult;
-    hResult = IUnknown_Exec(fClientBars[BIInternetToolbar].clientBar,
-                            CGID_PrivCITCommands, ITID_LINKSBANDSHOWN, 0, NULL, NULL);
+    (void)IUnknown_Exec(fClientBars[BIInternetToolbar].clientBar,
+                        CGID_PrivCITCommands, ITID_LINKSBANDSHOWN, 0, NULL, NULL);
     return 0;
 }
 
 LRESULT CShellBrowser::OnToggleTextLabels(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL &bHandled)
 {
-    HRESULT hResult;
-    hResult = IUnknown_Exec(fClientBars[BIInternetToolbar].clientBar,
-                            CGID_PrivCITCommands, ITID_TEXTLABELS, 0, NULL, NULL);
+    (void)IUnknown_Exec(fClientBars[BIInternetToolbar].clientBar,
+                        CGID_PrivCITCommands, ITID_TEXTLABELS, 0, NULL, NULL);
     return 0;
 }
 
 LRESULT CShellBrowser::OnToolbarCustomize(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL &bHandled)
 {
-    HRESULT hResult;
-    hResult = IUnknown_Exec(fClientBars[BIInternetToolbar].clientBar,
-                            CGID_PrivCITCommands, ITID_CUSTOMIZEENABLED, 0, NULL, NULL);
+    (void)IUnknown_Exec(fClientBars[BIInternetToolbar].clientBar,
+                        CGID_PrivCITCommands, ITID_CUSTOMIZEENABLED, 0, NULL, NULL);
     return 0;
 }
 

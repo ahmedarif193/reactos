@@ -129,7 +129,13 @@ typedef struct ext3_dir_entry_2 EXT2_DIR_ENTRY2, *PEXT2_DIR_ENTRY2;
  *
  */
 
-#define CL_ASSERT(cond) do {switch('x') {case (cond): case 0: break;}} while (0)
+#ifndef C_ASSERT
+#define __CL_ASSERT_GLUE(a, b) a##b
+#define _CL_ASSERT_GLUE(a, b) __CL_ASSERT_GLUE(a, b)
+#define C_ASSERT(expr) typedef char _CL_ASSERT_GLUE(__cl_static_assert_, __LINE__)[(expr) ? 1 : -1]
+#endif
+
+#define CL_ASSERT(cond) C_ASSERT(cond)
 
 /* File System Releated *************************************************/
 

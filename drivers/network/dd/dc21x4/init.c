@@ -700,7 +700,9 @@ DcInitializeAdapterResources(
                                AssignedResources,
                                &ResourceListSize);
     if (Status != NDIS_STATUS_SUCCESS)
+    {
         goto Cleanup;
+    }
 
     for (i = 0; i < AssignedResources->Count; ++i)
     {
@@ -761,7 +763,9 @@ DcInitializeAdapterResources(
         Adapter->Flags |= DC_IO_MAPPED;
     }
     if (Status != NDIS_STATUS_SUCCESS)
+    {
         goto Cleanup;
+    }
 
     INFO("IO Base %p\n", Adapter->IoBase);
     INFO("IRQ Level %u, Vector %u\n",

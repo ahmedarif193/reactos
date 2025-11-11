@@ -173,6 +173,7 @@ function(setup_host_tools)
             CMAKE_COMMAND ${HOST_TOOLS_CMAKE_COMMAND}
             CMAKE_ARGS
                 -UCMAKE_TOOLCHAIN_FILE
+                -DCMAKE_RULE_MESSAGES:BOOL=OFF
                 -DARCH:STRING=${ARCH}
                 -DWOW64_MULTILIB=OFF
                 -DCMAKE_INSTALL_PREFIX=${REACTOS_BINARY_DIR}/host-tools

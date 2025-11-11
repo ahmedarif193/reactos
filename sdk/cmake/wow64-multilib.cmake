@@ -74,6 +74,21 @@ if(_i386_gxx)
     unset(_i386_libstdcxx_dir)
 endif()
 
+# Ensure winpthread is available to all i386 subbuild link lines when using GCC's POSIX threading model.
+# This mirrors the top-level toolchain behavior that adds libwinpthread via imported targets.
+execute_process(
+    COMMAND ${_i386_gxx} -m32 -print-file-name=libwinpthread.a
+    OUTPUT_VARIABLE _i386_libwinpthread_location
+    ERROR_QUIET)
+string(STRIP "${_i386_libwinpthread_location}" _i386_libwinpthread_location)
+if(_i386_libwinpthread_location AND EXISTS "${_i386_libwinpthread_location}")
+    get_filename_component(_i386_libwinpthread_dir "${_i386_libwinpthread_location}" DIRECTORY)
+    # Place winpthread before C runtime libs so its dependencies can be resolved from the group
+    set(_i386_stdlibs "-L${_i386_libwinpthread_dir} -lwinpthread ${_i386_stdlibs}")
+endif()
+unset(_i386_libwinpthread_location)
+unset(_i386_libwinpthread_dir)
+
 set(_i386_compiler_args)
 if(NOT CMAKE_TOOLCHAIN_FILE)
     list(APPEND _i386_compiler_args

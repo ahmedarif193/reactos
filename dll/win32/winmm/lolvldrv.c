@@ -75,7 +75,6 @@ DWORD  MMDRV_Message(LPWINE_MLD mld, UINT wMsg, DWORD_PTR dwParam1,
     DWORD			ret;
     WINE_MM_DRIVER_PART*	part;
     WINE_LLTYPE*		llType = &llTypes[mld->type];
-    int				devID;
 
     TRACE("(%s %u %u 0x%08lx 0x%08lx 0x%08lx)\n",
 	  llTypes[mld->type].typestr, mld->uDeviceID, wMsg,
@@ -87,25 +86,16 @@ DWORD  MMDRV_Message(LPWINE_MLD mld, UINT wMsg, DWORD_PTR dwParam1,
 		 llTypes[mld->type].typestr);
 	    return MMSYSERR_BADDEVICEID;
 	}
-	devID = -1;
+	/* mapper alias */
     } else {
 	if (mld->uDeviceID >= llType->wMaxId) {
 	    WARN("uDev(%u) requested >= max (%d)\n", mld->uDeviceID, llType->wMaxId);
 	    return MMSYSERR_BADDEVICEID;
 	}
-	devID = mld->uDeviceID;
     }
 
     lpDrv = &MMDrvs[mld->mmdIndex];
     part = &lpDrv->parts[mld->type];
-
-#if 0
-    /* some sanity checks */
-    if (!(part->nIDMin <= devID))
-	ERR("!(part->nIDMin(%d) <= devID(%d))\n", part->nIDMin, devID);
-    if (!(devID < part->nIDMax))
-	ERR("!(devID(%d) < part->nIDMax(%d))\n", devID, part->nIDMax);
-#endif
 
     assert(part->fnMessage32);
 
@@ -569,14 +559,12 @@ BOOL	MMDRV_Init(void)
     ret |= MMDRV_Install("midimapper", WINE_DEFAULT_WINMM_MIDI, TRUE);
     return ret;
 #else
-    INT driver_count = 0;
-
-    driver_count += LoadRegistryMMEDrivers(NT_MME_DRIVERS_KEY);
-    driver_count += LoadRegistryMMEDrivers(NT_MME_DRIVERS32_KEY);
+    LoadRegistryMMEDrivers(NT_MME_DRIVERS_KEY);
+    LoadRegistryMMEDrivers(NT_MME_DRIVERS32_KEY);
 
     /* Explorer doesn't like us failing */
     return TRUE;
-//    return ( driver_count > 0 );
+//    return ( LoadRegistryMMEDrivers(...) > 0 );
 #endif
 }
 

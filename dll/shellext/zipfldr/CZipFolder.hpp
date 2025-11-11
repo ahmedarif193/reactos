@@ -72,7 +72,7 @@ public:
     }
 
     // *** IZip methods ***
-    STDMETHODIMP_(unzFile) getZip()
+    STDMETHODIMP_(unzFile) getZip() override
     {
         if (!m_UnzipFile)
         {
@@ -83,17 +83,17 @@ public:
     }
 
     // *** IShellFolder2 methods ***
-    STDMETHODIMP GetDefaultSearchGUID(GUID *pguid)
+    STDMETHODIMP GetDefaultSearchGUID(GUID *pguid) override
     {
         UNIMPLEMENTED;
         return E_NOTIMPL;
     }
-    STDMETHODIMP EnumSearches(IEnumExtraSearch **ppenum)
+    STDMETHODIMP EnumSearches(IEnumExtraSearch **ppenum) override
     {
         UNIMPLEMENTED;
         return E_NOTIMPL;
     }
-    STDMETHODIMP GetDefaultColumn(DWORD dwRes, ULONG *pSort, ULONG *pDisplay)
+    STDMETHODIMP GetDefaultColumn(DWORD dwRes, ULONG *pSort, ULONG *pDisplay) override
     {
         if (pSort)
             *pSort = COL_NAME;
@@ -101,14 +101,14 @@ public:
             *pDisplay = COL_NAME;
         return S_OK;
     }
-    STDMETHODIMP GetDefaultColumnState(UINT iColumn, DWORD *pcsFlags)
+    STDMETHODIMP GetDefaultColumnState(UINT iColumn, DWORD *pcsFlags) override
     {
         if (!pcsFlags || iColumn >= _countof(g_ColumnDefs))
             return E_INVALIDARG;
         *pcsFlags = g_ColumnDefs[iColumn].dwDefaultState;
         return S_OK;
     }
-    STDMETHODIMP GetDetailsEx(PCUITEMID_CHILD pidl, const SHCOLUMNID *pscid, VARIANT *pv)
+    STDMETHODIMP GetDetailsEx(PCUITEMID_CHILD pidl, const SHCOLUMNID *pscid, VARIANT *pv) override
     {
         UNIMPLEMENTED;
         return E_NOTIMPL;
@@ -141,7 +141,7 @@ public:
 
         return TRUE;
     }
-    STDMETHODIMP GetDetailsOf(PCUITEMID_CHILD pidl, UINT iColumn, SHELLDETAILS *psd)
+    STDMETHODIMP GetDetailsOf(PCUITEMID_CHILD pidl, UINT iColumn, SHELLDETAILS *psd) override
     {
         if (iColumn >= _countof(g_ColumnDefs))
             return E_FAIL;
@@ -221,23 +221,23 @@ public:
         UNIMPLEMENTED;
         return E_NOTIMPL;
     }
-    STDMETHODIMP MapColumnToSCID(UINT column, SHCOLUMNID *pscid)
+    STDMETHODIMP MapColumnToSCID(UINT column, SHCOLUMNID *pscid) override
     {
         UNIMPLEMENTED;
         return E_NOTIMPL;
     }
 
     // *** IShellFolder methods ***
-    STDMETHODIMP ParseDisplayName(HWND hwndOwner, LPBC pbc, LPOLESTR lpszDisplayName, ULONG *pchEaten, PIDLIST_RELATIVE *ppidl, ULONG *pdwAttributes)
+    STDMETHODIMP ParseDisplayName(HWND hwndOwner, LPBC pbc, LPOLESTR lpszDisplayName, ULONG *pchEaten, PIDLIST_RELATIVE *ppidl, ULONG *pdwAttributes) override
     {
         UNIMPLEMENTED;
         return E_NOTIMPL;
     }
-    STDMETHODIMP EnumObjects(HWND hwndOwner, DWORD dwFlags, LPENUMIDLIST *ppEnumIDList)
+    STDMETHODIMP EnumObjects(HWND hwndOwner, DWORD dwFlags, LPENUMIDLIST *ppEnumIDList) override
     {
         return _CEnumZipContents_CreateInstance(this, dwFlags, m_ZipDir, IID_PPV_ARG(IEnumIDList, ppEnumIDList));
     }
-    STDMETHODIMP BindToObject(PCUIDLIST_RELATIVE pidl, LPBC pbcReserved, REFIID riid, LPVOID *ppvOut)
+    STDMETHODIMP BindToObject(PCUIDLIST_RELATIVE pidl, LPBC pbcReserved, REFIID riid, LPVOID *ppvOut) override
     {
         if (riid == IID_IShellFolder)
         {
@@ -260,12 +260,12 @@ public:
         DbgPrint("%s(%S) UNHANDLED\n", __FUNCTION__, guid2string(riid));
         return E_NOTIMPL;
     }
-    STDMETHODIMP BindToStorage(PCUIDLIST_RELATIVE pidl, LPBC pbcReserved, REFIID riid, LPVOID *ppvOut)
+    STDMETHODIMP BindToStorage(PCUIDLIST_RELATIVE pidl, LPBC pbcReserved, REFIID riid, LPVOID *ppvOut) override
     {
         UNIMPLEMENTED;
         return E_NOTIMPL;
     }
-    STDMETHODIMP CompareIDs(LPARAM lParam, PCUIDLIST_RELATIVE pidl1, PCUIDLIST_RELATIVE pidl2)
+    STDMETHODIMP CompareIDs(LPARAM lParam, PCUIDLIST_RELATIVE pidl1, PCUIDLIST_RELATIVE pidl2) override
     {
         const ZipPidlEntry* zipEntry1 = _ZipFromIL(pidl1);
         const ZipPidlEntry* zipEntry2 = _ZipFromIL(pidl2);
@@ -294,7 +294,7 @@ public:
 
         return MAKE_COMPARE_HRESULT(result);
     }
-    STDMETHODIMP CreateViewObject(HWND hwndOwner, REFIID riid, LPVOID *ppvOut)
+    STDMETHODIMP CreateViewObject(HWND hwndOwner, REFIID riid, LPVOID *ppvOut) override
     {
         static const GUID UnknownIID = // {93F81976-6A0D-42C3-94DD-AA258A155470}
         {0x93F81976, 0x6A0D, 0x42C3, {0x94, 0xDD, 0xAA, 0x25, 0x8A, 0x15, 0x54, 0x70}};
@@ -325,7 +325,7 @@ public:
             DbgPrint("%s(%S) UNHANDLED\n", __FUNCTION__, guid2string(riid));
         return E_NOTIMPL;
     }
-    STDMETHODIMP GetAttributesOf(UINT cidl, PCUITEMID_CHILD_ARRAY apidl, DWORD *rgfInOut)
+    STDMETHODIMP GetAttributesOf(UINT cidl, PCUITEMID_CHILD_ARRAY apidl, DWORD *rgfInOut) override
     {
         if (!rgfInOut || !cidl || !apidl)
             return E_INVALIDARG;
@@ -399,7 +399,7 @@ public:
         }
         return E_NOTIMPL;
     }
-    STDMETHODIMP GetUIObjectOf(HWND hwndOwner, UINT cidl, PCUITEMID_CHILD_ARRAY apidl, REFIID riid, UINT * prgfInOut, LPVOID * ppvOut)
+    STDMETHODIMP GetUIObjectOf(HWND hwndOwner, UINT cidl, PCUITEMID_CHILD_ARRAY apidl, REFIID riid, UINT * prgfInOut, LPVOID * ppvOut) override
     {
         if ((riid == IID_IExtractIconA || riid == IID_IExtractIconW) && cidl == 1)
         {
@@ -436,7 +436,7 @@ public:
         DbgPrint("%s(%S) UNHANDLED\n", __FUNCTION__ , guid2string(riid));
         return E_NOINTERFACE;
     }
-    STDMETHODIMP GetDisplayNameOf(PCUITEMID_CHILD pidl, DWORD dwFlags, LPSTRRET strRet)
+    STDMETHODIMP GetDisplayNameOf(PCUITEMID_CHILD pidl, DWORD dwFlags, LPSTRRET strRet) override
     {
         if (!pidl)
             return S_FALSE;
@@ -454,7 +454,7 @@ public:
 
         return SHSetStrRet(strRet, zipEntry->Name);
     }
-    STDMETHODIMP SetNameOf(HWND hwndOwner, PCUITEMID_CHILD pidl, LPCOLESTR lpName, DWORD dwFlags, PITEMID_CHILD *pPidlOut)
+    STDMETHODIMP SetNameOf(HWND hwndOwner, PCUITEMID_CHILD pidl, LPCOLESTR lpName, DWORD dwFlags, PITEMID_CHILD *pPidlOut) override
     {
         UNIMPLEMENTED;
         return E_NOTIMPL;
@@ -477,7 +477,7 @@ public:
     //STDMETHODIMP Stat(STATSTG *pstatstg, DWORD grfStatFlag);
 
     // *** IContextMenu methods ***
-    STDMETHODIMP GetCommandString(UINT_PTR idCmd, UINT uFlags, UINT *pwReserved, LPSTR pszName, UINT cchMax)
+    STDMETHODIMP GetCommandString(UINT_PTR idCmd, UINT uFlags, UINT *pwReserved, LPSTR pszName, UINT cchMax) override
     {
         if (idCmd != 0)
             return E_INVALIDARG;
@@ -505,7 +505,7 @@ public:
 
         return E_INVALIDARG;
     }
-    STDMETHODIMP InvokeCommand(LPCMINVOKECOMMANDINFO pici)
+    STDMETHODIMP InvokeCommand(LPCMINVOKECOMMANDINFO pici) override
     {
         if (!pici || (pici->cbSize != sizeof(CMINVOKECOMMANDINFO) && pici->cbSize != sizeof(CMINVOKECOMMANDINFOEX)))
             return E_INVALIDARG;
@@ -525,7 +525,7 @@ public:
         }
         return E_INVALIDARG;
     }
-    STDMETHODIMP QueryContextMenu(HMENU hmenu, UINT indexMenu, UINT idCmdFirst, UINT idCmdLast, UINT uFlags)
+    STDMETHODIMP QueryContextMenu(HMENU hmenu, UINT indexMenu, UINT idCmdFirst, UINT idCmdLast, UINT uFlags) override
     {
         UINT idCmd = idCmdFirst;
 
@@ -544,7 +544,7 @@ public:
     }
 
     // *** IShellExtInit methods ***
-    STDMETHODIMP Initialize(PCIDLIST_ABSOLUTE pidlFolder, LPDATAOBJECT pDataObj, HKEY hkeyProgID)
+    STDMETHODIMP Initialize(PCIDLIST_ABSOLUTE pidlFolder, LPDATAOBJECT pDataObj, HKEY hkeyProgID) override
     {
         FORMATETC etc = { CF_HDROP, NULL, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
         STGMEDIUM stg;
@@ -600,14 +600,14 @@ public:
     //STDMETHODIMP GetCurFile(LPOLESTR *ppszFileName);
 
     //// *** IPersistFolder2 methods ***
-    STDMETHODIMP GetCurFolder(PIDLIST_ABSOLUTE * pidl)
+    STDMETHODIMP GetCurFolder(PIDLIST_ABSOLUTE * pidl) override
     {
         *pidl = ILClone(m_CurDir);
         return S_OK;
     }
 
     // *** IPersistFolder methods ***
-    STDMETHODIMP Initialize(PCIDLIST_ABSOLUTE pidl)
+    STDMETHODIMP Initialize(PCIDLIST_ABSOLUTE pidl) override
     {
         WCHAR tmpPath[MAX_PATH];
 
@@ -622,7 +622,7 @@ public:
     }
 
     // *** IPersist methods ***
-    STDMETHODIMP GetClassID(CLSID *lpClassId)
+    STDMETHODIMP GetClassID(CLSID *lpClassId) override
     {
         *lpClassId = CLSID_ZipFolderStorageHandler;
         return S_OK;
@@ -666,4 +666,3 @@ public:
         COM_INTERFACE_ENTRY_IID(IID_IPersist, IPersist)
     END_COM_MAP()
 };
-

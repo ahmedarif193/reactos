@@ -128,7 +128,7 @@ static HRESULT WINAPI DEVENUM_IPropertyBag_Read(
     HRESULT res = S_OK;
     LONG reswin32 = ERROR_SUCCESS;
     WCHAR name[80];
-    HKEY hkey;
+    HKEY hkey = NULL;
 
     TRACE("(%p)->(%s, %p, %p)\n", This, debugstr_w(pszPropName), pVar, pErrorLog);
 
@@ -156,13 +156,13 @@ static HRESULT WINAPI DEVENUM_IPropertyBag_Read(
         reswin32 = RegOpenKeyW(HKEY_CURRENT_USER, This->path, &hkey);
     res = HRESULT_FROM_WIN32(reswin32);
 
-    if (SUCCEEDED(res))
+    if (SUCCEEDED(res) && hkey)
     {
         reswin32 = RegQueryValueExW(hkey, pszPropName, NULL, NULL, NULL, &received);
         res = HRESULT_FROM_WIN32(reswin32);
     }
 
-    if (SUCCEEDED(res))
+    if (SUCCEEDED(res) && hkey)
     {
         pData = HeapAlloc(GetProcessHeap(), 0, received);
 
@@ -248,7 +248,8 @@ static HRESULT WINAPI DEVENUM_IPropertyBag_Read(
 
     HeapFree(GetProcessHeap(), 0, pData);
 
-    RegCloseKey(hkey);
+    if (hkey)
+        RegCloseKey(hkey);
 
     TRACE("<- %x\n", res);
     return res;

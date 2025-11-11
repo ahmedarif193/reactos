@@ -415,7 +415,8 @@ CDrvDefExt::InitGeneralPage(HWND hwndDlg)
     /* Set drive type and icon */
     // TODO: Call SHGetFileInfo to get this info
     UINT DriveType = GetDriveTypeW(m_wszDrive);
-    UINT IconId, TypeStrId;
+    UINT IconId = IDI_SHELL_DRIVE;
+    UINT TypeStrId = IDS_DRIVE_FIXED;
     switch (DriveType)
     {
         case DRIVE_REMOVABLE:
@@ -426,7 +427,7 @@ CDrvDefExt::InitGeneralPage(HWND hwndDlg)
         case DRIVE_CDROM: IconId = IDI_SHELL_CDROM; TypeStrId = IDS_DRIVE_CDROM; break;
         case DRIVE_REMOTE: IconId = IDI_SHELL_NETDRIVE; TypeStrId = IDS_DRIVE_NETWORK; break;
         case DRIVE_RAMDISK: IconId = IDI_SHELL_RAMDISK; break;
-        default: IconId = IDI_SHELL_DRIVE; TypeStrId = IDS_DRIVE_FIXED;
+        default: break;
     }
 
     BOOL bCanSetLabel = bHasFS;
