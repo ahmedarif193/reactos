@@ -254,26 +254,31 @@ RtlpCallQueryRegistryRoutine(IN PRTL_QUERY_REGISTRY_TABLE QueryTable,
         /* Check if it's a multi-string */
         if (Type == REG_MULTI_SZ)
         {
-            /* Prepare defaults */
-            Status = STATUS_SUCCESS;
-            /* Skip the last two UNICODE_NULL chars (the terminating null string) */
-            ValueEnd = (PWSTR)((ULONG_PTR)Data + Length - 2 * sizeof(UNICODE_NULL));
-            p = Data;
+            PWSTR Entry;
+            ULONG EntryLength;
 
-            /* Loop all strings */
+            /* Enumerate each null-terminated string in the multi-SZ payload */
+            Status = STATUS_SUCCESS;
+            ValueEnd = (PWSTR)((ULONG_PTR)Data + Length);
+            Entry = p = Data;
+
             while (p < ValueEnd)
             {
-                /* Go to the next string */
-                while (*p++);
+                /* Hives terminate the list with an empty string; stop there. */
+                if (*Entry == UNICODE_NULL) break;
 
-                /* Get the length and check if this is direct */
-                Length = (ULONG_PTR)p - (ULONG_PTR)Data;
+                /* Scan to the end of the current string (includes its NULL). */
+                while ((p < ValueEnd) && (*p++));
+                EntryLength = (ULONG)((ULONG_PTR)p - (ULONG_PTR)Entry);
+
+                /* Bail if we somehow only saw the terminator. */
+                if (EntryLength <= sizeof(UNICODE_NULL)) break;
+
                 if (QueryTable->Flags & RTL_QUERY_REGISTRY_DIRECT)
                 {
-                    /* Do the query */
                     Status = RtlpQueryRegistryDirect(REG_SZ,
-                                                     Data,
-                                                     (ULONG)Length,
+                                                     Entry,
+                                                     EntryLength,
                                                      QueryTable->EntryContext);
                     QueryTable->EntryContext =
                         (PVOID)((ULONG_PTR)QueryTable->EntryContext +
@@ -281,24 +286,20 @@ RtlpCallQueryRegistryRoutine(IN PRTL_QUERY_REGISTRY_TABLE QueryTable,
                 }
                 else
                 {
-                    /* Call the custom routine */
                     Status = QueryTable->QueryRoutine(Name,
                                                       REG_SZ,
-                                                      Data,
-                                                      (ULONG)Length,
+                                                      Entry,
+                                                      EntryLength,
                                                       Context,
                                                       QueryTable->EntryContext);
                 }
 
-                /* Normalize status */
                 if (Status == STATUS_BUFFER_TOO_SMALL) Status = STATUS_SUCCESS;
                 if (!NT_SUCCESS(Status)) break;
 
-                /* Update data pointer */
-                Data = p;
+                Entry = p;
             }
 
-            /* Return */
             return Status;
         }
 
