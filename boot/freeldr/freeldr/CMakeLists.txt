@@ -36,6 +36,7 @@ list(APPEND FREELDR_ARC_SOURCE
     # lib/fs/pxe.c
 
 list(APPEND FREELDR_BOOTLIB_SOURCE
+    lib/addrconv.c
     lib/arcsupp.c
     lib/debug.c
     lib/peloader.c
