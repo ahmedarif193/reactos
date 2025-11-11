@@ -30,6 +30,14 @@ typedef struct _CACHE_SECTION_PAGE_TABLE
     ULONG_PTR PageEntries[ENTRIES_PER_ELEMENT];
 } CACHE_SECTION_PAGE_TABLE, *PCACHE_SECTION_PAGE_TABLE;
 
+/* Sanity checks: the compare routine assumes FileOffset is first */
+C_ASSERT(offsetof(CACHE_SECTION_PAGE_TABLE, FileOffset) == 0);
+C_ASSERT(sizeof(((PCACHE_SECTION_PAGE_TABLE)0)->FileOffset) == sizeof(LARGE_INTEGER));
+C_ASSERT(offsetof(CACHE_SECTION_PAGE_TABLE, Segment) == sizeof(LARGE_INTEGER));
+C_ASSERT(offsetof(CACHE_SECTION_PAGE_TABLE, Refcount) == sizeof(LARGE_INTEGER) + sizeof(PVOID));
+C_ASSERT(sizeof(((PCACHE_SECTION_PAGE_TABLE)0)->PageEntries) ==
+        ENTRIES_PER_ELEMENT * sizeof(ULONG_PTR));
+
 struct _MM_REQUIRED_RESOURCES;
 
 typedef NTSTATUS (NTAPI * AcquireResource)(
