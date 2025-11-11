@@ -38,6 +38,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 
 #include <stdarg.h>
 #include "windef.h"
@@ -91,6 +92,54 @@ struct pdb_module_info
 /*========================================================================
  * Debug file access helper routines
  */
+
+static size_t cv_bounded_strlen(const char *str, const unsigned char *limit, BOOL *terminated)
+{
+    size_t max_len;
+    const char *terminator;
+
+    if (terminated)
+        *terminated = FALSE;
+
+    if (!limit || (const unsigned char*)str >= limit)
+        return 0;
+
+    max_len = limit - (const unsigned char*)str;
+    terminator = memchr(str, '\0', max_len);
+    if (terminator)
+    {
+        if (terminated)
+            *terminated = TRUE;
+        return (size_t)(terminator - str);
+    }
+
+    return max_len;
+}
+
+static const char *cv_dup_bounded_string(const char *name, size_t len, BOOL has_terminator, char **allocated)
+{
+    *allocated = NULL;
+
+    if (has_terminator)
+        return name;
+
+    /* Allocate a temporary copy so downstream helpers see a proper C string. */
+    char *copy = HeapAlloc(GetProcessHeap(), 0, len + 1);
+    if (!copy)
+        return NULL;
+
+    if (len)
+        memcpy(copy, name, len);
+    copy[len] = '\0';
+    *allocated = copy;
+    return copy;
+}
+
+static inline void cv_free_bounded_string(char *allocated)
+{
+    if (allocated)
+        HeapFree(GetProcessHeap(), 0, allocated);
+}
 
 static void dump(const void* ptr, unsigned len)
 {
@@ -382,119 +431,179 @@ static int leaf_as_variant(VARIANT* v, const unsigned short int* leaf)
     return length;
 }
 
-static int numeric_leaf(int* value, const unsigned short int* leaf)
+static unsigned short cv_read_u16(const unsigned char *ptr)
 {
-    unsigned short int type = *leaf++;
-    int length = 2;
+    unsigned short val;
+    memcpy(&val, ptr, sizeof(val));
+    return val;
+}
+
+static unsigned int cv_read_u32(const unsigned char *ptr)
+{
+    unsigned int val;
+    memcpy(&val, ptr, sizeof(val));
+    return val;
+}
+
+static int numeric_leaf(int* value, const void* leaf_ptr, const unsigned char* last)
+{
+    const unsigned char* leaf = leaf_ptr;
+    const unsigned char* cursor = leaf;
+    unsigned short int type;
+    int length = 0;
+
+    if (!leaf || !last || cursor >= last)
+    {
+        WARN("numeric leaf truncated\n");
+        *value = 0;
+        return 0;
+    }
+
+    if (cursor + sizeof(type) > last)
+    {
+        WARN("numeric leaf missing header\n");
+        *value = 0;
+        return (int)(last - leaf);
+    }
+
+    type = cv_read_u16(cursor);
+    cursor += sizeof(type);
+    length += sizeof(type);
 
     if (type < LF_NUMERIC)
     {
         *value = type;
+        return length;
     }
-    else
+
+#define ENSURE_BYTES(count)                                                       \
+    do {                                                                          \
+        if (cursor + (count) > last)                                              \
+        {                                                                         \
+            WARN("numeric leaf %04x truncated\n", type);                         \
+            *value = 0;                                                           \
+            return (int)(last - leaf);                                            \
+        }                                                                         \
+    } while (0)
+
+    switch (type)
     {
-        switch (type)
-        {
-        case LF_CHAR:
-            length += 1;
-            *value = *(const char*)leaf;
-            break;
+    case LF_CHAR:
+        ENSURE_BYTES(1);
+        length += 1;
+        *value = *(const char*)cursor;
+        break;
 
-        case LF_SHORT:
-            length += 2;
-            *value = *(const short*)leaf;
-            break;
+    case LF_SHORT:
+        ENSURE_BYTES(2);
+        length += 2;
+        *value = (short)cv_read_u16(cursor);
+        break;
 
-        case LF_USHORT:
-            length += 2;
-            *value = *leaf;
-            break;
+    case LF_USHORT:
+        ENSURE_BYTES(2);
+        length += 2;
+        *value = cv_read_u16(cursor);
+        break;
 
-        case LF_LONG:
-            length += 4;
-            *value = *(const int*)leaf;
-            break;
+    case LF_LONG:
+    case LF_ULONG:
+        ENSURE_BYTES(4);
+        length += 4;
+        *value = (int)cv_read_u32(cursor);
+        break;
 
-        case LF_ULONG:
-            length += 4;
-            *value = *(const unsigned int*)leaf;
-            break;
+    case LF_QUADWORD:
+    case LF_UQUADWORD:
+        ENSURE_BYTES(8);
+        length += 8;
+        *value = 0;    /* FIXME */
+        FIXME("Unsupported numeric leaf type %04x\n", type);
+        break;
 
-        case LF_QUADWORD:
-        case LF_UQUADWORD:
-	    FIXME("Unsupported numeric leaf type %04x\n", type);
-            length += 8;
-            *value = 0;    /* FIXME */
-            break;
+    case LF_REAL32:
+        ENSURE_BYTES(4);
+        length += 4;
+        *value = 0;    /* FIXME */
+        FIXME("Unsupported numeric leaf type %04x\n", type);
+        break;
 
-        case LF_REAL32:
-	    FIXME("Unsupported numeric leaf type %04x\n", type);
-            length += 4;
-            *value = 0;    /* FIXME */
-            break;
+    case LF_REAL48:
+        ENSURE_BYTES(6);
+        length += 6;
+        *value = 0;    /* FIXME */
+        FIXME("Unsupported numeric leaf type %04x\n", type);
+        break;
 
-        case LF_REAL48:
-	    FIXME("Unsupported numeric leaf type %04x\n", type);
-            length += 6;
-            *value = 0;    /* FIXME */
-            break;
+    case LF_REAL64:
+        ENSURE_BYTES(8);
+        length += 8;
+        *value = 0;    /* FIXME */
+        FIXME("Unsupported numeric leaf type %04x\n", type);
+        break;
 
-        case LF_REAL64:
-	    FIXME("Unsupported numeric leaf type %04x\n", type);
-            length += 8;
-            *value = 0;    /* FIXME */
-            break;
+    case LF_REAL80:
+        ENSURE_BYTES(10);
+        length += 10;
+        *value = 0;    /* FIXME */
+        FIXME("Unsupported numeric leaf type %04x\n", type);
+        break;
 
-        case LF_REAL80:
-	    FIXME("Unsupported numeric leaf type %04x\n", type);
-            length += 10;
-            *value = 0;    /* FIXME */
-            break;
+    case LF_REAL128:
+        ENSURE_BYTES(16);
+        length += 16;
+        *value = 0;    /* FIXME */
+        FIXME("Unsupported numeric leaf type %04x\n", type);
+        break;
 
-        case LF_REAL128:
-	    FIXME("Unsupported numeric leaf type %04x\n", type);
-            length += 16;
-            *value = 0;    /* FIXME */
-            break;
+    case LF_COMPLEX32:
+        ENSURE_BYTES(4);
+        length += 4;
+        *value = 0;    /* FIXME */
+        FIXME("Unsupported numeric leaf type %04x\n", type);
+        break;
 
-        case LF_COMPLEX32:
-	    FIXME("Unsupported numeric leaf type %04x\n", type);
-            length += 4;
-            *value = 0;    /* FIXME */
-            break;
+    case LF_COMPLEX64:
+        ENSURE_BYTES(8);
+        length += 8;
+        *value = 0;    /* FIXME */
+        FIXME("Unsupported numeric leaf type %04x\n", type);
+        break;
 
-        case LF_COMPLEX64:
-	    FIXME("Unsupported numeric leaf type %04x\n", type);
-            length += 8;
-            *value = 0;    /* FIXME */
-            break;
+    case LF_COMPLEX80:
+        ENSURE_BYTES(10);
+        length += 10;
+        *value = 0;    /* FIXME */
+        FIXME("Unsupported numeric leaf type %04x\n", type);
+        break;
 
-        case LF_COMPLEX80:
-	    FIXME("Unsupported numeric leaf type %04x\n", type);
-            length += 10;
-            *value = 0;    /* FIXME */
-            break;
+    case LF_COMPLEX128:
+        ENSURE_BYTES(16);
+        length += 16;
+        *value = 0;    /* FIXME */
+        FIXME("Unsupported numeric leaf type %04x\n", type);
+        break;
 
-        case LF_COMPLEX128:
-	    FIXME("Unsupported numeric leaf type %04x\n", type);
-            length += 16;
-            *value = 0;    /* FIXME */
-            break;
-
-        case LF_VARSTRING:
-	    FIXME("Unsupported numeric leaf type %04x\n", type);
-            length += 2 + *leaf;
-            *value = 0;    /* FIXME */
-            break;
-
-        default:
-	    FIXME("Unknown numeric leaf type %04x\n", type);
-            *value = 0;
-            break;
-        }
+    case LF_VARSTRING:
+    {
+        ENSURE_BYTES(2);
+        unsigned short strlen = cv_read_u16(cursor);
+        ENSURE_BYTES(2 + strlen);
+        length += 2 + strlen;
+        *value = 0;    /* FIXME */
+        FIXME("Unsupported numeric leaf type %04x\n", type);
+        break;
     }
 
-    return length;
+    default:
+        WARN("Unknown numeric leaf type %04x\n", type);
+        *value = 0;
+        break;
+    }
+
+#undef ENSURE_BYTES
+
+    return min(length, (int)(last - leaf));
 }
 
 /* convert a pascal string (as stored in debug information) into
@@ -697,7 +806,7 @@ static BOOL codeview_add_type_enum_field_list(struct module* module,
         {
         case LF_ENUMERATE_V1:
         {
-            int value, vlen = numeric_leaf(&value, &type->enumerate_v1.value);
+            int value, vlen = numeric_leaf(&value, &type->enumerate_v1.value, last);
             const struct p_string* p_name = (const struct p_string*)((const unsigned char*)&type->enumerate_v1.value + vlen);
 
             symt_add_enum_element(module, symt, terminate_string(p_name), value);
@@ -706,11 +815,23 @@ static BOOL codeview_add_type_enum_field_list(struct module* module,
         }
         case LF_ENUMERATE_V3:
         {
-            int value, vlen = numeric_leaf(&value, &type->enumerate_v3.value);
-            const char* name = (const char*)&type->enumerate_v3.value + vlen;
+            const unsigned char* value_ptr = (const unsigned char*)&type->enumerate_v3.value;
+            int value, vlen = numeric_leaf(&value, value_ptr, last);
+            const char* name = (const char*)value_ptr + vlen;
+            BOOL has_terminator = FALSE;
+            size_t name_len = cv_bounded_strlen(name, last, &has_terminator);
+            char *name_copy;
+            const char *safe_name = cv_dup_bounded_string(name, name_len, has_terminator, &name_copy);
 
-            symt_add_enum_element(module, symt, name, value);
-            ptr += 2 + 2 + vlen + (1 + strlen(name));
+            if (!safe_name)
+            {
+                ERR("Out of memory while copying enum element name\n");
+                return FALSE;
+            }
+
+            symt_add_enum_element(module, symt, safe_name, value);
+            cv_free_bounded_string(name_copy);
+            ptr += 2 + 2 + vlen + name_len + (has_terminator ? 1 : 0);
             break;
         }
 
@@ -788,7 +909,7 @@ static int codeview_add_type_struct_field_list(struct codeview_type_parse* ctp,
         switch (type->generic.id)
         {
         case LF_BCLASS_V1:
-            leaf_len = numeric_leaf(&value, &type->bclass_v1.offset);
+            leaf_len = numeric_leaf(&value, &type->bclass_v1.offset, last);
 
             /* FIXME: ignored for now */
 
@@ -796,7 +917,7 @@ static int codeview_add_type_struct_field_list(struct codeview_type_parse* ctp,
             break;
 
         case LF_BCLASS_V2:
-            leaf_len = numeric_leaf(&value, &type->bclass_v2.offset);
+            leaf_len = numeric_leaf(&value, &type->bclass_v2.offset, last);
 
             /* FIXME: ignored for now */
 
@@ -808,9 +929,9 @@ static int codeview_add_type_struct_field_list(struct codeview_type_parse* ctp,
             {
                 const unsigned short int* p_vboff;
                 int vpoff, vplen;
-                leaf_len = numeric_leaf(&value, &type->vbclass_v1.vbpoff);
+                leaf_len = numeric_leaf(&value, &type->vbclass_v1.vbpoff, last);
                 p_vboff = (const unsigned short int*)((const char*)&type->vbclass_v1.vbpoff + leaf_len);
-                vplen = numeric_leaf(&vpoff, p_vboff);
+                vplen = numeric_leaf(&vpoff, p_vboff, last);
 
                 /* FIXME: ignored for now */
 
@@ -823,9 +944,9 @@ static int codeview_add_type_struct_field_list(struct codeview_type_parse* ctp,
             {
                 const unsigned short int* p_vboff;
                 int vpoff, vplen;
-                leaf_len = numeric_leaf(&value, &type->vbclass_v2.vbpoff);
+                leaf_len = numeric_leaf(&value, &type->vbclass_v2.vbpoff, last);
                 p_vboff = (const unsigned short int*)((const char*)&type->vbclass_v2.vbpoff + leaf_len);
-                vplen = numeric_leaf(&vpoff, p_vboff);
+                vplen = numeric_leaf(&vpoff, p_vboff, last);
 
                 /* FIXME: ignored for now */
 
@@ -834,7 +955,7 @@ static int codeview_add_type_struct_field_list(struct codeview_type_parse* ctp,
             break;
 
         case LF_MEMBER_V1:
-            leaf_len = numeric_leaf(&value, &type->member_v1.offset);
+            leaf_len = numeric_leaf(&value, &type->member_v1.offset, last);
             p_name = (const struct p_string*)((const char*)&type->member_v1.offset + leaf_len);
 
             codeview_add_udt_element(ctp, symt, terminate_string(p_name), value, 
@@ -844,7 +965,7 @@ static int codeview_add_type_struct_field_list(struct codeview_type_parse* ctp,
             break;
 
         case LF_MEMBER_V2:
-            leaf_len = numeric_leaf(&value, &type->member_v2.offset);
+            leaf_len = numeric_leaf(&value, &type->member_v2.offset, last);
             p_name = (const struct p_string*)((const unsigned char*)&type->member_v2.offset + leaf_len);
 
             codeview_add_udt_element(ctp, symt, terminate_string(p_name), value, 
@@ -854,13 +975,27 @@ static int codeview_add_type_struct_field_list(struct codeview_type_parse* ctp,
             break;
 
         case LF_MEMBER_V3:
-            leaf_len = numeric_leaf(&value, &type->member_v3.offset);
-            c_name = (const char*)&type->member_v3.offset + leaf_len;
+        {
+            const unsigned char* offset_ptr = (const unsigned char*)&type->member_v3.offset;
+            leaf_len = numeric_leaf(&value, offset_ptr, last);
+            c_name = (const char*)offset_ptr + leaf_len;
+            BOOL has_terminator = FALSE;
+            size_t name_len = cv_bounded_strlen(c_name, last, &has_terminator);
+            char *name_copy;
+            const char *safe_name = cv_dup_bounded_string(c_name, name_len, has_terminator, &name_copy);
 
-            codeview_add_udt_element(ctp, symt, c_name, value, type->member_v3.type);
+            if (!safe_name)
+            {
+                ERR("Out of memory while copying struct member name\n");
+                return FALSE;
+            }
 
-            ptr += 2 + 2 + 4 + leaf_len + (strlen(c_name) + 1);
+            codeview_add_udt_element(ctp, symt, safe_name, value, type->member_v3.type);
+            cv_free_bounded_string(name_copy);
+
+            ptr += 2 + 2 + 4 + leaf_len + name_len + (has_terminator ? 1 : 0);
             break;
+        }
 
         case LF_STMEMBER_V1:
             /* FIXME: ignored for now */
@@ -873,9 +1008,13 @@ static int codeview_add_type_struct_field_list(struct codeview_type_parse* ctp,
             break;
 
         case LF_STMEMBER_V3:
+        {
+            BOOL has_terminator = FALSE;
+            size_t name_len = cv_bounded_strlen(type->stmember_v3.name, last, &has_terminator);
             /* FIXME: ignored for now */
-            ptr += 2 + 4 + 2 + (strlen(type->stmember_v3.name) + 1);
+            ptr += 2 + 4 + 2 + name_len + (has_terminator ? 1 : 0);
             break;
+        }
 
         case LF_METHOD_V1:
             /* FIXME: ignored for now */
@@ -888,9 +1027,13 @@ static int codeview_add_type_struct_field_list(struct codeview_type_parse* ctp,
             break;
 
         case LF_METHOD_V3:
+        {
+            BOOL has_terminator = FALSE;
+            size_t name_len = cv_bounded_strlen(type->method_v3.name, last, &has_terminator);
             /* FIXME: ignored for now */
-            ptr += 2 + 2 + 4 + (strlen(type->method_v3.name) + 1);
+            ptr += 2 + 2 + 4 + name_len + (has_terminator ? 1 : 0);
             break;
+        }
 
         case LF_NESTTYPE_V1:
             /* FIXME: ignored for now */
@@ -903,9 +1046,13 @@ static int codeview_add_type_struct_field_list(struct codeview_type_parse* ctp,
             break;
 
         case LF_NESTTYPE_V3:
+        {
+            BOOL has_terminator = FALSE;
+            size_t name_len = cv_bounded_strlen(type->nesttype_v3.name, last, &has_terminator);
             /* FIXME: ignored for now */
-            ptr += 2 + 2 + 4 + (strlen(type->nesttype_v3.name) + 1);
+            ptr += 2 + 2 + 4 + name_len + (has_terminator ? 1 : 0);
             break;
+        }
 
         case LF_VFUNCTAB_V1:
             /* FIXME: ignored for now */
@@ -946,18 +1093,25 @@ static int codeview_add_type_struct_field_list(struct codeview_type_parse* ctp,
             break;
 
         case LF_ONEMETHOD_V3:
+        {
+            size_t name_len;
+            BOOL has_terminator = FALSE;
             /* FIXME: ignored for now */
             switch ((type->onemethod_v3.attribute >> 2) & 7)
             {
             case 4: case 6: /* (pure) introducing virtual method */
-                ptr += 2 + 2 + 4 + 4 + (strlen(type->onemethod_virt_v3.name) + 1);
+                name_len = cv_bounded_strlen(type->onemethod_virt_v3.name, last, &has_terminator);
+                ptr += 2 + 2 + 4 + 4 + name_len + (has_terminator ? 1 : 0);
                 break;
 
             default:
-                ptr += 2 + 2 + 4 + (strlen(type->onemethod_v3.name) + 1);
+                has_terminator = FALSE;
+                name_len = cv_bounded_strlen(type->onemethod_v3.name, last, &has_terminator);
+                ptr += 2 + 2 + 4 + name_len + (has_terminator ? 1 : 0);
                 break;
             }
             break;
+        }
 
         case LF_INDEX_V1:
             if (!codeview_add_type_struct_field_list(ctp, symt, type->index_v1.ref))
@@ -1109,6 +1263,7 @@ static struct symt* codeview_parse_one_type(struct codeview_type_parse* ctp,
     const struct p_string*      p_name;
     const char*                 c_name;
     struct symt*                existing;
+    const unsigned char*        type_last = (const unsigned char*)type + type->generic.len + 2;
 
     existing = codeview_get_type(curr_type, TRUE);
 
@@ -1148,7 +1303,7 @@ static struct symt* codeview_parse_one_type(struct codeview_type_parse* ctp,
         if (existing) symt = codeview_cast_symt(existing, SymTagArrayType);
         else
         {
-            leaf_len = numeric_leaf(&value, &type->array_v1.arrlen);
+            leaf_len = numeric_leaf(&value, &type->array_v1.arrlen, type_last);
             p_name = (const struct p_string*)((const unsigned char*)&type->array_v1.arrlen + leaf_len);
             symt = codeview_add_type_array(ctp, terminate_string(p_name),
                                            type->array_v1.elemtype,
@@ -1159,7 +1314,7 @@ static struct symt* codeview_parse_one_type(struct codeview_type_parse* ctp,
         if (existing) symt = codeview_cast_symt(existing, SymTagArrayType);
         else
         {
-            leaf_len = numeric_leaf(&value, &type->array_v2.arrlen);
+            leaf_len = numeric_leaf(&value, &type->array_v2.arrlen, type_last);
             p_name = (const struct p_string*)((const unsigned char*)&type->array_v2.arrlen + leaf_len);
 
             symt = codeview_add_type_array(ctp, terminate_string(p_name),
@@ -1171,18 +1326,26 @@ static struct symt* codeview_parse_one_type(struct codeview_type_parse* ctp,
         if (existing) symt = codeview_cast_symt(existing, SymTagArrayType);
         else
         {
-            leaf_len = numeric_leaf(&value, &type->array_v3.arrlen);
+            leaf_len = numeric_leaf(&value, &type->array_v3.arrlen, type_last);
             c_name = (const char*)&type->array_v3.arrlen + leaf_len;
+            BOOL has_terminator = FALSE;
+            size_t name_len = cv_bounded_strlen(c_name, type_last, &has_terminator);
+            char *name_copy;
+            const char *safe_name = cv_dup_bounded_string(c_name, name_len, has_terminator, &name_copy);
 
-            symt = codeview_add_type_array(ctp, c_name,
+            if (!safe_name)
+                return NULL;
+
+            symt = codeview_add_type_array(ctp, safe_name,
                                            type->array_v3.elemtype,
                                            type->array_v3.idxtype, value);
+            cv_free_bounded_string(name_copy);
         }
         break;
 
     case LF_STRUCTURE_V1:
     case LF_CLASS_V1:
-        leaf_len = numeric_leaf(&value, &type->struct_v1.structlen);
+        leaf_len = numeric_leaf(&value, &type->struct_v1.structlen, type_last);
         p_name = (const struct p_string*)((const unsigned char*)&type->struct_v1.structlen + leaf_len);
         symt = codeview_add_type_struct(ctp, existing, terminate_string(p_name), value,
                                         type->generic.id == LF_CLASS_V1 ? UdtClass : UdtStruct,
@@ -1198,7 +1361,7 @@ static struct symt* codeview_parse_one_type(struct codeview_type_parse* ctp,
 
     case LF_STRUCTURE_V2:
     case LF_CLASS_V2:
-        leaf_len = numeric_leaf(&value, &type->struct_v2.structlen);
+        leaf_len = numeric_leaf(&value, &type->struct_v2.structlen, type_last);
         p_name = (const struct p_string*)((const unsigned char*)&type->struct_v2.structlen + leaf_len);
         symt = codeview_add_type_struct(ctp, existing, terminate_string(p_name), value,
                                         type->generic.id == LF_CLASS_V2 ? UdtClass : UdtStruct,
@@ -1214,22 +1377,34 @@ static struct symt* codeview_parse_one_type(struct codeview_type_parse* ctp,
 
     case LF_STRUCTURE_V3:
     case LF_CLASS_V3:
-        leaf_len = numeric_leaf(&value, &type->struct_v3.structlen);
+        leaf_len = numeric_leaf(&value, &type->struct_v3.structlen, type_last);
         c_name = (const char*)&type->struct_v3.structlen + leaf_len;
-        symt = codeview_add_type_struct(ctp, existing, c_name, value,
+        {
+            BOOL has_terminator = FALSE;
+            size_t name_len = cv_bounded_strlen(c_name, type_last, &has_terminator);
+            char *name_copy;
+            const char *safe_name = cv_dup_bounded_string(c_name, name_len, has_terminator, &name_copy);
+
+            if (!safe_name)
+                return NULL;
+
+            symt = codeview_add_type_struct(ctp, existing, safe_name, value,
                                         type->generic.id == LF_CLASS_V3 ? UdtClass : UdtStruct,
                                         type->struct_v3.property);
-        if (details)
-        {
-            codeview_add_type(curr_type, symt);
-            if (!(type->struct_v3.property & 0x80)) /* 0x80 = forward declaration */
-                codeview_add_type_struct_field_list(ctp, (struct symt_udt*)symt,
-                                                    type->struct_v3.fieldlist);
+            if (details)
+            {
+                codeview_add_type(curr_type, symt);
+                if (!(type->struct_v3.property & 0x80)) /* 0x80 = forward declaration */
+                    codeview_add_type_struct_field_list(ctp, (struct symt_udt*)symt,
+                                                        type->struct_v3.fieldlist);
+            }
+
+            cv_free_bounded_string(name_copy);
         }
         break;
 
     case LF_UNION_V1:
-        leaf_len = numeric_leaf(&value, &type->union_v1.un_len);
+        leaf_len = numeric_leaf(&value, &type->union_v1.un_len, type_last);
         p_name = (const struct p_string*)((const unsigned char*)&type->union_v1.un_len + leaf_len);
         symt = codeview_add_type_struct(ctp, existing, terminate_string(p_name),
                                         value, UdtUnion, type->union_v1.property);
@@ -1242,7 +1417,7 @@ static struct symt* codeview_parse_one_type(struct codeview_type_parse* ctp,
         break;
 
     case LF_UNION_V2:
-        leaf_len = numeric_leaf(&value, &type->union_v2.un_len);
+        leaf_len = numeric_leaf(&value, &type->union_v2.un_len, type_last);
         p_name = (const struct p_string*)((const unsigned char*)&type->union_v2.un_len + leaf_len);
         symt = codeview_add_type_struct(ctp, existing, terminate_string(p_name),
                                         value, UdtUnion, type->union_v2.property);
@@ -1255,15 +1430,27 @@ static struct symt* codeview_parse_one_type(struct codeview_type_parse* ctp,
         break;
 
     case LF_UNION_V3:
-        leaf_len = numeric_leaf(&value, &type->union_v3.un_len);
+        leaf_len = numeric_leaf(&value, &type->union_v3.un_len, type_last);
         c_name = (const char*)&type->union_v3.un_len + leaf_len;
-        symt = codeview_add_type_struct(ctp, existing, c_name,
-                                        value, UdtUnion, type->union_v3.property);
-        if (details)
         {
-            codeview_add_type(curr_type, symt);
-            codeview_add_type_struct_field_list(ctp, (struct symt_udt*)symt,
-                                                type->union_v3.fieldlist);
+            BOOL has_terminator = FALSE;
+            size_t name_len = cv_bounded_strlen(c_name, type_last, &has_terminator);
+            char *name_copy;
+            const char *safe_name = cv_dup_bounded_string(c_name, name_len, has_terminator, &name_copy);
+
+            if (!safe_name)
+                return NULL;
+
+            symt = codeview_add_type_struct(ctp, existing, safe_name,
+                                            value, UdtUnion, type->union_v3.property);
+            if (details)
+            {
+                codeview_add_type(curr_type, symt);
+                codeview_add_type_struct_field_list(ctp, (struct symt_udt*)symt,
+                                                    type->union_v3.fieldlist);
+            }
+
+            cv_free_bounded_string(name_copy);
         }
         break;
 
@@ -1282,10 +1469,22 @@ static struct symt* codeview_parse_one_type(struct codeview_type_parse* ctp,
         break;
 
     case LF_ENUM_V3:
-        symt = codeview_add_type_enum(ctp, existing, type->enumeration_v3.name,
+    {
+        BOOL has_terminator = FALSE;
+        size_t name_len = cv_bounded_strlen(type->enumeration_v3.name, type_last, &has_terminator);
+        char *name_copy;
+        const char *safe_name = cv_dup_bounded_string(type->enumeration_v3.name, name_len,
+                                                      has_terminator, &name_copy);
+
+        if (!safe_name)
+            return NULL;
+
+        symt = codeview_add_type_enum(ctp, existing, safe_name,
                                       type->enumeration_v3.fieldlist,
                                       type->enumeration_v3.type);
+        cv_free_bounded_string(name_copy);
         break;
+    }
 
     case LF_PROCEDURE_V1:
         symt = codeview_new_func_signature(ctp, existing, type->procedure_v1.call);
