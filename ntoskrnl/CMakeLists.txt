@@ -42,6 +42,11 @@ add_executable(ntoskrnl
     ${PCH_SKIP_SOURCE}
     ntoskrnl.rc
     ${CMAKE_CURRENT_BINARY_DIR}/ntoskrnl.def)
+target_sources(ntoskrnl PRIVATE rtl/intrin_llshift.c)
+if((NT_ARCH STREQUAL "i386" OR NT_ARCH STREQUAL "amd64") AND
+   (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang"))
+    target_sources(ntoskrnl PRIVATE rtl/intrin_msr.c)
+endif()
 set_module_type(ntoskrnl kernel)
 
 source_group(TREE ${REACTOS_SOURCE_DIR}/ntoskrnl PREFIX "Source Files" FILES ${NTOSKRNL_SOURCE})
