@@ -115,8 +115,11 @@ vDbgPrintExWithPrefixInternal(IN PCCH Prefix,
         if (PrefixLength > (sizeof(Buffer) - TimestampLength))
             PrefixLength = sizeof(Buffer) - TimestampLength;
 
-        /* Copy prefix after timestamp */
-        strncpy(Buffer + TimestampLength, Prefix, PrefixLength);
+        /* Copy prefix after timestamp (no implicit terminator needed) */
+        if (PrefixLength != 0)
+        {
+            memcpy(Buffer + TimestampLength, Prefix, PrefixLength);
+        }
 
         /* Do the printf after timestamp and prefix */
         Length = _vsnprintf(Buffer + TimestampLength + PrefixLength,
