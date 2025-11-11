@@ -4842,6 +4842,31 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
     }
     else
     {
+        PKTRAP_FRAME TrapFrame = KeGetCurrentThread()->TrapFrame;
+        PVOID Caller = _ReturnAddress();
+        PVOID UserPc = NULL;
+        PVOID UserSp = NULL;
+
+        if (TrapFrame)
+        {
+#if defined(_M_AMD64)
+            UserPc = (PVOID)TrapFrame->Rip;
+            UserSp = (PVOID)TrapFrame->Rsp;
+#elif defined(_M_IX86)
+            UserPc = (PVOID)(ULONG_PTR)TrapFrame->Eip;
+            UserSp = (PVOID)(ULONG_PTR)TrapFrame->HardwareEsp;
+#elif defined(_M_ARM)
+            UserPc = (PVOID)(ULONG_PTR)TrapFrame->Pc;
+            UserSp = (PVOID)(ULONG_PTR)TrapFrame->Sp;
+#elif defined(_M_ARM64)
+            UserPc = (PVOID)TrapFrame->Pc;
+            UserSp = (PVOID)TrapFrame->Sp;
+#else
+            UserPc = NULL;
+            UserSp = NULL;
+#endif
+        }
+
         //
         // Otherwise, reference the process with VM rights and attach to it if
         // this isn't the current process. We must attach because we'll be touching
@@ -4854,7 +4879,30 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
                                            PreviousMode,
                                            (PVOID*)&Process,
                                            NULL);
-        if (!NT_SUCCESS(Status)) return Status;
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("NtAllocateVirtualMemory: ObReferenceObjectByHandle failed %lx handle=%p current=%p mode=%d caller=%p userPc=%p userSp=%p currentProcess=%p\n",
+                    Status,
+                    ProcessHandle,
+                    NtCurrentProcess(),
+                    PreviousMode,
+                    Caller,
+                    UserPc,
+                    UserSp,
+                    CurrentProcess);
+
+            DbgPrintEx(DPFLTR_MM_ID,
+                       DPFLTR_ERROR_LEVEL,
+                       "NtAllocateVirtualMemory[HandleFail]: Status=%lx Handle=%p PrevMode=%d Caller=%p UserPc=%p UserSp=%p CurrentProcess=%p\n",
+                       Status,
+                       ProcessHandle,
+                       PreviousMode,
+                       Caller,
+                       UserPc,
+                       UserSp,
+                       CurrentProcess);
+            return Status;
+        }
         if (CurrentProcess != Process)
         {
             KeStackAttachProcess(&Process->Pcb, &ApcState);
