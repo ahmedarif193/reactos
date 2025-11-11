@@ -12,6 +12,7 @@
 #include <ntdll.h>
 #include <compat_undoc.h>
 #include <compatguid_undoc.h>
+#include <stdint.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -44,7 +45,20 @@ PLDR_DATA_TABLE_ENTRY LdrpCurrentDllInitializer;
 PLDR_DATA_TABLE_ENTRY LdrpNtDllDataTableEntry;
 
 static NTSTATUS (WINAPI *Kernel32ProcessInitPostImportFunction)(VOID);
-static BOOL (WINAPI *Kernel32BaseQueryModuleData)(IN LPSTR ModuleName, IN LPSTR Unk1, IN PVOID Unk2, IN PVOID Unk3, IN PVOID Unk4);
+#if defined(__GNUC__)
+static BOOL (WINAPI *Kernel32BaseQueryModuleData)(IN LPSTR ModuleName,
+                                                  IN LPSTR Unk1,
+                                                  IN PVOID Unk2,
+                                                  IN PVOID Unk3,
+                                                  IN PVOID Unk4)
+    __attribute__((unused));
+#else
+static BOOL (WINAPI *Kernel32BaseQueryModuleData)(IN LPSTR ModuleName,
+                                                  IN LPSTR Unk1,
+                                                  IN PVOID Unk2,
+                                                  IN PVOID Unk3,
+                                                  IN PVOID Unk4);
+#endif
 
 RTL_BITMAP TlsBitMap;
 RTL_BITMAP TlsExpansionBitMap;
@@ -99,6 +113,17 @@ extern BOOLEAN RtlpUse16ByteSLists;
 #define DEFAULT_SECURITY_COOKIE 0x00002B992DDFA232ll
 #else
 #define DEFAULT_SECURITY_COOKIE 0xBB40E64E
+#endif
+
+#if defined(__clang__) || defined(__GNUC__)
+#define LDRP_NO_STACK_PROTECTOR __attribute__((no_stack_protector))
+#else
+#define LDRP_NO_STACK_PROTECTOR
+#endif
+
+#if defined(__clang__)
+static LDRP_NO_STACK_PROTECTOR VOID LdrpInitSspGuard(VOID);
+uintptr_t __stack_chk_guard;
 #endif
 
 /* WOW64 loader integration (amd64 only) */
@@ -1865,6 +1890,7 @@ LdrpInitializeDotLocalSupport(PRTL_USER_PROCESS_PARAMETERS ProcessParameters)
 }
 
 
+LDRP_NO_STACK_PROTECTOR
 NTSTATUS
 NTAPI
 LdrpInitializeProcess(IN PCONTEXT Context,
@@ -1934,6 +1960,11 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     PWCHAR Current;
     ULONG ExecuteOptions = 0;
     PVOID ViewBase;
+
+#if defined(__clang__)
+    if (!__stack_chk_guard)
+        LdrpInitSspGuard();
+#endif
 
     /* Set a NULL SEH Filter */
     RtlSetUnhandledExceptionFilter(NULL);
@@ -2152,12 +2183,41 @@ LdrpInitializeProcess(IN PCONTEXT Context,
 
     /* Setup the Heap */
     RtlInitializeHeapManager();
-    Peb->ProcessHeap = RtlCreateHeap(HeapFlags,
-                                     NULL,
-                                     NtHeader->OptionalHeader.SizeOfHeapReserve,
-                                     NtHeader->OptionalHeader.SizeOfHeapCommit,
-                                     NULL,
-                                     &HeapParameters);
+
+    {
+        SIZE_T HeapReserve = NtHeader->OptionalHeader.SizeOfHeapReserve;
+        SIZE_T HeapCommit = NtHeader->OptionalHeader.SizeOfHeapCommit;
+
+        if ((HeapReserve < 0x10000) ||
+            (HeapReserve > 0x10000000ULL) ||
+            (HeapReserve & (PAGE_SIZE - 1)))
+        {
+            HeapReserve = 0x100000;
+        }
+
+        if ((HeapCommit < 0x1000) ||
+            (HeapCommit > HeapReserve) ||
+            (HeapCommit > 0x1000000ULL) ||
+            (HeapCommit & (PAGE_SIZE - 1)))
+        {
+            HeapCommit = min(HeapReserve, (SIZE_T)0x10000);
+            if (HeapCommit < 0x10000)
+            {
+                HeapCommit = 0x10000;
+            }
+        }
+
+        DPRINT1("LDR: Creating process heap Reserve=%Ix Commit=%Ix\n",
+                (SIZE_T)HeapReserve,
+                (SIZE_T)HeapCommit);
+
+        Peb->ProcessHeap = RtlCreateHeap(HeapFlags,
+                                         NULL,
+                                         HeapReserve,
+                                         HeapCommit,
+                                         NULL,
+                                         &HeapParameters);
+    }
 
     if (!Peb->ProcessHeap)
     {
@@ -2835,3 +2895,33 @@ LdrpInit(PCONTEXT Context,
 }
 
 /* EOF */
+#if defined(__clang__)
+static LDRP_NO_STACK_PROTECTOR VOID
+LdrpInitSspGuard(VOID)
+{
+    LARGE_INTEGER CurrentTime = { { 0, 0 } };
+
+    if (__stack_chk_guard)
+        return;
+
+    /* Ignore failures, best-effort entropy */
+    NtQuerySystemTime(&CurrentTime);
+
+    uintptr_t Mix = (uintptr_t)&__stack_chk_guard;
+    Mix ^= (uintptr_t)NtCurrentTeb();
+    Mix ^= (uintptr_t)NtCurrentPeb();
+    Mix ^= (uintptr_t)CurrentTime.QuadPart;
+    Mix ^= (uintptr_t)0xBB40E64EULL;
+
+    if (Mix == 0)
+        Mix = (uintptr_t)0xBB40E64EULL;
+
+    __stack_chk_guard = Mix;
+}
+
+DECLSPEC_NORETURN
+void __stack_chk_fail(void)
+{
+    RtlRaiseStatus(STATUS_STACK_BUFFER_OVERRUN);
+}
+#endif
