@@ -70,11 +70,29 @@ set(GDB FALSE CACHE BOOL
 "Whether to compile for debugging with GDB.
 If you don't use GDB, don't enable this.")
 
-set(DBG TRUE CACHE BOOL
+set(_ROS_DEFAULT_DBG TRUE)
+if(NOT CMAKE_CONFIGURATION_TYPES)
+    string(TOUPPER "${CMAKE_BUILD_TYPE}" _ROS_BUILD_TYPE_UPPER)
+    if(_ROS_BUILD_TYPE_UPPER STREQUAL "RELEASE" OR
+       _ROS_BUILD_TYPE_UPPER STREQUAL "MINSIZEREL")
+        set(_ROS_DEFAULT_DBG FALSE)
+    endif()
+endif()
+
+set(DBG ${_ROS_DEFAULT_DBG} CACHE BOOL
 "Whether to compile for debugging.")
 
+set(_ROS_DEFAULT_KDBG TRUE)
+if(NOT CMAKE_CONFIGURATION_TYPES)
+    string(TOUPPER "${CMAKE_BUILD_TYPE}" _ROS_BUILD_TYPE_UPPER)
+    if(_ROS_BUILD_TYPE_UPPER STREQUAL "RELEASE" OR
+       _ROS_BUILD_TYPE_UPPER STREQUAL "MINSIZEREL")
+        set(_ROS_DEFAULT_KDBG FALSE)
+    endif()
+endif()
+
 if(MSVC)
-    set(KDBG TRUE CACHE BOOL
+    set(KDBG ${_ROS_DEFAULT_KDBG} CACHE BOOL
 "Whether to compile in the integrated kernel debugger.")
     if(CMAKE_BUILD_TYPE STREQUAL "Release")
         set(_WINKD_ FALSE CACHE BOOL "Whether to compile with the KD protocol.")
@@ -82,7 +100,7 @@ if(MSVC)
         set(_WINKD_ TRUE CACHE BOOL "Whether to compile with the KD protocol.")
     endif()
 else()
-    set(KDBG TRUE CACHE BOOL "Whether to compile in the integrated kernel debugger.")
+    set(KDBG ${_ROS_DEFAULT_KDBG} CACHE BOOL "Whether to compile in the integrated kernel debugger.")
     set(_WINKD_ FALSE CACHE BOOL "Whether to compile with the KD protocol.")
 endif()
 
