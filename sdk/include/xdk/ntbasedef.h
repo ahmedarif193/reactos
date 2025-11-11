@@ -217,7 +217,13 @@
 
 /* Inlines */
 #ifndef FORCEINLINE
- #define FORCEINLINE __forceinline
+ #if defined(_MSC_VER) && !defined(__clang__)
+  #define FORCEINLINE __forceinline
+ #elif defined(__cplusplus)
+  #define FORCEINLINE __attribute__((__always_inline__)) inline
+ #else
+  #define FORCEINLINE __attribute__((__always_inline__)) static inline
+ #endif
 #endif /* FORCEINLINE */
 
 #ifndef DECLSPEC_NOINLINE
