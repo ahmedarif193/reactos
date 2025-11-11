@@ -121,7 +121,7 @@ adns_status adns__parse_domain(adns_state ads, int serv, adns_query qu,
 
   adns__findlabel_start(&fls,ads, serv,qu, dgram,dglen,max, *cbyte_io,cbyte_io);
   vb->used= 0;
-  return adns__parse_domain_more(&fls,ads,qu, vb,flags,dgram);
+  return adns__parse_domain_more(&fls,ads,qu, vb,(parsedomain_flags)flags,dgram);
 }
 
 adns_status adns__parse_domain_more(findlabel_state *fls, adns_state ads,

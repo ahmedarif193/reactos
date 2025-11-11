@@ -108,7 +108,7 @@ public:
         return BrokerNotification((HANDLE)wParam, (DWORD)lParam);
     }
 
-    void OnFinalMessage(HWND)
+    void OnFinalMessage(HWND) override
     {
         // The server will destroy this window.
         // After the window gets destroyed we can delete this broker here.

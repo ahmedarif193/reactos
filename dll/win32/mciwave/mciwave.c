@@ -46,8 +46,8 @@ typedef struct {
     WAVEFORMATEX		wfxRef;
     LPWAVEFORMATEX		lpWaveFormat;	/* Points to wfxRef until set by OPEN or RECORD */
     BOOL			fInput;		/* FALSE = Output, TRUE = Input */
-    WORD			wInput;		/* wave input device */
-    WORD			wOutput;	/* wave output device */
+    UINT			wInput;		/* wave input device id (can be WAVE_MAPPER) */
+    UINT			wOutput;	/* wave output device id (can be WAVE_MAPPER) */
     volatile WORD		dwStatus;	/* one from MCI_MODE_xxxx */
     DWORD			dwMciTimeFormat;/* One of the supported MCI_FORMAT_xxxx */
     DWORD			dwPosition;	/* position in bytes in chunk */
@@ -1352,7 +1352,7 @@ static DWORD WAVE_mciSet(MCIDEVICEID wDevID, DWORD dwFlags, LPMCI_WAVE_SET_PARMS
 	TRACE("MCI_WAVE_INPUT = %d\n", lpParms->wInput);
 	if (lpParms->wInput >= waveInGetNumDevs())
 	    return MCIERR_OUTOFRANGE;
-	if (wmw->wInput != (WORD)lpParms->wInput)
+	if (wmw->wInput != lpParms->wInput)
 	    WAVE_mciStop(wDevID, MCI_WAIT, NULL);
 	wmw->wInput = lpParms->wInput;
     }
@@ -1360,19 +1360,19 @@ static DWORD WAVE_mciSet(MCIDEVICEID wDevID, DWORD dwFlags, LPMCI_WAVE_SET_PARMS
 	TRACE("MCI_WAVE_OUTPUT = %d\n", lpParms->wOutput);
 	if (lpParms->wOutput >= waveOutGetNumDevs())
 	    return MCIERR_OUTOFRANGE;
-	if (wmw->wOutput != (WORD)lpParms->wOutput)
+	if (wmw->wOutput != lpParms->wOutput)
 	    WAVE_mciStop(wDevID, MCI_WAIT, NULL);
 	wmw->wOutput = lpParms->wOutput;
     }
     if (dwFlags & MCI_WAVE_SET_ANYINPUT) {
 	TRACE("MCI_WAVE_SET_ANYINPUT\n");
-	if (wmw->wInput != (WORD)lpParms->wInput)
+	if (wmw->wInput != lpParms->wInput)
 	    WAVE_mciStop(wDevID, MCI_WAIT, NULL);
 	wmw->wInput = WAVE_MAPPER;
     }
     if (dwFlags & MCI_WAVE_SET_ANYOUTPUT) {
 	TRACE("MCI_WAVE_SET_ANYOUTPUT\n");
-	if (wmw->wOutput != (WORD)lpParms->wOutput)
+	if (wmw->wOutput != lpParms->wOutput)
 	    WAVE_mciStop(wDevID, MCI_WAIT, NULL);
 	wmw->wOutput = WAVE_MAPPER;
     }
@@ -1531,7 +1531,7 @@ static DWORD WAVE_mciStatus(MCIDEVICEID wDevID, DWORD dwFlags, LPMCI_STATUS_PARM
 	    ret = MCI_RESOURCE_RETURNED;
 	    break;
 	case MCI_WAVE_INPUT:
-	    if (wmw->wInput != (WORD)WAVE_MAPPER)
+	    if (wmw->wInput != WAVE_MAPPER)
 		lpParms->dwReturn = wmw->wInput;
 	    else {
 		lpParms->dwReturn = MAKEMCIRESOURCE(WAVE_MAPPER, WAVE_MAPPER_S);
@@ -1540,7 +1540,7 @@ static DWORD WAVE_mciStatus(MCIDEVICEID wDevID, DWORD dwFlags, LPMCI_STATUS_PARM
 	    TRACE("MCI_WAVE_INPUT => %d\n", (signed)wmw->wInput);
 	    break;
 	case MCI_WAVE_OUTPUT:
-	    if (wmw->wOutput != (WORD)WAVE_MAPPER)
+	    if (wmw->wOutput != WAVE_MAPPER)
 		lpParms->dwReturn = wmw->wOutput;
 	    else {
 		lpParms->dwReturn = MAKEMCIRESOURCE(WAVE_MAPPER, WAVE_MAPPER_S);

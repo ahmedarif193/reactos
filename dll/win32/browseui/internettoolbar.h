@@ -54,7 +54,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetObject(LPSMDATA psmd, REFIID riid, void **ppvObject);
 public:
     // *** IShellMenuCallback methods ***
-    virtual HRESULT STDMETHODCALLTYPE CallbackSM(LPSMDATA psmd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+    virtual HRESULT STDMETHODCALLTYPE CallbackSM(LPSMDATA psmd, UINT uMsg, WPARAM wParam, LPARAM lParam) override;
 
 BEGIN_COM_MAP(CMenuCallback)
     COM_INTERFACE_ENTRY_IID(IID_IShellMenuCallback, IShellMenuCallback)

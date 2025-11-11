@@ -572,7 +572,7 @@ public:
         return This->TrayPropertiesThread();
     }
 
-    HWND STDMETHODCALLTYPE DisplayProperties()
+    HWND STDMETHODCALLTYPE DisplayProperties() override
     {
         HWND hTrayProp;
 
@@ -631,7 +631,7 @@ public:
         }
     }
 
-    BOOL STDMETHODCALLTYPE ExecContextMenuCmd(IN UINT uiCmd)
+    BOOL STDMETHODCALLTYPE ExecContextMenuCmd(IN UINT uiCmd) override
     {
         switch (uiCmd)
         {
@@ -2118,7 +2118,7 @@ ChangePos:
     /*
      * ITrayWindow
      */
-    HRESULT STDMETHODCALLTYPE Open()
+    HRESULT STDMETHODCALLTYPE Open() override
     {
         RECT rcWnd;
 
@@ -2155,7 +2155,7 @@ ChangePos:
         return S_OK;
     }
 
-    HRESULT STDMETHODCALLTYPE Close()
+    HRESULT STDMETHODCALLTYPE Close() override
     {
         if (m_hWnd != NULL)
         {
@@ -2168,23 +2168,23 @@ ChangePos:
         return S_OK;
     }
 
-    HWND STDMETHODCALLTYPE GetHWND()
+    HWND STDMETHODCALLTYPE GetHWND() override
     {
         return m_hWnd;
     }
 
-    BOOL STDMETHODCALLTYPE IsSpecialHWND(IN HWND hWnd)
+    BOOL STDMETHODCALLTYPE IsSpecialHWND(IN HWND hWnd) override
     {
         return (m_hWnd == hWnd ||
                 (m_DesktopWnd != NULL && m_hWnd == m_DesktopWnd));
     }
 
-    BOOL STDMETHODCALLTYPE IsHorizontal()
+    BOOL STDMETHODCALLTYPE IsHorizontal() override
     {
         return IsPosHorizontal();
     }
 
-    BOOL STDMETHODCALLTYPE Lock(IN BOOL bLock)
+    BOOL STDMETHODCALLTYPE Lock(IN BOOL bLock) override
     {
         BOOL bPrevLock = g_TaskbarSettings.bLock;
 
@@ -2237,7 +2237,7 @@ ChangePos:
     /* The task window is visible and non-WS_EX_TOOLWINDOW and
        { has WS_EX_APPWINDOW style or has no owner } and is none of explorer's
        special windows (such as the desktop or the tray window) */
-    BOOL STDMETHODCALLTYPE IsTaskWnd(HWND hWnd)
+    BOOL STDMETHODCALLTYPE IsTaskWnd(HWND hWnd) override
     {
         if (::IsWindow(hWnd) && ::IsWindowVisible(hWnd) && !IsSpecialHWND(hWnd))
         {
@@ -2258,7 +2258,7 @@ ChangePos:
                                                UINT indexMenu,
                                                UINT idCmdFirst,
                                                UINT idCmdLast,
-                                               UINT uFlags)
+                                               UINT uFlags) override
     {
         if (!m_ContextMenu)
         {
@@ -2270,7 +2270,7 @@ ChangePos:
         return m_ContextMenu->QueryContextMenu(hPopup, indexMenu, idCmdFirst, idCmdLast, uFlags);
     }
 
-    HRESULT STDMETHODCALLTYPE InvokeCommand(LPCMINVOKECOMMANDINFO lpici)
+    HRESULT STDMETHODCALLTYPE InvokeCommand(LPCMINVOKECOMMANDINFO lpici) override
     {
         if (!m_ContextMenu)
             return E_INVALIDARG;
@@ -2282,7 +2282,7 @@ ChangePos:
                                                UINT uType,
                                                UINT *pwReserved,
                                                LPSTR pszName,
-                                               UINT cchMax)
+                                               UINT cchMax) override
     {
         if (!m_ContextMenu)
             return E_INVALIDARG;

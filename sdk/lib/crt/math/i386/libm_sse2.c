@@ -11,9 +11,14 @@
 #if defined(_MSC_VER) && !defined(__clang__)
 #pragma function(acos,asin,atan,atan2,cos)
 #pragma function(exp,log,log10,pow,sin,tan)
+#endif
+
+#ifndef __ATTRIBUTE_SSE2__
+#if defined(_MSC_VER) && !defined(__clang__)
 #define __ATTRIBUTE_SSE2__
 #else
 #define __ATTRIBUTE_SSE2__ __attribute__((__target__("sse2")))
+#endif
 #endif
 
 #ifdef __GNUC__

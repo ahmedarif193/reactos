@@ -543,10 +543,10 @@ RxAllocateObject(
     PMINIRDR_DISPATCH MRxDispatch,
     ULONG NameLength)
 {
-    ULONG Tag, ObjectSize;
-    PVOID Object, *Extension;
-    PRX_PREFIX_ENTRY PrefixEntry;
-    USHORT StructSize, ExtensionSize;
+    ULONG Tag = 0, ObjectSize;
+    PVOID Object, *Extension = NULL;
+    PRX_PREFIX_ENTRY PrefixEntry = NULL;
+    USHORT StructSize = 0, ExtensionSize;
 
     PAGED_CODE();
 
@@ -583,7 +583,7 @@ RxAllocateObject(
 
         default:
             ASSERT(FALSE);
-            break;
+            return NULL;
     }
 
     /* Now, allocate the object */
@@ -618,7 +618,8 @@ RxAllocateObject(
 
         default:
             ASSERT(FALSE);
-            break;
+            RxFreePoolWithTag(Object, Tag);
+            return NULL;
     }
 
     /* Set the prefix table unicode string */
@@ -630,7 +631,7 @@ RxAllocateObject(
     PrefixEntry->Prefix.Buffer = Add2Ptr(Object, ExtensionSize + StructSize);
 
     /* Return the extension if we are asked to manage it */
-    if (ExtensionSize != 0)
+    if (ExtensionSize != 0 && Extension != NULL)
     {
         *Extension = Add2Ptr(Object, StructSize);
     }

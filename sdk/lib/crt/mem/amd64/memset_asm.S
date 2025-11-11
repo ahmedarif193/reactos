@@ -1,105 +1,131 @@
-/*
- * COPYRIGHT:         See COPYING in the top level directory
+/* 
  * PROJECT:           ReactOS C Runtime Library
- * PURPOSE:           memset implementation for amd64
- * FILE:              sdk/lib/crt/mem/amd64/memset_asm.S
+ * PURPOSE:           Optimized memset implementation for amd64 (GAS/Clang/GCC, COFF-safe)
+ * NOTES:
+ *   - Bootloader-safe: no SSE, no string instructions.
+ *   - Windows x64 ABI safe: touches only caller-saved regs (RAX, RCX, RDX, R8–R11).
+ *   - Aligns to 8 bytes, then writes 8B chunks + 4/2/1 tails.
  */
 
-#include <asm.inc>
+.intel_syntax noprefix
+.text
+.p2align 4, 0x90
 
-/*
- * void *memset(void *dst, int val, size_t count)
- *
- * Parameters:
- *   rcx - dst pointer
- *   edx - value (byte)
- *   r8  - count
- *
- * Returns:
- *   rax - dst pointer
- */
+.globl memset
+.def memset; .scl 2; .type 32; .endef
+    .seh_proc memset
+memset:
+    .seh_endprologue
+    .cfi_startproc
+    # RCX = dst, EDX = byte value, R8 = count
+    mov     rax, rcx                # return value = dst
 
-PUBLIC memset
+    test    r8, r8
+    jz      .Ldone
 
-/* FUNCTIONS *****************************************************************/
-.code
+    # Build 64-bit fill pattern in R11 from DL
+    movzx   r11d, dl                # r11 = 0..255
+    mov     r10, 0x0101010101010101
+    imul    r11, r10                # r11 = byte replicated across 8 bytes
 
-FUNC memset
-    FPO 0, 3, 2, 0, 0, FRAME_FPO
+    # If count < 16, go to small tail
+    cmp     r8, 16
+    jb      .Lsmall
 
-    /* Save registers */
-    push rdi
-    push rsi
+    # -------------------------
+    # Align destination to 8B
+    # -------------------------
+    mov     r9, rcx
+    and     r9, 7                   # misalignment [0..7]
+    jz      .Lqwords
 
-    /* Setup registers for string operations */
-    mov rdi, rcx                    /* rdi = destination */
-    mov r9, rcx                     /* r9 = save original dst for return */
-    movzx r11, dl                   /* r11 = save byte value */
-    mov rax, r11                    /* rax = byte value for stosb/stosq */
-    mov rcx, r8                     /* rcx = count */
+    mov     r10, 8
+    sub     r10, r9                 # bytes to align [1..7]
+    cmp     r10, r8
+    cmova   r10, r8                 # cap by remaining count
+    sub     r8,  r10                # reduce remaining
 
-    /* Clear direction flag */
-    cld
+.p2align 4, 0x90
+.Lalign_bytes:
+    mov     byte ptr [rcx], r11b
+    inc     rcx
+    dec     r10
+    jnz     .Lalign_bytes
 
-    /* Check if count is less than 16 bytes */
-    cmp rcx, 16
-    jb ByteFill
+    test    r8, r8
+    jz      .Ldone
 
-    /* Expand byte value to fill entire rax (8 bytes) */
-    mov r10, HEX(0101010101010101)
-    imul rax, r10                   /* Replicate byte across all 8 bytes */
+    # -------------------------
+    # 8-byte bulk stores
+    # -------------------------
+.Lqwords:
+    mov     r9, r8
+    shr     r9, 3                   # r9 = # of qwords
+    jz      .Ltail
 
-    /* Save count */
-    mov rdx, rcx
+.p2align 4, 0x90
+.Lqw_loop:
+    mov     qword ptr [rcx], r11
+    add     rcx, 8
+    dec     r9
+    jnz     .Lqw_loop
 
-    /* Check if destination is already 8-byte aligned */
-    test rdi, 7
-    je QwordFill
+    and     r8, 7                   # remaining < 8
 
-    /* Align destination to 8-byte boundary */
-    mov rcx, rdi
-    and rcx, 7                      /* Get misalignment (0-7) */
-    neg rcx
-    add rcx, 8                      /* Calculate bytes needed to align */
-    sub rdx, rcx                    /* Adjust count */
+    # -------------------------
+    # 4/2/1 tail
+    # -------------------------
+.Ltail:
+    test    r8, 4
+    jz      .Ltail_2
+    mov     dword ptr [rcx], r11d
+    add     rcx, 4
+    sub     r8, 4
 
-    /* Fill alignment bytes using stosb */
-    rep stosb
+.Ltail_2:
+    test    r8, 2
+    jz      .Ltail_1
+    mov     word ptr [rcx], r11w
+    add     rcx, 2
+    sub     r8, 2
 
-    /* Restore expanded qword value and count */
-    mov rcx, rdx
-    mov rax, r11                    /* Get back the byte value */
-    mov r10, HEX(0101010101010101)
-    imul rax, r10
+.Ltail_1:
+    test    r8, 1
+    jz      .Ldone
+    mov     byte ptr [rcx], r11b
+    jmp     .Ldone
 
-QwordFill:
-    /* Fill using qwords (rep stosq) */
-    mov rdx, rcx
-    shr rcx, 3                      /* rcx = count / 8 */
-    jz CheckRemainder
-    rep stosq
+    # -------------------------
+    # Small sizes (< 16)
+    # -------------------------
+.Lsmall:
+    # Try 8,4,2,1 in sequence
+    test    r8, 8
+    jz      .Lsm_4
+    mov     qword ptr [rcx], r11
+    add     rcx, 8
+    sub     r8, 8
 
-CheckRemainder:
-    /* Fill remaining bytes (0-7) */
-    mov rcx, rdx
-    and rcx, 7
-    jz Done
+.Lsm_4:
+    test    r8, 4
+    jz      .Lsm_2
+    mov     dword ptr [rcx], r11d
+    add     rcx, 4
+    sub     r8, 4
 
-ByteFill:
-    /* Fill remaining bytes using stosb */
-    rep stosb
+.Lsm_2:
+    test    r8, 2
+    jz      .Lsm_1
+    mov     word ptr [rcx], r11w
+    add     rcx, 2
+    sub     r8, 2
 
-Done:
-    /* Return original pointer */
-    mov rax, r9
+.Lsm_1:
+    test    r8, 1
+    jz      .Ldone
+    mov     byte ptr [rcx], r11b
 
-    /* Restore registers */
-    pop rsi
-    pop rdi
+.Ldone:
     ret
-
-ENDFUNC
-
-    /* no external references here */
-
-END
+    .seh_endproc
+    .cfi_endproc

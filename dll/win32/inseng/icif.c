@@ -1645,7 +1645,7 @@ error:
 
 static HRESULT process_section(struct ciffile *file, struct inf_section *section, const char *section_name)
 {
-    HRESULT hr;
+    HRESULT hr = E_FAIL;
     char *type;
 
     if (!section_get_str(section, "SectionType", &type, "Component"))
@@ -1656,7 +1656,10 @@ static HRESULT process_section(struct ciffile *file, struct inf_section *section
     else if (strcasecmp(type, "Group") == 0)
         hr = process_group(file, section, section_name);
     else
+    {
+        hr = E_NOTIMPL;
         FIXME("Don't know how to process %s\n", debugstr_a(type));
+    }
 
     heap_free(type);
     return hr;

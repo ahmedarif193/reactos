@@ -21,47 +21,47 @@ class CFindFolder :
         public IConnectionPointImpl<CFindFolder, &DIID_DSearchCommandEvents>
 {
     // *** IShellFolder2 methods ***
-    STDMETHODIMP GetDefaultSearchGUID(GUID *pguid);
+    STDMETHODIMP GetDefaultSearchGUID(GUID *pguid) override;
 
-    STDMETHODIMP EnumSearches(IEnumExtraSearch **ppenum);
+    STDMETHODIMP EnumSearches(IEnumExtraSearch **ppenum) override;
 
-    STDMETHODIMP GetDefaultColumn(DWORD dwRes, ULONG *pSort, ULONG *pDisplay);
+    STDMETHODIMP GetDefaultColumn(DWORD dwRes, ULONG *pSort, ULONG *pDisplay) override;
 
-    STDMETHODIMP GetDefaultColumnState(UINT iColumn, DWORD *pcsFlags);
+    STDMETHODIMP GetDefaultColumnState(UINT iColumn, DWORD *pcsFlags) override;
 
-    STDMETHODIMP GetDetailsEx(PCUITEMID_CHILD pidl, const SHCOLUMNID *pscid, VARIANT *pv);
+    STDMETHODIMP GetDetailsEx(PCUITEMID_CHILD pidl, const SHCOLUMNID *pscid, VARIANT *pv) override;
 
-    STDMETHODIMP GetDetailsOf(PCUITEMID_CHILD pidl, UINT iColumn, SHELLDETAILS *pDetails);
+    STDMETHODIMP GetDetailsOf(PCUITEMID_CHILD pidl, UINT iColumn, SHELLDETAILS *pDetails) override;
 
-    STDMETHODIMP MapColumnToSCID(UINT iColumn, SHCOLUMNID *pscid);
+    STDMETHODIMP MapColumnToSCID(UINT iColumn, SHCOLUMNID *pscid) override;
 
 
     // *** IShellFolder methods ***
     STDMETHODIMP ParseDisplayName(HWND hwndOwner, LPBC pbc, LPOLESTR lpszDisplayName, ULONG *pchEaten,
-                                  PIDLIST_RELATIVE *ppidl, ULONG *pdwAttributes);
+                                  PIDLIST_RELATIVE *ppidl, ULONG *pdwAttributes) override;
 
-    STDMETHODIMP EnumObjects(HWND hwndOwner, DWORD dwFlags, LPENUMIDLIST *ppEnumIDList);
+    STDMETHODIMP EnumObjects(HWND hwndOwner, DWORD dwFlags, LPENUMIDLIST *ppEnumIDList) override;
 
-    STDMETHODIMP BindToObject(PCUIDLIST_RELATIVE pidl, LPBC pbcReserved, REFIID riid, LPVOID *ppvOut);
+    STDMETHODIMP BindToObject(PCUIDLIST_RELATIVE pidl, LPBC pbcReserved, REFIID riid, LPVOID *ppvOut) override;
 
-    STDMETHODIMP BindToStorage(PCUIDLIST_RELATIVE pidl, LPBC pbcReserved, REFIID riid, LPVOID *ppvOut);
+    STDMETHODIMP BindToStorage(PCUIDLIST_RELATIVE pidl, LPBC pbcReserved, REFIID riid, LPVOID *ppvOut) override;
 
-    STDMETHODIMP CompareIDs(LPARAM lParam, PCUIDLIST_RELATIVE pidl1, PCUIDLIST_RELATIVE pidl2);
+    STDMETHODIMP CompareIDs(LPARAM lParam, PCUIDLIST_RELATIVE pidl1, PCUIDLIST_RELATIVE pidl2) override;
 
-    STDMETHODIMP CreateViewObject(HWND hwndOwner, REFIID riid, LPVOID *ppvOut);
+    STDMETHODIMP CreateViewObject(HWND hwndOwner, REFIID riid, LPVOID *ppvOut) override;
 
-    STDMETHODIMP GetAttributesOf(UINT cidl, PCUITEMID_CHILD_ARRAY apidl, DWORD *rgfInOut);
+    STDMETHODIMP GetAttributesOf(UINT cidl, PCUITEMID_CHILD_ARRAY apidl, DWORD *rgfInOut) override;
 
     STDMETHODIMP GetUIObjectOf(HWND hwndOwner, UINT cidl, PCUITEMID_CHILD_ARRAY apidl, REFIID riid, UINT *prgfInOut,
-                               LPVOID *ppvOut);
+                               LPVOID *ppvOut) override;
 
 
-    STDMETHODIMP GetDisplayNameOf(PCUITEMID_CHILD pidl, DWORD dwFlags, LPSTRRET pName);
+    STDMETHODIMP GetDisplayNameOf(PCUITEMID_CHILD pidl, DWORD dwFlags, LPSTRRET pName) override;
     STDMETHODIMP SetNameOf(HWND hwndOwner, PCUITEMID_CHILD pidl, LPCOLESTR lpName, DWORD dwFlags,
-                           PITEMID_CHILD *pPidlOut);
+                           PITEMID_CHILD *pPidlOut) override;
 
     //// *** IShellFolderViewCB methods ***
-    STDMETHODIMP MessageSFVCB(UINT uMsg, WPARAM wParam, LPARAM lParam);
+    STDMETHODIMP MessageSFVCB(UINT uMsg, WPARAM wParam, LPARAM lParam) override;
 
     //// *** IItemNameLimits methods ***
     STDMETHOD(GetMaxLength)(LPCWSTR pszName, int *piMaxNameLen) override;
@@ -83,15 +83,15 @@ private:
     static DWORD WINAPI SearchThreadProc(LPVOID lpParameter);
 
     //// *** IPersistFolder2 methods ***
-    STDMETHODIMP GetCurFolder(PIDLIST_ABSOLUTE *pidl);
+    STDMETHODIMP GetCurFolder(PIDLIST_ABSOLUTE *pidl) override;
 
 
     // *** IPersistFolder methods ***
-    STDMETHODIMP Initialize(PCIDLIST_ABSOLUTE pidl);
+    STDMETHODIMP Initialize(PCIDLIST_ABSOLUTE pidl) override;
 
 
     // *** IPersist methods ***
-    STDMETHODIMP GetClassID(CLSID *pClassId);
+    STDMETHODIMP GetClassID(CLSID *pClassId) override;
 
     // *** Message handlers ***
     LRESULT StartSearch(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
@@ -133,4 +133,3 @@ public:
         COM_INTERFACE_ENTRY_IID(IID_IConnectionPointContainer, IConnectionPointContainer)
     END_COM_MAP()
 };
-

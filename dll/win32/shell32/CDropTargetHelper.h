@@ -34,8 +34,8 @@ public:
 	CDropTargetHelper();
 	~CDropTargetHelper();
 
-	virtual HRESULT WINAPI InitializeFromBitmap(LPSHDRAGIMAGE pshdi, IDataObject *pDataObject);
-	virtual HRESULT WINAPI InitializeFromWindow(HWND hwnd, POINT *ppt, IDataObject *pDataObject);
+	virtual HRESULT WINAPI InitializeFromBitmap(LPSHDRAGIMAGE pshdi, IDataObject *pDataObject) override;
+	virtual HRESULT WINAPI InitializeFromWindow(HWND hwnd, POINT *ppt, IDataObject *pDataObject) override;
 
 	STDMETHOD(DragEnter)(HWND hwndTarget, IDataObject* pDataObject, POINT* ppt, DWORD dwEffect) override;
 	STDMETHOD(DragLeave)() override;

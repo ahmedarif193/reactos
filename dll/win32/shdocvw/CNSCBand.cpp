@@ -604,14 +604,14 @@ LRESULT CNSCBand::OnSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled
 LRESULT CNSCBand::OnSetFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
 {
     m_bFocused = TRUE;
-    IUnknown_OnFocusChangeIS(m_pSite, reinterpret_cast<IUnknown*>(this), TRUE);
+    IUnknown_OnFocusChangeIS(m_pSite, static_cast<IUnknown*>(static_cast<IDeskBand*>(this)), TRUE);
     bHandled = FALSE;
     return 0;
 }
 
 LRESULT CNSCBand::OnKillFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
 {
-    IUnknown_OnFocusChangeIS(m_pSite, reinterpret_cast<IUnknown*>(this), FALSE);
+    IUnknown_OnFocusChangeIS(m_pSite, static_cast<IUnknown*>(static_cast<IDeskBand*>(this)), FALSE);
     m_bFocused = FALSE;
     return 0;
 }

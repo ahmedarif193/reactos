@@ -966,7 +966,7 @@ class CFindFolderContextMenu :
     static const UINT ADDITIONAL_MENU_ITEMS = 2;
 
     // *** IContextMenu ***
-    STDMETHODIMP QueryContextMenu(HMENU hMenu, UINT indexMenu, UINT idCmdFirst, UINT idCmdLast, UINT uFlags)
+    STDMETHODIMP QueryContextMenu(HMENU hMenu, UINT indexMenu, UINT idCmdFirst, UINT idCmdLast, UINT uFlags) override
     {
         if (m_cidl > 1)
             uFlags &= ~CMF_CANRENAME;
@@ -986,7 +986,7 @@ class CFindFolderContextMenu :
         return m_pInner->QueryContextMenu(hMenu, indexMenu, idCmdFirst, idCmdLast, uFlags);
     }
 
-    STDMETHODIMP InvokeCommand(LPCMINVOKECOMMANDINFO lpcmi)
+    STDMETHODIMP InvokeCommand(LPCMINVOKECOMMANDINFO lpcmi) override
     {
         WORD idCmd = IS_INTRESOURCE(lpcmi->lpVerb) ? LOWORD(lpcmi->lpVerb) : 0;
         if (m_MyFirstId && idCmd >= m_MyFirstId && idCmd < m_MyFirstId + ADDITIONAL_MENU_ITEMS)
@@ -1028,7 +1028,7 @@ class CFindFolderContextMenu :
         return m_pInner->InvokeCommand(lpcmi);
     }
 
-    STDMETHODIMP GetCommandString(UINT_PTR idCommand, UINT uFlags, UINT *lpReserved, LPSTR lpszName, UINT uMaxNameLen)
+    STDMETHODIMP GetCommandString(UINT_PTR idCommand, UINT uFlags, UINT *lpReserved, LPSTR lpszName, UINT uMaxNameLen) override
     {
         return m_pInner->GetCommandString(idCommand, uFlags, lpReserved, lpszName, uMaxNameLen);
     }

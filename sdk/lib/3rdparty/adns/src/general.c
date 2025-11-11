@@ -163,7 +163,8 @@ const char *adns__diag_domain(adns_state ads, int serv, adns_query qu,
 			      vbuf *vb, const byte *dgram, int dglen, int cbyte) {
   adns_status st;
 
-  st= adns__parse_domain(ads,serv,qu,vb, pdf_quoteok, dgram,dglen,&cbyte,dglen);
+  const adns_queryflags diag_flags = (adns_queryflags)pdf_quoteok;
+  st= adns__parse_domain(ads,serv,qu,vb, diag_flags, dgram,dglen,&cbyte,dglen);
   if (st == adns_s_nomemory) {
     return "<cannot report domain... out of memory>";
   }

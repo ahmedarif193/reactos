@@ -1,143 +1,141 @@
-/*
+/* 
  * PROJECT:           ReactOS C Runtime Library
- * PURPOSE:           Optimized memmove implementation for amd64
- * COPYRIGHT:         Copyright 2025 Ahmed ARIF (arif.ing@outlook.com)
+ * PURPOSE:           Optimized memmove implementation for amd64 (GAS/Clang/GCC, COFF-safe)
+ * NOTES:
+ *   - Bootloader-safe: no SSE, only GPRs.
+ *   - Correctly handles overlap by switching direction.
+ *   - Windows x64 ABI safe: touches only caller-saved regs (RAX, RCX, RDX, R8–R11).
  */
 
-#include <asm.inc>
+.intel_syntax noprefix
+.text
+.p2align 4, 0x90
 
-/*
- * void *memmove(void *dst, const void *src, size_t count)
- *
- * Parameters (Windows x64 ABI):
- *   rcx - destination pointer
- *   rdx - source pointer
- *   r8  - count (number of bytes)
- *
- * Returns:
- *   rax - destination pointer
- *
- * Optimized implementation without SSE (bootloader-safe)
- * Uses only general-purpose registers for early boot compatibility
- * Properly handles overlapping regions
- */
+.globl memmove
+.def memmove; .scl 2; .type 32; .endef
+memmove:
+    .cfi_startproc
+    # RCX = dst, RDX = src, R8 = count
+    mov     rax, rcx                 # return value = dst
 
-PUBLIC memmove
+    test    r8, r8
+    jz      .Ldone
 
-/* FUNCTIONS *****************************************************************/
-.code
+    cmp     rcx, rdx
+    je      .Ldone                   # dst == src
 
-FUNC memmove
-    FPO 0, 3, 0, 0, 0, FRAME_FPO
+    # If dst <= src, or dst >= src+count, forward is safe
+    jb      .Lcopy_forward           # dst < src
+    mov     r9, rdx
+    add     r9, r8                   # r9 = src + count (may overflow)
+    jc      .Lcopy_backward          # overflow => pick backward to be safe
+    cmp     rcx, r9
+    jae     .Lcopy_forward           # dst >= src+count => no overlap => forward
 
-    /* Save destination for return value */
-    mov rax, rcx
+    # -------------------------
+    # Backward copy (overlap)
+    # -------------------------
+.Lcopy_backward:
+    # Set pointers one past the end
+    add     rdx, r8
+    add     rcx, r8
+    mov     r9,  r8
 
-    /* Check for zero count */
-    test r8, r8
-    jz memmove_done
+    # 8-byte chunks
+    mov     r10, r9
+    shr     r10, 3                   # r10 = r9 / 8
+    jz      .Lbwd_tail
 
-    /* Check for overlap: if (dest > src) AND (dest < src + count) */
-    cmp rcx, rdx
-    jbe copy_forward                /* dest <= src, safe to copy forward */
+.p2align 4, 0x90
+.Lbwd_qword:
+    sub     rdx, 8
+    sub     rcx, 8
+    mov     r11, [rdx]
+    mov     [rcx], r11
+    dec     r10
+    jnz     .Lbwd_qword
 
-    /* dest > src: check if dest < src + count (overlap check) */
-    mov r9, rdx
-    add r9, r8
-    jc copy_backward                /* Overflow: use backward copy as safe default */
-    cmp rcx, r9
-    jae copy_forward                /* dest >= src + count, no overlap */
+    and     r9, 7                    # remaining < 8
 
-copy_backward:
-    /* Overlapping and dest > src: must copy backward */
-    /* Move to end of buffers */
-    lea rdx, [rdx + r8 - 1]        /* src = src + n - 1 */
-    lea rcx, [rcx + r8 - 1]        /* dest = dest + n - 1 */
+.Lbwd_tail:
+    # 4-byte
+    test    r9, 4
+    jz      .Lbwd_2
+    sub     rdx, 4
+    sub     rcx, 4
+    mov     r11d, [rdx]
+    mov     [rcx], r11d
+    sub     r9, 4
 
-    mov r9, r8                      /* r9 = count */
+.Lbwd_2:
+    # 2-byte
+    test    r9, 2
+    jz      .Lbwd_1
+    sub     rdx, 2
+    sub     rcx, 2
+    mov     r11w, [rdx]
+    mov     [rcx], r11w
+    sub     r9, 2
 
-    /* Copy 8 bytes at a time backward */
-    cmp r9, 8
-    jb backward_small
+.Lbwd_1:
+    # 1-byte
+    test    r9, 1
+    jz      .Ldone
+    dec     rdx
+    dec     rcx
+    mov     r11b, [rdx]
+    mov     [rcx], r11b
+    jmp     .Ldone
 
-backward_8byte_loop:
-    cmp r9, 8
-    jb backward_small
-    sub rdx, 7
-    sub rcx, 7
-    mov r10, [rdx]
-    mov [rcx], r10
-    sub rdx, 1
-    sub rcx, 1
-    sub r9, 8
-    jmp backward_8byte_loop
+    # -------------------------
+    # Forward copy (no overlap)
+    # -------------------------
+.Lcopy_forward:
+    mov     r9, r8
 
-backward_small:
-    /* Copy remaining bytes */
-    test r9, r9
-    jz memmove_done
+    # 8-byte chunks
+    mov     r10, r9
+    shr     r10, 3                   # r10 = r9 / 8
+    jz      .Lfwd_tail
 
-backward_byte_loop:
-    mov r10b, [rdx]
-    mov [rcx], r10b
-    dec rdx
-    dec rcx
-    dec r9
-    jnz backward_byte_loop
+.p2align 4, 0x90
+.Lfwd_qword:
+    mov     r11, [rdx]
+    mov     [rcx], r11
+    add     rdx, 8
+    add     rcx, 8
+    dec     r10
+    jnz     .Lfwd_qword
+
+    and     r9, 7                    # remaining < 8
+
+.Lfwd_tail:
+    # 4-byte
+    test    r9, 4
+    jz      .Lfwd_2
+    mov     r11d, [rdx]
+    mov     [rcx], r11d
+    add     rdx, 4
+    add     rcx, 4
+    sub     r9, 4
+
+.Lfwd_2:
+    # 2-byte
+    test    r9, 2
+    jz      .Lfwd_1
+    mov     r11w, [rdx]
+    mov     [rcx], r11w
+    add     rdx, 2
+    add     rcx, 2
+    sub     r9, 2
+
+.Lfwd_1:
+    # 1-byte
+    test    r9, 1
+    jz      .Ldone
+    mov     r11b, [rdx]
+    mov     [rcx], r11b
+
+.Ldone:
     ret
-
-copy_forward:
-    /* Non-overlapping or safe to copy forward */
-    mov r9, r8                      /* r9 = count */
-
-    /* Copy 8 bytes at a time forward */
-    cmp r9, 8
-    jb forward_small
-
-forward_8byte_loop:
-    cmp r9, 8
-    jb forward_small
-    mov r10, [rdx]
-    mov [rcx], r10
-    add rdx, 8
-    add rcx, 8
-    sub r9, 8
-    jmp forward_8byte_loop
-
-forward_small:
-    /* Handle remaining bytes (0-7) */
-    test r9, r9
-    jz memmove_done
-
-    /* Try 4 bytes */
-    cmp r9, 4
-    jb forward_2byte
-    mov r10d, [rdx]
-    mov [rcx], r10d
-    add rdx, 4
-    add rcx, 4
-    sub r9, 4
-
-forward_2byte:
-    /* Try 2 bytes */
-    cmp r9, 2
-    jb forward_1byte
-    mov r10w, [rdx]
-    mov [rcx], r10w
-    add rdx, 2
-    add rcx, 2
-    sub r9, 2
-
-forward_1byte:
-    /* Try 1 byte */
-    test r9, r9
-    jz memmove_done
-    mov r10b, [rdx]
-    mov [rcx], r10b
-
-memmove_done:
-    ret
-
-ENDFUNC
-
-END
+    .cfi_endproc

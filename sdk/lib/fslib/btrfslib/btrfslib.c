@@ -407,6 +407,8 @@ static btrfs_chunk* add_chunk(LIST_ENTRY* chunks, uint64_t flags, btrfs_root* ch
         le = le->Flink;
     }
 
+    size = dev->dev_item.num_bytes / 10; // default chunk size cap
+
     if (flags & BLOCK_FLAG_METADATA) {
         if (dev->dev_item.num_bytes > 0xC80000000) // 50 GB
             size = 0x40000000; // 1 GB

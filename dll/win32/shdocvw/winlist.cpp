@@ -10,7 +10,7 @@
 #include <wine/debug.h>
 WINE_DEFAULT_DEBUG_CHANNEL(shdocvw);
 
-static VARIANT s_vaEmpty = { VT_EMPTY };
+static VARIANT s_vaEmpty = {{{VT_EMPTY}}};
 
 static HRESULT
 InitVariantFromBuffer(

@@ -1,265 +1,455 @@
-/*
+/* 
  * PROJECT:           ReactOS C Runtime Library
- * PURPOSE:           Optimized memcpy implementation for amd64
- * COPYRIGHT:         Copyright 2025 Ahmed ARIF (arif.ing@outlook.com)
+ * PURPOSE:           Optimized memcpy implementation for amd64 (GAS/Clang/GCC, COFF-safe)
+ * NOTES:
+ *   - Windows x64 ABI safe: uses only caller-saved GPRs (RAX, RCX, RDX, R8–R11)
+ *     and XMM0–XMM3 (no XMM6–XMM15).
+ *   - Destination is aligned to 16 bytes for aligned/NT stores.
+ *   - Uses non-temporal stores for very large copies (>= 256 KiB).
+ *   - Micro-opts: 128B unroll, aligned-load fast path, light prefetch.
+ *   - Win64 SEH unwind is provided via .seh_* directives.
+ *   - ERMS dispatch: uses rep movsb when supported, else SSE2/NT path.
  */
 
-#include <asm.inc>
+.intel_syntax noprefix
 
-/*
- * void *memcpy(void *dst, const void *src, size_t count)
- *
- * Parameters:
- *   rcx - destination pointer
- *   rdx - source pointer
- *   r8  - count (number of bytes)
- *
- * Returns:
- *   rax - destination pointer
- *
- * Strategy:
- *   1. Handle small copies (< 32 bytes) with simple moves
- *   2. Align destination to 16-byte boundary
- *   3. Use SSE2 movdqa/movdqu for bulk copy (16 bytes per iteration)
- *   4. Use non-temporal stores (movntdq) for large copies (>= 2KB)
- *   5. Handle remaining bytes
- */
+# Internal dispatch pointer (initialized once at first call)
+.section .data
+.p2align 3
+__reactos_memcpy_impl:
+    .quad 0
 
-PUBLIC memcpy
+.text
+.p2align 4, 0x90
 
-/* FUNCTIONS *****************************************************************/
-.code
+# Public entry: memcpy wrapper with ERMS dispatch and proper SEH
+.globl memcpy
+.def memcpy; .scl 2; .type 32; .endef
+    .seh_proc memcpy
+memcpy:
+    # Preserve RBX across CPUID per Win64 ABI
+    push    rbx
+    .seh_pushreg rbx
+    .seh_endprologue
+    .cfi_startproc
+    # RCX=dst, RDX=src, R8=count
+    mov     rax, rcx                # return value = dst
 
-FUNC memcpy
-    FPO 0, 3, 0, 0, 0, FRAME_FPO
+    # Fast path: if impl is set, tailcall it
+    mov     r9, qword ptr [rip+__reactos_memcpy_impl]
+    test    r9, r9
+    jnz     .Lcall_impl
 
-    /* Save destination for return value */
-    mov rax, rcx
+    # Detect ERMS once (CPUID EAX=7, ECX=0, check EBX bit 9)
+    # Preserve RCX and RDX across CPUID (RBX preserved via stack)
+    mov     r10, rcx                # save dst
+    mov     r11, rdx                # save src
 
-    /* Check for small copy (< 32 bytes) */
-    cmp r8, 32
-    jb SmallCopy
+    mov     eax, 7
+    xor     ecx, ecx
+    cpuid
 
-    /* Save non-volatile registers */
-    mov r9, rsi
-    mov r10, rdi
+    lea     rax, [rip+memcpy_sse2nt_impl]
+    lea     rdx, [rip+memcpy_erms_impl]
+    bt      ebx, 9                  # ERMS feature
+    mov     r9, rax                 # default: SSE2/NT
+    jnc     .Lchoose_done
+    mov     r9, rdx                 # ERMS available
+.Lchoose_done:
+    # Store chosen impl atomically if not already set
+    xor     eax, eax                # expected = 0
+    lock cmpxchg qword ptr [rip+__reactos_memcpy_impl], r9
+    # Load final impl (in case of race)
+    mov     r9, qword ptr [rip+__reactos_memcpy_impl]
+    # Restore RCX, RDX for tailcall and fix RAX return on first-call path
+    mov     rcx, r10
+    mov     rdx, r11
+    mov     rax, rcx
+.Lcall_impl:
+    pop     rbx
+    jmp     r9                      # tailcall chosen implementation
+    .seh_endproc
+    .cfi_endproc
 
-    /* Setup pointers */
-    mov rdi, rcx                    /* rdi = destination */
-    mov rsi, rdx                    /* rsi = source */
-    mov rcx, r8                     /* rcx = count */
+# SSE2 + NT implementation (body below)
+    .seh_proc memcpy_sse2nt_impl
+memcpy_sse2nt_impl:
+    .seh_endprologue
+    .cfi_startproc
+    # RCX=dst, RDX=src, R8=count
+    mov     rax, rcx                # return value = dst
 
-    /* Check if destination is 16-byte aligned */
-    test rdi, 15
-    jz AlignedCopy
+    cmp     r8, 32
+    jb      .Lsmall_copy
 
-    /* Align destination to 16-byte boundary */
-    mov r8, rdi
-    and r8, 15                      /* r8 = misalignment (0-15) */
-    mov r11, 16
-    sub r11, r8                     /* r11 = bytes to align */
-    sub rcx, r11                    /* Adjust remaining count */
+    # Align dst to 16
+    mov     r9, rcx
+    and     r9, 15
+    jz      .Lafter_align
 
-    /* Copy alignment bytes */
-AlignLoop:
-    mov al, [rsi]
-    mov [rdi], al
-    inc rsi
-    inc rdi
-    dec r11
-    jnz AlignLoop
+    mov     r10, 16
+    sub     r10, r9                 # bytes to align [1..15]
+    sub     r8,  r10                # reduce remaining count
 
-AlignedCopy:
-    /* Now rdi is 16-byte aligned */
-    /* Check if we should use non-temporal stores (>= 256KB) */
-    cmp rcx, 262144
-    jae LargeCopy
+.Lalign_loop:
+    mov     r11b, [rdx]
+    mov     [rcx], r11b
+    inc     rdx
+    inc     rcx
+    dec     r10
+    jnz     .Lalign_loop
 
-    /* Regular SSE2 copy for medium sizes */
-    mov r11, rcx
-    shr r11, 7                      /* r11 = count / 128 (8 x 16-byte chunks) */
-    jz CopyRemaining64
+.Lafter_align:
+    # Decide regular vs NT path
+    cmp     r8, 262144              # 256 KiB
+    jae     .Lnt_large
 
-    /* Main loop: copy 128 bytes per iteration (8 x 16-byte SSE2 moves) */
-Copy128Loop:
-    movdqu xmm0, [rsi]
-    movdqu xmm1, [rsi + 16]
-    movdqu xmm2, [rsi + 32]
-    movdqu xmm3, [rsi + 48]
-    movdqu xmm4, [rsi + 64]
-    movdqu xmm5, [rsi + 80]
-    movdqu xmm6, [rsi + 96]
-    movdqu xmm7, [rsi + 112]
+    # -------- Regular SSE2 path (aligned dst) --------
+    # Choose aligned-loads when src is 16B aligned
+    mov     r10, rdx
+    and     r10, 15
+    jz      .Lreg_aligned_loads
 
-    movdqa [rdi], xmm0
-    movdqa [rdi + 16], xmm1
-    movdqa [rdi + 32], xmm2
-    movdqa [rdi + 48], xmm3
-    movdqa [rdi + 64], xmm4
-    movdqa [rdi + 80], xmm5
-    movdqa [rdi + 96], xmm6
-    movdqa [rdi + 112], xmm7
+    # --- Unaligned-load main loop: 128B per iteration (two 64B batches) ---
+    mov     r9, r8
+    shr     r9, 7                   # r9 = number of 128B blocks
+    jz      .Lreg_64tail
+.p2align 4, 0x90
+.Lreg128_unaligned:
+    prefetchnta [rdx+256]
+    prefetchnta [rdx+320]
 
-    add rsi, 128
-    add rdi, 128
-    dec r11
-    jnz Copy128Loop
+    movdqu  xmm0, [rdx]
+    movdqu  xmm1, [rdx+16]
+    movdqu  xmm2, [rdx+32]
+    movdqu  xmm3, [rdx+48]
+    movdqa  [rcx],     xmm0
+    movdqa  [rcx+16],  xmm1
+    movdqa  [rcx+32],  xmm2
+    movdqa  [rcx+48],  xmm3
 
-CopyRemaining64:
-    /* Copy remaining 64-byte chunks */
-    mov r11, rcx
-    and r11, 127                    /* r11 = remaining bytes */
-    shr r11, 6                      /* r11 = remaining / 64 */
-    jz CopyRemaining16
+    movdqu  xmm0, [rdx+64]
+    movdqu  xmm1, [rdx+80]
+    movdqu  xmm2, [rdx+96]
+    movdqu  xmm3, [rdx+112]
+    movdqa  [rcx+64],  xmm0
+    movdqa  [rcx+80],  xmm1
+    movdqa  [rcx+96],  xmm2
+    movdqa  [rcx+112], xmm3
 
-Copy64Loop:
-    movdqu xmm0, [rsi]
-    movdqu xmm1, [rsi + 16]
-    movdqu xmm2, [rsi + 32]
-    movdqu xmm3, [rsi + 48]
+    add     rdx, 128
+    add     rcx, 128
+    dec     r9
+    jnz     .Lreg128_unaligned
 
-    movdqa [rdi], xmm0
-    movdqa [rdi + 16], xmm1
-    movdqa [rdi + 32], xmm2
-    movdqa [rdi + 48], xmm3
+.Lreg_64tail:
+    mov     r9, r8
+    and     r9, 127                 # <128B remainder
+    shr     r9, 6                   # # of 64B blocks
+    jz      .Lreg_16tail
 
-    add rsi, 64
-    add rdi, 64
-    dec r11
-    jnz Copy64Loop
+.p2align 4, 0x90
+.Lreg64_unaligned:
+    movdqu  xmm0, [rdx]
+    movdqu  xmm1, [rdx+16]
+    movdqu  xmm2, [rdx+32]
+    movdqu  xmm3, [rdx+48]
+    movdqa  [rcx],     xmm0
+    movdqa  [rcx+16],  xmm1
+    movdqa  [rcx+32],  xmm2
+    movdqa  [rcx+48],  xmm3
+    add     rdx, 64
+    add     rcx, 64
+    dec     r9
+    jnz     .Lreg64_unaligned
+    jmp     .Lreg_16tail
 
-CopyRemaining16:
-    /* Copy remaining 16-byte chunks */
-    mov r11, rcx
-    and r11, 63                     /* r11 = remaining bytes */
-    shr r11, 4                      /* r11 = remaining / 16 */
-    jz CopyRemainingBytes
+    # --- Aligned-load fast path ---
+.p2align 4, 0x90
+.Lreg_aligned_loads:
+    mov     r9, r8
+    shr     r9, 7                   # 128B blocks
+    jz      .Lreg_64tail_al
 
-Copy16Loop:
-    movdqu xmm0, [rsi]
-    movdqa [rdi], xmm0
-    add rsi, 16
-    add rdi, 16
-    dec r11
-    jnz Copy16Loop
+.p2align 4, 0x90
+.Lreg128_aligned:
+    prefetchnta [rdx+256]
+    prefetchnta [rdx+320]
 
-CopyRemainingBytes:
-    /* Copy remaining bytes (0-15) */
-    mov r11, rcx
-    and r11, 15
-    jz CopyDone
+    movdqa  xmm0, [rdx]
+    movdqa  xmm1, [rdx+16]
+    movdqa  xmm2, [rdx+32]
+    movdqa  xmm3, [rdx+48]
+    movdqa  [rcx],     xmm0
+    movdqa  [rcx+16],  xmm1
+    movdqa  [rcx+32],  xmm2
+    movdqa  [rcx+48],  xmm3
 
-CopyByteLoop:
-    mov r8b, [rsi]
-    mov [rdi], r8b
-    inc rsi
-    inc rdi
-    dec r11
-    jnz CopyByteLoop
+    movdqa  xmm0, [rdx+64]
+    movdqa  xmm1, [rdx+80]
+    movdqa  xmm2, [rdx+96]
+    movdqa  xmm3, [rdx+112]
+    movdqa  [rcx+64],  xmm0
+    movdqa  [rcx+80],  xmm1
+    movdqa  [rcx+96],  xmm2
+    movdqa  [rcx+112], xmm3
 
-CopyDone:
-    /* Restore non-volatile registers */
-    mov rdi, r10
-    mov rsi, r9
+    add     rdx, 128
+    add     rcx, 128
+    dec     r9
+    jnz     .Lreg128_aligned
+
+.Lreg_64tail_al:
+    mov     r9, r8
+    and     r9, 127
+    shr     r9, 6
+    jz      .Lreg_16tail
+
+.p2align 4, 0x90
+.Lreg64_aligned:
+    movdqa  xmm0, [rdx]
+    movdqa  xmm1, [rdx+16]
+    movdqa  xmm2, [rdx+32]
+    movdqa  xmm3, [rdx+48]
+    movdqa  [rcx],     xmm0
+    movdqa  [rcx+16],  xmm1
+    movdqa  [rcx+32],  xmm2
+    movdqa  [rcx+48],  xmm3
+    add     rdx, 64
+    add     rcx, 64
+    dec     r9
+    jnz     .Lreg64_aligned
+
+    # Common tails
+.Lreg_16tail:
+    mov     r9, r8
+    and     r9, 63                  # <64
+    shr     r9, 4                   # 16B chunks
+    jz      .Lreg_bytetail
+.p2align 4, 0x90
+.Lreg_16body:
+    movdqu  xmm0, [rdx]
+    movdqa  [rcx], xmm0
+    add     rdx, 16
+    add     rcx, 16
+    dec     r9
+    jnz     .Lreg_16body
+
+.Lreg_bytetail:
+    and     r8, 15
+    jz      .Ldone
+.p2align 4, 0x90
+.Lreg_byteloop:
+    mov     r9b, [rdx]
+    mov     [rcx], r9b
+    inc     rdx
+    inc     rcx
+    dec     r8
+    jnz     .Lreg_byteloop
+    jmp     .Ldone
+
+    # -------- Non-temporal large copy (>= 256 KiB) --------
+.p2align 4, 0x90
+.Lnt_large:
+    # 64B-align destination for NT stores
+    mov     r10, rcx
+    and     r10, 63                 # misalignment [0..63]
+    jz      .Lnt_after_align64
+    mov     r11, 64
+    sub     r11, r10                # bytes to reach 64B alignment
+    cmp     r11, r8
+    cmova   r11, r8
+    mov     r10, r11                # total preface
+
+    # 16B chunks to reach 64B boundary
+    mov     r9, r11
+    shr     r9, 4
+    jz      .Lnt_align64_tail
+.p2align 4, 0x90
+.Lnt_align64_16:
+    movdqu  xmm0, [rdx]
+    movdqa  [rcx], xmm0
+    add     rdx, 16
+    add     rcx, 16
+    dec     r9
+    jnz     .Lnt_align64_16
+
+.Lnt_align64_tail:
+    and     r11, 15
+    jz      .Lnt_align64_done
+.p2align 4, 0x90
+.Lnt_align64_tail_loop:
+    mov     r9b, [rdx]
+    mov     [rcx], r9b
+    inc     rdx
+    inc     rcx
+    dec     r11
+    jnz     .Lnt_align64_tail_loop
+
+.Lnt_align64_done:
+    sub     r8, r10
+
+.Lnt_after_align64:
+    # 128B-unrolled NT main loop
+    mov     r9, r8
+    shr     r9, 7                   # 128B blocks
+    jz      .Lnt_64tail
+
+.p2align 4, 0x90
+.Lnt128:
+    prefetchnta [rdx+256]
+    prefetchnta [rdx+320]
+
+    movdqu  xmm0, [rdx]
+    movdqu  xmm1, [rdx+16]
+    movdqu  xmm2, [rdx+32]
+    movdqu  xmm3, [rdx+48]
+    movntdq [rcx],     xmm0
+    movntdq [rcx+16],  xmm1
+    movntdq [rcx+32],  xmm2
+    movntdq [rcx+48],  xmm3
+
+    movdqu  xmm0, [rdx+64]
+    movdqu  xmm1, [rdx+80]
+    movdqu  xmm2, [rdx+96]
+    movdqu  xmm3, [rdx+112]
+    movntdq [rcx+64],  xmm0
+    movntdq [rcx+80],  xmm1
+    movntdq [rcx+96],  xmm2
+    movntdq [rcx+112], xmm3
+
+    add     rdx, 128
+    add     rcx, 128
+    dec     r9
+    jnz     .Lnt128
+
+.Lnt_64tail:
+    mov     r9, r8
+    and     r9, 127
+    shr     r9, 6                   # 64B blocks
+    jz      .Lnt_16tail
+.p2align 4, 0x90
+.Lnt64:
+    movdqu  xmm0, [rdx]
+    movdqu  xmm1, [rdx+16]
+    movdqu  xmm2, [rdx+32]
+    movdqu  xmm3, [rdx+48]
+    movntdq [rcx],     xmm0
+    movntdq [rcx+16],  xmm1
+    movntdq [rcx+32],  xmm2
+    movntdq [rcx+48],  xmm3
+    add     rdx, 64
+    add     rcx, 64
+    dec     r9
+    jnz     .Lnt64
+
+.Lnt_16tail:
+    mov     r9, r8
+    and     r9, 63
+    shr     r9, 4                   # 16B chunks
+    jz      .Lnt_bytetail
+.p2align 4, 0x90
+.Lnt_16body:
+    movdqu  xmm0, [rdx]
+    movntdq [rcx], xmm0
+    add     rdx, 16
+    add     rcx, 16
+    dec     r9
+    jnz     .Lnt_16body
+
+.Lnt_bytetail:
+    and     r8, 15
+    jz      .Lnt_finish
+.p2align 4, 0x90
+.Lnt_byteloop:
+    mov     r9b, [rdx]
+    mov     [rcx], r9b
+    inc     rdx
+    inc     rcx
+    dec     r8
+    jnz     .Lnt_byteloop
+
+.Lnt_finish:
+    sfence                          # ensure NT stores reach memory
+    jmp     .Ldone
+
+    # -------- Tiny copies (< 32 bytes) --------
+.p2align 4, 0x90
+.Lsmall_copy:
+    mov     r9, r8
+    cmp     r9, 16
+    jb      .Lsmall_8
+
+    mov     r10, [rdx]
+    mov     r11, [rdx+8]
+    mov     [rcx],   r10
+    mov     [rcx+8], r11
+    add     rcx, 16
+    add     rdx, 16
+    sub     r9, 16
+
+.Lsmall_8:
+    cmp     r9, 8
+    jb      .Lsmall_4
+    mov     r10, [rdx]
+    mov     [rcx], r10
+    add     rcx, 8
+    add     rdx, 8
+    sub     r9, 8
+
+.Lsmall_4:
+    cmp     r9, 4
+    jb      .Lsmall_2
+    mov     r10d, [rdx]
+    mov     [rcx], r10d
+    add     rcx, 4
+    add     rdx, 4
+    sub     r9, 4
+
+.Lsmall_2:
+    cmp     r9, 2
+    jb      .Lsmall_1
+    mov     r10w, [rdx]
+    mov     [rcx], r10w
+    add     rcx, 2
+    add     rdx, 2
+    sub     r9, 2
+
+.Lsmall_1:
+    test    r9, r9
+    jz      .Ldone
+    mov     r10b, [rdx]
+    mov     [rcx], r10b
+
+.Ldone:
     ret
+    .seh_endproc
+    .cfi_endproc
 
-LargeCopy:
-    /* Non-temporal copy for large buffers (>= 2KB) */
-    /* This bypasses cache for better performance on large copies */
-    mov r11, rcx
-    shr r11, 7                      /* r11 = count / 128 */
-    jz CopyRemaining64
+# ERMS implementation: rep movsb (Win64 ABI-safe with saved RSI/RDI)
+    .seh_proc memcpy_erms_impl
+memcpy_erms_impl:
+    # Prologue: save non-volatiles used (RSI, RDI)
+    push    rdi
+    .seh_pushreg rdi
+    push    rsi
+    .seh_pushreg rsi
+    .seh_endprologue
+    .cfi_startproc
 
-LargeCopy128Loop:
-    /* Prefetch next iteration's data (256 bytes ahead) */
-    prefetchnta [rsi + 256]
-    prefetchnta [rsi + 320]
+    # rax already holds return value (dst)
+    mov     rdi, rcx                # RDI = dst
+    mov     rsi, rdx                # RSI = src
+    mov     rcx, r8                 # RCX = count
+    test    rcx, rcx
+    jz      .Lerms_done
+    cld
+    rep movsb
 
-    movdqu xmm0, [rsi]
-    movdqu xmm1, [rsi + 16]
-    movdqu xmm2, [rsi + 32]
-    movdqu xmm3, [rsi + 48]
-    movdqu xmm4, [rsi + 64]
-    movdqu xmm5, [rsi + 80]
-    movdqu xmm6, [rsi + 96]
-    movdqu xmm7, [rsi + 112]
-
-    movntdq [rdi], xmm0             /* Non-temporal stores */
-    movntdq [rdi + 16], xmm1
-    movntdq [rdi + 32], xmm2
-    movntdq [rdi + 48], xmm3
-    movntdq [rdi + 64], xmm4
-    movntdq [rdi + 80], xmm5
-    movntdq [rdi + 96], xmm6
-    movntdq [rdi + 112], xmm7
-
-    add rsi, 128
-    add rdi, 128
-    dec r11
-    jnz LargeCopy128Loop
-
-    sfence                          /* Ensure non-temporal stores complete */
-    jmp CopyRemaining64
-
-SmallCopy:
-    /* Handle small copies (< 32 bytes) without SSE2 overhead */
-    mov r9, r8
-    cmp r9, 16
-    jb SmallCopy8
-
-    /* Copy 16 bytes */
-    mov r10, [rdx]
-    mov r11, [rdx + 8]
-    mov [rcx], r10
-    mov [rcx + 8], r11
-    add rcx, 16
-    add rdx, 16
-    sub r9, 16
-
-SmallCopy8:
-    cmp r9, 8
-    jb SmallCopy4
-
-    /* Copy 8 bytes */
-    mov r10, [rdx]
-    mov [rcx], r10
-    add rcx, 8
-    add rdx, 8
-    sub r9, 8
-
-SmallCopy4:
-    cmp r9, 4
-    jb SmallCopy2
-
-    /* Copy 4 bytes */
-    mov r10d, [rdx]
-    mov [rcx], r10d
-    add rcx, 4
-    add rdx, 4
-    sub r9, 4
-
-SmallCopy2:
-    cmp r9, 2
-    jb SmallCopy1
-
-    /* Copy 2 bytes */
-    mov r10w, [rdx]
-    mov [rcx], r10w
-    add rcx, 2
-    add rdx, 2
-    sub r9, 2
-
-SmallCopy1:
-    cmp r9, 1
-    jb SmallCopyDone
-
-    /* Copy 1 byte */
-    mov r10b, [rdx]
-    mov [rcx], r10b
-
-SmallCopyDone:
+.Lerms_done:
+    # Epilogue: restore RSI/RDI
+    pop     rsi
+    pop     rdi
     ret
-
-ENDFUNC
-
-END
+    .seh_endproc
+    .cfi_endproc

@@ -155,7 +155,16 @@
 \
     if ((FacsPtr) != 0) \
     { \
-        pending = InterlockedAnd((long volatile *)&(FacsPtr)->GlobalLock, ~3) & 1; \
+        UINT32 compare, prev; \
+        UINT32* lock = &((FacsPtr)->GlobalLock); \
+\
+        do \
+        { \
+            compare = *lock; \
+            prev = InterlockedCompareExchange((long volatile *)lock, compare & ~3, compare); \
+        } while (prev != compare); \
+\
+        pending = (BOOLEAN)(compare & 1); \
     } \
     (Pnd) = pending; \
 }

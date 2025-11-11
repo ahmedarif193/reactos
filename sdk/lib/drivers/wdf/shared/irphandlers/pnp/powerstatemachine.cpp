@@ -175,13 +175,16 @@ const POWER_EVENT_TARGET_STATE FxPkgPnp::m_PowerDxStoppedOtherStates[] =
     { PowerEventMaximum,            WdfDevStatePowerNull },
 };
 
+#define FX_POWER_STATE_INFO(queueOpen, droppedEvents) \
+    {{ (queueOpen), (droppedEvents) }}
+
 const POWER_STATE_TABLE FxPkgPnp::m_WdfPowerStates[] =
 {
     // WdfDevStatePowerObjectCreated
     {   NULL,
         { PowerImplicitD0, WdfDevStatePowerStartingCheckDeviceType DEBUGGED_EVENT },
         NULL,
-        { TRUE,
+        FX_POWER_STATE_INFO(TRUE,
           PowerMarkPageable | // parent sends usage notifications before the PDO is
           PowerMarkNonpageable | // started
           PowerParentToD0 | // parent powered up upon enumeration of child
@@ -189,83 +192,89 @@ const POWER_STATE_TABLE FxPkgPnp::m_WdfPowerStates[] =
                     // during start (or after AddDevice, etc)
           PowerD0   // If we are on top of a power policy owner who sends a D0
                     // to the stack in start device, we can get this event early
-        },
+        ),
     },
 
     // WdfDevStatePowerCheckDeviceType
     {   FxPkgPnp::PowerCheckDeviceType,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerCheckDeviceTypeNP
     {   FxPkgPnp::PowerCheckDeviceTypeNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerCheckParentState
     {   FxPkgPnp::PowerCheckParentState,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerCheckParentStateNP
     {   FxPkgPnp::PowerCheckParentStateNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerEnablingWakeAtBus
     {   FxPkgPnp::PowerEnablingWakeAtBus,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerEnablingWakeAtBusNP
     {   FxPkgPnp::PowerEnablingWakeAtBusNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerD0
     {   FxPkgPnp::PowerDZero,
         { PowerDx, WdfDevStatePowerGotoDx DEBUGGED_EVENT },
         FxPkgPnp::m_PowerD0OtherStates,
-        { TRUE,
+        FX_POWER_STATE_INFO(TRUE,
           PowerImplicitD3 |
           PowerD0               // A non WDF power policy owner might send a D0 irp
                                 // while we are in D0
-        },
+        ),
     },
 
     // WdfDevStatePowerD0NP
     {   FxPkgPnp::PowerD0NP,
         { PowerDx, WdfDevStatePowerGotoDxNP DEBUGGED_EVENT },
         FxPkgPnp::m_PowerD0NPOtherStates,
-        { TRUE,
+        FX_POWER_STATE_INFO(TRUE,
           PowerD0               // A non WDF power policy owner might send a D0 irp
                                 // while we are in D0
-        },
+        ),
     },
 
     // WdfDevStatePowerD0BusWakeOwner
     {   FxPkgPnp::PowerD0BusWakeOwner,
         { PowerDx, WdfDevStatePowerGotoDx DEBUGGED_EVENT },
         FxPkgPnp::m_PowerD0BusWakeOwnerOtherStates,
-        { TRUE,
+        FX_POWER_STATE_INFO(TRUE,
           PowerWakeSucceeded |  // During surprise remove, the pnp state machine
                                 // could complete the ww request and result in
                                 // this event before the pwr pol machine is stopped
@@ -276,14 +285,14 @@ const POWER_STATE_TABLE FxPkgPnp::m_WdfPowerStates[] =
           PowerParentToD0 |
           PowerD0               // A non WDF power policy owner might send a D0 irp
                                 // while we are in D0
-        },
+        ),
     },
 
     // WdfDevStatePowerD0BusWakeOwnerNP
     {   FxPkgPnp::PowerD0BusWakeOwnerNP,
         { PowerDx, WdfDevStatePowerGotoDxNP DEBUGGED_EVENT },
         FxPkgPnp::m_PowerD0BusWakeOwnerNPOtherStates,
-        { TRUE,
+        FX_POWER_STATE_INFO(TRUE,
           PowerWakeSucceeded |  // During surprise remove, the pnp state machine
                                 // could complete the ww request and result in
                                 // this event before the pwr pol machine is stopped
@@ -292,14 +301,14 @@ const POWER_STATE_TABLE FxPkgPnp::m_WdfPowerStates[] =
           PowerParentToD0 |
           PowerD0               // A non WDF power policy owner might send a D0 irp
                                 // while we are in D0
-        },
+        ),
     },
 
     // WdfDevStatePowerD0ArmedForWake
     {   FxPkgPnp::PowerD0ArmedForWake,
         { PowerDx, WdfDevStatePowerGotoDxArmedForWake DEBUGGED_EVENT },
         FxPkgPnp::m_PowerD0ArmedForWakeOtherStates,
-        { TRUE,
+        FX_POWER_STATE_INFO(TRUE,
           PowerParentToD0 |
           PowerWakeArrival  |   // PowerIsWakeRequestPresent() returned true in
                                 // WdfDevStatePowerD0BusWakeOwner and raced with
@@ -307,14 +316,14 @@ const POWER_STATE_TABLE FxPkgPnp::m_WdfPowerStates[] =
           PowerWakeCanceled |
           PowerD0               // A non WDF power policy owner might send a D0 irp
                                 // while we are in D0
-        },
+        ),
     },
 
     // WdfDevStatePowerD0ArmedForWakeNP
     {   FxPkgPnp::PowerD0ArmedForWakeNP,
         { PowerDx, WdfDevStatePowerGotoDxArmedForWakeNP DEBUGGED_EVENT },
         FxPkgPnp::m_PowerD0ArmedForWakeNPOtherStates,
-        { TRUE,
+        FX_POWER_STATE_INFO(TRUE,
           PowerParentToD0 |
           PowerWakeArrival  |   // PowerIsWakeRequestPresent() returned true in
                                 // WdfDevStatePowerD0BusWakeOwnerNP and raced with
@@ -322,168 +331,184 @@ const POWER_STATE_TABLE FxPkgPnp::m_WdfPowerStates[] =
           PowerWakeCanceled |
           PowerD0               // A non WDF power policy owner might send a D0 irp
                                 // while we are in D0
-        },
+        ),
     },
 
     // WdfDevStatePowerD0DisarmingWakeAtBus
     {   FxPkgPnp::PowerD0DisarmingWakeAtBus,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerD0DisarmingWakeAtBusNP
     {   FxPkgPnp::PowerD0DisarmingWakeAtBusNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerD0Starting
     {   FxPkgPnp::PowerD0Starting,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerD0StartingConnectInterrupt
     {   FxPkgPnp::PowerD0StartingConnectInterrupt,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerD0StartingDmaEnable
     {   FxPkgPnp::PowerD0StartingDmaEnable,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerD0StartingStartSelfManagedIo
     {   FxPkgPnp::PowerD0StartingStartSelfManagedIo,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerDecideD0State
     {   FxPkgPnp::PowerDecideD0State,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerGotoD3Stopped
     {   FxPkgPnp::PowerGotoD3Stopped,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerStopped
     {   NULL,
         { PowerImplicitD0, WdfDevStatePowerStartingCheckDeviceType DEBUGGED_EVENT },
         FxPkgPnp::m_PowerStoppedOtherStates,
-        { TRUE,
+        FX_POWER_STATE_INFO(TRUE,
           PowerD0 |             // as a filter above the PPO and the PPO powers on the stack
                                 // before seeing a surprise remove or remove irp
           PowerWakeFailed |     // power policy owner canceled the wake request while
                                 // we were transitioning to stop (or after the
                                 // transition succeeded)
-          PowerParentToD0 },
+          PowerParentToD0
+        ),
     },
 
     // WdfDevStatePowerStartingCheckDeviceType
     {   FxPkgPnp::PowerStartingCheckDeviceType,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerStartingChild
     {   FxPkgPnp::PowerStartingChild,
         { PowerParentToD0, WdfDevStatePowerD0Starting DEBUGGED_EVENT },
         NULL,
-        { TRUE,
-          0 },
+        FX_POWER_STATE_INFO(TRUE,
+          0
+        ),
     },
 
     // WdfDevStatePowerDxDisablingWakeAtBus
     {   FxPkgPnp::PowerDxDisablingWakeAtBus,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerDxDisablingWakeAtBusNP
     {   FxPkgPnp::PowerDxDisablingWakeAtBusNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerGotoDx
     {   FxPkgPnp::PowerGotoDNotZero,
         { PowerCompleteDx, WdfDevStatePowerNotifyingD0ExitToWakeInterrupts DEBUGGED_EVENT },
         NULL,
-        { FALSE,
+        FX_POWER_STATE_INFO(FALSE,
           PowerWakeArrival |    // on a PDO which is the PPO, it will send a wake
                                 // request in this state.
 
 
           PowerParentToD0       // Parent is powering up while this device is powering
                                 // down
-        },
+        ),
     },
 
     // WdfDevStatePowerGotoDxNP
     {   FxPkgPnp::PowerGotoDNotZeroNP,
         { PowerCompleteDx, WdfDevStatePowerNotifyingD0ExitToWakeInterruptsNP DEBUGGED_EVENT },
         NULL,
-        { FALSE,
+        FX_POWER_STATE_INFO(FALSE,
           PowerWakeArrival |    // on a PDO which is the PPO, it will send a wake
                                 // request in this state.
 
 
           PowerParentToD0       // Parent is powering up while this device is powering
                                 // down
-        },
+        ),
     },
 
     // WdfDevStatePowerGotoDxIoStopped
     {   FxPkgPnp::PowerGotoDNotZeroIoStopped,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerGotoDxIoStoppedNP
     {   FxPkgPnp::PowerGotoDNotZeroIoStoppedNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerGotoDxNPFailed
     {   FxPkgPnp::PowerGotoDxNPFailed,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // NOTE:  can't use PowerDx as a func name since it's an enum value
@@ -491,7 +516,7 @@ const POWER_STATE_TABLE FxPkgPnp::m_WdfPowerStates[] =
     {   NULL,
         { PowerD0, WdfDevStatePowerCheckDeviceType DEBUGGED_EVENT },
         FxPkgPnp::m_PowerDNotZeroOtherStates,
-        { TRUE,
+        FX_POWER_STATE_INFO(TRUE,
           PowerWakeArrival |    // on a PDO which is the PPO, it will send a wake
                                 // request in this state.
 
@@ -516,14 +541,14 @@ const POWER_STATE_TABLE FxPkgPnp::m_WdfPowerStates[] =
                                 // in Dx
 
           PowerDx               // power policy sent a Dx to Dx transition
-        },
+        ),
     },
 
     // WdfDevStatePowerDxNP
     {   NULL,
         { PowerD0, WdfDevStatePowerCheckDeviceTypeNP DEBUGGED_EVENT },
         FxPkgPnp::m_PowerDNotZeroNPOtherStates,
-        { TRUE,
+        FX_POWER_STATE_INFO(TRUE,
           PowerWakeArrival |    // on a PDO which is the PPO, it will send a wake
                                 // request in this state.
 
@@ -547,207 +572,227 @@ const POWER_STATE_TABLE FxPkgPnp::m_WdfPowerStates[] =
                                 // in Dx
 
           PowerDx               // power policy sent a Dx to Dx transition
-        },
+        ),
     },
 
     // WdfDevStatePowerGotoDxArmedForWake
     {   FxPkgPnp::PowerGotoDxArmedForWake,
         { PowerCompleteDx, WdfDevStatePowerGotoDxIoStoppedArmedForWake DEBUGGED_EVENT },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerGotoDxArmedForWakeNP
     {   FxPkgPnp::PowerGotoDxArmedForWakeNP,
         { PowerCompleteDx, WdfDevStatePowerGotoDxIoStoppedArmedForWakeNP DEBUGGED_EVENT },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerGotoDxIoStoppedArmedForWake
     {   FxPkgPnp::PowerGotoDxIoStoppedArmedForWake,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerGotoDxIoStoppedArmedForWakeNP
     {   FxPkgPnp::PowerGotoDxIoStoppedArmedForWakeNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerDxArmedForWake
     {   NULL,
         { PowerD0, WdfDevStatePowerCheckParentStateArmedForWake DEBUGGED_EVENT },
         FxPkgPnp::m_DxArmedForWakeOtherStates,
-        { TRUE,
+        FX_POWER_STATE_INFO(TRUE,
           PowerParentToD0      // can occur on a PDO when a Dx transition completes
                                // on the parent and it wakes up before the child
-        },
+        ),
     },
 
     // WdfDevStatePowerDxArmedForWakeNP
     {   NULL,
         { PowerD0, WdfDevStatePowerCheckParentStateArmedForWakeNP DEBUGGED_EVENT },
         FxPkgPnp::m_DxArmedForWakeNPOtherStates,
-        { TRUE,
+        FX_POWER_STATE_INFO(TRUE,
           PowerParentToD0      // can occur on a PDO when a Dx transition completes
                                // on the parent and it wakes up before the child
-        },
+        ),
     },
 
     // WdfDevStatePowerCheckParentStateArmedForWake
     {   FxPkgPnp::PowerCheckParentStateArmedForWake,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerCheckParentStateArmedForWakeNP
     {   FxPkgPnp::PowerCheckParentStateArmedForWakeNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerWaitForParentArmedForWake
     {   NULL,
         { PowerParentToD0, WdfDevStatePowerDxDisablingWakeAtBus DEBUGGED_EVENT },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerWaitForParentArmedForWakeNP
     {   NULL,
         { PowerParentToD0, WdfDevStatePowerDxDisablingWakeAtBusNP DEBUGGED_EVENT },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerStartSelfManagedIo
     {   FxPkgPnp::PowerStartSelfManagedIo,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerStartSelfManagedIoNP
     {   FxPkgPnp::PowerStartSelfManagedIoNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerStartSelfManagedIoFailed
     {   FxPkgPnp::PowerStartSelfManagedIoFailed,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerStartSelfManagedIoFailedNP
     {   FxPkgPnp::PowerStartSelfManagedIoFailedNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerWaitForParent
     {   NULL,
         { PowerParentToD0, WdfDevStatePowerWaking DEBUGGED_EVENT },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerWaitForParentNP
     {   NULL,
         { PowerParentToD0, WdfDevStatePowerWakingNP DEBUGGED_EVENT },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerWakePending
     {   FxPkgPnp::PowerWakePending,
         { PowerD0, WdfDevStatePowerCheckParentStateArmedForWake DEBUGGED_EVENT },
         FxPkgPnp::m_WakePendingOtherStates,
-        { TRUE,
+        FX_POWER_STATE_INFO(TRUE,
           PowerParentToD0 // parent moved to D0 while the child was moving to
                           // D0 from Dx armed for wake
-        },
+        ),
     },
 
     // WdfDevStatePowerWakePendingNP
     {   FxPkgPnp::PowerWakePendingNP,
         { PowerD0, WdfDevStatePowerCheckParentStateArmedForWakeNP DEBUGGED_EVENT },
         FxPkgPnp::m_WakePendingNPOtherStates,
-        { TRUE,
+        FX_POWER_STATE_INFO(TRUE,
           PowerParentToD0 // parent moved to D0 while the child was moving to
                           // D0 from Dx armed for wake
-        },
+        ),
     },
 
     // WdfDevStatePowerWaking
     {   FxPkgPnp::PowerWaking,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerWakingNP
     {   FxPkgPnp::PowerWakingNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerWakingConnectInterrupt
     {   FxPkgPnp::PowerWakingConnectInterrupt,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerWakingConnectInterruptNP
     {   FxPkgPnp::PowerWakingConnectInterruptNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerWakingConnectInterruptFailed
     {   FxPkgPnp::PowerWakingConnectInterruptFailed,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerWakingConnectInterruptFailedNP
     {   FxPkgPnp::PowerWakingConnectInterruptFailedNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerWakingDmaEnable
@@ -764,10 +809,10 @@ const POWER_STATE_TABLE FxPkgPnp::m_WdfPowerStates[] =
     {   FxPkgPnp::PowerWakingDmaEnableNP,
         { PowerCompleteD0, WdfDevStatePowerStartSelfManagedIoNP DEBUGGED_EVENT },
         NULL,
-        { FALSE,
+        FX_POWER_STATE_INFO(FALSE,
           PowerParentToD0 // parent moved to D0 while the child was moving to
                           // D0 from Dx armed for wake
-        },
+        ),
     },
 
     // WdfDevStatePowerWakingDmaEnableFailed
@@ -872,24 +917,27 @@ const POWER_STATE_TABLE FxPkgPnp::m_WdfPowerStates[] =
     {   FxPkgPnp::PowerDxStoppedDisarmWakeNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerGotoDxStoppedDisableInterruptNP
     {   FxPkgPnp::PowerGotoDxStoppedDisableInterruptNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerGotoDxStopped
     {   FxPkgPnp::PowerGotoDxStopped,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerDxStopped
@@ -936,116 +984,132 @@ const POWER_STATE_TABLE FxPkgPnp::m_WdfPowerStates[] =
     {   FxPkgPnp::PowerDxStoppedArmForWakeNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerFinalPowerDownFailed
     {   FxPkgPnp::PowerFinalPowerDownFailed,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerFinal
     {   NULL,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerGotoImplicitD3DisarmWakeAtBus
     {   FxPkgPnp::PowerGotoImplicitD3DisarmWakeAtBus,
         { PowerEventMaximum, WdfDevStatePowerNull DEBUGGED_EVENT },
         NULL,
-        { FALSE,
-            0 },
+        FX_POWER_STATE_INFO(FALSE,
+            0
+        ),
     },
 
     // WdfDevStatePowerUpFailed
     {   FxPkgPnp::PowerUpFailed,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerUpFailedDerefParent
     {   FxPkgPnp::PowerUpFailedDerefParent,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerGotoDxFailed
     {   FxPkgPnp::PowerGotoDxFailed,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerGotoDxStoppedDisableInterrupt
     {   FxPkgPnp::PowerGotoDxStoppedDisableInterrupt,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerUpFailedNP
     {   FxPkgPnp::PowerUpFailedNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerUpFailedDerefParentNP
     {   FxPkgPnp::PowerUpFailedDerefParentNP,
         { PowerEventMaximum, WdfDevStatePowerNull },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerNotifyingD0ExitToWakeInterrupts
     {   FxPkgPnp::PowerNotifyingD0ExitToWakeInterrupts,
         { PowerWakeInterruptCompleteTransition, WdfDevStatePowerGotoDxIoStopped DEBUGGED_EVENT },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerNotifyingD0EntryToWakeInterrupts
     {   FxPkgPnp::PowerNotifyingD0EntryToWakeInterrupts,
         { PowerWakeInterruptCompleteTransition, WdfDevStatePowerWakingConnectInterrupt DEBUGGED_EVENT },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
     // WdfDevStatePowerNotifyingD0ExitToWakeInterruptsNP
     {   FxPkgPnp::PowerNotifyingD0ExitToWakeInterruptsNP,
         { PowerWakeInterruptCompleteTransition, WdfDevStatePowerGotoDxIoStoppedNP TRAP_ON_EVENT },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerNotifyingD0EntryToWakeInterrupts
     {   FxPkgPnp::PowerNotifyingD0EntryToWakeInterruptsNP,
         { PowerWakeInterruptCompleteTransition, WdfDevStatePowerWakingConnectInterruptNP TRAP_ON_EVENT },
         NULL,
-        { FALSE,
-          0 },
+        FX_POWER_STATE_INFO(FALSE,
+          0
+        ),
     },
 
     // WdfDevStatePowerNull
     // *** no entry for this state ***
 };
+
+#undef FX_POWER_STATE_INFO
 
 // @@SMVERIFY_SPLIT_END
 

@@ -18,6 +18,7 @@
  */
 
 #include <stdarg.h>
+#include <math.h>
 
 #include "windef.h"
 #include "winbase.h"
@@ -54,7 +55,7 @@ double erf(double x)
     sign = 1;
     if (x < 0)
         sign = -1;
-    x = abs(x);
+    x = fabs(x);
 
     /* A & S 7.1.26 */
     t = 1.0/(1.0 + p*x);

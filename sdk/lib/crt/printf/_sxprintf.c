@@ -24,12 +24,7 @@
 
 int __cdecl _tstreamout(FILE *stream, const _TCHAR *format, va_list argptr);
 
-int
-#if defined(USER32_WSPRINTF) && defined(_M_IX86)
-__stdcall
-#else
-__cdecl
-#endif
+int __cdecl
 _sxprintf(
     _TCHAR *buffer,
 #if IS_SECAPI
@@ -118,5 +113,4 @@ _sxprintf(
 
     return result;
 }
-
 

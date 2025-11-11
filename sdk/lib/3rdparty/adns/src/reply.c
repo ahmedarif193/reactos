@@ -39,7 +39,7 @@ void adns__procdgram(adns_state ads, const byte *dgram, int dglen,
   int id, f1, f2, qdcount, ancount, nscount, arcount;
   int flg_ra, flg_rd, flg_tc, flg_qr, opcode;
   int rrtype, rrclass, rdlength, rdstart;
-  int anstart, nsstart, arstart;
+  int anstart, nsstart;
   int ownermatched, l, nrrs;
   unsigned long ttl, soattl;
   const typeinfo *typei;
@@ -157,8 +157,6 @@ void adns__procdgram(adns_state ads, const byte *dgram, int dglen,
   /* We're definitely going to do something with this packet and this query now. */
 
   anstart= qu->query_dglen;
-  arstart= -1;
-
   /* Now, take a look at the answer section, and see if it is complete.
    * If it has any CNAMEs we stuff them in the answer.
    */
@@ -199,10 +197,13 @@ void adns__procdgram(adns_state ads, const byte *dgram, int dglen,
 	adns__debug(ads,serv,qu,"ignoring CNAME (to %s) coexisting with RR",
 		    adns__diag_domain(ads,serv,qu, &qu->vb, dgram,dglen,rdstart));
       } else {
+	adns_queryflags parse_flags =
+	  (qu->flags & adns_qf_quotefail_cname) ? (adns_queryflags)0
+	                                       : (adns_queryflags)pdf_quoteok;
 	qu->cname_begin= rdstart;
 	qu->cname_dglen= dglen;
 	st= adns__parse_domain(ads,serv,qu, &qu->vb,
-			       qu->flags & adns_qf_quotefail_cname ? 0 : pdf_quoteok,
+			       parse_flags,
 			       dgram,dglen, &rdstart,rdstart+rdlength);
 	if (!qu->vb.used) goto x_truncated;
 	if (st) { adns__query_fail(qu,st); return; }

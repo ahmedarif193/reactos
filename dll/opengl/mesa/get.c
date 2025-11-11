@@ -98,7 +98,7 @@
 
 
 
-#define FLOAT_TO_BOOL(X)	( (X) ? GL_TRUE : GL_FALSE )
+#define FLOAT_TO_BOOL(X)	( ((X) != 0.0F) ? GL_TRUE : GL_FALSE )
 #define INT_TO_BOOL(I)		( (I)==0 ? GL_FALSE : GL_TRUE )
 #define ENUM_TO_BOOL(E)		( (E)==0 ? GL_FALSE : GL_TRUE )
 
@@ -625,7 +625,8 @@ void gl_GetBooleanv( GLcontext *ctx, GLenum pname, GLboolean *params )
 	 *params = FLOAT_TO_BOOL(ctx->Point.Size );
 	 break;
       case GL_POINT_SIZE_GRANULARITY:
-	 *params = FLOAT_TO_BOOL(POINT_SIZE_GRANULARITY );
+	 /* Constant is known non-zero; avoid pointless float comparison */
+	 *params = GL_TRUE;
 	 break;
       case GL_POINT_SIZE_RANGE:
 	 params[0] = FLOAT_TO_BOOL(MIN_POINT_SIZE );
