@@ -2,15 +2,20 @@
  * PROJECT:         ReactOS Runtime Library
  * LICENSE:         GPL - See COPYING in the top level directory
  * FILE:            lib/rtl/generictable.c
- * PURPOSE:         Splay Tree Generic Table Implementation
+ * PURPOSE:         Splay Tree Generic Table Implementation (robust/optimized variant)
  * PROGRAMMERS:     Alex Ionescu (alex.ionescu@reactos.org)
+ *                  (Minor robustness & micro-optimizations; safe-size checks; 2025)
  */
 
-/* INCLUDES ******************************************************************/
+ /* INCLUDES ******************************************************************/
 
 #include <rtl.h>
 #define NDEBUG
 #include <debug.h>
+
+#if defined(RTL_USE_AVL_TABLES)
+#warning "RTL_USE_AVL_TABLES defined while building generictable.c"
+#endif
 
 /* Internal header for table entries */
 typedef struct _TABLE_ENTRY_HEADER
@@ -20,6 +25,49 @@ typedef struct _TABLE_ENTRY_HEADER
     ULONGLONG Alignment; /* keep user data naturally aligned */
     UCHAR UserData[];
 } TABLE_ENTRY_HEADER, *PTABLE_ENTRY_HEADER;
+
+/* UserData must stay naturally pointer-aligned */
+C_ASSERT((FIELD_OFFSET(TABLE_ENTRY_HEADER, UserData) % sizeof(PVOID)) == 0);
+
+/* PRIVATE HELPERS ***********************************************************/
+
+/* Safe unsigned addition for ULONGs: returns FALSE on overflow */
+__forceinline
+BOOLEAN
+RtlpSafeAddUlong(_In_ ULONG a, _In_ ULONG b, _Out_ PULONG out)
+{
+    if (a > (MAXULONG - b)) return FALSE;
+    *out = a + b;
+    return TRUE;
+}
+
+/* Compute allocation size (header + payload) and verify it fits CLONG */
+__forceinline
+BOOLEAN
+RtlpComputeAllocSize(_In_ ULONG BufferSize, _Out_ CLONG* AllocSizeOut)
+{
+    ULONG total;
+    if (!RtlpSafeAddUlong(BufferSize,
+                          FIELD_OFFSET(TABLE_ENTRY_HEADER, UserData),
+                          &total))
+    {
+        return FALSE; /* overflow */
+    }
+
+    /* PRTL_GENERIC_ALLOCATE_ROUTINE takes CLONG */
+    if (total > (ULONG)MAXLONG) return FALSE;
+
+    *AllocSizeOut = (CLONG)total;
+    return TRUE;
+}
+
+/* Fetch TABLE_ENTRY_HEADER from splay link */
+__forceinline
+PTABLE_ENTRY_HEADER
+RtlpEntryFromLinks(_In_ PRTL_SPLAY_LINKS Links)
+{
+    return CONTAINING_RECORD(Links, TABLE_ENTRY_HEADER, SplayLinks);
+}
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
@@ -31,10 +79,12 @@ RtlpFindGenericTableNodeOrParent(IN PRTL_GENERIC_TABLE Table,
 {
     PRTL_SPLAY_LINKS CurrentNode, ChildNode;
     RTL_GENERIC_COMPARE_RESULTS Result;
+    PRTL_GENERIC_COMPARE_ROUTINE Compare;
 
     /* Quick check to see if the table is empty */
     if (RtlIsGenericTableEmpty(Table))
     {
+        *NodeOrParent = NULL;
         return TableEmptyTree;
     }
 
@@ -46,17 +96,28 @@ RtlpFindGenericTableNodeOrParent(IN PRTL_GENERIC_TABLE Table,
         return TableEmptyTree;
     }
 
+    Compare = Table->CompareRoutine;
+    ASSERT(Compare != NULL);
+
     /* Start compare loop */
-    while (TRUE)
+    for (;;)
     {
-        Result = Table->CompareRoutine(Table,
-                                       Buffer,
-                                       ((PTABLE_ENTRY_HEADER)CurrentNode)->
-                                       UserData);
+        /* Defensive check: bail if the current node unexpectedly disappears */
+        if (CurrentNode == NULL)
+        {
+            *NodeOrParent = NULL;
+            return TableEmptyTree;
+        }
+
+        Result = Compare(Table,
+                         Buffer,
+                         RtlpEntryFromLinks(CurrentNode)->UserData);
+
         if (Result == GenericLessThan)
         {
             /* We're less, check if this is the left child */
-            if ((ChildNode = RtlLeftChild(CurrentNode)))
+            ChildNode = RtlLeftChild(CurrentNode);
+            if (ChildNode)
             {
                 /* Continue searching from this node */
                 CurrentNode = ChildNode;
@@ -70,8 +131,9 @@ RtlpFindGenericTableNodeOrParent(IN PRTL_GENERIC_TABLE Table,
         }
         else if (Result == GenericGreaterThan)
         {
-            /* We're more, check if this is the right child */
-            if ((ChildNode = RtlRightChild(CurrentNode)))
+            /* We're greater, check if this is the right child */
+            ChildNode = RtlRightChild(CurrentNode);
+            if (ChildNode)
             {
                 /* Continue searching from this node */
                 CurrentNode = ChildNode;
@@ -108,6 +170,11 @@ RtlInitializeGenericTable(IN PRTL_GENERIC_TABLE Table,
                           IN PRTL_GENERIC_FREE_ROUTINE FreeRoutine,
                           IN PVOID TableContext)
 {
+    ASSERT(Table != NULL);
+    ASSERT(CompareRoutine != NULL);
+    ASSERT(AllocateRoutine != NULL);
+    ASSERT(FreeRoutine != NULL);
+
     /* Initialize the table to default and passed values */
     InitializeListHead(&Table->InsertOrderList);
     Table->TableRoot = NULL;
@@ -133,8 +200,17 @@ RtlInsertElementGenericTable(IN PRTL_GENERIC_TABLE Table,
     PRTL_SPLAY_LINKS NodeOrParent;
     TABLE_SEARCH_RESULT Result;
 
-    /* Get the splay links and table search result immediately */
-    Result = RtlpFindGenericTableNodeOrParent(Table, Buffer, &NodeOrParent);
+    /* Avoid the expensive lookup path when the tree is empty */
+    if (RtlIsGenericTableEmpty(Table))
+    {
+        NodeOrParent = NULL;
+        Result = TableEmptyTree;
+    }
+    else
+    {
+        /* Get the splay links and table search result immediately */
+        Result = RtlpFindGenericTableNodeOrParent(Table, Buffer, &NodeOrParent);
+    }
 
     /* Now call the routine to do the full insert */
     return RtlInsertElementGenericTableFull(Table,
@@ -162,14 +238,20 @@ RtlInsertElementGenericTableFull(IN PRTL_GENERIC_TABLE Table,
     /* Check if the entry wasn't already found */
     if (SearchResult != TableFoundNode)
     {
+        CLONG AllocSize;
+
         /* We're doing an allocation, sanity check */
         ASSERT(Table->NumberGenericTableElements != (MAXULONG - 1));
 
+        /* Safely compute allocation size; bail on overflow */
+        if (!RtlpComputeAllocSize(BufferSize, &AllocSize))
+        {
+            if (NewElement) *NewElement = FALSE;
+            return NULL;
+        }
+
         /* Allocate a node */
-        NewNode = Table->AllocateRoutine(Table,
-                                         BufferSize +
-                                         FIELD_OFFSET(TABLE_ENTRY_HEADER,
-                                                      UserData));
+        NewNode = Table->AllocateRoutine(Table, AllocSize);
         if (!NewNode)
         {
             /* No memory or other allocation error, fail */
@@ -180,7 +262,7 @@ RtlInsertElementGenericTableFull(IN PRTL_GENERIC_TABLE Table,
         /* Initialize the new inserted element */
         RtlInitializeSplayLinks(NewNode);
         InsertTailList(&Table->InsertOrderList,
-                       &((PTABLE_ENTRY_HEADER)NewNode)->ListEntry);
+                       &RtlpEntryFromLinks(NewNode)->ListEntry);
 
         /* Increase element count */
         Table->NumberGenericTableElements++;
@@ -202,10 +284,13 @@ RtlInsertElementGenericTableFull(IN PRTL_GENERIC_TABLE Table,
             RtlInsertAsRightChild(NodeOrParent, NewNode);
         }
 
-        /* Copy user buffer */
-        RtlCopyMemory(((PTABLE_ENTRY_HEADER)NewNode)->UserData,
-                      Buffer,
-                      BufferSize);
+        /* Copy user buffer (no-op if size == 0) */
+        if (BufferSize != 0)
+        {
+            RtlCopyMemory(RtlpEntryFromLinks(NewNode)->UserData,
+                          Buffer,
+                          BufferSize);
+        }
     }
     else
     {
@@ -220,7 +305,7 @@ RtlInsertElementGenericTableFull(IN PRTL_GENERIC_TABLE Table,
     if (NewElement) *NewElement = (SearchResult != TableFoundNode);
 
     /* Return pointer to user data */
-    return ((PTABLE_ENTRY_HEADER)NewNode)->UserData;
+    return RtlpEntryFromLinks(NewNode)->UserData;
 }
 
 /*
@@ -230,8 +315,9 @@ BOOLEAN
 NTAPI
 RtlIsGenericTableEmpty(IN PRTL_GENERIC_TABLE Table)
 {
-    /* Check if the table root is empty */
-    return (Table->TableRoot) ? FALSE: TRUE;
+    /* Prefer structure-internal invariant; also asserts in debug */
+    ASSERT((Table->TableRoot == NULL) == (Table->NumberGenericTableElements == 0));
+    return (Table->TableRoot == NULL);
 }
 
 /*
@@ -280,7 +366,7 @@ RtlLookupElementGenericTableFull(IN PRTL_GENERIC_TABLE Table,
                                                      NodeOrParent);
 
     /* Check if we found anything */
-    if ((*SearchResult == TableEmptyTree) || (*SearchResult != TableFoundNode))
+    if (*SearchResult != TableFoundNode)
     {
         /* Nothing found */
         return NULL;
@@ -342,7 +428,7 @@ RtlEnumerateGenericTable(IN PRTL_GENERIC_TABLE Table,
     {
         /* Then find the leftmost element */
         FoundNode = Table->TableRoot;
-        while(RtlLeftChild(FoundNode))
+        while (RtlLeftChild(FoundNode))
         {
             /* Get the left child */
             FoundNode = RtlLeftChild(FoundNode);
@@ -381,13 +467,13 @@ RtlEnumerateGenericTableWithoutSplaying(IN PRTL_GENERIC_TABLE Table,
     {
         /* Then find the leftmost element */
         FoundNode = Table->TableRoot;
-        while(RtlLeftChild(FoundNode))
+        while (RtlLeftChild(FoundNode))
         {
             /* Get the left child */
             FoundNode = RtlLeftChild(FoundNode);
         }
 
-        /* Splay it */
+        /* Save enumeration state but do not splay */
         *RestartKey = FoundNode;
     }
     else
@@ -403,6 +489,7 @@ RtlEnumerateGenericTableWithoutSplaying(IN PRTL_GENERIC_TABLE Table,
 
 /*
  * @unimplemented
+ * NOTE: This API belongs to the AVL variant; kept as a stub for drop-in parity.
  */
 PVOID
 NTAPI
@@ -415,6 +502,13 @@ RtlEnumerateGenericTableLikeADirectory(IN PRTL_AVL_TABLE Table,
                                        IN OUT PVOID Buffer)
 {
     UNIMPLEMENTED;
+    UNREFERENCED_PARAMETER(Table);
+    UNREFERENCED_PARAMETER(MatchFunction);
+    UNREFERENCED_PARAMETER(MatchData);
+    UNREFERENCED_PARAMETER(NextFlag);
+    UNREFERENCED_PARAMETER(RestartKey);
+    UNREFERENCED_PARAMETER(DeleteCount);
+    UNREFERENCED_PARAMETER(Buffer);
     return 0;
 }
 
@@ -455,24 +549,20 @@ RtlGetElementGenericTable(IN PRTL_GENERIC_TABLE Table,
         /* Find out if the distance is more then the half-way point */
         if (TargetIndex > (OrderedElement / 2))
         {
-            /* Do the search backwards, since this takes less iterations */
-            DeltaDown = OrderedElement - TargetIndex;
-            while (DeltaDown)
+            /* Do the search backwards, since this takes fewer iterations */
+            ULONG steps = OrderedElement - TargetIndex;
+            while (steps--)
             {
-                /* Get next node */
                 OrderedNode = OrderedNode->Blink;
-                DeltaDown--;
             }
         }
         else
         {
             /* Follow the list directly instead */
             OrderedNode = &Table->InsertOrderList;
-            while (WorkingIndex)
+            while (WorkingIndex--)
             {
-                /* Get next node */
                 OrderedNode = OrderedNode->Flink;
-                WorkingIndex--;
             }
         }
     }
@@ -482,26 +572,20 @@ RtlGetElementGenericTable(IN PRTL_GENERIC_TABLE Table,
         DeltaUp = TargetIndex - OrderedElement;
         DeltaDown = (ElementCount - TargetIndex) + 1;
 
-        /* Check if the up distance is smaller then the down distance */
+        /* Choose direction with fewer iterations */
         if (DeltaUp <= DeltaDown)
         {
-            /* Do the search forwards, since this takes less iterations */
-            while (DeltaUp)
+            while (DeltaUp--)
             {
-                /* Get next node */
                 OrderedNode = OrderedNode->Flink;
-                DeltaUp--;
             }
         }
         else
         {
-            /* Do the search downwards, since this takes less iterations */
             OrderedNode = &Table->InsertOrderList;
-            while (DeltaDown)
+            while (DeltaDown--)
             {
-                /* Get next node */
                 OrderedNode = OrderedNode->Blink;
-                DeltaDown--;
             }
         }
     }
