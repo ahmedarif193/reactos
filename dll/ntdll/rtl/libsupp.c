@@ -1008,6 +1008,28 @@ LdrpApisetVersion(VOID)
     if (CachedApisetVersion == ~0u)
     {
         DWORD CompatVersion = RosGetProcessCompatVersion();
+        DWORD OsVersion = (SharedUserData->NtMajorVersion << 8) |
+                          SharedUserData->NtMinorVersion;
+
+        if (!CompatVersion)
+        {
+            CompatVersion = OsVersion;
+        }
+
+        if ((CompatVersion < _WIN32_WINNT_WIN7) &&
+            (OsVersion >= _WIN32_WINNT_WIN7))
+        {
+            /*
+             * Modern Windows keeps the apiset layer available even when the
+             * requested compatibility GUID predates Windows 7.  ReactOS needs
+             * the same behaviour because contemporary applications import the
+             * api-ms-win-* DLLs unconditionally.
+             */
+            DPRINT1("Compat version %x < Win7 but OS %x supports apisets; forcing Win7\n",
+                    CompatVersion,
+                    OsVersion);
+            CompatVersion = _WIN32_WINNT_WIN7;
+        }
 
         switch (CompatVersion)
         {
