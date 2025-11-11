@@ -36,6 +36,7 @@ list(APPEND CRT_MEM_SOURCE
     ${LIBCNTPR_MEM_SOURCE}
 )
 
-# Needed by ext2fs. Should use RtlCompareMemory instead?
-add_library(memcmp mem/memcmp.c)
+# Needed by ext2fs and other kernel drivers. Should use RtlCompareMemory instead?
+add_library(memcmp
+    mem/memcmp.c)
 add_dependencies(memcmp psdk)
