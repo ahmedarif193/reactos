@@ -56,6 +56,7 @@ else()
         ucrtsupport
         crtmath
         vcruntime
+        libcntpr
         wine
     )
 endif()
