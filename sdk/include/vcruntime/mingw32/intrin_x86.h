@@ -948,7 +948,7 @@ __INTRIN_INLINE void __addgsdword(unsigned long Offset, unsigned long Data)
 
 __INTRIN_INLINE void __addgsqword(unsigned long Offset, unsigned long long Data)
 {
-	__asm__ __volatile__("addq %k[Data], %%gs:%a[Offset]" : : [Offset] "ir" (Offset), [Data] "ir" (Data) : "memory");
+	__asm__ __volatile__("addq %q[Data], %%gs:%a[Offset]" : : [Offset] "ir" (Offset), [Data] "ir" (Data) : "memory");
 }
 
 #else /* defined(__x86_64__) */
