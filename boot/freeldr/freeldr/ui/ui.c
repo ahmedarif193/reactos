@@ -22,6 +22,9 @@
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(UI);
 
+/* No BGRT-aware gating in generic UI layer; refresh policy is handled in the
+ * platform video backend (UEFI GOP) and via partial commits where needed. */
+
 UCHAR UiStatusBarFgColor;       // Status bar foreground color
 UCHAR UiStatusBarBgColor;       // Status bar background color
 UCHAR UiBackdropFgColor;        // Backdrop foreground color
@@ -419,6 +422,7 @@ UiIndicateProgress(VOID)
 {
     ULONG Percentage;
 
+
     /* Increase progress */
     UiProgressBar.Indicator.Count++;
 
@@ -462,6 +466,7 @@ UiUpdateProgressBar(
     _In_opt_ PCSTR ProgressText)
 {
     ULONG TotalProgress;
+
 
     /* Make sure the progress bar is enabled */
     if (!UiProgressBar.Show)

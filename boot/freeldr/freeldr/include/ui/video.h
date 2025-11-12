@@ -23,6 +23,14 @@ PVOID VideoAllocateOffScreenBuffer(VOID);   // Returns a pointer to an off-scree
 VOID VideoFreeOffScreenBuffer(VOID);
 VOID VideoCopyOffScreenBufferToVRAM(VOID);
 
+/* Commit only a rectangle (text-cell coords) from the off-screen buffer to VRAM.
+ * This minimizes overdraw so firmware BGRT stays visible outside the updated area. */
+VOID VideoCopyOffScreenBufferRectToVRAM(
+    _In_ ULONG Left,
+    _In_ ULONG Top,
+    _In_ ULONG Right,
+    _In_ ULONG Bottom);
+
 VOID VideoSavePaletteState(PPALETTE_ENTRY Palette, ULONG ColorCount);
 VOID VideoRestorePaletteState(PPALETTE_ENTRY Palette, ULONG ColorCount);
 

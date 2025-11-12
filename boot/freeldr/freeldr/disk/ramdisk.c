@@ -23,6 +23,7 @@
 
 #ifdef UEFIBOOT
 extern BOOLEAN UefiVideoDisplayBootLogo(VOID);
+extern BOOLEAN UefiVideoIsBootLogoDrawn(VOID);
 #endif
 
 #if defined(__GNUC__)
@@ -2201,7 +2202,14 @@ RamDiskLoadVirtualFile(
     LARGE_INTEGER Position;
 
     /* Display progress */
+#ifdef UEFIBOOT
+    if (!UefiVideoIsBootLogoDrawn())
+    {
+        UiDrawProgressBarCenter("Loading RamDisk...");
+    }
+#else
     UiDrawProgressBarCenter("Loading RamDisk...");
+#endif
 
     /*
      * If the firmware or a previous boot stage already provided the ramdisk
