@@ -51,6 +51,16 @@ UefiVideoPutChar(int Ch, UCHAR Attr,
 VOID
 UefiVideoCopyOffScreenBufferToVRAM(PVOID Buffer);
 
+/* UEFI-specific partial commit for semi-text updates. Coordinates are
+ * text-cell units (chars). */
+VOID
+UefiVideoCopyOffScreenBufferRectToVRAM(
+    PVOID Buffer,
+    ULONG Left,
+    ULONG Top,
+    ULONG Right,
+    ULONG Bottom);
+
 BOOLEAN
 UefiVideoIsPaletteFixed(VOID);
 
@@ -70,6 +80,12 @@ UefiPcBeep(VOID);
 
 BOOLEAN
 UefiVideoDisplayBootLogo(VOID);
+
+BOOLEAN
+UefiVideoIsBootLogoDrawn(VOID);
+
+VOID
+UefiVideoRefreshBootLogo(VOID);
 
 PFREELDR_MEMORY_DESCRIPTOR
 UefiMemGetMemoryMap(ULONG *MemoryMapSize);

@@ -145,8 +145,13 @@ MiniTuiTickProgressBar(
                 UiProgressBar.Right, UiProgressBar.Bottom,
                 ' ', ATTR(UiTextColor, UiMenuBgColor));
 
-    TuiUpdateDateTime();
-    VideoCopyOffScreenBufferToVRAM();
+    /* Only refresh the progress bar area to avoid redrawing the whole screen */
+    /* TuiUpdateDateTime(); -- skip while BGRT/logo visible */
+    VideoCopyOffScreenBufferRectToVRAM(
+        UiProgressBar.Left,
+        UiProgressBar.Top,
+        UiProgressBar.Right,
+        UiProgressBar.Bottom);
 }
 
 VOID
@@ -261,4 +266,3 @@ const UIVTBL MiniTuiVtbl =
     TuiDisplayMenu,
     MiniTuiDrawMenu,
 };
-

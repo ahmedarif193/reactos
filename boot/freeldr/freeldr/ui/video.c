@@ -40,6 +40,38 @@ VOID VideoCopyOffScreenBufferToVRAM(VOID)
     MachVideoCopyOffScreenBufferToVRAM(VideoOffScreenBuffer);
 }
 
+/* Partially copy text cells (Left..Right, Top..Bottom) to VRAM. */
+VOID
+VideoCopyOffScreenBufferRectToVRAM(
+    _In_ ULONG Left,
+    _In_ ULONG Top,
+    _In_ ULONG Right,
+    _In_ ULONG Bottom)
+{
+#ifdef UEFIBOOT
+    /* Use a UEFI-specific optimized path if available. */
+    extern VOID UefiVideoCopyOffScreenBufferRectToVRAM(
+        PVOID Buffer,
+        ULONG Left,
+        ULONG Top,
+        ULONG Right,
+        ULONG Bottom);
+    UefiVideoCopyOffScreenBufferRectToVRAM(
+        VideoOffScreenBuffer,
+        Left,
+        Top,
+        Right,
+        Bottom);
+#else
+    /* Fallback: update everything. */
+    UNREFERENCED_PARAMETER(Left);
+    UNREFERENCED_PARAMETER(Top);
+    UNREFERENCED_PARAMETER(Right);
+    UNREFERENCED_PARAMETER(Bottom);
+    VideoCopyOffScreenBufferToVRAM();
+#endif
+}
+
 
 VOID VideoSavePaletteState(PPALETTE_ENTRY Palette, ULONG ColorCount)
 {
@@ -171,4 +203,3 @@ VOID VideoFadeOut(ULONG ColorCount)
         }
     }
 }
-

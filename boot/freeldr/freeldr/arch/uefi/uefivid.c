@@ -22,6 +22,15 @@ static BOOLEAN UefiSelectBestModeByAspect(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
 #define CHAR_WIDTH  8
 #define CHAR_HEIGHT 16
 #define TOP_BOTTOM_LINES 0
+
+/* Remember BGRT splash state so we can re-apply it when the text UI repaints. */
+static PBGRT_TABLE gCachedBgrtTable = NULL;
+static BOOLEAN gBgrtLogoDrawn = FALSE;
+static BOOLEAN gBgrtRefreshInProgress = FALSE;
+/* Protected BGRT rectangle in pixel coordinates; operations should avoid
+ * touching this area so the firmware logo remains static. */
+static BOOLEAN gBgrtRectValid = FALSE;
+static UINT32 gBgrtLeft = 0, gBgrtTop = 0, gBgrtRight = 0, gBgrtBottom = 0;
 #define LOWEST_SUPPORTED_RES 1
 
 /* Preferred resolution bounds used when selecting a fallback mode */
@@ -129,6 +138,15 @@ static BOOLEAN UefiTrySetExactMode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
                                    UINT32 w,
                                    UINT32 h);
 static BOOLEAN UefiVideoBlitBgrtBitmap(PBGRT_TABLE Bgrt);
+static inline BOOLEAN
+UefiVideoBgrtRectIntersects(UINT32 Left, UINT32 Top, UINT32 Right, UINT32 Bottom)
+{
+    if (!gBgrtRectValid)
+        return FALSE;
+    if (Right < gBgrtLeft || Left > gBgrtRight || Bottom < gBgrtTop || Top > gBgrtBottom)
+        return FALSE;
+    return TRUE;
+}
 
 static VOID
 UefiVideoConfigureFramebufferCache(VOID)
@@ -475,11 +493,12 @@ UefiInitializeVideo(VOID)
     TRACE("  MaxMode: %d\n", gop->Mode->MaxMode);
     TRACE("  Current Mode: %d\n", gop->Mode->Mode);
 
+    const BOOLEAN kAllowModeSwitch = FALSE;
     UINT32 targetWidth = 0;
     UINT32 targetHeight = 0;
     BOOLEAN haveTargetResolution = UefiComputeTargetConsoleResolution(&targetWidth, &targetHeight);
 
-    if (haveTargetResolution)
+    if (kAllowModeSwitch && haveTargetResolution)
     {
         if (UefiTrySetExactMode(gop, targetWidth, targetHeight))
         {
@@ -561,13 +580,13 @@ UefiInitializeVideo(VOID)
     }
     
     /* Try EDID-based preferred/native selection; else use aspect-matched best */
-    if (!ModeChosen && haveTargetResolution)
+    if (kAllowModeSwitch && !ModeChosen && haveTargetResolution)
     {
         if (UefiSelectBestModeByAspect(gop, targetWidth, targetHeight))
             ModeChosen = TRUE;
     }
 
-    if (!ModeChosen)
+    if (kAllowModeSwitch && !ModeChosen)
     {
         UINT32 prefW = 0, prefH = 0;
         if (UefiGetPreferredResolutionFromEdid(&prefW, &prefH))
@@ -771,7 +790,24 @@ UefiVideoClearScreenColor(ULONG Color, BOOLEAN FullScreen)
 
     for (Line = 0; Line < VisibleHeight; Line++)
     {
-        RtlFillMemoryUlong(Row, RowBytes, Color);
+        UINT32 PixelY = (FullScreen ? 0 : TOP_BOTTOM_LINES) + Line;
+        if (gBgrtRectValid && PixelY >= gBgrtTop && PixelY <= gBgrtBottom)
+        {
+            SIZE_T LeftBytes = (SIZE_T)min((UINT32)framebufferData.ScreenWidth, gBgrtLeft) * sizeof(ULONG);
+            if (LeftBytes > 0)
+                RtlFillMemoryUlong(Row, LeftBytes, Color);
+            if (gBgrtRight + 1 < (UINT32)framebufferData.ScreenWidth)
+            {
+                SIZE_T RightStart = ((SIZE_T)gBgrtRight + 1) * sizeof(ULONG);
+                SIZE_T RightBytes = RowBytes - RightStart;
+                if (RightBytes > 0)
+                    RtlFillMemoryUlong(Row + RightStart, RightBytes, Color);
+            }
+        }
+        else
+        {
+            RtlFillMemoryUlong(Row, RowBytes, Color);
+        }
         Row += Pitch;
     }
 }
@@ -803,6 +839,18 @@ UefiVideoOutputChar(UCHAR Char, unsigned X, unsigned Y, ULONG FgColor, ULONG BgC
 
     UefiVideoEnsureFramebufferCache();
     UefiVideoWarnOnUncachedFramebuffer();
+
+    /* If the glyph intersects the protected BGRT rectangle, skip drawing. */
+    {
+        UINT32 GlyphLeft = X * CHAR_WIDTH;
+        UINT32 GlyphTop = (Y * CHAR_HEIGHT) + TOP_BOTTOM_LINES;
+        UINT32 GlyphRight = GlyphLeft + CHAR_WIDTH - 1;
+        UINT32 GlyphBottom = GlyphTop + CHAR_HEIGHT - 1;
+        if (UefiVideoBgrtRectIntersects(GlyphLeft, GlyphTop, GlyphRight, GlyphBottom))
+        {
+            return;
+        }
+    }
 
     FontPtr = BitmapFont8x16 + Char * CHAR_HEIGHT;
     GlyphBase = (PUCHAR)framebufferData.BaseAddress +
@@ -874,6 +922,43 @@ UefiVideoCopyOffScreenBufferToVRAM(PVOID Buffer)
 }
 
 VOID
+UefiVideoCopyOffScreenBufferRectToVRAM(
+    PVOID Buffer,
+    ULONG Left,
+    ULONG Top,
+    ULONG Right,
+    ULONG Bottom)
+{
+    PUCHAR OffScreenBuffer = (PUCHAR)Buffer;
+    ULONG GridWidth = framebufferData.ScreenWidth / CHAR_WIDTH;
+    ULONG GridHeight = (framebufferData.ScreenHeight - 2 * TOP_BOTTOM_LINES) / CHAR_HEIGHT;
+
+    if (Left > Right || Top > Bottom)
+        return;
+
+    if (GridWidth == 0 || GridHeight == 0)
+        return;
+
+    if (Right >= GridWidth) Right = GridWidth - 1;
+    if (Bottom >= GridHeight) Bottom = GridHeight - 1;
+
+    for (ULONG y = Top; y <= Bottom; ++y)
+    {
+        ULONG rowIndex = (y * GridWidth) * 2; /* 2 bytes per cell */
+        for (ULONG x = Left; x <= Right; ++x)
+        {
+            ULONG cell = rowIndex + (x * 2);
+            UCHAR ch = OffScreenBuffer[cell + 0];
+            UCHAR at = OffScreenBuffer[cell + 1];
+            UefiVideoPutChar(ch, at, x, y);
+        }
+    }
+
+    /* Refresh BGRT only once per partial update. */
+    UefiVideoRefreshBootLogo();
+}
+
+VOID
 UefiVideoScrollUp(VOID)
 {
     ULONG BgColor, Dummy;
@@ -899,20 +984,64 @@ UefiVideoScrollUp(VOID)
 
     RowBytes = (SIZE_T)framebufferData.ScreenWidth * sizeof(ULONG);
     Base = (PUCHAR)framebufferData.BaseAddress;
-    Dst = Base + TOP_BOTTOM_LINES * Pitch;
-    Src = Dst + CHAR_HEIGHT * Pitch;
-    CopyBytes = (SIZE_T)(VisiblePixelsY - CHAR_HEIGHT) * Pitch;
+    /* Replace bulk scroll with per-line copies excluding the BGRT area. */
+    {
+        ULONG CopyLines = VisiblePixelsY - CHAR_HEIGHT;
+        for (Line = 0; Line < CopyLines; ++Line)
+        {
+            PUCHAR DstRow = Base + (TOP_BOTTOM_LINES + Line) * Pitch;
+            PUCHAR SrcRow = DstRow + CHAR_HEIGHT * Pitch;
+            UINT32 PixelY = TOP_BOTTOM_LINES + Line;
 
-    RtlMoveMemory(Dst, Src, CopyBytes);
+            if (gBgrtRectValid && PixelY >= gBgrtTop && PixelY <= gBgrtBottom)
+            {
+                SIZE_T LeftBytes = (SIZE_T)min((UINT32)framebufferData.ScreenWidth, gBgrtLeft) * sizeof(ULONG);
+                if (LeftBytes > 0)
+                    RtlMoveMemory(DstRow, SrcRow, LeftBytes);
+                if (gBgrtRight + 1 < (UINT32)framebufferData.ScreenWidth)
+                {
+                    SIZE_T RightStart = ((SIZE_T)gBgrtRight + 1) * sizeof(ULONG);
+                    SIZE_T RightBytes = RowBytes - RightStart;
+                    if (RightBytes > 0)
+                        RtlMoveMemory(DstRow + RightStart, SrcRow + RightStart, RightBytes);
+                }
+            }
+            else
+            {
+                RtlMoveMemory(DstRow, SrcRow, RowBytes);
+            }
+        }
+    }
 
     UefiVideoAttrToColors(ATTR(COLOR_WHITE, COLOR_BLACK), &Dummy, &BgColor);
 
-    Dst += CopyBytes;
-    for (Line = 0; Line < CHAR_HEIGHT; Line++)
     {
-        RtlFillMemoryUlong(Dst, RowBytes, BgColor);
-        Dst += Pitch;
+        PUCHAR DstRow = Base + (TOP_BOTTOM_LINES + (VisiblePixelsY - CHAR_HEIGHT)) * Pitch;
+        for (Line = 0; Line < CHAR_HEIGHT; ++Line)
+        {
+            UINT32 PixelY = TOP_BOTTOM_LINES + (VisiblePixelsY - CHAR_HEIGHT) + Line;
+            if (gBgrtRectValid && PixelY >= gBgrtTop && PixelY <= gBgrtBottom)
+            {
+                SIZE_T LeftBytes = (SIZE_T)min((UINT32)framebufferData.ScreenWidth, gBgrtLeft) * sizeof(ULONG);
+                if (LeftBytes > 0)
+                    RtlFillMemoryUlong(DstRow, LeftBytes, BgColor);
+                if (gBgrtRight + 1 < (UINT32)framebufferData.ScreenWidth)
+                {
+                    SIZE_T RightStart = ((SIZE_T)gBgrtRight + 1) * sizeof(ULONG);
+                    SIZE_T RightBytes = RowBytes - RightStart;
+                    if (RightBytes > 0)
+                        RtlFillMemoryUlong(DstRow + RightStart, RightBytes, BgColor);
+                }
+            }
+            else
+            {
+                RtlFillMemoryUlong(DstRow, RowBytes, BgColor);
+            }
+            DstRow += Pitch;
+        }
     }
+
+    UefiVideoRefreshBootLogo();
 }
 
 VOID
@@ -1328,13 +1457,12 @@ UefiVideoBlitBgrtBitmap(PBGRT_TABLE Bgrt)
 BOOLEAN
 UefiVideoDisplayBootLogo(VOID)
 {
-    static BOOLEAN LogoDrawn = FALSE;
     PBGRT_TABLE Bgrt;
 
     TRACE("BGRT logo: display request (already drawn=%s)\n",
-          LogoDrawn ? "yes" : "no");
+          gBgrtLogoDrawn ? "yes" : "no");
 
-    if (LogoDrawn)
+    if (gBgrtLogoDrawn)
         return TRUE;
 
     if (!UefiIsFramebufferReady())
@@ -1370,9 +1498,36 @@ UefiVideoDisplayBootLogo(VOID)
         return FALSE;
     }
 
-    LogoDrawn = TRUE;
+    gCachedBgrtTable = Bgrt;
+    gBgrtLogoDrawn = TRUE;
     TRACE("BGRT logo: firmware splash drawn successfully\n");
     return TRUE;
+}
+
+BOOLEAN
+UefiVideoIsBootLogoDrawn(VOID)
+{
+    return gBgrtLogoDrawn;
+}
+
+VOID
+UefiVideoRefreshBootLogo(VOID)
+{
+    if (!gBgrtLogoDrawn || !gCachedBgrtTable)
+        return;
+
+    if (!UefiIsFramebufferReady())
+        return;
+
+    if (gBgrtRefreshInProgress)
+        return;
+
+    gBgrtRefreshInProgress = TRUE;
+    if (!UefiVideoBlitBgrtBitmap(gCachedBgrtTable))
+    {
+        TRACE("BGRT logo: refresh blit failed\n");
+    }
+    gBgrtRefreshInProgress = FALSE;
 }
 static BOOLEAN
 UefiParseEdidPreferred(const UINT8* Edid, UINT32 Size, UINT32* OutW, UINT32* OutH)
