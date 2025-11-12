@@ -31,6 +31,9 @@ extern BOOLEAN UefiGopConsoleIsInitialized(VOID);
 static BOOLEAN BootServicesExited = FALSE;
 
 /* Forward declarations ******************************************************/
+static BOOLEAN BootServicesAvailable(VOID);
+static VOID UefiConsSyncCursorFromFirmware(VOID);
+static BOOLEAN UefiConsFirmwarePutChar(int c);
 static BOOLEAN KeyQueueIsEmpty(VOID);
 static BOOLEAN KeyQueuePush(INT Value);
 static BOOLEAN KeyQueuePop(INT *Value);
@@ -41,13 +44,16 @@ static VOID UefiConsPumpKeys(BOOLEAN WaitForKey);
 VOID
 UefiConsPutChar(int c)
 {
-    /* Once boot services are gone, fall back to the GOP console implementation. */
-    if (BootServicesExited && UefiGopConsoleIsInitialized())
+    /* Use firmware text output while boot services are still available. */
+    if (UefiConsFirmwarePutChar(c))
+        return;
+
+    if (UefiGopConsoleIsInitialized())
     {
         UefiGopConsolePutChar((CHAR)c);
         return;
     }
-    
+
     ULONG Width, Height, Unused;
     BOOLEAN NeedScroll;
 
@@ -211,6 +217,109 @@ BootServicesAvailable(VOID)
             GlobalSystemTable->BootServices != NULL);
 }
 
+static EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL*
+UefiGetConOut(VOID)
+{
+    if (GlobalSystemTable == NULL)
+        return NULL;
+
+    return GlobalSystemTable->ConOut;
+}
+
+static VOID
+UefiConsSyncCursorFromFirmware(VOID)
+{
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL* ConOut;
+
+    ConOut = UefiGetConOut();
+    if (ConOut == NULL || ConOut->Mode == NULL)
+        return;
+
+    CurrentCursorX = ConOut->Mode->CursorColumn;
+    CurrentCursorY = ConOut->Mode->CursorRow;
+}
+
+static EFI_STATUS
+UefiConsFirmwareWriteSpaces(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL* ConOut, UINTN Count)
+{
+    static const CHAR16 Space[] = { L' ', 0 };
+    EFI_STATUS Status = EFI_SUCCESS;
+
+    while (Count-- > 0 && !EFI_ERROR(Status))
+    {
+        Status = ConOut->OutputString(ConOut, (CHAR16*)Space);
+    }
+
+    return Status;
+}
+
+static EFI_STATUS
+UefiConsFirmwareHandleTab(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL* ConOut)
+{
+    UINTN Column, Spaces;
+
+    if (ConOut->Mode == NULL)
+        return EFI_DEVICE_ERROR;
+
+    Column = ConOut->Mode->CursorColumn;
+    Spaces = 8 - (Column & 7);
+    if (Spaces == 0)
+        Spaces = 8;
+
+    return UefiConsFirmwareWriteSpaces(ConOut, Spaces);
+}
+
+static BOOLEAN
+UefiConsFirmwarePutChar(int c)
+{
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL* ConOut;
+    EFI_STATUS Status;
+    CHAR16 Buffer[2];
+
+    if (!BootServicesAvailable())
+        return FALSE;
+
+    ConOut = UefiGetConOut();
+    if (ConOut == NULL || ConOut->OutputString == NULL)
+        return FALSE;
+
+    switch (c)
+    {
+        case '\n':
+        {
+            static const CHAR16 NewLine[] = { L'\r', L'\n', 0 };
+            Status = ConOut->OutputString(ConOut, (CHAR16*)NewLine);
+            break;
+        }
+        case '\r':
+        {
+            static const CHAR16 CarriageReturn[] = { L'\r', 0 };
+            Status = ConOut->OutputString(ConOut, (CHAR16*)CarriageReturn);
+            break;
+        }
+        case '\b':
+        {
+            static const CHAR16 Backspace[] = { L'\b', 0 };
+            Status = ConOut->OutputString(ConOut, (CHAR16*)Backspace);
+            break;
+        }
+        case '\t':
+            Status = UefiConsFirmwareHandleTab(ConOut);
+            break;
+        default:
+            Buffer[0] = (CHAR16)(UINT8)c;
+            Buffer[1] = 0;
+            Status = ConOut->OutputString(ConOut, Buffer);
+            break;
+    }
+
+    if (EFI_ERROR(Status))
+        return FALSE;
+
+    UefiConsSyncCursorFromFirmware();
+    return TRUE;
+}
+
 static VOID
 UefiConsPumpKeys(BOOLEAN WaitForKey)
 {
@@ -304,6 +413,7 @@ UefiConsGetCh(VOID)
 VOID
 UefiConsMarkBootServicesExited(VOID)
 {
+    UefiConsSyncCursorFromFirmware();
     BootServicesExited = TRUE;
     
     /* Reposition the cursor if the GOP console is already initialised. */
