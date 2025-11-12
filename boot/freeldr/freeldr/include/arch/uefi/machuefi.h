@@ -68,6 +68,9 @@ UefiVideoSync(VOID);
 VOID
 UefiPcBeep(VOID);
 
+BOOLEAN
+UefiVideoDisplayBootLogo(VOID);
+
 PFREELDR_MEMORY_DESCRIPTOR
 UefiMemGetMemoryMap(ULONG *MemoryMapSize);
 

@@ -21,6 +21,10 @@
 #include <disk.h>
 #include <arch/archwsup.h>
 
+#ifdef UEFIBOOT
+extern BOOLEAN UefiVideoDisplayBootLogo(VOID);
+#endif
+
 #if defined(__GNUC__)
 extern VOID
 AddReactOSArcDiskInfo(
@@ -2397,6 +2401,22 @@ RamDiskInitialize(
     IN PCSTR DefaultPath OPTIONAL)
 {
     RamDiskErrorShown = FALSE;
+
+    TRACE("RamDiskInitialize: Begin (Init=%s)\n", InitRamDisk ? "true" : "false");
+
+#ifdef UEFIBOOT
+    /* Display BGRT splash once right at the start of ramdisk init. */
+    static BOOLEAN BgrtLogoShown = FALSE;
+    TRACE("RamDiskInitialize: BGRT logo shown=%s\n", BgrtLogoShown ? "yes" : "no");
+    if (!BgrtLogoShown)
+    {
+        BOOLEAN LogoResult = UefiVideoDisplayBootLogo();
+        TRACE("RamDiskInitialize: BGRT logo request result=%s\n",
+              LogoResult ? "success" : "failure");
+        if (LogoResult)
+            BgrtLogoShown = TRUE;
+    }
+#endif
 
     /* Reset the RAMDISK device */
     if (RamDiskBase && RamDiskBase != gInitRamDiskBase)
