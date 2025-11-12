@@ -8,6 +8,7 @@
 #include <uefildr.h>
 #include <Cpu.h>
 
+#include <drivers/acpi/acpi.h>
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WARNING);
 
@@ -31,6 +32,36 @@ static BOOLEAN UefiSelectBestModeByAspect(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
 
 #define FALLBACK_CONSOLE_WIDTH   1280
 #define FALLBACK_CONSOLE_HEIGHT   800
+#define BGRT_BMP_MAGIC           0x4D42 /* 'BM' */
+#define BI_RGB                   0
+
+extern PBGRT_TABLE GetBgrtTable(VOID);
+
+#pragma pack(push, 1)
+typedef struct _BMP_FILE_HEADER
+{
+    USHORT bfType;
+    ULONG  bfSize;
+    USHORT bfReserved1;
+    USHORT bfReserved2;
+    ULONG  bfOffBits;
+} BMP_FILE_HEADER, *PBMP_FILE_HEADER;
+
+typedef struct _BMP_INFO_HEADER
+{
+    ULONG  biSize;
+    LONG   biWidth;
+    LONG   biHeight;
+    USHORT biPlanes;
+    USHORT biBitCount;
+    ULONG  biCompression;
+    ULONG  biSizeImage;
+    LONG   biXPelsPerMeter;
+    LONG   biYPelsPerMeter;
+    ULONG  biClrUsed;
+    ULONG  biClrImportant;
+} BMP_INFO_HEADER, *PBMP_INFO_HEADER;
+#pragma pack(pop)
 
 /* GLOBALS ********************************************************************/
 
@@ -97,6 +128,7 @@ static BOOLEAN UefiSelectBestModeByAspect(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
 static BOOLEAN UefiTrySetExactMode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
                                    UINT32 w,
                                    UINT32 h);
+static BOOLEAN UefiVideoBlitBgrtBitmap(PBGRT_TABLE Bgrt);
 
 static VOID
 UefiVideoConfigureFramebufferCache(VOID)
@@ -1122,6 +1154,225 @@ UefiTrySetExactMode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
     }
 
     return FALSE;
+}
+
+static BOOLEAN
+UefiVideoBlitBgrtBitmap(PBGRT_TABLE Bgrt)
+{
+    const UINT8* Base;
+    const BMP_FILE_HEADER* FileHeader;
+    const BMP_INFO_HEADER* InfoHeader;
+    const UINT8* PixelData;
+    UINT32 Width, Height;
+    BOOLEAN BottomUp;
+    UINT32 BytesPerPixel;
+    UINT32 SrcStride;
+    UINT32 DestX, DestY;
+    UINT32 CopyWidth, CopyHeight;
+    ULONG Pitch;
+    PUCHAR Framebuffer;
+
+    if (!Bgrt)
+    {
+        TRACE("BGRT logo: no table provided\n");
+        return FALSE;
+    }
+
+    if (Bgrt->LogoAddress == 0)
+    {
+        TRACE("BGRT logo: table reports null logo address\n");
+        return FALSE;
+    }
+
+    if (!UefiIsFramebufferReady())
+    {
+        TRACE("BGRT logo: framebuffer not ready\n");
+        return FALSE;
+    }
+
+    Base = (const UINT8*)(ULONG_PTR)Bgrt->LogoAddress;
+    if (!Base)
+    {
+        TRACE("BGRT logo: logo base pointer null after translation\n");
+        return FALSE;
+    }
+
+    if (framebufferData.ScreenWidth == 0 || framebufferData.ScreenHeight == 0)
+    {
+        TRACE("BGRT logo: framebuffer dimensions are zero (%u x %u)\n",
+              framebufferData.ScreenWidth,
+              framebufferData.ScreenHeight);
+        return FALSE;
+    }
+
+    FileHeader = (const BMP_FILE_HEADER*)Base;
+    if (FileHeader->bfType != BGRT_BMP_MAGIC)
+    {
+        TRACE("BGRT logo: bitmap header magic invalid (0x%04x)\n", FileHeader->bfType);
+        return FALSE;
+    }
+
+    InfoHeader = (const BMP_INFO_HEADER*)(Base + sizeof(BMP_FILE_HEADER));
+    if (InfoHeader->biSize < sizeof(BMP_INFO_HEADER))
+    {
+        TRACE("BGRT logo: info header too small (%lu)\n", InfoHeader->biSize);
+        return FALSE;
+    }
+
+    if (InfoHeader->biPlanes != 1)
+    {
+        TRACE("BGRT logo: unsupported plane count %u\n", InfoHeader->biPlanes);
+        return FALSE;
+    }
+
+    if (InfoHeader->biCompression != BI_RGB)
+    {
+        TRACE("BGRT logo: unsupported compression %lu\n", InfoHeader->biCompression);
+        return FALSE;
+    }
+
+    if (InfoHeader->biBitCount != 24 && InfoHeader->biBitCount != 32)
+    {
+        TRACE("BGRT logo: unsupported bit depth %u\n", InfoHeader->biBitCount);
+        return FALSE;
+    }
+
+    BytesPerPixel = InfoHeader->biBitCount / 8;
+    Width = (InfoHeader->biWidth < 0) ? (UINT32)(-InfoHeader->biWidth) : (UINT32)InfoHeader->biWidth;
+    Height = (InfoHeader->biHeight < 0) ? (UINT32)(-InfoHeader->biHeight) : (UINT32)InfoHeader->biHeight;
+    BottomUp = (InfoHeader->biHeight > 0);
+
+    if (Width == 0 || Height == 0)
+    {
+        TRACE("BGRT logo: invalid bitmap dimensions %u x %u\n", Width, Height);
+        return FALSE;
+    }
+
+    if (FileHeader->bfOffBits < sizeof(BMP_FILE_HEADER) + InfoHeader->biSize)
+    {
+        TRACE("BGRT logo: pixel data offset too small (0x%lx)\n", FileHeader->bfOffBits);
+        return FALSE;
+    }
+
+    PixelData = Base + FileHeader->bfOffBits;
+    SrcStride = (InfoHeader->biBitCount == 32)
+                    ? Width * 4
+                    : (UINT32)(((UINT64)Width * 3ULL + 3ULL) & ~3ULL);
+
+    DestX = (Bgrt->OffsetX < framebufferData.ScreenWidth) ? Bgrt->OffsetX : framebufferData.ScreenWidth - 1;
+    DestY = (Bgrt->OffsetY < framebufferData.ScreenHeight) ? Bgrt->OffsetY : framebufferData.ScreenHeight - 1;
+
+    CopyWidth = (Width <= framebufferData.ScreenWidth - DestX)
+                    ? Width
+                    : framebufferData.ScreenWidth - DestX;
+    CopyHeight = (Height <= framebufferData.ScreenHeight - DestY)
+                    ? Height
+                    : framebufferData.ScreenHeight - DestY;
+
+    if (CopyWidth == 0 || CopyHeight == 0)
+    {
+        TRACE("BGRT logo: nothing to copy after clipping (dest=%u,%u size=%u x %u)\n",
+              DestX,
+              DestY,
+              CopyWidth,
+              CopyHeight);
+        return FALSE;
+    }
+
+    Pitch = UefiVideoGetLineStride();
+    if (Pitch == 0)
+    {
+        TRACE("BGRT logo: framebuffer pitch is zero\n");
+        return FALSE;
+    }
+
+    Framebuffer = (PUCHAR)framebufferData.BaseAddress;
+    if (!Framebuffer)
+    {
+        TRACE("BGRT logo: framebuffer base pointer is null\n");
+        return FALSE;
+    }
+
+    Framebuffer += (SIZE_T)DestY * Pitch + DestX * sizeof(ULONG);
+
+    for (UINT32 Row = 0; Row < CopyHeight; ++Row)
+    {
+        UINT32 SrcRowIndex = BottomUp ? (Height - 1 - Row) : Row;
+        const UINT8* Src = PixelData + (SIZE_T)SrcRowIndex * SrcStride;
+        PULONG Dst = (PULONG)(Framebuffer + (SIZE_T)Row * Pitch);
+
+        for (UINT32 Col = 0; Col < CopyWidth; ++Col)
+        {
+            UINT8 Blue = Src[0];
+            UINT8 Green = Src[1];
+            UINT8 Red = Src[2];
+            UINT8 Alpha = (BytesPerPixel == 4) ? Src[3] : 0xFF;
+
+            if (BytesPerPixel == 4 && Alpha == 0)
+            {
+                /* Completely transparent pixel, leave framebuffer as-is. */
+            }
+            else
+            {
+                ULONG Pixel = 0xFF000000 | ((ULONG)Red << 16) | ((ULONG)Green << 8) | (ULONG)Blue;
+                Dst[Col] = Pixel;
+            }
+
+            Src += BytesPerPixel;
+        }
+    }
+
+    return TRUE;
+}
+
+BOOLEAN
+UefiVideoDisplayBootLogo(VOID)
+{
+    static BOOLEAN LogoDrawn = FALSE;
+    PBGRT_TABLE Bgrt;
+
+    TRACE("BGRT logo: display request (already drawn=%s)\n",
+          LogoDrawn ? "yes" : "no");
+
+    if (LogoDrawn)
+        return TRUE;
+
+    if (!UefiIsFramebufferReady())
+    {
+        TRACE("BGRT logo: framebuffer not ready when display requested\n");
+        return FALSE;
+    }
+
+    Bgrt = GetBgrtTable();
+    if (!Bgrt)
+    {
+        TRACE("BGRT logo: ACPI BGRT table not available\n");
+        return FALSE;
+    }
+
+    TRACE("BGRT logo: table version=%u status=0x%02X imageType=%u offset=(%lu,%lu) addr=0x%llx\n",
+          Bgrt->Version,
+          Bgrt->Status,
+          Bgrt->ImageType,
+          Bgrt->OffsetX,
+          Bgrt->OffsetY,
+          Bgrt->LogoAddress);
+
+    if (!(Bgrt->Status & BGRT_STATUS_IMAGE_VALID))
+    {
+        TRACE("BGRT logo: table status invalid (0x%02X)\n", Bgrt->Status);
+        return FALSE;
+    }
+
+    if (!UefiVideoBlitBgrtBitmap(Bgrt))
+    {
+        TRACE("BGRT logo: bitmap blit routine failed\n");
+        return FALSE;
+    }
+
+    LogoDrawn = TRUE;
+    TRACE("BGRT logo: firmware splash drawn successfully\n");
+    return TRUE;
 }
 static BOOLEAN
 UefiParseEdidPreferred(const UINT8* Edid, UINT32 Size, UINT32* OutW, UINT32* OutH)

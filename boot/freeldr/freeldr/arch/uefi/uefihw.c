@@ -241,6 +241,23 @@ DetectAcpiBios(PCONFIGURATION_COMPONENT_DATA SystemKey, ULONG *BusNumber)
 PBGRT_TABLE
 GetBgrtTable(VOID)
 {
+    if (!BgrtTable)
+    {
+        PRSDP_DESCRIPTOR Rsdp = FindAcpiBios();
+
+        if (!Rsdp)
+        {
+            TRACE("GetBgrtTable: ACPI RSDP not found while probing for BGRT\n");
+            return NULL;
+        }
+
+        BgrtTable = FindBgrtTable(Rsdp);
+        if (BgrtTable)
+        {
+            TRACE("GetBgrtTable: BGRT table discovered on-demand\n");
+        }
+    }
+
     return BgrtTable;
 }
 
