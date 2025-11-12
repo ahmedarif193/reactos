@@ -74,7 +74,8 @@ __SEH_prolog:
     mov eax, [esp + OLDFRAME_StackBytes]
 
     /* Push address of __except_handler3 on the stack */
-    push offset __except_handler3
+    lea ecx, [__except_handler3]
+    push ecx
 
     /* Push the old exception record on the stack */
     push dword ptr fs:0

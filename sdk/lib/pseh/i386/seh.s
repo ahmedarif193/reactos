@@ -108,8 +108,9 @@ __abnormal_termination:
     xor eax, eax
 
     /* Check if the handler is the unwind handler */
-    mov ecx, fs:0
-    cmp dword ptr [ecx+4], offset _unwind_handler
+    mov ecx, fs:[0]
+    lea edx, [_unwind_handler]
+    cmp dword ptr [ecx+4], edx
     jne short ab_return
 
     /* Get the try level */
@@ -142,9 +143,11 @@ __local_unwind2:
     push ebp
     push eax
     push -2
-    push offset _unwind_handler
-    push fs:0
-    mov fs:0, esp
+    lea edx, [_unwind_handler]
+    push edx
+    mov eax, fs:[0]
+    push eax
+    mov fs:[0], esp
 
 unwind_loop:
     /* Get the exception registration and try level */
@@ -182,7 +185,8 @@ __NLG_Return2:
 
 unwind_return:
     /* Cleanup SEH */
-    pop fs:0
+    pop eax
+    mov fs:[0], eax
     add esp, 16
     pop edi
     pop esi
