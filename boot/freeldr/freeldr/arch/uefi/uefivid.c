@@ -17,9 +17,6 @@ static BOOLEAN UefiGetPreferredResolutionFromEdid(UINT32* OutW, UINT32* OutH);
 static BOOLEAN UefiSelectBestModeByAspect(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
                                           UINT32 targetW,
                                           UINT32 targetH);
-static BOOLEAN UefiTrySetExactMode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
-                                   UINT32 w,
-                                   UINT32 h);
 
 #define CHAR_WIDTH  8
 #define CHAR_HEIGHT 16
@@ -28,9 +25,12 @@ static BOOLEAN UefiTrySetExactMode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
 
 /* Preferred resolution bounds used when selecting a fallback mode */
 #define PREFERRED_WIDTH_MIN  800
-#define PREFERRED_WIDTH_MAX  1920
+#define PREFERRED_WIDTH_MAX  1280
 #define PREFERRED_HEIGHT_MIN 600
-#define PREFERRED_HEIGHT_MAX 1200
+#define PREFERRED_HEIGHT_MAX 800
+
+#define FALLBACK_CONSOLE_WIDTH   1280
+#define FALLBACK_CONSOLE_HEIGHT   800
 
 /* GLOBALS ********************************************************************/
 
@@ -42,6 +42,10 @@ UCHAR MachDefaultTextColor = COLOR_GRAY;
 REACTOS_INTERNAL_BGCONTEXT framebufferData;
 EFI_GUID EfiGraphicsOutputProtocol = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
 static BOOLEAN UefiGopFramebufferReady = FALSE;
+static BOOLEAN FramebufferCacheAttempted = FALSE;
+static BOOLEAN FramebufferCacheConfigured = FALSE;
+static BOOLEAN FramebufferCacheWarned = FALSE;
+static ULONG CachedLineStrideBytes = 0;
 
 BOOLEAN
 UefiIsFramebufferReady(VOID)
@@ -79,8 +83,20 @@ BOOLEAN UefiGopModesPermanent = FALSE;
 BOOLEAN UefiGopFramebuffersPermanent = FALSE;
 /* Forward declarations ******************************************************/
 static VOID UefiVideoConfigureFramebufferCache(VOID);
+static VOID UefiVideoInvalidateStrideCache(VOID);
+static ULONG UefiVideoGetLineStride(VOID);
+static VOID UefiVideoEnsureFramebufferCache(VOID);
+static VOID UefiVideoWarnOnUncachedFramebuffer(VOID);
+static VOID UefiClampResolutionBounds(UINT32* Width, UINT32* Height);
+static BOOLEAN UefiComputeTargetConsoleResolution(UINT32* Width, UINT32* Height);
 static BOOLEAN UefiFillFramebufferDescriptor(EFI_GRAPHICS_OUTPUT_PROTOCOL* Gop,
                                              PLOADER_PARAMETER_FRAMEBUFFER Descriptor);
+static BOOLEAN UefiSelectBestModeByAspect(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
+                                          UINT32 targetW,
+                                          UINT32 targetH);
+static BOOLEAN UefiTrySetExactMode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
+                                   UINT32 w,
+                                   UINT32 h);
 
 static VOID
 UefiVideoConfigureFramebufferCache(VOID)
@@ -98,6 +114,9 @@ UefiVideoConfigureFramebufferCache(VOID)
 
     if (GlobalSystemTable == NULL || GlobalSystemTable->BootServices == NULL)
         return;
+
+    FramebufferCacheAttempted = TRUE;
+    FramebufferCacheConfigured = FALSE;
 
     FramebufferBase = (EFI_PHYSICAL_ADDRESS)framebufferData.BaseAddress;
     AttributeBase = FramebufferBase & ~((EFI_PHYSICAL_ADDRESS)EFI_PAGE_SIZE - 1);
@@ -144,12 +163,122 @@ UefiVideoConfigureFramebufferCache(VOID)
             else
             {
                 TRACE("UEFI GOP: Framebuffer caching set to write-back fallback\n");
+                FramebufferCacheConfigured = TRUE;
             }
         }
         return;
     }
 
     TRACE("UEFI GOP: Framebuffer mapped with write-combining cache attribute\n");
+    FramebufferCacheConfigured = TRUE;
+}
+
+static VOID
+UefiVideoInvalidateStrideCache(VOID)
+{
+    CachedLineStrideBytes = 0;
+}
+
+static ULONG
+UefiVideoGetLineStride(VOID)
+{
+    if (CachedLineStrideBytes == 0)
+    {
+        ULONG Pitch = framebufferData.PixelsPerScanLine * sizeof(ULONG);
+
+        if (Pitch == 0)
+            return 0;
+
+        CachedLineStrideBytes = (Pitch + sizeof(ULONG) - 1) & ~(sizeof(ULONG) - 1);
+    }
+
+    return CachedLineStrideBytes;
+}
+
+static VOID
+UefiVideoEnsureFramebufferCache(VOID)
+{
+    if (!FramebufferCacheAttempted)
+        UefiVideoConfigureFramebufferCache();
+}
+
+static VOID
+UefiVideoWarnOnUncachedFramebuffer(VOID)
+{
+    if (FramebufferCacheAttempted && !FramebufferCacheConfigured && !FramebufferCacheWarned)
+    {
+        TRACE("UEFI GOP: framebuffer writes are uncached\n");
+        FramebufferCacheWarned = TRUE;
+    }
+}
+
+static VOID
+UefiClampResolutionBounds(UINT32* Width, UINT32* Height)
+{
+    UINT32 w = *Width;
+    UINT32 h = *Height;
+
+    if (w == 0 || h == 0)
+        return;
+
+    if (w > PREFERRED_WIDTH_MAX)
+    {
+        h = (UINT32)(((UINT64)h * PREFERRED_WIDTH_MAX) / w);
+        if (h == 0)
+            h = 1;
+        w = PREFERRED_WIDTH_MAX;
+    }
+
+    if (h > PREFERRED_HEIGHT_MAX)
+    {
+        w = (UINT32)(((UINT64)w * PREFERRED_HEIGHT_MAX) / h);
+        if (w == 0)
+            w = 1;
+        h = PREFERRED_HEIGHT_MAX;
+    }
+
+    if (w < PREFERRED_WIDTH_MIN)
+    {
+        h = (UINT32)(((UINT64)h * PREFERRED_WIDTH_MIN) / w);
+        if (h == 0)
+            h = 1;
+        w = PREFERRED_WIDTH_MIN;
+    }
+
+    if (h < PREFERRED_HEIGHT_MIN)
+    {
+        w = (UINT32)(((UINT64)w * PREFERRED_HEIGHT_MIN) / h);
+        if (w == 0)
+            w = 1;
+        h = PREFERRED_HEIGHT_MIN;
+    }
+
+    *Width = w;
+    *Height = h;
+}
+
+static BOOLEAN
+UefiComputeTargetConsoleResolution(UINT32* Width, UINT32* Height)
+{
+    UINT32 targetW = 0;
+    UINT32 targetH = 0;
+
+    if (UefiGetPreferredResolutionFromEdid(&targetW, &targetH))
+    {
+        UefiClampResolutionBounds(&targetW, &targetH);
+    }
+    else
+    {
+        targetW = FALLBACK_CONSOLE_WIDTH;
+        targetH = FALLBACK_CONSOLE_HEIGHT;
+    }
+
+    if (targetW == 0 || targetH == 0)
+        return FALSE;
+
+    *Width = targetW;
+    *Height = targetH;
+    return TRUE;
 }
 
 static BOOLEAN
@@ -238,6 +367,10 @@ UefiInitializeVideo(VOID)
 
     UefiGopFramebufferReady = FALSE;
     RtlZeroMemory(&framebufferData, sizeof(framebufferData));
+    UefiVideoInvalidateStrideCache();
+    FramebufferCacheAttempted = FALSE;
+    FramebufferCacheConfigured = FALSE;
+    FramebufferCacheWarned = FALSE;
     if (!GlobalSystemTable || !GlobalSystemTable->BootServices)
         return EFI_UNSUPPORTED;
 
@@ -310,17 +443,20 @@ UefiInitializeVideo(VOID)
     TRACE("  MaxMode: %d\n", gop->Mode->MaxMode);
     TRACE("  Current Mode: %d\n", gop->Mode->Mode);
 
-    /*
-     * Temporary: Force a static GOP resolution to make text readable on
-     * high-DPI firmware defaults. We use 1280x800 (16:10) to match common
-     * panels and keep aspect with 2560x1600 displays. This is a stop-gap;
-     * we can instead inherit the UEFI-provided mode (current firmware mode)
-     * or use EDID to select a native/preferred mode once font scaling and
-     * UI are in place.
-     */
-    if (UefiTrySetExactMode(gop, 1280, 800))
+    UINT32 targetWidth = 0;
+    UINT32 targetHeight = 0;
+    BOOLEAN haveTargetResolution = UefiComputeTargetConsoleResolution(&targetWidth, &targetHeight);
+
+    if (haveTargetResolution)
     {
-        ModeChosen = TRUE;
+        if (UefiTrySetExactMode(gop, targetWidth, targetHeight))
+        {
+            ModeChosen = TRUE;
+        }
+        else if (UefiSelectBestModeByAspect(gop, targetWidth, targetHeight))
+        {
+            ModeChosen = TRUE;
+        }
     }
 
     /* Enumerate all GOP modes, cache minimal descriptors for the kernel */
@@ -391,6 +527,12 @@ UefiInitializeVideo(VOID)
     }
     
     /* Try EDID-based preferred/native selection; else use aspect-matched best */
+    if (!ModeChosen && haveTargetResolution)
+    {
+        if (UefiSelectBestModeByAspect(gop, targetWidth, targetHeight))
+            ModeChosen = TRUE;
+    }
+
     if (!ModeChosen)
     {
         UINT32 prefW = 0, prefH = 0;
@@ -438,6 +580,10 @@ UefiInitializeVideo(VOID)
     framebufferData.GreenMask          = 0;
     framebufferData.BlueMask           = 0;
     framebufferData.ReservedMask       = 0;
+    UefiVideoInvalidateStrideCache();
+    FramebufferCacheAttempted = FALSE;
+    FramebufferCacheConfigured = FALSE;
+    FramebufferCacheWarned = FALSE;
 
     switch (gop->Mode->Info->PixelFormat)
     {
@@ -572,18 +718,27 @@ UefiVideoAttrToColors(UCHAR Attr, ULONG *FgColor, ULONG *BgColor)
 static VOID
 UefiVideoClearScreenColor(ULONG Color, BOOLEAN FullScreen)
 {
-    ULONG Delta;
-    ULONG Line, Col;
-    PULONG p;
+    ULONG Line;
+    ULONG Pitch;
+    ULONG VisibleHeight;
+    SIZE_T RowBytes;
+    PUCHAR Row;
 
-    Delta = (framebufferData.PixelsPerScanLine * 4 + 3) & ~ 0x3;
-    for (Line = 0; Line < framebufferData.ScreenHeight - (FullScreen ? 0 : 2 * TOP_BOTTOM_LINES); Line++)
+    if (framebufferData.BaseAddress == 0)
+        return;
+
+    Pitch = UefiVideoGetLineStride();
+    if (Pitch == 0)
+        return;
+
+    VisibleHeight = framebufferData.ScreenHeight - (FullScreen ? 0 : 2 * TOP_BOTTOM_LINES);
+    RowBytes = (SIZE_T)framebufferData.ScreenWidth * sizeof(ULONG);
+    Row = (PUCHAR)framebufferData.BaseAddress + (FullScreen ? 0 : TOP_BOTTOM_LINES) * Pitch;
+
+    for (Line = 0; Line < VisibleHeight; Line++)
     {
-        p = (PULONG) ((char *) framebufferData.BaseAddress + (Line + (FullScreen ? 0 : TOP_BOTTOM_LINES)) * Delta);
-        for (Col = 0; Col < framebufferData.ScreenWidth; Col++)
-        {
-            *p++ = Color;
-        }
+        RtlFillMemoryUlong(Row, RowBytes, Color);
+        Row += Pitch;
     }
 }
 
@@ -600,25 +755,38 @@ VOID
 UefiVideoOutputChar(UCHAR Char, unsigned X, unsigned Y, ULONG FgColor, ULONG BgColor)
 {
     PUCHAR FontPtr;
-    PULONG Pixel;
-    UCHAR Mask;
+    ULONG Pitch;
+    PUCHAR GlyphBase;
     unsigned Line;
     unsigned Col;
-    ULONG Delta;
-    Delta = (framebufferData.PixelsPerScanLine * 4 + 3) & ~ 0x3;
-    FontPtr = BitmapFont8x16 + Char * 16;
-    Pixel = (PULONG) ((char *) framebufferData.BaseAddress +
-            (Y * CHAR_HEIGHT + TOP_BOTTOM_LINES) *  Delta + X * CHAR_WIDTH * 4);
+
+    if (framebufferData.BaseAddress == 0)
+        return;
+
+    Pitch = UefiVideoGetLineStride();
+    if (Pitch == 0)
+        return;
+
+    UefiVideoEnsureFramebufferCache();
+    UefiVideoWarnOnUncachedFramebuffer();
+
+    FontPtr = BitmapFont8x16 + Char * CHAR_HEIGHT;
+    GlyphBase = (PUCHAR)framebufferData.BaseAddress +
+                (Y * CHAR_HEIGHT + TOP_BOTTOM_LINES) * Pitch +
+                X * CHAR_WIDTH * sizeof(ULONG);
 
     for (Line = 0; Line < CHAR_HEIGHT; Line++)
     {
-        Mask = 0x80;
+        UCHAR Mask = 0x80;
+        PULONG Pixel = (PULONG)GlyphBase;
+
         for (Col = 0; Col < CHAR_WIDTH; Col++)
         {
-            Pixel[Col] = (0 != (FontPtr[Line] & Mask) ? FgColor : BgColor);
-            Mask = Mask >> 1;
+            Pixel[Col] = (FontPtr[Line] & Mask) ? FgColor : BgColor;
+            Mask >>= 1;
         }
-        Pixel = (PULONG) ((char *) Pixel + Delta);
+
+        GlyphBase += Pitch;
     }
 }
 
@@ -675,20 +843,42 @@ VOID
 UefiVideoScrollUp(VOID)
 {
     ULONG BgColor, Dummy;
-    ULONG Delta;
-    Delta = (framebufferData.PixelsPerScanLine * 4 + 3) & ~ 0x3;
-    ULONG PixelCount = framebufferData.ScreenWidth * CHAR_HEIGHT *
-                       (((framebufferData.ScreenHeight - 2 * TOP_BOTTOM_LINES) / CHAR_HEIGHT) - 1);
-    PULONG Src = (PULONG)((PUCHAR)framebufferData.BaseAddress + (CHAR_HEIGHT + TOP_BOTTOM_LINES) * Delta);
-    PULONG Dst = (PULONG)((PUCHAR)framebufferData.BaseAddress + TOP_BOTTOM_LINES * Delta);
+    ULONG Pitch;
+    ULONG VisiblePixelsY;
+    SIZE_T RowBytes;
+    PUCHAR Base;
+    PUCHAR Src;
+    PUCHAR Dst;
+    SIZE_T CopyBytes;
+    ULONG Line;
+
+    if (framebufferData.BaseAddress == 0)
+        return;
+
+    Pitch = UefiVideoGetLineStride();
+    if (Pitch == 0)
+        return;
+
+    VisiblePixelsY = framebufferData.ScreenHeight - 2 * TOP_BOTTOM_LINES;
+    if (VisiblePixelsY <= CHAR_HEIGHT)
+        return;
+
+    RowBytes = (SIZE_T)framebufferData.ScreenWidth * sizeof(ULONG);
+    Base = (PUCHAR)framebufferData.BaseAddress;
+    Dst = Base + TOP_BOTTOM_LINES * Pitch;
+    Src = Dst + CHAR_HEIGHT * Pitch;
+    CopyBytes = (SIZE_T)(VisiblePixelsY - CHAR_HEIGHT) * Pitch;
+
+    RtlMoveMemory(Dst, Src, CopyBytes);
 
     UefiVideoAttrToColors(ATTR(COLOR_WHITE, COLOR_BLACK), &Dummy, &BgColor);
 
-    while (PixelCount--)
-        *Dst++ = *Src++;
-
-    for (PixelCount = 0; PixelCount < framebufferData.ScreenWidth * CHAR_HEIGHT; PixelCount++)
-        *Dst++ = BgColor;
+    Dst += CopyBytes;
+    for (Line = 0; Line < CHAR_HEIGHT; Line++)
+    {
+        RtlFillMemoryUlong(Dst, RowBytes, BgColor);
+        Dst += Pitch;
+    }
 }
 
 VOID
@@ -889,6 +1079,7 @@ UefiSelectBestModeByAspect(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
 
     return TRUE;
 }
+
 /*
  * Try to set an exact GOP mode matching the given WxH. Skips PixelBltOnly.
  */
@@ -898,6 +1089,7 @@ UefiTrySetExactMode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
                     UINT32 h)
 {
     UINT32 i;
+
     if (!gop || !gop->Mode)
         return FALSE;
 
@@ -906,6 +1098,7 @@ UefiTrySetExactMode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
         EFI_STATUS st;
         EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* info = NULL;
         UINTN infoSize = 0;
+
         st = gop->QueryMode(gop, i, &infoSize, &info);
         if (EFI_ERROR(st) || !info)
             continue;
@@ -915,12 +1108,17 @@ UefiTrySetExactMode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop,
         {
             if (!EFI_ERROR(gop->SetMode(gop, i)))
             {
-                TRACE("UEFI GOP: Forced exact mode %ux%u at index %u\n", w, h, i);
+                TRACE("UEFI GOP: switched to requested %ux%u mode (index %u)\n",
+                      w,
+                      h,
+                      i);
                 return TRUE;
             }
+
             return FALSE;
         }
     }
+
     return FALSE;
 }
 static BOOLEAN
