@@ -88,4 +88,9 @@ VidSolidColorFill(
     _In_ ULONG Bottom,
     _In_ UCHAR Color);
 
+VOID
+NTAPI
+VidSetBootGraphicsPreservation(
+    _In_ BOOLEAN Preserve);
+
 #endif // _BOOTVID_

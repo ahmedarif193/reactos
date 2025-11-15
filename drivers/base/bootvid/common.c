@@ -49,6 +49,8 @@ const RGBQUAD VidpDefaultPalette[BV_MAX_COLORS] =
     RGB(255, 255, 255), /* White */
 };
 
+BOOLEAN g_BootvidPreserveBootGraphics = FALSE;
+
 static BOOLEAN ClearRow = FALSE;
 
 /* PRIVATE FUNCTIONS **********************************************************/
@@ -570,4 +572,12 @@ VidBitBlt(
                    Delta);
         }
     }
+}
+
+VOID
+NTAPI
+VidSetBootGraphicsPreservation(
+    _In_ BOOLEAN Preserve)
+{
+    g_BootvidPreserveBootGraphics = Preserve;
 }

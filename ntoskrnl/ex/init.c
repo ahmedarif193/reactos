@@ -649,6 +649,9 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
         KeBugCheckEx(SESSION3_INITIALIZATION_FAILED, Status, 0, 0, 0);
     }
 
+    /* We kept the firmware splash alive until now; release the screen before usermode. */
+    InbvFinalizeBootGraphics();
+
     /* Resume the thread */
     Status = ZwResumeThread(ProcessInformation->ThreadHandle, NULL);
     if (!NT_SUCCESS(Status))

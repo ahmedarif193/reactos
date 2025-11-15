@@ -14,6 +14,7 @@
 #include <ntoskrnl.h>
 #include <reactos/arc/arc.h>
 #include "inbv/logo.h"
+#include "inbv/inbvgop.h"
 BOOLEAN NTAPI InbvGetGopFrameBufferInfo(_Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo);
 
 /* Theme color indices (BOOTVID palette) */
@@ -517,6 +518,10 @@ DisplayBootBitmap(
     _In_ BOOLEAN TextMode)
 {
     PVOID BootCopy = NULL, BootProgress = NULL, BootLogo = NULL, Header = NULL, Footer = NULL;
+
+    /* If GOP path handles this boot UI mode, bail out early. */
+    if (InbvGopHandleBootBitmap(TextMode))
+        return;
 
 #ifdef INBV_ROTBAR_IMPLEMENTED
     UCHAR Buffer[RTL_NUMBER_OF(RotBarBuffer)];

@@ -18,6 +18,7 @@
 
 /* Runtime selection flag: use UEFI GOP backend when available */
 extern BOOLEAN g_BootvidUseUefi;
+extern BOOLEAN g_BootvidPreserveBootGraphics;
 
 /* Arch specific includes */
 #if defined(_M_IX86) || defined(_M_AMD64)
