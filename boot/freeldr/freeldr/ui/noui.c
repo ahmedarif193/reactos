@@ -114,6 +114,12 @@ NoUiTickProgressBar(
 }
 
 VOID
+NoUiClearProgressBar(VOID)
+{
+    UiProgressBar.Show = FALSE;
+}
+
+VOID
 NoUiDrawProgressBarCenter(
     _In_ PCSTR ProgressText)
 {

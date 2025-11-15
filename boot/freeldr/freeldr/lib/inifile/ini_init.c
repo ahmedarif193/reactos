@@ -25,6 +25,11 @@ DBG_DEFAULT_CHANNEL(INIFILE);
 #ifdef UEFIBOOT
 #include <uefildr.h>
 #include <arch/uefi/machuefi.h>
+#endif // UEFIBOOT
+
+#ifndef PARTITION_KEEP
+#define PARTITION_KEEP ((ULONG)-1)
+#endif
 
 static
 BOOLEAN
@@ -91,7 +96,32 @@ IniBuildDiskLevelBootPath(
     memmove(Digits + 1, Closing, strlen(Closing) + 1);
     return TRUE;
 }
-#endif // UEFIBOOT
+
+static
+ARC_STATUS
+IniTryOpenFreeldrIni(
+    _In_ PCSTR DevicePath,
+    _In_ ULONG PartitionOverride,
+    _Out_ PULONG FileId)
+{
+    ARC_STATUS Status;
+
+    Status = FsOpenFile("freeldr.ini", DevicePath, OpenReadOnly, FileId);
+    if (Status == ESUCCESS)
+    {
+        if (DevicePath != FrLdrBootPath)
+        {
+            RtlStringCbCopyA(FrLdrBootPath, sizeof(FrLdrBootPath), DevicePath);
+        }
+
+        if (PartitionOverride != PARTITION_KEEP)
+        {
+            FrldrBootPartition = PartitionOverride;
+        }
+    }
+
+    return Status;
+}
 
 BOOLEAN IniFileInitialize(VOID)
 {
@@ -105,7 +135,7 @@ BOOLEAN IniFileInitialize(VOID)
     TRACE("IniFileInitialize()\n");
 
     /* Try to open freeldr.ini */
-    Status = FsOpenFile("freeldr.ini", FrLdrBootPath, OpenReadOnly, &FileId);
+    Status = IniTryOpenFreeldrIni(FrLdrBootPath, PARTITION_KEEP, &FileId);
     if (Status != ESUCCESS)
     {
         CHAR FallbackPath[MAX_PATH];
@@ -131,7 +161,7 @@ BOOLEAN IniFileInitialize(VOID)
                 {
                     *p = '0';
                     TRACE("Retrying freeldr.ini with fallback path: '%s'\n", FallbackPath);
-                    Status = FsOpenFile("freeldr.ini", FallbackPath, OpenReadOnly, &FileId);
+                    Status = IniTryOpenFreeldrIni(FallbackPath, PARTITION_KEEP, &FileId);
                 }
             }
         }
@@ -141,7 +171,7 @@ BOOLEAN IniFileInitialize(VOID)
         {
             static const CHAR CanonicalPath[] = "multi(0)disk(0)rdisk(0)partition(1)";
             TRACE("Retrying freeldr.ini with canonical path: '%s'\n", CanonicalPath);
-            Status = FsOpenFile("freeldr.ini", CanonicalPath, OpenReadOnly, &FileId);
+            Status = IniTryOpenFreeldrIni(CanonicalPath, 1, &FileId);
         }
 
 #ifdef UEFIBOOT
@@ -158,12 +188,7 @@ BOOLEAN IniFileInitialize(VOID)
             if (IniBuildDiskLevelBootPath(DiskPath, sizeof(DiskPath)))
             {
                 TRACE("Retrying freeldr.ini with disk-level path: '%s'\n", DiskPath);
-                if (FsOpenFile("freeldr.ini", DiskPath, OpenReadOnly, &FileId) == ESUCCESS)
-                {
-                    Status = ESUCCESS;
-                    RtlStringCbCopyA(FrLdrBootPath, sizeof(FrLdrBootPath), DiskPath);
-                    FrldrBootPartition = 0;
-                }
+                Status = IniTryOpenFreeldrIni(DiskPath, 0, &FileId);
             }
         }
 
@@ -188,12 +213,9 @@ BOOLEAN IniFileInitialize(VOID)
 
                     TRACE("Retrying freeldr.ini with alternate partition path: '%s'\n",
                           PartitionPath);
-                    if (FsOpenFile("freeldr.ini", PartitionPath, OpenReadOnly, &FileId) == ESUCCESS)
-                    {
-                        Status = ESUCCESS;
-                        RtlStringCbCopyA(FrLdrBootPath, sizeof(FrLdrBootPath), PartitionPath);
-                        FrldrBootPartition = Partition;
-                    }
+                    Status = IniTryOpenFreeldrIni(PartitionPath, Partition, &FileId);
+                    if (Status == ESUCCESS)
+                        break;
                 }
             }
         }
@@ -212,12 +234,9 @@ BOOLEAN IniFileInitialize(VOID)
                     continue;
 
                 TRACE("Retrying freeldr.ini with cdrom path: '%s'\n", CdPath);
-                if (FsOpenFile("freeldr.ini", CdPath, OpenReadOnly, &FileId) == ESUCCESS)
-                {
-                    Status = ESUCCESS;
-                    RtlStringCbCopyA(FrLdrBootPath, sizeof(FrLdrBootPath), CdPath);
-                    FrldrBootPartition = 0xFF;
-                }
+                Status = IniTryOpenFreeldrIni(CdPath, 0xFF, &FileId);
+                if (Status == ESUCCESS)
+                    break;
             }
         }
 #endif
@@ -235,6 +254,47 @@ BOOLEAN IniFileInitialize(VOID)
             }
         }
     }
+
+    /* If we opened successfully, normalize FrLdrBootPath to the actual device */
+#ifdef UEFIBOOT
+    {
+        PCCHAR ProvenArc = UefiGetArcPathForFileId(FileId);
+        if (ProvenArc && *ProvenArc)
+        {
+            if (_stricmp(FrLdrBootPath, ProvenArc) != 0)
+            {
+                TRACE("IniFileInitialize: Using proven boot path from FileId: '%s'\n", ProvenArc);
+                RtlStringCbCopyA(FrLdrBootPath, sizeof(FrLdrBootPath), ProvenArc);
+            }
+
+            /* Update the partition hint based on the proven ARC path */
+            if (strstr(ProvenArc, "cdrom(") != NULL)
+            {
+                FrldrBootPartition = 0xFF;
+            }
+            else
+            {
+                static const CHAR PartitionTok[] = "partition(";
+                PCSTR p = strstr(ProvenArc, PartitionTok);
+                if (p)
+                {
+                    ULONG part = 0;
+                    p += sizeof(PartitionTok) - 1;
+                    while (isdigit((unsigned char)*p))
+                    {
+                        part = (part * 10) + (*p - '0');
+                        ++p;
+                    }
+                    if (*p == ')')
+                        FrldrBootPartition = part;
+                }
+            }
+        }
+    }
+#endif
+
+
+    TRACE("IniFileInitialize: final boot path is '%s' (partition=%lu)\n", FrLdrBootPath, (ULONG)FrldrBootPartition);
 
     /* Get the file size */
     Status = ArcGetFileInformation(FileId, &FileInformation);

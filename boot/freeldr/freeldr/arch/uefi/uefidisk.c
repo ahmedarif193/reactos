@@ -28,6 +28,9 @@ typedef struct tagDISKCONTEXT
     ULONGLONG SectorOffset;
     ULONGLONG SectorCount;
     ULONGLONG SectorNumber;
+    /* UEFI plumbed info */
+    EFI_HANDLE BlockHandle;
+    CHAR ArcDevicePath[128];
 } DISKCONTEXT;
 
 typedef struct _INTERNAL_UEFI_DISK
@@ -660,6 +663,11 @@ UefiDiskOpen(CHAR *Path, OPENMODE OpenMode, ULONG *FileId)
     Context->SectorOffset = SectorOffset;
     Context->SectorCount = SectorCount;
     Context->SectorNumber = 0;
+    Context->BlockHandle = DeviceHandle;
+    if (Path)
+        RtlStringCbCopyA(Context->ArcDevicePath, sizeof(Context->ArcDevicePath), Path);
+    else
+        Context->ArcDevicePath[0] = '\0';
     FsSetDeviceSpecific(*FileId, Context);
     return ESUCCESS;
 }
@@ -755,6 +763,24 @@ static const DEVVTBL UefiDiskVtbl =
     UefiDiskRead,
     UefiDiskSeek,
 };
+
+/*
+ * Expose helpers to retrieve the UEFI block handle and ARC device path
+ * associated with a given FileId opened via UefiDiskOpen.
+ */
+EFI_HANDLE
+UefiGetBlockHandleForFileId(ULONG FileId)
+{
+    DISKCONTEXT* Context = FsGetDeviceSpecific(FileId);
+    return Context ? Context->BlockHandle : NULL;
+}
+
+PCCHAR
+UefiGetArcPathForFileId(ULONG FileId)
+{
+    DISKCONTEXT* Context = FsGetDeviceSpecific(FileId);
+    return (Context && Context->ArcDevicePath[0]) ? Context->ArcDevicePath : NULL;
+}
 
 static
 VOID
@@ -1252,6 +1278,7 @@ UefiSetBootpath(VOID)
         FrldrBootPartition = 0xFF;
         RtlStringCbPrintfA(FrLdrBootPath, sizeof(FrLdrBootPath),
                            "multi(0)disk(0)cdrom(%lu)", CdIndex);
+        TRACE("UefiSetBootpath: provisional path = '%s' (will be validated by INI open)\n", FrLdrBootPath);
    }
    else
    {
@@ -1262,6 +1289,7 @@ UefiSetBootpath(VOID)
         RtlStringCbPrintfA(FrLdrBootPath, sizeof(FrLdrBootPath),
                            "multi(0)disk(0)rdisk(%u)partition(%lu)",
                            PublicBootArcDisk, BootPartition);
+        TRACE("UefiSetBootpath: provisional path = '%s' (will be validated by INI open)\n", FrLdrBootPath);
    }
 
    TRACE("UEFI boot media classification: TreatAsCd=%d HasPartitionInfo=%d BootPartition=%lu\n",
@@ -1576,4 +1604,37 @@ UefiDiskGetCacheableBlockCount(UCHAR DriveNumber)
 
     GlobalSystemTable->BootServices->HandleProtocol(handles[UefiDriveNumber], &bioGuid, (void**)&bio);
     return (bio->Media->LastBlock + 1);
+}
+
+
+BOOLEAN
+UefiClassifyMediaFromHandle(
+    _In_ EFI_HANDLE Handle,
+    _Out_ PUEFI_MEDIA_INFO Info)
+{
+    EFI_BLOCK_IO* BlockIo = NULL;
+    EFI_STATUS Status;
+
+    if (!Info)
+        return FALSE;
+    RtlZeroMemory(Info, sizeof(*Info));
+    Info->Kind = UefiMediaUnknown;
+    if (!Handle)
+        return FALSE;
+
+    Status = GlobalSystemTable->BootServices->HandleProtocol(Handle, &bioGuid, (VOID**)&BlockIo);
+    if (EFI_ERROR(Status) || !BlockIo || !BlockIo->Media)
+        return FALSE;
+
+    Info->Removable = BlockIo->Media->RemovableMedia;
+    Info->ReadOnly  = BlockIo->Media->ReadOnly;
+    Info->BlockSize = BlockIo->Media->BlockSize;
+    Info->HasPartitionInfo = BlockIo->Media->LogicalPartition ? TRUE : FALSE;
+
+    if (UefiIsCdRomHandle(Handle) || (!Info->HasPartitionInfo && Info->BlockSize == 2048))
+        Info->Kind = UefiMediaCdrom;
+    else
+        Info->Kind = UefiMediaDisk;
+
+    return TRUE;
 }

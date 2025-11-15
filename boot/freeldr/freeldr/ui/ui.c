@@ -83,6 +83,7 @@ UIVTBL UiVtbl =
     NoUiDrawProgressBar,
     NoUiSetProgressBarText,
     NoUiTickProgressBar,
+    NoUiClearProgressBar,
     NoUiEditBox,
     NoUiTextToColor,
     NoUiTextToFillStyle,
@@ -492,6 +493,18 @@ UiSetProgressBarText(
         return;
 
     UiVtbl.SetProgressBarText(ProgressText);
+}
+
+VOID
+UiClearProgressBar(VOID)
+{
+    if (!UiProgressBar.Show)
+        return;
+
+    if (UiVtbl.ClearProgressBar)
+        UiVtbl.ClearProgressBar();
+
+    UiProgressBar.Show = FALSE;
 }
 
 VOID

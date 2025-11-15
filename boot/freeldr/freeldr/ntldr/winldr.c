@@ -22,6 +22,7 @@
 #include <drivers/acpi/acpi.h>
 extern EFI_SYSTEM_TABLE* GlobalSystemTable;
 extern EFI_HANDLE GlobalImageHandle;
+extern VOID UefiVideoRefreshBootLogo(VOID);
 #endif
 
 #include <debug.h>
@@ -1287,6 +1288,11 @@ LoadAndBootWindows(
     UiDrawBackdrop(UiGetScreenHeight());
     UiDrawStatusText("Loading...");
     UiDrawProgressBarCenter("Loading NT...");
+#ifdef UEFIBOOT
+    /* Ensure firmware BGRT logo is displayed also in non-RAMDISK LiveCD paths. */
+    extern BOOLEAN UefiVideoDisplayBootLogo(VOID);
+    (void)UefiVideoDisplayBootLogo();
+#endif
 
     /* Retrieve the system path */
     *BootPath = ANSI_NULL;
@@ -1586,6 +1592,10 @@ LoadAndBootWindowsCommon(
                            OperatingSystemVersion);
 
     UiUpdateProgressBar(100, NULL);
+#ifdef UEFIBOOT
+    UiClearProgressBar();
+    UefiVideoRefreshBootLogo();
+#endif
 
     /* Save entry-point pointer and Loader block VAs */
     KiSystemStartup = (KERNEL_ENTRY_POINT)KernelDTE->EntryPoint;

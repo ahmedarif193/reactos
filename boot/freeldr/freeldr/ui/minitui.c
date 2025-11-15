@@ -155,6 +155,24 @@ MiniTuiTickProgressBar(
 }
 
 VOID
+MiniTuiClearProgressBar(VOID)
+{
+    if (!UiProgressBar.Show)
+        return;
+
+    TuiFillArea(UiProgressBar.Left,
+                UiProgressBar.Top,
+                UiProgressBar.Right,
+                UiProgressBar.Bottom,
+                ' ', ATTR(UiMenuFgColor, UiMenuBgColor));
+    VideoCopyOffScreenBufferRectToVRAM(
+        UiProgressBar.Left,
+        UiProgressBar.Top,
+        UiProgressBar.Right,
+        UiProgressBar.Bottom);
+}
+
+VOID
 MiniTuiDrawProgressBarCenter(
     _In_ PCSTR ProgressText)
 {
@@ -258,6 +276,7 @@ const UIVTBL MiniTuiVtbl =
     MiniTuiDrawProgressBar,
     MiniTuiSetProgressBarText,
     MiniTuiTickProgressBar,
+    MiniTuiClearProgressBar,
     TuiEditBox,
     TuiTextToColor,
     TuiTextToFillStyle,

@@ -43,6 +43,9 @@ static UINT32 gBgrtLeft = 0, gBgrtTop = 0, gBgrtRight = 0, gBgrtBottom = 0;
 #define FALLBACK_CONSOLE_HEIGHT   800
 #define BGRT_BMP_MAGIC           0x4D42 /* 'BM' */
 #define BI_RGB                   0
+#ifndef BI_BITFIELDS
+#define BI_BITFIELDS             3
+#endif
 
 extern PBGRT_TABLE GetBgrtTable(VOID);
 
@@ -86,6 +89,22 @@ static BOOLEAN FramebufferCacheAttempted = FALSE;
 static BOOLEAN FramebufferCacheConfigured = FALSE;
 static BOOLEAN FramebufferCacheWarned = FALSE;
 static ULONG CachedLineStrideBytes = 0;
+
+/* Helper to normalize a color channel using a bit mask to 0..255 */
+static __inline UINT8
+UefiExtract8FromMask(UINT32 value, UINT32 mask)
+{
+    UINT32 shift = 0, bits = 0, m = mask;
+    if (!mask) return 0;
+    while ((m & 1U) == 0U) { m >>= 1; shift++; }
+    while ((m & 1U) == 1U) { m >>= 1; bits++; }
+    if (bits == 0) return 0;
+    {
+        UINT32 v = (value & mask) >> shift;
+        if (bits >= 8) return (UINT8)(v >> (bits - 8));
+        return (UINT8)((v * 255U) / ((1U << bits) - 1U));
+    }
+}
 
 BOOLEAN
 UefiIsFramebufferReady(VOID)
@@ -1298,6 +1317,7 @@ UefiVideoBlitBgrtBitmap(PBGRT_TABLE Bgrt)
     UINT32 CopyWidth, CopyHeight;
     ULONG Pitch;
     PUCHAR Framebuffer;
+    BOOLEAN UseGopBlt = FALSE;
 
     if (!Bgrt)
     {
@@ -1352,19 +1372,31 @@ UefiVideoBlitBgrtBitmap(PBGRT_TABLE Bgrt)
         return FALSE;
     }
 
-    if (InfoHeader->biCompression != BI_RGB)
+    /* Accept BI_RGB (24/32 bpp) and BI_BITFIELDS (16/32 bpp masks) */
+    if (InfoHeader->biCompression != BI_RGB && InfoHeader->biCompression != 3 /* BI_BITFIELDS */)
     {
         TRACE("BGRT logo: unsupported compression %lu\n", InfoHeader->biCompression);
         return FALSE;
     }
 
-    if (InfoHeader->biBitCount != 24 && InfoHeader->biBitCount != 32)
+    if (InfoHeader->biCompression == BI_RGB)
     {
-        TRACE("BGRT logo: unsupported bit depth %u\n", InfoHeader->biBitCount);
-        return FALSE;
+        if (InfoHeader->biBitCount != 24 && InfoHeader->biBitCount != 32)
+        {
+            TRACE("BGRT logo: unsupported bit depth %u\n", InfoHeader->biBitCount);
+            return FALSE;
+        }
+    }
+    else /* BI_BITFIELDS */
+    {
+        if (InfoHeader->biBitCount != 16 && InfoHeader->biBitCount != 32)
+        {
+            TRACE("BGRT logo: unsupported bit depth for bitfields %u\n", InfoHeader->biBitCount);
+            return FALSE;
+        }
     }
 
-    BytesPerPixel = InfoHeader->biBitCount / 8;
+    BytesPerPixel = (InfoHeader->biBitCount + 7) / 8;
     Width = (InfoHeader->biWidth < 0) ? (UINT32)(-InfoHeader->biWidth) : (UINT32)InfoHeader->biWidth;
     Height = (InfoHeader->biHeight < 0) ? (UINT32)(-InfoHeader->biHeight) : (UINT32)InfoHeader->biHeight;
     BottomUp = (InfoHeader->biHeight > 0);
@@ -1382,9 +1414,18 @@ UefiVideoBlitBgrtBitmap(PBGRT_TABLE Bgrt)
     }
 
     PixelData = Base + FileHeader->bfOffBits;
-    SrcStride = (InfoHeader->biBitCount == 32)
-                    ? Width * 4
-                    : (UINT32)(((UINT64)Width * 3ULL + 3ULL) & ~3ULL);
+    if (InfoHeader->biCompression == BI_RGB)
+    {
+        SrcStride = (InfoHeader->biBitCount == 32)
+                        ? Width * 4
+                        : (UINT32)(((UINT64)Width * 3ULL + 3ULL) & ~3ULL);
+    }
+    else /* BI_BITFIELDS */
+    {
+        /* Stride for 16/32 bpp with DWORD alignment */
+        UINT32 bits = InfoHeader->biBitCount;
+        SrcStride = (UINT32)((((UINT64)Width * bits + 31ULL) & ~31ULL) >> 3);
+    }
 
     DestX = (Bgrt->OffsetX < framebufferData.ScreenWidth) ? Bgrt->OffsetX : framebufferData.ScreenWidth - 1;
     DestY = (Bgrt->OffsetY < framebufferData.ScreenHeight) ? Bgrt->OffsetY : framebufferData.ScreenHeight - 1;
@@ -1407,46 +1448,164 @@ UefiVideoBlitBgrtBitmap(PBGRT_TABLE Bgrt)
     }
 
     Pitch = UefiVideoGetLineStride();
-    if (Pitch == 0)
-    {
-        TRACE("BGRT logo: framebuffer pitch is zero\n");
-        return FALSE;
-    }
-
     Framebuffer = (PUCHAR)framebufferData.BaseAddress;
-    if (!Framebuffer)
+    if (Pitch == 0 || !Framebuffer || framebufferData.PixelFormat == PixelBltOnly)
     {
-        TRACE("BGRT logo: framebuffer base pointer is null\n");
-        return FALSE;
+        /* Fallback to GOP->Blt path when no linear FB available */
+        UseGopBlt = TRUE;
+    }
+    else
+    {
+        Framebuffer += (SIZE_T)DestY * Pitch + DestX * sizeof(ULONG);
     }
 
-    Framebuffer += (SIZE_T)DestY * Pitch + DestX * sizeof(ULONG);
-
-    for (UINT32 Row = 0; Row < CopyHeight; ++Row)
+    if (!UseGopBlt)
     {
-        UINT32 SrcRowIndex = BottomUp ? (Height - 1 - Row) : Row;
-        const UINT8* Src = PixelData + (SIZE_T)SrcRowIndex * SrcStride;
-        PULONG Dst = (PULONG)(Framebuffer + (SIZE_T)Row * Pitch);
-
-        for (UINT32 Col = 0; Col < CopyWidth; ++Col)
+        /* Linear framebuffer write path */
+        for (UINT32 Row = 0; Row < CopyHeight; ++Row)
         {
-            UINT8 Blue = Src[0];
-            UINT8 Green = Src[1];
-            UINT8 Red = Src[2];
-            UINT8 Alpha = (BytesPerPixel == 4) ? Src[3] : 0xFF;
+            UINT32 SrcRowIndex = BottomUp ? (Height - 1 - Row) : Row;
+            const UINT8* Src = PixelData + (SIZE_T)SrcRowIndex * SrcStride;
+            PULONG Dst = (PULONG)(Framebuffer + (SIZE_T)Row * Pitch);
 
-            if (BytesPerPixel == 4 && Alpha == 0)
+            if (InfoHeader->biCompression == BI_RGB)
             {
-                /* Completely transparent pixel, leave framebuffer as-is. */
+                for (UINT32 Col = 0; Col < CopyWidth; ++Col)
+                {
+                    UINT8 Blue = Src[0];
+                    UINT8 Green = Src[1];
+                    UINT8 Red = Src[2];
+                    UINT8 Alpha = (BytesPerPixel == 4) ? Src[3] : 0xFF;
+                    if (!(BytesPerPixel == 4 && Alpha == 0))
+                    {
+                        ULONG Pixel = 0xFF000000 | ((ULONG)Red << 16) | ((ULONG)Green << 8) | (ULONG)Blue;
+                        Dst[Col] = Pixel;
+                    }
+                    Src += BytesPerPixel;
+                }
             }
-            else
+            else /* BI_BITFIELDS */
             {
-                ULONG Pixel = 0xFF000000 | ((ULONG)Red << 16) | ((ULONG)Green << 8) | (ULONG)Blue;
-                Dst[Col] = Pixel;
-            }
+                const UINT32* Masks = (const UINT32*)(Base + sizeof(BMP_FILE_HEADER) + InfoHeader->biSize);
+                UINT32 rMask = Masks[0], gMask = Masks[1], bMask = Masks[2];
+                UINT32 aMask = 0; /* optional fourth mask */
+                if (InfoHeader->biBitCount == 32 && FileHeader->bfOffBits >= sizeof(BMP_FILE_HEADER) + InfoHeader->biSize + sizeof(UINT32) * 4)
+                {
+                    aMask = Masks[3];
+                }
 
-            Src += BytesPerPixel;
+                if (InfoHeader->biBitCount == 16)
+                {
+                    const UINT16* Src16 = (const UINT16*)Src;
+                    for (UINT32 Col = 0; Col < CopyWidth; ++Col)
+                    {
+                        UINT32 v = Src16[Col];
+                        UINT8 R = UefiExtract8FromMask(v, rMask);
+                        UINT8 G = UefiExtract8FromMask(v, gMask);
+                        UINT8 B = UefiExtract8FromMask(v, bMask);
+                        ULONG Pixel = 0xFF000000 | ((ULONG)R << 16) | ((ULONG)G << 8) | (ULONG)B;
+                        Dst[Col] = Pixel;
+                    }
+                }
+                else /* 32bpp masks */
+                {
+                    const UINT32* Src32 = (const UINT32*)Src;
+                    for (UINT32 Col = 0; Col < CopyWidth; ++Col)
+                    {
+                        UINT32 v = Src32[Col];
+                        UINT8 R = UefiExtract8FromMask(v, rMask);
+                        UINT8 G = UefiExtract8FromMask(v, gMask);
+                        UINT8 B = UefiExtract8FromMask(v, bMask);
+                        UINT8 A = (aMask ? UefiExtract8FromMask(v, aMask) : 0xFF);
+                        if (A != 0)
+                        {
+                            ULONG Pixel = 0xFF000000 | ((ULONG)R << 16) | ((ULONG)G << 8) | (ULONG)B;
+                            Dst[Col] = Pixel;
+                        }
+                    }
+                }
+            }
         }
+    }
+    else
+    {
+        /* GOP->Blt fallback path */
+        EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
+        EFI_STATUS st = GlobalSystemTable->BootServices->LocateProtocol(&EfiGraphicsOutputProtocol, NULL, (VOID**)&gop);
+        if (EFI_ERROR(st) || !gop || !gop->Blt)
+        {
+            TRACE("BGRT logo: GOP->Blt unavailable for fallback\n");
+            return FALSE;
+        }
+
+        /* Prepare per-row blits, honoring transparency by splitting into runs */
+        EFI_GRAPHICS_OUTPUT_BLT_PIXEL* RowBuf = (EFI_GRAPHICS_OUTPUT_BLT_PIXEL*)FrLdrTempAlloc(CopyWidth * sizeof(*RowBuf), 'tRGB');
+        if (!RowBuf)
+            return FALSE;
+
+        const UINT32* Masks = (const UINT32*)(Base + sizeof(BMP_FILE_HEADER) + InfoHeader->biSize);
+        UINT32 rMask = 0, gMask = 0, bMask = 0, aMask = 0;
+        if (InfoHeader->biCompression == BI_BITFIELDS)
+        {
+            rMask = Masks[0]; gMask = Masks[1]; bMask = Masks[2];
+            if (InfoHeader->biBitCount == 32 && FileHeader->bfOffBits >= sizeof(BMP_FILE_HEADER) + InfoHeader->biSize + sizeof(UINT32) * 4)
+                aMask = Masks[3];
+        }
+        for (UINT32 Row = 0; Row < CopyHeight; ++Row)
+        {
+            UINT32 SrcRowIndex = BottomUp ? (Height - 1 - Row) : Row;
+            const UINT8* Src = PixelData + (SIZE_T)SrcRowIndex * SrcStride;
+
+            /* Build row buffer and blit runs of non-transparent pixels */
+            UINT32 runStart = 0;
+            BOOLEAN inRun = FALSE;
+            for (UINT32 Col = 0; Col <= CopyWidth; ++Col)
+            {
+                BOOLEAN opaque = FALSE;
+                UINT8 R=0,G=0,B=0,A=0xFF;
+                if (Col < CopyWidth)
+                {
+                    if (InfoHeader->biCompression == BI_RGB)
+                    {
+                        B = Src[0]; G = Src[1]; R = Src[2]; A = (BytesPerPixel == 4) ? Src[3] : 0xFF;
+                        Src += BytesPerPixel;
+                    }
+                    else if (InfoHeader->biBitCount == 16)
+                    {
+                        UINT32 v = ((const UINT16*)Src)[0]; Src += 2;
+                        R = UefiExtract8FromMask(v, rMask); G = UefiExtract8FromMask(v, gMask); B = UefiExtract8FromMask(v, bMask); A = 0xFF;
+                    }
+                    else /* 32bpp masks */
+                    {
+                        UINT32 v = ((const UINT32*)Src)[0]; Src += 4;
+                        R = UefiExtract8FromMask(v, rMask); G = UefiExtract8FromMask(v, gMask); B = UefiExtract8FromMask(v, bMask); A = (aMask ? UefiExtract8FromMask(v, aMask) : 0xFF);
+                    }
+                    opaque = (A != 0);
+                    RowBuf[Col].Red = R; RowBuf[Col].Green = G; RowBuf[Col].Blue = B; RowBuf[Col].Reserved = 0xFF;
+                }
+
+                if (opaque && !inRun) { inRun = TRUE; runStart = Col; }
+                if ((!opaque && inRun) || (Col == CopyWidth && inRun))
+                {
+                    UINT32 runLen = Col - runStart;
+                    if (runLen > 0)
+                    {
+                        EFI_STATUS bst = gop->Blt(gop,
+                                                  &RowBuf[runStart],
+                                                  EfiBltBufferToVideo,
+                                                  0, 0,
+                                                  DestX + runStart,
+                                                  DestY + Row,
+                                                  runLen,
+                                                  1,
+                                                  0);
+                        (void)bst;
+                    }
+                    inRun = FALSE;
+                }
+            }
+        }
+        FrLdrTempFree(RowBuf, 'tRGB');
     }
 
     return TRUE;

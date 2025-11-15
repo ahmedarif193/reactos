@@ -5,6 +5,9 @@
  * COPYRIGHT:   Copyright 2022 Justin Miller <justinmiller100@gmail.com>
  */
 
+#ifndef FREELDR_ARCH_UEFI_MACHUEFI_H
+#define FREELDR_ARCH_UEFI_MACHUEFI_H
+
 #include <machine.h>
 
 VOID
@@ -160,3 +163,37 @@ UefiGetCdromHandle(ULONG Index);
 
 ULONG
 UefiGetCdromCount(VOID);
+
+
+/* Informational media classification (for diagnostics/UI only) */
+typedef enum _UEFI_MEDIA_KIND
+{
+    UefiMediaUnknown = 0,
+    UefiMediaDisk,
+    UefiMediaCdrom
+} UEFI_MEDIA_KIND;
+
+typedef struct _UEFI_MEDIA_INFO
+{
+    UEFI_MEDIA_KIND Kind;
+    BOOLEAN Removable;
+    BOOLEAN ReadOnly;
+    ULONG BlockSize;
+    BOOLEAN HasPartitionInfo;
+} UEFI_MEDIA_INFO, *PUEFI_MEDIA_INFO;
+
+BOOLEAN
+UefiClassifyMediaFromHandle(
+    _In_ EFI_HANDLE Handle,
+    _Out_ PUEFI_MEDIA_INFO Info);
+
+
+/* Retrieve the EFI block handle and ARC device path for an opened FileId */
+EFI_HANDLE
+UefiGetBlockHandleForFileId(ULONG FileId);
+
+PCCHAR
+UefiGetArcPathForFileId(ULONG FileId);
+
+
+#endif /* FREELDR_ARCH_UEFI_MACHUEFI_H */

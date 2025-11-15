@@ -21,6 +21,9 @@ VOID
 MiniTuiTickProgressBar(
     _In_ ULONG SubPercentTimes100);
 
+VOID
+MiniTuiClearProgressBar(VOID);
+
 /* Draws the progress bar showing nPos percent filled */
 VOID
 MiniTuiDrawProgressBarCenter(

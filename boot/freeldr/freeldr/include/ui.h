@@ -175,6 +175,9 @@ VOID
 UiSetProgressBarText(
     _In_ PCSTR ProgressText);
 
+VOID
+UiClearProgressBar(VOID);
+
 /* Draws the progress bar showing nPos percent filled */
 VOID
 UiDrawProgressBarCenter(
@@ -284,6 +287,8 @@ typedef struct tagUIVTBL
 
     VOID (*TickProgressBar)(
         _In_ ULONG SubPercentTimes100);
+
+    VOID (*ClearProgressBar)(VOID);
 
     BOOLEAN (*EditBox)(PCSTR MessageText, PCHAR EditTextBuffer, ULONG Length);
     UCHAR (*TextToColor)(PCSTR ColorText);
