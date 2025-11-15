@@ -159,6 +159,11 @@ InbvGetGopFrameBufferInfo(
     _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo
 );
 
+CODE_SEG("INIT")
+VOID
+NTAPI
+InbvFinalizeBootGraphics(VOID);
+
 //
 // UEFI GOP mode enumeration/switching (stubs for now)
 //

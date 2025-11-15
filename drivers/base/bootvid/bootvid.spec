@@ -7,5 +7,6 @@
 @ stdcall VidResetDisplay(long)
 @ stdcall VidScreenToBufferBlt(ptr long long long long long)
 @ stdcall VidSetScrollRegion(long long long long)
+@ stdcall VidSetBootGraphicsPreservation(long)
 @ stdcall VidSetTextColor(long)
 @ stdcall VidSolidColorFill(long long long long long)

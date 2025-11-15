@@ -106,7 +106,10 @@ VidpSetupLinearFramebuffer(
     VidpCurrentY = 0;
 
     BackgroundColorValue = UefiColorFromIndex(BV_COLOR_BLACK);
-    UefiGopClearScreen(BackgroundColorValue);
+    if (!g_BootvidPreserveBootGraphics)
+    {
+        UefiGopClearScreen(BackgroundColorValue);
+    }
 
     DisplayInitialized = TRUE;
     return TRUE;
@@ -531,8 +534,8 @@ NTAPI
 UefiVidResetDisplay(
     _In_ BOOLEAN HalReset)
 {
-    /* Clear screen to black */
-    if (DisplayInitialized)
+    /* Clear screen to black only when preservation is not requested. */
+    if (DisplayInitialized && !g_BootvidPreserveBootGraphics)
         UefiGopClearScreen(BackgroundColorValue);
 
     UNREFERENCED_PARAMETER(HalReset);

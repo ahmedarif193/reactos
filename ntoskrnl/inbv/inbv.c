@@ -11,6 +11,7 @@
 
 #include <ntoskrnl.h>
 #include <reactos/arc/arc.h>
+#include <drivers/bootvid/bootvid.h>
 #include "inbv/logo.h"
 
 /* GLOBALS *******************************************************************/
@@ -63,6 +64,35 @@ static PLOADER_PARAMETER_GOP_MODE InbvGopModes = NULL;
 static ULONG InbvGopModeCount = 0;
 static ULONG InbvGopPreferredMode = MAXULONG;
 static ULONG InbvGopCurrentMode = MAXULONG;
+static LOADER_PARAMETER_BGRT InbvBgrtInfo;
+static BOOLEAN InbvBgrtInfoValid = FALSE;
+
+CODE_SEG("INIT")
+BOOLEAN
+NTAPI
+InbvQueryBgrtInfo(
+    _Out_opt_ PLOADER_PARAMETER_BGRT BgrtInfo)
+{
+    if (!InbvBgrtInfoValid)
+        return FALSE;
+
+    if (BgrtInfo)
+        RtlCopyMemory(BgrtInfo, &InbvBgrtInfo, sizeof(*BgrtInfo));
+
+    return TRUE;
+}
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+InbvFinalizeBootGraphics(VOID)
+{
+    if (!InbvBootDriverInstalled)
+        return;
+
+    VidSetBootGraphicsPreservation(FALSE);
+    InbvResetDisplay();
+}
 
 
 /*
@@ -221,6 +251,7 @@ InbvDriverInitialize(
         {
             RtlCopyMemory(&InbvGopFramebuffer, Fb, sizeof(*Fb));
             InbvGopInfoValid = TRUE;
+            VidSetBootGraphicsPreservation(TRUE);
         }
 
         if (Extension->GopFramebuffers && Extension->GopFramebufferCount)
@@ -240,6 +271,7 @@ InbvDriverInitialize(
                                   &fbList[0],
                                   sizeof(LOADER_PARAMETER_FRAMEBUFFER));
                     InbvGopInfoValid = TRUE;
+                    VidSetBootGraphicsPreservation(TRUE);
                 }
             }
         }
@@ -258,6 +290,16 @@ InbvDriverInitialize(
                 InbvGopModes = list;
                 InbvGopModeCount = Extension->GopModeCount;
             }
+        }
+
+        if (Extension->Size >= RTL_SIZEOF_THROUGH_FIELD(LOADER_PARAMETER_EXTENSION, BgrtInfo) &&
+            Extension->BgrtInfo.Valid &&
+            Extension->BgrtInfo.ImageSize != 0 &&
+            Extension->BgrtInfo.ImageAddress != 0)
+        {
+            RtlCopyMemory(&InbvBgrtInfo, &Extension->BgrtInfo, sizeof(InbvBgrtInfo));
+            InbvBgrtInfoValid = TRUE;
+            VidSetBootGraphicsPreservation(TRUE);
         }
     }
 
