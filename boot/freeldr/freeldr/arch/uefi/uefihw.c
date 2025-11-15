@@ -45,18 +45,33 @@ FindAcpiBios(VOID)
     UINTN i;
     RSDP_DESCRIPTOR* rsdp = NULL;
     EFI_GUID acpi2_guid = EFI_ACPI_20_TABLE_GUID;
+    EFI_GUID acpi1_guid = EFI_ACPI_TABLE_GUID; /* Some firmware only advertises ACPI 1.0 here */
 
+    /* Prefer ACPI 2.0+ */
     for (i = 0; i < GlobalSystemTable->NumberOfTableEntries; i++)
     {
         if (!memcmp(&GlobalSystemTable->ConfigurationTable[i].VendorGuid,
                     &acpi2_guid, sizeof(acpi2_guid)))
         {
             rsdp = (RSDP_DESCRIPTOR*)GlobalSystemTable->ConfigurationTable[i].VendorTable;
-            break;
+            if (rsdp)
+                return rsdp;
         }
     }
 
-    return rsdp;
+    /* Fallback to ACPI 1.0 */
+    for (i = 0; i < GlobalSystemTable->NumberOfTableEntries; i++)
+    {
+        if (!memcmp(&GlobalSystemTable->ConfigurationTable[i].VendorGuid,
+                    &acpi1_guid, sizeof(acpi1_guid)))
+        {
+            rsdp = (RSDP_DESCRIPTOR*)GlobalSystemTable->ConfigurationTable[i].VendorTable;
+            if (rsdp)
+                return rsdp;
+        }
+    }
+
+    return NULL;
 }
 
 /* Locate the BGRT table in the ACPI structures if one is present. */

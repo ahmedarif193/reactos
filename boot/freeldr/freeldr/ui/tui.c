@@ -28,6 +28,11 @@ typedef struct _SMALL_RECT
 } SMALL_RECT, *PSMALL_RECT;
 
 PVOID TextVideoBuffer = NULL;
+static ULONG TuiProgressFrameLeft;
+static ULONG TuiProgressFrameTop;
+static ULONG TuiProgressFrameRight;
+static ULONG TuiProgressFrameBottom;
+static BOOLEAN TuiProgressFrameValid = FALSE;
 
 /* GENERIC TUI UTILS *********************************************************/
 
@@ -868,6 +873,39 @@ TuiTickProgressBar(
 }
 
 static VOID
+TuiClearProgressBar(VOID)
+{
+    ULONG Left, Top, Right, Bottom;
+    UCHAR Attr = ATTR(UiBackdropFgColor, UiBackdropBgColor);
+
+    if (!UiProgressBar.Show)
+        return;
+
+    if (TuiProgressFrameValid)
+    {
+        Left = TuiProgressFrameLeft;
+        Top = TuiProgressFrameTop;
+        Right = TuiProgressFrameRight;
+        Bottom = TuiProgressFrameBottom;
+    }
+    else
+    {
+        Left = UiProgressBar.Left;
+        Top = UiProgressBar.Top;
+        Right = UiProgressBar.Right;
+        Bottom = UiProgressBar.Bottom;
+    }
+
+    if (Right >= UiScreenWidth) Right = UiScreenWidth - 1;
+    if (Bottom >= UiScreenHeight) Bottom = UiScreenHeight - 1;
+
+    TuiFillArea(Left, Top, Right, Bottom, ' ', Attr);
+    VideoCopyOffScreenBufferRectToVRAM(Left, Top, Right, Bottom);
+
+    TuiProgressFrameValid = FALSE;
+}
+
+static VOID
 TuiDrawProgressBar(
     _In_ ULONG Left,
     _In_ ULONG Top,
@@ -911,6 +949,12 @@ TuiDrawProgressBar(
     TuiDrawBox(Left, Top, Right, Bottom,
                VERT, HORZ, TRUE, TRUE,
                ATTR(UiMenuFgColor, UiMenuBgColor));
+
+    TuiProgressFrameLeft = Left;
+    TuiProgressFrameTop = Top;
+    TuiProgressFrameRight = Right;
+    TuiProgressFrameBottom = Bottom;
+    TuiProgressFrameValid = TRUE;
 
     /* Exclude the box margins */
     Left += 2;
@@ -1240,6 +1284,7 @@ const UIVTBL TuiVtbl =
     TuiDrawProgressBar,
     TuiSetProgressBarText,
     TuiTickProgressBar,
+    TuiClearProgressBar,
     TuiEditBox,
     TuiTextToColor,
     TuiTextToFillStyle,

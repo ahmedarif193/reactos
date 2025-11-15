@@ -66,6 +66,9 @@ VOID
 NoUiTickProgressBar(
     _In_ ULONG SubPercentTimes100);
 
+VOID
+NoUiClearProgressBar(VOID);
+
 /* Draws the progress bar showing nPos percent filled */
 VOID
 NoUiDrawProgressBarCenter(

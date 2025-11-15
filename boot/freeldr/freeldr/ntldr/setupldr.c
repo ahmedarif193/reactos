@@ -551,6 +551,11 @@ LoadReactOSSetup(
     UiDrawBackdrop(UiGetScreenHeight());
     UiDrawStatusText("Setup is loading...");
     UiDrawProgressBarCenter("Loading ReactOS Setup...");
+#ifdef UEFIBOOT
+    /* Ensure firmware BGRT logo also appears on Setup loader path. */
+    extern BOOLEAN UefiVideoDisplayBootLogo(VOID);
+    (void)UefiVideoDisplayBootLogo();
+#endif
 
     /* Retrieve the system path */
     *BootPath = ANSI_NULL;

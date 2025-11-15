@@ -261,9 +261,12 @@ BuildArgvForOsLoader(
                                SettingName, Size,
                                SettingValue, ValueSize);
 
-        if (FrldrGetBootPartition() == 0xFF &&
-            _stricmp(SettingName, "SystemPartition") == 0)
+        if (_stricmp(SettingName, "SystemPartition") == 0)
         {
+            if (_stricmp(SettingValue, BootPath) != 0)
+            {
+                TRACE("Overriding SystemPartition INI value with proven boot path '%s'\n", BootPath);
+            }
             RtlStringCbCopyA(SettingValue, ValueSize, BootPath);
         }
 
