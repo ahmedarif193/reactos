@@ -168,6 +168,9 @@ elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     add_compile_options($<$<COMPILE_LANGUAGE:C>:-fgnu89-inline>)
     add_compile_options(-Wno-pragma-pack)
     add_compile_options(-fno-associative-math)
+    if(ARCH STREQUAL "i386")
+        add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-fsjlj-exceptions>")
+    endif()
 
     if(CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 12.0)
         # disable "libcall optimization"
