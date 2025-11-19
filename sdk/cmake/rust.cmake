@@ -383,24 +383,30 @@ function(ros_add_rust_executable _target)
         # Win8+ sync primitives (WaitOnAddress/WakeByAddress*) live in Synchronization.lib
         # which is not re-exported by kernel32 on i686, so link it explicitly.
         set(_rust_target_extra "${_rust_target_extra} -C link-arg=-lsynchronization")
-        # Only add libgcc_s and shim for GNU toolchain builds. Clang builds
-        # typically use DWARF unwinder (libgcc_eh) which already provides
-        # _Unwind_* symbols; adding a shim would cause duplicate definitions.
-        if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
-            set(_rust_target_extra "${_rust_target_extra} -C link-arg=-lgcc_s")
-            set(_shim_c ${CMAKE_CURRENT_BINARY_DIR}/${_target}-unwind_shim32.c)
-            set(_shim_o ${CMAKE_CURRENT_BINARY_DIR}/${_target}-unwind_shim32.o)
-            file(WRITE ${_shim_c} "#include <stdlib.h>\n\nstruct _Unwind_Exception;\nint _Unwind_RaiseException(struct _Unwind_Exception* e) { (void)e; abort(); }\nvoid _Unwind_Resume(struct _Unwind_Exception* e) { (void)e; abort(); }\n")
-            add_custom_command(
-                OUTPUT ${_shim_o}
-                COMMAND ${ROS_RUST_LINKER} -x c -c -O2 -o ${_shim_o} ${_shim_c}
-                DEPENDS ${_shim_c}
-                VERBATIM
-                COMMENT "Compiling i686 unwind shim (PE/COFF)"
-            )
-            set(_extra_link_objs ${_shim_o})
-            set(_obj_link_args "-C link-arg=${_shim_o}")
-        endif()
+
+        # Inject a tiny PE/COFF object that satisfies _Unwind_Resume so we do
+        # not need to drag in libgcc_s when building with Rust on i686.
+        set(_shim_c ${CMAKE_CURRENT_BINARY_DIR}/${_target}-unwind_shim32.c)
+        set(_shim_o ${CMAKE_CURRENT_BINARY_DIR}/${_target}-unwind_shim32.o)
+        file(WRITE ${_shim_c}
+"#include <stdlib.h>
+
+__attribute__((noreturn))
+void _Unwind_Resume(void *state)
+{
+    (void)state;
+    abort();
+}
+")
+        add_custom_command(
+            OUTPUT ${_shim_o}
+            COMMAND ${ROS_RUST_LINKER} -x c -c -O2 -o ${_shim_o} ${_shim_c}
+            DEPENDS ${_shim_c}
+            VERBATIM
+            COMMENT "Compiling i686 unwind shim (PE/COFF)"
+        )
+        set(_extra_link_objs ${_shim_o})
+        set(_obj_link_args "-C link-arg=${_shim_o}")
     endif()
 
     # Optional extra link objects (e.g., unwind shims for i686)
