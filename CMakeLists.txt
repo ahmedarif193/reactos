@@ -19,7 +19,6 @@ endif()
 project(REACTOS)
 
 option(USE_NATIVE_MINGW_CRT "Link ReactOS user CRTs against the MinGW-w64 runtime instead of the in-tree implementation" OFF)
-option(WOW64_MULTILIB "Build a 32-bit SysWOW64 subset inside amd64 builds (no external i386 root required)" ON)
 
 # Anchor top-level source and binary directories for nested sub-build contexts
 if(NOT DEFINED REACTOS_TOP_SOURCE_DIR)
@@ -82,11 +81,12 @@ include(sdk/cmake/compilerflags.cmake)
 include(sdk/cmake/set_wine_module.cmake)
 
 # WOW64 build helpers (mirroring and multilib support)
-# Include multilib subbuild first so its variables are available to support helpers
+# Only wire WOW64 support when explicitly enabled via WOW64_MULTILIB.
+# Include multilib subbuild first so its variables are available to support helpers.
 if(ARCH STREQUAL "amd64" AND WOW64_MULTILIB)
     include(sdk/cmake/wow64-multilib.cmake)
+    include(sdk/cmake/wow64-support.cmake)
 endif()
-include(sdk/cmake/wow64-support.cmake)
 
 add_definitions(
     -D__REACTOS__

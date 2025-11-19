@@ -350,6 +350,10 @@ if(ARCH STREQUAL "amd64")
             endif()
         endforeach()
     else()
+        # External mirroring (legacy) is only relevant when WOW64 is enabled
+        # via an external i386 root. If WOW64 is disabled entirely, skip this
+        # section silently.
+        if(WOW64_ENABLED)
         # External mirroring (legacy): look for prebuilt i386 sysroot and enumerate files
         # Search for i386 build output in common locations
         set(_I386_SEARCH_PATHS
@@ -441,6 +445,7 @@ if(ARCH STREQUAL "amd64")
         else()
             message(STATUS "WOW64: No i386 binaries found. Set REACTOS_I386_ROOT to specify location.")
             message(STATUS "        SysWOW64 directory will be empty. 32-bit executables will not run.")
+        endif()
         endif()
     endif()
 endif()

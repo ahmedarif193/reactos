@@ -1,6 +1,10 @@
 # ReactOS Build Configuration
 # This file contains all build metadata and configuration options
 
+
+# WOW64 multilib: build a 32-bit SysWOW64 subset inside amd64 builds
+set(WOW64_MULTILIB OFF CACHE BOOL "Build a 32-bit SysWOW64 subset inside amd64 builds (no external i386 root required)")
+
 # Build type (Debug, Release, MinSizeRel, RelWithDebInfo)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Choose the type of build." FORCE)
@@ -107,6 +111,7 @@ message(STATUS "  Generator: ${CMAKE_GENERATOR}")
 message(STATUS "  Toolchain Path: ${TOOLCHAIN_PATH}")
 message(STATUS "  Toolchain Prefix: ${TOOLCHAIN_PREFIX}")
 message(STATUS "  Toolchain File: ${CMAKE_TOOLCHAIN_FILE}")
+message(STATUS "  WOW64 multilib: ${WOW64_MULTILIB}")
 message(STATUS "  Enable ccache: ${ENABLE_CCACHE}")
 if(BUILD_ENVIRONMENT STREQUAL "Clang")
     message(STATUS "  Clang Version: ${CLANG_VERSION}")
