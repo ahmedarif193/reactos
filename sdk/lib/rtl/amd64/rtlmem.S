@@ -58,7 +58,7 @@ RtlCompareMemory2:
 RtlCompareMemory3:
     /* All equal */
     /* Return the full count */
-    mov rax, rcx
+    mov rax, r8
     jmp RtlCompareMemory6
 
 RtlCompareMemory4:
