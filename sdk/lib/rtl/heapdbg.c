@@ -542,4 +542,108 @@ RtlDebugSizeHeap(HANDLE HeapPtr,
     return Result;
 }
 
+NTSTATUS NTAPI
+RtlDebugUsageHeap(HANDLE HeapHandle,
+                  ULONG Flags,
+                  PRTL_HEAP_USAGE Usage)
+{
+    PHEAP Heap = (PHEAP)HeapHandle;
+    BOOLEAN HeapLocked = FALSE;
+    NTSTATUS Status;
+
+    if (!HeapHandle || !Usage)
+        return STATUS_INVALID_PARAMETER;
+
+    if (Heap->Signature != HEAP_SIGNATURE)
+        return STATUS_INVALID_HANDLE;
+
+    Flags |= Heap->ForceFlags | HEAP_SKIP_VALIDATION_CHECKS;
+
+    if (!(Flags & HEAP_NO_SERIALIZE))
+    {
+        RtlEnterHeapLock(Heap->LockVariable, TRUE);
+        HeapLocked = TRUE;
+
+        Flags |= HEAP_NO_SERIALIZE;
+    }
+
+    RtlpValidateHeap(Heap, FALSE);
+    Status = RtlpUsageHeap(Heap, Flags, Usage);
+
+    if (HeapLocked)
+        RtlLeaveHeapLock(Heap->LockVariable);
+
+    return Status;
+}
+
+PWSTR NTAPI
+RtlDebugQueryTagHeap(PVOID HeapHandle,
+                     ULONG Flags,
+                     USHORT TagIndex,
+                     BOOLEAN ResetCounters,
+                     PRTL_HEAP_TAG_INFO HeapTagInfo)
+{
+    PHEAP Heap = (PHEAP)HeapHandle;
+    BOOLEAN HeapLocked = FALSE;
+    PWSTR Result;
+
+    if (!HeapHandle || !HeapTagInfo)
+        return NULL;
+
+    if (Heap->Signature != HEAP_SIGNATURE)
+        return NULL;
+
+    Flags |= Heap->ForceFlags | HEAP_SKIP_VALIDATION_CHECKS;
+
+    if (!(Flags & HEAP_NO_SERIALIZE))
+    {
+        RtlEnterHeapLock(Heap->LockVariable, TRUE);
+        HeapLocked = TRUE;
+
+        Flags |= HEAP_NO_SERIALIZE;
+    }
+
+    RtlpValidateHeap(Heap, FALSE);
+    Result = RtlpQueryTagHeap(Heap, Flags, TagIndex, ResetCounters, HeapTagInfo);
+
+    if (HeapLocked)
+        RtlLeaveHeapLock(Heap->LockVariable);
+
+    return Result;
+}
+
+NTSTATUS NTAPI
+RtlDebugWalkHeap(HANDLE HeapHandle,
+                 PVOID HeapEntry)
+{
+    PHEAP Heap = (PHEAP)HeapHandle;
+    BOOLEAN HeapLocked = FALSE;
+    ULONG Flags;
+    NTSTATUS Status;
+
+    if (!HeapHandle || !HeapEntry)
+        return STATUS_INVALID_PARAMETER;
+
+    if (Heap->Signature != HEAP_SIGNATURE)
+        return STATUS_INVALID_HANDLE;
+
+    Flags = Heap->ForceFlags | HEAP_SKIP_VALIDATION_CHECKS;
+
+    if (!(Flags & HEAP_NO_SERIALIZE))
+    {
+        RtlEnterHeapLock(Heap->LockVariable, TRUE);
+        HeapLocked = TRUE;
+
+        Flags |= HEAP_NO_SERIALIZE;
+    }
+
+    RtlpValidateHeap(Heap, FALSE);
+    Status = RtlpWalkHeap(Heap, Flags, (PRTL_HEAP_WALK_ENTRY)HeapEntry);
+
+    if (HeapLocked)
+        RtlLeaveHeapLock(Heap->LockVariable);
+
+    return Status;
+}
+
 /* EOF */
