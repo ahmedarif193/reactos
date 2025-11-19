@@ -75,6 +75,8 @@ KdpGetDebugMode(
             {
                 /* Valid port found, enable Serial Debugging */
                 KdpDebugMode.Serial = TRUE;
+                /* Ensure KDBG reads input from serial when DEBUGPORT is COM */
+                KdbDebugState |= KD_DEBUG_KDSERIAL;
 
                 /* Set the port to use */
                 SerialPortNumber = Value;
@@ -86,6 +88,8 @@ KdpGetDebugMode(
             if (Value)
             {
                 KdpDebugMode.Serial = TRUE;
+                /* Ensure KDBG reads input from serial when DEBUGPORT is COM */
+                KdbDebugState |= KD_DEBUG_KDSERIAL;
                 SerialPortInfo.Address = UlongToPtr(Value);
                 SerialPortNumber = 0;
             }
