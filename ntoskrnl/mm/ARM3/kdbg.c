@@ -46,6 +46,11 @@ VOID MiDumpPoolConsumers(BOOLEAN CalledFromDbg, ULONG Tag, ULONG Mask, ULONG Fla
 
 #include <kdbg/kdb.h>
 
+static VOID ExpKdbgExtPrintIrp(PIRP Irp);
+BOOLEAN ExpKdbgExtPte(ULONG Argc, PCHAR Argv[]);
+BOOLEAN ExpKdbgExtDevStack(ULONG Argc, PCHAR Argv[]);
+BOOLEAN ExpKdbgExtDevObj(ULONG Argc, PCHAR Argv[]);
+
 BOOLEAN
 ExpKdbgExtPool(
     ULONG Argc,
@@ -85,15 +90,14 @@ ExpKdbgExtPool(
     }
     else
     {
-        KdbpPrint("Heap is unimplemented\n");
+        KdbpPrint("Usage: !pool <address> [flags]\n");
         return TRUE;
     }
 
-    /* No paging support! */
+    /* No paging support! If validity check fails, try anyway to mimic WinDBG tolerance. */
     if (!MmIsAddressValid(PoolPage))
     {
-        KdbpPrint("Address not accessible!\n");
-        return TRUE;
+        KdbpPrint("Warning: address %p not validated, attempting dump anyway.\n", PoolPage);
     }
 
     /* Get pool type */
@@ -139,6 +143,276 @@ ExpKdbgExtPool(
     while ((Entry->BlockSize != 0) && ((ULONG_PTR)Entry < (ULONG_PTR)PoolPage + PAGE_SIZE));
 
     return TRUE;
+}
+
+BOOLEAN
+ExpKdbgExtPte(
+    ULONG Argc,
+    PCHAR Argv[])
+{
+    ULONG_PTR Va;
+
+    if (Argc < 2 || !KdbpGetHexNumber(Argv[1], &Va))
+    {
+        KdbpPrint("Usage: !pte <VirtualAddress>\n");
+        return TRUE;
+    }
+
+#ifdef _M_AMD64
+    PMMPTE Pxe, Ppe, Pde, Pte;
+
+    Pxe = MiAddressToPxe((PVOID)Va);
+    Ppe = MiAddressToPpe((PVOID)Va);
+    Pde = MiAddressToPde((PVOID)Va);
+    Pte = MiAddressToPte((PVOID)Va);
+
+    if (!MmIsAddressValid(Pxe))
+    {
+        KdbpPrint("PXE %p not mapped\n", Pxe);
+        return TRUE;
+    }
+    KdbpPrint("PXE %p: %016I64x (%s)\n", Pxe, Pxe->u.Long, Pxe->u.Hard.Valid ? "valid" : "not valid");
+
+    if (!MmIsAddressValid(Ppe))
+    {
+        KdbpPrint("PPE %p not mapped\n", Ppe);
+        return TRUE;
+    }
+    KdbpPrint("PPE %p: %016I64x (%s)\n", Ppe, Ppe->u.Long, Ppe->u.Hard.Valid ? "valid" : "not valid");
+
+    if (!MmIsAddressValid(Pde))
+    {
+        KdbpPrint("PDE %p not mapped\n", Pde);
+        return TRUE;
+    }
+    KdbpPrint("PDE %p: %016I64x (%s%s)\n",
+              Pde, Pde->u.Long,
+              Pde->u.Hard.Valid ? "valid" : "not valid",
+              (Pde->u.Hard.LargePage && Pde->u.Hard.Valid) ? " largepage" : "");
+    if (Pde->u.Hard.LargePage && Pde->u.Hard.Valid)
+    {
+        KdbpPrint(" Pfn %lx Global=%d NX=%d RW=%d US=%d WT=%d CD=%d\n",
+                  Pde->u.Hard.PageFrameNumber,
+                  Pde->u.Hard.Global,
+                  Pde->u.Hard.NoExecute,
+                  Pde->u.Hard.Write,
+                  Pde->u.Hard.Owner,
+                  Pde->u.Hard.WriteThrough,
+                  Pde->u.Hard.CacheDisable);
+        return TRUE;
+    }
+
+    if (!MmIsAddressValid(Pte))
+    {
+        KdbpPrint("PTE %p not mapped\n", Pte);
+        return TRUE;
+    }
+    KdbpPrint("PTE %p: %016I64x (%s)\n", Pte, Pte->u.Long, Pte->u.Hard.Valid ? "valid" : "not valid");
+    if (Pte->u.Hard.Valid)
+    {
+        KdbpPrint(" Pfn %lx Global=%d NX=%d RW=%d US=%d WT=%d CD=%d\n",
+                  Pte->u.Hard.PageFrameNumber,
+                  Pte->u.Hard.Global,
+                  Pte->u.Hard.NoExecute,
+                  Pte->u.Hard.Write,
+                  Pte->u.Hard.Owner,
+                  Pte->u.Hard.WriteThrough,
+                  Pte->u.Hard.CacheDisable);
+    }
+#else
+    UNREFERENCED_PARAMETER(Va);
+    KdbpPrint("!pte is not implemented on this architecture\n");
+#endif
+
+    return TRUE;
+}
+
+BOOLEAN
+ExpKdbgExtDevStack(
+    ULONG Argc,
+    PCHAR Argv[])
+{
+    PDEVICE_OBJECT DeviceObject = NULL;
+    PFILE_OBJECT FileObject = NULL;
+    BOOLEAN Parsed = FALSE;
+
+    if (Argc < 2)
+    {
+        KdbpPrint("Usage: !devstack <DeviceObject|DevicePath>\n");
+        return TRUE;
+    }
+
+    /* Try hex address first */
+    {
+        ULONG_PTR Ptr;
+        if (KdbpGetHexNumber(Argv[1], &Ptr))
+        {
+            DeviceObject = (PDEVICE_OBJECT)(ULONG_PTR)Ptr;
+            Parsed = TRUE;
+        }
+    }
+
+    if (!Parsed)
+    {
+        ANSI_STRING AnsiName;
+        UNICODE_STRING UniName;
+
+        RtlInitAnsiString(&AnsiName, Argv[1]);
+        if (NT_SUCCESS(RtlAnsiStringToUnicodeString(&UniName, &AnsiName, TRUE)))
+        {
+            NTSTATUS Status = IoGetDeviceObjectPointer(&UniName,
+                                                       FILE_READ_ATTRIBUTES,
+                                                       &FileObject,
+                                                       &DeviceObject);
+            if (!NT_SUCCESS(Status))
+            {
+                KdbpPrint("IoGetDeviceObjectPointer failed: 0x%08lx\n", Status);
+                RtlFreeUnicodeString(&UniName);
+                return TRUE;
+            }
+            RtlFreeUnicodeString(&UniName);
+            Parsed = TRUE;
+        }
+    }
+
+    if (!Parsed || !DeviceObject)
+    {
+        KdbpPrint("Unable to resolve device object\n");
+        return TRUE;
+    }
+
+    /* Walk the attachment chain downward */
+    KdbpPrint("Device stack starting at %p\n", DeviceObject);
+    for (ULONG depth = 0; DeviceObject && depth < 64; depth++)
+    {
+        PDRIVER_OBJECT Driver = DeviceObject->DriverObject;
+        PUNICODE_STRING DriverName = Driver ? &Driver->DriverName : NULL;
+        KdbpPrint(" [%02lu] DevObj %p Type=%x Flags=%08lx Driver=%p %wZ\n",
+                  depth,
+                  DeviceObject,
+                  DeviceObject->DeviceType,
+                  DeviceObject->Flags,
+                  Driver,
+                  DriverName ? DriverName : NULL);
+        DeviceObject = DeviceObject->AttachedDevice;
+    }
+
+    if (FileObject)
+        ObDereferenceObject(FileObject);
+
+    return TRUE;
+}
+
+BOOLEAN
+ExpKdbgExtDevObj(
+    ULONG Argc,
+    PCHAR Argv[])
+{
+    ULONG_PTR Ptr;
+    PDEVICE_OBJECT DevObj;
+
+    if (Argc < 2 || !KdbpGetHexNumber(Argv[1], &Ptr))
+    {
+        KdbpPrint("Usage: !devobj <DeviceObject>\n");
+        return TRUE;
+    }
+
+    DevObj = (PDEVICE_OBJECT)Ptr;
+    if (!MmIsAddressValid(DevObj))
+    {
+        KdbpPrint("Device object %p is not accessible\n", DevObj);
+        return TRUE;
+    }
+
+    KdbpPrint("DeviceObject %p Type=%x Size=%x RefCount=%u\n",
+              DevObj, DevObj->Type, DevObj->Size, DevObj->ReferenceCount);
+    KdbpPrint(" Flags=%08lx Characteristics=%08lx Alignment=%x StackSize=%x\n",
+              DevObj->Flags, DevObj->Characteristics, DevObj->AlignmentRequirement, DevObj->StackSize);
+    KdbpPrint(" Vpb=%p DeviceType=%x Attached=%p DriverObject=%p\n",
+              DevObj->Vpb, DevObj->DeviceType, DevObj->AttachedDevice, DevObj->DriverObject);
+
+    if (DevObj->DriverObject)
+    {
+        PUNICODE_STRING Dn = &DevObj->DriverObject->DriverName;
+        KdbpPrint(" DriverName: %wZ\n", Dn);
+    }
+
+    if (DevObj->DeviceExtension)
+    {
+        KdbpPrint(" DeviceExtension=%p\n", DevObj->DeviceExtension);
+    }
+    return TRUE;
+}
+
+BOOLEAN
+ExpKdbgExtIrp(
+    ULONG Argc,
+    PCHAR Argv[])
+{
+    PIRP Irp;
+
+    if (Argc < 2 || !KdbpGetHexNumber(Argv[1], (PULONG_PTR)&Irp))
+    {
+        KdbpPrint("Usage: !irp <IrpAddress>\n");
+        return TRUE;
+    }
+
+    if (!MmIsAddressValid(Irp))
+    {
+        KdbpPrint("IRP %p is not accessible\n", Irp);
+        return TRUE;
+    }
+
+    ExpKdbgExtPrintIrp(Irp);
+    return TRUE;
+}
+
+static
+VOID
+ExpKdbgExtPrintIrp(
+    PIRP Irp)
+{
+    UCHAR i;
+    PIO_STACK_LOCATION Stack, Current;
+
+    KdbpPrint("IRP %p Type %x Size %x Flags %lx\n",
+              Irp, Irp->Type, Irp->Size, Irp->Flags);
+    KdbpPrint("  Mdl=%p Tl=%p Over.CurrentStack=%p Cancel=%x PendingReturned=%x\n",
+              Irp->MdlAddress,
+              Irp->Tail.Overlay.Thread,
+              Irp->Tail.Overlay.CurrentStackLocation,
+              Irp->Cancel,
+              Irp->PendingReturned);
+    KdbpPrint("  IoStatus.Status=%lx Information=%Ix\n",
+              Irp->IoStatus.Status,
+              Irp->IoStatus.Information);
+    KdbpPrint("  RequestorMode=%x StackCount=%x CurrentLocation=%x\n",
+              Irp->RequestorMode,
+              Irp->StackCount,
+              Irp->CurrentLocation);
+
+    Stack = (PIO_STACK_LOCATION)(Irp + 1);
+    Current = Irp->Tail.Overlay.CurrentStackLocation;
+
+    if (!MmIsAddressValid(Stack) || !MmIsAddressValid(Current))
+    {
+        KdbpPrint("  Stack locations not accessible\n");
+        return;
+    }
+
+    for (i = 0; i < Irp->StackCount; i++)
+    {
+        BOOLEAN IsCurr = ((Stack + i) == Current);
+        KdbpPrint("  %c Stack[%u]: Major=%x Minor=%x DevObj=%p FileObj=%p Completion=%p Context=%p\n",
+                  IsCurr ? '*' : ' ',
+                  i,
+                  Stack[i].MajorFunction,
+                  Stack[i].MinorFunction,
+                  Stack[i].DeviceObject,
+                  Stack[i].FileObject,
+                  Stack[i].CompletionRoutine,
+                  Stack[i].Context);
+    }
 }
 
 static

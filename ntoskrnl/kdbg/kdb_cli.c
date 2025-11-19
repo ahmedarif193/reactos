@@ -89,6 +89,10 @@ BOOLEAN ExpKdbgExtPoolUsed(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtPoolFind(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtFileCache(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtDefWrites(ULONG Argc, PCHAR Argv[]);
+BOOLEAN ExpKdbgExtPte(ULONG Argc, PCHAR Argv[]);
+BOOLEAN ExpKdbgExtDevObj(ULONG Argc, PCHAR Argv[]);
+BOOLEAN ExpKdbgExtDevStack(ULONG Argc, PCHAR Argv[]);
+BOOLEAN ExpKdbgExtIrp(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtIrpFind(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtHandle(ULONG Argc, PCHAR Argv[]);
 #endif
@@ -355,6 +359,7 @@ static const struct
     { "disasm", "disasm [address] [L count]", "Disassemble count instructions at address.", KdbpCmdDisassembleX },
 #endif // _M_IX86
     { "x", "x [address] [L count]", "Display count dwords, starting at address.", KdbpCmdDisassembleX },
+    { "dd", "dd [address] [L count]", "Display count dwords, starting at address.", KdbpCmdDisassembleX },
     { "regs", "regs", "Display general purpose registers.", KdbpCmdRegs },
     { "cregs", "cregs", "Display control, descriptor table and task segment registers.", KdbpCmdRegs },
     { "sregs", "sregs", "Display status registers.", KdbpCmdRegs },
@@ -405,6 +410,10 @@ static const struct
     { "!pool", "!pool [Address [Flags]]", "Display information about pool allocations.", ExpKdbgExtPool },
     { "!poolused", "!poolused [Flags [Tag]]", "Display pool usage.", ExpKdbgExtPoolUsed },
     { "!poolfind", "!poolfind Tag [Pool]", "Search for pool tag allocations.", ExpKdbgExtPoolFind },
+    { "!pte", "!pte <Address>", "Display page table entries for a virtual address.", ExpKdbgExtPte },
+    { "!devobj", "!devobj <DeviceObject>", "Display a device object.", ExpKdbgExtDevObj },
+    { "!devstack", "!devstack <DeviceObject|DevicePath>", "Display device attachment stack.", ExpKdbgExtDevStack },
+    { "!irp", "!irp <Address>", "Display information about an IRP.", ExpKdbgExtIrp },
     { "!filecache", "!filecache", "Display cache usage.", ExpKdbgExtFileCache },
     { "!defwrites", "!defwrites", "Display cache write values.", ExpKdbgExtDefWrites },
     { "!irpfind", "!irpfind [Pool [startaddress [criteria data]]]", "Lists IRPs potentially matching criteria.", ExpKdbgExtIrpFind },
@@ -459,13 +468,15 @@ KdbpGetHexNumber(
     OUT ULONG_PTR *pulValue)
 {
     char *endptr;
+    unsigned long long tmp;
 
     /* Skip optional '0x' prefix */
     if ((pszNum[0] == '0') && ((pszNum[1] == 'x') || (pszNum[1] == 'X')))
         pszNum += 2;
 
-    /* Make a number from the string (hex) */
-    *pulValue = strtoul(pszNum, &endptr, 16);
+    /* Make a number from the string (hex) with full pointer width */
+    tmp = strtoull(pszNum, &endptr, 16);
+    *pulValue = (ULONG_PTR)tmp;
 
     return (*endptr == '\0');
 }
@@ -815,7 +826,9 @@ KdbpCmdDisassembleX(
     ULONG_PTR Address = KeGetContextPc(KdbCurrentTrapFrame);
     LONG InstLen;
 
-    if (Argv[0][0] == 'x') /* display memory */
+    const BOOLEAN IsDump = (Argv[0][0] == 'x') || (strcmp(Argv[0], "dd") == 0);
+
+    if (IsDump) /* display memory */
         Count = 16;
     else /* disassemble */
         Count = 10;
@@ -855,6 +868,18 @@ KdbpCmdDisassembleX(
     /* Evaluate the expression */
     if (Argc > 1)
     {
+        if (IsDump)
+        {
+            ULONG_PTR Tmp;
+
+            /* For dumps, prefer straight hex parsing to avoid noisy expr errors. */
+            if (KdbpGetHexNumber(Argv[1], &Tmp))
+            {
+                Address = Tmp;
+                goto have_address;
+            }
+        }
+
         if (!KdbpEvaluateExpression(Argv[1], KdbPromptStr.Length + (Argv[1]-Argv[0]), &Result))
             return TRUE;
 
@@ -863,13 +888,14 @@ KdbpCmdDisassembleX(
 
         Address = (ULONG_PTR)Result;
     }
-    else if (Argv[0][0] == 'x')
+    else if (IsDump)
     {
-        KdbpPrint("x: Address argument required.\n");
+        KdbpPrint("%s: Address argument required.\n", Argv[0]);
         return TRUE;
     }
 
-    if (Argv[0][0] == 'x')
+have_address:
+    if (IsDump)
     {
         /* Display dwords */
         ul = 0;
@@ -3416,8 +3442,7 @@ KdbpCliMainLoop(
          * Repeat the last one if the user pressed Enter.
          * This reduces the risk of RSI when single-stepping!
          */
-        // TEMP HACK! Issue an empty string instead of duplicating "kdb:>"
-        SIZE_T CmdLen = KdbPrompt(/*KdbPromptStr.Buffer*/"", Command, sizeof(Command));
+        SIZE_T CmdLen = KdbPrompt(KdbPromptStr.Buffer, Command, sizeof(Command));
         if (CmdLen == 0)
         {
             /* Nothing received but the user didn't press Enter, retry */
