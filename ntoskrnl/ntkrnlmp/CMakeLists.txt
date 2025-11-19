@@ -34,6 +34,8 @@ endif()
 set_module_type(ntkrnlmp kernel)
 target_compile_definitions(ntkrnlmp PRIVATE CONFIG_SMP)
 
+add_dependencies(ntkrnlmp ntos_syscalls)
+
 # dynamic analysis switches
 if(STACK_PROTECTOR)
     target_sources(ntkrnlmp PRIVATE $<TARGET_OBJECTS:gcc_ssp_nt>)

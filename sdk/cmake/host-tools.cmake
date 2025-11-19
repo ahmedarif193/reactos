@@ -51,7 +51,25 @@ function(setup_host_tools)
         endif()
     endif()
 
-    list(APPEND HOST_TOOLS asmpp bin2c widl gendib cabman fatten hpp isohybrid mkhive mkisofs obj2bin spec2def geninc mkshelllink txt2nls utf16le xml2sdb)
+    list(APPEND HOST_TOOLS
+        asmpp
+        bin2c
+        widl
+        gendib
+        cabman
+        fatten
+        hpp
+        isohybrid
+        mkhive
+        mkisofs
+        obj2bin
+        spec2def
+        geninc
+        mkshelllink
+        txt2nls
+        utf16le
+        xml2sdb
+        gen_syscalls)
     if(NOT MSVC)
         list(APPEND HOST_TOOLS pefixup)
         list(APPEND HOST_TOOLS rsym)

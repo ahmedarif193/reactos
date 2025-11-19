@@ -179,6 +179,9 @@ extern PGDI_BATCHFLUSH_ROUTINE KeGdiFlushUserBatch;
 extern ULONGLONG BootCycles, BootCyclesEnd;
 extern ULONG ProcessCount;
 extern VOID __cdecl KiInterruptTemplate(VOID);
+#if DBG
+VOID KiDbgValidateServiceTable(VOID);
+#endif
 
 /* MACROS *************************************************************************/
 

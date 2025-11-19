@@ -49,6 +49,8 @@ if((NT_ARCH STREQUAL "i386" OR NT_ARCH STREQUAL "amd64") AND
 endif()
 set_module_type(ntoskrnl kernel)
 
+add_dependencies(ntoskrnl ntos_syscalls)
+
 source_group(TREE ${REACTOS_SOURCE_DIR}/ntoskrnl PREFIX "Source Files" FILES ${NTOSKRNL_SOURCE})
 
 target_link_libraries(ntoskrnl cportlib csq ${PSEH_LIB} arbiter cmlib ntlsalib rtl ${ROSSYM_LIB} libcntpr setjmp wdmguid poguid ioevent)
@@ -67,4 +69,4 @@ add_subdirectory(ntkrnlmp)
 add_asm_files(ntdllsys_asm ntdll.S)
 add_library(ntdllsys ${ntdllsys_asm})
 set_target_properties(ntdllsys PROPERTIES LINKER_LANGUAGE "C")
-add_dependencies(ntdllsys asm)
+add_dependencies(ntdllsys asm ntos_syscalls)

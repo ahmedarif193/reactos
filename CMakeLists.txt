@@ -379,6 +379,53 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
 
     add_dependency_header()
 
+    # Syscall generator outputs (host-side tool)
+    set(NTOS_SYSCALL_HEADER ${REACTOS_BINARY_DIR}/ntoskrnl/include/internal/syscall_table.h)
+    set(NTDLL_SYSCALLS_ASM ${REACTOS_BINARY_DIR}/dll/ntdll/dispatch/amd64/ntdll_syscalls.S)
+    set(NTOS_SYSCALLS_BODY ${REACTOS_BINARY_DIR}/ntoskrnl/include/internal/syscalls_body.h)
+    set(NTOS_SYSCALL_IDS ${REACTOS_BINARY_DIR}/ntoskrnl/include/internal/syscall_ids.h)
+
+    # Locate the gen_syscalls host tool and remember which target builds it.
+    set(_GEN_SYSCALLS_DEP_TARGET)
+    set(_GEN_SYSCALLS_EXE)
+    if(TARGET native-gen_syscalls)
+        set(_GEN_SYSCALLS_DEP_TARGET native-gen_syscalls)
+        get_target_property(_GEN_SYSCALLS_EXE native-gen_syscalls IMPORTED_LOCATION)
+    elseif(TARGET gen_syscalls)
+        set(_GEN_SYSCALLS_DEP_TARGET gen_syscalls)
+        if(DEFINED GEN_SYSCALLS_OUTPUT_FILE)
+            set(_GEN_SYSCALLS_EXE ${GEN_SYSCALLS_OUTPUT_FILE})
+        else()
+            set(_GEN_SYSCALLS_EXE ${REACTOS_BINARY_DIR}/gen_syscalls${CMAKE_EXECUTABLE_SUFFIX})
+        endif()
+    endif()
+
+    if(NOT _GEN_SYSCALLS_EXE)
+        message(FATAL_ERROR "gen_syscalls tool not available; ensure host tools were configured")
+    endif()
+
+    add_custom_command(
+        OUTPUT ${NTOS_SYSCALL_HEADER} ${NTDLL_SYSCALLS_ASM} ${NTOS_SYSCALLS_BODY} ${NTOS_SYSCALL_IDS}
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+                ${REACTOS_BINARY_DIR}/ntoskrnl/include/internal
+                ${REACTOS_BINARY_DIR}/dll/ntdll/dispatch/amd64
+        COMMAND ${_GEN_SYSCALLS_EXE}
+                ${REACTOS_SOURCE_DIR}/ntoskrnl/sysfuncs.lst
+                ${NTOS_SYSCALL_HEADER}
+                ${NTDLL_SYSCALLS_ASM}
+                ${NTOS_SYSCALLS_BODY}
+                ${NTOS_SYSCALL_IDS}
+        DEPENDS ${_GEN_SYSCALLS_EXE}
+                ${REACTOS_SOURCE_DIR}/ntoskrnl/sysfuncs.lst
+        VERBATIM
+        COMMENT "Generating syscall_table.h and ntdll_syscalls.S from sysfuncs.lst")
+
+    add_custom_target(ntos_syscalls ALL
+        DEPENDS ${NTOS_SYSCALL_HEADER} ${NTDLL_SYSCALLS_ASM} ${NTOS_SYSCALLS_BODY} ${NTOS_SYSCALL_IDS})
+    if(_GEN_SYSCALLS_DEP_TARGET)
+        add_dependencies(ntos_syscalls ${_GEN_SYSCALLS_DEP_TARGET})
+    endif()
+
     add_subdirectory(sdk/include)
 
     if(ARCH MATCHES "64$")

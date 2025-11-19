@@ -40,7 +40,11 @@ list(APPEND SOURCE
 if(ARCH STREQUAL "i386")
     list(APPEND ASM_SOURCE dispatch/i386/dispatch.S)
 elseif(ARCH STREQUAL "amd64")
-    list(APPEND ASM_SOURCE dispatch/amd64/dispatch.S)
+    set(_NTDLL_SYSCALLS_S ${REACTOS_BINARY_DIR}/dll/ntdll/dispatch/amd64/ntdll_syscalls.S)
+    set_source_files_properties(${_NTDLL_SYSCALLS_S} PROPERTIES GENERATED TRUE)
+    list(APPEND ASM_SOURCE
+        dispatch/amd64/dispatch.S
+        ${_NTDLL_SYSCALLS_S})
 elseif(ARCH STREQUAL "arm")
     list(APPEND ASM_SOURCE dispatch/arm/stubs_asm.s)
 else()
@@ -59,13 +63,19 @@ add_library(ntdll MODULE
     def/ntdll.rc
     ${CMAKE_CURRENT_BINARY_DIR}/ntdll.def)
 
+add_dependencies(ntdll ntos_syscalls)
+
 set_module_type(ntdll win32dll ENTRYPOINT 0)
 #############################################
 ## HACK FOR MSVC COMPILATION WITH win32dll ##
 set_subsystem(ntdll console)
 ################# END  HACK #################
 
-target_link_libraries(ntdll ntdll_vista_static etwtrace csrlib rtl rtl_um rtl_vista ntdllsys libcntpr setjmp uuid ${PSEH_LIB})
+if(ARCH STREQUAL "amd64")
+    target_link_libraries(ntdll ntdll_vista_static etwtrace csrlib rtl rtl_um rtl_vista libcntpr setjmp uuid ${PSEH_LIB})
+else()
+    target_link_libraries(ntdll ntdll_vista_static etwtrace csrlib rtl rtl_um rtl_vista ntdllsys libcntpr setjmp uuid ${PSEH_LIB})
+endif()
 if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
     target_link_libraries(ntdll cryptlib)
 endif()

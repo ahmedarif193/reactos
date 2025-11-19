@@ -27,6 +27,8 @@ target_link_libraries(obj2bin PRIVATE host_includes)
 add_host_tool(spec2def spec2def/spec2def.c)
 add_host_tool(utf16le utf16le/utf16le.cpp)
 
+add_subdirectory(gen_syscalls)
+
 add_subdirectory(asmpp)
 add_subdirectory(cabman)
 add_subdirectory(fatten)

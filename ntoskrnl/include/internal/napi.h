@@ -22,18 +22,21 @@ NtCancelIoFileEx(
     _In_opt_ PIO_STATUS_BLOCK IoRequestToCancel,
     _Out_ PIO_STATUS_BLOCK IoStatusBlock);
 
+/* Generated from ntoskrnl/sysfuncs.lst by gen_syscalls */
+#include <internal/syscall_table.h>
+
 #define SVC_(name, argcount) (ULONG_PTR)Nt##name,
 ULONG_PTR MainSSDT[] = {
-#include "sysfuncs.h"
+#include <internal/syscalls_body.h>
 };
 #undef SVC_
 
 #define SVC_(name, argcount) argcount * sizeof(void *),
 UCHAR MainSSPT[] = {
-#include "sysfuncs.h"
+#include <internal/syscalls_body.h>
 };
+#undef SVC_
 
 #define MIN_SYSCALL_NUMBER    0
-#define NUMBER_OF_SYSCALLS    (sizeof(MainSSPT) / sizeof(MainSSPT[0]))
 #define MAX_SYSCALL_NUMBER    (NUMBER_OF_SYSCALLS - 1)
 ULONG MainNumberOfSysCalls = NUMBER_OF_SYSCALLS;

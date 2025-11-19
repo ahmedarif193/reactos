@@ -12,6 +12,9 @@
 #define NDEBUG
 #include <debug.h>
 #include <internal/napi.h>
+#if DBG
+#include <internal/syscall_ids.h>
+#endif
 
 /* GLOBALS *******************************************************************/
 
@@ -60,6 +63,24 @@ KSPIN_LOCK KiTimerTableLock[LOCK_QUEUE_TIMER_TABLE_LOCKS];
 KSPIN_LOCK KiReverseStallIpiLock;
 
 /* FUNCTIONS *****************************************************************/
+
+#if DBG
+VOID
+KiDbgValidateServiceTable(VOID)
+{
+    PKSERVICE_TABLE_DESCRIPTOR Table = &KeServiceDescriptorTable[NTOS_SERVICE_INDEX];
+
+#define SSDT_ASSERT_ENTRY(_Id, _Func) \
+    ASSERTMSG("SSDT limit too small for " #_Func, SYSCALL_ID_##_Id < Table->Limit); \
+    ASSERTMSG("SSDT entry mismatch for " #_Func, Table->Base[SYSCALL_ID_##_Id] == (ULONG_PTR)(_Func))
+
+    SSDT_ASSERT_ENTRY(QuerySystemInformation, NtQuerySystemInformation);
+    SSDT_ASSERT_ENTRY(GetPlugPlayEvent, NtGetPlugPlayEvent);
+    SSDT_ASSERT_ENTRY(AllocateVirtualMemory, NtAllocateVirtualMemory);
+
+#undef SSDT_ASSERT_ENTRY
+}
+#endif
 
 CODE_SEG("INIT")
 VOID
@@ -111,6 +132,10 @@ KiInitSystem(VOID)
     RtlCopyMemory(KeServiceDescriptorTableShadow,
                   KeServiceDescriptorTable,
                   sizeof(KeServiceDescriptorTable));
+
+#if DBG
+    KiDbgValidateServiceTable();
+#endif
 }
 
 CODE_SEG("INIT")

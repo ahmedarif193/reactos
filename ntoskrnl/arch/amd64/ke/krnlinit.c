@@ -282,6 +282,10 @@ KiInitializeKernel(IN PKPROCESS InitProcess,
                   KeServiceDescriptorTable,
                   sizeof(KeServiceDescriptorTable));
 
+#if DBG
+    KiDbgValidateServiceTable();
+#endif
+
     /* Initialize the Idle Process and the Process Listhead */
     InitializeListHead(&KiProcessListHead);
     PageDirectory[0] = 0;
@@ -314,4 +318,3 @@ KiInitializeKernel(IN PKPROCESS InitProcess,
     if (!DpcStack) KeBugCheckEx(NO_PAGES_AVAILABLE, 1, 0, 0, 0);
     Prcb->DpcStack = DpcStack;
 }
-

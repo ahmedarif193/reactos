@@ -7,7 +7,7 @@
 
 #define SVC_(name, argcount) STUB_U name
 
-#include <sysfuncs.h>
+#include <internal/syscalls_body.h>
 
     END
 
@@ -17,7 +17,7 @@
 
 #define SVC_(name, argcount) STUB_U name, argcount
 
-#include <sysfuncs.h>
+#include <internal/syscalls_body.h>
 
 END
 #endif

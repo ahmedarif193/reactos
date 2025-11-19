@@ -7,7 +7,7 @@
 
 #define SVC_(name, argcount) STUB_K name
 
-#include <sysfuncs.h>
+#include <internal/syscalls_body.h>
 
 #else
 
@@ -23,7 +23,7 @@ EXTERN KiZwSystemService:PROC
 
 #define SVC_(name, argcount) STUB_K name, argcount
 
-#include <sysfuncs.h>
+#include <internal/syscalls_body.h>
 
 #endif
 
