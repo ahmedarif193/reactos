@@ -5,26 +5,67 @@
  * COPYRIGHT:   Copyright 2024 Timo Kreuzer <timo.kreuzer@reactos.org>
  */
 
-#include <stdexcept>
-#include <cstdarg>
-#include <cstring>
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
 #include <malloc.h>
 
-namespace std {
+#if defined(__has_include)
+#  if __has_include(<stdexcept>)
+#    define PAL_STDCPP_HAS_STDEXCEPT 1
+#    include <stdexcept>
+#  elif __has_include(<exception>)
+#    define PAL_STDCPP_HAS_EXCEPTION 1
+#    include <exception>
+#  endif
+#endif
 
-class out_of_range_error : public exception
+#ifdef PAL_STDCPP_FORCE_THROW_OUT_OF_RANGE_FMT
+#undef PAL_STDCPP_HAS_STDEXCEPT
+#endif
+
+#if !defined(PAL_STDCPP_HAS_STDEXCEPT)
+namespace std
+{
+#if !defined(PAL_STDCPP_HAS_EXCEPTION)
+class exception
+{
+public:
+    exception() noexcept = default;
+    virtual ~exception() = default;
+    virtual const char* what() const noexcept { return ""; }
+};
+#endif
+
+class out_of_range : public exception
 {
     char* m_msg;
 public:
-    explicit out_of_range_error(const char* msg) noexcept
+    explicit out_of_range(const char* msg) noexcept
+        : m_msg(nullptr)
     {
-        size_t len = strlen(msg) + 1;
-        m_msg = (char*)malloc(len);
-        strcpy(m_msg, msg);
+        const size_t len = strlen(msg) + 1;
+        m_msg = static_cast<char*>(malloc(len));
+        if (m_msg)
+            memcpy(m_msg, msg, len);
     }
-    virtual ~out_of_range_error() { free(m_msg); };
-    virtual const char* what() const noexcept { return m_msg; }
+
+    ~out_of_range() override
+    {
+        if (m_msg)
+            free(m_msg);
+    }
+
+    const char* what() const noexcept override
+    {
+        return m_msg ? m_msg : "";
+    }
 };
+}
+#endif
+
+#if !defined(PAL_STDCPP_HAS_STDEXCEPT) || defined(PAL_STDCPP_FORCE_THROW_OUT_OF_RANGE_FMT)
+namespace std {
 
 void __throw_out_of_range_fmt(const char *format, ...)
 {
@@ -36,7 +77,8 @@ void __throw_out_of_range_fmt(const char *format, ...)
     buffer[sizeof(buffer) - 1] = 0;
     va_end(argptr);
 
-    throw out_of_range_error(buffer);
+    throw out_of_range(buffer);
 }
 
 }  // namespace std
+#endif
