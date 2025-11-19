@@ -1,0 +1,3 @@
+add_library(unwindshim STATIC unwind_shim.c)
+target_compile_definitions(unwindshim PRIVATE _CRT_SECURE_NO_WARNINGS)
+add_dependencies(unwindshim xdk)

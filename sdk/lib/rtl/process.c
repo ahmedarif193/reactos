@@ -395,18 +395,15 @@ NTAPI
 RtlEncodePointer(IN PVOID Pointer)
 {
     ULONG Cookie;
-    NTSTATUS Status;
 
-    Status = ZwQueryInformationProcess(NtCurrentProcess(),
-                                       ProcessCookie,
-                                       &Cookie,
-                                       sizeof(Cookie),
-                                       NULL);
-    if(!NT_SUCCESS(Status))
-    {
-        DPRINT1("Failed to receive the process cookie! Status: 0x%lx\n", Status);
+    if (!SharedUserData)
         return Pointer;
-    }
+
+    Cookie = SharedUserData->Cookie;
+
+    /* Avoid early-boot failures: if no cookie is available, return the pointer unchanged */
+    if (Cookie == 0)
+        return Pointer;
 
     return (PVOID)((ULONG_PTR)Pointer ^ Cookie);
 }
@@ -428,7 +425,17 @@ PVOID
 NTAPI
 RtlEncodeSystemPointer(IN PVOID Pointer)
 {
-    return (PVOID)((ULONG_PTR)Pointer ^ SharedUserData->Cookie);
+    ULONG Cookie;
+
+    if (!SharedUserData)
+        return Pointer;
+
+    Cookie = SharedUserData->Cookie;
+
+    if (Cookie == 0)
+        return Pointer;
+
+    return (PVOID)((ULONG_PTR)Pointer ^ Cookie);
 }
 
 /*

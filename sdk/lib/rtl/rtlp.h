@@ -1,3 +1,5 @@
+#pragma once
+
 /*
  * COPYRIGHT:       See COPYING in the top level directory
  * PROJECT:         ReactOS System Libraries
@@ -109,6 +111,102 @@ RtlpFreeMemory(
 KPROCESSOR_MODE
 NTAPI
 RtlpGetMode(VOID);
+
+FORCEINLINE
+NTSTATUS
+RtlpAllocateVirtualMemory(
+    HANDLE ProcessHandle,
+    PVOID *BaseAddress,
+    ULONG_PTR ZeroBits,
+    PSIZE_T RegionSize,
+    ULONG AllocationType,
+    ULONG Protect)
+{
+#if defined(__NTDLL__) || defined(_NTDLLBUILD_)
+    return NtAllocateVirtualMemory(ProcessHandle,
+                                   BaseAddress,
+                                   ZeroBits,
+                                   RegionSize,
+                                   AllocationType,
+                                   Protect);
+#else
+    return ZwAllocateVirtualMemory(ProcessHandle,
+                                   BaseAddress,
+                                   ZeroBits,
+                                   RegionSize,
+                                   AllocationType,
+                                   Protect);
+#endif
+}
+
+FORCEINLINE
+NTSTATUS
+RtlpFreeVirtualMemory(
+    HANDLE ProcessHandle,
+    PVOID *BaseAddress,
+    PSIZE_T RegionSize,
+    ULONG FreeType)
+{
+#if defined(__NTDLL__) || defined(_NTDLLBUILD_)
+    return NtFreeVirtualMemory(ProcessHandle,
+                               BaseAddress,
+                               RegionSize,
+                               FreeType);
+#else
+    return ZwFreeVirtualMemory(ProcessHandle,
+                               BaseAddress,
+                               RegionSize,
+                               FreeType);
+#endif
+}
+
+FORCEINLINE
+NTSTATUS
+RtlpQueryVirtualMemory(
+    HANDLE ProcessHandle,
+    PVOID BaseAddress,
+    MEMORY_INFORMATION_CLASS MemoryInformationClass,
+    PVOID MemoryInformation,
+    SIZE_T MemoryInformationLength,
+    PSIZE_T ReturnLength OPTIONAL)
+{
+#if defined(__NTDLL__) || defined(_NTDLLBUILD_)
+    return NtQueryVirtualMemory(ProcessHandle,
+                                BaseAddress,
+                                MemoryInformationClass,
+                                MemoryInformation,
+                                MemoryInformationLength,
+                                ReturnLength);
+#else
+    return ZwQueryVirtualMemory(ProcessHandle,
+                                BaseAddress,
+                                MemoryInformationClass,
+                                MemoryInformation,
+                                MemoryInformationLength,
+                                ReturnLength);
+#endif
+}
+
+FORCEINLINE
+NTSTATUS
+RtlpQuerySystemInformation(
+    SYSTEM_INFORMATION_CLASS SystemInformationClass,
+    PVOID SystemInformation,
+    ULONG SystemInformationLength,
+    PULONG ReturnLength OPTIONAL)
+{
+#if defined(__NTDLL__) || defined(_NTDLLBUILD_)
+    return NtQuerySystemInformation(SystemInformationClass,
+                                    SystemInformation,
+                                    SystemInformationLength,
+                                    ReturnLength);
+#else
+    return ZwQuerySystemInformation(SystemInformationClass,
+                                    SystemInformation,
+                                    SystemInformationLength,
+                                    ReturnLength);
+#endif
+}
 
 BOOLEAN
 NTAPI
