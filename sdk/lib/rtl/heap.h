@@ -338,6 +338,23 @@ RtlpValidateHeapEntry(PHEAP Heap, PHEAP_ENTRY HeapEntry);
 BOOLEAN NTAPI
 RtlpValidateHeapHeaders(PHEAP Heap, BOOLEAN Recalculate);
 
+NTSTATUS NTAPI
+RtlpUsageHeap(PHEAP Heap,
+              ULONG Flags,
+              PRTL_HEAP_USAGE Usage);
+
+PWSTR NTAPI
+RtlpQueryTagHeap(PHEAP Heap,
+                 ULONG Flags,
+                 USHORT TagIndex,
+                 BOOLEAN ResetCounters,
+                 PRTL_HEAP_TAG_INFO HeapTagInfo);
+
+NTSTATUS NTAPI
+RtlpWalkHeap(PHEAP Heap,
+             ULONG Flags,
+             PRTL_HEAP_WALK_ENTRY Walk);
+
 /* heapdbg.c */
 NTSYSAPI
 HANDLE NTAPI
@@ -392,6 +409,22 @@ SIZE_T NTAPI
 RtlDebugSizeHeap(HANDLE HeapPtr,
                  ULONG Flags,
                  PVOID Ptr);
+
+NTSTATUS NTAPI
+RtlDebugUsageHeap(HANDLE HeapHandle,
+                  ULONG Flags,
+                  PRTL_HEAP_USAGE Usage);
+
+PWSTR NTAPI
+RtlDebugQueryTagHeap(PVOID HeapHandle,
+                     ULONG Flags,
+                     USHORT TagIndex,
+                     BOOLEAN ResetCounters,
+                     PRTL_HEAP_TAG_INFO HeapTagInfo);
+
+NTSTATUS NTAPI
+RtlDebugWalkHeap(HANDLE HeapHandle,
+                 PVOID HeapEntry);
 
 /* heappage.c */
 
