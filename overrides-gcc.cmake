@@ -1,6 +1,6 @@
 foreach(lang C CXX ASM)
   set(CMAKE_${lang}_FLAGS_DEBUG "")
-  set(CMAKE_${lang}_FLAGS_MINSIZEREL "-Os")
+  set(CMAKE_${lang}_FLAGS_MINSIZEREL "-O3")
   set(CMAKE_${lang}_FLAGS_RELEASE "")
   set(CMAKE_${lang}_FLAGS_RELWITHDEBINFO "-O2 -g")
 endforeach()
