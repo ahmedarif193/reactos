@@ -181,7 +181,7 @@ typedef wchar_t _Wint_t;
 
     #endif // __STDC_WANT_SECURE_LIB__
 
-    __inline int __CRTDECL fwide(
+    static __inline int __CRTDECL fwide(
         _In_opt_ FILE* _F,
         _In_     int   _M
         )
@@ -190,14 +190,14 @@ typedef wchar_t _Wint_t;
         return (_M);
     }
 
-    __inline int __CRTDECL mbsinit(
+    static __inline int __CRTDECL mbsinit(
         _In_opt_ mbstate_t const* _P
         )
     {
         return _P == NULL || _P->_Wchar == 0;
     }
 
-    __inline wchar_t _CONST_RETURN* __CRTDECL wmemchr(
+    static __inline wchar_t _CONST_RETURN* __CRTDECL wmemchr(
         _In_reads_(_N) wchar_t const* _S,
         _In_           wchar_t        _C,
         _In_           size_t         _N
@@ -210,7 +210,7 @@ typedef wchar_t _Wint_t;
         return 0;
     }
 
-    __inline int __CRTDECL wmemcmp(
+    static __inline int __CRTDECL wmemcmp(
         _In_reads_(_N) wchar_t const* _S1,
         _In_reads_(_N) wchar_t const* _S2,
         _In_           size_t         _N
@@ -225,7 +225,7 @@ typedef wchar_t _Wint_t;
 
     _Post_equal_to_(_S1)
     _At_buffer_(_S1, _Iter_, _N, _Post_satisfies_(_S1[_Iter_] == _S2[_Iter_]))
-    __inline _CRT_INSECURE_DEPRECATE_MEMORY(wmemcpy_s)
+    static __inline _CRT_INSECURE_DEPRECATE_MEMORY(wmemcpy_s)
     wchar_t* __CRTDECL wmemcpy(
         _Out_writes_all_(_N) wchar_t*       _S1,
         _In_reads_(_N)       wchar_t const* _S2,
@@ -236,7 +236,7 @@ typedef wchar_t _Wint_t;
         return (wchar_t*)memcpy(_S1, _S2, _N*sizeof(wchar_t));
     }
 
-    __inline _CRT_INSECURE_DEPRECATE_MEMORY(wmemmove_s)
+    static __inline _CRT_INSECURE_DEPRECATE_MEMORY(wmemmove_s)
     wchar_t* __CRTDECL wmemmove(
         _Out_writes_all_opt_(_N) wchar_t*       _S1,
         _In_reads_opt_(_N)       wchar_t const* _S2,
@@ -249,7 +249,7 @@ typedef wchar_t _Wint_t;
 
     _Post_equal_to_(_S)
     _At_buffer_(_S, _Iter_, _N, _Post_satisfies_(_S[_Iter_] == _C))
-    __inline wchar_t* __CRTDECL wmemset(
+    static __inline wchar_t* __CRTDECL wmemset(
         _Out_writes_all_(_N) wchar_t* _S,
         _In_                 wchar_t  _C,
         _In_                 size_t   _N

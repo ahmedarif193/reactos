@@ -209,6 +209,11 @@ static BOOL try_enable_vt_input(HANDLE input, DWORD *saved_mode)
     return TRUE;
 }
 
+static BOOL ensure_vt_input_enabled(HANDLE input, DWORD *saved_mode)
+{
+    return try_enable_vt_input(input, saved_mode);
+}
+
 static void restore_console_mode(HANDLE handle, DWORD saved_mode)
 {
     SetConsoleMode(handle, saved_mode);

@@ -17,6 +17,7 @@
 /* Kernel definitions (mock) */
 #define PAGED_CODE()
 #define DPRINT1(...) do { if (0) DbgPrint(__VA_ARGS__); } while (0)
+#define DPRINT(...)  do { if (0) DbgPrint(__VA_ARGS__); } while (0)
 
 typedef struct _IRP
 {
@@ -74,11 +75,18 @@ typedef struct _PDO_DEVICE_DATA
 {
     HANDLE AcpiHandle;
     PWCHAR HardwareIDs;
+    BOOLEAN DockDevice;
+    BOOLEAN PciRootLogged;
     BOOLEAN HasCachedBusNumber;
     ULONG CachedBusNumber;
     BOOLEAN HasPciRootBusRange;
     ULONG PciRootMinBus;
     ULONG PciRootMaxBus;
+#define ACPI_PCI_MAX_WINDOWS 8
+    ULONG PciRootIoWindowCount;
+    struct { ULONGLONG Start; ULONGLONG End; } PciRootIoWindows[ACPI_PCI_MAX_WINDOWS];
+    ULONG PciRootMemWindowCount;
+    struct { ULONGLONG Start; ULONGLONG End; BOOLEAN Prefetchable; } PciRootMemWindows[ACPI_PCI_MAX_WINDOWS];
 } PDO_DEVICE_DATA, *PPDO_DEVICE_DATA;
 
 #ifdef UNIT_TEST
