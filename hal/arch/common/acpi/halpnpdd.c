@@ -402,6 +402,7 @@ HalpPortRangeQueryAllocate(
     PHALP_PORT_RANGE_ENTRY RangeEntry;
 
     if (!NewRangeId || (Length == 0))
+    if (!NewRangeId)
     {
         return STATUS_INVALID_PARAMETER;
     }
