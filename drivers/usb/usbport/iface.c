@@ -690,7 +690,55 @@ USBHI_SetDeviceHandleData(IN PVOID BusContext,
                           IN PVOID DeviceHandle,
                           IN PDEVICE_OBJECT UsbDevicePdo)
 {
-    DPRINT1("USBHI_SetDeviceHandleData: UNIMPLEMENTED. FIXME.\n");
+    PDEVICE_OBJECT PdoDevice;
+    PUSBPORT_RHDEVICE_EXTENSION PdoExtension;
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PUSBPORT_DEVICE_HANDLE Handle;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+    BOOLEAN Found = FALSE;
+
+    PdoDevice = BusContext;
+
+    if (DeviceHandle == NULL || PdoDevice == NULL)
+    {
+        return;
+    }
+
+    PdoExtension = PdoDevice->DeviceExtension;
+    FdoExtension = PdoExtension->FdoDevice->DeviceExtension;
+    Handle = (PUSBPORT_DEVICE_HANDLE)DeviceHandle;
+
+    KeAcquireSpinLock(&FdoExtension->DeviceHandleSpinLock, &OldIrql);
+
+    Entry = FdoExtension->DeviceHandleList.Flink;
+    while (Entry != &FdoExtension->DeviceHandleList)
+    {
+        if (CONTAINING_RECORD(Entry,
+                              USBPORT_DEVICE_HANDLE,
+                              DeviceHandleLink) == Handle)
+        {
+            Found = TRUE;
+            break;
+        }
+
+        Entry = Entry->Flink;
+    }
+
+    KeReleaseSpinLock(&FdoExtension->DeviceHandleSpinLock, OldIrql);
+
+    if (!Found)
+    {
+        DPRINT1("USBHI_SetDeviceHandleData: invalid handle %p for PDO %p\n",
+                DeviceHandle,
+                UsbDevicePdo);
+    }
+    else
+    {
+        DPRINT("USBHI_SetDeviceHandleData: handle %p PDO %p\n",
+               DeviceHandle,
+               UsbDevicePdo);
+    }
 }
 
 /* USB bus driver Interface functions */

@@ -2610,24 +2610,36 @@ PipDeviceActionWorker(
                 break;
 
             case PiActionStartDevice:
-                // This action is triggered from usermode, when a driver is installed
-                // for a non-critical PDO
+                /* User-mode request to start a (typically non-critical) PDO. */
                 if (deviceNode->Flags & DNF_HAS_PROBLEM)
                 {
-                    DPRINT1("NOTE: attempt to start device with problem flags %wZ\n",
-                            &deviceNode->InstancePath);
+                    DPRINT1("PiActionStartDevice: refusing start of problem device %wZ Flags=0x%08lx State=%u\n",
+                            &deviceNode->InstancePath,
+                            deviceNode->Flags,
+                            deviceNode->State);
                     status = STATUS_UNSUCCESSFUL;
                     break;
                 }
 
-                /* If already started, nothing more to do */
+                /* Already started: nothing to do. */
                 if (deviceNode->State == DeviceNodeStarted)
                 {
+                    DPRINT("PiActionStartDevice: device already started %wZ\n",
+                           &deviceNode->InstancePath);
                     status = STATUS_SUCCESS;
                     break;
                 }
 
-                /* Otherwise drive the state machine from the current state */
+                /*
+                 * Drive the PnP state machine from the current state
+                 * to (re)start the device. This is safe for nodes that
+                 * are initialized but not yet started, and matches how
+                 * Windows restarts devices after driver install.
+                 */
+                DPRINT("PiActionStartDevice: starting %wZ from state %u Flags=0x%08lx\n",
+                       &deviceNode->InstancePath,
+                       deviceNode->State,
+                       deviceNode->Flags);
                 PiDevNodeStateMachine(deviceNode);
                 status = STATUS_SUCCESS;
                 break;
