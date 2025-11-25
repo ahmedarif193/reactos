@@ -336,6 +336,7 @@ typedef struct _ADAPTER_OBJECT {
 
    ULONG NumberOfMapRegisters;
    ULONG CommittedMapRegisters;
+   ULONG InitialMapBufferBytesGoal;
 
    PWAIT_CONTEXT_BLOCK CurrentWcb;
    KDEVICE_QUEUE ChannelWaitQueue;
@@ -356,6 +357,7 @@ typedef struct _ADAPTER_OBJECT {
    BOOLEAN Dma32BitAddresses;
    BOOLEAN Dma64BitAddresses;
    LIST_ENTRY AdapterList;
+   UCHAR NumaNode;
 } ADAPTER_OBJECT;
 
 typedef struct _GROW_WORK_ITEM {
@@ -367,7 +369,12 @@ typedef struct _GROW_WORK_ITEM {
 #define MAP_BASE_SW_SG 1
 
 PADAPTER_OBJECT NTAPI
-HalpDmaAllocateMasterAdapter(VOID);
+HalpDmaAllocateMasterAdapter(
+   IN ULONG RegisterCapacity,
+   IN ULONG InitialMapBufferBytes,
+   IN UCHAR NumaNode,
+   IN BOOLEAN Supports64Bit,
+   IN BOOLEAN LegacyAdapter);
 
 PDMA_ADAPTER NTAPI
 HalpGetDmaAdapter(

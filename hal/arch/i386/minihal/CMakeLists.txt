@@ -5,13 +5,12 @@
 add_definitions(-D_MINIHAL_)
 
 list(APPEND MINI_HAL_SOURCE
-    ../legacy/bus/bushndlr.c
+    ../../common/legacy/bus/bushndlr.c
     ../legacy/bus/cmosbus.c
     ../legacy/bus/isabus.c
-    ../legacy/bus/pcibus.c
-    ../legacy/bussupp.c
+    ../../common/legacy/bus/pcibus.c
+    ../../common/legacy/bussupp.c
     acpi_ecam_stubs.c
-    ../generic/dma.c
     ../generic/drive.c
     ../generic/misc.c
     ../generic/nmi.c

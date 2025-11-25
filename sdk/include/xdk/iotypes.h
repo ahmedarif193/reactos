@@ -3104,6 +3104,80 @@ typedef struct _ACPI_INTERFACE_STANDARD2 {
   PUNREGISTER_FOR_DEVICE_NOTIFICATIONS2 UnregisterForDeviceNotifications;
 } ACPI_INTERFACE_STANDARD2, *PACPI_INTERFACE_STANDARD2;
 
+typedef enum _ACPI_REG_TYPE {
+    PM1a_ENABLE,
+    PM1b_ENABLE,
+    PM1a_STATUS,
+    PM1b_STATUS,
+    PM1a_CONTROL,
+    PM1b_CONTROL,
+    GP_STATUS,
+    GP_ENABLE,
+    SMI_CMD,
+    MaxRegType
+} ACPI_REG_TYPE, *PACPI_REG_TYPE;
+
+typedef USHORT (*PREAD_ACPI_REGISTER) (
+  _In_ ACPI_REG_TYPE AcpiReg,
+  _In_ ULONG         Register);
+
+typedef VOID (*PWRITE_ACPI_REGISTER) (
+  _In_ ACPI_REG_TYPE AcpiReg,
+  _In_ ULONG         Register,
+  _In_ USHORT        Value
+  );
+
+typedef struct ACPI_REGS_INTERFACE_STANDARD {
+    //
+    // generic interface header
+    //
+    USHORT Size;
+    USHORT Version;
+    PVOID  Context;
+    PINTERFACE_REFERENCE   InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+
+    //
+    // READ/WRITE_ACPI_REGISTER functions
+    //
+    PREAD_ACPI_REGISTER  ReadAcpiRegister;
+    PWRITE_ACPI_REGISTER WriteAcpiRegister;
+
+} ACPI_REGS_INTERFACE_STANDARD, *PACPI_REGS_INTERFACE_STANDARD;
+
+
+typedef NTSTATUS (*PHAL_QUERY_ALLOCATE_PORT_RANGE) (
+  _In_ BOOLEAN IsSparse,
+  _In_ BOOLEAN PrimaryIsMmio,
+  _In_opt_ PVOID VirtBaseAddr,
+  _In_ PHYSICAL_ADDRESS PhysBaseAddr,  // Only valid if PrimaryIsMmio = TRUE
+  _In_ ULONG Length,                   // Only valid if PrimaryIsMmio = TRUE
+  _Out_ PUSHORT NewRangeId
+  );
+
+typedef VOID (*PHAL_FREE_PORT_RANGE)(
+    _In_ USHORT RangeId
+    );
+
+
+typedef struct _HAL_PORT_RANGE_INTERFACE {
+    //
+    // generic interface header
+    //
+    USHORT Size;
+    USHORT Version;
+    PVOID  Context;
+    PINTERFACE_REFERENCE   InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+
+    //
+    // QueryAllocateRange/FreeRange functions
+    //
+    PHAL_QUERY_ALLOCATE_PORT_RANGE QueryAllocateRange;
+    PHAL_FREE_PORT_RANGE FreeRange;
+
+} HAL_PORT_RANGE_INTERFACE, *PHAL_PORT_RANGE_INTERFACE;
+
 #if !defined(_AMD64_) && !defined(_ARM_)
 #include <pshpack4.h>
 #endif

@@ -4,6 +4,7 @@ get_filename_component(HAL_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
 set(HAL_ARCH "${ARCH}" CACHE STRING "HAL architecture (i386|amd64|arm64)")
 set(HAL_ARCH_DIR "${HAL_SOURCE_DIR}/../arch/${HAL_ARCH}")
 set(HAL_I386_DIR "${HAL_SOURCE_DIR}/../arch/i386")
+set(HAL_COMMON_DIR "${HAL_SOURCE_DIR}/../arch/common")
 set(HAL_AMD64_DIR "${HAL_SOURCE_DIR}/../arch/amd64")
 
 add_definitions(
@@ -16,6 +17,7 @@ add_dependencies(lib_hal_rtlpc bugcodes psdk xdk)
 include_directories(
     ${HAL_ARCH_DIR}/include
     ${HAL_I386_DIR}/include
+    ${HAL_COMMON_DIR}/include
     ${REACTOS_SOURCE_DIR}/ntoskrnl/include
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/fast486)
 

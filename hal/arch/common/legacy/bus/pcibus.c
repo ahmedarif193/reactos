@@ -1,7 +1,7 @@
 /*
  * PROJECT:         ReactOS HAL
  * LICENSE:         GPL - See COPYING in the top level directory
- * FILE:            hal/halx86/legacy/bus/pcibus.c
+ * FILE:            hal/arch/common/legacy/bus/pcibus.c
  * PURPOSE:         PCI Bus Support (Configuration Space, Resource Allocation)
  * PROGRAMMERS:     Alex Ionescu (alex.ionescu@reactos.org)
  */
@@ -35,8 +35,11 @@ typedef struct _HALP_PCI_GSI_INFO
     UCHAR Pin;
 } HALP_PCI_GSI_INFO, *PHALP_PCI_GSI_INFO;
 
-static PHALP_PCI_GSI_INFO HalpPciGsiInfo;
-static ULONG HalpPciGsiCapacity;
+#define HALP_PCI_GSI_STATIC_CAPACITY 256
+static HALP_PCI_GSI_INFO HalpPciGsiStaticInfo[HALP_PCI_GSI_STATIC_CAPACITY];
+static PHALP_PCI_GSI_INFO HalpPciGsiInfo = HalpPciGsiStaticInfo;
+static ULONG HalpPciGsiCapacity = HALP_PCI_GSI_STATIC_CAPACITY;
+static BOOLEAN HalpPciGsiInfoUsesPool;
 static PHAL_ACPI_PCI_ROUTE_QUERY HalpPciRouteQueryCallback;
 BOOLEAN HalpPciBusRangeKnown;
 
@@ -742,13 +745,16 @@ static
 VOID
 HalpPciResetGsiTable(VOID)
 {
-    if (HalpPciGsiInfo)
+    if (HalpPciGsiInfoUsesPool && HalpPciGsiInfo)
     {
         ExFreePoolWithTag(HalpPciGsiInfo, HALP_PCI_GSI_TAG);
-        HalpPciGsiInfo = NULL;
+        HalpPciGsiInfoUsesPool = FALSE;
     }
 
-    HalpPciGsiCapacity = 0;
+    HalpPciGsiInfo = HalpPciGsiStaticInfo;
+    HalpPciGsiCapacity = HALP_PCI_GSI_STATIC_CAPACITY;
+    RtlZeroMemory(HalpPciGsiInfo,
+                  HalpPciGsiCapacity * sizeof(HALP_PCI_GSI_INFO));
 }
 
 static
@@ -786,15 +792,19 @@ HalpPciEnsureGsiCapacity(
         RtlCopyMemory(NewTable,
                       HalpPciGsiInfo,
                       HalpPciGsiCapacity * sizeof(HALP_PCI_GSI_INFO));
-        ExFreePoolWithTag(HalpPciGsiInfo, HALP_PCI_GSI_TAG);
+
+        if (HalpPciGsiInfoUsesPool)
+        {
+            ExFreePoolWithTag(HalpPciGsiInfo, HALP_PCI_GSI_TAG);
+        }
     }
 
     HalpPciGsiInfo = NewTable;
     HalpPciGsiCapacity = NewCapacity;
+    HalpPciGsiInfoUsesPool = TRUE;
     return TRUE;
 }
 
-static
 VOID
 HalpPciRecordGsiInfo(
     _In_ ULONG Gsi,

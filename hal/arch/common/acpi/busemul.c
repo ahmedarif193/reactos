@@ -1,7 +1,7 @@
 /*
  * PROJECT:         ReactOS HAL
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
- * FILE:            hal/halx86/acpi/busemul.c
+ * FILE:            hal/arch/common/acpi/busemul.c
  * PURPOSE:         ACPI HAL Bus Handler Emulation Code
  * PROGRAMMERS:     ReactOS Portable Systems Group
  */

@@ -438,6 +438,19 @@ HalpPciLookupGsiInfo(
     PUCHAR Trigger
 );
 
+VOID
+HalpPciRecordGsiInfo(
+    ULONG Gsi,
+    UCHAR Polarity,
+    UCHAR Trigger,
+    ULONG Segment,
+    UCHAR Bus,
+    UCHAR Device,
+    UCHAR Function,
+    UCHAR Pin,
+    BOOLEAN FromFirmware
+    );
+
 typedef struct _HALP_PCI_GSI_DIAG
 {
     BOOLEAN FromFirmware;

@@ -60,6 +60,8 @@ HalpInitPhase0(PLOADER_PARAMETER_BLOCK LoaderBlock)
 VOID
 HalpInitPhase1(VOID)
 {
+   /* Initialize the DMA subsystem so StorPort can obtain adapter objects */
+   HalpInitDma();
 }
 
 /* EOF */

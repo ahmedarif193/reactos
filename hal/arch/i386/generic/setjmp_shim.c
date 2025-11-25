@@ -8,6 +8,11 @@
  */
 
 #include <setjmp.h>
+#include <stddef.h>
+
+/* Track the last longjmp target/value so we can honor the value argument. */
+static volatile void *HalpLongjmpTarget;
+static volatile int HalpLongjmpValue;
 
 /*
  * Provide minimal C setjmp/longjmp implementations for the HAL. These wrap the
@@ -15,13 +20,28 @@
  */
 int __cdecl _setjmp(jmp_buf buffer)
 {
-    return __builtin_setjmp(buffer);
+    int ret = __builtin_setjmp((void **)buffer);
+
+    if (ret == 0)
+        return 0;
+
+    if (HalpLongjmpTarget == buffer)
+    {
+        ret = HalpLongjmpValue;
+        HalpLongjmpTarget = NULL;
+    }
+
+    return ret;
 }
 
 __declspec(noreturn)
 void __cdecl longjmp(jmp_buf buffer, int value)
 {
-    (void)value;
-    __builtin_longjmp(buffer, 1);
+    const int jump_value = value ? value : 1;
+
+    HalpLongjmpTarget = buffer;
+    HalpLongjmpValue = jump_value;
+
+    __builtin_longjmp((void **)buffer, 1);
     __builtin_unreachable();
 }

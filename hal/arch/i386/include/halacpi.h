@@ -29,6 +29,9 @@ typedef struct _HALP_ACPI_MCFG_ALLOCATION
 
 #define HALP_ACPI_SEGMENT_ANY 0xFFFF
 
+#define ACPI_GAS_SYSTEM_MEMORY 0
+#define ACPI_GAS_SYSTEM_IO     1
+
 extern PHALP_ACPI_MCFG HalpAcpiMcfgTable;
 extern PHALP_ACPI_MCFG_ALLOCATION HalpAcpiMcfgAllocations;
 extern ULONG HalpAcpiMcfgAllocationCount;
@@ -37,6 +40,15 @@ extern ULONG HalpAcpiMcfgSegDisabledCount;
 extern volatile LONG HalpAcpiEcamCoverageFlags;
 extern BOOLEAN HalpAcpiEcamDisabled;
 extern BOOLEAN HalpPmTimerInitialized;
+extern FADT HalpFixedAcpiDescTable;
+extern GEN_ADDR HalpPm1EventBlocks[2];
+extern GEN_ADDR HalpPm1ControlBlocks[2];
+extern GEN_ADDR HalpPm2ControlBlock;
+extern GEN_ADDR HalpGeneralPurposeBlocks[2];
+extern BOOLEAN HalpPm1EventBlockValid[2];
+extern BOOLEAN HalpPm1ControlBlockValid[2];
+extern BOOLEAN HalpPm2ControlBlockValid;
+extern BOOLEAN HalpGeneralPurposeBlockValid[2];
 
 /* Phase 1 ACPI initialization (pool/registry available) */
 VOID
@@ -117,5 +129,15 @@ HalAcpiGetTable(
 ULONG
 NTAPI
 HalpAcpiTimerRead(VOID);
+
+BOOLEAN
+HalpAcpiReadRegister(
+    _In_ const GEN_ADDR *Gas,
+    _Out_ ULONG *Value);
+
+BOOLEAN
+HalpAcpiWriteRegister(
+    _In_ const GEN_ADDR *Gas,
+    _In_ ULONG Value);
 
 /* EOF */

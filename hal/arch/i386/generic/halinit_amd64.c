@@ -36,6 +36,9 @@ HalpInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 VOID
 HalpInitPhase1(VOID)
 {
+    /* Ensure the DMA subsystem is ready before we touch storage */
+    HalpInitDma();
+
     /* Debug output */
     {
         const char msg[] = "*** HAL: HalpInitPhase1 for AMD64 - Setting up timer interrupt ***\n";

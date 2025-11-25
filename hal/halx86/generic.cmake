@@ -3,7 +3,7 @@ list(APPEND HAL_GENERIC_SOURCE
     ${HAL_I386_DIR}/generic/beep.c
     ${HAL_I386_DIR}/generic/cmos.c
     ${HAL_I386_DIR}/generic/display.c
-    ${HAL_I386_DIR}/generic/dma.c
+    ${HAL_COMMON_DIR}/generic/dma.c
     ${HAL_I386_DIR}/generic/drive.c
     ${HAL_I386_DIR}/generic/halinit.c
     ${HAL_I386_DIR}/generic/kdpci.c

@@ -2,7 +2,7 @@
  *
  * COPYRIGHT:       See COPYING in the top level directory
  * PROJECT:         ReactOS kernel
- * FILE:            hal/halx86/generic/dma.c
+ * FILE:            hal/arch/common/generic/dma.c
  * PURPOSE:         DMA functions
  * PROGRAMMERS:     David Welch (welch@mcmail.com)
  *                  Filip Navara (navaraf@reactos.com)
@@ -77,7 +77,20 @@
 #define NDEBUG
 #include <debug.h>
 
-#define MAX_SG_ELEMENTS 0x10
+#define HALP_SG_STACK_ELEMENTS 16
+
+#define HALP_DMA_MIN_REGISTERS              256
+#define HALP_DMA_MAX_REGISTERS_PER_NODE     (128 * 1024)
+#define HALP_DMA_DEFAULT_REGISTERS          1024
+#define HALP_DMA_INITIAL_REGISTER_STEP      64
+#define HALP_DMA_INITIAL_REGISTER_CAP       (HALP_DMA_INITIAL_REGISTER_STEP * 32)
+/* Legacy ISA bounce pool is capped at 512 KiB (128 map registers). */
+#define HALP_DMA_LEGACY_REGISTER_CAP        128
+#define HALP_DMA_LEGACY_MAX_BYTES           (HALP_DMA_LEGACY_REGISTER_CAP << PAGE_SHIFT)
+/* Never pre-allocate more than 2k map registers (~8 MiB) per adapter at boot. */
+#define HALP_DMA_BOOTSTRAP_REGISTER_CAP     (HALP_DMA_INITIAL_REGISTER_STEP * 8)
+#define HALP_DMA_BOOTSTRAP_BYTES            (HALP_DMA_BOOTSTRAP_REGISTER_CAP << PAGE_SHIFT)
+#define HALP_DMA_LEGACY_SPLIT_MIN_BYTES     (16 << PAGE_SHIFT)
 
 #ifndef _MINIHAL_
 static KEVENT HalpDmaLock;
@@ -87,7 +100,27 @@ static PADAPTER_OBJECT HalpEisaAdapter[8];
 #endif
 static BOOLEAN HalpEisaDma;
 #ifndef _MINIHAL_
-static PADAPTER_OBJECT HalpMasterAdapter;
+static BOOLEAN HalpDmaInitialized;
+static ULONG HalpMaxMapRegisters;
+static ULONG HalpInitialMapBufferBytes;
+static BOOLEAN HalpDmaBootstrapInProgress;
+typedef struct _HALP_DMA_NODE_ENTRY
+{
+    PADAPTER_OBJECT Adapter32;
+    PADAPTER_OBJECT Adapter64;
+} HALP_DMA_NODE_ENTRY, *PHALP_DMA_NODE_ENTRY;
+static PHALP_DMA_NODE_ENTRY HalpDmaNodeTable;
+static ULONG HalpDmaNodeCount;
+static PADAPTER_OBJECT HalpLegacyMasterAdapter;
+typedef PVOID
+(NTAPI *PMM_ALLOCATE_CONTIGUOUS_MEMORY_SPECIFY_CACHE_NODE)(
+    SIZE_T NumberOfBytes,
+    PHYSICAL_ADDRESS LowestAcceptableAddress,
+    PHYSICAL_ADDRESS HighestAcceptableAddress,
+    PHYSICAL_ADDRESS BoundaryAddressMultiple,
+    MEMORY_CACHING_TYPE CacheType,
+    NODE_REQUIREMENT PreferredNode);
+static PMM_ALLOCATE_CONTIGUOUS_MEMORY_SPECIFY_CACHE_NODE HalpMmAllocateContiguousMemorySpecifyCacheNode;
 #endif
 
 static const ULONG_PTR HalpEisaPortPage[8] = {
@@ -100,6 +133,11 @@ static const ULONG_PTR HalpEisaPortPage[8] = {
    FIELD_OFFSET(DMA_PAGE, Channel6),
    FIELD_OFFSET(DMA_PAGE, Channel7)
 };
+
+static VOID HalpDmaEnsureInitialGoal(PADAPTER_OBJECT AdapterObject);
+static VOID HalpDmaSatisfyInitialGoals(VOID);
+static BOOLEAN NTAPI HalpGrowMapBuffers(PADAPTER_OBJECT AdapterObject,
+                                       ULONG SizeOfMapBuffers);
 
 #ifndef _MINIHAL_
 NTSTATUS
@@ -134,6 +172,79 @@ HalBuildMdlFromScatterGatherList(
     IN PMDL OriginalMdl,
     OUT PMDL *TargetMdl);
 
+static NTSTATUS
+NTAPI
+HalpDmaAllocateAdapterChannelEx(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_opt_ PVOID DmaTransferContext,
+    _In_ ULONG NumberOfMapRegisters,
+    _In_ ULONG Flags,
+    _In_opt_ PDRIVER_CONTROL ExecutionRoutine,
+    _In_opt_ PVOID ExecutionContext,
+    _Out_opt_ PVOID *MapRegisterBase);
+
+static NTSTATUS
+NTAPI
+HalpDmaMapTransferEx(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_ PMDL Mdl,
+    _In_ PVOID MapRegisterBase,
+    _In_ ULONGLONG Offset,
+    _In_ ULONG DeviceOffset,
+    _Inout_ PULONG Length,
+    _In_ BOOLEAN WriteToDevice,
+    _Out_writes_bytes_(ScatterGatherBufferLength) PSCATTER_GATHER_LIST ScatterGatherBuffer,
+    _In_ ULONG ScatterGatherBufferLength,
+    _In_opt_ PDMA_COMPLETION_ROUTINE DmaCompletionRoutine,
+    _In_opt_ PVOID CompletionContext);
+
+static NTSTATUS
+NTAPI
+HalpDmaGetScatterGatherListEx(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_opt_ PVOID DmaTransferContext,
+    _In_ PMDL Mdl,
+    _In_ ULONGLONG Offset,
+    _In_ ULONG Length,
+    _In_ ULONG Flags,
+    _In_opt_ PDRIVER_LIST_CONTROL ExecutionRoutine,
+    _In_opt_ PVOID Context,
+    _In_ BOOLEAN WriteToDevice,
+    _In_opt_ PDMA_COMPLETION_ROUTINE DmaCompletionRoutine,
+    _In_opt_ PVOID CompletionContext,
+    _Out_opt_ PSCATTER_GATHER_LIST *ScatterGatherList);
+
+static NTSTATUS
+NTAPI
+HalpDmaBuildScatterGatherListEx(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_opt_ PVOID DmaTransferContext,
+    _In_ PMDL Mdl,
+    _In_ ULONGLONG Offset,
+    _In_ ULONG Length,
+    _In_ ULONG Flags,
+    _In_opt_ PDRIVER_LIST_CONTROL ExecutionRoutine,
+    _In_opt_ PVOID Context,
+    _In_ BOOLEAN WriteToDevice,
+    _Inout_updates_bytes_(ScatterGatherLength) PVOID ScatterGatherBuffer,
+    _In_ ULONG ScatterGatherLength,
+    _In_opt_ PDMA_COMPLETION_ROUTINE DmaCompletionRoutine,
+    _In_opt_ PVOID CompletionContext,
+    _Out_opt_ PVOID ScatterGatherList);
+
+static NTSTATUS
+NTAPI
+HalpDmaFlushAdapterBuffersEx(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_ PMDL Mdl,
+    _In_ PVOID MapRegisterBase,
+    _In_ ULONGLONG Offset,
+    _In_ ULONG Length,
+    _In_ BOOLEAN WriteToDevice);
+
 
 static DMA_OPERATIONS HalpDmaOperations = {
    sizeof(DMA_OPERATIONS),
@@ -155,9 +266,216 @@ static DMA_OPERATIONS HalpDmaOperations = {
 };
 #endif
 
-#define MAX_MAP_REGISTERS 64
-
 #define TAG_DMA ' AMD'
+
+#ifndef _MINIHAL_
+static ULONG
+HalpQueryNumaNodeCount(VOID)
+{
+    return 1;
+}
+
+static ULONGLONG
+HalpQueryTotalPhysicalPages(VOID)
+{
+    PPHYSICAL_MEMORY_RANGE MemoryRanges;
+    PPHYSICAL_MEMORY_RANGE Range;
+    ULONGLONG TotalPages = 0;
+
+    MemoryRanges = MmGetPhysicalMemoryRanges();
+    if (MemoryRanges == NULL)
+    {
+        return 0;
+    }
+
+    for (Range = MemoryRanges;
+         Range->BaseAddress.QuadPart || Range->NumberOfBytes.QuadPart;
+         Range++)
+    {
+        TotalPages += (Range->NumberOfBytes.QuadPart >> PAGE_SHIFT);
+    }
+
+    ExFreePool(MemoryRanges);
+    return TotalPages;
+}
+
+static ULONG
+HalpSelectMaxMapRegisters(
+    _In_ ULONGLONG TotalPages,
+    _In_ ULONG NodeCount)
+{
+    ULONGLONG PagesPerNode;
+    ULONGLONG RegistersPerNode;
+
+    if (NodeCount == 0)
+    {
+        NodeCount = 1;
+    }
+
+    if (TotalPages == 0)
+    {
+        return HALP_DMA_DEFAULT_REGISTERS;
+    }
+
+    PagesPerNode = TotalPages / NodeCount;
+    if (PagesPerNode == 0)
+    {
+        PagesPerNode = TotalPages;
+    }
+
+    RegistersPerNode = PagesPerNode / 32ULL;
+    if (RegistersPerNode < HALP_DMA_MIN_REGISTERS)
+    {
+        RegistersPerNode = HALP_DMA_MIN_REGISTERS;
+    }
+    if (RegistersPerNode > HALP_DMA_MAX_REGISTERS_PER_NODE)
+    {
+        RegistersPerNode = HALP_DMA_MAX_REGISTERS_PER_NODE;
+    }
+
+    return (ULONG)(RegistersPerNode * NodeCount);
+}
+
+static ULONG
+HalpSelectInitialMapBufferBytes(
+    _In_ ULONG MaxRegisters)
+{
+    ULONG InitialRegisters;
+
+    if (MaxRegisters == 0)
+    {
+        return HALP_DMA_INITIAL_REGISTER_STEP << PAGE_SHIFT;
+    }
+
+    InitialRegisters = MaxRegisters / 8;
+    if (InitialRegisters < HALP_DMA_INITIAL_REGISTER_STEP)
+    {
+        InitialRegisters = HALP_DMA_INITIAL_REGISTER_STEP;
+    }
+    if (InitialRegisters > HALP_DMA_INITIAL_REGISTER_CAP)
+    {
+        InitialRegisters = HALP_DMA_INITIAL_REGISTER_CAP;
+    }
+    if (InitialRegisters > MaxRegisters)
+    {
+        InitialRegisters = MaxRegisters;
+    }
+
+    return InitialRegisters << PAGE_SHIFT;
+}
+
+static ULONG
+HalpDmaDeriveMapRegisterCount(
+    _In_ PDEVICE_DESCRIPTION DeviceDescription,
+    _In_ ULONG MaximumLengthPages)
+{
+    UNREFERENCED_PARAMETER(DeviceDescription);
+    return MaximumLengthPages;
+}
+
+static ULONG
+HalpDmaQueryCurrentNode(VOID)
+{
+    PKPRCB Prcb = KeGetCurrentPrcb();
+
+    if ((Prcb != NULL) && (Prcb->ParentNode != NULL))
+    {
+        return Prcb->ParentNode->NodeNumber;
+    }
+
+    return 0;
+}
+
+static PADAPTER_OBJECT
+HalpDmaSelectMasterAdapter(
+    _In_ PDEVICE_DESCRIPTION DeviceDescription)
+{
+    PADAPTER_OBJECT Adapter;
+    ULONG Node;
+    BOOLEAN Use64Bit;
+
+    if (!DeviceDescription->Master || (HalpDmaNodeTable == NULL))
+    {
+        return HalpLegacyMasterAdapter;
+    }
+
+    if ((DeviceDescription->InterfaceType == Isa) ||
+        (DeviceDescription->InterfaceType == Eisa))
+    {
+        return HalpLegacyMasterAdapter;
+    }
+
+    Use64Bit = DeviceDescription->Dma64BitAddresses ? TRUE : FALSE;
+    Node = HalpDmaQueryCurrentNode();
+
+    if (Node >= HalpDmaNodeCount)
+    {
+        Node = 0;
+    }
+
+    Adapter = Use64Bit ? HalpDmaNodeTable[Node].Adapter64 : HalpDmaNodeTable[Node].Adapter32;
+    if (!Adapter)
+    {
+        Adapter = Use64Bit ? HalpDmaNodeTable[0].Adapter64 : HalpDmaNodeTable[0].Adapter32;
+    }
+
+    if (!Adapter)
+    {
+        Adapter = HalpLegacyMasterAdapter;
+    }
+
+    return Adapter;
+}
+#endif
+
+static VOID
+HalpDmaEnsureInitialGoal(
+    _In_opt_ PADAPTER_OBJECT AdapterObject)
+{
+    ULONG CurrentBytes;
+    ULONG NeededBytes;
+
+    if ((AdapterObject == NULL) || (AdapterObject->InitialMapBufferBytesGoal == 0))
+    {
+        return;
+    }
+
+    CurrentBytes = AdapterObject->NumberOfMapRegisters << PAGE_SHIFT;
+    if (CurrentBytes >= AdapterObject->InitialMapBufferBytesGoal)
+    {
+        AdapterObject->InitialMapBufferBytesGoal = 0;
+        return;
+    }
+
+    NeededBytes = AdapterObject->InitialMapBufferBytesGoal - CurrentBytes;
+    if (!HalpGrowMapBuffers(AdapterObject, NeededBytes))
+    {
+        DPRINT1("HAL DMA: deferred bootstrap grow failed (adapter=%p, bytes=%lu)\n",
+                AdapterObject,
+                NeededBytes);
+        AdapterObject->InitialMapBufferBytesGoal = 0;
+    }
+}
+
+static VOID
+HalpDmaSatisfyInitialGoals(VOID)
+{
+    if (HalpLegacyMasterAdapter)
+    {
+        HalpDmaEnsureInitialGoal(HalpLegacyMasterAdapter);
+    }
+
+    if (!HalpDmaNodeTable)
+    {
+        return;
+    }
+
+    for (ULONG Index = 0; Index < HalpDmaNodeCount; Index++)
+    {
+        HalpDmaEnsureInitialGoal(HalpDmaNodeTable[Index].Adapter32);
+        HalpDmaEnsureInitialGoal(HalpDmaNodeTable[Index].Adapter64);
+    }
+}
 
 /* FUNCTIONS *****************************************************************/
 
@@ -184,6 +502,24 @@ CODE_SEG("INIT")
 VOID
 HalpInitDma(VOID)
 {
+    ULONG NodeCount;
+    ULONGLONG TotalPages;
+    ULONG BootstrapMapBufferBytes;
+
+    if (HalpDmaInitialized)
+    {
+        return;
+    }
+
+    HalpDmaInitialized = TRUE;
+    HalpDmaBootstrapInProgress = TRUE;
+
+    TotalPages = HalpQueryTotalPhysicalPages();
+    NodeCount = HalpQueryNumaNodeCount();
+    HalpMaxMapRegisters = HalpSelectMaxMapRegisters(TotalPages, NodeCount);
+    HalpInitialMapBufferBytes = HalpSelectInitialMapBufferBytes(HalpMaxMapRegisters);
+    BootstrapMapBufferBytes = 0;
+
     /*
      * Initialize the DMA Operation table
      */
@@ -192,6 +528,19 @@ HalpInitDma(VOID)
     HalpDmaOperations.FreeAdapterChannel = (PFREE_ADAPTER_CHANNEL)IoFreeAdapterChannel;
     HalpDmaOperations.FreeMapRegisters = (PFREE_MAP_REGISTERS)IoFreeMapRegisters;
     HalpDmaOperations.MapTransfer = (PMAP_TRANSFER)IoMapTransfer;
+    HalpDmaOperations.AllocateAdapterChannelEx = HalpDmaAllocateAdapterChannelEx;
+    HalpDmaOperations.MapTransferEx = HalpDmaMapTransferEx;
+    HalpDmaOperations.GetScatterGatherListEx = HalpDmaGetScatterGatherListEx;
+    HalpDmaOperations.BuildScatterGatherListEx = HalpDmaBuildScatterGatherListEx;
+    HalpDmaOperations.FlushAdapterBuffersEx = HalpDmaFlushAdapterBuffersEx;
+
+    if (HalpMmAllocateContiguousMemorySpecifyCacheNode == NULL)
+    {
+        UNICODE_STRING RoutineName;
+        RtlInitUnicodeString(&RoutineName, L"MmAllocateContiguousMemorySpecifyCacheNode");
+        HalpMmAllocateContiguousMemorySpecifyCacheNode =
+            (PMM_ALLOCATE_CONTIGUOUS_MEMORY_SPECIFY_CACHE_NODE)MmGetSystemRoutineAddress(&RoutineName);
+    }
 
     if (HalpBusType == MACHINE_TYPE_EISA)
     {
@@ -214,13 +563,340 @@ HalpInitDma(VOID)
     InitializeListHead(&HalpDmaAdapterList);
     KeInitializeSpinLock(&HalpDmaAdapterListLock);
     KeInitializeEvent(&HalpDmaLock, NotificationEvent, TRUE);
-    HalpMasterAdapter = HalpDmaAllocateMasterAdapter();
+
+    if (NodeCount == 0)
+    {
+        NodeCount = 1;
+    }
+
+    HalpDmaNodeCount = NodeCount;
+    HalpDmaNodeTable = ExAllocatePoolWithTag(NonPagedPool,
+                                             sizeof(HALP_DMA_NODE_ENTRY) * HalpDmaNodeCount,
+                                             TAG_DMA);
+    if (!HalpDmaNodeTable)
+    {
+        KeBugCheckEx(HAL_INITIALIZATION_FAILED,
+                     'AMDN',
+                     HalpDmaNodeCount,
+                     HalpMaxMapRegisters,
+                     0);
+    }
+    RtlZeroMemory(HalpDmaNodeTable, sizeof(HALP_DMA_NODE_ENTRY) * HalpDmaNodeCount);
+
+    HalpLegacyMasterAdapter = HalpDmaAllocateMasterAdapter(HalpMaxMapRegisters,
+                                                          BootstrapMapBufferBytes,
+                                                          0,
+                                                          FALSE,
+                                                          TRUE);
+    if (!HalpLegacyMasterAdapter)
+    {
+        KeBugCheckEx(HAL_INITIALIZATION_FAILED,
+                     'AMDL',
+                     HalpMaxMapRegisters,
+                     HalpInitialMapBufferBytes,
+                     0);
+    }
+    {
+        ULONG LegacyGoal = HalpInitialMapBufferBytes;
+        if (LegacyGoal > HALP_DMA_LEGACY_MAX_BYTES)
+        {
+            LegacyGoal = HALP_DMA_LEGACY_MAX_BYTES;
+        }
+        HalpLegacyMasterAdapter->InitialMapBufferBytesGoal = LegacyGoal;
+    }
+
+    for (ULONG Index = 0; Index < HalpDmaNodeCount; Index++)
+    {
+        HalpDmaNodeTable[Index].Adapter32 =
+            HalpDmaAllocateMasterAdapter(HalpMaxMapRegisters,
+                                         0,
+                                         (UCHAR)Index,
+                                         FALSE,
+                                         FALSE);
+        HalpDmaNodeTable[Index].Adapter64 =
+            HalpDmaAllocateMasterAdapter(HalpMaxMapRegisters,
+                                         0,
+                                         (UCHAR)Index,
+                                         TRUE,
+                                         FALSE);
+
+        if (!HalpDmaNodeTable[Index].Adapter32 || !HalpDmaNodeTable[Index].Adapter64)
+        {
+            KeBugCheckEx(HAL_INITIALIZATION_FAILED,
+                         'AMDX',
+                         Index,
+                         (ULONG_PTR)HalpDmaNodeTable[Index].Adapter32,
+                         (ULONG_PTR)HalpDmaNodeTable[Index].Adapter64);
+        }
+
+        HalpDmaNodeTable[Index].Adapter32->InitialMapBufferBytesGoal = HalpInitialMapBufferBytes;
+        HalpDmaNodeTable[Index].Adapter64->InitialMapBufferBytesGoal = HalpInitialMapBufferBytes;
+    }
 
     /*
      * Setup the HalDispatchTable callback for creating PnP DMA adapters. It's
      * used by IoGetDmaAdapter in the kernel.
      */
     HalGetDmaAdapter = HalpGetDmaAdapter;
+
+    HalpDmaBootstrapInProgress = FALSE;
+    HalpDmaSatisfyInitialGoals();
+}
+#endif
+
+#ifndef _MINIHAL_
+static NTSTATUS
+NTAPI
+HalpDmaAllocateAdapterChannelEx(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_opt_ PVOID DmaTransferContext,
+    _In_ ULONG NumberOfMapRegisters,
+    _In_ ULONG Flags,
+    _In_opt_ PDRIVER_CONTROL ExecutionRoutine,
+    _In_opt_ PVOID ExecutionContext,
+    _Out_opt_ PVOID *MapRegisterBase)
+{
+    PADAPTER_OBJECT AdapterObject = (PADAPTER_OBJECT)DmaAdapter;
+    PVOID Context = ExecutionContext ? ExecutionContext : DmaTransferContext;
+
+    if (MapRegisterBase)
+    {
+        *MapRegisterBase = NULL;
+    }
+
+    if (Flags != 0)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (ExecutionRoutine == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return IoAllocateAdapterChannel(AdapterObject,
+                                    DeviceObject,
+                                    NumberOfMapRegisters,
+                                    ExecutionRoutine,
+                                    Context);
+}
+
+static ULONG
+HalpDmaComputeScatterGatherCapacity(
+    _In_ ULONG BufferLength)
+{
+    ULONG Capacity;
+
+    if (BufferLength < sizeof(SCATTER_GATHER_LIST))
+    {
+        return 0;
+    }
+
+    Capacity = 1;
+    Capacity += (BufferLength - sizeof(SCATTER_GATHER_LIST)) / sizeof(SCATTER_GATHER_ELEMENT);
+    return Capacity;
+}
+
+static NTSTATUS
+NTAPI
+HalpDmaMapTransferEx(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_ PMDL Mdl,
+    _In_ PVOID MapRegisterBase,
+    _In_ ULONGLONG Offset,
+    _In_ ULONG DeviceOffset,
+    _Inout_ PULONG Length,
+    _In_ BOOLEAN WriteToDevice,
+    _Out_writes_bytes_(ScatterGatherBufferLength) PSCATTER_GATHER_LIST ScatterGatherBuffer,
+    _In_ ULONG ScatterGatherBufferLength,
+    _In_opt_ PDMA_COMPLETION_ROUTINE DmaCompletionRoutine,
+    _In_opt_ PVOID CompletionContext)
+{
+    PADAPTER_OBJECT AdapterObject = (PADAPTER_OBJECT)DmaAdapter;
+    ULONG Capacity;
+    ULONG Remaining;
+    ULONG ElementCount = 0;
+    PVOID CurrentVa;
+    PHYSICAL_ADDRESS Address;
+
+    UNREFERENCED_PARAMETER(DeviceOffset);
+
+    if (DmaCompletionRoutine || CompletionContext)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (!ScatterGatherBuffer || !Length)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Capacity = HalpDmaComputeScatterGatherCapacity(ScatterGatherBufferLength);
+    if (Capacity == 0)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    Remaining = *Length;
+    CurrentVa = (PVOID)((PUCHAR)MmGetMdlVirtualAddress(Mdl) + Offset);
+
+    while ((Remaining > 0) && (ElementCount < Capacity))
+    {
+        ULONG Chunk = Remaining;
+
+        Address = IoMapTransfer(AdapterObject,
+                                Mdl,
+                                MapRegisterBase,
+                                CurrentVa,
+                                &Chunk,
+                                WriteToDevice);
+
+        if (Chunk == 0)
+        {
+            break;
+        }
+
+        ScatterGatherBuffer->Elements[ElementCount].Address = Address;
+        ScatterGatherBuffer->Elements[ElementCount].Length = Chunk;
+        ScatterGatherBuffer->Elements[ElementCount].Reserved = 0;
+
+        Remaining -= Chunk;
+        CurrentVa = (PVOID)((PUCHAR)CurrentVa + Chunk);
+        ElementCount++;
+    }
+
+    if (Remaining > 0)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    ScatterGatherBuffer->NumberOfElements = ElementCount;
+    ScatterGatherBuffer->Reserved = 0;
+    *Length -= Remaining;
+
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+NTAPI
+HalpDmaGetScatterGatherListEx(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_opt_ PVOID DmaTransferContext,
+    _In_ PMDL Mdl,
+    _In_ ULONGLONG Offset,
+    _In_ ULONG Length,
+    _In_ ULONG Flags,
+    _In_opt_ PDRIVER_LIST_CONTROL ExecutionRoutine,
+    _In_opt_ PVOID Context,
+    _In_ BOOLEAN WriteToDevice,
+    _In_opt_ PDMA_COMPLETION_ROUTINE DmaCompletionRoutine,
+    _In_opt_ PVOID CompletionContext,
+    _Out_opt_ PSCATTER_GATHER_LIST *ScatterGatherList)
+{
+    PVOID CurrentVa;
+
+    UNREFERENCED_PARAMETER(DmaTransferContext);
+    UNREFERENCED_PARAMETER(CompletionContext);
+
+    if ((Flags != 0) || ScatterGatherList || DmaCompletionRoutine)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (ExecutionRoutine == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    CurrentVa = (PVOID)((PUCHAR)MmGetMdlVirtualAddress(Mdl) + Offset);
+
+    return HalBuildScatterGatherList((PADAPTER_OBJECT)DmaAdapter,
+                                     DeviceObject,
+                                     Mdl,
+                                     CurrentVa,
+                                     Length,
+                                     ExecutionRoutine,
+                                     Context,
+                                     WriteToDevice,
+                                     NULL,
+                                     0);
+}
+
+static NTSTATUS
+NTAPI
+HalpDmaBuildScatterGatherListEx(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_opt_ PVOID DmaTransferContext,
+    _In_ PMDL Mdl,
+    _In_ ULONGLONG Offset,
+    _In_ ULONG Length,
+    _In_ ULONG Flags,
+    _In_opt_ PDRIVER_LIST_CONTROL ExecutionRoutine,
+    _In_opt_ PVOID Context,
+    _In_ BOOLEAN WriteToDevice,
+    _Inout_updates_bytes_(ScatterGatherLength) PVOID ScatterGatherBuffer,
+    _In_ ULONG ScatterGatherLength,
+    _In_opt_ PDMA_COMPLETION_ROUTINE DmaCompletionRoutine,
+    _In_opt_ PVOID CompletionContext,
+    _Out_opt_ PVOID ScatterGatherList)
+{
+    PVOID CurrentVa;
+
+    UNREFERENCED_PARAMETER(DmaTransferContext);
+    UNREFERENCED_PARAMETER(ScatterGatherList);
+
+    if ((Flags != 0) || DmaCompletionRoutine || CompletionContext)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (ExecutionRoutine == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    CurrentVa = (PVOID)((PUCHAR)MmGetMdlVirtualAddress(Mdl) + Offset);
+
+    return HalBuildScatterGatherList((PADAPTER_OBJECT)DmaAdapter,
+                                     DeviceObject,
+                                     Mdl,
+                                     CurrentVa,
+                                     Length,
+                                     ExecutionRoutine,
+                                     Context,
+                                     WriteToDevice,
+                                     ScatterGatherBuffer,
+                                     ScatterGatherLength);
+}
+
+static NTSTATUS
+NTAPI
+HalpDmaFlushAdapterBuffersEx(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_ PMDL Mdl,
+    _In_ PVOID MapRegisterBase,
+    _In_ ULONGLONG Offset,
+    _In_ ULONG Length,
+    _In_ BOOLEAN WriteToDevice)
+{
+    PVOID CurrentVa;
+
+    CurrentVa = (PVOID)((PUCHAR)MmGetMdlVirtualAddress(Mdl) + Offset);
+
+    if (IoFlushAdapterBuffers((PADAPTER_OBJECT)DmaAdapter,
+                              Mdl,
+                              MapRegisterBase,
+                              CurrentVa,
+                              Length,
+                              WriteToDevice))
+    {
+        return STATUS_SUCCESS;
+    }
+
+    return STATUS_UNSUCCESSFUL;
 }
 #endif
 
@@ -278,43 +954,129 @@ HalpGrowMapBuffers(IN PADAPTER_OBJECT AdapterObject,
     PHYSICAL_ADDRESS BoundryAddressMultiple;
     KIRQL OldIrql;
     ULONG MapRegisterCount;
+    ULONG Capacity;
+    ULONG AllocationBytes = SizeOfMapBuffers;
+    ULONG AttemptBytes;
+    BOOLEAN PartialAllowed;
 
-    /* Check if enough map register slots are available. */
-    MapRegisterCount = BYTES_TO_PAGES(SizeOfMapBuffers);
-    if (MapRegisterCount + AdapterObject->NumberOfMapRegisters > MAX_MAP_REGISTERS)
+    if ((AdapterObject->InitialMapBufferBytesGoal != 0) && !HalpDmaBootstrapInProgress)
     {
-        DPRINT("No more map register slots available! (Current: %d | Requested: %d | Limit: %d)\n",
-               AdapterObject->NumberOfMapRegisters,
-               MapRegisterCount,
-               MAX_MAP_REGISTERS);
-        return FALSE;
+        ULONG CurrentBytes = AdapterObject->NumberOfMapRegisters << PAGE_SHIFT;
+        if (CurrentBytes >= AdapterObject->InitialMapBufferBytesGoal)
+        {
+            AdapterObject->InitialMapBufferBytesGoal = 0;
+        }
+        else
+        {
+            ULONG Remaining = AdapterObject->InitialMapBufferBytesGoal - CurrentBytes;
+            if (AllocationBytes < Remaining)
+            {
+                AllocationBytes = Remaining;
+            }
+        }
     }
 
-    /*
-     * Allocate memory for the new map registers. For 32-bit adapters we use
-     * two passes in order not to waste scare resource (low memory).
-     */
-    HighestAcceptableAddress = HalpGetAdapterMaximumPhysicalAddress(AdapterObject);
-    LowestAcceptableAddress.HighPart = 0;
-    LowestAcceptableAddress.LowPart = HighestAcceptableAddress.LowPart == 0xFFFFFFFF ? 0x1000000 : 0;
-    BoundryAddressMultiple.QuadPart = 0;
+    Capacity = AdapterObject->MapRegisters->SizeOfBitMap;
+    AttemptBytes = AllocationBytes;
+    PartialAllowed = (AdapterObject->MasterAdapter == HalpLegacyMasterAdapter) &&
+                     (AdapterObject->InitialMapBufferBytesGoal != 0);
 
-    VirtualAddress = MmAllocateContiguousMemorySpecifyCache(MapRegisterCount << PAGE_SHIFT,
-                                                            LowestAcceptableAddress,
-                                                            HighestAcceptableAddress,
-                                                            BoundryAddressMultiple,
-                                                            MmNonCached);
-    if (!(VirtualAddress) && (LowestAcceptableAddress.LowPart))
+    for (;;)
     {
-        LowestAcceptableAddress.LowPart = 0;
-        VirtualAddress = MmAllocateContiguousMemorySpecifyCache(MapRegisterCount << PAGE_SHIFT,
-                                                                LowestAcceptableAddress,
-                                                                HighestAcceptableAddress,
-                                                                BoundryAddressMultiple,
-                                                                MmNonCached);
-    }
+        MapRegisterCount = BYTES_TO_PAGES(AttemptBytes);
+        if (MapRegisterCount == 0)
+        {
+            return FALSE;
+        }
 
-    if (!VirtualAddress) return FALSE;
+        if (MapRegisterCount + AdapterObject->NumberOfMapRegisters > Capacity)
+        {
+            if (!PartialAllowed)
+            {
+                DPRINT("No more map register slots available! (Current: %d | Requested: %d | Limit: %d)\n",
+                       AdapterObject->NumberOfMapRegisters,
+                       MapRegisterCount,
+                       Capacity);
+                return FALSE;
+            }
+
+            AttemptBytes >>= 1;
+            if (AttemptBytes < HALP_DMA_LEGACY_SPLIT_MIN_BYTES)
+            {
+                DPRINT1("HAL DMA: unable to reserve legacy map registers (min split reached)\n");
+                return FALSE;
+            }
+            continue;
+        }
+
+        HighestAcceptableAddress = HalpGetAdapterMaximumPhysicalAddress(AdapterObject);
+        LowestAcceptableAddress.HighPart = 0;
+        LowestAcceptableAddress.LowPart = HighestAcceptableAddress.LowPart == 0xFFFFFFFF ? 0x1000000 : 0;
+        BoundryAddressMultiple.QuadPart = 0;
+
+        VirtualAddress = NULL;
+
+        if (AdapterObject->MasterDevice &&
+            (HalpMmAllocateContiguousMemorySpecifyCacheNode != NULL))
+        {
+            NODE_REQUIREMENT PreferredNode = AdapterObject->NumaNode;
+            if (PreferredNode == 0 && !AdapterObject->Dma32BitAddresses && !AdapterObject->Dma64BitAddresses)
+            {
+                PreferredNode = MM_ANY_NODE_OK;
+            }
+
+            VirtualAddress = HalpMmAllocateContiguousMemorySpecifyCacheNode(AttemptBytes,
+                                                                            LowestAcceptableAddress,
+                                                                            HighestAcceptableAddress,
+                                                                            BoundryAddressMultiple,
+                                                                            MmNonCached,
+                                                                            PreferredNode);
+
+            if ((!VirtualAddress) && (PreferredNode != MM_ANY_NODE_OK))
+            {
+                VirtualAddress = HalpMmAllocateContiguousMemorySpecifyCacheNode(AttemptBytes,
+                                                                                LowestAcceptableAddress,
+                                                                                HighestAcceptableAddress,
+                                                                                BoundryAddressMultiple,
+                                                                                MmNonCached,
+                                                                                MM_ANY_NODE_OK);
+            }
+        }
+
+        if (!VirtualAddress)
+        {
+            VirtualAddress = MmAllocateContiguousMemorySpecifyCache(AttemptBytes,
+                                                                    LowestAcceptableAddress,
+                                                                    HighestAcceptableAddress,
+                                                                    BoundryAddressMultiple,
+                                                                    MmNonCached);
+            if ((!VirtualAddress) && (LowestAcceptableAddress.LowPart))
+            {
+                LowestAcceptableAddress.LowPart = 0;
+                VirtualAddress = MmAllocateContiguousMemorySpecifyCache(AttemptBytes,
+                                                                        LowestAcceptableAddress,
+                                                                        HighestAcceptableAddress,
+                                                                        BoundryAddressMultiple,
+                                                                        MmNonCached);
+            }
+        }
+
+        if (VirtualAddress)
+        {
+            AllocationBytes = AttemptBytes;
+            break;
+        }
+
+        if (!PartialAllowed || AttemptBytes <= HALP_DMA_LEGACY_SPLIT_MIN_BYTES)
+        {
+            DPRINT1("HAL DMA: MmAllocateContiguousMemorySpecifyCache[Node] failed (Node=%u, Size=%lu)\n",
+                    AdapterObject->NumaNode,
+                    AttemptBytes);
+            return FALSE;
+        }
+
+        AttemptBytes >>= 1;
+    }
 
     PhysicalAddress = MmGetPhysicalAddress(VirtualAddress);
 
@@ -382,6 +1144,13 @@ HalpGrowMapBuffers(IN PADAPTER_OBJECT AdapterObject,
 
     KeReleaseSpinLock(&AdapterObject->SpinLock, OldIrql);
 
+    if ((AdapterObject->InitialMapBufferBytesGoal != 0) &&
+        !HalpDmaBootstrapInProgress &&
+        ((AdapterObject->NumberOfMapRegisters << PAGE_SHIFT) >= AdapterObject->InitialMapBufferBytesGoal))
+    {
+        AdapterObject->InitialMapBufferBytesGoal = 0;
+    }
+
     return TRUE;
 }
 
@@ -395,12 +1164,21 @@ HalpGrowMapBuffers(IN PADAPTER_OBJECT AdapterObject,
  */
 PADAPTER_OBJECT
 NTAPI
-HalpDmaAllocateMasterAdapter(VOID)
+HalpDmaAllocateMasterAdapter(IN ULONG RegisterCapacity,
+                             IN ULONG InitialMapBufferBytes,
+                             IN UCHAR NumaNode,
+                             IN BOOLEAN Supports64Bit,
+                             IN BOOLEAN LegacyAdapter)
 {
     PADAPTER_OBJECT MasterAdapter;
     ULONG Size, SizeOfBitmap;
 
-    SizeOfBitmap = MAX_MAP_REGISTERS;
+    if (RegisterCapacity == 0)
+    {
+        RegisterCapacity = HALP_DMA_DEFAULT_REGISTERS;
+    }
+
+    SizeOfBitmap = RegisterCapacity;
     Size = sizeof(ADAPTER_OBJECT);
     Size += sizeof(RTL_BITMAP);
     Size += (SizeOfBitmap + 7) >> 3;
@@ -420,6 +1198,12 @@ HalpDmaAllocateMasterAdapter(VOID)
     RtlSetAllBits(MasterAdapter->MapRegisters);
     MasterAdapter->NumberOfMapRegisters = 0;
     MasterAdapter->CommittedMapRegisters = 0;
+    MasterAdapter->InitialMapBufferBytesGoal = InitialMapBufferBytes;
+    MasterAdapter->MasterDevice = LegacyAdapter ? FALSE : TRUE;
+    MasterAdapter->ScatterGather = TRUE;
+    MasterAdapter->Dma32BitAddresses = (!LegacyAdapter && !Supports64Bit);
+    MasterAdapter->Dma64BitAddresses = Supports64Bit;
+    MasterAdapter->NumaNode = NumaNode;
 
     MasterAdapter->MapRegisterBase = ExAllocatePoolWithTag(NonPagedPool,
                                                            SizeOfBitmap *
@@ -433,8 +1217,10 @@ HalpDmaAllocateMasterAdapter(VOID)
 
     RtlZeroMemory(MasterAdapter->MapRegisterBase,
                   SizeOfBitmap * sizeof(ROS_MAP_REGISTER_ENTRY));
-    if (!HalpGrowMapBuffers(MasterAdapter, 0x10000))
+    if ((InitialMapBufferBytes != 0) &&
+        (!HalpGrowMapBuffers(MasterAdapter, InitialMapBufferBytes)))
     {
+        ExFreePool(MasterAdapter->MapRegisterBase);
         ExFreePool(MasterAdapter);
         return NULL;
     }
@@ -453,7 +1239,8 @@ HalpDmaAllocateMasterAdapter(VOID)
 PADAPTER_OBJECT
 NTAPI
 HalpDmaAllocateChildAdapter(IN ULONG NumberOfMapRegisters,
-                            IN PDEVICE_DESCRIPTION DeviceDescription)
+                            IN PDEVICE_DESCRIPTION DeviceDescription,
+                            IN PADAPTER_OBJECT MasterAdapter)
 {
     PADAPTER_OBJECT AdapterObject;
     OBJECT_ATTRIBUTES ObjectAttributes;
@@ -475,7 +1262,13 @@ HalpDmaAllocateChildAdapter(IN ULONG NumberOfMapRegisters,
                             0,
                             0,
                             (PVOID)&AdapterObject);
-    if (!NT_SUCCESS(Status)) return NULL;
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("HAL DMA: ObCreateObject failed %lx for %lu map registers\n",
+                Status,
+                NumberOfMapRegisters);
+        return NULL;
+    }
 
     RtlZeroMemory(AdapterObject, sizeof(ADAPTER_OBJECT));
 
@@ -485,7 +1278,13 @@ HalpDmaAllocateChildAdapter(IN ULONG NumberOfMapRegisters,
                             0,
                             NULL,
                             &Handle);
-    if (!NT_SUCCESS(Status)) return NULL;
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("HAL DMA: ObInsertObject failed %lx for %lu map registers\n",
+                Status,
+                NumberOfMapRegisters);
+        return NULL;
+    }
 
     ObReferenceObject(AdapterObject);
 
@@ -497,7 +1296,8 @@ HalpDmaAllocateChildAdapter(IN ULONG NumberOfMapRegisters,
     AdapterObject->MapRegistersPerChannel = 1;
     AdapterObject->Dma32BitAddresses = DeviceDescription->Dma32BitAddresses;
     AdapterObject->ChannelNumber = 0xFF;
-    AdapterObject->MasterAdapter = HalpMasterAdapter;
+    AdapterObject->MasterAdapter = MasterAdapter ? MasterAdapter : HalpLegacyMasterAdapter;
+    AdapterObject->NumaNode = AdapterObject->MasterAdapter ? AdapterObject->MasterAdapter->NumaNode : 0;
     KeInitializeDeviceQueue(&AdapterObject->ChannelWaitQueue);
 
     return AdapterObject;
@@ -668,13 +1468,15 @@ HalGetAdapter(IN PDEVICE_DESCRIPTION DeviceDescription,
               OUT PULONG NumberOfMapRegisters)
 {
     PADAPTER_OBJECT AdapterObject = NULL;
+    PADAPTER_OBJECT MasterAdapter;
     BOOLEAN EisaAdapter;
     ULONG MapRegisters;
     ULONG MaximumLength;
+    ULONG MaximumLengthPages;
     KIRQL OldIrql;
 
     /* Validate parameters in device description */
-    if (DeviceDescription->Version > DEVICE_DESCRIPTION_VERSION2) return NULL;
+    if (DeviceDescription->Version > DEVICE_DESCRIPTION_VERSION3) return NULL;
 
     /*
      * See if we're going to use ISA/EISA DMA adapter. These adapters are
@@ -717,6 +1519,7 @@ HalGetAdapter(IN PDEVICE_DESCRIPTION DeviceDescription,
      *   DeviceDescription->MaximumLength.
      */
     MaximumLength = DeviceDescription->MaximumLength & MAXLONG;
+    MaximumLengthPages = BYTES_TO_PAGES(MaximumLength) + 1;
     if ((DeviceDescription->ScatterGather) &&
         ((DeviceDescription->InterfaceType == Eisa) ||
          (DeviceDescription->InterfaceType == PCIBus)))
@@ -729,13 +1532,15 @@ HalGetAdapter(IN PDEVICE_DESCRIPTION DeviceDescription,
     }
     else
     {
-        /*
-         * In the equation below the additional map register added by
-         * the "+1" accounts for the case when a transfer does not start
-         * at a page-aligned address.
-         */
-        MapRegisters = BYTES_TO_PAGES(MaximumLength) + 1;
-        if (MapRegisters > 16) MapRegisters = 16;
+        MapRegisters = HalpDmaDeriveMapRegisterCount(DeviceDescription,
+                                                     MaximumLengthPages);
+    }
+
+    MasterAdapter = EisaAdapter ? HalpLegacyMasterAdapter
+                                : HalpDmaSelectMasterAdapter(DeviceDescription);
+    if (!MasterAdapter)
+    {
+        return NULL;
     }
 
     /*
@@ -754,6 +1559,8 @@ HalGetAdapter(IN PDEVICE_DESCRIPTION DeviceDescription,
         AdapterObject = HalpEisaAdapter[DeviceDescription->DmaChannel];
         if (AdapterObject)
         {
+            AdapterObject->MasterAdapter = MasterAdapter;
+            AdapterObject->NumaNode = MasterAdapter->NumaNode;
             if ((AdapterObject->NeedsMapRegisters) &&
                 (MapRegisters > AdapterObject->MapRegistersPerChannel))
             {
@@ -764,7 +1571,9 @@ HalGetAdapter(IN PDEVICE_DESCRIPTION DeviceDescription,
 
     if (AdapterObject == NULL)
     {
-        AdapterObject = HalpDmaAllocateChildAdapter(MapRegisters, DeviceDescription);
+        AdapterObject = HalpDmaAllocateChildAdapter(MapRegisters,
+                                                    DeviceDescription,
+                                                    MasterAdapter);
         if (AdapterObject == NULL)
         {
             KeSetEvent(&HalpDmaLock, 0, 0);
@@ -784,14 +1593,8 @@ HalGetAdapter(IN PDEVICE_DESCRIPTION DeviceDescription,
         else
         {
             AdapterObject->NeedsMapRegisters = FALSE;
-            if (DeviceDescription->Master)
-            {
-                AdapterObject->MapRegistersPerChannel = BYTES_TO_PAGES(MaximumLength) + 1;
-            }
-            else
-            {
-                AdapterObject->MapRegistersPerChannel = 1;
-            }
+            AdapterObject->MapRegistersPerChannel = DeviceDescription->Master ?
+                MaximumLengthPages : 1;
         }
     }
 
@@ -933,11 +1736,18 @@ HalAllocateCommonBuffer(IN PADAPTER_OBJECT AdapterObject,
      */
     if (AdapterObject->MasterDevice)
     {
-        BoundryAddressMultiple.HighPart = 1;
+        if (AdapterObject->Dma64BitAddresses)
+        {
+            BoundryAddressMultiple.QuadPart = 0;
+        }
+        else
+        {
+            BoundryAddressMultiple.QuadPart = 0x100000000ULL;
+        }
     }
     else
     {
-        BoundryAddressMultiple.LowPart = 0x10000;
+        BoundryAddressMultiple.QuadPart = 0x10000;
     }
 
     VirtualAddress = MmAllocateContiguousMemorySpecifyCache(Length,
@@ -976,16 +1786,18 @@ HalFreeCommonBuffer(IN PADAPTER_OBJECT AdapterObject,
 }
 
 typedef struct _SCATTER_GATHER_CONTEXT {
-    BOOLEAN UsingUserBuffer;
-	PADAPTER_OBJECT AdapterObject;
-	PMDL Mdl;
-	PUCHAR CurrentVa;
-	ULONG Length;
-	PDRIVER_LIST_CONTROL AdapterListControlRoutine;
-	PVOID AdapterListControlContext, MapRegisterBase;
-	ULONG MapRegisterCount;
-	BOOLEAN WriteToDevice;
-	WAIT_CONTEXT_BLOCK Wcb;
+    BOOLEAN CallerSuppliedList;
+    PADAPTER_OBJECT AdapterObject;
+    PMDL Mdl;
+    PUCHAR CurrentVa;
+    ULONG Length;
+    PDRIVER_LIST_CONTROL AdapterListControlRoutine;
+    PVOID AdapterListControlContext;
+    PVOID MapRegisterBase;
+    ULONG MapRegisterCount;
+    BOOLEAN WriteToDevice;
+    PSCATTER_GATHER_LIST ScatterGatherList;
+    WAIT_CONTEXT_BLOCK Wcb;
 } SCATTER_GATHER_CONTEXT, *PSCATTER_GATHER_CONTEXT;
 
 
@@ -999,14 +1811,35 @@ HalpScatterGatherAdapterControl(IN PDEVICE_OBJECT DeviceObject,
 	PSCATTER_GATHER_CONTEXT AdapterControlContext = Context;
 	PADAPTER_OBJECT AdapterObject = AdapterControlContext->AdapterObject;
 	PSCATTER_GATHER_LIST ScatterGatherList;
-	SCATTER_GATHER_ELEMENT TempElements[MAX_SG_ELEMENTS];
+	SCATTER_GATHER_ELEMENT StackElements[HALP_SG_STACK_ELEMENTS];
+	PSCATTER_GATHER_ELEMENT TempElements = StackElements;
+	ULONG ElementCapacity = AdapterControlContext->MapRegisterCount;
 	ULONG ElementCount = 0, RemainingLength = AdapterControlContext->Length;
 	PUCHAR CurrentVa = AdapterControlContext->CurrentVa;
+	BOOLEAN AllocatedTemp = FALSE;
 
 	/* Store the map register base for later in HalPutScatterGatherList */
 	AdapterControlContext->MapRegisterBase = MapRegisterBase;
 
-	while (RemainingLength > 0 && ElementCount < MAX_SG_ELEMENTS)
+    if (ElementCapacity == 0)
+    {
+        ExFreePoolWithTag(AdapterControlContext, TAG_DMA);
+        return DeallocateObject;
+    }
+
+    if (ElementCapacity > HALP_SG_STACK_ELEMENTS)
+    {
+        SIZE_T TempBytes = ElementCapacity * sizeof(*TempElements);
+        TempElements = ExAllocatePoolWithTag(NonPagedPool, TempBytes, TAG_DMA);
+        if (!TempElements)
+        {
+            ExFreePoolWithTag(AdapterControlContext, TAG_DMA);
+            return DeallocateObject;
+        }
+        AllocatedTemp = TRUE;
+    }
+
+	while (RemainingLength > 0 && ElementCount < ElementCapacity)
 	{
 	    TempElements[ElementCount].Length = RemainingLength;
 		TempElements[ElementCount].Reserved = 0;
@@ -1031,19 +1864,36 @@ HalpScatterGatherAdapterControl(IN PDEVICE_OBJECT DeviceObject,
 	if (RemainingLength > 0)
 	{
 		DPRINT1("Scatter/gather list construction failed!\n");
+        if (AllocatedTemp)
+        {
+            ExFreePoolWithTag(TempElements, TAG_DMA);
+        }
+        ExFreePoolWithTag(AdapterControlContext, TAG_DMA);
 		return DeallocateObject;
 	}
 
-	ScatterGatherList = ExAllocatePoolWithTag(NonPagedPool,
-	                                          sizeof(SCATTER_GATHER_LIST) + sizeof(SCATTER_GATHER_ELEMENT) * ElementCount,
-											  TAG_DMA);
-	ASSERT(ScatterGatherList);
+    ScatterGatherList = AdapterControlContext->ScatterGatherList;
+    if (!ScatterGatherList)
+    {
+        DPRINT1("Scatter/gather list buffer missing\n");
+        if (AllocatedTemp)
+        {
+            ExFreePoolWithTag(TempElements, TAG_DMA);
+        }
+        ExFreePoolWithTag(AdapterControlContext, TAG_DMA);
+        return DeallocateObject;
+    }
 
 	ScatterGatherList->NumberOfElements = ElementCount;
 	ScatterGatherList->Reserved = (ULONG_PTR)AdapterControlContext;
 	RtlCopyMemory(ScatterGatherList->Elements,
 	              TempElements,
 				  sizeof(SCATTER_GATHER_ELEMENT) * ElementCount);
+
+    if (AllocatedTemp)
+    {
+        ExFreePoolWithTag(TempElements, TAG_DMA);
+    }
 
 	DPRINT("Initiating S/G DMA with %d element(s)\n", ElementCount);
 
@@ -1149,11 +1999,7 @@ HalpScatterGatherAdapterControl(IN PDEVICE_OBJECT DeviceObject,
 					   AdapterControlContext->MapRegisterCount);
 
 
-	ExFreePoolWithTag(ScatterGather, TAG_DMA);
-
-    /* If this is our buffer, release it */
-    if (!AdapterControlContext->UsingUserBuffer)
-        ExFreePoolWithTag(AdapterControlContext, TAG_DMA);
+    ExFreePoolWithTag(AdapterControlContext, TAG_DMA);
 
     DPRINT("S/G DMA has finished!\n");
 }
@@ -1170,14 +2016,52 @@ HalCalculateScatterGatherListSize(
 {
     ULONG NumberOfMapRegisters;
     ULONG SgSize;
+    PUCHAR BaseVa;
 
-    UNIMPLEMENTED_ONCE;
+    UNREFERENCED_PARAMETER(AdapterObject);
 
-    NumberOfMapRegisters = PAGE_ROUND_UP(Length) >> PAGE_SHIFT;
-    SgSize = sizeof(SCATTER_GATHER_CONTEXT);
+    if (!Length)
+    {
+        if (!Mdl)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        Length = MmGetMdlByteCount(Mdl);
+    }
+
+    if (Length == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (CurrentVa)
+    {
+        BaseVa = CurrentVa;
+    }
+    else if (Mdl)
+    {
+        BaseVa = MmGetMdlVirtualAddress(Mdl);
+    }
+    else
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    NumberOfMapRegisters = ADDRESS_AND_SIZE_TO_SPAN_PAGES(BaseVa, Length);
+    if (NumberOfMapRegisters == 0)
+    {
+        NumberOfMapRegisters = 1;
+    }
+
+    SgSize = FIELD_OFFSET(SCATTER_GATHER_LIST, Elements) +
+             (NumberOfMapRegisters * sizeof(SCATTER_GATHER_ELEMENT));
 
     *ScatterGatherListSize = SgSize;
-    if (pNumberOfMapRegisters) *pNumberOfMapRegisters = NumberOfMapRegisters;
+    if (pNumberOfMapRegisters)
+    {
+        *pNumberOfMapRegisters = NumberOfMapRegisters;
+    }
 
     return STATUS_SUCCESS;
 }
@@ -1233,7 +2117,10 @@ HalBuildScatterGatherList(
     NTSTATUS Status;
     ULONG SgSize, NumberOfMapRegisters;
     PSCATTER_GATHER_CONTEXT ScatterGatherContext;
-    BOOLEAN UsingUserBuffer;
+    PSCATTER_GATHER_LIST ScatterGatherList;
+    PVOID AllocationBlock = NULL;
+    BOOLEAN CallerBufferProvided;
+    PUCHAR BaseVa;
 
     Status = HalCalculateScatterGatherListSize(AdapterObject,
                                                Mdl,
@@ -1250,47 +2137,72 @@ HalBuildScatterGatherList(
         {
             return STATUS_BUFFER_TOO_SMALL;
         }
-        UsingUserBuffer = TRUE;
-    }
-    else
-    {
-        ScatterGatherBuffer = ExAllocatePoolWithTag(NonPagedPool, SgSize, TAG_DMA);
-        if (!ScatterGatherBuffer)
+        ScatterGatherList = (PSCATTER_GATHER_LIST)ScatterGatherBuffer;
+        CallerBufferProvided = TRUE;
+        ScatterGatherContext = ExAllocatePoolWithTag(NonPagedPool,
+                                                     sizeof(*ScatterGatherContext),
+                                                     TAG_DMA);
+        if (!ScatterGatherContext)
         {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
-        UsingUserBuffer = FALSE;
+    }
+    else
+    {
+        AllocationBlock = ExAllocatePoolWithTag(NonPagedPool,
+                                                sizeof(*ScatterGatherContext) + SgSize,
+                                                TAG_DMA);
+        if (!AllocationBlock)
+        {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        ScatterGatherContext = (PSCATTER_GATHER_CONTEXT)AllocationBlock;
+        ScatterGatherList = (PSCATTER_GATHER_LIST)((PUCHAR)AllocationBlock + sizeof(*ScatterGatherContext));
+        CallerBufferProvided = FALSE;
     }
 
+    if (CurrentVa)
     {
-        ScatterGatherContext = (PSCATTER_GATHER_CONTEXT)ScatterGatherBuffer;
+        BaseVa = CurrentVa;
+    }
+    else
+    {
+        BaseVa = (PUCHAR)MmGetMdlVirtualAddress(Mdl);
+    }
 
-        /* Fill the scatter-gather context */
-        ScatterGatherContext->UsingUserBuffer = UsingUserBuffer;
-        ScatterGatherContext->AdapterObject = AdapterObject;
-        ScatterGatherContext->Mdl = Mdl;
-        ScatterGatherContext->CurrentVa = CurrentVa;
-        ScatterGatherContext->Length = Length;
-        ScatterGatherContext->MapRegisterCount = NumberOfMapRegisters;
-        ScatterGatherContext->AdapterListControlRoutine = ExecutionRoutine;
-        ScatterGatherContext->AdapterListControlContext = Context;
-        ScatterGatherContext->WriteToDevice = WriteToDevice;
+    /* Fill the scatter-gather context */
+    ScatterGatherContext->CallerSuppliedList = CallerBufferProvided;
+    ScatterGatherContext->AdapterObject = AdapterObject;
+    ScatterGatherContext->Mdl = Mdl;
+    ScatterGatherContext->CurrentVa = BaseVa;
+    ScatterGatherContext->Length = Length;
+    ScatterGatherContext->MapRegisterCount = NumberOfMapRegisters;
+    ScatterGatherContext->AdapterListControlRoutine = ExecutionRoutine;
+    ScatterGatherContext->AdapterListControlContext = Context;
+    ScatterGatherContext->WriteToDevice = WriteToDevice;
+    ScatterGatherContext->ScatterGatherList = ScatterGatherList;
 
-        ScatterGatherContext->Wcb.DeviceObject = DeviceObject;
-        ScatterGatherContext->Wcb.DeviceContext = (PVOID)ScatterGatherContext;
-        ScatterGatherContext->Wcb.CurrentIrp = DeviceObject->CurrentIrp;
+    ScatterGatherContext->Wcb.DeviceObject = DeviceObject;
+    ScatterGatherContext->Wcb.DeviceContext = (PVOID)ScatterGatherContext;
+    ScatterGatherContext->Wcb.CurrentIrp = DeviceObject->CurrentIrp;
 
-        Status = HalAllocateAdapterChannel(AdapterObject,
-                                           &ScatterGatherContext->Wcb,
-                                           NumberOfMapRegisters,
-                                           HalpScatterGatherAdapterControl);
+    Status = HalAllocateAdapterChannel(AdapterObject,
+                                       &ScatterGatherContext->Wcb,
+                                       NumberOfMapRegisters,
+                                       HalpScatterGatherAdapterControl);
 
-        if (!NT_SUCCESS(Status))
+    if (!NT_SUCCESS(Status))
+    {
+        if (!CallerBufferProvided)
         {
-            if (!UsingUserBuffer)
-                ExFreePoolWithTag(ScatterGatherBuffer, TAG_DMA);
-            return Status;
+            ExFreePoolWithTag(AllocationBlock, TAG_DMA);
         }
+        else
+        {
+            ExFreePoolWithTag(ScatterGatherContext, TAG_DMA);
+        }
+        return Status;
     }
 
     return STATUS_SUCCESS;
@@ -1304,8 +2216,98 @@ HalBuildMdlFromScatterGatherList(
     IN PMDL OriginalMdl,
     OUT PMDL *TargetMdl)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PFN_COUNT TotalPages = 0;
+    ULONG mdlSize;
+    PMDL NewMdl;
+    PFN_NUMBER *PfnArray;
+    ULONGLONG TotalLength = 0;
+    ULONGLONG FirstAddress;
+    ULONG Index, PfnIndex = 0;
+
+    UNREFERENCED_PARAMETER(DmaAdapter);
+    UNREFERENCED_PARAMETER(OriginalMdl);
+
+    if (!ScatterGather || !TargetMdl)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (ScatterGather->NumberOfElements == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    for (Index = 0; Index < ScatterGather->NumberOfElements; ++Index)
+    {
+        PHYSICAL_ADDRESS SegmentAddress = ScatterGather->Elements[Index].Address;
+        ULONG SegmentLength = ScatterGather->Elements[Index].Length;
+        ULONGLONG CurrentAddress = SegmentAddress.QuadPart;
+
+        if (SegmentLength == 0)
+        {
+            continue;
+        }
+
+        TotalLength += SegmentLength;
+        TotalPages += ADDRESS_AND_SIZE_TO_SPAN_PAGES((PVOID)(ULONG_PTR)CurrentAddress,
+                                                    SegmentLength);
+    }
+
+    if (TotalPages == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (TotalLength > MAXULONG)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    mdlSize = sizeof(MDL) + (TotalPages * sizeof(PFN_NUMBER));
+    NewMdl = ExAllocatePoolWithTag(NonPagedPool, mdlSize, TAG_DMA);
+    if (!NewMdl)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(NewMdl, mdlSize);
+    NewMdl->Size = (USHORT)mdlSize;
+    NewMdl->MdlFlags = MDL_PAGES_LOCKED | MDL_SOURCE_IS_NONPAGED_POOL;
+    NewMdl->ByteCount = (ULONG)TotalLength;
+
+    FirstAddress = ScatterGather->Elements[0].Address.QuadPart;
+    NewMdl->ByteOffset = (CSHORT)(FirstAddress & (PAGE_SIZE - 1));
+    NewMdl->StartVa = (PVOID)(ULONG_PTR)(FirstAddress & ~(ULONGLONG)(PAGE_SIZE - 1));
+
+    PfnArray = MmGetMdlPfnArray(NewMdl);
+
+    for (Index = 0; Index < ScatterGather->NumberOfElements; ++Index)
+    {
+        PHYSICAL_ADDRESS SegmentAddress = ScatterGather->Elements[Index].Address;
+        ULONG SegmentLength = ScatterGather->Elements[Index].Length;
+        ULONGLONG CurrentAddress = SegmentAddress.QuadPart;
+
+        while (SegmentLength)
+        {
+            ULONGLONG PageBase = CurrentAddress & ~(ULONGLONG)(PAGE_SIZE - 1);
+            ULONG BytesInPage = (ULONG)(PAGE_SIZE - (CurrentAddress - PageBase));
+
+            if (BytesInPage > SegmentLength)
+            {
+                BytesInPage = SegmentLength;
+            }
+
+            PfnArray[PfnIndex++] = (PFN_NUMBER)(PageBase >> PAGE_SHIFT);
+
+            CurrentAddress += BytesInPage;
+            SegmentLength -= BytesInPage;
+        }
+    }
+
+    ASSERT(PfnIndex == TotalPages);
+
+    *TargetMdl = NewMdl;
+    return STATUS_SUCCESS;
 }
 #endif
 
@@ -2098,12 +3100,31 @@ IoMapTransfer(IN PADAPTER_OBJECT AdapterObject,
      */
     if (MapRegisterBase == NULL)
     {
+        BOOLEAN EnforceLimit = FALSE;
+        ULONGLONG MaxAddress = (ULONGLONG)-1;
+
+        if (AdapterObject)
+        {
+            HighestAcceptableAddress = HalpGetAdapterMaximumPhysicalAddress(AdapterObject);
+            if (HighestAcceptableAddress.QuadPart != -1)
+            {
+                EnforceLimit = TRUE;
+                MaxAddress = HighestAcceptableAddress.QuadPart;
+            }
+        }
+
         while (TransferLength < *Length)
         {
             MdlPage1 = *MdlPagesPtr;
             MdlPage2 = *(MdlPagesPtr + 1);
             if (MdlPage1 + 1 != MdlPage2) break;
-            if ((MdlPage1 ^ MdlPage2) & ~0xFFFFF) break;
+            if (EnforceLimit)
+            {
+                ULONGLONG NextEnd = PhysicalAddress.QuadPart +
+                                    TransferLength +
+                                    PAGE_SIZE - 1;
+                if (NextEnd > MaxAddress) break;
+            }
             TransferLength += PAGE_SIZE;
             MdlPagesPtr++;
         }
@@ -2129,7 +3150,9 @@ IoMapTransfer(IN PADAPTER_OBJECT AdapterObject,
         MdlPage1 = *MdlPagesPtr;
         MdlPage2 = *(MdlPagesPtr + 1);
         if (MdlPage1 + 1 != MdlPage2) break;
-        if (!HalpEisaDma && ((MdlPage1 ^ MdlPage2) & ~0xF)) break;
+        if ((!AdapterObject) ||
+            ((!AdapterObject->MasterDevice) &&
+             ((MdlPage1 ^ MdlPage2) & ~0xF))) break;
         TransferLength += PAGE_SIZE;
         MdlPagesPtr++;
     }

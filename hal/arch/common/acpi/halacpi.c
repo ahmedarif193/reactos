@@ -1,7 +1,7 @@
 /*
  * PROJECT:         ReactOS HAL
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
- * FILE:            hal/halx86/acpi/halacpi.c
+ * FILE:            hal/arch/common/acpi/halacpi.c
  * PURPOSE:         HAL ACPI Code
  * PROGRAMMERS:     ReactOS Portable Systems Group
  */
@@ -303,8 +303,6 @@ HalpAcpiForceVirtualBoxPciExpress(
 }
 
 #define HALP_ACPI_OVERRIDE_ALIGNMENT   8
-#define ACPI_GAS_SYSTEM_MEMORY         0
-#define ACPI_GAS_SYSTEM_IO             1
 #define ACPI_PM1_STATUS_POWER_BUTTON   0x0100
 #ifndef ACPI_FADT_POWER_BUTTON
 #define ACPI_FADT_POWER_BUTTON         (1 << 4)
@@ -393,13 +391,11 @@ VOID
 HalpAcpiInitializePmIoBlocks(
     _In_ PFADT Fadt);
 
-static
 BOOLEAN
 HalpAcpiReadRegister(
     _In_ const GEN_ADDR *Gas,
     _Out_ ULONG *Value);
 
-static
 BOOLEAN
 HalpAcpiWriteRegister(
     _In_ const GEN_ADDR *Gas,
@@ -823,7 +819,6 @@ HalpAcpiInitializePmIoBlocks(
                                                                      &HalpGeneralPurposeBlocks[1]);
 }
 
-static
 BOOLEAN
 HalpAcpiReadRegister(
     _In_ const GEN_ADDR *Gas,
@@ -959,7 +954,6 @@ HalpAcpiQueryPowerButton(VOID)
     return Pressed;
 }
 
-static
 BOOLEAN
 HalpAcpiWriteRegister(
     _In_ const GEN_ADDR *Gas,

@@ -2,11 +2,11 @@
 include_directories(${HAL_I386_DIR}/include ${REACTOS_SOURCE_DIR}/drivers/bus/acpi/acpica/include)
 
 list(APPEND HAL_ACPI_SOURCE
-    ${HAL_I386_DIR}/acpi/halacpi.c
-    ${HAL_I386_DIR}/acpi/halpnpdd.c
-    ${HAL_I386_DIR}/acpi/busemul.c
-    ${HAL_I386_DIR}/acpi/madt.c
-    ${HAL_I386_DIR}/legacy/bus/pcibus.c
+    ${HAL_COMMON_DIR}/acpi/halacpi.c
+    ${HAL_COMMON_DIR}/acpi/halpnpdd.c
+    ${HAL_COMMON_DIR}/acpi/busemul.c
+    ${HAL_COMMON_DIR}/acpi/madt.c
+    ${HAL_COMMON_DIR}/legacy/bus/pcibus.c
     ${CMAKE_CURRENT_BINARY_DIR}/pci_classes.c
     ${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.c)
 

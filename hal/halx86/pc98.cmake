@@ -12,7 +12,7 @@ list(APPEND HAL_PC98_SOURCE
     ${HAL_I386_DIR}/generic/setjmp_shim.c
     ${HAL_I386_DIR}/generic/apic_stubs.c
     ${HAL_I386_DIR}/generic/display.c
-    ${HAL_I386_DIR}/generic/dma.c
+    ${HAL_COMMON_DIR}/generic/dma.c
     ${HAL_I386_DIR}/generic/drive.c
     ${HAL_I386_DIR}/generic/halinit.c
     ${HAL_I386_DIR}/generic/kdpci.c
@@ -41,15 +41,15 @@ list(APPEND HAL_PC98_ASM_SOURCE
 
 # Legacy
 list(APPEND HAL_PC98_SOURCE
-    ${HAL_I386_DIR}/legacy/bus/bushndlr.c
+    ${HAL_COMMON_DIR}/legacy/bus/bushndlr.c
     ${HAL_I386_DIR}/legacy/bus/cmosbus.c
     ${HAL_I386_DIR}/legacy/bus/isabus.c
-    ${HAL_I386_DIR}/legacy/bus/pcibus.c
+    ${HAL_COMMON_DIR}/legacy/bus/sysbus.c
+    ${HAL_COMMON_DIR}/legacy/bussupp.c
+    ${HAL_COMMON_DIR}/legacy/bus/pcibus.c
     ${HAL_I386_DIR}/legacy/acpi_ecam_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/pci_classes.c
     ${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.c
-    ${HAL_I386_DIR}/legacy/bus/sysbus.c
-    ${HAL_I386_DIR}/legacy/bussupp.c
     ${HAL_I386_DIR}/legacy/halpnpdd.c
     ${HAL_I386_DIR}/legacy/halpcat.c)
 

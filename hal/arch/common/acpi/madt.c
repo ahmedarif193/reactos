@@ -17,6 +17,64 @@
 #define NDEBUG
 #include <debug.h>
 
+static
+UCHAR
+HalpAcpiDefaultPolarity(
+    _In_ UCHAR Bus)
+{
+    return (Bus == 0) ? HAL_ACPI_POLARITY_HIGH : HAL_ACPI_POLARITY_LOW;
+}
+
+static
+UCHAR
+HalpAcpiDefaultTrigger(
+    _In_ UCHAR Bus)
+{
+    return (Bus == 0) ? HAL_ACPI_TRIGGER_EDGE : HAL_ACPI_TRIGGER_LEVEL;
+}
+
+static
+UCHAR
+HalpAcpiTranslatePolarity(
+    _In_ UCHAR Bus,
+    _In_ USHORT IntiFlags)
+{
+    switch (IntiFlags & ACPI_MADT_POLARITY_MASK)
+    {
+        case ACPI_MADT_POLARITY_ACTIVE_HIGH:
+            return HAL_ACPI_POLARITY_HIGH;
+
+        case ACPI_MADT_POLARITY_ACTIVE_LOW:
+            return HAL_ACPI_POLARITY_LOW;
+
+        case ACPI_MADT_POLARITY_CONFORMS:
+        case ACPI_MADT_POLARITY_RESERVED:
+        default:
+            return HalpAcpiDefaultPolarity(Bus);
+    }
+}
+
+static
+UCHAR
+HalpAcpiTranslateTrigger(
+    _In_ UCHAR Bus,
+    _In_ USHORT IntiFlags)
+{
+    switch (IntiFlags & ACPI_MADT_TRIGGER_MASK)
+    {
+        case ACPI_MADT_TRIGGER_EDGE:
+            return HAL_ACPI_TRIGGER_EDGE;
+
+        case ACPI_MADT_TRIGGER_LEVEL:
+            return HAL_ACPI_TRIGGER_LEVEL;
+
+        case ACPI_MADT_TRIGGER_CONFORMS:
+        case ACPI_MADT_TRIGGER_RESERVED:
+        default:
+            return HalpAcpiDefaultTrigger(Bus);
+    }
+}
+
 // See HalpParseApicTables(). Only enable this to local-debug it.
 // That needs, for example, to test-call the function later or to use the "FrLdrDbgPrint" hack.
 #if DBG && 0
@@ -44,9 +102,7 @@ HALP_APIC_INFO_TABLE HalpApicInfoTable;
 static PROCESSOR_IDENTITY HalpStaticProcessorIdentity[MAXIMUM_PROCESSORS];
 const PPROCESSOR_IDENTITY HalpProcessorIdentity = HalpStaticProcessorIdentity;
 
-#if 0
 extern ULONG HalpPicVectorRedirect[16];
-#endif
 
 /* FUNCTIONS ******************************************************************/
 
@@ -196,9 +252,11 @@ HalpParseApicTables(
                     return;
                 }
 
-                DPRINT00(" Interrupt Override: Bus %u, SourceIrq %u, GlobalIrq %08X, IntiFlags %04X / UNIMPLEMENTED\n",
-                         InterruptOverride->Bus, InterruptOverride->SourceIrq,
-                         InterruptOverride->GlobalIrq, InterruptOverride->IntiFlags);
+                DPRINT00(" Interrupt Override: Bus %u, SourceIrq %u, GlobalIrq %08X, IntiFlags %04X\n",
+                         InterruptOverride->Bus,
+                         InterruptOverride->SourceIrq,
+                         InterruptOverride->GlobalIrq,
+                         InterruptOverride->IntiFlags);
 
                 if (InterruptOverride->Bus != 0) // 0 = ISA
                 {
@@ -206,10 +264,7 @@ HalpParseApicTables(
                     return;
                 }
 
-#if 1
-                // TODO: Implement it.
-#else // TODO: Is that correct?
-                if (InterruptOverride->SourceIrq > _countof(HalpPicVectorRedirect))
+                if (InterruptOverride->SourceIrq >= _countof(HalpPicVectorRedirect))
                 {
                     DPRINT01("Invalid SourceIrq: %p, %u\n",
                              InterruptOverride, InterruptOverride->SourceIrq);
@@ -218,8 +273,26 @@ HalpParseApicTables(
 
                 // Note: GlobalIrq is not validated in any way (yet).
                 HalpPicVectorRedirect[InterruptOverride->SourceIrq] = InterruptOverride->GlobalIrq;
-                // TODO: What about 'InterruptOverride->IntiFlags'?
-#endif
+
+                {
+                    UCHAR Polarity;
+                    UCHAR Trigger;
+
+                    Polarity = HalpAcpiTranslatePolarity((UCHAR)InterruptOverride->Bus,
+                                                         InterruptOverride->IntiFlags);
+                    Trigger = HalpAcpiTranslateTrigger((UCHAR)InterruptOverride->Bus,
+                                                       InterruptOverride->IntiFlags);
+
+                    HalpPciRecordGsiInfo(InterruptOverride->GlobalIrq,
+                                         Polarity,
+                                         Trigger,
+                                         0,
+                                         (UCHAR)InterruptOverride->Bus,
+                                         0xFF,
+                                         0xFF,
+                                         0,
+                                         TRUE);
+                }
 
                 break;
             }

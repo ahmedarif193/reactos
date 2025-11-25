@@ -9,7 +9,7 @@ list(APPEND HAL_XBOX_SOURCE
     ${HAL_I386_DIR}/generic/beep.c
     ${HAL_I386_DIR}/generic/cmos.c
     ${HAL_I386_DIR}/generic/display.c
-    ${HAL_I386_DIR}/generic/dma.c
+    ${HAL_COMMON_DIR}/generic/dma.c
     ${HAL_I386_DIR}/generic/drive.c
     ${HAL_I386_DIR}/generic/halinit.c
     ${HAL_I386_DIR}/generic/kdpci.c
@@ -24,15 +24,15 @@ list(APPEND HAL_XBOX_SOURCE
     ${HAL_I386_DIR}/generic/setjmp_shim.c
     ${HAL_I386_DIR}/generic/portio.c
     ${HAL_I386_DIR}/generic/x86bios.c
-    ${HAL_I386_DIR}/legacy/bus/bushndlr.c
+    ${HAL_COMMON_DIR}/legacy/bus/bushndlr.c
     ${HAL_I386_DIR}/legacy/bus/cmosbus.c
     ${HAL_I386_DIR}/legacy/bus/isabus.c
-    ${HAL_I386_DIR}/legacy/bus/pcibus.c
+    ${HAL_COMMON_DIR}/legacy/bus/sysbus.c
+    ${HAL_COMMON_DIR}/legacy/bussupp.c
+    ${HAL_COMMON_DIR}/legacy/bus/pcibus.c
     ${HAL_I386_DIR}/legacy/acpi_ecam_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/pci_classes.c
     ${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.c
-    ${HAL_I386_DIR}/legacy/bus/sysbus.c
-    ${HAL_I386_DIR}/legacy/bussupp.c
     ${HAL_I386_DIR}/legacy/halpnpdd.c
     ${HAL_I386_DIR}/legacy/halpcat.c
     ${HAL_I386_DIR}/generic/profil.c
