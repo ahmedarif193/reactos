@@ -10,7 +10,7 @@
 #define NDEBUG
 #include <debug.h>
 
-#define NDEBUG_EHCI_ROOT_HUB
+/* Keep root hub traces enabled in DBG builds (controlled by g_EhciTraceMask bit1) */
 #include "dbg_ehci.h"
 
 MPSTATUS
@@ -23,37 +23,41 @@ EHCI_RH_ChirpRootPort(IN PVOID ehciExtension,
     EHCI_PORT_STATUS_CONTROL PortSC;
     ULONG PortBit;
     ULONG ix;
+    ULONG ResetLoopCount;
 
     DPRINT_RH("EHCI_RH_ChirpRootPort: Port - %x\n", Port);
     ASSERT(Port != 0);
 
-    if (Port == 0 || Port > 15) {
+    if (Port == 0 || Port > EhciExtension->NumberOfPorts)
+    {
+        DPRINT_RH("EHCI_RH_ChirpRootPort: invalid port - %x\n", Port);
         return MP_STATUS_FAILURE;
+    }
+
+    PortBit = 1 << (Port - 1);
+
+    /* If a reset is already in progress, don't touch this port again */
+    if (PortBit & EhciExtension->ResetPortBits)
+    {
+        DPRINT_RH("EHCI_RH_ChirpRootPort: Skip port - %x (reset in progress)\n", Port);
+        return MP_STATUS_SUCCESS;
     }
 
     PortStatusReg = &EhciExtension->OperationalRegs->PortControl[Port - 1].AsULONG;
     PortSC.AsULONG = READ_REGISTER_ULONG(PortStatusReg);
     DPRINT_RH("EHCI_RH_ChirpRootPort: PortSC - %X\n", PortSC.AsULONG);
 
-    PortBit = 1 << (Port - 1);
-
-    if (PortBit & EhciExtension->ResetPortBits)
+    if (!PortSC.PortPower)
     {
-        DPRINT_RH("EHCI_RH_ChirpRootPort: Skip port - %x\n", Port);
+        DPRINT_RH("EHCI_RH_ChirpRootPort: Skip port - %x (power off)\n", Port);
         return MP_STATUS_SUCCESS;
     }
 
-    if (PortSC.PortPower == 0)
-    {
-        DPRINT_RH("EHCI_RH_ChirpRootPort: Skip port - %x\n", Port);
-        return MP_STATUS_SUCCESS;
-    }
-
-    if (PortSC.CurrentConnectStatus == 0 ||
-        PortSC.PortEnabledDisabled == 1 ||
+    if (!PortSC.CurrentConnectStatus ||
+        PortSC.PortEnabledDisabled ||
         PortSC.PortOwner == EHCI_PORT_OWNER_COMPANION_CONTROLLER)
     {
-        DPRINT_RH("EHCI_RH_ChirpRootPort: No port - %x\n", Port);
+        DPRINT_RH("EHCI_RH_ChirpRootPort: No HS device on port - %x\n", Port);
         return MP_STATUS_SUCCESS;
     }
 
@@ -81,6 +85,8 @@ EHCI_RH_ChirpRootPort(IN PVOID ehciExtension,
 
     RegPacket.UsbPortWait(EhciExtension, 10);
 
+    ResetLoopCount = 0;
+
     do
     {
         PortSC.AsULONG = READ_REGISTER_ULONG(PortStatusReg);
@@ -99,11 +105,20 @@ EHCI_RH_ChirpRootPort(IN PVOID ehciExtension,
 
              DPRINT_RH("EHCI_RH_ChirpRootPort: Reset port - %x\n", Port);
 
-             if (PortSC.PortReset == 0)
+             if (PortSC.PortReset == 0 || PortSC.AsULONG == (ULONG)-1)
                  break;
         }
+
+        ResetLoopCount++;
+        if (ResetLoopCount >= 100)
+        {
+            DPRINT1("EHCI_RH_ChirpRootPort: Port reset timeout on port %x, PortSC=0x%08lx\n",
+                    Port,
+                    PortSC.AsULONG);
+            break;
+        }
     }
-    while (PortSC.PortReset == 1);
+    while (PortSC.PortReset == 1 && PortSC.AsULONG != (ULONG)-1);
 
     PortSC.AsULONG = READ_REGISTER_ULONG(PortStatusReg);
 
@@ -197,6 +212,8 @@ EHCI_RH_GetPortStatus(IN PVOID ehciExtension,
     EHCI_PORT_STATUS_CONTROL PortSC;
     USB_PORT_STATUS_AND_CHANGE status;
     ULONG PortMaskBits;
+    BOOLEAN ConnectedNow;
+    BOOLEAN ConnectedBefore;
 
     ASSERT(Port != 0);
 
@@ -205,12 +222,17 @@ EHCI_RH_GetPortStatus(IN PVOID ehciExtension,
 
     if (PortSC.CurrentConnectStatus)
     {
-        DPRINT_RH("EHCI_RH_GetPortStatus: Port - %x, PortSC.AsULONG - %X\n",
-                  Port,
-                  PortSC.AsULONG);
+        /* Example: PortSC=0x1003 => CCS=1, CSC=1, POWER=1 on HS port */
+        // DPRINT_RH("EHCI_RH_GetPortStatus: Port - %x, PortSC.AsULONG - %X\n",
+        //           Port,
+        //           PortSC.AsULONG);
     }
 
     PortStatus->AsUlong32 = 0;
+
+    PortMaskBits = 1 << (Port - 1);
+    ConnectedNow = (PortSC.CurrentConnectStatus != 0);
+    ConnectedBefore = ((EhciExtension->LastConnectStatusBits & PortMaskBits) != 0);
 
     if (PortSC.LineStatus == EHCI_LINE_STATUS_K_STATE_LOW_SPEED &&
         PortSC.PortOwner != EHCI_PORT_OWNER_COMPANION_CONTROLLER &&
@@ -237,14 +259,13 @@ EHCI_RH_GetPortStatus(IN PVOID ehciExtension,
     status.PortChange.Usb20PortChange.PortEnableDisableChange = PortSC.PortEnableDisableChange;
     status.PortChange.Usb20PortChange.OverCurrentIndicatorChange = PortSC.OverCurrentChange;
 
-    PortMaskBits = 1 << (Port - 1);
-
     if (status.PortStatus.Usb20PortStatus.CurrentConnectStatus)
         status.PortStatus.Usb20PortStatus.LowSpeedDeviceAttached = 0;
 
     status.PortStatus.Usb20PortStatus.HighSpeedDeviceAttached = 1;
 
-    if (PortSC.ConnectStatusChange)
+    /* Latch connect-change either from HW bit or from cached state difference */
+    if (PortSC.ConnectStatusChange || (ConnectedNow != ConnectedBefore))
         EhciExtension->ConnectPortBits |= PortMaskBits;
 
     if (EhciExtension->FinishResetPortBits & PortMaskBits)
@@ -256,13 +277,20 @@ EHCI_RH_GetPortStatus(IN PVOID ehciExtension,
     if (EhciExtension->SuspendPortBits & PortMaskBits)
         status.PortChange.Usb20PortChange.SuspendChange = 1;
 
+    /* Update cached connect state after computing change bits */
+    if (ConnectedNow)
+        EhciExtension->LastConnectStatusBits |= PortMaskBits;
+    else
+        EhciExtension->LastConnectStatusBits &= ~PortMaskBits;
+
     *PortStatus = status;
 
     if (status.PortStatus.Usb20PortStatus.CurrentConnectStatus)
     {
-        DPRINT_RH("EHCI_RH_GetPortStatus: Port - %x, status.AsULONG - %X\n",
-                  Port,
-                  status.AsUlong32);
+        /* Example: status=0x10501 => PortStatus=0x0501 (CONNECT|POWER|HIGH_SPEED), PortChange=0x0001 (ConnectStatusChange) */
+        // DPRINT_RH("EHCI_RH_GetPortStatus: Port - %x, status.AsULONG - %X\n",
+        //           Port,
+        //           status.AsUlong32);
     }
 
     return MP_STATUS_SUCCESS;
@@ -273,7 +301,8 @@ NTAPI
 EHCI_RH_GetHubStatus(IN PVOID ehciExtension,
                      IN PUSB_HUB_STATUS_AND_CHANGE HubStatus)
 {
-    DPRINT_RH("EHCI_RH_GetHubStatus: ... \n");
+    /* HubStatus is always zero for EHCI root hubs; changes are per-port only */
+    // DPRINT_RH("EHCI_RH_GetHubStatus: ... \n");
     HubStatus->AsUlong32 = 0;
     return MP_STATUS_SUCCESS;
 }
@@ -326,11 +355,14 @@ EHCI_RH_PortResetComplete(IN PVOID ehciExtension,
     PULONG PortStatusReg;
     EHCI_PORT_STATUS_CONTROL PortSC;
     ULONG ix;
+    ULONG ResetLoopCount;
     PUSHORT Port = Context;
 
     DPRINT("EHCI_RH_PortResetComplete: *Port - %x\n", *Port);
 
     PortStatusReg = &EhciExtension->OperationalRegs->PortControl[*Port - 1].AsULONG;
+
+    ResetLoopCount = 0;
 
     do
     {
@@ -350,11 +382,20 @@ EHCI_RH_PortResetComplete(IN PVOID ehciExtension,
 
              DPRINT("EHCI_RH_PortResetComplete: Reset port - %x\n", Port);
 
-             if (PortSC.PortReset == 0)
+             if (PortSC.PortReset == 0 || PortSC.AsULONG == (ULONG)-1)
                  break;
         }
+
+        ResetLoopCount++;
+        if (ResetLoopCount >= 100)
+        {
+            DPRINT1("EHCI_RH_PortResetComplete: Port reset timeout on port %x, PortSC=0x%08lx\n",
+                    *Port,
+                    PortSC.AsULONG);
+            break;
+        }
     }
-    while (PortSC.PortReset == 1 && (PortSC.AsULONG != -1));
+    while (PortSC.PortReset == 1 && PortSC.AsULONG != (ULONG)-1);
 
     RegPacket.UsbPortRequestAsyncCallback(EhciExtension,
                                           50, // TimerValue
@@ -424,15 +465,67 @@ EHCI_RH_SetFeaturePortPower(IN PVOID ehciExtension,
     return MP_STATUS_SUCCESS;
 }
 
+
 MPSTATUS
 NTAPI
 EHCI_RH_SetFeaturePortEnable(IN PVOID ehciExtension,
                              IN USHORT Port)
 {
-    DPRINT_RH("EHCI_RH_SetFeaturePortEnable: Not supported\n");
+    PEHCI_EXTENSION EhciExtension = ehciExtension;
+    PULONG PortStatusReg;
+    EHCI_PORT_STATUS_CONTROL PortSC;
+
+    DPRINT_RH("EHCI_RH_SetFeaturePortEnable: Port - %x\n", Port);
     ASSERT(Port != 0);
+
+    /* Runtime validation in addition to ASSERT */
+    if (Port == 0 || Port > EhciExtension->NumberOfPorts)
+    {
+        DPRINT_RH("EHCI_RH_SetFeaturePortEnable: invalid port %x\n", Port);
+        return MP_STATUS_FAILURE;
+    }
+
+    PortStatusReg = &EhciExtension->OperationalRegs->PortControl[Port - 1].AsULONG;
+
+    PortSC.AsULONG = READ_REGISTER_ULONG(PortStatusReg);
+
+    /* Clear change bits only */
+    PortSC.ConnectStatusChange = 0;
+    PortSC.PortEnableDisableChange = 0;
+    PortSC.OverCurrentChange = 0;
+
+    /* If port is not powered, nothing to do */
+    if (!PortSC.PortPower)
+    {
+        WRITE_REGISTER_ULONG(PortStatusReg, PortSC.AsULONG);
+        return MP_STATUS_SUCCESS;
+    }
+
+    /* If the port is already enabled or owned by a companion HC, just ack */
+    if (PortSC.PortEnabledDisabled == 1 ||
+        PortSC.PortOwner == EHCI_PORT_OWNER_COMPANION_CONTROLLER)
+    {
+        WRITE_REGISTER_ULONG(PortStatusReg, PortSC.AsULONG);
+        return MP_STATUS_SUCCESS;
+    }
+
+    /*
+     * EHCI does not allow software to directly set PortEnabledDisabled = 1.
+     * The defined way to enable a port is via a port reset while a device
+     * is connected.  Treat SET_FEATURE(PORT_ENABLE) as a request to
+     * reset-and-enable when a device is present.
+     */
+    if (PortSC.CurrentConnectStatus == 1)
+    {
+        return EHCI_RH_SetFeaturePortReset(ehciExtension, Port);
+    }
+
+    /* No device attached – just commit cleared change bits and return */
+    WRITE_REGISTER_ULONG(PortStatusReg, PortSC.AsULONG);
+
     return MP_STATUS_SUCCESS;
 }
+
 
 MPSTATUS
 NTAPI

@@ -431,6 +431,19 @@ USBH_GetDeviceType(
   IN PUSB_DEVICE_HANDLE DeviceHandle,
   OUT USB_DEVICE_TYPE * OutDeviceType);
 
+NTSTATUS
+NTAPI
+USBH_RegQueryDeviceIgnoreHWSerNumFlag(
+  IN USHORT VendorId,
+  IN USHORT ProductId,
+  IN USHORT BcdDevice,
+  OUT PBOOLEAN IgnoreHwSerialNumber);
+
+BOOLEAN
+NTAPI
+USBH_DeviceIs2xDualMode(
+  IN PUSBHUB_PORT_PDO_EXTENSION PdoExtension);
+
 PUSBHUB_FDO_EXTENSION
 NTAPI
 USBH_GetRootHubExtension(

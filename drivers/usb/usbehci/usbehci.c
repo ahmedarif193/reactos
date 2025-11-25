@@ -10,10 +10,118 @@
 #define NDEBUG
 #include <debug.h>
 
-#define NDEBUG_EHCI_TRACE
+/* Enable EHCI trace channel for noisy chatty logs in DBG builds */
+/* Intentionally NOT defining NDEBUG_EHCI_TRACE so DPRINT_EHCI is active */
 #include "dbg_ehci.h"
 
+#if DBG
+static VOID
+EHCI_DumpSetupPacket(IN PUSB_DEFAULT_PIPE_SETUP_PACKET Setup)
+{
+    if (!Setup) return;
+    DPRINT1("EHCI SETUP: bmReq=0x%02x bReq=0x%02x wVal=0x%04x wIdx=0x%04x wLen=%u\n",
+            Setup->bmRequestType.B,
+            Setup->bRequest,
+            Setup->wValue.W,
+            Setup->wIndex.W,
+            Setup->wLength);
+}
+#endif
+
 USBPORT_REGISTRATION_PACKET RegPacket;
+
+/* Runtime trace control (DBG builds):
+ *  bit0: general EHCI logs (DPRINT_EHCI)
+ *  bit1: root hub logs (DPRINT_RH)
+ *  bit2: poll tick logs
+ */
+#if DBG
+/* Default: enable general + root hub traces; poll logs via registry */
+ULONG g_EhciTraceMask = 0x3;
+ULONG g_EhciPollLogDiv = 0x400; /* default: log every 1024 polls */
+#endif
+
+/* Forward declarations for local routines referenced before definition */
+VOID
+NTAPI
+EHCI_EnableInterrupts(IN PVOID ehciExtension);
+
+/* Forward decls for helpers used before definition */
+VOID
+NTAPI
+EHCI_RemoveQhFromAsyncList(IN PEHCI_EXTENSION EhciExtension,
+                           IN PEHCI_HCD_QH QH);
+
+#if DBG
+static VOID
+EHCI_HexDump(IN PCSTR Tag, IN const VOID* Buf, IN ULONG Length)
+{
+    const UCHAR* p = (const UCHAR*)Buf;
+    ULONG i;
+
+    if (!Buf || !Length)
+        return;
+
+    if (Length > 64) Length = 64; /* keep it short */
+
+    DbgPrint("%s: ", Tag);
+    for (i = 0; i < Length; i++)
+    {
+        DbgPrint("%02x%s", p[i], ((i + 1) % 16 == 0) ? "\n" : " ");
+    }
+    if (Length % 16) DbgPrint("\n");
+}
+#endif
+
+#if DBG
+static
+VOID
+EHCI_DumpScatterGatherList(IN PCSTR Tag,
+                           IN PUSBPORT_TRANSFER_PARAMETERS TransferParameters,
+                           IN PUSBPORT_SCATTER_GATHER_LIST SgList)
+{
+    ULONG Index;
+
+    if (!TransferParameters)
+    {
+        DPRINT1("EHCI_SG_DUMP: %s: TransferParameters NULL\n", Tag);
+        return;
+    }
+
+    if (!TransferParameters->TransferBufferLength)
+    {
+        DPRINT1("EHCI_SG_DUMP: %s: TransferBufferLength=0\n", Tag);
+        return;
+    }
+
+    if (!SgList)
+    {
+        DPRINT1("EHCI_SG_DUMP: %s: SgList NULL (Length=%lu)\n",
+                Tag,
+                TransferParameters->TransferBufferLength);
+        return;
+    }
+
+    DPRINT1("EHCI_SG_DUMP: %s: Len=%lu Flags=0x%lx Elements=%lu CurrentVa=%p\n",
+            Tag,
+            TransferParameters->TransferBufferLength,
+            TransferParameters->TransferFlags,
+            SgList->SgElementCount,
+            (PVOID)SgList->CurrentVa);
+
+    for (Index = 0; Index < SgList->SgElementCount; Index++)
+    {
+        ULONGLONG PhysicalAddress = SgList->SgElement[Index].SgPhysicalAddress.QuadPart;
+
+        DPRINT1("EHCI_SG_DUMP: %s: SG[%lu] PA=0x%I64x Len=%lu Offset=%lu\n",
+                Tag,
+                Index,
+                PhysicalAddress,
+                SgList->SgElement[Index].SgTransferLength,
+                SgList->SgElement[Index].SgOffset);
+    }
+}
+#endif
 
 static const UCHAR ClassicPeriod[8] = {
     ENDPOINT_INTERRUPT_1ms - 1,
@@ -108,6 +216,28 @@ static const UCHAR LinkTable[] = {
 };
 C_ASSERT(RTL_NUMBER_OF(LinkTable) == INTERRUPT_ENDPOINTs + 1);
 
+#if DBG
+static PCSTR
+EHCI_DecodeConditionCode(UCHAR Status)
+{
+    switch (Status)
+    {
+        case EHCI_TOKEN_STATUS_HALTED:
+            return "HALTED";
+        case EHCI_TOKEN_STATUS_DATA_BUFFER_ERROR:
+            return "DATA_BUFFER_ERROR";
+        case EHCI_TOKEN_STATUS_BABBLE_DETECTED:
+            return "BABBLE";
+        case EHCI_TOKEN_STATUS_TRANSACTION_ERROR:
+            return "XACT_ERROR";
+        case EHCI_TOKEN_STATUS_MISSED_MICROFRAME:
+            return "MISSED_MICROFRAME";
+        default:
+            return "STATUS_OK";
+    }
+}
+#endif
+
 PEHCI_HCD_TD
 NTAPI
 EHCI_AllocTd(IN PEHCI_EXTENSION EhciExtension,
@@ -154,7 +284,7 @@ EHCI_InitializeQH(IN PEHCI_EXTENSION EhciExtension,
     PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties;
     ULONG DeviceSpeed;
 
-    DPRINT_EHCI("EHCI_InitializeQH: EhciEndpoint - %p, QH - %p, QhPA - %p\n",
+    DPRINT_EHCI("EHCI_InitializeQH: EhciEndpoint=%p QH=%p QhPA=%p\n",
                 EhciEndpoint,
                 QH,
                 QhPA);
@@ -187,7 +317,7 @@ EHCI_InitializeQH(IN PEHCI_EXTENSION EhciExtension,
             break;
 
         default:
-            DPRINT1("EHCI_InitializeQH: Unknown DeviceSpeed - %x\n", DeviceSpeed);
+            DPRINT1("EHCI_InitializeQH: Unknown DeviceSpeed=0x%x\n", DeviceSpeed);
             ASSERT(FALSE);
             break;
     }
@@ -215,6 +345,15 @@ EHCI_InitializeQH(IN PEHCI_EXTENSION EhciExtension,
     QH->sqh.HwQH.Token.Status &= (UCHAR)~(EHCI_TOKEN_STATUS_ACTIVE |
                                           EHCI_TOKEN_STATUS_HALTED);
 
+    DPRINT_EHCI("EHCI_InitializeQH: EP=%u DevAddr=%u Speed=%u MPS=%u CEF=%u Hub=%u Port=%u\n",
+                EndpointProperties->EndpointAddress,
+                EndpointProperties->DeviceAddress,
+                QH->sqh.HwQH.EndpointParams.EndpointSpeed,
+                QH->sqh.HwQH.EndpointParams.MaximumPacketLength,
+                QH->sqh.HwQH.EndpointParams.ControlEndpointFlag,
+                QH->sqh.HwQH.EndpointCaps.HubAddr,
+                QH->sqh.HwQH.EndpointCaps.PortNumber);
+
     return QH;
 }
 
@@ -233,7 +372,7 @@ EHCI_OpenBulkOrControlEndpoint(IN PEHCI_EXTENSION EhciExtension,
     ULONG TdCount;
     ULONG ix;
 
-    DPRINT("EHCI_OpenBulkOrControlEndpoint: EhciEndpoint - %p, IsControl - %x\n",
+    DPRINT1("EHCI_OpenBulkOrControlEndpoint: EhciEndpoint=%p IsControl=%u\n",
            EhciEndpoint,
            IsControl);
 
@@ -261,6 +400,12 @@ EHCI_OpenBulkOrControlEndpoint(IN PEHCI_EXTENSION EhciExtension,
 
     TdVA = EhciEndpoint->FirstTD;
     TdPA = QhPA + sizeof(EHCI_HCD_QH);
+
+    DPRINT1("EHCI_OpenBulkOrControlEndpoint: BufferLen=%lu TDs=%lu QH_VA=%p TD0_VA=%p\n",
+            EndpointProperties->BufferLength,
+            TdCount,
+            QH,
+            TdVA);
 
     for (ix = 0; ix < TdCount; ix++)
     {
@@ -319,6 +464,11 @@ EHCI_OpenBulkOrControlEndpoint(IN PEHCI_EXTENSION EhciExtension,
     QH->sqh.HwQH.Token.Status &= (UCHAR)~EHCI_TOKEN_STATUS_ACTIVE;
     QH->sqh.HwQH.Token.TransferBytes = 0;
 
+    EhciEndpoint->NextDataToggle = 0;
+
+    DPRINT1("EHCI_OpenBulkOrControlEndpoint: completed EP=%p TDs=%lu\n",
+            EhciEndpoint,
+            TdCount);
     return MP_STATUS_SUCCESS;
 }
 
@@ -465,6 +615,8 @@ EHCI_OpenInterruptEndpoint(IN PEHCI_EXTENSION EhciExtension,
 
     QH->sqh.HwQH.Token.Status &= ~EHCI_TOKEN_STATUS_ACTIVE;
     QH->sqh.HwQH.Token.TransferBytes = 0;
+
+    EhciEndpoint->NextDataToggle = 0;
 
     return MP_STATUS_SUCCESS;
 }
@@ -623,14 +775,19 @@ EHCI_QueryEndpointRequirements(IN PVOID ehciExtension,
 {
     ULONG TransferType;
 
-    DPRINT("EHCI_QueryEndpointRequirements: ... \n");
+    DPRINT1("EHCI_QueryEndpointRequirements: DevAddr=%u EpAddr=0x%02x Type=%u Speed=%u MPS=%u\n",
+            EndpointProperties->DeviceAddress,
+            EndpointProperties->EndpointAddress,
+            EndpointProperties->TransferType,
+            EndpointProperties->DeviceSpeed,
+            EndpointProperties->MaxPacketSize);
 
     TransferType = EndpointProperties->TransferType;
 
     switch (TransferType)
     {
         case USBPORT_TRANSFER_TYPE_ISOCHRONOUS:
-            DPRINT("EHCI_QueryEndpointRequirements: IsoTransfer\n");
+            DPRINT1("EHCI_QueryEndpointRequirements: IsoTransfer\n");
 
             if (EndpointProperties->DeviceSpeed == UsbHighSpeed)
             {
@@ -645,7 +802,7 @@ EHCI_QueryEndpointRequirements(IN PVOID ehciExtension,
             break;
 
         case USBPORT_TRANSFER_TYPE_CONTROL:
-            DPRINT("EHCI_QueryEndpointRequirements: ControlTransfer\n");
+            DPRINT1("EHCI_QueryEndpointRequirements: ControlTransfer\n");
             EndpointRequirements->HeaderBufferSize = sizeof(EHCI_HCD_TD) +
                                                      sizeof(EHCI_HCD_QH) +
                                                      EHCI_MAX_CONTROL_TD_COUNT * sizeof(EHCI_HCD_TD);
@@ -654,7 +811,7 @@ EHCI_QueryEndpointRequirements(IN PVOID ehciExtension,
             break;
 
         case USBPORT_TRANSFER_TYPE_BULK:
-            DPRINT("EHCI_QueryEndpointRequirements: BulkTransfer\n");
+            DPRINT1("EHCI_QueryEndpointRequirements: BulkTransfer\n");
             EndpointRequirements->HeaderBufferSize = sizeof(EHCI_HCD_TD) +
                                                      sizeof(EHCI_HCD_QH) +
                                                      EHCI_MAX_BULK_TD_COUNT * sizeof(EHCI_HCD_TD);
@@ -663,7 +820,7 @@ EHCI_QueryEndpointRequirements(IN PVOID ehciExtension,
             break;
 
         case USBPORT_TRANSFER_TYPE_INTERRUPT:
-            DPRINT("EHCI_QueryEndpointRequirements: InterruptTransfer\n");
+            DPRINT1("EHCI_QueryEndpointRequirements: InterruptTransfer\n");
             EndpointRequirements->HeaderBufferSize = sizeof(EHCI_HCD_TD) +
                                                      sizeof(EHCI_HCD_QH) +
                                                      EHCI_MAX_INTERRUPT_TD_COUNT * sizeof(EHCI_HCD_TD);
@@ -672,11 +829,15 @@ EHCI_QueryEndpointRequirements(IN PVOID ehciExtension,
             break;
 
         default:
-            DPRINT1("EHCI_QueryEndpointRequirements: Unknown TransferType - %x\n",
+            DPRINT1("EHCI_QueryEndpointRequirements: Unknown TransferType=0x%x\n",
                     TransferType);
             DbgBreakPoint();
             break;
     }
+
+    DPRINT1("EHCI_QueryEndpointRequirements: HeaderBufferSize=%lu MaxTransferSize=%lu\n",
+            EndpointRequirements->HeaderBufferSize,
+            EndpointRequirements->MaxTransferSize);
 }
 
 VOID
@@ -883,11 +1044,11 @@ MPSTATUS
 NTAPI
 EHCI_InitializeSchedule(IN PEHCI_EXTENSION EhciExtension,
                         IN ULONG_PTR BaseVA,
-                        IN ULONG BasePA)
+                        IN ULONGLONG BasePA)
 {
     PEHCI_HW_REGISTERS OperationalRegs;
     PEHCI_HC_RESOURCES HcResourcesVA;
-    ULONG HcResourcesPA;
+    ULONGLONG HcResourcesPA;
     PEHCI_STATIC_QH AsyncHead;
     ULONG AsyncHeadPA;
     PEHCI_STATIC_QH PeriodicHead;
@@ -926,7 +1087,7 @@ EHCI_InitializeSchedule(IN PEHCI_EXTENSION EhciExtension,
     AsyncHead->HwQH.NextTD |= TERMINATE_POINTER;
     AsyncHead->HwQH.Token.Status = (UCHAR)EHCI_TOKEN_STATUS_HALTED;
 
-    AsyncHead->PhysicalAddress = AsyncHeadPA;
+    AsyncHead->PhysicalAddress = (ULONG)AsyncHeadPA;
     AsyncHead->PrevHead = AsyncHead->NextHead = (PEHCI_HCD_QH)AsyncHead;
 
     EhciExtension->AsyncHead = AsyncHead;
@@ -944,7 +1105,7 @@ EHCI_InitializeSchedule(IN PEHCI_EXTENSION EhciExtension,
                               80);
 
         EhciExtension->PeriodicHead[ix] = PeriodicHead;
-        EhciExtension->PeriodicHead[ix]->PhysicalAddress = PeriodicHeadPA;
+        EhciExtension->PeriodicHead[ix]->PhysicalAddress = (ULONG)PeriodicHeadPA;
 
         PeriodicHead += 1;
         PeriodicHeadPA += sizeof(EHCI_STATIC_QH);
@@ -967,15 +1128,26 @@ EHCI_InitializeSchedule(IN PEHCI_EXTENSION EhciExtension,
     }
 
     EhciExtension->IsoDummyQHListVA = &HcResourcesVA->IsoDummyQH[0];
-    EhciExtension->IsoDummyQHListPA = HcResourcesPA + FIELD_OFFSET(EHCI_HC_RESOURCES, IsoDummyQH[0]);
+    EhciExtension->IsoDummyQHListPA = (ULONG)(HcResourcesPA + FIELD_OFFSET(EHCI_HC_RESOURCES, IsoDummyQH[0]));
 
     EHCI_AddDummyQHs(EhciExtension);
 
+    /* Force 32-bit addressing for schedule structures */
+    WRITE_REGISTER_ULONG(&OperationalRegs->SegmentSelector, 0);
     WRITE_REGISTER_ULONG(&OperationalRegs->PeriodicListBase,
-                         EhciExtension->HcResourcesPA + FIELD_OFFSET(EHCI_HC_RESOURCES, PeriodicFrameList));
+                         (ULONG)(EhciExtension->HcResourcesPA + FIELD_OFFSET(EHCI_HC_RESOURCES, PeriodicFrameList)));
 
     WRITE_REGISTER_ULONG(&OperationalRegs->AsyncListBase,
                          NextLink.AsULONG);
+
+#if DBG
+    {
+        ULONG seg = READ_REGISTER_ULONG(&OperationalRegs->SegmentSelector);
+        ULONG plb = READ_REGISTER_ULONG(&OperationalRegs->PeriodicListBase);
+        ULONG alb = READ_REGISTER_ULONG(&OperationalRegs->AsyncListBase);
+        DPRINT1("EHCI_InitializeSchedule: CTRLDSSegment=0x%08lx PLB=0x%08lx ALB=0x%08lx\n", seg, plb, alb);
+    }
+#endif
 
     return MP_STATUS_SUCCESS;
 }
@@ -1038,14 +1210,26 @@ EHCI_InitializeHardware(IN PEHCI_EXTENSION EhciExtension)
 
     WRITE_REGISTER_ULONG(&OperationalRegs->PeriodicListBase, 0);
     WRITE_REGISTER_ULONG(&OperationalRegs->AsyncListBase, 0);
+    /* Force 32-bit addressing for schedule structures (EHCI CTRLDSSegment) */
+    WRITE_REGISTER_ULONG(&OperationalRegs->SegmentSelector, 0);
+#if DBG
+    {
+        ULONG seg = READ_REGISTER_ULONG(&OperationalRegs->SegmentSelector);
+        DPRINT1("EHCI_InitializeHardware: CTRLDSSegment after reset=0x%08lx\n", seg);
+    }
+#endif
 
     EhciExtension->InterruptMask.AsULONG = 0;
     EhciExtension->InterruptMask.Interrupt = 1;
     EhciExtension->InterruptMask.ErrorInterrupt = 1;
-    EhciExtension->InterruptMask.PortChangeInterrupt = 0;
+    /* Enable port-change interrupts by default to reduce polling */
+    EhciExtension->InterruptMask.PortChangeInterrupt = 1;
     EhciExtension->InterruptMask.FrameListRollover = 1;
     EhciExtension->InterruptMask.HostSystemError = 1;
     EhciExtension->InterruptMask.InterruptOnAsyncAdvance = 1;
+
+    /* Initialize cached connect state bitmap */
+    EhciExtension->LastConnectStatusBits = 0;
 
     return MP_STATUS_SUCCESS;
 }
@@ -1148,11 +1332,90 @@ EHCI_TakeControlHC(IN PEHCI_EXTENSION EhciExtension)
     return MP_STATUS_SUCCESS;
 }
 
+static const WCHAR EHCI_REG_FRAME_LENGTH_ADJ[] = L"FrameLengthAdjustment";
+static const WCHAR EHCI_REG_IDLE_SUPPORT[] = L"EnableIdleSupport";
+static const WCHAR EHCI_REG_TRACE_MASK[]   = L"EhciTraceMask";
+static const WCHAR EHCI_REG_POLL_DIV[]     = L"EhciPollLogDiv";
+
 VOID
 NTAPI
 EHCI_GetRegistryParameters(IN PEHCI_EXTENSION EhciExtension)
 {
-    DPRINT1("EHCI_GetRegistryParameters: UNIMPLEMENTED. FIXME\n");
+    ULONG ParameterValue;
+    MPSTATUS MpStatus;
+
+    DPRINT("EHCI_GetRegistryParameters: EhciExtension - %p\n", EhciExtension);
+
+    /* Optional override for the FLADJ value (defaults to PCI config byte) */
+    ParameterValue = EhciExtension->FrameLengthAdjustment;
+
+    MpStatus = RegPacket.UsbPortGetMiniportRegistryKeyValue(EhciExtension,
+                                                            TRUE,
+                                                            EHCI_REG_FRAME_LENGTH_ADJ,
+                                                            sizeof(EHCI_REG_FRAME_LENGTH_ADJ),
+                                                            &ParameterValue,
+                                                            sizeof(ParameterValue));
+
+    if (MpStatus == MP_STATUS_SUCCESS)
+    {
+        DPRINT("EHCI_GetRegistryParameters: overriding FLADJ with %lu\n", ParameterValue);
+        EhciExtension->FrameLengthAdjustment = (UCHAR)(ParameterValue & 0xFF);
+    }
+
+    /* Enable/disable idle support (controller selective suspend) */
+    ParameterValue = 0;
+
+    MpStatus = RegPacket.UsbPortGetMiniportRegistryKeyValue(EhciExtension,
+                                                            TRUE,
+                                                            EHCI_REG_IDLE_SUPPORT,
+                                                            sizeof(EHCI_REG_IDLE_SUPPORT),
+                                                            &ParameterValue,
+                                                            sizeof(ParameterValue));
+
+    if (MpStatus == MP_STATUS_SUCCESS)
+    {
+        if (ParameterValue)
+        {
+            EhciExtension->Flags |= EHCI_FLAGS_IDLE_SUPPORT;
+            DPRINT("EHCI_GetRegistryParameters: idle support enabled via registry\n");
+        }
+        else
+        {
+            EhciExtension->Flags &= ~EHCI_FLAGS_IDLE_SUPPORT;
+            DPRINT("EHCI_GetRegistryParameters: idle support disabled via registry\n");
+        }
+    }
+
+#if DBG
+    /* Optional runtime trace mask */
+    ParameterValue = 0xFFFFFFFF;
+    MpStatus = RegPacket.UsbPortGetMiniportRegistryKeyValue(EhciExtension,
+                                                            TRUE,
+                                                            EHCI_REG_TRACE_MASK,
+                                                            sizeof(EHCI_REG_TRACE_MASK),
+                                                            &ParameterValue,
+                                                            sizeof(ParameterValue));
+    if (MpStatus == MP_STATUS_SUCCESS)
+    {
+        g_EhciTraceMask = ParameterValue;
+        DPRINT("EHCI_GetRegistryParameters: EhciTraceMask=0x%08lx\n", g_EhciTraceMask);
+    }
+
+    /* Optional poll log divisor */
+    ParameterValue = g_EhciPollLogDiv;
+    MpStatus = RegPacket.UsbPortGetMiniportRegistryKeyValue(EhciExtension,
+                                                            TRUE,
+                                                            EHCI_REG_POLL_DIV,
+                                                            sizeof(EHCI_REG_POLL_DIV),
+                                                            &ParameterValue,
+                                                            sizeof(ParameterValue));
+    if (MpStatus == MP_STATUS_SUCCESS)
+    {
+        if (ParameterValue == 0) ParameterValue = 1;
+        g_EhciPollLogDiv = ParameterValue;
+        DPRINT("EHCI_GetRegistryParameters: EhciPollLogDiv=%lu\n", g_EhciPollLogDiv);
+    }
+#endif
 }
 
 MPSTATUS
@@ -1168,7 +1431,7 @@ EHCI_StartController(IN PVOID ehciExtension,
     UCHAR CapabilityRegLength;
     UCHAR Fladj;
 
-    DPRINT("EHCI_StartController: ... \n");
+    DPRINT1("EHCI_StartController: ResourcesTypes=0x%lx\n", Resources->ResourcesTypes);
 
     if ((Resources->ResourcesTypes & (USBPORT_RESOURCES_MEMORY | USBPORT_RESOURCES_INTERRUPT)) !=
                                      (USBPORT_RESOURCES_MEMORY | USBPORT_RESOURCES_INTERRUPT))
@@ -1189,8 +1452,11 @@ EHCI_StartController(IN PVOID ehciExtension,
 
     EhciExtension->OperationalRegs = OperationalRegs;
 
-    DPRINT("EHCI_StartController: CapabilityRegisters - %p\n", CapabilityRegisters);
-    DPRINT("EHCI_StartController: OperationalRegs     - %p\n", OperationalRegs);
+    DPRINT1("EHCI_StartController: CapRegs=%p OpRegs=%p\n", CapabilityRegisters, OperationalRegs);
+    DPRINT1("EHCI_StartController: HCSParams=0x%08lx HCCParams=0x%08lx Ports=%u\n",
+            CapabilityRegisters->StructParameters.AsULONG,
+            CapabilityRegisters->CapParameters.AsULONG,
+            CapabilityRegisters->StructParameters.PortCount);
 
     RegPacket.UsbPortReadWriteConfigSpace(EhciExtension,
                                           TRUE,
@@ -1199,6 +1465,7 @@ EHCI_StartController(IN PVOID ehciExtension,
                                           sizeof(Fladj));
 
     EhciExtension->FrameLengthAdjustment = Fladj;
+    DPRINT1("EHCI_StartController: PCI FLADJ=0x%02x\n", Fladj);
 
     EHCI_GetRegistryParameters(EhciExtension);
 
@@ -1209,6 +1476,7 @@ EHCI_StartController(IN PVOID ehciExtension,
         DPRINT1("EHCI_StartController: Unsuccessful TakeControlHC()\n");
         return MPStatus;
     }
+    DPRINT1("EHCI_StartController: TakeControlHC OK\n");
 
     MPStatus = EHCI_InitializeHardware(EhciExtension);
 
@@ -1217,6 +1485,7 @@ EHCI_StartController(IN PVOID ehciExtension,
         DPRINT1("EHCI_StartController: Unsuccessful InitializeHardware()\n");
         return MPStatus;
     }
+    DPRINT1("EHCI_StartController: InitializeHardware OK\n");
 
     MPStatus = EHCI_InitializeSchedule(EhciExtension,
                                        Resources->StartVA,
@@ -1227,6 +1496,7 @@ EHCI_StartController(IN PVOID ehciExtension,
         DPRINT1("EHCI_StartController: Unsuccessful InitializeSchedule()\n");
         return MPStatus;
     }
+    DPRINT1("EHCI_StartController: InitializeSchedule OK\n");
 
     RegPacket.UsbPortReadWriteConfigSpace(EhciExtension,
                                           TRUE,
@@ -1249,10 +1519,15 @@ EHCI_StartController(IN PVOID ehciExtension,
     EhciExtension->PortRoutingControl = EHCI_CONFIG_FLAG_CONFIGURED;
     WRITE_REGISTER_ULONG(&OperationalRegs->ConfigFlag,
                          EhciExtension->PortRoutingControl);
+    DPRINT1("EHCI_StartController: ConfigFlag=0x%08lx\n", EhciExtension->PortRoutingControl);
 
     Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
     Command.InterruptThreshold = 1; // one micro-frame
     WRITE_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG, Command.AsULONG);
+
+    /* Proactively enable interrupts (USBPORT may also call EnableInterrupts) */
+    EHCI_EnableInterrupts(EhciExtension);
+    DPRINT1("EHCI_StartController: HcCommand=0x%08lx (InterruptThreshold=1)\n", Command.AsULONG);
 
     Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
     Command.Run = 1; // execution of the schedule
@@ -1285,7 +1560,133 @@ NTAPI
 EHCI_StopController(IN PVOID ehciExtension,
                     IN BOOLEAN DisableInterrupts)
 {
-    DPRINT1("EHCI_StopController: UNIMPLEMENTED. FIXME\n");
+    PEHCI_EXTENSION EhciExtension = ehciExtension;
+    PEHCI_HW_REGISTERS OperationalRegs;
+    EHCI_USB_COMMAND Command;
+    EHCI_USB_STATUS Status;
+    LARGE_INTEGER EndTime, Now;
+    PEHCI_HCD_QH Qh, NextQh;
+    ULONG ix;
+
+    DPRINT1("EHCI_StopController: entry DisableInterrupts=%u\n", DisableInterrupts);
+
+    OperationalRegs = EhciExtension->OperationalRegs;
+
+    if (DisableInterrupts)
+    {
+        WRITE_REGISTER_ULONG(&OperationalRegs->HcInterruptEnable.AsULONG, 0);
+    }
+
+    /* Disable schedules */
+    Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
+    Command.AsynchronousEnable = 0;
+    Command.PeriodicEnable = 0;
+    WRITE_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG, Command.AsULONG);
+
+    /* Wait for schedules to quiesce */
+    KeQuerySystemTime(&EndTime);
+    EndTime.QuadPart += 200 * 10000; // 200 ms
+    do
+    {
+        Status.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG);
+        KeQuerySystemTime(&Now);
+        if (!Status.AsynchronousStatus && !Status.PeriodicStatus)
+            break;
+    }
+    while (Now.QuadPart < EndTime.QuadPart);
+
+    /* Halt the controller */
+    Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
+    Command.Run = 0;
+    WRITE_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG, Command.AsULONG);
+
+    KeQuerySystemTime(&EndTime);
+    EndTime.QuadPart += 200 * 10000; // 200 ms
+    do
+    {
+        Status.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG);
+        KeQuerySystemTime(&Now);
+        if (Status.HCHalted)
+            break;
+    }
+    while (Now.QuadPart < EndTime.QuadPart);
+
+    if (!Status.HCHalted)
+    {
+        DPRINT1("EHCI_StopController: controller did not halt in time (STS=0x%08lx)\n", Status.AsULONG);
+    }
+
+    /* Acknowledge any pending status bits */
+    if (Status.AsULONG)
+    {
+        WRITE_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG, Status.AsULONG & EHCI_INTERRUPT_MASK);
+    }
+
+    /* Defensive sweep: unlink any remaining QHs from schedules */
+    /* Async list */
+    if (EhciExtension->AsyncHead)
+    {
+        Qh = ((PEHCI_HCD_QH)EhciExtension->AsyncHead)->sqh.NextHead;
+        while (Qh && Qh != (PEHCI_HCD_QH)EhciExtension->AsyncHead)
+        {
+            NextQh = Qh->sqh.NextHead;
+            if (Qh->sqh.QhFlags & EHCI_QH_FLAG_IN_SCHEDULE)
+            {
+                DPRINT1("EHCI_StopController: unlinking ASYNC QH %p\n", Qh);
+                EHCI_RemoveQhFromAsyncList(EhciExtension, Qh);
+            }
+            Qh = NextQh;
+        }
+    }
+
+    /* Periodic lists (walk each static head chain) */
+    for (ix = 0; ix < RTL_NUMBER_OF(EhciExtension->PeriodicHead); ix++)
+    {
+        PEHCI_STATIC_QH StaticQH = EhciExtension->PeriodicHead[ix];
+        if (!StaticQH) continue;
+
+        Qh = StaticQH->NextHead;
+        while (Qh && !(Qh->sqh.QhFlags & EHCI_QH_FLAG_STATIC))
+        {
+            PEHCI_HCD_QH PrevHead;
+            ULONG NextQhPA;
+
+            NextQh = Qh->sqh.NextHead;
+
+            if (Qh->sqh.QhFlags & EHCI_QH_FLAG_IN_SCHEDULE)
+            {
+                PrevHead = Qh->sqh.PrevHead;
+
+                DPRINT1("EHCI_StopController: unlinking PERIODIC QH %p (prev=%p next=%p)\n",
+                        Qh, PrevHead, NextQh);
+
+                /* Relink neighbors */
+                PrevHead->sqh.NextHead = NextQh;
+                if (NextQh)
+                {
+                    NextQh->sqh.PrevHead = PrevHead;
+
+                    NextQhPA = NextQh->sqh.PhysicalAddress;
+                    NextQhPA &= LINK_POINTER_MASK + TERMINATE_POINTER;
+                    NextQhPA |= (EHCI_LINK_TYPE_QH << 1);
+                    PrevHead->sqh.HwQH.HorizontalLink.AsULONG = NextQhPA;
+                }
+                else
+                {
+                    PrevHead->sqh.HwQH.HorizontalLink.Terminate = 1;
+                }
+
+                Qh->sqh.QhFlags &= ~EHCI_QH_FLAG_IN_SCHEDULE;
+                Qh->sqh.NextHead = NULL;
+                Qh->sqh.PrevHead = NULL;
+            }
+
+            Qh = NextQh;
+        }
+    }
+
+    EhciExtension->IsStarted = FALSE;
+    DPRINT1("EHCI_StopController: exit\n");
 }
 
 VOID
@@ -1308,10 +1709,23 @@ EHCI_SuspendController(IN PVOID ehciExtension)
     EhciExtension->BackupCtrlDSSegment = READ_REGISTER_ULONG(&OperationalRegs->SegmentSelector);
     EhciExtension->BackupUSBCmd = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
 
+    /* Stop async/periodic engines before halting */
     Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
     Command.InterruptAdvanceDoorbell = 0;
+    Command.AsynchronousEnable = 0;
+    Command.PeriodicEnable = 0;
     WRITE_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG, Command.AsULONG);
 
+    /* Wait for schedules to quiesce */
+    for (ix = 0; ix < 200; ix++)
+    {
+        Status.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG);
+        if (!Status.AsynchronousStatus && !Status.PeriodicStatus)
+            break;
+        RegPacket.UsbPortWait(EhciExtension, 1);
+    }
+
+    /* Halt the controller */
     Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
     Command.Run = 0;
     WRITE_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG, Command.AsULONG);
@@ -1328,6 +1742,7 @@ EHCI_SuspendController(IN PVOID ehciExtension)
     if (Status.AsULONG)
         WRITE_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG, Status.AsULONG);
 
+    /* Mask all interrupts during suspend */
     WRITE_REGISTER_ULONG(&OperationalRegs->HcInterruptEnable.AsULONG, 0);
 
     for (ix = 0; ix < 10; ix++)
@@ -1343,6 +1758,7 @@ EHCI_SuspendController(IN PVOID ehciExtension)
     if (!Status.HCHalted)
         DbgBreakPoint();
 
+    /* Keep PortChange enabled to detect wake events */
     IntrEn.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcInterruptEnable.AsULONG);
     IntrEn.PortChangeInterrupt = 1;
     WRITE_REGISTER_ULONG(&OperationalRegs->HcInterruptEnable.AsULONG, IntrEn.AsULONG);
@@ -1358,6 +1774,8 @@ EHCI_ResumeController(IN PVOID ehciExtension)
     PEHCI_HW_REGISTERS OperationalRegs;
     ULONG RoutingControl;
     EHCI_USB_COMMAND Command;
+    EHCI_USB_STATUS Status;
+    ULONG ix;
 
     DPRINT("EHCI_ResumeController: ... \n");
 
@@ -1374,8 +1792,14 @@ EHCI_ResumeController(IN PVOID ehciExtension)
         return MP_STATUS_HW_ERROR;
     }
 
-    WRITE_REGISTER_ULONG(&OperationalRegs->SegmentSelector,
-                         EhciExtension->BackupCtrlDSSegment);
+    /* Keep 32-bit addressing across resume as well */
+    WRITE_REGISTER_ULONG(&OperationalRegs->SegmentSelector, 0);
+#if DBG
+    {
+        ULONG seg = READ_REGISTER_ULONG(&OperationalRegs->SegmentSelector);
+        DPRINT1("EHCI_ResumeController: CTRLDSSegment restored=0x%08lx (forced 0)\n", seg);
+    }
+#endif
 
     WRITE_REGISTER_ULONG(&OperationalRegs->PeriodicListBase,
                          EhciExtension->BackupPeriodiclistbase);
@@ -1383,24 +1807,47 @@ EHCI_ResumeController(IN PVOID ehciExtension)
     WRITE_REGISTER_ULONG(&OperationalRegs->AsyncListBase,
                          EhciExtension->BackupAsynclistaddr);
 
-    Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
-
-    Command.AsULONG = Command.AsULONG ^ EhciExtension->BackupUSBCmd;
-
+    /* Restore command register from backup, re-enable run and saved schedules */
+    Command.AsULONG = EhciExtension->BackupUSBCmd;
     Command.Reset = 0;
-    Command.FrameListSize = 0;
     Command.InterruptAdvanceDoorbell = 0;
     Command.LightResetHC = 0;
     Command.AsynchronousParkModeCount = 0;
     Command.AsynchronousParkModeEnable = 0;
-
     Command.Run = 1;
 
-    WRITE_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG,
-                         Command.AsULONG);
+    WRITE_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG, Command.AsULONG);
 
     WRITE_REGISTER_ULONG(&OperationalRegs->HcInterruptEnable.AsULONG,
                          EhciExtension->InterruptMask.AsULONG);
+
+    /* Optionally wait for schedules to indicate active if they were enabled */
+    Status.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG);
+    for (ix = 0; ix < 100; ix++)
+    {
+        Status.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG);
+        if (((! (EhciExtension->BackupUSBCmd & (1 << 5))) || Status.AsynchronousStatus) &&
+            ((! (EhciExtension->BackupUSBCmd & (1 << 4))) || Status.PeriodicStatus))
+        {
+            break;
+        }
+        RegPacket.UsbPortWait(EhciExtension, 1);
+    }
+
+    /* If HC supports PortPowerControl, power ports after resume */
+    if (EhciExtension->PortPowerControl)
+    {
+        USHORT Port;
+        for (Port = 1; Port <= EhciExtension->NumberOfPorts; Port++)
+        {
+            EHCI_RH_SetFeaturePortPower(EhciExtension, Port);
+        }
+        /* Allow power to settle to PowerOnToPowerGood (2*2ms) */
+        RegPacket.UsbPortWait(EhciExtension, 10);
+    }
+
+    /* Invalidate the root hub once to refresh state after resume */
+    RegPacket.UsbPortInvalidateRootHub(EhciExtension);
 
     EhciExtension->Flags &= ~EHCI_FLAGS_CONTROLLER_SUSPEND;
 
@@ -1460,6 +1907,11 @@ EHCI_InterruptService(IN PVOID ehciExtension)
 
     EhciExtension->InterruptStatus = iStatus;
 
+    DPRINT_EHCI("EHCI_InterruptService: Mask=0x%08lx Status=0x%08lx iStatus=0x%08lx\n",
+                IntrEn.AsULONG,
+                IntrSts.AsULONG,
+                iStatus.AsULONG);
+
     WRITE_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG, iStatus.AsULONG);
 
     if (iStatus.HostSystemError)
@@ -1501,7 +1953,7 @@ EHCI_InterruptDpc(IN PVOID ehciExtension,
 
     OperationalRegs = EhciExtension->OperationalRegs;
 
-    DPRINT_EHCI("EHCI_InterruptDpc: [%p] EnableInterrupts - %x\n",
+    DPRINT_EHCI("EHCI_InterruptDpc: [%p] EnableInterrupts=%u\n",
                 EhciExtension, EnableInterrupts);
 
     iStatus = EhciExtension->InterruptStatus;
@@ -1511,7 +1963,7 @@ EHCI_InterruptDpc(IN PVOID ehciExtension,
         iStatus.ErrorInterrupt == 1 ||
         iStatus.InterruptOnAsyncAdvance == 1)
     {
-        DPRINT_EHCI("EHCI_InterruptDpc: [%p] InterruptStatus - %X\n", EhciExtension, iStatus.AsULONG);
+        DPRINT_EHCI("EHCI_InterruptDpc: [%p] InterruptStatus=0x%08lx\n", EhciExtension, iStatus.AsULONG);
         RegPacket.UsbPortInvalidateEndpoint(EhciExtension, NULL);
     }
 
@@ -1525,6 +1977,8 @@ EHCI_InterruptDpc(IN PVOID ehciExtension,
     {
         WRITE_REGISTER_ULONG(&OperationalRegs->HcInterruptEnable.AsULONG,
                              EhciExtension->InterruptMask.AsULONG);
+        DPRINT_EHCI("EHCI_InterruptDpc: re-enabled interrupts mask=0x%08lx\n",
+                    EhciExtension->InterruptMask.AsULONG);
     }
 }
 
@@ -1547,12 +2001,13 @@ EHCI_MapAsyncTransferToTd(IN PEHCI_EXTENSION EhciExtension,
     ULONG DiffLength;
     ULONG NumPackets;
 
-    DPRINT_EHCI("EHCI_MapAsyncTransferToTd: EhciTransfer - %p, TD - %p, TransferedLen - %x, MaxPacketSize - %x, DataToggle - %x\n",
+    DPRINT1("EHCI_MapAsyncTransferToTd: Xfer=%p TD=%p Xfered=%lu MaxPkt=%lu Toggle=%p SgCount=%lu\n",
                 EhciTransfer,
                 TD,
                 TransferedLen,
                 MaxPacketSize,
-                DataToggle);
+                DataToggle,
+                SgList ? SgList->SgElementCount : 0);
 
     TransferParameters = EhciTransfer->TransferParameters;
 
@@ -1568,6 +2023,13 @@ EHCI_MapAsyncTransferToTd(IN PEHCI_EXTENSION EhciExtension,
 
         SgElement += 1;
     }
+
+    DPRINT1("EHCI_MapAsyncTransferToTd: Using SG[%lu] PA=%08lx Len=%lu Off=%lu StartXfered=%lu\n",
+                SgIdx,
+                SgList->SgElement[SgIdx].SgPhysicalAddress.LowPart,
+                SgList->SgElement[SgIdx].SgTransferLength,
+                SgList->SgElement[SgIdx].SgOffset,
+                TransferedLen);
 
     SgRemain = SgList->SgElementCount - SgIdx;
 
@@ -1586,6 +2048,10 @@ EHCI_MapAsyncTransferToTd(IN PEHCI_EXTENSION EhciExtension,
         }
 
         NumPackets = LengthThisTD / MaxPacketSize;
+
+        DPRINT1("EHCI_MapAsyncTransferToTd: TD Buf0=%08lx Buf1=%08lx Buf2=%08lx Buf3=%08lx Buf4=%08lx LengthThisTD=%lu (paged)\n",
+                    TD->HwTD.Buffer[0], TD->HwTD.Buffer[1], TD->HwTD.Buffer[2], TD->HwTD.Buffer[3], TD->HwTD.Buffer[4],
+                    LengthThisTD);
         DiffLength = LengthThisTD - MaxPacketSize * (LengthThisTD / MaxPacketSize);
 
         if (LengthThisTD != MaxPacketSize * (LengthThisTD / MaxPacketSize))
@@ -1609,11 +2075,41 @@ EHCI_MapAsyncTransferToTd(IN PEHCI_EXTENSION EhciExtension,
 
             TD->HwTD.Buffer[ix] = SgList->SgElement[SgIdx + ix].SgPhysicalAddress.LowPart;
         }
+
+        DPRINT1("EHCI_MapAsyncTransferToTd: TD Buf0=%08lx Buf1=%08lx Buf2=%08lx Buf3=%08lx Buf4=%08lx LengthThisTD=%lu (contig)\n",
+                    TD->HwTD.Buffer[0], TD->HwTD.Buffer[1], TD->HwTD.Buffer[2], TD->HwTD.Buffer[3], TD->HwTD.Buffer[4],
+                    LengthThisTD);
     }
 
     TD->HwTD.Token.TransferBytes = LengthThisTD;
     TD->LengthThisTD = LengthThisTD;
 
+    /* debug: remember start PA and length for TD completion correlation */
+    TD->Pad[0] = TD->HwTD.Buffer[0];
+    TD->Pad[1] = LengthThisTD;
+    /* also remember a mapped VA for debug hexdump at completion */
+#if DBG
+    {
+        ULONG_PTR va = (ULONG_PTR)SgList->MappedSystemVa + TransferedLen;
+        TD->Pad[2] = (ULONG)(va & 0xFFFFFFFF);
+        TD->Pad[3] = (ULONG)((va >> 32) & 0xFFFFFFFF);
+    }
+#endif
+
+    {
+        ULONG expected = SgList->SgElement[SgIdx].SgPhysicalAddress.LowPart -
+                         SgList->SgElement[SgIdx].SgOffset +
+                         TransferedLen;
+        if ((TD->HwTD.Buffer[0] ^ expected) != 0)
+        {
+            DPRINT1("EHCI_MapAsyncTransferToTd: WARNING Buf0 mismatch: set=0x%08lx expected=0x%08lx delta=%ld\n",
+                    TD->HwTD.Buffer[0], expected, (LONG)TD->HwTD.Buffer[0] - (LONG)expected);
+        }
+    }
+
+    DPRINT1("EHCI_MapAsyncTransferToTd: EXIT XferedNext=%lu ToggleNext=%u\n",
+                LengthThisTD + TransferedLen,
+                DataToggle ? (*DataToggle & 1) : 0);
     return LengthThisTD + TransferedLen;
 }
 
@@ -1623,14 +2119,21 @@ EHCI_EnableAsyncList(IN PEHCI_EXTENSION EhciExtension)
 {
     PEHCI_HW_REGISTERS OperationalRegs;
     EHCI_USB_COMMAND UsbCmd;
+    EHCI_INTERRUPT_ENABLE IntrEn;
 
-    DPRINT_EHCI("EHCI_EnableAsyncList: ... \n");
+    DPRINT_EHCI("EHCI_EnableAsyncList: enabling async schedule\n");
 
     OperationalRegs = EhciExtension->OperationalRegs;
+
+    /* Re-enable async advance interrupt when bringing async back */
+    IntrEn.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcInterruptEnable.AsULONG);
+    IntrEn.InterruptOnAsyncAdvance = 1;
+    WRITE_REGISTER_ULONG(&OperationalRegs->HcInterruptEnable.AsULONG, IntrEn.AsULONG);
 
     UsbCmd.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
     UsbCmd.AsynchronousEnable = 1;
     WRITE_REGISTER_ULONG((&OperationalRegs->HcCommand.AsULONG), UsbCmd.AsULONG);
+    DPRINT_EHCI("EHCI_EnableAsyncList: HcCommand=0x%08lx\n", UsbCmd.AsULONG);
 }
 
 VOID
@@ -1639,14 +2142,21 @@ EHCI_DisableAsyncList(IN PEHCI_EXTENSION EhciExtension)
 {
     PEHCI_HW_REGISTERS OperationalRegs;
     EHCI_USB_COMMAND UsbCmd;
+    EHCI_INTERRUPT_ENABLE IntrEn;
 
-    DPRINT("EHCI_DisableAsyncList: ... \n");
+    DPRINT1("EHCI_DisableAsyncList: disabling async schedule\n");
 
     OperationalRegs = EhciExtension->OperationalRegs;
 
     UsbCmd.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
     UsbCmd.AsynchronousEnable = 0;
     WRITE_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG, UsbCmd.AsULONG);
+    DPRINT_EHCI("EHCI_DisableAsyncList: HcCommand=0x%08lx\n", UsbCmd.AsULONG);
+
+    /* While idling async, drop IOAA to reduce interrupts; PortChange stays on */
+    IntrEn.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcInterruptEnable.AsULONG);
+    IntrEn.InterruptOnAsyncAdvance = 0;
+    WRITE_REGISTER_ULONG(&OperationalRegs->HcInterruptEnable.AsULONG, IntrEn.AsULONG);
 }
 
 VOID
@@ -1656,13 +2166,14 @@ EHCI_EnablePeriodicList(IN PEHCI_EXTENSION EhciExtension)
     PEHCI_HW_REGISTERS OperationalRegs;
     EHCI_USB_COMMAND Command;
 
-    DPRINT("EHCI_EnablePeriodicList: ... \n");
+    DPRINT1("EHCI_EnablePeriodicList: enabling periodic schedule\n");
 
     OperationalRegs = EhciExtension->OperationalRegs;
 
     Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
     Command.PeriodicEnable = 1;
     WRITE_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG, Command.AsULONG);
+    DPRINT_EHCI("EHCI_EnablePeriodicList: HcCommand=0x%08lx\n", Command.AsULONG);
 }
 
 VOID
@@ -1676,14 +2187,17 @@ EHCI_FlushAsyncCache(IN PEHCI_EXTENSION EhciExtension)
     LARGE_INTEGER EndTime;
     EHCI_USB_COMMAND Cmd;
 
-    DPRINT_EHCI("EHCI_FlushAsyncCache: EhciExtension - %p\n", EhciExtension);
+    DPRINT_EHCI("EHCI_FlushAsyncCache: EhciExtension=%p\n", EhciExtension);
 
     OperationalRegs = EhciExtension->OperationalRegs;
     Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
     Status.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG);
 
     if (!Status.AsynchronousStatus && !Command.AsynchronousEnable)
+    {
+        DPRINT_EHCI("EHCI_FlushAsyncCache: nothing to flush (AsyncEnable=0, AsyncStatus=0)\n");
         return;
+    }
 
     if (Status.AsynchronousStatus && !Command.AsynchronousEnable)
     {
@@ -1701,6 +2215,7 @@ EHCI_FlushAsyncCache(IN PEHCI_EXTENSION EhciExtension)
         }
         while (Status.AsynchronousStatus && Command.AsULONG != -1 && Command.Run);
 
+        DPRINT_EHCI("EHCI_FlushAsyncCache: waited for async when disabled\n");
         return;
     }
 
@@ -1716,10 +2231,12 @@ EHCI_FlushAsyncCache(IN PEHCI_EXTENSION EhciExtension)
             KeQuerySystemTime(&CurrentTime);
         }
         while (!Status.AsynchronousStatus && Command.AsULONG != -1 && Command.Run);
+        DPRINT_EHCI("EHCI_FlushAsyncCache: async engine active\n");
     }
 
     Command.InterruptAdvanceDoorbell = 1;
     WRITE_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG, Command.AsULONG);
+    DPRINT_EHCI("EHCI_FlushAsyncCache: doorbell rung\n");
 
     KeQuerySystemTime(&EndTime);
     EndTime.QuadPart += 100 * 10000;  //100 ms
@@ -1730,7 +2247,7 @@ EHCI_FlushAsyncCache(IN PEHCI_EXTENSION EhciExtension)
     {
         while (Cmd.Run)
         {
-            if (Cmd.AsULONG == -1)
+            if (Cmd.AsULONG == (ULONG)-1)
                 break;
 
             KeStallExecutionProcessor(1);
@@ -1740,12 +2257,20 @@ EHCI_FlushAsyncCache(IN PEHCI_EXTENSION EhciExtension)
             if (!Command.InterruptAdvanceDoorbell)
                 break;
 
+            if (CurrentTime.QuadPart > EndTime.QuadPart)
+            {
+                DPRINT1("EHCI_FlushAsyncCache: doorbell timeout, Cmd=0x%08lx\n",
+                        Command.AsULONG);
+                break;
+            }
+
             Cmd = Command;
         }
     }
 
     /* InterruptOnAsyncAdvance */
     WRITE_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG, 0x20);
+    DPRINT_EHCI("EHCI_FlushAsyncCache: InterruptOnAsyncAdvance acked\n");
 }
 
 VOID
@@ -1761,7 +2286,7 @@ EHCI_LockQH(IN PEHCI_EXTENSION EhciExtension,
     PEHCI_HW_REGISTERS OperationalRegs;
     EHCI_USB_COMMAND Command;
 
-    DPRINT_EHCI("EHCI_LockQH: QH - %p, TransferType - %x\n",
+    DPRINT_EHCI("EHCI_LockQH: QH=%p TransferType=%u\n",
                 QH,
                 TransferType);
 
@@ -1818,7 +2343,7 @@ EHCI_UnlockQH(IN PEHCI_EXTENSION EhciExtension,
 {
     ULONG QhPA;
 
-    DPRINT_EHCI("EHCI_UnlockQH: QH - %p\n", QH);
+    DPRINT_EHCI("EHCI_UnlockQH: QH=%p\n", QH);
 
     ASSERT(QH->sqh.QhFlags & EHCI_QH_FLAG_UPDATING);
     ASSERT(EhciExtension->LockQH);
@@ -1833,6 +2358,9 @@ EHCI_UnlockQH(IN PEHCI_EXTENSION EhciExtension,
     QhPA |= (EHCI_LINK_TYPE_QH << 1);
 
     EhciExtension->PrevQH->sqh.HwQH.HorizontalLink.AsULONG = QhPA;
+    DPRINT_EHCI("EHCI_UnlockQH: PrevQH=%p NewLink=0x%08lx\n",
+                EhciExtension->PrevQH,
+                QhPA);
 }
 
 VOID
@@ -1848,7 +2376,7 @@ EHCI_LinkTransferToQueue(IN PEHCI_EXTENSION EhciExtension,
     BOOLEAN IsPresent;
     ULONG ix;
 
-    DPRINT_EHCI("EHCI_LinkTransferToQueue: EhciEndpoint - %p, NextTD - %p\n",
+    DPRINT_EHCI("EHCI_LinkTransferToQueue: EP=%p NextTD=%p\n",
                 EhciEndpoint,
                 NextTD);
 
@@ -1880,10 +2408,14 @@ EHCI_LinkTransferToQueue(IN PEHCI_EXTENSION EhciExtension,
             EHCI_UnlockQH(EhciExtension, QH);
 
         EhciEndpoint->HcdHeadP = NextTD;
+        DPRINT_EHCI("EHCI_LinkTransferToQueue: Primed QH=%p NextTD=0x%08lx AltNext=0x%08lx\n",
+                    QH,
+                    QH->sqh.HwQH.NextTD,
+                    QH->sqh.HwQH.AlternateNextTD);
     }
     else
     {
-        DPRINT_EHCI("EHCI_LinkTransferToQueue: TD - %p, HcdTailP - %p\n",
+        DPRINT_EHCI("EHCI_LinkTransferToQueue: TD=%p HcdTailP=%p\n",
                     EhciEndpoint->HcdHeadP,
                     EhciEndpoint->HcdTailP);
 
@@ -1920,6 +2452,10 @@ EHCI_LinkTransferToQueue(IN PEHCI_EXTENSION EhciExtension,
             QH->sqh.HwQH.NextTD = NextTD->PhysicalAddress;
             QH->sqh.HwQH.AlternateNextTD = TERMINATE_POINTER;
         }
+
+        DPRINT_EHCI("EHCI_LinkTransferToQueue: Linked NextTD=0x%08lx at LinkTD=%p\n",
+                    NextTD->PhysicalAddress,
+                    LinkTD);
     }
 }
 
@@ -1940,12 +2476,21 @@ EHCI_ControlTransfer(IN PEHCI_EXTENSION EhciExtension,
     EHCI_TD_TOKEN Token;
     ULONG DataToggle = 1;
 
-    DPRINT_EHCI("EHCI_ControlTransfer: EhciEndpoint - %p, EhciTransfer - %p\n",
+    DPRINT1("EHCI_ControlTransfer: EP=%p Xfer=%p Len=%lu Flags=0x%lx\n",
                 EhciEndpoint,
-                EhciTransfer);
+                EhciTransfer,
+                TransferParameters ? TransferParameters->TransferBufferLength : 0,
+                TransferParameters ? TransferParameters->TransferFlags : 0);
 
     if (EhciEndpoint->RemainTDs < EHCI_MAX_CONTROL_TD_COUNT)
         return MP_STATUS_FAILURE;
+
+#if DBG
+    EHCI_DumpScatterGatherList("EHCI_ControlTransfer",
+                               TransferParameters,
+                               SgList);
+    EHCI_DumpSetupPacket(&TransferParameters->SetupPacket);
+#endif
 
     EhciExtension->PendingTransfers++;
     EhciEndpoint->PendingTDs++;
@@ -1985,6 +2530,10 @@ EHCI_ControlTransfer(IN PEHCI_EXTENSION EhciExtension,
     RtlCopyMemory(&FirstTD->SetupPacket,
                   &TransferParameters->SetupPacket,
                   sizeof(FirstTD->SetupPacket));
+    DPRINT1("EHCI_ControlTransfer: SETUP TD=%p Buf0=0x%08lx Bytes=%lu\n",
+                FirstTD,
+                FirstTD->HwTD.Buffer[0],
+                (ULONG)sizeof(FirstTD->SetupPacket));
 
     LastTD = EHCI_AllocTd(EhciExtension, EhciEndpoint);
 
@@ -2076,6 +2625,11 @@ EHCI_ControlTransfer(IN PEHCI_EXTENSION EhciExtension,
                                                   TD,
                                                   SgList);
 
+        DPRINT1("EHCI_ControlTransfer: DATA TD=%p PID=%u Toggle=%u\n",
+                    TD,
+                    TD->HwTD.Token.PIDCode,
+                    TD->HwTD.Token.DataToggle);
+
         PrevTD = TD;
     }
 
@@ -2096,6 +2650,9 @@ EHCI_ControlTransfer(IN PEHCI_EXTENSION EhciExtension,
         Token.PIDCode = EHCI_TD_TOKEN_PID_IN;
 
     LastTD->HwTD.Token = Token;
+    DPRINT1("EHCI_ControlTransfer: STATUS TD=%p PID=%u\n",
+                LastTD,
+                LastTD->HwTD.Token.PIDCode);
 
     LastTD->NextHcdTD = EhciEndpoint->HcdTailP;
     LastTD->HwTD.NextTD = EhciEndpoint->HcdTailP->PhysicalAddress;
@@ -2106,6 +2663,10 @@ EHCI_ControlTransfer(IN PEHCI_EXTENSION EhciExtension,
     ASSERT(EhciEndpoint->HcdTailP->NextHcdTD == NULL);
     ASSERT(EhciEndpoint->HcdTailP->AltNextHcdTD == NULL);
 
+    DPRINT1("EHCI_ControlTransfer: queued EP=%p FirstTD=%p LastTD=%p\n",
+                EhciEndpoint,
+                FirstTD,
+                LastTD);
     return MP_STATUS_SUCCESS;
 }
 
@@ -2121,10 +2682,13 @@ EHCI_BulkTransfer(IN PEHCI_EXTENSION EhciExtension,
     PEHCI_HCD_TD FirstTD = NULL;
     PEHCI_HCD_TD TD;
     ULONG TransferedLen;
+    ULONG DataToggle;
 
-    DPRINT_EHCI("EHCI_BulkTransfer: EhciEndpoint - %p, EhciTransfer - %p\n",
+    DPRINT_EHCI("EHCI_BulkTransfer: EP=%p Xfer=%p Len=%lu Flags=0x%lx\n",
                 EhciEndpoint,
-                EhciTransfer);
+                EhciTransfer,
+                TransferParameters ? TransferParameters->TransferBufferLength : 0,
+                TransferParameters ? TransferParameters->TransferFlags : 0);
 
     if (((TransferParameters->TransferBufferLength /
         ((EHCI_MAX_QTD_BUFFER_PAGES - 1) * PAGE_SIZE)) + 1) > EhciEndpoint->RemainTDs)
@@ -2140,9 +2704,15 @@ EHCI_BulkTransfer(IN PEHCI_EXTENSION EhciExtension,
 
     TransferedLen = 0;
     PrevTD = NULL;
+    DataToggle = EhciEndpoint->NextDataToggle & 1;
 
     if (TransferParameters->TransferBufferLength)
     {
+#if DBG
+        EHCI_DumpScatterGatherList("EHCI_BulkTransfer",
+                                   TransferParameters,
+                                   SgList);
+#endif
         while (TransferedLen < TransferParameters->TransferBufferLength)
         {
             TD = EHCI_AllocTd(EhciExtension, EhciEndpoint);
@@ -2192,15 +2762,22 @@ EHCI_BulkTransfer(IN PEHCI_EXTENSION EhciExtension,
                 TD->HwTD.Token.PIDCode = EHCI_TD_TOKEN_PID_OUT;
 
             TD->HwTD.Token.Status = (UCHAR)EHCI_TOKEN_STATUS_ACTIVE;
-            TD->HwTD.Token.DataToggle = 1;
+            TD->HwTD.Token.DataToggle = (UCHAR)DataToggle;
 
             TransferedLen = EHCI_MapAsyncTransferToTd(EhciExtension,
                                                       EhciEndpoint->EndpointProperties.MaxPacketSize,
                                                       TransferedLen,
-                                                      0,
+                                                      &DataToggle,
                                                       EhciTransfer,
                                                       TD,
                                                       SgList);
+
+            DPRINT_EHCI("EHCI_BulkTransfer: DATA TD=%p PID=%u Toggle=%u LenThis=%lu Buf0=0x%08lx\n",
+                        TD,
+                        TD->HwTD.Token.PIDCode,
+                        TD->HwTD.Token.DataToggle,
+                        TD->LengthThisTD,
+                        TD->HwTD.Buffer[0]);
 
             PrevTD = TD;
         }
@@ -2251,13 +2828,18 @@ EHCI_BulkTransfer(IN PEHCI_EXTENSION EhciExtension,
         TD->HwTD.Buffer[0] = TD->PhysicalAddress;
 
         TD->HwTD.Token.Status = (UCHAR)EHCI_TOKEN_STATUS_ACTIVE;
-        TD->HwTD.Token.DataToggle = 1;
+        TD->HwTD.Token.DataToggle = (UCHAR)DataToggle;
 
         TD->LengthThisTD = 0;
+        DPRINT_EHCI("EHCI_BulkTransfer: zero-length TD=%p PID=%u\n",
+                    TD,
+                    TD->HwTD.Token.PIDCode);
     }
 
     TD->HwTD.NextTD = EhciEndpoint->HcdTailP->PhysicalAddress;
     TD->NextHcdTD = EhciEndpoint->HcdTailP;
+
+    EhciEndpoint->NextDataToggle = DataToggle & 1;
 
     EHCI_EnableAsyncList(EhciExtension);
     EHCI_LinkTransferToQueue(EhciExtension, EhciEndpoint, FirstTD);
@@ -2265,6 +2847,10 @@ EHCI_BulkTransfer(IN PEHCI_EXTENSION EhciExtension,
     ASSERT(EhciEndpoint->HcdTailP->NextHcdTD == 0);
     ASSERT(EhciEndpoint->HcdTailP->AltNextHcdTD == 0);
 
+    DPRINT_EHCI("EHCI_BulkTransfer: queued EP=%p FirstTD=%p TD=%p\n",
+                EhciEndpoint,
+                FirstTD,
+                TD);
     return MP_STATUS_SUCCESS;
 }
 
@@ -2280,10 +2866,13 @@ EHCI_InterruptTransfer(IN PEHCI_EXTENSION EhciExtension,
     PEHCI_HCD_TD FirstTD = NULL;
     PEHCI_HCD_TD PrevTD = NULL;
     ULONG TransferedLen = 0;
+    ULONG DataToggle;
 
-    DPRINT_EHCI("EHCI_InterruptTransfer: EhciEndpoint - %p, EhciTransfer - %p\n",
+    DPRINT_EHCI("EHCI_InterruptTransfer: EP=%p Xfer=%p Len=%lu Flags=0x%lx\n",
                 EhciEndpoint,
-                EhciTransfer);
+                EhciTransfer,
+                TransferParameters ? TransferParameters->TransferBufferLength : 0,
+                TransferParameters ? TransferParameters->TransferFlags : 0);
 
     if (!EhciEndpoint->RemainTDs)
     {
@@ -2301,8 +2890,18 @@ EHCI_InterruptTransfer(IN PEHCI_EXTENSION EhciExtension,
         return MP_STATUS_FAILURE;
     }
 
+    DataToggle = EhciEndpoint->NextDataToggle & 1;
+
     while (TransferedLen < TransferParameters->TransferBufferLength)
     {
+#if DBG
+        if (TransferedLen == 0)
+        {
+            EHCI_DumpScatterGatherList("EHCI_InterruptTransfer",
+                                       TransferParameters,
+                                       SgList);
+        }
+#endif
         TD = EHCI_AllocTd(EhciExtension, EhciEndpoint);
 
         if (!TD)
@@ -2347,20 +2946,29 @@ EHCI_InterruptTransfer(IN PEHCI_EXTENSION EhciExtension,
             TD->HwTD.Token.PIDCode = EHCI_TD_TOKEN_PID_OUT;
 
         TD->HwTD.Token.Status = (UCHAR)EHCI_TOKEN_STATUS_ACTIVE;
-        TD->HwTD.Token.DataToggle = 1;
+        TD->HwTD.Token.DataToggle = (UCHAR)DataToggle;
 
         TransferedLen = EHCI_MapAsyncTransferToTd(EhciExtension,
                                                   EhciEndpoint->EndpointProperties.TotalMaxPacketSize,
                                                   TransferedLen,
-                                                  NULL,
+                                                  &DataToggle,
                                                   EhciTransfer,
                                                   TD,
                                                   SgList);
+
+        DPRINT_EHCI("EHCI_InterruptTransfer: DATA TD=%p PID=%u Toggle=%u LenThis=%lu Buf0=0x%08lx\n",
+                    TD,
+                    TD->HwTD.Token.PIDCode,
+                    TD->HwTD.Token.DataToggle,
+                    TD->LengthThisTD,
+                    TD->HwTD.Buffer[0]);
 
         PrevTD = TD;
     }
 
     TD->HwTD.Token.InterruptOnComplete = 1;
+
+    EhciEndpoint->NextDataToggle = DataToggle & 1;
 
     DPRINT_EHCI("EHCI_InterruptTransfer: PendingTDs - %x, TD->PhysicalAddress - %p, FirstTD - %p\n",
                 EhciTransfer->PendingTDs,
@@ -2371,6 +2979,10 @@ EHCI_InterruptTransfer(IN PEHCI_EXTENSION EhciExtension,
     TD->NextHcdTD = EhciEndpoint->HcdTailP;
 
     EHCI_LinkTransferToQueue(EhciExtension, EhciEndpoint, FirstTD);
+    DPRINT_EHCI("EHCI_InterruptTransfer: queued EP=%p FirstTD=%p TD=%p\n",
+                EhciEndpoint,
+                FirstTD,
+                TD);
 
     ASSERT(EhciEndpoint->HcdTailP->NextHcdTD == NULL);
     ASSERT(EhciEndpoint->HcdTailP->AltNextHcdTD == NULL);
@@ -2446,8 +3058,14 @@ EHCI_SubmitIsoTransfer(IN PVOID ehciExtension,
                        IN PVOID ehciTransfer,
                        IN PVOID isoParameters)
 {
-    DPRINT1("EHCI_SubmitIsoTransfer: UNIMPLEMENTED. FIXME\n");
-    return MP_STATUS_SUCCESS;
+    UNREFERENCED_PARAMETER(ehciExtension);
+    UNREFERENCED_PARAMETER(ehciEndpoint);
+    UNREFERENCED_PARAMETER(TransferParameters);
+    UNREFERENCED_PARAMETER(ehciTransfer);
+    UNREFERENCED_PARAMETER(isoParameters);
+
+    DPRINT1("EHCI_SubmitIsoTransfer: not supported (ISO transfers not implemented for EHCI)\n");
+    return MP_STATUS_NOT_SUPPORTED;
 }
 
 VOID
@@ -2522,9 +3140,10 @@ EHCI_AbortAsyncTransfer(IN PEHCI_EXTENSION EhciExtension,
     {
         DPRINT("EHCI_AbortAsyncTransfer: TD->EhciTransfer - %p\n", TD->EhciTransfer);
 
-        CurrentTD = RegPacket.UsbPortGetMappedVirtualAddress(QH->sqh.HwQH.CurrentTD,
-                                                             EhciExtension,
-                                                             EhciEndpoint);
+    DPRINT1("EHCI_AbortAsyncTransfer: map CurrentTD phys=%08lx\n", QH->sqh.HwQH.CurrentTD);
+    CurrentTD = RegPacket.UsbPortGetMappedVirtualAddress(QH->sqh.HwQH.CurrentTD,
+                                                         EhciExtension,
+                                                         EhciEndpoint);
 
         CurrentTransfer = CurrentTD->EhciTransfer;
         TD = EhciEndpoint->HcdHeadP;
@@ -2623,8 +3242,15 @@ NTAPI
 EHCI_GetEndpointState(IN PVOID ehciExtension,
                       IN PVOID ehciEndpoint)
 {
-    DPRINT1("EHCI_GetEndpointState: UNIMPLEMENTED. FIXME\n");
-    return 0;
+    PEHCI_ENDPOINT EhciEndpoint = ehciEndpoint;
+    UNREFERENCED_PARAMETER(ehciExtension);
+
+    /* Report the cached state maintained by SetEndpointState */
+    DPRINT("EHCI_GetEndpointState: EhciEndpoint - %p state=%lu\n",
+           EhciEndpoint,
+           EhciEndpoint ? EhciEndpoint->EndpointState : 0);
+
+    return EhciEndpoint ? EhciEndpoint->EndpointState : 0;
 }
 
 VOID
@@ -2824,7 +3450,9 @@ EHCI_SetIsoEndpointState(IN PEHCI_EXTENSION EhciExtension,
                          IN PEHCI_ENDPOINT EhciEndpoint,
                          IN ULONG EndpointState)
 {
-    DPRINT1("EHCI_SetIsoEndpointState: UNIMPLEMENTED. FIXME\n");
+    DPRINT("EHCI_SetIsoEndpointState: EhciEndpoint=%p state=%lu\n", EhciEndpoint, EndpointState);
+    /* Basic state book-keeping; full iTD/sITD schedule management TBD */
+    EhciEndpoint->EndpointState = EndpointState;
 }
 
 VOID
@@ -2988,22 +3616,100 @@ EHCI_ProcessDoneAsyncTd(IN PEHCI_EXTENSION EhciExtension,
     EhciTransfer->PendingTDs--;
 
     EhciEndpoint = EhciTransfer->EhciEndpoint;
+    TransferType = EhciEndpoint->EndpointProperties.TransferType;
+#if DBG
+    DPRINT1("EHCI_TD_DONE: TD=%p Token=0x%08lx Status=0x%02x PID=%u Toggle=%u RemBytes=%u LenThis=%lu Buf0=0x%08lx\n",
+            TD,
+            TD->HwTD.Token.AsULONG,
+            TD->HwTD.Token.Status,
+            TD->HwTD.Token.PIDCode,
+            TD->HwTD.Token.DataToggle,
+            TD->HwTD.Token.TransferBytes,
+            TD->LengthThisTD,
+            TD->HwTD.Buffer[0]);
+#endif
 
     if (!(TD->TdFlags & EHCI_HCD_TD_FLAG_ACTIVE))
     {
+        BOOLEAN TdHalted;
+        BOOLEAN TdShort;
 
-        if (TD->HwTD.Token.Status & EHCI_TOKEN_STATUS_HALTED)
+        TdHalted = (TD->HwTD.Token.Status & EHCI_TOKEN_STATUS_HALTED) != 0;
+        TdShort = (TD->HwTD.Token.TransferBytes != 0);
+
+        if (TdHalted)
+        {
+            DPRINT1("EHCI_TD_DONE: error %s (Token=0x%08lx)\n",
+                    EHCI_DecodeConditionCode(TD->HwTD.Token.Status),
+                    TD->HwTD.Token.AsULONG);
             USBDStatus = EHCI_GetErrorFromTD(TD);
+        }
         else
+        {
             USBDStatus = USBD_STATUS_SUCCESS;
+        }
 
         LengthTransfered = TD->LengthThisTD - TD->HwTD.Token.TransferBytes;
 
+#if DBG
         if (TD->HwTD.Token.PIDCode != EHCI_TD_TOKEN_PID_SETUP)
+        {
+            ULONG startPa = TD->Pad[0];
+            ULONG lenPa = TD->Pad[1];
+            ULONG endPa = startPa + lenPa;
+            DPRINT1("EHCI_TD_DONE: PAstart=0x%08lx PAend=0x%08lx ObservedBuf0=0x%08lx LenXfer=%lu RemBytes=%u\n",
+                    startPa,
+                    endPa,
+                    TD->HwTD.Buffer[0],
+                    LengthTransfered,
+                    TD->HwTD.Token.TransferBytes);
+
+            /* Optional hexdump of transferred data (first bytes) */
+            {
+                ULONG_PTR vaLow = TD->Pad[2];
+                ULONG_PTR vaHigh = TD->Pad[3];
+                ULONG_PTR va = vaLow | (vaHigh << 32);
+                if (va && LengthTransfered)
+                {
+                    ULONG dumpLen = (LengthTransfered < 32) ? LengthTransfered : 32;
+                    EHCI_HexDump("EHCI_TD_DONE DATA", (const VOID*)va, dumpLen);
+                }
+            }
+        }
+#endif
+
+        if (TD->HwTD.Token.PIDCode != EHCI_TD_TOKEN_PID_SETUP)
+        {
+            ULONG Remaining = 0;
+
+            if (TransferParameters &&
+                EhciTransfer->TransferLen < TransferParameters->TransferBufferLength)
+            {
+                Remaining = TransferParameters->TransferBufferLength -
+                            EhciTransfer->TransferLen;
+            }
+
+            if (Remaining && LengthTransfered > Remaining)
+            {
+                DPRINT1("EHCI_TD_DONE: clamping length %lu -> %lu (Remaining=%lu)\n",
+                        LengthTransfered,
+                        Remaining,
+                        Remaining);
+                LengthTransfered = Remaining;
+            }
+
             EhciTransfer->TransferLen += LengthTransfered;
+        }
 
         if (USBDStatus != USBD_STATUS_SUCCESS)
             EhciTransfer->USBDStatus = USBDStatus;
+
+        if ((TransferType == USBPORT_TRANSFER_TYPE_BULK ||
+             TransferType == USBPORT_TRANSFER_TYPE_INTERRUPT) &&
+            (TdHalted || TdShort))
+        {
+            EhciEndpoint->NextDataToggle = TD->HwTD.Token.DataToggle & 1;
+        }
     }
 
     TD->HwTD.NextTD = 0;
@@ -3017,8 +3723,6 @@ EHCI_ProcessDoneAsyncTd(IN PEHCI_EXTENSION EhciExtension,
     if (EhciTransfer->PendingTDs == 0)
     {
         EhciEndpoint->PendingTDs--;
-
-        TransferType = EhciEndpoint->EndpointProperties.TransferType;
 
         if (TransferType == USBPORT_TRANSFER_TYPE_CONTROL ||
             TransferType == USBPORT_TRANSFER_TYPE_BULK)
@@ -3064,6 +3768,7 @@ EHCI_PollActiveAsyncEndpoint(IN PEHCI_EXTENSION EhciExtension,
     CurrentTDPhys = QH->sqh.HwQH.CurrentTD & LINK_POINTER_MASK;
     ASSERT(CurrentTDPhys);
 
+    DPRINT1("EHCI_PollActiveAsyncEndpoint: map CurrentTD phys=%08lx\n", CurrentTDPhys);
     CurrentTD = RegPacket.UsbPortGetMappedVirtualAddress(CurrentTDPhys,
                                                          EhciExtension,
                                                          EhciEndpoint);
@@ -3197,6 +3902,7 @@ EHCI_PollHaltedAsyncEndpoint(IN PEHCI_EXTENSION EhciExtension,
     if (!EHCI_HardwarePresent(EhciExtension, 0))
         IsScheduled = 0;
 
+    DPRINT1("EHCI_PollHaltedAsyncEndpoint: map CurrentTD phys=%08lx\n", CurrentTdPA);
     CurrentTD = RegPacket.UsbPortGetMappedVirtualAddress(CurrentTdPA,
                                                          EhciExtension,
                                                          EhciEndpoint);
@@ -3356,6 +4062,13 @@ EHCI_CheckController(IN PVOID ehciExtension)
 
     if (EhciExtension->IsStarted)
         EHCI_HardwarePresent(EhciExtension, TRUE);
+#if DBG
+    else
+    {
+        /* Emit a trace when we are asked to check while not started */
+        DPRINT1("EHCI_CheckController: called while !IsStarted (ext=%p)\n", EhciExtension);
+    }
+#endif
 }
 
 ULONG
@@ -3413,9 +4126,25 @@ EHCI_PollController(IN PVOID ehciExtension)
     ULONG Port;
     EHCI_PORT_STATUS_CONTROL PortSC;
 
-    DPRINT_EHCI("EHCI_PollController: ... \n");
+    /* Optional poll logging (DBG) */
+#if DBG
+    if (g_EhciTraceMask & 0x4)
+    {
+        static ULONG s_pollLogTick;
+        ULONG div = g_EhciPollLogDiv ? g_EhciPollLogDiv : 1;
+        if ((++s_pollLogTick % div) == 0)
+            DPRINT_EHCI("EHCI_PollController: tick=%lu div=%lu\n", s_pollLogTick, div);
+    }
+#endif
 
     OperationalRegs = EhciExtension->OperationalRegs;
+#if DBG
+    {
+        ULONG seg = READ_REGISTER_ULONG(&OperationalRegs->SegmentSelector);
+        if (seg)
+            DPRINT1("EHCI_PollController: CTRLDSSegment nonzero=0x%08lx\n", seg);
+    }
+#endif
 
     if (!(EhciExtension->Flags & EHCI_FLAGS_CONTROLLER_SUSPEND))
     {
@@ -3455,7 +4184,10 @@ EHCI_SetEndpointDataToggle(IN PVOID ehciExtension,
     if (TransferType == USBPORT_TRANSFER_TYPE_BULK ||
         TransferType == USBPORT_TRANSFER_TYPE_INTERRUPT)
     {
-        EhciEndpoint->QH->sqh.HwQH.Token.DataToggle = DataToggle;
+        ULONG ToggleBit = DataToggle ? 1 : 0;
+
+        EhciEndpoint->QH->sqh.HwQH.Token.DataToggle = ToggleBit;
+        EhciEndpoint->NextDataToggle = ToggleBit;
     }
 }
 
@@ -3523,7 +4255,37 @@ VOID
 NTAPI
 EHCI_ResetController(IN PVOID ehciExtension)
 {
-    DPRINT1("EHCI_ResetController: UNIMPLEMENTED. FIXME\n");
+    PEHCI_EXTENSION EhciExtension = ehciExtension;
+    PEHCI_HW_REGISTERS OperationalRegs;
+    EHCI_USB_COMMAND Command;
+    LARGE_INTEGER EndTime, Now;
+
+    DPRINT1("EHCI_ResetController: entry\n");
+
+    OperationalRegs = EhciExtension->OperationalRegs;
+
+    /* Issue HC reset */
+    Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
+    Command.Reset = 1;
+    WRITE_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG, Command.AsULONG);
+
+    KeQuerySystemTime(&EndTime);
+    EndTime.QuadPart += 100 * 10000; // 100 ms
+    do
+    {
+        Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
+        KeQuerySystemTime(&Now);
+        if (!Command.Reset)
+            break;
+    }
+    while (Now.QuadPart < EndTime.QuadPart);
+
+    if (Command.Reset)
+    {
+        DPRINT1("EHCI_ResetController: reset timed out\n");
+    }
+
+    DPRINT1("EHCI_ResetController: exit\n");
 }
 
 MPSTATUS
@@ -3573,7 +4335,38 @@ EHCI_RebalanceEndpoint(IN PVOID ohciExtension,
                        IN PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
                        IN PVOID ohciEndpoint)
 {
-    DPRINT1("EHCI_RebalanceEndpoint: UNIMPLEMENTED. FIXME\n");
+    PEHCI_EXTENSION EhciExtension = (PEHCI_EXTENSION)ohciExtension;
+    PEHCI_ENDPOINT EhciEndpoint = (PEHCI_ENDPOINT)ohciEndpoint;
+    ULONG TransferType;
+
+    if (!EhciExtension || !EhciEndpoint || !EndpointProperties)
+        return;
+
+    TransferType = EhciEndpoint->EndpointProperties.TransferType;
+
+    DPRINT("EHCI_RebalanceEndpoint: EP=%p type=%lu period=%u ordinal=%lu\n",
+           EhciEndpoint,
+           TransferType,
+           EndpointProperties->Period,
+           EndpointProperties->Reserved6);
+
+    /* Only interrupt endpoints are placed on periodic tree here */
+    if (TransferType == USBPORT_TRANSFER_TYPE_INTERRUPT)
+    {
+        /* If scheduled, remove, update props, and reinsert */
+        if (EhciEndpoint->QH && (EhciEndpoint->QH->sqh.QhFlags & EHCI_QH_FLAG_IN_SCHEDULE))
+        {
+            EHCI_RemoveQhFromPeriodicList(EhciExtension, EhciEndpoint);
+        }
+
+        EhciEndpoint->EndpointProperties.Period = EndpointProperties->Period;
+        EhciEndpoint->EndpointProperties.Reserved6 = EndpointProperties->Reserved6; /* Ordinal */
+
+        if (EhciEndpoint->QH)
+        {
+            EHCI_InsertQhInPeriodicList(EhciExtension, EhciEndpoint);
+        }
+    }
 }
 
 VOID
@@ -3596,7 +4389,30 @@ VOID
 NTAPI
 EHCI_TakePortControl(IN PVOID ohciExtension)
 {
-    DPRINT1("EHCI_TakePortControl: UNIMPLEMENTED. FIXME\n");
+    PEHCI_EXTENSION EhciExtension = (PEHCI_EXTENSION)ohciExtension;
+    PEHCI_HW_REGISTERS OperationalRegs;
+    ULONG Port;
+    EHCI_PORT_STATUS_CONTROL PortSC;
+
+    DPRINT("EHCI_TakePortControl: taking ownership of ports\n");
+
+    if (!EhciExtension)
+        return;
+
+    OperationalRegs = EhciExtension->OperationalRegs;
+
+    /* Ensure this HC is configured */
+    WRITE_REGISTER_ULONG(&OperationalRegs->ConfigFlag, EHCI_CONFIG_FLAG_CONFIGURED);
+
+    /* Set owner to EHCI and power ports if supported */
+    for (Port = 0; Port < EhciExtension->NumberOfPorts; Port++)
+    {
+        PortSC.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->PortControl[Port].AsULONG);
+        PortSC.PortOwner = 0; /* EHCI owns */
+        if (EhciExtension->PortPowerControl)
+            PortSC.PortPower = 1;
+        WRITE_REGISTER_ULONG(&OperationalRegs->PortControl[Port].AsULONG, PortSC.AsULONG);
+    }
 }
 
 VOID
@@ -3625,11 +4441,12 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
 
     RegPacket.MiniPortVersion = USB_MINIPORT_VERSION_EHCI;
 
+    /* Enable polling as a fallback so we don't lose port changes on quirky HW */
     RegPacket.MiniPortFlags = USB_MINIPORT_FLAGS_INTERRUPT |
                               USB_MINIPORT_FLAGS_MEMORY_IO |
                               USB_MINIPORT_FLAGS_USB2 |
-                              USB_MINIPORT_FLAGS_POLLING |
-                              USB_MINIPORT_FLAGS_WAKE_SUPPORT;
+                              USB_MINIPORT_FLAGS_WAKE_SUPPORT |
+                              USB_MINIPORT_FLAGS_POLLING;
 
     RegPacket.MiniPortBusBandwidth = TOTAL_USB20_BUS_BANDWIDTH;
 

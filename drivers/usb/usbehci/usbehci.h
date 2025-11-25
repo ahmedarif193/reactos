@@ -144,6 +144,7 @@ typedef struct _EHCI_ENDPOINT {
   LIST_ENTRY ListTDs;
   const EHCI_PERIOD * PeriodTable;
   PEHCI_STATIC_QH StaticQH;
+  ULONG NextDataToggle;
 } EHCI_ENDPOINT, *PEHCI_ENDPOINT;
 
 /* EHCI Transfer follows USBPORT Transfer */
@@ -196,6 +197,8 @@ typedef struct _EHCI_EXTENSION {
   ULONG SuspendPortBits;
   ULONG ResetPortBits;
   ULONG FinishResetPortBits;
+  /* Cached per-port connect state (bit per port) */
+  ULONG LastConnectStatusBits;
   /* Transfers */
   ULONG PendingTransfers;
   /* Lock Queue */

@@ -594,6 +594,7 @@ USBHI_RootHubInitNotification(IN PVOID BusContext,
     PUSBPORT_RHDEVICE_EXTENSION PdoExtension;
     PDEVICE_OBJECT FdoDevice;
     PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PUSBPORT_ROOT_HUB_CALLBACK_DATA CallbackData;
     KIRQL OldIrql;
 
     DPRINT("USBHI_RootHubInitNotification\n");
@@ -602,11 +603,67 @@ USBHI_RootHubInitNotification(IN PVOID BusContext,
     PdoExtension = PdoDevice->DeviceExtension;
     FdoDevice = PdoExtension->FdoDevice;
     FdoExtension = FdoDevice->DeviceExtension;
+    CallbackData = (PUSBPORT_ROOT_HUB_CALLBACK_DATA)PdoExtension->RootHubCallbackData;
 
-    KeAcquireSpinLock(&FdoExtension->RootHubCallbackSpinLock, &OldIrql);
+    if (!CallbackData)
+    {
+        DPRINT1("USBHI_RootHubInitNotification: missing callback data for PDO %p\n",
+                PdoDevice);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    /* NULL callback is used to unregister the notification. Just clear state. */
+    if (!CallbackFunction)
+    {
+        KeAcquireSpinLock(&CallbackData->Lock, &OldIrql);
+        CallbackData->Context = NULL;
+        CallbackData->Callback = NULL;
+        CallbackData->Caller = NULL;
+        CallbackData->Timestamp = 0;
+        KeReleaseSpinLock(&CallbackData->Lock, OldIrql);
+
+        PdoExtension->RootHubInitContext = NULL;
+        PdoExtension->RootHubInitCallback = NULL;
+
+        DPRINT1("USBHI_RootHubInitNotification: unregistered callback for PDO %p\n",
+                PdoDevice);
+
+        return STATUS_SUCCESS;
+    }
+
+    if (!USBPORT_IsKernelPointer((PVOID)CallbackFunction))
+    {
+        DPRINT1("USBHI_RootHubInitNotification: invalid callback %p (Context=%p Pdo=%p) caller=%p\n",
+                CallbackFunction,
+                CallbackContext,
+                PdoDevice,
+                USBPORT_RETURN_ADDRESS());
+#if DBG
+        DbgBreakPoint();
+#endif
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KeAcquireSpinLock(&CallbackData->Lock, &OldIrql);
+    CallbackData->Context = CallbackContext;
+    CallbackData->Callback = CallbackFunction;
+    CallbackData->Caller = USBPORT_RETURN_ADDRESS();
+    CallbackData->Sequence += 1;
+    CallbackData->Timestamp = KeQueryInterruptTime();
+    KeReleaseSpinLock(&CallbackData->Lock, OldIrql);
+
     PdoExtension->RootHubInitContext = CallbackContext;
     PdoExtension->RootHubInitCallback = CallbackFunction;
-    KeReleaseSpinLock(&FdoExtension->RootHubCallbackSpinLock, OldIrql);
+
+    DPRINT1("USBHI_RootHubInitNotification: stored callback %p ctx=%p seq=%lu caller=%p\n",
+            CallbackFunction,
+            CallbackContext,
+            CallbackData->Sequence,
+            CallbackData->Caller);
+
+    /* Kick the worker to process the callback now that it is armed. */
+    FdoExtension->Flags |= USBPORT_FLAG_RH_INIT_CALLBACK;
+    USBPORT_SignalWorkerThread(FdoDevice);
 
     return STATUS_SUCCESS;
 }

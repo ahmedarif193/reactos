@@ -15,12 +15,181 @@
 #define NDEBUG_USBPORT_TIMER
 #include "usbdebug.h"
 
+#if DBG
+#ifndef USBPORT_DBG_BOUNCE_TRACE
+#define USBPORT_DBG_BOUNCE_TRACE 0
+#endif
+#ifndef USBPORT_DBG_TIMER_TRACE
+#define USBPORT_DBG_TIMER_TRACE 0
+#endif
+#if USBPORT_DBG_BOUNCE_TRACE
+#define USBPORT_BOUNCE_TRACE DPRINT1
+#else
+#define USBPORT_BOUNCE_TRACE(...) do { } while (0)
+#endif
+#if USBPORT_DBG_TIMER_TRACE
+#define USBPORT_TIMER_TRACE DPRINT1
+#else
+#define USBPORT_TIMER_TRACE(...) do { } while (0)
+#endif
+#else
+#define USBPORT_BOUNCE_TRACE(...) do { } while (0)
+#define USBPORT_TIMER_TRACE(...) do { } while (0)
+#endif
+
 LIST_ENTRY USBPORT_MiniPortDrivers = {NULL, NULL};
 LIST_ENTRY USBPORT_USB1FdoList = {NULL, NULL};
 LIST_ENTRY USBPORT_USB2FdoList = {NULL, NULL};
 
 KSPIN_LOCK USBPORT_SpinLock;
 BOOLEAN USBPORT_Initialized = FALSE;
+
+VOID
+USBPORT_ReferenceRootHubCallbackData(IN PUSBPORT_ROOT_HUB_CALLBACK_DATA CallbackData)
+{
+    if (!CallbackData)
+        return;
+
+    InterlockedIncrement(&CallbackData->RefCount);
+}
+
+VOID
+USBPORT_DereferenceRootHubCallbackData(IN PUSBPORT_ROOT_HUB_CALLBACK_DATA CallbackData)
+{
+    if (!CallbackData)
+        return;
+
+    if (InterlockedDecrement(&CallbackData->RefCount) == 0)
+    {
+        ExFreePoolWithTag(CallbackData, USB_PORT_TAG);
+    }
+}
+
+VOID
+USBPORT_StopControllerTimer(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
+{
+    BOOLEAN CancelTimer = FALSE;
+    KIRQL OldIrql;
+
+    if (!FdoExtension)
+        return;
+
+    KeAcquireSpinLock(&FdoExtension->TimerFlagsSpinLock, &OldIrql);
+
+    if (FdoExtension->TimerFlags & USBPORT_TMFLAG_TIMER_QUEUED)
+    {
+        FdoExtension->TimerFlags &= ~USBPORT_TMFLAG_TIMER_QUEUED;
+        CancelTimer = TRUE;
+    }
+
+    KeReleaseSpinLock(&FdoExtension->TimerFlagsSpinLock, OldIrql);
+
+    if (CancelTimer)
+    {
+        KeCancelTimer(&FdoExtension->TimerObject);
+    }
+}
+
+static
+BOOLEAN
+USBPORT_MdlNeedsBounce(IN PMDL Mdl,
+                       IN SIZE_T TransferLength)
+{
+    PFN_NUMBER *PfnArray;
+    ULONG PageCount;
+    ULONG Index;
+
+    if (!Mdl || TransferLength == 0)
+        return FALSE;
+
+    PfnArray = MmGetMdlPfnArray(Mdl);
+    if (!PfnArray)
+        return FALSE;
+
+    PageCount = ADDRESS_AND_SIZE_TO_SPAN_PAGES(MmGetMdlVirtualAddress(Mdl),
+                                               TransferLength);
+
+    for (Index = 0; Index < PageCount; Index++)
+    {
+        ULONGLONG Physical = ((ULONGLONG)PfnArray[Index]) << PAGE_SHIFT;
+
+        if ((Physical >> 32) != 0)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+NTSTATUS
+USBPORT_SetupTransferBounceBuffer(IN PDEVICE_OBJECT FdoDevice,
+                                  IN PUSBPORT_TRANSFER Transfer,
+                                  IN PURB Urb)
+{
+    SIZE_T TransferLength = Transfer->TransferParameters.TransferBufferLength;
+    PMDL OriginalMdl = Transfer->TransferBufferMDL;
+    PVOID OriginalVa;
+    PUSBPORT_COMMON_BUFFER_HEADER CommonBuffer;
+    PMDL BounceMdl;
+
+    if (!OriginalMdl || TransferLength == 0)
+        return STATUS_SUCCESS;
+
+    if (!USBPORT_MdlNeedsBounce(OriginalMdl, TransferLength))
+        return STATUS_SUCCESS;
+
+    OriginalVa = MmGetSystemAddressForMdlSafe(OriginalMdl, NormalPagePriority);
+    if (!OriginalVa)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    CommonBuffer = USBPORT_AllocateCommonBuffer(FdoDevice, TransferLength);
+    if (!CommonBuffer)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    BounceMdl = IoAllocateMdl((PVOID)CommonBuffer->VirtualAddress,
+                              (ULONG)TransferLength,
+                              FALSE,
+                              FALSE,
+                              NULL);
+    if (!BounceMdl)
+    {
+        USBPORT_FreeCommonBuffer(FdoDevice, CommonBuffer);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    MmBuildMdlForNonPagedPool(BounceMdl);
+
+    Transfer->BounceBuffer = CommonBuffer;
+    Transfer->BounceBufferLength = TransferLength;
+    Transfer->BounceOriginalVa = OriginalVa;
+    Transfer->BounceOriginalMdl = OriginalMdl;
+    Transfer->BounceOriginalBuffer = Urb->UrbControlTransfer.TransferBuffer;
+    Transfer->BounceMdl = BounceMdl;
+
+    Transfer->TransferBufferMDL = BounceMdl;
+    Urb->UrbControlTransfer.TransferBufferMDL = BounceMdl;
+    Urb->UrbControlTransfer.TransferBuffer = (PVOID)CommonBuffer->VirtualAddress;
+
+    if (Transfer->Direction == USBPORT_DMA_DIRECTION_TO_DEVICE)
+    {
+        RtlCopyMemory((PVOID)CommonBuffer->VirtualAddress,
+                      OriginalVa,
+                      TransferLength);
+    }
+    else
+    {
+        RtlZeroMemory((PVOID)CommonBuffer->VirtualAddress, TransferLength);
+    }
+
+    Transfer->Flags |= TRANSFER_FLAG_BOUNCE;
+
+    USBPORT_BOUNCE_TRACE("USBPORT: using bounce buffer %p PA=0x%08lx len=%lu (transfer=%p)\n",
+                         (PVOID)CommonBuffer->VirtualAddress,
+                         CommonBuffer->PhysicalAddress,
+                         (ULONG)TransferLength,
+                         Transfer);
+
+    return STATUS_SUCCESS;
+}
 
 PDEVICE_OBJECT
 NTAPI
@@ -1106,6 +1275,16 @@ USBPORT_InterruptService(IN PKINTERRUPT Interrupt,
     return Result;
 }
 
+BOOLEAN
+NTAPI
+USBPORT_MessageInterruptService(IN PKINTERRUPT Interrupt,
+                                IN PVOID ServiceContext,
+                                IN ULONG MessageId)
+{
+    UNREFERENCED_PARAMETER(MessageId);
+    return USBPORT_InterruptService(Interrupt, ServiceContext);
+}
+
 VOID
 NTAPI
 USBPORT_SignalWorkerThread(IN PDEVICE_OBJECT FdoDevice)
@@ -1222,31 +1401,74 @@ NTAPI
 USBPORT_DoRootHubCallback(IN PDEVICE_OBJECT FdoDevice)
 {
     PUSBPORT_DEVICE_EXTENSION FdoExtension;
-    PDEVICE_OBJECT PdoDevice;
-    PUSBPORT_RHDEVICE_EXTENSION PdoExtension;
+    PUSBPORT_ROOT_HUB_CALLBACK_DATA CallbackData;
     PRH_INIT_CALLBACK RootHubInitCallback;
     PVOID RootHubInitContext;
+    PVOID Caller;
+    ULONG Sequence;
+    ULONGLONG Timestamp;
+    KIRQL OldIrql;
+    PUSBPORT_RHDEVICE_EXTENSION PdoExtension;
+    PDEVICE_OBJECT PdoDevice;
 
     FdoExtension = FdoDevice->DeviceExtension;
 
     DPRINT("USBPORT_DoRootHubCallback: FdoDevice - %p\n", FdoDevice);
 
-    PdoDevice = FdoExtension->RootHubPdo;
+    CallbackData = FdoExtension->RootHubCallbackData;
 
-    if (PdoDevice)
+    if (!CallbackData)
     {
-        PdoExtension = PdoDevice->DeviceExtension;
+        DPRINT1("USBPORT_DoRootHubCallback: no callback data (Fdo=%p)\n",
+                FdoDevice);
+        return;
+    }
 
-        RootHubInitContext = PdoExtension->RootHubInitContext;
-        RootHubInitCallback = PdoExtension->RootHubInitCallback;
+    KeAcquireSpinLock(&CallbackData->Lock, &OldIrql);
+    RootHubInitContext = CallbackData->Context;
+    RootHubInitCallback = CallbackData->Callback;
+    Caller = CallbackData->Caller;
+    Sequence = CallbackData->Sequence;
+    Timestamp = CallbackData->Timestamp;
+    CallbackData->Callback = NULL;
+    CallbackData->Context = NULL;
+    CallbackData->Caller = NULL;
+    CallbackData->Timestamp = 0;
+    KeReleaseSpinLock(&CallbackData->Lock, OldIrql);
 
-        PdoExtension->RootHubInitCallback = NULL;
-        PdoExtension->RootHubInitContext = NULL;
+    PdoDevice = FdoExtension->RootHubPdo;
+    PdoExtension = USBPORT_GetRootHubExtension(FdoExtension);
 
-        if (RootHubInitCallback)
+    if (PdoExtension)
+    {
+        PdoExtension->RootHubInitCallback = RootHubInitCallback;
+        PdoExtension->RootHubInitContext = RootHubInitContext;
+    }
+
+    if (RootHubInitCallback)
+    {
+        if (!USBPORT_IsKernelPointer((PVOID)RootHubInitCallback))
         {
-            RootHubInitCallback(RootHubInitContext);
+            DPRINT1("USBPORT_DoRootHubCallback: invalid callback pointer %p (pdo=%p seq=%lu caller=%p ctx=%p)\n",
+                    RootHubInitCallback,
+                    PdoDevice,
+                    Sequence,
+                    Caller,
+                    RootHubInitContext);
+#if DBG
+            DbgBreakPoint();
+#endif
+            return;
         }
+
+        DPRINT1("USBPORT_DoRootHubCallback: calling %p ctx=%p seq=%lu caller=%p ts=%llu\n",
+                RootHubInitCallback,
+                RootHubInitContext,
+                Sequence,
+                Caller,
+                (unsigned long long)Timestamp);
+
+        RootHubInitCallback(RootHubInitContext);
     }
 
     DPRINT("USBPORT_DoRootHubCallback: exit\n");
@@ -1456,15 +1678,29 @@ USBPORT_StopWorkerThread(IN PDEVICE_OBJECT FdoDevice)
 {
     PUSBPORT_DEVICE_EXTENSION FdoExtension;
     NTSTATUS Status;
+    HANDLE ThreadHandle;
 
     DPRINT("USBPORT_StopWorkerThread ...\n");
 
     FdoExtension = FdoDevice->DeviceExtension;
 
+    ThreadHandle = FdoExtension->WorkerThreadHandle;
+
+    if (!ThreadHandle)
+    {
+        return;
+    }
+
     FdoExtension->Flags |= USBPORT_FLAG_WORKER_THREAD_EXIT;
     USBPORT_SignalWorkerThread(FdoDevice);
-    Status = ZwWaitForSingleObject(FdoExtension->WorkerThreadHandle, FALSE, NULL);
+    Status = ZwWaitForSingleObject(ThreadHandle, FALSE, NULL);
+#if DBG
     NT_ASSERT(Status == STATUS_SUCCESS);
+#endif
+    ZwClose(ThreadHandle);
+    FdoExtension->WorkerThreadHandle = NULL;
+    FdoExtension->WorkerThread = NULL;
+    FdoExtension->Flags &= ~USBPORT_FLAG_WORKER_THREAD_EXIT;
 }
 
 VOID
@@ -1477,9 +1713,15 @@ USBPORT_SynchronizeControllersStart(IN PDEVICE_OBJECT FdoDevice)
     PDEVICE_OBJECT USB2FdoDevice = NULL;
     PUSBPORT_DEVICE_EXTENSION USB2FdoExtension;
     BOOLEAN IsOn;
+    PUSBPORT_ROOT_HUB_CALLBACK_DATA CallbackData;
+    PRH_INIT_CALLBACK PendingCallback;
+    PVOID PendingContext;
+    PVOID PendingCaller;
+    ULONG PendingSequence;
+    ULONGLONG PendingTimestamp;
+    KIRQL CallbackIrql;
 
-    DPRINT_TIMER("USBPORT_SynchronizeControllersStart: FdoDevice - %p\n",
-                 FdoDevice);
+    // DPRINT1("USBPORT_SynchronizeControllersStart: FdoDevice - %p\n", FdoDevice);
 
     FdoExtension = FdoDevice->DeviceExtension;
 
@@ -1487,19 +1729,76 @@ USBPORT_SynchronizeControllersStart(IN PDEVICE_OBJECT FdoDevice)
 
     if (!PdoDevice)
     {
+        DPRINT1("USBPORT_SynchronizeControllersStart: FdoDevice is null - return\n");
         return;
     }
 
-    PdoExtension = PdoDevice->DeviceExtension;
+    PdoExtension = USBPORT_GetRootHubExtension(FdoExtension);
+    CallbackData = FdoExtension->RootHubCallbackData;
 
-    if (PdoExtension->RootHubInitCallback == NULL ||
-        FdoExtension->Flags & USBPORT_FLAG_RH_INIT_CALLBACK)
+    if (!PdoExtension)
     {
+        DPRINT1("USBPORT_SynchronizeControllersStart: no RootHub extension (pdo=%p fdo=%p)\n",
+                PdoDevice,
+                FdoDevice);
         return;
     }
 
-    DPRINT_TIMER("USBPORT_SynchronizeControllersStart: Flags - %p\n",
-                 FdoExtension->Flags);
+    if ((LONG_PTR)PdoExtension >= 0)
+    {
+        DPRINT1("USBPORT_SynchronizeControllersStart: invalid RootHub extension pointer %p (pdo=%p)\n",
+                PdoExtension,
+                PdoDevice);
+#if DBG
+        DbgBreakPoint();
+#endif
+        return;
+    }
+
+    if (!CallbackData)
+    {
+        DPRINT1("USBPORT_SynchronizeControllersStart: missing callback data (fdo=%p)\n",
+                FdoDevice);
+        return;
+    }
+
+    KeAcquireSpinLock(&CallbackData->Lock, &CallbackIrql);
+    PendingCallback = CallbackData->Callback;
+    PendingContext = CallbackData->Context;
+    PendingCaller = CallbackData->Caller;
+    PendingSequence = CallbackData->Sequence;
+    PendingTimestamp = CallbackData->Timestamp;
+    KeReleaseSpinLock(&CallbackData->Lock, CallbackIrql);
+
+    if (!PendingCallback || (FdoExtension->Flags & USBPORT_FLAG_RH_INIT_CALLBACK))
+    {
+        /* No callback scheduled yet: clear the flag so the timer stops spamming,
+           and wait for the hub to register a callback before retrying. */
+        if (FdoExtension->Flags & USBPORT_FLAG_RH_INIT_CALLBACK)
+        {
+            FdoExtension->Flags &= ~USBPORT_FLAG_RH_INIT_CALLBACK;
+            DPRINT1("USBPORT_SynchronizeControllersStart: PendingCallback is null - suppressing retry\n");
+        }
+        return;
+    }
+
+    FdoExtension->Flags &= ~USBPORT_FLAG_RH_STOPPED;
+
+    DPRINT1("USBPORT_SynchronizeControllersStart: Flags - %p\n",
+            FdoExtension->Flags);
+
+    /* Extra diagnostics to catch bad pointers on DPC path */
+#if DBG
+    DPRINT1("USBPORT_SynchronizeControllersStart: MiniPortExt=%p RootHubPdo=%p RootHubInitCb=%p\n",
+            FdoExtension->MiniPortExt,
+            PdoDevice,
+            PendingCallback);
+    DPRINT1("USBPORT_SynchronizeControllersStart: rh seq=%lu caller=%p ts=%llu ctx=%p\n",
+            PendingSequence,
+            PendingCaller,
+            (unsigned long long)PendingTimestamp,
+            PendingContext);
+#endif
 
     if (FdoExtension->Flags & USBPORT_FLAG_COMPANION_HC)
     {
@@ -1507,8 +1806,8 @@ USBPORT_SynchronizeControllersStart(IN PDEVICE_OBJECT FdoDevice)
 
         USB2FdoDevice = USBPORT_FindUSB2Controller(FdoDevice);
 
-        DPRINT_TIMER("USBPORT_SynchronizeControllersStart: USB2FdoDevice - %p\n",
-                     USB2FdoDevice);
+        DPRINT1("USBPORT_SynchronizeControllersStart: USB2FdoDevice - %p\n",
+                USB2FdoDevice);
 
         if (USB2FdoDevice)
         {
@@ -1567,29 +1866,44 @@ USBPORT_TimerDpc(IN PRKDPC Dpc,
     KIRQL OldIrql;
     KIRQL TimerOldIrql;
 
-    DPRINT_TIMER("USBPORT_TimerDpc: Dpc - %p, DeferredContext - %p\n",
-           Dpc,
-           DeferredContext);
+    USBPORT_TIMER_TRACE("USBPORT_TimerDpc: Dpc - %p, DeferredContext - %p\n",
+                        Dpc,
+                        DeferredContext);
 
     FdoDevice = DeferredContext;
     FdoExtension = FdoDevice->DeviceExtension;
     Packet = &FdoExtension->MiniPortInterface->Packet;
 
+    if (FdoExtension->Flags & USBPORT_FLAG_RH_STOPPED)
+    {
+        USBPORT_TIMER_TRACE("USBPORT_TimerDpc: root hub stopped, skipping DPC\n");
+        return;
+    }
+
     KeAcquireSpinLock(&FdoExtension->TimerFlagsSpinLock, &TimerOldIrql);
 
     TimerFlags = FdoExtension->TimerFlags;
 
-    DPRINT_TIMER("USBPORT_TimerDpc: Flags - %p, TimerFlags - %p\n",
-                 FdoExtension->Flags,
-                 TimerFlags);
+    USBPORT_TIMER_TRACE("USBPORT_TimerDpc: Flags - %p, TimerFlags - %p\n",
+                        FdoExtension->Flags,
+                        TimerFlags);
 
     if (FdoExtension->Flags & USBPORT_FLAG_HC_SUSPEND &&
         FdoExtension->Flags & USBPORT_FLAG_HC_WAKE_SUPPORT &&
         !(TimerFlags & USBPORT_TMFLAG_HC_RESUME))
     {
         KeAcquireSpinLock(&FdoExtension->MiniportSpinLock, &OldIrql);
+        USBPORT_TIMER_TRACE("USBPORT_TimerDpc: calling PollController (MiniPortExt=%p)\n",
+                            FdoExtension->MiniPortExt);
         Packet->PollController(FdoExtension->MiniPortExt);
         KeReleaseSpinLock(&FdoExtension->MiniportSpinLock, OldIrql);
+    }
+
+    {
+        PUSBPORT_RHDEVICE_EXTENSION RhExt = USBPORT_GetRootHubExtension(FdoExtension);
+        USBPORT_TIMER_TRACE("USBPORT_TimerDpc: RootHubPdo=%p RootHubExt=%p\n",
+                            FdoExtension->RootHubPdo,
+                            RhExt);
     }
 
     USBPORT_SynchronizeControllersStart(FdoDevice);
@@ -1604,6 +1918,8 @@ USBPORT_TimerDpc(IN PRKDPC Dpc,
 
     if (!(FdoExtension->Flags & USBPORT_FLAG_HC_SUSPEND))
     {
+        USBPORT_TIMER_TRACE("USBPORT_TimerDpc: calling CheckController (MiniPortExt=%p)\n",
+                            FdoExtension->MiniPortExt);
         Packet->CheckController(FdoExtension->MiniPortExt);
     }
 
@@ -1612,6 +1928,8 @@ USBPORT_TimerDpc(IN PRKDPC Dpc,
     if (FdoExtension->Flags & USBPORT_FLAG_HC_POLLING)
     {
         KeAcquireSpinLock(&FdoExtension->MiniportSpinLock, &OldIrql);
+    USBPORT_TIMER_TRACE("USBPORT_TimerDpc: calling PollController (MiniPortExt=%p) [polling]\n",
+                        FdoExtension->MiniPortExt);
         Packet->PollController(FdoExtension->MiniPortExt);
         KeReleaseSpinLock(&FdoExtension->MiniportSpinLock, OldIrql);
     }
@@ -1718,7 +2036,7 @@ USBPORT_AllocateCommonBuffer(IN PDEVICE_OBJECT FdoDevice,
     PHYSICAL_ADDRESS LogicalAddress;
     ULONG_PTR BaseVA;
     ULONG_PTR StartBufferVA;
-    ULONG StartBufferPA;
+    ULONGLONG StartBufferPA;
 
     DPRINT("USBPORT_AllocateCommonBuffer: FdoDevice - %p, BufferLength - %p\n",
            FdoDevice,
@@ -1745,7 +2063,7 @@ USBPORT_AllocateCommonBuffer(IN PDEVICE_OBJECT FdoDevice,
         goto Exit;
 
     StartBufferVA = BaseVA & ~(PAGE_SIZE - 1);
-    StartBufferPA = LogicalAddress.LowPart & ~(PAGE_SIZE - 1);
+    StartBufferPA = LogicalAddress.QuadPart & ~((ULONGLONG)PAGE_SIZE - 1ULL);
 
     HeaderBuffer = (PUSBPORT_COMMON_BUFFER_HEADER)(StartBufferVA +
                                                    BufferLength +
@@ -1970,19 +2288,26 @@ NTAPI
 USBPORT_Unload(IN PDRIVER_OBJECT DriverObject)
 {
     PUSBPORT_MINIPORT_INTERFACE MiniPortInterface;
-
-    DPRINT1("USBPORT_Unload: FIXME!\n");
+    KIRQL OldIrql;
 
     MiniPortInterface = USBPORT_FindMiniPort(DriverObject);
 
     if (!MiniPortInterface)
     {
-        DPRINT("USBPORT_Unload: CRITICAL ERROR!!! Not found MiniPortInterface\n");
+        DPRINT("USBPORT_Unload: CRITICAL ERROR!!! Not found MiniPortInterface\\n");
         KeBugCheckEx(BUGCODE_USB_DRIVER, 1, 0, 0, 0);
     }
 
-    DPRINT1("USBPORT_Unload: UNIMPLEMENTED. FIXME.\n");
-    //MiniPortInterface->DriverUnload(DriverObject); // Call MiniPort _HCI_Unload
+    if (MiniPortInterface->DriverUnload)
+    {
+        MiniPortInterface->DriverUnload(DriverObject);
+    }
+
+    KeAcquireSpinLock(&USBPORT_SpinLock, &OldIrql);
+    RemoveEntryList(&MiniPortInterface->DriverLink);
+    KeReleaseSpinLock(&USBPORT_SpinLock, OldIrql);
+
+    ExFreePoolWithTag(MiniPortInterface, USB_PORT_TAG);
 }
 
 VOID
@@ -2141,7 +2466,10 @@ USBPORT_GetMappedVirtualAddress(IN ULONG PhysicalAddress,
     ULONG Offset;
     ULONG_PTR VirtualAddress;
 
-    DPRINT_CORE("USBPORT_GetMappedVirtualAddress ...\n");
+    DPRINT1("USBPORT_GetMappedVirtualAddress: phys=%08lx MPext=%p MPep=%p\n",
+            PhysicalAddress,
+            MiniPortExtension,
+            MiniPortEndpoint);
 
     Endpoint = (PUSBPORT_ENDPOINT)((ULONG_PTR)MiniPortEndpoint -
                                    sizeof(USBPORT_ENDPOINT));
@@ -2152,9 +2480,35 @@ USBPORT_GetMappedVirtualAddress(IN ULONG PhysicalAddress,
     }
 
     HeaderBuffer = Endpoint->HeaderBuffer;
+    if (!HeaderBuffer)
+    {
+        DPRINT1("USBPORT_GetMappedVirtualAddress: NULL HeaderBuffer (EP=%p)\n", Endpoint);
+        return NULL;
+    }
 
-    Offset = PhysicalAddress - HeaderBuffer->PhysicalAddress;
-    VirtualAddress = HeaderBuffer->VirtualAddress + Offset;
+    /* Compute offset within the common buffer and validate bounds */
+    if ((ULONGLONG)PhysicalAddress < HeaderBuffer->PhysicalAddress)
+    {
+        DPRINT1("USBPORT_GetMappedVirtualAddress: phys < base (phys=%llx base=%llx)\n",
+                (unsigned long long)PhysicalAddress,
+                (unsigned long long)HeaderBuffer->PhysicalAddress);
+        return (PVOID)HeaderBuffer->VirtualAddress;
+    }
+
+    Offset = PhysicalAddress - (ULONG)HeaderBuffer->PhysicalAddress;
+    if ((ULONGLONG)Offset >= HeaderBuffer->BufferLength)
+    {
+        DPRINT1("USBPORT_GetMappedVirtualAddress: offset OOB (off=%llx len=%Ix)\n",
+                (unsigned long long)Offset,
+                HeaderBuffer->BufferLength);
+        return (PVOID)HeaderBuffer->VirtualAddress;
+    }
+
+    VirtualAddress = HeaderBuffer->VirtualAddress + (ULONG_PTR)Offset;
+    DPRINT1("USBPORT_GetMappedVirtualAddress: -> VA=%p (base=%p off=%lx)\n",
+            (PVOID)VirtualAddress,
+            (PVOID)HeaderBuffer->VirtualAddress,
+            Offset);
 
     return (PVOID)VirtualAddress;
 }
@@ -2258,6 +2612,47 @@ USBPORT_CompleteTransfer(IN PURB Urb,
                                         Transfer->NumberOfMapRegisters);
 
         KeLowerIrql(OldIrql);
+    }
+    else if (Transfer->Flags & TRANSFER_FLAG_BOUNCE)
+    {
+        SIZE_T BytesToCopy = Transfer->CompletedTransferLen;
+
+        if (Transfer->Direction == USBPORT_DMA_DIRECTION_FROM_DEVICE &&
+            Transfer->BounceBuffer &&
+            Transfer->BounceOriginalVa)
+        {
+            if (BytesToCopy > Transfer->BounceBufferLength)
+                BytesToCopy = Transfer->BounceBufferLength;
+
+            if (BytesToCopy)
+            {
+                RtlCopyMemory(Transfer->BounceOriginalVa,
+                              (PVOID)Transfer->BounceBuffer->VirtualAddress,
+                              BytesToCopy);
+            }
+        }
+
+        if (Transfer->BounceBuffer)
+        {
+            PDEVICE_OBJECT BounceFdo = Transfer->Endpoint->FdoDevice;
+            USBPORT_FreeCommonBuffer(BounceFdo, Transfer->BounceBuffer);
+            Transfer->BounceBuffer = NULL;
+        }
+
+        if (Transfer->BounceMdl)
+        {
+            IoFreeMdl(Transfer->BounceMdl);
+            Transfer->BounceMdl = NULL;
+        }
+
+        Urb->UrbControlTransfer.TransferBufferMDL = Transfer->BounceOriginalMdl;
+        Urb->UrbControlTransfer.TransferBuffer = Transfer->BounceOriginalBuffer;
+        Transfer->TransferBufferMDL = Transfer->BounceOriginalMdl;
+        Transfer->BounceOriginalMdl = NULL;
+        Transfer->BounceOriginalBuffer = NULL;
+        Transfer->BounceOriginalVa = NULL;
+        Transfer->BounceBufferLength = 0;
+        Transfer->Flags &= ~TRANSFER_FLAG_BOUNCE;
     }
 
     if (Urb->UrbHeader.UsbdFlags & USBD_FLAG_ALLOCATED_MDL)
@@ -2567,12 +2962,25 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
 
     FdoExtension = FdoDevice->DeviceExtension;
 
-    TransferLength = Urb->UrbControlTransfer.TransferBufferLength;
-    PipeHandle = Urb->UrbControlTransfer.PipeHandle;
-
-    if (TransferLength)
+    switch (Urb->UrbHeader.Function)
     {
-        Mdl = Urb->UrbControlTransfer.TransferBufferMDL;
+        case URB_FUNCTION_ISOCH_TRANSFER:
+            TransferLength = Urb->UrbIsochronousTransfer.TransferBufferLength;
+            PipeHandle = Urb->UrbIsochronousTransfer.PipeHandle;
+            Mdl = Urb->UrbIsochronousTransfer.TransferBufferMDL;
+            break;
+
+        case URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER:
+        case URB_FUNCTION_CONTROL_TRANSFER:
+        default:
+            TransferLength = Urb->UrbControlTransfer.TransferBufferLength;
+            PipeHandle = Urb->UrbControlTransfer.PipeHandle;
+            Mdl = Urb->UrbControlTransfer.TransferBufferMDL;
+            break;
+    }
+
+    if (TransferLength && Mdl)
+    {
         VirtualAddr = (ULONG_PTR)MmGetMdlVirtualAddress(Mdl);
 
         PagesNeed = ADDRESS_AND_SIZE_TO_SPAN_PAGES(VirtualAddr,
@@ -2585,11 +2993,8 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
 
     if (Urb->UrbHeader.Function == URB_FUNCTION_ISOCH_TRANSFER)
     {
-        DPRINT1("USBPORT_AllocateTransfer: ISOCH_TRANSFER UNIMPLEMENTED. FIXME\n");
-
-        //IsoBlockLen = sizeof(USBPORT_ISO_BLOCK) +
-        //              Urb->UrbIsochronousTransfer.NumberOfPackets *
-        //              sizeof(USBPORT_ISO_BLOCK_PACKET);
+        IsoBlockLen = USBPORT_ISO_BLOCK_SIZE(
+            Urb->UrbIsochronousTransfer.NumberOfPackets);
     }
 
     PortTransferLength = sizeof(USBPORT_TRANSFER) +
@@ -2620,6 +3025,53 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
     Transfer->IsoBlockPtr = NULL;
     Transfer->Period = 0;
     Transfer->ParentTransfer = Transfer;
+    Transfer->BounceBuffer = NULL;
+    Transfer->BounceOriginalVa = NULL;
+    Transfer->BounceBufferLength = 0;
+    Transfer->BounceMdl = NULL;
+    Transfer->BounceOriginalMdl = NULL;
+    Transfer->BounceOriginalBuffer = NULL;
+
+    switch (Urb->UrbHeader.Function)
+    {
+        case URB_FUNCTION_ISOCH_TRANSFER:
+            Transfer->TransferBufferMDL =
+                Urb->UrbIsochronousTransfer.TransferBufferMDL;
+            Transfer->TransferParameters.TransferBufferLength = TransferLength;
+            Transfer->TransferParameters.TransferFlags =
+                Urb->UrbIsochronousTransfer.TransferFlags;
+
+            if (Urb->UrbIsochronousTransfer.TransferFlags &
+                USBD_TRANSFER_DIRECTION_IN)
+            {
+                Transfer->Direction = USBPORT_DMA_DIRECTION_FROM_DEVICE;
+            }
+            else
+            {
+                Transfer->Direction = USBPORT_DMA_DIRECTION_TO_DEVICE;
+            }
+            break;
+
+        case URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER:
+        case URB_FUNCTION_CONTROL_TRANSFER:
+        default:
+            Transfer->TransferBufferMDL =
+                Urb->UrbControlTransfer.TransferBufferMDL;
+            Transfer->TransferParameters.TransferBufferLength = TransferLength;
+            Transfer->TransferParameters.TransferFlags =
+                Urb->UrbControlTransfer.TransferFlags;
+
+            if (Urb->UrbControlTransfer.TransferFlags &
+                USBD_TRANSFER_DIRECTION_IN)
+            {
+                Transfer->Direction = USBPORT_DMA_DIRECTION_FROM_DEVICE;
+            }
+            else
+            {
+                Transfer->Direction = USBPORT_DMA_DIRECTION_TO_DEVICE;
+            }
+            break;
+    }
 
     if (IsoBlockLen)
     {
@@ -2637,6 +3089,23 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
 
     Urb->UrbControlTransfer.hca.Reserved8[0] = Transfer;
     Urb->UrbHeader.UsbdFlags |= USBD_FLAG_ALLOCATED_TRANSFER;
+
+    if (TransferLength &&
+        Transfer->TransferBufferMDL &&
+        !(Transfer->Flags & TRANSFER_FLAG_ISO))
+    {
+        NTSTATUS BounceStatus;
+
+        BounceStatus = USBPORT_SetupTransferBounceBuffer(FdoDevice,
+                                                         Transfer,
+                                                         Urb);
+
+        if (!NT_SUCCESS(BounceStatus))
+        {
+            ExFreePoolWithTag(Transfer, USB_PORT_TAG);
+            return USBD_STATUS_INSUFFICIENT_RESOURCES;
+        }
+    }
 
     USBDStatus = USBD_STATUS_SUCCESS;
 
@@ -2900,3 +3369,15 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
 {
     return STATUS_SUCCESS;
 }
+#if DBG
+#ifndef USBPORT_DBG_BOUNCE_TRACE
+#define USBPORT_DBG_BOUNCE_TRACE 0
+#endif
+#if USBPORT_DBG_BOUNCE_TRACE
+#define USBPORT_BOUNCE_TRACE DPRINT1
+#else
+#define USBPORT_BOUNCE_TRACE(...) do { } while (0)
+#endif
+#else
+#define USBPORT_BOUNCE_TRACE(...) do { } while (0)
+#endif

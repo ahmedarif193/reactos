@@ -81,6 +81,10 @@ USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
             {
                 Urb->UrbHeader.UsbdFlags |= USBD_FLAG_ALLOCATED_MDL;
                 MmBuildMdlForNonPagedPool(Mdl);
+
+                KeFlushIoBuffers(Mdl,
+                                 (SetupPacket->bmRequestType.Dir == BMREQUEST_DEVICE_TO_HOST),
+                                 TRUE);
             }
             else
             {
@@ -119,6 +123,8 @@ USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
 
             if (pUSBDStatus)
                 *pUSBDStatus = USBDStatus;
+
+            /* No additional cache maintenance required after completion */
         }
 
         InterlockedDecrement(&DeviceHandle->DeviceHandleLock);
@@ -990,6 +996,7 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
     USHORT port;
     PUSBPORT_DEVICE_HANDLE DeviceHandle;
     PUSBPORT_PIPE_HANDLE PipeHandle;
+    PUSBPORT_ENDPOINT Endpoint;
     BOOL IsOpenedPipe;
     PVOID DeviceDescriptor;
     USB_DEFAULT_PIPE_SETUP_PACKET SetupPacket;
@@ -1084,19 +1091,20 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
                           NULL);
 
     PipeHandle = &DeviceHandle->PipeHandle;
+    Endpoint = NULL;
 
     PipeHandle->Flags = PIPE_HANDLE_FLAG_CLOSED;
 
     PipeHandle->EndpointDescriptor.bLength = sizeof(PipeHandle->EndpointDescriptor);
     PipeHandle->EndpointDescriptor.bDescriptorType = USB_ENDPOINT_DESCRIPTOR_TYPE;
 
-    if (DeviceHandle->DeviceSpeed == UsbLowSpeed)
+    if (DeviceHandle->DeviceSpeed == UsbHighSpeed)
     {
-        PipeHandle->EndpointDescriptor.wMaxPacketSize = 8;
+        PipeHandle->EndpointDescriptor.wMaxPacketSize = USB_DEFAULT_MAX_PACKET;
     }
     else
     {
-        PipeHandle->EndpointDescriptor.wMaxPacketSize = USB_DEFAULT_MAX_PACKET;
+        PipeHandle->EndpointDescriptor.wMaxPacketSize = 8;
     }
 
     InitializeListHead(&DeviceHandle->PipeHandleList);
@@ -1123,6 +1131,8 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
         return Status;
     }
 
+    Endpoint = PipeHandle->Endpoint;
+
     DeviceDescriptor = ExAllocatePoolWithTag(NonPagedPool,
                                              USB_DEFAULT_MAX_PACKET,
                                              USB_PORT_TAG);
@@ -1136,10 +1146,13 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
     RtlZeroMemory(DeviceDescriptor, USB_DEFAULT_MAX_PACKET);
     RtlZeroMemory(&SetupPacket, sizeof(USB_DEFAULT_PIPE_SETUP_PACKET));
 
+    DescriptorMinSize = RTL_SIZEOF_THROUGH_FIELD(USB_DEVICE_DESCRIPTOR,
+                                                 bMaxPacketSize0);
+
     SetupPacket.bmRequestType.Dir = BMREQUEST_DEVICE_TO_HOST;
     SetupPacket.bRequest = USB_REQUEST_GET_DESCRIPTOR;
     SetupPacket.wValue.HiByte = USB_DEVICE_DESCRIPTOR_TYPE;
-    SetupPacket.wLength = USB_DEFAULT_MAX_PACKET;
+    SetupPacket.wLength = DescriptorMinSize;
 
     TransferedLen = 0;
 
@@ -1147,23 +1160,85 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
                                      FdoDevice,
                                      &SetupPacket,
                                      DeviceDescriptor,
-                                     USB_DEFAULT_MAX_PACKET,
+                                     DescriptorMinSize,
                                      &TransferedLen,
                                      NULL);
 
+    if (!NT_SUCCESS(Status) || TransferedLen < DescriptorMinSize)
+        goto PostDescriptor;
+
+    RtlZeroMemory(&DeviceHandle->DeviceDescriptor,
+                  sizeof(USB_DEVICE_DESCRIPTOR));
     RtlCopyMemory(&DeviceHandle->DeviceDescriptor,
                   DeviceDescriptor,
-                  sizeof(USB_DEVICE_DESCRIPTOR));
+                  (TransferedLen < sizeof(USB_DEVICE_DESCRIPTOR)) ?
+                  TransferedLen : sizeof(USB_DEVICE_DESCRIPTOR));
+
+    MaxPacketSize = DeviceHandle->DeviceDescriptor.bMaxPacketSize0;
+
+    if (MaxPacketSize != 8 &&
+        MaxPacketSize != 16 &&
+        MaxPacketSize != 32 &&
+        MaxPacketSize != 64)
+    {
+        goto PostDescriptor;
+    }
+
+    PipeHandle->EndpointDescriptor.wMaxPacketSize = MaxPacketSize;
+
+    if (Endpoint)
+    {
+        Endpoint->EndpointProperties.TotalMaxPacketSize = MaxPacketSize;
+        Endpoint->EndpointProperties.MaxPacketSize = MaxPacketSize;
+    }
+
+    Status = USBPORT_ReopenPipe(FdoDevice, Endpoint);
+
+    if (!NT_SUCCESS(Status))
+        goto PostDescriptor;
+
+    USBPORT_Wait(FdoDevice, 10);
+
+    {
+        NTSTATUS InitialStatus = Status;
+        ULONG InitialTransferLen = TransferedLen;
+
+        RtlZeroMemory(&SetupPacket, sizeof(USB_DEFAULT_PIPE_SETUP_PACKET));
+
+        SetupPacket.bmRequestType.Dir = BMREQUEST_DEVICE_TO_HOST;
+        SetupPacket.bRequest = USB_REQUEST_GET_DESCRIPTOR;
+        SetupPacket.wValue.HiByte = USB_DEVICE_DESCRIPTOR_TYPE;
+        SetupPacket.wLength = sizeof(USB_DEVICE_DESCRIPTOR);
+
+        TransferedLen = 0;
+
+        Status = USBPORT_SendSetupPacket(DeviceHandle,
+                                         FdoDevice,
+                                         &SetupPacket,
+                                         DeviceDescriptor,
+                                         sizeof(USB_DEVICE_DESCRIPTOR),
+                                         &TransferedLen,
+                                         NULL);
+
+        if (NT_SUCCESS(Status) &&
+            TransferedLen >= sizeof(USB_DEVICE_DESCRIPTOR))
+        {
+            RtlCopyMemory(&DeviceHandle->DeviceDescriptor,
+                          DeviceDescriptor,
+                          sizeof(USB_DEVICE_DESCRIPTOR));
+        }
+        else if (!NT_SUCCESS(Status) &&
+                 NT_SUCCESS(InitialStatus) &&
+                 InitialTransferLen >= DescriptorMinSize)
+        {
+            Status = STATUS_SUCCESS;
+            TransferedLen = InitialTransferLen;
+        }
+    }
+
+PostDescriptor:
 
     ExFreePoolWithTag(DeviceDescriptor, USB_PORT_TAG);
-
-    DescriptorMinSize = RTL_SIZEOF_THROUGH_FIELD(USB_DEVICE_DESCRIPTOR,
-                                                 bMaxPacketSize0);
-
-    if ((TransferedLen == DescriptorMinSize) && !NT_SUCCESS(Status))
-    {
-        Status = STATUS_SUCCESS;
-    }
 
     if (NT_SUCCESS(Status) && (TransferedLen >= DescriptorMinSize))
     {
@@ -1194,6 +1269,26 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
     DPRINT1("USBPORT_CreateDevice: ERROR!!! TransferedLen - %x, Status - %lx\n",
             TransferedLen,
             Status);
+
+#if DBG
+    {
+        const UCHAR *RawDescriptor = (const UCHAR *)&DeviceHandle->DeviceDescriptor;
+        ULONG ByteIndex;
+
+        DPRINT1("USBPORT_CreateDevice: descriptor bytes (len=%lu)\n",
+                (ULONG)sizeof(USB_DEVICE_DESCRIPTOR));
+
+        for (ByteIndex = 0; ByteIndex < sizeof(USB_DEVICE_DESCRIPTOR); ByteIndex++)
+        {
+            DPRINT1("USBPORT_CreateDevice: desc[%02lu] = %02X\n",
+                    ByteIndex,
+                    RawDescriptor[ByteIndex]);
+        }
+    }
+#endif
+
+    /* Keep the structured dump for anyone building with URB tracing enabled */
+    USBPORT_DumpingDeviceDescriptor(&DeviceHandle->DeviceDescriptor);
 
 ErrorExit:
 
@@ -1429,6 +1524,7 @@ USBPORT_GetUsbDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
                          IN PULONG ConfigDescSize)
 {
     USB_DEFAULT_PIPE_SETUP_PACKET SetupPacket;
+    NTSTATUS Status;
 
     DPRINT("USBPORT_GetUsbDescriptor: Type - %x\n");
 
@@ -1439,13 +1535,39 @@ USBPORT_GetUsbDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
     SetupPacket.wValue.HiByte = Type;
     SetupPacket.wLength = (USHORT)*ConfigDescSize;
 
-    return USBPORT_SendSetupPacket(DeviceHandle,
-                                   FdoDevice,
-                                   &SetupPacket,
-                                   ConfigDesc,
-                                   *ConfigDescSize,
-                                   ConfigDescSize,
-                                   NULL);
+    Status = USBPORT_SendSetupPacket(DeviceHandle,
+                                     FdoDevice,
+                                     &SetupPacket,
+                                     ConfigDesc,
+                                     *ConfigDescSize,
+                                     ConfigDescSize,
+                                     NULL);
+
+#if DBG
+    if (NT_SUCCESS(Status) && ConfigDesc && ConfigDescSize && *ConfigDescSize)
+    {
+        ULONG dumpLen = (*ConfigDescSize < 16) ? *ConfigDescSize : 16;
+
+        DPRINT1("USBPORT_GetUsbDescriptor: completed type=0x%x len=%lu first bytes=%02x %02x %02x %02x %02x %02x\n",
+                Type,
+                *ConfigDescSize,
+                ((PUCHAR)ConfigDesc)[0],
+                dumpLen > 1 ? ((PUCHAR)ConfigDesc)[1] : 0,
+                dumpLen > 2 ? ((PUCHAR)ConfigDesc)[2] : 0,
+                dumpLen > 3 ? ((PUCHAR)ConfigDesc)[3] : 0,
+                dumpLen > 4 ? ((PUCHAR)ConfigDesc)[4] : 0,
+                dumpLen > 5 ? ((PUCHAR)ConfigDesc)[5] : 0);
+    }
+    else
+    {
+        DPRINT1("USBPORT_GetUsbDescriptor: type=0x%x failed Status=0x%08lx len=%lu\n",
+                Type,
+                Status,
+                ConfigDescSize ? *ConfigDescSize : 0);
+    }
+#endif
+
+    return Status;
 }
 
 PUSBPORT_INTERFACE_HANDLE
@@ -1520,7 +1642,7 @@ USBPORT_HandleSelectInterface(IN PDEVICE_OBJECT FdoDevice,
     if (USBDStatus)
     {
         Interface->InterfaceHandle = (USBD_INTERFACE_HANDLE)-1;
-        return USBPORT_USBDStatusToNtStatus(Urb, USBDStatus);
+        goto Exit;
     }
 
     DeviceHandle = Urb->UrbHeader.UsbdDeviceHandle;
@@ -1571,6 +1693,8 @@ USBPORT_HandleSelectInterface(IN PDEVICE_OBJECT FdoDevice,
                        &iHandle->InterfaceLink);
     }
 
+Exit:
+
     KeReleaseSemaphore(&FdoExtension->DeviceSemaphore,
                        LOW_REALTIME_PRIORITY,
                        1,
@@ -1618,6 +1742,31 @@ USBPORT_RemoveDevice(IN PDEVICE_OBJECT FdoDevice,
         DPRINT1("USBPORT_RemoveDevice: Not valid device handle\n");
         return STATUS_DEVICE_NOT_CONNECTED;
     }
+
+#if DBG
+    if (DeviceHandle->Flags & DEVICE_HANDLE_FLAG_ROOTHUB)
+    {
+        PVOID CallStack[8] = {0};
+        USHORT Depth;
+        USHORT Index;
+
+        Depth = RtlCaptureStackBackTrace(1,
+                                         RTL_NUMBER_OF(CallStack),
+                                         CallStack,
+                                         NULL);
+
+        DPRINT1("USBPORT_RemoveDevice: root hub handle %p removal requested (Flags=0x%lx)\n",
+                DeviceHandle,
+                DeviceHandle->Flags);
+
+        for (Index = 0; Index < Depth; Index++)
+        {
+            DPRINT1("USBPORT_RemoveDevice:  caller[%u]=%p\n",
+                    Index,
+                    CallStack[Index]);
+        }
+    }
+#endif
 
     USBPORT_RemoveDeviceHandle(FdoDevice, DeviceHandle);
 

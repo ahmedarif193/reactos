@@ -15,6 +15,33 @@
 
 IO_COMPLETION_ROUTINE USBPORT_FdoStartCompletion;
 
+typedef NTSTATUS (NTAPI *PFN_IO_CONNECT_INTERRUPT_EX)(PIO_CONNECT_INTERRUPT_PARAMETERS Parameters);
+typedef VOID (NTAPI *PFN_IO_DISCONNECT_INTERRUPT_EX)(PIO_DISCONNECT_INTERRUPT_PARAMETERS Parameters);
+
+static PFN_IO_CONNECT_INTERRUPT_EX UsbPortIoConnectInterruptEx = NULL;
+static PFN_IO_DISCONNECT_INTERRUPT_EX UsbPortIoDisconnectInterruptEx = NULL;
+static BOOLEAN UsbPortInterruptApiResolved = FALSE;
+
+static
+VOID
+USBPORT_EnsureInterruptApis(VOID)
+{
+    UNICODE_STRING RoutineName;
+
+    if (UsbPortInterruptApiResolved)
+        return;
+
+    RtlInitUnicodeString(&RoutineName, L"IoConnectInterruptEx");
+    UsbPortIoConnectInterruptEx =
+        (PFN_IO_CONNECT_INTERRUPT_EX)MmGetSystemRoutineAddress(&RoutineName);
+
+    RtlInitUnicodeString(&RoutineName, L"IoDisconnectInterruptEx");
+    UsbPortIoDisconnectInterruptEx =
+        (PFN_IO_DISCONNECT_INTERRUPT_EX)MmGetSystemRoutineAddress(&RoutineName);
+
+    UsbPortInterruptApiResolved = TRUE;
+}
+
 NTSTATUS
 NTAPI
 USBPORT_FdoStartCompletion(IN PDEVICE_OBJECT DeviceObject,
@@ -93,6 +120,7 @@ USBPORT_IsSelectiveSuspendEnabled(IN PDEVICE_OBJECT FdoDevice)
     DPRINT("USBPORT_IsSelectiveSuspendEnabled: ... \n");
 
     FdoExtension = FdoDevice->DeviceExtension;
+    FdoExtension->Flags &= ~USBPORT_FLAG_RH_STOPPED;
 
     USBPORT_GetRegistryKeyValueFullInfo(FdoDevice,
                                         FdoExtension->CommonExtension.LowerPdoDevice,
@@ -453,6 +481,8 @@ USBPORT_CreateLegacySymbolicLink(IN PDEVICE_OBJECT FdoDevice)
     WCHAR CharDosName[255] = {0};
     UNICODE_STRING DeviceName;
     NTSTATUS Status;
+    USHORT DosLength;
+    PWSTR DosBuffer;
 
     FdoExtension = FdoDevice->DeviceExtension;
 
@@ -468,7 +498,24 @@ USBPORT_CreateLegacySymbolicLink(IN PDEVICE_OBJECT FdoDevice)
                        L"\\DosDevices\\HCD%d",
                        FdoExtension->FdoNameNumber);
 
-    RtlInitUnicodeString(&FdoExtension->DosDeviceSymbolicName, CharDosName);
+    DosLength = (USHORT)((wcslen(CharDosName) + 1) * sizeof(WCHAR));
+
+    DosBuffer = ExAllocatePoolWithTag(PagedPool,
+                                      DosLength,
+                                      USB_PORT_TAG);
+
+    if (!DosBuffer)
+    {
+        DPRINT1("USBPORT_CreateLegacySymbolicLink: Allocation failed\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(DosBuffer, DosLength);
+    RtlCopyMemory(DosBuffer, CharDosName, DosLength);
+
+    FdoExtension->DosDeviceSymbolicName.Buffer = DosBuffer;
+    FdoExtension->DosDeviceSymbolicName.MaximumLength = DosLength;
+    FdoExtension->DosDeviceSymbolicName.Length = DosLength - sizeof(WCHAR);
 
     DPRINT("USBPORT_CreateLegacySymbolicLink: DeviceName - %wZ, DosSymbolicName - %wZ\n",
            &DeviceName,
@@ -481,6 +528,18 @@ USBPORT_CreateLegacySymbolicLink(IN PDEVICE_OBJECT FdoDevice)
     {
         FdoExtension->Flags |= USBPORT_FLAG_DOS_SYMBOLIC_NAME;
     }
+    else
+    {
+        DPRINT1("USBPORT_CreateLegacySymbolicLink: IoCreateSymbolicLink failed - %lx\n",
+                Status);
+        if (FdoExtension->DosDeviceSymbolicName.Buffer)
+        {
+            ExFreePoolWithTag(FdoExtension->DosDeviceSymbolicName.Buffer, USB_PORT_TAG);
+            FdoExtension->DosDeviceSymbolicName.Buffer = NULL;
+            FdoExtension->DosDeviceSymbolicName.MaximumLength = 0;
+            FdoExtension->DosDeviceSymbolicName.Length = 0;
+        }
+    }
 
     return Status;
 }
@@ -489,8 +548,231 @@ NTSTATUS
 NTAPI
 USBPORT_StopDevice(IN PDEVICE_OBJECT FdoDevice)
 {
-    DPRINT1("USBPORT_StopDevice: UNIMPLEMENTED. FIXME\n");
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PUSBPORT_REGISTRATION_PACKET Packet;
+    PUSBPORT_RESOURCES UsbPortResources;
+
+    DPRINT("USBPORT_StopDevice: FdoDevice - %p\n", FdoDevice);
+
+    FdoExtension = FdoDevice->DeviceExtension;
+    Packet = FdoExtension->MiniPortInterface ?
+             &FdoExtension->MiniPortInterface->Packet :
+             NULL;
+    UsbPortResources = &FdoExtension->UsbPortResources;
+
+    if (FdoExtension->MiniPortFlags & USBPORT_MPFLAG_INTERRUPTS_ENABLED)
+    {
+        USBPORT_MiniportInterrupts(FdoDevice, FALSE);
+        FdoExtension->MiniPortFlags &= ~(USBPORT_MPFLAG_INTERRUPTS_ENABLED |
+                                         USBPORT_MPFLAG_SUSPENDED);
+    }
+
+    USBPORT_StopControllerTimer(FdoExtension);
+    KeCancelTimer(&FdoExtension->TimerSoftInterrupt);
+    FdoExtension->TimerFlags = 0;
+
+    if (Packet && (FdoExtension->Flags & USBPORT_FLAG_HC_STARTED) &&
+        Packet->StopController)
+    {
+        Packet->StopController(FdoExtension->MiniPortExt, FALSE);
+    }
+
+    FdoExtension->Flags &= ~(USBPORT_FLAG_HC_STARTED |
+                             USBPORT_FLAG_INTERRUPT_ENABLED |
+                             USBPORT_FLAG_LEGACY_SUPPORT |
+                             USBPORT_FLAG_HC_POLLING |
+                             USBPORT_FLAG_HC_SUSPEND |
+                             USBPORT_FLAG_RH_INIT_CALLBACK);
+
+    if (FdoExtension->CommonExtension.IsInterfaceEnabled)
+    {
+        USBPORT_RegisterDeviceInterface(FdoExtension->CommonExtension.LowerPdoDevice,
+                                        FdoDevice,
+                                        &GUID_DEVINTERFACE_USB_HOST_CONTROLLER,
+                                        FALSE);
+    }
+
+    if ((FdoExtension->Flags & USBPORT_FLAG_DOS_SYMBOLIC_NAME) &&
+        FdoExtension->DosDeviceSymbolicName.Buffer)
+    {
+        IoDeleteSymbolicLink(&FdoExtension->DosDeviceSymbolicName);
+        ExFreePoolWithTag(FdoExtension->DosDeviceSymbolicName.Buffer, USB_PORT_TAG);
+        FdoExtension->DosDeviceSymbolicName.Buffer = NULL;
+        FdoExtension->DosDeviceSymbolicName.MaximumLength = 0;
+        FdoExtension->DosDeviceSymbolicName.Length = 0;
+        FdoExtension->Flags &= ~USBPORT_FLAG_DOS_SYMBOLIC_NAME;
+    }
+
+    USBPORT_FlushMapTransfers(FdoDevice);
+
+    if (FdoExtension->InterruptMessageInfo)
+    {
+        if (UsbPortIoDisconnectInterruptEx)
+        {
+            IO_DISCONNECT_INTERRUPT_PARAMETERS DisconnectParameters;
+            RtlZeroMemory(&DisconnectParameters, sizeof(DisconnectParameters));
+            DisconnectParameters.Version = CONNECT_MESSAGE_BASED;
+            DisconnectParameters.ConnectionContext.InterruptMessageTable =
+                FdoExtension->InterruptMessageInfo;
+            UsbPortIoDisconnectInterruptEx(&DisconnectParameters);
+        }
+        FdoExtension->InterruptMessageInfo = NULL;
+        FdoExtension->MessageInterruptsEnabled = FALSE;
+        FdoExtension->MessageInterruptCount = 0;
+        FdoExtension->InterruptObject = NULL;
+    }
+    else if (FdoExtension->InterruptObject)
+    {
+        IoDisconnectInterrupt(FdoExtension->InterruptObject);
+        FdoExtension->InterruptObject = NULL;
+    }
+
+    FdoExtension->Flags &= ~USBPORT_FLAG_INT_CONNECTED;
+
+    if (FdoExtension->MiniPortCommonBuffer)
+    {
+        USBPORT_FreeCommonBuffer(FdoDevice, FdoExtension->MiniPortCommonBuffer);
+        FdoExtension->MiniPortCommonBuffer = NULL;
+    }
+
+    if (FdoExtension->ActiveIrpTable)
+    {
+        ExFreePoolWithTag(FdoExtension->ActiveIrpTable, USB_PORT_TAG);
+        FdoExtension->ActiveIrpTable = NULL;
+    }
+
+    if (FdoExtension->PendingIrpTable)
+    {
+        ExFreePoolWithTag(FdoExtension->PendingIrpTable, USB_PORT_TAG);
+        FdoExtension->PendingIrpTable = NULL;
+    }
+
+    if (FdoExtension->DmaAdapter)
+    {
+        FdoExtension->DmaAdapter->DmaOperations->PutDmaAdapter(FdoExtension->DmaAdapter);
+        FdoExtension->DmaAdapter = NULL;
+        FdoExtension->NumberMapRegs = 0;
+    }
+
+    if ((UsbPortResources->ResourcesTypes & USBPORT_RESOURCES_MEMORY) &&
+        UsbPortResources->ResourceBase)
+    {
+        MmUnmapIoSpace(UsbPortResources->ResourceBase,
+                       UsbPortResources->IoSpaceLength);
+    }
+
+    RtlZeroMemory(UsbPortResources, sizeof(USBPORT_RESOURCES));
+
+    if (FdoExtension->BusInterface.InterfaceDereference &&
+        FdoExtension->BusInterface.Context)
+    {
+        FdoExtension->BusInterface.InterfaceDereference(FdoExtension->BusInterface.Context);
+    }
+
+    RtlZeroMemory(&FdoExtension->BusInterface, sizeof(BUS_INTERFACE_STANDARD));
+
+    FdoExtension->CommonExtension.DevicePowerState = PowerDeviceD3;
+
     return STATUS_SUCCESS;
+}
+
+static
+VOID
+USBPORT_StopRootHub(IN PDEVICE_OBJECT PdoDevice)
+{
+    PUSBPORT_RHDEVICE_EXTENSION PdoExtension;
+    PDEVICE_OBJECT FdoDevice;
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PIRP WakeIrp = NULL;
+    KIRQL OldIrql;
+
+    PdoExtension = PdoDevice->DeviceExtension;
+    FdoDevice = PdoExtension->FdoDevice;
+
+    DPRINT1("USBPORT_StopRootHub: PDO=%p FDO=%p\n", PdoDevice, FdoDevice);
+
+    if (!FdoDevice)
+    {
+        goto CleanupDeviceHandle;
+    }
+
+    FdoExtension = FdoDevice->DeviceExtension;
+
+    if (FdoExtension->Flags & USBPORT_FLAG_RH_STOPPED)
+    {
+        DPRINT1("USBPORT_StopRootHub: root hub already marked stopped (Flags=0x%lx)\n",
+                FdoExtension->Flags);
+    }
+
+    if (FdoExtension->MiniPortInterface &&
+        FdoExtension->MiniPortInterface->Packet.RH_DisableIrq)
+    {
+        DPRINT1("USBPORT_StopRootHub: disabling miniport root hub interrupts\n");
+        FdoExtension->MiniPortInterface->Packet.RH_DisableIrq(FdoExtension->MiniPortExt);
+    }
+
+    if (PdoExtension->CommonExtension.IsInterfaceEnabled)
+    {
+        USBPORT_RegisterDeviceInterface(PdoDevice,
+                                        PdoDevice,
+                                        &GUID_DEVINTERFACE_USB_HUB,
+                                        FALSE);
+    }
+
+    FdoExtension->Flags |= USBPORT_FLAG_RH_STOPPED;
+    USBPORT_StopControllerTimer(FdoExtension);
+
+    KeAcquireSpinLock(&FdoExtension->PowerWakeSpinLock, &OldIrql);
+
+    if (PdoExtension->WakeIrp && IoSetCancelRoutine(PdoExtension->WakeIrp, NULL))
+    {
+        WakeIrp = PdoExtension->WakeIrp;
+        PdoExtension->WakeIrp = NULL;
+    }
+
+    KeReleaseSpinLock(&FdoExtension->PowerWakeSpinLock, OldIrql);
+
+    if (WakeIrp)
+    {
+        WakeIrp->IoStatus.Status = STATUS_CANCELLED;
+        WakeIrp->IoStatus.Information = 0;
+        IoCompleteRequest(WakeIrp, IO_NO_INCREMENT);
+    }
+
+    if (USBPORT_ValidateDeviceHandle(FdoDevice, &PdoExtension->DeviceHandle))
+    {
+        DPRINT1("USBPORT_StopRootHub: removing handle %p\n",
+                &PdoExtension->DeviceHandle);
+        USBPORT_RemoveDevice(FdoDevice, &PdoExtension->DeviceHandle, 0);
+    }
+    else
+    {
+        DPRINT1("USBPORT_StopRootHub: handle %p no longer on DeviceHandle list\n",
+                &PdoExtension->DeviceHandle);
+    }
+
+CleanupDeviceHandle:
+    RtlZeroMemory(&PdoExtension->DeviceHandle, sizeof(USBPORT_DEVICE_HANDLE));
+    InitializeListHead(&PdoExtension->DeviceHandle.PipeHandleList);
+    InitializeListHead(&PdoExtension->DeviceHandle.TtList);
+
+    if (PdoExtension->RootHubDescriptors)
+    {
+        ExFreePoolWithTag(PdoExtension->RootHubDescriptors, USB_PORT_TAG);
+        PdoExtension->RootHubDescriptors = NULL;
+    }
+
+    if (PdoExtension->RootHubCallbackData)
+    {
+        USBPORT_DereferenceRootHubCallbackData(PdoExtension->RootHubCallbackData);
+        PdoExtension->RootHubCallbackData = NULL;
+    }
+
+    PdoExtension->Endpoint = NULL;
+    PdoExtension->ConfigurationValue = 0;
+    PdoExtension->RootHubInitCallback = NULL;
+    PdoExtension->RootHubInitContext = NULL;
+    PdoExtension->CommonExtension.DevicePowerState = PowerDeviceD3;
 }
 
 NTSTATUS
@@ -556,6 +838,8 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     DeviceDescription.Master = TRUE;
     DeviceDescription.ScatterGather = TRUE;
     DeviceDescription.Dma32BitAddresses = TRUE;
+    DeviceDescription.Dma64BitAddresses =
+        (Packet->MiniPortFlags & USB_MINIPORT_FLAGS_USB3) ? TRUE : FALSE;
     DeviceDescription.InterfaceType = PCIBus;
     DeviceDescription.DmaWidth = Width32Bits;
     DeviceDescription.DmaSpeed = Compatible;
@@ -785,26 +1069,92 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
 
     RtlZeroMemory(FdoExtension->PendingIrpTable, sizeof(USBPORT_IRP_TABLE));
 
-    Status = IoConnectInterrupt(&FdoExtension->InterruptObject,
-                                USBPORT_InterruptService,
-                                (PVOID)FdoDevice,
-                                0,
-                                UsbPortResources->InterruptVector,
-                                UsbPortResources->InterruptLevel,
-                                UsbPortResources->InterruptLevel,
-                                UsbPortResources->InterruptMode,
-                                UsbPortResources->ShareVector,
-                                UsbPortResources->InterruptAffinity,
-                                0);
-
-
-    if (!NT_SUCCESS(Status))
+    if (!UsbPortResources->ShareVector &&
+        (Packet->MiniPortFlags & USB_MINIPORT_FLAGS_USB3))
     {
-        DPRINT1("USBPORT_StartDevice: IoConnectInterrupt failed!\n");
-        goto ExitWithError;
+        DPRINT1("USBPORT_StartDevice: forcing shared IRQ for xHCI controller\n");
+        UsbPortResources->ShareVector = TRUE;
     }
 
-    FdoExtension->Flags &= ~USBPORT_FLAG_INT_CONNECTED;
+    USBPORT_EnsureInterruptApis();
+
+    if ((UsbPortResources->InterruptFlags & CM_RESOURCE_INTERRUPT_MESSAGE) &&
+        UsbPortResources->InterruptMessageCount != 0 &&
+        UsbPortIoConnectInterruptEx)
+    {
+        IO_CONNECT_INTERRUPT_PARAMETERS ConnectParameters;
+
+        RtlZeroMemory(&ConnectParameters, sizeof(ConnectParameters));
+        ConnectParameters.Version = CONNECT_MESSAGE_BASED;
+        ConnectParameters.MessageBased.PhysicalDeviceObject =
+            FdoExtension->CommonExtension.LowerPdoDevice;
+        ConnectParameters.MessageBased.ConnectionContext.InterruptMessageTable =
+            &FdoExtension->InterruptMessageInfo;
+        ConnectParameters.MessageBased.MessageServiceRoutine =
+            USBPORT_MessageInterruptService;
+        ConnectParameters.MessageBased.ServiceContext = FdoDevice;
+        ConnectParameters.MessageBased.SpinLock = NULL;
+        ConnectParameters.MessageBased.SynchronizeIrql =
+            UsbPortResources->InterruptLevel;
+        ConnectParameters.MessageBased.FloatingSave = FALSE;
+        ConnectParameters.MessageBased.FallBackServiceRoutine =
+            USBPORT_InterruptService;
+
+        Status = UsbPortIoConnectInterruptEx(&ConnectParameters);
+        if (NT_SUCCESS(Status) && FdoExtension->InterruptMessageInfo)
+        {
+            FdoExtension->InterruptObject =
+                FdoExtension->InterruptMessageInfo->MessageInfo[0].InterruptObject;
+            FdoExtension->MessageInterruptsEnabled = TRUE;
+            FdoExtension->MessageInterruptCount =
+                (UCHAR)FdoExtension->InterruptMessageInfo->MessageCount;
+            FdoExtension->Flags |= USBPORT_FLAG_INT_CONNECTED;
+        }
+        else
+        {
+            if (FdoExtension->InterruptMessageInfo && UsbPortIoDisconnectInterruptEx)
+            {
+                IO_DISCONNECT_INTERRUPT_PARAMETERS DisconnectParameters;
+                RtlZeroMemory(&DisconnectParameters, sizeof(DisconnectParameters));
+                DisconnectParameters.Version = CONNECT_MESSAGE_BASED;
+                DisconnectParameters.ConnectionContext.InterruptMessageTable =
+                    FdoExtension->InterruptMessageInfo;
+                UsbPortIoDisconnectInterruptEx(&DisconnectParameters);
+            }
+
+            FdoExtension->InterruptMessageInfo = NULL;
+            FdoExtension->MessageInterruptsEnabled = FALSE;
+            FdoExtension->MessageInterruptCount = 0;
+            Status = STATUS_UNSUCCESSFUL;
+        }
+    }
+    else
+    {
+        Status = STATUS_NOT_SUPPORTED;
+    }
+
+    if (!(FdoExtension->Flags & USBPORT_FLAG_INT_CONNECTED))
+    {
+        Status = IoConnectInterrupt(&FdoExtension->InterruptObject,
+                                    USBPORT_InterruptService,
+                                    (PVOID)FdoDevice,
+                                    0,
+                                    UsbPortResources->InterruptVector,
+                                    UsbPortResources->InterruptLevel,
+                                    UsbPortResources->InterruptLevel,
+                                    UsbPortResources->InterruptMode,
+                                    UsbPortResources->ShareVector,
+                                    UsbPortResources->InterruptAffinity,
+                                    0);
+
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("USBPORT_StartDevice: IoConnectInterrupt failed!\n");
+            goto ExitWithError;
+        }
+
+        FdoExtension->Flags |= USBPORT_FLAG_INT_CONNECTED;
+    }
 
     if (Packet->MiniPortExtensionSize)
     {
@@ -860,7 +1210,24 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
 
         if (FdoExtension->Flags & USBPORT_FLAG_INT_CONNECTED)
         {
-            IoDisconnectInterrupt(FdoExtension->InterruptObject);
+            if (FdoExtension->InterruptMessageInfo && UsbPortIoDisconnectInterruptEx)
+            {
+                IO_DISCONNECT_INTERRUPT_PARAMETERS DisconnectParameters;
+                RtlZeroMemory(&DisconnectParameters, sizeof(DisconnectParameters));
+                DisconnectParameters.Version = CONNECT_MESSAGE_BASED;
+                DisconnectParameters.ConnectionContext.InterruptMessageTable =
+                    FdoExtension->InterruptMessageInfo;
+                UsbPortIoDisconnectInterruptEx(&DisconnectParameters);
+                FdoExtension->InterruptMessageInfo = NULL;
+                FdoExtension->MessageInterruptsEnabled = FALSE;
+                FdoExtension->MessageInterruptCount = 0;
+            }
+            else if (FdoExtension->InterruptObject)
+            {
+                IoDisconnectInterrupt(FdoExtension->InterruptObject);
+                FdoExtension->InterruptObject = NULL;
+            }
+
             FdoExtension->Flags &= ~USBPORT_FLAG_INT_CONNECTED;
         }
 
@@ -1003,16 +1370,48 @@ USBPORT_ParseResources(IN PDEVICE_OBJECT FdoDevice,
         if (InterruptDescriptor && NT_SUCCESS(Status))
         {
             UsbPortResources->ResourcesTypes |= USBPORT_RESOURCES_INTERRUPT;
+            UsbPortResources->InterruptFlags = InterruptDescriptor->Flags;
+            UsbPortResources->InterruptMessageCount = 0;
 
-            UsbPortResources->InterruptVector = InterruptDescriptor->u.Interrupt.Vector;
-            UsbPortResources->InterruptLevel = InterruptDescriptor->u.Interrupt.Level;
-            UsbPortResources->InterruptAffinity = InterruptDescriptor->u.Interrupt.Affinity;
+            if (InterruptDescriptor->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
+            {
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+                UsbPortResources->InterruptVector =
+                    InterruptDescriptor->u.MessageInterrupt.Translated.Vector;
+                UsbPortResources->InterruptLevel =
+                    (KIRQL)InterruptDescriptor->u.MessageInterrupt.Translated.Level;
+                UsbPortResources->InterruptAffinity =
+                    InterruptDescriptor->u.MessageInterrupt.Translated.Affinity;
 
-            UsbPortResources->ShareVector = InterruptDescriptor->ShareDisposition ==
-                                            CmResourceShareShared;
+                if (InterruptDescriptor->u.MessageInterrupt.Raw.MessageCount)
+                {
+                    UsbPortResources->InterruptMessageCount =
+                        InterruptDescriptor->u.MessageInterrupt.Raw.MessageCount;
+                }
+                else
+                {
+                    UsbPortResources->InterruptMessageCount = 1;
+                }
+#else
+                UsbPortResources->InterruptVector = InterruptDescriptor->u.Interrupt.Vector;
+                UsbPortResources->InterruptLevel = InterruptDescriptor->u.Interrupt.Level;
+                UsbPortResources->InterruptAffinity = InterruptDescriptor->u.Interrupt.Affinity;
+                UsbPortResources->InterruptMessageCount = 1;
+#endif
+            }
+            else
+            {
+                UsbPortResources->InterruptVector = InterruptDescriptor->u.Interrupt.Vector;
+                UsbPortResources->InterruptLevel = InterruptDescriptor->u.Interrupt.Level;
+                UsbPortResources->InterruptAffinity = InterruptDescriptor->u.Interrupt.Affinity;
+            }
 
-            UsbPortResources->InterruptMode = InterruptDescriptor->Flags ==
-                                              CM_RESOURCE_INTERRUPT_LATCHED;
+            UsbPortResources->ShareVector =
+                (InterruptDescriptor->ShareDisposition == CmResourceShareShared);
+
+            UsbPortResources->InterruptMode =
+                (InterruptDescriptor->Flags & CM_RESOURCE_INTERRUPT_LATCHED) ?
+                    Latched : LevelSensitive;
         }
     }
     else
@@ -1029,6 +1428,8 @@ USBPORT_CreatePdo(IN PDEVICE_OBJECT FdoDevice,
                   OUT PDEVICE_OBJECT *RootHubPdo)
 {
     PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PUSBPORT_ROOT_HUB_CALLBACK_DATA CallbackData;
+    BOOLEAN CallbackDataReferenced = FALSE;
     PUSBPORT_RHDEVICE_EXTENSION PdoExtension;
     UNICODE_STRING DeviceName;
     ULONG DeviceNumber = 0;
@@ -1041,6 +1442,26 @@ USBPORT_CreatePdo(IN PDEVICE_OBJECT FdoDevice,
            RootHubPdo);
 
     FdoExtension = FdoDevice->DeviceExtension;
+
+    CallbackData = FdoExtension->RootHubCallbackData;
+
+    if (!CallbackData)
+    {
+        CallbackData = ExAllocatePoolWithTag(NonPagedPool,
+                                             sizeof(USBPORT_ROOT_HUB_CALLBACK_DATA),
+                                             USB_PORT_TAG);
+
+        if (!CallbackData)
+        {
+            *RootHubPdo = NULL;
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        RtlZeroMemory(CallbackData, sizeof(*CallbackData));
+        CallbackData->RefCount = 1;
+        KeInitializeSpinLock(&CallbackData->Lock);
+        FdoExtension->RootHubCallbackData = CallbackData;
+    }
 
     do
     {
@@ -1083,6 +1504,9 @@ USBPORT_CreatePdo(IN PDEVICE_OBJECT FdoDevice,
 
         PdoExtension->FdoDevice = FdoDevice;
         PdoExtension->PdoNameNumber = DeviceNumber;
+        PdoExtension->RootHubCallbackData = CallbackData;
+        USBPORT_ReferenceRootHubCallbackData(CallbackData);
+        CallbackDataReferenced = TRUE;
 
         USBPORT_AdjustDeviceCapabilities(FdoDevice, DeviceObject);
 
@@ -1097,11 +1521,40 @@ USBPORT_CreatePdo(IN PDEVICE_OBJECT FdoDevice,
     }
 
     if (!NT_SUCCESS(Status))
-        *RootHubPdo = NULL;
-    else
-        *RootHubPdo = DeviceObject;
+    {
+        if (CallbackDataReferenced)
+        {
+            USBPORT_DereferenceRootHubCallbackData(CallbackData);
+        }
 
-    DPRINT("USBPORT_CreatePdo: HubPdo - %p\n", DeviceObject);
+        *RootHubPdo = NULL;
+    }
+    else
+    {
+        *RootHubPdo = DeviceObject;
+    }
+
+    if (NT_SUCCESS(Status) && DeviceObject)
+    {
+        FdoExtension->RootHubPdoExtension = DeviceObject->DeviceExtension;
+#if DBG
+        DPRINT1("USBPORT_CreatePdo: HubPdo=%p DevExt=%p\n",
+                DeviceObject,
+                FdoExtension->RootHubPdoExtension);
+#else
+        DPRINT("USBPORT_CreatePdo: HubPdo - %p\n", DeviceObject);
+#endif
+    }
+    else if (!NT_SUCCESS(Status))
+    {
+        FdoExtension->RootHubPdoExtension = NULL;
+        DPRINT("USBPORT_CreatePdo: HubPdo - %p\n", DeviceObject);
+    }
+    else
+    {
+        DPRINT("USBPORT_CreatePdo: HubPdo - %p\n", DeviceObject);
+    }
+
     return Status;
 }
 
@@ -1223,8 +1676,14 @@ Exit:
             if (FdoCommonExtension->PnpStateFlags & USBPORT_PNP_STATE_STARTED &&
                !(FdoCommonExtension->PnpStateFlags & USBPORT_PNP_STATE_NOT_INIT))
             {
-                DPRINT1("USBPORT_FdoPnP: stop fdo FIXME\n");
+                USBPORT_StopWorkerThread(FdoDevice);
+                USBPORT_StopDevice(FdoDevice);
                 FdoCommonExtension->PnpStateFlags |= USBPORT_PNP_STATE_NOT_INIT;
+            }
+
+            if (FdoExtension->Flags & USBPORT_FLAG_REGISTERED_FDO)
+            {
+                USBPORT_RemoveUSBxFdo(FdoDevice);
             }
 
             Irp->IoStatus.Status = STATUS_SUCCESS;
@@ -1239,7 +1698,21 @@ Exit:
 
             if (RootHubPdo)
             {
+                PUSBPORT_RHDEVICE_EXTENSION RootHubExtension = RootHubPdo->DeviceExtension;
+                if (RootHubExtension && RootHubExtension->RootHubCallbackData)
+                {
+                    USBPORT_DereferenceRootHubCallbackData(RootHubExtension->RootHubCallbackData);
+                    RootHubExtension->RootHubCallbackData = NULL;
+                }
                 IoDeleteDevice(RootHubPdo);
+                FdoExtension->RootHubPdo = NULL;
+                FdoExtension->RootHubPdoExtension = NULL;
+            }
+
+            if (FdoExtension->RootHubCallbackData)
+            {
+                USBPORT_DereferenceRootHubCallbackData(FdoExtension->RootHubCallbackData);
+                FdoExtension->RootHubCallbackData = NULL;
             }
 
             return Status;
@@ -1253,10 +1726,15 @@ Exit:
             DPRINT("IRP_MN_STOP_DEVICE\n");
             if (FdoCommonExtension->PnpStateFlags & USBPORT_PNP_STATE_STARTED)
             {
-                DPRINT1("USBPORT_FdoPnP: stop fdo FIXME\n");
-
+                USBPORT_StopWorkerThread(FdoDevice);
+                USBPORT_StopDevice(FdoDevice);
+                if (FdoExtension->Flags & USBPORT_FLAG_REGISTERED_FDO)
+                {
+                    USBPORT_RemoveUSBxFdo(FdoDevice);
+                }
                 FdoCommonExtension->PnpStateFlags &= ~USBPORT_PNP_STATE_STARTED;
                 FdoCommonExtension->PnpStateFlags |= USBPORT_PNP_STATE_NOT_INIT;
+                FdoCommonExtension->PnpStateFlags |= USBPORT_PNP_STATE_STOPPED;
             }
 
             Irp->IoStatus.Status = STATUS_SUCCESS;
@@ -1306,6 +1784,8 @@ Exit:
                 {
                     Status = STATUS_SUCCESS;
                 }
+
+                FdoExtension->RootHubPdoExtension = USBPORT_GetRootHubExtension(FdoExtension);
 
                 DeviceRelations->Count = 1;
                 DeviceRelations->Objects[0] = FdoExtension->RootHubPdo;
@@ -1388,6 +1868,19 @@ Exit:
             {
                 USBPORT_InvalidateControllerHandler(FdoDevice,
                                                     USBPORT_INVALIDATE_CONTROLLER_SURPRISE_REMOVE);
+            }
+
+            if (FdoCommonExtension->PnpStateFlags & USBPORT_PNP_STATE_STARTED)
+            {
+                USBPORT_StopWorkerThread(FdoDevice);
+                USBPORT_StopDevice(FdoDevice);
+                if (FdoExtension->Flags & USBPORT_FLAG_REGISTERED_FDO)
+                {
+                    USBPORT_RemoveUSBxFdo(FdoDevice);
+                }
+
+                FdoCommonExtension->PnpStateFlags &= ~USBPORT_PNP_STATE_STARTED;
+                FdoCommonExtension->PnpStateFlags |= USBPORT_PNP_STATE_FAILED;
             }
             goto ForwardIrp;
 
@@ -1557,7 +2050,10 @@ USBPORT_PdoPnP(IN PDEVICE_OBJECT PdoDevice,
                 if (NT_SUCCESS(Status))
                 {
                     PdoCommonExtension->DevicePowerState = PowerDeviceD0;
-                    PdoCommonExtension->PnpStateFlags = USBPORT_PNP_STATE_STARTED;
+                    PdoCommonExtension->PnpStateFlags &= ~USBPORT_PNP_STATE_STOPPED;
+                    PdoCommonExtension->PnpStateFlags &= ~USBPORT_PNP_STATE_FAILED;
+                    PdoCommonExtension->PnpStateFlags &= ~USBPORT_PNP_STATE_NOT_INIT;
+                    PdoCommonExtension->PnpStateFlags |= USBPORT_PNP_STATE_STARTED;
                 }
             }
 
@@ -1569,10 +2065,19 @@ USBPORT_PdoPnP(IN PDEVICE_OBJECT PdoDevice,
             break;
 
         case IRP_MN_REMOVE_DEVICE:
-            DPRINT1("USBPORT_PdoPnP: IRP_MN_REMOVE_DEVICE UNIMPLEMENTED. FIXME. \n");
-            //USBPORT_StopRootHub();
-            Status = STATUS_SUCCESS;
-            break;
+            DPRINT("USBPORT_PdoPnP: IRP_MN_REMOVE_DEVICE\n");
+
+            USBPORT_StopRootHub(PdoDevice);
+
+            PdoCommonExtension->PnpStateFlags &= ~USBPORT_PNP_STATE_STARTED;
+            PdoCommonExtension->PnpStateFlags |= USBPORT_PNP_STATE_NOT_INIT |
+                                                 USBPORT_PNP_STATE_STOPPED |
+                                                 USBPORT_PNP_STATE_FAILED;
+
+            Irp->IoStatus.Status = STATUS_SUCCESS;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            IoDeleteDevice(PdoDevice);
+            return STATUS_SUCCESS;
 
         case IRP_MN_CANCEL_REMOVE_DEVICE:
             DPRINT("IRP_MN_CANCEL_REMOVE_DEVICE\n");
@@ -1580,8 +2085,16 @@ USBPORT_PdoPnP(IN PDEVICE_OBJECT PdoDevice,
             break;
 
         case IRP_MN_STOP_DEVICE:
-            DPRINT1("USBPORT_PdoPnP: IRP_MN_STOP_DEVICE UNIMPLEMENTED. FIXME. \n");
-            //USBPORT_StopRootHub();
+            DPRINT("USBPORT_PdoPnP: IRP_MN_STOP_DEVICE\n");
+
+            if (PdoCommonExtension->PnpStateFlags & USBPORT_PNP_STATE_STARTED)
+            {
+                USBPORT_StopRootHub(PdoDevice);
+                PdoCommonExtension->PnpStateFlags &= ~USBPORT_PNP_STATE_STARTED;
+                PdoCommonExtension->PnpStateFlags |= USBPORT_PNP_STATE_NOT_INIT |
+                                                     USBPORT_PNP_STATE_STOPPED;
+            }
+
             Status = STATUS_SUCCESS;
             break;
 
@@ -1793,6 +2306,13 @@ USBPORT_PdoPnP(IN PDEVICE_OBJECT PdoDevice,
 
         case IRP_MN_SURPRISE_REMOVAL:
             DPRINT("USBPORT_PdoPnP: IRP_MN_SURPRISE_REMOVAL\n");
+
+            USBPORT_StopRootHub(PdoDevice);
+
+            PdoCommonExtension->PnpStateFlags &= ~USBPORT_PNP_STATE_STARTED;
+            PdoCommonExtension->PnpStateFlags |= USBPORT_PNP_STATE_FAILED |
+                                                 USBPORT_PNP_STATE_NOT_INIT;
+
             Status = STATUS_SUCCESS;
             break;
 

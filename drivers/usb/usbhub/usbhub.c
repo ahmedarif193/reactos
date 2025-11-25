@@ -10,8 +10,20 @@
 #define NDEBUG
 #include <debug.h>
 
-#define NDEBUG_USBHUB_SCE
-#define NDEBUG_USBHUB_PNP
+#if DBG
+#ifndef USBHUB_DBG_CONFIG_TRACE
+#define USBHUB_DBG_CONFIG_TRACE 1
+#endif
+#if USBHUB_DBG_CONFIG_TRACE
+#define USBHUB_CFG_TRACE DPRINT1
+#else
+#define USBHUB_CFG_TRACE(...) do { } while (0)
+#endif
+#else
+#define USBHUB_CFG_TRACE(...) do { } while (0)
+#endif
+
+/* Enable SCE/PNP/enumeration debug output for usbhub in debug builds. */
 #include "dbg_uhub.h"
 
 #include <ntddstor.h>
@@ -1029,8 +1041,25 @@ USBH_GetConfigurationDescriptor(IN PDEVICE_OBJECT DeviceObject,
         {
             Status = STATUS_DEVICE_DATA_ERROR;
         }
+
+        USBHUB_CFG_TRACE("USBH_GetConfigurationDescriptor: NTSTATUS=0x%08lx wTotalLength=%u FirstBytes=%02x %02x %02x %02x %02x %02x\n",
+                         Status,
+                         ConfigDescriptor->wTotalLength,
+                         ((PUCHAR)ConfigDescriptor)[0],
+                         ((PUCHAR)ConfigDescriptor)[1],
+                         ((PUCHAR)ConfigDescriptor)[2],
+                         ((PUCHAR)ConfigDescriptor)[3],
+                         ((PUCHAR)ConfigDescriptor)[4],
+                         ((PUCHAR)ConfigDescriptor)[5]);
     }
     else
+    {
+        USBHUB_CFG_TRACE("USBH_GetConfigurationDescriptor: FAILED NTSTATUS=0x%08lx ReturnedLen=%lu\n",
+                         Status,
+                         ReturnedLen);
+    }
+
+    if (!NT_SUCCESS(Status))
     {
         if (ConfigDescriptor)
         {
@@ -1889,65 +1918,86 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     if (PortStatusChange.ConnectStatusChange)
     {
+        BOOLEAN Connected;
+
         PortData->PortStatus = *PortStatus;
+
+        Connected = PortStatus->PortStatus.Usb20PortStatus.CurrentConnectStatus ? TRUE : FALSE;
 
         USBH_SyncClearPortStatus(HubExtension,
                                  Port,
                                  USBHUB_FEATURE_C_PORT_CONNECTION);
 
         PortData = &HubExtension->PortData[Port - 1];
-
         PortDevice = PortData->DeviceObject;
 
-        if (!PortDevice)
+        if (!Connected)
         {
-            IoInvalidateDeviceRelations(HubExtension->LowerPDO, BusRelations);
-            return;
-        }
+            /* Device disconnected */
+            if (!PortDevice)
+            {
+                PortData->ConnectionStatus = NoDeviceConnected;
 
-        PortExtension = PortDevice->DeviceExtension;
+                HubExtension->HubFlags |= USBHUB_FDO_FLAG_DO_ENUMERATION;
+                IoInvalidateDeviceRelations(HubExtension->LowerPDO, BusRelations);
+                return;
+            }
 
-        if (PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_OVERCURRENT_PORT)
-        {
-            return;
-        }
+            PortExtension = PortDevice->DeviceExtension;
 
-        KeAcquireSpinLock(&HubExtension->RelationsWorkerSpinLock, &Irql);
+            if (PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_OVERCURRENT_PORT)
+            {
+                return;
+            }
 
-        if (PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_POWER_D3)
-        {
+            KeAcquireSpinLock(&HubExtension->RelationsWorkerSpinLock, &Irql);
+
+            if (PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_POWER_D3)
+            {
+                KeReleaseSpinLock(&HubExtension->RelationsWorkerSpinLock, Irql);
+
+                HubExtension->HubFlags |= USBHUB_FDO_FLAG_DO_ENUMERATION;
+                IoInvalidateDeviceRelations(HubExtension->LowerPDO, BusRelations);
+                return;
+            }
+
+            PortData->DeviceObject = NULL;
+            PortData->ConnectionStatus = NoDeviceConnected;
+
+            HubExtension->HubFlags |= USBHUB_FDO_FLAG_STATE_CHANGING;
+
+            InsertTailList(&HubExtension->PdoList, &PortExtension->PortLink);
+
             KeReleaseSpinLock(&HubExtension->RelationsWorkerSpinLock, Irql);
+
+            SerialNumber = InterlockedExchangePointer((PVOID)&PortExtension->SerialNumber,
+                                                      NULL);
+
+            if (SerialNumber)
+            {
+                ExFreePoolWithTag(SerialNumber, USB_HUB_TAG);
+            }
+
+            DeviceHandle = InterlockedExchangePointer(&PortExtension->DeviceHandle,
+                                                      NULL);
+
+            if (DeviceHandle)
+            {
+                USBD_RemoveDeviceEx(HubExtension, DeviceHandle, 0);
+                USBH_SyncDisablePort(HubExtension, Port);
+            }
+
+            HubExtension->HubFlags |= USBHUB_FDO_FLAG_DO_ENUMERATION;
             IoInvalidateDeviceRelations(HubExtension->LowerPDO, BusRelations);
-            return;
         }
-
-        PortData->DeviceObject = NULL;
-        PortData->ConnectionStatus = NoDeviceConnected;
-
-        HubExtension->HubFlags |= USBHUB_FDO_FLAG_STATE_CHANGING;
-
-        InsertTailList(&HubExtension->PdoList, &PortExtension->PortLink);
-
-        KeReleaseSpinLock(&HubExtension->RelationsWorkerSpinLock, Irql);
-
-        SerialNumber = InterlockedExchangePointer((PVOID)&PortExtension->SerialNumber,
-                                                  NULL);
-
-        if (SerialNumber)
+        else
         {
-            ExFreePoolWithTag(SerialNumber, USB_HUB_TAG);
+            /* New device connected or reconnection: mark for enumeration. */
+            PortData->ConnectionStatus = DeviceConnected;
+
+            HubExtension->HubFlags |= USBHUB_FDO_FLAG_DO_ENUMERATION;
+            IoInvalidateDeviceRelations(HubExtension->LowerPDO, BusRelations);
         }
-
-        DeviceHandle = InterlockedExchangePointer(&PortExtension->DeviceHandle,
-                                                  NULL);
-
-        if (DeviceHandle)
-        {
-            USBD_RemoveDeviceEx(HubExtension, DeviceHandle, 0);
-            USBH_SyncDisablePort(HubExtension, Port);
-        }
-
-        IoInvalidateDeviceRelations(HubExtension->LowerPDO, BusRelations);
     }
     else if (PortStatusChange.PortEnableDisableChange)
     {
@@ -2236,7 +2286,7 @@ Enum:
     else
     {
         for (Port = 0;
-             Port < HubExtension->HubDescriptor->bNumberOfPorts;
+             Port <= HubExtension->HubDescriptor->bNumberOfPorts;
              Port++)
         {
             if (IsBitSet((PUCHAR)(WorkItem + 1), Port))
@@ -2272,6 +2322,16 @@ Enum:
                 USBH_ProcessHubStateChange(HubExtension,
                                            &HubStatus);
             }
+
+            /*
+             * A hub or port change has been observed and processed.
+             * Make sure the PnP manager is notified so that
+             * USBH_FdoQueryBusRelations will be called to (re)enumerate
+             * children on this hub.  Also set DO_ENUMERATION so that
+             * the bus-relations path will not bail out early.
+             */
+            HubExtension->HubFlags |= USBHUB_FDO_FLAG_DO_ENUMERATION;
+            IoInvalidateDeviceRelations(HubExtension->LowerPDO, BusRelations);
         }
         else
         {
@@ -2473,7 +2533,7 @@ USBH_SubmitStatusChangeTransfer(IN PUSBHUB_FDO_EXTENSION HubExtension)
     Urb->Hdr.UsbdDeviceHandle = NULL;
 
     Urb->PipeHandle = HubExtension->PipeInfo.PipeHandle;
-    Urb->TransferFlags = USBD_SHORT_TRANSFER_OK;
+    Urb->TransferFlags = USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK;
     Urb->TransferBuffer = HubExtension->SCEBitmap;
     Urb->TransferBufferLength = HubExtension->SCEBitmapLength;
     Urb->TransferBufferMDL = NULL;
@@ -2985,9 +3045,11 @@ NTSTATUS
 NTAPI
 USBD_RegisterRootHubCallBack(IN PUSBHUB_FDO_EXTENSION HubExtension)
 {
+    NTSTATUS Status;
     PUSB_BUSIFFN_ROOTHUB_INIT_NOTIFY RootHubInitNotification;
 
-    DPRINT("USBD_RegisterRootHubCallBack: ... \n");
+    DPRINT_SCE("USBD_RegisterRootHubCallBack: HubExtension - %p\n",
+               HubExtension);
 
     RootHubInitNotification = HubExtension->BusInterface.RootHubInitNotification;
 
@@ -2998,9 +3060,14 @@ USBD_RegisterRootHubCallBack(IN PUSBHUB_FDO_EXTENSION HubExtension)
 
     KeClearEvent(&HubExtension->RootHubNotificationEvent);
 
-    return RootHubInitNotification(HubExtension->BusInterface.BusContext,
-                                   HubExtension,
-                                   USBHUB_RootHubCallBack);
+    Status = RootHubInitNotification(HubExtension->BusInterface.BusContext,
+                                     HubExtension,
+                                     USBHUB_RootHubCallBack);
+
+    DPRINT_SCE("USBD_RegisterRootHubCallBack: RootHubInitNotification -> 0x%08lx\n",
+               Status);
+
+    return Status;
 }
 
 NTSTATUS
@@ -3010,7 +3077,8 @@ USBD_UnRegisterRootHubCallBack(IN PUSBHUB_FDO_EXTENSION HubExtension)
     PUSB_BUSIFFN_ROOTHUB_INIT_NOTIFY RootHubInitNotification;
     NTSTATUS Status;
 
-    DPRINT("USBD_UnRegisterRootHubCallBack ... \n");
+    DPRINT_SCE("USBD_UnRegisterRootHubCallBack: HubExtension - %p\n",
+               HubExtension);
 
     RootHubInitNotification = HubExtension->BusInterface.RootHubInitNotification;
 
@@ -4394,9 +4462,9 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
     NTSTATUS Status;
     UNICODE_STRING DestinationString;
 
-    DPRINT("USBH_CreateDevice: Port - %x, UsbPortStatus - %lX\n",
-           Port,
-           UsbPortStatus.AsUshort16);
+    DPRINT_ENUM("USBH_CreateDevice: Port - %u, UsbPortStatus - 0x%04x\n",
+                Port,
+                UsbPortStatus.AsUshort16);
 
     do
     {
@@ -4430,8 +4498,11 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     PortExtension = DeviceObject->DeviceExtension;
 
-    DPRINT("USBH_CreateDevice: PortDevice - %p, <%wZ>\n", DeviceObject, &DeviceName);
-    DPRINT("USBH_CreateDevice: PortExtension - %p\n", PortExtension);
+    DPRINT_ENUM("USBH_CreateDevice: PortDevice - %p, <%wZ>\n",
+                DeviceObject,
+                &DeviceName);
+    DPRINT_ENUM("USBH_CreateDevice: PortExtension - %p\n",
+                PortExtension);
 
     RtlZeroMemory(PortExtension, sizeof(USBHUB_PORT_PDO_EXTENSION));
 
@@ -4524,14 +4595,17 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
         goto ErrorExit;
     }
 
-    DPRINT1("USBH_RegQueryDeviceIgnoreHWSerNumFlag UNIMPLEMENTED. FIXME\n");
-    //Status = USBH_RegQueryDeviceIgnoreHWSerNumFlag(PortExtension->DeviceDescriptor.idVendor,
-    //                                               PortExtension->DeviceDescriptor.idProduct,
-    //                                               &IgnoringHwSerial);
+    Status = USBH_RegQueryDeviceIgnoreHWSerNumFlag(PortExtension->DeviceDescriptor.idVendor,
+                                                   PortExtension->DeviceDescriptor.idProduct,
+                                                   PortExtension->DeviceDescriptor.bcdDevice,
+                                                   &IgnoringHwSerial);
 
-    if (TRUE)//Status == STATUS_OBJECT_NAME_NOT_FOUND)
+    if (!NT_SUCCESS(Status) &&
+        Status != STATUS_OBJECT_NAME_NOT_FOUND &&
+        Status != STATUS_OBJECT_PATH_NOT_FOUND)
     {
-        IgnoringHwSerial = FALSE;
+        DPRINT1("USBH_CreateDevice: USBH_RegQueryDeviceIgnoreHWSerNumFlag failed - %lx\n",
+                Status);
     }
 
     if (IgnoringHwSerial)
@@ -5110,6 +5184,102 @@ USBH_RegQueryGenericUSBDeviceString(PVOID USBDeviceString)
                                   NULL);
 }
 
+BOOLEAN
+NTAPI
+USBH_DeviceIs2xDualMode(IN PUSBHUB_PORT_PDO_EXTENSION PdoExtension)
+{
+    PUSB_DEVICE_DESCRIPTOR DeviceDescriptor;
+
+    DPRINT("USBH_DeviceIs2xDualMode: PdoExtension - %p\n", PdoExtension);
+
+    DeviceDescriptor = &PdoExtension->DeviceDescriptor;
+
+    if (DeviceDescriptor->bcdUSB < 0x0200)
+    {
+        return FALSE;
+    }
+
+    if (DeviceDescriptor->bMaxPacketSize0 < 64)
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+NTSTATUS
+NTAPI
+USBH_RegQueryDeviceIgnoreHWSerNumFlag(IN USHORT VendorId,
+                                      IN USHORT ProductId,
+                                      IN USHORT BcdDevice,
+                                      OUT PBOOLEAN IgnoreHwSerialNumber)
+{
+    RTL_QUERY_REGISTRY_TABLE QueryTable[2];
+    WCHAR KeyPath[64];
+    NTSTATUS Status = STATUS_OBJECT_NAME_NOT_FOUND;
+    UCHAR Value = 0;
+
+    DPRINT("USBH_RegQueryDeviceIgnoreHWSerNumFlag: Vid %04X Pid %04X Bcd %04X\n",
+           VendorId,
+           ProductId,
+           BcdDevice);
+
+    if (!IgnoreHwSerialNumber)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *IgnoreHwSerialNumber = FALSE;
+
+    RtlZeroMemory(QueryTable, sizeof(QueryTable));
+
+    QueryTable[0].QueryRoutine = USBH_GetConfigValue;
+    QueryTable[0].Flags = RTL_QUERY_REGISTRY_REQUIRED;
+    QueryTable[0].Name = L"IgnoreHWSerNum";
+    QueryTable[0].EntryContext = &Value;
+    QueryTable[0].DefaultType = REG_NONE;
+    QueryTable[0].DefaultData = NULL;
+    QueryTable[0].DefaultLength = 0;
+
+    if (BcdDevice != 0)
+    {
+        RtlStringCbPrintfW(KeyPath,
+                           sizeof(KeyPath),
+                           L"usbflags\\%04X%04X%04X",
+                           VendorId,
+                           ProductId,
+                           BcdDevice);
+
+        Status = RtlQueryRegistryValues(RTL_REGISTRY_CONTROL,
+                                        KeyPath,
+                                        QueryTable,
+                                        NULL,
+                                        NULL);
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        RtlStringCbPrintfW(KeyPath,
+                           sizeof(KeyPath),
+                           L"usbflags\\%04X%04X",
+                           VendorId,
+                           ProductId);
+
+        Status = RtlQueryRegistryValues(RTL_REGISTRY_CONTROL,
+                                        KeyPath,
+                                        QueryTable,
+                                        NULL,
+                                        NULL);
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        *IgnoreHwSerialNumber = (Value != 0);
+    }
+
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 DriverEntry(IN PDRIVER_OBJECT DriverObject,
@@ -5134,4 +5304,3 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
 
     return STATUS_SUCCESS;
 }
-

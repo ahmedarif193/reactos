@@ -318,6 +318,10 @@ USBH_OpenConfiguration(IN PUSBHUB_FDO_EXTENSION HubExtension)
 
     if (!Pid)
     {
+        DPRINT1("USBH_OpenConfiguration: failed to locate HUB interface (Flags=0x%lx ConfigLength=%u)\n",
+                HubExtension->HubFlags,
+                HubExtension->HubConfigDescriptor ?
+                    HubExtension->HubConfigDescriptor->wTotalLength : 0);
         return STATUS_UNSUCCESSFUL;
     }
 
@@ -325,8 +329,18 @@ USBH_OpenConfiguration(IN PUSBHUB_FDO_EXTENSION HubExtension)
 
     if (Pid->bInterfaceClass != USB_DEVICE_CLASS_HUB)
     {
+        DPRINT1("USBH_OpenConfiguration: interface class mismatch (Class=0x%x SubClass=0x%x Protocol=0x%x)\n",
+                Pid->bInterfaceClass,
+                Pid->bInterfaceSubClass,
+                Pid->bInterfaceProtocol);
         return STATUS_UNSUCCESSFUL;
     }
+
+    DPRINT1("USBH_OpenConfiguration: using interface %u alt %u Pipes=%u MaxPacket0=%u\n",
+            Pid->bInterfaceNumber,
+            Pid->bAlternateSetting,
+            Pid->bNumEndpoints,
+            HubExtension->HubDeviceDescriptor.bMaxPacketSize0);
 
     InterfaceList[0].InterfaceDescriptor = Pid;
 
@@ -335,6 +349,9 @@ USBH_OpenConfiguration(IN PUSBHUB_FDO_EXTENSION HubExtension)
 
     if (!Urb)
     {
+        DPRINT1("USBH_OpenConfiguration: failed to allocate SelectConfig URB (TotalLength=%u)\n",
+                HubExtension->HubConfigDescriptor ?
+                    HubExtension->HubConfigDescriptor->wTotalLength : 0);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -347,6 +364,17 @@ USBH_OpenConfiguration(IN PUSBHUB_FDO_EXTENSION HubExtension)
                       sizeof(USBD_PIPE_INFORMATION));
 
         HubExtension->ConfigHandle = Urb->UrbSelectConfiguration.ConfigurationHandle;
+
+        DPRINT1("USBH_OpenConfiguration: SelectConfig succeeded (PipeHandle=%p wTotalLength=%u)\n",
+                HubExtension->PipeInfo.PipeHandle,
+                HubExtension->HubConfigDescriptor ?
+                    HubExtension->HubConfigDescriptor->wTotalLength : 0);
+    }
+    else
+    {
+        DPRINT1("USBH_OpenConfiguration: SelectConfig failed NTSTATUS=0x%08lx USBDStatus=0x%08lx\n",
+                Status,
+                Urb->UrbHeader.Status);
     }
 
     ExFreePool(Urb);
@@ -1049,6 +1077,8 @@ USBH_FdoQueryBusRelations(IN PUSBHUB_FDO_EXTENSION HubExtension,
     DPRINT_ENUM("USBH_FdoQueryBusRelations: HubFlags - %lX\n",
                 HubExtension->HubFlags);
 
+    ASSERT(Irp->IoStatus.Information == 0);
+
     if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STARTED))
     {
        Status = STATUS_INVALID_DEVICE_STATE;
@@ -1063,15 +1093,47 @@ USBH_FdoQueryBusRelations(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_DO_ENUMERATION))
     {
-        // FIXME: this delay makes devices discovery during early boot more reliable
-        LARGE_INTEGER Interval;
-        Status = STATUS_SUCCESS;
-        IoInvalidateDeviceRelations(HubExtension->LowerPDO, BusRelations);
-        Interval.QuadPart = -10000LL * 1000; // 1 sec.
-        KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+        /*
+         * No new enumeration requested. Return a snapshot of the
+         * currently known child PDOs without touching port state or
+         * PdoList/ghost bookkeeping.
+         */
+        NumberPorts = HubExtension->HubDescriptor->bNumberOfPorts;
 
-        DPRINT_ENUM("USBH_FdoQueryBusRelations: Skip enumeration\n");
-        goto RelationsWorker;
+        Length = FIELD_OFFSET(DEVICE_RELATIONS, Objects) +
+                 NumberPorts * sizeof(PDEVICE_OBJECT);
+
+        DeviceRelations = ExAllocatePoolWithTag(NonPagedPool, Length, USB_HUB_TAG);
+        if (!DeviceRelations)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto RelationsWorker;
+        }
+
+        RtlZeroMemory(DeviceRelations, Length);
+
+        KeAcquireSpinLock(&HubExtension->RelationsWorkerSpinLock, &OldIrql);
+
+        for (Port = 0; Port < NumberPorts; Port++)
+        {
+            PdoDevice = HubExtension->PortData[Port].DeviceObject;
+
+            if (PdoDevice)
+            {
+                ObReferenceObject(PdoDevice);
+                DeviceRelations->Objects[DeviceRelations->Count++] = PdoDevice;
+            }
+        }
+
+        KeReleaseSpinLock(&HubExtension->RelationsWorkerSpinLock, OldIrql);
+
+        DPRINT_ENUM("USBH_FdoQueryBusRelations: snapshot only, Count=%lu\n",
+                    DeviceRelations->Count);
+
+        Irp->IoStatus.Status = STATUS_SUCCESS;
+        Irp->IoStatus.Information = (ULONG_PTR)DeviceRelations;
+
+        return USBH_PassIrp(HubExtension->LowerDevice, Irp);
     }
 
     InterlockedIncrement(&HubExtension->PendingRequestCount);
@@ -1087,11 +1149,6 @@ USBH_FdoQueryBusRelations(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     Length = FIELD_OFFSET(DEVICE_RELATIONS, Objects) +
              NumberPorts * sizeof(PDEVICE_OBJECT);
-
-    if (Irp->IoStatus.Information)
-    {
-        DPRINT1("FIXME: leaking old bus relations\n");
-    }
 
     DeviceRelations = ExAllocatePoolWithTag(NonPagedPool, Length, USB_HUB_TAG);
 
@@ -1142,6 +1199,7 @@ EnumStart:
     for (Port = 1; Port <= NumberPorts; Port++)
     {
         PortData = &HubExtension->PortData[Port - 1];
+        BOOLEAN ResetFailed = FALSE;
 
         if (HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_FAILED)
         {
@@ -1232,86 +1290,108 @@ EnumStart:
 
         USBH_Wait(100);
 
-        NtStatus = USBH_SyncResetPort(HubExtension, Port);
+        /*
+         * Certain USB 2.0 controllers (especially the virtual ones we use for
+         * debugging) need a little extra settle time after the debounce delay
+         * before a reset succeeds reliably, so keep the second 100 ms wait.
+         */
+        USBH_Wait(100);
 
+        ResetFailed = FALSE;
+
+        NtStatus = USBH_SyncResetPort(HubExtension, Port);
         if (!NT_SUCCESS(NtStatus))
         {
+            DPRINT_ENUM("USBH_FdoQueryBusRelations: reset failed on port %u (0x%08lx)\n",
+                        Port,
+                        NtStatus);
+            ResetFailed = TRUE;
+
             if (HubExtension->HubFlags & USBHUB_FDO_FLAG_USB20_HUB)
             {
                 PortData->DeviceObject = NULL;
                 PortData->ConnectionStatus = NoDeviceConnected;
                 continue;
             }
-        }
-        else
-        {
-            NtStatus = USBH_SyncGetPortStatus(HubExtension,
-                                              Port,
-                                              &PortData->PortStatus,
-                                              sizeof(USB_PORT_STATUS_AND_CHANGE));
 
-            UsbPortStatus = PortData->PortStatus.PortStatus;
+            goto PortEnumerationFailure;
+        }
+
+        NtStatus = USBH_SyncGetPortStatus(HubExtension,
+                                          Port,
+                                          &PortData->PortStatus,
+                                          sizeof(USB_PORT_STATUS_AND_CHANGE));
+
+        if (!NT_SUCCESS(NtStatus))
+        {
+            DPRINT_ENUM("USBH_FdoQueryBusRelations: get status failed after reset (port %u)\n",
+                        Port);
+            ResetFailed = TRUE;
+            goto PortEnumerationFailure;
+        }
+
+        UsbPortStatus = PortData->PortStatus.PortStatus;
+
+        if (NT_SUCCESS(NtStatus))
+        {
+            ULONG ix = 0;
+
+            for (NtStatus = USBH_CreateDevice(HubExtension, Port, UsbPortStatus, ix);
+                 !NT_SUCCESS(NtStatus);
+                 NtStatus = USBH_CreateDevice(HubExtension, Port, UsbPortStatus, ix))
+            {
+                USBH_Wait(500);
+
+                if (ix >= 2)
+                {
+                    break;
+                }
+
+                if (PortData->DeviceObject)
+                {
+                    IoDeleteDevice(PortData->DeviceObject);
+                    PortData->DeviceObject = NULL;
+                    PortData->ConnectionStatus = NoDeviceConnected;
+                }
+
+                USBH_SyncResetPort(HubExtension, Port);
+
+                ix++;
+            }
 
             if (NT_SUCCESS(NtStatus))
             {
-                ULONG ix = 0;
+                PdoExtension = PortData->DeviceObject->DeviceExtension;
 
-                for (NtStatus = USBH_CreateDevice(HubExtension, Port, UsbPortStatus, ix);
-                     !NT_SUCCESS(NtStatus);
-                     NtStatus = USBH_CreateDevice(HubExtension, Port, UsbPortStatus, ix))
+                if (!(PdoExtension->PortPdoFlags & USBHUB_PDO_FLAG_PORT_LOW_SPEED) &&
+                    !(PdoExtension->PortPdoFlags & USBHUB_PDO_FLAG_PORT_HIGH_SPEED) &&
+                    !(HubExtension->HubFlags & USBHUB_FDO_FLAG_USB20_HUB))
                 {
-                    USBH_Wait(500);
-
-                    if (ix >= 2)
+                    if (USBH_DeviceIs2xDualMode(PdoExtension))
                     {
-                        break;
+                        PdoExtension->PortPdoFlags |= USBHUB_PDO_FLAG_HS_USB1_DUALMODE;
                     }
-
-                    if (PortData->DeviceObject)
-                    {
-                        IoDeleteDevice(PortData->DeviceObject);
-                        PortData->DeviceObject = NULL;
-                        PortData->ConnectionStatus = NoDeviceConnected;
-                    }
-
-                    USBH_SyncResetPort(HubExtension, Port);
-
-                    ix++;
                 }
 
-                if (NT_SUCCESS(NtStatus))
-                {
-                    PdoExtension = PortData->DeviceObject->DeviceExtension;
+                ObReferenceObject(PortData->DeviceObject);
 
-                    if (!(PdoExtension->PortPdoFlags & USBHUB_PDO_FLAG_PORT_LOW_SPEED) &&
-                        !(PdoExtension->PortPdoFlags & USBHUB_PDO_FLAG_PORT_HIGH_SPEED) &&
-                        !(HubExtension->HubFlags & USBHUB_FDO_FLAG_USB20_HUB))
-                    {
-                        DPRINT1("USBH_FdoQueryBusRelations: FIXME USBH_DeviceIs2xDualMode()\n");
+                DeviceRelations->Objects[DeviceRelations->Count] = PortData->DeviceObject;
 
-                        if (0)//USBH_DeviceIs2xDualMode(PdoExtension))
-                        {
-                            PdoExtension->PortPdoFlags |= USBHUB_PDO_FLAG_HS_USB1_DUALMODE;
-                        }
-                    }
+                PortData->DeviceObject->Flags |= DO_POWER_PAGABLE;
+                PortData->DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
-                    ObReferenceObject(PortData->DeviceObject);
+                DeviceRelations->Count++;
 
-                    DeviceRelations->Objects[DeviceRelations->Count] = PortData->DeviceObject;
+                PortData->ConnectionStatus = DeviceConnected;
 
-                    PortData->DeviceObject->Flags |= DO_POWER_PAGABLE;
-                    PortData->DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
-
-                    DeviceRelations->Count++;
-
-                    PortData->ConnectionStatus = DeviceConnected;
-
-                    continue;
-                }
+                continue;
             }
         }
 
-        PortData->ConnectionStatus = DeviceFailedEnumeration;
+PortEnumerationFailure:
+
+        PortData->ConnectionStatus = ResetFailed ?
+            DeviceGeneralFailure : DeviceFailedEnumeration;
 
         if (NT_ERROR(USBH_SyncDisablePort(HubExtension, Port)))
         {

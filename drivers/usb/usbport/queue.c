@@ -442,7 +442,7 @@ USBPORT_FindIrpInTable(IN PUSBPORT_IRP_TABLE IrpTable,
 
     ASSERT(IrpTable != NULL);
 
-    do
+    while (IrpTable)
     {
         for (ix = 0; ix < 0x200; ix++)
         {
@@ -456,7 +456,6 @@ USBPORT_FindIrpInTable(IN PUSBPORT_IRP_TABLE IrpTable,
 
         IrpTable = IrpTable->LinkNextTable;
     }
-    while (IrpTable->LinkNextTable);
 
     DPRINT_CORE("USBPORT_FindIrpInTable: Not found!!!\n");
     return NULL;
@@ -1105,15 +1104,6 @@ USBPORT_QueueTransferUrb(IN PURB Urb)
     Parameters->TransferFlags = Urb->UrbControlTransfer.TransferFlags;
 
     Transfer->TransferBufferMDL = Urb->UrbControlTransfer.TransferBufferMDL;
-
-    if (Urb->UrbControlTransfer.TransferFlags & USBD_TRANSFER_DIRECTION_IN)
-    {
-        Transfer->Direction = USBPORT_DMA_DIRECTION_FROM_DEVICE;
-    }
-    else
-    {
-        Transfer->Direction = USBPORT_DMA_DIRECTION_TO_DEVICE;
-    }
 
     if (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_CONTROL)
     {

@@ -863,8 +863,24 @@ USBPORT_HandleSubmitURB(IN PDEVICE_OBJECT PdoDevice,
     switch (Function)
     {
         case URB_FUNCTION_ISOCH_TRANSFER:
-            DPRINT1("USBPORT_HandleSubmitURB: URB_FUNCTION_ISOCH_TRANSFER UNIMPLEMENTED. FIXME. \n");
+        {
+            DPRINT_URB("USBPORT_HandleSubmitURB: URB_FUNCTION_ISOCH_TRANSFER\n");
+
+            Status = USBPORT_ValidateURB(FdoDevice,
+                                         Irp,
+                                         Urb,
+                                         FALSE,
+                                         FALSE);
+
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("USBPORT_HandleSubmitURB: ISOCH_TRANSFER validation failed\n");
+                break;
+            }
+
+            Status = USBPORT_HandleDataTransfers(Urb);
             break;
+        }
 
         case URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER:
         case URB_FUNCTION_CONTROL_TRANSFER:

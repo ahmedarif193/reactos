@@ -51,6 +51,8 @@ typedef struct _USBPORT_RESOURCES {
   BOOLEAN ShareVector;
   UCHAR Padded2[3];
   KINTERRUPT_MODE InterruptMode;
+  ULONG InterruptFlags;
+  ULONG InterruptMessageCount;
   ULONG_PTR Reserved;
   PVOID ResourceBase;
   ULONG IoSpaceLength;
@@ -62,7 +64,7 @@ typedef struct _USBPORT_RESOURCES {
   UCHAR Reserved3;
 } USBPORT_RESOURCES, *PUSBPORT_RESOURCES;
 
-C_ASSERT(sizeof(USBPORT_RESOURCES) == 32 + 5 * sizeof(PVOID));
+C_ASSERT(sizeof(USBPORT_RESOURCES) == 40 + 5 * sizeof(PVOID));
 
 typedef struct _USBPORT_ENDPOINT_PROPERTIES {
   USHORT DeviceAddress;
@@ -537,6 +539,7 @@ typedef VOID
 #define USB_MINIPORT_FLAGS_POLLING      0x0080
 #define USB_MINIPORT_FLAGS_NO_DMA       0x0100
 #define USB_MINIPORT_FLAGS_WAKE_SUPPORT 0x0200
+#define USB_MINIPORT_FLAGS_USB3         0x0400
 
 #define TOTAL_USB11_BUS_BANDWIDTH  12000
 #define TOTAL_USB20_BUS_BANDWIDTH  400000
