@@ -40,8 +40,32 @@ static HALP_PCI_GSI_INFO HalpPciGsiStaticInfo[HALP_PCI_GSI_STATIC_CAPACITY];
 static PHALP_PCI_GSI_INFO HalpPciGsiInfo = HalpPciGsiStaticInfo;
 static ULONG HalpPciGsiCapacity = HALP_PCI_GSI_STATIC_CAPACITY;
 static BOOLEAN HalpPciGsiInfoUsesPool;
+static KSPIN_LOCK HalpPciGsiLock;
+static volatile LONG HalpPciGsiLockInitState;
 static PHAL_ACPI_PCI_ROUTE_QUERY HalpPciRouteQueryCallback;
 BOOLEAN HalpPciBusRangeKnown;
+
+static
+VOID
+HalpPciInitGsiLock(VOID)
+{
+    if (HalpPciGsiLockInitState == 2)
+    {
+        return;
+    }
+
+    if (InterlockedCompareExchange(&HalpPciGsiLockInitState, 1, 0) == 0)
+    {
+        KeInitializeSpinLock(&HalpPciGsiLock);
+        InterlockedExchange(&HalpPciGsiLockInitState, 2);
+        return;
+    }
+
+    while (HalpPciGsiLockInitState != 2)
+    {
+        KeStallExecutionProcessor(1);
+    }
+}
 
 /* Optional: allocate a concrete PCI bus handler for a given bus number.
    Not all HAL variants provide this. Avoid hard link-time dependency. */
@@ -745,6 +769,11 @@ static
 VOID
 HalpPciResetGsiTable(VOID)
 {
+    KIRQL OldIrql;
+
+    HalpPciInitGsiLock();
+    KeAcquireSpinLock(&HalpPciGsiLock, &OldIrql);
+
     if (HalpPciGsiInfoUsesPool && HalpPciGsiInfo)
     {
         ExFreePoolWithTag(HalpPciGsiInfo, HALP_PCI_GSI_TAG);
@@ -755,6 +784,8 @@ HalpPciResetGsiTable(VOID)
     HalpPciGsiCapacity = HALP_PCI_GSI_STATIC_CAPACITY;
     RtlZeroMemory(HalpPciGsiInfo,
                   HalpPciGsiCapacity * sizeof(HALP_PCI_GSI_INFO));
+
+    KeReleaseSpinLock(&HalpPciGsiLock, OldIrql);
 }
 
 static
@@ -765,6 +796,8 @@ HalpPciEnsureGsiCapacity(
     ULONG Required = Gsi + 1;
     ULONG NewCapacity;
     PHALP_PCI_GSI_INFO NewTable;
+    BOOLEAN UsedAllocation = FALSE;
+    KIRQL OldIrql;
 
     if (Required <= HalpPciGsiCapacity)
     {
@@ -787,21 +820,37 @@ HalpPciEnsureGsiCapacity(
     }
 
     RtlZeroMemory(NewTable, NewCapacity * sizeof(HALP_PCI_GSI_INFO));
-    if (HalpPciGsiInfo)
-    {
-        RtlCopyMemory(NewTable,
-                      HalpPciGsiInfo,
-                      HalpPciGsiCapacity * sizeof(HALP_PCI_GSI_INFO));
 
-        if (HalpPciGsiInfoUsesPool)
+    HalpPciInitGsiLock();
+    KeAcquireSpinLock(&HalpPciGsiLock, &OldIrql);
+
+    if (Required > HalpPciGsiCapacity)
+    {
+        if (HalpPciGsiInfo)
         {
-            ExFreePoolWithTag(HalpPciGsiInfo, HALP_PCI_GSI_TAG);
+            RtlCopyMemory(NewTable,
+                          HalpPciGsiInfo,
+                          HalpPciGsiCapacity * sizeof(HALP_PCI_GSI_INFO));
+
+            if (HalpPciGsiInfoUsesPool)
+            {
+                ExFreePoolWithTag(HalpPciGsiInfo, HALP_PCI_GSI_TAG);
+            }
         }
+
+        HalpPciGsiInfo = NewTable;
+        HalpPciGsiCapacity = NewCapacity;
+        HalpPciGsiInfoUsesPool = TRUE;
+        UsedAllocation = TRUE;
     }
 
-    HalpPciGsiInfo = NewTable;
-    HalpPciGsiCapacity = NewCapacity;
-    HalpPciGsiInfoUsesPool = TRUE;
+    KeReleaseSpinLock(&HalpPciGsiLock, OldIrql);
+
+    if (!UsedAllocation)
+    {
+        ExFreePoolWithTag(NewTable, HALP_PCI_GSI_TAG);
+    }
+
     return TRUE;
 }
 
@@ -817,8 +866,19 @@ HalpPciRecordGsiInfo(
     _In_ UCHAR Pin,
     _In_ BOOLEAN FromFirmware)
 {
+    KIRQL OldIrql;
+
     if (!HalpPciEnsureGsiCapacity(Gsi))
     {
+        return;
+    }
+
+    HalpPciInitGsiLock();
+    KeAcquireSpinLock(&HalpPciGsiLock, &OldIrql);
+
+    if ((Gsi >= HalpPciGsiCapacity) || !HalpPciGsiInfo)
+    {
+        KeReleaseSpinLock(&HalpPciGsiLock, OldIrql);
         return;
     }
 
@@ -831,6 +891,8 @@ HalpPciRecordGsiInfo(
     HalpPciGsiInfo[Gsi].Function = Function;
     HalpPciGsiInfo[Gsi].Pin = Pin;
     HalpPciGsiInfo[Gsi].FromFirmware = FromFirmware;
+
+    KeReleaseSpinLock(&HalpPciGsiLock, OldIrql);
 }
 
 static VOID
@@ -919,16 +981,23 @@ HalpPciLookupGsiInfo(
     _Out_ PUCHAR Polarity,
     _Out_ PUCHAR Trigger)
 {
-    if ((Gsi >= HalpPciGsiCapacity) ||
-        !HalpPciGsiInfo ||
-        !HalpPciGsiInfo[Gsi].Valid)
+    BOOLEAN Found = FALSE;
+    KIRQL OldIrql;
+
+    HalpPciInitGsiLock();
+    KeAcquireSpinLock(&HalpPciGsiLock, &OldIrql);
+
+    if ((Gsi < HalpPciGsiCapacity) &&
+        HalpPciGsiInfo &&
+        HalpPciGsiInfo[Gsi].Valid)
     {
-        return FALSE;
+        if (Polarity) *Polarity = HalpPciGsiInfo[Gsi].Polarity;
+        if (Trigger) *Trigger = HalpPciGsiInfo[Gsi].Trigger;
+        Found = TRUE;
     }
 
-    if (Polarity) *Polarity = HalpPciGsiInfo[Gsi].Polarity;
-    if (Trigger) *Trigger = HalpPciGsiInfo[Gsi].Trigger;
-    return TRUE;
+    KeReleaseSpinLock(&HalpPciGsiLock, OldIrql);
+    return Found;
 }
 
 BOOLEAN
@@ -936,21 +1005,32 @@ HalpPciDescribeGsi(
     _In_ ULONG Gsi,
     _Out_ PHALP_PCI_GSI_DIAG Diag)
 {
-    if (!Diag ||
-        (Gsi >= HalpPciGsiCapacity) ||
-        !HalpPciGsiInfo ||
-        !HalpPciGsiInfo[Gsi].Valid)
+    BOOLEAN Found = FALSE;
+    KIRQL OldIrql;
+
+    if (!Diag)
     {
         return FALSE;
     }
 
-    Diag->Segment = HalpPciGsiInfo[Gsi].Segment;
-    Diag->Bus = HalpPciGsiInfo[Gsi].Bus;
-    Diag->Device = HalpPciGsiInfo[Gsi].Device;
-    Diag->Function = HalpPciGsiInfo[Gsi].Function;
-    Diag->Pin = HalpPciGsiInfo[Gsi].Pin;
-    Diag->FromFirmware = HalpPciGsiInfo[Gsi].FromFirmware;
-    return TRUE;
+    HalpPciInitGsiLock();
+    KeAcquireSpinLock(&HalpPciGsiLock, &OldIrql);
+
+    if ((Gsi < HalpPciGsiCapacity) &&
+        HalpPciGsiInfo &&
+        HalpPciGsiInfo[Gsi].Valid)
+    {
+        Diag->Segment = HalpPciGsiInfo[Gsi].Segment;
+        Diag->Bus = HalpPciGsiInfo[Gsi].Bus;
+        Diag->Device = HalpPciGsiInfo[Gsi].Device;
+        Diag->Function = HalpPciGsiInfo[Gsi].Function;
+        Diag->Pin = HalpPciGsiInfo[Gsi].Pin;
+        Diag->FromFirmware = HalpPciGsiInfo[Gsi].FromFirmware;
+        Found = TRUE;
+    }
+
+    KeReleaseSpinLock(&HalpPciGsiLock, OldIrql);
+    return Found;
 }
 
 static
