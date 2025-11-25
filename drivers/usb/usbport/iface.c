@@ -559,8 +559,19 @@ USB_BUSIFFN
 USBHI_GetDeviceBusContext(IN PVOID BusContext,
                           IN PVOID DeviceHandle)
 {
-    DPRINT1("USBHI_GetDeviceBusContext: UNIMPLEMENTED. FIXME.\n");
-    return NULL;
+    UNREFERENCED_PARAMETER(DeviceHandle);
+
+    DPRINT("USBHI_GetDeviceBusContext: BusContext - %p, DeviceHandle - %p\n",
+           BusContext,
+           DeviceHandle);
+
+    /*
+     * For our implementation the bus context is already the root-hub PDO and
+     * is sufficient to identify the bus for subsequent calls. We do not
+     * maintain per-device bus contexts yet, so simply return the original
+     * bus context.
+     */
+    return BusContext;
 }
 
 NTSTATUS
@@ -749,7 +760,55 @@ USBDI_GetUSBDIVersion(IN PVOID BusContext,
                       OUT PUSBD_VERSION_INFORMATION VersionInfo,
                       OUT PULONG HcdCapabilities)
 {
-    DPRINT1("USBDI_GetUSBDIVersion: UNIMPLEMENTED. FIXME.\n");
+    PDEVICE_OBJECT PdoDevice;
+    PUSBPORT_RHDEVICE_EXTENSION PdoExtension;
+    PDEVICE_OBJECT FdoDevice;
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    ULONG Capabilities = 0;
+
+    DPRINT("USBDI_GetUSBDIVersion: ...\n");
+
+    if (!VersionInfo && !HcdCapabilities)
+    {
+        return;
+    }
+
+    PdoDevice = BusContext;
+    if (!PdoDevice)
+    {
+        return;
+    }
+
+    PdoExtension = PdoDevice->DeviceExtension;
+    if (!PdoExtension || !PdoExtension->FdoDevice)
+    {
+        return;
+    }
+
+    FdoDevice = PdoExtension->FdoDevice;
+    FdoExtension = FdoDevice->DeviceExtension;
+
+    if (VersionInfo)
+    {
+        RtlZeroMemory(VersionInfo, sizeof(USBD_VERSION_INFORMATION));
+
+        VersionInfo->USBDI_Version = USBDI_VERSION;
+
+        if (FdoExtension->MiniPortInterface &&
+            (FdoExtension->MiniPortInterface->Packet.MiniPortFlags & USB_MINIPORT_FLAGS_USB2))
+        {
+            VersionInfo->Supported_USB_Version = 0x0200;
+        }
+        else
+        {
+            VersionInfo->Supported_USB_Version = 0x0110;
+        }
+    }
+
+    if (HcdCapabilities)
+    {
+        *HcdCapabilities = Capabilities;
+    }
 }
 
 NTSTATUS
@@ -757,7 +816,34 @@ USB_BUSIFFN
 USBDI_QueryBusTime(IN PVOID BusContext,
                    OUT PULONG CurrentFrame)
 {
-    DPRINT1("USBDI_QueryBusTime: UNIMPLEMENTED. FIXME.\n");
+    PDEVICE_OBJECT PdoDevice;
+    PUSBPORT_RHDEVICE_EXTENSION PdoExtension;
+    PDEVICE_OBJECT FdoDevice;
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PUSBPORT_REGISTRATION_PACKET Packet;
+    KIRQL OldIrql;
+
+    DPRINT("USBDI_QueryBusTime: ...\n");
+
+    if (!CurrentFrame)
+        return STATUS_INVALID_PARAMETER;
+
+    PdoDevice = BusContext;
+    if (!PdoDevice)
+        return STATUS_INVALID_PARAMETER;
+
+    PdoExtension = PdoDevice->DeviceExtension;
+    if (!PdoExtension || !PdoExtension->FdoDevice)
+        return STATUS_INVALID_DEVICE_REQUEST;
+
+    FdoDevice = PdoExtension->FdoDevice;
+    FdoExtension = FdoDevice->DeviceExtension;
+    Packet = &FdoExtension->MiniPortInterface->Packet;
+
+    KeAcquireSpinLock(&FdoExtension->MiniportSpinLock, &OldIrql);
+    *CurrentFrame = Packet->Get32BitFrameNumber(FdoExtension->MiniPortExt);
+    KeReleaseSpinLock(&FdoExtension->MiniportSpinLock, OldIrql);
+
     return STATUS_SUCCESS;
 }
 
@@ -783,6 +869,7 @@ USBDI_QueryBusInformation(IN PVOID BusContext,
     PDEVICE_OBJECT FdoDevice;
     PUSBPORT_DEVICE_EXTENSION FdoExtension;
     SIZE_T Length;
+    PUSB_BUS_INFORMATION_LEVEL_0 Buffer0;
     PUSB_BUS_INFORMATION_LEVEL_1 Buffer1;
 
     DPRINT("USBDI_QueryBusInformation: Level - %p\n", Level);
@@ -800,6 +887,13 @@ USBDI_QueryBusInformation(IN PVOID BusContext,
 
     if (Level == 0)
     {
+        ULONG TotalBandwidth;
+        ULONG ConsumedBandwidth = 0;
+        ULONG ix;
+
+        if (!BusInfoBuffer || !BusInfoBufferLen)
+            return STATUS_INVALID_PARAMETER;
+
         if (BusInfoActualLen)
             *BusInfoActualLen = sizeof(USB_BUS_INFORMATION_LEVEL_0);
 
@@ -810,10 +904,25 @@ USBDI_QueryBusInformation(IN PVOID BusContext,
 
         *BusInfoBufferLen = sizeof(USB_BUS_INFORMATION_LEVEL_0);
 
-        //Buffer0 = BusInfoBuffer;
-        DPRINT1("USBDI_QueryBusInformation: LEVEL_0 UNIMPLEMENTED. FIXME\n");
-        //Buffer0->TotalBandwidth = USBPORT_GetTotalBandwidth();
-        //Buffer0->ConsumedBandwidth = USBPORT_GetAllocatedBandwidth();
+        Buffer0 = BusInfoBuffer;
+
+        TotalBandwidth = FdoExtension->TotalBusBandwidth;
+
+        for (ix = 0; ix < USB2_FRAMES; ix++)
+        {
+            ULONG available = FdoExtension->Bandwidth[ix];
+            ULONG used;
+
+            if (available >= TotalBandwidth)
+                continue;
+
+            used = TotalBandwidth - available;
+            if (used > ConsumedBandwidth)
+                ConsumedBandwidth = used;
+        }
+
+        Buffer0->TotalBandwidth = TotalBandwidth;
+        Buffer0->ConsumedBandwidth = ConsumedBandwidth;
 
         return STATUS_SUCCESS;
     }
@@ -834,9 +943,31 @@ USBDI_QueryBusInformation(IN PVOID BusContext,
         *BusInfoBufferLen = Length;
 
         Buffer1 = BusInfoBuffer;
-        DPRINT1("USBDI_QueryBusInformation: LEVEL_1 UNIMPLEMENTED. FIXME\n");
-        //Buffer1->TotalBandwidth = USBPORT_GetTotalBandwidth();
-        //Buffer1->ConsumedBandwidth = USBPORT_GetAllocatedBandwidth();
+        Buffer1->TotalBandwidth = FdoExtension->TotalBusBandwidth;
+
+        Buffer1->ConsumedBandwidth = 0;
+        if (FdoExtension->TotalBusBandwidth != 0)
+        {
+            ULONG TotalBandwidth = FdoExtension->TotalBusBandwidth;
+            ULONG ConsumedBandwidth = 0;
+            ULONG ix;
+
+            for (ix = 0; ix < USB2_FRAMES; ix++)
+            {
+                ULONG available = FdoExtension->Bandwidth[ix];
+                ULONG used;
+
+                if (available >= TotalBandwidth)
+                    continue;
+
+                used = TotalBandwidth - available;
+                if (used > ConsumedBandwidth)
+                    ConsumedBandwidth = used;
+            }
+
+            Buffer1->ConsumedBandwidth = ConsumedBandwidth;
+        }
+
         Buffer1->ControllerNameLength = FdoExtension->CommonExtension.SymbolicLinkName.Length;
 
         RtlCopyMemory(&Buffer1->ControllerNameUnicodeString,
@@ -878,7 +1009,40 @@ USBDI_EnumLogEntry(IN PVOID BusContext,
                    IN ULONG P1,
                    IN ULONG P2)
 {
-    DPRINT1("USBDI_EnumLogEntry: UNIMPLEMENTED. FIXME.\n");
+    PDEVICE_OBJECT PdoDevice;
+    PUSBPORT_RHDEVICE_EXTENSION PdoExtension;
+    PDEVICE_OBJECT FdoDevice;
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PUSBPORT_REGISTRATION_PACKET Packet;
+
+    DPRINT("USBDI_EnumLogEntry: Tag=%08lx Enum=%08lx P1=%08lx P2=%08lx\n",
+           DriverTag,
+           EnumTag,
+           P1,
+           P2);
+
+    PdoDevice = BusContext;
+    if (!PdoDevice)
+        return STATUS_INVALID_PARAMETER;
+
+    PdoExtension = PdoDevice->DeviceExtension;
+    if (!PdoExtension || !PdoExtension->FdoDevice)
+        return STATUS_INVALID_DEVICE_REQUEST;
+
+    FdoDevice = PdoExtension->FdoDevice;
+    FdoExtension = FdoDevice->DeviceExtension;
+    Packet = &FdoExtension->MiniPortInterface->Packet;
+
+    if (Packet->UsbPortLogEntry)
+    {
+        Packet->UsbPortLogEntry(FdoExtension->MiniPortExt,
+                                DriverTag,
+                                EnumTag,
+                                P1,
+                                P2,
+                                0);
+    }
+
     return STATUS_SUCCESS;
 }
 

@@ -5085,7 +5085,14 @@ USBH_AddDevice(IN PDRIVER_OBJECT DriverObject,
     DeviceObject->Flags |= DO_POWER_PAGABLE;
     DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
-    DPRINT("USBH_AddDevice: call IoWMIRegistrationControl() UNIMPLEMENTED. FIXME\n");
+    /* Register FDO with WMI (ignore failures, this is diagnostic only) */
+    Status = IoWMIRegistrationControl(DeviceObject, WMIREG_ACTION_REGISTER);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("USBH_AddDevice: IoWMIRegistrationControl(REGISTER) failed: 0x%lx\n",
+                Status);
+        Status = STATUS_SUCCESS;
+    }
 
     return Status;
 }

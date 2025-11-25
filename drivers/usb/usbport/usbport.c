@@ -23,12 +23,12 @@
 #define USBPORT_DBG_TIMER_TRACE 0
 #endif
 #if USBPORT_DBG_BOUNCE_TRACE
-#define USBPORT_BOUNCE_TRACE DPRINT1
+#define USBPORT_BOUNCE_TRACE DPRINT_CORE
 #else
 #define USBPORT_BOUNCE_TRACE(...) do { } while (0)
 #endif
 #if USBPORT_DBG_TIMER_TRACE
-#define USBPORT_TIMER_TRACE DPRINT1
+#define USBPORT_TIMER_TRACE DPRINT_CORE
 #else
 #define USBPORT_TIMER_TRACE(...) do { } while (0)
 #endif
@@ -658,7 +658,7 @@ USBPORT_USBDStatusToNtStatus(IN PURB Urb,
 
     if (USBD_ERROR(USBDStatus))
     {
-        DPRINT1("USBPORT_USBDStatusToNtStatus: Urb - %p, USBDStatus - %x\n",
+        DPRINT_CORE("USBPORT_USBDStatusToNtStatus: Urb - %p, USBDStatus - %x\n",
                 Urb,
                 USBDStatus);
     }
@@ -814,11 +814,11 @@ USBPORT_InvalidateControllerHandler(IN PDEVICE_OBJECT FdoDevice,
     switch (Type)
     {
         case USBPORT_INVALIDATE_CONTROLLER_RESET:
-            DPRINT1("USBPORT_InvalidateControllerHandler: INVALIDATE_CONTROLLER_RESET UNIMPLEMENTED. FIXME.\n");
+            DPRINT_CORE("USBPORT_InvalidateControllerHandler: INVALIDATE_CONTROLLER_RESET UNIMPLEMENTED. FIXME.\n");
             break;
 
         case USBPORT_INVALIDATE_CONTROLLER_SURPRISE_REMOVE:
-            DPRINT1("USBPORT_InvalidateControllerHandler: INVALIDATE_CONTROLLER_SURPRISE_REMOVE UNIMPLEMENTED. FIXME.\n");
+            DPRINT_CORE("USBPORT_InvalidateControllerHandler: INVALIDATE_CONTROLLER_SURPRISE_REMOVE UNIMPLEMENTED. FIXME.\n");
             break;
 
         case USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT:
@@ -861,7 +861,7 @@ USBPORT_NotifyDoubleBuffer(IN PVOID MiniPortExtension,
                            IN PVOID Buffer,
                            IN SIZE_T Length)
 {
-    DPRINT1("USBPORT_NotifyDoubleBuffer: UNIMPLEMENTED. FIXME.\n");
+    DPRINT_CORE("USBPORT_NotifyDoubleBuffer: UNIMPLEMENTED. FIXME.\n");
     return 0;
 }
 
@@ -1419,7 +1419,7 @@ USBPORT_DoRootHubCallback(IN PDEVICE_OBJECT FdoDevice)
 
     if (!CallbackData)
     {
-        DPRINT1("USBPORT_DoRootHubCallback: no callback data (Fdo=%p)\n",
+        DPRINT_CORE("USBPORT_DoRootHubCallback: no callback data (Fdo=%p)\n",
                 FdoDevice);
         return;
     }
@@ -1449,7 +1449,7 @@ USBPORT_DoRootHubCallback(IN PDEVICE_OBJECT FdoDevice)
     {
         if (!USBPORT_IsKernelPointer((PVOID)RootHubInitCallback))
         {
-            DPRINT1("USBPORT_DoRootHubCallback: invalid callback pointer %p (pdo=%p seq=%lu caller=%p ctx=%p)\n",
+            DPRINT_CORE("USBPORT_DoRootHubCallback: invalid callback pointer %p (pdo=%p seq=%lu caller=%p ctx=%p)\n",
                     RootHubInitCallback,
                     PdoDevice,
                     Sequence,
@@ -1461,7 +1461,7 @@ USBPORT_DoRootHubCallback(IN PDEVICE_OBJECT FdoDevice)
             return;
         }
 
-        DPRINT1("USBPORT_DoRootHubCallback: calling %p ctx=%p seq=%lu caller=%p ts=%llu\n",
+        DPRINT_CORE("USBPORT_DoRootHubCallback: calling %p ctx=%p seq=%lu caller=%p ts=%llu\n",
                 RootHubInitCallback,
                 RootHubInitContext,
                 Sequence,
@@ -1721,7 +1721,7 @@ USBPORT_SynchronizeControllersStart(IN PDEVICE_OBJECT FdoDevice)
     ULONGLONG PendingTimestamp;
     KIRQL CallbackIrql;
 
-    // DPRINT1("USBPORT_SynchronizeControllersStart: FdoDevice - %p\n", FdoDevice);
+    // DPRINT_CORE("USBPORT_SynchronizeControllersStart: FdoDevice - %p\n", FdoDevice);
 
     FdoExtension = FdoDevice->DeviceExtension;
 
@@ -1729,7 +1729,7 @@ USBPORT_SynchronizeControllersStart(IN PDEVICE_OBJECT FdoDevice)
 
     if (!PdoDevice)
     {
-        DPRINT1("USBPORT_SynchronizeControllersStart: FdoDevice is null - return\n");
+        DPRINT_CORE("USBPORT_SynchronizeControllersStart: FdoDevice is null - return\n");
         return;
     }
 
@@ -1738,7 +1738,7 @@ USBPORT_SynchronizeControllersStart(IN PDEVICE_OBJECT FdoDevice)
 
     if (!PdoExtension)
     {
-        DPRINT1("USBPORT_SynchronizeControllersStart: no RootHub extension (pdo=%p fdo=%p)\n",
+        DPRINT_CORE("USBPORT_SynchronizeControllersStart: no RootHub extension (pdo=%p fdo=%p)\n",
                 PdoDevice,
                 FdoDevice);
         return;
@@ -1746,7 +1746,7 @@ USBPORT_SynchronizeControllersStart(IN PDEVICE_OBJECT FdoDevice)
 
     if ((LONG_PTR)PdoExtension >= 0)
     {
-        DPRINT1("USBPORT_SynchronizeControllersStart: invalid RootHub extension pointer %p (pdo=%p)\n",
+        DPRINT_CORE("USBPORT_SynchronizeControllersStart: invalid RootHub extension pointer %p (pdo=%p)\n",
                 PdoExtension,
                 PdoDevice);
 #if DBG
@@ -1757,7 +1757,7 @@ USBPORT_SynchronizeControllersStart(IN PDEVICE_OBJECT FdoDevice)
 
     if (!CallbackData)
     {
-        DPRINT1("USBPORT_SynchronizeControllersStart: missing callback data (fdo=%p)\n",
+        DPRINT_CORE("USBPORT_SynchronizeControllersStart: missing callback data (fdo=%p)\n",
                 FdoDevice);
         return;
     }
@@ -1777,23 +1777,23 @@ USBPORT_SynchronizeControllersStart(IN PDEVICE_OBJECT FdoDevice)
         if (FdoExtension->Flags & USBPORT_FLAG_RH_INIT_CALLBACK)
         {
             FdoExtension->Flags &= ~USBPORT_FLAG_RH_INIT_CALLBACK;
-            DPRINT1("USBPORT_SynchronizeControllersStart: PendingCallback is null - suppressing retry\n");
+            DPRINT_CORE("USBPORT_SynchronizeControllersStart: PendingCallback is null - suppressing retry\n");
         }
         return;
     }
 
     FdoExtension->Flags &= ~USBPORT_FLAG_RH_STOPPED;
 
-    DPRINT1("USBPORT_SynchronizeControllersStart: Flags - %p\n",
+    DPRINT_CORE("USBPORT_SynchronizeControllersStart: Flags - %p\n",
             FdoExtension->Flags);
 
     /* Extra diagnostics to catch bad pointers on DPC path */
 #if DBG
-    DPRINT1("USBPORT_SynchronizeControllersStart: MiniPortExt=%p RootHubPdo=%p RootHubInitCb=%p\n",
+    DPRINT_CORE("USBPORT_SynchronizeControllersStart: MiniPortExt=%p RootHubPdo=%p RootHubInitCb=%p\n",
             FdoExtension->MiniPortExt,
             PdoDevice,
             PendingCallback);
-    DPRINT1("USBPORT_SynchronizeControllersStart: rh seq=%lu caller=%p ts=%llu ctx=%p\n",
+    DPRINT_CORE("USBPORT_SynchronizeControllersStart: rh seq=%lu caller=%p ts=%llu ctx=%p\n",
             PendingSequence,
             PendingCaller,
             (unsigned long long)PendingTimestamp,
@@ -1806,7 +1806,7 @@ USBPORT_SynchronizeControllersStart(IN PDEVICE_OBJECT FdoDevice)
 
         USB2FdoDevice = USBPORT_FindUSB2Controller(FdoDevice);
 
-        DPRINT1("USBPORT_SynchronizeControllersStart: USB2FdoDevice - %p\n",
+        DPRINT_CORE("USBPORT_SynchronizeControllersStart: USB2FdoDevice - %p\n",
                 USB2FdoDevice);
 
         if (USB2FdoDevice)
@@ -2214,7 +2214,7 @@ USBPORT_AddDevice(IN PDRIVER_OBJECT DriverObject,
         /* Bail out on other errors */
         if (!NT_SUCCESS(Status))
         {
-            DPRINT1("USBPORT_AddDevice: failed to create %wZ, Status %x\n",
+            DPRINT_CORE("USBPORT_AddDevice: failed to create %wZ, Status %x\n",
                     &DeviceName,
                     Status);
 
@@ -2362,7 +2362,7 @@ USBPORT_MiniportCompleteTransfer(IN PVOID MiniPortExtension,
 
         if (!(SplitTransfer->Flags & TRANSFER_FLAG_SUBMITED))
         {
-            DPRINT1("USBPORT_MiniportCompleteTransfer: SplitTransfer->Flags - %X\n",
+            DPRINT_CORE("USBPORT_MiniportCompleteTransfer: SplitTransfer->Flags - %X\n",
                     SplitTransfer->Flags);
             //Add TRANSFER_FLAG_xxx
         }
@@ -2425,7 +2425,7 @@ USBPORT_RequestAsyncCallback(IN PVOID MiniPortExtension,
 
     if (!AsyncCallbackData)
     {
-        DPRINT1("USBPORT_RequestAsyncCallback: Not allocated AsyncCallbackData!\n");
+        DPRINT_CORE("USBPORT_RequestAsyncCallback: Not allocated AsyncCallbackData!\n");
         return 0;
     }
 
@@ -2466,7 +2466,7 @@ USBPORT_GetMappedVirtualAddress(IN ULONG PhysicalAddress,
     ULONG Offset;
     ULONG_PTR VirtualAddress;
 
-    DPRINT1("USBPORT_GetMappedVirtualAddress: phys=%08lx MPext=%p MPep=%p\n",
+    DPRINT_CORE("USBPORT_GetMappedVirtualAddress: phys=%08lx MPext=%p MPep=%p\n",
             PhysicalAddress,
             MiniPortExtension,
             MiniPortEndpoint);
@@ -2482,14 +2482,14 @@ USBPORT_GetMappedVirtualAddress(IN ULONG PhysicalAddress,
     HeaderBuffer = Endpoint->HeaderBuffer;
     if (!HeaderBuffer)
     {
-        DPRINT1("USBPORT_GetMappedVirtualAddress: NULL HeaderBuffer (EP=%p)\n", Endpoint);
+        DPRINT_CORE("USBPORT_GetMappedVirtualAddress: NULL HeaderBuffer (EP=%p)\n", Endpoint);
         return NULL;
     }
 
     /* Compute offset within the common buffer and validate bounds */
     if ((ULONGLONG)PhysicalAddress < HeaderBuffer->PhysicalAddress)
     {
-        DPRINT1("USBPORT_GetMappedVirtualAddress: phys < base (phys=%llx base=%llx)\n",
+        DPRINT_CORE("USBPORT_GetMappedVirtualAddress: phys < base (phys=%llx base=%llx)\n",
                 (unsigned long long)PhysicalAddress,
                 (unsigned long long)HeaderBuffer->PhysicalAddress);
         return (PVOID)HeaderBuffer->VirtualAddress;
@@ -2498,14 +2498,14 @@ USBPORT_GetMappedVirtualAddress(IN ULONG PhysicalAddress,
     Offset = PhysicalAddress - (ULONG)HeaderBuffer->PhysicalAddress;
     if ((ULONGLONG)Offset >= HeaderBuffer->BufferLength)
     {
-        DPRINT1("USBPORT_GetMappedVirtualAddress: offset OOB (off=%llx len=%Ix)\n",
+        DPRINT_CORE("USBPORT_GetMappedVirtualAddress: offset OOB (off=%llx len=%Ix)\n",
                 (unsigned long long)Offset,
                 HeaderBuffer->BufferLength);
         return (PVOID)HeaderBuffer->VirtualAddress;
     }
 
     VirtualAddress = HeaderBuffer->VirtualAddress + (ULONG_PTR)Offset;
-    DPRINT1("USBPORT_GetMappedVirtualAddress: -> VA=%p (base=%p off=%lx)\n",
+    DPRINT_CORE("USBPORT_GetMappedVirtualAddress: -> VA=%p (base=%p off=%lx)\n",
             (PVOID)VirtualAddress,
             (PVOID)HeaderBuffer->VirtualAddress,
             Offset);
@@ -2671,7 +2671,7 @@ USBPORT_CompleteTransfer(IN PURB Urb,
         if (!NT_SUCCESS(Status))
         {
             //DbgBreakPoint();
-            DPRINT1("USBPORT_CompleteTransfer: Irp - %p complete with Status - %lx\n",
+            DPRINT_CORE("USBPORT_CompleteTransfer: Irp - %p complete with Status - %lx\n",
                     Irp,
                     Status);
 
@@ -2799,7 +2799,7 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
 
         if (PhAddr.QuadPart == PhAddress.QuadPart)
         {
-            DPRINT1("USBPORT_MapTransfer: PhAddr == PhAddress\n");
+            DPRINT_CORE("USBPORT_MapTransfer: PhAddr == PhAddress\n");
             ASSERT(FALSE);
         }
 
@@ -3010,7 +3010,7 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
 
     if (!Transfer)
     {
-        DPRINT1("USBPORT_AllocateTransfer: Transfer not allocated!\n");
+        DPRINT_CORE("USBPORT_AllocateTransfer: Transfer not allocated!\n");
         return USBD_STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -3129,7 +3129,7 @@ USBPORT_Dispatch(IN PDEVICE_OBJECT DeviceObject,
 
     if (DeviceExtension->PnpStateFlags & USBPORT_PNP_STATE_FAILED)
     {
-        DPRINT1("USBPORT_Dispatch: USBPORT_PNP_STATE_FAILED\n");
+        DPRINT_CORE("USBPORT_Dispatch: USBPORT_PNP_STATE_FAILED\n");
         DbgBreakPoint();
     }
 
@@ -3374,7 +3374,7 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
 #define USBPORT_DBG_BOUNCE_TRACE 0
 #endif
 #if USBPORT_DBG_BOUNCE_TRACE
-#define USBPORT_BOUNCE_TRACE DPRINT1
+#define USBPORT_BOUNCE_TRACE DPRINT_CORE
 #else
 #define USBPORT_BOUNCE_TRACE(...) do { } while (0)
 #endif

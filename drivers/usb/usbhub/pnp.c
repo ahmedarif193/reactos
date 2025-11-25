@@ -1589,7 +1589,14 @@ USBH_FdoRemoveDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
         HubExtension->PortData = NULL;
     }
 
-    DPRINT1("USBH_FdoRemoveDevice: call IoWMIRegistrationControl UNIMPLEMENTED. FIXME\n");
+    /* Deregister FDO from WMI (best-effort) */
+    Status = IoWMIRegistrationControl(HubExtension->Common.SelfDevice,
+                                      WMIREG_ACTION_DEREGISTER);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("USBH_FdoRemoveDevice: IoWMIRegistrationControl(DEREGISTER) failed: 0x%lx\n",
+                Status);
+    }
 
     Status = USBH_PassIrp(HubExtension->LowerDevice, Irp);
 
@@ -2207,6 +2214,7 @@ USBH_PdoStartDevice(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
     PUSBHUB_FDO_EXTENSION HubExtension;
     const GUID * Guid;
     NTSTATUS Status;
+    NTSTATUS WmiStatus;
 
     DPRINT("USBH_PdoStartDevice: PortExtension - %p\n", PortExtension);
 
@@ -2250,7 +2258,14 @@ USBH_PdoStartDevice(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
 
     PortExtension->CurrentPowerState.DeviceState = PowerDeviceD0;
 
-    DPRINT1("USBH_PdoStartDevice: call IoWMIRegistrationControl UNIMPLEMENTED. FIXME\n");
+    /* Register the child PDO with WMI; ignore failures */
+    WmiStatus = IoWMIRegistrationControl(PortExtension->Common.SelfDevice,
+                                         WMIREG_ACTION_REGISTER);
+    if (!NT_SUCCESS(WmiStatus))
+    {
+        DPRINT1("USBH_PdoStartDevice: IoWMIRegistrationControl(REGISTER) failed: 0x%lx\n",
+                WmiStatus);
+    }
 
     return Status;
 }
@@ -2409,7 +2424,8 @@ USBH_PdoRemoveDevice(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
                 ExFreePoolWithTag(SerialNumber, USB_HUB_TAG);
             }
 
-            DPRINT1("USBH_PdoRemoveDevice: call IoWMIRegistrationControl UNIMPLEMENTED. FIXME\n");
+            /* Deregister PDO from WMI if it was registered */
+            (void)IoWMIRegistrationControl(PortDevice, WMIREG_ACTION_DEREGISTER);
 
             if (HubExtension)
                 USBHUB_FlushAllTransfers(HubExtension);
@@ -2432,8 +2448,14 @@ NTAPI
 USBH_PdoStopDevice(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
                    IN PIRP Irp)
 {
-    DPRINT1("USBH_PdoStopDevice: UNIMPLEMENTED. FIXME\n");
-    DbgBreakPoint();
+    UNREFERENCED_PARAMETER(Irp);
+
+    DPRINT("USBH_PdoStopDevice: PortExtension - %p\n", PortExtension);
+
+    /* Best-effort WMI deregistration for stopped PDOs */
+    (void)IoWMIRegistrationControl(PortExtension->Common.SelfDevice,
+                                   WMIREG_ACTION_DEREGISTER);
+
     return STATUS_SUCCESS;
 }
 

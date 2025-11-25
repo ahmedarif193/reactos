@@ -1170,9 +1170,29 @@ USBH_DeviceControl(IN PUSBHUB_FDO_EXTENSION HubExtension,
             break;
 
         case IOCTL_USB_HUB_CYCLE_PORT:
-            DPRINT1("USBH_DeviceControl: IOCTL_USB_HUB_CYCLE_PORT UNIMPLEMENTED. FIXME\n");
-            DbgBreakPoint();
+        {
+            USHORT Port;
+
+            DPRINT("USBH_DeviceControl: IOCTL_USB_HUB_CYCLE_PORT\n");
+
+            if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STOPPED))
+            {
+                if (IoStack->Parameters.DeviceIoControl.InputBufferLength < sizeof(ULONG) ||
+                    !Irp->AssociatedIrp.SystemBuffer)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                }
+                else
+                {
+                    Port = (USHORT)(*(PULONG)Irp->AssociatedIrp.SystemBuffer);
+                    DPRINT("USBH_DeviceControl: cycle port %u\n", Port);
+                    Status = USBH_ResetDevice(HubExtension, Port, FALSE, TRUE);
+                }
+            }
+
+            USBH_CompleteIrp(Irp, Status);
             break;
+        }
 
         case IOCTL_USB_GET_NODE_INFORMATION:
             DPRINT("USBH_DeviceControl: IOCTL_USB_GET_NODE_INFORMATION\n");
