@@ -113,6 +113,7 @@
 #define USBHUB_FAIL_OVERCURRENT        7
 
 extern PWSTR GenericUSBDeviceString;
+extern LONG USBH_NextDebugBusNumber;
 
 typedef struct _USBHUB_PORT_DATA {
   USB_PORT_STATUS_AND_CHANGE PortStatus;
@@ -198,6 +199,7 @@ typedef struct _USBHUB_FDO_EXTENSION {
   USB_IDLE_CALLBACK_INFO IdleCallbackInfo;
   USB_PORT_STATUS_AND_CHANGE PortStatus;
   PIRP PowerIrp;
+  ULONG DebugBusNumber;
 } USBHUB_FDO_EXTENSION, *PUSBHUB_FDO_EXTENSION;
 
 typedef struct _USBHUB_PORT_PDO_EXTENSION {
@@ -232,6 +234,7 @@ typedef struct _USBHUB_PORT_PDO_EXTENSION {
   PIRP PdoWaitWakeIrp;
   LIST_ENTRY PortPowerList;
   KSPIN_LOCK PortPowerListSpinLock;
+  WCHAR DevPath[32];
 } USBHUB_PORT_PDO_EXTENSION, *PUSBHUB_PORT_PDO_EXTENSION;
 
 typedef struct _USBHUB_URB_TIMEOUT_CONTEXT {
@@ -509,6 +512,13 @@ USBH_SyncClearPortStatus(
   IN PUSBHUB_FDO_EXTENSION HubExtension,
   IN USHORT Port,
   IN USHORT RequestValue);
+
+NTSTATUS
+NTAPI
+USBH_SyncPowerOnPort(
+  IN PUSBHUB_FDO_EXTENSION HubExtension,
+  IN USHORT Port,
+  IN BOOLEAN IsWait);
 
 NTSTATUS
 NTAPI

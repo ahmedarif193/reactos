@@ -29,6 +29,7 @@
 #include <ntddstor.h>
 
 PWSTR GenericUSBDeviceString = NULL;
+LONG USBH_NextDebugBusNumber = 0;
 
 NTSTATUS
 NTAPI
@@ -75,7 +76,9 @@ NTAPI
 USBH_CompleteIrp(IN PIRP Irp,
                  IN NTSTATUS CompleteStatus)
 {
-    if (CompleteStatus != STATUS_SUCCESS)
+    if (!NT_SUCCESS(CompleteStatus) &&
+        CompleteStatus != STATUS_NOT_SUPPORTED &&
+        CompleteStatus != STATUS_NOT_IMPLEMENTED)
     {
         DPRINT1("USBH_CompleteIrp: Irp - %p, CompleteStatus - %X\n",
                 Irp,
@@ -4349,7 +4352,7 @@ USBH_CheckDeviceLanguage(IN PDEVICE_OBJECT DeviceObject,
 
     pSymbol = Descriptor->bString;
 
-    for (ix = 1; ix < NumSymbols; ix++)
+    for (ix = 0; ix < NumSymbols; ix++)
     {
         if (*pSymbol == (WCHAR)LanguageId)
         {
@@ -4440,6 +4443,160 @@ USBH_GetSerialNumberString(IN PDEVICE_OBJECT DeviceObject,
 Exit:
     ExFreePoolWithTag(Descriptor, USB_HUB_TAG);
     return Status;
+}
+
+static PWSTR
+USBH_AllocDeviceString(IN PDEVICE_OBJECT DeviceObject,
+                       IN UCHAR Index,
+                       IN USHORT LanguageId)
+{
+    PUSB_STRING_DESCRIPTOR Descriptor;
+    NTSTATUS Status;
+    PWSTR StringBuffer = NULL;
+    UCHAR StringLength;
+    UCHAR Length;
+
+    Descriptor = ExAllocatePoolWithTag(NonPagedPool,
+                                       MAXIMUM_USB_STRING_LENGTH,
+                                       USB_HUB_TAG);
+
+    if (!Descriptor)
+    {
+        return NULL;
+    }
+
+    RtlZeroMemory(Descriptor, MAXIMUM_USB_STRING_LENGTH);
+
+    Status = USBH_CheckDeviceLanguage(DeviceObject, LanguageId);
+
+    if (!NT_SUCCESS(Status))
+    {
+        goto Exit;
+    }
+
+    Status = USBH_SyncGetStringDescriptor(DeviceObject,
+                                          Index,
+                                          LanguageId,
+                                          Descriptor,
+                                          MAXIMUM_USB_STRING_LENGTH,
+                                          NULL,
+                                          TRUE);
+
+    if (!NT_SUCCESS(Status) ||
+        Descriptor->bLength <= sizeof(USB_COMMON_DESCRIPTOR))
+    {
+        goto Exit;
+    }
+
+    StringLength = Descriptor->bLength -
+                   FIELD_OFFSET(USB_STRING_DESCRIPTOR, bString);
+
+    Length = StringLength + sizeof(UNICODE_NULL);
+
+    StringBuffer = ExAllocatePoolWithTag(PagedPool, Length, USB_HUB_TAG);
+
+    if (!StringBuffer)
+    {
+        goto Exit;
+    }
+
+    RtlZeroMemory(StringBuffer, Length);
+    RtlCopyMemory(StringBuffer, Descriptor->bString, StringLength);
+
+Exit:
+    ExFreePoolWithTag(Descriptor, USB_HUB_TAG);
+    return StringBuffer;
+}
+
+static VOID
+USBH_LogNewDevice(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension)
+{
+    PUSB_DEVICE_DESCRIPTOR DeviceDescriptor;
+    const char *Speed;
+    PWSTR Product = NULL;
+    PWSTR Manufacturer = NULL;
+    USHORT LanguageId;
+    PUSBHUB_FDO_EXTENSION HubExtension;
+    PUSBHUB_FDO_EXTENSION RootHubExtension;
+    ULONG BusNumber;
+
+    HubExtension = PortExtension->HubExtension;
+    if (!HubExtension)
+    {
+        return;
+    }
+
+    RootHubExtension = USBH_GetRootHubExtension(HubExtension);
+    BusNumber = RootHubExtension->DebugBusNumber;
+
+    DeviceDescriptor = &PortExtension->DeviceDescriptor;
+
+    if (PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_PORT_HIGH_SPEED)
+    {
+        Speed = "high-speed";
+    }
+    else if (PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_PORT_LOW_SPEED)
+    {
+        Speed = "low-speed";
+    }
+    else
+    {
+        Speed = "full-speed";
+    }
+
+    DPRINT_ENUM("usb %lu-%S: new %s USB device on port %u\n",
+                BusNumber,
+                PortExtension->DevPath,
+                Speed,
+                PortExtension->PortNumber);
+
+    DPRINT_ENUM("usb %lu-%S: New USB device found, idVendor=%04X, idProduct=%04X, bcdDevice=%02X.%02X\n",
+                BusNumber,
+                PortExtension->DevPath,
+                DeviceDescriptor->idVendor,
+                DeviceDescriptor->idProduct,
+                DeviceDescriptor->bcdDevice >> 8,
+                DeviceDescriptor->bcdDevice & 0xFF);
+
+    DPRINT_ENUM("usb %lu-%S: New USB device strings: Mfr=%u, Product=%u, SerialNumber=%u\n",
+                BusNumber,
+                PortExtension->DevPath,
+                DeviceDescriptor->iManufacturer,
+                DeviceDescriptor->iProduct,
+                DeviceDescriptor->iSerialNumber);
+
+    LanguageId = MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US);
+
+    if (DeviceDescriptor->iProduct)
+    {
+        Product = USBH_AllocDeviceString(PortExtension->Common.SelfDevice,
+                                         DeviceDescriptor->iProduct,
+                                         LanguageId);
+    }
+
+    if (DeviceDescriptor->iManufacturer)
+    {
+        Manufacturer = USBH_AllocDeviceString(PortExtension->Common.SelfDevice,
+                                              DeviceDescriptor->iManufacturer,
+                                              LanguageId);
+    }
+
+    if (Product)
+    {
+        DPRINT_ENUM("usb %lu-%S: Product: %S\n", BusNumber, PortExtension->DevPath, Product);
+        ExFreePoolWithTag(Product, USB_HUB_TAG);
+    }
+
+    if (Manufacturer)
+    {
+        DPRINT_ENUM("usb %lu-%S: Manufacturer: %S\n", BusNumber, PortExtension->DevPath, Manufacturer);
+        ExFreePoolWithTag(Manufacturer, USB_HUB_TAG);
+    }
+
+    if (PortExtension->SerialNumber)
+    {
+        DPRINT_ENUM("usb %lu-%S: SerialNumber: %S\n", BusNumber, PortExtension->DevPath, PortExtension->SerialNumber);
+    }
 }
 
 NTSTATUS
@@ -4548,6 +4705,48 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
     DestinationString.MaximumLength = 4 * sizeof(WCHAR);
     Status = RtlIntegerToUnicodeString(Port, 10, &DestinationString);
 
+    /* Initialize debug devpath for logging (Linux-style bus path). */
+    RtlZeroMemory(PortExtension->DevPath, sizeof(PortExtension->DevPath));
+
+    if (HubExtension->LowerPDO == HubExtension->RootHubPdo)
+    {
+        /* Device is attached directly to the root hub. */
+        RtlStringCbPrintfW(PortExtension->DevPath,
+                           sizeof(PortExtension->DevPath),
+                           L"%u",
+                           Port);
+    }
+    else
+    {
+        PUSBHUB_PORT_PDO_EXTENSION ParentPdoExtension = NULL;
+
+        if (HubExtension->LowerPDO)
+        {
+            ParentPdoExtension =
+                (PUSBHUB_PORT_PDO_EXTENSION)HubExtension->LowerPDO->DeviceExtension;
+        }
+
+        if (ParentPdoExtension &&
+            ParentPdoExtension->Common.ExtensionType == USBH_EXTENSION_TYPE_PORT &&
+            ParentPdoExtension->DevPath[0] != UNICODE_NULL)
+        {
+            /* Device is behind an external hub: extend parent's path. */
+            RtlStringCbPrintfW(PortExtension->DevPath,
+                               sizeof(PortExtension->DevPath),
+                               L"%ws.%u",
+                               ParentPdoExtension->DevPath,
+                               Port);
+        }
+        else
+        {
+            /* Fallback: just use the port number. */
+            RtlStringCbPrintfW(PortExtension->DevPath,
+                               sizeof(PortExtension->DevPath),
+                               L"%u",
+                               Port);
+        }
+    }
+
     DeviceObject->Flags |= DO_POWER_PAGABLE;
     DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
@@ -4654,6 +4853,7 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     if (NT_SUCCESS(Status))
     {
+        USBH_LogNewDevice(PortExtension);
         goto Exit;
     }
 

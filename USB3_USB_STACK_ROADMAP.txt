@@ -1,0 +1,158 @@
+ReactOS USB 3.x (xHCI) Support Roadmap
+======================================
+
+Legend:
+- [ ] = not started
+- [~] = in progress / partially done
+- [x] = implemented / validated
+
+
+Phase 1 – Basic SuperSpeed enumeration
+--------------------------------------
+
+1. EP0 descriptor flow and bMaxPacketSize0 handling
+   - [ ] In `drivers/usb/usbport/device.c` (`USBPORT_CreateDevice`), accept USB 3.x EP0 semantics:
+     - For `DeviceDescriptor.bcdUSB >= 0x0300` and `bMaxPacketSize0 == 9`, treat EP0 MPS as 512 bytes.
+   - [ ] Ensure EP0 MPS (8 / 64 / 512) is propagated into:
+     - `PipeHandle->EndpointDescriptor.wMaxPacketSize`
+     - `Endpoint->EndpointProperties.MaxPacketSize` and `TotalMaxPacketSize`.
+   - [ ] In `drivers/usb/usbxhci/usbxhci.c`, confirm EP0 context uses the same MPS that USBPORT programs.
+
+2. Control transfer length accounting
+   - [ ] In `XHCI_SubmitControlTransfer`, ensure `Transfer->RequestedLength` is set correctly based on:
+     - `TransferParameters->TransferBufferLength` for data stages.
+   - [ ] In `XHCI_HandleTransferEvent`, verify:
+     - `Remaining` is interpreted correctly for chained TRBs.
+     - `BytesTransferred` matches what USBPORT expects, including short-packet cases.
+   - [ ] Re-test GET_DESCRIPTOR(DEVICE) on a SuperSpeed device:
+     - First 8-byte read succeeds, second full 18-byte read succeeds.
+     - `USBPORT_CreateDevice` no longer logs "TransferedLen - 8" errors and accepts bMaxPacketSize0.
+
+
+Phase 2 – xHCI root-hub emulation
+---------------------------------
+
+3. Root-hub status and feature APIs in usbxhci
+   - [ ] Implement `XHCI_RH_GetStatus` to report hub-level status (no over-current / local power change by default).
+   - [ ] Implement `XHCI_RH_GetPortStatus` to:
+     - Read `PORTSC` and fill `USB_PORT_STATUS_AND_CHANGE` (connect, enable, reset, over-current, etc.).
+   - [ ] Implement `XHCI_RH_GetHubStatus` to derive `USB_HUB_STATUS_AND_CHANGE` from port states.
+   - [ ] Implement `XHCI_RH_SetFeaturePort*` and `XHCI_RH_ClearFeaturePort*` in terms of `PORTSC`:
+     - Reset, Power, Enable, Suspend, and their corresponding change bits.
+   - [ ] Make `XHCI_RH_DisableIrq` / `XHCI_RH_EnableIrq` mask/unmask the interrupter cleanly for root-hub use.
+
+4. Port count and SuperSpeed vs non-SuperSpeed ports
+   - [ ] Use `HcsParams1` and `HcsParams2` to set:
+     - `Extension->NumberOfPorts`.
+   - [ ] (Optional for now) If the controller exposes separate SS/root segments, reflect that into the root-hub model.
+
+
+Phase 3 – USBPORT core USB 3 semantics
+--------------------------------------
+
+5. Speed handling
+   - [ ] Audit all uses of `USB_DEVICE_SPEED` (search for `UsbLowSpeed`, `UsbFullSpeed`, `UsbHighSpeed`).
+   - [ ] Add explicit handling for `UsbSuperSpeed`:
+     - Timeouts and retry logic for device reset and enumeration.
+     - Avoid inappropriate USB 1.1/2.0-only quirks on SS devices.
+
+6. Bandwidth and scheduling
+   - [ ] In the existing bandwidth accounting (bulk/iso/interrupt scheduling),
+     - Short term: treat SuperSpeed endpoints as "unlimited" so they do not fail due to legacy 12/480 Mbps limits.
+   - [ ] Longer term:
+     - Add distinct SS bandwidth model / constants (up to 5/10 Gbps, microframe-based).
+
+7. Descriptor and pipe semantics
+   - [ ] Accept and ignore (for now) SuperSpeed Endpoint Companion descriptors on SS devices.
+   - [ ] Ensure class/protocol parsing does not misclassify SS devices (e.g., hubs, UVC, MSC).
+
+
+Phase 4 – USBHUB USB 3.0 awareness
+----------------------------------
+
+8. USB 3.0 hub descriptor support
+   - [ ] Introduce `USB_3_0_HUB_DESCRIPTOR` in the ReactOS headers based on Win10 `usbspec.h`.
+   - [ ] In `USBH_SyncGetHubDescriptor`, detect hubs with `bcdUSB >= 0x0300`:
+     - Request and parse the v3 hub descriptor.
+     - Store SS-specific hub characteristics in the hub extension.
+
+9. Hub depth and route string
+   - [ ] Use the xHCI route string (`XHCI_BuildRouteString` + slot state) to:
+     - Reflect hub depth and downstream port on USBPORT/USBD's view of the device.
+   - [ ] Ensure `HubAddr` / `PortNumber` in `USBPORT_ENDPOINT_PROPERTIES` match the xHCI route.
+
+10. Port state handling
+    - [ ] Make `USBH_ProcessPortStateChange` able to handle USB 3 port states:
+      - Link state (PLS), warm reset, and the SS-specific change bits from `PORTSC`.
+    - [ ] For now, keep U1/U2 disabled at the hub policy level.
+
+
+Phase 5 – BOS and device capabilities
+-------------------------------------
+
+11. BOS parsing
+    - [ ] Add `USB_BOS_DESCRIPTOR` and the core device capabilities:
+      - `USB_DEVICE_CAPABILITY_USB20_EXTENSION`.
+      - `USB_DEVICE_CAPABILITY_SUPERSPEED_USB_DESCRIPTOR`.
+      - `USB_DEVICE_CAPABILITY_CONTAINER_ID`.
+    - [ ] Implement BOS retrieval in `usbport`/`usbhub`:
+      - Issue GET_DESCRIPTOR(BOS) and parse the capabilities into the device handle.
+
+12. Expose capabilities internally
+    - [ ] Store BOS-derived capabilities in the device extension for later IOCTLs and policy decisions.
+    - [ ] No immediate behavioral change required for LPM or container IDs in the first phase.
+
+
+Phase 6 – Link Power Management (LPM, U1/U2/U3)
+----------------------------------------------
+
+13. LPM policy
+    - [ ] Add LPM-related fields (U1/U2 exit latencies, etc.) based on `usbspec.h`.
+    - [ ] Define a simple kernel policy:
+      - Enable U1/U2 on SS devices that advertise them, with exit latencies under safe thresholds.
+      - Provide a kill switch or fallback if instability is detected.
+
+14. LPM implementation in xHCI
+    - [ ] Program per-port U1/U2 enable bits in `PORTSC`/extended registers as per the xHCI spec.
+    - [ ] Ensure port/link state transitions are handled correctly in port-status and hub logic.
+
+
+Phase 7 – Streams and advanced features (optional)
+--------------------------------------------------
+
+15. Bulk streams
+    - [ ] Extend `usbxhci` to manage stream-enabled bulk endpoints:
+      - Create and manage stream contexts in the Endpoint Context and associated rings.
+    - [ ] Extend USBPORT’s internal endpoint representation to:
+      - Track stream IDs and route completions accordingly.
+
+16. UASP / enhanced MSC
+    - [ ] Integrate with any future UASP miniport/class driver once streams are stable.
+
+
+Phase 8 – IOCTL / user-mode compatibility
+-----------------------------------------
+
+17. IOCTL structure alignment
+    - [ ] Diff ReactOS `sdk/include/psdk/usbioctl.h` against Win10:
+      - Import/update extended node connection info (`*_EX_V2`), especially SS-related fields.
+    - [ ] Implement IOCTL handlers in the USBPORT/USBD/USBHUB path:
+      - Populate SS fields using BOS, hub descriptors, and xHCI port information.
+
+18. Tooling verification
+    - [ ] Add a simple user-mode test app or extend existing tools to:
+      - Enumerate devices and display SS/USB 3 attributes via IOCTLs.
+
+
+Cross-cutting / maintenance
+---------------------------
+
+19. Debug and trace hygiene
+    - [ ] Keep xHCI DPRINT1 output focused on errors, with `DPRINT` for high-frequency traces.
+    - [ ] Add a debug switch to selectively enable verbose event-ring / TRB logging when needed.
+
+20. Conformance and robustness
+    - [ ] Compare the behavior of this stack against Windows 10/11 on the same hardware (where possible):
+      - Reset timing, retries, and error codes for common devices (HID, mass storage, hubs, webcams).
+    - [ ] Add assertions and graceful fallback paths in xHCI for unsupported hardware quirks.
+

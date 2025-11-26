@@ -406,11 +406,11 @@ FDO_HandlePnp(
     {
         case IRP_MN_REMOVE_DEVICE:
         {
-            // Unconfigure device */
+            /* Unconfigure device */
             DPRINT1("[USBCCGP] FDO IRP_MN_REMOVE\n");
             FDO_CloseConfiguration(DeviceObject);
 
-            /* Send the IRP down the stack */
+            /* Forward remove IRP down the stack */
             Irp->IoStatus.Status = STATUS_SUCCESS;
             IoSkipCurrentIrpStackLocation(Irp);
             Status = IoCallDriver(FDODeviceExtension->NextDeviceObject, Irp);
@@ -421,8 +421,8 @@ FDO_HandlePnp(
             /* Delete the device object */
             IoDeleteDevice(DeviceObject);
 
-            /* Request completed */
-            break;
+            /* The lower driver owns IRP completion; do not touch it again. */
+            return Status;
         }
         case IRP_MN_START_DEVICE:
         {

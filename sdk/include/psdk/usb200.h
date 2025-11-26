@@ -38,10 +38,12 @@ typedef enum _USB_DEVICE_TYPE {
   Usb20Device
 } USB_DEVICE_TYPE;
 
+/* Keep this in sync with Windows 10 usbspec.h */
 typedef enum _USB_DEVICE_SPEED {
   UsbLowSpeed = 0,
   UsbFullSpeed,
-  UsbHighSpeed
+  UsbHighSpeed,
+  UsbSuperSpeed
 } USB_DEVICE_SPEED;
 
 #define USB_PORT_STATUS_CONNECT                       0x0001

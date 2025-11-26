@@ -58,19 +58,31 @@ static VOID
 EHCI_HexDump(IN PCSTR Tag, IN const VOID* Buf, IN ULONG Length)
 {
     const UCHAR* p = (const UCHAR*)Buf;
-    ULONG i;
+    CHAR Line[64];
+    const char *Hex = "0123456789ABCDEF";
+    ULONG i, j, Chunk;
 
-    if (!Buf || !Length)
-        return;
+    if (!Buf || !Length) return;
 
-    if (Length > 64) Length = 64; /* keep it short */
+    DbgPrint("%s (Length %u):\n", Tag, Length);
 
-    DbgPrint("%s: ", Tag);
-    for (i = 0; i < Length; i++)
+    for (i = 0; i < Length; i += 16)
     {
-        DbgPrint("%02x%s", p[i], ((i + 1) % 16 == 0) ? "\n" : " ");
+        PCHAR d = Line;
+        Chunk = Length - i;
+        if (Chunk > 16) Chunk = 16;
+
+        for (j = 0; j < Chunk; j++)
+        {
+            UCHAR v = p[i + j];
+            *d++ = Hex[(v >> 4) & 0x0F];
+            *d++ = Hex[v & 0x0F];
+            *d++ = ' ';
+        }
+        *d = '\0';
+
+        DbgPrint("  +%04x: %s\n", i, Line);
     }
-    if (Length % 16) DbgPrint("\n");
 }
 #endif
 

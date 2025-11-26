@@ -834,7 +834,7 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
     KIRQL OldIrql;
     USHORT MaxPacketSize;
     USHORT AdditionalTransaction;
-    BOOLEAN IsAllocatedBandwidth;
+    BOOLEAN IsAllocatedBandwidth = FALSE;
     ULONG RetryCount;
 
     DPRINT1("USBPORT_OpenPipe: DeviceHandle=%p FdoDevice=%p PipeHandle=%p IRQL=%lu\n",
@@ -1018,7 +1018,7 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
         }
     }
 
-    if (EndpointProperties->TransferType == USB_ENDPOINT_TYPE_ISOCHRONOUS)
+    if (EndpointProperties->TransferType == USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
     {
         if (EndpointProperties->DeviceSpeed == UsbHighSpeed)
         {
@@ -1029,6 +1029,22 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
         {
             EndpointProperties->Period = ENDPOINT_INTERRUPT_1ms;
         }
+    }
+
+    if (EndpointProperties->TransferType == USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
+    {
+        DPRINT1("USBPORT_OpenPipe: Isochronous endpoints are not supported\n");
+
+        USBDStatus = USBD_STATUS_NOT_SUPPORTED;
+
+        if (UsbdStatus)
+        {
+            *UsbdStatus = USBDStatus;
+        }
+
+        Status = USBPORT_USBDStatusToNtStatus(NULL, USBDStatus);
+
+        goto ExitWithError;
     }
 
     if ((DeviceHandle->Flags & DEVICE_HANDLE_FLAG_ROOTHUB) != 0)

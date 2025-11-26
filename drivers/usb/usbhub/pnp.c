@@ -960,6 +960,26 @@ USBH_StartHubFdoDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
         }
     }
 
+    /* Assign a debug bus number based on the root hub. */
+    {
+        PUSBHUB_FDO_EXTENSION RootHubExtension;
+
+        RootHubExtension = USBH_GetRootHubExtension(HubExtension);
+
+        if (RootHubExtension == HubExtension)
+        {
+            if (HubExtension->DebugBusNumber == 0)
+            {
+                HubExtension->DebugBusNumber =
+                    (ULONG)InterlockedIncrement(&USBH_NextDebugBusNumber);
+            }
+        }
+        else
+        {
+            HubExtension->DebugBusNumber = RootHubExtension->DebugBusNumber;
+        }
+    }
+
     if (HubExtension->LowerPDO == HubExtension->RootHubPdo)
     {
         USBD_RegisterRootHubCallBack(HubExtension);

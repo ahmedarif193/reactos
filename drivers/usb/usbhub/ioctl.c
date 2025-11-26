@@ -1357,14 +1357,61 @@ USBH_PdoInternalControl(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
             return USBH_PdoIoctlResetPort(PortExtension, Irp);
 
         case IOCTL_INTERNAL_USB_ENABLE_PORT:
-            DPRINT1("USBH_PdoInternalControl: IOCTL_INTERNAL_USB_ENABLE_PORT\n");
-            DbgBreakPoint();
+        {
+            USHORT Port;
+
+            DPRINT("USBH_PdoInternalControl: IOCTL_INTERNAL_USB_ENABLE_PORT\n");
+
+            if (HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STOPPED)
+            {
+                Status = STATUS_DEVICE_NOT_CONNECTED;
+                break;
+            }
+
+            Port = PortExtension->PortNumber;
+            if (Port == 0)
+            {
+                Status = STATUS_INVALID_DEVICE_REQUEST;
+                break;
+            }
+
+            Status = USBH_SyncPowerOnPort(HubExtension,
+                                          Port,
+                                          TRUE);
             break;
+        }
 
         case IOCTL_INTERNAL_USB_CYCLE_PORT:
-            DPRINT1("USBH_PdoInternalControl: IOCTL_INTERNAL_USB_CYCLE_PORT\n");
-            DbgBreakPoint();
+        {
+            USHORT Port;
+
+            DPRINT("USBH_PdoInternalControl: IOCTL_INTERNAL_USB_CYCLE_PORT\n");
+
+            if (PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_PORT_RESSETING)
+            {
+                Status = STATUS_UNSUCCESSFUL;
+                break;
+            }
+
+            if (HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STOPPED)
+            {
+                Status = STATUS_DEVICE_NOT_CONNECTED;
+                break;
+            }
+
+            Port = PortExtension->PortNumber;
+            if (Port == 0)
+            {
+                Status = STATUS_INVALID_DEVICE_REQUEST;
+                break;
+            }
+
+            Status = USBH_ResetDevice(HubExtension,
+                                      Port,
+                                      FALSE,
+                                      TRUE);
             break;
+        }
 
         case IOCTL_INTERNAL_USB_GET_DEVICE_HANDLE:
             DPRINT("USBH_PdoInternalControl: IOCTL_INTERNAL_USB_GET_DEVICE_HANDLE\n");
@@ -1398,12 +1445,8 @@ USBH_PdoInternalControl(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
 
             if (!(PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_HUB_DEVICE))
             {
-                DbgBreakPoint();
                 Status = STATUS_SUCCESS;
-
                 *(PVOID *)IoStack->Parameters.Others.Argument1 = NULL;
-
-                USBH_CompleteIrp(Irp, Status);
                 break;
             }
 
@@ -1411,23 +1454,191 @@ USBH_PdoInternalControl(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
             return USBH_PassIrp(HubExtension->RootHubPdo, Irp);
 
         case IOCTL_INTERNAL_USB_GET_HUB_NAME:
-            DPRINT1("USBH_PdoInternalControl: IOCTL_INTERNAL_USB_GET_HUB_NAME\n");
-            DbgBreakPoint();
+        {
+            PUSB_HUB_NAME HubName;
+            ULONG Length;
+            PWCHAR Buffer;
+            PWCHAR BufferEnd;
+            ULONG BufferLength;
+            ULONG LengthSkip = 0;
+            ULONG NameLength;
+            ULONG Required;
+
+            DPRINT("USBH_PdoInternalControl: IOCTL_INTERNAL_USB_GET_HUB_NAME\n");
+
+            HubName = (PUSB_HUB_NAME)Irp->AssociatedIrp.SystemBuffer;
+            Length = IoStack->Parameters.DeviceIoControl.OutputBufferLength;
+
+            if (!HubName || Length < sizeof(USB_HUB_NAME))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                Irp->IoStatus.Information = sizeof(USB_HUB_NAME);
+                break;
+            }
+
+            RtlZeroMemory(HubName, Length);
+            HubName->ActualLength = sizeof(USB_HUB_NAME);
+
+            if (!(PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_HUB_DEVICE) ||
+                !(PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_DEVICE_STARTED) ||
+                !(PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_REG_DEV_INTERFACE) ||
+                PortExtension->SymbolicLinkName.Buffer == NULL)
+            {
+                /* Not a hub PDO or no interface registered: return empty name */
+                Irp->IoStatus.Information = sizeof(USB_HUB_NAME);
+                Status = STATUS_SUCCESS;
+                break;
+            }
+
+            Buffer = PortExtension->SymbolicLinkName.Buffer;
+            BufferLength = PortExtension->SymbolicLinkName.Length;
+
+            ASSERT(Buffer[BufferLength / sizeof(WCHAR)] == UNICODE_NULL);
+
+            if (*Buffer == L'\\')
+            {
+                BufferEnd = wcschr(Buffer + 1, L'\\');
+
+                if (BufferEnd != NULL)
+                {
+                    LengthSkip =
+                        (ULONG)((BufferEnd + 1 - Buffer) * sizeof(WCHAR));
+                }
+                else
+                {
+                    LengthSkip = BufferLength;
+                }
+            }
+
+            if (LengthSkip >= BufferLength)
+            {
+                Irp->IoStatus.Information = sizeof(USB_HUB_NAME);
+                Status = STATUS_SUCCESS;
+                break;
+            }
+
+            NameLength = BufferLength - LengthSkip;
+            Required = sizeof(USB_HUB_NAME) + NameLength;
+
+            HubName->ActualLength = Required;
+
+            if (Length < Required)
+            {
+                /* Caller needs to resubmit with a larger buffer */
+                Irp->IoStatus.Information = sizeof(USB_HUB_NAME);
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            RtlCopyMemory(&HubName->HubName[0],
+                          &Buffer[LengthSkip / sizeof(WCHAR)],
+                          NameLength);
+
+            /* Ensure trailing NULL */
+            HubName->HubName[NameLength / sizeof(WCHAR)] = UNICODE_NULL;
+
+            Irp->IoStatus.Information = Required;
+            Status = STATUS_SUCCESS;
             break;
+        }
 
         case IOCTL_GET_HCD_DRIVERKEY_NAME:
-            DPRINT1("USBH_PdoInternalControl: IOCTL_GET_HCD_DRIVERKEY_NAME\n");
-            DbgBreakPoint();
+            DPRINT("USBH_PdoInternalControl: IOCTL_GET_HCD_DRIVERKEY_NAME (unsupported on PDO)\n");
+            Status = STATUS_INVALID_DEVICE_REQUEST;
             break;
 
         case IOCTL_INTERNAL_USB_GET_BUS_INFO:
-            DPRINT1("USBH_PdoInternalControl: IOCTL_INTERNAL_USB_GET_BUS_INFO\n");
-            DbgBreakPoint();
+        {
+            PUSB_BUS_NOTIFICATION BusNotification;
+            PUSB_BUS_INFORMATION_LEVEL_1 BusInfo;
+            ULONG BusInfoLength;
+            ULONG BusInfoActualLength;
+            NTSTATUS QueryStatus;
+
+            DPRINT("USBH_PdoInternalControl: IOCTL_INTERNAL_USB_GET_BUS_INFO\n");
+
+            BusNotification =
+                (PUSB_BUS_NOTIFICATION)IoStack->Parameters.Others.Argument1;
+
+            if (!BusNotification)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            if (!HubExtension->BusInterfaceUSBDI.QueryBusInformation)
+            {
+                Status = STATUS_NOT_IMPLEMENTED;
+                break;
+            }
+
+            BusInfo = NULL;
+            BusInfoLength = 0;
+            BusInfoActualLength = 0;
+
+            /* First query to obtain required buffer length (Level 1) */
+            QueryStatus =
+                HubExtension->BusInterfaceUSBDI.QueryBusInformation(
+                    HubExtension->BusInterfaceUSBDI.BusContext,
+                    1,
+                    NULL,
+                    &BusInfoLength,
+                    &BusInfoActualLength);
+
+            if (QueryStatus != STATUS_BUFFER_TOO_SMALL &&
+                !NT_SUCCESS(QueryStatus))
+            {
+                Status = QueryStatus;
+                break;
+            }
+
+            if (BusInfoActualLength < sizeof(USB_BUS_INFORMATION_LEVEL_1))
+            {
+                BusInfoActualLength = sizeof(USB_BUS_INFORMATION_LEVEL_1);
+            }
+
+            BusInfo = ExAllocatePoolWithTag(NonPagedPool,
+                                            BusInfoActualLength,
+                                            USB_HUB_TAG);
+
+            if (!BusInfo)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+
+            BusInfoLength = BusInfoActualLength;
+
+            QueryStatus =
+                HubExtension->BusInterfaceUSBDI.QueryBusInformation(
+                    HubExtension->BusInterfaceUSBDI.BusContext,
+                    1,
+                    BusInfo,
+                    &BusInfoLength,
+                    &BusInfoActualLength);
+
+            if (!NT_SUCCESS(QueryStatus))
+            {
+                ExFreePoolWithTag(BusInfo, USB_HUB_TAG);
+                Status = QueryStatus;
+                break;
+            }
+
+            BusNotification->TotalBandwidth = BusInfo->TotalBandwidth;
+            BusNotification->ConsumedBandwidth = BusInfo->ConsumedBandwidth;
+            BusNotification->ControllerNameLength =
+                BusInfo->ControllerNameLength;
+
+            ExFreePoolWithTag(BusInfo, USB_HUB_TAG);
+
+            Irp->IoStatus.Information = sizeof(USB_BUS_NOTIFICATION);
+            Status = STATUS_SUCCESS;
             break;
+        }
 
         case IOCTL_INTERNAL_USB_GET_PARENT_HUB_INFO:
-            DPRINT1("USBH_PdoInternalControl: IOCTL_INTERNAL_USB_GET_PARENT_HUB_INFO\n");
-            DbgBreakPoint();
+            DPRINT("USBH_PdoInternalControl: IOCTL_INTERNAL_USB_GET_PARENT_HUB_INFO (not implemented)\n");
+            Status = STATUS_NOT_IMPLEMENTED;
             break;
 
         default:
