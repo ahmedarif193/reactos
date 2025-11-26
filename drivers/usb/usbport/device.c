@@ -1002,7 +1002,7 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
     USB_DEFAULT_PIPE_SETUP_PACKET SetupPacket;
     ULONG TransferedLen;
     ULONG DescriptorMinSize;
-    UCHAR MaxPacketSize;
+    USHORT MaxPacketSize;
     PUSBPORT_DEVICE_EXTENSION FdoExtension;
     PUSBPORT_REGISTRATION_PACKET Packet;
     NTSTATUS Status;
@@ -1133,8 +1133,9 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
 
     Endpoint = PipeHandle->Endpoint;
 
+    /* Allocate enough space for the full device descriptor, not just MPS0. */
     DeviceDescriptor = ExAllocatePoolWithTag(NonPagedPool,
-                                             USB_DEFAULT_MAX_PACKET,
+                                             sizeof(USB_DEVICE_DESCRIPTOR),
                                              USB_PORT_TAG);
 
     if (!DeviceDescriptor)
@@ -1174,17 +1175,35 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
                   (TransferedLen < sizeof(USB_DEVICE_DESCRIPTOR)) ?
                   TransferedLen : sizeof(USB_DEVICE_DESCRIPTOR));
 
-    MaxPacketSize = DeviceHandle->DeviceDescriptor.bMaxPacketSize0;
+    /*
+     * Map bMaxPacketSize0 to an actual max packet size for EP0.
+     * For USB 1.x/2.0 this is the literal size (8/16/32/64).
+     * For USB 3.x SuperSpeed devices, the encoding is 9 -> 512 bytes.
+     */
+    {
+        ULONG RawMaxPacketSize = DeviceHandle->DeviceDescriptor.bMaxPacketSize0;
+
+        if (DeviceHandle->DeviceDescriptor.bcdUSB >= 0x0300 &&
+            RawMaxPacketSize == 9)
+        {
+            MaxPacketSize = 512;
+        }
+        else
+        {
+            MaxPacketSize = RawMaxPacketSize;
+        }
+    }
 
     if (MaxPacketSize != 8 &&
         MaxPacketSize != 16 &&
         MaxPacketSize != 32 &&
-        MaxPacketSize != 64)
+        MaxPacketSize != 64 &&
+        MaxPacketSize != 512)
     {
         goto PostDescriptor;
     }
 
-    PipeHandle->EndpointDescriptor.wMaxPacketSize = MaxPacketSize;
+    PipeHandle->EndpointDescriptor.wMaxPacketSize = (USHORT)MaxPacketSize;
 
     if (Endpoint)
     {
