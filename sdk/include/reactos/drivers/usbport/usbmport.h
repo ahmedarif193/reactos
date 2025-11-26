@@ -541,8 +541,14 @@ typedef VOID
 #define USB_MINIPORT_FLAGS_WAKE_SUPPORT 0x0200
 #define USB_MINIPORT_FLAGS_USB3         0x0400
 
-#define TOTAL_USB11_BUS_BANDWIDTH  12000
-#define TOTAL_USB20_BUS_BANDWIDTH  400000
+#define TOTAL_USB11_BUS_BANDWIDTH        12000
+#define TOTAL_USB20_BUS_BANDWIDTH       400000
+/* Approximate aggregate SuperSpeed/SSP bus bandwidth (5/10 Gbps), expressed
+ * in the same abstract units used by the USB 2.0 scheduler.  These are not
+ * consumed by the legacy frame-based bandwidth pool but are available for
+ * future SuperSpeed-aware accounting or diagnostics. */
+#define TOTAL_USB30_BUS_BANDWIDTH_GEN1 4000000   /* ~10x USB 2.0 */
+#define TOTAL_USB30_BUS_BANDWIDTH_GEN2 8000000   /* ~20x USB 2.0 */
 
 typedef struct _USBPORT_REGISTRATION_PACKET {
   ULONG MiniPortVersion;

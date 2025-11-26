@@ -92,12 +92,22 @@ typedef struct _XHCI_DEVICE_SLOT {
     BOOLEAN InUse;
     BOOLEAN Addressed;
     BOOLEAN Configured;
+    ULONG Ep0ContextErrorCount;
     UCHAR UsbDeviceAddress;
     UCHAR PortNumber;
     ULONG RouteString;
     UCHAR HighestEndpointId;
     PXHCI_ENDPOINT EndpointTable[XHCI_MAX_ENDPOINTS + 1];
 } XHCI_DEVICE_SLOT, *PXHCI_DEVICE_SLOT;
+
+typedef struct _XHCI_PROTOCOL_SEGMENT {
+    UCHAR MajorRevision;
+    UCHAR MinorRevision;
+    UCHAR PortOffset;
+    UCHAR PortCount;
+} XHCI_PROTOCOL_SEGMENT, *PXHCI_PROTOCOL_SEGMENT;
+
+#define XHCI_MAX_PROTOCOL_SEGMENTS 8
 
 typedef struct _XHCI_EXTENSION {
   ULONG Signature;
@@ -145,12 +155,18 @@ typedef struct _XHCI_EXTENSION {
     XHCI_DEVICE_SLOT DeviceSlots[XHCI_MAX_SLOTS + 1];
     ULONG PendingUsbSts;
     BOOLEAN RhIrqEnabled;
+    BOOLEAN RhPendingInvalidate;
     BOOLEAN InterruptsEnabled;
   BOOLEAN ControllerRunning;
   BOOLEAN FatalError;
   ULONG Quirks;
   UCHAR DeviceAddressMap[XHCI_MAX_DEVICE_ADDRESS];
   UCHAR PortLinkState[XHCI_MAX_PORTS + 1];
+  UCHAR MaxU1ExitLatency;
+  USHORT MaxU2ExitLatency;
+  UCHAR ProtocolSegmentCount;
+  XHCI_PROTOCOL_SEGMENT ProtocolSegments[XHCI_MAX_PROTOCOL_SEGMENTS];
+  UCHAR PortProtocol[XHCI_MAX_PORTS + 1];
   /* MSI/MSI-X discovery (message interrupts not yet connected on ReactOS) */
   BOOLEAN MsiSupported;
     BOOLEAN MsixSupported;
@@ -182,6 +198,7 @@ typedef struct _XHCI_ENDPOINT {
     UCHAR SlotId;
     UCHAR EndpointId;
     UCHAR DoorbellTarget;
+    USHORT ReservedStreamId;
     BOOLEAN DefaultControl;
     BOOLEAN UsesStaticRing;
     BOOLEAN Isochronous;
@@ -201,6 +218,7 @@ typedef struct _XHCI_TRANSFER {
     ULONG Flags;
     BOOLEAN IsControl;
     BOOLEAN IsIsochronous;
+    USHORT StreamId;
     UCHAR NewAddress;
     UCHAR Reserved[2];
 } XHCI_TRANSFER, *PXHCI_TRANSFER;

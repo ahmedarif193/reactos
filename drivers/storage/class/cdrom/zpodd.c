@@ -512,51 +512,66 @@ Return Value:
 
 --*/
 {
-    NTSTATUS            status = STATUS_SUCCESS;
-    STORAGE_IDLE_POWER  idlePower = {0};
-    IO_STATUS_BLOCK     ioStatus = {0};
-    PIRP                irp = NULL;
-    KEVENT              event;
+    NTSTATUS status;
 
     PAGED_CODE();
 
-    idlePower.Version = 1;
-    idlePower.Size = sizeof (STORAGE_IDLE_POWER);
-    idlePower.WakeCapableHint = WakeCapable;
-    idlePower.D3ColdSupported = Enable;
-    idlePower.D3IdleTimeout = D3IdleTimeout;
+#ifdef __REACTOS__
+    UNREFERENCED_PARAMETER(DeviceExtension);
+    UNREFERENCED_PARAMETER(WakeCapable);
+    UNREFERENCED_PARAMETER(Enable);
+    UNREFERENCED_PARAMETER(D3IdleTimeout);
 
-    KeInitializeEvent(&event, NotificationEvent, FALSE);
-
-    irp = IoBuildDeviceIoControlRequest(IOCTL_STORAGE_ENABLE_IDLE_POWER,
-                                        DeviceExtension->LowerPdo,
-                                        &idlePower,
-                                        sizeof(STORAGE_IDLE_POWER),
-                                        NULL,
-                                        0,
-                                        FALSE,
-                                        &event,
-                                        &ioStatus);
-
-    if (irp == NULL)
+    /*
+     * ReactOS: IOCTL_STORAGE_ENABLE_IDLE_POWER currently exercises an
+     * incomplete IoBuildDeviceIoControlRequest / IopUnloadSafeCompletion
+     * path and can trigger BAD_POOL_HEADER (tag IoUs) when the internal
+     * unload-safe context is freed. Until the I/O manager implementation
+     * is fixed, treat this optional idle-power hint as unsupported to
+     * avoid pool corruption in ScsiPort/CDROM paths.
+     */
+    status = STATUS_NOT_SUPPORTED;
+#else
     {
-        status = STATUS_INSUFFICIENT_RESOURCES;
-    }
-    else
-    {
-        //
-        // Send the synchronous request to port driver.
-        //
+        STORAGE_IDLE_POWER  idlePower = {0};
+        IO_STATUS_BLOCK     ioStatus = {0};
+        PIRP                irp = NULL;
+        KEVENT              event;
 
-        status = IoCallDriver(DeviceExtension->LowerPdo, irp);
+        idlePower.Version = 1;
+        idlePower.Size = sizeof(STORAGE_IDLE_POWER);
+        idlePower.WakeCapableHint = WakeCapable;
+        idlePower.D3ColdSupported = Enable;
+        idlePower.D3IdleTimeout = D3IdleTimeout;
 
-        if (status == STATUS_PENDING)
+        KeInitializeEvent(&event, NotificationEvent, FALSE);
+
+        irp = IoBuildDeviceIoControlRequest(IOCTL_STORAGE_ENABLE_IDLE_POWER,
+                                            DeviceExtension->LowerPdo,
+                                            &idlePower,
+                                            sizeof(STORAGE_IDLE_POWER),
+                                            NULL,
+                                            0,
+                                            FALSE,
+                                            &event,
+                                            &ioStatus);
+
+        if (irp == NULL)
         {
-            KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
+            status = STATUS_INSUFFICIENT_RESOURCES;
+        }
+        else
+        {
+            status = IoCallDriver(DeviceExtension->LowerPdo, irp);
 
-            status = ioStatus.Status;
+            if (status == STATUS_PENDING)
+            {
+                KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
+                status = ioStatus.Status;
+            }
         }
     }
+#endif
 
     TracePrint((TRACE_LEVEL_INFORMATION,
                 TRACE_FLAG_POWER,
@@ -828,5 +843,4 @@ Return Value:
 }
 
 #pragma warning(pop) // un-sets any local warning changes
-
 

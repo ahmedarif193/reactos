@@ -34,6 +34,22 @@
 
 USBPORT_REGISTRATION_PACKET XhciRegPacket;
 
+#if DBG
+static ULONG g_XhciTraceMask;
+
+#define XHCI_TRACE_EVENTS    0x00000001
+#define XHCI_TRACE_TRANSFERS 0x00000002
+#define XHCI_TRACE_COMMANDS  0x00000004
+
+#define XHCI_DBG(Mask, ...)                                        \
+    do {                                                           \
+        if (g_XhciTraceMask & (Mask))                              \
+            DPRINT(__VA_ARGS__);                                   \
+    } while (0)
+#else
+#define XHCI_DBG(Mask, ...) do { UNREFERENCED_PARAMETER(Mask); } while (0)
+#endif
+
 /* TODO: fill out real interfaces; everything below is placeholder */
 
 static MPSTATUS NTAPI XHCI_OpenEndpoint(PVOID MiniPortExtension, PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties, PVOID Endpoint);
@@ -61,6 +77,7 @@ static MPSTATUS XHCI_ResetController(PXHCI_EXTENSION Extension);
 static BOOLEAN XHCI_WaitForRegisterBits(volatile ULONG *Reg, ULONG Mask, BOOLEAN WaitSet, ULONG TimeoutUs);
 static VOID XHCI_HandleControllerError(PXHCI_EXTENSION Extension, ULONG PendingStatus);
 static VOID XHCI_HandleCommandTimeout(PXHCI_EXTENSION Extension, ULONG CommandType);
+static VOID XHCI_GetRegistryParameters(PXHCI_EXTENSION Extension);
 static VOID NTAPI XHCI_RH_GetRootHubData(PVOID MiniPortExtension, PVOID RootHubData);
 static MPSTATUS NTAPI XHCI_RH_GetStatus(PVOID MiniPortExtension, PUSHORT Status);
 static MPSTATUS NTAPI XHCI_RH_GetPortStatus(PVOID MiniPortExtension, USHORT Port, PUSB_PORT_STATUS_AND_CHANGE PortStatus);
@@ -82,6 +99,11 @@ static VOID NTAPI XHCI_RH_EnableIrq(PVOID MiniPortExtension);
 static BOOLEAN XHCI_EventRingHasPendingTrb(PXHCI_EXTENSION Extension);
 static VOID XHCI_PollForWork(PXHCI_EXTENSION Extension, BOOLEAN AllowCallbacks);
 static VOID XHCI_DumpControllerState(PXHCI_EXTENSION Extension, PCSTR Reason);
+static VOID XHCI_DumpAddressDeviceContext(PXHCI_EXTENSION Extension,
+                                          PXHCI_DEVICE_SLOT Slot,
+                                          UCHAR EndpointId,
+                                          USHORT PortNumber,
+                                          UCHAR CompletionCode);
 /* Optional callbacks (safe stubs) */
 static MPSTATUS NTAPI XHCI_ReopenEndpoint(PVOID MiniPortExtension,
                                          PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
@@ -264,6 +286,10 @@ static VOID XHCI_DetectHardwareQuirks(PXHCI_EXTENSION Extension);
 static ULONG XHCI_FindExtendedCapability(PXHCI_EXTENSION Extension, UCHAR CapabilityId);
 static VOID XHCI_DisableLegacySupport(PXHCI_EXTENSION Extension);
 static VOID XHCI_ProbeMsiMsix(PXHCI_EXTENSION Extension);
+static VOID XHCI_BuildProtocolPortMap(PXHCI_EXTENSION Extension);
+static volatile ULONG *XHCI_GetPortPowerRegister(PXHCI_EXTENSION Extension, USHORT Port);
+static VOID XHCI_ConfigurePortLpm(PXHCI_EXTENSION Extension, USHORT Port);
+static VOID XHCI_ConfigureAllPortsLpm(PXHCI_EXTENSION Extension);
 static BOOLEAN XHCI_ReadPciConfig(PXHCI_EXTENSION Extension, ULONG Offset, PVOID Buffer, ULONG Length);
 static VOID NTAPI XHCI_QueryEndpointRequirements(PVOID MiniPortExtension,
                                                 PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
@@ -467,6 +493,18 @@ XHCI_GetPortStatusRegister(
 }
 
 static
+volatile ULONG *
+XHCI_GetPortPowerRegister(
+    _In_ PXHCI_EXTENSION Extension,
+    _In_ USHORT Port)
+{
+    if (!XHCI_IsValidPort(Extension, Port) || !Extension->OperationalRegisters)
+        return NULL;
+
+    return &Extension->OperationalRegisters->PortRegister[Port - 1].PortPowerManagement;
+}
+
+static
 BOOLEAN
 XHCI_PortIsSuperSpeed(
     _In_ PXHCI_EXTENSION Extension,
@@ -574,6 +612,84 @@ XHCI_PowerOnAllPorts(
     for (Port = 1; Port <= Extension->NumberOfPorts; Port++)
     {
         XHCI_RH_SetFeaturePortPower(Extension, Port);
+    }
+}
+
+static
+VOID
+XHCI_ConfigurePortLpm(
+    _Inout_ PXHCI_EXTENSION Extension,
+    _In_ USHORT Port)
+{
+    volatile ULONG *PortPmReg;
+    ULONG Value;
+    ULONG NewValue;
+    ULONG U1Timeout;
+    ULONG U2Timeout;
+
+    if (!Extension)
+        return;
+
+    /* Do not enable U1/U2 on controllers that advertise limited support. */
+    if (Extension->Quirks & XHCI_QUIRK_LIMIT_U1U2)
+        return;
+
+    /* Only SuperSpeed ports implement the U1/U2 timeout fields. */
+    if (!XHCI_PortIsSuperSpeed(Extension, Port))
+        return;
+
+    PortPmReg = XHCI_GetPortPowerRegister(Extension, Port);
+    if (!PortPmReg)
+        return;
+
+    Value = READ_REGISTER_ULONG(PortPmReg);
+    NewValue = Value;
+
+    /* Clear any existing U1/U2 timeout values. */
+    NewValue &= ~(XHCI_PORTPMSC_U1_TIMEOUT_MASK |
+                  XHCI_PORTPMSC_U2_TIMEOUT_MASK);
+
+    /*
+     * Use the hardware-advertised maximum exit latencies from HCS3 as a
+     * conservative baseline for per-port U1/U2 timeouts.  These fields
+     * describe the host controller's contribution; the actual link exit
+     * latencies also depend on downstream hubs and devices, but larger
+     * timeout values are always safe (they simply reduce LPM aggressiveness).
+     */
+    U1Timeout = Extension->MaxU1ExitLatency;
+    U2Timeout = Extension->MaxU2ExitLatency;
+
+    if (U1Timeout > 0xFF)
+        U1Timeout = 0xFF;
+    if (U2Timeout > 0xFFFF)
+        U2Timeout = 0xFFFF;
+
+    if (U1Timeout != 0)
+        NewValue |= (U1Timeout << XHCI_PORTPMSC_U1_TIMEOUT_SHIFT);
+    if (U2Timeout != 0)
+        NewValue |= (U2Timeout << XHCI_PORTPMSC_U2_TIMEOUT_SHIFT);
+
+    if (NewValue != Value)
+        WRITE_REGISTER_ULONG(PortPmReg, NewValue);
+}
+
+static
+VOID
+XHCI_ConfigureAllPortsLpm(
+    _Inout_ PXHCI_EXTENSION Extension)
+{
+    USHORT Port;
+
+    if (!Extension)
+        return;
+
+    /* Nothing to configure if the controller reports no U1/U2 exit latency. */
+    if (Extension->MaxU1ExitLatency == 0 && Extension->MaxU2ExitLatency == 0)
+        return;
+
+    for (Port = 1; Port <= Extension->NumberOfPorts; Port++)
+    {
+        XHCI_ConfigurePortLpm(Extension, Port);
     }
 }
 
@@ -1314,6 +1430,7 @@ XHCI_ResetDeviceOnPort(
 {
     PXHCI_DEVICE_SLOT Slot;
     MPSTATUS Status;
+    ULONG CompletionCode = 0;
 
     Slot = XHCI_FindSlotByPort(Extension, PortNumber);
     if (!Slot)
@@ -1327,7 +1444,16 @@ XHCI_ResetDeviceOnPort(
                               XHCI_COMMAND_TIMEOUT_MS,
                               TRUE,
                               NULL,
-                              NULL);
+                              &CompletionCode);
+    if (Status != MP_STATUS_SUCCESS)
+    {
+        DPRINT1("usbxhci: ResetDeviceOnPort: RESET_DEV command failed for slot %u on port %u (Status=%ld Code=%lu)\n",
+                Slot->SlotId,
+                PortNumber,
+                Status,
+                CompletionCode);
+    }
+
     return Status;
 }
 
@@ -1417,14 +1543,15 @@ XHCI_ServiceEventRing(
 
         TrbType = XHCI_GetTrbType(EventTrb);
 
-        DPRINT1("usbxhci: Event idx=%lu type=%lu ctrl=%08lx status=%08lx param=%08lx/%08lx AllowCb=%u\n",
-                (ULONG)Extension->EventRingDequeueIndex,
-                TrbType,
-                EventTrb->Control,
-                EventTrb->Status,
-                EventTrb->Parameter1,
-                EventTrb->Parameter2,
-                AllowCallbacks ? 1 : 0);
+        XHCI_DBG(XHCI_TRACE_EVENTS,
+                 "usbxhci: Event idx=%lu type=%lu ctrl=%08lx status=%08lx param=%08lx/%08lx AllowCb=%u\n",
+                 (ULONG)Extension->EventRingDequeueIndex,
+                 TrbType,
+                 EventTrb->Control,
+                 EventTrb->Status,
+                 EventTrb->Parameter1,
+                 EventTrb->Parameter2,
+                 AllowCallbacks ? 1 : 0);
 
         /*
          * When polling synchronously (AllowCallbacks == FALSE), avoid
@@ -1451,12 +1578,22 @@ XHCI_ServiceEventRing(
 
             case XHCI_TRB_TYPE_PORT_STATUS_CHANGE:
                 /* Record the change and defer hub notifications so we only
-                 * ring USBPORT once per DPC, even if multiple ports changed. */
+                 * ring USBPORT once per DPC, even if multiple ports changed.
+                 * When callbacks are temporarily masked or root-hub IRQs are
+                 * disabled, remember that a notification is pending so it can
+                 * be replayed once IRQs are re-enabled. */
                 XHCI_HandlePortStatusChangeEvent(Extension,
                                                  EventTrb,
                                                  FALSE);
-                if (AllowCallbacks)
+                if (AllowCallbacks && Extension->RhIrqEnabled)
+                {
                     NotifyRootHub = TRUE;
+                    Extension->RhPendingInvalidate = FALSE;
+                }
+                else
+                {
+                    Extension->RhPendingInvalidate = TRUE;
+                }
                 break;
 
             default:
@@ -1482,9 +1619,15 @@ XHCI_ServiceEventRing(
 
     /* Batch root-hub notifications so USBPORT only sees a single
      * invalidate call per DPC, even if several PORT_STATUS_CHANGE
-     * events were serviced. */
-    if (AllowCallbacks && NotifyRootHub && XhciRegPacket.UsbPortInvalidateRootHub)
+     * events were serviced. Respect the miniport's RootHub IRQ
+     * enable/disable state so USBPORT can quiesce notifications
+     * while stopping the root hub. */
+    if (AllowCallbacks &&
+        Extension->RhIrqEnabled &&
+        XhciRegPacket.UsbPortInvalidateRootHub &&
+        (NotifyRootHub || Extension->RhPendingInvalidate))
     {
+        Extension->RhPendingInvalidate = FALSE;
         XhciRegPacket.UsbPortInvalidateRootHub(Extension);
     }
 
@@ -1634,8 +1777,60 @@ XHCI_DumpControllerState(
     for (Port = 0; Port < Extension->NumberOfPorts && Port < 4; Port++)
     {
         ULONG PortSc = READ_REGISTER_ULONG(&Ops->PortRegister[Port].PortStatusAndControl);
-        DPRINT1("usbxhci: %s PORT%lu=0x%08lx\n", Reason, Port + 1, PortSc);
+            DPRINT1("usbxhci: %s PORT%lu=0x%08lx\n", Reason, Port + 1, PortSc);
     }
+}
+
+static
+VOID
+XHCI_DumpAddressDeviceContext(
+    _In_ PXHCI_EXTENSION Extension,
+    _In_ PXHCI_DEVICE_SLOT Slot,
+    _In_ UCHAR EndpointId,
+    _In_ USHORT PortNumber,
+    _In_ UCHAR CompletionCode)
+{
+    PXHCI_DEVICE_CONTEXT DeviceCtx;
+    PXHCI_SLOT_CONTEXT SlotCtx;
+    PXHCI_ENDPOINT_CONTEXT EpCtx;
+    volatile ULONG *PortScReg;
+    ULONG PortSc = 0;
+
+    if (!Extension || !Slot)
+        return;
+
+    DeviceCtx = (PXHCI_DEVICE_CONTEXT)Slot->DeviceContext.VirtualAddress;
+    if (!DeviceCtx)
+        return;
+
+    SlotCtx = &DeviceCtx->SlotContext;
+    if (EndpointId >= RTL_NUMBER_OF(DeviceCtx->EndpointContext))
+        EndpointId = 0;
+    EpCtx = &DeviceCtx->EndpointContext[EndpointId];
+
+    PortScReg = XHCI_GetPortStatusRegister(Extension, PortNumber);
+    if (PortScReg)
+        PortSc = READ_REGISTER_ULONG(PortScReg);
+
+    DPRINT1("usbxhci: AddressDevice CONTEXT_ERROR slot=%u ep=%u port=%u code=%u\n",
+            Slot->SlotId,
+            EndpointId,
+            PortNumber,
+            CompletionCode);
+    DPRINT1("usbxhci: SlotCtx: DevInfo=%08lx DevInfo2=%08lx TtInfo=%08lx DevState=%08lx\n",
+            SlotCtx->DevInfo,
+            SlotCtx->DevInfo2,
+            SlotCtx->TtInfo,
+            SlotCtx->DevState);
+    DPRINT1("usbxhci: Ep0Ctx: EpInfo=%08lx EpInfo2=%08lx TrDeq=%08lx:%08lx TxInfo=%08lx\n",
+            EpCtx->EpInfo,
+            EpCtx->EpInfo2,
+            (ULONG)(EpCtx->TrDequeuePointer >> 32),
+            (ULONG)(EpCtx->TrDequeuePointer & 0xFFFFFFFF),
+            EpCtx->TxInfo);
+    DPRINT1("usbxhci: PortSC[%u]=0x%08lx\n",
+            PortNumber,
+            PortSc);
 }
 
 static
@@ -1736,10 +1931,11 @@ XHCI_HandleCommandCompletion(
         CommandContext->Completed = TRUE;
     }
 
-    DPRINT1("usbxhci: command completion code=%lu slot=%u cmdptr=%I64x\n",
-            CompletionCode,
-            SlotId,
-            CommandPointer);
+    XHCI_DBG(XHCI_TRACE_COMMANDS,
+             "usbxhci: command completion code=%lu slot=%u cmdptr=%I64x\n",
+             CompletionCode,
+             SlotId,
+             CommandPointer);
 
     if (!CommandContext)
     {
@@ -1864,10 +2060,27 @@ XHCI_HandleTransferEvent(
     if (RequestedLength == 0 && Transfer->TransferParameters)
         RequestedLength = Transfer->TransferParameters->TransferBufferLength;
 
-    if (RequestedLength >= Remaining)
-        BytesTransferred = RequestedLength - Remaining;
-    else
-        BytesTransferred = 0;
+    if (RequestedLength < Remaining)
+    {
+        DPRINT1("usbxhci: transfer event slot=%u ep=%u reports residual %lu > requested %lu\n",
+                SlotId,
+                EndpointId,
+                Remaining,
+                RequestedLength);
+        Remaining = RequestedLength;
+    }
+
+    BytesTransferred = RequestedLength - Remaining;
+
+    XHCI_DBG(XHCI_TRACE_TRANSFERS,
+             "usbxhci: xfer complete slot=%u ep=%u code=%lu req=%lu rem=%lu bytes=%lu stream=%u\n",
+             SlotId,
+             EndpointId,
+             CompletionCode,
+             RequestedLength,
+             Remaining,
+             BytesTransferred,
+             Transfer->StreamId);
 
     switch (CompletionCode)
     {
@@ -1877,6 +2090,14 @@ XHCI_HandleTransferEvent(
             break;
         case XHCI_COMPLETION_STALL_ERROR:
             UsbdStatus = USBD_STATUS_STALL_PID;
+            break;
+        case XHCI_COMPLETION_STOPPED:
+        case XHCI_COMPLETION_STOPPED_LENGTH_INVALID:
+        case XHCI_COMPLETION_STOPPED_SHORT_PACKET:
+            /* Endpoint stopped (typically due to cancel/reset) – surface as a
+             * canceled transfer rather than a generic failure to better match
+             * Windows USBPORT semantics. */
+            UsbdStatus = USBD_STATUS_CANCELED;
             break;
         default:
             UsbdStatus = USBD_STATUS_REQUEST_FAILED;
@@ -1959,9 +2180,10 @@ XHCI_AssignSlot(
 
     XHCI_UpdateDeviceAddressMap(Extension, Slot, 0);
 
-    DPRINT1("usbxhci: slot %u assigned DCBAA=%I64x\n",
-            SlotId,
-            Slot->DeviceContext.PhysicalAddress.QuadPart);
+    XHCI_DBG(XHCI_TRACE_COMMANDS,
+             "usbxhci: slot %u assigned DCBAA=%I64x\n",
+             SlotId,
+             Slot->DeviceContext.PhysicalAddress.QuadPart);
 
     return MP_STATUS_SUCCESS;
 }
@@ -2023,8 +2245,9 @@ XHCI_Get32BitFrameNumber(
         return 0;
     {
         ULONG v = READ_REGISTER_ULONG(&Extension->RuntimeRegisters->MicroframeIndex);
-        DPRINT1("usbxhci: Get32BitFrameNumber (IRQL=%lu) MFIDX=%08lx\n",
-                (ULONG)KeGetCurrentIrql(), v);
+        XHCI_DBG(XHCI_TRACE_EVENTS,
+                 "usbxhci: Get32BitFrameNumber (IRQL=%lu) MFIDX=%08lx\n",
+                 (ULONG)KeGetCurrentIrql(), v);
         return v;
     }
 }
@@ -2037,8 +2260,9 @@ XHCI_InterruptNextSOF(
     PXHCI_EXTENSION Extension = (PXHCI_EXTENSION)MiniPortExtension;
     if (!Extension)
         return;
-    DPRINT1("usbxhci: InterruptNextSOF (IRQL=%lu) InvalidateCtrl=%p\n",
-            (ULONG)KeGetCurrentIrql(), XhciRegPacket.UsbPortInvalidateController);
+    XHCI_DBG(XHCI_TRACE_EVENTS,
+             "usbxhci: InterruptNextSOF (IRQL=%lu) InvalidateCtrl=%p\n",
+             (ULONG)KeGetCurrentIrql(), XhciRegPacket.UsbPortInvalidateController);
     /*
      * This callback is invoked by USBPORT while holding its MiniportSpinLock
      * at DISPATCH_LEVEL. Do not process events or call into pageable paths
@@ -2244,7 +2468,7 @@ XHCI_PrepareDefaultControlContext(
     DeviceCtx = (PXHCI_DEVICE_CONTEXT)Slot->DeviceContext.VirtualAddress;
     if (!InputCtx || !DeviceCtx)
         return;
-
+ 
     RtlZeroMemory(DeviceCtx, sizeof(XHCI_DEVICE_CONTEXT));
     RtlZeroMemory(InputCtx, sizeof(XHCI_INPUT_CONTEXT));
 
@@ -2252,7 +2476,32 @@ XHCI_PrepareDefaultControlContext(
     InputCtx->InputControlContext.DropContextFlags = 0;
 
     SlotCtx = &InputCtx->SlotContext;
-    SpeedCode = XHCI_MapDeviceSpeed(EndpointProperties->DeviceSpeed);
+
+    /*
+     * Prefer the actual negotiated link speed from the xHCI port status
+     * register over the logical USB_DEVICE_SPEED reported by USBPORT.
+     * This lets us correctly distinguish SuperSpeed vs High-Speed even
+     * when the hub/port stack only reports "high speed" for USB 3.x.
+     */
+    SpeedCode = 0;
+    if (Extension && EndpointProperties->PortNumber > 0)
+    {
+        volatile ULONG *PortStatusReg =
+            XHCI_GetPortStatusRegister(Extension, EndpointProperties->PortNumber);
+        if (PortStatusReg)
+        {
+            ULONG PortValue = READ_REGISTER_ULONG(PortStatusReg);
+            ULONG PortSpeed =
+                (PortValue & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT;
+
+            if (PortSpeed != 0)
+                SpeedCode = PortSpeed;
+        }
+    }
+
+    if (SpeedCode == 0)
+        SpeedCode = XHCI_MapDeviceSpeed(EndpointProperties->DeviceSpeed);
+
     RouteString = XHCI_BuildRouteString(Extension, EndpointProperties);
     XhciSlotContextSetRoute(SlotCtx, RouteString);
     XhciSlotContextSetSpeed(SlotCtx, SpeedCode);
@@ -2268,6 +2517,27 @@ XHCI_PrepareDefaultControlContext(
     EpCtx = &InputCtx->EndpointContext[0];
     MaxPacketSize = EndpointProperties->MaxPacketSize ?
                     EndpointProperties->MaxPacketSize : 8;
+
+    /*
+     * USBPORT is responsible for programming a spec‑compliant EP0 MPS
+     * into EndpointProperties based on the device descriptor and speed
+     * (64 bytes for High‑Speed, 512 bytes for SuperSpeed). The miniport
+     * trusts that value and only logs obviously invalid combinations so
+     * that we can catch stack bugs without silently "fixing" them here.
+     */
+    if (SpeedCode == XHCI_PORTSC_SPEED_HIGH &&
+        MaxPacketSize != USB_DEFAULT_MAX_PACKET)
+    {
+        DPRINT1("usbxhci: HS EP0 context has MPS=%lu (expected 64)\n",
+                MaxPacketSize);
+    }
+
+    if (SpeedCode == XHCI_PORTSC_SPEED_SUPER &&
+        MaxPacketSize != 512)
+    {
+        DPRINT1("usbxhci: SS EP0 context has MPS=%lu (expected 512)\n",
+                MaxPacketSize);
+    }
 
     if (Slot->Ep0TransferRing.PhysicalAddress.QuadPart)
     {
@@ -2362,7 +2632,10 @@ XHCI_BringupDefaultControlEndpoint(
                               &SlotId,
                               &CompletionCode);
     if (Status != MP_STATUS_SUCCESS)
+    {
+        DPRINT1("usbxhci: EnableSlot failed for EP0 (Status=%lu)\n", Status);
         return Status;
+    }
 
     Slot = XHCI_GetSlot(Extension, SlotId);
     if (!Slot || !Slot->InUse)
@@ -2381,6 +2654,44 @@ XHCI_BringupDefaultControlEndpoint(
                               &CompletionCode);
     if (Status != MP_STATUS_SUCCESS)
     {
+        UCHAR Cc = (UCHAR)CompletionCode;
+
+        DPRINT1("usbxhci: AddressDevice failed for slot %u (Status=%lu, CompletionCode=%lu, Port=%u, MPS=%lu)\n",
+                Slot ? Slot->SlotId : 0,
+                Status,
+                CompletionCode,
+                EndpointProperties->PortNumber,
+                EndpointProperties->MaxPacketSize);
+
+        if (Cc == XHCI_COMPLETION_CONTEXT_ERROR && Slot)
+        {
+            XHCI_DumpAddressDeviceContext(Extension,
+                                          Slot,
+                                          0,
+                                          EndpointProperties->PortNumber,
+                                          Cc);
+            XHCI_DumpControllerState(Extension,
+                                     "EP0 AddressDevice CONTEXT_ERROR");
+
+            Slot->Ep0ContextErrorCount++;
+            DPRINT1("usbxhci: EP0 CONTEXT_ERROR count for slot %u is now %lu\n",
+                    Slot->SlotId,
+                    Slot->Ep0ContextErrorCount);
+
+            if (Slot->Ep0ContextErrorCount >= 3)
+            {
+                DPRINT1("usbxhci: repeated EP0 CONTEXT_ERRORs on slot %u, marking controller fatal\n",
+                        Slot->SlotId);
+                Extension->FatalError = TRUE;
+                XHCI_ShutdownController(Extension, TRUE);
+                Status = MP_STATUS_HW_ERROR;
+            }
+            else
+            {
+                Status = MP_STATUS_FAILURE;
+            }
+        }
+
         /* Best-effort cleanup – ignore failure. */
         XHCI_SendCommand(Extension,
                          XHCI_TRB_TYPE_DISABLE_SLOT,
@@ -2605,6 +2916,127 @@ XHCI_FindExtendedCapability(
 
 static
 VOID
+XHCI_BuildProtocolPortMap(
+    _Inout_ PXHCI_EXTENSION Extension)
+{
+    PUCHAR Base;
+    ULONG Offset;
+    ULONG CapValue;
+    ULONG Iterations;
+
+    if (!Extension || !Extension->CapabilityRegisters)
+        return;
+
+    RtlZeroMemory(Extension->PortProtocol, sizeof(Extension->PortProtocol));
+    Extension->ProtocolSegmentCount = 0;
+
+    Offset = XHCI_HCC_EXT_CAP_PTR(Extension->CapabilityRegisters->HccParams);
+    if (Offset == 0)
+        return;
+
+    /* HCC extended-capability pointer is in dwords, convert to bytes */
+    Offset <<= 2;
+    Base = (PUCHAR)Extension->CapabilityRegisters;
+    Iterations = 0;
+
+    while (Offset && Iterations++ < 64)
+    {
+        volatile ULONG *CapReg = (volatile ULONG *)(Base + Offset);
+
+        CapValue = READ_REGISTER_ULONG(CapReg);
+
+        if (XHCI_EXT_CAP_ID(CapValue) == XHCI_EXT_CAP_ID_PROTOCOL)
+        {
+            PXHCI_PROTOCOL_CAPABILITY ProtoCap;
+            ULONG Revision;
+            ULONG PortInfo;
+            UCHAR Major;
+            UCHAR Minor;
+            UCHAR PortOffset;
+            UCHAR PortCount;
+            UCHAR ProtocolType;
+            UCHAR Index;
+
+            ProtoCap = (PXHCI_PROTOCOL_CAPABILITY)CapReg;
+            Revision = READ_REGISTER_ULONG(&ProtoCap->Revision);
+            PortInfo = READ_REGISTER_ULONG(&ProtoCap->PortInfo);
+
+            Major = (UCHAR)XHCI_EXT_PORT_MAJOR(Revision);
+            Minor = (UCHAR)XHCI_EXT_PORT_MINOR(Revision);
+            PortOffset = (UCHAR)XHCI_EXT_PORT_OFFSET(PortInfo);
+            PortCount = (UCHAR)XHCI_EXT_PORT_COUNT(PortInfo);
+
+            if (PortOffset != 0 && PortCount != 0)
+            {
+                ProtocolType = (Major >= 3) ? 3 : 2;
+
+                for (Index = 0; Index < PortCount; Index++)
+                {
+                    USHORT PortNumber = (USHORT)(PortOffset + Index);
+
+                    if (PortNumber == 0 ||
+                        PortNumber > Extension->NumberOfPorts ||
+                        PortNumber > XHCI_MAX_PORTS)
+                    {
+                        continue;
+                    }
+
+                    if (ProtocolType >= Extension->PortProtocol[PortNumber])
+                        Extension->PortProtocol[PortNumber] = ProtocolType;
+                }
+
+                if (Extension->ProtocolSegmentCount < XHCI_MAX_PROTOCOL_SEGMENTS)
+                {
+                    PXHCI_PROTOCOL_SEGMENT Segment;
+
+                    Segment = &Extension->ProtocolSegments[Extension->ProtocolSegmentCount++];
+                    Segment->MajorRevision = Major;
+                    Segment->MinorRevision = Minor;
+                    Segment->PortOffset = PortOffset;
+                    Segment->PortCount = PortCount;
+                }
+            }
+        }
+
+        if (XHCI_EXT_CAP_NEXT(CapValue) == 0)
+            break;
+
+        Offset += ((ULONG)XHCI_EXT_CAP_NEXT(CapValue) * sizeof(ULONG));
+    }
+
+    if (Extension->ProtocolSegmentCount != 0)
+    {
+        ULONG MaxPort = 0;
+        UCHAR i;
+
+        for (i = 0; i < Extension->ProtocolSegmentCount; i++)
+        {
+            ULONG LastPort;
+
+            LastPort = (ULONG)Extension->ProtocolSegments[i].PortOffset +
+                       (ULONG)Extension->ProtocolSegments[i].PortCount - 1;
+            if (LastPort > MaxPort)
+                MaxPort = LastPort;
+        }
+
+        if (MaxPort != 0 && MaxPort < Extension->NumberOfPorts)
+        {
+            DPRINT1("usbxhci: protocol caps limit root hub ports to %lu (HCS1 reports %lu)\n",
+                    MaxPort,
+                    Extension->NumberOfPorts);
+            Extension->NumberOfPorts = MaxPort;
+        }
+        else if (MaxPort > Extension->NumberOfPorts)
+        {
+            DPRINT1("usbxhci: protocol caps report ports up to %lu, clamping to HCS1 %lu\n",
+                    MaxPort,
+                    Extension->NumberOfPorts);
+        }
+    }
+}
+
+static
+VOID
 XHCI_DisableLegacySupport(
     _Inout_ PXHCI_EXTENSION Extension)
 {
@@ -2784,9 +3216,10 @@ XHCI_QueueCommand(
         XHCI_CommandContextLink(Extension, CommandContext);
     }
 
-    DPRINT1("usbxhci: queue command type=%lu cmdptr=%I64x\n",
-            TrbType,
-            CommandPointer);
+    XHCI_DBG(XHCI_TRACE_COMMANDS,
+             "usbxhci: queue command type=%lu cmdptr=%I64x\n",
+             TrbType,
+             CommandPointer);
 
     XHCI_AdvanceCommandRing(Extension);
     XHCI_RingCommandDoorbell(Extension);
@@ -3007,6 +3440,38 @@ XHCI_HandleCommandTimeout(
     XHCI_ShutdownController(Extension, TRUE);
 }
 
+static const WCHAR XHCI_REG_TRACE_MASK[] = L"XhciTraceMask";
+
+static
+VOID
+XHCI_GetRegistryParameters(
+    _Inout_ PXHCI_EXTENSION Extension)
+{
+#if DBG
+    ULONG ParameterValue = 0;
+    MPSTATUS MpStatus;
+
+    if (!Extension || !XhciRegPacket.UsbPortGetMiniportRegistryKeyValue)
+        return;
+
+    MpStatus = XhciRegPacket.UsbPortGetMiniportRegistryKeyValue(
+        Extension,
+        TRUE,
+        XHCI_REG_TRACE_MASK,
+        sizeof(XHCI_REG_TRACE_MASK),
+        &ParameterValue,
+        sizeof(ParameterValue));
+
+    if (MpStatus == MP_STATUS_SUCCESS)
+    {
+        g_XhciTraceMask = ParameterValue;
+        DPRINT("usbxhci: XhciTraceMask=0x%08lx\n", g_XhciTraceMask);
+    }
+#else
+    UNREFERENCED_PARAMETER(Extension);
+#endif
+}
+
 static MPSTATUS NTAPI
 XHCI_SubmitTransfer(PVOID MiniPortExtension,
                     PVOID EndpointHandle,
@@ -3039,6 +3504,7 @@ XHCI_SubmitTransfer(PVOID MiniPortExtension,
     Transfer->TransferParameters = TransferParameters;
     Transfer->SgList = SgList;
     Transfer->TransferHandle = TransferHandle;
+    Transfer->StreamId = (USHORT)TransferParameters->Reserved2;
     Transfer->RequestedLength = TransferParameters->TransferBufferLength;
     Transfer->UsbdStatus = USBD_STATUS_SUCCESS;
     Transfer->Flags = 0;
@@ -3199,7 +3665,20 @@ XHCI_SubmitControlTransfer(
 
     Trb->Parameter1 = SetupLow;
     Trb->Parameter2 = SetupHigh;
-    Trb->Status = sizeof(USB_DEFAULT_PIPE_SETUP_PACKET);
+    /*
+     * For control transfers with a data stage, program the Setup TRB's
+     * Transfer Length with the expected data-stage length (wLength).
+     * Some xHCI implementations use this field when calculating the
+     * residual byte count reported in the transfer event.
+     */
+    if (HasDataStage)
+    {
+        Trb->Status = TransferParameters->TransferBufferLength;
+    }
+    else
+    {
+        Trb->Status = sizeof(USB_DEFAULT_PIPE_SETUP_PACKET);
+    }
     Control = (XHCI_TRB_TYPE_SETUP_STAGE << XHCI_TRB_TYPE_SHIFT) |
               (Endpoint->TransferRing.CycleState & XHCI_TRB_CYCLE) |
               XHCI_TRB_IDT;
@@ -3277,7 +3756,7 @@ XHCI_SubmitControlTransfer(
     XHCI_RingEndpointDoorbell(Extension,
                                Endpoint->SlotId,
                                Endpoint->DoorbellTarget,
-                               0);
+                               Transfer->StreamId);
 
     return MP_STATUS_SUCCESS;
 
@@ -3343,7 +3822,7 @@ XHCI_SubmitBulkInterruptTransfer(
         XHCI_RingEndpointDoorbell(Extension,
                                    Endpoint->SlotId,
                                    Endpoint->DoorbellTarget,
-                                   0);
+                                   Transfer->StreamId);
         return MP_STATUS_SUCCESS;
     }
 
@@ -3501,7 +3980,7 @@ XHCI_SubmitSgTransfer(
     XHCI_RingEndpointDoorbell(Extension,
                                Endpoint->SlotId,
                                Endpoint->DoorbellTarget,
-                               0);
+                               Transfer->StreamId);
 
     return MP_STATUS_SUCCESS;
 }
@@ -3814,6 +4293,8 @@ XHCI_StartController(PVOID MiniPortExtension,
     DPRINT1("usbxhci: DB offset=%lu RT offset=%lu Doorbell=%p Runtime=%p\n",
             DbOffset, RtOffset, Extension->DoorbellArray, Extension->RuntimeRegisters);
 
+    XHCI_GetRegistryParameters(Extension);
+
     XHCI_DisableLegacySupport(Extension);
     /* Probe for MSI/MSI-X capabilities */
     XHCI_ProbeMsiMsix(Extension);
@@ -3835,6 +4316,7 @@ XHCI_StartController(PVOID MiniPortExtension,
 
     Extension->PendingUsbSts = 0;
     Extension->RhIrqEnabled = TRUE;
+    Extension->RhPendingInvalidate = FALSE;
     Extension->InterruptsEnabled = FALSE;
 
     if (!UsbPortResources->StartVA)
@@ -3912,6 +4394,13 @@ XHCI_StartController(PVOID MiniPortExtension,
     Extension->HciVersion = Extension->CapabilityRegisters->HciVersion;
     Extension->MaxSlots = XHCI_HCS1_MAX_SLOTS(HcsParams1);
     Extension->NumberOfPorts = XHCI_HCS1_MAX_PORTS(HcsParams1);
+    if (Extension->MaxSlots == 0 || Extension->NumberOfPorts == 0)
+    {
+        DPRINT1("usbxhci: controller reports MaxSlots=%lu NumberOfPorts=%lu, treating as unsupported\n",
+                Extension->MaxSlots,
+                Extension->NumberOfPorts);
+        return MP_STATUS_NOT_SUPPORTED;
+    }
     for (Port = 0; Port <= XHCI_MAX_PORTS; Port++)
         Extension->PortLinkState[Port] = XHCI_INVALID_LINK_STATE;
     if (Extension->NumberOfPorts > XHCI_MAX_PORTS)
@@ -3922,6 +4411,7 @@ XHCI_StartController(PVOID MiniPortExtension,
         Extension->NumberOfPorts = XHCI_MAX_PORTS;
     }
     Extension->PortPowerControl = (BOOLEAN)XHCI_HCS1_PPC(HcsParams1);
+    XHCI_BuildProtocolPortMap(Extension);
 
     Extension->MaxScratchpadBuffers = XHCI_HCS2_MAX_SCRATCH(HcsParams2);
     Extension->Supports64Bit = (BOOLEAN)(XHCI_HCC_64BIT_ADDR(HccParams) != 0);
@@ -3939,6 +4429,8 @@ XHCI_StartController(PVOID MiniPortExtension,
             XHCI_MAX_SCRATCHPADS);
         Extension->ScratchpadCount = XHCI_MAX_SCRATCHPADS;
     }
+    Extension->MaxU1ExitLatency = (UCHAR)XHCI_HCS3_U1_LATENCY(HcsParams3);
+    Extension->MaxU2ExitLatency = (USHORT)XHCI_HCS3_U2_LATENCY(HcsParams3);
 
     {
         ULONG ErstCapValue = XHCI_HCS2_ERST_MAX(HcsParams2);
@@ -3999,6 +4491,7 @@ XHCI_StartController(PVOID MiniPortExtension,
         return Status;
 
     XHCI_PowerOnAllPorts(Extension);
+    XHCI_ConfigureAllPortsLpm(Extension);
 
     if (Extension->OperationalRegisters)
     {
@@ -4109,6 +4602,7 @@ XHCI_StopController(PVOID MiniPortExtension,
 
     Extension->PendingUsbSts = 0;
     Extension->RhIrqEnabled = FALSE;
+    Extension->RhPendingInvalidate = FALSE;
     Extension->InterruptsEnabled = FALSE;
     Extension->ControllerRunning = FALSE;
     Extension->FatalError = FALSE;
@@ -4204,14 +4698,19 @@ XHCI_InterruptDpc(PVOID MiniPortExtension,
     PXHCI_EXTENSION Extension = MiniPortExtension;
     ULONG Pending;
 
-    DPRINT1("usbxhci: DPC (IRQL=%lu)\n", (ULONG)KeGetCurrentIrql());
+    XHCI_DBG(XHCI_TRACE_EVENTS,
+             "usbxhci: DPC (IRQL=%lu)\n",
+             (ULONG)KeGetCurrentIrql());
 
     if (!Extension)
         return;
 
     Pending = (ULONG)InterlockedExchange((volatile LONG *)&Extension->PendingUsbSts, 0);
-    DPRINT1("usbxhci: DPC pending=%08lx RhIrqEnabled=%u IntsEnabled=%u\n",
-            Pending, Extension->RhIrqEnabled ? 1 : 0, Extension->InterruptsEnabled ? 1 : 0);
+    XHCI_DBG(XHCI_TRACE_EVENTS,
+             "usbxhci: DPC pending=%08lx RhIrqEnabled=%u IntsEnabled=%u\n",
+             Pending,
+             Extension->RhIrqEnabled ? 1 : 0,
+             Extension->InterruptsEnabled ? 1 : 0);
 
     /* Host System Error (HSE) and Host Controller Error (HCE) are both fatal
      * conditions from the perspective of this miniport. If either is seen,
@@ -4230,7 +4729,8 @@ XHCI_InterruptDpc(PVOID MiniPortExtension,
 
     if (Pending & XHCI_USBSTS_EINT)
     {
-        DPRINT1("usbxhci: DPC: EINT set, servicing events\n");
+        XHCI_DBG(XHCI_TRACE_EVENTS,
+                 "usbxhci: DPC: EINT set, servicing events\n");
         XHCI_ServiceEventRing(Extension, TRUE, TRUE);
     }
 
@@ -5210,4 +5710,10 @@ XHCI_RH_EnableIrq(
         return;
 
     Extension->RhIrqEnabled = TRUE;
+    if (Extension->RhPendingInvalidate &&
+        XhciRegPacket.UsbPortInvalidateRootHub)
+    {
+        Extension->RhPendingInvalidate = FALSE;
+        XhciRegPacket.UsbPortInvalidateRootHub(Extension);
+    }
 }

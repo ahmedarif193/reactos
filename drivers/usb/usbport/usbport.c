@@ -2815,7 +2815,8 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
 
     sgList->SgElementCount = ix;
 
-    if (Endpoint->EndpointProperties.DeviceSpeed == UsbHighSpeed)
+    if (Endpoint->EndpointProperties.DeviceSpeed == UsbHighSpeed ||
+        Endpoint->EndpointProperties.DeviceSpeed == UsbSuperSpeed)
     {
         Transfer->Flags |= TRANSFER_FLAG_HIGH_SPEED;
     }

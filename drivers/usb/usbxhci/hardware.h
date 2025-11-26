@@ -40,12 +40,30 @@
 #define XHCI_EXT_CAP_ID(cap)       ((cap) & 0xFF)
 #define XHCI_EXT_CAP_NEXT(cap)     (((cap) >> 8) & 0xFF)
 #define XHCI_EXT_CAP_ID_LEGACY     0x01
+#define XHCI_EXT_CAP_ID_PROTOCOL   0x02
 #define XHCI_LEGACY_SUPPORT_OFFSET 0x00
 #define XHCI_LEGACY_CONTROL_OFFSET 0x04
 #define XHCI_HC_BIOS_OWNED         (1u << 16)
 #define XHCI_HC_OS_OWNED           (1u << 24)
 #define XHCI_LEGACY_DISABLE_SMI   (((0x7u) << 1) | ((0xFFu) << 5) | ((0x7u) << 17))
 #define XHCI_LEGACY_SMI_EVENTS     (0x7u << 29)
+
+/*
+ * Supported Protocol extended capability (xHCI 1.0+).
+ *
+ * Each instance describes a protocol revision (USB 2.x, USB 3.x, ...)
+ * and the contiguous range of ports that support it.
+ */
+typedef struct _XHCI_PROTOCOL_CAPABILITY {
+    volatile ULONG Revision;
+    volatile ULONG NameString;
+    volatile ULONG PortInfo;
+} XHCI_PROTOCOL_CAPABILITY, *PXHCI_PROTOCOL_CAPABILITY;
+
+#define XHCI_EXT_PORT_MAJOR(_rev)    (((_rev) >> 24) & 0xFF)
+#define XHCI_EXT_PORT_MINOR(_rev)    (((_rev) >> 16) & 0xFF)
+#define XHCI_EXT_PORT_OFFSET(_info)  ((_info) & 0xFF)
+#define XHCI_EXT_PORT_COUNT(_info)   (((_info) >> 8) & 0xFF)
 
 #define XHCI_USBCMD_RS             0x00000001
 #define XHCI_USBCMD_HCRST          0x00000002
@@ -104,6 +122,12 @@
 #define XHCI_PORTSC_DR             0x40000000
 #define XHCI_PORTSC_WPR            0x80000000
 #define XHCI_PORTSC_WRITE_MASK     0x80FF01FF
+
+/* Per‑port power management (PORTPMSC) – SuperSpeed ports */
+#define XHCI_PORTPMSC_U1_TIMEOUT_MASK   0x0000FF00u
+#define XHCI_PORTPMSC_U1_TIMEOUT_SHIFT  8
+#define XHCI_PORTPMSC_U2_TIMEOUT_MASK   0xFFFF0000u
+#define XHCI_PORTPMSC_U2_TIMEOUT_SHIFT  16
 
 #define XHCI_TRB_TYPE_SHIFT        10
 #define XHCI_TRB_TYPE_MASK         (0x3F << XHCI_TRB_TYPE_SHIFT)
@@ -425,6 +449,7 @@ XhciEndpointContextInit(
 #define XHCI_MAX_TRB_TRANSFER_LENGTH XHCI_TRB_LEN_MASK
 
 #define XHCI_COMPLETION_SUCCESS             1
+#define XHCI_COMPLETION_CONTEXT_ERROR       5
 #define XHCI_COMPLETION_STALL_ERROR         6
 #define XHCI_COMPLETION_SHORT_PACKET       13
 #define XHCI_COMPLETION_STOPPED            26

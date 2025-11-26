@@ -241,8 +241,10 @@ USBHI_QueryDeviceInformation(IN PVOID BusContext,
     {
         DeviceInfo->DeviceType = Usb11Device;
     }
-    else if (DeviceHandle->DeviceSpeed == UsbHighSpeed)
+    else
     {
+        /* Treat high-speed and SuperSpeed devices as Usb20Device
+         * for compatibility with the Windows USB stack. */
         DeviceInfo->DeviceType = Usb20Device;
     }
 

@@ -142,6 +142,12 @@ typedef enum _USB_CONTROLLER_FLAVOR {
 
 #endif
 
+/* Windows 8+ USB 3.0 stream and chained-MDL URB functions (Win10 SDK values) */
+#define URB_FUNCTION_OPEN_STATIC_STREAMS                          0x0035
+#define URB_FUNCTION_CLOSE_STATIC_STREAMS                         0x0036
+#define URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER_USING_CHAINED_MDL 0x0037
+#define URB_FUNCTION_ISOCH_TRANSFER_USING_CHAINED_MDL             0x0038
+
 #define URB_FUNCTION_RESERVE_0X002B                     0x002B
 #define URB_FUNCTION_RESERVE_0X002C                     0x002C
 #define URB_FUNCTION_RESERVE_0X002D                     0x002D
@@ -526,6 +532,25 @@ struct _URB_ISOCH_TRANSFER {
   USBD_ISO_PACKET_DESCRIPTOR IsoPacket[1];
 };
 
+/* Static streams (USB 3.x, Win8+) */
+#define URB_OPEN_STATIC_STREAMS_VERSION_100 0x100
+
+typedef struct _USBD_STREAM_INFORMATION {
+  USBD_PIPE_HANDLE PipeHandle;
+  ULONG StreamID;
+  ULONG MaximumTransferSize;
+  ULONG PipeFlags;
+} USBD_STREAM_INFORMATION, *PUSBD_STREAM_INFORMATION;
+
+struct _URB_OPEN_STATIC_STREAMS {
+  struct _URB_HEADER Hdr;
+  USBD_PIPE_HANDLE PipeHandle;
+  ULONG NumberOfStreams;
+  USHORT StreamInfoVersion;
+  USHORT StreamInfoSize;
+  PUSBD_STREAM_INFORMATION Streams;
+};
+
 typedef struct _URB {
   __GNU_EXTENSION union {
     struct _URB_HEADER UrbHeader;
@@ -551,5 +576,6 @@ typedef struct _URB {
 #if (_WIN32_WINNT >= 0x0501)
     struct _URB_OS_FEATURE_DESCRIPTOR_REQUEST UrbOSFeatureDescriptorRequest;
 #endif
+    struct _URB_OPEN_STATIC_STREAMS UrbOpenStaticStreams;
   };
 } URB, *PURB;

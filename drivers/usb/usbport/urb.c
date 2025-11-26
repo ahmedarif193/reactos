@@ -980,6 +980,14 @@ USBPORT_HandleSubmitURB(IN PDEVICE_OBJECT PdoDevice,
             return USBPORT_USBDStatusToNtStatus(Urb,
                                                 USBD_STATUS_INVALID_URB_FUNCTION);
 
+        case URB_FUNCTION_OPEN_STATIC_STREAMS:
+        case URB_FUNCTION_CLOSE_STATIC_STREAMS:
+        case URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER_USING_CHAINED_MDL:
+        case URB_FUNCTION_ISOCH_TRANSFER_USING_CHAINED_MDL:
+            DPRINT1("USBPORT_HandleSubmitURB: stream/chained-MDL URB function 0x%02X NOT_SUPPORTED\n",
+                    Function);
+            return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_NOT_SUPPORTED);
+
         case URB_FUNCTION_SYNC_RESET_PIPE_AND_CLEAR_STALL:
             Status = USBPORT_SyncResetPipeAndClearStall(PdoExtension->FdoDevice,
                                                         Irp,

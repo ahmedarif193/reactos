@@ -20,6 +20,46 @@
 
 static NPAGED_LOOKASIDE_LIST RmapLookasideList;
 
+#if DBG
+static ULONG MmRmapDebugIdCounter;
+
+static
+VOID
+MiCheckRmapListLocked(
+    _In_ PFN_NUMBER Page)
+{
+    PMM_RMAP_ENTRY entry = MmGetRmapListHeadPage(Page);
+
+    while (entry)
+    {
+        /* Detect obviously poisoned/freed entries (filled with 0xCC) */
+        {
+            const UCHAR *p = (const UCHAR *)entry;
+            SIZE_T i;
+            BOOLEAN AllCc = TRUE;
+
+            for (i = 0; i < sizeof(*entry); i++)
+            {
+                if (p[i] != 0xCC)
+                {
+                    AllCc = FALSE;
+                    break;
+                }
+            }
+
+            ASSERT(!AllCc);
+        }
+
+        if (!RMAP_IS_SEGMENT(entry->Address))
+        {
+            ASSERT(entry->Process != NULL);
+        }
+
+        entry = entry->Next;
+    }
+}
+#endif
+
 /* FUNCTIONS ****************************************************************/
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -59,6 +99,12 @@ MmPageOutPhysicalAddress(PFN_NUMBER Page)
     PMM_SECTION_SEGMENT Segment;
     LARGE_INTEGER SegmentOffset;
     KIRQL OldIrql;
+
+#if DBG
+    OldIrql = MiAcquirePfnLock();
+    MiCheckRmapListLocked(Page);
+    MiReleasePfnLock(OldIrql);
+#endif
 
 GetEntry:
     OldIrql = MiAcquirePfnLock();
@@ -340,6 +386,15 @@ MmInsertRmap(PFN_NUMBER Page, PEPROCESS Process,
     {
         KeBugCheck(MEMORY_MANAGEMENT);
     }
+
+#if DBG
+    ExpCheckPoolAllocation(new_entry, NonPagedPool, TAG_RMAP);
+    RtlZeroMemory(new_entry, sizeof(*new_entry));
+    new_entry->DebugId = InterlockedIncrementUL(&MmRmapDebugIdCounter);
+    ASSERT(new_entry->State == 0);
+    new_entry->State = 1;
+#endif
+
     new_entry->Address = Address;
     new_entry->Process = (PEPROCESS)Process;
 #if DBG
@@ -434,6 +489,16 @@ MmDeleteRmap(PFN_NUMBER Page, PEPROCESS Process,
                 previous_entry->Next = current_entry->Next;
             }
             MiReleasePfnLock(OldIrql);
+
+#if DBG
+            ExpCheckPoolAllocation(current_entry, NonPagedPool, TAG_RMAP);
+#endif
+
+#if DBG
+            ASSERT(current_entry->State == 1);
+            current_entry->State = 0;
+            RtlFillMemory(current_entry, sizeof(*current_entry), 0xCC);
+#endif
 
             ExFreeToNPagedLookasideList(&RmapLookasideList, current_entry);
             if (!RMAP_IS_SEGMENT(Address))

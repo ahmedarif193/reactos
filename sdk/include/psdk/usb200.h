@@ -107,6 +107,103 @@ typedef struct _USB_DEVICE_QUALIFIER_DESCRIPTOR {
   UCHAR bReserved;
 } USB_DEVICE_QUALIFIER_DESCRIPTOR, *PUSB_DEVICE_QUALIFIER_DESCRIPTOR;
 
+/*
+ * USB 3.0: 9.6.2 Binary Device Object Store (BOS), Table 9-9. BOS Descriptor.
+ */
+typedef struct _USB_BOS_DESCRIPTOR {
+  UCHAR  bLength;
+  UCHAR  bDescriptorType;
+  USHORT wTotalLength;
+  UCHAR  bNumDeviceCaps;
+} USB_BOS_DESCRIPTOR, *PUSB_BOS_DESCRIPTOR;
+
+/*
+ * Descriptor type for BOS, matches Windows and USB 3.x specifications.
+ */
+#define USB_BOS_DESCRIPTOR_TYPE                             0x0F
+
+C_ASSERT(sizeof(USB_BOS_DESCRIPTOR) == 5);
+
+/*
+ * USB 3.x Device Capability Type Codes (subset used by ReactOS).
+ */
+#define USB_DEVICE_CAPABILITY_WIRELESS_USB                  0x01
+#define USB_DEVICE_CAPABILITY_USB20_EXTENSION               0x02
+#define USB_DEVICE_CAPABILITY_SUPERSPEED_USB                0x03
+#define USB_DEVICE_CAPABILITY_CONTAINER_ID                  0x04
+
+/*
+ * USB 2.0 ECN: Link Power Management (LPM) / USB 3.0: USB 2.0 Extension Descriptor.
+ * Keep layout in sync with Windows 10 usbspec.h.
+ */
+typedef struct _USB_DEVICE_CAPABILITY_USB20_EXTENSION_DESCRIPTOR {
+  UCHAR bLength;
+  UCHAR bDescriptorType;
+  UCHAR bDevCapabilityType;
+  union {
+    ULONG AsUlong;
+    struct {
+      ULONG Reserved:1;
+      ULONG LPMCapable:1;
+      ULONG BESLAndAlternateHIRDSupported:1;
+      ULONG BaselineBESLValid:1;
+      ULONG DeepBESLValid:1;
+      ULONG Reserved1:3;
+      ULONG BaselineBESL:4;
+      ULONG DeepBESL:4;
+      ULONG Reserved2:16;
+    };
+  } bmAttributes;
+} USB_DEVICE_CAPABILITY_USB20_EXTENSION_DESCRIPTOR,
+  *PUSB_DEVICE_CAPABILITY_USB20_EXTENSION_DESCRIPTOR;
+
+C_ASSERT(sizeof(USB_DEVICE_CAPABILITY_USB20_EXTENSION_DESCRIPTOR) == 7);
+
+#define USB_DEVICE_CAPABILITY_USB20_EXTENSION_BMATTRIBUTES_RESERVED_MASK 0xFFFF00E1
+
+/*
+ * USB 3.0: SuperSpeed USB Device Capability descriptor.
+ */
+typedef struct _USB_DEVICE_CAPABILITY_SUPERSPEED_USB_DESCRIPTOR {
+  UCHAR  bLength;
+  UCHAR  bDescriptorType;
+  UCHAR  bDevCapabilityType;
+  UCHAR  bmAttributes;
+  USHORT wSpeedsSupported;
+  UCHAR  bFunctionalitySupport;
+  UCHAR  bU1DevExitLat;
+  USHORT wU2DevExitLat;
+} USB_DEVICE_CAPABILITY_SUPERSPEED_USB_DESCRIPTOR,
+  *PUSB_DEVICE_CAPABILITY_SUPERSPEED_USB_DESCRIPTOR;
+
+#define USB_DEVICE_CAPABILITY_SUPERSPEED_BMATTRIBUTES_RESERVED_MASK 0xFD
+#define USB_DEVICE_CAPABILITY_SUPERSPEED_BMATTRIBUTES_LTM_CAPABLE   0x02
+
+#define USB_DEVICE_CAPABILITY_SUPERSPEED_SPEEDS_SUPPORTED_RESERVED_MASK  0xFFF0
+#define USB_DEVICE_CAPABILITY_SUPERSPEED_SPEEDS_SUPPORTED_LOW            0x0001
+#define USB_DEVICE_CAPABILITY_SUPERSPEED_SPEEDS_SUPPORTED_FULL           0x0002
+#define USB_DEVICE_CAPABILITY_SUPERSPEED_SPEEDS_SUPPORTED_HIGH           0x0004
+#define USB_DEVICE_CAPABILITY_SUPERSPEED_SPEEDS_SUPPORTED_SUPER          0x0008
+
+#define USB_DEVICE_CAPABILITY_SUPERSPEED_U1_DEVICE_EXIT_MAX_VALUE 0x0A
+#define USB_DEVICE_CAPABILITY_SUPERSPEED_U2_DEVICE_EXIT_MAX_VALUE 0x07FF
+
+C_ASSERT(sizeof(USB_DEVICE_CAPABILITY_SUPERSPEED_USB_DESCRIPTOR) == 10);
+
+/*
+ * USB 3.0: Container ID Device Capability descriptor.
+ */
+typedef struct _USB_DEVICE_CAPABILITY_CONTAINER_ID_DESCRIPTOR {
+  UCHAR bLength;
+  UCHAR bDescriptorType;
+  UCHAR bDevCapabilityType;
+  UCHAR bReserved;
+  UCHAR ContainerID[16];
+} USB_DEVICE_CAPABILITY_CONTAINER_ID_DESCRIPTOR,
+  *PUSB_DEVICE_CAPABILITY_CONTAINER_ID_DESCRIPTOR;
+
+C_ASSERT(sizeof(USB_DEVICE_CAPABILITY_CONTAINER_ID_DESCRIPTOR) == 20);
+
 typedef union _USB_HIGH_SPEED_MAXPACKET {
   struct _MP {
     USHORT MaxPacket:11;
@@ -267,6 +364,27 @@ typedef union _USB_HUB_CHANGE {
 } USB_HUB_CHANGE, *PUSB_HUB_CHANGE;
 
 C_ASSERT(sizeof(USB_HUB_CHANGE) == sizeof(USHORT));
+
+/*
+ * USB 3.0 Hub Descriptor
+ *
+ * Modeled after the USB 3.x specification (Hub Descriptor, Table 10-XX)
+ * and kept layout-compatible with Windows 10's internal definition.
+ * The exact bitmap semantics of the removable/power masks are not used
+ * by the current ReactOS stack; they are treated as opaque bytes.
+ */
+typedef struct _USB_30_HUB_DESCRIPTOR {
+  UCHAR  bLength;
+  UCHAR  bDescriptorType;      /* USB_30_HUB_DESCRIPTOR_TYPE (0x2A) */
+  UCHAR  bNumberOfPorts;
+  USHORT wHubCharacteristics;
+  UCHAR  bPowerOnToPowerGood;
+  UCHAR  bHubControlCurrent;
+  UCHAR  bHubHdrDecLat;
+  USHORT wHubDelay;
+  UCHAR  DeviceRemovable[64];
+} USB_30_HUB_DESCRIPTOR, *PUSB_30_HUB_DESCRIPTOR;
+
 
 typedef union _USB_HUB_STATUS_AND_CHANGE {
   ULONG AsUlong32;

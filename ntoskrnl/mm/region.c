@@ -47,15 +47,20 @@ MmSplitRegion(PMM_REGION InitialRegion, PVOID InitialBaseAddress,
     {
         return(NULL);
     }
+    MiRegionInitDebug(NewRegion2);
+    ExpCheckPoolAllocation(NewRegion2, NonPagedPool, TAG_MM_REGION);
 
     /* Create the new region. */
     NewRegion1 = ExAllocatePoolWithTag(NonPagedPool, sizeof(MM_REGION),
                                        TAG_MM_REGION);
     if (NewRegion1 == NULL)
     {
+        MiRegionCheckDebug(NewRegion2);
         ExFreePoolWithTag(NewRegion2, TAG_MM_REGION);
         return(NULL);
     }
+    MiRegionInitDebug(NewRegion1);
+    ExpCheckPoolAllocation(NewRegion1, NonPagedPool, TAG_MM_REGION);
     NewRegion1->Type = NewType;
     NewRegion1->Protect = NewProtect;
     InternalLength = ((char*)InitialBaseAddress + InitialRegion->Length) - (char*)StartAddress;
@@ -86,6 +91,7 @@ MmSplitRegion(PMM_REGION InitialRegion, PVOID InitialBaseAddress,
     }
     else
     {
+        MiRegionCheckDebug(NewRegion2);
         ExFreePoolWithTag(NewRegion2, TAG_MM_REGION);
     }
 
@@ -93,6 +99,7 @@ MmSplitRegion(PMM_REGION InitialRegion, PVOID InitialBaseAddress,
     if (InitialBaseAddress == StartAddress)
     {
         RemoveEntryList(&InitialRegion->RegionListEntry);
+        MiRegionCheckDebug(InitialRegion);
         ExFreePoolWithTag(InitialRegion, TAG_MM_REGION);
     }
     else
@@ -154,6 +161,23 @@ MmAlterRegion(PMMSUPPORT AddressSpace, PVOID BaseAddress,
      * Free any complete regions that are containing in the range of addresses
      * and call the helper function to actually do the changes.
      */
+#if DBG
+    /* Validate region list before we start mutating it */
+    {
+        PLIST_ENTRY Entry;
+        PVOID Base = BaseAddress;
+
+        for (Entry = RegionListHead->Flink;
+             Entry != RegionListHead;
+             Entry = Entry->Flink)
+        {
+            PMM_REGION Region = CONTAINING_RECORD(Entry, MM_REGION, RegionListEntry);
+            MiRegionCheckDebug(Region);
+            NT_ASSERT(Region->Length != 0);
+            Base = (PVOID)((ULONG_PTR)Base + Region->Length);
+        }
+    }
+#endif
     CurrentEntry = NewRegion->RegionListEntry.Flink;
     CurrentRegion = CONTAINING_RECORD(CurrentEntry, MM_REGION,
                                       RegionListEntry);
@@ -172,9 +196,15 @@ MmAlterRegion(PMMSUPPORT AddressSpace, PVOID BaseAddress,
         CurrentBaseAddress = (PVOID)((ULONG_PTR)CurrentBaseAddress + CurrentRegion->Length);
         NewRegion->Length += CurrentRegion->Length;
         RemainingLength -= CurrentRegion->Length;
-        CurrentEntry = CurrentEntry->Flink;
+        PLIST_ENTRY NextEntry = CurrentEntry->Flink;
+        MiRegionCheckDebug(CurrentRegion);
         RemoveEntryList(&CurrentRegion->RegionListEntry);
         ExFreePoolWithTag(CurrentRegion, TAG_MM_REGION);
+        CurrentEntry = NextEntry;
+        if (CurrentEntry == RegionListHead)
+        {
+            break;
+        }
         CurrentRegion = CONTAINING_RECORD(CurrentEntry, MM_REGION,
                                           RegionListEntry);
     }
@@ -248,6 +278,8 @@ MmInitializeRegion(PLIST_ENTRY RegionListHead, SIZE_T Length, ULONG Type,
     Region->Type = Type;
     Region->Protect = Protect;
     Region->Length = Length;
+    MiRegionInitDebug(Region);
+    ExpCheckPoolAllocation(Region, NonPagedPool, TAG_MM_REGION);
     InitializeListHead(RegionListHead);
     InsertHeadList(RegionListHead, &Region->RegionListEntry);
 }

@@ -363,6 +363,39 @@ typedef struct _USB_NODE_CONNECTION_INFORMATION_EX {
 
 C_ASSERT(sizeof(USB_NODE_CONNECTION_INFORMATION_EX) == sizeof(USB_NODE_CONNECTION_INFORMATION));
 
+#pragma warning(push)
+#pragma warning(disable:4201)
+
+typedef union _USB_PROTOCOLS {
+  ULONG ul;
+  struct {
+    ULONG Usb110 : 1;
+    ULONG Usb200 : 1;
+    ULONG Usb300 : 1;
+    ULONG ReservedMBZ : 29;
+  };
+} USB_PROTOCOLS, *PUSB_PROTOCOLS;
+
+typedef union _USB_NODE_CONNECTION_INFORMATION_EX_V2_FLAGS {
+  ULONG ul;
+  struct {
+    ULONG DeviceIsOperatingAtSuperSpeedOrHigher : 1;
+    ULONG DeviceIsSuperSpeedCapableOrHigher : 1;
+    ULONG DeviceIsOperatingAtSuperSpeedPlusOrHigher : 1;
+    ULONG DeviceIsSuperSpeedPlusCapableOrHigher : 1;
+    ULONG ReservedMBZ : 28;
+  };
+} USB_NODE_CONNECTION_INFORMATION_EX_V2_FLAGS, *PUSB_NODE_CONNECTION_INFORMATION_EX_V2_FLAGS;
+
+#pragma warning(pop)
+
+typedef struct _USB_NODE_CONNECTION_INFORMATION_EX_V2 {
+  ULONG ConnectionIndex;
+  ULONG Length;
+  USB_PROTOCOLS SupportedUsbProtocols;
+  USB_NODE_CONNECTION_INFORMATION_EX_V2_FLAGS Flags;
+} USB_NODE_CONNECTION_INFORMATION_EX_V2, *PUSB_NODE_CONNECTION_INFORMATION_EX_V2;
+
 #endif
 
 #if (_WIN32_WINNT >= 0x0600)
@@ -421,6 +454,10 @@ typedef struct _HUB_DEVICE_CONFIG_INFO_V1 {
 } HUB_DEVICE_CONFIG_INFO, *PHUB_DEVICE_CONFIG_INFO;
 
 #endif
+
+#define IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2 \
+  CTL_CODE(FILE_DEVICE_USB, USB_GET_NODE_CONNECTION_INFORMATION_EX_V2, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
 
 typedef struct _HCD_ISO_STAT_COUNTERS {
   USHORT LateUrbs;

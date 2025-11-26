@@ -942,6 +942,99 @@ Exit:
     return Status;
 }
 
+static
+NTSTATUS
+USBH_IoctlGetNodeConnectionInformationExV2(
+    _In_ PUSBHUB_FDO_EXTENSION HubExtension,
+    _In_ PIRP Irp)
+{
+    PIO_STACK_LOCATION IoStack;
+    ULONG BufferLength;
+    PUSB_NODE_CONNECTION_INFORMATION_EX_V2 Info;
+    ULONG ConnectionIndex;
+    ULONG NumPorts;
+    PUSBHUB_PORT_DATA PortData;
+    PDEVICE_OBJECT DeviceObject;
+    PUSBHUB_PORT_PDO_EXTENSION PortExtension;
+    USB_PROTOCOLS Protocols;
+    USB_NODE_CONNECTION_INFORMATION_EX_V2_FLAGS Flags;
+    NTSTATUS Status;
+
+    DPRINT("USBH_IoctlGetNodeConnectionInformationExV2 ... \n");
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    BufferLength = IoStack->Parameters.DeviceIoControl.OutputBufferLength;
+
+    if (BufferLength < sizeof(USB_NODE_CONNECTION_INFORMATION_EX_V2) ||
+        !HubExtension->HubDescriptor ||
+        HubExtension->HubDescriptor->bNumberOfPorts == 0)
+    {
+        Status = STATUS_BUFFER_TOO_SMALL;
+        goto Exit;
+    }
+
+    Info = (PUSB_NODE_CONNECTION_INFORMATION_EX_V2)Irp->AssociatedIrp.SystemBuffer;
+    ConnectionIndex = Info->ConnectionIndex;
+
+    RtlZeroMemory(Info, sizeof(USB_NODE_CONNECTION_INFORMATION_EX_V2));
+    Info->ConnectionIndex = ConnectionIndex;
+    Info->Length = sizeof(USB_NODE_CONNECTION_INFORMATION_EX_V2);
+
+    Status = STATUS_INVALID_PARAMETER;
+
+    NumPorts = HubExtension->HubDescriptor->bNumberOfPorts;
+    if (ConnectionIndex == 0 || ConnectionIndex > NumPorts)
+        goto Exit;
+
+    PortData = HubExtension->PortData + (ConnectionIndex - 1);
+    DeviceObject = PortData->DeviceObject;
+
+    Protocols.ul = 0;
+    Flags.ul = 0;
+
+    /* Assume all hubs support USB 1.1 and 2.0 signalling on downstream ports. */
+    Protocols.Usb110 = 1;
+    Protocols.Usb200 = 1;
+
+    /* If this is a USB 3.x hub, advertise SuperSpeed support on all ports. */
+    if (HubExtension->HubDescriptor->bDescriptorType == USB_30_HUB_DESCRIPTOR_TYPE)
+        Protocols.Usb300 = 1;
+
+    if (DeviceObject)
+    {
+        PortExtension = DeviceObject->DeviceExtension;
+
+        if (PortData->ConnectionStatus == DeviceConnected)
+        {
+            USB_PORT_STATUS PortStatus = PortData->PortStatus.PortStatus;
+
+            /* Operating at SuperSpeed if we are on a USB 3 hub and the negotiated
+             * link speed is SuperSpeed (code 4 in USB_30_PORT_STATUS). */
+            if (HubExtension->HubDescriptor->bDescriptorType == USB_30_HUB_DESCRIPTOR_TYPE &&
+                PortStatus.Usb30PortStatus.NegotiatedDeviceSpeed == 4)
+            {
+                Flags.DeviceIsOperatingAtSuperSpeedOrHigher = 1;
+            }
+
+            /* SuperSpeed capable if the device advertises USB 3.x in its bcdUSB. */
+            if (PortExtension->DeviceDescriptor.bcdUSB >= 0x0300)
+            {
+                Flags.DeviceIsSuperSpeedCapableOrHigher = 1;
+            }
+        }
+    }
+
+    Info->SupportedUsbProtocols = Protocols;
+    Info->Flags = Flags;
+
+    Irp->IoStatus.Information = sizeof(USB_NODE_CONNECTION_INFORMATION_EX_V2);
+    Status = STATUS_SUCCESS;
+
+Exit:
+    USBH_CompleteIrp(Irp, Status);
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 USBH_IoctlGetNodeConnectionDriverKeyName(IN PUSBHUB_FDO_EXTENSION HubExtension,
@@ -1225,6 +1318,18 @@ USBH_DeviceControl(IN PUSBHUB_FDO_EXTENSION HubExtension,
                 Status = USBH_IoctlGetNodeConnectionInformation(HubExtension,
                                                                 Irp,
                                                                 TRUE);
+                break;
+            }
+
+            USBH_CompleteIrp(Irp, Status);
+            break;
+
+        case IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2:
+            DPRINT("USBH_DeviceControl: IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2\n");
+            if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STOPPED))
+            {
+                Status = USBH_IoctlGetNodeConnectionInformationExV2(HubExtension,
+                                                                    Irp);
                 break;
             }
 

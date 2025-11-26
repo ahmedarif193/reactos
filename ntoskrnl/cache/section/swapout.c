@@ -390,145 +390,176 @@ MmpPageOutPhysicalAddress(PFN_NUMBER Page)
     Dirty = MmIsDirtyPageRmap(Page);
 
     DPRINTC("Trying to unmap all instances of %x\n", Page);
-    ExAcquireFastMutex(&RmapListLock);
-    entry = MmGetRmapListHeadPage(Page);
-
-    // Entry and Segment might be null here in the case that the page
-    // is new and is in the process of being swapped in
-    if (!entry && !Segment)
     {
-        Status = STATUS_UNSUCCESSFUL;
-        DPRINT1("Page %x is in transit\n", Page);
-        ExReleaseFastMutex(&RmapListLock);
-        goto bail;
-    }
+        BOOLEAN First = TRUE;
+        PVOID LastAddress = NULL;
+        PEPROCESS LastProcess = NULL;
 
-    while (entry != NULL && NT_SUCCESS(Status))
-    {
-        Process = entry->Process;
-        Address = entry->Address;
-
-        DPRINTC("Process %p Address %p Page %x\n", Process, Address, Page);
-
-        if (RMAP_IS_SEGMENT(Address))
+        while (NT_SUCCESS(Status))
         {
-            entry = entry->Next;
-            continue;
-        }
+            KIRQL OldIrql = MiAcquirePfnLock();
 
-        if (Process && Address < MmSystemRangeStart)
-        {
-            /* Make sure we don't try to page out part of an exiting process */
-            if (PspIsProcessExiting(Process))
+            entry = MmGetRmapListHeadPage(Page);
+
+            /* Page may be in transit with no segment and no rmaps */
+            if (!entry)
             {
-                DPRINT("bail\n");
-                ExReleaseFastMutex(&RmapListLock);
-                goto bail;
-            }
-            ObReferenceObject(Process);
-            ProcRef = TRUE;
-            AddressSpace = &Process->Vm;
-        }
-        else
-        {
-            AddressSpace = MmGetKernelAddressSpace();
-        }
-        ExReleaseFastMutex(&RmapListLock);
-
-        RtlZeroMemory(&Resources, sizeof(Resources));
-
-        if ((((ULONG_PTR)Address) & 0xFFF) != 0)
-        {
-            KeBugCheck(MEMORY_MANAGEMENT);
-        }
-
-        do
-        {
-            MmLockAddressSpace(AddressSpace);
-
-            MemoryArea = MmLocateMemoryAreaByAddress(AddressSpace, Address);
-            if (MemoryArea == NULL || MemoryArea->DeleteInProgress)
-            {
-                Status = STATUS_UNSUCCESSFUL;
-                MmUnlockAddressSpace(AddressSpace);
-                DPRINTC("bail\n");
-                goto bail;
-            }
-
-            DPRINTC("Type %x (%p -> %p)\n",
-                    MemoryArea->Type,
-                    MA_GetStartingAddress(MemoryArea),
-                    MA_GetEndingAddress(MemoryArea));
-
-            Resources.DoAcquisition = NULL;
-            Resources.Page[0] = Page;
-
-            ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
-
-            DPRINT("%p:%p, page %x %x\n",
-                   Process,
-                   Address,
-                   Page,
-                   Resources.Page[0]);
-
-            PageDirty = FALSE;
-
-            Status = MmPageOutCacheSection(AddressSpace,
-                                           MemoryArea,
-                                           Address,
-                                           &PageDirty,
-                                           &Resources);
-
-            Dirty |= PageDirty;
-            DPRINT("%x\n", Status);
-
-            ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
-
-            MmUnlockAddressSpace(AddressSpace);
-
-            if (Status == STATUS_SUCCESS + 1)
-            {
-                // Wait page ... the other guy has it, so we'll just fail for now
-                DPRINT1("Wait entry ... can't continue\n");
-                Status = STATUS_UNSUCCESSFUL;
-                goto bail;
-            }
-            else if (Status == STATUS_MORE_PROCESSING_REQUIRED)
-            {
-                DPRINTC("DoAcquisition %p\n", Resources.DoAcquisition);
-
-                Status = Resources.DoAcquisition(AddressSpace,
-                                                 MemoryArea,
-                                                 &Resources);
-
-                DPRINTC("Status %x\n", Status);
-                if (!NT_SUCCESS(Status))
+                MiReleasePfnLock(OldIrql);
+                if (First && !Segment)
                 {
-                    DPRINT1("bail\n");
+                    Status = STATUS_UNSUCCESSFUL;
+                    DPRINT1("Page %x is in transit\n", Page);
+                }
+                break;
+            }
+
+            First = FALSE;
+
+            /* Find the next non-segment rmap after (LastAddress, LastProcess) */
+            while (entry)
+            {
+                if (RMAP_IS_SEGMENT(entry->Address))
+                {
+                    entry = entry->Next;
+                    continue;
+                }
+
+                if (LastAddress &&
+                    (entry->Address < LastAddress ||
+                     (entry->Address == LastAddress && entry->Process <= LastProcess)))
+                {
+                    entry = entry->Next;
+                    continue;
+                }
+
+                break;
+            }
+
+            if (!entry)
+            {
+                MiReleasePfnLock(OldIrql);
+                break;
+            }
+
+            Process = entry->Process;
+            Address = entry->Address;
+
+            DPRINTC("Process %p Address %p Page %x\n", Process, Address, Page);
+
+            if (Process && Address < MmSystemRangeStart)
+            {
+                /* Make sure we don't try to page out part of an exiting process */
+                if (PspIsProcessExiting(Process))
+                {
+                    MiReleasePfnLock(OldIrql);
+                    DPRINT("bail\n");
+                    Status = STATUS_UNSUCCESSFUL;
                     goto bail;
                 }
-                else
+
+                ObReferenceObject(Process);
+                ProcRef = TRUE;
+                AddressSpace = &Process->Vm;
+            }
+            else
+            {
+                AddressSpace = MmGetKernelAddressSpace();
+            }
+
+            /* Remember progress for the next iteration */
+            LastAddress = Address;
+            LastProcess = Process;
+
+            MiReleasePfnLock(OldIrql);
+
+            RtlZeroMemory(&Resources, sizeof(Resources));
+
+            if ((((ULONG_PTR)Address) & 0xFFF) != 0)
+            {
+                KeBugCheck(MEMORY_MANAGEMENT);
+            }
+
+            do
+            {
+                MmLockAddressSpace(AddressSpace);
+
+                MemoryArea = MmLocateMemoryAreaByAddress(AddressSpace, Address);
+                if (MemoryArea == NULL || MemoryArea->DeleteInProgress)
                 {
-                    Status = STATUS_MM_RESTART_OPERATION;
+                    Status = STATUS_UNSUCCESSFUL;
+                    MmUnlockAddressSpace(AddressSpace);
+                    DPRINTC("bail\n");
+                    goto bail;
+                }
+
+                DPRINTC("Type %x (%p -> %p)\n",
+                        MemoryArea->Type,
+                        MA_GetStartingAddress(MemoryArea),
+                        MA_GetEndingAddress(MemoryArea));
+
+                Resources.DoAcquisition = NULL;
+                Resources.Page[0] = Page;
+
+                ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+
+                DPRINT("%p:%p, page %x %x\n",
+                       Process,
+                       Address,
+                       Page,
+                       Resources.Page[0]);
+
+                PageDirty = FALSE;
+
+                Status = MmPageOutCacheSection(AddressSpace,
+                                               MemoryArea,
+                                               Address,
+                                               &PageDirty,
+                                               &Resources);
+
+                Dirty |= PageDirty;
+                DPRINT("%x\n", Status);
+
+                ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+
+                MmUnlockAddressSpace(AddressSpace);
+
+                if (Status == STATUS_SUCCESS + 1)
+                {
+                    /* Wait page ... the other guy has it, so we'll just fail for now */
+                    DPRINT1("Wait entry ... can't continue\n");
+                    Status = STATUS_UNSUCCESSFUL;
+                    goto bail;
+                }
+                else if (Status == STATUS_MORE_PROCESSING_REQUIRED)
+                {
+                    DPRINTC("DoAcquisition %p\n", Resources.DoAcquisition);
+
+                    Status = Resources.DoAcquisition(AddressSpace,
+                                                     MemoryArea,
+                                                     &Resources);
+
+                    DPRINTC("Status %x\n", Status);
+                    if (!NT_SUCCESS(Status))
+                    {
+                        DPRINT1("bail\n");
+                        goto bail;
+                    }
+                    else
+                    {
+                        Status = STATUS_MM_RESTART_OPERATION;
+                    }
                 }
             }
+            while (Status == STATUS_MM_RESTART_OPERATION);
+
+            if (ProcRef)
+            {
+                ASSERT(!MM_IS_WAIT_PTE(MmGetPfnForProcess(Process, Address)));
+                ObDereferenceObject(Process);
+                ProcRef = FALSE;
+            }
         }
-        while (Status == STATUS_MM_RESTART_OPERATION);
-
-        if (ProcRef)
-        {
-            ObDereferenceObject(Process);
-            ProcRef = FALSE;
-        }
-
-        ExAcquireFastMutex(&RmapListLock);
-        ASSERT(!MM_IS_WAIT_PTE(MmGetPfnForProcess(Process, Address)));
-        entry = MmGetRmapListHeadPage(Page);
-
-        DPRINTC("Entry %p\n", entry);
     }
-
-    ExReleaseFastMutex(&RmapListLock);
 
 bail:
     DPRINTC("BAIL %x\n", Status);

@@ -2482,6 +2482,10 @@ RamdiskHandleStorageQueryProperty(IN PRAMDISK_DRIVE_EXTENSION DeviceExtension,
     }
 
     Query = Irp->AssociatedIrp.SystemBuffer;
+    if (!Query)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
     OutputLength = IoStackLocation->Parameters.DeviceIoControl.OutputBufferLength;
 
     switch (Query->PropertyId)
@@ -2972,6 +2976,10 @@ RamdiskReadWriteReal(IN PIRP Irp,
 
     /* Get the MDL and map it into system space */
     Mdl = Irp->MdlAddress;
+    if (!Mdl)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
     SystemVa = MmGetSystemAddressForMdlSafe(Mdl, NormalPagePriority);
     if (!SystemVa) return STATUS_INSUFFICIENT_RESOURCES;
     CurrentBase = SystemVa;

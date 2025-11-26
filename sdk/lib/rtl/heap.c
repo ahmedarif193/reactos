@@ -2692,7 +2692,10 @@ BOOLEAN NTAPI RtlFreeHeap(
             (HeapEntry->SegmentOffset >= HEAP_SEGMENTS))
         {
             /* This is an invalid block */
-            DPRINT1("HEAP: Trying to free an invalid address %p!\n", Ptr);
+            PVOID CallersAddress = NULL, CallersCaller = NULL;
+            RtlCaptureStackBackTrace(1, 1, &CallersAddress, NULL);
+            DPRINT1("HEAP: Trying to free an invalid address %p (caller %p)!\n",
+                    Ptr, CallersAddress);
             RtlSetLastWin32ErrorAndNtStatusFromNtStatus(STATUS_INVALID_PARAMETER);
             _SEH2_YIELD(return FALSE);
         }
@@ -2700,7 +2703,10 @@ BOOLEAN NTAPI RtlFreeHeap(
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
         /* The pointer was invalid */
-        DPRINT1("HEAP: Trying to free an invalid address %p!\n", Ptr);
+        PVOID CallersAddress = NULL;
+        RtlCaptureStackBackTrace(1, 1, &CallersAddress, NULL);
+        DPRINT1("HEAP: Trying to free an invalid address %p (exception, caller %p)!\n",
+                Ptr, CallersAddress);
         RtlSetLastWin32ErrorAndNtStatusFromNtStatus(STATUS_INVALID_PARAMETER);
         _SEH2_YIELD(return FALSE);
     }

@@ -299,6 +299,45 @@ MmFinalizeSegment(PMM_SECTION_SEGMENT Segment)
         MmFreePageTablesSectionSegment(Segment, MiFreeSegmentPage);
         MmUnlockSectionSegment(Segment);
     }
+#if DBG
+    /*
+     * In DBG builds, make sure there are no remaining segment rmaps pointing
+     * to this segment before we free it. This is expensive (full PFN scan)
+     * but segment finalization is rare.
+     */
+    {
+        PFN_NUMBER Pfn;
+
+        for (Pfn = 0; Pfn <= MmHighestPhysicalPage; Pfn++)
+        {
+            PMMPFN PfnEntry = MiGetPfnEntry(Pfn);
+            if (!PfnEntry || !MI_IS_ROS_PFN(PfnEntry))
+                continue;
+
+            if (PfnEntry->RmapListHead)
+            {
+                PMM_RMAP_ENTRY Entry;
+                KIRQL PfnIrql = MiAcquirePfnLock();
+
+                Entry = MmGetRmapListHeadPage(Pfn);
+                while (Entry)
+                {
+                    if (RMAP_IS_SEGMENT(Entry->Address))
+                    {
+                        PCACHE_SECTION_PAGE_TABLE PageTable = (PCACHE_SECTION_PAGE_TABLE)Entry->Process;
+                        ASSERT(PageTable != NULL);
+                        ASSERT(PageTable->Segment != Segment);
+                    }
+
+                    Entry = Entry->Next;
+                }
+
+                MiReleasePfnLock(PfnIrql);
+            }
+        }
+    }
+#endif
+
     DPRINTC("Segment %p destroy\n", Segment);
     ExFreePoolWithTag(Segment, TAG_MM_SECTION_SEGMENT);
 }

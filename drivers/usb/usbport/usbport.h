@@ -59,7 +59,8 @@
 #define USBPORT_DMA_DIRECTION_TO_DEVICE   2
 
 #define USB_PORT_TAG 'pbsu'
-#define URB_FUNCTION_MAX 0x31
+/* Highest URB function code we recognize (Win8+ stream/chained MDL included). */
+#define URB_FUNCTION_MAX 0x38
 
 /* Hub Class Feature Selectors (Recipient - Port) */
 #define FEATURE_PORT_CONNECTION     0
@@ -218,6 +219,24 @@ typedef struct _USBPORT_DEVICE_HANDLE {
   ULONG TtCount;
   PUSB2_TT_EXTENSION TtExtension; // Transaction Translator
   LIST_ENTRY TtList;
+  /* BOS / device capability state (USB 2.0 LPM, USB 3.x SS, Container ID) */
+  BOOLEAN HasBosDescriptor;
+  BOOLEAN HasUsb20Extension;
+  BOOLEAN Usb20LpmCapable;
+  BOOLEAN Usb20BeslSupported;
+  UCHAR Usb20BaselineBesl;
+  UCHAR Usb20DeepBesl;
+  BOOLEAN HasSsCapability;
+  USHORT SsSpeedsSupported;
+  UCHAR SsFunctionalitySupport;
+  UCHAR SsU1ExitLatency;
+  USHORT SsU2ExitLatency;
+  BOOLEAN HasContainerId;
+  UCHAR ContainerId[16];
+  /* Derived link power management policy for SS devices */
+  BOOLEAN LpmPolicyComputed;
+  BOOLEAN LpmAllowU1;
+  BOOLEAN LpmAllowU2;
 } USBPORT_DEVICE_HANDLE, *PUSBPORT_DEVICE_HANDLE;
 
 typedef struct _USBPORT_ENDPOINT {

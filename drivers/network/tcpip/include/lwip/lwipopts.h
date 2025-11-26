@@ -8,6 +8,12 @@
 #define MEM_LIBC_MALLOC                 1
 #define MEMP_MEM_MALLOC                 1
 
+/* Enable allocator sanity checks in debug builds */
+#if DBG
+#define MEM_SANITY_CHECK                1
+#define MEMP_SANITY_CHECK               1
+#endif
+
 /* Define LWIP_COMPAT_MUTEX if the port has no mutexes and binary semaphores
  should be used instead */
 #define LWIP_COMPAT_MUTEX               1

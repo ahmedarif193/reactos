@@ -1159,6 +1159,13 @@ MmUnsharePageEntrySectionSegment(PMEMORY_AREA MemoryArea,
         MmFreeSwapPage(SwapEntry);
     }
     MmSetPageEntrySectionSegment(Segment, Offset, 0);
+#if DBG
+    {
+        KIRQL OldIrql = MiAcquirePfnLock();
+        ASSERT(MmGetRmapListHeadPage(Page) == NULL);
+        MiReleasePfnLock(OldIrql);
+    }
+#endif
     MmReleasePageMemoryConsumer(MC_USER, Page);
     return TRUE;
 }
@@ -3488,6 +3495,8 @@ MmFreeSectionPage(PVOID Context, MEMORY_AREA* MemoryArea, PVOID Address,
     AddressSpace = (PMMSUPPORT)Context;
     Process = MmGetAddressSpaceOwner(AddressSpace);
 
+    ASSERT(Address != NULL);
+
     Address = (PVOID)PAGE_ROUND_DOWN(Address);
 
     Offset.QuadPart = ((ULONG_PTR)Address - MA_GetStartingAddress(MemoryArea)) +
@@ -3543,6 +3552,13 @@ MmFreeSectionPage(PVOID Context, MEMORY_AREA* MemoryArea, PVOID Address,
                 MmSetSavedSwapEntryPage(Page, 0);
             }
             MmDeleteRmap(Page, Process, Address);
+#if DBG
+            {
+                KIRQL OldIrql = MiAcquirePfnLock();
+                ASSERT(MmGetRmapListHeadPage(Page) == NULL);
+                MiReleasePfnLock(OldIrql);
+            }
+#endif
             MmReleasePageMemoryConsumer(MC_USER, Page);
         }
         else
@@ -3598,6 +3614,7 @@ MmUnmapViewOfSegment(PMMSUPPORT AddressSpace,
     {
         CurrentEntry = RemoveHeadList(RegionListHead);
         CurrentRegion = CONTAINING_RECORD(CurrentEntry, MM_REGION, RegionListEntry);
+        MiRegionCheckDebug(CurrentRegion);
         ExFreePoolWithTag(CurrentRegion, TAG_MM_REGION);
     }
 

@@ -1125,7 +1125,20 @@ USBH_SyncGetHubDescriptor(IN PUSBHUB_FDO_EXTENSION HubExtension)
 
     RtlZeroMemory(HubDescriptor, NumberOfBytes);
 
-    RequestValue = 0;
+    /*
+     * For SuperSpeed hubs (bcdUSB >= 0x0300) request the USB 3.0 hub
+     * descriptor (type USB_30_HUB_DESCRIPTOR_TYPE, 0x2A). For USB 2.0
+     * and earlier hubs, use the classic 0x29 hub descriptor type.
+     *
+     * The payload is still stored in a USB_HUB_DESCRIPTOR-compatible
+     * buffer; the current ReactOS stack only consumes bNumberOfPorts
+     * and bPowerOnToPowerGood from this structure.
+     */
+    if (HubExtension->HubDeviceDescriptor.bcdUSB >= 0x0300)
+        RequestValue = (USB_30_HUB_DESCRIPTOR_TYPE << 8);
+    else
+        RequestValue = (USB_20_HUB_DESCRIPTOR_TYPE << 8);
+
     Retry = 0;
 
     while (TRUE)
@@ -1154,7 +1167,9 @@ USBH_SyncGetHubDescriptor(IN PUSBHUB_FDO_EXTENSION HubExtension)
                 break;
             }
 
-            RequestValue = 0x2900; // Hub DescriptorType - 0x29
+            /* Retry with the USB 2.0 hub descriptor type (0x29) as a
+             * fallback in case the device only supports that encoding. */
+            RequestValue = (USB_20_HUB_DESCRIPTOR_TYPE << 8);
 
             Retry++;
         }
@@ -1904,7 +1919,8 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
                             IN PUSB_PORT_STATUS_AND_CHANGE PortStatus)
 {
     PUSBHUB_PORT_DATA PortData;
-    USB_20_PORT_CHANGE PortStatusChange;
+    USB_20_PORT_CHANGE PortStatusChange20;
+    USB_30_PORT_CHANGE PortStatusChange30;
     PDEVICE_OBJECT PortDevice;
     PUSBHUB_PORT_PDO_EXTENSION PortExtension;
     PVOID SerialNumber;
@@ -1917,9 +1933,10 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
     ASSERT(Port > 0);
     PortData = &HubExtension->PortData[Port - 1];
 
-    PortStatusChange = PortStatus->PortChange.Usb20PortChange;
+    PortStatusChange20 = PortStatus->PortChange.Usb20PortChange;
+    PortStatusChange30 = PortStatus->PortChange.Usb30PortChange;
 
-    if (PortStatusChange.ConnectStatusChange)
+    if (PortStatusChange20.ConnectStatusChange)
     {
         BOOLEAN Connected;
 
@@ -2002,28 +2019,36 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
             IoInvalidateDeviceRelations(HubExtension->LowerPDO, BusRelations);
         }
     }
-    else if (PortStatusChange.PortEnableDisableChange)
+    else if (PortStatusChange20.PortEnableDisableChange)
     {
         RequestValue = USBHUB_FEATURE_C_PORT_ENABLE;
         PortData->PortStatus = *PortStatus;
         USBH_SyncClearPortStatus(HubExtension, Port, RequestValue);
         return;
     }
-    else if (PortStatusChange.SuspendChange)
+    else if (PortStatusChange20.SuspendChange ||
+             PortStatusChange30.PortLinkStateChange)
     {
-        DPRINT1("USBH_ProcessPortStateChange: SuspendChange UNIMPLEMENTED. FIXME\n");
-        DbgBreakPoint();
+        RequestValue = USBHUB_FEATURE_C_PORT_SUSPEND;
+        PortData->PortStatus = *PortStatus;
+        USBH_SyncClearPortStatus(HubExtension, Port, RequestValue);
+        return;
     }
-    else if (PortStatusChange.OverCurrentIndicatorChange)
+    else if (PortStatusChange20.OverCurrentIndicatorChange ||
+             PortStatusChange30.OverCurrentIndicatorChange)
     {
-        DPRINT1("USBH_ProcessPortStateChange: OverCurrentIndicatorChange UNIMPLEMENTED. FIXME\n");
-        DbgBreakPoint();
+        RequestValue = USBHUB_FEATURE_C_PORT_OVER_CURRENT;
+        PortData->PortStatus = *PortStatus;
+        USBH_SyncClearPortStatus(HubExtension, Port, RequestValue);
+        return;
     }
-    else if (PortStatusChange.ResetChange)
+    else if (PortStatusChange20.ResetChange ||
+             PortStatusChange30.BHResetChange)
     {
         RequestValue = USBHUB_FEATURE_C_PORT_RESET;
         PortData->PortStatus = *PortStatus;
         USBH_SyncClearPortStatus(HubExtension, Port, RequestValue);
+        return;
     }
 }
 

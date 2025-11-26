@@ -278,6 +278,8 @@ typedef struct _MM_RMAP_ENTRY
    PVOID Address;
 #if DBG
    PVOID Caller;
+   ULONG DebugId;
+   ULONG State;
 #endif
 }
 MM_RMAP_ENTRY, *PMM_RMAP_ENTRY;
@@ -483,7 +485,40 @@ typedef struct _MM_REGION
     ULONG Protect;
     SIZE_T Length;
     LIST_ENTRY RegionListEntry;
+#if DBG
+    ULONGLONG DebugHeadCanary;
+    ULONGLONG DebugTailCanary;
+#endif
 } MM_REGION, *PMM_REGION;
+
+#if DBG
+
+#define MI_REGION_CANARY_VALUE 0x12345678ABCDEF00ULL
+
+FORCEINLINE
+VOID
+MiRegionInitDebug(
+    _In_ PMM_REGION Region)
+{
+    Region->DebugHeadCanary = MI_REGION_CANARY_VALUE;
+    Region->DebugTailCanary = MI_REGION_CANARY_VALUE;
+}
+
+FORCEINLINE
+VOID
+MiRegionCheckDebug(
+    _In_ PMM_REGION Region)
+{
+    NT_ASSERT(Region->DebugHeadCanary == MI_REGION_CANARY_VALUE);
+    NT_ASSERT(Region->DebugTailCanary == MI_REGION_CANARY_VALUE);
+}
+
+#else
+
+#define MiRegionInitDebug(_Region)   ((void)0)
+#define MiRegionCheckDebug(_Region)  ((void)0)
+
+#endif
 
 // Mm internal
 /* Entry describing free pool memory */

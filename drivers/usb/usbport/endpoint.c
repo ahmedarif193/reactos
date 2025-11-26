@@ -85,6 +85,20 @@ USBPORT_AllocateBandwidth(IN PDEVICE_OBJECT FdoDevice,
     EndpointProperties = &Endpoint->EndpointProperties;
     TransferType = EndpointProperties->TransferType;
 
+    /*
+     * For SuperSpeed devices the legacy USB 1.1/2.0 frame-based
+     * bandwidth accounting model is not applicable. Treat SS
+     * endpoints as "unlimited" from the USBPORT scheduler point
+     * of view and do not consume from the periodic bandwidth
+     * pool. The xHCI miniport is responsible for enforcing any
+     * hardware limits.
+     */
+    if (EndpointProperties->DeviceSpeed == UsbSuperSpeed)
+    {
+        EndpointProperties->ScheduleOffset = 0;
+        return TRUE;
+    }
+
     if (TransferType == USBPORT_TRANSFER_TYPE_BULK ||
         TransferType == USBPORT_TRANSFER_TYPE_CONTROL ||
         Endpoint->Flags & ENDPOINT_FLAG_ROOTHUB_EP0)
@@ -1235,7 +1249,23 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
 
         if (MpStatus)
         {
-            USBDStatus = USBD_STATUS_INSUFFICIENT_RESOURCES;
+            if (MpStatus == MP_STATUS_NO_BANDWIDTH)
+            {
+                USBDStatus = USBD_STATUS_NO_BANDWIDTH;
+            }
+            else if (MpStatus == MP_STATUS_NOT_SUPPORTED)
+            {
+                USBDStatus = USBD_STATUS_NOT_SUPPORTED;
+            }
+            else if (MpStatus == MP_STATUS_FAILURE)
+            {
+                /* Context or descriptor problem (e.g. xHCI AddressDevice CONTEXT_ERROR). */
+                USBDStatus = USBD_STATUS_BAD_DESCRIPTOR;
+            }
+            else
+            {
+                USBDStatus = USBD_STATUS_INSUFFICIENT_RESOURCES;
+            }
         }
     }
 

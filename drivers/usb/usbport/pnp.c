@@ -568,7 +568,16 @@ USBPORT_StopDevice(IN PDEVICE_OBJECT FdoDevice)
     }
 
     USBPORT_StopControllerTimer(FdoExtension);
-    KeCancelTimer(&FdoExtension->TimerSoftInterrupt);
+    /*
+     * TimerSoftInterrupt is only initialized when USBPORT_SoftInterrupt
+     * has been used. Guard KeCancelTimer so we do not assert on an
+     * uninitialized KTIMER when StartDevice fails early. Any non-zero
+     * object type here indicates an initialized dispatcher header.
+     */
+    if (FdoExtension->TimerSoftInterrupt.Header.Type != 0)
+    {
+        KeCancelTimer(&FdoExtension->TimerSoftInterrupt);
+    }
     FdoExtension->TimerFlags = 0;
 
     if (Packet && (FdoExtension->Flags & USBPORT_FLAG_HC_STARTED) &&
