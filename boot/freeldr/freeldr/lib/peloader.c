@@ -334,7 +334,7 @@ PeLdrpBindImportName(
         if (ForwardDllName[0] == '_' && ForwardDllName[1] != ANSI_NULL)
         {
             SIZE_T Length = strlen(ForwardDllName);
-            RtlMoveMemory(ForwardDllName, ForwardDllName + 1, Length);
+            RtlMoveMemory(ForwardDllName, ForwardDllName + 1, Length + 1);
         }
 
         /* Check if the target image is already loaded */
