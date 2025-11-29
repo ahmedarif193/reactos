@@ -19,6 +19,9 @@
 #define MI_POOL_COPY_BYTES    512
 #define MI_MAX_TRANSFER_SIZE  64 * 1024
 
+#if defined(__GNUC__)
+__attribute__((unused))
+#endif
 FORCEINLINE
 BOOLEAN
 MiIsUserAddressRangeValid64(

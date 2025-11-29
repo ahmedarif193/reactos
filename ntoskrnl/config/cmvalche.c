@@ -26,6 +26,9 @@ CmpIsValueCached(IN HCELL_INDEX CellIndex)
     return FALSE;
 }
 
+#if defined(__GNUC__)
+__attribute__((unused))
+#endif
 FORCEINLINE
 VOID
 CmpSetValueCached(IN PHCELL_INDEX CellIndex)

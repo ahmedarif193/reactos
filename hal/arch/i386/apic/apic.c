@@ -258,14 +258,6 @@ ApicSendEOI(void)
 
 FORCEINLINE
 KIRQL
-ApicGetProcessorIrql(VOID)
-{
-    /* Read the TPR and convert it to an IRQL */
-    return TprToIrql(ApicRead(APIC_PPR));
-}
-
-FORCEINLINE
-KIRQL
 ApicGetCurrentIrql(VOID)
 {
 #ifdef _M_AMD64
@@ -697,7 +689,7 @@ HalpApcInterruptHandler(IN PKTRAP_FRAME TrapFrame)
 {
     KPROCESSOR_MODE ProcessorMode;
     KIRQL OldIrql;
-    ASSERT(ApicGetProcessorIrql() == APC_LEVEL);
+    ASSERT(TprToIrql(ApicRead(APIC_PPR)) == APC_LEVEL);
 
    /* Enter trap */
     KiEnterInterruptTrap(TrapFrame);
@@ -745,7 +737,7 @@ FASTCALL
 HalpDispatchInterruptHandler(IN PKTRAP_FRAME TrapFrame)
 {
     KIRQL OldIrql;
-    ASSERT(ApicGetProcessorIrql() == DISPATCH_LEVEL);
+    ASSERT(TprToIrql(ApicRead(APIC_PPR)) == DISPATCH_LEVEL);
 
    /* Enter trap */
     KiEnterInterruptTrap(TrapFrame);

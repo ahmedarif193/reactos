@@ -2003,7 +2003,7 @@ MmArmAccessFault(IN ULONG FaultCode,
             (PointerPpe->u.Hard.Valid == 0) ||
 #endif
             /* Always check if the PDE is valid */
-            (PointerPde->u.Hard.Valid == 0))
+            !PointerPde->u.Hard.Valid)
         {
             /* PXE/PPE/PDE (still) not valid, kill the system */
             KeBugCheckEx(PAGE_FAULT_IN_NONPAGED_AREA,

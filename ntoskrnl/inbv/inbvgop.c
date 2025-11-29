@@ -253,14 +253,13 @@ InbvGopHandleBootBitmap(
 {
     LOADER_PARAMETER_FRAMEBUFFER FbInfo;
     ULONG Width, Height;
-    BOOLEAN BgrtActive;
 
     if (!InbvGopQueryInfo(&FbInfo))
         return FALSE;
 
     Width = FbInfo.HorizontalResolution;
     Height = FbInfo.VerticalResolution;
-    BgrtActive = InbvQueryBgrtInfo(NULL);
+    (void)InbvQueryBgrtInfo(NULL);
 
     if (TextMode)
     {
