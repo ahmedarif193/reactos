@@ -24,7 +24,11 @@
 #include <freeldr.h>
 
 #include <debug.h>
+#if defined(__GNUC__)
+static int DbgDefaultChannel __attribute__((unused)) = DPRINT_DISK;
+#else
 DBG_DEFAULT_CHANNEL(DISK);
+#endif
 
 /* FUNCTIONS ******************************************************************/
 

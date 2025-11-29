@@ -38,6 +38,10 @@ extern char __ImageBase;
 #endif
 #endif
 
+#ifndef FREELDR_MAX_SECTION_COUNT
+#define FREELDR_MAX_SECTION_COUNT 8
+#endif
+
 typedef struct _FREELDR_MEMORY_DESCRIPTOR
 {
     TYPE_OF_MEMORY MemoryType;

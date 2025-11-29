@@ -43,12 +43,22 @@
 #define rdi edi
 #define rdx edx
 #define rsi esi
+#define LOAD_RUNTIME_PTR(reg, sym) mov reg, offset sym + INITIAL_BASE - FREELDR_BASE
+#define PTR_STORE dword ptr
+#define PTR_REG eax
+#else
+#define LOAD_RUNTIME_PTR(reg, sym) lea reg, [rip + sym]
+#define PTR_STORE qword ptr
+#define PTR_REG rax
 #endif
 
 
-#ifdef _USE_ML
-EXTERN __bss_start__:DWORD
-EXTERN __bss_end__:DWORD
+#ifdef _M_IX86
+EXTERN _FrldrGetImageSize:PROC
+#define FRLDR_GET_IMAGE_SIZE _FrldrGetImageSize
+#else
+EXTERN FrldrGetImageSize:PROC
+#define FRLDR_GET_IMAGE_SIZE FrldrGetImageSize
 #endif
 
 
@@ -99,11 +109,15 @@ MultibootEntry:
 
     /* Save multiboot info structure */
     mov esi, ebx
-    mov edi, offset MultibootInfo + INITIAL_BASE - FREELDR_BASE
+    LOAD_RUNTIME_PTR(rdi, MultibootInfo)
     mov ecx, MB_INFO_SIZE
     rep movsb
-    mov dword ptr [MultibootInfo + INITIAL_BASE - FREELDR_BASE + MB_INFO_MMAP_ADDR_OFFSET], 0
-    mov dword ptr [_MultibootInfoPtr + INITIAL_BASE - FREELDR_BASE], offset MultibootInfo
+    LOAD_RUNTIME_PTR(rdx, MultibootInfo)
+    mov dword ptr [rdx + MB_INFO_MMAP_ADDR_OFFSET], 0
+    LOAD_RUNTIME_PTR(rdx, _MultibootInfoPtr)
+    LOAD_RUNTIME_PTR(rax, MultibootInfo)
+    sub PTR_REG, (INITIAL_BASE - FREELDR_BASE)
+    mov PTR_STORE [rdx], PTR_REG
 
     /* See if the memory map was passed in */
     test dword ptr [rbx + MB_INFO_FLAGS_OFFSET], MB_INFO_FLAG_MEMORY_MAP
@@ -119,17 +133,24 @@ MultibootEntry:
     test esi, esi
     jz mbchk_command_line
     /* Save memory map structure */
-    mov edi, offset MultibootMemoryMap + INITIAL_BASE - FREELDR_BASE
+    LOAD_RUNTIME_PTR(rdi, MultibootMemoryMap)
     rep movsb
     /* Relocate memory map address */
-    mov dword ptr [MultibootInfo + INITIAL_BASE - FREELDR_BASE + MB_INFO_MMAP_ADDR_OFFSET], offset MultibootMemoryMap
+    LOAD_RUNTIME_PTR(rdx, MultibootInfo)
+    LOAD_RUNTIME_PTR(rax, MultibootMemoryMap)
+#ifdef _M_IX86
+    sub eax, (INITIAL_BASE - FREELDR_BASE)
+#else
+    sub rax, (INITIAL_BASE - FREELDR_BASE)
+#endif
+    mov dword ptr [rdx + MB_INFO_MMAP_ADDR_OFFSET], eax
 
 mbchk_command_line:
     /* Save command line */
     test dword ptr [rbx + MB_INFO_FLAGS_OFFSET], MB_INFO_FLAG_COMMAND_LINE
     jz mb2
     mov rsi, [rbx + MB_INFO_COMMAND_LINE_OFFSET]
-    mov edi, offset cmdline + INITIAL_BASE - FREELDR_BASE
+    LOAD_RUNTIME_PTR(rdi, cmdline)
     mov ecx, CMDLINE_SIZE - 1
 mb1:
     lodsb
@@ -159,13 +180,19 @@ mb3:
     /* Relocate itself to lower address */
     mov esi, INITIAL_BASE
     mov edi, FREELDR_BASE
-    mov ecx, offset __bss_start__ - FREELDR_BASE
+#ifdef _M_IX86
+    call FRLDR_GET_IMAGE_SIZE
+    mov ecx, eax
+#else
+    call FRLDR_GET_IMAGE_SIZE
+    mov rcx, rax
+#endif
     rep movsb
 
     /* Load segment registers for real-address mode */
-    mov edi, offset gdtptr
+    LOAD_RUNTIME_PTR(rdi, gdtptr)
     lgdt lXdtPrefix [rdi]
-    mov edi, offset idtptr
+    LOAD_RUNTIME_PTR(rdi, idtptr)
     lidt lXdtPrefix [rdi]
 
     mov ax, HEX(10)

@@ -8,11 +8,7 @@ EXTERN BootMain:PROC
 EXTERN cmdline:DWORD
 
 EXTERN DiskStopFloppyMotor:PROC
-
-#ifdef _USE_ML
-EXTERN __bss_start__:FWORD
-EXTERN __bss_end__:FWORD
-#endif
+EXTERN FrldrZeroBss:PROC
 
 .code64
 
@@ -29,10 +25,12 @@ RealEntryPoint:
     //mov word ptr [HEX(b8000)], HEX(0e00) + '1'
 
     /* Setup long mode stack */
-    mov rsp, qword ptr [stack64]
+    lea rax, [rip + stack64]
+    mov rsp, qword ptr [rax]
 
     /* Continue execution */
-    jmp qword ptr [ContinueAddress]
+    lea rax, [rip + ContinueAddress]
+    jmp qword ptr [rax]
 
 ContinueAddress:
     .quad FrldrStartup
@@ -53,25 +51,23 @@ FrldrStartup:
 
     /* Store BootDrive and BootPartition */
     mov al, byte ptr [BSS_BootDrive]
-    mov byte ptr [FrldrBootDrive], al
+    lea rdx, [rip + FrldrBootDrive]
+    mov byte ptr [rdx], al
     xor eax, eax
     mov al, byte ptr [BSS_BootPartition]
-    mov dword ptr [FrldrBootPartition], eax
+    lea rdx, [rip + FrldrBootPartition]
+    mov dword ptr [rdx], eax
 
     /* Patch long jump with real mode entry point */
     mov eax, dword ptr [BSS_RealModeEntry]
-    mov dword ptr [AddressOfRealModeEntryPoint], eax
+    lea rdx, [rip + AddressOfRealModeEntryPoint]
+    mov dword ptr [rdx], eax
 
     /* Clean out BSS */
-    xor rax, rax
-    mov rdi, offset __bss_start__
-    mov rcx, offset __bss_end__ + 7
-    sub rcx, rdi
-    shr rcx, 3
-    rep stosq
+    call FrldrZeroBss
 
     /* Pass the command line to BootMain */
-    mov rcx, offset cmdline
+    lea rcx, [rip + cmdline]
 
     /* GO! */
     call BootMain
@@ -172,11 +168,13 @@ PxeCallApi:
 PUBLIC CallRealMode
 CallRealMode:
     /* Save current stack pointer */
-    mov qword ptr [stack64], rsp
+    lea rdx, [rip + stack64]
+    mov qword ptr [rdx], rsp
 
     /* Set continue address and switch to real mode */
-    lea rax, [CallRealMode_return]
-    mov qword ptr [ContinueAddress], rax
+    lea rax, [rip + CallRealMode_return]
+    lea rdx, [rip + ContinueAddress]
+    mov qword ptr [rdx], rax
 
 SwitchToReal:
     /* Set sane segments */
@@ -190,10 +188,12 @@ SwitchToReal:
     //mov word ptr [HEX(0b8008)], HEX(0e00) + '4'
 
     /* Save 64-bit stack pointer */
-    mov qword ptr [stack64], rsp
+    lea rdx, [rip + stack64]
+    mov qword ptr [rdx], rsp
 
     /* Step 1 - jump to compatibility segment */
-    jmp fword ptr [jumpvector]
+    lea rax, [rip + jumpvector]
+    jmp fword ptr [rax]
 
 jumpvector:
     .long SwitchToRealCompSegment
@@ -219,7 +219,8 @@ AddressOfRealModeEntryPoint:
 
 CallRealMode_return:
     /* restore stack pointer */
-    mov rsp, qword ptr [stack64]
+    lea rax, [rip + stack64]
+    mov rsp, qword ptr [rax]
     ret
 
 /////////////////////////////////////////

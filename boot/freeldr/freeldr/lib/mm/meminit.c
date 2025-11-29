@@ -262,6 +262,7 @@ MmCheckFreeldrImageFile(VOID)
     PIMAGE_NT_HEADERS NtHeaders;
     PIMAGE_FILE_HEADER FileHeader;
     PIMAGE_OPTIONAL_HEADER OptionalHeader;
+    ULONG SectionCount;
 
     /* Get the NT headers */
     NtHeaders = RtlImageNtHeader(&__ImageBase);
@@ -277,8 +278,11 @@ MmCheckFreeldrImageFile(VOID)
 
     /* Check the file header */
     FileHeader = &NtHeaders->FileHeader;
+    SectionCount = FileHeader->NumberOfSections;
+
     if ((FileHeader->Machine != IMAGE_FILE_MACHINE_NATIVE) ||
-        (FileHeader->NumberOfSections != FREELDR_SECTION_COUNT) ||
+        (SectionCount < FREELDR_SECTION_COUNT) ||
+        (SectionCount > FREELDR_MAX_SECTION_COUNT) ||
         (FileHeader->PointerToSymbolTable != 0) ||  // Symbols stripped
         (FileHeader->NumberOfSymbols != 0) ||       //    ""      ""
         (FileHeader->SizeOfOptionalHeader != sizeof(IMAGE_OPTIONAL_HEADER)))
@@ -290,12 +294,12 @@ MmCheckFreeldrImageFile(VOID)
             __LINE__,
             "FreeLdr FileHeader is invalid.\n"
             "Machine == 0x%lx, expected 0x%lx\n"
-            "NumberOfSections == 0x%lx, expected 0x%lx\n"
+            "NumberOfSections == 0x%lx, expected range 0x%lx-0x%lx\n"
             "PointerToSymbolTable == 0x%lx, expected 0\n"
             "NumberOfSymbols == 0x%lx, expected 0\n"
             "SizeOfOptionalHeader == 0x%lx, expected 0x%lx\n",
             FileHeader->Machine, IMAGE_FILE_MACHINE_NATIVE,
-            FileHeader->NumberOfSections, FREELDR_SECTION_COUNT,
+            SectionCount, FREELDR_SECTION_COUNT, FREELDR_MAX_SECTION_COUNT,
             FileHeader->PointerToSymbolTable,
             FileHeader->NumberOfSymbols,
             FileHeader->SizeOfOptionalHeader, sizeof(IMAGE_OPTIONAL_HEADER));

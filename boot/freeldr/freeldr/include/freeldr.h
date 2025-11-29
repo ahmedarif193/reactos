@@ -150,6 +150,18 @@ EditOperatingSystemEntry(
 VOID RunLoader(VOID);
 VOID FrLdrCheckCpuCompatibility(VOID);
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+ULONG FrldrGetImageSize(VOID);
+VOID FrldrZeroBss(VOID);
+BOOLEAN FrldrValidateBss(VOID);
+
+#ifdef __cplusplus
+}
+#endif
+
 #ifdef UEFIBOOT
 VOID FrLdrUefiBeginEarlyLogForwarding(VOID);
 VOID FrLdrUefiEndEarlyLogForwarding(VOID);

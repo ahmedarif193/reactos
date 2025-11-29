@@ -28,11 +28,7 @@ EXTERN _i386Idt:DWORD
 EXTERN cmdline:DWORD
 
 EXTERN _DiskStopFloppyMotor:PROC
-
-#ifdef _USE_ML
-EXTERN __bss_start__:DWORD
-EXTERN __bss_end__:DWORD
-#endif
+EXTERN _FrldrZeroBss:PROC
 
 .code32
 
@@ -77,12 +73,7 @@ _FrldrStartup:
     mov dword ptr ds:[SwitchToReal16Address], eax
 
     /* Clean out BSS */
-    xor eax, eax
-    mov edi, offset __bss_start__
-    mov ecx, offset __bss_end__ + 3
-    sub ecx, edi
-    shr ecx, 2
-    rep stosd
+    call _FrldrZeroBss
 
     /* Initialize the idt */
     call _InitIdt

@@ -59,6 +59,8 @@ EfiEntry(
 {
     PCSTR CmdLine = ""; // FIXME: Determine a command-line from UEFI boot options
 
+    FrldrZeroBss();
+
     GlobalImageHandle = ImageHandle;
     GlobalSystemTable = SystemTable;
     /* Pre-seed a sane default boot path for early INI access */

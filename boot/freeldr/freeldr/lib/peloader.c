@@ -330,6 +330,13 @@ PeLdrpBindImportName(
         /* Strip out the symbol name */
         *strrchr(ForwardDllName, '.') = ANSI_NULL;
 
+        /* Some toolchains emit forwarders with a leading underscore on the DLL name */
+        if (ForwardDllName[0] == '_' && ForwardDllName[1] != ANSI_NULL)
+        {
+            SIZE_T Length = strlen(ForwardDllName);
+            RtlMoveMemory(ForwardDllName, ForwardDllName + 1, Length);
+        }
+
         /* Check if the target image is already loaded */
         if (!PeLdrCheckForLoadedDll(ModuleListHead, ForwardDllName, &DataTableEntry))
         {

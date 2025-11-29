@@ -58,9 +58,15 @@ list(APPEND FREELDR_BOOTLIB_SOURCE
     lib/inifile/ini_init.c
     lib/inifile/inifile.c
     lib/inifile/parse.c
+    lib/image.c
     lib/mm/meminit.c
     lib/mm/mm.c
     lib/mm/heap.c)
+
+if(DEFINED REACTOS_LINKER_SUPPORTS_GNU_SCRIPTS AND NOT REACTOS_LINKER_SUPPORTS_GNU_SCRIPTS)
+    list(APPEND FREELDR_BOOTLIB_SOURCE
+        bssmarkers.c)
+endif()
 
 list(APPEND FREELDR_BOOTMGR_SOURCE
     include/freeldr.h

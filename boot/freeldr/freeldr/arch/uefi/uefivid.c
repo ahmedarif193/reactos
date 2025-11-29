@@ -985,9 +985,6 @@ UefiVideoScrollUp(VOID)
     ULONG VisiblePixelsY;
     SIZE_T RowBytes;
     PUCHAR Base;
-    PUCHAR Src;
-    PUCHAR Dst;
-    SIZE_T CopyBytes;
     ULONG Line;
 
     if (framebufferData.BaseAddress == 0)

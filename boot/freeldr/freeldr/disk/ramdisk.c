@@ -338,6 +338,31 @@ typedef struct _ISO_COPY_CONTEXT
 
 #define ISO_SCRATCH_MIN_SIZE     (1024 * 1024)
 #define ISO_SCRATCH_MAX_SIZE     (8 * 1024 * 1024)
+
+static
+BOOLEAN
+RamDiskResidentIsIso(
+    _In_ const UCHAR *Base,
+    _In_ ULONGLONG Size)
+{
+    const ULONG PvdOffset = 16 * ISO_SECTOR_SIZE;
+
+    if (!Base || Size < (ULONGLONG)PvdOffset + 7)
+        return FALSE;
+
+    Base += PvdOffset;
+
+    if (Base[0] != 0x01) /* Primary Volume Descriptor type */
+        return FALSE;
+
+    if (Base[1] != 'C' || Base[2] != 'D' || Base[3] != '0' || Base[4] != '0' || Base[5] != '1')
+        return FALSE;
+
+    if (Base[6] != 0x01) /* ISO 9660 version */
+        return FALSE;
+
+    return TRUE;
+}
 #define ISO_SCRATCH_FLOOR_SIZE   (128 * 1024)
 #define ISO_STREAM_FALLBACK_CHUNK (1024 * 1024)
 #define TAG_ISO_BUFFER 'BosI'
@@ -2215,7 +2240,10 @@ RamDiskLoadVirtualFile(
      * If the firmware or a previous boot stage already provided the ramdisk
      * image in memory, skip the expensive readback and reuse the cached data.
      */
-    if (gInitRamDiskBase && gInitRamDiskSize != 0)
+    if (gInitRamDiskBase &&
+        gInitRamDiskSize != 0 &&
+        RamDiskRequestedSize == 0 &&
+        RamDiskResidentIsIso(gInitRamDiskBase, gInitRamDiskSize))
     {
         BOOLEAN UseResidentImage = FALSE;
         ULONGLONG ResidentSize = (ULONGLONG)gInitRamDiskSize;
@@ -2253,7 +2281,38 @@ RamDiskLoadVirtualFile(
     /* Try opening the Ramdisk file */
     Status = FsOpenFile(FileName, DefaultPath, OpenReadOnly, &RamFileId);
     if (Status != ESUCCESS)
+    {
+        if (RamDiskRequestedSize != 0 &&
+            gInitRamDiskBase &&
+            gInitRamDiskSize != 0 &&
+            RamDiskResidentIsIso(gInitRamDiskBase, gInitRamDiskSize))
+        {
+            ULONGLONG ResidentSize = (ULONGLONG)gInitRamDiskSize;
+
+            if (RamDiskRequestedSize > ResidentSize)
+            {
+                WARN("RamDiskLoadVirtualFile: resident image smaller than requested "
+                     "(requested=%llu resident=%llu)\n",
+                     RamDiskRequestedSize,
+                     ResidentSize);
+            }
+            else
+            {
+                RamDiskBase = gInitRamDiskBase;
+                RamDiskFileSize = ResidentSize;
+                RamDiskImageOffset = 0;
+                RamDiskImageLength = RamDiskRequestedSize;
+                RamDiskResetVisibleRegion();
+                UiUpdateProgressBar(100, NULL);
+                TRACE("RamDiskLoadVirtualFile: falling back to resident ramdisk image (%llu of %llu bytes)\n",
+                      RamDiskImageLength,
+                      ResidentSize);
+                return ESUCCESS;
+            }
+        }
+
         return Status;
+    }
 
     /* Get the file size */
     Status = ArcGetFileInformation(RamFileId, &Information);

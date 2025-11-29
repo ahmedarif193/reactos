@@ -137,6 +137,26 @@ VOID Rs232PortPutByte(UCHAR ByteToSend)
 
 #endif /* DBG */
 
+#if !DBG
+BOOLEAN Rs232PortInitialize(IN ULONG ComPort, IN ULONG BaudRate)
+{
+    UNREFERENCED_PARAMETER(ComPort);
+    UNREFERENCED_PARAMETER(BaudRate);
+    return FALSE;
+}
+
+BOOLEAN Rs232PortGetByte(PUCHAR ByteReceived)
+{
+    UNREFERENCED_PARAMETER(ByteReceived);
+    return FALSE;
+}
+
+VOID Rs232PortPutByte(UCHAR ByteToSend)
+{
+    UNREFERENCED_PARAMETER(ByteToSend);
+}
+#endif /* !DBG */
+
 BOOLEAN Rs232PortInUse(PUCHAR Base)
 {
 #if DBG

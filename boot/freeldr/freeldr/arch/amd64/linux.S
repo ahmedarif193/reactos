@@ -24,10 +24,12 @@
 EXTERN DiskStopFloppyMotor:PROC
 EXTERN Relocator16Boot:PROC
 
-.code64
-
+.bss
+    .align 16
 Regs:
     .space REGS_SIZE
+
+.code64
 
 /*
  * VOID __cdecl
@@ -58,10 +60,11 @@ BootLinuxKernel:
 
     /* Set all segment registers to 0x9000 */
     mov ax, HEX(9000)
-    mov word ptr [Regs + REGS_DS], ax
-    mov word ptr [Regs + REGS_ES], ax
-    mov word ptr [Regs + REGS_FS], ax
-    mov word ptr [Regs + REGS_GS], ax
+    lea r10, [rip + Regs]
+    mov word ptr [r10 + REGS_DS], ax
+    mov word ptr [r10 + REGS_ES], ax
+    mov word ptr [r10 + REGS_FS], ax
+    mov word ptr [r10 + REGS_GS], ax
 
     /*
      * Relocate the kernel image to its final destination (can be as low as 0x10000).
@@ -122,7 +125,7 @@ after_reloc:
     mov r9w, HEX(9020) // CodeSegment
     mov r8w, HEX(9000) // StackPointer
     mov  dx, HEX(9000) // StackSegment
-    mov rcx, offset Regs
+    lea rcx, [rip + Regs]
     call Relocator16Boot
 
     /* Cleanup and return */

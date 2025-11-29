@@ -73,21 +73,20 @@ ULONGLONG DbgQueryMicrosecondsSinceBoot(VOID);
 /* Critical boot trace - always enabled for BootMain trace */
 #define CRITICAL_TRACE(fmt, ...) DbgPrint(fmt, ##__VA_ARGS__)
 
-#if DBG
-    #define ERR_CH(ch, fmt, ...)    DbgPrint2(DPRINT_##ch, ERR_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-    #define FIXME_CH(ch, fmt, ...)  DbgPrint2(DPRINT_##ch, FIXME_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-    #define WARN_CH(ch, fmt, ...)   DbgPrint2(DPRINT_##ch, WARN_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-    #define TRACE_CH(ch, fmt, ...)  DbgPrint2(DPRINT_##ch, TRACE_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define ERR_CH(ch, fmt, ...)    DbgPrint2(DPRINT_##ch, ERR_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define FIXME_CH(ch, fmt, ...)  DbgPrint2(DPRINT_##ch, FIXME_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define WARN_CH(ch, fmt, ...)   DbgPrint2(DPRINT_##ch, WARN_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define TRACE_CH(ch, fmt, ...)  DbgPrint2(DPRINT_##ch, TRACE_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
 
-    #define ERR(fmt, ...)    DbgPrint2(DbgDefaultChannel, ERR_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-    #define FIXME(fmt, ...)  DbgPrint2(DbgDefaultChannel, FIXME_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-    #define WARN(fmt, ...)   DbgPrint2(DbgDefaultChannel, WARN_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-    #define TRACE(fmt, ...)  DbgPrint2(DbgDefaultChannel, TRACE_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define ERR(fmt, ...)    DbgPrint2(DbgDefaultChannel, ERR_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define FIXME(fmt, ...)  DbgPrint2(DbgDefaultChannel, FIXME_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define WARN(fmt, ...)   DbgPrint2(DbgDefaultChannel, WARN_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define TRACE(fmt, ...)  DbgPrint2(DbgDefaultChannel, TRACE_LEVEL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
 
-    #define UNIMPLEMENTED DbgPrint("(%s:%d) WARNING: %s is UNIMPLEMENTED!\n", __FILE__, __LINE__, __FUNCTION__);
+#define UNIMPLEMENTED DbgPrint("(%s:%d) WARNING: %s is UNIMPLEMENTED!\n", __FILE__, __LINE__, __FUNCTION__);
 
-    #define BugCheck(fmt, ...)              do { DbgPrint("(%s:%d) Fatal Error in %s: " fmt, __FILE__, __LINE__, __FUNCTION__, ##__VA_ARGS__); for (;;); } while (0)
-    #define DbgDumpBuffer(mask, buf, len)    DebugDumpBuffer(mask, buf, len)
+#define BugCheck(fmt, ...)              do { DbgPrint("(%s:%d) Fatal Error in %s: " fmt, __FILE__, __LINE__, __FUNCTION__, ##__VA_ARGS__); for (;;); } while (0)
+#define DbgDumpBuffer(mask, buf, len)    DebugDumpBuffer(mask, buf, len)
 
 #ifdef __i386__
 
@@ -115,34 +114,6 @@ void    MEMORY_READWRITE_BREAKPOINT4(unsigned long addr);
 void    MEMORY_WRITE_BREAKPOINT4(unsigned long addr);
 
 #endif // defined __i386__
-
-#else
-    /* In release builds only emit the critical trace macro; all other noise stays quiet. */
-    #undef DBG_DEFAULT_CHANNEL
-    #define DBG_DEFAULT_CHANNEL(ch)
-
-    #define ERR_CH(ch, fmt, ...)
-    #define FIXME_CH(ch, fmt, ...)
-    #define WARN_CH(ch, fmt, ...)
-    #define TRACE_CH(ch, fmt, ...)
-
-    #define ERR(fmt, ...)
-    #define FIXME(fmt, ...)
-    #define WARN(fmt, ...)
-    /* Map TRACE to CRITICAL_TRACE so key boot messages remain visible. */
-    #define TRACE(fmt, ...) CRITICAL_TRACE(fmt, ##__VA_ARGS__)
-
-    #define UNIMPLEMENTED
-
-    /* DebugInit is already declared above and remains available in release builds. */
-    #define BugCheck(fmt, ...)
-    #define DbgDumpBuffer(mask, buf, len)
-    #define DebugEnableScreenPort()
-    #define DebugDisableScreenPort()
-    #define DebugIsScreenPortEnabled() (FALSE)
-    #define DbgParseDebugChannels(val)
-
-#endif // DBG
 
 DECLSPEC_NORETURN
 void
