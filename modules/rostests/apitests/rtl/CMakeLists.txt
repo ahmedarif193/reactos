@@ -1,6 +1,7 @@
 
 
 list(APPEND SOURCE
+    RtlCriticalSection.c
     RtlIntSafe.c
 )
 
