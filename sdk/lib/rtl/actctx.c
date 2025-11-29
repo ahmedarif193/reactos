@@ -6198,7 +6198,11 @@ RtlpInitializeActCtx(PVOID* pOldShimData)
 
     /* ReactOS specific:
        Now that we have found the process_actctx we can initialize the process compat subsystem */
+#if (defined(__NTDLL__) || defined(_NTDLLBUILD_)) && !defined(_NTOSKRNL_)
     LdrpInitializeProcessCompat(process_actctx, pOldShimData);
+#else
+    UNREFERENCED_PARAMETER(pOldShimData);
+#endif
 
     ctx.cbSize   = sizeof(ctx);
     ctx.dwFlags  = 0;

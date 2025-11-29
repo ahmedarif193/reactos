@@ -184,14 +184,31 @@ function(setup_host_tools)
     endif()
 
     if(NOT _reused_host_tools)
+        set(_host_tools_build_command ${HOST_TOOLS_CMAKE_COMMAND} --build ${REACTOS_BINARY_DIR}/host-tools/bin)
+
+        set(_host_generator "${CMAKE_GENERATOR}")
+        set(_host_generator_is_multi FALSE)
+        if(_host_generator MATCHES "Visual Studio" OR _host_generator STREQUAL "Xcode" OR _host_generator MATCHES "Ninja Multi-Config")
+            set(_host_generator_is_multi TRUE)
+        endif()
+        if(_host_generator_is_multi)
+            list(APPEND _host_tools_build_command --config ${HOST_BUILD_TYPE})
+        endif()
+
+        if(_host_generator MATCHES "^Ninja")
+            list(APPEND _host_tools_build_command -- --quiet)
+        endif()
+    endif()
+
+    if(NOT _reused_host_tools)
         ExternalProject_Add(host-tools
             SOURCE_DIR ${REACTOS_SOURCE_DIR}
             PREFIX ${REACTOS_BINARY_DIR}/host-tools
             BINARY_DIR ${REACTOS_BINARY_DIR}/host-tools/bin
             CMAKE_COMMAND ${HOST_TOOLS_CMAKE_COMMAND}
+            BUILD_COMMAND ${_host_tools_build_command}
             CMAKE_ARGS
                 -UCMAKE_TOOLCHAIN_FILE
-                -DCMAKE_RULE_MESSAGES:BOOL=OFF
                 -DARCH:STRING=${ARCH}
                 -DWOW64_MULTILIB=OFF
                 -DCMAKE_INSTALL_PREFIX=${REACTOS_BINARY_DIR}/host-tools

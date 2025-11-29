@@ -64,6 +64,7 @@ struct FxWatchdog {
             WDF_VERIFY_KM_ONLY_CODE();
 
             FX_ASSERT_AND_ASSUME_FOR_PREFAST(NT_SUCCESS(status));
+            UNREFERENCED_PARAMETER(status);
 
             m_CallingThread = Mx::MxGetCurrentThread();
 
@@ -113,4 +114,3 @@ struct FxWatchdog {
 };
 
 #endif // __FX_WATCHDOG__
-

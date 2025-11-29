@@ -62,26 +62,6 @@ UCHAR RtlpBitsClearLow[] =
     4,0,1,0,2,0,1,0,3,0,1,0,2,0,1,0
 };
 
-FORCEINLINE
-UCHAR
-RtlpFindLeastSetBit(ULONG Bits)
-{
-    if (Bits & 0xFFFF)
-    {
-        if (Bits & 0xFF)
-            return RtlpBitsClearLow[Bits & 0xFF]; /* Lowest byte */
-        else
-            return RtlpBitsClearLow[(Bits >> 8) & 0xFF] + 8; /* 2nd byte */
-    }
-    else
-    {
-        if ((Bits >> 16) & 0xFF)
-            return RtlpBitsClearLow[(Bits >> 16) & 0xFF] + 16; /* 3rd byte */
-        else
-            return RtlpBitsClearLow[(Bits >> 24) & 0xFF] + 24; /* Highest byte */
-    }
-}
-
 /* Maximum size of a tail-filling pattern used for compare operation */
 UCHAR FillPattern[HEAP_ENTRY_SIZE] =
 {
@@ -96,6 +76,146 @@ UCHAR FillPattern[HEAP_ENTRY_SIZE] =
 };
 
 #define RTL_HEAP_INITIAL_UCRS 8
+
+#define RTL_HEAP_TRACE_SLOTS 2048
+
+typedef struct _RTL_HEAP_TRACE_SLOT
+{
+    PVOID Address;
+    USHORT AllocIndex;
+    USHORT FreeIndex;
+} RTL_HEAP_TRACE_SLOT, *PRTL_HEAP_TRACE_SLOT;
+
+static RTL_HEAP_TRACE_SLOT RtlpHeapTraceTable[RTL_HEAP_TRACE_SLOTS];
+
+static
+VOID
+RtlpHeapTraceRemember(PVOID Ptr, USHORT AllocIndex, USHORT FreeIndex)
+{
+    ULONG_PTR Key, Slot, i;
+
+    if (!Ptr)
+        return;
+
+    Key = (ULONG_PTR)Ptr >> HEAP_ENTRY_SHIFT;
+    Slot = Key & (RTL_HEAP_TRACE_SLOTS - 1);
+
+    for (i = 0; i < RTL_HEAP_TRACE_SLOTS; i++)
+    {
+        PRTL_HEAP_TRACE_SLOT Entry = &RtlpHeapTraceTable[(Slot + i) & (RTL_HEAP_TRACE_SLOTS - 1)];
+        PVOID Prev = InterlockedCompareExchangePointer(&Entry->Address, Ptr, NULL);
+
+        if (Prev == NULL || Prev == Ptr)
+        {
+            Entry->AllocIndex = AllocIndex;
+            Entry->FreeIndex = FreeIndex;
+            return;
+        }
+    }
+}
+
+static
+BOOLEAN
+RtlpHeapTraceLookup(PVOID Ptr, USHORT *AllocIndex, USHORT *FreeIndex)
+{
+    ULONG_PTR Key, Slot, i;
+
+    if (!Ptr)
+        return FALSE;
+
+    Key = (ULONG_PTR)Ptr >> HEAP_ENTRY_SHIFT;
+    Slot = Key & (RTL_HEAP_TRACE_SLOTS - 1);
+
+    for (i = 0; i < RTL_HEAP_TRACE_SLOTS; i++)
+    {
+        PRTL_HEAP_TRACE_SLOT Entry = &RtlpHeapTraceTable[(Slot + i) & (RTL_HEAP_TRACE_SLOTS - 1)];
+        if (Entry->Address == Ptr)
+        {
+            if (AllocIndex) *AllocIndex = Entry->AllocIndex;
+            if (FreeIndex) *FreeIndex = Entry->FreeIndex;
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static
+VOID
+RtlpHeapLogFreeFailure(PVOID Ptr)
+{
+#if DBG
+    USHORT AllocIdx = 0, FreeIdx = 0;
+    PVOID Backtrace[16];
+    USHORT Depth, i;
+
+    Depth = RtlCaptureStackBackTrace(1, RTL_NUMBER_OF(Backtrace), Backtrace, NULL);
+    DPRINT1("HEAP: invalid free %p, stack trace depth %u:\n", Ptr, Depth);
+    for (i = 0; i < Depth; i++)
+    {
+        PVOID ModuleBase = NULL;
+        UNICODE_STRING ModName;
+        ModName.Buffer = NULL;
+        ModName.Length = ModName.MaximumLength = 0;
+        ModuleBase = RtlPcToFileHeader(Backtrace[i], (PVOID *)&ModuleBase);
+#ifndef _NTOSKRNL_
+        /* Try to resolve the module name in user-mode for easier triage */
+        if (ModuleBase)
+        {
+            PLDR_DATA_TABLE_ENTRY LdrEntry;
+            if (NT_SUCCESS(LdrFindEntryForAddress(Backtrace[i], &LdrEntry)))
+            {
+                ModName = LdrEntry->BaseDllName;
+            }
+        }
+#endif
+        if (ModName.Buffer)
+            DPRINT1("  [%u] %p (module %wZ base %p)\n", i, Backtrace[i], &ModName, ModuleBase);
+        else
+            DPRINT1("  [%u] %p (module %p)\n", i, Backtrace[i], ModuleBase);
+    }
+
+    if (RtlpHeapTraceLookup(Ptr, &AllocIdx, &FreeIdx))
+    {
+        DPRINT1("HEAP: saved AllocIndex=%u FreeIndex=%u for %p\n", AllocIdx, FreeIdx, Ptr);
+    }
+#else
+    UNREFERENCED_PARAMETER(Ptr);
+#endif
+}
+
+static
+VOID
+RtlpHeapLogTraceIndices(PVOID Ptr)
+{
+#if DBG
+    USHORT AllocIdx = 0, FreeIdx = 0;
+    if (RtlpHeapTraceLookup(Ptr, &AllocIdx, &FreeIdx))
+    {
+        DPRINT1("HEAP: trace indices for %p alloc=%u free=%u\n", Ptr, AllocIdx, FreeIdx);
+    }
+#else
+    UNREFERENCED_PARAMETER(Ptr);
+#endif
+}
+
+FORCEINLINE
+BOOLEAN
+RtlpHeapRequestNeedsExtra(
+    _In_ PHEAP Heap,
+    _In_ ULONG Flags)
+{
+    if (Heap->Flags & HEAP_CAPTURE_STACK_BACKTRACES)
+        return TRUE;
+
+    if (Heap->PseudoTagEntries)
+        return TRUE;
+
+    if (Flags & (HEAP_EXTRA_FLAGS_MASK & ~HEAP_CAPTURE_STACK_BACKTRACES))
+        return TRUE;
+
+    return FALSE;
+}
 
 static
 SIZE_T
@@ -2184,8 +2304,7 @@ RtlpSplitEntry(PHEAP Heap,
     /* Add extra flags in case of settable user value feature is requested,
        or there is a tag (small or normal) or there is a request to
        capture stack backtraces */
-    if ((Flags & HEAP_EXTRA_FLAGS_MASK) ||
-        Heap->PseudoTagEntries)
+    if (RtlpHeapRequestNeedsExtra(Heap, Flags))
     {
         /* Add flag which means that the entry will have extra stuff attached */
         EntryFlags |= HEAP_ENTRY_EXTRA_PRESENT;
@@ -2437,8 +2556,7 @@ RtlAllocateHeap(IN PVOID HeapPtr,
     /* Add extra flags in case of settable user value feature is requested,
        or there is a tag (small or normal) or there is a request to
        capture stack backtraces */
-    if ((Flags & HEAP_EXTRA_FLAGS_MASK) ||
-        Heap->PseudoTagEntries)
+    if (RtlpHeapRequestNeedsExtra(Heap, Flags))
     {
         /* Add flag which means that the entry will have extra stuff attached */
         EntryFlags |= HEAP_ENTRY_EXTRA_PRESENT;
@@ -2563,6 +2681,11 @@ RtlAllocateHeap(IN PVOID HeapPtr,
         {
             Extra = RtlpGetExtraStuffPointer(InUseEntry);
             RtlZeroMemory(Extra, sizeof(HEAP_ENTRY_EXTRA));
+            if (Heap->Flags & HEAP_CAPTURE_STACK_BACKTRACES)
+            {
+                Extra->AllocatorBackTraceIndex = RtlLogStackBackTrace();
+                RtlpHeapTraceRemember(InUseEntry + 1, Extra->AllocatorBackTraceIndex, 0);
+            }
 
             // TODO: Tagging
         }
@@ -2577,6 +2700,7 @@ RtlAllocateHeap(IN PVOID HeapPtr,
         SIZE_T VirtualAllocationSize = AllocationSize +
                                        sizeof(HEAP_VIRTUAL_ALLOC_ENTRY) -
                                        sizeof(HEAP_ENTRY);
+        PVOID UserBlock;
 
         if ((VirtualAllocationSize < AllocationSize) ||
             (VirtualAllocationSize > Heap->MaximumAllocationSize))
@@ -2613,6 +2737,16 @@ RtlAllocateHeap(IN PVOID HeapPtr,
         VirtualBlock->BusyBlock.Flags = EntryFlags | HEAP_ENTRY_VIRTUAL_ALLOC | HEAP_ENTRY_EXTRA_PRESENT;
         VirtualBlock->CommitSize = AllocationSize;
         VirtualBlock->ReserveSize = AllocationSize;
+        RtlZeroMemory(&VirtualBlock->ExtraStuff, sizeof(VirtualBlock->ExtraStuff));
+
+        UserBlock = (PVOID)((PHEAP_ENTRY)&VirtualBlock->BusyBlock + 1);
+        if (Heap->Flags & HEAP_CAPTURE_STACK_BACKTRACES)
+        {
+            VirtualBlock->ExtraStuff.AllocatorBackTraceIndex = RtlLogStackBackTrace();
+            RtlpHeapTraceRemember(UserBlock,
+                                   VirtualBlock->ExtraStuff.AllocatorBackTraceIndex,
+                                   0);
+        }
 
         /* Insert it into the list of virtual allocations */
         InsertTailList(&Heap->VirtualAllocdBlocks, &VirtualBlock->Entry);
@@ -2621,7 +2755,7 @@ RtlAllocateHeap(IN PVOID HeapPtr,
         if (HeapLocked) RtlLeaveHeapLock(Heap->LockVariable);
 
         /* Return pointer to user data */
-        return VirtualBlock + 1;
+        return UserBlock;
     }
 
     /* Generate an exception */
@@ -2668,6 +2802,7 @@ BOOLEAN NTAPI RtlFreeHeap(
     PHEAP_VIRTUAL_ALLOC_ENTRY VirtualEntry;
     BOOLEAN Locked = FALSE;
     NTSTATUS Status;
+    USHORT FreeTrace = 0, AllocTrace = 0;
 
     /* Freeing NULL pointer is a legal operation */
     if (!Ptr) return TRUE;
@@ -2693,6 +2828,7 @@ BOOLEAN NTAPI RtlFreeHeap(
         {
             /* This is an invalid block */
             DPRINT1("HEAP: Trying to free an invalid address %p!\n", Ptr);
+            RtlpHeapLogFreeFailure(Ptr);
             RtlSetLastWin32ErrorAndNtStatusFromNtStatus(STATUS_INVALID_PARAMETER);
             _SEH2_YIELD(return FALSE);
         }
@@ -2701,6 +2837,7 @@ BOOLEAN NTAPI RtlFreeHeap(
     {
         /* The pointer was invalid */
         DPRINT1("HEAP: Trying to free an invalid address %p!\n", Ptr);
+        RtlpHeapLogFreeFailure(Ptr);
         RtlSetLastWin32ErrorAndNtStatusFromNtStatus(STATUS_INVALID_PARAMETER);
         _SEH2_YIELD(return FALSE);
     }
@@ -2713,6 +2850,15 @@ BOOLEAN NTAPI RtlFreeHeap(
         Locked = TRUE;
     }
 
+    if ((Heap->Flags & HEAP_CAPTURE_STACK_BACKTRACES) &&
+        (HeapEntry->Flags & HEAP_ENTRY_EXTRA_PRESENT))
+    {
+        PHEAP_ENTRY_EXTRA Extra = RtlpGetExtraStuffPointer(HeapEntry);
+        AllocTrace = Extra->AllocatorBackTraceIndex;
+        FreeTrace = RtlLogStackBackTrace();
+        RtlpHeapTraceRemember(Ptr, AllocTrace, FreeTrace);
+    }
+
     if (HeapEntry->Flags & HEAP_ENTRY_VIRTUAL_ALLOC)
     {
         /* Big allocation */
@@ -2722,6 +2868,15 @@ BOOLEAN NTAPI RtlFreeHeap(
         RemoveEntryList(&VirtualEntry->Entry);
 
         // TODO: Tagging
+
+        if ((Heap->Flags & HEAP_CAPTURE_STACK_BACKTRACES) &&
+            (VirtualEntry->BusyBlock.Flags & HEAP_ENTRY_EXTRA_PRESENT))
+        {
+            PHEAP_ENTRY_EXTRA Extra = &VirtualEntry->ExtraStuff;
+            if (!AllocTrace) AllocTrace = Extra->AllocatorBackTraceIndex;
+            if (!FreeTrace) FreeTrace = RtlLogStackBackTrace();
+            RtlpHeapTraceRemember(Ptr, AllocTrace, FreeTrace);
+        }
 
         BlockSize = 0;
         Status = ZwFreeVirtualMemory(NtCurrentProcess(),
@@ -3098,8 +3253,7 @@ RtlReAllocateHeap(HANDLE HeapPtr,
 
     /* Add up extra stuff, if it is present anywhere */
     if (((((PHEAP_ENTRY)Ptr)-1)->Flags & HEAP_ENTRY_EXTRA_PRESENT) ||
-        (Flags & HEAP_EXTRA_FLAGS_MASK) ||
-        Heap->PseudoTagEntries)
+        RtlpHeapRequestNeedsExtra(Heap, Flags))
     {
         AllocationSize += sizeof(HEAP_ENTRY_EXTRA);
     }
@@ -3698,6 +3852,7 @@ RtlpCheckInUsePattern(PHEAP_ENTRY HeapEntry)
     if (Result != HEAP_ENTRY_SIZE)
     {
         DPRINT1("HEAP: Heap entry (size %x) %p tail is modified at %p\n", Size, HeapEntry, TailPart + Result);
+        RtlpHeapLogTraceIndices(HeapEntry + 1);
         return FALSE;
     }
 
@@ -3768,6 +3923,7 @@ RtlpValidateHeapEntry(
 
 invalid_entry:
     DPRINT1("HEAP: Invalid heap entry %p in heap %p\n", HeapEntry, Heap);
+    RtlpHeapLogTraceIndices(HeapEntry ? (HeapEntry + 1) : NULL);
     return FALSE;
 }
 

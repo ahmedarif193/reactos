@@ -25,8 +25,25 @@ static BOOLEAN RtlpDebugInfoFreeList[MAX_STATIC_CS_DEBUG_OBJECTS];
 LARGE_INTEGER RtlpTimeout;
 BOOLEAN RtlpTimeoutDisable;
 
-extern BOOLEAN LdrpShutdownInProgress;
-extern HANDLE LdrpShutdownThreadId;
+static PRTL_CRITICAL_SECTION_SHUTDOWN_CALLBACK RtlpShutdownBypassCallback;
+
+VOID
+NTAPI
+RtlpSetCriticalSectionShutdownCallback(
+    _In_opt_ PRTL_CRITICAL_SECTION_SHUTDOWN_CALLBACK Callback)
+{
+    RtlpShutdownBypassCallback = Callback;
+}
+
+FORCEINLINE BOOLEAN RtlpIsShutdownBypassAllowed(VOID)
+{
+    PRTL_CRITICAL_SECTION_SHUTDOWN_CALLBACK Callback = RtlpShutdownBypassCallback;
+
+    if (!Callback)
+        return FALSE;
+
+    return Callback();
+}
 
 /* FUNCTIONS *****************************************************************/
 
@@ -132,8 +149,7 @@ RtlpWaitForCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
      * If we're shutting down the process, we're allowed to acquire any
      * critical sections by force (the loader lock in particular)
      */
-    if (LdrpShutdownInProgress &&
-        LdrpShutdownThreadId == NtCurrentTeb()->RealClientId.UniqueThread)
+    if (RtlpIsShutdownBypassAllowed())
     {
         DPRINT("Forcing ownership of critical section %p\n", CriticalSection);
         return STATUS_SUCCESS;

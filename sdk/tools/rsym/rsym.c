@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <wchar.h>
+#include <ctype.h>
 
 #include "rsym.h"
 
@@ -62,6 +63,67 @@ ComputeDJBHash(const char *name)
     }
 
     return val;
+}
+
+static BOOL
+StringEqualsInsensitiveN(const char *value, size_t length, const char *literal)
+{
+    size_t literal_len = strlen(literal);
+    size_t i;
+
+    if (length != literal_len)
+    {
+        return FALSE;
+    }
+
+    for (i = 0; i < length; i++)
+    {
+        if (tolower((unsigned char)value[i]) != literal[i])
+        {
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+static BOOL
+EnvVarIsTruthy(const char *value)
+{
+    const char *start = value;
+    const char *end;
+    size_t length;
+
+    while (*start && isspace((unsigned char)*start))
+    {
+        ++start;
+    }
+
+    end = start + strlen(start);
+    while (end > start && isspace((unsigned char)*(end - 1)))
+    {
+        --end;
+    }
+
+    length = (size_t)(end - start);
+    if (length == 0)
+    {
+        return FALSE;
+    }
+
+    if (length == 1 && start[0] == '0')
+    {
+        return FALSE;
+    }
+
+    if (StringEqualsInsensitiveN(start, length, "false") ||
+        StringEqualsInsensitiveN(start, length, "off") ||
+        StringEqualsInsensitiveN(start, length, "no"))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 static void
@@ -139,6 +201,95 @@ CompareSymEntry(const PROSSYM_ENTRY SymEntry1, const PROSSYM_ENTRY SymEntry2)
     return 0;
 }
 
+static void
+CopyImageIfNeeded(const char *inputPath, const char *outputPath)
+{
+    if (!inputPath || !outputPath || strcmp(inputPath, outputPath) == 0)
+    {
+        return;
+    }
+
+    FILE *src = fopen(inputPath, "rb");
+    FILE *dst = fopen(outputPath, "wb");
+    if (!src || !dst)
+    {
+        if (src)
+            fclose(src);
+        if (dst)
+            fclose(dst);
+        fprintf(stderr, "rsym: unable to copy image without symbols\n");
+        exit(1);
+    }
+
+    char buffer[4096];
+    size_t read_bytes;
+    while ((read_bytes = fread(buffer, 1, sizeof(buffer), src)) != 0)
+    {
+        if (fwrite(buffer, 1, read_bytes, dst) != read_bytes)
+        {
+            fprintf(stderr, "rsym: unable to copy image without symbols\n");
+            fclose(src);
+            fclose(dst);
+            exit(1);
+        }
+    }
+    fclose(src);
+    fclose(dst);
+}
+
+static const char *
+ExtractBaseName(const char *path)
+{
+    const char *last_slash = strrchr(path, '/');
+    const char *last_backslash = strrchr(path, '\\');
+    const char *name = path ? path : "";
+
+    if (last_slash && (!last_backslash || last_slash > last_backslash))
+    {
+        name = last_slash + 1;
+    }
+    else if (last_backslash)
+    {
+        name = last_backslash + 1;
+    }
+
+    return name;
+}
+
+static int
+ShouldSkipByList(const char *skipList, const char *imagePath)
+{
+    if (!skipList || !imagePath || *imagePath == '\0')
+    {
+        return 0;
+    }
+
+    const char *base = ExtractBaseName(imagePath);
+    size_t baseLen = strlen(base);
+    const char *cursor = skipList;
+
+    while (*cursor)
+    {
+        const char *tokenEnd = strchr(cursor, ';');
+        size_t tokenLen = tokenEnd ? (size_t)(tokenEnd - cursor) : strlen(cursor);
+
+        if (tokenLen == baseLen &&
+            tokenLen != 0 &&
+            strncmp(cursor, base, tokenLen) == 0)
+        {
+            return 1;
+        }
+
+        if (!tokenEnd)
+        {
+            break;
+        }
+        cursor = tokenEnd + 1;
+    }
+
+    return 0;
+}
+
 static int
 GetStabInfo(void *FileData, PIMAGE_FILE_HEADER PEFileHeader,
             PIMAGE_SECTION_HEADER PESectionHeaders,
@@ -189,6 +340,8 @@ GetCoffInfo(void *FileData, PIMAGE_FILE_HEADER PEFileHeader,
         /* No COFF symbol table */
         *CoffSymbolsLength = 0;
         *CoffStringsLength = 0;
+        *CoffSymbolsBase = NULL;
+        *CoffStringsBase = NULL;
     }
     else
     {
@@ -388,12 +541,14 @@ ConvertCoffs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
     CoffEntry = (PCOFF_SYMENT) CoffSymbolsBase;
     Count = CoffSymbolsLength / sizeof(COFF_SYMENT);
 
-    *SymbolsBase = malloc(Count * sizeof(ROSSYM_ENTRY));
+    /* One extra entry is reserved for the zeroed sentinel that we append. */
+    *SymbolsBase = malloc((Count + 1) * sizeof(ROSSYM_ENTRY));
     if (*SymbolsBase == NULL)
     {
         fprintf(stderr, "Unable to allocate memory for converted COFF symbols\n");
         return 1;
     }
+    memset(*SymbolsBase, 0, (Count + 1) * sizeof(ROSSYM_ENTRY));
     *SymbolsCount = 0;
     Current = *SymbolsBase;
 
@@ -627,8 +782,7 @@ DbgHelpAddLineNumber(PSRCCODEINFO LineInfo, void *UserContext)
     functionId = DbgHelpAddStringToTable(tab, strdup(pSymbol->Name));
 
     if (LineInfo->Address == 0)
-        fprintf(stderr, "Address is 0.\n");
-
+        return TRUE;
     tab->lastLineEntry = DbgHelpAddLineEntry(tab);
     tab->lastLineEntry->vma = LineInfo->Address - LineInfo->ModBase;
     tab->lastLineEntry->functionId = functionId;
@@ -1265,6 +1419,7 @@ int main(int argc, char* argv[])
     void *file;
     char elfhdr[4] = { '\177', 'E', 'L', 'F' };
     BOOLEAN UseDbgHelp = FALSE;
+    BOOLEAN HaveLineInfo = FALSE;
     int arg, argstate = 0;
     char *SourcePath = NULL;
 
@@ -1305,6 +1460,23 @@ int main(int argc, char* argv[])
     {
         fprintf(stderr, "Usage: rsym [-s <sources>] <input> <output>\n");
         exit(1);
+    }
+
+    {
+        const char *skipEnv = getenv("RSYM_SKIP_ROSSYM");
+        if (skipEnv && EnvVarIsTruthy(skipEnv))
+        {
+            CopyImageIfNeeded(path1, path2);
+            return 0;
+        }
+    }
+    {
+        const char *skipList = getenv("RSYM_SKIP_LIST");
+        if (skipList && ShouldSkipByList(skipList, path1))
+        {
+            CopyImageIfNeeded(path1, path2);
+            return 0;
+        }
     }
 
     FileData = load_file(path1, &FileSize);
@@ -1353,6 +1525,12 @@ int main(int argc, char* argv[])
         exit(1);
     }
 
+    HaveLineInfo = (StabsLength != 0);
+
+    int HasCoffSymbols = !(PEFileHeader->PointerToSymbolTable == 0 ||
+                           PEFileHeader->NumberOfSymbols == 0);
+
+#ifdef _WIN32
     if (StabsLength == 0)
     {
         // SYMOPT_AUTO_PUBLICS
@@ -1378,8 +1556,23 @@ int main(int argc, char* argv[])
         }
 
         UseDbgHelp = TRUE;
+        HaveLineInfo = (StabSymbolsCount != 0);
         SymUnloadModule64(FileData, module_base);
         SymCleanup(FileData);
+    }
+#endif
+
+    if (!HaveLineInfo && !HasCoffSymbols)
+    {
+        if (UseDbgHelp && StringBase)
+        {
+            free(StringBase);
+            StringBase = NULL;
+        }
+
+        CopyImageIfNeeded(path1, path2);
+        free(FileData);
+        return 0;
     }
 
     if (GetCoffInfo(FileData,

@@ -40,6 +40,60 @@ if(USE_DUMMY_PSEH)
     add_definitions(-D_USE_DUMMY_PSEH=1)
 endif()
 
+# Detect when clang drives lld in COFF mode so we can avoid GNU-only linker
+# constructs (scripts, numeric entry points, etc.).
+set(REACTOS_TARGET_LINKER_IS_LLD FALSE)
+set(REACTOS_LINKER_SUPPORTS_GNU_SCRIPTS TRUE)
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(_ROS_LD_PATH "")
+    if(CMAKE_LINKER)
+        set(_ROS_LD_PATH "${CMAKE_LINKER}")
+    elseif(DEFINED LD_EXECUTABLE AND NOT "${LD_EXECUTABLE}" STREQUAL "")
+        set(_ROS_LD_PATH "${LD_EXECUTABLE}")
+    endif()
+    if(NOT "${_ROS_LD_PATH}" STREQUAL "")
+        get_filename_component(_ROS_LD_BASENAME "${_ROS_LD_PATH}" NAME)
+        string(TOLOWER "${_ROS_LD_BASENAME}" _ROS_LD_BASENAME)
+        if(_ROS_LD_BASENAME MATCHES "^ld\\.lld(\\.exe)?$"
+           OR _ROS_LD_BASENAME MATCHES "^lld-link(\\.exe)?$"
+           OR _ROS_LD_BASENAME MATCHES "^lld(\\.exe)?$")
+            set(REACTOS_TARGET_LINKER_IS_LLD TRUE)
+            set(REACTOS_LINKER_SUPPORTS_GNU_SCRIPTS FALSE)
+        endif()
+        unset(_ROS_LD_BASENAME)
+    endif()
+    if(NOT REACTOS_TARGET_LINKER_IS_LLD)
+        set(_ROS_LD_FLAG_SOURCES
+            "${CMAKE_EXE_LINKER_FLAGS}" "${CMAKE_EXE_LINKER_FLAGS_INIT}"
+            "${CMAKE_SHARED_LINKER_FLAGS}" "${CMAKE_SHARED_LINKER_FLAGS_INIT}"
+            "${CMAKE_MODULE_LINKER_FLAGS}" "${CMAKE_MODULE_LINKER_FLAGS_INIT}")
+        set(_ROS_LD_HINT "")
+        foreach(_ROS_FLAG ${_ROS_LD_FLAG_SOURCES})
+            if(_ROS_FLAG MATCHES "-fuse-ld=([^ \"']+)")
+                set(_ROS_LD_HINT "${CMAKE_MATCH_1}")
+                break()
+            endif()
+        endforeach()
+        if(NOT "${_ROS_LD_HINT}" STREQUAL "")
+            get_filename_component(_ROS_LD_BASENAME "${_ROS_LD_HINT}" NAME)
+            if("${_ROS_LD_BASENAME}" STREQUAL "")
+                set(_ROS_LD_BASENAME "${_ROS_LD_HINT}")
+            endif()
+            string(TOLOWER "${_ROS_LD_BASENAME}" _ROS_LD_BASENAME)
+            if(_ROS_LD_BASENAME MATCHES "^ld\\.lld(\\.exe)?$"
+               OR _ROS_LD_BASENAME MATCHES "^lld-link(\\.exe)?$"
+               OR _ROS_LD_BASENAME MATCHES "^lld(\\.exe)?$")
+                set(REACTOS_TARGET_LINKER_IS_LLD TRUE)
+                set(REACTOS_LINKER_SUPPORTS_GNU_SCRIPTS FALSE)
+            endif()
+            unset(_ROS_LD_BASENAME)
+        endif()
+        unset(_ROS_LD_HINT)
+        unset(_ROS_LD_FLAG_SOURCES)
+    endif()
+    unset(_ROS_LD_PATH)
+endif()
+
 # Mirror the tool hint handling from the Clang toolchain so consumers can
 # override the MinGW prefix/suffix once and have both toolchains honor it.
 if(NOT DEFINED MINGW_TOOLCHAIN_PREFIX)
@@ -325,7 +379,17 @@ if(SEPARATE_DBG)
 
     if (NOT NO_ROSSYM)
         get_target_property(RSYM native-rsym IMPORTED_LOCATION)
-        set(strip_debug "${RSYM} -s ${REACTOS_SOURCE_DIR} <TARGET> <TARGET>")
+        get_property(_ros_rsym_skip GLOBAL PROPERTY ROS_RSYM_SKIP_BASES)
+        if(_ros_rsym_skip AND NOT _ros_rsym_skip STREQUAL "ROS_RSYM_SKIP_BASES-NOTFOUND")
+            list(JOIN _ros_rsym_skip ";" _ros_rsym_skip_joined)
+            set(_ROSSYM_ENV_COMMAND "\"${CMAKE_COMMAND}\" -E env \"RSYM_SKIP_LIST=${_ros_rsym_skip_joined}\"")
+        else()
+            set(_ROSSYM_ENV_COMMAND "\"${CMAKE_COMMAND}\" -E env")
+        endif()
+        set(strip_debug "${_ROSSYM_ENV_COMMAND} \"${RSYM}\" -s ${REACTOS_SOURCE_DIR} <TARGET> <TARGET>")
+        unset(_ros_rsym_skip_joined)
+        unset(_ros_rsym_skip)
+        unset(_ROSSYM_ENV_COMMAND)
     else()
         set(strip_debug "${CMAKE_STRIP} --strip-debug <TARGET>")
     endif()
@@ -362,21 +426,33 @@ elseif(NO_ROSSYM)
 else()
     # Normal rsym build
     get_target_property(RSYM native-rsym IMPORTED_LOCATION)
+    get_property(_ros_rsym_skip GLOBAL PROPERTY ROS_RSYM_SKIP_BASES)
+    if(_ros_rsym_skip AND NOT _ros_rsym_skip STREQUAL "ROS_RSYM_SKIP_BASES-NOTFOUND")
+        list(JOIN _ros_rsym_skip ";" _ros_rsym_skip_joined)
+        set(_ROSSYM_ENV_COMMAND "\"${CMAKE_COMMAND}\" -E env \"RSYM_SKIP_LIST=${_ros_rsym_skip_joined}\"")
+    else()
+        set(_ROSSYM_ENV_COMMAND "\"${CMAKE_COMMAND}\" -E env")
+    endif()
+    set(_ROSSYM_LINK_COMMAND "${_ROSSYM_ENV_COMMAND} \"${RSYM}\" -s ${REACTOS_SOURCE_DIR} <TARGET> <TARGET>")
 
     set(CMAKE_C_LINK_EXECUTABLE
         "<CMAKE_C_COMPILER> ${CMAKE_C_FLAGS} <CMAKE_C_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> -Wl,--start-group <LINK_LIBRARIES> -Wl,--end-group"
-        "${RSYM} -s ${REACTOS_SOURCE_DIR} <TARGET> <TARGET>")
+        "${_ROSSYM_LINK_COMMAND}")
     set(CMAKE_CXX_LINK_EXECUTABLE
         "<CMAKE_CXX_COMPILER> ${CMAKE_CXX_FLAGS} <CMAKE_CXX_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> -Wl,--start-group <LINK_LIBRARIES> -Wl,--end-group"
-        "${RSYM} -s ${REACTOS_SOURCE_DIR} <TARGET> <TARGET>")
+        "${_ROSSYM_LINK_COMMAND}")
     set(CMAKE_C_CREATE_SHARED_LIBRARY
         "<CMAKE_C_COMPILER> ${CMAKE_C_FLAGS} <CMAKE_SHARED_LIBRARY_C_FLAGS> <LINK_FLAGS> <CMAKE_SHARED_LIBRARY_CREATE_C_FLAGS> -o <TARGET> <OBJECTS> -Wl,--start-group <LINK_LIBRARIES> -Wl,--end-group"
-        "${RSYM} -s ${REACTOS_SOURCE_DIR} <TARGET> <TARGET>")
+        "${_ROSSYM_LINK_COMMAND}")
     set(CMAKE_CXX_CREATE_SHARED_LIBRARY
         "<CMAKE_CXX_COMPILER> ${CMAKE_CXX_FLAGS} <CMAKE_SHARED_LIBRARY_CXX_FLAGS> <LINK_FLAGS> <CMAKE_SHARED_LIBRARY_CREATE_CXX_FLAGS> -o <TARGET> <OBJECTS> -Wl,--start-group <LINK_LIBRARIES> -Wl,--end-group"
-        "${RSYM} -s ${REACTOS_SOURCE_DIR} <TARGET> <TARGET>")
+        "${_ROSSYM_LINK_COMMAND}")
     set(CMAKE_RC_CREATE_SHARED_LIBRARY
         "<CMAKE_C_COMPILER> ${CMAKE_C_FLAGS} <CMAKE_SHARED_LIBRARY_C_FLAGS> <LINK_FLAGS> <CMAKE_SHARED_LIBRARY_CREATE_C_FLAGS> -o <TARGET> <OBJECTS> <LINK_LIBRARIES>")
+    unset(_ros_rsym_skip_joined)
+    unset(_ros_rsym_skip)
+    unset(_ROSSYM_LINK_COMMAND)
+    unset(_ROSSYM_ENV_COMMAND)
 endif()
 
 set(CMAKE_C_CREATE_SHARED_MODULE ${CMAKE_C_CREATE_SHARED_LIBRARY})
@@ -423,8 +499,13 @@ function(set_entrypoint MODULE ENTRYPOINT)
     if(NOT _t_arch)
         set(_t_arch ${ARCH})
     endif()
-    if(${ENTRYPOINT} STREQUAL "0")
-        target_link_options(${MODULE} PRIVATE "-Wl,--entry=0")
+    if("${ENTRYPOINT}" STREQUAL "0")
+        if(REACTOS_TARGET_LINKER_IS_LLD)
+            target_sources(${MODULE} PRIVATE
+                ${REACTOS_SOURCE_DIR}/sdk/lib/noentry/noentry_stub.c)
+        else()
+            target_link_options(${MODULE} PRIVATE "-Wl,--entry=0")
+        endif()
     elseif(_t_arch STREQUAL "i386")
         set(_entrysymbol _${ENTRYPOINT})
         if(${ARGC} GREATER 2)
@@ -437,7 +518,35 @@ function(set_entrypoint MODULE ENTRYPOINT)
 endfunction()
 
 function(set_subsystem MODULE SUBSYSTEM)
-    target_link_options(${MODULE} PRIVATE "-Wl,--subsystem,${SUBSYSTEM}:5.01")
+    set(_ros_subsystem "${SUBSYSTEM}")
+    if(REACTOS_TARGET_LINKER_IS_LLD)
+        string(TOLOWER "${_ros_subsystem}" _ros_subsystem_lld)
+        if(_ros_subsystem_lld MATCHES "^[0-9]+$")
+            if(_ros_subsystem_lld STREQUAL "1")
+                set(_ros_subsystem_lld "native")
+            elseif(_ros_subsystem_lld STREQUAL "2")
+                set(_ros_subsystem_lld "windows")
+            elseif(_ros_subsystem_lld STREQUAL "3")
+                set(_ros_subsystem_lld "console")
+            elseif(_ros_subsystem_lld STREQUAL "9")
+                set(_ros_subsystem_lld "windowsce")
+            elseif(_ros_subsystem_lld STREQUAL "10")
+                set(_ros_subsystem_lld "efi_application")
+            elseif(_ros_subsystem_lld STREQUAL "14")
+                set(_ros_subsystem_lld "efi_boot_service_driver")
+            elseif(_ros_subsystem_lld STREQUAL "15")
+                set(_ros_subsystem_lld "efi_runtime_driver")
+            elseif(_ros_subsystem_lld STREQUAL "16")
+                set(_ros_subsystem_lld "boot_application")
+            else()
+                message(WARNING "LLD does not understand numeric subsystem '${_ros_subsystem}'. Using the raw value instead.")
+                set(_ros_subsystem_lld "${_ros_subsystem}")
+            endif()
+        endif()
+        target_link_options(${MODULE} PRIVATE "-Wl,--subsystem,${_ros_subsystem_lld}:5.01")
+    else()
+        target_link_options(${MODULE} PRIVATE "-Wl,--subsystem,${SUBSYSTEM}:5.01")
+    endif()
 endfunction()
 
 function(set_image_base MODULE IMAGE_BASE)
@@ -457,7 +566,13 @@ function(set_module_type_toolchain MODULE TYPE)
     if(TYPE IN_LIST KERNEL_MODULE_TYPES)
         target_link_options(${MODULE} PRIVATE -Wl,--exclude-all-symbols,-file-alignment=0x1000,-section-alignment=0x1000)
 
-        if(${TYPE} STREQUAL "wdmdriver")
+        if(REACTOS_TARGET_LINKER_IS_LLD)
+            if(${TYPE} STREQUAL "wdmdriver")
+                target_link_options(${MODULE} PRIVATE "-Wl,/driver:wdm")
+            else()
+                target_link_options(${MODULE} PRIVATE "-Wl,/driver")
+            endif()
+        elseif(${TYPE} STREQUAL "wdmdriver")
             target_link_options(${MODULE} PRIVATE "-Wl,--wdmdriver")
         endif()
 
@@ -630,6 +745,13 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
             # Delete any existing file in the private directory before creating new one
             COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
             COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} ${_dlltool_killat_flag} --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
+            COMMAND ${CMAKE_OBJCOPY}
+                '--set-section-flags=.didat$$2=alloc,load,contents,data'
+                '--set-section-flags=.didat$$4=alloc,load,contents,data'
+                '--set-section-flags=.didat$$5=alloc,load,contents,data'
+                '--set-section-flags=.didat$$6=alloc,load,contents,data'
+                '--set-section-flags=.didat$$7=alloc,load,contents,data'
+                ${_libname}_delayed.a
             COMMAND ${CMAKE_RANLIB} ${_libname}_delayed.a
             DEPENDS ${_implib_def}
             WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
@@ -641,6 +763,13 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
             # Delete any existing file in the private directory before creating new one
             COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
             COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} ${_dlltool_killat_flag} --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
+            COMMAND ${CMAKE_OBJCOPY}
+                '--set-section-flags=.didat$$2=alloc,load,contents,data'
+                '--set-section-flags=.didat$$4=alloc,load,contents,data'
+                '--set-section-flags=.didat$$5=alloc,load,contents,data'
+                '--set-section-flags=.didat$$6=alloc,load,contents,data'
+                '--set-section-flags=.didat$$7=alloc,load,contents,data'
+                ${_libname}_delayed.a
             DEPENDS ${_implib_def}
             WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
     endif()
@@ -798,9 +927,18 @@ macro(add_asm_files _target)
 endmacro()
 
 function(add_linker_script _target _linker_script_file)
-    get_filename_component(_file_full_path ${_linker_script_file} ABSOLUTE)
-    target_link_options(${_target} PRIVATE "-Wl,-T,${_file_full_path}")
-    set_property(TARGET ${_target} APPEND PROPERTY LINK_DEPENDS ${_file_full_path})
+    if(REACTOS_LINKER_SUPPORTS_GNU_SCRIPTS)
+        get_filename_component(_file_full_path ${_linker_script_file} ABSOLUTE)
+        target_link_options(${_target} PRIVATE "-Wl,-T,${_file_full_path}")
+        set_property(TARGET ${_target} APPEND PROPERTY LINK_DEPENDS ${_file_full_path})
+    else()
+        get_property(_ros_warned GLOBAL PROPERTY REACTOS_LINKER_SCRIPTS_UNSUPPORTED SET)
+        if(NOT _ros_warned)
+            message(WARNING "The active linker does not support GNU-style linker scripts. "
+                "Skipping script '${_linker_script_file}'.")
+            set_property(GLOBAL PROPERTY REACTOS_LINKER_SCRIPTS_UNSUPPORTED TRUE)
+        endif()
+    endif()
 endfunction()
 
 # Manage our C++ options

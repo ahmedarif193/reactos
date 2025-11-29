@@ -286,6 +286,7 @@ RtlpQueryRemoteProcessModules(HANDLE ProcessHandle,
 /*
  * @unimplemented
  */
+#ifndef _NTOSKRNL_
 NTSTATUS
 NTAPI
 RtlQueryProcessDebugInformation(IN ULONG ProcessId,
@@ -463,5 +464,18 @@ RtlQueryProcessDebugInformation(IN ULONG ProcessId,
 
     return Status;
 }
+#else
+NTSTATUS
+NTAPI
+RtlQueryProcessDebugInformation(IN ULONG ProcessId,
+                                IN ULONG DebugInfoMask,
+                                IN OUT PRTL_DEBUG_INFORMATION Buf)
+{
+    UNREFERENCED_PARAMETER(ProcessId);
+    UNREFERENCED_PARAMETER(DebugInfoMask);
+    UNREFERENCED_PARAMETER(Buf);
+    return STATUS_NOT_IMPLEMENTED;
+}
+#endif
 
 /* EOL */

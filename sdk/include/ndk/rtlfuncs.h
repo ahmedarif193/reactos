@@ -3385,6 +3385,13 @@ RtlDestroyQueryDebugBuffer(IN PRTL_DEBUG_INFORMATION DebugBuffer);
 NTSYSAPI
 NTSTATUS
 NTAPI
+RtlQueryProcessBackTraceInformation(
+    _Inout_ PRTL_DEBUG_INFORMATION DebugBuffer
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
 RtlQueryProcessDebugInformation(
     _In_ ULONG ProcessId,
     _In_ ULONG DebugInfoClassMask,

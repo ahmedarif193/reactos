@@ -1,0 +1,10 @@
+#pragma once
+
+typedef
+BOOLEAN
+(NTAPI *PRTL_CRITICAL_SECTION_SHUTDOWN_CALLBACK)(VOID);
+
+VOID
+NTAPI
+RtlpSetCriticalSectionShutdownCallback(
+    _In_opt_ PRTL_CRITICAL_SECTION_SHUTDOWN_CALLBACK Callback);

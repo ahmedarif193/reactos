@@ -38,6 +38,8 @@ extern VOID FASTCALL CHECK_PAGED_CODE_RTL(char *file, int line);
 
 extern PVOID MmHighestUserAddress;
 
+#include <reactos/rtl_critical.h>
+
 NTSTATUS
 NTAPI
 RtlpSafeCopyMemory(

@@ -461,8 +461,11 @@ RtlpDphWritePageHeapBlockInformation(PDPH_HEAP_ROOT DphRoot, PVOID UserAllocatio
     FillPtr = (PUCHAR)UserAllocation + Size;
     RtlFillMemory(FillPtr, ROUND_UP(FillPtr, PAGE_SIZE) - (ULONG_PTR)FillPtr, DPH_FILL_SUFFIX);
 
-    /* FIXME: Check if logging stack traces is turned on */
-    //if (DphRoot->ExtraFlags &
+    if (DphRoot->ExtraFlags & DPH_EXTRA_LOG_STACK_TRACES)
+    {
+        BlockInfo->TraceIndex = RtlLogStackBackTrace();
+        BlockInfo->StackTrace = NULL;
+    }
 
     return TRUE;
 }
@@ -1350,6 +1353,13 @@ RtlpDphReportCorruptedBlock(
     }
     _SEH2_END;
 
+    if (SafeInfo.TraceIndex || SafeInfo.StackTrace)
+    {
+        USHORT FreeIdx = (USHORT)(ULONG_PTR)SafeInfo.StackTrace;
+        DPRINT1("DPH: block %p alloc trace %u free trace %u\n",
+                Block, SafeInfo.TraceIndex, FreeIdx);
+    }
+
     if (ValidationInfo & DPH_VALINFO_CORRUPTED_AFTER_FREE)
     {
         VERIFIER_STOP(
@@ -1597,6 +1607,8 @@ RtlpPageHeapCreate(ULONG Flags,
     DphRoot->HeapFlags = Flags;
     DphRoot->HeapCritSect = (PHEAP_LOCK)((PCHAR)DphRoot + DPH_POOL_SIZE);
     DphRoot->ExtraFlags = RtlpDphGlobalFlags;
+    if (Flags & HEAP_CAPTURE_STACK_BACKTRACES)
+        DphRoot->ExtraFlags |= DPH_EXTRA_LOG_STACK_TRACES;
 
     ZwQueryPerformanceCounter(&PerfCounter, NULL);
     DphRoot->Seed = PerfCounter.LowPart;
@@ -1891,8 +1903,10 @@ RtlpPageHeapAllocate(IN PVOID HeapPtr,
     BusyNode->UserValue = NULL;
     BusyNode->UserFlags = Flags & HEAP_SETTABLE_USER_FLAGS;
 
-    // FIXME: Don't forget about stack traces if such flag was set
-    BusyNode->StackTrace = NULL;
+    if (DphRoot->ExtraFlags & DPH_EXTRA_LOG_STACK_TRACES)
+        BusyNode->StackTrace = (PVOID)(ULONG_PTR)RtlLogStackBackTrace();
+    else
+        BusyNode->StackTrace = NULL;
 
     /* Place it on busy list */
     RtlpDphPlaceOnBusyList(DphRoot, BusyNode);
@@ -2008,9 +2022,16 @@ RtlpPageHeapFree(HANDLE HeapPtr,
     RtlpDphPlaceOnFreeList(DphRoot, Node);
 
     //if (DphRoot->ExtraFlags & DPH_EXTRA_LOG_STACK_TRACES)
-    //    Node->StackTrace = RtlpDphLogStackTrace(3);
-    //else
+    if (DphRoot->ExtraFlags & DPH_EXTRA_LOG_STACK_TRACES)
+    {
+        PDPH_BLOCK_INFORMATION Info = (PDPH_BLOCK_INFORMATION)Node->pUserAllocation - 1;
+        Info->StackTrace = (PVOID)(ULONG_PTR)RtlLogStackBackTrace();
+        Node->StackTrace = Info->StackTrace;
+    }
+    else
+    {
         Node->StackTrace = NULL;
+    }
 
     /* Leave the heap lock */
     RtlpDphPostProcessing(DphRoot);

@@ -626,9 +626,26 @@ PrintName(FILE *fileDest, EXPORT *pexp, PSTRING pstr, int fDeco)
     }
 }
 
+static
+void
+NormalizeForwarderTarget(PSTRING pstr)
+{
+    if ((giArch == ARCH_X86) &&
+        pstr &&
+        (pstr->len > 1) &&
+        (pstr->buf[0] == '_') &&
+        ScanToken(pstr->buf, '.'))
+    {
+        pstr->buf++;
+        pstr->len--;
+    }
+}
+
 void
 OutputLine_def_MS(FILE *fileDest, EXPORT *pexp)
 {
+    STRING Target;
+
     PrintName(fileDest, pexp, &pexp->strName, 0);
 
     if (gbImportLib)
@@ -639,6 +656,9 @@ OutputLine_def_MS(FILE *fileDest, EXPORT *pexp)
     }
     else if (pexp->strTarget.buf)
     {
+        Target = pexp->strTarget;
+        NormalizeForwarderTarget(&Target);
+
         if (pexp->strName.buf[0] == '?')
         {
             //fprintf(stderr, "warning: ignoring C++ redirection %.*s -> %.*s\n",
@@ -650,16 +670,16 @@ OutputLine_def_MS(FILE *fileDest, EXPORT *pexp)
 
             /* If the original name was decorated, use decoration in the forwarder as well */
             if ((giArch == ARCH_X86) && ScanToken(pexp->strName.buf, '@') &&
-                !ScanToken(pexp->strTarget.buf, '@') &&
+                !ScanToken(Target.buf, '@') &&
                 ((pexp->nCallingConvention == CC_STDCALL) ||
                 (pexp->nCallingConvention == CC_FASTCALL)) )
             {
-                PrintName(fileDest, pexp, &pexp->strTarget, 1);
+                PrintName(fileDest, pexp, &Target, 1);
             }
             else
             {
                 /* Write the undecorated redirection name */
-                fprintf(fileDest, "%.*s", pexp->strTarget.len, pexp->strTarget.buf);
+                fprintf(fileDest, "%.*s", Target.len, Target.buf);
             }
         }
     }
@@ -681,6 +701,7 @@ void
 OutputLine_def_GCC(FILE *fileDest, EXPORT *pexp)
 {
     int bTracing = 0;
+    STRING Target;
     /* Print the function name, with decoration for export libs */
     PrintName(fileDest, pexp, &pexp->strName, gbImportLib);
     DbgPrint("Generating def line for '%.*s'\n", pexp->strName.len, pexp->strName.buf);
@@ -691,9 +712,12 @@ OutputLine_def_GCC(FILE *fileDest, EXPORT *pexp)
         int fIsExternal = !!ScanToken(pexp->strTarget.buf, '.');
         DbgPrint("Got redirect '%.*s'\n", pexp->strTarget.len, pexp->strTarget.buf);
 
+        Target = pexp->strTarget;
+        NormalizeForwarderTarget(&Target);
+
         /* print the target name, don't decorate if it is external */
         fprintf(fileDest, pexp->uFlags & FL_IMPSYM ? "==" : "=");
-        PrintName(fileDest, pexp, &pexp->strTarget, !fIsExternal);
+        PrintName(fileDest, pexp, &Target, !fIsExternal);
     }
     else if (((pexp->uFlags & FL_STUB) || (pexp->nCallingConvention == CC_STUB)) &&
              (pexp->strName.buf[0] == '?'))

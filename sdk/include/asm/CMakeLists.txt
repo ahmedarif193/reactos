@@ -1,5 +1,6 @@
 
 add_library(genincdata MODULE genincdata.c)
+set_property(GLOBAL APPEND PROPERTY ROS_RSYM_SKIP_BASES "genincdata.dll")
 
 set_entrypoint(genincdata 0)
 add_dependencies(genincdata bugcodes psdk xdk)
