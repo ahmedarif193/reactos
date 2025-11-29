@@ -1216,6 +1216,7 @@ static __inline tSendEntry * PrepareSendEntry(PARANDIS_ADAPTER *pContext, PNDIS_
                 len,
                 pcrAnyChecksum/* | pcrFixAnyChecksum*/,
                 __FUNCTION__);
+            UNREFERENCED_PARAMETER(res);
             /*
             if (res.xxpStatus == ppresXxpKnown)
             {

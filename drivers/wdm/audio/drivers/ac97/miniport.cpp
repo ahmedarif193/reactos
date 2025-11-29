@@ -19,15 +19,17 @@ static KSDATARANGE_AUDIO PinDataRangesMicStream[MIC_SAMPLERATES_TESTED];
 
 static KSDATARANGE PinDataRangesAnalogBridge[] =
 {
-   {
-      sizeof(KSDATARANGE),
-      0,
-      0,
-      0,
-      STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
-      STATICGUIDOF(KSDATAFORMAT_SUBTYPE_ANALOG),
-      STATICGUIDOF(KSDATAFORMAT_SPECIFIER_NONE)
-   }
+    {
+        {
+            sizeof(KSDATARANGE),
+            0,
+            0,
+            0,
+            { STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO) },
+            { STATICGUIDOF(KSDATAFORMAT_SUBTYPE_ANALOG) },
+            { STATICGUIDOF(KSDATAFORMAT_SPECIFIER_NONE) }
+        }
+    }
 };
 
 /*****************************************************************************
@@ -93,7 +95,7 @@ static PCPIN_DESCRIPTOR MiniportPins[] =
             KSPIN_COMMUNICATION_SINK,                   // Communication
             (GUID *) &KSCATEGORY_AUDIO,                 // Category
             NULL,                                       // Name
-            0                                           // Reserved
+            {0}                                         // Reserved
         }
     },
 
@@ -112,7 +114,7 @@ static PCPIN_DESCRIPTOR MiniportPins[] =
             KSPIN_COMMUNICATION_NONE,                   // Communication
             (GUID *) &KSCATEGORY_AUDIO,                 // Category
             NULL,                                       // Name
-            0                                           // Reserved
+            {0}                                         // Reserved
         }
     },
 
@@ -131,7 +133,7 @@ static PCPIN_DESCRIPTOR MiniportPins[] =
             KSPIN_COMMUNICATION_SINK,                   // Communication
             (GUID *) &PINNAME_CAPTURE,                  // Category
             &KSAUDFNAME_RECORDING_CONTROL,              // Name
-            0                                           // Reserved
+            {0}                                         // Reserved
         }
     },
 
@@ -150,7 +152,7 @@ static PCPIN_DESCRIPTOR MiniportPins[] =
             KSPIN_COMMUNICATION_NONE,                   // Communication
             (GUID *) &KSCATEGORY_AUDIO,                 // Category
             NULL,                                       // Name
-            0                                           // Reserved
+            {0}                                         // Reserved
         }
     },
 
@@ -174,7 +176,7 @@ static PCPIN_DESCRIPTOR MiniportPins[] =
             KSPIN_COMMUNICATION_SINK,                   // Communication
             (GUID *) &KSCATEGORY_AUDIO,                 // Category
             NULL,                                       // Name
-            0                                           // Reserved
+            {0}                                         // Reserved
         }
     },
 
@@ -193,7 +195,7 @@ static PCPIN_DESCRIPTOR MiniportPins[] =
             KSPIN_COMMUNICATION_NONE,                   // Communication
             (GUID *) &KSCATEGORY_AUDIO,                 // Category
             NULL,                                       // Name
-            0                                           // Reserved
+            {0}                                         // Reserved
         }
     }
 };

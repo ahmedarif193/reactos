@@ -30,8 +30,9 @@ FltpStartingToDrainObject(
 );
 
 VOID
+NTAPI
 FltpMiniFilterDriverUnload(
-);
+    _In_ PDRIVER_OBJECT DriverObject);
 
 NTSTATUS
 FltpAttachFrame(
@@ -436,8 +437,11 @@ FltpStartingToDrainObject(_Inout_ PFLT_OBJECT Object)
 }
 
 VOID
-FltpMiniFilterDriverUnload()
+NTAPI
+FltpMiniFilterDriverUnload(
+    _In_ PDRIVER_OBJECT DriverObject)
 {
+    UNREFERENCED_PARAMETER(DriverObject);
     __debugbreak();
 }
 

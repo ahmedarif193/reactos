@@ -30,9 +30,8 @@ if(DBG)
 endif()
 
 add_library(dc21x4 MODULE ${SOURCE} dc21x4.rc)
-if(DBG)
-    target_link_libraries(dc21x4 memcmp)
-endif()
+# Always link the memcmp helper; release builds also call memcmp in EEPROM logic.
+target_link_libraries(dc21x4 memcmp)
 add_pch(dc21x4 dc21x4.h SOURCE)
 set_module_type(dc21x4 kernelmodedriver)
 add_importlibs(dc21x4 ndis ntoskrnl hal)

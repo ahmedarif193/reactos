@@ -472,7 +472,6 @@ UDFTWrite(
     OSSTATUS RC = STATUS_SUCCESS;
     uint32 rLba;
     uint32 BCount;
-    uint32 i;
 
 #ifdef DBG
     //ASSERT(!(LBA & (32-1)));
@@ -542,7 +541,7 @@ retry_1:
         }
         // write according to relocation table
         RelocExtent_saved = RelocExtent;
-        for(i=0; RelocExtent->extLength; i++, RelocExtent++) {
+        for(; RelocExtent->extLength; RelocExtent++) {
             SIZE_T _WrittenBytes;
             rLba = RelocExtent->extLocation;
             BCount = RelocExtent->extLength>>Vcb->BlockSizeBits;
@@ -607,7 +606,6 @@ UDFTRead(
     uint32 retry;
     PVCB Vcb = (PVCB)_Vcb;
     uint32 BCount = Length >> Vcb->BlockSizeBits;
-    uint32 i;
 #ifdef _BROWSE_UDF_
     PEXTENT_MAP RelocExtent;
     PEXTENT_MAP RelocExtent_saved = NULL;
@@ -673,7 +671,7 @@ retry_1:
         }
         // read according to relocation table
         RelocExtent_saved = RelocExtent;
-        for(i=0; RelocExtent->extLength; i++, RelocExtent++) {
+        for(; RelocExtent->extLength; RelocExtent++) {
             SIZE_T _ReadBytes;
             rLba = RelocExtent->extLocation;
             if(rLba >= (Vcb->CDR_Mode ? Vcb->NWA : Vcb->LastLBA + 1)) {
@@ -3815,6 +3813,7 @@ check_for_data_track:
         UDFPrint(("    seek workaround, LBA %x, status %x\n", i, RC));
     }
     DbgFreePool(tmp);
+    UNREFERENCED_PARAMETER(RC);
 #endif //_BROWSE_UDF_
 
     return STATUS_SUCCESS;
