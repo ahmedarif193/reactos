@@ -70,6 +70,7 @@ typedef struct
 } WITHREADERROR, *LPWITHREADERROR;
 
 static DWORD g_dwTlsErrIndex = TLS_OUT_OF_INDEXES;
+static void INTERNET_FreeThreadError(void);
 HMODULE WININET_hModule;
 
 static CRITICAL_SECTION WININET_cs;
@@ -288,10 +289,7 @@ BOOL WINAPI DllMain (HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
             break;
 
         case DLL_THREAD_DETACH:
-            if (g_dwTlsErrIndex != TLS_OUT_OF_INDEXES)
-            {
-                heap_free(TlsGetValue(g_dwTlsErrIndex));
-            }
+            INTERNET_FreeThreadError();
             break;
 
         case DLL_PROCESS_DETACH:
@@ -303,8 +301,9 @@ BOOL WINAPI DllMain (HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 
             if (g_dwTlsErrIndex != TLS_OUT_OF_INDEXES)
             {
-                heap_free(TlsGetValue(g_dwTlsErrIndex));
+                INTERNET_FreeThreadError();
                 TlsFree(g_dwTlsErrIndex);
+                g_dwTlsErrIndex = TLS_OUT_OF_INDEXES;
             }
             break;
     }
@@ -3826,6 +3825,21 @@ static LPWITHREADERROR INTERNET_AllocThreadError(void)
     return lpwite;
 }
 
+static void INTERNET_FreeThreadError(void)
+{
+    LPWITHREADERROR lpwite;
+
+    if (g_dwTlsErrIndex == TLS_OUT_OF_INDEXES)
+        return;
+
+    lpwite = TlsGetValue(g_dwTlsErrIndex);
+    if (!lpwite)
+        return;
+
+    TlsSetValue(g_dwTlsErrIndex, NULL);
+    heap_free(lpwite);
+}
+
 
 /***********************************************************************
  *           INTERNET_SetLastError (internal)
@@ -3884,11 +3898,7 @@ static DWORD CALLBACK INTERNET_WorkerThreadFunc(LPVOID lpvParam)
     WININET_Release(task->hdr);
     heap_free(task);
 
-    if (g_dwTlsErrIndex != TLS_OUT_OF_INDEXES)
-    {
-        heap_free(TlsGetValue(g_dwTlsErrIndex));
-        TlsSetValue(g_dwTlsErrIndex, NULL);
-    }
+    INTERNET_FreeThreadError();
     return TRUE;
 }
 

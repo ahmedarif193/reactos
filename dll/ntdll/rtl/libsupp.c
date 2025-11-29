@@ -1035,6 +1035,12 @@ LdrpApisetVersion(VOID)
         {
             case 0:
                 break;
+            case _WIN32_WINNT_WIN2K:
+            case _WIN32_WINNT_WINXP:
+            case _WIN32_WINNT_WS03:
+                /* Legacy versions shipped without apisets */
+                CachedApisetVersion = 0;
+                break;
             case _WIN32_WINNT_VISTA:
                 /* No apisets in vista yet*/
                 CachedApisetVersion = 0;

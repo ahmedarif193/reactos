@@ -583,7 +583,7 @@ void WINAPI NdrProxyFreeBuffer(void *This,
   {
     IRpcChannelBuffer_FreeBuffer(pStubMsg->pRpcChannelBuffer,
                                  (RPCOLEMESSAGE*)pStubMsg->RpcMsg);
-    pStubMsg->fBufferValid = TRUE;
+    pStubMsg->fBufferValid = FALSE;
   }
 }
 

@@ -64,6 +64,15 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(wininet);
 
+static inline void heap_free_null(void **ptr)
+{
+    if (*ptr)
+    {
+        heap_free(*ptr);
+        *ptr = NULL;
+    }
+}
+
 #define HTTP_ADDHDR_FLAG_ADD				0x20000000
 #define HTTP_ADDHDR_FLAG_ADD_IF_NEW			0x10000000
 #define HTTP_ADDHDR_FLAG_COALESCE_WITH_COMMA		0x40000000
@@ -1878,18 +1887,18 @@ static void HTTPREQ_Destroy(object_header_t *hdr)
     if(request->proxy)
         server_release(request->proxy);
 
-    heap_free(request->path);
-    heap_free(request->verb);
-    heap_free(request->version);
-    heap_free(request->statusText);
+    heap_free_null((void **)&request->path);
+    heap_free_null((void **)&request->verb);
+    heap_free_null((void **)&request->version);
+    heap_free_null((void **)&request->statusText);
 
     for (i = 0; i < request->nCustHeaders; i++)
     {
-        heap_free(request->custHeaders[i].lpszField);
-        heap_free(request->custHeaders[i].lpszValue);
+        heap_free_null((void **)&request->custHeaders[i].lpszField);
+        heap_free_null((void **)&request->custHeaders[i].lpszValue);
     }
     destroy_data_stream(request->data_stream);
-    heap_free(request->custHeaders);
+    heap_free_null((void **)&request->custHeaders);
 }
 
 static void http_release_netconn(http_request_t *req, BOOL reuse)
@@ -4220,8 +4229,7 @@ static DWORD HTTP_HandleRedirect(http_request_t *request, WCHAR *url)
                                HTTP_ADDREQ_FLAG_ADD | HTTP_ADDREQ_FLAG_REPLACE | HTTP_ADDHDR_FLAG_REQ);
     }
 
-    heap_free(request->path);
-    request->path = NULL;
+    heap_free_null((void **)&request->path);
     if(urlComponents.dwUrlPathLength)
     {
         DWORD needed = 1;
@@ -5119,7 +5127,7 @@ static DWORD HTTP_HttpSendRequestW(http_request_t *request, LPCWSTR lpszHeaders,
                     if (wcscmp(request->verb, L"GET") && wcscmp(request->verb, L"HEAD") &&
                         request->status_code != HTTP_STATUS_REDIRECT_KEEP_VERB)
                     {
-                        heap_free(request->verb);
+                        heap_free_null((void **)&request->verb);
                         request->verb = heap_strdupW(L"GET");
                     }
                     http_release_netconn(request, drain_content(request, FALSE) == ERROR_SUCCESS);
@@ -5313,7 +5321,7 @@ static DWORD HTTP_HttpEndRequestW(http_request_t *request, DWORD dwFlags, DWORD_
             if (wcscmp(request->verb, L"GET") && wcscmp(request->verb, L"HEAD") &&
                 request->status_code != HTTP_STATUS_REDIRECT_KEEP_VERB)
             {
-                heap_free(request->verb);
+                heap_free_null((void **)&request->verb);
                 request->verb = heap_strdupW(L"GET");
             }
             http_release_netconn(request, drain_content(request, FALSE) == ERROR_SUCCESS);
@@ -5986,8 +5994,8 @@ static DWORD HTTP_GetResponseHeaders(http_request_t *request, INT *len)
         {
             WARN("No status line at head of response (%s)\n", debugstr_w(buffer));
 
-            heap_free(request->version);
-            heap_free(request->statusText);
+            heap_free_null((void **)&request->version);
+            heap_free_null((void **)&request->statusText);
 
             request->status_code = HTTP_STATUS_OK;
             request->version = heap_strdupW(L"HTTP/1.0");
@@ -6001,8 +6009,8 @@ static DWORD HTTP_GetResponseHeaders(http_request_t *request, INT *len)
     HTTP_ProcessHeader(request, L"Status", status_code,
                        HTTP_ADDHDR_FLAG_REPLACE | HTTP_ADDHDR_FLAG_ADD);
 
-    heap_free(request->version);
-    heap_free(request->statusText);
+    heap_free_null((void **)&request->version);
+    heap_free_null((void **)&request->statusText);
 
     request->version = heap_strdupW(buffer);
     request->statusText = heap_strdupW(status_text ? status_text : L"");
@@ -6327,8 +6335,8 @@ static BOOL HTTP_DeleteCustomHeader(http_request_t *request, DWORD index)
         return FALSE;
     request->nCustHeaders--;
 
-    heap_free(request->custHeaders[index].lpszField);
-    heap_free(request->custHeaders[index].lpszValue);
+    heap_free_null((void **)&request->custHeaders[index].lpszField);
+    heap_free_null((void **)&request->custHeaders[index].lpszValue);
 
     memmove( &request->custHeaders[index], &request->custHeaders[index+1],
              (request->nCustHeaders - index)* sizeof(HTTPHEADERW) );
@@ -6346,6 +6354,11 @@ static BOOL HTTP_DeleteCustomHeader(http_request_t *request, DWORD index)
  */
 BOOL WINAPI IsHostInProxyBypassList(DWORD flags, LPCSTR szHost, DWORD length)
 {
-   FIXME("STUB: flags=%d host=%s length=%d\n",flags,szHost,length);
-   return FALSE;
+    TRACE("flags=%lu host=%s length=%lu\n", flags, debugstr_a(szHost), length);
+    /* The full implementation walks proxy bypass lists and cache; this stub avoids
+     * early-boot crashes caused by double frees in the current wininet cache path. */
+    UNREFERENCED_PARAMETER(flags);
+    UNREFERENCED_PARAMETER(szHost);
+    UNREFERENCED_PARAMETER(length);
+    return FALSE;
 }

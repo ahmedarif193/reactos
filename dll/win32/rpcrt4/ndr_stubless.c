@@ -1249,7 +1249,8 @@ static LONG_PTR *stub_do_args(MIDL_STUB_MESSAGE *pStubMsg,
             else if (param_needs_alloc(params[i].attr) &&
                      (!params[i].attr.MustFree || params[i].attr.IsSimpleRef))
             {
-                if (*pTypeFormat != FC_BIND_CONTEXT) pStubMsg->pfnFree(*(void **)pArg);
+                if (*pTypeFormat != FC_BIND_CONTEXT)
+                    NdrpFreeMemory(pStubMsg, *(unsigned char **)pArg);
             }
             break;
         case STUBLESS_INITOUT:

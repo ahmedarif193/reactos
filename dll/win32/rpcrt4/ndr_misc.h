@@ -63,5 +63,6 @@ extern const NDR_MEMORYSIZE NdrMemorySizer[] DECLSPEC_HIDDEN;
 extern const NDR_FREE       NdrFreer[] DECLSPEC_HIDDEN;
 
 ULONG ComplexStructSize(PMIDL_STUB_MESSAGE pStubMsg, PFORMAT_STRING pFormat) DECLSPEC_HIDDEN;
+void NdrpFreeMemory(PMIDL_STUB_MESSAGE pStubMsg, unsigned char *Pointer) DECLSPEC_HIDDEN;
 
 #endif  /* __WINE_NDR_MISC_H */

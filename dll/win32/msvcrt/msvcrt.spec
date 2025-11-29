@@ -1310,7 +1310,6 @@
 @ cdecl atan2(double double)
 @ cdecl -arch=x86_64,arm atan2f(long)
 @ cdecl -arch=x86_64,arm atanf(long)
-@ extern atexit # Declaring it as extern let us use the symbol from msvcrtex while having the __imp_ symbol defined in the import lib for those who really need it
 @ cdecl atof(str)
 @ cdecl atoi(str)
 @ cdecl atol(str)
@@ -1576,4 +1575,4 @@
 @ varargs wscanf(wstr)
 @ stub -version=0x600+ wscanf_s
 # Provide non-underscored aliases for MinGW C99/ANSI calls used by Wine modules
-@ cdecl -arch=i386 atexit(ptr)
+@ extern -arch=i386 atexit

@@ -65,47 +65,47 @@ struct wire_record {
 ]
 interface IWineMsiRemote
 {
-    UINT remote_ViewClose( [in] MSIHANDLE view );
-    UINT remote_ViewExecute( [in] MSIHANDLE view, [in, unique] struct wire_record *record );
-    UINT remote_ViewFetch( [in] MSIHANDLE view, [out] struct wire_record **record );
-    UINT remote_ViewGetColumnInfo( [in] MSIHANDLE view, [in] MSICOLINFO info, [out] struct wire_record **record );
-    MSIDBERROR remote_ViewGetError( [in] MSIHANDLE view, [out, string] LPWSTR *column );
-    UINT remote_ViewModify( [in] MSIHANDLE view, [in] MSIMODIFY mode,
+    UINT __stdcall remote_ViewClose( [in] MSIHANDLE view );
+    UINT __stdcall remote_ViewExecute( [in] MSIHANDLE view, [in, unique] struct wire_record *record );
+    UINT __stdcall remote_ViewFetch( [in] MSIHANDLE view, [out] struct wire_record **record );
+    UINT __stdcall remote_ViewGetColumnInfo( [in] MSIHANDLE view, [in] MSICOLINFO info, [out] struct wire_record **record );
+    MSIDBERROR __stdcall remote_ViewGetError( [in] MSIHANDLE view, [out, string] LPWSTR *column );
+    UINT __stdcall remote_ViewModify( [in] MSIHANDLE view, [in] MSIMODIFY mode,
         [in] struct wire_record *record, [out] struct wire_record **refreshed );
 
-    MSICONDITION remote_DatabaseIsTablePersistent( [in] MSIHANDLE db, [in] LPCWSTR table );
-    UINT remote_DatabaseGetPrimaryKeys( [in] MSIHANDLE db, [in, string] LPCWSTR table, [out] struct wire_record **keys );
-    UINT remote_DatabaseGetSummaryInformation( [in] MSIHANDLE db, [in] UINT updatecount, [out] MSIHANDLE *suminfo );
-    UINT remote_DatabaseOpenView( [in] MSIHANDLE db, [in, string] LPCWSTR query, [out] MSIHANDLE *view );
+    MSICONDITION __stdcall remote_DatabaseIsTablePersistent( [in] MSIHANDLE db, [in] LPCWSTR table );
+    UINT __stdcall remote_DatabaseGetPrimaryKeys( [in] MSIHANDLE db, [in, string] LPCWSTR table, [out] struct wire_record **keys );
+    UINT __stdcall remote_DatabaseGetSummaryInformation( [in] MSIHANDLE db, [in] UINT updatecount, [out] MSIHANDLE *suminfo );
+    UINT __stdcall remote_DatabaseOpenView( [in] MSIHANDLE db, [in, string] LPCWSTR query, [out] MSIHANDLE *view );
 
-    UINT remote_SummaryInfoGetPropertyCount( [in] MSIHANDLE suminfo, [out] UINT *count );
-    UINT remote_SummaryInfoGetProperty( [in] MSIHANDLE suminfo, [in] UINT property, [out] UINT *type, [out] INT *value,
-                                        [out] FILETIME *ft, [out, string] LPWSTR *buf );
+    UINT __stdcall remote_SummaryInfoGetPropertyCount( [in] MSIHANDLE suminfo, [out] UINT *count );
+    UINT __stdcall remote_SummaryInfoGetProperty( [in] MSIHANDLE suminfo, [in] UINT property, [out] UINT *type, [out] INT *value,
+                                                  [out] FILETIME *ft, [out, string] LPWSTR *buf );
 
-    MSIHANDLE remote_GetActiveDatabase( [in] MSIHANDLE hinst );
-    UINT remote_GetProperty( [in] MSIHANDLE hinst, [in, string] LPCWSTR property, [out, string] LPWSTR *value, [out] DWORD *size );
-    UINT remote_SetProperty( [in] MSIHANDLE hinst, [in, string, unique] LPCWSTR property, [in, string, unique] LPCWSTR value );
-    int remote_ProcessMessage( [in] MSIHANDLE hinst, [in] INSTALLMESSAGE message, [in] struct wire_record *record );
-    UINT remote_DoAction( [in] MSIHANDLE hinst, [in, string] LPCWSTR action );
-    UINT remote_Sequence( [in] MSIHANDLE hinst, [in, string] LPCWSTR table, [in] int sequence );
-    UINT remote_GetTargetPath( [in] MSIHANDLE hinst, [in, string] LPCWSTR folder, [out, string] LPWSTR *value );
-    UINT remote_SetTargetPath( [in] MSIHANDLE hinst, [in, string] LPCWSTR folder, [in, string] LPCWSTR value );
-    UINT remote_GetSourcePath( [in] MSIHANDLE hinst, [in, string] LPCWSTR folder, [out, string] LPWSTR *value );
-    BOOL remote_GetMode( [in] MSIHANDLE hinst, [in] MSIRUNMODE mode );
-    UINT remote_SetMode( [in] MSIHANDLE hinst, [in] MSIRUNMODE mode, [in] BOOL state );
-    UINT remote_GetFeatureState( [in] MSIHANDLE hinst, [in, string] LPCWSTR feature, [out] INSTALLSTATE *installed, [out] INSTALLSTATE *action );
-    UINT remote_SetFeatureState( [in] MSIHANDLE hinst, [in, string] LPCWSTR feature, [in] INSTALLSTATE state );
-    UINT remote_GetComponentState( [in] MSIHANDLE hinst, [in, string] LPCWSTR component, [out] INSTALLSTATE *installed, [out] INSTALLSTATE *action );
-    UINT remote_SetComponentState( [in] MSIHANDLE hinst, [in, string] LPCWSTR component, [in] INSTALLSTATE state );
-    LANGID remote_GetLanguage( [in] MSIHANDLE hinst );
-    UINT remote_SetInstallLevel( [in] MSIHANDLE hinst, [in] int level );
-    UINT remote_FormatRecord( [in] MSIHANDLE hinst, [in] struct wire_record *record, [out, string] LPWSTR *value);
-    MSICONDITION remote_EvaluateCondition( [in] MSIHANDLE hinst, [in, string] LPCWSTR condition );
-    UINT remote_GetFeatureCost( [in] MSIHANDLE hinst, [in, string] LPCWSTR feature, [in] MSICOSTTREE cost_tree, [in] INSTALLSTATE state, [out] INT *cost );
-    UINT remote_EnumComponentCosts( [in] MSIHANDLE hinst, [in, string, unique] LPCWSTR component, [in] DWORD index, [in] INSTALLSTATE state,
-                                    [out, string, size_is(3)] LPWSTR drive, [out] INT *cost, [out] INT *temp );
+    MSIHANDLE __stdcall remote_GetActiveDatabase( [in] MSIHANDLE hinst );
+    UINT __stdcall remote_GetProperty( [in] MSIHANDLE hinst, [in, string] LPCWSTR property, [out, string] LPWSTR *value, [out] DWORD *size );
+    UINT __stdcall remote_SetProperty( [in] MSIHANDLE hinst, [in, string, unique] LPCWSTR property, [in, string, unique] LPCWSTR value );
+    int __stdcall remote_ProcessMessage( [in] MSIHANDLE hinst, [in] INSTALLMESSAGE message, [in] struct wire_record *record );
+    UINT __stdcall remote_DoAction( [in] MSIHANDLE hinst, [in, string] LPCWSTR action );
+    UINT __stdcall remote_Sequence( [in] MSIHANDLE hinst, [in, string] LPCWSTR table, [in] int sequence );
+    UINT __stdcall remote_GetTargetPath( [in] MSIHANDLE hinst, [in, string] LPCWSTR folder, [out, string] LPWSTR *value );
+    UINT __stdcall remote_SetTargetPath( [in] MSIHANDLE hinst, [in, string] LPCWSTR folder, [in, string] LPCWSTR value );
+    UINT __stdcall remote_GetSourcePath( [in] MSIHANDLE hinst, [in, string] LPCWSTR folder, [out, string] LPWSTR *value );
+    BOOL __stdcall remote_GetMode( [in] MSIHANDLE hinst, [in] MSIRUNMODE mode );
+    UINT __stdcall remote_SetMode( [in] MSIHANDLE hinst, [in] MSIRUNMODE mode, [in] BOOL state );
+    UINT __stdcall remote_GetFeatureState( [in] MSIHANDLE hinst, [in, string] LPCWSTR feature, [out] INSTALLSTATE *installed, [out] INSTALLSTATE *action );
+    UINT __stdcall remote_SetFeatureState( [in] MSIHANDLE hinst, [in, string] LPCWSTR feature, [in] INSTALLSTATE state );
+    UINT __stdcall remote_GetComponentState( [in] MSIHANDLE hinst, [in, string] LPCWSTR component, [out] INSTALLSTATE *installed, [out] INSTALLSTATE *action );
+    UINT __stdcall remote_SetComponentState( [in] MSIHANDLE hinst, [in, string] LPCWSTR component, [in] INSTALLSTATE state );
+    LANGID __stdcall remote_GetLanguage( [in] MSIHANDLE hinst );
+    UINT __stdcall remote_SetInstallLevel( [in] MSIHANDLE hinst, [in] int level );
+    UINT __stdcall remote_FormatRecord( [in] MSIHANDLE hinst, [in] struct wire_record *record, [out, string] LPWSTR *value);
+    MSICONDITION __stdcall remote_EvaluateCondition( [in] MSIHANDLE hinst, [in, string] LPCWSTR condition );
+    UINT __stdcall remote_GetFeatureCost( [in] MSIHANDLE hinst, [in, string] LPCWSTR feature, [in] MSICOSTTREE cost_tree, [in] INSTALLSTATE state, [out] INT *cost );
+    UINT __stdcall remote_EnumComponentCosts( [in] MSIHANDLE hinst, [in, string, unique] LPCWSTR component, [in] DWORD index, [in] INSTALLSTATE state,
+                                              [out, string, size_is(3)] LPWSTR drive, [out] INT *cost, [out] INT *temp );
 
-    UINT remote_GetActionInfo( [in] const GUID *guid, [out, string] WCHAR **action, [out] int *type, [out, string] WCHAR **dllname,
-                               [out, string] char **function, [out] MSIHANDLE *hinst );
-    UINT remote_CloseHandle( [in] MSIHANDLE handle );
+    UINT __stdcall remote_GetActionInfo( [in] const GUID *guid, [out, string] WCHAR **action, [out] int *type, [out, string] WCHAR **dllname,
+                                         [out, string] char **function, [out] MSIHANDLE *hinst );
+    UINT __stdcall remote_CloseHandle( [in] MSIHANDLE handle );
 }

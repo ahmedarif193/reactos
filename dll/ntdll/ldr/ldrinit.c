@@ -10,6 +10,7 @@
 /* INCLUDES *****************************************************************/
 
 #include <ntdll.h>
+#include <reactos/rtl_critical.h>
 #include <compat_undoc.h>
 #include <compatguid_undoc.h>
 #include <stdint.h>
@@ -43,6 +44,17 @@ WCHAR StringBuffer[156];
 extern PTEB LdrpTopLevelDllBeingLoadedTeb; // defined in rtlsupp.c!
 PLDR_DATA_TABLE_ENTRY LdrpCurrentDllInitializer;
 PLDR_DATA_TABLE_ENTRY LdrpNtDllDataTableEntry;
+
+static
+BOOLEAN
+NTAPI
+LdrpIsShutdownBypassThread(VOID)
+{
+    if (!LdrpShutdownInProgress)
+        return FALSE;
+
+    return (LdrpShutdownThreadId == NtCurrentTeb()->RealClientId.UniqueThread);
+}
 
 static NTSTATUS (WINAPI *Kernel32ProcessInitPostImportFunction)(VOID);
 #if defined(__GNUC__)
@@ -2157,6 +2169,7 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     //InsertTailList(&RtlCriticalSectionList, &LdrpLoaderLock.DebugInfo->ProcessLocksList);
     //LdrpLoaderLock.DebugInfo->CriticalSection = &LdrpLoaderLock;
     RtlInitializeCriticalSection(&LdrpLoaderLock);
+    RtlpSetCriticalSectionShutdownCallback(LdrpIsShutdownBypassThread);
     LdrpLoaderLockInit = TRUE;
 
     /* Check if User Stack Trace Database support was requested */

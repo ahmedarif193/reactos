@@ -399,6 +399,37 @@ typedef struct _NDR_MEMORY_LIST
 
 #define MEML_MAGIC  ('M' << 24 | 'E' << 16 | 'M' << 8 | 'L')
 
+static
+NDR_MEMORY_LIST **
+NdrpFindMemoryListEntry(
+    MIDL_STUB_MESSAGE *pStubMsg,
+    unsigned char *Pointer)
+{
+    NDR_MEMORY_LIST **pprev = (NDR_MEMORY_LIST **)&pStubMsg->pMemoryList;
+
+    while (*pprev)
+    {
+        NDR_MEMORY_LIST *entry = *pprev;
+        unsigned char *base;
+
+        if (entry->magic != MEML_MAGIC)
+        {
+            pprev = &entry->next;
+            continue;
+        }
+
+        base = (unsigned char *)entry - entry->size;
+        if (base == Pointer)
+        {
+            return pprev;
+        }
+
+        pprev = &entry->next;
+    }
+
+    return NULL;
+}
+
 /***********************************************************************
  *            NdrAllocate [RPCRT4.@]
  *
@@ -453,10 +484,26 @@ static void *NdrAllocateZero(MIDL_STUB_MESSAGE *stubmsg, SIZE_T len)
     return mem;
 }
 
-static void NdrFree(MIDL_STUB_MESSAGE *pStubMsg, unsigned char *Pointer)
+void NdrpFreeMemory(MIDL_STUB_MESSAGE *pStubMsg, unsigned char *Pointer)
 {
+    NDR_MEMORY_LIST **pprev;
+    NDR_MEMORY_LIST *entry;
+
     TRACE("(%p, %p)\n", pStubMsg, Pointer);
 
+    if (!Pointer)
+        return;
+
+    pprev = NdrpFindMemoryListEntry(pStubMsg, Pointer);
+    if (!pprev)
+    {
+        TRACE("Pointer %p not allocated by NdrAllocate, skipping free\n", Pointer);
+        return;
+    }
+
+    entry = *pprev;
+    *pprev = entry->next;
+    entry->magic = 0;
     pStubMsg->pfnFree(Pointer);
 }
 
@@ -1165,7 +1212,7 @@ static void PointerFree(PMIDL_STUB_MESSAGE pStubMsg,
     return;
   }
   TRACE("freeing %p\n", Pointer);
-  NdrFree(pStubMsg, Pointer);
+  NdrpFreeMemory(pStubMsg, Pointer);
   return;
 notfree:
   TRACE("not freeing %p\n", Pointer);

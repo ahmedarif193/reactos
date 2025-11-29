@@ -2444,12 +2444,12 @@ UINT WINAPI MsiGetPropertyW(MSIHANDLE hinst, const WCHAR *name, WCHAR *buf, DWOR
     return r;
 }
 
-MSIHANDLE __cdecl s_remote_GetActiveDatabase(MSIHANDLE hinst)
+MSIHANDLE RPC_ENTRY s_remote_GetActiveDatabase(MSIHANDLE hinst)
 {
     return MsiGetActiveDatabase(hinst);
 }
 
-UINT __cdecl s_remote_GetProperty(MSIHANDLE hinst, LPCWSTR property, LPWSTR *value, DWORD *size)
+UINT RPC_ENTRY s_remote_GetProperty(MSIHANDLE hinst, LPCWSTR property, LPWSTR *value, DWORD *size)
 {
     WCHAR empty[1];
     UINT r;
@@ -2467,12 +2467,12 @@ UINT __cdecl s_remote_GetProperty(MSIHANDLE hinst, LPCWSTR property, LPWSTR *val
     return r;
 }
 
-UINT __cdecl s_remote_SetProperty(MSIHANDLE hinst, LPCWSTR property, LPCWSTR value)
+UINT RPC_ENTRY s_remote_SetProperty(MSIHANDLE hinst, LPCWSTR property, LPCWSTR value)
 {
     return MsiSetPropertyW(hinst, property, value);
 }
 
-int __cdecl s_remote_ProcessMessage(MSIHANDLE hinst, INSTALLMESSAGE message, struct wire_record *remote_rec)
+int RPC_ENTRY s_remote_ProcessMessage(MSIHANDLE hinst, INSTALLMESSAGE message, struct wire_record *remote_rec)
 {
     MSIHANDLE rec;
     int ret;
@@ -2487,17 +2487,17 @@ int __cdecl s_remote_ProcessMessage(MSIHANDLE hinst, INSTALLMESSAGE message, str
     return ret;
 }
 
-UINT __cdecl s_remote_DoAction(MSIHANDLE hinst, LPCWSTR action)
+UINT RPC_ENTRY s_remote_DoAction(MSIHANDLE hinst, LPCWSTR action)
 {
     return MsiDoActionW(hinst, action);
 }
 
-UINT __cdecl s_remote_Sequence(MSIHANDLE hinst, LPCWSTR table, int sequence)
+UINT RPC_ENTRY s_remote_Sequence(MSIHANDLE hinst, LPCWSTR table, int sequence)
 {
     return MsiSequenceW(hinst, table, sequence);
 }
 
-UINT __cdecl s_remote_GetTargetPath(MSIHANDLE hinst, LPCWSTR folder, LPWSTR *value)
+UINT RPC_ENTRY s_remote_GetTargetPath(MSIHANDLE hinst, LPCWSTR folder, LPWSTR *value)
 {
     WCHAR empty[1];
     DWORD size = 0;
@@ -2514,12 +2514,12 @@ UINT __cdecl s_remote_GetTargetPath(MSIHANDLE hinst, LPCWSTR folder, LPWSTR *val
     return r;
 }
 
-UINT __cdecl s_remote_SetTargetPath(MSIHANDLE hinst, LPCWSTR folder, LPCWSTR value)
+UINT RPC_ENTRY s_remote_SetTargetPath(MSIHANDLE hinst, LPCWSTR folder, LPCWSTR value)
 {
     return MsiSetTargetPathW(hinst, folder, value);
 }
 
-UINT __cdecl s_remote_GetSourcePath(MSIHANDLE hinst, LPCWSTR folder, LPWSTR *value)
+UINT RPC_ENTRY s_remote_GetSourcePath(MSIHANDLE hinst, LPCWSTR folder, LPWSTR *value)
 {
     WCHAR empty[1];
     DWORD size = 1;
@@ -2536,49 +2536,49 @@ UINT __cdecl s_remote_GetSourcePath(MSIHANDLE hinst, LPCWSTR folder, LPWSTR *val
     return r;
 }
 
-BOOL __cdecl s_remote_GetMode(MSIHANDLE hinst, MSIRUNMODE mode)
+BOOL RPC_ENTRY s_remote_GetMode(MSIHANDLE hinst, MSIRUNMODE mode)
 {
     return MsiGetMode(hinst, mode);
 }
 
-UINT __cdecl s_remote_SetMode(MSIHANDLE hinst, MSIRUNMODE mode, BOOL state)
+UINT RPC_ENTRY s_remote_SetMode(MSIHANDLE hinst, MSIRUNMODE mode, BOOL state)
 {
     return MsiSetMode(hinst, mode, state);
 }
 
-UINT __cdecl s_remote_GetFeatureState(MSIHANDLE hinst, LPCWSTR feature,
+UINT RPC_ENTRY s_remote_GetFeatureState(MSIHANDLE hinst, LPCWSTR feature,
                                     INSTALLSTATE *installed, INSTALLSTATE *action)
 {
     return MsiGetFeatureStateW(hinst, feature, installed, action);
 }
 
-UINT __cdecl s_remote_SetFeatureState(MSIHANDLE hinst, LPCWSTR feature, INSTALLSTATE state)
+UINT RPC_ENTRY s_remote_SetFeatureState(MSIHANDLE hinst, LPCWSTR feature, INSTALLSTATE state)
 {
     return MsiSetFeatureStateW(hinst, feature, state);
 }
 
-UINT __cdecl s_remote_GetComponentState(MSIHANDLE hinst, LPCWSTR component,
+UINT RPC_ENTRY s_remote_GetComponentState(MSIHANDLE hinst, LPCWSTR component,
                                       INSTALLSTATE *installed, INSTALLSTATE *action)
 {
     return MsiGetComponentStateW(hinst, component, installed, action);
 }
 
-UINT __cdecl s_remote_SetComponentState(MSIHANDLE hinst, LPCWSTR component, INSTALLSTATE state)
+UINT RPC_ENTRY s_remote_SetComponentState(MSIHANDLE hinst, LPCWSTR component, INSTALLSTATE state)
 {
     return MsiSetComponentStateW(hinst, component, state);
 }
 
-LANGID __cdecl s_remote_GetLanguage(MSIHANDLE hinst)
+LANGID RPC_ENTRY s_remote_GetLanguage(MSIHANDLE hinst)
 {
     return MsiGetLanguage(hinst);
 }
 
-UINT __cdecl s_remote_SetInstallLevel(MSIHANDLE hinst, int level)
+UINT RPC_ENTRY s_remote_SetInstallLevel(MSIHANDLE hinst, int level)
 {
     return MsiSetInstallLevel(hinst, level);
 }
 
-UINT __cdecl s_remote_FormatRecord(MSIHANDLE hinst, struct wire_record *remote_rec, LPWSTR *value)
+UINT RPC_ENTRY s_remote_FormatRecord(MSIHANDLE hinst, struct wire_record *remote_rec, LPWSTR *value)
 {
     WCHAR empty[1];
     DWORD size = 0;
@@ -2604,18 +2604,18 @@ UINT __cdecl s_remote_FormatRecord(MSIHANDLE hinst, struct wire_record *remote_r
     return r;
 }
 
-MSICONDITION __cdecl s_remote_EvaluateCondition(MSIHANDLE hinst, LPCWSTR condition)
+MSICONDITION RPC_ENTRY s_remote_EvaluateCondition(MSIHANDLE hinst, LPCWSTR condition)
 {
     return MsiEvaluateConditionW(hinst, condition);
 }
 
-UINT __cdecl s_remote_GetFeatureCost(MSIHANDLE hinst, LPCWSTR feature,
+UINT RPC_ENTRY s_remote_GetFeatureCost(MSIHANDLE hinst, LPCWSTR feature,
     MSICOSTTREE cost_tree, INSTALLSTATE state, INT *cost)
 {
     return MsiGetFeatureCostW(hinst, feature, cost_tree, state, cost);
 }
 
-UINT __cdecl s_remote_EnumComponentCosts(MSIHANDLE hinst, LPCWSTR component,
+UINT RPC_ENTRY s_remote_EnumComponentCosts(MSIHANDLE hinst, LPCWSTR component,
     DWORD index, INSTALLSTATE state, LPWSTR drive, INT *cost, INT *temp)
 {
     DWORD size = 3;

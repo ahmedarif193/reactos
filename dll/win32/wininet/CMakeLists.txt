@@ -44,6 +44,7 @@ endif()
 
 set_module_type(wininet win32dll)
 target_link_libraries(wininet wine ${PSEH_LIB} oldnames)
+set_target_properties(wininet PROPERTIES LINK_FLAGS "-Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/wininet.map")
 
 add_delay_importlibs(wininet secur32 crypt32 cryptui iphlpapi dhcpcsvc)
 add_importlibs(wininet mpr shlwapi shell32 user32 advapi32 ws2_32 normaliz kernel32_vista msvcrt kernel32 ntdll)

@@ -21,8 +21,12 @@
 
 #include <assert.h>
 
+#ifndef NONAMELESSUNION
 #define NONAMELESSUNION
+#endif
+#ifndef NONAMELESSSTRUCT
 #define NONAMELESSSTRUCT
+#endif
 #ifndef DBGHELP_STATIC_LIB
 #include "ntstatus.h"
 #define WIN32_NO_STATUS

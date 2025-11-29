@@ -1318,12 +1318,12 @@ UINT msi_load_suminfo_properties( MSIPACKAGE *package )
     return r;
 }
 
-UINT __cdecl s_remote_SummaryInfoGetPropertyCount( MSIHANDLE suminfo, UINT *count )
+UINT RPC_ENTRY s_remote_SummaryInfoGetPropertyCount( MSIHANDLE suminfo, UINT *count )
 {
     return MsiSummaryInfoGetPropertyCount( suminfo, count );
 }
 
-UINT __cdecl s_remote_SummaryInfoGetProperty( MSIHANDLE suminfo, UINT property, UINT *type,
+UINT RPC_ENTRY s_remote_SummaryInfoGetProperty( MSIHANDLE suminfo, UINT property, UINT *type,
                                               INT *value, FILETIME *ft, LPWSTR *buf )
 {
     WCHAR empty[1];

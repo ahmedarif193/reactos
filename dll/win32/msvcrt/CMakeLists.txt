@@ -13,29 +13,25 @@ if(USE_NATIVE_MINGW_CRT)
     mingwcrt_import_default_libs(USE_NATIVE_MINGW_CRT_LIBS NO_MSVCRT)
 endif()
 
-# On native i386 builds, embed startup objects into libmsvcrt so importers keep
-# functioning regardless of the CRT backend being used. When building i386 via
-# amd64 multilib, avoid mixing real objects into the import library to prevent
-# symbol decoration mismatches and unresolved references.
-if(NOT REACTOS_MULTILIB_I386)
+# When not building i386 via multilib, fold the startup objects into the import
+# library so native toolchains (including MinGW) resolve their references
+# without relying on link-order quirks. Multilib i386 keeps a separate archive.
+if(REACTOS_MULTILIB_I386)
+    add_library(msvcrt_startup STATIC $<TARGET_OBJECTS:msvcrtex>)
+    add_dependencies(msvcrt_startup msvcrtex)
+    target_link_libraries(msvcrt_startup PUBLIC libkernel32)
+    target_link_libraries(msvcrt_startup PRIVATE oldnames)
+    target_link_libraries(libmsvcrt INTERFACE msvcrt_startup)
+else()
+    # Append startup objects directly into the import library.
     target_sources(libmsvcrt PRIVATE $<TARGET_OBJECTS:msvcrtex>)
+    add_dependencies(libmsvcrt msvcrtex)
     add_custom_command(TARGET libmsvcrt POST_BUILD
         COMMAND ${CMAKE_AR} q $<TARGET_FILE:libmsvcrt> $<TARGET_OBJECTS:msvcrtex>
         COMMAND ${CMAKE_AR} s $<TARGET_FILE:libmsvcrt>
         COMMAND ${CMAKE_RANLIB} $<TARGET_FILE:libmsvcrt>
         COMMAND_EXPAND_LISTS
         COMMENT "Appending CRT startup objects to libmsvcrt")
-else()
-    # Keep the import library pure when building multilib i386, but still
-    # provide CRT startup entry points by archiving the msvcrtex objects
-    # separately and linking them automatically.
-    add_library(msvcrt_multilib_startup STATIC $<TARGET_OBJECTS:msvcrtex>)
-    add_dependencies(msvcrt_multilib_startup msvcrtex)
-    # Startup objects reference Kernel32 APIs (e.g. TLS helpers). Ensure
-    # consumers pulling this static archive also pull the import lib.
-    target_link_libraries(msvcrt_multilib_startup PUBLIC libkernel32)
-    target_link_libraries(msvcrt_multilib_startup PRIVATE oldnames)
-    target_link_libraries(libmsvcrt INTERFACE msvcrt_multilib_startup)
 endif()
 
 # Embed RTC libs when available for stack protector support.
@@ -59,7 +55,6 @@ add_definitions(
 set(MSVCRT_SOURCES
     dllmain.c
     stubs.c
-    wctob.c
     msvcrt.rc
     ${CMAKE_CURRENT_BINARY_DIR}/msvcrt_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/msvcrt.def)
@@ -85,7 +80,10 @@ else()
     else()
         target_link_libraries(msvcrt crt vcruntime cpprt wine ${PSEH_LIB})
     endif()
-    target_link_options(msvcrt PRIVATE "-Wl,--exclude-libs,libmsvcrt.a" "-Wl,--allow-multiple-definition")
+    if(NOT REACTOS_TARGET_LINKER_IS_LLD)
+        target_link_options(msvcrt PRIVATE "-Wl,--exclude-libs,libmsvcrt.a")
+    endif()
+    target_link_options(msvcrt PRIVATE "-Wl,--allow-multiple-definition")
 endif()
 
 if(MSVC)

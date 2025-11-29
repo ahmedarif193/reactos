@@ -1197,12 +1197,12 @@ MSICONDITION WINAPI MsiDatabaseIsTablePersistentW( MSIHANDLE hDatabase, const WC
     return r;
 }
 
-UINT __cdecl s_remote_ViewClose(MSIHANDLE view)
+UINT RPC_ENTRY s_remote_ViewClose(MSIHANDLE view)
 {
     return MsiViewClose(view);
 }
 
-UINT __cdecl s_remote_ViewExecute(MSIHANDLE view, struct wire_record *remote_rec)
+UINT RPC_ENTRY s_remote_ViewExecute(MSIHANDLE view, struct wire_record *remote_rec)
 {
     MSIHANDLE rec = 0;
     UINT r;
@@ -1216,7 +1216,7 @@ UINT __cdecl s_remote_ViewExecute(MSIHANDLE view, struct wire_record *remote_rec
     return r;
 }
 
-UINT __cdecl s_remote_ViewFetch(MSIHANDLE view, struct wire_record **rec)
+UINT RPC_ENTRY s_remote_ViewFetch(MSIHANDLE view, struct wire_record **rec)
 {
     MSIHANDLE handle;
     UINT r = MsiViewFetch(view, &handle);
@@ -1227,7 +1227,7 @@ UINT __cdecl s_remote_ViewFetch(MSIHANDLE view, struct wire_record **rec)
     return r;
 }
 
-UINT __cdecl s_remote_ViewGetColumnInfo(MSIHANDLE view, MSICOLINFO info, struct wire_record **rec)
+UINT RPC_ENTRY s_remote_ViewGetColumnInfo(MSIHANDLE view, MSICOLINFO info, struct wire_record **rec)
 {
     MSIHANDLE handle;
     UINT r = MsiViewGetColumnInfo(view, info, &handle);
@@ -1238,7 +1238,7 @@ UINT __cdecl s_remote_ViewGetColumnInfo(MSIHANDLE view, MSICOLINFO info, struct 
     return r;
 }
 
-MSIDBERROR __cdecl s_remote_ViewGetError(MSIHANDLE view, LPWSTR *column)
+MSIDBERROR RPC_ENTRY s_remote_ViewGetError(MSIHANDLE view, LPWSTR *column)
 {
     WCHAR empty[1];
     DWORD size = 1;
@@ -1254,7 +1254,7 @@ MSIDBERROR __cdecl s_remote_ViewGetError(MSIHANDLE view, LPWSTR *column)
     return r;
 }
 
-UINT __cdecl s_remote_ViewModify(MSIHANDLE view, MSIMODIFY mode,
+UINT RPC_ENTRY s_remote_ViewModify(MSIHANDLE view, MSIMODIFY mode,
     struct wire_record *remote_rec, struct wire_record **remote_refreshed)
 {
     MSIHANDLE handle = 0;

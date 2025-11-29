@@ -50,9 +50,13 @@ endif()
 add_cd_file(TARGET shellbtrfs DESTINATION reactos/system32 FOR all)
 target_link_libraries(shellbtrfs ${SHELLBTRFS_LINK_LIBS})
 
-if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    # Work around binutils ld choking on duplicate libstdc++ typeinfo COMDATs
-    # by letting clang drive lld for this target. lld deduplicates these
-    # sections without the flood of warnings that ld emits.
-    target_link_options(shellbtrfs PRIVATE "-fuse-ld=lld")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    include(CheckCXXCompilerFlag)
+    check_cxx_compiler_flag("-fuse-ld=lld" SHELLBTRFS_CLANG_HAS_LLD)
+    if(SHELLBTRFS_CLANG_HAS_LLD)
+        # Work around binutils ld choking on duplicate libstdc++ typeinfo COMDATs
+        # by letting clang drive lld for this target. lld deduplicates these
+        # sections without the flood of warnings that ld emits.
+        target_link_options(shellbtrfs PRIVATE "-fuse-ld=lld")
+    endif()
 endif()

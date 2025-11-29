@@ -1933,12 +1933,12 @@ MSIDBSTATE WINAPI MsiGetDatabaseState( MSIHANDLE handle )
     return ret;
 }
 
-MSICONDITION __cdecl s_remote_DatabaseIsTablePersistent(MSIHANDLE db, LPCWSTR table)
+MSICONDITION RPC_ENTRY s_remote_DatabaseIsTablePersistent(MSIHANDLE db, LPCWSTR table)
 {
     return MsiDatabaseIsTablePersistentW(db, table);
 }
 
-UINT __cdecl s_remote_DatabaseGetPrimaryKeys(MSIHANDLE db, LPCWSTR table, struct wire_record **rec)
+UINT RPC_ENTRY s_remote_DatabaseGetPrimaryKeys(MSIHANDLE db, LPCWSTR table, struct wire_record **rec)
 {
     MSIHANDLE handle;
     UINT r = MsiDatabaseGetPrimaryKeysW(db, table, &handle);
@@ -1949,12 +1949,12 @@ UINT __cdecl s_remote_DatabaseGetPrimaryKeys(MSIHANDLE db, LPCWSTR table, struct
     return r;
 }
 
-UINT __cdecl s_remote_DatabaseGetSummaryInformation(MSIHANDLE db, UINT updatecount, MSIHANDLE *suminfo)
+UINT RPC_ENTRY s_remote_DatabaseGetSummaryInformation(MSIHANDLE db, UINT updatecount, MSIHANDLE *suminfo)
 {
     return MsiGetSummaryInformationW(db, NULL, updatecount, suminfo);
 }
 
-UINT __cdecl s_remote_DatabaseOpenView(MSIHANDLE db, LPCWSTR query, MSIHANDLE *view)
+UINT RPC_ENTRY s_remote_DatabaseOpenView(MSIHANDLE db, LPCWSTR query, MSIHANDLE *view)
 {
     return MsiDatabaseOpenViewW(db, query, view);
 }
