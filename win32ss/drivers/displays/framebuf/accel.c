@@ -29,12 +29,6 @@ typedef struct _FB_RECT_ENUM
     RECTL arcl[FB_RECT_ENUM_LIMIT];
 } FB_RECT_ENUM;
 
-FORCEINLINE BOOL
-FbIsTrivialClip(CLIPOBJ *Clip)
-{
-    return (!Clip) || (Clip->iDComplexity == DC_TRIVIAL);
-}
-
 FORCEINLINE LONG
 FbBytesPerPixel(_In_ PPDEV ppdev)
 {

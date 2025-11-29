@@ -10,28 +10,28 @@
 typedef VOID (NTAPI *PDXAPI_FUNCTION)(PVOID lpvInBuffer, PVOID lpvOutBuffer);
 
 /* Prototypes */
-VOID DxGetVersionNumber(PVOID lpvInBuffer, LPDDGETVERSIONNUMBER lpvOutBuffer);
-VOID DxCloseHandle(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxOpenDirectDraw(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxOpenSurface(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxOpenVideoPort(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxGetKernelCaps(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxGetFieldNumber(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxSetFieldNumber(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxSetSkipPattern(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxGetSurfaceState(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxSetSurfaceState(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxLock(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxFlipOverlay(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxFlipVideoPort(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxGetCurrentAutoflip(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxGetPreviousAutoflip(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxRegisterEvent(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxUnregisterEvent(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxGetPolarity(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxOpenVpCatureDevice(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxAddVpCaptureBuffer(PVOID lpvInBuffer, PVOID lpvOutBuffer);
-VOID DxFlushVpCaptureBuffs(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxGetVersionNumber(PVOID lpvInBuffer, LPDDGETVERSIONNUMBER lpvOutBuffer);
+VOID NTAPI DxCloseHandle(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxOpenDirectDraw(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxOpenSurface(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxOpenVideoPort(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxGetKernelCaps(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxGetFieldNumber(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxSetFieldNumber(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxSetSkipPattern(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxGetSurfaceState(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxSetSurfaceState(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxLock(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxFlipOverlay(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxFlipVideoPort(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxGetCurrentAutoflip(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxGetPreviousAutoflip(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxRegisterEvent(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxUnregisterEvent(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxGetPolarity(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxOpenVpCatureDevice(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxAddVpCaptureBuffer(PVOID lpvInBuffer, PVOID lpvOutBuffer);
+VOID NTAPI DxFlushVpCaptureBuffs(PVOID lpvInBuffer, PVOID lpvOutBuffer);
 
 /* Internal driver table being use as looking up table for correct size of structs */
 DWORD tblCheckInBuffer [] =

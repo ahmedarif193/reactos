@@ -44,6 +44,9 @@ GdiTransformPoints2(
 
 FORCEINLINE
 void
+#if defined(__GNUC__)
+__attribute__((unused))
+#endif
 GdiTransformPoints(
     _In_ MATRIX *pmx,
     _Out_writes_(nCount) PPOINT pptOut,
@@ -956,4 +959,3 @@ OffsetWindowOrgEx(
 
 //    return NtGdiOffsetWindowOrgEx(hdc, nXOffset, nYOffset, lpPoint);
 }
-

@@ -188,6 +188,7 @@ DxUpdateCapture (
 *
 *--*/
 VOID
+NTAPI
 DxGetVersionNumber(PVOID lpvInBuffer, LPDDGETVERSIONNUMBER lpvOutBuffer)
 {
     lpvOutBuffer->ddRVal = DD_OK;
@@ -196,126 +197,147 @@ DxGetVersionNumber(PVOID lpvInBuffer, LPDDGETVERSIONNUMBER lpvOutBuffer)
 }
 
 VOID
+NTAPI
 DxCloseHandle(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxOpenDirectDraw(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxOpenSurface(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxOpenVideoPort(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxGetKernelCaps(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxGetFieldNumber(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxSetFieldNumber(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxSetSkipPattern(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxGetSurfaceState(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxSetSurfaceState(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxLock(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxFlipOverlay(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxFlipVideoPort(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxGetCurrentAutoflip(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxGetPreviousAutoflip(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxRegisterEvent(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxUnregisterEvent(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxGetPolarity(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxOpenVpCatureDevice(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxAddVpCaptureBuffer(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */
 }
 
 VOID
+NTAPI
 DxFlushVpCaptureBuffs(PVOID lpvInBuffer, PVOID lpvOutBuffer)
 {
     /* FIXME Unimplement */

@@ -18,7 +18,11 @@
 #include <debug.h>
 
 #if DBG
-static __inline VOID W32K_DBG(_In_z_ PCCH Format, ...)
+static __inline VOID
+#if defined(__GNUC__)
+__attribute__((format(printf, 1, 2), unused))
+#endif
+W32K_DBG(_In_z_ PCCH Format, ...)
 {
     va_list ap;
     va_start(ap, Format);
