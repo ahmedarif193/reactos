@@ -36,7 +36,7 @@ say "${bold}Installing build dependencies and MinGW toolchains...${reset}"
 # Try a broad set of packages to cover Debian/Ubuntu variants
 $SUDO apt-get install -y \
   build-essential curl ca-certificates pkg-config git \
-  ninja-build \
+  ninja-build clang-19 \
   mingw-w64 binutils-mingw-w64 \
   gcc-mingw-w64 g++-mingw-w64 || true
 
@@ -78,4 +78,3 @@ say "Installed targets:" && rustup target list --installed || true
 say "${bold}Done.${reset}"
 say "If cargo is not found in new shells, add to your shell profile:"
 say "  export PATH=\"$HOME/.cargo/bin:\$PATH\""
-
