@@ -79,11 +79,21 @@ static
 VOID
 IopArbIrqMarkReservedLocked(VOID)
 {
-    /* Reserve CPU-reserved vectors 0x00-0x1F */
-    RtlSetBits(&IopArbIrqBitmap, 0, 0x20);
+    ULONG ReservedLow = PRIMARY_VECTOR_BASE ? PRIMARY_VECTOR_BASE : 0x20;
+
+    if (ReservedLow > IopArbIrqBitmap.SizeOfBitMap)
+        ReservedLow = IopArbIrqBitmap.SizeOfBitMap;
+
+    /*
+     * Reserve CPU/architecture-reserved vectors below PRIMARY_VECTOR_BASE.
+     * On x86/x64 this covers exceptions and IPIs (0x00-0x2F).
+     */
+    if (ReservedLow)
+        RtlSetBits(&IopArbIrqBitmap, 0, ReservedLow);
 
     /* Reserve spurious/APIC vectors we should not hand out */
-    RtlSetBits(&IopArbIrqBitmap, 0xFF, 1);
+    if (IopArbIrqBitmap.SizeOfBitMap > 0xFF)
+        RtlSetBits(&IopArbIrqBitmap, 0xFF, 1);
 }
 
 static
@@ -210,6 +220,9 @@ IopArbIrqAllocateRange(
 
     IopArbIrqEnsureInitialized();
 
+    if (Minimum >= IopArbIrqBitmap.SizeOfBitMap)
+        return FALSE;
+
     if (Maximum >= IopArbIrqBitmap.SizeOfBitMap)
         Maximum = IopArbIrqBitmap.SizeOfBitMap - 1;
 
@@ -251,9 +264,18 @@ IopAllocateIrqVectors(
     _Out_ PULONG StartVector)
 {
     ULONG Start;
+    ULONG MaxAllowed;
 
     if (!StartVector || Count == 0)
         return STATUS_INVALID_PARAMETER;
+
+    /* Do not hand out vectors past the allocator bitmap (IDT bound). */
+    MaxAllowed = IopArbIrqBitmap.SizeOfBitMap ?
+                 IopArbIrqBitmap.SizeOfBitMap - 1 : 0;
+    if (MinimumVector > MaxAllowed)
+        return STATUS_CONFLICTING_ADDRESSES;
+    if (MaximumVector > MaxAllowed)
+        MaximumVector = MaxAllowed;
 
     if (!IopArbIrqAllocateRange(MinimumVector,
                                 MaximumVector,

@@ -253,7 +253,7 @@ IopFindInterruptResource(
         if (MessageCount == 0)
             MessageCount = 1;
 
-        Status = IopAllocateIrqVectors(0,
+        Status = IopAllocateIrqVectors(PRIMARY_VECTOR_BASE,
                                        MAXULONG,
                                        MessageCount,
                                        &StartVector);
@@ -1004,6 +1004,34 @@ IopFilterResourceRequirements(
     return STATUS_SUCCESS;
 }
 
+static
+BOOLEAN
+IopRequirementsIncludeMessageInterrupt(
+    IN PIO_RESOURCE_REQUIREMENTS_LIST RequirementsList)
+{
+    PIO_RESOURCE_LIST ResList;
+    ULONG i, j;
+
+    if (!RequirementsList)
+        return FALSE;
+
+    ResList = &RequirementsList->List[0];
+    for (i = 0; i < RequirementsList->AlternativeLists; i++, ResList = IopGetNextResourceList(ResList))
+    {
+        for (j = 0; j < ResList->Count; j++)
+        {
+            PIO_RESOURCE_DESCRIPTOR IoDesc = &ResList->Descriptors[j];
+            if (IoDesc->Type == CmResourceTypeInterrupt &&
+                (IoDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+            {
+                return TRUE;
+            }
+        }
+    }
+
+    return FALSE;
+}
+
 
 NTSTATUS
 IopUpdateResourceMap(
@@ -1342,34 +1370,43 @@ IopTranslateDeviceResources(
             {
                if (DescriptorRaw->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
                {
-                  KIRQL Irql;
+                  KAFFINITY Affinity;
                   ULONG Vector;
+                  KIRQL VectorIrql;
 
                   if (DescriptorRaw->u.MessageInterrupt.Raw.MessageCount == 0)
                      DescriptorRaw->u.MessageInterrupt.Raw.MessageCount = 1;
 
-                  DescriptorTranslated->u.MessageInterrupt.Raw = DescriptorRaw->u.MessageInterrupt.Raw;
-
                   Vector = DescriptorRaw->u.MessageInterrupt.Raw.Vector;
                   if (Vector == 0)
                      Vector = DescriptorRaw->u.Interrupt.Vector;
-                  if (Vector == 0)
-                     Vector = DescriptorRaw->u.Interrupt.Vector;
 
-                  DescriptorTranslated->u.MessageInterrupt.Translated.Vector = HalGetInterruptVector(
-                     DeviceNode->ResourceList->List[i].InterfaceType,
-                     DeviceNode->ResourceList->List[i].BusNumber,
-                     Vector,
-                     Vector,
-                     &Irql,
-                     &DescriptorTranslated->u.MessageInterrupt.Translated.Affinity);
-                  DescriptorTranslated->u.MessageInterrupt.Translated.Level = Irql;
-                  if (DescriptorTranslated->u.MessageInterrupt.Translated.Vector == 0)
+                  if (Vector == 0)
                   {
-                     DescriptorTranslated->u.MessageInterrupt.Translated.Vector = Vector;
-                     DescriptorTranslated->u.MessageInterrupt.Translated.Level = DISPATCH_LEVEL;
-                     DescriptorTranslated->u.MessageInterrupt.Translated.Affinity = KeActiveProcessors;
+                     Status = STATUS_UNSUCCESSFUL;
+                     DPRINT1("Failed to translate message interrupt resource: no vector assigned\n");
+                     goto cleanup;
                   }
+
+                  Affinity = DescriptorRaw->u.MessageInterrupt.Raw.Affinity;
+                  if (Affinity == 0)
+                     Affinity = KeActiveProcessors;
+                  else
+                     Affinity &= KeActiveProcessors;
+                  if (Affinity == 0)
+                     Affinity = KeActiveProcessors;
+
+                  /* Message IRQL must match the vector mapping expected by KeConnectInterrupt */
+                  VectorIrql = (KIRQL)(Vector >> 4);
+                  if (VectorIrql < DISPATCH_LEVEL)
+                     VectorIrql = DISPATCH_LEVEL;
+
+                  DescriptorTranslated->u.MessageInterrupt.Raw = DescriptorRaw->u.MessageInterrupt.Raw;
+                  DescriptorTranslated->u.MessageInterrupt.Raw.Vector = Vector;
+                  DescriptorTranslated->u.MessageInterrupt.Raw.Affinity = Affinity;
+                  DescriptorTranslated->u.MessageInterrupt.Translated.Vector = Vector;
+                  DescriptorTranslated->u.MessageInterrupt.Translated.Level = VectorIrql;
+                  DescriptorTranslated->u.MessageInterrupt.Translated.Affinity = Affinity;
                }
                else
                {
@@ -1479,6 +1516,31 @@ IopAssignDeviceResources(
        }
 
        RtlCopyMemory(DeviceNode->ResourceList, DeviceNode->BootResources, ListSize);
+
+       /*
+        * If the device advertises MSI/MSI-X in its requirements, drop any
+        * boot-supplied legacy interrupt descriptors so we can hand out
+        * message interrupts instead of being pinned to firmware INTx.
+        */
+        if (IopRequirementsIncludeMessageInterrupt(DeviceNode->ResourceRequirements))
+        {
+            PCM_FULL_RESOURCE_DESCRIPTOR Full = &DeviceNode->ResourceList->List[0];
+            PCM_PARTIAL_RESOURCE_LIST Partial = &Full->PartialResourceList;
+            ULONG NewCount = 0;
+
+            for (ULONG idx = 0; idx < Partial->Count; idx++)
+            {
+                PCM_PARTIAL_RESOURCE_DESCRIPTOR Src = &Partial->PartialDescriptors[idx];
+                if (Src->Type == CmResourceTypeInterrupt)
+                    continue;
+
+                if (NewCount != idx)
+                    Partial->PartialDescriptors[NewCount] = *Src;
+                NewCount++;
+            }
+
+            Partial->Count = NewCount;
+        }
 
        Status = IopDetectResourceConflict(DeviceNode->ResourceList, FALSE, NULL);
        if (!NT_SUCCESS(Status))

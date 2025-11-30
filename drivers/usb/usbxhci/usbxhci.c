@@ -224,6 +224,7 @@ static MPSTATUS XHCI_ModifyPortBits(PXHCI_EXTENSION Extension, USHORT Port, ULON
 static MPSTATUS XHCI_SetPortLinkState(PXHCI_EXTENSION Extension, USHORT Port, ULONG LinkState);
 static VOID XHCI_PowerOnAllPorts(PXHCI_EXTENSION Extension);
 static MPSTATUS XHCI_ConfigurePageSize(PXHCI_EXTENSION Extension);
+static VOID XHCI_ProgramInterrupterState(PXHCI_EXTENSION Extension);
 static VOID XHCI_TryWarmResetPort(PXHCI_EXTENSION Extension, USHORT Port);
 static VOID XHCI_ResetCommandRingState(PXHCI_EXTENSION Extension);
 static PXHCI_TRB XHCI_GetCommandRingTrb(PXHCI_EXTENSION Extension);
@@ -3731,6 +3732,47 @@ XHCI_EnableMsix(
     return TRUE;
 }
 
+static
+VOID
+XHCI_ProgramInterrupterState(
+    _Inout_ PXHCI_EXTENSION Extension)
+{
+    PXHCI_INTERRUPTER_REGISTER_SET Interrupter;
+    ULONG Iman;
+
+    if (!Extension || !Extension->RuntimeRegisters)
+        return;
+
+    Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
+
+    /* Program ERST and ERDP for interrupter 0 */
+    WRITE_REGISTER_ULONG(&Interrupter->ErstSize, Extension->ErstEntryCount);
+    WRITE_REGISTER_ULONG(&Interrupter->ErstBaseLow,
+                         (ULONG)(Extension->ErstTablePhysical.QuadPart & 0xFFFFFFFF));
+    WRITE_REGISTER_ULONG(&Interrupter->ErstBaseHigh,
+                         (ULONG)(Extension->ErstTablePhysical.QuadPart >> 32));
+    /* Program ERDP to the event ring base and set EHB (BUSY) to clear state */
+    WRITE_REGISTER_ULONG(&Interrupter->ErdpHigh,
+                         (ULONG)(Extension->EventRingPhysical.QuadPart >> 32));
+    WRITE_REGISTER_ULONG(&Interrupter->ErdpLow,
+                         ((ULONG)(Extension->EventRingPhysical.QuadPart & 0xFFFFFFFF)) |
+                         XHCI_ERDP_BUSY);
+    Extension->EventRingDequeuePointer = Extension->EventRingPhysical.QuadPart;
+
+    Iman = READ_REGISTER_ULONG(&Interrupter->Iman);
+    Iman |= XHCI_IMAN_IE;
+    Iman |= XHCI_IMAN_IP;
+    WRITE_REGISTER_ULONG(&Interrupter->Iman, Iman);
+
+    DPRINT1("usbxhci: IMOD=%08lx ERST=%08lx:%08lx ERDP=%08lx:%08lx IMAN=%08lx\n",
+            READ_REGISTER_ULONG(&Interrupter->Imod),
+            READ_REGISTER_ULONG(&Interrupter->ErstBaseHigh),
+            READ_REGISTER_ULONG(&Interrupter->ErstBaseLow),
+            READ_REGISTER_ULONG(&Interrupter->ErdpHigh),
+            READ_REGISTER_ULONG(&Interrupter->ErdpLow),
+            READ_REGISTER_ULONG(&Interrupter->Iman));
+}
+
 
 static
 MPSTATUS
@@ -5074,6 +5116,24 @@ XHCI_StartController(PVOID MiniPortExtension,
         }
     }
 
+    /*
+     * Bring the controller into a clean state before we touch rings or
+     * start it. Some firmware leaves HCE latched across warm boots.
+     */
+    Status = XHCI_ResetController(Extension);
+    if (Status != MP_STATUS_SUCCESS)
+        return Status;
+
+    /* Clear any latched status bits (HCH/HSE/HCE/EINT/PCD) from prior runs. */
+    {
+        ULONG StsAck = XHCI_USBSTS_EINT |
+                       XHCI_USBSTS_PCD |
+                       XHCI_USBSTS_HSE |
+                       XHCI_USBSTS_HCE |
+                       XHCI_USBSTS_HCH;
+        WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts, StsAck);
+    }
+
     Extension->PendingUsbSts = 0;
     Extension->RhIrqEnabled = TRUE;
     Extension->RhPendingInvalidate = FALSE;
@@ -5198,6 +5258,20 @@ XHCI_StartController(PVOID MiniPortExtension,
     Status = XHCI_BuildCommonBufferLayout(Extension, UsbPortResources);
     if (Status != MP_STATUS_SUCCESS)
         return Status;
+
+    if (!Extension->Supports64Bit)
+    {
+        ULONGLONG CommonStart = Extension->HcResourcesPhysical.QuadPart;
+        ULONGLONG CommonEnd = CommonStart + Extension->CommonBufferSize - 1;
+
+        if (CommonEnd >= 0x100000000ULL)
+        {
+            DPRINT1("usbxhci: common buffer not 32-bit DMA reachable (PA=%I64x size=%Iu)\n",
+                    (ULONGLONG)CommonStart,
+                    (SIZE_T)Extension->CommonBufferSize);
+            return MP_STATUS_NOT_SUPPORTED;
+        }
+    }
 
     XHCI_InitDeviceSlots(Extension);
 
@@ -5349,19 +5423,68 @@ XHCI_StartController(PVOID MiniPortExtension,
         /* Try a halt/reset/re-run once if the HC failed to exit halt. */
         XHCI_HaltController(Extension, XHCI_WAIT_HALT_US);
         XHCI_ResetController(Extension);
+        XHCI_ProgramInterrupterState(Extension);
+        XHCI_EnableInterrupts(Extension);
         Status = XHCI_RunController(Extension);
         if (Status != MP_STATUS_SUCCESS)
             return Status;
     }
 
-    /* If the controller immediately asserts HCE after starting, fail cleanly
-     * so the stack does not proceed with a wedged host. */
+    /* If the controller immediately asserts HCE after starting, try one full recovery then fail. */
     if (READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts) & XHCI_USBSTS_HCE)
     {
-        DPRINT1("usbxhci: host controller error latched immediately after start\n");
+        ULONG UsbSts = READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
+        ULONG UsbCmd = READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
+        DPRINT1("usbxhci: host controller error latched after start (USBSTS=%08lx USBCMD=%08lx), attempting recovery\n",
+                UsbSts,
+                UsbCmd);
+
         XHCI_HaltController(Extension, XHCI_WAIT_HALT_US);
         XHCI_ResetController(Extension);
-        return MP_STATUS_HW_ERROR;
+        /* Clear latched status and reprogram interrupter after reset. */
+        WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
+                             XHCI_USBSTS_EINT |
+                             XHCI_USBSTS_PCD |
+                             XHCI_USBSTS_HSE |
+                             XHCI_USBSTS_HCE |
+                             XHCI_USBSTS_HCH);
+        XHCI_ProgramInterrupterState(Extension);
+        XHCI_EnableInterrupts(Extension);
+
+        Status = XHCI_RunController(Extension);
+        if (Status != MP_STATUS_SUCCESS ||
+            (READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts) & XHCI_USBSTS_HCE))
+        {
+            ULONG UsbStsAfter = READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
+
+            DPRINT1("usbxhci: controller error persists after recovery (USBSTS=%08lx)\n",
+                    UsbStsAfter);
+
+            XHCI_DumpControllerState(Extension, "start failed HCE");
+
+            if (Extension->OperationalRegisters)
+            {
+                PXHCI_OPERATIONAL_REGISTERS Ops = Extension->OperationalRegisters;
+                ULONG PortIndex;
+
+                for (PortIndex = 0; PortIndex < Extension->NumberOfPorts; PortIndex++)
+                {
+                    ULONG PortSc =
+                        READ_REGISTER_ULONG(&Ops->PortRegister[PortIndex].PortStatusAndControl);
+                    DPRINT1("usbxhci: start failed HCE PORT%lu=0x%08lx\n",
+                            PortIndex + 1,
+                            PortSc);
+                }
+            }
+
+            DPRINT1("usbxhci: start failed HCE HCS2=%08lx HCS3=%08lx MaxSlots=%lu MaxPorts=%lu Scratchpads=%lu\n",
+                    HcsParams2,
+                    HcsParams3,
+                    Extension->MaxSlots,
+                    Extension->NumberOfPorts,
+                    Extension->ScratchpadCount);
+            return MP_STATUS_HW_ERROR;
+        }
     }
 
     return MP_STATUS_SUCCESS;

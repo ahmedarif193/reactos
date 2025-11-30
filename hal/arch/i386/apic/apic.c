@@ -822,8 +822,13 @@ HalEnableSystemInterrupt(
     /* Check if its valid */
     if (Index == APIC_FREE_VECTOR)
     {
-        /* Interrupt is not in use */
-        return FALSE;
+        /*
+         * No IOAPIC entry owns this vector. Treat it as a message/MSI vector
+         * that does not require IOAPIC programming and mark it reserved so
+         * later lookups (Begin/Disable) do not assert.
+         */
+        HalpVectorToIndex[Vector] = APIC_RESERVED_VECTOR;
+        return TRUE;
     }
 
     /* Read the redirection entry */
@@ -903,6 +908,10 @@ HalDisableSystemInterrupt(
     ASSERT(Vector < RTL_NUMBER_OF(HalpVectorToIndex));
 
     Index = HalpVectorToIndex[Vector];
+
+    /* Message/MSI or unknown vector, nothing to mask */
+    if (Index == APIC_FREE_VECTOR || Index == APIC_RESERVED_VECTOR)
+        return;
 
     /* Read lower dword of redirection entry */
     ReDirReg.Long0 = IOApicRead(IOAPIC_REDTBL + 2 * Index);

@@ -31,8 +31,8 @@ static NTSTATUS NTAPI PciPnpControl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 PPCI_DRIVER_EXTENSION DriverExtension = NULL;
 BOOLEAN HasDebuggingDevice = FALSE;
 PCI_TYPE1_CFG_CYCLE_BITS PciDebuggingDevice[2] = {0};
-BOOLEAN PciMsiEnabledByPolicy = FALSE;
-BOOLEAN PciMsixEnabledByPolicy = FALSE;
+BOOLEAN PciMsiEnabledByPolicy = TRUE;
+BOOLEAN PciMsixEnabledByPolicy = TRUE;
 
 /*** PRIVATE *****************************************************************/
 
@@ -253,14 +253,14 @@ PciReadInterruptPolicy(
     _In_opt_ PUNICODE_STRING RegistryPath)
 {
     RTL_QUERY_REGISTRY_TABLE QueryTable[3];
-    ULONG EnableMsi = 0;
-    ULONG EnableMsix = 0;
+    ULONG EnableMsi = 1;
+    ULONG EnableMsix = 1;
     WCHAR ParametersBuffer[512];
     UNICODE_STRING ParametersPath;
     NTSTATUS Status;
 
-    PciMsiEnabledByPolicy = FALSE;
-    PciMsixEnabledByPolicy = FALSE;
+    PciMsiEnabledByPolicy = TRUE;
+    PciMsixEnabledByPolicy = TRUE;
 
     if (!RegistryPath || RegistryPath->Length == 0)
         return;
@@ -290,11 +290,11 @@ PciReadInterruptPolicy(
                                     QueryTable,
                                     NULL,
                                     NULL);
-    if (!NT_SUCCESS(Status))
-        return;
-
-    PciMsiEnabledByPolicy = (EnableMsi != 0);
-    PciMsixEnabledByPolicy = (EnableMsix != 0);
+    if (NT_SUCCESS(Status))
+    {
+        PciMsiEnabledByPolicy = (EnableMsi != 0);
+        PciMsixEnabledByPolicy = (EnableMsix != 0);
+    }
 }
 
 CODE_SEG("INIT")

@@ -353,7 +353,6 @@ PciPdoDetermineInterruptPolicy(
         ZwClose(KeyHandle);
     }
 
-    UNICODE_STRING DriverKey;
     ULONG Length = 0;
     NTSTATUS Status = IoGetDeviceProperty(DeviceExtension->PciDevice->Pdo,
                                           DevicePropertyDriverKeyName,
@@ -982,7 +981,6 @@ PdoQueryResourceRequirements(
     PIO_RESOURCE_REQUIREMENTS_LIST ResourceList;
     PIO_RESOURCE_DESCRIPTOR Descriptor;
     ULONG Size;
-    ULONG ResCount = 0;
     ULONG ListSize;
     UCHAR Bar;
     ULONGLONG Base;
@@ -996,6 +994,24 @@ PdoQueryResourceRequirements(
     UCHAR InterruptPin;
     ULONG MsixMessageCount;
     UCHAR MsiMessageCount;
+    ULONG BaseDescriptorCount;
+    IO_RESOURCE_DESCRIPTOR BaseDescriptors[32];
+    ULONG RequirementsBusNumber;
+    BOOLEAN MsixOption;
+    BOOLEAN MsiOption;
+    BOOLEAN LegacyOption;
+    ULONG OptionCount;
+    SIZE_T AllocationSize;
+    PUCHAR ListPtr;
+    ULONG OptionIndex;
+    ULONG CurrentCount;
+    typedef enum _PCI_INTERRUPT_REQUIREMENT {
+        PciRequirementNone = 0,
+        PciRequirementLegacy,
+        PciRequirementMsi,
+        PciRequirementMsix,
+    } PCI_INTERRUPT_REQUIREMENT;
+    PCI_INTERRUPT_REQUIREMENT Options[3];
 
     UNREFERENCED_PARAMETER(IrpSp);
     DPRINT("PdoQueryResourceRequirements() called\n");
@@ -1041,8 +1057,12 @@ PdoQueryResourceRequirements(
             MsiMessageCount = 1;
     }
 
-    /* Count required resource descriptors */
-    ResCount = 0;
+    RequirementsBusNumber = DeviceExtension->PciDevice->BusNumber;
+    BaseDescriptorCount = 0;
+    RtlZeroMemory(BaseDescriptors, sizeof(BaseDescriptors));
+    Descriptor = BaseDescriptors;
+
+    /* Build non-interrupt resource descriptors once */
     if (PCI_CONFIGURATION_TYPE(&PciConfig) == PCI_DEVICE_TYPE)
     {
         for (Bar = 0; Bar < PCI_TYPE0_ADDRESSES;)
@@ -1053,23 +1073,73 @@ PdoQueryResourceRequirements(
                                    &Length,
                                    &Flags,
                                    &Bar,
-                                   NULL))
+                                   &MaximumAddress))
                 break;
 
-            if (Length != 0)
-                ResCount += 2;
+            if (Length == 0)
+            {
+                DPRINT("Unused address register\n");
+                continue;
+            }
+
+            Descriptor->Option = IO_RESOURCE_PREFERRED;
+            if (Flags & PCI_ADDRESS_IO_SPACE)
+            {
+                Descriptor->Type = CmResourceTypePort;
+                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                Descriptor->Flags = CM_RESOURCE_PORT_IO |
+                                    CM_RESOURCE_PORT_16_BIT_DECODE |
+                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
+
+                Descriptor->u.Port.Length = Length;
+                Descriptor->u.Port.Alignment = 1;
+                Descriptor->u.Port.MinimumAddress.QuadPart = Base;
+                Descriptor->u.Port.MaximumAddress.QuadPart = Base + Length - 1;
+            }
+            else
+            {
+                Descriptor->Type = CmResourceTypeMemory;
+                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
+                    ((Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0);
+
+                Descriptor->u.Memory.Length = Length;
+                Descriptor->u.Memory.Alignment = 1;
+                Descriptor->u.Memory.MinimumAddress.QuadPart = Base;
+                Descriptor->u.Memory.MaximumAddress.QuadPart = Base + Length - 1;
+            }
+            Descriptor++;
+
+            Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
+            if (Flags & PCI_ADDRESS_IO_SPACE)
+            {
+                Descriptor->Type = CmResourceTypePort;
+                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                Descriptor->Flags = CM_RESOURCE_PORT_IO |
+                                    CM_RESOURCE_PORT_16_BIT_DECODE |
+                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
+
+                Descriptor->u.Port.Length = Length;
+                Descriptor->u.Port.Alignment = Length;
+                Descriptor->u.Port.MinimumAddress.QuadPart = 0;
+                Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
+            }
+            else
+            {
+                Descriptor->Type = CmResourceTypeMemory;
+                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
+                    ((Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0);
+
+                Descriptor->u.Memory.Length = Length;
+                Descriptor->u.Memory.Alignment = Length;
+                Descriptor->u.Memory.MinimumAddress.QuadPart = 0;
+                Descriptor->u.Memory.MaximumAddress.QuadPart = MaximumAddress;
+            }
+            Descriptor++;
         }
 
         /* FIXME: Check ROM address */
-
-        if (HasMsix)
-            ResCount++;
-
-        if (HasMsi)
-            ResCount++;
-
-        if (InterruptPin != 0)
-            ResCount++;
     }
     else if (PCI_CONFIGURATION_TYPE(&PciConfig) == PCI_BRIDGE_TYPE)
     {
@@ -1081,21 +1151,85 @@ PdoQueryResourceRequirements(
                                    &Length,
                                    &Flags,
                                    &Bar,
-                                   NULL))
+                                   &MaximumAddress))
                 break;
 
-            if (Length != 0)
-                ResCount += 2;
+            if (Length == 0)
+            {
+                DPRINT("Unused address register\n");
+                continue;
+            }
+
+            Descriptor->Option = IO_RESOURCE_PREFERRED;
+            if (Flags & PCI_ADDRESS_IO_SPACE)
+            {
+                Descriptor->Type = CmResourceTypePort;
+                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                Descriptor->Flags = CM_RESOURCE_PORT_IO |
+                                    CM_RESOURCE_PORT_16_BIT_DECODE |
+                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
+
+                Descriptor->u.Port.Length = Length;
+                Descriptor->u.Port.Alignment = 1;
+                Descriptor->u.Port.MinimumAddress.QuadPart = Base;
+                Descriptor->u.Port.MaximumAddress.QuadPart = Base + Length - 1;
+            }
+            else
+            {
+                Descriptor->Type = CmResourceTypeMemory;
+                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
+                    ((Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0);
+
+                Descriptor->u.Memory.Length = Length;
+                Descriptor->u.Memory.Alignment = 1;
+                Descriptor->u.Memory.MinimumAddress.QuadPart = Base;
+                Descriptor->u.Memory.MaximumAddress.QuadPart = Base + Length - 1;
+            }
+            Descriptor++;
+
+            Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
+            if (Flags & PCI_ADDRESS_IO_SPACE)
+            {
+                Descriptor->Type = CmResourceTypePort;
+                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                Descriptor->Flags = CM_RESOURCE_PORT_IO |
+                                    CM_RESOURCE_PORT_16_BIT_DECODE |
+                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
+
+                Descriptor->u.Port.Length = Length;
+                Descriptor->u.Port.Alignment = Length;
+                Descriptor->u.Port.MinimumAddress.QuadPart = 0;
+                Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
+            }
+            else
+            {
+                Descriptor->Type = CmResourceTypeMemory;
+                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
+                    ((Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0);
+
+                Descriptor->u.Memory.Length = Length;
+                Descriptor->u.Memory.Alignment = Length;
+                Descriptor->u.Memory.MinimumAddress.QuadPart = 0;
+                Descriptor->u.Memory.MaximumAddress.QuadPart = MaximumAddress;
+            }
+            Descriptor++;
         }
 
-        if (HasMsix)
-            ResCount++;
-
-        if (HasMsi)
-            ResCount++;
-
         if (DeviceExtension->PciDevice->PciConfig.BaseClass == PCI_CLASS_BRIDGE_DEV)
-            ResCount++;
+        {
+            Descriptor->Option = 0;
+            Descriptor->Type = CmResourceTypeBusNumber;
+            Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+
+            RequirementsBusNumber =
+            Descriptor->u.BusNumber.MinBusNumber =
+            Descriptor->u.BusNumber.MaxBusNumber = DeviceExtension->PciDevice->PciConfig.u.type1.SecondaryBus;
+            Descriptor->u.BusNumber.Length = 1;
+            Descriptor->u.BusNumber.Reserved = 0;
+            Descriptor++;
+        }
     }
     else if (PCI_CONFIGURATION_TYPE(&PciConfig) == PCI_CARDBUS_BRIDGE_TYPE)
     {
@@ -1106,15 +1240,37 @@ PdoQueryResourceRequirements(
         DPRINT1("Unsupported header type %d\n", PCI_CONFIGURATION_TYPE(&PciConfig));
     }
 
-    if (ResCount == 0)
+    BaseDescriptorCount = (ULONG)(Descriptor - BaseDescriptors);
+    MsixOption = (HasMsix && AllowMsix);
+    MsiOption = (HasMsi && AllowMsi);
+    LegacyOption = (InterruptPin != 0);
+
+    if ((BaseDescriptorCount == 0) && !MsixOption && !MsiOption && !LegacyOption)
     {
         Irp->IoStatus.Information = 0;
         return STATUS_SUCCESS;
     }
 
-    /* Calculate the resource list size */
-    ListSize = FIELD_OFFSET(IO_RESOURCE_REQUIREMENTS_LIST, List[0].Descriptors) +
-               ResCount * sizeof(IO_RESOURCE_DESCRIPTOR);
+    OptionCount = 0;
+    if (MsixOption)
+        Options[OptionCount++] = PciRequirementMsix;
+    if (MsiOption)
+        Options[OptionCount++] = PciRequirementMsi;
+    if (LegacyOption)
+        Options[OptionCount++] = PciRequirementLegacy;
+    if (OptionCount == 0)
+        Options[OptionCount++] = PciRequirementNone;
+
+    AllocationSize = FIELD_OFFSET(IO_RESOURCE_REQUIREMENTS_LIST, List[0]);
+    for (OptionIndex = 0; OptionIndex < OptionCount; OptionIndex++)
+    {
+        CurrentCount = BaseDescriptorCount +
+                       ((Options[OptionIndex] == PciRequirementNone) ? 0 : 1);
+        AllocationSize += FIELD_OFFSET(IO_RESOURCE_LIST, Descriptors) +
+                          CurrentCount * sizeof(IO_RESOURCE_DESCRIPTOR);
+    }
+
+    ListSize = (ULONG)AllocationSize;
 
     DPRINT("ListSize %lu (0x%lx)\n", ListSize, ListSize);
 
@@ -1131,287 +1287,61 @@ PdoQueryResourceRequirements(
     RtlZeroMemory(ResourceList, ListSize);
     ResourceList->ListSize = ListSize;
     ResourceList->InterfaceType = PCIBus;
-    ResourceList->BusNumber = DeviceExtension->PciDevice->BusNumber;
+    ResourceList->BusNumber = RequirementsBusNumber;
     ResourceList->SlotNumber = DeviceExtension->PciDevice->SlotNumber.u.AsULONG;
-    ResourceList->AlternativeLists = 1;
+    ResourceList->AlternativeLists = OptionCount;
+    ListPtr = (PUCHAR)&ResourceList->List[0];
 
-    ResourceList->List[0].Version = 1;
-    ResourceList->List[0].Revision = 1;
-    ResourceList->List[0].Count = ResCount;
-
-    Descriptor = &ResourceList->List[0].Descriptors[0];
-    if (PCI_CONFIGURATION_TYPE(&PciConfig) == PCI_DEVICE_TYPE)
+    for (OptionIndex = 0; OptionIndex < OptionCount; OptionIndex++)
     {
-        for (Bar = 0; Bar < PCI_TYPE0_ADDRESSES;)
+        PIO_RESOURCE_LIST IoList = (PIO_RESOURCE_LIST)ListPtr;
+        PIO_RESOURCE_DESCRIPTOR Dest;
+        BOOLEAN IncludeInterrupt = (Options[OptionIndex] != PciRequirementNone);
+
+        CurrentCount = BaseDescriptorCount + (IncludeInterrupt ? 1 : 0);
+        IoList->Version = 1;
+        IoList->Revision = 1;
+        IoList->Count = CurrentCount;
+
+        Dest = &IoList->Descriptors[0];
+        if (BaseDescriptorCount)
         {
-            if (!PdoGetRangeLength(DeviceExtension,
-                                   Bar,
-                                   &Base,
-                                   &Length,
-                                   &Flags,
-                                   &Bar,
-                                   &MaximumAddress))
-            {
-                DPRINT1("PdoGetRangeLength() failed\n");
-                break;
-            }
+            RtlCopyMemory(Dest,
+                          BaseDescriptors,
+                          BaseDescriptorCount * sizeof(IO_RESOURCE_DESCRIPTOR));
+            Dest += BaseDescriptorCount;
+        }
 
-            if (Length == 0)
-            {
-                DPRINT("Unused address register\n");
-                continue;
-            }
+        if (IncludeInterrupt)
+        {
+            Dest->Option = 0;
+            Dest->Type = CmResourceTypeInterrupt;
 
-            /* Set preferred descriptor */
-            Descriptor->Option = IO_RESOURCE_PREFERRED;
-            if (Flags & PCI_ADDRESS_IO_SPACE)
+            if (Options[OptionIndex] == PciRequirementLegacy)
             {
-                Descriptor->Type = CmResourceTypePort;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_PORT_IO |
-                                    CM_RESOURCE_PORT_16_BIT_DECODE |
-                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
-
-                Descriptor->u.Port.Length = Length;
-                Descriptor->u.Port.Alignment = 1;
-                Descriptor->u.Port.MinimumAddress.QuadPart = Base;
-                Descriptor->u.Port.MaximumAddress.QuadPart = Base + Length - 1;
+                Dest->ShareDisposition = CmResourceShareShared;
+                Dest->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
+                Dest->u.Interrupt.MinimumVector = 0;
+                Dest->u.Interrupt.MaximumVector = 0xFF;
             }
             else
             {
-                Descriptor->Type = CmResourceTypeMemory;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                    (Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0;
-
-                Descriptor->u.Memory.Length = Length;
-                Descriptor->u.Memory.Alignment = 1;
-                Descriptor->u.Memory.MinimumAddress.QuadPart = Base;
-                Descriptor->u.Memory.MaximumAddress.QuadPart = Base + Length - 1;
-            }
-            Descriptor++;
-
-            /* Set alternative descriptor */
-            Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
-            if (Flags & PCI_ADDRESS_IO_SPACE)
-            {
-                Descriptor->Type = CmResourceTypePort;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_PORT_IO |
-                                    CM_RESOURCE_PORT_16_BIT_DECODE |
-                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
-
-                Descriptor->u.Port.Length = Length;
-                Descriptor->u.Port.Alignment = Length;
-                Descriptor->u.Port.MinimumAddress.QuadPart = 0;
-                Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
-            }
-            else
-            {
-                Descriptor->Type = CmResourceTypeMemory;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                    (Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0;
-
-                Descriptor->u.Memory.Length = Length;
-                Descriptor->u.Memory.Alignment = Length;
-                Descriptor->u.Port.MinimumAddress.QuadPart = 0;
-                Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
-            }
-            Descriptor++;
-        }
-
-        /* FIXME: Check ROM address */
-
-        if (HasMsix && AllowMsix)
-        {
-            Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
-            Descriptor->Type = CmResourceTypeInterrupt;
-            Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-            Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE |
-                                CM_RESOURCE_INTERRUPT_MESSAGE;
-            Descriptor->u.Interrupt.MinimumVector = 1;
-            Descriptor->u.Interrupt.MaximumVector = MsixMessageCount;
-            Descriptor->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
-            Descriptor->u.Interrupt.PriorityPolicy = IrqPriorityUndefined;
-            Descriptor->u.Interrupt.TargetedProcessors = 0;
-            Descriptor++;
-        }
-
-        if (HasMsi && AllowMsi)
-        {
-            Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
-            Descriptor->Type = CmResourceTypeInterrupt;
-            Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-            Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE |
-                                CM_RESOURCE_INTERRUPT_MESSAGE;
-            Descriptor->u.Interrupt.MinimumVector = 1;
-            Descriptor->u.Interrupt.MaximumVector = MsiMessageCount;
-            Descriptor->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
-            Descriptor->u.Interrupt.PriorityPolicy = IrqPriorityUndefined;
-            Descriptor->u.Interrupt.TargetedProcessors = 0;
-            Descriptor++;
-        }
-
-        if (InterruptPin != 0)
-        {
-            Descriptor->Option = ((HasMsix && AllowMsix) ||
-                                  (HasMsi && AllowMsi)) ? IO_RESOURCE_ALTERNATIVE : 0; /* Required */
-            Descriptor->Type = CmResourceTypeInterrupt;
-            Descriptor->ShareDisposition = CmResourceShareShared;
-            Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-
-            Descriptor->u.Interrupt.MinimumVector = 0;
-            Descriptor->u.Interrupt.MaximumVector = 0xFF;
-            Descriptor->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
-            Descriptor->u.Interrupt.PriorityPolicy = IrqPriorityUndefined;
-            Descriptor->u.Interrupt.TargetedProcessors = 0;
-            Descriptor++;
-        }
-    }
-    else if (PCI_CONFIGURATION_TYPE(&PciConfig) == PCI_BRIDGE_TYPE)
-    {
-        for (Bar = 0; Bar < PCI_TYPE1_ADDRESSES;)
-        {
-            if (!PdoGetRangeLength(DeviceExtension,
-                                   Bar,
-                                   &Base,
-                                   &Length,
-                                   &Flags,
-                                   &Bar,
-                                   &MaximumAddress))
-            {
-                DPRINT1("PdoGetRangeLength() failed\n");
-                break;
+                Dest->ShareDisposition = CmResourceShareDeviceExclusive;
+                Dest->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE |
+                              CM_RESOURCE_INTERRUPT_MESSAGE;
+                Dest->u.Interrupt.MinimumVector = 1;
+                Dest->u.Interrupt.MaximumVector =
+                    (Options[OptionIndex] == PciRequirementMsix) ?
+                        MsixMessageCount : MsiMessageCount;
             }
 
-            if (Length == 0)
-            {
-                DPRINT("Unused address register\n");
-                continue;
-            }
-
-            /* Set preferred descriptor */
-            Descriptor->Option = IO_RESOURCE_PREFERRED;
-            if (Flags & PCI_ADDRESS_IO_SPACE)
-            {
-                Descriptor->Type = CmResourceTypePort;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_PORT_IO |
-                                    CM_RESOURCE_PORT_16_BIT_DECODE |
-                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
-
-                Descriptor->u.Port.Length = Length;
-                Descriptor->u.Port.Alignment = 1;
-                Descriptor->u.Port.MinimumAddress.QuadPart = Base;
-                Descriptor->u.Port.MaximumAddress.QuadPart = Base + Length - 1;
-            }
-            else
-            {
-                Descriptor->Type = CmResourceTypeMemory;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                    (Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0;
-
-                Descriptor->u.Memory.Length = Length;
-                Descriptor->u.Memory.Alignment = 1;
-                Descriptor->u.Memory.MinimumAddress.QuadPart = Base;
-                Descriptor->u.Memory.MaximumAddress.QuadPart = Base + Length - 1;
-            }
-            Descriptor++;
-
-            /* Set alternative descriptor */
-            Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
-            if (Flags & PCI_ADDRESS_IO_SPACE)
-            {
-                Descriptor->Type = CmResourceTypePort;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_PORT_IO |
-                                    CM_RESOURCE_PORT_16_BIT_DECODE |
-                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
-
-                Descriptor->u.Port.Length = Length;
-                Descriptor->u.Port.Alignment = Length;
-                Descriptor->u.Port.MinimumAddress.QuadPart = 0;
-                Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
-            }
-            else
-            {
-                Descriptor->Type = CmResourceTypeMemory;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                    (Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0;
-
-                Descriptor->u.Memory.Length = Length;
-                Descriptor->u.Memory.Alignment = Length;
-                Descriptor->u.Port.MinimumAddress.QuadPart = 0;
-                Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
-            }
-            Descriptor++;
+            Dest->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
+            Dest->u.Interrupt.PriorityPolicy = IrqPriorityUndefined;
+            Dest->u.Interrupt.TargetedProcessors = 0;
         }
 
-        if (HasMsix && AllowMsix)
-        {
-            Descriptor->Option = IO_RESOURCE_PREFERRED;
-            Descriptor->Type = CmResourceTypeInterrupt;
-            Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-            Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE |
-                                CM_RESOURCE_INTERRUPT_MESSAGE;
-            Descriptor->u.Interrupt.MinimumVector = 1;
-            Descriptor->u.Interrupt.MaximumVector = MsixMessageCount;
-            Descriptor->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
-            Descriptor->u.Interrupt.PriorityPolicy = IrqPriorityUndefined;
-            Descriptor->u.Interrupt.TargetedProcessors = 0;
-            Descriptor++;
-        }
-
-        if (HasMsi && AllowMsi)
-        {
-            Descriptor->Option = HasMsix ? IO_RESOURCE_ALTERNATIVE : IO_RESOURCE_PREFERRED;
-            Descriptor->Type = CmResourceTypeInterrupt;
-            Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-            Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE |
-                                CM_RESOURCE_INTERRUPT_MESSAGE;
-            Descriptor->u.Interrupt.MinimumVector = 1;
-            Descriptor->u.Interrupt.MaximumVector = MsiMessageCount;
-            Descriptor->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
-            Descriptor->u.Interrupt.PriorityPolicy = IrqPriorityUndefined;
-            Descriptor->u.Interrupt.TargetedProcessors = 0;
-            Descriptor++;
-        }
-
-        if (InterruptPin != 0)
-        {
-            Descriptor->Option = ((HasMsix && AllowMsix) ||
-                                  (HasMsi && AllowMsi)) ? IO_RESOURCE_ALTERNATIVE : 0; /* Required */
-            Descriptor->Type = CmResourceTypeInterrupt;
-            Descriptor->ShareDisposition = CmResourceShareShared;
-            Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-
-            Descriptor->u.Interrupt.MinimumVector = 0;
-            Descriptor->u.Interrupt.MaximumVector = 0xFF;
-            Descriptor->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
-            Descriptor->u.Interrupt.PriorityPolicy = IrqPriorityUndefined;
-            Descriptor->u.Interrupt.TargetedProcessors = 0;
-            Descriptor++;
-        }
-
-        if (DeviceExtension->PciDevice->PciConfig.BaseClass == PCI_CLASS_BRIDGE_DEV)
-        {
-            Descriptor->Option = 0; /* Required */
-            Descriptor->Type = CmResourceTypeBusNumber;
-            Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-
-            ResourceList->BusNumber =
-            Descriptor->u.BusNumber.MinBusNumber =
-            Descriptor->u.BusNumber.MaxBusNumber = DeviceExtension->PciDevice->PciConfig.u.type1.SecondaryBus;
-            Descriptor->u.BusNumber.Length = 1;
-            Descriptor->u.BusNumber.Reserved = 0;
-        }
-    }
-    else if (PCI_CONFIGURATION_TYPE(&PciConfig) == PCI_CARDBUS_BRIDGE_TYPE)
-    {
-        /* FIXME: Add Cardbus bridge resources */
+        ListPtr += FIELD_OFFSET(IO_RESOURCE_LIST, Descriptors) +
+                   CurrentCount * sizeof(IO_RESOURCE_DESCRIPTOR);
     }
 
     Irp->IoStatus.Information = (ULONG_PTR)ResourceList;

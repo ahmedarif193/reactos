@@ -2116,6 +2116,13 @@ USBPORT_AllocateCommonBuffer(IN PDEVICE_OBJECT FdoDevice,
     FdoExtension = FdoDevice->DeviceExtension;
 
     DmaAdapter = FdoExtension->DmaAdapter;
+    if (!DmaAdapter || !DmaAdapter->DmaOperations ||
+        !DmaAdapter->DmaOperations->AllocateCommonBuffer)
+    {
+        DPRINT1("USBPORT_AllocateCommonBuffer: missing DMA adapter/ops\n");
+        goto Exit;
+    }
+
     DmaOperations = DmaAdapter->DmaOperations;
 
     HeaderSize = sizeof(USBPORT_COMMON_BUFFER_HEADER);

@@ -1150,7 +1150,8 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     RtlZeroMemory(FdoExtension->PendingIrpTable, sizeof(USBPORT_IRP_TABLE));
 
     if (!UsbPortResources->ShareVector &&
-        (Packet->MiniPortFlags & USB_MINIPORT_FLAGS_USB3))
+        (Packet->MiniPortFlags & USB_MINIPORT_FLAGS_USB3) &&
+        !(UsbPortResources->InterruptFlags & CM_RESOURCE_INTERRUPT_MESSAGE))
     {
         DPRINT1("USBPORT_StartDevice: forcing shared IRQ for xHCI controller\n");
         UsbPortResources->ShareVector = TRUE;
@@ -1305,9 +1306,9 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
             else if (FdoExtension->InterruptObject)
             {
                 IoDisconnectInterrupt(FdoExtension->InterruptObject);
-                FdoExtension->InterruptObject = NULL;
             }
 
+            FdoExtension->InterruptObject = NULL;
             FdoExtension->Flags &= ~USBPORT_FLAG_INT_CONNECTED;
         }
 

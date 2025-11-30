@@ -404,6 +404,8 @@ IoConnectInterruptEx(
             ConnectSyncIrql = Parameters->MessageBased.SynchronizeIrql ?
                               Parameters->MessageBased.SynchronizeIrql :
                               ConnectIrql;
+            if (ConnectSyncIrql < ConnectIrql)
+                ConnectSyncIrql = ConnectIrql;
 
             for (i = 0; i < MessageCount; i++)
             {
@@ -440,7 +442,7 @@ IoConnectInterruptEx(
                                       ConnectSyncIrql,
                                       Mode,
                                       FALSE,
-                                      Affinity,
+                                      0,
                                       Parameters->MessageBased.FloatingSave);
 
                 if (!KeConnectInterrupt(&Entry->Interrupt))
