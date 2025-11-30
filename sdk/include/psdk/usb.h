@@ -33,6 +33,10 @@
 #pragma message("WARNING: OSR21_COMPAT SWITCH NOT SUPPORTED")
 #endif
 
+#ifndef PHYSICAL_ADDRESS
+typedef LARGE_INTEGER PHYSICAL_ADDRESS;
+#endif
+
 #ifndef _NTDDK_
 #ifndef _WDMDDK_
 typedef PVOID PIRP;
@@ -40,7 +44,7 @@ typedef PVOID PMDL;
 #endif
 #endif
 
-#define USBDI_VERSION    0x00000500
+#define USBDI_VERSION    0x00000600
 
 #include "usb200.h"
 
@@ -48,8 +52,20 @@ typedef PVOID PMDL;
 #define USB_PORTATTR_SHARED_USB2                        0x00000002
 #define USB_PORTATTR_MINI_CONNECTOR                     0x00000004
 #define USB_PORTATTR_OEM_CONNECTOR                      0x00000008
+#define USB_PORTATTR_DEBUG_CAPABLE                      0x00000010
+#define USB_PORTATTR_TYPEC_CONNECTOR                    0x00000020
+#define USB_PORTATTR_COMPANION_PORT_MASK                0x0000FF00
+#define USB_PORTATTR_COMPANION_PORT_SHIFT               8
+#define USB_PORTATTR_COMPANION_INDEX_MASK               0x00FF0000
+#define USB_PORTATTR_COMPANION_INDEX_SHIFT              16
 #define USB_PORTATTR_OWNED_BY_CC                        0x01000000
 #define USB_PORTATTR_NO_OVERCURRENT_UI                  0x02000000
+#define USB_PORTATTR_TYPEC_USB4_CAPABLE                 0x04000000
+#define USB_PORTATTR_TYPEC_TBT3_CAPABLE                 0x08000000
+#define USB_PORTATTR_TYPEC_PCIE_TUNNELING               0x10000000
+#define USB_PORTATTR_TYPEC_DP_ALT_MODE                  0x20000000
+#define USB_PORTATTR_TYPEC_RETIMER_MASK                 0xC0000000
+#define USB_PORTATTR_TYPEC_RETIMER_SHIFT                30
 
 typedef enum _USB_CONTROLLER_FLAVOR {
   USB_HcGeneric = 0,
@@ -75,7 +91,10 @@ typedef enum _USB_CONTROLLER_FLAVOR {
   UHCI_VIA_x0E_FIFO = 264,
   EHCI_Generic = 1000,
   EHCI_NEC = 2000,
-  EHCI_Lucent = 3000
+  EHCI_Lucent = 3000,
+  EHCI_NVIDIA_Tegra2 = 4000,
+  EHCI_NVIDIA_Tegra3 = 4001,
+  EHCI_Intel_Medfield = 5001
 } USB_CONTROLLER_FLAVOR;
 
 
@@ -126,6 +145,13 @@ typedef enum _USB_CONTROLLER_FLAVOR {
 #define URB_FUNCTION_GET_DESCRIPTOR_FROM_INTERFACE      0x0028
 #define URB_FUNCTION_SET_DESCRIPTOR_TO_INTERFACE        0x0029
 
+/* Reserve 0x002B-0x002F to match the Windows SDK layout */
+#define URB_FUNCTION_RESERVE_0X002B                     0x002B
+#define URB_FUNCTION_RESERVE_0X002C                     0x002C
+#define URB_FUNCTION_RESERVE_0X002D                     0x002D
+#define URB_FUNCTION_RESERVE_0X002E                     0x002E
+#define URB_FUNCTION_RESERVE_0X002F                     0x002F
+
 #if (_WIN32_WINNT >= 0x0501)
 
 #define URB_FUNCTION_GET_MS_FEATURE_DESCRIPTOR          0x002A
@@ -147,23 +173,18 @@ typedef enum _USB_CONTROLLER_FLAVOR {
 #define URB_FUNCTION_CLOSE_STATIC_STREAMS                         0x0036
 #define URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER_USING_CHAINED_MDL 0x0037
 #define URB_FUNCTION_ISOCH_TRANSFER_USING_CHAINED_MDL             0x0038
-
-#define URB_FUNCTION_RESERVE_0X002B                     0x002B
-#define URB_FUNCTION_RESERVE_0X002C                     0x002C
-#define URB_FUNCTION_RESERVE_0X002D                     0x002D
-#define URB_FUNCTION_RESERVE_0X002E                     0x002E
-#define URB_FUNCTION_RESERVE_0X002F                     0x002F
+#define URB_FUNCTION_GET_ISOCH_PIPE_TRANSFER_PATH_DELAYS          0x003D
 
 #define URB_FUNCTION_RESET_PIPE                         URB_FUNCTION_SYNC_RESET_PIPE_AND_CLEAR_STALL
 
-#define USBD_TRANSFER_DIRECTION                         0x00000001
 #define USBD_SHORT_TRANSFER_OK                          0x00000002
 #define USBD_START_ISO_TRANSFER_ASAP                    0x00000004
 #define USBD_DEFAULT_PIPE_TRANSFER                      0x00000008
-#define USBD_TRANSFER_DIRECTION_FLAG(flags)             ((flags) & USBD_TRANSFER_DIRECTION)
 
 #define USBD_TRANSFER_DIRECTION_OUT                     0
 #define USBD_TRANSFER_DIRECTION_IN                      1
+#define USBD_TRANSFER_DIRECTION                         USBD_TRANSFER_DIRECTION_IN
+#define USBD_TRANSFER_DIRECTION_FLAG(flags)             ((flags) & USBD_TRANSFER_DIRECTION)
 #define VALID_TRANSFER_FLAGS_MASK                       (USBD_SHORT_TRANSFER_OK | USBD_TRANSFER_DIRECTION | \
                                                          USBD_START_ISO_TRANSFER_ASAP | USBD_DEFAULT_PIPE_TRANSFER)
 #define USBD_ISO_START_FRAME_RANGE                      1024
@@ -174,6 +195,7 @@ typedef LONG USBD_STATUS;
 #define USBD_PENDING(Status)                            ((ULONG)(Status) >> 30 == 1)
 #define USBD_ERROR(Status)                              ((USBD_STATUS)(Status) < 0)
 #define USBD_STATUS_SUCCESS                             ((USBD_STATUS)0x00000000L)
+#define USBD_STATUS_PORT_OPERATION_PENDING              ((USBD_STATUS)0x00000001L)
 #define USBD_STATUS_PENDING                             ((USBD_STATUS)0x40000000L)
 #define USBD_STATUS_CRC                                 ((USBD_STATUS)0xC0000001L)
 #define USBD_STATUS_BTSTUFF                             ((USBD_STATUS)0xC0000002L)
@@ -193,6 +215,9 @@ typedef LONG USBD_STATUS;
 #define USBD_STATUS_XACT_ERROR                          ((USBD_STATUS)0xC0000011L)
 #define USBD_STATUS_BABBLE_DETECTED                     ((USBD_STATUS)0xC0000012L)
 #define USBD_STATUS_DATA_BUFFER_ERROR                   ((USBD_STATUS)0xC0000013L)
+#define USBD_STATUS_NO_PING_RESPONSE                    ((USBD_STATUS)0xC0000014L)
+#define USBD_STATUS_INVALID_STREAM_TYPE                 ((USBD_STATUS)0xC0000015L)
+#define USBD_STATUS_INVALID_STREAM_ID                   ((USBD_STATUS)0xC0000016L)
 #define USBD_STATUS_ENDPOINT_HALTED                     ((USBD_STATUS)0xC0000030L)
 #define USBD_STATUS_INVALID_URB_FUNCTION                ((USBD_STATUS)0x80000200L)
 #define USBD_STATUS_INVALID_PARAMETER                   ((USBD_STATUS)0x80000300L)
@@ -207,11 +232,13 @@ typedef LONG USBD_STATUS;
 #define USBD_STATUS_FRAME_CONTROL_NOT_OWNED             ((USBD_STATUS)0xC0000D00L)
 #define USBD_STATUS_NOT_SUPPORTED                       ((USBD_STATUS)0xC0000E00L)
 #define USBD_STATUS_INVALID_CONFIGURATION_DESCRIPTOR    ((USBD_STATUS)0xC0000F00L)
+#define USBD_STATUS_INAVLID_CONFIGURATION_DESCRIPTOR    ((USBD_STATUS)0xC0000F00L)
 #define USBD_STATUS_INSUFFICIENT_RESOURCES              ((USBD_STATUS)0xC0001000L)
 #define USBD_STATUS_SET_CONFIG_FAILED                   ((USBD_STATUS)0xC0002000L)
 #define USBD_STATUS_BUFFER_TOO_SMALL                    ((USBD_STATUS)0xC0003000L)
 #define USBD_STATUS_INTERFACE_NOT_FOUND                 ((USBD_STATUS)0xC0004000L)
 #define USBD_STATUS_INVALID_PIPE_FLAGS                  ((USBD_STATUS)0xC0005000L)
+#define USBD_STATUS_INAVLID_PIPE_FLAGS                  ((USBD_STATUS)0xC0005000L)
 #define USBD_STATUS_TIMEOUT                             ((USBD_STATUS)0xC0006000L)
 #define USBD_STATUS_DEVICE_GONE                         ((USBD_STATUS)0xC0007000L)
 #define USBD_STATUS_STATUS_NOT_MAPPED                   ((USBD_STATUS)0xC0008000L)
@@ -276,8 +303,45 @@ typedef struct _USBD_PIPE_INFORMATION {
 #define USBD_PF_SHORT_PACKET_OPT                        0x00000002
 #define USBD_PF_ENABLE_RT_THREAD_ACCESS                 0x00000004
 #define USBD_PF_MAP_ADD_TRANSFERS                       0x00000008
+#define USBD_PF_VIDEO_PRIORITY                          0x00000010
+#define USBD_PF_VOICE_PRIORITY                          0x00000020
+#define USBD_PF_INTERACTIVE_PRIORITY                    0x00000030
+#define USBD_PF_PRIORITY_MASK                           0x000000F0
 #define USBD_PF_VALID_MASK                              (USBD_PF_CHANGE_MAX_PACKET | USBD_PF_SHORT_PACKET_OPT | \
-                                                         USBD_PF_ENABLE_RT_THREAD_ACCESS | USBD_PF_MAP_ADD_TRANSFERS)
+                                                         USBD_PF_ENABLE_RT_THREAD_ACCESS | USBD_PF_MAP_ADD_TRANSFERS | \
+                                                         USBD_PF_VIDEO_PRIORITY | USBD_PF_VOICE_PRIORITY | \
+                                                         USBD_PF_INTERACTIVE_PRIORITY)
+
+typedef enum _USBD_ENDPOINT_OFFLOAD_MODE {
+  UsbdEndpointOffloadModeNotSupported = 0,
+  UsbdEndpointOffloadSoftwareAssisted,
+  UsbdEndpointOffloadHardwareAssisted
+} USBD_ENDPOINT_OFFLOAD_MODE;
+
+#include <pshpack1.h>
+typedef struct _USBD_ENDPOINT_OFFLOAD_INFORMATION {
+  ULONG Size;
+  USHORT EndpointAddress;
+  ULONG ResourceId;
+  USBD_ENDPOINT_OFFLOAD_MODE Mode;
+  ULONG RootHubPortNumber:8;
+  ULONG RouteString:20;
+  ULONG Speed:4;
+  ULONG UsbDeviceAddress:8;
+  ULONG SlotId:8;
+  ULONG MultiTT:1;
+  ULONG Reserved0:15;
+  PHYSICAL_ADDRESS TransferSegmentLA;
+  PVOID TransferSegmentVA;
+  SIZE_T TransferRingSize;
+  ULONG TransferRingInitialCycleBit;
+  ULONG MessageNumber;
+  PHYSICAL_ADDRESS EventRingSegmentLA;
+  PVOID EventRingSegmentVA;
+  SIZE_T EventRingSize;
+  ULONG EventRingInitialCycleBit;
+} USBD_ENDPOINT_OFFLOAD_INFORMATION, *PUSBD_ENDPOINT_OFFLOAD_INFORMATION;
+#include <poppack.h>
 
 typedef struct _USBD_INTERFACE_INFORMATION {
   USHORT Length;
@@ -551,6 +615,13 @@ struct _URB_OPEN_STATIC_STREAMS {
   PUSBD_STREAM_INFORMATION Streams;
 };
 
+struct _URB_GET_ISOCH_PIPE_TRANSFER_PATH_DELAYS {
+  struct _URB_HEADER Hdr;
+  USBD_PIPE_HANDLE PipeHandle;
+  ULONG MaximumSendPathDelayInMilliSeconds;
+  ULONG MaximumCompletionPathDelayInMilliSeconds;
+};
+
 typedef struct _URB {
   __GNU_EXTENSION union {
     struct _URB_HEADER UrbHeader;
@@ -577,5 +648,6 @@ typedef struct _URB {
     struct _URB_OS_FEATURE_DESCRIPTOR_REQUEST UrbOSFeatureDescriptorRequest;
 #endif
     struct _URB_OPEN_STATIC_STREAMS UrbOpenStaticStreams;
+    struct _URB_GET_ISOCH_PIPE_TRANSFER_PATH_DELAYS UrbGetIsochPipeTransferPathDelays;
   };
 } URB, *PURB;

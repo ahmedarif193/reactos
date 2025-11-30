@@ -34,4 +34,3 @@ HalpAcpiQueryPowerButton(VOID)
 {
     return FALSE;
 }
-

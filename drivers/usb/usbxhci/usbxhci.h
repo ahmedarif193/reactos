@@ -48,8 +48,9 @@
 typedef struct DECLSPEC_ALIGN(PAGE_SIZE) _XHCI_SCRATCHPAD_PAGE {
     UCHAR Buffer[PAGE_SIZE];
 } XHCI_SCRATCHPAD_PAGE, *PXHCI_SCRATCHPAD_PAGE;
+C_ASSERT(sizeof(XHCI_SCRATCHPAD_PAGE) == PAGE_SIZE);
 
-typedef struct DECLSPEC_ALIGN(64) _XHCI_HC_RESOURCES {
+typedef struct DECLSPEC_ALIGN(PAGE_SIZE) _XHCI_HC_RESOURCES {
     ULONGLONG Dcbaa[XHCI_MAX_SLOTS + 1];
     ULONGLONG ScratchpadPointerArray[XHCI_MAX_SCRATCHPADS];
     XHCI_SCRATCHPAD_PAGE ScratchpadBuffers[XHCI_MAX_SCRATCHPADS];
@@ -129,11 +130,16 @@ typedef struct _XHCI_EXTENSION {
     USHORT HciVersion;
     PXHCI_HC_RESOURCES HcResources;
     PHYSICAL_ADDRESS HcResourcesPhysical;
+    SIZE_T CommonBufferSize;
+    PULONGLONG Dcbaa;
     PHYSICAL_ADDRESS DcbaaPhysical;
-  PHYSICAL_ADDRESS ScratchpadArrayPhysical;
-  ULONG ScratchpadCount;
-  ULONG ConfiguredPageSize;
-  PXHCI_TRB CommandRing;
+    PULONGLONG ScratchpadPointerArray;
+    PHYSICAL_ADDRESS ScratchpadArrayPhysical;
+    PXHCI_SCRATCHPAD_PAGE ScratchpadBuffers;
+    PHYSICAL_ADDRESS ScratchpadBuffersPhysical;
+    ULONG ScratchpadCount;
+    ULONG ConfiguredPageSize;
+    PXHCI_TRB CommandRing;
     PHYSICAL_ADDRESS CommandRingPhysical;
     ULONG CommandRingTrbCount;
     ULONG CommandRingCycleState;
@@ -149,9 +155,13 @@ typedef struct _XHCI_EXTENSION {
   ULONGLONG EventRingDequeuePointer;
   LIST_ENTRY CommandContextList;
   KSPIN_LOCK CommandLock;
+  KSPIN_LOCK EventRingLock;
     PHYSICAL_ADDRESS DeviceContextsPhysical;
     PHYSICAL_ADDRESS InputContextsPhysical;
     PHYSICAL_ADDRESS Ep0RingArrayPhysical;
+    PXHCI_DEVICE_CONTEXT DeviceContexts;
+    PXHCI_INPUT_CONTEXT InputContexts;
+    PXHCI_TRB Ep0TransferRings;
     XHCI_DEVICE_SLOT DeviceSlots[XHCI_MAX_SLOTS + 1];
     ULONG PendingUsbSts;
     BOOLEAN RhIrqEnabled;
@@ -171,9 +181,12 @@ typedef struct _XHCI_EXTENSION {
   BOOLEAN MsiSupported;
     BOOLEAN MsixSupported;
     BOOLEAN MsiEnabled;
-    BOOLEAN MsixEnabled;
-    UCHAR MsiCapOffset;
+  BOOLEAN MsixEnabled;
+  UCHAR MsiCapOffset;
   UCHAR MsixCapOffset;
+  /* PnP/synchronization */
+  volatile LONG Ep0WorkerCount;
+  BOOLEAN StoppingOrRemoved;
 } XHCI_EXTENSION, *PXHCI_EXTENSION;
 
 typedef struct _XHCI_COMMAND_CONTEXT {
@@ -184,6 +197,7 @@ typedef struct _XHCI_COMMAND_CONTEXT {
   UCHAR SlotId;
   BOOLEAN Completed;
   BOOLEAN InList;
+  PKEVENT CompletionEvent;
 } XHCI_COMMAND_CONTEXT, *PXHCI_COMMAND_CONTEXT;
 
 typedef struct _XHCI_ENDPOINT {
@@ -195,6 +209,8 @@ typedef struct _XHCI_ENDPOINT {
     PUSBPORT_TRANSFER_PARAMETERS PendingParameters;
     PUSBPORT_SCATTER_GATHER_LIST PendingSgList;
     struct _XHCI_TRANSFER *ActiveTransfer;
+    volatile LONG PendingWorkCount;
+    KSPIN_LOCK Lock;
     UCHAR SlotId;
     UCHAR EndpointId;
     UCHAR DoorbellTarget;

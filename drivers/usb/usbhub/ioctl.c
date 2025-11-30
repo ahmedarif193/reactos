@@ -245,7 +245,9 @@ USBH_PdoIoctlGetPortStatus(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
     PULONG PortStatus;
     NTSTATUS Status;
 
-    DPRINT("USBH_PdoIoctlGetPortStatus ... \n");
+    DPRINT1("USBH_PdoIoctlGetPortStatus: Port %u PDO %p\n",
+            PortExtension->PortNumber,
+            PortExtension->Common.SelfDevice);
 
     HubExtension = PortExtension->HubExtension;
 
@@ -294,6 +296,12 @@ USBH_PdoIoctlGetPortStatus(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
                    EVENT_INCREMENT,
                    FALSE);
     }
+
+    DPRINT1("USBH_PdoIoctlGetPortStatus: Status %x RawPortStatus 0x%08lx Flags %s%s\n",
+            Status,
+            *(ULONG *)&PortData->PortStatus.PortStatus,
+            (*PortStatus & USBD_PORT_CONNECTED) ? "C" : "-",
+            (*PortStatus & USBD_PORT_ENABLED) ? "E" : "-");
 
     USBH_CompleteIrp(Irp, Status);
 
@@ -776,6 +784,60 @@ USBH_IoctlGetHubCapabilities(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
 NTSTATUS
 NTAPI
+USBH_IoctlGetHubInformationEx(IN PUSBHUB_FDO_EXTENSION HubExtension,
+                              IN PIRP Irp)
+{
+    PUSB_HUB_INFORMATION_EX HubInfo;
+    PIO_STACK_LOCATION IoStack;
+    ULONG BufferLength;
+    NTSTATUS Status = STATUS_SUCCESS;
+    BOOLEAN IsRoot;
+    ULONG CopyLength;
+
+    DPRINT("USBH_IoctlGetHubInformationEx ... \n");
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    BufferLength = IoStack->Parameters.DeviceIoControl.OutputBufferLength;
+
+    if (BufferLength < sizeof(USB_HUB_INFORMATION_EX) ||
+        !Irp->AssociatedIrp.SystemBuffer)
+    {
+        Status = STATUS_BUFFER_TOO_SMALL;
+        USBH_CompleteIrp(Irp, Status);
+        return Status;
+    }
+
+    HubInfo = Irp->AssociatedIrp.SystemBuffer;
+    RtlZeroMemory(HubInfo, BufferLength);
+
+    IsRoot = (HubExtension->LowerPDO == HubExtension->RootHubPdo);
+
+    if (IsRoot)
+        HubInfo->HubType = UsbRootHub;
+    else if (HubExtension->HubFlags & USBHUB_FDO_FLAG_USB20_HUB)
+        HubInfo->HubType = Usb20Hub;
+    else
+        HubInfo->HubType = Usb20Hub;
+
+    if (HubExtension->HubDescriptor)
+    {
+        HubInfo->HighestPortNumber = HubExtension->HubDescriptor->bNumberOfPorts;
+
+        CopyLength = min(sizeof(HubInfo->u.UsbHubDescriptor),
+                         HubExtension->HubDescriptor->bDescriptorLength);
+        RtlCopyMemory(&HubInfo->u.UsbHubDescriptor,
+                      HubExtension->HubDescriptor,
+                      CopyLength);
+    }
+
+    Irp->IoStatus.Information = sizeof(USB_HUB_INFORMATION_EX);
+    USBH_CompleteIrp(Irp, Status);
+
+    return Status;
+}
+
+NTSTATUS
+NTAPI
 USBH_IoctlGetNodeConnectionAttributes(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                       IN PIRP Irp)
 {
@@ -826,6 +888,195 @@ USBH_IoctlGetNodeConnectionAttributes(IN PUSBHUB_FDO_EXTENSION HubExtension,
 Exit:
 
     USBH_CompleteIrp(Irp, Status);
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+USBH_IoctlGetPortConnectorProperties(IN PUSBHUB_FDO_EXTENSION HubExtension,
+                                     IN PIRP Irp)
+{
+    PUSB_PORT_CONNECTOR_PROPERTIES Properties;
+    PIO_STACK_LOCATION IoStack;
+    ULONG BufferLength;
+    ULONG ConnectionIndex;
+    ULONG NumPorts;
+    NTSTATUS Status = STATUS_INVALID_PARAMETER;
+    PUSBHUB_PORT_DATA PortData;
+    WCHAR ValueName[48];
+    ULONG ValueNameLength;
+    ULONG SymbolicLinkLength;
+
+    DPRINT("USBH_IoctlGetPortConnectorProperties ... \n");
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    BufferLength = IoStack->Parameters.DeviceIoControl.OutputBufferLength;
+
+    if (BufferLength < sizeof(USB_PORT_CONNECTOR_PROPERTIES) ||
+        !Irp->AssociatedIrp.SystemBuffer)
+    {
+        USBH_CompleteIrp(Irp, STATUS_BUFFER_TOO_SMALL);
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    Properties = Irp->AssociatedIrp.SystemBuffer;
+    ConnectionIndex = Properties->ConnectionIndex;
+    RtlZeroMemory(Properties, BufferLength);
+    Properties->ConnectionIndex = ConnectionIndex;
+
+    if (!HubExtension->HubDescriptor)
+    {
+        USBH_CompleteIrp(Irp, Status);
+        return Status;
+    }
+
+    NumPorts = HubExtension->HubDescriptor->bNumberOfPorts;
+
+    if (ConnectionIndex == 0 || ConnectionIndex > NumPorts)
+    {
+        USBH_CompleteIrp(Irp, Status);
+        return Status;
+    }
+
+    PortData = HubExtension->PortData + (ConnectionIndex - 1);
+
+    Properties->ActualLength = sizeof(USB_PORT_CONNECTOR_PROPERTIES);
+    Properties->UsbPortProperties.PortIsUserConnectable =
+        (PortData->PortAttributes & USB_PORTATTR_NO_CONNECTOR) ? 0 : 1;
+    Properties->UsbPortProperties.PortIsDebugCapable =
+        (PortData->PortAttributes & USB_PORTATTR_DEBUG_CAPABLE) ? 1 : 0;
+    Properties->UsbPortProperties.PortHasMultipleCompanions =
+        (PortData->PortAttributes & USB_PORTATTR_SHARED_USB2) ? 1 : 0;
+    Properties->UsbPortProperties.PortConnectorIsTypeC =
+        (PortData->PortAttributes & USB_PORTATTR_TYPEC_CONNECTOR) ? 1 : 0;
+
+    Properties->CompanionIndex =
+        (USHORT)((PortData->PortAttributes & USB_PORTATTR_COMPANION_INDEX_MASK) >>
+                 USB_PORTATTR_COMPANION_INDEX_SHIFT);
+    Properties->CompanionPortNumber =
+        (USHORT)((PortData->PortAttributes & USB_PORTATTR_COMPANION_PORT_MASK) >>
+                 USB_PORTATTR_COMPANION_PORT_SHIFT);
+    Properties->CompanionHubSymbolicLinkName[0] = UNICODE_NULL;
+
+    if (Properties->CompanionIndex && Properties->CompanionPortNumber)
+    {
+        if (NT_SUCCESS(RtlStringCchPrintfW(ValueName,
+                                           ARRAYSIZE(ValueName),
+                                           L"CompanionHub%02u",
+                                           ConnectionIndex)))
+        {
+            ValueNameLength = (ULONG)((wcslen(ValueName) + 1) * sizeof(WCHAR));
+            SymbolicLinkLength = BufferLength -
+                FIELD_OFFSET(USB_PORT_CONNECTOR_PROPERTIES, CompanionHubSymbolicLinkName);
+            if (SymbolicLinkLength == 0 ||
+                !NT_SUCCESS(USBD_GetPdoRegistryParameter(HubExtension->LowerPDO,
+                                                         Properties->CompanionHubSymbolicLinkName,
+                                                         SymbolicLinkLength,
+                                                         ValueName,
+                                                         ValueNameLength)))
+            {
+                Properties->CompanionHubSymbolicLinkName[0] = UNICODE_NULL;
+            }
+            else
+            {
+                SIZE_T CompanionBytes = 0;
+                if (NT_SUCCESS(RtlStringCbLengthW(Properties->CompanionHubSymbolicLinkName,
+                                                  SymbolicLinkLength,
+                                                  &CompanionBytes)) &&
+                    CompanionBytes > 0)
+                {
+                    if (CompanionBytes <= SymbolicLinkLength)
+                        Properties->ActualLength += (ULONG)CompanionBytes;
+                }
+            }
+        }
+    }
+
+    Irp->IoStatus.Information = sizeof(USB_PORT_CONNECTOR_PROPERTIES);
+    Status = STATUS_SUCCESS;
+    USBH_CompleteIrp(Irp, Status);
+
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+USBH_IoctlGetTypeCPortInformation(IN PUSBHUB_FDO_EXTENSION HubExtension,
+                                  IN PIRP Irp)
+{
+    PUSB_TYPE_C_PORT_INFORMATION TypeCInfo;
+    PIO_STACK_LOCATION IoStack;
+    ULONG BufferLength;
+    ULONG ConnectionIndex;
+    ULONG NumPorts;
+    NTSTATUS Status = STATUS_INVALID_PARAMETER;
+    PUSBHUB_PORT_DATA PortData;
+    ULONG Flags = 0;
+    ULONG Attributes;
+    ULONG Retimer;
+
+    DPRINT("USBH_IoctlGetTypeCPortInformation ... \n");
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    BufferLength = IoStack->Parameters.DeviceIoControl.OutputBufferLength;
+
+    if (BufferLength < sizeof(USB_TYPE_C_PORT_INFORMATION) ||
+        !Irp->AssociatedIrp.SystemBuffer)
+    {
+        USBH_CompleteIrp(Irp, STATUS_BUFFER_TOO_SMALL);
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    TypeCInfo = Irp->AssociatedIrp.SystemBuffer;
+    ConnectionIndex = TypeCInfo->ConnectionIndex;
+    RtlZeroMemory(TypeCInfo, BufferLength);
+    TypeCInfo->ConnectionIndex = ConnectionIndex;
+
+    if (!HubExtension->HubDescriptor)
+    {
+        USBH_CompleteIrp(Irp, Status);
+        return Status;
+    }
+
+    NumPorts = HubExtension->HubDescriptor->bNumberOfPorts;
+
+    if (ConnectionIndex == 0 || ConnectionIndex > NumPorts)
+    {
+        USBH_CompleteIrp(Irp, Status);
+        return Status;
+    }
+
+    PortData = HubExtension->PortData + (ConnectionIndex - 1);
+    Attributes = PortData->PortAttributes;
+
+    if (!(Attributes & USB_PORTATTR_TYPEC_CONNECTOR))
+    {
+        USBH_CompleteIrp(Irp, STATUS_NOT_SUPPORTED);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    Flags |= USB_TYPE_C_PORT_FLAG_TYPEC_PRESENT;
+    if (Attributes & USB_PORTATTR_TYPEC_USB4_CAPABLE)
+        Flags |= USB_TYPE_C_PORT_FLAG_USB4_CAPABLE;
+    if (Attributes & USB_PORTATTR_TYPEC_TBT3_CAPABLE)
+        Flags |= USB_TYPE_C_PORT_FLAG_TBT3_CAPABLE;
+    if (Attributes & USB_PORTATTR_TYPEC_PCIE_TUNNELING)
+        Flags |= USB_TYPE_C_PORT_FLAG_PCIE_TUNNELING;
+    if (Attributes & USB_PORTATTR_TYPEC_DP_ALT_MODE)
+        Flags |= USB_TYPE_C_PORT_FLAG_DP_ALT_MODE;
+
+    Retimer = (Attributes & USB_PORTATTR_TYPEC_RETIMER_MASK) >>
+              USB_PORTATTR_TYPEC_RETIMER_SHIFT;
+    Flags |= (Retimer << USB_TYPE_C_PORT_FLAG_RETIMER_COUNT_SHIFT) &
+             USB_TYPE_C_PORT_FLAG_RETIMER_COUNT_MASK;
+
+    TypeCInfo->ActualLength = sizeof(USB_TYPE_C_PORT_INFORMATION);
+    TypeCInfo->Flags = Flags;
+
+    Irp->IoStatus.Information = sizeof(USB_TYPE_C_PORT_INFORMATION);
+    Status = STATUS_SUCCESS;
+    USBH_CompleteIrp(Irp, Status);
+
     return Status;
 }
 
@@ -1262,6 +1513,17 @@ USBH_DeviceControl(IN PUSBHUB_FDO_EXTENSION HubExtension,
             USBH_CompleteIrp(Irp, Status);
             break;
 
+        case IOCTL_USB_GET_HUB_INFORMATION_EX:
+            DPRINT("USBH_DeviceControl: IOCTL_USB_GET_HUB_INFORMATION_EX\n");
+            if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STOPPED))
+            {
+                Status = USBH_IoctlGetHubInformationEx(HubExtension, Irp);
+                break;
+            }
+
+            USBH_CompleteIrp(Irp, Status);
+            break;
+
         case IOCTL_USB_HUB_CYCLE_PORT:
         {
             USHORT Port;
@@ -1341,6 +1603,28 @@ USBH_DeviceControl(IN PUSBHUB_FDO_EXTENSION HubExtension,
             if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STOPPED))
             {
                 Status = USBH_IoctlGetNodeConnectionAttributes(HubExtension, Irp);
+                break;
+            }
+
+            USBH_CompleteIrp(Irp, Status);
+            break;
+
+        case IOCTL_USB_GET_PORT_CONNECTOR_PROPERTIES:
+            DPRINT("USBH_DeviceControl: IOCTL_USB_GET_PORT_CONNECTOR_PROPERTIES\n");
+            if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STOPPED))
+            {
+                Status = USBH_IoctlGetPortConnectorProperties(HubExtension, Irp);
+                break;
+            }
+
+            USBH_CompleteIrp(Irp, Status);
+            break;
+
+        case IOCTL_USB_GET_TYPE_C_PORT_INFORMATION:
+            DPRINT("USBH_DeviceControl: IOCTL_USB_GET_TYPE_C_PORT_INFORMATION\n");
+            if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STOPPED))
+            {
+                Status = USBH_IoctlGetTypeCPortInformation(HubExtension, Irp);
                 break;
             }
 

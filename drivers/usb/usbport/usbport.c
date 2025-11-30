@@ -300,6 +300,23 @@ USBPORT_IsCompanionFdoExtension(IN PDEVICE_OBJECT USB2FdoDevice,
            USB2FdoExtension->PciDeviceNumber == USB1FdoExtension->PciDeviceNumber;
 }
 
+static
+LONG
+USBPORT_CompareCompanionExtensions(IN PUSBPORT_DEVICE_EXTENSION Left,
+                                   IN PUSBPORT_DEVICE_EXTENSION Right)
+{
+    if (Left->BusNumber != Right->BusNumber)
+        return (Left->BusNumber > Right->BusNumber) ? 1 : -1;
+
+    if (Left->PciDeviceNumber != Right->PciDeviceNumber)
+        return (Left->PciDeviceNumber > Right->PciDeviceNumber) ? 1 : -1;
+
+    if (Left->PciFunctionNumber != Right->PciFunctionNumber)
+        return (Left->PciFunctionNumber > Right->PciFunctionNumber) ? 1 : -1;
+
+    return 0;
+}
+
 PDEVICE_RELATIONS
 NTAPI
 USBPORT_FindCompanionControllers(IN PDEVICE_OBJECT USB2FdoDevice,
@@ -362,31 +379,74 @@ USBPORT_FindCompanionControllers(IN PDEVICE_OBJECT USB2FdoDevice,
 
     Entry = &ControllersList->Objects[0];
 
-    while (USB1FdoList && USB1FdoList != &USBPORT_USB1FdoList)
+    if (NumControllers)
     {
-        USB1FdoExtension = CONTAINING_RECORD(USB1FdoList,
-                                             USBPORT_DEVICE_EXTENSION,
-                                             ControllerLink);
+        PUSBPORT_DEVICE_EXTENSION *Matched;
+        ULONG MatchedIndex = 0;
+        ULONG ix, jx;
 
-        if (USB1FdoExtension->Flags & USBPORT_FLAG_COMPANION_HC &&
-            USBPORT_IsCompanionFdoExtension(USB2FdoDevice, USB1FdoExtension))
+        Matched = ExAllocatePoolWithTag(NonPagedPool,
+                                        NumControllers * sizeof(PUSBPORT_DEVICE_EXTENSION),
+                                        USB_PORT_TAG);
+        if (!Matched)
         {
-            *Entry = USB1FdoExtension->CommonExtension.LowerPdoDevice;
+            ExFreePoolWithTag(ControllersList, USB_PORT_TAG);
+            ControllersList = NULL;
+            goto Exit;
+        }
 
-            if (IsObRefer)
+        USB1FdoList = USBPORT_USB1FdoList.Flink;
+        while (USB1FdoList && USB1FdoList != &USBPORT_USB1FdoList)
+        {
+            USB1FdoExtension = CONTAINING_RECORD(USB1FdoList,
+                                                 USBPORT_DEVICE_EXTENSION,
+                                                 ControllerLink);
+
+            if (USB1FdoExtension->Flags & USBPORT_FLAG_COMPANION_HC &&
+                USBPORT_IsCompanionFdoExtension(USB2FdoDevice, USB1FdoExtension))
             {
-                ObReferenceObject(USB1FdoExtension->CommonExtension.LowerPdoDevice);
+                Matched[MatchedIndex++] = USB1FdoExtension;
             }
+
+            USB1FdoList = USB1FdoExtension->ControllerLink.Flink;
+        }
+
+        for (ix = 0; ix < MatchedIndex; ++ix)
+        {
+            for (jx = ix + 1; jx < MatchedIndex; ++jx)
+            {
+                if (USBPORT_CompareCompanionExtensions(Matched[ix], Matched[jx]) > 0)
+                {
+                    PUSBPORT_DEVICE_EXTENSION Temp = Matched[ix];
+                    Matched[ix] = Matched[jx];
+                    Matched[jx] = Temp;
+                }
+            }
+        }
+
+        for (ix = 0; ix < MatchedIndex; ++ix)
+        {
+            PDEVICE_OBJECT TargetObject;
 
             if (IsFDOsReturned)
             {
-                *Entry = USB1FdoExtension->CommonExtension.SelfDevice;
+                TargetObject = Matched[ix]->CommonExtension.SelfDevice;
+            }
+            else
+            {
+                TargetObject = Matched[ix]->CommonExtension.LowerPdoDevice;
             }
 
+            if (IsObRefer && TargetObject)
+            {
+                ObReferenceObject(TargetObject);
+            }
+
+            *Entry = TargetObject;
             ++Entry;
         }
 
-        USB1FdoList = USB1FdoExtension->ControllerLink.Flink;
+        ExFreePoolWithTag(Matched, USB_PORT_TAG);
     }
 
 Exit:
@@ -814,11 +874,19 @@ USBPORT_InvalidateControllerHandler(IN PDEVICE_OBJECT FdoDevice,
     switch (Type)
     {
         case USBPORT_INVALIDATE_CONTROLLER_RESET:
-            DPRINT_CORE("USBPORT_InvalidateControllerHandler: INVALIDATE_CONTROLLER_RESET UNIMPLEMENTED. FIXME.\n");
+            DPRINT_CORE("USBPORT_InvalidateControllerHandler: INVALIDATE_CONTROLLER_RESET\n");
+            USBPORT_SignalTransportChange(FdoExtension,
+                                          USB_REGISTER_FOR_TRANSPORT_LATENCY_CHANGE |
+                                          USB_REGISTER_FOR_TRANSPORT_BANDWIDTH_CHANGE);
+            USBPORT_InvalidateTimeSyncGeneration(FdoExtension);
             break;
 
         case USBPORT_INVALIDATE_CONTROLLER_SURPRISE_REMOVE:
-            DPRINT_CORE("USBPORT_InvalidateControllerHandler: INVALIDATE_CONTROLLER_SURPRISE_REMOVE UNIMPLEMENTED. FIXME.\n");
+            DPRINT_CORE("USBPORT_InvalidateControllerHandler: INVALIDATE_CONTROLLER_SURPRISE_REMOVE\n");
+            USBPORT_SignalTransportChange(FdoExtension,
+                                          USB_REGISTER_FOR_TRANSPORT_LATENCY_CHANGE |
+                                          USB_REGISTER_FOR_TRANSPORT_BANDWIDTH_CHANGE);
+            USBPORT_InvalidateTimeSyncGeneration(FdoExtension);
             break;
 
         case USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT:
@@ -2277,6 +2345,9 @@ USBPORT_AddDevice(IN PDRIVER_OBJECT DriverObject,
     InitializeListHead(&FdoExtension->IdleIrpList);
     InitializeListHead(&FdoExtension->BadRequestList);
     InitializeListHead(&FdoExtension->EndpointClosedList);
+    InitializeListHead(&FdoExtension->Aux.TransportRegistrationList);
+    InitializeListHead(&FdoExtension->Aux.TimeSyncTrackingList);
+    FdoExtension->Aux.NextTimeSyncId = 1;
 
     DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 

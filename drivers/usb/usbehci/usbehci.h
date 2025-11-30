@@ -175,6 +175,7 @@ typedef struct _EHCI_EXTENSION {
   ULONG Flags;
   PEHCI_HC_CAPABILITY_REGISTERS CapabilityRegisters;
   PEHCI_HW_REGISTERS OperationalRegs;
+  EHCI_HC_STRUCTURAL_PARAMS StructuralParameters;
   UCHAR FrameLengthAdjustment;
   BOOLEAN IsStarted;
   USHORT HcSystemErrors;
@@ -336,5 +337,24 @@ VOID
 NTAPI
 EHCI_RH_EnableIrq(
   IN PVOID ohciExtension);
+
+VOID
+NTAPI
+EHCI_TakePortControl(
+  IN PVOID EhciExtension);
+
+BOOLEAN
+NTAPI
+EHCI_QueryCompanionPortInfo(
+  IN PVOID EhciExtension,
+  IN USHORT Port,
+  OUT PUSBPORT_COMPANION_PORT_INFO PortInfo);
+
+BOOLEAN
+NTAPI
+EHCI_QueryPortAttributes(
+  IN PVOID EhciExtension,
+  IN USHORT Port,
+  OUT PULONG Attributes);
 
 #endif /* USBEHCI_H__ */

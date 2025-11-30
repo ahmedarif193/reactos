@@ -1549,7 +1549,21 @@ IoGetDeviceProperty(IN PDEVICE_OBJECT DeviceObject,
         case DevicePropertyResourceRequirements:
             PIP_UNIMPLEMENTED();
         case DevicePropertyAllocatedResources:
-            PIP_UNIMPLEMENTED();
+            if (DeviceNode->ResourceListTranslated)
+            {
+                PIP_RETURN_DATA(PnpDetermineResourceListSize(DeviceNode->ResourceListTranslated),
+                                DeviceNode->ResourceListTranslated);
+            }
+            else if (DeviceNode->ResourceList)
+            {
+                PIP_RETURN_DATA(PnpDetermineResourceListSize(DeviceNode->ResourceList),
+                                DeviceNode->ResourceList);
+            }
+            else
+            {
+                *ResultLength = 0;
+                return STATUS_SUCCESS;
+            }
         default:
             return STATUS_INVALID_PARAMETER_2;
     }

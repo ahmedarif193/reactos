@@ -42,6 +42,71 @@ USBPORT_EnsureInterruptApis(VOID)
     UsbPortInterruptApiResolved = TRUE;
 }
 
+static
+VOID
+USBPORT_CleanupTransportRegistrations(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY Entry;
+    PUSBPORT_TRANSPORT_REGISTRATION Registration;
+    PIRP PendingIrp;
+
+    for (;;)
+    {
+        KeAcquireSpinLock(&FdoExtension->Aux.TransportListSpinLock, &OldIrql);
+        if (IsListEmpty(&FdoExtension->Aux.TransportRegistrationList))
+        {
+            KeReleaseSpinLock(&FdoExtension->Aux.TransportListSpinLock, OldIrql);
+            break;
+        }
+
+        Entry = RemoveHeadList(&FdoExtension->Aux.TransportRegistrationList);
+        Registration = CONTAINING_RECORD(Entry,
+                                         USBPORT_TRANSPORT_REGISTRATION,
+                                         ListEntry);
+        PendingIrp = Registration->PendingIrp;
+        Registration->PendingIrp = NULL;
+        KeReleaseSpinLock(&FdoExtension->Aux.TransportListSpinLock, OldIrql);
+
+        if (PendingIrp)
+        {
+            USBPORT_CompleteTransportNotificationIrp(FdoExtension,
+                                                     PendingIrp,
+                                                     STATUS_CANCELLED,
+                                                     FALSE);
+        }
+
+        ExFreePoolWithTag(Registration, USB_PORT_TAG);
+    }
+}
+
+static
+VOID
+USBPORT_CleanupTimeSyncContexts(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY Entry;
+    PUSBPORT_TIMESYNC_CONTEXT Context;
+
+    for (;;)
+    {
+        KeAcquireSpinLock(&FdoExtension->Aux.TimeSyncSpinLock, &OldIrql);
+        if (IsListEmpty(&FdoExtension->Aux.TimeSyncTrackingList))
+        {
+            KeReleaseSpinLock(&FdoExtension->Aux.TimeSyncSpinLock, OldIrql);
+            break;
+        }
+
+        Entry = RemoveHeadList(&FdoExtension->Aux.TimeSyncTrackingList);
+        KeReleaseSpinLock(&FdoExtension->Aux.TimeSyncSpinLock, OldIrql);
+
+        Context = CONTAINING_RECORD(Entry,
+                                    USBPORT_TIMESYNC_CONTEXT,
+                                    ListEntry);
+        ExFreePoolWithTag(Context, USB_PORT_TAG);
+    }
+}
+
 NTSTATUS
 NTAPI
 USBPORT_FdoStartCompletion(IN PDEVICE_OBJECT DeviceObject,
@@ -682,6 +747,10 @@ USBPORT_StopDevice(IN PDEVICE_OBJECT FdoDevice)
 
     FdoExtension->CommonExtension.DevicePowerState = PowerDeviceD3;
 
+    USBPORT_CleanupTransportRegistrations(FdoExtension);
+    USBPORT_CleanupTimeSyncContexts(FdoExtension);
+    FdoExtension->Aux.NextTimeSyncId = 1;
+
     return STATUS_SUCCESS;
 }
 
@@ -904,6 +973,8 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     KeInitializeSpinLock(&FdoExtension->SetPowerD0SpinLock);
     KeInitializeSpinLock(&FdoExtension->RootHubCallbackSpinLock);
     KeInitializeSpinLock(&FdoExtension->TtSpinLock);
+    KeInitializeSpinLock(&FdoExtension->Aux.TransportListSpinLock);
+    KeInitializeSpinLock(&FdoExtension->Aux.TimeSyncSpinLock);
 
     KeInitializeDpc(&FdoExtension->IsrDpc, USBPORT_IsrDpc, FdoDevice);
 
@@ -1321,8 +1392,16 @@ USBPORT_ParseResources(IN PDEVICE_OBJECT FdoDevice,
             }
             else if (PartialDescriptor->Type == CmResourceTypeInterrupt)
             {
+                /* Prefer message interrupts over legacy if both are present. */
                 if (!InterruptDescriptor)
+                {
                     InterruptDescriptor = PartialDescriptor;
+                }
+                else if (!(InterruptDescriptor->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) &&
+                         (PartialDescriptor->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+                {
+                    InterruptDescriptor = PartialDescriptor;
+                }
             }
             else if (PartialDescriptor->Type == CmResourceTypeMemory)
             {

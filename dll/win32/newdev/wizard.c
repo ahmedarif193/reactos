@@ -687,6 +687,7 @@ CHSourceDlgProc(
                     LPITEMIDLIST pidl;
                     WCHAR Title[MAX_PATH];
                     WCHAR CustomSearchPath[MAX_PATH] = { 0 };
+                    LPWSTR HeapPath = NULL;
                     INT len, idx = (INT)SendDlgItemMessageW(hwndDlg, IDC_COMBO_PATH, CB_GETCURSEL, 0, 0);
                     LoadStringW(hDllInstance, IDS_BROWSE_FOR_FOLDER_TITLE, Title, _countof(Title));
 
@@ -702,7 +703,24 @@ CHSourceDlgProc(
                         else
                             SendDlgItemMessageW(hwndDlg, IDC_COMBO_PATH, CB_GETLBTEXT, idx, (LPARAM)CustomSearchPath);
                     }
-                    DevInstData->CustomSearchPath = CustomSearchPath;
+
+                    if (CustomSearchPath[0] != UNICODE_NULL)
+                    {
+                        SIZE_T Size = (wcslen(CustomSearchPath) + 1) * sizeof(WCHAR);
+
+                        if (DevInstData->CustomSearchPath)
+                        {
+                            HeapFree(GetProcessHeap(), 0, DevInstData->CustomSearchPath);
+                            DevInstData->CustomSearchPath = NULL;
+                        }
+
+                        HeapPath = HeapAlloc(GetProcessHeap(), 0, Size);
+                        if (HeapPath)
+                        {
+                            RtlCopyMemory(HeapPath, CustomSearchPath, Size);
+                            DevInstData->CustomSearchPath = HeapPath;
+                        }
+                    }
 
                     bi.hwndOwner = hwndDlg;
                     bi.ulFlags = BIF_USENEWUI | BIF_RETURNONLYFSDIRS | BIF_STATUSTEXT | BIF_NONEWFOLDERBUTTON;

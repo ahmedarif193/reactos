@@ -176,6 +176,11 @@ HalGetInterruptVector(
 NTHALAPI
 ULONG
 NTAPI
+HalGetAcpiSciVector(VOID);
+
+NTHALAPI
+ULONG
+NTAPI
 HalSetBusData(
   _In_ BUS_DATA_TYPE BusDataType,
   _In_ ULONG BusNumber,

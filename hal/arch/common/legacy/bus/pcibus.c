@@ -1373,14 +1373,12 @@ HalpConfigurePciRootBridge(
 
     if (BusData->OscControlRequest && !BusData->OscExpressCapability)
     {
-        DPRINT1("HAL: PCI segment %lu bus %lu: firmware kept PCIe capability control; falling back to legacy config path.\n",
+        /* Firmware withheld PCIe capability control. Keep ECAM available if
+         * MCFG validated, but log that we may need to fall back to legacy
+         * config on a per-access basis. */
+        DPRINT1("HAL: PCI segment %lu bus %lu: firmware kept PCIe capability control; ECAM kept available (legacy fallback per access).\n",
                 Info->Segment,
                 Info->Bus);
-        if (!HalpAcpiEcamDisabled)
-        {
-            HalpAcpiEcamDisabled = TRUE;
-            InterlockedOr(&HalpAcpiEcamCoverageFlags, HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL);
-        }
     }
 
     if (BusData->OscControlRequest & HAL_ACPI_OSC_CONTROL_NATIVE_HOTPLUG)
@@ -2003,7 +2001,11 @@ HalpPhase0GetPciDataByOffset(
     PUCHAR BufferPtr = Buffer;
     PCI_TYPE1_CFG_BITS PciCfg;
 
+    /* Use ECAM for early config space only when globally enabled;
+       otherwise rely on legacy type 1 (CF8/CFC) and avoid noisy
+       "ECAM disabled globally" traces from the debug walker. */
     if (Length &&
+        !HalpAcpiEcamDisabled &&
         HalpAcpiAccessConfigEcam(FALSE,
                                  HALP_ACPI_SEGMENT_ANY,
                                  Bus,

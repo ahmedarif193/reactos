@@ -137,6 +137,22 @@ typedef NTSTATUS
     _In_ PARBITER_INSTANCE Arbiter
 );
 
+NTSTATUS
+NTAPI
+ArbCommitAllocation(
+    _In_ PARBITER_INSTANCE Arbiter);
+
+NTSTATUS
+NTAPI
+ArbRollbackAllocation(
+    _In_ PARBITER_INSTANCE Arbiter);
+
+NTSTATUS
+NTAPI
+ArbBootAllocation(
+    _In_ PARBITER_INSTANCE Arbiter,
+    _In_ PLIST_ENTRY ArbitrationList);
+
 typedef NTSTATUS
 (NTAPI * PARB_PREPROCESS_ENTRY)(
     _In_ PARBITER_INSTANCE Arbiter,

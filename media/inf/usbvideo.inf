@@ -1,0 +1,40 @@
+;USBVIDEO.INF
+
+[Version]
+Signature  = "$Windows NT$"
+Class      = Image
+ClassGuid  = {6bdd1fc6-810f-11d0-bec7-08002be2092f}
+Provider   = %ReactOS%
+DriverVer  = 10/02/2005,1.00.0.0
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%GenericMfg% = GenericMfg
+
+[GenericMfg]
+%USB\\Class_0E.DeviceDesc% = usbvideo_Inst,USB\\Class_0E
+%USB\\Vid_174f&Pid_181f&MI_00.DeviceDesc% = usbvideo_Inst,USB\\Vid_174f&Pid_181f&MI_00
+
+[usbvideo_Inst.NT]
+CopyFiles = usbvideo_CopyFiles.NT
+
+[usbvideo_CopyFiles.NT]
+usbvideo.sys
+
+[usbvideo_Inst.NT.Services]
+AddService = usbvideo, 0x00000002, usbvideo_Service_Inst
+
+[usbvideo_Service_Inst]
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\\usbvideo.sys
+LoadOrderGroup = Extended Base
+
+[Strings]
+ReactOS = "ReactOS Project"
+GenericMfg = "(Generic Imaging Devices)"
+USB\\Class_0E.DeviceDesc = "USB Video Device"
+USB\\Vid_174f&Pid_181f&MI_00.DeviceDesc = "USB Video Device (Integrated Camera)"

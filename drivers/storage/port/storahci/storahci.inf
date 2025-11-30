@@ -74,6 +74,9 @@ CopyFiles = storahci_CopyFiles
 [storahci_Inst.HW]
 ; Enables Storport IPM for this adapter
 HKR, "StorPort", "EnableIdlePowerManagement", %REG_DWORD%, 0x01
+; Prefer MSI/MSI-X for AHCI controllers
+HKR, "", "AllowMSI", %REG_DWORD%, 0x01
+HKR, "", "AllowMSIX", %REG_DWORD%, 0x01
 
 [storahci_Inst.Services]
 AddService = storahci, %SPSVCINST_ASSOCSERVICE%, storahci_Service_Inst, Miniport_EventLog_Inst

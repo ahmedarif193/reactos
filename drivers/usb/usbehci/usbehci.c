@@ -1213,6 +1213,7 @@ EHCI_InitializeHardware(IN PEHCI_EXTENSION EhciExtension)
     DPRINT("EHCI_InitializeHardware: Reset - OK\n");
 
     StructuralParams.AsULONG = READ_REGISTER_ULONG(&CapabilityRegisters->StructParameters.AsULONG);
+    EhciExtension->StructuralParameters = StructuralParams;
 
     EhciExtension->NumberOfPorts = StructuralParams.PortCount;
     EhciExtension->PortPowerControl = StructuralParams.PortPowerControl;
@@ -4398,6 +4399,161 @@ EHCI_FlushInterrupts(IN PVOID ehciExtension)
     WRITE_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG, Status.AsULONG);
 }
 
+static
+UCHAR
+EHCI_ReadPortRouteDescriptor(IN PEHCI_EXTENSION EhciExtension,
+                             IN USHORT PortNumber)
+{
+    PEHCI_HC_CAPABILITY_REGISTERS CapabilityRegisters;
+    ULONG ByteIndex;
+    UCHAR RouteByte;
+
+    if (!EhciExtension || !PortNumber || PortNumber > EhciExtension->NumberOfPorts)
+        return 0;
+
+    CapabilityRegisters = EhciExtension->CapabilityRegisters;
+    if (!CapabilityRegisters)
+        return 0;
+
+    ByteIndex = (PortNumber - 1) >> 1;
+    RouteByte = READ_REGISTER_UCHAR(&CapabilityRegisters->CompanionPortRouteDesc[ByteIndex]);
+
+    if ((PortNumber & 1) == 0)
+        RouteByte >>= 4;
+    else
+        RouteByte &= 0x0F;
+
+    return RouteByte & 0x0F;
+}
+
+static
+UCHAR
+EHCI_GetCompanionIndex(IN PEHCI_EXTENSION EhciExtension,
+                       IN EHCI_HC_STRUCTURAL_PARAMS StructuralParams,
+                       IN USHORT PortNumber)
+{
+    UCHAR CompanionIndex;
+
+    if (!StructuralParams.CompanionControllers ||
+        !PortNumber ||
+        PortNumber > EhciExtension->NumberOfPorts)
+    {
+        return 0;
+    }
+
+    if (StructuralParams.PortRouteRules)
+    {
+        CompanionIndex = EHCI_ReadPortRouteDescriptor(EhciExtension, PortNumber);
+    }
+    else if (StructuralParams.PortsPerCompanion)
+    {
+        CompanionIndex = (UCHAR)(((PortNumber - 1) / StructuralParams.PortsPerCompanion) + 1);
+    }
+    else
+    {
+        CompanionIndex = 0;
+    }
+
+    if (!CompanionIndex || CompanionIndex > StructuralParams.CompanionControllers)
+        return 0;
+
+    return CompanionIndex;
+}
+
+static
+USHORT
+EHCI_GetCompanionPortNumber(IN PEHCI_EXTENSION EhciExtension,
+                            IN EHCI_HC_STRUCTURAL_PARAMS StructuralParams,
+                            IN USHORT PortNumber,
+                            IN UCHAR CompanionIndex)
+{
+    USHORT Candidate;
+    USHORT PortOrdinal = 0;
+
+    if (!CompanionIndex || !PortNumber || PortNumber > EhciExtension->NumberOfPorts)
+        return 0;
+
+    if (StructuralParams.PortRouteRules)
+    {
+        for (Candidate = 1; Candidate <= PortNumber; ++Candidate)
+        {
+            if (EHCI_GetCompanionIndex(EhciExtension, StructuralParams, Candidate) == CompanionIndex)
+            {
+                ++PortOrdinal;
+            }
+        }
+
+        return PortOrdinal;
+    }
+
+    if (StructuralParams.PortsPerCompanion)
+    {
+        USHORT PortsPerCompanion = StructuralParams.PortsPerCompanion;
+        if (!PortsPerCompanion)
+            PortsPerCompanion = 1;
+
+        return (USHORT)(((PortNumber - 1) % PortsPerCompanion) + 1);
+    }
+
+    return 0;
+}
+
+BOOLEAN
+NTAPI
+EHCI_QueryCompanionPortInfo(IN PVOID ehciExtension,
+                            IN USHORT Port,
+                            OUT PUSBPORT_COMPANION_PORT_INFO PortInfo)
+{
+    PEHCI_EXTENSION EhciExtension = (PEHCI_EXTENSION)ehciExtension;
+    EHCI_HC_STRUCTURAL_PARAMS StructuralParams;
+    UCHAR CompanionIndex;
+    USHORT CompanionPortNumber;
+
+    if (!EhciExtension || !PortInfo)
+        return FALSE;
+
+    StructuralParams = EhciExtension->StructuralParameters;
+
+    CompanionIndex = EHCI_GetCompanionIndex(EhciExtension,
+                                            StructuralParams,
+                                            Port);
+    if (!CompanionIndex)
+        return FALSE;
+
+    CompanionPortNumber = EHCI_GetCompanionPortNumber(EhciExtension,
+                                                      StructuralParams,
+                                                      Port,
+                                                      CompanionIndex);
+    if (!CompanionPortNumber)
+        CompanionPortNumber = 1;
+
+    PortInfo->CompanionIndex = CompanionIndex;
+    PortInfo->CompanionPortNumber = CompanionPortNumber;
+    return TRUE;
+}
+
+BOOLEAN
+NTAPI
+EHCI_QueryPortAttributes(IN PVOID ehciExtension,
+                         IN USHORT Port,
+                         OUT PULONG Attributes)
+{
+    PEHCI_EXTENSION EhciExtension = (PEHCI_EXTENSION)ehciExtension;
+
+    if (!EhciExtension || !Attributes)
+        return FALSE;
+
+    *Attributes = 0;
+
+    if (EhciExtension->StructuralParameters.DebugPortNumber &&
+        Port == EhciExtension->StructuralParameters.DebugPortNumber)
+    {
+        *Attributes |= USB_PORTATTR_DEBUG_CAPABLE;
+    }
+
+    return (*Attributes != 0);
+}
+
 VOID
 NTAPI
 EHCI_TakePortControl(IN PVOID ohciExtension)
@@ -4518,6 +4674,8 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
     RegPacket.FlushInterrupts = EHCI_FlushInterrupts;
     RegPacket.RH_ChirpRootPort = EHCI_RH_ChirpRootPort;
     RegPacket.TakePortControl = EHCI_TakePortControl;
+    RegPacket.QueryCompanionPortInfo = EHCI_QueryCompanionPortInfo;
+    RegPacket.QueryPortAttributes = EHCI_QueryPortAttributes;
 
     DriverObject->DriverUnload = EHCI_Unload;
 

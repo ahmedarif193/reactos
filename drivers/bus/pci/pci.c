@@ -31,6 +31,8 @@ static NTSTATUS NTAPI PciPnpControl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 PPCI_DRIVER_EXTENSION DriverExtension = NULL;
 BOOLEAN HasDebuggingDevice = FALSE;
 PCI_TYPE1_CFG_CYCLE_BITS PciDebuggingDevice[2] = {0};
+BOOLEAN PciMsiEnabledByPolicy = FALSE;
+BOOLEAN PciMsixEnabledByPolicy = FALSE;
 
 /*** PRIVATE *****************************************************************/
 
@@ -244,6 +246,57 @@ PciLocateKdDevices(VOID)
     }
 }
 
+static
+CODE_SEG("INIT")
+VOID
+PciReadInterruptPolicy(
+    _In_opt_ PUNICODE_STRING RegistryPath)
+{
+    RTL_QUERY_REGISTRY_TABLE QueryTable[3];
+    ULONG EnableMsi = 0;
+    ULONG EnableMsix = 0;
+    WCHAR ParametersBuffer[512];
+    UNICODE_STRING ParametersPath;
+    NTSTATUS Status;
+
+    PciMsiEnabledByPolicy = FALSE;
+    PciMsixEnabledByPolicy = FALSE;
+
+    if (!RegistryPath || RegistryPath->Length == 0)
+        return;
+
+    ParametersPath.Buffer = ParametersBuffer;
+    ParametersPath.MaximumLength = sizeof(ParametersBuffer);
+    ParametersPath.Length = 0;
+
+    if (RegistryPath->Length >= ParametersPath.MaximumLength)
+        return;
+
+    RtlCopyUnicodeString(&ParametersPath, RegistryPath);
+    Status = RtlAppendUnicodeToString(&ParametersPath, L"\\Parameters");
+    if (!NT_SUCCESS(Status))
+        return;
+
+    RtlZeroMemory(QueryTable, sizeof(QueryTable));
+    QueryTable[0].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    QueryTable[0].Name = L"EnableMSI";
+    QueryTable[0].EntryContext = &EnableMsi;
+    QueryTable[1].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    QueryTable[1].Name = L"EnableMSIX";
+    QueryTable[1].EntryContext = &EnableMsix;
+
+    Status = RtlQueryRegistryValues(RTL_REGISTRY_ABSOLUTE,
+                                    ParametersPath.Buffer,
+                                    QueryTable,
+                                    NULL,
+                                    NULL);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    PciMsiEnabledByPolicy = (EnableMsi != 0);
+    PciMsixEnabledByPolicy = (EnableMsix != 0);
+}
+
 CODE_SEG("INIT")
 NTSTATUS
 NTAPI
@@ -274,6 +327,7 @@ DriverEntry(
     InitializeListHead(&DriverExtension->BusListHead);
     KeInitializeSpinLock(&DriverExtension->BusListLock);
 
+    PciReadInterruptPolicy(RegistryPath);
     PciLocateKdDevices();
 
     return STATUS_SUCCESS;

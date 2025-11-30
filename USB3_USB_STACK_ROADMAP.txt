@@ -161,3 +161,19 @@ Cross-cutting / maintenance
     - [~] Compare the behavior of this stack against Windows 10/11 on the same hardware (where possible):
       - Reset timing, retries, and error codes for common devices (HID, mass storage, hubs, webcams).
     - [x] Add assertions and graceful fallback paths in xHCI for unsupported hardware quirks.
+
+Immediate follow-up tasks (Intel 7-Series xHCI, no events yet)
+--------------------------------------------------------------
+
+- [ ] Enable MSI/MSI-X in usbxhci: walk PCI caps (offset 0x34), program MSI (or MSIX) and request message interrupts from USBPORT instead of falling back to shared legacy IRQ 0xA. See Win10 xHCI sample in /home/ahmed/WorkDir/TTE/winsdk-10 for reference.
+- [~] Implement 64-byte context support: allocate 64B device/input contexts when HCCPARAMS CSC=1, update context structs/offsets, and remove the 64B rejection in XHCI_StartController so 8086:1e31 does not get treated as unsupported.
+- [ ] Allow 64-bit DMA unless a quirk requires 32-bit: only set XHCI_QUIRK_FORCE_32BIT_DMA for known-broken controllers; otherwise permit DCBAA/rings/scratchpads above 4GB.
+- [ ] Fix PCI VID/DID discovery path: now that config reads use the read flag, re-verify VID/DID logging and base quirks on actual IDs, not zeros.
+- [~] Audit root-hub IRQ gating: ensure IMAN/IMOD and UsbCmd.INTE are programmed and that event ring advances even if legacy IRQ delivery is blocked; keep polling path as fallback. (usbxhci now advertises POLLING to USBPORT so timer-based work runs even if interrupts are lost.)
+
+Platform / HAL prerequisites (PCI & ACPI)
+-----------------------------------------
+- [ ] ACPI/PCI HAL: supply MSI/MSI-X resources for xHCI (properly populate CM_RESOURCE_INTERRUPT_MESSAGE entries so USBPORT connects message interrupts instead of legacy GSI 0–11).
+- [ ] ACPI _PRT / routing: resolve “Failed to satisfy interrupt requirement with IRQ 0x9-0x9” by decoding resource type 4 in _CRS and mapping GSIs above 11; ensure PIRQ->GSI translation covers xHCI.
+- [ ] PCI config access: fix MMCONFIG enable/disable flow so ECAM is usable on 7‑Series; current firmware failure forces CF8/CFC legacy path and returns VID/DID as 0, blocking quirk detection.
+- [ ] PCI command defaults: ensure bus mastering and MEM enable bits are set by bus driver before StartDevice (avoid needing miniport-side workarounds).

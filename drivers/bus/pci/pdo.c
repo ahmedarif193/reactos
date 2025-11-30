@@ -111,8 +111,524 @@ PciPdoSetBusDataByOffset(
                                  Length);
 }
 
+#define PCI_CAP_PTR_FIRST      0x40
+#define PCI_CAP_MAX_ITERATIONS 48
+
+static
+BOOLEAN
+PciPdoFindCapability(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ UCHAR CapabilityId,
+    _Out_opt_ PUCHAR CapabilityOffset)
+{
+    UCHAR HeaderType;
+    UCHAR CapPointer;
+    USHORT Status;
+    ULONG CapFieldOffset;
+    ULONG BytesRead;
+    UCHAR Iter;
+
+    if (!DeviceExtension || !DeviceExtension->PciDevice)
+        return FALSE;
+
+    BytesRead = PciPdoGetBusDataByOffset(DeviceExtension,
+                                         &Status,
+                                         FIELD_OFFSET(PCI_COMMON_CONFIG, Status),
+                                         sizeof(Status));
+    if (BytesRead != sizeof(Status) ||
+        !(Status & PCI_STATUS_CAP_LIST))
+    {
+        return FALSE;
+    }
+
+    BytesRead = PciPdoGetBusDataByOffset(DeviceExtension,
+                                         &HeaderType,
+                                         FIELD_OFFSET(PCI_COMMON_CONFIG, HeaderType),
+                                         sizeof(HeaderType));
+    if (BytesRead != sizeof(HeaderType))
+        return FALSE;
+
+    HeaderType &= PCI_HEADER_TYPE_MASK;
+    CapFieldOffset = (HeaderType == PCI_CARDBUS_BRIDGE_TYPE) ?
+                     PCI_CB_CAPABILITY_LIST : PCI_CAPABILITY_LIST;
+
+    BytesRead = PciPdoGetBusDataByOffset(DeviceExtension,
+                                         &CapPointer,
+                                         CapFieldOffset,
+                                         sizeof(CapPointer));
+    if (BytesRead != sizeof(CapPointer) || CapPointer < PCI_CAP_PTR_FIRST)
+        return FALSE;
+
+    for (Iter = 0; Iter < PCI_CAP_MAX_ITERATIONS; ++Iter)
+    {
+        UCHAR Header[2];
+
+        BytesRead = PciPdoGetBusDataByOffset(DeviceExtension,
+                                             Header,
+                                             CapPointer,
+                                             sizeof(Header));
+        if (BytesRead != sizeof(Header))
+            break;
+
+        if (Header[0] == CapabilityId)
+        {
+            if (CapabilityOffset)
+                *CapabilityOffset = CapPointer;
+            return TRUE;
+        }
+
+        if (Header[1] < PCI_CAP_PTR_FIRST || Header[1] == CapPointer)
+            break;
+
+        CapPointer = Header[1];
+    }
+
+    return FALSE;
+}
+
+static
+VOID
+PciPdoCacheMsiInfo(
+    _Inout_ PPDO_DEVICE_EXTENSION DeviceExtension)
+{
+    PPCI_DEVICE Device;
+    UCHAR Offset;
+    USHORT Control;
+    ULONG TableInfo;
+    ULONG BytesRead;
+
+    Device = DeviceExtension ? DeviceExtension->PciDevice : NULL;
+    if (!Device)
+        return;
+
+    if (Device->MsiCapability == 0)
+    {
+        if (PciPdoFindCapability(DeviceExtension, PCI_CAP_ID_MSI, &Offset))
+            Device->MsiCapability = Offset;
+    }
+
+    if (Device->MsiCapability)
+    {
+        BytesRead = PciPdoGetBusDataByOffset(DeviceExtension,
+                                             &Control,
+                                             Device->MsiCapability + PCI_MSI_FLAGS,
+                                             sizeof(Control));
+        if (BytesRead == sizeof(Control))
+        {
+            Device->MsiControl = Control;
+            Device->MsiMaxCount = (UCHAR)(1 << ((Control & PCI_MSI_FLAGS_QMASK) >> 1));
+            if (Device->MsiMaxCount == 0)
+                Device->MsiMaxCount = 1;
+            if (Device->MsiMaxCount > 32)
+                Device->MsiMaxCount = 32;
+        }
+    }
+
+    if (Device->MsixCapability == 0)
+    {
+        if (PciPdoFindCapability(DeviceExtension, PCI_CAP_ID_MSIX, &Offset))
+            Device->MsixCapability = Offset;
+    }
+
+    if (Device->MsixCapability)
+    {
+        BytesRead = PciPdoGetBusDataByOffset(DeviceExtension,
+                                             &Control,
+                                             Device->MsixCapability + PCI_MSIX_FLAGS,
+                                             sizeof(Control));
+        if (BytesRead == sizeof(Control))
+        {
+            Device->MsixControl = Control;
+            Device->MsixTableSize = (USHORT)((Control & PCI_MSIX_FLAGS_TABLE_SIZE) + 1);
+        }
+
+        BytesRead = PciPdoGetBusDataByOffset(DeviceExtension,
+                                             &TableInfo,
+                                             Device->MsixCapability + PCI_MSIX_TABLE,
+                                             sizeof(TableInfo));
+        if (BytesRead == sizeof(TableInfo))
+        {
+            Device->MsixTableBir = (UCHAR)(TableInfo & PCI_MSIX_TABLE_BIR_MASK);
+            Device->MsixTableOffset = TableInfo & PCI_MSIX_TABLE_OFFSET_MASK;
+        }
+
+        BytesRead = PciPdoGetBusDataByOffset(DeviceExtension,
+                                             &TableInfo,
+                                             Device->MsixCapability + PCI_MSIX_PBA,
+                                             sizeof(TableInfo));
+        if (BytesRead == sizeof(TableInfo))
+        {
+            Device->MsixPbaBir = (UCHAR)(TableInfo & PCI_MSIX_TABLE_BIR_MASK);
+            Device->MsixPbaOffset = TableInfo & PCI_MSIX_TABLE_OFFSET_MASK;
+        }
+    }
+}
+
 #define PCI_ADDRESS_MEMORY_ADDRESS_MASK_64     0xfffffffffffffff0ull
 #define PCI_ADDRESS_IO_ADDRESS_MASK_64         0xfffffffffffffffcull
+
+typedef struct _PCI_MSIX_TABLE_ENTRY
+{
+    ULONG MessageAddressLow;
+    ULONG MessageAddressHigh;
+    ULONG MessageData;
+    ULONG VectorControl;
+} PCI_MSIX_TABLE_ENTRY, *PPCI_MSIX_TABLE_ENTRY;
+
+typedef struct _PCI_MSIX_MESSAGE_INFO
+{
+    ULONG Vector;
+    KAFFINITY Affinity;
+} PCI_MSIX_MESSAGE_INFO, *PPCI_MSIX_MESSAGE_INFO;
+
+static
+VOID
+PciPdoApplyInterruptPolicyFromKey(
+    _In_ HANDLE KeyHandle,
+    _Inout_ PBOOLEAN AllowMsi,
+    _Inout_ PBOOLEAN AllowMsix)
+{
+    UNICODE_STRING ValueName;
+    UCHAR Buffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
+    PKEY_VALUE_PARTIAL_INFORMATION ValueInfo = (PKEY_VALUE_PARTIAL_INFORMATION)Buffer;
+    ULONG ResultLength;
+    NTSTATUS Status;
+
+    if (!KeyHandle)
+        return;
+
+    RtlInitUnicodeString(&ValueName, L"AllowMSI");
+    Status = ZwQueryValueKey(KeyHandle,
+                             &ValueName,
+                             KeyValuePartialInformation,
+                             ValueInfo,
+                             sizeof(Buffer),
+                             &ResultLength);
+    if (NT_SUCCESS(Status) &&
+        ValueInfo->Type == REG_DWORD &&
+        ValueInfo->DataLength == sizeof(ULONG))
+    {
+        *AllowMsi = (*(PULONG)ValueInfo->Data) != 0;
+    }
+
+    RtlInitUnicodeString(&ValueName, L"AllowMSIX");
+    Status = ZwQueryValueKey(KeyHandle,
+                             &ValueName,
+                             KeyValuePartialInformation,
+                             ValueInfo,
+                             sizeof(Buffer),
+                             &ResultLength);
+    if (NT_SUCCESS(Status) &&
+        ValueInfo->Type == REG_DWORD &&
+        ValueInfo->DataLength == sizeof(ULONG))
+    {
+        *AllowMsix = (*(PULONG)ValueInfo->Data) != 0;
+    }
+}
+
+static
+VOID
+PciPdoDetermineInterruptPolicy(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension,
+    _Out_ PBOOLEAN AllowMsi,
+    _Out_ PBOOLEAN AllowMsix)
+{
+    BOOLEAN UseMsi = PciMsiEnabledByPolicy;
+    BOOLEAN UseMsix = PciMsixEnabledByPolicy;
+    HANDLE KeyHandle;
+
+    if (!DeviceExtension || !DeviceExtension->PciDevice)
+    {
+        *AllowMsi = UseMsi;
+        *AllowMsix = UseMsix;
+        return;
+    }
+
+    if (NT_SUCCESS(IoOpenDeviceRegistryKey(DeviceExtension->PciDevice->Pdo,
+                                           PLUGPLAY_REGKEY_DEVICE,
+                                           KEY_READ,
+                                           &KeyHandle)))
+    {
+        PciPdoApplyInterruptPolicyFromKey(KeyHandle, &UseMsi, &UseMsix);
+        ZwClose(KeyHandle);
+    }
+
+    UNICODE_STRING DriverKey;
+    ULONG Length = 0;
+    NTSTATUS Status = IoGetDeviceProperty(DeviceExtension->PciDevice->Pdo,
+                                          DevicePropertyDriverKeyName,
+                                          0,
+                                          NULL,
+                                          &Length);
+    if (Status == STATUS_BUFFER_TOO_SMALL && Length)
+    {
+        PWCHAR Buffer = ExAllocatePoolWithTag(PagedPool, Length, TAG_PCI);
+        if (Buffer)
+        {
+            Status = IoGetDeviceProperty(DeviceExtension->PciDevice->Pdo,
+                                         DevicePropertyDriverKeyName,
+                                         Length,
+                                         Buffer,
+                                         &Length);
+            if (NT_SUCCESS(Status))
+            {
+                HANDLE ServiceHandle;
+                UNICODE_STRING DriverKeyPath;
+                OBJECT_ATTRIBUTES ObjectAttributes;
+
+                DriverKeyPath.Buffer = Buffer;
+                if (Length >= sizeof(WCHAR))
+                {
+                    SIZE_T PathChars = (Length / sizeof(WCHAR)) - 1;
+                    DriverKeyPath.Length = (USHORT)(PathChars * sizeof(WCHAR));
+                }
+                else
+                {
+                    DriverKeyPath.Length = 0;
+                }
+                DriverKeyPath.MaximumLength = (USHORT)Length;
+
+                InitializeObjectAttributes(&ObjectAttributes,
+                                           &DriverKeyPath,
+                                           OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                           NULL,
+                                           NULL);
+                if (NT_SUCCESS(ZwOpenKey(&ServiceHandle, KEY_READ, &ObjectAttributes)))
+                {
+                    PciPdoApplyInterruptPolicyFromKey(ServiceHandle, &UseMsi, &UseMsix);
+                    ZwClose(ServiceHandle);
+                }
+            }
+            ExFreePoolWithTag(Buffer, TAG_PCI);
+        }
+    }
+
+    *AllowMsi = UseMsi;
+    *AllowMsix = UseMsix;
+}
+
+static
+ULONG
+PciPdoSelectDestinationId(
+    _In_ KAFFINITY Affinity)
+{
+    ULONG Index = 0;
+    KAFFINITY Mask = Affinity;
+
+    if (Mask == 0)
+        Mask = KeQueryActiveProcessors();
+
+    while ((Mask & 1) == 0)
+    {
+        Mask >>= 1;
+        Index++;
+    }
+
+    return Index;
+}
+
+static
+BOOLEAN
+PciPdoGetMsixTableAddress(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension,
+    _Out_ PPHYSICAL_ADDRESS TableAddress)
+{
+    PPCI_DEVICE Device;
+    ULONGLONG BarValue;
+
+    if (!DeviceExtension || !TableAddress)
+        return FALSE;
+
+    Device = DeviceExtension->PciDevice;
+    if (!Device ||
+        Device->MsixCapability == 0 ||
+        Device->MsixTableBir >= PCI_TYPE0_ADDRESSES)
+    {
+        return FALSE;
+    }
+
+    BarValue = Device->PciConfig.u.type0.BaseAddresses[Device->MsixTableBir];
+    if (BarValue == 0 || (BarValue & PCI_ADDRESS_IO_SPACE))
+        return FALSE;
+
+    if ((BarValue & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_64BIT)
+    {
+        ULONGLONG HighPart;
+
+        HighPart = Device->PciConfig.u.type0.BaseAddresses[Device->MsixTableBir + 1];
+        BarValue = (HighPart << 32) | (BarValue & PCI_ADDRESS_MEMORY_ADDRESS_MASK_64);
+    }
+    else
+    {
+        BarValue &= PCI_ADDRESS_MEMORY_ADDRESS_MASK_64;
+    }
+
+    TableAddress->QuadPart = BarValue + Device->MsixTableOffset;
+    return TRUE;
+}
+
+static
+NTSTATUS
+PciPdoEnableMsi(
+    _Inout_ PPDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR RawDescriptor,
+    _In_opt_ PCM_PARTIAL_RESOURCE_DESCRIPTOR TranslatedDescriptor)
+{
+    PPCI_DEVICE Device;
+    ULONG MessageAddressLow;
+    ULONG MessageAddressHigh;
+    USHORT MessageData;
+    USHORT Control;
+    BOOLEAN Is64Bit;
+    ULONG MessageCount;
+    ULONG DestId;
+    KAFFINITY Affinity;
+    ULONG Vector;
+
+    Device = DeviceExtension->PciDevice;
+    if (!Device || Device->MsiCapability == 0 || !RawDescriptor)
+        return STATUS_NOT_SUPPORTED;
+
+    MessageCount = 1;
+    if (RawDescriptor->u.MessageInterrupt.Raw.MessageCount)
+        MessageCount = RawDescriptor->u.MessageInterrupt.Raw.MessageCount;
+
+    if (Device->MsiMaxCount != 0 && MessageCount > Device->MsiMaxCount)
+        MessageCount = Device->MsiMaxCount;
+
+    Affinity = TranslatedDescriptor ?
+               TranslatedDescriptor->u.MessageInterrupt.Translated.Affinity :
+               KeQueryActiveProcessors();
+    Vector = TranslatedDescriptor ?
+             TranslatedDescriptor->u.MessageInterrupt.Translated.Vector :
+             RawDescriptor->u.MessageInterrupt.Raw.Vector;
+
+    DestId = PciPdoSelectDestinationId(Affinity);
+
+    MessageAddressLow = 0xFEE00000 | (DestId << 12);
+    MessageAddressHigh = 0;
+    MessageData = (USHORT)(Vector & 0xFF);
+
+    Control = Device->MsiControl;
+    Control &= ~(PCI_MSI_FLAGS_QSIZE | PCI_MSI_FLAGS_ENABLE);
+    {
+        UCHAR EnableCount = 0;
+        while ((1U << EnableCount) < MessageCount && EnableCount < 5)
+            ++EnableCount;
+        Control |= (EnableCount << 4);
+    }
+    Control |= PCI_MSI_FLAGS_ENABLE;
+
+    Is64Bit = (Device->MsiControl & PCI_MSI_FLAGS_64BIT) != 0;
+
+    PciPdoSetBusDataByOffset(DeviceExtension,
+                             &MessageAddressLow,
+                             Device->MsiCapability + PCI_MSI_ADDRESS_LO,
+                             sizeof(MessageAddressLow));
+    if (Is64Bit)
+    {
+        PciPdoSetBusDataByOffset(DeviceExtension,
+                                 &MessageAddressHigh,
+                                 Device->MsiCapability + PCI_MSI_ADDRESS_HI,
+                                 sizeof(MessageAddressHigh));
+        PciPdoSetBusDataByOffset(DeviceExtension,
+                                 &MessageData,
+                                 Device->MsiCapability + PCI_MSI_DATA_64,
+                                 sizeof(MessageData));
+    }
+    else
+    {
+        PciPdoSetBusDataByOffset(DeviceExtension,
+                                 &MessageData,
+                                 Device->MsiCapability + PCI_MSI_DATA_32,
+                                 sizeof(MessageData));
+    }
+    PciPdoSetBusDataByOffset(DeviceExtension,
+                             &Control,
+                             Device->MsiCapability + PCI_MSI_FLAGS,
+                             sizeof(Control));
+
+    Device->MsiControl = Control;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+PciPdoEnableMsix(
+    _Inout_ PPDO_DEVICE_EXTENSION DeviceExtension,
+    _In_reads_(MessageCount) PPCI_MSIX_MESSAGE_INFO Messages,
+    _In_ ULONG MessageCount)
+{
+    PPCI_DEVICE Device;
+    PHYSICAL_ADDRESS TableAddress;
+    PVOID TableMapping = NULL;
+    ULONG ProgramCount;
+    ULONG i;
+    USHORT Control;
+    NTSTATUS Status;
+
+    Device = DeviceExtension->PciDevice;
+    if (!Device || Device->MsixCapability == 0 || !Messages || MessageCount == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    if (!PciPdoGetMsixTableAddress(DeviceExtension, &TableAddress))
+        return STATUS_INVALID_DEVICE_STATE;
+
+    ProgramCount = MessageCount;
+    if (Device->MsixTableSize != 0 && ProgramCount > Device->MsixTableSize)
+        ProgramCount = Device->MsixTableSize;
+
+    Control = Device->MsixControl | PCI_MSIX_FLAGS_MASKALL;
+    PciPdoSetBusDataByOffset(DeviceExtension,
+                             &Control,
+                             Device->MsixCapability + PCI_MSIX_FLAGS,
+                             sizeof(Control));
+
+    TableMapping = MmMapIoSpace(TableAddress,
+                                ProgramCount * sizeof(PCI_MSIX_TABLE_ENTRY),
+                                MmNonCached);
+    if (!TableMapping)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    for (i = 0; i < ProgramCount; ++i)
+    {
+        ULONG AddressLow;
+        ULONG AddressHigh = 0;
+        USHORT Data;
+        KAFFINITY Affinity;
+        ULONG Vector;
+        ULONG DestId;
+        PPCI_MSIX_TABLE_ENTRY Entry;
+
+        Affinity = Messages[i].Affinity;
+        if (Affinity == 0)
+            Affinity = KeQueryActiveProcessors();
+
+        Vector = Messages[i].Vector;
+        DestId = PciPdoSelectDestinationId(Affinity);
+
+        AddressLow = 0xFEE00000 | (DestId << 12);
+        Data = (USHORT)(Vector & 0xFF);
+
+        Entry = (PPCI_MSIX_TABLE_ENTRY)((PUCHAR)TableMapping + (i * sizeof(PCI_MSIX_TABLE_ENTRY)));
+        Entry->MessageAddressLow = AddressLow;
+        Entry->MessageAddressHigh = AddressHigh;
+        Entry->MessageData = Data;
+        Entry->VectorControl = 0;
+    }
+
+    Control |= PCI_MSIX_FLAGS_ENABLE;
+    Control &= ~PCI_MSIX_FLAGS_MASKALL;
+    PciPdoSetBusDataByOffset(DeviceExtension,
+                             &Control,
+                             Device->MsixCapability + PCI_MSIX_FLAGS,
+                             sizeof(Control));
+    Device->MsixControl = Control;
+    Status = STATUS_SUCCESS;
+
+    MmUnmapIoSpace(TableMapping, ProgramCount * sizeof(PCI_MSIX_TABLE_ENTRY));
+    return Status;
+}
 
 /*** PRIVATE *****************************************************************/
 
@@ -473,6 +989,13 @@ PdoQueryResourceRequirements(
     ULONGLONG Length;
     ULONG Flags;
     ULONGLONG MaximumAddress;
+    BOOLEAN HasMsi;
+    BOOLEAN HasMsix;
+    BOOLEAN AllowMsi;
+    BOOLEAN AllowMsix;
+    UCHAR InterruptPin;
+    ULONG MsixMessageCount;
+    UCHAR MsiMessageCount;
 
     UNREFERENCED_PARAMETER(IrpSp);
     DPRINT("PdoQueryResourceRequirements() called\n");
@@ -491,6 +1014,32 @@ PdoQueryResourceRequirements(
     }
 
     DPRINT("Command register: 0x%04hx\n", PciConfig.Command);
+    HasMsi = FALSE;
+    HasMsix = FALSE;
+    AllowMsi = FALSE;
+    AllowMsix = FALSE;
+
+    PciPdoDetermineInterruptPolicy(DeviceExtension, &AllowMsi, &AllowMsix);
+    InterruptPin = 0;
+    MsixMessageCount = 0;
+    MsiMessageCount = 0;
+
+    PciPdoCacheMsiInfo(DeviceExtension);
+    HasMsi = (DeviceExtension->PciDevice->MsiCapability != 0);
+    HasMsix = (DeviceExtension->PciDevice->MsixCapability != 0);
+    InterruptPin = PciConfig.u.type0.InterruptPin;
+    if (HasMsix)
+    {
+        MsixMessageCount = DeviceExtension->PciDevice->MsixTableSize;
+        if (MsixMessageCount == 0)
+            MsixMessageCount = 1;
+    }
+    if (HasMsi)
+    {
+        MsiMessageCount = DeviceExtension->PciDevice->MsiMaxCount;
+        if (MsiMessageCount == 0)
+            MsiMessageCount = 1;
+    }
 
     /* Count required resource descriptors */
     ResCount = 0;
@@ -513,7 +1062,13 @@ PdoQueryResourceRequirements(
 
         /* FIXME: Check ROM address */
 
-        if (PciConfig.u.type0.InterruptPin != 0)
+        if (HasMsix)
+            ResCount++;
+
+        if (HasMsi)
+            ResCount++;
+
+        if (InterruptPin != 0)
             ResCount++;
     }
     else if (PCI_CONFIGURATION_TYPE(&PciConfig) == PCI_BRIDGE_TYPE)
@@ -532,6 +1087,12 @@ PdoQueryResourceRequirements(
             if (Length != 0)
                 ResCount += 2;
         }
+
+        if (HasMsix)
+            ResCount++;
+
+        if (HasMsi)
+            ResCount++;
 
         if (DeviceExtension->PciDevice->PciConfig.BaseClass == PCI_CLASS_BRIDGE_DEV)
             ResCount++;
@@ -662,15 +1223,50 @@ PdoQueryResourceRequirements(
 
         /* FIXME: Check ROM address */
 
-        if (PciConfig.u.type0.InterruptPin != 0)
+        if (HasMsix && AllowMsix)
         {
-            Descriptor->Option = 0; /* Required */
+            Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
+            Descriptor->Type = CmResourceTypeInterrupt;
+            Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+            Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE |
+                                CM_RESOURCE_INTERRUPT_MESSAGE;
+            Descriptor->u.Interrupt.MinimumVector = 1;
+            Descriptor->u.Interrupt.MaximumVector = MsixMessageCount;
+            Descriptor->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
+            Descriptor->u.Interrupt.PriorityPolicy = IrqPriorityUndefined;
+            Descriptor->u.Interrupt.TargetedProcessors = 0;
+            Descriptor++;
+        }
+
+        if (HasMsi && AllowMsi)
+        {
+            Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
+            Descriptor->Type = CmResourceTypeInterrupt;
+            Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+            Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE |
+                                CM_RESOURCE_INTERRUPT_MESSAGE;
+            Descriptor->u.Interrupt.MinimumVector = 1;
+            Descriptor->u.Interrupt.MaximumVector = MsiMessageCount;
+            Descriptor->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
+            Descriptor->u.Interrupt.PriorityPolicy = IrqPriorityUndefined;
+            Descriptor->u.Interrupt.TargetedProcessors = 0;
+            Descriptor++;
+        }
+
+        if (InterruptPin != 0)
+        {
+            Descriptor->Option = ((HasMsix && AllowMsix) ||
+                                  (HasMsi && AllowMsi)) ? IO_RESOURCE_ALTERNATIVE : 0; /* Required */
             Descriptor->Type = CmResourceTypeInterrupt;
             Descriptor->ShareDisposition = CmResourceShareShared;
             Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
 
             Descriptor->u.Interrupt.MinimumVector = 0;
             Descriptor->u.Interrupt.MaximumVector = 0xFF;
+            Descriptor->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
+            Descriptor->u.Interrupt.PriorityPolicy = IrqPriorityUndefined;
+            Descriptor->u.Interrupt.TargetedProcessors = 0;
+            Descriptor++;
         }
     }
     else if (PCI_CONFIGURATION_TYPE(&PciConfig) == PCI_BRIDGE_TYPE)
@@ -751,6 +1347,52 @@ PdoQueryResourceRequirements(
                 Descriptor->u.Port.MinimumAddress.QuadPart = 0;
                 Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
             }
+            Descriptor++;
+        }
+
+        if (HasMsix && AllowMsix)
+        {
+            Descriptor->Option = IO_RESOURCE_PREFERRED;
+            Descriptor->Type = CmResourceTypeInterrupt;
+            Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+            Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE |
+                                CM_RESOURCE_INTERRUPT_MESSAGE;
+            Descriptor->u.Interrupt.MinimumVector = 1;
+            Descriptor->u.Interrupt.MaximumVector = MsixMessageCount;
+            Descriptor->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
+            Descriptor->u.Interrupt.PriorityPolicy = IrqPriorityUndefined;
+            Descriptor->u.Interrupt.TargetedProcessors = 0;
+            Descriptor++;
+        }
+
+        if (HasMsi && AllowMsi)
+        {
+            Descriptor->Option = HasMsix ? IO_RESOURCE_ALTERNATIVE : IO_RESOURCE_PREFERRED;
+            Descriptor->Type = CmResourceTypeInterrupt;
+            Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+            Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE |
+                                CM_RESOURCE_INTERRUPT_MESSAGE;
+            Descriptor->u.Interrupt.MinimumVector = 1;
+            Descriptor->u.Interrupt.MaximumVector = MsiMessageCount;
+            Descriptor->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
+            Descriptor->u.Interrupt.PriorityPolicy = IrqPriorityUndefined;
+            Descriptor->u.Interrupt.TargetedProcessors = 0;
+            Descriptor++;
+        }
+
+        if (InterruptPin != 0)
+        {
+            Descriptor->Option = ((HasMsix && AllowMsix) ||
+                                  (HasMsi && AllowMsi)) ? IO_RESOURCE_ALTERNATIVE : 0; /* Required */
+            Descriptor->Type = CmResourceTypeInterrupt;
+            Descriptor->ShareDisposition = CmResourceShareShared;
+            Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
+
+            Descriptor->u.Interrupt.MinimumVector = 0;
+            Descriptor->u.Interrupt.MaximumVector = 0xFF;
+            Descriptor->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
+            Descriptor->u.Interrupt.PriorityPolicy = IrqPriorityUndefined;
+            Descriptor->u.Interrupt.TargetedProcessors = 0;
             Descriptor++;
         }
 
@@ -2084,6 +2726,21 @@ PdoStartDevice(
     PCM_RESOURCE_LIST RawResList = IrpSp->Parameters.StartDevice.AllocatedResources;
     PCM_FULL_RESOURCE_DESCRIPTOR RawFullDesc;
     PCM_PARTIAL_RESOURCE_DESCRIPTOR RawPartialDesc;
+    PCM_RESOURCE_LIST TranslatedResList;
+    PCM_FULL_RESOURCE_DESCRIPTOR TranslatedFullDesc;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR TranslatedPartialDesc;
+    PPCI_MSIX_MESSAGE_INFO MsixMessages = NULL;
+    ULONG MsixMessageCount = 0;
+    ULONG MsixMessageLimit = 0;
+    BOOLEAN UsingMsix = FALSE;
+    BOOLEAN UsingMsi = FALSE;
+    BOOLEAN DisableIntx = FALSE;
+    BOOLEAN HadMessageResource = FALSE;
+    BOOLEAN MsixAllowed = FALSE;
+    BOOLEAN MsiAllowed = FALSE;
+    NTSTATUS Status = STATUS_SUCCESS;
+    NTSTATUS MsixStatus = STATUS_SUCCESS;
+    NTSTATUS MsiStatus = STATUS_SUCCESS;
     ULONG i, ii;
     PPDO_DEVICE_EXTENSION DeviceExtension = DeviceObject->DeviceExtension;
     UCHAR Irq;
@@ -2100,18 +2757,110 @@ PdoStartDevice(
 
     /* TODO: Assign the other resources we get to the card */
 
+    TranslatedResList = IrpSp->Parameters.StartDevice.AllocatedResourcesTranslated;
+    TranslatedFullDesc = TranslatedResList ? &TranslatedResList->List[0] : NULL;
+
+    PciPdoGetBusData(DeviceExtension,
+                     &DeviceExtension->PciDevice->PciConfig,
+                     PCI_COMMON_HDR_LENGTH);
+    PciPdoCacheMsiInfo(DeviceExtension);
+    if (DeviceExtension->PciDevice->MsixCapability)
+    {
+        MsixMessageLimit = DeviceExtension->PciDevice->MsixTableSize;
+        if (MsixMessageLimit == 0)
+            MsixMessageLimit = 1;
+    }
+
+    PciPdoDetermineInterruptPolicy(DeviceExtension, &MsiAllowed, &MsixAllowed);
+
     RawFullDesc = &RawResList->List[0];
     for (i = 0; i < RawResList->Count; i++, RawFullDesc = CmiGetNextResourceDescriptor(RawFullDesc))
     {
+        PCM_FULL_RESOURCE_DESCRIPTOR CurrentTranslated = TranslatedFullDesc;
+        if (TranslatedFullDesc)
+            TranslatedFullDesc = CmiGetNextResourceDescriptor(TranslatedFullDesc);
+
         for (ii = 0; ii < RawFullDesc->PartialResourceList.Count; ii++)
         {
             /* Partial resource descriptors can be of variable size (CmResourceTypeDeviceSpecific),
                but only one is allowed and it must be the last one in the list! */
             RawPartialDesc = &RawFullDesc->PartialResourceList.PartialDescriptors[ii];
+            TranslatedPartialDesc = NULL;
+            if (CurrentTranslated &&
+                ii < CurrentTranslated->PartialResourceList.Count)
+            {
+                TranslatedPartialDesc = &CurrentTranslated->PartialResourceList.PartialDescriptors[ii];
+            }
 
             if (RawPartialDesc->Type == CmResourceTypeInterrupt)
             {
                 UCHAR LegacyLine;
+
+                if (RawPartialDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
+                {
+                    if (!(MsixAllowed || MsiAllowed))
+                        continue;
+
+                    HadMessageResource = TRUE;
+
+                    if (MsixAllowed && DeviceExtension->PciDevice->MsixCapability)
+                    {
+                        if (!MsixMessages && MsixMessageLimit != 0)
+                        {
+                            MsixMessages = ExAllocatePoolWithTag(NonPagedPool,
+                                                                 MsixMessageLimit * sizeof(PCI_MSIX_MESSAGE_INFO),
+                                                                 TAG_PCI);
+                            if (MsixMessages)
+                                RtlZeroMemory(MsixMessages, MsixMessageLimit * sizeof(PCI_MSIX_MESSAGE_INFO));
+                            else
+                                DPRINT1("PCI PDO: Failed to allocate MSI-X message table for %02x:%02x.%u\n",
+                                        (UCHAR)DeviceExtension->PciDevice->BusNumber,
+                                        DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                                        DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber);
+                        }
+
+                        if (MsixMessages &&
+                            MsixMessageCount < MsixMessageLimit)
+                        {
+                            MsixMessages[MsixMessageCount].Vector =
+                                TranslatedPartialDesc ?
+                                TranslatedPartialDesc->u.MessageInterrupt.Translated.Vector :
+                                RawPartialDesc->u.MessageInterrupt.Raw.Vector;
+                            MsixMessages[MsixMessageCount].Affinity =
+                                TranslatedPartialDesc ?
+                                TranslatedPartialDesc->u.MessageInterrupt.Translated.Affinity :
+                                0;
+                            MsixMessageCount++;
+                            UsingMsix = TRUE;
+                        }
+                    }
+                    else if (MsiAllowed &&
+                             !UsingMsi &&
+                             DeviceExtension->PciDevice->MsiCapability)
+                    {
+                        MsiStatus = PciPdoEnableMsi(DeviceExtension,
+                                                    RawPartialDesc,
+                                                    TranslatedPartialDesc);
+                        if (NT_SUCCESS(MsiStatus))
+                        {
+                            UsingMsi = TRUE;
+                            DisableIntx = TRUE;
+                        }
+                        else
+                        {
+                            DPRINT1("PCI PDO: MSI enable failed for %02x:%02x.%u (status 0x%08lx)\n",
+                                    (UCHAR)DeviceExtension->PciDevice->BusNumber,
+                                    DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                                    DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
+                                    MsiStatus);
+                        }
+                    }
+
+                    continue;
+                }
+
+                if (UsingMsix || UsingMsi)
+                    continue;
 
                 if (RawPartialDesc->u.Interrupt.Level <= 0xFF)
                 {
@@ -2143,6 +2892,37 @@ PdoStartDevice(
         }
     }
 
+    if (UsingMsix && MsixMessageCount > 0 && MsixMessages)
+    {
+        MsixStatus = PciPdoEnableMsix(DeviceExtension,
+                                      MsixMessages,
+                                      MsixMessageCount);
+        if (NT_SUCCESS(MsixStatus))
+        {
+            DisableIntx = TRUE;
+        }
+        else
+        {
+            DPRINT1("PCI PDO: MSI-X enable failed for %02x:%02x.%u (status 0x%08lx)\n",
+                    (UCHAR)DeviceExtension->PciDevice->BusNumber,
+                    DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                    DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
+                    MsixStatus);
+            UsingMsix = FALSE;
+        }
+    }
+
+    if (MsixMessages)
+        ExFreePoolWithTag(MsixMessages, TAG_PCI);
+
+    if (HadMessageResource && !(UsingMsix || UsingMsi))
+    {
+        DPRINT1("PCI PDO: Device %02x:%02x.%u provided message interrupts but is running in legacy mode.\n",
+                (UCHAR)DeviceExtension->PciDevice->BusNumber,
+                DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber);
+    }
+
     Command = 0;
 
     DBGPRINT("pci!PdoStartDevice: Enabling command flags for PCI device 0x%x on bus 0x%x: ",
@@ -2166,6 +2946,12 @@ PdoStartDevice(
         DBGPRINT("[I/O space enable] ");
     }
 
+    if (DisableIntx)
+    {
+        Command |= PCI_COMMAND_INTX_DISABLE;
+        DBGPRINT("[INTx disable] ");
+    }
+
     if (Command != 0)
     {
         DBGPRINT("\n");
@@ -2186,7 +2972,7 @@ PdoStartDevice(
     PciPublishLegacyScsiportConfig(DeviceObject,
         IrpSp->Parameters.StartDevice.AllocatedResourcesTranslated);
 
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 static NTSTATUS

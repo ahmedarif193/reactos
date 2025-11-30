@@ -14,6 +14,7 @@
 #include <stdarg.h>
 #define NDEBUG
 #include <debug.h>
+extern VOID NTAPI IopReserveIrqVectors(_In_reads_(Count) PULONG Vectors, _In_ ULONG Count);
 
 extern VOID HalpPciLogEcamCoverage(VOID);
 
@@ -53,7 +54,8 @@ ULONG HalpAcpiMcfgAllocationCount;
 PUCHAR HalpAcpiMcfgSegDisabled;
 ULONG HalpAcpiMcfgSegDisabledCount;
 volatile LONG HalpAcpiEcamCoverageFlags;
-BOOLEAN HalpAcpiEcamDisabled;
+/* ECAM is enabled by default; may be disabled via registry (DisableEcam) */
+BOOLEAN HalpAcpiEcamDisabled = FALSE;
 
 static
 LONG
@@ -1987,6 +1989,17 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
                     if (!Programmed || !MmconfigValid)
                     {
+                        /*
+                         * VirtualBox ICH9/Q35 firmware advertises an MCFG
+                         * window that does not actually decode PCI Express
+                         * MMCONFIG cycles.  Windows treats this as a fatal
+                         * ECAM failure and falls back to legacy CF8/CFC
+                         * configuration space for the entire segment.
+                         *
+                         * Mirror that behaviour here: once the VBox probe
+                         * fails, disable ECAM globally so all configuration
+                         * requests use type‑1 config space instead.
+                         */
                         if (!HalpAcpiEcamDisabled)
                         {
                             HalpAcpiEcamDisabled = TRUE;
@@ -2392,6 +2405,10 @@ HalpAcpiAccessConfigEcam(
                 ULONG Value;
 
                 Value = *(UNALIGNED PULONG)BufferPtr;
+                /* On some VirtualBox Q35 firmware, bus 0/slot 0 returns
+                 * 0xFFFF even when MMCONFIG decode works for other devices.
+                 * Do not force legacy solely on this probe; defer to per‑bus
+                 * vendor checks in HalpPhase0GetPciDataByOffset. */
                 if ((Value & 0xFFFF) == 0xFFFF)
                 {
                     ForceLegacy = TRUE;
@@ -2408,30 +2425,8 @@ HalpAcpiAccessConfigEcam(
 
     if (ForceLegacy)
     {
+        /* Do not disable the entire segment; let callers retry legacy for this access */
         HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES, NULL);
-
-        /* Disable ECAM for this allocation/segment only */
-        if (HalpAcpiMcfgSegDisabled && HalpAcpiMcfgAllocations)
-        {
-            ULONG idx;
-            for (idx = 0; idx < HalpAcpiMcfgAllocationCount; ++idx)
-            {
-                if (&HalpAcpiMcfgAllocations[idx] == Allocation)
-                {
-                    if (idx < HalpAcpiMcfgSegDisabledCount)
-                    {
-                        HalpAcpiMcfgSegDisabled[idx] = 1;
-                        {
-                            CHAR msg[128];
-                            _snprintf(msg, sizeof(msg), "HAL: MMCONFIG vendor returned 0xFFFF; disabling ECAM for segment %u.", Allocation->PciSegment);
-                            HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-
         return FALSE;
     }
 
@@ -3051,6 +3046,7 @@ HalpBuildAcpiResourceList(IN PIO_RESOURCE_REQUIREMENTS_LIST ResourceList)
         HalpSciGsi = Interrupt;
         ResourceList->List[0].Descriptors[0].u.Interrupt.MinimumVector = Interrupt;
         ResourceList->List[0].Descriptors[0].u.Interrupt.MaximumVector = Interrupt;
+        IopReserveIrqVectors(&Interrupt, 1);
 
         /* One more */
         ++ResourceList->List[0].Count;

@@ -373,6 +373,9 @@ IopFreeDeviceNode(
 
     if (DeviceNode->ResourceList)
     {
+        IopReleaseMessageInterruptVectors(DeviceNode->ResourceListTranslated ?
+                                          DeviceNode->ResourceListTranslated :
+                                          DeviceNode->ResourceList);
         ExFreePool(DeviceNode->ResourceList);
     }
 
@@ -480,4 +483,41 @@ IopTraverseDeviceTree(
     }
 
     return Status;
+}
+VOID
+NTAPI
+IopReleaseMessageInterruptVectors(
+    _In_opt_ PCM_RESOURCE_LIST ResourceList)
+{
+    ULONG i, j;
+    PCM_FULL_RESOURCE_DESCRIPTOR FullDescriptor;
+
+    if (!ResourceList)
+        return;
+
+    FullDescriptor = &ResourceList->List[0];
+    for (i = 0; i < ResourceList->Count; i++)
+    {
+        PCM_PARTIAL_RESOURCE_LIST PartialList = &FullDescriptor->PartialResourceList;
+        PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDesc = PartialList->PartialDescriptors;
+
+        for (j = 0; j < PartialList->Count; j++, PartialDesc++)
+        {
+            if (PartialDesc->Type == CmResourceTypeInterrupt &&
+                (PartialDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+            {
+                ULONG msgCount = PartialDesc->u.MessageInterrupt.Raw.MessageCount ?
+                                 PartialDesc->u.MessageInterrupt.Raw.MessageCount : 1;
+                ULONG vec = PartialDesc->u.MessageInterrupt.Raw.Vector;
+                ULONG k;
+
+                for (k = 0; k < msgCount; k++, vec++)
+                {
+                    IopReleaseIrqVectors(&vec, 1);
+                }
+            }
+        }
+
+        FullDescriptor = CmiGetNextResourceDescriptor(FullDescriptor);
+    }
 }

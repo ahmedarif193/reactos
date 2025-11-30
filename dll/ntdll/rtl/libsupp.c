@@ -1034,27 +1034,41 @@ LdrpApisetVersion(VOID)
         switch (CompatVersion)
         {
             case 0:
-                break;
-            case _WIN32_WINNT_VISTA:
-                /* No apisets in vista yet*/
+                /* No specific compatibility version; leave apisets disabled. */
                 CachedApisetVersion = 0;
                 break;
+
+            case _WIN32_WINNT_WINXP:
+            case _WIN32_WINNT_WS03:
+                /* NT 5.1 / 5.2: no apisets on these OS versions. */
+                CachedApisetVersion = 0;
+                break;
+
+            case _WIN32_WINNT_VISTA:
+                /* No apisets in Vista yet. */
+                CachedApisetVersion = 0;
+                break;
+
             case _WIN32_WINNT_WIN7:
                 CachedApisetVersion = APISET_WIN7;
                 DPRINT1("Activating apisets for Win7\n");
                 break;
+
             case _WIN32_WINNT_WIN8:
                 CachedApisetVersion = APISET_WIN8;
                 DPRINT1("Activating apisets for Win8\n");
                 break;
+
             case _WIN32_WINNT_WINBLUE:
                 CachedApisetVersion = APISET_WIN81;
                 DPRINT1("Activating apisets for Win8.1\n");
                 break;
+
             case _WIN32_WINNT_WIN10:
                 CachedApisetVersion = APISET_WIN10;
                 DPRINT1("Activating apisets for Win10\n");
                 break;
+
             default:
                 DPRINT1("Unknown version 0x%x\n", CompatVersion);
                 CachedApisetVersion = 0;

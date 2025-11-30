@@ -28,7 +28,6 @@ typedef struct _CM_PARTIAL_RESOURCE_DESCRIPTOR {
       ULONG Vector;
       KAFFINITY Affinity;
     } Interrupt;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
     struct {
       union {
         struct {
@@ -53,7 +52,6 @@ typedef struct _CM_PARTIAL_RESOURCE_DESCRIPTOR {
         } Translated;
       } DUMMYUNIONNAME;
     } MessageInterrupt;
-#endif
     struct {
       PHYSICAL_ADDRESS Start;
       ULONG Length;

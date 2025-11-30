@@ -623,7 +623,6 @@ typedef struct _CM_PARTIAL_RESOURCE_DESCRIPTOR
             ULONG Vector;
             KAFFINITY Affinity;
         } Interrupt;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
         struct
         {
             union
@@ -643,7 +642,6 @@ typedef struct _CM_PARTIAL_RESOURCE_DESCRIPTOR
                 } Translated;
             };
         } MessageInterrupt;
-#endif
         struct
         {
             PHYSICAL_ADDRESS Start;
@@ -749,6 +747,5 @@ typedef struct _CM_DISK_GEOMETRY_DEVICE_DATA
 #endif // _!NTOS_MODE_USER
 
 #endif // _CMTYPES_H
-
 
 

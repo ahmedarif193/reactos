@@ -13,6 +13,8 @@
 #define NDEBUG
 #include <debug.h>
 
+extern ULONG HalpSciGsi;
+
 HAL_AMLI_BAD_IO_ADDRESS_LIST HalAMLIBadIOAddressList[] =
 {
     { 0x0000, 0x10, 1, NULL }, // DMA controller
@@ -181,4 +183,11 @@ HaliSetSystemInformation(IN HAL_SET_INFORMATION_CLASS InformationClass,
 {
     UNIMPLEMENTED;
     return STATUS_NOT_IMPLEMENTED;
+}
+
+ULONG
+NTAPI
+HalGetAcpiSciVector(VOID)
+{
+    return HalpSciGsi;
 }

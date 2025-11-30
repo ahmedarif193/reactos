@@ -1,0 +1,20 @@
+HAL / PCI Bring-Up Tasks for xHCI (Intel 7-Series, VID 8086 DID 1e31)
+=====================================================================
+
+- [ ] Fix ACPI _PRT / GSI routing
+  - Decode resource type 4 in root _CRS and map PIRQ/GSIs so xHCI is not forced to IRQ 0x9–0x9.
+  - Ensure routing supports GSIs above 11; current max GSI is 11.
+
+- [ ] Enable MSI / MSI-X resources for xHCI
+  - Expose CM_RESOURCE_INTERRUPT_MESSAGE for the xHCI PDO so USBPORT can connect message interrupts.
+  - Program MSI in PCI config (per WDK xHCI sample) once resources are available.
+
+- [ ] Restore ECAM / MMCONFIG access
+  - Fix firmware/quirk path that disables ECAM globally; allow PCI Express config space via MMCONFIG.
+  - Keep CF8/CFC legacy path reliable as fallback.
+
+- [ ] PCI command defaults
+  - Bus driver should set MEM + BusMaster bits before StartDevice; avoid miniport-side workarounds.
+
+- [ ] Validate PCI config reads
+  - Ensure VID/DID and capability reads are stable via the chosen config path (ECAM or CF8/CFC) so quirks are based on real IDs.

@@ -333,6 +333,14 @@ typedef struct _IO_INTERRUPT
     KSPIN_LOCK SpinLock;
 } IO_INTERRUPT, *PIO_INTERRUPT;
 
+typedef struct _IO_INTERRUPT_MESSAGE_ENTRY
+{
+    KINTERRUPT Interrupt;
+    PKMESSAGE_SERVICE_ROUTINE MessageServiceRoutine;
+    PVOID ServiceContext;
+    ULONG MessageId;
+} IO_INTERRUPT_MESSAGE_ENTRY, *PIO_INTERRUPT_MESSAGE_ENTRY;
+
 //
 // I/O Error Log Packet Header
 //
@@ -1471,6 +1479,31 @@ extern KSPIN_LOCK IopDeviceActionLock;
 extern LIST_ENTRY IopDeviceActionRequestList;
 extern RESERVE_IRP_ALLOCATOR IopReserveIrpAllocator;
 extern BOOLEAN IoRemoteBootClient;
+
+NTSTATUS
+NTAPI
+IopAllocateIrqVectors(
+    _In_ ULONG MinimumVector,
+    _In_ ULONG MaximumVector,
+    _In_ ULONG Count,
+    _Out_ PULONG StartVector);
+
+VOID
+NTAPI
+IopReserveIrqVectors(
+    _In_reads_(Count) PULONG Vectors,
+    _In_ ULONG Count);
+
+VOID
+NTAPI
+IopReleaseIrqVectors(
+    _In_reads_(Count) PULONG Vectors,
+    _In_ ULONG Count);
+
+VOID
+NTAPI
+IopReleaseMessageInterruptVectors(
+    _In_opt_ PCM_RESOURCE_LIST ResourceList);
 
 //
 // Inlined Functions

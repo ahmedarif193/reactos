@@ -14,6 +14,27 @@ NT_PRODUCT_TYPE LsapProductType = NtProductWinNt;
 
 /* FUNCTIONS ***************************************************************/
 
+#if DBG
+typedef struct _LSA_HEAP_TRACK_ENTRY
+{
+    LIST_ENTRY ListEntry;
+    PVOID Ptr;
+    SIZE_T Size;
+    BOOLEAN Freed;
+} LSA_HEAP_TRACK_ENTRY, *PLSA_HEAP_TRACK_ENTRY;
+
+static CRITICAL_SECTION LsapHeapTrackCs;
+static CRITICAL_SECTION_DEBUG LsapHeapTrackCsDebug =
+{
+    0, 0, &LsapHeapTrackCs,
+    { &LsapHeapTrackCsDebug.ProcessLocksList, &LsapHeapTrackCsDebug.ProcessLocksList },
+    0, 0, { (DWORD_PTR)(__FILE__ ": LsapHeapTrackCs") }
+};
+static CRITICAL_SECTION LsapHeapTrackCs = { &LsapHeapTrackCsDebug, -1, 0, 0, 0, 0 };
+static LIST_ENTRY LsapHeapTrackList = { &LsapHeapTrackList, &LsapHeapTrackList };
+static BOOLEAN LsapHeapTrackInitialized;
+#endif
+
 VOID
 NTAPI
 LsaIFree_LSAPR_ACCOUNT_ENUM_BUFFER(
@@ -339,12 +360,107 @@ LsapInitLsa(VOID)
 
 void __RPC_FAR * __RPC_USER midl_user_allocate(SIZE_T len)
 {
-    return RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, len);
+    PVOID Ptr;
+
+    Ptr = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, len);
+
+#if DBG
+    if (Ptr != NULL)
+    {
+        PLIST_ENTRY Entry;
+        PLSA_HEAP_TRACK_ENTRY Track;
+
+        if (!LsapHeapTrackInitialized)
+        {
+            InitializeListHead(&LsapHeapTrackList);
+            LsapHeapTrackInitialized = TRUE;
+        }
+
+        Track = RtlAllocateHeap(RtlGetProcessHeap(), 0, sizeof(*Track));
+        if (Track != NULL)
+        {
+            Track->Ptr = Ptr;
+            Track->Size = len;
+            Track->Freed = FALSE;
+
+            RtlEnterCriticalSection(&LsapHeapTrackCs);
+            InsertHeadList(&LsapHeapTrackList, &Track->ListEntry);
+            RtlLeaveCriticalSection(&LsapHeapTrackCs);
+
+            TRACE("midl_user_allocate(%Iu) -> %p\n", len, Ptr);
+        }
+        else
+        {
+            ERR("midl_user_allocate: failed to allocate tracking entry for %p (%Iu bytes)\n",
+                Ptr, len);
+        }
+    }
+    else
+    {
+        ERR("midl_user_allocate(%Iu) failed\n", len);
+    }
+#endif
+
+    return Ptr;
 }
 
 
 void __RPC_USER midl_user_free(void __RPC_FAR * ptr)
 {
+#if DBG
+    if (ptr != NULL)
+    {
+        BOOLEAN Found = FALSE;
+        BOOLEAN CanFree = FALSE;
+        PLSA_HEAP_TRACK_ENTRY Track;
+        PLIST_ENTRY Link;
+
+        if (LsapHeapTrackInitialized)
+        {
+            RtlEnterCriticalSection(&LsapHeapTrackCs);
+            Link = LsapHeapTrackList.Flink;
+            while (Link != &LsapHeapTrackList)
+            {
+                Track = CONTAINING_RECORD(Link, LSA_HEAP_TRACK_ENTRY, ListEntry);
+                if (Track->Ptr == ptr)
+                {
+                    Found = TRUE;
+                    if (Track->Freed)
+                    {
+                        ERR("midl_user_free: double free of %p (size %Iu)\n",
+                            ptr, Track->Size);
+                    }
+                    else
+                    {
+                        Track->Freed = TRUE;
+                        CanFree = TRUE;
+                    }
+                    break;
+                }
+                Link = Link->Flink;
+            }
+            RtlLeaveCriticalSection(&LsapHeapTrackCs);
+        }
+
+        if (!Found)
+        {
+            ERR("midl_user_free: freeing untracked pointer %p\n", ptr);
+        }
+
+        TRACE("midl_user_free(%p)\n", ptr);
+
+        if (!CanFree)
+        {
+            /* In debug builds, avoid corrupting the heap by refusing to
+             * free pointers that were never tracked or have already been
+             * freed once. The caller is violating the midl_user_free
+             * contract in these cases, so we log and leak instead of
+             * crashing LSASS. */
+            return;
+        }
+    }
+#endif
+
     RtlFreeHeap(RtlGetProcessHeap(), 0, ptr);
 }
 

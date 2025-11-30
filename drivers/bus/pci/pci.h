@@ -4,6 +4,7 @@
 #include <ntifs.h>
 #include <cmreslist.h>
 #include <ntstrsafe.h>
+#include "pcidef.h"
 
 #define TAG_PCI '0ICP'
 
@@ -29,6 +30,26 @@ typedef struct _PCI_DEVICE
     BOOLEAN EnableBusMaster;
     // Whether the device is owned by the KD
     BOOLEAN IsDebuggingDevice;
+    // MSI capability offset (0 if none)
+    UCHAR MsiCapability;
+    // MSI-X capability offset (0 if none)
+    UCHAR MsixCapability;
+    // Cached MSI control value
+    USHORT MsiControl;
+    // Cached MSI-X control value
+    USHORT MsixControl;
+    // Maximum MSI messages supported
+    UCHAR MsiMaxCount;
+    // MSI-X table size (entries)
+    USHORT MsixTableSize;
+    // MSI-X table BAR indicator
+    UCHAR MsixTableBir;
+    // MSI-X PBA BAR indicator
+    UCHAR MsixPbaBir;
+    // MSI-X table offset within BAR
+    ULONG MsixTableOffset;
+    // MSI-X PBA offset within BAR
+    ULONG MsixPbaOffset;
 } PCI_DEVICE, *PPCI_DEVICE;
 
 
@@ -160,6 +181,8 @@ extern PPCI_DRIVER_EXTENSION DriverExtension;
 
 extern BOOLEAN HasDebuggingDevice;
 extern PCI_TYPE1_CFG_CYCLE_BITS PciDebuggingDevice[2];
+extern BOOLEAN PciMsiEnabledByPolicy;
+extern BOOLEAN PciMsixEnabledByPolicy;
 
 /* fdo.c */
 

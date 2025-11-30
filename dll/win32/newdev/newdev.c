@@ -660,6 +660,8 @@ DevInstallW(
     BOOL ret;
     DWORD config_flags;
     BOOL retval = FALSE;
+    HKEY hDevKey = NULL;
+    BOOL isImageClass = FALSE;
 
     TRACE("(%p, %p, %s, %d)\n", hWndParent, hInstance, debugstr_w(InstanceId), Show);
 
@@ -739,6 +741,23 @@ DevInstallW(
         goto cleanup;
     }
 
+    {
+        WCHAR className[64];
+
+        if (SetupDiGetDeviceRegistryPropertyW(
+                DevInstData->hDevInfo,
+                &DevInstData->devInfoData,
+                SPDRP_CLASS,
+                NULL,
+                (BYTE *)className,
+                sizeof(className),
+                NULL))
+        {
+            if (_wcsicmp(className, L"Image") == 0)
+                isImageClass = TRUE;
+        }
+    }
+
     if (SetupDiGetDeviceRegistryPropertyW(
         DevInstData->hDevInfo,
         &DevInstData->devInfoData,
@@ -759,6 +778,16 @@ DevInstallW(
 
     TRACE("Installing %s (%s)\n", debugstr_w((PCWSTR)DevInstData->buffer), debugstr_w(InstanceId));
 
+    /* Open device registry key for optional diagnostics */
+    hDevKey = SetupDiOpenDevRegKey(DevInstData->hDevInfo,
+                                   &DevInstData->devInfoData,
+                                   DICS_FLAG_GLOBAL,
+                                   0,
+                                   DIREG_DEV,
+                                   KEY_SET_VALUE);
+    if (hDevKey == INVALID_HANDLE_VALUE)
+        hDevKey = NULL;
+
     /* Search driver in default location and removable devices */
     if (!PrepareFoldersToScan(DevInstData, FALSE, FALSE, NULL))
     {
@@ -770,6 +799,17 @@ DevInstallW(
         /* Driver found ; install it */
         retval = InstallCurrentDriver(DevInstData);
         TRACE("InstallCurrentDriver() returned %d\n", retval);
+        if (!retval && hDevKey)
+        {
+            /* Record a class-specific install failure reason for diagnostics */
+            DWORD FailReason = isImageClass ? 2 : 1;
+            RegSetValueExW(hDevKey,
+                           L"FailReasonID",
+                           0,
+                           REG_DWORD,
+                           (const BYTE *)&FailReason,
+                           sizeof(FailReason));
+        }
         if (retval && Show != SW_HIDE)
         {
             /* Should we display the 'Need to reboot' page? */
@@ -793,6 +833,16 @@ DevInstallW(
     {
         /* We can't show the wizard. Fail the install */
         TRACE("No wizard\n");
+        if (hDevKey)
+        {
+            DWORD FailReason = isImageClass ? 2 : 1;
+            RegSetValueExW(hDevKey,
+                           L"FailReasonID",
+                           0,
+                           REG_DWORD,
+                           (const BYTE *)&FailReason,
+                           sizeof(FailReason));
+        }
         goto cleanup;
     }
 
@@ -801,6 +851,8 @@ DevInstallW(
     retval = DisplayWizard(DevInstData, hWndParent, IDD_WELCOMEPAGE);
 
 cleanup:
+    if (hDevKey)
+        RegCloseKey(hDevKey);
     if (DevInstData)
     {
         if (DevInstData->devInfoData.cbSize != 0)
@@ -979,42 +1031,74 @@ ClientSideInstallW(
 
     /* Read the data. Some is just included for compatibility with Windows right now and not yet used by ReactOS.
        See umpnpmgr for more details. */
-    if(!ReadFile(hPipe, &Value, sizeof(Value), &BytesRead, NULL))
+    if (!ReadFile(hPipe, &Value, sizeof(Value), &BytesRead, NULL) ||
+        BytesRead != sizeof(Value) ||
+        Value < sizeof(WCHAR) ||
+        (Value % sizeof(WCHAR)) != 0 ||
+        Value > 4 * MAX_PATH * sizeof(WCHAR))
     {
-        ERR("ReadFile failed with error %u\n", GetLastError());
+        ERR("ClientSideInstallW: invalid InstallEventName length (%lu, bytesRead=%lu, err=%u)\n",
+            Value, BytesRead, GetLastError());
         goto cleanup;
     }
 
     InstallEventName = (PWSTR)HeapAlloc(GetProcessHeap(), 0, Value);
-
-    if(!ReadFile(hPipe, InstallEventName, Value, &BytesRead, NULL))
+    if (!InstallEventName)
     {
-        ERR("ReadFile failed with error %u\n", GetLastError());
+        ERR("ClientSideInstallW: HeapAlloc failed for InstallEventName (%lu bytes)\n", Value);
         goto cleanup;
     }
 
+    if (!ReadFile(hPipe, InstallEventName, Value, &BytesRead, NULL) ||
+        BytesRead != Value)
+    {
+        ERR("ClientSideInstallW: failed reading InstallEventName (len=%lu, read=%lu, err=%u)\n",
+            Value, BytesRead, GetLastError());
+        goto cleanup;
+    }
+
+    /* Ensure the event name is NUL-terminated */
+    InstallEventName[(Value / sizeof(WCHAR)) - 1] = UNICODE_NULL;
+
     /* I couldn't figure out what the following value means under Windows XP.
        Therefore I used it in umpnpmgr to pass the ShowWizard variable. */
-    if(!ReadFile(hPipe, &ShowWizard, sizeof(ShowWizard), &BytesRead, NULL))
+    if (!ReadFile(hPipe, &ShowWizard, sizeof(ShowWizard), &BytesRead, NULL) ||
+        BytesRead != sizeof(ShowWizard))
     {
-        ERR("ReadFile failed with error %u\n", GetLastError());
+        ERR("ClientSideInstallW: failed reading ShowWizard (read=%lu, err=%u)\n",
+            BytesRead, GetLastError());
         goto cleanup;
     }
 
     /* Next one is again size in bytes of the following string */
-    if(!ReadFile(hPipe, &Value, sizeof(Value), &BytesRead, NULL))
+    if (!ReadFile(hPipe, &Value, sizeof(Value), &BytesRead, NULL) ||
+        BytesRead != sizeof(Value) ||
+        Value < sizeof(WCHAR) ||
+        (Value % sizeof(WCHAR)) != 0 ||
+        Value > 4 * MAX_PATH * sizeof(WCHAR))
     {
-        ERR("ReadFile failed with error %u\n", GetLastError());
+        ERR("ClientSideInstallW: invalid DeviceInstance length (%lu, bytesRead=%lu, err=%u)\n",
+            Value, BytesRead, GetLastError());
         goto cleanup;
     }
 
     DeviceInstance = (PWSTR)HeapAlloc(GetProcessHeap(), 0, Value);
-
-    if(!ReadFile(hPipe, DeviceInstance, Value, &BytesRead, NULL))
+    if (!DeviceInstance)
     {
-        ERR("ReadFile failed with error %u\n", GetLastError());
+        ERR("ClientSideInstallW: HeapAlloc failed for DeviceInstance (%lu bytes)\n", Value);
         goto cleanup;
     }
+
+    if (!ReadFile(hPipe, DeviceInstance, Value, &BytesRead, NULL) ||
+        BytesRead != Value)
+    {
+        ERR("ClientSideInstallW: failed reading DeviceInstance (len=%lu, read=%lu, err=%u)\n",
+            Value, BytesRead, GetLastError());
+        goto cleanup;
+    }
+
+    /* Ensure the instance ID is NUL-terminated */
+    DeviceInstance[(Value / sizeof(WCHAR)) - 1] = UNICODE_NULL;
 
     ReturnValue = DevInstallW(NULL, NULL, DeviceInstance, ShowWizard ? SW_SHOWNOACTIVATE : SW_HIDE);
     if(!ReturnValue)

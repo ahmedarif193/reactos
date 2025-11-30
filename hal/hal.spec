@@ -28,6 +28,7 @@
 @ stdcall HalGetEnvironmentVariable(str long str)
 @ fastcall -arch=arm,arm64 HalGetInterruptSource()
 @ stdcall HalGetInterruptVector(long long long long ptr ptr)
+@ stdcall HalGetAcpiSciVector()
 ;@ stdcall -arch=x86_64 HalHandleMcheck()
 @ stdcall -arch=i386,x86_64 HalHandleNMI(ptr)
 @ stdcall HalInitSystem(long ptr)

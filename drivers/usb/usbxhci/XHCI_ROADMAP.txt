@@ -1,0 +1,11 @@
+ReactOS xHCI parity roadmap (Win10/11 oriented)
+
+[ ] Interrupt resources: update PnP/USBPORT to hand xHCI a CM_RESOURCE_INTERRUPT_MESSAGE when MSI/MSI-X is supported; refuse legacy unless controller lacks MSI. Program MSI/MSI-X table with OS-provided addr/data/affinity, keep legacy disabled.
+[ ] Multiple interrupters: plumb USBPORT plumbing for >1 message/vector and map to xHCI interrupter contexts (at least one per CPU cluster).
+[ ] Bring-up sequencing: after DCBAA/CRCR/ERST, set RS and wait for HCH clear; on HCE, halt+reset once and reinit rings before failing.
+[ ] Capability/quirk handling: extend quirks DB per VID/DID/HciVer; gate unsupported HciVer cleanly; validate BIR/offset for MSI-X table/PBA against mapped BAR.
+[ ] Event/command robustness: avoid busy-wait at DISPATCH_LEVEL (async command path), keep per-endpoint locking for ActiveTransfer/ring state, add refcount to protect EP rings during async work.
+[ ] Root hub integration: ensure RootHubData populated only on successful start; handle zero-port/unsupported cases without assertions.
+[ ] Power/LPM: align port power control, indicators, U1/U2 policy with Windows defaults; honor HCS3 exit latencies and per-port protocol segments.
+[ ] Reset/recovery: implement host reset path (USBCMD.HCRST) and clean shutdown on fatal errors without leaking context rings.
+[ ] Testing matrix: real HW (Intel/AMD/Renesas), MSI-only, MSI-X multi-vector, legacy fallback (non-MSI parts), and stress (hotplug, hub tree, suspend/resume).

@@ -11,6 +11,7 @@
 #include <hal.h>
 #define NDEBUG
 #include <debug.h>
+extern VOID NTAPI IopReserveIrqVectors(_In_reads_(Count) PULONG Vectors, _In_ ULONG Count);
 
 /* GLOBALS *****************************************************************/
 
@@ -269,6 +270,25 @@ AssignIrqVector(ULONG irq)
 #endif
 }
 
+static VOID
+IOAPICReserveSpecialVectors(VOID)
+{
+   ULONG i;
+   ULONG ReservedVectors[MAX_IRQ_SOURCE];
+   ULONG ReservedCount = 0;
+
+   for (i = 0; i < IRQCount && ReservedCount < RTL_NUMBER_OF(ReservedVectors); i++)
+   {
+      if (IRQMap[i].IrqType == INT_NMI || IRQMap[i].IrqType == INT_EXTINT)
+      {
+         ReservedVectors[ReservedCount++] = IRQ2VECTOR(i);
+      }
+   }
+
+   if (ReservedCount > 0)
+      IopReserveIrqVectors(ReservedVectors, ReservedCount);
+}
+
 /*
  * Find the IRQ entry number of a certain pin.
  */
@@ -430,6 +450,8 @@ IOAPICEnable(VOID)
       tmp = IOAPICRead(i, IOAPIC_VER);
       IOAPICMap[i].EntryCount = GET_IOAPIC_MRE(tmp) + 1;
    }
+
+   IOAPICReserveSpecialVectors();
 
    /*
     * Do not trust the IO-APIC being empty at bootup

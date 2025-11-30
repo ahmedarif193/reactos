@@ -12,6 +12,8 @@
 #define NDEBUG
 #include <debug.h>
 
+static KAFFINITY IopNextMessageAffinity;
+
 FORCEINLINE
 PIO_RESOURCE_LIST
 IopGetNextResourceList(
@@ -185,14 +187,101 @@ IopFindDmaResource(
 
 static
 BOOLEAN
+IopSelectNextMessageAffinity(
+    OUT PKAFFINITY Affinity)
+{
+    KAFFINITY Active = KeQueryActiveProcessors();
+    KAFFINITY BitMask = 1;
+    KAFFINITY Candidate;
+
+    if (Active == 0)
+        Active = 1;
+
+    if ((IopNextMessageAffinity == 0) ||
+        !(IopNextMessageAffinity & Active))
+    {
+        while (BitMask && !(Active & BitMask))
+            BitMask <<= 1;
+        if (BitMask == 0)
+            BitMask = 1;
+        IopNextMessageAffinity = BitMask;
+        *Affinity = BitMask;
+        return TRUE;
+    }
+
+    Candidate = IopNextMessageAffinity;
+    do
+    {
+        Candidate <<= 1;
+        if (Candidate == 0)
+            break;
+    } while (!(Candidate & Active));
+
+    if (Candidate == 0 || !(Candidate & Active))
+    {
+        while (BitMask && !(Active & BitMask))
+            BitMask <<= 1;
+        if (BitMask == 0)
+            BitMask = 1;
+        Candidate = BitMask;
+    }
+
+    IopNextMessageAffinity = Candidate;
+    *Affinity = Candidate;
+    return TRUE;
+}
+
+static
+BOOLEAN
 IopFindInterruptResource(
     IN PIO_RESOURCE_DESCRIPTOR IoDesc,
     OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
 {
     ULONG Vector;
+    NTSTATUS Status;
 
     ASSERT(IoDesc->Type == CmDesc->Type);
     ASSERT(IoDesc->Type == CmResourceTypeInterrupt);
+
+    if (IoDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
+    {
+        USHORT MessageCount = (USHORT)(IoDesc->u.Interrupt.MaximumVector -
+                                       IoDesc->u.Interrupt.MinimumVector + 1);
+        ULONG StartVector;
+        KAFFINITY RequestedAffinity;
+
+        if (MessageCount == 0)
+            MessageCount = 1;
+
+        Status = IopAllocateIrqVectors(0,
+                                       MAXULONG,
+                                       MessageCount,
+                                       &StartVector);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("Failed to allocate %u message interrupt vectors (status 0x%08lx)\n",
+                    MessageCount,
+                    Status);
+            return FALSE;
+        }
+
+        RequestedAffinity = IoDesc->u.Interrupt.TargetedProcessors;
+        if (RequestedAffinity)
+            RequestedAffinity &= KeQueryActiveProcessors();
+        if (!RequestedAffinity)
+            IopSelectNextMessageAffinity(&RequestedAffinity);
+
+        CmDesc->u.MessageInterrupt.Raw.Reserved = 0;
+        CmDesc->u.MessageInterrupt.Raw.MessageCount = MessageCount;
+        CmDesc->u.MessageInterrupt.Raw.Vector = StartVector;
+        CmDesc->u.MessageInterrupt.Raw.Affinity = RequestedAffinity;
+
+        DPRINT1("Allocating message interrupt range %lu-%lu (count %u)\n",
+                StartVector,
+                StartVector + MessageCount - 1,
+                MessageCount);
+        return TRUE;
+    }
 
     for (Vector = IoDesc->u.Interrupt.MinimumVector;
          Vector <= IoDesc->u.Interrupt.MaximumVector;
@@ -239,6 +328,7 @@ IopFixupResourceListWithRequirements(
         if (OldCount == 0 && *ResourceList != NULL)
         {
             /* Just free it and kill the pointer */
+            IopReleaseMessageInterruptVectors(*ResourceList);
             ExFreePool(*ResourceList);
             *ResourceList = NULL;
         }
@@ -255,6 +345,7 @@ IopFixupResourceListWithRequirements(
                 return STATUS_NO_MEMORY;
 
             /* Copy the old stuff back */
+            IopReleaseMessageInterruptVectors(*ResourceList);
             RtlCopyMemory(NewList, *ResourceList, PnpDetermineResourceListSize(*ResourceList));
 
             /* Free the old one */
@@ -526,6 +617,7 @@ IopFixupResourceListWithRequirements(
                     NewList->List[0].PartialResourceList.Count++;
 
                     /* Free the old list */
+                    IopReleaseMessageInterruptVectors(*ResourceList);
                     ExFreePool(*ResourceList);
                 }
 
@@ -556,6 +648,7 @@ IopFixupResourceListWithRequirements(
     /* Free the list */
     if (*ResourceList)
     {
+        IopReleaseMessageInterruptVectors(*ResourceList);
         ExFreePool(*ResourceList);
         *ResourceList = NULL;
     }
@@ -587,12 +680,6 @@ IopCheckResourceDescriptor(
             /* Partial resource descriptors can be of variable size (CmResourceTypeDeviceSpecific),
                but only one is allowed and it must be the last one in the list! */
             PCM_PARTIAL_RESOURCE_DESCRIPTOR ResDesc2 = &ResList->PartialDescriptors[ii];
-
-            /* Only treat explicitly shared claimants as shareable.
-               DriverExclusive remains non-shareable to avoid hiding real conflicts. */
-            if ((ResDesc->ShareDisposition == CmResourceShareShared) &&
-                (ResDesc2->ShareDisposition == CmResourceShareShared))
-                continue;
 
             /* Make sure we're comparing the same types */
             if (ResDesc->Type != ResDesc2->Type)
@@ -668,8 +755,82 @@ IopCheckResourceDescriptor(
                 }
                 case CmResourceTypeInterrupt:
                 {
+                    BOOLEAN Msg1 = (ResDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) != 0;
+                    BOOLEAN Msg2 = (ResDesc2->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) != 0;
+
+                    if (Msg1 || Msg2)
+                    {
+                        ULONG v1 = Msg1 ? ResDesc->u.MessageInterrupt.Raw.Vector : ResDesc->u.Interrupt.Vector;
+                        ULONG v2 = Msg2 ? ResDesc2->u.MessageInterrupt.Raw.Vector : ResDesc2->u.Interrupt.Vector;
+                        ULONG c1 = Msg1 && ResDesc->u.MessageInterrupt.Raw.MessageCount ?
+                                   ResDesc->u.MessageInterrupt.Raw.MessageCount : 1;
+                        ULONG c2 = Msg2 && ResDesc2->u.MessageInterrupt.Raw.MessageCount ?
+                                   ResDesc2->u.MessageInterrupt.Raw.MessageCount : 1;
+                        KAFFINITY a1 = Msg1 ? ResDesc->u.MessageInterrupt.Raw.Affinity : ResDesc->u.Interrupt.Affinity;
+                        KAFFINITY a2 = Msg2 ? ResDesc2->u.MessageInterrupt.Raw.Affinity : ResDesc2->u.Interrupt.Affinity;
+                        BOOLEAN overlap = (v1 < (v2 + c2)) && (v2 < (v1 + c1));
+
+                        if (overlap && (!a1 || !a2 || (a1 & a2)))
+                        {
+                            if (!Silent)
+                            {
+                                DPRINT1("Resource conflict: Message IRQ (0x%x-0x%x vs. 0x%x-0x%x)\n",
+                                        v1, v1 + c1 - 1, v2, v2 + c2 - 1);
+                            }
+                            Result = TRUE;
+                            goto ByeBye;
+                        }
+                        break;
+                    }
+
                     if (ResDesc->u.Interrupt.Vector == ResDesc2->u.Interrupt.Vector)
                     {
+                        BOOLEAN Level1 = (ResDesc->Flags & CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE) != 0;
+                        BOOLEAN Level2 = (ResDesc2->Flags & CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE) != 0;
+
+                        /*
+                         * Level‑sensitive line interrupts are inherently shareable on
+                         * APIC systems. If the requester explicitly asked for a shared
+                         * level interrupt, allow it to share an existing level vector
+                         * even when the original claimant did not mark it shared.
+                         * This matches Windows behaviour on common PC/PCI platforms
+                         * and avoids spurious conflicts on ICH9/Q35 where multiple
+                         * PCI functions legitimately sit on the same GSI.
+                         */
+                        if (Level1 &&
+                            Level2 &&
+                            ResDesc->ShareDisposition == CmResourceShareShared)
+                        {
+                            if (!Silent)
+                            {
+                                DPRINT("Allowing shared level IRQ 0x%x (existing ShareDisposition=%lu)\n",
+                                       ResDesc->u.Interrupt.Vector,
+                                       ResDesc2->ShareDisposition);
+                            }
+                            break;
+                        }
+
+                        /*
+                         * ACPI firmware sometimes reports PCI GSIs as edge-triggered
+                         * even though IOAPIC wiring is level-sensitive. When both
+                         * claimants mark the interrupt shareable, permit the share
+                         * on IOAPIC systems to avoid starving PCI devices of an IRQ.
+                         */
+                        if (HalIsIoApicPresent() &&
+                            Level1 &&
+                            !Level2 &&
+                            (ResDesc->ShareDisposition == CmResourceShareShared) &&
+                            (ResDesc2->ShareDisposition == CmResourceShareShared) &&
+                            (ResDesc2->Flags & CM_RESOURCE_INTERRUPT_LATCHED))
+                        {
+                            if (!Silent)
+                            {
+                                DPRINT("Allowing shared level IRQ 0x%x despite latched peer (IOAPIC present)\n",
+                                       ResDesc->u.Interrupt.Vector);
+                            }
+                            break;
+                        }
+
                         /*
                          * PIC special-case: Allow IRQ9 (SCI) to be shared even when one
                          * side did not explicitly mark the descriptor as shared. On
@@ -1179,21 +1340,55 @@ IopTranslateDeviceResources(
             }
             case CmResourceTypeInterrupt:
             {
-               KIRQL Irql;
-               DescriptorTranslated->u.Interrupt.Vector = HalGetInterruptVector(
-                  DeviceNode->ResourceList->List[i].InterfaceType,
-                  DeviceNode->ResourceList->List[i].BusNumber,
-                  DescriptorRaw->u.Interrupt.Level,
-                  DescriptorRaw->u.Interrupt.Vector,
-                  &Irql,
-                  &DescriptorTranslated->u.Interrupt.Affinity);
-               DescriptorTranslated->u.Interrupt.Level = Irql;
-               if (!DescriptorTranslated->u.Interrupt.Vector)
+               if (DescriptorRaw->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
                {
-                   Status = STATUS_UNSUCCESSFUL;
-                   DPRINT1("Failed to translate interrupt resource (Vector: 0x%x | Level: 0x%x)\n", DescriptorRaw->u.Interrupt.Vector,
-                                                                                                   DescriptorRaw->u.Interrupt.Level);
-                   goto cleanup;
+                  KIRQL Irql;
+                  ULONG Vector;
+
+                  if (DescriptorRaw->u.MessageInterrupt.Raw.MessageCount == 0)
+                     DescriptorRaw->u.MessageInterrupt.Raw.MessageCount = 1;
+
+                  DescriptorTranslated->u.MessageInterrupt.Raw = DescriptorRaw->u.MessageInterrupt.Raw;
+
+                  Vector = DescriptorRaw->u.MessageInterrupt.Raw.Vector;
+                  if (Vector == 0)
+                     Vector = DescriptorRaw->u.Interrupt.Vector;
+                  if (Vector == 0)
+                     Vector = DescriptorRaw->u.Interrupt.Vector;
+
+                  DescriptorTranslated->u.MessageInterrupt.Translated.Vector = HalGetInterruptVector(
+                     DeviceNode->ResourceList->List[i].InterfaceType,
+                     DeviceNode->ResourceList->List[i].BusNumber,
+                     Vector,
+                     Vector,
+                     &Irql,
+                     &DescriptorTranslated->u.MessageInterrupt.Translated.Affinity);
+                  DescriptorTranslated->u.MessageInterrupt.Translated.Level = Irql;
+                  if (DescriptorTranslated->u.MessageInterrupt.Translated.Vector == 0)
+                  {
+                     DescriptorTranslated->u.MessageInterrupt.Translated.Vector = Vector;
+                     DescriptorTranslated->u.MessageInterrupt.Translated.Level = DISPATCH_LEVEL;
+                     DescriptorTranslated->u.MessageInterrupt.Translated.Affinity = KeActiveProcessors;
+                  }
+               }
+               else
+               {
+                  KIRQL Irql;
+                  DescriptorTranslated->u.Interrupt.Vector = HalGetInterruptVector(
+                     DeviceNode->ResourceList->List[i].InterfaceType,
+                     DeviceNode->ResourceList->List[i].BusNumber,
+                     DescriptorRaw->u.Interrupt.Level,
+                     DescriptorRaw->u.Interrupt.Vector,
+                     &Irql,
+                     &DescriptorTranslated->u.Interrupt.Affinity);
+                  DescriptorTranslated->u.Interrupt.Level = Irql;
+                  if (!DescriptorTranslated->u.Interrupt.Vector)
+                  {
+                      Status = STATUS_UNSUCCESSFUL;
+                      DPRINT1("Failed to translate interrupt resource (Vector: 0x%x | Level: 0x%x)\n", DescriptorRaw->u.Interrupt.Vector,
+                                                                                                      DescriptorRaw->u.Interrupt.Level);
+                      goto cleanup;
+                  }
                }
                break;
             }

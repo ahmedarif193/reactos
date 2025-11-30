@@ -464,7 +464,6 @@ MiFreeContiguousMemory(IN PVOID BaseAddress)
     PFN_NUMBER PageFrameIndex, LastPage, PageCount;
     PMMPFN Pfn1, StartPfn;
     PMMPTE PointerPte;
-    PAGED_CODE();
 
     //
     // First, check if the memory came from initial nonpaged pool, or expansion

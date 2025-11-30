@@ -28,6 +28,7 @@ volume.inf
 audio.inf
 ks.inf
 c_image.inf
+usbvideo.inf
 
 [Infs.Always]
 syssetup.inf,EarlyPhaseSetup

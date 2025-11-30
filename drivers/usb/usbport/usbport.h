@@ -14,6 +14,7 @@
 #include <wdmguid.h>
 #include <ntstrsafe.h>
 #include <usb.h>
+#include <usbioctl.h>
 #include <hubbusif.h>
 #include <usbbusif.h>
 #include <usbdlib.h>
@@ -61,6 +62,20 @@
 #define USB_PORT_TAG 'pbsu'
 /* Highest URB function code we recognize (Win8+ stream/chained MDL included). */
 #define URB_FUNCTION_MAX 0x38
+#define USBPORT_DEFAULT_ISOCH_PATH_DELAY_MS 1
+
+typedef struct _USBPORT_TRANSPORT_REGISTRATION {
+  LIST_ENTRY ListEntry;
+  USB_CHANGE_REGISTRATION_HANDLE Handle;
+  ULONG Flags;
+  PIRP PendingIrp;
+} USBPORT_TRANSPORT_REGISTRATION, *PUSBPORT_TRANSPORT_REGISTRATION;
+
+typedef struct _USBPORT_TIMESYNC_CONTEXT {
+  LIST_ENTRY ListEntry;
+  HANDLE Handle;
+  ULONG GenerationID;
+} USBPORT_TIMESYNC_CONTEXT, *PUSBPORT_TIMESYNC_CONTEXT;
 
 /* Hub Class Feature Selectors (Recipient - Port) */
 #define FEATURE_PORT_CONNECTION     0
@@ -465,9 +480,27 @@ typedef struct _USBPORT_DEVICE_EXTENSION {
 
   /* Miniport extension should be aligned on 0x100 */
 #if !defined(_M_X64)
-  ULONG Padded[58];
+  union {
+    ULONG Padded[58];
+    struct {
+      LIST_ENTRY TransportRegistrationList;
+      KSPIN_LOCK TransportListSpinLock;
+      LIST_ENTRY TimeSyncTrackingList;
+      KSPIN_LOCK TimeSyncSpinLock;
+      ULONG NextTimeSyncId;
+    } Aux;
+  };
 #else
-  ULONG Padded[21];
+  union {
+    ULONG Padded[21];
+    struct {
+      LIST_ENTRY TransportRegistrationList;
+      KSPIN_LOCK TransportListSpinLock;
+      LIST_ENTRY TimeSyncTrackingList;
+      KSPIN_LOCK TimeSyncSpinLock;
+      ULONG NextTimeSyncId;
+    } Aux;
+  };
 #endif
 
 } USBPORT_DEVICE_EXTENSION, *PUSBPORT_DEVICE_EXTENSION;
@@ -1418,6 +1451,25 @@ USBPORT_AbortEndpoint(
   IN PDEVICE_OBJECT FdoDevice,
   IN PUSBPORT_ENDPOINT Endpoint,
   IN PIRP Irp);
+
+VOID
+NTAPI
+USBPORT_SignalTransportChange(
+  IN PUSBPORT_DEVICE_EXTENSION FdoExtension,
+  IN ULONG ChangeFlags);
+
+VOID
+NTAPI
+USBPORT_CompleteTransportNotificationIrp(
+  IN PUSBPORT_DEVICE_EXTENSION FdoExtension,
+  IN PIRP Irp,
+  IN NTSTATUS Status,
+  IN BOOLEAN UpdateData);
+
+VOID
+NTAPI
+USBPORT_InvalidateTimeSyncGeneration(
+  IN PUSBPORT_DEVICE_EXTENSION FdoExtension);
 
 /* roothub.c */
 VOID

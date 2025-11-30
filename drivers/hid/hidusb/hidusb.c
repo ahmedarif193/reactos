@@ -56,6 +56,9 @@ HidUsb_GetPortStatus(
     //
     DeviceExtension = DeviceObject->DeviceExtension;
 
+    DPRINT1("[HIDUSB] GetPortStatus: DevObj %p Next %p\n",
+            DeviceObject, DeviceExtension->NextDeviceObject);
+
     //
     // init result
     //
@@ -112,6 +115,8 @@ HidUsb_GetPortStatus(
     //
     // done
     //
+    DPRINT1("[HIDUSB] GetPortStatus: completed with Status %x PortStatus %x\n",
+            Status, *PortStatus);
     return Status;
 }
 
@@ -290,6 +295,8 @@ HidUsb_ResetPort(
     //
     // done
     //
+    DPRINT1("[HIDUSB] ResetPort: completed with Status %x\n",
+            IoStatusBlock.Status);
     return IoStatusBlock.Status;
 }
 
@@ -340,7 +347,7 @@ HidUsb_ResetWorkerRoutine(
     PHID_USB_RESET_CONTEXT ResetContext;
     PHID_DEVICE_EXTENSION DeviceExtension;
 
-    DPRINT("[HIDUSB] ResetWorkerRoutine\n");
+    DPRINT1("[HIDUSB] ResetWorkerRoutine: DevObj %p\n", DeviceObject);
 
     //
     // get context
@@ -356,7 +363,8 @@ HidUsb_ResetWorkerRoutine(
     // get port status
     //
     Status = HidUsb_GetPortStatus(ResetContext->DeviceObject, &PortStatus);
-    DPRINT("[HIDUSB] ResetWorkerRoutine GetPortStatus %x PortStatus %x\n", Status, PortStatus);
+    DPRINT1("[HIDUSB] ResetWorkerRoutine: GetPortStatus Status %x PortStatus %x\n",
+            Status, PortStatus);
     if (NT_SUCCESS(Status))
     {
         if (!(PortStatus & USB_PORT_STATUS_ENABLE))
@@ -365,7 +373,8 @@ HidUsb_ResetWorkerRoutine(
             // port is disabled
             //
             Status = HidUsb_ResetInterruptPipe(ResetContext->DeviceObject);
-            DPRINT1("[HIDUSB] ResetWorkerRoutine ResetPipe %x\n", Status);
+            DPRINT1("[HIDUSB] ResetWorkerRoutine: ResetPipe (disabled) Status %x\n",
+                    Status);
         }
         else
         {
@@ -373,14 +382,16 @@ HidUsb_ResetWorkerRoutine(
             // abort pipe
             //
             Status = HidUsb_AbortPipe(ResetContext->DeviceObject);
-            DPRINT1("[HIDUSB] ResetWorkerRoutine AbortPipe %x\n", Status);
+            DPRINT1("[HIDUSB] ResetWorkerRoutine: AbortPipe Status %x\n",
+                    Status);
             if (NT_SUCCESS(Status))
             {
                 //
                 // reset port
                 //
                 Status = HidUsb_ResetPort(ResetContext->DeviceObject);
-                DPRINT1("[HIDUSB] ResetPort %x\n", Status);
+                DPRINT1("[HIDUSB] ResetWorkerRoutine: ResetPort Status %x\n",
+                        Status);
                 if (Status == STATUS_DEVICE_DATA_ERROR)
                 {
                     //
@@ -398,7 +409,8 @@ HidUsb_ResetWorkerRoutine(
                     // reset pipe
                     //
                     Status = HidUsb_ResetInterruptPipe(ResetContext->DeviceObject);
-                    DPRINT1("[HIDUSB] ResetWorkerRoutine ResetPipe %x\n", Status);
+                    DPRINT1("[HIDUSB] ResetWorkerRoutine: ResetPipe (after reset) Status %x\n",
+                            Status);
                 }
             }
         }
@@ -408,6 +420,7 @@ HidUsb_ResetWorkerRoutine(
     // cleanup
     //
     ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    DPRINT1("[HIDUSB] ResetWorkerRoutine: completion, Irp %p\n", ResetContext->Irp);
     IoFreeWorkItem(ResetContext->WorkItem);
     IoCompleteRequest(ResetContext->Irp, IO_NO_INCREMENT);
     ExFreePoolWithTag(ResetContext, HIDUSB_TAG);

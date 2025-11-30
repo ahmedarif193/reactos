@@ -2692,10 +2692,19 @@ BOOLEAN NTAPI RtlFreeHeap(
             (HeapEntry->SegmentOffset >= HEAP_SEGMENTS))
         {
             /* This is an invalid block */
-            PVOID CallersAddress = NULL, CallersCaller = NULL;
-            RtlCaptureStackBackTrace(1, 1, &CallersAddress, NULL);
-            DPRINT1("HEAP: Trying to free an invalid address %p (caller %p)!\n",
-                    Ptr, CallersAddress);
+            PVOID CallersAddress = NULL;
+            PVOID ImageBase = NULL;
+            ULONG_PTR Offset = 0;
+
+            /* Skip RtlFreeHeap and its immediate caller (HeapFree wrapper) */
+            RtlCaptureStackBackTrace(2, 1, &CallersAddress, NULL);
+            if (CallersAddress && RtlPcToFileHeader(CallersAddress, &ImageBase) && ImageBase)
+            {
+                Offset = (ULONG_PTR)CallersAddress - (ULONG_PTR)ImageBase;
+            }
+
+            DPRINT1("HEAP: Trying to free an invalid address %p (caller %p, module %p, offset 0x%Ix)!\n",
+                    Ptr, CallersAddress, ImageBase, Offset);
             RtlSetLastWin32ErrorAndNtStatusFromNtStatus(STATUS_INVALID_PARAMETER);
             _SEH2_YIELD(return FALSE);
         }
@@ -2704,9 +2713,17 @@ BOOLEAN NTAPI RtlFreeHeap(
     {
         /* The pointer was invalid */
         PVOID CallersAddress = NULL;
-        RtlCaptureStackBackTrace(1, 1, &CallersAddress, NULL);
-        DPRINT1("HEAP: Trying to free an invalid address %p (exception, caller %p)!\n",
-                Ptr, CallersAddress);
+        PVOID ImageBase = NULL;
+        ULONG_PTR Offset = 0;
+
+        RtlCaptureStackBackTrace(2, 1, &CallersAddress, NULL);
+        if (CallersAddress && RtlPcToFileHeader(CallersAddress, &ImageBase) && ImageBase)
+        {
+            Offset = (ULONG_PTR)CallersAddress - (ULONG_PTR)ImageBase;
+        }
+
+        DPRINT1("HEAP: Trying to free an invalid address %p (exception, caller %p, module %p, offset 0x%Ix)!\n",
+                Ptr, CallersAddress, ImageBase, Offset);
         RtlSetLastWin32ErrorAndNtStatusFromNtStatus(STATUS_INVALID_PARAMETER);
         _SEH2_YIELD(return FALSE);
     }

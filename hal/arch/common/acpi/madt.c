@@ -16,6 +16,7 @@
 
 #define NDEBUG
 #include <debug.h>
+extern VOID NTAPI IopReserveIrqVectors(_In_reads_(Count) PULONG Vectors, _In_ ULONG Count);
 
 static
 UCHAR
@@ -245,6 +246,7 @@ HalpParseApicTables(
             {
                 ACPI_MADT_INTERRUPT_OVERRIDE *InterruptOverride =
                     (ACPI_MADT_INTERRUPT_OVERRIDE *)AcpiHeader;
+                ULONG OverrideVector;
 
                 if (AcpiHeader->Length != sizeof(*InterruptOverride))
                 {
@@ -273,6 +275,20 @@ HalpParseApicTables(
 
                 // Note: GlobalIrq is not validated in any way (yet).
                 HalpPicVectorRedirect[InterruptOverride->SourceIrq] = InterruptOverride->GlobalIrq;
+
+                /* Reserve the override GSI so it won't be allocated */
+                OverrideVector = InterruptOverride->GlobalIrq;
+                if (OverrideVector < 256)
+                {
+                    DPRINT("Reserving override GSI %lu for SourceIrq %u\n",
+                           OverrideVector,
+                           InterruptOverride->SourceIrq);
+                    IopReserveIrqVectors(&OverrideVector, 1);
+                }
+                else
+                {
+                    DPRINT1("Override GSI %lu outside arbiter range; not reserved\n", OverrideVector);
+                }
 
                 {
                     UCHAR Polarity;

@@ -28,4 +28,3 @@ HalpAcpiAccessConfigEcam(BOOLEAN Write, USHORT Segment, ULONG BusNumber,
     InterlockedOr(&HalpAcpiEcamCoverageFlags, HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL);
     return FALSE;
 }
-

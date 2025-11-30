@@ -9,9 +9,62 @@
 
 #define NDEBUG
 #include <debug.h>
-
 #define NDEBUG_USBPORT_URB
 #include "usbdebug.h"
+
+static
+ULONG
+USBPORT_GetIsoPathDelay(
+    IN PUSBPORT_DEVICE_EXTENSION FdoExtension,
+    IN PUSBPORT_ENDPOINT Endpoint)
+{
+    ULONG Delay;
+    ULONG MiniportFlags = 0;
+
+    if (FdoExtension->MiniPortInterface)
+    {
+        MiniportFlags = FdoExtension->MiniPortInterface->Packet.MiniPortFlags;
+    }
+
+    if (MiniportFlags & USB_MINIPORT_FLAGS_USB3)
+    {
+        return 0;
+    }
+
+    Delay = USBPORT_DEFAULT_ISOCH_PATH_DELAY_MS;
+
+    if (!Endpoint)
+        return Delay;
+
+    switch (Endpoint->EndpointProperties.DeviceSpeed)
+    {
+        case UsbSuperSpeed:
+            Delay = 0;
+            break;
+
+        case UsbHighSpeed:
+            if (FdoExtension->Usb2Extension)
+                Delay = FdoExtension->Usb2Extension->HcDelayTime;
+            else
+                Delay = 1;
+            break;
+
+        default:
+            Delay = 2;
+            if (Endpoint->TtExtension)
+                Delay += Endpoint->TtExtension->Tt.DelayTime;
+            else if (FdoExtension->Usb2Extension)
+                Delay += FdoExtension->Usb2Extension->HcDelayTime;
+            else
+                Delay += USBPORT_DEFAULT_ISOCH_PATH_DELAY_MS;
+            break;
+    }
+
+    if (Delay == 0)
+        Delay = USBPORT_DEFAULT_ISOCH_PATH_DELAY_MS;
+
+    return Delay;
+}
 
 NTSTATUS
 NTAPI
@@ -62,6 +115,38 @@ USBPORT_HandleGetCurrentFrame(IN PDEVICE_OBJECT FdoDevice,
 
     DPRINT_URB("USBPORT_HandleGetCurrentFrame: FrameNumber - %p\n",
                FrameNumber);
+
+    return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_SUCCESS);
+}
+
+NTSTATUS
+NTAPI
+USBPORT_HandleGetIsochPipeDelays(IN PURB Urb)
+{
+    PUSBPORT_PIPE_HANDLE PipeHandle;
+    PUSBPORT_ENDPOINT Endpoint;
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    ULONG Delay;
+
+    PipeHandle = Urb->UrbGetIsochPipeTransferPathDelays.PipeHandle;
+    if (!PipeHandle || !PipeHandle->Endpoint)
+    {
+        return USBPORT_USBDStatusToNtStatus(Urb,
+                                            USBD_STATUS_INVALID_PIPE_HANDLE);
+    }
+
+    Endpoint = PipeHandle->Endpoint;
+    if (Endpoint->EndpointProperties.TransferType != USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
+    {
+        return USBPORT_USBDStatusToNtStatus(Urb,
+                                            USBD_STATUS_INVALID_PIPE_HANDLE);
+    }
+
+    FdoExtension = Endpoint->FdoDevice->DeviceExtension;
+    Delay = USBPORT_GetIsoPathDelay(FdoExtension, Endpoint);
+
+    Urb->UrbGetIsochPipeTransferPathDelays.MaximumSendPathDelayInMilliSeconds = Delay;
+    Urb->UrbGetIsochPipeTransferPathDelays.MaximumCompletionPathDelayInMilliSeconds = Delay;
 
     return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_SUCCESS);
 }
@@ -1034,6 +1119,10 @@ USBPORT_HandleSubmitURB(IN PDEVICE_OBJECT PdoDevice,
             Status = USBPORT_HandleGetCurrentFrame(PdoExtension->FdoDevice,
                                                    Irp,
                                                    Urb);
+            break;
+
+        case URB_FUNCTION_GET_ISOCH_PIPE_TRANSFER_PATH_DELAYS:
+            Status = USBPORT_HandleGetIsochPipeDelays(Urb);
             break;
 
         case URB_FUNCTION_TAKE_FRAME_LENGTH_CONTROL:

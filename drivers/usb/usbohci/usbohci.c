@@ -835,6 +835,8 @@ OHCI_StartController(IN PVOID ohciExtension,
     Interrupts.UnrecoverableError = 1;
     Interrupts.FrameNumberOverflow = 1;
     Interrupts.OwnershipChange = 1;
+    Interrupts.RootHubStatusChange = 1;
+    Interrupts.MasterInterruptEnable = 1;
 
     WRITE_REGISTER_ULONG(InterruptEnableReg, Interrupts.AsULONG);
 
@@ -2501,6 +2503,22 @@ OHCI_FlushInterrupts(IN PVOID uhciExtension)
     return;
 }
 
+BOOLEAN
+NTAPI
+OHCI_QueryPortAttributes(IN PVOID ohciExtension,
+                         IN USHORT Port,
+                         OUT PULONG Attributes)
+{
+    UNREFERENCED_PARAMETER(ohciExtension);
+    UNREFERENCED_PARAMETER(Port);
+
+    if (!Attributes)
+        return FALSE;
+
+    *Attributes = 0;
+    return FALSE;
+}
+
 NTSTATUS
 NTAPI
 DriverEntry(IN PDRIVER_OBJECT DriverObject,
@@ -2574,6 +2592,7 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
     RegPacket.EndSendOnePacket = OHCI_EndSendOnePacket;
     RegPacket.PassThru = OHCI_PassThru;
     RegPacket.FlushInterrupts = OHCI_FlushInterrupts;
+    RegPacket.QueryPortAttributes = OHCI_QueryPortAttributes;
 
     DriverObject->DriverUnload = OHCI_Unload;
 
