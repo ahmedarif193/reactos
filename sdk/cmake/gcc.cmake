@@ -54,9 +54,9 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_SYSTEM_NAME STREQUAL "Windows"
     if(NOT "${_ROS_LD_PATH}" STREQUAL "")
         get_filename_component(_ROS_LD_BASENAME "${_ROS_LD_PATH}" NAME)
         string(TOLOWER "${_ROS_LD_BASENAME}" _ROS_LD_BASENAME)
-        if(_ROS_LD_BASENAME MATCHES "^ld\\.lld(\\.exe)?$"
-           OR _ROS_LD_BASENAME MATCHES "^lld-link(\\.exe)?$"
-           OR _ROS_LD_BASENAME MATCHES "^lld(\\.exe)?$")
+        if(_ROS_LD_BASENAME MATCHES "^ld\\.lld(-[0-9.]+)?(\\.exe)?$"
+           OR _ROS_LD_BASENAME MATCHES "^lld-link(-[0-9.]+)?(\\.exe)?$"
+           OR _ROS_LD_BASENAME MATCHES "^lld(-[0-9.]+)?(\\.exe)?$")
             set(REACTOS_TARGET_LINKER_IS_LLD TRUE)
             set(REACTOS_LINKER_SUPPORTS_GNU_SCRIPTS FALSE)
         endif()
@@ -69,7 +69,7 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_SYSTEM_NAME STREQUAL "Windows"
             "${CMAKE_MODULE_LINKER_FLAGS}" "${CMAKE_MODULE_LINKER_FLAGS_INIT}")
         set(_ROS_LD_HINT "")
         foreach(_ROS_FLAG ${_ROS_LD_FLAG_SOURCES})
-            if(_ROS_FLAG MATCHES "-fuse-ld=([^ \"']+)")
+            if(_ROS_FLAG MATCHES "-fuse-ld=\"?([^ \"']+)\"?")
                 set(_ROS_LD_HINT "${CMAKE_MATCH_1}")
                 break()
             endif()
@@ -80,9 +80,9 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_SYSTEM_NAME STREQUAL "Windows"
                 set(_ROS_LD_BASENAME "${_ROS_LD_HINT}")
             endif()
             string(TOLOWER "${_ROS_LD_BASENAME}" _ROS_LD_BASENAME)
-            if(_ROS_LD_BASENAME MATCHES "^ld\\.lld(\\.exe)?$"
-               OR _ROS_LD_BASENAME MATCHES "^lld-link(\\.exe)?$"
-               OR _ROS_LD_BASENAME MATCHES "^lld(\\.exe)?$")
+            if(_ROS_LD_BASENAME MATCHES "^ld\\.lld(-[0-9.]+)?(\\.exe)?$"
+               OR _ROS_LD_BASENAME MATCHES "^lld-link(-[0-9.]+)?(\\.exe)?$"
+               OR _ROS_LD_BASENAME MATCHES "^lld(-[0-9.]+)?(\\.exe)?$")
                 set(REACTOS_TARGET_LINKER_IS_LLD TRUE)
                 set(REACTOS_LINKER_SUPPORTS_GNU_SCRIPTS FALSE)
             endif()

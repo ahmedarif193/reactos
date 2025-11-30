@@ -1,4 +1,3 @@
-
 if(DEFINED ENV{_ROSBE_ROSSCRIPTDIR})
     set(CMAKE_SYSROOT $ENV{_ROSBE_ROSSCRIPTDIR}/$ENV{ROS_ARCH})
 endif()
@@ -25,6 +24,7 @@ set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
 
 # The name of the target operating system
 set(CMAKE_SYSTEM_NAME Windows)
+
 # The processor we are targeting
 if (ARCH STREQUAL "i386")
     set(CMAKE_SYSTEM_PROCESSOR i686)
@@ -38,11 +38,10 @@ else()
     message(FATAL_ERROR "Unsupported ARCH: ${ARCH}")
 endif()
 
-if (DEFINED CLANG_VERSION)
-    set(CLANG_SUFFIX "-${CLANG_VERSION}")
-else()
-    set(CLANG_SUFFIX "")
+if(NOT DEFINED CLANG_VERSION OR "${CLANG_VERSION}" STREQUAL "")
+    set(CLANG_VERSION "19")
 endif()
+set(CLANG_SUFFIX "-${CLANG_VERSION}")
 
 # Which tools to use
 set(triplet ${CMAKE_SYSTEM_PROCESSOR}-w64-mingw32)
@@ -131,41 +130,83 @@ set(CMAKE_ASM_CREATE_STATIC_LIBRARY "${_REACTOS_CREATE_STATIC_LIBRARY}")
 unset(_REACTOS_CREATE_STATIC_LIBRARY)
 
 # Do not inject generic -lgcc/-lgcc_eh here: it can pull in host libgcc
-# and clash with the MinGW toolchain libraries selected below. Our build
-# system already links the correct libgcc/libgcc_eh via imported targets
-# (see sdk/cmake/gcc.cmake). Leave the standard libraries empty.
+# and clash with the MinGW toolchain libraries selected below.
 set(CMAKE_C_STANDARD_LIBRARIES "" CACHE STRING "Standard C Libraries")
 set(CMAKE_CXX_STANDARD_LIBRARIES "" CACHE STRING "Standard C++ Libraries")
 
-set(_CLANG_MINGW_LINKER_NAME "${_CLANG_MINGW_PREFIX}ld${_CLANG_MINGW_SUFFIX}")
+unset(LD_EXECUTABLE CACHE)
 set(LD_EXECUTABLE "")
-if(DEFINED CMAKE_LINKER AND NOT "${CMAKE_LINKER}" STREQUAL "")
-    # CMake seeds CMAKE_LINKER with the host default (usually ld.lld) before
-    # the toolchain file runs.  Only reuse it when the user already pointed it
-    # at the MinGW linker we are about to look for; otherwise fall back to the
-    # auto-detection below so we do not silently keep using the host linker and
-    # lose support for linker scripts ("-T").
-    get_filename_component(_clang_existing_linker_name "${CMAKE_LINKER}" NAME)
-    if(_clang_existing_linker_name STREQUAL "${_CLANG_MINGW_LINKER_NAME}")
-        set(LD_EXECUTABLE "${CMAKE_LINKER}")
-    endif()
+set(_CLANG_MINGW_USE_FUSE_LD OFF)
+set(_CLANG_MINGW_LINKER_KIND "")
+
+# Clang builds prefer lld. ReactOS bundles versioned binaries (lld-<version>, ld.lld-<version>),
+# so we locate the requested version directly and fall back to MinGW binutils only if needed.
+set(_CLANG_MINGW_LLD_CANDIDATES
+    ld.lld-${CLANG_VERSION}
+    lld-${CLANG_VERSION}
+    lld-link-${CLANG_VERSION}
+    ld.lld
+    lld)
+
+if(DEFINED TOOLCHAIN_PATH AND NOT "${TOOLCHAIN_PATH}" STREQUAL "")
+    foreach(_clang_linker_name IN LISTS _CLANG_MINGW_LLD_CANDIDATES)
+        set(_clang_tool_linker "${TOOLCHAIN_PATH}/${_clang_linker_name}")
+        if(EXISTS "${_clang_tool_linker}")
+            set(LD_EXECUTABLE "${_clang_tool_linker}")
+            break()
+        endif()
+    endforeach()
+    unset(_clang_tool_linker)
 endif()
-if(NOT LD_EXECUTABLE AND DEFINED TOOLCHAIN_PATH AND NOT "${TOOLCHAIN_PATH}" STREQUAL "")
-    set(_clang_mingw_toolchain_linker "${TOOLCHAIN_PATH}/${_CLANG_MINGW_LINKER_NAME}")
-    if(EXISTS "${_clang_mingw_toolchain_linker}")
-        set(LD_EXECUTABLE "${_clang_mingw_toolchain_linker}")
+
+# Handle system LLVM installs such as /usr/lib/llvm-19/bin/ld.lld
+if(NOT LD_EXECUTABLE)
+    set(_clang_system_lld "/usr/lib/llvm-${CLANG_VERSION}/bin/ld.lld")
+    if(EXISTS "${_clang_system_lld}")
+        set(LD_EXECUTABLE "${_clang_system_lld}")
     endif()
-    unset(_clang_mingw_toolchain_linker)
+    unset(_clang_system_lld)
 endif()
+
 if(NOT LD_EXECUTABLE)
     find_program(LD_EXECUTABLE
-        NAMES ${_CLANG_MINGW_LINKER_NAME}
+        NAMES ${_CLANG_MINGW_LLD_CANDIDATES}
+        HINTS
+            "/usr/lib/llvm-${CLANG_VERSION}/bin"
+            "/usr/lib/llvm-${CLANG_VERSION}"
+            "/usr/lib/llvm/bin"
+            "/usr/lib/llvm"
+            "/usr/bin"
+            "/usr/local/bin"
+            "C:/Program Files/LLVM/bin"
+            "C:/Program Files (x86)/LLVM/bin"
+        NO_CMAKE_FIND_ROOT_PATH)
+endif()
+
+if(LD_EXECUTABLE)
+    set(_CLANG_MINGW_USE_FUSE_LD ON)
+    set(_CLANG_MINGW_LINKER_KIND "lld")
+else()
+    set(_CLANG_MINGW_BINUTILS_CANDIDATES
+        ${_CLANG_MINGW_PREFIX}ld${_CLANG_MINGW_SUFFIX}
+        ${_CLANG_MINGW_PREFIX}ld.bfd${_CLANG_MINGW_SUFFIX}
+        ${_CLANG_MINGW_PREFIX}ld.gold${_CLANG_MINGW_SUFFIX})
+    find_program(LD_EXECUTABLE
+        NAMES ${_CLANG_MINGW_BINUTILS_CANDIDATES}
         ${_CLANG_MINGW_TOOL_HINT_ARGS})
-    if(NOT LD_EXECUTABLE)
-        message(FATAL_ERROR "Unable to find ${_CLANG_MINGW_LINKER_NAME}")
+    if(LD_EXECUTABLE)
+        set(_CLANG_MINGW_USE_FUSE_LD ON)
+        set(_CLANG_MINGW_LINKER_KIND "binutils")
+    else()
+        message(FATAL_ERROR
+            "LLVM lld-${CLANG_VERSION} not found and no MinGW binutils linker is available. "
+            "Install the matching lld package or ensure GNU ld is on PATH/TOOLCHAIN_PATH.")
     endif()
 endif()
-message(STATUS "Using linker ${LD_EXECUTABLE}")
+
+unset(_CLANG_MINGW_BINUTILS_CANDIDATES)
+
+message(STATUS "Using linker ${LD_EXECUTABLE} (${_CLANG_MINGW_LINKER_KIND})")
 set(CMAKE_LINKER "${LD_EXECUTABLE}" CACHE FILEPATH "Linker executable" FORCE)
 
 set(_CLANG_MINGW_LINKER_FLAG_VARS
@@ -182,17 +223,40 @@ if(_CLANG_MINGW_TOOL_DIR)
     list(REMOVE_DUPLICATES _CLANG_MINGW_TOOL_HINT_DIRS)
     _clang_mingw_refresh_hint_args()
 endif()
+
 if(_CLANG_MINGW_TOOL_DIR)
     foreach(_clang_flag_var ${_CLANG_MINGW_LINKER_FLAG_VARS})
         string(APPEND ${_clang_flag_var} " -B\"${_CLANG_MINGW_TOOL_DIR}\"")
     endforeach()
 endif()
-set(_CLANG_MINGW_FUSE_LD_ARG "${LD_EXECUTABLE}")
-foreach(_clang_flag_var ${_CLANG_MINGW_LINKER_FLAG_VARS})
-    string(APPEND ${_clang_flag_var} " -fuse-ld=\"${_CLANG_MINGW_FUSE_LD_ARG}\"")
-endforeach()
+
+# Force clang to use the detected linker binary; map to a name clang accepts
+if(_CLANG_MINGW_USE_FUSE_LD)
+    if(_CLANG_MINGW_LINKER_KIND STREQUAL "lld")
+        set(_CLANG_MINGW_FUSE_LD_ARG "lld")
+    else()
+        get_filename_component(_clang_linker_name "${LD_EXECUTABLE}" NAME)
+        if(_clang_linker_name MATCHES "ld.gold")
+            set(_CLANG_MINGW_FUSE_LD_ARG "gold")
+        elseif(_clang_linker_name MATCHES "ld.bfd")
+            set(_CLANG_MINGW_FUSE_LD_ARG "bfd")
+        else()
+            set(_CLANG_MINGW_FUSE_LD_ARG "ld")
+        endif()
+        unset(_clang_linker_name)
+    endif()
+    foreach(_clang_flag_var ${_CLANG_MINGW_LINKER_FLAG_VARS})
+        string(APPEND ${_clang_flag_var} " -fuse-ld=\"${_CLANG_MINGW_FUSE_LD_ARG}\"")
+    endforeach()
+endif()
+
+unset(_CLANG_MINGW_USE_FUSE_LD)
 unset(_CLANG_MINGW_FUSE_LD_ARG)
-unset(_CLANG_MINGW_LINKER_FLAG_VARS)
+unset(_CLANG_MINGW_LLD_CANDIDATES)
+unset(_CLANG_MINGW_BINUTILS_LINKER_NAME)
+unset(_CLANG_MINGW_LINKER_KIND)
+unset(_clang_existing_linker_name)
+unset(_clang_linker_index)
 
 macro(_clang_mingw_require_tool _out_var _tool_name)
     find_program(${_out_var}
@@ -213,7 +277,6 @@ _clang_mingw_require_tool(_CLANG_MINGW_DLLTOOL "dlltool")
 set(CMAKE_DLLTOOL ${_CLANG_MINGW_DLLTOOL} CACHE FILEPATH "MinGW dlltool" FORCE)
 _clang_mingw_require_tool(_CLANG_MINGW_AR "ar")
 # Always use binutils from the MinGW toolchain for archive creation.
-# This avoids incompatibilities with llvm-dlltool option handling.
 set(CMAKE_AR ${_CLANG_MINGW_AR} CACHE FILEPATH "MinGW archiver" FORCE)
 _clang_mingw_require_tool(_CLANG_MINGW_OBJCOPY "objcopy")
 set(CMAKE_OBJCOPY ${_CLANG_MINGW_OBJCOPY} CACHE FILEPATH "MinGW objcopy" FORCE)
