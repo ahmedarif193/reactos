@@ -29,42 +29,49 @@ static volatile LONG IopArbIrqInitState;
 
 static
 VOID
-IopArbIrqEnsureInitialized(VOID)
+IopArbIrqInitializeBitmap(VOID)
 {
     KIRQL OldIrql;
 
-    while (TRUE)
+    KeInitializeSpinLock(&IopArbIrqLock);
+    RtlInitializeBitMap(&IopArbIrqBitmap,
+                        IopArbIrqBitmapBuffer,
+                        IOP_ARB_IRQ_BITMAP_BITS);
+    RtlClearAllBits(&IopArbIrqBitmap);
+
+    KeAcquireSpinLock(&IopArbIrqLock, &OldIrql);
+    IopArbIrqMarkReservedLocked();
+    DPRINT1("IRQ Arbiter init: bitmap bits=%lu\n",
+            IopArbIrqBitmap.SizeOfBitMap);
+    KeReleaseSpinLock(&IopArbIrqLock, OldIrql);
+}
+
+VOID
+NTAPI
+IopArbIrqEarlyInit(VOID)
+{
+    LONG State;
+
+    State = InterlockedCompareExchange(&IopArbIrqInitState,
+                                       IOP_ARB_IRQ_INIT_IN_PROGRESS,
+                                       IOP_ARB_IRQ_INIT_NOT_STARTED);
+    if (State == IOP_ARB_IRQ_INIT_DONE)
     {
-        LONG State = IopArbIrqInitState;
-        if (State == IOP_ARB_IRQ_INIT_DONE)
-            return;
-
-        if (State == IOP_ARB_IRQ_INIT_NOT_STARTED)
-        {
-            if (InterlockedCompareExchange(&IopArbIrqInitState,
-                                           IOP_ARB_IRQ_INIT_IN_PROGRESS,
-                                           IOP_ARB_IRQ_INIT_NOT_STARTED) ==
-                IOP_ARB_IRQ_INIT_NOT_STARTED)
-            {
-                KeInitializeSpinLock(&IopArbIrqLock);
-                RtlInitializeBitMap(&IopArbIrqBitmap,
-                                    IopArbIrqBitmapBuffer,
-                                    IOP_ARB_IRQ_BITMAP_BITS);
-                RtlClearAllBits(&IopArbIrqBitmap);
-
-                KeAcquireSpinLock(&IopArbIrqLock, &OldIrql);
-                IopArbIrqMarkReservedLocked();
-                DPRINT1("IRQ Arbiter init: bitmap bits=%lu\n",
-                        IopArbIrqBitmap.SizeOfBitMap);
-                KeReleaseSpinLock(&IopArbIrqLock, OldIrql);
-
-                InterlockedExchange(&IopArbIrqInitState, IOP_ARB_IRQ_INIT_DONE);
-                return;
-            }
-        }
-
-        KeStallExecutionProcessor(1);
+        return;
     }
+    else if (State == IOP_ARB_IRQ_INIT_NOT_STARTED)
+    {
+        IopArbIrqInitializeBitmap();
+        InterlockedExchange(&IopArbIrqInitState, IOP_ARB_IRQ_INIT_DONE);
+    }
+}
+
+static
+VOID
+IopArbIrqEnsureInitialized(VOID)
+{
+    if (IopArbIrqInitState != IOP_ARB_IRQ_INIT_DONE)
+        IopArbIrqEarlyInit();
 }
 
 FORCEINLINE
@@ -215,10 +222,10 @@ IopArbIrqAllocateRange(
     KIRQL OldIrql;
     ULONG Index;
 
+    IopArbIrqEnsureInitialized();
+
     if (Length == 0 || Minimum > Maximum)
         return FALSE;
-
-    IopArbIrqEnsureInitialized();
 
     if (Minimum >= IopArbIrqBitmap.SizeOfBitMap)
         return FALSE;
@@ -265,6 +272,8 @@ IopAllocateIrqVectors(
 {
     ULONG Start;
     ULONG MaxAllowed;
+
+    IopArbIrqEnsureInitialized();
 
     if (!StartVector || Count == 0)
         return STATUS_INVALID_PARAMETER;
@@ -526,7 +535,7 @@ IopArbIrqInitialize(VOID)
     NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     PAGED_CODE();
-    IopArbIrqEnsureInitialized();
+    IopArbIrqEarlyInit();
     IopArbIrqMarkSciReserved();
 
     IopRootIrqArbiter.Name = L"RootIRQ";

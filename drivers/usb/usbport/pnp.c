@@ -900,6 +900,7 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     if (BytesRead != PCI_COMMON_HDR_LENGTH)
     {
         DPRINT1("USBPORT_StartDevice: Failed to get pci config information!\n");
+        Status = STATUS_UNSUCCESSFUL;
         goto ExitWithError;
     }
 
@@ -1132,6 +1133,7 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     if (!FdoExtension->ActiveIrpTable)
     {
         DPRINT1("USBPORT_StartDevice: Allocate ActiveIrpTable failed!\n");
+        Status = STATUS_INSUFFICIENT_RESOURCES;
         goto ExitWithError;
     }
 
@@ -1144,6 +1146,7 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     if (!FdoExtension->PendingIrpTable)
     {
         DPRINT1("USBPORT_StartDevice: Allocate PendingIrpTable failed!\n");
+        Status = STATUS_INSUFFICIENT_RESOURCES;
         goto ExitWithError;
     }
 
@@ -1288,6 +1291,33 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     {
         DPRINT1("USBPORT_StartDevice: Failed to Start MiniPort. MiniPortStatus - %x\n",
                 MiniPortStatus);
+
+        switch (MiniPortStatus)
+        {
+            case MP_STATUS_NO_RESOURCES:
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+
+            case MP_STATUS_NO_BANDWIDTH:
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+
+            case MP_STATUS_HW_ERROR:
+                Status = STATUS_DEVICE_HARDWARE_ERROR;
+                break;
+
+            case MP_STATUS_NOT_SUPPORTED:
+                Status = STATUS_NOT_SUPPORTED;
+                break;
+
+            case MP_STATUS_ERROR:
+            case MP_STATUS_FAILURE:
+            case MP_STATUS_RESERVED1:
+            case MP_STATUS_UNSUCCESSFUL:
+            default:
+                Status = STATUS_UNSUCCESSFUL;
+                break;
+        }
 
         if (FdoExtension->Flags & USBPORT_FLAG_INT_CONNECTED)
         {
@@ -1843,6 +1873,29 @@ Exit:
             DPRINT("IRP_MN_QUERY_DEVICE_RELATIONS\n");
             if (RelationType == BusRelations)
             {
+                if (!(FdoCommonExtension->PnpStateFlags & USBPORT_PNP_STATE_STARTED))
+                {
+                    DeviceRelations = ExAllocatePoolWithTag(PagedPool,
+                                                            sizeof(DEVICE_RELATIONS),
+                                                            USB_PORT_TAG);
+
+                    if (!DeviceRelations)
+                    {
+                        Status = STATUS_INSUFFICIENT_RESOURCES;
+                        Irp->IoStatus.Status = Status;
+                        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                        return Status;
+                    }
+
+                    DeviceRelations->Count = 0;
+                    DeviceRelations->Objects[0] = NULL;
+
+                    Irp->IoStatus.Status = STATUS_SUCCESS;
+                    Irp->IoStatus.Information = (ULONG_PTR)DeviceRelations;
+                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    return STATUS_SUCCESS;
+                }
+
                 DeviceRelations = ExAllocatePoolWithTag(PagedPool,
                                                         sizeof(DEVICE_RELATIONS),
                                                         USB_PORT_TAG);

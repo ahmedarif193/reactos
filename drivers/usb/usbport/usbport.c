@@ -3434,6 +3434,32 @@ USBPORT_RegisterUSBPortDriver(IN PDRIVER_OBJECT DriverObject,
     RegPacket->UsbPortBugCheck = USBPORT_BugCheck;
     RegPacket->UsbPortNotifyDoubleBuffer = USBPORT_NotifyDoubleBuffer;
 
+#if DBG
+    /*
+     * For interface versions that support message interrupts and the full
+     * common-buffer/async callback helpers (USB 2.0 and later), assert that
+     * the registration packet is wired up as expected. This catches cases
+     * where a miniport was built against a mismatched USBPORT header.
+     */
+    if (Version >= USB20_MINIPORT_INTERFACE_VERSION)
+    {
+        ASSERT(RegPacket->UsbPortDbgPrint != NULL);
+        ASSERT(RegPacket->UsbPortGetMiniportRegistryKeyValue != NULL);
+        ASSERT(RegPacket->UsbPortInvalidateRootHub != NULL);
+        ASSERT(RegPacket->UsbPortInvalidateEndpoint != NULL);
+        ASSERT(RegPacket->UsbPortCompleteTransfer != NULL);
+        ASSERT(RegPacket->UsbPortCompleteIsoTransfer != NULL);
+        ASSERT(RegPacket->UsbPortLogEntry != NULL);
+        ASSERT(RegPacket->UsbPortGetMappedVirtualAddress != NULL);
+        ASSERT(RegPacket->UsbPortRequestAsyncCallback != NULL);
+        ASSERT(RegPacket->UsbPortReadWriteConfigSpace != NULL);
+        ASSERT(RegPacket->UsbPortWait != NULL);
+        ASSERT(RegPacket->UsbPortInvalidateController != NULL);
+        ASSERT(RegPacket->UsbPortBugCheck != NULL);
+        ASSERT(RegPacket->UsbPortNotifyDoubleBuffer != NULL);
+    }
+#endif
+
     RtlCopyMemory(&MiniPortInterface->Packet,
                   RegPacket,
                   sizeof(USBPORT_REGISTRATION_PACKET));

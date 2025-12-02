@@ -29,6 +29,7 @@ BOOLEAN
 PciPdoIsBusInRange(
     _In_ PPDO_DEVICE_EXTENSION DeviceExtension)
 {
+    USHORT Segment = 0;
     PFDO_DEVICE_EXTENSION FdoExtension;
     ULONG BusNumber;
 
@@ -39,13 +40,15 @@ PciPdoIsBusInRange(
     if (!FdoExtension)
         return TRUE;
 
+    Segment = FdoExtension->BusSegment;
     BusNumber = DeviceExtension->PciDevice->BusNumber;
     if (FdoExtension->BusRangeStart <= FdoExtension->BusRangeEnd)
     {
         if (BusNumber < FdoExtension->BusRangeStart ||
             BusNumber > FdoExtension->BusRangeEnd)
         {
-            DPRINT1("PCI: Skipping config access for bus %lu outside firmware range [%lu-%lu].\n",
+            DPRINT1("PCI: Skipping config access for seg %u bus %lu outside firmware range [%lu-%lu].\n",
+                    Segment,
                     BusNumber,
                     FdoExtension->BusRangeStart,
                     FdoExtension->BusRangeEnd);
@@ -113,6 +116,23 @@ PciPdoSetBusDataByOffset(
 
 #define PCI_CAP_PTR_FIRST      0x40
 #define PCI_CAP_MAX_ITERATIONS 48
+
+static
+USHORT
+PciPdoGetSegment(
+    _In_opt_ PPDO_DEVICE_EXTENSION DeviceExtension)
+{
+    PFDO_DEVICE_EXTENSION FdoExtension;
+
+    if (!DeviceExtension || !DeviceExtension->Fdo)
+        return 0;
+
+    FdoExtension = (PFDO_DEVICE_EXTENSION)DeviceExtension->Fdo->DeviceExtension;
+    if (!FdoExtension)
+        return 0;
+
+    return FdoExtension->BusSegment;
+}
 
 static
 BOOLEAN
@@ -333,6 +353,7 @@ PciPdoDetermineInterruptPolicy(
     _Out_ PBOOLEAN AllowMsi,
     _Out_ PBOOLEAN AllowMsix)
 {
+    PFDO_DEVICE_EXTENSION FdoExtension = NULL;
     BOOLEAN UseMsi = PciMsiEnabledByPolicy;
     BOOLEAN UseMsix = PciMsixEnabledByPolicy;
     HANDLE KeyHandle;
@@ -343,6 +364,9 @@ PciPdoDetermineInterruptPolicy(
         *AllowMsix = UseMsix;
         return;
     }
+
+    if (DeviceExtension->Fdo)
+        FdoExtension = (PFDO_DEVICE_EXTENSION)DeviceExtension->Fdo->DeviceExtension;
 
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(DeviceExtension->PciDevice->Pdo,
                                            PLUGPLAY_REGKEY_DEVICE,
@@ -400,6 +424,39 @@ PciPdoDetermineInterruptPolicy(
             }
             ExFreePoolWithTag(Buffer, TAG_PCI);
         }
+    }
+
+    if (FdoExtension && !FdoExtension->MsiSupported)
+    {
+        if (!FdoExtension->MsiDiagLogged)
+        {
+            DPRINT1("PCI: Disabling MSI/MSI-X on seg %u bus %lu due to _OSC status 0x%lx grant 0x%lx\n",
+                    FdoExtension->BusSegment,
+                    FdoExtension->BusNumber,
+                    FdoExtension->OscStatusFlags,
+                    FdoExtension->OscControlGranted);
+            if (FdoExtension->OscMasked && !FdoExtension->MsiMaskLogged)
+            {
+                DPRINT1("PCI: _OSC masked controls 0x%lx on seg %u bus %lu\n",
+                        FdoExtension->OscMasked,
+                        FdoExtension->BusSegment,
+                        FdoExtension->BusNumber);
+                FdoExtension->MsiMaskLogged = TRUE;
+            }
+            FdoExtension->MsiDiagLogged = TRUE;
+        }
+        UseMsi = FALSE;
+        UseMsix = FALSE;
+    }
+    else if (FdoExtension && FdoExtension->OscMasked && !FdoExtension->MsiMaskLogged)
+    {
+        DPRINT1("PCI: _OSC masked controls 0x%lx on seg %u bus %lu (status 0x%lx grant 0x%lx) but MSI remains allowed\n",
+                FdoExtension->OscMasked,
+                FdoExtension->BusSegment,
+                FdoExtension->BusNumber,
+                FdoExtension->OscStatusFlags,
+                FdoExtension->OscControlGranted);
+        FdoExtension->MsiMaskLogged = TRUE;
     }
 
     *AllowMsi = UseMsi;
@@ -684,8 +741,9 @@ PdoQueryId(
     PPDO_DEVICE_EXTENSION DeviceExtension;
     UNICODE_STRING String;
     NTSTATUS Status;
+    USHORT Segment = PciPdoGetSegment((PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension);
 
-    DPRINT("Called\n");
+    DPRINT("Called (seg %u)\n", Segment);
 
     DeviceExtension = (PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
 
@@ -750,9 +808,11 @@ PdoQueryBusInformation(
 {
     PPDO_DEVICE_EXTENSION DeviceExtension;
     PPNP_BUS_INFORMATION BusInformation;
+    USHORT Segment;
 
     UNREFERENCED_PARAMETER(IrpSp);
-    DPRINT("Called\n");
+    Segment = PciPdoGetSegment((PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension);
+    DPRINT("Called (seg %u)\n", Segment);
 
     DeviceExtension = (PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
     BusInformation = ExAllocatePoolWithTag(PagedPool, sizeof(PNP_BUS_INFORMATION), TAG_PCI);
@@ -779,9 +839,11 @@ PdoQueryCapabilities(
     PPDO_DEVICE_EXTENSION DeviceExtension;
     PDEVICE_CAPABILITIES DeviceCapabilities;
     ULONG DeviceNumber, FunctionNumber;
+    USHORT Segment;
 
     UNREFERENCED_PARAMETER(Irp);
-    DPRINT("Called\n");
+    Segment = PciPdoGetSegment((PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension);
+    DPRINT("Called (seg %u)\n", Segment);
 
     DeviceExtension = (PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
     DeviceCapabilities = IrpSp->Parameters.DeviceCapabilities.Capabilities;
@@ -807,6 +869,7 @@ PdoReadPciBar(PPDO_DEVICE_EXTENSION DeviceExtension,
 {
     ULONG Size;
     ULONG AllOnes;
+    USHORT Segment = PciPdoGetSegment(DeviceExtension);
 
     /* Read the original value */
     Size = PciPdoGetBusDataByOffset(DeviceExtension,
@@ -815,7 +878,7 @@ PdoReadPciBar(PPDO_DEVICE_EXTENSION DeviceExtension,
                                     sizeof(ULONG));
     if (Size != sizeof(ULONG))
     {
-        DPRINT1("Wrong size %lu\n", Size);
+        DPRINT1("Wrong size %lu (seg %u)\n", Size, Segment);
         return FALSE;
     }
 
@@ -827,7 +890,7 @@ PdoReadPciBar(PPDO_DEVICE_EXTENSION DeviceExtension,
                                     sizeof(ULONG));
     if (Size != sizeof(ULONG))
     {
-        DPRINT1("Wrong size %lu\n", Size);
+        DPRINT1("Wrong size %lu (seg %u)\n", Size, Segment);
         return FALSE;
     }
 
@@ -838,7 +901,7 @@ PdoReadPciBar(PPDO_DEVICE_EXTENSION DeviceExtension,
                                     sizeof(ULONG));
     if (Size != sizeof(ULONG))
     {
-        DPRINT1("Wrong size %lu\n", Size);
+        DPRINT1("Wrong size %lu (seg %u)\n", Size, Segment);
         return FALSE;
     }
 
@@ -849,7 +912,7 @@ PdoReadPciBar(PPDO_DEVICE_EXTENSION DeviceExtension,
                                     sizeof(ULONG));
     if (Size != sizeof(ULONG))
     {
-        DPRINT1("Wrong size %lu\n", Size);
+        DPRINT1("Wrong size %lu (seg %u)\n", Size, Segment);
         return FALSE;
     }
 
@@ -1012,24 +1075,28 @@ PdoQueryResourceRequirements(
         PciRequirementMsix,
     } PCI_INTERRUPT_REQUIREMENT;
     PCI_INTERRUPT_REQUIREMENT Options[3];
+    USHORT Segment;
+    PFDO_DEVICE_EXTENSION FdoExtension;
 
     UNREFERENCED_PARAMETER(IrpSp);
-    DPRINT("PdoQueryResourceRequirements() called\n");
+    Segment = PciPdoGetSegment((PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension);
+    DPRINT("PdoQueryResourceRequirements() called (seg %u)\n", Segment);
 
     DeviceExtension = (PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    FdoExtension = DeviceExtension && DeviceExtension->Fdo ? (PFDO_DEVICE_EXTENSION)DeviceExtension->Fdo->DeviceExtension : NULL;
 
     /* Get PCI configuration space */
     Size = PciPdoGetBusData(DeviceExtension,
                             &PciConfig,
                             PCI_COMMON_HDR_LENGTH);
-    DPRINT("Size %lu\n", Size);
+    DPRINT("Size %lu (seg %u)\n", Size, Segment);
     if (Size < PCI_COMMON_HDR_LENGTH)
     {
         Irp->IoStatus.Information = 0;
         return STATUS_UNSUCCESSFUL;
     }
 
-    DPRINT("Command register: 0x%04hx\n", PciConfig.Command);
+    DPRINT("Command register (seg %u): 0x%04hx\n", Segment, PciConfig.Command);
     HasMsi = FALSE;
     HasMsix = FALSE;
     AllowMsi = FALSE;
@@ -1078,7 +1145,7 @@ PdoQueryResourceRequirements(
 
             if (Length == 0)
             {
-                DPRINT("Unused address register\n");
+                DPRINT("Unused address register (seg %u)\n", Segment);
                 continue;
             }
 
@@ -1156,7 +1223,7 @@ PdoQueryResourceRequirements(
 
             if (Length == 0)
             {
-                DPRINT("Unused address register\n");
+                DPRINT("Unused address register (seg %u)\n", Segment);
                 continue;
             }
 
@@ -1237,13 +1304,24 @@ PdoQueryResourceRequirements(
     }
     else
     {
-        DPRINT1("Unsupported header type %d\n", PCI_CONFIGURATION_TYPE(&PciConfig));
+        DPRINT1("Unsupported header type %d (seg %u)\n",
+                PCI_CONFIGURATION_TYPE(&PciConfig),
+                Segment);
     }
 
     BaseDescriptorCount = (ULONG)(Descriptor - BaseDescriptors);
     MsixOption = (HasMsix && AllowMsix);
     MsiOption = (HasMsi && AllowMsi);
     LegacyOption = (InterruptPin != 0);
+    if (FdoExtension && FdoExtension->OscMasked)
+    {
+        ULONG Masked = FdoExtension->OscMasked;
+        if (!AllowMsi || (Masked & HAL_ACPI_OSC_SUPPORT_MSI))
+            MsiOption = FALSE;
+        /* If firmware masked MSI but not MSI-X, allow MSI-X; no explicit MSI-X bit defined, so honor AllowMsix */
+        if (!AllowMsix)
+            MsixOption = FALSE;
+    }
 
     if ((BaseDescriptorCount == 0) && !MsixOption && !MsiOption && !LegacyOption)
     {
@@ -1272,7 +1350,7 @@ PdoQueryResourceRequirements(
 
     ListSize = (ULONG)AllocationSize;
 
-    DPRINT("ListSize %lu (0x%lx)\n", ListSize, ListSize);
+    DPRINT("ListSize %lu (0x%lx) (seg %u)\n", ListSize, ListSize, Segment);
 
     /* Allocate the resource requirements list */
     ResourceList = ExAllocatePoolWithTag(PagedPool,
@@ -1368,8 +1446,10 @@ PdoQueryResources(
     ULONGLONG Base;
     ULONGLONG Length;
     ULONG Flags;
+    USHORT Segment;
 
-    DPRINT("PdoQueryResources() called\n");
+    Segment = PciPdoGetSegment((PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension);
+    DPRINT("PdoQueryResources() called (seg %u)\n", Segment);
 
     UNREFERENCED_PARAMETER(IrpSp);
     DeviceExtension = (PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
@@ -1378,14 +1458,14 @@ PdoQueryResources(
     Size = PciPdoGetBusData(DeviceExtension,
                              &PciConfig,
                              PCI_COMMON_HDR_LENGTH);
-    DPRINT("Size %lu\n", Size);
+    DPRINT("Size %lu (seg %u)\n", Size, Segment);
     if (Size < PCI_COMMON_HDR_LENGTH)
     {
         Irp->IoStatus.Information = 0;
         return STATUS_UNSUCCESSFUL;
     }
 
-    DPRINT("Command register: 0x%04hx\n", PciConfig.Command);
+    DPRINT("Command register (seg %u): 0x%04hx\n", Segment, PciConfig.Command);
 
     /* Count required resource descriptors */
     ResCount = 0;
@@ -1437,7 +1517,9 @@ PdoQueryResources(
     }
     else
     {
-        DPRINT1("Unsupported header type %d\n", PCI_CONFIGURATION_TYPE(&PciConfig));
+        DPRINT1("Unsupported header type %d (seg %u)\n",
+                PCI_CONFIGURATION_TYPE(&PciConfig),
+                Segment);
     }
 
     if (ResCount == 0)
@@ -1483,7 +1565,7 @@ PdoQueryResources(
 
             if (Length == 0)
             {
-                DPRINT("Unused address register\n");
+                DPRINT("Unused address register (seg %u)\n", Segment);
                 continue;
             }
 
@@ -2673,8 +2755,12 @@ PdoStartDevice(
     NTSTATUS MsiStatus = STATUS_SUCCESS;
     ULONG i, ii;
     PPDO_DEVICE_EXTENSION DeviceExtension = DeviceObject->DeviceExtension;
+    PFDO_DEVICE_EXTENSION FdoExtension = DeviceExtension->Fdo ? (PFDO_DEVICE_EXTENSION)DeviceExtension->Fdo->DeviceExtension : NULL;
+    USHORT Segment = FdoExtension ? FdoExtension->BusSegment : 0;
     UCHAR Irq;
     USHORT Command;
+    BOOLEAN HasMemResource = FALSE;
+    BOOLEAN HasIoResource = FALSE;
 
     UNREFERENCED_PARAMETER(Irp);
 
@@ -2693,6 +2779,28 @@ PdoStartDevice(
     PciPdoGetBusData(DeviceExtension,
                      &DeviceExtension->PciDevice->PciConfig,
                      PCI_COMMON_HDR_LENGTH);
+    if (DeviceExtension->PciDevice->PciConfig.VendorID == PCI_INVALID_VENDORID ||
+        DeviceExtension->PciDevice->PciConfig.VendorID == 0)
+    {
+        DPRINT1("PCI PDO: Invalid VID on first read for %u:%02x:%02x.%u; retrying config read\n",
+                Segment,
+                (UCHAR)DeviceExtension->PciDevice->BusNumber,
+                DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber);
+        PciPdoGetBusData(DeviceExtension,
+                         &DeviceExtension->PciDevice->PciConfig,
+                         PCI_COMMON_HDR_LENGTH);
+        if (DeviceExtension->PciDevice->PciConfig.VendorID == PCI_INVALID_VENDORID ||
+            DeviceExtension->PciDevice->PciConfig.VendorID == 0)
+        {
+            DPRINT1("PCI PDO: Config read still invalid for %u:%02x:%02x.%u; failing START_DEVICE\n",
+                    Segment,
+                    (UCHAR)DeviceExtension->PciDevice->BusNumber,
+                    DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                    DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber);
+            return STATUS_UNSUCCESSFUL;
+        }
+    }
     PciPdoCacheMsiInfo(DeviceExtension);
     if (DeviceExtension->PciDevice->MsixCapability)
     {
@@ -2743,7 +2851,8 @@ PdoStartDevice(
                             if (MsixMessages)
                                 RtlZeroMemory(MsixMessages, MsixMessageLimit * sizeof(PCI_MSIX_MESSAGE_INFO));
                             else
-                                DPRINT1("PCI PDO: Failed to allocate MSI-X message table for %02x:%02x.%u\n",
+                                DPRINT1("PCI PDO: Failed to allocate MSI-X message table for %u:%02x:%02x.%u\n",
+                                        Segment,
                                         (UCHAR)DeviceExtension->PciDevice->BusNumber,
                                         DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
                                         DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber);
@@ -2778,7 +2887,8 @@ PdoStartDevice(
                         }
                         else
                         {
-                            DPRINT1("PCI PDO: MSI enable failed for %02x:%02x.%u (status 0x%08lx)\n",
+                            DPRINT1("PCI PDO: MSI enable failed for %u:%02x:%02x.%u (status 0x%08lx)\n",
+                                    Segment,
                                     (UCHAR)DeviceExtension->PciDevice->BusNumber,
                                     DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
                                     DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
@@ -2799,18 +2909,20 @@ PdoStartDevice(
                 else
                 {
                     LegacyLine = (UCHAR)RawPartialDesc->u.Interrupt.Vector;
-                    DPRINT1("PCI PDO: GSI %lu exceeds legacy range for %02x:%02x.%u; using system vector %u for config write.\n",
+                    DPRINT1("PCI PDO: GSI %lu exceeds legacy range for %u:%02x:%02x.%u; using system vector %u for config write.\n",
                             RawPartialDesc->u.Interrupt.Level,
+                            Segment,
                             (UCHAR)DeviceExtension->PciDevice->BusNumber,
                             DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
                             DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
                             RawPartialDesc->u.Interrupt.Vector);
                 }
 
-                DPRINT("Assigning PCI_INTERRUPT_LINE %u (system vector %u) to PCI device 0x%x on bus 0x%x\n",
+                DPRINT("Assigning PCI_INTERRUPT_LINE %u (system vector %u) to PCI device 0x%x on seg %u bus 0x%x\n",
                        LegacyLine,
                        RawPartialDesc->u.Interrupt.Vector,
                        DeviceExtension->PciDevice->SlotNumber.u.AsULONG,
+                       Segment,
                        DeviceExtension->PciDevice->BusNumber);
 
                 Irq = LegacyLine;
@@ -2818,6 +2930,14 @@ PdoStartDevice(
                                           &Irq,
                                           0x3c /* PCI_INTERRUPT_LINE */,
                                           sizeof(UCHAR));
+            }
+            else if (RawPartialDesc->Type == CmResourceTypeMemory)
+            {
+                HasMemResource = TRUE;
+            }
+            else if (RawPartialDesc->Type == CmResourceTypePort)
+            {
+                HasIoResource = TRUE;
             }
         }
     }
@@ -2833,13 +2953,14 @@ PdoStartDevice(
         }
         else
         {
-            DPRINT1("PCI PDO: MSI-X enable failed for %02x:%02x.%u (status 0x%08lx)\n",
-                    (UCHAR)DeviceExtension->PciDevice->BusNumber,
-                    DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
-                    DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
-                    MsixStatus);
-            UsingMsix = FALSE;
-        }
+        DPRINT1("PCI PDO: MSI-X enable failed for %u:%02x:%02x.%u (status 0x%08lx)\n",
+                Segment,
+                (UCHAR)DeviceExtension->PciDevice->BusNumber,
+                DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
+                MsixStatus);
+        UsingMsix = FALSE;
+    }
     }
 
     if (MsixMessages)
@@ -2847,7 +2968,8 @@ PdoStartDevice(
 
     if (HadMessageResource && !(UsingMsix || UsingMsi))
     {
-        DPRINT1("PCI PDO: Device %02x:%02x.%u provided message interrupts but is running in legacy mode.\n",
+        DPRINT1("PCI PDO: Device %u:%02x:%02x.%u provided message interrupts but is running in legacy mode.\n",
+                Segment,
                 (UCHAR)DeviceExtension->PciDevice->BusNumber,
                 DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
                 DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber);
@@ -2858,19 +2980,24 @@ PdoStartDevice(
     DBGPRINT("pci!PdoStartDevice: Enabling command flags for PCI device 0x%x on bus 0x%x: ",
             DeviceExtension->PciDevice->SlotNumber.u.AsULONG,
             DeviceExtension->PciDevice->BusNumber);
-    if (DeviceExtension->PciDevice->EnableBusMaster)
+    if (DeviceExtension->PciDevice->EnableBusMaster ||
+        (DeviceExtension->PciDevice->PciConfig.Command & PCI_ENABLE_BUS_MASTER))
     {
         Command |= PCI_ENABLE_BUS_MASTER;
         DBGPRINT("[Bus master] ");
     }
 
-    if (DeviceExtension->PciDevice->EnableMemorySpace)
+    if (HasMemResource ||
+        DeviceExtension->PciDevice->EnableMemorySpace ||
+        (DeviceExtension->PciDevice->PciConfig.Command & PCI_ENABLE_MEMORY_SPACE))
     {
         Command |= PCI_ENABLE_MEMORY_SPACE;
         DBGPRINT("[Memory space enable] ");
     }
 
-    if (DeviceExtension->PciDevice->EnableIoSpace)
+    if (HasIoResource ||
+        DeviceExtension->PciDevice->EnableIoSpace ||
+        (DeviceExtension->PciDevice->PciConfig.Command & PCI_ENABLE_IO_SPACE))
     {
         Command |= PCI_ENABLE_IO_SPACE;
         DBGPRINT("[I/O space enable] ");
@@ -2886,7 +3013,7 @@ PdoStartDevice(
     {
         DBGPRINT("\n");
 
-        /* OR with the previous value */
+        /* Force-enable bus master and MEM/IO as requested by policy and existing state */
         Command |= DeviceExtension->PciDevice->PciConfig.Command;
 
         PciPdoSetBusDataByOffset(DeviceExtension,
@@ -2912,8 +3039,9 @@ PdoReadConfig(
     PIO_STACK_LOCATION IrpSp)
 {
     ULONG Size;
+    USHORT Segment = PciPdoGetSegment((PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension);
 
-    DPRINT("PdoReadConfig() called\n");
+    DPRINT("PdoReadConfig() called (seg %u)\n", Segment);
 
     Size = InterfaceBusGetBusData(DeviceObject,
                                   IrpSp->Parameters.ReadWriteConfig.WhichSpace,
@@ -2923,7 +3051,10 @@ PdoReadConfig(
 
     if (Size != IrpSp->Parameters.ReadWriteConfig.Length)
     {
-        DPRINT1("Size %lu  Length %lu\n", Size, IrpSp->Parameters.ReadWriteConfig.Length);
+        DPRINT1("Size %lu  Length %lu (seg %u)\n",
+                Size,
+                IrpSp->Parameters.ReadWriteConfig.Length,
+                Segment);
         Irp->IoStatus.Information = 0;
         return STATUS_UNSUCCESSFUL;
     }
@@ -2941,8 +3072,9 @@ PdoWriteConfig(
     PIO_STACK_LOCATION IrpSp)
 {
     ULONG Size;
+    USHORT Segment = PciPdoGetSegment((PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension);
 
-    DPRINT1("PdoWriteConfig() called\n");
+    DPRINT1("PdoWriteConfig() called (seg %u)\n", Segment);
 
     /* Get PCI configuration space */
     Size = InterfaceBusSetBusData(DeviceObject,
@@ -2953,7 +3085,10 @@ PdoWriteConfig(
 
     if (Size != IrpSp->Parameters.ReadWriteConfig.Length)
     {
-        DPRINT1("Size %lu  Length %lu\n", Size, IrpSp->Parameters.ReadWriteConfig.Length);
+        DPRINT1("Size %lu  Length %lu (seg %u)\n",
+                Size,
+                IrpSp->Parameters.ReadWriteConfig.Length,
+                Segment);
         Irp->IoStatus.Information = 0;
         return STATUS_UNSUCCESSFUL;
     }
@@ -3009,8 +3144,9 @@ PdoPnpControl(
 {
     PIO_STACK_LOCATION IrpSp;
     NTSTATUS Status;
+    USHORT Segment = PciPdoGetSegment((PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension);
 
-    DPRINT("Called\n");
+    DPRINT("Called (seg %u)\n", Segment);
 
     Status = Irp->IoStatus.Status;
 
@@ -3039,12 +3175,12 @@ PdoPnpControl(
             break;
 
         case IRP_MN_QUERY_DEVICE_TEXT:
-            DPRINT("IRP_MN_QUERY_DEVICE_TEXT received\n");
+            DPRINT("IRP_MN_QUERY_DEVICE_TEXT received (seg %u)\n", Segment);
             Status = PdoQueryDeviceText(DeviceObject, Irp, IrpSp);
             break;
 
         case IRP_MN_QUERY_ID:
-            DPRINT("IRP_MN_QUERY_ID received\n");
+            DPRINT("IRP_MN_QUERY_ID received (seg %u)\n", Segment);
             Status = PdoQueryId(DeviceObject, Irp, IrpSp);
             break;
 
@@ -3053,12 +3189,12 @@ PdoPnpControl(
             break;
 
         case IRP_MN_QUERY_RESOURCE_REQUIREMENTS:
-            DPRINT("IRP_MN_QUERY_RESOURCE_REQUIREMENTS received\n");
+            DPRINT("IRP_MN_QUERY_RESOURCE_REQUIREMENTS received (seg %u)\n", Segment);
             Status = PdoQueryResourceRequirements(DeviceObject, Irp, IrpSp);
             break;
 
         case IRP_MN_QUERY_RESOURCES:
-            DPRINT("IRP_MN_QUERY_RESOURCES received\n");
+            DPRINT("IRP_MN_QUERY_RESOURCES received (seg %u)\n", Segment);
             Status = PdoQueryResources(DeviceObject, Irp, IrpSp);
             break;
 

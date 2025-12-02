@@ -56,6 +56,9 @@ ULONG HalpAcpiMcfgSegDisabledCount;
 volatile LONG HalpAcpiEcamCoverageFlags;
 /* ECAM is enabled by default; may be disabled via registry (DisableEcam) */
 BOOLEAN HalpAcpiEcamDisabled = FALSE;
+/* Per-segment legacy override when firmware ECAM decode is broken */
+USHORT HalpAcpiEcamForceLegacySegment = 0xFFFF;
+BOOLEAN HalpAcpiEcamForceLegacyLogged = FALSE;
 
 static
 LONG
@@ -1992,21 +1995,14 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                         /*
                          * VirtualBox ICH9/Q35 firmware advertises an MCFG
                          * window that does not actually decode PCI Express
-                         * MMCONFIG cycles.  Windows treats this as a fatal
-                         * ECAM failure and falls back to legacy CF8/CFC
-                         * configuration space for the entire segment.
-                         *
-                         * Mirror that behaviour here: once the VBox probe
-                         * fails, disable ECAM globally so all configuration
-                         * requests use type‑1 config space instead.
+                         * MMCONFIG cycles. Instead of disabling ECAM
+                         * globally, mark this segment as legacy-only and let
+                         * other segments continue using ECAM if available.
                          */
-                        if (!HalpAcpiEcamDisabled)
-                        {
-                            HalpAcpiEcamDisabled = TRUE;
-                            HalpAcpiRecordEcamEvent(
-                                HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY,
-                                "HAL: VirtualBox firmware does not decode PCI Express MMCONFIG; forcing legacy configuration space access.");
-                        }
+                        HalpAcpiEcamForceLegacySegment = FirstAllocation->PciSegment;
+                        HalpAcpiRecordEcamEvent(
+                            HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY,
+                            "HAL: VirtualBox firmware does not decode PCI Express MMCONFIG; forcing legacy configuration space access for this segment.");
                     }
                 }
 
@@ -2284,6 +2280,20 @@ HalpAcpiAccessConfigEcam(
         return FALSE;
     }
 
+    if (HalpAcpiEcamForceLegacySegment != 0xFFFF &&
+        Segment != HALP_ACPI_SEGMENT_ANY &&
+        Segment == HalpAcpiEcamForceLegacySegment)
+    {
+        if (!HalpAcpiEcamForceLegacyLogged)
+        {
+            CHAR msg[128];
+            _snprintf(msg, sizeof(msg), "HAL: ECAM disabled for segment %u due to firmware decode failure; using legacy configuration space.", Segment);
+            HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
+            HalpAcpiEcamForceLegacyLogged = TRUE;
+        }
+        return FALSE;
+    }
+
     if (!HalpAcpiMcfgAllocations || !HalpAcpiMcfgAllocationCount)
     {
         HalpAcpiRecordEcamEvent(
@@ -2372,6 +2382,7 @@ HalpAcpiAccessConfigEcam(
         ULONG PageOffset;
         PVOID Mapping;
         PHYSICAL_ADDRESS PageBase;
+        BOOLEAN ReadVendorProbe = FALSE;
 
         PhysicalAddress.QuadPart = FunctionBase + CurrentOffset;
         PageBase.QuadPart = PhysicalAddress.QuadPart & ~((ULONGLONG)PAGE_SIZE - 1);
@@ -2393,7 +2404,17 @@ HalpAcpiAccessConfigEcam(
         }
         else
         {
-            RtlCopyMemory(BufferPtr, (PUCHAR)Mapping + PageOffset, Chunk);
+            PUCHAR ChunkPtr = BufferPtr;
+            RtlCopyMemory(ChunkPtr, (PUCHAR)Mapping + PageOffset, Chunk);
+
+            /* Detect ECAM decode failures: vendor all 0/0xFFFF. */
+            if (!ForceLegacy &&
+                Offset == 0 &&
+                PageOffset == 0 &&
+                Chunk >= sizeof(ULONG))
+            {
+                ReadVendorProbe = TRUE;
+            }
 
             if (!ForceLegacy &&
                 BusNumber == 0 &&
@@ -2417,6 +2438,20 @@ HalpAcpiAccessConfigEcam(
         }
 
         MmUnmapIoSpace(Mapping, PAGE_SIZE);
+
+        if (ReadVendorProbe && Segment != HALP_ACPI_SEGMENT_ANY)
+        {
+            USHORT Vendor = *(UNALIGNED PUSHORT)BufferPtr;
+            if (Vendor == 0xFFFF || Vendor == 0x0000)
+            {
+                HalpAcpiEcamForceLegacySegment = Segment;
+                HalpAcpiRecordEcamEvent(
+                    HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES,
+                    "HAL: ECAM read returned invalid vendor; forcing legacy config for this segment.");
+                ForceLegacy = TRUE;
+                break;
+            }
+        }
 
         BufferPtr += Chunk;
         CurrentOffset += Chunk;

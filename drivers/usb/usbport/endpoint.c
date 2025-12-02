@@ -862,6 +862,18 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
     FdoExtension = FdoDevice->DeviceExtension;
     Packet = &FdoExtension->MiniPortInterface->Packet;
 
+    /* Never attempt to open pipes against a controller that was never
+     * started successfully. This protects miniports from being called
+     * with uninitialized hardware/MMIO state when StartController
+     * failed earlier. */
+    if (!(FdoExtension->Flags & USBPORT_FLAG_HC_STARTED))
+    {
+        DPRINT1("USBPORT_OpenPipe: HC not started, refusing to open pipe\n");
+        if (UsbdStatus)
+            *UsbdStatus = USBD_STATUS_DEVICE_GONE;
+        return USBPORT_USBDStatusToNtStatus(NULL, USBD_STATUS_DEVICE_GONE);
+    }
+
     EndpointSize = sizeof(USBPORT_ENDPOINT) + Packet->MiniPortEndpointSize;
     DPRINT1("USBPORT_OpenPipe: computed EndpointSize=%Iu IRQL=%lu\n",
             EndpointSize,

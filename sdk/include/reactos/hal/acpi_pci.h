@@ -51,6 +51,7 @@ typedef struct _HAL_ACPI_PCI_ROOT_INFO
     HAL_ACPI_PCI_WINDOW IoWindow;
     HAL_ACPI_PCI_WINDOW MemoryWindow;
     HAL_ACPI_PCI_WINDOW PrefetchWindow;
+    ULONG MaxGsi;
     HAL_ACPI_PCI_OSC_INFO Osc;
 } HAL_ACPI_PCI_ROOT_INFO, *PHAL_ACPI_PCI_ROOT_INFO;
 
@@ -105,6 +106,33 @@ NTAPI
 HalpSetPciRoutingMap(
     _In_reads_opt_(EntryCount) const HAL_ACPI_PCI_ROUTE_ENTRY *Entries,
     _In_ ULONG EntryCount
+    );
+
+NTHALAPI
+BOOLEAN
+NTAPI
+HalIsPciMsiSupported(
+    VOID
+    );
+
+NTHALAPI
+BOOLEAN
+NTAPI
+HalQueryPciMsiSupport(
+    _In_ ULONG Segment,
+    _In_ UCHAR Bus,
+    _Out_opt_ PBOOLEAN Supported,
+    _Out_opt_ PULONG OscStatusFlags,
+    _Out_opt_ PULONG OscControlGranted,
+    _Out_opt_ PUSHORT EffectiveSegment,
+    _Out_opt_ PULONG OscMaskedControls
+    );
+
+NTHALAPI
+VOID
+NTAPI
+HalpRecordPciMaxGsi(
+    _In_ const HAL_ACPI_PCI_ROUTE_ENTRY *Entry
     );
 
 #ifdef __cplusplus

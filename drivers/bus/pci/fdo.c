@@ -24,8 +24,9 @@ FdoLocateChildDevice(
 {
     PLIST_ENTRY CurrentEntry;
     PPCI_DEVICE CurrentDevice;
+    USHORT Segment = DeviceExtension ? DeviceExtension->BusSegment : 0;
 
-    DPRINT("Called\n");
+    DPRINT("Called (seg %u)\n", Segment);
 
     CurrentEntry = DeviceExtension->DeviceListHead.Flink;
     while (CurrentEntry != &DeviceExtension->DeviceListHead)
@@ -47,7 +48,7 @@ FdoLocateChildDevice(
     }
 
     *Device = NULL;
-    DPRINT("Done\n");
+    DPRINT("Done (seg %u)\n", Segment);
     return STATUS_UNSUCCESSFUL;
 }
 
@@ -89,10 +90,12 @@ FdoEnumerateDevices(
     ULONG Bus;
     ULONG Size;
     NTSTATUS Status;
+    USHORT Segment;
 
-    DPRINT("Called\n");
+    DPRINT("Called (seg %u)\n", Segment);
 
     DeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    Segment = DeviceExtension->BusSegment;
 
     DeviceExtension->DeviceListCount = 0;
 
@@ -112,11 +115,6 @@ FdoEnumerateDevices(
             {
                 SlotNumber.u.bits.FunctionNumber = FunctionNumber;
 
-                DPRINT("Bus %1lu  Device %2lu  Func %1lu\n",
-                       Bus,
-                       DeviceNumber,
-                       FunctionNumber);
-
                 RtlZeroMemory(&PciConfig,
                               sizeof(PCI_COMMON_CONFIG));
 
@@ -125,7 +123,7 @@ FdoEnumerateDevices(
                                      SlotNumber.u.AsULONG,
                                      &PciConfig,
                                      PCI_COMMON_HDR_LENGTH);
-                DPRINT("Size %lu\n", Size);
+                DPRINT("Size %lu (seg %u)\n", Size, Segment);
                 if (Size != PCI_COMMON_HDR_LENGTH ||
                     PciConfig.VendorID == PCI_INVALID_VENDORID ||
                     PciConfig.VendorID == 0)
@@ -140,12 +138,13 @@ FdoEnumerateDevices(
                     }
                 }
 
-                DPRINT("Bus %1lu  Device %2lu  Func %1lu  VenID 0x%04hx  DevID 0x%04hx\n",
+                DPRINT("Bus %1lu  Device %2lu  Func %1lu  VenID 0x%04hx  DevID 0x%04hx (seg %u)\n",
                        Bus,
                        DeviceNumber,
                        FunctionNumber,
                        PciConfig.VendorID,
-                       PciConfig.DeviceID);
+                       PciConfig.DeviceID,
+                       Segment);
 
                 Status = FdoLocateChildDevice(&Device, DeviceExtension, Bus, SlotNumber, &PciConfig);
                 if (!NT_SUCCESS(Status))
@@ -211,7 +210,7 @@ FdoEnumerateDevices(
 
 
 
-    DPRINT("Done\n");
+    DPRINT("Done (seg %u)\n", Segment);
 
     return STATUS_SUCCESS;
 }
@@ -233,10 +232,12 @@ FdoQueryBusRelations(
     NTSTATUS ErrorStatus;
     ULONG Size;
     ULONG i;
+    USHORT Segment;
 
     UNREFERENCED_PARAMETER(IrpSp);
 
-    DPRINT("Called\n");
+    Segment = ((PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension)->BusSegment;
+    DPRINT("Called (seg %u)\n", Segment);
 
     ErrorStatus = STATUS_INSUFFICIENT_RESOURCES;
 
@@ -252,7 +253,7 @@ FdoQueryBusRelations(
     {
         /* FIXME: Another bus driver has already created a DEVICE_RELATIONS
                   structure so we must merge this structure with our own */
-        DPRINT1("FIXME: leaking old bus relations\n");
+        DPRINT1("FIXME: leaking old bus relations (seg %u)\n", Segment);
     }
 
     Size = sizeof(DEVICE_RELATIONS) +
@@ -317,7 +318,9 @@ FdoQueryBusRelations(
                 break;
             }
 
-            DPRINT("DeviceID: %S\n", PdoDeviceExtension->DeviceID.Buffer);
+            DPRINT("DeviceID: %S (seg %u)\n",
+                   PdoDeviceExtension->DeviceID.Buffer,
+                   Segment);
 
             /* Add Instance ID string */
             Status = PciCreateInstanceIDString(&PdoDeviceExtension->InstanceID, Device);
@@ -396,7 +399,7 @@ FdoQueryBusRelations(
 
     Irp->IoStatus.Information = (ULONG_PTR)Relations;
 
-    DPRINT("Done\n");
+    DPRINT("Done (seg %u)\n", Segment);
 
     return Status;
 }
@@ -412,21 +415,23 @@ FdoStartDevice(
     PCM_PARTIAL_RESOURCE_DESCRIPTOR ResourceDescriptor;
     ULONG FoundBusNumber = FALSE;
     ULONG i;
-
-    DPRINT("Called\n");
+    USHORT Segment;
 
     DeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    Segment = DeviceExtension ? DeviceExtension->BusSegment : 0;
+
+    DPRINT("Called (seg %u)\n", Segment);
 
     AllocatedResources = IoGetCurrentIrpStackLocation(Irp)->Parameters.StartDevice.AllocatedResources;
     if (!AllocatedResources)
     {
-        DPRINT("No allocated resources sent to driver\n");
+        DPRINT("No allocated resources sent to driver (seg %u)\n", Segment);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     if (AllocatedResources->Count < 1)
     {
-        DPRINT("Not enough allocated resources sent to driver\n");
+        DPRINT("Not enough allocated resources sent to driver (seg %u)\n", Segment);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -438,6 +443,7 @@ FdoStartDevice(
 
     /* By default, use the bus number in the resource list header */
     DeviceExtension->BusNumber = AllocatedResources->List[0].BusNumber;
+    DeviceExtension->BusSegment = 0;
     DeviceExtension->BusRangeStart = DeviceExtension->BusNumber;
     DeviceExtension->BusRangeEnd = DeviceExtension->BusNumber;
 
@@ -472,11 +478,52 @@ FdoStartDevice(
                 DPRINT("Found bus number resource: %lu-%lu\n",
                        DeviceExtension->BusRangeStart,
                        DeviceExtension->BusRangeEnd);
-                FoundBusNumber = TRUE;
-                break;
+               FoundBusNumber = TRUE;
+               break;
 
             default:
-                DPRINT("Unknown resource descriptor type 0x%x\n", ResourceDescriptor->Type);
+                DPRINT("Unknown resource descriptor type 0x%x (seg %u)\n",
+                       ResourceDescriptor->Type,
+                       Segment);
+        }
+    }
+
+    {
+        BOOLEAN MsiSupported;
+        ULONG OscStatus = 0;
+        ULONG OscGrant = 0;
+        ULONG OscMasked = 0;
+
+        if (HalQueryPciMsiSupport(DeviceExtension->BusSegment,
+                                  (UCHAR)DeviceExtension->BusNumber,
+                                  &MsiSupported,
+                                  &OscStatus,
+                                  &OscGrant,
+                                  &DeviceExtension->BusSegment,
+                                  &OscMasked))
+        {
+            DeviceExtension->MsiSupported = MsiSupported;
+            DeviceExtension->OscStatusFlags = OscStatus;
+            DeviceExtension->OscControlGranted = OscGrant;
+            DeviceExtension->OscMasked = OscMasked;
+        }
+        else
+        {
+            DeviceExtension->MsiSupported = HalIsPciMsiSupported();
+            DeviceExtension->OscStatusFlags = 0;
+            DeviceExtension->OscControlGranted = 0;
+            DeviceExtension->OscMasked = 0;
+        }
+
+        if (DeviceExtension->OscMasked && !DeviceExtension->MsiMaskLogged)
+        {
+            DPRINT1("PCI: _OSC masked controls 0x%lx on seg %u bus %lu (status 0x%lx grant 0x%lx)\n",
+                    DeviceExtension->OscMasked,
+                    DeviceExtension->BusSegment,
+                    DeviceExtension->BusNumber,
+                    DeviceExtension->OscStatusFlags,
+                    DeviceExtension->OscControlGranted);
+            DeviceExtension->MsiMaskLogged = TRUE;
         }
     }
 
@@ -514,8 +561,9 @@ FdoPnpControl(
     PFDO_DEVICE_EXTENSION DeviceExtension;
     PIO_STACK_LOCATION IrpSp;
     NTSTATUS Status = Irp->IoStatus.Status;
+    USHORT Segment = ((PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension)->BusSegment;
 
-    DPRINT("Called\n");
+    DPRINT("Called (seg %u)\n", Segment);
 
     DeviceExtension = DeviceObject->DeviceExtension;
 
@@ -557,7 +605,7 @@ FdoPnpControl(
             break;
 #endif
         case IRP_MN_START_DEVICE:
-            DPRINT("IRP_MN_START_DEVICE received\n");
+            DPRINT("IRP_MN_START_DEVICE received (seg %u)\n", Segment);
             Status = STATUS_UNSUCCESSFUL;
 
             if (IoForwardIrpSynchronously(DeviceExtension->Ldo, Irp))
@@ -609,7 +657,9 @@ FdoPnpControl(
             break;
 
         default:
-            DPRINT1("Unknown PNP minor function 0x%x\n", IrpSp->MinorFunction);
+            DPRINT1("Unknown PNP minor function 0x%x (seg %u)\n",
+                    IrpSp->MinorFunction,
+                    Segment);
             break;
     }
 
@@ -617,7 +667,7 @@ FdoPnpControl(
     IoSkipCurrentIrpStackLocation(Irp);
     Status = IoCallDriver(DeviceExtension->Ldo, Irp);
 
-    DPRINT("Leaving. Status 0x%lx\n", Status);
+    DPRINT("Leaving. Status 0x%lx (seg %u)\n", Status, Segment);
 
     return Status;
 }
@@ -639,7 +689,7 @@ FdoPowerControl(
     PFDO_DEVICE_EXTENSION DeviceExtension;
     NTSTATUS Status;
 
-    DPRINT("Called\n");
+    DPRINT("Called (seg %u)\n", DeviceExtension->BusSegment);
 
     DeviceExtension = DeviceObject->DeviceExtension;
 
@@ -647,7 +697,7 @@ FdoPowerControl(
     IoSkipCurrentIrpStackLocation(Irp);
     Status = PoCallDriver(DeviceExtension->Ldo, Irp);
 
-    DPRINT("Leaving. Status 0x%X\n", Status);
+    DPRINT("Leaving. Status 0x%X (seg %u)\n", Status, DeviceExtension->BusSegment);
 
     return Status;
 }

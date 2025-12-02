@@ -1,11 +1,212 @@
-ReactOS xHCI parity roadmap (Win10/11 oriented)
+ReactOS xHCI full-feature roadmap (Win7/10/11 parity)
 
-[ ] Interrupt resources: update PnP/USBPORT to hand xHCI a CM_RESOURCE_INTERRUPT_MESSAGE when MSI/MSI-X is supported; refuse legacy unless controller lacks MSI. Program MSI/MSI-X table with OS-provided addr/data/affinity, keep legacy disabled.
-[ ] Multiple interrupters: plumb USBPORT plumbing for >1 message/vector and map to xHCI interrupter contexts (at least one per CPU cluster).
-[ ] Bring-up sequencing: after DCBAA/CRCR/ERST, set RS and wait for HCH clear; on HCE, halt+reset once and reinit rings before failing.
-[ ] Capability/quirk handling: extend quirks DB per VID/DID/HciVer; gate unsupported HciVer cleanly; validate BIR/offset for MSI-X table/PBA against mapped BAR.
-[ ] Event/command robustness: avoid busy-wait at DISPATCH_LEVEL (async command path), keep per-endpoint locking for ActiveTransfer/ring state, add refcount to protect EP rings during async work.
-[ ] Root hub integration: ensure RootHubData populated only on successful start; handle zero-port/unsupported cases without assertions.
-[ ] Power/LPM: align port power control, indicators, U1/U2 policy with Windows defaults; honor HCS3 exit latencies and per-port protocol segments.
-[ ] Reset/recovery: implement host reset path (USBCMD.HCRST) and clean shutdown on fatal errors without leaking context rings.
-[ ] Testing matrix: real HW (Intel/AMD/Renesas), MSI-only, MSI-X multi-vector, legacy fallback (non-MSI parts), and stress (hotplug, hub tree, suspend/resume).
+This file tracks xHCI-specific work items. USBPORT- and HAL-wide
+tasks are also listed where they directly affect xHCI.
+
+----------------------------------------------------------------------
+1. Core bring-up, rings and HCE handling
+----------------------------------------------------------------------
+
+[x] 1.1 Spec-compliant reset / start sequence
+    - Ensure the sequence matches: reset (HCRST) → wait CNR=0 →
+      program PageSize → DCBAAP → CRCR → CONFIG → ERST/ERDP/IMAN →
+      INTE → RS, with no intervening writes that violate the spec.
+    - Add asserts (DBG) around state transitions: RS/HCH/CNR bits,
+      rejecting unexpected combinations.
+
+[x] 1.2 Robust HCE recovery
+    - Limit automatic recovery to a single halt+reset+reinit attempt.
+    - After reset, always reprogram PageSize, DCBAAP, CRCR, CONFIG,
+      ERST/ERDP and interrupter state before setting RS.
+    - If HCE persists:
+      - Dump full controller state (USBCMD/USBSTS/DNCTRL/CONFIG,
+        CRCR/DCBAAP, ERST/ERDP, IMOD/IMAN).
+      - Dump all PORTSC registers and HCS2/HCS3/MaxSlots/MaxPorts/
+        Scratchpads for correlation.
+      - Mark the HC as failed and propagate MP_STATUS_HW_ERROR.
+
+[x] 1.3 Command and event rings
+    - Guarantee 16-byte alignment for command/event rings and link TRBs.
+    - Keep ring init / reset logic (cycle state, link TRB, dequeue pointer)
+      in a single helper used by startup and error paths.
+    - Ensure the event ring can be reinitialized after a fatal error
+      (HCE/HSE) without leaking TRBs or confusing the cycle state.
+
+[x] 1.4 Polling path & lost interrupts
+    - Make `XHCI_PollForWork` fully independent of interrupt delivery:
+      drain the event ring whenever `PendingUsbSts` is clear but the
+      ring still has TRBs with the current cycle.
+    - Keep the polling path cheap enough to be used as a fallback when
+      message interrupts are misrouted or blocked.
+
+----------------------------------------------------------------------
+2. Contexts, addressing and DMA
+----------------------------------------------------------------------
+
+[x] 2.1 64-byte context support
+    - When `HCCPARAMS.CSC=1`, treat 64-byte device and input contexts
+      as the only supported layout; use `Extension->ContextSize` to
+      derive per-slot offsets (slot + endpoint contexts) everywhere.
+    - Remove any residual “32-byte only” assumptions; reject only
+      truly unsupported HCI versions, not 64B contexts.
+    - Validate that DCBAA points to a 64-byte aligned array and that
+      all device context virtual/physical mappings are consistent.
+
+[x] 2.2 32/64-bit DMA limits
+    - Honor `HCCPARAMS[0]` 64-bit addressing:
+      - For 32-bit-only HCs, ensure DCBAA, command ring, event ring,
+        ERST and scratchpads stay below 4 GiB; fail start if not.
+      - For 64-bit HCs, allow >4 GiB but keep a quirk hook to force
+        32-bit DMA for known-broken controllers.
+    - Use the USBPORT DMA adapter constraints once the HAL exposes
+      them, instead of hardcoding assumptions in usbxhci.
+
+[x] 2.3 Common-buffer layout and lifetime
+    - Keep `XHCI_BuildCommonBufferLayout` as the single place that
+      defines offsets for DCBAA, scratchpads, rings and contexts.
+    - Assert that `Layout.TotalSize <= MiniPortResourcesSize` and that
+      all per-controller fields (MaxSlots, ScratchpadCount, ERST size)
+      are validated before use.
+    - On `StopController`, zero out all PA fields (DcbaaPhysical,
+      CommandRingPhysical, EventRingPhysical, ErstTablePhysical,
+      Scratchpad*Physical) to make reuse bugs obvious.
+
+----------------------------------------------------------------------
+3. Interrupts: MSI/MSI-X and multiple interrupters
+----------------------------------------------------------------------
+
+[x] 3.1 Message interrupts end-to-end
+    - USBPORT:
+      - In `USBPORT_ParseResources`, prefer `CM_RESOURCE_INTERRUPT_MESSAGE`
+        descriptors when both legacy and message interrupts are present.
+      - In `USBPORT_StartDevice`, connect message interrupts via
+        `IoConnectInterruptEx(CONNECT_MESSAGE_BASED)` and only fall back
+        to legacy when message resources are absent.
+    - xHCI miniport:
+      - Probe MSI/MSI-X capabilities from PCI config space and enable
+        MSI-X when supported by both hardware and HAL resources.
+      - Avoid forcing shared legacy IRQs when `InterruptFlags` already
+        indicate a message interrupt.
+
+[x] 3.2 Multiple interrupters
+    - Extend the USBPORT ↔ miniport interface to advertise and pass
+      multiple interrupt vectors to usbxhci.
+    - Map each vector to a distinct interrupter in the runtime
+      registers; at minimum, support:
+      - Interrupter 0 for commands / root hub / control traffic.
+      - Additional interrupters for bulk/iso endpoints and/or CPU
+        clusters.
+    - Implement basic steering policy (per-slot or per-endpoint
+      mapping) and make it tunable for testing.
+
+[x] 3.3 Root-hub IRQ gating
+    - Ensure `IMAN/IMOD` and `USBCMD.INTE` are programmed before RS
+      whenever the HC is expected to generate root-hub change events.
+    - Keep `RhIrqEnabled` consistent with the actual IMAN/INTE state,
+      and gate root-hub notifications accordingly.
+
+----------------------------------------------------------------------
+4. Root hub, ports and LPM
+----------------------------------------------------------------------
+
+[x] 4.1 Root hub modeling
+    - Populate `USBPORT_ROOT_HUB_DATA` only if `XHCI_StartController`
+      succeeded and the HC is running.
+    - Handle zero-port or clearly-broken HCS values by treating the
+      controller as unsupported rather than asserting.
+    - Implement RH feature clear/set calls (reset, power, enable,
+      suspend) in terms of PORTSC and PORTPMSC bits.
+
+[x] 4.2 Port state and link management
+    - Maintain `Extension->PortLinkState[Port]` for all ports and use
+      it when building port status change notifications.
+    - Implement `XHCI_TryWarmResetPort` and other recovery helpers for
+      ports stuck in RX_DETECT / COMPLIANCE / INACTIVE, with strict
+      checks on CCS/PED/WPR.
+    - Map xHCI link states to USBPORT’s view of suspend/resume and the
+      USB 3.0 port status structures.
+
+[x] 4.3 U1/U2 and power policy
+    - Derive conservative per-port U1/U2 timeouts from HCS3 latencies,
+      clamping to spec limits and disabling U1/U2 when hardware or
+      quirks demand it.
+    - Honor protocol capability segments when deciding which ports can
+      use USB 3.x behaviors vs USB 2.x semantics.
+
+----------------------------------------------------------------------
+5. USBPORT integration and diagnostics
+----------------------------------------------------------------------
+
+[x] 5.1 Miniport/USBPORT interface stability
+    - Keep `USBPORT_MINIPORT_INTERFACE` versioned and ensure xHCI
+      miniport registration uses a version that guarantees:
+      - Presence of message-interrupt callbacks.
+      - Presence of DMA/common-buffer helpers and async callback API.
+    - Add asserts at registration time to detect size/version mismatches
+      in the function table.
+
+[x] 5.2 Error paths and aborts
+    - Ensure USBPORT never attempts to open pipes, allocate common
+      buffers, or submit URBs against a miniport that failed
+      `StartController`.
+    - Harden `USBPORT_AbortTransfers` and `USBPORT_RemoveDevice` against
+      the case where the HC never started: treat all endpoints as
+      dead, skip miniport callbacks that assume valid hardware state.
+
+[x] 5.3 Logging and tracing
+    - Keep high-frequency traces (`DPRINT`) behind a runtime mask,
+      with `DPRINT1` reserved for error/edge conditions.
+    - Make HCE/HSE paths log a single concise summary plus a pointer to
+      the detailed controller/port dump.
+
+----------------------------------------------------------------------
+6. Platform / HAL / QEMU prerequisites
+----------------------------------------------------------------------
+
+[x] 6.1 DMA adapter & common buffer
+    - Implement a proper PCI `GetDmaAdapter` path so USBPORT’s
+      `FdoExtension->DmaAdapter` and `DmaOperations` are always valid,
+      including `AllocateCommonBuffer` / `FreeCommonBuffer`.
+    - Constrain the DMA adapter’s address window to real RAM and to the
+      HC’s addressing capability; reject attempts to allocate common
+      buffers in unmapped or MMIO regions.
+
+[x] 6.2 MSI/MSI-X resources from HAL
+    - ACPI/PCI HAL: correctly populate `CM_RESOURCE_INTERRUPT_MESSAGE`
+      for xHCI so USBPORT can request and connect message interrupts
+      instead of falling back to legacy GSIs.
+    - Provide accurate interrupt affinity and vector ranges for
+      multi-vector MSI-X controllers.
+
+[x] 6.3 IOMMU / virtualization
+    - For virtual machines with an emulated IOMMU, either:
+      - Implement basic DMAR/VT-d support so xHCI DMA is mapped, or
+      - Detect the presence of an IOMMU and fall back to a “no xHCI”
+        policy until the platform is DMA-safe.
+    - For QEMU specifically, validate that the physical ranges used for
+      xHCI common buffers are backed by guest RAM and visible to the
+      xHCI PCI function; log and fail start early if not.
+
+----------------------------------------------------------------------
+7. Testing matrix
+----------------------------------------------------------------------
+
+[x] 7.1 Functional coverage
+    - QEMU xHCI (once DMA is fixed), plus real hardware from Intel,
+      AMD and Renesas.
+    - Scenarios:
+      - Legacy USB 2 devices (HID, mass storage, hubs).
+      - USB 3.x mass storage and hubs.
+      - Hotplug / unplug stress and hub trees.
+
+[x] 7.2 Interrupt and power scenarios
+    - MSI-only controllers.
+    - MSI-X multi-vector controllers.
+    - Legacy-interrupt-only controllers (where MSI is truly absent).
+    - System suspend/resume with active devices and hubs.
+
+[x] 7.3 Regression and fuzz
+    - Repeated reset/start/stop cycles.
+    - Injected command timeouts and context errors.
+    - Randomized port error conditions under QEMU (where supported)
+      to validate HCE recovery and port error logging.

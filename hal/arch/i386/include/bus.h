@@ -147,10 +147,12 @@ typedef struct _PCIPBUSDATA
     ULONG OscSupportSet;
     ULONG OscControlRequest;
     ULONG OscControlGranted;
+    ULONG OscMaskedControls;
     BOOLEAN OscNativeHotPlug;
     BOOLEAN OscNativePme;
     BOOLEAN OscNativeAer;
     BOOLEAN OscExpressCapability;
+    BOOLEAN MsiSupported;
     BOOLEAN NativeExpressServicesConfigured;
 } PCIPBUSDATA, *PPCIPBUSDATA;
 

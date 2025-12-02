@@ -44,6 +44,7 @@
 #define XHCI_QUIRK_LEGACY_BIOS_HANDOFF 0x00000004
 #define XHCI_QUIRK_NO_PORT_INDICATORS 0x00000008
 #define XHCI_QUIRK_LIMIT_U1U2         0x00000010
+#define XHCI_QUIRK_IGNORE_STARTUP_HCE 0x00000020
 
 typedef struct DECLSPEC_ALIGN(PAGE_SIZE) _XHCI_SCRATCHPAD_PAGE {
     UCHAR Buffer[PAGE_SIZE];
@@ -149,6 +150,8 @@ typedef struct _XHCI_EXTENSION {
     ULONG EventRingTrbCount;
     ULONG EventRingDequeueIndex;
     ULONG EventRingCycleState;
+    UCHAR InterrupterCount;
+    UCHAR ReservedInterrupt[3];
   PXHCI_ERST_ENTRY ErstTable;
   PHYSICAL_ADDRESS ErstTablePhysical;
   ULONG ErstEntryCount;
@@ -172,6 +175,7 @@ typedef struct _XHCI_EXTENSION {
   ULONG Quirks;
   UCHAR DeviceAddressMap[XHCI_MAX_DEVICE_ADDRESS];
   UCHAR PortLinkState[XHCI_MAX_PORTS + 1];
+  BOOLEAN PortConnectStatus[XHCI_MAX_PORTS + 1];
   UCHAR MaxU1ExitLatency;
   USHORT MaxU2ExitLatency;
   UCHAR ProtocolSegmentCount;
@@ -214,6 +218,7 @@ typedef struct _XHCI_ENDPOINT {
     UCHAR SlotId;
     UCHAR EndpointId;
     UCHAR DoorbellTarget;
+    UCHAR InterruptTarget;
     USHORT ReservedStreamId;
     BOOLEAN DefaultControl;
     BOOLEAN UsesStaticRing;

@@ -773,7 +773,13 @@ USBPORT_RootHubSCE(IN PUSBPORT_TRANSFER Transfer)
             PortStatus.PortChange.Usb20PortChange.PortEnableDisableChange ||
             PortStatus.PortChange.Usb20PortChange.SuspendChange ||
             PortStatus.PortChange.Usb20PortChange.OverCurrentIndicatorChange ||
-            PortStatus.PortChange.Usb20PortChange.ResetChange)
+            PortStatus.PortChange.Usb20PortChange.ResetChange ||
+            PortStatus.PortChange.Usb30PortChange.ConnectStatusChange ||
+            PortStatus.PortChange.Usb30PortChange.OverCurrentIndicatorChange ||
+            PortStatus.PortChange.Usb30PortChange.ResetChange ||
+            PortStatus.PortChange.Usb30PortChange.BHResetChange ||
+            PortStatus.PortChange.Usb30PortChange.PortLinkStateChange ||
+            PortStatus.PortChange.Usb30PortChange.PortConfigErrorChange)
         {
             /*
              * Encode port change bits per USB 2.0 spec:
@@ -976,7 +982,14 @@ USBPORT_RootHubCreateDevice(IN PDEVICE_OBJECT FdoDevice,
 
     Packet->RH_GetRootHubData(FdoExtension->MiniPortExt, &RootHubData);
 
-    ASSERT(RootHubData.NumberOfPorts != 0);
+    if (RootHubData.NumberOfPorts == 0)
+    {
+#if DBG
+        DPRINT1("USBPORT_RootHubCreateDevice: miniport reported 0 root hub ports, failing root hub start\n");
+#endif
+        return STATUS_UNSUCCESSFUL;
+    }
+
     NumMaskByte = (RootHubData.NumberOfPorts - 1) / 8 + 1;
 
     DescriptorsLength = sizeof(USB_DEVICE_DESCRIPTOR) +

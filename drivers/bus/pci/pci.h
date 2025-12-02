@@ -4,6 +4,7 @@
 #include <ntifs.h>
 #include <cmreslist.h>
 #include <ntstrsafe.h>
+#include <reactos/hal/acpi_pci.h>
 #include "pcidef.h"
 
 #define TAG_PCI '0ICP'
@@ -116,12 +117,23 @@ typedef struct _FDO_DEVICE_EXTENSION
     LIST_ENTRY ListEntry;
     // PCI bus number serviced by this FDO (legacy single-bus view)
     ULONG BusNumber;
+    // PCI segment of this root
+    USHORT BusSegment;
     // Lowest bus number owned by this root bridge
     ULONG BusRangeStart;
     // Highest bus number owned by this root bridge
     ULONG BusRangeEnd;
     // Current state of the driver
     PCI_DEVICE_STATE State;
+    // Whether MSI/MSI-X is allowed for this root (from ACPI/HAL)
+    BOOLEAN MsiSupported;
+    // Whether we've logged the _OSC outcome for this root
+    BOOLEAN MsiDiagLogged;
+    // Cached _OSC status/grant for diagnostics
+    ULONG OscStatusFlags;
+    ULONG OscControlGranted;
+    ULONG OscMasked;
+    BOOLEAN MsiMaskLogged;
     // Namespace device list
     LIST_ENTRY DeviceListHead;
     // Number of (not removed) devices in device list

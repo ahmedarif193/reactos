@@ -1,20 +1,21 @@
 HAL / PCI Bring-Up Tasks for xHCI (Intel 7-Series, VID 8086 DID 1e31)
 =====================================================================
 
-- [ ] Fix ACPI _PRT / GSI routing
-  - Decode resource type 4 in root _CRS and map PIRQ/GSIs so xHCI is not forced to IRQ 0x9–0x9.
-  - Ensure routing supports GSIs above 11; current max GSI is 11.
+- [x] Fix ACPI _PRT / GSI routing
+  - Decode IRQ/ExtIRQ/ADDRESS32 in root _CRS, track MaxGsi, grow HAL GSI tables as needed, and synthesize routing entries for type-4 IRQs when _PRT is absent.
+  - Route GSIs above 11 and preserve legacy fallback when firmware data is missing.
 
 - [ ] Enable MSI / MSI-X resources for xHCI
-  - Expose CM_RESOURCE_INTERRUPT_MESSAGE for the xHCI PDO so USBPORT can connect message interrupts.
-  - Program MSI in PCI config (per WDK xHCI sample) once resources are available.
+  - [x] Request MSI in _OSC (HAL_ACPI_OSC_SUPPORT_MSI set in SupportValue) so firmware can grant message interrupts.
+  - [x] Ensure HalQueryPciMsiSupport returns per-root masked bits and PnP respects them (segment/bus arguments correct).
+  - [x] Expose CM_RESOURCE_INTERRUPT_MESSAGE for the xHCI PDO; once resources exist, program MSI/MSI-X in the miniport.
+  - [ ] Test on VBox (legacy/ECAM), QEMU modern ACPI, and real HW; verify xHCI binds with MSI-X and no legacy IRQ conflicts. Collect logs from boots with xHCI present (USBPORT/usbxhci should report message interrupts, no legacy fallback).
 
-- [ ] Restore ECAM / MMCONFIG access
-  - Fix firmware/quirk path that disables ECAM globally; allow PCI Express config space via MMCONFIG.
-  - Keep CF8/CFC legacy path reliable as fallback.
+- [x] Restore ECAM / MMCONFIG access
+  - Restrict VBox ECAM quirk to affected segments; keep legacy CF8/CFC as fallback and continue to honor DisableEcam registry.
 
-- [ ] PCI command defaults
-  - Bus driver should set MEM + BusMaster bits before StartDevice; avoid miniport-side workarounds.
+- [x] PCI command defaults
+  - Bus driver forces MEM/IO/BusMaster bits before StartDevice when resources are present.
 
-- [ ] Validate PCI config reads
-  - Ensure VID/DID and capability reads are stable via the chosen config path (ECAM or CF8/CFC) so quirks are based on real IDs.
+- [x] Validate PCI config reads
+  - Retry and fail START_DEVICE if VID/DID stay invalid; keep per-segment ECAM/legacy selection so capability walks use stable IDs.

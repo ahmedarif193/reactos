@@ -41,11 +41,16 @@ IopGetMessageEntriesFromInfo(
     _In_ PIO_INTERRUPT_MESSAGE_INFO MessageInfo)
 {
     SIZE_T HeaderSize;
+    PIO_MESSAGE_CONNECT_CONTEXT Context;
+
+    Context = CONTAINING_RECORD(MessageInfo,
+                                IO_MESSAGE_CONNECT_CONTEXT,
+                                MessageInfoHeader);
 
     HeaderSize = sizeof(IO_MESSAGE_CONNECT_CONTEXT) +
                  (MessageInfo->MessageCount - 1) * sizeof(IO_INTERRUPT_MESSAGE_INFO_ENTRY);
 
-    return (PIO_INTERRUPT_MESSAGE_ENTRY)((PUCHAR)MessageInfo + HeaderSize);
+    return (PIO_INTERRUPT_MESSAGE_ENTRY)((PUCHAR)Context + HeaderSize);
 }
 
 static
@@ -572,30 +577,16 @@ IoDisconnectInterruptEx(
             PIO_INTERRUPT_MESSAGE_INFO MessageInfo;
             PIO_INTERRUPT_MESSAGE_ENTRY MessageEntries;
             ULONG i;
-            PULONG ReleaseVectors = NULL;
 
             MessageInfo = Parameters->ConnectionContext.InterruptMessageTable;
             if (!MessageInfo)
                 return;
 
-            ReleaseVectors = ExAllocatePoolWithTag(PagedPool,
-                                                   sizeof(ULONG) * MessageInfo->MessageCount,
-                                                   TAG_IO_INTERRUPT);
-
             MessageEntries = IopGetMessageEntriesFromInfo(MessageInfo);
             for (i = 0; i < MessageInfo->MessageCount; i++)
             {
-                if (ReleaseVectors)
-                    ReleaseVectors[i] = MessageInfo->MessageInfo[i].Vector;
-
                 if (MessageEntries[i].Interrupt.ServiceRoutine)
                     KeDisconnectInterrupt(&MessageEntries[i].Interrupt);
-            }
-
-            if (ReleaseVectors)
-            {
-                IopReleaseIrqVectors(ReleaseVectors, MessageInfo->MessageCount);
-                ExFreePoolWithTag(ReleaseVectors, TAG_IO_INTERRUPT);
             }
 
             ExFreePoolWithTag(CONTAINING_RECORD(MessageInfo,

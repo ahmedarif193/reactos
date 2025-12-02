@@ -172,6 +172,7 @@ PciAddDevice(
     RtlZeroMemory(DeviceExtension, sizeof(FDO_DEVICE_EXTENSION));
 
     DeviceExtension->Common.IsFDO = TRUE;
+    DeviceExtension->MsiSupported = TRUE;
 
     DeviceExtension->Ldo = IoAttachDeviceToDeviceStack(Fdo,
                                                        PhysicalDeviceObject);
@@ -255,12 +256,14 @@ PciReadInterruptPolicy(
     RTL_QUERY_REGISTRY_TABLE QueryTable[3];
     ULONG EnableMsi = 1;
     ULONG EnableMsix = 1;
+    BOOLEAN OscMsiAllowed;
     WCHAR ParametersBuffer[512];
     UNICODE_STRING ParametersPath;
     NTSTATUS Status;
 
-    PciMsiEnabledByPolicy = TRUE;
-    PciMsixEnabledByPolicy = TRUE;
+    OscMsiAllowed = HalIsPciMsiSupported();
+    PciMsiEnabledByPolicy = OscMsiAllowed;
+    PciMsixEnabledByPolicy = OscMsiAllowed;
 
     if (!RegistryPath || RegistryPath->Length == 0)
         return;
@@ -292,8 +295,8 @@ PciReadInterruptPolicy(
                                     NULL);
     if (NT_SUCCESS(Status))
     {
-        PciMsiEnabledByPolicy = (EnableMsi != 0);
-        PciMsixEnabledByPolicy = (EnableMsix != 0);
+        PciMsiEnabledByPolicy = OscMsiAllowed && (EnableMsi != 0);
+        PciMsixEnabledByPolicy = OscMsiAllowed && (EnableMsix != 0);
     }
 }
 

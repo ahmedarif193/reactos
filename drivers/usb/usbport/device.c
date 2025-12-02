@@ -921,11 +921,22 @@ NTAPI
 USBPORT_AbortTransfers(IN PDEVICE_OBJECT FdoDevice,
                        IN PUSBPORT_DEVICE_HANDLE DeviceHandle)
 {
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
     PLIST_ENTRY HandleList;
     PUSBPORT_PIPE_HANDLE PipeHandle;
     BOOLEAN Result;
 
     DPRINT("USBPORT_AbortAllTransfers: ... \n");
+
+    FdoExtension = FdoDevice->DeviceExtension;
+
+    /* If the host controller never started, treat all endpoints as dead and
+     * skip miniport abort callbacks that assume valid hardware state. */
+    if (!(FdoExtension->Flags & USBPORT_FLAG_HC_STARTED))
+    {
+        DPRINT1("USBPORT_AbortTransfers: HC not started; treating endpoints as dead\n");
+        return;
+    }
 
     HandleList = DeviceHandle->PipeHandleList.Flink;
 

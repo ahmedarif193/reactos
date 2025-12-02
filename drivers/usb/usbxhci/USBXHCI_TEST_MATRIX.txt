@@ -1,0 +1,122 @@
+ReactOS xHCI test matrix (functional / interrupt / stress)
+
+This file describes how to exercise the usbxhci + usbport stack along the
+axes listed under section 7 of XHCI_ROADMAP.txt. It is intended for use on
+real hardware and under QEMU; nothing here is ReactOS‑build‑time only.
+
+1. QEMU xHCI smoke / functional
+--------------------------------
+
+Host:
+  - Build ReactOS with usbxhci enabled and this tree’s HAL/PCI bits.
+  - Use a recent QEMU with nec-usb-xhci or qemu-xhci:
+      qemu-system-x86_64 \
+        -M q35 \
+        -m 1024 \
+        -enable-kvm \
+        -device qemu-xhci,id=xhci \
+        -drive file=reactos.img,if=ide,format=raw
+
+Guest scenarios:
+  - Legacy USB 2 devices:
+      * USB HID (keyboard/mouse).
+      * USB2 mass storage (flash drive).
+  - USB 3.x devices:
+      * Mass storage (UASP if available, or BOT).
+      * USB3 hubs with downstream devices.
+  - Operations:
+      * Cold boot with devices present.
+      * Hotplug / unplug while idle and under I/O.
+      * Suspend / resume (if supported by the host) with devices attached.
+
+Expected behaviour:
+  - usbxhci.sys loads without assert in DBG builds.
+  - All devices enumerate and survive simple I/O (copy files, run apps).
+  - No repeated HCE/HSE fatal errors after start; StartController either
+    succeeds or fails once with MP_STATUS_HW_ERROR and logs a dump.
+
+2. Real hardware coverage
+--------------------------
+
+Targets:
+  - Intel xHCI (Series 7/8/9, 100/200, newer).
+  - AMD xHCI (FCH and chipset variants).
+  - Renesas/NEC discrete xHCI.
+  - ASMedia/VIA discrete xHCI (32‑bit DMA quirks).
+
+Scenarios:
+  - Same functional matrix as QEMU (USB2 + USB3 devices, hubs).
+  - Root hub port power cycling (use device manager / devcon equivalent).
+  - Port error injection where possible (unplug during heavy write, etc.).
+
+Expected behaviour:
+  - For 32‑bit‑only or quirked controllers, StartController fails early
+    if the common buffer crosses 4 GiB; otherwise DMA behaves.
+  - Multiple MSI/MSI‑X vectors: on controllers with multi‑vector MSI‑X,
+    check that:
+      * PCI resources expose CM_RESOURCE_INTERRUPT_MESSAGE with MessageCount>1.
+      * usbxhci logs "using message interrupts (N vectors)" and
+        "intrN ..." lines from XHCI_ProgramInterrupterState.
+      * Interrupt load spreads across vectors when multiple bulk/interrupt
+        endpoints are active.
+
+3. Interrupt and power scenarios
+---------------------------------
+
+MSI‑only controllers:
+  - Disable MSI‑X in firmware/BIOS if possible, keep MSI enabled.
+  - Confirm USBPORT uses CONNECT_MESSAGE_BASED and usbxhci sees
+    CM_RESOURCE_INTERRUPT_MESSAGE with InterruptMessageCount == 1.
+
+MSI‑X controllers:
+  - Leave MSI‑X enabled; verify IRQ affinity and vector separation as
+    above (section 2).
+
+Legacy‑only controllers:
+  - Disable MSI/MSI‑X in firmware so only a legacy GSI is exposed.
+  - Confirm usbport parses the legacy CmResourceTypeInterrupt and that
+    usbxhci logs "using legacy IRQ vector ...".
+
+Suspend/resume:
+  - With active devices/hubs, issue system sleep/resume cycles.
+  - Confirm that:
+      * XHCI_ResumeController reprograms interrupters and RS; devices
+        resume function without replug.
+      * Root‑hub change notifications continue to work after resume.
+
+4. Regression and fuzz
+-----------------------
+
+Reset/start/stop loops:
+  - Use a test driver or kernel debugger to repeatedly:
+      * StopController / StartController.
+      * System reboot with warm reset (no full power loss).
+  - Verify that:
+      * HCE latched across warm boots is cleared by StartController’s
+        pre‑start reset path.
+      * No resource leaks in common buffer layout (no asserts in DBG).
+
+Command timeouts:
+  - Inject timeouts by patching XHCI_COMMAND_TIMEOUT_MS in DBG builds or
+    by temporarily blocking event delivery (disable interrupts, exercise
+    heavy traffic).
+  - Confirm XHCI_HandleCommandTimeout:
+      * Logs a concise summary and forces controller shutdown.
+      * Prevents further miniport activity (FatalError is set).
+
+Random port error conditions (QEMU or hardware with debug ports):
+  - Force ports into COMPLIANCE / INACTIVE / RX_DETECT where possible.
+  - Verify:
+      * XHCI_TryWarmResetPort attempts warm reset only when CCS/PED/WPR
+        conditions are met.
+      * Port status / link state mapping in XHCI_RH_GetPortStatus matches
+        expected USBPORT structures (suspend/resume bits, speed, etc.).
+
+Notes:
+  - All tests should be run on both free and DBG builds. DBG builds must
+    be free of ASSERTs and use XhciTraceMask to control trace volume.
+  - For new regressions, capture:
+      * usbxhci DPRINT1 logs.
+      * PCI VID/DID/HciVersion.
+      * Output from XHCI_DumpControllerState when HCE/HSE paths fire.
+

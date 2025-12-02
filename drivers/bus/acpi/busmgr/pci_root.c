@@ -140,18 +140,20 @@ AcpiPciRootEvaluateOsc(
     static const UINT8 PciExpressUuid[16] = { 0x33, 0xDB, 0x4D, 0x5B, 0x1F, 0xF7, 0x40, 0x1C, 0x96, 0x57, 0x74, 0x41, 0xC0, 0x3D, 0xD7, 0x66 };
     ULONG SupportValue = 0;
     ULONG ControlValue = 0;
+    ULONG CapBuffer[2];
     ACPI_OBJECT Parameters[4];
     ACPI_OBJECT_LIST ArgumentList = { 4, Parameters };
     ACPI_BUFFER ReturnBuffer = { ACPI_ALLOCATE_BUFFER, NULL };
-    ULONG ControlData;
     ACPI_STATUS Status;
 
     SupportValue |= OSC_SUPPORT_EXTENDED_CONFIG_REGIONS;
     SupportValue |= OSC_SUPPORT_SEGMENT_GROUPS;
+    SupportValue |= HAL_ACPI_OSC_SUPPORT_MSI;
 
     ControlValue |= OSC_CONTROL_EXPRESS_CAP_STRUCTURE;
 
-    ControlData = ControlValue;
+    CapBuffer[0] = SupportValue;
+    CapBuffer[1] = ControlValue;
 
     Parameters[0].Type = ACPI_TYPE_BUFFER;
     Parameters[0].Buffer.Length = sizeof(PciExpressUuid);
@@ -161,11 +163,11 @@ AcpiPciRootEvaluateOsc(
     Parameters[1].Integer.Value = PCI_ROOT_BUS_OSC_METHOD_CAPABILITY_REVISION;
 
     Parameters[2].Type = ACPI_TYPE_INTEGER;
-    Parameters[2].Integer.Value = SupportValue;
+    Parameters[2].Integer.Value = ARRAYSIZE(CapBuffer);
 
     Parameters[3].Type = ACPI_TYPE_BUFFER;
-    Parameters[3].Buffer.Length = sizeof(ControlData);
-    Parameters[3].Buffer.Pointer = (UINT8 *)&ControlData;
+    Parameters[3].Buffer.Length = sizeof(CapBuffer);
+    Parameters[3].Buffer.Pointer = (UINT8 *)CapBuffer;
 
     RootInfo->Osc.Evaluated = TRUE;
     RootInfo->Osc.SupportSet = SupportValue;
@@ -474,6 +476,28 @@ AcpiPciRootProcessResource(
             break;
         }
 
+        case ACPI_RESOURCE_TYPE_EXTENDED_IRQ:
+        {
+            const ACPI_RESOURCE_EXTENDED_IRQ *Irq = &Resource->Data.ExtendedIrq;
+            for (UINT32 i = 0; i < Irq->InterruptCount; ++i)
+            {
+                if (Irq->Interrupts[i] > RootInfo->MaxGsi)
+                    RootInfo->MaxGsi = (ULONG)Irq->Interrupts[i];
+            }
+            break;
+        }
+
+        case ACPI_RESOURCE_TYPE_IRQ:
+        {
+            const ACPI_RESOURCE_IRQ *Irq = &Resource->Data.Irq;
+            for (UINT32 i = 0; i < Irq->InterruptCount; ++i)
+            {
+                if (Irq->Interrupts[i] > RootInfo->MaxGsi)
+                    RootInfo->MaxGsi = (ULONG)Irq->Interrupts[i];
+            }
+            break;
+        }
+
         default:
             break;
     }
@@ -491,6 +515,7 @@ AcpiPciRootExtractResources(
     AcpiPciRootInitWindow(&RootInfo->IoWindow);
     AcpiPciRootInitWindow(&RootInfo->MemoryWindow);
     AcpiPciRootInitWindow(&RootInfo->PrefetchWindow);
+    RootInfo->MaxGsi = 0;
 
     Status = AcpiGetCurrentResources(Handle, &ResourceBuffer);
     if (ACPI_FAILURE(Status))

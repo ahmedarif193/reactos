@@ -578,4 +578,3 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Switch to new kernel stack and start kernel bootstrapping */
     KiSwitchToBootStack(InitialStack);
 }
-

@@ -44,6 +44,7 @@ static KSPIN_LOCK HalpPciGsiLock;
 static volatile LONG HalpPciGsiLockInitState;
 static PHAL_ACPI_PCI_ROUTE_QUERY HalpPciRouteQueryCallback;
 BOOLEAN HalpPciBusRangeKnown;
+static BOOLEAN HalpPciMsiSupported = TRUE;
 
 static
 VOID
@@ -952,11 +953,13 @@ HalpPciPropagateRootConfiguration(
         ((PPCIPBUSDATA)Child->BusData)->OscSupportSet = RootData->OscSupportSet;
         ((PPCIPBUSDATA)Child->BusData)->OscControlRequest = RootData->OscControlRequest;
         ((PPCIPBUSDATA)Child->BusData)->OscControlGranted = RootData->OscControlGranted;
+        ((PPCIPBUSDATA)Child->BusData)->OscMaskedControls = RootData->OscMaskedControls;
         ((PPCIPBUSDATA)Child->BusData)->OscNativeHotPlug = RootData->OscNativeHotPlug;
         ((PPCIPBUSDATA)Child->BusData)->OscNativePme = RootData->OscNativePme;
         ((PPCIPBUSDATA)Child->BusData)->OscNativeAer = RootData->OscNativeAer;
         ((PPCIPBUSDATA)Child->BusData)->OscExpressCapability = RootData->OscExpressCapability;
         ((PPCIPBUSDATA)Child->BusData)->NativeExpressServicesConfigured = RootData->NativeExpressServicesConfigured;
+        ((PPCIPBUSDATA)Child->BusData)->MsiSupported = RootData->MsiSupported;
         ((PPCIPBUSDATA)Child->BusData)->BusNumbersConfigured =
             RootData->BusNumbersConfigured;
         ((PPCIPBUSDATA)Child->BusData)->BusNumberStart =
@@ -1305,6 +1308,79 @@ HalpSetPciRoutingMap(
 
 VOID
 NTAPI
+HalpRecordPciMaxGsi(
+    _In_ const HAL_ACPI_PCI_ROUTE_ENTRY *Entry)
+{
+    if (Entry && Entry->Gsi != 0)
+    {
+        HalpPciEnsureGsiCapacity(Entry->Gsi);
+    }
+}
+
+BOOLEAN
+NTAPI
+HalIsPciMsiSupported(VOID)
+{
+    return HalpPciMsiSupported;
+}
+
+BOOLEAN
+NTAPI
+HalQueryPciMsiSupport(
+    _In_ ULONG Segment,
+    _In_ UCHAR Bus,
+    _Out_opt_ PBOOLEAN Supported,
+    _Out_opt_ PULONG OscStatusFlags,
+    _Out_opt_ PULONG OscControlGranted,
+    _Out_opt_ PUSHORT EffectiveSegment,
+    _Out_opt_ PULONG OscMaskedControls)
+{
+    PBUS_HANDLER Handler;
+    PPCIPBUSDATA BusData;
+
+    Handler = HalHandlerForBus(PCIBus, Bus);
+    if (!Handler)
+    {
+        return FALSE;
+    }
+
+    BusData = (PPCIPBUSDATA)Handler->BusData;
+    if (!BusData)
+    {
+        return FALSE;
+    }
+
+    if ((Segment != 0) && (BusData->PciSegment != (USHORT)Segment))
+    {
+        return FALSE;
+    }
+
+    if (Supported)
+    {
+        *Supported = BusData->MsiSupported;
+    }
+    if (EffectiveSegment)
+    {
+        *EffectiveSegment = BusData->PciSegment;
+    }
+    if (OscStatusFlags)
+    {
+        *OscStatusFlags = BusData->OscInfo.StatusFlags;
+    }
+    if (OscControlGranted)
+    {
+        *OscControlGranted = BusData->OscControlGranted;
+    }
+    if (OscMaskedControls)
+    {
+        *OscMaskedControls = BusData->OscMaskedControls;
+    }
+
+    return TRUE;
+}
+
+VOID
+NTAPI
 HalpConfigurePciRootBridge(
     _In_ const HAL_ACPI_PCI_ROOT_INFO *Info)
 {
@@ -1366,10 +1442,47 @@ HalpConfigurePciRootBridge(
     BusData->OscSupportSet = Info->Osc.SupportSet;
     BusData->OscControlRequest = Info->Osc.ControlRequest;
     BusData->OscControlGranted = Info->Osc.ControlGranted;
+    BusData->OscMaskedControls = Info->Osc.ControlRequest & ~Info->Osc.ControlGranted;
     BusData->OscNativeHotPlug = (Info->Osc.ControlGranted & HAL_ACPI_OSC_CONTROL_NATIVE_HOTPLUG) != 0;
     BusData->OscNativePme = (Info->Osc.ControlGranted & HAL_ACPI_OSC_CONTROL_NATIVE_PME) != 0;
     BusData->OscNativeAer = (Info->Osc.ControlGranted & HAL_ACPI_OSC_CONTROL_NATIVE_AER) != 0;
     BusData->OscExpressCapability = (Info->Osc.ControlGranted & HAL_ACPI_OSC_CONTROL_EXPRESS_CAP) != 0;
+    BusData->MsiSupported = TRUE;
+
+    if (Info->MaxGsi != 0)
+    {
+        HalpPciEnsureGsiCapacity(Info->MaxGsi);
+        if (Info->MaxGsi > 11)
+        {
+            DPRINT1("HAL: PCI root seg %lu bus %lu: extending GSI capacity to %lu based on _CRS\n",
+                    Info->Segment,
+                    Info->Bus,
+                    Info->MaxGsi);
+        }
+    }
+
+    if (Info->Osc.Evaluated)
+    {
+        const ULONG OscFatalMask = OSC_FIRMWARE_FAILURE; /* treat only firmware failure as fatal */
+        const ULONG OscMasked = OSC_CAPABILITIES_MASKED; /* capabilities masked */
+
+        if (Info->Osc.StatusFlags & OscMasked)
+        {
+            ULONG MaskedControls = Info->Osc.ControlRequest & ~Info->Osc.ControlGranted;
+            DPRINT1("HAL: _OSC capabilities masked on segment %lu bus %lu (req 0x%lx grant 0x%lx masked 0x%lx)\n",
+                    Info->Segment,
+                    Info->Bus,
+                    Info->Osc.ControlRequest,
+                    Info->Osc.ControlGranted,
+                    MaskedControls);
+        }
+
+        if (Info->Osc.StatusFlags & OscFatalMask)
+        {
+            HalpPciMsiSupported = FALSE;
+            BusData->MsiSupported = FALSE;
+        }
+    }
 
     if (BusData->OscControlRequest && !BusData->OscExpressCapability)
     {
@@ -3787,6 +3900,7 @@ HalpInitializePciStubs(VOID)
     BusData->OscNativePme = FALSE;
     BusData->OscNativeAer = FALSE;
     BusData->OscExpressCapability = FALSE;
+    BusData->MsiSupported = TRUE;
     BusData->NativeExpressServicesConfigured = FALSE;
 
     RtlZeroMemory(BusData->ConfiguredBits, sizeof(BusData->ConfiguredBits));

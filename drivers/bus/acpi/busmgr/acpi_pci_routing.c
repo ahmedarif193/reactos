@@ -202,6 +202,20 @@ AcpiPrtResolveLink(
             Resolved = TRUE;
             break;
         }
+        else if (Resource->Type == ACPI_RESOURCE_TYPE_ADDRESS32)
+        {
+            /* ACPI resource type 4 (ADDRESS32) can encode GSIs in _CRS for root bridges. */
+            const ACPI_RESOURCE_ADDRESS32 *Addr = &Resource->Data.Address32;
+            if (Addr->ResourceType == ACPI_MEMORY_RANGE || Addr->ResourceType == ACPI_IO_RANGE)
+                continue;
+
+            /* Use Minimum as GSI when Source is empty. */
+            Entry->Gsi = (ULONG)Addr->Address.Minimum;
+            Entry->Polarity = HAL_ACPI_POLARITY_LOW;
+            Entry->Trigger = HAL_ACPI_TRIGGER_LEVEL;
+            Resolved = TRUE;
+            break;
+        }
     }
 
     ACPI_FREE(ResourceBuffer.Pointer);
@@ -215,8 +229,32 @@ AcpiPrtBuildForHandle(
     _In_ ULONG Segment,
     _In_ UCHAR RootBus)
 {
+    ACPI_BUFFER CrsBuffer = { ACPI_ALLOCATE_BUFFER, NULL };
     ACPI_BUFFER Buffer = { ACPI_ALLOCATE_BUFFER, NULL };
     ACPI_STATUS Status;
+    ACPI_RESOURCE *CrsResource;
+    ULONG MaxGsi = 0;
+
+    /* Pre-scan _CRS for type-4 IRQ encodings so we can map them later. */
+    Status = AcpiGetCurrentResources(Handle, &CrsBuffer);
+    if (ACPI_SUCCESS(Status) && CrsBuffer.Pointer)
+    {
+        for (CrsResource = (ACPI_RESOURCE *)CrsBuffer.Pointer;
+             CrsResource && CrsResource->Type != ACPI_RESOURCE_TYPE_END_TAG;
+             CrsResource = ACPI_NEXT_RESOURCE(CrsResource))
+        {
+            if (CrsResource->Type == ACPI_RESOURCE_TYPE_ADDRESS32)
+            {
+                const ACPI_RESOURCE_ADDRESS32 *Addr = &CrsResource->Data.Address32;
+                if ((Addr->ResourceType == ACPI_MEMORY_RANGE) ||
+                    (Addr->ResourceType == ACPI_IO_RANGE))
+                    continue;
+
+                if (Addr->Address.Minimum > MaxGsi)
+                    MaxGsi = (ULONG)Addr->Address.Minimum;
+            }
+        }
+    }
 
     Status = AcpiGetIrqRoutingTable(Handle, &Buffer);
     if (ACPI_FAILURE(Status))
@@ -225,7 +263,23 @@ AcpiPrtBuildForHandle(
         {
             DPRINT1("ACPI: _PRT query for root %p failed (0x%X)\n", Handle, Status);
         }
+        if (CrsBuffer.Pointer)
+            ACPI_FREE(CrsBuffer.Pointer);
         return Status;
+    }
+
+    /* If _PRT is absent but _CRS had a type-4 IRQ, synthesize a single entry */
+    if (Buffer.Pointer == NULL && MaxGsi != 0)
+    {
+        PRT_MAP_ENTRY Entry = {0};
+        Entry.Segment = Segment;
+        Entry.Bus = RootBus;
+        Entry.Device = 0;
+        Entry.Pin = 1;
+        Entry.Gsi = MaxGsi;
+        Entry.Polarity = HAL_ACPI_POLARITY_LOW;
+        Entry.Trigger = HAL_ACPI_TRIGGER_LEVEL;
+        AcpiPrtInsertOrUpdate(&Entry);
     }
 
     for (ACPI_PCI_ROUTING_TABLE *Route = (ACPI_PCI_ROUTING_TABLE *)Buffer.Pointer;
@@ -269,6 +323,19 @@ AcpiPrtBuildForHandle(
         }
     }
 
+    if (MaxGsi != 0)
+    {
+        HAL_ACPI_PCI_ROUTE_ENTRY MaxEntry = {0};
+        MaxEntry.Segment = Segment;
+        MaxEntry.Bus = RootBus;
+        MaxEntry.Gsi = MaxGsi;
+        MaxEntry.Polarity = HAL_ACPI_POLARITY_LOW;
+        MaxEntry.TriggerMode = HAL_ACPI_TRIGGER_LEVEL;
+        HalpRecordPciMaxGsi(&MaxEntry);
+    }
+
+    if (CrsBuffer.Pointer)
+        ACPI_FREE(CrsBuffer.Pointer);
     ACPI_FREE(Buffer.Pointer);
     return AE_OK;
 }

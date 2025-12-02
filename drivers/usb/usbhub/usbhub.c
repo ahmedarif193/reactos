@@ -2509,7 +2509,19 @@ USBH_ChangeIndication(IN PDEVICE_OBJECT DeviceObject,
 
     if (Port > NumPorts)
     {
-        Port = 0;
+        /* No bits set in the change bitmap – force a rescan by flagging all ports. */
+        RtlZeroMemory(Bitmap, HubExtension->SCEBitmapLength);
+        for (Port = 1; Port <= NumPorts; Port++)
+        {
+            ULONG BitIndex = Port;
+            ULONG ByteIndex = BitIndex >> 3;
+            UCHAR BitMask = (UCHAR)(1u << (BitIndex & 7));
+
+            if (ByteIndex < HubExtension->SCEBitmapLength)
+                ((PUCHAR)Bitmap)[ByteIndex] |= BitMask;
+        }
+
+        Port = 1;
     }
 
     Status = USBH_ChangeIndicationQueryChange(HubExtension,

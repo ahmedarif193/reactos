@@ -371,17 +371,21 @@ IopFreeDeviceNode(
 
     RtlFreeUnicodeString(&DeviceNode->ServiceName);
 
-    if (DeviceNode->ResourceList)
+    if (DeviceNode->ResourceList || DeviceNode->ResourceListTranslated)
     {
-        IopReleaseMessageInterruptVectors(DeviceNode->ResourceListTranslated ?
-                                          DeviceNode->ResourceListTranslated :
-                                          DeviceNode->ResourceList);
-        ExFreePool(DeviceNode->ResourceList);
-    }
+        PCM_RESOURCE_LIST RawList = DeviceNode->ResourceList;
+        PCM_RESOURCE_LIST XlatList = DeviceNode->ResourceListTranslated;
 
-    if (DeviceNode->ResourceListTranslated)
-    {
-        ExFreePool(DeviceNode->ResourceListTranslated);
+        IopReleaseMessageInterruptVectors(XlatList ? XlatList : RawList);
+
+        if (RawList)
+            ExFreePool(RawList);
+
+        if (XlatList && XlatList != RawList)
+            ExFreePool(XlatList);
+
+        DeviceNode->ResourceList = NULL;
+        DeviceNode->ResourceListTranslated = NULL;
     }
 
     if (DeviceNode->ResourceRequirements)

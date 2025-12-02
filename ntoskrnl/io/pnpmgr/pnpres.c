@@ -8,6 +8,7 @@
  */
 
 #include <ntoskrnl.h>
+#include <reactos/hal/acpi_pci.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -312,12 +313,38 @@ IopFixupResourceListWithRequirements(
     ULONG i, OldCount;
     BOOLEAN AlternateRequired = FALSE;
     PIO_RESOURCE_LIST ResList;
+    USHORT Segment = 0;
+    UCHAR Bus = 0;
+    BOOLEAN MsiAllowed = HalIsPciMsiSupported();
+    ULONG OscMasked = 0;
 
     /* Save the initial resource count when we got here so we can restore if an alternate fails */
     if (*ResourceList != NULL)
         OldCount = (*ResourceList)->List[0].PartialResourceList.Count;
     else
         OldCount = 0;
+
+    if (RequirementsList->InterfaceType == PCIBus)
+    {
+        Segment = (USHORT)RequirementsList->BusNumber >> 8;
+        Bus = (UCHAR)(RequirementsList->BusNumber & 0xFF);
+        USHORT EffectiveSegment = Segment;
+        if (!HalQueryPciMsiSupport(Segment,
+                                   Bus,
+                                   &MsiAllowed,
+                                   NULL,
+                                   NULL,
+                                   &EffectiveSegment,
+                                   &OscMasked))
+        {
+            MsiAllowed = HalIsPciMsiSupported();
+            OscMasked = 0;
+        }
+        else
+        {
+            Segment = EffectiveSegment;
+        }
+    }
 
     ResList = &RequirementsList->List[0];
     for (i = 0; i < RequirementsList->AlternativeLists; i++, ResList = IopGetNextResourceList(ResList))
@@ -336,16 +363,25 @@ IopFixupResourceListWithRequirements(
         {
             PCM_RESOURCE_LIST NewList;
 
-            /* Let's resize it */
+            /*
+             * Drop any MSI/MSI-X vectors that were reserved while
+             * processing the previous alternative list.
+             */
+            IopReleaseMessageInterruptVectors(*ResourceList);
+
+            /* Restore the original descriptor count */
             (*ResourceList)->List[0].PartialResourceList.Count = OldCount;
 
             /* Allocate the new smaller list */
             NewList = ExAllocatePool(PagedPool, PnpDetermineResourceListSize(*ResourceList));
             if (!NewList)
+            {
+                ExFreePool(*ResourceList);
+                *ResourceList = NULL;
                 return STATUS_NO_MEMORY;
+            }
 
             /* Copy the old stuff back */
-            IopReleaseMessageInterruptVectors(*ResourceList);
             RtlCopyMemory(NewList, *ResourceList, PnpDetermineResourceListSize(*ResourceList));
 
             /* Free the old one */
@@ -391,6 +427,46 @@ IopFixupResourceListWithRequirements(
                 switch (IoDesc->Type)
                 {
                     case CmResourceTypeInterrupt:
+                        /* If MSI is not allowed on this PCI root, ignore message-interrupt descriptors. */
+                        if (!MsiAllowed &&
+                            (IoDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+                        {
+                            continue;
+                        }
+
+                        if ((OscMasked & HAL_ACPI_OSC_SUPPORT_MSI) &&
+                            (IoDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+                        {
+                            continue;
+                        }
+
+                        /* Message interrupts: match on count (and message flag), not vector range. */
+                        if (IoDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
+                        {
+                            if (CmDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
+                            {
+                                ULONG ReqCount = IoDesc->u.Interrupt.MaximumVector -
+                                                 IoDesc->u.Interrupt.MinimumVector + 1;
+                                ULONG AllocCount = CmDesc->u.MessageInterrupt.Raw.MessageCount;
+                                if (ReqCount == 0)
+                                    ReqCount = 1;
+                                if (AllocCount == 0)
+                                    AllocCount = 1;
+
+                                if (AllocCount >= ReqCount)
+                                {
+                                    Matched = TRUE;
+                                }
+                                else
+                                {
+                                    DPRINT1("Message interrupt - Not a match! requested %lu messages but got %lu\n",
+                                            ReqCount,
+                                            AllocCount);
+                                }
+                            }
+                            break;
+                        }
+
                         /* Make sure it satisfies our vector range */
                         if (CmDesc->u.Interrupt.Vector >= IoDesc->u.Interrupt.MinimumVector &&
                             CmDesc->u.Interrupt.Vector <= IoDesc->u.Interrupt.MaximumVector)
@@ -587,7 +663,32 @@ IopFixupResourceListWithRequirements(
                     /* We need a new list */
                     NewList = ExAllocatePool(PagedPool, sizeof(CM_RESOURCE_LIST));
                     if (!NewList)
+                    {
+                        if (IoDesc->Type == CmResourceTypeInterrupt &&
+                            (NewDesc.Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+                        {
+                            CM_RESOURCE_LIST TempList;
+
+                            TempList.Count = 1;
+                            TempList.List[0].InterfaceType = InterfaceTypeUndefined;
+                            TempList.List[0].BusNumber = 0;
+                            TempList.List[0].PartialResourceList.Version = 1;
+                            TempList.List[0].PartialResourceList.Revision = 1;
+                            TempList.List[0].PartialResourceList.Count = 1;
+                            TempList.List[0].PartialResourceList.PartialDescriptors[0] = NewDesc;
+
+                            IopReleaseMessageInterruptVectors(&TempList);
+                        }
+
+                        if (*ResourceList)
+                        {
+                            IopReleaseMessageInterruptVectors(*ResourceList);
+                            ExFreePool(*ResourceList);
+                            *ResourceList = NULL;
+                        }
+
                         return STATUS_NO_MEMORY;
+                    }
 
                     /* Set it up */
                     NewList->Count = 1;
@@ -605,7 +706,32 @@ IopFixupResourceListWithRequirements(
                     /* Allocate the new larger list */
                     NewList = ExAllocatePool(PagedPool, PnpDetermineResourceListSize(*ResourceList) + sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR));
                     if (!NewList)
+                    {
+                        if (IoDesc->Type == CmResourceTypeInterrupt &&
+                            (NewDesc.Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+                        {
+                            CM_RESOURCE_LIST TempList;
+
+                            TempList.Count = 1;
+                            TempList.List[0].InterfaceType = InterfaceTypeUndefined;
+                            TempList.List[0].BusNumber = 0;
+                            TempList.List[0].PartialResourceList.Version = 1;
+                            TempList.List[0].PartialResourceList.Revision = 1;
+                            TempList.List[0].PartialResourceList.Count = 1;
+                            TempList.List[0].PartialResourceList.PartialDescriptors[0] = NewDesc;
+
+                            IopReleaseMessageInterruptVectors(&TempList);
+                        }
+
+                        if (*ResourceList)
+                        {
+                            IopReleaseMessageInterruptVectors(*ResourceList);
+                            ExFreePool(*ResourceList);
+                            *ResourceList = NULL;
+                        }
+
                         return STATUS_NO_MEMORY;
+                    }
 
                     /* Copy the old stuff back */
                     RtlCopyMemory(NewList, *ResourceList, PnpDetermineResourceListSize(*ResourceList));

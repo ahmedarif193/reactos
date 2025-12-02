@@ -1490,6 +1490,10 @@ IopAllocateIrqVectors(
 
 VOID
 NTAPI
+IopArbIrqEarlyInit(VOID);
+
+VOID
+NTAPI
 IopReserveIrqVectors(
     _In_reads_(Count) PULONG Vectors,
     _In_ ULONG Count);
