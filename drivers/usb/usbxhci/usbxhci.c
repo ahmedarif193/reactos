@@ -8087,7 +8087,7 @@ XHCI_RH_UpdatePortStatusFields(
     _In_ ULONG PortValue,
     _Inout_ PUSB_PORT_STATUS_AND_CHANGE PortStatus)
 {
-    if (PortNumber == 5) // DPRINT1("Update: P5 Raw=%08lx\n", PortValue);
+    // if (PortNumber == 5) DPRINT1("Update: P5 Raw=%08lx\n", PortValue);
     static BOOLEAN P5Injected = FALSE;
     // DPRINT1("Update: P5 Raw=%08lx\n", PortValue);
     ULONG Speed;
@@ -8099,12 +8099,6 @@ XHCI_RH_UpdatePortStatusFields(
     PUSB_30_PORT_STATUS PortStatus30 = &PortStatus->PortStatus.Usb30PortStatus;
     PUSB_30_PORT_CHANGE PortChange30 = &PortStatus->PortChange.Usb30PortChange;
 
-    /* HACK: Ignore Port 6 to stop storm */
-    if (PortNumber == 6)
-    {
-         PortStatus->PortStatus.AsUshort16 = 0;
-         return;
-    }
     UCHAR Protocol = 0;
 
     if (Extension && PortNumber > 0 && PortNumber <= XHCI_MAX_PORTS)
