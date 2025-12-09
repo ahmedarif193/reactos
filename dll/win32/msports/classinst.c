@@ -113,11 +113,13 @@ GetBootResourceList(HDEVINFO DeviceInfoSet,
                               NULL,
                              (LPBYTE)lpBuffer,
                               &dwDataSize);
-    if (lError == ERROR_SUCCESS)
+    if (lError != ERROR_SUCCESS)
     {
         ERR("RegQueryValueExW() failed (Error %lu)\n", lError);
-        ret = TRUE;
+        goto done;
     }
+
+    ret = TRUE;
 
 done:
     if (ret == FALSE && lpBuffer != NULL)

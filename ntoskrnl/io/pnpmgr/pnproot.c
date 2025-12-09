@@ -13,6 +13,10 @@
 #define NDEBUG
 #include <debug.h>
 
+BOOLEAN
+NTAPI
+InbvHasValidGopFrameBuffer(VOID);
+
 /* GLOBALS *******************************************************************/
 
 #define ENUM_NAME_ROOT L"Root"
@@ -63,6 +67,213 @@ typedef struct _BUFFER
 } BUFFER, *PBUFFER;
 
 static PNPROOT_FDO_DEVICE_EXTENSION PnpRootDOExtension;
+
+static
+VOID
+PnpRootEnsureUefiFramebufferInstance(VOID);
+
+static
+VOID
+PnpRootSetSzValue(
+    _In_opt_ HANDLE KeyHandle,
+    _In_ PCWSTR ValueName,
+    _In_ PCWSTR Data)
+{
+    UNICODE_STRING Name;
+    SIZE_T Length;
+    ULONG DataLength;
+
+    if ((KeyHandle == NULL) || (ValueName == NULL) || (Data == NULL))
+        return;
+
+    RtlInitUnicodeString(&Name, ValueName);
+    Length = wcslen(Data);
+    if (Length >= UNICODE_STRING_MAX_CHARS)
+        return;
+
+    DataLength = (ULONG)((Length + 1) * sizeof(WCHAR));
+    ZwSetValueKey(KeyHandle, &Name, 0, REG_SZ, (PVOID)Data, DataLength);
+}
+
+static
+VOID
+PnpRootSetDwordValue(
+    _In_opt_ HANDLE KeyHandle,
+    _In_ PCWSTR ValueName,
+    _In_ ULONG Data)
+{
+    UNICODE_STRING Name;
+
+    if ((KeyHandle == NULL) || (ValueName == NULL))
+        return;
+
+    RtlInitUnicodeString(&Name, ValueName);
+    ZwSetValueKey(KeyHandle, &Name, 0, REG_DWORD, &Data, sizeof(Data));
+}
+
+static
+VOID
+PnpRootSetMultiSzValue(
+    _In_opt_ HANDLE KeyHandle,
+    _In_ PCWSTR ValueName,
+    _In_reads_bytes_(DataLength) const WCHAR *Data,
+    _In_ ULONG DataLength)
+{
+    UNICODE_STRING Name;
+
+    if ((KeyHandle == NULL) || (ValueName == NULL) || (Data == NULL))
+        return;
+
+    RtlInitUnicodeString(&Name, ValueName);
+    ZwSetValueKey(KeyHandle, &Name, 0, REG_MULTI_SZ, (PVOID)Data, DataLength);
+}
+
+static
+VOID
+PnpRootEnsureUefiFramebufferInstance(VOID)
+{
+    static const WCHAR UefiFbDeviceDesc[] = L"UEFI Framebuffer Adapter";
+    static const WCHAR UefiFbClassName[] = L"Display";
+    static const WCHAR UefiFbClassGuid[] = L"{4D36E968-E325-11CE-BFC1-08002BE10318}";
+    static const WCHAR UefiFbManufacturer[] = L"ReactOS Project";
+    static const WCHAR UefiFbService[] = L"uefifb";
+    static const WCHAR UefiFbHardwareIds[] = L"ROOT\\UEFIFB\0DISPLAY\\ROSUEFIFB\0\0";
+    static const WCHAR UefiFbCompatibleIds[] = L"ROOT\\DISPLAY\0\0";
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING EnumRootPath = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\System\\CurrentControlSet\\Enum\\Root");
+    UNICODE_STRING DeviceKeyName = RTL_CONSTANT_STRING(L"UEFIFB");
+    UNICODE_STRING InstanceName = RTL_CONSTANT_STRING(L"0000");
+    UNICODE_STRING ControlName = RTL_CONSTANT_STRING(L"Control");
+    UNICODE_STRING LogConfName = RTL_CONSTANT_STRING(L"LogConf");
+    HANDLE RootKey = NULL, DeviceKey = NULL, InstanceKey = NULL, ControlKey = NULL, LogConfKey = NULL;
+    ULONG Disposition;
+    NTSTATUS Status;
+    ULONG Value;
+    UNICODE_STRING ValueName;
+
+    if (!InbvHasValidGopFrameBuffer())
+        return;
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &EnumRootPath,
+                               OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                               NULL,
+                               NULL);
+    Status = ZwCreateKey(&RootKey,
+                         KEY_READ | KEY_WRITE,
+                         &ObjectAttributes,
+                         0,
+                         NULL,
+                         REG_OPTION_NON_VOLATILE,
+                         &Disposition);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &DeviceKeyName,
+                               OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                               RootKey,
+                               NULL);
+    Status = ZwCreateKey(&DeviceKey,
+                         KEY_READ | KEY_WRITE,
+                         &ObjectAttributes,
+                         0,
+                         NULL,
+                         REG_OPTION_NON_VOLATILE,
+                         &Disposition);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    Value = 1;
+    PnpRootSetDwordValue(DeviceKey, L"NextInstance", Value);
+    PnpRootSetSzValue(DeviceKey, L"Class", UefiFbClassName);
+    PnpRootSetSzValue(DeviceKey, L"ClassGUID", UefiFbClassGuid);
+    PnpRootSetSzValue(DeviceKey, L"DeviceDesc", UefiFbDeviceDesc);
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &InstanceName,
+                               OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                               DeviceKey,
+                               NULL);
+    Status = ZwCreateKey(&InstanceKey,
+                         KEY_READ | KEY_WRITE,
+                         &ObjectAttributes,
+                         0,
+                         NULL,
+                         REG_OPTION_NON_VOLATILE,
+                         &Disposition);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    PnpRootSetMultiSzValue(InstanceKey,
+                           L"HardwareID",
+                           UefiFbHardwareIds,
+                           sizeof(UefiFbHardwareIds));
+    PnpRootSetMultiSzValue(InstanceKey,
+                           L"CompatibleIDs",
+                           UefiFbCompatibleIds,
+                           sizeof(UefiFbCompatibleIds));
+    PnpRootSetSzValue(InstanceKey, L"Class", UefiFbClassName);
+    PnpRootSetSzValue(InstanceKey, L"ClassGUID", UefiFbClassGuid);
+    PnpRootSetSzValue(InstanceKey, L"DeviceDesc", UefiFbDeviceDesc);
+    PnpRootSetSzValue(InstanceKey, L"Mfg", UefiFbManufacturer);
+    PnpRootSetSzValue(InstanceKey, L"Service", UefiFbService);
+    Value = 0;
+    PnpRootSetDwordValue(InstanceKey, L"ConfigFlags", Value);
+    PnpRootSetDwordValue(InstanceKey, L"Capabilities", Value);
+    Value = 1;
+    PnpRootSetDwordValue(InstanceKey, L"DeviceReported", Value);
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &ControlName,
+                               OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                               InstanceKey,
+                               NULL);
+    Status = ZwCreateKey(&ControlKey,
+                         KEY_READ | KEY_WRITE,
+                         &ObjectAttributes,
+                         0,
+                         NULL,
+                         REG_OPTION_NON_VOLATILE,
+                         &Disposition);
+    if (NT_SUCCESS(Status))
+    {
+        Value = 1;
+        PnpRootSetDwordValue(ControlKey, L"DeviceReported", Value);
+    }
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &LogConfName,
+                               OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                               InstanceKey,
+                               NULL);
+    Status = ZwCreateKey(&LogConfKey,
+                         KEY_READ | KEY_WRITE,
+                         &ObjectAttributes,
+                         0,
+                         NULL,
+                         REG_OPTION_NON_VOLATILE,
+                         &Disposition);
+    if (NT_SUCCESS(Status))
+    {
+        RtlInitUnicodeString(&ValueName, L"BootConfig");
+        ZwSetValueKey(LogConfKey, &ValueName, 0, REG_BINARY, NULL, 0);
+        RtlInitUnicodeString(&ValueName, L"BasicConfigVector");
+        ZwSetValueKey(LogConfKey, &ValueName, 0, REG_BINARY, NULL, 0);
+    }
+
+Cleanup:
+    if (LogConfKey)
+        ZwClose(LogConfKey);
+    if (ControlKey)
+        ZwClose(ControlKey);
+    if (InstanceKey)
+        ZwClose(InstanceKey);
+    if (DeviceKey)
+        ZwClose(DeviceKey);
+    if (RootKey)
+        ZwClose(RootKey);
+}
 
 /* FUNCTIONS *****************************************************************/
 
@@ -663,6 +874,10 @@ EnumerateDevices(
     ULONG ResultSize;
     ULONG Index1, Index2;
     NTSTATUS Status = STATUS_UNSUCCESSFUL;
+    const UNICODE_STRING UefiFbKey = RTL_CONSTANT_STRING(L"UEFIFB");
+    BOOLEAN HasGopFramebuffer = InbvHasValidGopFrameBuffer();
+    if (HasGopFramebuffer)
+        PnpRootEnsureUefiFramebufferInstance();
 
     DPRINT("EnumerateDevices(FDO %p)\n", DeviceObject);
 
@@ -748,6 +963,13 @@ EnumerateDevices(
         if (RtlPrefixUnicodeString(&LegacyU, &SubKeyName, FALSE))
         {
             DPRINT("Ignoring legacy driver '%wZ'\n", &SubKeyName);
+            Index1++;
+            continue;
+        }
+
+        if (!HasGopFramebuffer &&
+            RtlEqualUnicodeString(&SubKeyName, &UefiFbKey, TRUE))
+        {
             Index1++;
             continue;
         }

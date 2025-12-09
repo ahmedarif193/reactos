@@ -107,6 +107,42 @@
 #define USBHUB_RESET_PORT_MAX_RETRY  3
 #define USBHUB_MAX_REQUEST_ERRORS    3
 
+FORCEINLINE
+BOOLEAN
+USBH_PortStatusIsConnected(
+    _In_ const USB_PORT_STATUS_AND_CHANGE *PortStatus)
+{
+    return (PortStatus->PortStatus.Usb20PortStatus.CurrentConnectStatus != 0) ||
+           (PortStatus->PortStatus.Usb30PortStatus.CurrentConnectStatus != 0);
+}
+
+FORCEINLINE
+VOID
+USBH_PortStatusForceConnected(
+    _Inout_ USB_PORT_STATUS_AND_CHANGE *PortStatus)
+{
+    PortStatus->PortStatus.Usb20PortStatus.CurrentConnectStatus = 1;
+    PortStatus->PortStatus.Usb30PortStatus.CurrentConnectStatus = 1;
+}
+
+FORCEINLINE
+BOOLEAN
+USBH_PortChangeHasConnect(
+    _In_ const USB_PORT_STATUS_AND_CHANGE *PortStatus)
+{
+    return (PortStatus->PortChange.Usb20PortChange.ConnectStatusChange != 0) ||
+           (PortStatus->PortChange.Usb30PortChange.ConnectStatusChange != 0);
+}
+
+FORCEINLINE
+VOID
+USBH_PortChangeMarkConnect(
+    _Inout_ USB_PORT_STATUS_AND_CHANGE *PortStatus)
+{
+    PortStatus->PortChange.Usb20PortChange.ConnectStatusChange = 1;
+    PortStatus->PortChange.Usb30PortChange.ConnectStatusChange = 1;
+}
+
 
 #define USBHUB_FAIL_NO_FAIL            5
 #define USBHUB_FAIL_NESTED_TOO_DEEPLY  6
@@ -120,6 +156,7 @@ typedef struct _USBHUB_PORT_DATA {
   PDEVICE_OBJECT DeviceObject;
   USB_CONNECTION_STATUS ConnectionStatus;
   ULONG PortAttributes;
+  ULONG LogFlags;
 } USBHUB_PORT_DATA, *PUSBHUB_PORT_DATA;
 
 typedef struct _USBHUB_FDO_EXTENSION *PUSBHUB_FDO_EXTENSION;

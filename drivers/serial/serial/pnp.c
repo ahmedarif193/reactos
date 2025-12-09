@@ -14,6 +14,42 @@
 #include <ndk/haltypes.h>
 #include <debug.h>
 
+static
+BOOLEAN
+SerialRequirementsIncludeDebuggerPort(
+    PIO_RESOURCE_REQUIREMENTS_LIST Requirements)
+{
+    ULONGLONG DebugStart, DebugEnd;
+    ULONG alt, desc;
+
+    if (!KdComPortInUse || Requirements == NULL)
+        return FALSE;
+
+    DebugStart = (ULONGLONG)(ULONG_PTR)KdComPortInUse;
+    DebugEnd = DebugStart + 8;
+
+    for (alt = 0; alt < Requirements->AlternativeLists; alt++)
+    {
+        PIO_RESOURCE_LIST ResourceList = &Requirements->List[alt];
+
+        for (desc = 0; desc < ResourceList->Count; desc++)
+        {
+            PIO_RESOURCE_DESCRIPTOR Descriptor = &ResourceList->Descriptors[desc];
+
+            if (Descriptor->Type != CmResourceTypePort)
+                continue;
+
+            if ((ULONGLONG)Descriptor->u.Port.MinimumAddress.QuadPart <= DebugStart &&
+                (ULONGLONG)Descriptor->u.Port.MaximumAddress.QuadPart + 1 >= DebugEnd)
+            {
+                return TRUE;
+            }
+        }
+    }
+
+    return FALSE;
+}
+
 NTSTATUS NTAPI
 SerialAddDeviceInternal(
 	IN PDRIVER_OBJECT DriverObject,
@@ -134,193 +170,200 @@ SerialAddDevice(
 
 NTSTATUS NTAPI
 SerialPnpStartDevice(
-	IN PDEVICE_OBJECT DeviceObject,
-	IN PCM_RESOURCE_LIST ResourceList,
-	IN PCM_RESOURCE_LIST ResourceListTranslated)
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PCM_RESOURCE_LIST ResourceList,
+    IN PCM_RESOURCE_LIST ResourceListTranslated)
 {
-	PSERIAL_DEVICE_EXTENSION DeviceExtension;
-	WCHAR DeviceNameBuffer[32];
-	UNICODE_STRING DeviceName;
-	WCHAR LinkNameBuffer[32];
-	UNICODE_STRING LinkName;
-	WCHAR ComPortBuffer[32];
-	UNICODE_STRING ComPort;
-	ULONG Vector = 0;
-	ULONG i;
-	UCHAR IER;
-	KIRQL Dirql;
-	KAFFINITY Affinity = 0;
-	KINTERRUPT_MODE InterruptMode = Latched;
-	BOOLEAN ShareInterrupt = TRUE;
-	OBJECT_ATTRIBUTES objectAttributes;
-	PUCHAR ComPortBase;
-	UNICODE_STRING KeyName;
-	HANDLE hKey;
-	NTSTATUS Status;
+    PSERIAL_DEVICE_EXTENSION DeviceExtension;
+    WCHAR DeviceNameBuffer[32];
+    UNICODE_STRING DeviceName;
+    WCHAR LinkNameBuffer[32];
+    UNICODE_STRING LinkName;
+    WCHAR ComPortBuffer[32];
+    UNICODE_STRING ComPort;
+    ULONG Vector = 0;
+    ULONG i;
+    UCHAR IER;
+    KIRQL Dirql;
+    KAFFINITY Affinity = 0;
+    KINTERRUPT_MODE InterruptMode = Latched;
+    BOOLEAN ShareInterrupt = TRUE;
+    OBJECT_ATTRIBUTES objectAttributes;
+    PUCHAR ComPortBase = NULL;
+    UNICODE_STRING KeyName;
+    HANDLE hKey;
+    BOOLEAN DebuggerOwned;
+    NTSTATUS Status;
 
-	DeviceExtension = (PSERIAL_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    DeviceExtension = (PSERIAL_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
 
-	ASSERT(DeviceExtension);
+    ASSERT(DeviceExtension);
 
-	if (!ResourceList)
-	{
-		WARN_(SERIAL, "No allocated resources sent to driver\n");
-		return STATUS_INSUFFICIENT_RESOURCES;
-	}
-	if (ResourceList->Count != 1)
-	{
-		WARN_(SERIAL, "Wrong number of allocated resources sent to driver\n");
-		return STATUS_INSUFFICIENT_RESOURCES;
-	}
-	if (ResourceList->List[0].PartialResourceList.Version != 1
-	 || ResourceList->List[0].PartialResourceList.Revision != 1
-	 || ResourceListTranslated->List[0].PartialResourceList.Version != 1
-	 || ResourceListTranslated->List[0].PartialResourceList.Revision != 1)
-	{
-		WARN_(SERIAL, "Revision mismatch: %u.%u != 1.1 or %u.%u != 1.1\n",
-			ResourceList->List[0].PartialResourceList.Version,
-			ResourceList->List[0].PartialResourceList.Revision,
-			ResourceListTranslated->List[0].PartialResourceList.Version,
-			ResourceListTranslated->List[0].PartialResourceList.Revision);
-		return STATUS_REVISION_MISMATCH;
-	}
+    if (!ResourceList ||
+        !ResourceListTranslated ||
+        ResourceList->Count != 1 ||
+        ResourceListTranslated->Count != 1 ||
+        ResourceList->List[0].PartialResourceList.Version != 1 ||
+        ResourceList->List[0].PartialResourceList.Revision != 1 ||
+        ResourceListTranslated->List[0].PartialResourceList.Version != 1 ||
+        ResourceListTranslated->List[0].PartialResourceList.Revision != 1)
+    {
+        TRACE_(SERIAL, "Resources not supplied or invalid, assuming debugger-owned port\n");
+        ResourceList = NULL;
+        ResourceListTranslated = NULL;
+    }
 
-	DeviceExtension->BaudRate = 19200;
-	DeviceExtension->BaseAddress = 0;
-	Dirql = 0;
-	for (i = 0; i < ResourceList->List[0].PartialResourceList.Count; i++)
-	{
-		PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptor = &ResourceList->List[0].PartialResourceList.PartialDescriptors[i];
-		PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptorTranslated = &ResourceListTranslated->List[0].PartialResourceList.PartialDescriptors[i];
-		switch (PartialDescriptor->Type)
-		{
-			case CmResourceTypePort:
-				if (PartialDescriptor->u.Port.Length < 7)
-					return STATUS_INSUFFICIENT_RESOURCES;
-				if (DeviceExtension->BaseAddress != 0)
-					return STATUS_UNSUCCESSFUL;
-				DeviceExtension->BaseAddress = PartialDescriptor->u.Port.Start.u.LowPart;
-				break;
-			case CmResourceTypeInterrupt:
-				Dirql = (KIRQL)PartialDescriptorTranslated->u.Interrupt.Level;
-				Vector = PartialDescriptorTranslated->u.Interrupt.Vector;
-				Affinity = PartialDescriptorTranslated->u.Interrupt.Affinity;
-				if (PartialDescriptorTranslated->Flags & CM_RESOURCE_INTERRUPT_LATCHED)
-					InterruptMode = Latched;
-				else
-					InterruptMode = LevelSensitive;
-				ShareInterrupt = (PartialDescriptorTranslated->ShareDisposition == CmResourceShareShared);
-				break;
-		}
-	}
-	INFO_(SERIAL, "New COM port. Base = 0x%lx, Irql = %u\n",
-		DeviceExtension->BaseAddress, Dirql);
-	if (!DeviceExtension->BaseAddress)
-		return STATUS_INSUFFICIENT_RESOURCES;
-	if (!Dirql)
-		return STATUS_INSUFFICIENT_RESOURCES;
-	ComPortBase = ULongToPtr(DeviceExtension->BaseAddress);
+    DeviceExtension->BaudRate = 19200;
+    DeviceExtension->BaseAddress = 0;
+    DeviceExtension->WaitMask = 0;
+    Dirql = 0;
+    DebuggerOwned = DeviceExtension->DebuggerOwned;
 
-	/* Test if we are trying to start the serial port used for debugging */
-    INFO_(SERIAL, "Comparing addresses: KdComPortInUse: %p, ComPortBase: %p\n", KdComPortInUse, ComPortBase);
-	if (KdComPortInUse == ComPortBase)
-	{
-		INFO_(SERIAL, "Failing IRP_MN_START_DEVICE as this serial port is used for debugging\n");
-		return STATUS_INSUFFICIENT_RESOURCES;
-	}
+    if (!ResourceList ||
+        ResourceList->List[0].PartialResourceList.Count == 0)
+    {
+        DebuggerOwned = TRUE;
+    }
 
-	if (DeviceExtension->UartType == UartUnknown)
-		DeviceExtension->UartType = SerialDetectUartType(ComPortBase);
+    if (!DebuggerOwned && ResourceList)
+    {
+        for (i = 0; i < ResourceList->List[0].PartialResourceList.Count; i++)
+        {
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptor = &ResourceList->List[0].PartialResourceList.PartialDescriptors[i];
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptorTranslated = &ResourceListTranslated->List[0].PartialResourceList.PartialDescriptors[i];
+            switch (PartialDescriptor->Type)
+            {
+                case CmResourceTypePort:
+                    if (PartialDescriptor->u.Port.Length < 7)
+                        return STATUS_INSUFFICIENT_RESOURCES;
+                    if (DeviceExtension->BaseAddress != 0)
+                        return STATUS_UNSUCCESSFUL;
+                    DeviceExtension->BaseAddress = PartialDescriptor->u.Port.Start.u.LowPart;
+                    break;
+                case CmResourceTypeInterrupt:
+                    Dirql = (KIRQL)PartialDescriptorTranslated->u.Interrupt.Level;
+                    Vector = PartialDescriptorTranslated->u.Interrupt.Vector;
+                    Affinity = PartialDescriptorTranslated->u.Interrupt.Affinity;
+                    if (PartialDescriptorTranslated->Flags & CM_RESOURCE_INTERRUPT_LATCHED)
+                        InterruptMode = Latched;
+                    else
+                        InterruptMode = LevelSensitive;
+                    ShareInterrupt = (PartialDescriptorTranslated->ShareDisposition == CmResourceShareShared);
+                    break;
+            }
+        }
+        INFO_(SERIAL, "New COM port. Base = 0x%lx, Irql = %u\n",
+            DeviceExtension->BaseAddress, Dirql);
+        if (!DeviceExtension->BaseAddress)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        if (!Dirql)
+            return STATUS_INSUFFICIENT_RESOURCES;
 
-	/* Get current settings */
-	DeviceExtension->MCR = READ_PORT_UCHAR(SER_MCR(ComPortBase));
-	DeviceExtension->MSR = READ_PORT_UCHAR(SER_MSR(ComPortBase));
-	DeviceExtension->WaitMask = 0;
+        ComPortBase = ULongToPtr(DeviceExtension->BaseAddress);
 
-	/* Set baud rate */
-	Status = SerialSetBaudRate(DeviceExtension, DeviceExtension->BaudRate);
-	if (!NT_SUCCESS(Status))
-	{
-		WARN_(SERIAL, "SerialSetBaudRate() failed with status 0x%08x\n", Status);
-		return Status;
-	}
+        INFO_(SERIAL, "Comparing addresses: KdComPortInUse: %p, ComPortBase: %p\n", KdComPortInUse, ComPortBase);
+        if (KdComPortInUse == ComPortBase)
+            DebuggerOwned = TRUE;
+    }
 
-	/* Set line control */
-	DeviceExtension->SerialLineControl.StopBits = STOP_BIT_1;
-	DeviceExtension->SerialLineControl.Parity = NO_PARITY;
-	DeviceExtension->SerialLineControl.WordLength = 8;
-	Status = SerialSetLineControl(DeviceExtension, &DeviceExtension->SerialLineControl);
-	if (!NT_SUCCESS(Status))
-	{
-		WARN_(SERIAL, "SerialSetLineControl() failed with status 0x%08x\n", Status);
-		return Status;
-	}
+    if (DebuggerOwned)
+    {
+        DeviceExtension->DebuggerOwned = TRUE;
+        if (!ComPortBase && KdComPortInUse)
+        {
+            ComPortBase = (PUCHAR)KdComPortInUse;
+            DeviceExtension->BaseAddress = (ULONG)(ULONG_PTR)KdComPortInUse;
+        }
+        INFO_(SERIAL, "Reserving COM%lu for kernel debugger use\n", DeviceExtension->ComPort);
+    }
+    else
+    {
+        DeviceExtension->DebuggerOwned = FALSE;
 
-	/* Clear receive/transmit buffers */
-	if (DeviceExtension->UartType >= Uart16550A)
-	{
-		/* 16550 UARTs also have FIFO queues, but they are unusable due to a bug */
-		WRITE_PORT_UCHAR(SER_FCR(ComPortBase),
-			SR_FCR_CLEAR_RCVR | SR_FCR_CLEAR_XMIT);
-	}
+        if (DeviceExtension->UartType == UartUnknown)
+            DeviceExtension->UartType = SerialDetectUartType(ComPortBase);
 
-	/* Create link \DosDevices\COMX -> \Device\SerialX */
-	swprintf(DeviceNameBuffer, L"\\Device\\Serial%lu", DeviceExtension->SerialPortNumber);
-	swprintf(LinkNameBuffer, L"\\DosDevices\\COM%lu", DeviceExtension->ComPort);
-	swprintf(ComPortBuffer, L"COM%lu", DeviceExtension->ComPort);
-	RtlInitUnicodeString(&DeviceName, DeviceNameBuffer);
-	RtlInitUnicodeString(&LinkName, LinkNameBuffer);
-	RtlInitUnicodeString(&ComPort, ComPortBuffer);
-	Status = IoCreateSymbolicLink(&LinkName, &DeviceName);
-	if (!NT_SUCCESS(Status))
-	{
-		WARN_(SERIAL, "IoCreateSymbolicLink() failed with status 0x%08x\n", Status);
-		return Status;
-	}
+        DeviceExtension->MCR = READ_PORT_UCHAR(SER_MCR(ComPortBase));
+        DeviceExtension->MSR = READ_PORT_UCHAR(SER_MSR(ComPortBase));
 
-	/* Connect interrupt and enable them */
-	Status = IoConnectInterrupt(
-		&DeviceExtension->Interrupt, SerialInterruptService,
-		DeviceObject, NULL,
-		Vector, Dirql, Dirql,
-		InterruptMode, ShareInterrupt,
-		Affinity, FALSE);
-	if (!NT_SUCCESS(Status))
-	{
-		WARN_(SERIAL, "IoConnectInterrupt() failed with status 0x%08x\n", Status);
-		{NTSTATUS status = IoSetDeviceInterfaceState(&DeviceExtension->SerialInterfaceName, FALSE); UNREFERENCED_PARAMETER(status);}
-		IoDeleteSymbolicLink(&LinkName);
-		return Status;
-	}
+        Status = SerialSetBaudRate(DeviceExtension, DeviceExtension->BaudRate);
+        if (!NT_SUCCESS(Status))
+        {
+            WARN_(SERIAL, "SerialSetBaudRate() failed with status 0x%08x\n", Status);
+            return Status;
+        }
 
-	/* Write an entry value under HKLM\HARDWARE\DeviceMap\SERIALCOMM */
-	/* This step is not mandatory, so don't exit in case of error */
-	RtlInitUnicodeString(&KeyName, L"\\Registry\\Machine\\HARDWARE\\DeviceMap\\SERIALCOMM");
-	InitializeObjectAttributes(&objectAttributes, &KeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-	Status = ZwCreateKey(&hKey, KEY_SET_VALUE, &objectAttributes, 0, NULL, REG_OPTION_VOLATILE, NULL);
-	if (NT_SUCCESS(Status))
-	{
-		/* Key = \Device\Serialx, Value = COMx */
-		ZwSetValueKey(hKey, &DeviceName, 0, REG_SZ, ComPortBuffer, ComPort.Length + sizeof(WCHAR));
-		ZwClose(hKey);
-	}
+        DeviceExtension->SerialLineControl.StopBits = STOP_BIT_1;
+        DeviceExtension->SerialLineControl.Parity = NO_PARITY;
+        DeviceExtension->SerialLineControl.WordLength = 8;
+        Status = SerialSetLineControl(DeviceExtension, &DeviceExtension->SerialLineControl);
+        if (!NT_SUCCESS(Status))
+        {
+            WARN_(SERIAL, "SerialSetLineControl() failed with status 0x%08x\n", Status);
+            return Status;
+        }
 
-	DeviceExtension->PnpState = dsStarted;
+        if (DeviceExtension->UartType >= Uart16550A)
+        {
+            WRITE_PORT_UCHAR(SER_FCR(ComPortBase),
+                SR_FCR_CLEAR_RCVR | SR_FCR_CLEAR_XMIT);
+        }
+    }
 
-	/* Activate interrupt modes */
-	IER = READ_PORT_UCHAR(SER_IER(ComPortBase));
-	IER |= SR_IER_DATA_RECEIVED | SR_IER_THR_EMPTY | SR_IER_LSR_CHANGE | SR_IER_MSR_CHANGE;
-	WRITE_PORT_UCHAR(SER_IER(ComPortBase), IER);
+    swprintf(DeviceNameBuffer, L"\\Device\\Serial%lu", DeviceExtension->SerialPortNumber);
+    swprintf(LinkNameBuffer, L"\\DosDevices\\COM%lu", DeviceExtension->ComPort);
+    swprintf(ComPortBuffer, L"COM%lu", DeviceExtension->ComPort);
+    RtlInitUnicodeString(&DeviceName, DeviceNameBuffer);
+    RtlInitUnicodeString(&LinkName, LinkNameBuffer);
+    RtlInitUnicodeString(&ComPort, ComPortBuffer);
+    Status = IoCreateSymbolicLink(&LinkName, &DeviceName);
+    if (!NT_SUCCESS(Status))
+    {
+        WARN_(SERIAL, "IoCreateSymbolicLink() failed with status 0x%08x\n", Status);
+        return Status;
+    }
 
-	/* Activate DTR, RTS */
-	DeviceExtension->MCR |= SR_MCR_DTR | SR_MCR_RTS;
-	WRITE_PORT_UCHAR(SER_MCR(ComPortBase), DeviceExtension->MCR);
+    if (!DebuggerOwned)
+    {
+        Status = IoConnectInterrupt(
+            &DeviceExtension->Interrupt, SerialInterruptService,
+            DeviceObject, NULL,
+            Vector, Dirql, Dirql,
+            InterruptMode, ShareInterrupt,
+            Affinity, FALSE);
+        if (!NT_SUCCESS(Status))
+        {
+            WARN_(SERIAL, "IoConnectInterrupt() failed with status 0x%08x\n", Status);
+            {NTSTATUS status = IoSetDeviceInterfaceState(&DeviceExtension->SerialInterfaceName, FALSE); UNREFERENCED_PARAMETER(status);}
+            IoDeleteSymbolicLink(&LinkName);
+            return Status;
+        }
+    }
 
-	/* Activate serial interface */
-	{NTSTATUS status = IoSetDeviceInterfaceState(&DeviceExtension->SerialInterfaceName, TRUE); UNREFERENCED_PARAMETER(status);}
-	/* We don't really care if the call succeeded or not... */
+    RtlInitUnicodeString(&KeyName, L"\\Registry\\Machine\\HARDWARE\\DeviceMap\\SERIALCOMM");
+    InitializeObjectAttributes(&objectAttributes, &KeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwCreateKey(&hKey, KEY_SET_VALUE, &objectAttributes, 0, NULL, REG_OPTION_VOLATILE, NULL);
+    if (NT_SUCCESS(Status))
+    {
+        ZwSetValueKey(hKey, &DeviceName, 0, REG_SZ, ComPortBuffer, ComPort.Length + sizeof(WCHAR));
+        ZwClose(hKey);
+    }
 
-	return STATUS_SUCCESS;
+    DeviceExtension->PnpState = dsStarted;
+
+    if (!DebuggerOwned)
+    {
+        IER = READ_PORT_UCHAR(SER_IER(ComPortBase));
+        IER |= SR_IER_DATA_RECEIVED | SR_IER_THR_EMPTY | SR_IER_LSR_CHANGE | SR_IER_MSR_CHANGE;
+        WRITE_PORT_UCHAR(SER_IER(ComPortBase), IER);
+
+        DeviceExtension->MCR |= SR_MCR_DTR | SR_MCR_RTS;
+        WRITE_PORT_UCHAR(SER_MCR(ComPortBase), DeviceExtension->MCR);
+    }
+
+    {NTSTATUS status = IoSetDeviceInterfaceState(&DeviceExtension->SerialInterfaceName, TRUE); UNREFERENCED_PARAMETER(status);}
+
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS NTAPI
@@ -411,7 +454,22 @@ SerialPnp(
 		}
 		case IRP_MN_FILTER_RESOURCE_REQUIREMENTS: /* (optional) 0xd */
 		{
+			PIO_RESOURCE_REQUIREMENTS_LIST Requirements;
+
 			TRACE_(SERIAL, "IRP_MJ_PNP / IRP_MN_FILTER_RESOURCE_REQUIREMENTS\n");
+			DeviceExtension = (PSERIAL_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+			Requirements = Stack->Parameters.FilterResourceRequirements.IoResourceRequirementList;
+			if (SerialRequirementsIncludeDebuggerPort(Requirements))
+			{
+				INFO_(SERIAL, "Filtering resource requirements for debugger-owned COM%lu\n", DeviceExtension->ComPort);
+				if (Requirements)
+				{
+					Requirements->AlternativeLists = 0;
+					Requirements->List[0].Count = 0;
+					Requirements->ListSize = FIELD_OFFSET(IO_RESOURCE_REQUIREMENTS_LIST, List);
+				}
+				DeviceExtension->DebuggerOwned = TRUE;
+			}
 			return ForwardIrpAndForget(DeviceObject, Irp);
 		}
 		default:

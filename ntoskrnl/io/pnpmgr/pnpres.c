@@ -346,6 +346,18 @@ IopFixupResourceListWithRequirements(
         }
     }
 
+    if (RequirementsList->AlternativeLists == 0)
+    {
+        if (*ResourceList)
+        {
+            IopReleaseMessageInterruptVectors(*ResourceList);
+            ExFreePool(*ResourceList);
+            *ResourceList = NULL;
+        }
+
+        return STATUS_SUCCESS;
+    }
+
     ResList = &RequirementsList->List[0];
     for (i = 0; i < RequirementsList->AlternativeLists; i++, ResList = IopGetNextResourceList(ResList))
     {
@@ -1614,12 +1626,23 @@ IopAssignDeviceResources(
 {
    NTSTATUS Status;
    ULONG ListSize;
+   BOOLEAN NoResourcesNeeded = FALSE;
 
    Status = IopFilterResourceRequirements(DeviceNode);
    if (!NT_SUCCESS(Status))
        goto ByeBye;
 
    if (!DeviceNode->BootResources && !DeviceNode->ResourceRequirements)
+   {
+       NoResourcesNeeded = TRUE;
+   }
+   else if (DeviceNode->ResourceRequirements &&
+            DeviceNode->ResourceRequirements->AlternativeLists == 0)
+   {
+       NoResourcesNeeded = TRUE;
+   }
+
+   if (NoResourcesNeeded)
    {
       /* No resource needed for this device */
       DeviceNode->ResourceList = NULL;

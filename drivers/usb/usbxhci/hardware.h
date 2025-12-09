@@ -121,7 +121,7 @@ typedef struct _XHCI_PROTOCOL_CAPABILITY {
 #define XHCI_PORTSC_WOE            0x08000000
 #define XHCI_PORTSC_DR             0x40000000
 #define XHCI_PORTSC_WPR            0x80000000
-#define XHCI_PORTSC_WRITE_MASK     0x80FF01FF
+#define XHCI_PORTSC_WRITE_MASK     0x80FF03FF
 
 /* Per‑port power management (PORTPMSC) – SuperSpeed ports */
 #define XHCI_PORTPMSC_U1_TIMEOUT_MASK   0x0000FF00u
@@ -155,6 +155,12 @@ typedef struct _XHCI_PROTOCOL_CAPABILITY {
 #define XHCI_TRB_TYPE_STOP_EP      15
 #define XHCI_TRB_TYPE_SET_DEQ      16
 #define XHCI_TRB_TYPE_RESET_DEV    17
+#define XHCI_TRB_TYPE_FORCE_EVENT  18
+#define XHCI_TRB_TYPE_NEG_BANDWIDTH 19
+#define XHCI_TRB_TYPE_SET_LT       20
+#define XHCI_TRB_TYPE_GET_BW       21
+#define XHCI_TRB_TYPE_FORCE_HEADER 22
+#define XHCI_TRB_TYPE_CMD_NOOP     23
 
 /* Event TRB types */
 #define XHCI_TRB_TYPE_TRANSFER_EVENT       32
@@ -310,6 +316,14 @@ typedef struct DECLSPEC_ALIGN(64) _XHCI_INPUT_CONTEXT {
 #define XHCI_SLOT_HUB_BIT                  (1u << 26)
 #define XHCI_SLOT_LAST_CTX_MASK            (0x1F << 27)
 #define XHCI_SLOT_ROOT_PORT_MASK           (0xFF << 16)
+#define XHCI_SLOT_TT_SLOT_MASK             0xFFu
+#define XHCI_SLOT_TT_PORT_SHIFT            8
+#define XHCI_SLOT_TT_PORT_MASK             (0xFFu << XHCI_SLOT_TT_PORT_SHIFT)
+#define XHCI_SLOT_TT_THINK_TIME_SHIFT      16
+#define XHCI_SLOT_TT_THINK_TIME_MASK       (0x3u << XHCI_SLOT_TT_THINK_TIME_SHIFT)
+#define XHCI_SLOT_MAX_PORTS_SHIFT          24
+#define XHCI_SLOT_MAX_PORTS_MASK           (0xFFu << XHCI_SLOT_MAX_PORTS_SHIFT)
+#define XHCI_SLOT_MAX_EXIT_LAT_MASK        0xFFFFu
 
 #define XHCI_EPCTX_MULT_SHIFT              8
 #define XHCI_EPCTX_MULT_MASK               (0x3 << XHCI_EPCTX_MULT_SHIFT)
@@ -409,6 +423,26 @@ XhciSlotContextSetRootPort(
 
 FORCEINLINE
 VOID
+XhciSlotContextSetMaxPorts(
+    _Inout_ XHCI_SLOT_CONTEXT *SlotCtx,
+    _In_ ULONG MaxPorts)
+{
+    SlotCtx->DevInfo2 &= ~XHCI_SLOT_MAX_PORTS_MASK;
+    SlotCtx->DevInfo2 |= ((MaxPorts & 0xFF) << XHCI_SLOT_MAX_PORTS_SHIFT);
+}
+
+FORCEINLINE
+VOID
+XhciSlotContextSetMaxExitLatency(
+    _Inout_ XHCI_SLOT_CONTEXT *SlotCtx,
+    _In_ ULONG Latency)
+{
+    SlotCtx->DevInfo2 &= ~XHCI_SLOT_MAX_EXIT_LAT_MASK;
+    SlotCtx->DevInfo2 |= (Latency & XHCI_SLOT_MAX_EXIT_LAT_MASK);
+}
+
+FORCEINLINE
+VOID
 XhciEndpointContextInit(
     _Inout_ XHCI_ENDPOINT_CONTEXT *EpCtx,
     _In_ ULONG EndpointType,
@@ -457,3 +491,13 @@ XhciEndpointContextInit(
 #define XHCI_COMPLETION_STOPPED_SHORT_PACKET 28
 
 #define XHCI_GET_COMPLETION_CODE(Status)    (((Status) >> 24) & 0xFF)
+
+FORCEINLINE
+VOID
+XhciEndpointContextSetMaxPacketSize(
+    _Inout_ XHCI_ENDPOINT_CONTEXT *EpCtx,
+    _In_ ULONG MaxPacketSize)
+{
+    EpCtx->EpInfo2 &= ~0xFFFF0000;
+    EpCtx->EpInfo2 |= (MaxPacketSize & 0xFFFF) << 16;
+}

@@ -508,7 +508,7 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                     sizeof(USB_PORT_STATUS_AND_CHANGE));
 
     if (NT_SUCCESS(Status) &&
-        (PortStatus.PortStatus.Usb20PortStatus.CurrentConnectStatus == 0))
+        !USBH_PortStatusIsConnected(&PortStatus))
     {
         Status = STATUS_UNSUCCESSFUL;
         goto Exit;
@@ -526,7 +526,9 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                    &Event);
 
         RequestType.B = 0;
-        RequestType.Recipient = BMREQUEST_TO_DEVICE;
+        /* Port reset is a class request to the specific port, not the hub
+         * device, otherwise the controller never generates the reset change. */
+        RequestType.Recipient = BMREQUEST_TO_OTHER;
         RequestType.Type = BMREQUEST_CLASS;
         RequestType.Dir = BMREQUEST_HOST_TO_DEVICE;
 
@@ -540,7 +542,9 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                USBHUB_FEATURE_PORT_RESET,
                                Port);
 
-        Timeout.QuadPart = -5000 * 10000;
+        /* Do not wait the full 5 seconds; poll at 500 ms to avoid long stalls
+         * when controllers fail to raise a change interrupt. */
+        Timeout.QuadPart = -500 * 10000;
 
         if (!NT_SUCCESS(Status))
         {
@@ -569,8 +573,18 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                         &PortStatus,
                                         sizeof(USB_PORT_STATUS_AND_CHANGE));
 
+        /* If the reset bit has already dropped and the device is still present,
+         * consider the reset complete even if no interrupt ever arrived. */
+        if (NT_SUCCESS(Status) &&
+            USBH_PortStatusIsConnected(&PortStatus) &&
+            !(PortStatus.PortStatus.AsUshort16 & USB_PORT_STATUS_RESET))
+        {
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
         if (!NT_SUCCESS(Status) ||
-            (PortStatus.PortStatus.Usb20PortStatus.CurrentConnectStatus == 0) ||
+            !USBH_PortStatusIsConnected(&PortStatus) ||
             ResetRetry >= USBHUB_RESET_PORT_MAX_RETRY)
         {
             InterlockedExchangePointer((PVOID)&HubExtension->pResetPortEvent,
@@ -591,7 +605,7 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                     &PortStatus,
                                     sizeof(USB_PORT_STATUS_AND_CHANGE));
 
-    if ((PortStatus.PortStatus.Usb20PortStatus.CurrentConnectStatus == 0) &&
+    if (!USBH_PortStatusIsConnected(&PortStatus) &&
         NT_SUCCESS(Status) &&
         HubExtension->HubFlags & USBHUB_FDO_FLAG_USB20_HUB)
     {
@@ -1530,7 +1544,7 @@ USBH_SyncPowerOnPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
     PortData = &HubExtension->PortData[Port - 1];
     PortStatus = &PortData->PortStatus;
 
-    if (PortStatus->PortStatus.Usb20PortStatus.CurrentConnectStatus == 1)
+    if (USBH_PortStatusIsConnected(PortStatus))
     {
         return Status;
     }
@@ -1558,7 +1572,7 @@ USBH_SyncPowerOnPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
             USBH_Wait(2 * HubDescriptor->bPowerOnToPowerGood);
         }
 
-        PortStatus->PortStatus.Usb20PortStatus.CurrentConnectStatus = 1;
+        USBH_PortStatusForceConnected(PortStatus);
     }
 
     return Status;
@@ -1764,8 +1778,8 @@ USBH_ChangeIndicationProcessChange(IN PDEVICE_OBJECT DeviceObject,
 
     HubExtension = Context;
 
-    DPRINT_SCE("USBH_ChangeIndicationProcessChange: PortStatus - %lX\n",
-               HubExtension->PortStatus.AsUlong32);
+    //DPRINT_SCE("USBH_ChangeIndicationProcessChange: PortStatus - %lX\n",
+    //           HubExtension->PortStatus.AsUlong32);
 
     if ((NT_SUCCESS(Irp->IoStatus.Status) ||
         USBD_SUCCESS(HubExtension->SCEWorkerUrb.Hdr.Status)) &&
@@ -1823,7 +1837,7 @@ USBH_ChangeIndicationQueryChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
     PIO_STACK_LOCATION IoStack;
     BM_REQUEST_TYPE RequestType;
 
-    DPRINT_SCE("USBH_ChangeIndicationQueryChange: Port - %x\n", Port);
+    //DPRINT_SCE("USBH_ChangeIndicationQueryChange: Port - %x\n", Port);
 
     InterlockedIncrement(&HubExtension->PendingRequestCount);
 
@@ -1928,7 +1942,7 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
     USHORT RequestValue;
     KIRQL Irql;
 
-    DPRINT_SCE("USBH_ProcessPortStateChange ... \n");
+    //DPRINT_SCE("USBH_ProcessPortStateChange ... \n");
 
     ASSERT(Port > 0);
     PortData = &HubExtension->PortData[Port - 1];
@@ -1936,13 +1950,13 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
     PortStatusChange20 = PortStatus->PortChange.Usb20PortChange;
     PortStatusChange30 = PortStatus->PortChange.Usb30PortChange;
 
-    if (PortStatusChange20.ConnectStatusChange)
+    if (USBH_PortChangeHasConnect(PortStatus))
     {
         BOOLEAN Connected;
 
         PortData->PortStatus = *PortStatus;
 
-        Connected = PortStatus->PortStatus.Usb20PortStatus.CurrentConnectStatus ? TRUE : FALSE;
+        Connected = USBH_PortStatusIsConnected(PortStatus);
 
         USBH_SyncClearPortStatus(HubExtension,
                                  Port,
@@ -1957,6 +1971,9 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
             if (!PortDevice)
             {
                 PortData->ConnectionStatus = NoDeviceConnected;
+
+                DPRINT_ENUM("USBH_ProcessPortStateChange: Port %u disconnect -> enumerate\n",
+                            Port);
 
                 HubExtension->HubFlags |= USBHUB_FDO_FLAG_DO_ENUMERATION;
                 IoInvalidateDeviceRelations(HubExtension->LowerPDO, BusRelations);
@@ -2012,12 +2029,59 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
         }
         else
         {
-            /* New device connected or reconnection: mark for enumeration. */
-            PortData->ConnectionStatus = DeviceConnected;
+            /*
+             * New device connected or reconnection: mark for enumeration.
+             *
+             * If the previous enumeration on this port failed with a
+             * permanent error (e.g. malformed descriptors), do not keep
+             * retrying enumeration on every connect-change storm. Instead
+             * honour the failure state recorded by USBH_FdoQueryBusRelations
+             * (DeviceFailedEnumeration / DeviceGeneralFailure) until a real
+             * disconnect happens and clears ConnectionStatus back to
+             * NoDeviceConnected.
+             */
+            if (PortData->ConnectionStatus == DeviceFailedEnumeration ||
+                PortData->ConnectionStatus == DeviceGeneralFailure)
+            {
+                /* Log only the first suppressed connect per failure epoch. */
+                if (!(PortData->LogFlags & 0x1))
+                {
+                    PortData->LogFlags |= 0x1;
+                    DPRINT_ENUM("USBH_ProcessPortStateChange: Port %u connect while in failure state (%u) -> suppress re-enumeration\n",
+                                Port,
+                                PortData->ConnectionStatus);
+                }
+            }
+            else
+            {
+                PortData->ConnectionStatus = DeviceConnected;
+                PortData->LogFlags = 0;
 
-            HubExtension->HubFlags |= USBHUB_FDO_FLAG_DO_ENUMERATION;
-            IoInvalidateDeviceRelations(HubExtension->LowerPDO, BusRelations);
+                DPRINT_ENUM("USBH_ProcessPortStateChange: Port %u connect -> enumerate\n",
+                            Port);
+
+                HubExtension->HubFlags |= USBHUB_FDO_FLAG_DO_ENUMERATION;
+                IoInvalidateDeviceRelations(HubExtension->LowerPDO, BusRelations);
+            }
         }
+    }
+
+    /* If we synthesized a connection for a missing PDO, persist it in
+     * ConnectionStatus so that bus relations will force creation. */
+    if (USBH_PortChangeHasConnect(PortStatus) &&
+        USBH_PortStatusIsConnected(PortStatus) &&
+        !PortData->DeviceObject)
+    {
+        PortData->ConnectionStatus = DeviceConnected;
+    }
+
+    if (PortStatusChange20.ResetChange ||
+        PortStatusChange30.BHResetChange)
+    {
+        RequestValue = USBHUB_FEATURE_C_PORT_RESET;
+        PortData->PortStatus = *PortStatus;
+        USBH_SyncClearPortStatus(HubExtension, Port, RequestValue);
+        return;
     }
     else if (PortStatusChange20.PortEnableDisableChange)
     {
@@ -2038,14 +2102,6 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
              PortStatusChange30.OverCurrentIndicatorChange)
     {
         RequestValue = USBHUB_FEATURE_C_PORT_OVER_CURRENT;
-        PortData->PortStatus = *PortStatus;
-        USBH_SyncClearPortStatus(HubExtension, Port, RequestValue);
-        return;
-    }
-    else if (PortStatusChange20.ResetChange ||
-             PortStatusChange30.BHResetChange)
-    {
-        RequestValue = USBHUB_FEATURE_C_PORT_RESET;
         PortData->PortStatus = *PortStatus;
         USBH_SyncClearPortStatus(HubExtension, Port, RequestValue);
         return;
@@ -2222,7 +2278,7 @@ USBH_ResetHub(IN PUSBHUB_FDO_EXTENSION HubExtension)
 VOID
 NTAPI
 USBH_ChangeIndicationWorker(IN PUSBHUB_FDO_EXTENSION HubExtension,
-                            IN PVOID Context)
+                             IN PVOID Context)
 {
     PUSBHUB_FDO_EXTENSION LowerHubExtension;
     PUSBHUB_PORT_PDO_EXTENSION LowerPortExtension;
@@ -2231,8 +2287,11 @@ USBH_ChangeIndicationWorker(IN PUSBHUB_FDO_EXTENSION HubExtension,
     USB_HUB_STATUS_AND_CHANGE HubStatus;
     NTSTATUS Status;
     USHORT Port = 0;
+    BOOLEAN UseCachedStatus = FALSE;
 
-    DPRINT_SCE("USBH_ChangeIndicationWorker ... \n");
+    DPRINT_SCE("USBH_ChangeIndicationWorker: HubExt=%p WorkItem=%p\n",
+               HubExtension,
+               Context);
 
     WorkItem = Context;
 
@@ -2284,7 +2343,7 @@ USBH_ChangeIndicationWorker(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                     sizeof(USB_PORT_STATUS_AND_CHANGE));
 
     if (!NT_SUCCESS(Status) ||
-        !PortStatus.PortStatus.Usb20PortStatus.CurrentConnectStatus)
+        !USBH_PortStatusIsConnected(&PortStatus))
     {
         HubExtension->HubFlags |= USBHUB_FDO_FLAG_DEVICE_REMOVED;
 
@@ -2313,34 +2372,260 @@ Enum:
     }
     else
     {
-        for (Port = 0;
-             Port <= HubExtension->HubDescriptor->bNumberOfPorts;
-             Port++)
         {
-            if (IsBitSet((PUCHAR)(WorkItem + 1), Port))
+            USHORT NumPorts = HubExtension->HubDescriptor->bNumberOfPorts;
+            PUCHAR Bitmap = (PUCHAR)(WorkItem + 1);
+            USHORT ProbePort;
+            USB_PORT_STATUS_AND_CHANGE ProbeStatus;
+            USHORT FirstPort = 0;
+            BOOLEAN AnySet = FALSE;
+
+            /* If the bitmap is empty, probe to discover any pending changes. */
             {
-                break;
+                USHORT BitPort;
+
+                for (BitPort = 1; BitPort <= NumPorts; BitPort++)
+                {
+                    if (IsBitSet(Bitmap, BitPort))
+                    {
+                        AnySet = TRUE;
+                        break;
+                    }
+                }
             }
+
+            if (!AnySet)
+            {
+                for (ProbePort = 1; ProbePort <= NumPorts; ProbePort++)
+                {
+                    PUSBHUB_PORT_DATA ProbePortData = &HubExtension->PortData[ProbePort - 1];
+                    if (!NT_SUCCESS(USBH_SyncGetPortStatus(HubExtension,
+                                                           ProbePort,
+                                                           &ProbeStatus,
+                                                           sizeof(ProbeStatus))))
+                    {
+                        continue;
+                    }
+
+                    if (ProbeStatus.PortChange.AsUshort16 == 0 &&
+                        !USBH_PortStatusIsConnected(&ProbeStatus) &&
+                        ProbePortData->ConnectionStatus != DeviceConnected)
+                    {
+                        continue;
+                    }
+
+                    if (FirstPort == 0)
+                        FirstPort = ProbePort;
+
+                    if (IsBitSet(Bitmap, ProbePort))
+                        break;
+                }
+
+                if (FirstPort != 0)
+                {
+                    ULONG BitIndex = FirstPort;
+                    ULONG ByteIndex = BitIndex >> 3;
+                    UCHAR BitMask = (UCHAR)(1u << (BitIndex & 7));
+
+                    Bitmap[ByteIndex] |= BitMask;
+                }
+            }
+
+            /* Handle every port that currently has a change indicated. */
+            for (Port = 1; Port <= NumPorts; Port++)
+            {
+                if (!IsBitSet(Bitmap, Port))
+                    continue;
+
+                if (Port &&
+                    !WorkItem->IsRequestErrors &&
+                    HubExtension->Port == Port)
+                {
+                    PortStatus = HubExtension->PortStatus;
+                    Status = STATUS_SUCCESS;
+                    UseCachedStatus = TRUE;
+                }
+                else
+                {
+                    Status = USBH_SyncGetPortStatus(HubExtension,
+                                                    Port,
+                                                    &PortStatus,
+                                                    sizeof(PortStatus));
+                    UseCachedStatus = FALSE;
+
+                    if (NT_SUCCESS(Status) &&
+                        !USBH_PortStatusIsConnected(&PortStatus) &&
+                        HubExtension->PortData[Port - 1].ConnectionStatus == DeviceConnected)
+                    {
+                        /* Preserve a synthetic connect for ports we already marked. */
+                        USBH_PortStatusForceConnected(&PortStatus);
+                    }
+                }
+
+                if (NT_SUCCESS(Status))
+                {
+                    if (PortStatus.PortChange.AsUshort16 == 0 &&
+                        IsBitSet(Bitmap, Port))
+                    {
+                        USBH_PortChangeMarkConnect(&PortStatus);
+                    }
+
+                    if (!HubExtension->PortData[Port - 1].DeviceObject &&
+                        USBH_PortStatusIsConnected(&PortStatus))
+                    {
+                        PUSBHUB_PORT_DATA PortData = &HubExtension->PortData[Port - 1];
+
+                        /* Do not overwrite a permanent failure state here. */
+                        if (PortData->ConnectionStatus != DeviceFailedEnumeration &&
+                            PortData->ConnectionStatus != DeviceGeneralFailure)
+                        {
+                            PortData->ConnectionStatus = DeviceConnected;
+                        }
+                    }
+
+                    DPRINT_SCE("USBH_ChangeIndicationWorker: Port %u Status=0x%04X Change=0x%04X\n",
+                               Port,
+                               PortStatus.PortStatus.AsUshort16,
+                               PortStatus.PortChange.AsUshort16);
+
+                    USBH_ProcessPortStateChange(HubExtension,
+                                                Port,
+                                                &PortStatus);
+                }
+                else
+                {
+                    HubExtension->RequestErrors++;
+
+                    if (HubExtension->RequestErrors > USBHUB_MAX_REQUEST_ERRORS)
+                    {
+                        HubExtension->HubFlags |= USBHUB_FDO_FLAG_DEVICE_FAILED;
+                        goto Exit;
+                    }
+                }
+            }
+
+            /*
+             * Also probe ports not indicated in the bitmap to catch devices whose
+             * change event was dropped.  If a connected device is present without
+             * a PDO, synthesize a connect change so enumeration can proceed.
+             */
+            for (Port = 1; Port <= NumPorts; Port++)
+            {
+                PUSBHUB_PORT_DATA PortData;
+
+                if (IsBitSet(Bitmap, Port))
+                    continue;
+
+                if (!NT_SUCCESS(USBH_SyncGetPortStatus(HubExtension,
+                                                       Port,
+                                                       &PortStatus,
+                                                       sizeof(PortStatus))))
+                {
+                    continue;
+                }
+
+                if (!USBH_PortStatusIsConnected(&PortStatus))
+                {
+                    continue;
+                }
+
+                PortData = &HubExtension->PortData[Port - 1];
+
+                if (PortData->DeviceObject)
+                    continue;
+
+                /*
+                 * If enumeration on this port has already failed permanently,
+                 * do not synthesize further connect changes.  This prevents
+                 * repeated re-enumeration attempts for ports stuck in
+                 * DeviceFailedEnumeration / DeviceGeneralFailure.
+                 */
+                if (PortData->ConnectionStatus == DeviceFailedEnumeration ||
+                    PortData->ConnectionStatus == DeviceGeneralFailure)
+                {
+                    if (!(PortData->LogFlags & 0x2))
+                    {
+                        PortData->LogFlags |= 0x2;
+                        DPRINT_SCE("USBH_ChangeIndicationWorker: Synth Port %u suppressed (failure state=%u)\n",
+                                   Port,
+                                   PortData->ConnectionStatus);
+                    }
+                    continue;
+                }
+
+                RtlZeroMemory(&PortStatus.PortChange, sizeof(PortStatus.PortChange));
+                USBH_PortChangeMarkConnect(&PortStatus);
+                DPRINT_SCE("USBH_ChangeIndicationWorker: Synth Port %u Status=0x%04X Change=0x%04X\n",
+                           Port,
+                           PortStatus.PortStatus.AsUshort16,
+                           PortStatus.PortChange.AsUshort16);
+
+                /* Seed cached state so bus relations sees the device as present. */
+                PortData->ConnectionStatus = DeviceConnected;
+                USBH_PortStatusForceConnected(&PortStatus);
+                PortData->PortStatus = PortStatus;
+
+                USBH_ProcessPortStateChange(HubExtension, Port, &PortStatus);
+
+                /* Force a new bus-relations query so the synthetic connect is enumerated. */
+                HubExtension->HubFlags |= USBHUB_FDO_FLAG_DO_ENUMERATION;
+                IoInvalidateDeviceRelations(HubExtension->LowerPDO, BusRelations);
+
+                /* Keep the change worker alive: restart the loop so the newly
+                 * queued bus-relations will run without idling out. */
+                continue;
+            }
+
+            goto SubmitTransfer;
         }
 
-        if (Port)
+            /*
+             * If USBH_ChangeIndicationQueryChange has just completed a GET_STATUS
+             * request for this port, prefer the cached status over issuing a new
+             * synchronous query.  This keeps the original change bits visible to
+             * USBH_ProcessPortStateChange, which mirrors Windows hub semantics.
+         */
+        if (Port &&
+            !WorkItem->IsRequestErrors &&
+            HubExtension->Port == Port)
         {
-            Status = USBH_SyncGetPortStatus(HubExtension,
-                                            Port,
-                                            &PortStatus,
-                                            sizeof(PortStatus));
+            PortStatus = HubExtension->PortStatus;
+            Status = STATUS_SUCCESS;
+            UseCachedStatus = TRUE;
         }
-        else
+
+        if (!UseCachedStatus)
         {
-            Status = USBH_SyncGetHubStatus(HubExtension,
-                                           &HubStatus,
-                                           sizeof(HubStatus));
+            if (Port)
+            {
+                Status = USBH_SyncGetPortStatus(HubExtension,
+                                                Port,
+                                                &PortStatus,
+                                                sizeof(PortStatus));
+            }
+            else
+            {
+                Status = USBH_SyncGetHubStatus(HubExtension,
+                                               &HubStatus,
+                                               sizeof(HubStatus));
+            }
         }
 
         if (NT_SUCCESS(Status))
         {
             if (Port)
             {
+                if (PortStatus.PortChange.AsUshort16 == 0 &&
+                    IsBitSet((PUCHAR)(WorkItem + 1), Port))
+                {
+                    USBH_PortChangeMarkConnect(&PortStatus);
+                }
+
+                DPRINT_SCE("USBH_ChangeIndicationWorker: Port %u Status=0x%04X Change=0x%04X\n",
+                           Port,
+                           PortStatus.PortStatus.AsUshort16,
+                           PortStatus.PortChange.AsUshort16);
+
                 USBH_ProcessPortStateChange(HubExtension,
                                             Port,
                                             &PortStatus);
@@ -2373,6 +2658,7 @@ Enum:
         }
     }
 
+SubmitTransfer:
     USBH_SubmitStatusChangeTransfer(HubExtension);
 
 Exit:
@@ -2422,10 +2708,10 @@ USBH_ChangeIndication(IN PDEVICE_OBJECT DeviceObject,
     HubExtension = Context;
     UrbStatus = HubExtension->SCEWorkerUrb.Hdr.Status;
 
-    DPRINT_SCE("USBH_ChangeIndication: IrpStatus - %x, UrbStatus - %x, HubFlags - %lX\n",
-               Irp->IoStatus.Status,
-               UrbStatus,
-               HubExtension->HubFlags);
+    //DPRINT_SCE("USBH_ChangeIndication: IrpStatus - %x, UrbStatus - %x, HubFlags - %lX\n",
+    //           Irp->IoStatus.Status,
+    //           UrbStatus,
+    //           HubExtension->HubFlags);
 
     if (NT_ERROR(Irp->IoStatus.Status) || USBD_ERROR(UrbStatus) ||
        (HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_FAILED) ||
@@ -2509,19 +2795,13 @@ USBH_ChangeIndication(IN PDEVICE_OBJECT DeviceObject,
 
     if (Port > NumPorts)
     {
-        /* No bits set in the change bitmap – force a rescan by flagging all ports. */
-        RtlZeroMemory(Bitmap, HubExtension->SCEBitmapLength);
-        for (Port = 1; Port <= NumPorts; Port++)
-        {
-            ULONG BitIndex = Port;
-            ULONG ByteIndex = BitIndex >> 3;
-            UCHAR BitMask = (UCHAR)(1u << (BitIndex & 7));
-
-            if (ByteIndex < HubExtension->SCEBitmapLength)
-                ((PUCHAR)Bitmap)[ByteIndex] |= BitMask;
-        }
-
-        Port = 1;
+        /*
+         * No bits set in the change bitmap.  Pass Port = 0 to
+         * USBH_ChangeIndicationQueryChange so that it queues the
+         * work item without issuing a GET_STATUS request.  The
+         * worker will probe ports as needed at PASSIVE_LEVEL.
+         */
+        Port = 0;
     }
 
     Status = USBH_ChangeIndicationQueryChange(HubExtension,
@@ -4789,7 +5069,7 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("USBH_CreateDevice: IoCreateDevice() failed - %lX\n", Status);
+        DPRINT_ENUM("USBH_CreateDevice: IoCreateDevice() failed - %lX\n", Status);
         goto ErrorExit;
     }
 
@@ -4800,7 +5080,20 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("USBH_CreateDevice: USBD_CreateDeviceEx() failed - %lX\n", Status);
+        DPRINT_ENUM("USBH_CreateDevice: USBD_CreateDeviceEx() failed - %lX\n", Status);
+
+        /*
+         * Mark the port as a permanent enumeration failure immediately so
+         * that change-indication handling and the synthetic connect probe
+         * stop re-issuing enumeration requests until a real disconnect or
+         * reset occurs.  USBH_FdoQueryBusRelations will reinforce this state
+         * and take care of disabling the port as needed.
+         */
+        if (Port > 0)
+        {
+            HubExtension->PortData[Port - 1].ConnectionStatus = DeviceFailedEnumeration;
+        }
+
         goto ErrorExit;
     }
 
@@ -4808,7 +5101,7 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("USBH_CreateDevice: USBH_SyncResetPort() failed - %lX\n", Status);
+        DPRINT_ENUM("USBH_CreateDevice: USBH_SyncResetPort() failed - %lX\n", Status);
         goto ErrorExit;
     }
 
@@ -4826,7 +5119,8 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("USBH_CreateDevice: USBD_InitializeDeviceEx() failed - %lX\n", Status);
+        DPRINT_ENUM("USBH_CreateDevice: USBD_InitializeDeviceEx() failed - %lX\n", Status);
+        HubExtension->PortData[Port - 1].ConnectionStatus = DeviceFailedEnumeration;
         PortExtension->DeviceHandle = NULL;
         goto ErrorExit;
     }
@@ -4840,8 +5134,8 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
         Status != STATUS_OBJECT_NAME_NOT_FOUND &&
         Status != STATUS_OBJECT_PATH_NOT_FOUND)
     {
-        DPRINT1("USBH_CreateDevice: USBH_RegQueryDeviceIgnoreHWSerNumFlag failed - %lx\n",
-                Status);
+        DPRINT_ENUM("USBH_CreateDevice: USBH_RegQueryDeviceIgnoreHWSerNumFlag failed - %lx\n",
+                    Status);
     }
 
     if (IgnoringHwSerial)
@@ -4950,7 +5244,7 @@ USBH_ResetDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                     sizeof(USB_PORT_STATUS_AND_CHANGE));
 
     if (!NT_SUCCESS(Status) ||
-        !(PortStatus.PortStatus.Usb20PortStatus.CurrentConnectStatus))
+        !USBH_PortStatusIsConnected(&PortStatus))
     {
         return STATUS_UNSUCCESSFUL;
     }

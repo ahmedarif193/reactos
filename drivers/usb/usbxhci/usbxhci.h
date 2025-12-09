@@ -100,6 +100,14 @@ typedef struct _XHCI_DEVICE_SLOT {
     ULONG RouteString;
     UCHAR HighestEndpointId;
     PXHCI_ENDPOINT EndpointTable[XHCI_MAX_ENDPOINTS + 1];
+    USHORT HubAddress;
+    USB_DEVICE_SPEED DeviceSpeed;
+    UCHAR HubPortCount;
+    USHORT MaxExitLatency;
+    UCHAR TtThinkTime;
+    BOOLEAN MultiTt;
+    BOOLEAN HasTtInfo;
+    BOOLEAN IsHub;
 } XHCI_DEVICE_SLOT, *PXHCI_DEVICE_SLOT;
 
 typedef struct _XHCI_PROTOCOL_SEGMENT {
@@ -169,13 +177,15 @@ typedef struct _XHCI_EXTENSION {
     ULONG PendingUsbSts;
     BOOLEAN RhIrqEnabled;
     BOOLEAN RhPendingInvalidate;
-    BOOLEAN InterruptsEnabled;
+  BOOLEAN InterruptsEnabled;
   BOOLEAN ControllerRunning;
   BOOLEAN FatalError;
+  BOOLEAN StartupHcePersistent;
   ULONG Quirks;
   UCHAR DeviceAddressMap[XHCI_MAX_DEVICE_ADDRESS];
   UCHAR PortLinkState[XHCI_MAX_PORTS + 1];
   BOOLEAN PortConnectStatus[XHCI_MAX_PORTS + 1];
+  ULONG PortChangeMask[XHCI_MAX_PORTS + 1];
   UCHAR MaxU1ExitLatency;
   USHORT MaxU2ExitLatency;
   UCHAR ProtocolSegmentCount;
@@ -246,6 +256,16 @@ typedef struct _XHCI_TRANSFER {
 
 #define XHCI_TRANSFER_FLAG_SET_ADDRESS   0x00000001
 #define XHCI_TRANSFER_FLAG_GET_DESCRIPTOR 0x00000002
+
+BOOLEAN
+XHCI_EndpointNeedsTt(
+    _In_ PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties);
+
+VOID
+XHCI_ApplyTtInfo(
+    _In_ PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
+    _In_opt_ PXHCI_DEVICE_SLOT HubSlot,
+    _Inout_ PXHCI_SLOT_CONTEXT SlotContext);
 
 NTSTATUS
 NTAPI

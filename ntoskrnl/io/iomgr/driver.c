@@ -15,6 +15,10 @@
 #include <debug.h>
 #include <mm/ARM3/miarm.h>
 
+BOOLEAN
+NTAPI
+InbvHasValidGopFrameBuffer(VOID);
+
 /* GLOBALS ********************************************************************/
 
 ERESOURCE IopDriverLoadResource;
@@ -821,6 +825,8 @@ IopInitializeBuiltinDriver(IN PLDR_DATA_TABLE_ENTRY BootLdrEntry)
     PLIST_ENTRY NextEntry;
     UNICODE_STRING ServiceName;
     BOOLEAN Success;
+    BOOLEAN SkipBootInstanceEnumeration = FALSE;
+    static const UNICODE_STRING UefiFbServiceName = RTL_CONSTANT_STRING(L"uefifb");
 
     /*
      * Display 'Loading XXX...' message
@@ -877,10 +883,16 @@ IopInitializeBuiltinDriver(IN PLDR_DATA_TABLE_ENTRY BootLdrEntry)
     RegistryPath.Buffer = ExAllocatePoolWithTag(PagedPool, RegistryPath.MaximumLength, TAG_IO);
     if (RegistryPath.Buffer == NULL)
     {
+        RtlFreeUnicodeString(&ServiceName);
         return FALSE;
     }
     RtlAppendUnicodeToString(&RegistryPath, ServicesKeyName);
     RtlAppendUnicodeStringToString(&RegistryPath, &ServiceName);
+    if (RtlEqualUnicodeString(&ServiceName, &UefiFbServiceName, TRUE) &&
+        !InbvHasValidGopFrameBuffer())
+    {
+        SkipBootInstanceEnumeration = TRUE;
+    }
     RtlFreeUnicodeString(&ServiceName);
 
     HANDLE serviceHandle;
@@ -932,6 +944,12 @@ IopInitializeBuiltinDriver(IN PLDR_DATA_TABLE_ENTRY BootLdrEntry)
 
     HANDLE enumServiceHandle;
     UNICODE_STRING enumName = RTL_CONSTANT_STRING(L"Enum");
+
+    if (SkipBootInstanceEnumeration)
+    {
+        ZwClose(serviceHandle);
+        goto Cleanup;
+    }
 
     Status = IopOpenRegistryKeyEx(&enumServiceHandle, serviceHandle, &enumName, KEY_READ);
     ZwClose(serviceHandle);

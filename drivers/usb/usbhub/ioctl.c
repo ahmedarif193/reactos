@@ -279,7 +279,7 @@ USBH_PdoIoctlGetPortStatus(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
             *PortStatus |= USBD_PORT_ENABLED;
         }
 
-        if (PortData->PortStatus.PortStatus.Usb20PortStatus.CurrentConnectStatus)
+        if (USBH_PortStatusIsConnected(&PortData->PortStatus))
         {
             *PortStatus |= USBD_PORT_CONNECTED;
         }

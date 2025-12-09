@@ -31,6 +31,13 @@ SerialCreate(
 		goto ByeBye;
 	}
 
+	if (DeviceExtension->DebuggerOwned)
+	{
+		WARN_(SERIAL, "COM%lu reserved for kernel debugger\n", DeviceExtension->ComPort);
+		Status = STATUS_DEVICE_BUSY;
+		goto ByeBye;
+	}
+
 	if(DeviceExtension->IsOpened)
 	{
 		WARN_(SERIAL, "COM%lu is already opened\n", DeviceExtension->ComPort);

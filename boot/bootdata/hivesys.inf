@@ -1645,6 +1645,75 @@ HKLM,"SYSTEM\CurrentControlSet\Control\WOW",,0x00000012
 
 ; PNP Root device
 HKLM,"SYSTEM\CurrentControlSet\Enum\HTREE\ROOT\0","",0x00000000,""
+HKLM,"SYSTEM\CurrentControlSet\Enum\HTREE\ROOT\0","Class",0x00000000,"System"
+HKLM,"SYSTEM\CurrentControlSet\Enum\HTREE\ROOT\0","ClassGUID",0x00000000,"{4D36E97D-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Enum\HTREE\ROOT\0","DeviceDesc",0x00000000,"Root enumerator"
+
+; Reserve the debugger serial port so ACPI reuses the boot-time resources
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501",,0x00000012
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501","Class",0x00000000,"Ports"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501","ClassGUID",0x00000000,"{4D36E978-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501","NextInstance",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501\1","Capabilities",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501\1","Class",0x00000000,"Ports"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501\1","ClassGUID",0x00000000,"{4D36E978-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501\1","CompatibleIDs",0x00010000,"*PNP0501"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501\1","DeviceDesc",0x00000000,"Communications Port (Debugger)"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501\1","HardwareID",0x00010000,"ACPI\PNP0501","*PNP0501"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501\1","Service",0x00000000,"serial"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501\1","EnumPropPages32",0x00000000,"msports.dll,SerialPortPropPageProvider"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501\1","PortSubClass",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501\1","UpperFilters",0x00010000,"serenum"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501\1\LogConf",,0x00000012
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0501\1\LogConf","BootConfig",0x00000001,\
+  01,00,00,00,00,00,00,00,00,00,00,00,01,00,01,00,02,00,00,00,\
+  01,00,01,00,F8,03,00,00,00,00,00,00,08,00,00,00,\
+  02,00,00,00,04,00,00,00,04,00,00,00,01,00,00,00
+
+; Reserve the legacy parallel port resources for ACPI
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0400",,0x00000012
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0400","Class",0x00000000,"Ports"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0400","ClassGUID",0x00000000,"{4D36E978-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0400","NextInstance",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0400\1","Capabilities",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0400\1","Class",0x00000000,"Ports"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0400\1","ClassGUID",0x00000000,"{4D36E978-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0400\1","CompatibleIDs",0x00010000,"*PNP0400"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0400\1","DeviceDesc",0x00000000,"Standard LPT printer port"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0400\1","HardwareID",0x00010000,"ACPI\PNP0400","*PNP0400"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0400\1","Service",0x00000000,"parport"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0400\1","EnumPropPages32",0x00000000,"msports.dll,ParallelPortPropPageProvider"
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0400\1","PortSubClass",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0400\1\LogConf",,0x00000012
+HKLM,"SYSTEM\CurrentControlSet\Enum\ACPI\PNP0400\1\LogConf","BootConfig",0x00000001,\
+  01,00,00,00,00,00,00,00,00,00,00,00,01,00,01,00,02,00,00,00,\
+  01,00,01,00,78,03,00,00,00,00,00,00,08,00,00,00,\
+  02,00,00,00,07,00,00,00,07,00,00,00,01,00,00,00
+
+; Ports class metadata and services
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E978-E325-11CE-BFC1-08002BE10318}",,0x00000000,"Serial and parallel ports"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E978-E325-11CE-BFC1-08002BE10318}","Class",0x00000000,"Ports"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E978-E325-11CE-BFC1-08002BE10318}","ClassDesc",0x00000000,"Serial and parallel ports"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E978-E325-11CE-BFC1-08002BE10318}","Icon",0x00000000,"-23"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E978-E325-11CE-BFC1-08002BE10318}","Installer32",0x00000000,"msports.dll,PortsClassInstaller"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\serial","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\serial","Start",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\serial","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\serial","ImagePath",0x00020000,"system32\drivers\serial.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\serial","Group",0x00000000,"Extended base"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\serenum","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\serenum","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\serenum","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\serenum","ImagePath",0x00020000,"system32\drivers\serenum.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\serenum","Group",0x00000000,"PNP Filter"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\parport","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\parport","Start",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\parport","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\parport","ImagePath",0x00020000,"system32\drivers\parport.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\parport","Group",0x00000000,"Extended base"
 
 ; SWENUM driver
 HKLM,"SYSTEM\CurrentControlSet\Services\swenum","ErrorControl",0x00010001,0x00000001

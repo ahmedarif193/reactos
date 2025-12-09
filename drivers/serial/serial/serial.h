@@ -71,6 +71,7 @@ typedef struct _SERIAL_DEVICE_EXTENSION
 	SERIALPERF_STATS SerialPerfStats;
 	SERIAL_TIMEOUTS SerialTimeOuts;
 	BOOLEAN IsOpened;
+	BOOLEAN DebuggerOwned;
 	KEVENT InputBufferNotEmpty;
 	CIRCULAR_BUFFER InputBuffer;
 	KSPIN_LOCK InputBufferLock;

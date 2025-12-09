@@ -2691,7 +2691,8 @@ USBPORT_CompleteTransfer(IN PURB Urb,
 
         KeLowerIrql(OldIrql);
     }
-    else if (Transfer->Flags & TRANSFER_FLAG_BOUNCE)
+
+    if (Transfer->Flags & TRANSFER_FLAG_BOUNCE)
     {
         SIZE_T BytesToCopy = Transfer->CompletedTransferLen;
 

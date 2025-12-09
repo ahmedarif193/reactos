@@ -59,6 +59,8 @@ HKR, , Icon,           0, "-27"
 %PCI\CC_0604.DeviceDesc% = PCI_Inst,PCI\CC_0604
 %*ThermalZone.DeviceDesc% = NO_DRV,*ThermalZone
 %PCI\CC_0C05.DeviceDesc% = NO_DRV,PCI\CC_0C05
+%ACPI\QEMU0002.DeviceDesc% = NO_DRV,ACPI\QEMU0002
+%HTREE\ROOT\0.DeviceDesc% = NO_DRV,HTREE\ROOT\0
 
 [IntelMfg]
 %*INT0800.DeviceDesc% = NO_DRV,*INT0800
@@ -204,6 +206,8 @@ PCI\CC_0601.DeviceDesc = "Standard PCI to ISA bridge"
 PCI\CC_0604.DeviceDesc = "Standard PCI to PCI bridge"
 *ThermalZone.DeviceDesc = "ACPI thermal zone"
 PCI\CC_0C05.DeviceDesc = "SMBus Controller"
+ACPI\QEMU0002.DeviceDesc = "QEMU ACPI device"
+HTREE\ROOT\0.DeviceDesc = "Root enumerator"
 
 *INT0800.DeviceDesc = "Intel 82802 Firmware Hub Device"
 PCI\VEN_8086&DEV_1237.DeviceDesc = "Intel 440FX - 82441FX PMC [Natoma]"

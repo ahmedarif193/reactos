@@ -133,6 +133,38 @@ USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
             if (pUSBDStatus)
                 *pUSBDStatus = USBDStatus;
 
+            /*
+             * For debug builds, trace the actual payload length and the first
+             * bytes returned for device-descriptor requests. This helps catch
+             * cases where the miniport reports a successful transfer but the
+             * buffer contents seen by USBPORT_CreateDevice do not match the
+             * SW-ENUM logs or expected descriptor layout.
+             */
+#if DBG
+            if (NT_SUCCESS(Status) &&
+                TransferedLen &&
+                Buffer &&
+                SetupPacket &&
+                SetupPacket->bRequest == USB_REQUEST_GET_DESCRIPTOR &&
+                SetupPacket->wValue.HiByte == USB_DEVICE_DESCRIPTOR_TYPE)
+            {
+                ULONG Len = *TransferedLen;
+                const UCHAR *Raw = (const UCHAR *)Buffer;
+
+                DPRINT1("USBPORT_SendSetupPacket: GET_DESCRIPTOR(Device) completed len=%lu, "
+                        "first bytes=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+                        Len,
+                        (Len > 0) ? Raw[0] : 0,
+                        (Len > 1) ? Raw[1] : 0,
+                        (Len > 2) ? Raw[2] : 0,
+                        (Len > 3) ? Raw[3] : 0,
+                        (Len > 4) ? Raw[4] : 0,
+                        (Len > 5) ? Raw[5] : 0,
+                        (Len > 6) ? Raw[6] : 0,
+                        (Len > 7) ? Raw[7] : 0);
+            }
+#endif
+
             /* No additional cache maintenance required after completion */
         }
 
@@ -1287,12 +1319,55 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
      * Map bMaxPacketSize0 to an actual max packet size for EP0.
      * For USB 1.x/2.0 this is the literal size (8/16/32/64).
      * For USB 3.x SuperSpeed devices, the encoding is 9 -> 512 bytes.
+     *
+     * In debug builds we have seen cases where DeviceHandle->DeviceDescriptor
+     * remained all zeros even though the transfer for the first 8 bytes of
+     * the descriptor completed successfully (e.g. QEMU xHCI SW‑ENUM). To
+     * avoid treating those as bogus devices, re-synchronize the cached
+     * descriptor from the temporary buffer if it still looks empty here and
+     * fall back to a spec‑compliant EP0 MPS whenever the raw value is zero.
      */
     {
-        ULONG RawMaxPacketSize = DeviceHandle->DeviceDescriptor.bMaxPacketSize0;
+        ULONG RawMaxPacketSize;
 
-        if (DeviceHandle->DeviceDescriptor.bcdUSB >= 0x0300 &&
-            RawMaxPacketSize == 9)
+        if (DeviceHandle->DeviceDescriptor.bLength == 0 &&
+            TransferedLen >= DescriptorMinSize &&
+            DeviceDescriptor != NULL)
+        {
+            RtlCopyMemory(&DeviceHandle->DeviceDescriptor,
+                          DeviceDescriptor,
+                          (TransferedLen < sizeof(USB_DEVICE_DESCRIPTOR)) ?
+                          TransferedLen : sizeof(USB_DEVICE_DESCRIPTOR));
+        }
+
+        RawMaxPacketSize = DeviceHandle->DeviceDescriptor.bMaxPacketSize0;
+
+        /*
+         * Treat a raw value of zero as a malformed descriptor and substitute
+         * the minimum legal EP0 size for the negotiated device speed so that
+         * enumeration can continue. This mirrors how Windows tolerates some
+         * emulated controllers that do not fill bMaxPacketSize0 correctly.
+         */
+        if (RawMaxPacketSize == 0)
+        {
+            switch (DeviceHandle->DeviceSpeed)
+            {
+                case UsbHighSpeed:
+                    MaxPacketSize = USB_DEFAULT_MAX_PACKET;
+                    break;
+
+                case UsbSuperSpeed:
+                    MaxPacketSize = 512;
+                    break;
+
+                default:
+                    /* Low-/Full-speed: start from 8 bytes for EP0. */
+                    MaxPacketSize = 8;
+                    break;
+            }
+        }
+        else if (DeviceHandle->DeviceDescriptor.bcdUSB >= 0x0300 &&
+                 RawMaxPacketSize == 9)
         {
             MaxPacketSize = 512;
         }
@@ -1365,12 +1440,23 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
                                          &TransferedLen,
                                          NULL);
 
+        /*
+         * Some emulated controllers (notably the QEMU/xHCI SW-ENUM path)
+         * can complete the full-device GET_DESCRIPTOR with a short length
+         * even though the buffer contains a complete, well-formed device
+         * descriptor.  Accept any successful transfer that returned at
+         * least through bMaxPacketSize0 and copy whatever was delivered.
+         */
         if (NT_SUCCESS(Status) &&
-            TransferedLen >= sizeof(USB_DEVICE_DESCRIPTOR))
+            TransferedLen >= DescriptorMinSize)
         {
+            ULONG CopyLength =
+                (TransferedLen < sizeof(USB_DEVICE_DESCRIPTOR)) ?
+                TransferedLen : sizeof(USB_DEVICE_DESCRIPTOR);
+
             RtlCopyMemory(&DeviceHandle->DeviceDescriptor,
                           DeviceDescriptor,
-                          sizeof(USB_DEVICE_DESCRIPTOR));
+                          CopyLength);
         }
         else if (!NT_SUCCESS(Status) &&
                  NT_SUCCESS(InitialStatus) &&
@@ -1393,13 +1479,31 @@ PostDescriptor:
             /*
              * Re-evaluate EP0 max-packet size using the same mapping as
              * above so that SuperSpeed devices (bcdUSB >= 0x0300 with
-             * bMaxPacketSize0 == 9 -> 512 bytes) are accepted here too.
+             * bMaxPacketSize0 == 9 -> 512 bytes) and emulated devices
+             * with a bogus zero value are accepted here too.
              */
             {
                 ULONG RawMaxPacketSize = DeviceHandle->DeviceDescriptor.bMaxPacketSize0;
 
-                if (DeviceHandle->DeviceDescriptor.bcdUSB >= 0x0300 &&
-                    RawMaxPacketSize == 9)
+                if (RawMaxPacketSize == 0)
+                {
+                    switch (DeviceHandle->DeviceSpeed)
+                    {
+                        case UsbHighSpeed:
+                            MaxPacketSize = USB_DEFAULT_MAX_PACKET;
+                            break;
+
+                        case UsbSuperSpeed:
+                            MaxPacketSize = 512;
+                            break;
+
+                        default:
+                            MaxPacketSize = 8;
+                            break;
+                    }
+                }
+                else if (DeviceHandle->DeviceDescriptor.bcdUSB >= 0x0300 &&
+                         RawMaxPacketSize == 9)
                 {
                     MaxPacketSize = 512;
                 }

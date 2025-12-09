@@ -34,7 +34,7 @@ SUFFIX_WHITELIST = {".exe", ".dll", ".sys", ".efi", ".ax", ".acm", ".drv", ".so"
 NM_TOOL = os.environ.get("NM", "x86_64-w64-mingw32-nm")
 _PATTERN = re.compile(r"<([^:<>]+):([0-9A-Fa-f]+)>")
 
-TAIL_DEFAULT = 200
+TAIL_DEFAULT = 2
 DEFAULT_TIMEOUT_SECONDS = 60
 DEFAULT_LOG_PATH = Path("/tmp/out-q35.log")
 
@@ -306,12 +306,11 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
         "qemu-xhci,id=xhci",
         "-serial",
         f"file:{log_path}",
+        # Attach both input devices explicitly to the primary xHCI root hub.
         "-device",
-        "qemu-xhci",
+        "usb-kbd,bus=xhci.0,port=1",
         "-device",
-        "usb-kbd",
-        "-device",
-        "usb-tablet",
+        "usb-tablet,bus=xhci.0,port=2",
         "-display",
         "none",
     ]
@@ -329,16 +328,40 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
     seen_lines = 0
     lines_cache: List[str] = []
     poll_interval = 0.5
+    # Treat a 4-second log silence as a stall to keep runs short and stop before
+    # the later PnP storm territory.
+    idle_threshold = 4.0
 
     entered_debugger_at: Optional[float] = None
     bootmain_count = 0
     bootmain_truncate_at: Optional[int] = None
     bootmain_threshold = bootmain_limit or 0
 
+    # PnP storm detection: abort if PiQueueDeviceAction spam appears too often.
+    pnp_storm_threshold = 70
+    piqueue_count = 0
+
+    last_activity = start_time
+
     try:
         while True:
             if log_path.exists():
                 current_lines = _read_lines_from_path(log_path)
+                # Hard line-count cap: if the log grows too large, stop QEMU to
+                # avoid wasting time in late-boot storms.
+                if stop_reason is None and len(current_lines) >= 2400:
+                    stop_reason = "line-limit"
+                    print(
+                        f"[symbolize] Log exceeded {len(current_lines)} lines "
+                        f"(limit 2400); stopping QEMU."
+                    )
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    lines_cache = current_lines
+                    break
                 if len(current_lines) > seen_lines:
                     new_lines = current_lines[seen_lines:]
                     for idx, line in enumerate(new_lines):
@@ -357,6 +380,10 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
                                 except subprocess.TimeoutExpired:
                                     proc.kill()
                                 break
+                        if "PiQueueDeviceAction: allocated" in line:
+                            piqueue_count += 1
+                            if piqueue_count >= pnp_storm_threshold and stop_reason is None:
+                                stop_reason = "piqueue"
                         if "Assertion failed" in line:
                             stop_reason = "assertion"
                         elif _PATTERN.search(line):
@@ -367,6 +394,11 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
                         if stop_reason:
                             if stop_reason == "assertion":
                                 print("[symbolize] Assertion detected; stopping QEMU.")
+                            elif stop_reason == "piqueue":
+                                print(
+                                    f"[symbolize] PiQueueDeviceAction storm "
+                                    f"({piqueue_count} hits); stopping QEMU."
+                                )
                             else:
                                 print("[symbolize] Backtrace marker detected; stopping QEMU.")
                             proc.terminate()
@@ -377,6 +409,7 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
                             break
                     lines_cache = current_lines
                     seen_lines = len(current_lines)
+                    last_activity = time.monotonic()
                 if stop_reason:
                     break
             if entered_debugger_at is not None and stop_reason is None:
@@ -390,6 +423,18 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
                         proc.kill()
                     lines_cache = _read_lines_from_path(log_path) if log_path.exists() else []
                     break
+            if seen_lines > 0 and stop_reason is None:
+                if time.monotonic() - last_activity >= idle_threshold:
+                    print(f"[symbolize] No new log lines for {idle_threshold:.1f}s; stopping QEMU.")
+                    stop_reason = "idle"
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    lines_cache = _read_lines_from_path(log_path) if log_path.exists() else []
+                    break
+
             if proc.poll() is not None:
                 lines_cache = _read_lines_from_path(log_path) if log_path.exists() else []
                 break

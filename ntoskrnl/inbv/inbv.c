@@ -833,6 +833,26 @@ InbvGetGopFrameBufferInfo(
     return TRUE;
 }
 
+BOOLEAN
+NTAPI
+InbvHasValidGopFrameBuffer(VOID)
+{
+    LOADER_PARAMETER_FRAMEBUFFER FrameBuffer;
+
+    if (!InbvGetGopFrameBufferInfo(&FrameBuffer))
+        return FALSE;
+
+    if ((FrameBuffer.FrameBufferBase.QuadPart == 0) ||
+        (FrameBuffer.FrameBufferSize == 0) ||
+        (FrameBuffer.HorizontalResolution == 0) ||
+        (FrameBuffer.VerticalResolution == 0))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 ULONG
 NTAPI
 InbvGetGopFrameBufferCount(VOID)

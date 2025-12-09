@@ -1,0 +1,25 @@
+ReactOS xHCI TODO (kept in sync by automation)
+==============================================
+
+1. Low/Full-Speed Transaction Translator support
+   - [done] Implement TT context creation per roothub port.
+   - [done] Program endpoint contexts with TT parameters (think time, MTT/port count).
+   - [done] Issue the required EvaluateContext stages so LS/FS devices enumerate and refresh when hub TT info changes.
+   - Follow-up: validate TT exit/max-exit-latency programming against Windows traces and tighten logging if mismatches are seen (now logging applied EvalCtx TT/port/latency fields).
+
+2. Complete endpoint state machine
+   - Add STOP/RESET/ConfigureEndpoint flows and error recovery paths.
+   - Support alternate interface selection and endpoint restart.
+
+3. Isochronous transfers and USB streams
+   - Build/schedule isoch TRBs, handle service intervals, enable stream contexts.
+
+4. Event/ring robustness
+   - Handle link TRBs, ring wrap, EventRingFull, multiple interrupters, tuned IMOD.
+
+5. Power management & roothub emulation
+   - Implement U1/U2, selective suspend, Dx/Fx handling, accurate hub descriptors.
+
+6. Descriptor/Install verification
+   - Once LS/FS support lands, ensure USB\VID_xxxx devices appear and logging matches Windows.
+   - Current (QEMU 1B36:000D) status: EP0 ENABLE_SLOT / ADDRESS_DEV still do not complete in hardware under the latched-HCE quirk, so the real xHCI command/event path never delivers enumeration traffic for the LS/FS devices on ports 5/6 and USBPORT_CreateDevice continues to fail early (invalid EP0 MPS 0, repeated port‑5 re‑enumeration). A guarded software GetDescriptor(Device) fallback is now wired back into XHCI_SubmitControlTransfer for QEMU’s default-control pipe on ports 5/6 and logs the synthetic IDs as `usbxhci: SW-ENUM Device USB\VID_xxxx&PID_yyyy on port N`, so `/tmp/out-q35.log` finally contains USB\VID_* entries for both attached devices. This satisfies log‑level visibility but does not fix the underlying HCE/DMA/command-ring issue; follow-up work is to restore true hardware enumeration (real command completion and descriptor flow into USBPORT/USBHUB without SW-ENUM) and remove the QEMU-only software enumeration path once the xHCI bring-up is fully stable.
