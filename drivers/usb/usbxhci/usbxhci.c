@@ -2091,6 +2091,9 @@ XHCI_HandleEnumerationTransfer(
     PUCHAR Buffer;
     ULONG BufferLength;
 
+    DPRINT1("XHCI_HandleEnumerationTransfer: Enter (Slot=%u Ep=%u)\n", 
+            Endpoint->Slot->SlotId, Endpoint->EndpointId);
+
     if (!Extension || !Endpoint || !Transfer)
         return;
 
@@ -2132,9 +2135,16 @@ XHCI_HandleEnumerationTransfer(
         if (Buffer && MmIsAddressValid(Buffer) && BufferLength >= 2 && Endpoint->Slot)
         
             {
-                PUSB_DEVICE_DESCRIPTOR D = (PUSB_DEVICE_DESCRIPTOR)Buffer;
-                DPRINT1("XHCI: GetDescriptor Data: Len=%d Type=%x VID=%04x PID=%04x\n", 
-                        BufferLength, D->bDescriptorType, D->idVendor, D->idProduct);
+                if (BufferLength >= 12)
+                {
+                    PUSB_DEVICE_DESCRIPTOR D = (PUSB_DEVICE_DESCRIPTOR)Buffer;
+                    DPRINT1("XHCI: GetDescriptor Data: Len=%d Type=%x VID=%04x PID=%04x\n", 
+                            BufferLength, D->bDescriptorType, D->idVendor, D->idProduct);
+                }
+                else
+                {
+                     DPRINT1("XHCI: GetDescriptor Data: Len=%d (Header Only)\n", BufferLength);
+                }
 
             
             UCHAR DescriptorType = Setup->wValue.HiByte;
@@ -2322,6 +2332,8 @@ if (DevDesc->bDescriptorType == USB_DEVICE_DESCRIPTOR_TYPE &&
             }
         }
     }
+
+    DPRINT1("XHCI_HandleEnumerationTransfer: Exit\n");
 }
 
 static MPSTATUS
@@ -2560,21 +2572,7 @@ XHCI_ServiceEventRing(
      * enable/disable state so USBPORT can quiesce notifications
      * while stopping the root hub. */
 
-    static BOOLEAN Triggered = FALSE;
-    static ULONG Counter = 0;
-    if (AllowCallbacks && Extension->RhIrqEnabled && !Triggered)
-    {
-         Counter++;
-    if (Counter < 20) {
-        DPRINT1("XHCI_Service: Cnt=%lu Allow=%u IrqEn=%u\n", Counter, AllowCallbacks, Extension->RhIrqEnabled);
-    }
-         // Wait for 10 calls to let things settle, then fire.
-         if (Counter > 1) {
-             NotifyRootHub = TRUE;
-             Triggered = TRUE;
-             DPRINT1("XHCI: Artificial RootHub Invalidate Triggered for Port 5 CSC\n");
-         }
-    }
+
     if (AllowCallbacks &&
         Extension->RhIrqEnabled &&
         XhciRegPacket.UsbPortInvalidateRootHub &&
@@ -3347,11 +3345,13 @@ XHCI_HandleTransferEvent(
     }
     else if (XhciRegPacket.UsbPortCompleteTransfer)
     {
+        DPRINT1("XHCI: Calling UsbPortCompleteTransfer (UsbdStatus=0x%x)\n", Transfer->UsbdStatus);
         XhciRegPacket.UsbPortCompleteTransfer(Extension,
                                               Endpoint,
                                               Transfer->TransferParameters,
                                               Transfer->UsbdStatus,
                                               Transfer->BytesTransferred);
+        DPRINT1("XHCI: UsbPortCompleteTransfer returned\n");
     }
 
     /* TODO: If we ever start calling UsbPortInvalidateEndpoint from the xHCI
