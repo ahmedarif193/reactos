@@ -1825,7 +1825,7 @@ XHCI_GetDescriptorBuffer(
     if (AvailableLength)
         *AvailableLength = Avail;
 
-    return (PUCHAR)SgList->MappedSystemVa + Element->SgOffset;
+    return (PUCHAR)SgList->MappedSystemVa;
 }
 
 static MPSTATUS
