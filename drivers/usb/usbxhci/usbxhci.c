@@ -46,6 +46,7 @@
 
 #define XHCI_INVALID_LINK_STATE 0xFF
 #define USBPORT_NO_HUB_ADDRESS 0xFFFF
+#define XHCI_EP0_POLL_INTERVAL_US 50
 
 USBPORT_REGISTRATION_PACKET XhciRegPacket;
 static BOOLEAN g_XhciStartupHceQuirkOverrideValid;
@@ -161,6 +162,11 @@ static VOID NTAPI XHCI_RH_DisableIrq(PVOID MiniPortExtension);
 static VOID NTAPI XHCI_RH_EnableIrq(PVOID MiniPortExtension);
 static BOOLEAN XHCI_EventRingHasPendingTrb(PXHCI_EXTENSION Extension);
 static VOID XHCI_PollForWork(PXHCI_EXTENSION Extension, BOOLEAN AllowCallbacks);
+static VOID NTAPI XHCI_Ep0PollDpc(PKDPC Dpc,
+                                  PVOID DeferredContext,
+                                  PVOID SystemArg1,
+                                  PVOID SystemArg2);
+static VOID XHCI_ScheduleEp0Poll(PXHCI_EXTENSION Extension);
 static VOID XHCI_TraceCommandRingState(PXHCI_EXTENSION Extension,
                                        PCSTR Reason,
                                        ULONGLONG CommandPointer,
@@ -3143,6 +3149,44 @@ XHCI_HandlePortChange(
 }
 
 static
+VOID
+XHCI_ScheduleEp0Poll(
+    _Inout_ PXHCI_EXTENSION Extension)
+{
+    LARGE_INTEGER DueTime;
+
+    if (!Extension)
+        return;
+
+    DueTime.QuadPart = -(LONGLONG)XHCI_EP0_POLL_INTERVAL_US * 10;
+    KeSetTimer(&Extension->Ep0PollTimer, DueTime, &Extension->Ep0PollDpc);
+}
+
+static
+VOID
+NTAPI
+XHCI_Ep0PollDpc(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArg1,
+    _In_opt_ PVOID SystemArg2)
+{
+    PXHCI_EXTENSION Extension = (PXHCI_EXTENSION)DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArg1);
+    UNREFERENCED_PARAMETER(SystemArg2);
+
+    if (!Extension || Extension->FatalError || Extension->StoppingOrRemoved)
+        return;
+
+    XHCI_PollForWork(Extension, TRUE);
+
+    if (InterlockedCompareExchange(&Extension->Ep0PollCounter, 0, 0) > 0)
+        XHCI_ScheduleEp0Poll(Extension);
+}
+
+static
 BOOLEAN
 XHCI_ScanPortStatusChanges(
     _In_ PXHCI_EXTENSION Extension,
@@ -3316,6 +3360,12 @@ XHCI_HandleTransferEvent(
     Transfer->CompletionTrbPointer = TrbPointer;
     Transfer->BytesTransferred = BytesTransferred;
     Transfer->UsbdStatus = UsbdStatus;
+    if (Transfer->Flags & XHCI_TRANSFER_FLAG_NEEDS_POLL)
+    {
+        Transfer->Flags &= ~XHCI_TRANSFER_FLAG_NEEDS_POLL;
+        if (InterlockedDecrement(&Extension->Ep0PollCounter) <= 0)
+            KeCancelTimer(&Extension->Ep0PollTimer);
+    }
 
     if (Transfer->Flags & (XHCI_TRANSFER_FLAG_SET_ADDRESS | XHCI_TRANSFER_FLAG_GET_DESCRIPTOR))
     {
@@ -5954,28 +6004,42 @@ XHCI_SubmitControlTransfer(
      * requests do not get stuck when the first interrupt is lost. */
     if (Endpoint->DefaultControl)
     {
-        ULONG PollCount;
-        for (PollCount = 0; PollCount < 200; PollCount++)
+        if (KeGetCurrentIrql() <= PASSIVE_LEVEL)
         {
-            BOOLEAN Active;
+            ULONG PollCount;
+            for (PollCount = 0; PollCount < 200; PollCount++)
+            {
+                BOOLEAN Active;
 
-            XHCI_PollForWork(Extension, TRUE);
+                XHCI_PollForWork(Extension, TRUE);
 
-            KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
-            Active = (Endpoint->ActiveTransfer != NULL);
-            KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+                KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
+                Active = (Endpoint->ActiveTransfer != NULL);
+                KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
 
-            if (!Active)
-                return MP_STATUS_SUCCESS;
+                if (!Active)
+                    return MP_STATUS_SUCCESS;
 
-            KeStallExecutionProcessor(50);
+                KeStallExecutionProcessor(50);
+            }
+        }
+        else
+        {
+            Transfer->Flags |= XHCI_TRANSFER_FLAG_NEEDS_POLL;
+            if (InterlockedIncrement(&Extension->Ep0PollCounter) == 1)
+                XHCI_ScheduleEp0Poll(Extension);
         }
     }
 
     return MP_STATUS_SUCCESS;
 
 Failure:
-    
+    if (Transfer->Flags & XHCI_TRANSFER_FLAG_NEEDS_POLL)
+    {
+        Transfer->Flags &= ~XHCI_TRANSFER_FLAG_NEEDS_POLL;
+        if (InterlockedDecrement(&Extension->Ep0PollCounter) <= 0)
+            KeCancelTimer(&Extension->Ep0PollTimer);
+    }
     if (ProgrammedRing)
         XHCI_ResetEndpointRing(Endpoint);
 
@@ -6369,59 +6433,72 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
     IsDefaultPipe = (EndpointProperties->EndpointAddress == 0 &&
                      EndpointProperties->TransferType == USBPORT_TRANSFER_TYPE_CONTROL);
 
-    if (IsDefaultPipe && EndpointProperties->DeviceAddress == 0)
-    {
-        if (KeGetCurrentIrql() <= PASSIVE_LEVEL)
-            return XHCI_BringupDefaultControlEndpoint(Extension, XhciEndpoint, EndpointProperties);
-
-        if (XhciRegPacket.UsbPortRequestAsyncCallback)
-        {
-            XHCI_EP0_BRINGUP_CTX Ctx;
-            RtlZeroMemory(&Ctx, sizeof(Ctx));
-            Ctx.Endpoint = XhciEndpoint;
-            Ctx.Props = *EndpointProperties;
-
-            XhciRegPacket.UsbPortRequestAsyncCallback(
-                Extension,
-                0,
-                &Ctx,
-                sizeof(Ctx),
-                XHCI_Ep0BringupCallback);
-
-            DPRINT1("usbxhci: deferred EP0 bring-up from IRQL=%lu\n", KeGetCurrentIrql());
-            
-        }
-
-        DPRINT1("usbxhci: unable to schedule EP0 bring-up (no callback)\n");
-        return MP_STATUS_NOT_SUPPORTED;
-    }
-
-    if (IsDefaultPipe && EndpointProperties->DeviceAddress != 0)
+    if (IsDefaultPipe)
     {
         Slot = XHCI_FindSlotByAddress(Extension, EndpointProperties->DeviceAddress);
-        if (!Slot)
-            return MP_STATUS_ERROR;
+        if (!Slot &&
+            EndpointProperties->DeviceAddress == 0 &&
+            EndpointProperties->PortNumber != 0)
+        {
+            Slot = XHCI_FindSlotByPort(Extension, EndpointProperties->PortNumber);
+        }
 
-        XhciEndpoint->Slot = Slot;
-        XhciEndpoint->SlotId = Slot->SlotId;
-        XhciEndpoint->EndpointId = 1;
-        XhciEndpoint->DoorbellTarget = 1;
-        XhciEndpoint->DefaultControl = TRUE;
-        XhciEndpoint->UsesStaticRing = TRUE;
-        XhciEndpoint->TransferRing.Base = Slot->Ep0TransferRing.VirtualAddress;
-        XhciEndpoint->TransferRing.PhysicalAddress = Slot->Ep0TransferRing.PhysicalAddress;
-        XhciEndpoint->TransferRing.TrbCount = XHCI_STATIC_EP_RING_TRBS;
-        XhciEndpoint->TransferRing.Length = Slot->Ep0TransferRing.Length;
-        XhciEndpoint->TransferRing.CycleState = Slot->Ep0RingCycleState;
-        XhciEndpoint->TransferRing.EnqueueIndex = Slot->Ep0RingEnqueueIndex;
-        XhciEndpoint->TransferRing.DequeueIndex = Slot->Ep0RingDequeueIndex;
-        XhciEndpoint->TransferRing.UsesCommonBuffer = TRUE;
-        KeInitializeSpinLock(&XhciEndpoint->Lock);
-        Slot->EndpointTable[1] = XhciEndpoint;
+        if (Slot)
+        {
+            XhciEndpoint->Slot = Slot;
+            XhciEndpoint->SlotId = Slot->SlotId;
+            XhciEndpoint->EndpointId = 1;
+            XhciEndpoint->DoorbellTarget = 1;
+            XhciEndpoint->DefaultControl = TRUE;
+            XhciEndpoint->UsesStaticRing = TRUE;
+            XhciEndpoint->TransferRing.Base = Slot->Ep0TransferRing.VirtualAddress;
+            XhciEndpoint->TransferRing.PhysicalAddress = Slot->Ep0TransferRing.PhysicalAddress;
+            XhciEndpoint->TransferRing.TrbCount = XHCI_STATIC_EP_RING_TRBS;
+            XhciEndpoint->TransferRing.Length = Slot->Ep0TransferRing.Length;
+            XhciEndpoint->TransferRing.CycleState = Slot->Ep0RingCycleState;
+            XhciEndpoint->TransferRing.EnqueueIndex = Slot->Ep0RingEnqueueIndex;
+            XhciEndpoint->TransferRing.DequeueIndex = Slot->Ep0RingDequeueIndex;
+            XhciEndpoint->TransferRing.UsesCommonBuffer = TRUE;
+            KeInitializeSpinLock(&XhciEndpoint->Lock);
+            Slot->EndpointTable[1] = XhciEndpoint;
 
-        /* EP0 is already programmed by the Address Device command; nothing
-         * more to configure for the default control pipe once a slot exists. */
-        return MP_STATUS_SUCCESS;
+            /* EP0 is already programmed by the Address Device command; nothing
+             * more to configure for the default control pipe once a slot exists. */
+            return MP_STATUS_SUCCESS;
+        }
+
+        if (EndpointProperties->DeviceAddress == 0)
+        {
+            if (KeGetCurrentIrql() <= PASSIVE_LEVEL)
+                return XHCI_BringupDefaultControlEndpoint(Extension, XhciEndpoint, EndpointProperties);
+
+            if (XhciRegPacket.UsbPortRequestAsyncCallback)
+            {
+                XHCI_EP0_BRINGUP_CTX Ctx;
+                RtlZeroMemory(&Ctx, sizeof(Ctx));
+                Ctx.Endpoint = XhciEndpoint;
+                Ctx.Props = *EndpointProperties;
+
+                XhciRegPacket.UsbPortRequestAsyncCallback(
+                    Extension,
+                    0,
+                    &Ctx,
+                    sizeof(Ctx),
+                    XHCI_Ep0BringupCallback);
+
+                DPRINT1("usbxhci: deferred EP0 bring-up from IRQL=%lu\n",
+                        KeGetCurrentIrql());
+                
+            }
+
+            DPRINT1("usbxhci: unable to schedule EP0 bring-up (no callback)\n");
+            return MP_STATUS_NOT_SUPPORTED;
+        }
+
+        DPRINT1("usbxhci: no slot found for default control pipe addr=%u port=%u\n",
+                EndpointProperties->DeviceAddress,
+                EndpointProperties->PortNumber);
+        return MP_STATUS_ERROR;
     }
 
     Slot = XHCI_FindSlotByAddress(Extension, EndpointProperties->DeviceAddress);
@@ -6567,6 +6644,9 @@ XHCI_StartController(PVOID MiniPortExtension,
     Extension->PortIndicatorsSupported = FALSE;
     Extension->StoppingOrRemoved = FALSE;
     Extension->Ep0WorkerCount = 0;
+    KeInitializeTimerEx(&Extension->Ep0PollTimer, NotificationTimer);
+    KeInitializeDpc(&Extension->Ep0PollDpc, XHCI_Ep0PollDpc, Extension);
+    Extension->Ep0PollCounter = 0;
     XHCI_InitDeviceAddressMap(Extension);
     Extension->Resources = UsbPortResources;
     Extension->MmioBase = UsbPortResources->ResourceBase;
@@ -7150,6 +7230,8 @@ XHCI_StopController(PVOID MiniPortExtension,
     DPRINT1("usbxhci: StopController\n");
 
     Extension->StoppingOrRemoved = TRUE;
+    KeCancelTimer(&Extension->Ep0PollTimer);
+    InterlockedExchange(&Extension->Ep0PollCounter, 0);
 
     /* Give any pending EP0 bring-up work a chance to drain before we tear
      * down hardware/MMIO pointers. */

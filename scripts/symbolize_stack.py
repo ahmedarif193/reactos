@@ -42,8 +42,8 @@ DEFAULT_LOG_PATH = Path("/tmp/out-q35.log")
 DEFAULT_QEMU_CMD = (
     "qemu-system-x86_64 -enable-kvm "
     "-M q35,usb=off "
-    "-m 32G "
-    "-drive file=livecd_usb-ohci-ehci.iso,media=cdrom "
+    "-m 3G "
+    "-drive file=livecd_eotics.com_reactosv2.iso,media=cdrom "
     "-device qemu-xhci,id=xhci "
     "-serial stdio "
     "-device qemu-xhci "
@@ -275,7 +275,7 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
     build_dir = _locate_build_dir()
 
     print(f"[symbolize] Using build directory: {build_dir}")
-    print("[symbolize] Building livecd_usb-ohci-ehci.iso …")
+    print("[symbolize] Building livecd_eotics.com_reactosv2.iso …")
     build = subprocess.run(
         ["ninja", "livecd"],
         cwd=build_dir,
@@ -289,9 +289,9 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
         raise subprocess.CalledProcessError(build.returncode, build.args)
     print("[symbolize] Build complete.")
 
-    livecd = build_dir / "livecd_usb-ohci-ehci.iso"
+    livecd = build_dir / "livecd_eotics.com_reactosv2.iso"
     if not livecd.exists():
-        raise FileNotFoundError("livecd_usb-ohci-ehci.iso not found; run the script from the build directory")
+        raise FileNotFoundError("livecd_eotics.com_reactosv2.iso not found; run the script from the build directory")
 
     qemu_cmd = [
         "qemu-system-x86_64",
@@ -299,7 +299,7 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
         "-M",
         "q35,usb=off",
         "-m",
-        "32G",
+        "3G",
         "-drive",
         f"file={livecd},media=cdrom",
         "-device",
@@ -311,11 +311,9 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
         "usb-kbd,bus=xhci.0,port=1",
         "-device",
         "usb-tablet,bus=xhci.0,port=2",
-        "-display",
-        "none",
     ]
 
-    print(f"[symbolize] Launching QEMU (headless, 32G RAM). Log: {log_path}")
+    print(f"[symbolize] Launching QEMU (headless, 3G RAM). Log: {log_path}")
     proc = subprocess.Popen(
         qemu_cmd,
         cwd=build_dir,

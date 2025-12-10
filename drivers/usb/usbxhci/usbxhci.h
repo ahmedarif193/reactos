@@ -201,6 +201,9 @@ typedef struct _XHCI_EXTENSION {
   /* PnP/synchronization */
   volatile LONG Ep0WorkerCount;
   BOOLEAN StoppingOrRemoved;
+  KTIMER Ep0PollTimer;
+  KDPC Ep0PollDpc;
+  volatile LONG Ep0PollCounter;
 } XHCI_EXTENSION, *PXHCI_EXTENSION;
 
 typedef struct _XHCI_COMMAND_CONTEXT {
@@ -256,6 +259,7 @@ typedef struct _XHCI_TRANSFER {
 
 #define XHCI_TRANSFER_FLAG_SET_ADDRESS   0x00000001
 #define XHCI_TRANSFER_FLAG_GET_DESCRIPTOR 0x00000002
+#define XHCI_TRANSFER_FLAG_NEEDS_POLL    0x00000004
 
 BOOLEAN
 XHCI_EndpointNeedsTt(
