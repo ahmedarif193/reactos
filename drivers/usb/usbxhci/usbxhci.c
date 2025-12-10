@@ -3613,14 +3613,14 @@ XHCI_BuildRouteString(
         return 0;
 
     /*
-     * Root-port devices encode the root port number directly in bits [3:0].
+     * Root-port devices have a Route String of 0.
      * Devices behind hubs inherit their parent's route string and append the
      * downstream port number (one nibble per tier, up to five tiers).
      */
     if (EndpointProperties->HubAddr == USBPORT_NO_HUB_ADDRESS ||
         EndpointProperties->HubAddr == 0)
     {
-        return (ULONG)(EndpointProperties->PortNumber & 0xF);
+        return 0;
     }
 
     if (!Extension)
@@ -3783,24 +3783,26 @@ XHCI_PrepareDefaultControlContext(
                     EndpointProperties->MaxPacketSize : 8;
 
     /*
-     * USBPORT is responsible for programming a spec‑compliant EP0 MPS
-     * into EndpointProperties based on the device descriptor and speed
-     * (64 bytes for High‑Speed, 512 bytes for SuperSpeed). The miniport
-     * trusts that value and only logs obviously invalid combinations so
-     * that we can catch stack bugs without silently "fixing" them here.
+     * USBPORT is typically responsible for programming a spec‑compliant EP0 MPS.
+     * However, during initial enumerations (Address Device), USBPORT might not
+     * yet know the device speed and defaults to MPS=8. If we know the port
+     * generated a High-Speed or SuperSpeed connection, we must enforce the
+     * correct MPS (64 or 512) or the xHCI controller will reject the context.
      */
     if (SpeedCode == XHCI_PORTSC_SPEED_HIGH &&
         MaxPacketSize != USB_DEFAULT_MAX_PACKET)
     {
-        DPRINT1("usbxhci: HS EP0 context has MPS=%lu (expected 64)\n",
+        DPRINT1("usbxhci: HS EP0 context has MPS=%lu (expected 64) - FORCING CORRECTION\n",
                 MaxPacketSize);
+        MaxPacketSize = USB_DEFAULT_MAX_PACKET;
     }
 
     if (SpeedCode == XHCI_PORTSC_SPEED_SUPER &&
         MaxPacketSize != 512)
     {
-        DPRINT1("usbxhci: SS EP0 context has MPS=%lu (expected 512)\n",
+        DPRINT1("usbxhci: SS EP0 context has MPS=%lu (expected 512) - FORCING CORRECTION\n",
                 MaxPacketSize);
+        MaxPacketSize = 512;
     }
 
     if (Slot->Ep0TransferRing.PhysicalAddress.QuadPart)
