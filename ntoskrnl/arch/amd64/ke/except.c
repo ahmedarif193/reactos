@@ -14,6 +14,8 @@
 #include <debug.h>
 
 extern KI_INTERRUPT_DISPATCH_ENTRY KiUnexpectedRange[256];
+extern VOID ExpInterlockedPopEntrySListFault16(VOID);
+extern VOID ExpInterlockedPopEntrySListResume16(VOID);
 
 /* GLOBALS *******************************************************************/
 
@@ -90,6 +92,91 @@ KeInitExceptions(VOID)
 
     KeGetPcr()->IdtBase = KiIdt;
     __lidt(&KiIdtDescriptor.Limit);
+}
+
+static
+BOOLEAN
+KiHandleKernelSListFault(
+    _Inout_ PKTRAP_FRAME TrapFrame)
+{
+    const ULONGLONG SListDepthMask = 0xFFFFULL;
+    const ULONGLONG SListNextMask = 0xFFFFFFFFFFFFFFF0ULL;
+    PSLIST_HEADER ListHead;
+    ULONGLONG Alignment;
+    ULONGLONG Region;
+    ULONGLONG NextEntry;
+
+    if ((PVOID)(ULONG_PTR)TrapFrame->Rip != (PVOID)(ULONG_PTR)ExpInterlockedPopEntrySListFault16)
+    {
+        return FALSE;
+    }
+
+    ListHead = (PSLIST_HEADER)(ULONG_PTR)TrapFrame->R8;
+
+    _SEH2_TRY
+    {
+        Alignment = ListHead->Alignment;
+        Region = ListHead->Region;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return FALSE;
+    }
+    _SEH2_END;
+
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "KiHandleKernelSListFault: Rip=%p Head=%p Next=%p Align=%I64x Region=%I64x Trap=%I64x/%I64x\n",
+               (PVOID)(ULONG_PTR)TrapFrame->Rip,
+               ListHead,
+               (PVOID)(ULONG_PTR)(Region & SListNextMask),
+               Alignment,
+               Region,
+               TrapFrame->Rax,
+               TrapFrame->Rdx);
+
+    NextEntry = Region & SListNextMask;
+    if (NextEntry != 0)
+    {
+        LONG64 CanonicalHigh = (LONG64)NextEntry >> 48;
+        if ((CanonicalHigh != 0) && (CanonicalHigh != -1))
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID,
+                       DPFLTR_ERROR_LEVEL,
+                       "KiHandleKernelSListFault: non-canonical entry %p\n",
+                       (PVOID)(ULONG_PTR)NextEntry);
+            ULONGLONG NewAlignment = Alignment & ~SListDepthMask;
+            ULONGLONG NewRegion = Region & ~SListNextMask;
+            LONG64 Comparand[2];
+            Comparand[0] = (LONG64)Alignment;
+            Comparand[1] = (LONG64)Region;
+
+            if (!InterlockedCompareExchange128((volatile LONG64*)ListHead,
+                                               (LONG64)NewRegion,
+                                               (LONG64)NewAlignment,
+                                               Comparand))
+            {
+                TrapFrame->Rip = (ULONG_PTR)ExpInterlockedPopEntrySListResume16;
+                return TRUE;
+            }
+
+            TrapFrame->Rax = NewAlignment;
+            TrapFrame->Rdx = NewRegion;
+            KeGetCurrentThread()->SListFaultCount++;
+            TrapFrame->Rip = (ULONG_PTR)ExpInterlockedPopEntrySListResume16;
+            return TRUE;
+        }
+    }
+
+    if ((Alignment != TrapFrame->Rax) ||
+        (Region != TrapFrame->Rdx))
+    {
+        KeGetCurrentThread()->SListFaultCount++;
+        TrapFrame->Rip = (ULONG_PTR)ExpInterlockedPopEntrySListResume16;
+        return TRUE;
+    }
+
+    return FALSE;
 }
 
 static
@@ -701,6 +788,11 @@ KiGeneralProtectionFaultHandler(
     {
         /* Unknown CPU MSR, so raise an access violation */
         return STATUS_ACCESS_VIOLATION;
+    }
+
+    if (KiHandleKernelSListFault(TrapFrame))
+    {
+        return STATUS_SUCCESS;
     }
 
     ASSERT(FALSE);

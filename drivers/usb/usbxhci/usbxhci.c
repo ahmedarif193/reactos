@@ -348,6 +348,10 @@ static VOID XHCI_PrepareDefaultControlContext(PXHCI_EXTENSION Extension,
 static MPSTATUS XHCI_BringupDefaultControlEndpoint(PXHCI_EXTENSION Extension,
                                                    PXHCI_ENDPOINT Endpoint,
                                                    PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties);
+static MPSTATUS XHCI_AddressDeviceSlot(PXHCI_EXTENSION Extension,
+                                       PXHCI_DEVICE_SLOT Slot,
+                                       PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
+                                       BOOLEAN DisableOnFailure);
 static VOID XHCI_FillVirtualDeviceDescriptor(PXHCI_EXTENSION Extension,
                                              PXHCI_ENDPOINT Endpoint,
                                              PUSB_DEVICE_DESCRIPTOR Descriptor);
@@ -1485,6 +1489,42 @@ XHCI_ConfigureSlotEndpoint(
     SlotCtx = XHCI_GetInputSlotContextVa(Extension, InputCtxBase);
     RtlCopyMemory(SlotCtx, ActiveSlotCtx, Extension->ContextSize);
 
+    {
+        UCHAR CopyLimit = Slot->HighestEndpointId;
+        UCHAR CopyId;
+
+        if (CopyLimit < 1)
+            CopyLimit = 1;
+
+        for (CopyId = 1;
+             CopyId <= CopyLimit && CopyId <= XHCI_MAX_ENDPOINTS;
+             CopyId++)
+        {
+            PXHCI_ENDPOINT_CONTEXT ActiveEpCtx;
+            PXHCI_ENDPOINT_CONTEXT InputEpCtx;
+
+            if (CopyId == EndpointId)
+                continue;
+
+            if (CopyId != 1 && Slot->EndpointTable[CopyId] == NULL)
+                continue;
+
+            ActiveEpCtx = XHCI_GetDeviceEndpointContextVa(Extension,
+                                                          DeviceCtxBase,
+                                                          CopyId - 1);
+            InputEpCtx = XHCI_GetInputEndpointContextVa(Extension,
+                                                        InputCtxBase,
+                                                        CopyId - 1);
+            if (ActiveEpCtx && InputEpCtx)
+                RtlCopyMemory(InputEpCtx, ActiveEpCtx, Extension->ContextSize);
+        }
+    }
+
+    if (!Slot->Configured)
+    {
+        CtrlCtx->AddContextFlags |= (1 << 1);
+    }
+
     if (XhciSlotContextGetLastCtx(SlotCtx) < EndpointId)
         XhciSlotContextSetLastCtx(SlotCtx, EndpointId);
 
@@ -2041,6 +2081,16 @@ XHCI_UpdateEp0MaxPacketSize(
 
     if (!Slot || !Slot->InUse)
         return MP_STATUS_ERROR;
+    
+    // Safety check: Ensure the context sizes are consistent to prevent overflow
+    if (Extension->ContextSize == 0 || 
+        Slot->InputContext.Length < Extension->ContextSize * 33 || // simplified check, typically 33 contexts max
+        Slot->DeviceContext.Length < Extension->ContextSize * 32)
+    {
+         DPRINT1("usbxhci: Context size mismatch or invalid! CtxSize=%lu InLen=%lu DevLen=%lu\n",
+                 Extension->ContextSize, (ULONG)Slot->InputContext.Length, (ULONG)Slot->DeviceContext.Length);
+         // Don't fail here yet, just warn, but proceed carefully
+    }
 
     InputCtxBase = Slot->InputContext.VirtualAddress;
     DeviceCtxBase = Slot->DeviceContext.VirtualAddress;
@@ -2049,6 +2099,7 @@ XHCI_UpdateEp0MaxPacketSize(
 
     CtrlCtx = XHCI_GetInputControlContextVa(Extension, InputCtxBase);
     CtrlCtx->AddContextFlags = (1 << 1); // EP0
+    // DropContextFlags must be 0 for Evaluate Context command or it will fail
     CtrlCtx->DropContextFlags = 0;
 
     ActiveSlotCtx = XHCI_GetDeviceSlotContextVa(Extension, DeviceCtxBase);
@@ -2139,9 +2190,12 @@ XHCI_HandleEnumerationTransfer(
         
         Buffer = XHCI_GetDescriptorBuffer(Transfer, &BufferLength);
         if (Buffer && MmIsAddressValid(Buffer) && BufferLength >= 2 && Endpoint->Slot)
-        
+        {
+            UCHAR DescriptorType = Setup->wValue.HiByte;
+
+            if (DescriptorType == USB_DEVICE_DESCRIPTOR_TYPE)
             {
-                if (BufferLength >= 12)
+                if (BufferLength >= sizeof(USB_DEVICE_DESCRIPTOR))
                 {
                     PUSB_DEVICE_DESCRIPTOR D = (PUSB_DEVICE_DESCRIPTOR)Buffer;
                     DPRINT1("XHCI: GetDescriptor Data: Len=%d Type=%x VID=%04x PID=%04x\n", 
@@ -2149,11 +2203,13 @@ XHCI_HandleEnumerationTransfer(
                 }
                 else
                 {
-                     DPRINT1("XHCI: GetDescriptor Data: Len=%d (Header Only)\n", BufferLength);
+                     DPRINT1("XHCI: GetDescriptor Data: Len=%d (Header Only/Short)\n", BufferLength);
                 }
-
-            
-            UCHAR DescriptorType = Setup->wValue.HiByte;
+            }
+            else
+            {
+                 DPRINT1("XHCI: GetDescriptor Data: Len=%d Type=%x (Not Device Descriptor)\n", BufferLength, DescriptorType);
+            }
 
             if (DescriptorType == USB_DEVICE_DESCRIPTOR_TYPE &&
                 BufferLength >= sizeof(USB_DEVICE_DESCRIPTOR))
@@ -2192,7 +2248,7 @@ XHCI_HandleEnumerationTransfer(
                     }
                 }
 
-if (DevDesc->bDescriptorType == USB_DEVICE_DESCRIPTOR_TYPE &&
+                if (DevDesc->bDescriptorType == USB_DEVICE_DESCRIPTOR_TYPE &&
                     DevDesc->bDeviceClass == USB_DEVICE_CLASS_HUB)
                 {
                     Endpoint->Slot->IsHub = TRUE;
@@ -2924,6 +2980,7 @@ XHCI_DumpInputContextForAddress(
             EpCtx->TxInfo);
 }
 
+
 static
 VOID
 XHCI_RingCommandDoorbell(
@@ -3094,6 +3151,8 @@ XHCI_HandleCommandCompletion(
     {
         Slot->Configured = FALSE;
         Slot->HighestEndpointId = 1;
+        Slot->Addressed = FALSE;
+        XHCI_UpdateDeviceAddressMap(Extension, Slot, 0);
         DPRINT1("usbxhci: slot %u reset\n", SlotId);
     }
 }
@@ -3927,6 +3986,95 @@ XHCI_InitializeScratchpads(
 }
 
 static MPSTATUS
+XHCI_AddressDeviceSlot(
+    _Inout_ PXHCI_EXTENSION Extension,
+    _Inout_ PXHCI_DEVICE_SLOT Slot,
+    _In_ PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
+    _In_ BOOLEAN DisableOnFailure)
+{
+    MPSTATUS Status;
+    ULONG CompletionCode = 0;
+    UCHAR SlotId;
+
+    if (!Extension || !Slot || !EndpointProperties)
+        return MP_STATUS_ERROR;
+
+    SlotId = Slot->SlotId;
+
+    XHCI_PrepareDefaultControlContext(Extension, Slot, EndpointProperties);
+
+    DPRINT1("usbxhci: EP0 bring-up: issuing ADDRESS_DEV for slot %u port=%u\n",
+            SlotId,
+            EndpointProperties->PortNumber);
+
+    Status = XHCI_SendCommand(Extension,
+                              XHCI_TRB_TYPE_ADDRESS_DEV,
+                              Slot->InputContext.PhysicalAddress.QuadPart,
+                              0,
+                              XHCI_COMMAND_SLOT_FIELD(SlotId),
+                              XHCI_COMMAND_TIMEOUT_MS,
+                              TRUE,
+                              NULL,
+                              &CompletionCode);
+    if (Status != MP_STATUS_SUCCESS)
+    {
+        UCHAR Cc = (UCHAR)CompletionCode;
+
+        DPRINT1("usbxhci: AddressDevice failed for slot %u (Status=%lu, CompletionCode=%lu, Port=%u, MPS=%lu)\n",
+                SlotId,
+                Status,
+                CompletionCode,
+                EndpointProperties->PortNumber,
+                EndpointProperties->MaxPacketSize);
+
+        if (Cc == XHCI_COMPLETION_CONTEXT_ERROR)
+        {
+            XHCI_DumpInputContextForAddress(Extension, Slot);
+            XHCI_DumpAddressDeviceContext(Extension,
+                                          Slot,
+                                          0,
+                                          EndpointProperties->PortNumber,
+                                          Cc);
+            XHCI_DumpControllerState(Extension,
+                                     "EP0 AddressDevice CONTEXT_ERROR");
+
+            Slot->Ep0ContextErrorCount++;
+            DPRINT1("usbxhci: EP0 CONTEXT_ERROR count for slot %u is now %lu\n",
+                    SlotId,
+                    Slot->Ep0ContextErrorCount);
+
+            if (Slot->Ep0ContextErrorCount >= 3)
+            {
+                DPRINT1("usbxhci: repeated EP0 CONTEXT_ERRORs on slot %u, marking controller fatal\n",
+                        SlotId);
+                Extension->FatalError = TRUE;
+                XHCI_ShutdownController(Extension, TRUE);
+                Status = MP_STATUS_HW_ERROR;
+            }
+            else
+            {
+                Status = MP_STATUS_FAILURE;
+            }
+        }
+
+        if (DisableOnFailure)
+        {
+            XHCI_SendCommand(Extension,
+                             XHCI_TRB_TYPE_DISABLE_SLOT,
+                             0,
+                             0,
+                             XHCI_COMMAND_SLOT_FIELD(SlotId),
+                             XHCI_COMMAND_TIMEOUT_MS,
+                             FALSE,
+                             NULL,
+                             NULL);
+        }
+    }
+
+    return Status;
+}
+
+static MPSTATUS
 XHCI_BringupDefaultControlEndpoint(
     _Inout_ PXHCI_EXTENSION Extension,
     _Inout_ PXHCI_ENDPOINT Endpoint,
@@ -3939,9 +4087,6 @@ XHCI_BringupDefaultControlEndpoint(
 
     if (!Extension || !Endpoint || !EndpointProperties)
         return MP_STATUS_ERROR;
-
-    if (Endpoint->Slot)
-        
 
     KeInitializeSpinLock(&Endpoint->Lock);
 
@@ -3970,74 +4115,12 @@ XHCI_BringupDefaultControlEndpoint(
     if (!Slot || !Slot->InUse)
         return MP_STATUS_ERROR;
 
-    XHCI_PrepareDefaultControlContext(Extension, Slot, EndpointProperties);
-
-    DPRINT1("usbxhci: EP0 bring-up: issuing ADDRESS_DEV for slot %u port=%u\n",
-            Slot->SlotId,
-            EndpointProperties->PortNumber);
-
-    Status = XHCI_SendCommand(Extension,
-                              XHCI_TRB_TYPE_ADDRESS_DEV,
-                              Slot->InputContext.PhysicalAddress.QuadPart,
-                              0,
-                              XHCI_COMMAND_SLOT_FIELD(Slot->SlotId),
-                              XHCI_COMMAND_TIMEOUT_MS,
-                              TRUE,
-                              &SlotId,
-                              &CompletionCode);
+    Status = XHCI_AddressDeviceSlot(Extension,
+                                    Slot,
+                                    EndpointProperties,
+                                    TRUE);
     if (Status != MP_STATUS_SUCCESS)
-    {
-        UCHAR Cc = (UCHAR)CompletionCode;
-
-        DPRINT1("usbxhci: AddressDevice failed for slot %u (Status=%lu, CompletionCode=%lu, Port=%u, MPS=%lu)\n",
-                Slot ? Slot->SlotId : 0,
-                Status,
-                CompletionCode,
-                EndpointProperties->PortNumber,
-                EndpointProperties->MaxPacketSize);
-
-        if (Cc == XHCI_COMPLETION_CONTEXT_ERROR && Slot)
-        {
-            XHCI_DumpInputContextForAddress(Extension, Slot);
-            XHCI_DumpAddressDeviceContext(Extension,
-                                          Slot,
-                                          0,
-                                          EndpointProperties->PortNumber,
-                                          Cc);
-            XHCI_DumpControllerState(Extension,
-                                     "EP0 AddressDevice CONTEXT_ERROR");
-
-            Slot->Ep0ContextErrorCount++;
-            DPRINT1("usbxhci: EP0 CONTEXT_ERROR count for slot %u is now %lu\n",
-                    Slot->SlotId,
-                    Slot->Ep0ContextErrorCount);
-
-            if (Slot->Ep0ContextErrorCount >= 3)
-            {
-                DPRINT1("usbxhci: repeated EP0 CONTEXT_ERRORs on slot %u, marking controller fatal\n",
-                        Slot->SlotId);
-                Extension->FatalError = TRUE;
-                XHCI_ShutdownController(Extension, TRUE);
-                Status = MP_STATUS_HW_ERROR;
-            }
-            else
-            {
-                Status = MP_STATUS_FAILURE;
-            }
-        }
-
-        /* Best-effort cleanup – ignore failure. */
-        XHCI_SendCommand(Extension,
-                         XHCI_TRB_TYPE_DISABLE_SLOT,
-                         0,
-                         0,
-                         XHCI_COMMAND_SLOT_FIELD(Slot->SlotId),
-                         XHCI_COMMAND_TIMEOUT_MS,
-                         FALSE,
-                         NULL,
-                         NULL);
         return Status;
-    }
 
     Endpoint->Slot = Slot;
     Endpoint->SlotId = Slot->SlotId;
@@ -6445,6 +6528,16 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
 
         if (Slot)
         {
+            if (!Slot->Addressed)
+            {
+                Status = XHCI_AddressDeviceSlot(Extension,
+                                                Slot,
+                                                EndpointProperties,
+                                                FALSE);
+                if (Status != MP_STATUS_SUCCESS)
+                    return Status;
+            }
+
             XhciEndpoint->Slot = Slot;
             XhciEndpoint->SlotId = Slot->SlotId;
             XhciEndpoint->EndpointId = 1;
