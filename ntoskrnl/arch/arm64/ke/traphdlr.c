@@ -3,7 +3,7 @@
  * LICENSE:         GPL-2.0-or-later (see COPYING in the top level directory)
  * FILE:            ntoskrnl/arch/arm64/ke/traphdlr.c
  * PURPOSE:         Placeholder trap/exception handler glue for ARM64
- * PROGRAMMERS:     ReactOS Contributors
+ * COPYRIGHT:       Copyright 2025 Ahmed ARIF <arif.ing@outlook.com>
  *
  * NOTE:
  *  This file exists as a “vitrine” so that the amd64/i386 KiHandleKernelSListFault

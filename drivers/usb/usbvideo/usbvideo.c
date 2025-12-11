@@ -2,6 +2,7 @@
  * PROJECT:     ReactOS USB Video Class Stub Driver
  * LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
  * PURPOSE:     Minimal function driver for USB video class devices
+ * COPYRIGHT:   Copyright 2025 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #include <ntddk.h>

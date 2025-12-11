@@ -1,3 +1,9 @@
+/*
+ * PROJECT:         ReactOS Kernel – ARM64 bring-up scaffolding
+ * LICENSE:         GPL-2.0-or-later
+ * COPYRIGHT:   Copyright 2025 Ahmed ARIF <arif.ing@outlook.com>
+ */
+
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
