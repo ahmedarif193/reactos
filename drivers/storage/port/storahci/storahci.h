@@ -31,7 +31,7 @@
 
 #define MAXIMUM_AHCI_PORT_COUNT             32
 #define MAXIMUM_AHCI_PRDT_ENTRIES           32
-#define MAXIMUM_AHCI_PORT_NCS               30
+#define MAXIMUM_AHCI_PORT_NCS               32
 #define MAXIMUM_QUEUE_BUFFER_SIZE           255
 #define MAXIMUM_TRANSFER_LENGTH             (128*1024) // 128 KB
 
