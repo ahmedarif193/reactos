@@ -2694,7 +2694,7 @@ AhciFPDMA_CFIS (
     cmdTable->CFIS[AHCI_ATA_CFIS_LBA0] = SrbExtension->LBA0;
     cmdTable->CFIS[AHCI_ATA_CFIS_LBA1] = SrbExtension->LBA1;
     cmdTable->CFIS[AHCI_ATA_CFIS_LBA2] = SrbExtension->LBA2;
-    cmdTable->CFIS[AHCI_ATA_CFIS_Device] = 0x40; /* LBA mode */
+    cmdTable->CFIS[AHCI_ATA_CFIS_Device] = 0x40 | ((SrbExtension->Flags & ATA_FLAGS_FUA) ? 0x80 : 0); /* LBA mode */
 
     cmdTable->CFIS[AHCI_ATA_CFIS_LBA3] = SrbExtension->LBA3;
     cmdTable->CFIS[AHCI_ATA_CFIS_LBA4] = SrbExtension->LBA4;
@@ -3397,6 +3397,16 @@ InquiryCompletion (
              if (IdentifyDeviceData->QueueDepth > 0)
                  PortExtension->DeviceParams.MaxQueueDepth = (IdentifyDeviceData->QueueDepth & 0x1F) + 1;
              
+             {
+                 ULONG hwMax = AHCI_Global_Port_CAP_NCS(AdapterExtension->CAP) + 1;
+                 if (PortExtension->DeviceParams.MaxQueueDepth > hwMax)
+                 {
+                     AhciDebugPrint("\tClamping QueueDepth %lu to HW Limit %lu\n", 
+                                    PortExtension->DeviceParams.MaxQueueDepth, hwMax);
+                     PortExtension->DeviceParams.MaxQueueDepth = hwMax;
+                 }
+             }
+             
              AhciDebugPrint("\tNCQ Supported: QueueDepth=%lu\n", PortExtension->DeviceParams.MaxQueueDepth);
         }
         else
@@ -3887,6 +3897,10 @@ AhciPrepareAtaReadWrite (
 
     SrbExtension->AtaFunction = ATA_FUNCTION_ATA_READ;
     SrbExtension->Flags = 0;
+    if (Srb->SrbFlags & SRB_FLAGS_FORCE_UNIT_ACCESS)
+    {
+        SrbExtension->Flags |= ATA_FLAGS_FUA;
+    }
     SrbExtension->CompletionRoutine = NULL;
 
     if (IsReading)

@@ -109,6 +109,7 @@ typedef struct _READ_CAPACITY16_DATA
 #define ATA_FLAGS_DATA_OUT                  (1 << 2)
 #define ATA_FLAGS_48BIT_COMMAND             (1 << 3)
 #define ATA_FLAGS_USE_DMA                   (1 << 4)
+#define ATA_FLAGS_FUA                       (1 << 5)
 
 #define IsAtaCommand(AtaFunction)           (AtaFunction & ATA_FUNCTION_ATA_COMMAND)
 #define IsAtapiCommand(AtaFunction)         (AtaFunction & ATA_FUNCTION_ATAPI_COMMAND)
@@ -116,7 +117,7 @@ typedef struct _READ_CAPACITY16_DATA
 #define IsAdapterCAPS64(CAP)                (CAP & AHCI_Global_HBA_CAP_S64A)
 
 // 3.1.1 NCS = CAP[12:08] -> Align
-#define AHCI_Global_Port_CAP_NCS(x)         (((x) & 0xF00) >> 8)
+#define AHCI_Global_Port_CAP_NCS(x)         (((x) & 0x1F00) >> 8)
 
 #define ROUND_UP(N, S) ((((N) + (S) - 1) / (S)) * (S))
 /* Round a pointer up to the given alignment (power of two) */
