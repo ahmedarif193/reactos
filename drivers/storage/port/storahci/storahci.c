@@ -884,14 +884,7 @@ AhciCompleteRequest(
     )
 {
     PAHCI_SRB_EXTENSION SrbExtension;
-    PSCSI_REQUEST_BLOCK ParentSrb; /* parent to complete, for internal SRBs */
     PAHCI_COMPLETION_ROUTINE CompletionRoutine;
-    
-    /* Linkage for DeferredParentList */
-    LIST_ENTRY DeferredLink;
-
-    // for alignment purpose -- 128 byte alignment including OwningPort
-    UCHAR Reserved[128 - sizeof(PVOID)];
     if (Srb->SrbStatus == SRB_STATUS_PENDING)
     {
         Srb->SrbStatus = SRB_STATUS_SUCCESS;

@@ -545,6 +545,7 @@ typedef struct _AHCI_PORT_EXTENSION
     AHCI_QUEUE CompletionQueue;                         // completed Srbs waiting on worker thread
     volatile LONG CompletionPending;
     LIST_ENTRY CompletionListEntry;
+    LIST_ENTRY DeferredParentList;
     PSCSI_REQUEST_BLOCK Slot[MAXIMUM_AHCI_PORT_NCS];    // Srbs which has been alloted a port
     PAHCI_RECEIVED_FIS ReceivedFIS;
     PAHCI_COMMAND_HEADER CommandList;
@@ -645,6 +646,7 @@ typedef struct _AHCI_SRB_EXTENSION
     ULONG DeferredToInternal; /* parent SRB is deferred to an internal miniport SRB (do not issue to HBA) */
     struct _SCSI_REQUEST_BLOCK *ParentSrb; /* parent to complete, for internal SRBs */
     struct _SCSI_REQUEST_BLOCK *Srb;       /* backpointer to self, for recovery */
+    LIST_ENTRY DeferredLink; /* linkage into per-port DeferredParentList */
     PAHCI_COMPLETION_ROUTINE CompletionRoutine;
     struct _AHCI_PORT_EXTENSION *OwningPort;
 
