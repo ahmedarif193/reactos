@@ -62,7 +62,7 @@ static CHAR PcDiskIdentifier[32][20];
 /* UEFI-specific */
 static ULONG UefiBootRootIdentifier;
 static ULONG OffsetToBoot;
-static ULONG PublicBootArcDisk;
+ULONG PublicBootArcDisk;
 static INTERNAL_UEFI_DISK* InternalUefiDisk = NULL;
 static EFI_GUID bioGuid = BLOCK_IO_PROTOCOL;
 static EFI_BLOCK_IO* bio;
