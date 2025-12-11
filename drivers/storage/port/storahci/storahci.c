@@ -2657,6 +2657,58 @@ AhciATA_CFIS (
     return 5;
 }// -- AhciATA_CFIS();
 
+static
+ULONG
+AhciFPDMA_CFIS (
+    __in PAHCI_PORT_EXTENSION PortExtension,
+    __in PAHCI_SRB_EXTENSION SrbExtension
+    )
+{
+    PAHCI_COMMAND_TABLE cmdTable;
+    UNREFERENCED_PARAMETER(PortExtension);
+
+    AhciDebugPrint("AhciFPDMA_CFIS(): Cmd=0x%02x Tag=%u LBA=%02x-%02x-%02x-%02x-%02x-%02x SC=%04x\n",
+                   SrbExtension->CommandReg,
+                   SrbExtension->SlotIndex,
+                   SrbExtension->LBA0, SrbExtension->LBA1, SrbExtension->LBA2,
+                   SrbExtension->LBA3, SrbExtension->LBA4, SrbExtension->LBA5,
+                   (SrbExtension->SectorCountHigh << 8) | SrbExtension->SectorCountLow);
+
+    cmdTable = &SrbExtension->CommandTable;
+    AhciZeroMemory((PCHAR)cmdTable->CFIS, sizeof(cmdTable->CFIS));
+
+    /* 
+       FPDMA First Party DMA (NCQ) FIS Structure
+       DW0: FisType (27h) | PMP/C (1<<7) | Command
+       DW1: LBA0 | LBA1 | LBA2 | Device (40h)
+       DW2: LBA3 | LBA4 | LBA5 | Features (Sector Count 0:7)
+       DW3: Sector Count (Tag << 3) | Features (Sector Count 8:15) | ...
+    */
+
+    cmdTable->CFIS[AHCI_ATA_CFIS_FisType] = FIS_TYPE_REG_H2D;
+    cmdTable->CFIS[AHCI_ATA_CFIS_PMPort_C] = (1 << 7);
+    cmdTable->CFIS[AHCI_ATA_CFIS_CommandReg] = SrbExtension->CommandReg;
+
+    cmdTable->CFIS[AHCI_ATA_CFIS_FeaturesLow] = SrbExtension->SectorCountLow; /* Features (7:0) = SectorCount(7:0) */
+    
+    cmdTable->CFIS[AHCI_ATA_CFIS_LBA0] = SrbExtension->LBA0;
+    cmdTable->CFIS[AHCI_ATA_CFIS_LBA1] = SrbExtension->LBA1;
+    cmdTable->CFIS[AHCI_ATA_CFIS_LBA2] = SrbExtension->LBA2;
+    cmdTable->CFIS[AHCI_ATA_CFIS_Device] = 0x40; /* LBA mode */
+
+    cmdTable->CFIS[AHCI_ATA_CFIS_LBA3] = SrbExtension->LBA3;
+    cmdTable->CFIS[AHCI_ATA_CFIS_LBA4] = SrbExtension->LBA4;
+    cmdTable->CFIS[AHCI_ATA_CFIS_LBA5] = SrbExtension->LBA5;
+
+    cmdTable->CFIS[AHCI_ATA_CFIS_FeaturesHigh] = SrbExtension->SectorCountHigh; /* Features (15:8) = SectorCount(15:8) */
+
+    /* The 'Sector Count' register in the FIS holds the Tag << 3 */
+    cmdTable->CFIS[AHCI_ATA_CFIS_SectorCountLow] = (UCHAR)((SrbExtension->SlotIndex & 0x1F) << 3);
+    cmdTable->CFIS[AHCI_ATA_CFIS_SectorCountHigh] = 0;
+
+    return 5; /* 5 Dwords */
+}
+
 /**
  * @name AhciATAPI_CFIS
  * @not_implemented
@@ -2878,9 +2930,14 @@ AhciProcessSrb (
     CommandHeader = &PortExtension->CommandList[SlotIndex];
 
     cfl = 0;
+    cfl = 0;
     if (IsAtapiCommand(SrbExtension->AtaFunction))
     {
         cfl = AhciATAPI_CFIS(PortExtension, SrbExtension);
+    }
+    else if (SrbExtension->CommandReg == ATA_CMD_FPDMA_READ || SrbExtension->CommandReg == ATA_CMD_FPDMA_WRITE)
+    {
+        cfl = AhciFPDMA_CFIS(PortExtension, SrbExtension);
     }
     else if (IsAtaCommand(SrbExtension->AtaFunction))
     {
@@ -2988,6 +3045,11 @@ AhciProcessSrb (
                    SlotIndex,
                    (ULONG)CommandHeader->DI.PRDTL,
                    (ULONG)CommandHeader->DI.CFL);
+
+    if (SrbExtension->CommandReg == ATA_CMD_FPDMA_READ || SrbExtension->CommandReg == ATA_CMD_FPDMA_WRITE)
+    {
+        StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->SACT, (1 << SlotIndex));
+    }
 
     // mark this slot
     PortExtension->Slot[SlotIndex] = Srb;
@@ -3312,6 +3374,21 @@ InquiryCompletion (
             PortExtension->DeviceParams.MaxLba.LowPart = IdentifyDeviceData->UserAddressableSectors;
         }
 
+        /* Check for NCQ Support */
+        if ((IdentifyDeviceData->SataCapabilities.Ncq) && 
+            (IdentifyDeviceData->QueueDepth > 0) &&
+            (AdapterExtension->CAP & AHCI_Global_HBA_CAP_SNCQ))
+        {
+             PortExtension->DeviceParams.SupportsNCQ = 1;
+             PortExtension->DeviceParams.MaxQueueDepth = (IdentifyDeviceData->QueueDepth & 0x1F) + 1;
+             AhciDebugPrint("\tNCQ Supported: QueueDepth=%lu\n", PortExtension->DeviceParams.MaxQueueDepth);
+        }
+        else
+        {
+             PortExtension->DeviceParams.SupportsNCQ = 0;
+             PortExtension->DeviceParams.MaxQueueDepth = 1;
+        }
+
         /* Logical/Physical sector sizes (handle 512e/4Kn without asserting). */
         {
             ULONG logicalBytes = DEVICE_ATA_BLOCK_SIZE;   /* default 512 */
@@ -3482,7 +3559,7 @@ InquiryCompletion (
     return;
 }// -- InquiryCompletion();
 
- /**
+/**
  * @name AhciATAPICommand
  * @implemented
  *
@@ -3833,6 +3910,15 @@ AhciPrepareAtaReadWrite (
         else
         {
             SrbExtension->CommandReg = IDE_COMMAND_WRITE_DMA_EXT;
+        }
+
+        /* Upgrade to NCQ/FPDMA if supported */
+        if (PortExtension->DeviceParams.SupportsNCQ)
+        {
+             if (IsReading)
+                 SrbExtension->CommandReg = ATA_CMD_FPDMA_READ;
+             else
+                 SrbExtension->CommandReg = ATA_CMD_FPDMA_WRITE;
         }
 
         SrbExtension->LBA3 = (UCHAR)((StartOffset >> 24) & 0xFF);
