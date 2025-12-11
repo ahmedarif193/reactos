@@ -526,7 +526,6 @@ typedef struct _AHCI_PORT_EXTENSION
     {
         UCHAR RemovableDevice;
         UCHAR Lba48BitMode;
-        UCHAR Lba48BitMode;
         UCHAR AccessType;
         UCHAR DeviceType;
         UCHAR SupportsNCQ;

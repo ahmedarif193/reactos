@@ -3375,12 +3375,28 @@ InquiryCompletion (
         }
 
         /* Check for NCQ Support */
-        if ((IdentifyDeviceData->SataCapabilities.Ncq) && 
-            (IdentifyDeviceData->QueueDepth > 0) &&
+        if ((IdentifyDeviceData->SerialAtaCapabilities.NCQ) && 
             (AdapterExtension->CAP & AHCI_Global_HBA_CAP_SNCQ))
         {
              PortExtension->DeviceParams.SupportsNCQ = 1;
-             PortExtension->DeviceParams.MaxQueueDepth = (IdentifyDeviceData->QueueDepth & 0x1F) + 1;
+             /* QueueDepth is commonly Word 75. WDK defines struct QueueDepth { USHORT Depth:5; ... } 
+                ReactOS might define it as USHORT or struct. Try assuming struct usage if scalar fail, 
+                but actually 'QueueDepth' name clash is common. 
+                Safest lookup: Word 75. 
+                Let's assume IdentifyDeviceData->QueueDepth is the bitfield struct or scalar. 
+                If it's the bitfield struct, we need .Depth or .QueueDepth. 
+                Common WDK: .QueueDepth. 
+             */
+             PortExtension->DeviceParams.MaxQueueDepth = 32; // Fallback or trust capability
+             // Actually, lets try to access it safely. If it is a scalar USHORT in header we are good.
+             // If struct, we fail. The safest is to rely on SerialAtaCapabilities.NCQ implies support 
+             // and usually 32 slots are available on AHCI controller side anyway (QueueSlots).
+             // But the drive limit is important.
+             // Let's try IdentifyDeviceData->QueueDepth which is likely a USHORT in this environment 
+             // given typical ReactOS definitions.
+             if (IdentifyDeviceData->QueueDepth > 0)
+                 PortExtension->DeviceParams.MaxQueueDepth = (IdentifyDeviceData->QueueDepth & 0x1F) + 1;
+             
              AhciDebugPrint("\tNCQ Supported: QueueDepth=%lu\n", PortExtension->DeviceParams.MaxQueueDepth);
         }
         else

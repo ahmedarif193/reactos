@@ -71,6 +71,11 @@ typedef struct _SCSI_SUPPORTED_CONTROL_TYPE_LIST {
 #define AHCI_CMD_TABLE_ALLOC_SIZE \
     (sizeof(AHCI_CMD_TABLE) + ((AHCI_MAX_PRDT_ENTRIES - 1) * sizeof(AHCI_PRDT_ENTRY)))
 
+#define AHCI_CAP_SNCQ              0x40000000
+
+#define ATA_CMD_FPDMA_READ         0x60
+#define ATA_CMD_FPDMA_WRITE        0x61
+
 /* Minimal AHCI HBA register layout */
 typedef struct _AHCI_HBA_MEM {
     volatile ULONG CAP;        /* 0x00: HBA Capabilities */
@@ -189,6 +194,9 @@ typedef struct _AHCI_PORT_CONTEXT {
     ULONG Signature;
     ULONG SectorSize;
     ULONGLONG SectorCount;
+    BOOLEAN SupportsNCQ;
+    UCHAR MaxQueueDepth;
+    UCHAR Reserved0[2];
     BOOLEAN SenseValid;
     SENSE_DATA SenseData;
     PAHCI_CMD_HEADER CommandList;
