@@ -68,6 +68,7 @@ typedef struct _READ_CAPACITY16_DATA
 
 // section 3.1.2
 #define AHCI_Global_HBA_CAP_S64A            (1 << 31)
+#define AHCI_Global_HBA_CAP_SNCQ            (1 << 30)
 
 // FIS Types : https://wiki.osdev.org/AHCI
 #define FIS_TYPE_REG_H2D        0x27 // Register FIS - host to device
@@ -97,6 +98,8 @@ typedef struct _READ_CAPACITY16_DATA
 #define ATA_FUNCTION_ATA_COMMAND            0x100
 #define ATA_FUNCTION_ATA_IDENTIFY           0x101
 #define ATA_FUNCTION_ATA_READ               0x102
+#define ATA_CMD_FPDMA_READ                  0x60
+#define ATA_CMD_FPDMA_WRITE                 0x61
 
 // ATAPI Functions
 #define ATA_FUNCTION_ATAPI_COMMAND          0x200
@@ -523,8 +526,11 @@ typedef struct _AHCI_PORT_EXTENSION
     {
         UCHAR RemovableDevice;
         UCHAR Lba48BitMode;
+        UCHAR Lba48BitMode;
         UCHAR AccessType;
         UCHAR DeviceType;
+        UCHAR SupportsNCQ;
+        ULONG MaxQueueDepth;
         UCHAR IsActive;
         LARGE_INTEGER MaxLba;
         ULONG BytesPerLogicalSector;
