@@ -8,6 +8,17 @@
 #include <ntddk.h>
 #include <ata.h>
 #include <storport.h>
+#include <ntddscsi.h>
+
+/* Older DDKs may not define SCSIOP_UNMAP. Define it for block devices if missing. */
+#ifndef SCSIOP_UNMAP
+#define SCSIOP_UNMAP 0x42
+#endif
+
+/* Some older headers may lack REQUEST_SENSE opcode */
+#ifndef SCSIOP_REQUEST_SENSE
+#define SCSIOP_REQUEST_SENSE 0x03
+#endif
 
 #define NDEBUG
 #include <debug.h>
@@ -105,9 +116,12 @@ typedef struct _READ_CAPACITY16_DATA
 #define AHCI_Global_Port_CAP_NCS(x)         (((x) & 0xF00) >> 8)
 
 #define ROUND_UP(N, S) ((((N) + (S) - 1) / (S)) * (S))
+/* Round a pointer up to the given alignment (power of two) */
+#ifndef ROUND_UP_PTR
+#define ROUND_UP_PTR(p, a) ((PVOID)((((ULONG_PTR)(p)) + ((a) - 1)) & ~((ULONG_PTR)((a) - 1))))
+#endif
 //#define AhciDebugPrint(format, ...) StorPortDebugPrint(0, format, __VA_ARGS__)
-//#define AhciDebugPrint(format, ...) DbgPrint("(%s:%d) " format, __RELFILE__, __LINE__, ##__VA_ARGS__)
-#define AhciDebugPrint(format, ...) do {} while (0)
+#define AhciDebugPrint(format, ...) DbgPrint("(storahci:%s:%d) " format, __RELFILE__, __LINE__, ##__VA_ARGS__)
 
 typedef
 VOID
@@ -534,11 +548,23 @@ typedef struct _AHCI_PORT_EXTENSION
     PSCSI_REQUEST_BLOCK Slot[MAXIMUM_AHCI_PORT_NCS];    // Srbs which has been alloted a port
     PAHCI_RECEIVED_FIS ReceivedFIS;
     PAHCI_COMMAND_HEADER CommandList;
+    // Base of per-slot command tables allocated from non-cached, physically-contiguous memory
+    // Each entry is 128-byte aligned and sized sizeof(AHCI_COMMAND_TABLE).
+    PAHCI_COMMAND_TABLE CommandTables;
     STOR_DEVICE_POWER_STATE DevicePowerState;           // Device Power State
     PIDENTIFY_DEVICE_DATA IdentifyDeviceData;
     STOR_PHYSICAL_ADDRESS IdentifyDeviceDataPhysicalAddress;
     struct _AHCI_ADAPTER_EXTENSION* AdapterExtension;   // Port's Adapter Information
     volatile LONG ErrorRecoveryScheduled;
+    volatile LONG ResetInProgress;
+    ULONG ErrorSlotsMask;                        // snapshot of CommandIssuedSlots at error time
+    UCHAR LastTaskfileStatus;
+    UCHAR LastTaskfileError;
+    UCHAR LastErrorValid;
+    /* ATAPI DMA fallback: coalesce small transfers to device block size (e.g., 2048). */
+    volatile LONG AtapiDmaFallbackActive;
+    /* Log empty-port start failures only once until a successful start/reset. */
+    volatile LONG StartFailLogged;
 } AHCI_PORT_EXTENSION, *PAHCI_PORT_EXTENSION;
 
 // Holds Adapter Information
@@ -612,12 +638,30 @@ typedef struct _AHCI_SRB_EXTENSION
     ULONG SlotIndex;
     LOCAL_SCATTER_GATHER_LIST Sgl;
     PLOCAL_SCATTER_GATHER_LIST pSgl;
+    PVOID SavedOriginalRequest;
+    volatile LONG Completed;
+    ULONG Canary;
+    ULONG Internal; /* non-zero for miniport-internal SRBs (do not StorPortComplete) */
+    ULONG DeferredToInternal; /* parent SRB is deferred to an internal miniport SRB (do not issue to HBA) */
+    struct _SCSI_REQUEST_BLOCK *ParentSrb; /* parent to complete, for internal SRBs */
     PAHCI_COMPLETION_ROUTINE CompletionRoutine;
     struct _AHCI_PORT_EXTENSION *OwningPort;
 
     // for alignment purpose -- 128 byte alignment including OwningPort
     UCHAR Reserved[128 - sizeof(PVOID)];
+    /* Bounce buffer context for ATAPI DMA fallback */
+    PVOID BounceBuffer;
+    ULONG BounceLength;
+    PVOID OriginalDataBuffer;
+    ULONG OriginalDataLength;
 } AHCI_SRB_EXTENSION, *PAHCI_SRB_EXTENSION;
+
+/*
+ * The AHCI command table is intended to be the first field of the SRB
+ * extension. Assert this contract at build time so layout changes
+ * immediately fail instead of causing subtle corruption at runtime.
+ */
+C_ASSERT(FIELD_OFFSET(AHCI_SRB_EXTENSION, CommandTable) == 0);
 
 //////////////////////////////////////////////////////////////
 //                       Declarations                       //
@@ -642,6 +686,11 @@ AhciZeroMemory (
     __in ULONG BufferSize
     );
 
+/*
+ * Note: IsPortValid returns whether the port is currently active (DeviceParams.IsActive),
+ * not merely whether the port exists/implemented. Callers should not treat this as a static
+ * existence check during recovery.
+ */
 FORCEINLINE
 BOOLEAN
 IsPortValid (
@@ -679,6 +728,12 @@ UCHAR DeviceRequestCapacity (
     __in PCDB Cdb
     );
 
+UCHAR DeviceRequestUnmap (
+    __in PAHCI_ADAPTER_EXTENSION AdapterExtension,
+    __in PSCSI_REQUEST_BLOCK Srb,
+    __in PCDB Cdb
+    );
+
 UCHAR
 DeviceInquiryRequest (
     __in PAHCI_ADAPTER_EXTENSION AdapterExtension,
@@ -709,6 +764,13 @@ FORCEINLINE
 PVOID
 RemoveQueue (
     __inout PAHCI_QUEUE Queue
+    );
+
+/* Remove all occurrences of an entry from a queue (order-preserving). */
+VOID
+AhciRemoveFromQueue(
+    __inout PAHCI_QUEUE Queue,
+    __in PVOID Entry
     );
 
 FORCEINLINE
