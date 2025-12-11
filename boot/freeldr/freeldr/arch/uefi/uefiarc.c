@@ -418,21 +418,68 @@ UefiEnumerateArcDisks(VOID)
         EFI_LOADED_IMAGE_PROTOCOL* LoadedImage = NULL;
         if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
                 GlobalImageHandle, &gEfiLoadedImageProtocolGuid, (VOID**)&LoadedImage)) &&
-            LoadedImage && LoadedImage->DeviceHandle == H)
+            LoadedImage)
         {
-            isBootHandle = TRUE;
+            if (LoadedImage->DeviceHandle == H)
+            {
+                TRACE("UefiEnumerateArcDisks: Handle %p IS the boot handle (Direct Match)\n", H);
+                isBootHandle = TRUE;
+            }
+            else
+            {
+                /* Check if H is the parent of the boot partition */
+                EFI_HANDLE Parent = FindParentDiskHandle(LoadedImage->DeviceHandle);
+                if (Parent == H)
+                {
+                    TRACE("UefiEnumerateArcDisks: Handle %p IS the boot handle (Parent Match)\n", H);
+                    isBootHandle = TRUE;
+                }
+                else
+                {
+                    /* Trace failures for known removable boot scenarios */
+                    if (BlockIo->Media->RemovableMedia)
+                    {
+                        TRACE("UefiEnumerateArcDisks: Removable Handle %p != BootParent %p (BootH=%p)\n", 
+                              H, Parent, LoadedImage->DeviceHandle);
+                    }
+                }
+            }
         }
-
+        
         BOOLEAN isPartition = BlockIo->Media->LogicalPartition;
         BOOLEAN isRemovable = BlockIo->Media->RemovableMedia;
         BOOLEAN isCd        = UefiIsCdRomHandle(H);
+
+        /* 
+         * FIX: If this is the parent of the boot partition, force it to be treated as a HDD/rdisk.
+         * Heuristics in UefiIsCdRomHandle (e.g. BlockSize=2048) can falsely identify 4Kn HDDs as CDs.
+         * Since we booted from a partition, it behaves like a HDD, so we must enumerate it as one.
+         */
+        if (isBootHandle && isCd && LoadedImage && LoadedImage->DeviceHandle != H)
+        {
+             /* Check if the actual boot handle (child) is a partition */
+             EFI_HANDLE ChildHandle = LoadedImage->DeviceHandle;
+             EFI_BLOCK_IO_PROTOCOL* ChildBlk = NULL;
+             if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+                     ChildHandle, &gEfiBlockIoProtocolGuid, (VOID**)&ChildBlk)) &&
+                 ChildBlk && ChildBlk->Media->LogicalPartition)
+             {
+                 TRACE("UEFI ARC: Boot disk %p is CD-ROM by heuristic, but boot handle is partition -> Forcing HDD/rdisk\n", H);
+                 isCd = FALSE;
+             }
+        }
+
+        TRACE("UefiEnumerateArcDisks: Handle %p: Part=%d Rem=%d Cd=%d Boot=%d\n", H, isPartition, isRemovable, isCd, isBootHandle);
 
         /* We only index physical handles (non-partitions) */
         if (isPartition) continue;
 
         /* Skip non-boot removable devices except CD-ROMs (we still index CDs) */
         if (isRemovable && !isBootHandle && !isCd)
-            continue;
+        {
+             TRACE("UefiEnumerateArcDisks: Skipping removable non-boot device %p\n", H);
+             continue;
+        }
 
         if (isCd)
         {
@@ -475,6 +522,46 @@ UefiEnumerateArcDisks(VOID)
 
     TRACE("UefiEnumerateArcDisks: Found %lu HDD/SSD, %lu CD-ROM\n",
           (ULONG)UefiDiskHandleCount, (ULONG)UefiCdromCount);
+
+    /* 
+     * Post-enumeration fixup: The initial FrLdrBootPath in UefiSetBootpath likely guessed rdisk(0)
+     * because enumeration hadn't run. Now we know the real index of the boot drive.
+     * We must update FrLdrBootPath to point to the correct rdisk(N).
+     */
+    if (FrldrBootPartition != 0xFF) /* 0xFF = CD-ROM, which is handled via cdrom(N) and usually consistent */
+    {
+        extern CHAR FrLdrBootPath[MAX_PATH];
+        extern ULONG PublicBootArcDisk;
+        
+        /* Find the boot handle in our list */
+        for (i = 0; i < UefiDiskHandleCount; ++i)
+        {
+            /* 
+             * We identified the boot disk earlier by verifying it against LoadedImage->DeviceHandle.
+             * But we need to match it again to the 'i' index.
+             * The 'BootHandle' used in UefiDiskIsUsb and others is not global, but we can resolve it.
+             */
+             // Simpler: We know 'PublicBootHandle' is the partition handle. 
+             // We need the PARENT of PublicBootHandle.
+             extern EFI_HANDLE PublicBootHandle;
+             if (PublicBootHandle)
+             {
+                 EFI_HANDLE RealBootDisk = FindParentDiskHandle(PublicBootHandle);
+                 if (RealBootDisk && UefiDiskHandles[i].Handle == RealBootDisk)
+                 {
+                     TRACE("UEFI ARC: Correcting boot path from provisional rdisk(%lu) to rdisk(%lu)\n", 
+                           PublicBootArcDisk, (ULONG)i);
+                     
+                     PublicBootArcDisk = (ULONG)i;
+                     RtlStringCbPrintfA(FrLdrBootPath, sizeof(FrLdrBootPath),
+                           "multi(0)disk(0)rdisk(%lu)partition(%lu)",
+                           PublicBootArcDisk, FrldrBootPartition);
+                     TRACE("UEFI ARC: Final Boot Path: %s\n", FrLdrBootPath);
+                     break;
+                 }
+             }
+        }
+    }
 
     return (UefiDiskHandleCount + UefiCdromCount) > 0;
 }
