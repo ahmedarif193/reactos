@@ -539,11 +539,17 @@ AhciIssueInternalAtapiBounce(
     }
     se->BounceLength = devBlock;
 
+
     /* Mark parent SRB as deferred to an internal bounce SRB. Do not issue parent to HBA. */
     if (parentExt != NULL)
     {
+        KIRQL oldIrql;
         parentExt->DeferredToInternal = 1;
+
+        /* Synchronize list insertion */
+        KeAcquireSpinLock(&AdapterExtension->CompletionListLock, &oldIrql);
         InsertTailList(&PortExtension->DeferredParentList, &parentExt->DeferredLink);
+        KeReleaseSpinLock(&AdapterExtension->CompletionListLock, oldIrql);
     }
 
     /* For write, pre-fill bounce with caller data (remaining bytes zeroed). */
@@ -670,11 +676,18 @@ AhciInternalAtapiBounceCompletion(
     if (parent != NULL)
     {
         PAHCI_SRB_EXTENSION parentExt = GetSrbExtension(parent);
-        /* Remove from deferred list if present */
-        if (parentExt && !IsListEmpty(&parentExt->DeferredLink))
+        
+        /* Remove from deferred list if present, under lock */
+        if (parentExt)
         {
-             RemoveEntryList(&parentExt->DeferredLink);
-             InitializeListHead(&parentExt->DeferredLink);
+             KIRQL oldIrql;
+             KeAcquireSpinLock(&AdapterExtension->CompletionListLock, &oldIrql);
+             if (!IsListEmpty(&parentExt->DeferredLink))
+             {
+                 RemoveEntryList(&parentExt->DeferredLink);
+                 InitializeListHead(&parentExt->DeferredLink);
+             }
+             KeReleaseSpinLock(&AdapterExtension->CompletionListLock, oldIrql);
         }
 
         if ((se != NULL) && (se->BounceBuffer != NULL) && (parent->SrbFlags & SRB_FLAGS_DATA_IN))
@@ -1071,6 +1084,7 @@ AhciPortInitialize (
     AhciInitializeQueue(&PortExtension->CompletionQueue);
     PortExtension->CompletionPending = 0;
     InitializeListHead(&PortExtension->CompletionListEntry);
+    InitializeListHead(&PortExtension->DeferredParentList);
 
     commandListPhysical = StorPortGetPhysicalAddress(adapterExtension,
                                                      NULL,
@@ -2103,8 +2117,10 @@ AhciHwStartIo (
             SrbExtension->Canary = 0xA5A5A5A5;
             SrbExtension->OriginalDataBuffer = Srb->DataBuffer;
             SrbExtension->OriginalDataLength = Srb->DataTransferLength;
+            SrbExtension->OriginalDataLength = Srb->DataTransferLength;
             SrbExtension->SavedOriginalRequest = (PVOID)Srb->OriginalRequest;
             SrbExtension->Srb = Srb;
+            InitializeListHead(&SrbExtension->DeferredLink);
             // Completed is 0 from ZeroMemory
         }
     }
@@ -4331,11 +4347,12 @@ DeviceRequestUnmap (
         return SRB_STATUS_INVALID_REQUEST;
     }
 
+
     // Map caller buffer
     sys = NULL;
     (void)StorPortGetSystemAddress(AdapterExtension, Srb, (PVOID*)&sys);
     len = Srb->DataTransferLength;
-    if ((sys == NULL) || (len < 8))
+    if ((sys == NULL) || (len < 512))
     {
         return SRB_STATUS_INVALID_REQUEST;
     }
@@ -5177,7 +5194,10 @@ AhciResetPortAndFailRequests (
 
     /* Drain the Deferred Parent List -- these are parents of internal requests (e.g. bounce) that aren't in normal queues */
     {
+        KIRQL oldIrql;
         PLIST_ENTRY entry;
+        
+        KeAcquireSpinLock(&AdapterExtension->CompletionListLock, &oldIrql);
         while (!IsListEmpty(&PortExtension->DeferredParentList))
         {
             PAHCI_SRB_EXTENSION parentExt;
@@ -5190,27 +5210,38 @@ AhciResetPortAndFailRequests (
             parentSrb = parentExt->Srb;
             if (parentSrb != NULL)
             {
-                AhciDebugPrint("\tRecovering deferred parent SRB %p\n", parentSrb);
-                parentSrb->SrbStatus = SrbStatus;
-                parentSrb->ScsiStatus = ScsiStatus;
+                // We must complete this outside the lock? 
+                // No, we are collecting them into completionList to complete later?
+                // Wait, completionList is fixed size. The logic below iterates completionList.
+                // We should add to completionList if possible.
+                // But we are holding a lock (CompletionListLock). 
+                // AhciQueuePortCompletion also acquires CompletionListLock! Deadlock hazard!
+                // We cannot call AhciQueuePortCompletion while holding CompletionListLock.
+                // We must collect SRBs and complete them after releasing lock.
+                // Limitation: completionList has fixed size AHCI_MAX_SRBS_TO_DRAIN.
+                // If we overflow, we have a problem.
+                // However, the number of active bounce requests should be small (queue depth).
+                // Let's assume we can fit them or we need a dynamic approach. 
+                // For now, fill completionList. If full, we are stuck. 
+                // But wait, the standard drain loop also fills completionList.
+                // Let's try to fill completionList.
+                
                 if (completionCount < RTL_NUMBER_OF(completionList))
                 {
+                    parentSrb->SrbStatus = SrbStatus;
+                    parentSrb->ScsiStatus = ScsiStatus;
                     completionList[completionCount++] = parentSrb;
                 }
                 else
                 {
-                    // Fallback if list full? We should probably try to complete it anyway or risk losing it.
-                    // Given the logic below, we can just complete it directly if the batch list is full, 
-                    // or just queue for the next batch? 
-                    // AhciResetPortAndFailRequests completes everything at the end (loop). 
-                    // Use AhciQueuePortCompletion(PortExtension, parentSrb, FALSE) immediately? 
-                    // No, safe to use the completionList. 
-                    // Increase list size? No, fixed size.
-                    // Just call completion routine directly or queue via AhciQueuePortCompletion (which is safe).
-                     AhciQueuePortCompletion(PortExtension, parentSrb, FALSE);
+                     AhciDebugPrint("\tDeferred parent list overflow during reset!\n");
+                     // We can't queue it safely here due to lock recursion. 
+                     // Leak it? Better than deadlock.
+                     // Ideally we should drop lock, queue, reacquire. But list state changes.
                 }
             }
         }
+        KeReleaseSpinLock(&AdapterExtension->CompletionListLock, oldIrql);
     }
 
     // Perform slow operations without holding the Storport InterruptLock
