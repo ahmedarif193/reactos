@@ -18,11 +18,13 @@ DBG_DEFAULT_CHANNEL(WARNING);
 
 #define TAG_HW_RESOURCE_LIST    'lRwH'
 #define TAG_HW_DISK_CONTEXT     'cDwH'
+#define UEFI_DISK_CONTEXT_SIGNATURE 'cDsU'
 #define FIRST_PARTITION 1
 #define MAX_PARTITION_SEARCH 128
 
 typedef struct tagDISKCONTEXT
 {
+    ULONG Signature;
     UCHAR DriveNumber;
     ULONG SectorSize;
     ULONGLONG SectorOffset;
@@ -650,6 +652,7 @@ UefiDiskOpen(CHAR *Path, OPENMODE OpenMode, ULONG *FileId)
     if (!Context)
         return ENOMEM;
 
+    Context->Signature = UEFI_DISK_CONTEXT_SIGNATURE;
     Context->DriveNumber = DriveNumber;
     Context->SectorSize = SectorSize;
     Context->SectorOffset = SectorOffset;
@@ -756,6 +759,29 @@ static const DEVVTBL UefiDiskVtbl =
     UefiDiskSeek,
 };
 
+static
+DISKCONTEXT*
+UefiResolveDiskContext(ULONG FileId)
+{
+    ULONG Depth = 0;
+
+    while (FileId != INVALID_FILE_ID && Depth < MAX_FDS)
+    {
+        DISKCONTEXT* Context = FsGetDeviceSpecific(FileId);
+        if (Context && Context->Signature == UEFI_DISK_CONTEXT_SIGNATURE)
+            return Context;
+
+        ULONG ParentId = FsGetDeviceId(FileId);
+        if (ParentId == FileId)
+            break;
+
+        FileId = ParentId;
+        ++Depth;
+    }
+
+    return NULL;
+}
+
 /*
  * Expose helpers to retrieve the UEFI block handle and ARC device path
  * associated with a given FileId opened via UefiDiskOpen.
@@ -763,14 +789,14 @@ static const DEVVTBL UefiDiskVtbl =
 EFI_HANDLE
 UefiGetBlockHandleForFileId(ULONG FileId)
 {
-    DISKCONTEXT* Context = FsGetDeviceSpecific(FileId);
+    DISKCONTEXT* Context = UefiResolveDiskContext(FileId);
     return Context ? Context->BlockHandle : NULL;
 }
 
 PCCHAR
 UefiGetArcPathForFileId(ULONG FileId)
 {
-    DISKCONTEXT* Context = FsGetDeviceSpecific(FileId);
+    DISKCONTEXT* Context = UefiResolveDiskContext(FileId);
     return (Context && Context->ArcDevicePath[0]) ? Context->ArcDevicePath : NULL;
 }
 
@@ -1130,8 +1156,7 @@ UefiSetBootpath(VOID)
 
    RtlZeroMemory(&PartitionEntry, sizeof(PartitionEntry));
 
-   if (!TreatAsCd &&
-       UefiGetBootPartitionEntry(FrldrBootDrive, &PartitionEntry, &BootPartition) &&
+   if (UefiGetBootPartitionEntry(FrldrBootDrive, &PartitionEntry, &BootPartition) &&
        BootPartition != 0)
    {
         BOOLEAN PartitionLooksValid = (PartitionEntry.PartitionSectorCount != 0 &&
@@ -1181,7 +1206,8 @@ UefiSetBootpath(VOID)
         IsoProbeIo = RootDiskIo;
    }
 
-   if (!TreatAsCd && IsoProbeIo && IsoProbeIo->Media &&
+   if (!TreatAsCd && !HasPartitionInfo &&
+       IsoProbeIo && IsoProbeIo->Media &&
        !IsoProbeIo->Media->LogicalPartition && IsoProbeIo->Media->MediaPresent)
    {
         if (UefiDetectIsoVolume(IsoProbeIo))
