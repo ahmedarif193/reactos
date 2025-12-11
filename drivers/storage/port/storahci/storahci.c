@@ -543,6 +543,7 @@ AhciIssueInternalAtapiBounce(
     if (parentExt != NULL)
     {
         parentExt->DeferredToInternal = 1;
+        InsertTailList(&PortExtension->DeferredParentList, &parentExt->DeferredLink);
     }
 
     /* For write, pre-fill bounce with caller data (remaining bytes zeroed). */
@@ -668,6 +669,14 @@ AhciInternalAtapiBounceCompletion(
 
     if (parent != NULL)
     {
+        PAHCI_SRB_EXTENSION parentExt = GetSrbExtension(parent);
+        /* Remove from deferred list if present */
+        if (parentExt && !IsListEmpty(&parentExt->DeferredLink))
+        {
+             RemoveEntryList(&parentExt->DeferredLink);
+             InitializeListHead(&parentExt->DeferredLink);
+        }
+
         if ((se != NULL) && (se->BounceBuffer != NULL) && (parent->SrbFlags & SRB_FLAGS_DATA_IN))
         {
             ULONG copyLen = (se->OriginalDataLength < se->BounceLength) ? se->OriginalDataLength : se->BounceLength;
@@ -862,13 +871,14 @@ AhciCompleteRequest(
     )
 {
     PAHCI_SRB_EXTENSION SrbExtension;
+    PSCSI_REQUEST_BLOCK ParentSrb; /* parent to complete, for internal SRBs */
     PAHCI_COMPLETION_ROUTINE CompletionRoutine;
+    
+    /* Linkage for DeferredParentList */
+    LIST_ENTRY DeferredLink;
 
-    if ((AdapterExtension == NULL) || (Srb == NULL))
-    {
-        return;
-    }
-
+    // for alignment purpose -- 128 byte alignment including OwningPort
+    UCHAR Reserved[128 - sizeof(PVOID)];
     if (Srb->SrbStatus == SRB_STATUS_PENDING)
     {
         Srb->SrbStatus = SRB_STATUS_SUCCESS;
@@ -880,7 +890,9 @@ AhciCompleteRequest(
     /* Drop true duplicates as early as possible to avoid noisy logs */
     if (SrbExtension != NULL)
     {
-        LONG prev = InterlockedCompareExchange((PLONG)&SrbExtension->Completed, 1, 1);
+        /* Attempt to transition from 0 (Not Completed) to 1 (Completed). 
+           If the previous value was not 0, it means we already completed it. */
+        LONG prev = InterlockedCompareExchange((PLONG)&SrbExtension->Completed, 1, 0);
         if (prev != 0)
         {
             return;
@@ -954,11 +966,8 @@ AhciCompleteRequest(
     /* Drop duplicate completion attempts at the miniport level. */
     if (SrbExtension != NULL)
     {
-        LONG prev = InterlockedExchange((PLONG)&SrbExtension->Completed, 1);
-        if (prev != 0)
-        {
-            return;
-        }
+        /* We already set Completed=1 at the top of this function. Double-check isn't strictly necessary 
+           if the top guard holds, but we continue with cleanup. */
         /* Restore the original DataBuffer/DataTransferLength if Storport changed them.
            This keeps classpnp's DbgCheckReturnedPkt happy. */
         if (SrbExtension->OriginalDataBuffer != NULL && Srb->DataBuffer != SrbExtension->OriginalDataBuffer)
@@ -2084,6 +2093,21 @@ AhciHwStartIo (
                    (ULONG)Srb->SrbFlags);
 
     AdapterExtension = (PAHCI_ADAPTER_EXTENSION)DeviceExtension;
+
+    /* Initialize SRB Extension centrally */
+    {
+        PAHCI_SRB_EXTENSION SrbExtension = GetSrbExtension(Srb);
+        if (SrbExtension != NULL)
+        {
+            AhciZeroMemory((PCHAR)SrbExtension, sizeof(*SrbExtension));
+            SrbExtension->Canary = 0xA5A5A5A5;
+            SrbExtension->OriginalDataBuffer = Srb->DataBuffer;
+            SrbExtension->OriginalDataLength = Srb->DataTransferLength;
+            SrbExtension->SavedOriginalRequest = (PVOID)Srb->OriginalRequest;
+            SrbExtension->Srb = Srb;
+            // Completed is 0 from ZeroMemory
+        }
+    }
 
     /* Accept SRB if the target port exists; do not reject while inactive (recovery). */
     if ((Srb->TargetId >= AdapterExtension->PortCount) ||
@@ -4330,10 +4354,10 @@ DeviceRequestUnmap (
         return SRB_STATUS_INVALID_REQUEST;
     }
 
-    // Build a single 512-byte DSM TRIM data block in-place
-    // Each descriptor is 8 bytes: 6-byte LBA (LE) + 2-byte sector count (LE)
-    AhciZeroMemory((PCHAR)sys, 512);
+    // Build a single 512-byte DSM TRIM data block/
+    // We MUST use a separate buffer to avoid overwriting the input UNMAP descriptions before we read them all.
     {
+        UCHAR trimBuf[512] = {0};
         ULONG maxDesc = 64; // 512 / 8
         ULONG n = blkLen / 16; // UNMAP descriptor count
         if (n > maxDesc)
@@ -4342,7 +4366,8 @@ DeviceRequestUnmap (
             n = maxDesc;
         }
         PUCHAR in = sys + 8;
-        PUCHAR out = sys; // reuse buffer for TRIM payload
+        PUCHAR out = trimBuf;
+        
         for (ULONG i = 0; i < n; i++)
         {
             // UNMAP descriptor: 8 bytes LBA (big endian), 4 bytes block count (big endian), 4 bytes reserved
@@ -4367,6 +4392,11 @@ DeviceRequestUnmap (
             in += 16;
             out += 8;
         }
+        
+        // Now safely copy the constructed TRIM payload over the original buffer
+        // Note: we only write 512 bytes.
+        AhciZeroMemory((PCHAR)sys, 512);
+        StorPortCopyMemory(sys, trimBuf, 512);
     }
 
     // Set transfer to one 512-byte block
@@ -5144,6 +5174,44 @@ AhciResetPortAndFailRequests (
                              completionList,
                              RTL_NUMBER_OF(completionList),
                              &completionCount);
+
+    /* Drain the Deferred Parent List -- these are parents of internal requests (e.g. bounce) that aren't in normal queues */
+    {
+        PLIST_ENTRY entry;
+        while (!IsListEmpty(&PortExtension->DeferredParentList))
+        {
+            PAHCI_SRB_EXTENSION parentExt;
+            PSCSI_REQUEST_BLOCK parentSrb;
+
+            entry = RemoveHeadList(&PortExtension->DeferredParentList);
+            parentExt = CONTAINING_RECORD(entry, AHCI_SRB_EXTENSION, DeferredLink);
+            InitializeListHead(&parentExt->DeferredLink); // mark as removed
+
+            parentSrb = parentExt->Srb;
+            if (parentSrb != NULL)
+            {
+                AhciDebugPrint("\tRecovering deferred parent SRB %p\n", parentSrb);
+                parentSrb->SrbStatus = SrbStatus;
+                parentSrb->ScsiStatus = ScsiStatus;
+                if (completionCount < RTL_NUMBER_OF(completionList))
+                {
+                    completionList[completionCount++] = parentSrb;
+                }
+                else
+                {
+                    // Fallback if list full? We should probably try to complete it anyway or risk losing it.
+                    // Given the logic below, we can just complete it directly if the batch list is full, 
+                    // or just queue for the next batch? 
+                    // AhciResetPortAndFailRequests completes everything at the end (loop). 
+                    // Use AhciQueuePortCompletion(PortExtension, parentSrb, FALSE) immediately? 
+                    // No, safe to use the completionList. 
+                    // Increase list size? No, fixed size.
+                    // Just call completion routine directly or queue via AhciQueuePortCompletion (which is safe).
+                     AhciQueuePortCompletion(PortExtension, parentSrb, FALSE);
+                }
+            }
+        }
+    }
 
     // Perform slow operations without holding the Storport InterruptLock
     if (PortExtension->Port != NULL)

@@ -644,6 +644,7 @@ typedef struct _AHCI_SRB_EXTENSION
     ULONG Internal; /* non-zero for miniport-internal SRBs (do not StorPortComplete) */
     ULONG DeferredToInternal; /* parent SRB is deferred to an internal miniport SRB (do not issue to HBA) */
     struct _SCSI_REQUEST_BLOCK *ParentSrb; /* parent to complete, for internal SRBs */
+    struct _SCSI_REQUEST_BLOCK *Srb;       /* backpointer to self, for recovery */
     PAHCI_COMPLETION_ROUTINE CompletionRoutine;
     struct _AHCI_PORT_EXTENSION *OwningPort;
 
