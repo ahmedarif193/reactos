@@ -19,6 +19,51 @@
 #define AHCI_COMPLETION_WORK_BURST 16
 
 static
+ULONG
+AhciGetHardwareQueueDepth(
+    __in PAHCI_PORT_EXTENSION PortExtension
+    )
+{
+    ULONG hwDepth;
+
+    if ((PortExtension == NULL) || (PortExtension->MaxPortQueueDepth == 0))
+    {
+        hwDepth = 1;
+    }
+    else
+    {
+        hwDepth = PortExtension->MaxPortQueueDepth;
+    }
+
+    if (hwDepth > MAXIMUM_AHCI_PORT_NCS)
+    {
+        hwDepth = MAXIMUM_AHCI_PORT_NCS;
+    }
+
+    return hwDepth;
+}
+
+static
+ULONG
+AhciGetEffectiveQueueDepth(
+    __in PAHCI_PORT_EXTENSION PortExtension
+    )
+{
+    ULONG hwDepth;
+    ULONG deviceDepth;
+
+    hwDepth = AhciGetHardwareQueueDepth(PortExtension);
+    deviceDepth = (PortExtension != NULL) ? PortExtension->DeviceParams.MaxQueueDepth : 0;
+
+    if ((deviceDepth == 0) || (deviceDepth > hwDepth))
+    {
+        deviceDepth = hwDepth;
+    }
+
+    return deviceDepth;
+}
+
+static
 BOOLEAN
 AhciStopPort(
     __in PAHCI_PORT_EXTENSION PortExtension,
@@ -1217,14 +1262,18 @@ AhciAllocateResourceForAdapter (
     )
 {
     PCHAR nonCachedExtension;
-    ULONG index, NCS, AlignedNCS;
+    ULONG index, hwQueueDepth, AlignedNCS;
     ULONG portCount, portImplemented, nonCachedExtensionSize;
     PAHCI_PORT_EXTENSION PortExtension;
 
     AhciDebugPrint("AhciAllocateResourceForAdapter()\n");
 
-    NCS = AHCI_Global_Port_CAP_NCS(AdapterExtension->CAP);
-    AlignedNCS = ROUND_UP(NCS, 8);
+    hwQueueDepth = AHCI_Global_Port_CAP_NCS(AdapterExtension->CAP) + 1;
+    if (hwQueueDepth > MAXIMUM_AHCI_PORT_NCS)
+    {
+        hwQueueDepth = MAXIMUM_AHCI_PORT_NCS;
+    }
+    AlignedNCS = ROUND_UP(hwQueueDepth, 8);
 
     // get port count -- Number of set bits in `AdapterExtension->PortImplemented`
     portCount = 0;
@@ -1300,7 +1349,8 @@ AhciAllocateResourceForAdapter (
             ptr = (PUCHAR)ROUND_UP_PTR(ptr, 128);
             PortExtension->CommandTables = (PAHCI_COMMAND_TABLE)ptr;
             ptr += sizeof(AHCI_COMMAND_TABLE) * AlignedNCS;
-            PortExtension->MaxPortQueueDepth = NCS;
+            PortExtension->MaxPortQueueDepth = hwQueueDepth;
+            PortExtension->DeviceParams.MaxQueueDepth = 1;
             nonCachedExtension += nonCachedExtensionSize;
 
             StorPortInitializeDpc(AdapterExtension,
@@ -1799,7 +1849,7 @@ AhciCompleteIssuedSrb (
     NT_ASSERT(CommandsToComplete != 0);
 
     AdapterExtension = PortExtension->AdapterExtension;
-    NCS = AHCI_Global_Port_CAP_NCS(AdapterExtension->CAP);
+    NCS = AhciGetHardwareQueueDepth(PortExtension);
 
     for (i = 0; i < NCS; i++)
     {
@@ -2923,7 +2973,7 @@ AhciProcessSrb (
         }
     }
 
-    NT_ASSERT(SlotIndex < AHCI_Global_Port_CAP_NCS(AdapterExtension->CAP));
+    NT_ASSERT(SlotIndex < AhciGetHardwareQueueDepth(PortExtension));
     SrbExtension->SlotIndex = SlotIndex;
 
     // program the CFIS in the CommandTable
@@ -3090,7 +3140,17 @@ AhciActivatePort (
     AdapterExtension = PortExtension->AdapterExtension;
     QueueSlots = PortExtension->QueueSlots;
     // Limit to valid NCS bits to guard against erroneous bits in QueueSlots
-    NCSmask = (1u << AHCI_Global_Port_CAP_NCS(AdapterExtension->CAP)) - 1u;
+    {
+        ULONG hwSlots = AhciGetHardwareQueueDepth(PortExtension);
+        if (hwSlots >= 32)
+        {
+            NCSmask = 0xFFFFFFFF;
+        }
+        else
+        {
+            NCSmask = (1u << hwSlots) - 1u;
+        }
+    }
     QueueSlots &= NCSmask;
     PortExtension->QueueSlots &= NCSmask;
 
@@ -3186,13 +3246,15 @@ AhciProcessIO (
     }
 
     occupiedSlots = (PortExtension->QueueSlots | PortExtension->CommandIssuedSlots); // Busy command slots for given port
-    NCS = AHCI_Global_Port_CAP_NCS(AdapterExtension->CAP);
-    if (NCS > MAXIMUM_AHCI_PORT_NCS)
+    NCS = AhciGetEffectiveQueueDepth(PortExtension);
+    if (NCS >= 32)
     {
-        AhciDebugPrint("AhciProcessIO: NCS=%lu exceeds maximum, clamping to %u\n", NCS, MAXIMUM_AHCI_PORT_NCS);
-        NCS = MAXIMUM_AHCI_PORT_NCS;
+        commandSlotMask = 0xFFFFFFFF;
     }
-    commandSlotMask = (1 << NCS) - 1; // available slots mask
+    else
+    {
+        commandSlotMask = (1u << NCS) - 1u; // available slots mask
+    }
 
     commandSlotMask = (commandSlotMask & ~occupiedSlots);
     if(commandSlotMask != 0)
@@ -3246,7 +3308,6 @@ AtapiInquiryCompletion (
     )
 {
     PAHCI_PORT_EXTENSION PortExtension;
-    PAHCI_ADAPTER_EXTENSION AdapterExtension;
     PSCSI_REQUEST_BLOCK Srb;
     BOOLEAN status;
 
@@ -3258,14 +3319,12 @@ AtapiInquiryCompletion (
     NT_ASSERT(Srb != NULL);
     NT_ASSERT(PortExtension != NULL);
 
-    AdapterExtension = PortExtension->AdapterExtension;
-
     // send queue depth
     status = StorPortSetDeviceQueueDepth(PortExtension->AdapterExtension,
                                          Srb->PathId,
                                          Srb->TargetId,
                                          Srb->Lun,
-                                         AHCI_Global_Port_CAP_NCS(AdapterExtension->CAP));
+                                         AhciGetEffectiveQueueDepth(PortExtension));
 
     NT_ASSERT(status == TRUE);
     return;
@@ -3398,8 +3457,8 @@ InquiryCompletion (
                  PortExtension->DeviceParams.MaxQueueDepth = (IdentifyDeviceData->QueueDepth & 0x1F) + 1;
              
              {
-                 ULONG hwMax = AHCI_Global_Port_CAP_NCS(AdapterExtension->CAP) + 1;
-                 if (PortExtension->DeviceParams.MaxQueueDepth > hwMax)
+                 ULONG hwMax = PortExtension->MaxPortQueueDepth;
+                 if ((hwMax != 0) && (PortExtension->DeviceParams.MaxQueueDepth > hwMax))
                  {
                      AhciDebugPrint("\tClamping QueueDepth %lu to HW Limit %lu\n", 
                                     PortExtension->DeviceParams.MaxQueueDepth, hwMax);
@@ -3506,6 +3565,7 @@ InquiryCompletion (
         AhciDebugPrint("\tATAPI Device\n");
         PortExtension->DeviceParams.DeviceType = AHCI_DEVICE_TYPE_ATAPI;
         PortExtension->DeviceParams.AccessType = READ_ONLY_DIRECT_ACCESS_DEVICE;
+        PortExtension->DeviceParams.MaxQueueDepth = 1;
 
         /* IDENTIFY PACKET DEVICE has model/firmware/serial in the same words. */
         if (IdentifyDeviceData != NULL)
@@ -3550,7 +3610,7 @@ InquiryCompletion (
     // prepare data to send
     InquiryData->Versions = 2;
     InquiryData->Wide32Bit = 1;
-    InquiryData->CommandQueue = (PortExtension->MaxPortQueueDepth > 1) ? 1 : 0;
+    InquiryData->CommandQueue = (AhciGetEffectiveQueueDepth(PortExtension) > 1) ? 1 : 0;
     InquiryData->ResponseDataFormat = 0x2;
     InquiryData->DeviceTypeModifier = 0;
     InquiryData->DeviceTypeQualifier = DEVICE_CONNECTED;
@@ -3579,7 +3639,7 @@ InquiryCompletion (
                                          Srb->PathId,
                                          Srb->TargetId,
                                          Srb->Lun,
-                                         AHCI_Global_Port_CAP_NCS(AdapterExtension->CAP));
+                                         AhciGetEffectiveQueueDepth(PortExtension));
 
     NT_ASSERT(status == TRUE);
     return;
@@ -3897,10 +3957,6 @@ AhciPrepareAtaReadWrite (
 
     SrbExtension->AtaFunction = ATA_FUNCTION_ATA_READ;
     SrbExtension->Flags = 0;
-    if (Srb->SrbFlags & SRB_FLAGS_FORCE_UNIT_ACCESS)
-    {
-        SrbExtension->Flags |= ATA_FLAGS_FUA;
-    }
     SrbExtension->CompletionRoutine = NULL;
 
     if (IsReading)
