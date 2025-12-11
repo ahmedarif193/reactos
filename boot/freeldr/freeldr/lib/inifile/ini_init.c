@@ -256,7 +256,15 @@ BOOLEAN IniFileInitialize(VOID)
     }
 
     /* If we opened successfully, normalize FrLdrBootPath to the actual device */
+    /* If we opened successfully, normalize FrLdrBootPath to the actual device */
 #ifdef UEFIBOOT
+    /* 
+     * DISABLED: This logic retrieves the ARC path from the file context via UefiGetArcPathForFileId.
+     * However, logs show this returns corrupted data ('| '), overwriting our correct FrLdrBootPath.
+     * Since uefiarc.c now explicitly updates FrLdrBootPath after enumeration, this retroactive fixup
+     * is redundant and currently dangerous.
+     */
+    /*
     {
         PCCHAR ProvenArc = UefiGetArcPathForFileId(FileId);
         if (ProvenArc && *ProvenArc)
@@ -267,7 +275,7 @@ BOOLEAN IniFileInitialize(VOID)
                 RtlStringCbCopyA(FrLdrBootPath, sizeof(FrLdrBootPath), ProvenArc);
             }
 
-            /* Update the partition hint based on the proven ARC path */
+            // Update the partition hint based on the proven ARC path
             if (strstr(ProvenArc, "cdrom(") != NULL)
             {
                 FrldrBootPartition = 0xFF;
@@ -291,6 +299,7 @@ BOOLEAN IniFileInitialize(VOID)
             }
         }
     }
+    */
 #endif
 
 

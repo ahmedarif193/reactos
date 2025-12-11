@@ -450,25 +450,6 @@ UefiEnumerateArcDisks(VOID)
         BOOLEAN isRemovable = BlockIo->Media->RemovableMedia;
         BOOLEAN isCd        = UefiIsCdRomHandle(H);
 
-        /* 
-         * FIX: If this is the parent of the boot partition, force it to be treated as a HDD/rdisk.
-         * Heuristics in UefiIsCdRomHandle (e.g. BlockSize=2048) can falsely identify 4Kn HDDs as CDs.
-         * Since we booted from a partition, it behaves like a HDD, so we must enumerate it as one.
-         */
-        if (isBootHandle && isCd && LoadedImage && LoadedImage->DeviceHandle != H)
-        {
-             /* Check if the actual boot handle (child) is a partition */
-             EFI_HANDLE ChildHandle = LoadedImage->DeviceHandle;
-             EFI_BLOCK_IO_PROTOCOL* ChildBlk = NULL;
-             if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
-                     ChildHandle, &gEfiBlockIoProtocolGuid, (VOID**)&ChildBlk)) &&
-                 ChildBlk && ChildBlk->Media->LogicalPartition)
-             {
-                 TRACE("UEFI ARC: Boot disk %p is CD-ROM by heuristic, but boot handle is partition -> Forcing HDD/rdisk\n", H);
-                 isCd = FALSE;
-             }
-        }
-
         TRACE("UefiEnumerateArcDisks: Handle %p: Part=%d Rem=%d Cd=%d Boot=%d\n", H, isPartition, isRemovable, isCd, isBootHandle);
 
         /* We only index physical handles (non-partitions) */

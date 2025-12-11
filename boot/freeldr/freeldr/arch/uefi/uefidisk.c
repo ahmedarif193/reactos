@@ -194,6 +194,10 @@ UefiIsCdRomHandle(IN EFI_HANDLE Handle)
 {
     EFI_DEVICE_PATH_PROTOCOL* DevicePath = NULL;
 
+    /*
+     * Primary Check: UEFI Device Path Protocol (Standard)
+     * Look for a MEDIA_DEVICE_PATH node with MEDIA_CDROM_DP subtype.
+     */
     if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
             Handle, &DevicePathProtocolGuid, (VOID**)&DevicePath)) &&
         DevicePath)
@@ -208,35 +212,23 @@ UefiIsCdRomHandle(IN EFI_HANDLE Handle)
     }
 
     /*
-     * Some firmware (notably SATA/USB bridges) expose optical media via a
-     * hard-drive style device path. Fall back to Block I/O heuristics so these
-     * devices are still classified as CDs.
+     * Secondary Check: ISO9660 Signature (Robust)
+     * Some older firmware or USB bridges might present a CD without the CDROM_DP node.
+     * We verify the content for an ISO9660 PVD.
+     * We explicitly DO NOT use BlockSize=2048 as a standalone heuristic, as 4Kn HDDs
+     * share this block size and were causing false positives.
      */
     EFI_BLOCK_IO* BlockIo = NULL;
     if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
             Handle, &bioGuid, (VOID**)&BlockIo)) &&
-        BlockIo && BlockIo->Media && !BlockIo->Media->LogicalPartition)
+        BlockIo && BlockIo->Media && 
+        BlockIo->Media->MediaPresent && 
+        !BlockIo->Media->LogicalPartition)
     {
-        if (!BlockIo->Media->MediaPresent)
-            return FALSE;
-
-        if (BlockIo->Media->ReadOnly)
-        {
-            if (BlockIo->Media->BlockSize == 2048 ||
-                UefiDetectIsoVolume(BlockIo))
-            {
-                TRACE("UefiIsCdRomHandle: heuristic matched read-only media (BlockSize=%u)\n",
-                      BlockIo->Media->BlockSize);
-                return TRUE;
-            }
-
-            TRACE("UefiIsCdRomHandle: read-only media without ISO signature, assuming CD-ROM\n");
-            return TRUE;
-        }
-
+        /* Only check signatures if we are actually allowed to read */
         if (UefiDetectIsoVolume(BlockIo))
         {
-            TRACE("UefiIsCdRomHandle: detected ISO9660 volume on writable/removable media\n");
+            TRACE("UefiIsCdRomHandle: Detected ISO9660 signature on media\n");
             return TRUE;
         }
     }
