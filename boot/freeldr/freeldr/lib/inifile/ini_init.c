@@ -258,20 +258,19 @@ BOOLEAN IniFileInitialize(VOID)
     /* If we opened successfully, normalize FrLdrBootPath to the actual device */
     /* If we opened successfully, normalize FrLdrBootPath to the actual device */
 #ifdef UEFIBOOT
-    /* 
-     * DISABLED: This logic retrieves the ARC path from the file context via UefiGetArcPathForFileId.
-     * However, logs show this returns corrupted data ('| '), overwriting our correct FrLdrBootPath.
-     * Since uefiarc.c now explicitly updates FrLdrBootPath after enumeration, this retroactive fixup
-     * is redundant and currently dangerous.
-     */
     /*
+     * Normalize the saved boot path using the ARC string stored on the
+     * underlying disk handle. UefiGetArcPathForFileId now walks filesystem
+     * handles until it finds the real disk context, so we can pass the file id.
+     */
     {
         PCCHAR ProvenArc = UefiGetArcPathForFileId(FileId);
         if (ProvenArc && *ProvenArc)
         {
             if (_stricmp(FrLdrBootPath, ProvenArc) != 0)
             {
-                TRACE("IniFileInitialize: Using proven boot path from FileId: '%s'\n", ProvenArc);
+                TRACE("IniFileInitialize: Using proven boot path from FileId %lu: '%s'\n",
+                      FileId, ProvenArc);
                 RtlStringCbCopyA(FrLdrBootPath, sizeof(FrLdrBootPath), ProvenArc);
             }
 
@@ -299,7 +298,6 @@ BOOLEAN IniFileInitialize(VOID)
             }
         }
     }
-    */
 #endif
 
 
