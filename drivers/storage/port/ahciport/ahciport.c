@@ -788,11 +788,13 @@ AhciWaitForCommandComplete(
     _In_ PAHCI_ADAPTER_EXTENSION Adapter,
     _In_ ULONG Port,
     _In_ ULONG SlotMask,
-    _In_ ULONG TimeoutUs)
+    _In_ ULONG TimeoutUs,
+    _In_ BOOLEAN IsFpdma)
 {
     ULONG iterations = (TimeoutUs / 50) + 1;
     volatile ULONG *pxci = AhciPortRegPtr(Adapter, Port, AHCI_PxCI);
     volatile ULONG *pxis = AhciPortRegPtr(Adapter, Port, AHCI_PxIS);
+    volatile ULONG *pxsact = AhciPortRegPtr(Adapter, Port, AHCI_PxSACT);
 
     while (iterations--)
     {
@@ -809,8 +811,19 @@ AhciWaitForCommandComplete(
             }
         }
 
-        if ((ci & SlotMask) == 0)
-            return AhciCmdStatusSuccess;
+        if (IsFpdma)
+        {
+            ULONG sact = AHCI_READ_REG32(Adapter, pxsact);
+            /* For NCQ, completion is indicated when SACT bit clears. 
+               CI bit clears as soon as command is transmitted, so do not check it. */
+            if ((sact & SlotMask) == 0)
+                return AhciCmdStatusSuccess;
+        }
+        else
+        {
+            if ((ci & SlotMask) == 0)
+                return AhciCmdStatusSuccess;
+        }
 
         ScsiPortStallExecution(50);
     }
@@ -834,6 +847,9 @@ AhciIssueAtaCommand(
     PAHCI_CMD_HEADER header;
     PAHCI_CMD_TABLE table;
     ULONG slotMask = 1u << AHCI_CMD_SLOT;
+    UCHAR tag = (UCHAR)AHCI_CMD_SLOT;
+    BOOLEAN isFpdma = (Command == ATA_CMD_FPDMA_READ || Command == ATA_CMD_FPDMA_WRITE);
+    BOOLEAN sactArmed = FALSE;
     ULONG tfd;
     ULONG prdtEntries = 0;
 
@@ -883,7 +899,7 @@ AhciIssueAtaCommand(
         fis[0] = AHCI_FIS_TYPE_REG_H2D;
         fis[1] = 1 << 7;
         fis[2] = Command;
-        fis[3] = 0;
+        fis[3] = isFpdma ? (UCHAR)(SectorCount & 0xFF) : 0;
         fis[4] = (UCHAR)(Lba & 0xFF);
         fis[5] = (UCHAR)((Lba >> 8) & 0xFF);
         fis[6] = (UCHAR)((Lba >> 16) & 0xFF);
@@ -891,9 +907,17 @@ AhciIssueAtaCommand(
         fis[8] = (UCHAR)((Lba >> 24) & 0xFF);
         fis[9] = (UCHAR)((Lba >> 32) & 0xFF);
         fis[10] = (UCHAR)((Lba >> 40) & 0xFF);
-        fis[11] = 0;
-        fis[12] = (UCHAR)(SectorCount & 0xFF);
-        fis[13] = (UCHAR)((SectorCount >> 8) & 0xFF);
+        fis[11] = isFpdma ? (UCHAR)((SectorCount >> 8) & 0xFF) : 0;
+        if (isFpdma)
+        {
+            fis[12] = (UCHAR)((tag & 0x1F) << 3);
+            fis[13] = 0;
+        }
+        else
+        {
+            fis[12] = (UCHAR)(SectorCount & 0xFF);
+            fis[13] = (UCHAR)((SectorCount >> 8) & 0xFF);
+        }
         fis[14] = 0;
         fis[15] = 0;
     }
@@ -910,16 +934,27 @@ AhciIssueAtaCommand(
         }
     }
 
+    if (isFpdma)
+    {
+        AhciWritePort(Adapter, Port, AHCI_PxSACT, slotMask);
+        sactArmed = TRUE;
+    }
+
     port->Busy = TRUE;
 
     AhciWritePort(Adapter, Port, AHCI_PxCI, slotMask);
 
     {
-        AHCI_CMD_STATUS cmdStatus = AhciWaitForCommandComplete(Adapter, Port, slotMask, AHCI_COMMAND_TIMEOUT_US);
+        AHCI_CMD_STATUS cmdStatus = AhciWaitForCommandComplete(Adapter, Port, slotMask, AHCI_COMMAND_TIMEOUT_US, isFpdma);
 
         if (cmdStatus == AhciCmdStatusTimeout)
         {
             port->Busy = FALSE;
+            if (sactArmed)
+            {
+                AhciWritePort(Adapter, Port, AHCI_PxSACT, 0);
+                sactArmed = FALSE;
+            }
             AHCI_ERROR("IssueAta: command timeout (op=0x%02x) on port %lu", Command, Port);
             AhciDumpPortState(Adapter, Port, "command timeout");
             if (!AhciStopPort(Adapter, Port))
@@ -934,10 +969,21 @@ AhciIssueAtaCommand(
 
         if (cmdStatus == AhciCmdStatusError || (tfd & AHCI_TFD_STS_ERR))
         {
+            if (sactArmed)
+            {
+                AhciWritePort(Adapter, Port, AHCI_PxSACT, 0);
+                sactArmed = FALSE;
+            }
             AHCI_WARN("IssueAta: taskfile error (TFD=0x%08lx) on port %lu", tfd, Port);
             AhciDumpPortState(Adapter, Port, "taskfile error");
             return FALSE;
         }
+    }
+
+    if (sactArmed)
+    {
+        AhciWritePort(Adapter, Port, AHCI_PxSACT, 0);
+        sactArmed = FALSE;
     }
 
     Adapter->AbBase->IS = (1u << Port);
@@ -1065,7 +1111,7 @@ AhciIssuePacketCommand(
     AhciWritePort(Adapter, Port, AHCI_PxCI, slotMask);
 
     {
-        AHCI_CMD_STATUS cmdStatus = AhciWaitForCommandComplete(Adapter, Port, slotMask, AHCI_COMMAND_TIMEOUT_US);
+        AHCI_CMD_STATUS cmdStatus = AhciWaitForCommandComplete(Adapter, Port, slotMask, AHCI_COMMAND_TIMEOUT_US, FALSE);
 
         if (cmdStatus == AhciCmdStatusTimeout)
         {
@@ -1166,6 +1212,20 @@ AhciIdentifyDevice(
     port->SectorCount = sectors;
     port->Present = TRUE;
     port->Atapi = FALSE;
+    port->SupportsNCQ = FALSE;
+    port->MaxQueueDepth = 1;
+    if ((Adapter->Cap & AHCI_CAP_SNCQ) && (id[76] & 0x0100))
+    {
+        UCHAR depthField = (UCHAR)(id[75] & 0x1F);
+        UCHAR depth = (depthField & 0x1F) + 1;
+        if (depth == 0)
+            depth = 1;
+        if (depth > 32)
+            depth = 32;
+        port->SupportsNCQ = TRUE;
+        port->MaxQueueDepth = depth;
+        AHCI_TRACE("Port %lu: NCQ supported (depth=%u)", Port, depth);
+    }
     AhciClearSense(port);
     AHCI_TRACE("Port %lu: IDENTIFY reports %llu sectors", Port, sectors);
     return TRUE;
@@ -1200,6 +1260,8 @@ AhciIdentifyPacketDevice(
     port->SectorCount = 0;
     port->Present = TRUE;
     port->Atapi = TRUE;
+    port->SupportsNCQ = FALSE;
+    port->MaxQueueDepth = 1;
     AhciClearSense(port);
 
 #if AHCI_ENABLE_TRACE
@@ -1263,15 +1325,21 @@ AhciReadWriteSectors(
             if (chunkSectors == 0)
                 chunkSectors = 1;
 
-            success = AhciIssueAtaCommand(Adapter,
-                                          Port,
-                                          Srb,
-                                          Write ? 0x35 : 0x25,
-                                          currentLba,
-                                          chunkSectors,
-                                          Write,
-                                          currentBuffer,
-                                          chunk);
+            {
+                UCHAR opcode = port->SupportsNCQ ?
+                               (Write ? ATA_CMD_FPDMA_WRITE : ATA_CMD_FPDMA_READ) :
+                               (Write ? 0x35 : 0x25);
+
+                success = AhciIssueAtaCommand(Adapter,
+                                              Port,
+                                              Srb,
+                                              opcode,
+                                              currentLba,
+                                              chunkSectors,
+                                              Write,
+                                              currentBuffer,
+                                              chunk);
+            }
 
             if (!success)
             {
