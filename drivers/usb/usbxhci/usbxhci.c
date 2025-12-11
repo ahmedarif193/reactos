@@ -2198,8 +2198,19 @@ XHCI_HandleEnumerationTransfer(
                 if (BufferLength >= sizeof(USB_DEVICE_DESCRIPTOR))
                 {
                     PUSB_DEVICE_DESCRIPTOR D = (PUSB_DEVICE_DESCRIPTOR)Buffer;
+                    PHYSICAL_ADDRESS Pa = MmGetPhysicalAddress(Buffer);
+                    PHYSICAL_ADDRESS SgPa;
+                    SgPa.QuadPart = 0;
+
+                    if (Transfer->SgList && Transfer->SgList->SgElementCount > 0)
+                         SgPa = Transfer->SgList->SgElement[0].SgPhysicalAddress;
+
                     DPRINT1("XHCI: GetDescriptor Data: Len=%d Type=%x VID=%04x PID=%04x\n", 
                             BufferLength, D->bDescriptorType, D->idVendor, D->idProduct);
+                    DPRINT1("XHCI: buffer debugging: VA=%p PA=%I64x SG_PA=%I64x\n",
+                            Buffer, Pa.QuadPart, SgPa.QuadPart);
+                    DPRINT1("XHCI: Raw Bytes: %02x %02x %02x %02x\n",
+                           ((PUCHAR)Buffer)[0], ((PUCHAR)Buffer)[1], ((PUCHAR)Buffer)[2], ((PUCHAR)Buffer)[3]);
                 }
                 else
                 {
