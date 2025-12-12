@@ -80,6 +80,8 @@ typedef struct _PDO_DEVICE_DATA
     BOOLEAN HasCachedBusNumber;
     ULONG CachedBusNumber;
     BOOLEAN HasPciRootBusRange;
+    BOOLEAN HasPciRootSegment;
+    ULONG PciRootSegment;
     ULONG PciRootMinBus;
     ULONG PciRootMaxBus;
 #define ACPI_PCI_MAX_WINDOWS 8

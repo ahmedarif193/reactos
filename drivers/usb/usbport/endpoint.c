@@ -1252,6 +1252,16 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
                     USBDStatus = USBD_STATUS_TIMEOUT;
                 }
             }
+            else
+            {
+                DPRINT1("USBPORT_OpenPipe: MiniportOpenEndpoint FAILED MpStatus=%lx "
+                        "Type=%lu Dir=%lu Speed=%u MaxPacket=%lu\n",
+                        MpStatus,
+                        EndpointProperties->TransferType,
+                        EndpointProperties->Direction,
+                        DeviceHandle->DeviceSpeed,
+                        EndpointProperties->MaxPacketSize);
+            }
         }
         else
         {
