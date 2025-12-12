@@ -1742,12 +1742,26 @@ XHCI_ConfigureSlotEndpoint(
         BurstSize = 0xF;
     Mult = (BurstSize > 0x3) ? 0x3 : BurstSize;
     Interval = Endpoint->EndpointProperties.Period;
-    /* ISO endpoints must publish their Max ESIT Payload; others must leave it zero per xHCI 6.2.3.6. */
+    /*
+     * Periodic endpoints (isoch + interrupt) must publish Max ESIT Payload;
+     * non-periodic endpoints (control + bulk) must leave it zero (xHCI 6.2.3.6).
+     */
     MaxEsitPayload = 0;
     if (EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
-        EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN)
+        EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN ||
+        EndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_OUT ||
+        EndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_IN)
     {
-        MaxEsitPayload = MaxPacketSize * (BurstSize + 1) * (Mult + 1);
+        MaxEsitPayload = Endpoint->EndpointProperties.TotalMaxPacketSize;
+        if (MaxEsitPayload == 0)
+        {
+            ULONG Transactions = Endpoint->EndpointProperties.TransactionPerMicroframe;
+            if (Transactions == 0)
+                Transactions = 1;
+
+            MaxEsitPayload = MaxPacketSize * Transactions;
+        }
+
         if (MaxEsitPayload > 0xFFFF)
             MaxEsitPayload = 0xFFFF;
     }
