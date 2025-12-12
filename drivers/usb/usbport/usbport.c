@@ -1972,6 +1972,7 @@ USBPORT_TimerDpc(IN PRKDPC Dpc,
         USBPORT_TIMER_TRACE("USBPORT_TimerDpc: RootHubPdo=%p RootHubExt=%p\n",
                             FdoExtension->RootHubPdo,
                             RhExt);
+        UNREFERENCED_PARAMETER(RhExt);
     }
 
     USBPORT_SynchronizeControllersStart(FdoDevice);

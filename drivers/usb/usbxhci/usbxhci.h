@@ -37,7 +37,7 @@
 #define XHCI_ASSERT_PASSIVE(Tag) ((void)0)
 #endif
 
-#define XHCI_MAX_DEVICE_ADDRESS 256
+#define XHCI_MAX_DEVICE_ADDRESS 127
 
 #define XHCI_QUIRK_FORCE_32BIT_DMA   0x00000001
 #define XHCI_QUIRK_SLOW_HARD_RESET   0x00000002
@@ -184,7 +184,7 @@ typedef struct _XHCI_EXTENSION {
   BOOLEAN FatalError;
   BOOLEAN StartupHcePersistent;
   ULONG Quirks;
-  UCHAR DeviceAddressMap[XHCI_MAX_DEVICE_ADDRESS];
+    UCHAR DeviceAddressMap[XHCI_MAX_DEVICE_ADDRESS + 1];
   UCHAR PortLinkState[XHCI_MAX_PORTS + 1];
   BOOLEAN PortConnectStatus[XHCI_MAX_PORTS + 1];
   ULONG PortChangeMask[XHCI_MAX_PORTS + 1];

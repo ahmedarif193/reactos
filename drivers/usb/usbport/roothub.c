@@ -46,6 +46,8 @@ USBPORT_DumpDeviceHandleList(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
     if (RhExtension)
         RootHubHandle = &RhExtension->DeviceHandle;
 
+    UNREFERENCED_PARAMETER(RootHubHandle);
+
     USBPORT_RH_TRACE("USBPORT_DumpDeviceHandleList: Fdo=%p ListHead=%p RootHubHandle=%p\n",
                      FdoExtension->CommonExtension.SelfDevice,
                      &FdoExtension->DeviceHandleList,
@@ -63,6 +65,8 @@ USBPORT_DumpDeviceHandleList(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
                                    DeviceHandleLink);
 
         Flags = Handle->Flags;
+
+        UNREFERENCED_PARAMETER(Flags);
 
         USBPORT_RH_TRACE("  [%lu] Handle=%p Flags=0x%lx Addr=%lu Removed=%lu Lock=%ld\n",
                          Index,

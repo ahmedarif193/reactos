@@ -6,10 +6,15 @@
 
 #pragma once
 
+#ifndef XHCI_ALIGN_UP
+#define XHCI_ALIGN_UP(_v, _a) (((_v) + ((_a) - 1)) & ~((_a) - 1))
+#endif
+
 #define XHCI_MAX_PORTS 32
-#define XHCI_MAX_SLOTS 256
+#define XHCI_MAX_SLOTS 255
 #define XHCI_MAX_ENDPOINTS 32
 #define XHCI_MAX_SCRATCHPADS 1024
+#define XHCI_MAX_DEVICE_ADDRESS 127
 
 #define XHCI_STATIC_EP_RING_TRBS 32
 #define XHCI_EXTERNAL_EP_RING_TRBS 64
