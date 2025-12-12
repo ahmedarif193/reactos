@@ -2046,6 +2046,7 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
             if (USBH_IsVirtualXhciPort(PortExtension))
             {
                 /* Ignore duplicate connect notifications for synthetic ports. */
+                PortData->SynthConnectPending = FALSE;
                 return;
             }
         }
@@ -2574,6 +2575,19 @@ Enum:
                     if (PortStatus.PortChange.AsUshort16 == 0 &&
                         IsBitSet(Bitmap, Port))
                     {
+                        PDEVICE_OBJECT ExistingDevice = HubExtension->PortData[Port - 1].DeviceObject;
+
+                        if (ExistingDevice)
+                        {
+                            PUSBHUB_PORT_PDO_EXTENSION ExistingExt =
+                                ExistingDevice->DeviceExtension;
+
+                            if (USBH_IsVirtualXhciPort(ExistingExt))
+                            {
+                                continue;
+                            }
+                        }
+
                         USBH_PortChangeMarkConnect(&PortStatus);
                     }
 

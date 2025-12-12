@@ -3418,17 +3418,24 @@ XHCI_HandlePortChange(
     ChangeMask = PortSc & XHCI_PORTSC_CHANGE_MASK;
     if (ChangeMask)
     {
-        BOOLEAN DropChange = FALSE;
+        ULONG OriginalMask = ChangeMask;
+        BOOLEAN SuppressConnect = FALSE;
 
-        if (XHCI_IsVirtualPort(Extension, PortId) &&
-            Extension->VirtualPortAnnounced[PortId] &&
-            (ChangeMask & XHCI_PORTSC_CSC) != 0 &&
-            (ChangeMask & ~XHCI_PORTSC_CSC) == 0)
+        BOOLEAN IsVirtualPort = XHCI_IsVirtualPort(Extension, PortId);
+        BOOLEAN AlreadyAnnounced = FALSE;
+
+        if (IsVirtualPort && PortId <= XHCI_MAX_PORTS)
+            AlreadyAnnounced = Extension->VirtualPortAnnounced[PortId];
+
+        if (IsVirtualPort &&
+            AlreadyAnnounced &&
+            (ChangeMask & XHCI_PORTSC_CSC) != 0)
         {
-            DropChange = TRUE;
+            SuppressConnect = TRUE;
+            ChangeMask &= ~XHCI_PORTSC_CSC;
         }
 
-        if (!DropChange && PortId <= XHCI_MAX_PORTS)
+        if (ChangeMask != 0 && PortId <= XHCI_MAX_PORTS)
         {
             ULONG PreviousMask = (ULONG)InterlockedOr(
                 (volatile LONG *)&Extension->PortChangeMask[PortId],
@@ -3437,14 +3444,14 @@ XHCI_HandlePortChange(
             if (((~PreviousMask) & ChangeMask) == 0)
                 NotifyHub = FALSE;
         }
-        else if (DropChange)
+        else if (SuppressConnect)
         {
             NotifyHub = FALSE;
         }
 
-        XHCI_AckPortChangeInternal(Extension, PortId, ChangeMask, FALSE);
+        XHCI_AckPortChangeInternal(Extension, PortId, OriginalMask, FALSE);
 
-        if (DropChange)
+        if (SuppressConnect && ChangeMask == 0)
             return;
     }
     else
@@ -9078,12 +9085,6 @@ XHCI_RH_UpdatePortStatusFields(
         if (Protocol >= 3)
             PortStatus30->CurrentConnectStatus = 1;
     }
-    else if (Extension &&
-             XHCI_IsVirtualPort(Extension, PortNumber) &&
-             PortNumber <= XHCI_MAX_PORTS)
-    {
-        Extension->VirtualPortAnnounced[PortNumber] = FALSE;
-    }
 
     if (PortValue & XHCI_PORTSC_PED)
         PortStatus->PortStatus.AsUshort16 |= USB_PORT_STATUS_ENABLE;
@@ -9168,6 +9169,15 @@ XHCI_RH_UpdatePortStatusFields(
 
     if ((PortValue & XHCI_PORTSC_CSC) || (CurrentConnect != PreviousConnect))
     {
+        if (!CurrentConnect &&
+            PreviousConnect &&
+            Extension &&
+            XHCI_IsVirtualPort(Extension, PortNumber) &&
+            PortNumber <= XHCI_MAX_PORTS)
+        {
+            Extension->VirtualPortAnnounced[PortNumber] = FALSE;
+        }
+
         if (PortNumber == 7)
         {
             XHCI_RH_AckPortChange(Extension, PortNumber, XHCI_PORTSC_CSC);
@@ -9316,19 +9326,6 @@ XHCI_RH_GetPortStatus(
         /* Make the power bit visible immediately after repowering. */
         PortStatus->PortStatus.AsUshort16 |= USB_PORT_STATUS_POWER;
         PortStatus->PortStatus.Usb30PortStatus.PortPower = 1;
-    }
-
-    if (PortStatus->PortChange.AsUshort16 != 0)
-    {
-        if (Extension->RhIrqEnabled && XhciRegPacket.UsbPortInvalidateRootHub)
-        {
-            Extension->RhPendingInvalidate = FALSE;
-            XhciRegPacket.UsbPortInvalidateRootHub(Extension);
-        }
-        else
-        {
-            Extension->RhPendingInvalidate = TRUE;
-        }
     }
 
     //DPRINT1("usbxhci: RH_GetPortStatus ext=%p port=%u PortSC=0x%08lx Status=0x%04x Change=0x%04x\n",
