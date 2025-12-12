@@ -24,6 +24,7 @@
 #include <wingdi.h>
 #include <shellapi.h>
 #include <strsafe.h>
+#include <devguid.h>
 
 /* Unicode constants */
 static const WCHAR BackSlash[] = {'\\',0};
@@ -199,8 +200,8 @@ SETUP_CreateDevicesList(
         }
         else
         {
-            TRACE("Using default class GUID_NULL for device %S\n", InstancePath);
-            memcpy(&ClassGuid, &GUID_NULL, sizeof(GUID));
+            TRACE("Using default class GUID_DEVCLASS_UNKNOWN for device %S\n", InstancePath);
+            memcpy(&ClassGuid, &GUID_DEVCLASS_UNKNOWN, sizeof(GUID));
         }
 
         if (Class && !IsEqualIID(&ClassGuid, Class))

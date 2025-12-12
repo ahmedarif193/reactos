@@ -84,16 +84,31 @@ InstallDevice(PCWSTR DeviceInstance, BOOL ShowWizard)
                       KEY_QUERY_VALUE,
                       &DeviceKey) == ERROR_SUCCESS)
     {
+        WCHAR ClassName[64] = {0};
+        DWORD Type = REG_NONE;
+        DWORD Size = sizeof(ClassName);
+
         if (RegQueryValueExW(DeviceKey,
                              L"Class",
                              NULL,
-                             NULL,
-                             NULL,
-                             NULL) == ERROR_SUCCESS)
+                             &Type,
+                             (PBYTE)ClassName,
+                             &Size) == ERROR_SUCCESS &&
+            Type == REG_SZ)
         {
-            DPRINT("No need to install: %S\n", DeviceInstance);
-            RegCloseKey(DeviceKey);
-            return TRUE;
+            /* Ensure NUL-termination even if the registry data isn't. */
+            ClassName[(RTL_NUMBER_OF(ClassName) - 1)] = UNICODE_NULL;
+
+            /*
+             * Win7+: "Other devices" are still uninstalled. Do not treat
+             * Class="Unknown" as installed, so we still try to match an INF.
+             */
+            if (_wcsicmp(ClassName, L"Unknown") != 0)
+            {
+                DPRINT("No need to install: %S\n", DeviceInstance);
+                RegCloseKey(DeviceKey);
+                return TRUE;
+            }
         }
 
         BytesWritten = sizeof(DWORD);
