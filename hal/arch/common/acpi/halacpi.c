@@ -59,6 +59,7 @@ BOOLEAN HalpAcpiEcamDisabled = FALSE;
 /* Per-segment legacy override when firmware ECAM decode is broken */
 USHORT HalpAcpiEcamForceLegacySegment = 0xFFFF;
 BOOLEAN HalpAcpiEcamForceLegacyLogged = FALSE;
+BOOLEAN HalpAcpiEcamVendorProbeLogged = FALSE;
 
 static
 LONG
@@ -2444,10 +2445,21 @@ HalpAcpiAccessConfigEcam(
             USHORT Vendor = *(UNALIGNED PUSHORT)BufferPtr;
             if (Vendor == 0xFFFF || Vendor == 0x0000)
             {
-                HalpAcpiEcamForceLegacySegment = Segment;
-                HalpAcpiRecordEcamEvent(
-                    HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES,
-                    "HAL: ECAM read returned invalid vendor; forcing legacy config for this segment.");
+                if (!HalpAcpiEcamVendorProbeLogged)
+                {
+                    CHAR msg[128];
+                    _snprintf(msg,
+                              sizeof(msg),
+                              "HAL: ECAM vendor read invalid on segment %u bus %lu dev %lu fn %lu; retrying via legacy config.",
+                              Segment,
+                              BusNumber,
+                              (ULONG)Slot.u.bits.DeviceNumber,
+                              (ULONG)Slot.u.bits.FunctionNumber);
+                    HalpAcpiRecordEcamEvent(
+                        HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES,
+                        msg);
+                    HalpAcpiEcamVendorProbeLogged = TRUE;
+                }
                 ForceLegacy = TRUE;
                 break;
             }

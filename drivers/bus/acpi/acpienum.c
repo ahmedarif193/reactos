@@ -490,6 +490,16 @@ BuspLogPciRootResources(
                 break;
             }
 
+            case ACPI_RESOURCE_TYPE_IO:
+            {
+                const ACPI_RESOURCE_IO *Io = &Resource->Data.Io;
+                Minimum = Io->Minimum;
+                Maximum = Io->Maximum;
+                Length = Io->AddressLength;
+                DescriptorName = "Io16";
+                break;
+            }
+
             case ACPI_RESOURCE_TYPE_FIXED_IO:
             {
                 const ACPI_RESOURCE_FIXED_IO *Io = &Resource->Data.FixedIo;

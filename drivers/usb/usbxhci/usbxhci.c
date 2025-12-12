@@ -5521,6 +5521,29 @@ XHCI_ValidateCommandEngine(
     if (Extension->OperationalRegisters)
         UsbSts = READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
 
+    if ((UsbSts & XHCI_USBSTS_HCE) &&
+        (Extension->Quirks & XHCI_QUIRK_IGNORE_STARTUP_HCE))
+    {
+        DPRINT1("usbxhci: persistent startup HCE (USBSTS=%08lx) – skipping NO-OP probe per quirk\n",
+                UsbSts);
+        WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
+                             XHCI_USBSTS_HCE |
+                             XHCI_USBSTS_HSE |
+                             XHCI_USBSTS_PCD |
+                             XHCI_USBSTS_EINT);
+        Extension->StartupHcePersistent = TRUE;
+        return MP_STATUS_SUCCESS;
+    }
+
+    if (UsbSts & XHCI_USBSTS_HCE)
+    {
+        WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
+                             XHCI_USBSTS_HCE |
+                             XHCI_USBSTS_HSE |
+                             XHCI_USBSTS_PCD |
+                             XHCI_USBSTS_EINT);
+    }
+
     /* If the controller already asserts HCE, shorten the probe to avoid long stalls. */
     if (UsbSts & XHCI_USBSTS_HCE)
         TimeoutMs = 50;

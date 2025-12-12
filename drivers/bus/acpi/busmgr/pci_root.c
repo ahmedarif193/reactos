@@ -10,9 +10,21 @@
 #ifdef CONFIG_ACPI_PCI
 
 
+#define ACPI_PCI_ROOT_HANDLE_TAG 'rPcA'
+
+typedef struct _ACPI_PCI_ROOT_TRACK_ENTRY
+{
+    LIST_ENTRY ListEntry;
+    ACPI_HANDLE Handle;
+    ULONG Segment;
+    ULONG BusStart;
+    ULONG BusEnd;
+} ACPI_PCI_ROOT_TRACK_ENTRY, *PACPI_PCI_ROOT_TRACK_ENTRY;
+
 typedef struct _ACPI_PCI_ROOT_ENUM_CONTEXT
 {
     ULONG RootCount;
+    LIST_ENTRY SeenRoots;
 } ACPI_PCI_ROOT_ENUM_CONTEXT, *PACPI_PCI_ROOT_ENUM_CONTEXT;
 
 #define OSC_FIRMWARE_FAILURE          0x02
@@ -129,6 +141,86 @@ AcpiPciRootSetTranslation(
     Window->HasTranslation = TRUE;
     Window->Translation = Translation;
     Window->TranslationType = TranslationType;
+}
+
+static
+VOID
+AcpiPciRootInitContext(
+    _Out_ PACPI_PCI_ROOT_ENUM_CONTEXT Context)
+{
+    RtlZeroMemory(Context, sizeof(*Context));
+    InitializeListHead(&Context->SeenRoots);
+}
+
+static
+VOID
+AcpiPciRootCleanupContext(
+    _Inout_ PACPI_PCI_ROOT_ENUM_CONTEXT Context)
+{
+    PLIST_ENTRY Entry;
+
+    while (!IsListEmpty(&Context->SeenRoots))
+    {
+        Entry = RemoveHeadList(&Context->SeenRoots);
+        ExFreePoolWithTag(CONTAINING_RECORD(Entry,
+                                            ACPI_PCI_ROOT_TRACK_ENTRY,
+                                            ListEntry),
+                          ACPI_PCI_ROOT_HANDLE_TAG);
+    }
+
+    InitializeListHead(&Context->SeenRoots);
+    Context->RootCount = 0;
+}
+
+static
+BOOLEAN
+AcpiPciRootRememberHandle(
+    _Inout_opt_ PACPI_PCI_ROOT_ENUM_CONTEXT Context,
+    _In_ ACPI_HANDLE Handle,
+    _In_ ULONG Segment,
+    _In_ ULONG BusStart,
+    _In_ ULONG BusEnd)
+{
+    PACPI_PCI_ROOT_TRACK_ENTRY Entry;
+
+    if (!Context)
+    {
+        return TRUE;
+    }
+
+    for (Entry = CONTAINING_RECORD(Context->SeenRoots.Flink,
+                                   ACPI_PCI_ROOT_TRACK_ENTRY,
+                                   ListEntry);
+         &Entry->ListEntry != &Context->SeenRoots;
+         Entry = CONTAINING_RECORD(Entry->ListEntry.Flink,
+                                   ACPI_PCI_ROOT_TRACK_ENTRY,
+                                   ListEntry))
+    {
+        if (Entry->Handle == Handle)
+        {
+            return FALSE;
+        }
+    }
+
+    Entry = ExAllocatePoolWithTag(NonPagedPool,
+                                  sizeof(*Entry),
+                                  ACPI_PCI_ROOT_HANDLE_TAG);
+    if (!Entry)
+    {
+        DPRINT1("ACPI: Failed to track PCI root handle %p (Seg %lu Bus %lu-%lu)\n",
+                Handle,
+                Segment,
+                BusStart,
+                BusEnd);
+        return TRUE;
+    }
+
+    Entry->Handle = Handle;
+    Entry->Segment = Segment;
+    Entry->BusStart = BusStart;
+    Entry->BusEnd = BusEnd;
+    InsertTailList(&Context->SeenRoots, &Entry->ListEntry);
+    return TRUE;
 }
 
 static
@@ -615,6 +707,24 @@ AcpiPciRootEnumerateCallback(
                 RootInfo.BusEnd = RootInfo.BusStart;
         }
 
+        if (Context &&
+            !AcpiPciRootRememberHandle(Context,
+                                       Handle,
+                                       RootInfo.Segment,
+                                       RootInfo.BusStart,
+                                       RootInfo.BusEnd))
+        {
+            DPRINT1("ACPI: PCI root HID=%s UID=%s already processed (Seg %lu Bus %lu-%lu), skipping duplicate handle %p\n",
+                    (Info->Valid & ACPI_VALID_HID) ? Info->HardwareId.String : "<none>",
+                    (Info->Valid & ACPI_VALID_UID) ? Info->UniqueId.String : "<none>",
+                    RootInfo.Segment,
+                    RootInfo.BusStart,
+                    RootInfo.BusEnd,
+                    Handle);
+            ACPI_FREE(Info);
+            return AE_OK;
+        }
+
         AcpiPciRootEvaluateOsc(Handle, &RootInfo);
 
         DPRINT1("ACPI: PCI Root %lu: HID=%s UID=%s SEG=%lu BUS=%lu\n",
@@ -708,14 +818,19 @@ AcpiPciRootEnumerateByHid(
 int
 acpi_pci_root_init(VOID)
 {
-    ACPI_PCI_ROOT_ENUM_CONTEXT Context = { 0 };
+    ACPI_PCI_ROOT_ENUM_CONTEXT Context;
+    ULONG Enumerated;
 
+    AcpiPciRootInitContext(&Context);
     DPRINT1("ACPI: Enumerating PCI root bridges (ACPI 1.0/2.0+/PCIe)\n");
 
     AcpiPciRootEnumerateByHid("PNP0A03", &Context);
     AcpiPciRootEnumerateByHid("PNP0A08", &Context);
 
-    if (!Context.RootCount)
+    Enumerated = Context.RootCount;
+    AcpiPciRootCleanupContext(&Context);
+
+    if (!Enumerated)
     {
         DPRINT1("ACPI: No PCI root bridges reported in namespace\n");
     }
