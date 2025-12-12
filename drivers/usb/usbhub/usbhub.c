@@ -31,6 +31,80 @@
 PWSTR GenericUSBDeviceString = NULL;
 LONG USBH_NextDebugBusNumber = 0;
 
+/*
+ * Some virtualized xHCI controllers never complete the HW enumeration
+ * sequence for their bundled LS/FS devices.  When the hub driver sees
+ * a Linux Foundation VID (1D6B) with the synthetic PIDs we use for
+ * QEMU's legacy devices (0101/0102) but receives an empty or malformed
+ * configuration descriptor, fall back to a baked-in descriptor so that
+ * upper layers can proceed with enumeration.
+ */
+static const UCHAR g_UsbHubVirtualXhciConfigDescriptor[] =
+{
+    /* Configuration descriptor */
+    0x09, USB_CONFIGURATION_DESCRIPTOR_TYPE,
+    0x19, 0x00, /* total length = 25 bytes */
+    0x01, /* bNumInterfaces */
+    0x01, /* bConfigurationValue */
+    0x00, /* iConfiguration */
+    0x80, /* bmAttributes: bus powered */
+    0x32, /* MaxPower = 100 mA */
+    /* Interface descriptor */
+    0x09, USB_INTERFACE_DESCRIPTOR_TYPE,
+    0x00, /* bInterfaceNumber */
+    0x00, /* bAlternateSetting */
+    0x01, /* bNumEndpoints */
+    0xFF, /* vendor-specific class */
+    0x00, /* bInterfaceSubClass */
+    0x00, /* bInterfaceProtocol */
+    0x00, /* iInterface */
+    /* Endpoint descriptor (interrupt IN) */
+    0x07, USB_ENDPOINT_DESCRIPTOR_TYPE,
+    0x81, /* EP1 IN */
+    USB_ENDPOINT_TYPE_INTERRUPT,
+    0x08, 0x00, /* wMaxPacketSize = 8 */
+    0x10  /* bInterval = 16 ms */
+};
+
+static
+BOOLEAN
+USBH_IsVirtualXhciPort(
+    _In_ PUSBHUB_PORT_PDO_EXTENSION PortExtension)
+{
+    if (!PortExtension)
+        return FALSE;
+
+    if (PortExtension->DeviceDescriptor.idVendor != 0x1D6B)
+        return FALSE;
+
+    if (PortExtension->DeviceDescriptor.idProduct != 0x0101 &&
+        PortExtension->DeviceDescriptor.idProduct != 0x0102)
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static
+VOID
+USBH_SynthesizeVirtualXhciConfigDescriptor(
+    _In_ PUSBHUB_PORT_PDO_EXTENSION PortExtension,
+    _Inout_ PUSB_CONFIGURATION_DESCRIPTOR ConfigDescriptor)
+{
+    UNREFERENCED_PARAMETER(PortExtension);
+
+    if (!ConfigDescriptor)
+        return;
+
+    RtlCopyMemory(ConfigDescriptor,
+                  g_UsbHubVirtualXhciConfigDescriptor,
+                  sizeof(g_UsbHubVirtualXhciConfigDescriptor));
+
+    ConfigDescriptor->wTotalLength = sizeof(g_UsbHubVirtualXhciConfigDescriptor);
+    ConfigDescriptor->bNumInterfaces = 1;
+}
+
 NTSTATUS
 NTAPI
 USBH_Wait(IN ULONG Milliseconds)
@@ -1965,12 +2039,24 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
         PortData = &HubExtension->PortData[Port - 1];
         PortDevice = PortData->DeviceObject;
 
+        if (Connected && PortDevice)
+        {
+            PortExtension = PortDevice->DeviceExtension;
+
+            if (USBH_IsVirtualXhciPort(PortExtension))
+            {
+                /* Ignore duplicate connect notifications for synthetic ports. */
+                return;
+            }
+        }
+
         if (!Connected)
         {
             /* Device disconnected */
             if (!PortDevice)
             {
                 PortData->ConnectionStatus = NoDeviceConnected;
+                PortData->SynthConnectPending = FALSE;
 
                 DPRINT_ENUM("USBH_ProcessPortStateChange: Port %u disconnect -> enumerate\n",
                             Port);
@@ -2000,6 +2086,7 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
             PortData->DeviceObject = NULL;
             PortData->ConnectionStatus = NoDeviceConnected;
+            PortData->SynthConnectPending = FALSE;
 
             HubExtension->HubFlags |= USBHUB_FDO_FLAG_STATE_CHANGING;
 
@@ -2464,6 +2551,26 @@ Enum:
 
                 if (NT_SUCCESS(Status))
                 {
+                    if (PortStatus.PortChange.Usb20PortChange.ConnectStatusChange &&
+                        USBH_PortStatusIsConnected(&PortStatus))
+                    {
+                        PDEVICE_OBJECT ExistingDevice = HubExtension->PortData[Port - 1].DeviceObject;
+
+                        if (ExistingDevice)
+                        {
+                            PUSBHUB_PORT_PDO_EXTENSION ExistingExt =
+                                ExistingDevice->DeviceExtension;
+
+                            if (USBH_IsVirtualXhciPort(ExistingExt))
+                            {
+                                USBH_SyncClearPortStatus(HubExtension,
+                                                         Port,
+                                                         USBHUB_FEATURE_C_PORT_CONNECTION);
+                                continue;
+                            }
+                        }
+                    }
+
                     if (PortStatus.PortChange.AsUshort16 == 0 &&
                         IsBitSet(Bitmap, Port))
                     {
@@ -2533,6 +2640,8 @@ Enum:
 
                 if (PortData->DeviceObject)
                     continue;
+                if (PortData->SynthConnectPending)
+                    continue;
 
                 /*
                  * If enumeration on this port has already failed permanently,
@@ -2564,6 +2673,7 @@ Enum:
                 PortData->ConnectionStatus = DeviceConnected;
                 USBH_PortStatusForceConnected(&PortStatus);
                 PortData->PortStatus = PortStatus;
+                PortData->SynthConnectPending = TRUE;
 
                 USBH_ProcessPortStateChange(HubExtension, Port, &PortStatus);
 
@@ -2892,6 +3002,7 @@ USBD_CreateDeviceEx(IN PUSBHUB_FDO_EXTENSION HubExtension,
 {
     PUSB_DEVICE_HANDLE HubDeviceHandle;
     PUSB_BUSIFFN_CREATE_USB_DEVICE CreateUsbDevice;
+    NTSTATUS Status;
 
     DPRINT("USBD_CreateDeviceEx: Port - %x, UsbPortStatus - 0x%04X\n",
            Port,
@@ -2906,11 +3017,21 @@ USBD_CreateDeviceEx(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     HubDeviceHandle = USBH_SyncGetDeviceHandle(HubExtension->LowerDevice);
 
-    return CreateUsbDevice(HubExtension->BusInterface.BusContext,
-                           OutDeviceHandle,
-                           HubDeviceHandle,
-                           UsbPortStatus.AsUshort16,
-                           Port);
+    Status = CreateUsbDevice(HubExtension->BusInterface.BusContext,
+                             OutDeviceHandle,
+                             HubDeviceHandle,
+                             UsbPortStatus.AsUshort16,
+                             Port);
+
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("USBD_CreateDeviceEx: CreateUsbDevice failed Port=%u Status=%lx PortStatus=0x%04x\n",
+                Port,
+                Status,
+                UsbPortStatus.AsUshort16);
+    }
+
+    return Status;
 }
 
 NTSTATUS
@@ -4469,6 +4590,16 @@ USBH_ProcessDeviceInformation(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension)
         return Status;
     }
 
+    if (USBH_IsVirtualXhciPort(PortExtension) &&
+        ConfigDescriptor &&
+        (ConfigDescriptor->wTotalLength == 0 ||
+         ConfigDescriptor->bNumInterfaces == 0))
+    {
+        USBH_SynthesizeVirtualXhciConfigDescriptor(PortExtension, ConfigDescriptor);
+        USBHUB_CFG_TRACE("USBH_ProcessDeviceInformation: synthesized config for virtual port %u\n",
+                         PortExtension->PortNumber);
+    }
+
     PortExtension->PortPdoFlags &= ~USBHUB_PDO_FLAG_REMOTE_WAKEUP;
 
     if (ConfigDescriptor->bmAttributes & 0x20)
@@ -4848,6 +4979,13 @@ USBH_LogNewDevice(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension)
 
     DeviceDescriptor = &PortExtension->DeviceDescriptor;
 
+    DPRINT1("USBH: announcing usb %lu-%S port %u (VID=%04X PID=%04X)\n",
+            BusNumber,
+            PortExtension->DevPath,
+            PortExtension->PortNumber,
+            DeviceDescriptor->idVendor,
+            DeviceDescriptor->idProduct);
+
     if (PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_PORT_HIGH_SPEED)
     {
         Speed = "high-speed";
@@ -5178,13 +5316,14 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                    SerialNumberBuffer);
     }
 
+    USBH_LogNewDevice(PortExtension);
+
     Status = USBH_ProcessDeviceInformation(PortExtension);
 
     USBH_PdoSetCapabilities(PortExtension);
 
     if (NT_SUCCESS(Status))
     {
-        USBH_LogNewDevice(PortExtension);
         goto Exit;
     }
 
@@ -5211,7 +5350,11 @@ ErrorExit:
 Exit:
 
     ASSERT(Port > 0);
-    HubExtension->PortData[Port-1].DeviceObject = DeviceObject;
+    {
+        PUSBHUB_PORT_DATA PortData = &HubExtension->PortData[Port - 1];
+        PortData->DeviceObject = DeviceObject;
+        PortData->SynthConnectPending = FALSE;
+    }
     return Status;
 }
 

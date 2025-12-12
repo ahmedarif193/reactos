@@ -157,6 +157,8 @@ typedef struct _USBHUB_PORT_DATA {
   USB_CONNECTION_STATUS ConnectionStatus;
   ULONG PortAttributes;
   ULONG LogFlags;
+  BOOLEAN SynthConnectPending;
+  UCHAR Reserved[3];
 } USBHUB_PORT_DATA, *PUSBHUB_PORT_DATA;
 
 typedef struct _USBHUB_FDO_EXTENSION *PUSBHUB_FDO_EXTENSION;
