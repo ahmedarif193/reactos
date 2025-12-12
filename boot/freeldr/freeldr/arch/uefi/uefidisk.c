@@ -1026,6 +1026,7 @@ UefiSetBootpath(VOID)
    EFI_BLOCK_IO* RootDiskIo = NULL;
    EFI_BLOCK_IO* BootClassifyIo = bio;
    BOOLEAN BootHandleIsPartition = FALSE;
+   BOOLEAN BootPartitionLooksOptical = FALSE;
 
    if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
            GlobalImageHandle,
@@ -1053,6 +1054,11 @@ UefiSetBootpath(VOID)
                 if (BootHandleIsPartition)
                 {
                     TRACE("Boot handle is a logical partition; using partition media for heuristics\n");
+                    if (BootBlockIo->Media->BlockSize == 2048 ||
+                        (BootBlockIo->Media->RemovableMedia && BootBlockIo->Media->ReadOnly))
+                    {
+                        BootPartitionLooksOptical = TRUE;
+                    }
                 }
             }
         }
@@ -1177,8 +1183,15 @@ UefiSetBootpath(VOID)
         PartitionInfoHandle = handles[UefiBootRootIdentifier];
         if (RootDiskIo)
         {
-            BootClassifyIo = RootDiskIo;
-            TRACE("Using root disk Block I/O (%p) for media classification\n", RootDiskIo);
+            if (BootPartitionLooksOptical && BootClassifyIo && RootDiskIo != BootClassifyIo)
+            {
+                TRACE("Boot partition Block I/O looks optical; keeping it for media classification\n");
+            }
+            else
+            {
+                BootClassifyIo = RootDiskIo;
+                TRACE("Using root disk Block I/O (%p) for media classification\n", RootDiskIo);
+            }
         }
    }
 
@@ -1186,6 +1199,17 @@ UefiSetBootpath(VOID)
          DevPathHasPartition,
          DevPathPartition,
          DevPathStart);
+
+   if (!TreatAsCd && BootPartitionLooksOptical && !HasPartitionInfo)
+   {
+        TRACE("Boot partition Block I/O exhibits optical geometry; forcing ISO/CD semantics\n");
+        TreatAsCd = TRUE;
+        BootPartition = 0;
+        if (BootHandle)
+        {
+            PartitionInfoHandle = BootHandle;
+        }
+   }
 
    if (TreatAsCd && HasPartitionInfo)
    {
