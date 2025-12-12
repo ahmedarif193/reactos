@@ -95,6 +95,7 @@ Bus_PlugInDevice (
     PLIST_ENTRY         entry;
     BOOLEAN             multiSzBuilt = TRUE;
     BOOLEAN             hasPciExpressCid = FALSE;
+    BOOLEAN             isPciRoot;
 
     PAGED_CODE ();
 
@@ -140,7 +141,10 @@ Bus_PlugInDevice (
         }
     }
 
-    if (Device->pnp.hardware_id && strncmp(Device->pnp.hardware_id, "PNP0A", 5) == 0)
+    isPciRoot = (Device->pnp.hardware_id &&
+                 strncmp(Device->pnp.hardware_id, "PNP0A", 5) == 0);
+
+    if (isPciRoot)
     {
         BuspEnsureMmConfigState();
 
@@ -199,6 +203,24 @@ Bus_PlugInDevice (
     pdoData->AcpiHandle = Device->handle;
     InitializeListHead(&pdoData->NotificationList);
     KeInitializeSpinLock(&pdoData->NotificationLock);
+
+    if (isPciRoot)
+    {
+        ULONG Segment, BusStart, BusEnd;
+
+        if (AcpiPciRootQueryInfo(Device->handle, &Segment, &BusStart, &BusEnd))
+        {
+            pdoData->HasPciRootSegment = TRUE;
+            pdoData->PciRootSegment = Segment;
+
+            if (!pdoData->HasPciRootBusRange)
+            {
+                pdoData->PciRootMinBus = BusStart;
+                pdoData->PciRootMaxBus = BusEnd;
+                pdoData->HasPciRootBusRange = TRUE;
+            }
+        }
+    }
 
     //
     // Copy the hardware IDs and merge in compat IDs from _CID

@@ -60,6 +60,11 @@ BOOLEAN HalpAcpiEcamDisabled = FALSE;
 USHORT HalpAcpiEcamForceLegacySegment = 0xFFFF;
 BOOLEAN HalpAcpiEcamForceLegacyLogged = FALSE;
 BOOLEAN HalpAcpiEcamVendorProbeLogged = FALSE;
+volatile LONG *HalpAcpiEcamBadBusBitmap;
+ULONG HalpAcpiEcamBadBusBitmapBits;
+
+#define HALP_ACPI_INVALID_MCFG_INDEX 0xFFFFFFFFu
+#define HALP_ACPI_ECAM_BUS_BITMAP_STRIDE 256UL
 
 static
 LONG
@@ -76,6 +81,93 @@ HalpAcpiRecordEcamEvent(
     }
 
     return PreviousFlags;
+}
+
+static
+ULONG
+HalpAcpiGetMcfgAllocationIndex(
+    _In_opt_ PHALP_ACPI_MCFG_ALLOCATION Allocation)
+{
+    if (!HalpAcpiMcfgAllocations || !Allocation)
+    {
+        return HALP_ACPI_INVALID_MCFG_INDEX;
+    }
+
+    if ((Allocation < HalpAcpiMcfgAllocations) ||
+        (Allocation >= (HalpAcpiMcfgAllocations + HalpAcpiMcfgAllocationCount)))
+    {
+        return HALP_ACPI_INVALID_MCFG_INDEX;
+    }
+
+    return (ULONG)(Allocation - HalpAcpiMcfgAllocations);
+}
+
+static
+BOOLEAN
+HalpAcpiIsEcamBusDisabled(
+    _In_ ULONG AllocationIndex,
+    _In_ ULONG BusNumber)
+{
+    ULONG BitIndex;
+
+    if (!HalpAcpiEcamBadBusBitmap)
+    {
+        return FALSE;
+    }
+
+    if ((AllocationIndex == HALP_ACPI_INVALID_MCFG_INDEX) ||
+        (BusNumber > 0xFF))
+    {
+        return FALSE;
+    }
+
+    BitIndex = AllocationIndex * HALP_ACPI_ECAM_BUS_BITMAP_STRIDE + BusNumber;
+
+    if (BitIndex >= HalpAcpiEcamBadBusBitmapBits)
+    {
+        return FALSE;
+    }
+
+    return ((HalpAcpiEcamBadBusBitmap[BitIndex >> 5] &
+             (1u << (BitIndex & 31))) != 0);
+}
+
+static
+BOOLEAN
+HalpAcpiDisableEcamBus(
+    _In_ ULONG AllocationIndex,
+    _In_ ULONG BusNumber)
+{
+    ULONG BitIndex;
+    ULONG WordIndex;
+    ULONG Mask;
+    volatile LONG *WordPtr;
+    LONG Previous;
+
+    if (!HalpAcpiEcamBadBusBitmap)
+    {
+        return FALSE;
+    }
+
+    if ((AllocationIndex == HALP_ACPI_INVALID_MCFG_INDEX) ||
+        (BusNumber > 0xFF))
+    {
+        return FALSE;
+    }
+
+    BitIndex = AllocationIndex * HALP_ACPI_ECAM_BUS_BITMAP_STRIDE + BusNumber;
+
+    if (BitIndex >= HalpAcpiEcamBadBusBitmapBits)
+    {
+        return FALSE;
+    }
+
+    WordIndex = BitIndex >> 5;
+    Mask = 1u << (BitIndex & 31);
+    WordPtr = &HalpAcpiEcamBadBusBitmap[WordIndex];
+
+    Previous = InterlockedOr(WordPtr, Mask);
+    return ((Previous & Mask) == 0);
 }
 
 static
@@ -2272,6 +2364,8 @@ HalpAcpiAccessConfigEcam(
     ULONG CurrentOffset;
     PUCHAR BufferPtr;
     BOOLEAN ForceLegacy;
+    ULONG AllocationIndex;
+    USHORT EffectiveSegment;
 
     if (HalpAcpiEcamDisabled)
     {
@@ -2346,25 +2440,27 @@ HalpAcpiAccessConfigEcam(
             "HAL: PCI Express MMCONFIG has no allocation that covers the requested bus; using legacy configuration space.");
         return FALSE;
     }
+    AllocationIndex = HalpAcpiGetMcfgAllocationIndex(Allocation);
+    EffectiveSegment = Allocation->PciSegment;
 
     /* If this allocation/segment has been disabled due to invalid ECAM, fallback */
-    if (HalpAcpiMcfgSegDisabled && HalpAcpiMcfgAllocations)
+    if (HalpAcpiMcfgSegDisabled &&
+        AllocationIndex < HalpAcpiMcfgSegDisabledCount &&
+        HalpAcpiMcfgSegDisabled[AllocationIndex])
     {
-        ULONG idx;
-        for (idx = 0; idx < HalpAcpiMcfgAllocationCount; ++idx)
-        {
-            if (&HalpAcpiMcfgAllocations[idx] == Allocation)
-            {
-                if (idx < HalpAcpiMcfgSegDisabledCount && HalpAcpiMcfgSegDisabled[idx])
-                {
-                    CHAR msg[128];
-                    _snprintf(msg, sizeof(msg), "HAL: ECAM disabled for segment %u; using legacy configuration space.", Allocation->PciSegment);
-                    HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
-                    return FALSE;
-                }
-                break;
-            }
-        }
+        CHAR msg[128];
+        _snprintf(msg,
+                  sizeof(msg),
+                  "HAL: ECAM disabled for segment %u; using legacy configuration space.",
+                  EffectiveSegment);
+        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
+        return FALSE;
+    }
+
+    if (HalpAcpiIsEcamBusDisabled(AllocationIndex, BusNumber))
+    {
+        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, NULL);
+        return FALSE;
     }
 
     FunctionBase = Allocation->BaseAddress;
@@ -2440,18 +2536,19 @@ HalpAcpiAccessConfigEcam(
 
         MmUnmapIoSpace(Mapping, PAGE_SIZE);
 
-        if (ReadVendorProbe && Segment != HALP_ACPI_SEGMENT_ANY)
+        if (ReadVendorProbe)
         {
             USHORT Vendor = *(UNALIGNED PUSHORT)BufferPtr;
             if (Vendor == 0xFFFF || Vendor == 0x0000)
             {
+                (void)HalpAcpiDisableEcamBus(AllocationIndex, BusNumber);
                 if (!HalpAcpiEcamVendorProbeLogged)
                 {
                     CHAR msg[128];
                     _snprintf(msg,
                               sizeof(msg),
                               "HAL: ECAM vendor read invalid on segment %u bus %lu dev %lu fn %lu; retrying via legacy config.",
-                              Segment,
+                              EffectiveSegment,
                               BusNumber,
                               (ULONG)Slot.u.bits.DeviceNumber,
                               (ULONG)Slot.u.bits.FunctionNumber);
@@ -3233,6 +3330,27 @@ HalpAcpiPhase1Init(VOID)
         {
             RtlZeroMemory(HalpAcpiMcfgSegDisabled, HalpAcpiMcfgAllocationCount * sizeof(UCHAR));
             HalpAcpiMcfgSegDisabledCount = HalpAcpiMcfgAllocationCount;
+        }
+    }
+
+    if (HalpAcpiMcfgAllocations &&
+        HalpAcpiMcfgAllocationCount &&
+        !HalpAcpiEcamBadBusBitmap)
+    {
+        ULONG Bits = HalpAcpiMcfgAllocationCount * HALP_ACPI_ECAM_BUS_BITMAP_STRIDE;
+        ULONG Words = (Bits + 31) / 32;
+        SIZE_T Bytes = (SIZE_T)Words * sizeof(ULONG);
+
+        if (Bytes)
+        {
+            HalpAcpiEcamBadBusBitmap = ExAllocatePoolWithTag(NonPagedPool,
+                                                             Bytes,
+                                                             'bBCE');
+            if (HalpAcpiEcamBadBusBitmap)
+            {
+                RtlZeroMemory((PVOID)HalpAcpiEcamBadBusBitmap, Bytes);
+                HalpAcpiEcamBadBusBitmapBits = Bits;
+            }
         }
     }
 

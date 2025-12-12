@@ -59,6 +59,8 @@ typedef struct _PDO_DEVICE_DATA
     ULONG CachedBusNumber;
     BOOLEAN HasCachedBusNumber;
     BOOLEAN HasPciRootBusRange;
+    BOOLEAN HasPciRootSegment;
+    ULONG PciRootSegment;
     ULONG PciRootMinBus;
     ULONG PciRootMaxBus;
     /* Cached PCI root window information (from _CRS) */

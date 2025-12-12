@@ -165,6 +165,13 @@ void acpi_ec_exit (void);
 
 int acpi_pci_root_init (void);
 void acpi_pci_root_exit (void);
+BOOLEAN
+NTAPI
+AcpiPciRootQueryInfo(
+    _In_ ACPI_HANDLE Handle,
+    _Out_opt_ PULONG Segment,
+    _Out_opt_ PULONG BusStart,
+    _Out_opt_ PULONG BusEnd);
 
 /* ACPI PCI Interrupt Link (pci_link.c) */
 
