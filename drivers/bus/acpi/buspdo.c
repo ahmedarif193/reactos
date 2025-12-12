@@ -52,6 +52,48 @@ BuspIsPciRootDevice(
     return FALSE;
 }
 
+#ifndef UNIT_TEST
+static
+VOID
+BuspApplyTrackedPciRootInfo(
+    _Inout_ PPDO_DEVICE_DATA DeviceData)
+{
+    ULONG Segment, MinBus, MaxBus;
+
+    if (!DeviceData || !DeviceData->AcpiHandle)
+        return;
+
+    if (!BuspIsPciRootDevice(DeviceData))
+        return;
+
+    if (!AcpiPciRootQueryInfo(DeviceData->AcpiHandle,
+                              &Segment,
+                              &MinBus,
+                              &MaxBus))
+    {
+        return;
+    }
+
+    DeviceData->HasPciRootSegment = TRUE;
+    DeviceData->PciRootSegment = Segment;
+
+    if (!DeviceData->HasPciRootBusRange)
+    {
+        DeviceData->PciRootMinBus = MinBus;
+        DeviceData->PciRootMaxBus = MaxBus;
+        DeviceData->HasPciRootBusRange = TRUE;
+    }
+}
+#else
+static
+VOID
+BuspApplyTrackedPciRootInfo(
+    _Inout_ PPDO_DEVICE_DATA DeviceData)
+{
+    UNREFERENCED_PARAMETER(DeviceData);
+}
+#endif
+
 static __inline VOID
 BuspCachePciRootIoWindow(
     _Inout_ PPDO_DEVICE_DATA DeviceData,
@@ -1752,12 +1794,14 @@ Cleanup:
 #endif /* !UNIT_TEST */
 
 /* Build a stable instance ID string for devices that lack _UID.
- * Strategy: prefer _UID; then bus_address (_ADR); otherwise device-type fallback.
+ * Strategy: prefer _UID; then PCI root segment (if tracked); then bus_address (_ADR);
+ * otherwise device-type fallback.
  * Returns the number of WCHARs written (without terminator). */
 static
 ULONG
 BuspBuildStableInstanceId(
     _In_opt_ struct acpi_device* Device,
+    _In_opt_ PPDO_DEVICE_DATA DeviceData,
     _In_ BOOLEAN IsFixedFeatureButton,
     _Out_writes_(MaxChars) PWCHAR Out,
     _In_ ULONG MaxChars)
@@ -1777,14 +1821,25 @@ BuspBuildStableInstanceId(
             Out[len] = UNICODE_NULL;
             return (ULONG)len;
         }
-        if (Device->flags.bus_address)
-        {
-            /* Use bus address (commonly _ADR) as decimal instance id */
-            int n = _snwprintf(Out, MaxChars, L"%u", (UINT)Device->pnp.bus_address);
-            if (n < 0) n = 0;
-            Out[(n < (int)MaxChars) ? n : (int)MaxChars - 1] = UNICODE_NULL;
-            return (ULONG)((n > 0) ? n : 0);
-        }
+    }
+
+    if (DeviceData &&
+        BuspIsPciRootDevice(DeviceData) &&
+        DeviceData->HasPciRootSegment)
+    {
+        int n = _snwprintf(Out, MaxChars, L"%lu", DeviceData->PciRootSegment);
+        if (n < 0) n = 0;
+        Out[(n < (int)MaxChars) ? n : (int)MaxChars - 1] = UNICODE_NULL;
+        return (ULONG)((n > 0) ? n : 0);
+    }
+
+    if (Device && Device->flags.bus_address)
+    {
+        /* Use bus address (commonly _ADR) as decimal instance id */
+        int n = _snwprintf(Out, MaxChars, L"%u", (UINT)Device->pnp.bus_address);
+        if (n < 0) n = 0;
+        Out[(n < (int)MaxChars) ? n : (int)MaxChars - 1] = UNICODE_NULL;
+        return (ULONG)((n > 0) ? n : 0);
     }
 
     if (IsFixedFeatureButton)
@@ -1833,6 +1888,10 @@ Bus_PDO_PnP (
         DeviceData->HasPciRootBusRange = FALSE;
         DeviceData->PciRootMinBus = 0;
         DeviceData->PciRootMaxBus = 0;
+        DeviceData->HasPciRootSegment = FALSE;
+        DeviceData->PciRootSegment = 0;
+
+        BuspApplyTrackedPciRootInfo(DeviceData);
 
         if (BuspIsPciRootDevice(DeviceData))
         {
@@ -2204,7 +2263,7 @@ Bus_PDO_QueryDeviceId(
             acpi_bus_get_device(DeviceData->AcpiHandle, &Device);
 
         BOOLEAN isFFB = (DeviceData->AcpiHandle == NULL);
-        length = BuspBuildStableInstanceId(Device, isFFB, temp, RTL_NUMBER_OF(temp));
+        length = BuspBuildStableInstanceId(Device, DeviceData, isFFB, temp, RTL_NUMBER_OF(temp));
         if (length == 0)
         {
             /* Fallback */

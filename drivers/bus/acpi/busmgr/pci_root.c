@@ -12,6 +12,10 @@
 
 #define ACPI_PCI_ROOT_HANDLE_TAG 'rPcA'
 
+static FAST_MUTEX AcpiPciRootTrackLock;
+static LIST_ENTRY AcpiPciRootTrackList;
+static BOOLEAN AcpiPciRootTrackingInitialized = FALSE;
+
 typedef struct _ACPI_PCI_ROOT_TRACK_ENTRY
 {
     LIST_ENTRY ListEntry;
@@ -24,7 +28,6 @@ typedef struct _ACPI_PCI_ROOT_TRACK_ENTRY
 typedef struct _ACPI_PCI_ROOT_ENUM_CONTEXT
 {
     ULONG RootCount;
-    LIST_ENTRY SeenRoots;
 } ACPI_PCI_ROOT_ENUM_CONTEXT, *PACPI_PCI_ROOT_ENUM_CONTEXT;
 
 #define OSC_FIRMWARE_FAILURE          0x02
@@ -149,55 +152,52 @@ AcpiPciRootInitContext(
     _Out_ PACPI_PCI_ROOT_ENUM_CONTEXT Context)
 {
     RtlZeroMemory(Context, sizeof(*Context));
-    InitializeListHead(&Context->SeenRoots);
 }
 
 static
 VOID
-AcpiPciRootCleanupContext(
-    _Inout_ PACPI_PCI_ROOT_ENUM_CONTEXT Context)
+AcpiPciRootEnsureTrackingInitialized(VOID)
 {
-    PLIST_ENTRY Entry;
-
-    while (!IsListEmpty(&Context->SeenRoots))
+    if (AcpiPciRootTrackingInitialized)
     {
-        Entry = RemoveHeadList(&Context->SeenRoots);
-        ExFreePoolWithTag(CONTAINING_RECORD(Entry,
-                                            ACPI_PCI_ROOT_TRACK_ENTRY,
-                                            ListEntry),
-                          ACPI_PCI_ROOT_HANDLE_TAG);
+        return;
     }
 
-    InitializeListHead(&Context->SeenRoots);
-    Context->RootCount = 0;
+    ExInitializeFastMutex(&AcpiPciRootTrackLock);
+    InitializeListHead(&AcpiPciRootTrackList);
+    AcpiPciRootTrackingInitialized = TRUE;
 }
 
 static
 BOOLEAN
 AcpiPciRootRememberHandle(
-    _Inout_opt_ PACPI_PCI_ROOT_ENUM_CONTEXT Context,
     _In_ ACPI_HANDLE Handle,
     _In_ ULONG Segment,
     _In_ ULONG BusStart,
     _In_ ULONG BusEnd)
 {
     PACPI_PCI_ROOT_TRACK_ENTRY Entry;
+    PLIST_ENTRY Link;
 
-    if (!Context)
+    AcpiPciRootEnsureTrackingInitialized();
+
+    if (!AcpiPciRootTrackingInitialized)
     {
         return TRUE;
     }
 
-    for (Entry = CONTAINING_RECORD(Context->SeenRoots.Flink,
-                                   ACPI_PCI_ROOT_TRACK_ENTRY,
-                                   ListEntry);
-         &Entry->ListEntry != &Context->SeenRoots;
-         Entry = CONTAINING_RECORD(Entry->ListEntry.Flink,
-                                   ACPI_PCI_ROOT_TRACK_ENTRY,
-                                   ListEntry))
+    ExAcquireFastMutex(&AcpiPciRootTrackLock);
+
+    for (Link = AcpiPciRootTrackList.Flink;
+         Link != &AcpiPciRootTrackList;
+         Link = Link->Flink)
     {
+        Entry = CONTAINING_RECORD(Link,
+                                  ACPI_PCI_ROOT_TRACK_ENTRY,
+                                  ListEntry);
         if (Entry->Handle == Handle)
         {
+            ExReleaseFastMutex(&AcpiPciRootTrackLock);
             return FALSE;
         }
     }
@@ -207,6 +207,7 @@ AcpiPciRootRememberHandle(
                                   ACPI_PCI_ROOT_HANDLE_TAG);
     if (!Entry)
     {
+        ExReleaseFastMutex(&AcpiPciRootTrackLock);
         DPRINT1("ACPI: Failed to track PCI root handle %p (Seg %lu Bus %lu-%lu)\n",
                 Handle,
                 Segment,
@@ -219,7 +220,12 @@ AcpiPciRootRememberHandle(
     Entry->Segment = Segment;
     Entry->BusStart = BusStart;
     Entry->BusEnd = BusEnd;
-    InsertTailList(&Context->SeenRoots, &Entry->ListEntry);
+    Entry->Segment = Segment;
+    Entry->BusStart = BusStart;
+    Entry->BusEnd = BusEnd;
+    InsertTailList(&AcpiPciRootTrackList, &Entry->ListEntry);
+
+    ExReleaseFastMutex(&AcpiPciRootTrackLock);
     return TRUE;
 }
 
@@ -708,8 +714,7 @@ AcpiPciRootEnumerateCallback(
         }
 
         if (Context &&
-            !AcpiPciRootRememberHandle(Context,
-                                       Handle,
+            !AcpiPciRootRememberHandle(Handle,
                                        RootInfo.Segment,
                                        RootInfo.BusStart,
                                        RootInfo.BusEnd))
@@ -815,6 +820,46 @@ AcpiPciRootEnumerateByHid(
     }
 }
 
+BOOLEAN
+NTAPI
+AcpiPciRootQueryInfo(
+    _In_ ACPI_HANDLE Handle,
+    _Out_opt_ PULONG Segment,
+    _Out_opt_ PULONG BusStart,
+    _Out_opt_ PULONG BusEnd)
+{
+    PACPI_PCI_ROOT_TRACK_ENTRY Entry;
+    PLIST_ENTRY Link;
+    BOOLEAN Found = FALSE;
+
+    if (!Handle || !AcpiPciRootTrackingInitialized)
+    {
+        return FALSE;
+    }
+
+    ExAcquireFastMutex(&AcpiPciRootTrackLock);
+
+    for (Link = AcpiPciRootTrackList.Flink;
+         Link != &AcpiPciRootTrackList;
+         Link = Link->Flink)
+    {
+        Entry = CONTAINING_RECORD(Link,
+                                  ACPI_PCI_ROOT_TRACK_ENTRY,
+                                  ListEntry);
+        if (Entry->Handle == Handle)
+        {
+            if (Segment) *Segment = Entry->Segment;
+            if (BusStart) *BusStart = Entry->BusStart;
+            if (BusEnd) *BusEnd = Entry->BusEnd;
+            Found = TRUE;
+            break;
+        }
+    }
+
+    ExReleaseFastMutex(&AcpiPciRootTrackLock);
+    return Found;
+}
+
 int
 acpi_pci_root_init(VOID)
 {
@@ -822,13 +867,13 @@ acpi_pci_root_init(VOID)
     ULONG Enumerated;
 
     AcpiPciRootInitContext(&Context);
+    AcpiPciRootEnsureTrackingInitialized();
     DPRINT1("ACPI: Enumerating PCI root bridges (ACPI 1.0/2.0+/PCIe)\n");
 
     AcpiPciRootEnumerateByHid("PNP0A03", &Context);
     AcpiPciRootEnumerateByHid("PNP0A08", &Context);
 
     Enumerated = Context.RootCount;
-    AcpiPciRootCleanupContext(&Context);
 
     if (!Enumerated)
     {
@@ -841,7 +886,29 @@ acpi_pci_root_init(VOID)
 void
 acpi_pci_root_exit(VOID)
 {
-    /* Nothing to tear down yet. */
+    if (!AcpiPciRootTrackingInitialized)
+    {
+        return;
+    }
+
+    for (;;)
+    {
+        PACPI_PCI_ROOT_TRACK_ENTRY Entry;
+        PLIST_ENTRY Link;
+
+        ExAcquireFastMutex(&AcpiPciRootTrackLock);
+        if (IsListEmpty(&AcpiPciRootTrackList))
+        {
+            ExReleaseFastMutex(&AcpiPciRootTrackLock);
+            break;
+        }
+
+        Link = RemoveHeadList(&AcpiPciRootTrackList);
+        ExReleaseFastMutex(&AcpiPciRootTrackLock);
+
+        Entry = CONTAINING_RECORD(Link, ACPI_PCI_ROOT_TRACK_ENTRY, ListEntry);
+        ExFreePoolWithTag(Entry, ACPI_PCI_ROOT_HANDLE_TAG);
+    }
 }
 
 #endif /* CONFIG_ACPI_PCI */
