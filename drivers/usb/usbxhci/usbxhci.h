@@ -108,6 +108,8 @@ typedef struct _XHCI_DEVICE_SLOT {
     BOOLEAN MultiTt;
     BOOLEAN HasTtInfo;
     BOOLEAN IsHub;
+    BOOLEAN VirtualDevice;
+    UCHAR VirtualConfigurationValue;
 } XHCI_DEVICE_SLOT, *PXHCI_DEVICE_SLOT;
 
 typedef struct _XHCI_PROTOCOL_SEGMENT {
@@ -186,6 +188,7 @@ typedef struct _XHCI_EXTENSION {
   UCHAR PortLinkState[XHCI_MAX_PORTS + 1];
   BOOLEAN PortConnectStatus[XHCI_MAX_PORTS + 1];
   ULONG PortChangeMask[XHCI_MAX_PORTS + 1];
+  BOOLEAN VirtualPortAnnounced[XHCI_MAX_PORTS + 1];
   UCHAR MaxU1ExitLatency;
   USHORT MaxU2ExitLatency;
   UCHAR ProtocolSegmentCount;
