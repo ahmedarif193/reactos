@@ -1379,7 +1379,7 @@ XHCI_GetTransferRingTrb(
         PXHCI_TRB LinkTrb = &Ring->Base[Ring->TrbCount - 1];
         ULONG LinkControl = (XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) |
                             XHCI_TRB_TOGGLE_CYCLE |
-                            XHCI_TRB_CYCLE;
+                            (Ring->CycleState & 0x1);
 
         LinkTrb->Parameter1 = (ULONG)(Ring->PhysicalAddress.QuadPart & 0xFFFFFFFF);
         LinkTrb->Parameter2 = (ULONG)(Ring->PhysicalAddress.QuadPart >> 32);
@@ -1534,6 +1534,9 @@ XHCI_FreeTransferRing(
     {
         MmFreeContiguousMemory(Ring->Base);
     }
+    Ring->CycleState = 1;
+    Ring->EnqueueIndex = 0;
+    Ring->DequeueIndex = 0;
 
     RtlZeroMemory(Ring, sizeof(*Ring));
 }
@@ -1876,33 +1879,8 @@ if (EndpointId == 1)         CtrlCtx->AddContextFlags |= (1 << 1);
             Endpoint->InterruptTarget = Target;
     }
 
-    /*
-     * Only program a new dequeue pointer for dynamic rings. Static EP0 rings
-     * are already wired at slot enable time and issuing a SetTRDequeue while
-     * the controller is in persistent HCE on QEMU can wedge enumeration.
-     */
-    if (Endpoint->TransferRing.PhysicalAddress.QuadPart &&
-        !Endpoint->UsesStaticRing)
-    {
-        MPSTATUS DeqStatus = XHCI_SetEndpointDequeue(Extension,
-                                                     Slot,
-                                                     EndpointId,
-                                                     &Endpoint->TransferRing);
-        if (DeqStatus != MP_STATUS_SUCCESS)
-        {
-            DPRINT1("usbxhci: SetTRDequeue failed for slot %u ep %u (status=%lx)\n",
-                    Slot->SlotId,
-                    EndpointId,
-                    DeqStatus);
-        }
-        else
-        {
-            /* Kick the endpoint so hardware resumes at the freshly programmed dequeue. */
-            XHCI_RingEndpointDoorbell(Extension, Slot->SlotId, EndpointId, 0);
-        }
-    }
-
     return MP_STATUS_SUCCESS;
+    XHCI_RingEndpointDoorbell(Extension, Slot->SlotId, EndpointId, 0);
 }
 
 static MPSTATUS
@@ -6865,6 +6843,7 @@ XHCI_SubmitTransfer(PVOID MiniPortExtension,
     PXHCI_EXTENSION Extension = MiniPortExtension;
     PXHCI_ENDPOINT Endpoint = EndpointHandle;
     PXHCI_TRANSFER Transfer = TransferHandle;
+    DPRINT1("SUBMIT_XFER: Slot=%u EP=%u Addr=%u Type=%u Len=%u\n", Endpoint->SlotId, Endpoint->EndpointId, Endpoint->EndpointProperties.DeviceAddress, Endpoint->EndpointProperties.TransferType, TransferParameters->TransferBufferLength);
 
     static BOOLEAN Triggered = FALSE;
     if (Extension && Extension->RhIrqEnabled && !Triggered && XhciRegPacket.UsbPortInvalidateRootHub)
