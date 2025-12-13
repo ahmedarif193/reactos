@@ -1708,7 +1708,7 @@ XHCI_ConfigureSlotEndpoint(
 
     if (!Slot->Configured)
     {
-//        CtrlCtx->AddContextFlags |= (1 << 1);
+if (EndpointId == 1)         CtrlCtx->AddContextFlags |= (1 << 1);
     }
 
     if (XhciSlotContextGetLastCtx(SlotCtx) < EndpointId)
@@ -4403,7 +4403,6 @@ XHCI_PrepareDefaultControlContext(
             ULONG PortSpeed =
                 (PortValue & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT;
 
-            if (PortSpeed != 0)
             if (PortSpeed != 0)
                 SpeedCode = PortSpeed;
         }
@@ -8478,9 +8477,25 @@ XHCI_StopController(PVOID MiniPortExtension,
     KeReleaseSpinLock(&Extension->CommandLock, OldIrql);
 
     KeAcquireSpinLock(&Extension->DeferredTransferLock, &OldIrql);
-    InitializeListHead(&Extension->DeferredTransferList);
-    KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
+    while (!IsListEmpty(&Extension->DeferredTransferList))
+    {
+        PLIST_ENTRY Entry = RemoveHeadList(&Extension->DeferredTransferList);
+        PXHCI_TRANSFER Transfer = CONTAINING_RECORD(Entry, XHCI_TRANSFER, ListEntry);
 
+        KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
+
+        if (XhciRegPacket.UsbPortCompleteTransfer)
+        {
+            XhciRegPacket.UsbPortCompleteTransfer(Extension,
+                                                  Transfer->Endpoint,
+                                                  Transfer->TransferParameters,
+                                                  USBD_STATUS_CANCELED,
+                                                  Transfer->BytesTransferred);
+        }
+
+        KeAcquireSpinLock(&Extension->DeferredTransferLock, &OldIrql);
+    }
+    KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
     Extension->MmioBase = NULL;
     Extension->CapabilityRegisters = NULL;
     Extension->OperationalRegisters = NULL;
