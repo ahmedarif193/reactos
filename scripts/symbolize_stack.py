@@ -347,7 +347,7 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
                 current_lines = _read_lines_from_path(log_path)
                 # Hard line-count cap: if the log grows too large, stop QEMU to
                 # avoid wasting time in late-boot storms.
-                if stop_reason is None and len(current_lines) >= 2400:
+                if stop_reason is None and len(current_lines) >= 6000:
                     stop_reason = "line-limit"
                     print(
                         f"[symbolize] Log exceeded {len(current_lines)} lines "
