@@ -1590,6 +1590,7 @@ ErrorExit:
                                 NULL);
     }
 
+    DPRINT1("USBPORT_CreateDevice: Failed with Status %x, masking to STATUS_DEVICE_DATA_ERROR\n", Status);
     Status = STATUS_DEVICE_DATA_ERROR;
 
     if (IsOpenedPipe)

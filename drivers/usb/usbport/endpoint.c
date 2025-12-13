@@ -1116,7 +1116,6 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
 
     Direction = USB_ENDPOINT_DIRECTION_OUT(EndpointDescriptor->bEndpointAddress);
     EndpointProperties->Direction = Direction;
-
     if (DeviceHandle->IsRootHub)
     {
         Endpoint->EndpointWorker = 0; // USBPORT_RootHubEndpointWorker;

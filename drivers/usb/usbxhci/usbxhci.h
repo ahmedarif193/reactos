@@ -167,6 +167,8 @@ typedef struct _XHCI_EXTENSION {
   LIST_ENTRY CommandContextList;
   KSPIN_LOCK CommandLock;
   KSPIN_LOCK EventRingLock;
+  LIST_ENTRY DeferredTransferList;
+  KSPIN_LOCK DeferredTransferLock;
     PHYSICAL_ADDRESS DeviceContextsPhysical;
     PHYSICAL_ADDRESS InputContextsPhysical;
     PHYSICAL_ADDRESS Ep0RingArrayPhysical;
