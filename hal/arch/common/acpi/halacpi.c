@@ -11,6 +11,7 @@
 #include <hal.h>
 #include <halacpi.h>
 #include <ntifs.h>
+#include <reactos/hal/acpi_cstate.h>
 #include <stdarg.h>
 #define NDEBUG
 #include <debug.h>
@@ -19,6 +20,16 @@ extern VOID NTAPI IopReserveIrqVectors(_In_reads_(Count) PULONG Vectors, _In_ UL
 extern VOID HalpPciLogEcamCoverage(VOID);
 
 NTSYSAPI NTSTATUS NTAPI NtShutdownSystem(_In_ SHUTDOWN_ACTION Action);
+
+#ifndef ACPI_PM1_STATUS_BUS_MASTER
+#define ACPI_PM1_STATUS_BUS_MASTER     0x0010
+#endif
+#ifndef ACPI_FADT_WBINVD
+#define ACPI_FADT_WBINVD               0x00000001
+#endif
+#ifndef ACPI_FADT_WBINVD_FLUSH
+#define ACPI_FADT_WBINVD_FLUSH         0x00000002
+#endif
 
 /* GLOBALS ********************************************************************/
 
@@ -3299,7 +3310,110 @@ HalReportResourceUsage(VOID)
     HalpReportResourceUsage(&HalString, InterfaceType);
 
     /* Setup PCI debugging and Hibernation */
-    HalpRegisterPciDebuggingDeviceInfo();
+HalpRegisterPciDebuggingDeviceInfo();
+}
+
+static
+BOOLEAN
+HalpBuildLegacyCStateRegister(
+    _In_ const GEN_ADDR *ControlBlock,
+    _In_ UCHAR ByteOffset,
+    _Out_ PHAL_ACPI_C_STATE_REGISTER Target)
+{
+    if (!ControlBlock || !Target)
+        return FALSE;
+
+    if (!HalpAcpiGasValid(ControlBlock))
+        return FALSE;
+
+    Target->AddressSpaceId = ControlBlock->AddressSpaceID;
+    Target->BitWidth = 8;
+    Target->BitOffset = 0;
+    Target->AccessSize = 1;
+    Target->Address = ControlBlock->Address.QuadPart + ByteOffset;
+    return TRUE;
+}
+
+NTSTATUS
+NTAPI
+HalGetAcpiCStateInformation(
+    _Out_ PHAL_ACPI_C_STATE_INFO Info)
+{
+    const GEN_ADDR *ControlBlock;
+    ULONG Count = 0;
+    BOOLEAN RequireFlush;
+
+    if (!Info)
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(Info, sizeof(*Info));
+
+    ControlBlock = NULL;
+    if (HalpPm1ControlBlockValid[0])
+    {
+        ControlBlock = &HalpPm1ControlBlocks[0];
+    }
+    else if (HalpPm1ControlBlockValid[1])
+    {
+        ControlBlock = &HalpPm1ControlBlocks[1];
+    }
+
+    if (!ControlBlock)
+        return STATUS_NOT_SUPPORTED;
+
+    /* ACPI spec: lack of WBINVD or presence of WBINVD_FLUSH means C3 requires cache flush */
+    RequireFlush = ((HalpFixedAcpiDescTable.flags & ACPI_FADT_WBINVD) == 0) ||
+                   ((HalpFixedAcpiDescTable.flags & ACPI_FADT_WBINVD_FLUSH) != 0);
+
+    if (HalpFixedAcpiDescTable.lvl2_latency &&
+        HalpFixedAcpiDescTable.lvl2_latency != 0xFFFF)
+    {
+        if (Count < HAL_ACPI_MAX_C_STATES &&
+            HalpBuildLegacyCStateRegister(ControlBlock, 4, &Info->States[Count].Register))
+        {
+            Info->States[Count].Type = 2;
+            Info->States[Count].Latency = HalpFixedAcpiDescTable.lvl2_latency;
+            Info->States[Count].RequiresCacheFlush = FALSE;
+            ++Count;
+        }
+    }
+
+    if (HalpFixedAcpiDescTable.lvl3_latency &&
+        HalpFixedAcpiDescTable.lvl3_latency != 0xFFFF)
+    {
+        if (Count < HAL_ACPI_MAX_C_STATES &&
+            HalpBuildLegacyCStateRegister(ControlBlock, 5, &Info->States[Count].Register))
+        {
+            Info->States[Count].Type = 3;
+            Info->States[Count].Latency = HalpFixedAcpiDescTable.lvl3_latency;
+            Info->States[Count].RequiresCacheFlush = RequireFlush;
+            ++Count;
+        }
+    }
+
+    Info->Count = Count;
+    return (Count != 0) ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+}
+
+BOOLEAN
+NTAPI
+HalIsAcpiBusMasterActive(VOID)
+{
+    ULONG Value;
+
+    for (ULONG Index = 0; Index < RTL_NUMBER_OF(HalpPm1EventBlocks); ++Index)
+    {
+        if (!HalpPm1EventBlockValid[Index])
+            continue;
+
+        if (!HalpAcpiReadRegister(&HalpPm1EventBlocks[Index], &Value))
+            continue;
+
+        if (Value & ACPI_PM1_STATUS_BUS_MASTER)
+            return TRUE;
+    }
+
+    return FALSE;
 }
 
 BOOLEAN
@@ -3314,7 +3428,6 @@ HalpQueryAcpiRootPointer(
     return (HalpAcpiRsdpAddress.QuadPart != 0);
 }
 
-/* EOF */
 /* Phase 1 init: allocate per-segment ECAM disable map and read registry gate */
 CODE_SEG("INIT")
 VOID

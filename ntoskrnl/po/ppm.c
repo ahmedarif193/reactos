@@ -91,7 +91,7 @@ PoRegisterProcessorIdleHandler(
         return STATUS_DEVICE_BUSY;
     }
 
-    ExReInitializeRundownProtection(&PopIdleHandlerRundown[ProcessorNumber].Ref);
+    ExfReInitializeRundownProtection(&PopIdleHandlerRundown[ProcessorNumber].Ref);
     Prcb->PowerState.IdleHandlers = Entries;
     Prcb->PowerState.IdleHandlersCount = HandlerCount;
     KeReleaseSpinLock(&PopIdleHandlerLock, OldIrql);
