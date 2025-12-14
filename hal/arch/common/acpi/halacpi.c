@@ -10,14 +10,18 @@
 
 #include <hal.h>
 #include <halacpi.h>
+#include <halpcie.h>
 #include <ntifs.h>
 #include <reactos/hal/acpi_cstate.h>
 #include <stdarg.h>
 #define NDEBUG
 #include <debug.h>
 extern VOID NTAPI IopReserveIrqVectors(_In_reads_(Count) PULONG Vectors, _In_ ULONG Count);
+/* Legacy PCI config uses the global lock from the legacy PCI bus support */
+extern KSPIN_LOCK HalpPCIConfigLock;
 
 extern VOID HalpPciLogEcamCoverage(VOID);
+extern BOOLEAN NTAPI HalpIsApicInterruptController(VOID);
 
 NTSYSAPI NTSTATUS NTAPI NtShutdownSystem(_In_ SHUTDOWN_ACTION Action);
 
@@ -70,12 +74,9 @@ BOOLEAN HalpAcpiEcamDisabled = FALSE;
 /* Per-segment legacy override when firmware ECAM decode is broken */
 USHORT HalpAcpiEcamForceLegacySegment = 0xFFFF;
 BOOLEAN HalpAcpiEcamForceLegacyLogged = FALSE;
-BOOLEAN HalpAcpiEcamVendorProbeLogged = FALSE;
-volatile LONG *HalpAcpiEcamBadBusBitmap;
-ULONG HalpAcpiEcamBadBusBitmapBits;
 
-#define HALP_ACPI_INVALID_MCFG_INDEX 0xFFFFFFFFu
-#define HALP_ACPI_ECAM_BUS_BITMAP_STRIDE 256UL
+static PVOID *HalpAcpiMcfgEcamMappings;
+static ULONG HalpAcpiMcfgEcamMappingCount;
 
 static
 LONG
@@ -92,93 +93,6 @@ HalpAcpiRecordEcamEvent(
     }
 
     return PreviousFlags;
-}
-
-static
-ULONG
-HalpAcpiGetMcfgAllocationIndex(
-    _In_opt_ PHALP_ACPI_MCFG_ALLOCATION Allocation)
-{
-    if (!HalpAcpiMcfgAllocations || !Allocation)
-    {
-        return HALP_ACPI_INVALID_MCFG_INDEX;
-    }
-
-    if ((Allocation < HalpAcpiMcfgAllocations) ||
-        (Allocation >= (HalpAcpiMcfgAllocations + HalpAcpiMcfgAllocationCount)))
-    {
-        return HALP_ACPI_INVALID_MCFG_INDEX;
-    }
-
-    return (ULONG)(Allocation - HalpAcpiMcfgAllocations);
-}
-
-static
-BOOLEAN
-HalpAcpiIsEcamBusDisabled(
-    _In_ ULONG AllocationIndex,
-    _In_ ULONG BusNumber)
-{
-    ULONG BitIndex;
-
-    if (!HalpAcpiEcamBadBusBitmap)
-    {
-        return FALSE;
-    }
-
-    if ((AllocationIndex == HALP_ACPI_INVALID_MCFG_INDEX) ||
-        (BusNumber > 0xFF))
-    {
-        return FALSE;
-    }
-
-    BitIndex = AllocationIndex * HALP_ACPI_ECAM_BUS_BITMAP_STRIDE + BusNumber;
-
-    if (BitIndex >= HalpAcpiEcamBadBusBitmapBits)
-    {
-        return FALSE;
-    }
-
-    return ((HalpAcpiEcamBadBusBitmap[BitIndex >> 5] &
-             (1u << (BitIndex & 31))) != 0);
-}
-
-static
-BOOLEAN
-HalpAcpiDisableEcamBus(
-    _In_ ULONG AllocationIndex,
-    _In_ ULONG BusNumber)
-{
-    ULONG BitIndex;
-    ULONG WordIndex;
-    ULONG Mask;
-    volatile LONG *WordPtr;
-    LONG Previous;
-
-    if (!HalpAcpiEcamBadBusBitmap)
-    {
-        return FALSE;
-    }
-
-    if ((AllocationIndex == HALP_ACPI_INVALID_MCFG_INDEX) ||
-        (BusNumber > 0xFF))
-    {
-        return FALSE;
-    }
-
-    BitIndex = AllocationIndex * HALP_ACPI_ECAM_BUS_BITMAP_STRIDE + BusNumber;
-
-    if (BitIndex >= HalpAcpiEcamBadBusBitmapBits)
-    {
-        return FALSE;
-    }
-
-    WordIndex = BitIndex >> 5;
-    Mask = 1u << (BitIndex & 31);
-    WordPtr = &HalpAcpiEcamBadBusBitmap[WordIndex];
-
-    Previous = InterlockedOr(WordPtr, Mask);
-    return ((Previous & Mask) == 0);
 }
 
 static
@@ -204,6 +118,260 @@ HalpPciVendorIdLooksSane(
     {
         return FALSE;
     }
+
+    return TRUE;
+}
+
+#define HALP_ACPI_ECAM_STATE_UNKNOWN   0
+#define HALP_ACPI_ECAM_STATE_WORKING   1
+#define HALP_ACPI_ECAM_STATE_DISABLED  2
+
+static __inline ULONG
+HalpPciReadConfigDwordLegacy(
+    _In_ UCHAR BusNumber,
+    _In_ UCHAR DeviceNumber,
+    _In_ UCHAR FunctionNumber,
+    _In_ UCHAR RegisterOffset)
+{
+    ULONG Address;
+    ULONG Value;
+    UCHAR ConfigControl;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&HalpPCIConfigLock, &OldIrql);
+    ConfigControl = READ_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB);
+    if (!(ConfigControl & 0x01))
+    {
+        WRITE_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB, ConfigControl | 0x01);
+    }
+
+    Address = 0x80000000;
+    Address |= ((ULONG)BusNumber << 16);
+    Address |= ((ULONG)DeviceNumber << 11);
+    Address |= ((ULONG)FunctionNumber << 8);
+    Address |= (RegisterOffset & 0xFC);
+
+    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address);
+    Value = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC);
+    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, 0);
+
+    KeReleaseSpinLock(&HalpPCIConfigLock, OldIrql);
+    return Value;
+}
+
+static __inline ULONGLONG
+HalpAcpiEcamOffsetInAllocation(
+    _In_ const HALP_ACPI_MCFG_ALLOCATION *Allocation,
+    _In_ UCHAR BusNumber,
+    _In_ UCHAR DeviceNumber,
+    _In_ UCHAR FunctionNumber,
+    _In_ ULONG RegisterOffset)
+{
+    ULONGLONG Offset;
+
+    Offset = ((ULONGLONG)(BusNumber - Allocation->StartBusNumber) << 20);
+    Offset += ((ULONGLONG)DeviceNumber << 15);
+    Offset += ((ULONGLONG)FunctionNumber << 12);
+    Offset += RegisterOffset;
+
+    return Offset;
+}
+
+static ULONG
+HalpAcpiReadEcamUlong(
+    _In_ ULONG AllocationIndex,
+    _In_ const HALP_ACPI_MCFG_ALLOCATION *Allocation,
+    _In_ UCHAR BusNumber,
+    _In_ UCHAR DeviceNumber,
+    _In_ UCHAR FunctionNumber,
+    _In_ ULONG RegisterOffset)
+{
+    ULONGLONG Offset;
+    PVOID MappingBase;
+    PHYSICAL_ADDRESS Physical;
+    PHYSICAL_ADDRESS PageBase;
+    ULONG PageOffset;
+    PVOID Mapping;
+    ULONG Value;
+
+    Offset = HalpAcpiEcamOffsetInAllocation(Allocation,
+                                           BusNumber,
+                                           DeviceNumber,
+                                           FunctionNumber,
+                                           RegisterOffset);
+
+    MappingBase = NULL;
+    if (HalpAcpiMcfgEcamMappings && AllocationIndex < HalpAcpiMcfgEcamMappingCount)
+    {
+        MappingBase = HalpAcpiMcfgEcamMappings[AllocationIndex];
+    }
+
+    if (MappingBase)
+    {
+        return READ_REGISTER_ULONG((PULONG)((PUCHAR)MappingBase + Offset));
+    }
+
+    Physical.QuadPart = Allocation->BaseAddress + Offset;
+    PageBase.QuadPart = Physical.QuadPart & ~((ULONGLONG)PAGE_SIZE - 1);
+    PageOffset = (ULONG)(Physical.QuadPart - PageBase.QuadPart);
+
+    Mapping = MmMapIoSpace(PageBase, PAGE_SIZE, MmNonCached);
+    if (!Mapping)
+    {
+        return 0xFFFFFFFF;
+    }
+
+    Value = READ_REGISTER_ULONG((PULONG)((PUCHAR)Mapping + PageOffset));
+    MmUnmapIoSpace(Mapping, PAGE_SIZE);
+
+    return Value;
+}
+
+static PVOID
+HalpAcpiEnsureEcamMapping(
+    _In_ ULONG AllocationIndex,
+    _In_ const HALP_ACPI_MCFG_ALLOCATION *Allocation)
+{
+    PVOID Existing;
+    PVOID NewMapping;
+    PHYSICAL_ADDRESS Base;
+    ULONGLONG BusCount;
+    ULONGLONG WindowLength;
+    SIZE_T Length;
+
+    if (!HalpAcpiMcfgEcamMappings || AllocationIndex >= HalpAcpiMcfgEcamMappingCount)
+    {
+        return NULL;
+    }
+
+    Existing = HalpAcpiMcfgEcamMappings[AllocationIndex];
+    if (Existing)
+    {
+        return Existing;
+    }
+
+    BusCount = (ULONGLONG)(Allocation->EndBusNumber - Allocation->StartBusNumber + 1);
+    WindowLength = BusCount << 20;
+    if (!BusCount || !WindowLength)
+    {
+        return NULL;
+    }
+
+    if (WindowLength > (ULONGLONG)(SIZE_T)-1)
+    {
+        return NULL;
+    }
+
+    Length = (SIZE_T)WindowLength;
+    if ((sizeof(PVOID) == sizeof(ULONG)) && (Length > 0x4000000))
+    {
+        DPRINT1("HAL: ECAM window %#llx too large (%zu bytes) on 32-bit; falling back to legacy\n",
+                Allocation->BaseAddress,
+                Length);
+        return NULL;
+    }
+
+    Base.QuadPart = Allocation->BaseAddress;
+
+    NewMapping = MmMapIoSpace(Base, Length, MmNonCached);
+    if (!NewMapping)
+    {
+        return NULL;
+    }
+
+    if (InterlockedCompareExchangePointer((PVOID *)&HalpAcpiMcfgEcamMappings[AllocationIndex],
+                                          NewMapping,
+                                          NULL) != NULL)
+    {
+        MmUnmapIoSpace(NewMapping, Length);
+        return HalpAcpiMcfgEcamMappings[AllocationIndex];
+    }
+
+    return NewMapping;
+}
+
+static BOOLEAN
+HalpAcpiValidateEcamAllocation(
+    _In_ ULONG AllocationIndex,
+    _In_ const HALP_ACPI_MCFG_ALLOCATION *Allocation)
+{
+    UCHAR BusNumber = Allocation->StartBusNumber;
+    BOOLEAN FoundLegacy;
+    ULONG LegacyId;
+    ULONG EcamId;
+    UCHAR Dev;
+    ULONG Matches = 0;
+    ULONG Mismatches = 0;
+    const UCHAR MaxProbeBuses = 4;
+    const UCHAR MaxProbeDevices = 4;
+
+    if (Allocation->PciSegment != 0)
+    {
+        for (Dev = 0; Dev < PCI_MAX_DEVICES; Dev++)
+        {
+            EcamId = HalpAcpiReadEcamUlong(AllocationIndex, Allocation, BusNumber, Dev, 0, 0);
+            if (EcamId == 0xFFFFFFFF)
+            {
+                continue;
+            }
+
+            if (HalpPciVendorIdLooksSane(EcamId, 0))
+            {
+                return TRUE;
+            }
+
+            return FALSE;
+        }
+
+        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES,
+                                "HAL: ECAM segment had only 0xFFFFFFFF; disabling ECAM for segment");
+        return FALSE;
+    }
+
+    FoundLegacy = FALSE;
+
+    for (BusNumber = Allocation->StartBusNumber;
+         BusNumber <= Allocation->EndBusNumber && (BusNumber - Allocation->StartBusNumber) < MaxProbeBuses;
+         ++BusNumber)
+    {
+        for (Dev = 0; Dev < PCI_MAX_DEVICES && Dev < MaxProbeDevices; Dev++)
+        {
+            LegacyId = HalpPciReadConfigDwordLegacy(BusNumber, Dev, 0, 0);
+            if (!HalpPciVendorIdLooksSane(LegacyId, 0))
+            {
+                continue;
+            }
+
+            FoundLegacy = TRUE;
+            EcamId = HalpAcpiReadEcamUlong(AllocationIndex, Allocation, BusNumber, Dev, 0, 0);
+            if (EcamId == LegacyId)
+            {
+                ++Matches;
+                continue;
+            }
+
+            if (EcamId != 0xFFFFFFFF)
+            {
+                ++Mismatches;
+                if (Mismatches >= 2)
+                {
+                    DPRINT1("HAL: ECAM disable seg %u bus %u dev %u legacy %08lx ecam %08lx\n",
+                            Allocation->PciSegment,
+                            BusNumber,
+                            Dev,
+                            LegacyId,
+                            EcamId);
+                    return FALSE;
+                }
+            }
+        }
+    }
+
+    if (Matches)
+        return TRUE;
+
+    if (FoundLegacy && Mismatches)
+        return FALSE;
 
     return TRUE;
 }
@@ -412,9 +580,16 @@ HalpAcpiForceVirtualBoxPciExpress(
 }
 
 #define HALP_ACPI_OVERRIDE_ALIGNMENT   8
+#define ACPI_PM1_STATUS_BUS_MASTER     0x0010
 #define ACPI_PM1_STATUS_POWER_BUTTON   0x0100
 #ifndef ACPI_FADT_POWER_BUTTON
 #define ACPI_FADT_POWER_BUTTON         (1 << 4)
+#endif
+#ifndef ACPI_FADT_WBINVD
+#define ACPI_FADT_WBINVD               (1 << 0)
+#endif
+#ifndef ACPI_FADT_WBINVD_FLUSH
+#define ACPI_FADT_WBINVD_FLUSH         (1 << 1)
 #endif
 
 ULONG HalpPicVectorRedirect[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
@@ -509,6 +684,13 @@ BOOLEAN
 HalpAcpiWriteRegister(
     _In_ const GEN_ADDR *Gas,
     _In_ ULONG Value);
+
+static
+BOOLEAN
+HalpBuildLegacyCStateRegister(
+    _In_ const GEN_ADDR *ControlBlock,
+    _In_ UCHAR ByteOffset,
+    _Out_ PHAL_ACPI_C_STATE_REGISTER Target);
 
 static
 ULONG
@@ -1145,6 +1327,109 @@ HalpAcpiWriteRegister(
         default:
             return FALSE;
     }
+}
+
+static
+BOOLEAN
+HalpBuildLegacyCStateRegister(
+    _In_ const GEN_ADDR *ControlBlock,
+    _In_ UCHAR ByteOffset,
+    _Out_ PHAL_ACPI_C_STATE_REGISTER Target)
+{
+    if (!ControlBlock || !Target)
+        return FALSE;
+
+    if (!HalpAcpiGasValid(ControlBlock))
+        return FALSE;
+
+    Target->AddressSpaceId = ControlBlock->AddressSpaceID;
+    Target->BitWidth = 8;
+    Target->BitOffset = 0;
+    Target->AccessSize = 1;
+    Target->Address = ControlBlock->Address.QuadPart + ByteOffset;
+    return TRUE;
+}
+
+NTSTATUS
+NTAPI
+HalGetAcpiCStateInformation(
+    _Out_ PHAL_ACPI_C_STATE_INFO Info)
+{
+    const GEN_ADDR *ControlBlock;
+    ULONG Count = 0;
+    BOOLEAN RequireFlush;
+
+    if (!Info)
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(Info, sizeof(*Info));
+
+    ControlBlock = NULL;
+    if (HalpPm1ControlBlockValid[0])
+    {
+        ControlBlock = &HalpPm1ControlBlocks[0];
+    }
+    else if (HalpPm1ControlBlockValid[1])
+    {
+        ControlBlock = &HalpPm1ControlBlocks[1];
+    }
+
+    if (!ControlBlock)
+        return STATUS_NOT_SUPPORTED;
+
+    /* ACPI spec: lack of WBINVD or presence of WBINVD_FLUSH means C3 requires cache flush */
+    RequireFlush = ((HalpFixedAcpiDescTable.flags & ACPI_FADT_WBINVD) == 0) ||
+                   ((HalpFixedAcpiDescTable.flags & ACPI_FADT_WBINVD_FLUSH) != 0);
+
+    if (HalpFixedAcpiDescTable.lvl2_latency &&
+        HalpFixedAcpiDescTable.lvl2_latency != 0xFFFF)
+    {
+        if (Count < HAL_ACPI_MAX_C_STATES &&
+            HalpBuildLegacyCStateRegister(ControlBlock, 4, &Info->States[Count].Register))
+        {
+            Info->States[Count].Type = 2;
+            Info->States[Count].Latency = HalpFixedAcpiDescTable.lvl2_latency;
+            Info->States[Count].RequiresCacheFlush = FALSE;
+            ++Count;
+        }
+    }
+
+    if (HalpFixedAcpiDescTable.lvl3_latency &&
+        HalpFixedAcpiDescTable.lvl3_latency != 0xFFFF)
+    {
+        if (Count < HAL_ACPI_MAX_C_STATES &&
+            HalpBuildLegacyCStateRegister(ControlBlock, 5, &Info->States[Count].Register))
+        {
+            Info->States[Count].Type = 3;
+            Info->States[Count].Latency = HalpFixedAcpiDescTable.lvl3_latency;
+            Info->States[Count].RequiresCacheFlush = RequireFlush;
+            ++Count;
+        }
+    }
+
+    Info->Count = Count;
+    return (Count != 0) ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+}
+
+BOOLEAN
+NTAPI
+HalIsAcpiBusMasterActive(VOID)
+{
+    ULONG Value;
+
+    for (ULONG Index = 0; Index < RTL_NUMBER_OF(HalpPm1EventBlocks); ++Index)
+    {
+        if (!HalpPm1EventBlockValid[Index])
+            continue;
+
+        if (!HalpAcpiReadRegister(&HalpPm1EventBlocks[Index], &Value))
+            continue;
+
+        if (Value & ACPI_PM1_STATUS_BUS_MASTER)
+            return TRUE;
+    }
+
+    return FALSE;
 }
 
 PVOID
@@ -2298,6 +2583,19 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
+
+    /*
+     * Identify the ACPI HAL flavor more accurately when APIC support is linked in.
+     * This is user-visible via HalReportResourceUsage().
+     */
+    if (HalpIsApicInterruptController())
+    {
+#ifdef _M_AMD64
+        HalName = L"ACPI x64-based PC";
+#else
+        HalName = L"ACPI x86-based PC";
+#endif
+    }
     /* Return success */
     return STATUS_SUCCESS;
 }
@@ -2333,29 +2631,35 @@ HalpAppendFormatA(
 /* Helper function to show PCI BAR size */
 CODE_SEG("INIT")
 static VOID
-ShowSize(ULONG Size, PCHAR Buffer, SIZE_T BufferSize)
+ShowSize(ULONGLONG Size, PCHAR Buffer, SIZE_T BufferSize)
 {
     if (!Size) return;
 
     HalpAppendFormatA(Buffer, BufferSize, " [size=");
     if (Size < 1024)
     {
-        HalpAppendFormatA(Buffer, BufferSize, "%d", (int)Size);
+        HalpAppendFormatA(Buffer, BufferSize, "%I64u", Size);
     }
     else if (Size < 1048576)
     {
-        HalpAppendFormatA(Buffer, BufferSize, "%dK", (int)(Size / 1024));
+        HalpAppendFormatA(Buffer, BufferSize, "%I64uK", (Size / 1024));
     }
-    else if (Size < 0x80000000)
+    else if (Size < 0x80000000ULL)
     {
-        HalpAppendFormatA(Buffer, BufferSize, "%dM", (int)(Size / 1048576));
+        HalpAppendFormatA(Buffer, BufferSize, "%I64uM", (Size / 1048576));
     }
     else
     {
-        HalpAppendFormatA(Buffer, BufferSize, "%d", Size);
+        HalpAppendFormatA(Buffer, BufferSize, "%I64u", Size);
     }
     HalpAppendFormatA(Buffer, BufferSize, "]");
 }
+
+static PHALP_ACPI_MCFG_ALLOCATION
+HalpAcpiFindMcfgAllocation(
+    _In_ USHORT Segment,
+    _In_ UCHAR BusNumber
+    );
 
 BOOLEAN
 NTAPI
@@ -2369,34 +2673,22 @@ HalpAcpiAccessConfigEcam(
     _In_ ULONG Length)
 {
     PHALP_ACPI_MCFG_ALLOCATION Allocation;
-    ULONGLONG FunctionBase;
-    PHYSICAL_ADDRESS PhysicalAddress;
-    ULONG BytesLeft;
-    ULONG CurrentOffset;
-    PUCHAR BufferPtr;
-    BOOLEAN ForceLegacy;
     ULONG AllocationIndex;
-    USHORT EffectiveSegment;
+    UCHAR State;
+    ULONGLONG BusCount;
+    ULONGLONG WindowLength;
+    ULONGLONG AccessOffset;
+    PVOID MappingBase;
+    PHYSICAL_ADDRESS PhysicalAddress;
+    PHYSICAL_ADDRESS PageBase;
+    ULONG PageOffset;
+    PVOID Mapping;
 
     if (HalpAcpiEcamDisabled)
     {
         HalpAcpiRecordEcamEvent(
             HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL,
             "HAL: PCI Express MMCONFIG access requested after ECAM was globally disabled; using legacy configuration space.");
-        return FALSE;
-    }
-
-    if (HalpAcpiEcamForceLegacySegment != 0xFFFF &&
-        Segment != HALP_ACPI_SEGMENT_ANY &&
-        Segment == HalpAcpiEcamForceLegacySegment)
-    {
-        if (!HalpAcpiEcamForceLegacyLogged)
-        {
-            CHAR msg[128];
-            _snprintf(msg, sizeof(msg), "HAL: ECAM disabled for segment %u due to firmware decode failure; using legacy configuration space.", Segment);
-            HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
-            HalpAcpiEcamForceLegacyLogged = TRUE;
-        }
         return FALSE;
     }
 
@@ -2443,7 +2735,7 @@ HalpAcpiAccessConfigEcam(
         HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_SEGMENT_ANY, NULL);
     }
 
-    Allocation = HalpAcpiGetMcfgAllocation(Segment, (UCHAR)BusNumber);
+    Allocation = HalpAcpiFindMcfgAllocation(Segment, (UCHAR)BusNumber);
     if (!Allocation)
     {
         HalpAcpiRecordEcamEvent(
@@ -2451,147 +2743,155 @@ HalpAcpiAccessConfigEcam(
             "HAL: PCI Express MMCONFIG has no allocation that covers the requested bus; using legacy configuration space.");
         return FALSE;
     }
-    AllocationIndex = HalpAcpiGetMcfgAllocationIndex(Allocation);
-    EffectiveSegment = Allocation->PciSegment;
 
-    /* If this allocation/segment has been disabled due to invalid ECAM, fallback */
-    if (HalpAcpiMcfgSegDisabled &&
-        AllocationIndex < HalpAcpiMcfgSegDisabledCount &&
-        HalpAcpiMcfgSegDisabled[AllocationIndex])
+    if (HalpAcpiEcamForceLegacySegment != 0xFFFF &&
+        Allocation->PciSegment == HalpAcpiEcamForceLegacySegment)
     {
-        CHAR msg[128];
-        _snprintf(msg,
-                  sizeof(msg),
-                  "HAL: ECAM disabled for segment %u; using legacy configuration space.",
-                  EffectiveSegment);
-        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
-        return FALSE;
-    }
-
-    if (HalpAcpiIsEcamBusDisabled(AllocationIndex, BusNumber))
-    {
-        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, NULL);
-        return FALSE;
-    }
-
-    FunctionBase = Allocation->BaseAddress;
-    FunctionBase += ((ULONGLONG)(BusNumber - Allocation->StartBusNumber) << 20);
-    FunctionBase += ((ULONGLONG)Slot.u.bits.DeviceNumber << 15);
-    FunctionBase += ((ULONGLONG)Slot.u.bits.FunctionNumber << 12);
-
-    BufferPtr = Buffer;
-    CurrentOffset = Offset;
-    BytesLeft = Length;
-    ForceLegacy = FALSE;
-
-    while (BytesLeft)
-    {
-        ULONG Chunk;
-        ULONG PageOffset;
-        PVOID Mapping;
-        PHYSICAL_ADDRESS PageBase;
-        BOOLEAN ReadVendorProbe = FALSE;
-
-        PhysicalAddress.QuadPart = FunctionBase + CurrentOffset;
-        PageBase.QuadPart = PhysicalAddress.QuadPart & ~((ULONGLONG)PAGE_SIZE - 1);
-        PageOffset = (ULONG)(PhysicalAddress.QuadPart - PageBase.QuadPart);
-        Chunk = min(BytesLeft, PAGE_SIZE - PageOffset);
-
-        Mapping = MmMapIoSpace(PageBase, PAGE_SIZE, MmNonCached);
-        if (!Mapping)
+        if (!HalpAcpiEcamForceLegacyLogged)
         {
-            HalpAcpiRecordEcamEvent(
-                HALP_ACPI_ECAM_COVERAGE_MAP_FAILURE,
-                "HAL: Failed to map a PCI Express MMCONFIG page; using legacy configuration space instead.");
+            CHAR msg[128];
+            _snprintf(msg,
+                      sizeof(msg),
+                      "HAL: ECAM disabled for segment %u due to firmware decode failure; using legacy configuration space.",
+                      Allocation->PciSegment);
+            HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
+            HalpAcpiEcamForceLegacyLogged = TRUE;
+        }
+        return FALSE;
+    }
+
+    AllocationIndex = (ULONG)(Allocation - HalpAcpiMcfgAllocations);
+    if (HalpAcpiMcfgSegDisabled && AllocationIndex < HalpAcpiMcfgSegDisabledCount)
+    {
+        State = HalpAcpiMcfgSegDisabled[AllocationIndex];
+        if (State == HALP_ACPI_ECAM_STATE_UNKNOWN)
+        {
+            if (!HalpAcpiValidateEcamAllocation(AllocationIndex, Allocation))
+            {
+                HalpAcpiMcfgSegDisabled[AllocationIndex] = HALP_ACPI_ECAM_STATE_DISABLED;
+                HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES,
+                                        "HAL: PCI Express MMCONFIG decode mismatch; using legacy configuration space.");
+                return FALSE;
+            }
+
+            HalpAcpiMcfgSegDisabled[AllocationIndex] = HALP_ACPI_ECAM_STATE_WORKING;
+        }
+        else if (State == HALP_ACPI_ECAM_STATE_DISABLED)
+        {
+            CHAR msg[128];
+            _snprintf(msg,
+                      sizeof(msg),
+                      "HAL: ECAM disabled for segment %u; using legacy configuration space.",
+                      Allocation->PciSegment);
+            HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
             return FALSE;
         }
+    }
 
+    BusCount = (ULONGLONG)(Allocation->EndBusNumber - Allocation->StartBusNumber + 1);
+    WindowLength = BusCount << 20;
+    if (!BusCount || !WindowLength)
+    {
+        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_ZERO_LENGTH, NULL);
+        return FALSE;
+    }
+
+    AccessOffset = HalpAcpiEcamOffsetInAllocation(Allocation,
+                                                  (UCHAR)BusNumber,
+                                                  Slot.u.bits.DeviceNumber,
+                                                  Slot.u.bits.FunctionNumber,
+                                                  Offset);
+
+    if ((AccessOffset + Length) > WindowLength)
+    {
+        HalpAcpiRecordEcamEvent(
+            HALP_ACPI_ECAM_COVERAGE_RANGE_OVERRUN,
+            "HAL: PCI Express MMCONFIG request exceeded the allocation window; using legacy configuration space.");
+        return FALSE;
+    }
+
+    MappingBase = NULL;
+    if (HalpAcpiMcfgEcamMappings && AllocationIndex < HalpAcpiMcfgEcamMappingCount)
+    {
+        MappingBase = HalpAcpiMcfgEcamMappings[AllocationIndex];
+        if (!MappingBase)
+        {
+            MappingBase = HalpAcpiEnsureEcamMapping(AllocationIndex, Allocation);
+        }
+    }
+
+    if (MappingBase)
+    {
         if (Write)
         {
-            RtlCopyMemory((PUCHAR)Mapping + PageOffset, BufferPtr, Chunk);
+            RtlCopyMemory((PUCHAR)MappingBase + AccessOffset, Buffer, Length);
         }
         else
         {
-            PUCHAR ChunkPtr = BufferPtr;
-            RtlCopyMemory(ChunkPtr, (PUCHAR)Mapping + PageOffset, Chunk);
+            RtlCopyMemory(Buffer, (PUCHAR)MappingBase + AccessOffset, Length);
 
-            /* Detect ECAM decode failures: vendor all 0/0xFFFF. */
-            if (!ForceLegacy &&
+            if (Allocation->PciSegment == 0 &&
                 Offset == 0 &&
-                PageOffset == 0 &&
-                Chunk >= sizeof(ULONG))
+                Length >= sizeof(USHORT) &&
+                (UCHAR)BusNumber == Allocation->StartBusNumber &&
+                Slot.u.AsULONG == 0)
             {
-                ReadVendorProbe = TRUE;
-            }
-
-            if (!ForceLegacy &&
-                BusNumber == 0 &&
-                Slot.u.AsULONG == 0 &&
-                Offset == 0 &&
-                PageOffset == 0 &&
-                Chunk >= sizeof(ULONG))
-            {
-                ULONG Value;
-
-                Value = *(UNALIGNED PULONG)BufferPtr;
-                /* On some VirtualBox Q35 firmware, bus 0/slot 0 returns
-                 * 0xFFFF even when MMCONFIG decode works for other devices.
-                 * Do not force legacy solely on this probe; defer to per‑bus
-                 * vendor checks in HalpPhase0GetPciDataByOffset. */
-                if ((Value & 0xFFFF) == 0xFFFF)
+                USHORT Vendor = *(UNALIGNED PUSHORT)Buffer;
+                if (Vendor == 0xFFFF || Vendor == 0x0000)
                 {
-                    ForceLegacy = TRUE;
+                    return FALSE;
                 }
             }
         }
 
-        MmUnmapIoSpace(Mapping, PAGE_SIZE);
-
-        if (ReadVendorProbe)
-        {
-            USHORT Vendor = *(UNALIGNED PUSHORT)BufferPtr;
-            if (Vendor == 0xFFFF || Vendor == 0x0000)
-            {
-                (void)HalpAcpiDisableEcamBus(AllocationIndex, BusNumber);
-                if (!HalpAcpiEcamVendorProbeLogged)
-                {
-                    CHAR msg[128];
-                    _snprintf(msg,
-                              sizeof(msg),
-                              "HAL: ECAM vendor read invalid on segment %u bus %lu dev %lu fn %lu; retrying via legacy config.",
-                              EffectiveSegment,
-                              BusNumber,
-                              (ULONG)Slot.u.bits.DeviceNumber,
-                              (ULONG)Slot.u.bits.FunctionNumber);
-                    HalpAcpiRecordEcamEvent(
-                        HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES,
-                        msg);
-                    HalpAcpiEcamVendorProbeLogged = TRUE;
-                }
-                ForceLegacy = TRUE;
-                break;
-            }
-        }
-
-        BufferPtr += Chunk;
-        CurrentOffset += Chunk;
-        BytesLeft -= Chunk;
+        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_USED, NULL);
+        return TRUE;
     }
 
-    if (ForceLegacy)
+    PhysicalAddress.QuadPart = Allocation->BaseAddress + AccessOffset;
+    PageBase.QuadPart = PhysicalAddress.QuadPart & ~((ULONGLONG)PAGE_SIZE - 1);
+    PageOffset = (ULONG)(PhysicalAddress.QuadPart - PageBase.QuadPart);
+
+    Mapping = MmMapIoSpace(PageBase, PAGE_SIZE, MmNonCached);
+    if (!Mapping)
     {
-        /* Do not disable the entire segment; let callers retry legacy for this access */
-        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES, NULL);
+        HalpAcpiRecordEcamEvent(
+            HALP_ACPI_ECAM_COVERAGE_MAP_FAILURE,
+            "HAL: Failed to map a PCI Express MMCONFIG page; using legacy configuration space instead.");
         return FALSE;
+    }
+
+    if (Write)
+    {
+        RtlCopyMemory((PUCHAR)Mapping + PageOffset, Buffer, Length);
+    }
+    else
+    {
+        RtlCopyMemory(Buffer, (PUCHAR)Mapping + PageOffset, Length);
+    }
+
+    MmUnmapIoSpace(Mapping, PAGE_SIZE);
+
+    if (!Write &&
+        Allocation->PciSegment == 0 &&
+        Offset == 0 &&
+        Length >= sizeof(USHORT) &&
+        (UCHAR)BusNumber == Allocation->StartBusNumber &&
+        Slot.u.AsULONG == 0)
+    {
+        USHORT Vendor = *(UNALIGNED PUSHORT)Buffer;
+        if (Vendor == 0xFFFF || Vendor == 0x0000)
+        {
+            return FALSE;
+        }
     }
 
     HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_USED, NULL);
     return TRUE;
 }
 
-PHALP_ACPI_MCFG_ALLOCATION
-NTAPI
-HalpAcpiGetMcfgAllocation(
+static PHALP_ACPI_MCFG_ALLOCATION
+HalpAcpiFindMcfgAllocation(
     _In_ USHORT Segment,
     _In_ UCHAR BusNumber)
 {
@@ -2623,6 +2923,37 @@ HalpAcpiGetMcfgAllocation(
     }
 
     return NULL;
+}
+
+PHALP_ACPI_MCFG_ALLOCATION
+NTAPI
+HalpAcpiGetMcfgAllocation(
+    _In_ USHORT Segment,
+    _In_ UCHAR BusNumber)
+{
+    PHALP_ACPI_MCFG_ALLOCATION Allocation;
+    ULONG AllocationIndex;
+
+    Allocation = HalpAcpiFindMcfgAllocation(Segment, BusNumber);
+    if (!Allocation)
+    {
+        return NULL;
+    }
+
+    AllocationIndex = (ULONG)(Allocation - HalpAcpiMcfgAllocations);
+    if (HalpAcpiMcfgSegDisabled && AllocationIndex < HalpAcpiMcfgSegDisabledCount &&
+        HalpAcpiMcfgSegDisabled[AllocationIndex] == HALP_ACPI_ECAM_STATE_DISABLED)
+    {
+        return NULL;
+    }
+
+    if (HalpAcpiEcamForceLegacySegment != 0xFFFF &&
+        Allocation->PciSegment == HalpAcpiEcamForceLegacySegment)
+    {
+        return NULL;
+    }
+
+    return Allocation;
 }
 
 BOOLEAN
@@ -2671,6 +3002,302 @@ HalpAcpiGetEcamAddress(
 #include "pci_classes.h"
 #include "pci_vendors.h"
 
+CODE_SEG("INIT")
+static
+VOID
+NTAPI
+HalpDebugPciDumpCapabilitiesAcpi(
+    _In_ ULONG BusNumber,
+    _In_ PCI_SLOT_NUMBER PciSlot,
+    _In_ UCHAR HeaderType,
+    _In_ PPCI_COMMON_CONFIG PciData)
+{
+    PCI_CAPABILITIES_HEADER Header;
+    UCHAR CapabilityPointer;
+    ULONG GuardCount;
+    ULONG Visited[8];
+    BOOLEAN IsPcie;
+
+    IsPcie = FALSE;
+    RtlZeroMemory(Visited, sizeof(Visited));
+
+    if (!(PciData->Status & PCI_STATUS_CAPABILITIES_LIST))
+    {
+        return;
+    }
+
+    switch (HeaderType)
+    {
+        case PCI_DEVICE_TYPE:
+            CapabilityPointer = PciData->u.type0.CapabilitiesPtr;
+            break;
+
+        case PCI_BRIDGE_TYPE:
+            CapabilityPointer = PciData->u.type1.CapabilitiesPtr;
+            break;
+
+        case PCI_CARDBUS_BRIDGE_TYPE:
+            CapabilityPointer = PciData->u.type2.CapabilitiesPtr;
+            break;
+
+        default:
+            CapabilityPointer = 0;
+            break;
+    }
+
+    GuardCount = 0;
+    while (CapabilityPointer >= 0x40 &&
+           GuardCount++ < 48)
+    {
+        ULONG Index;
+        ULONG Mask;
+
+        CapabilityPointer &= (UCHAR)~0x3;
+
+        Index = CapabilityPointer / 4;
+        Mask = 1u << (Index & 31);
+        if (Visited[Index >> 5] & Mask)
+        {
+            break;
+        }
+        Visited[Index >> 5] |= Mask;
+
+        RtlZeroMemory(&Header, sizeof(Header));
+        HalpPhase0GetPciDataByOffset(BusNumber,
+                                     PciSlot,
+                                     &Header,
+                                     CapabilityPointer,
+                                     sizeof(Header));
+
+        if (Header.CapabilityID == 0 ||
+            Header.CapabilityID == 0xFF ||
+            Header.Next == CapabilityPointer)
+        {
+            break;
+        }
+
+        switch (Header.CapabilityID)
+        {
+            case PCI_CAPABILITY_ID_POWER_MANAGEMENT:
+            {
+                USHORT Pmc;
+
+                Pmc = 0;
+                HalpPhase0GetPciDataByOffset(BusNumber,
+                                             PciSlot,
+                                             &Pmc,
+                                             (ULONG)CapabilityPointer + 2,
+                                             sizeof(Pmc));
+                DbgPrint("\tCapabilities: [%02x] Power Management version %u\n",
+                         CapabilityPointer,
+                         (ULONG)(Pmc & 0x7));
+                break;
+            }
+
+            case PCI_CAPABILITY_ID_MSI:
+            {
+                USHORT Control;
+                UCHAR MultipleCapable;
+                UCHAR MultipleEnabled;
+
+                Control = 0;
+                HalpPhase0GetPciDataByOffset(BusNumber,
+                                             PciSlot,
+                                             &Control,
+                                             (ULONG)CapabilityPointer + 2,
+                                             sizeof(Control));
+
+                MultipleCapable = (UCHAR)((Control >> 1) & 0x7);
+                MultipleEnabled = (UCHAR)((Control >> 4) & 0x7);
+                if (MultipleEnabled > MultipleCapable)
+                {
+                    MultipleEnabled = MultipleCapable;
+                }
+
+                DbgPrint("\tCapabilities: [%02x] MSI: Enable%c Count=%lu/%lu Maskable%c 64bit%c\n",
+                         CapabilityPointer,
+                         (Control & 0x0001) ? '+' : '-',
+                         1ul << MultipleEnabled,
+                         1ul << MultipleCapable,
+                         (Control & 0x0100) ? '+' : '-',
+                         (Control & 0x0080) ? '+' : '-');
+                break;
+            }
+
+            case PCI_CAPABILITY_ID_PCI_EXPRESS:
+            {
+                USHORT PcieCap;
+                UCHAR DeviceType;
+                UCHAR MessageNumber;
+
+                IsPcie = TRUE;
+
+                PcieCap = 0;
+                HalpPhase0GetPciDataByOffset(BusNumber,
+                                             PciSlot,
+                                             &PcieCap,
+                                             (ULONG)CapabilityPointer + 2,
+                                             sizeof(PcieCap));
+
+                DeviceType = (UCHAR)((PcieCap >> 4) & 0xF);
+                MessageNumber = (UCHAR)((PcieCap >> 9) & 0x1F);
+
+                DbgPrint("\tCapabilities: [%02x] Express %s, MSI %02u\n",
+                         CapabilityPointer,
+                         HalpPciExpressDeviceTypeName(DeviceType),
+                         (ULONG)MessageNumber);
+                break;
+            }
+
+            case PCI_CAPABILITY_ID_MSIX:
+            {
+                USHORT Control;
+                ULONG TableSize;
+
+                Control = 0;
+                HalpPhase0GetPciDataByOffset(BusNumber,
+                                             PciSlot,
+                                             &Control,
+                                             (ULONG)CapabilityPointer + 2,
+                                             sizeof(Control));
+
+                TableSize = (ULONG)(Control & 0x07FF) + 1;
+
+                DbgPrint("\tCapabilities: [%02x] MSI-X: Enable%c Count=%lu Masked%c\n",
+                         CapabilityPointer,
+                         (Control & 0x8000) ? '+' : '-',
+                         TableSize,
+                         (Control & 0x4000) ? '+' : '-');
+                break;
+            }
+
+            default:
+                DbgPrint("\tCapabilities: [%02x] Capability ID %02x\n",
+                         CapabilityPointer,
+                         (ULONG)Header.CapabilityID);
+                break;
+        }
+
+        CapabilityPointer = Header.Next;
+    }
+
+    if (!IsPcie)
+    {
+        return;
+    }
+
+    {
+        USHORT Offset;
+        ULONG ExtVisited[32];
+
+        Offset = 0x100;
+        RtlZeroMemory(ExtVisited, sizeof(ExtVisited));
+        GuardCount = 0;
+
+        while (Offset >= 0x100 &&
+               Offset < 0x1000 &&
+               GuardCount++ < 64)
+        {
+            ULONG ExtHeader;
+            USHORT CapabilityId;
+            USHORT NextOffset;
+            ULONG Index;
+            ULONG Mask;
+
+            Index = Offset / 4;
+            Mask = 1u << (Index & 31);
+            if (ExtVisited[Index >> 5] & Mask)
+            {
+                break;
+            }
+            ExtVisited[Index >> 5] |= Mask;
+
+            ExtHeader = 0;
+            HalpPhase0GetPciDataByOffset(BusNumber,
+                                         PciSlot,
+                                         &ExtHeader,
+                                         Offset,
+                                         sizeof(ExtHeader));
+
+            if (ExtHeader == 0 || ExtHeader == 0xFFFFFFFF)
+            {
+                break;
+            }
+
+            CapabilityId = (USHORT)(ExtHeader & 0xFFFF);
+            if (CapabilityId == 0 || CapabilityId == 0xFFFF)
+            {
+                break;
+            }
+
+            NextOffset = (USHORT)((ExtHeader >> 20) & 0xFFF);
+
+            switch (CapabilityId)
+            {
+                case 0x0001:
+                    DbgPrint("\tCapabilities: [%03x] Advanced Error Reporting\n", Offset);
+                    break;
+
+                case 0x0003:
+                {
+                    ULONG SerialLow;
+                    ULONG SerialHigh;
+                    ULONGLONG Serial;
+                    UCHAR B0, B1, B2, B3, B4, B5, B6, B7;
+
+                    SerialLow = 0;
+                    SerialHigh = 0;
+                    HalpPhase0GetPciDataByOffset(BusNumber,
+                                                 PciSlot,
+                                                 &SerialLow,
+                                                 Offset + 4,
+                                                 sizeof(SerialLow));
+                    HalpPhase0GetPciDataByOffset(BusNumber,
+                                                 PciSlot,
+                                                 &SerialHigh,
+                                                 Offset + 8,
+                                                 sizeof(SerialHigh));
+
+                    Serial = ((ULONGLONG)SerialHigh << 32) | SerialLow;
+                    B0 = (UCHAR)(Serial >> 56);
+                    B1 = (UCHAR)(Serial >> 48);
+                    B2 = (UCHAR)(Serial >> 40);
+                    B3 = (UCHAR)(Serial >> 32);
+                    B4 = (UCHAR)(Serial >> 24);
+                    B5 = (UCHAR)(Serial >> 16);
+                    B6 = (UCHAR)(Serial >> 8);
+                    B7 = (UCHAR)(Serial);
+
+                    DbgPrint("\tCapabilities: [%03x] Device Serial Number %02x-%02x-%02x-%02x-%02x-%02x-%02x-%02x\n",
+                             Offset,
+                             (ULONG)B0,
+                             (ULONG)B1,
+                             (ULONG)B2,
+                             (ULONG)B3,
+                             (ULONG)B4,
+                             (ULONG)B5,
+                             (ULONG)B6,
+                             (ULONG)B7);
+                    break;
+                }
+
+                default:
+                    DbgPrint("\tCapabilities: [%03x] Extended Capability ID %04x\n",
+                             Offset,
+                             (ULONG)CapabilityId);
+                    break;
+            }
+
+            if (NextOffset == 0 || NextOffset == Offset || (NextOffset & 0x3))
+            {
+                break;
+            }
+
+            Offset = NextOffset;
+        }
+    }
+}
+
 /* Enhanced PCI device enumeration with rich output */
 CODE_SEG("INIT")
 static VOID
@@ -2687,10 +3314,12 @@ HalpDebugPciDumpBusAcpi(
     CHAR bVendorName[64] = "";
     CHAR bProductName[128] = "Unknown device";
     CHAR bSubVendorName[128] = "Unknown";
-    ULONG Size, Mem, b;
+    BOOLEAN HasSubsystemIds;
+    ULONG b;
     ULONG OriginalBar, PciBar;
 
     HeaderType = (PciData->HeaderType & ~PCI_MULTIFUNCTION);
+    HasSubsystemIds = TRUE;
 
     /* Isolate the class name */
     sprintf(LookupString, "C %02x  ", PciData->BaseClass);
@@ -2774,24 +3403,33 @@ HalpDebugPciDumpBusAcpi(
                         p += strlen(NEWLINE);
                     }
                     Boundary = p;
-                    SubVendorName = NULL;
+            SubVendorName = NULL;
 
-                    if (HeaderType == PCI_DEVICE_TYPE)
+            if (HeaderType == PCI_DEVICE_TYPE)
+            {
+                if ((PciData->u.type0.SubVendorID == 0) &&
+                    (PciData->u.type0.SubSystemID == 0))
+                {
+                    HasSubsystemIds = FALSE;
+                }
+
+                /* Isolate the subvendor and subsystem name */
+                if (HasSubsystemIds)
+                {
+                    sprintf(LookupString,
+                            "\t\t%04x %04x  ",
+                            PciData->u.type0.SubVendorID,
+                            PciData->u.type0.SubSystemID);
+                    SubVendorName = strstr(ProductName, LookupString);
+                    if (Boundary && SubVendorName >= Boundary)
                     {
-                        /* Isolate the subvendor and subsystem name */
-                        sprintf(LookupString,
-                                "\t\t%04x %04x  ",
-                                PciData->u.type0.SubVendorID,
-                                PciData->u.type0.SubSystemID);
-                        SubVendorName = strstr(ProductName, LookupString);
-                        if (Boundary && SubVendorName >= Boundary)
-                        {
-                            SubVendorName = NULL;
-                        }
+                        SubVendorName = NULL;
                     }
-                    if (SubVendorName)
-                    {
-                        /* Copy the subvendor name into our buffer */
+                }
+            }
+            if (SubVendorName)
+            {
+                /* Copy the subvendor name into our buffer */
                         SubVendorName += strlen("\t\t0000 0000  ");
                         p = strpbrk(SubVendorName, NEWLINE);
                         if (p)
@@ -2823,15 +3461,24 @@ HalpDebugPciDumpBusAcpi(
 
     if (HeaderType == PCI_DEVICE_TYPE)
     {
-        DbgPrint("\tSubsystem: %s [%04x:%04x]\n",
-                 bSubVendorName,
-                 PciData->u.type0.SubVendorID,
-                 PciData->u.type0.SubSystemID);
+        if (HasSubsystemIds)
+        {
+            DbgPrint("\tSubsystem: %s [%04x:%04x]\n",
+                     bSubVendorName,
+                     PciData->u.type0.SubVendorID,
+                     PciData->u.type0.SubSystemID);
+        }
+        else
+        {
+            DbgPrint("\tSubsystem: (not provided)\n");
+        }
     }
 
     /* Print out and decode flags */
     {
         CHAR FlagsLine[256];
+        HALP_PCI_GSI_DIAG GsiDiag;
+        BOOLEAN HasGsi = FALSE;
 
         FlagsLine[0] = '\0';
         HalpAppendFormatA(FlagsLine, sizeof(FlagsLine), "\tFlags:");
@@ -2842,6 +3489,15 @@ HalpDebugPciDumpBusAcpi(
         if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x400) HalpAppendFormatA(FlagsLine, sizeof(FlagsLine), " slow devsel,");
         if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x600) HalpAppendFormatA(FlagsLine, sizeof(FlagsLine), " unknown devsel,");
         HalpAppendFormatA(FlagsLine, sizeof(FlagsLine), " latency %d", PciData->LatencyTimer);
+
+        if ((HeaderType == PCI_DEVICE_TYPE) &&
+            (PciData->u.type0.InterruptLine != 0) &&
+            (PciData->u.type0.InterruptLine != 0xFF) &&
+            HalpPciDescribeGsi((ULONG)PciData->u.type0.InterruptLine, &GsiDiag))
+        {
+            HasGsi = TRUE;
+        }
+
         if (PciData->u.type0.InterruptPin != 0 &&
             PciData->u.type0.InterruptLine != 0 &&
             PciData->u.type0.InterruptLine != 0xFF)
@@ -2857,6 +3513,19 @@ HalpDebugPciDumpBusAcpi(
         }
 
         DbgPrint("%s\n", FlagsLine);
+
+        if (HasGsi)
+        {
+            DbgPrint("\tInterrupt: line %02u -> GSI %u%s (seg %u bus %u dev %u fn %u pin IN%c)\n",
+                     PciData->u.type0.InterruptLine,
+                     (ULONG)PciData->u.type0.InterruptLine,
+                     GsiDiag.FromFirmware ? " from firmware" : "",
+                     (ULONG)GsiDiag.Segment,
+                     (ULONG)GsiDiag.Bus,
+                     (ULONG)GsiDiag.Device,
+                     (ULONG)GsiDiag.Function,
+                     (GsiDiag.Pin >= 1 && GsiDiag.Pin <= 4) ? ('A' + GsiDiag.Pin - 1) : '?');
+        }
     }
 
     if (HeaderType == PCI_BRIDGE_TYPE)
@@ -2883,82 +3552,169 @@ HalpDebugPciDumpBusAcpi(
                           PciData->u.type1.SecondaryLatency);
         DbgPrint("%s\n", BridgeLine);
     }
-
     /* Scan and display BARs (Base Address Registers) */
-    Size = 0;
     for (b = 0; b < (HeaderType == PCI_DEVICE_TYPE ? PCI_TYPE0_ADDRESSES : PCI_TYPE1_ADDRESSES); b++)
     {
-        /* Check for a BAR */
-        if (HeaderType != PCI_CARDBUS_BRIDGE_TYPE)
-            Mem = PciData->u.type0.BaseAddresses[b];
-        else
-            Mem = 0;
-        if (Mem)
+        ULONGLONG BaseAddress;
+        ULONGLONG Mask;
+        ULONGLONG BarSize;
+        BOOLEAN IsIo;
+        BOOLEAN Is64Bit;
+        BOOLEAN Prefetch;
+        ULONG Offset;
+        ULONG OriginalLow;
+        ULONG OriginalHigh;
+        ULONG MaskLow;
+        ULONG MaskHigh;
+
+        if (HeaderType == PCI_CARDBUS_BRIDGE_TYPE)
+            break;
+
+        OriginalLow = PciData->u.type0.BaseAddresses[b];
+        if (OriginalLow == 0)
+            continue;
+
+        Offset = FIELD_OFFSET(PCI_COMMON_CONFIG, u.type0.BaseAddresses[b]);
+        OriginalBar = OriginalLow;
+
+        PciBar = 0xFFFFFFFF;
+        HalpPhase0SetPciDataByOffset(BusNumber, PciSlot, &PciBar, Offset, sizeof(ULONG));
+        HalpPhase0GetPciDataByOffset(BusNumber, PciSlot, &PciBar, Offset, sizeof(ULONG));
+        MaskLow = PciBar;
+
+        HalpPhase0SetPciDataByOffset(BusNumber, PciSlot, &OriginalBar, Offset, sizeof(ULONG));
+
+        IsIo = ((OriginalLow & PCI_ADDRESS_IO_SPACE) != 0);
+        Is64Bit = FALSE;
+        Prefetch = FALSE;
+        OriginalHigh = 0;
+        MaskHigh = 0;
+
+        if (!IsIo)
         {
-            /* Save original BAR value */
-            OriginalBar = Mem;
-            PciBar = 0xFFFFFFFF;
-
-            /* Write all 1s to determine size */
-            HalpPhase0SetPciDataByOffset(BusNumber,
-                                         PciSlot,
-                                         &PciBar,
-                                         FIELD_OFFSET(PCI_COMMON_CONFIG, u.type0.BaseAddresses[b]),
-                                         sizeof(ULONG));
-            /* Read back the value */
-            HalpPhase0GetPciDataByOffset(BusNumber,
-                                         PciSlot,
-                                         &PciBar,
-                                         FIELD_OFFSET(PCI_COMMON_CONFIG, u.type0.BaseAddresses[b]),
-                                         sizeof(ULONG));
-            /* Restore original value */
-            HalpPhase0SetPciDataByOffset(BusNumber,
-                                         PciSlot,
-                                         &OriginalBar,
-                                         FIELD_OFFSET(PCI_COMMON_CONFIG, u.type0.BaseAddresses[b]),
-                                         sizeof(ULONG));
-
-            /* Decode the address type */
-            if (PciBar & PCI_ADDRESS_IO_SPACE)
+            Prefetch = ((OriginalLow & PCI_ADDRESS_MEMORY_PREFETCHABLE) != 0);
+            if (((OriginalLow & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_64BIT) &&
+                (b + 1 < (HeaderType == PCI_DEVICE_TYPE ? PCI_TYPE0_ADDRESSES : PCI_TYPE1_ADDRESSES)))
             {
-                /* Guess the I/O size */
-                Size = 1 << 2;
-                while (!(PciBar & Size) && (Size)) Size <<= 1;
+                ULONG ProbeHigh = 0xFFFFFFFF;
 
-                /* Print I/O BAR info */
+                Is64Bit = TRUE;
+                OriginalHigh = PciData->u.type0.BaseAddresses[b + 1];
+
+                HalpPhase0SetPciDataByOffset(BusNumber,
+                                             PciSlot,
+                                             &ProbeHigh,
+                                             Offset + sizeof(ULONG),
+                                             sizeof(ULONG));
+                HalpPhase0GetPciDataByOffset(BusNumber,
+                                             PciSlot,
+                                             &ProbeHigh,
+                                             Offset + sizeof(ULONG),
+                                             sizeof(ULONG));
+                MaskHigh = ProbeHigh;
+
+                HalpPhase0SetPciDataByOffset(BusNumber,
+                                             PciSlot,
+                                             &OriginalHigh,
+                                             Offset + sizeof(ULONG),
+                                             sizeof(ULONG));
+            }
+        }
+
+        if (IsIo)
+        {
+            BaseAddress = (ULONGLONG)(OriginalLow & PCI_ADDRESS_IO_ADDRESS_MASK);
+            Mask = (ULONGLONG)(MaskLow & PCI_ADDRESS_IO_ADDRESS_MASK);
+            BarSize = Mask ? (Mask & (0ULL - Mask)) : 0;
+
+            {
                 CHAR BarLine[256];
 
                 BarLine[0] = '\0';
                 HalpAppendFormatA(BarLine,
                                   sizeof(BarLine),
                                   "\tI/O ports at %04lx",
-                                  Mem & PCI_ADDRESS_IO_ADDRESS_MASK);
-                ShowSize(Size, BarLine, sizeof(BarLine));
+                                  (ULONG)BaseAddress);
+                ShowSize(BarSize, BarLine, sizeof(BarLine));
                 DbgPrint("%s\n", BarLine);
+            }
+        }
+        else
+        {
+            BaseAddress = (ULONGLONG)(OriginalLow & PCI_ADDRESS_MEMORY_ADDRESS_MASK);
+            if (Is64Bit)
+            {
+                BaseAddress |= ((ULONGLONG)OriginalHigh << 32);
+                Mask = ((ULONGLONG)MaskHigh << 32) | MaskLow;
             }
             else
             {
-                /* Guess the memory size */
-                Size = 1 << 4;
-                while (!(PciBar & Size) && (Size)) Size <<= 1;
+                Mask = (ULONGLONG)MaskLow;
+            }
 
-                /* Print Memory BAR info */
+            Mask &= 0xFFFFFFFFFFFFFFF0ULL;
+            BarSize = Mask ? (Mask & (0ULL - Mask)) : 0;
+
+            {
+                CHAR BarLine[256];
+
+                BarLine[0] = '\0';
+                if (Is64Bit)
                 {
-                    CHAR BarLine[256];
-
-                    BarLine[0] = '\0';
                     HalpAppendFormatA(BarLine,
                                       sizeof(BarLine),
-                                      "\tMemory at %08lx (%d-bit, %sprefetchable)",
-                                      Mem & PCI_ADDRESS_MEMORY_ADDRESS_MASK,
-                                      (Mem & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_32BIT ? 32 : 64,
-                                      (Mem & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? "" : "non-");
-                    ShowSize(Size, BarLine, sizeof(BarLine));
-                    DbgPrint("%s\n", BarLine);
+                                      "\tMemory at %I64x (64-bit, %sprefetchable)",
+                                      BaseAddress,
+                                      Prefetch ? "" : "non-");
                 }
+                else
+                {
+                    HalpAppendFormatA(BarLine,
+                                      sizeof(BarLine),
+                                      "\tMemory at %08lx (32-bit, %sprefetchable)",
+                                      (ULONG)BaseAddress,
+                                      Prefetch ? "" : "non-");
+                }
+                ShowSize(BarSize, BarLine, sizeof(BarLine));
+                DbgPrint("%s\n", BarLine);
             }
         }
+
+        if (Is64Bit)
+            b++;
     }
+
+    if (HeaderType == PCI_DEVICE_TYPE && PciData->u.type0.ROMBaseAddress)
+    {
+        ULONGLONG RomSize;
+        ULONGLONG Mask;
+        ULONG Offset;
+        ULONG MaskValue;
+        CHAR RomLine[256];
+
+        OriginalBar = PciData->u.type0.ROMBaseAddress;
+        Offset = FIELD_OFFSET(PCI_COMMON_CONFIG, u.type0.ROMBaseAddress);
+
+        PciBar = 0xFFFFFFFE;
+        HalpPhase0SetPciDataByOffset(BusNumber, PciSlot, &PciBar, Offset, sizeof(ULONG));
+        MaskValue = 0;
+        HalpPhase0GetPciDataByOffset(BusNumber, PciSlot, &MaskValue, Offset, sizeof(ULONG));
+        HalpPhase0SetPciDataByOffset(BusNumber, PciSlot, &OriginalBar, Offset, sizeof(ULONG));
+
+        Mask = (ULONGLONG)(MaskValue & PCI_ADDRESS_ROM_ADDRESS_MASK);
+        RomSize = Mask ? (Mask & (0ULL - Mask)) : 0;
+
+        RomLine[0] = '\0';
+        HalpAppendFormatA(RomLine,
+                          sizeof(RomLine),
+                          "\tExpansion ROM at %08lx [%s]",
+                          OriginalBar & PCI_ADDRESS_ROM_ADDRESS_MASK,
+                          (OriginalBar & PCI_ROMADDRESS_ENABLED) ? "enabled" : "disabled");
+        ShowSize(RomSize, RomLine, sizeof(RomLine));
+        DbgPrint("%s\n", RomLine);
+    }
+
+    HalpDebugPciDumpCapabilitiesAcpi(BusNumber, PciSlot, HeaderType, PciData);
 }
 
 CODE_SEG("INIT")
@@ -3274,7 +4030,7 @@ HalReportResourceUsage(VOID)
     INTERFACE_TYPE InterfaceType;
     UNICODE_STRING HalString;
 
-    /* FIXME: Initialize DMA 64-bit support */
+    HalpInitDma();
 
     /* FIXME: Initialize MCA bus */
 
@@ -3313,109 +4069,6 @@ HalReportResourceUsage(VOID)
 HalpRegisterPciDebuggingDeviceInfo();
 }
 
-static
-BOOLEAN
-HalpBuildLegacyCStateRegister(
-    _In_ const GEN_ADDR *ControlBlock,
-    _In_ UCHAR ByteOffset,
-    _Out_ PHAL_ACPI_C_STATE_REGISTER Target)
-{
-    if (!ControlBlock || !Target)
-        return FALSE;
-
-    if (!HalpAcpiGasValid(ControlBlock))
-        return FALSE;
-
-    Target->AddressSpaceId = ControlBlock->AddressSpaceID;
-    Target->BitWidth = 8;
-    Target->BitOffset = 0;
-    Target->AccessSize = 1;
-    Target->Address = ControlBlock->Address.QuadPart + ByteOffset;
-    return TRUE;
-}
-
-NTSTATUS
-NTAPI
-HalGetAcpiCStateInformation(
-    _Out_ PHAL_ACPI_C_STATE_INFO Info)
-{
-    const GEN_ADDR *ControlBlock;
-    ULONG Count = 0;
-    BOOLEAN RequireFlush;
-
-    if (!Info)
-        return STATUS_INVALID_PARAMETER;
-
-    RtlZeroMemory(Info, sizeof(*Info));
-
-    ControlBlock = NULL;
-    if (HalpPm1ControlBlockValid[0])
-    {
-        ControlBlock = &HalpPm1ControlBlocks[0];
-    }
-    else if (HalpPm1ControlBlockValid[1])
-    {
-        ControlBlock = &HalpPm1ControlBlocks[1];
-    }
-
-    if (!ControlBlock)
-        return STATUS_NOT_SUPPORTED;
-
-    /* ACPI spec: lack of WBINVD or presence of WBINVD_FLUSH means C3 requires cache flush */
-    RequireFlush = ((HalpFixedAcpiDescTable.flags & ACPI_FADT_WBINVD) == 0) ||
-                   ((HalpFixedAcpiDescTable.flags & ACPI_FADT_WBINVD_FLUSH) != 0);
-
-    if (HalpFixedAcpiDescTable.lvl2_latency &&
-        HalpFixedAcpiDescTable.lvl2_latency != 0xFFFF)
-    {
-        if (Count < HAL_ACPI_MAX_C_STATES &&
-            HalpBuildLegacyCStateRegister(ControlBlock, 4, &Info->States[Count].Register))
-        {
-            Info->States[Count].Type = 2;
-            Info->States[Count].Latency = HalpFixedAcpiDescTable.lvl2_latency;
-            Info->States[Count].RequiresCacheFlush = FALSE;
-            ++Count;
-        }
-    }
-
-    if (HalpFixedAcpiDescTable.lvl3_latency &&
-        HalpFixedAcpiDescTable.lvl3_latency != 0xFFFF)
-    {
-        if (Count < HAL_ACPI_MAX_C_STATES &&
-            HalpBuildLegacyCStateRegister(ControlBlock, 5, &Info->States[Count].Register))
-        {
-            Info->States[Count].Type = 3;
-            Info->States[Count].Latency = HalpFixedAcpiDescTable.lvl3_latency;
-            Info->States[Count].RequiresCacheFlush = RequireFlush;
-            ++Count;
-        }
-    }
-
-    Info->Count = Count;
-    return (Count != 0) ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
-}
-
-BOOLEAN
-NTAPI
-HalIsAcpiBusMasterActive(VOID)
-{
-    ULONG Value;
-
-    for (ULONG Index = 0; Index < RTL_NUMBER_OF(HalpPm1EventBlocks); ++Index)
-    {
-        if (!HalpPm1EventBlockValid[Index])
-            continue;
-
-        if (!HalpAcpiReadRegister(&HalpPm1EventBlocks[Index], &Value))
-            continue;
-
-        if (Value & ACPI_PM1_STATUS_BUS_MASTER)
-            return TRUE;
-    }
-
-    return FALSE;
-}
-
 BOOLEAN
 HalpQueryAcpiRootPointer(
     _Out_ PPHYSICAL_ADDRESS Address)
@@ -3446,24 +4099,15 @@ HalpAcpiPhase1Init(VOID)
         }
     }
 
-    if (HalpAcpiMcfgAllocations &&
-        HalpAcpiMcfgAllocationCount &&
-        !HalpAcpiEcamBadBusBitmap)
+    if (HalpAcpiMcfgAllocations && HalpAcpiMcfgAllocationCount && !HalpAcpiMcfgEcamMappings)
     {
-        ULONG Bits = HalpAcpiMcfgAllocationCount * HALP_ACPI_ECAM_BUS_BITMAP_STRIDE;
-        ULONG Words = (Bits + 31) / 32;
-        SIZE_T Bytes = (SIZE_T)Words * sizeof(ULONG);
-
-        if (Bytes)
+        HalpAcpiMcfgEcamMappings = ExAllocatePoolWithTag(NonPagedPool,
+                                                         HalpAcpiMcfgAllocationCount * sizeof(PVOID),
+                                                         'maCE');
+        if (HalpAcpiMcfgEcamMappings)
         {
-            HalpAcpiEcamBadBusBitmap = ExAllocatePoolWithTag(NonPagedPool,
-                                                             Bytes,
-                                                             'bBCE');
-            if (HalpAcpiEcamBadBusBitmap)
-            {
-                RtlZeroMemory((PVOID)HalpAcpiEcamBadBusBitmap, Bytes);
-                HalpAcpiEcamBadBusBitmapBits = Bits;
-            }
+            RtlZeroMemory(HalpAcpiMcfgEcamMappings, HalpAcpiMcfgAllocationCount * sizeof(PVOID));
+            HalpAcpiMcfgEcamMappingCount = HalpAcpiMcfgAllocationCount;
         }
     }
 
