@@ -25,8 +25,8 @@ list(APPEND HAL_XBOX_SOURCE
     ${HAL_I386_DIR}/generic/portio.c
     ${HAL_I386_DIR}/generic/x86bios.c
     ${HAL_COMMON_DIR}/legacy/bus/bushndlr.c
-    ${HAL_I386_DIR}/legacy/bus/cmosbus.c
-    ${HAL_I386_DIR}/legacy/bus/isabus.c
+    ${HAL_COMMON_DIR}/legacy/bus/cmosbus.c
+    ${HAL_COMMON_DIR}/legacy/bus/isabus.c
     ${HAL_COMMON_DIR}/legacy/bus/sysbus.c
     ${HAL_COMMON_DIR}/legacy/bussupp.c
     ${HAL_COMMON_DIR}/legacy/bus/pcibus.c

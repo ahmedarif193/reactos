@@ -6,8 +6,8 @@ add_definitions(-D_MINIHAL_)
 
 list(APPEND MINI_HAL_SOURCE
     ../../common/legacy/bus/bushndlr.c
-    ../legacy/bus/cmosbus.c
-    ../legacy/bus/isabus.c
+    ../../common/legacy/bus/cmosbus.c
+    ../../common/legacy/bus/isabus.c
     ../../common/legacy/bus/pcibus.c
     ../../common/legacy/bussupp.c
     acpi_ecam_stubs.c
