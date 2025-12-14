@@ -6,6 +6,8 @@
 * PROGRAMMERS:     Alex Ionescu (alex.ionescu@reactos.org)
 */
 
+#pragma once
+
 #include <guiddef.h>
 #include <poclass.h>
 
@@ -199,6 +201,31 @@ typedef struct _PO_DEVICE_NOTIFY_ORDER
     PO_NOTIFY_ORDER_LEVEL OrderLevel[8];
 } PO_DEVICE_NOTIFY_ORDER, *PPO_DEVICE_NOTIFY_ORDER;
 
+typedef struct _POP_IDLE_HANDLER_ENTRY
+{
+    PROCESSOR_IDLE_HANDLER_INFO Info;
+    ULONG_PTR Context;
+} POP_IDLE_HANDLER_ENTRY, *PPOP_IDLE_HANDLER_ENTRY;
+
+typedef struct DECLSPEC_ALIGN(64) _POP_IDLE_RUNDOWN_ENTRY
+{
+    EX_RUNDOWN_REF Ref;
+} POP_IDLE_RUNDOWN_ENTRY, *PPOP_IDLE_RUNDOWN_ENTRY;
+
+extern POP_IDLE_RUNDOWN_ENTRY PopIdleHandlerRundown[MAXIMUM_PROCESSORS];
+
+VOID
+PopInitIdleHandlerSupport(VOID);
+
+VOID
+PopInitThermalSupport(VOID);
+
+VOID
+PoNotifyProcessorThermalEvent(
+    _In_ ULONG ProcessorIndex,
+    _In_ PO_THERMAL_EVENT_TYPE EventType,
+    _In_ ULONG TripPoint);
+
 typedef struct _POP_DEVICE_SYS_STATE
 {
     UCHAR IrpMinor;
@@ -381,4 +408,3 @@ extern LIST_ENTRY PopVolumeDevices;
 extern KSPIN_LOCK PopDopeGlobalLock;
 extern POP_POWER_ACTION PopAction;
 extern SYSTEM_POWER_CAPABILITIES PopCapabilities;
-

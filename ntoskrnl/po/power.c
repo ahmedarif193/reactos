@@ -475,6 +475,8 @@ PoInitSystem(IN ULONG BootPhase)
 
     /* Initialize support for shutdown waits and work-items */
     PopInitShutdownList();
+    PopInitIdleHandlerSupport();
+    PopInitThermalSupport();
 
     return TRUE;
 }
@@ -501,7 +503,48 @@ VOID
 FASTCALL
 PopIdle0(IN PPROCESSOR_POWER_STATE PowerState)
 {
-    /* FIXME: Extremly naive implementation */
+    ULONG ProcessorNumber;
+    PEX_RUNDOWN_REF Rundown;
+    PPOP_IDLE_HANDLER_ENTRY Handlers;
+    ULONG HandlerCount;
+
+    ProcessorNumber = KeGetCurrentProcessorNumber();
+    Rundown = &PopIdleHandlerRundown[ProcessorNumber].Ref;
+
+    if (!ExAcquireRundownProtection(Rundown))
+    {
+        HalProcessorIdle();
+        return;
+    }
+
+    Handlers = (PPOP_IDLE_HANDLER_ENTRY)PowerState->IdleHandlers;
+    HandlerCount = PowerState->IdleHandlersCount;
+
+    if (Handlers && HandlerCount)
+    {
+        PROCESSOR_IDLE_TIMES IdleTimes;
+        NTSTATUS Status;
+        LARGE_INTEGER Counter;
+        PPOP_IDLE_HANDLER_ENTRY Target;
+
+        RtlZeroMemory(&IdleTimes, sizeof(IdleTimes));
+        Counter = KeQueryPerformanceCounter(NULL);
+        IdleTimes.StartTime = Counter.QuadPart;
+
+        Target = &Handlers[HandlerCount - 1];
+        Status = Target->Info.Handler(Target->Context, &IdleTimes);
+        if (!NT_SUCCESS(Status))
+        {
+            HalProcessorIdle();
+        }
+
+        Counter = KeQueryPerformanceCounter(NULL);
+        IdleTimes.EndTime = Counter.QuadPart;
+        ExReleaseRundownProtection(Rundown);
+        return;
+    }
+
+    ExReleaseRundownProtection(Rundown);
     HalProcessorIdle();
 }
 
