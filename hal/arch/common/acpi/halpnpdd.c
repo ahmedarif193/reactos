@@ -14,6 +14,12 @@
 #include <initguid.h>
 #include <wdmguid.h>
 
+#include <ntstrsafe.h>
+
+#ifndef NonPagedPoolNx
+#define NonPagedPoolNx NonPagedPool
+#endif
+
 #define NDEBUG
 #include <debug.h>
 
@@ -29,10 +35,26 @@ typedef enum _PDO_TYPE
     WdPdo
 } PDO_TYPE;
 
+typedef enum _HALP_PNP_STATE
+{
+    HalpPnpStateNotStarted = 0,
+    HalpPnpStateStarted,
+    HalpPnpStateStopPending,
+    HalpPnpStateStopped,
+    HalpPnpStateRemovePending,
+    HalpPnpStateSurpriseRemoved,
+    HalpPnpStateDeleted
+} HALP_PNP_STATE;
+
 typedef struct _FDO_EXTENSION
 {
     EXTENSION_TYPE ExtensionType;
     struct _PDO_EXTENSION* ChildPdoList;
+    FAST_MUTEX ChildPdoLock;
+    FAST_MUTEX PnpStateLock;
+    HALP_PNP_STATE PnpState;
+    HALP_PNP_STATE PreviousPnpState;
+    LONG InterfaceReferenceCount;
     PDEVICE_OBJECT PhysicalDeviceObject;
     PDEVICE_OBJECT FunctionalDeviceObject;
     PDEVICE_OBJECT AttachedDeviceObject;
@@ -44,10 +66,56 @@ typedef struct _PDO_EXTENSION
     struct _PDO_EXTENSION* Next;
     PDEVICE_OBJECT PhysicalDeviceObject;
     PFDO_EXTENSION ParentFdoExtension;
+    PDEVICE_OBJECT ParentFdoDeviceObject;
     PDO_TYPE PdoType;
     PDESCRIPTION_HEADER WdTable;
+    FAST_MUTEX PnpStateLock;
+    HALP_PNP_STATE PnpState;
+    HALP_PNP_STATE PreviousPnpState;
+    DEVICE_POWER_STATE CurrentDevicePowerState;
+    SYSTEM_POWER_STATE CurrentSystemPowerState;
     LONG InterfaceReferenceCount;
 } PDO_EXTENSION, *PPDO_EXTENSION;
+
+static
+VOID
+HalpPdoDetachFromParent(
+    _Inout_ PPDO_EXTENSION PdoExtension)
+{
+    PFDO_EXTENSION ParentFdo;
+    PDEVICE_OBJECT ParentFdoDeviceObject;
+
+    ExAcquireFastMutex(&PdoExtension->PnpStateLock);
+    ParentFdo = PdoExtension->ParentFdoExtension;
+    ParentFdoDeviceObject = PdoExtension->ParentFdoDeviceObject;
+    PdoExtension->ParentFdoExtension = NULL;
+    PdoExtension->ParentFdoDeviceObject = NULL;
+    ExReleaseFastMutex(&PdoExtension->PnpStateLock);
+
+    if (ParentFdo)
+    {
+        PPDO_EXTENSION *Link;
+
+        ExAcquireFastMutex(&ParentFdo->ChildPdoLock);
+        Link = &ParentFdo->ChildPdoList;
+        while (*Link)
+        {
+            if (*Link == PdoExtension)
+            {
+                *Link = PdoExtension->Next;
+                break;
+            }
+
+            Link = &(*Link)->Next;
+        }
+        ExReleaseFastMutex(&ParentFdo->ChildPdoLock);
+    }
+
+    if (ParentFdoDeviceObject)
+    {
+        ObDereferenceObject(ParentFdoDeviceObject);
+    }
+}
 
 /* GLOBALS ********************************************************************/
 
@@ -55,8 +123,8 @@ PDRIVER_OBJECT HalpDriverObject;
 static LIST_ENTRY HalpPortRangeList;
 static KSPIN_LOCK HalpPortRangeLock;
 static USHORT HalpPortRangeNextId = 1;
-static BOOLEAN HalpPortRangeListInitialized;
-static volatile LONG HalpPortRangeInitOnce;
+static KEVENT HalpPortRangeInitEvent;
+static volatile LONG HalpPortRangeInitState;
 
 typedef struct _HALP_PORT_RANGE_ENTRY
 {
@@ -75,7 +143,33 @@ NTAPI
 HalpAcpiInterfaceReference(
     _In_opt_ PVOID Context)
 {
-    UNREFERENCED_PARAMETER(Context);
+    PFDO_EXTENSION DeviceExtension;
+    EXTENSION_TYPE ExtensionType;
+    PDEVICE_OBJECT DeviceObject = (PDEVICE_OBJECT)Context;
+
+    if (!DeviceObject)
+    {
+        return;
+    }
+
+    ObReferenceObject(DeviceObject);
+
+    DeviceExtension = (PFDO_EXTENSION)DeviceObject->DeviceExtension;
+    if (!DeviceExtension)
+    {
+        ObDereferenceObject(DeviceObject);
+        return;
+    }
+
+    ExtensionType = DeviceExtension->ExtensionType;
+    if (ExtensionType == FdoExtensionType)
+    {
+        InterlockedIncrement(&DeviceExtension->InterfaceReferenceCount);
+    }
+    else if (ExtensionType == PdoExtensionType)
+    {
+        InterlockedIncrement(&((PPDO_EXTENSION)DeviceExtension)->InterfaceReferenceCount);
+    }
 }
 
 static
@@ -84,19 +178,61 @@ NTAPI
 HalpAcpiInterfaceDereference(
     _In_opt_ PVOID Context)
 {
-    UNREFERENCED_PARAMETER(Context);
+    PFDO_EXTENSION DeviceExtension;
+    EXTENSION_TYPE ExtensionType;
+    PDEVICE_OBJECT DeviceObject = (PDEVICE_OBJECT)Context;
+
+    if (!DeviceObject)
+    {
+        return;
+    }
+
+    DeviceExtension = (PFDO_EXTENSION)DeviceObject->DeviceExtension;
+    if (DeviceExtension)
+    {
+        ExtensionType = DeviceExtension->ExtensionType;
+        if (ExtensionType == FdoExtensionType)
+        {
+            InterlockedDecrement(&DeviceExtension->InterfaceReferenceCount);
+        }
+        else if (ExtensionType == PdoExtensionType)
+        {
+            InterlockedDecrement(&((PPDO_EXTENSION)DeviceExtension)->InterfaceReferenceCount);
+        }
+    }
+
+    ObDereferenceObject(DeviceObject);
 }
 
 static
 VOID
 HalpAcpiInitPortRangeList(VOID)
 {
-    if (InterlockedCompareExchange(&HalpPortRangeInitOnce, 1, 0) != 0)
-        return;
+    LONG State;
 
-    InitializeListHead(&HalpPortRangeList);
-    KeInitializeSpinLock(&HalpPortRangeLock);
-    HalpPortRangeListInitialized = TRUE;
+    State = InterlockedCompareExchange(&HalpPortRangeInitState, 1, 0);
+    if (State == 0)
+    {
+        InitializeListHead(&HalpPortRangeList);
+        KeInitializeSpinLock(&HalpPortRangeLock);
+        HalpPortRangeNextId = 1;
+
+        KeMemoryBarrier();
+        InterlockedExchange(&HalpPortRangeInitState, 2);
+        KeSetEvent(&HalpPortRangeInitEvent, IO_NO_INCREMENT, FALSE);
+        return;
+    }
+
+    if (State == 2)
+    {
+        return;
+    }
+
+    KeWaitForSingleObject(&HalpPortRangeInitEvent,
+                          Executive,
+                          KernelMode,
+                          FALSE,
+                          NULL);
 }
 
 static
@@ -171,9 +307,11 @@ HalpAddDevice(IN PDRIVER_OBJECT DriverObject,
     FdoExtension->PhysicalDeviceObject = TargetDevice;
     FdoExtension->FunctionalDeviceObject = DeviceObject;
     FdoExtension->ChildPdoList = NULL;
-
-    /* FDO is done initializing */
-    DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+    ExInitializeFastMutex(&FdoExtension->ChildPdoLock);
+    ExInitializeFastMutex(&FdoExtension->PnpStateLock);
+    FdoExtension->PnpState = HalpPnpStateNotStarted;
+    FdoExtension->PreviousPnpState = HalpPnpStateNotStarted;
+    FdoExtension->InterfaceReferenceCount = 0;
 
     /* Attach to the physical device object (the bus) */
     AttachedDevice = IoAttachDeviceToDeviceStack(DeviceObject, TargetDevice);
@@ -199,6 +337,8 @@ HalpAddDevice(IN PDRIVER_OBJECT DriverObject,
     {
         /* Fail */
         DPRINT1("HAL: Could not create ACPI device object status=0x%08x\n", Status);
+        IoDetachDevice(FdoExtension->AttachedDeviceObject);
+        IoDeleteDevice(DeviceObject);
         return Status;
     }
 
@@ -207,11 +347,21 @@ HalpAddDevice(IN PDRIVER_OBJECT DriverObject,
     PdoExtension->ExtensionType = PdoExtensionType;
     PdoExtension->PhysicalDeviceObject = PdoDeviceObject;
     PdoExtension->ParentFdoExtension = FdoExtension;
+    PdoExtension->ParentFdoDeviceObject = DeviceObject;
+    ObReferenceObject(DeviceObject);
     PdoExtension->PdoType = AcpiPdo;
+    ExInitializeFastMutex(&PdoExtension->PnpStateLock);
+    PdoExtension->PnpState = HalpPnpStateNotStarted;
+    PdoExtension->PreviousPnpState = HalpPnpStateNotStarted;
+    PdoExtension->CurrentDevicePowerState = PowerDeviceD3;
+    PdoExtension->CurrentSystemPowerState = PowerSystemWorking;
+    PdoExtension->InterfaceReferenceCount = 0;
 
     /* Add the PDO to the head of the list */
+    ExAcquireFastMutex(&FdoExtension->ChildPdoLock);
     PdoExtension->Next = FdoExtension->ChildPdoList;
     FdoExtension->ChildPdoList = PdoExtension;
+    ExReleaseFastMutex(&FdoExtension->ChildPdoLock);
 
     /* Initialization is finished */
     PdoDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
@@ -225,6 +375,7 @@ HalpAddDevice(IN PDRIVER_OBJECT DriverObject,
     }
 
     /* Return status */
+    DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
     DPRINT("Device added %lx\n", Status);
     return Status;
 }
@@ -402,12 +553,16 @@ HalpPortRangeQueryAllocate(
     PHALP_PORT_RANGE_ENTRY RangeEntry;
 
     if (!NewRangeId || (Length == 0))
-    if (!NewRangeId)
     {
         return STATUS_INVALID_PARAMETER;
     }
 
-    RangeEntry = ExAllocatePoolWithTag(NonPagedPool, sizeof(*RangeEntry), TAG_HAL);
+    if (HalpPortRangeInitState != 2)
+    {
+        return STATUS_DEVICE_NOT_READY;
+    }
+
+    RangeEntry = ExAllocatePoolZero(NonPagedPoolNx, sizeof(*RangeEntry), TAG_HAL);
     if (!RangeEntry)
     {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -477,7 +632,7 @@ HalpPortRangeFreeRange(
     PLIST_ENTRY Entry;
     PHALP_PORT_RANGE_ENTRY RangeEntry;
 
-    if (!HalpPortRangeListInitialized)
+    if (HalpPortRangeInitState != 2)
     {
         return;
     }
@@ -501,6 +656,72 @@ HalpPortRangeFreeRange(
     KeReleaseSpinLock(&HalpPortRangeLock, OldIrql);
 }
 
+static
+BOOLEAN
+HalpIsPortRangeListEmpty(VOID)
+{
+    KIRQL OldIrql;
+    BOOLEAN IsEmpty;
+
+    if (HalpPortRangeInitState != 2)
+    {
+        return TRUE;
+    }
+
+    KeAcquireSpinLock(&HalpPortRangeLock, &OldIrql);
+    IsEmpty = IsListEmpty(&HalpPortRangeList);
+    KeReleaseSpinLock(&HalpPortRangeLock, OldIrql);
+
+    return IsEmpty;
+}
+
+static
+BOOLEAN
+HalpIsDeviceQuiesced(
+    _In_opt_ PDEVICE_OBJECT DeviceObject)
+{
+    PFDO_EXTENSION DeviceExtension;
+    EXTENSION_TYPE ExtensionType;
+    LONG InterfaceRefs;
+
+    if (!DeviceObject)
+    {
+        return TRUE;
+    }
+
+    DeviceExtension = (PFDO_EXTENSION)DeviceObject->DeviceExtension;
+    if (!DeviceExtension)
+    {
+        return TRUE;
+    }
+
+    ExtensionType = DeviceExtension->ExtensionType;
+    if (ExtensionType == FdoExtensionType)
+    {
+        InterfaceRefs = InterlockedCompareExchange(&DeviceExtension->InterfaceReferenceCount, 0, 0);
+    }
+    else if (ExtensionType == PdoExtensionType)
+    {
+        InterfaceRefs = InterlockedCompareExchange(&((PPDO_EXTENSION)DeviceExtension)->InterfaceReferenceCount, 0, 0);
+    }
+    else
+    {
+        InterfaceRefs = 0;
+    }
+
+    if (InterfaceRefs != 0)
+    {
+        return FALSE;
+    }
+
+    if (!HalpIsPortRangeListEmpty())
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 NTSTATUS
 NTAPI
 HalpQueryInterface(IN PDEVICE_OBJECT DeviceObject,
@@ -514,7 +735,6 @@ HalpQueryInterface(IN PDEVICE_OBJECT DeviceObject,
     PACPI_REGS_INTERFACE_STANDARD RegInterface;
     PHAL_PORT_RANGE_INTERFACE PortRangeInterface;
 
-    UNREFERENCED_PARAMETER(DeviceObject);
     UNREFERENCED_PARAMETER(InterfaceSpecificData);
 
     HalpAcpiInitPortRangeList();
@@ -537,11 +757,12 @@ HalpQueryInterface(IN PDEVICE_OBJECT DeviceObject,
         RtlZeroMemory(RegInterface, sizeof(*RegInterface));
         RegInterface->Size = sizeof(*RegInterface);
         RegInterface->Version = ProvidedVersion;
-        RegInterface->Context = NULL;
+        RegInterface->Context = DeviceObject;
         RegInterface->InterfaceReference = HalpAcpiInterfaceReference;
         RegInterface->InterfaceDereference = HalpAcpiInterfaceDereference;
         RegInterface->ReadAcpiRegister = HalpAcpiInterfaceReadRegister;
         RegInterface->WriteAcpiRegister = HalpAcpiInterfaceWriteRegister;
+        RegInterface->InterfaceReference(RegInterface->Context);
         if (Length)
         {
             *Length = sizeof(*RegInterface);
@@ -567,11 +788,12 @@ HalpQueryInterface(IN PDEVICE_OBJECT DeviceObject,
         RtlZeroMemory(PortRangeInterface, sizeof(*PortRangeInterface));
         PortRangeInterface->Size = sizeof(*PortRangeInterface);
         PortRangeInterface->Version = ProvidedVersion;
-        PortRangeInterface->Context = NULL;
+        PortRangeInterface->Context = DeviceObject;
         PortRangeInterface->InterfaceReference = HalpAcpiInterfaceReference;
         PortRangeInterface->InterfaceDereference = HalpAcpiInterfaceDereference;
         PortRangeInterface->QueryAllocateRange = HalpPortRangeQueryAllocate;
         PortRangeInterface->FreeRange = HalpPortRangeFreeRange;
+        PortRangeInterface->InterfaceReference(PortRangeInterface->Context);
         if (Length)
         {
             *Length = sizeof(*PortRangeInterface);
@@ -612,6 +834,8 @@ HalpQueryDeviceRelations(IN PDEVICE_OBJECT DeviceObject,
         /* This better be an FDO */
         if (ExtensionType == FdoExtensionType)
         {
+            ExAcquireFastMutex(&FdoExtension->ChildPdoLock);
+
             /* Count how many PDOs we have */
             PdoExtension = FdoExtension->ChildPdoList;
             while (PdoExtension)
@@ -633,7 +857,11 @@ HalpQueryDeviceRelations(IN PDEVICE_OBJECT DeviceObject,
                                                               Objects) +
                                                  sizeof(PDEVICE_OBJECT) * PdoCount,
                                                  TAG_HAL);
-            if (!FdoRelations) return STATUS_INSUFFICIENT_RESOURCES;
+            if (!FdoRelations)
+            {
+                ExReleaseFastMutex(&FdoExtension->ChildPdoLock);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
 
             /* Save our count */
             FdoRelations->Count = PdoCount;
@@ -675,6 +903,8 @@ HalpQueryDeviceRelations(IN PDEVICE_OBJECT DeviceObject,
                 while (PdoExtension);
             }
 
+            ExReleaseFastMutex(&FdoExtension->ChildPdoLock);
+
             /* Return the new structure */
             *DeviceRelations = FdoRelations;
             return STATUS_SUCCESS;
@@ -712,12 +942,19 @@ NTAPI
 HalpQueryCapabilities(IN PDEVICE_OBJECT DeviceObject,
                       OUT PDEVICE_CAPABILITIES Capabilities)
 {
-    //PPDO_EXTENSION PdoExtension;
+    PFDO_EXTENSION DeviceExtension;
+    PPDO_EXTENSION PdoExtension;
     NTSTATUS Status;
+    ULONG i;
     PAGED_CODE();
 
     /* Get the extension and check for valid version */
-    //PdoExtension = DeviceObject->DeviceExtension;
+    DeviceExtension = DeviceObject->DeviceExtension;
+    PdoExtension = NULL;
+    if (DeviceExtension && (DeviceExtension->ExtensionType == PdoExtensionType))
+    {
+        PdoExtension = (PPDO_EXTENSION)DeviceExtension;
+    }
     ASSERT(Capabilities->Version == 1);
     if (Capabilities->Version == 1)
     {
@@ -736,20 +973,45 @@ HalpQueryCapabilities(IN PDEVICE_OBJECT DeviceObject,
         Capabilities->UniqueID = TRUE;
         Capabilities->SilentInstall = TRUE;
 
+        /* HAL devices are not dynamically managed */
+        Capabilities->NonDynamic = TRUE;
+        Capabilities->NoDisplayInUI = TRUE;
+
         /* Fill out the address */
         Capabilities->Address = InterfaceTypeUndefined;
         Capabilities->UINumber = InterfaceTypeUndefined;
 
-        /* Fill out latencies */
+        /* Default to no intermediate D-states */
+        Capabilities->DeviceD1 = FALSE;
+        Capabilities->DeviceD2 = FALSE;
+
+        Capabilities->WakeFromD0 = FALSE;
+        Capabilities->WakeFromD1 = FALSE;
+        Capabilities->WakeFromD2 = FALSE;
+        Capabilities->WakeFromD3 = FALSE;
+        Capabilities->WakeFromInterrupt = FALSE;
+
+        Capabilities->SystemWake = PowerSystemUnspecified;
+        Capabilities->DeviceWake = PowerDeviceUnspecified;
+
+        /* Fill out latencies (ms). D3 is conservative for ACPI transitions. */
         Capabilities->D1Latency = 0;
         Capabilities->D2Latency = 0;
-        Capabilities->D3Latency = 0;
+        Capabilities->D3Latency = 100;
 
         /* Fill out supported device states */
+        for (i = 0; i < PowerSystemMaximum; i++)
+        {
+            Capabilities->DeviceState[i] = PowerDeviceD3;
+        }
+
+        if (PdoExtension && (PdoExtension->PdoType == WdPdo))
+        {
+            /* Watchdog is not power-manageable by the user */
+            Capabilities->NoDisplayInUI = TRUE;
+        }
+
         Capabilities->DeviceState[PowerSystemWorking] = PowerDeviceD0;
-        Capabilities->DeviceState[PowerSystemHibernate] = PowerDeviceD3;
-        Capabilities->DeviceState[PowerSystemShutdown] = PowerDeviceD3;
-        Capabilities->DeviceState[PowerSystemSleeping3] = PowerDeviceD3;
 
         /* Done */
         Status = STATUS_SUCCESS;
@@ -928,11 +1190,21 @@ HalpQueryIdPdo(IN PDEVICE_OBJECT DeviceObject,
 {
     PPDO_EXTENSION PdoExtension;
     PDO_TYPE PdoType;
-    PWCHAR CurrentId;
-    WCHAR Id[100];
-    NTSTATUS Status;
-    SIZE_T Length = 0;
+    const WCHAR *Ids[2];
+    ULONG IdCount;
+    BOOLEAN MultiSz;
     PWCHAR Buffer;
+    PWCHAR Current;
+    SIZE_T TotalChars;
+    SIZE_T TotalBytes;
+    SIZE_T RemainingBytes;
+    ULONG i;
+    NTSTATUS Status;
+
+    if (!BusQueryId)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     /* Get the PDO type */
     PdoExtension = DeviceObject->DeviceExtension;
@@ -943,77 +1215,95 @@ HalpQueryIdPdo(IN PDEVICE_OBJECT DeviceObject,
     switch (IdType)
     {
         case BusQueryDeviceID:
-        case BusQueryHardwareIDs:
 
-            /* What kind of PDO is this? */
+            MultiSz = FALSE;
+            IdCount = 1;
             if (PdoType == AcpiPdo)
             {
-                /* ACPI ID */
-                CurrentId = L"ACPI_HAL\\PNP0C08";
-                RtlCopyMemory(Id, CurrentId, (wcslen(CurrentId) * sizeof(WCHAR)) + sizeof(UNICODE_NULL));
-                Length += (wcslen(CurrentId) * sizeof(WCHAR)) + sizeof(UNICODE_NULL);
-
-                CurrentId = L"*PNP0C08";
-                RtlCopyMemory(&Id[wcslen(Id) + 1], CurrentId, (wcslen(CurrentId) * sizeof(WCHAR)) + sizeof(UNICODE_NULL));
-                Length += (wcslen(CurrentId) * sizeof(WCHAR)) + sizeof(UNICODE_NULL);
+                Ids[0] = L"ACPI_HAL\\PNP0C08";
             }
             else if (PdoType == WdPdo)
             {
-                /* WatchDog ID */
-                CurrentId = L"ACPI_HAL\\PNP0C18";
-                RtlCopyMemory(Id, CurrentId, (wcslen(CurrentId) * sizeof(WCHAR)) + sizeof(UNICODE_NULL));
-                Length += (wcslen(CurrentId) * sizeof(WCHAR)) + sizeof(UNICODE_NULL);
-
-                CurrentId = L"*PNP0C18";
-                RtlCopyMemory(&Id[wcslen(Id) + 1], CurrentId, (wcslen(CurrentId) * sizeof(WCHAR)) + sizeof(UNICODE_NULL));
-                Length += (wcslen(CurrentId) * sizeof(WCHAR)) + sizeof(UNICODE_NULL);
+                Ids[0] = L"ACPI_HAL\\PNP0C18";
             }
             else
             {
-                /* Unknown */
+                return STATUS_NOT_SUPPORTED;
+            }
+            break;
+
+        case BusQueryHardwareIDs:
+
+            MultiSz = TRUE;
+            IdCount = 2;
+            if (PdoType == AcpiPdo)
+            {
+                Ids[0] = L"ACPI_HAL\\PNP0C08";
+                Ids[1] = L"*PNP0C08";
+            }
+            else if (PdoType == WdPdo)
+            {
+                Ids[0] = L"ACPI_HAL\\PNP0C18";
+                Ids[1] = L"*PNP0C18";
+            }
+            else
+            {
                 return STATUS_NOT_SUPPORTED;
             }
             break;
 
         case BusQueryInstanceID:
 
-            /* Instance ID */
-            CurrentId = L"0";
-            RtlCopyMemory(Id, CurrentId, (wcslen(CurrentId) * sizeof(WCHAR)) + sizeof(UNICODE_NULL));
-            Length += (wcslen(CurrentId) * sizeof(WCHAR)) + sizeof(UNICODE_NULL);
+            MultiSz = FALSE;
+            IdCount = 1;
+            Ids[0] = L"0";
             break;
 
-        case BusQueryCompatibleIDs:
         default:
 
             /* We don't support anything else */
             return STATUS_NOT_SUPPORTED;
     }
 
-
-    /* Allocate the buffer */
-    Buffer = ExAllocatePoolWithTag(PagedPool,
-                                   Length + sizeof(UNICODE_NULL),
-                                   TAG_HAL);
-    if (Buffer)
+    TotalChars = 0;
+    for (i = 0; i < IdCount; i++)
     {
-        /* Copy the string and null-terminate it */
-        RtlCopyMemory(Buffer, Id, Length);
-        Buffer[Length / sizeof(WCHAR)] = UNICODE_NULL;
-
-        /* Return string */
-        *BusQueryId = Buffer;
-        Status = STATUS_SUCCESS;
-        DPRINT("Returning: %S\n", *BusQueryId);
-    }
-    else
-    {
-        /* Fail */
-        Status = STATUS_INSUFFICIENT_RESOURCES;
+        TotalChars += wcslen(Ids[i]) + 1;
     }
 
-    /* Return status */
-    return Status;
+    if (MultiSz)
+    {
+        TotalChars += 1;
+    }
+
+    TotalBytes = TotalChars * sizeof(WCHAR);
+    Buffer = ExAllocatePoolZero(PagedPool, TotalBytes, TAG_HAL);
+    if (!Buffer)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Current = Buffer;
+    RemainingBytes = TotalBytes;
+    for (i = 0; i < IdCount; i++)
+    {
+        SIZE_T AdvanceChars;
+
+        Status = RtlStringCbCopyW(Current, RemainingBytes, Ids[i]);
+        if (!NT_SUCCESS(Status))
+        {
+            ExFreePoolWithTag(Buffer, TAG_HAL);
+            return Status;
+        }
+
+        AdvanceChars = wcslen(Ids[i]) + 1;
+        Current += AdvanceChars;
+        RemainingBytes -= AdvanceChars * sizeof(WCHAR);
+    }
+
+    *BusQueryId = (PUSHORT)Buffer;
+    DPRINT("Returning: %S\n", (PWCHAR)*BusQueryId);
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -1100,6 +1390,37 @@ HalpDispatchPnp(IN PDEVICE_OBJECT DeviceObject,
         /* Query the IRP type */
         switch (Minor)
         {
+            case IRP_MN_REMOVE_DEVICE:
+
+                DPRINT("Remove device received for FDO\n");
+
+                /*
+                 * Orphan children before deleting the FDO so they won't touch
+                 * freed FDO extension memory during late-remove paths.
+                 */
+                ExAcquireFastMutex(&FdoExtension->ChildPdoLock);
+                {
+                    PPDO_EXTENSION CurrentPdo;
+
+                    CurrentPdo = FdoExtension->ChildPdoList;
+                    FdoExtension->ChildPdoList = NULL;
+                    while (CurrentPdo)
+                    {
+                        ExAcquireFastMutex(&CurrentPdo->PnpStateLock);
+                        CurrentPdo->ParentFdoExtension = NULL;
+                        ExReleaseFastMutex(&CurrentPdo->PnpStateLock);
+
+                        CurrentPdo = CurrentPdo->Next;
+                    }
+                }
+                ExReleaseFastMutex(&FdoExtension->ChildPdoLock);
+
+                IoSkipCurrentIrpStackLocation(Irp);
+                Status = IoCallDriver(FdoExtension->AttachedDeviceObject, Irp);
+                IoDetachDevice(FdoExtension->AttachedDeviceObject);
+                IoDeleteDevice(DeviceObject);
+                return Status;
+
             case IRP_MN_QUERY_DEVICE_RELATIONS:
 
                 /* Call the worker */
@@ -1130,14 +1451,6 @@ HalpDispatchPnp(IN PDEVICE_OBJECT DeviceObject,
                 Status = HalpQueryIdFdo(DeviceObject,
                                         IoStackLocation->Parameters.QueryId.IdType,
                                         (PVOID)&Irp->IoStatus.Information);
-                break;
-
-            case IRP_MN_QUERY_CAPABILITIES:
-
-                /* Call the worker */
-                DPRINT("Querying the capabilities for the FDO\n");
-                Status = HalpQueryCapabilities(DeviceObject,
-                                               IoStackLocation->Parameters.DeviceCapabilities.Capabilities);
                 break;
 
             default:
@@ -1171,16 +1484,19 @@ HalpDispatchPnp(IN PDEVICE_OBJECT DeviceObject,
     {
         /* This is a PDO instead */
         ASSERT(FdoExtension->ExtensionType == PdoExtensionType);
-        //PdoExtension = (PPDO_EXTENSION)FdoExtension;
+        PPDO_EXTENSION PdoExtension = (PPDO_EXTENSION)FdoExtension;
         /* Query the IRP type */
         Status = STATUS_SUCCESS;
         switch (Minor)
         {
             case IRP_MN_START_DEVICE:
 
-                /* We only care about a PCI PDO */
                 DPRINT1("Start device received\n");
-                /* Complete the IRP normally */
+                ExAcquireFastMutex(&PdoExtension->PnpStateLock);
+                PdoExtension->PreviousPnpState = PdoExtension->PnpState;
+                PdoExtension->PnpState = HalpPnpStateStarted;
+                PdoExtension->CurrentDevicePowerState = PowerDeviceD0;
+                ExReleaseFastMutex(&PdoExtension->PnpStateLock);
                 break;
 
             case IRP_MN_REMOVE_DEVICE:
@@ -1188,7 +1504,112 @@ HalpDispatchPnp(IN PDEVICE_OBJECT DeviceObject,
                 /* Check if this is a PCI device */
                 DPRINT1("Remove device received\n");
 
+                ExAcquireFastMutex(&PdoExtension->PnpStateLock);
+                PdoExtension->PreviousPnpState = PdoExtension->PnpState;
+                PdoExtension->PnpState = HalpPnpStateDeleted;
+                ExReleaseFastMutex(&PdoExtension->PnpStateLock);
+
+                HalpPdoDetachFromParent(PdoExtension);
+
                 /* We're done */
+                Status = STATUS_SUCCESS;
+                break;
+
+            case IRP_MN_QUERY_REMOVE_DEVICE:
+            case IRP_MN_QUERY_STOP_DEVICE:
+
+                DPRINT1("Query stop/remove received\n");
+                ExAcquireFastMutex(&PdoExtension->PnpStateLock);
+
+                if (Minor == IRP_MN_QUERY_STOP_DEVICE)
+                {
+                    if (PdoExtension->PnpState == HalpPnpStateStarted)
+                    {
+                        if (HalpIsDeviceQuiesced(DeviceObject))
+                        {
+                            PdoExtension->PreviousPnpState = PdoExtension->PnpState;
+                            PdoExtension->PnpState = HalpPnpStateStopPending;
+                            Status = STATUS_SUCCESS;
+                        }
+                        else
+                        {
+                            Status = STATUS_DEVICE_BUSY;
+                        }
+                    }
+                    else if ((PdoExtension->PnpState == HalpPnpStateStopPending) ||
+                             (PdoExtension->PnpState == HalpPnpStateStopped) ||
+                             (PdoExtension->PnpState == HalpPnpStateNotStarted))
+                    {
+                        Status = STATUS_SUCCESS;
+                    }
+                    else
+                    {
+                        Status = STATUS_INVALID_DEVICE_STATE;
+                    }
+                }
+                else if (Minor == IRP_MN_QUERY_REMOVE_DEVICE)
+                {
+                    if ((PdoExtension->PnpState == HalpPnpStateStarted) ||
+                        (PdoExtension->PnpState == HalpPnpStateStopped) ||
+                        (PdoExtension->PnpState == HalpPnpStateNotStarted))
+                    {
+                        if (HalpIsDeviceQuiesced(DeviceObject))
+                        {
+                            PdoExtension->PreviousPnpState = PdoExtension->PnpState;
+                            PdoExtension->PnpState = HalpPnpStateRemovePending;
+                            Status = STATUS_SUCCESS;
+                        }
+                        else
+                        {
+                            Status = STATUS_DEVICE_BUSY;
+                        }
+                    }
+                    else if (PdoExtension->PnpState == HalpPnpStateRemovePending)
+                    {
+                        Status = STATUS_SUCCESS;
+                    }
+                    else
+                    {
+                        Status = STATUS_INVALID_DEVICE_STATE;
+                    }
+                }
+                else
+                {
+                    Status = STATUS_INVALID_DEVICE_STATE;
+                }
+
+                ExReleaseFastMutex(&PdoExtension->PnpStateLock);
+                break;
+
+            case IRP_MN_CANCEL_REMOVE_DEVICE:
+            case IRP_MN_CANCEL_STOP_DEVICE:
+
+                DPRINT1("Cancel stop/remove received\n");
+                ExAcquireFastMutex(&PdoExtension->PnpStateLock);
+
+                if ((Minor == IRP_MN_CANCEL_STOP_DEVICE) &&
+                    (PdoExtension->PnpState == HalpPnpStateStopPending))
+                {
+                    PdoExtension->PnpState = PdoExtension->PreviousPnpState;
+                }
+                else if ((Minor == IRP_MN_CANCEL_REMOVE_DEVICE) &&
+                         (PdoExtension->PnpState == HalpPnpStateRemovePending))
+                {
+                    PdoExtension->PnpState = PdoExtension->PreviousPnpState;
+                }
+
+                ExReleaseFastMutex(&PdoExtension->PnpStateLock);
+                Status = STATUS_SUCCESS;
+                break;
+
+            case IRP_MN_STOP_DEVICE:
+
+                DPRINT1("Stop device received\n");
+                ExAcquireFastMutex(&PdoExtension->PnpStateLock);
+                PdoExtension->PreviousPnpState = PdoExtension->PnpState;
+                PdoExtension->PnpState = HalpPnpStateStopped;
+                PdoExtension->CurrentDevicePowerState = PowerDeviceD3;
+                ExReleaseFastMutex(&PdoExtension->PnpStateLock);
                 Status = STATUS_SUCCESS;
                 break;
 
@@ -1196,7 +1617,14 @@ HalpDispatchPnp(IN PDEVICE_OBJECT DeviceObject,
 
                 /* Inherit whatever status we had */
                 DPRINT1("Surprise removal IRP\n");
-                Status = Irp->IoStatus.Status;
+                ExAcquireFastMutex(&PdoExtension->PnpStateLock);
+                PdoExtension->PreviousPnpState = PdoExtension->PnpState;
+                PdoExtension->PnpState = HalpPnpStateSurpriseRemoved;
+                ExReleaseFastMutex(&PdoExtension->PnpStateLock);
+
+                HalpPdoDetachFromParent(PdoExtension);
+
+                Status = STATUS_SUCCESS;
                 break;
 
             case IRP_MN_QUERY_DEVICE_RELATIONS:
@@ -1268,6 +1696,11 @@ HalpDispatchPnp(IN PDEVICE_OBJECT DeviceObject,
         DPRINT("IRP completed with status: %lx\n", Status);
         Irp->IoStatus.Status = Status;
         IoCompleteRequest(Irp, IO_NO_INCREMENT);
+
+        if ((Minor == IRP_MN_REMOVE_DEVICE) && NT_SUCCESS(Status))
+        {
+            IoDeleteDevice(DeviceObject);
+        }
         return Status;
     }
 }
@@ -1277,8 +1710,21 @@ NTAPI
 HalpDispatchWmi(IN PDEVICE_OBJECT DeviceObject,
                 IN PIRP Irp)
 {
-    UNIMPLEMENTED_DBGBREAK("HAL: PnP Driver WMI!\n");
-    return STATUS_SUCCESS;
+    PFDO_EXTENSION FdoExtension;
+
+    DPRINT("HAL: PnP Driver WMI!\n");
+
+    FdoExtension = DeviceObject->DeviceExtension;
+    if (FdoExtension->ExtensionType == FdoExtensionType)
+    {
+        IoSkipCurrentIrpStackLocation(Irp);
+        return IoCallDriver(FdoExtension->AttachedDeviceObject, Irp);
+    }
+
+    Irp->IoStatus.Information = 0;
+    Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return STATUS_NOT_SUPPORTED;
 }
 
 NTSTATUS
@@ -1286,23 +1732,62 @@ NTAPI
 HalpDispatchPower(IN PDEVICE_OBJECT DeviceObject,
                   IN PIRP Irp)
 {
-    PFDO_EXTENSION FdoExtension;
+    PFDO_EXTENSION DeviceExtension;
+    PPDO_EXTENSION PdoExtension;
+    PIO_STACK_LOCATION IoStackLocation;
+    POWER_STATE PowerState;
+    POWER_STATE_TYPE PowerType;
+    NTSTATUS Status;
 
     DPRINT("HAL: PnP Driver Power!\n");
-    FdoExtension = DeviceObject->DeviceExtension;
-    if (FdoExtension->ExtensionType == FdoExtensionType)
+    DeviceExtension = DeviceObject->DeviceExtension;
+    IoStackLocation = IoGetCurrentIrpStackLocation(Irp);
+
+    if (DeviceExtension->ExtensionType == FdoExtensionType)
     {
-        PoStartNextPowerIrp(Irp);
         IoSkipCurrentIrpStackLocation(Irp);
-        return PoCallDriver(FdoExtension->AttachedDeviceObject, Irp);
+        return PoCallDriver(DeviceExtension->AttachedDeviceObject, Irp);
     }
-    else
+
+    ASSERT(DeviceExtension->ExtensionType == PdoExtensionType);
+    PdoExtension = (PPDO_EXTENSION)DeviceExtension;
+
+    Status = STATUS_SUCCESS;
+    switch (IoStackLocation->MinorFunction)
     {
-        PoStartNextPowerIrp(Irp);
-        Irp->IoStatus.Status = STATUS_SUCCESS;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
-        return STATUS_SUCCESS;
+        case IRP_MN_SET_POWER:
+
+            PowerType = IoStackLocation->Parameters.Power.Type;
+            PowerState = IoStackLocation->Parameters.Power.State;
+            if (PowerType == DevicePowerState)
+            {
+                PdoExtension->CurrentDevicePowerState = PowerState.DeviceState;
+                PoSetPowerState(DeviceObject, DevicePowerState, PowerState);
+            }
+            else if (PowerType == SystemPowerState)
+            {
+                PdoExtension->CurrentSystemPowerState = PowerState.SystemState;
+            }
+
+            Status = STATUS_SUCCESS;
+            break;
+
+        case IRP_MN_QUERY_POWER:
+
+            Status = STATUS_SUCCESS;
+            break;
+
+        default:
+
+            Status = STATUS_SUCCESS;
+            break;
     }
+
+    PoStartNextPowerIrp(Irp);
+    Irp->IoStatus.Information = 0;
+    Irp->IoStatus.Status = Status;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return Status;
 }
 
 NTSTATUS
@@ -1314,6 +1799,9 @@ HalpDriverEntry(IN PDRIVER_OBJECT DriverObject,
     PDEVICE_OBJECT TargetDevice = NULL;
 
     DPRINT("HAL: PnP Driver ENTRY!\n");
+
+    KeInitializeEvent(&HalpPortRangeInitEvent, NotificationEvent, FALSE);
+    HalpPortRangeInitState = 0;
 
     /* This is us */
     HalpDriverObject = DriverObject;
