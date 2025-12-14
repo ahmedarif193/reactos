@@ -3,6 +3,21 @@ $if (_WDMDDK_)
  *                     Power Management Support Functions                     *
  ******************************************************************************/
 
+#include <ddk/ntpoapi.h>
+
+#ifndef _PO_PROCESSOR_IDLE_HANDLER_DEFINED
+#define _PO_PROCESSOR_IDLE_HANDLER_DEFINED
+typedef struct _PO_PROCESSOR_IDLE_HANDLER {
+  PROCESSOR_IDLE_HANDLER_INFO Info;
+  ULONG_PTR Context;
+} PO_PROCESSOR_IDLE_HANDLER, *PPO_PROCESSOR_IDLE_HANDLER;
+#endif
+
+typedef enum _PO_THERMAL_EVENT_TYPE {
+  PoThermalEventHot = 0,
+  PoThermalEventCritical = 1
+} PO_THERMAL_EVENT_TYPE, *PPO_THERMAL_EVENT_TYPE;
+
 #define PoSetDeviceBusy(IdlePointer) ((void)(*(IdlePointer) = 0))
 
 #if (NTDDI_VERSION >= NTDDI_WIN2K)
@@ -24,6 +39,31 @@ PoRegisterDeviceForIdleDetection(
   _In_ ULONG ConservationIdleTime,
   _In_ ULONG PerformanceIdleTime,
   _In_ DEVICE_POWER_STATE State);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PoRegisterProcessorIdleHandler(
+  _In_ ULONG ProcessorNumber,
+  _In_reads_(HandlerCount) PPO_PROCESSOR_IDLE_HANDLER IdleHandlers,
+  _In_ ULONG HandlerCount);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+PoUnregisterProcessorIdleHandler(
+  _In_ ULONG ProcessorNumber);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+PoNotifyProcessorThermalEvent(
+  _In_ ULONG ProcessorNumber,
+  _In_ PO_THERMAL_EVENT_TYPE EventType,
+  _In_ ULONG TripPoint);
 
 _IRQL_requires_max_(APC_LEVEL)
 NTKERNELAPI
@@ -194,4 +234,3 @@ PoCreatePowerRequest(
   _In_opt_ PCOUNTED_REASON_CONTEXT Context);
 
 #endif /* (NTDDI_VERSION >= NTDDI_WIN7) */
-

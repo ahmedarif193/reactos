@@ -201,6 +201,7 @@ typedef struct _KINTERRUPT *PKINTERRUPT;
 typedef struct _KPROCESS *PKPROCESS;
 typedef struct _KTHREAD *PKTHREAD, *PRKTHREAD;
 typedef struct _CONTEXT *PCONTEXT;
+typedef struct _PO_PROCESSOR_IDLE_HANDLER *PPO_PROCESSOR_IDLE_HANDLER;
 
 #if defined(USE_DMA_MACROS) && !defined(_NTHAL_)
 typedef struct _DMA_ADAPTER *PADAPTER_OBJECT;

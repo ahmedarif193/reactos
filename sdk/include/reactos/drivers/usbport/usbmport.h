@@ -57,14 +57,14 @@ typedef struct _USBPORT_RESOURCES {
   PVOID ResourceBase;
   ULONG IoSpaceLength;
   ULONG_PTR StartVA;
-  ULONG StartPA;
+  ULONGLONG StartPA;
   UCHAR LegacySupport;
   BOOLEAN IsChirpHandled;
   UCHAR Reserved2;
   UCHAR Reserved3;
 } USBPORT_RESOURCES, *PUSBPORT_RESOURCES;
 
-C_ASSERT(sizeof(USBPORT_RESOURCES) == 40 + 5 * sizeof(PVOID));
+C_ASSERT(sizeof(USBPORT_RESOURCES) == 40 + 6 * sizeof(PVOID));
 
 typedef struct _USBPORT_COMPANION_PORT_INFO {
   USHORT CompanionIndex;
