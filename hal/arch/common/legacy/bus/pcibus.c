@@ -46,6 +46,93 @@ static PHAL_ACPI_PCI_ROUTE_QUERY HalpPciRouteQueryCallback;
 BOOLEAN HalpPciBusRangeKnown;
 static BOOLEAN HalpPciMsiSupported = TRUE;
 
+static __inline BOOLEAN
+HalpIsPciDebuggingEnabled(VOID)
+{
+    return (KdDebuggerEnabled && !KdDebuggerNotPresent);
+}
+
+static __inline PCSTR
+HalpPciTriggerModeName(
+    _In_ UCHAR TriggerMode)
+{
+    switch (TriggerMode)
+    {
+        case HAL_ACPI_TRIGGER_EDGE:  return "edge";
+        case HAL_ACPI_TRIGGER_LEVEL: return "level";
+        default:                     return "unknown";
+    }
+}
+
+static __inline PCSTR
+HalpPciPolarityName(
+    _In_ UCHAR Polarity)
+{
+    switch (Polarity)
+    {
+        case HAL_ACPI_POLARITY_HIGH: return "high";
+        case HAL_ACPI_POLARITY_LOW:  return "low";
+        case HAL_ACPI_POLARITY_BOTH: return "both";
+        default:                     return "unknown";
+    }
+}
+
+static __inline CHAR
+HalpPciPinLetter(
+    _In_ UCHAR Pin)
+{
+    if ((Pin >= 1) && (Pin <= 4))
+    {
+        return (CHAR)('A' + (Pin - 1));
+    }
+
+    return '?';
+}
+
+static
+VOID
+HalpPciDumpAcpiRoutingMap(
+    _In_reads_opt_(EntryCount) const HAL_ACPI_PCI_ROUTE_ENTRY *Entries,
+    _In_ ULONG EntryCount)
+{
+    ULONG Index;
+    ULONG Printed = 0;
+
+    if (!Entries || EntryCount == 0)
+    {
+        return;
+    }
+
+    DbgPrint("\n====== ACPI _PRT PCI IRQ ROUTING MAP =======\n\n");
+
+    for (Index = 0; Index < EntryCount; ++Index)
+    {
+        const HAL_ACPI_PCI_ROUTE_ENTRY *Entry = &Entries[Index];
+
+        if ((Entry->Pin < 1) || (Entry->Pin > 4))
+        {
+            continue;
+        }
+
+        DbgPrint("%04lx:%02x:%02x pin %c -> GSI %lu (%s, %s)\n",
+                 Entry->Segment,
+                 (ULONG)Entry->Bus,
+                 (ULONG)Entry->Device,
+                 HalpPciPinLetter(Entry->Pin),
+                 Entry->Gsi,
+                 HalpPciTriggerModeName(Entry->TriggerMode),
+                 HalpPciPolarityName(Entry->Polarity));
+        ++Printed;
+    }
+
+    if (Printed == 0)
+    {
+        DbgPrint("HAL: No valid _PRT routing entries.\n");
+    }
+
+    DbgPrint("\n====== END ACPI _PRT PCI IRQ ROUTING MAP =======\n\n");
+}
+
 static
 VOID
 HalpPciInitGsiLock(VOID)
@@ -1304,6 +1391,11 @@ HalpSetPciRoutingMap(
                 Recorded,
                 MaxGsi);
     }
+
+    if (HalpIsPciDebuggingEnabled())
+    {
+        HalpPciDumpAcpiRoutingMap(Entries, EntryCount);
+    }
 }
 
 VOID
@@ -1979,8 +2071,12 @@ HalpReadPCIConfig(IN PBUS_HANDLER BusHandler,
     else
     {
         PPCIPBUSDATA BusData = (PPCIPBUSDATA)BusHandler->BusData;
+        BOOLEAN TryEcam;
 
-        if (Length && BusData && BusData->AcpiRootConfigured &&
+        TryEcam = (Length != 0) &&
+                  BusData &&
+                  (BusData->AcpiRootConfigured || (BusData->PciSegment != 0));
+        if (TryEcam &&
             HalpAcpiAccessConfigEcam(FALSE,
                                      BusData->PciSegment,
                                      BusHandler->BusNumber,
@@ -1989,6 +2085,12 @@ HalpReadPCIConfig(IN PBUS_HANDLER BusHandler,
                                      Offset,
                                      Length))
         {
+            return;
+        }
+
+        if (Length && BusData && (BusData->PciSegment != 0))
+        {
+            RtlFillMemory(Buffer, Length, -1);
             return;
         }
 
@@ -2014,8 +2116,12 @@ HalpWritePCIConfig(IN PBUS_HANDLER BusHandler,
     if (HalpValidPCISlot(BusHandler, Slot))
     {
         PPCIPBUSDATA BusData = (PPCIPBUSDATA)BusHandler->BusData;
+        BOOLEAN TryEcam;
 
-        if (Length && BusData && BusData->AcpiRootConfigured &&
+        TryEcam = (Length != 0) &&
+                  BusData &&
+                  (BusData->AcpiRootConfigured || (BusData->PciSegment != 0));
+        if (TryEcam &&
             HalpAcpiAccessConfigEcam(TRUE,
                                      BusData->PciSegment,
                                      BusHandler->BusNumber,
@@ -2023,6 +2129,11 @@ HalpWritePCIConfig(IN PBUS_HANDLER BusHandler,
                                      Buffer,
                                      Offset,
                                      Length))
+        {
+            return;
+        }
+
+        if (BusData && (BusData->PciSegment != 0))
         {
             return;
         }
@@ -2338,6 +2449,17 @@ HalpGetPCIData(IN PBUS_HANDLER BusHandler,
             /* It's invalid, but we want to return this much */
             Len = sizeof(USHORT);
         }
+        else
+        {
+            /*
+             * ACPI firmware may keep legacy IRQ numbers (0-15) in the PCI
+             * InterruptLine register even when the device is routed to a GSI
+             * above 15 via _PRT/IO-APIC. If an ACPI _PRT provider is available,
+             * translate the InterruptLine we return to callers into the
+             * firmware-selected GSI.
+             */
+            HalpPCIPin2ISALine(BusHandler, RootHandler, Slot, PciConfig);
+        }
 
         /* Now check if there's space left */
         if (Len < Offset) return 0;
@@ -2467,6 +2589,24 @@ HalpGetPCIIntOnISABus(IN PBUS_HANDLER BusHandler,
 }
 #endif // _MINIHAL_
 
+static VOID
+HalpPciUpdateInterruptLine(
+    _In_ PBUS_HANDLER BusHandler,
+    _In_ PCI_SLOT_NUMBER SlotNumber,
+    _In_ UCHAR InterruptLine)
+{
+    if (!BusHandler)
+    {
+        return;
+    }
+
+    HalpWritePCIConfig(BusHandler,
+                      SlotNumber,
+                      &InterruptLine,
+                      FIELD_OFFSET(PCI_COMMON_CONFIG, u.type0.InterruptLine),
+                      sizeof(InterruptLine));
+}
+
 VOID
 NTAPI
 HalpPCIPin2ISALine(IN PBUS_HANDLER BusHandler,
@@ -2499,6 +2639,8 @@ HalpPCIPin2ISALine(IN PBUS_HANDLER BusHandler,
                                        &Polarity,
                                        &Trigger))
         {
+            UCHAR NewLine;
+
             HalpPciRecordGsiInfo(Gsi,
                                  Polarity,
                                  Trigger,
@@ -2508,7 +2650,15 @@ HalpPCIPin2ISALine(IN PBUS_HANDLER BusHandler,
                                  SlotNumber.u.bits.FunctionNumber,
                                  Pin,
                                  TRUE);
-            PciData->u.type0.InterruptLine = (Gsi <= 0xFF) ? (UCHAR)Gsi : 0xFF;
+
+            NewLine = (Gsi <= 0xFF) ? (UCHAR)Gsi : 0xFF;
+            if ((NewLine <= 0x0F) &&
+                (PciData->u.type0.InterruptLine != NewLine))
+            {
+                HalpPciUpdateInterruptLine(BusHandler, SlotNumber, NewLine);
+            }
+
+            PciData->u.type0.InterruptLine = NewLine;
             return;
         }
     }

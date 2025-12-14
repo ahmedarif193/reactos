@@ -9,6 +9,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <hal.h>
+#include <halpcie.h>
 #include <intrin.h>
 #include <ndk/rtlfuncs.h>
 #include <reactos/hal/acpi_pci.h>
@@ -1420,6 +1421,325 @@ ShowSize(ULONG x)
     DbgPrint("]");
 }
 
+CODE_SEG("INIT")
+static
+VOID
+NTAPI
+HalpShowSize64(IN ULONGLONG Size)
+{
+    if (!Size) return;
+
+    DbgPrint(" [size=");
+    if (Size < 1024ULL)
+    {
+        DbgPrint("%I64u", Size);
+    }
+    else if (Size < 1048576ULL)
+    {
+        DbgPrint("%I64uK", Size / 1024ULL);
+    }
+    else if (Size < 1073741824ULL)
+    {
+        DbgPrint("%I64uM", Size / 1048576ULL);
+    }
+    else if (Size < 1099511627776ULL)
+    {
+        DbgPrint("%I64uG", Size / 1073741824ULL);
+    }
+    else
+    {
+        DbgPrint("%I64uT", Size / 1099511627776ULL);
+    }
+    DbgPrint("]");
+}
+
+CODE_SEG("INIT")
+static
+VOID
+NTAPI
+HalpDebugPciDumpCapabilities(IN PBUS_HANDLER BusHandler,
+                             IN PCI_SLOT_NUMBER PciSlot,
+                             IN UCHAR HeaderType,
+                             IN PPCI_COMMON_CONFIG PciData)
+{
+    PCI_CAPABILITIES_HEADER Header;
+    UCHAR CapabilityPointer;
+    ULONG GuardCount;
+    ULONG Visited[8];
+    BOOLEAN IsPcie;
+    USHORT Offset;
+    ULONG ExtVisited[32];
+
+    IsPcie = FALSE;
+    RtlZeroMemory(Visited, sizeof(Visited));
+    RtlZeroMemory(ExtVisited, sizeof(ExtVisited));
+
+    if (!(PciData->Status & PCI_STATUS_CAPABILITIES_LIST))
+    {
+        return;
+    }
+
+    switch (HeaderType)
+    {
+        case PCI_DEVICE_TYPE:
+            CapabilityPointer = PciData->u.type0.CapabilitiesPtr;
+            break;
+
+        case PCI_BRIDGE_TYPE:
+            CapabilityPointer = PciData->u.type1.CapabilitiesPtr;
+            break;
+
+        case PCI_CARDBUS_BRIDGE_TYPE:
+            CapabilityPointer = PciData->u.type2.CapabilitiesPtr;
+            break;
+
+        default:
+            CapabilityPointer = 0;
+            break;
+    }
+    if (!CapabilityPointer)
+    {
+        return;
+    }
+    GuardCount = 0;
+
+    while (CapabilityPointer >= 0x40 &&
+           GuardCount++ < 48)
+    {
+        ULONG Index;
+        ULONG Mask;
+
+        CapabilityPointer &= (UCHAR)~0x3;
+
+        Index = CapabilityPointer / 4;
+        Mask = 1u << (Index & 31);
+        if (Visited[Index >> 5] & Mask)
+        {
+            break;
+        }
+        Visited[Index >> 5] |= Mask;
+
+        HalpReadPCIConfig(BusHandler,
+                          PciSlot,
+                          &Header,
+                          CapabilityPointer,
+                          sizeof(Header));
+
+        if (Header.CapabilityID == 0 ||
+            Header.CapabilityID == 0xFF ||
+            Header.Next == CapabilityPointer)
+        {
+            break;
+        }
+
+        switch (Header.CapabilityID)
+        {
+            case PCI_CAPABILITY_ID_POWER_MANAGEMENT:
+            {
+                USHORT Pmc;
+
+                HalpReadPCIConfig(BusHandler,
+                                  PciSlot,
+                                  &Pmc,
+                                  (USHORT)(CapabilityPointer + 2),
+                                  sizeof(Pmc));
+                DbgPrint("\tCapabilities: [%02x] Power Management version %u\n",
+                         CapabilityPointer,
+                         (ULONG)(Pmc & 0x7));
+                break;
+            }
+
+            case PCI_CAPABILITY_ID_MSI:
+            {
+                USHORT Control;
+                UCHAR MultipleCapable;
+                UCHAR MultipleEnabled;
+
+                HalpReadPCIConfig(BusHandler,
+                                  PciSlot,
+                                  &Control,
+                                  (USHORT)(CapabilityPointer + 2),
+                                  sizeof(Control));
+
+                MultipleCapable = (UCHAR)((Control >> 1) & 0x7);
+                MultipleEnabled = (UCHAR)((Control >> 4) & 0x7);
+                if (MultipleEnabled > MultipleCapable)
+                {
+                    MultipleEnabled = MultipleCapable;
+                }
+
+                DbgPrint("\tCapabilities: [%02x] MSI: Enable%c Count=%lu/%lu Maskable%c 64bit%c\n",
+                         CapabilityPointer,
+                         (Control & 0x0001) ? '+' : '-',
+                         1ul << MultipleEnabled,
+                         1ul << MultipleCapable,
+                         (Control & 0x0100) ? '+' : '-',
+                         (Control & 0x0080) ? '+' : '-');
+                break;
+            }
+
+            case PCI_CAPABILITY_ID_PCI_EXPRESS:
+            {
+                USHORT PcieCap;
+                UCHAR DeviceType;
+                UCHAR MessageNumber;
+
+                IsPcie = TRUE;
+                HalpReadPCIConfig(BusHandler,
+                                  PciSlot,
+                                  &PcieCap,
+                                  (USHORT)(CapabilityPointer + 2),
+                                  sizeof(PcieCap));
+
+                DeviceType = (UCHAR)((PcieCap >> 4) & 0xF);
+                MessageNumber = (UCHAR)((PcieCap >> 9) & 0x1F);
+
+                DbgPrint("\tCapabilities: [%02x] Express %s, MSI %02u\n",
+                         CapabilityPointer,
+                         HalpPciExpressDeviceTypeName(DeviceType),
+                         (ULONG)MessageNumber);
+                break;
+            }
+
+            case PCI_CAPABILITY_ID_MSIX:
+            {
+                USHORT Control;
+                ULONG TableSize;
+
+                HalpReadPCIConfig(BusHandler,
+                                  PciSlot,
+                                  &Control,
+                                  (USHORT)(CapabilityPointer + 2),
+                                  sizeof(Control));
+
+                TableSize = (ULONG)(Control & 0x07FF) + 1;
+
+                DbgPrint("\tCapabilities: [%02x] MSI-X: Enable%c Count=%lu Masked%c\n",
+                         CapabilityPointer,
+                         (Control & 0x8000) ? '+' : '-',
+                         TableSize,
+                         (Control & 0x4000) ? '+' : '-');
+                break;
+            }
+
+            default:
+                DbgPrint("\tCapabilities: [%02x] Capability ID %02x\n",
+                         CapabilityPointer,
+                         (ULONG)Header.CapabilityID);
+                break;
+        }
+
+        CapabilityPointer = Header.Next;
+    }
+
+    if (!IsPcie)
+    {
+        return;
+    }
+
+    Offset = 0x100;
+    GuardCount = 0;
+
+    while (Offset >= 0x100 &&
+           Offset < 0x1000 &&
+           GuardCount++ < 64)
+    {
+        ULONG ExtHeader;
+        USHORT CapabilityId;
+        USHORT NextOffset;
+        ULONG Index;
+        ULONG Mask;
+
+        Index = Offset / 4;
+        Mask = 1u << (Index & 31);
+        if (ExtVisited[Index >> 5] & Mask)
+        {
+            break;
+        }
+        ExtVisited[Index >> 5] |= Mask;
+
+        HalpReadPCIConfig(BusHandler,
+                          PciSlot,
+                          &ExtHeader,
+                          Offset,
+                          sizeof(ExtHeader));
+
+        if (ExtHeader == 0 || ExtHeader == 0xFFFFFFFF)
+        {
+            break;
+        }
+
+        CapabilityId = (USHORT)(ExtHeader & 0xFFFF);
+        NextOffset = (USHORT)((ExtHeader >> 20) & 0xFFF);
+
+        if (CapabilityId == 0 || CapabilityId == 0xFFFF)
+        {
+            break;
+        }
+
+        switch (CapabilityId)
+        {
+            case 0x0001:
+                DbgPrint("\tCapabilities: [%03x] Advanced Error Reporting\n", Offset);
+                break;
+
+            case 0x0003:
+            {
+                ULONG SerialLow;
+                ULONG SerialHigh;
+                ULONGLONG Serial;
+                UCHAR B0, B1, B2, B3, B4, B5, B6, B7;
+
+                HalpReadPCIConfig(BusHandler,
+                                  PciSlot,
+                                  &SerialLow,
+                                  (USHORT)(Offset + 4),
+                                  sizeof(SerialLow));
+                HalpReadPCIConfig(BusHandler,
+                                  PciSlot,
+                                  &SerialHigh,
+                                  (USHORT)(Offset + 8),
+                                  sizeof(SerialHigh));
+
+                Serial = ((ULONGLONG)SerialHigh << 32) | SerialLow;
+                B0 = (UCHAR)(Serial >> 56);
+                B1 = (UCHAR)(Serial >> 48);
+                B2 = (UCHAR)(Serial >> 40);
+                B3 = (UCHAR)(Serial >> 32);
+                B4 = (UCHAR)(Serial >> 24);
+                B5 = (UCHAR)(Serial >> 16);
+                B6 = (UCHAR)(Serial >> 8);
+                B7 = (UCHAR)(Serial);
+
+                DbgPrint("\tCapabilities: [%03x] Device Serial Number %02x-%02x-%02x-%02x-%02x-%02x-%02x-%02x\n",
+                         Offset,
+                         (ULONG)B0,
+                         (ULONG)B1,
+                         (ULONG)B2,
+                         (ULONG)B3,
+                         (ULONG)B4,
+                         (ULONG)B5,
+                         (ULONG)B6,
+                         (ULONG)B7);
+                break;
+            }
+
+            default:
+                DbgPrint("\tCapabilities: [%03x] Extended Capability ID %04x\n",
+                         Offset,
+                         (ULONG)CapabilityId);
+                break;
+        }
+
+        if (NextOffset == 0 || NextOffset == Offset || (NextOffset & 0x3))
+        {
+            break;
+        }
+
+        Offset = NextOffset;
+    }
+}
+
 /*
  * These includes are required to define
  * the ClassTable and VendorTable arrays.
@@ -1445,9 +1765,11 @@ HalpDebugPciDumpBus(IN PBUS_HANDLER BusHandler,
     CHAR bVendorName[64] = "";
     CHAR bProductName[128] = "Unknown device";
     CHAR bSubVendorName[128] = "Unknown";
-    ULONG Size, Mem, b;
+    BOOLEAN HasSubsystemIds;
+    ULONG b;
 
     HeaderType = (PciData->HeaderType & ~PCI_MULTIFUNCTION);
+    HasSubsystemIds = TRUE;
 
     /* Isolate the class name */
     sprintf(LookupString, "C %02x  ", PciData->BaseClass);
@@ -1526,15 +1848,24 @@ HalpDebugPciDumpBus(IN PBUS_HANDLER BusHandler,
 
             if (HeaderType == PCI_DEVICE_TYPE)
             {
-                /* Isolate the subvendor and subsystem name */
-                sprintf(LookupString,
-                        "\t\t%04x %04x  ",
-                        PciData->u.type0.SubVendorID,
-                        PciData->u.type0.SubSystemID);
-                SubVendorName = strstr(ProductName, LookupString);
-                if (Boundary && SubVendorName >= Boundary)
+                if ((PciData->u.type0.SubVendorID == 0) &&
+                    (PciData->u.type0.SubSystemID == 0))
                 {
-                    SubVendorName = NULL;
+                    HasSubsystemIds = FALSE;
+                }
+
+                /* Isolate the subvendor and subsystem name */
+                if (HasSubsystemIds)
+                {
+                    sprintf(LookupString,
+                            "\t\t%04x %04x  ",
+                            PciData->u.type0.SubVendorID,
+                            PciData->u.type0.SubSystemID);
+                    SubVendorName = strstr(ProductName, LookupString);
+                    if (Boundary && SubVendorName >= Boundary)
+                    {
+                        SubVendorName = NULL;
+                    }
                 }
             }
             if (SubVendorName)
@@ -1566,26 +1897,59 @@ HalpDebugPciDumpBus(IN PBUS_HANDLER BusHandler,
 
     if (HeaderType == PCI_DEVICE_TYPE)
     {
-        DbgPrint("\tSubsystem: %s [%04x:%04x]\n",
-                 bSubVendorName,
-                 PciData->u.type0.SubVendorID,
-                 PciData->u.type0.SubSystemID);
+        if (HasSubsystemIds)
+        {
+            DbgPrint("\tSubsystem: %s [%04x:%04x]\n",
+                     bSubVendorName,
+                     PciData->u.type0.SubVendorID,
+                     PciData->u.type0.SubSystemID);
+        }
+        else
+        {
+            DbgPrint("\tSubsystem: (not provided)\n");
+        }
     }
 
     /* Print out and decode flags */
-    DbgPrint("\tFlags:");
-    if (PciData->Command & PCI_ENABLE_BUS_MASTER) DbgPrint(" bus master,");
-    if (PciData->Status & PCI_STATUS_66MHZ_CAPABLE) DbgPrint(" 66MHz,");
-    if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x000) DbgPrint(" fast devsel,");
-    if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x200) DbgPrint(" medium devsel,");
-    if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x400) DbgPrint(" slow devsel,");
-    if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x600) DbgPrint(" unknown devsel,");
-    DbgPrint(" latency %d", PciData->LatencyTimer);
-    if (PciData->u.type0.InterruptPin != 0 &&
-        PciData->u.type0.InterruptLine != 0 &&
-        PciData->u.type0.InterruptLine != 0xFF) DbgPrint(", IRQ %02d", PciData->u.type0.InterruptLine);
-    else if (PciData->u.type0.InterruptPin != 0) DbgPrint(", IRQ assignment required");
-    DbgPrint("\n");
+    {
+        HALP_PCI_GSI_DIAG GsiDiag;
+        BOOLEAN HasGsi = FALSE;
+
+        DbgPrint("\tFlags:");
+        if (PciData->Command & PCI_ENABLE_BUS_MASTER) DbgPrint(" bus master,");
+        if (PciData->Status & PCI_STATUS_66MHZ_CAPABLE) DbgPrint(" 66MHz,");
+        if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x000) DbgPrint(" fast devsel,");
+        if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x200) DbgPrint(" medium devsel,");
+        if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x400) DbgPrint(" slow devsel,");
+        if ((PciData->Status & PCI_STATUS_DEVSEL) == 0x600) DbgPrint(" unknown devsel,");
+        DbgPrint(" latency %d", PciData->LatencyTimer);
+
+        if ((PciData->u.type0.InterruptLine != 0) &&
+            (PciData->u.type0.InterruptLine != 0xFF) &&
+            HalpPciDescribeGsi((ULONG)PciData->u.type0.InterruptLine, &GsiDiag))
+        {
+            HasGsi = TRUE;
+        }
+
+        if (PciData->u.type0.InterruptPin != 0 &&
+            PciData->u.type0.InterruptLine != 0 &&
+            PciData->u.type0.InterruptLine != 0xFF) DbgPrint(", IRQ %02d", PciData->u.type0.InterruptLine);
+        else if (PciData->u.type0.InterruptPin != 0) DbgPrint(", IRQ assignment required");
+        DbgPrint("\n");
+
+        if (HasGsi)
+        {
+            DbgPrint("\tInterrupt: line %02u -> GSI %u%s (seg %u bus %u dev %u fn %u pin IN%c)\n",
+                     PciData->u.type0.InterruptLine,
+                     (ULONG)PciData->u.type0.InterruptLine,
+                     GsiDiag.FromFirmware ? " from firmware" : "",
+                     (ULONG)GsiDiag.Segment,
+                     (ULONG)GsiDiag.Bus,
+                     (ULONG)GsiDiag.Device,
+                     (ULONG)GsiDiag.Function,
+                     (GsiDiag.Pin >= 1 && GsiDiag.Pin <= 4) ? ('A' + GsiDiag.Pin - 1) : '?');
+        }
+    }
 
     if (HeaderType == PCI_BRIDGE_TYPE)
     {
@@ -1598,61 +1962,154 @@ HalpDebugPciDumpBus(IN PBUS_HANDLER BusHandler,
     }
 
     /* Scan addresses */
-    Size = 0;
-    for (b = 0; b < (HeaderType == PCI_DEVICE_TYPE ? PCI_TYPE0_ADDRESSES : PCI_TYPE1_ADDRESSES); b++)
     {
-        /* Check for a BAR */
-        if (HeaderType != PCI_CARDBUS_BRIDGE_TYPE)
-            Mem = PciData->u.type0.BaseAddresses[b];
-        else
-            Mem = 0;
-        if (Mem)
+        ULONG AddressCount;
+
+        AddressCount = (HeaderType == PCI_DEVICE_TYPE) ? PCI_TYPE0_ADDRESSES : PCI_TYPE1_ADDRESSES;
+        for (b = 0; b < AddressCount; b++)
         {
-            ULONG PciBar = 0xFFFFFFFF;
+    {
+        ULONG OriginalLow;
+        ULONG OriginalHigh;
+        ULONG ProbeLow;
+        ULONG ProbeHigh;
+        USHORT BarOffset;
+        BOOLEAN IsIo;
+        BOOLEAN Is64;
+        ULONGLONG BaseAddress;
+        ULONGLONG Mask;
+        ULONGLONG Size;
 
-            HalpWritePCIConfig(BusHandler,
-                               PciSlot,
-                               &PciBar,
-                               FIELD_OFFSET(PCI_COMMON_HEADER, u.type0.BaseAddresses[b]),
-                               sizeof(ULONG));
-            HalpReadPCIConfig(BusHandler,
-                              PciSlot,
-                              &PciBar,
-                              FIELD_OFFSET(PCI_COMMON_HEADER, u.type0.BaseAddresses[b]),
-                              sizeof(ULONG));
-            HalpWritePCIConfig(BusHandler,
-                               PciSlot,
-                               &Mem,
-                               FIELD_OFFSET(PCI_COMMON_HEADER, u.type0.BaseAddresses[b]),
-                               sizeof(ULONG));
+        if (HeaderType == PCI_CARDBUS_BRIDGE_TYPE)
+        {
+            break;
+        }
 
-            /* Decode the address type */
-            if (PciBar & PCI_ADDRESS_IO_SPACE)
+        OriginalLow = PciData->u.type0.BaseAddresses[b];
+        if (!OriginalLow)
+        {
+            continue;
+        }
+
+        IsIo = (OriginalLow & PCI_ADDRESS_IO_SPACE) != 0;
+        Is64 = FALSE;
+        OriginalHigh = 0;
+        ProbeHigh = 0xFFFFFFFF;
+
+        if (!IsIo && ((OriginalLow & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_64BIT))
+        {
+            if (b + 1 >= AddressCount)
             {
-                /* Guess the size */
-                Size = 1 << 2;
-                while (!(PciBar & Size) && (Size)) Size <<= 1;
+                break;
+            }
 
-                /* Print it out */
-                DbgPrint("\tI/O ports at %04lx", Mem & PCI_ADDRESS_IO_ADDRESS_MASK);
-                ShowSize(Size);
+            Is64 = TRUE;
+            OriginalHigh = PciData->u.type0.BaseAddresses[b + 1];
+        }
+
+        BarOffset = (USHORT)FIELD_OFFSET(PCI_COMMON_HEADER, u.type0.BaseAddresses[b]);
+
+        ProbeLow = 0xFFFFFFFF;
+        HalpWritePCIConfig(BusHandler, PciSlot, &ProbeLow, BarOffset, sizeof(ProbeLow));
+        HalpReadPCIConfig(BusHandler, PciSlot, &ProbeLow, BarOffset, sizeof(ProbeLow));
+
+        if (Is64)
+        {
+            BarOffset = (USHORT)FIELD_OFFSET(PCI_COMMON_HEADER, u.type0.BaseAddresses[b + 1]);
+            HalpWritePCIConfig(BusHandler, PciSlot, &ProbeHigh, BarOffset, sizeof(ProbeHigh));
+            HalpReadPCIConfig(BusHandler, PciSlot, &ProbeHigh, BarOffset, sizeof(ProbeHigh));
+            HalpWritePCIConfig(BusHandler, PciSlot, &OriginalHigh, BarOffset, sizeof(OriginalHigh));
+        }
+
+        BarOffset = (USHORT)FIELD_OFFSET(PCI_COMMON_HEADER, u.type0.BaseAddresses[b]);
+        HalpWritePCIConfig(BusHandler, PciSlot, &OriginalLow, BarOffset, sizeof(OriginalLow));
+
+        if (IsIo)
+        {
+            BaseAddress = (ULONGLONG)(OriginalLow & PCI_ADDRESS_IO_ADDRESS_MASK);
+            Mask = (ULONGLONG)(ProbeLow & PCI_ADDRESS_IO_ADDRESS_MASK);
+            Size = Mask ? ((~Mask + 1) & 0xFFFFFFFFULL) : 0;
+
+            DbgPrint("\tI/O ports at %04I64x", BaseAddress);
+            HalpShowSize64(Size);
+            DbgPrint("\n");
+        }
+        else
+        {
+            if (Is64)
+            {
+                BaseAddress = ((ULONGLONG)OriginalHigh << 32) |
+                              (ULONGLONG)(OriginalLow & PCI_ADDRESS_MEMORY_ADDRESS_MASK);
+                Mask = ((ULONGLONG)ProbeHigh << 32) |
+                       (ULONGLONG)(ProbeLow & PCI_ADDRESS_MEMORY_ADDRESS_MASK);
             }
             else
             {
-                /* Guess the size */
-                Size = 1 << 4;
-                while (!(PciBar & Size) && (Size)) Size <<= 1;
-
-                /* Print it out */
-                DbgPrint("\tMemory at %08lx (%d-bit, %sprefetchable)",
-                         Mem & PCI_ADDRESS_MEMORY_ADDRESS_MASK,
-                         (Mem & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_32BIT ? 32 : 64,
-                         (Mem & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? "" : "non-");
-                ShowSize(Size);
+                BaseAddress = (ULONGLONG)(OriginalLow & PCI_ADDRESS_MEMORY_ADDRESS_MASK);
+                Mask = (ULONGLONG)(ProbeLow & PCI_ADDRESS_MEMORY_ADDRESS_MASK);
             }
+
+            if (Is64)
+            {
+                Size = Mask ? (~Mask + 1) : 0;
+            }
+            else
+            {
+                Size = Mask ? ((~Mask + 1) & 0xFFFFFFFFULL) : 0;
+            }
+
+            DbgPrint("\tMemory at %I64x (%d-bit, %sprefetchable)",
+                     BaseAddress,
+                     Is64 ? 64 : 32,
+                     (OriginalLow & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? "" : "non-");
+            HalpShowSize64(Size);
             DbgPrint("\n");
         }
+
+        if (Is64)
+        {
+            b++;
+        }
+        }
     }
+
+    if (HeaderType == PCI_DEVICE_TYPE && PciData->u.type0.ROMBaseAddress)
+    {
+        ULONG RomOriginal;
+        ULONG RomProbe;
+        ULONGLONG RomSize;
+
+        RomOriginal = PciData->u.type0.ROMBaseAddress;
+        RomProbe = 0xFFFFFFFE;
+
+        HalpWritePCIConfig(BusHandler,
+                           PciSlot,
+                           &RomProbe,
+                           FIELD_OFFSET(PCI_COMMON_HEADER, u.type0.ROMBaseAddress),
+                           sizeof(RomProbe));
+        HalpReadPCIConfig(BusHandler,
+                          PciSlot,
+                          &RomProbe,
+                          FIELD_OFFSET(PCI_COMMON_HEADER, u.type0.ROMBaseAddress),
+                          sizeof(RomProbe));
+        HalpWritePCIConfig(BusHandler,
+                           PciSlot,
+                           &RomOriginal,
+                           FIELD_OFFSET(PCI_COMMON_HEADER, u.type0.ROMBaseAddress),
+                           sizeof(RomOriginal));
+
+        RomSize = (RomProbe & PCI_ADDRESS_ROM_ADDRESS_MASK) ?
+                  ((~(ULONGLONG)(RomProbe & PCI_ADDRESS_ROM_ADDRESS_MASK) + 1) & 0xFFFFFFFFULL) :
+                  0;
+
+        DbgPrint("\tExpansion ROM at %08lx [%s]",
+                 RomOriginal & PCI_ADDRESS_ROM_ADDRESS_MASK,
+                 (RomOriginal & PCI_ROMADDRESS_ENABLED) ? "enabled" : "disabled");
+        HalpShowSize64(RomSize);
+        DbgPrint("\n");
+    }
+
+    HalpDebugPciDumpCapabilities(BusHandler, PciSlot, HeaderType, PciData);
 }
 #endif
 
