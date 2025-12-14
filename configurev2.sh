@@ -45,7 +45,7 @@ ensure_rust_toolchain() {
         echo "========================================="
         echo "Rustup not found; installing user-local rustup + stable toolchain"
         echo "========================================="
-        curl -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh
+        curl -fsSL --connect-timeout 30 --max-time 1800 https://sh.rustup.rs -o /tmp/rustup-init.sh
         sh /tmp/rustup-init.sh -y --default-toolchain stable
         rm -f /tmp/rustup-init.sh
         # Load cargo env for this shell so CMake finds the rustup-managed cargo
@@ -55,8 +55,10 @@ ensure_rust_toolchain() {
         fi
     else
         # Ensure stable toolchain exists and is default
-        rustup toolchain install stable >/dev/null 2>&1 || true
-        rustup default stable >/dev/null 2>&1 || true
+        echo "Installing/Updating stable Rust toolchain (this may take a while)..."
+        rustup toolchain install stable || true
+        echo "Setting stable as default..."
+        rustup default stable || true
     fi
 
     # Ensure PATH contains rustup-managed cargo for this session
@@ -108,7 +110,7 @@ ensure_mingw_toolchain() {
     local archive_path="/tmp/${archive_name}"
 
     echo "Fetching ${archive_name}..."
-    curl -L --fail "$url" -o "$archive_path"
+    curl -L --fail --connect-timeout 30 --max-time 1800 "$url" -o "$archive_path"
 
     echo "Extracting ${archive_name} into ${DEFAULT_TOOLCHAIN_ROOT}..."
     tar -xzf "$archive_path" -C "$DEFAULT_TOOLCHAIN_ROOT"
