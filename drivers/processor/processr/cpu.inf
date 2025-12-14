@@ -21,12 +21,13 @@ HKR, , ,               0, %ProcessorClassName%
 HKR, , Icon,           0, "-28"
 
 [Manufacturer]
-%Standard%=Standard
-%CyrixMfg%=Cyrix
-%IntelMfg%=Intel
-%AMDMfg%=AMD
-%TransmetaMfg%=Transmeta
-%VIAMfg%=VIA
+%Standard%=Standard,NTx86
+%CyrixMfg%=Cyrix,NTx86
+%IntelMfg%=Intel,NTx86
+%AMDMfg%=AMD,NTx86
+%TransmetaMfg%=Transmeta,NTx86
+%VIAMfg%=VIA,NTx86
+%LegacyProcessorMfg%=LegacyProcessor,NTamd64
 
 [Standard]
 %Processor.DeviceDesc% = Processr_Inst,ACPI\Processor
@@ -62,8 +63,8 @@ HKR, , Icon,           0, "-28"
 %IntelP4Processor.DeviceDesc%     = Processr_Inst,ACPI\GenuineIntel_-_x86_Family_15
 %IntelProcessor.DeviceDesc%       = Processr_Inst,ACPI\GenuineIntel_-_x86
 
-[Intel.NTAMD64]
-%IntelProcessor.DeviceDesc%       = Processr_Inst,ACPI\GenuineIntel_-_EM64T
+[LegacyProcessor.NTamd64]
+%Processor.DeviceDesc% = Processr_Inst,ACPI\Processor
 
 [AMD]
 %AMDK6Processor.DeviceDesc%   = Processr_Inst,ACPI\AuthenticAMD_-_x86_Family_5_Model_7
@@ -77,10 +78,6 @@ HKR, , Icon,           0, "-28"
 %AMDQProcessor.DeviceDesc%    = Processr_Inst,ACPI\AuthenticAMD_-_x86_Family_17
 %AMDProcessor.DeviceDesc%     = Processr_Inst,ACPI\AuthenticAMD_-_x86
 
-[AMD.NTAMD64]
-%AMDK8Processor.DeviceDesc%   = Processr_Inst,ACPI\AuthenticAMD_-_AMD64_Family_15
-%AMDProcessor.DeviceDesc%     = Processr_Inst,ACPI\AuthenticAMD_-_AMD64
-
 [Transmeta]
 %TransmetaProcessor.DeviceDesc% = Processr_Inst,ACPI\GenuineTMx86_-_x86
 
@@ -90,9 +87,6 @@ HKR, , Icon,           0, "-28"
 %ViaC7Processor.DeviceDesc%   = Processr_Inst,ACPI\CentaurHauls_-_x86_Family_6_Model_13
 %ViaNANOProcessor.DeviceDesc% = Processr_Inst,ACPI\CentaurHauls_-_x86_Family_6_Model_15
 %ViaProcessor.DeviceDesc%     = Processr_Inst,ACPI\CentaurHauls_-_x86
-
-[VIA.NTAMD64]
-%ViaProcessor.DeviceDesc%     = Processr_Inst,ACPI\CentaurHauls_-_VIA64
 
 ;---------------------------- Processr Driver ---------------------------
 
@@ -128,6 +122,7 @@ IntelMfg = "Intel"
 AMDMfg = "AMD"
 TransmetaMfg = "Transmeta"
 VIAMfg = "VIA"
+LegacyProcessorMfg = "Legacy Processor Support"
 
 ; Localizable
 ProcessorClassName = "Processors"

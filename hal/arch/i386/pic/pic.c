@@ -213,6 +213,13 @@ PHAL_SW_INTERRUPT_HANDLER_2ND_ENTRY SWInterruptHandlerTable2[3] =
 
 LONG HalpEisaELCR;
 
+BOOLEAN
+NTAPI
+HalpIsApicInterruptController(VOID)
+{
+    return FALSE;
+}
+
 /* FUNCTIONS ******************************************************************/
 
 VOID

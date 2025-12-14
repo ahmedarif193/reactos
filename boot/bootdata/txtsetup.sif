@@ -139,9 +139,11 @@ partmgr.sys  = 1,,,,,,x,4,,,,1,4
 
 [SourceDisksFiles.x86]
 acpi.sys     = 1,,,,,,,4,1,,,1,4
+acpiproc.sys = 1,,,,,,,4,,,,1,4
 
 [SourceDisksFiles.amd64]
 acpi.sys     = 1,,,,,,x,4,,,,1,4
+acpiproc.sys = 1,,,,,,x,4,,,,1,4
 
 ;
 ; The [SystemPartitionFiles] section lists all the files

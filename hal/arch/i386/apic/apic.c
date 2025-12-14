@@ -47,6 +47,13 @@ ULONG ApicVersion;
 UCHAR HalpVectorToIndex[256];
 ULONG HalpIoApicRedirectionCount = HALP_APIC_DEFAULT_REDIR_COUNT;
 
+BOOLEAN
+NTAPI
+HalpIsApicInterruptController(VOID)
+{
+    return TRUE;
+}
+
 static
 VOID
 HalpIoApicDeriveAndApplyRouting(
