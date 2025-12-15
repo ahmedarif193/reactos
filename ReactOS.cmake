@@ -94,6 +94,11 @@ if(NOT DEFINED ENABLE_CCACHE)
     set(ENABLE_CCACHE OFF CACHE BOOL "Enable ccache for faster rebuilds" FORCE)
 endif()
 
+# Tagged ISO output
+if(NOT DEFINED CONFIG_REACTOS_TAGGED_BIN)
+    set(CONFIG_REACTOS_TAGGED_BIN OFF CACHE BOOL "Append git branch/commit to output image filenames")
+endif()
+
 # Additional CMake options
 set(REACTOS_CMAKE_OPTIONS "" CACHE STRING "Additional CMake options")
 

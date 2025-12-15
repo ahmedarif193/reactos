@@ -70,8 +70,11 @@ set(ISO_MANUFACTURER "ReactOS Project") # For both the publisher and the prepare
 set(ISO_VOLNAME      "ReactOS")         # For both the Volume ID and the Volume set ID
 
 # Option: tag produced image filenames with branch/commit
-option(CONFIG_REACTOS_TAGGED_BIN "Append git branch/commit to output image filenames" OFF)
+if(NOT DEFINED CONFIG_REACTOS_TAGGED_BIN)
+    option(CONFIG_REACTOS_TAGGED_BIN "Append git branch/commit to output image filenames" OFF)
+endif()
 
+set(_APPLY_ISO_TAG FALSE)
 if(CONFIG_REACTOS_TAGGED_BIN)
     # Compute a git-based tag to append to produced image filenames
     # Prefer branch name; if detached, use 7-char commit; fallback to 'local'
@@ -110,6 +113,13 @@ if(CONFIG_REACTOS_TAGGED_BIN)
     string(REPLACE "/" "_" _ISO_TAG ${_ISO_TAG})
     string(REGEX REPLACE "[^A-Za-z0-9_.-]" "_" _ISO_TAG ${_ISO_TAG})
 
+    set(_APPLY_ISO_TAG TRUE)
+    if(_ISO_TAG STREQUAL "dev")
+        set(_APPLY_ISO_TAG FALSE)
+    endif()
+endif()
+
+if(_APPLY_ISO_TAG)
     set(REACTOS_LIVECD_ISO        ${REACTOS_BINARY_DIR}/livecd_${_ISO_TAG}.iso)
     set(REACTOS_BOOTCD_ISO        ${REACTOS_BINARY_DIR}/reactos_${_ISO_TAG}_bootcd.iso)
     set(REACTOS_BOOTCDREGTEST_ISO ${REACTOS_BINARY_DIR}/reactos_${_ISO_TAG}_bootcdregtest.iso)
@@ -252,14 +262,15 @@ endif()
 # Sanitize for filename safety
 string(REPLACE "/" "_" _ISO_TAG ${_ISO_TAG})
 string(REGEX REPLACE "[^A-Za-z0-9_.-]" "_" _ISO_TAG ${_ISO_TAG})
-set(REACTOS_TAGGED_ISO "reactos_${_ISO_TAG}.iso")
-
-add_custom_command(
-    OUTPUT ${REACTOS_BINARY_DIR}/${REACTOS_TAGGED_ISO}
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${REACTOS_BINARY_DIR}/livecd.iso ${REACTOS_BINARY_DIR}/${REACTOS_TAGGED_ISO}
-    DEPENDS livecd ${REACTOS_BINARY_DIR}/livecd.iso
-    COMMENT "Creating tagged ISO ${REACTOS_TAGGED_ISO}"
-    VERBATIM)
+if(NOT _ISO_TAG STREQUAL "dev")
+    set(REACTOS_TAGGED_ISO "reactos_${_ISO_TAG}.iso")
+    add_custom_command(
+        OUTPUT ${REACTOS_BINARY_DIR}/${REACTOS_TAGGED_ISO}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${REACTOS_BINARY_DIR}/livecd.iso ${REACTOS_BINARY_DIR}/${REACTOS_TAGGED_ISO}
+        DEPENDS livecd ${REACTOS_BINARY_DIR}/livecd.iso
+        COMMENT "Creating tagged ISO ${REACTOS_TAGGED_ISO}"
+        VERBATIM)
+endif()
 
 # Optional LiveUSB helper bundle: copy the ISO alongside a pre-formatted
 # writable FAT image that can be appended on removable media.
