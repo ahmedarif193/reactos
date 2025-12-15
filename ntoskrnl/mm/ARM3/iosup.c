@@ -37,6 +37,146 @@ MI_PFN_CACHE_ATTRIBUTE MiPlatformCacheAttributes[2][MmMaximumCacheType] =
     {MiNonCached,MiCached,MiWriteCombined,MiCached,MiNonCached,MiWriteCombined},
 };
 
+LIST_ENTRY MiIoMappingListHead;
+KSPIN_LOCK MiIoMappingLock;
+static volatile LONG MiIoMappingListInitialized;
+
+static
+VOID
+MiEnsureIoSpaceMapInitialized(VOID)
+{
+    LONG State;
+
+    if (MiIoMappingListInitialized == 2) return;
+
+    State = InterlockedCompareExchange((PLONG)&MiIoMappingListInitialized, 1, 0);
+    if (State == 0)
+    {
+        InitializeListHead(&MiIoMappingListHead);
+        KeInitializeSpinLock(&MiIoMappingLock);
+        InterlockedExchange((PLONG)&MiIoMappingListInitialized, 2);
+    }
+    else
+    {
+        while (MiIoMappingListInitialized != 2) YieldProcessor();
+    }
+}
+
+VOID
+NTAPI
+MiInitializeIoSpaceMap(VOID)
+{
+    MiEnsureIoSpaceMapInitialized();
+}
+
+NTSTATUS
+NTAPI
+MiInsertIoSpaceMap(
+    IN PFN_NUMBER PhysicalPage,
+    IN PFN_NUMBER PageCount,
+    IN MI_PFN_CACHE_ATTRIBUTE CacheAttribute,
+    IN PVOID BaseAddress
+)
+{
+    PFN_NUMBER EndPage;
+    PMI_IO_MAPPING Mapping;
+    PMI_IO_MAPPING NewMapping;
+    PLIST_ENTRY NextEntry;
+    KIRQL OldIrql;
+
+    ASSERT(PageCount != 0);
+
+    MiEnsureIoSpaceMapInitialized();
+
+    EndPage = PhysicalPage + PageCount;
+    if (EndPage < PhysicalPage) return STATUS_INVALID_PARAMETER;
+
+    NewMapping = ExAllocatePoolWithTag(NonPagedPool, sizeof(*NewMapping), 'oIoM');
+    if (!NewMapping) return STATUS_INSUFFICIENT_RESOURCES;
+
+    NewMapping->PhysicalPage = PhysicalPage;
+    NewMapping->PageCount = PageCount;
+    NewMapping->CacheAttribute = CacheAttribute;
+    NewMapping->BaseAddress = PAGE_ALIGN(BaseAddress);
+
+    KeAcquireSpinLock(&MiIoMappingLock, &OldIrql);
+
+    NextEntry = MiIoMappingListHead.Flink;
+    while (NextEntry != &MiIoMappingListHead)
+    {
+        PFN_NUMBER MappingStart, MappingEnd;
+
+        Mapping = CONTAINING_RECORD(NextEntry, MI_IO_MAPPING, ListEntry);
+        MappingStart = Mapping->PhysicalPage;
+        MappingEnd = MappingStart + Mapping->PageCount;
+
+        if ((PhysicalPage < MappingEnd) && (EndPage > MappingStart))
+        {
+            if (Mapping->CacheAttribute != CacheAttribute)
+            {
+                DPRINT1("MM: I/O space cache conflict PFN %Ix (%Ix pages, cache %u) overlaps PFN %Ix (%Ix pages, cache %u)\n",
+                        PhysicalPage,
+                        PageCount,
+                        CacheAttribute,
+                        MappingStart,
+                        Mapping->PageCount,
+                        Mapping->CacheAttribute);
+                KeReleaseSpinLock(&MiIoMappingLock, OldIrql);
+                ExFreePoolWithTag(NewMapping, 'oIoM');
+                return STATUS_CONFLICTING_ADDRESSES;
+            }
+        }
+
+        NextEntry = NextEntry->Flink;
+    }
+
+    InsertTailList(&MiIoMappingListHead, &NewMapping->ListEntry);
+    KeReleaseSpinLock(&MiIoMappingLock, OldIrql);
+
+    return STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+MiRemoveIoSpaceMap(
+    IN PFN_NUMBER PhysicalPage,
+    IN PFN_NUMBER PageCount,
+    IN MI_PFN_CACHE_ATTRIBUTE CacheAttribute,
+    IN PVOID BaseAddress
+)
+{
+    PMI_IO_MAPPING Mapping;
+    PLIST_ENTRY NextEntry;
+    KIRQL OldIrql;
+    PVOID AlignedBaseAddress;
+
+    MiEnsureIoSpaceMapInitialized();
+
+    AlignedBaseAddress = PAGE_ALIGN(BaseAddress);
+
+    KeAcquireSpinLock(&MiIoMappingLock, &OldIrql);
+
+    NextEntry = MiIoMappingListHead.Flink;
+    while (NextEntry != &MiIoMappingListHead)
+    {
+        Mapping = CONTAINING_RECORD(NextEntry, MI_IO_MAPPING, ListEntry);
+        NextEntry = NextEntry->Flink;
+
+        if ((Mapping->PhysicalPage == PhysicalPage) &&
+            (Mapping->PageCount == PageCount) &&
+            (Mapping->CacheAttribute == CacheAttribute) &&
+            (Mapping->BaseAddress == AlignedBaseAddress))
+        {
+            RemoveEntryList(&Mapping->ListEntry);
+            KeReleaseSpinLock(&MiIoMappingLock, OldIrql);
+            ExFreePoolWithTag(Mapping, 'oIoM');
+            return;
+        }
+    }
+
+    KeReleaseSpinLock(&MiIoMappingLock, OldIrql);
+}
+
 /* PUBLIC FUNCTIONS ***********************************************************/
 
 /*
@@ -48,11 +188,13 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
              IN SIZE_T NumberOfBytes,
              IN MEMORY_CACHING_TYPE CacheType)
 {
-
+    NTSTATUS Status;
     PFN_NUMBER Pfn;
+    PFN_NUMBER PhysicalPage;
     PFN_COUNT PageCount;
     PMMPTE PointerPte;
     PVOID BaseAddress;
+    PVOID MappingBaseAddress;
     MMPTE TempPte;
     PMMPFN Pfn1 = NULL;
     MI_PFN_CACHE_ATTRIBUTE CacheAttribute;
@@ -90,6 +232,7 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
     // Also translate the cache attribute
     //
     Pfn = (PFN_NUMBER)(PhysicalAddress.QuadPart >> PAGE_SHIFT);
+    PhysicalPage = Pfn;
     Pfn1 = MiGetPfnEntry(Pfn);
     IsIoMapping = (Pfn1 == NULL) ? TRUE : FALSE;
     CacheAttribute = MiPlatformCacheAttributes[IsIoMapping][CacheType];
@@ -100,6 +243,23 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
     PointerPte = MiReserveSystemPtes(PageCount, SystemPteSpace);
     if (!PointerPte) return NULL;
     BaseAddress = MiPteToAddress(PointerPte);
+    MappingBaseAddress = BaseAddress;
+
+    //
+    // Enforce coherency on I/O mappings
+    //
+    if (IsIoMapping)
+    {
+        Status = MiInsertIoSpaceMap(PhysicalPage,
+                                    PageCount,
+                                    CacheAttribute,
+                                    MappingBaseAddress);
+        if (!NT_SUCCESS(Status))
+        {
+            MiReleaseSystemPtes(PointerPte, PageCount, SystemPteSpace);
+            return NULL;
+        }
+    }
 
     //
     // Check if this is uncached
@@ -220,6 +380,7 @@ MmUnmapIoSpace(IN PVOID BaseAddress,
     PFN_NUMBER Pfn;
     PFN_COUNT PageCount;
     PMMPTE PointerPte;
+    MI_PFN_CACHE_ATTRIBUTE CacheAttribute;
 
     //
     // Sanity check
@@ -242,6 +403,12 @@ MmUnmapIoSpace(IN PVOID BaseAddress,
     //
     if (!MiGetPfnEntry(Pfn))
     {
+        CacheAttribute = MiGetPteCacheAttribute(PointerPte);
+        MiRemoveIoSpaceMap(Pfn,
+                           PageCount,
+                           CacheAttribute,
+                           BaseAddress);
+
         //
         // Destroy the PTE
         //

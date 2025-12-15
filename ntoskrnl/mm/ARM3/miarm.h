@@ -417,6 +417,32 @@ typedef enum _MI_PFN_CACHE_ATTRIBUTE
     MiNotMapped
 } MI_PFN_CACHE_ATTRIBUTE, *PMI_PFN_CACHE_ATTRIBUTE;
 
+typedef struct _MI_IO_MAPPING
+{
+    LIST_ENTRY ListEntry;
+    PFN_NUMBER PhysicalPage;
+    PFN_NUMBER PageCount;
+    MI_PFN_CACHE_ATTRIBUTE CacheAttribute;
+    PVOID BaseAddress;
+} MI_IO_MAPPING, *PMI_IO_MAPPING;
+
+FORCEINLINE
+MI_PFN_CACHE_ATTRIBUTE
+MiGetPteCacheAttribute(
+    _In_ PMMPTE PointerPte
+    )
+{
+#if defined(_M_ARM)
+    if (PointerPte->u.Hard.Cached) return MiCached;
+    if (PointerPte->u.Hard.Buffered) return MiWriteCombined;
+    return MiNonCached;
+#else
+    if (PointerPte->u.Hard.CacheDisable == 0) return MiCached;
+    if (PointerPte->u.Hard.WriteThrough != 0) return MiNonCached;
+    return MiWriteCombined;
+#endif
+}
+
 typedef struct _PHYSICAL_MEMORY_RUN
 {
     PFN_NUMBER BasePage;
@@ -565,6 +591,8 @@ extern SIZE_T MmSessionSize;
 extern PMMPTE MmFirstReservedMappingPte, MmLastReservedMappingPte;
 extern PMMPTE MiFirstReservedZeroingPte;
 extern MI_PFN_CACHE_ATTRIBUTE MiPlatformCacheAttributes[2][MmMaximumCacheType];
+extern LIST_ENTRY MiIoMappingListHead;
+extern KSPIN_LOCK MiIoMappingLock;
 extern PPHYSICAL_MEMORY_DESCRIPTOR MmPhysicalMemoryBlock;
 extern SIZE_T MmBootImageSize;
 extern PMMPTE MmSystemPtesStart[MaximumPtePoolTypes];
@@ -2053,6 +2081,30 @@ MiReleaseSystemPtes(
     IN PMMPTE StartingPte,
     IN ULONG NumberOfPtes,
     IN MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType
+);
+
+VOID
+NTAPI
+MiInitializeIoSpaceMap(
+    VOID
+);
+
+NTSTATUS
+NTAPI
+MiInsertIoSpaceMap(
+    IN PFN_NUMBER PhysicalPage,
+    IN PFN_NUMBER PageCount,
+    IN MI_PFN_CACHE_ATTRIBUTE CacheAttribute,
+    IN PVOID BaseAddress
+);
+
+VOID
+NTAPI
+MiRemoveIoSpaceMap(
+    IN PFN_NUMBER PhysicalPage,
+    IN PFN_NUMBER PageCount,
+    IN MI_PFN_CACHE_ATTRIBUTE CacheAttribute,
+    IN PVOID BaseAddress
 );
 
 

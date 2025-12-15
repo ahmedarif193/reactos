@@ -1439,8 +1439,22 @@ MiAddHalIoMappings(VOID)
                     PageFrameIndex = PFN_FROM_PTE(PointerPte);
                     if (!MiGetPfnEntry(PageFrameIndex))
                     {
-                        /* FIXME: For PAT, we need to track I/O cache attributes for coherency */
-                        DPRINT1("HAL I/O Mapping at %p is unsafe\n", BaseAddress);
+                        NTSTATUS Status;
+                        MI_PFN_CACHE_ATTRIBUTE CacheAttribute;
+
+                        CacheAttribute = MiGetPteCacheAttribute(PointerPte);
+                        Status = MiInsertIoSpaceMap(PageFrameIndex,
+                                                    1,
+                                                    CacheAttribute,
+                                                    BaseAddress);
+                        if (!NT_SUCCESS(Status))
+                        {
+                            DPRINT1("MiAddHalIoMappings: failed to reserve HAL I/O mapping at %p (PFN %Ix, cache %u): 0x%08lx\n",
+                                    BaseAddress,
+                                    PageFrameIndex,
+                                    CacheAttribute,
+                                    Status);
+                        }
                     }
                 }
 
@@ -2384,6 +2398,9 @@ MmArmInitSystem(IN ULONG Phase,
 
         /* Look for large page cache entries that need caching */
         MiSyncCachedRanges();
+
+        /* Initialize cache-coherency tracking for I/O space mappings */
+        MiInitializeIoSpaceMap();
 
         /* Loop for HAL Heap I/O device mappings that need coherency tracking */
         MiAddHalIoMappings();
