@@ -315,12 +315,12 @@ KdbSymProcessSymbols(
 
     if (RosSymCreateFromMem(LdrEntry->DllBase, LdrEntry->SizeOfImage, (PROSSYM_INFO*)&LdrEntry->PatchInformation))
     {
-        CHAR ModuleNameAnsi[64];
-        KdbpSymUnicodeToAnsi(&LdrEntry->BaseDllName, ModuleNameAnsi, sizeof(ModuleNameAnsi));
-        DPRINT1("KdbSymProcessSymbols: loaded rossym from memory for %s (Base=%p Size=%Ix)\n",
-                ModuleNameAnsi,
-                LdrEntry->DllBase,
-                (SIZE_T)LdrEntry->SizeOfImage);
+        // CHAR ModuleNameAnsi[64];
+        // KdbpSymUnicodeToAnsi(&LdrEntry->BaseDllName, ModuleNameAnsi, sizeof(ModuleNameAnsi));
+        // DPRINT1("KdbSymProcessSymbols: loaded rossym from memory for %s (Base=%p Size=%Ix)\n",
+        //         ModuleNameAnsi,
+        //         LdrEntry->DllBase,
+        //         (SIZE_T)LdrEntry->SizeOfImage);
         return;
     }
     else
@@ -460,7 +460,7 @@ KdbSymInit(
             LoadSymbols = FALSE;
             return LoadSymbols;
         }
-
+        DPRINT1("starting symbols loader thread: 0x%08x\n", Status);
         RosSymInitKernelMode();
 
         KeAcquireSpinLock(&PsLoadedModuleSpinLock, &OldIrql);

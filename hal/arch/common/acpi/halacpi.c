@@ -718,10 +718,6 @@ HalpAcpiForceVirtualBoxPciExpress(
             HalpUnmapVirtualAddress((PVOID)EcamPtr, 1);
         }
 
-        DPRINT1("HAL: After forcing PCIEXBAR, legacy vendor read 0x%08lx, ECAM vendor 0x%08lx\n",
-                LegacyVendor,
-                MmconfigVendor);
-
         if (LegacyVendorValue)
         {
             *LegacyVendorValue = LegacyVendor;

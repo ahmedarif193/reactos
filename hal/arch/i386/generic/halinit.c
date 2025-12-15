@@ -143,7 +143,6 @@ HalInitSystem(
 
         /* Initialize ACPI */
         Status = HalpSetupAcpiPhase0(LoaderBlock);
-        DPRINT1("HAL: After HalpSetupAcpiPhase0 -> %lx\n", Status);
         if (!NT_SUCCESS(Status))
         {
             KeBugCheckEx(ACPI_BIOS_ERROR, Status, 0, 0, 0);
@@ -151,14 +150,12 @@ HalInitSystem(
 
         /* Initialize the PICs */
         HalpInitializePICs(TRUE);
-        DPRINT1("HAL: After HalpInitializePICs\n");
 
         /* Initialize CMOS lock */
         KeInitializeSpinLock(&HalpSystemHardwareLock);
 
         /* Initialize CMOS */
         HalpInitializeCmos();
-        DPRINT1("HAL: After HalpInitializeCmos\n");
 
         /* Fill out the dispatch tables */
         HalQuerySystemInformation = HaliQuerySystemInformation;
@@ -183,31 +180,25 @@ HalInitSystem(
             HalResetDisplay = HalpNoopResetDisplay;
         }
         HalHaltSystem = HaliHaltSystem;
-        DPRINT1("HAL: After filling dispatch table\n");
 
         /* Setup I/O space */
         HalpDefaultIoSpace.Next = HalpAddressUsageList;
         HalpAddressUsageList = &HalpDefaultIoSpace;
-        DPRINT1("HAL: After setting up IO space\n");
 
         /* Setup busy waiting */
         HalpCalibrateStallExecution();
-        DPRINT1("HAL: After HalpCalibrateStallExecution\n");
 
         /* Initialize the clock */
         HalpInitializeClock();
-        DPRINT1("HAL: After HalpInitializeClock\n");
 
         /*
          * We could be rebooting with a pending profile interrupt,
          * so clear it here before interrupts are enabled
          */
         HalStopProfileInterrupt(ProfileTime);
-        DPRINT1("HAL: After HalStopProfileInterrupt\n");
 
         /* Do some HAL-specific initialization */
         HalpInitPhase0(LoaderBlock);
-        DPRINT1("HAL: After HalpInitPhase0\n");
 
         /* Initialize Phase 0 of the x86 emulator only for BIOS systems */
         if (LoaderBlock->FirmwareInformation.FirmwareTypeEfi == 0)
