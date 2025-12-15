@@ -125,6 +125,7 @@ USBPORT_SetupTransferBounceBuffer(IN PDEVICE_OBJECT FdoDevice,
                                   IN PUSBPORT_TRANSFER Transfer,
                                   IN PURB Urb)
 {
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
     SIZE_T TransferLength = Transfer->TransferParameters.TransferBufferLength;
     PMDL OriginalMdl = Transfer->TransferBufferMDL;
     PVOID OriginalVa;
@@ -133,6 +134,19 @@ USBPORT_SetupTransferBounceBuffer(IN PDEVICE_OBJECT FdoDevice,
 
     if (!OriginalMdl || TransferLength == 0)
         return STATUS_SUCCESS;
+
+    /*
+     * On amd64/q35, nonpaged allocations routinely land above 4GB. xHCI
+     * controllers are expected to handle 64-bit DMA, so avoid forcing bounce
+     * buffering (and copy-back) for xHCI miniports.
+     */
+    FdoExtension = FdoDevice ? FdoDevice->DeviceExtension : NULL;
+    if (FdoExtension &&
+        FdoExtension->MiniPortInterface &&
+        FdoExtension->MiniPortInterface->Packet.MiniPortVersion == USB_MINIPORT_VERSION_XHCI)
+    {
+        return STATUS_SUCCESS;
+    }
 
     if (!USBPORT_MdlNeedsBounce(OriginalMdl, TransferLength))
         return STATUS_SUCCESS;
@@ -2850,7 +2864,6 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
                PhAddress.HighPart,
                TransferLength);
 
-        PhAddress.HighPart = 0;
         SgCurrentLength = TransferLength;
 
         do
@@ -2870,7 +2883,7 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
             sgList->SgElement[ix].SgOffset = CurrentLength +
                                              (TransferLength - SgCurrentLength);
 
-            PhAddress.LowPart += ElementLength;
+            PhAddress.QuadPart += ElementLength;
             SgCurrentLength -= ElementLength;
 
             ++ix;
