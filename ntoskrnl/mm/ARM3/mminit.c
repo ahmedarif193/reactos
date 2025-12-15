@@ -1442,6 +1442,7 @@ MiAddHalIoMappings(VOID)
                         NTSTATUS Status;
                         MI_PFN_CACHE_ATTRIBUTE CacheAttribute;
 
+                        /* TODO: Coalesce contiguous HAL I/O mappings into larger runs */
                         CacheAttribute = MiGetPteCacheAttribute(PointerPte);
                         Status = MiInsertIoSpaceMap(PageFrameIndex,
                                                     1,

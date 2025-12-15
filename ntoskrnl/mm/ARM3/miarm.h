@@ -432,6 +432,7 @@ MiGetPteCacheAttribute(
     _In_ PMMPTE PointerPte
     )
 {
+    /* TODO: Upgrade cache attribute logic to support full PAT/MTRR decoding */
 #if defined(_M_ARM)
     if (PointerPte->u.Hard.Cached) return MiCached;
     if (PointerPte->u.Hard.Buffered) return MiWriteCombined;

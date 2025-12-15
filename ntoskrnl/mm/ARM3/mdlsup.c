@@ -708,6 +708,8 @@ MmMapLockedPagesSpecifyCache(IN PMDL Mdl,
         IsIoMapping = (Mdl->MdlFlags & MDL_IO_SPACE) != 0;
         CacheAttribute = MiPlatformCacheAttributes[IsIoMapping][CacheType];
 
+        /* TODO: Check MiIoMappingListHead in MmMapLockedPages for MDL conflicts */
+
         //
         // Reserve the PTEs
         //

@@ -40,6 +40,7 @@ MI_PFN_CACHE_ATTRIBUTE MiPlatformCacheAttributes[2][MmMaximumCacheType] =
 LIST_ENTRY MiIoMappingListHead;
 KSPIN_LOCK MiIoMappingLock;
 static volatile LONG MiIoMappingListInitialized;
+/* TODO: Replace list with a range tree for faster overlap checks */
 
 static
 VOID
