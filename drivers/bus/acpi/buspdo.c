@@ -326,14 +326,23 @@ BuspCountRequirementsFromAcpiResources(
                 ACPI_RESOURCE_ADDRESS16 *addr16 = &resource->Data.Address16;
                 if (addr16->ProducerConsumer != ACPI_PRODUCER)
                 {
-                    NumberOfResources++;
                     if (addr16->ResourceType == ACPI_BUS_NUMBER_RANGE)
                     {
                         FoundBusRange = TRUE;
-                        /* Correct bus range: end is Maximum (or Minimum + Length - 1), not both */
+                        /* Track the root bus range, but do not contribute a bus-number
+                         * resource for the PCI root itself. The PCI bus driver will
+                         * request child bus ranges for bridges. */
                         BuspRecordPciRootBusRange(DeviceData,
                                                   addr16->Address.Minimum,
                                                   addr16->Address.Maximum);
+                        if (!IsPciRoot)
+                        {
+                            NumberOfResources++;
+                        }
+                    }
+                    else
+                    {
+                        NumberOfResources++;
                     }
                 }
                 break;
@@ -344,13 +353,20 @@ BuspCountRequirementsFromAcpiResources(
                 ACPI_RESOURCE_ADDRESS32 *addr32 = &resource->Data.Address32;
                 if (addr32->ProducerConsumer != ACPI_PRODUCER)
                 {
-                    NumberOfResources++;
                     if (addr32->ResourceType == ACPI_BUS_NUMBER_RANGE)
                     {
                         FoundBusRange = TRUE;
                         BuspRecordPciRootBusRange(DeviceData,
                                                   addr32->Address.Minimum,
                                                   addr32->Address.Maximum);
+                        if (!IsPciRoot)
+                        {
+                            NumberOfResources++;
+                        }
+                    }
+                    else
+                    {
+                        NumberOfResources++;
                     }
                 }
                 break;
@@ -361,13 +377,20 @@ BuspCountRequirementsFromAcpiResources(
                 ACPI_RESOURCE_ADDRESS64 *addr64 = &resource->Data.Address64;
                 if (addr64->ProducerConsumer != ACPI_PRODUCER)
                 {
-                    NumberOfResources++;
                     if (addr64->ResourceType == ACPI_BUS_NUMBER_RANGE)
                     {
                         FoundBusRange = TRUE;
                         BuspRecordPciRootBusRange(DeviceData,
                                                   (ULONG)addr64->Address.Minimum,
                                                   (ULONG)addr64->Address.Maximum);
+                        if (!IsPciRoot)
+                        {
+                            NumberOfResources++;
+                        }
+                    }
+                    else
+                    {
+                        NumberOfResources++;
                     }
                 }
                 break;
@@ -378,13 +401,20 @@ BuspCountRequirementsFromAcpiResources(
                 ACPI_RESOURCE_EXTENDED_ADDRESS64 *addrx = &resource->Data.ExtAddress64;
                 if (addrx->ProducerConsumer != ACPI_PRODUCER)
                 {
-                    NumberOfResources++;
                     if (addrx->ResourceType == ACPI_BUS_NUMBER_RANGE)
                     {
                         FoundBusRange = TRUE;
                         BuspRecordPciRootBusRange(DeviceData,
                                                   (ULONG)addrx->Address.Minimum,
                                                   (ULONG)addrx->Address.Maximum);
+                        if (!IsPciRoot)
+                        {
+                            NumberOfResources++;
+                        }
+                    }
+                    else
+                    {
+                        NumberOfResources++;
                     }
                 }
                 break;
@@ -1219,20 +1249,22 @@ BuspCreateResourceListFromAcpiResources(
 
                 if (addr16->ResourceType == ACPI_BUS_NUMBER_RANGE)
                 {
-                    ResourceDescriptor->Type = CmResourceTypeBusNumber;
-                    ResourceDescriptor->ShareDisposition = CmResourceShareShared;
-                    ResourceDescriptor->Flags = 0;
-                    ResourceDescriptor->u.BusNumber.Start = addr16->Address.Minimum;
-                    ResourceDescriptor->u.BusNumber.Length = addr16->Address.AddressLength;
-                    if (IsPciRoot)
+                    ULONG MinBus = (ULONG)addr16->Address.Minimum;
+                    ULONGLONG MaxBus = addr16->Address.Maximum;
+                    if (addr16->Address.AddressLength > 0)
+                        MaxBus = addr16->Address.Minimum + addr16->Address.AddressLength - 1;
+                    BuspRecordPciRootBusRange(DeviceData,
+                                              MinBus,
+                                              (ULONG)MaxBus);
+
+                    if (!IsPciRoot)
                     {
-                        ULONG MinBus = (ULONG)addr16->Address.Minimum;
-                        ULONGLONG MaxBus = addr16->Address.Maximum;
-                        if (addr16->Address.AddressLength > 0)
-                            MaxBus = addr16->Address.Minimum + addr16->Address.AddressLength - 1;
-                        BuspRecordPciRootBusRange(DeviceData,
-                                                  MinBus,
-                                                  (ULONG)MaxBus);
+                        ResourceDescriptor->Type = CmResourceTypeBusNumber;
+                        ResourceDescriptor->ShareDisposition = CmResourceShareShared;
+                        ResourceDescriptor->Flags = 0;
+                        ResourceDescriptor->u.BusNumber.Start = addr16->Address.Minimum;
+                        ResourceDescriptor->u.BusNumber.Length = addr16->Address.AddressLength;
+                        ResourceDescriptor++;
                     }
                 }
                 else if (addr16->ResourceType == ACPI_IO_RANGE)
@@ -1274,7 +1306,10 @@ BuspCreateResourceListFromAcpiResources(
                         BuspCachePciRootMemWindow(DeviceData, s, e, prefetch);
                     }
                 }
-                ResourceDescriptor++;
+                if (addr16->ResourceType != ACPI_BUS_NUMBER_RANGE)
+                {
+                    ResourceDescriptor++;
+                }
                 break;
             }
 
@@ -1286,20 +1321,22 @@ BuspCreateResourceListFromAcpiResources(
 
                 if (addr32->ResourceType == ACPI_BUS_NUMBER_RANGE)
                 {
-                    ResourceDescriptor->Type = CmResourceTypeBusNumber;
-                    ResourceDescriptor->ShareDisposition = CmResourceShareShared;
-                    ResourceDescriptor->Flags = 0;
-                    ResourceDescriptor->u.BusNumber.Start = addr32->Address.Minimum;
-                    ResourceDescriptor->u.BusNumber.Length = addr32->Address.AddressLength;
-                    if (IsPciRoot)
+                    ULONG MinBus = (ULONG)addr32->Address.Minimum;
+                    ULONGLONG MaxBus = addr32->Address.Maximum;
+                    if (addr32->Address.AddressLength > 0)
+                        MaxBus = addr32->Address.Minimum + addr32->Address.AddressLength - 1;
+                    BuspRecordPciRootBusRange(DeviceData,
+                                              MinBus,
+                                              (ULONG)MaxBus);
+
+                    if (!IsPciRoot)
                     {
-                        ULONG MinBus = (ULONG)addr32->Address.Minimum;
-                        ULONGLONG MaxBus = addr32->Address.Maximum;
-                        if (addr32->Address.AddressLength > 0)
-                            MaxBus = addr32->Address.Minimum + addr32->Address.AddressLength - 1;
-                        BuspRecordPciRootBusRange(DeviceData,
-                                                  MinBus,
-                                                  (ULONG)MaxBus);
+                        ResourceDescriptor->Type = CmResourceTypeBusNumber;
+                        ResourceDescriptor->ShareDisposition = CmResourceShareShared;
+                        ResourceDescriptor->Flags = 0;
+                        ResourceDescriptor->u.BusNumber.Start = addr32->Address.Minimum;
+                        ResourceDescriptor->u.BusNumber.Length = addr32->Address.AddressLength;
+                        ResourceDescriptor++;
                     }
                 }
                 else if (addr32->ResourceType == ACPI_IO_RANGE)
@@ -1341,7 +1378,10 @@ BuspCreateResourceListFromAcpiResources(
                         BuspCachePciRootMemWindow(DeviceData, s, e, prefetch);
                     }
                 }
-                ResourceDescriptor++;
+                if (addr32->ResourceType != ACPI_BUS_NUMBER_RANGE)
+                {
+                    ResourceDescriptor++;
+                }
                 break;
             }
 
@@ -1353,11 +1393,23 @@ BuspCreateResourceListFromAcpiResources(
 
                 if (addr64->ResourceType == ACPI_BUS_NUMBER_RANGE)
                 {
-                    ResourceDescriptor->Type = CmResourceTypeBusNumber;
-                    ResourceDescriptor->ShareDisposition = CmResourceShareShared;
-                    ResourceDescriptor->Flags = 0;
-                    ResourceDescriptor->u.BusNumber.Start = (ULONG)addr64->Address.Minimum;
-                    ResourceDescriptor->u.BusNumber.Length = addr64->Address.AddressLength;
+                    ULONG MinBus = (ULONG)addr64->Address.Minimum;
+                    ULONGLONG MaxBus = addr64->Address.Maximum;
+                    if (addr64->Address.AddressLength > 0)
+                        MaxBus = addr64->Address.Minimum + addr64->Address.AddressLength - 1;
+                    BuspRecordPciRootBusRange(DeviceData,
+                                              MinBus,
+                                              (ULONG)MaxBus);
+
+                    if (!IsPciRoot)
+                    {
+                        ResourceDescriptor->Type = CmResourceTypeBusNumber;
+                        ResourceDescriptor->ShareDisposition = CmResourceShareShared;
+                        ResourceDescriptor->Flags = 0;
+                        ResourceDescriptor->u.BusNumber.Start = (ULONG)addr64->Address.Minimum;
+                        ResourceDescriptor->u.BusNumber.Length = addr64->Address.AddressLength;
+                        ResourceDescriptor++;
+                    }
                 }
                 else if (addr64->ResourceType == ACPI_IO_RANGE)
                 {
@@ -1398,7 +1450,10 @@ BuspCreateResourceListFromAcpiResources(
                         BuspCachePciRootMemWindow(DeviceData, s, e, prefetch);
                     }
                 }
-                ResourceDescriptor++;
+                if (addr64->ResourceType != ACPI_BUS_NUMBER_RANGE)
+                {
+                    ResourceDescriptor++;
+                }
                 break;
             }
 
@@ -1410,11 +1465,23 @@ BuspCreateResourceListFromAcpiResources(
 
                 if (addrx->ResourceType == ACPI_BUS_NUMBER_RANGE)
                 {
-                    ResourceDescriptor->Type = CmResourceTypeBusNumber;
-                    ResourceDescriptor->ShareDisposition = CmResourceShareShared;
-                    ResourceDescriptor->Flags = 0;
-                    ResourceDescriptor->u.BusNumber.Start = (ULONG)addrx->Address.Minimum;
-                    ResourceDescriptor->u.BusNumber.Length = addrx->Address.AddressLength;
+                    ULONG MinBus = (ULONG)addrx->Address.Minimum;
+                    ULONGLONG MaxBus = addrx->Address.Maximum;
+                    if (addrx->Address.AddressLength > 0)
+                        MaxBus = addrx->Address.Minimum + addrx->Address.AddressLength - 1;
+                    BuspRecordPciRootBusRange(DeviceData,
+                                              MinBus,
+                                              (ULONG)MaxBus);
+
+                    if (!IsPciRoot)
+                    {
+                        ResourceDescriptor->Type = CmResourceTypeBusNumber;
+                        ResourceDescriptor->ShareDisposition = CmResourceShareShared;
+                        ResourceDescriptor->Flags = 0;
+                        ResourceDescriptor->u.BusNumber.Start = (ULONG)addrx->Address.Minimum;
+                        ResourceDescriptor->u.BusNumber.Length = addrx->Address.AddressLength;
+                        ResourceDescriptor++;
+                    }
                 }
                 else if (addrx->ResourceType == ACPI_IO_RANGE)
                 {

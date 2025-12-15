@@ -15,6 +15,8 @@
 #define NDEBUG
 #include <debug.h>
 
+extern ULONG HalpPicVectorRedirect[16];
+
 #define HALP_PCI_DEFAULT_IO_BASE          0x0ULL
 #define HALP_PCI_DEFAULT_IO_LIMIT         0xFFFFULL
 #define HALP_PCI_DEFAULT_MEM_BASE         0xC0000000ULL
@@ -1353,6 +1355,7 @@ HalpSetPciRoutingMap(
     for (Index = 0; Index < EntryCount; ++Index)
     {
         const HAL_ACPI_PCI_ROUTE_ENTRY *Entry = &Entries[Index];
+        ULONG Gsi;
 
         if ((Entry->Pin < 1) || (Entry->Pin > 4))
         {
@@ -1364,7 +1367,13 @@ HalpSetPciRoutingMap(
             continue;
         }
 
-        HalpPciRecordGsiInfo(Entry->Gsi,
+        Gsi = Entry->Gsi;
+        if (Gsi < 16)
+        {
+            Gsi = HalpPicVectorRedirect[Gsi];
+        }
+
+        HalpPciRecordGsiInfo(Gsi,
                              Entry->Polarity,
                              Entry->TriggerMode,
                              Entry->Segment,
@@ -1375,9 +1384,9 @@ HalpSetPciRoutingMap(
                              TRUE);
         ++Recorded;
 
-        if (Entry->Gsi > MaxGsi)
+        if (Gsi > MaxGsi)
         {
-            MaxGsi = Entry->Gsi;
+            MaxGsi = Gsi;
         }
     }
 

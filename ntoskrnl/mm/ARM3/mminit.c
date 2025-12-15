@@ -1437,7 +1437,8 @@ MiAddHalIoMappings(VOID)
                 {
                     /* Is the HAL using it for device or I/O mapped memory? */
                     PageFrameIndex = PFN_FROM_PTE(PointerPte);
-                    if (!MiGetPfnEntry(PageFrameIndex))
+                    if ((PageFrameIndex <= MmHighestPhysicalPage) &&
+                        !MiGetPfnEntry(PageFrameIndex))
                     {
                         /* FIXME: For PAT, we need to track I/O cache attributes for coherency */
                         DPRINT1("HAL I/O Mapping at %p is unsafe\n", BaseAddress);

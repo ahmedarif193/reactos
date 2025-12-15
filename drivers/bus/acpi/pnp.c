@@ -412,8 +412,16 @@ Bus_InitializePdo (
     case ACPI_STATE_D2: ntState = PowerDeviceD2; break;
     case ACPI_STATE_D3: ntState = PowerDeviceD3; break;
     default:
-        DPRINT1("Unknown power state (%d) returned by acpi\n", acpistate);
-        ntState = PowerDeviceUnspecified;
+        if (acpistate == 255)
+        {
+            DPRINT("ACPI: Unknown device power state 0x%02x, assuming D0\n", acpistate);
+            ntState = PowerDeviceD0;
+        }
+        else
+        {
+            DPRINT1("Unknown power state (%d) returned by acpi\n", acpistate);
+            ntState = PowerDeviceUnspecified;
+        }
         break;
     }
 

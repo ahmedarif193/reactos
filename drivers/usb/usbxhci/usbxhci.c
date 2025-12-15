@@ -1110,8 +1110,11 @@ XHCI_ProgramDcbaaCrcrAndConfig(
                     Crcr,
                     HwDcbaa,
                     HwCrcr);
-            ASSERT(HwDcbaa == Dcbaa);
-            ASSERT((HwCrcr & ~0x3FULL) == (Crcr & ~0x3FULL));
+            if (!(Extension->Quirks & XHCI_QUIRK_IGNORE_DCBAA_CRCR_ECHO))
+            {
+                ASSERT(HwDcbaa == Dcbaa);
+                ASSERT((HwCrcr & ~0x3FULL) == (Crcr & ~0x3FULL));
+            }
         }
     }
 #endif
@@ -5869,6 +5872,21 @@ XHCI_DetectHardwareQuirks(
             DPRINT1("usbxhci: startup HCE quirk forced via registry (VID=%04x DID=%04x)\n",
                     VendorId,
                     DeviceId);
+        }
+
+        /*
+         * Some recent Intel PCH/SoC controllers (for example Alder Lake-N
+         * 8086:464E and 8086:54ED) have been observed to report a zeroed
+         * CRCR immediately after programming even though the controller
+         * proceeds to operate correctly under Windows. Treat this as an
+         * unreliable read-back of the command ring base rather than a
+         * fatal condition so that the miniport does not end up in a
+         * debug-time assertion loop on these systems.
+         */
+        if (VendorId == 0x8086 &&
+            (DeviceId == 0x464E || DeviceId == 0x54ED))
+        {
+            Extension->Quirks |= XHCI_QUIRK_IGNORE_DCBAA_CRCR_ECHO;
         }
     }
 
