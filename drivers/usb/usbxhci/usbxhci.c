@@ -1689,12 +1689,22 @@ XHCI_ConfigureSlotEndpoint(
     ULONG AverageTrbLength;
     ULONGLONG DequeuePtr;
     MPSTATUS Status;
+    ULONG ResumeDoorbells = 0;
+    BOOLEAN ExpandAddFlags = FALSE;
+    ULONG ReconfigureMask = 0;
 
     if (!Extension || !Slot || !Endpoint || EndpointId == 0)
         return MP_STATUS_ERROR;
 
     XHCI_LOG_IRQL("ConfigureSlotEndpoint entry");
-    XHCI_ASSERT_PASSIVE("XHCI_ConfigureSlotEndpoint entry");
+#if DBG
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+    {
+        DPRINT1("usbxhci ASSERT: XHCI_ConfigureSlotEndpoint requires <= DISPATCH_LEVEL, current=%lu\n",
+                (ULONG)KeGetCurrentIrql());
+        ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
+    }
+#endif
 
     InputCtxBase = Slot->InputContext.VirtualAddress;
     DeviceCtxBase = Slot->DeviceContext.VirtualAddress;
@@ -1747,9 +1757,40 @@ XHCI_ConfigureSlotEndpoint(
         }
     }
 
-    if (!Slot->Configured)
+    /*
+     * QEMU's xHCI (1B36:000D) does not reliably preserve previously-configured
+     * endpoint contexts unless they are explicitly included in a subsequent
+     * CONFIGURE_ENDPOINT (Add Context Flags + matching input endpoint contexts).
+     * This shows up with usb-storage: after opening/configuring bulk IN (DCI=3),
+     * configuring bulk OUT (DCI=4) can leave DCI=3 Disabled, stalling BOT.
+     *
+     * Work around this by re-submitting all already-configured (non-EP0)
+     * endpoints alongside the new one when issuing CONFIGURE_ENDPOINT on QEMU.
+     *
+     * On other controllers, keep the narrower behavior (only expand when adding
+     * a lower DCI after a higher one).
+     */
+    ExpandAddFlags = Slot->Configured &&
+                     (Slot->HighestEndpointId != 0) &&
+                     (((Extension->Quirks & XHCI_QUIRK_QEMU_CONFIG_EP_ORDER) != 0) ||
+                      (EndpointId < Slot->HighestEndpointId));
+    if (ExpandAddFlags)
     {
-if (EndpointId == 1)         CtrlCtx->AddContextFlags |= (1 << 1);
+        UCHAR Id;
+        UCHAR StartId = ((Extension->Quirks & XHCI_QUIRK_QEMU_CONFIG_EP_ORDER) != 0) ?
+                        2 : (UCHAR)(EndpointId + 1);
+
+        for (Id = StartId;
+             Id <= Slot->HighestEndpointId && Id <= XHCI_MAX_ENDPOINTS;
+             Id++)
+        {
+            if (Id != EndpointId && Slot->EndpointTable[Id] != NULL)
+            {
+                CtrlCtx->AddContextFlags |= (1 << Id);
+                ResumeDoorbells |= (1 << Id);
+                ReconfigureMask |= (1u << Id);
+            }
+        }
     }
 
     if (XhciSlotContextGetLastCtx(SlotCtx) < EndpointId)
@@ -1785,20 +1826,9 @@ if (EndpointId == 1)         CtrlCtx->AddContextFlags |= (1 << 1);
                 (Endpoint->EndpointProperties.TransactionPerMicroframe - 1) : 0;
     if (BurstSize > 0xF)
         BurstSize = 0xF;
-    /*
-     * Mult is only defined for SS isoch endpoints. For USB 2.x endpoints and
-     * SS interrupt endpoints this field must be zero.
-     */
     Mult = (EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
             EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN) ?
            ((BurstSize > 0x3) ? 0x3 : BurstSize) : 0;
-    /*
-     * xHCI Endpoint Context Interval encodes the exponent used for the ESIT.
-     * USB bInterval values differ by speed; map USBPORT's Period accordingly.
-     *
-     * - High/SuperSpeed periodic: bInterval is 1..16 (2^(bInterval-1) uframes)
-     * - Full/Low speed periodic:  bInterval is in frames; use floor(log2)
-     */
     Interval = 0;
     if (EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
         EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN ||
@@ -1823,19 +1853,15 @@ if (EndpointId == 1)         CtrlCtx->AddContextFlags |= (1 << 1);
             Interval = Exp + 3;
         }
 
-    if (Endpoint->EndpointProperties.DeviceSpeed == UsbFullSpeed ||
-        Endpoint->EndpointProperties.DeviceSpeed == UsbLowSpeed)
-    {
-        BurstSize = 0;
-    }
+        if (Endpoint->EndpointProperties.DeviceSpeed == UsbFullSpeed ||
+            Endpoint->EndpointProperties.DeviceSpeed == UsbLowSpeed)
+        {
+            BurstSize = 0;
+        }
 
         if (Interval > 15)
             Interval = 15;
     }
-    /*
-     * Periodic endpoints (isoch + interrupt) must publish Max ESIT Payload;
-     * non-periodic endpoints (control + bulk) must leave it zero (xHCI 6.2.3.6).
-     */
     MaxEsitPayload = 0;
     if (EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
         EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN ||
@@ -1871,7 +1897,8 @@ if (EndpointId == 1)         CtrlCtx->AddContextFlags |= (1 << 1);
     }
 
     DequeuePtr =
-        (Endpoint->TransferRing.PhysicalAddress.QuadPart & ~0xFULL) |
+        ((Endpoint->TransferRing.PhysicalAddress.QuadPart +
+          ((ULONGLONG)Endpoint->TransferRing.EnqueueIndex * sizeof(XHCI_TRB))) & ~0xFULL) |
         (Endpoint->TransferRing.CycleState & 0x1);
 
     XhciEndpointContextInit(EpCtx,
@@ -1884,10 +1911,168 @@ if (EndpointId == 1)         CtrlCtx->AddContextFlags |= (1 << 1);
                             AverageTrbLength,
                             DequeuePtr);
 
-    XHCI_ASSERT_PASSIVE("XHCI_ConfigureSlotEndpoint before XHCI_SendCommand");
+    if (ExpandAddFlags && ReconfigureMask != 0)
+    {
+        UCHAR Id;
+        for (Id = 2; Id <= Slot->HighestEndpointId && Id <= XHCI_MAX_ENDPOINTS; Id++)
+        {
+            PXHCI_ENDPOINT ExistingEndpoint;
+            ULONG ExistingEndpointType;
+            ULONGLONG ExistingDequeuePtr;
+            ULONG ExistingMaxPacketSize;
+            ULONG ExistingBurstSize;
+            ULONG ExistingMult;
+            ULONG ExistingInterval;
+            ULONG ExistingMaxEsitPayload;
+            ULONG ExistingAverageTrbLength;
+
+            if ((ReconfigureMask & (1u << Id)) == 0)
+                continue;
+
+            ExistingEndpoint = Slot->EndpointTable[Id];
+            if (!ExistingEndpoint)
+                continue;
+
+            ExistingEndpointType =
+                XHCI_GetEndpointTypeFromProperties(&ExistingEndpoint->EndpointProperties);
+            if (ExistingEndpointType == XHCI_ENDPOINT_TYPE_INVALID)
+                continue;
+
+            EpCtx = XHCI_GetInputEndpointContextVa(Extension, InputCtxBase, Id - 1);
+            if (!EpCtx)
+                continue;
+
+            RtlZeroMemory(EpCtx, Extension->ContextSize);
+
+            ExistingMaxPacketSize = ExistingEndpoint->EndpointProperties.MaxPacketSize ?
+                                    ExistingEndpoint->EndpointProperties.MaxPacketSize : 8;
+            ExistingBurstSize =
+                (ExistingEndpoint->EndpointProperties.TransactionPerMicroframe > 0) ?
+                (ExistingEndpoint->EndpointProperties.TransactionPerMicroframe - 1) : 0;
+            if (ExistingBurstSize > 0xF)
+                ExistingBurstSize = 0xF;
+
+            ExistingMult = (ExistingEndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
+                            ExistingEndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN) ?
+                           ((ExistingBurstSize > 0x3) ? 0x3 : ExistingBurstSize) : 0;
+
+            ExistingInterval = 0;
+            if (ExistingEndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
+                ExistingEndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN ||
+                ExistingEndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_OUT ||
+                ExistingEndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_IN)
+            {
+                UCHAR Period = ExistingEndpoint->EndpointProperties.Period;
+
+                if (Period == 0)
+                    Period = 1;
+
+                if (ExistingEndpoint->EndpointProperties.DeviceSpeed == UsbHighSpeed ||
+                    ExistingEndpoint->EndpointProperties.DeviceSpeed == UsbSuperSpeed)
+                {
+                    ExistingInterval = Period - 1;
+                }
+                else
+                {
+                    ULONG Exp = 0;
+                    while (Exp < 15 && ((1u << (Exp + 1)) <= Period))
+                        Exp++;
+                    ExistingInterval = Exp + 3;
+                }
+
+                if (ExistingEndpoint->EndpointProperties.DeviceSpeed == UsbFullSpeed ||
+                    ExistingEndpoint->EndpointProperties.DeviceSpeed == UsbLowSpeed)
+                {
+                    ExistingBurstSize = 0;
+                }
+
+                if (ExistingInterval > 15)
+                    ExistingInterval = 15;
+            }
+
+            ExistingMaxEsitPayload = 0;
+            if (ExistingEndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
+                ExistingEndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN ||
+                ExistingEndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_OUT ||
+                ExistingEndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_IN)
+            {
+                ExistingMaxEsitPayload = ExistingEndpoint->EndpointProperties.TotalMaxPacketSize;
+                if (ExistingMaxEsitPayload == 0)
+                {
+                    ULONG Transactions = ExistingEndpoint->EndpointProperties.TransactionPerMicroframe;
+                    if (Transactions == 0)
+                        Transactions = 1;
+
+                    ExistingMaxEsitPayload = ExistingMaxPacketSize * Transactions;
+                }
+
+                if (ExistingMaxEsitPayload > 0xFFFF)
+                    ExistingMaxEsitPayload = 0xFFFF;
+            }
+
+            ExistingAverageTrbLength = ExistingEndpoint->EndpointProperties.MaxTransferSize ?
+                                       (ExistingEndpoint->EndpointProperties.MaxTransferSize & 0xFFFF) :
+                                       ExistingMaxPacketSize;
+            if (ExistingAverageTrbLength == 0)
+                ExistingAverageTrbLength = ExistingMaxPacketSize;
+
+            if (!ExistingEndpoint->TransferRing.Base ||
+                ExistingEndpoint->TransferRing.PhysicalAddress.QuadPart == 0)
+            {
+                DPRINT1("usbxhci: ConfigureSlotEndpoint missing transfer ring for slot %u ep %u\n",
+                        Slot->SlotId,
+                        Id);
+                continue;
+            }
+
+            ExistingDequeuePtr =
+                ((ExistingEndpoint->TransferRing.PhysicalAddress.QuadPart +
+                  ((ULONGLONG)ExistingEndpoint->TransferRing.EnqueueIndex * sizeof(XHCI_TRB))) & ~0xFULL) |
+                (ExistingEndpoint->TransferRing.CycleState & 0x1);
+
+            XhciEndpointContextInit(EpCtx,
+                                    ExistingEndpointType,
+                                    ExistingMaxPacketSize,
+                                    ExistingBurstSize,
+                                    ExistingInterval,
+                                    ExistingMult,
+                                    ExistingMaxEsitPayload,
+                                    ExistingAverageTrbLength,
+                                    ExistingDequeuePtr);
+        }
+    }
+
     XHCI_LOG_IRQL("ConfigureSlotEndpoint before XHCI_SendCommand");
 
-    if (Slot->Configured)
+#if DBG
+    if ((Extension->Quirks & XHCI_QUIRK_QEMU_CONFIG_EP_ORDER) &&
+        Slot->SlotId == 1 &&
+        (EndpointId == 3 || EndpointId == 4))
+    {
+        DPRINT1("usbxhci: CONFIG_EP prep slot=%u ep=%u Add=%08lx Drop=%08lx LastCtx(in)=%lu Highest=%u Reconf=%08lx\n",
+                Slot->SlotId,
+                EndpointId,
+                CtrlCtx->AddContextFlags,
+                CtrlCtx->DropContextFlags,
+                XhciSlotContextGetLastCtx(SlotCtx),
+                Slot->HighestEndpointId,
+                ReconfigureMask);
+    }
+#endif
+
+    if (ExpandAddFlags && ReconfigureMask != 0)
+    {
+        UCHAR Id;
+        for (Id = 2; Id <= Slot->HighestEndpointId && Id <= XHCI_MAX_ENDPOINTS; Id++)
+        {
+            if ((ReconfigureMask & (1u << Id)) == 0)
+                continue;
+            (VOID)XHCI_StopEndpoint(Extension, Slot, Id);
+        }
+    }
+    if (Slot->Configured &&
+             EndpointId < RTL_NUMBER_OF(Slot->EndpointTable) &&
+             Slot->EndpointTable[EndpointId] != NULL)
     {
         MPSTATUS StopStatus = XHCI_StopEndpoint(Extension, Slot, EndpointId);
         if (StopStatus != MP_STATUS_SUCCESS)
@@ -1897,8 +2082,7 @@ if (EndpointId == 1)         CtrlCtx->AddContextFlags |= (1 << 1);
     }
 
     Status = XHCI_SendCommand(Extension,
-                              Slot->Configured ? XHCI_TRB_TYPE_EVAL_CTX
-                                               : XHCI_TRB_TYPE_CONFIG_EP,
+                              XHCI_TRB_TYPE_CONFIG_EP,
                               Slot->InputContext.PhysicalAddress.QuadPart,
                               0,
                               XHCI_COMMAND_SLOT_FIELD(Slot->SlotId),
@@ -1928,6 +2112,39 @@ if (EndpointId == 1)         CtrlCtx->AddContextFlags |= (1 << 1);
     }
 
     XHCI_RingEndpointDoorbell(Extension, Slot->SlotId, EndpointId, 0);
+    if (ExpandAddFlags)
+    {
+        UCHAR Id;
+        for (Id = 2; Id <= Slot->HighestEndpointId && Id <= XHCI_MAX_ENDPOINTS; Id++)
+        {
+            if ((ResumeDoorbells & (1u << Id)) == 0 || Id == EndpointId)
+                continue;
+            XHCI_RingEndpointDoorbell(Extension, Slot->SlotId, Id, 0);
+        }
+    }
+
+#if DBG
+    if ((Extension->Quirks & XHCI_QUIRK_QEMU_CONFIG_EP_ORDER) &&
+        Slot->SlotId == 1 &&
+        (EndpointId == 3 || EndpointId == 4))
+    {
+        PVOID DeviceCtxBase = Slot->DeviceContext.VirtualAddress;
+        if (DeviceCtxBase)
+        {
+            PXHCI_ENDPOINT_CONTEXT ActiveEpCtx =
+                XHCI_GetDeviceEndpointContextVa(Extension, DeviceCtxBase, EndpointId - 1);
+            if (ActiveEpCtx)
+            {
+                DPRINT1("usbxhci: CONFIG_EP done slot=%u ep=%u ActiveState=%lu EpInfo=%08lx EpInfo2=%08lx\n",
+                        Slot->SlotId,
+                        EndpointId,
+                        (ULONG)(ActiveEpCtx->EpInfo & XHCI_EPCTX_STATE_MASK),
+                        ActiveEpCtx->EpInfo,
+                        ActiveEpCtx->EpInfo2);
+            }
+        }
+    }
+#endif
     return MP_STATUS_SUCCESS;
 }
 
@@ -3997,6 +4214,18 @@ XHCI_HandleTransferEvent(
              BytesTransferred,
              Transfer->StreamId);
 
+    if (SlotId == 1 && (EndpointId == 3 || EndpointId == 4))
+    {
+        DPRINT1("usbxhci: bulk xfer event S%u E%u Code=%lu Req=%lu Rem=%lu Bytes=%lu Ptr=%I64x\n",
+                SlotId,
+                EndpointId,
+                CompletionCode,
+                RequestedLength,
+                Remaining,
+                BytesTransferred,
+                TrbPointer);
+    }
+
     switch (CompletionCode)
     {
         case XHCI_COMPLETION_SUCCESS:
@@ -5625,6 +5854,7 @@ XHCI_DetectHardwareQuirks(
             if (EnableQuirk)
             {
                 Extension->Quirks |= XHCI_QUIRK_IGNORE_STARTUP_HCE;
+                Extension->Quirks |= XHCI_QUIRK_QEMU_CONFIG_EP_ORDER;
                 DPRINT1("usbxhci: startup HCE quirk enabled for QEMU\n");
             }
             else
@@ -6509,10 +6739,17 @@ XHCI_WaitForCommandCompletion(
 
     while (Remaining--)
     {
-        if (!CommandContext->Completed)
-        {
+        /*
+         * When we can use an event wait (IRQL <= APC_LEVEL), rely on the IRQ/DPC
+         * path to service the event ring and signal CompletionEvent. Polling the
+         * event ring from within a USBPORT->miniport call can force us to defer
+         * unrelated transfer completions, which risks USBPORT timeouts/cancels
+         * and ensuing pool/list corruption.
+         *
+         * If we cannot wait on an event (high IRQL), fall back to polling.
+         */
+        if (!CommandContext->Completed && !UseEventWait)
             XHCI_ServiceEventRing(Extension, FALSE, FALSE);
-        }
 
         if (CommandContext->Completed)
             break;
@@ -6951,6 +7188,37 @@ XHCI_SubmitTransfer(PVOID MiniPortExtension,
     if (Extension->FatalError)
         return MP_STATUS_HW_ERROR;
 
+    /*
+     * USBPORT may transiently tear down and recreate pipes while higher-level
+     * drivers (notably usb-storage) continue queuing transfers. On QEMU's xHCI
+     * this can leave a bulk endpoint context Disabled even though the pipe
+     * handle is still used, which would otherwise stall the boot waiting for a
+     * completion that never arrives. If we observe a Disabled endpoint at
+     * submit-time, attempt a best-effort CONFIGURE_ENDPOINT to re-enable it.
+     */
+    if ((Extension->Quirks & XHCI_QUIRK_QEMU_CONFIG_EP_ORDER) &&
+        KeGetCurrentIrql() <= DISPATCH_LEVEL &&
+        Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK &&
+        Endpoint->Slot &&
+        Endpoint->EndpointId > 1)
+    {
+        PVOID DeviceCtxBase = Endpoint->Slot->DeviceContext.VirtualAddress;
+        if (DeviceCtxBase)
+        {
+            PXHCI_ENDPOINT_CONTEXT EpCtx =
+                XHCI_GetDeviceEndpointContextVa(Extension,
+                                                DeviceCtxBase,
+                                                Endpoint->EndpointId - 1);
+            if (EpCtx && ((EpCtx->EpInfo & XHCI_EPCTX_STATE_MASK) == XHCI_EPCTX_STATE_DISABLED))
+            {
+                (VOID)XHCI_ConfigureSlotEndpoint(Extension,
+                                                 Endpoint->Slot,
+                                                 Endpoint,
+                                                 Endpoint->EndpointId);
+            }
+        }
+    }
+
     if (Endpoint->EndpointProperties.TransferType ==
             USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
     {
@@ -7181,18 +7449,10 @@ XHCI_SubmitControlTransfer(
     while (HasDataStage && Remaining && SgIndex < SgList->SgElementCount)
     {
         ULONG ElementRemaining = SgList->SgElement[SgIndex].SgTransferLength;
-        ULONG ElementOffset = SgList->SgElement[SgIndex].SgOffset;
         ULONGLONG ElementAddress = SgList->SgElement[SgIndex].SgPhysicalAddress.QuadPart;
 
-        if (ElementOffset >= ElementRemaining)
-        {
-            ElementRemaining = 0;
-        }
-
-        if (ElementOffset)
-            ElementAddress += ElementOffset;
-        if (ElementRemaining > ElementOffset)
-            ElementRemaining -= ElementOffset;
+        /* USBPORT's SgOffset is the offset into the *overall* transfer buffer;
+         * SgPhysicalAddress already points at the correct segment. */
 
         while (ElementRemaining && Remaining)
         {
@@ -7345,7 +7605,6 @@ XHCI_SubmitSgTransfer(
     PXHCI_TRB Trb = NULL;
     ULONGLONG PhysicalAddress = 0;
     ULONG Control;
-    BOOLEAN DirectionIn;
     MPSTATUS Status = MP_STATUS_SUCCESS;
     KIRQL OldIrql;
     ULONG IsoPayloadLimit = 0;
@@ -7371,9 +7630,40 @@ XHCI_SubmitSgTransfer(
     TransferParameters = Transfer->TransferParameters;
     SgList = Transfer->SgList;
 
-    DirectionIn =
-        (Endpoint->EndpointProperties.Direction != USBPORT_TRANSFER_DIRECTION_OUT) ?
-            TRUE : FALSE;
+    if (Endpoint->SlotId == 1 &&
+        Endpoint->EndpointId == 4 &&
+        TransferParameters &&
+        TransferParameters->TransferBufferLength == 31 &&
+        SgList &&
+        SgList->MappedSystemVa &&
+        SgList->SgElementCount > 0)
+    {
+        PUSBPORT_SCATTER_GATHER_ELEMENT Element = &SgList->SgElement[0];
+        ULONG Offset = Element->SgOffset;
+        ULONG Length = Element->SgTransferLength;
+
+        if (Offset < Length && (Length - Offset) >= 31)
+        {
+            const UCHAR *Cbw = (const UCHAR *)SgList->MappedSystemVa + Offset;
+            ULONG Sig = *(const ULONG *)(const VOID *)(Cbw + 0);
+            ULONG Tag = *(const ULONG *)(const VOID *)(Cbw + 4);
+            ULONG XferLen = *(const ULONG *)(const VOID *)(Cbw + 8);
+
+            DPRINT1("usbxhci: BOT CBW sig=%08lx tag=%08lx xfer=%08lx flags=%02x lun=%02x cblen=%02x cdb=%02x %02x %02x %02x %02x %02x\n",
+                    Sig,
+                    Tag,
+                    XferLen,
+                    Cbw[12],
+                    Cbw[13],
+                    Cbw[14],
+                    Cbw[15],
+                    Cbw[16],
+                    Cbw[17],
+                    Cbw[18],
+                    Cbw[19],
+                    Cbw[20]);
+        }
+    }
 
     if (IsIsochronous)
     {
@@ -7425,8 +7715,6 @@ XHCI_SubmitSgTransfer(
         {
             Control |= ((ULONG)Endpoint->InterruptTarget << XHCI_TRB_INTR_TARGET_SHIFT);
         }
-        if (DirectionIn)
-            Control |= XHCI_TRB_DIR_IN;
         if (IsIsochronous)
             Control |= XHCI_TRB_SIA;
 #if DBG
@@ -7462,15 +7750,8 @@ XHCI_SubmitSgTransfer(
     {
         ULONG ElementRemaining = SgList->SgElement[SgIndex].SgTransferLength;
         PHYSICAL_ADDRESS ElementAddress = SgList->SgElement[SgIndex].SgPhysicalAddress;
-        ULONG ElementOffset = SgList->SgElement[SgIndex].SgOffset;
-
-        if (ElementOffset)
-            ElementAddress.QuadPart += ElementOffset;
-
-        if (ElementOffset >= ElementRemaining)
-            ElementRemaining = 0;
-        else
-            ElementRemaining -= ElementOffset;
+        /* USBPORT's SgOffset is the offset into the *overall* transfer buffer;
+         * SgPhysicalAddress already points at the correct segment. */
 
         while (ElementRemaining && Remaining)
         {
@@ -7501,9 +7782,6 @@ XHCI_SubmitSgTransfer(
             {
                 Control |= ((ULONG)Endpoint->InterruptTarget << XHCI_TRB_INTR_TARGET_SHIFT);
             }
-
-            if (DirectionIn)
-                Control |= XHCI_TRB_DIR_IN;
 
             if (IsIsochronous)
                 Control |= XHCI_TRB_SIA;
@@ -7557,6 +7835,39 @@ XHCI_SubmitSgTransfer(
 #if DBG
     ASSERT(IocTrbCount == 1);
 #endif
+
+    if (Endpoint->SlotId == 1 && (Endpoint->EndpointId == 3 || Endpoint->EndpointId == 4))
+    {
+        ULONGLONG Buffer = Trb ? (((ULONGLONG)Trb->Parameter2 << 32) | Trb->Parameter1) : 0;
+        ULONG TrbLen = Trb ? (Trb->Status & XHCI_TRB_LEN_MASK) : 0;
+        ULONG EpState = 0xFFFFFFFF;
+        ULONG EpInfo2 = 0;
+
+        if (Endpoint->Slot && Endpoint->Slot->DeviceContext.VirtualAddress)
+        {
+            PXHCI_ENDPOINT_CONTEXT EpCtx =
+                XHCI_GetDeviceEndpointContextVa(Extension,
+                                                Endpoint->Slot->DeviceContext.VirtualAddress,
+                                                Endpoint->EndpointId - 1);
+            if (EpCtx)
+            {
+                EpState = EpCtx->EpInfo & XHCI_EPCTX_STATE_MASK;
+                EpInfo2 = EpCtx->EpInfo2;
+            }
+        }
+
+        DPRINT1("usbxhci: bulk submit S%u E%u Req=%lu LastTrb=%I64x Buf=%I64x Len=%lu Enq=%lu CS=%lu EpState=%lx EpInfo2=%08lx\n",
+                Endpoint->SlotId,
+                Endpoint->EndpointId,
+                Transfer->RequestedLength,
+                (ULONGLONG)Transfer->CompletionTrbPointer,
+                Buffer,
+                TrbLen,
+                Endpoint->TransferRing.EnqueueIndex,
+                (ULONG)Endpoint->TransferRing.CycleState,
+                EpState,
+                EpInfo2);
+    }
 
     {
         USHORT DoorbellStreamId = XHCI_SelectDoorbellStreamId(Endpoint, Transfer);
@@ -7843,6 +8154,24 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
     if (Status != MP_STATUS_SUCCESS)
         return Status;
 
+    /*
+     * QEMU's xHCI (1B36:000D) can leave lower DCIs disabled if a higher DCI is
+     * configured first (notably usb-storage's bulk OUT at DCI=4 before bulk IN
+     * at DCI=3). Work around this by deferring the initial ConfigureEndpoint
+     * for the bulk OUT pipe (EP 0x02 / DCI 4) until after the bulk IN pipe is
+     * opened and configured.
+     */
+    if ((Extension->Quirks & XHCI_QUIRK_QEMU_CONFIG_EP_ORDER) &&
+        !Slot->Configured &&
+        EndpointProperties->TransferType == USBPORT_TRANSFER_TYPE_BULK &&
+        EndpointProperties->Direction == USBPORT_TRANSFER_DIRECTION_OUT &&
+        EndpointProperties->EndpointAddress == 0x02 &&
+        EndpointId == 4)
+    {
+        Slot->DeferredEndpointTable[EndpointId] = XhciEndpoint;
+        return MP_STATUS_SUCCESS;
+    }
+
     Status = XHCI_ConfigureSlotEndpoint(Extension,
                                         Slot,
                                         XhciEndpoint,
@@ -7851,6 +8180,24 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
     {
         XHCI_FreeTransferRing(&XhciEndpoint->TransferRing);
         return Status;
+    }
+
+    if ((Extension->Quirks & XHCI_QUIRK_QEMU_CONFIG_EP_ORDER) &&
+        Slot->DeferredEndpointTable[4] != NULL &&
+        Slot->EndpointTable[4] == NULL)
+    {
+        PXHCI_ENDPOINT Deferred = Slot->DeferredEndpointTable[4];
+        Slot->DeferredEndpointTable[4] = NULL;
+
+        Status = XHCI_ConfigureSlotEndpoint(Extension,
+                                            Slot,
+                                            Deferred,
+                                            4);
+        if (Status != MP_STATUS_SUCCESS)
+        {
+            Slot->DeferredEndpointTable[4] = Deferred;
+            return Status;
+        }
     }
 
     return MP_STATUS_SUCCESS;
@@ -7868,9 +8215,22 @@ XHCI_CloseEndpoint(PVOID MiniPortExtension,
     if (!XhciEndpoint)
         return;
 
+#if DBG
+    if (XhciEndpoint->SlotId == 1 && (XhciEndpoint->EndpointId == 3 || XhciEndpoint->EndpointId == 4))
+    {
+        DPRINT1("usbxhci: CloseEndpoint slot=%u ep=%u addr=0x%02x\n",
+                XhciEndpoint->SlotId,
+                XhciEndpoint->EndpointId,
+                (UCHAR)(XhciEndpoint->EndpointProperties.EndpointAddress & 0xFF));
+    }
+#endif
+
     if (XhciEndpoint->Slot &&
         XhciEndpoint->EndpointId < RTL_NUMBER_OF(XhciEndpoint->Slot->EndpointTable))
     {
+        if (XhciEndpoint->Slot->DeferredEndpointTable[XhciEndpoint->EndpointId] == XhciEndpoint)
+            XhciEndpoint->Slot->DeferredEndpointTable[XhciEndpoint->EndpointId] = NULL;
+
         if (!XhciEndpoint->DefaultControl)
             XHCI_DropSlotEndpoint(XhciEndpoint->Extension,
                                   XhciEndpoint->Slot,
