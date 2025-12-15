@@ -916,11 +916,19 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     DeviceDescription.Version = DEVICE_DESCRIPTION_VERSION;
     DeviceDescription.Master = TRUE;
     DeviceDescription.ScatterGather = TRUE;
-    DeviceDescription.Dma32BitAddresses = TRUE;
-    DeviceDescription.Dma64BitAddresses =
-        (Packet->MiniPortFlags & USB_MINIPORT_FLAGS_USB3) ? TRUE : FALSE;
+    if (Packet->MiniPortFlags & USB_MINIPORT_FLAGS_USB3)
+    {
+        DeviceDescription.Dma32BitAddresses = FALSE;
+        DeviceDescription.Dma64BitAddresses = TRUE;
+        DeviceDescription.DmaWidth = Width64Bits;
+    }
+    else
+    {
+        DeviceDescription.Dma32BitAddresses = TRUE;
+        DeviceDescription.Dma64BitAddresses = FALSE;
+        DeviceDescription.DmaWidth = Width32Bits;
+    }
     DeviceDescription.InterfaceType = PCIBus;
-    DeviceDescription.DmaWidth = Width32Bits;
     DeviceDescription.DmaSpeed = Compatible;
     DeviceDescription.MaximumLength = MAXULONG;
 
