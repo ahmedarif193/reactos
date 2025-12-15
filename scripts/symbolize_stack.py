@@ -37,21 +37,10 @@ _PATTERN = re.compile(r"<([^:<>]+):([0-9A-Fa-f]+)>")
 TAIL_DEFAULT = 2
 DEFAULT_TIMEOUT_SECONDS = 60
 DEFAULT_LOG_PATH = Path("/tmp/out-q35.log")
-
-# Convenience: ready-to-run QEMU command for this build/ISO
-DEFAULT_QEMU_CMD = (
-    "qemu-system-x86_64 -enable-kvm "
-    "-M q35,usb=off "
-    "-m 3G "
-    "-drive file=livecd_eotics.com_reactosv2.iso,media=cdrom "
-    "-device qemu-xhci,id=xhci "
-    "-serial stdio "
-    "-device qemu-xhci "
-    "-device usb-kbd "
-    "-device usb-tablet "
-    "-display none"
-)
-
+GECKO_MARKER = "Could not load wine-gecko"
+USB_DEVICE_FOUND_MARKER = "New USB device found"
+USB_DEVICE_FOUND_EXPECTED_COUNT = 3
+STALL_FATAL_MESSAGE = "FATAL !! the boot don't reach desktop, you need to fix it"
 
 def _locate_build_dir() -> Path:
     """Return the directory that contains the ReactOS build artifacts."""
@@ -275,7 +264,7 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
     build_dir = _locate_build_dir()
 
     print(f"[symbolize] Using build directory: {build_dir}")
-    print("[symbolize] Building livecd_eotics.com_reactosv2.iso …")
+    print("[symbolize] Building livecd_dev.iso …")
     build = subprocess.run(
         ["ninja", "livecd"],
         cwd=build_dir,
@@ -289,19 +278,21 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
         raise subprocess.CalledProcessError(build.returncode, build.args)
     print("[symbolize] Build complete.")
 
-    livecd = build_dir / "livecd_eotics.com_reactosv2.iso"
+    livecd = build_dir / "livecd_dev.iso"
     if not livecd.exists():
-        raise FileNotFoundError("livecd_eotics.com_reactosv2.iso not found; run the script from the build directory")
+        raise FileNotFoundError("livecd_dev.iso not found; run the script from the build directory")
 
     qemu_cmd = [
         "qemu-system-x86_64",
+        "-bios",
+        "/usr/share/ovmf/OVMF.fd",
         "-enable-kvm",
         "-M",
         "q35,usb=off",
         "-m",
         "3G",
         "-drive",
-        f"file={livecd},media=cdrom",
+        f"file={livecd}",
         "-device",
         "qemu-xhci,id=xhci",
         "-serial",
@@ -311,6 +302,10 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
         "usb-kbd,bus=xhci.0,port=1",
         "-device",
         "usb-tablet,bus=xhci.0,port=2",
+    "-drive",
+    "if=none,id=usbdisk,file=fat32.img",
+    "-device",
+    "usb-storage,drive=usbdisk","-display","none"
     ]
 
     print(f"[symbolize] Launching QEMU (headless, 3G RAM). Log: {log_path}")
@@ -463,6 +458,26 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
             with log_path.open("w", encoding="utf-8") as handle:
                 for line in lines_cache:
                     handle.write(line + "\n")
+
+    if lines_cache:
+        gecko_marker_present = any(GECKO_MARKER in line for line in lines_cache)
+        usb_device_found_count = sum(1 for line in lines_cache if USB_DEVICE_FOUND_MARKER in line)
+        usb_device_found_ok = usb_device_found_count == USB_DEVICE_FOUND_EXPECTED_COUNT
+
+        if (not gecko_marker_present) or (not usb_device_found_ok):
+            usb_status = (
+                f"'{USB_DEVICE_FOUND_MARKER}' occurrences: {usb_device_found_count} "
+                f"(expected {USB_DEVICE_FOUND_EXPECTED_COUNT})"
+            )
+            lines_cache.append(STALL_FATAL_MESSAGE)
+            print(STALL_FATAL_MESSAGE)
+            print(usb_status)
+            try:
+                with log_path.open("a", encoding="utf-8") as handle:
+                    handle.write(STALL_FATAL_MESSAGE + "\n")
+                    handle.write(usb_status + "\n")
+            except OSError:
+                pass
 
     print("[symbolize] QEMU run finished.")
     print(f"[symbolize] Log available at {log_path}")
