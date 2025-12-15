@@ -227,6 +227,51 @@ HalpAcpiReadEcamUlong(
     return Value;
 }
 
+static
+VOID
+HalpAcpiReadEcamBytes(
+    _In_ ULONG AllocationIndex,
+    _In_ const HALP_ACPI_MCFG_ALLOCATION *Allocation,
+    _In_ ULONG BusNumber,
+    _In_ PCI_SLOT_NUMBER Slot,
+    _In_ ULONG Offset,
+    _Out_writes_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Length)
+{
+    ULONG CurrentOffset = Offset;
+    ULONG Remaining = Length;
+    PUCHAR Out = Buffer;
+
+    while (Remaining)
+    {
+        ULONG AlignedOffset;
+        ULONG Dword;
+        ULONG ByteInDword;
+        ULONG ToCopy;
+
+        AlignedOffset = CurrentOffset & ~3u;
+        Dword = HalpAcpiReadEcamUlong(AllocationIndex,
+                                      Allocation,
+                                      (UCHAR)BusNumber,
+                                      Slot.u.bits.DeviceNumber,
+                                      Slot.u.bits.FunctionNumber,
+                                      AlignedOffset);
+
+        ByteInDword = CurrentOffset & 3u;
+        ToCopy = 4 - ByteInDword;
+        if (ToCopy > Remaining)
+        {
+            ToCopy = Remaining;
+        }
+
+        RtlCopyMemory(Out, ((PUCHAR)&Dword) + ByteInDword, ToCopy);
+
+        CurrentOffset += ToCopy;
+        Out += ToCopy;
+        Remaining -= ToCopy;
+    }
+}
+
 static PVOID
 HalpAcpiEnsureEcamMapping(
     _In_ ULONG AllocationIndex,
@@ -2811,69 +2856,53 @@ HalpAcpiAccessConfigEcam(
     }
 
     MappingBase = NULL;
-    if (HalpAcpiMcfgEcamMappings && AllocationIndex < HalpAcpiMcfgEcamMappingCount)
+    if (Write)
     {
-        MappingBase = HalpAcpiMcfgEcamMappings[AllocationIndex];
-        if (!MappingBase)
+        if (HalpAcpiMcfgEcamMappings && AllocationIndex < HalpAcpiMcfgEcamMappingCount)
         {
-            MappingBase = HalpAcpiEnsureEcamMapping(AllocationIndex, Allocation);
-        }
-    }
-
-    if (MappingBase)
-    {
-        if (Write)
-        {
-            RtlCopyMemory((PUCHAR)MappingBase + AccessOffset, Buffer, Length);
-        }
-        else
-        {
-            RtlCopyMemory(Buffer, (PUCHAR)MappingBase + AccessOffset, Length);
-
-            if (Allocation->PciSegment == 0 &&
-                Offset == 0 &&
-                Length >= sizeof(USHORT) &&
-                (UCHAR)BusNumber == Allocation->StartBusNumber &&
-                Slot.u.AsULONG == 0)
+            MappingBase = HalpAcpiMcfgEcamMappings[AllocationIndex];
+            if (!MappingBase)
             {
-                USHORT Vendor = *(UNALIGNED PUSHORT)Buffer;
-                if (Vendor == 0xFFFF || Vendor == 0x0000)
-                {
-                    return FALSE;
-                }
+                MappingBase = HalpAcpiEnsureEcamMapping(AllocationIndex, Allocation);
             }
         }
+
+        if (MappingBase)
+        {
+            RtlCopyMemory((PUCHAR)MappingBase + AccessOffset, Buffer, Length);
+            HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_USED, NULL);
+            return TRUE;
+        }
+
+        PhysicalAddress.QuadPart = Allocation->BaseAddress + AccessOffset;
+        PageBase.QuadPart = PhysicalAddress.QuadPart & ~((ULONGLONG)PAGE_SIZE - 1);
+        PageOffset = (ULONG)(PhysicalAddress.QuadPart - PageBase.QuadPart);
+
+        Mapping = MmMapIoSpace(PageBase, PAGE_SIZE, MmNonCached);
+        if (!Mapping)
+        {
+            HalpAcpiRecordEcamEvent(
+                HALP_ACPI_ECAM_COVERAGE_MAP_FAILURE,
+                "HAL: Failed to map a PCI Express MMCONFIG page; using legacy configuration space instead.");
+            return FALSE;
+        }
+
+        RtlCopyMemory((PUCHAR)Mapping + PageOffset, Buffer, Length);
+        MmUnmapIoSpace(Mapping, PAGE_SIZE);
 
         HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_USED, NULL);
         return TRUE;
     }
 
-    PhysicalAddress.QuadPart = Allocation->BaseAddress + AccessOffset;
-    PageBase.QuadPart = PhysicalAddress.QuadPart & ~((ULONGLONG)PAGE_SIZE - 1);
-    PageOffset = (ULONG)(PhysicalAddress.QuadPart - PageBase.QuadPart);
+    HalpAcpiReadEcamBytes(AllocationIndex,
+                          Allocation,
+                          BusNumber,
+                          Slot,
+                          Offset,
+                          Buffer,
+                          Length);
 
-    Mapping = MmMapIoSpace(PageBase, PAGE_SIZE, MmNonCached);
-    if (!Mapping)
-    {
-        HalpAcpiRecordEcamEvent(
-            HALP_ACPI_ECAM_COVERAGE_MAP_FAILURE,
-            "HAL: Failed to map a PCI Express MMCONFIG page; using legacy configuration space instead.");
-        return FALSE;
-    }
-
-    if (Write)
-    {
-        RtlCopyMemory((PUCHAR)Mapping + PageOffset, Buffer, Length);
-    }
-    else
-    {
-        RtlCopyMemory(Buffer, (PUCHAR)Mapping + PageOffset, Length);
-    }
-
-    MmUnmapIoSpace(Mapping, PAGE_SIZE);
-
-    if (!Write &&
-        Allocation->PciSegment == 0 &&
+    if (Allocation->PciSegment == 0 &&
         Offset == 0 &&
         Length >= sizeof(USHORT) &&
         (UCHAR)BusNumber == Allocation->StartBusNumber &&
@@ -2882,6 +2911,9 @@ HalpAcpiAccessConfigEcam(
         USHORT Vendor = *(UNALIGNED PUSHORT)Buffer;
         if (Vendor == 0xFFFF || Vendor == 0x0000)
         {
+            DPRINT1("HAL: PCI ECAM anchor vendor all-ones/zero seg=%u bus=%02lu\n",
+                    Allocation->PciSegment,
+                    BusNumber);
             return FALSE;
         }
     }
@@ -3714,21 +3746,21 @@ HalpDebugPciDumpBusAcpi(
         DbgPrint("%s\n", RomLine);
     }
 
-    HalpDebugPciDumpCapabilitiesAcpi(BusNumber, PciSlot, HeaderType, PciData);
-}
+		    HalpDebugPciDumpCapabilitiesAcpi(BusNumber, PciSlot, HeaderType, PciData);
+		}
 
 CODE_SEG("INIT")
 static
 VOID
 HalpAcpiEnumeratePciBusDebug(VOID)
-{
-    PCI_COMMON_CONFIG PciConfig;
-    PCI_SLOT_NUMBER PciSlot;
-    ULONG BusNumber, DeviceNumber, FunctionNumber;
-    ULONG VendorId;
-    USHORT VendorWord;
-    LONG EcamFlags;
-    BOOLEAN ForcedLegacy;
+	{
+	    PCI_COMMON_CONFIG PciConfig;
+	    PCI_SLOT_NUMBER PciSlot;
+	    ULONG BusNumber, DeviceNumber, FunctionNumber;
+	    ULONG VendorId;
+	    USHORT VendorWord;
+	    LONG EcamFlags;
+	    BOOLEAN ForcedLegacy;
 
     /* Make sure legacy handlers exist if ECAM access is disabled */
     /* Setup the PCI stub support */
@@ -3798,60 +3830,69 @@ HalpAcpiEnumeratePciBusDebug(VOID)
             /* For bus 0, continue scanning all devices/functions to see if anyone responds */
         }
 
-        /* Enumerate all devices on this bus */
-        for (DeviceNumber = 0; DeviceNumber < 32; DeviceNumber++)
-        {
-            /* Enumerate all functions on this device */
-            for (FunctionNumber = 0; FunctionNumber < 8; FunctionNumber++)
+	        /* Enumerate all devices on this bus */
+	        for (DeviceNumber = 0; DeviceNumber < 32; DeviceNumber++)
+	        {
+		    /* Enumerate all functions on this device */
+		    for (FunctionNumber = 0; FunctionNumber < 8; FunctionNumber++)
             {
                 /* Build the PCI slot */
                 PciSlot.u.AsULONG = 0;
                 PciSlot.u.bits.DeviceNumber = DeviceNumber;
                 PciSlot.u.bits.FunctionNumber = FunctionNumber;
 
-                /* Read the vendor ID */
-                VendorId = 0xFFFFFFFF;
-                VendorWord = 0xFFFF;
-                HalpPhase0GetPciDataByOffset(BusNumber,
-                                             PciSlot,
-                                             &VendorId,
-                                             0,
-                                             sizeof(VendorId));
+		        /* Read the vendor ID */
+		        VendorId = 0xFFFFFFFF;
+		        VendorWord = 0xFFFF;
+		        HalpPhase0GetPciDataByOffset(BusNumber,
+		                                     PciSlot,
+		                                     &VendorId,
+		                                     0,
+		                                     sizeof(VendorId));
 
-                /* Check if device exists */
-                if (!HalpPciVendorIdLooksSane(VendorId, (USHORT)(VendorId & 0xFFFF)))
-                {
-                    HalpPhase0GetPciDataByOffset(BusNumber,
-                                                 PciSlot,
-                                                 &VendorWord,
-                                                 0,
-                                                 sizeof(VendorWord));
-                    if (!HalpPciVendorIdLooksSane(0xFFFFFFFF, VendorWord))
-                    {
-                        continue;
-                    }
+			        /* Check if device exists */
+			        {
+			            BOOLEAN VendorSane;
 
-                    VendorId = VendorWord;
-                    DPRINT1("HAL: Legacy config probe resolved via WORD read for %02u:%02u.%u (vendor=0x%04x)\n",
-                            BusNumber,
-                            DeviceNumber,
-                            FunctionNumber,
-                            VendorWord);
-                }
-                else
-                {
-                    /* Any valid response means the bus decodes */
-                }
-                BusHadAnyDevice = TRUE;
-                /* Read full configuration */
-                HalpPhase0GetPciDataByOffset(BusNumber,
-                                             PciSlot,
-                                             &PciConfig,
-                                             0,
-                                             sizeof(PCI_COMMON_CONFIG));
+				        if (!HalpPciVendorIdLooksSane(VendorId, (USHORT)(VendorId & 0xFFFF)))
+				        {
+				            HalpPhase0GetPciDataByOffset(BusNumber,
+				                                         PciSlot,
+				                                         &VendorWord,
+				                                         0,
+				                                         sizeof(VendorWord));
+				            if (!HalpPciVendorIdLooksSane(0xFFFFFFFF, VendorWord))
+				            {
+				                continue;
+				            }
 
-                /* Use the enhanced debug output function */
-                HalpDebugPciDumpBusAcpi(BusNumber, PciSlot, &PciConfig);
+				            VendorId = VendorWord;
+				            DPRINT1("HAL: Legacy config probe resolved via WORD read for %02u:%02u.%u (vendor=0x%04x)\n",
+				                    BusNumber,
+				                    DeviceNumber,
+				                    FunctionNumber,
+				                    VendorWord);
+				        }
+				        else
+				        {
+				            /* Any valid response means the bus decodes */
+				        }
+				        VendorSane = HalpPciVendorIdLooksSane(VendorId, (USHORT)VendorId);
+				        if (!VendorSane)
+				        {
+				            continue;
+				        }
+			        }
+		        BusHadAnyDevice = TRUE;
+		        /* Read full configuration */
+			        HalpPhase0GetPciDataByOffset(BusNumber,
+			                                     PciSlot,
+			                                     &PciConfig,
+			                                     0,
+			                                     sizeof(PCI_COMMON_CONFIG));
+
+		        /* Use the enhanced debug output function */
+		        HalpDebugPciDumpBusAcpi(BusNumber, PciSlot, &PciConfig);
 
                 /* For function 0, check if this is a multi-function device */
                 if (FunctionNumber == 0 && !(PciConfig.HeaderType & PCI_MULTIFUNCTION))

@@ -1833,6 +1833,40 @@ UCHAR PCIDeref[4][4] =
     {1, 1, 1, 1}    // UCHAR-aligned offset
 };
 
+static
+VOID
+HalpPciTracePhase0Read(
+    _In_ BOOLEAN UsedEcam,
+    _In_ ULONG Bus,
+    _In_ PCI_SLOT_NUMBER PciSlot,
+    _In_ ULONG Offset,
+    _In_ ULONG Length,
+    _In_reads_bytes_(Length) PVOID Buffer)
+{
+    ULONG Value;
+
+    if (!HalpIsPciDebuggingEnabled())
+    {
+        return;
+    }
+
+    if (Length < sizeof(ULONG))
+    {
+        return;
+    }
+
+    Value = *(UNALIGNED PULONG)Buffer;
+
+    DbgPrint("HAL: PCI PH0 %s bus %02lu dev %02lu fn %u off %03lx len %lu val %08lx\n",
+             UsedEcam ? "ECAM" : "LEGACY",
+             Bus,
+             (ULONG)PciSlot.u.bits.DeviceNumber,
+             (ULONG)PciSlot.u.bits.FunctionNumber,
+             Offset,
+             Length,
+             Value);
+}
+
 /* Type 1 PCI Bus */
 PCI_CONFIG_HANDLER PCIConfigHandlerType1 =
 {
@@ -2223,6 +2257,7 @@ HalpPhase0GetPciDataByOffset(
 {
     ULONG BytesLeft = Length;
     PUCHAR BufferPtr = Buffer;
+    PUCHAR BufferStart = BufferPtr;
     PCI_TYPE1_CFG_BITS PciCfg;
 
     /* Use ECAM for early config space only when globally enabled;
@@ -2238,6 +2273,16 @@ HalpPhase0GetPciDataByOffset(
                                  Offset,
                                  Length))
     {
+        if (Offset == 0 && Length >= sizeof(ULONG))
+        {
+            HalpPciTracePhase0Read(TRUE,
+                                   Bus,
+                                   PciSlot,
+                                   Offset,
+                                   Length,
+                                   Buffer);
+        }
+
         return Length;
     }
 
@@ -2302,6 +2347,16 @@ HalpPhase0GetPciDataByOffset(
         Offset += i;
         BufferPtr += i;
         BytesLeft -= i;
+    }
+
+    if (Offset == 0 && Length >= sizeof(ULONG))
+    {
+        HalpPciTracePhase0Read(FALSE,
+                               Bus,
+                               PciSlot,
+                               Offset,
+                               Length,
+                               BufferStart);
     }
 
     return Length;
