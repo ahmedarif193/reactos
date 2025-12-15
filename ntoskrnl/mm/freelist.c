@@ -33,7 +33,6 @@ SIZE_T MmDriverCommit;
 SIZE_T MmProcessCommit;
 SIZE_T MmPagedPoolCommit;
 SIZE_T MmPeakCommitment;
-SIZE_T MmtotalCommitLimitMaximum;
 
 PMMPFN FirstUserLRUPfn;
 PMMPFN LastUserLRUPfn;

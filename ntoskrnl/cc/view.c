@@ -39,6 +39,9 @@
 
 /* GLOBALS *******************************************************************/
 
+/* Global tuning parameters */
+BOOLEAN MmLargeSystemCache = FALSE;
+
 LIST_ENTRY DirtyVacbListHead;
 static LIST_ENTRY VacbLruListHead;
 

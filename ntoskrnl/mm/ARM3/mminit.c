@@ -336,9 +336,6 @@ MM_SYSTEMSIZE MmSystemSize;
 PFN_NUMBER MmSystemCacheWsMinimum = 288;
 PFN_NUMBER MmSystemCacheWsMaximum = 350;
 
-/* FIXME: Move to cache/working set code later */
-BOOLEAN MmLargeSystemCache;
-
 /*
  * This value determines in how many fragments/chunks the subsection prototype
  * PTEs should be allocated when mapping a section object. It is configurable in
@@ -355,9 +352,6 @@ SIZE_T MmAllocationFragment;
  * These two values track how much virtual memory can be committed, and when
  * expansion should happen.
  */
- // FIXME: They should be moved elsewhere since it's not an "init" setting?
-SIZE_T MmTotalCommitLimit;
-SIZE_T MmTotalCommitLimitMaximum;
 
 /*
  * These values tune certain user parameters. They have default values set here,

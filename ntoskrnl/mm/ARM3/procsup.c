@@ -17,6 +17,10 @@
 
 /* GLOBALS ********************************************************************/
 
+/* Global commit limits */
+SIZE_T MmTotalCommitLimit;
+SIZE_T MmTotalCommitLimitMaximum;
+
 ULONG MmProcessColorSeed = 0x12345678;
 ULONG MmMaximumDeadKernelStacks = 5;
 SLIST_HEADER MmDeadStackSListHead;

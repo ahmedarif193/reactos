@@ -567,6 +567,8 @@ extern BOOLEAN MmMirroring;
 extern BOOLEAN MmMakeLowMemory;
 extern BOOLEAN MmEnforceWriteProtection;
 extern SIZE_T MmAllocationFragment;
+extern SIZE_T MmTotalCommitLimit;
+extern SIZE_T MmTotalCommitLimitMaximum;
 extern ULONG MmConsumedPoolPercentage;
 extern ULONG MmVerifyDriverBufferType;
 extern ULONG MmVerifyDriverLevel;

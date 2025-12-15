@@ -38,13 +38,13 @@ extern PVOID KernelVerifier;
 extern MM_DRIVER_VERIFIER_DATA MmVerifierData;
 
 extern SIZE_T MmTotalCommitLimit;
+extern SIZE_T MmTotalCommitLimitMaximum;
 extern SIZE_T MmTotalCommittedPages;
 extern SIZE_T MmSharedCommit;
 extern SIZE_T MmDriverCommit;
 extern SIZE_T MmProcessCommit;
 extern SIZE_T MmPagedPoolCommit;
 extern SIZE_T MmPeakCommitment;
-extern SIZE_T MmtotalCommitLimitMaximum;
 
 extern PVOID MiDebugMapping; // internal
 extern PMMPTE MmDebugPte; // internal

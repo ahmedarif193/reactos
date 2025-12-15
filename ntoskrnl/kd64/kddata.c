@@ -611,7 +611,7 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     PtrToUL64(&MmVerifierData),
     PtrToUL64(&MmAllocatedNonPagedPool),
     PtrToUL64(&MmPeakCommitment),
-    PtrToUL64(&MmtotalCommitLimitMaximum),
+    PtrToUL64(&MmTotalCommitLimitMaximum),
     PtrToUL64(&CmNtCSDVersion),
     PtrToUL64(&MmPhysicalMemoryBlock),
     PtrToUL64(&MmSessionBase),
