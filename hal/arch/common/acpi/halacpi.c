@@ -238,37 +238,182 @@ HalpAcpiReadEcamBytes(
     _Out_writes_bytes_(Length) PVOID Buffer,
     _In_ ULONG Length)
 {
-    ULONG CurrentOffset = Offset;
-    ULONG Remaining = Length;
-    PUCHAR Out = Buffer;
+    PVOID allocationMapping;
+    PVOID tempMapping;
+    PUCHAR deviceBase;
+    ULONGLONG deviceOffset;
+    PHYSICAL_ADDRESS phys;
+    ULONG currentOffset;
+    ULONG remaining;
+    PUCHAR out;
 
-    while (Remaining)
+    allocationMapping = NULL;
+    tempMapping = NULL;
+
+    if (HalpAcpiMcfgEcamMappings && AllocationIndex < HalpAcpiMcfgEcamMappingCount)
     {
-        ULONG AlignedOffset;
-        ULONG Dword;
-        ULONG ByteInDword;
-        ULONG ToCopy;
+        allocationMapping = HalpAcpiMcfgEcamMappings[AllocationIndex];
+    }
 
-        AlignedOffset = CurrentOffset & ~3u;
-        Dword = HalpAcpiReadEcamUlong(AllocationIndex,
-                                      Allocation,
-                                      (UCHAR)BusNumber,
-                                      Slot.u.bits.DeviceNumber,
-                                      Slot.u.bits.FunctionNumber,
-                                      AlignedOffset);
+    deviceOffset = HalpAcpiEcamOffsetInAllocation(Allocation,
+                                                  (UCHAR)BusNumber,
+                                                  Slot.u.bits.DeviceNumber,
+                                                  Slot.u.bits.FunctionNumber,
+                                                  0);
 
-        ByteInDword = CurrentOffset & 3u;
-        ToCopy = 4 - ByteInDword;
-        if (ToCopy > Remaining)
+    if (allocationMapping)
+    {
+        deviceBase = (PUCHAR)allocationMapping + deviceOffset;
+    }
+    else
+    {
+        ULONGLONG physAddr;
+
+        physAddr = Allocation->BaseAddress + deviceOffset;
+        phys.QuadPart = physAddr & ~((ULONGLONG)PAGE_SIZE - 1);
+
+        tempMapping = MmMapIoSpace(phys, PAGE_SIZE, MmNonCached);
+        if (!tempMapping)
         {
-            ToCopy = Remaining;
+            RtlFillMemory(Buffer, Length, 0xFF);
+            return;
         }
 
-        RtlCopyMemory(Out, ((PUCHAR)&Dword) + ByteInDword, ToCopy);
+        deviceBase = (PUCHAR)tempMapping + (ULONG)(physAddr - phys.QuadPart);
+    }
 
-        CurrentOffset += ToCopy;
-        Out += ToCopy;
-        Remaining -= ToCopy;
+    currentOffset = Offset;
+    remaining = Length;
+    out = Buffer;
+
+    while (remaining)
+    {
+        ULONG alignedOffset;
+        ULONG byteInDword;
+        ULONG toCopy;
+        ULONG dword;
+        volatile ULONG *reg;
+
+        alignedOffset = currentOffset & ~3u;
+        byteInDword = currentOffset & 3u;
+        toCopy = 4 - byteInDword;
+        if (toCopy > remaining)
+        {
+            toCopy = remaining;
+        }
+
+        reg = (volatile ULONG *)(deviceBase + alignedOffset);
+        dword = READ_REGISTER_ULONG(reg);
+
+        RtlCopyMemory(out, ((PUCHAR)&dword) + byteInDword, toCopy);
+
+        currentOffset += toCopy;
+        out += toCopy;
+        remaining -= toCopy;
+    }
+
+    if (tempMapping)
+    {
+        MmUnmapIoSpace(tempMapping, PAGE_SIZE);
+    }
+}
+
+static
+VOID
+HalpAcpiWriteEcamBytes(
+    _In_ ULONG AllocationIndex,
+    _In_ const HALP_ACPI_MCFG_ALLOCATION *Allocation,
+    _In_ ULONG BusNumber,
+    _In_ PCI_SLOT_NUMBER Slot,
+    _In_reads_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length)
+{
+    PVOID allocationMapping;
+    PVOID tempMapping;
+    PUCHAR deviceBase;
+    ULONGLONG deviceOffset;
+    PHYSICAL_ADDRESS phys;
+    ULONG currentOffset;
+    ULONG remaining;
+    PUCHAR in;
+
+    allocationMapping = NULL;
+    tempMapping = NULL;
+
+    if (HalpAcpiMcfgEcamMappings && AllocationIndex < HalpAcpiMcfgEcamMappingCount)
+    {
+        allocationMapping = HalpAcpiMcfgEcamMappings[AllocationIndex];
+    }
+
+    deviceOffset = HalpAcpiEcamOffsetInAllocation(Allocation,
+                                                  (UCHAR)BusNumber,
+                                                  Slot.u.bits.DeviceNumber,
+                                                  Slot.u.bits.FunctionNumber,
+                                                  0);
+
+    if (allocationMapping)
+    {
+        deviceBase = (PUCHAR)allocationMapping + deviceOffset;
+    }
+    else
+    {
+        ULONGLONG physAddr;
+
+        physAddr = Allocation->BaseAddress + deviceOffset;
+        phys.QuadPart = physAddr & ~((ULONGLONG)PAGE_SIZE - 1);
+
+        tempMapping = MmMapIoSpace(phys, PAGE_SIZE, MmNonCached);
+        if (!tempMapping)
+        {
+            return;
+        }
+
+        deviceBase = (PUCHAR)tempMapping + (ULONG)(physAddr - phys.QuadPart);
+    }
+
+    currentOffset = Offset;
+    remaining = Length;
+    in = Buffer;
+
+    while (remaining)
+    {
+        ULONG alignedOffset;
+        ULONG byteInDword;
+        ULONG toWrite;
+        volatile ULONG *reg;
+        ULONG dword;
+
+        alignedOffset = currentOffset & ~3u;
+        byteInDword = currentOffset & 3u;
+        toWrite = 4 - byteInDword;
+        if (toWrite > remaining)
+        {
+            toWrite = remaining;
+        }
+
+        reg = (volatile ULONG *)(deviceBase + alignedOffset);
+
+        if ((toWrite == 4) && (byteInDword == 0))
+        {
+            RtlCopyMemory(&dword, in, sizeof(ULONG));
+            WRITE_REGISTER_ULONG(reg, dword);
+        }
+        else
+        {
+            dword = READ_REGISTER_ULONG(reg);
+            RtlCopyMemory(((PUCHAR)&dword) + byteInDword, in, toWrite);
+            WRITE_REGISTER_ULONG(reg, dword);
+        }
+
+        currentOffset += toWrite;
+        in += toWrite;
+        remaining -= toWrite;
+    }
+
+    if (tempMapping)
+    {
+        MmUnmapIoSpace(tempMapping, PAGE_SIZE);
     }
 }
 
@@ -2723,11 +2868,6 @@ HalpAcpiAccessConfigEcam(
     ULONGLONG BusCount;
     ULONGLONG WindowLength;
     ULONGLONG AccessOffset;
-    PVOID MappingBase;
-    PHYSICAL_ADDRESS PhysicalAddress;
-    PHYSICAL_ADDRESS PageBase;
-    ULONG PageOffset;
-    PVOID Mapping;
 
     if (HalpAcpiEcamDisabled)
     {
@@ -2855,41 +2995,15 @@ HalpAcpiAccessConfigEcam(
         return FALSE;
     }
 
-    MappingBase = NULL;
     if (Write)
     {
-        if (HalpAcpiMcfgEcamMappings && AllocationIndex < HalpAcpiMcfgEcamMappingCount)
-        {
-            MappingBase = HalpAcpiMcfgEcamMappings[AllocationIndex];
-            if (!MappingBase)
-            {
-                MappingBase = HalpAcpiEnsureEcamMapping(AllocationIndex, Allocation);
-            }
-        }
-
-        if (MappingBase)
-        {
-            RtlCopyMemory((PUCHAR)MappingBase + AccessOffset, Buffer, Length);
-            HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_USED, NULL);
-            return TRUE;
-        }
-
-        PhysicalAddress.QuadPart = Allocation->BaseAddress + AccessOffset;
-        PageBase.QuadPart = PhysicalAddress.QuadPart & ~((ULONGLONG)PAGE_SIZE - 1);
-        PageOffset = (ULONG)(PhysicalAddress.QuadPart - PageBase.QuadPart);
-
-        Mapping = MmMapIoSpace(PageBase, PAGE_SIZE, MmNonCached);
-        if (!Mapping)
-        {
-            HalpAcpiRecordEcamEvent(
-                HALP_ACPI_ECAM_COVERAGE_MAP_FAILURE,
-                "HAL: Failed to map a PCI Express MMCONFIG page; using legacy configuration space instead.");
-            return FALSE;
-        }
-
-        RtlCopyMemory((PUCHAR)Mapping + PageOffset, Buffer, Length);
-        MmUnmapIoSpace(Mapping, PAGE_SIZE);
-
+        HalpAcpiWriteEcamBytes(AllocationIndex,
+                               Allocation,
+                               BusNumber,
+                               Slot,
+                               Buffer,
+                               Offset,
+                               Length);
         HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_USED, NULL);
         return TRUE;
     }
