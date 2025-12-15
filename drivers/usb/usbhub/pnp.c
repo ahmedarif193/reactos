@@ -1399,6 +1399,8 @@ EnumStart:
                         ExFreePoolWithTag(SerialNumber, USB_HUB_TAG);
                     }
 
+                    USBH_FreeCachedStrings(PdoExtension);
+
                     DeviceHandle = InterlockedExchangePointer(&PdoExtension->DeviceHandle,
                                                               NULL);
 
@@ -2180,6 +2182,30 @@ USBH_PdoQueryDeviceText(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
         !PortExtension->IgnoringHwSerial &&
         !(PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_INIT_PORT_FAILED))
     {
+        if (!PortExtension->ProductString)
+        {
+            USBH_CacheDeviceStrings(PortExtension);
+        }
+
+        if (PortExtension->ProductString)
+        {
+            Length = (wcslen(PortExtension->ProductString) + 1) * sizeof(WCHAR);
+            DeviceText = ExAllocatePoolWithTag(PagedPool,
+                                               Length,
+                                               USB_HUB_TAG);
+
+            if (DeviceText)
+            {
+                RtlZeroMemory(DeviceText, Length);
+                RtlCopyMemory(DeviceText,
+                              PortExtension->ProductString,
+                              Length);
+
+                Irp->IoStatus.Information = (ULONG_PTR)DeviceText;
+                return STATUS_SUCCESS;
+            }
+        }
+
         Descriptor = ExAllocatePoolWithTag(NonPagedPool,
                                            MAXIMUM_USB_STRING_LENGTH,
                                            USB_HUB_TAG);
@@ -2188,35 +2214,23 @@ USBH_PdoQueryDeviceText(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
         {
             RtlZeroMemory(Descriptor, MAXIMUM_USB_STRING_LENGTH);
 
-            for (Status = USBH_CheckDeviceLanguage(DeviceObject, LanguageId);
-                 ;
-                 Status = USBH_CheckDeviceLanguage(DeviceObject, DefaultId))
+            Status = USBH_SelectLanguageId(DeviceObject,
+                                           LanguageId,
+                                           &LanguageId);
+
+            if (NT_SUCCESS(Status))
             {
-                if (NT_SUCCESS(Status))
-                {
-                    Status = USBH_SyncGetStringDescriptor(DeviceObject,
-                                                          iProduct,
-                                                          LanguageId,
-                                                          Descriptor,
-                                                          MAXIMUM_USB_STRING_LENGTH,
-                                                          NULL,
-                                                          TRUE);
-
-                    if (NT_SUCCESS(Status))
-                    {
-                        break;
-                    }
-                }
-
-                if (LanguageId == DefaultId)
-                {
-                    goto Exit;
-                }
-
-                LanguageId = DefaultId;
+                Status = USBH_SyncGetStringDescriptor(DeviceObject,
+                                                      iProduct,
+                                                      LanguageId,
+                                                      Descriptor,
+                                                      MAXIMUM_USB_STRING_LENGTH,
+                                                      NULL,
+                                                      TRUE);
             }
 
-            if (Descriptor->bLength <= sizeof(USB_COMMON_DESCRIPTOR))
+            if (!NT_SUCCESS(Status) ||
+                Descriptor->bLength <= sizeof(USB_COMMON_DESCRIPTOR))
             {
                 Status = STATUS_UNSUCCESSFUL;
             }
@@ -2246,8 +2260,6 @@ USBH_PdoQueryDeviceText(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
                     Status = STATUS_INSUFFICIENT_RESOURCES;
                 }
             }
-
-        Exit:
 
             ExFreePoolWithTag(Descriptor, USB_HUB_TAG);
 
@@ -2625,6 +2637,8 @@ USBH_PdoRemoveDevice(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
             {
                 ExFreePoolWithTag(SerialNumber, USB_HUB_TAG);
             }
+
+            USBH_FreeCachedStrings(PortExtension);
 
             /* Deregister PDO from WMI if it was registered */
             (void)IoWMIRegistrationControl(PortDevice, WMIREG_ACTION_DEREGISTER);

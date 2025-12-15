@@ -254,6 +254,12 @@ typedef struct _USBHUB_PORT_PDO_EXTENSION {
   USHORT SN_DescriptorLength;
   BOOL IgnoringHwSerial;
   LPWSTR SerialNumber; // serial number string
+  USHORT SelectedLanguageId;
+  BOOLEAN LanguageIdCached;
+  PWSTR ProductString;
+  PWSTR ManufacturerString;
+  PWSTR ConfigurationString;
+  PWSTR InterfaceString;
   USB_DEVICE_DESCRIPTOR DeviceDescriptor;
   USB_DEVICE_DESCRIPTOR OldDeviceDescriptor;
   USB_CONFIGURATION_DESCRIPTOR ConfigDescriptor;
@@ -693,6 +699,23 @@ NTAPI
 USBH_CheckDeviceLanguage(
   IN PDEVICE_OBJECT DeviceObject,
   IN USHORT LanguageId);
+
+NTSTATUS
+NTAPI
+USBH_SelectLanguageId(
+  IN PDEVICE_OBJECT DeviceObject,
+  IN USHORT PreferredId,
+  OUT PUSHORT OutLanguageId);
+
+NTSTATUS
+NTAPI
+USBH_CacheDeviceStrings(
+  IN PUSBHUB_PORT_PDO_EXTENSION PortExtension);
+
+VOID
+NTAPI
+USBH_FreeCachedStrings(
+  IN PUSBHUB_PORT_PDO_EXTENSION PortExtension);
 
 NTSTATUS
 NTAPI

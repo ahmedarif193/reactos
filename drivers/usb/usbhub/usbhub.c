@@ -31,6 +31,19 @@
 PWSTR GenericUSBDeviceString = NULL;
 LONG USBH_NextDebugBusNumber = 0;
 
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwQueryDefaultLocale(
+    IN BOOLEAN UserProfile,
+    OUT PLCID DefaultLocaleId);
+
+static PWSTR
+USBH_AllocDeviceString(
+    IN PDEVICE_OBJECT DeviceObject,
+    IN UCHAR Index,
+    IN USHORT LanguageId);
+
 /*
  * Some virtualized xHCI controllers never complete the HW enumeration
  * sequence for their bundled LS/FS devices.  When the hub driver sees
@@ -168,10 +181,6 @@ NTAPI
 USBH_PassIrp(IN PDEVICE_OBJECT DeviceObject,
              IN PIRP Irp)
 {
-    DPRINT_PNP("USBH_PassIrp: DeviceObject - %p, Irp - %p\n",
-               DeviceObject,
-               Irp);
-
     IoSkipCurrentIrpStackLocation(Irp);
     return IoCallDriver(DeviceObject, Irp);
 }
@@ -1445,7 +1454,8 @@ USBH_SyncGetStringDescriptor(IN PDEVICE_OBJECT DeviceObject,
 
     if (IsValidateLength && TransferedLength != Descriptor->bLength)
     {
-        Status = STATUS_DEVICE_DATA_ERROR;
+        if (TransferedLength < Descriptor->bLength)
+            Status = STATUS_DEVICE_DATA_ERROR;
     }
 
     ExFreePoolWithTag(Urb, USB_HUB_TAG);
@@ -2102,6 +2112,8 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
             {
                 ExFreePoolWithTag(SerialNumber, USB_HUB_TAG);
             }
+
+            USBH_FreeCachedStrings(PortExtension);
 
             DeviceHandle = InterlockedExchangePointer(&PortExtension->DeviceHandle,
                                                       NULL);
@@ -4832,24 +4844,67 @@ Exit:
     return Status;
 }
 
+static
+USHORT
+USBH_GetDefaultLanguageId(VOID)
+{
+    LCID LocaleId;
+    NTSTATUS Status;
+
+    LocaleId = 0;
+    Status = ZwQueryDefaultLocale(FALSE, &LocaleId);
+
+    if (!NT_SUCCESS(Status) || !LocaleId)
+    {
+        return MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US);
+    }
+
+    return LANGIDFROMLCID(LocaleId);
+}
+
 NTSTATUS
 NTAPI
-USBH_GetSerialNumberString(IN PDEVICE_OBJECT DeviceObject,
-                           IN LPWSTR * OutSerialNumber,
-                           IN PUSHORT OutDescriptorLength,
-                           IN USHORT LanguageId,
-                           IN UCHAR Index)
+USBH_SelectLanguageId(IN PDEVICE_OBJECT DeviceObject,
+                      IN USHORT PreferredId,
+                      OUT PUSHORT OutLanguageId)
 {
+    PCOMMON_DEVICE_EXTENSION CommonExt;
+    PUSBHUB_PORT_PDO_EXTENSION PortExtension = NULL;
     PUSB_STRING_DESCRIPTOR Descriptor;
     NTSTATUS Status;
-    LPWSTR SerialNumberBuffer = NULL;
-    UCHAR StringLength;
-    UCHAR Length;
+    ULONG NumLanguages;
+    ULONG ix;
+    PWCHAR LanguageIds;
+    ULONG Length;
+    ULONG EffectiveLength;
+    USHORT EnglishId;
+    USHORT PreferredLangId;
+    USHORT ChosenId = 0;
+    BOOLEAN EnglishSeen = FALSE;
 
-    DPRINT("USBH_GetSerialNumberString: ... \n");
+    if (!OutLanguageId)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
-    *OutSerialNumber = NULL;
-    *OutDescriptorLength = 0;
+    if (DeviceObject)
+    {
+        CommonExt = (PCOMMON_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+
+        if (CommonExt->ExtensionType == USBH_EXTENSION_TYPE_PORT)
+        {
+            PortExtension = (PUSBHUB_PORT_PDO_EXTENSION)CommonExt;
+        }
+    }
+
+    if (PortExtension && PortExtension->LanguageIdCached)
+    {
+        *OutLanguageId = PortExtension->SelectedLanguageId;
+        return STATUS_SUCCESS;
+    }
+
+    EnglishId = MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US);
+    PreferredLangId = PreferredId ? PreferredId : EnglishId;
 
     Descriptor = ExAllocatePoolWithTag(NonPagedPool,
                                        MAXIMUM_USB_STRING_LENGTH,
@@ -4862,7 +4917,250 @@ USBH_GetSerialNumberString(IN PDEVICE_OBJECT DeviceObject,
 
     RtlZeroMemory(Descriptor, MAXIMUM_USB_STRING_LENGTH);
 
-    Status = USBH_CheckDeviceLanguage(DeviceObject, LanguageId);
+    Status = USBH_SyncGetStringDescriptor(DeviceObject,
+                                          0,
+                                          0,
+                                          Descriptor,
+                                          MAXIMUM_USB_STRING_LENGTH,
+                                          &Length,
+                                          TRUE);
+
+    if (!NT_SUCCESS(Status))
+    {
+        /* Fall back to preferred/English even if string 0 retrieval failed. */
+        ChosenId = PreferredLangId ? PreferredLangId : EnglishId;
+        Status = STATUS_SUCCESS;
+        goto Exit;
+    }
+
+    EffectiveLength = Descriptor->bLength;
+
+    if (Length >= sizeof(USB_COMMON_DESCRIPTOR) &&
+        Length < EffectiveLength)
+    {
+        EffectiveLength = Length;
+    }
+
+    if (EffectiveLength < sizeof(USB_COMMON_DESCRIPTOR))
+    {
+        Status = STATUS_DEVICE_DATA_ERROR;
+        goto Exit;
+    }
+
+    NumLanguages = (EffectiveLength -
+                    FIELD_OFFSET(USB_STRING_DESCRIPTOR, bString)) / sizeof(WCHAR);
+
+    if (!NumLanguages)
+    {
+        Status = STATUS_NOT_SUPPORTED;
+        goto Exit;
+    }
+
+    LanguageIds = Descriptor->bString;
+
+    for (ix = 0; ix < NumLanguages; ix++)
+    {
+        if (LanguageIds[ix] == PreferredLangId)
+        {
+            ChosenId = PreferredLangId;
+            break;
+        }
+
+        if (LanguageIds[ix] == EnglishId)
+        {
+            EnglishSeen = TRUE;
+        }
+    }
+
+    if (!ChosenId && EnglishSeen)
+    {
+        ChosenId = EnglishId;
+    }
+
+    if (!ChosenId)
+    {
+        ChosenId = LanguageIds[0];
+    }
+
+    *OutLanguageId = ChosenId;
+    Status = STATUS_SUCCESS;
+
+Exit:
+    ExFreePoolWithTag(Descriptor, USB_HUB_TAG);
+
+    if (!NT_SUCCESS(Status))
+    {
+        ChosenId = ChosenId ? ChosenId : PreferredLangId;
+        if (!ChosenId)
+        {
+            ChosenId = EnglishId;
+        }
+
+        Status = STATUS_SUCCESS;
+    }
+
+    if (ChosenId && OutLanguageId)
+    {
+        *OutLanguageId = ChosenId;
+    }
+
+    if (PortExtension)
+    {
+        PortExtension->SelectedLanguageId = ChosenId;
+        PortExtension->LanguageIdCached = TRUE;
+    }
+
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+USBH_CacheDeviceStrings(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    USHORT LanguageId;
+    PUSB_DEVICE_DESCRIPTOR DeviceDescriptor;
+
+    if (!PortExtension)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!PortExtension->LanguageIdCached)
+    {
+        LanguageId = USBH_GetDefaultLanguageId();
+
+        Status = USBH_SelectLanguageId(PortExtension->Common.SelfDevice,
+                                       LanguageId,
+                                       &LanguageId);
+
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+    }
+    else
+    {
+        LanguageId = PortExtension->SelectedLanguageId;
+    }
+
+    DeviceDescriptor = &PortExtension->DeviceDescriptor;
+
+    if (!PortExtension->ProductString && DeviceDescriptor->iProduct)
+    {
+        PortExtension->ProductString = USBH_AllocDeviceString(PortExtension->Common.SelfDevice,
+                                                              DeviceDescriptor->iProduct,
+                                                              LanguageId);
+    }
+
+    if (!PortExtension->ManufacturerString && DeviceDescriptor->iManufacturer)
+    {
+        PortExtension->ManufacturerString = USBH_AllocDeviceString(PortExtension->Common.SelfDevice,
+                                                                   DeviceDescriptor->iManufacturer,
+                                                                   LanguageId);
+    }
+
+    if (!PortExtension->ConfigurationString &&
+        PortExtension->ConfigDescriptor.iConfiguration)
+    {
+        PortExtension->ConfigurationString = USBH_AllocDeviceString(PortExtension->Common.SelfDevice,
+                                                                    PortExtension->ConfigDescriptor.iConfiguration,
+                                                                    LanguageId);
+    }
+
+    if (!PortExtension->InterfaceString &&
+        PortExtension->InterfaceDescriptor.iInterface)
+    {
+        PortExtension->InterfaceString = USBH_AllocDeviceString(PortExtension->Common.SelfDevice,
+                                                                PortExtension->InterfaceDescriptor.iInterface,
+                                                                LanguageId);
+    }
+
+    return Status;
+}
+
+VOID
+NTAPI
+USBH_FreeCachedStrings(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension)
+{
+    PVOID String;
+
+    if (!PortExtension)
+    {
+        return;
+    }
+
+    String = InterlockedExchangePointer((PVOID)&PortExtension->ProductString, NULL);
+
+    if (String)
+    {
+        ExFreePoolWithTag(String, USB_HUB_TAG);
+    }
+
+    String = InterlockedExchangePointer((PVOID)&PortExtension->ManufacturerString, NULL);
+
+    if (String)
+    {
+        ExFreePoolWithTag(String, USB_HUB_TAG);
+    }
+
+    String = InterlockedExchangePointer((PVOID)&PortExtension->ConfigurationString, NULL);
+
+    if (String)
+    {
+        ExFreePoolWithTag(String, USB_HUB_TAG);
+    }
+
+    String = InterlockedExchangePointer((PVOID)&PortExtension->InterfaceString, NULL);
+
+    if (String)
+    {
+        ExFreePoolWithTag(String, USB_HUB_TAG);
+    }
+
+    PortExtension->SelectedLanguageId = 0;
+    PortExtension->LanguageIdCached = FALSE;
+}
+
+NTSTATUS
+NTAPI
+USBH_GetSerialNumberString(IN PDEVICE_OBJECT DeviceObject,
+                           IN LPWSTR * OutSerialNumber,
+                           IN PUSHORT OutDescriptorLength,
+                           IN USHORT LanguageId,
+                           IN UCHAR Index)
+{
+    PUSB_STRING_DESCRIPTOR Descriptor;
+    NTSTATUS Status;
+    LPWSTR SerialNumberBuffer = NULL;
+    USHORT SelectedLanguageId;
+    UCHAR StringLength;
+    UCHAR Length;
+
+    DPRINT("USBH_GetSerialNumberString: ... \n");
+
+    *OutSerialNumber = NULL;
+    *OutDescriptorLength = 0;
+    SelectedLanguageId = LanguageId;
+    if (!SelectedLanguageId)
+    {
+        SelectedLanguageId = USBH_GetDefaultLanguageId();
+    }
+
+    Descriptor = ExAllocatePoolWithTag(NonPagedPool,
+                                       MAXIMUM_USB_STRING_LENGTH,
+                                       USB_HUB_TAG);
+
+    if (!Descriptor)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(Descriptor, MAXIMUM_USB_STRING_LENGTH);
+
+    Status = USBH_SelectLanguageId(DeviceObject,
+                                   SelectedLanguageId,
+                                   &SelectedLanguageId);
 
     if (!NT_SUCCESS(Status))
     {
@@ -4871,7 +5169,7 @@ USBH_GetSerialNumberString(IN PDEVICE_OBJECT DeviceObject,
 
     Status = USBH_SyncGetStringDescriptor(DeviceObject,
                                           Index,
-                                          LanguageId,
+                                          SelectedLanguageId,
                                           Descriptor,
                                           MAXIMUM_USB_STRING_LENGTH,
                                           NULL,
@@ -4915,6 +5213,7 @@ USBH_AllocDeviceString(IN PDEVICE_OBJECT DeviceObject,
     PUSB_STRING_DESCRIPTOR Descriptor;
     NTSTATUS Status;
     PWSTR StringBuffer = NULL;
+    USHORT SelectedLanguageId;
     UCHAR StringLength;
     UCHAR Length;
 
@@ -4929,7 +5228,15 @@ USBH_AllocDeviceString(IN PDEVICE_OBJECT DeviceObject,
 
     RtlZeroMemory(Descriptor, MAXIMUM_USB_STRING_LENGTH);
 
-    Status = USBH_CheckDeviceLanguage(DeviceObject, LanguageId);
+    SelectedLanguageId = LanguageId;
+    if (!SelectedLanguageId)
+    {
+        SelectedLanguageId = USBH_GetDefaultLanguageId();
+    }
+
+    Status = USBH_SelectLanguageId(DeviceObject,
+                                   SelectedLanguageId,
+                                   &SelectedLanguageId);
 
     if (!NT_SUCCESS(Status))
     {
@@ -4938,7 +5245,7 @@ USBH_AllocDeviceString(IN PDEVICE_OBJECT DeviceObject,
 
     Status = USBH_SyncGetStringDescriptor(DeviceObject,
                                           Index,
-                                          LanguageId,
+                                          SelectedLanguageId,
                                           Descriptor,
                                           MAXIMUM_USB_STRING_LENGTH,
                                           NULL,
@@ -4975,9 +5282,6 @@ USBH_LogNewDevice(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension)
 {
     PUSB_DEVICE_DESCRIPTOR DeviceDescriptor;
     const char *Speed;
-    PWSTR Product = NULL;
-    PWSTR Manufacturer = NULL;
-    USHORT LanguageId;
     PUSBHUB_FDO_EXTENSION HubExtension;
     PUSBHUB_FDO_EXTENSION RootHubExtension;
     ULONG BusNumber;
@@ -5034,32 +5338,26 @@ USBH_LogNewDevice(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension)
                 DeviceDescriptor->iProduct,
                 DeviceDescriptor->iSerialNumber);
 
-    LanguageId = MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US);
+    USBH_CacheDeviceStrings(PortExtension);
 
-    if (DeviceDescriptor->iProduct)
+    if (PortExtension->ProductString)
     {
-        Product = USBH_AllocDeviceString(PortExtension->Common.SelfDevice,
-                                         DeviceDescriptor->iProduct,
-                                         LanguageId);
+        DPRINT_ENUM("usb %lu-%S: Product: %S\n", BusNumber, PortExtension->DevPath, PortExtension->ProductString);
     }
 
-    if (DeviceDescriptor->iManufacturer)
+    if (PortExtension->ManufacturerString)
     {
-        Manufacturer = USBH_AllocDeviceString(PortExtension->Common.SelfDevice,
-                                              DeviceDescriptor->iManufacturer,
-                                              LanguageId);
+        DPRINT_ENUM("usb %lu-%S: Manufacturer: %S\n", BusNumber, PortExtension->DevPath, PortExtension->ManufacturerString);
     }
 
-    if (Product)
+    if (PortExtension->ConfigurationString)
     {
-        DPRINT_ENUM("usb %lu-%S: Product: %S\n", BusNumber, PortExtension->DevPath, Product);
-        ExFreePoolWithTag(Product, USB_HUB_TAG);
+        DPRINT_ENUM("usb %lu-%S: Configuration: %S\n", BusNumber, PortExtension->DevPath, PortExtension->ConfigurationString);
     }
 
-    if (Manufacturer)
+    if (PortExtension->InterfaceString)
     {
-        DPRINT_ENUM("usb %lu-%S: Manufacturer: %S\n", BusNumber, PortExtension->DevPath, Manufacturer);
-        ExFreePoolWithTag(Manufacturer, USB_HUB_TAG);
+        DPRINT_ENUM("usb %lu-%S: Interface: %S\n", BusNumber, PortExtension->DevPath, PortExtension->InterfaceString);
     }
 
     if (PortExtension->SerialNumber)
@@ -5303,7 +5601,7 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
         USBH_GetSerialNumberString(PortExtension->Common.SelfDevice,
                                    &SerialNumberBuffer,
                                    &PortExtension->SN_DescriptorLength,
-                                   MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US),
+                                   0,
                                    PortExtension->DeviceDescriptor.iSerialNumber);
 
         if (SerialNumberBuffer)
@@ -5360,6 +5658,8 @@ ErrorExit:
     {
         ExFreePoolWithTag(SerialNumberBuffer, USB_HUB_TAG);
     }
+
+    USBH_FreeCachedStrings(PortExtension);
 
 Exit:
 

@@ -2702,11 +2702,6 @@ XHCI_HandleEnumerationTransfer(
 
     if (Transfer->Flags & XHCI_TRANSFER_FLAG_GET_DESCRIPTOR)
     {
-        DPRINT1("usbxhci: GetDescriptor value=0x%04x index=0x%04x\n",
-                Setup->wValue.W,
-                Setup->wIndex.W);
-
-        
         Buffer = XHCI_GetDescriptorBuffer(Transfer, &BufferLength);
         if (Buffer && MmIsAddressValid(Buffer) && BufferLength >= 2 && Endpoint->Slot)
         {
@@ -2763,7 +2758,7 @@ XHCI_HandleEnumerationTransfer(
             }
             else
             {
-                 DPRINT1("XHCI: GetDescriptor Data: Len=%d Type=%x (Not Device Descriptor)\n", BufferLength, DescriptorType);
+                /* omit noisy trace for non-device descriptors */
             }
 
             if (DescriptorType == USB_DEVICE_DESCRIPTOR_TYPE &&
@@ -4273,14 +4268,6 @@ XHCI_HandleTransferEvent(
 
     if (Transfer->Flags & (XHCI_TRANSFER_FLAG_SET_ADDRESS | XHCI_TRANSFER_FLAG_GET_DESCRIPTOR))
     {
-        DPRINT1("usbxhci: enum xfer slot=%u ep=%u code=%lu usbd=0x%lx bytes=%lu req=%lu flags=0x%lx\n",
-                SlotId,
-                EndpointId,
-                CompletionCode,
-                UsbdStatus,
-                BytesTransferred,
-                RequestedLength,
-                Transfer->Flags);
     }
 
     /* Track aggregate bandwidth usage for periodic endpoints (iso/int). */
@@ -7159,8 +7146,6 @@ XHCI_SubmitTransfer(PVOID MiniPortExtension,
     PXHCI_EXTENSION Extension = MiniPortExtension;
     PXHCI_ENDPOINT Endpoint = EndpointHandle;
     PXHCI_TRANSFER Transfer = TransferHandle;
-    DPRINT1("SUBMIT_XFER: Slot=%u EP=%u Addr=%u Type=%u Len=%u\n", Endpoint->SlotId, Endpoint->EndpointId, Endpoint->EndpointProperties.DeviceAddress, Endpoint->EndpointProperties.TransferType, TransferParameters->TransferBufferLength);
-
     static BOOLEAN Triggered = FALSE;
     if (Extension && Extension->RhIrqEnabled && !Triggered && XhciRegPacket.UsbPortInvalidateRootHub)
     {
@@ -7172,8 +7157,6 @@ XHCI_SubmitTransfer(PVOID MiniPortExtension,
 
     if (!Extension || !Endpoint || !Transfer || !TransferParameters)
         return MP_STATUS_ERROR;
-
-    DPRINT1("SUBMIT_XFER: Slot=%u EP=%u Addr=%u Type=%u Len=%u\n", Endpoint->SlotId, Endpoint->EndpointId, Endpoint->EndpointProperties.DeviceAddress, Endpoint->EndpointProperties.TransferType, TransferParameters->TransferBufferLength);
 
     XHCI_DBG(XHCI_TRACE_TRANSFERS,
              "usbxhci: SubmitTransfer ep=%u devaddr=%u type=%lu flags=0x%lx len=%lu setupType=0x%02x req=0x%02x\n",
@@ -7356,13 +7339,6 @@ XHCI_SubmitControlTransfer(
     if (TransferParameters->SetupPacket.bRequest == USB_REQUEST_GET_DESCRIPTOR)
     {
         Transfer->Flags |= XHCI_TRANSFER_FLAG_GET_DESCRIPTOR;
-        DPRINT1("usbxhci: SUBMIT GET_DESCRIPTOR type=0x%02x idx=0x%02x port=%u hub=%u speed=%u len=%lu\n",
-                TransferParameters->SetupPacket.wValue.HiByte,
-                TransferParameters->SetupPacket.wValue.LowByte,
-                Endpoint->EndpointProperties.PortNumber,
-                Endpoint->EndpointProperties.HubAddr,
-                Endpoint->EndpointProperties.DeviceSpeed,
-                TransferParameters->TransferBufferLength);
     }
 
     /*
