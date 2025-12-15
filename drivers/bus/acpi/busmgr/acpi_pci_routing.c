@@ -298,7 +298,30 @@ AcpiPrtBuildForHandle(
 
         if (!Route->Source[0])
         {
-            Entry.Gsi = Route->SourceIndex;
+            ULONG Gsi = Route->SourceIndex;
+            UCHAR Polarity = Entry.Polarity;
+            UCHAR Trigger = Entry.Trigger;
+
+            /*
+             * Direct _PRT entry: SourceIndex encodes the interrupt line.
+             * Feed it through the HAL's legacy IRQ→GSI mapping so we get
+             * a real GSI that reflects MADT INT_SOURCE_OVERRIDE data and
+             * any firmware-provided polarity/trigger configuration.
+             */
+            if (HalpTranslatePciLegacyIrqToGsi(Route->SourceIndex,
+                                               &Gsi,
+                                               &Polarity,
+                                               &Trigger))
+            {
+                Entry.Gsi = Gsi;
+                Entry.Polarity = Polarity;
+                Entry.Trigger = Trigger;
+            }
+            else
+            {
+                Entry.Gsi = Route->SourceIndex;
+            }
+
             AcpiPrtInsertOrUpdate(&Entry);
             continue;
         }

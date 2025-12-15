@@ -67,8 +67,14 @@ IopSynchronousCall(
     Status = IoCallDriver(TopDeviceObject, Irp);
     /* Otherwise we may get stuck here or have IoStatusBlock not populated */
     ASSERT(!KeAreAllApcsDisabled());
-    if (Status == STATUS_PENDING)
+    if ((Status == STATUS_PENDING) || Irp->PendingReturned)
     {
+        if (Status == STATUS_SUCCESS && Irp->PendingReturned)
+        {
+            IoMarkIrpPending(Irp);
+            Status = STATUS_PENDING;
+        }
+
         /* Wait for it */
         KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
         Status = IoStatusBlock.Status;

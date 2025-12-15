@@ -1062,6 +1062,11 @@ IopInitializeBootDrivers(VOID)
     PBOOT_DRIVER_LIST_ENTRY BootEntry;
     DPRINT("IopInitializeBootDrivers()\n");
 
+#if DBG
+    LARGE_INTEGER BootInitStart, BootInitEnd, BootInitFreq;
+    BootInitStart = KeQueryPerformanceCounter(&BootInitFreq);
+#endif
+
     /* Create the RAW FS built-in driver */
     RtlInitUnicodeString(&DriverName, L"\\FileSystem\\RAW");
 
@@ -1227,6 +1232,23 @@ IopInitializeBootDrivers(VOID)
     PnPBootDriversLoaded = TRUE;
 
     DbgPrint("BOOT DRIVERS LOADED\n");
+
+#if DBG
+    BootInitEnd = KeQueryPerformanceCounter(NULL);
+    if (BootInitFreq.QuadPart != 0)
+    {
+        ULONGLONG Ticks = (ULONGLONG)(BootInitEnd.QuadPart - BootInitStart.QuadPart);
+        ULONGLONG Millis = (Ticks * 1000ULL) / (ULONGLONG)BootInitFreq.QuadPart;
+        DbgPrint("IopInitializeBootDrivers: completed in %I64u ms (ticks=%I64u, freq=%I64u)\n",
+                 Millis,
+                 Ticks,
+                 (ULONGLONG)BootInitFreq.QuadPart);
+    }
+    else
+    {
+        DbgPrint("IopInitializeBootDrivers: completed (KeQueryPerformanceCounter frequency unavailable)\n");
+    }
+#endif
 
     PiQueueDeviceAction(IopRootDeviceNode->PhysicalDeviceObject,
                         PiActionEnumDeviceTree,

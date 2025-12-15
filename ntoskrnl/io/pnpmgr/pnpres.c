@@ -1007,6 +1007,20 @@ IopCheckResourceDescriptor(
                     UINT32 r2Start = ResDesc2->u.BusNumber.Start;
                     UINT32 r2End = ResDesc2->u.BusNumber.Start + ResDesc2->u.BusNumber.Length;
 
+                    /*
+                     * Bus-number resources describe ownership of bus ranges in a
+                     * hierarchy (root bridge -> downstream bridges). A child bus
+                     * that is fully contained within a parent range (for example
+                     * [1,2) under a [0,FF) root) is not a conflict; it is the
+                     * normal PCI/PCIe topology. Only partial overlaps that are
+                     * not strict containment should be treated as conflicts.
+                     */
+                    if ((rStart >= r2Start && rEnd <= r2End) ||
+                        (r2Start >= rStart && r2End <= rEnd))
+                    {
+                        break;
+                    }
+
                     if (rStart < r2End && r2Start < rEnd)
                     {
                         if (!Silent)

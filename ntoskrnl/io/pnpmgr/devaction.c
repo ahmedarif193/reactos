@@ -2579,6 +2579,11 @@ PipDeviceActionWorker(
 
         status = STATUS_SUCCESS;
 
+#if DBG
+        LARGE_INTEGER PerfStart, PerfEnd, PerfFreq;
+        PerfStart = KeQueryPerformanceCounter(&PerfFreq);
+#endif
+
         DPRINT("Processing PnP request %p: DeviceObject - %p, Action - %s\n",
                Request, Request->DeviceObject, ActionToStr(Request->Action));
 
@@ -2677,7 +2682,29 @@ PipDeviceActionWorker(
             KeSetEvent(Request->CompletionEvent, IO_NO_INCREMENT, FALSE);
         }
 
+#if DBG
+        PerfEnd = KeQueryPerformanceCounter(NULL);
+        if (PerfFreq.QuadPart != 0)
+        {
+            ULONGLONG Ticks = (ULONGLONG)(PerfEnd.QuadPart - PerfStart.QuadPart);
+            ULONGLONG Millis = (Ticks * 1000ULL) / (ULONGLONG)PerfFreq.QuadPart;
+            DPRINT1("Finished processing PnP request %p action %s in %I64u ms (status 0x%08lx)\n",
+                    Request,
+                    ActionToStr(Request->Action),
+                    Millis,
+                    status);
+        }
+        else
+        {
+            DPRINT1("Finished processing PnP request %p action %s in %I64d ticks (status 0x%08lx)\n",
+                    Request,
+                    ActionToStr(Request->Action),
+                    PerfEnd.QuadPart - PerfStart.QuadPart,
+                    status);
+        }
+#else
         DPRINT("Finished processing PnP request %p\n", Request);
+#endif
         ObDereferenceObject(Request->DeviceObject);
         DPRINT1("Freeing PnP request %p action %u status 0x%08lx\n",
                 Request,

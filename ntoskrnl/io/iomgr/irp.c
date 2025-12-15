@@ -359,6 +359,22 @@ IopCompleteRequest(IN PKAPC Apc,
         /* Check if we have an event or a file object */
         if (Irp->UserEvent)
         {
+#if DBG
+            if ((((PKEVENT)Irp->UserEvent)->Header.Type != NotificationEvent) &&
+                (((PKEVENT)Irp->UserEvent)->Header.Type != SynchronizationEvent))
+            {
+                PIO_STACK_LOCATION Isl = IoGetCurrentIrpStackLocation(Irp);
+                DPRINT1("IO: invalid UserEvent %p type=%u completing IRP %p (Status=%lx DevObj=%p Major=%x Minor=%x)\n",
+                        Irp->UserEvent,
+                        ((PKEVENT)Irp->UserEvent)->Header.Type,
+                        Irp,
+                        Irp->IoStatus.Status,
+                        Isl ? Isl->DeviceObject : NULL,
+                        Isl ? Isl->MajorFunction : 0,
+                        Isl ? Isl->MinorFunction : 0);
+                DbgBreakPoint();
+            }
+#endif
             /* At the very least, this is a PKEVENT, so signal it always */
             KeSetEvent(Irp->UserEvent, 0, FALSE);
 

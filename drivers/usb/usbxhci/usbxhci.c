@@ -4635,7 +4635,7 @@ XHCI_BuildErstTable(
         Extension->ErstEntryCount = XHCI_ERST_MAX_ENTRIES;
 
     RtlZeroMemory(Extension->ErstTable,
-                  sizeof(XHCI_ERST_ENTRY) * XHCI_ERST_MAX_ENTRIES);
+                  sizeof(XHCI_ERST_ENTRY) * Extension->ErstEntryCount);
 
     for (Index = 0; Index < Extension->ErstEntryCount; Index++)
     {
@@ -7098,7 +7098,9 @@ XHCI_RecoverControllerAfterCommandTimeout(
     if (Status != MP_STATUS_SUCCESS)
         return Status;
 
+    DPRINT1("usbxhci: DEBUG EventRingPhysical BEFORE ProgramDcbaaCrcrAndConfig: %I64x\n", (ULONGLONG)Extension->EventRingPhysical.QuadPart);
     Status = XHCI_ProgramDcbaaCrcrAndConfig(Extension);
+    DPRINT1("usbxhci: DEBUG EventRingPhysical AFTER ProgramDcbaaCrcrAndConfig: %I64x\n", (ULONGLONG)Extension->EventRingPhysical.QuadPart);
     if (Status != MP_STATUS_SUCCESS)
         return Status;
     XHCI_ProgramInterrupterState(Extension);
@@ -8657,7 +8659,9 @@ XHCI_StartController(PVOID MiniPortExtension,
     if (Status != MP_STATUS_SUCCESS)
         return Status;
 
+    DPRINT1("usbxhci: DEBUG EventRingPhysical BEFORE ProgramDcbaaCrcrAndConfig: %I64x\n", (ULONGLONG)Extension->EventRingPhysical.QuadPart);
     Status = XHCI_ProgramDcbaaCrcrAndConfig(Extension);
+    DPRINT1("usbxhci: DEBUG EventRingPhysical AFTER ProgramDcbaaCrcrAndConfig: %I64x\n", (ULONGLONG)Extension->EventRingPhysical.QuadPart);
     if (Status != MP_STATUS_SUCCESS)
         return Status;
 
@@ -8688,7 +8692,9 @@ XHCI_StartController(PVOID MiniPortExtension,
         if (Status != MP_STATUS_SUCCESS)
             return Status;
 
+    DPRINT1("usbxhci: DEBUG EventRingPhysical BEFORE ProgramDcbaaCrcrAndConfig: %I64x\n", (ULONGLONG)Extension->EventRingPhysical.QuadPart);
         Status = XHCI_ProgramDcbaaCrcrAndConfig(Extension);
+    DPRINT1("usbxhci: DEBUG EventRingPhysical AFTER ProgramDcbaaCrcrAndConfig: %I64x\n", (ULONGLONG)Extension->EventRingPhysical.QuadPart);
         if (Status != MP_STATUS_SUCCESS)
             return Status;
 
@@ -8731,7 +8737,9 @@ XHCI_StartController(PVOID MiniPortExtension,
         if (Status != MP_STATUS_SUCCESS)
             return Status;
 
+    DPRINT1("usbxhci: DEBUG EventRingPhysical BEFORE ProgramDcbaaCrcrAndConfig: %I64x\n", (ULONGLONG)Extension->EventRingPhysical.QuadPart);
         Status = XHCI_ProgramDcbaaCrcrAndConfig(Extension);
+    DPRINT1("usbxhci: DEBUG EventRingPhysical AFTER ProgramDcbaaCrcrAndConfig: %I64x\n", (ULONGLONG)Extension->EventRingPhysical.QuadPart);
         if (Status != MP_STATUS_SUCCESS)
             return Status;
 

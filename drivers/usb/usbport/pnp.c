@@ -117,6 +117,99 @@ USBPORT_FdoStartCompletion(IN PDEVICE_OBJECT DeviceObject,
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
+typedef struct _USBPORT_PNP_FORWARD_CONTEXT
+{
+    BOOLEAN ReturnSeen;
+    BOOLEAN ObservedPending;
+    UCHAR Major;
+    UCHAR Minor;
+    UCHAR EventType;
+} USBPORT_PNP_FORWARD_CONTEXT, *PUSBPORT_PNP_FORWARD_CONTEXT;
+
+C_ASSERT(sizeof(USBPORT_PNP_FORWARD_CONTEXT) <= RTL_FIELD_SIZE(IRP, Tail.Overlay.DriverContext));
+
+static
+NTSTATUS
+NTAPI
+USBPORT_PnpForwardCompletion(IN PDEVICE_OBJECT DeviceObject,
+                             IN PIRP Irp,
+                             IN PVOID Context)
+{
+    PUSBPORT_PNP_FORWARD_CONTEXT ForwardContext = Context;
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    if (ForwardContext)
+    {
+        if (ForwardContext->ReturnSeen &&
+            !ForwardContext->ObservedPending &&
+            !Irp->PendingReturned)
+        {
+            DPRINT1("USBPORT_PNP: IRP %p Major %x Minor %x completed async without pending "
+                    "(Status=%lx UserEvent=%p Type=%u)\n",
+                    Irp,
+                    ForwardContext->Major,
+                    ForwardContext->Minor,
+                    Irp->IoStatus.Status,
+                    Irp->UserEvent,
+                    ForwardContext->EventType);
+            IoMarkIrpPending(Irp);
+        }
+        else if (Irp->PendingReturned)
+        {
+            IoMarkIrpPending(Irp);
+        }
+    }
+
+    return STATUS_CONTINUE_COMPLETION;
+}
+
+static
+__inline
+PUSBPORT_PNP_FORWARD_CONTEXT
+USBPORT_ArmPnPForwardContext(IN PIRP Irp,
+                             IN PIO_STACK_LOCATION IoStack)
+{
+    PUSBPORT_PNP_FORWARD_CONTEXT Context;
+
+    Context = (PUSBPORT_PNP_FORWARD_CONTEXT)&Irp->Tail.Overlay.DriverContext[0];
+    RtlZeroMemory(Context, sizeof(*Context));
+    Context->Major = IoStack->MajorFunction;
+    Context->Minor = IoStack->MinorFunction;
+    Context->EventType = Irp->UserEvent ?
+                         ((PKEVENT)Irp->UserEvent)->Header.Type :
+                         0xFF;
+
+    IoSetCompletionRoutine(Irp,
+                           USBPORT_PnpForwardCompletion,
+                           Context,
+                           TRUE,
+                           TRUE,
+                           TRUE);
+
+    return Context;
+}
+
+static
+__inline
+VOID
+USBPORT_FinalizePnPForwardContext(IN PUSBPORT_PNP_FORWARD_CONTEXT Context,
+                                  IN PIRP Irp,
+                                  IN NTSTATUS Status)
+{
+    if (!Context)
+        return;
+
+    Context->ReturnSeen = TRUE;
+    if ((Status == STATUS_PENDING) || (Irp->PendingReturned))
+    {
+        Context->ObservedPending = TRUE;
+        if (Status == STATUS_PENDING)
+        {
+            IoMarkIrpPending(Irp);
+        }
+    }
+}
+
 NTSTATUS
 NTAPI
 USBPORT_RegisterDeviceInterface(IN PDEVICE_OBJECT PdoDevice,
@@ -2037,12 +2130,22 @@ Exit:
         default:
             DPRINT("unknown IRP_MN_???\n");
 ForwardIrp:
-            /* forward irp to next device object */
-            IoSkipCurrentIrpStackLocation(Irp);
-            break;
-    }
+        {
+            PUSBPORT_PNP_FORWARD_CONTEXT ForwardContext;
 
-    return IoCallDriver(FdoCommonExtension->LowerDevice, Irp);
+            /* forward irp to next device object */
+            ForwardContext = USBPORT_ArmPnPForwardContext(Irp, IoStack);
+            IoSkipCurrentIrpStackLocation(Irp);
+            Status = IoCallDriver(FdoCommonExtension->LowerDevice, Irp);
+            USBPORT_FinalizePnPForwardContext(ForwardContext, Irp, Status);
+            if ((Status != STATUS_PENDING) && Irp->PendingReturned)
+            {
+                IoMarkIrpPending(Irp);
+                Status = STATUS_PENDING;
+            }
+            return Status;
+        }
+    }
 }
 
 PVOID

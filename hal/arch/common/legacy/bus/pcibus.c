@@ -1125,6 +1125,55 @@ HalpPciDescribeGsi(
     return Found;
 }
 
+BOOLEAN
+NTAPI
+HalpTranslatePciLegacyIrqToGsi(
+    _In_ ULONG RawInterrupt,
+    _Out_ PULONG Gsi,
+    _Out_opt_ PUCHAR Polarity,
+    _Out_opt_ PUCHAR TriggerMode)
+{
+    ULONG CandidateGsi;
+    UCHAR LocalPolarity = HAL_ACPI_POLARITY_LOW;
+    UCHAR LocalTrigger = HAL_ACPI_TRIGGER_LEVEL;
+
+    CandidateGsi = RawInterrupt;
+
+    /*
+     * For legacy IRQs (0–15), consult the PIC→GSI redirect table
+     * populated from MADT INT_SOURCE_OVERRIDE entries. For higher
+     * values, treat the number as an already-encoded GSI.
+     */
+    if (RawInterrupt < _countof(HalpPicVectorRedirect))
+    {
+        CandidateGsi = HalpPicVectorRedirect[RawInterrupt];
+    }
+
+    /*
+     * If we have diagnostic information for this GSI (for example from
+     * MADT or other firmware sources), prefer its polarity/trigger
+     * settings. Otherwise, keep the default level/low values.
+     */
+    (VOID)HalpPciLookupGsiInfo(CandidateGsi,
+                               &LocalPolarity,
+                               &LocalTrigger);
+
+    if (Gsi)
+    {
+        *Gsi = CandidateGsi;
+    }
+    if (Polarity)
+    {
+        *Polarity = LocalPolarity;
+    }
+    if (TriggerMode)
+    {
+        *TriggerMode = LocalTrigger;
+    }
+
+    return TRUE;
+}
+
 static
 BOOLEAN
 HalpPciBusBelongsToRoot(

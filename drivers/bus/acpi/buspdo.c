@@ -662,13 +662,24 @@ BuspCreateRequirementsListFromAcpiResources(
 
                 if (addr16->ResourceType == ACPI_BUS_NUMBER_RANGE)
                 {
-                    RequirementDescriptor->Type = CmResourceTypeBusNumber;
-                    RequirementDescriptor->ShareDisposition = CmResourceShareShared;
-                    RequirementDescriptor->Flags = 0;
-                    RequirementDescriptor->u.BusNumber.MinBusNumber = addr16->Address.Minimum;
-                    /* Correct bus range upper bound: use Maximum */
-                    RequirementDescriptor->u.BusNumber.MaxBusNumber = addr16->Address.Maximum;
-                    RequirementDescriptor->u.BusNumber.Length = addr16->Address.AddressLength;
+                    ULONG MinBus = (ULONG)addr16->Address.Minimum;
+                    ULONGLONG MaxBus = addr16->Address.Maximum;
+
+                    if (addr16->Address.AddressLength > 0)
+                        MaxBus = addr16->Address.Minimum + addr16->Address.AddressLength - 1;
+
+                    BuspRecordPciRootBusRange(DeviceData, MinBus, (ULONG)MaxBus);
+
+                    if (!IsPciRoot)
+                    {
+                        RequirementDescriptor->Type = CmResourceTypeBusNumber;
+                        RequirementDescriptor->ShareDisposition = CmResourceShareShared;
+                        RequirementDescriptor->Flags = 0;
+                        RequirementDescriptor->u.BusNumber.MinBusNumber = addr16->Address.Minimum;
+                        RequirementDescriptor->u.BusNumber.MaxBusNumber = addr16->Address.Maximum;
+                        RequirementDescriptor->u.BusNumber.Length = addr16->Address.AddressLength;
+                        RequirementDescriptor++;
+                    }
                 }
                 else if (addr16->ResourceType == ACPI_IO_RANGE)
                 {
@@ -687,6 +698,8 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->u.Port.Length = addr16->Address.AddressLength;
                     RequirementDescriptor->u.Port.MinimumAddress.QuadPart = Minimum;
                     RequirementDescriptor->u.Port.MaximumAddress.QuadPart = Maximum + addr16->Address.AddressLength - 1;
+
+                    RequirementDescriptor++;
                 }
                 else
                 {
@@ -713,9 +726,8 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->u.Memory.Length = addr16->Address.AddressLength;
                     RequirementDescriptor->u.Memory.MinimumAddress.QuadPart = Minimum;
                     RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum + addr16->Address.AddressLength - 1;
+                    RequirementDescriptor++;
                 }
-
-                RequirementDescriptor++;
                 break;
             }
 
@@ -730,12 +742,24 @@ BuspCreateRequirementsListFromAcpiResources(
 
                 if (addr32->ResourceType == ACPI_BUS_NUMBER_RANGE)
                 {
-                    RequirementDescriptor->Type = CmResourceTypeBusNumber;
-                    RequirementDescriptor->ShareDisposition = CmResourceShareShared;
-                    RequirementDescriptor->Flags = 0;
-                    RequirementDescriptor->u.BusNumber.MinBusNumber = addr32->Address.Minimum;
-                    RequirementDescriptor->u.BusNumber.MaxBusNumber = addr32->Address.Maximum;
-                    RequirementDescriptor->u.BusNumber.Length = addr32->Address.AddressLength;
+                    ULONG MinBus = (ULONG)addr32->Address.Minimum;
+                    ULONGLONG MaxBus = addr32->Address.Maximum;
+
+                    if (addr32->Address.AddressLength > 0)
+                        MaxBus = addr32->Address.Minimum + addr32->Address.AddressLength - 1;
+
+                    BuspRecordPciRootBusRange(DeviceData, MinBus, (ULONG)MaxBus);
+
+                    if (!IsPciRoot)
+                    {
+                        RequirementDescriptor->Type = CmResourceTypeBusNumber;
+                        RequirementDescriptor->ShareDisposition = CmResourceShareShared;
+                        RequirementDescriptor->Flags = 0;
+                        RequirementDescriptor->u.BusNumber.MinBusNumber = addr32->Address.Minimum;
+                        RequirementDescriptor->u.BusNumber.MaxBusNumber = addr32->Address.Maximum;
+                        RequirementDescriptor->u.BusNumber.Length = addr32->Address.AddressLength;
+                        RequirementDescriptor++;
+                    }
                 }
                 else if (addr32->ResourceType == ACPI_IO_RANGE)
                 {
@@ -754,6 +778,8 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->u.Port.Length = addr32->Address.AddressLength;
                     RequirementDescriptor->u.Port.MinimumAddress.QuadPart = Minimum;
                     RequirementDescriptor->u.Port.MaximumAddress.QuadPart = Maximum + addr32->Address.AddressLength - 1;
+
+                    RequirementDescriptor++;
                 }
                 else
                 {
@@ -780,9 +806,8 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->u.Memory.Length = addr32->Address.AddressLength;
                     RequirementDescriptor->u.Memory.MinimumAddress.QuadPart = Minimum;
                     RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum + addr32->Address.AddressLength - 1;
+                    RequirementDescriptor++;
                 }
-
-                RequirementDescriptor++;
                 break;
             }
 
@@ -797,12 +822,24 @@ BuspCreateRequirementsListFromAcpiResources(
 
                 if (addr64->ResourceType == ACPI_BUS_NUMBER_RANGE)
                 {
-                    RequirementDescriptor->Type = CmResourceTypeBusNumber;
-                    RequirementDescriptor->ShareDisposition = CmResourceShareShared;
-                    RequirementDescriptor->Flags = 0;
-                    RequirementDescriptor->u.BusNumber.MinBusNumber = (ULONG)addr64->Address.Minimum;
-                    RequirementDescriptor->u.BusNumber.MaxBusNumber = (ULONG)addr64->Address.Maximum;
-                    RequirementDescriptor->u.BusNumber.Length = addr64->Address.AddressLength;
+                    ULONG MinBus = (ULONG)addr64->Address.Minimum;
+                    ULONGLONG MaxBus = addr64->Address.Maximum;
+
+                    if (addr64->Address.AddressLength > 0)
+                        MaxBus = addr64->Address.Minimum + addr64->Address.AddressLength - 1;
+
+                    BuspRecordPciRootBusRange(DeviceData, MinBus, (ULONG)MaxBus);
+
+                    if (!IsPciRoot)
+                    {
+                        RequirementDescriptor->Type = CmResourceTypeBusNumber;
+                        RequirementDescriptor->ShareDisposition = CmResourceShareShared;
+                        RequirementDescriptor->Flags = 0;
+                        RequirementDescriptor->u.BusNumber.MinBusNumber = (ULONG)addr64->Address.Minimum;
+                        RequirementDescriptor->u.BusNumber.MaxBusNumber = (ULONG)addr64->Address.Maximum;
+                        RequirementDescriptor->u.BusNumber.Length = addr64->Address.AddressLength;
+                        RequirementDescriptor++;
+                    }
                 }
                 else if (addr64->ResourceType == ACPI_IO_RANGE)
                 {
@@ -821,6 +858,8 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->u.Port.Length = addr64->Address.AddressLength;
                     RequirementDescriptor->u.Port.MinimumAddress.QuadPart = Minimum;
                     RequirementDescriptor->u.Port.MaximumAddress.QuadPart = Maximum + addr64->Address.AddressLength - 1;
+
+                    RequirementDescriptor++;
                 }
                 else
                 {
@@ -847,9 +886,8 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->u.Memory.Length = addr64->Address.AddressLength;
                     RequirementDescriptor->u.Memory.MinimumAddress.QuadPart = Minimum;
                     RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum + addr64->Address.AddressLength - 1;
+                    RequirementDescriptor++;
                 }
-
-                RequirementDescriptor++;
                 break;
             }
 
@@ -864,12 +902,24 @@ BuspCreateRequirementsListFromAcpiResources(
 
                 if (addrx->ResourceType == ACPI_BUS_NUMBER_RANGE)
                 {
-                    RequirementDescriptor->Type = CmResourceTypeBusNumber;
-                    RequirementDescriptor->ShareDisposition = CmResourceShareShared;
-                    RequirementDescriptor->Flags = 0;
-                    RequirementDescriptor->u.BusNumber.MinBusNumber = (ULONG)addrx->Address.Minimum;
-                    RequirementDescriptor->u.BusNumber.MaxBusNumber = (ULONG)addrx->Address.Maximum;
-                    RequirementDescriptor->u.BusNumber.Length = addrx->Address.AddressLength;
+                    ULONG MinBus = (ULONG)addrx->Address.Minimum;
+                    ULONGLONG MaxBus = addrx->Address.Maximum;
+
+                    if (addrx->Address.AddressLength > 0)
+                        MaxBus = addrx->Address.Minimum + addrx->Address.AddressLength - 1;
+
+                    BuspRecordPciRootBusRange(DeviceData, MinBus, (ULONG)MaxBus);
+
+                    if (!IsPciRoot)
+                    {
+                        RequirementDescriptor->Type = CmResourceTypeBusNumber;
+                        RequirementDescriptor->ShareDisposition = CmResourceShareShared;
+                        RequirementDescriptor->Flags = 0;
+                        RequirementDescriptor->u.BusNumber.MinBusNumber = (ULONG)addrx->Address.Minimum;
+                        RequirementDescriptor->u.BusNumber.MaxBusNumber = (ULONG)addrx->Address.Maximum;
+                        RequirementDescriptor->u.BusNumber.Length = addrx->Address.AddressLength;
+                        RequirementDescriptor++;
+                    }
                 }
                 else if (addrx->ResourceType == ACPI_IO_RANGE)
                 {
@@ -888,6 +938,8 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->u.Port.Length = addrx->Address.AddressLength;
                     RequirementDescriptor->u.Port.MinimumAddress.QuadPart = Minimum;
                     RequirementDescriptor->u.Port.MaximumAddress.QuadPart = Maximum + addrx->Address.AddressLength - 1;
+
+                    RequirementDescriptor++;
                 }
                 else
                 {
@@ -914,9 +966,8 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->u.Memory.Length = addrx->Address.AddressLength;
                     RequirementDescriptor->u.Memory.MinimumAddress.QuadPart = Minimum;
                     RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum + addrx->Address.AddressLength - 1;
+                    RequirementDescriptor++;
                 }
-
-                RequirementDescriptor++;
                 break;
             }
 

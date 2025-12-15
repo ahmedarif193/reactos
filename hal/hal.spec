@@ -67,6 +67,7 @@
 @ stdcall -arch=i386,x86_64 HalIsPciMsiSupported()
 @ stdcall -arch=i386,x86_64 HalQueryPciMsiSupport(long long ptr ptr ptr ptr ptr)
 @ stdcall -arch=i386,x86_64 HalpRecordPciMaxGsi(ptr)
+@ stdcall -arch=i386,x86_64 HalpTranslatePciLegacyIrqToGsi(long ptr ptr ptr)
 @ stdcall HalpConfigurePciRootBridge(ptr)
 @ stdcall HalpRegisterPciRouteQuery(ptr)
 @ stdcall HalpSetPciRoutingMap(ptr long)

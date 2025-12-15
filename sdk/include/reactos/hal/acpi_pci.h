@@ -135,6 +135,16 @@ HalpRecordPciMaxGsi(
     _In_ const HAL_ACPI_PCI_ROUTE_ENTRY *Entry
     );
 
+NTHALAPI
+BOOLEAN
+NTAPI
+HalpTranslatePciLegacyIrqToGsi(
+    _In_ ULONG RawInterrupt,
+    _Out_ PULONG Gsi,
+    _Out_opt_ PUCHAR Polarity,
+    _Out_opt_ PUCHAR TriggerMode
+    );
+
 #ifdef __cplusplus
 }
 #endif
