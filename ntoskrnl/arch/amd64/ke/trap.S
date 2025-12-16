@@ -20,6 +20,7 @@ EXTERN KiGeneralProtectionFaultHandler:PROC
 EXTERN KiXmmExceptionHandler:PROC
 EXTERN KiDeliverApc:PROC
 EXTERN KiDpcInterruptHandler:PROC
+EXTERN KiIpiInterruptHandler:PROC
 EXTERN PsConvertToGuiThread:PROC
 EXTERN MmCreateKernelStack:PROC
 EXTERN MmDeleteKernelStack:PROC
@@ -692,7 +693,8 @@ PUBLIC KiIpiInterrupt
     /* End the interrupt */
     mov dword ptr [APIC_EOI], 0
 
-    int 3
+    /* Handle packet-style IPIs (TLB shootdown, etc.) */
+    call KiIpiInterruptHandler
 
     /* Return */
     ExitTrap (TF_SAVE_ALL or TF_IRQL)

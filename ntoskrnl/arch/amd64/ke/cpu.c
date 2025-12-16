@@ -34,6 +34,13 @@ BOOLEAN KiSMTProcessorsPresent;
 /* Flush data */
 volatile LONG KiTbFlushTimeStamp;
 
+#ifdef CONFIG_SMP
+static KSPIN_LOCK KiTbFlushLock;
+static volatile KAFFINITY KiTbFlushTargetSet;
+static volatile LONG KiTbFlushRequestId;
+static volatile LONG KiTbFlushAcknowledge[MAXIMUM_PROCESSORS];
+#endif
+
 /* CPU Signatures */
 static const CHAR CmpIntelID[]       = "GenuineIntel";
 static const CHAR CmpAmdID[]         = "AuthenticAMD";
@@ -572,6 +579,34 @@ KeFlushCurrentTb(VOID)
 
 VOID
 NTAPI
+KiIpiInterruptHandler(VOID)
+{
+#ifdef CONFIG_SMP
+    KAFFINITY TargetSet;
+    PKPRCB Prcb;
+    ULONG Processor;
+    LONG RequestId;
+
+    Prcb = KeGetCurrentPrcb();
+    TargetSet = KiTbFlushTargetSet;
+
+    if (!(TargetSet & Prcb->SetMember))
+        return;
+
+    RequestId = KiTbFlushRequestId;
+    Processor = KeGetCurrentProcessorNumber();
+
+    KeFlushCurrentTb();
+    InterlockedExchange((PLONG)&KiTbFlushAcknowledge[Processor], RequestId);
+
+    /* TODO: Handle IPI_PACKET_READY / generic-call packets on AMD64. */
+#else
+    /* No-op: packet IPIs are only used on SMP builds. */
+#endif
+}
+
+VOID
+NTAPI
 KiRestoreProcessorControlState(PKPROCESSOR_STATE ProcessorState)
 {
     /* Restore the CR registers */
@@ -694,13 +729,78 @@ KeFlushEntireTb(IN BOOLEAN Invalid,
                 IN BOOLEAN AllProcessors)
 {
     KIRQL OldIrql;
+#ifdef CONFIG_SMP
+    KAFFINITY TargetSet;
+    PKPRCB Prcb;
+    LONG RequestId;
+#endif
 
-    // FIXME: halfplemented
+    UNREFERENCED_PARAMETER(Invalid);
+
     /* Raise the IRQL for the TB Flush */
     OldIrql = KeRaiseIrqlToSynchLevel();
 
+#ifdef CONFIG_SMP
+    Prcb = KeGetCurrentPrcb();
+    TargetSet = 0;
+
+    if (AllProcessors)
+    {
+        TargetSet = KeActiveProcessors & ~Prcb->SetMember;
+    }
+
+    if (TargetSet != 0)
+    {
+        KeAcquireSpinLockAtDpcLevel(&KiTbFlushLock);
+
+        RequestId = InterlockedIncrement((PLONG)&KiTbFlushRequestId);
+        KiTbFlushTargetSet = TargetSet;
+        KeMemoryBarrier();
+
+        HalRequestIpi(TargetSet);
+    }
+#else
+    UNREFERENCED_PARAMETER(AllProcessors);
+#endif
+
     /* Flush the TB for the Current CPU, and update the flush stamp */
     KeFlushCurrentTb();
+
+#ifdef CONFIG_SMP
+    if (TargetSet != 0)
+    {
+        KAFFINITY Remaining;
+        ULONG Processor;
+
+        Remaining = TargetSet;
+        while (Remaining != 0)
+        {
+            for (Processor = 0; Processor < KeNumberProcessors; Processor++)
+            {
+                KAFFINITY SetMember;
+
+                SetMember = AFFINITY_MASK(Processor);
+                if (!(Remaining & SetMember))
+                    continue;
+
+                if (KiTbFlushAcknowledge[Processor] == RequestId)
+                {
+                    Remaining &= ~SetMember;
+                }
+            }
+
+            if (Remaining != 0)
+            {
+                YieldProcessor();
+                KeMemoryBarrierWithoutFence();
+            }
+        }
+
+        KiTbFlushTargetSet = 0;
+        KeMemoryBarrier();
+        KeReleaseSpinLockFromDpcLevel(&KiTbFlushLock);
+    }
+#endif
 
     /* Update the flush stamp and return to original IRQL */
     InterlockedExchangeAdd(&KiTbFlushTimeStamp, 1);
