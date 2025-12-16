@@ -670,17 +670,6 @@ EarlyQuit:
     /* DACL is no longer needed, free it */
     ExFreePoolWithTag(Dacl, TAG_DACL);
 
-    /* FIXME: To enable once page file management is moved to ARM3 */
-#if 0
-    /* Check we won't overflow commit limit with the page file */
-    if (MmTotalCommitLimitMaximum + (SafeMaximumSize.QuadPart >> PAGE_SHIFT) <= MmTotalCommitLimitMaximum)
-    {
-        ZwClose(FileHandle);
-        ExFreePoolWithTag(Buffer, TAG_MM);
-        return STATUS_INVALID_PARAMETER_3;
-    }
-#endif
-
     /* Set its end of file to minimal size */
     Status = ZwSetInformationFile(FileHandle,
                                   &IoStatus,
@@ -794,6 +783,31 @@ EarlyQuit:
 
     /* Insert the new paging file information into the list */
     KeAcquireGuardedMutex(&MmPageFileCreationLock);
+
+    /* Update commit limits (per Windows: physical + pagefile sizes). */
+    {
+        SIZE_T CommitCurrentDelta;
+        SIZE_T CommitMaximumDelta;
+
+        CommitCurrentDelta = PagingFile->Size - 1;
+        CommitMaximumDelta = PagingFile->MaximumSize - 1;
+
+        if ((MmTotalCommitLimit + CommitCurrentDelta) < MmTotalCommitLimit ||
+            (MmTotalCommitLimitMaximum + CommitMaximumDelta) < MmTotalCommitLimitMaximum)
+        {
+            KeReleaseGuardedMutex(&MmPageFileCreationLock);
+            ExFreePoolWithTag(PagingFile->Bitmap, TAG_MM);
+            ExFreePoolWithTag(PagingFile, TAG_MM);
+            ObDereferenceObject(FileObject);
+            ZwClose(FileHandle);
+            ExFreePoolWithTag(Buffer, TAG_MM);
+            return STATUS_INVALID_PARAMETER_3;
+        }
+
+        MmTotalCommitLimit += CommitCurrentDelta;
+        MmTotalCommitLimitMaximum += CommitMaximumDelta;
+    }
+
     /* Ensure the corresponding slot is empty yet */
     ASSERT(MmPagingFile[MmNumberOfPagingFiles] == NULL);
     MmPagingFile[MmNumberOfPagingFiles] = PagingFile;
