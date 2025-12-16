@@ -35,6 +35,7 @@ KiIpiSend(
     }
     else
     {
+        /* TODO: Support packet-style IPIs on AMD64 (IPI_PACKET_READY / IPI_SYNCH_REQUEST). */
         ASSERT(FALSE);
     }
 }
@@ -45,6 +46,9 @@ KeIpiGenericCall(
     _In_ PKIPI_BROADCAST_WORKER Function,
     _In_ ULONG_PTR Argument)
 {
+    /* TODO: Implement KeIpiGenericCall on AMD64 using packet IPIs and
+     * KiIpiInterruptHandler-based dispatch, mirroring the i386 logic in
+     * `ntoskrnl/ke/ipi.c` (two-phase barrier + completion wait). */
     __debugbreak();
     return 0;
 }

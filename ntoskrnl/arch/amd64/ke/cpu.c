@@ -35,6 +35,8 @@ BOOLEAN KiSMTProcessorsPresent;
 volatile LONG KiTbFlushTimeStamp;
 
 #ifdef CONFIG_SMP
+/* TODO: Replace this ad-hoc TB shootdown state with the generic AMD64 packet IPI
+ * mechanism (KeIpiGenericCall / KiIpiSendPacket) once implemented. */
 static KSPIN_LOCK KiTbFlushLock;
 static volatile KAFFINITY KiTbFlushTargetSet;
 static volatile LONG KiTbFlushRequestId;
@@ -599,7 +601,8 @@ KiIpiInterruptHandler(VOID)
     KeFlushCurrentTb();
     InterlockedExchange((PLONG)&KiTbFlushAcknowledge[Processor], RequestId);
 
-    /* TODO: Handle IPI_PACKET_READY / generic-call packets on AMD64. */
+    /* TODO: Demultiplex and handle generic packet IPIs on AMD64
+     * (IPI_PACKET_READY / IPI_SYNCH_REQUEST). */
 #else
     /* No-op: packet IPIs are only used on SMP builds. */
 #endif

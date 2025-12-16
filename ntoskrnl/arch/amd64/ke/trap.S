@@ -695,6 +695,8 @@ PUBLIC KiIpiInterrupt
 
     /* Handle packet-style IPIs (TLB shootdown, etc.) */
     call KiIpiInterruptHandler
+    /* TODO: Extend KiIpiInterruptHandler to dispatch generic packet IPIs
+     * (KeIpiGenericCall / KiIpiSendPacket / IPI_SYNCH_REQUEST). */
 
     /* Return */
     ExitTrap (TF_SAVE_ALL or TF_IRQL)

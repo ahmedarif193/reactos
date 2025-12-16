@@ -71,8 +71,7 @@ KiInitMachineDependent(VOID)
     /* Check for PAT and/or MTRR support */
     if (KeFeatureBits & KF_PAT)
     {
-        /* FIXME: Support this */
-        DPRINT("PAT support detected but not yet taken advantage of!\n");
+        /* PAT MSR is initialized per-CPU in KiInitializeCpu(). */
     }
 
 //        /* Allocate the IOPM save area */

@@ -170,6 +170,10 @@ KiIpiServiceRoutine(IN PKTRAP_FRAME TrapFrame,
     if (InterlockedBitTestAndReset((PLONG)&Prcb->IpiFrozen, IPI_SYNCH_REQUEST))
     {
 #if defined(_M_ARM) || defined(_M_AMD64)
+        /* TODO: Implement IPI_SYNCH_REQUEST packet dispatch on ARM/AMD64:
+         * - decrement CurrentPacket[1] and honor CurrentPacket[2] synchronize flag
+         * - call WorkerRoutine(CurrentPacket[0])
+         * - clear TargetSet membership and release SignalDone */
         DbgBreakPoint();
 #else
         (void)InterlockedDecrementUL(&Prcb->SignalDone->CurrentPacket[1]);
