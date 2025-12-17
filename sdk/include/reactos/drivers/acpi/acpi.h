@@ -6,6 +6,8 @@
  * PROGRAMMERS:     ReactOS Portable Systems Group
  */
 
+#pragma once
+
 //
 // ACPI BIOS Registry Component Configuration Data
 //
@@ -38,10 +40,12 @@ typedef struct _ACPI_BIOS_MULTI_NODE
 #define SBST_SIGNATURE 0x54534253               // "SBST"
 #define DBGP_SIGNATURE 0x50474244               // "DBGP"
 #define MCFG_SIGNATURE 'GFCM'                   // "MCFG"
+#define HPET_SIGNATURE 0x54455048               // "HPET"
 #define XSDT_SIGNATURE 'TDSX'
 #define BOOT_SIGNATURE 'TOOB'
 #define SRAT_SIGNATURE 'TARS'
 #define WDRT_SIGNATURE 'TRDW'
+#define WAET_SIGNATURE 0x54454157               // "WAET"
 #define BGRT_SIGNATURE  0x54524742      	// "BGRT"
 
 //
