@@ -50,6 +50,56 @@ extern BOOLEAN HalpPm1ControlBlockValid[2];
 extern BOOLEAN HalpPm2ControlBlockValid;
 extern BOOLEAN HalpGeneralPurposeBlockValid[2];
 
+extern PHYSICAL_ADDRESS HalpAcpiRootTablePhysicalAddress;
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+HalpAcpiDiscoverHpetTable(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock);
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+HalpAcpiDiscoverWaetTable(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock);
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+HalpAcpiReserveRootTables(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock);
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+HalpAcpiLogRootTablesOrdered(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+    _In_ PFADT Fadt);
+
+PDESCRIPTION_HEADER
+NTAPI
+HalpAcpiGetCachedTable(
+    _In_ ULONG Signature);
+
+PVOID
+NTAPI
+HalpAcpiCopyBiosTable(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+    _In_ PDESCRIPTION_HEADER TableHeader);
+
+VOID
+NTAPI
+HalpAcpiCacheTable(
+    _In_ PDESCRIPTION_HEADER TableHeader);
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+HalpAcpiEnumerateRootTables(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+    _In_ PRSDT Root);
+
 /* Phase 1 ACPI initialization (pool/registry available) */
 VOID
 HalpAcpiPhase1Init(VOID);

@@ -63,6 +63,8 @@ LIST_ENTRY HalpAcpiTableMatchList;
 
 ULONG HalpInvalidAcpiTable;
 
+PHYSICAL_ADDRESS HalpAcpiRootTablePhysicalAddress;
+
 PHALP_ACPI_MCFG HalpAcpiMcfgTable;
 PHALP_ACPI_MCFG_ALLOCATION HalpAcpiMcfgAllocations;
 ULONG HalpAcpiMcfgAllocationCount;
@@ -1869,11 +1871,19 @@ HalpAcpiGetTableFromBios(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
         if (CheckSum)
         {
             HalpInvalidAcpiTable = Header->Signature;
-            DPRINT1("Checksum failed on ACPI table %c%c%c%c\n",
+            DPRINT1("HAL: Early ACPI table checksum verification FAILED for %c%c%c%c\n",
                     (Signature & 0xFF),
                     (Signature & 0xFF00) >> 8,
                     (Signature & 0xFF0000) >> 16,
                     (Signature & 0xFF000000) >> 24);
+        }
+        else
+        {
+            DPRINT("HAL: Early ACPI table checksum verification OK for %c%c%c%c\n",
+                   (Signature & 0xFF),
+                   (Signature & 0xFF00) >> 8,
+                   (Signature & 0xFF0000) >> 16,
+                   (Signature & 0xFF000000) >> 24);
         }
     }
 
@@ -2115,6 +2125,35 @@ HalpAcpiFindRsdtPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
     RtlCopyMemory(MappedAddress, NodeData, NodeLength);
     HalpAcpiRsdpAddress = HalpAcpiMultiNode->RsdpAddress;
 
+    /* Log the RSDP like Linux */
+    {
+        PHYSICAL_ADDRESS RsdpPhysical;
+        RSDP *Rsdp;
+        ULONG RsdpLength;
+        CHAR OemId[7];
+
+        RsdpPhysical = HalpAcpiRsdpAddress;
+        Rsdp = HalpMapPhysicalMemory64(RsdpPhysical, 1);
+        if (Rsdp)
+        {
+            if ((Rsdp->Revision >= 2) && (Rsdp->Length != 0))
+                RsdpLength = Rsdp->Length;
+            else
+                RsdpLength = 20; /* ACPI v1.0 RSDP length */
+
+            RtlCopyMemory(OemId, Rsdp->OEMID, sizeof(Rsdp->OEMID));
+            OemId[sizeof(Rsdp->OEMID)] = '\0';
+
+            DPRINT1("ACPI: RSDP %016I64x %06lx (v%02u %s )\n",
+                    (unsigned long long)RsdpPhysical.QuadPart,
+                    RsdpLength,
+                    (ULONG)Rsdp->Revision,
+                    OemId);
+
+            HalpUnmapVirtualAddress(Rsdp, 1);
+        }
+    }
+
     /* Return the data */
     *AcpiMultiNode = HalpAcpiMultiNode;
     return STATUS_SUCCESS;
@@ -2139,11 +2178,15 @@ HalpAcpiTableCacheInit(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     ExInitializeFastMutex(&HalpAcpiTableCacheLock);
     InitializeListHead(&HalpAcpiTableCacheList);
 
+    /* Inform about checksum policy */
+    DPRINT1("ACPI: Early table checksum verification enabled\n");
+
     /* Find the RSDT */
     Status = HalpAcpiFindRsdtPhase0(LoaderBlock, &AcpiMultiNode);
     if (!NT_SUCCESS(Status)) return Status;
 
     PhysicalAddress.QuadPart = AcpiMultiNode->RsdtAddress.QuadPart;
+    HalpAcpiRootTablePhysicalAddress = PhysicalAddress;
 
     /* Map the RSDT */
     if (LoaderBlock)
@@ -2245,6 +2288,13 @@ HalpAcpiTableCacheInit(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                                          LoaderExtension->AcpiTableSize);
         }
     }
+
+    /*
+     * Enumerate all entries from the ACPI root (RSDT/XSDT) and cache
+     * each table once so that the ACPI summary log reflects the full
+     * firmware table set and later lookups hit the cache.
+     */
+    HalpAcpiEnumerateRootTables(LoaderBlock, Rsdt);
 
     /* Done */
     return Status;
@@ -2444,11 +2494,21 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     HalpAcpiInitializePmTimerBlock(Fadt);
     HalpAcpiInitializePmIoBlocks(Fadt);
 
+    /* Log FACP/DSDT/FACS/APIC/HPET/MCFG/WAET headers in Linux order */
+    HalpAcpiLogRootTablesOrdered(LoaderBlock, Fadt);
+
     /* Anything special this HAL needs to do? */
     HalpAcpiDetectMachineSpecificActions(LoaderBlock, &HalpFixedAcpiDescTable);
 
     /* Get the debug table for KD */
     HalpDebugPortTable = HalAcpiGetTable(LoaderBlock, DBGP_SIGNATURE);
+
+    /* Discover additional ACPI tables of interest early */
+    HalpAcpiDiscoverHpetTable(LoaderBlock);
+    HalpAcpiDiscoverWaetTable(LoaderBlock);
+
+    /* Log reservation for all root-referenced tables like Linux */
+    HalpAcpiReserveRootTables(LoaderBlock);
 
     /* Cache the PCI Express MMCONFIG information if present */
     {

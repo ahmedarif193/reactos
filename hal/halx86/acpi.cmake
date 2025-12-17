@@ -6,6 +6,9 @@ list(APPEND HAL_ACPI_SOURCE
     ${HAL_COMMON_DIR}/acpi/halpnpdd.c
     ${HAL_COMMON_DIR}/acpi/busemul.c
     ${HAL_COMMON_DIR}/acpi/madt.c
+    ${HAL_COMMON_DIR}/acpi/rsdt.c
+    ${HAL_COMMON_DIR}/acpi/hpet.c
+    ${HAL_COMMON_DIR}/acpi/waet.c
     ${HAL_COMMON_DIR}/legacy/bus/pcibus.c
     ${CMAKE_CURRENT_BINARY_DIR}/pci_classes.c
     ${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.c)
