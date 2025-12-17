@@ -11,6 +11,15 @@
 
 EXTERN RtlpUse16ByteSLists:BYTE
 
+#if defined(_NTOSKRNL_) && !defined(_NTDLLBUILD_)
+#define RTL_SLIST_KERNEL 1
+#endif
+
+#ifdef RTL_SLIST_KERNEL
+EXTERN KeBugCheckEx:PROC
+.set BUGCHECK_SLIST_CORRUPT, 0x139
+#endif
+
 /*
 typedef union DECLSPEC_ALIGN(16) _SLIST_HEADER
 {
@@ -127,6 +136,21 @@ GLOBAL_LABEL ExpInterlockedPopEntrySListResume
 
     /* Combine to new pointer in rdx */
     or rdx, r9
+    /* Validate canonical pointer before dereference */
+#ifdef RTL_SLIST_KERNEL
+    mov r11, rcx                /* preserve head pointer */
+    mov r10, rdx
+    shl r10, 16
+    sar r10, 16
+    cmp r10, rdx
+    je .Lcanon_ok_pop8
+    mov rcx, BUGCHECK_SLIST_CORRUPT
+    mov r8, rdx                 /* Param2 = bad next */
+    mov rdx, r11                /* Param1 = head */
+    mov r9, [rsp]               /* Param3 = return address */
+    call KeBugCheckEx
+.Lcanon_ok_pop8:
+#endif
 
 GLOBAL_LABEL ExpInterlockedPopEntrySListFault
 
@@ -179,6 +203,21 @@ FUNC RtlInterlockedPopEntrySList16
 
     /* Copy rcx to r8, as we need rcx for the exchange */
     mov r8, rcx
+    /* Validate canonical ListHead->Region before use */
+#ifdef RTL_SLIST_KERNEL
+    mov r11, r8                 /* preserve head pointer */
+    mov r10, rdx
+    shl r10, 16
+    sar r10, 16
+    cmp r10, rdx
+    je .Lcanon_ok_pop16
+    mov rcx, BUGCHECK_SLIST_CORRUPT
+    mov r8, rdx                 /* Param2 = bad next */
+    mov rdx, r11                /* Param1 = head */
+    mov r9, [rsp]               /* Param3 = return address */
+    call KeBugCheckEx
+.Lcanon_ok_pop16:
+#endif
 
 GLOBAL_LABEL ExpInterlockedPopEntrySListResume16
 
@@ -247,7 +286,21 @@ ExpInterlockedPushEntrySListChecked:
     int HEX(2C)
 ExpInterlockedPushEntrySListChecked2:
 #endif
-
+    /* Validate canonical ListEntry pointer */
+#ifdef RTL_SLIST_KERNEL
+    mov r11, rcx                /* preserve head pointer */
+    mov r10, rdx
+    shl r10, 16
+    sar r10, 16
+    cmp r10, rdx
+    je .Lcanon_ok_push
+    mov rcx, BUGCHECK_SLIST_CORRUPT
+    mov r8, rdx                 /* Param2 = bad entry */
+    mov rdx, r11                /* Param1 = head */
+    mov r9, [rsp]               /* Param3 = return address */
+    call KeBugCheckEx
+.Lcanon_ok_push:
+#endif
     /* Load ListHead->Alignment into rax */
     mov rax, [rcx]
 
@@ -446,4 +499,3 @@ RtlInterlockedFlushSListLoop16:
 ENDFUNC
 
 END
-
