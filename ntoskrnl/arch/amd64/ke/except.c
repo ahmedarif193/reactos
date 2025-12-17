@@ -99,7 +99,6 @@ BOOLEAN
 KiHandleKernelSListFault(
     _Inout_ PKTRAP_FRAME TrapFrame)
 {
-    const ULONGLONG SListDepthMask = 0xFFFFULL;
     const ULONGLONG SListNextMask = 0xFFFFFFFFFFFFFFF0ULL;
     PSLIST_HEADER ListHead;
     ULONGLONG Alignment;
@@ -141,36 +140,18 @@ KiHandleKernelSListFault(
         LONG64 CanonicalHigh = (LONG64)NextEntry >> 48;
         if ((CanonicalHigh != 0) && (CanonicalHigh != -1))
         {
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_ERROR_LEVEL,
-                       "KiHandleKernelSListFault: non-canonical entry %p\n",
-                       (PVOID)(ULONG_PTR)NextEntry);
-            ULONGLONG NewAlignment = Alignment & ~SListDepthMask;
-            ULONGLONG NewRegion = Region & ~SListNextMask;
-            LONG64 Comparand[2];
-            Comparand[0] = (LONG64)Alignment;
-            Comparand[1] = (LONG64)Region;
-
-            if (!InterlockedCompareExchange128((volatile LONG64*)ListHead,
-                                               (LONG64)NewRegion,
-                                               (LONG64)NewAlignment,
-                                               Comparand))
-            {
-                TrapFrame->Rip = (ULONG_PTR)ExpInterlockedPopEntrySListResume16;
-                return TRUE;
-            }
-
-            TrapFrame->Rax = NewAlignment;
-            TrapFrame->Rdx = NewRegion;
-            KeGetCurrentThread()->SListFaultCount++;
-            TrapFrame->Rip = (ULONG_PTR)ExpInterlockedPopEntrySListResume16;
-            return TRUE;
+            KeBugCheckEx(KERNEL_SECURITY_CHECK_FAILURE,
+                         0x534C5301, /* SLST: non-canonical next */
+                         (ULONG_PTR)ListHead,
+                         (ULONG_PTR)NextEntry,
+                         (ULONG_PTR)Alignment);
         }
     }
 
     if ((Alignment != TrapFrame->Rax) ||
         (Region != TrapFrame->Rdx))
     {
+        /* Contention: allow retry with updated head */
         KeGetCurrentThread()->SListFaultCount++;
         TrapFrame->Rip = (ULONG_PTR)ExpInterlockedPopEntrySListResume16;
         return TRUE;
