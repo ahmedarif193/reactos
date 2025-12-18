@@ -250,6 +250,7 @@ typedef struct _XHCI_TRANSFER {
     PUSBPORT_TRANSFER_PARAMETERS TransferParameters;
     PUSBPORT_SCATTER_GATHER_LIST SgList;
     PVOID TransferHandle;
+    ULONGLONG TdFirstTrbPointer;
     ULONGLONG CompletionTrbPointer;
     ULONG RequestedLength;
     ULONG BytesTransferred;

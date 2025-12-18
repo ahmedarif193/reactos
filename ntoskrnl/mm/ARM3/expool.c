@@ -21,6 +21,9 @@
 /* GLOBALS ********************************************************************/
 
 #define POOL_BIG_TABLE_ENTRY_FREE 0x1
+#ifdef _WIN64
+extern BOOLEAN RtlpUse16ByteSLists;
+#endif
 
 /*
  * This defines when we shrink or expand the table.
@@ -63,6 +66,57 @@ ULONGLONG MiLastPoolDumpTime;
 #define POOL_BLOCK(x, i)    (PPOOL_HEADER)((ULONG_PTR)(x) + ((i) * POOL_BLOCK_SIZE))
 #define POOL_NEXT_BLOCK(x)  POOL_BLOCK((x), (x)->BlockSize)
 #define POOL_PREV_BLOCK(x)  POOL_BLOCK((x), -((x)->PreviousSize))
+
+#ifdef _WIN64
+FORCEINLINE
+BOOLEAN
+ExpIsCanonicalAddress64(
+    _In_ ULONG_PTR Address)
+{
+    LONG64 CanonicalHigh = (LONG64)Address >> 48;
+    return (CanonicalHigh == 0) || (CanonicalHigh == -1);
+}
+
+FORCEINLINE
+VOID
+ExpEnsureSListHeadIsSane(
+    _Inout_ PSLIST_HEADER SListHead)
+{
+    ULONGLONG Region;
+    ULONGLONG NextEntry;
+
+    if (!RtlpUse16ByteSLists) return;
+
+    /*
+     * For 16-byte SLIST headers on amd64 the next pointer is stored in the
+     * second QWORD with the low 4 bits reserved (HeaderType/Init/etc).
+     *
+     * If the head becomes corrupt (typically from overwriting a freed block's
+     * embedded SLIST_ENTRY), the next pointer can become non-canonical and
+     * will GP-fault in ExpInterlockedPopEntrySListFault16. Flush the list to
+     * keep the pool allocator alive long enough to diagnose the real culprit.
+     */
+    Region = SListHead->Region;
+    NextEntry = Region & 0xFFFFFFFFFFFFFFF0ULL;
+    if (NextEntry && !ExpIsCanonicalAddress64((ULONG_PTR)NextEntry))
+    {
+        DPRINT1("POOL: Corrupt SLIST head %p (Align=%I64x Region=%I64x Next=%p), flushing\n",
+                SListHead,
+                SListHead->Alignment,
+                Region,
+                (PVOID)(ULONG_PTR)NextEntry);
+        (VOID)InterlockedFlushSList(SListHead);
+    }
+}
+#else
+FORCEINLINE
+VOID
+ExpEnsureSListHeadIsSane(
+    _Inout_ PSLIST_HEADER SListHead)
+{
+    UNREFERENCED_PARAMETER(SListHead);
+}
+#endif
 
 /*
  * Pool list access debug macros, similar to Arthur's pfnlist.c work.
@@ -2104,6 +2158,7 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
                          Prcb->PPPagedLookasideList[i - 1].P :
                          Prcb->PPNPagedLookasideList[i - 1].P;
         LookasideList->TotalAllocates++;
+        ExpEnsureSListHeadIsSane(&LookasideList->ListHead);
         Entry = (PPOOL_HEADER)InterlockedPopEntrySList(&LookasideList->ListHead);
         if (!Entry)
         {
@@ -2114,6 +2169,7 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
                              Prcb->PPPagedLookasideList[i - 1].L :
                              Prcb->PPNPagedLookasideList[i - 1].L;
             LookasideList->TotalAllocates++;
+            ExpEnsureSListHeadIsSane(&LookasideList->ListHead);
             Entry = (PPOOL_HEADER)InterlockedPopEntrySList(&LookasideList->ListHead);
         }
 
@@ -2749,6 +2805,7 @@ ExFreePoolWithTag(IN PVOID P,
                          Prcb->PPPagedLookasideList[BlockSize - 1].P :
                          Prcb->PPNPagedLookasideList[BlockSize - 1].P;
         LookasideList->TotalFrees++;
+        ExpEnsureSListHeadIsSane(&LookasideList->ListHead);
         if (ExQueryDepthSList(&LookasideList->ListHead) < LookasideList->Depth)
         {
             LookasideList->FreeHits++;
@@ -2763,6 +2820,7 @@ ExFreePoolWithTag(IN PVOID P,
                          Prcb->PPPagedLookasideList[BlockSize - 1].L :
                          Prcb->PPNPagedLookasideList[BlockSize - 1].L;
         LookasideList->TotalFrees++;
+        ExpEnsureSListHeadIsSane(&LookasideList->ListHead);
         if (ExQueryDepthSList(&LookasideList->ListHead) < LookasideList->Depth)
         {
             LookasideList->FreeHits++;

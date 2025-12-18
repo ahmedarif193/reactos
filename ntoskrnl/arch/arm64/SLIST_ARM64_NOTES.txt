@@ -1,0 +1,17 @@
+SList hardening parity for ARM64 – notes
+========================================
+
+- Mirror amd64/i386 behavior:
+  - Add KiHandleKernelSListFaultArm64 that traps SList faults, checks canonical Next, and bugchecks on corruption (no silent retry).
+  - Harden interlocked SList primitives to work with 16-byte headers when adding cookies/ABA tags.
+
+- Optional diagnostics (DBG/Verifier):
+  - Cookie stamping on push and verification on pop to catch stomps while entries sit on the list.
+  - Per-head shadow metadata (last push/pop caller/tag/size) for attribution.
+  - Lookaside bypass flag for triage (e.g., ExpDisablePoolLookaside equivalent) and tag-based skips.
+
+- Controls:
+  - Boot/registry toggle to enable/disable hardening/logging without rebuild.
+
+- Target tags to watch based on amd64 experience:
+  - USB hub/port small allocations (tags UHUB/usbp) if corruption resurfaces on ARM64.

@@ -2671,6 +2671,18 @@ USBPORT_CompleteTransfer(IN PURB Urb,
     Transfer->USBDStatus = TransferStatus;
     Status = USBPORT_USBDStatusToNtStatus(Urb, TransferStatus);
 
+    /* If the miniport reported success but zero length on an IN control transfer,
+     * fall back to the requested length so cached data from a bounce buffer still
+     * gets flushed back to the caller. */
+    if ((Urb->UrbHeader.Function == URB_FUNCTION_CONTROL_TRANSFER) &&
+        (Transfer->Direction == USBPORT_DMA_DIRECTION_FROM_DEVICE) &&
+        NT_SUCCESS(Status) &&
+        Transfer->CompletedTransferLen == 0 &&
+        Transfer->TransferParameters.TransferBufferLength != 0)
+    {
+        Transfer->CompletedTransferLen = Transfer->TransferParameters.TransferBufferLength;
+    }
+
     UrbTransfer->TransferBufferLength = Transfer->CompletedTransferLen;
 
     if (Transfer->Flags & TRANSFER_FLAG_DMA_MAPPED)
@@ -2684,6 +2696,12 @@ USBPORT_CompleteTransfer(IN PURB Urb,
         Mdl = UrbTransfer->TransferBufferMDL;
         CurrentVa = (ULONG_PTR)MmGetMdlVirtualAddress(Mdl);
         TransferLength = UrbTransfer->TransferBufferLength;
+        if (!WriteToDevice &&
+            TransferLength == 0 &&
+            Transfer->TransferParameters.TransferBufferLength != 0)
+        {
+            TransferLength = Transfer->TransferParameters.TransferBufferLength;
+        }
 
         IsFlushSuccess = DmaOperations->FlushAdapterBuffers(FdoExtension->DmaAdapter,
                                                             Mdl,
@@ -2715,6 +2733,8 @@ USBPORT_CompleteTransfer(IN PURB Urb,
             Transfer->BounceBuffer &&
             Transfer->BounceOriginalVa)
         {
+            if (BytesToCopy == 0 && Transfer->TransferParameters.TransferBufferLength)
+                BytesToCopy = Transfer->TransferParameters.TransferBufferLength;
             if (BytesToCopy > Transfer->BounceBufferLength)
                 BytesToCopy = Transfer->BounceBufferLength;
 
@@ -2747,6 +2767,30 @@ USBPORT_CompleteTransfer(IN PURB Urb,
         Transfer->BounceOriginalVa = NULL;
         Transfer->BounceBufferLength = 0;
         Transfer->Flags &= ~TRANSFER_FLAG_BOUNCE;
+    }
+
+    if (Urb->UrbHeader.Function == URB_FUNCTION_CONTROL_TRANSFER)
+    {
+        PUSB_DEFAULT_PIPE_SETUP_PACKET SetupPkt =
+            (PUSB_DEFAULT_PIPE_SETUP_PACKET)&UrbTransfer->SetupPacket[0];
+        if (SetupPkt->bRequest == USB_REQUEST_GET_DESCRIPTOR &&
+            SetupPkt->wValue.HiByte == USB_CONFIGURATION_DESCRIPTOR_TYPE)
+        {
+            PUCHAR Buf = UrbTransfer->TransferBuffer;
+            ULONG Len = (ULONG)UrbTransfer->TransferBufferLength;
+
+            if (Buf && Len >= 6)
+            {
+                DPRINT1("USBPORT_CompleteTransfer: CFG DESC len=%lu first=%02x %02x %02x %02x %02x %02x\n",
+                        Len,
+                        Buf[0], Buf[1], Buf[2], Buf[3], Buf[4], Buf[5]);
+            }
+            else
+            {
+                DPRINT1("USBPORT_CompleteTransfer: CFG DESC len=%lu buf=%p\n",
+                        Len, Buf);
+            }
+        }
     }
 
     if (Urb->UrbHeader.UsbdFlags & USBD_FLAG_ALLOCATED_MDL)

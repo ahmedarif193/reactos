@@ -2756,6 +2756,27 @@ XHCI_HandleEnumerationTransfer(
                      DPRINT1("XHCI: GetDescriptor Data: Len=%d (Header Only/Short)\n", BufferLength);
                 }
             }
+            else if (DescriptorType == USB_CONFIGURATION_DESCRIPTOR_TYPE)
+            {
+                PHYSICAL_ADDRESS Pa = MmGetPhysicalAddress(Buffer);
+                PHYSICAL_ADDRESS SgPa;
+                SgPa.QuadPart = 0;
+
+                if (Transfer->SgList && Transfer->SgList->SgElementCount > 0)
+                    SgPa = Transfer->SgList->SgElement[0].SgPhysicalAddress;
+
+                DPRINT1("XHCI: GetDescriptor(CFG) len=%lu first=%02x %02x %02x %02x %02x %02x VA=%p PA=%I64x SG_PA=%I64x\n",
+                        BufferLength,
+                        (BufferLength > 0) ? Buffer[0] : 0,
+                        (BufferLength > 1) ? Buffer[1] : 0,
+                        (BufferLength > 2) ? Buffer[2] : 0,
+                        (BufferLength > 3) ? Buffer[3] : 0,
+                        (BufferLength > 4) ? Buffer[4] : 0,
+                        (BufferLength > 5) ? Buffer[5] : 0,
+                        Buffer,
+                        Pa.QuadPart,
+                        SgPa.QuadPart);
+            }
             else
             {
                 /* omit noisy trace for non-device descriptors */
@@ -4165,6 +4186,49 @@ XHCI_HandleTransferEvent(
     }
 
     Transfer = Endpoint->ActiveTransfer;
+
+    /*
+     * Only complete the currently active transfer when the controller reports
+     * completion for the TRB that we armed with IOC. QEMU can deliver stale or
+     * intermediate transfer events; completing on those breaks enumeration.
+     */
+    if ((Transfer->CompletionTrbPointer != 0) &&
+        (Transfer->CompletionTrbPointer != TrbPointer))
+    {
+        BOOLEAN InTdRange = FALSE;
+
+        if (Transfer->TdFirstTrbPointer != 0)
+        {
+            ULONGLONG First = Transfer->TdFirstTrbPointer;
+            ULONGLONG Last = Transfer->CompletionTrbPointer;
+
+            if (First <= Last)
+                InTdRange = (TrbPointer >= First && TrbPointer <= Last);
+            else
+                InTdRange = (TrbPointer >= First || TrbPointer <= Last);
+        }
+
+        if (!InTdRange)
+        {
+#if DBG
+        DPRINT1("usbxhci: transfer event pointer mismatch slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
+                SlotId,
+                EndpointId,
+                (ULONGLONG)Transfer->CompletionTrbPointer,
+                (ULONGLONG)TrbPointer,
+                CompletionCode);
+#endif
+        }
+#if DBG
+        DPRINT1("usbxhci: transfer event within TD range slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
+                SlotId,
+                EndpointId,
+                (ULONGLONG)Transfer->CompletionTrbPointer,
+                (ULONGLONG)TrbPointer,
+                CompletionCode);
+#endif
+    }
+
     Endpoint->TransferRing.DequeueIndex = Endpoint->TransferRing.EnqueueIndex;
 
     if (Endpoint->DefaultControl && Endpoint->Slot)
@@ -4198,6 +4262,22 @@ XHCI_HandleTransferEvent(
              CompletionCode,
              Remaining,
              TrbPointer);
+
+    if ((Transfer->Flags & XHCI_TRANSFER_FLAG_GET_DESCRIPTOR) &&
+        Transfer->TransferParameters &&
+        Transfer->TransferParameters->SetupPacket.wValue.HiByte == USB_CONFIGURATION_DESCRIPTOR_TYPE)
+    {
+        DPRINT1("usbxhci: cfg desc event S%u E%u code=%lu req=%lu rem=%lu bytes=%lu ptr=%I64x first=%I64x last=%I64x\n",
+                SlotId,
+                EndpointId,
+                CompletionCode,
+                RequestedLength,
+                Remaining,
+                BytesTransferred,
+                TrbPointer,
+                (ULONGLONG)Transfer->TdFirstTrbPointer,
+                (ULONGLONG)Transfer->CompletionTrbPointer);
+    }
 
     XHCI_DBG(XHCI_TRACE_TRANSFERS,
              "usbxhci: xfer complete slot=%u ep=%u code=%lu req=%lu rem=%lu bytes=%lu stream=%u\n",
@@ -4242,19 +4322,6 @@ XHCI_HandleTransferEvent(
             UsbdStatus = USBD_STATUS_REQUEST_FAILED;
             break;
     }
-
-#if DBG
-    if (Transfer->CompletionTrbPointer != 0 &&
-        Transfer->CompletionTrbPointer != TrbPointer)
-    {
-        DPRINT1("usbxhci: transfer event pointer mismatch slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
-                SlotId,
-                EndpointId,
-                (ULONGLONG)Transfer->CompletionTrbPointer,
-                (ULONGLONG)TrbPointer,
-                CompletionCode);
-    }
-#endif
 
     Transfer->CompletionTrbPointer = TrbPointer;
     Transfer->BytesTransferred = BytesTransferred;
@@ -7317,11 +7384,15 @@ XHCI_SubmitControlTransfer(
 
     TransferParameters = Transfer->TransferParameters;
     SgList = Transfer->SgList;
+    Transfer->TdFirstTrbPointer = 0;
+    Transfer->CompletionTrbPointer = 0;
     HasDataStage = (TransferParameters->TransferBufferLength != 0);
     DataIn = (TransferParameters->TransferFlags & USBD_TRANSFER_DIRECTION_IN) ? TRUE : FALSE;
     Transfer->Flags = 0;
     Transfer->NewAddress = 0;
     Transfer->IsControl = TRUE;
+    Transfer->TdFirstTrbPointer = 0;
+    Transfer->CompletionTrbPointer = 0;
 
     if (TransferParameters->SetupPacket.bmRequestType.B == 0 &&
         TransferParameters->SetupPacket.bRequest == USB_REQUEST_SET_ADDRESS)
@@ -7381,6 +7452,7 @@ XHCI_SubmitControlTransfer(
         Status = MP_STATUS_NO_RESOURCES;
         goto Failure;
     }
+    Transfer->TdFirstTrbPointer = PhysicalAddress;
 
     RtlCopyMemory(&SetupLow,
                   &TransferParameters->SetupPacket,
@@ -7680,6 +7752,7 @@ XHCI_SubmitSgTransfer(
             Status = MP_STATUS_NO_RESOURCES;
             goto Failure;
         }
+        Transfer->TdFirstTrbPointer = PhysicalAddress;
 
         Trb->Parameter1 = 0;
         Trb->Parameter2 = 0;
@@ -7748,6 +7821,8 @@ XHCI_SubmitSgTransfer(
                 Status = MP_STATUS_NO_RESOURCES;
                 goto Failure;
             }
+            if (Transfer->TdFirstTrbPointer == 0)
+                Transfer->TdFirstTrbPointer = PhysicalAddress;
 
             Trb->Parameter1 = (ULONG)(BufferAddress & 0xFFFFFFFF);
             Trb->Parameter2 = (ULONG)(BufferAddress >> 32);

@@ -1524,7 +1524,35 @@ HalGetAdapter(IN PDEVICE_DESCRIPTION DeviceDescription,
         ((DeviceDescription->InterfaceType == Eisa) ||
          (DeviceDescription->InterfaceType == PCIBus)))
     {
-        MapRegisters = 0;
+        /*
+         * Historically we returned MapRegisters=0 for PCI/EISA scatter/gather
+         * devices under the assumption that map registers are never needed.
+         * That is not true for bus-master devices that cannot address the
+         * full physical range (e.g. 32-bit DMA limits on x64).
+         *
+         * If the device is a PCI bus master with a 32-bit DMA ceiling, provide
+         * map registers so IoMapTransfer can bounce buffers above the limit.
+         */
+        if ((DeviceDescription->InterfaceType == PCIBus) &&
+            (DeviceDescription->Master) &&
+            (DeviceDescription->Dma32BitAddresses) &&
+            !(DeviceDescription->Dma64BitAddresses))
+        {
+            MapRegisters = HalpDmaDeriveMapRegisterCount(DeviceDescription,
+                                                         MaximumLengthPages);
+            if ((HalpMaxMapRegisters != 0) && (MapRegisters > HalpMaxMapRegisters))
+            {
+                MapRegisters = HalpMaxMapRegisters;
+            }
+            if (MapRegisters == 0)
+            {
+                MapRegisters = 1;
+            }
+        }
+        else
+        {
+            MapRegisters = 0;
+        }
     }
     else if ((DeviceDescription->ScatterGather) && !(DeviceDescription->Master))
     {
