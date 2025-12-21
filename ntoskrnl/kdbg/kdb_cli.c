@@ -56,6 +56,7 @@
 
 static BOOLEAN KdbpCmdEvalExpression(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdDisassembleX(ULONG Argc, PCHAR Argv[]);
+static BOOLEAN KdbpCmdWriteMemory(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdRegs(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdBackTrace(ULONG Argc, PCHAR Argv[]);
 
@@ -95,6 +96,7 @@ BOOLEAN ExpKdbgExtDevStack(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtIrp(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtIrpFind(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtHandle(ULONG Argc, PCHAR Argv[]);
+BOOLEAN ExpKdbgExtLookaside(ULONG Argc, PCHAR Argv[]);
 #endif
 
 extern char __ImageBase;
@@ -360,6 +362,11 @@ static const struct
 #endif // _M_IX86
     { "x", "x [address] [L count]", "Display count dwords, starting at address.", KdbpCmdDisassembleX },
     { "dd", "dd [address] [L count]", "Display count dwords, starting at address.", KdbpCmdDisassembleX },
+    { "dq", "dq [address] [L count]", "Display count qwords, starting at address.", KdbpCmdDisassembleX },
+    { "eb", "eb address value", "Write a byte value to the given address.", KdbpCmdWriteMemory },
+    { "ew", "ew address value", "Write a word value to the given address.", KdbpCmdWriteMemory },
+    { "ed", "ed address value", "Write a dword value to the given address.", KdbpCmdWriteMemory },
+    { "eq", "eq address value", "Write a qword value to the given address.", KdbpCmdWriteMemory },
     { "regs", "regs", "Display general purpose registers.", KdbpCmdRegs },
     { "cregs", "cregs", "Display control, descriptor table and task segment registers.", KdbpCmdRegs },
     { "sregs", "sregs", "Display status registers.", KdbpCmdRegs },
@@ -418,6 +425,7 @@ static const struct
     { "!defwrites", "!defwrites", "Display cache write values.", ExpKdbgExtDefWrites },
     { "!irpfind", "!irpfind [Pool [startaddress [criteria data]]]", "Lists IRPs potentially matching criteria.", ExpKdbgExtIrpFind },
     { "!handle", "!handle [Handle]", "Displays info about handles.", ExpKdbgExtHandle },
+    { "!lookaside", "!lookaside", "Dump lookaside corruption log.", ExpKdbgExtLookaside },
 #endif
 };
 
@@ -821,15 +829,17 @@ KdbpCmdDisassembleX(
 {
     ULONG Count;
     ULONG ul;
+    ULONGLONG ull;
     INT i;
     ULONGLONG Result = 0;
     ULONG_PTR Address = KeGetContextPc(KdbCurrentTrapFrame);
     LONG InstLen;
 
-    const BOOLEAN IsDump = (Argv[0][0] == 'x') || (strcmp(Argv[0], "dd") == 0);
+    const BOOLEAN IsQwordDump = (strcmp(Argv[0], "dq") == 0);
+    const BOOLEAN IsDump = (Argv[0][0] == 'x') || (strcmp(Argv[0], "dd") == 0) || IsQwordDump;
 
     if (IsDump) /* display memory */
-        Count = 16;
+        Count = IsQwordDump ? 8 : 16;
     else /* disassemble */
         Count = 10;
 
@@ -899,6 +909,7 @@ have_address:
     {
         /* Display dwords */
         ul = 0;
+        ull = 0;
 
         while (Count > 0)
         {
@@ -907,17 +918,29 @@ have_address:
             else
                 KdbpPrint(":");
 
-            i = min(4, Count);
+            i = min(IsQwordDump ? 2 : 4, Count);
             Count -= i;
 
             while (--i >= 0)
             {
-                if (!NT_SUCCESS(KdbpSafeReadMemory(&ul, (PVOID)Address, sizeof(ul))))
-                    KdbpPrint(" ????????");
-                else
-                    KdbpPrint(" %08x", ul);
+                if (IsQwordDump)
+                {
+                    if (!NT_SUCCESS(KdbpSafeReadMemory(&ull, (PVOID)Address, sizeof(ull))))
+                        KdbpPrint(" ????????????????");
+                    else
+                        KdbpPrint(" %016I64x", ull);
 
-                Address += sizeof(ul);
+                    Address += sizeof(ull);
+                }
+                else
+                {
+                    if (!NT_SUCCESS(KdbpSafeReadMemory(&ul, (PVOID)Address, sizeof(ul))))
+                        KdbpPrint(" ????????");
+                    else
+                        KdbpPrint(" %08x", ul);
+
+                    Address += sizeof(ul);
+                }
             }
 
             KdbpPrint("\n");
@@ -944,6 +967,64 @@ have_address:
             Address += InstLen;
         }
     }
+
+    return TRUE;
+}
+
+static BOOLEAN
+KdbpCmdWriteMemory(
+    ULONG Argc,
+    PCHAR Argv[])
+{
+    ULONGLONG Result;
+    ULONG_PTR Address;
+    NTSTATUS Status;
+    SIZE_T Size;
+
+    if (Argc < 3)
+    {
+        KdbpPrint("%s: address and value required.\n", Argv[0]);
+        return TRUE;
+    }
+
+    if (!KdbpEvaluateExpression(Argv[1],
+                                KdbPromptStr.Length + (Argv[1] - Argv[0]),
+                                &Result))
+    {
+        return TRUE;
+    }
+
+    Address = (ULONG_PTR)Result;
+
+    if (!KdbpEvaluateExpression(Argv[2],
+                                KdbPromptStr.Length + (Argv[2] - Argv[0]),
+                                &Result))
+    {
+        return TRUE;
+    }
+
+    switch (Argv[0][1])
+    {
+        case 'b':
+            Size = sizeof(UCHAR);
+            break;
+
+        case 'w':
+            Size = sizeof(USHORT);
+            break;
+
+        case 'd':
+            Size = sizeof(ULONG);
+            break;
+
+        default:
+            Size = sizeof(ULONGLONG);
+            break;
+    }
+
+    Status = KdbpSafeWriteMemory((PVOID)Address, &Result, Size);
+    if (!NT_SUCCESS(Status))
+        KdbpPrint("%s: write to %p failed (0x%08x)\n", Argv[0], (PVOID)Address, Status);
 
     return TRUE;
 }

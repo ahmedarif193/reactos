@@ -441,10 +441,10 @@ RpnpParseExpression(
     RPN_OP ComparativeOp;
     BOOLEAN ComparativeOpFilled = FALSE;
     BOOLEAN IsComparativeOp;
-    INT_PTR i, i2;
+    INT_PTR i, i2, BracketPos;
     ULONG64 ull;
     UCHAR MemorySize;
-    CHAR Buffer[16];
+    CHAR Buffer[256];
     BOOLEAN First;
 
     ASSERT(Stack);
@@ -543,20 +543,41 @@ RpnpParseExpression(
         MemorySize = sizeof(ULONG_PTR); /* default to pointer size */
 
 get_operand:
-        i = strcspn(p, "+-*/%()[]<>!=");
+        i = 0;
+        i2 = 0;
+
+        if (isalpha(*p) || *p == '_' || *p == '.')
+        {
+            while (p[i] &&
+                   !isspace(p[i]) &&
+                   !(p[i] == '!' && p[i + 1] == '=') &&
+                   !(p[i] == '=' && p[i + 1] == '=') &&
+                   !strchr("+-*/%()[]<>", p[i]))
+            {
+                i++;
+            }
+        }
+        else
+        {
+            i = strcspn(p, "+-*/%()[]<>!=");
+        }
+
         if (i > 0)
         {
-            i2 = i;
-
             /* Copy register name/memory size */
-            while (isspace(p[--i2]));
+            i2 = i;
+            while (i2 > 0 && isspace(p[i2 - 1])) i2--;
 
-            i2 = min(i2 + 1, (INT)sizeof (Buffer) - 1);
+            i2 = min(i2, (INT)sizeof (Buffer) - 1);
             strncpy(Buffer, p, i2);
             Buffer[i2] = '\0';
 
             /* Memory size prefix */
-            if (p[i] == '[')
+            BracketPos = i;
+            while (p[BracketPos] && isspace(p[BracketPos]))
+                BracketPos++;
+
+            if (p[BracketPos] == '[')
             {
                 if (stricmp(Buffer, "byte") == 0)
                     MemorySize = 1;
@@ -576,8 +597,8 @@ get_operand:
                     return FALSE;
                 }
 
-                p += i;
-                CharacterOffset += i;
+                p += BracketPos;
+                CharacterOffset += BracketPos;
                 goto get_operand;
             }
 
@@ -597,21 +618,29 @@ get_operand:
                 CharacterOffset += i;
                 p += i;
             }
-            else
-            {
-                /* Immediate value */
-                ull = strtoull(p, &pend, 0);
-                if (p != pend)
-                {
-                    RpnOp.Type = RpnOpImmediate;
-                    RpnOp.CharacterOffset = CharacterOffset;
-                    RpnOp.Data.Immediate = ull;
-                    CharacterOffset += pend - p;
-                    p = pend;
-                }
                 else
                 {
-                    CONST_STRCPY(ErrMsg, "Operand expected");
+                    /* Immediate value or symbol */
+                    ull = strtoull(p, &pend, 0);
+                    if (p != pend)
+                    {
+                        RpnOp.Type = RpnOpImmediate;
+                        RpnOp.CharacterOffset = CharacterOffset;
+                        RpnOp.Data.Immediate = ull;
+                        CharacterOffset += pend - p;
+                        p = pend;
+                    }
+                    else if (KdbpSymAddressFromName(Buffer, (PULONG_PTR)&ull))
+                    {
+                        RpnOp.Type = RpnOpImmediate;
+                        RpnOp.CharacterOffset = CharacterOffset;
+                        RpnOp.Data.Immediate = ull;
+                        CharacterOffset += i;
+                        p += i;
+                    }
+                    else
+                    {
+                        CONST_STRCPY(ErrMsg, "Operand expected");
 
                     if (ErrOffset)
                         *ErrOffset = CharacterOffset;
@@ -1213,4 +1242,3 @@ KdbpRpnEvaluateParsedExpression(
     /* Evaluate the stack */
     return RpnpEvaluateStack(Stack, TrapFrame, Result, ErrOffset, ErrMsg);
 }
-

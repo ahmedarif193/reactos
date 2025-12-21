@@ -18,6 +18,13 @@
 
 /* GLOBALS ******************************************************************/
 
+static
+PCHAR
+NTAPI
+KdbpSymUnicodeToAnsi(IN PUNICODE_STRING Unicode,
+                     OUT PCHAR Ansi,
+                     IN ULONG Length);
+
 typedef struct _IMAGE_SYMBOL_INFO_CACHE
 {
     LIST_ENTRY ListEntry;
@@ -107,6 +114,167 @@ KdbpSymFindModule(
                                    Address,
                                    Index,
                                    pLdrEntry);
+}
+
+static
+BOOLEAN
+KdbpSymModuleNameEquals(
+    _In_ PCSTR Name,
+    _In_ PLDR_DATA_TABLE_ENTRY LdrEntry)
+{
+    CHAR ModuleNameAnsi[64];
+    PCHAR Dot;
+
+    KdbpSymUnicodeToAnsi(&LdrEntry->BaseDllName,
+                        ModuleNameAnsi,
+                        sizeof(ModuleNameAnsi));
+
+    Dot = strchr(ModuleNameAnsi, '.');
+    if (Dot) *Dot = ANSI_NULL;
+
+    if (_stricmp(ModuleNameAnsi, Name) == 0)
+        return TRUE;
+
+    if (_stricmp(Name, "nt") == 0 &&
+        (_strnicmp(ModuleNameAnsi, "ntoskrnl", 8) == 0 ||
+         _strnicmp(ModuleNameAnsi, "ntkrnl", 6) == 0))
+    {
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+BOOLEAN
+KdbpSymFindModuleByName(
+    IN PCSTR Name,
+    OUT PLDR_DATA_TABLE_ENTRY* pLdrEntry)
+{
+    PEPROCESS CurrentProcess;
+
+    if (!Name || !pLdrEntry)
+        return FALSE;
+
+    /* First, try the kernel module list. */
+    KeAcquireSpinLockAtDpcLevel(&PsLoadedModuleSpinLock);
+    for (PLIST_ENTRY Link = PsLoadedModuleList.Flink;
+         Link != &PsLoadedModuleList;
+         Link = Link->Flink)
+    {
+        PLDR_DATA_TABLE_ENTRY LdrEntry;
+
+        LdrEntry = CONTAINING_RECORD(Link, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+        if (KdbpSymModuleNameEquals(Name, LdrEntry))
+        {
+            *pLdrEntry = LdrEntry;
+            KeReleaseSpinLockFromDpcLevel(&PsLoadedModuleSpinLock);
+            return TRUE;
+        }
+    }
+    KeReleaseSpinLockFromDpcLevel(&PsLoadedModuleSpinLock);
+
+    /* Fall back to the current process modules. */
+    CurrentProcess = PsGetCurrentProcess();
+    if (!CurrentProcess || !CurrentProcess->Peb || !CurrentProcess->Peb->Ldr)
+        return FALSE;
+
+    for (PLIST_ENTRY Link = CurrentProcess->Peb->Ldr->InLoadOrderModuleList.Flink;
+         Link != &CurrentProcess->Peb->Ldr->InLoadOrderModuleList;
+         Link = Link->Flink)
+    {
+        PLDR_DATA_TABLE_ENTRY LdrEntry;
+
+        LdrEntry = CONTAINING_RECORD(Link, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+        if (KdbpSymModuleNameEquals(Name, LdrEntry))
+        {
+            *pLdrEntry = LdrEntry;
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static
+BOOLEAN
+KdbpSymLookupSymbolInModule(
+    _In_ PLDR_DATA_TABLE_ENTRY LdrEntry,
+    _In_ PCSTR Name,
+    _Out_ PULONG_PTR Address)
+{
+    if (!LdrEntry || !Name || !Address)
+        return FALSE;
+
+#ifndef __ROS_DWARF__
+    if (LdrEntry->PatchInformation)
+    {
+        PROSSYM_INFO RosInfo = LdrEntry->PatchInformation;
+
+        if (RosInfo->Symbols && RosInfo->Strings)
+        {
+            for (ULONG i = 0; i < RosInfo->SymbolsCount; i++)
+            {
+                PROSSYM_ENTRY Entry = &RosInfo->Symbols[i];
+
+                if (Entry->FunctionOffset &&
+                    _stricmp(Name, RosInfo->Strings + Entry->FunctionOffset) == 0)
+                {
+                    *Address = (ULONG_PTR)LdrEntry->DllBase + Entry->Address;
+                    return TRUE;
+                }
+            }
+        }
+    }
+#endif
+
+    *Address = (ULONG_PTR)RtlFindExportedRoutineByName(LdrEntry->DllBase, Name);
+    return (*Address != 0);
+}
+
+BOOLEAN
+KdbpSymAddressFromName(
+    IN PCSTR Name,
+    OUT PULONG_PTR Address)
+{
+    CHAR ModuleName[64];
+    PCSTR SymbolName;
+    PCSTR Bang;
+    SIZE_T ModuleNameLength;
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+
+    if (!Name || !Address)
+        return FALSE;
+
+    SymbolName = Name;
+    Bang = strchr(Name, '!');
+
+    /* Handle a module prefix if present. */
+    if (Bang)
+    {
+        ModuleNameLength = (SIZE_T)(Bang - Name);
+        if (ModuleNameLength == 0 || ModuleNameLength >= sizeof(ModuleName))
+            return FALSE;
+
+        strncpy(ModuleName, Name, ModuleNameLength);
+        ModuleName[ModuleNameLength] = ANSI_NULL;
+        SymbolName = Bang + 1;
+        if (*SymbolName == ANSI_NULL)
+            return FALSE;
+
+        if (!KdbpSymFindModuleByName(ModuleName, &LdrEntry))
+            return FALSE;
+
+        return KdbpSymLookupSymbolInModule(LdrEntry, SymbolName, Address);
+    }
+
+    /* No module specified: search all loaded modules. */
+    for (INT Index = 0; KdbpSymFindModule(NULL, Index, &LdrEntry); Index++)
+    {
+        if (KdbpSymLookupSymbolInModule(LdrEntry, SymbolName, Address))
+            return TRUE;
+    }
+
+    return FALSE;
 }
 
 static

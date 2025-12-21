@@ -177,6 +177,16 @@ KdbpSymFindModule(
     OUT PLDR_DATA_TABLE_ENTRY* pLdrEntry);
 
 BOOLEAN
+KdbpSymFindModuleByName(
+    IN PCSTR Name,
+    OUT PLDR_DATA_TABLE_ENTRY* pLdrEntry);
+
+BOOLEAN
+KdbpSymAddressFromName(
+    IN PCSTR Name,
+    OUT PULONG_PTR Address);
+
+BOOLEAN
 KdbSymPrintAddress(
     IN PVOID Address,
     IN PCONTEXT Context);

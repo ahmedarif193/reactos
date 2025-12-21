@@ -100,14 +100,14 @@ XHCI_GetDeviceEndpointContextVa(_In_ PXHCI_EXTENSION Extension,
                                     Extension->ContextSize * (1 + EndpointIndex));
 }
 
+
+#if DBG
+static ULONG g_XhciTraceMask;
+
 #define XHCI_TRACE_EVENTS    0x00000001
 #define XHCI_TRACE_TRANSFERS 0x00000002
 #define XHCI_TRACE_COMMANDS  0x00000004
 #define XHCI_TRACE_PORTS     0x00000008
-
-
-#if DBG
-static ULONG g_XhciTraceMask;
 
 #define XHCI_DBG(Mask, ...)                                        \
     do {                                                           \
@@ -419,7 +419,6 @@ typedef struct _XHCI_DEFERRED_OPEN_WORK {
     PXHCI_ENDPOINT Endpoint;
     USBPORT_ENDPOINT_PROPERTIES Properties;
     MPSTATUS Status;
-    LONG RefCount;
 } XHCI_DEFERRED_OPEN_WORK, *PXHCI_DEFERRED_OPEN_WORK;
 typedef struct _XHCI_EP0_WORK_WRAP {
     WORK_QUEUE_ITEM Item;
@@ -4188,14 +4187,6 @@ XHCI_HandleTransferEvent(
 
     Transfer = Endpoint->ActiveTransfer;
 
-    /* Calculate BytesTransferred early for the intermediate check */
-    RequestedLength = Transfer->RequestedLength;
-    if (RequestedLength == 0 && Transfer->TransferParameters)
-        RequestedLength = Transfer->TransferParameters->TransferBufferLength;
-    if (RequestedLength < Remaining)
-        Remaining = RequestedLength;
-    BytesTransferred = RequestedLength - Remaining;
-
     /*
      * Only complete the currently active transfer when the controller reports
      * completion for the TRB that we armed with IOC. QEMU can deliver stale or
@@ -4204,7 +4195,7 @@ XHCI_HandleTransferEvent(
     if ((Transfer->CompletionTrbPointer != 0) &&
         (Transfer->CompletionTrbPointer != TrbPointer))
     {
-        BOOLEAN InTdRange = (Transfer->TdFirstTrbPointer == 0);
+        BOOLEAN InTdRange = FALSE;
 
         if (Transfer->TdFirstTrbPointer != 0)
         {
@@ -4220,34 +4211,14 @@ XHCI_HandleTransferEvent(
         if (!InTdRange)
         {
 #if DBG
-            DPRINT1("usbxhci: transfer event pointer mismatch slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
-                    SlotId,
-                    EndpointId,
-                    (ULONGLONG)Transfer->CompletionTrbPointer,
-                    (ULONGLONG)TrbPointer,
-                    CompletionCode);
+        DPRINT1("usbxhci: transfer event pointer mismatch slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
+                SlotId,
+                EndpointId,
+                (ULONGLONG)Transfer->CompletionTrbPointer,
+                (ULONGLONG)TrbPointer,
+                CompletionCode);
 #endif
-            KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
-            return;
         }
-
-        if (CompletionCode == XHCI_COMPLETION_SHORT_PACKET ||
-            CompletionCode == XHCI_COMPLETION_SUCCESS)
-        {
-#if DBG
-            DPRINT1("usbxhci: intermediate transfer event slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
-                    SlotId,
-                    EndpointId,
-                    (ULONGLONG)Transfer->CompletionTrbPointer,
-                    (ULONGLONG)TrbPointer,
-                    CompletionCode);
-#endif
-            /* Update transferred count but wait for the Status Stage event */
-            Transfer->BytesTransferred = BytesTransferred;
-            KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
-            return;
-        }
-
 #if DBG
         DPRINT1("usbxhci: transfer event within TD range slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
                 SlotId,
@@ -4257,6 +4228,7 @@ XHCI_HandleTransferEvent(
                 CompletionCode);
 #endif
     }
+
     Endpoint->TransferRing.DequeueIndex = Endpoint->TransferRing.EnqueueIndex;
 
     if (Endpoint->DefaultControl && Endpoint->Slot)
@@ -8018,7 +7990,6 @@ XHCI_DeferEndpointOpen(PXHCI_EXTENSION Extension,
     RtlZeroMemory(Work, sizeof(*Work));
     Work->Endpoint = Endpoint;
     Work->Properties = *EndpointProperties;
-    Work->RefCount = 2;
     Work->Status = MP_STATUS_ERROR;
     KeInitializeEvent(&Work->CompletionEvent, NotificationEvent, FALSE);
     ExInitializeWorkItem(&Work->Item, XHCI_OpenEndpointWorker, Work);
@@ -8038,15 +8009,13 @@ XHCI_DeferEndpointOpen(PXHCI_EXTENSION Extension,
     if (!KeReadStateEvent(&Work->CompletionEvent))
     {
         DPRINT1("usbxhci: deferred OpenEndpoint timed out/stopped\n");
-        if (InterlockedDecrement(&Work->RefCount) == 0)
-            ExFreePoolWithTag(Work, XHCI_TAG);
+        ExFreePoolWithTag(Work, XHCI_TAG);
         return MP_STATUS_UNSUCCESSFUL;
     }
 
     {
         MPSTATUS Status = Work->Status;
-        if (InterlockedDecrement(&Work->RefCount) == 0)
-            ExFreePoolWithTag(Work, XHCI_TAG);
+        ExFreePoolWithTag(Work, XHCI_TAG);
         return Status;
     }
 }
@@ -8074,8 +8043,6 @@ XHCI_OpenEndpointWorker(PVOID Context)
     }
 
     KeSetEvent(&Work->CompletionEvent, IO_NO_INCREMENT, FALSE);
-    if (InterlockedDecrement(&Work->RefCount) == 0)
-        ExFreePoolWithTag(Work, XHCI_TAG);
 }
 
 static MPSTATUS

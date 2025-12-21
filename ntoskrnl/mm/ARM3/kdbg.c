@@ -50,6 +50,24 @@ static VOID ExpKdbgExtPrintIrp(PIRP Irp);
 BOOLEAN ExpKdbgExtPte(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtDevStack(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtDevObj(ULONG Argc, PCHAR Argv[]);
+BOOLEAN ExpKdbgExtLookaside(ULONG Argc, PCHAR Argv[]);
+
+#define EXP_LOOKASIDE_LOG_ENTRIES 16
+
+typedef struct _EXP_LOOKASIDE_CORRUPTION
+{
+    PVOID CorruptPointer;
+    ULONGLONG Timestamp;
+    PVOID Stack[8];
+    USHORT Frames;
+    USHORT Index;
+    UCHAR PagedList;
+    UCHAR Processor;
+} EXP_LOOKASIDE_CORRUPTION, *PEXP_LOOKASIDE_CORRUPTION;
+
+extern EXP_LOOKASIDE_CORRUPTION ExpLookasideCorruptionLog[EXP_LOOKASIDE_LOG_ENTRIES];
+extern volatile LONG ExpLookasideCorruptionLogIndex;
+extern BOOLEAN ExpDisablePoolLookaside;
 
 BOOLEAN
 ExpKdbgExtPool(
@@ -891,6 +909,59 @@ ExpKdbgExtIrpFind(
     else if (PoolType == PagedPool)
     {
         ExpKdbgExtPoolFindPagedPool(TAG_IRP, 0xFFFFFFFF, ExpKdbgExtIrpFindPrint, &FindCtxt);
+    }
+
+    return TRUE;
+}
+
+static
+VOID
+ExpKdbgExtPrintStackAddress(
+    _In_ PVOID Address)
+{
+    if (!KdbSymPrintAddress(Address, NULL))
+        KdbpPrint("%p", Address);
+}
+
+BOOLEAN
+ExpKdbgExtLookaside(
+    ULONG Argc,
+    PCHAR Argv[])
+{
+    LONG Index, Start;
+    ULONG i, j;
+    PEXP_LOOKASIDE_CORRUPTION Entry;
+
+    UNREFERENCED_PARAMETER(Argc);
+    UNREFERENCED_PARAMETER(Argv);
+
+    Index = ExpLookasideCorruptionLogIndex;
+    Start = max(Index - (EXP_LOOKASIDE_LOG_ENTRIES - 1), 0);
+
+    KdbpPrint("Lookaside log (next=%ld disable=%d)\n", Index, ExpDisablePoolLookaside ? 1 : 0);
+
+    for (i = (ULONG)Start; i <= (ULONG)Index; i++)
+    {
+        Entry = &ExpLookasideCorruptionLog[i & (EXP_LOOKASIDE_LOG_ENTRIES - 1)];
+
+        if (!Entry->CorruptPointer && !Entry->Frames)
+            continue;
+
+        KdbpPrint(" [%lu] ptr=%p paged=%u idx=%u cpu=%u time=%I64u frames=%u\n",
+                  i,
+                  Entry->CorruptPointer,
+                  Entry->PagedList,
+                  Entry->Index,
+                  Entry->Processor,
+                  Entry->Timestamp,
+                  Entry->Frames);
+
+        for (j = 0; j < Entry->Frames && j < RTL_NUMBER_OF(Entry->Stack); j++)
+        {
+            KdbpPrint("    ");
+            ExpKdbgExtPrintStackAddress(Entry->Stack[j]);
+            KdbpPrint("\n");
+        }
     }
 
     return TRUE;

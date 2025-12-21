@@ -264,7 +264,7 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
     build_dir = _locate_build_dir()
 
     print(f"[symbolize] Using build directory: {build_dir}")
-    print("[symbolize] Building livecd_dev.iso …")
+    print("[symbolize] Building livecd_sprint6-6-kernel.iso …")
     build = subprocess.run(
         ["ninja", "livecd"],
         cwd=build_dir,
@@ -278,9 +278,9 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
         raise subprocess.CalledProcessError(build.returncode, build.args)
     print("[symbolize] Build complete.")
 
-    livecd = build_dir / "livecd_dev.iso"
+    livecd = build_dir / "livecd_sprint6-6-kernel.iso"
     if not livecd.exists():
-        raise FileNotFoundError("livecd_dev.iso not found; run the script from the build directory")
+        raise FileNotFoundError("livecdlivecd_sprint6-6-kernel.iso not found; run the script from the build directory")
 
     qemu_cmd = [
         "qemu-system-x86_64",
@@ -321,17 +321,16 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
     seen_lines = 0
     lines_cache: List[str] = []
     poll_interval = 0.5
-    # Treat a 4-second log silence as a stall to keep runs short and stop before
-    # the later PnP storm territory.
-    idle_threshold = 4.0
+    # Treat long silences as stalls; keep generous to allow USB/PnP bring-up.
+    idle_threshold = 30.0
 
     entered_debugger_at: Optional[float] = None
     bootmain_count = 0
     bootmain_truncate_at: Optional[int] = None
     bootmain_threshold = bootmain_limit or 0
 
-    # PnP storm detection: abort if PiQueueDeviceAction spam appears too often.
-    pnp_storm_threshold = 70
+    # Disable PiQueueDeviceAction storm abort; we need full logs for triage.
+    pnp_storm_threshold = 1_000_000
     piqueue_count = 0
 
     last_activity = start_time
@@ -340,21 +339,7 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
         while True:
             if log_path.exists():
                 current_lines = _read_lines_from_path(log_path)
-                # Hard line-count cap: if the log grows too large, stop QEMU to
-                # avoid wasting time in late-boot storms.
-                if stop_reason is None and len(current_lines) >= 6000:
-                    stop_reason = "line-limit"
-                    print(
-                        f"[symbolize] Log exceeded {len(current_lines)} lines "
-                        f"(limit 2400); stopping QEMU."
-                    )
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                    lines_cache = current_lines
-                    break
+                # Disable hard line-count cap to allow full capture to bugcheck.
                 if len(current_lines) > seen_lines:
                     new_lines = current_lines[seen_lines:]
                     for idx, line in enumerate(new_lines):

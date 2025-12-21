@@ -25,6 +25,178 @@
 extern BOOLEAN RtlpUse16ByteSLists;
 #endif
 
+extern GENERAL_LOOKASIDE ExpSmallNPagedPoolLookasideLists[NUMBER_POOL_LOOKASIDE_LISTS];
+extern GENERAL_LOOKASIDE ExpSmallPagedPoolLookasideLists[NUMBER_POOL_LOOKASIDE_LISTS];
+extern BOOLEAN ExpDisablePoolLookaside;
+static LONG ExpLookasideCorruptionHit;
+#if DBG
+#ifndef EXP_LOOKASIDE_HARD_TRAP
+#define EXP_LOOKASIDE_HARD_TRAP 1
+#endif
+#else
+#define EXP_LOOKASIDE_HARD_TRAP 0
+#endif
+
+FORCEINLINE
+VOID
+ExpLogLookasideCorruption(
+    _In_ PKPRCB Prcb,
+    _In_ BOOLEAN PagedList,
+    _In_ USHORT Index,
+    _In_ PVOID CorruptPointer);
+NTSYSAPI
+USHORT
+NTAPI
+RtlCaptureStackBackTrace(
+    _In_ ULONG FramesToSkip,
+    _In_ ULONG FramesToCapture,
+    _Out_writes_to_(FramesToCapture, return) PVOID *BackTrace,
+    _Out_opt_ PULONG BackTraceHash);
+
+#if DBG
+FORCEINLINE
+BOOLEAN
+ExpIsLookasidePointerValid(
+    _In_ PGENERAL_LOOKASIDE Pointer,
+    _In_ BOOLEAN PagedList,
+    _In_ USHORT Index)
+{
+    ULONG_PTR Offset;
+    PGENERAL_LOOKASIDE Start;
+
+    if (!Pointer) return FALSE;
+
+    Start = PagedList ?
+            (PGENERAL_LOOKASIDE)ExpSmallPagedPoolLookasideLists :
+            (PGENERAL_LOOKASIDE)ExpSmallNPagedPoolLookasideLists;
+
+    Offset = (ULONG_PTR)Pointer - (ULONG_PTR)Start;
+    if ((Offset % sizeof(GENERAL_LOOKASIDE)) != 0)
+    {
+        return FALSE;
+    }
+
+    Offset /= sizeof(GENERAL_LOOKASIDE);
+    if (Offset >= NUMBER_POOL_LOOKASIDE_LISTS)
+    {
+        return FALSE;
+    }
+
+    return (Offset == Index);
+}
+#endif
+
+FORCEINLINE
+BOOLEAN
+ExpValidateLookasideHead(
+    _In_ PKPRCB Prcb,
+    _In_ PGENERAL_LOOKASIDE Lookaside,
+    _In_ BOOLEAN PagedList,
+    _In_ USHORT Index)
+{
+#if defined(_WIN64)
+    ULONGLONG NextEntry;
+
+    NextEntry = Lookaside->ListHead.Header16.NextEntry << 4;
+    if (NextEntry)
+    {
+        LONG64 CanonicalHigh = (LONG64)NextEntry >> 48;
+        if ((CanonicalHigh != 0) && (CanonicalHigh != -1))
+        {
+#if DBG && EXP_LOOKASIDE_HARD_TRAP
+            DbgPrintEx(DPFLTR_DEFAULT_ID,
+                       DPFLTR_ERROR_LEVEL,
+                       "EX: lookaside head corrupt (Paged=%d Index=%u Head=%p Next=%p CPU=%u) – breaking\n",
+                       PagedList,
+                       Index,
+                       Lookaside,
+                       (PVOID)(ULONG_PTR)NextEntry,
+                       Prcb->Number);
+            DbgBreakPoint();
+#endif
+            ExpLogLookasideCorruption(Prcb,
+                                      PagedList,
+                                      Index,
+                                      (PVOID)(ULONG_PTR)NextEntry);
+            InterlockedFlushSList(&Lookaside->ListHead);
+            InitializeSListHead(&Lookaside->ListHead);
+            if (InterlockedCompareExchange(&ExpLookasideCorruptionHit, 1, 0) == 0)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID,
+                           DPFLTR_ERROR_LEVEL,
+                           "EX: lookaside head corrupt (Paged=%d Index=%u Head=%p Next=%p CPU=%u) – disabling lookasides\n",
+                           PagedList,
+                           Index,
+                           Lookaside,
+                           (PVOID)(ULONG_PTR)NextEntry,
+                           Prcb->Number);
+            }
+            ExpDisablePoolLookaside = TRUE;
+            return FALSE;
+        }
+    }
+#else
+    UNREFERENCED_PARAMETER(Prcb);
+    UNREFERENCED_PARAMETER(Lookaside);
+    UNREFERENCED_PARAMETER(PagedList);
+    UNREFERENCED_PARAMETER(Index);
+#endif
+    return TRUE;
+}
+
+FORCEINLINE
+PGENERAL_LOOKASIDE
+ExpGetValidPoolLookasideList(
+    _Inout_ PKPRCB Prcb,
+    _In_ BOOLEAN PagedList,
+    _In_ USHORT Index,
+    _In_ BOOLEAN UseGlobal)
+{
+    PGENERAL_LOOKASIDE DefaultList;
+#if DBG
+    PGENERAL_LOOKASIDE Current;
+#endif
+
+    DefaultList = PagedList ?
+                  &ExpSmallPagedPoolLookasideLists[Index] :
+                  &ExpSmallNPagedPoolLookasideLists[Index];
+
+    if (PagedList)
+    {
+        Current = UseGlobal ?
+                  Prcb->PPPagedLookasideList[Index].L :
+                  Prcb->PPPagedLookasideList[Index].P;
+
+#if DBG
+        if (Current && !ExpIsLookasidePointerValid(Current, TRUE, Index))
+        {
+            ExpLogLookasideCorruption(Prcb, TRUE, Index, Current);
+        }
+#endif
+
+        Prcb->PPPagedLookasideList[Index].P = DefaultList;
+        Prcb->PPPagedLookasideList[Index].L = DefaultList;
+    }
+    else
+    {
+        Current = UseGlobal ?
+                  Prcb->PPNPagedLookasideList[Index].L :
+                  Prcb->PPNPagedLookasideList[Index].P;
+
+#if DBG
+        if (Current && !ExpIsLookasidePointerValid(Current, FALSE, Index))
+        {
+            ExpLogLookasideCorruption(Prcb, FALSE, Index, Current);
+        }
+#endif
+
+        Prcb->PPNPagedLookasideList[Index].P = DefaultList;
+        Prcb->PPNPagedLookasideList[Index].L = DefaultList;
+    }
+
+    return DefaultList;
+}
+
 /*
  * This defines when we shrink or expand the table.
  * 3 --> keep the number of used entries in the 33%-66% of the table capacity.
@@ -57,8 +229,104 @@ BOOLEAN ExStopBadTags;
 KSPIN_LOCK ExpLargePoolTableLock;
 ULONG ExpPoolBigEntriesInUse;
 ULONG ExpPoolFlags;
+BOOLEAN ExpDisablePoolLookaside = FALSE;
 ULONG ExPoolFailures;
 ULONGLONG MiLastPoolDumpTime;
+
+#if DBG
+#define EXP_LOOKASIDE_LOG_ENTRIES 16
+
+typedef struct _EXP_LOOKASIDE_CORRUPTION
+{
+    PVOID CorruptPointer;
+    ULONGLONG Timestamp;
+    PVOID Stack[8];
+    USHORT Frames;
+    USHORT Index;
+    UCHAR PagedList;
+    UCHAR Processor;
+} EXP_LOOKASIDE_CORRUPTION, *PEXP_LOOKASIDE_CORRUPTION;
+
+EXP_LOOKASIDE_CORRUPTION ExpLookasideCorruptionLog[EXP_LOOKASIDE_LOG_ENTRIES];
+volatile LONG ExpLookasideCorruptionLogIndex;
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+FORCEINLINE
+VOID
+ExpLogLookasideCorruption(
+    _In_ PKPRCB Prcb,
+    _In_ BOOLEAN PagedList,
+    _In_ USHORT Index,
+    _In_ PVOID CorruptPointer)
+{
+    ULONG Slot;
+    PEXP_LOOKASIDE_CORRUPTION Entry;
+
+    Slot = (ULONG)InterlockedIncrement(&ExpLookasideCorruptionLogIndex);
+    Entry = &ExpLookasideCorruptionLog[Slot & (EXP_LOOKASIDE_LOG_ENTRIES - 1)];
+
+    Entry->CorruptPointer = CorruptPointer;
+    Entry->Timestamp = KeQueryInterruptTime();
+    Entry->PagedList = PagedList ? 1 : 0;
+    Entry->Index = Index;
+    Entry->Processor = (UCHAR)Prcb->Number;
+    Entry->Frames = RtlCaptureStackBackTrace(1,
+                                             RTL_NUMBER_OF(Entry->Stack),
+                                             Entry->Stack,
+                                             NULL);
+
+    DPRINT1("EX: corrupt pool lookaside pointer (Paged=%d Index=%u Ptr=%p Prcb=%p CPU=%u)\n",
+            PagedList,
+            Index,
+            CorruptPointer,
+            Prcb,
+            Prcb->Number);
+}
+
+FORCEINLINE
+VOID
+ExpDumpLookasideCorruptionLog(VOID)
+{
+    ULONG i, j;
+    EXP_LOOKASIDE_CORRUPTION *Entry;
+
+    DPRINT1("EX: lookaside corruption log next=%ld\n", ExpLookasideCorruptionLogIndex);
+
+    for (i = 0; i < EXP_LOOKASIDE_LOG_ENTRIES; i++)
+    {
+        Entry = &ExpLookasideCorruptionLog[i];
+        if (!Entry->CorruptPointer && !Entry->Frames)
+            continue;
+
+        DPRINT1("  [%u] Ptr=%p Paged=%u Index=%u CPU=%u Time=%I64u Frames=%u\n",
+                i,
+                Entry->CorruptPointer,
+                Entry->PagedList,
+                Entry->Index,
+                Entry->Processor,
+                Entry->Timestamp,
+                Entry->Frames);
+        for (j = 0; j < Entry->Frames && j < RTL_NUMBER_OF(Entry->Stack); j++)
+        {
+            DPRINT1("        %p\n", Entry->Stack[j]);
+        }
+    }
+}
+#else
+FORCEINLINE
+VOID
+ExpLogLookasideCorruption(
+    _In_ PKPRCB Prcb,
+    _In_ BOOLEAN PagedList,
+    _In_ USHORT Index,
+    _In_ PVOID CorruptPointer)
+{
+    UNREFERENCED_PARAMETER(Prcb);
+    UNREFERENCED_PARAMETER(PagedList);
+    UNREFERENCED_PARAMETER(Index);
+    UNREFERENCED_PARAMETER(CorruptPointer);
+}
+#endif
 
 /* Pool block/header/list access macros */
 #define POOL_ENTRY(x)       (PPOOL_HEADER)((ULONG_PTR)(x) - sizeof(POOL_HEADER))
@@ -2151,26 +2419,47 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
     //
     if (i <= NUMBER_POOL_LOOKASIDE_LISTS)
     {
-        //
-        // Try popping it from the per-CPU lookaside list
-        //
-        LookasideList = (PoolType == PagedPool) ?
-                         Prcb->PPPagedLookasideList[i - 1].P :
-                         Prcb->PPNPagedLookasideList[i - 1].P;
-        LookasideList->TotalAllocates++;
-        ExpEnsureSListHeadIsSane(&LookasideList->ListHead);
-        Entry = (PPOOL_HEADER)InterlockedPopEntrySList(&LookasideList->ListHead);
-        if (!Entry)
+        PGENERAL_LOOKASIDE UsedList = NULL;
+        BOOLEAN PagedList = (PoolType == PagedPool);
+        USHORT LookasideIndex = i - 1;
+
+        Entry = NULL;
+
+        /* Always validate the stored lookaside pointers to catch corruption. */
+        ExpGetValidPoolLookasideList(Prcb, PagedList, LookasideIndex, FALSE);
+        ExpGetValidPoolLookasideList(Prcb, PagedList, LookasideIndex, TRUE);
+
+        if (!ExpDisablePoolLookaside)
         {
             //
-            // We failed, try popping it from the global list
+            // Try popping it from the per-CPU lookaside list
             //
-            LookasideList = (PoolType == PagedPool) ?
-                             Prcb->PPPagedLookasideList[i - 1].L :
-                             Prcb->PPNPagedLookasideList[i - 1].L;
-            LookasideList->TotalAllocates++;
-            ExpEnsureSListHeadIsSane(&LookasideList->ListHead);
-            Entry = (PPOOL_HEADER)InterlockedPopEntrySList(&LookasideList->ListHead);
+            LookasideList = ExpGetValidPoolLookasideList(Prcb,
+                                                         PagedList,
+                                                         LookasideIndex,
+                                                         FALSE);
+            if (ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
+            {
+                LookasideList->TotalAllocates++;
+                Entry = (PPOOL_HEADER)InterlockedPopEntrySList(&LookasideList->ListHead);
+                if (Entry) UsedList = LookasideList;
+                if (!Entry)
+                {
+                    //
+                    // We failed, try popping it from the global list
+                    //
+                    LookasideList = ExpGetValidPoolLookasideList(Prcb,
+                                                                 PagedList,
+                                                                 LookasideIndex,
+                                                                 TRUE);
+                    if (ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
+                    {
+                        LookasideList->TotalAllocates++;
+                        Entry = (PPOOL_HEADER)InterlockedPopEntrySList(&LookasideList->ListHead);
+                        if (Entry) UsedList = LookasideList;
+                    }
+                }
+            }
         }
 
         //
@@ -2178,7 +2467,7 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
         //
         if (Entry)
         {
-            LookasideList->AllocateHits++;
+            UsedList->AllocateHits++;
 
             //
             // Get the real entry, write down its pool type, and track it
@@ -2798,34 +3087,50 @@ ExFreePoolWithTag(IN PVOID P,
     //
     if (BlockSize <= NUMBER_POOL_LOOKASIDE_LISTS)
     {
-        //
-        // Try pushing it into the per-CPU lookaside list
-        //
-        LookasideList = (PoolType == PagedPool) ?
-                         Prcb->PPPagedLookasideList[BlockSize - 1].P :
-                         Prcb->PPNPagedLookasideList[BlockSize - 1].P;
-        LookasideList->TotalFrees++;
-        ExpEnsureSListHeadIsSane(&LookasideList->ListHead);
-        if (ExQueryDepthSList(&LookasideList->ListHead) < LookasideList->Depth)
-        {
-            LookasideList->FreeHits++;
-            InterlockedPushEntrySList(&LookasideList->ListHead, P);
-            return;
-        }
+        BOOLEAN PagedList = (PoolType == PagedPool);
+        USHORT LookasideIndex = BlockSize - 1;
 
-        //
-        // We failed, try to push it into the global lookaside list
-        //
-        LookasideList = (PoolType == PagedPool) ?
-                         Prcb->PPPagedLookasideList[BlockSize - 1].L :
-                         Prcb->PPNPagedLookasideList[BlockSize - 1].L;
-        LookasideList->TotalFrees++;
-        ExpEnsureSListHeadIsSane(&LookasideList->ListHead);
-        if (ExQueryDepthSList(&LookasideList->ListHead) < LookasideList->Depth)
+        /* Always validate the stored lookaside pointers to catch corruption. */
+        ExpGetValidPoolLookasideList(Prcb, PagedList, LookasideIndex, FALSE);
+        ExpGetValidPoolLookasideList(Prcb, PagedList, LookasideIndex, TRUE);
+
+        if (!ExpDisablePoolLookaside)
         {
-            LookasideList->FreeHits++;
-            InterlockedPushEntrySList(&LookasideList->ListHead, P);
-            return;
+            //
+            // Try pushing it into the per-CPU lookaside list
+            //
+            LookasideList = ExpGetValidPoolLookasideList(Prcb,
+                                                         PagedList,
+                                                         LookasideIndex,
+                                                         FALSE);
+            if (ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
+            {
+                LookasideList->TotalFrees++;
+                if (ExQueryDepthSList(&LookasideList->ListHead) < LookasideList->Depth)
+                {
+                    LookasideList->FreeHits++;
+                    InterlockedPushEntrySList(&LookasideList->ListHead, P);
+                    return;
+                }
+            }
+
+            //
+            // We failed, try to push it into the global lookaside list
+            //
+            LookasideList = ExpGetValidPoolLookasideList(Prcb,
+                                                         PagedList,
+                                                         LookasideIndex,
+                                                         TRUE);
+            if (ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
+            {
+                LookasideList->TotalFrees++;
+                if (ExQueryDepthSList(&LookasideList->ListHead) < LookasideList->Depth)
+                {
+                    LookasideList->FreeHits++;
+                    InterlockedPushEntrySList(&LookasideList->ListHead, P);
+                    return;
+                }
+            }
         }
     }
 

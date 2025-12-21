@@ -229,7 +229,6 @@ static const UCHAR LinkTable[] = {
 };
 C_ASSERT(RTL_NUMBER_OF(LinkTable) == INTERRUPT_ENDPOINTs + 1);
 
-#if DBG
 static PCSTR
 EHCI_DecodeConditionCode(UCHAR Status)
 {
@@ -249,7 +248,6 @@ EHCI_DecodeConditionCode(UCHAR Status)
             return "STATUS_OK";
     }
 }
-#endif
 
 PEHCI_HCD_TD
 NTAPI
