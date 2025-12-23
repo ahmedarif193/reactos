@@ -44,6 +44,17 @@ else()
     set(CLANG_SUFFIX "")
 endif()
 
+set(_CLANG_C_COMPILER "clang${CLANG_SUFFIX}")
+set(_CLANG_CXX_COMPILER "clang++${CLANG_SUFFIX}")
+if(CLANG_SUFFIX AND DEFINED TOOLCHAIN_PATH)
+    if(NOT EXISTS "${TOOLCHAIN_PATH}/${_CLANG_C_COMPILER}")
+        set(_CLANG_C_COMPILER "clang")
+    endif()
+    if(NOT EXISTS "${TOOLCHAIN_PATH}/${_CLANG_CXX_COMPILER}")
+        set(_CLANG_CXX_COMPILER "clang++")
+    endif()
+endif()
+
 # Which tools to use
 set(triplet ${CMAKE_SYSTEM_PROCESSOR}-w64-mingw32)
 
@@ -113,9 +124,9 @@ macro(_clang_mingw_refresh_hint_args)
 endmacro()
 _clang_mingw_refresh_hint_args()
 
-set(CMAKE_C_COMPILER clang${CLANG_SUFFIX})
+set(CMAKE_C_COMPILER ${_CLANG_C_COMPILER})
 set(CMAKE_C_COMPILER_TARGET ${triplet})
-set(CMAKE_CXX_COMPILER clang++${CLANG_SUFFIX})
+set(CMAKE_CXX_COMPILER ${_CLANG_CXX_COMPILER})
 set(CMAKE_CXX_COMPILER_TARGET ${triplet})
 set(CMAKE_ASM_COMPILER_ID GNU)
 
@@ -209,8 +220,13 @@ _clang_mingw_require_tool(_CLANG_MINGW_WINDMC "windmc")
 set(CMAKE_MC_COMPILER ${_CLANG_MINGW_WINDMC} CACHE FILEPATH "MinGW message compiler" FORCE)
 _clang_mingw_require_tool(_CLANG_MINGW_WINDRES "windres")
 set(CMAKE_RC_COMPILER ${_CLANG_MINGW_WINDRES} CACHE FILEPATH "MinGW resource compiler" FORCE)
-_clang_mingw_require_tool(_CLANG_MINGW_DLLTOOL "dlltool")
-set(CMAKE_DLLTOOL ${_CLANG_MINGW_DLLTOOL} CACHE FILEPATH "MinGW dlltool" FORCE)
+# Prefer GNU binutils dlltool when available; llvm-dlltool lacks --kill-at/--output-lib
+if(APPLE AND EXISTS "/opt/homebrew/bin/${_CLANG_MINGW_PREFIX}dlltool")
+    set(CMAKE_DLLTOOL "/opt/homebrew/bin/${_CLANG_MINGW_PREFIX}dlltool" CACHE FILEPATH "MinGW dlltool" FORCE)
+else()
+    _clang_mingw_require_tool(_CLANG_MINGW_DLLTOOL "dlltool")
+    set(CMAKE_DLLTOOL ${_CLANG_MINGW_DLLTOOL} CACHE FILEPATH "MinGW dlltool" FORCE)
+endif()
 _clang_mingw_require_tool(_CLANG_MINGW_AR "ar")
 # Always use binutils from the MinGW toolchain for archive creation.
 # This avoids incompatibilities with llvm-dlltool option handling.

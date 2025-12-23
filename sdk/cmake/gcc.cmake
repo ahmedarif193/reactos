@@ -507,8 +507,8 @@ if(NOT ARCH STREQUAL "i386")
     set(DECO_OPTION "-@")
 endif()
 
-# If we are building i386 using an x86_64 multilib toolchain, ensure dlltool targets 32-bit
-if(ARCH STREQUAL "i386" AND REACTOS_MULTILIB_I386)
+# Ensure dlltool gets the correct machine flags
+if(ARCH STREQUAL "i386")
     # Ensure dlltool generates 32-bit code and assembles with 32-bit mode
     # Derive the 'as' program from the toolchain path (replace ...-gcc with ...-as)
     set(_dlltool_as ${CMAKE_ASM_COMPILER})
@@ -518,8 +518,13 @@ if(ARCH STREQUAL "i386" AND REACTOS_MULTILIB_I386)
     endif()
     # x86_64-w64-mingw32-as accepts --32 to assemble 32-bit objects
     set(DLLTOOL_EXTRA_ARGS -m i386 --as ${_dlltool_as} --as-flags=--32)
+elseif(ARCH STREQUAL "amd64")
+    set(DLLTOOL_EXTRA_ARGS -m i386:x86-64)
 else()
     set(DLLTOOL_EXTRA_ARGS)
+endif()
+if(NOT DLLTOOL_EXTRA_ARGS)
+    set(DLLTOOL_EXTRA_ARGS -m i386:x86-64)
 endif()
 
 function(fixup_load_config _target)
@@ -559,6 +564,9 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
     if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
     # Prepare dlltool args per-library
     set(_dlltool_args ${DLLTOOL_EXTRA_ARGS})
+        if(ARCH STREQUAL "amd64" AND NOT _dlltool_args)
+            set(_dlltool_args -m i386:x86-64)
+        endif()
         # Using --kill-at on i386 can drop stdcall decoration (@N) from
         # import symbols. With --disable-stdcall-fixup enabled for linkers
         # in our multilib subbuild, that causes unresolved references.
@@ -578,6 +586,9 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
     else()
     # Prepare dlltool args per-library
     set(_dlltool_args ${DLLTOOL_EXTRA_ARGS})
+        if(ARCH STREQUAL "amd64" AND NOT _dlltool_args)
+            set(_dlltool_args -m i386:x86-64)
+        endif()
         add_custom_command(
             OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}.a
             # Delete any existing file in the private directory before creating new one
@@ -625,6 +636,9 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
     if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
     # Prepare dlltool args per-library
     set(_dlltool_args ${DLLTOOL_EXTRA_ARGS})
+        if(ARCH STREQUAL "amd64" AND NOT _dlltool_args)
+            set(_dlltool_args -m i386:x86-64)
+        endif()
         add_custom_command(
             OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
             # Delete any existing file in the private directory before creating new one
@@ -636,6 +650,9 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
     else()
     # Prepare dlltool args per-library
     set(_dlltool_args ${DLLTOOL_EXTRA_ARGS})
+        if(ARCH STREQUAL "amd64" AND NOT _dlltool_args)
+            set(_dlltool_args -m i386:x86-64)
+        endif()
         add_custom_command(
             OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
             # Delete any existing file in the private directory before creating new one
@@ -846,6 +863,12 @@ if(NOT IS_ABSOLUTE "${GXX_EXECUTABLE}")
     unset(_gxx_search_paths)
 endif()
 
+# Allow MMX/SSE2 builtins when using clang (llvm-mingw); some headers emit MMX intrinsics.
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mmmx -msse2" CACHE STRING "C compiler flags" FORCE)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mmmx -msse2" CACHE STRING "C++ compiler flags" FORCE)
+endif()
+
 set(GXX_MULTIARCH_ARGS)
 if(ARCH STREQUAL "i386")
     set(GXX_MULTIARCH_ARGS -m32)
@@ -866,6 +889,31 @@ endif()
 add_library(libgcc STATIC IMPORTED)
 execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libgcc.a OUTPUT_VARIABLE LIBGCC_LOCATION)
 string(STRIP "${LIBGCC_LOCATION}" LIBGCC_LOCATION)
+get_filename_component(_LIBGCC_REALPATH "${LIBGCC_LOCATION}" REALPATH)
+if(NOT EXISTS "${_LIBGCC_REALPATH}")
+    get_filename_component(_LIBGCC_BIN_DIR "${GXX_EXECUTABLE}" DIRECTORY)
+    get_filename_component(_LIBGCC_TOOLCHAIN_ROOT "${_LIBGCC_BIN_DIR}" DIRECTORY)
+    set(_LIBGCC_BUILTINS_ARCH x86_64)
+    if(ARCH STREQUAL "i386")
+        set(_LIBGCC_BUILTINS_ARCH i386)
+    elseif(ARCH STREQUAL "arm")
+        set(_LIBGCC_BUILTINS_ARCH arm)
+    elseif(ARCH STREQUAL "arm64")
+        set(_LIBGCC_BUILTINS_ARCH aarch64)
+    endif()
+    file(GLOB _LIBGCC_BUILTINS_CANDIDATES "${_LIBGCC_TOOLCHAIN_ROOT}/lib/clang/*/lib/windows/libclang_rt.builtins-${_LIBGCC_BUILTINS_ARCH}.a")
+    list(LENGTH _LIBGCC_BUILTINS_CANDIDATES _LIBGCC_BUILTINS_COUNT)
+    if(_LIBGCC_BUILTINS_COUNT GREATER 0)
+        list(GET _LIBGCC_BUILTINS_CANDIDATES 0 LIBGCC_LOCATION)
+    else()
+        message(WARNING "libgcc.a not found; compiler-rt builtins will not be linked automatically")
+    endif()
+    unset(_LIBGCC_BUILTINS_CANDIDATES)
+    unset(_LIBGCC_BUILTINS_COUNT)
+    unset(_LIBGCC_BUILTINS_ARCH)
+    unset(_LIBGCC_BIN_DIR)
+    unset(_LIBGCC_TOOLCHAIN_ROOT)
+endif()
 set_target_properties(libgcc PROPERTIES IMPORTED_LOCATION ${LIBGCC_LOCATION})
 # libgcc needs kernel32 and winpthread (an appropriate CRT must be linked manually)
 target_link_libraries(libgcc INTERFACE libwinpthread libkernel32)
@@ -873,6 +921,28 @@ target_link_libraries(libgcc INTERFACE libwinpthread libkernel32)
 add_library(libsupc++ STATIC IMPORTED GLOBAL)
 execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libsupc++.a OUTPUT_VARIABLE LIBSUPCXX_LOCATION)
 string(STRIP "${LIBSUPCXX_LOCATION}" LIBSUPCXX_LOCATION)
+get_filename_component(_LIBSUPCXX_REALPATH "${LIBSUPCXX_LOCATION}" REALPATH)
+if(NOT LIBSUPCXX_LOCATION OR LIBSUPCXX_LOCATION STREQUAL "libsupc++.a" OR NOT EXISTS "${_LIBSUPCXX_REALPATH}")
+    get_filename_component(_LIBSUPCXX_BIN_DIR "${GXX_EXECUTABLE}" DIRECTORY)
+    get_filename_component(_LIBSUPCXX_TOOLCHAIN_ROOT "${_LIBSUPCXX_BIN_DIR}" DIRECTORY)
+    find_library(_LIBSUPCXX_ALT NAMES c++abi libc++abi PATHS
+        "${_LIBSUPCXX_TOOLCHAIN_ROOT}/${CMAKE_CXX_COMPILER_TARGET}/lib"
+        "${_LIBSUPCXX_TOOLCHAIN_ROOT}/${MINGW_TOOLCHAIN_PREFIX}/lib"
+        "${_LIBSUPCXX_TOOLCHAIN_ROOT}/generic-w64-mingw32/lib"
+        "${_LIBSUPCXX_TOOLCHAIN_ROOT}/x86_64-w64-mingw32/lib"
+        "${_LIBSUPCXX_TOOLCHAIN_ROOT}/i686-w64-mingw32/lib"
+        "${_LIBSUPCXX_TOOLCHAIN_ROOT}/lib"
+        NO_DEFAULT_PATH)
+    if(_LIBSUPCXX_ALT)
+        set(LIBSUPCXX_LOCATION "${_LIBSUPCXX_ALT}")
+        set(_LIBSTDCCXX_IS_LIBCXX TRUE)
+    else()
+        message(WARNING "libsupc++.a not found; using toolchain defaults may fail to link C++ exceptions")
+    endif()
+    unset(_LIBSUPCXX_ALT)
+    unset(_LIBSUPCXX_BIN_DIR)
+    unset(_LIBSUPCXX_TOOLCHAIN_ROOT)
+endif()
 set_target_properties(libsupc++ PROPERTIES IMPORTED_LOCATION ${LIBSUPCXX_LOCATION})
 
 # Add libgcc_eh for exception handling on amd64
@@ -880,6 +950,27 @@ if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
     add_library(libgcc_eh STATIC IMPORTED GLOBAL)
     execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libgcc_eh.a OUTPUT_VARIABLE LIBGCCEH_LOCATION)
     string(STRIP "${LIBGCCEH_LOCATION}" LIBGCCEH_LOCATION)
+    get_filename_component(_LIBGCCEH_REALPATH "${LIBGCCEH_LOCATION}" REALPATH)
+    if(NOT EXISTS "${_LIBGCCEH_REALPATH}")
+        get_filename_component(_LIBGCCEH_BIN_DIR "${GXX_EXECUTABLE}" DIRECTORY)
+        get_filename_component(_LIBGCCEH_TOOLCHAIN_ROOT "${_LIBGCCEH_BIN_DIR}" DIRECTORY)
+        find_library(_LIBGCCEH_ALT NAMES unwind libunwind PATHS
+            "${_LIBGCCEH_TOOLCHAIN_ROOT}/${CMAKE_CXX_COMPILER_TARGET}/lib"
+            "${_LIBGCCEH_TOOLCHAIN_ROOT}/${MINGW_TOOLCHAIN_PREFIX}/lib"
+            "${_LIBGCCEH_TOOLCHAIN_ROOT}/generic-w64-mingw32/lib"
+            "${_LIBGCCEH_TOOLCHAIN_ROOT}/x86_64-w64-mingw32/lib"
+            "${_LIBGCCEH_TOOLCHAIN_ROOT}/i686-w64-mingw32/lib"
+            "${_LIBGCCEH_TOOLCHAIN_ROOT}/lib"
+            NO_DEFAULT_PATH)
+        if(_LIBGCCEH_ALT)
+            set(LIBGCCEH_LOCATION "${_LIBGCCEH_ALT}")
+        else()
+            message(WARNING "libgcc_eh.a not found; falling back may be required for exception handling")
+        endif()
+        unset(_LIBGCCEH_ALT)
+        unset(_LIBGCCEH_BIN_DIR)
+        unset(_LIBGCCEH_TOOLCHAIN_ROOT)
+    endif()
     set_target_properties(libgcc_eh PROPERTIES IMPORTED_LOCATION ${LIBGCCEH_LOCATION})
     # libsupc++ requires libgcc_eh, libgcc and stdc++compat
     target_link_libraries(libsupc++ INTERFACE libgcc_eh libgcc stdc++compat)
@@ -901,6 +992,42 @@ string(STRIP "${LIBSTDCCXX_LOCATION}" LIBSTDCCXX_LOCATION)
 set_target_properties(libstdc++ PROPERTIES IMPORTED_LOCATION ${LIBSTDCCXX_LOCATION})
 # Derive the MinGW C++ include directories so Clang can find standard headers.
 get_filename_component(_LIBSTDCCXX_REALPATH "${LIBSTDCCXX_LOCATION}" REALPATH)
+if(NOT EXISTS "${_LIBSTDCCXX_REALPATH}")
+    set(_LIBSTDCCXX_REALPATH "")
+endif()
+get_filename_component(_GXX_BIN_DIR "${GXX_EXECUTABLE}" DIRECTORY)
+get_filename_component(_GXX_TOOLCHAIN_ROOT "${_GXX_BIN_DIR}" DIRECTORY)
+set(_LIBSTDCCXX_IS_LIBCXX FALSE)
+if(NOT _LIBSTDCCXX_REALPATH)
+    set(_LIBCXX_STATIC_CANDIDATES
+        "${_GXX_TOOLCHAIN_ROOT}/${_LIBSTDCCXX_TRIPLET}/lib/libc++.a"
+        "${_GXX_TOOLCHAIN_ROOT}/x86_64-w64-mingw32/lib/libc++.a"
+        "${_GXX_TOOLCHAIN_ROOT}/i686-w64-mingw32/lib/libc++.a"
+        "${_GXX_TOOLCHAIN_ROOT}/generic-w64-mingw32/lib/libc++.a")
+    foreach(_LIBCXX_CAND IN LISTS _LIBCXX_STATIC_CANDIDATES)
+        if(EXISTS "${_LIBCXX_CAND}")
+            set(_LIBCXX_STATIC "${_LIBCXX_CAND}")
+            break()
+        endif()
+    endforeach()
+    if(NOT _LIBCXX_STATIC)
+        find_library(_LIBCXX_STATIC NAMES libc++.a PATHS
+            "${_GXX_TOOLCHAIN_ROOT}/${CMAKE_CXX_COMPILER_TARGET}/lib"
+            "${_GXX_TOOLCHAIN_ROOT}/${CMAKE_CXX_COMPILER_TARGET}/lib64"
+            "${_GXX_TOOLCHAIN_ROOT}/${MINGW_TOOLCHAIN_PREFIX}/lib"
+            "${_GXX_TOOLCHAIN_ROOT}/generic-w64-mingw32/lib"
+            "${_GXX_TOOLCHAIN_ROOT}/x86_64-w64-mingw32/lib"
+            "${_GXX_TOOLCHAIN_ROOT}/i686-w64-mingw32/lib"
+            "${_GXX_TOOLCHAIN_ROOT}/lib"
+            "${_GXX_TOOLCHAIN_ROOT}/lib64"
+            NO_DEFAULT_PATH)
+    endif()
+    if(_LIBCXX_STATIC)
+        set(LIBSTDCCXX_LOCATION "${_LIBCXX_STATIC}")
+        set(_LIBSTDCCXX_REALPATH "${_LIBCXX_STATIC}")
+        set(_LIBSTDCCXX_IS_LIBCXX TRUE)
+    endif()
+endif()
 get_filename_component(_LIBSTDCCXX_DIR "${_LIBSTDCCXX_REALPATH}" DIRECTORY)
 get_filename_component(_LIBSTDCCXX_VERSION "${_LIBSTDCCXX_DIR}" NAME)
 get_filename_component(_LIBSTDCCXX_TRIPLET_DIR "${_LIBSTDCCXX_DIR}" DIRECTORY)
@@ -909,11 +1036,17 @@ get_filename_component(_LIBSTDCCXX_LIBGCC_DIR "${_LIBSTDCCXX_TRIPLET_DIR}" DIREC
 get_filename_component(_LIBSTDCCXX_LIB_DIR "${_LIBSTDCCXX_LIBGCC_DIR}" DIRECTORY)
 get_filename_component(_LIBSTDCCXX_PREFIX "${_LIBSTDCCXX_LIB_DIR}" DIRECTORY)
 set(_LIBSTDCCXX_FALLBACK_INCLUDE_BASE "${_LIBSTDCCXX_PREFIX}/${_LIBSTDCCXX_TRIPLET}/include/c++/${_LIBSTDCCXX_VERSION}")
-get_filename_component(_GXX_BIN_DIR "${GXX_EXECUTABLE}" DIRECTORY)
-get_filename_component(_GXX_TOOLCHAIN_ROOT "${_GXX_BIN_DIR}" DIRECTORY)
 set(_LIBSTDCCXX_TRIPLET_CANDIDATE "${CMAKE_CXX_COMPILER_TARGET}")
 if(NOT _LIBSTDCCXX_TRIPLET_CANDIDATE)
     set(_LIBSTDCCXX_TRIPLET_CANDIDATE "${_LIBSTDCCXX_TRIPLET}")
+endif()
+if(NOT _LIBSTDCCXX_TRIPLET_CANDIDATE)
+    execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -dumpmachine OUTPUT_VARIABLE _LIBSTDCCXX_TRIPLET_CANDIDATE ERROR_QUIET)
+    string(STRIP "${_LIBSTDCCXX_TRIPLET_CANDIDATE}" _LIBSTDCCXX_TRIPLET_CANDIDATE)
+endif()
+if(NOT _LIBSTDCCXX_TRIPLET_CANDIDATE AND DEFINED MINGW_TOOLCHAIN_PREFIX)
+    set(_LIBSTDCCXX_TRIPLET_CANDIDATE "${MINGW_TOOLCHAIN_PREFIX}")
+    string(REGEX REPLACE "-$" "" _LIBSTDCCXX_TRIPLET_CANDIDATE "${_LIBSTDCCXX_TRIPLET_CANDIDATE}")
 endif()
 execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -dumpfullversion OUTPUT_VARIABLE _GXX_FULL_VERSION ERROR_QUIET)
 string(STRIP "${_GXX_FULL_VERSION}" _GXX_FULL_VERSION)
@@ -924,6 +1057,12 @@ endif()
 if(NOT _GXX_FULL_VERSION)
     set(_GXX_FULL_VERSION "${_LIBSTDCCXX_VERSION}")
 endif()
+if(NOT _GXX_FULL_VERSION)
+    set(_GXX_FULL_VERSION "v1")
+endif()
+if(NOT _LIBSTDCCXX_LIB_DIR OR _LIBSTDCCXX_LIB_DIR STREQUAL ".")
+    set(_LIBSTDCCXX_LIB_DIR "${_GXX_TOOLCHAIN_ROOT}/${_LIBSTDCCXX_TRIPLET_CANDIDATE}/lib")
+endif()
 set(_LIBSTDCCXX_INCLUDE_BASE "${_GXX_TOOLCHAIN_ROOT}/${_LIBSTDCCXX_TRIPLET_CANDIDATE}/include/c++/${_GXX_FULL_VERSION}")
 if(NOT EXISTS "${_LIBSTDCCXX_INCLUDE_BASE}" AND DEFINED MINGW_TOOLCHAIN_PREFIX AND NOT "${MINGW_TOOLCHAIN_PREFIX}" STREQUAL "")
     string(REGEX REPLACE "-$" "" _CLANG_MINGW_TRIPLET "${MINGW_TOOLCHAIN_PREFIX}")
@@ -932,6 +1071,19 @@ if(NOT EXISTS "${_LIBSTDCCXX_INCLUDE_BASE}" AND DEFINED MINGW_TOOLCHAIN_PREFIX A
         set(_LIBSTDCCXX_INCLUDE_BASE "${_GXX_TOOLCHAIN_ROOT}/${_LIBSTDCCXX_TRIPLET_CANDIDATE}/include/c++/${_GXX_FULL_VERSION}")
     endif()
     unset(_CLANG_MINGW_TRIPLET)
+endif()
+if(NOT EXISTS "${_LIBSTDCCXX_INCLUDE_BASE}")
+    foreach(_LIBCXX_BASE IN ITEMS
+        "${_GXX_TOOLCHAIN_ROOT}/${_LIBSTDCCXX_TRIPLET_CANDIDATE}/include/c++/v1"
+        "${_GXX_TOOLCHAIN_ROOT}/generic-w64-mingw32/include/c++/v1"
+        "${_GXX_TOOLCHAIN_ROOT}/include/c++/v1"
+        "${_GXX_TOOLCHAIN_ROOT}/share/libc++/v1")
+        if(EXISTS "${_LIBCXX_BASE}")
+            set(_LIBSTDCCXX_INCLUDE_BASE "${_LIBCXX_BASE}")
+            set(_LIBSTDCCXX_IS_LIBCXX TRUE)
+            break()
+        endif()
+    endforeach()
 endif()
 if(NOT EXISTS "${_LIBSTDCCXX_INCLUDE_BASE}")
     set(_LIBSTDCCXX_INCLUDE_BASE "${_LIBSTDCCXX_FALLBACK_INCLUDE_BASE}")
@@ -957,6 +1109,7 @@ foreach(_LIBSTDCCXX_EXTRA_DIR IN LISTS _LIBSTDCCXX_EXTRA_INCLUDE_DIRS)
     endif()
 endforeach()
 unset(_LIBSTDCCXX_EXTRA_INCLUDE_DIRS)
+set_target_properties(libstdc++ PROPERTIES IMPORTED_LOCATION ${LIBSTDCCXX_LOCATION})
 message(STATUS "Detected libstdc++ include roots: ${_LIBSTDCCXX_INCLUDE_DIRS}")
 if(_LIBSTDCCXX_INCLUDE_DIRS AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     foreach(_STDCPP_INCLUDE_DIR IN LISTS _LIBSTDCCXX_INCLUDE_DIRS)
@@ -969,7 +1122,30 @@ unset(_GXX_FULL_VERSION)
 unset(_LIBSTDCCXX_TRIPLET_CANDIDATE)
 unset(_LIBSTDCCXX_FALLBACK_INCLUDE_BASE)
 # libstdc++ requires libsupc++ and mingwex provided by GCC
-target_link_libraries(libstdc++ INTERFACE libsupc++ libmingwex oldnames)
+set(_LIBSTDCCXX_DEPS libsupc++ libmingwex oldnames)
+if(_LIBSTDCCXX_IS_LIBCXX)
+    set(_LIBSTDCCXX_DEPS libmingwex oldnames)
+    find_library(_LIBCXXABI_STATIC NAMES c++abi libc++abi PATHS
+        "${_LIBSTDCCXX_LIB_DIR}"
+        "${_LIBSTDCCXX_LIB_DIR}/../lib"
+        "${_GXX_TOOLCHAIN_ROOT}/lib"
+        NO_DEFAULT_PATH)
+    find_library(_LIBUNWIND_STATIC NAMES unwind libunwind PATHS
+        "${_LIBSTDCCXX_LIB_DIR}"
+        "${_LIBSTDCCXX_LIB_DIR}/../lib"
+        "${_GXX_TOOLCHAIN_ROOT}/lib"
+        NO_DEFAULT_PATH)
+    if(_LIBCXXABI_STATIC)
+        list(APPEND _LIBSTDCCXX_DEPS "${_LIBCXXABI_STATIC}")
+    endif()
+    if(_LIBUNWIND_STATIC)
+        list(APPEND _LIBSTDCCXX_DEPS "${_LIBUNWIND_STATIC}")
+    endif()
+endif()
+target_link_libraries(libstdc++ INTERFACE ${_LIBSTDCCXX_DEPS})
+unset(_LIBCXXABI_STATIC)
+unset(_LIBUNWIND_STATIC)
+unset(_LIBSTDCCXX_DEPS)
 
 # Helper interface library that carries the C++ STL usage requirements
 add_library(cppstl INTERFACE)

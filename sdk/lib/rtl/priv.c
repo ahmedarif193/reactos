@@ -443,7 +443,11 @@ RtlAdjustPrivilege(IN ULONG Privilege,
 
     if (!NT_SUCCESS (Status))
     {
-        DPRINT1("Retrieving token handle failed (Status %lx)\n", Status);
+        /* STATUS_NO_TOKEN is expected when CurrentThread=TRUE but no impersonation is active */
+        if (!(CurrentThread && (Status == STATUS_NO_TOKEN)))
+        {
+            DPRINT1("Retrieving token handle failed (Status %lx)\n", Status);
+        }
         return Status;
     }
 

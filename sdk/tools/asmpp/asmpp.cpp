@@ -517,7 +517,7 @@ translate_expression(TokenList &tokens, size_t index, const vector<string> &macr
                 }
                 else if (iequals(tok.str(), "not"))
                 {
-                    printf("!");
+                    printf("~");
                     index += 1;
                 }
                 else
@@ -531,12 +531,48 @@ translate_expression(TokenList &tokens, size_t index, const vector<string> &macr
                 {
                     return index;
                 }
+            case TOKEN_TYPE::Identifier:
+                if (iequals(tok.str(), "eq"))
+                {
+                    printf("==");
+                    index += 1;
+                }
+                else if (iequals(tok.str(), "ne"))
+                {
+                    printf("!=");
+                    index += 1;
+                }
+                else if (iequals(tok.str(), "lt"))
+                {
+                    printf("<");
+                    index += 1;
+                }
+                else if (iequals(tok.str(), "le"))
+                {
+                    printf("<=");
+                    index += 1;
+                }
+                else if (iequals(tok.str(), "gt"))
+                {
+                    printf(">");
+                    index += 1;
+                }
+                else if (iequals(tok.str(), "ge"))
+                {
+                    printf(">=");
+                    index += 1;
+                }
+                else
+                {
+                    index = translate_token(tokens, index, macro_params);
+                }
+                break;
+
             case TOKEN_TYPE::WhiteSpace:
             case TOKEN_TYPE::BraceOpen:
             case TOKEN_TYPE::BraceClose:
             case TOKEN_TYPE::DecNumber:
             case TOKEN_TYPE::HexNumber:
-            case TOKEN_TYPE::Identifier:
                 index = translate_token(tokens, index, macro_params);
                 break;
 
@@ -622,6 +658,36 @@ size_t translate_instruction_param(TokenList& tokens, size_t index, const vector
                     !is_string_in_list(macro_params, tok.str()) &&
                     !g_processing_jmp)
                 {
+                    // Look ahead for simple offsets (+/- number) to include before [rip]
+                    while (index < tokens.size())
+                    {
+                        size_t peek = index;
+                        while (peek < tokens.size() && tokens[peek].type() == TOKEN_TYPE::WhiteSpace)
+                            peek++;
+                        
+                        if (peek < tokens.size() && tokens[peek].type() == TOKEN_TYPE::Operator &&
+                            (tokens[peek].str() == "+" || tokens[peek].str() == "-"))
+                        {
+                            // Print whitespace
+                            while (index < peek) {
+                                printf("%s", tokens[index].str().c_str());
+                                index++;
+                            }
+                            // Print operator
+                            index = translate_token(tokens, index, macro_params);
+                            
+                            // Print whitespace after operator
+                            while (index < tokens.size() && tokens[index].type() == TOKEN_TYPE::WhiteSpace) {
+                                printf("%s", tokens[index].str().c_str());
+                                index++;
+                            }
+                            
+                            // Print operand (number or identifier)
+                            index = translate_token(tokens, index, macro_params);
+                            continue;
+                        }
+                        break;
+                    }
                     printf("[rip]");
                 }
                 break;
@@ -989,7 +1055,7 @@ translate_identifier_construct(TokenList& tokens, size_t index, const vector<str
 
         case TOKEN_TYPE::KW_PROC:
         {
-            printf(".func %s\n", tok.str().c_str());
+            //printf(".func %s\n", tok.str().c_str());
             printf("%s:", tok.str().c_str());
             index += 3;
 
@@ -1009,7 +1075,7 @@ translate_identifier_construct(TokenList& tokens, size_t index, const vector<str
 
         case TOKEN_TYPE::KW_ENDP:
         {
-            printf(".seh_endproc\n.endfunc");
+            printf(".seh_endproc\n");
             index += 3;
             break;
         }
@@ -1105,7 +1171,7 @@ translate_construct(TokenList& tokens, size_t index, const vector<string> &macro
         case TOKEN_TYPE::KW_endif:
             // TODO: handle parameter differences between "if" and ".if" etc.
             printf(".");
-            return complete_line(tokens, index, macro_params);
+            return translate_expression(tokens, index, macro_params);
 
         case TOKEN_TYPE::KW_include:
         {

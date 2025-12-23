@@ -2,6 +2,10 @@
 add_host_module(gcc_plugin_seh main.cpp)
 target_include_directories(gcc_plugin_seh PRIVATE ${GCC_PLUGIN_DIR}/include)
 set_target_properties(gcc_plugin_seh PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(APPLE)
+    # Allow unresolved GCC internals to be bound at load time by the compiler binary
+    target_link_options(gcc_plugin_seh PRIVATE -Wl,-undefined,dynamic_lookup)
+endif()
 
 if (CMAKE_HOST_SYSTEM MATCHES "Windows")
     # On windows, GCC plugins need to be linked to the main executable
