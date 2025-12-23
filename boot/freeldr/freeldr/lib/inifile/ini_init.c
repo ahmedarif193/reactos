@@ -31,6 +31,7 @@ DBG_DEFAULT_CHANNEL(INIFILE);
 #define PARTITION_KEEP ((ULONG)-1)
 #endif
 
+#ifdef UEFIBOOT
 static
 BOOLEAN
 IniExtractRdiskIndex(
@@ -96,6 +97,7 @@ IniBuildDiskLevelBootPath(
     memmove(Digits + 1, Closing, strlen(Closing) + 1);
     return TRUE;
 }
+#endif
 
 static
 ARC_STATUS

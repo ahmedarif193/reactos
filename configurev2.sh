@@ -7,6 +7,7 @@ set -e
 
 REACTOS_SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEFAULT_TOOLCHAIN_ROOT="${HOME}/mingw-toolchains"
+DEFAULT_TOOLCHAIN_PATH_OVERRIDE=""
 MINGW_X86_64_URL="https://github.com/ahmedarif193/mingw-gcc15.2/releases/download/v15.2/x86_64-w64-mingw32.tar.gz"
 MINGW_I686_URL="https://github.com/ahmedarif193/mingw-gcc15.2/releases/download/v15.2/i686-w64-mingw32.tar.gz"
 MINGW_AARCH64_URL="${MINGW_AARCH64_URL:-}" # Optional external location for the arm64 MinGW toolchain
@@ -118,6 +119,33 @@ ensure_mingw_toolchain() {
     rm -f "$archive_path"
 }
 
+ensure_macos_dependencies() {
+    if [ "$(uname -s)" != "Darwin" ]; then
+        return
+    fi
+
+    if [ -d "/opt/homebrew/bin" ]; then
+        export PATH="/opt/homebrew/bin:$PATH"
+    fi
+
+    if ! command -v brew >/dev/null 2>&1; then
+        echo "Warning: Homebrew not found; install it from https://brew.sh to let configurev2 set up macOS prerequisites." >&2
+        return
+    fi
+
+    local missing=()
+    for pkg in cmake ninja mingw-w64; do
+        if ! brew list --versions "$pkg" >/dev/null 2>&1; then
+            missing+=("$pkg")
+        fi
+    done
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "Installing macOS prerequisites via Homebrew: ${missing[*]}"
+        brew install "${missing[@]}"
+    fi
+}
+
 usage() {
     cat << EOF
 Usage: $0 [options]
@@ -157,6 +185,7 @@ CLEAN_BUILD=0
 CMAKE_EXTRA_ARGS=""
 USE_CLANG=0
 CLANG_VERSION=""
+CMAKE_DLLTOOL_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -238,8 +267,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ "$USE_CLANG" -eq 1 ] && [ -z "$CLANG_VERSION" ]; then
-    CLANG_VERSION="19"
+    CLANG_VERSION="21"
 fi
+
+ensure_macos_dependencies
 
 if [ -z "$ARCH" ] && [ -n "$ROS_ARCH" ]; then
     ARCH="$ROS_ARCH"
@@ -253,6 +284,11 @@ ARCH="$(echo "$ARCH" | tr '[:upper:]' '[:lower:]')"
 [ -z "$BUILD_TYPE" ] && BUILD_TYPE="RelWithDebInfo"
 [ -z "$CMAKE_GENERATOR" ] && CMAKE_GENERATOR="Ninja"
 [ -z "$ENABLE_CCACHE" ] && ENABLE_CCACHE="OFF"
+if [ "$(uname -s)" = "Darwin" ]; then
+    if command -v /opt/homebrew/bin/gcc-15 >/dev/null 2>&1 && command -v /opt/homebrew/bin/g++-15 >/dev/null 2>&1; then
+        CMAKE_EXTRA_ARGS="$CMAKE_EXTRA_ARGS -DHOST_CC=/opt/homebrew/bin/gcc-15 -DHOST_CXX=/opt/homebrew/bin/g++-15"
+    fi
+fi
 if [ -z "$TOOLCHAIN_PREFIX" ]; then
     case "$ARCH" in
         amd64|x86_64)
@@ -273,24 +309,63 @@ if [ -z "$TOOLCHAIN_PREFIX" ]; then
     esac
 fi
 
+# macOS: pick toolchain root based on requested compiler
+if [ "$(uname -s)" = "Darwin" ]; then
+    if [ "$USE_CLANG" -eq 1 ]; then
+        MAC_LLVM_MINGW_ROOT="${HOME}/mingw-toolchains/llvm-mingw-20251216-ucrt-macos-universal"
+        if [ -d "${MAC_LLVM_MINGW_ROOT}/bin" ]; then
+            DEFAULT_TOOLCHAIN_ROOT="$MAC_LLVM_MINGW_ROOT"
+            DEFAULT_TOOLCHAIN_PATH_OVERRIDE="${MAC_LLVM_MINGW_ROOT}/bin"
+            if [ -z "$CMAKE_EXTRA_ARGS" ] || [[ "$CMAKE_EXTRA_ARGS" != *"CMAKE_C_COMPILER="* ]]; then
+                CLANG_BIN="${MAC_LLVM_MINGW_ROOT}/bin"
+                CLANG_C="${CLANG_BIN}/clang-21"
+                CLANG_CXX="${CLANG_BIN}/clang++-21"
+                [ -x "$CLANG_C" ] || CLANG_C="${CLANG_BIN}/clang"
+                [ -x "$CLANG_CXX" ] || CLANG_CXX="${CLANG_BIN}/clang++"
+                CMAKE_EXTRA_ARGS="$CMAKE_EXTRA_ARGS -DCMAKE_C_COMPILER=${CLANG_C} -DCMAKE_CXX_COMPILER=${CLANG_CXX}"
+            fi
+        fi
+    else
+        case "$TOOLCHAIN_PREFIX" in
+            x86_64-w64-mingw32)
+                BREW_MINGW_ROOT="/opt/homebrew/opt/mingw-w64/toolchain-x86_64"
+                ;;
+            i686-w64-mingw32)
+                BREW_MINGW_ROOT="/opt/homebrew/opt/mingw-w64/toolchain-i686"
+                ;;
+            *)
+                BREW_MINGW_ROOT=""
+                ;;
+        esac
+        if [ -n "$BREW_MINGW_ROOT" ] && [ -d "$BREW_MINGW_ROOT/bin" ]; then
+            DEFAULT_TOOLCHAIN_ROOT="$BREW_MINGW_ROOT"
+            DEFAULT_TOOLCHAIN_PATH_OVERRIDE="${BREW_MINGW_ROOT}/bin"
+        fi
+    fi
+fi
+
 if [ -z "$TOOLCHAIN_PATH" ]; then
-    case "$TOOLCHAIN_PREFIX" in
-        x86_64-w64-mingw32)
-            TOOLCHAIN_PATH="${DEFAULT_TOOLCHAIN_ROOT}/x86_64-w64-mingw32/bin"
-            ;;
-        i686-w64-mingw32)
-            TOOLCHAIN_PATH="${DEFAULT_TOOLCHAIN_ROOT}/i686-w64-mingw32/bin"
-            ;;
-        arm-w64-mingw32)
-            TOOLCHAIN_PATH="${DEFAULT_TOOLCHAIN_ROOT}/arm-w64-mingw32/bin"
-            ;;
-        aarch64-w64-mingw32)
-            TOOLCHAIN_PATH="${DEFAULT_TOOLCHAIN_ROOT}/aarch64-w64-mingw32/bin"
-            ;;
-        *)
-            TOOLCHAIN_PATH="${DEFAULT_TOOLCHAIN_ROOT}/i686-w64-mingw32/bin"
-            ;;
-    esac
+    if [ -n "$DEFAULT_TOOLCHAIN_PATH_OVERRIDE" ]; then
+        TOOLCHAIN_PATH="$DEFAULT_TOOLCHAIN_PATH_OVERRIDE"
+    else
+        case "$TOOLCHAIN_PREFIX" in
+            x86_64-w64-mingw32)
+                TOOLCHAIN_PATH="${DEFAULT_TOOLCHAIN_ROOT}/x86_64-w64-mingw32/bin"
+                ;;
+            i686-w64-mingw32)
+                TOOLCHAIN_PATH="${DEFAULT_TOOLCHAIN_ROOT}/i686-w64-mingw32/bin"
+                ;;
+            arm-w64-mingw32)
+                TOOLCHAIN_PATH="${DEFAULT_TOOLCHAIN_ROOT}/arm-w64-mingw32/bin"
+                ;;
+            aarch64-w64-mingw32)
+                TOOLCHAIN_PATH="${DEFAULT_TOOLCHAIN_ROOT}/aarch64-w64-mingw32/bin"
+                ;;
+            *)
+                TOOLCHAIN_PATH="${DEFAULT_TOOLCHAIN_ROOT}/i686-w64-mingw32/bin"
+                ;;
+        esac
+    fi
 fi
 
 if [ "$USER_PROVIDED_TOOLCHAIN_PATH" -eq 0 ]; then
@@ -332,6 +407,13 @@ fi
 
 BUILD_TYPE_SANITIZED="${BUILD_TYPE// /_}"
 OUTPUT_DIR="${OUTPUT_DIR}-${BUILD_TYPE_SANITIZED}"
+
+if [ "$(uname -s)" = "Darwin" ]; then
+    HOMEBREW_DLLTOOL="/opt/homebrew/bin/${TOOLCHAIN_PREFIX}-dlltool"
+    if [ -x "$HOMEBREW_DLLTOOL" ]; then
+        CMAKE_DLLTOOL_OVERRIDE="$HOMEBREW_DLLTOOL"
+    fi
+fi
 
 echo "========================================="
 echo "ReactOS Build Configuration"
@@ -389,6 +471,12 @@ fi
 if [ -f "host-tools/CMakeCache.txt" ]; then
     rm -f host-tools/CMakeCache.txt
 fi
+if [ -f "host-tools/bin/CMakeCache.txt" ]; then
+    rm -f host-tools/bin/CMakeCache.txt
+fi
+if [ -d "host-tools/bin/CMakeFiles" ]; then
+    rm -rf host-tools/bin/CMakeFiles
+fi
 
 echo "Running CMake configuration..."
 echo
@@ -425,6 +513,7 @@ CMAKE_COMMAND="cmake -G \"$CMAKE_GENERATOR\" \
     -DENABLE_CCACHE:BOOL=\"$ENABLE_CCACHE\" \
     -DCMAKE_TOOLCHAIN_FILE:FILEPATH=\"$REACTOS_SOURCE_DIR/$TOOLCHAIN_FILE\" \
     -DBUILD_ENVIRONMENT=\"$BUILD_ENVIRONMENT_VALUE\" \
+    $([ -n "$CMAKE_DLLTOOL_OVERRIDE" ] && echo -DCMAKE_DLLTOOL:FILEPATH=\"$CMAKE_DLLTOOL_OVERRIDE\") \
     ${CMAKE_MAKE_PROGRAM_ARG} \
     -C \"$REACTOS_SOURCE_DIR/ReactOS.cmake\" \
     ${CLANG_VERSION_ARG} \
