@@ -116,7 +116,7 @@ AcpiprocCaptureTss(
     NTSTATUS Status;
     PACPI_METHOD_ARGUMENT Argument;
     PACPIPROC_TSS_ENTRY States = NULL;
-    SIZE_T AllocationSize;
+    size_t AllocationSize;
     ULONG StateCount;
 
     Status = AcpiprocExecuteMethod(DeviceExtension, "_TSS", &OutputBuffer, &OutputLength);

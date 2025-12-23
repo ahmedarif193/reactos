@@ -9,6 +9,10 @@
 #define NDEBUG
 #include <debug.h>
 
+#define XHCI_READ_REGISTER_ULONG(_reg) READ_REGISTER_ULONG((PULONG)(ULONG_PTR)(_reg))
+#define XHCI_WRITE_REGISTER_ULONG(_reg, _val) WRITE_REGISTER_ULONG((PULONG)(ULONG_PTR)(_reg), (_val))
+#define XHCI_READ_REGISTER_UCHAR(_reg) READ_REGISTER_UCHAR((PUCHAR)(ULONG_PTR)(_reg))
+
 #ifndef XHCI_UNUSED
 #ifdef __GNUC__
 #define XHCI_UNUSED __attribute__((unused))
@@ -830,7 +834,7 @@ XHCI_PortIsSuperSpeed(
     if (!PortStatusReg)
         return FALSE;
 
-    PortValue = READ_REGISTER_ULONG(PortStatusReg);
+    PortValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
     return ((PortValue & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT) ==
            XHCI_PORTSC_SPEED_SUPER;
 }
@@ -864,11 +868,11 @@ XHCI_AckPortChangeInternal(
     if (!PortStatusReg)
         return;
 
-    OldValue = READ_REGISTER_ULONG(PortStatusReg);
+    OldValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
     /* Strict Ack: Preserve PP (Bit 9). All others 0 (including PED/PR) to avoid side effects. */
     ValueToWrite = (OldValue & XHCI_PORTSC_PP) | (ChangeMask & XHCI_PORTSC_CHANGE_MASK);
 
-    WRITE_REGISTER_ULONG(PortStatusReg, ValueToWrite);
+    XHCI_WRITE_REGISTER_ULONG(PortStatusReg, ValueToWrite);
 
     if (ClearShadowMask && Port <= XHCI_MAX_PORTS)
     {
@@ -894,7 +898,7 @@ XHCI_ModifyPortBits(
     if (!PortStatusReg)
         return MP_STATUS_ERROR;
 
-    Value = READ_REGISTER_ULONG(PortStatusReg);
+    Value = XHCI_READ_REGISTER_ULONG(PortStatusReg);
     NewValue = Value;
 
     NewValue |= SetMask;
@@ -905,7 +909,7 @@ XHCI_ModifyPortBits(
 
     if (Port == 5)
         DPRINT1("ModBits: P%u Read=%08lx Writing=%08lx\n", Port, Value, NewValue & XHCI_PORTSC_WRITE_MASK);
-    WRITE_REGISTER_ULONG(PortStatusReg, NewValue & XHCI_PORTSC_WRITE_MASK);
+    XHCI_WRITE_REGISTER_ULONG(PortStatusReg, NewValue & XHCI_PORTSC_WRITE_MASK);
 
     return MP_STATUS_SUCCESS;
 }
@@ -925,7 +929,7 @@ XHCI_SetPortLinkState(
     if (!PortStatusReg)
         return MP_STATUS_ERROR;
 
-    Value = READ_REGISTER_ULONG(PortStatusReg);
+    Value = XHCI_READ_REGISTER_ULONG(PortStatusReg);
     NewValue = Value & ~XHCI_PORTSC_PLS_MASK;
     NewValue |= XHCI_PORTSC_PLS(LinkState);
     NewValue |= XHCI_PORTSC_LWS;
@@ -933,7 +937,7 @@ XHCI_SetPortLinkState(
 
     if (Port == 5)
         DPRINT1("ModBits: P%u Read=%08lx Writing=%08lx\n", Port, Value, NewValue & XHCI_PORTSC_WRITE_MASK);
-    WRITE_REGISTER_ULONG(PortStatusReg, NewValue & XHCI_PORTSC_WRITE_MASK);
+    XHCI_WRITE_REGISTER_ULONG(PortStatusReg, NewValue & XHCI_PORTSC_WRITE_MASK);
 
     return MP_STATUS_SUCCESS;
 }
@@ -984,7 +988,7 @@ XHCI_ConfigurePortLpm(
     if (!PortPmReg)
         return;
 
-    Value = READ_REGISTER_ULONG(PortPmReg);
+    Value = XHCI_READ_REGISTER_ULONG(PortPmReg);
     NewValue = Value;
 
     /* Clear any existing U1/U2 timeout values. */
@@ -1012,7 +1016,7 @@ XHCI_ConfigurePortLpm(
         NewValue |= (U2Timeout << XHCI_PORTPMSC_U2_TIMEOUT_SHIFT);
 
     if (NewValue != Value)
-        WRITE_REGISTER_ULONG(PortPmReg, NewValue);
+        XHCI_WRITE_REGISTER_ULONG(PortPmReg, NewValue);
 }
 
 static
@@ -1102,11 +1106,11 @@ XHCI_ProgramDcbaaCrcrAndConfig(
 
     DPRINT1("usbxhci: programming DCBAA=%08lx:%08lx CRCR=%08lx:%08lx\n",
             DcbaaHigh, DcbaaLow, CrcrHigh, CrcrLow);
-    WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->DcbaapLow, DcbaaLow);
-    WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->DcbaapHigh, DcbaaHigh);
-    WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->CrCrLow, CrcrLow);
-    WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->CrCrHigh, CrcrHigh);
-    WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->Config,
+    XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->DcbaapLow, DcbaaLow);
+    XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->DcbaapHigh, DcbaaHigh);
+    XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->CrCrLow, CrcrLow);
+    XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->CrCrHigh, CrcrHigh);
+    XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->Config,
                          Extension->MaxSlots);
 
 #if DBG
@@ -1114,10 +1118,10 @@ XHCI_ProgramDcbaaCrcrAndConfig(
         ULONGLONG HwDcbaa;
         ULONGLONG HwCrcr;
 
-        HwDcbaa = ((ULONGLONG)READ_REGISTER_ULONG(&Extension->OperationalRegisters->DcbaapHigh) << 32) |
-                  READ_REGISTER_ULONG(&Extension->OperationalRegisters->DcbaapLow);
-        HwCrcr = ((ULONGLONG)READ_REGISTER_ULONG(&Extension->OperationalRegisters->CrCrHigh) << 32) |
-                 (READ_REGISTER_ULONG(&Extension->OperationalRegisters->CrCrLow) & ~0x3FULL);
+        HwDcbaa = ((ULONGLONG)XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->DcbaapHigh) << 32) |
+                  XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->DcbaapLow);
+        HwCrcr = ((ULONGLONG)XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->CrCrHigh) << 32) |
+                 (XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->CrCrLow) & ~0x3FULL);
 
         if (HwDcbaa != Dcbaa || (HwCrcr & ~0x3FULL) != (Crcr & ~0x3FULL))
         {
@@ -1134,9 +1138,9 @@ XHCI_ProgramDcbaaCrcrAndConfig(
 #endif
 
     DPRINT1("usbxhci: USBCMD=%08lx USBSTS=%08lx CONFIG=%08lx\n",
-            READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd),
-            READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts),
-            READ_REGISTER_ULONG(&Extension->OperationalRegisters->Config));
+            XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd),
+            XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts),
+            XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->Config));
 
     return MP_STATUS_SUCCESS;
 }
@@ -1153,7 +1157,7 @@ XHCI_ConfigurePageSize(
         return MP_STATUS_ERROR;
 
     PageSizeReg = &Extension->OperationalRegisters->PageSize;
-    Supported = READ_REGISTER_ULONG(PageSizeReg);
+    Supported = XHCI_READ_REGISTER_ULONG(PageSizeReg);
 
     if ((Supported & XHCI_PAGE_SIZE_4K) == 0)
     {
@@ -1162,7 +1166,7 @@ XHCI_ConfigurePageSize(
         return MP_STATUS_NOT_SUPPORTED;
     }
 
-    WRITE_REGISTER_ULONG(PageSizeReg, XHCI_PAGE_SIZE_4K);
+    XHCI_WRITE_REGISTER_ULONG(PageSizeReg, XHCI_PAGE_SIZE_4K);
     Extension->ConfiguredPageSize = XHCI_PAGE_SIZE_4K;
     DPRINT1("usbxhci: configured page size mask=0x%08lx\n",
             Extension->ConfiguredPageSize);
@@ -1188,7 +1192,7 @@ XHCI_TryWarmResetPort(
     if (!PortStatusReg)
         return;
 
-    PortValue = READ_REGISTER_ULONG(PortStatusReg);
+    PortValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
 
     if (!(PortValue & XHCI_PORTSC_CCS) ||
         (PortValue & XHCI_PORTSC_PED) ||
@@ -1358,7 +1362,7 @@ XHCI_RingEndpointDoorbell(
 
     Value = EndpointId & 0x1F;
     Value |= (StreamId & 0xFFFF) << 16;
-    WRITE_REGISTER_ULONG(&Extension->DoorbellArray->Doorbell[SlotIndex], Value);
+    XHCI_WRITE_REGISTER_ULONG(&Extension->DoorbellArray->Doorbell[SlotIndex], Value);
     if (SlotIndex != 0)
     {
         XHCI_DBG(XHCI_TRACE_TRANSFERS,
@@ -3593,20 +3597,20 @@ XHCI_ServiceEventRing(
         BOOLEAN SetBusy = (Processed != 0) || AcknowledgeInterrupt;
 
         Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
-        WRITE_REGISTER_ULONG(&Interrupter->ErdpHigh,
+        XHCI_WRITE_REGISTER_ULONG(&Interrupter->ErdpHigh,
                              (ULONG)(Extension->EventRingDequeuePointer >> 32));
 
         ErdpLow = (ULONG)(Extension->EventRingDequeuePointer & 0xFFFFFFFF);
         if (SetBusy)
             ErdpLow |= XHCI_ERDP_BUSY;
 
-        WRITE_REGISTER_ULONG(&Interrupter->ErdpLow, ErdpLow);
+        XHCI_WRITE_REGISTER_ULONG(&Interrupter->ErdpLow, ErdpLow);
 
         if (AcknowledgeInterrupt)
         {
-            ULONG Iman = READ_REGISTER_ULONG(&Interrupter->Iman);
+            ULONG Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
             Iman |= XHCI_IMAN_IP;
-            WRITE_REGISTER_ULONG(&Interrupter->Iman, Iman);
+            XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, Iman);
         }
 
     }
@@ -3721,25 +3725,25 @@ XHCI_DumpControllerState(
     XHCI_DisableInterrupts(Extension);
 
     Ops = Extension->OperationalRegisters;
-    UsbCmd = READ_REGISTER_ULONG(&Ops->UsbCmd);
-    UsbSts = READ_REGISTER_ULONG(&Ops->UsbSts);
-    DnCtrl = READ_REGISTER_ULONG(&Ops->DeviceNotificationControl);
-    Config = READ_REGISTER_ULONG(&Ops->Config);
-    Crcr = ((ULONGLONG)READ_REGISTER_ULONG(&Ops->CrCrHigh) << 32) |
-           READ_REGISTER_ULONG(&Ops->CrCrLow);
-    Dcbaap = ((ULONGLONG)READ_REGISTER_ULONG(&Ops->DcbaapHigh) << 32) |
-             READ_REGISTER_ULONG(&Ops->DcbaapLow);
+    UsbCmd = XHCI_READ_REGISTER_ULONG(&Ops->UsbCmd);
+    UsbSts = XHCI_READ_REGISTER_ULONG(&Ops->UsbSts);
+    DnCtrl = XHCI_READ_REGISTER_ULONG(&Ops->DeviceNotificationControl);
+    Config = XHCI_READ_REGISTER_ULONG(&Ops->Config);
+    Crcr = ((ULONGLONG)XHCI_READ_REGISTER_ULONG(&Ops->CrCrHigh) << 32) |
+           XHCI_READ_REGISTER_ULONG(&Ops->CrCrLow);
+    Dcbaap = ((ULONGLONG)XHCI_READ_REGISTER_ULONG(&Ops->DcbaapHigh) << 32) |
+             XHCI_READ_REGISTER_ULONG(&Ops->DcbaapLow);
 
     Runtime = Extension->RuntimeRegisters;
     Interrupter = Runtime ? &Runtime->Interrupter[0] : NULL;
 
     if (Interrupter)
     {
-        ErstSize = READ_REGISTER_ULONG(&Interrupter->ErstSize);
-        ErstBase = ((ULONGLONG)READ_REGISTER_ULONG(&Interrupter->ErstBaseHigh) << 32) |
-                   READ_REGISTER_ULONG(&Interrupter->ErstBaseLow);
-        Erdp = ((ULONGLONG)READ_REGISTER_ULONG(&Interrupter->ErdpHigh) << 32) |
-               READ_REGISTER_ULONG(&Interrupter->ErdpLow);
+        ErstSize = XHCI_READ_REGISTER_ULONG(&Interrupter->ErstSize);
+        ErstBase = ((ULONGLONG)XHCI_READ_REGISTER_ULONG(&Interrupter->ErstBaseHigh) << 32) |
+                   XHCI_READ_REGISTER_ULONG(&Interrupter->ErstBaseLow);
+        Erdp = ((ULONGLONG)XHCI_READ_REGISTER_ULONG(&Interrupter->ErdpHigh) << 32) |
+               XHCI_READ_REGISTER_ULONG(&Interrupter->ErdpLow);
     }
     else
     {
@@ -3763,13 +3767,13 @@ XHCI_DumpControllerState(
     {
         DPRINT1("usbxhci: %s IMOD=%08lx IMAN=%08lx\n",
                 Reason,
-                READ_REGISTER_ULONG(&Interrupter->Imod),
-                READ_REGISTER_ULONG(&Interrupter->Iman));
+                XHCI_READ_REGISTER_ULONG(&Interrupter->Imod),
+                XHCI_READ_REGISTER_ULONG(&Interrupter->Iman));
     }
 
     for (Port = 0; Port < Extension->NumberOfPorts; Port++)
     {
-        ULONG PortSc = READ_REGISTER_ULONG(&Ops->PortRegister[Port].PortStatusAndControl);
+        ULONG PortSc = XHCI_READ_REGISTER_ULONG(&Ops->PortRegister[Port].PortStatusAndControl);
             DPRINT1("usbxhci: %s PORT%lu=0x%08lx\n", Reason, Port + 1, PortSc);
     }
 }
@@ -3900,15 +3904,15 @@ XHCI_LogInterrupterState(
         return;
 
     Ops = Extension->OperationalRegisters;
-    UsbCmd = READ_REGISTER_ULONG(&Ops->UsbCmd);
-    UsbSts = READ_REGISTER_ULONG(&Ops->UsbSts);
-    Config = READ_REGISTER_ULONG(&Ops->Config);
-    Crcr = ((ULONGLONG)READ_REGISTER_ULONG(&Ops->CrCrHigh) << 32) |
-           READ_REGISTER_ULONG(&Ops->CrCrLow);
+    UsbCmd = XHCI_READ_REGISTER_ULONG(&Ops->UsbCmd);
+    UsbSts = XHCI_READ_REGISTER_ULONG(&Ops->UsbSts);
+    Config = XHCI_READ_REGISTER_ULONG(&Ops->Config);
+    Crcr = ((ULONGLONG)XHCI_READ_REGISTER_ULONG(&Ops->CrCrHigh) << 32) |
+           XHCI_READ_REGISTER_ULONG(&Ops->CrCrLow);
 
     if (Extension->DoorbellArray)
     {
-        Doorbell0 = READ_REGISTER_ULONG(&Extension->DoorbellArray->Doorbell[0]);
+        Doorbell0 = XHCI_READ_REGISTER_ULONG(&Extension->DoorbellArray->Doorbell[0]);
     }
 
     Interrupter = (Extension->RuntimeRegisters) ?
@@ -3916,13 +3920,13 @@ XHCI_LogInterrupterState(
 
     if (Interrupter)
     {
-        ULONG Iman = READ_REGISTER_ULONG(&Interrupter->Iman);
-        ULONG Imod = READ_REGISTER_ULONG(&Interrupter->Imod);
-        ULONG ErstSize = READ_REGISTER_ULONG(&Interrupter->ErstSize);
-        ULONGLONG Erdp = ((ULONGLONG)READ_REGISTER_ULONG(&Interrupter->ErdpHigh) << 32) |
-                         READ_REGISTER_ULONG(&Interrupter->ErdpLow);
-        ULONGLONG ErstBase = ((ULONGLONG)READ_REGISTER_ULONG(&Interrupter->ErstBaseHigh) << 32) |
-                             READ_REGISTER_ULONG(&Interrupter->ErstBaseLow);
+        ULONG Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
+        ULONG Imod = XHCI_READ_REGISTER_ULONG(&Interrupter->Imod);
+        ULONG ErstSize = XHCI_READ_REGISTER_ULONG(&Interrupter->ErstSize);
+        ULONGLONG Erdp = ((ULONGLONG)XHCI_READ_REGISTER_ULONG(&Interrupter->ErdpHigh) << 32) |
+                         XHCI_READ_REGISTER_ULONG(&Interrupter->ErdpLow);
+        ULONGLONG ErstBase = ((ULONGLONG)XHCI_READ_REGISTER_ULONG(&Interrupter->ErstBaseHigh) << 32) |
+                             XHCI_READ_REGISTER_ULONG(&Interrupter->ErstBaseLow);
 
         DPRINT1("usbxhci: %s IMAN=%08lx IMOD=%08lx ERSTSZ=%lu ERSTBA=%08lx:%08lx "
                 "ERDP=%08lx:%08lx\n",
@@ -3968,14 +3972,14 @@ XHCI_TraceCommandRingState(
     Ops = Extension->OperationalRegisters;
     Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
 
-    Crcr = ((ULONGLONG)READ_REGISTER_ULONG(&Ops->CrCrHigh) << 32) |
-           READ_REGISTER_ULONG(&Ops->CrCrLow);
-    ErstBase = ((ULONGLONG)READ_REGISTER_ULONG(&Interrupter->ErstBaseHigh) << 32) |
-               READ_REGISTER_ULONG(&Interrupter->ErstBaseLow);
-    Erdp = ((ULONGLONG)READ_REGISTER_ULONG(&Interrupter->ErdpHigh) << 32) |
-           READ_REGISTER_ULONG(&Interrupter->ErdpLow);
-    ErstSize = READ_REGISTER_ULONG(&Interrupter->ErstSize);
-    Iman = READ_REGISTER_ULONG(&Interrupter->Iman);
+    Crcr = ((ULONGLONG)XHCI_READ_REGISTER_ULONG(&Ops->CrCrHigh) << 32) |
+           XHCI_READ_REGISTER_ULONG(&Ops->CrCrLow);
+    ErstBase = ((ULONGLONG)XHCI_READ_REGISTER_ULONG(&Interrupter->ErstBaseHigh) << 32) |
+               XHCI_READ_REGISTER_ULONG(&Interrupter->ErstBaseLow);
+    Erdp = ((ULONGLONG)XHCI_READ_REGISTER_ULONG(&Interrupter->ErdpHigh) << 32) |
+           XHCI_READ_REGISTER_ULONG(&Interrupter->ErdpLow);
+    ErstSize = XHCI_READ_REGISTER_ULONG(&Interrupter->ErstSize);
+    Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
 
     DPRINT1("usbxhci: %s type=%lu cmdptr=%I64x cmd_enq=%lu cyc=%lu "
             "evt_deq=%lu cyc=%lu CRCR=%08lx:%08lx ERST=%08lx:%08lx "
@@ -4041,7 +4045,7 @@ XHCI_DumpAddressDeviceContext(
 
     PortScReg = XHCI_GetPortStatusRegister(Extension, PortNumber);
     if (PortScReg)
-        PortSc = READ_REGISTER_ULONG(PortScReg);
+        PortSc = XHCI_READ_REGISTER_ULONG(PortScReg);
 
     DPRINT1("usbxhci: AddressDevice CONTEXT_ERROR slot=%u ep=%u port=%u code=%u\n",
             Slot->SlotId,
@@ -4292,7 +4296,7 @@ XHCI_HandlePortChange(
 
     PortScReg = XHCI_GetPortStatusRegister(Extension, PortId);
     if (PortScReg)
-        PortSc = READ_REGISTER_ULONG(PortScReg);
+        PortSc = XHCI_READ_REGISTER_ULONG(PortScReg);
 
     DPRINT1("usbxhci: port status change on port %u PortSC=0x%08lx\n",
             PortId,
@@ -4408,7 +4412,7 @@ XHCI_ScanPortStatusChanges(
         if (!PortScReg)
             continue;
 
-        PortSc = READ_REGISTER_ULONG(PortScReg);
+        PortSc = XHCI_READ_REGISTER_ULONG(PortScReg);
         if ((PortSc & XHCI_PORTSC_CHANGE_MASK) == 0)
             continue;
 
@@ -4900,7 +4904,7 @@ XHCI_Get32BitFrameNumber(
     if (!Extension || !Extension->RuntimeRegisters)
         return 0;
     {
-        ULONG v = READ_REGISTER_ULONG(&Extension->RuntimeRegisters->MicroframeIndex);
+        ULONG v = XHCI_READ_REGISTER_ULONG(&Extension->RuntimeRegisters->MicroframeIndex);
         XHCI_DBG(XHCI_TRACE_EVENTS,
                  "usbxhci: Get32BitFrameNumber (IRQL=%lu) MFIDX=%08lx\n",
                  (ULONG)KeGetCurrentIrql(), v);
@@ -5150,7 +5154,7 @@ XHCI_PrepareDefaultControlContext(
             XHCI_GetPortStatusRegister(Extension, EndpointProperties->PortNumber);
         if (PortStatusReg)
         {
-            ULONG PortValue = READ_REGISTER_ULONG(PortStatusReg);
+            ULONG PortValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
             ULONG PortSpeed =
                 (PortValue & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT;
 
@@ -5946,7 +5950,7 @@ XHCI_SubmitControlTransferSwEnum(
     if (!(Extension->Quirks & XHCI_QUIRK_IGNORE_STARTUP_HCE) ||
         !Extension->StartupHcePersistent ||
         !Extension->OperationalRegisters ||
-        !(READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts) & XHCI_USBSTS_HCE))
+        !(XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts) & XHCI_USBSTS_HCE))
         return MP_STATUS_NOT_SUPPORTED;
     if (Endpoint->EndpointProperties.TransferType != USBPORT_TRANSFER_TYPE_CONTROL ||
         Endpoint->EndpointProperties.EndpointAddress != 0)
@@ -6378,7 +6382,7 @@ XHCI_FindExtendedCapability(
     {
         volatile ULONG *CapReg = (volatile ULONG *)(Base + Offset);
 
-        CapValue = READ_REGISTER_ULONG(CapReg);
+        CapValue = XHCI_READ_REGISTER_ULONG(CapReg);
         if (XHCI_EXT_CAP_ID(CapValue) == CapabilityId)
             return Offset;
 
@@ -6423,7 +6427,7 @@ XHCI_BuildProtocolPortMap(
     {
         volatile ULONG *CapReg = (volatile ULONG *)(Base + Offset);
 
-        CapValue = READ_REGISTER_ULONG(CapReg);
+        CapValue = XHCI_READ_REGISTER_ULONG(CapReg);
 
         if (XHCI_EXT_CAP_ID(CapValue) == XHCI_EXT_CAP_ID_PROTOCOL)
         {
@@ -6438,8 +6442,8 @@ XHCI_BuildProtocolPortMap(
             UCHAR Index;
 
             ProtoCap = (PXHCI_PROTOCOL_CAPABILITY)CapReg;
-            Revision = READ_REGISTER_ULONG(&ProtoCap->Revision);
-            PortInfo = READ_REGISTER_ULONG(&ProtoCap->PortInfo);
+            Revision = XHCI_READ_REGISTER_ULONG(&ProtoCap->Revision);
+            PortInfo = XHCI_READ_REGISTER_ULONG(&ProtoCap->PortInfo);
 
             Major = (UCHAR)XHCI_EXT_PORT_MAJOR(Revision);
             Minor = (UCHAR)XHCI_EXT_PORT_MINOR(Revision);
@@ -6713,16 +6717,16 @@ XHCI_DisableLegacySupport(
     LegacyControl = (volatile ULONG *)((PUCHAR)Extension->CapabilityRegisters +
                                         Offset + XHCI_LEGACY_CONTROL_OFFSET);
 
-    Value = READ_REGISTER_ULONG(LegacySupport);
+    Value = XHCI_READ_REGISTER_ULONG(LegacySupport);
     if ((Value & XHCI_HC_BIOS_OWNED) == 0)
         return MP_STATUS_SUCCESS;
 
     Extension->Resources->LegacySupport = 1;
-    WRITE_REGISTER_ULONG(LegacySupport, Value | XHCI_HC_OS_OWNED);
+    XHCI_WRITE_REGISTER_ULONG(LegacySupport, Value | XHCI_HC_OS_OWNED);
 
     for (Retry = 0; Retry < TimeoutUs / 100; Retry++)
     {
-        Value = READ_REGISTER_ULONG(LegacySupport);
+        Value = XHCI_READ_REGISTER_ULONG(LegacySupport);
         if ((Value & XHCI_HC_BIOS_OWNED) == 0)
             break;
 
@@ -6740,9 +6744,9 @@ XHCI_DisableLegacySupport(
         return MP_STATUS_SUCCESS;
     }
 
-    Value = READ_REGISTER_ULONG(LegacyControl);
+    Value = XHCI_READ_REGISTER_ULONG(LegacyControl);
     Value &= ~(XHCI_LEGACY_DISABLE_SMI | XHCI_LEGACY_SMI_EVENTS);
-    WRITE_REGISTER_ULONG(LegacyControl, Value);
+    XHCI_WRITE_REGISTER_ULONG(LegacyControl, Value);
 
     return MP_STATUS_SUCCESS;
 }
@@ -6989,35 +6993,35 @@ XHCI_ProgramInterrupterState(
         Interrupter = &Extension->RuntimeRegisters->Interrupter[Index];
 
         /* Use a conservative default interrupt moderation interval. */
-        WRITE_REGISTER_ULONG(&Interrupter->Imod, XHCI_IMOD_DEFAULT);
+        XHCI_WRITE_REGISTER_ULONG(&Interrupter->Imod, XHCI_IMOD_DEFAULT);
 
         /* Program ERST and ERDP for this interrupter; all share the same ring. */
-        WRITE_REGISTER_ULONG(&Interrupter->ErstSize, Extension->ErstEntryCount);
-        WRITE_REGISTER_ULONG(&Interrupter->ErstBaseLow,
+        XHCI_WRITE_REGISTER_ULONG(&Interrupter->ErstSize, Extension->ErstEntryCount);
+        XHCI_WRITE_REGISTER_ULONG(&Interrupter->ErstBaseLow,
                              (ULONG)(Extension->ErstTablePhysical.QuadPart & 0xFFFFFFFF));
-        WRITE_REGISTER_ULONG(&Interrupter->ErstBaseHigh,
+        XHCI_WRITE_REGISTER_ULONG(&Interrupter->ErstBaseHigh,
                              (ULONG)(Extension->ErstTablePhysical.QuadPart >> 32));
         /* Program ERDP to the event ring base and set EHB (BUSY) to clear state */
         Extension->EventRingDequeuePointer = Extension->EventRingPhysical.QuadPart;
-        WRITE_REGISTER_ULONG(&Interrupter->ErdpHigh,
+        XHCI_WRITE_REGISTER_ULONG(&Interrupter->ErdpHigh,
                              (ULONG)(Extension->EventRingDequeuePointer >> 32));
-        WRITE_REGISTER_ULONG(&Interrupter->ErdpLow,
+        XHCI_WRITE_REGISTER_ULONG(&Interrupter->ErdpLow,
                              ((ULONG)(Extension->EventRingDequeuePointer & 0xFFFFFFFF)) |
                              XHCI_ERDP_BUSY);
 
-        Iman = READ_REGISTER_ULONG(&Interrupter->Iman);
+        Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
         Iman |= XHCI_IMAN_IE;
         Iman |= XHCI_IMAN_IP;
-        WRITE_REGISTER_ULONG(&Interrupter->Iman, Iman);
+        XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, Iman);
 
         DPRINT1("usbxhci: intr%lu IMOD=%08lx ERST=%08lx:%08lx ERDP=%08lx:%08lx IMAN=%08lx\n",
                 Index,
-                READ_REGISTER_ULONG(&Interrupter->Imod),
-                READ_REGISTER_ULONG(&Interrupter->ErstBaseHigh),
-                READ_REGISTER_ULONG(&Interrupter->ErstBaseLow),
-                READ_REGISTER_ULONG(&Interrupter->ErdpHigh),
-                READ_REGISTER_ULONG(&Interrupter->ErdpLow),
-                READ_REGISTER_ULONG(&Interrupter->Iman));
+                XHCI_READ_REGISTER_ULONG(&Interrupter->Imod),
+                XHCI_READ_REGISTER_ULONG(&Interrupter->ErstBaseHigh),
+                XHCI_READ_REGISTER_ULONG(&Interrupter->ErstBaseLow),
+                XHCI_READ_REGISTER_ULONG(&Interrupter->ErdpHigh),
+                XHCI_READ_REGISTER_ULONG(&Interrupter->ErdpLow),
+                XHCI_READ_REGISTER_ULONG(&Interrupter->Iman));
     }
 }
 
@@ -7328,14 +7332,14 @@ XHCI_ValidateCommandEngine(
         return MP_STATUS_ERROR;
 
     if (Extension->OperationalRegisters)
-        UsbSts = READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
+        UsbSts = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
 
     if ((UsbSts & XHCI_USBSTS_HCE) &&
         (Extension->Quirks & XHCI_QUIRK_IGNORE_STARTUP_HCE))
     {
         DPRINT1("usbxhci: persistent startup HCE (USBSTS=%08lx) – skipping NO-OP probe per quirk\n",
                 UsbSts);
-        WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
+        XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
                              XHCI_USBSTS_HCE |
                              XHCI_USBSTS_HSE |
                              XHCI_USBSTS_PCD |
@@ -7346,7 +7350,7 @@ XHCI_ValidateCommandEngine(
 
     if (UsbSts & XHCI_USBSTS_HCE)
     {
-        WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
+        XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
                              XHCI_USBSTS_HCE |
                              XHCI_USBSTS_HSE |
                              XHCI_USBSTS_PCD |
@@ -7397,10 +7401,10 @@ XHCI_ResetController(
     UsbCmd = &Extension->OperationalRegisters->UsbCmd;
     UsbSts = &Extension->OperationalRegisters->UsbSts;
 
-    Command = READ_REGISTER_ULONG(UsbCmd);
+    Command = XHCI_READ_REGISTER_ULONG(UsbCmd);
     if (Command & XHCI_USBCMD_RS)
     {
-        WRITE_REGISTER_ULONG(UsbCmd, Command & ~XHCI_USBCMD_RS);
+        XHCI_WRITE_REGISTER_ULONG(UsbCmd, Command & ~XHCI_USBCMD_RS);
         if (!XHCI_WaitForRegisterBits(UsbSts,
                                       XHCI_USBSTS_HCH,
                                       TRUE,
@@ -7416,7 +7420,7 @@ XHCI_ResetController(
     ReadyTimeout = (Extension->Quirks & XHCI_QUIRK_SLOW_HARD_RESET) ?
                    (XHCI_WAIT_CNR_US * 2) : XHCI_WAIT_CNR_US;
 
-    WRITE_REGISTER_ULONG(UsbCmd, XHCI_USBCMD_HCRST);
+    XHCI_WRITE_REGISTER_ULONG(UsbCmd, XHCI_USBCMD_HCRST);
 
     if (!XHCI_WaitForRegisterBits(UsbCmd,
                                   XHCI_USBCMD_HCRST,
@@ -7438,8 +7442,8 @@ XHCI_ResetController(
 
 #if DBG
     {
-        ULONG DebugCmd = READ_REGISTER_ULONG(UsbCmd);
-        ULONG DebugSts = READ_REGISTER_ULONG(UsbSts);
+        ULONG DebugCmd = XHCI_READ_REGISTER_ULONG(UsbCmd);
+        ULONG DebugSts = XHCI_READ_REGISTER_ULONG(UsbSts);
 
         if ((DebugCmd & (XHCI_USBCMD_RS | XHCI_USBCMD_HCRST)) != 0 ||
             (DebugSts & XHCI_USBSTS_CNR) != 0)
@@ -7454,7 +7458,7 @@ XHCI_ResetController(
 #endif
 
         /* Clear any error bits that might be latched (HCE, HSE, PCD, EINT) */
-    WRITE_REGISTER_ULONG(UsbSts,
+    XHCI_WRITE_REGISTER_ULONG(UsbSts,
                          XHCI_USBSTS_HCE |
                          XHCI_USBSTS_HSE |
                          XHCI_USBSTS_PCD |
@@ -7569,7 +7573,7 @@ XHCI_RecoverControllerAfterCommandTimeout(
     if (Status != MP_STATUS_SUCCESS)
         return Status;
 
-    WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
+    XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
                          XHCI_USBSTS_EINT |
                          XHCI_USBSTS_PCD |
                          XHCI_USBSTS_HSE |
@@ -8986,7 +8990,7 @@ XHCI_StartController(PVOID MiniPortExtension,
     Base = (PUCHAR)Extension->MmioBase;
     Extension->CapabilityRegisters = (PXHCI_CAPABILITY_REGISTERS)Base;
     {
-        ULONG CapHeader0 = READ_REGISTER_ULONG((volatile ULONG *)Base);
+        ULONG CapHeader0 = XHCI_READ_REGISTER_ULONG((volatile ULONG *)Base);
         Extension->CapabilityLength = CapHeader0 & 0xFF;
         /* HciVersion occupies bits 31:16 of the first dword (little-endian) */
         Extension->HciVersion = (USHORT)((CapHeader0 >> 16) & 0xFFFF);
@@ -9023,7 +9027,7 @@ XHCI_StartController(PVOID MiniPortExtension,
         SIZE_T i;
         for (i = 0; i < RTL_NUMBER_OF(CapDump); i++)
         {
-            CapDump[i] = READ_REGISTER_ULONG((volatile ULONG *)(Base + (i * sizeof(ULONG))));
+            CapDump[i] = XHCI_READ_REGISTER_ULONG((volatile ULONG *)(Base + (i * sizeof(ULONG))));
         }
         DPRINT1("usbxhci: CAP dump 0x00-0x1F: %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
                 CapDump[0], CapDump[1], CapDump[2], CapDump[3],
@@ -9112,15 +9116,15 @@ XHCI_StartController(PVOID MiniPortExtension,
     KeInitializeSpinLock(&Extension->DeferredTransferLock);
     InitializeListHead(&Extension->DeferredTransferList);
 
-    HcsParams1 = READ_REGISTER_ULONG(&Extension->CapabilityRegisters->HcsParams1);
-    HcsParams2 = READ_REGISTER_ULONG(&Extension->CapabilityRegisters->HcsParams2);
-    HcsParams3 = READ_REGISTER_ULONG(&Extension->CapabilityRegisters->HcsParams3);
-    HccParams = READ_REGISTER_ULONG(&Extension->CapabilityRegisters->HccParams);
+    HcsParams1 = XHCI_READ_REGISTER_ULONG(&Extension->CapabilityRegisters->HcsParams1);
+    HcsParams2 = XHCI_READ_REGISTER_ULONG(&Extension->CapabilityRegisters->HcsParams2);
+    HcsParams3 = XHCI_READ_REGISTER_ULONG(&Extension->CapabilityRegisters->HcsParams3);
+    HccParams = XHCI_READ_REGISTER_ULONG(&Extension->CapabilityRegisters->HccParams);
 
     {
-        ULONG CapRaw0 = READ_REGISTER_ULONG((volatile ULONG *)Extension->CapabilityRegisters);
-        ULONG CapRaw4 = READ_REGISTER_ULONG((volatile ULONG *)((PUCHAR)Extension->CapabilityRegisters + 4));
-        ULONG CapRaw8 = READ_REGISTER_ULONG((volatile ULONG *)((PUCHAR)Extension->CapabilityRegisters + 8));
+        ULONG CapRaw0 = XHCI_READ_REGISTER_ULONG((volatile ULONG *)Extension->CapabilityRegisters);
+        ULONG CapRaw4 = XHCI_READ_REGISTER_ULONG((volatile ULONG *)((PUCHAR)Extension->CapabilityRegisters + 4));
+        ULONG CapRaw8 = XHCI_READ_REGISTER_ULONG((volatile ULONG *)((PUCHAR)Extension->CapabilityRegisters + 8));
         DPRINT1("usbxhci: CAP dwords [0]=%08lx [4]=%08lx [8]=%08lx\n",
                 CapRaw0, CapRaw4, CapRaw8);
     }
@@ -9142,14 +9146,14 @@ XHCI_StartController(PVOID MiniPortExtension,
                 Extension->HciVersion,
                 Extension->CapabilityLength);
         DPRINT1("usbxhci: raw CAP header bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n",
-                READ_REGISTER_UCHAR((volatile UCHAR *)Base + 0),
-                READ_REGISTER_UCHAR((volatile UCHAR *)Base + 1),
-                READ_REGISTER_UCHAR((volatile UCHAR *)Base + 2),
-                READ_REGISTER_UCHAR((volatile UCHAR *)Base + 3),
-                READ_REGISTER_UCHAR((volatile UCHAR *)Base + 4),
-                READ_REGISTER_UCHAR((volatile UCHAR *)Base + 5),
-                READ_REGISTER_UCHAR((volatile UCHAR *)Base + 6),
-                READ_REGISTER_UCHAR((volatile UCHAR *)Base + 7));
+                XHCI_READ_REGISTER_UCHAR((volatile UCHAR *)Base + 0),
+                XHCI_READ_REGISTER_UCHAR((volatile UCHAR *)Base + 1),
+                XHCI_READ_REGISTER_UCHAR((volatile UCHAR *)Base + 2),
+                XHCI_READ_REGISTER_UCHAR((volatile UCHAR *)Base + 3),
+                XHCI_READ_REGISTER_UCHAR((volatile UCHAR *)Base + 4),
+                XHCI_READ_REGISTER_UCHAR((volatile UCHAR *)Base + 5),
+                XHCI_READ_REGISTER_UCHAR((volatile UCHAR *)Base + 6),
+                XHCI_READ_REGISTER_UCHAR((volatile UCHAR *)Base + 7));
         return MP_STATUS_NOT_SUPPORTED;
     }
     else if (Extension->HciVersion < 0x0100)
@@ -9311,7 +9315,7 @@ XHCI_StartController(PVOID MiniPortExtension,
     if (Status != MP_STATUS_SUCCESS)
         return Status;
 
-    WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
+    XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
                          XHCI_USBSTS_EINT |
                          XHCI_USBSTS_PCD |
                          XHCI_USBSTS_HSE |
@@ -9342,7 +9346,7 @@ XHCI_StartController(PVOID MiniPortExtension,
         if (Status != MP_STATUS_SUCCESS)
             return Status;
 
-        WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
+        XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
                              XHCI_USBSTS_EINT |
                              XHCI_USBSTS_PCD |
                              XHCI_USBSTS_HSE |
@@ -9370,10 +9374,10 @@ XHCI_StartController(PVOID MiniPortExtension,
     }
 
     /* If the controller immediately asserts HCE after starting, try one recovery. */
-    if (READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts) & XHCI_USBSTS_HCE)
+    if (XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts) & XHCI_USBSTS_HCE)
     {
-        ULONG UsbSts = READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
-        ULONG UsbCmd = READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
+        ULONG UsbSts = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
+        ULONG UsbCmd = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
 
         DPRINT1("usbxhci: host controller error latched after start "
                 "(USBSTS=%08lx USBCMD=%08lx) – attempting one recovery\n",
@@ -9385,7 +9389,7 @@ XHCI_StartController(PVOID MiniPortExtension,
         if (Status != MP_STATUS_SUCCESS)
             return Status;
 
-        WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
+        XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
                              XHCI_USBSTS_EINT |
                              XHCI_USBSTS_PCD |
                              XHCI_USBSTS_HSE |
@@ -9412,9 +9416,9 @@ XHCI_StartController(PVOID MiniPortExtension,
             return Status;
     }
 
-    if (READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts) & XHCI_USBSTS_HCE)
+    if (XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts) & XHCI_USBSTS_HCE)
     {
-        ULONG UsbStsAfter = READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
+        ULONG UsbStsAfter = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
 
         if ((UsbStsAfter & XHCI_USBSTS_HCE) &&
             (Extension->Quirks & XHCI_QUIRK_IGNORE_STARTUP_HCE))
@@ -9425,7 +9429,7 @@ XHCI_StartController(PVOID MiniPortExtension,
                         "(USBSTS=%08lx) – ignoring per startup quirk after NO-OP validation\n",
                         UsbStsAfter);
 
-                WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
+                XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
                                      XHCI_USBSTS_HCE |
                                      XHCI_USBSTS_HSE |
                                      XHCI_USBSTS_PCD |
@@ -9627,7 +9631,7 @@ XHCI_InterruptService(PVOID MiniPortExtension)
 
     XHCI_DPRINT_SHARED("usbxhci: ISR (IRQL=%lu)\n", (ULONG)KeGetCurrentIrql());
 
-    Status = READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
+    Status = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
     AckMask = Status & (XHCI_USBSTS_EINT |
                         XHCI_USBSTS_PCD |
                         XHCI_USBSTS_HSE |
@@ -9641,7 +9645,7 @@ XHCI_InterruptService(PVOID MiniPortExtension)
 
     /* If HCE/HSE are set, latch them into PendingUsbSts even when EINT is
      * clear so the DPC can decide whether to ignore or handle them. */
-    UsbSts = READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
+    UsbSts = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
     if (UsbSts & (XHCI_USBSTS_HSE | XHCI_USBSTS_HCE))
     {
         InterlockedOr((volatile LONG *)&Extension->PendingUsbSts,
@@ -9657,7 +9661,7 @@ XHCI_InterruptService(PVOID MiniPortExtension)
                  AckMask);
     }
 
-    WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts, AckMask);
+    XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts, AckMask);
 
     InterlockedOr((volatile LONG *)&Extension->PendingUsbSts, AckMask);
 
@@ -9754,18 +9758,18 @@ XHCI_EnableInterrupts(PVOID MiniPortExtension)
     if (!Extension || !Extension->OperationalRegisters)
         return;
 
-    Command = READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
+    Command = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
     Command |= XHCI_USBCMD_INTE;
-    WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd, Command);
+    XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd, Command);
     Extension->InterruptsEnabled = TRUE;
 
     if (Extension->RuntimeRegisters)
     {
         Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
-        Iman = READ_REGISTER_ULONG(&Interrupter->Iman);
+        Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
         Iman |= XHCI_IMAN_IE;
         Iman |= XHCI_IMAN_IP;
-        WRITE_REGISTER_ULONG(&Interrupter->Iman, Iman);
+        XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, Iman);
     }
 }
 
@@ -10142,17 +10146,17 @@ XHCI_DisableInterrupts(PVOID MiniPortExtension)
     if (!Extension || !Extension->OperationalRegisters)
         return;
 
-    Command = READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
+    Command = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
     Command &= ~XHCI_USBCMD_INTE;
-    WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd, Command);
+    XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd, Command);
     Extension->InterruptsEnabled = FALSE;
 
     if (Extension->RuntimeRegisters)
     {
         Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
-        Iman = READ_REGISTER_ULONG(&Interrupter->Iman);
+        Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
         Iman &= ~XHCI_IMAN_IE;
-        WRITE_REGISTER_ULONG(&Interrupter->Iman, Iman);
+        XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, Iman);
     }
 }
 
@@ -10171,8 +10175,8 @@ XHCI_RunController(
     UsbCmd = &Extension->OperationalRegisters->UsbCmd;
     UsbSts = &Extension->OperationalRegisters->UsbSts;
 
-    Status = READ_REGISTER_ULONG(UsbSts);
-    Command = READ_REGISTER_ULONG(UsbCmd);
+    Status = XHCI_READ_REGISTER_ULONG(UsbSts);
+    Command = XHCI_READ_REGISTER_ULONG(UsbCmd);
 
     if ((Command & XHCI_USBCMD_RS) && !(Status & XHCI_USBSTS_HCH))
     {
@@ -10190,7 +10194,7 @@ XHCI_RunController(
     }
 
     Command |= XHCI_USBCMD_RS;
-    WRITE_REGISTER_ULONG(UsbCmd, Command);
+    XHCI_WRITE_REGISTER_ULONG(UsbCmd, Command);
 
     if (!XHCI_WaitForRegisterBits(UsbSts,
                                   XHCI_USBSTS_HCH,
@@ -10201,9 +10205,9 @@ XHCI_RunController(
         return MP_STATUS_HW_ERROR;
     }
 
-    Status = READ_REGISTER_ULONG(UsbSts);
+    Status = XHCI_READ_REGISTER_ULONG(UsbSts);
 #if DBG
-    Command = READ_REGISTER_ULONG(UsbCmd);
+    Command = XHCI_READ_REGISTER_ULONG(UsbCmd);
     if ((Command & XHCI_USBCMD_RS) == 0 ||
         (Status & XHCI_USBSTS_HCH) != 0 ||
         (Status & XHCI_USBSTS_CNR) != 0)
@@ -10231,7 +10235,7 @@ XHCI_HaltController(
     if (!Extension || !Extension->OperationalRegisters)
         return MP_STATUS_ERROR;
 
-    Command = READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
+    Command = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
     if ((Command & XHCI_USBCMD_RS) == 0)
     {
         if (XHCI_WaitForRegisterBits(&Extension->OperationalRegisters->UsbSts,
@@ -10248,7 +10252,7 @@ XHCI_HaltController(
     }
 
     Command &= ~XHCI_USBCMD_RS;
-    WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd, Command);
+    XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd, Command);
 
     if (!XHCI_WaitForRegisterBits(&Extension->OperationalRegisters->UsbSts,
                                   XHCI_USBSTS_HCH,
@@ -10331,7 +10335,7 @@ XHCI_ResumeController(
     KeStallExecutionProcessor(10000); // 10ms delay
     DPRINT1("usbxhci: About to Run Controller (Retry)\n");
     Status = XHCI_RunController(Extension);
-    DPRINT1("usbxhci: RunController ret 0x%x STS=0x%x\n", Status, READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts));
+    DPRINT1("usbxhci: RunController ret 0x%x STS=0x%x\n", Status, XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts));
     if (Status != MP_STATUS_SUCCESS)
         return Status;
 
@@ -10378,7 +10382,7 @@ XHCI_RH_GetRootHubData(
     PortCount = Extension->NumberOfPorts;
     if (Extension->CapabilityRegisters)
     {
-        Hcs1 = READ_REGISTER_ULONG(&Extension->CapabilityRegisters->HcsParams1);
+        Hcs1 = XHCI_READ_REGISTER_ULONG(&Extension->CapabilityRegisters->HcsParams1);
         if (Hcs1 != 0)
         {
             ULONG HwPorts = XHCI_HCS1_MAX_PORTS(Hcs1);
@@ -10693,7 +10697,7 @@ XHCI_RH_GetPortStatus(
     if (!PortStatusReg)
         return MP_STATUS_ERROR;
 
-    PortValue = READ_REGISTER_ULONG(PortStatusReg);
+    PortValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
     if (Port <= XHCI_MAX_PORTS)
     {
         ULONG LatchedChanges =
@@ -10709,7 +10713,7 @@ XHCI_RH_GetPortStatus(
         /* Port lost power; try to re-enable so status reflects reality. */
         if (XHCI_ModifyPortBits(Extension, Port, XHCI_PORTSC_PP, 0, 0) == MP_STATUS_SUCCESS)
         {
-            PortValue = READ_REGISTER_ULONG(PortStatusReg);
+            PortValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
             PoweredOn = TRUE;
         }
     }

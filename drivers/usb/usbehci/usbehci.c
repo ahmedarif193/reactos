@@ -2102,7 +2102,7 @@ EHCI_MapAsyncTransferToTd(IN PEHCI_EXTENSION EhciExtension,
     /* also remember a mapped VA for debug hexdump at completion */
 #if DBG
     {
-        ULONG_PTR va = (ULONG_PTR)SgList->MappedSystemVa + TransferedLen;
+        ULONGLONG va = (ULONGLONG)(ULONG_PTR)SgList->MappedSystemVa + TransferedLen;
         TD->Pad[2] = (ULONG)(va & 0xFFFFFFFF);
         TD->Pad[3] = (ULONG)((va >> 32) & 0xFFFFFFFF);
     }
@@ -3678,13 +3678,11 @@ EHCI_ProcessDoneAsyncTd(IN PEHCI_EXTENSION EhciExtension,
 
             /* Optional hexdump of transferred data (first bytes) */
             {
-                ULONG_PTR vaLow = TD->Pad[2];
-                ULONG_PTR vaHigh = TD->Pad[3];
-                ULONG_PTR va = vaLow | (vaHigh << 32);
+                ULONGLONG va = ((ULONGLONG)TD->Pad[3] << 32) | TD->Pad[2];
                 if (va && LengthTransfered)
                 {
                     ULONG dumpLen = (LengthTransfered < 32) ? LengthTransfered : 32;
-                    EHCI_HexDump("EHCI_TD_DONE DATA", (const VOID*)va, dumpLen);
+                    EHCI_HexDump("EHCI_TD_DONE DATA", (const VOID*)(ULONG_PTR)va, dumpLen);
                 }
             }
         }

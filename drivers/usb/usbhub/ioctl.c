@@ -979,7 +979,7 @@ USBH_IoctlGetPortConnectorProperties(IN PUSBHUB_FDO_EXTENSION HubExtension,
             }
             else
             {
-                SIZE_T CompanionBytes = 0;
+                size_t CompanionBytes = 0;
                 if (NT_SUCCESS(RtlStringCbLengthW(Properties->CompanionHubSymbolicLinkName,
                                                   SymbolicLinkLength,
                                                   &CompanionBytes)) &&

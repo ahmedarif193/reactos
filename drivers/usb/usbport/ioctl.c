@@ -17,6 +17,7 @@ static VOID USBPORT_FillDeviceCharacteristics(IN PUSBPORT_DEVICE_EXTENSION FdoEx
 
 static
 VOID
+NTAPI
 USBPORT_CancelTransportNotificationIrp(
     IN PDEVICE_OBJECT DeviceObject,
     IN PIRP Irp);
@@ -167,6 +168,7 @@ USBPORT_InvalidateTimeSyncGeneration(
 
 static
 VOID
+NTAPI
 USBPORT_CancelTransportNotificationIrp(
     IN PDEVICE_OBJECT DeviceObject,
     IN PIRP Irp)

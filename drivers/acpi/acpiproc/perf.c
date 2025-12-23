@@ -712,7 +712,7 @@ AcpiprocCapturePss(
     PACPI_METHOD_ARGUMENT Argument;
     ULONG StateIndex;
     PACPIPROC_PSS_ENTRY States;
-    SIZE_T AllocationSize;
+    size_t AllocationSize;
 
     Status = AcpiprocExecuteMethod(DeviceExtension, "_PSS", &OutputBuffer, &OutputLength);
     if (!NT_SUCCESS(Status))

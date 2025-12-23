@@ -16,6 +16,7 @@
 #endif
 
 VOID
+NTAPI
 HalProcessorIdle(VOID);
 BOOLEAN
 NTAPI
@@ -86,7 +87,7 @@ AcpiprocCaptureLegacyCstates(
 {
     HAL_ACPI_C_STATE_INFO HalInfo;
     PACPIPROC_CSTATE_ENTRY States = NULL;
-    SIZE_T AllocationSize;
+    size_t AllocationSize;
     NTSTATUS Status;
 
     Status = HalGetAcpiCStateInformation(&HalInfo);
@@ -208,7 +209,7 @@ AcpiprocCaptureCst(
     ULONG PackageCount;
     ULONG ActualCount = 0;
     PACPIPROC_CSTATE_ENTRY States = NULL;
-    SIZE_T AllocationSize;
+    size_t AllocationSize;
     PUCHAR BufferEnd;
     NTSTATUS Status;
 

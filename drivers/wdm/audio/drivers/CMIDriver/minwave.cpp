@@ -780,7 +780,7 @@ STDMETHODIMP CMiniportWaveCMI::NewStream(PMINIPORTWAVECYCLICSTREAM *OutStream, P
 #ifdef WAVERT
    		stream[PCM_OUT_STREAM]->SetState(KSSTATE_STOP);
 #else
-   		stream[PCM_OUT_STREAM]->SetState(KSSTATE_STOP_AC3);
+   		stream[PCM_OUT_STREAM]->SetState((KSSTATE)KSSTATE_STOP_AC3);
 #endif
 	}
 	if ((streamIndex == PCM_OUT_STREAM) && isStreamRunning[AC3_OUT_STREAM]) {
@@ -1232,7 +1232,7 @@ CMiniportWaveStreamCMI::~CMiniportWaveStreamCMI(void)
 		Miniport->stream[PCM_OUT_STREAM]->prepareStream();
 		Miniport->stream[PCM_OUT_STREAM]->SetState(KSSTATE_ACQUIRE);
 		Miniport->stream[PCM_OUT_STREAM]->state = temp;
-		Miniport->stream[PCM_OUT_STREAM]->SetState(KSSTATE_RUN_AC3);
+		Miniport->stream[PCM_OUT_STREAM]->SetState((KSSTATE)KSSTATE_RUN_AC3);
 	}
 
 	if (Miniport) {
@@ -1481,14 +1481,14 @@ STDMETHODIMP CMiniportWaveStreamCMI::SetState(KSSTATE NewState)
 		return STATUS_INVALID_PARAMETER;
 	}
 
-	if (NewState == KSSTATE_RUN_AC3) {
+	if ((ULONG)NewState == KSSTATE_RUN_AC3) {
 		NewState = state;
 		state = KSSTATE_STOP;
 	}
 
 	// STOP -> ACQUIRE -> PAUSE -> PLAY -> PAUSE -> ACQUIRE -> STOP
 	if (state != NewState) {
-		switch (NewState) {
+		switch ((ULONG)NewState) {
 			case KSSTATE_ACQUIRE:
 				DBGPRINT(("---KSSTATE_ACQUIRE: previous state: %d", state));
 				if (state == KSSTATE_PAUSE) {
@@ -1606,7 +1606,7 @@ STDMETHODIMP CMiniportWaveStreamCMI::SetState(KSSTATE NewState)
 				KeReleaseMutex(&Miniport->mutex, FALSE);
 				break;
 		}
-		if (NewState != KSSTATE_STOP_AC3) {
+		if ((ULONG)NewState != KSSTATE_STOP_AC3) {
 			state = NewState;
 		}
 	}
