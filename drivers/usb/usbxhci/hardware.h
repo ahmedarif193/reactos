@@ -186,8 +186,8 @@ typedef struct _XHCI_PROTOCOL_CAPABILITY {
 
 #define XHCI_TRB_TRT_MASK          (3 << 16)
 #define XHCI_TRB_TRT_NO_DATA       (0 << 16)
-#define XHCI_TRB_TRT_OUT           (2 << 16)
-#define XHCI_TRB_TRT_IN            (3 << 16)
+#define XHCI_TRB_TRT_OUT           (1 << 16)
+#define XHCI_TRB_TRT_IN            (2 << 16)
 
 #define XHCI_TRB_TO_SLOT_ID(ctrl)  (((ctrl) >> 24) & 0xFF)
 #define XHCI_TRB_TO_EP_ID(ctrl)    (((ctrl) >> 16) & 0x1F)

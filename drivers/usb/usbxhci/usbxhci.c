@@ -5900,6 +5900,16 @@ XHCI_DetectHardwareQuirks(
             Extension->Quirks |= XHCI_QUIRK_FORCE_32BIT_DMA;
         }
 
+        /* QEMU's emulation reports 64-bit DMA capability but still runs on
+         * guests with <4GB of RAM. Keep ring/buffer allocations below 4GB to
+         * avoid programming bogus high addresses that some builds have been
+         * returning for common buffers. */
+        if (VendorId == 0x1B36 && DeviceId == 0x000D &&
+            !(Extension->Quirks & XHCI_QUIRK_FORCE_32BIT_DMA))
+        {
+            Extension->Quirks |= XHCI_QUIRK_FORCE_32BIT_DMA;
+        }
+
         /* Example: early Intel Series 7/8 controllers can be slow to reset. */
         if (VendorId == 0x8086 && Extension->HciVersion <= 0x0100)
         {
@@ -6212,10 +6222,44 @@ XHCI_BuildCommonBufferLayout(
     BaseVa = (PUCHAR)UsbPortResources->StartVA;
     BasePa = (ULONGLONG)UsbPortResources->StartPA;
 
+    if ((Extension->Quirks & XHCI_QUIRK_FORCE_32BIT_DMA) &&
+        (BasePa + Layout.TotalSize - 1) >= 0x100000000ULL)
+    {
+        PHYSICAL_ADDRESS Low, High, Skip;
+
+        Low.QuadPart = 0;
+        High.QuadPart = 0xFFFFFFFFULL;
+        Skip.QuadPart = 0;
+
+        BaseVa = MmAllocateContiguousMemorySpecifyCache(SizeToZero,
+                                                        Low,
+                                                        High,
+                                                        Skip,
+                                                        MmCached);
+        if (!BaseVa)
+            return MP_STATUS_NO_RESOURCES;
+
+        BasePa = (ULONGLONG)MmGetPhysicalAddress(BaseVa).QuadPart;
+        if ((BasePa + Layout.TotalSize - 1) >= 0x100000000ULL)
+        {
+            MmFreeContiguousMemory(BaseVa);
+            return MP_STATUS_NO_RESOURCES;
+        }
+        Extension->AllocatedCommonBuffer = BaseVa;
+        Extension->AllocatedCommonBufferPhysical.QuadPart = BasePa;
+        Extension->AllocatedCommonBufferSize = SizeToZero;
+    }
+    else
+    {
+        Extension->AllocatedCommonBuffer = NULL;
+        Extension->AllocatedCommonBufferPhysical.QuadPart = 0;
+        Extension->AllocatedCommonBufferSize = 0;
+    }
+
     RtlZeroMemory(BaseVa, SizeToZero);
 
-    Extension->HcResources = (PXHCI_HC_RESOURCES)UsbPortResources->StartVA;
-    Extension->HcResourcesPhysical.QuadPart = UsbPortResources->StartPA;
+    Extension->HcResources = (PXHCI_HC_RESOURCES)BaseVa;
+    Extension->HcResourcesPhysical.QuadPart = BasePa;
     Extension->CommonBufferSize = Layout.TotalSize;
 
 #if DBG
@@ -8943,6 +8987,14 @@ XHCI_StopController(PVOID MiniPortExtension,
         KeAcquireSpinLock(&Extension->DeferredTransferLock, &OldIrql);
     }
     KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
+
+    if (Extension->AllocatedCommonBuffer)
+    {
+        MmFreeContiguousMemory(Extension->AllocatedCommonBuffer);
+        Extension->AllocatedCommonBuffer = NULL;
+        Extension->AllocatedCommonBufferPhysical.QuadPart = 0;
+        Extension->AllocatedCommonBufferSize = 0;
+    }
     Extension->MmioBase = NULL;
     Extension->CapabilityRegisters = NULL;
     Extension->OperationalRegisters = NULL;

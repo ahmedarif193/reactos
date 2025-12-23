@@ -196,6 +196,9 @@ typedef struct _XHCI_EXTENSION {
   UCHAR ProtocolSegmentCount;
   XHCI_PROTOCOL_SEGMENT ProtocolSegments[XHCI_MAX_PROTOCOL_SEGMENTS];
   UCHAR PortProtocol[XHCI_MAX_PORTS + 1];
+  PVOID AllocatedCommonBuffer;
+  PHYSICAL_ADDRESS AllocatedCommonBufferPhysical;
+  SIZE_T AllocatedCommonBufferSize;
   /* MSI/MSI-X discovery (message interrupts not yet connected on ReactOS) */
   BOOLEAN MsiSupported;
     BOOLEAN MsixSupported;
