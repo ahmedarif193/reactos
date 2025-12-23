@@ -41,6 +41,10 @@
 #define USBPORT_RESOURCES_INTERRUPT 2
 #define USBPORT_RESOURCES_MEMORY    4
 
+#if defined(_M_IX86)
+#include <pshpack4.h>
+#endif
+
 typedef struct _USBPORT_RESOURCES {
   ULONG ResourcesTypes;
   USB_CONTROLLER_FLAVOR HcFlavor;
@@ -63,6 +67,10 @@ typedef struct _USBPORT_RESOURCES {
   UCHAR Reserved2;
   UCHAR Reserved3;
 } USBPORT_RESOURCES, *PUSBPORT_RESOURCES;
+
+#if defined(_M_IX86)
+#include <poppack.h>
+#endif
 
 C_ASSERT(sizeof(USBPORT_RESOURCES) == 40 + 6 * sizeof(PVOID));
 

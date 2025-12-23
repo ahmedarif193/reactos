@@ -42,17 +42,24 @@ typedef __declspec(align(1)) __m128i __m128i_u;
 
 #else /* _MSC_VER */
 
-typedef double __m128d __attribute__((__vector_size__(16), __aligned__(16)));
-typedef long long __m128i __attribute__((__vector_size__(16), __aligned__(16)));
+#if defined(__clang__) && defined(__REACTOS_CLANG_MMINTRIN)
+#define __REACTOS_CLANG_MMINTRIN_TYPES 1
+#endif
 
+typedef double __m128d __attribute__((__vector_size__(16), __aligned__(16)));
 typedef double __m128d_u __attribute__((__vector_size__(16), __aligned__(1)));
 typedef long long __m128i_u __attribute__((__vector_size__(16), __aligned__(1)));
 
 /* Type defines.  */
 typedef double __v2df __attribute__((__vector_size__(16)));
+
+#ifndef __REACTOS_CLANG_MMINTRIN_TYPES
+typedef long long __m128i __attribute__((__vector_size__(16), __aligned__(16)));
 typedef long long __v2di __attribute__((__vector_size__(16)));
+typedef int __v4si __attribute__((__vector_size__(16)));
 typedef short __v8hi __attribute__((__vector_size__(16)));
 typedef char __v16qi __attribute__((__vector_size__(16)));
+#endif
 
 /* Unsigned types */
 typedef unsigned long long __v2du __attribute__((__vector_size__(16)));
@@ -915,17 +922,29 @@ __INTRIN_INLINE_SSE2 int _mm_cvttsd_si32(__m128d a)
 
 __INTRIN_INLINE_MMXSSE2 __m64 _mm_cvtpd_pi32(__m128d a)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return __REACTOS_TRUNC64(__builtin_ia32_cvtpd2dq((__v2df)a));
+#else
     return (__m64)__builtin_ia32_cvtpd2pi((__v2df)a);
+#endif
 }
 
 __INTRIN_INLINE_MMXSSE2 __m64 _mm_cvttpd_pi32(__m128d a)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return __REACTOS_TRUNC64(__builtin_ia32_cvttpd2dq((__v2df)a));
+#else
     return (__m64)__builtin_ia32_cvttpd2pi((__v2df)a);
+#endif
 }
 
 __INTRIN_INLINE_MMXSSE2 __m128d _mm_cvtpi32_pd(__m64 a)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return (__m128d)__builtin_convertvector((__v2si)a, __v2df);
+#else
     return __builtin_ia32_cvtpi2pd((__v2si)a);
+#endif
 }
 
 __INTRIN_INLINE_SSE2 double _mm_cvtsd_f64(__m128d a)
@@ -1141,7 +1160,11 @@ __INTRIN_INLINE_SSE2 __m128i _mm_add_epi32(__m128i a, __m128i b)
 
 __INTRIN_INLINE_MMXSSE2 __m64 _mm_add_si64(__m64 a, __m64 b)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return (__m64)((unsigned long long)a + (unsigned long long)b);
+#else
     return (__m64)__builtin_ia32_paddq((__v1di)a, (__v1di)b);
+#endif
 }
 
 __INTRIN_INLINE_SSE2 __m128i _mm_add_epi64(__m128i a, __m128i b)
@@ -1253,7 +1276,12 @@ __INTRIN_INLINE_SSE2 __m128i _mm_mullo_epi16(__m128i a, __m128i b)
 
 __INTRIN_INLINE_MMXSSE2 __m64 _mm_mul_su32(__m64 a, __m64 b)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return __REACTOS_TRUNC64(__builtin_ia32_pmuludq128((__v4si)__REACTOS_ANYEXT128(a),
+                                                       (__v4si)__REACTOS_ANYEXT128(b)));
+#else
     return (__m64)__builtin_ia32_pmuludq((__v2si)a, (__v2si)b);
+#endif
 }
 
 __INTRIN_INLINE_SSE2 __m128i _mm_mul_epu32(__m128i a, __m128i b)
@@ -1283,7 +1311,11 @@ __INTRIN_INLINE_SSE2 __m128i _mm_sub_epi32(__m128i a, __m128i b)
 
 __INTRIN_INLINE_MMXSSE2 __m64 _mm_sub_si64(__m64 a, __m64 b)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return (__m64)((unsigned long long)a - (unsigned long long)b);
+#else
     return (__m64)__builtin_ia32_psubq((__v1di)a, (__v1di)b);
+#endif
 }
 
 __INTRIN_INLINE_SSE2 __m128i _mm_sub_epi64(__m128i a, __m128i b)

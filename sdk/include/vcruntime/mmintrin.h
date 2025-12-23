@@ -24,6 +24,15 @@
 
 #include <vcruntime.h>
 
+#if defined(__clang__) && !defined(_MSC_VER)
+#if __has_include_next(<mmintrin.h>)
+#include_next <mmintrin.h>
+#define __REACTOS_CLANG_MMINTRIN 1
+#endif
+#endif
+
+#ifndef __REACTOS_CLANG_MMINTRIN
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -658,5 +667,7 @@ __INTRIN_INLINE_MMX __m64 _mm_set1_pi8(char b)
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* __REACTOS_CLANG_MMINTRIN */
 
 #endif /* _MMINTRIN_H_INCLUDED */

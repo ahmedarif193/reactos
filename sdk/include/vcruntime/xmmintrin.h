@@ -71,6 +71,17 @@ typedef union _DECLSPEC_INTRIN_TYPE _CRT_ALIGN(16) __m128
 
 #endif /* _MSC_VER */
 
+#if defined(__REACTOS_CLANG_MMINTRIN)
+#define __REACTOS_TRUNC64(x) \
+    (__m64)__builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+#define __REACTOS_ZEXT128(x) \
+    (__m128i)__builtin_shufflevector((__v2si)(x), __extension__(__v2si){}, 0, 1, 2, 3)
+#define __REACTOS_ANYEXT128(x) \
+    (__m128i)__builtin_shufflevector((__v2si)(x), __extension__(__v2si){}, 0, 1, -1, -1)
+#define __REACTOS_ZEROUPPER64(x) \
+    (__m128i)__builtin_shufflevector((__v4si)(x), __extension__(__v4si){}, 0, 1, 4, 5)
+#endif
+
 #define _MM_ALIGN16 _VCRT_ALIGN(16)
 
 /* Constants for use with _mm_prefetch.  */
@@ -875,7 +886,11 @@ __INTRIN_INLINE_SSE long long _mm_cvtss_si64(__m128 __a)
 // _mm_cvt_ps2pi
 __INTRIN_INLINE_SSE __m64 _mm_cvtps_pi32(__m128 __a)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return __REACTOS_TRUNC64(__builtin_ia32_cvtps2dq((__v4sf)__REACTOS_ZEROUPPER64(__a)));
+#else
     return (__m64)__builtin_ia32_cvtps2pi((__v4sf)__a);
+#endif
 }
 
 // _mm_cvtt_ss2si
@@ -894,7 +909,11 @@ __INTRIN_INLINE_SSE long long _mm_cvttss_si64(__m128 __a)
 // _mm_cvtt_ps2pi
 __INTRIN_INLINE_SSE __m64 _mm_cvttps_pi32(__m128 __a)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return __REACTOS_TRUNC64(__builtin_ia32_cvttps2dq((__v4sf)__REACTOS_ZEROUPPER64(__a)));
+#else
     return (__m64)__builtin_ia32_cvttps2pi((__v4sf)__a);
+#endif
 }
 
 // _mm_cvt_si2ss
@@ -915,7 +934,14 @@ __INTRIN_INLINE_SSE __m128 _mm_cvtsi64_ss(__m128 __a, long long __b)
 // _mm_cvt_pi2ps
 __INTRIN_INLINE_SSE __m128 _mm_cvtpi32_ps(__m128 __a, __m64 __b)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return (__m128)__builtin_shufflevector(
+        (__v4sf)__a,
+        __builtin_convertvector((__v4si)__REACTOS_ZEXT128(__b), __v4sf),
+        4, 5, 2, 3);
+#else
     return __builtin_ia32_cvtpi2ps((__v4sf)__a, (__v2si)__b);
+#endif
 }
 
 __INTRIN_INLINE_SSE float _mm_cvtss_f32(__m128 __a)
@@ -1120,8 +1146,8 @@ __INTRIN_INLINE_SSE void _mm_storer_ps(float *__p, __m128 __a)
 
 __INTRIN_INLINE_SSE void _mm_stream_pi(__m64 *__p, __m64 __a)
 {
-#ifdef __clang__
-    __builtin_ia32_movntq((__v1di*)__p, __a);
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    __builtin_nontemporal_store(__a, (__m64 *)__p);
 #else
     __builtin_ia32_movntq((long long unsigned int *)__p, (long long unsigned int)__a);
 #endif
@@ -1167,42 +1193,68 @@ __INTRIN_INLINE_SSE __m64 _mm_insert_pi16 (__m64 const __a, int const __d, int c
 // _m_pmaxsw
 __INTRIN_INLINE_SSE __m64 _mm_max_pi16(__m64 __a, __m64 __b)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return (__m64)__builtin_elementwise_max((__v4hi)__a, (__v4hi)__b);
+#else
     return (__m64)__builtin_ia32_pmaxsw((__v4hi)__a, (__v4hi)__b);
+#endif
 }
 
 // _m_pmaxub
 __INTRIN_INLINE_SSE __m64 _mm_max_pu8(__m64 __a, __m64 __b)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return (__m64)__builtin_elementwise_max((__v8qu)__a, (__v8qu)__b);
+#else
     return (__m64)__builtin_ia32_pmaxub((__v8qi)__a, (__v8qi)__b);
+#endif
 }
 
 // _m_pminsw
 __INTRIN_INLINE_SSE __m64 _mm_min_pi16(__m64 __a, __m64 __b)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return (__m64)__builtin_elementwise_min((__v4hi)__a, (__v4hi)__b);
+#else
     return (__m64)__builtin_ia32_pminsw((__v4hi)__a, (__v4hi)__b);
+#endif
 }
 
 // _m_pminub
 __INTRIN_INLINE_SSE __m64 _mm_min_pu8(__m64 __a, __m64 __b)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return (__m64)__builtin_elementwise_min((__v8qu)__a, (__v8qu)__b);
+#else
     return (__m64)__builtin_ia32_pminub((__v8qi)__a, (__v8qi)__b);
+#endif
 }
 
 // _m_pmovmskb
 __INTRIN_INLINE_SSE int _mm_movemask_pi8(__m64 __a)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return __builtin_ia32_pmovmskb128((__v16qi)__REACTOS_ZEXT128(__a));
+#else
     return __builtin_ia32_pmovmskb((__v8qi)__a);
+#endif
 }
 
 // _m_pmulhuw
 __INTRIN_INLINE_SSE __m64 _mm_mulhi_pu16(__m64 __a, __m64 __b)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return __REACTOS_TRUNC64(__builtin_ia32_pmulhuw128((__v8hi)__REACTOS_ANYEXT128(__a),
+                                                       (__v8hi)__REACTOS_ANYEXT128(__b)));
+#else
     return (__m64)__builtin_ia32_pmulhuw((__v4hi)__a, (__v4hi)__b);
+#endif
 }
 
-#ifdef __clang__
+#ifdef __REACTOS_CLANG_MMINTRIN
 #define _m_pshufw(a, n) \
-    ((__m64)__builtin_ia32_pshufw((__v4hi)(__m64)(a), (n)))
+    ((__m64)__builtin_shufflevector((__v4hi)(__m64)(a), __extension__(__v4hi){}, \
+                                   (n) & 0x3, ((n) >> 2) & 0x3, ((n) >> 4) & 0x3, ((n) >> 6) & 0x3))
 #else
 // _m_pshufw
 __INTRIN_INLINE_MMX __m64 _mm_shuffle_pi16 (__m64 __a, int const __n)
@@ -1214,25 +1266,53 @@ __INTRIN_INLINE_MMX __m64 _mm_shuffle_pi16 (__m64 __a, int const __n)
 // _m_maskmovq
 __INTRIN_INLINE_SSE void _mm_maskmove_si64(__m64 __d, __m64 __n, char *__p)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    __m128i __d128 = __REACTOS_ANYEXT128(__d);
+    __m128i __n128 = __REACTOS_ZEXT128(__n);
+    if (((__SIZE_TYPE__)__p & 0xfff) >= 4096 - 15 &&
+        ((__SIZE_TYPE__)__p & 0xfff) <= 4096 - 8)
+    {
+        __p -= 8;
+        __d128 = __builtin_ia32_pslldqi128_byteshift((__v2di)__d128, 8);
+        __n128 = __builtin_ia32_pslldqi128_byteshift((__v2di)__n128, 8);
+    }
+    __builtin_ia32_maskmovdqu((__v16qi)__d128, (__v16qi)__n128, __p);
+#else
     __builtin_ia32_maskmovq((__v8qi)__d, (__v8qi)__n, __p);
+#endif
 }
 
 // _m_pavgb
 __INTRIN_INLINE_SSE __m64 _mm_avg_pu8(__m64 __a, __m64 __b)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return __REACTOS_TRUNC64(__builtin_ia32_pavgb128((__v16qi)__REACTOS_ANYEXT128(__a),
+                                                     (__v16qi)__REACTOS_ANYEXT128(__b)));
+#else
     return (__m64)__builtin_ia32_pavgb((__v8qi)__a, (__v8qi)__b);
+#endif
 }
 
 // _m_pavgw
 __INTRIN_INLINE_SSE __m64 _mm_avg_pu16(__m64 __a, __m64 __b)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return __REACTOS_TRUNC64(__builtin_ia32_pavgw128((__v8hi)__REACTOS_ANYEXT128(__a),
+                                                     (__v8hi)__REACTOS_ANYEXT128(__b)));
+#else
     return (__m64)__builtin_ia32_pavgw((__v4hi)__a, (__v4hi)__b);
+#endif
 }
 
 // _m_psadbw
 __INTRIN_INLINE_SSE __m64 _mm_sad_pu8(__m64 __a, __m64 __b)
 {
+#if defined(__REACTOS_CLANG_MMINTRIN)
+    return __REACTOS_TRUNC64(__builtin_ia32_psadbw128((__v16qi)__REACTOS_ZEXT128(__a),
+                                                      (__v16qi)__REACTOS_ZEXT128(__b)));
+#else
     return (__m64)__builtin_ia32_psadbw((__v8qi)__a, (__v8qi)__b);
+#endif
 }
 
 #endif // __GNUC__
