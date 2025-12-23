@@ -41,6 +41,10 @@
 #include "wine/unicode.h"
 #include "wine/list.h"
 
+#ifndef YYUSE
+#define YYUSE(x) (void)(x)
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(msi);
 
 typedef struct tag_yyinput
@@ -150,13 +154,13 @@ condition:
         {
             COND_input* cond = (COND_input*) info;
             cond->result = $1;
-            YY_USE(yynerrs);
+            YYUSE(yynerrs);
         }
   | /* empty */
         {
             COND_input* cond = (COND_input*) info;
             cond->result = MSICONDITION_NONE;
-            YY_USE(yynerrs);
+            YYUSE(yynerrs);
         }
     ;
 

@@ -27,6 +27,10 @@
 #include <libxml/xpathInternals.h>
 #include "wine/debug.h"
 
+#ifndef YYUSE
+#define YYUSE(x) (void)(x)
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(msxml);
 
 
@@ -77,7 +81,7 @@ static void xslpattern_error(parser_param* param, void const* scanner, char cons
 
 %initial-action
 {
-    YY_USE(yynerrs);
+    YYUSE(yynerrs);
 }
 
 %left TOK_OpAnd TOK_OpOr

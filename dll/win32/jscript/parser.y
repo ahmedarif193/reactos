@@ -24,7 +24,10 @@
 
 #include "wine/debug.h"
 
+#ifndef __WINE_DBCH_JSCRIPT_DEFINED
+#define __WINE_DBCH_JSCRIPT_DEFINED
 WINE_DEFAULT_DEBUG_CHANNEL(jscript);
+#endif
 
 static int parser_error(parser_ctx_t*,const char*);
 static void set_error(parser_ctx_t*,UINT);

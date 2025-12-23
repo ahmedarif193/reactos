@@ -28,7 +28,10 @@
 #define YYUSE(x) (void)(x)
 #endif
 
+#ifndef __WINE_DBCH_JSCRIPT_DEFINED
+#define __WINE_DBCH_JSCRIPT_DEFINED
 WINE_DEFAULT_DEBUG_CHANNEL(jscript);
+#endif
 
 %}
 

@@ -3,11 +3,14 @@ add_definitions(
     -D_URLMON_
     -DENTRY_PREFIX=URLMON_
     -DPROXY_DELEGATION
-    -DWINE_REGISTER_DLL
-    -DPROXY_CLSID_IS={0x79EAC9F1,0xBAF9,0x11CE,{0x8C,0x82,0x00,0xAA,0x00,0x4B,0xA9,0x0B}})
+    -DWINE_REGISTER_DLL)
 
 spec2def(urlmon.dll urlmon.spec ADD_IMPORTLIB)
 add_rpcproxy_files(urlmon_urlmon.idl)
+
+set(_proxy_def_header ${CMAKE_CURRENT_SOURCE_DIR}/proxy_clsids.h)
+set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/proxy.dlldata.c PROPERTIES COMPILE_FLAGS "-include ${_proxy_def_header}")
+set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/urlmon_urlmon_p.c PROPERTIES COMPILE_FLAGS "-include ${_proxy_def_header}")
 
 set(_source_file ${CMAKE_CURRENT_SOURCE_DIR}/urlmon.inf)
 set(_converted_file ${CMAKE_CURRENT_BINARY_DIR}/urlmon_utf16.inf)

@@ -2,6 +2,7 @@
 spec2def(lz32.dll lz32.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
+    lz32_stub.c
     version.rc
     ${CMAKE_CURRENT_BINARY_DIR}/lz32.def)
 
