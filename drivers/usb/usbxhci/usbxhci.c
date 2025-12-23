@@ -9,6 +9,16 @@
 #define NDEBUG
 #include <debug.h>
 
+/*
+ * XHCI ROADMAP (Windows 8/10-style behavior):
+ * - Initialize DCBAA + scratchpads; size contexts via HCCPARAMS.
+ * - Implement command ring + doorbell flow (Enable/Address/Configure/Stop/Set Dequeue).
+ * - Implement event ring (ERST/ERDP) and command/transfer event handling.
+ * - Build endpoint transfer rings; map TRBs; complete USBPORT transfers.
+ * - Handle PORTSC state changes, reset/enable, and enumeration sequence.
+ * - Add halt recovery and error paths (Stop Endpoint, Set TR Dequeue).
+ */
+
 #define XHCI_READ_REGISTER_ULONG(_reg) READ_REGISTER_ULONG((PULONG)(ULONG_PTR)(_reg))
 #define XHCI_WRITE_REGISTER_ULONG(_reg, _val) WRITE_REGISTER_ULONG((PULONG)(ULONG_PTR)(_reg), (_val))
 #define XHCI_READ_REGISTER_UCHAR(_reg) READ_REGISTER_UCHAR((PUCHAR)(ULONG_PTR)(_reg))
@@ -108,7 +118,6 @@ XHCI_GetDeviceEndpointContextVa(_In_ PXHCI_EXTENSION Extension,
 #define XHCI_TRACE_TRANSFERS 0x00000002
 #define XHCI_TRACE_COMMANDS  0x00000004
 #define XHCI_TRACE_PORTS     0x00000008
-
 
 #if DBG
 static ULONG g_XhciTraceMask;

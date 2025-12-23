@@ -232,6 +232,7 @@ C_ASSERT(RTL_NUMBER_OF(LinkTable) == INTERRUPT_ENDPOINTs + 1);
 static PCSTR
 EHCI_DecodeConditionCode(UCHAR Status)
 {
+#if DBG
     switch (Status)
     {
         case EHCI_TOKEN_STATUS_HALTED:
@@ -247,6 +248,10 @@ EHCI_DecodeConditionCode(UCHAR Status)
         default:
             return "STATUS_OK";
     }
+#else
+    UNREFERENCED_PARAMETER(Status);
+    return "STATUS_OK";
+#endif
 }
 
 PEHCI_HCD_TD
