@@ -364,6 +364,8 @@ typedef struct _SCSI_PORT_DEVICE_EXTENSION
 
     PHYSICAL_ADDRESS PhysicalAddress;
     ULONG CommonBufferLength;
+    BOOLEAN CommonBufferFromMm;
+    MEMORY_CACHING_TYPE CommonBufferCacheType;
     ULONG IoAddress;
 
     BOOLEAN InterruptMessageBased;
@@ -485,6 +487,7 @@ SpiEnsureAdapterObject(
 NTSTATUS
 SpiAllocateCommonBuffer(
     _Inout_ PSCSI_PORT_DEVICE_EXTENSION DeviceExtension,
+    _In_ PPORT_CONFIGURATION_INFORMATION ConfigInfo,
     _In_ ULONG NonCachedSize);
 
 NTSTATUS

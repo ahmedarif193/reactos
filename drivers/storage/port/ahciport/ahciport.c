@@ -19,6 +19,93 @@
 #define AHCI_ALIGN_PTR(Ptr, Alignment) \
     ((PUCHAR)(((ULONG_PTR)(Ptr) + ((Alignment) - 1)) & ~((ULONG_PTR)(Alignment) - 1)))
 
+#define AHCI_QUIRK_ALLOW_TINY_PRDT_CROSS 0x00000001
+#define AHCI_PCI_ID_ANY                0xFFFF
+
+typedef struct _AHCI_PCI_QUIRK {
+    USHORT VendorId;
+    USHORT DeviceId;
+    USHORT SubVendorId;
+    USHORT SubDeviceId;
+    UCHAR RevisionId;
+    UCHAR RevisionMask;
+    ULONG Flags;
+} AHCI_PCI_QUIRK, *PAHCI_PCI_QUIRK;
+
+static const AHCI_PCI_QUIRK AhciPciQuirks[] =
+{
+    /* Populate with controllers that mis-handle sub-sector PRDT entries. */
+    { 0, 0, 0, 0, 0, 0, 0 }
+};
+
+static BOOLEAN
+AhciReadPciConfig(
+    _In_ PAHCI_ADAPTER_EXTENSION Adapter,
+    _In_ PPORT_CONFIGURATION_INFORMATION ConfigInfo,
+    _Out_ PPCI_COMMON_CONFIG PciConfig)
+{
+    ULONG length;
+
+    if (ConfigInfo->AdapterInterfaceType != PCIBus)
+        return FALSE;
+
+#ifdef AHCI_USE_STORPORT
+    length = StorPortGetBusData(Adapter,
+                                PCIConfiguration,
+                                ConfigInfo->SystemIoBusNumber,
+                                ConfigInfo->SlotNumber,
+                                PciConfig,
+                                sizeof(*PciConfig));
+#else
+    length = ScsiPortGetBusData(Adapter,
+                                PCIConfiguration,
+                                ConfigInfo->SystemIoBusNumber,
+                                ConfigInfo->SlotNumber,
+                                PciConfig,
+                                sizeof(*PciConfig));
+#endif
+
+    return (length == sizeof(*PciConfig));
+}
+
+static ULONG
+AhciGetPciQuirks(
+    _In_ const PCI_COMMON_CONFIG *PciConfig)
+{
+    ULONG quirks = 0;
+
+    for (ULONG i = 0; i < RTL_NUMBER_OF(AhciPciQuirks); ++i)
+    {
+        const AHCI_PCI_QUIRK *entry = &AhciPciQuirks[i];
+        BOOLEAN revMatch;
+
+        if (entry->Flags == 0)
+            continue;
+
+        if ((entry->VendorId != AHCI_PCI_ID_ANY) && (entry->VendorId != PciConfig->VendorID))
+            continue;
+        if ((entry->DeviceId != AHCI_PCI_ID_ANY) && (entry->DeviceId != PciConfig->DeviceID))
+            continue;
+        if ((entry->SubVendorId != AHCI_PCI_ID_ANY) && (entry->SubVendorId != PciConfig->u.type0.SubVendorID))
+            continue;
+        if ((entry->SubDeviceId != AHCI_PCI_ID_ANY) && (entry->SubDeviceId != PciConfig->u.type0.SubSystemID))
+            continue;
+
+        if (entry->RevisionMask == 0)
+            revMatch = TRUE;
+        else
+            revMatch = ((PciConfig->RevisionID & entry->RevisionMask) ==
+                        (entry->RevisionId & entry->RevisionMask));
+
+        if (!revMatch)
+            continue;
+
+        quirks |= entry->Flags;
+    }
+
+    return quirks;
+}
+
 #ifdef AHCI_USE_STORPORT
 #ifndef STOR_STATUS_SUCCESS
 #define STOR_STATUS_SUCCESS 0
@@ -705,6 +792,8 @@ AhciBuildPrdt(
         PVOID virtualAddress = (PVOID)((PUCHAR)Buffer + offset);
         SCSI_PHYSICAL_ADDRESS phys = ScsiPortGetPhysicalAddress(Adapter, Srb, virtualAddress, &chunkLength);
         ULONGLONG physAddress;
+        BOOLEAN firstInChunk = TRUE;
+        const ULONG prdtByteCountMask = 0x3FFFFF;
 
         if (chunkLength == 0)
         {
@@ -717,6 +806,13 @@ AhciBuildPrdt(
                        (Srb != NULL) ? Srb->DataBuffer : NULL,
                        (Srb != NULL) ? (ULONG)Srb->DataTransferLength : 0);
             break;
+        }
+
+        if (!(Adapter->Cap & AHCI_CAP_S64A) && phys.HighPart)
+        {
+            AHCI_ERROR("BuildPrdt: HBA lacks 64-bit DMA but got phys=%08lx%08lx",
+                       (ULONG)phys.HighPart, (ULONG)phys.LowPart);
+            return 0;
         }
 
         if (chunkLength > (Length - offset))
@@ -737,10 +833,35 @@ AhciBuildPrdt(
                 ULONGLONG boundaryBytes = nextBoundary - physAddress;
                 if (boundaryBytes > 0 && boundaryBytes < bytes)
                 {
-                    if (boundaryBytes < AHCI_DEFAULT_SECTOR_SIZE)
+                    /* Avoid sub-sector PRDT entries by borrowing from the previous entry in this chunk. */
+                    if (boundaryBytes < AHCI_DEFAULT_SECTOR_SIZE && !firstInChunk && entry > 0)
                     {
-                        /* Crossing a 4 MiB boundary by a tiny slice is safe; avoid 1-byte PRDTs */
-                        bytes = chunkLength;
+                        ULONG adjust = AHCI_DEFAULT_SECTOR_SIZE - (ULONG)boundaryBytes;
+                        PAHCI_PRDT_ENTRY prev = &Prdt[entry - 1];
+                        ULONGLONG prevPhysBase = ((ULONGLONG)prev->DBAU << 32) | prev->DBA;
+                        ULONG prevBytes = (prev->DBC_I & prdtByteCountMask) + 1;
+                        ULONGLONG prevEnd = prevPhysBase + prevBytes;
+
+                        if (prevEnd == physAddress &&
+                            prevBytes >= adjust + AHCI_DEFAULT_SECTOR_SIZE)
+                        {
+                            ULONG prevFlags = prev->DBC_I & ~prdtByteCountMask;
+
+                            prevFlags &= ~(1u << 31);
+                            prevBytes -= adjust;
+                            prev->DBC_I = prevFlags | (prevBytes - 1);
+                            physAddress = prevPhysBase + prevBytes;
+                            chunkLength += adjust;
+                            if (offset >= adjust)
+                                offset -= adjust;
+                            boundaryBytes += adjust;
+                        }
+                    }
+
+                    if (boundaryBytes < AHCI_DEFAULT_SECTOR_SIZE &&
+                        (Adapter->Quirks & AHCI_QUIRK_ALLOW_TINY_PRDT_CROSS))
+                    {
+                        /* Controller quirk: allow a short cross-boundary segment. */
                     }
                     else
                     {
@@ -761,6 +882,7 @@ AhciBuildPrdt(
             physAddress += bytes;
             chunkLength -= bytes;
             offset += bytes;
+            firstInChunk = FALSE;
         }
     }
 
@@ -2002,13 +2124,14 @@ AhciHwFindAdapter(
     ConfigInfo->MaximumNumberOfLogicalUnits = 1;
     ConfigInfo->MaximumTransferLength = AHCI_MAX_TRANSFER_LENGTH;
     ConfigInfo->AlignmentMask = sizeof(ULONG) - 1;
+    /* Final DMA addressing policy is selected after reading CAP.S64A. */
     ConfigInfo->Dma32BitAddresses = TRUE;
     ConfigInfo->SrbExtensionSize = 0;
 #ifdef AHCI_USE_STORPORT
-    ConfigInfo->Dma64BitAddresses = SCSI_DMA64_MINIPORT_SUPPORTED;
+    ConfigInfo->Dma64BitAddresses = 0;
     ConfigInfo->SynchronizationModel = StorSynchronizeFullDuplex;
 #else
-    ConfigInfo->Dma64BitAddresses = TRUE;
+    ConfigInfo->Dma64BitAddresses = 0;
 #endif
 
     RtlZeroMemory(adapter, sizeof(*adapter));
@@ -2045,6 +2168,35 @@ AhciHwFindAdapter(
         adapter->Version = adapter->AbBase->VS;
         adapter->Cap = adapter->AbBase->CAP;
         adapter->PortsImplemented = adapter->AbBase->PI;
+        adapter->Quirks = 0;
+
+        {
+            PCI_COMMON_CONFIG pciConfig;
+
+            if (AhciReadPciConfig(adapter, ConfigInfo, &pciConfig))
+            {
+                adapter->Quirks = AhciGetPciQuirks(&pciConfig);
+                if (adapter->Quirks != 0)
+                {
+                    AHCI_WARN("HwFindAdapter: PCI %04x:%04x rev=%02x quirks=0x%08lx",
+                              pciConfig.VendorID,
+                              pciConfig.DeviceID,
+                              pciConfig.RevisionID,
+                              adapter->Quirks);
+                }
+            }
+        }
+
+        if (adapter->Cap & AHCI_CAP_S64A)
+        {
+            ConfigInfo->Dma32BitAddresses = FALSE;
+            ConfigInfo->Dma64BitAddresses = SCSI_DMA64_MINIPORT_SUPPORTED;
+        }
+        else
+        {
+            ConfigInfo->Dma32BitAddresses = TRUE;
+            ConfigInfo->Dma64BitAddresses = 0;
+        }
 
         if (adapter->PortsImplemented == 0)
         {
@@ -2128,6 +2280,17 @@ AhciHwFindAdapter(
                 port->IdentifyBuffer = ptr;
                 chunk = idSize;
                 port->IdentifyBufferPhys = ScsiPortGetPhysicalAddress(adapter, NULL, port->IdentifyBuffer, &chunk);
+
+                /* No bounce path for HBA command structures; require <=4GB on 32-bit-only HBAs. */
+                if (!(adapter->Cap & AHCI_CAP_S64A) &&
+                    (port->CommandListPhys.HighPart ||
+                     port->ReceivedFisPhys.HighPart ||
+                     port->CommandTablePhys.HighPart ||
+                     port->IdentifyBufferPhys.HighPart))
+                {
+                    AHCI_ERROR("HwFindAdapter: HBA lacks 64-bit DMA but non-cached extension is above 4GB");
+                    return SP_RETURN_NOT_FOUND;
+                }
 
                 port->SectorSize = AHCI_DEFAULT_SECTOR_SIZE;
 

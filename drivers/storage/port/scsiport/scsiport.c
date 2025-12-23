@@ -157,7 +157,9 @@ SpiEnsureAdapterObject(PSCSI_PORT_DEVICE_EXTENSION DeviceExtension,
                        PPORT_CONFIGURATION_INFORMATION ConfigInfo);
 
 NTSTATUS
-SpiAllocateCommonBuffer(PSCSI_PORT_DEVICE_EXTENSION DeviceExtension, ULONG NonCachedSize);
+SpiAllocateCommonBuffer(PSCSI_PORT_DEVICE_EXTENSION DeviceExtension,
+                        PPORT_CONFIGURATION_INFORMATION ConfigInfo,
+                        ULONG NonCachedSize);
 
 static VOID
 SpiInitializePortDeviceExtension(
@@ -1157,7 +1159,7 @@ ScsiPortGetUncachedExtension(IN PVOID HwDeviceExtension,
         DeviceExtension->NeedSrbExtensionAlloc = TRUE;
 
     /* Allocate a common DMA buffer */
-    Status = SpiAllocateCommonBuffer(DeviceExtension, NumberOfBytes);
+    Status = SpiAllocateCommonBuffer(DeviceExtension, ConfigInfo, NumberOfBytes);
 
     if (!NT_SUCCESS(Status))
     {
@@ -1169,10 +1171,13 @@ ScsiPortGetUncachedExtension(IN PVOID HwDeviceExtension,
 }
 
 NTSTATUS
-SpiAllocateCommonBuffer(PSCSI_PORT_DEVICE_EXTENSION DeviceExtension, ULONG NonCachedSize)
+SpiAllocateCommonBuffer(PSCSI_PORT_DEVICE_EXTENSION DeviceExtension,
+                        PPORT_CONFIGURATION_INFORMATION ConfigInfo,
+                        ULONG NonCachedSize)
 {
     PVOID *SrbExtension, CommonBuffer;
     ULONG CommonBufferLength, BufSize;
+    PHYSICAL_ADDRESS physicalAddress;
 
     /* If size is 0, set it to 16 */
     if (!DeviceExtension->SrbExtensionSize)
@@ -1193,6 +1198,9 @@ SpiAllocateCommonBuffer(PSCSI_PORT_DEVICE_EXTENSION DeviceExtension, ULONG NonCa
     CommonBufferLength =
         ROUND_TO_PAGES(NonCachedSize + BufSize * DeviceExtension->RequestsNumber);
 
+    DeviceExtension->CommonBufferFromMm = FALSE;
+    DeviceExtension->CommonBufferCacheType = MmNonCached;
+
     /* Allocate it */
     if (!DeviceExtension->AdapterObject)
     {
@@ -1206,6 +1214,46 @@ SpiAllocateCommonBuffer(PSCSI_PORT_DEVICE_EXTENSION DeviceExtension, ULONG NonCa
             CommonBufferLength,
             &DeviceExtension->PhysicalAddress,
             FALSE );
+
+        if (CommonBuffer &&
+            ConfigInfo &&
+            ConfigInfo->Dma32BitAddresses &&
+            !ConfigInfo->Dma64BitAddresses &&
+            DeviceExtension->PhysicalAddress.HighPart != 0)
+        {
+            PHYSICAL_ADDRESS lowestAddress;
+            PHYSICAL_ADDRESS highestAddress;
+            PHYSICAL_ADDRESS alignment;
+
+            DPRINT1("SpiAllocateCommonBuffer: DMA32-only adapter got PA=0x%I64x, retrying <=4GB\n",
+                    DeviceExtension->PhysicalAddress.QuadPart);
+
+            physicalAddress = DeviceExtension->PhysicalAddress;
+            HalFreeCommonBuffer(DeviceExtension->AdapterObject,
+                                CommonBufferLength,
+                                physicalAddress,
+                                CommonBuffer,
+                                FALSE);
+
+            CommonBuffer = NULL;
+            DeviceExtension->PhysicalAddress.QuadPart = 0;
+
+            lowestAddress.QuadPart = 0;
+            highestAddress.QuadPart = 0x00000000FFFFFFFFULL;
+            alignment.QuadPart = 0;
+
+            CommonBuffer = MmAllocateContiguousMemorySpecifyCache(CommonBufferLength,
+                                                                  lowestAddress,
+                                                                  highestAddress,
+                                                                  alignment,
+                                                                  MmNonCached);
+            if (CommonBuffer)
+            {
+                DeviceExtension->PhysicalAddress = MmGetPhysicalAddress(CommonBuffer);
+                DeviceExtension->CommonBufferFromMm = TRUE;
+                DeviceExtension->CommonBufferCacheType = MmNonCached;
+            }
+        }
     }
 
     /* Fail in case of error */
@@ -1961,7 +2009,7 @@ CreatePortConfig:
             DeviceExtension->NeedSrbExtensionAlloc = TRUE;
 
             /* Allocate common buffer */
-            Status = SpiAllocateCommonBuffer(DeviceExtension, 0);
+            Status = SpiAllocateCommonBuffer(DeviceExtension, PortConfig, 0);
 
             /* Check for failure */
             if (!NT_SUCCESS(Status))

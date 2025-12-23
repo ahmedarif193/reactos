@@ -71,6 +71,7 @@ typedef struct _SCSI_SUPPORTED_CONTROL_TYPE_LIST {
 #define AHCI_CMD_TABLE_ALLOC_SIZE \
     (sizeof(AHCI_CMD_TABLE) + ((AHCI_MAX_PRDT_ENTRIES - 1) * sizeof(AHCI_PRDT_ENTRY)))
 
+#define AHCI_CAP_S64A              0x80000000
 #define AHCI_CAP_SNCQ              0x40000000
 
 #define ATA_CMD_FPDMA_READ         0x60
@@ -214,6 +215,7 @@ typedef struct _AHCI_ADAPTER_EXTENSION {
     ULONG Cap;
     ULONG Version;
     ULONG PortsImplemented;
+    ULONG Quirks;
     UCHAR PortCount;
     PVOID NonCachedBase;
     ULONG NonCachedBytes;

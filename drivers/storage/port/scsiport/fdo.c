@@ -406,7 +406,7 @@ InterruptScanDone:
         PortExtension->SupportsAutoSense = portConfig->AutoRequestSense;
         PortExtension->NeedSrbExtensionAlloc = TRUE;
 
-        status = SpiAllocateCommonBuffer(PortExtension, 0);
+        status = SpiAllocateCommonBuffer(PortExtension, portConfig, 0);
         if (!NT_SUCCESS(status))
         {
             goto Cleanup;
@@ -1418,7 +1418,13 @@ FdoRemoveAdapter(
     /* Free common buffer (if it exists) */
     if (DeviceExtension->SrbExtensionBuffer != NULL && DeviceExtension->CommonBufferLength != 0)
     {
-        if (!DeviceExtension->AdapterObject)
+        if (DeviceExtension->CommonBufferFromMm)
+        {
+            MmFreeContiguousMemorySpecifyCache(DeviceExtension->SrbExtensionBuffer,
+                                               DeviceExtension->CommonBufferLength,
+                                               DeviceExtension->CommonBufferCacheType);
+        }
+        else if (!DeviceExtension->AdapterObject)
         {
             ExFreePoolWithTag(DeviceExtension->SrbExtensionBuffer, TAG_SCSIPORT);
         }
@@ -1434,6 +1440,8 @@ FdoRemoveAdapter(
         DeviceExtension->SrbExtensionBuffer = NULL;
         DeviceExtension->CommonBufferLength = 0;
         DeviceExtension->NonCachedExtension = NULL;
+        DeviceExtension->CommonBufferFromMm = FALSE;
+        DeviceExtension->CommonBufferCacheType = MmNonCached;
     }
 
     /* Free SRB info */
