@@ -38,6 +38,28 @@
 #define USBPORT_ASSERT_PASSIVE(Tag) ((void)0)
 #endif
 
+#if DBG
+PVOID
+USBPORT_AllocPoolWithTagDbg(
+    _In_ POOL_TYPE PoolType,
+    _In_ SIZE_T NumberOfBytes,
+    _In_ ULONG Tag,
+    _In_ PCSTR File,
+    _In_ ULONG Line);
+
+VOID
+USBPORT_FreePoolWithTagDbg(
+    _In_ PVOID P,
+    _In_ ULONG Tag,
+    _In_ PCSTR File,
+    _In_ ULONG Line);
+
+#define ExAllocatePoolWithTag(PoolType, NumberOfBytes, Tag) \
+    USBPORT_AllocPoolWithTagDbg((PoolType), (NumberOfBytes), (Tag), __FILE__, __LINE__)
+#define ExFreePoolWithTag(P, Tag) \
+    USBPORT_FreePoolWithTagDbg((P), (Tag), __FILE__, __LINE__)
+#endif
+
 #define PCI_INTERFACE_USB_ID_UHCI 0x00
 #define PCI_INTERFACE_USB_ID_OHCI 0x10
 #define PCI_INTERFACE_USB_ID_EHCI 0x20

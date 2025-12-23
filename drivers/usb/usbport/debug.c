@@ -15,6 +15,56 @@
 //#define NDEBUG_USBPORT_USB2
 #include "usbdebug.h"
 
+#if DBG
+#ifdef ExAllocatePoolWithTag
+#undef ExAllocatePoolWithTag
+#endif
+#ifdef ExFreePoolWithTag
+#undef ExFreePoolWithTag
+#endif
+
+PVOID
+USBPORT_AllocPoolWithTagDbg(
+    _In_ POOL_TYPE PoolType,
+    _In_ SIZE_T NumberOfBytes,
+    _In_ ULONG Tag,
+    _In_ PCSTR File,
+    _In_ ULONG Line)
+{
+    PVOID Ptr;
+
+    Ptr = ExAllocatePoolWithTag(PoolType, NumberOfBytes, Tag);
+    if (Tag == USB_PORT_TAG && NumberOfBytes <= 64)
+    {
+        DPRINT1("USBPORT alloc size=%Iu ptr=%p tag=%.4s at %s:%lu\n",
+                NumberOfBytes,
+                Ptr,
+                (char *)&Tag,
+                File,
+                Line);
+    }
+    return Ptr;
+}
+
+VOID
+USBPORT_FreePoolWithTagDbg(
+    _In_ PVOID P,
+    _In_ ULONG Tag,
+    _In_ PCSTR File,
+    _In_ ULONG Line)
+{
+    if (Tag == USB_PORT_TAG)
+    {
+        DPRINT1("USBPORT free ptr=%p tag=%.4s at %s:%lu\n",
+                P,
+                (char *)&Tag,
+                File,
+                Line);
+    }
+    ExFreePoolWithTag(P, Tag);
+}
+#endif
+
 ULONG
 USBPORT_DbgPrint(IN PVOID MiniPortExtension,
                  IN ULONG Level,
@@ -310,4 +360,3 @@ USBPORT_DumpingTtEndpoint(IN PUSB2_TT_ENDPOINT TtEndpoint)
     DPRINT_USB2("Nums            - %X\n", TtEndpoint->Nums.AsULONG);
     DPRINT_USB2("nextTtEndpoint  - %X\n", TtEndpoint->NextTtEndpoint);
 }
-

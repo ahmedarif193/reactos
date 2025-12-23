@@ -445,6 +445,7 @@ USBSTOR_PdoHandleQueryInstanceId(
     PFDO_DEVICE_EXTENSION FDODeviceExtension;
     PUSB_STRING_DESCRIPTOR Descriptor;
     ULONG CharCount;
+    ULONG SerialChars = 0;
     LPWSTR InstanceId;
     NTSTATUS Status;
 
@@ -455,7 +456,8 @@ USBSTOR_PdoHandleQueryInstanceId(
     if (Descriptor && (Descriptor->bLength >= sizeof(USB_COMMON_DESCRIPTOR) + sizeof(WCHAR)))
     {
         /* Format the serial number descriptor only if supported by the device */
-        CharCount = (Descriptor->bLength - sizeof(USB_COMMON_DESCRIPTOR)) / sizeof(WCHAR) +
+        SerialChars = (Descriptor->bLength - sizeof(USB_COMMON_DESCRIPTOR)) / sizeof(WCHAR);
+        CharCount = SerialChars +
                     (sizeof("&") - 1) +
                     (sizeof("F") - 1) + // LUN: 1 char (MAX_LUN)
                     sizeof(ANSI_NULL);
@@ -476,11 +478,13 @@ USBSTOR_PdoHandleQueryInstanceId(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    if (Descriptor && (Descriptor->bLength >= sizeof(USB_COMMON_DESCRIPTOR) + sizeof(WCHAR)))
-    {	
+    if (Descriptor && SerialChars != 0)
+    {
+        /* USB string descriptors are length-prefixed, not null-terminated. */
         Status = RtlStringCchPrintfW(InstanceId,
                                      CharCount,
-                                     L"%s&%x",
+                                     L"%.*s&%x",
+                                     SerialChars,
                                      Descriptor->bString,
                                      PDODeviceExtension->LUN);
     }
@@ -493,8 +497,15 @@ USBSTOR_PdoHandleQueryInstanceId(
                                      PDODeviceExtension->LUN);
     }
 
-    /* This should not happen */
-    ASSERT(NT_SUCCESS(Status));
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("USBSTOR_PdoHandleQueryInstanceId: format failed status=0x%08lx len=%lu\n",
+                Status,
+                CharCount);
+        ExFreePoolWithTag(InstanceId, USB_STOR_TAG);
+        Irp->IoStatus.Information = 0;
+        return Status;
+    }
 
     DPRINT("USBSTOR_PdoHandleQueryInstanceId '%S'\n", InstanceId);
 

@@ -44,6 +44,8 @@
 #define XHCI_QUIRK_LIMIT_U1U2         0x00000010
 #define XHCI_QUIRK_IGNORE_STARTUP_HCE 0x00000020
 #define XHCI_QUIRK_QEMU_CONFIG_EP_ORDER 0x00000040
+#define XHCI_BOUNCE_POOL_SLOTS 4
+#define XHCI_BOUNCE_BUFFER_SIZE 0x10000
 
 typedef struct DECLSPEC_ALIGN(PAGE_SIZE) _XHCI_SCRATCHPAD_PAGE {
     UCHAR Buffer[PAGE_SIZE];
@@ -199,6 +201,11 @@ typedef struct _XHCI_EXTENSION {
   PVOID AllocatedCommonBuffer;
   PHYSICAL_ADDRESS AllocatedCommonBufferPhysical;
   SIZE_T AllocatedCommonBufferSize;
+  PVOID BounceBuffers[XHCI_BOUNCE_POOL_SLOTS];
+  PHYSICAL_ADDRESS BounceBuffersPhysical[XHCI_BOUNCE_POOL_SLOTS];
+  ULONG BounceBufferSize;
+  ULONG BounceBuffersInUseMask;
+  KSPIN_LOCK BounceBufferLock;
   /* MSI/MSI-X discovery (message interrupts not yet connected on ReactOS) */
   BOOLEAN MsiSupported;
     BOOLEAN MsixSupported;
@@ -264,6 +271,12 @@ typedef struct _XHCI_TRANSFER {
     USHORT StreamId;
     UCHAR NewAddress;
     UCHAR Reserved[2];
+    PVOID BounceBuffer;
+    PHYSICAL_ADDRESS BouncePhysicalAddress;
+    ULONG BounceLength;
+    LONG BounceSlot;
+    BOOLEAN BounceDataIn;
+    UCHAR BounceReserved[3];
 } XHCI_TRANSFER, *PXHCI_TRANSFER;
 
 #define XHCI_TRANSFER_FLAG_SET_ADDRESS   0x00000001

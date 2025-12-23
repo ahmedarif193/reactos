@@ -141,6 +141,22 @@ static MPSTATUS NTAPI XHCI_SubmitTransfer(PVOID MiniPortExtension,
                                           PUSBPORT_TRANSFER_PARAMETERS TransferParameters,
                                           PVOID Transfer,
                                           PUSBPORT_SCATTER_GATHER_LIST SgList);
+static BOOLEAN XHCI_Requires32BitDma(PXHCI_EXTENSION Extension);
+static BOOLEAN XHCI_SgListHasHighAddress(PUSBPORT_SCATTER_GATHER_LIST SgList, PULONGLONG HighAddress);
+static MPSTATUS XHCI_PrepareBounceBuffer(PXHCI_EXTENSION Extension,
+                                         PXHCI_TRANSFER Transfer,
+                                         ULONG Length,
+                                         BOOLEAN DataIn);
+static VOID XHCI_ReleaseBounceBuffer(PXHCI_TRANSFER Transfer);
+static VOID XHCI_FinalizeBounceBuffer(PXHCI_TRANSFER Transfer);
+static ULONG XHCI_CopySgListToBuffer(PUSBPORT_SCATTER_GATHER_LIST SgList,
+                                     PVOID Buffer,
+                                     ULONG BufferLength);
+static ULONG XHCI_CopyBufferToSgList(PUSBPORT_SCATTER_GATHER_LIST SgList,
+                                     const VOID *Buffer,
+                                     ULONG BufferLength);
+static MPSTATUS XHCI_InitBouncePool(PXHCI_EXTENSION Extension);
+static VOID XHCI_FreeBouncePool(PXHCI_EXTENSION Extension);
 static MPSTATUS XHCI_ResetController(PXHCI_EXTENSION Extension);
 static BOOLEAN XHCI_WaitForRegisterBits(volatile ULONG *Reg, ULONG Mask, BOOLEAN WaitSet, ULONG TimeoutUs);
 static VOID XHCI_HandleControllerError(PXHCI_EXTENSION Extension, ULONG PendingStatus);
@@ -2397,6 +2413,367 @@ XHCI_GetDescriptorBuffer(
     return (PUCHAR)SgList->MappedSystemVa;
 }
 
+static
+BOOLEAN
+XHCI_Requires32BitDma(
+    _In_ PXHCI_EXTENSION Extension)
+{
+    if (!Extension)
+        return FALSE;
+
+    return (!Extension->Supports64Bit ||
+            (Extension->Quirks & XHCI_QUIRK_FORCE_32BIT_DMA));
+}
+
+static
+BOOLEAN
+XHCI_SgListHasHighAddress(
+    _In_ PUSBPORT_SCATTER_GATHER_LIST SgList,
+    _Out_opt_ PULONGLONG HighAddress)
+{
+    ULONG Index;
+
+    if (!SgList)
+        return FALSE;
+
+    for (Index = 0; Index < SgList->SgElementCount; Index++)
+    {
+        ULONGLONG Address = SgList->SgElement[Index].SgPhysicalAddress.QuadPart;
+
+        if ((Address >> 32) != 0)
+        {
+            if (HighAddress)
+                *HighAddress = Address;
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static
+ULONG
+XHCI_CopySgListToBuffer(
+    _In_ PUSBPORT_SCATTER_GATHER_LIST SgList,
+    _Out_writes_bytes_(BufferLength) PVOID Buffer,
+    _In_ ULONG BufferLength)
+{
+    ULONG Index;
+    ULONG Copied = 0;
+    PUCHAR Base;
+
+    if (!SgList || !Buffer || BufferLength == 0 || !SgList->MappedSystemVa)
+        return 0;
+
+    Base = (PUCHAR)SgList->MappedSystemVa;
+
+    for (Index = 0; Index < SgList->SgElementCount; Index++)
+    {
+        ULONG Offset = SgList->SgElement[Index].SgOffset;
+        ULONG Length = SgList->SgElement[Index].SgTransferLength;
+
+        if (Offset >= BufferLength)
+            break;
+
+        if (Offset + Length > BufferLength)
+            Length = BufferLength - Offset;
+
+        RtlCopyMemory((PUCHAR)Buffer + Offset, Base + Offset, Length);
+        Copied += Length;
+
+        if (Offset + Length >= BufferLength)
+            break;
+    }
+
+    return Copied;
+}
+
+static
+ULONG
+XHCI_CopyBufferToSgList(
+    _In_ PUSBPORT_SCATTER_GATHER_LIST SgList,
+    _In_reads_bytes_(BufferLength) const VOID *Buffer,
+    _In_ ULONG BufferLength)
+{
+    ULONG Index;
+    ULONG Copied = 0;
+    PUCHAR Base;
+
+    if (!SgList || !Buffer || BufferLength == 0 || !SgList->MappedSystemVa)
+        return 0;
+
+    Base = (PUCHAR)SgList->MappedSystemVa;
+
+    for (Index = 0; Index < SgList->SgElementCount; Index++)
+    {
+        ULONG Offset = SgList->SgElement[Index].SgOffset;
+        ULONG Length = SgList->SgElement[Index].SgTransferLength;
+
+        if (Offset >= BufferLength)
+            break;
+
+        if (Offset + Length > BufferLength)
+            Length = BufferLength - Offset;
+
+        RtlCopyMemory(Base + Offset, (const PUCHAR)Buffer + Offset, Length);
+        Copied += Length;
+
+        if (Offset + Length >= BufferLength)
+            break;
+    }
+
+    return Copied;
+}
+
+static
+MPSTATUS
+XHCI_PrepareBounceBuffer(
+    _In_ PXHCI_EXTENSION Extension,
+    _Inout_ PXHCI_TRANSFER Transfer,
+    _In_ ULONG Length,
+    _In_ BOOLEAN DataIn)
+{
+    ULONG Index;
+    ULONG Mask;
+    KIRQL OldIrql;
+    PHYSICAL_ADDRESS Lowest;
+    PHYSICAL_ADDRESS Highest;
+    PHYSICAL_ADDRESS Boundary;
+    PVOID Buffer;
+
+    if (!Transfer || Length == 0)
+        return MP_STATUS_SUCCESS;
+
+    Transfer->BounceSlot = -1;
+
+    /* Use preallocated low-memory buffers to avoid allocations at DISPATCH_LEVEL. */
+    if (Extension &&
+        Extension->BounceBufferSize >= Length &&
+        Extension->BounceBuffers[0])
+    {
+        KeAcquireSpinLock(&Extension->BounceBufferLock, &OldIrql);
+        for (Index = 0; Index < XHCI_BOUNCE_POOL_SLOTS; Index++)
+        {
+            Mask = (1u << Index);
+            if ((Extension->BounceBuffersInUseMask & Mask) == 0 &&
+                Extension->BounceBuffers[Index])
+            {
+                Extension->BounceBuffersInUseMask |= Mask;
+                KeReleaseSpinLock(&Extension->BounceBufferLock, OldIrql);
+
+                Transfer->BounceBuffer = Extension->BounceBuffers[Index];
+                Transfer->BounceLength = Length;
+                Transfer->BounceDataIn = DataIn;
+                Transfer->BouncePhysicalAddress = Extension->BounceBuffersPhysical[Index];
+                Transfer->BounceSlot = (LONG)Index;
+
+                DPRINT1("usbxhci: bounce pool slot=%lu len=%lu VA=%p PA=%I64x dir=%s\n",
+                        Index,
+                        Length,
+                        Transfer->BounceBuffer,
+                        Transfer->BouncePhysicalAddress.QuadPart,
+                        DataIn ? "IN" : "OUT");
+                return MP_STATUS_SUCCESS;
+            }
+        }
+        KeReleaseSpinLock(&Extension->BounceBufferLock, OldIrql);
+
+        DPRINT1("usbxhci: bounce pool exhausted len=%lu irql=%lu\n",
+                Length,
+                (ULONG)KeGetCurrentIrql());
+    }
+
+    Lowest.QuadPart = 0;
+    Highest.QuadPart = 0xFFFFFFFFull;
+    Boundary.QuadPart = 0;
+
+    /*
+     * QEMU's xHCI advertises 64-bit DMA capability but can still truncate to
+     * 32-bit. Allocate a low-memory bounce buffer so TRBs never reference
+     * addresses above 4 GiB when 32-bit DMA is forced.
+     */
+    Buffer = MmAllocateContiguousMemorySpecifyCache(Length,
+                                                    Lowest,
+                                                    Highest,
+                                                    Boundary,
+                                                    MmNonCached);
+    if (!Buffer)
+    {
+        DPRINT1("usbxhci: bounce alloc failed len=%lu irql=%lu\n",
+                Length,
+                (ULONG)KeGetCurrentIrql());
+        return MP_STATUS_NO_RESOURCES;
+    }
+
+    Transfer->BounceBuffer = Buffer;
+    Transfer->BounceLength = Length;
+    Transfer->BounceDataIn = DataIn;
+    Transfer->BouncePhysicalAddress = MmGetPhysicalAddress(Buffer);
+
+    if ((Transfer->BouncePhysicalAddress.QuadPart >> 32) != 0)
+    {
+        DPRINT1("usbxhci: bounce buffer above 4G (PA=%I64x len=%lu)\n",
+                Transfer->BouncePhysicalAddress.QuadPart,
+                Length);
+        XHCI_ReleaseBounceBuffer(Transfer);
+        return MP_STATUS_NO_RESOURCES;
+    }
+
+    DPRINT1("usbxhci: bounce buffer len=%lu VA=%p PA=%I64x dir=%s\n",
+            Length,
+            Buffer,
+            Transfer->BouncePhysicalAddress.QuadPart,
+            DataIn ? "IN" : "OUT");
+
+    return MP_STATUS_SUCCESS;
+}
+
+static
+VOID
+XHCI_ReleaseBounceBuffer(
+    _Inout_ PXHCI_TRANSFER Transfer)
+{
+    PXHCI_EXTENSION Extension;
+    KIRQL OldIrql;
+
+    if (!Transfer || !Transfer->BounceBuffer)
+        return;
+
+    Extension = (Transfer->Endpoint ? Transfer->Endpoint->Extension : NULL);
+    if (Transfer->BounceSlot >= 0 &&
+        Extension &&
+        Transfer->BounceSlot < XHCI_BOUNCE_POOL_SLOTS)
+    {
+        KeAcquireSpinLock(&Extension->BounceBufferLock, &OldIrql);
+        Extension->BounceBuffersInUseMask &= ~(1u << Transfer->BounceSlot);
+        KeReleaseSpinLock(&Extension->BounceBufferLock, OldIrql);
+    }
+    else
+    {
+        MmFreeContiguousMemory(Transfer->BounceBuffer);
+    }
+
+    Transfer->BounceBuffer = NULL;
+    Transfer->BounceLength = 0;
+    Transfer->BouncePhysicalAddress.QuadPart = 0;
+    Transfer->BounceDataIn = FALSE;
+    Transfer->BounceSlot = -1;
+}
+
+static
+VOID
+XHCI_FinalizeBounceBuffer(
+    _Inout_ PXHCI_TRANSFER Transfer)
+{
+    ULONG Length;
+    ULONG Copied;
+
+    if (!Transfer || !Transfer->BounceBuffer)
+        return;
+
+    if (Transfer->BounceDataIn)
+    {
+        Length = Transfer->BytesTransferred;
+        if (Length > Transfer->BounceLength)
+            Length = Transfer->BounceLength;
+
+        Copied = XHCI_CopyBufferToSgList(Transfer->SgList,
+                                         Transfer->BounceBuffer,
+                                         Length);
+        if (Copied < Length)
+        {
+            DPRINT1("usbxhci: bounce IN copy short (%lu/%lu)\n",
+                    Copied,
+                    Length);
+        }
+    }
+
+    XHCI_ReleaseBounceBuffer(Transfer);
+}
+
+static
+MPSTATUS
+XHCI_InitBouncePool(
+    _Inout_ PXHCI_EXTENSION Extension)
+{
+    ULONG Index;
+    PHYSICAL_ADDRESS Low;
+    PHYSICAL_ADDRESS High;
+    PHYSICAL_ADDRESS Boundary;
+
+    if (!Extension)
+        return MP_STATUS_ERROR;
+
+    if (!XHCI_Requires32BitDma(Extension))
+        return MP_STATUS_SUCCESS;
+
+    Extension->BounceBufferSize = XHCI_BOUNCE_BUFFER_SIZE;
+    Extension->BounceBuffersInUseMask = 0;
+    KeInitializeSpinLock(&Extension->BounceBufferLock);
+
+    Low.QuadPart = 0;
+    High.QuadPart = 0xFFFFFFFFull;
+    Boundary.QuadPart = 0;
+
+    for (Index = 0; Index < XHCI_BOUNCE_POOL_SLOTS; Index++)
+    {
+        PVOID Buffer = MmAllocateContiguousMemorySpecifyCache(Extension->BounceBufferSize,
+                                                             Low,
+                                                             High,
+                                                             Boundary,
+                                                             MmNonCached);
+        if (!Buffer)
+        {
+            DPRINT1("usbxhci: bounce pool alloc failed slot=%lu len=%lu\n",
+                    Index,
+                    Extension->BounceBufferSize);
+            XHCI_FreeBouncePool(Extension);
+            return MP_STATUS_NO_RESOURCES;
+        }
+
+        Extension->BounceBuffers[Index] = Buffer;
+        Extension->BounceBuffersPhysical[Index] = MmGetPhysicalAddress(Buffer);
+
+        if ((Extension->BounceBuffersPhysical[Index].QuadPart >> 32) != 0)
+        {
+            DPRINT1("usbxhci: bounce pool entry above 4G (slot=%lu PA=%I64x)\n",
+                    Index,
+                    Extension->BounceBuffersPhysical[Index].QuadPart);
+            XHCI_FreeBouncePool(Extension);
+            return MP_STATUS_NO_RESOURCES;
+        }
+    }
+
+    DPRINT1("usbxhci: bounce pool ready slots=%u size=%lu\n",
+            XHCI_BOUNCE_POOL_SLOTS,
+            Extension->BounceBufferSize);
+    return MP_STATUS_SUCCESS;
+}
+
+static
+VOID
+XHCI_FreeBouncePool(
+    _Inout_ PXHCI_EXTENSION Extension)
+{
+    ULONG Index;
+
+    if (!Extension)
+        return;
+
+    for (Index = 0; Index < XHCI_BOUNCE_POOL_SLOTS; Index++)
+    {
+        if (Extension->BounceBuffers[Index])
+        {
+            MmFreeContiguousMemory(Extension->BounceBuffers[Index]);
+            Extension->BounceBuffers[Index] = NULL;
+            Extension->BounceBuffersPhysical[Index].QuadPart = 0;
+        }
+    }
+
+    Extension->BounceBuffersInUseMask = 0;
+    Extension->BounceBufferSize = 0;
+}
+
 static MPSTATUS
 XHCI_UpdateSlotTtInfo(
     _In_ PXHCI_EXTENSION Extension,
@@ -4354,6 +4731,7 @@ XHCI_HandleTransferEvent(
     Transfer->CompletionTrbPointer = TrbPointer;
     Transfer->BytesTransferred = BytesTransferred;
     Transfer->UsbdStatus = UsbdStatus;
+    XHCI_FinalizeBounceBuffer(Transfer);
     if (Transfer->Flags & XHCI_TRANSFER_FLAG_NEEDS_POLL)
     {
         Transfer->Flags &= ~XHCI_TRANSFER_FLAG_NEEDS_POLL;
@@ -7362,6 +7740,7 @@ XHCI_SubmitTransfer(PVOID MiniPortExtension,
     Transfer->Flags = 0;
     Transfer->NewAddress = 0;
     Transfer->IsIsochronous = FALSE;
+    Transfer->BounceSlot = -1;
 
     switch (Endpoint->EndpointProperties.TransferType)
     {
@@ -7393,6 +7772,7 @@ XHCI_SubmitControlTransfer(
     BOOLEAN HasDataStage;
     BOOLEAN DataIn;
     BOOLEAN StatusIn;
+    BOOLEAN UseBounce = FALSE;
     PXHCI_TRB Trb;
     ULONGLONG PhysicalAddress;
     ULONG Control;
@@ -7403,6 +7783,7 @@ XHCI_SubmitControlTransfer(
     BOOLEAN ProgrammedRing = FALSE;
     ULONG SgIndex = 0;
     KIRQL OldIrql;
+    ULONGLONG HighAddress = 0;
 
     if (!Extension || !Endpoint || !Transfer)
         return MP_STATUS_ERROR;
@@ -7518,6 +7899,35 @@ XHCI_SubmitControlTransfer(
         }
     }
 
+    if (HasDataStage &&
+        XHCI_Requires32BitDma(Extension) &&
+        XHCI_SgListHasHighAddress(SgList, &HighAddress))
+    {
+        DPRINT1("usbxhci: control DMA above 4G (pa=%I64x len=%lu), using bounce buffer\n",
+                HighAddress,
+                TransferParameters->TransferBufferLength);
+        Status = XHCI_PrepareBounceBuffer(Extension,
+                                          Transfer,
+                                          TransferParameters->TransferBufferLength,
+                                          DataIn);
+        if (Status != MP_STATUS_SUCCESS)
+            goto Failure;
+
+        UseBounce = (Transfer->BounceBuffer != NULL);
+        if (UseBounce && !DataIn)
+        {
+            ULONG Copied = XHCI_CopySgListToBuffer(SgList,
+                                                   Transfer->BounceBuffer,
+                                                   Transfer->BounceLength);
+            if (Copied < Transfer->BounceLength)
+            {
+                DPRINT1("usbxhci: control OUT bounce copy short (%lu/%lu)\n",
+                        Copied,
+                        Transfer->BounceLength);
+            }
+        }
+    }
+
     Trb = XHCI_GetTransferRingTrb(&Endpoint->TransferRing, &PhysicalAddress, TRUE);
     if (!Trb)
     {
@@ -7563,54 +7973,97 @@ XHCI_SubmitControlTransfer(
 
     if (HasDataStage)
     {
-        SgIndex = 0;
-    }
-
-    while (HasDataStage && Remaining && SgIndex < SgList->SgElementCount)
-    {
-        ULONG ElementRemaining = SgList->SgElement[SgIndex].SgTransferLength;
-        ULONGLONG ElementAddress = SgList->SgElement[SgIndex].SgPhysicalAddress.QuadPart;
-
-        /* USBPORT's SgOffset is the offset into the *overall* transfer buffer;
-         * SgPhysicalAddress already points at the correct segment. */
-
-        while (ElementRemaining && Remaining)
+        if (Transfer->BounceBuffer)
         {
-            Chunk = XHCI_CalcTrbTransferChunk(ElementAddress,
-                                              ElementRemaining,
-                                              Remaining,
-                                              0);
+            ULONG ElementRemaining = Transfer->BounceLength;
+            ULONGLONG ElementAddress = Transfer->BouncePhysicalAddress.QuadPart;
 
-            Trb = XHCI_GetTransferRingTrb(&Endpoint->TransferRing,
-                                          &PhysicalAddress,
-                                          TRUE);
-            if (!Trb)
+            while (ElementRemaining && Remaining)
             {
-                Status = MP_STATUS_NO_RESOURCES;
-                goto Failure;
+                Chunk = XHCI_CalcTrbTransferChunk(ElementAddress,
+                                                  ElementRemaining,
+                                                  Remaining,
+                                                  0);
+
+                Trb = XHCI_GetTransferRingTrb(&Endpoint->TransferRing,
+                                              &PhysicalAddress,
+                                              TRUE);
+                if (!Trb)
+                {
+                    Status = MP_STATUS_NO_RESOURCES;
+                    goto Failure;
+                }
+
+                Trb->Parameter1 = (ULONG)(ElementAddress & 0xFFFFFFFF);
+                Trb->Parameter2 = (ULONG)(ElementAddress >> 32);
+                Trb->Status = Chunk;
+                Control = (XHCI_TRB_TYPE_DATA_STAGE << XHCI_TRB_TYPE_SHIFT) |
+                          (Endpoint->TransferRing.CycleState & XHCI_TRB_CYCLE);
+
+                if (DataIn)
+                    Control |= XHCI_TRB_DIR_IN;
+
+                /* For Control Transfers, Data Stage TRBs are always followed by Status Stage. */
+                Control |= XHCI_TRB_CHAIN_BIT;
+
+                Trb->Control = Control;
+                XHCI_AdvanceTransferRing(&Endpoint->TransferRing);
+
+                ElementAddress += Chunk;
+                ElementRemaining -= Chunk;
+                Remaining -= Chunk;
             }
-
-            Trb->Parameter1 = (ULONG)(ElementAddress & 0xFFFFFFFF);
-            Trb->Parameter2 = (ULONG)(ElementAddress >> 32);
-            Trb->Status = Chunk;
-            Control = (XHCI_TRB_TYPE_DATA_STAGE << XHCI_TRB_TYPE_SHIFT) |
-                      (Endpoint->TransferRing.CycleState & XHCI_TRB_CYCLE);
-
-            if (DataIn)
-                Control |= XHCI_TRB_DIR_IN;
-
-            /* For Control Transfers, Data Stage TRBs are always followed by Status Stage. */
-            Control |= XHCI_TRB_CHAIN_BIT;
-
-            Trb->Control = Control;
-            XHCI_AdvanceTransferRing(&Endpoint->TransferRing);
-
-            ElementAddress += Chunk;
-            ElementRemaining -= Chunk;
-            Remaining -= Chunk;
         }
+        else
+        {
+            SgIndex = 0;
+            while (Remaining && SgIndex < SgList->SgElementCount)
+            {
+                ULONG ElementRemaining = SgList->SgElement[SgIndex].SgTransferLength;
+                ULONGLONG ElementAddress = SgList->SgElement[SgIndex].SgPhysicalAddress.QuadPart;
 
-        SgIndex++;
+                /* USBPORT's SgOffset is the offset into the *overall* transfer buffer;
+                 * SgPhysicalAddress already points at the correct segment. */
+
+                while (ElementRemaining && Remaining)
+                {
+                    Chunk = XHCI_CalcTrbTransferChunk(ElementAddress,
+                                                      ElementRemaining,
+                                                      Remaining,
+                                                      0);
+
+                    Trb = XHCI_GetTransferRingTrb(&Endpoint->TransferRing,
+                                                  &PhysicalAddress,
+                                                  TRUE);
+                    if (!Trb)
+                    {
+                        Status = MP_STATUS_NO_RESOURCES;
+                        goto Failure;
+                    }
+
+                    Trb->Parameter1 = (ULONG)(ElementAddress & 0xFFFFFFFF);
+                    Trb->Parameter2 = (ULONG)(ElementAddress >> 32);
+                    Trb->Status = Chunk;
+                    Control = (XHCI_TRB_TYPE_DATA_STAGE << XHCI_TRB_TYPE_SHIFT) |
+                              (Endpoint->TransferRing.CycleState & XHCI_TRB_CYCLE);
+
+                    if (DataIn)
+                        Control |= XHCI_TRB_DIR_IN;
+
+                    /* For Control Transfers, Data Stage TRBs are always followed by Status Stage. */
+                    Control |= XHCI_TRB_CHAIN_BIT;
+
+                    Trb->Control = Control;
+                    XHCI_AdvanceTransferRing(&Endpoint->TransferRing);
+
+                    ElementAddress += Chunk;
+                    ElementRemaining -= Chunk;
+                    Remaining -= Chunk;
+                }
+
+                SgIndex++;
+            }
+        }
     }
 
     if (Remaining != 0)
@@ -7684,6 +8137,7 @@ Failure:
     if (ProgrammedRing)
         XHCI_ResetEndpointRing(Endpoint);
 
+    XHCI_ReleaseBounceBuffer(Transfer);
     Transfer->UsbdStatus = USBD_STATUS_REQUEST_FAILED;
     KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
     if (Endpoint->ActiveTransfer == Transfer)
@@ -7728,6 +8182,9 @@ XHCI_SubmitSgTransfer(
     MPSTATUS Status = MP_STATUS_SUCCESS;
     KIRQL OldIrql;
     ULONG IsoPayloadLimit = 0;
+    BOOLEAN DataIn = FALSE;
+    BOOLEAN UseBounce = FALSE;
+    ULONGLONG HighAddress = 0;
 #if DBG
     ULONG IocTrbCount = 0;
 #endif
@@ -7749,6 +8206,8 @@ XHCI_SubmitSgTransfer(
 
     TransferParameters = Transfer->TransferParameters;
     SgList = Transfer->SgList;
+    if (TransferParameters)
+        DataIn = (TransferParameters->TransferFlags & USBD_TRANSFER_DIRECTION_IN) ? TRUE : FALSE;
 
     if (Endpoint->SlotId == 1 &&
         Endpoint->EndpointId == 4 &&
@@ -7867,18 +8326,42 @@ XHCI_SubmitSgTransfer(
         goto Failure;
     }
 
-    while (Remaining && SgIndex < SgList->SgElementCount)
+    if (Remaining &&
+        XHCI_Requires32BitDma(Extension) &&
+        XHCI_SgListHasHighAddress(SgList, &HighAddress))
     {
-        ULONG ElementRemaining = SgList->SgElement[SgIndex].SgTransferLength;
-        PHYSICAL_ADDRESS ElementAddress = SgList->SgElement[SgIndex].SgPhysicalAddress;
-        /* USBPORT's SgOffset is the offset into the *overall* transfer buffer;
-         * SgPhysicalAddress already points at the correct segment. */
+        DPRINT1("usbxhci: sg DMA above 4G (pa=%I64x len=%lu), using bounce buffer\n",
+                HighAddress,
+                Remaining);
+        Status = XHCI_PrepareBounceBuffer(Extension, Transfer, Remaining, DataIn);
+        if (Status != MP_STATUS_SUCCESS)
+            goto Failure;
+
+        UseBounce = (Transfer->BounceBuffer != NULL);
+        if (UseBounce && !DataIn)
+        {
+            ULONG Copied = XHCI_CopySgListToBuffer(SgList,
+                                                   Transfer->BounceBuffer,
+                                                   Transfer->BounceLength);
+            if (Copied < Transfer->BounceLength)
+            {
+                DPRINT1("usbxhci: sg OUT bounce copy short (%lu/%lu)\n",
+                        Copied,
+                        Transfer->BounceLength);
+            }
+        }
+    }
+
+    if (UseBounce)
+    {
+        ULONG ElementRemaining = Transfer->BounceLength;
+        ULONGLONG ElementAddress = Transfer->BouncePhysicalAddress.QuadPart;
 
         while (ElementRemaining && Remaining)
         {
             BOOLEAN TdContinues;
 
-            BufferAddress = ElementAddress.QuadPart;
+            BufferAddress = ElementAddress;
             Chunk = XHCI_CalcTrbTransferChunk(BufferAddress,
                                               ElementRemaining,
                                               Remaining,
@@ -7923,7 +8406,7 @@ XHCI_SubmitSgTransfer(
             XHCI_AdvanceTransferRing(&Endpoint->TransferRing);
 
 
-            ElementAddress.QuadPart += Chunk;
+            ElementAddress += Chunk;
             ElementRemaining -= Chunk;
             Remaining -= Chunk;
             XHCI_DBG(XHCI_TRACE_TRANSFERS,
@@ -7934,8 +8417,79 @@ XHCI_SubmitSgTransfer(
                      Chunk,
                      Trb->Control);
         }
+    }
+    else
+    {
+        while (Remaining && SgIndex < SgList->SgElementCount)
+        {
+            ULONG ElementRemaining = SgList->SgElement[SgIndex].SgTransferLength;
+            PHYSICAL_ADDRESS ElementAddress = SgList->SgElement[SgIndex].SgPhysicalAddress;
+            /* USBPORT's SgOffset is the offset into the *overall* transfer buffer;
+             * SgPhysicalAddress already points at the correct segment. */
 
-        SgIndex++;
+            while (ElementRemaining && Remaining)
+            {
+                BOOLEAN TdContinues;
+
+                BufferAddress = ElementAddress.QuadPart;
+                Chunk = XHCI_CalcTrbTransferChunk(BufferAddress,
+                                                  ElementRemaining,
+                                                  Remaining,
+                                                  IsoPayloadLimit);
+
+                TdContinues = (Remaining > Chunk);
+                Trb = XHCI_GetTransferRingTrb(&Endpoint->TransferRing,
+                                              &PhysicalAddress,
+                                              TdContinues);
+                if (!Trb)
+                {
+                    Status = MP_STATUS_NO_RESOURCES;
+                    goto Failure;
+                }
+                if (Transfer->TdFirstTrbPointer == 0)
+                    Transfer->TdFirstTrbPointer = PhysicalAddress;
+
+                Trb->Parameter1 = (ULONG)(BufferAddress & 0xFFFFFFFF);
+                Trb->Parameter2 = (ULONG)(BufferAddress >> 32);
+                Trb->Status = Chunk;
+                Control = (TrbType << XHCI_TRB_TYPE_SHIFT) |
+                          (Endpoint->TransferRing.CycleState & XHCI_TRB_CYCLE);
+                if (Endpoint->InterruptTarget < Extension->InterrupterCount)
+                {
+                    Control |= ((ULONG)Endpoint->InterruptTarget << XHCI_TRB_INTR_TARGET_SHIFT);
+                }
+
+                if (IsIsochronous)
+                    Control |= XHCI_TRB_SIA;
+                if (TdContinues)
+                    Control |= XHCI_TRB_CHAIN_BIT;
+                else
+                {
+                    Control |= XHCI_TRB_IOC;
+#if DBG
+                    ASSERT((Control & XHCI_TRB_IOC) != 0);
+                    IocTrbCount++;
+#endif
+                }
+
+                Trb->Control = Control;
+                XHCI_AdvanceTransferRing(&Endpoint->TransferRing);
+
+
+                ElementAddress.QuadPart += Chunk;
+                ElementRemaining -= Chunk;
+                Remaining -= Chunk;
+                XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                         "usbxhci: xfer TRB addr=%I64x p1=%08lx p2=%08lx len=%lu ctrl=%08lx\n",
+                         (ULONGLONG)PhysicalAddress,
+                         Trb->Parameter1,
+                         Trb->Parameter2,
+                         Chunk,
+                         Trb->Control);
+            }
+
+            SgIndex++;
+        }
     }
 
     if (Remaining)
@@ -8004,6 +8558,7 @@ XHCI_SubmitSgTransfer(
     return MP_STATUS_SUCCESS;
 
 Failure:
+    XHCI_ReleaseBounceBuffer(Transfer);
     Transfer->UsbdStatus = USBD_STATUS_REQUEST_FAILED;
     KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
     if (Endpoint->ActiveTransfer == Transfer)
@@ -8689,6 +9244,10 @@ XHCI_StartController(PVOID MiniPortExtension,
     if (Status != MP_STATUS_SUCCESS)
         return Status;
 
+    Status = XHCI_InitBouncePool(Extension);
+    if (Status != MP_STATUS_SUCCESS)
+        return Status;
+
     if (!Extension->Supports64Bit ||
         (Extension->Quirks & XHCI_QUIRK_FORCE_32BIT_DMA))
     {
@@ -8988,6 +9547,7 @@ XHCI_StopController(PVOID MiniPortExtension,
     }
     KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
 
+    XHCI_FreeBouncePool(Extension);
     if (Extension->AllocatedCommonBuffer)
     {
         MmFreeContiguousMemory(Extension->AllocatedCommonBuffer);
