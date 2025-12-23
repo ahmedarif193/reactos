@@ -49,7 +49,11 @@ static BOOLEAN HalpPciMsiSupported = TRUE;
 static __inline BOOLEAN
 HalpIsPciDebuggingEnabled(VOID)
 {
+#ifdef _MINIHAL_
+    return FALSE;
+#else
     return (KdDebuggerEnabled && !KdDebuggerNotPresent);
+#endif
 }
 
 static __inline PCSTR

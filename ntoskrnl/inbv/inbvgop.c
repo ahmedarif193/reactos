@@ -261,6 +261,7 @@ InbvGopHandleBootBitmap(
     Width = FbInfo.HorizontalResolution;
     Height = FbInfo.VerticalResolution;
     BgrtActive = InbvQueryBgrtInfo(NULL);
+    UNREFERENCED_PARAMETER(BgrtActive);
 
     if (TextMode)
     {

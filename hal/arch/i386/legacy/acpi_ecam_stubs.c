@@ -1,6 +1,7 @@
 /* Minimal ACPI ECAM stubs for legacy (non-ACPI) HALs */
 #include "../include/hal.h"
 #include "../include/halacpi.h"
+#include <reactos/hal/acpi_cstate.h>
 
 volatile LONG HalpAcpiEcamCoverageFlags = 0;
 BOOLEAN HalpAcpiEcamDisabled = TRUE;
@@ -31,6 +32,20 @@ HalpAcpiAccessConfigEcam(BOOLEAN Write, USHORT Segment, ULONG BusNumber,
 
 BOOLEAN NTAPI
 HalpAcpiQueryPowerButton(VOID)
+{
+    return FALSE;
+}
+
+NTSTATUS NTAPI
+HalGetAcpiCStateInformation(
+    _Out_ PHAL_ACPI_C_STATE_INFO Info)
+{
+    UNREFERENCED_PARAMETER(Info);
+    return STATUS_NOT_SUPPORTED;
+}
+
+BOOLEAN NTAPI
+HalIsAcpiBusMasterActive(VOID)
 {
     return FALSE;
 }

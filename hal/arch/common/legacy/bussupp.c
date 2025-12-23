@@ -1968,7 +1968,6 @@ HalpDebugPciDumpBus(IN PBUS_HANDLER BusHandler,
         AddressCount = (HeaderType == PCI_DEVICE_TYPE) ? PCI_TYPE0_ADDRESSES : PCI_TYPE1_ADDRESSES;
         for (b = 0; b < AddressCount; b++)
         {
-    {
         ULONG OriginalLow;
         ULONG OriginalHigh;
         ULONG ProbeLow;

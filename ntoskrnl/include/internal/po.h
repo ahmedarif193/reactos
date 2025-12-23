@@ -221,6 +221,7 @@ VOID
 PopInitThermalSupport(VOID);
 
 VOID
+NTAPI
 PoNotifyProcessorThermalEvent(
     _In_ ULONG ProcessorIndex,
     _In_ PO_THERMAL_EVENT_TYPE EventType,

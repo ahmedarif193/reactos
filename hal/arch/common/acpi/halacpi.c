@@ -80,6 +80,11 @@ BOOLEAN HalpAcpiEcamForceLegacyLogged = FALSE;
 static PVOID *HalpAcpiMcfgEcamMappings;
 static ULONG HalpAcpiMcfgEcamMappingCount;
 
+static PVOID
+HalpAcpiEnsureEcamMapping(
+    _In_ ULONG AllocationIndex,
+    _In_ const HALP_ACPI_MCFG_ALLOCATION *Allocation);
+
 static
 LONG
 HalpAcpiRecordEcamEvent(
@@ -206,6 +211,8 @@ HalpAcpiReadEcamUlong(
     if (HalpAcpiMcfgEcamMappings && AllocationIndex < HalpAcpiMcfgEcamMappingCount)
     {
         MappingBase = HalpAcpiMcfgEcamMappings[AllocationIndex];
+        if (!MappingBase)
+            MappingBase = HalpAcpiEnsureEcamMapping(AllocationIndex, Allocation);
     }
 
     if (MappingBase)
@@ -255,6 +262,8 @@ HalpAcpiReadEcamBytes(
     if (HalpAcpiMcfgEcamMappings && AllocationIndex < HalpAcpiMcfgEcamMappingCount)
     {
         allocationMapping = HalpAcpiMcfgEcamMappings[AllocationIndex];
+        if (!allocationMapping)
+            allocationMapping = HalpAcpiEnsureEcamMapping(AllocationIndex, Allocation);
     }
 
     deviceOffset = HalpAcpiEcamOffsetInAllocation(Allocation,
@@ -305,7 +314,7 @@ HalpAcpiReadEcamBytes(
         }
 
         reg = (volatile ULONG *)(deviceBase + alignedOffset);
-        dword = READ_REGISTER_ULONG(reg);
+        dword = READ_REGISTER_ULONG((PULONG)reg);
 
         RtlCopyMemory(out, ((PUCHAR)&dword) + byteInDword, toCopy);
 
@@ -346,6 +355,8 @@ HalpAcpiWriteEcamBytes(
     if (HalpAcpiMcfgEcamMappings && AllocationIndex < HalpAcpiMcfgEcamMappingCount)
     {
         allocationMapping = HalpAcpiMcfgEcamMappings[AllocationIndex];
+        if (!allocationMapping)
+            allocationMapping = HalpAcpiEnsureEcamMapping(AllocationIndex, Allocation);
     }
 
     deviceOffset = HalpAcpiEcamOffsetInAllocation(Allocation,
@@ -399,13 +410,13 @@ HalpAcpiWriteEcamBytes(
         if ((toWrite == 4) && (byteInDword == 0))
         {
             RtlCopyMemory(&dword, in, sizeof(ULONG));
-            WRITE_REGISTER_ULONG(reg, dword);
+            WRITE_REGISTER_ULONG((PULONG)reg, dword);
         }
         else
         {
-            dword = READ_REGISTER_ULONG(reg);
+            dword = READ_REGISTER_ULONG((PULONG)reg);
             RtlCopyMemory(((PUCHAR)&dword) + byteInDword, in, toWrite);
-            WRITE_REGISTER_ULONG(reg, dword);
+            WRITE_REGISTER_ULONG((PULONG)reg, dword);
         }
 
         currentOffset += toWrite;

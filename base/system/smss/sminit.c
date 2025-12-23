@@ -1617,6 +1617,8 @@ SmpInitializeKnownDllsInternal(IN PUNICODE_STRING Directory,
         if (!NT_SUCCESS(Status))
         {
             /* Checksum failed, so don't even try going further -- kill SMSS */
+            DPRINT1("SMSS: KnownDLL verification failed for %wZ (Status 0x%08lx)\n",
+                    &RegEntry->Value, Status);
             RtlInitUnicodeString(&ErrorResponse,
                                  L"Verification of a KnownDLL failed.");
             ErrorParameters[0] = (ULONG_PTR)&ErrorResponse;
@@ -1627,6 +1629,8 @@ SmpInitializeKnownDllsInternal(IN PUNICODE_STRING Directory,
         else if (!(ImageCharacteristics & IMAGE_FILE_DLL))
         {
             /* An invalid known DLL entry will also kill SMSS */
+            DPRINT1("SMSS: KnownDLL entry is not a DLL: %wZ (Characteristics 0x%04lx)\n",
+                    &RegEntry->Value, (ULONG)ImageCharacteristics);
             RtlInitUnicodeString(&ErrorResponse,
                                  L"Non-DLL file included in KnownDLL list.");
             ErrorParameters[0] = (ULONG_PTR)&ErrorResponse;
