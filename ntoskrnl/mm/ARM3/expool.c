@@ -97,7 +97,21 @@ ExpValidateLookasideHead(
 #if defined(_WIN64)
     ULONGLONG NextEntry;
 
-    NextEntry = Lookaside->ListHead.Header16.NextEntry << 4;
+    /*
+     * Reconstruct the first entry pointer exactly like the SLIST helpers do,
+     * so validation does not treat a valid Region-based head (HeaderType=1)
+     * as non-canonical. The 8-byte header stores the region in the head
+     * address; the 16-byte header keeps the full pointer in Region.
+     */
+    if (Lookaside->ListHead.Header16.HeaderType)
+    {
+        NextEntry = Lookaside->ListHead.Region & ~0xFULL;
+    }
+    else
+    {
+        NextEntry = Lookaside->ListHead.Header8.NextEntry << 4;
+        NextEntry |= ((ULONG_PTR)&Lookaside->ListHead & 0xFFFFF80000000000ULL);
+    }
     if (NextEntry)
     {
         LONG64 CanonicalHigh = (LONG64)NextEntry >> 48;
@@ -112,6 +126,36 @@ ExpValidateLookasideHead(
                        Lookaside,
                        (PVOID)(ULONG_PTR)NextEntry,
                        Prcb->Number);
+            DbgPrintEx(DPFLTR_DEFAULT_ID,
+                       DPFLTR_ERROR_LEVEL,
+                       "EX: head detail type=%u depth=%u seq=%I64u size=%lu tag=%.4s next16=%I64x next8=%I64x region=%I64x pa=%I64x\n",
+                       Lookaside->ListHead.Header16.HeaderType,
+                       Lookaside->ListHead.Header16.Depth,
+                       Lookaside->ListHead.Header16.Sequence,
+                       Lookaside->Size,
+                       (char *)&Lookaside->Tag,
+                       Lookaside->ListHead.Header16.NextEntry,
+                       Lookaside->ListHead.Header8.NextEntry,
+                       Lookaside->ListHead.Region,
+                       MmGetPhysicalAddress(&Lookaside->ListHead).QuadPart);
+            {
+                UCHAR Raw[32];
+                ULONG j;
+                RtlCopyMemory(Raw, &Lookaside->ListHead, sizeof(Raw));
+                DbgPrintEx(DPFLTR_DEFAULT_ID,
+                           DPFLTR_ERROR_LEVEL,
+                           "EX: head raw:");
+                for (j = 0; j < sizeof(Raw); j++)
+                {
+                    DbgPrintEx(DPFLTR_DEFAULT_ID,
+                               DPFLTR_ERROR_LEVEL,
+                               " %02x",
+                               Raw[j]);
+                }
+                DbgPrintEx(DPFLTR_DEFAULT_ID,
+                           DPFLTR_ERROR_LEVEL,
+                           "\n");
+            }
             DbgBreakPoint();
 #endif
             ExpLogLookasideCorruption(Prcb,
@@ -143,6 +187,120 @@ ExpValidateLookasideHead(
 #endif
     return TRUE;
 }
+
+#if defined(_WIN64)
+FORCEINLINE
+BOOLEAN
+ExpIsCanonicalPointer(_In_ PVOID Pointer)
+{
+    LONG64 CanonicalHigh = (LONG64)(LONG_PTR)Pointer >> 48;
+    return (CanonicalHigh == 0) || (CanonicalHigh == -1);
+}
+#endif
+
+#if DBG
+#define USBPORT_POOL_TAG 'pbsu'
+#define USBPORT_TRACE_MAX_BYTES 64
+#define POOL_TRACE_TAG 'looP'
+#define POOL_TRACE_MAX_BYTES 64
+static LONG ExpPoolTraceBudget = 64;
+#define POOL_TRACE_TARGET_BYTES 24
+static LONG ExpPoolAnyBudget = 256;
+/* Trace lookaside index 2 (size 24) push/pop to find corruptors. */
+static LONG ExpLookasideTraceBudget = 64;
+/* Temporary: bypass lookaside index 2 (size 24) to isolate head corruption. */
+static BOOLEAN ExpDisableIndex2Lookaside = TRUE;
+static LONG ExpLookasideBypassLogged = 0;
+
+FORCEINLINE
+VOID
+ExpTraceLookasideOp(
+    _In_ PCSTR Action,
+    _In_ BOOLEAN PagedList,
+    _In_ USHORT Index,
+    _In_ PVOID Entry,
+    _In_ ULONG Tag)
+{
+    USHORT Frames;
+    PVOID Stack[6];
+    UCHAR Raw[8];
+    PHYSICAL_ADDRESS Pa;
+    USHORT i;
+
+    if (Index != 2)
+        return;
+    if (InterlockedDecrement(&ExpLookasideTraceBudget) < 0)
+        return;
+
+    Pa = MmGetPhysicalAddress(Entry);
+    RtlZeroMemory(Raw, sizeof(Raw));
+    if (MmIsAddressValid(Entry))
+        RtlCopyMemory(Raw, Entry, sizeof(Raw));
+
+    Frames = RtlCaptureStackBackTrace(1,
+                                      RTL_NUMBER_OF(Stack),
+                                      Stack,
+                                      NULL);
+
+    DPRINT1("EX: lookaside %s (Paged=%d Idx=2) entry=%p pa=%I64x tag=%.4s raw=%02x %02x %02x %02x %02x %02x %02x %02x\n",
+            Action,
+            PagedList ? 1 : 0,
+            Entry,
+            Pa.QuadPart,
+            (char *)&Tag,
+            Raw[0], Raw[1], Raw[2], Raw[3], Raw[4], Raw[5], Raw[6], Raw[7]);
+    for (i = 0; i < Frames && i < RTL_NUMBER_OF(Stack); i++)
+    {
+        DPRINT1("    frame %u: %p\n", i, Stack[i]);
+    }
+}
+
+FORCEINLINE
+VOID
+ExpLogUsbPortPoolTrace(
+    _In_ PCSTR Action,
+    _In_ PVOID Pointer,
+    _In_ SIZE_T Size,
+    _In_ ULONG Tag)
+{
+    USHORT Frames;
+    PVOID Stack[8];
+    USHORT i;
+
+    if (Tag == USBPORT_POOL_TAG && Size <= USBPORT_TRACE_MAX_BYTES)
+    {
+        /* Always trace USBPORT small-pool activity. */
+    }
+    else if (Tag == POOL_TRACE_TAG && Size <= POOL_TRACE_MAX_BYTES)
+    {
+        /* Trace limited generic Pool tag traffic to catch lookaside corruption. */
+        if (InterlockedDecrement(&ExpPoolTraceBudget) < 0)
+            return;
+    }
+    else if (Size == POOL_TRACE_TARGET_BYTES)
+    {
+        /* Capture a larger sample of size-24 allocations (lookaside index 2). */
+        if (InterlockedDecrement(&ExpPoolAnyBudget) < 0)
+            return;
+    }
+    else
+    {
+        return;
+    }
+
+    Frames = RtlCaptureStackBackTrace(1, RTL_NUMBER_OF(Stack), Stack, NULL);
+    DPRINT1("EX: USBPORT %s size=%Iu ptr=%p tag=%.4s frames=%u\n",
+            Action,
+            Size,
+            Pointer,
+            (char *)&Tag,
+            Frames);
+    for (i = 0; i < Frames; i++)
+    {
+        DPRINT1("        %p\n", Stack[i]);
+    }
+}
+#endif
 
 FORCEINLINE
 PGENERAL_LOOKASIDE
@@ -281,6 +439,19 @@ ExpLogLookasideCorruption(
             CorruptPointer,
             Prcb,
             Prcb->Number);
+
+    /* Dump the first bytes of the suspect entry to correlate with payload origins. */
+    if (CorruptPointer && MmIsAddressValid(CorruptPointer))
+    {
+        UCHAR Raw[32];
+        PHYSICAL_ADDRESS Pa = MmGetPhysicalAddress(CorruptPointer);
+        RtlCopyMemory(Raw, CorruptPointer, sizeof(Raw));
+        DPRINT1("EX: corrupt lookaside entry va=%p pa=%I64x first=%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                CorruptPointer,
+                Pa.QuadPart,
+                Raw[0], Raw[1], Raw[2], Raw[3],
+                Raw[4], Raw[5], Raw[6], Raw[7]);
+    }
 }
 
 FORCEINLINE
@@ -2422,6 +2593,18 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
         PGENERAL_LOOKASIDE UsedList = NULL;
         BOOLEAN PagedList = (PoolType == PagedPool);
         USHORT LookasideIndex = i - 1;
+        BOOLEAN SkipIndexLookaside = FALSE;
+
+#if DBG
+        if (LookasideIndex == 2 && ExpDisableIndex2Lookaside)
+        {
+            SkipIndexLookaside = TRUE;
+            if (InterlockedCompareExchange(&ExpLookasideBypassLogged, 1, 0) == 0)
+            {
+                DPRINT1("EX: bypassing lookaside index 2 (size=24) to isolate head corruption\n");
+            }
+        }
+#endif
 
         Entry = NULL;
 
@@ -2429,7 +2612,7 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
         ExpGetValidPoolLookasideList(Prcb, PagedList, LookasideIndex, FALSE);
         ExpGetValidPoolLookasideList(Prcb, PagedList, LookasideIndex, TRUE);
 
-        if (!ExpDisablePoolLookaside)
+        if (!ExpDisablePoolLookaside && !SkipIndexLookaside)
         {
             //
             // Try popping it from the per-CPU lookaside list
@@ -2484,6 +2667,12 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
             Entry->PoolTag = Tag;
             (POOL_FREE_BLOCK(Entry))->Flink = NULL;
             (POOL_FREE_BLOCK(Entry))->Blink = NULL;
+#if DBG
+            ExpLogUsbPortPoolTrace("alloc",
+                                   POOL_FREE_BLOCK(Entry),
+                                   Entry->BlockSize * POOL_BLOCK_SIZE,
+                                   Tag);
+#endif
             return POOL_FREE_BLOCK(Entry);
         }
     }
@@ -2668,6 +2857,12 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
             Entry->PoolTag = Tag;
             (POOL_FREE_BLOCK(Entry))->Flink = NULL;
             (POOL_FREE_BLOCK(Entry))->Blink = NULL;
+#if DBG
+            ExpLogUsbPortPoolTrace("alloc",
+                                   POOL_FREE_BLOCK(Entry),
+                                   Entry->BlockSize * POOL_BLOCK_SIZE,
+                                   Tag);
+#endif
             return POOL_FREE_BLOCK(Entry);
         }
     } while (++ListHead != &PoolDesc->ListHeads[POOL_LISTS_PER_PAGE]);
@@ -2811,6 +3006,12 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
     //
     ExpCheckPoolBlocks(Entry);
     Entry->PoolTag = Tag;
+#if DBG
+    ExpLogUsbPortPoolTrace("alloc",
+                           POOL_FREE_BLOCK(Entry),
+                           Entry->BlockSize * POOL_BLOCK_SIZE,
+                           Tag);
+#endif
     return POOL_FREE_BLOCK(Entry);
 }
 
@@ -3040,6 +3241,12 @@ ExFreePoolWithTag(IN PVOID P,
     //
     Tag = Entry->PoolTag;
     if (Tag & PROTECTED_POOL) Tag &= ~PROTECTED_POOL;
+#if DBG
+    ExpLogUsbPortPoolTrace("free",
+                           P,
+                           BlockSize * POOL_BLOCK_SIZE,
+                           Tag);
+#endif
 
     //
     // Check block tag
@@ -3089,13 +3296,26 @@ ExFreePoolWithTag(IN PVOID P,
     {
         BOOLEAN PagedList = (PoolType == PagedPool);
         USHORT LookasideIndex = BlockSize - 1;
+        BOOLEAN SkipIndexLookaside = FALSE;
 
         /* Always validate the stored lookaside pointers to catch corruption. */
         ExpGetValidPoolLookasideList(Prcb, PagedList, LookasideIndex, FALSE);
         ExpGetValidPoolLookasideList(Prcb, PagedList, LookasideIndex, TRUE);
 
-        if (!ExpDisablePoolLookaside)
+#if DBG
+        if (LookasideIndex == 2 && ExpDisableIndex2Lookaside)
         {
+            SkipIndexLookaside = TRUE;
+            if (InterlockedCompareExchange(&ExpLookasideBypassLogged, 1, 0) == 0)
+            {
+                DPRINT1("EX: bypassing lookaside index 2 (size=24) to isolate head corruption\n");
+            }
+        }
+#endif
+
+        if (!ExpDisablePoolLookaside && !SkipIndexLookaside)
+        {
+            ULONG TraceTag = Tag;
             //
             // Try pushing it into the per-CPU lookaside list
             //
@@ -3105,6 +3325,27 @@ ExFreePoolWithTag(IN PVOID P,
                                                          FALSE);
             if (ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
             {
+#if DBG
+                ExpTraceLookasideOp("push-pcpu",
+                                    PagedList,
+                                    LookasideIndex,
+                                    P,
+                                    TraceTag);
+#endif
+#if defined(_WIN64)
+                if (!ExpIsCanonicalPointer(P))
+                {
+                    DPRINT1("EX: non-canonical lookaside free (Paged=%d Index=%u Tag=%.4s Ptr=%p Size=%u CPU=%u)\n",
+                            PagedList,
+                            LookasideIndex,
+                            (char *)&Tag,
+                            P,
+                            BlockSize * POOL_BLOCK_SIZE,
+                            Prcb->Number);
+                    ExpLogLookasideCorruption(Prcb, PagedList, LookasideIndex, P);
+                    DbgBreakPoint();
+                }
+#endif
                 LookasideList->TotalFrees++;
                 if (ExQueryDepthSList(&LookasideList->ListHead) < LookasideList->Depth)
                 {
@@ -3112,6 +3353,18 @@ ExFreePoolWithTag(IN PVOID P,
                     InterlockedPushEntrySList(&LookasideList->ListHead, P);
                     return;
                 }
+            }
+            else
+            {
+                DPRINT1("EX: lookaside head corrupt during free (Paged=%d Index=%u Tag=%.4s Block=%p Size=%u Head=%p CPU=%u)\n",
+                        PagedList,
+                        LookasideIndex,
+                        (char *)&Tag,
+                        P,
+                        BlockSize * POOL_BLOCK_SIZE,
+                        LookasideList,
+                        Prcb->Number);
+                ExpDisablePoolLookaside = TRUE;
             }
 
             //
@@ -3123,6 +3376,27 @@ ExFreePoolWithTag(IN PVOID P,
                                                          TRUE);
             if (ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
             {
+#if DBG
+                ExpTraceLookasideOp("push-global",
+                                    PagedList,
+                                    LookasideIndex,
+                                    P,
+                                    TraceTag);
+#endif
+#if defined(_WIN64)
+                if (!ExpIsCanonicalPointer(P))
+                {
+                    DPRINT1("EX: non-canonical global lookaside free (Paged=%d Index=%u Tag=%.4s Ptr=%p Size=%u CPU=%u)\n",
+                            PagedList,
+                            LookasideIndex,
+                            (char *)&Tag,
+                            P,
+                            BlockSize * POOL_BLOCK_SIZE,
+                            Prcb->Number);
+                    ExpLogLookasideCorruption(Prcb, PagedList, LookasideIndex, P);
+                    DbgBreakPoint();
+                }
+#endif
                 LookasideList->TotalFrees++;
                 if (ExQueryDepthSList(&LookasideList->ListHead) < LookasideList->Depth)
                 {
@@ -3130,6 +3404,18 @@ ExFreePoolWithTag(IN PVOID P,
                     InterlockedPushEntrySList(&LookasideList->ListHead, P);
                     return;
                 }
+            }
+            else
+            {
+                DPRINT1("EX: global lookaside head corrupt during free (Paged=%d Index=%u Tag=%.4s Block=%p Size=%u Head=%p CPU=%u)\n",
+                        PagedList,
+                        LookasideIndex,
+                        (char *)&Tag,
+                        P,
+                        BlockSize * POOL_BLOCK_SIZE,
+                        LookasideList,
+                        Prcb->Number);
+                ExpDisablePoolLookaside = TRUE;
             }
         }
     }
