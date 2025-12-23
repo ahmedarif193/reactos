@@ -321,11 +321,11 @@ ExpGetValidPoolLookasideList(
 
     if (PagedList)
     {
+#if DBG
         Current = UseGlobal ?
                   Prcb->PPPagedLookasideList[Index].L :
                   Prcb->PPPagedLookasideList[Index].P;
 
-#if DBG
         if (Current && !ExpIsLookasidePointerValid(Current, TRUE, Index))
         {
             ExpLogLookasideCorruption(Prcb, TRUE, Index, Current);
@@ -337,11 +337,11 @@ ExpGetValidPoolLookasideList(
     }
     else
     {
+#if DBG
         Current = UseGlobal ?
                   Prcb->PPNPagedLookasideList[Index].L :
                   Prcb->PPNPagedLookasideList[Index].P;
 
-#if DBG
         if (Current && !ExpIsLookasidePointerValid(Current, FALSE, Index))
         {
             ExpLogLookasideCorruption(Prcb, FALSE, Index, Current);
