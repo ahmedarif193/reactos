@@ -32,10 +32,10 @@ endif()
 
 # Clang defaults
 if(BUILD_ENVIRONMENT STREQUAL "Clang")
-    if(NOT DEFINED CLANG_VERSION OR CLANG_VERSION STREQUAL "")
-        set(CLANG_VERSION "19" CACHE STRING "Clang version suffix (e.g. 19)" FORCE)
-    else()
-        set(CLANG_VERSION "${CLANG_VERSION}" CACHE STRING "Clang version suffix (e.g. 19)")
+if(NOT DEFINED CLANG_VERSION OR CLANG_VERSION STREQUAL "")
+    set(CLANG_VERSION "21" CACHE STRING "Clang version suffix (e.g. 21)" FORCE)
+else()
+    set(CLANG_VERSION "${CLANG_VERSION}" CACHE STRING "Clang version suffix (e.g. 21)")
     endif()
 endif()
 

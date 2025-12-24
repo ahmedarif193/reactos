@@ -159,8 +159,8 @@ Options:
     -o, --output DIR        Set output directory name
     -p, --toolchain-path    Set toolchain binaries path (e.g., $HOME/mingw-toolchains/x86_64-w64-mingw32/bin)
     --toolchain-prefix      Set toolchain prefix (e.g., x86_64-w64-mingw32)
-    --clang[=VER]           Configure using the Clang toolchain file (defaults to clang-19)
-    --clang-version VER     Use clang binaries with the specified version suffix (e.g., 18)
+    --clang[=VER]           Configure using the Clang toolchain file (defaults to clang-21)
+    --clang-version VER     Use clang binaries with the specified version suffix (e.g., 21)
     -c, --ccache            Enable ccache
     --clean                 Clean build directory before configuring
     
