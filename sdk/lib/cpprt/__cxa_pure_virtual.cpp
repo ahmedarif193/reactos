@@ -11,3 +11,11 @@ extern "C" void __cxa_pure_virtual(void)
 {
     __debugbreak();
 }
+
+namespace std {
+    void __throw_out_of_range_fmt(const char *, ...)
+    {
+        __debugbreak();
+        while (true);
+    }
+}

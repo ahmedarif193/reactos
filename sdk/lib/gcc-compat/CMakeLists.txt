@@ -4,7 +4,6 @@ include_directories(
 
 list(APPEND SOURCE
     __mingw_vsprintf.c
-    __throw_out_of_range_fmt.cpp
     StringCchCopyNA.c)
 
 if(ARCH STREQUAL "i386" AND REACTOS_MULTILIB_I386)
@@ -20,6 +19,13 @@ endif()
 add_library(stdc++compat ${SOURCE})
 set_target_cpp_properties(stdc++compat WITH_EXCEPTIONS)
 add_dependencies(stdc++compat xdk)
-target_link_libraries(stdc++compat PRIVATE libmsvcrt cppstl)
+target_link_libraries(stdc++compat PRIVATE libmsvcrt)
 remove_target_compile_option(stdc++compat "$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<NOT:$<IN_LIST:cppstl,$<TARGET_PROPERTY:LINK_LIBRARIES>>>>:-nostdinc>")
 target_compile_definitions(stdc++compat PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:PAL_STDCPP_COMPAT>" _CRT_DECLARE_NONSTDC_NAMES=1)
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_include_directories(stdc++compat BEFORE PRIVATE ${_LIBSTDCCXX_INCLUDE_DIRS})
+    if(CLANG_RESOURCE_DIR)
+        target_include_directories(stdc++compat BEFORE PRIVATE "${CLANG_RESOURCE_DIR}/include")
+    endif()
+endif()

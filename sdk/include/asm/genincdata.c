@@ -109,3 +109,8 @@ GenIncMemcpy(void *dest, const void *src, size_t num)
 {
     return GenIncMemmove(dest, src, num);
 }
+
+#ifdef __GNUC__
+int __attribute__((stdcall)) DllMainCRTStartup(void* hinst, unsigned long reason, void* reserved) { return 1; }
+#endif
+
