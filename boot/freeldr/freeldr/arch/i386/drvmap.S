@@ -36,14 +36,20 @@ Int13Handler:
 
     /* Get callers flags from stack */
     mov ax, [bp + 6]
-    mov word ptr cs:[CallersFlags - Int13Handler], ax
+    push si
+    mov si, CallersFlagsOffset
+    mov word ptr cs:[si], ax
+    pop si
 
     /* Save the drive number they passed in */
-    mov byte ptr cs:[PassedInDriveNumber - Int13Handler], dl
+    push si
+    mov si, PassedInDriveNumberOffset
+    mov byte ptr cs:[si], dl
+    pop si
 
     /* Now we need to perform the mapping */
     xor cx, cx
-    mov si, offset Int13HandlerMapCount - Int13Handler
+    mov si, Int13HandlerMapCountOffset
 
     /* Get the count of drives in the map list */
     mov cl, byte ptr cs:[si]
@@ -81,7 +87,13 @@ CallOldInt13Handler:
     pop ax
 
     /* Put flags onto stack */
-    push word ptr cs:[CallersFlags - Int13Handler]
+    push si
+    mov si, CallersFlagsOffset
+    mov si, word ptr cs:[si]
+    push bp
+    mov bp, sp
+    xchg si, [bp+2]
+    pop bp
 
     /* Call old int 13h handler with new drive number */
     .byte HEX(9a) /* lcall */
@@ -98,7 +110,10 @@ _DriveMapOldInt13HandlerAddress:
     pop ax
 
     /* Restore the callers drive number */
-    mov dl, byte ptr cs:[PassedInDriveNumber - Int13Handler]
+    push si
+    mov si, PassedInDriveNumberOffset
+    mov dl, byte ptr cs:[si]
+    pop si
 
     pop bp
 
@@ -138,6 +153,11 @@ Int13HandlerDriveNew4:
 
 PUBLIC _DriveMapInt13HandlerEnd
 _DriveMapInt13HandlerEnd:
+
+
+.equ CallersFlagsOffset, CallersFlags - Int13Handler
+.equ PassedInDriveNumberOffset, PassedInDriveNumber - Int13Handler
+.equ Int13HandlerMapCountOffset, Int13HandlerMapCount - Int13Handler
 
 .endcode16
 

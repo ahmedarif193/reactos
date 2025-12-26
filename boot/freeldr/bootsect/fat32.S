@@ -11,7 +11,7 @@
 #include <asm.inc>
 #include <freeldr/include/arch/pc/x86common.h>
 
-#define BP_REL(x) [bp+x-offset start]
+#define BP_REL(x) [bp + x]
 
 .code16
 
@@ -23,60 +23,86 @@ start:
 
 OEMName:
     .ASCII "FrLdr1.0"
+.set OEMName_off, OEMName - start
 BytesPerSector:
     .word 512
+.set BytesPerSector_off, BytesPerSector - start
 SectsPerCluster:
     .byte 0
+.set SectsPerCluster_off, SectsPerCluster - start
 ReservedSectors:
     .word 32
+.set ReservedSectors_off, ReservedSectors - start
 NumberOfFats:
     .byte 2
+.set NumberOfFats_off, NumberOfFats - start
 MaxRootEntries:
     .word 0             // Always zero for FAT32 volumes
+.set MaxRootEntries_off, MaxRootEntries - start
 TotalSectors:
     .word 0             // Always zero for FAT32 volumes
+.set TotalSectors_off, TotalSectors - start
 MediaDescriptor:
     .byte HEX(0f8)
+.set MediaDescriptor_off, MediaDescriptor - start
 SectorsPerFat:
     .word 0             // Always zero for FAT32 volumes
+.set SectorsPerFat_off, SectorsPerFat - start
 SectorsPerTrack:
     .word 0
+.set SectorsPerTrack_off, SectorsPerTrack - start
 NumberOfHeads:
     .word 0
+.set NumberOfHeads_off, NumberOfHeads - start
 HiddenSectors:
     .long 0
+.set HiddenSectors_off, HiddenSectors - start
 TotalSectorsBig:
     .long 0
+.set TotalSectorsBig_off, TotalSectorsBig - start
 
 // FAT32 Inserted Info
 SectorsPerFatBig:
     .long    0
+.set SectorsPerFatBig_off, SectorsPerFatBig - start
 ExtendedFlags:
     .word    0
+.set ExtendedFlags_off, ExtendedFlags - start
 FSVersion:
     .word    0
+.set FSVersion_off, FSVersion - start
 RootDirStartCluster:
     .long    0
+.set RootDirStartCluster_off, RootDirStartCluster - start
 FSInfoSector:
     .word    0
+.set FSInfoSector_off, FSInfoSector - start
 BackupBootSector:
     .word    6
+.set BackupBootSector_off, BackupBootSector - start
 Reserved1:
     .space 12, 0
+.set Reserved1_off, Reserved1 - start
 // End FAT32 Inserted Info
 
 BootDrive:
     .byte 0
+.set BootDrive_off, BootDrive - start
 Reserved:
     .byte 0
+.set Reserved_off, Reserved - start
 ExtendSig:
     .byte HEX(29)
+.set ExtendSig_off, ExtendSig - start
 SerialNumber:
     .long 0
+.set SerialNumber_off, SerialNumber - start
 VolumeLabel:
     .ascii "NO NAME    "
+.set VolumeLabel_off, VolumeLabel - start
 FileSystem:
     .ascii "FAT32   "
+.set FileSystem_off, FileSystem - start
 
 main:
     xor ax,ax               // Setup segment registers
@@ -86,27 +112,27 @@ main:
     mov bp, HEX(7c00)
     mov sp, HEX(7c00)       // Setup a stack
 
-    cmp byte ptr BP_REL(BootDrive), HEX(0ff)    // If they have specified a boot drive then use it
+    cmp byte ptr BP_REL(BootDrive_off), HEX(0ff)    // If they have specified a boot drive then use it
     jne CheckSectorsPerFat
 
-    mov byte ptr BP_REL(BootDrive), dl          // Save the boot drive
+    mov byte ptr BP_REL(BootDrive_off), dl          // Save the boot drive
 
 CheckSectorsPerFat:
 
-    cmp word ptr BP_REL(SectorsPerFat), 0       // Check the old 16-bit value of SectorsPerFat
+    cmp word ptr BP_REL(SectorsPerFat_off), 0       // Check the old 16-bit value of SectorsPerFat
     jnz CheckFailed                             // If it is non-zero then exit with an error
 CheckTotalSectors:                              // Check the old 16-bit value of TotalSectors & MaxRootEntries
-    cmp dword ptr BP_REL(MaxRootEntries), 0     // by comparing the DWORD at offset MaxRootEntries to zero
+    cmp dword ptr BP_REL(MaxRootEntries_off), 0     // by comparing the DWORD at offset MaxRootEntries to zero
     jnz CheckFailed                             // If it is non-zero then exit with an error
 CheckFileSystemVersion:
-    cmp word ptr BP_REL(FSVersion), 0           // Check the file system version word
+    cmp word ptr BP_REL(FSVersion_off), 0           // Check the file system version word
     jna GetDriveParameters                      // It is zero, so continue
 CheckFailed:
     jmp PrintFileSystemError                    // If it is not zero then exit with an error
 
 GetDriveParameters:
     mov  ax, HEX(0800)
-    mov  dl, byte ptr BP_REL(BootDrive)         // Get boot drive in dl
+    mov  dl, byte ptr BP_REL(BootDrive_off)         // Get boot drive in dl
     int  HEX(13)                                // Request drive parameters from the bios
     jnc  CalcDriveSize                          // If the call succeeded then calculate the drive size
 
@@ -134,13 +160,13 @@ CalcDriveSize:
 
     // We now have the total number of sectors as reported
     // by the bios in eax, so store it in our variable
-    mov dword ptr ds:[BiosCHSDriveSize], eax
+    mov dword ptr [HEX(7c00) + BiosCHSDriveSize_off], eax
 
 LoadExtraBootCode:
     // First we have to load our extra boot code at
     // sector 14 into memory at [0000:7e00h]
     mov  eax, HEX(0e)
-    add  eax, dword ptr BP_REL(HiddenSectors)   // Add the number of hidden sectors
+    add  eax, dword ptr BP_REL(HiddenSectors_off)   // Add the number of hidden sectors
     mov  cx, 1
     xor  bx, bx
     mov  es, bx                                 // Read sector to [0000:7e00h]
@@ -154,7 +180,7 @@ LoadExtraBootCode:
 // CX has number of sectors to read
 ReadSectors:
     push es
-    cmp  eax, dword ptr ds:[BiosCHSDriveSize]   // Check if they are reading a sector outside CHS range
+    cmp  eax, dword ptr [HEX(7c00) + BiosCHSDriveSize_off]   // Check if they are reading a sector outside CHS range
     jae  ReadSectorsLBA                         // Yes - go to the LBA routine
                                                 // If at all possible we want to use LBA routines because
                                                 // They are optimized to read more than 1 sector per read
@@ -164,7 +190,7 @@ ReadSectors:
 CheckInt13hExtensions:                          // Now check if this computer supports extended reads
     mov  ah, HEX(41)                            // AH = 41h
     mov  bx, HEX(55aa)                          // BX = 55AAh
-    mov  dl, byte ptr BP_REL(BootDrive)         // DL = drive (80h-FFh)
+    mov  dl, byte ptr BP_REL(BootDrive_off)         // DL = drive (80h-FFh)
     int  HEX(13)                                // IBM/MS INT 13 Extensions - INSTALLATION CHECK
     jc   ReadSectorsCHS                         // CF set on error (extensions not supported)
     cmp  bx, HEX(0aa55)                         // BX = AA55h if installed
@@ -182,7 +208,7 @@ ReadSectorsLBA:
     mov  cx, 64                                 // Otherwise read only 64 sectors on this loop iteration
 
 ReadSectorsSetupDiskAddressPacket:
-    mov word ptr ds:[LBASectorsRead],cx
+    mov word ptr [HEX(7c00) + LBASectorsRead_off],cx
     push 0
     push 0
     push eax                                // Put 64-bit logical block address on stack
@@ -192,7 +218,7 @@ ReadSectorsSetupDiskAddressPacket:
     push 16                                 // Set size of packet to 10h
     mov  si, sp                             // Setup disk address packet on stack
 
-    mov  dl, byte ptr BP_REL(BootDrive)     // Drive number
+    mov  dl, byte ptr BP_REL(BootDrive_off)     // Drive number
     mov  ah, HEX(42)                        // Int 13h, AH = 42h - Extended Read
     int  HEX(13)                            // Call BIOS
     jc   PrintDiskError                     // If the read failed then abort
@@ -202,7 +228,7 @@ ReadSectorsSetupDiskAddressPacket:
     popad                                   // Restore sector count & logical sector number
 
     push bx
-    mov  ebx, dword ptr ds:[LBASectorsRead]
+    mov  ebx, dword ptr [HEX(7c00) + LBASectorsRead_off]
     add  eax, ebx                           // Increment sector to read
     shl  ebx, 5
     mov  dx, es
@@ -210,7 +236,7 @@ ReadSectorsSetupDiskAddressPacket:
     mov  es, dx
     pop  bx
 
-    sub  cx, word ptr ds:[LBASectorsRead]
+    sub  cx, word ptr [HEX(7c00) + LBASectorsRead_off]
     jnz  ReadSectorsLBA                     // Read next sector
 
     pop es
@@ -218,6 +244,7 @@ ReadSectorsSetupDiskAddressPacket:
 
 LBASectorsRead:
     .long    0
+.set LBASectorsRead_off, LBASectorsRead - start
 
 
 // Reads logical sectors into [ES:BX]
@@ -229,15 +256,15 @@ ReadSectorsCHS:
 ReadSectorsCHSLoop:
     pushad
     xor  edx, edx
-    movzx ecx, word ptr BP_REL(SectorsPerTrack)
+    movzx ecx, word ptr BP_REL(SectorsPerTrack_off)
     div  ecx                                    // Divide logical by SectorsPerTrack
     inc  dl                                     // Sectors numbering starts at 1 not 0
     mov  cl, dl                                 // Sector in CL
     mov  edx, eax
     shr  edx, 16
-    div  word ptr BP_REL(NumberOfHeads)         // Divide logical by number of heads
+    div  word ptr BP_REL(NumberOfHeads_off)         // Divide logical by number of heads
     mov  dh, dl                                 // Head in DH
-    mov  dl, byte ptr BP_REL(BootDrive)         // Drive number in DL
+    mov  dl, byte ptr BP_REL(BootDrive_off)         // Drive number in DL
     mov  ch, al                                 // Cylinder in CX
     ror  ah, 1                                  // Low 8 bits of cylinder in CH, high 2 bits
     ror  ah, 1                                  //  in CL shifted to bits 6 & 7
@@ -266,7 +293,7 @@ ReadSectorsCHSLoop:
 // Displays a disk error message
 // And reboots
 PrintDiskError:
-    mov  si, offset msgDiskError        // Bad boot disk message
+    mov  si, HEX(7c00) + msgDiskError_off       // Bad boot disk message
     call PutChars                       // Display it
 
     jmp  Reboot
@@ -274,11 +301,11 @@ PrintDiskError:
 // Displays a file system error message
 // And reboots
 PrintFileSystemError:
-    mov  si, offset msgFileSystemError  // FreeLdr not found message
+    mov  si, HEX(7c00) + msgFileSystemError_off  // FreeLdr not found message
     call PutChars                       // Display it
 
 Reboot:
-    mov  si, offset msgAnyKey           // Press any key message
+    mov  si, HEX(7c00) + msgAnyKey_off           // Press any key message
     call PutChars                       // Display it
     xor  ax, ax
     int  HEX(16)                        // Wait for a keypress
@@ -298,18 +325,23 @@ Done:
 
 BiosCHSDriveSize:
     .long 0
+.set BiosCHSDriveSize_off, BiosCHSDriveSize - start
 
 msgDiskError:
     .ascii "Disk error", CR, LF, NUL
+.set msgDiskError_off, msgDiskError - start
 msgFileSystemError:
     .ascii "File system error", CR, LF, NUL
+.set msgFileSystemError_off, msgFileSystemError - start
 msgAnyKey:
-    .ascii "Press any key to restart", CR, LF, NUL
+    .ascii "Press key", CR, LF, NUL
+.set msgAnyKey_off, msgAnyKey - start
 
 .org 509 // Pad to 509 bytes
 
 BootPartition:
     .byte 0
+.set BootPartition_off, BootPartition - start
 
 BootSignature:
     .word HEX(0aa55)    // BootSector signature
@@ -329,7 +361,7 @@ BootSignature:
 StartSearch:
 
     // Now we must get the first cluster of the root directory
-    mov  eax, dword ptr BP_REL(RootDirStartCluster)
+    mov  eax, dword ptr BP_REL(RootDirStartCluster_off)
     cmp  eax, HEX(0ffffff8)     // Check to see if this is the last cluster in the chain
     jb   ContinueSearch         // If not continue, if so then we didn't find freeldr.sys
     jmp  PrintFileNotFound
@@ -342,12 +374,12 @@ ContinueSearch:
     // Now we have to find our way through the root directory to
     // The FREELDR.SYS file
     xor  bx,bx
-    mov  bl, byte ptr BP_REL(SectsPerCluster)
+    mov  bl, byte ptr BP_REL(SectsPerCluster_off)
     shl  bx, 4              // BX = BX * 512 / 32
     mov  ax, HEX(2000)      // We loaded at 2000:0000
     mov  es, ax
     xor  di, di
-    mov  si, offset filename
+    mov  si, HEX(7c00) + filename_off
     mov  cx, 11
     repe cmpsb              // Compare filenames
     jz   FoundFile          // If same we found it
@@ -360,7 +392,7 @@ FindFile:
     add  ax, 2              // So lets move to the next one
     mov  es, ax             // And search again
     xor  di, di
-    mov  si, offset filename
+    mov  si, HEX(7c00) + filename_off
     mov  cx, 11
     repe cmpsb              // Compare filenames
     jz   FoundFile          // If same we found it
@@ -368,14 +400,14 @@ FindFile:
     jnz  FindFile           // Last entry?
 
     // Get the next root dir cluster and try again until we run out of clusters
-    mov  eax, dword ptr BP_REL(RootDirStartCluster)
+    mov  eax, dword ptr BP_REL(RootDirStartCluster_off)
     call GetFatEntry
-    mov dword ptr BP_REL(RootDirStartCluster), eax
+    mov dword ptr BP_REL(RootDirStartCluster_off), eax
     jmp  StartSearch
 
 FoundFile:
                                     // Display "Loading FreeLoader..." message
-    mov  si, offset msgLoading      // Loading message
+    mov  si, HEX(7c00) + msgLoading_off      // Loading message
     call PutChars                   // Display it
 
     xor  di, di                     // ES:DI has dir entry
@@ -407,7 +439,7 @@ LoadFile:
     pop  es
 
     xor  bx, bx
-    mov  bl, byte ptr BP_REL(SectsPerCluster)
+    mov  bl, byte ptr BP_REL(SectsPerCluster_off)
     shl  bx, 5                  // BX = BX * 512 / 16
     mov  ax, es                 // Increment the load address by
     add  ax, bx                 // The size of a cluster
@@ -421,8 +453,8 @@ LoadFile:
     jmp  LoadFile               // Load the next cluster (if any)
 
 LoadFileDone:
-    mov  dl, byte ptr BP_REL(BootDrive)     // Load boot drive into DL
-    mov  dh, byte ptr ds:[BootPartition]    // Load boot partition into DH
+    mov  dl, byte ptr BP_REL(BootDrive_off)     // Load boot drive into DL
+    mov  dh, byte ptr [HEX(7c00) + BootPartition_off]    // Load boot partition into DH
 
     /* Transfer execution to the bootloader */
     ljmp16 0, FREELDR_BASE
@@ -435,12 +467,12 @@ GetFatEntry:
     shl   eax, 2                                // EAX = EAX * 4 (since FAT32 entries are 4 bytes)
     mov   ecx, eax                              // Save this for later in ECX
     xor   edx, edx
-    movzx ebx, word ptr BP_REL(BytesPerSector)
+    movzx ebx, word ptr BP_REL(BytesPerSector_off)
     push  ebx
     div   ebx                                   // FAT Sector Number = EAX / BytesPerSector
-    movzx ebx, word ptr BP_REL(ReservedSectors)
+    movzx ebx, word ptr BP_REL(ReservedSectors_off)
     add   eax, ebx                              // FAT Sector Number += ReservedSectors
-    mov   ebx, dword ptr BP_REL(HiddenSectors)
+    mov   ebx, dword ptr BP_REL(HiddenSectors_off)
     add   eax, ebx                              // FAT Sector Number += HiddenSectors
     pop   ebx
     dec   ebx
@@ -452,15 +484,15 @@ GetFatEntry:
                                                 // to see which FAT is the active one
                                                 // and use it, or if they are mirrored then
                                                 // no worries
-    movzx ebx, word ptr BP_REL(ExtendedFlags)   // Get extended flags and put into ebx
+    movzx ebx, word ptr BP_REL(ExtendedFlags_off)   // Get extended flags and put into ebx
     and   bx, HEX(0f)                           // Mask off upper 8 bits, now we have active fat in bl
     jz    LoadFatSector                         // If fat is mirrored then skip fat calcs
-    cmp   bl, byte ptr BP_REL(NumberOfFats)     // Compare bl to number of fats
+    cmp   bl, byte ptr BP_REL(NumberOfFats_off)     // Compare bl to number of fats
     jb    GetActiveFatOffset
     jmp   PrintFileSystemError                  // If bl is bigger than numfats exit with error
 GetActiveFatOffset:
     push  eax                                   // Save logical FAT sector number
-    mov   eax, dword ptr BP_REL(SectorsPerFatBig)   // Get the number of sectors occupied by one fat in eax
+    mov   eax, dword ptr BP_REL(SectorsPerFatBig_off)   // Get the number of sectors occupied by one fat in eax
     mul   ebx                                   // Multiplied by the active FAT index we have in ebx
     pop   edx                                   // Get logical FAT sector number
     add   eax, edx                              // Add the current FAT sector offset
@@ -473,10 +505,10 @@ LoadFatSector:
 
     // EAX holds logical FAT sector number
     // Check if we have already loaded it
-    cmp   eax, dword ptr ds:[FatSectorInCache]
+    cmp   eax, dword ptr [HEX(7c00) + FatSectorInCache_off]
     je    LoadFatSectorAlreadyLoaded
 
-    mov   dword ptr ds:[FatSectorInCache], eax
+    mov   dword ptr [HEX(7c00) + FatSectorInCache_off], eax
     xor   bx, bx
     mov   cx, 1
     call  ReadSectors
@@ -490,6 +522,7 @@ LoadFatSectorAlreadyLoaded:
 
 FatSectorInCache:                               // This variable tells us which sector we currently have in memory
     .long    HEX(0ffffffff)                     // There is no need to re-read the same sector if we don't have to
+.set FatSectorInCache_off, FatSectorInCache - start
 
 
 // Reads cluster number in EAX into [ES:0000]
@@ -499,36 +532,39 @@ ReadCluster:
     dec   eax
     dec   eax
     xor   edx, edx
-    movzx ebx, byte ptr BP_REL(SectsPerCluster)
+    movzx ebx, byte ptr BP_REL(SectsPerCluster_off)
     mul   ebx
     push  eax
     xor   edx, edx
-    movzx eax, byte ptr BP_REL(NumberOfFats)
-    mul   dword ptr BP_REL(SectorsPerFatBig)
-    movzx ebx, word ptr BP_REL(ReservedSectors)
+    movzx eax, byte ptr BP_REL(NumberOfFats_off)
+    mul   dword ptr BP_REL(SectorsPerFatBig_off)
+    movzx ebx, word ptr BP_REL(ReservedSectors_off)
     add   eax, ebx
-    add   eax, dword ptr BP_REL(HiddenSectors)
+    add   eax, dword ptr BP_REL(HiddenSectors_off)
     pop   ebx
     add   eax, ebx              // EAX now contains the logical sector number of the cluster
     xor   bx, bx                // We will load it to [ES:0000], ES loaded before function call
-    movzx cx, byte ptr BP_REL(SectsPerCluster)
+    movzx cx, byte ptr BP_REL(SectsPerCluster_off)
     call  ReadSectors
     ret
 
 // Displays a file not found error message
 // And reboots
 PrintFileNotFound:
-    mov  si, offset msgFreeLdr  // FreeLdr not found message
+    mov  si, HEX(7c00) + msgFreeLdr_off  // FreeLdr not found message
     call PutChars               // Display it
 
     jmp  Reboot
 
 msgFreeLdr:
-    .ascii "freeldr.sys not found", CR, LF, NUL
+    .ascii "Ldr not found", CR, LF, NUL
+.set msgFreeLdr_off, msgFreeLdr - start
 filename:
     .ascii "FREELDR SYS"
+.set filename_off, filename - start
 msgLoading:
-    .ascii "Loading FreeLoader...", CR, LF, NUL
+    .ascii "Loading...", CR, LF, NUL
+.set msgLoading_off, msgLoading - start
 
 .org 1022   // Pad to 1022 bytes
 

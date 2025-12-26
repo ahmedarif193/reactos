@@ -41,7 +41,7 @@
 #include <asm.inc>
 #include <freeldr/include/arch/pc/x86common.h>
 
-#define BP_REL(x) [bp+x-offset start]
+#define BP_REL(x) [bp + x]
 
 DataAreaStartHigh       =   2
 DataAreaStartLow        =   4
@@ -64,42 +64,61 @@ start:
 
 OEMName:
     .ascii "FrLdr1.0"
+.set OEMName_off, OEMName - start
 BytesPerSector:
     .word 512
+.set BytesPerSector_off, BytesPerSector - start
 SectsPerCluster:
     .byte 1
+.set SectsPerCluster_off, SectsPerCluster - start
 ReservedSectors:
     .word 1
+.set ReservedSectors_off, ReservedSectors - start
 NumberOfFats:
     .byte 2
+.set NumberOfFats_off, NumberOfFats - start
 MaxRootEntries:
     .word 224
+.set MaxRootEntries_off, MaxRootEntries - start
 TotalSectors:
     .word 2880
+.set TotalSectors_off, TotalSectors - start
 MediaDescriptor:
     .byte HEX(0f0)
+.set MediaDescriptor_off, MediaDescriptor - start
 SectorsPerFat:
     .word 9
+.set SectorsPerFat_off, SectorsPerFat - start
 SectorsPerTrack:
     .word 18
+.set SectorsPerTrack_off, SectorsPerTrack - start
 NumberOfHeads:
     .word 2
+.set NumberOfHeads_off, NumberOfHeads - start
 HiddenSectors:
     .long 0
+.set HiddenSectors_off, HiddenSectors - start
 TotalSectorsBig:
     .long 0
+.set TotalSectorsBig_off, TotalSectorsBig - start
 BootDrive:
     .byte HEX(0ff)
+.set BootDrive_off, BootDrive - start
 Reserved:
     .byte 0
+.set Reserved_off, Reserved - start
 ExtendSig:
     .byte HEX(29)
+.set ExtendSig_off, ExtendSig - start
 SerialNumber:
     .long 00000000
+.set SerialNumber_off, SerialNumber - start
 VolumeLabel:
     .ascii "NO NAME    "
+.set VolumeLabel_off, VolumeLabel - start
 FileSystem:
     .ascii "FAT12   "
+.set FileSystem_off, FileSystem - start
 
 main:
     xor ax, ax
@@ -109,15 +128,15 @@ main:
     mov ds, ax                                  // Make DS correct
     mov es, ax                                  // Make ES correct
 
-    cmp byte ptr BP_REL(BootDrive), HEX(0ff)    // If they have specified a boot drive then use it
+    cmp byte ptr BP_REL(BootDrive_off), HEX(0ff)    // If they have specified a boot drive then use it
     jne GetDriveParameters
 
-    mov byte ptr BP_REL(BootDrive), dl          // Save the boot drive
+    mov byte ptr BP_REL(BootDrive_off), dl          // Save the boot drive
 
 
 GetDriveParameters:
     mov ah, 8
-    mov dl, byte ptr BP_REL(BootDrive)          // Get boot drive in dl
+    mov dl, byte ptr BP_REL(BootDrive_off)          // Get boot drive in dl
     int HEX(13)                                 // Request drive parameters from the bios
     jnc CalcDriveSize                           // If the call succeeded then calculate the drive size
 
@@ -151,15 +170,15 @@ CalcDriveSize:
     // Now we must find our way to the first sector of the root directory
     xor ax, ax
     xor cx, cx
-    mov al, byte ptr BP_REL(NumberOfFats)       // Number of fats
-    mul word ptr BP_REL(SectorsPerFat)          // Times sectors per fat
-    add ax, word ptr BP_REL(HiddenSectors)
-    adc dx, word ptr BP_REL(HiddenSectors+2)    // Add the number of hidden sectors
-    add ax, word ptr BP_REL(ReservedSectors)    // Add the number of reserved sectors
+    mov al, byte ptr BP_REL(NumberOfFats_off)       // Number of fats
+    mul word ptr BP_REL(SectorsPerFat_off)          // Times sectors per fat
+    add ax, word ptr BP_REL(HiddenSectors_off)
+    adc dx, word ptr BP_REL(HiddenSectors_off + 2)  // Add the number of hidden sectors
+    add ax, word ptr BP_REL(ReservedSectors_off)    // Add the number of reserved sectors
     adc dx, cx                                  // Add carry bit
     mov word ptr [bp - DataAreaStartLow], ax    // Save the starting sector of the root directory
     mov word ptr [bp - DataAreaStartHigh], dx   // Save it in the first 4 bytes before the boot sector
-    mov si, word ptr BP_REL(MaxRootEntries)     // Get number of root dir entries in SI
+    mov si, word ptr BP_REL(MaxRootEntries_off)     // Get number of root dir entries in SI
     pusha                                       // Save 32-bit logical start sector of root dir
     // DX:AX now has the number of the starting sector of the root directory
 
@@ -167,7 +186,7 @@ CalcDriveSize:
     xor dx, dx
     mov ax, 32                                  // Size of dir entry
     mul si                                      // Times the number of entries
-    mov bx, word ptr BP_REL(BytesPerSector)
+    mov bx, word ptr BP_REL(BytesPerSector_off)
     add ax, bx
     dec ax
     div bx                                      // Divided by the size of a sector
@@ -218,9 +237,12 @@ FoundFreeLoader:
 
     // Save the addresses of needed functions so
     // the helper code will know where to call them.
-    mov word ptr [bp-ReadSectorsOffset], offset ReadSectors     // Save the address of ReadSectors
-    mov word ptr [bp-ReadClusterOffset], offset ReadCluster     // Save the address of ReadCluster
-    mov word ptr [bp-PutCharsOffset],    offset PutChars        // Save the address of PutChars
+    mov ax, HEX(7c00) + ReadSectors_off
+    mov word ptr [bp-ReadSectorsOffset], ax     // Save the address of ReadSectors
+    mov ax, HEX(7c00) + ReadCluster_off
+    mov word ptr [bp-ReadClusterOffset], ax     // Save the address of ReadCluster
+    mov ax, HEX(7c00) + PutChars_off
+    mov word ptr [bp-PutCharsOffset],    ax        // Save the address of PutChars
 
     // Now AX has start cluster of FreeLoader and we
     // have loaded the helper code in the first 512 bytes
@@ -236,7 +258,7 @@ FoundFreeLoader:
 // Displays an error message
 // And reboots
 ErrBoot:
-    mov si, offset msgFreeLdr   // FreeLdr not found message
+    mov si, HEX(7c00) + msgFreeLdr_off   // FreeLdr not found message
     call PutChars               // Display it
 
 Reboot:
@@ -256,11 +278,12 @@ PutChars:
     jmp short PutChars
 Done:
     ret
+.set PutChars_off, PutChars - start
 
 // Displays a bad boot message
 // And reboots
 BadBoot:
-    mov si, offset msgDiskError // Bad boot disk message
+    mov si, HEX(7c00) + msgDiskError_off // Bad boot disk message
     call PutChars               // Display it
 
     jmp short Reboot
@@ -272,7 +295,7 @@ ReadCluster:
     dec ax                              // Adjust start cluster by 2
     dec ax                              // Because the data area starts on cluster 2
     xor ch, ch
-    mov cl, byte ptr BP_REL(SectsPerCluster)
+    mov cl, byte ptr BP_REL(SectsPerCluster_off)
     mul cx                              // Times sectors per cluster
     add ax, [bp-DataAreaStartLow]       // Add start of data area
     adc dx, [bp-DataAreaStartHigh]      // Now we have DX:AX with the logical start sector of FREELDR.SYS
@@ -280,6 +303,7 @@ ReadCluster:
 //  mov  cl,BYTE [BYTE bp+SectsPerCluster]// Sectors per cluster still in CX
 //  call ReadSectors
 //  ret
+.set ReadCluster_off, ReadCluster - start
 
 
 
@@ -334,7 +358,7 @@ ReadSectorsLBALoop:
 
     // Good, we're here so the computer supports LBA disk access
     // So finish the extended read
-    mov dl, byte ptr BP_REL(BootDrive)      // Drive number
+    mov dl, byte ptr BP_REL(BootDrive_off)      // Drive number
     mov ah, HEX(42)                         // Int 13h, AH = 42h - Extended Read
     int HEX(13)                             // Call BIOS
     jc BadBoot                              // If the read failed then abort
@@ -355,6 +379,7 @@ ReadSectorsLBALoop:
     loop ReadSectorsLBALoop                 // Read next sector
 
     ret
+.set ReadSectors_off, ReadSectors - start
 
 
 // Reads logical sectors into [ES:BX]
@@ -368,14 +393,14 @@ ReadSectorsCHSLoop:
     xchg ax, cx
     xchg ax, dx
     xor dx, dx
-    div word ptr BP_REL(SectorsPerTrack)
+    div word ptr BP_REL(SectorsPerTrack_off)
     xchg ax, cx
-    div  word ptr BP_REL(SectorsPerTrack)   // Divide logical by SectorsPerTrack
+    div  word ptr BP_REL(SectorsPerTrack_off)   // Divide logical by SectorsPerTrack
     inc  dx                                 // Sectors numbering starts at 1 not 0
     xchg cx, dx
-    div  word ptr BP_REL(NumberOfHeads)     // Number of heads
+    div  word ptr BP_REL(NumberOfHeads_off)     // Number of heads
     mov  dh, dl                             // Head to DH, drive to DL
-    mov  dl, byte ptr BP_REL(BootDrive)     // Drive number
+    mov  dl, byte ptr BP_REL(BootDrive_off)     // Drive number
     mov  ch, al                             // Cylinder in CX
     ror  ah, 2                              // Low 8 bits of cylinder in CH, high 2 bits
                                             //     in CL shifted to bits 6 & 7
@@ -408,19 +433,23 @@ NoCarryCHS:
 
 msgDiskError:
     .ascii "Disk error", CR, LF, NUL
+.set msgDiskError_off, msgDiskError - start
 msgFreeLdr:
     .ascii "Ldr not found", CR, LF, NUL
+.set msgFreeLdr_off, msgFreeLdr - start
 // Sorry, need the space...
 // msgAnyKey:
 //  .ascii "Press any key to restart", CR, LF, NUL
 //  .ascii "Press a key", CR, LF, NUL
 filename:
     .ascii "FREELDR SYS"
+.set filename_off, filename - start
 
     .org 509    // Pad to 509 bytes
 
 BootPartition:
     .byte 0
+.set BootPartition_off, BootPartition - start
 
 BootSignature:
     .word HEX(0aa55)    // BootSector signature
