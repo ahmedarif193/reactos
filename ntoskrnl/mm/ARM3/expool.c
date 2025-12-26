@@ -28,7 +28,9 @@ extern BOOLEAN RtlpUse16ByteSLists;
 extern GENERAL_LOOKASIDE ExpSmallNPagedPoolLookasideLists[NUMBER_POOL_LOOKASIDE_LISTS];
 extern GENERAL_LOOKASIDE ExpSmallPagedPoolLookasideLists[NUMBER_POOL_LOOKASIDE_LISTS];
 extern BOOLEAN ExpDisablePoolLookaside;
+#if defined(_WIN64)
 static LONG ExpLookasideCorruptionHit;
+#endif
 #if DBG
 #ifndef EXP_LOOKASIDE_HARD_TRAP
 #define EXP_LOOKASIDE_HARD_TRAP 1
