@@ -55,6 +55,11 @@ ULONG	PerfDataGetProcessCount(void);
 ULONG	PerfDataGetProcessorUsage(void);
 ULONG	PerfDataGetProcessorSystemUsage(void);
 
+/* Per-CPU usage APIs */
+ULONG	PerfDataGetProcessorCount(void);
+ULONG	PerfDataGetPerProcessorUsage(ULONG CpuIndex);
+ULONG	PerfDataGetPerProcessorSystemUsage(ULONG CpuIndex);
+
 BOOL	PerfDataGetImageName(ULONG Index, LPWSTR lpImageName, ULONG nMaxCount);
 ULONG	PerfDataGetProcessId(ULONG Index);
 BOOL	PerfDataGetUserName(ULONG Index, LPWSTR lpUserName, ULONG nMaxCount);
