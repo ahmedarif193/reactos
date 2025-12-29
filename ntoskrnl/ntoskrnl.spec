@@ -1245,7 +1245,7 @@
 @ stdcall RtlLookupElementGenericTableAvl(ptr ptr)
 @ stdcall RtlLookupElementGenericTableFull(ptr ptr ptr ptr)
 @ stdcall RtlLookupElementGenericTableFullAvl(ptr ptr ptr ptr)
-@ cdecl -arch=x86_64 RtlLookupFunctionEntry(double ptr ptr)
+@ cdecl -arch=x86_64,arm64 RtlLookupFunctionEntry(double ptr ptr)
 @ stdcall RtlMapGenericMask(ptr ptr)
 @ stdcall RtlMapSecurityErrorToNtStatus(long)
 @ stdcall RtlMergeRangeLists(ptr ptr ptr long)
@@ -1342,7 +1342,7 @@
 @ stdcall RtlValidSecurityDescriptor(ptr)
 @ stdcall RtlValidSid(ptr)
 @ stdcall RtlVerifyVersionInfo(ptr long long long)
-@ stdcall -arch=x86_64,arm RtlVirtualUnwind(long int64 int64 ptr ptr ptr ptr ptr)
+@ stdcall -arch=x86_64,arm,arm64 RtlVirtualUnwind(long int64 int64 ptr ptr ptr ptr ptr)
 @ stdcall RtlVolumeDeviceToDosName(ptr ptr) IoVolumeDeviceToDosName
 @ stdcall RtlWalkFrameChain(ptr long long)
 @ stdcall RtlWriteRegistryValue(long wstr wstr long ptr long)

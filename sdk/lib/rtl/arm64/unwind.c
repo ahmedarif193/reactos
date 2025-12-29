@@ -44,8 +44,6 @@ typedef union _ARM64_UNWIND_XDATA_HEADER
     };
 } ARM64_UNWIND_XDATA_HEADER, *PARM64_UNWIND_XDATA_HEADER;
 
-#define RVA(base, addr) ((PVOID)((ULONG_PTR)(base) + (ULONG_PTR)(addr)))
-
 static __inline ULONG
 RtlpArm64FunctionLength(
     _In_ const RUNTIME_FUNCTION *FunctionEntry,
@@ -56,8 +54,8 @@ RtlpArm64FunctionLength(
     {
         const ARM64_UNWIND_XDATA_HEADER *Xdata;
 
-        Xdata = (const ARM64_UNWIND_XDATA_HEADER *)RVA(ImageBase,
-                                                       FunctionEntry->UnwindData);
+        Xdata = (const ARM64_UNWIND_XDATA_HEADER *)RVA(FunctionEntry->UnwindData,
+                                                       ImageBase);
         return Xdata->FunctionLength << 2;
     }
 
@@ -95,6 +93,13 @@ RtlLookupFunctionTable(
 
 PRUNTIME_FUNCTION
 NTAPI
+RtlpLookupDynamicFunctionEntry(
+    _In_ DWORD64 ControlPc,
+    _Out_ PDWORD64 ImageBase,
+    _In_ PUNWIND_HISTORY_TABLE HistoryTable);
+
+PRUNTIME_FUNCTION
+NTAPI
 RtlLookupFunctionEntry(
     _In_ DWORD64 ControlPc,
     _Out_ PDWORD64 ImageBase,
@@ -108,8 +113,7 @@ RtlLookupFunctionEntry(
     FunctionTable = RtlLookupFunctionTable(ControlPc, ImageBase, &TableLength);
     if (FunctionTable == NULL)
     {
-        UNREFERENCED_PARAMETER(HistoryTable);
-        return NULL;
+        return RtlpLookupDynamicFunctionEntry(ControlPc, ImageBase, HistoryTable);
     }
 
     ControlPc -= *ImageBase;
@@ -912,8 +916,8 @@ RtlVirtualUnwind(
             const ULONG *UnwindWords;
             const ULONG *HandlerRvaPtr;
 
-            Xdata = (const ARM64_UNWIND_XDATA_HEADER *)RVA(ImageBase,
-                                                          FunctionEntry->UnwindData);
+            Xdata = (const ARM64_UNWIND_XDATA_HEADER *)RVA(FunctionEntry->UnwindData,
+                                                          ImageBase);
             UseXdata = TRUE;
             EpilogCount = Xdata->EpilogCount;
             EpilogTableCount = (Xdata->EpilogInHeader && (EpilogCount > 0)) ?
@@ -924,7 +928,7 @@ RtlVirtualUnwind(
 
             if (Xdata->ExceptionDataPresent)
             {
-                Handler = (PEXCEPTION_ROUTINE)RVA(ImageBase, *HandlerRvaPtr);
+                Handler = (PEXCEPTION_ROUTINE)RVA(*HandlerRvaPtr, ImageBase);
                 LocalHandlerData = (PVOID)(HandlerRvaPtr + 1);
             }
 

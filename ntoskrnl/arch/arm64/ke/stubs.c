@@ -198,7 +198,7 @@ KeRaiseUserException(
     return (NTSTATUS)OldPc;
 }
 
-NTSTATUS
+VOID
 NTAPI
 RtlGetCallersAddress(
     _Out_opt_ PVOID *CallersAddress,

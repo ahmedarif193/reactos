@@ -458,8 +458,12 @@ endfunction()
 
 function(set_subsystem MODULE SUBSYSTEM)
     if(SUBSYSTEM STREQUAL "EFI_APPLICATION" OR SUBSYSTEM STREQUAL "efi_application" OR SUBSYSTEM STREQUAL "10")
-        # Some MinGW ld builds reject the named EFI subsystem; use the numeric value.
-        target_link_options(${MODULE} PRIVATE "-Wl,--subsystem,10")
+        # GNU ld accepts numeric EFI values, lld requires the named form.
+        if(MINGW_LINKER_IS_LLD)
+            target_link_options(${MODULE} PRIVATE "-Wl,--subsystem,efi_application")
+        else()
+            target_link_options(${MODULE} PRIVATE "-Wl,--subsystem,10")
+        endif()
     else()
         target_link_options(${MODULE} PRIVATE "-Wl,--subsystem,${SUBSYSTEM}:5.01")
     endif()

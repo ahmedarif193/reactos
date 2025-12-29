@@ -415,18 +415,6 @@ KiArm64HandleSynchronousException(
     Context->TrapFramePointer = NULL;
     Context->ExceptionFramePointer = NULL;
 
-    /* Fast path: kernel BRK with no debugger attached —
-     * skip the breakpoint to keep boot moving (amd64 parity). */
-    {
-        KPROCESSOR_MODE FastMode = KiArm64PreviousModeFromSpsr(Context->State.Spsr);
-        if ((EsrClass == 0x3C) && (FastMode == KernelMode) && (!KdDebuggerEnabled || KdDebuggerNotPresent))
-        {
-            /* Advance ELR by 4 bytes to step over BRK. */
-            Context->State.Elr += 4;
-            return TRUE;
-        }
-    }
-
     /* One-shot guard to avoid recursive exception storms while KD/logging
      * is not fully reliable during bring-up. Do this before any further logging. */
     {
