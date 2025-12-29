@@ -51,10 +51,4 @@ MachInit(const char *CmdLine)
     MachVtbl.InitializeBootDevices = UefiInitializeBootDevices;
     MachVtbl.HwDetect = UefiHwDetect;
     MachVtbl.HwIdle = UefiHwIdle;
-
-    /* Setup GOP */
-    if (UefiInitializeVideo() != EFI_SUCCESS)
-    {
-        ERR("Failed to setup GOP\n");
-    }
 }

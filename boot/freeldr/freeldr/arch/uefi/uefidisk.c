@@ -18,13 +18,11 @@ DBG_DEFAULT_CHANNEL(WARNING);
 
 #define TAG_HW_RESOURCE_LIST    'lRwH'
 #define TAG_HW_DISK_CONTEXT     'cDwH'
-#define UEFI_DISK_CONTEXT_SIGNATURE 'cDsU'
 #define FIRST_PARTITION 1
 #define MAX_PARTITION_SEARCH 128
 
 typedef struct tagDISKCONTEXT
 {
-    ULONG Signature;
     UCHAR DriveNumber;
     ULONG SectorSize;
     ULONGLONG SectorOffset;
@@ -64,7 +62,7 @@ static CHAR PcDiskIdentifier[32][20];
 /* UEFI-specific */
 static ULONG UefiBootRootIdentifier;
 static ULONG OffsetToBoot;
-ULONG PublicBootArcDisk;
+static ULONG PublicBootArcDisk;
 static INTERNAL_UEFI_DISK* InternalUefiDisk = NULL;
 static EFI_GUID bioGuid = BLOCK_IO_PROTOCOL;
 static EFI_BLOCK_IO* bio;
@@ -196,10 +194,6 @@ UefiIsCdRomHandle(IN EFI_HANDLE Handle)
 {
     EFI_DEVICE_PATH_PROTOCOL* DevicePath = NULL;
 
-    /*
-     * Primary Check: UEFI Device Path Protocol (Standard)
-     * Look for a MEDIA_DEVICE_PATH node with MEDIA_CDROM_DP subtype.
-     */
     if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
             Handle, &DevicePathProtocolGuid, (VOID**)&DevicePath)) &&
         DevicePath)
@@ -214,23 +208,35 @@ UefiIsCdRomHandle(IN EFI_HANDLE Handle)
     }
 
     /*
-     * Secondary Check: ISO9660 Signature (Robust)
-     * Some older firmware or USB bridges might present a CD without the CDROM_DP node.
-     * We verify the content for an ISO9660 PVD.
-     * We explicitly DO NOT use BlockSize=2048 as a standalone heuristic, as 4Kn HDDs
-     * share this block size and were causing false positives.
+     * Some firmware (notably SATA/USB bridges) expose optical media via a
+     * hard-drive style device path. Fall back to Block I/O heuristics so these
+     * devices are still classified as CDs.
      */
     EFI_BLOCK_IO* BlockIo = NULL;
     if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
             Handle, &bioGuid, (VOID**)&BlockIo)) &&
-        BlockIo && BlockIo->Media && 
-        BlockIo->Media->MediaPresent && 
-        !BlockIo->Media->LogicalPartition)
+        BlockIo && BlockIo->Media && !BlockIo->Media->LogicalPartition)
     {
-        /* Only check signatures if we are actually allowed to read */
+        if (!BlockIo->Media->MediaPresent)
+            return FALSE;
+
+        if (BlockIo->Media->ReadOnly)
+        {
+            if (BlockIo->Media->BlockSize == 2048 ||
+                UefiDetectIsoVolume(BlockIo))
+            {
+                TRACE("UefiIsCdRomHandle: heuristic matched read-only media (BlockSize=%u)\n",
+                      BlockIo->Media->BlockSize);
+                return TRUE;
+            }
+
+            TRACE("UefiIsCdRomHandle: read-only media without ISO signature, assuming CD-ROM\n");
+            return TRUE;
+        }
+
         if (UefiDetectIsoVolume(BlockIo))
         {
-            TRACE("UefiIsCdRomHandle: Detected ISO9660 signature on media\n");
+            TRACE("UefiIsCdRomHandle: detected ISO9660 volume on writable/removable media\n");
             return TRUE;
         }
     }
@@ -652,7 +658,6 @@ UefiDiskOpen(CHAR *Path, OPENMODE OpenMode, ULONG *FileId)
     if (!Context)
         return ENOMEM;
 
-    Context->Signature = UEFI_DISK_CONTEXT_SIGNATURE;
     Context->DriveNumber = DriveNumber;
     Context->SectorSize = SectorSize;
     Context->SectorOffset = SectorOffset;
@@ -759,29 +764,6 @@ static const DEVVTBL UefiDiskVtbl =
     UefiDiskSeek,
 };
 
-static
-DISKCONTEXT*
-UefiResolveDiskContext(ULONG FileId)
-{
-    ULONG Depth = 0;
-
-    while (FileId != INVALID_FILE_ID && Depth < MAX_FDS)
-    {
-        DISKCONTEXT* Context = FsGetDeviceSpecific(FileId);
-        if (Context && Context->Signature == UEFI_DISK_CONTEXT_SIGNATURE)
-            return Context;
-
-        ULONG ParentId = FsGetDeviceId(FileId);
-        if (ParentId == FileId)
-            break;
-
-        FileId = ParentId;
-        ++Depth;
-    }
-
-    return NULL;
-}
-
 /*
  * Expose helpers to retrieve the UEFI block handle and ARC device path
  * associated with a given FileId opened via UefiDiskOpen.
@@ -789,14 +771,14 @@ UefiResolveDiskContext(ULONG FileId)
 EFI_HANDLE
 UefiGetBlockHandleForFileId(ULONG FileId)
 {
-    DISKCONTEXT* Context = UefiResolveDiskContext(FileId);
+    DISKCONTEXT* Context = FsGetDeviceSpecific(FileId);
     return Context ? Context->BlockHandle : NULL;
 }
 
 PCCHAR
 UefiGetArcPathForFileId(ULONG FileId)
 {
-    DISKCONTEXT* Context = UefiResolveDiskContext(FileId);
+    DISKCONTEXT* Context = FsGetDeviceSpecific(FileId);
     return (Context && Context->ArcDevicePath[0]) ? Context->ArcDevicePath : NULL;
 }
 
@@ -1026,7 +1008,6 @@ UefiSetBootpath(VOID)
    EFI_BLOCK_IO* RootDiskIo = NULL;
    EFI_BLOCK_IO* BootClassifyIo = bio;
    BOOLEAN BootHandleIsPartition = FALSE;
-   BOOLEAN BootPartitionLooksOptical = FALSE;
 
    if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
            GlobalImageHandle,
@@ -1054,11 +1035,6 @@ UefiSetBootpath(VOID)
                 if (BootHandleIsPartition)
                 {
                     TRACE("Boot handle is a logical partition; using partition media for heuristics\n");
-                    if (BootBlockIo->Media->BlockSize == 2048 ||
-                        (BootBlockIo->Media->RemovableMedia && BootBlockIo->Media->ReadOnly))
-                    {
-                        BootPartitionLooksOptical = TRUE;
-                    }
                 }
             }
         }
@@ -1162,7 +1138,8 @@ UefiSetBootpath(VOID)
 
    RtlZeroMemory(&PartitionEntry, sizeof(PartitionEntry));
 
-   if (UefiGetBootPartitionEntry(FrldrBootDrive, &PartitionEntry, &BootPartition) &&
+   if (!TreatAsCd &&
+       UefiGetBootPartitionEntry(FrldrBootDrive, &PartitionEntry, &BootPartition) &&
        BootPartition != 0)
    {
         BOOLEAN PartitionLooksValid = (PartitionEntry.PartitionSectorCount != 0 &&
@@ -1183,15 +1160,8 @@ UefiSetBootpath(VOID)
         PartitionInfoHandle = handles[UefiBootRootIdentifier];
         if (RootDiskIo)
         {
-            if (BootPartitionLooksOptical && BootClassifyIo && RootDiskIo != BootClassifyIo)
-            {
-                TRACE("Boot partition Block I/O looks optical; keeping it for media classification\n");
-            }
-            else
-            {
-                BootClassifyIo = RootDiskIo;
-                TRACE("Using root disk Block I/O (%p) for media classification\n", RootDiskIo);
-            }
+            BootClassifyIo = RootDiskIo;
+            TRACE("Using root disk Block I/O (%p) for media classification\n", RootDiskIo);
         }
    }
 
@@ -1199,17 +1169,6 @@ UefiSetBootpath(VOID)
          DevPathHasPartition,
          DevPathPartition,
          DevPathStart);
-
-   if (!TreatAsCd && BootPartitionLooksOptical && !HasPartitionInfo)
-   {
-        TRACE("Boot partition Block I/O exhibits optical geometry; forcing ISO/CD semantics\n");
-        TreatAsCd = TRUE;
-        BootPartition = 0;
-        if (BootHandle)
-        {
-            PartitionInfoHandle = BootHandle;
-        }
-   }
 
    if (TreatAsCd && HasPartitionInfo)
    {
@@ -1230,8 +1189,7 @@ UefiSetBootpath(VOID)
         IsoProbeIo = RootDiskIo;
    }
 
-   if (!TreatAsCd && !HasPartitionInfo &&
-       IsoProbeIo && IsoProbeIo->Media &&
+   if (!TreatAsCd && IsoProbeIo && IsoProbeIo->Media &&
        !IsoProbeIo->Media->LogicalPartition && IsoProbeIo->Media->MediaPresent)
    {
         if (UefiDetectIsoVolume(IsoProbeIo))

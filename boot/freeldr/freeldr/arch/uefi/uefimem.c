@@ -64,6 +64,12 @@ PVOID     OsLoaderBase;
 SIZE_T    OsLoaderSize;
 EFI_HANDLE PublicBootHandle;
 
+/* Cached FreeLdr-style map for use after ExitBootServices. */
+static PFREELDR_MEMORY_DESCRIPTOR CachedFreeldrMem;
+static ULONG CachedFreeldrCount;
+static BOOLEAN CachedMemoryMapValid;
+static BOOLEAN BootServicesExitedFlag;
+
 /* Declared elsewhere */
 void _exituefi(VOID);
 
@@ -245,6 +251,22 @@ UefiMemGetMemoryMap(_Out_ ULONG *MemoryMapSize /* OUT: number of entries */)
     FreeldrDescCount = 0;
     EfiMemoryMap = NULL;
 
+    /* After ExitBootServices, firmware services are gone. Reuse the last
+     * successful map we captured while they were available. */
+    if (!GlobalSystemTable || !GlobalSystemTable->BootServices || BootServicesExitedFlag)
+    {
+        if (CachedMemoryMapValid && CachedFreeldrMem)
+        {
+            FreeldrDescCount = CachedFreeldrCount;
+            if (MemoryMapSize)
+                *MemoryMapSize = CachedFreeldrCount;
+            return CachedFreeldrMem;
+        }
+
+        TRACE("UefiMemGetMemoryMap: BootServices unavailable and no cached map\n");
+        return NULL;
+    }
+
     /* Identify our image for base/size and the boot device. */
     Status = GlobalSystemTable->BootServices->HandleProtocol(GlobalImageHandle,
                                                              &EfiLoadedImageProtocol,
@@ -344,6 +366,11 @@ UefiMemGetMemoryMap(_Out_ ULONG *MemoryMapSize /* OUT: number of entries */)
     /* Windows/NT expects page 0 reserved; some UEFI maps leave it free. */
     UefiSetMemory(FreeldrMem, 0, 1, LoaderFirmwarePermanent);
 
+    /* Cache for post-ExitBootServices users (ARM64 MMU setup). */
+    CachedFreeldrMem = FreeldrMem;
+    CachedFreeldrCount = FreeldrDescCount;
+    CachedMemoryMapValid = TRUE;
+
     *MemoryMapSize = FreeldrDescCount;
     return FreeldrMem;
 }
@@ -382,6 +409,7 @@ UefiExitBootServices(VOID)
     else
     {
         TRACE("Exited boot services\n");
+        BootServicesExitedFlag = TRUE;
         /* Notify the console layer so it can switch to the GOP fallback. */
         UefiConsMarkBootServicesExited();
     }

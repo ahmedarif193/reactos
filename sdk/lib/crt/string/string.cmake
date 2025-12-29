@@ -100,6 +100,7 @@ list(APPEND CRT_STRING_SOURCE
     string/string.c
     string/strncoll.c
     string/strtod.c
+    string/strtold.c
     string/strtok.c
     string/strtok_s.c
     string/strtoul.c

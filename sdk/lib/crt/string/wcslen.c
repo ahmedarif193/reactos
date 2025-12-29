@@ -1,6 +1,10 @@
-
-#define _UNICODE
 #include <wchar.h>
-#include "tcslen.h"
+#include <stddef.h>
 
-/* EOF */
+size_t __cdecl wcslen(const wchar_t *str)
+{
+    const wchar_t *s = str;
+    while (*s)
+        ++s;
+    return (size_t)(s - str);
+}

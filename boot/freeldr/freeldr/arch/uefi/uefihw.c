@@ -10,8 +10,9 @@
 #include <uefildr.h>
 
 #include <debug.h>
-/* ACPI structures are required for BGRT detection. */
 #include <drivers/acpi/acpi.h>
+#include <arch/pc/pcbios.h>
+#include <arch/pc/hardware.h>
 
 DBG_DEFAULT_CHANNEL(WARNING);
 
@@ -290,7 +291,7 @@ UefiHwDetect(
     FldrCreateSystemKey(&SystemKey, "AT/AT COMPATIBLE");
 #elif defined(_M_IA64)
     FldrCreateSystemKey(&SystemKey, "Intel Itanium processor family");
-#elif defined(_M_ARM) || defined(_M_ARM64)
+#elif defined(_M_ARM) || defined(_M_ARM64) || defined(__aarch64__)
     FldrCreateSystemKey(&SystemKey, "ARM processor family");
 #else
     #error Please define a system key for your architecture

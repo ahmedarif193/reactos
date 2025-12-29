@@ -2068,14 +2068,16 @@ NTSTATUS
 VpAllocateInterruptThunk(
     _Inout_ PVIDEO_PORT_DRIVER_EXTENSION DriverExtension)
 {
-#if defined(_M_AMD64)
-    const ULONG codeSize = 12; /* mov rax, imm64; jmp rax */
-#elif defined(_M_IX86)
-    const ULONG codeSize = 7;  /* mov eax, imm32; jmp eax */
-#else
+#if !defined(_M_AMD64) && !defined(_M_IX86)
+    UNREFERENCED_PARAMETER(DriverExtension);
     return STATUS_NOT_IMPLEMENTED;
+#else
+    const ULONG codeSize =
+#if defined(_M_AMD64)
+        12; /* mov rax, imm64; jmp rax */
+#else
+        7;  /* mov eax, imm32; jmp eax */
 #endif
-
     PUCHAR stub;
 
     if (DriverExtension->InterruptThunk.CodeBase != NULL)
@@ -2106,6 +2108,7 @@ VpAllocateInterruptThunk(
     DriverExtension->InterruptThunk.CodeSize = codeSize;
 
     return STATUS_SUCCESS;
+#endif
 }
 
 static BOOLEAN NTAPI

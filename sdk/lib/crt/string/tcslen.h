@@ -6,7 +6,11 @@
 #pragma function(_tcslen)
 #endif /* _MSC_VER */
 
-size_t __cdecl _tcslen(const _TCHAR * str)
+#ifndef CRT_WEAK_ATTR
+#define CRT_WEAK_ATTR
+#endif
+
+CRT_WEAK_ATTR size_t __cdecl _tcslen(const _TCHAR * str)
 {
  const _TCHAR * s;
 

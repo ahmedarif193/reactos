@@ -76,17 +76,24 @@ EfiEntry(
 
     MachInit(CmdLine);
 
+    /* Initialize memory manager */
+    if (!MmInitializeMemoryManager())
+    {
+        ERR("Unable to initialize memory manager.\n");
+        goto Quit;
+    }
+
+    /* Setup GOP now that the heap is available */
+    if (UefiInitializeVideo() != EFI_SUCCESS)
+    {
+        ERR("Failed to setup GOP\n");
+        goto Quit;
+    }
+
     /* UI pre-initialization */
     if (!UiInitialize(FALSE))
     {
         UiMessageBoxCritical("Unable to initialize UI.");
-        goto Quit;
-    }
-
-    /* Initialize memory manager */
-    if (!MmInitializeMemoryManager())
-    {
-        UiMessageBoxCritical("Unable to initialize memory manager.");
         goto Quit;
     }
 

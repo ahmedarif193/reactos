@@ -1,7 +1,11 @@
 
 #include <tchar.h>
 
-_TCHAR * _tcschr(const _TCHAR * s, _XINT c)
+#ifndef CRT_WEAK_ATTR
+#define CRT_WEAK_ATTR
+#endif
+
+CRT_WEAK_ATTR _TCHAR * _tcschr(const _TCHAR * s, _XINT c)
 {
  _TCHAR cc = c;
 

@@ -16,7 +16,6 @@ list(APPEND SOURCE
     dma.c
     event.c
     funclist.c
-    int10.c
     interrupt.c
     registry.c
     resource.c
@@ -25,6 +24,12 @@ list(APPEND SOURCE
     stubs.c
     timer.c
     videoprt.c)
+
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+    list(APPEND SOURCE int10.c)
+else()
+    list(APPEND SOURCE int10_stub.c)
+endif()
 
 list(APPEND PCH_SKIP_SOURCE
     guid.c)
