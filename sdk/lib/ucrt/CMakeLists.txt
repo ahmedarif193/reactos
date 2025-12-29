@@ -32,6 +32,9 @@ add_compile_definitions(
     _GCC_NO_SAL_ATTRIIBUTES
     CRTDLL
 )
+if(ARCH STREQUAL "arm64")
+    add_compile_definitions(_M_ARM64)
+endif()
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
    CMAKE_C_COMPILER_ID STREQUAL "Clang")
@@ -125,6 +128,10 @@ add_library(ucrt OBJECT
     ${UCRT_TIME_SOURCES}
     ${UCRT_VCRUNTIME_SOURCES}
 )
+
+if(ARCH STREQUAL "arm64")
+    target_sources(ucrt PRIVATE arm64/intrinsics.cpp)
+endif()
 
 target_link_libraries(ucrt vcruntime)
 add_dependencies(ucrt psdk asm)

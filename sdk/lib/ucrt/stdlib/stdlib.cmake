@@ -24,8 +24,13 @@ list(APPEND UCRT_STDLIB_SOURCES
 )
 
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    add_asm_files(UCRT_STDLIB_ASM stdlib/clang-hacks.s)
-    list(APPEND UCRT_STDLIB_SOURCES
-        ${UCRT_STDLIB_ASM}
-    )
+    if(ARCH STREQUAL "arm64")
+        list(APPEND UCRT_STDLIB_SOURCES stdlib/arm64/clang-hacks.c)
+        set_source_files_properties(stdlib/arm64/clang-hacks.c PROPERTIES COMPILE_OPTIONS "-fno-builtin")
+    else()
+        add_asm_files(UCRT_STDLIB_ASM stdlib/clang-hacks.s)
+        list(APPEND UCRT_STDLIB_SOURCES
+            ${UCRT_STDLIB_ASM}
+        )
+    endif()
 endif()

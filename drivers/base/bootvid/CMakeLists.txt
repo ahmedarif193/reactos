@@ -25,6 +25,11 @@ elseif(ARCH STREQUAL "arm")
     list(APPEND SOURCE
         arm/arm.h
         arm/bootvid.c)
+elseif(ARCH STREQUAL "arm64")
+    list(APPEND SOURCE
+        arm64/bootvid.c
+        uefi/bootvid.c
+        uefi/uefi.h)
 endif()
 
 list(APPEND SOURCE

@@ -2,10 +2,9 @@
 get_filename_component(NTOS_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
 
 set(NT_ARCH "${ARCH}" CACHE STRING "Kernel architecture (i386|amd64|arm64)")
+set(NTOS_ARCH_DIR "${NTOS_SOURCE_DIR}/arch/${NT_ARCH}")
 if(NT_ARCH STREQUAL "arm64")
-    set(NTOS_ARCH_DIR "${NTOS_SOURCE_DIR}/arch/arm")
-else()
-    set(NTOS_ARCH_DIR "${NTOS_SOURCE_DIR}/arch/${NT_ARCH}")
+    set(KDBG FALSE)
 endif()
 
 include_directories(
@@ -20,6 +19,10 @@ include_directories(
 
 if(NT_ARCH STREQUAL "amd64")
     include_directories(${NTOS_SOURCE_DIR}/arch/i386/include)
+endif()
+
+if(NT_ARCH STREQUAL "arm64")
+    set_source_files_properties(${NTOS_ARCH_DIR}/ke/atomics.c PROPERTIES COMPILE_OPTIONS "-fno-builtin")
 endif()
 
 add_definitions(
@@ -320,7 +323,15 @@ if(DBG)
     list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/se/debug.c)
 endif()
 
-list(APPEND ASM_SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/zw.S)
+if(NT_ARCH STREQUAL "i386" OR NT_ARCH STREQUAL "amd64" OR NT_ARCH STREQUAL "arm64")
+    list(APPEND ASM_SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/zw.S)
+endif()
+
+if(NT_ARCH STREQUAL "arm64")
+    list(REMOVE_ITEM SOURCE
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ipi.c
+        ${NTOS_SOURCE_DIR}/ke/ipi.c)
+endif()
 
 if(NT_ARCH STREQUAL "i386")
     list(APPEND ASM_SOURCE
@@ -384,7 +395,7 @@ elseif(NT_ARCH STREQUAL "amd64")
         ${NTOS_ARCH_DIR}/ke/traphandler.c
         ${NTOS_ARCH_DIR}/ke/usercall.c
         ${NTOS_ARCH_DIR}/ke/xstate.c)
-elseif(NT_ARCH STREQUAL "arm" OR NT_ARCH STREQUAL "arm64")
+elseif(NT_ARCH STREQUAL "arm")
     list(APPEND ASM_SOURCE
         ${NTOS_ARCH_DIR}/ex/ioport.s
         ${NTOS_ARCH_DIR}/ke/boot.s
@@ -405,6 +416,49 @@ elseif(NT_ARCH STREQUAL "arm" OR NT_ARCH STREQUAL "arm64")
         ${NTOS_ARCH_DIR}/mm/ARM3/init.c
         ${NTOS_ARCH_DIR}/ps/psctx.c
         ${NTOS_ARCH_DIR}/rtl/rtlexcpt.c)
+elseif(NT_ARCH STREQUAL "arm64")
+    list(APPEND ASM_SOURCE
+        ${NTOS_ARCH_DIR}/ke/earlyvec.S
+        ${NTOS_ARCH_DIR}/ke/trapvec.S
+        ${NTOS_ARCH_DIR}/ke/trapret.S
+        ${NTOS_ARCH_DIR}/ke/ctxswitch.S
+        ${NTOS_ARCH_DIR}/ke/bootstack.S)
+    list(APPEND SOURCE
+        ${NTOS_ARCH_DIR}/config/cmhardwr.c
+        ${NTOS_ARCH_DIR}/ex/ioport.c
+        ${NTOS_ARCH_DIR}/kd64/kdarm64.c
+        ${NTOS_ARCH_DIR}/kd/kdfallback.c
+        ${NTOS_ARCH_DIR}/ke/atomics.c
+        ${NTOS_ARCH_DIR}/ke/boot.c
+        ${NTOS_ARCH_DIR}/ke/context.c
+        ${NTOS_ARCH_DIR}/ke/cpu.c
+        ${NTOS_ARCH_DIR}/ke/exceptinit.c
+        ${NTOS_ARCH_DIR}/ke/exp.c
+        ${NTOS_ARCH_DIR}/ke/floatstubs.c
+        ${NTOS_ARCH_DIR}/ke/freeze.c
+        ${NTOS_ARCH_DIR}/ke/interrupt.c
+        ${NTOS_ARCH_DIR}/ke/ipi.c
+        ${NTOS_ARCH_DIR}/ke/irql.c
+        ${NTOS_ARCH_DIR}/ke/kiinit.c
+        ${NTOS_ARCH_DIR}/ke/rtlshim.c
+        ${NTOS_ARCH_DIR}/ke/spinlock.c
+        ${NTOS_ARCH_DIR}/ke/stubs.c
+        ${NTOS_ARCH_DIR}/ke/thrdini.c
+        ${NTOS_ARCH_DIR}/ke/trapc.c
+        ${NTOS_ARCH_DIR}/ke/trapdump.c
+        ${NTOS_ARCH_DIR}/ke/usercall.c
+        ${NTOS_ARCH_DIR}/mm/page.c
+        ${NTOS_ARCH_DIR}/mm/procsup.c
+        ${NTOS_ARCH_DIR}/mm/ARM3/init.c
+        ${NTOS_ARCH_DIR}/mm/ARM3/maputils.c
+        ${NTOS_ARCH_DIR}/ps/psctx.c
+        ${NTOS_ARCH_DIR}/rtl/rtlexcpt.c)
+    if(KDBG)
+        list(APPEND ASM_SOURCE ${NTOS_ARCH_DIR}/kdbg/kdb_help.S)
+        list(APPEND SOURCE
+            ${NTOS_ARCH_DIR}/kdbg/arm64-dis.c
+            ${NTOS_ARCH_DIR}/kdbg/kdb_shim.c)
+    endif()
 endif()
 
 if(NOT _WINKD_)

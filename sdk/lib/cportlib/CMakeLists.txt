@@ -1,7 +1,11 @@
 
 if(SARCH STREQUAL "pc98")
     add_library(cportlib cport_pc98.c)
-else()
+elseif(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
     add_library(cportlib cport.c)
+elseif(ARCH STREQUAL "arm64")
+    add_library(cportlib cport_arm64.c)
+else()
+    add_library(cportlib cport_stub.c)
 endif()
 add_dependencies(cportlib xdk)

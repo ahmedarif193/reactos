@@ -49,6 +49,8 @@ elseif(ARCH STREQUAL "arm")
 elseif(ARCH STREQUAL "arm64")
     list(APPEND UCRTSUPP_SOURCE
         wine/except_arm64.c
+        arm64/setjmpex.c
+        except/arm64/atomics.c
     )
 endif()
 

@@ -9,6 +9,8 @@ elseif(ARCH STREQUAL "amd64")
 elseif(ARCH STREQUAL "arm")
     list(APPEND ASM_SOURCE
         arm/seh_prolog.s)
+elseif(ARCH STREQUAL "arm64")
+    # ARM64 currently relies on the generic framebased runtime without extra assembly.
 endif()
 
 if(MSVC OR ((CMAKE_C_COMPILER_ID STREQUAL "Clang") AND (ARCH STREQUAL "amd64")))
@@ -31,7 +33,7 @@ elseif((CMAKE_C_COMPILER_ID STREQUAL "GNU") AND (ARCH STREQUAL "amd64"))
     endif()
 else()
 
-    if(USE_PSEH3)
+    if(USE_PSEH3 AND ARCH STREQUAL "i386")
         include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/pseh)
         list(APPEND SOURCE
             i386/pseh3.c
@@ -45,6 +47,8 @@ else()
             i386/framebased-gcchack-asm.S)
     elseif(ARCH STREQUAL "amd64")
         list(APPEND SOURCE amd64/framebased.c)
+    elseif(ARCH STREQUAL "arm64")
+        list(APPEND SOURCE arm64/framebased.c dummy.c)
     endif()
 
 add_library(pseh ${SOURCE} ${ASM_SOURCE})

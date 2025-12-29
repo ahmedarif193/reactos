@@ -14,6 +14,12 @@ list(APPEND LIBCNTPR_SOURCE
     ${LIBCNTPR_WSTRING_SOURCE}
 )
 
+if(ARCH STREQUAL "arm64")
+    list(APPEND LIBCNTPR_SOURCE
+        except/arm64/fastfail.c
+    )
+endif()
+
 list(APPEND LIBCNTPR_ASM_SOURCE
     ${LIBCNTPR_EXCEPT_ASM_SOURCE}
     ${LIBCNTPR_FLOAT_ASM_SOURCE}
@@ -33,4 +39,29 @@ target_compile_definitions(libcntpr
     _LIBCNT_
     __CRT__NO_INLINE
     CRTDLL)
+if(ARCH STREQUAL "arm64" AND TARGET msvcrt_host)
+    target_link_libraries(libcntpr INTERFACE msvcrt_host)
+endif()
+if(ARCH STREQUAL "arm64" AND NOT TARGET pthread_stubs)
+    add_library(pthread_stubs STATIC arm64/pthread_stubs.c)
+endif()
+if(ARCH STREQUAL "arm64")
+    if(TARGET libatomic_host)
+        target_link_libraries(libcntpr INTERFACE libatomic_host pthread_stubs)
+    elseif(TARGET libatomic)
+        target_link_libraries(libcntpr INTERFACE libatomic pthread_stubs)
+    else()
+        target_link_libraries(libcntpr INTERFACE atomic pthread_stubs)
+    endif()
+    get_target_property(_libgcc_path libgcc IMPORTED_LOCATION)
+    if(_libgcc_path)
+        target_link_libraries(libcntpr INTERFACE ${_libgcc_path})
+    endif()
+elseif(TARGET libatomic_host)
+    target_link_libraries(libcntpr INTERFACE libatomic_host)
+elseif(TARGET libatomic)
+    target_link_libraries(libcntpr INTERFACE libatomic)
+elseif(NOT WIN32)
+    target_link_libraries(libcntpr INTERFACE atomic)
+endif()
 add_dependencies(libcntpr psdk asm)

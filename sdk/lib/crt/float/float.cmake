@@ -47,4 +47,13 @@ elseif(ARCH STREQUAL "arm")
         float/arm/__getfp.s
         float/arm/__setfp.s
     )
+elseif(ARCH STREQUAL "arm64")
+    list(APPEND CRT_FLOAT_SOURCE
+        float/arm64/_clearfp.c
+        float/arm64/_controlfp.c
+        float/arm64/_statusfp.c
+    )
+    list(APPEND LIBCNTPR_FLOAT_SOURCE
+        float/arm64/_controlfp.c
+    )
 endif()

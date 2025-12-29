@@ -16,6 +16,10 @@ extern "C" {
 #define MM_ALLOCATION_GRANULARITY         0x10000
 #define MM_ALLOCATION_GRANULARITY_SHIFT   16L
 #define MM_PAGE_FRAME_NUMBER_SIZE         20
+#define MM_SHARED_USER_DATA_VA            0x7FFE0000ULL
+
+/* User space range limit */
+#define MI_HIGHEST_USER_ADDRESS           (PVOID)0x000007FFFFFEFFFFULL
 
 /* Following structs are based on WoA symbols */
 typedef struct _HARDWARE_PTE
@@ -142,7 +146,14 @@ typedef struct _MMPTE
         MMPTE_SUBSECTION Subsect;
         MMPTE_LIST List;
     } u;
-} MMPTE, *PMMPTE;
+} MMPTE, *PMMPTE,
+  MMPDE, *PMMPDE,
+  MMPPE, *PMMPPE,
+  MMPXE, *PMMPXE;
+
+#define PTE_PER_PAGE 512
+#define PDE_PER_PAGE 512
+#define PPE_PER_PAGE 512
 
 #ifdef __cplusplus
 }; // extern "C"

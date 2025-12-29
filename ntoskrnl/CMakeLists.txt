@@ -1,6 +1,10 @@
 
 PROJECT(NTOS)
 
+if(NT_ARCH STREQUAL "arm64")
+    add_definitions(-D_M_ARM64)
+endif()
+
 if (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # Enable this again. CORE-17637
     add_compile_options(-Wunused-result)
@@ -29,8 +33,10 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
 endif()
 
 if((CMAKE_C_COMPILER_ID STREQUAL "Clang") OR (CMAKE_C_COMPILER_ID STREQUAL "GNU"))
-    # Enable xsave feature
-    add_compile_options(-mxsave)
+    if(NT_ARCH STREQUAL "i386" OR NT_ARCH STREQUAL "amd64")
+        # Enable xsave feature on x86/x64
+        add_compile_options(-mxsave)
+    endif()
 endif()
 
 list(APPEND PCH_SKIP_SOURCE
@@ -70,3 +76,12 @@ add_asm_files(ntdllsys_asm ntdll.S)
 add_library(ntdllsys ${ntdllsys_asm})
 set_target_properties(ntdllsys PROPERTIES LINKER_LANGUAGE "C")
 add_dependencies(ntdllsys asm ntos_syscalls)
+
+if(NT_ARCH STREQUAL "arm64" AND (CMAKE_C_COMPILER_ID STREQUAL "Clang" OR CMAKE_C_COMPILER_ID STREQUAL "GNU"))
+    add_custom_command(TARGET ntoskrnl POST_BUILD
+        COMMAND ${CMAKE_OBJCOPY} --only-keep-debug $<TARGET_FILE:ntoskrnl> $<TARGET_FILE:ntoskrnl>.dbg
+        COMMAND ${CMAKE_STRIP} --strip-debug $<TARGET_FILE:ntoskrnl>
+        COMMAND ${CMAKE_OBJCOPY} --add-gnu-debuglink=$<TARGET_FILE:ntoskrnl>.dbg $<TARGET_FILE:ntoskrnl>
+        COMMENT "Stripping debug info from ntoskrnl and saving to .dbg file"
+    )
+endif()

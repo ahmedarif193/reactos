@@ -28,8 +28,15 @@ if(NOT DEFINED USE_PSEH3)
     set(USE_PSEH3 1)
 endif()
 
+# PSEH3 is x86-only; disable it for other architectures.
+if(NOT ARCH STREQUAL "i386")
+    set(USE_PSEH3 0 CACHE BOOL "PSEH3 is only supported on i386" FORCE)
+endif()
+
 if(USE_PSEH3)
     add_definitions(-D_USE_PSEH3=1)
+elseif(NOT ARCH STREQUAL "i386")
+    add_compile_options(-U_USE_PSEH3)
 endif()
 
 if(NOT DEFINED USE_DUMMY_PSEH)
@@ -78,8 +85,11 @@ endif()
 # note: -fno-common is default since GCC 10
 add_compile_options(-pipe -fms-extensions -fno-strict-aliasing -fno-common)
 
-# A long double is 64 bits
-add_compile_options(-mlong-double-64)
+# A long double is 64 bits on Windows; enforce this where the toolchain defaults
+# to wider quad-precision to avoid pulling in libgcc tf helpers.
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+    add_compile_options(-mlong-double-64)
+endif()
 
 # Prevent GCC from searching any of the default directories.
 # The case for C++ is handled through the reactos_c++ INTERFACE library
@@ -205,6 +215,11 @@ endif()
 
 # Tuning
 add_compile_options(-march=${OARCH} -mtune=${TUNE})
+if(ARCH STREQUAL "arm64")
+    # Avoid GCC's out-of-line atomic helpers (__aarch64_*), which are not
+    # available in the freestanding kernel/driver environment.
+    add_compile_options(-mno-outline-atomics)
+endif()
 
 # Warnings, errors
 # Only treat warnings as errors for Debug builds (GCC only)
@@ -496,11 +511,18 @@ function(add_delay_importlibs _module)
     if(_module_type STREQUAL "STATIC_LIBRARY")
         message(FATAL_ERROR "Cannot add delay imports to a static library")
     endif()
-    foreach(_lib ${ARGN})
-        get_filename_component(_basename "${_lib}" NAME_WE)
-        target_link_libraries(${_module} lib${_basename}_delayed)
-    endforeach()
-    target_link_libraries(${_module} delayimp)
+    if(ARCH STREQUAL "arm64")
+        foreach(_lib ${ARGN})
+            get_filename_component(_basename "${_lib}" NAME_WE)
+            target_link_libraries(${_module} lib${_basename})
+        endforeach()
+    else()
+        foreach(_lib ${ARGN})
+            get_filename_component(_basename "${_lib}" NAME_WE)
+            target_link_libraries(${_module} lib${_basename}_delayed)
+        endforeach()
+        target_link_libraries(${_module} delayimp)
+    endif()
 endfunction()
 
 if(NOT ARCH STREQUAL "i386")
@@ -622,22 +644,23 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
     endif()
     list(FIND _skip_import_list ${_libname} _skip_copy_index)
     if(_skip_copy_index EQUAL -1)
-        # FIXME: On amd64, AR corrupts import libraries when using EXTERNAL_OBJECT
+        # FIXME: AR corrupts import libraries when using EXTERNAL_OBJECT
         # Force a copy operation to preserve the correct import library
-        if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
+        if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386" OR ARCH STREQUAL "arm" OR ARCH STREQUAL "arm64")
             # Override the library file with a proper copy after it's created
             add_custom_command(TARGET ${_libname} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy ${LIBRARY_PRIVATE_DIR}/${_libname}.a $<TARGET_FILE:${_libname}>
                 COMMAND ${CMAKE_AR} s $<TARGET_FILE:${_libname}>
                 COMMAND ${CMAKE_RANLIB} $<TARGET_FILE:${_libname}>
-                COMMENT "FIXME: Overwriting ${_libname} with proper import library (amd64 workaround)")
+                COMMENT "FIXME: Overwriting ${_libname} with proper import library copy")
         endif()
     endif()
 
-    # Do the same with delay-import libs
-    set(LIBRARY_PRIVATE_DIR ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${_libname}_delayed.dir)
-    # FIXME: For amd64, we need to run ranlib after dlltool to ensure proper index
-    if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
+    if(NOT ARCH STREQUAL "arm64")
+        # Do the same with delay-import libs
+        set(LIBRARY_PRIVATE_DIR ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${_libname}_delayed.dir)
+        # FIXME: For amd64, we need to run ranlib after dlltool to ensure proper index
+        if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
     # Prepare dlltool args per-library
     set(_dlltool_args ${DLLTOOL_EXTRA_ARGS})
         if(ARCH STREQUAL "amd64" AND NOT _dlltool_args)
@@ -682,14 +705,15 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
     if(_skip_delayed_copy_index EQUAL -1)
         # FIXME: AR corrupts import libraries when using EXTERNAL_OBJECT
         # Force a copy operation to preserve the correct import library
-        if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
+        if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386" OR ARCH STREQUAL "arm" OR ARCH STREQUAL "arm64")
             # Override the library file with a proper copy after it's created
             add_custom_command(TARGET ${_libname}_delayed POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a $<TARGET_FILE:${_libname}_delayed>
                 COMMAND ${CMAKE_AR} s $<TARGET_FILE:${_libname}_delayed>
                 COMMAND ${CMAKE_RANLIB} $<TARGET_FILE:${_libname}_delayed>
-                COMMENT "FIXME: Overwriting ${_libname}_delayed with proper import library (amd64 workaround)")
+                COMMENT "FIXME: Overwriting ${_libname}_delayed with proper import library copy")
         endif()
+    endif()
     endif()
 endfunction()
 
@@ -869,8 +893,10 @@ endif()
 
 # Allow MMX/SSE2 builtins when using clang (llvm-mingw); some headers emit MMX intrinsics.
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mmmx -msse2" CACHE STRING "C compiler flags" FORCE)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mmmx -msse2" CACHE STRING "C++ compiler flags" FORCE)
+    if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mmmx -msse2" CACHE STRING "C compiler flags" FORCE)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mmmx -msse2" CACHE STRING "C++ compiler flags" FORCE)
+    endif()
     execute_process(COMMAND ${CMAKE_C_COMPILER} -print-resource-dir
         OUTPUT_VARIABLE CLANG_RESOURCE_DIR
         OUTPUT_STRIP_TRAILING_WHITESPACE)
@@ -900,11 +926,23 @@ if(LIBWINPTHREAD_LOCATION MATCHES "mingw32")
     string(STRIP "${LIBWINPTHREAD_LOCATION}" LIBWINPTHREAD_LOCATION)
     message(STATUS "Using libwinpthread from ${LIBWINPTHREAD_LOCATION}")
     set_target_properties(libwinpthread PROPERTIES IMPORTED_LOCATION ${LIBWINPTHREAD_LOCATION})
-    # libwinpthread needs kernel32 imports, a CRT and msvcrtex
-    target_link_libraries(libwinpthread INTERFACE libkernel32 libmsvcrt msvcrtex)
+    if(ARCH STREQUAL "arm64")
+        # Arm64 freeldr links a static CRT; avoid dragging msvcrt in here. FIXME: revisit once we have a dedicated winpthread import lib.
+        target_link_libraries(libwinpthread INTERFACE libkernel32 libntdll)
+    else()
+        # libwinpthread needs kernel32 imports, a CRT and msvcrtex
+        target_link_libraries(libwinpthread INTERFACE libkernel32 libmsvcrt msvcrtex)
+    endif()
 else()
     add_library(libwinpthread INTERFACE)
 endif()
+
+add_library(libatomic STATIC IMPORTED)
+execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libatomic.a OUTPUT_VARIABLE LIBATOMIC_LOCATION)
+string(STRIP "${LIBATOMIC_LOCATION}" LIBATOMIC_LOCATION)
+set_target_properties(libatomic PROPERTIES IMPORTED_LOCATION ${LIBATOMIC_LOCATION})
+# libatomic may use the same TLS helpers as libgcc on MinGW targets
+target_link_libraries(libatomic INTERFACE libkernel32 libntdll)
 
 add_library(libgcc STATIC IMPORTED)
 execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libgcc.a OUTPUT_VARIABLE LIBGCC_LOCATION)
@@ -935,8 +973,8 @@ if(NOT EXISTS "${_LIBGCC_REALPATH}")
     unset(_LIBGCC_TOOLCHAIN_ROOT)
 endif()
 set_target_properties(libgcc PROPERTIES IMPORTED_LOCATION ${LIBGCC_LOCATION})
-# libgcc needs kernel32 and winpthread (an appropriate CRT must be linked manually)
-target_link_libraries(libgcc INTERFACE libwinpthread libkernel32)
+# libgcc needs kernel32/ntdll for SEH helpers and winpthread for TLS init
+target_link_libraries(libgcc INTERFACE libwinpthread libkernel32 libntdll)
 
 add_library(libsupc++ STATIC IMPORTED GLOBAL)
 execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libsupc++.a OUTPUT_VARIABLE LIBSUPCXX_LOCATION)

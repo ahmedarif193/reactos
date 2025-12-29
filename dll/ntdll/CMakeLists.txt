@@ -21,6 +21,9 @@ add_library(rtl_um OBJECT
     rtl/libsupp.c
     rtl/uilist.c
     rtl/version.c)
+if(ARCH STREQUAL "arm64")
+    target_sources(rtl_um PRIVATE rtl/arm64/unwind.c)
+endif()
 target_link_libraries(rtl_um apisets ${PSEH_LIB})
 add_dependencies(rtl_um psdk)
 
