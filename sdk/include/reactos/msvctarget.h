@@ -26,7 +26,7 @@
  #if !defined(_M_ARM)
   #define _M_ARM 1
  #endif
-#elif defined(__arm64__)
+#elif defined(__arm64__) || defined(__aarch64__)
  #if !defined(_ARM64_)
   #define _ARM64_ 1
  #endif

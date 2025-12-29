@@ -44,7 +44,33 @@ $ZwFuncName
     bx lr
 $NtFuncEndName
 $ZwFuncEndName
-    MEND
+	MEND
+
+#elif defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+
+    .set SyscallId, 0
+
+    .macro STUB_K Name, ArgCount
+    .align 2
+    .global Zw\Name
+Zw\Name:
+    mov x8, #SyscallId
+    svc #0
+    ret
+    .set SyscallId, SyscallId + 1
+    .endm
+
+    .macro STUB_U Name, ArgCount
+    .align 2
+    .global Nt\Name
+    .global Zw\Name
+Nt\Name:
+Zw\Name:
+    mov x8, #SyscallId
+    svc #0
+    ret
+    .set SyscallId, SyscallId + 1
+    .endm
 
 #else
 

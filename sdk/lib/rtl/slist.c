@@ -263,6 +263,134 @@ RtlInterlockedPushListSList(
 
 _WARN("C based S-List functions can bugcheck, if not handled properly in kernel")
 
+#if defined(_M_ARM64)
+
+PSLIST_ENTRY
+NTAPI
+RtlInterlockedPushEntrySList(
+    _Inout_ PSLIST_HEADER SListHead,
+    _Inout_ __drv_aliasesMem PSLIST_ENTRY SListEntry)
+{
+    SLIST_HEADER OldHeader, NewHeader;
+    PSLIST_ENTRY FirstEntry;
+    BOOLEAN exchanged;
+
+    ASSERT(((ULONG_PTR)SListHead & 0xF) == 0);
+    ASSERT(((ULONG_PTR)SListEntry & 0xF) == 0);
+
+    if (RtlpUse16ByteSLists == (BOOLEAN)-1)
+    {
+        RtlpUse16ByteSLists = TRUE;
+    }
+
+    do
+    {
+        OldHeader = *SListHead;
+        FirstEntry = (PSLIST_ENTRY)(OldHeader.Region & ~0xFLL);
+        SListEntry->Next = FirstEntry;
+
+        NewHeader = OldHeader;
+        NewHeader.Header16.Depth++;
+        NewHeader.Header16.Sequence++;
+        NewHeader.Region = (ULONG64)SListEntry;
+        NewHeader.Header16.HeaderType = 1;
+        NewHeader.Header16.Init = 1;
+
+        exchanged = _InterlockedCompareExchange128((PLONG64)SListHead,
+                                                   NewHeader.Region,
+                                                   NewHeader.Alignment,
+                                                   (PLONG64)&OldHeader);
+    } while (!exchanged);
+
+    return FirstEntry;
+}
+
+PSLIST_ENTRY
+NTAPI
+RtlInterlockedPopEntrySList(
+    _Inout_ PSLIST_HEADER SListHead)
+{
+    SLIST_HEADER OldHeader, NewHeader;
+    PSLIST_ENTRY FirstEntry, NextEntry;
+    BOOLEAN exchanged;
+
+    ASSERT(((ULONG_PTR)SListHead & 0xF) == 0);
+
+    if (RtlpUse16ByteSLists == (BOOLEAN)-1)
+    {
+        RtlpUse16ByteSLists = TRUE;
+    }
+
+    do
+    {
+        OldHeader = *SListHead;
+        FirstEntry = (PSLIST_ENTRY)(OldHeader.Region & ~0xFLL);
+        if (FirstEntry == NULL)
+        {
+            return NULL;
+        }
+
+        NextEntry = FirstEntry->Next;
+
+        NewHeader = OldHeader;
+        NewHeader.Header16.Depth--;
+        NewHeader.Header16.Sequence++;
+        NewHeader.Region = (ULONG64)NextEntry;
+        NewHeader.Header16.HeaderType = 1;
+        NewHeader.Header16.Init = 1;
+
+        exchanged = _InterlockedCompareExchange128((PLONG64)SListHead,
+                                                   NewHeader.Region,
+                                                   NewHeader.Alignment,
+                                                   (PLONG64)&OldHeader);
+    } while (!exchanged);
+
+    return FirstEntry;
+}
+
+PSLIST_ENTRY
+NTAPI
+RtlInterlockedFlushSList(
+    _Inout_ PSLIST_HEADER SListHead)
+{
+    SLIST_HEADER OldHeader, NewHeader;
+    PSLIST_ENTRY FirstEntry;
+    BOOLEAN exchanged;
+
+    ASSERT(((ULONG_PTR)SListHead & 0xF) == 0);
+
+    if (RtlpUse16ByteSLists == (BOOLEAN)-1)
+    {
+        RtlpUse16ByteSLists = TRUE;
+    }
+
+    do
+    {
+        OldHeader = *SListHead;
+        FirstEntry = (PSLIST_ENTRY)(OldHeader.Region & ~0xFLL);
+        if (FirstEntry == NULL)
+        {
+            return NULL;
+        }
+
+        NewHeader = OldHeader;
+        NewHeader.Header16.Depth = 0;
+        NewHeader.Header16.Sequence++;
+        NewHeader.Region = 0;
+        NewHeader.Header16.HeaderType = 1;
+        NewHeader.Header16.Init = 1;
+
+        exchanged = _InterlockedCompareExchange128((PLONG64)SListHead,
+                                                   NewHeader.Region,
+                                                   NewHeader.Alignment,
+                                                   (PLONG64)&OldHeader);
+    } while (!exchanged);
+
+    return FirstEntry;
+}
+
+#else /* !_M_ARM64 */
+
 #ifdef _WIN64
 #error "No generic S-List functions for WIN64!"
 #endif
@@ -402,6 +530,8 @@ RtlInterlockedFlushSList(
     return OldHeader.Next.Next;
 
 }
+
+#endif /* _M_ARM64 */
 
 #ifdef _MSC_VER
 #pragma comment(linker, "/alternatename:ExpInterlockedPopEntrySList=RtlInterlockedPopEntrySList")

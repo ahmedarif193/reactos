@@ -20,6 +20,17 @@
 #endif
 
 #ifdef _WIN64
+typedef struct _UNWIND_HISTORY_TABLE UNWIND_HISTORY_TABLE, *PUNWIND_HISTORY_TABLE;
+typedef struct _KNONVOLATILE_CONTEXT_POINTERS KNONVOLATILE_CONTEXT_POINTERS, *PKNONVOLATILE_CONTEXT_POINTERS;
+
+NTSYSAPI void WINAPI RtlCaptureContext(CONTEXT*);
+#if !defined(_M_ARM64) && !defined(__aarch64__)
+NTSYSAPI PRUNTIME_FUNCTION WINAPI RtlLookupFunctionEntry(ULONG_PTR, ULONG_PTR*, PUNWIND_HISTORY_TABLE);
+NTSYSAPI PEXCEPTION_ROUTINE WINAPI RtlVirtualUnwind(ULONG, ULONG_PTR, ULONG_PTR, PRUNTIME_FUNCTION, CONTEXT*, void**, ULONG_PTR*, PKNONVOLATILE_CONTEXT_POINTERS);
+#endif
+#endif
+
+#ifdef _WIN64
 #define DEFAULT_SECURITY_COOKIE 0x00002B992DDFA232ll
 #else
 #define DEFAULT_SECURITY_COOKIE 0xBB40E64E
@@ -110,11 +121,12 @@ __report_gsfailure (ULONG_PTR StackCookie)
 {
   volatile UINT_PTR cookie[2] __MINGW_ATTRIB_UNUSED;
 #ifdef _WIN64
+  RtlCaptureContext (&GS_ContextRecord);
+#if !defined(_M_ARM64) && !defined(__aarch64__)
   ULONG64 controlPC, imgBase, establisherFrame;
   PRUNTIME_FUNCTION fctEntry;
   PVOID hndData;
 
-  RtlCaptureContext (&GS_ContextRecord);
   controlPC = GS_ContextRecord.Rip;
   fctEntry = RtlLookupFunctionEntry(controlPC, &imgBase, NULL);
   if (fctEntry != NULL)
@@ -123,11 +135,17 @@ __report_gsfailure (ULONG_PTR StackCookie)
 			&GS_ContextRecord, &hndData, &establisherFrame, NULL);
     }
   else
+#endif /* !_M_ARM64 */
 #endif /* _WIN64 */
     {
 #ifdef _WIN64
+#if defined(__aarch64__) || defined(_M_ARM64)
+      GS_ContextRecord.Pc = (ULONGLONG) _ReturnAddress();
+      GS_ContextRecord.Sp = (ULONGLONG) _AddressOfReturnAddress() + 8;
+#else
       GS_ContextRecord.Rip = (ULONGLONG) _ReturnAddress();
       GS_ContextRecord.Rsp = (ULONGLONG) _AddressOfReturnAddress() + 8;
+#endif
 #else
       GS_ContextRecord.Eip = (DWORD) _ReturnAddress();
       GS_ContextRecord.Esp = (DWORD) _AddressOfReturnAddress() + 4;
@@ -135,8 +153,13 @@ __report_gsfailure (ULONG_PTR StackCookie)
     }
 
 #ifdef _WIN64
+#if defined(__aarch64__) || defined(_M_ARM64)
+  GS_ExceptionRecord.ExceptionAddress = (PVOID) GS_ContextRecord.Pc;
+  GS_ContextRecord.X0 = StackCookie;
+#else
   GS_ExceptionRecord.ExceptionAddress = (PVOID) GS_ContextRecord.Rip;
   GS_ContextRecord.Rcx = StackCookie;
+#endif
 #else
   GS_ExceptionRecord.ExceptionAddress = (PVOID) GS_ContextRecord.Eip;
   GS_ContextRecord.Ecx = StackCookie;

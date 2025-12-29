@@ -17,9 +17,9 @@
 VOID NTAPI RtlpBreakWithStatusInstruction(VOID);
 
 //
-// Apply the KIPCR WDK workaround for x86 and AMD64
+// Apply the KIPCR WDK workaround for x86/AMD64/ARM64
 //
-#if defined(_M_IX86) || defined(_M_AMD64)
+#if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_ARM64)
 #define KPCR KIPCR
 #endif
 
@@ -52,6 +52,16 @@ VOID NTAPI RtlpBreakWithStatusInstruction(VOID);
 #define KPCR_STACK_LIMIT_OFFSET        FIELD_OFFSET(KPCR, StackLimit)
 #define KPRCB_PCR_PAGE_OFFSET          FIELD_OFFSET(KPRCB, PcrPage)
 #define CBSTACK_FRAME_POINTER          DummyFramePointer
+
+#elif defined(_M_ARM64)
+
+#define KPCR_SELF_PCR_OFFSET           FIELD_OFFSET(KIPCR, Self)
+#define KPCR_CURRENT_PRCB_OFFSET       FIELD_OFFSET(KIPCR, CurrentPrcb)
+#define KPCR_CONTAINED_PRCB_OFFSET     FIELD_OFFSET(KIPCR, Prcb)
+#define KPCR_INITIAL_STACK_OFFSET      0
+#define KPCR_STACK_LIMIT_OFFSET        0
+#define KPRCB_PCR_PAGE_OFFSET          0
+#define CBSTACK_FRAME_POINTER          Fp
 
 #else
 #error Unsupported Architecture
@@ -648,8 +658,8 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     KPCR_CONTAINED_PRCB_OFFSET,
     0,
     0,
-#if defined(_M_ARM)
-    _WARN("KPCR_INITIAL_STACK_OFFSET, KPCR_STACK_LIMIT_OFFSET and KPRCB_PCR_PAGE_OFFSET not properly defined on ARM")
+#if defined(_M_ARM) || defined(_M_ARM64)
+    _WARN("KPCR_INITIAL_STACK_OFFSET, KPCR_STACK_LIMIT_OFFSET and KPRCB_PCR_PAGE_OFFSET not properly defined on ARM/ARM64")
     0,
     0,
     0,

@@ -55,6 +55,20 @@ extern "C" {
 
 #define UNIATA_COMM_PORT_VENDOR_STR "UNIATA  " "Management Port " UNIATA_VER_STR
 
+#if !defined(_NTDDDISK_H_) && !defined(_IDEREGS_DEFINED)
+#define _IDEREGS_DEFINED
+typedef struct _IDEREGS {
+    UCHAR  bFeaturesReg;
+    UCHAR  bSectorCountReg;
+    UCHAR  bSectorNumberReg;
+    UCHAR  bCylLowReg;
+    UCHAR  bCylHighReg;
+    UCHAR  bDriveHeadReg;
+    UCHAR  bCommandReg;
+    UCHAR  bReserved;
+} IDEREGS, *PIDEREGS, *LPIDEREGS;
+#endif
+
 #ifndef UNIATA_CORE
 
 #define IOCTL_SCSI_MINIPORT_UNIATA_FIND_DEVICES    ((FILE_DEVICE_SCSI << 16) + 0x09a0)

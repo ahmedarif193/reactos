@@ -22,6 +22,9 @@
 #include "btrfs_drv.h"
 #include "xxhash.h"
 #include "crc32c.h"
+#if defined(_ARM_) || defined(_ARM64_)
+#include <arm_neon.h>
+#endif
 #ifndef __REACTOS__
 #ifndef _MSC_VER
 #include <cpuid.h>

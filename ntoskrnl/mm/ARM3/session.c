@@ -487,7 +487,7 @@ MiSessionInitializeWorkingSetList(VOID)
     if (PointerPde->u.Hard.Valid == 1)
     {
         /* Nope, we'll have to do it */
-#ifndef _M_ARM
+#if defined(_M_IX86) || defined(_M_AMD64)
         ASSERT(PointerPde->u.Hard.Global == 0);
 #endif
         AllocatedPageTable = FALSE;

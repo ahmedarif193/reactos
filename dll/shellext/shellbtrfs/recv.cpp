@@ -26,6 +26,7 @@
 #include "crc32c.h"
 
 
+#if defined(_X86_) || defined(_AMD64_)
 #ifndef _MSC_VER
 #ifdef __REACTOS__
 #define __cpuidex __cpuidex_ // prevent redeclaration
@@ -33,6 +34,7 @@
 #include <cpuid.h>
 #else
 #include <intrin.h>
+#endif
 #endif
 
 

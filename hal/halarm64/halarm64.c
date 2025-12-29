@@ -9,6 +9,7 @@
 #include <ioaccess.h>
 #include <halfuncs.h>
 #include <reactos/hal/acpi_pci.h>
+#include <reactos/hal/acpi_cstate.h>
 #include <bugcodes.h>
 #include <debug.h>
 
@@ -258,6 +259,71 @@ HalQueryPciBusRange(
     }
 
     return FALSE;
+}
+
+NTSTATUS
+NTAPI
+HalGetAcpiCStateInformation(
+    _Out_ PHAL_ACPI_C_STATE_INFO Info)
+{
+    if (Info)
+    {
+        RtlZeroMemory(Info, sizeof(*Info));
+    }
+
+    return STATUS_NOT_SUPPORTED;
+}
+
+BOOLEAN
+NTAPI
+HalIsAcpiBusMasterActive(VOID)
+{
+    return FALSE;
+}
+
+ULONG
+NTAPI
+HalGetAcpiSciVector(VOID)
+{
+    return 0;
+}
+
+BOOLEAN
+NTAPI
+HalIsPciMsiSupported(VOID)
+{
+    return FALSE;
+}
+
+BOOLEAN
+NTAPI
+HalQueryPciMsiSupport(
+    _In_ ULONG Segment,
+    _In_ UCHAR Bus,
+    _Out_opt_ PBOOLEAN Supported,
+    _Out_opt_ PULONG OscStatusFlags,
+    _Out_opt_ PULONG OscControlGranted,
+    _Out_opt_ PUSHORT EffectiveSegment,
+    _Out_opt_ PULONG OscMaskedControls)
+{
+    UNREFERENCED_PARAMETER(Segment);
+    UNREFERENCED_PARAMETER(Bus);
+
+    if (Supported) *Supported = FALSE;
+    if (OscStatusFlags) *OscStatusFlags = 0;
+    if (OscControlGranted) *OscControlGranted = 0;
+    if (EffectiveSegment) *EffectiveSegment = 0;
+    if (OscMaskedControls) *OscMaskedControls = 0;
+
+    return FALSE;
+}
+
+VOID
+NTAPI
+HalpRecordPciMaxGsi(
+    _In_ const HAL_ACPI_PCI_ROUTE_ENTRY *Entry)
+{
+    UNREFERENCED_PARAMETER(Entry);
 }
 
 VOID

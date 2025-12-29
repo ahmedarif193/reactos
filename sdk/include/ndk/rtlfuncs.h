@@ -30,6 +30,14 @@ Author:
 #include "in6addr.h"
 #include "inaddr.h"
 
+#ifndef CDECL
+#if defined(_M_IX86) || defined(__i386__)
+#define CDECL __cdecl
+#else
+#define CDECL
+#endif
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -839,7 +847,7 @@ RtlUnwind(
 
 #define RTL_STACK_WALKING_MODE_FRAMES_TO_SKIP_SHIFT 8
 
-#ifdef _M_AMD64
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
 
 NTSYSAPI
 PRUNTIME_FUNCTION
@@ -864,7 +872,15 @@ RtlVirtualUnwind(
     _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers
 );
 
-#endif // _M_AMD64
+NTSYSAPI
+VOID
+CDECL
+RtlRestoreContext(
+    _Inout_ PCONTEXT ContextRecord,
+    _Inout_opt_ PEXCEPTION_RECORD ExceptionRecord
+);
+
+#endif // _M_AMD64 || _M_ARM64
 
 //
 // Tracing Functions

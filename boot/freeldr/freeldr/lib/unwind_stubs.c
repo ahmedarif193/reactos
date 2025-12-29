@@ -4,9 +4,10 @@
 #if defined(_M_ARM64) || defined(__aarch64__)
 
 PRUNTIME_FUNCTION
+NTAPI
 RtlLookupFunctionEntry(
-    _In_ ULONG_PTR ControlPc,
-    _Out_ PULONG_PTR ImageBase,
+    _In_ DWORD64 ControlPc,
+    _Out_ PDWORD64 ImageBase,
     _Inout_opt_ PUNWIND_HISTORY_TABLE HistoryTable)
 {
     UNREFERENCED_PARAMETER(ControlPc);
@@ -37,7 +38,8 @@ RtlUnwindEx(
     }
 }
 
-BOOLEAN
+PEXCEPTION_ROUTINE
+NTAPI
 RtlVirtualUnwind(
     _In_ ULONG HandlerType,
     _In_ ULONG64 ImageBase,
@@ -56,7 +58,7 @@ RtlVirtualUnwind(
     UNREFERENCED_PARAMETER(HandlerData);
     UNREFERENCED_PARAMETER(EstablisherFrame);
     UNREFERENCED_PARAMETER(ContextPointers);
-    return FALSE;
+    return NULL;
 }
 
 void

@@ -19,12 +19,12 @@
 //#include <mm3dnow.h>
 #endif /* _M_IX86 */
 
-#if defined(_M_ARM)
+#if defined(_M_ARM) || defined(_ARM_) || defined(__arm__)
 //#include <arm_neon.h>
 #include <armintr.h>
 #endif /* _M_ARM */
 
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
 #include <arm64intr.h>
 //#include <arm64_neon.h>
 #endif /* _M_ARM64 */

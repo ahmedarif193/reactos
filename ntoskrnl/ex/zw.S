@@ -9,6 +9,16 @@
 
 #include <internal/syscalls_body.h>
 
+    END
+
+#elif defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+
+    .text
+
+#define SVC_(name, argcount) STUB_K name, argcount
+
+#include <internal/syscalls_body.h>
+
 #else
 
 #ifdef _M_IX86
@@ -25,6 +35,6 @@ EXTERN KiZwSystemService:PROC
 
 #include <internal/syscalls_body.h>
 
-#endif
-
     END
+
+#endif

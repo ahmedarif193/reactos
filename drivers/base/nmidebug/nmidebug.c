@@ -42,12 +42,16 @@ NmiDbgCallback(IN PVOID Context,
     NmiClearFlag();
 
     /* Get NMI status signature */
+#if defined(_M_IX86) || defined(_M_AMD64)
     __indwordstring(0x80, (PULONG)NmiBegin, 1);
     ((void(*)())&KiBugCheckData[4])();
 
     /* Handle the NMI safely */
 #ifdef _M_IX86
     KiEnableTimerWatchdog = (RtlCompareMemory(NmiBegin, NmiBegin + 4, 4) != 4);
+#endif
+#else
+    UNREFERENCED_PARAMETER(Handled);
 #endif
     return TRUE;
 }

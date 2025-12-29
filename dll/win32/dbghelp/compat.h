@@ -2274,12 +2274,24 @@ enum CV_HREG_e
     CV_AMD64_R14        = 342,
     CV_AMD64_R15        = 343,
 
-    /* Wine extension */
+    /* ARM64 */
     CV_ARM64_NOREG        = CV_REG_NONE,
-    CV_ARM64_X0           = 10, /* this includes X0 to X30 */
-    CV_ARM64_SP           = 41,
-    CV_ARM64_PC           = 42,
-    CV_ARM64_PSTATE       = 43,
+    CV_ARM64_W0           = 10, /* this includes W0 to W30 */
+    CV_ARM64_WZR          = 41,
+    CV_ARM64_PC           = 42, /* Wine extension */
+    CV_ARM64_PSTATE       = 43, /* Wine extension */
+    CV_ARM64_X0           = 50, /* this includes X0 to X28 */
+    CV_ARM64_IP0          = 66, /* Same as X16 */
+    CV_ARM64_IP1          = 67, /* Same as X17 */
+    CV_ARM64_FP           = 79,
+    CV_ARM64_LR           = 80,
+    CV_ARM64_SP           = 81,
+    CV_ARM64_ZR           = 82,
+    CV_ARM64_NZCV         = 90,
+    CV_ARM64_S0           = 100, /* this includes S0 to S31 */
+    CV_ARM64_D0           = 140, /* this includes D0 to D31 */
+    CV_ARM64_Q0           = 180, /* this includes Q0 to Q31 */
+    CV_ARM64_FPSR         = 220,
 };
 
 typedef enum

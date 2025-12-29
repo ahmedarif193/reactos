@@ -17,8 +17,10 @@
 #endif
 
 /* WDK hacks */
-#ifdef _M_AMD64
+#if defined(_M_AMD64) || defined(_M_ARM64)
 #define IoAllocateAdapterChannel _IoAllocateAdapterChannel
+#endif
+#ifdef _M_AMD64
 #define KeGetCurrentThread _KeGetCurrentThread
 #define RtlFillMemoryUlong _RtlFillMemoryUlong
 #endif

@@ -55,7 +55,7 @@ add_library(pseh ${SOURCE} ${ASM_SOURCE})
 target_link_libraries(pseh chkstk)
 add_dependencies(pseh psdk)
 
-target_include_directories(pseh PRIVATE include/pseh)
+target_include_directories(pseh PRIVATE include)
 endif()
 
 target_include_directories(pseh INTERFACE include)

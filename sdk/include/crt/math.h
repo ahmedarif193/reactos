@@ -341,6 +341,7 @@ _CRT_NONSTDC_DEPRECATE(_yn) _CRTIMP double __cdecl yn(_In_ int x, _In_ double y)
 #ifdef __cplusplus
 }
 #ifndef _CMATH_
+#if !defined(REACTOS_LIBCXX)
 extern "C++" {
 
 //inline long abs(_In_ long x) { return labs(x); }
@@ -398,6 +399,7 @@ _Check_return_ inline long double sqrt(_In_ long double x) throw() { return sqrt
 _Check_return_ inline long double tan(_In_ long double x) throw() { return tanl(x); }
 _Check_return_ inline long double tanh(_In_ long double x) throw() { return tanhl(x); }
 }
+#endif /* !REACTOS_LIBCXX */
 #endif /* !_CMATH_ */
 #endif /* __cplusplus */
 

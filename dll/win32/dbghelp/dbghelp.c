@@ -163,11 +163,32 @@ extern struct cpu       cpu_i386, cpu_x86_64, cpu_arm, cpu_arm64;
 #ifndef DBGHELP_STATIC_LIB
 static struct cpu*      dbghelp_cpus[] = {&cpu_i386, &cpu_x86_64, &cpu_arm, &cpu_arm64, NULL};
 #else
+#if defined(TARGET_arm64)
+static struct cpu*      dbghelp_cpus[] = {&cpu_arm64, NULL};
+#elif defined(TARGET_arm)
+static struct cpu*      dbghelp_cpus[] = {&cpu_arm, NULL};
+#elif defined(TARGET_amd64)
+static struct cpu*      dbghelp_cpus[] = {&cpu_i386, &cpu_x86_64, NULL};
+#else
 static struct cpu*      dbghelp_cpus[] = {&cpu_i386, NULL};
+#endif
 #endif
 
 struct cpu*             dbghelp_current_cpu =
-#if defined(__i386__) || defined(DBGHELP_STATIC_LIB)
+#ifdef DBGHELP_STATIC_LIB
+#if defined(TARGET_i386)
+    &cpu_i386
+#elif defined(TARGET_amd64)
+    &cpu_x86_64
+#elif defined(TARGET_arm)
+    &cpu_arm
+#elif defined(TARGET_arm64)
+    &cpu_arm64
+#else
+#error define support for your CPU
+#endif
+#else
+#if defined(__i386__)
     &cpu_i386
 #elif defined(__x86_64__)
     &cpu_x86_64
@@ -177,6 +198,7 @@ struct cpu*             dbghelp_current_cpu =
     &cpu_arm64
 #else
 #error define support for your CPU
+#endif
 #endif
     ;
 

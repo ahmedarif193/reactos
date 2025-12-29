@@ -283,6 +283,7 @@ AcpiprocRawReadFixedHardware(
     _In_ ACPIPROC_REGISTER_KIND Kind,
     _Out_ PULONGLONG Value)
 {
+#if defined(_M_IX86) || defined(_M_AMD64)
     switch (Kind)
     {
         case AcpiprocRegisterKindControl:
@@ -296,6 +297,11 @@ AcpiprocRawReadFixedHardware(
         default:
             return STATUS_NOT_SUPPORTED;
     }
+#else
+    UNREFERENCED_PARAMETER(Kind);
+    UNREFERENCED_PARAMETER(Value);
+    return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 static
@@ -304,6 +310,7 @@ AcpiprocRawWriteFixedHardware(
     _In_ ACPIPROC_REGISTER_KIND Kind,
     _In_ ULONGLONG Value)
 {
+#if defined(_M_IX86) || defined(_M_AMD64)
     switch (Kind)
     {
         case AcpiprocRegisterKindControl:
@@ -316,6 +323,11 @@ AcpiprocRawWriteFixedHardware(
         default:
             return STATUS_NOT_SUPPORTED;
     }
+#else
+    UNREFERENCED_PARAMETER(Kind);
+    UNREFERENCED_PARAMETER(Value);
+    return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 static

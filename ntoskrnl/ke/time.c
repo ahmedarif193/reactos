@@ -160,7 +160,7 @@ KeUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
     Prcb->InterruptCount++;
 
     /* Check if we came from user mode */
-#ifndef _M_ARM
+#if defined(_M_IX86) || defined(_M_AMD64)
     if (KiUserTrap(TrapFrame) || (TrapFrame->EFlags & EFLAGS_V86_MASK))
 #else
     if (TrapFrame->PreviousMode == UserMode)

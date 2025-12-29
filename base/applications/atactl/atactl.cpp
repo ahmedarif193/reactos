@@ -4,7 +4,6 @@
 #include <winreg.h>
 #include <winioctl.h>
 #include <stdlib.h>
-//#include <ntdddisk.h>
 //#include <ntddscsi.h>
 #include <ntddscsi.h>
 #include <atapi.h>
@@ -1941,4 +1940,3 @@ main (
     }
     exit(0);
 }
-

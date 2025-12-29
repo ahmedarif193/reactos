@@ -8,6 +8,7 @@
 #ifndef IP_TYPES_INCLUDED
 #define IP_TYPES_INCLUDED
 
+#include <sdkddkver.h>
 #include <time.h>
 #include <ifdef.h>
 #include <nldef.h>
@@ -373,7 +374,7 @@ typedef struct ip_interface_name_info_w2ksp1 {
     GUID DeviceGuid;
     GUID InterfaceGuid;
 } IP_INTERFACE_NAME_INFO_W2KSP1, *PIP_INTERFACE_NAME_INFO_W2KSP1;
-#if (NTDDI_VERSION >= NTDDI_WIN2KSP1)
+#if defined(__REACTOS__) || (NTDDI_VERSION >= NTDDI_WIN2KSP1)
 typedef IP_INTERFACE_NAME_INFO_W2KSP1 IP_INTERFACE_NAME_INFO;
 typedef IP_INTERFACE_NAME_INFO_W2KSP1 *PIP_INTERFACE_NAME_INFO;
 #endif

@@ -33,6 +33,8 @@ extern BOOLEAN g_BootvidPreserveBootGraphics;
 #endif
 #elif defined(_M_ARM)
 #include "arm/arm.h"
+#elif defined(_M_ARM64)
+#include "arm64/arm64.h"
 #else
 #error Unknown architecture
 #endif

@@ -12,6 +12,8 @@
 extern "C" {
 #endif
 
+#include <arch_mm.h>
+
 #define MI_LOWEST_VAD_ADDRESS                   (PVOID)MM_LOWEST_USER_ADDRESS
 
 /* Make the code cleaner with some definitions for size multiples */
@@ -133,6 +135,51 @@ C_ASSERT(SYSTEM_PD_SIZE == PAGE_SIZE);
 #define PTE_DISABLE_CACHE       0x0000000000000010ULL
 #define PTE_WRITECOMBINED_CACHE 0x0000000000000010ULL
 #define PTE_PROTECT_MASK        0x8000000000000612ULL
+#elif defined(_M_ARM64)
+/*
+ * ARM64 hardware PTE layout mirrors Windows' WoA descriptors:
+ *  - AttrIndx is in bits [3:2]
+ *  - Shareability is in bits [9:8]
+ *  - Access flag is bit 10
+ *  - PXN/UXN are bits 53/54
+ *  - Writable/CopyOnWrite are bits 55/56
+ */
+#define ARM64_PTE_CACHE_SHIFT        2
+#define ARM64_PTE_CACHE_MASK         (3ULL << ARM64_PTE_CACHE_SHIFT)
+#define ARM64_PTE_CACHE_WB           (4ULL << ARM64_PTE_CACHE_SHIFT)
+#define ARM64_PTE_CACHE_UC           (0ULL << ARM64_PTE_CACHE_SHIFT)
+#define ARM64_PTE_CACHE_WC           (1ULL << ARM64_PTE_CACHE_SHIFT)
+#define ARM64_PTE_PXN                (1ULL << 53)
+#define ARM64_PTE_UXN                (1ULL << 54)
+#define ARM64_PTE_WRITE              (1ULL << 55)
+#define ARM64_PTE_COPY_ON_WRITE      (1ULL << 56)
+
+//
+// Access Flags
+//
+#define PTE_READONLY            (ARM64_PTE_PXN | ARM64_PTE_UXN)
+#define PTE_EXECUTE             0ULL
+#define PTE_EXECUTE_READ        PTE_EXECUTE
+#define PTE_READWRITE           (ARM64_PTE_PXN | ARM64_PTE_UXN | ARM64_PTE_WRITE)
+#define PTE_WRITECOPY           (ARM64_PTE_PXN | ARM64_PTE_UXN | ARM64_PTE_COPY_ON_WRITE)
+#define PTE_EXECUTE_READWRITE   ARM64_PTE_WRITE
+#define PTE_EXECUTE_WRITECOPY   ARM64_PTE_COPY_ON_WRITE
+#define PTE_PROTOTYPE           0x0000000000000400ULL
+
+//
+// State Flags
+//
+#define PTE_VALID               0x0000000000000001ULL
+#define PTE_ACCESSED            0x0000000000000400ULL /* AF is bit 10 in hardware PTE */
+#define PTE_DIRTY               0ULL
+
+//
+// Cache flags
+//
+#define PTE_ENABLE_CACHE        ARM64_PTE_CACHE_WB
+#define PTE_DISABLE_CACHE       ARM64_PTE_CACHE_UC
+#define PTE_WRITECOMBINED_CACHE ARM64_PTE_CACHE_WC
+#define PTE_PROTECT_MASK        (ARM64_PTE_PXN | ARM64_PTE_UXN | ARM64_PTE_WRITE | ARM64_PTE_COPY_ON_WRITE | ARM64_PTE_CACHE_MASK | PTE_PROTOTYPE)
 #elif defined(_M_ARM)
 #define PTE_READONLY            0x200
 #define PTE_EXECUTE             0 // Not worrying about NX yet
@@ -437,6 +484,11 @@ MiGetPteCacheAttribute(
     if (PointerPte->u.Hard.Cached) return MiCached;
     if (PointerPte->u.Hard.Buffered) return MiWriteCombined;
     return MiNonCached;
+#elif defined(_M_ARM64)
+    if (PointerPte->u.Hard.CacheType == 3) return MiWriteCombined;
+    if (PointerPte->u.Hard.CacheType == 2) return MiNonCached;
+    if (PointerPte->u.Hard.CacheType == 1) return MiNonCached;
+    return MiCached;
 #else
     if (PointerPte->u.Hard.CacheDisable == 0) return MiCached;
     if (PointerPte->u.Hard.WriteThrough != 0) return MiNonCached;
@@ -752,6 +804,34 @@ MiIsUserPte(PVOID Address)
 {
     return ((ULONG_PTR)Address >> 34) == 0x3FFFFDA0ULL;
 }
+#elif defined(_M_ARM64)
+FORCEINLINE
+BOOLEAN
+MiIsUserPxe(PVOID Address)
+{
+    return (Address < (PVOID)MiAddressToPxe(MI_DEFAULT_SYSTEM_RANGE_START));
+}
+
+FORCEINLINE
+BOOLEAN
+MiIsUserPpe(PVOID Address)
+{
+    return (Address < (PVOID)MiAddressToPpe(MI_DEFAULT_SYSTEM_RANGE_START));
+}
+
+FORCEINLINE
+BOOLEAN
+MiIsUserPde(PVOID Address)
+{
+    return (Address < (PVOID)MiAddressToPde(MI_DEFAULT_SYSTEM_RANGE_START));
+}
+
+FORCEINLINE
+BOOLEAN
+MiIsUserPte(PVOID Address)
+{
+    return (Address < (PVOID)MiAddressToPte(MI_DEFAULT_SYSTEM_RANGE_START));
+}
 #else
 FORCEINLINE
 BOOLEAN
@@ -886,7 +966,43 @@ MI_MAKE_HARDWARE_PTE_USER(IN PMMPTE NewPte,
     NewPte->u.Long |= MmProtectToPteMask[ProtectionMask];
 }
 
-#ifndef _M_AMD64
+#if defined(_M_ARM64)
+//
+// Builds a Prototype PTE for the address of the PTE
+//
+FORCEINLINE
+VOID
+MI_MAKE_PROTOTYPE_PTE(
+    _Out_ PMMPTE NewPte,
+    _In_ PMMPTE PointerPte)
+{
+    NewPte->u.Long = 0;
+    NewPte->u.Proto.Prototype = 1;
+    NewPte->u.Proto.ProtoAddress = (ULONG_PTR)PointerPte;
+}
+
+//
+// Builds a Subsection PTE for the address of the Segment
+//
+FORCEINLINE
+VOID
+MI_MAKE_SUBSECTION_PTE(
+    _Out_ PMMPTE NewPte,
+    _In_ PVOID Segment)
+{
+    NewPte->u.Long = 0;
+    NewPte->u.Subsect.Prototype = 1;
+    NewPte->u.Subsect.SubsectionAddress = (ULONG_PTR)Segment;
+}
+
+FORCEINLINE
+BOOLEAN
+MI_IS_MAPPED_PTE(
+    _In_ PMMPTE PointerPte)
+{
+    return (PointerPte->u.Long != 0);
+}
+#elif !defined(_M_AMD64)
 //
 // Builds a Prototype PTE for the address of the PTE
 //
@@ -989,7 +1105,11 @@ MI_IS_PHYSICAL_ADDRESS(IN PVOID Address)
 
     /* Large pages are never paged out, always physically resident */
     PointerPde = MiAddressToPde(Address);
+#if defined(_M_ARM64)
+    return (MI_IS_PAGE_LARGE(PointerPde) && (PointerPde->u.Hard.Valid));
+#else
     return ((PointerPde->u.Hard.LargePage) && (PointerPde->u.Hard.Valid));
+#endif
 }
 
 //

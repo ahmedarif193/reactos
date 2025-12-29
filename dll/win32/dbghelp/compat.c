@@ -216,6 +216,14 @@ void* __MapViewOfFile(HANDLE file,DWORD d1,DWORD d2,DWORD d3,SIZE_T s)
     return result;
 }
 
+void minidump_add_memory_block(struct dump_context* dc, ULONG64 base, ULONG size, ULONG rva)
+{
+    (void)dc;
+    (void)base;
+    (void)size;
+    (void)rva;
+}
+
 BOOL __UnmapViewOfFile(const void* data)
 {
     free((void *)data);

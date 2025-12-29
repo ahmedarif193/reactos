@@ -14,9 +14,14 @@ FORCEINLINE struct _TEB * NtCurrentTeb(VOID)
 #elif defined(_M_ARM)
     // return (struct _TEB *)KeGetPcr()->Used_Self;
     return (struct _TEB *)(ULONG_PTR)_MoveFromCoprocessor(CP15_TPIDRURW);
-#elif defined (_M_ARM64)
-    //UNIMPLEMENTED;
+#elif defined (_M_ARM64) || defined(__aarch64__) || defined(__arm64__)
+#if defined(__GNUC__) || defined(__clang__)
+    struct _TEB *Teb;
+    __asm__ __volatile__("mov %0, x18" : "=r"(Teb));
+    return Teb;
+#else
     return 0;
+#endif
 // #elif defined(_M_PPC)
 //     return (struct _TEB *)_read_teb_dword(0x18);
 #else

@@ -8,7 +8,7 @@
 #include "gdi_private.h"
 
 #define NDEBUG
-#include <debug.h>
+#include <reactos/debug.h>
 
 WINEDC *get_nulldrv_dc( PHYSDEV dev );
 const struct gdi_dc_funcs path_driver DECLSPEC_HIDDEN;

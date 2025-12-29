@@ -203,6 +203,13 @@ KeGetTrapFrameStackRegister(
 }
 
 FORCEINLINE
+PULONG_PTR
+KiGetUserModeStackAddress(void)
+{
+    return &PsGetCurrentThread()->Tcb.TrapFrame->Sp;
+}
+
+FORCEINLINE
 PKTRAP_FRAME
 KiGetLinkedTrapFrame(
     _In_ PKTRAP_FRAME TrapFrame)

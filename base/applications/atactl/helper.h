@@ -1,3 +1,4 @@
+#ifndef _NTDDDISK_H_
 typedef struct _DRIVERSTATUS {
 	UCHAR  bDriverError;
 	UCHAR  bIDEError;
@@ -5,6 +6,8 @@ typedef struct _DRIVERSTATUS {
 	ULONG  dwReserved[2];
 } DRIVERSTATUS, *PDRIVERSTATUS, *LPDRIVERSTATUS;
 
+#if !defined(_IDEREGS_DEFINED)
+#define _IDEREGS_DEFINED
 typedef struct _IDEREGS {
 	UCHAR  bFeaturesReg;
 	UCHAR  bSectorCountReg;
@@ -15,6 +18,7 @@ typedef struct _IDEREGS {
 	UCHAR  bCommandReg;
 	UCHAR  bReserved;
 } IDEREGS, *PIDEREGS, *LPIDEREGS;
+#endif
 
 #define ATAPI_ID_CMD                      0xA1
 #define ID_CMD                            0xEC
@@ -36,3 +40,4 @@ typedef struct _SENDCMDINPARAMS {
 	UCHAR  bBuffer[1];
 } SENDCMDINPARAMS, *PSENDCMDINPARAMS, *LPSENDCMDINPARAMS;
 #include <poppack.h>
+#endif /* _NTDDDISK_H_ */

@@ -176,13 +176,13 @@ typedef ULONG_PTR SWAPENTRY;
 //
 #ifdef _M_IX86
 #define MM_WAIT_ENTRY            0x7ffffc00
-#elif defined(_M_AMD64)
+#elif defined(_M_AMD64) || defined(_M_ARM64)
 #define MM_WAIT_ENTRY            0x7FFFFFFFFFFFFC00ULL
 #else
 #error Unsupported architecture!
 #endif
 
-#ifdef _M_AMD64
+#if defined(_M_AMD64) || defined(_M_ARM64)
 #define InterlockedCompareExchangePte(PointerPte, Exchange, Comperand) \
     InterlockedCompareExchange64((PLONG64)(PointerPte), Exchange, Comperand)
 

@@ -422,6 +422,7 @@ elseif(NT_ARCH STREQUAL "arm64")
         ${NTOS_ARCH_DIR}/ke/trapvec.S
         ${NTOS_ARCH_DIR}/ke/trapret.S
         ${NTOS_ARCH_DIR}/ke/ctxswitch.S
+        ${NTOS_ARCH_DIR}/ke/usercall_asm.S
         ${NTOS_ARCH_DIR}/ke/bootstack.S)
     list(APPEND SOURCE
         ${NTOS_ARCH_DIR}/config/cmhardwr.c
@@ -452,6 +453,7 @@ elseif(NT_ARCH STREQUAL "arm64")
         ${NTOS_ARCH_DIR}/mm/ARM3/init.c
         ${NTOS_ARCH_DIR}/mm/ARM3/maputils.c
         ${NTOS_ARCH_DIR}/ps/psctx.c
+        ${NTOS_ARCH_DIR}/rtl/ehandler.c
         ${NTOS_ARCH_DIR}/rtl/rtlexcpt.c)
     if(KDBG)
         list(APPEND ASM_SOURCE ${NTOS_ARCH_DIR}/kdbg/kdb_help.S)

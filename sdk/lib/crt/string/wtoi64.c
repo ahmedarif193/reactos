@@ -203,5 +203,19 @@ unsigned __int64 CDECL _wcstoui64(const wchar_t *nptr,
     return _wcstoui64_l(nptr, endptr, base, NULL);
 }
 
+long long
+CDECL
+wcstoll(const wchar_t *nptr, wchar_t **endptr, int base)
+{
+    return _wcstoi64(nptr, endptr, base);
+}
+
+unsigned long long
+CDECL
+wcstoull(const wchar_t *nptr, wchar_t **endptr, int base)
+{
+    return _wcstoui64(nptr, endptr, base);
+}
+
 
 /* EOF */

@@ -23,12 +23,15 @@
 // COM port flags.
 //
 #define CPPORT_FLAG_MODEM_CONTROL   0x02
+#define CPPORT_FLAG_SUPPRESS_ECHO   0x04
 
 typedef struct _CPPORT
 {
     PUCHAR Address;
     ULONG  BaudRate;
     USHORT Flags;
+    USHORT Reserved;
+    ULONG  EchoDiscard;
 } CPPORT, *PCPPORT;
 
 VOID

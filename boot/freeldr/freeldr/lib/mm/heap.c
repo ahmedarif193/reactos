@@ -321,7 +321,7 @@ FrLdrHeapAllocateEx(
     PHEAP Heap = HeapHandle;
     PHEAP_BLOCK Block, NextBlock;
     USHORT BlockSize, Remaining;
-#if DBG && !defined(_M_ARM)
+#if DBG && !defined(_M_ARM) && !defined(_M_ARM64) && !defined(_ARM64_) && !defined(__aarch64__) && !defined(__arm64__)
     ULONGLONG Time = __rdtsc();
 #endif
 
@@ -401,7 +401,7 @@ FrLdrHeapAllocateEx(
         Heap->MaxAllocBytes = max(Heap->MaxAllocBytes, Heap->CurrentAllocBytes);
         Heap->LargestAllocation = max(Heap->LargestAllocation,
                                       Block->Size * sizeof(HEAP_BLOCK));
-#if DBG && !defined(_M_ARM)
+#if DBG && !defined(_M_ARM) && !defined(_M_ARM64) && !defined(_ARM64_) && !defined(__aarch64__) && !defined(__arm64__)
         Heap->AllocationTime += (__rdtsc() - Time);
 #endif
 
@@ -432,7 +432,7 @@ FrLdrHeapFreeEx(
 {
     PHEAP Heap = HeapHandle;
     PHEAP_BLOCK Block, PrevBlock, NextBlock;
-#if DBG && !defined(_M_ARM)
+#if DBG && !defined(_M_ARM) && !defined(_M_ARM64) && !defined(_ARM64_) && !defined(__aarch64__) && !defined(__arm64__)
     ULONGLONG Time = __rdtsc();
 #endif
 
@@ -512,7 +512,7 @@ FrLdrHeapFreeEx(
 
     /* Update the next block's back link */
     NextBlock->PreviousSize = Block->Size;
-#if DBG && !defined(_M_ARM)
+#if DBG && !defined(_M_ARM) && !defined(_M_ARM64) && !defined(_ARM64_) && !defined(__aarch64__) && !defined(__arm64__)
     Heap->FreeTime += (__rdtsc() - Time);
 #endif
 }
@@ -624,4 +624,3 @@ RtlFreeHeap(
     FrLdrHeapFreeEx(FrLdrDefaultHeap, HeapBase, ' ltR');
     return TRUE;
 }
-

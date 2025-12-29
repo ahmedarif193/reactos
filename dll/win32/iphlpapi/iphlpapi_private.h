@@ -32,7 +32,7 @@
 #include <ndk/iofuncs.h>
 #include <ndk/obfuncs.h>
 #include <ndk/rtlfuncs.h>
-#include <iphlpapi.h>
+#include <psdk/iphlpapi.h>
 #include "resinfo.h"
 #include <wine/debug.h>
 

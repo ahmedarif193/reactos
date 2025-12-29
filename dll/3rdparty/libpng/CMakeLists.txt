@@ -30,6 +30,9 @@ list(APPEND SOURCE
 
 add_library(libpng MODULE ${SOURCE} ${CMAKE_CURRENT_BINARY_DIR}/libpng.def)
 set_module_type(libpng win32dll)
+if(ARCH STREQUAL "arm64")
+    target_compile_definitions(libpng PRIVATE PNG_ARM_NEON_OPT=0)
+endif()
 target_link_libraries(libpng zlib ${PSEH_LIB})
 add_importlibs(libpng msvcrt kernel32 ntdll)
 add_pch(libpng pngpriv.h SOURCE)

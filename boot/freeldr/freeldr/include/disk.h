@@ -127,6 +127,8 @@ SIZE_T FrLdrGetRecommendedDiskBufferSize(SIZE_T MaximumBufferSize);
 
 /* ARC path of the boot drive and partition */
 extern CCHAR FrLdrBootPath[MAX_PATH];
+extern UCHAR FrldrBootDrive;
+extern ULONG FrldrBootPartition;
 
 
 ///////////////////////////////////////////////////////////////////////////////////////

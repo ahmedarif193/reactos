@@ -232,8 +232,10 @@ HGDIOBJ WINAPI GdiFixUpHandle(HGDIOBJ hGdiObj);
 BOOL WINAPI SetWorldTransformForMetafile(HDC hdc, const XFORM *pxform);
 #define SetWorldTransform SetWorldTransformForMetafile
 #endif
-#ifdef _M_ARM
+#if defined(_M_ARM)
 #define DbgRaiseAssertionFailure() __emit(0xdefc)
+#elif defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+#define DbgRaiseAssertionFailure() __builtin_trap()
 #else
 #define DbgRaiseAssertionFailure() __int2c()
 #endif // _M_ARM
@@ -273,4 +275,3 @@ HBITMAP EMFDRV_SelectBitmap( WINEDC *dc, HBITMAP hbitmap );
 
 
 #endif /* __WINE_GDI_PRIVATE_H */
-

@@ -16,6 +16,10 @@ if ((CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
     list(APPEND SOURCE rand_s.c)
 endif()
 
+if(NOT MSVC)
+    list(APPEND SOURCE codecvt_int_id.cpp)
+endif()
+
 add_library(stdc++compat ${SOURCE})
 set_target_cpp_properties(stdc++compat WITH_EXCEPTIONS)
 add_dependencies(stdc++compat xdk)

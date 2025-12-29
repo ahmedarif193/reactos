@@ -198,6 +198,15 @@ KeRestoreFloatingPointState(
     return STATUS_SUCCESS;
 }
 
+FORCEINLINE
+ULONG
+KeGetCurrentProcessorIndex(VOID)
+{
+    extern ULONG NTAPI KeGetCurrentProcessorNumberEx(
+        _Out_opt_ PPROCESSOR_NUMBER ProcNumber);
+    return KeGetCurrentProcessorNumberEx(NULL);
+}
+
 VOID
 KeFlushIoBuffers(
     _In_ PMDL Mdl,

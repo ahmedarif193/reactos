@@ -152,7 +152,7 @@ extern "C" {
     unsigned long long D[8]; // D8-D15 VFP/NEON regs
   } _JUMP_BUFFER;
 
-#elif defined(_M_ARM64)
+#elif defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
 
 #define _JBLEN 24
 #define _JBTYPE unsigned __int64
@@ -197,6 +197,9 @@ typedef struct __JUMP_BUFFER {
 #elif defined(_X86_)
 # define mingw_getsp() \
   ({ void* value; __asm__ __volatile__("movl %%esp, %[value]" : [value] "=r" (value)); value; })
+#elif defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+# define mingw_getsp() \
+  ({ void* value; __asm__ __volatile__("mov %0, sp" : "=r" (value)); value; })
 #endif
 #define setjmp(BUF) _setjmp((BUF),mingw_getsp())
 #if defined(__clang__)

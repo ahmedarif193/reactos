@@ -79,6 +79,16 @@ __syserr40, __syserr41, __syserr42, __syserr43
 
 int _sys_nerr = sizeof(_sys_errlist) / sizeof(_sys_errlist[0]) - 1;
 
+int* CDECL __sys_nerr(void)
+{
+    return &_sys_nerr;
+}
+
+char** CDECL __sys_errlist(void)
+{
+    return _sys_errlist;
+}
+
 /*********************************************************************
  *		strerror (MSVCRT.@)
  */

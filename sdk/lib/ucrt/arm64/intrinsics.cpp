@@ -3,11 +3,7 @@
 
 extern "C" {
 
-int __cdecl __intrinsic_setjmp(jmp_buf buffer)
-{
-    return setjmp(buffer);
-}
-
+int __cdecl __intrinsic_setjmp(jmp_buf buffer);
 int __cdecl __intrinsic_setjmpex(jmp_buf, void*);
 
 int __cdecl __wine_setjmpex(jmp_buf buffer, void* context)

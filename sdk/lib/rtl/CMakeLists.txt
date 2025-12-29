@@ -125,6 +125,8 @@ elseif(ARCH STREQUAL "arm")
         byteswap.c
         mem.c)
 elseif(ARCH STREQUAL "arm64")
+    list(APPEND ASM_SOURCE
+        arm64/except_asm.S)
     list(APPEND SOURCE
         arm64/debug.c
         arm64/except.c

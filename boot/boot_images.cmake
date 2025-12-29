@@ -14,30 +14,54 @@ elseif(NOT ARCH STREQUAL "i386")
     message(FATAL_ERROR "Unknown ARCH '" ${ARCH} "', cannot generate a valid UEFI boot filename.")
 endif()
 
+set(_HAVE_BIOS_BOOT FALSE)
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+    set(_HAVE_BIOS_BOOT TRUE)
+endif()
+
 if(DEFINED EFI_PLATFORM_ID)
+    set(_efisys_boot_args "")
+    set(_efisys_deps native-fatten uefildr ${REACTOS_SOURCE_DIR}/boot/bootdata/bootcd.ini)
+    if(_HAVE_BIOS_BOOT)
+        set(_efisys_boot_args -boot ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/fat.bin)
+        list(APPEND _efisys_deps fat)
+    endif()
+
     add_custom_target(efisys
         COMMAND native-fatten ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin -format 2880 EFIBOOT
-            -boot ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/fat.bin
+            ${_efisys_boot_args}
             -add ${REACTOS_SOURCE_DIR}/boot/bootdata/bootcd.ini freeldr.ini
             -mkdir EFI -mkdir EFI/BOOT -add $<TARGET_FILE:uefildr> EFI/BOOT/boot${EFI_PLATFORM_ID}.efi
-        DEPENDS native-fatten fat uefildr ${REACTOS_SOURCE_DIR}/boot/bootdata/bootcd.ini
+        DEPENDS ${_efisys_deps}
         VERBATIM)
 endif()
 
 # ISO image EFI boot parameters
 set(ISO_EFI_BOOT_PARAMS)
+set(ISO_BIOS_BOOT_PARAMS_ISOBOOT)
+set(ISO_BIOS_BOOT_PARAMS_ISOBTRT)
+if(_HAVE_BIOS_BOOT)
+    set(ISO_BIOS_BOOT_PARAMS_ISOBOOT -eltorito-boot loader/isoboot.bin -no-emul-boot -boot-load-size 4)
+    set(ISO_BIOS_BOOT_PARAMS_ISOBTRT -eltorito-boot loader/isobtrt.bin -no-emul-boot -boot-load-size 4)
+endif()
 
 # Create an 'empty' directory (guaranteed to be empty) to be able to add
 # arbitrary empty directories to the ISO image using mkisofs.
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/empty)
 
 # Retrieve the full paths to the generated files of the 'isombr', 'isoboot', 'isobtrt' and 'efisys' targets
-set(_isombr_file  ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/isombr.bin)  # get_target_property(_isombr_file  isombr  LOCATION)
-set(_isoboot_file ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/isoboot.bin) # get_target_property(_isoboot_file isoboot LOCATION)
-set(_isobtrt_file ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/isobtrt.bin) # get_target_property(_isobtrt_file isobtrt LOCATION)
+if(_HAVE_BIOS_BOOT)
+    set(_isombr_file  ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/isombr.bin)  # get_target_property(_isombr_file  isombr  LOCATION)
+    set(_isoboot_file ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/isoboot.bin) # get_target_property(_isoboot_file isoboot LOCATION)
+    set(_isobtrt_file ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/isobtrt.bin) # get_target_property(_isobtrt_file isobtrt LOCATION)
+endif()
 if(DEFINED EFI_PLATFORM_ID)
     set(_efisys_file  ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin) # get_target_property(_efisys_file  efisys  LOCATION)
-    list(APPEND ISO_EFI_BOOT_PARAMS -eltorito-alt-boot -eltorito-platform efi -eltorito-boot loader/efisys.bin -no-emul-boot)
+    if(_HAVE_BIOS_BOOT)
+        list(APPEND ISO_EFI_BOOT_PARAMS -eltorito-alt-boot -eltorito-platform efi -eltorito-boot loader/efisys.bin -no-emul-boot)
+    else()
+        list(APPEND ISO_EFI_BOOT_PARAMS -eltorito-platform efi -eltorito-boot loader/efisys.bin -no-emul-boot)
+    endif()
 endif()
 
 # Create a mkisofs sort file to specify an explicit ordering for the boot files
@@ -57,9 +81,11 @@ endif()
 #
 set(ISO_SORT_FILE_DATA "\
 ${CMAKE_CURRENT_BINARY_DIR}/empty/boot.catalog 4
-${_isoboot_file} 3
-${_isobtrt_file} 2
 ")
+if(_HAVE_BIOS_BOOT)
+    string(APPEND ISO_SORT_FILE_DATA "${_isoboot_file} 3\n")
+    string(APPEND ISO_SORT_FILE_DATA "${_isobtrt_file} 2\n")
+endif()
 if(DEFINED EFI_PLATFORM_ID)
     string(APPEND ISO_SORT_FILE_DATA "${_efisys_file} 1\n")
 endif()
@@ -176,14 +202,21 @@ endfunction()
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/bootcd.cmake.lst "")
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/bootcd.cmake.lst "${CMAKE_CURRENT_BINARY_DIR}/empty\n")
 
+set(_BOOTCD_ISOHYBRID_CMD)
+set(_BOOTCD_ISOHYBRID_DEPS)
+if(_HAVE_BIOS_BOOT)
+    set(_BOOTCD_ISOHYBRID_CMD COMMAND native-isohybrid -b ${_isombr_file} -t 0x96 ${REACTOS_BOOTCD_ISO})
+    set(_BOOTCD_ISOHYBRID_DEPS isombr native-isohybrid)
+endif()
+
 add_custom_target(bootcd
     COMMAND native-mkisofs -quiet -o ${REACTOS_BOOTCD_ISO} -iso-level 4
         -publisher ${ISO_MANUFACTURER} -preparer ${ISO_MANUFACTURER} -volid ${ISO_VOLNAME} -volset ${ISO_VOLNAME}
-        -eltorito-boot loader/isoboot.bin -no-emul-boot -boot-load-size 4 ${ISO_EFI_BOOT_PARAMS} -hide boot.catalog
+        ${ISO_BIOS_BOOT_PARAMS_ISOBOOT} ${ISO_EFI_BOOT_PARAMS} -hide boot.catalog
         -sort ${CMAKE_CURRENT_BINARY_DIR}/bootfiles.sort
         -no-cache-inodes -graft-points -path-list ${CMAKE_CURRENT_BINARY_DIR}/bootcd.$<CONFIG>.lst
-    COMMAND native-isohybrid -b ${_isombr_file} -t 0x96 ${REACTOS_BOOTCD_ISO}
-    DEPENDS isombr native-isohybrid native-mkisofs
+    ${_BOOTCD_ISOHYBRID_CMD}
+    DEPENDS native-mkisofs ${_BOOTCD_ISOHYBRID_DEPS}
     VERBATIM)
 
 ## BootCDRegTest
@@ -191,14 +224,21 @@ add_custom_target(bootcd
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/bootcdregtest.cmake.lst "")
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/bootcdregtest.cmake.lst "${CMAKE_CURRENT_BINARY_DIR}/empty\n")
 
+set(_BOOTCDREGTEST_ISOHYBRID_CMD)
+set(_BOOTCDREGTEST_ISOHYBRID_DEPS)
+if(_HAVE_BIOS_BOOT)
+    set(_BOOTCDREGTEST_ISOHYBRID_CMD COMMAND native-isohybrid -b ${_isombr_file} -t 0x96 ${REACTOS_BOOTCDREGTEST_ISO})
+    set(_BOOTCDREGTEST_ISOHYBRID_DEPS isombr native-isohybrid)
+endif()
+
 add_custom_target(bootcdregtest
     COMMAND native-mkisofs -quiet -o ${REACTOS_BOOTCDREGTEST_ISO} -iso-level 4
         -publisher ${ISO_MANUFACTURER} -preparer ${ISO_MANUFACTURER} -volid ${ISO_VOLNAME} -volset ${ISO_VOLNAME}
-        -eltorito-boot loader/isobtrt.bin -no-emul-boot -boot-load-size 4 ${ISO_EFI_BOOT_PARAMS} -hide boot.catalog
+        ${ISO_BIOS_BOOT_PARAMS_ISOBTRT} ${ISO_EFI_BOOT_PARAMS} -hide boot.catalog
         -sort ${CMAKE_CURRENT_BINARY_DIR}/bootfiles.sort
         -no-cache-inodes -graft-points -path-list ${CMAKE_CURRENT_BINARY_DIR}/bootcdregtest.$<CONFIG>.lst
-    COMMAND native-isohybrid -b ${_isombr_file} -t 0x96 ${REACTOS_BOOTCDREGTEST_ISO}
-    DEPENDS isombr native-isohybrid native-mkisofs
+    ${_BOOTCDREGTEST_ISOHYBRID_CMD}
+    DEPENDS native-mkisofs ${_BOOTCDREGTEST_ISOHYBRID_DEPS}
     VERBATIM)
 
 ## LiveCD
@@ -213,14 +253,21 @@ file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "reactos/TEMP=${CMAKE_C
 add_allusers_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "Profiles")
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "Profiles" "Default User")
 
+set(_LIVECD_ISOHYBRID_CMD)
+set(_LIVECD_ISOHYBRID_DEPS)
+if(_HAVE_BIOS_BOOT)
+    set(_LIVECD_ISOHYBRID_CMD COMMAND native-isohybrid -b ${_isombr_file} -t 0x96 ${REACTOS_LIVECD_ISO})
+    set(_LIVECD_ISOHYBRID_DEPS isombr native-isohybrid)
+endif()
+
 add_custom_target(livecd
     COMMAND native-mkisofs -quiet -o ${REACTOS_LIVECD_ISO} -iso-level 4
         -publisher ${ISO_MANUFACTURER} -preparer ${ISO_MANUFACTURER} -volid ${ISO_VOLNAME} -volset ${ISO_VOLNAME}
-        -eltorito-boot loader/isoboot.bin -no-emul-boot -boot-load-size 4 ${ISO_EFI_BOOT_PARAMS} -hide boot.catalog
+        ${ISO_BIOS_BOOT_PARAMS_ISOBOOT} ${ISO_EFI_BOOT_PARAMS} -hide boot.catalog
         -sort ${CMAKE_CURRENT_BINARY_DIR}/bootfiles.sort
         -no-cache-inodes -graft-points -path-list ${CMAKE_CURRENT_BINARY_DIR}/livecd.$<CONFIG>.lst
-    COMMAND native-isohybrid -b ${_isombr_file} -t 0x96 ${REACTOS_LIVECD_ISO}
-    DEPENDS isombr native-isohybrid native-mkisofs
+    ${_LIVECD_ISOHYBRID_CMD}
+    DEPENDS native-mkisofs ${_LIVECD_ISOHYBRID_DEPS}
     VERBATIM)
 
 # Additionally produce a branch/commit-tagged ISO name, e.g. reactos_dev.iso or reactos_<commit>.iso
@@ -465,14 +512,21 @@ endif()
 add_allusers_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/hybridcd.cmake.lst "livecd/Profiles")
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/hybridcd.cmake.lst "livecd/Profiles" "Default User")
 
+set(_HYBRIDCD_ISOHYBRID_CMD)
+set(_HYBRIDCD_ISOHYBRID_DEPS)
+if(_HAVE_BIOS_BOOT)
+    set(_HYBRIDCD_ISOHYBRID_CMD COMMAND native-isohybrid -b ${_isombr_file} -t 0x96 ${REACTOS_HYBRIDCD_ISO})
+    set(_HYBRIDCD_ISOHYBRID_DEPS isombr native-isohybrid)
+endif()
+
 add_custom_target(hybridcd
     COMMAND native-mkisofs -quiet -o ${REACTOS_HYBRIDCD_ISO} -iso-level 4
         -publisher ${ISO_MANUFACTURER} -preparer ${ISO_MANUFACTURER} -volid ${ISO_VOLNAME} -volset ${ISO_VOLNAME}
-        -eltorito-boot loader/isoboot.bin -no-emul-boot -boot-load-size 4 ${ISO_EFI_BOOT_PARAMS} -hide boot.catalog
+        ${ISO_BIOS_BOOT_PARAMS_ISOBOOT} ${ISO_EFI_BOOT_PARAMS} -hide boot.catalog
         -sort ${CMAKE_CURRENT_BINARY_DIR}/bootfiles.sort
         -duplicates-once -no-cache-inodes -graft-points -path-list ${CMAKE_CURRENT_BINARY_DIR}/hybridcd.$<CONFIG>.lst
-    COMMAND native-isohybrid -b ${_isombr_file} -t 0x96 ${REACTOS_HYBRIDCD_ISO}
-    DEPENDS bootcd livecd
+    ${_HYBRIDCD_ISOHYBRID_CMD}
+    DEPENDS bootcd livecd ${_HYBRIDCD_ISOHYBRID_DEPS}
     VERBATIM)
 
 if(DEFINED EFI_PLATFORM_ID)

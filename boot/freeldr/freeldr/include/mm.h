@@ -94,6 +94,24 @@ typedef struct _FREELDR_MEMORY_DESCRIPTOR
 
 #endif
 
+#if defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+
+#define MM_PAGE_SIZE    4096
+#define MM_PAGE_MASK    0xFFF
+#define MM_PAGE_SHIFT    12
+/*
+ * Keep ARM64 loader mapping limits aligned with AMD64 for now:
+ * 1 GB identity map and allocations from the first 4 GB.
+ */
+#define MM_MAX_PAGE                0xFFFFFFFFFULL /* 36-bit PFN span */
+#define MM_MAX_PAGE_LOADER         0x100000  /* Can allocate from first 4 GB */
+#define MM_MAX_PAGE_LOADER_MAPPED  0x40000   /* Loader maps first 1 GB only */
+
+#define MM_SIZE_TO_PAGES(a)  \
+    ( ((a) >> MM_PAGE_SHIFT) + ((a) & MM_PAGE_MASK ? 1 : 0) )
+
+#endif
+
 // HEAP and STACK size
 #define HEAP_PAGES    0x400
 #define STACK_PAGES    0x00

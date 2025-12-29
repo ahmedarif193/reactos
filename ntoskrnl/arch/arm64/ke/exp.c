@@ -17,10 +17,7 @@
  * For ARM64 we reuse the same high-level policy so that assertions and
  * bugchecks behave identically.  The only architecture-specific details are
  * the register names (PC instead of RIP, 4-byte breakpoints) and the fact
- * that we currently lack a user-mode exception dispatcher.  Until the latter
- * is implemented we terminate the offending process on an unhandled
- * user-mode second chance exception instead of trying to build the WOW64
- * stack frame.
+ * that WOW64 exception dispatch is not wired yet.
  */
 
 static __attribute__((unused)) VOID KiArm64DbgPrintBacktraceImpl(_In_ PCONTEXT Ctx)
@@ -32,6 +29,134 @@ static __attribute__((unused)) VOID KiArm64DbgPrintBacktraceImpl(_In_ PCONTEXT C
                (PVOID)(ULONG_PTR)Ctx->Pc,
                (PVOID)(ULONG_PTR)Ctx->Sp,
                (ULONG)Ctx->Cpsr);
+}
+
+static
+BOOLEAN
+KiDispatchExceptionToUser(
+    _In_ PKTRAP_FRAME TrapFrame,
+    _In_ PCONTEXT Context,
+    _In_ PEXCEPTION_RECORD ExceptionRecord)
+{
+    EXCEPTION_RECORD LocalExceptRecord;
+    ULONG_PTR UserSp;
+    PKUSER_EXCEPTION_STACK UserStack;
+
+    ASSERT(TrapFrame != NULL);
+    ASSERT(Context != NULL);
+    ASSERT(ExceptionRecord != NULL);
+
+    if (Context->Sp < sizeof(KUSER_EXCEPTION_STACK))
+    {
+        return FALSE;
+    }
+
+    /* Allocate a 16-byte aligned exception stack frame on the user stack */
+    UserSp = (ULONG_PTR)(Context->Sp - sizeof(KUSER_EXCEPTION_STACK));
+    UserSp &= ~0xFULL;
+    UserStack = (PKUSER_EXCEPTION_STACK)UserSp;
+
+    if ((UserSp + sizeof(KUSER_EXCEPTION_STACK) - 1) > (ULONG_PTR)MmUserProbeAddress)
+    {
+        RtlZeroMemory(&LocalExceptRecord, sizeof(LocalExceptRecord));
+        LocalExceptRecord.ExceptionCode = STATUS_ACCESS_VIOLATION;
+        LocalExceptRecord.ExceptionFlags = 0;
+        LocalExceptRecord.ExceptionRecord = NULL;
+        LocalExceptRecord.NumberParameters = 0;
+        ExceptionRecord = &LocalExceptRecord;
+    }
+
+    _enable();
+
+    _SEH2_TRY
+    {
+        ProbeForWrite(UserStack,
+                      sizeof(*UserStack),
+                      TYPE_ALIGNMENT(KUSER_EXCEPTION_STACK));
+        RtlZeroMemory(UserStack, sizeof(*UserStack));
+        UserStack->Context = *Context;
+        UserStack->ExceptionRecord = *ExceptionRecord;
+        UserStack->MachineFrame.Sp = Context->Sp;
+        UserStack->MachineFrame.Pc = Context->Pc;
+    }
+    _SEH2_EXCEPT((LocalExceptRecord = *_SEH2_GetExceptionInformation()->ExceptionRecord),
+                 EXCEPTION_EXECUTE_HANDLER)
+    {
+        _disable();
+        return FALSE;
+    }
+    _SEH2_END;
+
+    TrapFrame->X0 = (ULONG64)(ULONG_PTR)&UserStack->ExceptionRecord;
+    TrapFrame->X1 = (ULONG64)(ULONG_PTR)&UserStack->Context;
+    TrapFrame->Sp = UserSp;
+    TrapFrame->Pc = (ULONG64)(ULONG_PTR)KeUserExceptionDispatcher;
+    TrapFrame->Lr = (ULONG64)(ULONG_PTR)KeUserExceptionDispatcher;
+
+    _disable();
+    return TRUE;
+}
+
+static
+VOID
+KiPageInDirectory(
+    _In_ PVOID ImageBase,
+    _In_ USHORT Directory)
+{
+    volatile CHAR *Pointer;
+    ULONG Size;
+
+    Pointer = RtlImageDirectoryEntryToData(ImageBase, TRUE, Directory, &Size);
+    if (!Pointer) return;
+
+    while ((LONG)Size > 0)
+    {
+        (void)*Pointer;
+        Pointer += PAGE_SIZE;
+        Size -= PAGE_SIZE;
+    }
+}
+
+static
+VOID
+KiPrepareUserDebugData(VOID)
+{
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    PPEB_LDR_DATA PebLdr;
+    PLIST_ENTRY ListEntry;
+    PTEB Teb;
+
+    Teb = KeGetCurrentThread()->Teb;
+    if (!Teb) return;
+
+    _enable();
+
+    _SEH2_TRY
+    {
+        PebLdr = Teb->ProcessEnvironmentBlock->Ldr;
+        if (!PebLdr) _SEH2_LEAVE;
+
+        for (ListEntry = PebLdr->InLoadOrderModuleList.Flink;
+             ListEntry != &PebLdr->InLoadOrderModuleList;
+             ListEntry = ListEntry->Flink)
+        {
+            LdrEntry = CONTAINING_RECORD(ListEntry,
+                                         LDR_DATA_TABLE_ENTRY,
+                                         InLoadOrderLinks);
+
+            KiPageInDirectory((PVOID)LdrEntry->DllBase,
+                              IMAGE_DIRECTORY_ENTRY_DEBUG);
+
+            KiPageInDirectory((PVOID)LdrEntry->DllBase,
+                              IMAGE_DIRECTORY_ENTRY_EXCEPTION);
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    _SEH2_END;
+
+    _disable();
 }
 
 VOID
@@ -155,7 +280,29 @@ KiDispatchException(_In_ PEXCEPTION_RECORD ExceptionRecord,
     {
         if (FirstChance)
         {
+            if ((!(PsGetCurrentProcess()->DebugPort) &&
+                 !(KdIgnoreUmExceptions)) ||
+                 (KdIsThisAKdTrap(ExceptionRecord, &Context, PreviousMode)))
+            {
+                KiPrepareUserDebugData();
+                if (KiDebugRoutine(TrapFrame,
+                                   ExceptionFrame,
+                                   ExceptionRecord,
+                                   &Context,
+                                   PreviousMode,
+                                   FALSE))
+                {
+                    Handled = TRUE;
+                    goto HandledExit;
+                }
+            }
+
             if (DbgkForwardException(ExceptionRecord, TRUE, FALSE))
+            {
+                return;
+            }
+
+            if (KiDispatchExceptionToUser(TrapFrame, &Context, ExceptionRecord))
             {
                 return;
             }

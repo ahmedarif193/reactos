@@ -8,6 +8,7 @@
 #include "precomp.h"
 
 #include <guiddef.h>
+#include <stdlib.h>
 
 #define NDEBUG
 #include <debug.h>

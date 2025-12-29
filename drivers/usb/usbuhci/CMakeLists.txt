@@ -1,4 +1,8 @@
 
+if(NOT (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64"))
+    return()
+endif()
+
 list(APPEND SOURCE
     roothub.c
     usbuhci.c

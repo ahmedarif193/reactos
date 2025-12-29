@@ -4,6 +4,10 @@ $if(0)
 #include <intrin.h>
 $endif()
 
+#if !defined(RC_INVOKED) && (defined(_M_ARM) || defined(_M_ARM64))
+#include <intrin.h>
+#endif
+
 #define KeMemoryBarrierWithoutFence() _ReadWriteBarrier()
 
 #if defined(_M_IX86) || defined(_M_AMD64)

@@ -174,71 +174,31 @@ NTAPI
 KeRaiseUserException(
     _In_ NTSTATUS ExceptionCode)
 {
-    return ExceptionCode;
+    PTEB Teb = KeGetCurrentThread()->Teb;
+    PKTRAP_FRAME TrapFrame = KeGetCurrentThread()->TrapFrame;
+    ULONG64 OldPc;
+
+    if ((Teb == NULL) || (TrapFrame == NULL))
+    {
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    _SEH2_TRY
+    {
+        Teb->ExceptionCode = ExceptionCode;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    OldPc = TrapFrame->Pc;
+    TrapFrame->Pc = (ULONG64)(ULONG_PTR)KeRaiseUserExceptionDispatcher;
+    return (NTSTATUS)OldPc;
 }
 
 NTSTATUS
-NTAPI
-KiCallUserMode(
-    _Inout_opt_ PVOID *OutputBuffer,
-    _Inout_opt_ PULONG OutputLength)
-{
-    if (OutputBuffer != NULL)
-    {
-        *OutputBuffer = NULL;
-    }
-
-    if (OutputLength != NULL)
-    {
-        *OutputLength = 0;
-    }
-
-    DPRINT1("ARM64 TODO: KiCallUserMode not implemented yet\n");
-    return STATUS_NOT_IMPLEMENTED;
-}
-
-NTSTATUS
-NTAPI
-KeUserModeCallback(
-    _In_ ULONG FunctionID,
-    _In_reads_opt_(InputLength) PVOID InputBuffer,
-    _In_ ULONG InputLength,
-    _Outptr_result_buffer_(*OutputLength) PVOID *OutputBuffer,
-    _Out_ PULONG OutputLength)
-{
-    UNREFERENCED_PARAMETER(FunctionID);
-    UNREFERENCED_PARAMETER(InputBuffer);
-    UNREFERENCED_PARAMETER(InputLength);
-
-    if (OutputBuffer != NULL)
-    {
-        *OutputBuffer = NULL;
-    }
-
-    if (OutputLength != NULL)
-    {
-        *OutputLength = 0;
-    }
-
-    DPRINT1("ARM64 TODO: KeUserModeCallback not implemented yet\n");
-    return STATUS_NOT_IMPLEMENTED;
-}
-
-NTSTATUS
-NTAPI
-NtCallbackReturn(
-    _In_opt_ PVOID ResultBuffer,
-    _In_opt_ ULONG ResultLength,
-    _In_ NTSTATUS Status)
-{
-    UNREFERENCED_PARAMETER(ResultBuffer);
-    UNREFERENCED_PARAMETER(ResultLength);
-    UNREFERENCED_PARAMETER(Status);
-    DPRINT1("ARM64 TODO: NtCallbackReturn not implemented yet\n");
-    return STATUS_NOT_IMPLEMENTED;
-}
-
-VOID
 NTAPI
 RtlGetCallersAddress(
     _Out_opt_ PVOID *CallersAddress,

@@ -95,6 +95,7 @@ typedef struct _ARM64_EARLY_SYNC_CONTEXT
     PKTRAP_FRAME TrapFramePointer;
     PKEXCEPTION_FRAME ExceptionFramePointer;
     KTRAP_FRAME TrapFrame;
+    KEXCEPTION_FRAME ExceptionFrame;
 } ARM64_EARLY_SYNC_CONTEXT, *PARM64_EARLY_SYNC_CONTEXT;
 
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, State.VectorId) == 0x0);
@@ -106,6 +107,8 @@ C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, State.Registers.X[0]) == 0x28);
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, TrapFramePointer) == 0x138);
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, ExceptionFramePointer) == 0x140);
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, TrapFrame) == 0x148);
+#define ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE 0x380
+C_ASSERT(sizeof(ARM64_EARLY_SYNC_CONTEXT) <= ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE);
 
 static
 KPROCESSOR_MODE
@@ -121,6 +124,10 @@ KiArm64InitializeTrapFrame(
     _Inout_ PARM64_EARLY_SYNC_CONTEXT Context,
     _Out_ PKTRAP_FRAME TrapFrame)
 {
+    ULONG64 Fpcr = 0;
+    ULONG64 Fpsr = 0;
+    PKEXCEPTION_FRAME ExceptionFrame = &Context->ExceptionFrame;
+
     RtlZeroMemory(TrapFrame, sizeof(*TrapFrame));
 
     TrapFrame->PreviousMode = (CHAR)KiArm64PreviousModeFromSpsr(Context->State.Spsr);
@@ -137,6 +144,26 @@ KiArm64InitializeTrapFrame(
     RtlCopyMemory(TrapFrame->X,
                   Context->State.Registers.X,
                   sizeof(TrapFrame->X));
+
+    RtlZeroMemory(ExceptionFrame, sizeof(*ExceptionFrame));
+    ExceptionFrame->TrapFrame = (ULONG64)(ULONG_PTR)TrapFrame;
+    __asm__ __volatile__("mrs %0, fpcr" : "=r"(Fpcr));
+    __asm__ __volatile__("mrs %0, fpsr" : "=r"(Fpsr));
+    ExceptionFrame->Fpcr = Fpcr;
+    ExceptionFrame->Fpsr = Fpsr;
+    ExceptionFrame->X19 = Context->State.Registers.X[19];
+    ExceptionFrame->X20 = Context->State.Registers.X[20];
+    ExceptionFrame->X21 = Context->State.Registers.X[21];
+    ExceptionFrame->X22 = Context->State.Registers.X[22];
+    ExceptionFrame->X23 = Context->State.Registers.X[23];
+    ExceptionFrame->X24 = Context->State.Registers.X[24];
+    ExceptionFrame->X25 = Context->State.Registers.X[25];
+    ExceptionFrame->X26 = Context->State.Registers.X[26];
+    ExceptionFrame->X27 = Context->State.Registers.X[27];
+    ExceptionFrame->X28 = Context->State.Registers.X[28];
+    ExceptionFrame->Fp = Context->State.Registers.X[29];
+    ExceptionFrame->Lr = Context->State.Registers.X[30];
+    Context->ExceptionFramePointer = ExceptionFrame;
 }
 
 static LONG KiArm64SyncExceptionLogBudget = 128;
@@ -219,11 +246,40 @@ KiArm64ResetDataAbortGuard(VOID)
     }
 }
 
+static __inline VOID
+KiArm64ClearTrapActive(VOID)
+{
+    ULONG ProcessorIndex = KeGetCurrentProcessorNumber();
+
+    if (ProcessorIndex < MAXIMUM_PROCESSORS)
+    {
+        InterlockedExchange(&KiArm64TrapActive[ProcessorIndex], 0);
+    }
+}
+
+#define KI_ARM64_ACCESS_READ    0
+#define KI_ARM64_ACCESS_WRITE   1
+#define KI_ARM64_ACCESS_EXECUTE 8
+
+static __inline ULONG_PTR
+KiArm64AccessTypeToExceptionInfo(
+    _In_ BOOLEAN WriteAccess,
+    _In_ BOOLEAN InstructionFetch)
+{
+    if (InstructionFetch)
+    {
+        return KI_ARM64_ACCESS_EXECUTE;
+    }
+
+    return WriteAccess ? KI_ARM64_ACCESS_WRITE : KI_ARM64_ACCESS_READ;
+}
+
 static
 ULONG
 KiArm64BuildFaultCode(
     _In_ ULONG FaultStatus,
     _In_ BOOLEAN WriteAccess,
+    _In_ BOOLEAN InstructionFetch,
     _In_ KPROCESSOR_MODE PreviousMode)
 {
     ULONG Code = 0;
@@ -256,6 +312,11 @@ KiArm64BuildFaultCode(
     if (WriteAccess)
     {
         Code |= 0x2;
+    }
+
+    if (InstructionFetch)
+    {
+        Code |= 0x20;
     }
 
     if (PreviousMode == UserMode)
@@ -419,14 +480,70 @@ KiArm64HandleSynchronousException(
             KiSystemService(Thread, TrapFrame, Instruction);
 
             Context->TrapFramePointer = TrapFrame;
-            Context->ExceptionFramePointer = NULL;
+            Context->ExceptionFramePointer = &Context->ExceptionFrame;
+            KiArm64ClearTrapActive();
             return TRUE;
         }
 
-        case 0x20: /* Data abort, lower EL */
-        case 0x21: /* Data abort, same EL  */
-        case 0x24: /* Data abort (imprecise), lower EL */
-        case 0x25: /* Data abort (imprecise), same EL  */
+        case 0x20: /* Instruction abort, lower EL */
+        case 0x21: /* Instruction abort, same EL  */
+        {
+            EXCEPTION_RECORD ExceptionRecord;
+
+            TrapFrame = &Context->TrapFrame;
+            KiArm64InitializeTrapFrame(Context, TrapFrame);
+
+            PreviousMode = KiArm64PreviousModeFromSpsr(Context->State.Spsr);
+            WriteAccess = FALSE;
+
+            Status = MmArmAccessFault(KiArm64BuildFaultCode(FaultStatus,
+                                                            WriteAccess,
+                                                            TRUE,
+                                                            PreviousMode),
+                                      (PVOID)(ULONG_PTR)Context->State.FaultAddress,
+                                      PreviousMode,
+                                      TrapFrame);
+
+            if (NT_SUCCESS(Status))
+            {
+                Context->TrapFramePointer = TrapFrame;
+                Context->ExceptionFramePointer = &Context->ExceptionFrame;
+                KiArm64ClearTrapActive();
+                return TRUE;
+            }
+
+            if ((PreviousMode == KernelMode) && (!KdDebuggerEnabled || KdDebuggerNotPresent))
+            {
+                KiArm64BugCheckSynchronousException(Context);
+                /* not reached */
+            }
+
+            RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
+            ExceptionRecord.ExceptionCode = KI_EXCEPTION_ACCESS_VIOLATION;
+            ExceptionRecord.ExceptionFlags = 0;
+            ExceptionRecord.ExceptionRecord = NULL;
+            ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
+            ExceptionRecord.NumberParameters = 2;
+            ExceptionRecord.ExceptionInformation[0] = KiArm64AccessTypeToExceptionInfo(WriteAccess, TRUE);
+            ExceptionRecord.ExceptionInformation[1] = (ULONG_PTR)Context->State.FaultAddress;
+
+            if (!KdDebuggerEnabled || KdDebuggerNotPresent)
+                KiArm64ReportUnhandledSyncException(Context, Esr);
+
+            KiDispatchException(&ExceptionRecord,
+                                Context->ExceptionFramePointer,
+                                TrapFrame,
+                                PreviousMode,
+                                TRUE);
+
+            Context->TrapFramePointer = TrapFrame;
+            Context->ExceptionFramePointer = &Context->ExceptionFrame;
+            KiArm64ClearTrapActive();
+            return TRUE;
+        }
+
+        case 0x24: /* Data abort, lower EL */
+        case 0x25: /* Data abort, same EL  */
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
 
@@ -479,6 +596,7 @@ KiArm64HandleSynchronousException(
 
                 Status = MmArmAccessFault(KiArm64BuildFaultCode(FaultStatus,
                                                                  WriteAccess,
+                                                                 FALSE,
                                                                  PreviousMode),
                                            (PVOID)(ULONG_PTR)Context->State.FaultAddress,
                                            PreviousMode,
@@ -500,12 +618,8 @@ KiArm64HandleSynchronousException(
                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_TRACE_LEVEL,
                            "[arm64] DA resolved: 0x%lx\n", Status);
                 Context->TrapFramePointer = TrapFrame;
-                Context->ExceptionFramePointer = NULL;
-                {
-                    ULONG CpuIndex = KeGetCurrentProcessorNumber();
-                    if (CpuIndex < MAXIMUM_PROCESSORS)
-                        InterlockedExchange(&KiArm64TrapActive[CpuIndex], 0);
-                }
+                Context->ExceptionFramePointer = &Context->ExceptionFrame;
+                KiArm64ClearTrapActive();
                 return TRUE;
             }
 
@@ -529,27 +643,56 @@ KiArm64HandleSynchronousException(
                 ExceptionRecord.ExceptionRecord = NULL;
                 ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
                 ExceptionRecord.NumberParameters = 2;
-                ExceptionRecord.ExceptionInformation[0] = WriteAccess ? 1 : 0;
+                ExceptionRecord.ExceptionInformation[0] = KiArm64AccessTypeToExceptionInfo(WriteAccess, FALSE);
                 ExceptionRecord.ExceptionInformation[1] = (ULONG_PTR)Context->State.FaultAddress;
 
                 if (!KdDebuggerEnabled || KdDebuggerNotPresent)
                     KiArm64ReportUnhandledSyncException(Context, Esr);
 
                 KiDispatchException(&ExceptionRecord,
-                                    NULL,
+                                    Context->ExceptionFramePointer,
                                     TrapFrame,
                                     PreviousMode,
                                     TRUE);
 
                 /* Return with updated trap frame (either resumed, or KD/bugcheck handled). */
                 Context->TrapFramePointer = TrapFrame;
-                Context->ExceptionFramePointer = NULL;
-                {
-                    ULONG CpuIndex = KeGetCurrentProcessorNumber();
-                    if (CpuIndex < MAXIMUM_PROCESSORS)
-                        InterlockedExchange(&KiArm64TrapActive[CpuIndex], 0);
-                }
+                Context->ExceptionFramePointer = &Context->ExceptionFrame;
+                KiArm64ClearTrapActive();
                 return TRUE;
+        }
+
+        case 0x22: /* PC alignment fault */
+        case 0x26: /* SP alignment fault */
+        {
+            EXCEPTION_RECORD ExceptionRecord;
+            KPROCESSOR_MODE Mode;
+
+            TrapFrame = &Context->TrapFrame;
+            KiArm64InitializeTrapFrame(Context, TrapFrame);
+
+            Mode = KiArm64PreviousModeFromSpsr(Context->State.Spsr);
+
+            RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
+            ExceptionRecord.ExceptionCode = STATUS_DATATYPE_MISALIGNMENT;
+            ExceptionRecord.ExceptionFlags = 0;
+            ExceptionRecord.ExceptionRecord = NULL;
+            ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
+            ExceptionRecord.NumberParameters = 0;
+
+            if (!KdDebuggerEnabled || KdDebuggerNotPresent)
+                KiArm64ReportUnhandledSyncException(Context, Esr);
+
+            KiDispatchException(&ExceptionRecord,
+                                Context->ExceptionFramePointer,
+                                TrapFrame,
+                                Mode,
+                                TRUE);
+
+            Context->TrapFramePointer = TrapFrame;
+            Context->ExceptionFramePointer = &Context->ExceptionFrame;
+            KiArm64ClearTrapActive();
+            return TRUE;
         }
 
         case 0x2F: /* SError */
@@ -570,18 +713,14 @@ KiArm64HandleSynchronousException(
                 KiArm64ReportUnhandledSyncException(Context, Esr);
 
             KiDispatchException(&ExceptionRecord,
-                                NULL,
+                                Context->ExceptionFramePointer,
                                 TrapFrame,
                                 KiArm64PreviousModeFromSpsr(Context->State.Spsr),
                                 TRUE);
 
             Context->TrapFramePointer = TrapFrame;
-            Context->ExceptionFramePointer = NULL;
-            {
-                ULONG CpuIndex = KeGetCurrentProcessorNumber();
-                if (CpuIndex < MAXIMUM_PROCESSORS)
-                    InterlockedExchange(&KiArm64TrapActive[CpuIndex], 0);
-            }
+            Context->ExceptionFramePointer = &Context->ExceptionFrame;
+            KiArm64ClearTrapActive();
             return TRUE;
         }
 
@@ -597,12 +736,8 @@ KiArm64HandleSynchronousException(
                 TrapFrame->Pc = (ULONG64)((ULONG_PTR)Context->State.Elr + 4);
                 Context->State.Elr += 4;
                 Context->TrapFramePointer = TrapFrame;
-                Context->ExceptionFramePointer = NULL;
-                {
-                    ULONG CpuIndex = KeGetCurrentProcessorNumber();
-                    if (CpuIndex < MAXIMUM_PROCESSORS)
-                        InterlockedExchange(&KiArm64TrapActive[CpuIndex], 0);
-                }
+                Context->ExceptionFramePointer = &Context->ExceptionFrame;
+                KiArm64ClearTrapActive();
                 return TRUE;
             }
 
@@ -631,13 +766,14 @@ KiArm64HandleSynchronousException(
             }
 
             KiDispatchException(&ExceptionRecord,
-                                NULL,
+                                Context->ExceptionFramePointer,
                                 TrapFrame,
                                 KiArm64PreviousModeFromSpsr(Context->State.Spsr),
                                 TRUE);
 
             Context->TrapFramePointer = TrapFrame;
-            Context->ExceptionFramePointer = NULL;
+            Context->ExceptionFramePointer = &Context->ExceptionFrame;
+            KiArm64ClearTrapActive();
             return TRUE;
         }
 
@@ -658,18 +794,14 @@ KiArm64HandleSynchronousException(
                 KiArm64ReportUnhandledSyncException(Context, Esr);
 
             KiDispatchException(&ExceptionRecord,
-                                NULL,
+                                Context->ExceptionFramePointer,
                                 TrapFrame,
                                 KiArm64PreviousModeFromSpsr(Context->State.Spsr),
                                 TRUE);
 
             Context->TrapFramePointer = TrapFrame;
-            Context->ExceptionFramePointer = NULL;
-            {
-                ULONG CpuIndex = KeGetCurrentProcessorNumber();
-                if (CpuIndex < MAXIMUM_PROCESSORS)
-                    InterlockedExchange(&KiArm64TrapActive[CpuIndex], 0);
-            }
+            Context->ExceptionFramePointer = &Context->ExceptionFrame;
+            KiArm64ClearTrapActive();
             return TRUE;
         }
     }

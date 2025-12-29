@@ -47,7 +47,7 @@ KiArm64EarlyVectorTable:
 .equ ARM64_EARLY_STATE_TRAP_PTR,      0x138
 .equ ARM64_EARLY_STATE_EXC_PTR,       0x140
 .equ ARM64_EARLY_STATE_TRAP_FRAME,    0x148
-.equ ARM64_EARLY_STATE_SIZE,          0x2B0
+.equ ARM64_EARLY_STATE_SIZE,          0x380
 
 #define VECTOR_HANDLER_SYNC(label, id)                                   \
     .global label;                                                       \

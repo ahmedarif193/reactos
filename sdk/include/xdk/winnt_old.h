@@ -4583,13 +4583,25 @@ FORCEINLINE PVOID GetCurrentFiber(VOID)
 #elif defined (_M_ARM64)
 FORCEINLINE struct _TEB * NtCurrentTeb(VOID)
 {
-    //UNIMPLEMENTED;
+#if defined(__GNUC__) || defined(__clang__)
+    struct _TEB *Teb;
+    __asm__ __volatile__("mov %0, x18" : "=r"(Teb));
+    return Teb;
+#else
     return 0;
+#endif
 }
 FORCEINLINE PVOID GetCurrentFiber(VOID)
 {
-    //UNIMPLEMENTED;
+#if defined(__GNUC__) || defined(__clang__)
+#ifdef NONAMELESSUNION
+    return ((PNT_TIB)NtCurrentTeb())->DUMMYUNIONNAME.FiberData;
+#else
+    return ((PNT_TIB)NtCurrentTeb())->FiberData;
+#endif
+#else
     return 0;
+#endif
 }
 #elif defined(_M_PPC)
 FORCEINLINE unsigned long _read_teb_dword(const unsigned long Offset)

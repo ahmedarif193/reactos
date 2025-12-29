@@ -38,6 +38,13 @@ void DbgBreakPoint(void)
     __asm__ volatile("brk #0");
 }
 
+KIRQL
+NTAPI
+KeGetCurrentIrql(VOID)
+{
+    return PASSIVE_LEVEL;
+}
+
 VOID
 FrLdrBugCheckWithMessage(
     ULONG BugCode,

@@ -253,6 +253,12 @@ RtlWalkFrameChain(OUT PVOID *Callers,
     // FIXME: Hack. Probably won't work if this ever actually manages to run someday.
     Stack = (ULONG_PTR)&Stack;
 #endif
+#elif defined(_M_ARM64) || defined(_ARM64_)
+#if defined(__GNUC__) || defined(__clang__)
+    Stack = (ULONG_PTR)__builtin_frame_address(0);
+#elif defined(_MSC_VER)
+    Stack = (ULONG_PTR)&Stack;
+#endif
 #else
 #error Unknown architecture
 #endif

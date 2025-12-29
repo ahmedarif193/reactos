@@ -298,6 +298,20 @@ size_t CDECL strftime( char *str, size_t max, const char *format,
 }
 
 /*********************************************************************
+ *		_strftime_l (MSVCRT.@)
+ */
+size_t CDECL _strftime_l(char *str, size_t max, const char *format,
+                                     const struct tm *mstm, _locale_t locale)
+{
+    MSVCRT___lc_time_data *time_data = NULL;
+
+    if (locale)
+        time_data = locale->locinfo->lc_time_curr;
+
+    return _Strftime(str, max, format, mstm, time_data);
+}
+
+/*********************************************************************
  *		wcsftime (MSVCRT.@)
  */
 size_t CDECL wcsftime( wchar_t *str, size_t max,

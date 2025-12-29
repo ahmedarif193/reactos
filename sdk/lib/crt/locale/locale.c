@@ -1273,6 +1273,17 @@ MSVCRT__locale_t CDECL MSVCRT__create_locale(int category, const char *locale)
     return loc;
 }
 
+/* UCRT-style exports for non-MSVC toolchains */
+void CDECL _free_locale(_locale_t locale)
+{
+    MSVCRT__free_locale((MSVCRT__locale_t)locale);
+}
+
+_locale_t CDECL _create_locale(int category, const char *locale)
+{
+    return (_locale_t)MSVCRT__create_locale(category, locale);
+}
+
 /*********************************************************************
  *             setlocale (MSVCRT.@)
  */
@@ -1526,4 +1537,3 @@ const unsigned short* __cdecl __pctype_func(void)
 {
    return get_locinfo()->pctype;
 }
-

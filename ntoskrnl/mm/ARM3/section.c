@@ -1971,7 +1971,7 @@ MiFlushTbAndCapture(IN PMMVAD FoundVad,
     //
     // Windows updates the relevant PFN1 information, we currently don't.
     //
-    if (UpdateDirty && PreviousPte.u.Hard.Dirty)
+    if (UpdateDirty && MI_IS_PAGE_DIRTY(&PreviousPte))
     {
         if (!Pfn1->u3.e1.Modified)
         {

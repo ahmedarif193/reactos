@@ -244,3 +244,20 @@ int CDECL _snscanf(const char *input, size_t length, const char *format, ...)
     __ms_va_end(valist);
     return res;
 }
+
+int CDECL __stdio_common_vsscanf(unsigned __int64 options, const char *buffer,
+        size_t count, const char *format, _locale_t locale, va_list arglist)
+{
+    UNREFERENCED_PARAMETER(options);
+    UNREFERENCED_PARAMETER(count);
+
+    if (!buffer || !format)
+    {
+#ifndef _LIBCNT_
+        *_errno() = EINVAL;
+#endif
+        return EOF;
+    }
+
+    return vsscanf_l(buffer, format, locale, arglist);
+}

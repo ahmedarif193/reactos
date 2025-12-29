@@ -131,7 +131,7 @@ MiInitSystemMemoryAreas(VOID)
     // Reserved HAL area (includes KUSER_SHARED_DATA and KPCR)
     MiCreateArm3StaticMemoryArea((PVOID)MM_HAL_VA_START, MM_HAL_VA_END - MM_HAL_VA_START + 1, FALSE);
 #else /* _X86_ */
-#ifndef _M_AMD64
+#if !defined(_M_AMD64) && !defined(_M_ARM64)
     // KPCR, one page per CPU. Only for 32-bit kernel.
     MiCreateArm3StaticMemoryArea(PCR, PAGE_SIZE * KeNumberProcessors, FALSE);
 #endif /* _M_AMD64 */

@@ -4,7 +4,7 @@
 #undef SetWorldTransform
 
 #define NDEBUG
-#include <debug.h>
+#include <reactos/debug.h>
 
 static
 GDILOOBJTYPE
@@ -424,4 +424,3 @@ METADC_RosGlueDeleteDC(
 
     return NtGdiDeleteObjectApp(hdc);
 }
-

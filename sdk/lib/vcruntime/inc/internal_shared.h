@@ -12,6 +12,8 @@
 
 #include <corecrt_startup.h>
 #include <crtdbg.h>
+#include <malloc.h>
+#include <stdlib.h>
 #include <windef.h>
 #include <winbase.h>
 

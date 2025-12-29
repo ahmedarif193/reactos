@@ -18,6 +18,7 @@ typedef NTSTATUS (NTAPI *USER_CALL)(PVOID Argument, ULONG ArgumentLength);
 
 /* FUNCTIONS ****************************************************************/
 
+#if !(defined(_M_ARM64) || defined(__aarch64__))
 /*
  * @implemented
  */
@@ -50,6 +51,26 @@ KiUserExceptionDispatcher(PEXCEPTION_RECORD ExceptionRecord,
     /* Raise the exception */
     RtlRaiseException(&NestedExceptionRecord);
 }
+#endif
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+VOID
+NTAPI
+KiUserExceptionDispatcherNestedArm64(
+    _In_ PEXCEPTION_RECORD ExceptionRecord,
+    _In_ NTSTATUS Status)
+{
+    EXCEPTION_RECORD NestedExceptionRecord;
+
+    RtlZeroMemory(&NestedExceptionRecord, sizeof(NestedExceptionRecord));
+    NestedExceptionRecord.ExceptionCode = Status;
+    NestedExceptionRecord.ExceptionFlags = EXCEPTION_NONCONTINUABLE;
+    NestedExceptionRecord.ExceptionRecord = ExceptionRecord;
+    NestedExceptionRecord.NumberParameters = 0;
+
+    RtlRaiseException(&NestedExceptionRecord);
+}
+#endif
 
 /*
  * @implemented
@@ -70,6 +91,7 @@ KiRaiseUserExceptionDispatcher(VOID)
     RtlRaiseException(&ExceptionRecord);
 }
 
+#if !(defined(_M_ARM64) || defined(__aarch64__))
 /*
  * @implemented
  */
@@ -85,3 +107,4 @@ KiUserCallbackDispatcher(ULONG Index,
                      0,
                      KernelCallbackTable[Index](Argument, ArgumentLength));
 }
+#endif

@@ -12,43 +12,87 @@
     .global KiArm64VectorTable
 KiArm64VectorTable:
 
+.equ ARM64_EARLY_STATE_VECTORID,      0x0
+.equ ARM64_EARLY_STATE_ESR,           0x8
+.equ ARM64_EARLY_STATE_FAR,           0x10
+.equ ARM64_EARLY_STATE_ELR,           0x18
+.equ ARM64_EARLY_STATE_SPSR,          0x20
+.equ ARM64_EARLY_STATE_REGS,          0x28
+.equ ARM64_EARLY_STATE_REG_SP,        0x120
+.equ ARM64_EARLY_STATE_REG_PC,        0x128
+.equ ARM64_EARLY_STATE_REG_PSTATE,    0x130
+.equ ARM64_EARLY_STATE_TRAP_PTR,      0x138
+.equ ARM64_EARLY_STATE_EXC_PTR,       0x140
+.equ ARM64_EARLY_STATE_TRAP_FRAME,    0x148
+.equ ARM64_EARLY_STATE_SIZE,          0x380
+
 /* Permanent table entries */
 #define PERM_VECTOR_SYNC(label, id)                                      \
     .global label;                                                       \
 label:                                                                   \
     stp x29, x30, [sp, #-16]!;                                           \
     mov x29, sp;                                                         \
-    /* Reuse early sync framing to build a KTRAP_FRAME */                \
-    sub sp, sp, #0x2B0; /* ARM64_EARLY_STATE_SIZE */                     \
-    /* Save a minimal GPR window and state expected by C helper */       \
-    /* (Use the same layout as in earlyvec.S) */                         \
-    /* Save x0-x3 to seed the state; the helper fills the rest */        \
-    str x0, [sp, #0x28];                                                 \
-    str x1, [sp, #0x30];                                                 \
-    str x2, [sp, #0x38];                                                 \
-    str x3, [sp, #0x40];                                                 \
+    sub sp, sp, #ARM64_EARLY_STATE_SIZE;                                 \
+    str x0,  [sp, #(ARM64_EARLY_STATE_REGS + 0 * 8)];                    \
+    str x1,  [sp, #(ARM64_EARLY_STATE_REGS + 1 * 8)];                    \
+    str x2,  [sp, #(ARM64_EARLY_STATE_REGS + 2 * 8)];                    \
+    str x3,  [sp, #(ARM64_EARLY_STATE_REGS + 3 * 8)];                    \
+    str x4,  [sp, #(ARM64_EARLY_STATE_REGS + 4 * 8)];                    \
+    str x5,  [sp, #(ARM64_EARLY_STATE_REGS + 5 * 8)];                    \
+    str x6,  [sp, #(ARM64_EARLY_STATE_REGS + 6 * 8)];                    \
+    str x7,  [sp, #(ARM64_EARLY_STATE_REGS + 7 * 8)];                    \
+    str x8,  [sp, #(ARM64_EARLY_STATE_REGS + 8 * 8)];                    \
+    str x9,  [sp, #(ARM64_EARLY_STATE_REGS + 9 * 8)];                    \
+    str x10, [sp, #(ARM64_EARLY_STATE_REGS + 10 * 8)];                   \
+    str x11, [sp, #(ARM64_EARLY_STATE_REGS + 11 * 8)];                   \
+    str x12, [sp, #(ARM64_EARLY_STATE_REGS + 12 * 8)];                   \
+    str x13, [sp, #(ARM64_EARLY_STATE_REGS + 13 * 8)];                   \
+    str x14, [sp, #(ARM64_EARLY_STATE_REGS + 14 * 8)];                   \
+    str x15, [sp, #(ARM64_EARLY_STATE_REGS + 15 * 8)];                   \
+    str x16, [sp, #(ARM64_EARLY_STATE_REGS + 16 * 8)];                   \
+    str x17, [sp, #(ARM64_EARLY_STATE_REGS + 17 * 8)];                   \
+    str x18, [sp, #(ARM64_EARLY_STATE_REGS + 18 * 8)];                   \
+    str x19, [sp, #(ARM64_EARLY_STATE_REGS + 19 * 8)];                   \
+    str x20, [sp, #(ARM64_EARLY_STATE_REGS + 20 * 8)];                   \
+    str x21, [sp, #(ARM64_EARLY_STATE_REGS + 21 * 8)];                   \
+    str x22, [sp, #(ARM64_EARLY_STATE_REGS + 22 * 8)];                   \
+    str x23, [sp, #(ARM64_EARLY_STATE_REGS + 23 * 8)];                   \
+    str x24, [sp, #(ARM64_EARLY_STATE_REGS + 24 * 8)];                   \
+    str x25, [sp, #(ARM64_EARLY_STATE_REGS + 25 * 8)];                   \
+    str x26, [sp, #(ARM64_EARLY_STATE_REGS + 26 * 8)];                   \
+    str x27, [sp, #(ARM64_EARLY_STATE_REGS + 27 * 8)];                   \
+    str x28, [sp, #(ARM64_EARLY_STATE_REGS + 28 * 8)];                   \
+    ldr x9, [x29];                                                       \
+    str x9, [sp, #(ARM64_EARLY_STATE_REGS + 29 * 8)];                    \
+    ldr x10, [x29, #8];                                                  \
+    str x10, [sp, #(ARM64_EARLY_STATE_REGS + 30 * 8)];                   \
     add x11, x29, #16;                                                   \
-    str x11, [sp, #0x120]; /* SP */                                      \
+    str x11, [sp, #ARM64_EARLY_STATE_REG_SP];                            \
     mrs x12, elr_el1;                                                    \
-    str x12, [sp, #0x18]; /* ELR */                                      \
-    str x12, [sp, #0x128]; /* PC */                                      \
+    str x12, [sp, #ARM64_EARLY_STATE_ELR];                               \
+    str x12, [sp, #ARM64_EARLY_STATE_REG_PC];                            \
     mrs x13, spsr_el1;                                                   \
-    str x13, [sp, #0x20]; /* SPSR */                                     \
+    str x13, [sp, #ARM64_EARLY_STATE_SPSR];                              \
+    str x13, [sp, #ARM64_EARLY_STATE_REG_PSTATE];                        \
     mrs x14, esr_el1;                                                    \
-    str x14, [sp, #0x8];  /* ESR */                                      \
+    str x14, [sp, #ARM64_EARLY_STATE_ESR];                               \
     mrs x15, far_el1;                                                    \
-    str x15, [sp, #0x10]; /* FAR */                                      \
+    str x15, [sp, #ARM64_EARLY_STATE_FAR];                               \
     mov w16, #(id);                                                      \
-    str x16, [sp, #0x0];  /* VectorId */                                 \
+    str x16, [sp, #ARM64_EARLY_STATE_VECTORID];                          \
+    str xzr, [sp, #ARM64_EARLY_STATE_TRAP_PTR];                          \
+    str xzr, [sp, #ARM64_EARLY_STATE_EXC_PTR];                           \
     mov x0, sp;                                                          \
     bl KiArm64HandleSynchronousException;                                \
     cbz x0, 1f;                                                          \
-    add sp, sp, #0x2B0;                                                  \
+    ldr x2, [sp, #ARM64_EARLY_STATE_TRAP_PTR];                           \
+    ldr x3, [sp, #ARM64_EARLY_STATE_EXC_PTR];                            \
+    add sp, sp, #ARM64_EARLY_STATE_SIZE;                                 \
     ldp x29, x30, [sp], #16;                                             \
-    /* Return through KiTrapReturn */                                     \
+    mov x0, x2;                                                          \
+    mov x1, x3;                                                          \
     b KiTrapReturn;                                                      \
-1:  /* Bugcheck path */                                                  \
-    mov x0, sp;                                                          \
+1:  mov x0, sp;                                                          \
     bl KiArm64BugCheckEntry;                                             \
     b 1b
 

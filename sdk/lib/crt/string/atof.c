@@ -9,3 +9,13 @@ atof(const char *ascii)
 {
   return strtod(ascii, 0);
 }
+
+/*
+ * @implemented
+ */
+float
+CDECL
+strtof(const char *ascii, char **endptr)
+{
+  return (float)strtod(ascii, endptr);
+}

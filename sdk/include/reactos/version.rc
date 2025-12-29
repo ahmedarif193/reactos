@@ -12,8 +12,8 @@
  */
 
 #include "winver.h"
-#include "version.h"
-#include "buildno.h"
+#include <reactos/version.h>
+#include <reactos/buildno.h>
 
 /* Define some defaults (shouldn't be overwritten by applications */
 #define REACTOS_DEFAULT_STR_COMPANY_NAME    "ReactOS Project"

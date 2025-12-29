@@ -10,7 +10,7 @@
 #include <winsvc.h>
 
 #define NDEBUG
-#include <debug.h>
+#include <reactos/debug.h>
 
 static WCHAR ServiceName[] = L"DHCP";
 

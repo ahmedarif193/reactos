@@ -6,7 +6,7 @@ if(NOT MSVC)
         OUTPUT ${LIBRARY_PRIVATE_DIR}/oldnames.a
         # ar just puts stuff into the archive, without looking twice. Just delete the lib, we're going to rebuild it anyway
         COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE:oldnames>
-        COMMAND ${CMAKE_DLLTOOL} ${DLLTOOL_EXTRA_ARGS} --def ${CMAKE_CURRENT_SOURCE_DIR}/moldname-msvcrt.def --kill-at --output-lib=oldnames.a -t oldnames
+        COMMAND ${CMAKE_DLLTOOL} ${DLLTOOL_EXTRA_ARGS} -d ${CMAKE_CURRENT_SOURCE_DIR}/moldname-msvcrt.def -k -l oldnames.a -t oldnames
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/moldname-msvcrt.def
         WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
     set_source_files_properties(
@@ -17,12 +17,12 @@ if(NOT MSVC)
     _add_library(oldnames STATIC EXCLUDE_FROM_ALL ${LIBRARY_PRIVATE_DIR}/oldnames.a)
     set_target_properties(oldnames PROPERTIES LINKER_LANGUAGE "C")
 
-    if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
+    if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386" OR ARCH STREQUAL "arm64")
         add_custom_command(TARGET oldnames POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy ${LIBRARY_PRIVATE_DIR}/oldnames.a $<TARGET_FILE:oldnames>
             COMMAND ${CMAKE_AR} s $<TARGET_FILE:oldnames>
             COMMAND ${CMAKE_RANLIB} $<TARGET_FILE:oldnames>
-            COMMENT "FIXME: Overwriting oldnames with proper import library (amd64 workaround)")
+            COMMENT "FIXME: Overwriting oldnames with proper import library (importlib workaround)")
     endif()
 else()
     add_asm_files(oldnames_asm oldnames-common.S oldnames-msvcrt.S)

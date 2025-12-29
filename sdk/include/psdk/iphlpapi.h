@@ -7,7 +7,7 @@ extern "C" {
 
 #include <iprtrmib.h>
 #include <ipexport.h>
-#include <iptypes.h>
+#include "iptypes.h"
 
 DWORD WINAPI AddIPAddress(IPAddr,IPMask,DWORD,PULONG,PULONG);
 DWORD WINAPI CreateIpForwardEntry(PMIB_IPFORWARDROW);

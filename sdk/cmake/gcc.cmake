@@ -312,6 +312,8 @@ endif()
 # Fix build with GLIBCXX + our c++ headers
 add_definitions(-D_GLIBCXX_HAVE_BROKEN_VSWPRINTF -D_GLIBCXX_HAVE_QUICK_EXIT=0 -D_GLIBCXX_HAVE_AT_QUICK_EXIT=0)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -include reactos/quick_exit_compat.h")
+add_compile_definitions("$<$<COMPILE_LANGUAGE:CXX>:__STDC_CONSTANT_MACROS>"
+                       "$<$<COMPILE_LANGUAGE:CXX>:__STDC_LIMIT_MACROS>")
 
 # Fix build with UCRT headers
 add_definitions(-D_CRT_SUPPRESS_RESTRICT)
@@ -439,7 +441,10 @@ function(set_entrypoint MODULE ENTRYPOINT)
         set(_t_arch ${ARCH})
     endif()
     if(${ENTRYPOINT} STREQUAL "0")
-        # target_link_options(${MODULE} PRIVATE "-Wl,-e,0")
+        if(_t_arch STREQUAL "arm64")
+            target_link_options(${MODULE} PRIVATE "-Wl,--entry=__ReactOSNoEntry")
+            target_sources(${MODULE} PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/crt/startup/noentry_arm64.c)
+        endif()
     elseif(_t_arch STREQUAL "i386")
         set(_entrysymbol _${ENTRYPOINT})
         if(${ARGC} GREATER 2)
@@ -452,7 +457,12 @@ function(set_entrypoint MODULE ENTRYPOINT)
 endfunction()
 
 function(set_subsystem MODULE SUBSYSTEM)
-    target_link_options(${MODULE} PRIVATE "-Wl,--subsystem,${SUBSYSTEM}:5.01")
+    if(SUBSYSTEM STREQUAL "EFI_APPLICATION" OR SUBSYSTEM STREQUAL "efi_application" OR SUBSYSTEM STREQUAL "10")
+        # Some MinGW ld builds reject the named EFI subsystem; use the numeric value.
+        target_link_options(${MODULE} PRIVATE "-Wl,--subsystem,10")
+    else()
+        target_link_options(${MODULE} PRIVATE "-Wl,--subsystem,${SUBSYSTEM}:5.01")
+    endif()
 endfunction()
 
 function(set_image_base MODULE IMAGE_BASE)
@@ -473,7 +483,9 @@ function(set_module_type_toolchain MODULE TYPE)
         target_link_options(${MODULE} PRIVATE -Wl,--exclude-all-symbols,-file-alignment=0x1000,-section-alignment=0x1000)
 
         if(${TYPE} STREQUAL "wdmdriver")
-            target_link_options(${MODULE} PRIVATE "-Wl,--wdmdriver")
+            if(NOT MINGW_LINKER_IS_LLD)
+                target_link_options(${MODULE} PRIVATE "-Wl,--wdmdriver")
+            endif()
         endif()
 
         # Place INIT &.rsrc section at the tail of the module, before .reloc
@@ -498,6 +510,13 @@ function(set_module_type_toolchain MODULE TYPE)
         if(TYPE IN_LIST _gcc_compat_host_types)
             target_link_options(${MODULE} PRIVATE "-Wl,--whole-archive" "$<TARGET_FILE:gcc-compat>" "-Wl,--no-whole-archive")
             add_dependencies(${MODULE} gcc-compat)
+        endif()
+    endif()
+
+    if(_t_arch STREQUAL "arm64" AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang"))
+        if(TYPE IN_LIST KERNEL_MODULE_TYPES)
+            target_link_libraries(${MODULE} chkstk)
+            add_dependencies(${MODULE} chkstk)
         endif()
     endif()
 
@@ -546,6 +565,12 @@ if(ARCH STREQUAL "i386")
     endif()
 elseif(ARCH STREQUAL "amd64")
     set(DLLTOOL_EXTRA_ARGS -m i386:x86-64)
+elseif(ARCH STREQUAL "arm")
+    set(DLLTOOL_EXTRA_ARGS -m arm)
+elseif(ARCH STREQUAL "arm64")
+    set(DLLTOOL_EXTRA_ARGS -m arm64)
+elseif(ARCH STREQUAL "ia64")
+    set(DLLTOOL_EXTRA_ARGS -m ia64)
 else()
     set(DLLTOOL_EXTRA_ARGS)
 endif()
@@ -597,7 +622,7 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
         # import symbols. With --disable-stdcall-fixup enabled for linkers
         # in our multilib subbuild, that causes unresolved references.
         # Avoid --kill-at for i386 multilib builds to preserve decoration.
-        set(_dlltool_killat_flag --kill-at)
+        set(_dlltool_killat_flag -k)
         if(ARCH STREQUAL "i386" AND REACTOS_MULTILIB_I386)
             set(_dlltool_killat_flag)
         endif()
@@ -605,7 +630,7 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
             OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}.a
             # Delete any existing file in the private directory before creating new one
             COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/${_libname}.a
-            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} ${_dlltool_killat_flag} --output-lib=${_libname}.a -t ${_libname}
+            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} -d ${_implib_def} ${_dlltool_killat_flag} -l ${_libname}.a -t ${_libname}
             COMMAND ${CMAKE_RANLIB} ${_libname}.a
             DEPENDS ${_implib_def}
             WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
@@ -619,7 +644,7 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
             OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}.a
             # Delete any existing file in the private directory before creating new one
             COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/${_libname}.a
-            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} ${_dlltool_killat_flag} --output-lib=${_libname}.a -t ${_libname}
+            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} -d ${_implib_def} ${_dlltool_killat_flag} -l ${_libname}.a -t ${_libname}
             DEPENDS ${_implib_def}
             WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
     endif()
@@ -763,7 +788,21 @@ function(spec2def _dllname _spec_file)
 endfunction()
 
 macro(macro_mc FLAG FILE)
-    set(COMMAND_MC ${CMAKE_MC_COMPILER} -u ${FLAG} -b -h ${CMAKE_CURRENT_BINARY_DIR}/ -r ${CMAKE_CURRENT_BINARY_DIR}/ ${FILE})
+    set(_mc_target_flag "")
+    if(NOT CMAKE_HOST_WIN32)
+        if(ARCH STREQUAL "i386")
+            set(_mc_target_flag -F pe-i386)
+        elseif(ARCH STREQUAL "amd64")
+            set(_mc_target_flag -F pe-x86-64)
+        elseif(ARCH STREQUAL "arm")
+            set(_mc_target_flag -F pe-arm-little)
+        elseif(ARCH STREQUAL "arm64")
+            set(_mc_target_flag -F pe-aarch64-little)
+        elseif(ARCH STREQUAL "ia64")
+            set(_mc_target_flag -F pe-ia64)
+        endif()
+    endif()
+    set(COMMAND_MC ${CMAKE_MC_COMPILER} ${_mc_target_flag} -u ${FLAG} -b -h ${CMAKE_CURRENT_BINARY_DIR}/ -r ${CMAKE_CURRENT_BINARY_DIR}/ ${FILE})
 endmacro()
 
 # PSEH lib, needed with mingw
@@ -843,6 +882,10 @@ macro(add_asm_files _target)
 endmacro()
 
 function(add_linker_script _target _linker_script_file)
+    if(MINGW_LINKER_IS_LLD)
+        # lld COFF does not support GNU linker scripts.
+        return()
+    endif()
     get_filename_component(_file_full_path ${_linker_script_file} ABSOLUTE)
     target_link_options(${_target} PRIVATE "-Wl,-T,${_file_full_path}")
     set_property(TARGET ${_target} APPEND PROPERTY LINK_DEPENDS ${_file_full_path})
@@ -865,6 +908,7 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     if("${GXX_EXECUTABLE}" STREQUAL "g++" AND DEFINED CMAKE_CXX_COMPILER_TARGET AND NOT "${CMAKE_CXX_COMPILER_TARGET}" STREQUAL "")
         set(GXX_EXECUTABLE ${CMAKE_CXX_COMPILER_TARGET}-g++)
     endif()
+    set(_CLANG_CXX_FALLBACK "${CMAKE_CXX_COMPILER}")
 else()
     set(GXX_EXECUTABLE ${CMAKE_CXX_COMPILER})
 endif()
@@ -884,12 +928,17 @@ if(NOT IS_ABSOLUTE "${GXX_EXECUTABLE}")
     if(GXX_EXECUTABLE_FULL)
         set(GXX_EXECUTABLE ${GXX_EXECUTABLE_FULL})
     elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-        message(FATAL_ERROR
-            "${GXX_EXECUTABLE} not found. Ensure the MinGW toolchain is installed "
-            "and either add it to PATH or set TOOLCHAIN_PATH.")
+        if(_CLANG_CXX_FALLBACK)
+            set(GXX_EXECUTABLE ${_CLANG_CXX_FALLBACK})
+        else()
+            message(FATAL_ERROR
+                "${GXX_EXECUTABLE} not found. Ensure the MinGW toolchain is installed "
+                "and either add it to PATH or set TOOLCHAIN_PATH.")
+        endif()
     endif()
     unset(_gxx_search_paths)
 endif()
+unset(_CLANG_CXX_FALLBACK)
 
 # Allow MMX/SSE2 builtins when using clang (llvm-mingw); some headers emit MMX intrinsics.
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
@@ -937,12 +986,18 @@ else()
     add_library(libwinpthread INTERFACE)
 endif()
 
-add_library(libatomic STATIC IMPORTED)
 execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libatomic.a OUTPUT_VARIABLE LIBATOMIC_LOCATION)
 string(STRIP "${LIBATOMIC_LOCATION}" LIBATOMIC_LOCATION)
-set_target_properties(libatomic PROPERTIES IMPORTED_LOCATION ${LIBATOMIC_LOCATION})
-# libatomic may use the same TLS helpers as libgcc on MinGW targets
-target_link_libraries(libatomic INTERFACE libkernel32 libntdll)
+get_filename_component(_LIBATOMIC_REALPATH "${LIBATOMIC_LOCATION}" REALPATH)
+if(EXISTS "${_LIBATOMIC_REALPATH}")
+    add_library(libatomic STATIC IMPORTED)
+    set_target_properties(libatomic PROPERTIES IMPORTED_LOCATION ${LIBATOMIC_LOCATION})
+    # libatomic may use the same TLS helpers as libgcc on MinGW targets
+    target_link_libraries(libatomic INTERFACE libkernel32 libntdll)
+else()
+    message(STATUS "libatomic.a not found; skipping libatomic")
+endif()
+unset(_LIBATOMIC_REALPATH)
 
 add_library(libgcc STATIC IMPORTED)
 execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libgcc.a OUTPUT_VARIABLE LIBGCC_LOCATION)
@@ -1057,8 +1112,21 @@ get_filename_component(_GXX_BIN_DIR "${GXX_EXECUTABLE}" DIRECTORY)
 get_filename_component(_GXX_TOOLCHAIN_ROOT "${_GXX_BIN_DIR}" DIRECTORY)
 set(_LIBSTDCCXX_IS_LIBCXX FALSE)
 if(NOT _LIBSTDCCXX_REALPATH)
-    set(_LIBCXX_STATIC_CANDIDATES
-        "${_GXX_TOOLCHAIN_ROOT}/${_LIBSTDCCXX_TRIPLET}/lib/libc++.a"
+    set(_LIBCXX_STATIC_CANDIDATES "")
+    if(CMAKE_CXX_COMPILER_TARGET)
+        list(APPEND _LIBCXX_STATIC_CANDIDATES
+            "${_GXX_TOOLCHAIN_ROOT}/${CMAKE_CXX_COMPILER_TARGET}/lib/libc++.a")
+    endif()
+    if(MINGW_TOOLCHAIN_PREFIX)
+        list(APPEND _LIBCXX_STATIC_CANDIDATES
+            "${_GXX_TOOLCHAIN_ROOT}/${MINGW_TOOLCHAIN_PREFIX}/lib/libc++.a")
+    endif()
+    if(_LIBSTDCCXX_TRIPLET)
+        list(APPEND _LIBCXX_STATIC_CANDIDATES
+            "${_GXX_TOOLCHAIN_ROOT}/${_LIBSTDCCXX_TRIPLET}/lib/libc++.a")
+    endif()
+    list(APPEND _LIBCXX_STATIC_CANDIDATES
+        "${_GXX_TOOLCHAIN_ROOT}/aarch64-w64-mingw32/lib/libc++.a"
         "${_GXX_TOOLCHAIN_ROOT}/x86_64-w64-mingw32/lib/libc++.a"
         "${_GXX_TOOLCHAIN_ROOT}/i686-w64-mingw32/lib/libc++.a"
         "${_GXX_TOOLCHAIN_ROOT}/generic-w64-mingw32/lib/libc++.a")
@@ -1169,10 +1237,14 @@ endforeach()
 unset(_LIBSTDCCXX_EXTRA_INCLUDE_DIRS)
 set_target_properties(libstdc++ PROPERTIES IMPORTED_LOCATION ${LIBSTDCCXX_LOCATION})
 message(STATUS "Detected libstdc++ include roots: ${_LIBSTDCCXX_INCLUDE_DIRS}")
-if(_LIBSTDCCXX_INCLUDE_DIRS AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+set(REACTOS_CXX_STL_INCLUDE_DIRS)
+if(_LIBSTDCCXX_INCLUDE_DIRS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     foreach(_STDCPP_INCLUDE_DIR IN LISTS _LIBSTDCCXX_INCLUDE_DIRS)
-        add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-isystem${_STDCPP_INCLUDE_DIR}>")
+        list(APPEND REACTOS_CXX_STL_INCLUDE_DIRS "$<$<COMPILE_LANGUAGE:CXX>:${_STDCPP_INCLUDE_DIR}>")
     endforeach()
+endif()
+if(_LIBSTDCCXX_IS_LIBCXX)
+    add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:REACTOS_LIBCXX>)
 endif()
 unset(_GXX_BIN_DIR)
 unset(_GXX_TOOLCHAIN_ROOT)
@@ -1181,20 +1253,42 @@ unset(_LIBSTDCCXX_TRIPLET_CANDIDATE)
 unset(_LIBSTDCCXX_FALLBACK_INCLUDE_BASE)
 # libstdc++ requires libsupc++ and mingwex provided by GCC
 set(_LIBSTDCCXX_DEPS libsupc++ libmingwex oldnames)
-if(_LIBSTDCCXX_IS_LIBCXX)
-    set(_LIBSTDCCXX_DEPS libmingwex oldnames)
-    find_library(_LIBCXXABI_STATIC NAMES c++abi libc++abi PATHS
-        "${_LIBSTDCCXX_LIB_DIR}"
-        "${_LIBSTDCCXX_LIB_DIR}/../lib"
-        "${_GXX_TOOLCHAIN_ROOT}/lib"
-        NO_DEFAULT_PATH)
-    find_library(_LIBUNWIND_STATIC NAMES unwind libunwind PATHS
-        "${_LIBSTDCCXX_LIB_DIR}"
-        "${_LIBSTDCCXX_LIB_DIR}/../lib"
-        "${_GXX_TOOLCHAIN_ROOT}/lib"
-        NO_DEFAULT_PATH)
+    if(_LIBSTDCCXX_IS_LIBCXX)
+        set(_LIBSTDCCXX_DEPS libmingwex oldnames stdc++compat)
+        find_library(_LIBCXXABI_STATIC NAMES c++abi libc++abi PATHS
+            "${_LIBSTDCCXX_LIB_DIR}"
+            "${_LIBSTDCCXX_LIB_DIR}/../lib"
+            "${_GXX_TOOLCHAIN_ROOT}/lib"
+            NO_DEFAULT_PATH)
+        execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libunwind.a
+            OUTPUT_VARIABLE _LIBUNWIND_STATIC)
+        string(STRIP "${_LIBUNWIND_STATIC}" _LIBUNWIND_STATIC)
+        if(NOT EXISTS "${_LIBUNWIND_STATIC}")
+            set(_LIBUNWIND_STATIC "")
+        endif()
+        if(NOT _LIBUNWIND_STATIC)
+            find_library(_LIBUNWIND_STATIC NAMES unwind libunwind PATHS
+                "${_LIBSTDCCXX_LIB_DIR}"
+                "${_LIBSTDCCXX_LIB_DIR}/../lib"
+                "${_GXX_TOOLCHAIN_ROOT}/lib"
+                NO_DEFAULT_PATH)
+        endif()
     if(_LIBCXXABI_STATIC)
         list(APPEND _LIBSTDCCXX_DEPS "${_LIBCXXABI_STATIC}")
+    endif()
+    if(NOT _LIBUNWIND_STATIC)
+        set(_LIBUNWIND_CANDIDATES
+            "${_LIBSTDCCXX_LIB_DIR}/libunwind.a"
+            "${_LIBSTDCCXX_LIB_DIR}/libunwind.dll.a"
+            "${_LIBSTDCCXX_LIB_DIR}/../lib/libunwind.a"
+            "${_LIBSTDCCXX_LIB_DIR}/../lib/libunwind.dll.a")
+        foreach(_LIBUNWIND_CAND IN LISTS _LIBUNWIND_CANDIDATES)
+            if(EXISTS "${_LIBUNWIND_CAND}")
+                set(_LIBUNWIND_STATIC "${_LIBUNWIND_CAND}")
+                break()
+            endif()
+        endforeach()
+        unset(_LIBUNWIND_CANDIDATES)
     endif()
     if(_LIBUNWIND_STATIC)
         list(APPEND _LIBSTDCCXX_DEPS "${_LIBUNWIND_STATIC}")
@@ -1208,9 +1302,9 @@ unset(_LIBSTDCCXX_DEPS)
 # Helper interface library that carries the C++ STL usage requirements
 add_library(cppstl INTERFACE)
 target_link_libraries(cppstl INTERFACE libstdc++)
-if(_LIBSTDCCXX_INCLUDE_DIRS)
+if(_LIBSTDCCXX_INCLUDE_DIRS AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     foreach(_STDCPP_INCLUDE_DIR IN LISTS _LIBSTDCCXX_INCLUDE_DIRS)
-        target_include_directories(cppstl SYSTEM INTERFACE "${_STDCPP_INCLUDE_DIR}")
+        target_include_directories(cppstl SYSTEM BEFORE INTERFACE "${_STDCPP_INCLUDE_DIR}")
     endforeach()
 endif()
 target_compile_definitions(cppstl INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:PAL_STDCPP_COMPAT>")

@@ -201,17 +201,22 @@ KiInitializeUserApc(
     _In_ PVOID SystemArgument1,
     _In_ PVOID SystemArgument2)
 {
-    CONTEXT Context = { 0 };
+    PUAPC_FRAME ApcFrame;
+    CONTEXT LocalContext = { 0 };
     ULONG_PTR Stack;
 
     UNREFERENCED_PARAMETER(ExceptionFrame);
 
-    Context.ContextFlags = CONTEXT_FULL | CONTEXT_INTEGER;
-    KeTrapFrameToContext(TrapFrame, NULL, &Context);
+    ApcFrame = (PUAPC_FRAME)ALIGN_DOWN_POINTER_BY(TrapFrame->Sp - sizeof(*ApcFrame), 16);
 
-    Stack = (Context.Sp & ~0xF) - sizeof(CONTEXT);
-    ProbeForWrite((PVOID)Stack, sizeof(CONTEXT), sizeof(QUAD));
-    RtlMoveMemory((PVOID)Stack, &Context, sizeof(CONTEXT));
+    LocalContext.ContextFlags = CONTEXT_FULL | CONTEXT_INTEGER;
+    KeTrapFrameToContext(TrapFrame, NULL, &LocalContext);
+
+    Stack = (ULONG_PTR)ApcFrame;
+    ProbeForWrite(ApcFrame, sizeof(*ApcFrame), TYPE_ALIGNMENT(UAPC_FRAME));
+    RtlMoveMemory(&ApcFrame->Context, &LocalContext, sizeof(LocalContext));
+    ApcFrame->MachineFrame.Pc = TrapFrame->Pc;
+    ApcFrame->MachineFrame.Sp = TrapFrame->Sp;
 
     TrapFrame->X0 = (ULONG_PTR)NormalContext;
     TrapFrame->X1 = (ULONG_PTR)SystemArgument1;
@@ -220,4 +225,191 @@ KiInitializeUserApc(
     TrapFrame->Sp = Stack;
     TrapFrame->Pc = (ULONG_PTR)KeUserApcDispatcher;
     TrapFrame->Lr = (ULONG_PTR)KeUserApcDispatcher;
+}
+
+NTSTATUS
+FASTCALL
+KiUserModeCallout(
+    _Out_ PKCALLOUT_FRAME CalloutFrame)
+{
+    PKTHREAD CurrentThread;
+    PKTRAP_FRAME TrapFrame;
+    KTRAP_FRAME CallbackTrapFrame;
+    PKIPCR Pcr;
+    ULONG_PTR InitialStack;
+    NTSTATUS Status;
+
+    CurrentThread = KeGetCurrentThread();
+
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    ASSERT((CurrentThread->ApcStateIndex == OriginalApcEnvironment) &&
+           (CurrentThread->CombinedApcDisable == 0));
+
+    InitialStack = (ULONG_PTR)ALIGN_DOWN_POINTER_BY(CalloutFrame, 16);
+
+    if ((InitialStack - KERNEL_STACK_SIZE) < (ULONG_PTR)CurrentThread->StackLimit)
+    {
+        Status = MmGrowKernelStack((PVOID)InitialStack);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+    }
+
+    CalloutFrame->CallbackStack = (ULONG_PTR)CurrentThread->CallbackStack;
+    CalloutFrame->InitialStack = (ULONG_PTR)CurrentThread->InitialStack;
+
+    TrapFrame = CurrentThread->TrapFrame;
+    CalloutFrame->TrapFrame = (ULONG_PTR)TrapFrame;
+
+    CurrentThread->CallbackStack = CalloutFrame;
+
+    _disable();
+
+    CurrentThread->InitialStack = (PVOID)InitialStack;
+
+    CallbackTrapFrame = *TrapFrame;
+
+    Pcr = (PKIPCR)KeGetPcr();
+    if (Pcr != NULL)
+    {
+        Pcr->Prcb.RspBase = InitialStack;
+    }
+
+    CallbackTrapFrame.Pc = (ULONG_PTR)KeUserCallbackDispatcher;
+
+    _enable();
+
+    KiUserCallbackExit(&CallbackTrapFrame);
+}
+
+VOID
+KiSetupUserCalloutFrame(
+    _Out_ PUCALLOUT_FRAME UserCalloutFrame,
+    _In_ PKTRAP_FRAME TrapFrame,
+    _In_ ULONG ApiNumber,
+    _In_ PVOID Buffer,
+    _In_ ULONG BufferLength)
+{
+    UserCalloutFrame->Buffer = Buffer;
+    UserCalloutFrame->Length = BufferLength;
+    UserCalloutFrame->ApiNumber = ApiNumber;
+    UserCalloutFrame->MachineFrame.Pc = TrapFrame->Pc;
+    UserCalloutFrame->MachineFrame.Sp = TrapFrame->Sp;
+}
+
+NTSTATUS
+NTAPI
+KeUserModeCallback(
+    _In_ ULONG RoutineIndex,
+    _In_ PVOID Argument,
+    _In_ ULONG ArgumentLength,
+    _Out_ PVOID *Result,
+    _Out_ PULONG ResultLength)
+{
+    ULONG_PTR OldStack;
+    PUCHAR UserArguments;
+    PUCALLOUT_FRAME CalloutFrame;
+    PULONG_PTR UserStackPointer;
+    NTSTATUS CallbackStatus;
+    PTEB Teb;
+    ULONG GdiBatchCount = 0;
+
+    ASSERT(KeGetCurrentThread()->ApcState.KernelApcInProgress == FALSE);
+    ASSERT(KeGetPreviousMode() == UserMode);
+
+    UserStackPointer = KiGetUserModeStackAddress();
+    OldStack = *UserStackPointer;
+
+    _SEH2_TRY
+    {
+        UserArguments = (PUCHAR)ALIGN_DOWN_POINTER_BY(OldStack - ArgumentLength, 16);
+        CalloutFrame = ((PUCALLOUT_FRAME)UserArguments) - 1;
+
+        ProbeForWrite(CalloutFrame,
+                      sizeof(*CalloutFrame) + ArgumentLength,
+                      sizeof(PVOID));
+
+        RtlCopyMemory(UserArguments, Argument, ArgumentLength);
+
+        KiSetupUserCalloutFrame(CalloutFrame,
+                                KeGetCurrentThread()->TrapFrame,
+                                RoutineIndex,
+                                UserArguments,
+                                ArgumentLength);
+
+        Teb = KeGetCurrentThread()->Teb;
+
+        *UserStackPointer = (ULONG_PTR)CalloutFrame;
+        CallbackStatus = KiCallUserMode(Result, ResultLength);
+        if (CallbackStatus == STATUS_CALLBACK_POP_STACK)
+        {
+            OldStack = *UserStackPointer;
+        }
+
+        GdiBatchCount = Teb->GdiBatchCount;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    if (GdiBatchCount)
+    {
+        *UserStackPointer -= 256;
+        KeGdiFlushUserBatch();
+    }
+
+    *UserStackPointer = OldStack;
+    return CallbackStatus;
+}
+
+NTSTATUS
+NTAPI
+NtCallbackReturn(
+    _In_ PVOID Result,
+    _In_ ULONG ResultLength,
+    _In_ NTSTATUS CallbackStatus)
+{
+    PKTHREAD CurrentThread;
+    PKCALLOUT_FRAME CalloutFrame;
+    PKTRAP_FRAME CallbackTrapFrame, TrapFrame;
+    PKIPCR Pcr;
+
+    CurrentThread = KeGetCurrentThread();
+    CalloutFrame = CurrentThread->CallbackStack;
+    if (CalloutFrame == NULL)
+    {
+        return STATUS_NO_CALLBACK_ACTIVE;
+    }
+
+    *((PVOID*)CalloutFrame->OutputBuffer) = Result;
+    *((ULONG*)CalloutFrame->OutputLength) = ResultLength;
+
+    CallbackTrapFrame = CurrentThread->TrapFrame;
+
+    _disable();
+
+    Pcr = (PKIPCR)KeGetPcr();
+
+    TrapFrame = (PKTRAP_FRAME)CalloutFrame->TrapFrame;
+
+    if (CallbackStatus == STATUS_CALLBACK_POP_STACK)
+    {
+        *TrapFrame = *CallbackTrapFrame;
+    }
+
+    if (Pcr != NULL)
+    {
+        Pcr->Prcb.RspBase = CalloutFrame->InitialStack;
+    }
+
+    CurrentThread->InitialStack = (PVOID)CalloutFrame->InitialStack;
+    CurrentThread->TrapFrame = TrapFrame;
+    CurrentThread->CallbackStack = (PVOID)CalloutFrame->CallbackStack;
+
+    _enable();
+
+    KiCallbackReturn(CalloutFrame, CallbackStatus);
 }

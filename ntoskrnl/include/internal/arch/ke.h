@@ -29,6 +29,8 @@
 #include <internal/arm/ke.h>
 #elif defined(_M_AMD64)
 #include <internal/amd64/ke.h>
+#elif defined(_M_ARM64)
+#include <arch/arm64/include/ke.h>
 #else
 #error "Unknown processor"
 #endif

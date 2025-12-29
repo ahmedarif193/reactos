@@ -37,10 +37,18 @@ KiTrapReturn:
     ands    w27, w22, #0xF
     b.eq    1f
     msr     sp_el0, x26              /* Returning to EL0 */
-    b       2f
+    /* Ensure x18/TPIDR_EL0 track the current TEB for user-mode ABI */
+    adrp    x16, KeArm64CurrentThread
+    ldr     x16, [x16, #:lo12:KeArm64CurrentThread]
+    cbz     x16, 2f
+    ldr     x18, [x16, #ThTeb]
+    msr     tpidr_el0, x18
+2:
+    ldr     x16, [x20, #TfX16]
+    b       3f
 1:
     mov     sp, x26                  /* Returning to EL1 */
-2:
+3:
     /* Restore non-volatiles when an exception frame is present */
     cbz     x21, 3f
     mov     x11, x21

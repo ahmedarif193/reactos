@@ -34,6 +34,18 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(dbghelp);
 
+#ifdef __aarch64__
+#ifdef DBGHELP_STATIC_LIB
+#define ARM64_CTX_FP(ctx) ((ctx)->DUMMYUNIONNAME.DUMMYSTRUCTNAME.Fp)
+#define ARM64_CTX_LR(ctx) ((ctx)->DUMMYUNIONNAME.DUMMYSTRUCTNAME.Lr)
+#define ARM64_CTX_X(ctx)  ((ctx)->DUMMYUNIONNAME.X)
+#else
+#define ARM64_CTX_FP(ctx) ((ctx)->Fp)
+#define ARM64_CTX_LR(ctx) ((ctx)->Lr)
+#define ARM64_CTX_X(ctx)  ((ctx)->X)
+#endif
+#endif
+
 static BOOL arm64_get_addr(HANDLE hThread, const CONTEXT* ctx,
                            enum cpu_addr ca, ADDRESS64* addr)
 {
@@ -44,7 +56,7 @@ static BOOL arm64_get_addr(HANDLE hThread, const CONTEXT* ctx,
 #ifdef __aarch64__
     case cpu_addr_pc:    addr->Offset = ctx->Pc;  return TRUE;
     case cpu_addr_stack: addr->Offset = ctx->Sp;  return TRUE;
-    case cpu_addr_frame: addr->Offset = ctx->Fp; return TRUE;
+    case cpu_addr_frame: addr->Offset = ARM64_CTX_FP(ctx); return TRUE;
 #endif
     default: addr->Mode = -1;
         return FALSE;
@@ -73,7 +85,7 @@ static BOOL fetch_next_frame(struct cpu_stack_walk* csw, union ctx *pcontext,
 {
     DWORD64 xframe;
     CONTEXT *context = &pcontext->ctx;
-    DWORD_PTR               oldReturn = context->Lr;
+    DWORD_PTR               oldReturn = ARM64_CTX_LR(context);
 
     if (dwarf2_virtual_unwind(csw, curr_pc, pcontext, &xframe))
     {
@@ -82,7 +94,7 @@ static BOOL fetch_next_frame(struct cpu_stack_walk* csw, union ctx *pcontext,
         return TRUE;
     }
 
-    if (context->Pc == context->Lr) return FALSE;
+    if (context->Pc == ARM64_CTX_LR(context)) return FALSE;
     context->Pc = oldReturn;
 
     return TRUE;
@@ -128,8 +140,8 @@ static BOOL arm64_stack_walk(struct cpu_stack_walk *csw, STACKFRAME64 *frame,
 
     /* set frame information */
     frame->AddrStack.Offset = context->ctx.Sp;
-    frame->AddrReturn.Offset = context->ctx.Lr;
-    frame->AddrFrame.Offset = context->ctx.Fp;
+    frame->AddrReturn.Offset = ARM64_CTX_LR(&context->ctx);
+    frame->AddrFrame.Offset = ARM64_CTX_FP(&context->ctx);
     frame->AddrPC.Offset = context->ctx.Pc;
 
     frame->Far = TRUE;
@@ -205,10 +217,10 @@ static void *arm64_fetch_context_reg(union ctx *pctx, unsigned regno, unsigned *
     case CV_ARM64_X0 + 25:
     case CV_ARM64_X0 + 26:
     case CV_ARM64_X0 + 27:
-    case CV_ARM64_X0 + 28: *size = sizeof(ctx->X[0]); return &ctx->X[regno - CV_ARM64_X0];
+    case CV_ARM64_X0 + 28: *size = sizeof(ARM64_CTX_X(ctx)[0]); return &ARM64_CTX_X(ctx)[regno - CV_ARM64_X0];
     case CV_ARM64_PSTATE:  *size = sizeof(ctx->Cpsr);   return &ctx->Cpsr;
-    case CV_ARM64_FP:      *size = sizeof(ctx->Fp); return &ctx->Fp;
-    case CV_ARM64_LR:      *size = sizeof(ctx->Lr); return &ctx->Lr;
+    case CV_ARM64_FP:      *size = sizeof(ARM64_CTX_FP(ctx)); return &ARM64_CTX_FP(ctx);
+    case CV_ARM64_LR:      *size = sizeof(ARM64_CTX_LR(ctx)); return &ARM64_CTX_LR(ctx);
     case CV_ARM64_SP:      *size = sizeof(ctx->Sp);     return &ctx->Sp;
     case CV_ARM64_PC:      *size = sizeof(ctx->Pc);     return &ctx->Pc;
     }

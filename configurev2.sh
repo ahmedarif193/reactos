@@ -323,13 +323,16 @@ if [ -z "$TOOLCHAIN_PREFIX" ]; then
     esac
 fi
 
-# macOS: use the bundled llvm-mingw root for clang builds on Intel hosts.
-# On Apple Silicon, prefer the built-in /usr/bin/clang and a fixed llvm-mingw sysroot.
+# macOS: use the llvm-mingw toolchain root for clang builds.
+# On Apple Silicon arm64 targets, force the default llvm-mingw root and built-in clang.
 if [ "$(uname -s)" = "Darwin" ] && [ "$USE_CLANG" -eq 1 ]; then
-    if [ "$(uname -m)" = "arm64" ]; then
+    if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
         MAC_LLVM_MINGW_ROOT="/Users/mac/mingw-toolchains/llvm-mingw-20251216-ucrt-macos-universal"
         DEFAULT_TOOLCHAIN_ROOT="$MAC_LLVM_MINGW_ROOT"
         DEFAULT_TOOLCHAIN_PATH_OVERRIDE="${MAC_LLVM_MINGW_ROOT}/bin"
+        if [ -z "$CMAKE_EXTRA_ARGS" ] || [[ "$CMAKE_EXTRA_ARGS" != *"CMAKE_C_COMPILER="* ]]; then
+            CMAKE_EXTRA_ARGS="$CMAKE_EXTRA_ARGS -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++"
+        fi
     else
         MAC_LLVM_MINGW_ROOT="${HOME}/mingw-toolchains/llvm-mingw-20251216-ucrt-macos-universal"
         if [ -d "${MAC_LLVM_MINGW_ROOT}/bin" ]; then
@@ -350,8 +353,6 @@ fi
 if [ -z "$TOOLCHAIN_PATH" ]; then
     if [ -n "$DEFAULT_TOOLCHAIN_PATH_OVERRIDE" ]; then
         TOOLCHAIN_PATH="$DEFAULT_TOOLCHAIN_PATH_OVERRIDE"
-    elif [ "$USE_CLANG" -eq 1 ] && [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
-        TOOLCHAIN_PATH=""
     else
         case "$TOOLCHAIN_PREFIX" in
             x86_64-w64-mingw32)
@@ -474,16 +475,6 @@ if [ -f "CMakeCache.txt" ]; then
     echo "Removing existing CMakeCache.txt..."
     rm -f CMakeCache.txt
 fi
-if [ -f "host-tools/CMakeCache.txt" ]; then
-    rm -f host-tools/CMakeCache.txt
-fi
-if [ -f "host-tools/bin/CMakeCache.txt" ]; then
-    rm -f host-tools/bin/CMakeCache.txt
-fi
-if [ -d "host-tools/bin/CMakeFiles" ]; then
-    rm -rf host-tools/bin/CMakeFiles
-fi
-
 echo "Running CMake configuration..."
 echo
 

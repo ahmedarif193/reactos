@@ -128,6 +128,14 @@ if(MSVC_IDE)
 endif()
 
 # Bison and Flex support
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin"
+    AND (NOT DEFINED BISON_EXECUTABLE OR BISON_EXECUTABLE STREQUAL "/usr/bin/bison"))
+    if(EXISTS "/opt/homebrew/opt/bison/bin/bison")
+        set(BISON_EXECUTABLE "/opt/homebrew/opt/bison/bin/bison" CACHE FILEPATH "Bison executable" FORCE)
+    elseif(EXISTS "/usr/local/opt/bison/bin/bison")
+        set(BISON_EXECUTABLE "/usr/local/opt/bison/bin/bison" CACHE FILEPATH "Bison executable" FORCE)
+    endif()
+endif()
 find_package(BISON REQUIRED)
 find_package(FLEX REQUIRED)
 
@@ -305,6 +313,7 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
         endif()
     elseif(ARCH STREQUAL "arm64")
         # GNU tools refer to arm64 as aarch64
+        add_compile_definitions(_M_ARM64)
         add_definitions(-D_ARM64_ -D__arm64__ -D__aarch64__ -D_WIN64)
     endif()
 
@@ -353,28 +362,59 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     # We're using widl now for both MSVC and GCC builds
     include(sdk/cmake/widl-support.cmake)
 
-    include_directories(
-        sdk/include
-        sdk/include/crt
-        sdk/include/ddk
-        sdk/include/ndk
-        sdk/include/psdk
-        sdk/include/reactos
-        sdk/include/reactos/libs
-        sdk/include/vcruntime
-        sdk/include/winrt
-        ${REACTOS_BINARY_DIR}/sdk/include
-        ${REACTOS_BINARY_DIR}/sdk/include/psdk
-        ${REACTOS_BINARY_DIR}/sdk/include/ddk
-        ${REACTOS_BINARY_DIR}/sdk/include/dxsdk
-        ${REACTOS_BINARY_DIR}/sdk/include/reactos
-        ${REACTOS_BINARY_DIR}/sdk/include/reactos/mc
-        sdk/include/dxsdk
-        sdk/lib/pseh/include
-    )
+    if(REACTOS_CXX_STL_INCLUDE_DIRS)
+        include_directories(SYSTEM
+            sdk/include
+            sdk/include/crt
+            sdk/include/ddk
+            sdk/include/ndk
+            sdk/include/psdk
+            sdk/include/reactos
+            sdk/include/reactos/libs
+            sdk/include/vcruntime
+            sdk/include/winrt
+            ${REACTOS_BINARY_DIR}/sdk/include
+            ${REACTOS_BINARY_DIR}/sdk/include/psdk
+            ${REACTOS_BINARY_DIR}/sdk/include/ddk
+            ${REACTOS_BINARY_DIR}/sdk/include/dxsdk
+            ${REACTOS_BINARY_DIR}/sdk/include/reactos
+            ${REACTOS_BINARY_DIR}/sdk/include/reactos/mc
+            sdk/include/dxsdk
+            sdk/lib/pseh/include
+        )
+    else()
+        include_directories(
+            sdk/include
+            sdk/include/crt
+            sdk/include/ddk
+            sdk/include/ndk
+            sdk/include/psdk
+            sdk/include/reactos
+            sdk/include/reactos/libs
+            sdk/include/vcruntime
+            sdk/include/winrt
+            ${REACTOS_BINARY_DIR}/sdk/include
+            ${REACTOS_BINARY_DIR}/sdk/include/psdk
+            ${REACTOS_BINARY_DIR}/sdk/include/ddk
+            ${REACTOS_BINARY_DIR}/sdk/include/dxsdk
+            ${REACTOS_BINARY_DIR}/sdk/include/reactos
+            ${REACTOS_BINARY_DIR}/sdk/include/reactos/mc
+            sdk/include/dxsdk
+            sdk/lib/pseh/include
+        )
+    endif()
 
     if(ARCH STREQUAL "arm")
         include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos/arm)
+    endif()
+
+    if(REACTOS_CXX_STL_INCLUDE_DIRS)
+        get_directory_property(_reactos_includes INCLUDE_DIRECTORIES)
+        foreach(_dir IN LISTS REACTOS_CXX_STL_INCLUDE_DIRS)
+            list(REMOVE_ITEM _reactos_includes "${_dir}")
+        endforeach()
+        set_property(DIRECTORY PROPERTY INCLUDE_DIRECTORIES "${REACTOS_CXX_STL_INCLUDE_DIRS};${_reactos_includes}")
+        unset(_reactos_includes)
     endif()
 
     add_dependency_header()

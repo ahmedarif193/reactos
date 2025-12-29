@@ -185,7 +185,51 @@ typedef struct _KEXCEPTION_FRAME
     ULONG64 Return;
 } KEXCEPTION_FRAME, *PKEXCEPTION_FRAME;
 
+//
+// Machine Frame
+//
+typedef struct _MACHINE_FRAME
+{
+    ULONG64 Sp;
+    ULONG64 Pc;
+} MACHINE_FRAME, *PMACHINE_FRAME;
+
+//
+// User side APC dispatcher frame
+//
+typedef struct _UAPC_FRAME
+{
+    CONTEXT Context;
+    MACHINE_FRAME MachineFrame;
+} UAPC_FRAME, *PUAPC_FRAME;
+
+//
+// Stack frame layout for KiUserExceptionDispatcher
+//
+typedef struct _KUSER_EXCEPTION_STACK
+{
+    CONTEXT Context;
+    EXCEPTION_RECORD ExceptionRecord;
+    ULONG64 Alignment;
+    MACHINE_FRAME MachineFrame;
+} KUSER_EXCEPTION_STACK, *PKUSER_EXCEPTION_STACK;
+
 typedef KEXCEPTION_FRAME KCALLOUT_FRAME, *PKCALLOUT_FRAME;
+
+//
+// User side callout frame
+//
+typedef struct _UCALLOUT_FRAME
+{
+    ULONG64 P1Home;
+    ULONG64 P2Home;
+    ULONG64 P3Home;
+    ULONG64 P4Home;
+    PVOID Buffer;
+    ULONG Length;
+    ULONG ApiNumber;
+    MACHINE_FRAME MachineFrame;
+} UCALLOUT_FRAME, *PUCALLOUT_FRAME;
 
 typedef struct _KSTART_FRAME
 {
@@ -670,6 +714,7 @@ extern BOOLEAN KeArm64DpcRoutineActive;
 #define KeGetCurrentPrcb()             ((KeArm64CurrentPcr && KeArm64CurrentPcr->CurrentPrcb) ? \
                                         KeArm64CurrentPcr->CurrentPrcb : \
                                         (KeArm64CurrentPcr ? &KeArm64CurrentPcr->Prcb : (PKPRCB)NULL))
+#define PRIMARY_VECTOR_BASE            0x00
 
 //
 // Special Registers Structure (outside of CONTEXT)

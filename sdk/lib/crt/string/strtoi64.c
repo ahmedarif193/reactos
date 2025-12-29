@@ -92,5 +92,12 @@ _strtoi64(const char *nptr, char **endptr, int base)
     return _strtoi64_l(nptr, endptr, base, NULL);
 }
 
+long long
+CDECL
+strtoll(const char *nptr, char **endptr, int base)
+{
+    return _strtoi64(nptr, endptr, base);
+}
+
 
 /* EOF */

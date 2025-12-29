@@ -2499,7 +2499,7 @@ UserFault:
                 /* And make a new shiny one with our page */
                 MiInitializePfn(PageFrameIndex, PointerPte, TRUE);
                 TempPte.u.Hard.PageFrameNumber = PageFrameIndex;
-                TempPte.u.Hard.Write = 1;
+                MI_MAKE_WRITE_PAGE(&TempPte);
                 TempPte.u.Hard.CopyOnWrite = 0;
 
                 MI_WRITE_VALID_PTE(PointerPte, TempPte);
@@ -2529,7 +2529,12 @@ UserFault:
             if (CurrentProcess->Pcb.Flags.ExecuteEnable)
             {
                 /* Fix up the PTE to be executable */
+#if defined(_M_ARM64)
+                TempPte.u.Hard.UserNoExecute = 0;
+                TempPte.u.Hard.PrivilegedNoExecute = 0;
+#else
                 TempPte.u.Hard.NoExecute = 0;
+#endif
                 MI_UPDATE_VALID_PTE(PointerPte, TempPte);
                 MiUnlockProcessWorkingSet(CurrentProcess, CurrentThread);
                 return STATUS_SUCCESS;
