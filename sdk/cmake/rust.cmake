@@ -13,6 +13,64 @@ else()
     set(ROS_RUST_FOUND FALSE)
 endif()
 
+# Optional override for rustup toolchain selection when no default is configured.
+set(ROS_RUSTUP_TOOLCHAIN_DEFAULT "" CACHE STRING "Rustup toolchain to use when no default is configured")
+
+# Optional explicit Rust tool homes (derived from detected executables when unset).
+set(ROS_CARGO_HOME "" CACHE PATH "CARGO_HOME for Rust tooling")
+set(ROS_RUSTUP_HOME "" CACHE PATH "RUSTUP_HOME for Rust tooling")
+
+function(_ros_rust_deduce_homes _tool _out_cargo _out_rustup)
+    set(_cargo "")
+    set(_rustup "")
+    if(_tool AND EXISTS "${_tool}")
+        get_filename_component(_bin_dir "${_tool}" DIRECTORY)
+        get_filename_component(_cargo_home "${_bin_dir}" DIRECTORY)
+        if(EXISTS "${_cargo_home}")
+            set(_cargo "${_cargo_home}")
+            get_filename_component(_cargo_parent "${_cargo_home}" DIRECTORY)
+            if(EXISTS "${_cargo_parent}/.rustup")
+                set(_rustup "${_cargo_parent}/.rustup")
+            endif()
+        endif()
+    endif()
+    set(${_out_cargo} "${_cargo}" PARENT_SCOPE)
+    set(${_out_rustup} "${_rustup}" PARENT_SCOPE)
+endfunction()
+
+if(ROS_CARGO_HOME STREQUAL "" OR ROS_RUSTUP_HOME STREQUAL "")
+    set(_deduced_cargo "")
+    set(_deduced_rustup "")
+    if(ROS_RUSTUP_EXECUTABLE)
+        _ros_rust_deduce_homes("${ROS_RUSTUP_EXECUTABLE}" _deduced_cargo _deduced_rustup)
+    endif()
+    if((_deduced_cargo STREQUAL "" OR _deduced_rustup STREQUAL "") AND ROS_CARGO_EXECUTABLE)
+        _ros_rust_deduce_homes("${ROS_CARGO_EXECUTABLE}" _deduced_cargo _deduced_rustup)
+    endif()
+    if(ROS_CARGO_HOME STREQUAL "" AND NOT _deduced_cargo STREQUAL "")
+        set(ROS_CARGO_HOME "${_deduced_cargo}" CACHE PATH "CARGO_HOME for Rust tooling" FORCE)
+    endif()
+    if(ROS_RUSTUP_HOME STREQUAL "" AND NOT _deduced_rustup STREQUAL "")
+        set(ROS_RUSTUP_HOME "${_deduced_rustup}" CACHE PATH "RUSTUP_HOME for Rust tooling" FORCE)
+    endif()
+    unset(_deduced_cargo)
+    unset(_deduced_rustup)
+endif()
+
+if(NOT ROS_CARGO_HOME STREQUAL "" AND "$ENV{CARGO_HOME}" STREQUAL "")
+    set(ENV{CARGO_HOME} "${ROS_CARGO_HOME}")
+endif()
+if(NOT ROS_RUSTUP_HOME STREQUAL "" AND "$ENV{RUSTUP_HOME}" STREQUAL "")
+    set(ENV{RUSTUP_HOME} "${ROS_RUSTUP_HOME}")
+endif()
+
+set(_ros_rust_env_prefix "")
+if(NOT ROS_CARGO_HOME STREQUAL "")
+    list(APPEND _ros_rust_env_prefix "CARGO_HOME=${ROS_CARGO_HOME}")
+endif()
+if(NOT ROS_RUSTUP_HOME STREQUAL "")
+    list(APPEND _ros_rust_env_prefix "RUSTUP_HOME=${ROS_RUSTUP_HOME}")
+endif()
 # Verify the toolchain is usable (rustup default set, etc.)
 if(ROS_RUST_FOUND)
     set(_ros_rust_toolchain_ok TRUE)
@@ -54,7 +112,13 @@ if(ROS_RUST_FOUND)
         message(WARNING "Rust toolchain not usable; disabling Rust modules. Configure a default toolchain (e.g., 'rustup default stable') to enable.\n rustc: ${_ros_rustc_err}\n cargo: ${_ros_cargo_err}")
         set(ROS_RUST_FOUND FALSE)
     elseif(_ros_rust_missing_default)
-        message(STATUS "Rust toolchain proxies detected without default; relying on per-target RUSTUP_TOOLCHAIN assignments.")
+        if(ROS_RUSTUP_TOOLCHAIN_DEFAULT STREQUAL "")
+            set(ROS_RUSTUP_TOOLCHAIN_DEFAULT "stable" CACHE STRING "Rustup toolchain to use when no default is configured" FORCE)
+        endif()
+        if("$ENV{RUSTUP_TOOLCHAIN}" STREQUAL "")
+            set(ENV{RUSTUP_TOOLCHAIN} "${ROS_RUSTUP_TOOLCHAIN_DEFAULT}")
+        endif()
+        message(STATUS "Rust toolchain proxies detected without default; using RUSTUP_TOOLCHAIN='${ROS_RUSTUP_TOOLCHAIN_DEFAULT}'.")
     endif()
 endif()
 
@@ -227,7 +291,7 @@ function(ros_rust_make_env _out_var)
         return()
     endif()
 
-    set(_env_list
+    set(_env_list ${_ros_rust_env_prefix}
         "CC_${ROS_RUST_TARGET_TRIPLE}=${ROS_RUST_LINKER}"
         "AR_${ROS_RUST_TARGET_TRIPLE}=${ROS_RUST_AR}"
         "RUSTFLAGS=-C linker=${ROS_RUST_LINKER}"
@@ -303,17 +367,28 @@ function(ros_add_rust_executable _target)
             endif()
         endforeach()
     endif()
+    if(_rustup_toolchain_override STREQUAL "" AND NOT ROS_RUSTUP_TOOLCHAIN_DEFAULT STREQUAL "")
+        set(_rustup_toolchain_override "${ROS_RUSTUP_TOOLCHAIN_DEFAULT}")
+    endif()
 
     if(ROS_RUSTUP_EXECUTABLE AND ROS_RUST_TARGET_TRIPLE)
         set(_rustup_toolchain_args)
         if(NOT _rustup_toolchain_override STREQUAL "")
             set(_rustup_toolchain_args --toolchain ${_rustup_toolchain_override})
         endif()
+        set(_rustup_env ${_ros_rust_env_prefix})
+        if(NOT _rustup_toolchain_override STREQUAL "")
+            list(APPEND _rustup_env "RUSTUP_TOOLCHAIN=${_rustup_toolchain_override}")
+        endif()
+        set(_rustup_cmd ${ROS_RUSTUP_EXECUTABLE})
+        if(_rustup_env)
+            set(_rustup_cmd ${CMAKE_COMMAND} -E env ${_rustup_env} ${ROS_RUSTUP_EXECUTABLE})
+        endif()
         set(_install_target_stamp ${CMAKE_CURRENT_BINARY_DIR}/cargo-${_target}/.${ROS_RUST_TARGET_TRIPLE}.installed.stamp)
         add_custom_command(
             OUTPUT ${_install_target_stamp}
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/cargo-${_target}
-            COMMAND ${ROS_RUSTUP_EXECUTABLE} target add ${_rustup_toolchain_args} ${ROS_RUST_TARGET_TRIPLE}
+            COMMAND ${_rustup_cmd} target add ${_rustup_toolchain_args} ${ROS_RUST_TARGET_TRIPLE}
             COMMAND ${CMAKE_COMMAND} -E touch ${_install_target_stamp}
             VERBATIM
             COMMENT "Ensuring Rust target '${ROS_RUST_TARGET_TRIPLE}' is installed"
@@ -444,6 +519,8 @@ void _Unwind_Resume(void *state)
     foreach(_pair ${_base_env})
         if(_pair MATCHES "^RUSTFLAGS=")
             # skip, we will insert our own below
+        elseif(_pair MATCHES "^RUSTUP_TOOLCHAIN=")
+            # skip, will re-add after overrides
         else()
             list(APPEND _env "${_pair}")
         endif()

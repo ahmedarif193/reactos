@@ -134,7 +134,11 @@ ensure_macos_dependencies() {
     fi
 
     local missing=()
-    for pkg in cmake ninja mingw-w64; do
+    local packages=(cmake ninja)
+    if [ "${USE_CLANG:-0}" -eq 1 ]; then
+        packages+=(mingw-w64)
+    fi
+    for pkg in "${packages[@]}"; do
         if ! brew list --versions "$pkg" >/dev/null 2>&1; then
             missing+=("$pkg")
         fi
@@ -309,37 +313,20 @@ if [ -z "$TOOLCHAIN_PREFIX" ]; then
     esac
 fi
 
-# macOS: pick toolchain root based on requested compiler
-if [ "$(uname -s)" = "Darwin" ]; then
-    if [ "$USE_CLANG" -eq 1 ]; then
-        MAC_LLVM_MINGW_ROOT="${HOME}/mingw-toolchains/llvm-mingw-20251216-ucrt-macos-universal"
-        if [ -d "${MAC_LLVM_MINGW_ROOT}/bin" ]; then
-            DEFAULT_TOOLCHAIN_ROOT="$MAC_LLVM_MINGW_ROOT"
-            DEFAULT_TOOLCHAIN_PATH_OVERRIDE="${MAC_LLVM_MINGW_ROOT}/bin"
-            if [ -z "$CMAKE_EXTRA_ARGS" ] || [[ "$CMAKE_EXTRA_ARGS" != *"CMAKE_C_COMPILER="* ]]; then
-                CLANG_BIN="${MAC_LLVM_MINGW_ROOT}/bin"
-                CLANG_C="${CLANG_BIN}/clang-21"
-                CLANG_CXX="${CLANG_BIN}/clang++-21"
-                [ -x "$CLANG_C" ] || CLANG_C="${CLANG_BIN}/clang"
-                [ -x "$CLANG_CXX" ] || CLANG_CXX="${CLANG_BIN}/clang++"
-                CMAKE_EXTRA_ARGS="$CMAKE_EXTRA_ARGS -DCMAKE_C_COMPILER=${CLANG_C} -DCMAKE_CXX_COMPILER=${CLANG_CXX}"
-            fi
-        fi
-    else
-        case "$TOOLCHAIN_PREFIX" in
-            x86_64-w64-mingw32)
-                BREW_MINGW_ROOT="/opt/homebrew/opt/mingw-w64/toolchain-x86_64"
-                ;;
-            i686-w64-mingw32)
-                BREW_MINGW_ROOT="/opt/homebrew/opt/mingw-w64/toolchain-i686"
-                ;;
-            *)
-                BREW_MINGW_ROOT=""
-                ;;
-        esac
-        if [ -n "$BREW_MINGW_ROOT" ] && [ -d "$BREW_MINGW_ROOT/bin" ]; then
-            DEFAULT_TOOLCHAIN_ROOT="$BREW_MINGW_ROOT"
-            DEFAULT_TOOLCHAIN_PATH_OVERRIDE="${BREW_MINGW_ROOT}/bin"
+# macOS: use the bundled llvm-mingw root for clang builds.
+# MinGW GCC follows the default Linux-style layout under $HOME/mingw-toolchains.
+if [ "$(uname -s)" = "Darwin" ] && [ "$USE_CLANG" -eq 1 ]; then
+    MAC_LLVM_MINGW_ROOT="${HOME}/mingw-toolchains/llvm-mingw-20251216-ucrt-macos-universal"
+    if [ -d "${MAC_LLVM_MINGW_ROOT}/bin" ]; then
+        DEFAULT_TOOLCHAIN_ROOT="$MAC_LLVM_MINGW_ROOT"
+        DEFAULT_TOOLCHAIN_PATH_OVERRIDE="${MAC_LLVM_MINGW_ROOT}/bin"
+        if [ -z "$CMAKE_EXTRA_ARGS" ] || [[ "$CMAKE_EXTRA_ARGS" != *"CMAKE_C_COMPILER="* ]]; then
+            CLANG_BIN="${MAC_LLVM_MINGW_ROOT}/bin"
+            CLANG_C="${CLANG_BIN}/clang-21"
+            CLANG_CXX="${CLANG_BIN}/clang++-21"
+            [ -x "$CLANG_C" ] || CLANG_C="${CLANG_BIN}/clang"
+            [ -x "$CLANG_CXX" ] || CLANG_CXX="${CLANG_BIN}/clang++"
+            CMAKE_EXTRA_ARGS="$CMAKE_EXTRA_ARGS -DCMAKE_C_COMPILER=${CLANG_C} -DCMAKE_CXX_COMPILER=${CLANG_CXX}"
         fi
     fi
 fi
@@ -407,13 +394,6 @@ fi
 
 BUILD_TYPE_SANITIZED="${BUILD_TYPE// /_}"
 OUTPUT_DIR="${OUTPUT_DIR}-${BUILD_TYPE_SANITIZED}"
-
-if [ "$(uname -s)" = "Darwin" ]; then
-    HOMEBREW_DLLTOOL="/opt/homebrew/bin/${TOOLCHAIN_PREFIX}-dlltool"
-    if [ -x "$HOMEBREW_DLLTOOL" ]; then
-        CMAKE_DLLTOOL_OVERRIDE="$HOMEBREW_DLLTOOL"
-    fi
-fi
 
 echo "========================================="
 echo "ReactOS Build Configuration"

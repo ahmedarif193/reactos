@@ -13,10 +13,25 @@ if(NOT GEN_SYSCALLS_CARGO_EXECUTABLE)
     message(FATAL_ERROR "cargo not found: required to build gen_syscalls host tool")
 endif()
 
+set(_gen_syscalls_env)
+if(DEFINED ROS_CARGO_HOME AND NOT "${ROS_CARGO_HOME}" STREQUAL "")
+    list(APPEND _gen_syscalls_env "CARGO_HOME=${ROS_CARGO_HOME}")
+endif()
+if(DEFINED ROS_RUSTUP_HOME AND NOT "${ROS_RUSTUP_HOME}" STREQUAL "")
+    list(APPEND _gen_syscalls_env "RUSTUP_HOME=${ROS_RUSTUP_HOME}")
+endif()
+if(DEFINED ROS_RUSTUP_TOOLCHAIN_DEFAULT AND NOT "${ROS_RUSTUP_TOOLCHAIN_DEFAULT}" STREQUAL "")
+    list(APPEND _gen_syscalls_env "RUSTUP_TOOLCHAIN=${ROS_RUSTUP_TOOLCHAIN_DEFAULT}")
+endif()
+set(_gen_syscalls_cargo_cmd ${GEN_SYSCALLS_CARGO_EXECUTABLE})
+if(_gen_syscalls_env)
+    set(_gen_syscalls_cargo_cmd ${CMAKE_COMMAND} -E env ${_gen_syscalls_env} ${GEN_SYSCALLS_CARGO_EXECUTABLE})
+endif()
+
 add_custom_command(
     OUTPUT ${GEN_SYSCALLS_OUTPUT}
     COMMAND ${CMAKE_COMMAND} -E make_directory "${TOOLS_FOLDER}"
-    COMMAND ${GEN_SYSCALLS_CARGO_EXECUTABLE} build
+    COMMAND ${_gen_syscalls_cargo_cmd} build
             --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
             --bin gen_syscalls
             --target-dir "${GEN_SYSCALLS_BUILD_DIR}"

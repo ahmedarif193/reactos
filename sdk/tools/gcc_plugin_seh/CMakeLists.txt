@@ -1,6 +1,15 @@
 
 add_host_module(gcc_plugin_seh main.cpp)
 target_include_directories(gcc_plugin_seh PRIVATE ${GCC_PLUGIN_DIR}/include)
+set(_gmp_hint_paths)
+if(APPLE)
+    list(APPEND _gmp_hint_paths "/opt/homebrew/include" "/usr/local/include")
+endif()
+find_path(GMP_INCLUDE_DIR gmp.h HINTS ${_gmp_hint_paths})
+if(GMP_INCLUDE_DIR)
+    target_include_directories(gcc_plugin_seh SYSTEM PRIVATE ${GMP_INCLUDE_DIR})
+endif()
+unset(_gmp_hint_paths)
 set_target_properties(gcc_plugin_seh PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(APPLE)
     # Allow unresolved GCC internals to be bound at load time by the compiler binary
