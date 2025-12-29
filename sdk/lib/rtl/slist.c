@@ -14,6 +14,49 @@
 #define NDEBUG
 #include <debug.h>
 
+#if defined(_M_ARM64)
+typedef union _RTL_SLIST_CAS128
+{
+    __int128 Value;
+    struct
+    {
+        ULONGLONG Low;
+        ULONGLONG High;
+    } Parts;
+} RTL_SLIST_CAS128, *PRTL_SLIST_CAS128;
+
+static __inline unsigned char
+RtlpInterlockedCompareExchange128(
+    _Interlocked_operand_ volatile __int64 *Destination,
+    __int64 ExchangeHigh,
+    __int64 ExchangeLow,
+    __int64 *ComparandResult)
+{
+    RTL_SLIST_CAS128 Expected;
+    RTL_SLIST_CAS128 Desired;
+
+    Expected.Parts.Low = (ULONGLONG)ComparandResult[0];
+    Expected.Parts.High = (ULONGLONG)ComparandResult[1];
+    Desired.Parts.Low = (ULONGLONG)ExchangeLow;
+    Desired.Parts.High = (ULONGLONG)ExchangeHigh;
+
+    if (__atomic_compare_exchange_n((volatile __int128 *)Destination,
+                                    &Expected.Value,
+                                    Desired.Value,
+                                    0,
+                                    __ATOMIC_ACQ_REL,
+                                    __ATOMIC_ACQUIRE))
+    {
+        return 1;
+    }
+
+    ComparandResult[0] = (LONG64)Expected.Parts.Low;
+    ComparandResult[1] = (LONG64)Expected.Parts.High;
+    return 0;
+}
+#define _InterlockedCompareExchange128 RtlpInterlockedCompareExchange128
+#endif
+
 #ifdef _WIN64
 BOOLEAN RtlpUse16ByteSLists = -1;
 #endif
@@ -41,6 +84,14 @@ RtlInitializeSListHead(
     /* On amd64 we don't need to store anything */
     SListHead->Region = 0;
 #endif /* _IA64_ */
+
+#if defined(_M_ARM64)
+    /* ARM64 always uses 16-byte SLIST headers. */
+    if (RtlpUse16ByteSLists == (BOOLEAN)-1)
+    {
+        RtlpUse16ByteSLists = TRUE;
+    }
+#endif
 #endif /* _WIN64 */
 
     SListHead->Alignment = 0;
@@ -363,4 +414,3 @@ RtlInterlockedFlushSList(
 #endif
 
 #endif
-

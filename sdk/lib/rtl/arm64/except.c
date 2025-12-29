@@ -9,6 +9,17 @@
 #define NDEBUG
 #include <debug.h>
 
+BOOLEAN
+NTAPI
+RtlpUnwindInternal(
+    _In_opt_ PVOID TargetFrame,
+    _In_opt_ PVOID TargetIp,
+    _In_ PEXCEPTION_RECORD ExceptionRecord,
+    _In_ PVOID ReturnValue,
+    _In_ PCONTEXT ContextRecord,
+    _In_opt_ struct _UNWIND_HISTORY_TABLE *HistoryTable,
+    _In_ ULONG Flags);
+
 VOID
 NTAPI
 RtlInitializeContext(
@@ -35,21 +46,25 @@ RtlDispatchException(
     _In_ PEXCEPTION_RECORD ExceptionRecord,
     _In_ PCONTEXT ContextRecord)
 {
-    UNREFERENCED_PARAMETER(ExceptionRecord);
-    UNREFERENCED_PARAMETER(ContextRecord);
-    return FALSE;
+    BOOLEAN Handled;
+
+    if (RtlCallVectoredExceptionHandlers(ExceptionRecord, ContextRecord))
+    {
+        RtlCallVectoredContinueHandlers(ExceptionRecord, ContextRecord);
+        return TRUE;
+    }
+
+    Handled = RtlpUnwindInternal(NULL,
+                                 NULL,
+                                 ExceptionRecord,
+                                 0,
+                                 ContextRecord,
+                                 NULL,
+                                 UNW_FLAG_EHANDLER);
+
+    RtlCallVectoredContinueHandlers(ExceptionRecord, ContextRecord);
+
+    return Handled;
 }
 
-VOID
-NTAPI
-RtlUnwind(
-    _In_opt_ PVOID TargetFrame,
-    _In_opt_ PVOID TargetIp,
-    _In_opt_ PEXCEPTION_RECORD ExceptionRecord,
-    _In_ PVOID ReturnValue)
-{
-    UNREFERENCED_PARAMETER(TargetFrame);
-    UNREFERENCED_PARAMETER(TargetIp);
-    UNREFERENCED_PARAMETER(ExceptionRecord);
-    UNREFERENCED_PARAMETER(ReturnValue);
-}
+/* RtlUnwind is provided by unwind.c for ARM64 */

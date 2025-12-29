@@ -18,12 +18,38 @@ extern ULONG FASTCALL HalGetInterruptSource(VOID);
 
 /* Simple vector→KINTERRUPT chain table (INTIDs up to 1023 for GICv2/v3) */
 #define ARM64_MAX_INTID 1024
+#define ARM64_SGI_IPI 0
+#define ARM64_SGI_APC 1
+#define ARM64_SGI_DPC 2
 static PKINTERRUPT KiArm64IntTable[ARM64_MAX_INTID] = {0};
 static KSPIN_LOCK KiArm64IntTableLock;
 /* Simple timer wiring for bring-up */
 static KINTERRUPT KiArm64TimerInterrupt;
 static KSPIN_LOCK KiArm64TimerLock;
 static ULONGLONG KiArm64TimerPeriodTicks;
+static KINTERRUPT KiArm64IpiInterrupt;
+static KSPIN_LOCK KiArm64IpiLock;
+static KINTERRUPT KiArm64DpcInterrupt;
+static KSPIN_LOCK KiArm64DpcLock;
+static KINTERRUPT KiArm64ApcInterrupt;
+static KSPIN_LOCK KiArm64ApcLock;
+
+BOOLEAN
+NTAPI
+KiIpiServiceRoutine(
+    _In_ PKTRAP_FRAME TrapFrame,
+    _In_ PKEXCEPTION_FRAME ExceptionFrame);
+
+VOID
+NTAPI
+KiDispatchInterrupt(VOID);
+
+VOID
+NTAPI
+KiDeliverApc(
+    _In_ KPROCESSOR_MODE DeliveryMode,
+    _In_ PKEXCEPTION_FRAME ExceptionFrame,
+    _In_ PKTRAP_FRAME TrapFrame);
 
 static __inline ULONGLONG KiArm64ReadCntFrq(void)
 {
@@ -56,6 +82,41 @@ KiArm64TimerIsr(
     {
         DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_TRACE_LEVEL, "[arm64] Timer tick %ld\n", t);
     }
+    return TRUE;
+}
+
+static BOOLEAN NTAPI
+KiArm64IpiIsr(
+    _In_ PKINTERRUPT Interrupt,
+    _In_opt_ PVOID ServiceContext)
+{
+    UNREFERENCED_PARAMETER(Interrupt);
+    UNREFERENCED_PARAMETER(ServiceContext);
+
+    return KiIpiServiceRoutine(NULL, NULL);
+}
+
+static BOOLEAN NTAPI
+KiArm64DpcIsr(
+    _In_ PKINTERRUPT Interrupt,
+    _In_opt_ PVOID ServiceContext)
+{
+    UNREFERENCED_PARAMETER(Interrupt);
+    UNREFERENCED_PARAMETER(ServiceContext);
+
+    KiDispatchInterrupt();
+    return TRUE;
+}
+
+static BOOLEAN NTAPI
+KiArm64ApcIsr(
+    _In_ PKINTERRUPT Interrupt,
+    _In_opt_ PVOID ServiceContext)
+{
+    UNREFERENCED_PARAMETER(Interrupt);
+    UNREFERENCED_PARAMETER(ServiceContext);
+
+    KiDeliverApc(KernelMode, NULL, NULL);
     return TRUE;
 }
 
@@ -104,6 +165,49 @@ KeInitInterrupts(VOID)
         }
     }
     KiArm64BootStageLog("[arm64] KeInitInterrupts: HAL/GIC init");
+
+    /* Wire SGIs for IPI/APC/DPC */
+    KeInitializeSpinLock(&KiArm64IpiLock);
+    KeInitializeInterrupt(&KiArm64IpiInterrupt,
+                          KiArm64IpiIsr,
+                          NULL,
+                          &KiArm64IpiLock,
+                          ARM64_SGI_IPI,
+                          IPI_LEVEL,
+                          IPI_LEVEL,
+                          Latched,
+                          FALSE,
+                          0,
+                          FALSE);
+    (VOID)KeConnectInterrupt(&KiArm64IpiInterrupt);
+
+    KeInitializeSpinLock(&KiArm64DpcLock);
+    KeInitializeInterrupt(&KiArm64DpcInterrupt,
+                          KiArm64DpcIsr,
+                          NULL,
+                          &KiArm64DpcLock,
+                          ARM64_SGI_DPC,
+                          DISPATCH_LEVEL,
+                          DISPATCH_LEVEL,
+                          Latched,
+                          FALSE,
+                          0,
+                          FALSE);
+    (VOID)KeConnectInterrupt(&KiArm64DpcInterrupt);
+
+    KeInitializeSpinLock(&KiArm64ApcLock);
+    KeInitializeInterrupt(&KiArm64ApcInterrupt,
+                          KiArm64ApcIsr,
+                          NULL,
+                          &KiArm64ApcLock,
+                          ARM64_SGI_APC,
+                          APC_LEVEL,
+                          APC_LEVEL,
+                          Latched,
+                          FALSE,
+                          0,
+                          FALSE);
+    (VOID)KeConnectInterrupt(&KiArm64ApcInterrupt);
 
     /* Wire the generic timer (PPI INTID 30) for a periodic heartbeat */
     {
@@ -217,6 +321,8 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
 {
     ULONG IntId;
     KIRQL OldIrql;
+    KIRQL RequestIrql = DISPATCH_LEVEL;
+    PKINTERRUPT Head;
     BOOLEAN Begun;
 
     /* Ask HAL for current INTID */
@@ -226,8 +332,20 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
     if ((IntId == 0) || (IntId >= ARM64_MAX_INTID))
         return;
 
-    Begun = HalBeginSystemInterrupt(DISPATCH_LEVEL, IntId, &OldIrql);
+    Head = KiArm64IntTable[IntId];
+    if (Head != NULL)
+    {
+        RequestIrql = Head->Irql;
+    }
+
+    Begun = HalBeginSystemInterrupt(RequestIrql, IntId, &OldIrql);
     if (!Begun) return;
+
+    if (Head == NULL)
+    {
+        HalEndSystemInterrupt(OldIrql, NULL);
+        return;
+    }
 
     /* Dispatch to kernel’s ISR chain */
     KiArm64DispatchChain(IntId, OldIrql);

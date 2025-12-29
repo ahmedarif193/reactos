@@ -30,8 +30,30 @@ KiIpiSend(
     _In_ KAFFINITY TargetSet,
     _In_ ULONG IpiRequest)
 {
+#ifdef CONFIG_SMP
+    KAFFINITY ProcessorMask;
+    ULONG Index;
+
+    if (TargetSet == 0)
+        return;
+
+    for (Index = 0, ProcessorMask = 1; Index < KeNumberProcessors; Index++, ProcessorMask <<= 1)
+    {
+        if (TargetSet & ProcessorMask)
+        {
+            PKPRCB Prcb = KiProcessorBlock[Index];
+            if (Prcb != NULL)
+            {
+                InterlockedBitTestAndSet((PLONG)&Prcb->IpiFrozen, IpiRequest);
+            }
+        }
+    }
+
+    HalRequestIpi(TargetSet);
+#else
     UNREFERENCED_PARAMETER(TargetSet);
     UNREFERENCED_PARAMETER(IpiRequest);
+#endif
 }
 
 VOID
@@ -84,6 +106,27 @@ KiIpiServiceRoutine(
 {
     UNREFERENCED_PARAMETER(TrapFrame);
     UNREFERENCED_PARAMETER(ExceptionFrame);
+#ifdef CONFIG_SMP
+    {
+        PKPRCB Prcb = KeGetCurrentPrcb();
+
+        if (InterlockedBitTestAndReset((PLONG)&Prcb->IpiFrozen, IPI_APC))
+        {
+            HalRequestSoftwareInterrupt(APC_LEVEL);
+        }
+
+        if (InterlockedBitTestAndReset((PLONG)&Prcb->IpiFrozen, IPI_DPC))
+        {
+            Prcb->DpcInterruptRequested = TRUE;
+            HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
+        }
+
+        if (InterlockedBitTestAndReset((PLONG)&Prcb->IpiFrozen, IPI_SYNCH_REQUEST))
+        {
+            DbgBreakPoint();
+        }
+    }
+#endif
     return TRUE;
 }
 

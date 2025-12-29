@@ -53,6 +53,7 @@ KiArm64EmitStageLog(_In_z_ PCSTR Stage)
 }
 
 extern BOOLEAN KdDebuggerNotPresent;
+extern BOOLEAN RtlpUse16ByteSLists;
 
 KINTERRUPT KxUnexpectedInterrupt;
 ULONG KeNumberProcessIds;
@@ -218,6 +219,10 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
         KeFeatureBits = 0;
         KeProcessorLevel = 0;
         KeProcessorRevision = 0;
+
+        /* ARM64 uses 16-byte SLIST headers and 128-bit CAS */
+        RtlpUse16ByteSLists = TRUE;
+        SharedUserData->ProcessorFeatures[PF_COMPARE_EXCHANGE128] = TRUE;
 
         KeLowerIrql(APC_LEVEL);
         KiArm64BootStageLog("[arm64] KiInitializeKernel: before KiInitSystem");

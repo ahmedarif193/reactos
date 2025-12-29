@@ -2100,6 +2100,61 @@ MmArmInitSystem(IN ULONG Phase,
         MmUserProbeAddress = (ULONG_PTR)MI_USER_PROBE_ADDRESS;
         MmHighestUserAddress = (PVOID)MI_HIGHEST_USER_ADDRESS;
 
+#if defined(_M_ARM64)
+        if ((ULONG_PTR)MmHighestUserAddress >= (ULONG_PTR)MmSystemRangeStart)
+        {
+            DPRINT1("ARM64 VA layout invalid: highest user %p >= system start %p\n",
+                    MmHighestUserAddress,
+                    MmSystemRangeStart);
+            KeBugCheckEx(MEMORY_MANAGEMENT,
+                         (ULONG_PTR)MmHighestUserAddress,
+                         (ULONG_PTR)MmSystemRangeStart,
+                         0,
+                         0);
+        }
+
+        if ((ULONG_PTR)KSEG0_BASE < (ULONG_PTR)MmSystemRangeStart)
+        {
+            DPRINT1("ARM64 VA layout mismatch: KSEG0_BASE %p < system start %p\n",
+                    (PVOID)KSEG0_BASE,
+                    MmSystemRangeStart);
+        }
+
+        if (((ULONG_PTR)MmSystemRangeStart & (1ULL << 47)) == 0)
+        {
+            DPRINT1("ARM64 VA layout invalid: system start %p not in upper VA half\n",
+                    MmSystemRangeStart);
+            KeBugCheckEx(MEMORY_MANAGEMENT,
+                         (ULONG_PTR)MmSystemRangeStart,
+                         0,
+                         0,
+                         0);
+        }
+
+        if (((ULONG_PTR)MmHighestUserAddress & (1ULL << 47)) != 0)
+        {
+            DPRINT1("ARM64 VA layout invalid: highest user %p not in lower VA half\n",
+                    MmHighestUserAddress);
+            KeBugCheckEx(MEMORY_MANAGEMENT,
+                         (ULONG_PTR)MmHighestUserAddress,
+                         0,
+                         0,
+                         0);
+        }
+
+        if ((ULONG_PTR)MmUserProbeAddress > (ULONG_PTR)MmHighestUserAddress)
+        {
+            DPRINT1("ARM64 VA layout invalid: user probe %p > highest user %p\n",
+                    (PVOID)(ULONG_PTR)MmUserProbeAddress,
+                    MmHighestUserAddress);
+            KeBugCheckEx(MEMORY_MANAGEMENT,
+                         (ULONG_PTR)MmUserProbeAddress,
+                         (ULONG_PTR)MmHighestUserAddress,
+                         0,
+                         0);
+        }
+#endif
+
         /* Highest PTE and PDE based on the addresses above */
         MiHighestUserPte = MiAddressToPte(MmHighestUserAddress);
         MiHighestUserPde = MiAddressToPde(MmHighestUserAddress);

@@ -317,22 +317,41 @@ VOID
 NTAPI
 KiDispatchInterrupt(VOID)
 {
-#if defined(_M_ARM64) || defined(__aarch64__)
-    ULONG64 esr = 0, elr = 0, far = 0;
-    CHAR Stage[192];
-    __asm__ __volatile__("mrs %0, esr_el1" : "=r"(esr));
-    __asm__ __volatile__("mrs %0, elr_el1" : "=r"(elr));
-    __asm__ __volatile__("mrs %0, far_el1" : "=r"(far));
-    if (NT_SUCCESS(RtlStringCbPrintfA(Stage,
-                                      sizeof(Stage),
-                                      "[arm64] KiDispatchInterrupt: ESR=0x%llx ELR=%p FAR=%p",
-                                      (unsigned long long)esr,
-                                      (PVOID)(ULONG_PTR)elr,
-                                      (PVOID)(ULONG_PTR)far)))
+    PKIPCR Pcr = (PKIPCR)KeGetPcr();
+    PKPRCB Prcb = &Pcr->Prcb;
+    PKTHREAD NewThread, OldThread;
+
+    _disable();
+
+    if ((Prcb->DpcData[0].DpcQueueDepth) ||
+        (Prcb->TimerRequest) ||
+        (Prcb->DeferredReadyListHead.Next))
     {
-        KiArm64BootStageLog(Stage);
+        KiRetireDpcList(Prcb);
     }
-#else
-    UNIMPLEMENTED;
-#endif
+
+    _enable();
+
+    if (Prcb->QuantumEnd)
+    {
+        Prcb->QuantumEnd = FALSE;
+        KiQuantumEnd();
+    }
+    else if (Prcb->NextThread)
+    {
+        KiAcquirePrcbLock(Prcb);
+
+        OldThread = Prcb->CurrentThread;
+        NewThread = Prcb->NextThread;
+
+        Prcb->NextThread = NULL;
+        Prcb->CurrentThread = NewThread;
+
+        NewThread->State = Running;
+        OldThread->WaitReason = WrDispatchInt;
+
+        KxQueueReadyThread(OldThread, Prcb);
+
+        KiSwapContext(APC_LEVEL, OldThread);
+    }
 }

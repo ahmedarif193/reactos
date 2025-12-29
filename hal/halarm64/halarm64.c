@@ -300,12 +300,17 @@ PUCHAR KdComPortInUse = NULL;
 #define GICD_ICPENDR      0x280
 #define GICD_IPRIORITYR   0x400
 #define GICD_ITARGETSR    0x800
+#define GICD_SGIR         0xF00
 
 #define GICC_CTLR         0x000
 #define GICC_PMR          0x004
 #define GICC_BPR          0x008
 #define GICC_IAR          0x00C
 #define GICC_EOIR         0x010
+
+#define HAL_ARM64_SGI_IPI 0
+#define HAL_ARM64_SGI_APC 1
+#define HAL_ARM64_SGI_DPC 2
 
 static __inline volatile ULONG *HalpMmio(ULONG_PTR Base, ULONG Offset)
 {
@@ -323,6 +328,16 @@ static BOOLEAN HalpLoggedGicOnce = FALSE; /* One-time post-KD log */
 FORCEINLINE ULONGLONG HalpReadPfr0(void)
 {
     ULONGLONG v; __asm__ __volatile__("mrs %0, id_aa64pfr0_el1" : "=r"(v)); return v;
+}
+
+FORCEINLINE ULONGLONG HalpReadCntfrq(void)
+{
+    ULONGLONG v; __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(v)); return v;
+}
+
+FORCEINLINE ULONGLONG HalpReadCntpct(void)
+{
+    ULONGLONG v; __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(v)); return v;
 }
 
 FORCEINLINE unsigned int HalpReadIccSre(void)
@@ -360,6 +375,28 @@ FORCEINLINE VOID HalpWriteIccIgrpen1(unsigned int v)
     __asm__ __volatile__("msr icc_igrpen1_el1, %0; isb" :: "r"((ULONGLONG)v) : "memory");
 }
 #endif
+
+static VOID
+HalpArm64SendSgi(
+    _In_ KAFFINITY TargetSet,
+    _In_ ULONG SgiId)
+{
+    ULONG TargetList;
+
+    if ((TargetSet == 0) || (SgiId > 15))
+        return;
+
+    if (HalpGicUseSysRegs)
+    {
+        return;
+    }
+
+    TargetList = (ULONG)(TargetSet & 0xFF);
+    if (TargetList == 0)
+        return;
+
+    *HalpMmio(HAL_ARM64_GICD_BASE, GICD_SGIR) = (SgiId & 0xF) | (TargetList << 16);
+}
 
 BOOLEAN
 NTAPI
@@ -457,14 +494,14 @@ HalInitSystem(
     if (HalpGicUseSysRegs)
     {
 #if defined(_M_ARM64) || defined(__aarch64__)
-        HalpWriteIccPmr(0x00); /* mask all for now */
+        HalpWriteIccPmr(0xFF); /* allow all priorities */
         HalpWriteIccBpr1(0);
         HalpWriteIccIgrpen1(1); /* enable Group1 */
 #endif
     }
     else
     {
-        *HalpMmio(HAL_ARM64_GICC_BASE, GICC_PMR) = 0x00; /* mask all for now */
+        *HalpMmio(HAL_ARM64_GICC_BASE, GICC_PMR) = 0xFF; /* allow all priorities */
         *HalpMmio(HAL_ARM64_GICC_BASE, GICC_BPR) = 0x0;
         *HalpMmio(HAL_ARM64_GICC_BASE, GICC_CTLR) = 0x3; /* enable Group0+Group1 */
     }
@@ -484,8 +521,16 @@ FASTCALL
 HalRequestSoftwareInterrupt(
     _In_ KIRQL SoftwareInterruptRequested)
 {
-    UNREFERENCED_PARAMETER(SoftwareInterruptRequested);
-    UNIMPLEMENTED_STUB();
+    KAFFINITY Target = (KAFFINITY)1 << KeGetCurrentProcessorNumber();
+
+    if (SoftwareInterruptRequested >= DISPATCH_LEVEL)
+    {
+        HalpArm64SendSgi(Target, HAL_ARM64_SGI_DPC);
+    }
+    else if (SoftwareInterruptRequested >= APC_LEVEL)
+    {
+        HalpArm64SendSgi(Target, HAL_ARM64_SGI_APC);
+    }
 }
 
 VOID
@@ -591,10 +636,12 @@ HalBeginSystemInterrupt(
 {
     ULONG cpu = KeGetCurrentProcessorNumber();
     ULONG intid = Vector;
-    if (OldIrql) *OldIrql = KeRaiseIrqlToDpcLevel();
-    if (cpu < MAXIMUM_PROCESSORS) HalpArm64ActiveIntId[cpu] = intid;
     /* Consider INTID 1023 spurious on GICv2 */
-    if (intid == 1023 || intid == 0) return FALSE;
+    if (intid == 1023 || intid == 0)
+        return FALSE;
+
+    if (OldIrql) *OldIrql = KfRaiseIrql(Irql);
+    if (cpu < MAXIMUM_PROCESSORS) HalpArm64ActiveIntId[cpu] = intid;
     return TRUE;
 }
 
@@ -609,7 +656,7 @@ HalCalibratePerformanceCounter(
     UNREFERENCED_PARAMETER(Period);
     if (Frequency)
     {
-        *Frequency = 0;
+        *Frequency = HalpReadCntfrq();
     }
 }
 
@@ -851,7 +898,11 @@ VOID
 NTAPI
 HalProcessorIdle(VOID)
 {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    __asm__ __volatile__("wfi" ::: "memory");
+#else
     UNIMPLEMENTED_STUB();
+#endif
 }
 
 BOOLEAN
@@ -895,8 +946,7 @@ NTAPI
 HalRequestIpi(
     _In_ KAFFINITY TargetSet)
 {
-    UNREFERENCED_PARAMETER(TargetSet);
-    UNIMPLEMENTED_STUB();
+    HalpArm64SendSgi(TargetSet, HAL_ARM64_SGI_IPI);
 }
 
 ARC_STATUS
@@ -1155,8 +1205,9 @@ KeQueryPerformanceCounter(
     LARGE_INTEGER Counter = {0};
     if (PerformanceFrequency)
     {
-        PerformanceFrequency->QuadPart = 0;
+        PerformanceFrequency->QuadPart = (LONGLONG)HalpReadCntfrq();
     }
+    Counter.QuadPart = (LONGLONG)HalpReadCntpct();
     return Counter;
 }
 
@@ -1165,6 +1216,16 @@ NTAPI
 KeStallExecutionProcessor(
     _In_ ULONG MicroSeconds)
 {
-    UNREFERENCED_PARAMETER(MicroSeconds);
-    UNIMPLEMENTED_STUB();
+    ULONGLONG Frequency = HalpReadCntfrq();
+    ULONGLONG Start = HalpReadCntpct();
+    ULONGLONG Ticks;
+
+    if (Frequency == 0)
+        return;
+
+    Ticks = (Frequency / 1000000ULL) * (ULONGLONG)MicroSeconds;
+    while ((HalpReadCntpct() - Start) < Ticks)
+    {
+        __asm__ __volatile__("isb" ::: "memory");
+    }
 }

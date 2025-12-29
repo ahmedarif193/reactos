@@ -52,16 +52,38 @@ label:                                                                   \
     bl KiArm64BugCheckEntry;                                             \
     b 1b
 
-#define PERM_VECTOR_DEF(label, id)                                       \
+#define PERM_VECTOR_ASYNC(label, id)                                     \
     .global label;                                                       \
 label:                                                                   \
-    stp x29, x30, [sp, #-16]!;                                           \
-    mov x29, sp;                                                         \
-    /* Call the C veneer for HAL-aware dispatch (stub for now) */        \
+    /* Preserve volatile state for IRQ/FIQ dispatch */                   \
+    sub sp, sp, #0xB0; /* 22 regs * 8 bytes */                           \
+    stp x0,  x1,  [sp, #0x00];                                           \
+    stp x2,  x3,  [sp, #0x10];                                           \
+    stp x4,  x5,  [sp, #0x20];                                           \
+    stp x6,  x7,  [sp, #0x30];                                           \
+    stp x8,  x9,  [sp, #0x40];                                           \
+    stp x10, x11, [sp, #0x50];                                           \
+    stp x12, x13, [sp, #0x60];                                           \
+    stp x14, x15, [sp, #0x70];                                           \
+    stp x16, x17, [sp, #0x80];                                           \
+    stp x18, x19, [sp, #0x90];                                           \
+    stp x29, x30, [sp, #0xA0];                                           \
+    /* Call the C veneer for HAL-aware dispatch */                       \
     mov w0, #(id);                                                       \
     bl KiArm64InterruptDispatchEntry;                                    \
-    mov sp, x29;                                                         \
-    ldp x29, x30, [sp], #16;                                             \
+    /* Restore volatile state */                                         \
+    ldp x29, x30, [sp, #0xA0];                                           \
+    ldp x18, x19, [sp, #0x90];                                           \
+    ldp x16, x17, [sp, #0x80];                                           \
+    ldp x14, x15, [sp, #0x70];                                           \
+    ldp x12, x13, [sp, #0x60];                                           \
+    ldp x10, x11, [sp, #0x50];                                           \
+    ldp x8,  x9,  [sp, #0x40];                                           \
+    ldp x6,  x7,  [sp, #0x30];                                           \
+    ldp x4,  x5,  [sp, #0x20];                                           \
+    ldp x2,  x3,  [sp, #0x10];                                           \
+    ldp x0,  x1,  [sp, #0x00];                                           \
+    add sp, sp, #0xB0;                                                   \
     eret
 
 #define PERM_VECTOR_BUGCHECK(label, id)                                  \
@@ -76,22 +98,22 @@ label:                                                                   \
 
 /* Table entries for all 16 vectors */
 PERM_VECTOR_SYNC(KiArm64PermVectorSyncSp0,          0)
-PERM_VECTOR_DEF (KiArm64PermVectorIrqSp0,           1)
-PERM_VECTOR_DEF (KiArm64PermVectorFiqSp0,           2)
+PERM_VECTOR_ASYNC (KiArm64PermVectorIrqSp0,           1)
+PERM_VECTOR_ASYNC (KiArm64PermVectorFiqSp0,           2)
 PERM_VECTOR_SYNC(KiArm64PermVectorSErrorSp0,    3)
 PERM_VECTOR_SYNC(KiArm64PermVectorSyncSpx,          4)
-PERM_VECTOR_DEF (KiArm64PermVectorIrqSpx,           5)
-PERM_VECTOR_DEF (KiArm64PermVectorFiqSpx,           6)
+PERM_VECTOR_ASYNC (KiArm64PermVectorIrqSpx,           5)
+PERM_VECTOR_ASYNC (KiArm64PermVectorFiqSpx,           6)
 PERM_VECTOR_SYNC(KiArm64PermVectorSErrorSpx,    7)
 PERM_VECTOR_SYNC(KiArm64PermVectorSyncLowerA64,     8)
-PERM_VECTOR_DEF (KiArm64PermVectorIrqLowerA64,      9)
-PERM_VECTOR_DEF (KiArm64PermVectorFiqLowerA64,     10)
+PERM_VECTOR_ASYNC (KiArm64PermVectorIrqLowerA64,      9)
+PERM_VECTOR_ASYNC (KiArm64PermVectorFiqLowerA64,     10)
 PERM_VECTOR_SYNC(KiArm64PermVectorSErrorLowerA64,  11)
 PERM_VECTOR_SYNC(KiArm64PermVectorSyncLowerA32,    12)
-PERM_VECTOR_DEF (KiArm64PermVectorIrqLowerA32,     13)
-PERM_VECTOR_DEF (KiArm64PermVectorFiqLowerA32,     14)
+PERM_VECTOR_ASYNC (KiArm64PermVectorIrqLowerA32,     13)
+PERM_VECTOR_ASYNC (KiArm64PermVectorFiqLowerA32,     14)
 PERM_VECTOR_SYNC(KiArm64PermVectorSErrorLowerA32,  15)
 
 #undef PERM_VECTOR_SYNC
-#undef PERM_VECTOR_DEF
+#undef PERM_VECTOR_ASYNC
 #undef PERM_VECTOR_BUGCHECK
