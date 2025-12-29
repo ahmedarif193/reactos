@@ -136,7 +136,9 @@ ensure_macos_dependencies() {
     local missing=()
     local packages=(cmake ninja)
     if [ "${USE_CLANG:-0}" -eq 1 ]; then
-        packages+=(mingw-w64)
+        if [ "$(uname -m)" != "arm64" ]; then
+            packages+=(mingw-w64)
+        fi
     fi
     for pkg in "${packages[@]}"; do
         if ! brew list --versions "$pkg" >/dev/null 2>&1; then
@@ -189,6 +191,7 @@ CLEAN_BUILD=0
 CMAKE_EXTRA_ARGS=""
 USE_CLANG=0
 CLANG_VERSION=""
+CLANG_VERSION_SET=0
 CMAKE_DLLTOOL_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
@@ -229,6 +232,7 @@ while [[ $# -gt 0 ]]; do
             USE_CLANG=1
             TOOLCHAIN_FILE="toolchain-clang.cmake"
             CLANG_VERSION="${1#*=}"
+            CLANG_VERSION_SET=1
             shift
             ;;
         --clang)
@@ -236,6 +240,7 @@ while [[ $# -gt 0 ]]; do
             TOOLCHAIN_FILE="toolchain-clang.cmake"
             if [ -n "$2" ] && [[ "$2" != -* ]]; then
                 CLANG_VERSION="$2"
+                CLANG_VERSION_SET=1
                 shift 2
             else
                 shift
@@ -247,6 +252,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             CLANG_VERSION="$2"
+            CLANG_VERSION_SET=1
             USE_CLANG=1
             TOOLCHAIN_FILE="toolchain-clang.cmake"
             shift 2
@@ -270,8 +276,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [ "$USE_CLANG" -eq 1 ] && [ -z "$CLANG_VERSION" ]; then
-    CLANG_VERSION="21"
+if [ "$USE_CLANG" -eq 1 ] && [ -z "$CLANG_VERSION" ] && [ "$CLANG_VERSION_SET" -eq 0 ]; then
+    if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+        CLANG_VERSION=""
+    else
+        CLANG_VERSION="21"
+    fi
 fi
 
 ensure_macos_dependencies
@@ -313,20 +323,26 @@ if [ -z "$TOOLCHAIN_PREFIX" ]; then
     esac
 fi
 
-# macOS: use the bundled llvm-mingw root for clang builds.
-# MinGW GCC follows the default Linux-style layout under $HOME/mingw-toolchains.
+# macOS: use the bundled llvm-mingw root for clang builds on Intel hosts.
+# On Apple Silicon, prefer the built-in /usr/bin/clang and a fixed llvm-mingw sysroot.
 if [ "$(uname -s)" = "Darwin" ] && [ "$USE_CLANG" -eq 1 ]; then
-    MAC_LLVM_MINGW_ROOT="${HOME}/mingw-toolchains/llvm-mingw-20251216-ucrt-macos-universal"
-    if [ -d "${MAC_LLVM_MINGW_ROOT}/bin" ]; then
+    if [ "$(uname -m)" = "arm64" ]; then
+        MAC_LLVM_MINGW_ROOT="/Users/mac/mingw-toolchains/llvm-mingw-20251216-ucrt-macos-universal"
         DEFAULT_TOOLCHAIN_ROOT="$MAC_LLVM_MINGW_ROOT"
         DEFAULT_TOOLCHAIN_PATH_OVERRIDE="${MAC_LLVM_MINGW_ROOT}/bin"
-        if [ -z "$CMAKE_EXTRA_ARGS" ] || [[ "$CMAKE_EXTRA_ARGS" != *"CMAKE_C_COMPILER="* ]]; then
-            CLANG_BIN="${MAC_LLVM_MINGW_ROOT}/bin"
-            CLANG_C="${CLANG_BIN}/clang-21"
-            CLANG_CXX="${CLANG_BIN}/clang++-21"
-            [ -x "$CLANG_C" ] || CLANG_C="${CLANG_BIN}/clang"
-            [ -x "$CLANG_CXX" ] || CLANG_CXX="${CLANG_BIN}/clang++"
-            CMAKE_EXTRA_ARGS="$CMAKE_EXTRA_ARGS -DCMAKE_C_COMPILER=${CLANG_C} -DCMAKE_CXX_COMPILER=${CLANG_CXX}"
+    else
+        MAC_LLVM_MINGW_ROOT="${HOME}/mingw-toolchains/llvm-mingw-20251216-ucrt-macos-universal"
+        if [ -d "${MAC_LLVM_MINGW_ROOT}/bin" ]; then
+            DEFAULT_TOOLCHAIN_ROOT="$MAC_LLVM_MINGW_ROOT"
+            DEFAULT_TOOLCHAIN_PATH_OVERRIDE="${MAC_LLVM_MINGW_ROOT}/bin"
+            if [ -z "$CMAKE_EXTRA_ARGS" ] || [[ "$CMAKE_EXTRA_ARGS" != *"CMAKE_C_COMPILER="* ]]; then
+                CLANG_BIN="${MAC_LLVM_MINGW_ROOT}/bin"
+                CLANG_C="${CLANG_BIN}/clang-21"
+                CLANG_CXX="${CLANG_BIN}/clang++-21"
+                [ -x "$CLANG_C" ] || CLANG_C="${CLANG_BIN}/clang"
+                [ -x "$CLANG_CXX" ] || CLANG_CXX="${CLANG_BIN}/clang++"
+                CMAKE_EXTRA_ARGS="$CMAKE_EXTRA_ARGS -DCMAKE_C_COMPILER=${CLANG_C} -DCMAKE_CXX_COMPILER=${CLANG_CXX}"
+            fi
         fi
     fi
 fi
@@ -334,6 +350,8 @@ fi
 if [ -z "$TOOLCHAIN_PATH" ]; then
     if [ -n "$DEFAULT_TOOLCHAIN_PATH_OVERRIDE" ]; then
         TOOLCHAIN_PATH="$DEFAULT_TOOLCHAIN_PATH_OVERRIDE"
+    elif [ "$USE_CLANG" -eq 1 ] && [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+        TOOLCHAIN_PATH=""
     else
         case "$TOOLCHAIN_PREFIX" in
             x86_64-w64-mingw32)
@@ -356,22 +374,24 @@ if [ -z "$TOOLCHAIN_PATH" ]; then
 fi
 
 if [ "$USER_PROVIDED_TOOLCHAIN_PATH" -eq 0 ]; then
-    case "$TOOLCHAIN_PREFIX" in
-        x86_64-w64-mingw32)
-            ensure_mingw_toolchain "x86_64-w64-mingw32" "$MINGW_X86_64_URL"
-            ;;
-        i686-w64-mingw32)
-            ensure_mingw_toolchain "i686-w64-mingw32" "$MINGW_I686_URL"
-            ;;
-        aarch64-w64-mingw32)
-            if [ -n "$MINGW_AARCH64_URL" ]; then
-                ensure_mingw_toolchain "aarch64-w64-mingw32" "$MINGW_AARCH64_URL"
-            fi
-            ;;
-    esac
+    if ! ([ "$USE_CLANG" -eq 1 ] && [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]); then
+        case "$TOOLCHAIN_PREFIX" in
+            x86_64-w64-mingw32)
+                ensure_mingw_toolchain "x86_64-w64-mingw32" "$MINGW_X86_64_URL"
+                ;;
+            i686-w64-mingw32)
+                ensure_mingw_toolchain "i686-w64-mingw32" "$MINGW_I686_URL"
+                ;;
+            aarch64-w64-mingw32)
+                if [ -n "$MINGW_AARCH64_URL" ]; then
+                    ensure_mingw_toolchain "aarch64-w64-mingw32" "$MINGW_AARCH64_URL"
+                fi
+                ;;
+        esac
+    fi
 fi
 
-if [ ! -d "$TOOLCHAIN_PATH" ]; then
+if [ -n "$TOOLCHAIN_PATH" ] && [ ! -d "$TOOLCHAIN_PATH" ]; then
     cat << EOF >&2
 Error: Toolchain path '$TOOLCHAIN_PATH' does not exist.
 Provide the correct location with --toolchain-path or install the ${TOOLCHAIN_PREFIX} toolchain under ${DEFAULT_TOOLCHAIN_ROOT}.
@@ -432,16 +452,22 @@ cd "$OUTPUT_DIR"
 
 # Ensure desired toolchain binaries are picked up by CMake's find_program.
 if [ -d "$TOOLCHAIN_PATH" ]; then
-    export PATH="$TOOLCHAIN_PATH:$PATH"
+    if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ] && [ "$USE_CLANG" -eq 1 ]; then
+        export PATH="/usr/bin:$TOOLCHAIN_PATH:$PATH"
+    else
+        export PATH="$TOOLCHAIN_PATH:$PATH"
+    fi
 fi
 
-EXPECTED_COMPILER="${TOOLCHAIN_PREFIX}-gcc"
-if ! command -v "$EXPECTED_COMPILER" >/dev/null 2>&1; then
-    cat << EOF >&2
+if [ "$USE_CLANG" -eq 0 ]; then
+    EXPECTED_COMPILER="${TOOLCHAIN_PREFIX}-gcc"
+    if ! command -v "$EXPECTED_COMPILER" >/dev/null 2>&1; then
+        cat << EOF >&2
 Error: Expected toolchain binary '$EXPECTED_COMPILER' was not found in PATH.
 Verify that the ${TOOLCHAIN_PREFIX} toolchain is installed in '$TOOLCHAIN_PATH' or pass --toolchain-path to its bin directory.
 EOF
-    exit 1
+        exit 1
+    fi
 fi
 
 if [ -f "CMakeCache.txt" ]; then

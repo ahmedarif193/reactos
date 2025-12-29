@@ -130,6 +130,10 @@ set(CMAKE_USER_MAKE_RULES_OVERRIDE "${CMAKE_CURRENT_LIST_DIR}/overrides-gcc.cmak
 # explicitly and must not acquire user-mode DLL dependencies.
 set(CMAKE_C_STANDARD_LIBRARIES "" CACHE STRING "Standard C Libraries" FORCE)
 set(CMAKE_CXX_STANDARD_LIBRARIES "" CACHE STRING "Standard C++ Libraries" FORCE)
+if(ARCH STREQUAL "arm64")
+    set(CMAKE_C_STANDARD_LIBRARIES "-latomic" CACHE STRING "Standard C Libraries" FORCE)
+    set(CMAKE_CXX_STANDARD_LIBRARIES "-latomic" CACHE STRING "Standard C++ Libraries" FORCE)
+endif()
 
 # Get GCC version
 execute_process(COMMAND ${CMAKE_C_COMPILER} -dumpversion OUTPUT_VARIABLE GCC_VERSION)
