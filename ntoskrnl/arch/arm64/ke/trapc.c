@@ -363,15 +363,15 @@ KiArm64BugCheckSynchronousException(
     /* Reconstruct a trap frame so the bugcheck dump has architectural state. */
     KiArm64InitializeTrapFrame(Context, &TrapFrame);
 
-    /* Emit a concise, recognizable banner akin to other architectures */
-    /* No early prints here; KDBG/KD will report the exception. */
-#if defined(_M_ARM64) || defined(__aarch64__)
-    /* Switch KD to passive mode; do not emit any trap dump here to avoid
-     * re-entering the fault path during early boot. */
-    KdDebuggerEnabled = FALSE;
-    KdDebuggerNotPresent = TRUE;
-    SharedUserData->KdDebuggerEnabled = FALSE;
-#endif
+    /*
+     * Enable KD so "*** Fatal System Error" prints via DbgPrint in KeBugCheckWithTf.
+     * Set KdPitchDebugger to prevent KD re-initialization attempts that could
+     * cause faults during the bugcheck path. This ensures we get crash output
+     * without risking infinite fault loops from KdEnableDebuggerWithLock.
+     */
+    KdDebuggerEnabled = TRUE;
+    KdDebuggerNotPresent = TRUE;  /* No interactive debugger attached */
+    KdPitchDebugger = TRUE;       /* Prevent KD re-init which can fault */
 
     /* Avoid touching working-set structures or pool during a hard stop. */
     KiArm64ResetDataAbortGuard();

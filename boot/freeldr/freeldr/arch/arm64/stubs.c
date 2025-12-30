@@ -62,20 +62,39 @@ FrLdrBugCheckWithMessage(
     for (;;) { __asm__ volatile("wfi"); }
 }
 
-/* ARM64 FreeLDR uses a simple KSEG0 offset mapping for kernel addresses */
+/*
+ * ARM64 FreeLDR uses a simple KSEG0 offset mapping for kernel addresses.
+ *
+ * Virtual Address Layout:
+ *   - Physical addresses: 0x0000000000000000 - 0xFFFF7FFFFFFFFFFF
+ *   - Kernel virtual:     0xFFFF800000000000 - 0xFFFFFFFFFFFFFFFF
+ *
+ * The mapping is: KernelVA = PhysicalAddress + ARM64_KSEG0_BASE
+ *
+ * These functions are idempotent - calling VaToPa(VaToPa(x)) or PaToVa(PaToVa(x))
+ * will not cause corruption, making them safe even if addresses are already in the
+ * expected format.
+ */
 PVOID VaToPa(PVOID Va)
 {
     ULONGLONG value = (ULONGLONG)(ULONG_PTR)Va;
+    /* Check if this is a kernel virtual address */
     if (value >= ARM64_KSEG0_BASE)
         return (PVOID)(value - ARM64_KSEG0_BASE);
+    /* Already a physical address (or identity-mapped low address) */
     return Va;
 }
 
 PVOID PaToVa(PVOID Pa)
 {
+    ULONGLONG value = (ULONGLONG)(ULONG_PTR)Pa;
     if (Pa == NULL)
         return NULL;
-    return (PVOID)((ULONGLONG)(ULONG_PTR)Pa + ARM64_KSEG0_BASE);
+    /* Check if this is already a kernel virtual address - avoid double conversion */
+    if (value >= ARM64_KSEG0_BASE)
+        return Pa;
+    /* Convert physical address to kernel virtual address */
+    return (PVOID)(value + ARM64_KSEG0_BASE);
 }
 
 VOID

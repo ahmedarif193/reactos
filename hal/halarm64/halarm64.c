@@ -508,8 +508,38 @@ HalInitSystem(
 #if defined(_M_ARM64) || defined(__aarch64__)
         pfr0 = HalpReadPfr0();
         pfr0_gic = (ULONG)((pfr0 >> 24) & 0xF);
-        /* Bring-up: force legacy GICC path; avoid ICC_* sysregs at EL1 */
-        HalpGicUseSysRegs = FALSE;
+
+        /*
+         * GICv3+ detection: PFR0.GIC field indicates system register support
+         * 0 = not implemented, 1 = GICv3/v4 system registers available
+         *
+         * For GICv3+, we MUST use system registers (ICC_*) because the
+         * legacy MMIO CPU interface (GICC) doesn't exist on GICv3-only systems.
+         */
+        if (pfr0_gic >= 1)
+        {
+            /* Enable System Register interface */
+            ULONG sre = HalpReadIccSre();
+            sre |= 0x1; /* SRE bit - enable system register access */
+            HalpWriteIccSre(sre);
+
+            /* Verify SRE is enabled */
+            sre = HalpReadIccSre();
+            if (sre & 0x1)
+            {
+                HalpGicUseSysRegs = TRUE;
+            }
+            else
+            {
+                /* Fallback to legacy if SRE couldn't be enabled */
+                HalpGicUseSysRegs = FALSE;
+            }
+        }
+        else
+        {
+            /* GICv2 - use legacy MMIO interface */
+            HalpGicUseSysRegs = FALSE;
+        }
 #endif
 
         /* Identify distributor architecture revision */

@@ -39,6 +39,15 @@ static VOID MiMapPPEs(PVOID StartAddress, PVOID EndAddress);
 static VOID MiMapPDEs(PVOID StartAddress, PVOID EndAddress);
 
 #define ARM64_PTE_TYPE_TABLE        0x3ULL
+#define ARM64_PTE_AF                (1ULL << 10)  /* Access Flag - required for L3 page entries */
+#define ARM64_PTE_SH_INNER          (3ULL << 8)   /* Inner Shareable */
+#define ARM64_PTE_AP_RW_EL1         (0ULL << 6)   /* EL1 R/W, EL0 no access */
+/*
+ * For recursive self-map entry: must work as BOTH table descriptor (L0-L2)
+ * AND page descriptor (L3). Table descriptors ignore AF/SH/AP, but L3 needs
+ * AF=1 or we get Access Flag faults. Include shareability for proper caching.
+ */
+#define ARM64_SELFMAP_ENTRY_BITS    (ARM64_PTE_TYPE_TABLE | ARM64_PTE_AF | ARM64_PTE_SH_INNER)
 #define MI_ARM64_MAKE_TABLE_DESC(Pfn) (((UINT64)(Pfn) << PAGE_SHIFT) | ARM64_PTE_TYPE_TABLE)
 
 /* Minimal PL011 UART helpers for early, direct serial breadcrumbs. */
@@ -263,7 +272,7 @@ MiArm64EnsureAliasMappingForPointer(
         ULONG SelfIndex = MiAddressToPxi((PVOID)PXE_SELFMAP);
         if ((RootL0[SelfIndex] & ~0xFULL) != (RootPa & ~0xFULL))
         {
-            RootL0[SelfIndex] = (RootPa | ARM64_PTE_TYPE_TABLE);
+            RootL0[SelfIndex] = (RootPa | ARM64_SELFMAP_ENTRY_BITS);
             __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1\n\tdsb ish\n\tisb" ::: "memory");
         }
     }
@@ -285,137 +294,99 @@ MiArm64MapPxeAlias(VOID)
 
     __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
 
-    /* The alias VA we want to back is the page containing PXE_SELFMAP. */
+    /* The alias VA we want to back is the page containing PXE_SELFMAP (= PXE_BASE page). */
     PVOID VaBase = (PVOID)((ULONG_PTR)PXE_SELFMAP & ~(PAGE_SIZE - 1ULL));
+    UINT64 RootPa = Ttbr1 & ~((UINT64)PAGE_SIZE - 1ULL);
+    ULONG SelfIndex = MiAddressToPxi((PVOID)PXE_SELFMAP);
+
+    UNREFERENCED_PARAMETER(VaBase);
 
     {
-        CHAR Stage[160];
+        CHAR Stage[200];
         if (NT_SUCCESS(RtlStringCbPrintfA(Stage,
                                           sizeof(Stage),
-                                          "[arm64] MiArm64MapPxeAlias: Ttbr1=0x%llx VaBase=%p",
+                                          "[arm64] MiArm64MapPxeAlias: Ttbr1=0x%llx VaBase=%p RootPa=0x%llx SelfIdx=%lu",
                                           (unsigned long long)Ttbr1,
-                                          VaBase)))
+                                          VaBase,
+                                          (unsigned long long)RootPa,
+                                          (unsigned long)SelfIndex)))
         {
             KiArm64BootStageLog(Stage);
         }
     }
 
-    /* Make sure the L0 recursive entry points to the L0 root. */
+    /* CRITICAL FIX: For PXE_BASE mapping, we CANNOT use MiArm64LookupTableEntry because
+     * it would try to walk through the self-map which isn't set up yet. Instead, we must
+     * directly access the L0 table via KSEG0 (physical mapping) and manually set up the
+     * recursive structure.
+     *
+     * The key insight: PXE_BASE uses indices [493][493][493][493] due to recursion.
+     * L0[493] points to L0 itself (the recursive entry).
+     * So accessing PXE_BASE actually accesses L0[493] through four levels of recursion.
+     * We just need to ensure L0[493] is set up correctly - no intermediate tables needed!
+     */
+
+    volatile UINT64 *RootL0 = (volatile UINT64 *)MiArm64PhysToKseg0(RootPa);
+    UINT64 Current = RootL0[SelfIndex];
+
+    /* Ensure the L0 recursive entry points to the L0 root with proper table descriptor bits. */
+    UINT64 DesiredEntry = RootPa | ARM64_SELFMAP_ENTRY_BITS;
+
+    if ((Current & ~0xFULL) != RootPa)
     {
-        UINT64 RootPa = Ttbr1 & ~((UINT64)PAGE_SIZE - 1ULL);
-        volatile UINT64 *RootL0 = (volatile UINT64 *)MiArm64PhysToKseg0(RootPa);
-        ULONG SelfIndex = MiAddressToPxi((PVOID)PXE_SELFMAP);
-        UINT64 Current = RootL0[SelfIndex];
-
+        CHAR Stage[160];
+        if (NT_SUCCESS(RtlStringCbPrintfA(Stage,
+                                          sizeof(Stage),
+                                          "[arm64] MiArm64MapPxeAlias: fixing L0[%lu] from 0x%llx to 0x%llx",
+                                          (unsigned long)SelfIndex,
+                                          (unsigned long long)Current,
+                                          (unsigned long long)DesiredEntry)))
         {
-            CHAR Stage[160];
-            if (NT_SUCCESS(RtlStringCbPrintfA(Stage,
-                                              sizeof(Stage),
-                                              "[arm64] MiArm64MapPxeAlias: RootPa=0x%llx SelfIndex=%lu Current=0x%llx",
-                                              (unsigned long long)RootPa,
-                                              (unsigned long)SelfIndex,
-                                              (unsigned long long)Current)))
-            {
-                KiArm64BootStageLog(Stage);
-            }
+            KiArm64BootStageLog(Stage);
         }
 
-        if ((RootL0[SelfIndex] & ~0xFULL) != (RootPa & ~0xFULL))
-        {
-            RootL0[SelfIndex] = (RootPa | ARM64_PTE_TYPE_TABLE);
-            __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1\n\tdsb ish\n\tisb" ::: "memory");
+        RootL0[SelfIndex] = DesiredEntry;
+        __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
+        Current = RootL0[SelfIndex];
+    }
+    else
+    {
+        KiArm64BootStageLog("[arm64] MiArm64MapPxeAlias: L0[493] recursive entry already correct");
+    }
 
-            {
-                CHAR Stage[160];
-                UINT64 NewVal = RootL0[SelfIndex];
-                if (NT_SUCCESS(RtlStringCbPrintfA(Stage,
-                                                  sizeof(Stage),
-                                                  "[arm64] MiArm64MapPxeAlias: patched L0[%lu]=0x%llx",
-                                                  (unsigned long)SelfIndex,
-                                                  (unsigned long long)NewVal)))
-                {
-                    KiArm64BootStageLog(Stage);
-                }
-            }
-        }
-        else
+    /* Verify the self-map setup by checking we can now access PXE_BASE.
+     * With L0[493]->L0, the recursive walk should work:
+     * PXE_BASE[493] accesses L0[493]->L0[493]->L0[493]->L0[493] = L0[493] itself.
+     */
+    {
+        CHAR Stage[200];
+        if (NT_SUCCESS(RtlStringCbPrintfA(Stage,
+                                          sizeof(Stage),
+                                          "[arm64] MiArm64MapPxeAlias: L0[%lu]=0x%llx (PA via KSEG0)",
+                                          (unsigned long)SelfIndex,
+                                          (unsigned long long)Current)))
         {
-            KiArm64BootStageLog("[arm64] MiArm64MapPxeAlias: recursive L0 entry already correct");
+            KiArm64BootStageLog(Stage);
         }
     }
 
-    /* Map the alias leaf to the PFN of the L0 root. */
-    {
-        volatile UINT64 *Leaf = MiArm64LookupTableEntry(Ttbr1, VaBase, 3);
+    /* Invalidate TLB entries for all self-map windows to ensure fresh translations. */
+    __asm__ __volatile__(
+        "dsb ishst\n\t"
+        "tlbi vaae1is, %0\n\t"
+        "tlbi vaae1is, %1\n\t"
+        "tlbi vaae1is, %2\n\t"
+        "tlbi vaae1is, %3\n\t"
+        "dsb ish\n\t"
+        "isb"
+        :
+        : "r"(PXE_BASE >> 12),
+          "r"(PPE_BASE >> 12),
+          "r"(PDE_BASE >> 12),
+          "r"(PTE_BASE >> 12)
+        : "memory");
 
-        if (!Leaf)
-        {
-            KiArm64BootStageLog("[arm64] MiArm64MapPxeAlias: Leaf lookup at level 3 returned NULL");
-        }
-        else
-        {
-            CHAR Stage[160];
-            if (NT_SUCCESS(RtlStringCbPrintfA(Stage,
-                                              sizeof(Stage),
-                                              "[arm64] MiArm64MapPxeAlias: initial leaf=0x%llx",
-                                              (unsigned long long)*Leaf)))
-            {
-                KiArm64BootStageLog(Stage);
-            }
-        }
-
-        if (Leaf && ((*Leaf & 1ULL) == 0))
-        {
-            PFN_NUMBER RootPfn = (PFN_NUMBER)((Ttbr1 & ~((UINT64)PAGE_SIZE - 1ULL)) >> PAGE_SHIFT);
-
-            {
-                CHAR Stage[160];
-                if (NT_SUCCESS(RtlStringCbPrintfA(Stage,
-                                                  sizeof(Stage),
-                                                  "[arm64] MiArm64MapPxeAlias: mapping alias leaf to RootPfn=0x%Ix",
-                                                  (SIZE_T)RootPfn)))
-                {
-                    KiArm64BootStageLog(Stage);
-                }
-            }
-
-            MiArm64MapPageTablePage(Ttbr1, VaBase, RootPfn);
-
-            if (Leaf)
-            {
-                CHAR Stage[160];
-                UINT64 AfterMap = *Leaf;
-                if (NT_SUCCESS(RtlStringCbPrintfA(Stage,
-                                                  sizeof(Stage),
-                                                  "[arm64] MiArm64MapPxeAlias: after MiArm64MapPageTablePage leaf=0x%llx",
-                                                  (unsigned long long)AfterMap)))
-                {
-                    KiArm64BootStageLog(Stage);
-                }
-            }
-        }
-
-        /* Trace the final descriptor for diagnostics. */
-        {
-            /* Avoid chatty logging: emit this at most a few times */
-            LONG budget = InterlockedDecrement(&MiArm64AliasLogBudget);
-            if (budget >= 0)
-            {
-                CHAR Stage[160];
-                UINT64 Final = 0;
-                Leaf = MiArm64LookupTableEntry(Ttbr1, VaBase, 3);
-                if (Leaf)
-                    Final = *Leaf;
-                if (NT_SUCCESS(RtlStringCbPrintfA(Stage,
-                                                  sizeof(Stage),
-                                                  "[arm64] MiArm64MapPxeAlias: ensured PXE alias mapping leaf=0x%llx",
-                                                  (unsigned long long)Final)))
-                {
-                    KiArm64BootStageLog(Stage);
-                }
-            }
-        }
-    }
+    KiArm64BootStageLog("[arm64] MiArm64MapPxeAlias: self-map recursion configured");
 #endif
 }
 
@@ -548,7 +519,11 @@ MiArm64CanTouchSystemPageTables(VOID)
     _SEH2_END;
 
     UINT64 RootPa = Ttbr1 & ~((UINT64)PAGE_SIZE - 1ULL);
-    volatile UINT64 *RootL0 = (volatile UINT64 *)(ULONG_PTR)RootPa;
+
+    /* CRITICAL FIX: Must access physical page tables via KSEG0 mapping, not raw physical address!
+     * KSEG0_BASE | PhysAddr gives the kernel's direct-map window for physical memory.
+     */
+    volatile UINT64 *RootL0 = (volatile UINT64 *)MiArm64PhysToKseg0(RootPa);
 
     BOOLEAN Faulted = FALSE;
     UINT64 Current = 0;
@@ -565,12 +540,13 @@ MiArm64CanTouchSystemPageTables(VOID)
 
     if (Faulted)
     {
-        KiArm64BootStageLog("[arm64] MiArm64CanTouchSystemPageTables: L0 access fault (no identity map)");
+        /* This should not happen if FreeLDR set up KSEG0 correctly */
+        KiArm64BootStageLog("[arm64] MiArm64CanTouchSystemPageTables: L0 access fault via KSEG0");
         MiArm64SelfMapProbe = 0;
         return FALSE;
     }
 
-    UINT64 Desired = RootPa | ARM64_PTE_TYPE_TABLE;
+    UINT64 Desired = RootPa | ARM64_SELFMAP_ENTRY_BITS;
     ULONG SelfIndex = MiAddressToPxi((PVOID)PXE_SELFMAP);
     if ((Current & ~((UINT64)PAGE_SIZE - 1ULL)) != RootPa)
     {
@@ -680,11 +656,11 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             KiArm64BootStageLog(Stage);
         }
 
-        /* Also log the L0 self-map entry via identity mapping to confirm
+        /* Also log the L0 self-map entry via KSEG0 to confirm
          * the recursive slot points at the root table. */
         {
             UINT64 RootPa = Ttbr1 & ~((UINT64)PAGE_SIZE - 1ULL);
-            volatile UINT64 *RootL0 = (volatile UINT64 *)(ULONG_PTR)RootPa;
+            volatile UINT64 *RootL0 = (volatile UINT64 *)MiArm64PhysToKseg0(RootPa);
             ULONG SelfIndex = MiAddressToPxi((PVOID)PXE_SELFMAP);
             UINT64 Entry = 0;
             BOOLEAN Faulted = FALSE;

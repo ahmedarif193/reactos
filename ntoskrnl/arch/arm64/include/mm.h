@@ -34,10 +34,14 @@
 #define _MI_PAGING_LEVELS 4
 #define _MI_HAS_NO_EXECUTE 1
 
-/* Virtual address layout (mirrors Windows 11 on ARM64). */
+/* Virtual address layout for ARM64.
+ * The kernel is mapped at KSEG0_BASE (0xFFFF800000000000), so system range
+ * must start at or below that address and have bit 47 set for valid canonical
+ * upper-half addresses on ARM64 with 48-bit VAs.
+ */
 #define MI_USER_PROBE_ADDRESS           (PVOID)0x000007FFFFFE0000ULL
-#define MI_DEFAULT_SYSTEM_RANGE_START   (PVOID)0xFFFF000000000000ULL
-#define MI_REAL_SYSTEM_RANGE_START             0xFFFF000000000000ULL
+#define MI_DEFAULT_SYSTEM_RANGE_START   (PVOID)0xFFFF800000000000ULL
+#define MI_REAL_SYSTEM_RANGE_START             0xFFFF800000000000ULL
 #define HYPER_SPACE                            0xFFFFF70000000000ULL
 #define HYPER_SPACE_END                        0xFFFFF77FFFFFFFFFULL
 #define MI_SYSTEM_CACHE_WS_START               0xFFFFF78000001000ULL

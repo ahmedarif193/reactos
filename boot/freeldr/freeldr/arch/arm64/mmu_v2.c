@@ -1194,7 +1194,7 @@ static BOOLEAN Arm64SetupSelfMapWindows(VOID)
 {
     const UINT64 self_idx = (ARM64_SELF_PXE_BASE >> ARM64_PXI_SHIFT) & ARM64_PX_MASK;
     const UINT64 root_pa = phys_from_ptr(arm64_kernel_l0_table);
-    const UINT64 desired = root_pa | PTE_TYPE_VALID | PTE_TYPE_TABLE;
+    const UINT64 desired = root_pa | PTE_TYPE_VALID | PTE_TYPE_TABLE | PTE_BLOCK_AF;
     UINT64 current = arm64_kernel_l0_table[self_idx];
 
     TRACE("ARM64-SELFMAP: Ensuring recursive slot points to root\n");
@@ -1880,7 +1880,9 @@ static VOID setup_pgtables(VOID)
     {
         const UINT64 self_idx = (ARM64_SELF_PXE_BASE >> ARM64_PXI_SHIFT) & ARM64_PX_MASK;
         const UINT64 root_pa = phys_from_ptr(arm64_kernel_l0_table);
-        const UINT64 self_entry = root_pa | PTE_TYPE_VALID | PTE_TYPE_TABLE;
+        /* Include AF bit so the recursive self-map works on CPUs without
+         * hardware-managed Access Flag (e.g., Cortex-A72 vs Cortex-A76). */
+        const UINT64 self_entry = root_pa | PTE_TYPE_VALID | PTE_TYPE_TABLE | PTE_BLOCK_AF;
         UINT64 previous = arm64_kernel_l0_table[self_idx];
 
         pte_write(&arm64_kernel_l0_table[self_idx], self_entry);
@@ -1909,7 +1911,7 @@ static VOID setup_pgtables(VOID)
                     (unsigned long long)verify_entry,
                     (unsigned long long)root_pa);
                 pte_write(&arm64_kernel_l0_table[self_idx],
-                          root_pa | PTE_TYPE_VALID | PTE_TYPE_TABLE);
+                          root_pa | PTE_TYPE_VALID | PTE_TYPE_TABLE | PTE_BLOCK_AF);
             } else {
                 TRACE("ARM64-SELFMAP: L0[493] verified OK after setup (0x%llx)\n",
                       (unsigned long long)verify_entry);
@@ -2695,7 +2697,7 @@ VOID Arm64SetupKernelHandoffMMU(VOID)
                 (unsigned long long)entry,
                 (unsigned long long)root_pa);
             /* Try to repair it */
-            pte_write(&arm64_kernel_l0_table[self_idx], root_pa | PTE_TYPE_VALID | PTE_TYPE_TABLE);
+            pte_write(&arm64_kernel_l0_table[self_idx], root_pa | PTE_TYPE_VALID | PTE_TYPE_TABLE | PTE_BLOCK_AF);
             UartPuts("ARM64-SELFMAP: Attempted repair - set L0[493] back to root\n");
         } else {
             UartPuts(" OK (points to root)\n");
