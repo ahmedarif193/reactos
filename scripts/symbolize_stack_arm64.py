@@ -23,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+import platform
 import time
 from bisect import bisect_right
 from dataclasses import dataclass
@@ -271,33 +272,70 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
             "livecd_arm64-merge.iso not found; run the script from the build directory"
         )
 
-    qemu_cmd = [
-        "qemu-system-aarch64",
-        "-machine",
-        "virt,gic-version=3",
-        "-cpu",
-        "cortex-a76",
-        "-m",
-        "4G",
-        "-bios",
-        "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
-        "-drive",
-        f"file={livecd}",
-        "-device",
-        "qemu-xhci",
-        "-device",
-        "usb-kbd",
-        "-device",
-        "usb-tablet",
-        "-device",
-        "ramfb",
-        "-serial",
-        f"file:{log_path}",
-        "-display",
-        "none",
-    ]
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        pflash = Path("/opt/homebrew/share/qemu/edk2-aarch64-code.fd")
+        if not pflash.exists():
+            raise FileNotFoundError(
+                f"Apple Silicon HVF boot ROM missing: {pflash} (install qemu-efi-aarch64 or adjust the path)"
+            )
+        qemu_cmd = [
+            "qemu-system-aarch64",
+            "-device",
+            "ramfb",
+            "-M",
+            "virt,accel=hvf",
+            "-cpu",
+            "host",
+            "-smp",
+            "4",
+            "-m",
+            "3G",
+            "-drive",
+            f"if=pflash,format=raw,readonly=on,file={pflash}",
+            "-drive",
+            f"if=virtio,media=cdrom,readonly=on,file={livecd}",
+            "-boot",
+            "order=d,menu=on",
+            "-serial",
+            f"file:{log_path}",
+            "-monitor",
+            "none",
+            "-device",
+            "qemu-xhci",
+            "-device",
+            "usb-kbd",
+            "-device",
+            "usb-tablet",
+        ]
+        print(f"[symbolize] Launching QEMU (Apple HVF, 3G RAM). Log: {log_path}")
+    else:
+        qemu_cmd = [
+            "qemu-system-aarch64",
+            "-machine",
+            "virt,gic-version=3",
+            "-cpu",
+            "cortex-a76",
+            "-m",
+            "4G",
+            "-bios",
+            "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+            "-drive",
+            f"file={livecd}",
+            "-device",
+            "qemu-xhci",
+            "-device",
+            "usb-kbd",
+            "-device",
+            "usb-tablet",
+            "-device",
+            "ramfb",
+            "-serial",
+            f"file:{log_path}",
+            "-display",
+            "none",
+        ]
 
-    print(f"[symbolize] Launching QEMU (headless, 4G RAM). Log: {log_path}")
+        print(f"[symbolize] Launching QEMU (headless, 4G RAM). Log: {log_path}")
     proc = subprocess.Popen(
         qemu_cmd,
         cwd=build_dir,
@@ -311,7 +349,7 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
     lines_cache: List[str] = []
     poll_interval = 0.5
     # Treat long silences as stalls; keep generous to allow USB/PnP bring-up.
-    idle_threshold = 30.0
+    idle_threshold = 6.0
 
     entered_debugger_at: Optional[float] = None
     bootmain_count = 0
