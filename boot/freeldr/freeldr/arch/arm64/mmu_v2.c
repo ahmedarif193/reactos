@@ -489,10 +489,20 @@ allocate_pt_pages(UINTN pages, const char *label)
     if (!GlobalSystemTable || !(bs = GlobalSystemTable->BootServices))
     {
         /* After ExitBootServices we cannot trust new heap allocations to be mapped.
-         * Stick to the static arena that lives inside the already-mapped loader image. */
+         * Stick to the static arena that lives inside the already-mapped loader image.
+         *
+         * IMPORTANT: We must compute the aligned ABSOLUTE address, not just align the
+         * offset. If the arena base itself has any runtime misalignment (even though
+         * we use __attribute__((aligned(4096)))), adding an aligned offset would still
+         * produce a misaligned pointer. Page tables MUST be 4KB-aligned or the
+         * descriptor type bits get corrupted. */
         SIZE_T bytes = (SIZE_T)pages * PAGE_SIZE;
-        UINT64 offset = (arm64_static_extra_pt_offset + (PAGE_SIZE - 1ULL)) & ~(PAGE_SIZE - 1ULL);
-        UINT64 required = offset + (UINT64)pages * PAGE_SIZE;
+        UINT64 arena_base = (UINT64)(uintptr_t)arm64_static_extra_pt_arena;
+        UINT64 current_abs = arena_base + arm64_static_extra_pt_offset;
+        UINT64 aligned_abs = (current_abs + PAGE_SIZE - 1ULL) & ~(PAGE_SIZE - 1ULL);
+        UINT64 new_offset = aligned_abs - arena_base;
+        UINT64 required = new_offset + (UINT64)pages * PAGE_SIZE;
+
         if (required > sizeof(arm64_static_extra_pt_arena))
         {
             ERR("ARM64: Boot Services unavailable while allocating %s\n", label);
@@ -500,9 +510,19 @@ allocate_pt_pages(UINTN pages, const char *label)
             return NULL;
         }
 
-        ptr = arm64_static_extra_pt_arena + offset;
+        ptr = (VOID *)(uintptr_t)aligned_abs;
         arm64_static_extra_pt_offset = required;
         RtlZeroMemory(ptr, bytes);
+
+        /* Verify alignment before returning */
+        if (((UINT64)(uintptr_t)ptr & (PAGE_SIZE - 1ULL)) != 0)
+        {
+            ERR("ARM64: Static PT arena returned misaligned %s @ 0x%llx\n",
+                label, (unsigned long long)(UINT64)(uintptr_t)ptr);
+            UartPuts("ARM64: FATAL: page table allocation misaligned\n");
+            return NULL;
+        }
+
         TRACE("ARM64: Static PT arena provided %s @ 0x%llx (%u pages)\n",
               label,
               (unsigned long long)((UINT64)(uintptr_t)ptr),
