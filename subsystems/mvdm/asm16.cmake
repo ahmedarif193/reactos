@@ -43,16 +43,9 @@ function(add_asm16_bin _target _binary_file _base_address)
     ##
     ## All this part is the same as CreateBootSectorTarget
     ##
-    # Use i686 GCC assembler for 16-bit code (clang doesn't support 16-bit relocations)
-    if(DEFINED CMAKE_ASM16_COMPILER AND CMAKE_ASM16_COMPILER)
-        set(_asm16_compiler "${CMAKE_ASM16_COMPILER}")
-    else()
-        set(_asm16_compiler "${CMAKE_ASM_COMPILER}")
-    endif()
-    # Define _X86_ for 16-bit assembly to avoid x64 SEH macro definitions
     add_custom_command(
         OUTPUT ${_object_file}
-        COMMAND ${_asm16_compiler} -x assembler-with-cpp -o ${_object_file} -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm ${_directory_includes} ${_source_file_defines} ${_directory_defines} -D__ASM__ -D_X86_ -U_AMD64_ -U__x86_64__ -c ${_concatenated_asm_file}
+        COMMAND ${CMAKE_ASM_COMPILER} ${CLANG_ASM_EXTRA_FLAGS} -x assembler-with-cpp -o ${_object_file} -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm ${_directory_includes} ${_source_file_defines} ${_directory_defines} -D__ASM__ -c ${_concatenated_asm_file}
         DEPENDS ${_concatenated_asm_file})
 
     add_custom_command(

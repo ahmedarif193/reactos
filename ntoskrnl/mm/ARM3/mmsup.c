@@ -173,6 +173,40 @@ BOOLEAN
 NTAPI
 MmIsAddressValid(IN PVOID VirtualAddress)
 {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64-specific implementation using the AT (Address Translate) instruction.
+     *
+     * The self-map mechanism used by MiAddressToPte/Pde/Ppe/Pxe can fault if the
+     * page table hierarchy is not fully populated. On ARM64, we use the AT S1E1R
+     * instruction to probe the address translation without causing a fault.
+     *
+     * AT S1E1R translates the address as a stage 1 read at EL1, and stores the
+     * result in PAR_EL1. If the translation fails, PAR_EL1.F bit is set.
+     */
+    ULONG64 par;
+
+    /* Issue AT S1E1R instruction to translate the virtual address */
+    __asm__ volatile(
+        "at s1e1r, %1\n\t"
+        "isb\n\t"
+        "mrs %0, par_el1"
+        : "=r" (par)
+        : "r" ((ULONG64)VirtualAddress)
+        : "memory"
+    );
+
+    /* Check the F (Fault) bit - bit 0 of PAR_EL1 */
+    if (par & 1)
+    {
+        /* Translation failed - address is not valid */
+        return FALSE;
+    }
+
+    /* Translation succeeded - address is valid */
+    return TRUE;
+#else
+    /* Non-ARM64 implementation using self-map page table walk */
 #if _MI_PAGING_LEVELS >= 4
     /* Check if the PXE is valid */
     if (MiAddressToPxe(VirtualAddress)->u.Hard.Valid == 0) return FALSE;
@@ -184,8 +218,18 @@ MmIsAddressValid(IN PVOID VirtualAddress)
 #endif
 
 #if _MI_PAGING_LEVELS >= 2
-    /* Check if the PDE is valid */
-    if (MiAddressToPde(VirtualAddress)->u.Hard.Valid == 0) return FALSE;
+    {
+        PMMPTE PointerPde = MiAddressToPde(VirtualAddress);
+
+        /* Check if the PDE is valid */
+        if (PointerPde->u.Hard.Valid == 0) return FALSE;
+
+        /* Check if this is a large page (2MB block mapping on ARM64/AMD64).
+         * Large pages have no L3/PTE table - the PDE itself is the final mapping.
+         * Trying to access MiAddressToPte() for a large page will cause a fault
+         * because the self-map expects an L3 table that doesn't exist. */
+        if (MI_IS_PAGE_LARGE(PointerPde)) return TRUE;
+    }
 #endif
 
     /* Check if the PTE is valid */
@@ -194,6 +238,7 @@ MmIsAddressValid(IN PVOID VirtualAddress)
     /* This address is valid now, but it will only stay so if the caller holds
      * the PFN lock */
     return TRUE;
+#endif /* ARM64 */
 }
 
 /*

@@ -11,6 +11,19 @@ if(NOT DEFINED SEPARATE_DBG)
     set(SEPARATE_DBG FALSE)
 endif()
 
+# Dwarf-based builds toggle (no rsym)
+# Expose NO_ROSSYM in the cache so it can be toggled explicitly.
+if(NOT DEFINED NO_ROSSYM)
+    set(NO_ROSSYM OFF CACHE BOOL "Disable rossym (.rossym) generation; rely on DWARF only")
+endif()
+
+# Force-disable rossym in configurations where it is unsupported or undesired.
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(NO_ROSSYM ON CACHE BOOL "Disable rossym (.rossym) generation; rely on DWARF only" FORCE)
+elseif(NOT ARCH STREQUAL "i386" AND NOT ARCH STREQUAL "amd64")
+    set(NO_ROSSYM ON CACHE BOOL "Disable rossym (.rossym) generation; rely on DWARF only" FORCE)
+endif()
+
 if(NOT DEFINED USE_PSEH3)
     set(USE_PSEH3 1)
 endif()
@@ -198,8 +211,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInf
             add_compile_options(-femit-struct-debug-detailed=none -feliminate-unused-debug-symbols)
         endif()
     endif()
-    # Remap build directory to source directory in DWARF debug info
-    add_compile_options(-fdebug-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=${REACTOS_SOURCE_DIR})
 endif()
 
 # Tuning
@@ -317,7 +328,6 @@ endif()
 if(SEPARATE_DBG)
     # PDB style debug puts all dwarf debug info in a separate dbg file
     message(STATUS "Building separate debug symbols")
-    add_compile_definitions(SEPARATE_DBG)
     file(MAKE_DIRECTORY ${REACTOS_BINARY_DIR}/symbols)
     if(CMAKE_GENERATOR STREQUAL "Ninja")
         # Those variables seems to be set but empty in newer CMake versions
@@ -330,7 +340,12 @@ if(SEPARATE_DBG)
         set(SYMBOL_FILE <TARGET>)
     endif()
 
-    set(strip_debug "${CMAKE_STRIP} --strip-debug <TARGET>")
+    if (NOT NO_ROSSYM)
+        get_target_property(RSYM native-rsym IMPORTED_LOCATION)
+        set(strip_debug "${RSYM} -s ${REACTOS_SOURCE_DIR} <TARGET> <TARGET>")
+    else()
+        set(strip_debug "${CMAKE_STRIP} --strip-debug <TARGET>")
+    endif()
 
     set(CMAKE_C_LINK_EXECUTABLE
         "<CMAKE_C_COMPILER> <CMAKE_C_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>"
@@ -352,12 +367,33 @@ if(SEPARATE_DBG)
         "<CMAKE_C_COMPILER> <CMAKE_SHARED_LIBRARY_C_FLAGS> <LINK_FLAGS> <CMAKE_SHARED_LIBRARY_CREATE_C_FLAGS> -o <TARGET> <OBJECTS> <LINK_LIBRARIES>"
         "${CMAKE_STRIP} --only-keep-debug <TARGET> -o ${REACTOS_BINARY_DIR}/symbols/${SYMBOL_FILE}"
         ${strip_debug})
-else()
+elseif(NO_ROSSYM)
+    # Dwarf-based build
+    message(STATUS "Generating a dwarf-based build (no rsym)")
+    # Use --start-group/--end-group to resolve circular/static lib dependencies
     set(CMAKE_C_LINK_EXECUTABLE "<CMAKE_C_COMPILER> ${CMAKE_C_FLAGS} <CMAKE_C_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> -Wl,--start-group <LINK_LIBRARIES> -Wl,--end-group")
     set(CMAKE_CXX_LINK_EXECUTABLE "<CMAKE_CXX_COMPILER> ${CMAKE_CXX_FLAGS} <CMAKE_CXX_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> -Wl,--start-group <LINK_LIBRARIES> -Wl,--end-group")
     set(CMAKE_C_CREATE_SHARED_LIBRARY "<CMAKE_C_COMPILER> ${CMAKE_C_FLAGS} <CMAKE_SHARED_LIBRARY_C_FLAGS> <LINK_FLAGS> <CMAKE_SHARED_LIBRARY_CREATE_C_FLAGS> -o <TARGET> <OBJECTS> -Wl,--start-group <LINK_LIBRARIES> -Wl,--end-group")
     set(CMAKE_CXX_CREATE_SHARED_LIBRARY "<CMAKE_CXX_COMPILER> ${CMAKE_CXX_FLAGS} <CMAKE_SHARED_LIBRARY_CXX_FLAGS> <LINK_FLAGS> <CMAKE_SHARED_LIBRARY_CREATE_CXX_FLAGS> -o <TARGET> <OBJECTS> -Wl,--start-group <LINK_LIBRARIES> -Wl,--end-group")
     set(CMAKE_RC_CREATE_SHARED_LIBRARY "<CMAKE_C_COMPILER> ${CMAKE_C_FLAGS} <CMAKE_SHARED_LIBRARY_C_FLAGS> <LINK_FLAGS> <CMAKE_SHARED_LIBRARY_CREATE_C_FLAGS> -o <TARGET> <OBJECTS> <LINK_LIBRARIES>")
+else()
+    # Normal rsym build
+    get_target_property(RSYM native-rsym IMPORTED_LOCATION)
+
+    set(CMAKE_C_LINK_EXECUTABLE
+        "<CMAKE_C_COMPILER> ${CMAKE_C_FLAGS} <CMAKE_C_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> -Wl,--start-group <LINK_LIBRARIES> -Wl,--end-group"
+        "${RSYM} -s ${REACTOS_SOURCE_DIR} <TARGET> <TARGET>")
+    set(CMAKE_CXX_LINK_EXECUTABLE
+        "<CMAKE_CXX_COMPILER> ${CMAKE_CXX_FLAGS} <CMAKE_CXX_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> -Wl,--start-group <LINK_LIBRARIES> -Wl,--end-group"
+        "${RSYM} -s ${REACTOS_SOURCE_DIR} <TARGET> <TARGET>")
+    set(CMAKE_C_CREATE_SHARED_LIBRARY
+        "<CMAKE_C_COMPILER> ${CMAKE_C_FLAGS} <CMAKE_SHARED_LIBRARY_C_FLAGS> <LINK_FLAGS> <CMAKE_SHARED_LIBRARY_CREATE_C_FLAGS> -o <TARGET> <OBJECTS> -Wl,--start-group <LINK_LIBRARIES> -Wl,--end-group"
+        "${RSYM} -s ${REACTOS_SOURCE_DIR} <TARGET> <TARGET>")
+    set(CMAKE_CXX_CREATE_SHARED_LIBRARY
+        "<CMAKE_CXX_COMPILER> ${CMAKE_CXX_FLAGS} <CMAKE_SHARED_LIBRARY_CXX_FLAGS> <LINK_FLAGS> <CMAKE_SHARED_LIBRARY_CREATE_CXX_FLAGS> -o <TARGET> <OBJECTS> -Wl,--start-group <LINK_LIBRARIES> -Wl,--end-group"
+        "${RSYM} -s ${REACTOS_SOURCE_DIR} <TARGET> <TARGET>")
+    set(CMAKE_RC_CREATE_SHARED_LIBRARY
+        "<CMAKE_C_COMPILER> ${CMAKE_C_FLAGS} <CMAKE_SHARED_LIBRARY_C_FLAGS> <LINK_FLAGS> <CMAKE_SHARED_LIBRARY_CREATE_C_FLAGS> -o <TARGET> <OBJECTS> <LINK_LIBRARIES>")
 endif()
 
 set(CMAKE_C_CREATE_SHARED_MODULE ${CMAKE_C_CREATE_SHARED_LIBRARY})
@@ -420,7 +456,6 @@ function(set_entrypoint MODULE ENTRYPOINT)
             target_link_options(${MODULE} PRIVATE "-Wl,--entry=__ReactOSNoEntry")
             target_sources(${MODULE} PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/crt/startup/noentry_arm64.c)
         elseif(_t_arch STREQUAL "amd64")
-            # For amd64, use a noentry stub function
             target_link_options(${MODULE} PRIVATE "-Wl,--entry=__ReactOSNoEntry")
             target_sources(${MODULE} PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/crt/startup/noentry_amd64.c)
         endif()
@@ -463,9 +498,7 @@ function(set_module_type_toolchain MODULE TYPE)
         -Wl,--major-image-version,5 -Wl,--minor-image-version,01 -Wl,--major-os-version,5 -Wl,--minor-os-version,01)
 
     if(TYPE IN_LIST KERNEL_MODULE_TYPES)
-        # Kernel modules require page-aligned sections for proper loading
-        target_link_options(${MODULE} PRIVATE
-            -Wl,--exclude-all-symbols,-file-alignment=0x1000,-section-alignment=0x1000)
+        target_link_options(${MODULE} PRIVATE -Wl,--exclude-all-symbols,-file-alignment=0x1000,-section-alignment=0x1000)
 
         if(${TYPE} STREQUAL "wdmdriver")
             if(NOT MINGW_LINKER_IS_LLD)
@@ -540,22 +573,18 @@ endif()
 
 # Ensure dlltool gets the correct machine flags
 if(ARCH STREQUAL "i386")
-    # Ensure dlltool generates 32-bit code and assembles with 32-bit mode.
-    # Derive the 'as' program from the toolchain path (replace ...-gcc with ...-as).
+    # Ensure dlltool generates 32-bit code and assembles with 32-bit mode
+    # Derive the 'as' program from the toolchain path (replace ...-gcc with ...-as)
     set(_dlltool_as ${CMAKE_ASM_COMPILER})
     get_filename_component(_dlltool_as_name "${_dlltool_as}" NAME)
     if(_dlltool_as_name MATCHES "gcc(\\.exe)?$")
         string(REPLACE "gcc" "as" _dlltool_as "${_dlltool_as}")
     endif()
-    # Only multilib x86_64 assemblers need a 32-bit mode flag; native i686-as does not.
-    if(MINGW_TOOLCHAIN_PREFIX MATCHES "^x86_64-w64-mingw32-")
-        if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND _dlltool_as_name MATCHES "clang(\\+\\+)?(\\.exe)?$")
-            set(DLLTOOL_EXTRA_ARGS -m i386 --as ${_dlltool_as} --as-flags "-m32 -c")
-        else()
-            set(DLLTOOL_EXTRA_ARGS -m i386 --as ${_dlltool_as} --as-flags=--32)
-        endif()
+    # x86_64-w64-mingw32-as accepts --32 to assemble 32-bit objects
+    if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        set(DLLTOOL_EXTRA_ARGS -m i386 --as ${_dlltool_as} --as-flags "-m32 -c")
     else()
-        set(DLLTOOL_EXTRA_ARGS -m i386 --as ${_dlltool_as})
+        set(DLLTOOL_EXTRA_ARGS -m i386 --as ${_dlltool_as} --as-flags=--32)
     endif()
 elseif(ARCH STREQUAL "amd64")
     set(DLLTOOL_EXTRA_ARGS -m i386:x86-64)
@@ -570,6 +599,61 @@ else()
 endif()
 if(NOT DLLTOOL_EXTRA_ARGS)
     set(DLLTOOL_EXTRA_ARGS -m i386:x86-64)
+endif()
+
+set(DLLTOOL_DELAYLIB ${CMAKE_DLLTOOL})
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT CMAKE_HOST_WIN32)
+    get_filename_component(_dlltool_real "${CMAKE_DLLTOOL}" REALPATH)
+    get_filename_component(_dlltool_real_name "${_dlltool_real}" NAME)
+    if(_dlltool_real_name MATCHES "^llvm-")
+        set(_delay_dlltool_name "dlltool")
+        if(MINGW_TOOLCHAIN_PREFIX)
+            set(_delay_dlltool_name "${MINGW_TOOLCHAIN_PREFIX}dlltool")
+        endif()
+        set(_delay_dlltool_candidate)
+        if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT ROS_GNU_MINGW_TOOLCHAIN_PATH STREQUAL "")
+            set(_delay_dlltool_path "${ROS_GNU_MINGW_TOOLCHAIN_PATH}/${_delay_dlltool_name}")
+            if(EXISTS "${_delay_dlltool_path}")
+                set(_delay_dlltool_candidate "${_delay_dlltool_path}")
+            endif()
+            unset(_delay_dlltool_path)
+        endif()
+        set(_delay_dlltool_hints)
+        if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT ROS_GNU_MINGW_TOOLCHAIN_PATH STREQUAL "")
+            list(APPEND _delay_dlltool_hints ${ROS_GNU_MINGW_TOOLCHAIN_PATH})
+        endif()
+        if(DEFINED ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH} AND NOT "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
+            list(APPEND _delay_dlltool_hints "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}")
+        endif()
+        list(APPEND _delay_dlltool_hints /usr/bin /usr/local/bin)
+        if(NOT _delay_dlltool_candidate)
+            find_program(_delay_dlltool_candidate
+                NAMES ${_delay_dlltool_name}
+                HINTS ${_delay_dlltool_hints}
+                NO_DEFAULT_PATH)
+        endif()
+        if(NOT _delay_dlltool_candidate)
+            find_program(_delay_dlltool_candidate
+                NAMES ${_delay_dlltool_name})
+        endif()
+        if(_delay_dlltool_candidate)
+            get_filename_component(_delay_dlltool_real "${_delay_dlltool_candidate}" REALPATH)
+            get_filename_component(_delay_dlltool_real_name "${_delay_dlltool_real}" NAME)
+            if(NOT _delay_dlltool_real_name STREQUAL "llvm-dlltool")
+                set(DLLTOOL_DELAYLIB ${_delay_dlltool_candidate})
+            endif()
+        endif()
+        if("${DLLTOOL_DELAYLIB}" STREQUAL "${CMAKE_DLLTOOL}")
+            message(WARNING "llvm-dlltool lacks --output-delaylib; install binutils dlltool to build delay import libs.")
+        endif()
+        unset(_delay_dlltool_candidate)
+        unset(_delay_dlltool_hints)
+        unset(_delay_dlltool_name)
+        unset(_delay_dlltool_real)
+        unset(_delay_dlltool_real_name)
+    endif()
+    unset(_dlltool_real)
+    unset(_dlltool_real_name)
 endif()
 
 function(fixup_load_config _target)
@@ -689,7 +773,7 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
             OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
             # Delete any existing file in the private directory before creating new one
             COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
-            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} ${_dlltool_killat_flag} --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
+            COMMAND ${DLLTOOL_DELAYLIB} ${_dlltool_args} --def ${_implib_def} ${_dlltool_killat_flag} --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
             COMMAND ${CMAKE_RANLIB} ${_libname}_delayed.a
             DEPENDS ${_implib_def}
             WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
@@ -703,7 +787,7 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
             OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
             # Delete any existing file in the private directory before creating new one
             COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/${_libname}_delayed.a
-            COMMAND ${CMAKE_DLLTOOL} ${_dlltool_args} --def ${_implib_def} ${_dlltool_killat_flag} --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
+            COMMAND ${DLLTOOL_DELAYLIB} ${_dlltool_args} --def ${_implib_def} ${_dlltool_killat_flag} --output-delaylib=${_libname}_delayed.a -t ${_libname}_delayed
             DEPENDS ${_implib_def}
             WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
     endif()
@@ -802,46 +886,61 @@ endmacro()
 # PSEH lib, needed with mingw
 set(PSEH_LIB "pseh")
 
-# Find i686 assembler for boot sector targets (16-bit code)
-# Boot sector code is 16-bit x86, only needed for amd64 targets
-# NOTE: Clang cannot handle 16-bit x86 relocations, so we MUST use GCC for this
-if(ARCH STREQUAL "amd64")
-    # Search for i686-w64-mingw32-gcc for 16-bit boot sector code
-    # This is required even for Clang builds because clang doesn't support 16-bit relocations
-
-    # Check in standard mingw-toolchains location first (macOS cross-compile setup)
-    if(NOT DEFINED CMAKE_ASM16_COMPILER)
-        set(_i686_gcc_path "$ENV{HOME}/mingw-toolchains/bin/i686-w64-mingw32-gcc")
-        if(EXISTS "${_i686_gcc_path}")
-            set(CMAKE_ASM16_COMPILER "${_i686_gcc_path}" CACHE FILEPATH "i686 assembler for boot sectors")
+# Clang's integrated assembler and llvm-mingw 'as' wrapper choke on NT-style asm.
+set(BOOTSECT_ASM_EXTRA_FLAGS)
+set(CLANG_ASM_EXTRA_FLAGS)
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64"))
+    if(NOT CMAKE_HOST_WIN32)
+        set(_clang_binutils_as_name "${MINGW_TOOLCHAIN_PREFIX}as")
+        set(_clang_binutils_as)
+        if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT ROS_GNU_MINGW_TOOLCHAIN_PATH STREQUAL "")
+            set(_clang_binutils_as "${ROS_GNU_MINGW_TOOLCHAIN_PATH}/${_clang_binutils_as_name}")
+            if(NOT EXISTS "${_clang_binutils_as}")
+                set(_clang_binutils_as)
+            endif()
         endif()
-    endif()
-    # Try to find i686 assembler in ROS_GNU_MINGW_TOOLCHAIN_PATH parent directory
-    if(NOT DEFINED CMAKE_ASM16_COMPILER AND DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH)
-        get_filename_component(_ros_toolchain_parent "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" DIRECTORY)
-        get_filename_component(_ros_toolchain_parent "${_ros_toolchain_parent}" DIRECTORY)
-        set(_i686_gcc_path "${_ros_toolchain_parent}/i686-w64-mingw32/bin/i686-w64-mingw32-gcc")
-        if(EXISTS "${_i686_gcc_path}")
-            set(CMAKE_ASM16_COMPILER "${_i686_gcc_path}" CACHE FILEPATH "i686 assembler for boot sectors")
+        set(_clang_binutils_as_hints)
+        if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT ROS_GNU_MINGW_TOOLCHAIN_PATH STREQUAL "")
+            list(APPEND _clang_binutils_as_hints ${ROS_GNU_MINGW_TOOLCHAIN_PATH})
         endif()
-    endif()
-    # Check in TOOLCHAIN_PATH's parent bin directory
-    if(NOT DEFINED CMAKE_ASM16_COMPILER AND DEFINED TOOLCHAIN_PATH)
-        get_filename_component(_toolchain_parent "${TOOLCHAIN_PATH}" DIRECTORY)
-        set(_i686_gcc_path "${_toolchain_parent}/bin/i686-w64-mingw32-gcc")
-        if(EXISTS "${_i686_gcc_path}")
-            set(CMAKE_ASM16_COMPILER "${_i686_gcc_path}" CACHE FILEPATH "i686 assembler for boot sectors")
+        if(DEFINED ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH} AND NOT "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
+            list(APPEND _clang_binutils_as_hints "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}")
         endif()
-    endif()
-    # Fallback: search in PATH
-    if(NOT DEFINED CMAKE_ASM16_COMPILER)
-        find_program(CMAKE_ASM16_COMPILER NAMES i686-w64-mingw32-gcc)
-    endif()
-    if(CMAKE_ASM16_COMPILER)
-        message(STATUS "Using i686 GCC for boot sectors: ${CMAKE_ASM16_COMPILER}")
-    else()
-        message(WARNING "No i686 GCC found for 16-bit boot sectors. Boot sector compilation will fail!")
-        message(WARNING "Install i686-w64-mingw32-gcc or set CMAKE_ASM16_COMPILER manually.")
+        list(APPEND _clang_binutils_as_hints /usr/bin /usr/local/bin)
+        if(NOT _clang_binutils_as)
+            find_program(_clang_binutils_as
+                NAMES ${_clang_binutils_as_name}
+                HINTS ${_clang_binutils_as_hints}
+                NO_DEFAULT_PATH)
+        endif()
+        if(NOT _clang_binutils_as)
+            find_program(_clang_binutils_as
+                NAMES ${_clang_binutils_as_name})
+        endif()
+        if(_clang_binutils_as)
+            set(_clang_as_wrapper_dir "${CMAKE_BINARY_DIR}/clang-gnu-tools")
+            file(MAKE_DIRECTORY "${_clang_as_wrapper_dir}")
+            set(_clang_as_wrapper "${_clang_as_wrapper_dir}/as")
+            if(EXISTS "${_clang_as_wrapper}")
+                file(REMOVE "${_clang_as_wrapper}")
+            endif()
+            file(CREATE_LINK "${_clang_binutils_as}" "${_clang_as_wrapper}" SYMBOLIC RESULT _clang_as_link_result)
+            if(NOT _clang_as_link_result EQUAL 0)
+                message(WARNING "Failed to create clang GNU as shim at ${_clang_as_wrapper} (result ${_clang_as_link_result}).")
+            endif()
+            set(CLANG_ASM_EXTRA_FLAGS -fno-integrated-as -B${_clang_as_wrapper_dir})
+            add_compile_options("$<$<COMPILE_LANGUAGE:ASM>:-fno-integrated-as>"
+                                "$<$<COMPILE_LANGUAGE:ASM>:-B${_clang_as_wrapper_dir}>")
+            set(BOOTSECT_ASM_EXTRA_FLAGS ${CLANG_ASM_EXTRA_FLAGS})
+            unset(_clang_as_wrapper_dir)
+            unset(_clang_as_wrapper)
+            unset(_clang_as_link_result)
+        else()
+            message(WARNING "Clang assembly may fail without GNU ${_clang_binutils_as_name} from binutils.")
+        endif()
+        unset(_clang_binutils_as_name)
+        unset(_clang_binutils_as)
+        unset(_clang_binutils_as_hints)
     endif()
 endif()
 
@@ -851,19 +950,9 @@ function(CreateBootSectorTarget _target_name _asm_file _binary_file _base_addres
     get_defines(_defines)
     get_includes(_includes)
 
-    # Use i686 GCC assembler for boot sector code (16-bit x86 code requires GCC, clang doesn't support it)
-    if(DEFINED CMAKE_ASM16_COMPILER AND CMAKE_ASM16_COMPILER)
-        set(_bootsect_asm "${CMAKE_ASM16_COMPILER}")
-        # Define _X86_ for 16-bit assembly to avoid x64 SEH macro definitions
-        set(_bootsect_defines -D_X86_ -U_AMD64_ -U__x86_64__)
-    else()
-        set(_bootsect_asm "${CMAKE_ASM_COMPILER}")
-        set(_bootsect_defines "")
-    endif()
-
     add_custom_command(
         OUTPUT ${_object_file}
-        COMMAND ${_bootsect_asm} -x assembler-with-cpp -o ${_object_file} -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm ${_includes} ${_defines} -D__ASM__ ${_bootsect_defines} -c ${_asm_file}
+        COMMAND ${CMAKE_ASM_COMPILER} ${BOOTSECT_ASM_EXTRA_FLAGS} -x assembler-with-cpp -o ${_object_file} -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm ${_includes} ${_defines} -D__ASM__ -c ${_asm_file}
         DEPENDS ${_asm_file})
 
     add_custom_command(
@@ -1005,18 +1094,11 @@ if(NOT IS_ABSOLUTE "${GXX_EXECUTABLE}")
 endif()
 unset(_CLANG_CXX_FALLBACK)
 
-# Allow MMX/SSE2 builtins when using Clang; some headers emit MMX intrinsics.
-# For i386: Do NOT add SSE globally - the bootloader runs before SSE is enabled in CR4.
-#           Bootloader targets explicitly disable SSE via target_compile_options.
-#           Kernel/HAL/drivers can use default Clang behavior (which is soft-float without SSE).
-# For amd64: SSE2 is part of the baseline architecture, so enable it globally.
+# Allow MMX/SSE2 builtins when using clang (llvm-mingw); some headers emit MMX intrinsics.
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    if(ARCH STREQUAL "amd64")
-        # AMD64 baseline includes SSE2, safe to enable globally
-        add_compile_options($<$<COMPILE_LANGUAGE:C>:-mmmx>)
-        add_compile_options($<$<COMPILE_LANGUAGE:C>:-msse2>)
-        add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-mmmx>)
-        add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-msse2>)
+    if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mmmx -msse2" CACHE STRING "C compiler flags" FORCE)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mmmx -msse2" CACHE STRING "C++ compiler flags" FORCE)
     endif()
     execute_process(COMMAND ${CMAKE_C_COMPILER} -print-resource-dir
         OUTPUT_VARIABLE CLANG_RESOURCE_DIR
@@ -1316,17 +1398,11 @@ if(_LIBSTDCCXX_INCLUDE_DIRS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         list(APPEND REACTOS_CXX_STL_INCLUDE_DIRS "$<$<COMPILE_LANGUAGE:CXX>:${_STDCPP_INCLUDE_DIR}>")
     endforeach()
 endif()
-# When using Clang with a MinGW libstdc++ toolchain, CMake detects the
-# include paths from g++ and marks them as "implicit". But Clang doesn't
-# actually know about these paths, so we need to remove them from the
-# implicit list to ensure they get passed explicitly on the command line.
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+if(_LIBSTDCCXX_IS_LIBCXX AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     foreach(_STDCPP_INCLUDE_DIR IN LISTS _LIBSTDCCXX_INCLUDE_DIRS)
         list(REMOVE_ITEM CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES "${_STDCPP_INCLUDE_DIR}")
     endforeach()
-    if(_LIBSTDCCXX_IS_LIBCXX)
-        set(REACTOS_CXX_STL_FORCE_NON_SYSTEM TRUE)
-    endif()
+    set(REACTOS_CXX_STL_FORCE_NON_SYSTEM TRUE)
 endif()
 if(_LIBSTDCCXX_IS_LIBCXX)
     add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:REACTOS_LIBCXX>)

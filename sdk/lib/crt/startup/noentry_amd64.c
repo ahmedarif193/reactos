@@ -1,4 +1,4 @@
-#if defined(_M_AMD64) || defined(_AMD64_) || defined(__x86_64__)
+#if defined(_M_AMD64) || defined(_AMD64_) || defined(__x86_64__) || defined(__x86_64)
 
 __attribute__((used))
 unsigned long __ReactOSNoEntry(void *hinst, unsigned long reason, void *reserved)
