@@ -234,7 +234,8 @@ static const PCWSTR WinLdrLegacyBootServices[] =
     L"Vga",
     L"VgaSave",
     L"Sacdrv",
-    L"BusLogic"
+    L"BusLogic",
+    L"usbuhci"   /* UHCI is Intel x86-specific, not present on ARM64 */
 };
 
 static
