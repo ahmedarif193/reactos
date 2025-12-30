@@ -11,7 +11,10 @@ DEFAULT_TOOLCHAIN_PATH_OVERRIDE=""
 MINGW_X86_64_URL="https://github.com/ahmedarif193/mingw-gcc15.2/releases/download/v15.2/x86_64-w64-mingw32.tar.gz"
 MINGW_I686_URL="https://github.com/ahmedarif193/mingw-gcc15.2/releases/download/v15.2/i686-w64-mingw32.tar.gz"
 MINGW_AARCH64_URL="${MINGW_AARCH64_URL:-}" # Optional external location for the arm64 MinGW toolchain
+LLVM_MINGW_ROOT_OVERRIDE="${ROS_LLVM_MINGW_ROOT:-${LLVM_MINGW_ROOT:-}}"
+LLVM_MINGW_LINUX_DEFAULT="${DEFAULT_TOOLCHAIN_ROOT}/llvm-mingw-20251202-ucrt-ubuntu-22.04-x86_64"
 MINGW_TOOLCHAIN_BANNER_SHOWN=0
+USE_LLVM_MINGW=0
 
 # Ensure Rust toolchain (rustup-managed) and required windows-gnu target are installed
 ensure_rust_toolchain() {
@@ -350,6 +353,29 @@ if [ "$(uname -s)" = "Darwin" ] && [ "$USE_CLANG" -eq 1 ]; then
     fi
 fi
 
+# Linux: prefer llvm-mingw UCRT bundle for clang builds on amd64/arm64 if present.
+if [ "$(uname -s)" = "Linux" ] && [ "$USE_CLANG" -eq 1 ]; then
+    case "$ARCH" in
+        amd64|x86_64|arm64|aarch64)
+            LINUX_LLVM_MINGW_ROOT=""
+            if [ -n "$LLVM_MINGW_ROOT_OVERRIDE" ]; then
+                LINUX_LLVM_MINGW_ROOT="$LLVM_MINGW_ROOT_OVERRIDE"
+            else
+                LINUX_LLVM_MINGW_ROOT="$LLVM_MINGW_LINUX_DEFAULT"
+            fi
+            if [ -d "${LINUX_LLVM_MINGW_ROOT}/bin" ]; then
+                DEFAULT_TOOLCHAIN_ROOT="$LINUX_LLVM_MINGW_ROOT"
+                DEFAULT_TOOLCHAIN_PATH_OVERRIDE="${LINUX_LLVM_MINGW_ROOT}/bin"
+                USE_LLVM_MINGW=1
+                if [ "$CLANG_VERSION_SET" -eq 0 ]; then
+                    CLANG_VERSION=""
+                fi
+            fi
+            unset LINUX_LLVM_MINGW_ROOT
+            ;;
+    esac
+fi
+
 if [ -z "$TOOLCHAIN_PATH" ]; then
     if [ -n "$DEFAULT_TOOLCHAIN_PATH_OVERRIDE" ]; then
         TOOLCHAIN_PATH="$DEFAULT_TOOLCHAIN_PATH_OVERRIDE"
@@ -375,7 +401,7 @@ if [ -z "$TOOLCHAIN_PATH" ]; then
 fi
 
 if [ "$USER_PROVIDED_TOOLCHAIN_PATH" -eq 0 ]; then
-    if ! ([ "$USE_CLANG" -eq 1 ] && [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]); then
+    if [ "$USE_LLVM_MINGW" -eq 0 ] && ! ([ "$USE_CLANG" -eq 1 ] && [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]); then
         case "$TOOLCHAIN_PREFIX" in
             x86_64-w64-mingw32)
                 ensure_mingw_toolchain "x86_64-w64-mingw32" "$MINGW_X86_64_URL"

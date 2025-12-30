@@ -216,11 +216,14 @@ endif()
 set(ROS_RUST_LINKER "${CMAKE_C_COMPILER}")
 set(ROS_RUST_AR "${CMAKE_AR}")
 
-# If using Clang toolchain for C/C++, prefer MinGW GCC driver for Rust linking
+# If using Clang toolchain for C/C++, prefer MinGW GCC driver for Rust GNU targets.
+# For gnullvm targets, keep Clang (GCC does not accept LLVM-only flags like --unwindlib=none).
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # Derive MinGW triplet from the current ReactOS ARCH
     ros_rust_target_from_arch(${ARCH} _ros_rust_triple_for_link)
-    ros_clang_mingw_triplet_from_rust(${_ros_rust_triple_for_link} _mingw_triplet_for_link)
+    if(NOT _ros_rust_triple_for_link MATCHES "gnullvm$")
+        ros_clang_mingw_triplet_from_rust(${_ros_rust_triple_for_link} _mingw_triplet_for_link)
+    endif()
     if(_mingw_triplet_for_link)
         set(_ros_rust_linker_name "${_mingw_triplet_for_link}-gcc")
         set(_ros_rust_ar_name "${_mingw_triplet_for_link}-ar")
@@ -283,6 +286,8 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
         unset(_ros_rust_linker_path)
         unset(_ros_rust_ar_path)
     endif()
+    unset(_mingw_triplet_for_link)
+    unset(_ros_rust_triple_for_link)
 endif()
 
 # Provide a ready-to-use env list for `cmake -E env` in custom commands

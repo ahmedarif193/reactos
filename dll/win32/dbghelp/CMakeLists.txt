@@ -14,6 +14,7 @@ if(NOT CMAKE_CROSSCOMPILING)
         pe_module.c
         source.c
         stabs.c
+        stack.c
         storage.c
         symbol.c
         type.c)

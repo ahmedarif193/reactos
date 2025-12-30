@@ -27,7 +27,9 @@
 #include <assert.h>
 
 #include "dbghelp_private.h"
+#ifndef DBGHELP_STATIC_LIB
 #include "wine/debug.h"
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(dbghelp);
 
@@ -132,6 +134,7 @@ DWORD64 sw_module_base(struct cpu_stack_walk* csw, DWORD64 addr)
         return csw->u.s64.f_modl_bas(csw->hProcess, addr);
 }
 
+#ifndef DBGHELP_STATIC_LIB
 /***********************************************************************
  *		StackWalk (DBGHELP.@)
  */
@@ -271,3 +274,4 @@ BOOL WINAPI SymRegisterFunctionEntryCallback64(HANDLE hProc,
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return FALSE;
 }
+#endif /* DBGHELP_STATIC_LIB */

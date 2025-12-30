@@ -827,6 +827,7 @@ typedef struct _EXCEPTION_REGISTRATION_RECORD
 #define GetCurrentDirectoryW(x, y) 0
 #define GetFileSizeEx __GetFileSizeEx
 #define ReadProcessMemory(a,b,c,d,e) 0
+#define GetThreadSelectorEntry(a,b,c) 0
 #define GetCurrentProcess() (HANDLE)1
 #define IsWow64Process __IsWow64Process
 #define FILE_BEGIN	0

@@ -9,6 +9,7 @@ set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
     CLANG_VERSION
     MINGW_TOOLCHAIN_PREFIX
     MINGW_TOOLCHAIN_SUFFIX
+    ROS_GNU_MINGW_TOOLCHAIN_PATH
     TOOLCHAIN_PATH
     TOOLCHAIN_PREFIX
     CMAKE_LINKER
@@ -142,11 +143,38 @@ macro(_clang_mingw_add_hint_from_tool _tool_var)
     endif()
 endmacro()
 
+if(NOT DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH OR "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
+    if(DEFINED ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH} AND NOT "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
+        set(ROS_GNU_MINGW_TOOLCHAIN_PATH "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}")
+    elseif(DEFINED ENV{HOME} AND NOT "$ENV{HOME}" STREQUAL "")
+        string(REGEX REPLACE "-$" "" _clang_mingw_prefix_dir "${_CLANG_MINGW_PREFIX}")
+        if(NOT _clang_mingw_prefix_dir STREQUAL "")
+            set(_clang_mingw_default_gnu_toolchain_bin
+                "$ENV{HOME}/mingw-toolchains/${_clang_mingw_prefix_dir}/bin")
+            if(EXISTS "${_clang_mingw_default_gnu_toolchain_bin}")
+                set(ROS_GNU_MINGW_TOOLCHAIN_PATH "${_clang_mingw_default_gnu_toolchain_bin}")
+            endif()
+            unset(_clang_mingw_default_gnu_toolchain_bin)
+        endif()
+        unset(_clang_mingw_prefix_dir)
+    endif()
+endif()
+if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
+    set(ROS_GNU_MINGW_TOOLCHAIN_PATH "${ROS_GNU_MINGW_TOOLCHAIN_PATH}"
+        CACHE PATH "Path to GNU MinGW toolchain (bin)")
+endif()
+
 if(DEFINED TOOLCHAIN_PATH AND NOT "${TOOLCHAIN_PATH}" STREQUAL "")
     _clang_mingw_add_hint_dir("${TOOLCHAIN_PATH}")
 endif()
 if(DEFINED ENV{TOOLCHAIN_PATH} AND NOT "$ENV{TOOLCHAIN_PATH}" STREQUAL "")
     _clang_mingw_add_hint_dir("$ENV{TOOLCHAIN_PATH}")
+endif()
+if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
+    _clang_mingw_add_hint_dir("${ROS_GNU_MINGW_TOOLCHAIN_PATH}")
+endif()
+if(DEFINED ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH} AND NOT "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
+    _clang_mingw_add_hint_dir("$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}")
 endif()
 if(APPLE AND EXISTS "/opt/homebrew/opt/binutils/bin")
     _clang_mingw_add_hint_dir("/opt/homebrew/opt/binutils/bin")
