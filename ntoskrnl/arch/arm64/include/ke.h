@@ -240,6 +240,13 @@ extern BOOLEAN KiArm64FinalVectorsInstalled;
 extern BOOLEAN KiArm64SvcConfigured;
 extern BOOLEAN KiArm64IrqFiqConfigured;
 
+/* Debug register counts from ID_AA64DFR0_EL1 */
+extern ULONG KiArm64NumBreakpoints;
+extern ULONG KiArm64NumWatchpoints;
+
+VOID
+KiInitializeDebugRegisterCounts(VOID);
+
 #define Ki386PerfEnd()
 #define KiEndInterrupt(TrapFrame, TrapStatus)
 

@@ -594,6 +594,13 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             }
         }
 
+        /*
+         * Initialize debug register counts from ID_AA64DFR0_EL1 before KD init.
+         * This must happen before any code path that calls KiSaveProcessorControlState,
+         * which occurs during KD symbol loading.
+         */
+        KiInitializeDebugRegisterCounts();
+
         KiArm64BootStageLog("[arm64] KiInitializeSystem: enabling KD");
         /* After KD enable, use normal DPRINT1 path (parity with amd64) */
         DPRINT1("[arm64] KiInitializeSystem: boot cpu enabling KD\n");

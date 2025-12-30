@@ -154,15 +154,6 @@ KfLowerIrql(
     KIRQL OldIrql = KiQueryCurrentIrql();
     CHAR Buf[128];
 
-    if (NT_SUCCESS(RtlStringCbPrintfA(Buf,
-                                      sizeof(Buf),
-                                      "[arm64] KfLowerIrql: entry OldIrql=%lu NewIrql=%lu",
-                                      (ULONG)OldIrql,
-                                      (ULONG)NewIrql)))
-    {
-        KiArm64BootStageLog(Buf);
-    }
-
     if (NewIrql > OldIrql)
     {
         if (NT_SUCCESS(RtlStringCbPrintfA(Buf,
@@ -180,15 +171,6 @@ KfLowerIrql(
 
     KiApplyIrqMaskForIrqlTransition(OldIrql, NewIrql);
     KiSetCurrentIrql(NewIrql);
-
-    if (NT_SUCCESS(RtlStringCbPrintfA(Buf,
-                                      sizeof(Buf),
-                                      "[arm64] KfLowerIrql: exit OldIrql=%lu NewIrql=%lu",
-                                      (ULONG)OldIrql,
-                                      (ULONG)NewIrql)))
-    {
-        KiArm64BootStageLog(Buf);
-    }
 }
 
 NTKERNELAPI

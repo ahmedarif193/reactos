@@ -37,6 +37,42 @@ ULONG KeIcacheFlushCount;
 ULONG KeDcacheFlushCount;
 ULONG KeLargestCacheLine = 64;
 
+/*
+ * Number of hardware breakpoint and watchpoint registers.
+ * Read from ID_AA64DFR0_EL1 during early init.
+ * BRPs field (bits 15:12) gives breakpoints-1, WRPs field (bits 23:20) gives watchpoints-1.
+ * Default to conservative values (6 breakpoints, 2 watchpoints) until initialized.
+ */
+ULONG KiArm64NumBreakpoints = 6;
+ULONG KiArm64NumWatchpoints = 2;
+
+/*
+ * Initialize the debug register counts by reading ID_AA64DFR0_EL1.
+ * Called early during CPU initialization.
+ */
+VOID
+KiInitializeDebugRegisterCounts(VOID)
+{
+    ULONGLONG Dfr0;
+
+    __asm__ __volatile__("mrs %0, id_aa64dfr0_el1" : "=r"(Dfr0));
+
+    /* BRPs field (bits 15:12): number of breakpoints minus 1 */
+    KiArm64NumBreakpoints = ((Dfr0 >> 12) & 0xF) + 1;
+
+    /* WRPs field (bits 23:20): number of watchpoints minus 1 */
+    KiArm64NumWatchpoints = ((Dfr0 >> 20) & 0xF) + 1;
+
+    /* Clamp to maximum supported by our structures (8 BPs, 2 WPs) */
+    if (KiArm64NumBreakpoints > 8)
+        KiArm64NumBreakpoints = 8;
+    if (KiArm64NumWatchpoints > 2)
+        KiArm64NumWatchpoints = 2;
+
+    DPRINT1("[arm64] Debug registers: %u breakpoints, %u watchpoints\n",
+            KiArm64NumBreakpoints, KiArm64NumWatchpoints);
+}
+
 #if DBG
 static __inline ULONGLONG KiRead_ID_AA64PFR0_EL1(void)
 {
@@ -140,6 +176,7 @@ NTAPI
 KiSaveProcessorControlState(_Out_ PKPROCESSOR_STATE ProcessorState)
 {
     ULONGLONG Value;
+    ULONG NumBps, NumWps;
 
     if (ProcessorState == NULL)
     {
@@ -153,28 +190,41 @@ KiSaveProcessorControlState(_Out_ PKPROCESSOR_STATE ProcessorState)
     READ_SYSREG64(ProcessorState->SpecialRegisters.Tpidrro_El0, tpidrro_el0);
     READ_SYSREG64(ProcessorState->SpecialRegisters.Tpidr_El1, tpidr_el1);
 
-    READ_DBG_SLOT(KernelBvr, 0, "dbgbvr");
-    READ_DBG_SLOT(KernelBvr, 1, "dbgbvr");
-    READ_DBG_SLOT(KernelBvr, 2, "dbgbvr");
-    READ_DBG_SLOT(KernelBvr, 3, "dbgbvr");
-    READ_DBG_SLOT(KernelBvr, 4, "dbgbvr");
-    READ_DBG_SLOT(KernelBvr, 5, "dbgbvr");
-    READ_DBG_SLOT(KernelBvr, 6, "dbgbvr");
-    READ_DBG_SLOT(KernelBvr, 7, "dbgbvr");
+    /*
+     * Save hardware breakpoint registers. Only access registers that exist
+     * according to ID_AA64DFR0_EL1. Accessing non-existent registers causes
+     * an undefined instruction exception on some implementations (e.g., QEMU).
+     */
+    NumBps = KiArm64NumBreakpoints;
 
-    READ_DBG_SLOT(KernelBcr, 0, "dbgbcr");
-    READ_DBG_SLOT(KernelBcr, 1, "dbgbcr");
-    READ_DBG_SLOT(KernelBcr, 2, "dbgbcr");
-    READ_DBG_SLOT(KernelBcr, 3, "dbgbcr");
-    READ_DBG_SLOT(KernelBcr, 4, "dbgbcr");
-    READ_DBG_SLOT(KernelBcr, 5, "dbgbcr");
-    READ_DBG_SLOT(KernelBcr, 6, "dbgbcr");
-    READ_DBG_SLOT(KernelBcr, 7, "dbgbcr");
+    /* Zero out all slots first to ensure clean state */
+    RtlZeroMemory(ProcessorState->SpecialRegisters.KernelBvr,
+                  sizeof(ProcessorState->SpecialRegisters.KernelBvr));
+    RtlZeroMemory(ProcessorState->SpecialRegisters.KernelBcr,
+                  sizeof(ProcessorState->SpecialRegisters.KernelBcr));
 
-    READ_DBG_SLOT(KernelWvr, 0, "dbgwvr");
-    READ_DBG_SLOT(KernelWvr, 1, "dbgwvr");
-    READ_DBG_SLOT(KernelWcr, 0, "dbgwcr");
-    READ_DBG_SLOT(KernelWcr, 1, "dbgwcr");
+    /* Save only the breakpoint registers that exist */
+    if (NumBps > 0) { READ_DBG_SLOT(KernelBvr, 0, "dbgbvr"); READ_DBG_SLOT(KernelBcr, 0, "dbgbcr"); }
+    if (NumBps > 1) { READ_DBG_SLOT(KernelBvr, 1, "dbgbvr"); READ_DBG_SLOT(KernelBcr, 1, "dbgbcr"); }
+    if (NumBps > 2) { READ_DBG_SLOT(KernelBvr, 2, "dbgbvr"); READ_DBG_SLOT(KernelBcr, 2, "dbgbcr"); }
+    if (NumBps > 3) { READ_DBG_SLOT(KernelBvr, 3, "dbgbvr"); READ_DBG_SLOT(KernelBcr, 3, "dbgbcr"); }
+    if (NumBps > 4) { READ_DBG_SLOT(KernelBvr, 4, "dbgbvr"); READ_DBG_SLOT(KernelBcr, 4, "dbgbcr"); }
+    if (NumBps > 5) { READ_DBG_SLOT(KernelBvr, 5, "dbgbvr"); READ_DBG_SLOT(KernelBcr, 5, "dbgbcr"); }
+    if (NumBps > 6) { READ_DBG_SLOT(KernelBvr, 6, "dbgbvr"); READ_DBG_SLOT(KernelBcr, 6, "dbgbcr"); }
+    if (NumBps > 7) { READ_DBG_SLOT(KernelBvr, 7, "dbgbvr"); READ_DBG_SLOT(KernelBcr, 7, "dbgbcr"); }
+
+    /*
+     * Save hardware watchpoint registers. Same principle as breakpoints.
+     */
+    NumWps = KiArm64NumWatchpoints;
+
+    RtlZeroMemory(ProcessorState->SpecialRegisters.KernelWvr,
+                  sizeof(ProcessorState->SpecialRegisters.KernelWvr));
+    RtlZeroMemory(ProcessorState->SpecialRegisters.KernelWcr,
+                  sizeof(ProcessorState->SpecialRegisters.KernelWcr));
+
+    if (NumWps > 0) { READ_DBG_SLOT(KernelWvr, 0, "dbgwvr"); READ_DBG_SLOT(KernelWcr, 0, "dbgwcr"); }
+    if (NumWps > 1) { READ_DBG_SLOT(KernelWvr, 1, "dbgwvr"); READ_DBG_SLOT(KernelWcr, 1, "dbgwcr"); }
 
     READ_SYSREG64(ProcessorState->ArchState.Midr_El1, midr_el1);
     READ_SYSREG64(ProcessorState->ArchState.Sctlr_El1, sctlr_el1);
@@ -204,6 +254,8 @@ VOID
 NTAPI
 KiRestoreProcessorControlState(_In_ PKPROCESSOR_STATE ProcessorState)
 {
+    ULONG NumBps, NumWps;
+
     if (ProcessorState == NULL)
     {
         return;
@@ -213,28 +265,28 @@ KiRestoreProcessorControlState(_In_ PKPROCESSOR_STATE ProcessorState)
     WRITE_SYSREG64(tpidrro_el0, ProcessorState->SpecialRegisters.Tpidrro_El0);
     WRITE_SYSREG64(tpidr_el1, ProcessorState->SpecialRegisters.Tpidr_El1);
 
-    WRITE_DBG_SLOT(KernelBvr, 0, "dbgbvr");
-    WRITE_DBG_SLOT(KernelBvr, 1, "dbgbvr");
-    WRITE_DBG_SLOT(KernelBvr, 2, "dbgbvr");
-    WRITE_DBG_SLOT(KernelBvr, 3, "dbgbvr");
-    WRITE_DBG_SLOT(KernelBvr, 4, "dbgbvr");
-    WRITE_DBG_SLOT(KernelBvr, 5, "dbgbvr");
-    WRITE_DBG_SLOT(KernelBvr, 6, "dbgbvr");
-    WRITE_DBG_SLOT(KernelBvr, 7, "dbgbvr");
+    /*
+     * Restore hardware breakpoint registers. Only access registers that exist
+     * according to ID_AA64DFR0_EL1.
+     */
+    NumBps = KiArm64NumBreakpoints;
 
-    WRITE_DBG_SLOT(KernelBcr, 0, "dbgbcr");
-    WRITE_DBG_SLOT(KernelBcr, 1, "dbgbcr");
-    WRITE_DBG_SLOT(KernelBcr, 2, "dbgbcr");
-    WRITE_DBG_SLOT(KernelBcr, 3, "dbgbcr");
-    WRITE_DBG_SLOT(KernelBcr, 4, "dbgbcr");
-    WRITE_DBG_SLOT(KernelBcr, 5, "dbgbcr");
-    WRITE_DBG_SLOT(KernelBcr, 6, "dbgbcr");
-    WRITE_DBG_SLOT(KernelBcr, 7, "dbgbcr");
+    if (NumBps > 0) { WRITE_DBG_SLOT(KernelBvr, 0, "dbgbvr"); WRITE_DBG_SLOT(KernelBcr, 0, "dbgbcr"); }
+    if (NumBps > 1) { WRITE_DBG_SLOT(KernelBvr, 1, "dbgbvr"); WRITE_DBG_SLOT(KernelBcr, 1, "dbgbcr"); }
+    if (NumBps > 2) { WRITE_DBG_SLOT(KernelBvr, 2, "dbgbvr"); WRITE_DBG_SLOT(KernelBcr, 2, "dbgbcr"); }
+    if (NumBps > 3) { WRITE_DBG_SLOT(KernelBvr, 3, "dbgbvr"); WRITE_DBG_SLOT(KernelBcr, 3, "dbgbcr"); }
+    if (NumBps > 4) { WRITE_DBG_SLOT(KernelBvr, 4, "dbgbvr"); WRITE_DBG_SLOT(KernelBcr, 4, "dbgbcr"); }
+    if (NumBps > 5) { WRITE_DBG_SLOT(KernelBvr, 5, "dbgbvr"); WRITE_DBG_SLOT(KernelBcr, 5, "dbgbcr"); }
+    if (NumBps > 6) { WRITE_DBG_SLOT(KernelBvr, 6, "dbgbvr"); WRITE_DBG_SLOT(KernelBcr, 6, "dbgbcr"); }
+    if (NumBps > 7) { WRITE_DBG_SLOT(KernelBvr, 7, "dbgbvr"); WRITE_DBG_SLOT(KernelBcr, 7, "dbgbcr"); }
 
-    WRITE_DBG_SLOT(KernelWvr, 0, "dbgwvr");
-    WRITE_DBG_SLOT(KernelWvr, 1, "dbgwvr");
-    WRITE_DBG_SLOT(KernelWcr, 0, "dbgwcr");
-    WRITE_DBG_SLOT(KernelWcr, 1, "dbgwcr");
+    /*
+     * Restore hardware watchpoint registers.
+     */
+    NumWps = KiArm64NumWatchpoints;
+
+    if (NumWps > 0) { WRITE_DBG_SLOT(KernelWvr, 0, "dbgwvr"); WRITE_DBG_SLOT(KernelWcr, 0, "dbgwcr"); }
+    if (NumWps > 1) { WRITE_DBG_SLOT(KernelWvr, 1, "dbgwvr"); WRITE_DBG_SLOT(KernelWcr, 1, "dbgwcr"); }
 
     WRITE_SYSREG64(tcr_el1, ProcessorState->ArchState.Tcr_El1);
     WRITE_SYSREG64(ttbr0_el1, ProcessorState->ArchState.Ttbr0_El1);
