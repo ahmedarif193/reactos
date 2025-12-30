@@ -101,12 +101,13 @@ typedef struct _FREELDR_MEMORY_DESCRIPTOR
 #define MM_PAGE_SHIFT    12
 /*
  * ARM64 UEFI systems (like QEMU virt) often have RAM starting at 1GB physical.
- * We need MM_MAX_PAGE_LOADER_MAPPED to be high enough to include usable RAM.
- * Map up to 4GB to cover typical ARM64 UEFI configurations.
+ * With 3GB RAM starting at 1GB offset, the highest page is ~0x140000 (5GB).
+ * We set MM_MAX_PAGE_LOADER to 8GB to handle typical ARM64 UEFI configurations
+ * with headroom for larger memory or different firmware layouts.
  */
 #define MM_MAX_PAGE                0xFFFFFFFFFULL /* 36-bit PFN span */
-#define MM_MAX_PAGE_LOADER         0x100000  /* Can allocate from first 4 GB */
-#define MM_MAX_PAGE_LOADER_MAPPED  0x100000  /* Loader maps first 4 GB (ARM64 UEFI needs this) */
+#define MM_MAX_PAGE_LOADER         0x200000  /* Can allocate from first 8 GB */
+#define MM_MAX_PAGE_LOADER_MAPPED  0x200000  /* Loader maps first 8 GB (ARM64 UEFI needs this) */
 
 #define MM_SIZE_TO_PAGES(a)  \
     ( ((a) >> MM_PAGE_SHIFT) + ((a) & MM_PAGE_MASK ? 1 : 0) )

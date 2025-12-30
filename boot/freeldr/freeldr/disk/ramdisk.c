@@ -124,7 +124,7 @@ static PVOID     RamDiskWritableBase = NULL;
 static ULONGLONG RamDiskWritableSize = 0;
 static BOOLEAN   RamDiskErrorShown = FALSE;
 
-#if defined(_M_AMD64) || defined(__x86_64__)
+#if defined(_M_AMD64) || defined(__x86_64__) || defined(_M_ARM64) || defined(__aarch64__)
 #define RAMDISK_MAX_LOW_BYTES     ((ULONGLONG)MM_MAX_PAGE_LOADER_MAPPED << MM_PAGE_SHIFT)
 #else
 #define RAMDISK_MAX_LOW_BYTES     (0x40000000ULL) /* 1 GiB on 32-bit */
