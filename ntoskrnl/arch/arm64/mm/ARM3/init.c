@@ -283,12 +283,28 @@ MiArm64EnsureAliasMappingForPointer(
 /*
  * Map the PXE alias page that contains the self-map entry so that
  * dereferencing addresses in the PXE alias region is safe.
+ *
+ * CRITICAL: The ARM64 self-map at L0[493] creates a recursive structure where:
+ * - PXE_BASE (indices [493,493,493,493]) walks purely through the recursive entry
+ * - PPE_BASE (indices [493,493,493,*]) works because the first 3 levels are recursive
+ * - PDE_BASE (indices [493,493,*,*]) and PTE_BASE (indices [493,*,*,*]) require
+ *   intermediate L0 entries to exist because the walk leaves the recursive path
+ *
+ * For example, PDE_BASE+0 has indices [493,493,0,0]:
+ *   L0[493] -> L0 (recursive)
+ *   L0[493] -> L0 (recursive)
+ *   L0[0] -> This needs a valid table descriptor!
+ *   L1[0] -> The actual entry we're accessing
+ *
+ * This function sets up not only the recursive L0[493] entry but also ensures
+ * that intermediate table entries exist for the self-map to work correctly.
  */
 VOID
 MiArm64MapPxeAlias(VOID)
 {
 #if defined(_M_ARM64) || defined(__aarch64__)
     UINT64 Ttbr1;
+    ULONG i;
 
     KiArm64BootStageLog("[arm64] MiArm64MapPxeAlias: entry");
 
@@ -314,17 +330,6 @@ MiArm64MapPxeAlias(VOID)
             KiArm64BootStageLog(Stage);
         }
     }
-
-    /* CRITICAL FIX: For PXE_BASE mapping, we CANNOT use MiArm64LookupTableEntry because
-     * it would try to walk through the self-map which isn't set up yet. Instead, we must
-     * directly access the L0 table via KSEG0 (physical mapping) and manually set up the
-     * recursive structure.
-     *
-     * The key insight: PXE_BASE uses indices [493][493][493][493] due to recursion.
-     * L0[493] points to L0 itself (the recursive entry).
-     * So accessing PXE_BASE actually accesses L0[493] through four levels of recursion.
-     * We just need to ensure L0[493] is set up correctly - no intermediate tables needed!
-     */
 
     volatile UINT64 *RootL0 = (volatile UINT64 *)MiArm64PhysToKseg0(RootPa);
     UINT64 Current = RootL0[SelfIndex];
@@ -352,6 +357,47 @@ MiArm64MapPxeAlias(VOID)
     else
     {
         KiArm64BootStageLog("[arm64] MiArm64MapPxeAlias: L0[493] recursive entry already correct");
+    }
+
+    /*
+     * NOTE: The self-map recursive structure has specific requirements for L0 entries.
+     * When accessing PDE_BASE or PTE_BASE through the self-map, the translation walk
+     * may need to traverse L0 entries that correspond to user-mode address ranges.
+     *
+     * DANGEROUS APPROACH (REMOVED): Previously, we filled ALL empty L0 entries with
+     * a shared placeholder page. This creates serious problems:
+     * - Those entries are no longer "empty" - code may treat them as real mappings
+     * - When user processes need real page tables, we'd have conflicts
+     * - Hard-to-debug memory corruption when the shared page is accessed
+     *
+     * SAFER APPROACH: Only ensure the kernel-space L0 entries are properly mapped.
+     * The self-map should primarily be used for kernel address space management.
+     * If user-space self-map access is needed, allocate real tables on-demand
+     * through proper fault handlers, not dummy placeholders.
+     *
+     * For now, we rely on FreeLDR having set up the necessary kernel L0 entries
+     * (typically indices 256-511 for kernel space on ARM64). The self-map recursive
+     * entry at L0[493] is sufficient for most kernel MM operations.
+     */
+    {
+        /* Log the self-map configuration for debugging */
+        CHAR Stage[160];
+        ULONG ValidEntries = 0;
+
+        /* Count how many L0 entries are actually mapped */
+        for (i = 0; i < 512; i++)
+        {
+            if (RootL0[i] & 1ULL)
+                ValidEntries++;
+        }
+
+        if (NT_SUCCESS(RtlStringCbPrintfA(Stage,
+                                          sizeof(Stage),
+                                          "[arm64] MiArm64MapPxeAlias: L0 has %lu valid entries (no placeholders)",
+                                          (unsigned long)ValidEntries)))
+        {
+            KiArm64BootStageLog(Stage);
+        }
     }
 
     /* Verify the self-map setup by checking we can now access PXE_BASE.
@@ -400,13 +446,21 @@ MiArm64MapAliasForPointer(
 
     PVOID AliasBase = (PVOID)((ULONG_PTR)AliasVa & ~(PAGE_SIZE - 1ULL));
 
-    if (MiIsUserPxe(AliasVa))
+    /* Only call MiArm64MapPxeAlias for addresses actually IN the PXE_BASE range.
+     * MiIsUserPxe checks if it's a "user" PXE, but we must first ensure it's
+     * even in the PXE range at all. PTE/PDE/PPE addresses are all less than
+     * PXE_BASE, so the old check would incorrectly match them.
+     */
+    if ((AliasVa >= (PVOID)PXE_BASE) && MiIsUserPxe(AliasVa))
     {
         MiArm64MapPxeAlias();
         return;
     }
 
-    if (MiIsUserPpe(AliasVa))
+    /* Handle all PPEs - both user and kernel/system.
+     * The self-map needs alias pages for kernel PPEs too.
+     */
+    if ((AliasVa >= (PVOID)PPE_BASE) && (AliasVa < (PVOID)PXE_BASE))
     {
         ULONG64 ippe = (((ULONG64)(ULONG_PTR)AliasVa) - (ULONG64)PPE_BASE) >> 3;
         ULONG64 pxi = (ippe >> 9) & 0x1FFULL;
@@ -423,7 +477,10 @@ MiArm64MapAliasForPointer(
         return;
     }
 
-    if (MiIsUserPde(AliasVa))
+    /* Handle all PDEs - both user and kernel/system.
+     * The self-map needs alias pages for kernel PDEs too.
+     */
+    if ((AliasVa >= (PVOID)PDE_BASE) && (AliasVa < (PVOID)PPE_BASE))
     {
         ULONG64 ipde = (((ULONG64)(ULONG_PTR)AliasVa) - (ULONG64)PDE_BASE) >> 3;
         ULONG64 ppi = (ipde >> 9) & 0x1FFULL;
@@ -452,7 +509,14 @@ MiArm64MapAliasForPointer(
         return;
     }
 
-    if (MiIsUserPte(AliasVa))
+    /* Handle all PTEs - both user and kernel/system.
+     * The self-map needs alias pages for kernel PTEs too!
+     *
+     * Previously, only MiIsUserPte() addresses were handled, which caused
+     * translation faults when accessing PTEs for kernel addresses
+     * (e.g., FFFFF6C000214000 is the PTE for kernel VA 0xFFFF800042800000).
+     */
+    if ((AliasVa >= (PVOID)PTE_BASE) && (AliasVa < (PVOID)PDE_BASE))
     {
         ULONG64 ipte = (((ULONG64)(ULONG_PTR)AliasVa) - (ULONG64)PTE_BASE) >> 3;
         ULONG64 pdi = (ipte >> 9) & 0x1FFULL;
@@ -466,10 +530,26 @@ MiArm64MapAliasForPointer(
             PFN_NUMBER Pfn = MxGetNextPage(1);
             if (Pfn != 0)
             {
-                /* Zero new L0 table page then publish descriptor */
+                /* Zero new L1 table page then publish descriptor */
                 RtlZeroMemory(MiArm64PfnToKseg0(Pfn), PAGE_SIZE);
                 *E0 = MI_ARM64_MAKE_TABLE_DESC(Pfn);
                 __asm__ __volatile__("dsb ishst" ::: "memory");
+
+                /* Log when creating L0 entries for kernel PTE alias regions */
+                if (MiArm64AliasLogBudget > 0)
+                {
+                    LONG Snapshot = InterlockedDecrement(&MiArm64AliasLogBudget);
+                    if (Snapshot >= 0)
+                    {
+                        CHAR Log[160];
+                        if (NT_SUCCESS(RtlStringCbPrintfA(Log, sizeof(Log),
+                            "[arm64] MiArm64MapAliasForPointer: created L0[%lu] for PTE alias %p (VaSynth=%p)",
+                            (ULONG)pxi, AliasVa, VaSynth)))
+                        {
+                            KiArm64BootStageLog(Log);
+                        }
+                    }
+                }
             }
         }
 
@@ -723,6 +803,12 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         KiArm64BootStageLog("[arm64] MiInitMachineDependent: building nonpaged pool");
         MiBuildNonPagedPool();
         KiArm64BootStageLog("[arm64] MiInitMachineDependent: nonpaged pool ready");
+
+        /* Initialize the nonpaged pool descriptor so ExAllocatePoolWithTag works */
+        KiArm64BootStageLog("[arm64] MiInitMachineDependent: initializing pool descriptor");
+        InitializePool(NonPagedPool, 0);
+        KiArm64BootStageLog("[arm64] MiInitMachineDependent: pool descriptor ready");
+
         KiArm64BootStageLog("[arm64] MiInitMachineDependent: building system PTE space");
         MiBuildSystemPteSpace();
         KiArm64BootStageLog("[arm64] MiInitMachineDependent: system PTE space ready");

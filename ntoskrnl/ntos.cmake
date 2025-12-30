@@ -3,9 +3,8 @@ get_filename_component(NTOS_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
 
 set(NT_ARCH "${ARCH}" CACHE STRING "Kernel architecture (i386|amd64|arm64)")
 set(NTOS_ARCH_DIR "${NTOS_SOURCE_DIR}/arch/${NT_ARCH}")
-if(NT_ARCH STREQUAL "arm64")
-    set(KDBG FALSE)
-endif()
+# ARM64 uses KDBG but with its own kdb_shim.c instead of the x86-specific kdb.c
+# The shim provides crash output with stack traces and register dumps.
 
 include_directories(
     ${REACTOS_SOURCE_DIR}
@@ -485,14 +484,20 @@ if(NOT _WINKD_)
     endif()
 
     if(KDBG)
-        list(APPEND SOURCE
-            ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdbg.c
-            ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb.c
-            ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_cli.c
-            ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_cmdhist.c
-            ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_expr.c
-            ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_print.c
-            ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_symbols.c)
+        # kdbg.c is the common entry point for debugger packets
+        list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdbg.c)
+
+        # ARM64 uses kdb_shim.c instead of the x86-specific kdb.c/kdb_cli.c
+        # The shim provides all necessary functions for crash output
+        if(NOT NT_ARCH STREQUAL "arm64")
+            list(APPEND SOURCE
+                ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb.c
+                ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_cli.c
+                ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_cmdhist.c
+                ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_expr.c
+                ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_print.c
+                ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_symbols.c)
+        endif()
     endif()
 
     list(APPEND SOURCE

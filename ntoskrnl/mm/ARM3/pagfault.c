@@ -1910,6 +1910,27 @@ MmArmAccessFault(IN ULONG FaultCode,
     PMMPFN Pfn1;
     DPRINT("ARM3 FAULT AT: %p\n", Address);
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* ARM64 DIAGNOSTIC: Log every MmArmAccessFault call - no filter */
+    {
+        static volatile LONG EntryBudget = 5;
+        if (EntryBudget > 0)
+        {
+            if (InterlockedDecrement(&EntryBudget) >= 0)
+            {
+                extern VOID KiArm64BootStageLog(_In_z_ PCSTR Message);
+                CHAR Buffer[200];
+                RtlStringCbPrintfA(Buffer, sizeof(Buffer),
+                    "[MmArm] Addr=%p IRQL=%u IsHyper=%d PXE=%p",
+                    Address, OldIrql,
+                    (int)MI_IS_PAGE_TABLE_OR_HYPER_ADDRESS(Address),
+                    PointerPxe);
+                KiArm64BootStageLog(Buffer);
+            }
+        }
+    }
+#endif
+
     /* Check for page fault on high IRQL */
     if (OldIrql > APC_LEVEL)
     {
@@ -1976,6 +1997,55 @@ MmArmAccessFault(IN ULONG FaultCode,
             }
         }
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /*
+         * ARM64 HIGH-IRQL SELF-MAP FIX:
+         *
+         * On ARM64, even when PointerPxe/Ppe/Pde/Pte dereferences succeed
+         * (because intermediate page tables exist), the actual faulting address
+         * in the self-map window (PTE_BASE..MmHyperSpaceEnd) may still need
+         * its alias mapping created.
+         *
+         * This is critical at HIGH IRQL because:
+         * 1. Code accesses PTE/PDE/PPE addresses to manipulate page tables
+         * 2. The pointer dereferences (PointerPte->u.Hard.Valid) work because
+         *    the intermediate L0/L1/L2 tables already exist
+         * 3. BUT the final L3 entry for the target address may not be mapped yet
+         * 4. Without this fix, we return SUCCESS without creating the mapping,
+         *    causing an infinite fault loop
+         *
+         * Example: Address FFFFF6C000214000 (PTE for kernel VA):
+         *   - PointerPte points into page table structures (already valid)
+         *   - But FFFFF6C000214000 itself needs an L3 entry via self-map
+         *   - MiArm64MapAliasForPointer creates this missing L3 entry
+         */
+        if (MI_IS_PAGE_TABLE_OR_HYPER_ADDRESS(Address))
+        {
+            extern VOID MiArm64MapAliasForPointer(_In_ PVOID AliasVa);
+
+            /* Create the self-map alias page backing for this address */
+            MiArm64MapAliasForPointer(Address);
+
+            /*
+             * Invalidate TLB for the faulting address. The mapping was just created
+             * via KSEG0 direct manipulation, so we need to ensure the MMU sees it.
+             * Use TLBI VAE1IS (invalidate by VA, Inner Shareable) for SMP safety.
+             */
+            {
+                ULONG64 VaForTlbi = ((ULONG64)(ULONG_PTR)Address) >> 12;
+                __asm__ __volatile__(
+                    "dsb ishst\n\t"           /* Ensure stores are visible */
+                    "tlbi vae1is, %0\n\t"     /* Invalidate TLB entry */
+                    "dsb ish\n\t"             /* Wait for TLB invalidation */
+                    "isb\n\t"                 /* Synchronize context */
+                    : : "r"(VaForTlbi) : "memory"
+                );
+            }
+
+            DPRINT1("ARM64: Created self-map alias at high IRQL for %p\n", Address);
+        }
+#endif
+
         /* Nothing is actually wrong */
         DPRINT1("Fault at IRQL %u is ok (%p)\n", OldIrql, Address);
         return STATUS_SUCCESS;
@@ -2018,15 +2088,69 @@ MmArmAccessFault(IN ULONG FaultCode,
 
         /* The PDE is valid, so read the PTE */
         TempPte = *PointerPte;
-        if (TempPte.u.Hard.Valid == 1)
+#if defined(_M_ARM64) || defined(__aarch64__)
         {
+            /* ARM64 DIAGNOSTIC: Log PTE state to understand early-return path */
+            static volatile LONG DiagBudget = 5;
+            if ((DiagBudget > 0) && MI_IS_PAGE_TABLE_OR_HYPER_ADDRESS(Address))
+            {
+                if (InterlockedDecrement(&DiagBudget) >= 0)
+                {
+                    extern VOID KiArm64BootStageLog(_In_z_ PCSTR Message);
+                    CHAR Buffer[128];
+                    ULONG IsValid = MI_IS_PTE_VALID_ARM64(TempPte) ? 1 : 0;
+                    RtlStringCbPrintfA(Buffer, sizeof(Buffer),
+                        "[pagfault] Addr=%p PTE=0x%I64x Bits[1:0]=%u ValidL3=%u",
+                        Address, TempPte.u.Long, (ULONG)(TempPte.u.Long & 3), IsValid);
+                    KiArm64BootStageLog(Buffer);
+                }
+            }
+        }
+#endif
+        /*
+         * ARM64: Check if the PTE is valid using architecture-specific rules.
+         * On ARM64, L3 page descriptors require bits [1:0] = 0b11 for validity.
+         * A value of 0b01 (Valid=1, NotLargePage=0) is a block descriptor,
+         * which is INVALID at L3 level. Using MI_IS_PTE_VALID_ARM64 ensures
+         * we correctly identify only valid page descriptors.
+         */
+#if defined(_M_ARM64) || defined(__aarch64__)
+        if (MI_IS_PTE_VALID_ARM64(TempPte))
+#else
+        if (TempPte.u.Hard.Valid == 1)
+#endif
+        {
+#if defined(_M_ARM64) || defined(__aarch64__)
+            /* ARM64 DIAGNOSTIC: Log that we're entering early-return path */
+            static volatile LONG DiagBudget2 = 5;
+            if ((DiagBudget2 > 0) && MI_IS_PAGE_TABLE_OR_HYPER_ADDRESS(Address))
+            {
+                if (InterlockedDecrement(&DiagBudget2) >= 0)
+                {
+                    extern VOID KiArm64BootStageLog(_In_z_ PCSTR Message);
+                    CHAR Buffer[128];
+                    RtlStringCbPrintfA(Buffer, sizeof(Buffer),
+                        "[pagfault] Line2070: PTE valid, entering early-return path");
+                    KiArm64BootStageLog(Buffer);
+                }
+            }
+#endif
             /* Check if this was system space or session space */
             if (!IsSessionAddress)
             {
                 /* Check if the PTE is still valid under PFN lock */
                 OldIrql = MiAcquirePfnLock();
                 TempPte = *PointerPte;
+                /*
+                 * ARM64: Re-check PTE validity with proper architecture-specific check.
+                 * This is the second check after acquiring PFN lock to ensure the PTE
+                 * didn't change. Must use the same ARM64-aware validity check.
+                 */
+#if defined(_M_ARM64) || defined(__aarch64__)
+                if (MI_IS_PTE_VALID_ARM64(TempPte))
+#else
                 if (TempPte.u.Hard.Valid)
+#endif
                 {
                     /* Check if this was a write */
                     if (MI_IS_WRITE_ACCESS(FaultCode))
@@ -2059,6 +2183,64 @@ MmArmAccessFault(IN ULONG FaultCode,
 
                 /* Release PFN lock and return all good */
                 MiReleasePfnLock(OldIrql);
+#if defined(_M_ARM64) || defined(__aarch64__)
+                /*
+                 * ARM64 CRITICAL FIX: TLB Invalidation for Self-Map Addresses
+                 *
+                 * PROBLEM: The PTE is valid, but we took a translation fault. This means
+                 * the ARM64 TLB has cached a "translation fault" result for this VA.
+                 * Simply returning STATUS_SUCCESS will cause the fault to repeat infinitely
+                 * because the TLB still contains the stale fault entry.
+                 *
+                 * ROOT CAUSE: ARM64's weakly-ordered memory model and TLB behavior:
+                 * 1. When a translation fault occurs, the TLB may cache the fault result
+                 * 2. If another CPU or previous code created the PTE mapping, the local
+                 *    CPU's TLB doesn't automatically see it
+                 * 3. The fault handler finds a valid PTE but the TLB entry says "fault"
+                 * 4. Without TLB invalidation, we loop forever
+                 *
+                 * SOLUTION: For self-map addresses (PTE_BASE region), explicitly invalidate
+                 * the TLB entry before returning SUCCESS. This ensures the MMU refetches
+                 * the translation and sees the valid PTE.
+                 *
+                 * WHY SELF-MAP ONLY: Self-map addresses are special because:
+                 * - They're created on-demand by MiArm64MapAliasForPointer
+                 * - The PTE might be created by another code path or CPU
+                 * - The TLB state is ambiguous (fault cached, but PTE valid)
+                 * - Regular pages don't have this race condition
+                 */
+                if (MI_IS_PAGE_TABLE_OR_HYPER_ADDRESS(Address))
+                {
+                    static volatile LONG DiagBudget3 = 5;
+                    if (DiagBudget3 > 0)
+                    {
+                        if (InterlockedDecrement(&DiagBudget3) >= 0)
+                        {
+                            extern VOID KiArm64BootStageLog(_In_z_ PCSTR Message);
+                            CHAR Buffer[128];
+                            RtlStringCbPrintfA(Buffer, sizeof(Buffer),
+                                "[pagfault] Line2111: Invalidating TLB for self-map addr=%p",
+                                Address);
+                            KiArm64BootStageLog(Buffer);
+                        }
+                    }
+
+                    /*
+                     * Invalidate TLB for this specific VA using TLBI VAE1IS.
+                     * - DSB ISHST: Ensure all prior stores (PTE writes) are visible
+                     * - TLBI VAE1IS: Invalidate TLB entry for this VA (Inner Shareable)
+                     * - DSB ISH: Wait for TLB invalidation to complete
+                     * - ISB: Synchronize instruction fetch pipeline
+                     */
+                    ULONG64 VaForTlbi = ((ULONG64)(ULONG_PTR)Address) >> 12;
+                    __asm__ __volatile__(
+                        "dsb ishst\n\t"           /* Ensure stores are visible */
+                        "tlbi vae1is, %0\n\t"     /* Invalidate TLB for this VA */
+                        "dsb ish\n\t"             /* Barrier before instruction fetch */
+                        "isb"                      /* Synchronize context */
+                        : : "r"(VaForTlbi) : "memory");
+                }
+#endif
                 return STATUS_SUCCESS;
             }
         }
@@ -2091,8 +2273,71 @@ _WARN("Session space stuff is not implemented yet!")
             /* Windows does this check but I don't understand why -- it's done above! */
             ASSERT(MiCheckPdeForPagedPool(Address) != STATUS_WAIT_1);
 #endif
+#if defined(_M_ARM64) || defined(__aarch64__)
+            /*
+             * ARM64 CRITICAL FIX: Self-map alias pages must be created on-demand.
+             *
+             * When code accesses PTE_BASE, PDE_BASE, PPE_BASE, or PXE_BASE addresses,
+             * these are recursive self-map windows that require intermediate page table
+             * mappings to exist. Unlike x86_64 where the self-map works more directly,
+             * ARM64's 4-level translation requires explicit L0/L1/L2 table entries.
+             *
+             * Example: Accessing PTE for kernel VA 0xFFFF800042800000:
+             *   PTE address = PTE_BASE + ((VA >> 12) << 3) = FFFFF6C000214000
+             *   This address itself needs page tables:
+             *     L0[493] -> L0 (self-map entry)
+             *     L0[493] -> L0 again (still recursive)
+             *     L0[XXX] -> L1 table (must exist!)
+             *     L1[YYY] -> L2 table (must exist!)
+             *     L2[ZZZ] -> L3 table (must exist!)
+             *     L3[offset] = the actual PTE entry
+             *
+             * MiArm64MapAliasForPointer creates these intermediate tables on-demand
+             * and maps the final L3 page via the KSEG0 direct-map window.
+             */
+            extern VOID MiArm64MapAliasForPointer(_In_ PVOID AliasVa);
+
+            /* Ensure the self-map alias page is backed by physical memory */
+            MiArm64MapAliasForPointer(Address);
+
+            /*
+             * Invalidate TLB for the faulting address. The mapping was just created
+             * via KSEG0 direct manipulation, so we need to ensure the MMU sees it.
+             * Use TLBI VAE1IS (invalidate by VA, Inner Shareable) for SMP safety.
+             */
+            {
+                ULONG64 VaForTlbi = ((ULONG64)(ULONG_PTR)Address) >> 12;
+                __asm__ __volatile__(
+                    "dsb ishst\n\t"           /* Ensure stores are visible */
+                    "tlbi vae1is, %0\n\t"     /* Invalidate TLB for this VA */
+                    "dsb ish\n\t"             /* Barrier before instruction fetch */
+                    "isb"                      /* Synchronize context */
+                    : : "r"(VaForTlbi) : "memory");
+            }
+
+            /* Log the first few self-map faults for debugging */
+            {
+                static volatile LONG LogBudget = 10;
+                if (LogBudget > 0)
+                {
+                    LONG Snapshot = InterlockedDecrement(&LogBudget);
+                    if (Snapshot >= 0)
+                    {
+                        DbgPrintEx(DPFLTR_MM_ID,
+                                   DPFLTR_INFO_LEVEL,
+                                   "[arm64] MmArmAccessFault: resolved self-map fault at %p (FaultCode=0x%lx)\n",
+                                   Address,
+                                   FaultCode);
+                    }
+                }
+            }
+
+            /* Return success - the faulting instruction will retry and succeed */
+            return STATUS_SUCCESS;
+#else
             /* Handle this as a user mode fault */
             goto UserFault;
+#endif
         }
 
         /* Get the current thread */

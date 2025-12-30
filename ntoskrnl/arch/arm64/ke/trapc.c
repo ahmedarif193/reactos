@@ -10,6 +10,9 @@
 #define NDEBUG
 #include <debug.h>
 #include <mm/ARM3/miarm.h>
+#ifdef KDBG
+#include <kdbg/kdb.h>
+#endif
 
 #define ARM64_STUB() UNIMPLEMENTED_DBGBREAK()
 
@@ -354,11 +357,10 @@ KiArm64BugCheckSynchronousException(
      * bugcheck with a reconstructed trap frame. Spinning here hides the
      * original fault and trips the watchdog.
      */
-    /* If ELR is in very low VA, proceed straight to bugcheck; avoid any
-       extra logging that could re-enter during early boot. */
-    (void)Context;
-
     KTRAP_FRAME TrapFrame;
+    ULONG Esr = (ULONG)(Context->State.ExceptionSyndrome & 0xFFFFFFFFULL);
+    ULONG EsrClass = (Esr >> 26) & 0x3FULL;
+    BOOLEAN WriteAccess = (Esr & (1u << 6)) != 0;
 
     /* Reconstruct a trap frame so the bugcheck dump has architectural state. */
     KiArm64InitializeTrapFrame(Context, &TrapFrame);
@@ -376,17 +378,49 @@ KiArm64BugCheckSynchronousException(
     /* Avoid touching working-set structures or pool during a hard stop. */
     KiArm64ResetDataAbortGuard();
 
-    /* Print a single compact first-crash line to help locate faults */
+    /* Print first crash info */
     if (InterlockedCompareExchange(&KiArm64FirstCrashPrinted, 1, 0) == 0)
     {
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "[arm64] FirstCrash: vec=%lu esr=0x%lx elr=%p far=%p\n",
-                   (ULONG)Context->State.VectorId,
-                   (ULONG)Context->State.ExceptionSyndrome,
-                   (PVOID)(ULONG_PTR)Context->State.Elr,
-                   (PVOID)(ULONG_PTR)Context->State.FaultAddress);
+        KI_ARM64_STAGE_LOGF("[arm64] FirstCrash: vec=%lu esr=0x%lx elr=%p far=%p",
+                           (ULONG)Context->State.VectorId,
+                           (ULONG)Context->State.ExceptionSyndrome,
+                           (PVOID)(ULONG_PTR)Context->State.Elr,
+                           (PVOID)(ULONG_PTR)Context->State.FaultAddress);
     }
+
+#ifdef KDBG
+    /*
+     * Call KDBG to display crash diagnostics before bugcheck.
+     * This is the last safe point to show crash info.
+     */
+    {
+        EXCEPTION_RECORD64 ExceptionRecord64;
+        CONTEXT KdbContext;
+
+        RtlZeroMemory(&ExceptionRecord64, sizeof(ExceptionRecord64));
+        /* Determine exception code based on ESR class */
+        if (EsrClass == 0x24 || EsrClass == 0x25)
+        {
+            ExceptionRecord64.ExceptionCode = STATUS_ACCESS_VIOLATION;
+            ExceptionRecord64.NumberParameters = 2;
+            ExceptionRecord64.ExceptionInformation[0] = WriteAccess ? 1 : 0;
+            ExceptionRecord64.ExceptionInformation[1] = (ULONG_PTR)Context->State.FaultAddress;
+        }
+        else
+        {
+            ExceptionRecord64.ExceptionCode = STATUS_ILLEGAL_INSTRUCTION;
+            ExceptionRecord64.NumberParameters = 0;
+        }
+        ExceptionRecord64.ExceptionFlags = 0;
+        ExceptionRecord64.ExceptionAddress = Context->State.Elr;
+
+        RtlZeroMemory(&KdbContext, sizeof(KdbContext));
+        KdbContext.ContextFlags = CONTEXT_FULL | CONTEXT_ARM64;
+        KeTrapFrameToContext(&TrapFrame, NULL, &KdbContext);
+
+        KdbEnterDebuggerException(&ExceptionRecord64, KernelMode, &KdbContext, FALSE);
+    }
+#endif /* KDBG */
 
     KeBugCheckWithTf(TRAP_CAUSE_UNKNOWN,
                      (ULONG_PTR)Context->State.VectorId,
@@ -507,7 +541,7 @@ KiArm64HandleSynchronousException(
             }
 
             RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
-            ExceptionRecord.ExceptionCode = KI_EXCEPTION_ACCESS_VIOLATION;
+            ExceptionRecord.ExceptionCode = STATUS_ACCESS_VIOLATION;
             ExceptionRecord.ExceptionFlags = 0;
             ExceptionRecord.ExceptionRecord = NULL;
             ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
@@ -532,6 +566,7 @@ KiArm64HandleSynchronousException(
 
         case 0x24: /* Data abort, lower EL */
         case 0x25: /* Data abort, same EL  */
+
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
 
@@ -553,6 +588,7 @@ KiArm64HandleSynchronousException(
                 }
 
                 /* Keep logging minimal in trap path to avoid reentry */
+#if DBG && defined(ARM64_TRAP_TRACE)
                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_TRACE_LEVEL,
                            "[arm64] DA: esr=0x%lx far=%p elr=%p cpu=%lu guard=%ld\n",
                            Esr,
@@ -560,6 +596,7 @@ KiArm64HandleSynchronousException(
                            (PVOID)(ULONG_PTR)Context->State.Elr,
                            ProcessorIndex,
                            GuardSnapshot);
+#endif
 
                 if (ProcessorIndex < MAXIMUM_PROCESSORS)
                 {
@@ -568,6 +605,7 @@ KiArm64HandleSynchronousException(
                                                                   0) == 0);
                     if (!OwnsAbortGuard)
                     {
+#if DBG && defined(ARM64_TRAP_TRACE)
                         PVOID LrPointer = (PVOID)(ULONG_PTR)Context->State.Registers.X[30];
                         PVOID SpPointer = (PVOID)(ULONG_PTR)Context->State.Registers.Sp;
 
@@ -579,6 +617,7 @@ KiArm64HandleSynchronousException(
                                    LrPointer,
                                    SpPointer,
                                    ProcessorIndex);
+#endif
                     }
                 }
 
@@ -595,26 +634,59 @@ KiArm64HandleSynchronousException(
                     InterlockedExchange(&KiArm64DataAbortOwner[ProcessorIndex], 0);
                 }
 
+#if DBG && defined(ARM64_TRAP_TRACE)
                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_TRACE_LEVEL,
                            "[arm64] DA exit: status=0x%lx cpu=%lu\n",
                            Status,
                            ProcessorIndex);
+#endif
             }
 
             if (NT_SUCCESS(Status))
             {
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_TRACE_LEVEL,
-                           "[arm64] DA resolved: 0x%lx\n", Status);
                 Context->TrapFramePointer = TrapFrame;
                 Context->ExceptionFramePointer = &Context->ExceptionFrame;
                 KiArm64ClearTrapActive();
                 return TRUE;
             }
 
-            /* Not resolved by Mm. If we're in kernel mode and no debugger is
-             * attached, bugcheck immediately to avoid recursive faults while
-             * trying to log/dispatch. This mirrors amd64 behavior when KD is
-             * unavailable during early boot. */
+            /* Not resolved by Mm - this is an unhandled data abort. */
+
+#ifdef KDBG
+            /*
+             * Call KDBG to display crash diagnostics (registers, stack trace,
+             * modules) for kernel-mode faults. This runs regardless of KD state
+             * since KDBG provides valuable crash info even when KD is "enabled"
+             * for serial output but no interactive debugger is attached.
+             */
+            if (PreviousMode == KernelMode)
+            {
+                EXCEPTION_RECORD64 ExceptionRecord64;
+                CONTEXT KdbContext;
+
+                RtlZeroMemory(&ExceptionRecord64, sizeof(ExceptionRecord64));
+                ExceptionRecord64.ExceptionCode = STATUS_ACCESS_VIOLATION;
+                ExceptionRecord64.ExceptionFlags = 0;
+                ExceptionRecord64.ExceptionAddress = Context->State.Elr;
+                ExceptionRecord64.NumberParameters = 2;
+                ExceptionRecord64.ExceptionInformation[0] = KiArm64AccessTypeToExceptionInfo(WriteAccess, FALSE);
+                ExceptionRecord64.ExceptionInformation[1] = (ULONG_PTR)Context->State.FaultAddress;
+
+                RtlZeroMemory(&KdbContext, sizeof(KdbContext));
+                KdbContext.ContextFlags = CONTEXT_FULL | CONTEXT_ARM64;
+
+                KeTrapFrameToContext(TrapFrame, Context->ExceptionFramePointer, &KdbContext);
+
+                KdbEnterDebuggerException(&ExceptionRecord64,
+                                          PreviousMode,
+                                          &KdbContext,
+                                          TRUE);
+            }
+#endif /* KDBG */
+
+            /* If we're in kernel mode and no debugger is attached, bugcheck
+             * immediately to avoid recursive faults while trying to log/dispatch.
+             * This mirrors amd64 behavior when KD is unavailable during early boot. */
             if ((PreviousMode == KernelMode) && (!KdDebuggerEnabled || KdDebuggerNotPresent))
             {
                 KiArm64BugCheckSynchronousException(Context);
@@ -626,16 +698,13 @@ KiArm64HandleSynchronousException(
             {
                 EXCEPTION_RECORD ExceptionRecord;
                 RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
-                ExceptionRecord.ExceptionCode = KI_EXCEPTION_ACCESS_VIOLATION;
+                ExceptionRecord.ExceptionCode = STATUS_ACCESS_VIOLATION;
                 ExceptionRecord.ExceptionFlags = 0;
                 ExceptionRecord.ExceptionRecord = NULL;
                 ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
                 ExceptionRecord.NumberParameters = 2;
                 ExceptionRecord.ExceptionInformation[0] = KiArm64AccessTypeToExceptionInfo(WriteAccess, FALSE);
                 ExceptionRecord.ExceptionInformation[1] = (ULONG_PTR)Context->State.FaultAddress;
-
-                if (!KdDebuggerEnabled || KdDebuggerNotPresent)
-                    KiArm64ReportUnhandledSyncException(Context, Esr);
 
                 KiDispatchException(&ExceptionRecord,
                                     Context->ExceptionFramePointer,
@@ -714,13 +783,51 @@ KiArm64HandleSynchronousException(
 
         case 0x3C: /* BRK instruction */
         {
-            /* If no debugger is attached, mirror amd64 behavior by skipping
-             * kernel-mode breakpoints instead of trapping into KD/bugcheck. */
             KPROCESSOR_MODE Mode = KiArm64PreviousModeFromSpsr(Context->State.Spsr);
-            if ((!KdDebuggerEnabled || KdDebuggerNotPresent) && (Mode == KernelMode))
+
+            TrapFrame = &Context->TrapFrame;
+            KiArm64InitializeTrapFrame(Context, TrapFrame);
+
+#ifdef KDBG
+            /*
+             * When KDBG is compiled in, call KdbEnterDebuggerException to
+             * display crash diagnostics (registers, stack trace, modules)
+             * before continuing. This provides useful debugging output during
+             * bugchecks even when no external debugger is attached.
+             */
             {
-                TrapFrame = &Context->TrapFrame;
-                KiArm64InitializeTrapFrame(Context, TrapFrame);
+                EXCEPTION_RECORD64 ExceptionRecord64;
+                CONTEXT KdbContext;
+
+                /* Build EXCEPTION_RECORD64 for KDBG */
+                RtlZeroMemory(&ExceptionRecord64, sizeof(ExceptionRecord64));
+                ExceptionRecord64.ExceptionCode = STATUS_BREAKPOINT;
+                ExceptionRecord64.ExceptionFlags = 0;
+                ExceptionRecord64.ExceptionAddress = Context->State.Elr;
+                ExceptionRecord64.NumberParameters = 1;
+                ExceptionRecord64.ExceptionInformation[0] = Context->State.Elr;
+
+                /* Build CONTEXT from trap frame for KDBG */
+                RtlZeroMemory(&KdbContext, sizeof(KdbContext));
+                KdbContext.ContextFlags = CONTEXT_FULL | CONTEXT_ARM64;
+                KeTrapFrameToContext(TrapFrame, Context->ExceptionFramePointer, &KdbContext);
+
+                /* Call KDBG to print crash diagnostics */
+                KdbEnterDebuggerException(&ExceptionRecord64,
+                                          Mode,
+                                          &KdbContext,
+                                          TRUE);
+            }
+#endif /* KDBG */
+
+            /*
+             * After KDBG has printed diagnostics, skip the breakpoint by
+             * advancing PC. If an external debugger is attached, it will
+             * handle the exception through KiDispatchException instead.
+             */
+            if (!KdDebuggerEnabled || KdDebuggerNotPresent)
+            {
+                /* No external debugger - skip the BRK instruction */
                 TrapFrame->Pc = (ULONG64)((ULONG_PTR)Context->State.Elr + 4);
                 Context->State.Elr += 4;
                 Context->TrapFramePointer = TrapFrame;
@@ -729,35 +836,28 @@ KiArm64HandleSynchronousException(
                 return TRUE;
             }
 
-            EXCEPTION_RECORD ExceptionRecord;
-
-            TrapFrame = &Context->TrapFrame;
-            KiArm64InitializeTrapFrame(Context, TrapFrame);
-
-            RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
-            ExceptionRecord.ExceptionCode = STATUS_BREAKPOINT;
-            ExceptionRecord.ExceptionFlags = 0;
-            ExceptionRecord.ExceptionRecord = NULL;
-            ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
-            ExceptionRecord.NumberParameters = 1;
-            ExceptionRecord.ExceptionInformation[0] = (ULONG_PTR)Context->State.Elr;
-
-            if (!KdDebuggerEnabled || KdDebuggerNotPresent)
+            /* External debugger attached - dispatch through normal path */
             {
-                KiArm64ReportUnhandledSyncException(Context, Esr);
-            }
-            else
-            {
+                EXCEPTION_RECORD ExceptionRecord;
+
+                RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
+                ExceptionRecord.ExceptionCode = STATUS_BREAKPOINT;
+                ExceptionRecord.ExceptionFlags = 0;
+                ExceptionRecord.ExceptionRecord = NULL;
+                ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
+                ExceptionRecord.NumberParameters = 1;
+                ExceptionRecord.ExceptionInformation[0] = (ULONG_PTR)Context->State.Elr;
+
                 KI_ARM64_STAGE_LOGF("[arm64] TrapDiag: forwarding BRK to KD esr=0x%lx elr=%p",
                                     Esr,
                                     (PVOID)(ULONG_PTR)Context->State.Elr);
-            }
 
-            KiDispatchException(&ExceptionRecord,
-                                Context->ExceptionFramePointer,
-                                TrapFrame,
-                                KiArm64PreviousModeFromSpsr(Context->State.Spsr),
-                                TRUE);
+                KiDispatchException(&ExceptionRecord,
+                                    Context->ExceptionFramePointer,
+                                    TrapFrame,
+                                    Mode,
+                                    TRUE);
+            }
 
             Context->TrapFramePointer = TrapFrame;
             Context->ExceptionFramePointer = &Context->ExceptionFrame;

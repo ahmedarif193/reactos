@@ -1066,6 +1066,55 @@ KdbpCmdRegs(
                   Context->Ecx, Context->Edx,
                   Context->Esi, Context->Edi,
                   Context->Ebp);
+#elif defined(_M_ARM64)
+        /* ARM64 general-purpose registers */
+        KdbpPrint("   PC   0x%016llx     SP   0x%016llx\n"
+                  "   LR   0x%016llx     FP   0x%016llx\n",
+                  (ULONGLONG)Context->Pc, (ULONGLONG)Context->Sp,
+                  (ULONGLONG)Context->Lr, (ULONGLONG)Context->Fp);
+        KdbpPrint("   X0   0x%016llx     X1   0x%016llx\n"
+                  "   X2   0x%016llx     X3   0x%016llx\n"
+                  "   X4   0x%016llx     X5   0x%016llx\n"
+                  "   X6   0x%016llx     X7   0x%016llx\n",
+                  (ULONGLONG)Context->X0, (ULONGLONG)Context->X1,
+                  (ULONGLONG)Context->X2, (ULONGLONG)Context->X3,
+                  (ULONGLONG)Context->X4, (ULONGLONG)Context->X5,
+                  (ULONGLONG)Context->X6, (ULONGLONG)Context->X7);
+        KdbpPrint("   X8   0x%016llx     X9   0x%016llx\n"
+                  "  X10   0x%016llx    X11   0x%016llx\n"
+                  "  X12   0x%016llx    X13   0x%016llx\n"
+                  "  X14   0x%016llx    X15   0x%016llx\n",
+                  (ULONGLONG)Context->X8, (ULONGLONG)Context->X9,
+                  (ULONGLONG)Context->X10, (ULONGLONG)Context->X11,
+                  (ULONGLONG)Context->X12, (ULONGLONG)Context->X13,
+                  (ULONGLONG)Context->X14, (ULONGLONG)Context->X15);
+        KdbpPrint("  X16   0x%016llx    X17   0x%016llx\n"
+                  "  X18   0x%016llx    X19   0x%016llx\n"
+                  "  X20   0x%016llx    X21   0x%016llx\n"
+                  "  X22   0x%016llx    X23   0x%016llx\n",
+                  (ULONGLONG)Context->X16, (ULONGLONG)Context->X17,
+                  (ULONGLONG)Context->X18, (ULONGLONG)Context->X19,
+                  (ULONGLONG)Context->X20, (ULONGLONG)Context->X21,
+                  (ULONGLONG)Context->X22, (ULONGLONG)Context->X23);
+        KdbpPrint("  X24   0x%016llx    X25   0x%016llx\n"
+                  "  X26   0x%016llx    X27   0x%016llx\n"
+                  "  X28   0x%016llx\n",
+                  (ULONGLONG)Context->X24, (ULONGLONG)Context->X25,
+                  (ULONGLONG)Context->X26, (ULONGLONG)Context->X27,
+                  (ULONGLONG)Context->X28);
+        /* Display CPSR/PSTATE with decoded flags */
+        KdbpPrint("  CPSR  0x%08x", Context->Cpsr);
+        if (Context->Cpsr & (1 << 31)) KdbpPrint(" N");
+        if (Context->Cpsr & (1 << 30)) KdbpPrint(" Z");
+        if (Context->Cpsr & (1 << 29)) KdbpPrint(" C");
+        if (Context->Cpsr & (1 << 28)) KdbpPrint(" V");
+        if (Context->Cpsr & (1 << 9))  KdbpPrint(" E");  /* Endianness */
+        if (Context->Cpsr & (1 << 8))  KdbpPrint(" A");  /* SError mask */
+        if (Context->Cpsr & (1 << 7))  KdbpPrint(" I");  /* IRQ mask */
+        if (Context->Cpsr & (1 << 6))  KdbpPrint(" F");  /* FIQ mask */
+        KdbpPrint(" EL%d", (Context->Cpsr >> 2) & 3);    /* Exception level */
+        if (Context->Cpsr & (1 << 0))  KdbpPrint(" SP_ELx"); else KdbpPrint(" SP_EL0");
+        KdbpPrint("\n");
 #else
         KdbpPrint("CS:RIP  0x%04x:0x%p\n"
                   "SS:RSP  0x%04x:0x%p\n"
@@ -1080,7 +1129,8 @@ KdbpCmdRegs(
                   Context->Rsi, Context->Rdi,
                   Context->Rbp);
 #endif
-        /* Display the EFlags */
+#ifndef _M_ARM64
+        /* Display the EFlags (x86/AMD64 only) */
         KdbpPrint("EFLAGS  0x%08x ", Context->EFlags);
         for (i = 0; i < 32; i++)
         {
@@ -1102,9 +1152,33 @@ KdbpCmdRegs(
             }
         }
         KdbpPrint("\n");
+#endif
     }
     else if (Argv[0][0] == 'c') /* cregs */
     {
+#ifdef _M_ARM64
+        /* ARM64 system registers - read directly from hardware */
+        ULONG64 Ttbr0, Ttbr1, Tcr, Sctlr, Mair, Vbar;
+        __asm__ __volatile__("mrs %0, TTBR0_EL1" : "=r"(Ttbr0));
+        __asm__ __volatile__("mrs %0, TTBR1_EL1" : "=r"(Ttbr1));
+        __asm__ __volatile__("mrs %0, TCR_EL1" : "=r"(Tcr));
+        __asm__ __volatile__("mrs %0, SCTLR_EL1" : "=r"(Sctlr));
+        __asm__ __volatile__("mrs %0, MAIR_EL1" : "=r"(Mair));
+        __asm__ __volatile__("mrs %0, VBAR_EL1" : "=r"(Vbar));
+
+        KdbpPrint("TTBR0_EL1  0x%016llx (User page tables)\n", (ULONGLONG)Ttbr0);
+        KdbpPrint("TTBR1_EL1  0x%016llx (Kernel page tables)\n", (ULONGLONG)Ttbr1);
+        KdbpPrint("TCR_EL1    0x%016llx (Translation Control)\n", (ULONGLONG)Tcr);
+        KdbpPrint("SCTLR_EL1  0x%016llx", (ULONGLONG)Sctlr);
+        if (Sctlr & (1ULL << 0))  KdbpPrint(" M");   /* MMU enable */
+        if (Sctlr & (1ULL << 2))  KdbpPrint(" C");   /* Data cache enable */
+        if (Sctlr & (1ULL << 12)) KdbpPrint(" I");   /* Instruction cache enable */
+        if (Sctlr & (1ULL << 25)) KdbpPrint(" EE");  /* Big endian */
+        if (Sctlr & (1ULL << 19)) KdbpPrint(" WXN"); /* Write XOR Execute */
+        KdbpPrint("\n");
+        KdbpPrint("MAIR_EL1   0x%016llx (Memory Attributes)\n", (ULONGLONG)Mair);
+        KdbpPrint("VBAR_EL1   0x%016llx (Vector Base)\n", (ULONGLONG)Vbar);
+#else
         ULONG Cr0, Cr2, Cr3, Cr4;
         KDESCRIPTOR Gdtr = {0}, Idtr = {0};
         USHORT Ldtr, Tr;
@@ -1180,9 +1254,16 @@ KdbpCmdRegs(
         KdbpPrint("LDTR 0x%04x\n", Ldtr);
         KdbpPrint("IDTR Base 0x%08x  Size 0x%04x\n", Idtr.Base, Idtr.Limit);
         KdbpPrint("TR   0x%04x\n", Tr);
+#endif /* _M_ARM64 */
     }
     else if (Argv[0][0] == 's') /* sregs */
     {
+#ifdef _M_ARM64
+        /* ARM64 has no segment registers - display FPCR/FPSR instead */
+        KdbpPrint("ARM64 has no segment registers.\n");
+        KdbpPrint("FPCR  0x%08x (Floating-Point Control)\n", Context->Fpcr);
+        KdbpPrint("FPSR  0x%08x (Floating-Point Status)\n", Context->Fpsr);
+#else
         KdbpPrint("CS  0x%04x  Index 0x%04x  %cDT RPL%d\n",
                   Context->SegCs & 0xffff, (Context->SegCs & 0xffff) >> 3,
                   (Context->SegCs & (1 << 2)) ? 'L' : 'G', Context->SegCs & 3);
@@ -1196,10 +1277,26 @@ KdbpCmdRegs(
                   Context->SegGs, Context->SegGs >> 3, (Context->SegGs & (1 << 2)) ? 'L' : 'G', Context->SegGs & 3);
         KdbpPrint("SS  0x%04x  Index 0x%04x  %cDT RPL%d\n",
                   Context->SegSs, Context->SegSs >> 3, (Context->SegSs & (1 << 2)) ? 'L' : 'G', Context->SegSs & 3);
+#endif
     }
     else /* dregs */
     {
         ASSERT(Argv[0][0] == 'd');
+#ifdef _M_ARM64
+        /* ARM64 debug registers from CONTEXT */
+        KdbpPrint("Breakpoint Registers:\n");
+        for (i = 0; i < ARM64_MAX_BREAKPOINTS; i++)
+        {
+            KdbpPrint("  BCR%d  0x%08x  BVR%d  0x%016llx\n",
+                      i, Context->Bcr[i], i, (ULONGLONG)Context->Bvr[i]);
+        }
+        KdbpPrint("Watchpoint Registers:\n");
+        for (i = 0; i < ARM64_MAX_WATCHPOINTS; i++)
+        {
+            KdbpPrint("  WCR%d  0x%08x  WVR%d  0x%016llx\n",
+                      i, Context->Wcr[i], i, (ULONGLONG)Context->Wvr[i]);
+        }
+#else
         KdbpPrint("DR0  0x%08x\n"
                   "DR1  0x%08x\n"
                   "DR2  0x%08x\n"
@@ -1208,6 +1305,7 @@ KdbpCmdRegs(
                   "DR7  0x%08x\n",
                   Context->Dr0, Context->Dr1, Context->Dr2, Context->Dr3,
                   Context->Dr6, Context->Dr7);
+#endif
     }
 
     return TRUE;

@@ -174,6 +174,34 @@ C_ASSERT(SYSTEM_PD_SIZE == PAGE_SIZE);
 #define PTE_DIRTY               0ULL
 
 //
+// ARM64 L3 Page Descriptor Validation
+//
+// On ARM64, page table descriptors use a 2-bit type field in bits [1:0]:
+//   0b00 = Invalid descriptor
+//   0b01 = Block descriptor (only valid at L0-L2 for huge pages, INVALID at L3)
+//   0b11 = Page descriptor (L3) or Table descriptor (L0-L2)
+//
+// This is fundamentally different from x86_64 where only bit 0 indicates validity.
+// For L3 page descriptors (PTEs), BOTH bits must be set to 1 (value 0x3) for the
+// PTE to be architecturally valid. The same applies to L0-L2 table descriptors
+// (PXE/PPE/PDE) when they point to next-level page tables (not huge pages).
+//
+// Reference: ARM Architecture Reference Manual ARMv8, section D5.3.3
+//
+#define ARM64_PTE_TYPE_MASK     0x0000000000000003ULL
+#define ARM64_PTE_TYPE_INVALID  0x0000000000000000ULL  // Bits [1:0] = 0b00
+#define ARM64_PTE_TYPE_BLOCK    0x0000000000000001ULL  // Bits [1:0] = 0b01
+#define ARM64_PTE_TYPE_PAGE     0x0000000000000003ULL  // Bits [1:0] = 0b11
+#define ARM64_PTE_TYPE_TABLE    0x0000000000000003ULL  // Bits [1:0] = 0b11 (same as page)
+
+// Check if a PTE (L3 page descriptor) is valid
+#define MI_IS_PTE_VALID_ARM64(Pte) (((Pte).u.Long & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_PAGE)
+
+// Check if a PDE/PPE/PXE (L0-L2 table descriptor) is valid as a table pointer
+// Note: This doesn't check for block descriptors (huge pages) which are also valid at L0-L2
+#define MI_IS_TABLE_VALID_ARM64(Pde) (((Pde).u.Long & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_TABLE)
+
+//
 // Cache flags
 //
 #define PTE_ENABLE_CACHE        ARM64_PTE_CACHE_WB

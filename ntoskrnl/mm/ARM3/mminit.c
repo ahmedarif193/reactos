@@ -759,11 +759,42 @@ MiBuildPfnDatabaseFromPages(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* PFN of the startup page directory */
     StartupPdIndex = PFN_FROM_PTE(MiAddressToPde(PDE_BASE));
 
+#ifdef _M_ARM64
+    /*
+     * On ARM64, only kernel space page tables are mapped. The self-mapping
+     * PTE structure only covers kernel space starting at KSEG0_BASE
+     * (0xFFFF800000000000). Attempting to access PDEs for user-space addresses
+     * (VA 0 through 0x0000FFFFFFFFFFFF) would cause page faults because
+     * those L0 entries are not populated.
+     *
+     * Start scanning from kernel space base address instead.
+     * KSEG0_BASE has L0 index 256, so we scan the upper half of the
+     * address space (L0 indices 256-511) which covers 256 PPEs * 512 PDEs.
+     */
+    BaseAddress = KSEG0_BASE;
+    PointerPde = MiAddressToPde((PVOID)KSEG0_BASE);
+    /* Scan upper half: 256 PPE entries * 512 PDE entries per PPE */
+    Count = (PPE_PER_PAGE / 2) * PDE_PER_PAGE;
+#else
     /* Start with the first PDE and scan them all */
     PointerPde = MiAddressToPde(NULL);
     Count = PPE_PER_PAGE * PDE_PER_PAGE;
+#endif
     for (i = 0; i < Count; i++)
     {
+#ifdef _M_ARM64
+        /*
+         * On ARM64, check if the PDE itself is accessible through the self-map.
+         * The self-map path may not be complete for all PDE addresses.
+         */
+        if (!MmIsAddressValid(PointerPde))
+        {
+            /* Skip this PDE and advance to the next */
+            PointerPde++;
+            BaseAddress += PDE_MAPPED_VA;
+            continue;
+        }
+#endif
         /* Check for valid PDE */
         if (PointerPde->u.Hard.Valid == 1)
         {
@@ -796,6 +827,22 @@ MiBuildPfnDatabaseFromPages(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             PointerPte = MiAddressToPte(BaseAddress);
             for (j = 0; j < PTE_PER_PAGE; j++)
             {
+#ifdef _M_ARM64
+                /*
+                 * On ARM64, the self-map may not have all PTE pages accessible.
+                 * Even if the PDE is valid (meaning the actual page table exists),
+                 * the self-map path to access the PTE might not be complete.
+                 * Use MmIsAddressValid to check if the PTE is accessible before
+                 * dereferencing it.
+                 */
+                if (!MmIsAddressValid(PointerPte))
+                {
+                    /* Skip to next PTE */
+                    PointerPte++;
+                    BaseAddress += PAGE_SIZE;
+                    continue;
+                }
+#endif
                 /* Check for a valid PTE */
                 if (PointerPte->u.Hard.Valid == 1)
                 {
@@ -865,8 +912,16 @@ MiBuildPfnDatabaseZeroPage(VOID)
     Pfn1 = MiGetPfnEntry(MmLowestPhysicalPage);
     if (!(MmLowestPhysicalPage) && !(Pfn1->u3.e2.ReferenceCount))
     {
-        /* Make it a bogus page to catch errors */
+        /*
+         * Make it a bogus page to catch errors.
+         * Use a kernel-space address for the bogus PDE on ARM64 since
+         * user-space page tables are not mapped.
+         */
+#ifdef _M_ARM64
+        PointerPde = MiAddressToPde((PVOID)0xFFFFFFFFFFFFFFFFULL);
+#else
         PointerPde = MiAddressToPde(0xFFFFFFFF);
+#endif
         Pfn1->u4.PteFrame = PFN_FROM_PTE(PointerPde);
         Pfn1->PteAddress = (PMMPTE)PointerPde;
         Pfn1->u2.ShareCount++;
@@ -1404,6 +1459,19 @@ MiAddHalIoMappings(VOID)
     PMMPTE PointerPte;
     ULONG j;
     PFN_NUMBER PageFrameIndex;
+
+#if defined(_M_ARM64)
+    /*
+     * ARM64: Skip HAL I/O mapping enumeration during early bring-up.
+     * The page table self-map for the HAL VA range (0xFFFFFFFFFFC00000 to
+     * 0xFFFFFFFFFFFFFFFF) is not fully established yet, and dereferencing
+     * MiAddressToPde() for these high addresses causes translation faults.
+     * The ARM64 HAL is minimal and hasn't created any I/O mappings in this
+     * range yet anyway. This can be enabled later once the full page table
+     * infrastructure for the HAL VA area is in place.
+     */
+    return;
+#endif
 
     /* HAL Heap address -- should be on a PDE boundary */
     BaseAddress = (PVOID)MM_HAL_VA_START;

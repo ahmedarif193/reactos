@@ -147,12 +147,25 @@ DbgBreakPointWithStatus(
 {
     UNREFERENCED_PARAMETER(Status);
 
+    /*
+     * On ARM64, always trigger BRK when KDBG is compiled in (regardless of
+     * whether an external debugger is attached). This allows the integrated
+     * kernel debugger to display crash diagnostics (registers, stack trace)
+     * during bugchecks. The BRK handler in trapc.c routes the exception to
+     * KdbEnterDebuggerException when KDBG is enabled.
+     *
+     * If no debugger of any kind is available, the trap handler will skip
+     * the breakpoint by advancing PC.
+     */
+#ifdef KDBG
+    __asm__ __volatile__("brk #0xf000" ::: "memory");
+#else
     if (!KdDebuggerEnabled || KdDebuggerNotPresent)
     {
         return;
     }
-
     __asm__ __volatile__("brk #0xf000" ::: "memory");
+#endif
 }
 
 VOID

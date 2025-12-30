@@ -92,7 +92,7 @@ typedef struct _MMPTE_PROTOTYPE
     ULONG64 Prototype:1;
     ULONG64 DemandFillProto:1;
     ULONG64 RsvdZ1:4;
-    ULONG64 ProtoAddress:48;
+    LONG64 ProtoAddress:48;
 } MMPTE_PROTOTYPE;
 
 typedef struct _MMPTE_SUBSECTION
@@ -105,7 +105,12 @@ typedef struct _MMPTE_SUBSECTION
     ULONG64 Prototype:1;
     ULONG64 ColdPage:1;
     ULONG64 RsvdZ2:4;
-    ULONG64 SubsectionAddress:48;
+    /*
+     * SubsectionAddress must be LONG64 (signed) so that when it's read and
+     * cast back to a pointer, the sign extension from bit 47 restores the
+     * canonical kernel address form (e.g., 0xFFFF... for kernel space).
+     */
+    LONG64 SubsectionAddress:48;
 } MMPTE_SUBSECTION;
 
 typedef struct _MMPTE_TIMESTAMP
