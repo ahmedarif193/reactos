@@ -402,6 +402,7 @@ UefiExitBootServices(VOID)
         BootServicesExitedFlag = TRUE;
         /* Notify the console layer so it can switch to the GOP fallback. */
         UefiConsMarkBootServicesExited();
+        UefiSerialDisableFirmware();
     }
 }
 

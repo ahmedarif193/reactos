@@ -11,6 +11,9 @@
 #include <uefildr.h>
 #include <arch/uefi/SerialIo.h>
 #include <debug.h>
+#if defined(_M_ARM64) || defined(__aarch64__)
+#include <drivers/acpi/acpi.h>
+#endif
 
 extern EFI_SYSTEM_TABLE* GlobalSystemTable;
 extern EFI_HANDLE GlobalImageHandle;
@@ -18,6 +21,7 @@ extern EFI_HANDLE GlobalImageHandle;
 /* Serial I/O Protocol instance */
 static EFI_SERIAL_IO_PROTOCOL* SerialIoProtocol = NULL;
 static BOOLEAN SerialInitialized = FALSE;
+static BOOLEAN FirmwareSerialDisabled = FALSE;
 
 /* Serial I/O Protocol GUID */
 EFI_GUID gEfiSerialIoProtocolGuid = EFI_SERIAL_IO_PROTOCOL_GUID;
@@ -32,11 +36,17 @@ EFI_GUID gEfiSerialIoProtocolGuid = EFI_SERIAL_IO_PROTOCOL_GUID;
 
 /* PL011 UART access macros */
 #define PL011_READ(offset) \
-    (*(volatile UINT32*)((UINTN)PL011_UART_BASE + (offset)))
+    (*(volatile UINT32*)((UINTN)Pl011UartBase + (offset)))
 #define PL011_WRITE(offset, value) \
-    (*(volatile UINT32*)((UINTN)PL011_UART_BASE + (offset)) = (value))
+    (*(volatile UINT32*)((UINTN)Pl011UartBase + (offset)) = (value))
 
 static BOOLEAN UsePL011Fallback = FALSE;
+static BOOLEAN Pl011Present = FALSE;
+static UINT64 Pl011UartBase = PL011_UART_BASE;
+
+#define SPCR_SIGNATURE 0x52435053 /* "SPCR" */
+#define SPCR_INTERFACE_ARM_PL011 0x0E
+#define ACPI_GAS_SPACE_SYSTEM_MEMORY 0
 
 /*
  * On some firmwares the PL011 MMIO range is not mapped while Boot Services
@@ -98,10 +108,132 @@ static BOOLEAN UefiMmioRangePresent(UINT64 PhysAddr, UINT64 Length)
     return present;
 }
 
+static PRSDP UefiLocateRsdp(VOID)
+{
+    if (!GlobalSystemTable)
+        return NULL;
+
+    EFI_GUID Acpi20 = EFI_ACPI_20_TABLE_GUID;
+    EFI_GUID Acpi10 = ACPI_10_TABLE_GUID;
+
+    for (UINTN Index = 0; Index < GlobalSystemTable->NumberOfTableEntries; ++Index)
+    {
+        EFI_CONFIGURATION_TABLE *Entry = &GlobalSystemTable->ConfigurationTable[Index];
+
+        if (!memcmp(&Entry->VendorGuid, &Acpi20, sizeof(EFI_GUID)) ||
+            !memcmp(&Entry->VendorGuid, &Acpi10, sizeof(EFI_GUID)))
+        {
+            return (PRSDP)Entry->VendorTable;
+        }
+    }
+
+    return NULL;
+}
+
+#include <pshpack1.h>
+typedef struct _SPCR_TABLE
+{
+    DESCRIPTION_HEADER Header;
+    UCHAR InterfaceType;
+    UCHAR Reserved[3];
+    GEN_ADDR SerialPort;
+    UCHAR InterruptType;
+    UCHAR PcInterrupt;
+    ULONG Interrupt;
+    UCHAR BaudRate;
+    UCHAR Parity;
+    UCHAR StopBits;
+    UCHAR FlowControl;
+    UCHAR TerminalType;
+    UCHAR Reserved1;
+    USHORT PciDeviceId;
+    USHORT PciVendorId;
+    UCHAR PciBus;
+    UCHAR PciDevice;
+    UCHAR PciFunction;
+    ULONG PciFlags;
+    UCHAR PciSegment;
+    ULONG Reserved2;
+} SPCR_TABLE, *PSPCR_TABLE;
+#include <poppack.h>
+
+static PSPCR_TABLE UefiLocateSpcr(VOID)
+{
+    PRSDP Rsdp = UefiLocateRsdp();
+    if (!Rsdp)
+        return NULL;
+
+    if (Rsdp->Revision >= 2 && Rsdp->XsdtAddress.QuadPart != 0)
+    {
+        PXSDT Xsdt = (PXSDT)(ULONG_PTR)Rsdp->XsdtAddress.QuadPart;
+        if (!Xsdt)
+            return NULL;
+
+        ULONG EntryCount = 0;
+        if (Xsdt->Header.Length > sizeof(DESCRIPTION_HEADER))
+            EntryCount = (Xsdt->Header.Length - sizeof(DESCRIPTION_HEADER)) / sizeof(PHYSICAL_ADDRESS);
+
+        for (ULONG i = 0; i < EntryCount; ++i)
+        {
+            ULONG_PTR TablePa = (ULONG_PTR)Xsdt->Tables[i].QuadPart;
+            if (TablePa == 0)
+                continue;
+
+            PSPCR_TABLE Spcr = (PSPCR_TABLE)TablePa;
+            if (Spcr->Header.Signature == SPCR_SIGNATURE)
+                return Spcr;
+        }
+    }
+
+    if (Rsdp->RsdtAddress != 0)
+    {
+        PRSDT Rsdt = (PRSDT)(ULONG_PTR)Rsdp->RsdtAddress;
+        if (!Rsdt)
+            return NULL;
+
+        ULONG EntryCount = 0;
+        if (Rsdt->Header.Length > sizeof(DESCRIPTION_HEADER))
+            EntryCount = (Rsdt->Header.Length - sizeof(DESCRIPTION_HEADER)) / sizeof(ULONG);
+
+        for (ULONG i = 0; i < EntryCount; ++i)
+        {
+            ULONG_PTR TablePa = (ULONG_PTR)Rsdt->Tables[i];
+            if (TablePa == 0)
+                continue;
+
+            PSPCR_TABLE Spcr = (PSPCR_TABLE)TablePa;
+            if (Spcr->Header.Signature == SPCR_SIGNATURE)
+                return Spcr;
+        }
+    }
+
+    return NULL;
+}
+
+static BOOLEAN UefiUpdatePl011FromSpcr(VOID)
+{
+    PSPCR_TABLE Spcr = UefiLocateSpcr();
+    if (!Spcr)
+        return FALSE;
+
+    if (Spcr->InterfaceType != SPCR_INTERFACE_ARM_PL011)
+        return FALSE;
+
+    if (Spcr->SerialPort.AddressSpaceID != ACPI_GAS_SPACE_SYSTEM_MEMORY)
+        return FALSE;
+
+    if (Spcr->SerialPort.Address.QuadPart == 0)
+        return FALSE;
+
+    Pl011UartBase = Spcr->SerialPort.Address.QuadPart;
+    Pl011Present = TRUE;
+    return TRUE;
+}
+
 /* Check if PL011 UART is present and accessible */
 static BOOLEAN PL011IsPresent(VOID)
 {
-    UINTN fr_addr = (UINTN)PL011_UART_BASE + PL011_FR;
+    UINTN fr_addr = (UINTN)Pl011UartBase + PL011_FR;
 
     /* Only attempt the MMIO read if the range is described by firmware */
     if (!UefiMmioRangePresent((UINT64)fr_addr, sizeof(UINT32)))
@@ -125,8 +257,8 @@ static BOOLEAN PL011IsPresent(VOID)
 /* Send a byte via PL011 UART */
 static VOID PL011PutByte(UCHAR ByteToSend)
 {
-    volatile UINT32 *uart_dr = (volatile UINT32*)((UINTN)PL011_UART_BASE + PL011_DR);
-    volatile UINT32 *uart_fr = (volatile UINT32*)((UINTN)PL011_UART_BASE + PL011_FR);
+    volatile UINT32 *uart_dr = (volatile UINT32*)((UINTN)Pl011UartBase + PL011_DR);
+    volatile UINT32 *uart_fr = (volatile UINT32*)((UINTN)Pl011UartBase + PL011_FR);
 
     /* Wait until transmit FIFO is not full */
     while ((*uart_fr & PL011_FR_TXFF) != 0)
@@ -224,6 +356,13 @@ BOOLEAN Rs232PortInitialize(IN ULONG ComPort, IN ULONG BaudRate)
         return TRUE;
     }
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    if (!Pl011Present)
+        UefiUpdatePl011FromSpcr();
+    if (!Pl011Present)
+        Pl011Present = PL011IsPresent();
+#endif
+
     /* Set defaults if not specified */
     if (ComPort == 0) {
         ComPort = 1;  /* Default to first available serial port */
@@ -240,7 +379,7 @@ BOOLEAN Rs232PortInitialize(IN ULONG ComPort, IN ULONG BaudRate)
 
 #if defined(_M_ARM64) || defined(__aarch64__)
     /* Try PL011 UART as fallback on ARM64 */
-    if (PL011IsPresent()) {
+    if (Pl011Present) {
         UsePL011Fallback = TRUE;
         SerialInitialized = TRUE;
         return TRUE;
@@ -257,7 +396,7 @@ BOOLEAN Rs232PortGetByte(PUCHAR ByteReceived)
     UINTN BufferSize = 1;
     EFI_STATUS Status;
 
-    if (!SerialIoProtocol) {
+    if (FirmwareSerialDisabled || !SerialIoProtocol) {
         return FALSE;
     }
 
@@ -274,7 +413,7 @@ BOOLEAN Rs232PortPollByte(PUCHAR ByteReceived)
 VOID Rs232PortPutByte(UCHAR ByteToSend)
 {
     /* If Serial I/O Protocol is available, use it */
-    if (SerialIoProtocol) {
+    if (!FirmwareSerialDisabled && SerialIoProtocol) {
         UefiSerialPutByte(ByteToSend);
         return;
     }
@@ -293,9 +432,25 @@ BOOLEAN Rs232PortInUse(PUCHAR Base)
     /* Not applicable for UEFI Serial I/O */
     (void)Base;
 #if defined(_M_ARM64) || defined(__aarch64__)
+    if (FirmwareSerialDisabled)
+        return UsePL011Fallback;
     return (SerialIoProtocol != NULL || UsePL011Fallback);
 #else
+    if (FirmwareSerialDisabled)
+        return FALSE;
     return (SerialIoProtocol != NULL);
+#endif
+}
+
+VOID UefiSerialDisableFirmware(VOID)
+{
+    FirmwareSerialDisabled = TRUE;
+    SerialIoProtocol = NULL;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    if (!Pl011Present)
+        UefiUpdatePl011FromSpcr();
+    if (Pl011Present)
+        UsePL011Fallback = TRUE;
 #endif
 }
 

@@ -59,6 +59,11 @@ VOID    DbgParseDebugChannels(PCHAR Value);
  * reset when the kernel takes over.
  */
 ULONGLONG DbgQueryMicrosecondsSinceBoot(VOID);
+VOID DbgDisableTimestamps(VOID);
+
+#ifdef UEFIBOOT
+VOID UefiSerialDisableFirmware(VOID);
+#endif
 
 #define ERR_LEVEL      0x1
 #define FIXME_LEVEL    0x2

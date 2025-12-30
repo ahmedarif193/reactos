@@ -27,6 +27,7 @@ ULONG ArcGetRelativeTime(VOID);
 
 /* Track initialization state for timestamp system. */
 static BOOLEAN TimestampInitialized = FALSE;
+static BOOLEAN DbgSuppressTimestamps = FALSE;
 
 /*
  * Return microseconds elapsed since bootloader start, similar to Linux printk
@@ -108,6 +109,17 @@ GetMicrosecondsSinceBoot(VOID)
         return (delta * 1000000ULL) / TscHz;
     }
 #else
+#if defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+    /* ARM64: use the generic timer (UEFI-safe fallback inside timer.c). */
+    ULONGLONG ticks = Arm64GetTimerCount();
+    ULONGLONG usec = Arm64TimerTicksToMicroseconds(ticks);
+    if (!TimestampInitialized)
+    {
+        TimestampInitialized = TRUE;
+        return 0;
+    }
+    return usec;
+#else
     /* Non x86/x64: use firmware relative seconds (coarse) */
     if (!TimestampInitialized)
     {
@@ -116,6 +128,7 @@ GetMicrosecondsSinceBoot(VOID)
     }
     return (ULONGLONG)ArcGetRelativeTime() * 1000000ULL;
 #endif
+#endif
 }
 
 /* Public wrapper used by other bootloader units to query elapsed time */
@@ -123,6 +136,12 @@ ULONGLONG
 DbgQueryMicrosecondsSinceBoot(VOID)
 {
     return GetMicrosecondsSinceBoot();
+}
+
+VOID
+DbgDisableTimestamps(VOID)
+{
+    DbgSuppressTimestamps = TRUE;
 }
 
 #define DEBUG_ALL
@@ -367,14 +386,17 @@ DbgPrint2(ULONG Mask, ULONG Level, const char *File, ULONG Line, char *Format, .
     /* Print the header if we have started a new line */
     if (DebugStartOfLine)
     {
-        /* Prefix the line with a simple monotonic timestamp. */
-        ULONGLONG Microseconds = GetMicrosecondsSinceBoot();
-        ULONGLONG Seconds = Microseconds / 1000000ULL;
-        ULONGLONG Fractional = Microseconds % 1000000ULL;
-        
-        // Format: [SSSSSS.MMMMMM] where S=seconds, M=microseconds
-        DbgPrint("[%8llu.%06llu] ", Seconds, Fractional);
-        
+        if (!DbgSuppressTimestamps)
+        {
+            /* Prefix the line with a simple monotonic timestamp. */
+            ULONGLONG Microseconds = GetMicrosecondsSinceBoot();
+            ULONGLONG Seconds = Microseconds / 1000000ULL;
+            ULONGLONG Fractional = Microseconds % 1000000ULL;
+
+            /* Format: [SSSSSS.MMMMMM] where S=seconds, M=microseconds */
+            DbgPrint("[%8llu.%06llu] ", Seconds, Fractional);
+        }
+
         DbgPrint("(%s:%lu) ", File, Line);
 
         switch (Level)
@@ -579,6 +601,11 @@ DbgQueryMicrosecondsSinceBoot(VOID)
 {
     /* No debug timing available in release builds */
     return 0;
+}
+
+VOID
+DbgDisableTimestamps(VOID)
+{
 }
 
 VOID

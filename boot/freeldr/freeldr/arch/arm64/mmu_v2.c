@@ -841,6 +841,24 @@ static UINT64 get_tcr(UINT64 *pips, UINT64 *pva_bits)
                      (max_addr > (1ULL << 36)) ? 40 :
                      (max_addr > (1ULL << 32)) ? 36 : 32;
 
+    /*
+     * CRITICAL FIX: Our page table structure uses 4-level tables (L0->L1->L2->L3).
+     * With 4KB granule:
+     *   - T0SZ <= 25 (VA >= 39 bits): 4 levels starting at L0
+     *   - T0SZ >= 26 (VA <= 38 bits): 3 levels starting at L1
+     *
+     * If va_bits < 39, the CPU interprets TTBR0 as pointing to L1 instead of L0,
+     * causing translation faults because our L0 table entries are read as L1.
+     *
+     * Force minimum 48-bit VA (T0SZ=16) to ensure 4-level page table structure
+     * matches what the CPU expects.
+     */
+    if (va_bits < 48) {
+        TRACE("ARM64: Forcing va_bits from %llu to 48 for 4-level page tables\n",
+              (unsigned long long)va_bits);
+        va_bits = 48;
+    }
+
     ips_desired = (va_bits == 48) ? 5 :
                   (va_bits == 44) ? 4 :
                   (va_bits == 42) ? 3 :
@@ -1935,6 +1953,125 @@ static VOID setup_pgtables(VOID)
     {
         ARM64_MAPPING_PLAN Plan;
         ARM64_RESERVATION_HINTS Reservation = {0};
+
+        /* ========== DIAGNOSTIC: Dump memory map for identity mapping ========== */
+        {
+            UINT64 current_pc;
+            UINT64 loader_start = 0, loader_end = 0;
+            BOOLEAN loader_found = FALSE;
+
+            __asm__ volatile("adr %0, ." : "=r"(current_pc));
+
+            TRACE("ARM64-DIAG: ============================================\n");
+            TRACE("ARM64-DIAG: MEMORY MAP FOR IDENTITY MAPPING\n");
+            TRACE("ARM64-DIAG: Current PC = 0x%llx\n", (unsigned long long)current_pc);
+            TRACE("ARM64-DIAG: Map limit = 0x%llx (MM_MAX_PAGE_LOADER_MAPPED)\n",
+                  (unsigned long long)((UINT64)MM_MAX_PAGE_LOADER_MAPPED << PAGE_SHIFT));
+            TRACE("ARM64-DIAG: Total descriptors: %lu\n", MemoryMapSize);
+            TRACE("ARM64-DIAG: --------------------------------------------\n");
+
+            for (ULONG i = 0; i < MemoryMapSize; i++)
+            {
+                const FREELDR_MEMORY_DESCRIPTOR *Desc = &MemoryMap[i];
+                UINT64 base = (UINT64)Desc->BasePage * PAGE_SIZE;
+                UINT64 size = (UINT64)Desc->PageCount * PAGE_SIZE;
+                UINT64 end = base + size;
+                const char *type_str;
+
+                /* Get memory type string */
+                switch (Desc->MemoryType)
+                {
+                    case LoaderFree: type_str = "Free"; break;
+                    case LoaderLoadedProgram: type_str = "LoadedProgram"; break;
+                    case LoaderFirmwareTemporary: type_str = "FirmwareTemp"; break;
+                    case LoaderFirmwarePermanent: type_str = "FirmwarePerm"; break;
+                    case LoaderOsloaderHeap: type_str = "OsloaderHeap"; break;
+                    case LoaderOsloaderStack: type_str = "OsloaderStack"; break;
+                    case LoaderSystemCode: type_str = "SystemCode"; break;
+                    case LoaderHalCode: type_str = "HalCode"; break;
+                    case LoaderBootDriver: type_str = "BootDriver"; break;
+                    case LoaderRegistryData: type_str = "RegistryData"; break;
+                    case LoaderMemoryData: type_str = "MemoryData"; break;
+                    case LoaderNlsData: type_str = "NlsData"; break;
+                    case LoaderSpecialMemory: type_str = "SpecialMemory"; break;
+                    case LoaderReserve: type_str = "Reserve"; break;
+                    case LoaderBad: type_str = "Bad"; break;
+                    default: type_str = "Unknown"; break;
+                }
+
+                /* Check if this contains the current PC */
+                BOOLEAN contains_pc = (current_pc >= base && current_pc < end);
+
+                TRACE("ARM64-DIAG: [%2lu] 0x%llx-0x%llx (%lluMB) %s%s\n",
+                      i,
+                      (unsigned long long)base,
+                      (unsigned long long)end,
+                      (unsigned long long)(size >> 20),
+                      type_str,
+                      contains_pc ? " <-- CURRENT PC" : "");
+
+                /* Track loader region */
+                if (Desc->MemoryType == LoaderLoadedProgram && contains_pc)
+                {
+                    loader_start = base;
+                    loader_end = end;
+                    loader_found = TRUE;
+                }
+            }
+
+            TRACE("ARM64-DIAG: --------------------------------------------\n");
+
+            if (loader_found)
+            {
+                TRACE("ARM64-DIAG: Bootloader region: 0x%llx-0x%llx (%lluMB)\n",
+                      (unsigned long long)loader_start,
+                      (unsigned long long)loader_end,
+                      (unsigned long long)((loader_end - loader_start) >> 20));
+            }
+            else
+            {
+                ERR("ARM64-DIAG: WARNING - Current PC 0x%llx not found in any LoadedProgram region!\n",
+                    (unsigned long long)current_pc);
+
+                /* Search for ANY region containing the PC */
+                for (ULONG i = 0; i < MemoryMapSize; i++)
+                {
+                    const FREELDR_MEMORY_DESCRIPTOR *Desc = &MemoryMap[i];
+                    UINT64 base = (UINT64)Desc->BasePage * PAGE_SIZE;
+                    UINT64 size = (UINT64)Desc->PageCount * PAGE_SIZE;
+                    UINT64 end = base + size;
+
+                    if (current_pc >= base && current_pc < end)
+                    {
+                        ERR("ARM64-DIAG: PC is in region type %d at 0x%llx-0x%llx\n",
+                            Desc->MemoryType,
+                            (unsigned long long)base,
+                            (unsigned long long)end);
+                    }
+                }
+            }
+
+            /* Check if loader is within identity map limit */
+            if (loader_found)
+            {
+                UINT64 map_limit = (UINT64)MM_MAX_PAGE_LOADER_MAPPED << PAGE_SHIFT;
+                if (loader_end > map_limit)
+                {
+                    ERR("ARM64-DIAG: CRITICAL - Loader extends beyond identity map limit!\n");
+                    ERR("ARM64-DIAG: Loader end: 0x%llx, Map limit: 0x%llx\n",
+                        (unsigned long long)loader_end,
+                        (unsigned long long)map_limit);
+                }
+                else
+                {
+                    TRACE("ARM64-DIAG: Loader within identity map limit (OK)\n");
+                }
+            }
+
+            TRACE("ARM64-DIAG: ============================================\n");
+        }
+        /* ========== END DIAGNOSTIC ========== */
+
         Arm64DeriveReservationHints(MemoryMap, MemoryMapSize, &Reservation);
 
         ULONGLONG pfnReserveBytes = Reservation.PfnBytes ? Reservation.PfnBytes : ARM64_PFN_DB_RESERVE_SIZE;
@@ -2027,6 +2164,177 @@ static VOID setup_pgtables(VOID)
 #ifndef SCTLR_EL1_WXN
 #define SCTLR_EL1_WXN (1ULL << 19)
 #endif
+
+/*
+ * Diagnostic: Walk page table hierarchy and verify mapping exists for a VA.
+ * Returns TRUE if mapping is valid, FALSE otherwise.
+ * Logs detailed information about each level.
+ */
+static BOOLEAN
+Arm64VerifyIdentityMapping(UINT64 va, UINT64 *out_pa, UINT64 *out_attrs)
+{
+    UINT64 l0_idx = (va >> 39) & 0x1FF;
+    UINT64 l1_idx = (va >> 30) & 0x1FF;
+    UINT64 l2_idx = (va >> 21) & 0x1FF;
+    UINT64 l3_idx = (va >> 12) & 0x1FF;
+    UINT64 entry;
+    UINT64 *table;
+
+    TRACE("ARM64-DIAG: Verifying identity mapping for VA=0x%llx\n", (unsigned long long)va);
+    TRACE("ARM64-DIAG: Indices: L0=%llu L1=%llu L2=%llu L3=%llu\n",
+          (unsigned long long)l0_idx, (unsigned long long)l1_idx,
+          (unsigned long long)l2_idx, (unsigned long long)l3_idx);
+
+    /* Check L0 */
+    if (!arm64_l0_page_table)
+    {
+        ERR("ARM64-DIAG: TTBR0 L0 table pointer is NULL!\n");
+        return FALSE;
+    }
+
+    TRACE("ARM64-DIAG: TTBR0 L0 table at %p (PA=0x%llx)\n",
+          (void *)arm64_l0_page_table,
+          (unsigned long long)phys_from_ptr(arm64_l0_page_table));
+
+    if (l0_idx >= ARM64_USER_L1_TABLES)
+    {
+        ERR("ARM64-DIAG: L0 index %llu >= %u (out of identity range)\n",
+            (unsigned long long)l0_idx, ARM64_USER_L1_TABLES);
+        return FALSE;
+    }
+
+    entry = arm64_l0_page_table[l0_idx];
+    TRACE("ARM64-DIAG: L0[%llu] = 0x%llx\n", (unsigned long long)l0_idx, (unsigned long long)entry);
+
+    if (!DESC_VALID(entry))
+    {
+        ERR("ARM64-DIAG: L0[%llu] is INVALID (entry=0x%llx)\n",
+            (unsigned long long)l0_idx, (unsigned long long)entry);
+        return FALSE;
+    }
+
+    if (!DESC_IS_TABLE(entry))
+    {
+        ERR("ARM64-DIAG: L0[%llu] is not a table descriptor (entry=0x%llx)\n",
+            (unsigned long long)l0_idx, (unsigned long long)entry);
+        return FALSE;
+    }
+
+    /* Get L1 table */
+    table = (UINT64 *)PA_TO_VA(entry & ~0xFFFULL);
+    TRACE("ARM64-DIAG: L1 table at %p\n", (void *)table);
+
+    entry = table[l1_idx];
+    TRACE("ARM64-DIAG: L1[%llu] = 0x%llx\n", (unsigned long long)l1_idx, (unsigned long long)entry);
+
+    if (!DESC_VALID(entry))
+    {
+        ERR("ARM64-DIAG: L1[%llu] is INVALID (entry=0x%llx)\n",
+            (unsigned long long)l1_idx, (unsigned long long)entry);
+        return FALSE;
+    }
+
+    /* Check for 1GB block */
+    if (DESC_IS_BLOCK(entry))
+    {
+        UINT64 block_pa = entry & ~0x3FFFFFFFULL;
+        UINT64 offset = va & 0x3FFFFFFFULL;
+        if (out_pa) *out_pa = block_pa + offset;
+        if (out_attrs) *out_attrs = entry & 0xFFF0000000000FFFULL;
+        TRACE("ARM64-DIAG: 1GB block mapping found: PA=0x%llx\n",
+              (unsigned long long)(block_pa + offset));
+        return TRUE;
+    }
+
+    if (!DESC_IS_TABLE(entry))
+    {
+        ERR("ARM64-DIAG: L1[%llu] is neither block nor table (entry=0x%llx)\n",
+            (unsigned long long)l1_idx, (unsigned long long)entry);
+        return FALSE;
+    }
+
+    /* Get L2 table */
+    table = (UINT64 *)PA_TO_VA(entry & ~0xFFFULL);
+    TRACE("ARM64-DIAG: L2 table at %p\n", (void *)table);
+
+    entry = table[l2_idx];
+    TRACE("ARM64-DIAG: L2[%llu] = 0x%llx\n", (unsigned long long)l2_idx, (unsigned long long)entry);
+
+    if (!DESC_VALID(entry))
+    {
+        ERR("ARM64-DIAG: L2[%llu] is INVALID (entry=0x%llx)\n",
+            (unsigned long long)l2_idx, (unsigned long long)entry);
+        return FALSE;
+    }
+
+    /* Check for 2MB block */
+    if (DESC_IS_BLOCK(entry))
+    {
+        UINT64 block_pa = entry & ~0x1FFFFFULL;
+        UINT64 offset = va & 0x1FFFFFULL;
+        if (out_pa) *out_pa = block_pa + offset;
+        if (out_attrs) *out_attrs = entry & 0xFFF0000000000FFFULL;
+        TRACE("ARM64-DIAG: 2MB block mapping found: PA=0x%llx\n",
+              (unsigned long long)(block_pa + offset));
+        return TRUE;
+    }
+
+    if (!DESC_IS_TABLE(entry))
+    {
+        ERR("ARM64-DIAG: L2[%llu] is neither block nor table (entry=0x%llx)\n",
+            (unsigned long long)l2_idx, (unsigned long long)entry);
+        return FALSE;
+    }
+
+    /* Get L3 table */
+    table = (UINT64 *)PA_TO_VA(entry & ~0xFFFULL);
+    TRACE("ARM64-DIAG: L3 table at %p\n", (void *)table);
+
+    entry = table[l3_idx];
+    TRACE("ARM64-DIAG: L3[%llu] = 0x%llx\n", (unsigned long long)l3_idx, (unsigned long long)entry);
+
+    if (!DESC_VALID(entry))
+    {
+        ERR("ARM64-DIAG: L3[%llu] is INVALID (entry=0x%llx)\n",
+            (unsigned long long)l3_idx, (unsigned long long)entry);
+        return FALSE;
+    }
+
+    if (!DESC_IS_PAGE(entry))
+    {
+        ERR("ARM64-DIAG: L3[%llu] is not a valid page (entry=0x%llx)\n",
+            (unsigned long long)l3_idx, (unsigned long long)entry);
+        return FALSE;
+    }
+
+    /* 4KB page */
+    {
+        UINT64 page_pa = entry & ~0xFFFULL;
+        UINT64 offset = va & 0xFFFULL;
+        if (out_pa) *out_pa = page_pa + offset;
+        if (out_attrs) *out_attrs = entry & 0xFFF0000000000FFFULL;
+        TRACE("ARM64-DIAG: 4KB page mapping found: PA=0x%llx\n",
+              (unsigned long long)(page_pa + offset));
+    }
+
+    return TRUE;
+}
+
+/*
+ * Diagnostic: Dump L2 pool allocation state for debugging
+ */
+static VOID
+Arm64DumpL2PoolState(VOID)
+{
+    TRACE("ARM64-DIAG: L2 pool state (user/identity):\n");
+    for (ULONG i = 0; i < ARM64_USER_L1_TABLES; i++)
+    {
+        TRACE("ARM64-DIAG:   L0 slot %lu: %llu/%u L2 tables used\n",
+              i,
+              (unsigned long long)arm64_user_l2_next_index[i],
+              ARM64_L2_TABLES_PER_L1);
+    }
+}
 
 VOID Arm64EnablePageTables(VOID)
 {
@@ -2130,17 +2438,146 @@ VOID Arm64EnablePageTables(VOID)
            If strict EL2 separation is needed, TTBR1 might be ignored or used differently. */
     }
     TRACE("ARM64: PT_EN: TTBRs written\n");
-    
+
     ARM64_DSB_ISH();
     ARM64_ISB();
     TRACE("ARM64: PT_EN: TLB Invalidated\n");
 
+    /* ========== DIAGNOSTIC: Verify identity mapping before MMU enable ========== */
+    {
+        UINT64 current_pc;
+        UINT64 mapped_pa;
+        UINT64 mapped_attrs;
+        BOOLEAN mapping_valid;
+
+        /* Get current PC */
+        __asm__ volatile("adr %0, ." : "=r"(current_pc));
+
+        TRACE("ARM64-DIAG: ============================================\n");
+        TRACE("ARM64-DIAG: PRE-MMU-ENABLE VERIFICATION\n");
+        TRACE("ARM64-DIAG: Current PC = 0x%llx\n", (unsigned long long)current_pc);
+        TRACE("ARM64-DIAG: TTBR0 will be = 0x%llx\n", (unsigned long long)phys_table0);
+        TRACE("ARM64-DIAG: TTBR1 will be = 0x%llx\n", (unsigned long long)phys_table1);
+        TRACE("ARM64-DIAG: TCR = 0x%llx\n", (unsigned long long)tcr);
+
+        /* Dump L2 pool state */
+        Arm64DumpL2PoolState();
+
+        /* Verify current PC is identity-mapped */
+        mapping_valid = Arm64VerifyIdentityMapping(current_pc, &mapped_pa, &mapped_attrs);
+
+        if (!mapping_valid)
+        {
+            ERR("ARM64-DIAG: CRITICAL - Current PC 0x%llx is NOT identity-mapped!\n",
+                (unsigned long long)current_pc);
+            ERR("ARM64-DIAG: MMU enable will FAIL - system will hang!\n");
+
+            /* Also check a few addresses around the PC */
+            UINT64 page_base = current_pc & ~0xFFFULL;
+            ERR("ARM64-DIAG: Checking nearby addresses:\n");
+            for (int offset = -2; offset <= 2; offset++)
+            {
+                UINT64 check_addr = page_base + (offset * PAGE_SIZE);
+                if (check_addr < (1ULL << 48)) /* Valid address */
+                {
+                    BOOLEAN nearby_valid = Arm64VerifyIdentityMapping(check_addr, NULL, NULL);
+                    ERR("ARM64-DIAG:   0x%llx: %s\n",
+                        (unsigned long long)check_addr,
+                        nearby_valid ? "MAPPED" : "NOT MAPPED");
+                }
+            }
+
+            /* Don't proceed - hang here so we can see the logs */
+            ERR("ARM64-DIAG: HALTING - identity mapping verification failed\n");
+            for (;;)
+                __asm__ volatile("wfi");
+        }
+        else
+        {
+            TRACE("ARM64-DIAG: Current PC identity mapping VERIFIED\n");
+            TRACE("ARM64-DIAG: PC 0x%llx -> PA 0x%llx (attrs=0x%llx)\n",
+                  (unsigned long long)current_pc,
+                  (unsigned long long)mapped_pa,
+                  (unsigned long long)mapped_attrs);
+
+            /* Verify identity: VA should equal PA */
+            if (mapped_pa != current_pc)
+            {
+                ERR("ARM64-DIAG: WARNING - Not a true identity map! VA=0x%llx PA=0x%llx\n",
+                    (unsigned long long)current_pc,
+                    (unsigned long long)mapped_pa);
+            }
+
+            /* Check execute permissions */
+            BOOLEAN is_pxn = (mapped_attrs & PTE_BLOCK_PXN) != 0;
+            BOOLEAN is_uxn = (mapped_attrs & PTE_BLOCK_UXN) != 0;
+            if (is_pxn)
+            {
+                ERR("ARM64-DIAG: WARNING - PXN is set! Code may not be executable at EL1\n");
+            }
+            if (is_uxn)
+            {
+                TRACE("ARM64-DIAG: UXN is set (OK for kernel code)\n");
+            }
+        }
+
+        /* Also verify exception vector is mapped */
+        {
+            extern UINT8 arm64_exception_vectors[];
+            UINT64 vbar = (UINT64)(uintptr_t)arm64_exception_vectors;
+            TRACE("ARM64-DIAG: Verifying exception vector at 0x%llx\n",
+                  (unsigned long long)vbar);
+
+            if (!Arm64VerifyIdentityMapping(vbar, NULL, NULL))
+            {
+                ERR("ARM64-DIAG: CRITICAL - Exception vector 0x%llx is NOT mapped!\n",
+                    (unsigned long long)vbar);
+                ERR("ARM64-DIAG: Faults will cause double-fault/hang!\n");
+            }
+            else
+            {
+                TRACE("ARM64-DIAG: Exception vector mapping VERIFIED\n");
+            }
+        }
+
+        /* Verify stack pointer is identity-mapped */
+        {
+            UINT64 sp;
+            __asm__ volatile("mov %0, sp" : "=r"(sp));
+            TRACE("ARM64-DIAG: Verifying stack at SP=0x%llx\n", (unsigned long long)sp);
+
+            if (!Arm64VerifyIdentityMapping(sp, NULL, NULL))
+            {
+                ERR("ARM64-DIAG: CRITICAL - Stack at 0x%llx is NOT mapped!\n",
+                    (unsigned long long)sp);
+                ERR("ARM64-DIAG: Any stack operation after MMU enable will fault!\n");
+            }
+            else
+            {
+                TRACE("ARM64-DIAG: Stack mapping VERIFIED\n");
+            }
+        }
+
+        TRACE("ARM64-DIAG: ============================================\n");
+    }
+    /* ========== END DIAGNOSTIC ========== */
+
     /* 3. Re-enable MMU and Cache (Original SCTLR flags) */
-    /* Ensure M and C are set. 
+    /* Ensure M and C are set.
        IMPORTANT: Clear WXN (Write-Execute-Never) to allow loader execution (which is mapped R/W) */
     UINT64 sctlr_on = (sctlr | SCTLR_EL1_M | SCTLR_EL1_C) & ~SCTLR_EL1_WXN;
 
-    TRACE("ARM64: PT_EN: Re-enabling MMU (WXN cleared)\n");
+    /*
+     * CRITICAL: Clean and invalidate all data caches before enabling MMU.
+     * The page table walker reads from memory (or its own cache), not from
+     * the L1/L2 data caches. We must ensure all page table writes are visible
+     * to the translation table walker.
+     */
+    TRACE("ARM64: PT_EN: Cleaning all data caches for page table coherency\n");
+    __asm_dcache_all(0);  /* 0 = clean & invalidate */
+    ARM64_DSB_ISH();
+
+    TRACE("ARM64: PT_EN: Re-enabling MMU (WXN cleared), SCTLR=0x%llx\n", (unsigned long long)sctlr_on);
     if (el == 1 || el12) {
         if (el12) __asm__ volatile("msr " SCTLR_EL12_SYSREG ", %0" :: "r"(sctlr_on) : "memory");
         else      __asm__ volatile("msr sctlr_el1, %0" :: "r"(sctlr_on) : "memory");
