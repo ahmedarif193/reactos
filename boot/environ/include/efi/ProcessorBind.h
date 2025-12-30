@@ -1,5 +1,5 @@
 /** @file
-Processor or Compiler specific defines and types for IA-32 architecture.
+Processor or Compiler specific defines and types for IA-32 and AArch64 architectures.
 
 Copyright (c) 2006 - 2011, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials are licensed and made available under
@@ -18,7 +18,13 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 ///
 /// Define the processor type so other code can make processor based choices.
 ///
+#if defined(__aarch64__) || defined(_M_ARM64)
+#define MDE_CPU_AARCH64
+#elif defined(__x86_64__) || defined(_M_X64)
+#define MDE_CPU_X64
+#else
 #define MDE_CPU_IA32
+#endif
 
 //
 // Make sure we are using the correct packing rules per EFI specification
@@ -197,18 +203,7 @@ typedef signed char         CHAR8;
 typedef signed char         INT8;
 #endif
 
-#ifndef _WIN64
-///
-/// Unsigned value of native width.  (4 bytes on supported 32-bit processor instructions;
-/// 8 bytes on supported 64-bit processor instructions.)
-///
-typedef UINT32  UINTN;
-///
-/// Signed value of native width.  (4 bytes on supported 32-bit processor instructions;
-/// 8 bytes on supported 64-bit processor instructions.)
-///
-typedef INT32   INTN;
-#else
+#if defined(MDE_CPU_AARCH64) || defined(MDE_CPU_X64) || defined(_WIN64)
 ///
 /// Unsigned value of native width.  (4 bytes on supported 32-bit processor instructions;
 /// 8 bytes on supported 64-bit processor instructions.)
@@ -219,12 +214,38 @@ typedef UINT64  UINTN;
 /// 8 bytes on supported 64-bit processor instructions.)
 ///
 typedef INT64   INTN;
+#else
+///
+/// Unsigned value of native width.  (4 bytes on supported 32-bit processor instructions;
+/// 8 bytes on supported 64-bit processor instructions.)
+///
+typedef UINT32  UINTN;
+///
+/// Signed value of native width.  (4 bytes on supported 32-bit processor instructions;
+/// 8 bytes on supported 64-bit processor instructions.)
+///
+typedef INT32   INTN;
 #endif
 
 //
 // Processor specific defines
 //
 
+#if defined(MDE_CPU_AARCH64) || defined(MDE_CPU_X64) || defined(_WIN64)
+///
+/// A value of native width with the highest bit set.
+///
+#define MAX_BIT     0x8000000000000000ULL
+///
+/// A value of native width with the two highest bits set.
+///
+#define MAX_2_BITS  0xC000000000000000ULL
+
+///
+/// Maximum legal 64-bit address.
+///
+#define MAX_ADDRESS   0xFFFFFFFFFFFFFFFFULL
+#else
 ///
 /// A value of native width with the highest bit set.
 ///
@@ -238,6 +259,7 @@ typedef INT64   INTN;
 /// Maximum legal IA-32 address.
 ///
 #define MAX_ADDRESS   0xFFFFFFFF
+#endif
 
 ///
 /// The stack alignment required for IA-32.
@@ -253,20 +275,26 @@ typedef INT64   INTN;
 ///
 /// If EFIAPI is already defined, then we use that definition.
 ///
-#elif defined(_MSC_EXTENSIONS)
+#elif defined(MDE_CPU_AARCH64)
 ///
-/// Microsoft* compiler specific method for EFIAPI calling convention.
-/// 
-#define EFIAPI __cdecl  
-#elif defined(__GNUC__)
+/// AArch64 uses the standard AAPCS64 calling convention.
+/// No special attribute needed.
 ///
-/// GCC specific method for EFIAPI calling convention.
-/// 
-#define EFIAPI __attribute__((cdecl))  
+#define EFIAPI
+#elif defined(_MSC_EXTENSIONS) && !defined(MDE_CPU_X64)
+///
+/// Microsoft* compiler specific method for EFIAPI calling convention (IA-32 only).
+///
+#define EFIAPI __cdecl
+#elif defined(__GNUC__) && defined(MDE_CPU_IA32)
+///
+/// GCC specific method for EFIAPI calling convention (IA-32 only).
+///
+#define EFIAPI __attribute__((cdecl))
 #else
 ///
 /// The default for a non Microsoft* or GCC compiler is to assume the EFI ABI
-/// is the standard. 
+/// is the standard. Also used for x64 where cdecl is not applicable.
 ///
 #define EFIAPI
 #endif

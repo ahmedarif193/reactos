@@ -241,6 +241,11 @@ by Pages.
 ///
 #define EFI_IMAGE_MACHINE_ARMTHUMB_MIXED  0x01C2
 
+///
+/// PE32+ Machine type for AArch64 (ARM64) UEFI images.
+///
+#define EFI_IMAGE_MACHINE_AARCH64         0xAA64
+
 
 #if   defined (MDE_CPU_IA32)
 
@@ -268,7 +273,14 @@ by Pages.
 #define EFI_IMAGE_MACHINE_TYPE_SUPPORTED(Machine) \
     (((Machine) == EFI_IMAGE_MACHINE_ARMTHUMB_MIXED) || ((Machine) == EFI_IMAGE_MACHINE_EBC))
 
-#define EFI_IMAGE_MACHINE_CROSS_TYPE_SUPPORTED(Machine) ((Machine) == EFI_IMAGE_MACHINE_ARMTHUMB_MIXED) 
+#define EFI_IMAGE_MACHINE_CROSS_TYPE_SUPPORTED(Machine) ((Machine) == EFI_IMAGE_MACHINE_ARMTHUMB_MIXED)
+
+#elif defined (MDE_CPU_AARCH64)
+
+#define EFI_IMAGE_MACHINE_TYPE_SUPPORTED(Machine) \
+    (((Machine) == EFI_IMAGE_MACHINE_AARCH64) || ((Machine) == EFI_IMAGE_MACHINE_EBC))
+
+#define EFI_IMAGE_MACHINE_CROSS_TYPE_SUPPORTED(Machine) (FALSE)
 
 #elif defined (MDE_CPU_EBC)
 

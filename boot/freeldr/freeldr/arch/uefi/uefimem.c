@@ -288,9 +288,6 @@ UefiMemGetMemoryMap(_Out_ ULONG *MemoryMapSize /* OUT: number of entries */)
     /* Convert the firmware map into FreeLdr's compact descriptor list. */
     const UINT32 EntryCount = (DescSize ? (UINT32)(MapBytes / DescSize) : 0);
 
-    TRACE("Memory allocation calculation: MapBytes=%lu, DescSize=%lu, EntryCount=%u\n", 
-          (UINTN)MapBytes, (UINTN)DescSize, EntryCount);
-
     /* Compute buffer size carefully (avoid overflow): */
     const SIZE_T each = sizeof(FREELDR_MEMORY_DESCRIPTOR);
     SIZE_T FreeldrEntriesCap = (SIZE_T)EntryCount + FREELDR_EXTRA_DESCS;
@@ -298,9 +295,6 @@ UefiMemGetMemoryMap(_Out_ ULONG *MemoryMapSize /* OUT: number of entries */)
         FreeldrEntriesCap = EntryCount;
 
     SIZE_T FreeldrBytes = each * FreeldrEntriesCap;
-    
-    TRACE("FreeldrBytes calculation: each=%lu * FreeldrEntriesCap=%lu = %lu\n", 
-          (UINTN)each, (UINTN)FreeldrEntriesCap, (UINTN)FreeldrBytes);
 
     Status = GlobalSystemTable->BootServices->AllocatePool(EfiLoaderData,
                                                            FreeldrBytes,
@@ -313,12 +307,8 @@ UefiMemGetMemoryMap(_Out_ ULONG *MemoryMapSize /* OUT: number of entries */)
         return NULL;
     }
 
-    TRACE("About to memset: FreeldrMem=%p, FreeldrBytes=%lu\n", FreeldrMem, (UINTN)FreeldrBytes);
-
     /* Zero exactly what we allocated. */
     memset(FreeldrMem, 0, FreeldrBytes);
-    
-    TRACE("memset completed successfully\n");
 
     /* Walk the EFI map and translate. */
     EFI_MEMORY_DESCRIPTOR *MapEntry = (EFI_MEMORY_DESCRIPTOR *)EfiMemoryMap;

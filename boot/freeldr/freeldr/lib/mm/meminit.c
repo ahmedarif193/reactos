@@ -334,13 +334,11 @@ MmCheckFreeldrImageFile(VOID)
 
 BOOLEAN MmInitializeMemoryManager(VOID)
 {
-#if DBG
-#endif
-
     /* Check the freeldr binary */
     MmCheckFreeldrImageFile();
 
     BiosMemoryMap = MachVtbl.GetMemoryMap(&BiosMemoryMapEntryCount);
+
     // Find address for the page lookup table
     TotalPagesInLookupTable = MmGetAddressablePageCountIncludingHoles();
     PageLookupTableAddress = MmFindLocationForPageLookupTable(TotalPagesInLookupTable);
@@ -467,8 +465,8 @@ PVOID MmFindLocationForPageLookupTable(PFN_NUMBER TotalPageCount)
                                  MM_MAX_PAGE_LOADER_MAPPED);
 
     // Calculate the virtual address
-    PageLookupTableMemAddress = (PVOID)((PageLookupTableEndPage * PAGE_SIZE)
-                                        - PageLookupTableSize);
+    ULONG_PTR EndAddr = (ULONG_PTR)PageLookupTableEndPage * PAGE_SIZE;
+    PageLookupTableMemAddress = (PVOID)(EndAddr - PageLookupTableSize);
 
     return PageLookupTableMemAddress;
 }
