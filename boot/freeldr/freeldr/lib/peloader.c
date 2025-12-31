@@ -167,11 +167,6 @@ PeLdrpBindImportName(
     PCHAR ExportName, ForwarderName;
     BOOLEAN Success;
 
-    DbgPrint("PeLdrpBindImportName: DllBase(VA)=%p ImageBase(VA)=%p ThunkName(VA)=%p ThunkData(VA)=%p\n",
-             DllBase, ImageBase, ThunkName, ThunkData);
-    DbgPrint("PeLdrpBindImportName: DllBase(PA)=%p ImageBase(PA)=%p ProcessForwards=%d\n",
-             VaToPa(DllBase), VaToPa(ImageBase), ProcessForwards);
-
     /* Check passed DllBase */
     if (!DllBase)
     {
@@ -182,9 +177,6 @@ PeLdrpBindImportName(
     /* Convert all non-critical pointers to PA from VA */
     ThunkName = VaToPa(ThunkName);
     ThunkData = VaToPa(ThunkData);
-
-    DbgPrint("PeLdrpBindImportName: After VaToPa - ThunkName(PA)=%p ThunkData(PA)=%p\n",
-             ThunkName, ThunkData);
 
     /* Is the reference by ordinal? */
     if (IMAGE_SNAP_BY_ORDINAL(ThunkName->u1.Ordinal) && !ProcessForwards)
@@ -207,9 +199,6 @@ PeLdrpBindImportName(
 
         /* Get the import name, convert it to a physical pointer */
         ImportData = VaToPa((PVOID)ThunkName->u1.AddressOfData);
-
-        DbgPrint("PeLdrpBindImportName: Importing by name: '%s' (Hint=%u)\n",
-                 ImportData->Name, ImportData->Hint);
 
         /* Get pointers to Name and Ordinal tables (RVA -> VA) */
         NameTable = VaToPa(RVA(DllBase, ExportDirectory->AddressOfNames));
@@ -316,16 +305,8 @@ PeLdrpBindImportName(
     /* Get a pointer to the function table */
     FunctionTable = (PULONG)VaToPa(RVA(DllBase, ExportDirectory->AddressOfFunctions));
 
-    DbgPrint("PeLdrpBindImportName: Ordinal=%lu FunctionTable(PA)=%p\n", Ordinal, FunctionTable);
-    DbgPrint("PeLdrpBindImportName: FunctionTable[%lu]=%p (RVA)\n", Ordinal, (PVOID)(ULONG_PTR)FunctionTable[Ordinal]);
-
     /* Save a pointer to the function */
     ThunkData->u1.Function = (ULONG_PTR)RVA(DllBase, FunctionTable[Ordinal]);
-
-    DbgPrint("PeLdrpBindImportName: Writing ThunkData->u1.Function=%p (VA) to ThunkData(PA)=%p\n",
-             (PVOID)ThunkData->u1.Function, ThunkData);
-    DbgPrint("PeLdrpBindImportName: DllBase(VA)=%p + RVA=%p = Function(VA)=%p\n",
-             DllBase, (PVOID)(ULONG_PTR)FunctionTable[Ordinal], (PVOID)ThunkData->u1.Function);
 
     /* Is it a forwarder? (function pointer is within the export directory) */
     ForwarderName = (PCHAR)VaToPa((PVOID)ThunkData->u1.Function);
@@ -506,11 +487,6 @@ PeLdrpScanImportAddressTable(
     BOOLEAN Success;
     ULONG ExportSize;
 
-    DbgPrint("PeLdrpScanImportAddressTable: DllBase(VA)=%p ImageBase(VA)=%p\n", DllBase, ImageBase);
-    DbgPrint("PeLdrpScanImportAddressTable: ThunkName(VA)=%p ThunkData(VA)=%p\n", ThunkName, ThunkData);
-    DbgPrint("PeLdrpScanImportAddressTable: ThunkName(PA)=%p ThunkData(PA)=%p\n",
-             VaToPa(ThunkName), VaToPa(ThunkData));
-
     /* Obtain the export table from the DLL's base */
     if (!DllBase)
     {
@@ -554,9 +530,6 @@ PeLdrpScanImportAddressTable(
         /* Fail if binding was unsuccessful */
         if (!Success)
             return Success;
-
-        DbgPrint("PeLdrpScanImportAddressTable: IAT entry at ThunkData(PA)=%p: Before=%p After=%p\n",
-                 ThunkDataPA, (PVOID)BeforeValue, (PVOID)ThunkDataPA->u1.Function);
 
         /* Move to the next thunk */
         ThunkName++;
@@ -686,19 +659,9 @@ PeLdrScanImportDescriptorTable(
     PCH ImportName;
     BOOLEAN Success;
 
-    DbgPrint("=== PeLdrScanImportDescriptorTable: Scanning imports for DTE=%p ===\n", ScanDTE);
-    DbgPrint("PeLdrScanImportDescriptorTable: DllBase(VA)=%p DllBase(PA)=%p\n",
-             ScanDTE->DllBase, VaToPa(ScanDTE->DllBase));
-    DbgPrint("PeLdrScanImportDescriptorTable: BaseDllName='%.*S' DirectoryPath='%s'\n",
-             ScanDTE->BaseDllName.Length / sizeof(WCHAR),
-             VaToPa(ScanDTE->BaseDllName.Buffer), DirectoryPath);
-
     /* Get a pointer to the import table of this image */
     ImportTable = (PIMAGE_IMPORT_DESCRIPTOR)RtlImageDirectoryEntryToData(VaToPa(ScanDTE->DllBase),
         TRUE, IMAGE_DIRECTORY_ENTRY_IMPORT, &ImportTableSize);
-
-    DbgPrint("PeLdrScanImportDescriptorTable: ImportTable(PA)=%p Size=%lu\n",
-             ImportTable, ImportTableSize);
 
     /* If the image doesn't have any import directory, just return success */
     if (!ImportTable)
@@ -715,14 +678,6 @@ PeLdrScanImportDescriptorTable(
 
         /* Get pointer to the name */
         ImportName = (PCH)VaToPa(RVA(ScanDTE->DllBase, ImportTable->Name));
-        DbgPrint("\n--- Processing import DLL: '%s' ---\n", ImportName);
-        DbgPrint("PeLdrScanImportDescriptorTable: ImportTable(PA)=%p Name(RVA)=%p\n",
-                 ImportTable, (PVOID)(ULONG_PTR)ImportTable->Name);
-        DbgPrint("PeLdrScanImportDescriptorTable: OriginalFirstThunk(RVA)=%p FirstThunk(RVA)=%p\n",
-                 (PVOID)(ULONG_PTR)ImportTable->OriginalFirstThunk,
-                 (PVOID)(ULONG_PTR)ImportTable->FirstThunk);
-        DbgPrint("PeLdrScanImportDescriptorTable: ThunkName(VA)=%p ThunkData(VA)=%p\n",
-                 ThunkName, ThunkData);
 
         /* In case we get a reference to ourselves - just skip it */
         if (PeLdrpCompareDllName(ImportName, &ScanDTE->BaseDllName))
@@ -743,12 +698,6 @@ PeLdrScanImportDescriptorTable(
             }
         }
 
-        /* Scan its import address table */
-        DbgPrint("PeLdrScanImportDescriptorTable: Calling PeLdrpScanImportAddressTable for '%s'\n",
-                 ImportName);
-        DbgPrint("PeLdrScanImportDescriptorTable: DataTableEntry->DllBase(VA)=%p ScanDTE->DllBase(VA)=%p\n",
-                 DataTableEntry->DllBase, ScanDTE->DllBase);
-
         Success = PeLdrpScanImportAddressTable(ModuleListHead,
                                                DataTableEntry->DllBase,
                                                ScanDTE->DllBase,
@@ -764,11 +713,8 @@ PeLdrScanImportDescriptorTable(
             return Success;
         }
 
-        DbgPrint("PeLdrScanImportDescriptorTable: Successfully resolved imports from '%s'\n",
-                 ImportName);
     }
 
-    DbgPrint("=== PeLdrScanImportDescriptorTable: Completed successfully ===\n\n");
     return TRUE;
 }
 
