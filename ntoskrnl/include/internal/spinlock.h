@@ -27,8 +27,20 @@ KxAcquireSpinLock(
     PKSPIN_LOCK SpinLock)
 {
 #if DBG
+    KSPIN_LOCK StoredBefore, StoredAfter;
+    KSPIN_LOCK Owner = (KSPIN_LOCK)KeGetCurrentThread() | 1;
+
+    /* Validate spinlock pointer */
+    if (SpinLock == NULL)
+    {
+        /* Critical error: NULL spinlock pointer */
+        KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, (ULONG_PTR)SpinLock, 0, 0, 0);
+    }
+
+    StoredBefore = *SpinLock;
+
     /* Make sure that we don't own the lock already */
-    if (((KSPIN_LOCK)KeGetCurrentThread() | 1) == *SpinLock)
+    if (Owner == StoredBefore)
     {
         /* We do, bugcheck! */
         KeBugCheckEx(SPIN_LOCK_ALREADY_OWNED, (ULONG_PTR)SpinLock, 0, 0, 0);
@@ -60,6 +72,7 @@ KxAcquireSpinLock(
 #if DBG
     /* On debug builds, we OR in the KTHREAD */
     *SpinLock = (KSPIN_LOCK)KeGetCurrentThread() | 1;
+    StoredAfter = *SpinLock;
 #endif
 }
 
@@ -78,11 +91,25 @@ KxReleaseSpinLock(
     PKSPIN_LOCK SpinLock)
 {
 #if DBG
+    KSPIN_LOCK Owner = (KSPIN_LOCK)KeGetCurrentThread() | 1;
+    KSPIN_LOCK Stored;
+    BOOLEAN Mismatch;
+
+    /* Validate spinlock pointer */
+    if (SpinLock == NULL)
+    {
+        /* Critical error: NULL spinlock pointer */
+        KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, (ULONG_PTR)SpinLock, (ULONG_PTR)Owner, 0, 1);
+    }
+
+    Stored = *SpinLock;
+    Mismatch = (Owner != Stored);
+
     /* Make sure that the threads match */
-    if (((KSPIN_LOCK)KeGetCurrentThread() | 1) != *SpinLock)
+    if (Mismatch)
     {
         /* They don't, bugcheck */
-        KeBugCheckEx(SPIN_LOCK_NOT_OWNED, (ULONG_PTR)SpinLock, 0, 0, 0);
+        KeBugCheckEx(SPIN_LOCK_NOT_OWNED, (ULONG_PTR)SpinLock, (ULONG_PTR)Owner, (ULONG_PTR)Stored, 0);
     }
 #endif
 

@@ -130,11 +130,20 @@ KiArm64InitializeTrapFrame(
     ULONG64 Fpcr = 0;
     ULONG64 Fpsr = 0;
     PKEXCEPTION_FRAME ExceptionFrame = &Context->ExceptionFrame;
+    KIRQL CurrentIrql;
 
     RtlZeroMemory(TrapFrame, sizeof(*TrapFrame));
 
+    /*
+     * Capture IRQL BEFORE any potential IRQL changes during exception handling.
+     * For synchronous exceptions (data/instruction abort), we're at the IRQL
+     * that was active when the fault occurred. This is critical for Windows
+     * ARM64 compliance - the trap frame must preserve the interrupted IRQL.
+     */
+    CurrentIrql = KeGetCurrentIrql();
+
     TrapFrame->PreviousMode = (CHAR)KiArm64PreviousModeFromSpsr(Context->State.Spsr);
-    TrapFrame->PreviousIrql = KeGetCurrentIrql();
+    TrapFrame->PreviousIrql = (UCHAR)CurrentIrql;
     TrapFrame->TrapFrame = (ULONG64)(ULONG_PTR)TrapFrame;
     TrapFrame->FaultAddress = Context->State.FaultAddress;
     TrapFrame->Spsr = (ULONG)Context->State.Spsr;
@@ -446,6 +455,13 @@ KiArm64HandleSynchronousException(
     NTSTATUS Status;
     BOOLEAN WriteAccess;
 
+    /*
+     * ARM64 memory model: Ensure exception state from assembly is visible.
+     * The DSB/ISB in assembly ensures system register reads are complete,
+     * but we need a compiler barrier to prevent C code reordering.
+     */
+    __asm__ __volatile__("" ::: "memory");
+
     Context->TrapFramePointer = NULL;
     Context->ExceptionFramePointer = NULL;
 
@@ -466,11 +482,13 @@ KiArm64HandleSynchronousException(
 #if defined(_M_ARM64) || defined(__aarch64__)
     if ((EsrClass != 0x11) && (EsrClass != 0x15) && (EsrClass != 0x3C))
     {
-        KI_ARM64_STAGE_LOGF("[arm64] TrapDiag: KiArm64HandleSync class=0x%lx esr=0x%lx far=%p elr=%p vector=%lu",
+        KI_ARM64_STAGE_LOGF("[arm64] TrapDiag: KiArm64HandleSync class=0x%lx esr=0x%lx far=%p elr=%p sp=%p spsr=0x%llx vector=%lu",
                             (ULONG)EsrClass,
                             (ULONG)Esr,
                             (PVOID)(ULONG_PTR)Context->State.FaultAddress,
                             (PVOID)(ULONG_PTR)Context->State.Elr,
+                            (PVOID)(ULONG_PTR)Context->State.Registers.Sp,
+                            (unsigned long long)Context->State.Spsr,
                             (ULONG)Context->State.VectorId);
     }
 #endif
@@ -569,6 +587,19 @@ KiArm64HandleSynchronousException(
 
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
+
+            if ((ULONG_PTR)Context->State.FaultAddress < (ULONG_PTR)MM_SYSTEM_RANGE_START)
+            {
+                KI_ARM64_STAGE_LOGF("[arm64] DA user: far=%p elr=%p sp=%p lr=%p x0=%p x1=%p x2=%p x3=%p",
+                                    (PVOID)(ULONG_PTR)Context->State.FaultAddress,
+                                    (PVOID)(ULONG_PTR)Context->State.Elr,
+                                    (PVOID)(ULONG_PTR)TrapFrame->Sp,
+                                    (PVOID)(ULONG_PTR)TrapFrame->X[30],
+                                    (PVOID)(ULONG_PTR)TrapFrame->X[0],
+                                    (PVOID)(ULONG_PTR)TrapFrame->X[1],
+                                    (PVOID)(ULONG_PTR)TrapFrame->X[2],
+                                    (PVOID)(ULONG_PTR)TrapFrame->X[3]);
+            }
 
             PreviousMode = KiArm64PreviousModeFromSpsr(Context->State.Spsr);
             WriteAccess = (Iss & (1u << 6)) != 0;

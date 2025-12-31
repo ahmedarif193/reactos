@@ -859,7 +859,7 @@ ExpBlockOnLockedHandleEntry(IN PHANDLE_TABLE HandleTable,
                             IN PHANDLE_TABLE_ENTRY HandleTableEntry)
 {
     LONG_PTR OldValue;
-    EX_PUSH_LOCK_WAIT_BLOCK WaitBlock;
+    DECLSPEC_ALIGN(16) EX_PUSH_LOCK_WAIT_BLOCK WaitBlock;
 
     /* Block on the pushlock */
     ExBlockPushLock(&HandleTable->HandleContentionEvent, &WaitBlock);

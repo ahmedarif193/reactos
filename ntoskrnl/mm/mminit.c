@@ -226,14 +226,26 @@ MmInitSystem(IN ULONG Phase,
              IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     extern MMPTE ValidKernelPte;
+    extern KGUARDED_MUTEX MmPagedPoolMutex;
     PMMPTE PointerPte;
     MMPTE TempPte = ValidKernelPte;
     PFN_NUMBER PageFrameNumber;
     PLIST_ENTRY ListEntry;
     PLDR_DATA_TABLE_ENTRY DataTableEntry;
 
+    /* ARM64: Check mutex state at entry to Phase 1 */
+    DPRINT1("[MM] MmInitSystem Phase %lu ENTRY: MmPagedPoolMutex @ %p, Type=%02x, Count=%ld\n",
+            Phase,
+            &MmPagedPoolMutex,
+            (ULONG)MmPagedPoolMutex.Gate.Header.Type,
+            MmPagedPoolMutex.Count);
+
+    DPRINT1("[MM] Phase 1: After DPRINT1, before ASSERT\n");
+
     /* Initialize the kernel address space */
     ASSERT(Phase == 1);
+
+    DPRINT1("[MM] Phase 1: After ASSERT, before event init\n");
 
 #ifdef NEWCC
     InitializeListHead(&MiSegmentList);
@@ -247,19 +259,47 @@ MmInitSystem(IN ULONG Phase,
     KeInitializeEvent(&MmWaitPageEvent, SynchronizationEvent, FALSE);
 #endif
 
+    DPRINT1("[MM] Phase 1: After event init, before setting address space\n");
+
     MmKernelAddressSpace = &PsIdleProcess->Vm;
+
+    DPRINT1("[MM] Phase 1: After setting address space, before MiInitSystemMemoryAreas\n");
 
     /* Intialize system memory areas */
     MiInitSystemMemoryAreas();
 
+    DPRINT1("[MM] Phase 1: After MiInitSystemMemoryAreas, before MiDbgDumpAddressSpace\n");
+
     /* Dump the address space */
     MiDbgDumpAddressSpace();
 
+    DPRINT1("[MM] Phase 1: After MiDbgDumpAddressSpace, before MmInitGlobalKernelPageDirectory\n");
+
     MmInitGlobalKernelPageDirectory();
+    DPRINT1("[MM] Phase 1: After MmInitGlobalKernelPageDirectory\n");
+
     MmInitializeMemoryConsumer(MC_USER, MmTrimUserMemory);
+    DPRINT1("[MM] Phase 1: After MmInitializeMemoryConsumer\n");
+
     MmInitializeRmapList();
+    DPRINT1("[MM] Phase 1: After MmInitializeRmapList\n");
+
     MmInitSectionImplementation();
+    DPRINT1("[MM] Phase 1: After MmInitSectionImplementation\n");
+
     MmInitPagingFile();
+    DPRINT1("[MM] Phase 1: After MmInitPagingFile, before MiInitializePoolEvents\n");
+
+    /*
+     * ARM64: Initialize pool events BEFORE the first paged pool allocation.
+     * MiInitializePoolEvents() must be called before any code that tries to
+     * acquire the paged pool mutex, because it initializes the mutex's gate
+     * and pool work item structures. We cannot call MiInitializeMemoryEvents()
+     * here because it itself allocates from paged pool.
+     */
+    MiInitializePoolEvents();
+
+    DPRINT1("[MM] Phase 1: After MiInitializePoolEvents\n");
 
     //
     // Create a PTE to double-map the shared data section. We allocate it

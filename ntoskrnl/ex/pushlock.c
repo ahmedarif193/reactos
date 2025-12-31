@@ -112,6 +112,28 @@ ExfWakePushLock(PEX_PUSH_LOCK PushLock,
                           ~EX_PUSH_LOCK_PTR_BITS);
         WaitBlock = FirstWaitBlock;
 
+        /* ARM64: Ensure we see the initialized gate.
+         * After extracting the wait block pointer from the pushlock, we need
+         * to ensure all initialization writes (especially to the gate) are
+         * visible before we access the wait block fields. */
+#if defined(_M_ARM64) || defined(__aarch64__)
+        if (FirstWaitBlock)
+        {
+            __asm__ __volatile__("dmb ishld" : : : "memory");
+        }
+#endif
+
+        /* ARM64 DEBUG: Log wait block extraction */
+        DPRINT1("ExfWakePushLock: OldValue.Value=%016llX, FirstWaitBlock=%p\n",
+                (ULONGLONG)OldValue.Value, FirstWaitBlock);
+        if (FirstWaitBlock)
+        {
+            DPRINT1("                 WaitBlock->WakeGate=%p, Type=%02X, Flags=%08lX\n",
+                    &FirstWaitBlock->WakeGate,
+                    FirstWaitBlock->WakeGate.Header.Type,
+                    FirstWaitBlock->Flags);
+        }
+
         /* Try to find the last block */
         while (TRUE)
         {
@@ -193,6 +215,10 @@ ExfWakePushLock(PEX_PUSH_LOCK PushLock,
         /* We are about to get signaled */
         WaitBlock->Signaled = TRUE;
 #endif
+
+        /* ARM64 DEBUG: Log before signaling */
+        DPRINT1("ExfWakePushLock: Signaling WaitBlock=%p, WakeGate=%p, Gate.Type=%02X\n",
+                WaitBlock, &WaitBlock->WakeGate, WaitBlock->WakeGate.Header.Type);
 
         /* Set the Wait Bit in the Wait Block */
         if (!InterlockedBitTestAndReset(&WaitBlock->Flags, 1))
@@ -472,7 +498,7 @@ ExfAcquirePushLockExclusive(PEX_PUSH_LOCK PushLock)
 {
     EX_PUSH_LOCK OldValue = *PushLock, NewValue, TempValue;
     BOOLEAN NeedWake;
-    EX_PUSH_LOCK_WAIT_BLOCK Block;
+    DECLSPEC_ALIGN(16) EX_PUSH_LOCK_WAIT_BLOCK Block;
     PEX_PUSH_LOCK_WAIT_BLOCK WaitBlock = &Block;
 
     /* Start main loop */
@@ -570,6 +596,28 @@ ExfAcquirePushLockExclusive(PEX_PUSH_LOCK PushLock)
             ASSERT(NewValue.Waiting);
             ASSERT(NewValue.Locked);
 
+            /* Set up the Wait Gate BEFORE publishing the wait block */
+            KeInitializeGate(&WaitBlock->WakeGate);
+
+            /* ARM64: Ensure gate initialization is visible before publishing.
+             * On ARM64's weakly-ordered memory model, we need an explicit barrier
+             * to ensure all gate initialization writes are visible to other CPUs
+             * before they can access the wait block via the published pointer.
+             * While InterlockedCompareExchangePointer provides barriers, compiler
+             * optimizations might reorder the gate initialization, so we use a
+             * compiler barrier here. */
+#if defined(_M_ARM64) || defined(__aarch64__)
+            __asm__ __volatile__("dmb ishst" : : : "memory");
+#endif
+
+            /* ARM64 DEBUG: Log wait block details */
+            DPRINT1("ExfAcquirePushLockExclusive: WaitBlock=%p (aligned=%d), WakeGate=%p, Gate.Type=%02X\n",
+                    WaitBlock,
+                    ((ULONG_PTR)WaitBlock & 0xF) == 0 ? 1 : 0,
+                    &WaitBlock->WakeGate,
+                    WaitBlock->WakeGate.Header.Type);
+            DPRINT1("                              Publishing to PushLock=%p\n", PushLock);
+
             /* Write the new value */
             TempValue = NewValue;
             NewValue.Ptr = InterlockedCompareExchangePointer(&PushLock->Ptr,
@@ -577,8 +625,13 @@ ExfAcquirePushLockExclusive(PEX_PUSH_LOCK PushLock)
                                                              OldValue.Ptr);
             if (NewValue.Value != OldValue.Value)
             {
-                /* Retry */
+                /* Retry - use a proper acquire load to see latest value */
+#if defined(_M_ARM64) || defined(__aarch64__)
+                __asm__ __volatile__("dmb ishld" : : : "memory");
+                OldValue = *(volatile PEX_PUSH_LOCK)PushLock;
+#else
                 OldValue = *PushLock;
+#endif
                 continue;
             }
 
@@ -588,9 +641,6 @@ ExfAcquirePushLockExclusive(PEX_PUSH_LOCK PushLock)
                 /* Scan the Waiters and Wake PushLocks */
                 ExpOptimizePushLockList(PushLock, TempValue);
             }
-
-            /* Set up the Wait Gate */
-            KeInitializeGate(&WaitBlock->WakeGate);
 
 #ifdef CONFIG_SMP
             /* Now spin on the push lock if necessary */
@@ -611,6 +661,10 @@ ExfAcquirePushLockExclusive(PEX_PUSH_LOCK PushLock)
             /* Now try to remove the wait bit */
             if (InterlockedBitTestAndReset(&WaitBlock->Flags, 1))
             {
+                /* ARM64 DEBUG: About to wait on gate */
+                DPRINT1("ExfAcquirePushLockExclusive: About to wait - WaitBlock=%p, WakeGate=%p, Type=%02X\n",
+                        WaitBlock, &WaitBlock->WakeGate, WaitBlock->WakeGate.Header.Type);
+
                 /* Nobody removed it already, let's do a full wait */
                 KeWaitForGate(&WaitBlock->WakeGate, WrPushLock, KernelMode);
                 ASSERT(WaitBlock->Signaled);
@@ -646,7 +700,7 @@ ExfAcquirePushLockShared(PEX_PUSH_LOCK PushLock)
 {
     EX_PUSH_LOCK OldValue = *PushLock, NewValue;
     BOOLEAN NeedWake;
-    EX_PUSH_LOCK_WAIT_BLOCK Block;
+    DECLSPEC_ALIGN(16) EX_PUSH_LOCK_WAIT_BLOCK Block;
     PEX_PUSH_LOCK_WAIT_BLOCK WaitBlock = &Block;
 
     /* Start main loop */
@@ -735,14 +789,37 @@ ExfAcquirePushLockShared(PEX_PUSH_LOCK PushLock)
             WaitBlock->PushLock = PushLock;
 #endif
 
+            /* Set up the Wait Gate BEFORE publishing the wait block */
+            KeInitializeGate(&WaitBlock->WakeGate);
+
+            /* ARM64: Ensure gate initialization is visible before publishing.
+             * On ARM64's weakly-ordered memory model, we need an explicit barrier
+             * to ensure all gate initialization writes are visible to other CPUs
+             * before they can access the wait block via the published pointer. */
+#if defined(_M_ARM64) || defined(__aarch64__)
+            __asm__ __volatile__("dmb ishst" : : : "memory");
+#endif
+
+            /* ARM64 DEBUG: Log wait block details */
+            DPRINT1("ExfAcquirePushLockShared: WaitBlock=%p (aligned=%d), WakeGate=%p, Gate.Type=%02X\n",
+                    WaitBlock,
+                    ((ULONG_PTR)WaitBlock & 0xF) == 0 ? 1 : 0,
+                    &WaitBlock->WakeGate,
+                    WaitBlock->WakeGate.Header.Type);
+
             /* Write the new value */
             NewValue.Ptr = InterlockedCompareExchangePointer(&PushLock->Ptr,
                                                              NewValue.Ptr,
                                                              OldValue.Ptr);
             if (NewValue.Ptr != OldValue.Ptr)
             {
-                /* Retry */
+                /* Retry - use a proper acquire load to see latest value */
+#if defined(_M_ARM64) || defined(__aarch64__)
+                __asm__ __volatile__("dmb ishld" : : : "memory");
+                OldValue = *(volatile PEX_PUSH_LOCK)PushLock;
+#else
                 OldValue = *PushLock;
+#endif
                 continue;
             }
 
@@ -755,9 +832,6 @@ ExfAcquirePushLockShared(PEX_PUSH_LOCK PushLock)
                 /* Scan the Waiters and Wake PushLocks */
                 ExpOptimizePushLockList(PushLock, OldValue);
             }
-
-            /* Set up the Wait Gate */
-            KeInitializeGate(&WaitBlock->WakeGate);
 
 #ifdef CONFIG_SMP
             /* Now spin on the push lock if necessary */
@@ -778,6 +852,10 @@ ExfAcquirePushLockShared(PEX_PUSH_LOCK PushLock)
             /* Now try to remove the wait bit */
             if (InterlockedBitTestAndReset(&WaitBlock->Flags, 1))
             {
+                /* ARM64 DEBUG: About to wait on gate */
+                DPRINT1("ExfAcquirePushLockShared: About to wait - WaitBlock=%p, WakeGate=%p, Type=%02X\n",
+                        WaitBlock, &WaitBlock->WakeGate, WaitBlock->WakeGate.Header.Type);
+
                 /* Fast-path did not work, we need to do a full wait */
                 KeWaitForGate(&WaitBlock->WakeGate, WrPushLock, KernelMode);
                 ASSERT(WaitBlock->Signaled);

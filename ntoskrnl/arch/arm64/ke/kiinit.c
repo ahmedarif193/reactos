@@ -171,7 +171,20 @@ VOID
 NTAPI
 KiInitMachineDependent(VOID)
 {
-    KiArm64InitializeStubPcr();
+    /* Only initialize stub PCR if we don't have a real PCR yet.
+     * During normal boot, KiInitializeSystem already set up the real PCR
+     * via KiInitializePcr before calling KiInitializeKernel, which in turn
+     * calls KiInitSpinLocks to initialize the PRCB LockQueue.
+     * We must NOT overwrite KeArm64CurrentPcr with the stub if it's already
+     * pointing to a real, initialized PCR/PRCB. Check if LockQueue has been
+     * initialized (LockQueue[0].Lock should be non-NULL after KiInitSpinLocks). */
+    if (KeArm64CurrentPcr == NULL ||
+        KeArm64CurrentPcr == &KiArm64PcrStub ||
+        KeArm64CurrentPcr->Prcb.LockQueue[LockQueueDispatcherLock].Lock == NULL)
+    {
+        /* PCR not initialized yet, use stub */
+        KiArm64InitializeStubPcr();
+    }
     KiInitializeMachineType();
 }
 
@@ -268,6 +281,34 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     /* quiet */
 
     KiArm64BootStageLog("[arm64] KiInitializeKernel: before ExpInitializeExecutive");
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        UINT64 sp_el0, current_sp, daif, sctlr;
+        CHAR buf[200];
+
+        /* Read SP_EL0 to check if it has a stale value */
+        __asm__ volatile("mrs %0, sp_el0" : "=r"(sp_el0));
+        __asm__ volatile("mov %0, sp" : "=r"(current_sp));
+        __asm__ volatile("mrs %0, daif" : "=r"(daif));
+        __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
+
+        RtlStringCbPrintfA(buf, sizeof(buf),
+            "[arm64] SP_EL0=0x%llx SP=0x%llx DAIF=0x%llx SCTLR=0x%llx",
+            (unsigned long long)sp_el0,
+            (unsigned long long)current_sp,
+            (unsigned long long)daif,
+            (unsigned long long)sctlr);
+        KiArm64BootStageLog(buf);
+
+        /* Clear SP_EL0 to a known value so we can detect if it's being used */
+        __asm__ volatile("msr sp_el0, %0" :: "r"((UINT64)0xDEAD0000DEAD0000ULL));
+        __asm__ volatile("isb");
+
+        KiArm64BootStageLog("[arm64] SP_EL0 set to sentinel, calling ExpInitializeExecutive");
+    }
+#endif
+
     ExpInitializeExecutive(Number, LoaderBlock);
     KiArm64BootStageLog("[arm64] KiInitializeKernel: after ExpInitializeExecutive");
 
@@ -498,8 +539,61 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     KeLoaderBlock = LoaderBlock;
     Arm64Block = &LoaderBlock->u.Arm64;
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+#define ARM64_LDR_TO_VIRT(Value) \
+    (((ULONG_PTR)(Value) < (ULONG_PTR)KSEG0_BASE) ? \
+        ((ULONG_PTR)(Value) + (ULONG_PTR)KSEG0_BASE) : \
+        (ULONG_PTR)(Value))
+
+    LoaderBlock->Thread = ARM64_LDR_TO_VIRT(LoaderBlock->Thread);
+    LoaderBlock->Process = ARM64_LDR_TO_VIRT(LoaderBlock->Process);
+    if (LoaderBlock->KernelStack != 0)
+    {
+        LoaderBlock->KernelStack = ARM64_LDR_TO_VIRT(LoaderBlock->KernelStack);
+    }
+    Arm64Block->PcrPage = ARM64_LDR_TO_VIRT(Arm64Block->PcrPage);
+    Arm64Block->PanicStack = ARM64_LDR_TO_VIRT(Arm64Block->PanicStack);
+    Arm64Block->InterruptStack = ARM64_LDR_TO_VIRT(Arm64Block->InterruptStack);
+
+#undef ARM64_LDR_TO_VIRT
+#endif
+
     InitialThread = (PKTHREAD)(ULONG_PTR)LoaderBlock->Thread;
     InitialProcess = (PKPROCESS)(ULONG_PTR)LoaderBlock->Process;
+
+    if (InitialThread != NULL)
+    {
+        if ((ULONG_PTR)InitialThread->InitialStack < (ULONG_PTR)KSEG0_BASE)
+        {
+            InitialThread->InitialStack = (PVOID)((ULONG_PTR)InitialThread->InitialStack +
+                                                  (ULONG_PTR)KSEG0_BASE);
+        }
+
+        if (InitialThread->StackLimit < (ULONG_PTR)KSEG0_BASE)
+        {
+            InitialThread->StackLimit += (ULONG_PTR)KSEG0_BASE;
+        }
+
+        if ((ULONG_PTR)InitialThread->KernelStack < (ULONG_PTR)KSEG0_BASE)
+        {
+            InitialThread->KernelStack = (PVOID)((ULONG_PTR)InitialThread->KernelStack +
+                                                 (ULONG_PTR)KSEG0_BASE);
+        }
+
+        {
+            CHAR Stage[200];
+            if (NT_SUCCESS(RtlStringCbPrintfA(Stage,
+                                              sizeof(Stage),
+                                              "[arm64] init thread stacks: th=%p init=%p limit=%p kernel=%p",
+                                              InitialThread,
+                                              InitialThread->InitialStack,
+                                              (PVOID)InitialThread->StackLimit,
+                                              InitialThread->KernelStack)))
+            {
+                KiArm64BootStageLog(Stage);
+            }
+        }
+    }
 
     if (InitialThread != NULL)
     {
@@ -621,7 +715,25 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         /* removed noisy stage log around KdPollBreakIn */
     }
 
-    __asm__ __volatile__("msr daifclr, #0xf" ::: "memory");
+    /*
+     * Unmask IRQ and FIQ (bits 1, 2) but keep SError masked (bit 3) for now.
+     * SErrors can be stale from UEFI/FreeLdr and we don't want them delivered
+     * until we're ready to handle them properly.
+     * DAIF immediate bits: D=3, A=2, I=1, F=0 -> clear I+F = 0x3
+     */
+    {
+        UINT64 daif_before, daif_after;
+        CHAR buf[200];
+        __asm__ volatile("mrs %0, daif" : "=r"(daif_before));
+        __asm__ __volatile__("msr daifclr, #0x3" ::: "memory");
+        __asm__ volatile("isb");
+        __asm__ volatile("mrs %0, daif" : "=r"(daif_after));
+        RtlStringCbPrintfA(buf, sizeof(buf),
+            "[arm64] DAIF before=0x%llx after=0x%llx (SError should be masked)",
+            (unsigned long long)daif_before,
+            (unsigned long long)daif_after);
+        KiArm64BootStageLog(buf);
+    }
 
     KfLowerIrql(DISPATCH_LEVEL);
     if (Pcr != NULL)

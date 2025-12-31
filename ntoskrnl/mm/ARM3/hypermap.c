@@ -20,6 +20,9 @@
 PMMPTE MmFirstReservedMappingPte, MmLastReservedMappingPte;
 PMMPTE MiFirstReservedZeroingPte;
 MMPTE HyperTemplatePte;
+#if defined(_M_ARM64) || defined(__aarch64__)
+extern RTL_BITMAP MiPfnBitMap;
+#endif
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
@@ -39,6 +42,12 @@ MiMapPageInHyperSpace(IN PEPROCESS Process,
     ASSERT(Page != 0);
 #if defined(_M_AMD64)
     if (MiPfnsInitialized)
+    {
+        ASSERT(MiGetPfnEntry(Page) != NULL);
+    }
+#elif defined(_M_ARM64) || defined(__aarch64__)
+    if (MmIsAddressValid(MmPfnDatabase) &&
+        (!MiPfnBitMap.Buffer || MmIsAddressValid(MiPfnBitMap.Buffer)))
     {
         ASSERT(MiGetPfnEntry(Page) != NULL);
     }

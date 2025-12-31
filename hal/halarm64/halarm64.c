@@ -732,12 +732,30 @@ HalBeginSystemInterrupt(
 {
     ULONG cpu = KeGetCurrentProcessorNumber();
     ULONG intid = Vector;
-    /* Consider INTID 1023 spurious on GICv2 */
-    if (intid == 1023 || intid == 0)
+
+    /*
+     * CRITICAL: Check for spurious interrupts BEFORE raising IRQL.
+     * GICv2: INTID 1023 = spurious
+     * GICv3: INTID 1023 = spurious, 1020-1023 are special
+     * INTID 0 is reserved and should never be delivered
+     */
+    if (intid >= 1020 || intid == 0)
         return FALSE;
 
+    /*
+     * Raise IRQL to the interrupt's synchronization level.
+     * This prevents lower-priority interrupts from preempting this handler.
+     * Must happen BEFORE processing the interrupt to maintain IRQL discipline.
+     */
     if (OldIrql) *OldIrql = KfRaiseIrql(Irql);
+
+    /*
+     * Save the active INTID for this CPU so HalEndSystemInterrupt can EOI it.
+     * This handles the case where multiple interrupts are nested - we track
+     * per-CPU to ensure the correct INTID is EOI'd.
+     */
     if (cpu < MAXIMUM_PROCESSORS) HalpArm64ActiveIntId[cpu] = intid;
+
     return TRUE;
 }
 
@@ -807,8 +825,20 @@ HalEndSystemInterrupt(
 {
     ULONG cpu = KeGetCurrentProcessorNumber();
     ULONG intid = (cpu < MAXIMUM_PROCESSORS) ? HalpArm64ActiveIntId[cpu] : 0;
+
+    /*
+     * CRITICAL: Lower IRQL BEFORE sending EOI to prevent nested interrupts.
+     * Windows ARM64 convention: IRQL synchronization happens before GIC EOI.
+     * If we EOI first, a higher-priority interrupt can preempt before IRQL drops,
+     * causing incorrect IRQL transitions and potential deadlocks.
+     */
+    KeLowerIrql(Irql);
+
     if (intid)
     {
+        /* Memory barrier to ensure all interrupt processing is visible */
+        __asm__ __volatile__("dsb sy" ::: "memory");
+
         if (HalpGicUseSysRegs)
         {
 #if defined(_M_ARM64) || defined(__aarch64__)
@@ -821,7 +851,6 @@ HalEndSystemInterrupt(
         }
         if (cpu < MAXIMUM_PROCESSORS) HalpArm64ActiveIntId[cpu] = 0;
     }
-    KeLowerIrql(Irql);
     UNREFERENCED_PARAMETER(TrapFrame);
 }
 

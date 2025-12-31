@@ -351,6 +351,10 @@ typedef struct _REQUEST_MAILBOX
     PVOID Virtual[7];
 } REQUEST_MAILBOX, *PREQUEST_MAILBOX;
 
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
+#define GENERAL_LOOKASIDE_POOL PP_LOOKASIDE_LIST
+#endif
+
 typedef struct _KPRCB
 {
     ULONG MxCsr;
@@ -421,8 +425,8 @@ typedef struct _KPRCB
 #endif
     KSPIN_LOCK_QUEUE LockQueue[LockQueueMaximumLock]; // 2003: 33, vista:49
     PP_LOOKASIDE_LIST PPLookasideList[16];
-    PP_LOOKASIDE_LIST PPNPagedLookasideList[NUMBER_POOL_LOOKASIDE_LISTS];
-    PP_LOOKASIDE_LIST PPPagedLookasideList[NUMBER_POOL_LOOKASIDE_LISTS];
+    GENERAL_LOOKASIDE_POOL PPNPagedLookasideList[NUMBER_POOL_LOOKASIDE_LISTS];
+    GENERAL_LOOKASIDE_POOL PPPagedLookasideList[NUMBER_POOL_LOOKASIDE_LISTS];
     UINT64 PacketBarrier;
     SINGLE_LIST_ENTRY DeferredReadyListHead;
     LONG MmPageFaultCount;

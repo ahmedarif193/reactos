@@ -16,6 +16,8 @@
 #include "miarm.h"
 #undef MmSystemRangeStart
 
+extern PPOOL_DESCRIPTOR PoolVector[2];
+
 /* GLOBALS ********************************************************************/
 
 //
@@ -153,6 +155,7 @@ PMMPTE MiSessionLastPte;
 //
 PVOID MiSystemViewStart;
 SIZE_T MmSystemViewSize;
+BOOLEAN MmPagedPoolInitialized = FALSE;
 
 #if (_MI_PAGING_LEVELS == 2)
 //
@@ -1824,7 +1827,9 @@ MiBuildPagedPool(VOID)
     ULONG BitMapSize;
 #if (_MI_PAGING_LEVELS >= 3)
     MMPPE TempPpe = ValidKernelPpe;
+#if !defined(_M_ARM64)
     PMMPPE PointerPpe;
+#endif
 #elif (_MI_PAGING_LEVELS == 2)
     MMPTE TempPte = ValidKernelPte;
 
@@ -1915,6 +1920,10 @@ MiBuildPagedPool(VOID)
     /* On these systems, there's no double-mapping, so instead, the PPEs
      * are setup to span the entire paged pool area, so there's no need for the
      * system PD */
+#if !defined(_M_ARM64)
+    /* On x86_64/AMD64, we set up PPEs through the self-map alias.
+     * On ARM64, this is handled earlier through physical page table manipulation
+     * in MiMapPPEs/MiMapPDEs, so we skip this x86_64-specific code. */
     for (PointerPpe = MiAddressToPpe(MmPagedPoolStart);
          PointerPpe <= MiAddressToPpe(MmPagedPoolEnd);
          PointerPpe++)
@@ -1930,14 +1939,39 @@ MiBuildPagedPool(VOID)
                                            PFN_FROM_PTE(MiAddressToPte(PointerPpe)));
         }
     }
-#endif
+#else
+    /* ARM64: PPEs and PDEs were already set up by MiMapPPEs/MiMapPDEs
+     * in MiInitMachineDependent through direct physical page table manipulation.
+     * Suppress unused variable warning. */
+    (void)TempPpe;
+#endif /* !defined(_M_ARM64) */
+#endif /* (_MI_PAGING_LEVELS >= 3) */
 
     //
     // So now get the PDE for paged pool and zero it out
     //
     PointerPde = MiAddressToPde(MmPagedPoolStart);
+#if !defined(_M_ARM64)
+    /* On x86_64, zero out the PDE entries before setting up the first one.
+     * On ARM64, the PDEs (L2 table descriptors) were already set up by MiMapPDEs,
+     * and we must NOT zero them out as that would break the page table structure. */
     RtlZeroMemory(PointerPde,
                   (1 + MiAddressToPde(MmPagedPoolEnd) - PointerPde) * sizeof(MMPDE));
+#else
+    /* ARM64: PDEs are already set up. Just log for debugging. */
+    {
+        extern VOID KiArm64BootStageLog(_In_z_ PCSTR Stage);
+        CHAR Log[200];
+        if (NT_SUCCESS(RtlStringCbPrintfA(Log, sizeof(Log),
+                                          "[arm64] MiBuildPagedPool: PointerPde=%p (VA range %p-%p)",
+                                          PointerPde,
+                                          MmPagedPoolStart,
+                                          MmPagedPoolEnd)))
+        {
+            KiArm64BootStageLog(Log);
+        }
+    }
+#endif
 
     //
     // Next, get the first and last PTE
@@ -1946,12 +1980,61 @@ MiBuildPagedPool(VOID)
     MmPagedPoolInfo.FirstPteForPagedPool = PointerPte;
     MmPagedPoolInfo.LastPteForPagedPool = MiAddressToPte(MmPagedPoolEnd);
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* ARM64: Ensure alias pages for paged pool PTEs and PDEs are mapped.
+     * The fault handler (MmArmAccessFault) will dereference these addresses
+     * when handling faults in the paged pool range, so they must be accessible
+     * before the first paged pool access occurs.
+     *
+     * We map aliases for:
+     * 1. PointerPde - the PDE for MmPagedPoolStart (e.g., 0xFFFFF6FB7E280000)
+     * 2. PointerPte - the first PTE for paged pool (e.g., 0xFFFFF6C000144000)
+     * 3. Last PTE - to ensure the entire range is accessible
+     */
+    {
+        extern VOID MiArm64MapAliasForPointer(_In_ PVOID AliasVa);
+        extern VOID KiArm64BootStageLog(_In_z_ PCSTR Stage);
+
+        /* Map the PDE alias for paged pool start */
+        MiArm64MapAliasForPointer(PointerPde);
+
+        /* Map the first PTE alias for paged pool */
+        MiArm64MapAliasForPointer(PointerPte);
+
+        /* Map the last PTE alias for paged pool */
+        MiArm64MapAliasForPointer(MmPagedPoolInfo.LastPteForPagedPool);
+
+        /* Also map the PPE alias for paged pool to ensure full traversability */
+        MiArm64MapAliasForPointer(MiAddressToPpe(MmPagedPoolStart));
+
+        KiArm64BootStageLog("[arm64] MiBuildPagedPool: mapped PDE/PTE aliases");
+    }
+#endif
+
     /* Allocate a page and map the first paged pool PDE */
     MI_SET_USAGE(MI_USAGE_PAGED_POOL);
     MI_SET_PROCESS2("Kernel");
+#if defined(_M_ARM64)
+    /* On ARM64, the PDE may already be valid from bootloader page tables.
+     * If so, use the existing PDE entry and ensure its L3 table is zeroed. */
+    if (PointerPde->u.Hard.Valid == 1)
+    {
+        PageFrameIndex = PFN_FROM_PDE(PointerPde);
+        /* Zero the L3 table via KSEG0 (direct physical mapping) since
+         * MiPdeToAddress returns the target VA which has no PTEs yet. */
+        RtlZeroMemory((PVOID)(KSEG0_BASE + ((ULONGLONG)PageFrameIndex << PAGE_SHIFT)), PAGE_SIZE);
+    }
+    else
+    {
+        PageFrameIndex = MiRemoveZeroPage(0);
+        TempPde.u.Hard.PageFrameNumber = PageFrameIndex;
+        MI_WRITE_VALID_PDE(PointerPde, TempPde);
+    }
+#else
     PageFrameIndex = MiRemoveZeroPage(0);
     TempPde.u.Hard.PageFrameNumber = PageFrameIndex;
     MI_WRITE_VALID_PDE(PointerPde, TempPde);
+#endif
 #if (_MI_PAGING_LEVELS >= 3)
     /* Use the PPE of MmPagedPoolStart that was setup above */
 //    Bla = PFN_FROM_PTE(PpeAddress(MmPagedPool...));
@@ -2051,6 +2134,25 @@ MiBuildPagedPool(VOID)
 
     /* Setup the global session space */
     MiInitializeSystemSpaceMap(NULL);
+
+    //
+    // The paged pool descriptor was already initialized by InitializePool(PagedPool, 0)
+    // called above. We just need to mark paged pool as ready for use.
+    // DO NOT re-initialize the descriptor here, as that would corrupt the pool list heads
+    // and accounting structures that were set up during InitializePool.
+    //
+    ASSERT(PoolVector[NonPagedPool] == &NonPagedPoolDescriptor);
+    ASSERT(PoolVector[PagedPool] == ExpPagedPoolDescriptor[0]);
+    ASSERT(ExpPagedPoolDescriptor[0] != NULL);
+
+    /* Paged pool is now ready for allocations. */
+    MmPagedPoolInitialized = TRUE;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        extern VOID KiArm64BootStageLog(_In_z_ PCSTR Stage);
+        KiArm64BootStageLog("[arm64] MiBuildPagedPool: ready");
+    }
+#endif
 }
 
 CODE_SEG("INIT")
@@ -2266,7 +2368,13 @@ MmArmInitSystem(IN ULONG Phase,
         MmCriticalSectionTimeout.QuadPart = MmCritsectTimeoutSeconds * (-10000000LL);
 
         /* Initialize the paged pool mutex and the section commit mutex */
+        DPRINT1("[MM] Phase 0: MmPagedPoolMutex @ %p (before init, Type=%02x)\n",
+                &MmPagedPoolMutex,
+                (ULONG)MmPagedPoolMutex.Gate.Header.Type);
         KeInitializeGuardedMutex(&MmPagedPoolMutex);
+        DPRINT1("[MM] Phase 0: MmPagedPoolMutex @ %p (after init, Type=%02x)\n",
+                &MmPagedPoolMutex,
+                (ULONG)MmPagedPoolMutex.Gate.Header.Type);
         KeInitializeGuardedMutex(&MmSectionCommitMutex);
         KeInitializeGuardedMutex(&MmSectionBasedMutex);
 
@@ -2672,6 +2780,13 @@ MmArmInitSystem(IN ULONG Phase,
 
         /* Initialize the loaded module list */
         MiInitializeLoadedModuleList(LoaderBlock);
+
+        /* ARM64: Verify mutex is still initialized at end of Phase 0 */
+        DPRINT1("[MM] Phase 0 END: MmPagedPoolMutex @ %p, Type=%02x, Count=%ld, Owner=%p\n",
+                &MmPagedPoolMutex,
+                (ULONG)MmPagedPoolMutex.Gate.Header.Type,
+                MmPagedPoolMutex.Count,
+                MmPagedPoolMutex.Owner);
     }
 
     //

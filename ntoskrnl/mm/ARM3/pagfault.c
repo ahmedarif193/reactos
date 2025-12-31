@@ -1910,26 +1910,12 @@ MmArmAccessFault(IN ULONG FaultCode,
     PMMPFN Pfn1;
     DPRINT("ARM3 FAULT AT: %p\n", Address);
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    /* ARM64 DIAGNOSTIC: Log every MmArmAccessFault call - no filter */
-    {
-        static volatile LONG EntryBudget = 5;
-        if (EntryBudget > 0)
-        {
-            if (InterlockedDecrement(&EntryBudget) >= 0)
-            {
-                extern VOID KiArm64BootStageLog(_In_z_ PCSTR Message);
-                CHAR Buffer[200];
-                RtlStringCbPrintfA(Buffer, sizeof(Buffer),
-                    "[MmArm] Addr=%p IRQL=%u IsHyper=%d PXE=%p",
-                    Address, OldIrql,
-                    (int)MI_IS_PAGE_TABLE_OR_HYPER_ADDRESS(Address),
-                    PointerPxe);
-                KiArm64BootStageLog(Buffer);
-            }
-        }
-    }
-#endif
+    /*
+     * Note: On ARM64, the alias pages (PTE_BASE, PDE_BASE, PPE_BASE, PXE_BASE)
+     * must be set up during boot initialization in MiInitMachineDependent.
+     * We cannot call MiArm64MapAliasForPointer here because it can cause
+     * recursive faults when paged pool is not yet available.
+     */
 
     /* Check for page fault on high IRQL */
     if (OldIrql > APC_LEVEL)

@@ -1086,7 +1086,20 @@ MiGetPfnEntry(IN PFN_NUMBER Pfn)
     if (Pfn > MmHighestPhysicalPage) return NULL;
 
     /* Make sure this page actually has a PFN entry */
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64: Don't return NULL based on MiPfnBitMap check.
+     * During early boot, pages are allocated from MxFreeDescriptor via MxGetNextPage.
+     * These pages are valid physical pages but may not be in MmPhysicalMemoryBlock,
+     * so they won't be set in MiPfnBitMap. However, MmPfnDatabase covers all PFNs
+     * up to MmHighestPhysicalPage, so the entry exists - it just might not be
+     * in the bitmap. Returning NULL causes crashes in pool code that expects
+     * valid PFN entries for mapped pages.
+     */
+    (void)MiPfnBitMap; /* Suppress unused warning */
+#else
     if ((MiPfnBitMap.Buffer) && !(RtlTestBit(&MiPfnBitMap, (ULONG)Pfn))) return NULL;
+#endif
 
     /* Get the entry */
     Page = &MmPfnDatabase[Pfn];

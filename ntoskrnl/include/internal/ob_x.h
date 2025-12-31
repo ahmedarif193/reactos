@@ -382,8 +382,23 @@ ObpAllocateObjectCreateInfoBuffer(IN PP_NPAGED_LOOKASIDE_NUMBER Type)
     PNPAGED_LOOKASIDE_LIST List;
     PKPRCB Prcb = KeGetCurrentPrcb();
 
-    /* Get the P list first */
+    /*
+     * ARM64 CRITICAL: Check if lookaside list is initialized before use.
+     * The PRCB's PPLookasideList array may be NULL if called before
+     * ObInitSystem/IopInitLookasideLists initialization completes.
+     */
     List = (PNPAGED_LOOKASIDE_LIST)Prcb->PPLookasideList[Type].P;
+    if (!List)
+    {
+#if DBG
+        DbgPrint("OB: ObpAllocateObjectCreateInfoBuffer: NULL P list for Type=%u, Prcb=%p\n",
+                (ULONG)Type, Prcb);
+#endif
+        /* Fall back to direct pool allocation with same tag as lookaside */
+        return ExAllocatePoolWithTag(NonPagedPool,
+                                     sizeof(OBJECT_CREATE_INFORMATION),
+                                     'ICbO');
+    }
 
     /* Attempt allocation */
     List->L.TotalAllocates++;
@@ -395,6 +410,18 @@ ObpAllocateObjectCreateInfoBuffer(IN PP_NPAGED_LOOKASIDE_NUMBER Type)
 
         /* Try the L List */
         List = (PNPAGED_LOOKASIDE_LIST)Prcb->PPLookasideList[Type].L;
+        if (!List)
+        {
+#if DBG
+            DbgPrint("OB: ObpAllocateObjectCreateInfoBuffer: NULL L list for Type=%u, Prcb=%p\n",
+                    (ULONG)Type, Prcb);
+#endif
+            /* Fall back to direct pool allocation with same tag as lookaside */
+            return ExAllocatePoolWithTag(NonPagedPool,
+                                         sizeof(OBJECT_CREATE_INFORMATION),
+                                         'ICbO');
+        }
+
         List->L.TotalAllocates++;
         Buffer = (PVOID)InterlockedPopEntrySList(&List->L.ListHead);
         if (!Buffer)
@@ -419,8 +446,23 @@ ObpFreeCapturedAttributes(IN PVOID Buffer,
     PNPAGED_LOOKASIDE_LIST List;
     PKPRCB Prcb = KeGetCurrentPrcb();
 
-    /* Use the P List */
+    /*
+     * ARM64 CRITICAL: Check if lookaside list is initialized before use.
+     * The PRCB's PPLookasideList array may be NULL if called before
+     * ObInitSystem/IopInitLookasideLists initialization completes.
+     */
     List = (PNPAGED_LOOKASIDE_LIST)Prcb->PPLookasideList[Type].P;
+    if (!List)
+    {
+#if DBG
+        DbgPrint("OB: ObpFreeCapturedAttributes: NULL P list for Type=%u, Prcb=%p - freeing to pool\n",
+                (ULONG)Type, Prcb);
+#endif
+        /* Fall back to direct pool free with same tag as lookaside */
+        ExFreePoolWithTag(Buffer, 'ICbO');
+        return;
+    }
+
     List->L.TotalFrees++;
 
     /* Check if the Free was within the Depth or not */
@@ -431,6 +473,17 @@ ObpFreeCapturedAttributes(IN PVOID Buffer,
 
         /* Use the L List */
         List = (PNPAGED_LOOKASIDE_LIST)Prcb->PPLookasideList[Type].L;
+        if (!List)
+        {
+#if DBG
+            DbgPrint("OB: ObpFreeCapturedAttributes: NULL L list for Type=%u, Prcb=%p - freeing to pool\n",
+                    (ULONG)Type, Prcb);
+#endif
+            /* Fall back to direct pool free with same tag as lookaside */
+            ExFreePoolWithTag(Buffer, 'ICbO');
+            return;
+        }
+
         List->L.TotalFrees++;
 
         /* Check if the Free was within the Depth or not */

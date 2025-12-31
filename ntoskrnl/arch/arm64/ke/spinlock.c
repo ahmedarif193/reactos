@@ -13,51 +13,6 @@
 extern BOOLEAN ExpArm64PoolBootstrapMode;
 VOID KiArm64BootStageLog(_In_z_ PCSTR Stage);
 
-#if DBG && (defined(_M_ARM64) || defined(__aarch64__))
-VOID
-KiArm64DebugLogSpinAcquire(
-    _In_ PKSPIN_LOCK Lock,
-    _In_ KSPIN_LOCK Owner,
-    _In_ KSPIN_LOCK StoredBefore,
-    _In_ KSPIN_LOCK StoredAfter)
-{
-    CHAR Buf[192];
-
-    if (NT_SUCCESS(RtlStringCbPrintfA(Buf,
-                                      sizeof(Buf),
-                                      "[arm64] KxAcquireSpinLock: lock=%p owner=%p stored_before=%p stored_after=%p",
-                                      Lock,
-                                      (PVOID)Owner,
-                                      (PVOID)StoredBefore,
-                                      (PVOID)StoredAfter)))
-    {
-        KiArm64BootStageLog(Buf);
-    }
-}
-
-VOID
-KiArm64DebugLogSpinRelease(
-    _In_ PKSPIN_LOCK Lock,
-    _In_ KSPIN_LOCK Owner,
-    _In_ KSPIN_LOCK Stored,
-    _In_ BOOLEAN Mismatch)
-{
-    CHAR Buf[192];
-
-    if (NT_SUCCESS(RtlStringCbPrintfA(Buf,
-                                      sizeof(Buf),
-                                      "[arm64] KxReleaseSpinLock: lock=%p owner=%p stored=%p mismatch=%lu",
-                                      Lock,
-                                      (PVOID)Owner,
-                                      (PVOID)Stored,
-                                      (ULONG)Mismatch)))
-    {
-        KiArm64BootStageLog(Buf);
-    }
-}
-#endif
-VOID KiArm64BootStageLog(_In_z_ PCSTR Stage);
-
 KIRQL
 FASTCALL
 KfAcquireSpinLock(
@@ -76,49 +31,9 @@ KfReleaseSpinLock(
     _Inout_ PKSPIN_LOCK SpinLock,
     _In_ KIRQL OldIrql)
 {
-    CHAR Buf[128];
-    KIRQL CurIrql = KeGetCurrentIrql();
-
-    if (NT_SUCCESS(RtlStringCbPrintfA(Buf,
-                                      sizeof(Buf),
-                                      "[arm64] KfReleaseSpinLock: entry Lock=%p OldIrql=%lu CurIrql=%lu",
-                                      SpinLock,
-                                      (ULONG)OldIrql,
-                                      (ULONG)CurIrql)))
-    {
-        KiArm64BootStageLog(Buf);
-    }
-
     KxReleaseSpinLock(SpinLock);
 
-    CurIrql = KeGetCurrentIrql();
-    if (NT_SUCCESS(RtlStringCbPrintfA(Buf,
-                                      sizeof(Buf),
-                                      "[arm64] KfReleaseSpinLock: after KxReleaseSpinLock CurIrql=%lu",
-                                      (ULONG)CurIrql)))
-    {
-        KiArm64BootStageLog(Buf);
-    }
-
-    if (NT_SUCCESS(RtlStringCbPrintfA(Buf,
-                                      sizeof(Buf),
-                                      "[arm64] KfReleaseSpinLock: before KfLowerIrql NewIrql=%lu CurIrql=%lu",
-                                      (ULONG)OldIrql,
-                                      (ULONG)CurIrql)))
-    {
-        KiArm64BootStageLog(Buf);
-    }
-
     KfLowerIrql(OldIrql);
-
-    CurIrql = KeGetCurrentIrql();
-    if (NT_SUCCESS(RtlStringCbPrintfA(Buf,
-                                      sizeof(Buf),
-                                      "[arm64] KfReleaseSpinLock: after KfLowerIrql CurIrql=%lu",
-                                      (ULONG)CurIrql)))
-    {
-        KiArm64BootStageLog(Buf);
-    }
 }
 
 VOID
@@ -168,6 +83,8 @@ KeAcquireQueuedSpinLock(
     _In_ KSPIN_LOCK_QUEUE_NUMBER LockNumber)
 {
     KIRQL OldIrql;
+    PKPRCB Prcb;
+    PKSPIN_LOCK Lock;
 
 #if defined(_M_ARM64) || defined(__aarch64__)
     if (ExpArm64PoolBootstrapMode && LockNumber == LockQueueMmNonPagedPoolLock)
@@ -177,7 +94,33 @@ KeAcquireQueuedSpinLock(
 #endif
 
     KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
-    KxAcquireSpinLock(KeGetCurrentPrcb()->LockQueue[LockNumber].Lock);
+
+    Prcb = KeGetCurrentPrcb();
+    if (Prcb == NULL)
+    {
+        CHAR Buf[128];
+        if (NT_SUCCESS(RtlStringCbPrintfA(Buf, sizeof(Buf),
+            "[arm64] KeAcquireQueuedSpinLock: NULL PRCB for LockNumber=%lu", (ULONG)LockNumber)))
+        {
+            KiArm64BootStageLog(Buf);
+        }
+        KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 1, LockNumber, 0, 0);
+    }
+
+    Lock = Prcb->LockQueue[LockNumber].Lock;
+    if (Lock == NULL)
+    {
+        CHAR Buf[192];
+        if (NT_SUCCESS(RtlStringCbPrintfA(Buf, sizeof(Buf),
+            "[arm64] KeAcquireQueuedSpinLock: NULL Lock for LockNumber=%lu Prcb=%p KeArm64CurrentPcr=%p",
+            (ULONG)LockNumber, Prcb, KeArm64CurrentPcr)))
+        {
+            KiArm64BootStageLog(Buf);
+        }
+        KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 2, LockNumber, (ULONG_PTR)Prcb, (ULONG_PTR)KeArm64CurrentPcr);
+    }
+
+    KxAcquireSpinLock(Lock);
     return OldIrql;
 }
 
@@ -199,6 +142,9 @@ KeReleaseQueuedSpinLock(
     _In_ KSPIN_LOCK_QUEUE_NUMBER LockNumber,
     _In_ KIRQL OldIrql)
 {
+    PKPRCB Prcb;
+    PKSPIN_LOCK Lock;
+
 #if defined(_M_ARM64) || defined(__aarch64__)
     if (ExpArm64PoolBootstrapMode && LockNumber == LockQueueMmNonPagedPoolLock)
     {
@@ -206,7 +152,32 @@ KeReleaseQueuedSpinLock(
     }
 #endif
 
-    KxReleaseSpinLock(KeGetCurrentPrcb()->LockQueue[LockNumber].Lock);
+    Prcb = KeGetCurrentPrcb();
+    if (Prcb == NULL)
+    {
+        CHAR Buf[128];
+        if (NT_SUCCESS(RtlStringCbPrintfA(Buf, sizeof(Buf),
+            "[arm64] KeReleaseQueuedSpinLock: NULL PRCB for LockNumber=%lu", (ULONG)LockNumber)))
+        {
+            KiArm64BootStageLog(Buf);
+        }
+        KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 3, LockNumber, 0, 0);
+    }
+
+    Lock = Prcb->LockQueue[LockNumber].Lock;
+    if (Lock == NULL)
+    {
+        CHAR Buf[192];
+        if (NT_SUCCESS(RtlStringCbPrintfA(Buf, sizeof(Buf),
+            "[arm64] KeReleaseQueuedSpinLock: NULL Lock for LockNumber=%lu Prcb=%p KeArm64CurrentPcr=%p",
+            (ULONG)LockNumber, Prcb, KeArm64CurrentPcr)))
+        {
+            KiArm64BootStageLog(Buf);
+        }
+        KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 4, LockNumber, (ULONG_PTR)Prcb, (ULONG_PTR)KeArm64CurrentPcr);
+    }
+
+    KxReleaseSpinLock(Lock);
     KeLowerIrql(OldIrql);
 }
 

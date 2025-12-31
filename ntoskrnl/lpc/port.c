@@ -16,7 +16,8 @@
 
 POBJECT_TYPE LpcPortObjectType, LpcWaitablePortObjectType;
 ULONG LpcpMaxMessageSize;
-PAGED_LOOKASIDE_LIST LpcpMessagesLookaside;
+/* ARM64: Ensure proper SLIST_HEADER alignment */
+DECLSPEC_ALIGN(16) PAGED_LOOKASIDE_LIST LpcpMessagesLookaside;
 KGUARDED_MUTEX LpcpLock;
 ULONG LpcpTraceLevel = 0;
 ULONG LpcpNextMessageId = 1, LpcpNextCallbackId = 1;

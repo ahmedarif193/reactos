@@ -15,6 +15,9 @@
  *   x1 = LoaderBlock (to become x0 for the C wrapper)
  */
 KiArm64SwitchToBootStack:
+    /* Ensure SP_EL1 is selected before updating the stack pointer */
+    msr     spsel, #1
+    isb
     /* Set the new stack pointer */
     mov     sp, x0
     /* Move LoaderBlock into x0 as first argument to C wrapper */

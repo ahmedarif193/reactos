@@ -107,6 +107,7 @@ MMPTE ValidKernelPte = {
         .Valid = 1,
         .NotLargePage = 1,   /* ensure type==table/page (0b11) */
         .Accessed = 1,       /* AF=1 for leaf PTEs */
+        .Writable = 1,
         .Owner = 0,
     }
 };
@@ -118,6 +119,8 @@ static void KeArm64InitValidKernelPte(void)
     ValidKernelPte.u.Long |= ((ULONGLONG)4ULL << ARM64_PTE_CACHE_SHIFT);
     /* Make default leaf mappings Inner Shareable to avoid alias issues */
     ValidKernelPte.u.Long |= (3ULL << 8);
+    ValidKernelPteLocal.u.Long |= ((ULONGLONG)4ULL << ARM64_PTE_CACHE_SHIFT);
+    ValidKernelPteLocal.u.Long |= (3ULL << 8);
 }
 MMPDE ValidKernelPde = {
     .u.Hard = {
@@ -129,7 +132,15 @@ MMPDE ValidKernelPde = {
 MMPTE DemandZeroPte = {.u.Long = (MM_READWRITE << MM_PTE_SOFTWARE_PROTECTION_BITS)};
 MMPDE DemandZeroPde = {.u.Long = (MM_READWRITE << MM_PTE_SOFTWARE_PROTECTION_BITS)};
 MMPTE PrototypePte = {.u.Long = (MM_READWRITE << MM_PTE_SOFTWARE_PROTECTION_BITS) | PTE_PROTOTYPE | (MI_PTE_LOOKUP_NEEDED << PAGE_SHIFT)};
-MMPTE ValidKernelPteLocal = {.u.Hard.Valid = 1, .u.Hard.Accessed = 1, .u.Hard.Owner = 0};
+MMPTE ValidKernelPteLocal = {
+    .u.Hard = {
+        .Valid = 1,
+        .NotLargePage = 1,
+        .Accessed = 1,
+        .Writable = 1,
+        .Owner = 0
+    }
+};
 MMPDE ValidKernelPdeLocal = {.u.Hard.Valid = 1, .u.Hard.Accessed = 1};
 MMPTE MmDecommittedPte = {.u.Long = (MM_READWRITE << MM_PTE_SOFTWARE_PROTECTION_BITS)};
 

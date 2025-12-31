@@ -82,8 +82,14 @@ label:                                                                   \
     str x16, [sp, #ARM64_EARLY_STATE_VECTORID];                          \
     str xzr, [sp, #ARM64_EARLY_STATE_TRAP_PTR];                          \
     str xzr, [sp, #ARM64_EARLY_STATE_EXC_PTR];                           \
+    /* Memory barriers to ensure exception state is visible to C code */ \
+    dsb sy;                                                              \
+    isb;                                                                 \
     mov x0, sp;                                                          \
     bl KiArm64HandleSynchronousException;                                \
+    /* Memory barrier after C handler returns */                         \
+    dsb sy;                                                              \
+    isb;                                                                 \
     cbz x0, 1f;                                                          \
     ldr x2, [sp, #ARM64_EARLY_STATE_TRAP_PTR];                           \
     ldr x3, [sp, #ARM64_EARLY_STATE_EXC_PTR];                            \
@@ -112,9 +118,15 @@ label:                                                                   \
     stp x16, x17, [sp, #0x80];                                           \
     stp x18, x19, [sp, #0x90];                                           \
     stp x29, x30, [sp, #0xA0];                                           \
+    /* Memory barrier before calling C code to ensure register saves visible */ \
+    dsb sy;                                                              \
+    isb;                                                                 \
     /* Call the C veneer for HAL-aware dispatch */                       \
     mov w0, #(id);                                                       \
     bl KiArm64InterruptDispatchEntry;                                    \
+    /* Memory barrier before restoring to ensure interrupt handled */    \
+    dsb sy;                                                              \
+    isb;                                                                 \
     /* Restore volatile state */                                         \
     ldp x29, x30, [sp, #0xA0];                                           \
     ldp x18, x19, [sp, #0x90];                                           \
@@ -128,6 +140,9 @@ label:                                                                   \
     ldp x2,  x3,  [sp, #0x10];                                           \
     ldp x0,  x1,  [sp, #0x00];                                           \
     add sp, sp, #0xB0;                                                   \
+    /* Final barrier before exception return */                          \
+    dsb sy;                                                              \
+    isb;                                                                 \
     eret
 
 #define PERM_VECTOR_BUGCHECK(label, id)                                  \
@@ -140,23 +155,66 @@ label:                                                                   \
     bl KiArm64BugCheckEntry;                                             \
     b label
 
-/* Table entries for all 16 vectors */
-PERM_VECTOR_SYNC(KiArm64PermVectorSyncSp0,          0)
-PERM_VECTOR_ASYNC (KiArm64PermVectorIrqSp0,           1)
-PERM_VECTOR_ASYNC (KiArm64PermVectorFiqSp0,           2)
-PERM_VECTOR_SYNC(KiArm64PermVectorSErrorSp0,    3)
-PERM_VECTOR_SYNC(KiArm64PermVectorSyncSpx,          4)
-PERM_VECTOR_ASYNC (KiArm64PermVectorIrqSpx,           5)
-PERM_VECTOR_ASYNC (KiArm64PermVectorFiqSpx,           6)
-PERM_VECTOR_SYNC(KiArm64PermVectorSErrorSpx,    7)
-PERM_VECTOR_SYNC(KiArm64PermVectorSyncLowerA64,     8)
-PERM_VECTOR_ASYNC (KiArm64PermVectorIrqLowerA64,      9)
-PERM_VECTOR_ASYNC (KiArm64PermVectorFiqLowerA64,     10)
-PERM_VECTOR_SYNC(KiArm64PermVectorSErrorLowerA64,  11)
-PERM_VECTOR_SYNC(KiArm64PermVectorSyncLowerA32,    12)
-PERM_VECTOR_ASYNC (KiArm64PermVectorIrqLowerA32,     13)
-PERM_VECTOR_ASYNC (KiArm64PermVectorFiqLowerA32,     14)
-PERM_VECTOR_SYNC(KiArm64PermVectorSErrorLowerA32,  15)
+/*
+ * ARM64 Exception Vector Table
+ * Each entry must be 128 bytes (0x80) apart.
+ * We use small stubs that branch to the full handlers.
+ */
+
+/* Vector stub macro - branches to handler, padded to 0x80 bytes */
+#define VECTOR_STUB(label)    \
+    .balign 0x80;             \
+    b label
+
+/* Vector table: 16 entries at 128-byte intervals */
+    VECTOR_STUB(KiArm64PermVectorSyncSp0_Handler)       /* 0x000: Sync, Current EL SP0 */
+    VECTOR_STUB(KiArm64PermVectorIrqSp0_Handler)        /* 0x080: IRQ, Current EL SP0 */
+    VECTOR_STUB(KiArm64PermVectorFiqSp0_Handler)        /* 0x100: FIQ, Current EL SP0 */
+    VECTOR_STUB(KiArm64PermVectorSErrorSp0_Handler)     /* 0x180: SError, Current EL SP0 */
+    VECTOR_STUB(KiArm64PermVectorSyncSpx_Handler)       /* 0x200: Sync, Current EL SPx */
+    VECTOR_STUB(KiArm64PermVectorIrqSpx_Handler)        /* 0x280: IRQ, Current EL SPx */
+    VECTOR_STUB(KiArm64PermVectorFiqSpx_Handler)        /* 0x300: FIQ, Current EL SPx */
+    VECTOR_STUB(KiArm64PermVectorSErrorSpx_Handler)     /* 0x380: SError, Current EL SPx */
+    VECTOR_STUB(KiArm64PermVectorSyncLowerA64_Handler)  /* 0x400: Sync, Lower EL A64 */
+    VECTOR_STUB(KiArm64PermVectorIrqLowerA64_Handler)   /* 0x480: IRQ, Lower EL A64 */
+    VECTOR_STUB(KiArm64PermVectorFiqLowerA64_Handler)   /* 0x500: FIQ, Lower EL A64 */
+    VECTOR_STUB(KiArm64PermVectorSErrorLowerA64_Handler) /* 0x580: SError, Lower EL A64 */
+    VECTOR_STUB(KiArm64PermVectorSyncLowerA32_Handler)  /* 0x600: Sync, Lower EL A32 */
+    VECTOR_STUB(KiArm64PermVectorIrqLowerA32_Handler)   /* 0x680: IRQ, Lower EL A32 */
+    VECTOR_STUB(KiArm64PermVectorFiqLowerA32_Handler)   /* 0x700: FIQ, Lower EL A32 */
+    VECTOR_STUB(KiArm64PermVectorSErrorLowerA32_Handler) /* 0x780: SError, Lower EL A32 */
+
+#undef VECTOR_STUB
+
+/* Full handlers - these can be any size since they're jumped to, not at fixed offsets */
+
+/* Sync handlers */
+PERM_VECTOR_SYNC(KiArm64PermVectorSyncSp0_Handler,          0)
+PERM_VECTOR_SYNC(KiArm64PermVectorSyncSpx_Handler,          4)
+PERM_VECTOR_SYNC(KiArm64PermVectorSyncLowerA64_Handler,     8)
+PERM_VECTOR_SYNC(KiArm64PermVectorSyncLowerA32_Handler,    12)
+
+/* SError handlers - treated like sync for debugging */
+PERM_VECTOR_SYNC(KiArm64PermVectorSErrorSp0_Handler,    3)
+PERM_VECTOR_SYNC(KiArm64PermVectorSErrorSpx_Handler,    7)
+PERM_VECTOR_SYNC(KiArm64PermVectorSErrorLowerA64_Handler,  11)
+PERM_VECTOR_SYNC(KiArm64PermVectorSErrorLowerA32_Handler,  15)
+
+/* Async handlers (IRQ/FIQ) */
+PERM_VECTOR_ASYNC(KiArm64PermVectorIrqSp0_Handler,           1)
+PERM_VECTOR_ASYNC(KiArm64PermVectorFiqSp0_Handler,           2)
+PERM_VECTOR_ASYNC(KiArm64PermVectorIrqSpx_Handler,           5)
+PERM_VECTOR_ASYNC(KiArm64PermVectorFiqSpx_Handler,           6)
+PERM_VECTOR_ASYNC(KiArm64PermVectorIrqLowerA64_Handler,      9)
+PERM_VECTOR_ASYNC(KiArm64PermVectorFiqLowerA64_Handler,     10)
+PERM_VECTOR_ASYNC(KiArm64PermVectorIrqLowerA32_Handler,     13)
+PERM_VECTOR_ASYNC(KiArm64PermVectorFiqLowerA32_Handler,     14)
+
+/* Legacy symbols for external references */
+.global KiArm64PermVectorSyncSp0
+.set KiArm64PermVectorSyncSp0, KiArm64PermVectorSyncSp0_Handler
+.global KiArm64PermVectorSyncSpx
+.set KiArm64PermVectorSyncSpx, KiArm64PermVectorSyncSpx_Handler
 
 #undef PERM_VECTOR_SYNC
 #undef PERM_VECTOR_ASYNC

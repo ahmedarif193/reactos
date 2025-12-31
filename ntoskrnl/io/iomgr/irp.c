@@ -641,23 +641,38 @@ IoAllocateIrp(IN CCHAR StackSize,
             ListType = LookasideLargeIrpList;
         }
 
-        /* Get the P List First */
+        /*
+         * ARM64 CRITICAL: Check if lookaside list is initialized before use.
+         * The PRCB's PPLookasideList array may be NULL if called before
+         * IopInitLookasideLists initialization completes.
+         */
         List = (PNPAGED_LOOKASIDE_LIST)Prcb->PPLookasideList[ListType].P;
 
-        /* Attempt allocation */
-        List->L.TotalAllocates++;
-        Irp = (PIRP)InterlockedPopEntrySList(&List->L.ListHead);
-
-        /* Check if the P List failed */
-        if (!Irp)
+        if (List)
         {
-            /* Let the balancer know */
-            List->L.AllocateMisses++;
-
-            /* Try the L List */
-            List = (PNPAGED_LOOKASIDE_LIST)Prcb->PPLookasideList[ListType].L;
+            /* Attempt allocation */
             List->L.TotalAllocates++;
             Irp = (PIRP)InterlockedPopEntrySList(&List->L.ListHead);
+
+            /* Check if the P List failed */
+            if (!Irp)
+            {
+                /* Let the balancer know */
+                List->L.AllocateMisses++;
+
+                /* Try the L List */
+                List = (PNPAGED_LOOKASIDE_LIST)Prcb->PPLookasideList[ListType].L;
+                if (List)
+                {
+                    List->L.TotalAllocates++;
+                    Irp = (PIRP)InterlockedPopEntrySList(&List->L.ListHead);
+                }
+            }
+        }
+        else
+        {
+            DPRINT1("IO: IoAllocateIrp: NULL P list for ListType=%u, Prcb=%p - using pool\n",
+                    (ULONG)ListType, Prcb);
         }
     }
 
@@ -1699,8 +1714,21 @@ IoFreeIrp(IN PIRP Irp)
         /* Check if this was a Big IRP */
         if (Irp->StackCount != 1) ListType = LookasideLargeIrpList;
 
-        /* Use the P List */
+        /*
+         * ARM64 CRITICAL: Check if lookaside list is initialized before use.
+         * The PRCB's PPLookasideList array may be NULL if called before
+         * IopInitLookasideLists initialization completes.
+         */
         List = (PNPAGED_LOOKASIDE_LIST)Prcb->PPLookasideList[ListType].P;
+        if (!List)
+        {
+            DPRINT1("IO: IoFreeIrp: NULL P list for ListType=%u, Prcb=%p Irp=%p - freeing to pool\n",
+                    (ULONG)ListType, Prcb, Irp);
+            /* Fall back to direct pool free */
+            ExFreePoolWithTag(Irp, TAG_IRP);
+            return;
+        }
+
         List->L.TotalFrees++;
 
         /* Check if the Free was within the Depth or not */
@@ -1711,6 +1739,15 @@ IoFreeIrp(IN PIRP Irp)
 
             /* Use the L List */
             List = (PNPAGED_LOOKASIDE_LIST)Prcb->PPLookasideList[ListType].L;
+            if (!List)
+            {
+                DPRINT1("IO: IoFreeIrp: NULL L list for ListType=%u, Prcb=%p Irp=%p - freeing to pool\n",
+                        (ULONG)ListType, Prcb, Irp);
+                /* Fall back to direct pool free */
+                ExFreePoolWithTag(Irp, TAG_IRP);
+                return;
+            }
+
             List->L.TotalFrees++;
 
             /* Check if the Free was within the Depth or not */

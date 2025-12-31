@@ -1084,9 +1084,24 @@ KiSystemStartup(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Switch to a clean boot stack before entering KiInitializeSystem */
     LoaderBlock->KernelStack = (ULONG_PTR)KiArm64P0BootStack;
+    if (LoaderBlock->KernelStack < ARM64_KSEG0_BASE)
+    {
+        LoaderBlock->KernelStack += ARM64_KSEG0_BASE;
+    }
+    {
+        CHAR Stage[160];
+        if (NT_SUCCESS(RtlStringCbPrintfA(Stage,
+                                          sizeof(Stage),
+                                          "[arm64] bootstack: raw=%p adjusted=%p",
+                                          KiArm64P0BootStack,
+                                          (PVOID)LoaderBlock->KernelStack)))
+        {
+            KiArm64BootStageLog(Stage);
+        }
+    }
 
     {
-        ULONG_PTR InitialStack = (ULONG_PTR)KiArm64P0BootStack;
+        ULONG_PTR InitialStack = LoaderBlock->KernelStack;
         KiArm64BootStageLog("[arm64] switching to boot stack");
         KiArm64SwitchToBootStack(InitialStack, LoaderBlock);
     }
@@ -1107,7 +1122,38 @@ CODE_SEG("INIT")
 DECLSPEC_NORETURN VOID NTAPI
 KiArm64SystemStartupBootStack(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
-    /* Final handoff into phase 0 init on a clean boot stack */
+    /*
+     * ARM64 Boot Stack Initialization
+     *
+     * This function is called on the clean boot stack before entering the main
+     * kernel initialization. It must perform critical early initialization that
+     * other subsystems depend on, similar to amd64's KiSystemStartupBootStack.
+     *
+     * Key responsibilities:
+     * 1. Initialize pool lookaside list pointers in the PRCB
+     * 2. Set up any architecture-specific state needed for early boot
+     * 3. Hand off to the main kernel initialization
+     */
+
+    /* Declare the pool lookaside initialization function from ex/lookas.c */
+    extern VOID NTAPI ExInitPoolLookasidePointers(VOID);
+
+    KiArm64BootStageLog("[arm64] KiSystemStartupBootStack: initializing pool lookaside pointers");
+
+    /*
+     * CRITICAL: Initialize pool lookaside list pointers BEFORE calling KiInitializeSystem.
+     *
+     * The PRCB contains per-CPU pointers to lookaside lists that are used by the pool
+     * allocator (ExAllocatePoolWithTag/ExFreePoolWithTag). These must be initialized
+     * before any pool allocations occur, otherwise the allocator will dereference
+     * NULL or uninitialized pointers when trying to use the lookaside lists.
+     *
+     * On amd64, this is done in KiSystemStartupBootStack before KiInitializeKernel.
+     * We must do the same on ARM64 to avoid crashes in RtlInterlockedPopEntrySList
+     * when ExAllocatePoolWithTag tries to pop from an uninitialized lookaside list.
+     */
+    ExInitPoolLookasidePointers();
+
     KiArm64BootStageLog("[arm64] KiSystemStartupBootStack: entering KiInitializeSystem");
     KiInitializeSystem(LoaderBlock);
     KiArm64BootStageLog("[arm64] KiSystemStartupBootStack: KiInitializeSystem returned unexpectedly");

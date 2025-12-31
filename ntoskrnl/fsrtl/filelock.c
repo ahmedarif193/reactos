@@ -14,7 +14,8 @@
 
 /* GLOBALS *******************************************************************/
 
-PAGED_LOOKASIDE_LIST FsRtlFileLockLookasideList;
+/* ARM64: Ensure proper SLIST_HEADER alignment */
+DECLSPEC_ALIGN(16) PAGED_LOOKASIDE_LIST FsRtlFileLockLookasideList;
 
 /* Note: this aligns the two types of lock entry structs so we can access the
    FILE_LOCK_INFO part in common.  Add elements after Shared if new stuff is needed.

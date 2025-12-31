@@ -1014,7 +1014,33 @@ ExpInitializeExecutive(IN ULONG Cpu,
     PCHAR RcEnd = NULL;
     CHAR VersionBuffer[65];
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        /* ARM64 debug: entry point marker */
+        extern VOID KiArm64BootStageLog(PCSTR Message);
+        KiArm64BootStageLog("[arm64] ExpInitializeExecutive: entry");
+
+        /* Check LoaderBlock pointer validity */
+        if ((ULONG_PTR)LoaderBlock < 0xFFFF800000000000ULL)
+        {
+            KiArm64BootStageLog("[arm64] ExpInitializeExecutive: WARNING LoaderBlock is PA!");
+        }
+
+        /* Memory barrier to ensure all previous memory accesses complete */
+        __asm__ volatile("dsb sy" ::: "memory");
+        __asm__ volatile("isb" ::: "memory");
+
+        KiArm64BootStageLog("[arm64] ExpInitializeExecutive: after DSB/ISB");
+    }
+#endif
+
     /* Validate Loader */
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        extern VOID KiArm64BootStageLog(PCSTR Message);
+        KiArm64BootStageLog("[arm64] ExpInitializeExecutive: before ExpIsLoaderValid");
+    }
+#endif
     if (!ExpIsLoaderValid(LoaderBlock))
     {
         /* Invalid loader version */
@@ -1024,9 +1050,27 @@ ExpInitializeExecutive(IN ULONG Cpu,
                      LoaderBlock->Extension->MajorVersion,
                      LoaderBlock->Extension->MinorVersion);
     }
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        extern VOID KiArm64BootStageLog(PCSTR Message);
+        KiArm64BootStageLog("[arm64] ExpInitializeExecutive: after ExpIsLoaderValid");
+    }
+#endif
 
     /* Initialize PRCB pool lookaside pointers */
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        extern VOID KiArm64BootStageLog(PCSTR Message);
+        KiArm64BootStageLog("[arm64] ExpInitializeExecutive: before ExInitPoolLookasidePointers");
+    }
+#endif
     ExInitPoolLookasidePointers();
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        extern VOID KiArm64BootStageLog(PCSTR Message);
+        KiArm64BootStageLog("[arm64] ExpInitializeExecutive: after ExInitPoolLookasidePointers");
+    }
+#endif
 
     /* Check if this is an application CPU */
     if (Cpu)

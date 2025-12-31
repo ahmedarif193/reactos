@@ -35,7 +35,8 @@ ULONG CcLazyWriteIos = 0;
  * - Number of worker threads
  */
 LAZY_WRITER LazyWriter;
-NPAGED_LOOKASIDE_LIST CcTwilightLookasideList;
+/* ARM64: Ensure proper SLIST_HEADER alignment */
+DECLSPEC_ALIGN(16) NPAGED_LOOKASIDE_LIST CcTwilightLookasideList;
 LIST_ENTRY CcExpressWorkQueue;
 LIST_ENTRY CcRegularWorkQueue;
 LIST_ENTRY CcIdleWorkerThreadList;

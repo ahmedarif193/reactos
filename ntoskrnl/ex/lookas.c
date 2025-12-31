@@ -20,8 +20,15 @@ LIST_ENTRY ExpPagedLookasideListHead;
 KSPIN_LOCK ExpPagedLookasideListLock;
 LIST_ENTRY ExSystemLookasideListHead;
 LIST_ENTRY ExPoolLookasideListHead;
-GENERAL_LOOKASIDE ExpSmallNPagedPoolLookasideLists[NUMBER_POOL_LOOKASIDE_LISTS];
-GENERAL_LOOKASIDE ExpSmallPagedPoolLookasideLists[NUMBER_POOL_LOOKASIDE_LISTS];
+
+/*
+ * ARM64 CRITICAL: These arrays MUST be aligned to 16 bytes because they contain
+ * SLIST_HEADER structures which require 16-byte alignment for atomic operations.
+ * The GENERAL_LOOKASIDE structure is already cache-aligned (128 bytes on ARM64),
+ * but we explicitly ensure the array start address is also properly aligned.
+ */
+DECLSPEC_ALIGN(16) GENERAL_LOOKASIDE ExpSmallNPagedPoolLookasideLists[NUMBER_POOL_LOOKASIDE_LISTS];
+DECLSPEC_ALIGN(16) GENERAL_LOOKASIDE ExpSmallPagedPoolLookasideLists[NUMBER_POOL_LOOKASIDE_LISTS];
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
@@ -62,6 +69,25 @@ ExInitPoolLookasidePointers(VOID)
     PKPRCB Prcb = KeGetCurrentPrcb();
     PGENERAL_LOOKASIDE Entry;
 
+    DPRINT1("EX: ExInitPoolLookasidePointers called, Prcb=%p CPU=%u\n",
+            Prcb,
+            Prcb ? Prcb->Number : 0xFFFF);
+
+    /*
+     * ARM64 CRITICAL: On ARM64, the PRCB lookaside pointer arrays may contain
+     * uninitialized data if the PRCB was not fully zeroed during early boot.
+     * We must ensure these arrays are properly initialized before being used.
+     *
+     * First, unconditionally zero the entire lookaside pointer arrays to ensure
+     * no garbage data remains from uninitialized memory. This is especially
+     * critical on ARM64 where the PRCB structure is large and may not be
+     * fully zeroed by the bootloader or early kernel initialization.
+     */
+    RtlZeroMemory(&Prcb->PPNPagedLookasideList[0],
+                  sizeof(Prcb->PPNPagedLookasideList));
+    RtlZeroMemory(&Prcb->PPPagedLookasideList[0],
+                  sizeof(Prcb->PPPagedLookasideList));
+
     /* Loop for all pool lists */
     for (i = 0; i < NUMBER_POOL_LOOKASIDE_LISTS; i++)
     {
@@ -81,6 +107,16 @@ ExInitPoolLookasidePointers(VOID)
         Prcb->PPPagedLookasideList[i].P = Entry;
         Prcb->PPPagedLookasideList[i].L = Entry;
     }
+
+    DPRINT1("EX: ExInitPoolLookasidePointers complete - initialized %u lists\n",
+            NUMBER_POOL_LOOKASIDE_LISTS);
+    DPRINT1("EX:   ExpSmallNPagedPoolLookasideLists=%p\n",
+            ExpSmallNPagedPoolLookasideLists);
+    DPRINT1("EX:   ExpSmallPagedPoolLookasideLists=%p\n",
+            ExpSmallPagedPoolLookasideLists);
+    DPRINT1("EX:   Sample NPAGED[0].ListHead=%p Depth=%u\n",
+            &ExpSmallNPagedPoolLookasideLists[0].ListHead,
+            ExpSmallNPagedPoolLookasideLists[0].Depth);
 }
 
 CODE_SEG("INIT")
@@ -89,6 +125,8 @@ NTAPI
 ExpInitLookasideLists(VOID)
 {
     ULONG i;
+
+    DPRINT1("EX: ExpInitLookasideLists called - fully initializing global arrays\n");
 
     /* Initialize locks and lists */
     InitializeListHead(&ExpNonPagedLookasideListHead);
@@ -117,6 +155,9 @@ ExpInitLookasideLists(VOID)
                                         256,
                                         &ExPoolLookasideListHead);
     }
+
+    DPRINT1("EX: ExpInitLookasideLists complete - fully initialized %u lists\n",
+            NUMBER_POOL_LOOKASIDE_LISTS);
 }
 
 /* PUBLIC FUNCTIONS **********************************************************/

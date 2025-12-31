@@ -697,6 +697,7 @@ extern PMMPTE MiSessionImagePteStart;
 extern PMMPTE MiSessionImagePteEnd;
 extern PMMPTE MiSessionBasePte;
 extern PMMPTE MiSessionLastPte;
+extern BOOLEAN MmPagedPoolInitialized;
 extern SIZE_T MmSizeOfPagedPoolInBytes;
 extern PMMPDE MmSystemPagePtes;
 extern PVOID MmSystemCacheStart;
@@ -892,6 +893,10 @@ MiDetermineUserGlobalPteMask(IN PVOID PointerPte)
     /* Make it valid and accessed */
     TempPte.u.Hard.Valid = TRUE;
     MI_MAKE_ACCESSED_PAGE(&TempPte);
+#if defined(_M_ARM64)
+    /* ARM64 L3 descriptors require type bits[1:0]=0b11 */
+    TempPte.u.Hard.NotLargePage = 1;
+#endif
 
     /* Is this for user-mode? */
     if (
@@ -933,8 +938,18 @@ MI_MAKE_HARDWARE_PTE_KERNEL(IN PMMPTE NewPte,
     ASSERT(ProtectionMask & MM_PROTECT_ACCESS);
     ASSERT((ProtectionMask & MM_GUARDPAGE) == 0);
 
+#if defined(_M_ARM64)
+    /* Seed with a valid ARM64 template to set type bits/AF/cache/shareability. */
+    NewPte->u.Long = ValidKernelPte.u.Long;
+    NewPte->u.Long &= ~(ARM64_PTE_PXN |
+                        ARM64_PTE_UXN |
+                        ARM64_PTE_WRITE |
+                        ARM64_PTE_COPY_ON_WRITE |
+                        ARM64_PTE_CACHE_MASK);
+#else
     /* Start fresh */
     NewPte->u.Long = 0;
+#endif
 
     /* Set the protection and page */
     NewPte->u.Hard.PageFrameNumber = PageFrameNumber;

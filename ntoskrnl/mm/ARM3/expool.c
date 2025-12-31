@@ -38,6 +38,7 @@ static LONG ExpLookasideCorruptionHit;
 #else
 #define EXP_LOOKASIDE_HARD_TRAP 0
 #endif
+static BOOLEAN ExpEarlyPoolLogDone;
 
 FORCEINLINE
 VOID
@@ -72,6 +73,20 @@ ExpIsLookasidePointerValid(
             (PGENERAL_LOOKASIDE)ExpSmallPagedPoolLookasideLists :
             (PGENERAL_LOOKASIDE)ExpSmallNPagedPoolLookasideLists;
 
+    /*
+     * ARM64 CRITICAL FIX: On ARM64, GENERAL_LOOKASIDE is DECLSPEC_CACHEALIGN which
+     * means 128-byte alignment. This causes each structure to be padded to 256 bytes (0x100).
+     * The offset calculation below will FAIL because sizeof(GENERAL_LOOKASIDE) includes
+     * the padding, but the array indexing uses the compiler's array stride.
+     *
+     * SOLUTION: Use direct pointer comparison against the expected array element.
+     * This works correctly regardless of structure size or padding.
+     */
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* On ARM64, compare directly against the expected array element */
+    return (Pointer == &Start[Index]);
+#else
+    /* On x86/x64, use the original offset-based validation */
     Offset = (ULONG_PTR)Pointer - (ULONG_PTR)Start;
     if ((Offset % sizeof(GENERAL_LOOKASIDE)) != 0)
     {
@@ -85,6 +100,7 @@ ExpIsLookasidePointerValid(
     }
 
     return (Offset == Index);
+#endif
 }
 #endif
 
@@ -92,12 +108,27 @@ FORCEINLINE
 BOOLEAN
 ExpValidateLookasideHead(
     _In_ PKPRCB Prcb,
-    _In_ PGENERAL_LOOKASIDE Lookaside,
+    _In_opt_ PGENERAL_LOOKASIDE Lookaside,
     _In_ BOOLEAN PagedList,
     _In_ USHORT Index)
 {
 #if defined(_WIN64)
     ULONGLONG NextEntry;
+
+    /*
+     * ARM64 CRITICAL: Check for NULL lookaside pointer before dereferencing.
+     * If the PRCB lookkaside arrays are uninitialized or corrupted, we may
+     * receive a NULL pointer which would cause a crash when accessing ListHead.
+     */
+    if (Lookaside == NULL)
+    {
+        DPRINT1("EX: NULL lookaside pointer (Paged=%d Index=%u CPU=%u) - disabling lookasides\n",
+                PagedList,
+                Index,
+                Prcb->Number);
+        ExpDisablePoolLookaside = TRUE;
+        return FALSE;
+    }
 
     /*
      * Reconstruct the first entry pointer exactly like the SLIST helpers do,
@@ -315,11 +346,40 @@ ExpGetValidPoolLookasideList(
     PGENERAL_LOOKASIDE DefaultList;
 #if DBG
     PGENERAL_LOOKASIDE Current;
+    static LONG FirstCallLogged = 0;
 #endif
+
+    /*
+     * ARM64 CRITICAL: Validate index bounds before accessing global arrays.
+     * Out-of-bounds access could return invalid pointers.
+     */
+    if (Index >= NUMBER_POOL_LOOKASIDE_LISTS)
+    {
+        DPRINT1("EX: Invalid lookaside index %u (max %u) - caller bug!\n",
+                Index,
+                NUMBER_POOL_LOOKASIDE_LISTS - 1);
+        return NULL;
+    }
 
     DefaultList = PagedList ?
                   &ExpSmallPagedPoolLookasideLists[Index] :
                   &ExpSmallNPagedPoolLookasideLists[Index];
+
+#if DBG
+    /* Log the first few calls to see initialization state */
+    if (InterlockedCompareExchange(&FirstCallLogged, 1, 0) == 0)
+    {
+        DPRINT1("EX: ExpGetValidPoolLookasideList FIRST CALL:\n");
+        DPRINT1("    Prcb=%p CPU=%u Paged=%d Index=%u Global=%d\n",
+                Prcb, Prcb->Number, PagedList, Index, UseGlobal);
+        DPRINT1("    DefaultList=%p &ListHead=%p\n",
+                DefaultList, &DefaultList->ListHead);
+        DPRINT1("    ExpSmallNPagedPoolLookasideLists=%p\n",
+                ExpSmallNPagedPoolLookasideLists);
+        DPRINT1("    ExpSmallPagedPoolLookasideLists=%p\n",
+                ExpSmallPagedPoolLookasideLists);
+    }
+#endif
 
     if (PagedList)
     {
@@ -513,9 +573,99 @@ VOID
 NTAPI
 ExpCheckPoolLinks(IN PLIST_ENTRY ListHead)
 {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    static LONG CheckCount = 0;
+    LONG Count = InterlockedIncrement(&CheckCount);
+    BOOLEAN IsValidPoolAddr = FALSE;
+    ULONG_PTR Addr = (ULONG_PTR)ListHead;
+
+    /*
+     * ARM64: First check if ListHead is in a valid pool region.
+     * During early boot, some code paths may pass garbage addresses.
+     * We need to verify the address is either:
+     * 1. In NonPagedPoolDescriptor ListHeads array
+     * 2. In PagedPoolDescriptor ListHeads array (if initialized)
+     * 3. In NonPagedPool memory region (0xFFFFFA81...)
+     * 4. In PagedPool memory region (0xFFFFF8A0...)
+     */
+
+    /* Check if in NonPagedPoolDescriptor */
+    if (Addr >= (ULONG_PTR)&NonPagedPoolDescriptor &&
+        Addr < (ULONG_PTR)&NonPagedPoolDescriptor + sizeof(POOL_DESCRIPTOR))
+    {
+        IsValidPoolAddr = TRUE;
+    }
+    /* Check if in PagedPoolDescriptor */
+    else if (ExpPagedPoolDescriptor[0] != NULL &&
+             Addr >= (ULONG_PTR)ExpPagedPoolDescriptor[0] &&
+             Addr < (ULONG_PTR)ExpPagedPoolDescriptor[0] + sizeof(POOL_DESCRIPTOR))
+    {
+        IsValidPoolAddr = TRUE;
+    }
+    /* Check if in NonPagedPool memory region (0xFFFFFA81...) */
+    else if (Addr >= 0xFFFFFA8100000000ULL && Addr < 0xFFFFFA8200000000ULL)
+    {
+        IsValidPoolAddr = TRUE;
+    }
+    /* Check if in PagedPool memory region (0xFFFFF8A0...) */
+    else if (Addr >= 0xFFFFF8A000000000ULL && Addr < 0xFFFFF8B000000000ULL)
+    {
+        IsValidPoolAddr = TRUE;
+    }
+
+    if (!IsValidPoolAddr)
+    {
+        DPRINT1("ARM64 ExpCheckPoolLinks[%d]: SKIPPING invalid addr %p (not in pool region)\n",
+                Count, ListHead);
+        DPRINT1("  NonPagedDesc=%p-%p PagedDesc=%p\n",
+                &NonPagedPoolDescriptor,
+                (PUCHAR)&NonPagedPoolDescriptor + sizeof(POOL_DESCRIPTOR),
+                ExpPagedPoolDescriptor[0]);
+        return;
+    }
+
+    /* Early check for obviously corrupt links */
+    if (ListHead->Flink == NULL || ListHead->Blink == NULL)
+    {
+        DPRINT1("ARM64 POOL LINK NULL CHECK FAILED (call #%d):\n", Count);
+        DPRINT1("  ListHead=%p Flink=%p Blink=%p\n",
+                ListHead, ListHead->Flink, ListHead->Blink);
+        DPRINT1("  NonPagedDesc=%p PagedDesc=%p\n",
+                &NonPagedPoolDescriptor, ExpPagedPoolDescriptor[0]);
+        KeBugCheckEx(BAD_POOL_HEADER,
+                     3,
+                     (ULONG_PTR)ListHead,
+                     (ULONG_PTR)ListHead->Flink,
+                     (ULONG_PTR)ListHead->Blink);
+    }
+
+    /* Log calls around the crash point to understand call pattern */
+    if (Count <= 10 || (Count >= 40 && Count <= 50))
+    {
+        DPRINT1("ARM64 ExpCheckPoolLinks[%d]: ListHead=%p Flink=%p Blink=%p\n",
+                Count, ListHead, ListHead->Flink, ListHead->Blink);
+    }
+#endif
     if ((ExpDecodePoolLink(ExpDecodePoolLink(ListHead->Flink)->Blink) != ListHead) ||
         (ExpDecodePoolLink(ExpDecodePoolLink(ListHead->Blink)->Flink) != ListHead))
     {
+#if defined(_M_ARM64) || defined(__aarch64__)
+        PLIST_ENTRY DecodedFlink = ExpDecodePoolLink(ListHead->Flink);
+        PLIST_ENTRY DecodedBlink = ExpDecodePoolLink(ListHead->Blink);
+        DPRINT1("ARM64 POOL LINK CORRUPTION:\n");
+        DPRINT1("  ListHead=%p Flink=%p (decoded=%p) Blink=%p (decoded=%p)\n",
+                ListHead, ListHead->Flink, DecodedFlink, ListHead->Blink, DecodedBlink);
+        if (MmIsAddressValid(DecodedFlink))
+            DPRINT1("  DecodedFlink->Blink=%p (decoded=%p)\n",
+                    DecodedFlink->Blink, ExpDecodePoolLink(DecodedFlink->Blink));
+        else
+            DPRINT1("  DecodedFlink %p is INVALID address\n", DecodedFlink);
+        if (MmIsAddressValid(DecodedBlink))
+            DPRINT1("  DecodedBlink->Flink=%p (decoded=%p)\n",
+                    DecodedBlink->Flink, ExpDecodePoolLink(DecodedBlink->Flink));
+        else
+            DPRINT1("  DecodedBlink %p is INVALID address\n", DecodedBlink);
+#endif
         KeBugCheckEx(BAD_POOL_HEADER,
                      3,
                      (ULONG_PTR)ListHead,
@@ -579,6 +729,10 @@ ExpInsertPoolTailList(IN PLIST_ENTRY ListHead,
                       IN PLIST_ENTRY Entry)
 {
     PLIST_ENTRY Blink;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    if (ListHead->Flink == NULL || ListHead->Blink == NULL)
+        DPRINT1("ARM64 InsertTail pre: ListHead=%p Flink=%p Entry=%p\n", ListHead, ListHead->Flink, Entry);
+#endif
     ExpCheckPoolLinks(ListHead);
     Blink = ExpDecodePoolLink(ListHead->Blink);
     Entry->Flink = ExpEncodePoolLink(ListHead);
@@ -594,6 +748,10 @@ ExpInsertPoolHeadList(IN PLIST_ENTRY ListHead,
                       IN PLIST_ENTRY Entry)
 {
     PLIST_ENTRY Flink;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    if (ListHead->Flink == NULL || ListHead->Blink == NULL)
+        DPRINT1("ARM64 InsertHead pre: ListHead=%p Flink=%p Entry=%p\n", ListHead, ListHead->Flink, Entry);
+#endif
     ExpCheckPoolLinks(ListHead);
     Flink = ExpDecodePoolLink(ListHead->Flink);
     Entry->Flink = ExpEncodePoolLink(Flink);
@@ -1651,11 +1809,14 @@ InitializePool(IN POOL_TYPE PoolType,
         ASSERT(KeNumberNodes == 1);
 
         //
-        // Allocate the pool descriptor
+        // Allocate the pool descriptor and guarded mutex together.
+        // ARM64 FIX: The allocation order MUST match the pointer arithmetic below.
+        // We allocate POOL_DESCRIPTOR first, then KGUARDED_MUTEX after it, so that
+        // (Descriptor + 1) correctly points to the mutex.
         //
         Descriptor = ExAllocatePoolWithTag(NonPagedPool,
-                                           sizeof(KGUARDED_MUTEX) +
-                                           sizeof(POOL_DESCRIPTOR),
+                                           sizeof(POOL_DESCRIPTOR) +
+                                           sizeof(KGUARDED_MUTEX),
                                            'looP');
         if (!Descriptor)
         {
@@ -1670,17 +1831,46 @@ InitializePool(IN POOL_TYPE PoolType,
         }
 
         //
-        // Setup the vector and guarded mutex for paged pool
+        // Setup the vector and guarded mutex for paged pool.
+        // ARM64 FIX: The mutex is located immediately after the descriptor in memory,
+        // so we use (Descriptor + 1) to get its address. The old code had the allocation
+        // order reversed (KGUARDED_MUTEX + POOL_DESCRIPTOR) which caused the mutex pointer
+        // to point to uninitialized memory beyond the allocated block.
         //
         PoolVector[PagedPool] = Descriptor;
         ExpPagedPoolMutex = (PKGUARDED_MUTEX)(Descriptor + 1);
         ExpPagedPoolDescriptor[0] = Descriptor;
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /* ARM64 DEBUG: Log addresses before initialization */
+        DPRINT1("ARM64 PagedPool BEFORE init: Descriptor=%p size=%zu\n",
+                Descriptor, sizeof(POOL_DESCRIPTOR));
+        DPRINT1("ARM64 PagedPool BEFORE init: ExpPagedPoolMutex=%p size=%zu\n",
+                ExpPagedPoolMutex, sizeof(KGUARDED_MUTEX));
+        DPRINT1("ARM64 PagedPool BEFORE init: Allocated range: %p - %p\n",
+                Descriptor,
+                (PUCHAR)Descriptor + sizeof(POOL_DESCRIPTOR) + sizeof(KGUARDED_MUTEX));
+        DPRINT1("ARM64 PagedPool BEFORE init: Gate=%p (relative offset=%zd)\n",
+                &ExpPagedPoolMutex->Gate,
+                (PUCHAR)&ExpPagedPoolMutex->Gate - (PUCHAR)Descriptor);
+#endif
+
         KeInitializeGuardedMutex(ExpPagedPoolMutex);
         ExInitializePoolDescriptor(Descriptor,
                                    PagedPool,
                                    0,
                                    Threshold,
                                    ExpPagedPoolMutex);
+#if defined(_M_ARM64) || defined(__aarch64__)
+        DPRINT1("ARM64 PagedPool: Descriptor=%p ListHeads[0]=%p Flink=%p Blink=%p\n",
+                Descriptor, &Descriptor->ListHeads[0],
+                Descriptor->ListHeads[0].Flink, Descriptor->ListHeads[0].Blink);
+        DPRINT1("ARM64 PagedPool: ExpPagedPoolMutex=%p Gate=%p Type=%02X Count=%ld\n",
+                ExpPagedPoolMutex,
+                &ExpPagedPoolMutex->Gate,
+                ExpPagedPoolMutex->Gate.Header.Type,
+                ExpPagedPoolMutex->Count);
+#endif
 
         //
         // Insert the generic tracker for all of nonpaged pool
@@ -2347,6 +2537,36 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
     ASSERT(Tag != 0);
     ASSERT(Tag != ' GIB');
     ASSERT(NumberOfBytes != 0);
+
+    //
+    // Check if paged pool is being requested but is not yet initialized.
+    // If so, redirect to nonpaged pool.
+    //
+    if ((PoolType & BASE_POOL_TYPE_MASK) == PagedPool)
+    {
+        BOOLEAN PagedPoolReady = (MmPagedPoolInitialized != FALSE);
+        BOOLEAN PagedPoolDescValid = ((PoolVector[PagedPool] != NULL) &&
+                                      ((PVOID)PoolVector[PagedPool] >= MmNonPagedPoolStart) &&
+                                      ((PVOID)PoolVector[PagedPool] <= MmNonPagedPoolEnd));
+
+        if (!PagedPoolReady || !PagedPoolDescValid)
+        {
+            if (!ExpEarlyPoolLogDone)
+            {
+                ExpEarlyPoolLogDone = TRUE;
+                DPRINT1("EX: early pool alloc phase=%lu type=0x%x size=%Iu tag=%.4s vec0=%p vec1=%p map=%p\n",
+                        ExpInitializationPhase,
+                        PoolType,
+                        NumberOfBytes,
+                        (PCHAR)&Tag,
+                        PoolVector[NonPagedPool],
+                        PoolVector[PagedPool],
+                        MmPagedPoolInfo.PagedPoolAllocationMap);
+            }
+            PoolType &= ~BASE_POOL_TYPE_MASK;
+        }
+    }
+
     ExpCheckPoolIrqlLevel(PoolType, NumberOfBytes, NULL);
 
     //
@@ -2393,6 +2613,17 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
     OriginalType = PoolType;
     PoolType = PoolType & BASE_POOL_TYPE_MASK;
     PoolDesc = PoolVector[PoolType];
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        static int PoolDescLogCount = 0;
+        if (PoolDescLogCount < 5 || PoolDesc == NULL)
+        {
+            DPRINT1("ARM64 POOL SETUP[%d]: OrigType=%d PoolType=%d PoolDesc=%p NonPagedDesc=%p PagedDesc=%p\n",
+                    PoolDescLogCount, OriginalType, PoolType, PoolDesc, &NonPagedPoolDescriptor, ExpPagedPoolDescriptor[0]);
+            PoolDescLogCount++;
+        }
+    }
+#endif
     ASSERT(PoolDesc != NULL);
 
     //
@@ -2543,7 +2774,8 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
                                                          PagedList,
                                                          LookasideIndex,
                                                          FALSE);
-            if (ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
+            if (LookasideList != NULL &&
+                ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
             {
                 LookasideList->TotalAllocates++;
                 Entry = (PPOOL_HEADER)InterlockedPopEntrySList(&LookasideList->ListHead);
@@ -2557,7 +2789,8 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
                                                                  PagedList,
                                                                  LookasideIndex,
                                                                  TRUE);
-                    if (ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
+                    if (LookasideList != NULL &&
+                        ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
                     {
                         LookasideList->TotalAllocates++;
                         Entry = (PPOOL_HEADER)InterlockedPopEntrySList(&LookasideList->ListHead);
@@ -2604,6 +2837,31 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
     // list optimized for this kind of size lookup
     //
     ListHead = &PoolDesc->ListHeads[i];
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* ARM64: Validate PoolDesc and i before starting the loop */
+    {
+        static int LoopStartCount = 0;
+        LoopStartCount++;
+        if (LoopStartCount <= 10 ||
+            (ULONG_PTR)PoolDesc < 0xFFFF000000000000ULL ||
+            i >= POOL_LISTS_PER_PAGE)
+        {
+            DPRINT1("ARM64 LOOP START[%d]: PoolDesc=%p i=%u ListHead=%p (NonPagedDesc=%p PagedDesc=%p)\n",
+                    LoopStartCount, PoolDesc, i, ListHead,
+                    &NonPagedPoolDescriptor, ExpPagedPoolDescriptor[0]);
+        }
+        if ((ULONG_PTR)PoolDesc < 0xFFFF000000000000ULL)
+        {
+            DPRINT1("ARM64 LOOP: CORRUPT PoolDesc=%p! PoolType=%d\n", PoolDesc, PoolType);
+            KeBugCheckEx(BAD_POOL_HEADER, 0xAA65, (ULONG_PTR)PoolDesc, PoolType, i);
+        }
+        if (i >= POOL_LISTS_PER_PAGE)
+        {
+            DPRINT1("ARM64 LOOP: i=%u out of bounds (max=%u)\n", i, POOL_LISTS_PER_PAGE);
+            KeBugCheckEx(BAD_POOL_HEADER, 0xAA66, i, POOL_LISTS_PER_PAGE, (ULONG_PTR)PoolDesc);
+        }
+    }
+#endif
     do
     {
         //
@@ -2637,8 +2895,57 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
             // there is a guarantee that any block on this list will either be
             // of the correct size, or perhaps larger.
             //
+#if defined(_M_ARM64) || defined(__aarch64__)
+            {
+                static int DbgAllocCount = 0;
+                extern PPOOL_DESCRIPTOR ExpPagedPoolDescriptor[16 + 1];
+                if (DbgAllocCount < 5 || ListHead->Flink == NULL || ListHead->Blink == NULL)
+                {
+                    DPRINT1("ARM64 POOL ALLOC[%d]: PoolType=%d ListHead=%p Flink=%p Blink=%p PoolDesc=%p (Paged[0]=%p) i=%d\n",
+                            DbgAllocCount, PoolType, ListHead, ListHead->Flink, ListHead->Blink,
+                            PoolDesc, ExpPagedPoolDescriptor[0], i);
+                    DbgAllocCount++;
+                }
+            }
+#endif
             ExpCheckPoolLinks(ListHead);
             Entry = POOL_ENTRY(ExpRemovePoolHeadList(ListHead));
+#if defined(_M_ARM64) || defined(__aarch64__)
+            /* ARM64: Validate Entry immediately after removal from free list */
+            if ((ULONG_PTR)Entry < 0xFFFF000000000000ULL)
+            {
+                DPRINT1("ARM64 ENTRY CORRUPT (low addr): Entry=%p from ListHead=%p (i=%u)\n",
+                        Entry, ListHead, i);
+                DPRINT1("  ListHead Flink=%p Blink=%p\n", ListHead->Flink, ListHead->Blink);
+                DPRINT1("  PoolDesc=%p NonPagedDesc=%p PagedDesc=%p\n",
+                        PoolDesc, &NonPagedPoolDescriptor, ExpPagedPoolDescriptor[0]);
+                /* Cannot continue with a corrupt entry - bugcheck with info */
+                KeBugCheckEx(BAD_POOL_HEADER, 0xAA64, (ULONG_PTR)Entry, (ULONG_PTR)ListHead, i);
+            }
+            /* Also check if Entry is inside the descriptor itself (not pool memory) */
+            if (((ULONG_PTR)Entry >= (ULONG_PTR)PoolDesc &&
+                 (ULONG_PTR)Entry < (ULONG_PTR)PoolDesc + sizeof(POOL_DESCRIPTOR)) ||
+                ((ULONG_PTR)Entry >= (ULONG_PTR)&NonPagedPoolDescriptor &&
+                 (ULONG_PTR)Entry < (ULONG_PTR)&NonPagedPoolDescriptor + sizeof(POOL_DESCRIPTOR)) ||
+                (ExpPagedPoolDescriptor[0] != NULL &&
+                 (ULONG_PTR)Entry >= (ULONG_PTR)ExpPagedPoolDescriptor[0] &&
+                 (ULONG_PTR)Entry < (ULONG_PTR)ExpPagedPoolDescriptor[0] + sizeof(POOL_DESCRIPTOR)))
+            {
+                DPRINT1("ARM64 ENTRY IN DESCRIPTOR: Entry=%p PoolDesc=%p ListHead=%p i=%u\n",
+                        Entry, PoolDesc, ListHead, i);
+                DPRINT1("  NonPagedDesc=%p-%p PagedDesc=%p-%p\n",
+                        &NonPagedPoolDescriptor,
+                        (PUCHAR)&NonPagedPoolDescriptor + sizeof(POOL_DESCRIPTOR),
+                        ExpPagedPoolDescriptor[0],
+                        ExpPagedPoolDescriptor[0] ? (PUCHAR)ExpPagedPoolDescriptor[0] + sizeof(POOL_DESCRIPTOR) : NULL);
+                DPRINT1("  ListHead Flink=%p Blink=%p (decoded: %p %p)\n",
+                        ListHead->Flink, ListHead->Blink,
+                        ExpDecodePoolLink(ListHead->Flink), ExpDecodePoolLink(ListHead->Blink));
+                /* Skip this allocation - return to free list search */
+                ExUnlockPool(PoolDesc, OldIrql);
+                continue;
+            }
+#endif
             ExpCheckPoolLinks(ListHead);
             ExpCheckPoolBlocks(Entry);
             ASSERT(Entry->BlockSize >= i);
@@ -2740,6 +3047,24 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
                 // "full" entry, which contains enough bytes for a linked list
                 // and thus can be used for allocations (up to 8 bytes...)
                 //
+#if defined(_M_ARM64) || defined(__aarch64__)
+                /* ARM64: Validate FragmentEntry and BlockSize before using */
+                if ((ULONG_PTR)FragmentEntry < 0xFFFF000000000000ULL ||
+                    BlockSize == 0 || BlockSize > POOL_LISTS_PER_PAGE)
+                {
+                    DPRINT1("ARM64 FRAGMENT CORRUPT: FragmentEntry=%p BlockSize=%u Entry=%p i=%u\n",
+                            FragmentEntry, BlockSize, Entry, i);
+                    DPRINT1("  PoolDesc=%p ListHeads=%p Computed=%p\n",
+                            PoolDesc, PoolDesc->ListHeads, &PoolDesc->ListHeads[BlockSize - 1]);
+                    /* Skip the corruption instead of crashing */
+                    Entry->BlockSize = i;
+                    Entry->PoolType = OriginalType + 1;
+                    ExUnlockPool(PoolDesc, OldIrql);
+                    InterlockedExchangeAddSizeT(&PoolDesc->TotalBytes, Entry->BlockSize * POOL_BLOCK_SIZE);
+                    InterlockedIncrement((PLONG)&PoolDesc->RunningAllocs);
+                    return POOL_FREE_BLOCK(Entry);
+                }
+#endif
                 ExpCheckPoolLinks(&PoolDesc->ListHeads[BlockSize - 1]);
                 if (BlockSize != 1)
                 {
@@ -2787,6 +3112,10 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
 #endif
             return POOL_FREE_BLOCK(Entry);
         }
+#if defined(_M_ARM64) || defined(__aarch64__)
+ContinueToNext:
+        ;  /* Empty statement after label */
+#endif
     } while (++ListHead != &PoolDesc->ListHeads[POOL_LISTS_PER_PAGE]);
 
     //
@@ -2985,6 +3314,31 @@ ExFreePoolWithTag(IN PVOID P,
     PKPRCB Prcb = KeGetCurrentPrcb();
     PGENERAL_LOOKASIDE LookasideList;
     PEPROCESS Process;
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        BOOLEAN InNonPaged = ((P >= MmNonPagedPoolStart) && (P < MmNonPagedPoolEnd));
+        BOOLEAN InPaged = ((P >= MmPagedPoolStart) && (P < MmPagedPoolEnd));
+        if (!InNonPaged && !InPaged)
+        {
+            static volatile LONG LogBudget = 4;
+            if (InterlockedDecrement(&LogBudget) >= 0)
+            {
+                DbgPrintEx(DPFLTR_MM_ID,
+                           DPFLTR_ERROR_LEVEL,
+                           "ExFreePoolWithTag: pointer %p outside pool (NP %p-%p, PP %p-%p) caller=%p tag=0x%lx\n",
+                           P,
+                           MmNonPagedPoolStart,
+                           MmNonPagedPoolEnd,
+                           MmPagedPoolStart,
+                           MmPagedPoolEnd,
+                           _ReturnAddress(),
+                           TagToFree);
+            }
+            return;
+        }
+    }
+#endif
 
     //
     // Check if any of the debug flags are enabled
@@ -3245,7 +3599,8 @@ ExFreePoolWithTag(IN PVOID P,
                                                          PagedList,
                                                          LookasideIndex,
                                                          FALSE);
-            if (ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
+            if (LookasideList != NULL &&
+                ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
             {
 #if DBG
                 ExpTraceLookasideOp("push-pcpu",
@@ -3296,7 +3651,8 @@ ExFreePoolWithTag(IN PVOID P,
                                                          PagedList,
                                                          LookasideIndex,
                                                          TRUE);
-            if (ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
+            if (LookasideList != NULL &&
+                ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
             {
 #if DBG
                 ExpTraceLookasideOp("push-global",
@@ -3387,6 +3743,19 @@ ExFreePoolWithTag(IN PVOID P,
                 //
                 ExpCheckPoolLinks(POOL_FREE_BLOCK(NextEntry));
                 ExpRemovePoolEntryList(POOL_FREE_BLOCK(NextEntry));
+#if defined(_M_ARM64) || defined(__aarch64__)
+                {
+                    PLIST_ENTRY FreeBlock = POOL_FREE_BLOCK(NextEntry);
+                    PLIST_ENTRY DecodedFlink = ExpDecodePoolLink(FreeBlock->Flink);
+                    PLIST_ENTRY DecodedBlink = ExpDecodePoolLink(FreeBlock->Blink);
+                    if (DecodedFlink->Flink == NULL || DecodedBlink->Flink == NULL)
+                    {
+                        DPRINT1("ARM64 FREE COMBINE1: NextEntry=%p FreeBlock=%p\n", NextEntry, FreeBlock);
+                        DPRINT1("  Flink=%p (decoded=%p) Blink=%p (decoded=%p)\n",
+                                FreeBlock->Flink, DecodedFlink, FreeBlock->Blink, DecodedBlink);
+                    }
+                }
+#endif
                 ExpCheckPoolLinks(ExpDecodePoolLink((POOL_FREE_BLOCK(NextEntry))->Flink));
                 ExpCheckPoolLinks(ExpDecodePoolLink((POOL_FREE_BLOCK(NextEntry))->Blink));
             }

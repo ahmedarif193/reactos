@@ -9,7 +9,7 @@ Usage examples
 When no filtering options are supplied the script assumes the input is a kd log,
 trims everything before the first "Entered debugger" marker, keeps only the
 lines that start with "[", echoes those lines, and prints symbolized entries
-for each ``<module:offset>`` token that appears on them.
+for each ``<module:offset>`` or ``<module+0xoffset>`` token that appears on them.
 
 Pass ``--tail-from`` and/or ``--only-prefix`` to override the default trimming,
 ``--binary`` to provide additional module-to-binary mappings, and ``--show-line``
@@ -33,7 +33,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 SUFFIX_WHITELIST = {".exe", ".dll", ".sys", ".efi", ".ax", ".acm", ".drv", ".so"}
 
 NM_TOOL = os.environ.get("NM", "aarch64-w64-mingw32-nm")
-_PATTERN = re.compile(r"<([^:<>]+):([0-9A-Fa-f]+)>")
+_PATTERN = re.compile(r"<([^:+<>]+)(?:[:+])(?:0x)?([0-9A-Fa-f]+)>")
 
 TAIL_DEFAULT = 2
 DEFAULT_TIMEOUT_SECONDS = 60
@@ -266,10 +266,23 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
 
     print(f"[symbolize] Using build directory: {build_dir}")
 
+    # Build livecd before running QEMU
+    print("[symbolize] Building livecd...")
+    ninja_result = subprocess.run(
+        ["ninja", "livecd"],
+        cwd=build_dir,
+        capture_output=True,
+        text=True
+    )
+    if ninja_result.returncode != 0:
+        print(f"[symbolize] ninja livecd failed:\n{ninja_result.stderr}")
+        raise RuntimeError("Failed to build livecd")
+    print("[symbolize] livecd build complete")
+
     livecd = build_dir / "livecd_arm64-merge.iso"
     if not livecd.exists():
         raise FileNotFoundError(
-            "livecd_arm64-merge.iso not found; run the script from the build directory"
+            "livecd_arm64-merge.iso not found after ninja build"
         )
 
     if sys.platform == "darwin" and platform.machine() == "arm64":
@@ -336,6 +349,15 @@ def _run_default_capture(log_path: Path, timeout: int, bootmain_limit: Optional[
         ]
 
         print(f"[symbolize] Launching QEMU (headless, 4G RAM). Log: {log_path}")
+
+    # Kill any existing qemu-system-aarch64 process before launching new one
+    subprocess.run(
+        "sudo kill -9 $(pidof qemu-system-aarch64)",
+        shell=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
     proc = subprocess.Popen(
         qemu_cmd,
         cwd=build_dir,

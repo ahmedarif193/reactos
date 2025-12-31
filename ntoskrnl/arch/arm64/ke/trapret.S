@@ -14,6 +14,19 @@ KiTrapReturn:
     ldr     x24, [x20, #TfFp]
     ldr     x25, [x20, #TfLr]
 
+    /* Load critical exception state FIRST before any other loads */
+    ldr     w22, [x20, #TfSpsr]
+    ldr     x23, [x20, #TfPc]
+    ldr     x26, [x20, #TfSp]
+
+    /* Program exception state to system registers */
+    msr     spsr_el1, x22
+    msr     elr_el1,  x23
+
+    /* Memory barrier to ensure exception state is committed */
+    dsb     sy
+    isb
+
     /* Restore volatile registers from the trap frame */
     ldr     x18, [x20, #TfX18]
     ldp     x16, x17, [x20, #TfX16]
@@ -25,13 +38,6 @@ KiTrapReturn:
     ldp     x4,  x5,  [x20, #TfX4]
     ldp     x2,  x3,  [x20, #TfX2]
     ldp     x0,  x1,  [x20, #TfX0]
-
-    /* Program status and target address */
-    ldr     w22, [x20, #TfSpsr]
-    ldr     x23, [x20, #TfPc]
-    ldr     x26, [x20, #TfSp]
-    msr     spsr_el1, x22
-    msr     elr_el1,  x23
 
     /* Select appropriate stack pointer */
     ands    w27, w22, #0xF
@@ -50,7 +56,7 @@ KiTrapReturn:
     mov     sp, x26                  /* Returning to EL1 */
 3:
     /* Restore non-volatiles when an exception frame is present */
-    cbz     x21, 3f
+    cbz     x21, 5f
     mov     x11, x21
     ldr     x19, [x11, #ExX19]
     ldr     x20, [x11, #ExX20]
@@ -65,11 +71,12 @@ KiTrapReturn:
     ldr     x29, [x11, #ExFp]
     ldr     x30, [x11, #ExLr]
     b       4f
-3:
+5:
     mov     x29, x24
     mov     x30, x25
 4:
-    dsb     ish
+    /* Full memory barrier before exception return */
+    dsb     sy
     isb
     eret
 

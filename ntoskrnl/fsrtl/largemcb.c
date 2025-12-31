@@ -19,8 +19,9 @@
 
 /* GLOBALS *******************************************************************/
 
-PAGED_LOOKASIDE_LIST FsRtlFirstMappingLookasideList;
-NPAGED_LOOKASIDE_LIST FsRtlFastMutexLookasideList;
+/* ARM64: Ensure proper SLIST_HEADER alignment */
+DECLSPEC_ALIGN(16) PAGED_LOOKASIDE_LIST FsRtlFirstMappingLookasideList;
+DECLSPEC_ALIGN(16) NPAGED_LOOKASIDE_LIST FsRtlFastMutexLookasideList;
 
 /* We use only real 'mapping' runs; we do not store 'holes' to our GTree. */
 typedef struct _LARGE_MCB_MAPPING_ENTRY // run

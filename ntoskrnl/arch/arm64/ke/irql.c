@@ -18,7 +18,12 @@ VOID KiArm64BootStageLog(_In_z_ PCSTR Stage);
 #define ARM64_MASK_IRQ()   __asm__ __volatile__("msr daifset, #0x2" ::: "memory")
 #define ARM64_UNMASK_IRQ() __asm__ __volatile__("msr daifclr, #0x2" ::: "memory")
 #define ARM64_MASK_ALL()   __asm__ __volatile__("msr daifset, #0xf" ::: "memory")
-#define ARM64_UNMASK_ALL() __asm__ __volatile__("msr daifclr, #0xf" ::: "memory")
+/*
+ * Don't unmask SError (bit 2 in immediate = A) during IRQL transitions.
+ * SErrors from UEFI/FreeLdr can be stale and we want them to stay pended.
+ * Unmask only D, I, F (bits 3, 1, 0 = 0xB).
+ */
+#define ARM64_UNMASK_ALL() __asm__ __volatile__("msr daifclr, #0xb" ::: "memory")
 #define ARM64_SYNC_BARRIER()                                                     \
     do                                                                           \
     {                                                                            \

@@ -1737,12 +1737,15 @@ MiReloadBootLoadedDrivers(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     PIMAGE_FILE_HEADER FileHeader;
     BOOLEAN ValidRelocs;
     PIMAGE_DATA_DIRECTORY DataDirectory;
-    PVOID DllBase, NewImageAddress;
+    PVOID DllBase, NewImageAddress, PageVa;
     NTSTATUS Status;
     PMMPTE PointerPte, StartPte, LastPte;
     PFN_COUNT PteCount;
     PMMPFN Pfn1;
-    MMPTE TempPte, OldPte;
+    MMPTE TempPte;
+#if !defined(_M_ARM64) && !defined(__aarch64__)
+    MMPTE OldPte;
+#endif
 
     /* Loop driver list */
     for (NextEntry = LoaderBlock->LoadOrderListHead.Flink;
@@ -1768,14 +1771,22 @@ MiReloadBootLoadedDrivers(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
 #if MI_TRACE_PFNS
         /* Loop the PTEs */
+        PageVa = LdrEntry->DllBase;
         while (PointerPte < LastPte)
         {
             ULONG len;
+#if defined(_M_ARM64) || defined(__aarch64__)
+            PHYSICAL_ADDRESS Pa = MmGetPhysicalAddress(PageVa);
+            ASSERT(Pa.QuadPart != 0);
+            Pfn1 = MiGetPfnEntry((PFN_NUMBER)(Pa.QuadPart >> PAGE_SHIFT));
+#else
             ASSERT(PointerPte->u.Hard.Valid == 1);
             Pfn1 = MiGetPfnEntry(PFN_FROM_PTE(PointerPte));
+#endif
             len = wcslen(LdrEntry->BaseDllName.Buffer) * sizeof(WCHAR);
             snprintf(Pfn1->ProcessName, min(16, len), "%S", LdrEntry->BaseDllName.Buffer);
             PointerPte++;
+            PageVa = (PVOID)((ULONG_PTR)PageVa + PAGE_SIZE);
         }
 #endif
         /* Skip kernel and HAL */
@@ -1819,16 +1830,26 @@ MiReloadBootLoadedDrivers(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
         /* Loop the PTEs */
         PointerPte = StartPte;
+        PageVa = DllBase;
         while (PointerPte < LastPte)
         {
             /* Mark the page modified in the PFN database */
+#if defined(_M_ARM64) || defined(__aarch64__)
+            PHYSICAL_ADDRESS Pa = MmGetPhysicalAddress(PageVa);
+            ASSERT(Pa.QuadPart != 0);
+            Pfn1 = MiGetPfnEntry((PFN_NUMBER)(Pa.QuadPart >> PAGE_SHIFT));
+#else
             ASSERT(PointerPte->u.Hard.Valid == 1);
             Pfn1 = MiGetPfnEntry(PFN_FROM_PTE(PointerPte));
-            ASSERT(Pfn1->u3.e1.Rom == 0);
-            Pfn1->u3.e1.Modified = TRUE;
+#endif
+            if (Pfn1->u3.e1.Rom == 0)
+            {
+                Pfn1->u3.e1.Modified = TRUE;
+            }
 
             /* Next */
             PointerPte++;
+            PageVa = (PVOID)((ULONG_PTR)PageVa + PAGE_SIZE);
         }
 
         /* Now reserve system PTEs for the image */
@@ -1850,14 +1871,19 @@ MiReloadBootLoadedDrivers(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
         /* Loop the new driver PTEs */
         TempPte = ValidKernelPte;
+        PageVa = DllBase;
         while (PointerPte < LastPte)
         {
             /* Copy the old data */
+#if defined(_M_ARM64) || defined(__aarch64__)
+            PHYSICAL_ADDRESS Pa = MmGetPhysicalAddress(PageVa);
+            ASSERT(Pa.QuadPart != 0);
+            TempPte.u.Hard.PageFrameNumber = (PFN_NUMBER)(Pa.QuadPart >> PAGE_SHIFT);
+#else
             OldPte = *StartPte;
             ASSERT(OldPte.u.Hard.Valid == 1);
-
-            /* Set page number from the loader's memory */
             TempPte.u.Hard.PageFrameNumber = OldPte.u.Hard.PageFrameNumber;
+#endif
 
             /* Write it */
             MI_WRITE_VALID_PTE(PointerPte, TempPte);
@@ -1865,6 +1891,7 @@ MiReloadBootLoadedDrivers(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             /* Move on */
             PointerPte++;
             StartPte++;
+            PageVa = (PVOID)((ULONG_PTR)PageVa + PAGE_SIZE);
         }
 
         /* Update position */

@@ -653,6 +653,12 @@ WinLdrLoadBootDrivers(PLOADER_PARAMETER_BLOCK LoaderBlock,
     PBOOT_DRIVER_LIST_ENTRY BootDriver;
     BOOLEAN Success;
     BOOLEAN ret = TRUE;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    static const PCWSTR WinLdrArm64UnsupportedBootDrivers[] =
+    {
+        L"usbuhci"
+    };
+#endif
 
     /* Walk through the boot drivers list */
     NextBd = LoaderBlock->BootDriverListHead.Flink;
@@ -665,6 +671,28 @@ WinLdrLoadBootDrivers(PLOADER_PARAMETER_BLOCK LoaderBlock,
 
         /* Get the next list entry as we may remove the current one on failure */
         NextBd = BootDriver->Link.Flink;
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+        {
+            BOOLEAN Skip = FALSE;
+            for (ULONG Index = 0; Index < RTL_NUMBER_OF(WinLdrArm64UnsupportedBootDrivers); Index++)
+            {
+                UNICODE_STRING Name;
+                RtlInitUnicodeString(&Name, WinLdrArm64UnsupportedBootDrivers[Index]);
+                if (RtlEqualUnicodeString(&DriverNode->Name, &Name, TRUE))
+                {
+                    TRACE("Skipping unsupported ARM64 boot driver '%wZ'\n", &DriverNode->Name);
+                    Skip = TRUE;
+                    break;
+                }
+            }
+            if (Skip)
+            {
+                RemoveEntryList(&BootDriver->Link);
+                continue;
+            }
+        }
+#endif
 
         TRACE("BootDriver %wZ DTE %08X RegPath: %wZ\n",
               &BootDriver->FilePath, BootDriver->LdrEntry,
@@ -1692,6 +1720,40 @@ LoadAndBootWindowsCommon(
      * so the kernel debugger can maintain a continuous timestamp.
      */
     WinLdrSystemBlock->LoaderPerformanceData.EndTime = DbgQueryMicrosecondsSinceBoot();
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* ARM64: Direct PL011 UART output for debugging kernel jump */
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "\r\n[ARM64] About to jump to kernel entry: ";
+        const char *end = "\r\n";
+        const char *hex = "0123456789ABCDEF";
+        ULONG_PTR addr = (ULONG_PTR)KiSystemStartup;
+
+        /* Wait for TXFF and print message */
+        while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+        while (*msg) { while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {} Uart[0] = *msg++; }
+
+        /* Print address as hex */
+        for (int i = 60; i >= 0; i -= 4) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = hex[(addr >> i) & 0xF];
+        }
+
+        /* Print LoaderBlockVA address */
+        while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {} Uart[0] = ' ';
+        while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {} Uart[0] = 'L';
+        while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {} Uart[0] = 'B';
+        while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {} Uart[0] = '=';
+        addr = (ULONG_PTR)LoaderBlockVA;
+        for (int i = 60; i >= 0; i -= 4) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = hex[(addr >> i) & 0xF];
+        }
+
+        while (*end) { while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {} Uart[0] = *end++; }
+    }
+#endif
 
     /* Pass control */
     (*KiSystemStartup)(LoaderBlockVA);

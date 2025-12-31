@@ -410,6 +410,9 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     PsIdleProcess->ProcessLock.Value = 0;
     ExInitializeRundownProtection(&PsIdleProcess->RundownProtect);
 
+    /* Initialize the address creation lock (required for MM operations) */
+    KeInitializeGuardedMutex(&PsIdleProcess->AddressCreationLock);
+
     /* Initialize the thread list */
     InitializeListHead(&PsIdleProcess->ThreadListHead);
 

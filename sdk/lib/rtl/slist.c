@@ -81,7 +81,7 @@ RtlInitializeSListHead(
     /* On Itanium we store the region in the list head */
     SListHead->Region = (ULONG_PTR)SListHead & VRN_MASK;
 #else
-    /* On amd64 we don't need to store anything */
+    /* On amd64 and ARM64 we must initialize both fields to zero */
     SListHead->Region = 0;
 #endif /* _IA64_ */
 
@@ -94,6 +94,12 @@ RtlInitializeSListHead(
 #endif
 #endif /* _WIN64 */
 
+    /*
+     * CRITICAL: On ARM64 and AMD64, the SLIST_HEADER is a 16-byte structure
+     * with separate Alignment and Region fields. Setting only Alignment = 0
+     * is insufficient because Region is a separate 64-bit field that must
+     * also be explicitly zeroed (already done above for _WIN64).
+     */
     SListHead->Alignment = 0;
 }
 
@@ -275,6 +281,32 @@ RtlInterlockedPushEntrySList(
     PSLIST_ENTRY FirstEntry;
     BOOLEAN exchanged;
 
+    /*
+     * ARM64 CRITICAL: Check for NULL parameters before any operations.
+     */
+    if (SListHead == NULL)
+    {
+        USHORT Frames;
+        PVOID Stack[8];
+        USHORT i;
+
+        Frames = RtlCaptureStackBackTrace(1, RTL_NUMBER_OF(Stack), Stack, NULL);
+        DPRINT1("RtlInterlockedPushEntrySList: NULL SListHead passed - caller bug!\n");
+        DPRINT1("    SListEntry=%p\n", SListEntry);
+        DPRINT1("    Backtrace (%u frames):\n", Frames);
+        for (i = 0; i < Frames; i++)
+        {
+            DPRINT1("      [%u] %p\n", i, Stack[i]);
+        }
+        return NULL;
+    }
+    if (SListEntry == NULL)
+    {
+        DPRINT1("RtlInterlockedPushEntrySList: NULL SListEntry passed - caller bug!\n");
+        DPRINT1("    SListHead=%p\n", SListHead);
+        return NULL;
+    }
+
     ASSERT(((ULONG_PTR)SListHead & 0xF) == 0);
     ASSERT(((ULONG_PTR)SListEntry & 0xF) == 0);
 
@@ -313,6 +345,17 @@ RtlInterlockedPopEntrySList(
     SLIST_HEADER OldHeader, NewHeader;
     PSLIST_ENTRY FirstEntry, NextEntry;
     BOOLEAN exchanged;
+
+    /*
+     * ARM64 CRITICAL: Check for NULL SListHead before any operations.
+     * This can happen if lookaside lists are not properly initialized
+     * or if there's corruption in the PRCB lookaside pointer arrays.
+     */
+    if (SListHead == NULL)
+    {
+        DPRINT1("RtlInterlockedPopEntrySList: NULL SListHead passed - caller bug!\n");
+        return NULL;
+    }
 
     ASSERT(((ULONG_PTR)SListHead & 0xF) == 0);
 
@@ -356,6 +399,15 @@ RtlInterlockedFlushSList(
     SLIST_HEADER OldHeader, NewHeader;
     PSLIST_ENTRY FirstEntry;
     BOOLEAN exchanged;
+
+    /*
+     * ARM64 CRITICAL: Check for NULL SListHead before any operations.
+     */
+    if (SListHead == NULL)
+    {
+        DPRINT1("RtlInterlockedFlushSList: NULL SListHead passed - caller bug!\n");
+        return NULL;
+    }
 
     ASSERT(((ULONG_PTR)SListHead & 0xF) == 0);
 

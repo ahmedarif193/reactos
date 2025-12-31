@@ -15,7 +15,8 @@
 
 POBJECT_TYPE IoCompletionType;
 
-GENERAL_LOOKASIDE IoCompletionPacketLookaside;
+/* ARM64: Ensure proper SLIST_HEADER alignment */
+DECLSPEC_ALIGN(16) GENERAL_LOOKASIDE IoCompletionPacketLookaside;
 
 GENERIC_MAPPING IopCompletionMapping =
 {
@@ -65,9 +66,22 @@ IopFreeMiniPacket(PIOP_MINI_COMPLETION_PACKET Packet)
     PKPRCB Prcb = KeGetCurrentPrcb();
     PNPAGED_LOOKASIDE_LIST List;
 
-    /* Use the P List */
+    /*
+     * ARM64 CRITICAL: Check if lookaside list is initialized before use.
+     * The PRCB's PPLookasideList array may be NULL if called before
+     * IopInitLookasideLists initialization completes.
+     */
     List = (PNPAGED_LOOKASIDE_LIST)Prcb->
             PPLookasideList[LookasideCompletionList].P;
+    if (!List)
+    {
+        DPRINT1("IO: IopFreeMiniPacket: NULL P list, Prcb=%p Packet=%p - freeing to pool\n",
+                Prcb, Packet);
+        /* Fall back to direct pool free */
+        ExFreePool(Packet);
+        return;
+    }
+
     List->L.TotalFrees++;
 
     /* Check if the Free was within the Depth or not */
@@ -79,6 +93,15 @@ IopFreeMiniPacket(PIOP_MINI_COMPLETION_PACKET Packet)
         /* Use the L List */
         List = (PNPAGED_LOOKASIDE_LIST)Prcb->
                 PPLookasideList[LookasideCompletionList].L;
+        if (!List)
+        {
+            DPRINT1("IO: IopFreeMiniPacket: NULL L list, Prcb=%p Packet=%p - freeing to pool\n",
+                    Prcb, Packet);
+            /* Fall back to direct pool free */
+            ExFreePool(Packet);
+            return;
+        }
+
         List->L.TotalFrees++;
 
         /* Check if the Free was within the Depth or not */
@@ -156,35 +179,53 @@ IoSetIoCompletion(IN PVOID IoCompletion,
     PKPRCB Prcb = KeGetCurrentPrcb();
     PIOP_MINI_COMPLETION_PACKET Packet;
 
-    /* Get the P List */
+    /*
+     * ARM64 CRITICAL: Check if lookaside list is initialized before use.
+     * The PRCB's PPLookasideList array may be NULL if called before
+     * IopInitLookasideLists initialization completes.
+     */
     List = (PNPAGED_LOOKASIDE_LIST)Prcb->
             PPLookasideList[LookasideCompletionList].P;
 
-    /* Try to allocate the Packet */
-    List->L.TotalAllocates++;
-    Packet = (PVOID)InterlockedPopEntrySList(&List->L.ListHead);
-
-    /* Check if that failed, use the L list if it did */
-    if (!Packet)
+    if (List)
     {
-        /* Let the balancer know */
-        List->L.AllocateMisses++;
-
-        /* Get L List */
-        List = (PNPAGED_LOOKASIDE_LIST)Prcb->
-                PPLookasideList[LookasideCompletionList].L;
-
         /* Try to allocate the Packet */
         List->L.TotalAllocates++;
         Packet = (PVOID)InterlockedPopEntrySList(&List->L.ListHead);
+
+        /* Check if that failed, use the L list if it did */
+        if (!Packet)
+        {
+            /* Let the balancer know */
+            List->L.AllocateMisses++;
+
+            /* Get L List */
+            List = (PNPAGED_LOOKASIDE_LIST)Prcb->
+                    PPLookasideList[LookasideCompletionList].L;
+
+            if (List)
+            {
+                /* Try to allocate the Packet */
+                List->L.TotalAllocates++;
+                Packet = (PVOID)InterlockedPopEntrySList(&List->L.ListHead);
+                if (!Packet)
+                {
+                    /* Let the balancer know */
+                    List->L.AllocateMisses++;
+                }
+            }
+        }
+    }
+    else
+    {
+        DPRINT1("IO: IoSetIoCompletion: NULL P list, Prcb=%p - allocating from pool\n",
+                Prcb);
+        Packet = NULL;
     }
 
-    /* Still failed, use pool */
+    /* Still failed or no lookaside list, use pool */
     if (!Packet)
     {
-        /* Let the balancer know */
-        List->L.AllocateMisses++;
-
         /* Allocate from Nonpaged Pool */
         Packet = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Packet), IOC_TAG);
     }

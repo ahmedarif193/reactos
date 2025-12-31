@@ -80,9 +80,10 @@ extern KSPIN_LOCK IopTimerLock;
 extern PDEVICE_OBJECT IopErrorLogObject;
 extern BOOLEAN PnPBootDriversInitialized;
 
-GENERAL_LOOKASIDE IoLargeIrpLookaside;
-GENERAL_LOOKASIDE IoSmallIrpLookaside;
-GENERAL_LOOKASIDE IopMdlLookasideList;
+/* ARM64: Ensure proper SLIST_HEADER alignment */
+DECLSPEC_ALIGN(16) GENERAL_LOOKASIDE IoLargeIrpLookaside;
+DECLSPEC_ALIGN(16) GENERAL_LOOKASIDE IoSmallIrpLookaside;
+DECLSPEC_ALIGN(16) GENERAL_LOOKASIDE IopMdlLookasideList;
 extern GENERAL_LOOKASIDE IoCompletionPacketLookaside;
 
 PLOADER_PARAMETER_BLOCK IopLoaderBlock;

@@ -571,12 +571,30 @@ WinLdrSetProcessorContext(
     _In_ USHORT OperatingSystemVersion)
 {
 #if defined(_M_ARM64) || defined(__aarch64__)
+    /* Direct PL011 UART output - works after ExitBootServices */
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "\r\n[PL011] WinLdrSetProcessorContext entered\r\n";
+        while (*msg) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = *msg++;
+        }
+    }
     UartPuts("ARM64: WinLdrSetProcessorContext called\n");
 #endif
 
     Arm64ConfigureProcessorContext(OperatingSystemVersion);
 
 #if defined(_M_ARM64) || defined(__aarch64__)
+    /* Direct PL011 UART output after page table enable */
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "[PL011] WinLdrSetProcessorContext completed\r\n";
+        while (*msg) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = *msg++;
+        }
+    }
     UartPuts("ARM64: WinLdrSetProcessorContext completed\n");
 #endif
 }
@@ -667,6 +685,36 @@ Arm64AllocateKernelDataStructures(VOID)
 
     /* Zero out the entire data block for clean initialization */
     RtlZeroMemory(KernelDataBlock, sizeof(ARM64_KERNEL_DATA));
+
+    /*
+     * Initialize the KTHREAD structure's stack fields.
+     * The kernel expects these to be set up by the loader.
+     * KTHREAD layout (ARM64/x64):
+     *   +0x28: InitialStack  (top of stack)
+     *   +0x30: StackLimit    (bottom of stack / guard)
+     *   +0x38: StackBase     (same as InitialStack)
+     *   +0x58: KernelStack   (current stack pointer)
+     */
+    {
+        PULONG_PTR ThreadPtr = (PULONG_PTR)KernelDataBlock->InitialThread;
+        ULONG_PTR StackBase = (ULONG_PTR)KernelDataBlock->KernelStack;
+        ULONG_PTR StackTop = StackBase + KERNEL_STACK_SIZE;
+        ULONG_PTR StackLimit = StackBase;
+
+        /* Ensure 16-byte alignment for stack top */
+        StackTop = StackTop & ~(ULONG_PTR)0xF;
+
+        /* Set KTHREAD stack fields using raw offsets */
+        ThreadPtr[0x28 / sizeof(ULONG_PTR)] = StackTop;     /* InitialStack */
+        ThreadPtr[0x30 / sizeof(ULONG_PTR)] = StackLimit;   /* StackLimit */
+        ThreadPtr[0x38 / sizeof(ULONG_PTR)] = StackTop;     /* StackBase */
+        ThreadPtr[0x58 / sizeof(ULONG_PTR)] = StackTop;     /* KernelStack */
+
+        TRACE("ARM64: InitialThread stack initialized: InitialStack=0x%llx StackLimit=0x%llx KernelStack=0x%llx\n",
+              (unsigned long long)StackTop,
+              (unsigned long long)StackLimit,
+              (unsigned long long)StackTop);
+    }
 
     TRACE("ARM64: Successfully allocated kernel data structures at %p\n", KernelDataBlock);
     TRACE("ARM64: KernelStack at %p, PanicStack at %p, InterruptStack at %p\n",

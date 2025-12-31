@@ -45,9 +45,10 @@ BOOLEAN MmLargeSystemCache = FALSE;
 LIST_ENTRY DirtyVacbListHead;
 static LIST_ENTRY VacbLruListHead;
 
-NPAGED_LOOKASIDE_LIST iBcbLookasideList;
-static NPAGED_LOOKASIDE_LIST SharedCacheMapLookasideList;
-static NPAGED_LOOKASIDE_LIST VacbLookasideList;
+/* ARM64: Ensure proper SLIST_HEADER alignment */
+DECLSPEC_ALIGN(16) NPAGED_LOOKASIDE_LIST iBcbLookasideList;
+DECLSPEC_ALIGN(16) static NPAGED_LOOKASIDE_LIST SharedCacheMapLookasideList;
+DECLSPEC_ALIGN(16) static NPAGED_LOOKASIDE_LIST VacbLookasideList;
 
 /* Internal vars (MS):
  * - Threshold above which lazy writer will start action

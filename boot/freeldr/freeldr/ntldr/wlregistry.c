@@ -284,9 +284,25 @@ BOOLEAN WinLdrScanSystemHive(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock,
     DECLARE_UNICODE_STRING_SIZE(OemHalFileName, MAX_PATH);
     CHAR SearchPath[1024];
 
-    if (LoaderBlock->Extension && LoaderBlock->Extension->BootViaEFI)
     {
-        WinLdrDisableLegacyBootDriversForUefi();
+        BOOLEAN DisableLegacyBootDrivers = FALSE;
+
+        if (LoaderBlock->Extension && LoaderBlock->Extension->BootViaEFI)
+        {
+            DisableLegacyBootDrivers = TRUE;
+        }
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /*
+         * ARM64 never supports legacy x86 boot services like UHCI, VGA, or floppy.
+         * Force-disable them even if the firmware flag is not set.
+         */
+        DisableLegacyBootDrivers = TRUE;
+#endif
+
+        if (DisableLegacyBootDrivers)
+        {
+            WinLdrDisableLegacyBootDriversForUefi();
+        }
     }
 
     /* Scan registry and prepare boot drivers list */

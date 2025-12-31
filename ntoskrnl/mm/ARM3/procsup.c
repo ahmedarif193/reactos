@@ -23,7 +23,8 @@ SIZE_T MmTotalCommitLimitMaximum;
 
 ULONG MmProcessColorSeed = 0x12345678;
 ULONG MmMaximumDeadKernelStacks = 5;
-SLIST_HEADER MmDeadStackSListHead;
+/* ARM64/AMD64 SLIST_HEADER is 16 bytes and MUST be 16-byte aligned. */
+DECLSPEC_ALIGN(16) SLIST_HEADER MmDeadStackSListHead;
 ULONG MmRotatingUniprocessorNumber = 0;
 
 /* PRIVATE FUNCTIONS **********************************************************/

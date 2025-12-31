@@ -27,7 +27,8 @@ typedef struct {
 
 ULONG TunnelMaxEntries = 256;
 ULONG TunnelMaxAge = 15;
-PAGED_LOOKASIDE_LIST TunnelLookasideList;
+/* ARM64: Ensure proper SLIST_HEADER alignment */
+DECLSPEC_ALIGN(16) PAGED_LOOKASIDE_LIST TunnelLookasideList;
 
 #define DEFAULT_EXTRA_SIZE (72)
 #define DEFAULT_ENTRY_SIZE (sizeof(TUNNEL_NODE_ENTRY) + DEFAULT_EXTRA_SIZE)

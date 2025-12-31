@@ -21,7 +21,8 @@ typedef struct _RTL_RANGE_ENTRY
     RTL_RANGE Range;
 } RTL_RANGE_ENTRY, *PRTL_RANGE_ENTRY;
 
-PAGED_LOOKASIDE_LIST RtlpRangeListEntryLookasideList;
+/* ARM64: Ensure proper SLIST_HEADER alignment */
+DECLSPEC_ALIGN(16) PAGED_LOOKASIDE_LIST RtlpRangeListEntryLookasideList;
 SIZE_T RtlpAllocDeallocQueryBufferSize = 128;
 
 /* FUNCTIONS *****************************************************************/

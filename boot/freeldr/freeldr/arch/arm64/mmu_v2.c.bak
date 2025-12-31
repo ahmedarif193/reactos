@@ -196,15 +196,11 @@ static inline void tlbi_va_all_levels(ULONGLONG va)
 
 /*
  * PTE_TABLE_ATTRS: Standard attributes for table descriptors (L0/L1/L2).
- * NOTE: AF bit is only valid for LEAF entries (blocks/pages), not for table
- * descriptors. The AF bit (bit 10) in table descriptors is reserved/ignored.
- * Table descriptor format:
- *   - Bits [1:0] = 0b11 (table type)
- *   - Bits [11:2] are ignored by hardware
- *   - Bits [47:12] = next-level table address
- *   - Bits [63:59,58:52] have specific meanings (APTable, XNTable, etc.)
+ * Includes AF bit because when the self-map is used, table entries are accessed
+ * as data through the recursive page table walk, requiring AF to be set to avoid
+ * Access Flag faults.
  */
-#define PTE_TABLE_ATTRS         (PTE_TYPE_VALID | PTE_TYPE_TABLE)
+#define PTE_TABLE_ATTRS         (PTE_TYPE_VALID | PTE_TYPE_TABLE | PTE_BLOCK_AF)
 
 #define PTE_BLOCK_MEMTYPE_MASK  (7ULL << 2)
 
@@ -1305,24 +1301,8 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
             l1_table = arm64_l1_page_tables[l0_idx];
         }
 
-        /*
-         * CRITICAL: Disable large block mappings for kernel space to ensure
-         * the recursive self-map functions correctly.
-         *
-         * The self-map at L0[493] points back to L0 itself. When the kernel
-         * accesses a PTE via the self-map (e.g., L0[493]->L1[256]->L2[1]->L3[18]),
-         * it's actually traversing L0[256]->L1[1]->L2[18]. For this to work,
-         * ALL intermediate entries must be TABLE descriptors, not BLOCK descriptors.
-         *
-         * If we create 1GB or 2MB blocks in kernel space, the self-map breaks
-         * because it encounters a BLOCK descriptor when it expects a TABLE descriptor.
-         *
-         * For user space (TTBR0), large blocks are fine since there's no self-map.
-         */
-
-        /* 1GiB block if possible (ONLY for user space) */
-        if (!is_kernel &&
-            (va % 0x40000000ULL) == 0 && (pa % 0x40000000ULL) == 0 && remaining >= 0x40000000ULL)
+        /* 1GiB block if possible */
+        if ((va % 0x40000000ULL) == 0 && (pa % 0x40000000ULL) == 0 && remaining >= 0x40000000ULL)
         {
             if (!DESC_IS_TABLE(l1_table[l1_idx])) {
                 pte_replace_break_before_make(&l1_table[l1_idx], pa | PTE_TYPE_VALID | PTE_TYPE_BLOCK | attrs);
@@ -1332,9 +1312,8 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
             }
         }
 
-        /* 2MiB block if possible (ONLY for user space) */
-        if (!is_kernel &&
-            (va & 0x1FFFFFULL) == 0 && (pa & 0x1FFFFFULL) == 0 && remaining >= 0x200000ULL)
+        /* 2MiB block if possible */
+        if ((va & 0x1FFFFFULL) == 0 && (pa & 0x1FFFFFULL) == 0 && remaining >= 0x200000ULL)
         {
             BOOLEAN in_pool = is_kernel && (l0_idx >= ARM64_KSEG0_L0_INDEX) &&
                               (l0_idx < (ARM64_KSEG0_L0_INDEX + ARM64_KERNEL_L1_TABLES));
@@ -1909,8 +1888,8 @@ static VOID setup_pgtables(VOID)
     {
         const UINT64 self_idx = (ARM64_SELF_PXE_BASE >> ARM64_PXI_SHIFT) & ARM64_PX_MASK;
         const UINT64 root_pa = phys_from_ptr(arm64_kernel_l0_table);
-        /* Self-map entry: points the page table root back to itself.
-         * This is a table descriptor (not a leaf), so no AF bit. */
+        /* Include AF bit so the recursive self-map works on CPUs without
+         * hardware-managed Access Flag (e.g., Cortex-A72 vs Cortex-A76). */
         const UINT64 self_entry = root_pa | PTE_TABLE_ATTRS;
         UINT64 previous = arm64_kernel_l0_table[self_idx];
 
@@ -1944,51 +1923,6 @@ static VOID setup_pgtables(VOID)
             } else {
                 TRACE("ARM64-SELFMAP: L0[493] verified OK after setup (0x%llx)\n",
                       (unsigned long long)verify_entry);
-            }
-
-            /* Verify that kernel space L0[256] is a table descriptor, not a block */
-            UINT64 l0_256_entry = arm64_kernel_l0_table[256];
-            BOOLEAN is_table = DESC_IS_TABLE(l0_256_entry);
-            BOOLEAN is_block = DESC_IS_BLOCK(l0_256_entry);
-            BOOLEAN is_valid = DESC_VALID(l0_256_entry);
-
-            UartPuts("ARM64-SELFMAP: L0[256] = 0x");
-            UartPutHex64(l0_256_entry);
-            UartPuts(" valid=");
-            UartPutc(is_valid ? '1' : '0');
-            UartPuts(" table=");
-            UartPutc(is_table ? '1' : '0');
-            UartPuts(" block=");
-            UartPutc(is_block ? '1' : '0');
-            UartPuts("\n");
-
-            if (!is_table && is_valid) {
-                ERR("ARM64-SELFMAP: ERROR - L0[256] is not a table descriptor! Entry=0x%llx\n",
-                    (unsigned long long)l0_256_entry);
-                UartPuts("ARM64-SELFMAP: CRITICAL ERROR - L0[256] is not a table!\n");
-            } else if (is_table) {
-                /* Also check L1[1] to ensure it's a table too */
-                UINT64 *l1_table = (UINT64 *)PA_TO_VA(l0_256_entry & ~0xFFFULL);
-                UINT64 l1_1_entry = l1_table[1];
-                BOOLEAN l1_is_table = DESC_IS_TABLE(l1_1_entry);
-                BOOLEAN l1_is_block = DESC_IS_BLOCK(l1_1_entry);
-                BOOLEAN l1_is_valid = DESC_VALID(l1_1_entry);
-
-                UartPuts("ARM64-SELFMAP: L1[1] = 0x");
-                UartPutHex64(l1_1_entry);
-                UartPuts(" valid=");
-                UartPutc(l1_is_valid ? '1' : '0');
-                UartPuts(" table=");
-                UartPutc(l1_is_table ? '1' : '0');
-                UartPuts(" block=");
-                UartPutc(l1_is_block ? '1' : '0');
-                UartPuts("\n");
-
-                if (l1_is_block && !l1_is_table) {
-                    ERR("ARM64-SELFMAP: ERROR - L1[1] is a block descriptor! Entry=0x%llx\n",
-                        (unsigned long long)l1_1_entry);
-                    UartPuts("ARM64-SELFMAP: CRITICAL ERROR - L1[1] should be table, not block!\n");
-                }
             }
         }
     }
@@ -2386,8 +2320,8 @@ static inline VOID Pl011RawPuts(const char *S)
 VOID Arm64EnablePageTables(VOID)
 {
     Pl011RawPuts("[PT] Arm64EnablePageTables START\n");
-    // TRACE("ARM64: Enabling page tables (Safe Switch: MMU Off -> Update -> MMU On)\n");
-    // TRACE("ARM64: PT_EN: Start\n");
+    TRACE("ARM64: Enabling page tables (Safe Switch: MMU Off -> Update -> MMU On)\n");
+    TRACE("ARM64: PT_EN: Start\n");
 
     UINT64 tcr;
     int el = get_effective_el();
@@ -2403,13 +2337,13 @@ VOID Arm64EnablePageTables(VOID)
      */
     if (el == 2 && !el12)
     {
-    // TRACE("ARM64: PT_EN: Forcing EL1 entry state for Windows parity\n");
+        TRACE("ARM64: PT_EN: Forcing EL1 entry state for Windows parity\n");
         Arm64EnsureEl1EntryState();
         el = get_effective_el();
         el12 = use_el12_registers();
         if (el != 1 && !el12)
         {
-    // ERR("ARM64: PT_EN: Unable to transition to EL1, aborting MMU enable\n");
+            ERR("ARM64: PT_EN: Unable to transition to EL1, aborting MMU enable\n");
             return;
         }
     }
@@ -2420,7 +2354,7 @@ VOID Arm64EnablePageTables(VOID)
     Pl011RawPuts("[PT] get_tcr done\n");
 
     /* 1. Read current SCTLR and Disable MMU (M) and Cache (C) */
-    // TRACE("ARM64: PT_EN: Reading SCTLR\n");
+    TRACE("ARM64: PT_EN: Reading SCTLR\n");
     if (el == 1 || el12) {
         if (el12) __asm__ volatile("mrs %0, " SCTLR_EL12_SYSREG : "=r"(sctlr));
         else      __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
@@ -2429,12 +2363,12 @@ VOID Arm64EnablePageTables(VOID)
         __asm__ volatile("mrs %0, sctlr_el2" : "=r"(sctlr));
     }
 
-    // TRACE("ARM64: PT_EN: Orig SCTLR=0x%llx\n", (unsigned long long)sctlr);
+    TRACE("ARM64: PT_EN: Orig SCTLR=0x%llx\n", (unsigned long long)sctlr);
 
     UINT64 sctlr_off = sctlr & ~(SCTLR_EL1_M | SCTLR_EL1_C);
     
     Pl011RawPuts("[PT] Disabling MMU\n");
-    // TRACE("ARM64: PT_EN: Disabling MMU\n");
+    TRACE("ARM64: PT_EN: Disabling MMU\n");
     if (el == 1 || el12) {
         if (el12) __asm__ volatile("msr " SCTLR_EL12_SYSREG ", %0" :: "r"(sctlr_off) : "memory");
         else      __asm__ volatile("msr sctlr_el1, %0" :: "r"(sctlr_off) : "memory");
@@ -2444,7 +2378,7 @@ VOID Arm64EnablePageTables(VOID)
     }
     ARM64_ISB();
     Pl011RawPuts("[PT] MMU disabled, ISB done\n");
-    // TRACE("ARM64: PT_EN: MMU Disabled\n");
+    TRACE("ARM64: PT_EN: MMU Disabled\n");
 
     /* 2. Update Translation Registers (MAIR first, then TCR, then TTBRs) */
     Pl011RawPuts("[PT] Getting page table ptrs\n");
@@ -2456,7 +2390,7 @@ VOID Arm64EnablePageTables(VOID)
     UINT64 mair = MEMORY_ATTRIBUTES;
 
     Pl011RawPuts("[PT] Writing MAIR\n");
-    // TRACE("ARM64: PT_EN: Writing MAIR\n");
+    TRACE("ARM64: PT_EN: Writing MAIR\n");
     if (el == 1 || el12) {
         if (el12) {
             __asm__ volatile("msr " MAIR_EL12_SYSREG  ", %0" :: "r"(mair)   : "memory");
@@ -2468,7 +2402,7 @@ VOID Arm64EnablePageTables(VOID)
         __asm__ volatile("msr mair_el2, %0"  :: "r"(mair)   : "memory");
     }
     Pl011RawPuts("[PT] Writing TCR\n");
-    // TRACE("ARM64: PT_EN: Writing TCR\n");
+    TRACE("ARM64: PT_EN: Writing TCR\n");
     if (el == 1 || el12) {
         if (el12) {
             __asm__ volatile("msr " TCR_EL12_SYSREG   ", %0" :: "r"(tcr)    : "memory");
@@ -2480,7 +2414,7 @@ VOID Arm64EnablePageTables(VOID)
         __asm__ volatile("msr tcr_el2, %0"   :: "r"(tcr)    : "memory");
     }
     Pl011RawPuts("[PT] Writing TTBRs\n");
-    // TRACE("ARM64: PT_EN: Writing TTBRs\n");
+    TRACE("ARM64: PT_EN: Writing TTBRs\n");
     if (el == 1 || el12) {
         if (el12) {
             Pl011RawPuts("[PT] TTBR0_EL12 write\n");
@@ -2504,14 +2438,14 @@ VOID Arm64EnablePageTables(VOID)
            If strict EL2 separation is needed, TTBR1 might be ignored or used differently. */
     }
     Pl011RawPuts("[PT] TTBRs written\n");
-    // TRACE("ARM64: PT_EN: TTBRs written\n");
+    TRACE("ARM64: PT_EN: TTBRs written\n");
 
     Pl011RawPuts("[PT] DSB_ISH\n");
     ARM64_DSB_ISH();
     Pl011RawPuts("[PT] ISB\n");
     ARM64_ISB();
     Pl011RawPuts("[PT] barriers done\n");
-    // TRACE("ARM64: PT_EN: TLB Invalidated\n");
+    TRACE("ARM64: PT_EN: TLB Invalidated\n");
 
     Pl011RawPuts("[PT] Starting diagnostics\n");
     /* ========== DIAGNOSTIC: Verify identity mapping before MMU enable ========== */
@@ -2592,7 +2526,7 @@ VOID Arm64EnablePageTables(VOID)
      * to the translation table walker.
      */
     Pl011RawPuts("[PT] Cleaning dcache\n");
-    // TRACE("ARM64: PT_EN: Cleaning all data caches for page table coherency\n");
+    TRACE("ARM64: PT_EN: Cleaning all data caches for page table coherency\n");
     __asm_dcache_all(0);  /* 0 = clean & invalidate */
     Pl011RawPuts("[PT] dcache cleaned, DSB\n");
     ARM64_DSB_ISH();
@@ -2629,7 +2563,7 @@ VOID Arm64EnablePageTables(VOID)
         __asm_dcache_all(0);
         ARM64_DSB_ISH();
     }
-    // TRACE("ARM64: PT_EN: Re-enabling MMU (WXN cleared), SCTLR=0x%llx\n", (unsigned long long)sctlr_on);
+    TRACE("ARM64: PT_EN: Re-enabling MMU (WXN cleared), SCTLR=0x%llx\n", (unsigned long long)sctlr_on);
     if (el == 1 || el12) {
         if (el12) {
             Pl011RawPuts("[PT] Writing SCTLR_EL12\n");
@@ -2647,8 +2581,8 @@ VOID Arm64EnablePageTables(VOID)
     ARM64_ISB();
     Pl011RawPuts("[PT] MMU enabled!\n");
 
-    // TRACE("ARM64: Page tables enabled (SCTLR=0x%llx)\n", (unsigned long long)sctlr_on);
-    // TRACE("ARM64: PT_EN: End\n");
+    TRACE("ARM64: Page tables enabled (SCTLR=0x%llx)\n", (unsigned long long)sctlr_on);
+    TRACE("ARM64: PT_EN: End\n");
 }
 
 static VOID ensure_page_tables_initialized(VOID)
@@ -2759,26 +2693,6 @@ VOID Arm64SetupKernelHandoffMMU(VOID)
             UartPuts("ARM64-SELFMAP: Attempted repair - set L0[493] back to root\n");
         } else {
             UartPuts(" OK (points to root)\n");
-
-            /* Also verify L0[256] and L1[1] are table descriptors for proper self-map operation */
-            UINT64 l0_256_entry = arm64_kernel_l0_table[256];
-            if (DESC_IS_TABLE(l0_256_entry)) {
-                UINT64 *l1_table = (UINT64 *)PA_TO_VA(l0_256_entry & ~0xFFFULL);
-                UINT64 l1_1_entry = l1_table[1];
-                UartPuts("ARM64-SELFMAP: Handoff check - L0[256]=0x");
-                UartPutHex64(l0_256_entry);
-                UartPuts(" L1[1]=0x");
-                UartPutHex64(l1_1_entry);
-                if (DESC_IS_BLOCK(l1_1_entry)) {
-                    UartPuts(" ERROR: L1[1] is BLOCK!");
-                    ERR("ARM64-SELFMAP: Handoff ERROR - L1[1] is block, not table!\n");
-                } else if (DESC_IS_TABLE(l1_1_entry)) {
-                    UartPuts(" OK (tables)");
-                }
-                UartPuts("\n");
-            } else {
-                UartPuts("ARM64-SELFMAP: Handoff ERROR - L0[256] is not a table!\n");
-            }
         }
     }
 
