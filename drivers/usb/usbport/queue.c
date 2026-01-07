@@ -1398,6 +1398,9 @@ USBPORT_AbortEndpoint(IN PDEVICE_OBJECT FdoDevice,
 
     KeReleaseSpinLock(&Endpoint->EndpointSpinLock, Endpoint->EndpointOldIrql);
 
+    /* Free any cached reusable transfer on abort */
+    USBPORT_FreeReusableTransfer(Endpoint);
+
     USBPORT_InvalidateEndpointHandler(FdoDevice,
                                       Endpoint,
                                       INVALIDATE_ENDPOINT_INT_NEXT_SOF);

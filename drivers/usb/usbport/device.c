@@ -19,6 +19,83 @@ static
 VOID
 USBPORT_ComputeLpmPolicy(IN PUSBPORT_DEVICE_HANDLE DeviceHandle);
 
+#if DBG
+#define USBPORT_GUARD_HEAD 0x47445255u /* 'URDG' */
+#define USBPORT_GUARD_TAIL 0x544C4755u /* 'UGLT' */
+#define USBPORT_GUARD_MAX_SIZE 4096u
+
+typedef struct _USBPORT_GUARD_HEADER
+{
+    ULONG Size;
+    ULONG Guard;
+} USBPORT_GUARD_HEADER, *PUSBPORT_GUARD_HEADER;
+
+static
+PUCHAR
+USBPORT_AllocGuardedDescriptor(
+    _In_ ULONG Size,
+    _In_ PCSTR Name)
+{
+    SIZE_T Total = sizeof(USBPORT_GUARD_HEADER) + (SIZE_T)Size + sizeof(ULONG);
+    PUSBPORT_GUARD_HEADER Header;
+    PUCHAR Payload;
+
+    Header = ExAllocatePoolWithTag(NonPagedPool, Total, USB_PORT_TAG);
+    if (!Header)
+        return NULL;
+
+    Header->Size = Size;
+    Header->Guard = USBPORT_GUARD_HEAD;
+    Payload = (PUCHAR)(Header + 1);
+    *(PULONG)(Payload + Size) = USBPORT_GUARD_TAIL;
+    RtlZeroMemory(Payload, Size);
+    DPRINT1("USBPORT_GUARD alloc %s size=%lu buf=%p\n", Name, Size, Payload);
+    return Payload;
+}
+
+static
+VOID
+USBPORT_FreeGuardedDescriptor(
+    _In_opt_ PUCHAR Buffer,
+    _In_ PCSTR Name)
+{
+    PUSBPORT_GUARD_HEADER Header;
+    ULONG Size;
+    ULONG Tail;
+
+    if (!Buffer)
+        return;
+
+    Header = (PUSBPORT_GUARD_HEADER)(Buffer - sizeof(USBPORT_GUARD_HEADER));
+    Size = Header->Size;
+    Tail = 0;
+
+    if (Header->Guard != USBPORT_GUARD_HEAD || Size > USBPORT_GUARD_MAX_SIZE)
+    {
+        DPRINT1("USBPORT_GUARD corrupt %s buf=%p head=%08lx size=%lu\n",
+                Name,
+                Buffer,
+                Header->Guard,
+                Size);
+    }
+    else
+    {
+        Tail = *(PULONG)(Buffer + Size);
+        if (Tail != USBPORT_GUARD_TAIL)
+        {
+            DPRINT1("USBPORT_GUARD corrupt %s buf=%p size=%lu head=%08lx tail=%08lx\n",
+                    Name,
+                    Buffer,
+                    Size,
+                    Header->Guard,
+                    Tail);
+        }
+    }
+
+    ExFreePoolWithTag(Header, USB_PORT_TAG);
+}
+#endif
+
 NTSTATUS
 NTAPI
 USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
@@ -43,6 +120,16 @@ USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
            Length,
            TransferedLen,
            pUSBDStatus);
+#if DBG
+    if (SetupPacket &&
+        SetupPacket->bRequest == USB_REQUEST_GET_DESCRIPTOR &&
+        SetupPacket->wValue.HiByte == USB_BOS_DESCRIPTOR_TYPE)
+    {
+        DPRINT1("USBPORT_SendSetupPacket: BOS GET_DESCRIPTOR len=%lu buf=%p\n",
+                Length,
+                Buffer);
+    }
+#endif
 
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
 
@@ -1274,9 +1361,15 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
     Endpoint = PipeHandle->Endpoint;
 
     /* Allocate enough space for the full device descriptor, not just MPS0. */
+#if DBG
+    DeviceDescriptor = (PUSB_DEVICE_DESCRIPTOR)USBPORT_AllocGuardedDescriptor(
+        sizeof(USB_DEVICE_DESCRIPTOR),
+        "DEV_DESC");
+#else
     DeviceDescriptor = ExAllocatePoolWithTag(NonPagedPool,
                                              sizeof(USB_DEVICE_DESCRIPTOR),
                                              USB_PORT_TAG);
+#endif
 
     if (!DeviceDescriptor)
     {
@@ -1469,7 +1562,11 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
 
 PostDescriptor:
 
+#if DBG
+    USBPORT_FreeGuardedDescriptor((PUCHAR)DeviceDescriptor, "DEV_DESC");
+#else
     ExFreePoolWithTag(DeviceDescriptor, USB_PORT_TAG);
+#endif
 
     if (NT_SUCCESS(Status) && (TransferedLen >= DescriptorMinSize))
     {
@@ -1966,13 +2063,23 @@ USBPORT_FetchBosDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
     }
 
     BosTotalLength = BosHeader.wTotalLength;
+#if DBG
+    DPRINT1("USBPORT_FetchBosDescriptor: BOS total=%lu numcaps=%u headerlen=%lu\n",
+            BosTotalLength,
+            BosHeader.bNumDeviceCaps,
+            Length);
+#endif
 
     if (BosTotalLength > 512)
         BosTotalLength = 512;
 
+#if DBG
+    BosBuffer = USBPORT_AllocGuardedDescriptor(BosTotalLength, "BOS_DESC");
+#else
     BosBuffer = ExAllocatePoolWithTag(NonPagedPool,
                                       BosTotalLength,
                                       USB_PORT_TAG);
+#endif
     if (!BosBuffer)
         return;
 
@@ -2071,7 +2178,11 @@ USBPORT_FetchBosDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
     }
 
 Done:
+#if DBG
+    USBPORT_FreeGuardedDescriptor(BosBuffer, "BOS_DESC");
+#else
     ExFreePoolWithTag(BosBuffer, USB_PORT_TAG);
+#endif
 }
 
 static

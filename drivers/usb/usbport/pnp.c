@@ -15,6 +15,20 @@
 
 IO_COMPLETION_ROUTINE USBPORT_FdoStartCompletion;
 
+#if (NTDDI_VERSION < NTDDI_VISTA)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoConnectInterruptEx(
+    _Inout_ PIO_CONNECT_INTERRUPT_PARAMETERS Parameters);
+
+NTKERNELAPI
+VOID
+NTAPI
+IoDisconnectInterruptEx(
+    _In_ PIO_DISCONNECT_INTERRUPT_PARAMETERS Parameters);
+#endif
+
 typedef NTSTATUS (NTAPI *PFN_IO_CONNECT_INTERRUPT_EX)(PIO_CONNECT_INTERRUPT_PARAMETERS Parameters);
 typedef VOID (NTAPI *PFN_IO_DISCONNECT_INTERRUPT_EX)(PIO_DISCONNECT_INTERRUPT_PARAMETERS Parameters);
 
@@ -38,6 +52,11 @@ USBPORT_EnsureInterruptApis(VOID)
     RtlInitUnicodeString(&RoutineName, L"IoDisconnectInterruptEx");
     UsbPortIoDisconnectInterruptEx =
         (PFN_IO_DISCONNECT_INTERRUPT_EX)MmGetSystemRoutineAddress(&RoutineName);
+
+    if (!UsbPortIoConnectInterruptEx)
+        UsbPortIoConnectInterruptEx = IoConnectInterruptEx;
+    if (!UsbPortIoDisconnectInterruptEx)
+        UsbPortIoDisconnectInterruptEx = IoDisconnectInterruptEx;
 
     UsbPortInterruptApiResolved = TRUE;
 }
@@ -1204,6 +1223,8 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
         }
         else
         {
+            NTSTATUS ConnectStatus = Status;
+
             if (FdoExtension->InterruptMessageInfo && UsbPortIoDisconnectInterruptEx)
             {
                 IO_DISCONNECT_INTERRUPT_PARAMETERS DisconnectParameters;
@@ -1218,6 +1239,10 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
             FdoExtension->MessageInterruptsEnabled = FALSE;
             FdoExtension->MessageInterruptCount = 0;
             Status = STATUS_UNSUCCESSFUL;
+
+            DPRINT1("USBPORT_StartDevice: IoConnectInterruptEx failed (Status=0x%lx MsgInfo=%p)\n",
+                    ConnectStatus,
+                    FdoExtension->InterruptMessageInfo);
         }
     }
     else

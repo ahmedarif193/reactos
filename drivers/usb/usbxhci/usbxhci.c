@@ -1125,24 +1125,23 @@ XHCI_ProgramDcbaaCrcrAndConfig(
 #if DBG
     {
         ULONGLONG HwDcbaa;
-        ULONGLONG HwCrcr;
 
         HwDcbaa = ((ULONGLONG)XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->DcbaapHigh) << 32) |
                   XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->DcbaapLow);
-        HwCrcr = ((ULONGLONG)XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->CrCrHigh) << 32) |
-                 (XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->CrCrLow) & ~0x3FULL);
 
-        if (HwDcbaa != Dcbaa || (HwCrcr & ~0x3FULL) != (Crcr & ~0x3FULL))
+        if (HwDcbaa != Dcbaa)
         {
-            DPRINT1("usbxhci: DCBAA/CRCR mismatch after program "
-                    "(expected DCBAA=%I64x CRCR=%I64x, hw DCBAA=%I64x CRCR=%I64x)\n",
+            DPRINT1("usbxhci: DCBAA mismatch after program "
+                    "(expected DCBAA=%I64x, hw DCBAA=%I64x)\n",
                     Dcbaa,
-                    Crcr,
-                    HwDcbaa,
-                    HwCrcr);
+                    HwDcbaa);
             ASSERT(HwDcbaa == Dcbaa);
-            ASSERT((HwCrcr & ~0x3FULL) == (Crcr & ~0x3FULL));
         }
+        /*
+         * Note: CRCR (Command Ring Control Register) bits 6-63 are write-only
+         * per xHCI spec section 5.4.5. The pointer reads as 0 when the Command
+         * Ring is stopped (CRR=0). Do not assert on CRCR readback mismatch.
+         */
     }
 #endif
 
@@ -2423,7 +2422,7 @@ XHCI_GetDescriptorBuffer(
     if (AvailableLength)
         *AvailableLength = Avail;
 
-    return (PUCHAR)SgList->MappedSystemVa;
+    return (PUCHAR)SgList->MappedSystemVa + Element->SgOffset;
 }
 
 static
@@ -3478,8 +3477,17 @@ XHCI_ServiceEventRing(
     while (TRUE)
     {
         PXHCI_TRB EventTrb = &Extension->EventRing[Extension->EventRingDequeueIndex];
-        ULONG Cycle = EventTrb->Control & XHCI_TRB_CYCLE;
+        ULONG Cycle;
         ULONG TrbType;
+
+        /*
+         * Ensure we read the latest value written by the xHCI controller.
+         * Use READ_REGISTER_ULONG to bypass any CPU caching and get a fresh
+         * read of the DMA-written event TRB. This is critical for detecting
+         * new events written by the controller after previous polling.
+         */
+        KeMemoryBarrier();
+        Cycle = READ_REGISTER_ULONG((PULONG)&EventTrb->Control) & XHCI_TRB_CYCLE;
 
         if (Cycle != Extension->EventRingCycleState)
             break;
@@ -3640,6 +3648,7 @@ XHCI_EventRingHasPendingTrb(
     PXHCI_TRB EventTrb;
     BOOLEAN Pending;
     KIRQL OldIrql;
+    ULONG Control;
 
     if (!Extension ||
         !Extension->EventRing ||
@@ -3650,8 +3659,17 @@ XHCI_EventRingHasPendingTrb(
 
     KeAcquireSpinLock(&Extension->EventRingLock, &OldIrql);
     EventTrb = &Extension->EventRing[Extension->EventRingDequeueIndex];
-    Pending = ((EventTrb->Control & XHCI_TRB_CYCLE) ==
-               Extension->EventRingCycleState);
+
+    /*
+     * Ensure we read the latest value written by the xHCI controller.
+     * The event ring is in cached memory, and while x86/amd64 maintains
+     * cache coherency for DMA, a memory barrier ensures the CPU doesn't
+     * reorder the read with respect to previous operations.
+     */
+    KeMemoryBarrier();
+    Control = READ_REGISTER_ULONG((PULONG)&EventTrb->Control);
+
+    Pending = ((Control & XHCI_TRB_CYCLE) == Extension->EventRingCycleState);
     KeReleaseSpinLock(&Extension->EventRingLock, OldIrql);
     return Pending;
 }
@@ -4543,6 +4561,8 @@ XHCI_HandleTransferEvent(
     ULONG UsbdStatus;
     ULONG RequestedLength;
     KIRQL OldIrql;
+    BOOLEAN TraceBos = FALSE;
+    BOOLEAN TraceDevDesc = FALSE;
 
     if (!Extension || !EventTrb || Extension->FatalError)
         return;
@@ -4577,6 +4597,20 @@ XHCI_HandleTransferEvent(
     }
 
     Transfer = Endpoint->ActiveTransfer;
+    {
+        PUSBPORT_TRANSFER_PARAMETERS Params = Transfer->TransferParameters;
+        if (Transfer->IsControl &&
+            Params &&
+            Params->SetupPacket.bRequest == USB_REQUEST_GET_DESCRIPTOR)
+        {
+            UCHAR DescType = Params->SetupPacket.wValue.HiByte;
+
+            if (DescType == USB_BOS_DESCRIPTOR_TYPE)
+                TraceBos = TRUE;
+            else if (DescType == USB_DEVICE_DESCRIPTOR_TYPE)
+                TraceDevDesc = TRUE;
+        }
+    }
 
     /* Calculate BytesTransferred early for the intermediate check */
     RequestedLength = Transfer->RequestedLength;
@@ -4616,6 +4650,24 @@ XHCI_HandleTransferEvent(
                     (ULONGLONG)Transfer->CompletionTrbPointer,
                     (ULONGLONG)TrbPointer,
                     CompletionCode);
+            if (TraceBos)
+            {
+                DPRINT1("usbxhci: BOS mismatch slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
+                        SlotId,
+                        EndpointId,
+                        (ULONGLONG)Transfer->CompletionTrbPointer,
+                        (ULONGLONG)TrbPointer,
+                        CompletionCode);
+            }
+            if (TraceDevDesc)
+            {
+                DPRINT1("usbxhci: DEV mismatch slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
+                        SlotId,
+                        EndpointId,
+                        (ULONGLONG)Transfer->CompletionTrbPointer,
+                        (ULONGLONG)TrbPointer,
+                        CompletionCode);
+            }
 #endif
             KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
             return;
@@ -4646,6 +4698,28 @@ XHCI_HandleTransferEvent(
                 (ULONGLONG)TrbPointer,
                 CompletionCode);
 #endif
+    }
+    if (TraceBos)
+    {
+        DPRINT1("usbxhci: BOS complete slot=%u ep=%u trb=%I64x exp=%I64x bytes=%lu rem=%lu code=%lu\n",
+                SlotId,
+                EndpointId,
+                (ULONGLONG)TrbPointer,
+                (ULONGLONG)Transfer->CompletionTrbPointer,
+                BytesTransferred,
+                Remaining,
+                CompletionCode);
+    }
+    if (TraceDevDesc)
+    {
+        DPRINT1("usbxhci: DEV complete slot=%u ep=%u trb=%I64x exp=%I64x bytes=%lu rem=%lu code=%lu\n",
+                SlotId,
+                EndpointId,
+                (ULONGLONG)TrbPointer,
+                (ULONGLONG)Transfer->CompletionTrbPointer,
+                BytesTransferred,
+                Remaining,
+                CompletionCode);
     }
     Endpoint->TransferRing.DequeueIndex = Endpoint->TransferRing.EnqueueIndex;
 
@@ -7786,6 +7860,7 @@ XHCI_SubmitControlTransfer(
     BOOLEAN DataIn;
     BOOLEAN StatusIn;
     BOOLEAN UseBounce = FALSE;
+    BOOLEAN ForceBounce = FALSE;
     PXHCI_TRB Trb;
     ULONGLONG PhysicalAddress;
     ULONG Control;
@@ -7797,6 +7872,10 @@ XHCI_SubmitControlTransfer(
     ULONG SgIndex = 0;
     KIRQL OldIrql;
     ULONGLONG HighAddress = 0;
+    BOOLEAN TraceBos = FALSE;
+    BOOLEAN TraceDevDesc = FALSE;
+    ULONG BosBytesProgrammed = 0;
+    ULONG DevDescBytesProgrammed = 0;
 
     if (!Extension || !Endpoint || !Transfer)
         return MP_STATUS_ERROR;
@@ -7860,6 +7939,14 @@ XHCI_SubmitControlTransfer(
     Transfer->TdFirstTrbPointer = 0;
     Transfer->CompletionTrbPointer = 0;
 
+#if !defined(_WIN64)
+    if (Endpoint->DefaultControl &&
+        (Extension->Quirks & XHCI_QUIRK_IGNORE_STARTUP_HCE))
+    {
+        ForceBounce = TRUE;
+    }
+#endif
+
     if (TransferParameters->SetupPacket.bmRequestType.B == 0 &&
         TransferParameters->SetupPacket.bRequest == USB_REQUEST_SET_ADDRESS)
     {
@@ -7876,6 +7963,31 @@ XHCI_SubmitControlTransfer(
     if (TransferParameters->SetupPacket.bRequest == USB_REQUEST_GET_DESCRIPTOR)
     {
         Transfer->Flags |= XHCI_TRANSFER_FLAG_GET_DESCRIPTOR;
+    }
+
+    if (TransferParameters &&
+        TransferParameters->SetupPacket.bRequest == USB_REQUEST_GET_DESCRIPTOR)
+    {
+        UCHAR DescType = TransferParameters->SetupPacket.wValue.HiByte;
+
+        if (DescType == USB_BOS_DESCRIPTOR_TYPE)
+        {
+            TraceBos = TRUE;
+            DPRINT1("usbxhci: BOS submit len=%lu wLength=%u sgcount=%lu buf=%p\n",
+                    TransferParameters->TransferBufferLength,
+                    TransferParameters->SetupPacket.wLength,
+                    SgList ? SgList->SgElementCount : 0,
+                    SgList ? SgList->MappedSystemVa : NULL);
+        }
+        else if (DescType == USB_DEVICE_DESCRIPTOR_TYPE)
+        {
+            TraceDevDesc = TRUE;
+            DPRINT1("usbxhci: DEV submit len=%lu wLength=%u sgcount=%lu buf=%p\n",
+                    TransferParameters->TransferBufferLength,
+                    TransferParameters->SetupPacket.wLength,
+                    SgList ? SgList->SgElementCount : 0,
+                    SgList ? SgList->MappedSystemVa : NULL);
+        }
     }
 
     /*
@@ -7913,12 +8025,21 @@ XHCI_SubmitControlTransfer(
     }
 
     if (HasDataStage &&
-        XHCI_Requires32BitDma(Extension) &&
-        XHCI_SgListHasHighAddress(SgList, &HighAddress))
+        (ForceBounce ||
+         (XHCI_Requires32BitDma(Extension) &&
+          XHCI_SgListHasHighAddress(SgList, &HighAddress))))
     {
-        DPRINT1("usbxhci: control DMA above 4G (pa=%I64x len=%lu), using bounce buffer\n",
-                HighAddress,
-                TransferParameters->TransferBufferLength);
+        if (ForceBounce)
+        {
+            DPRINT1("usbxhci: forcing control bounce buffer for EP0 (len=%lu)\n",
+                    TransferParameters->TransferBufferLength);
+        }
+        else
+        {
+            DPRINT1("usbxhci: control DMA above 4G (pa=%I64x len=%lu), using bounce buffer\n",
+                    HighAddress,
+                    TransferParameters->TransferBufferLength);
+        }
         Status = XHCI_PrepareBounceBuffer(Extension,
                                           Transfer,
                                           TransferParameters->TransferBufferLength,
@@ -8007,6 +8128,10 @@ XHCI_SubmitControlTransfer(
                     goto Failure;
                 }
 
+                if (TraceBos)
+                    BosBytesProgrammed += Chunk;
+                if (TraceDevDesc)
+                    DevDescBytesProgrammed += Chunk;
                 Trb->Parameter1 = (ULONG)(ElementAddress & 0xFFFFFFFF);
                 Trb->Parameter2 = (ULONG)(ElementAddress >> 32);
                 Trb->Status = Chunk;
@@ -8054,6 +8179,10 @@ XHCI_SubmitControlTransfer(
                         goto Failure;
                     }
 
+                    if (TraceBos)
+                        BosBytesProgrammed += Chunk;
+                    if (TraceDevDesc)
+                        DevDescBytesProgrammed += Chunk;
                     Trb->Parameter1 = (ULONG)(ElementAddress & 0xFFFFFFFF);
                     Trb->Parameter2 = (ULONG)(ElementAddress >> 32);
                     Trb->Status = Chunk;
@@ -8111,6 +8240,24 @@ XHCI_SubmitControlTransfer(
     /* Interrupt target is encoded in the event TRB, not the status-stage TRB. */
     Trb->Control = Control;
     Transfer->CompletionTrbPointer = PhysicalAddress;
+    if (TraceBos)
+    {
+        DPRINT1("usbxhci: BOS trbs first=%I64x last=%I64x data=%lu hasData=%u dir=%s\n",
+                (ULONGLONG)Transfer->TdFirstTrbPointer,
+                (ULONGLONG)Transfer->CompletionTrbPointer,
+                BosBytesProgrammed,
+                HasDataStage ? 1 : 0,
+                DataIn ? "IN" : "OUT");
+    }
+    if (TraceDevDesc)
+    {
+        DPRINT1("usbxhci: DEV trbs first=%I64x last=%I64x data=%lu hasData=%u dir=%s\n",
+                (ULONGLONG)Transfer->TdFirstTrbPointer,
+                (ULONGLONG)Transfer->CompletionTrbPointer,
+                DevDescBytesProgrammed,
+                HasDataStage ? 1 : 0,
+                DataIn ? "IN" : "OUT");
+    }
     XHCI_AdvanceTransferRing(&Endpoint->TransferRing);
 
     {

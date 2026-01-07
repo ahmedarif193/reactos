@@ -1097,6 +1097,15 @@ USBPORT_QueueDoneTransfer(IN PUSBPORT_TRANSFER Transfer,
                 Transfer,
                 USBDStatus);
 
+    if (InterlockedBitTestAndSet((PLONG)&Transfer->Flags, TRANSFER_FLAG_COMPLETED_BIT))
+    {
+        DPRINT1("USBPORT_QueueDoneTransfer: duplicate completion (Transfer=%p Endpoint=%p Status=%x)\n",
+                Transfer,
+                Transfer->Endpoint,
+                USBDStatus);
+        return FALSE;
+    }
+
     FdoDevice = Transfer->Endpoint->FdoDevice;
     FdoExtension = FdoDevice->DeviceExtension;
 
@@ -2426,7 +2435,6 @@ USBPORT_MiniportCompleteTransfer(IN PVOID MiniPortExtension,
                                  USBPORT_TRANSFER,
                                  TransferParameters);
 
-    Transfer->Flags |= TRANSFER_FLAG_COMPLETED;
     Transfer->CompletedTransferLen = TransferLength;
 
     if (((Transfer->Flags & TRANSFER_FLAG_SPLITED) == 0) ||
@@ -2640,6 +2648,190 @@ USBPORT_InvalidateEndpoint(IN PVOID MiniPortExtension,
     return 0;
 }
 
+/*
+ * Interrupt Transfer Reuse Implementation
+ *
+ * For interrupt endpoints (HID devices like mice/keyboards), the same transfer
+ * structure can be reused across multiple poll cycles. This eliminates the
+ * overhead of allocating and freeing transfer structures ~60+ times per second.
+ *
+ * Pattern: alloc once -> submit -> complete -> resubmit -> complete -> ... -> free on close
+ */
+
+BOOLEAN
+NTAPI
+USBPORT_IsInterruptTransferReusable(IN PUSBPORT_TRANSFER Transfer)
+{
+    PUSBPORT_ENDPOINT Endpoint;
+    PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties;
+
+    if (!Transfer || !Transfer->Endpoint)
+        return FALSE;
+
+    Endpoint = Transfer->Endpoint;
+    EndpointProperties = &Endpoint->EndpointProperties;
+
+    /* Only interrupt IN endpoints can reuse transfers */
+    if (EndpointProperties->TransferType != USBPORT_TRANSFER_TYPE_INTERRUPT)
+        return FALSE;
+
+    /* Only IN direction (device to host) - polling for input */
+    if (Transfer->Direction != USBPORT_DMA_DIRECTION_FROM_DEVICE)
+        return FALSE;
+
+    /* Don't reuse if canceled, aborted, or device gone */
+    if (Transfer->Flags & (TRANSFER_FLAG_CANCELED | TRANSFER_FLAG_ABORTED |
+                           TRANSFER_FLAG_DEVICE_GONE))
+        return FALSE;
+
+    /* Don't reuse split or ISO transfers */
+    if (Transfer->Flags & (TRANSFER_FLAG_SPLITED | TRANSFER_FLAG_ISO |
+                           TRANSFER_FLAG_PARENT))
+        return FALSE;
+
+    /* Don't reuse bounce-buffered transfers (complex cleanup) */
+    if (Transfer->Flags & TRANSFER_FLAG_BOUNCE)
+        return FALSE;
+
+    /* Don't reuse root hub endpoints */
+    if (Endpoint->Flags & ENDPOINT_FLAG_ROOTHUB_EP0)
+        return FALSE;
+
+    /* Endpoint must be healthy and not being closed */
+    if (Endpoint->Flags & (ENDPOINT_FLAG_NUKE | ENDPOINT_FLAG_ABORTING |
+                           ENDPOINT_FLAG_CLOSED))
+        return FALSE;
+
+    return TRUE;
+}
+
+VOID
+NTAPI
+USBPORT_ResetTransferForResubmit(IN PUSBPORT_TRANSFER Transfer)
+{
+    /*
+     * Reset the transfer structure for resubmission.
+     * Keep: Endpoint, Urb, buffer pointers, direction, period
+     * Reset: Flags (completion-related), status, completed length
+     */
+
+    /* Clear completion and submission flags, keep REUSABLE */
+    Transfer->Flags &= ~(TRANSFER_FLAG_COMPLETED | TRANSFER_FLAG_SUBMITED |
+                         TRANSFER_FLAG_DMA_MAPPED | TRANSFER_FLAG_HIGH_SPEED);
+    Transfer->Flags |= TRANSFER_FLAG_REUSABLE;
+
+    /* Reset status */
+    Transfer->USBDStatus = USBD_STATUS_SUCCESS;
+    Transfer->CompletedTransferLen = 0;
+
+    /* Reset DMA mapping state */
+    Transfer->MapRegisterBase = NULL;
+    Transfer->NumberOfMapRegisters = 0;
+
+    /* Reset link pointers */
+    Transfer->TransferLink.Flink = NULL;
+    Transfer->TransferLink.Blink = NULL;
+
+    /* Reset time tracking */
+    Transfer->Time.QuadPart = 0;
+}
+
+VOID
+NTAPI
+USBPORT_ResubmitInterruptTransfer(IN PUSBPORT_TRANSFER Transfer)
+{
+    PUSBPORT_ENDPOINT Endpoint;
+    PDEVICE_OBJECT FdoDevice;
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    KIRQL OldIrql;
+
+    if (!Transfer || !Transfer->Endpoint)
+        return;
+
+    Endpoint = Transfer->Endpoint;
+    FdoDevice = Endpoint->FdoDevice;
+    FdoExtension = FdoDevice->DeviceExtension;
+
+    DPRINT_CORE("USBPORT_ResubmitInterruptTransfer: Transfer - %p, Endpoint - %p\n",
+                Transfer, Endpoint);
+
+    /* Reset the transfer for resubmission */
+    USBPORT_ResetTransferForResubmit(Transfer);
+
+    /* Queue back to the endpoint's transfer list for DMA mapping and submission */
+    KeAcquireSpinLock(&Endpoint->EndpointSpinLock, &OldIrql);
+
+    /* Check endpoint is still healthy */
+    if (Endpoint->Flags & (ENDPOINT_FLAG_NUKE | ENDPOINT_FLAG_ABORTING |
+                           ENDPOINT_FLAG_CLOSED))
+    {
+        /* Endpoint is being torn down, don't resubmit */
+        KeReleaseSpinLock(&Endpoint->EndpointSpinLock, OldIrql);
+
+        /* Clear reusable flag and mark for normal completion/free */
+        Transfer->Flags &= ~TRANSFER_FLAG_REUSABLE;
+        InterlockedExchange(&Endpoint->ReusableTransferInFlight, 0);
+        Endpoint->ReusableTransfer = NULL;
+
+        /* Free the transfer */
+        ExFreePoolWithTag(Transfer, USB_PORT_TAG);
+        return;
+    }
+
+    /* Insert at tail of transfer list (it will be DMA mapped and submitted) */
+    InsertTailList(&Endpoint->TransferList, &Transfer->TransferLink);
+
+    KeReleaseSpinLock(&Endpoint->EndpointSpinLock, OldIrql);
+
+    /* Now we need to DMA map this transfer. Queue it for mapping. */
+    KeAcquireSpinLock(&FdoExtension->MapTransferSpinLock, &OldIrql);
+    RemoveEntryList(&Transfer->TransferLink);
+    InsertTailList(&FdoExtension->MapTransferList, &Transfer->TransferLink);
+    KeReleaseSpinLock(&FdoExtension->MapTransferSpinLock, OldIrql);
+
+    /* Flush the map transfer list */
+    USBPORT_FlushMapTransfers(FdoDevice);
+
+    /* Trigger endpoint worker to submit the transfer */
+    USBPORT_InvalidateEndpointHandler(FdoDevice,
+                                      Endpoint,
+                                      INVALIDATE_ENDPOINT_WORKER_DPC);
+}
+
+VOID
+NTAPI
+USBPORT_FreeReusableTransfer(IN PUSBPORT_ENDPOINT Endpoint)
+{
+    PUSBPORT_TRANSFER Transfer;
+    KIRQL OldIrql;
+
+    if (!Endpoint)
+        return;
+
+    KeAcquireSpinLock(&Endpoint->EndpointSpinLock, &OldIrql);
+
+    Transfer = Endpoint->ReusableTransfer;
+    Endpoint->ReusableTransfer = NULL;
+    InterlockedExchange(&Endpoint->ReusableTransferInFlight, 0);
+
+    KeReleaseSpinLock(&Endpoint->EndpointSpinLock, OldIrql);
+
+    if (Transfer)
+    {
+        DPRINT_CORE("USBPORT_FreeReusableTransfer: Freeing Transfer - %p\n", Transfer);
+
+        /* Remove from any list it might be on */
+        if (Transfer->TransferLink.Flink && Transfer->TransferLink.Blink)
+        {
+            RemoveEntryList(&Transfer->TransferLink);
+            Transfer->TransferLink.Flink = NULL;
+            Transfer->TransferLink.Blink = NULL;
+        }
+
+        ExFreePoolWithTag(Transfer, USB_PORT_TAG);
+    }
+}
+
 VOID
 NTAPI
 USBPORT_CompleteTransfer(IN PURB Urb,
@@ -2666,7 +2858,16 @@ USBPORT_CompleteTransfer(IN PURB Urb,
            TransferStatus);
 
     UrbTransfer = &Urb->UrbControlTransfer;
-    Transfer = UrbTransfer->hca.Reserved8[0];
+    Transfer = (PUSBPORT_TRANSFER)InterlockedExchangePointer(
+        (PVOID *)&UrbTransfer->hca.Reserved8[0],
+        NULL);
+    if (!Transfer)
+    {
+        DPRINT1("USBPORT_CompleteTransfer: duplicate or missing transfer (Urb=%p Status=%X)\n",
+                Urb,
+                TransferStatus);
+        return;
+    }
 
     Transfer->USBDStatus = TransferStatus;
     Status = USBPORT_USBDStatusToNtStatus(Urb, TransferStatus);
@@ -2799,7 +3000,6 @@ USBPORT_CompleteTransfer(IN PURB Urb,
         Urb->UrbHeader.UsbdFlags &= ~USBD_FLAG_ALLOCATED_MDL;
     }
 
-    Urb->UrbControlTransfer.hca.Reserved8[0] = NULL;
     Urb->UrbHeader.UsbdFlags &= ~USBD_FLAG_ALLOCATED_TRANSFER;
 
     Irp = Transfer->Irp;
@@ -2831,7 +3031,57 @@ USBPORT_CompleteTransfer(IN PURB Urb,
         KeSetEvent(Event, EVENT_INCREMENT, FALSE);
     }
 
-    ExFreePoolWithTag(Transfer, USB_PORT_TAG);
+    /*
+     * For successful interrupt IN transfers, cache the transfer structure
+     * in the endpoint for reuse instead of freeing it. This eliminates
+     * the alloc/free overhead for HID device polling (~60+ times/sec).
+     */
+    Endpoint = Transfer->Endpoint;
+    if (NT_SUCCESS(Status) &&
+        USBPORT_IsInterruptTransferReusable(Transfer) &&
+        Endpoint->ReusableTransfer == NULL)
+    {
+        KIRQL CacheIrql;
+
+        KeAcquireSpinLock(&Endpoint->EndpointSpinLock, &CacheIrql);
+
+        /* Double-check under lock */
+        if (Endpoint->ReusableTransfer == NULL &&
+            !(Endpoint->Flags & (ENDPOINT_FLAG_NUKE | ENDPOINT_FLAG_ABORTING |
+                                  ENDPOINT_FLAG_CLOSED)))
+        {
+            /* Cache for reuse - clear the in-flight marker first */
+            InterlockedExchange(&Endpoint->ReusableTransferInFlight, 0);
+
+            /* Mark as reusable and cache */
+            Transfer->Flags |= TRANSFER_FLAG_REUSABLE;
+            Transfer->Flags &= ~TRANSFER_FLAG_COMPLETED;
+
+            /* Clear per-request fields to avoid stale references */
+            Transfer->Irp = NULL;
+            Transfer->Urb = NULL;
+            Transfer->Event = NULL;
+
+            Endpoint->ReusableTransfer = Transfer;
+            Transfer = NULL; /* Prevent free below */
+
+            DPRINT_CORE("USBPORT_CompleteTransfer: Cached Transfer for reuse on Endpoint - %p\n",
+                        Endpoint);
+        }
+
+        KeReleaseSpinLock(&Endpoint->EndpointSpinLock, CacheIrql);
+    }
+
+    if (Transfer)
+    {
+        /* Clear the reusable in-flight flag if we're freeing */
+        if (Endpoint && (Transfer->Flags & TRANSFER_FLAG_REUSABLE))
+        {
+            InterlockedExchange(&Endpoint->ReusableTransferInFlight, 0);
+        }
+
+        ExFreePoolWithTag(Transfer, USB_PORT_TAG);
+    }
 
     DPRINT_CORE("USBPORT_CompleteTransfer: exit\n");
 }
@@ -3090,6 +3340,9 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
     PUSBPORT_PIPE_HANDLE PipeHandle;
     USBD_STATUS USBDStatus;
     SIZE_T IsoBlockLen = 0;
+    PUSBPORT_ENDPOINT Endpoint;
+    KIRQL OldIrql;
+    BOOLEAN ReusingTransfer = FALSE;
 
     DPRINT_CORE("USBPORT_AllocateTransfer: FdoDevice - %p, Urb - %p, DeviceHandle - %p, Irp - %p, Event - %p\n",
            FdoDevice,
@@ -3117,6 +3370,78 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
             break;
     }
 
+    Endpoint = PipeHandle->Endpoint;
+
+    /*
+     * Try to reuse a cached interrupt transfer structure.
+     * This optimization eliminates alloc/free overhead for HID polling.
+     */
+    if (Urb->UrbHeader.Function == URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER &&
+        Endpoint &&
+        Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_INTERRUPT &&
+        Endpoint->ReusableTransfer != NULL &&
+        !InterlockedCompareExchange(&Endpoint->ReusableTransferInFlight, 1, 0))
+    {
+        KeAcquireSpinLock(&Endpoint->EndpointSpinLock, &OldIrql);
+
+        Transfer = Endpoint->ReusableTransfer;
+        if (Transfer &&
+            Transfer->FullTransferLength >= (sizeof(USBPORT_TRANSFER) +
+                FdoExtension->MiniPortInterface->Packet.MiniPortTransferSize) &&
+            Transfer->TransferParameters.TransferBufferLength == TransferLength)
+        {
+            /* Reuse the cached transfer */
+            Endpoint->ReusableTransfer = NULL;
+            ReusingTransfer = TRUE;
+
+            DPRINT_CORE("USBPORT_AllocateTransfer: Reusing Transfer - %p for Endpoint - %p\n",
+                        Transfer, Endpoint);
+        }
+        else
+        {
+            /* Cannot reuse (size mismatch or NULL), release the lock */
+            InterlockedExchange(&Endpoint->ReusableTransferInFlight, 0);
+            Transfer = NULL;
+        }
+
+        KeReleaseSpinLock(&Endpoint->EndpointSpinLock, OldIrql);
+    }
+
+    if (ReusingTransfer)
+    {
+        /* Reset the transfer for new use */
+        Transfer->Flags &= ~(TRANSFER_FLAG_COMPLETED | TRANSFER_FLAG_SUBMITED |
+                             TRANSFER_FLAG_DMA_MAPPED | TRANSFER_FLAG_HIGH_SPEED |
+                             TRANSFER_FLAG_CANCELED | TRANSFER_FLAG_ABORTED);
+        Transfer->Flags |= TRANSFER_FLAG_REUSABLE;
+        Transfer->USBDStatus = USBD_STATUS_SUCCESS;
+        Transfer->CompletedTransferLen = 0;
+        Transfer->MapRegisterBase = NULL;
+        Transfer->NumberOfMapRegisters = 0;
+        Transfer->TransferLink.Flink = NULL;
+        Transfer->TransferLink.Blink = NULL;
+        Transfer->Time.QuadPart = 0;
+
+        /* Update per-request fields */
+        Transfer->Irp = Irp;
+        Transfer->Urb = Urb;
+        Transfer->Event = Event;
+        Transfer->TransferBufferMDL = Mdl;
+        Transfer->TransferParameters.TransferBufferLength = TransferLength;
+        Transfer->TransferParameters.TransferFlags = Urb->UrbControlTransfer.TransferFlags;
+
+        if (Urb->UrbControlTransfer.TransferFlags & USBD_TRANSFER_DIRECTION_IN)
+            Transfer->Direction = USBPORT_DMA_DIRECTION_FROM_DEVICE;
+        else
+            Transfer->Direction = USBPORT_DMA_DIRECTION_TO_DEVICE;
+
+        Urb->UrbControlTransfer.hca.Reserved8[0] = Transfer;
+        Urb->UrbHeader.UsbdFlags |= USBD_FLAG_ALLOCATED_TRANSFER;
+
+        return USBD_STATUS_SUCCESS;
+    }
+
+    /* Standard allocation path */
     if (TransferLength && Mdl)
     {
         VirtualAddr = (ULONG_PTR)MmGetMdlVirtualAddress(Mdl);

@@ -541,6 +541,9 @@ USBPORT_DeleteEndpoint(IN PDEVICE_OBJECT FdoDevice,
 
         KeReleaseSpinLock(&FdoExtension->EndpointListSpinLock, OldIrql);
 
+        /* Free any cached reusable transfer before closing endpoint */
+        USBPORT_FreeReusableTransfer(Endpoint);
+
         MiniportCloseEndpoint(FdoDevice, Endpoint);
 
         if (Endpoint->HeaderBuffer)

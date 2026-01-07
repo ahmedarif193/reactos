@@ -192,8 +192,10 @@ typedef struct _USBPORT_TIMESYNC_CONTEXT {
 #define TRANSFER_FLAG_DEVICE_GONE 0x00000080
 #define TRANSFER_FLAG_SPLITED    0x00000100
 #define TRANSFER_FLAG_COMPLETED  0x00000200
+#define TRANSFER_FLAG_COMPLETED_BIT 9
 #define TRANSFER_FLAG_PARENT     0x00000400
 #define TRANSFER_FLAG_BOUNCE     0x00000800
+#define TRANSFER_FLAG_REUSABLE   0x00001000
 
 extern KSPIN_LOCK USBPORT_SpinLock;
 extern LIST_ENTRY USBPORT_MiniPortDrivers;
@@ -303,6 +305,9 @@ typedef struct _USBPORT_ENDPOINT {
   LIST_ENTRY TransferList;
   LIST_ENTRY CancelList;
   LIST_ENTRY AbortList;
+  /* Interrupt transfer reuse for HID devices */
+  struct _USBPORT_TRANSFER *ReusableTransfer;
+  LONG ReusableTransferInFlight;
   /* Links */
   LIST_ENTRY EndpointLink;
   LIST_ENTRY WorkerLink;
@@ -927,6 +932,27 @@ VOID
 NTAPI
 USBPORT_DoneTransfer(
   IN PUSBPORT_TRANSFER Transfer);
+
+/* Interrupt transfer reuse functions */
+BOOLEAN
+NTAPI
+USBPORT_IsInterruptTransferReusable(
+  IN PUSBPORT_TRANSFER Transfer);
+
+VOID
+NTAPI
+USBPORT_ResetTransferForResubmit(
+  IN PUSBPORT_TRANSFER Transfer);
+
+VOID
+NTAPI
+USBPORT_ResubmitInterruptTransfer(
+  IN PUSBPORT_TRANSFER Transfer);
+
+VOID
+NTAPI
+USBPORT_FreeReusableTransfer(
+  IN PUSBPORT_ENDPOINT Endpoint);
 
 /* debug.c */
 ULONG
