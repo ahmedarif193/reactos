@@ -78,7 +78,7 @@ add_library(uefifreeldr_common
     ${UEFILDR_BOOTMGR_SOURCE}
     ${FREELDR_NTLDR_SOURCE})
 
-target_link_libraries(uefifreeldr_common PUBLIC apisets rossym)
+target_link_libraries(uefifreeldr_common PUBLIC apisets $<$<CONFIG:Debug>:rossym>)
 
 target_compile_definitions(uefifreeldr_common PRIVATE UEFIBOOT)
 
@@ -143,21 +143,8 @@ endif()
     # We don't need hotpatching
     remove_target_compile_option(uefildr "/hotpatch")
 else()
-    # Keep debug info at link time so rsym can harvest file:line; we strip after injection
     target_link_options(uefildr PRIVATE -Wl,--file-alignment,0x200,--section-alignment,0x200)
     target_link_options(uefildr PRIVATE -Wl,--as-needed)
-    # Inject compact .rossym symbols for in-UEFI backtraces and keep them (no strip)
-    if(TARGET native-rsym)
-        get_target_property(RSYM native-rsym IMPORTED_LOCATION)
-        add_custom_command(TARGET uefildr
-            POST_BUILD
-            COMMAND ${RSYM} -s ${REACTOS_SOURCE_DIR} $<TARGET_FILE:uefildr> $<TARGET_FILE:uefildr>
-            # Drop heavy debug sections now that .rossym is embedded
-            COMMAND ${CMAKE_STRIP} --strip-debug $<TARGET_FILE:uefildr>
-            VERBATIM)
-    else()
-        message(STATUS "native-rsym not available; skipping .rossym injection for uefildr")
-    endif()
 endif()
 
 set_subsystem(uefildr EFI_APPLICATION)

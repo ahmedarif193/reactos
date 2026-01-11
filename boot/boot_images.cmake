@@ -28,7 +28,7 @@ if(DEFINED EFI_PLATFORM_ID)
     endif()
 
     add_custom_target(efisys
-        COMMAND native-fatten ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin -format 2880 EFIBOOT
+        COMMAND native-fatten ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin -format 5760 EFIBOOT
             ${_efisys_boot_args}
             -add ${REACTOS_SOURCE_DIR}/boot/bootdata/bootcd.ini freeldr.ini
             -mkdir EFI -mkdir EFI/BOOT -add $<TARGET_FILE:uefildr> EFI/BOOT/boot${EFI_PLATFORM_ID}.efi
@@ -95,72 +95,13 @@ file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/bootfiles.sort ${ISO_SORT_FILE_DATA})
 set(ISO_MANUFACTURER "ReactOS Project") # For both the publisher and the preparer
 set(ISO_VOLNAME      "ReactOS")         # For both the Volume ID and the Volume set ID
 
-# Option: tag produced image filenames with branch/commit
-if(NOT DEFINED CONFIG_REACTOS_TAGGED_BIN)
-    option(CONFIG_REACTOS_TAGGED_BIN "Append git branch/commit to output image filenames" OFF)
-endif()
-
-set(_APPLY_ISO_TAG FALSE)
-if(CONFIG_REACTOS_TAGGED_BIN)
-    # Compute a git-based tag to append to produced image filenames
-    # Prefer branch name; if detached, use 7-char commit; fallback to 'local'
-    if(DEFINED REACTOS_SOURCE_DIR)
-        set(_GIT_WORK_DIR ${REACTOS_SOURCE_DIR})
-    else()
-        set(_GIT_WORK_DIR ${CMAKE_SOURCE_DIR})
-    endif()
-
-    set(_GIT_BRANCH "")
-    execute_process(
-        COMMAND git rev-parse --abbrev-ref HEAD
-        WORKING_DIRECTORY ${_GIT_WORK_DIR}
-        OUTPUT_VARIABLE _GIT_BRANCH
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET)
-
-    set(_ISO_TAG "")
-    if(_GIT_BRANCH AND NOT _GIT_BRANCH STREQUAL "HEAD")
-        set(_ISO_TAG "${_GIT_BRANCH}")
-    else()
-        execute_process(
-            COMMAND git rev-parse --short=7 HEAD
-            WORKING_DIRECTORY ${_GIT_WORK_DIR}
-            OUTPUT_VARIABLE _GIT_SHORT
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET)
-        if(_GIT_SHORT)
-            set(_ISO_TAG "${_GIT_SHORT}")
-        else()
-            set(_ISO_TAG "local")
-        endif()
-    endif()
-
-    # Sanitize for filename safety and define standard output artifact names
-    string(REPLACE "/" "_" _ISO_TAG ${_ISO_TAG})
-    string(REGEX REPLACE "[^A-Za-z0-9_.-]" "_" _ISO_TAG ${_ISO_TAG})
-
-    set(_APPLY_ISO_TAG TRUE)
-    if(_ISO_TAG STREQUAL "dev")
-        set(_APPLY_ISO_TAG FALSE)
-    endif()
-endif()
-
-if(_APPLY_ISO_TAG)
-    set(REACTOS_LIVECD_ISO        ${REACTOS_BINARY_DIR}/livecd_${_ISO_TAG}.iso)
-    set(REACTOS_BOOTCD_ISO        ${REACTOS_BINARY_DIR}/reactos_${_ISO_TAG}_bootcd.iso)
-    set(REACTOS_BOOTCDREGTEST_ISO ${REACTOS_BINARY_DIR}/reactos_${_ISO_TAG}_bootcdregtest.iso)
-    set(REACTOS_HYBRIDCD_ISO      ${REACTOS_BINARY_DIR}/reactos_${_ISO_TAG}_hybridcd.iso)
-    set(REACTOS_LIVEUSB_ISO       ${REACTOS_BINARY_DIR}/liveusb_${_ISO_TAG}.iso)
-    set(REACTOS_LIVEIMG_IMG       ${REACTOS_BINARY_DIR}/liveimg_${_ISO_TAG}.img)
-else()
-    # Default legacy names
-    set(REACTOS_LIVECD_ISO        ${REACTOS_BINARY_DIR}/livecd.iso)
-    set(REACTOS_BOOTCD_ISO        ${REACTOS_BINARY_DIR}/bootcd.iso)
-    set(REACTOS_BOOTCDREGTEST_ISO ${REACTOS_BINARY_DIR}/bootcdregtest.iso)
-    set(REACTOS_HYBRIDCD_ISO      ${REACTOS_BINARY_DIR}/hybridcd.iso)
-    set(REACTOS_LIVEUSB_ISO       ${REACTOS_BINARY_DIR}/liveusb.iso)
-    set(REACTOS_LIVEIMG_IMG       ${REACTOS_BINARY_DIR}/liveimg.img)
-endif()
+# Standard output artifact names (no branch/commit tagging)
+set(REACTOS_LIVECD_ISO        ${REACTOS_BINARY_DIR}/livecd.iso)
+set(REACTOS_BOOTCD_ISO        ${REACTOS_BINARY_DIR}/bootcd.iso)
+set(REACTOS_BOOTCDREGTEST_ISO ${REACTOS_BINARY_DIR}/bootcdregtest.iso)
+set(REACTOS_HYBRIDCD_ISO      ${REACTOS_BINARY_DIR}/hybridcd.iso)
+set(REACTOS_LIVEUSB_ISO       ${REACTOS_BINARY_DIR}/liveusb.iso)
+set(REACTOS_LIVEIMG_IMG       ${REACTOS_BINARY_DIR}/liveimg.img)
 
 
 # Create user profile directories in the LiveImage
@@ -269,55 +210,6 @@ add_custom_target(livecd
     ${_LIVECD_ISOHYBRID_CMD}
     DEPENDS native-mkisofs ${_LIVECD_ISOHYBRID_DEPS}
     VERBATIM)
-
-# Additionally produce a branch/commit-tagged ISO name, e.g. reactos_dev.iso or reactos_<commit>.iso
-# Determine Git work dir
-if(DEFINED REACTOS_SOURCE_DIR)
-    set(_GIT_WORK_DIR ${REACTOS_SOURCE_DIR})
-else()
-    set(_GIT_WORK_DIR ${CMAKE_SOURCE_DIR})
-endif()
-
-# Try branch name first; if detached or unavailable, fall back to short commit
-set(_GIT_BRANCH "")
-execute_process(
-    COMMAND git rev-parse --abbrev-ref HEAD
-    WORKING_DIRECTORY ${_GIT_WORK_DIR}
-    OUTPUT_VARIABLE _GIT_BRANCH
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET)
-
-set(_ISO_TAG "")
-if(_GIT_BRANCH AND NOT _GIT_BRANCH STREQUAL "HEAD")
-    set(_ISO_TAG "${_GIT_BRANCH}")
-else()
-    set(_GIT_SHORT "")
-    execute_process(
-        COMMAND git rev-parse --short=7 HEAD
-        WORKING_DIRECTORY ${_GIT_WORK_DIR}
-        OUTPUT_VARIABLE _GIT_SHORT
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET)
-    if(_GIT_SHORT)
-        set(_ISO_TAG "${_GIT_SHORT}")
-    else()
-        # Final fallback if not a git repo: use 'local'
-        set(_ISO_TAG "local")
-    endif()
-endif()
-
-# Sanitize for filename safety
-string(REPLACE "/" "_" _ISO_TAG ${_ISO_TAG})
-string(REGEX REPLACE "[^A-Za-z0-9_.-]" "_" _ISO_TAG ${_ISO_TAG})
-if(NOT _ISO_TAG STREQUAL "dev")
-    set(REACTOS_TAGGED_ISO "reactos_${_ISO_TAG}.iso")
-    add_custom_command(
-        OUTPUT ${REACTOS_BINARY_DIR}/${REACTOS_TAGGED_ISO}
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${REACTOS_BINARY_DIR}/livecd.iso ${REACTOS_BINARY_DIR}/${REACTOS_TAGGED_ISO}
-        DEPENDS livecd ${REACTOS_BINARY_DIR}/livecd.iso
-        COMMENT "Creating tagged ISO ${REACTOS_TAGGED_ISO}"
-        VERBATIM)
-endif()
 
 # Optional LiveUSB helper bundle: copy the ISO alongside a pre-formatted
 # writable FAT image that can be appended on removable media.

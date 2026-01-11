@@ -145,6 +145,25 @@ FormatAddressWithModule(ULONG_PTR Address)
 
         if (gFreeldrRos)
         {
+#ifdef __ROS_DWARF__
+            ROSSYM_LINEINFO LineInfo = {0};
+            if (RosSymGetAddressInformation(gFreeldrRos, (ULONG_PTR)(Address - base), &LineInfo))
+            {
+                PCHAR func = LineInfo.FunctionName;
+                PCHAR file = LineInfo.FileName;
+                ULONG line = LineInfo.LineNumber;
+                if (func && func[0] && file && file[0] && line)
+                    DbgPrint("    %p (freeldr!%s) %s:%lu\n", (PVOID)Address, func, file, (unsigned long)line);
+                else if (func && func[0])
+                    DbgPrint("    %p (freeldr!%s)\n", (PVOID)Address, func);
+                else if (file && file[0] && line)
+                    DbgPrint("    %p (freeldr+0x%Ix) %s:%lu\n", (PVOID)Address, (SIZE_T)(Address - base), file, (unsigned long)line);
+                else
+                    DbgPrint("    %p (freeldr+0x%Ix)\n", (PVOID)Address, (SIZE_T)(Address - base));
+                RosSymFreeInfo(&LineInfo);
+                return;
+            }
+#else
             ULONG line = 0; CHAR file[128] = {0}; CHAR func[128] = {0};
             if (RosSymGetAddressInformation(gFreeldrRos, (ULONG_PTR)(Address - base), &line, file, func))
             {
@@ -158,6 +177,7 @@ FormatAddressWithModule(ULONG_PTR Address)
                     DbgPrint("    %p (freeldr+0x%Ix)\n", (PVOID)Address, (SIZE_T)(Address - base));
                 return;
             }
+#endif
         }
 
         /* Prefer embedded freeldr symbol table when available */

@@ -34,16 +34,3 @@ add_library(hal MODULE
     ${SOURCES}
     ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
 reactos_hal_setup(hal 0)
-
-# Inject compact .rossym symbols into HAL on ARM64 so early backtraces
-# can resolve addresses without external symbols.
-if(ARCH STREQUAL "arm64")
-    if(TARGET native-rsym)
-        get_target_property(RSYM native-rsym IMPORTED_LOCATION)
-        add_custom_command(TARGET hal POST_BUILD
-            COMMAND ${RSYM} -s ${REACTOS_SOURCE_DIR} $<TARGET_FILE:hal> $<TARGET_FILE:hal>
-            COMMENT "Injecting .rossym into hal (ARM64)")
-    else()
-        message(STATUS "native-rsym not available; skipping .rossym injection for hal (ARM64)")
-    endif()
-endif()

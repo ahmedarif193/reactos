@@ -34,7 +34,7 @@ elseif((CMAKE_C_COMPILER_ID STREQUAL "GNU") AND (ARCH STREQUAL "amd64"))
 else()
 
     if(USE_PSEH3 AND ARCH STREQUAL "i386")
-        include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/pseh)
+        include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include/pseh)
         list(APPEND SOURCE
             i386/pseh3.c
             i386/pseh3_i386.S)
