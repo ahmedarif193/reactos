@@ -16,8 +16,6 @@
 #define NDEBUG
 #include <debug.h>
 #define trace 0
-#define MAX_DEFINED_FILES 64
-
 enum
 {
     Isstmt = 1<<0,
@@ -52,9 +50,11 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
     DwarfBuf b;
     DwarfSym sym;
     State emit, cur, reset;
-    char *defined_files[MAX_DEFINED_FILES];
+    char **defined_files = NULL;
     ULONG defined_count = 0;
+    ULONG defined_capacity = 0;
     ULONG header_file_count = 0;
+    int ret = -1;
 
     memset(proc, 0, sizeof(*proc));
 
@@ -211,8 +211,23 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
                     break;
                 case 3:	/* define file */
                     s = dwarfgetstring(&b);
-                    if (defined_count < MAX_DEFINED_FILES)
-                        defined_files[defined_count++] = s;
+                    if (defined_count == defined_capacity)
+                    {
+                        ULONG new_capacity = defined_capacity ? defined_capacity * 2 : 16;
+                        char **new_defined_files = RosSymAllocMem(new_capacity * sizeof(char *));
+                        if (!new_defined_files)
+                            goto out;
+
+                        if (defined_files)
+                        {
+                            RtlCopyMemory(new_defined_files, defined_files, defined_count * sizeof(char *));
+                            RosSymFreeMem(defined_files);
+                        }
+
+                        defined_files = new_defined_files;
+                        defined_capacity = new_capacity;
+                    }
+                    defined_files[defined_count++] = s;
                     dwarfget128(&b);
                     dwarfget128(&b);
                     dwarfget128(&b);
@@ -363,7 +378,7 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
         DwarfSym compunit = { };
         int renum = dwarfenumunit(d, unit, &compunit);
         if (renum < 0)
-            return -1;
+            goto out;
         renum = dwarfnextsymat(d, &compunit, proc);
         while (renum == 0) {
             if (proc->attrs.tag == TagSubprogram &&
@@ -384,7 +399,7 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
         DwarfSym compunit = { };
         int renum = dwarfenumunit(d, unit, &compunit);
         if (renum < 0)
-            return -1;
+            goto out;
         renum = dwarfnextsymat(d, &compunit, proc);
         while (renum == 0) {
             if (proc->attrs.tag == TagSubprogram &&
@@ -404,11 +419,17 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
 
     /* free at last, free at last */
 done:
-    return 0;
+    ret = 0;
+    goto cleanup;
 bad:
     werrstr("corrupted line mapping for %p", (PVOID)pc);
+    goto cleanup;
 out:
-    return -1;
+    goto cleanup;
+cleanup:
+    if (defined_files)
+        RosSymFreeMem(defined_files);
+    return ret;
 }
 
 VOID RosSymFreeInfo(PROSSYM_LINEINFO LineInfo)
