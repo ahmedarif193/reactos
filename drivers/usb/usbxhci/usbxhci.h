@@ -44,6 +44,7 @@
 #define XHCI_QUIRK_LIMIT_U1U2         0x00000010
 #define XHCI_QUIRK_IGNORE_STARTUP_HCE 0x00000020
 #define XHCI_QUIRK_QEMU_CONFIG_EP_ORDER 0x00000040
+#define XHCI_QUIRK_NON_COHERENT_DMA   0x00000080
 #define XHCI_BOUNCE_POOL_SLOTS 4
 #define XHCI_BOUNCE_BUFFER_SIZE 0x10000
 
@@ -215,6 +216,7 @@ typedef struct _XHCI_EXTENSION {
   UCHAR MsixCapOffset;
   /* PnP/synchronization */
   volatile LONG Ep0WorkerCount;
+  volatile LONG SwEnumWorkerCount;
   BOOLEAN StoppingOrRemoved;
   KTIMER Ep0PollTimer;
   KDPC Ep0PollDpc;
@@ -242,6 +244,17 @@ typedef struct _XHCI_ENDPOINT {
     PUSBPORT_SCATTER_GATHER_LIST PendingSgList;
     struct _XHCI_TRANSFER *ActiveTransfer;
     volatile LONG PendingWorkCount;
+    /*
+     * SwEnumRefCount: Miniport-owned reference count for SW-enum work items.
+     * Incremented when queuing async work, decremented on completion.
+     * ClosePipe waits until this reaches zero before freeing resources.
+     */
+    volatile LONG SwEnumRefCount;
+    /*
+     * Closing: Set by ClosePipe to prevent new work from being queued.
+     * Once set, XHCI_ReferenceEndpointForSwEnum returns FALSE.
+     */
+    volatile LONG Closing;
     KSPIN_LOCK Lock;
     UCHAR SlotId;
     UCHAR EndpointId;
@@ -282,6 +295,9 @@ typedef struct _XHCI_TRANSFER {
 #define XHCI_TRANSFER_FLAG_SET_ADDRESS   0x00000001
 #define XHCI_TRANSFER_FLAG_GET_DESCRIPTOR 0x00000002
 #define XHCI_TRANSFER_FLAG_NEEDS_POLL    0x00000004
+#define XHCI_TRANSFER_FLAG_SWENUM_PENDING 0x00000008
+#define XHCI_TRANSFER_FLAG_SWENUM_CANCELED 0x00000010
+#define XHCI_TRANSFER_FLAG_SWENUM_DONE    0x00000020
 
 BOOLEAN
 XHCI_EndpointNeedsTt(
