@@ -61,16 +61,32 @@ IopFindBusNumberResource(
     ASSERT(IoDesc->Type == CmDesc->Type);
     ASSERT(IoDesc->Type == CmResourceTypeBusNumber);
 
-    for (Start = IoDesc->u.BusNumber.MinBusNumber;
-         Start <= IoDesc->u.BusNumber.MaxBusNumber - IoDesc->u.BusNumber.Length + 1;
-         Start++)
+    /*
+     * Use a while loop instead of for loop to properly skip conflicting ranges.
+     * When a conflict is found, we skip directly to the end of the conflicting
+     * range instead of incrementing by 1 each time. This dramatically reduces
+     * the number of expensive IopCheckDescriptorForConflict calls from O(n) to O(conflicts).
+     */
+    Start = IoDesc->u.BusNumber.MinBusNumber;
+    while (Start <= IoDesc->u.BusNumber.MaxBusNumber - IoDesc->u.BusNumber.Length + 1)
     {
         CmDesc->u.BusNumber.Length = IoDesc->u.BusNumber.Length;
         CmDesc->u.BusNumber.Start = Start;
 
         if (IopCheckDescriptorForConflict(CmDesc, &ConflictingDesc))
         {
-            Start += ConflictingDesc.u.BusNumber.Start + ConflictingDesc.u.BusNumber.Length;
+            /* Skip past the entire conflicting range */
+            ULONG ConflictEnd = ConflictingDesc.u.BusNumber.Start + ConflictingDesc.u.BusNumber.Length;
+            if (ConflictEnd <= Start)
+            {
+                /* Conflict is before or at current position, move forward by 1 */
+                Start++;
+            }
+            else
+            {
+                /* Jump directly to end of conflicting range */
+                Start = ConflictEnd;
+            }
         }
         else
         {
@@ -98,17 +114,33 @@ IopFindMemoryResource(
     if (IoDesc->u.Memory.Alignment == 0)
         IoDesc->u.Memory.Alignment = 1;
 
-    for (Start = (ULONGLONG)IoDesc->u.Memory.MinimumAddress.QuadPart;
-         Start <= (ULONGLONG)IoDesc->u.Memory.MaximumAddress.QuadPart - IoDesc->u.Memory.Length + 1;
-         Start += IoDesc->u.Memory.Alignment)
+    /*
+     * Use a while loop to properly skip conflicting ranges.
+     * When a conflict is found, skip directly to the end of the conflicting
+     * range (aligned) instead of incrementing by alignment each time.
+     */
+    Start = (ULONGLONG)IoDesc->u.Memory.MinimumAddress.QuadPart;
+    while (Start <= (ULONGLONG)IoDesc->u.Memory.MaximumAddress.QuadPart - IoDesc->u.Memory.Length + 1)
     {
         CmDesc->u.Memory.Length = IoDesc->u.Memory.Length;
         CmDesc->u.Memory.Start.QuadPart = (LONGLONG)Start;
 
         if (IopCheckDescriptorForConflict(CmDesc, &ConflictingDesc))
         {
-            Start += (ULONGLONG)ConflictingDesc.u.Memory.Start.QuadPart +
-                     ConflictingDesc.u.Memory.Length;
+            /* Skip past the entire conflicting range */
+            ULONGLONG ConflictEnd = (ULONGLONG)ConflictingDesc.u.Memory.Start.QuadPart +
+                                    ConflictingDesc.u.Memory.Length;
+            if (ConflictEnd <= Start)
+            {
+                /* Conflict is before or at current position, move forward by alignment */
+                Start += IoDesc->u.Memory.Alignment;
+            }
+            else
+            {
+                /* Align the conflict end to our alignment boundary */
+                ULONGLONG Alignment = IoDesc->u.Memory.Alignment;
+                Start = ((ConflictEnd + Alignment - 1) / Alignment) * Alignment;
+            }
         }
         else
         {
@@ -136,16 +168,33 @@ IopFindPortResource(
     if (IoDesc->u.Port.Alignment == 0)
         IoDesc->u.Port.Alignment = 1;
 
-    for (Start = (ULONGLONG)IoDesc->u.Port.MinimumAddress.QuadPart;
-         Start <= (ULONGLONG)IoDesc->u.Port.MaximumAddress.QuadPart - IoDesc->u.Port.Length + 1;
-         Start += IoDesc->u.Port.Alignment)
+    /*
+     * Use a while loop to properly skip conflicting ranges.
+     * When a conflict is found, skip directly to the end of the conflicting
+     * range (aligned) instead of incrementing by alignment each time.
+     */
+    Start = (ULONGLONG)IoDesc->u.Port.MinimumAddress.QuadPart;
+    while (Start <= (ULONGLONG)IoDesc->u.Port.MaximumAddress.QuadPart - IoDesc->u.Port.Length + 1)
     {
         CmDesc->u.Port.Length = IoDesc->u.Port.Length;
         CmDesc->u.Port.Start.QuadPart = (LONGLONG)Start;
 
         if (IopCheckDescriptorForConflict(CmDesc, &ConflictingDesc))
         {
-            Start += (ULONGLONG)ConflictingDesc.u.Port.Start.QuadPart + ConflictingDesc.u.Port.Length;
+            /* Skip past the entire conflicting range */
+            ULONGLONG ConflictEnd = (ULONGLONG)ConflictingDesc.u.Port.Start.QuadPart +
+                                    ConflictingDesc.u.Port.Length;
+            if (ConflictEnd <= Start)
+            {
+                /* Conflict is before or at current position, move forward by alignment */
+                Start += IoDesc->u.Port.Alignment;
+            }
+            else
+            {
+                /* Align the conflict end to our alignment boundary */
+                ULONGLONG Alignment = IoDesc->u.Port.Alignment;
+                Start = ((ConflictEnd + Alignment - 1) / Alignment) * Alignment;
+            }
         }
         else
         {
