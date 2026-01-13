@@ -107,33 +107,119 @@ RosSymCreateFromMem(PVOID ImageStart, ULONG_PTR ImageSize, PROSSYM_INFO *RosSymI
 					}
 
 					/* If we couldn't find it in mapped sections, try using the section characteristics
-					 * to identify DWARF sections by their typical attributes */
+					 * to identify DWARF sections by their typical attributes.
+					 *
+					 * DWARF sections have predictable characteristics:
+					 * - IMAGE_SCN_CNT_INITIALIZED_DATA (0x40): Contains initialized data
+					 * - IMAGE_SCN_MEM_DISCARDABLE (0x02000000): Can be discarded after load
+					 * - IMAGE_SCN_MEM_READ (0x40000000): Readable
+					 *
+					 * We also use section size heuristics to distinguish between different
+					 * DWARF sections since they have predictable relative sizes.
+					 */
 					if (!VirtualOffset) {
 						ULONG chars = OrigSectionHeaders[SectionIndex].Characteristics;
-						/* DWARF sections have IMAGE_SCN_CNT_INITIALIZED_DATA (0x40) and
-						 * IMAGE_SCN_MEM_DISCARDABLE (0x02000000) or IMAGE_SCN_MEM_READ (0x40000000) */
-						if ((chars & 0x40) && (chars & 0x42000000)) {
-							/* Try to identify by order - DWARF sections typically come after .reloc */
-							static const char* DwarfNames[] = {
-								".debug_aranges", ".debug_info", ".debug_abbrev", ".debug_line",
-								".debug_frame", ".debug_str", ".debug_loc", ".debug_ranges", ".debug_pubnames"
-							};
-							/* Find the first DWARF section index by looking for the first section
-							 * with debug characteristics after all regular sections */
-							ULONG FirstDebugSection = 0;
+						ULONG sectionSize = OrigSectionHeaders[SectionIndex].SizeOfRawData;
+
+						/* Check for typical DWARF section characteristics */
+						if ((chars & IMAGE_SCN_CNT_INITIALIZED_DATA) &&
+							(chars & IMAGE_SCN_MEM_DISCARDABLE) &&
+							(chars & IMAGE_SCN_MEM_READ)) {
+
+							/*
+							 * Build a size profile of all debug-like sections to identify
+							 * which specific DWARF section this is. We use relative sizes
+							 * and ordering to make educated guesses.
+							 */
+							typedef struct {
+								ULONG index;
+								ULONG size;
+								ULONG chars;
+							} DebugSectionInfo;
+
+							DebugSectionInfo debugSections[16];
+							ULONG debugSectionCount = 0;
+
+							/* Collect all sections with debug characteristics */
 							for (ULONG k = 0; k < NtHeaders->FileHeader.NumberOfSections; k++) {
 								ULONG kchars = OrigSectionHeaders[k].Characteristics;
-								/* Section with long name and debug-like characteristics */
 								if ((OrigSectionHeaders[k].Name[0] == '/') &&
-									(kchars & 0x40) && (kchars & 0x42000000)) {
-									FirstDebugSection = k;
+									(kchars & IMAGE_SCN_CNT_INITIALIZED_DATA) &&
+									(kchars & IMAGE_SCN_MEM_DISCARDABLE) &&
+									(kchars & IMAGE_SCN_MEM_READ)) {
+									if (debugSectionCount < 16) {
+										debugSections[debugSectionCount].index = k;
+										debugSections[debugSectionCount].size = OrigSectionHeaders[k].SizeOfRawData;
+										debugSections[debugSectionCount].chars = kchars;
+										debugSectionCount++;
+									}
+								}
+							}
+
+							/* Find which debug section this is */
+							ULONG positionInDebugSections = 0;
+							for (ULONG k = 0; k < debugSectionCount; k++) {
+								if (debugSections[k].index == SectionIndex) {
+									positionInDebugSections = k;
 									break;
 								}
 							}
-							if (FirstDebugSection && SectionIndex >= FirstDebugSection) {
-								ULONG DebugIndex = SectionIndex - FirstDebugSection;
-								if (DebugIndex < sizeof(DwarfNames)/sizeof(DwarfNames[0])) {
-									ResolvedName = (PCHAR)DwarfNames[DebugIndex];
+
+							/*
+							 * Standard DWARF section order (typical in GCC/MinGW output):
+							 * .debug_aranges  - Small, address range table
+							 * .debug_info     - Large, main debug information
+							 * .debug_abbrev   - Medium, abbreviation table
+							 * .debug_line     - Large, line number information
+							 * .debug_frame    - Medium, call frame information
+							 * .debug_str      - Medium, string table
+							 * .debug_loc      - Variable, location lists
+							 * .debug_ranges   - Small, range lists
+							 * .debug_pubnames - Small, public names
+							 * .debug_pubtypes - Small, public types
+							 *
+							 * We use a combination of:
+							 * 1. Section position in the debug sections list
+							 * 2. Relative size compared to other debug sections
+							 * 3. Absolute size heuristics
+							 */
+
+							/* Find largest sections (typically .debug_info and .debug_line) */
+							ULONG largestSize = 0;
+							ULONG secondLargestSize = 0;
+							for (ULONG k = 0; k < debugSectionCount; k++) {
+								if (debugSections[k].size > largestSize) {
+									secondLargestSize = largestSize;
+									largestSize = debugSections[k].size;
+								} else if (debugSections[k].size > secondLargestSize) {
+									secondLargestSize = debugSections[k].size;
+								}
+							}
+
+							/* Identify section based on size and position */
+							if (sectionSize == largestSize) {
+								/* Largest section is typically .debug_info */
+								ResolvedName = ".debug_info";
+							} else if (sectionSize == secondLargestSize) {
+								/* Second largest is typically .debug_line */
+								ResolvedName = ".debug_line";
+							} else {
+								/* Use position-based heuristic for smaller sections */
+								static const char* DwarfNames[] = {
+									".debug_aranges",
+									".debug_info",
+									".debug_abbrev",
+									".debug_line",
+									".debug_frame",
+									".debug_str",
+									".debug_loc",
+									".debug_ranges",
+									".debug_pubnames",
+									".debug_pubtypes"
+								};
+
+								if (positionInDebugSections < sizeof(DwarfNames)/sizeof(DwarfNames[0])) {
+									ResolvedName = (PCHAR)DwarfNames[positionInDebugSections];
 								}
 							}
 						}
