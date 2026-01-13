@@ -61,7 +61,7 @@ page
 
         .code
 
-        public  _strncpy
+        PUBLIC  _strncpy
 .PROC _strncpy
         // dest:ptr byte, \
         // source:ptr byte, \
@@ -236,7 +236,7 @@ fill_tail_end:
         ret
 
 .ENDP // _strncpy
-        end
+        END
 
 
 

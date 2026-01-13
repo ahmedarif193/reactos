@@ -87,8 +87,8 @@ page
 
         .code
 
-       public _strcat
-       public _strcpy      // make both functions available
+       PUBLIC _strcat
+       PUBLIC _strcpy      // make both functions available
 .PROC _strcpy
         // dst:ptr byte, \
         // src:ptr byte
@@ -101,7 +101,7 @@ page
 
 .ENDP // _strcpy
 
-        align   16
+        ALIGN   16
 
 .PROC _strcat
         // dst:ptr byte, \
@@ -124,7 +124,7 @@ dest_misaligned:                    // simple byte loop until string is aligned
         test    ecx,3
         jne     short dest_misaligned
 
-        align   4
+        ALIGN   4
 
 find_end_of_dest_string_loop:
         mov     eax,dword ptr [ecx] // read 4 bytes
@@ -231,5 +231,5 @@ byte_0:
 
 .ENDP // _strcat
 
-        end
+        END
 

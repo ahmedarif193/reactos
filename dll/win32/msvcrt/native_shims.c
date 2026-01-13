@@ -119,9 +119,17 @@ const unsigned short *_pctype = NULL;
 const unsigned short *_pwctype = NULL;
 
 char *_sys_errlist[1] = {NULL};
-char **__sys_errlist = _sys_errlist;
 int _sys_nerr = 0;
-int *__sys_nerr = &_sys_nerr;
+
+char **__cdecl __sys_errlist(void)
+{
+    return _sys_errlist;
+}
+
+int *__cdecl __sys_nerr(void)
+{
+    return &_sys_nerr;
+}
 void *__badioinfo = NULL;
 void *__pioinfo[64] = {0};
 FILE _iob[20] = {0};

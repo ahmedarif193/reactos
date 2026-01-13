@@ -62,26 +62,9 @@ UCHAR RtlpBitsClearLow[] =
     4,0,1,0,2,0,1,0,3,0,1,0,2,0,1,0
 };
 
-FORCEINLINE
-UCHAR
-RtlpFindLeastSetBit(ULONG Bits)
-{
-    if (Bits & 0xFFFF)
-    {
-        if (Bits & 0xFF)
-            return RtlpBitsClearLow[Bits & 0xFF]; /* Lowest byte */
-        else
-            return RtlpBitsClearLow[(Bits >> 8) & 0xFF] + 8; /* 2nd byte */
-    }
-    else
-    {
-        if ((Bits >> 16) & 0xFF)
-            return RtlpBitsClearLow[(Bits >> 16) & 0xFF] + 16; /* 3rd byte */
-        else
-            return RtlpBitsClearLow[(Bits >> 24) & 0xFF] + 24; /* Highest byte */
-    }
-}
-
+#if defined(__GNUC__)
+__attribute__((unused))
+#endif
 /* Maximum size of a tail-filling pattern used for compare operation */
 UCHAR FillPattern[HEAP_ENTRY_SIZE] =
 {

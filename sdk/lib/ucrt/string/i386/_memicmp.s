@@ -60,7 +60,7 @@ page
 
         .code
 
-        public  ___ascii_memicmp
+        PUBLIC  ___ascii_memicmp
 .PROC ___ascii_memicmp
 
 // Prolog. Original sources used ML's extended PROC feature to autogenerate this.
@@ -86,7 +86,7 @@ page
         mov     bl,'Z'
         mov     dh,'a'-'A'      // add to cap to make lower
 
-        align   4
+        ALIGN   4
 
 lupe:
         mov     ah,[esi]        // ah = *first
@@ -142,4 +142,4 @@ toend:
         ret                     // _cdecl return
 
 .ENDP // ___ascii_memicmp
-        end
+        END

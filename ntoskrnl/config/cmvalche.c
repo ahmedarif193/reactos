@@ -26,14 +26,6 @@ CmpIsValueCached(IN HCELL_INDEX CellIndex)
     return FALSE;
 }
 
-FORCEINLINE
-VOID
-CmpSetValueCached(IN PHCELL_INDEX CellIndex)
-{
-    /* Set the cached bit */
-    *CellIndex |= 1;
-}
-
 #define ASSERT_VALUE_CACHE() \
     ASSERTMSG("Cached Values Not Yet Supported!\n", FALSE);
 

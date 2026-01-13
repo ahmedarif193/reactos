@@ -10,9 +10,11 @@
 #include <stddef.h>
 
 #if defined(_M_IX86) || defined(_M_X64)
+#if !defined(_BLDR_) || defined(_M_X64)
 #include <immintrin.h>
 //#include <ammintrin.h>
 #include <xmmintrin.h> // native headers: immintrin.h -> wmmintrin.h -> nmmintrin.h -> smmintrin.h -> tmmintrin.h -> pmmintrin.h -> emmintrin.h
+#endif /* !_BLDR_ || _M_X64 */
 #endif /* _M_IX86 || _M_X64 */
 
 #if defined(_M_IX86)

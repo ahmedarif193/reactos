@@ -31,8 +31,6 @@
 @ stdcall HalGetInterruptVector(long long long long ptr ptr)
 @ stdcall HalIsAcpiBusMasterActive()
 @ stdcall HalGetAcpiSciVector()
-@ stdcall HalGetAcpiCStateInformation(ptr)
-@ stdcall HalIsAcpiBusMasterActive()
 ;@ stdcall -arch=x86_64 HalHandleMcheck()
 @ stdcall -arch=i386,x86_64 HalHandleNMI(ptr)
 @ stdcall HalInitSystem(long ptr)

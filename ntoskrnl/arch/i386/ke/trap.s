@@ -3,7 +3,7 @@
  * COPYRIGHT:       See COPYING in the top level directory
  * PURPOSE:         System Traps, Entrypoints and Exitpoints
  * PROGRAMMER:      Alex Ionescu (alex@relsoft.net)
- *                  Timo Kreuzer (timo.kreuzer@reactos.org)
+ * Timo Kreuzer (timo.kreuzer@reactos.org)
  * NOTE:            See asmmacro.S for the shared entry/exit code.
  */
 
@@ -36,7 +36,7 @@ ASSUME CS:nothing
 
 PUBLIC _KiIdt
 _KiIdt:
-/* This is the Software Interrupt Table that we handle in this file:        */
+/* This is the Software Interrupt Table that we handle in this file:         */
 idt _KiTrap00,         INT_32_DPL0  /* INT 00: Divide Error (#DE)           */
 idt _KiTrap01,         INT_32_DPL0  /* INT 01: Debug Exception (#DB)        */
 idt _KiTrap02,         INT_32_DPL0  /* INT 02: NMI Interrupt                */
@@ -68,7 +68,9 @@ idt _KiRaiseAssertion, INT_32_DPL3  /* INT 2C: Debug Assertion Handler      */
 idt _KiDebugService,   INT_32_DPL3  /* INT 2D: Debug Service Handler        */
 idt _KiSystemService,  INT_32_DPL3  /* INT 2E: System Call Service Handler  */
 idt _KiTrap0F,         INT_32_DPL0  /* INT 2F: RESERVED                     */
-i = HEX(30)
+
+/* FIX: Use decimal 48 (0x30) to ensure reliable macro math/generation */
+i = 48
 REPEAT 208
     GENERATE_IDT_STUB %i
     i = i + 1
@@ -77,7 +79,7 @@ ENDR
 PUBLIC _KiIdtDescriptor
 _KiIdtDescriptor:
     .short 0
-    .short HEX(7FF)
+    .short 0x7FF
     .long _KiIdt
 
 PUBLIC _KiUnexpectedEntrySize
@@ -89,7 +91,9 @@ _KiUnexpectedEntrySize:
 
 PUBLIC _KiStartUnexpectedRange@0
 _KiStartUnexpectedRange@0:
-i = HEX(30)
+
+/* FIX: Use decimal 48 (0x30) to ensure reliable macro math/generation */
+i = 48
 REPEAT 208
     GENERATE_INT_HANDLER %i
     i = i + 1

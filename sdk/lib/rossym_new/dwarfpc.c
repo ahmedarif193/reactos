@@ -84,7 +84,7 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
     b.addrsize = sym.b.addrsize;	/* should i get this from somewhere else? */
 
     len = dwarfget4(&b);
-    if(b.p==nil || b.p+len > b.ep || b.p+len < b.p){
+    if(b.p==nil || len > (size_t)(b.ep - b.p)){
         werrstr("bad len");
         goto bad;
     }
@@ -97,7 +97,7 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
     }
 
     len = dwarfget4(&b);
-    if(b.p==nil || b.p+len > b.ep || b.p+len < b.p){
+    if(b.p==nil || len > (size_t)(b.ep - b.p)){
         werrstr("another bad len");
         goto bad;
     }

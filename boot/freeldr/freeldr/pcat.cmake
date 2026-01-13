@@ -170,9 +170,20 @@ if(MSVC AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # We need to reduce the binary size
     target_compile_options(freeldr_common PRIVATE "/Os")
 endif()
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    # Prevent using SSE (no support in freeldr)
-    target_compile_options(freeldr_common PUBLIC -mno-sse)
+if(ARCH STREQUAL "i386")
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        # Prevent using SSE/SSE2/AVX (FreeLoader runs before SSE is enabled in the CPU)
+        target_compile_options(freeldr_common PUBLIC
+            -mno-mmx
+            -mno-sse
+            -mno-sse2
+            -mno-sse3
+            -mno-ssse3
+            -mno-sse4.1
+            -mno-sse4.2
+            -mno-avx
+            -mno-avx2)
+    endif()
 endif()
 
 set(PCH_SOURCE
@@ -210,6 +221,22 @@ if(NOT MSVC)
         -fno-stack-protector
         -fno-exceptions)
     target_link_options(freeldr_pe PRIVATE -nostdlib -nodefaultlibs -Wl,--gc-sections)
+endif()
+
+if(ARCH STREQUAL "i386")
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        # Prevent using SSE/SSE2/AVX (FreeLoader runs before SSE is enabled in the CPU)
+        target_compile_options(freeldr_pe PRIVATE
+            -mno-mmx
+            -mno-sse
+            -mno-sse2
+            -mno-sse3
+            -mno-ssse3
+            -mno-sse4.1
+            -mno-sse4.2
+            -mno-avx
+            -mno-avx2)
+    endif()
 endif()
 
 if(MSVC)
@@ -253,7 +280,7 @@ if(ARCH STREQUAL "i386")
     target_link_libraries(freeldr_pe mini_hal)
 endif()
 
-target_link_libraries(freeldr_pe freeldr_common cportlib libcntpr blrtl)
+target_link_libraries(freeldr_pe freeldr_common cportlib bllibcntpr blrtl)
 
 # dynamic analysis switches
 if(STACK_PROTECTOR)

@@ -34,11 +34,6 @@ void *__p__mbcasemap(void)
     return _mbcasemap;
 }
 
-extern char *_sys_errlist[];
-char **__sys_errlist = _sys_errlist;
-extern int _sys_nerr;
-int *__sys_nerr = &_sys_nerr;
-
 typedef int (__cdecl *_onexit_t)(void);
 __declspec(dllimport) _onexit_t __cdecl _onexit(_onexit_t func);
 

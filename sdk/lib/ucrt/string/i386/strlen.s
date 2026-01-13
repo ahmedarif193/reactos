@@ -52,7 +52,7 @@ page
 
         .code
 
-        public  _strlen
+        PUBLIC  _strlen
 
 .PROC _strlen
         // buf:ptr byte
@@ -78,7 +78,7 @@ str_misaligned:
 
         add     eax,dword ptr 0         // 5 byte nop to align label below
 
-        align   16                      // should be redundant
+        ALIGN   16                      // should be redundant
 
 main_loop:
         mov     eax,dword ptr [ecx]     // read 4 bytes
@@ -125,4 +125,4 @@ byte_0:
 
 .ENDP // _strlen
 
-        end
+        END

@@ -57,9 +57,9 @@ PUBLIC CpupDoCallBack
 
     /* Establish stack frame */
     push rbp
-    .pushreg rbp
+    .PUSHREG rbp
     mov rbp, rsp
-    .setframe rbp, 0
+    .SETFRAME rbp, 0
 
     /* Allocate space for:
      * - Shadow space (4 * 8 = 32 bytes)
@@ -69,25 +69,25 @@ PUBLIC CpupDoCallBack
      * Total: 640 bytes, aligned to 16
      */
     sub rsp, HEX(280)
-    .allocstack HEX(280)
+    .ALLOCSTACK HEX(280)
 
     /* Save non-volatile registers */
     mov [rbp - 8], rbx
-    .savereg rbx, 8
+    .SAVEREG rbx, 8
     mov [rbp - 16], rsi
-    .savereg rsi, 16
+    .SAVEREG rsi, 16
     mov [rbp - 24], rdi
-    .savereg rdi, 24
+    .SAVEREG rdi, 24
     mov [rbp - 32], r12
-    .savereg r12, 32
+    .SAVEREG r12, 32
     mov [rbp - 40], r13
-    .savereg r13, 40
+    .SAVEREG r13, 40
     mov [rbp - 48], r14
-    .savereg r14, 48
+    .SAVEREG r14, 48
     mov [rbp - 56], r15
-    .savereg r15, 56
+    .SAVEREG r15, 56
 
-    .endprolog
+    .ENDPROLOG
 
     /* Save input parameters to non-volatile registers */
     mov r12, rcx  /* r12 = CallbackRoutine */
@@ -170,9 +170,9 @@ PUBLIC CpupDispatchException
 
     /* Establish stack frame */
     push rbp
-    .pushreg rbp
+    .PUSHREG rbp
     mov rbp, rsp
-    .setframe rbp, 0
+    .SETFRAME rbp, 0
 
     /* Allocate stack space:
      * - Shadow space (32 bytes)
@@ -183,25 +183,25 @@ PUBLIC CpupDispatchException
      * Total: 792 bytes, round to 800 (0x320) for alignment
      */
     sub rsp, HEX(320)
-    .allocstack HEX(320)
+    .ALLOCSTACK HEX(320)
 
     /* Save non-volatile registers */
     mov [rbp - 8], rbx
-    .savereg rbx, 8
+    .SAVEREG rbx, 8
     mov [rbp - 16], rsi
-    .savereg rsi, 16
+    .SAVEREG rsi, 16
     mov [rbp - 24], rdi
-    .savereg rdi, 24
+    .SAVEREG rdi, 24
     mov [rbp - 32], r12
-    .savereg r12, 32
+    .SAVEREG r12, 32
     mov [rbp - 40], r13
-    .savereg r13, 40
+    .SAVEREG r13, 40
     mov [rbp - 48], r14
-    .savereg r14, 48
+    .SAVEREG r14, 48
     mov [rbp - 56], r15
-    .savereg r15, 56
+    .SAVEREG r15, 56
 
-    .endprolog
+    .ENDPROLOG
 
 #if DBG
     /* Debug trace: entering exception dispatch */
@@ -362,7 +362,7 @@ PUBLIC CpupDispatchException
  */
 PUBLIC Wow64cpuSaveFpuContext
 .PROC Wow64cpuSaveFpuContext
-    .endprolog
+    .ENDPROLOG
 
     /* Ensure alignment */
     and rcx, HEX(FFFFFFFFFFFFFFF0)
@@ -386,7 +386,7 @@ PUBLIC Wow64cpuSaveFpuContext
  */
 PUBLIC Wow64cpuRestoreFpuContext
 .PROC Wow64cpuRestoreFpuContext
-    .endprolog
+    .ENDPROLOG
 
     /* Ensure alignment */
     and rcx, HEX(FFFFFFFFFFFFFFF0)

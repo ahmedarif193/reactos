@@ -63,7 +63,7 @@ page
 
     .code
 
-    public  _strncat
+    PUBLIC  _strncat
 .PROC _strncat
    // front:ptr byte,
    // back:ptr byte,
@@ -251,5 +251,5 @@ byte_1:
 
 .ENDP // _strncat
 
-        end
+        END
 

@@ -98,6 +98,23 @@ if(NOT MSVC)
     target_link_options(rosload PRIVATE -nostdlib -nodefaultlibs -Wl,--gc-sections)
 endif()
 
+if(ARCH STREQUAL "i386")
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        # Prevent using SSE/SSE2/AVX (FreeLoader runs before SSE is enabled in the CPU)
+        # The -mno-* flags override global -mmmx -msse2 flags from gcc.cmake
+        target_compile_options(rosload PRIVATE
+            -mno-mmx
+            -mno-sse
+            -mno-sse2
+            -mno-sse3
+            -mno-ssse3
+            -mno-sse4.1
+            -mno-sse4.2
+            -mno-avx
+            -mno-avx2)
+    endif()
+endif()
+
 set_image_base(rosload 0x10000) # 0x200000
 set_subsystem(rosload native)
 set_entrypoint(rosload RunLoader)
@@ -106,7 +123,7 @@ if(ARCH STREQUAL "i386")
     target_link_libraries(rosload mini_hal)
 endif()
 
-target_link_libraries(rosload blcmlib blrtl libcntpr)
+target_link_libraries(rosload blcmlib blrtl bllibcntpr)
 add_importlibs(rosload freeldr)
 
 # dynamic analysis switches

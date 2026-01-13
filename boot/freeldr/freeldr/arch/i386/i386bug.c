@@ -74,6 +74,7 @@ PrintTextV(const CHAR *Format, va_list args)
     Buffer[sizeof(Buffer) - 1] = ANSI_NULL;
 
     i386PrintText(Buffer);
+    DbgPrint("%s", Buffer);
 }
 
 static void

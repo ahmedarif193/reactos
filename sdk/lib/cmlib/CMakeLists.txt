@@ -23,6 +23,23 @@ if(CMAKE_CROSSCOMPILING)
     # CMLIB for NT bootloader
     add_library(blcmlib ${SOURCE})
     target_compile_definitions(blcmlib PRIVATE _BLDR_)
+
+    # Disable SSE/SSE2/AVX for i386 (FreeLoader runs before SSE is enabled in the CPU)
+    if(ARCH STREQUAL "i386")
+        if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+            target_compile_options(blcmlib PRIVATE
+                -mno-mmx
+                -mno-sse
+                -mno-sse2
+                -mno-sse3
+                -mno-ssse3
+                -mno-sse4.1
+                -mno-sse4.2
+                -mno-avx
+                -mno-avx2)
+        endif()
+    endif()
+
     add_dependencies(blcmlib bugcodes xdk)
     add_pch(blcmlib cmlib.h SOURCE)
 

@@ -278,7 +278,7 @@ MmCheckFreeldrImageFile(VOID)
     /* Check the file header */
     FileHeader = &NtHeaders->FileHeader;
     if ((FileHeader->Machine != IMAGE_FILE_MACHINE_NATIVE) ||
-        (FileHeader->NumberOfSections != FREELDR_SECTION_COUNT) ||
+        (FileHeader->NumberOfSections < FREELDR_SECTION_COUNT) ||
         (FileHeader->PointerToSymbolTable != 0) ||  // Symbols stripped
         (FileHeader->NumberOfSymbols != 0) ||       //    ""      ""
         (FileHeader->SizeOfOptionalHeader != sizeof(IMAGE_OPTIONAL_HEADER)))
@@ -290,7 +290,7 @@ MmCheckFreeldrImageFile(VOID)
             __LINE__,
             "FreeLdr FileHeader is invalid.\n"
             "Machine == 0x%lx, expected 0x%lx\n"
-            "NumberOfSections == 0x%lx, expected 0x%lx\n"
+            "NumberOfSections == 0x%lx, expected >= 0x%lx\n"
             "PointerToSymbolTable == 0x%lx, expected 0\n"
             "NumberOfSymbols == 0x%lx, expected 0\n"
             "SizeOfOptionalHeader == 0x%lx, expected 0x%lx\n",

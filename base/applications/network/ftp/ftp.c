@@ -467,7 +467,7 @@ void sendrequest(const char *cmd, const char *local, const char *remote, int pri
 	long bytes = 0, hashbytes = HASHBYTES;
 	register int c, d;
 	struct stat st;
-	struct timeval start, stop;
+    struct timeval start = {0}, stop = {0};
 	const char *mode;
 
 	if (verbose && printnames) {
@@ -748,7 +748,7 @@ void recvrequest(const char *cmd, const char *local, const char *remote, const c
 //	struct
 		fd_set mask;
 	register int c;
-	struct timeval start, stop;
+    struct timeval start = {0}, stop = {0};
 //	struct stat st;
 
 	is_retr = strcmp(cmd, "RETR") == 0;

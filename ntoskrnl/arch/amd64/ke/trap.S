@@ -47,6 +47,15 @@ MACRO(Fatal, BugcheckCode)
     call KiSystemFatalException
 ENDM
 
+MACRO(JMP_SELF)
+#ifdef _USE_ML
+    jmp $
+#else
+1:
+    jmp 1b
+#endif
+ENDM
+
 
 /* FUNCTIONS *****************************************************************/
 
@@ -60,8 +69,13 @@ MACRO(UnexpectedVectorStub, Vector)
     nop
     /* This is a push instruction with 8bit operand. Since the instruction
        sign extends the value to 32 bits, we need to offset it */
+#ifdef _USE_ML
 PUBLIC KxUnexpectedInterrupt&Vector
 KxUnexpectedInterrupt&Vector:
+#else
+PUBLIC KxUnexpectedInterrupt\()Vector
+KxUnexpectedInterrupt\()Vector:
+#endif
     push (Vector - 128)
     jmp KiUnexpectedInterrupt
 ENDM
@@ -76,6 +90,8 @@ ENDR
 PUBLIC KiUnexpectedRangeEnd
 KiUnexpectedRangeEnd:
 
+/* Align to 16 bytes so MOVAPS in KeInitializeInterrupt works correctly */
+ALIGN 16
 PUBLIC KiInterruptDispatchTemplate
 KiInterruptDispatchTemplate:
     /* This instruction pushes the return address on the stack, which is the
@@ -89,8 +105,8 @@ FUNC InternalDispatchException
 
     /* Allocate stack space for EXCEPTION_RECORD and KEXCEPTION_FRAME */
     sub rsp, EXCEPTION_RECORD_LENGTH + KEXCEPTION_FRAME_LENGTH
-    .allocstack (EXCEPTION_RECORD_LENGTH + KEXCEPTION_FRAME_LENGTH)
-    .endprolog
+    .ALLOCSTACK (EXCEPTION_RECORD_LENGTH + KEXCEPTION_FRAME_LENGTH)
+    .ENDPROLOG
 
     /* Set up EXCEPTION_RECORD */
     lea rcx, [rsp + KEXCEPTION_FRAME_LENGTH]
@@ -345,7 +361,7 @@ FUNC KiDoubleFaultAbort
 
     /* Bugcheck */
     Fatal 8 // EXCEPTION_DOUBLE_FAULT
-    jmp $
+    JMP_SELF
 ENDFUNC
 
 
@@ -357,7 +373,7 @@ FUNC KiNpxSegmentOverrunAbort
     /* Bugcheck */
     Fatal EXCEPTION_NPX_OVERRUN
 
-    jmp $
+    JMP_SELF
 ENDFUNC
 
 
@@ -368,7 +384,7 @@ FUNC KiInvalidTssFault
 
     /* Bugcheck */
     Fatal EXCEPTION_INVALID_TSS
-    jmp $
+    JMP_SELF
 ENDFUNC
 
 
@@ -379,7 +395,7 @@ FUNC KiSegmentNotPresentFault
 
     /* Bugcheck */
     Fatal EXCEPTION_SEGMENT_NOT_PRESENT
-    jmp $
+    JMP_SELF
 ENDFUNC
 
 
@@ -390,7 +406,7 @@ FUNC KiStackFault
 
     /* Bugcheck */
     Fatal EXCEPTION_STACK_FAULT
-    jmp $
+    JMP_SELF
 ENDFUNC
 
 
@@ -502,7 +518,7 @@ PageFaultReturn:
     cli
 
     /* Return */
-    ExitTrap (TF_SAVE_ALL or TF_CHECKUSERAPC)
+    ExitTrap (TF_SAVE_ALL OR TF_CHECKUSERAPC)
 ENDFUNC
 
 
@@ -526,7 +542,7 @@ FUNC KiAlignmentFault
 
     /* Bugcheck */
     Fatal EXCEPTION_ALIGNMENT_CHECK
-    jmp $
+    JMP_SELF
 ENDFUNC
 
 
@@ -537,7 +553,7 @@ FUNC KiMcheckAbort
 
     /* Bugcheck */
     Fatal HEX(12)
-    jmp $
+    JMP_SELF
 ENDFUNC
 
 
@@ -602,7 +618,7 @@ ENDFUNC
 PUBLIC KiApcInterrupt
 .PROC KiApcInterrupt
    /* No error code */
-    EnterTrap (TF_SAVE_ALL or TF_IRQL)
+    EnterTrap (TF_SAVE_ALL OR TF_IRQL)
 
     /* Raise to APC_LEVEL */
     mov rax, APC_LEVEL
@@ -629,7 +645,7 @@ PUBLIC KiApcInterrupt
     mov cr8, rax
 
     /* Return */
-    ExitTrap (TF_SAVE_ALL or TF_IRQL)
+    ExitTrap (TF_SAVE_ALL OR TF_IRQL)
 .ENDP
 
 /*
@@ -648,10 +664,10 @@ EXTERN KiRetireDpcList:PROC
 PUBLIC KiRetireDpcListInDpcStack
 .PROC KiRetireDpcListInDpcStack
     push rbp
-    .pushreg rbp
+    .PUSHREG rbp
     mov rbp, rsp
-    .setframe rbp, 0
-    .endprolog
+    .SETFRAME rbp, 0
+    .ENDPROLOG
 
     /* Switch to the DpcStack */
     mov rsp, rdx
@@ -671,20 +687,20 @@ PUBLIC KiRetireDpcListInDpcStack
 PUBLIC KiDpcInterrupt
 .PROC KiDpcInterrupt
    /* No error code */
-    EnterTrap (TF_SAVE_ALL or TF_IRQL)
+    EnterTrap (TF_SAVE_ALL OR TF_IRQL)
 
     /* Call the worker routine */
     call KiDpcInterruptHandler
 
     /* Return, but don't send an EOI! */
-    ExitTrap (TF_SAVE_ALL or TF_IRQL)
+    ExitTrap (TF_SAVE_ALL OR TF_IRQL)
 .ENDP
 
 
 PUBLIC KiIpiInterrupt
 .PROC KiIpiInterrupt
    /* No error code */
-    EnterTrap (TF_SAVE_ALL or TF_IRQL)
+    EnterTrap (TF_SAVE_ALL OR TF_IRQL)
 
     /* Raise to IPI_LEVEL */
     mov rax, IPI_LEVEL
@@ -699,7 +715,7 @@ PUBLIC KiIpiInterrupt
      * (KeIpiGenericCall / KiIpiSendPacket / IPI_SYNCH_REQUEST). */
 
     /* Return */
-    ExitTrap (TF_SAVE_ALL or TF_IRQL)
+    ExitTrap (TF_SAVE_ALL OR TF_IRQL)
 .ENDP
 
 
@@ -717,7 +733,7 @@ FUNC KiUnexpectedInterrupt
     sub rsp, 8
     mov [rbp + KTRAP_FRAME_P5 + 8], rbp // trap frame
     call KeBugCheckWithTf
-    jmp $
+    JMP_SELF
 #endif
     /* Return */
     ExitTrap TF_SAVE_ALL
@@ -726,7 +742,7 @@ ENDFUNC
 PUBLIC KiInterruptDispatch
 FUNC KiInterruptDispatch
     /* The error code is a pointer to the interrupt object's code */
-    EnterTrap (TF_HAS_ERROR_CODE or TF_SAVE_ALL or TF_IRQL)
+    EnterTrap (TF_HAS_ERROR_CODE OR TF_SAVE_ALL OR TF_IRQL)
 
     /* Increase interrupt count */
     inc dword ptr gs:[PcInterruptCount];
@@ -789,7 +805,7 @@ FUNC KiInterruptDispatch
     mov rsi, [rbp + KTRAP_FRAME_Rsi]
 
     /* Return */
-    ExitTrap (TF_SAVE_ALL or TF_SEND_EOI)
+    ExitTrap (TF_SAVE_ALL OR TF_SEND_EOI)
 ENDFUNC
 
 EXTERN KiSystemCallHandler:PROC
@@ -840,7 +856,7 @@ PUBLIC KiSystemCallEntry64
     mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rsp], rax
 
     /* Set sane segments */
-    mov ax, (KGDT64_R3_DATA or RPL_MASK)
+    mov ax, (KGDT64_R3_DATA OR RPL_MASK)
     mov ds, ax
     mov es, ax
 
@@ -1000,7 +1016,7 @@ PUBLIC KiServiceExit3
 
     /* Return */
     mov rbp, rsp
-    ExitTrap (TF_SEGMENTS or TF_CHECKUSERAPC)
+    ExitTrap (TF_SEGMENTS OR TF_CHECKUSERAPC)
 .ENDP
 
 
@@ -1040,7 +1056,7 @@ FUNC KiSystemCallEntry32
     mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rsp], rax
 
     /* Set sane segments for kernel */
-    mov ax, (KGDT64_R3_DATA or RPL_MASK)
+    mov ax, (KGDT64_R3_DATA OR RPL_MASK)
     mov ds, ax
     mov es, ax
 
@@ -1151,16 +1167,16 @@ ENDFUNC
 PUBLIC KiZwSystemService
 FUNC KiZwSystemService
     push rbp
-    .pushreg rbp
+    .PUSHREG rbp
     sub rsp, KTRAP_FRAME_LENGTH
-    .allocstack KTRAP_FRAME_LENGTH
+    .ALLOCSTACK KTRAP_FRAME_LENGTH
     mov [rsp + KTRAP_FRAME_Rsi], rsi
-    .savereg rsi, KTRAP_FRAME_Rsi
+    .SAVEREG rsi, KTRAP_FRAME_Rsi
     mov [rsp + KTRAP_FRAME_Rdi], rdi
-    .savereg rdi, KTRAP_FRAME_Rdi
+    .SAVEREG rdi, KTRAP_FRAME_Rdi
     mov rbp, rsp
-    .setframe rbp, 0
-    .endprolog
+    .SETFRAME rbp, 0
+    .ENDPROLOG
 
     /* Get current thread */
     mov r11, gs:[PcCurrentThread]
@@ -1221,8 +1237,8 @@ PUBLIC KiConvertToGuiThread
 FUNC KiConvertToGuiThread
 
     sub rsp, 40
-    .allocstack 40
-    .endprolog
+    .ALLOCSTACK 40
+    .ENDPROLOG
 
     /* Check if we already have a large stack */
     mov rax, gs:[PcCurrentThread]
@@ -1391,7 +1407,7 @@ PUBLIC KiInitiateUserApc
 
 PUBLIC KiInitializeSegments
 KiInitializeSegments:
-    mov ax, KGDT64_R3_DATA or RPL_MASK
+    mov ax, KGDT64_R3_DATA OR RPL_MASK
     mov gs, ax
     swapgs
     mov gs, ax
@@ -1426,10 +1442,10 @@ FUNC KeSwitchKernelStack
 
     /* Save rcx and allocate callee home space */
     mov [rsp + P1Home], rcx
-    .savereg rcx, P1Home
+    .SAVEREG rcx, P1Home
     sub rsp, 40
-    .allocstack 40
-    .endprolog
+    .ALLOCSTACK 40
+    .ENDPROLOG
 
     /* Call the C handler, which returns the old stack in rax */
     call KiSwitchKernelStack

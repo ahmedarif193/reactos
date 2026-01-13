@@ -25,9 +25,9 @@
 
     /* Save registers */
     push rsi
-    .pushreg rsi
+    .PUSHREG rsi
     push rdi
-    .pushreg rdi
+    .PUSHREG rdi
     .ENDPROLOG
 
     /* Setup registers for compare */

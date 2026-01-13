@@ -456,35 +456,6 @@ ExpLogLookasideCorruption(
     }
 }
 
-FORCEINLINE
-VOID
-ExpDumpLookasideCorruptionLog(VOID)
-{
-    ULONG i, j;
-    EXP_LOOKASIDE_CORRUPTION *Entry;
-
-    DPRINT1("EX: lookaside corruption log next=%ld\n", ExpLookasideCorruptionLogIndex);
-
-    for (i = 0; i < EXP_LOOKASIDE_LOG_ENTRIES; i++)
-    {
-        Entry = &ExpLookasideCorruptionLog[i];
-        if (!Entry->CorruptPointer && !Entry->Frames)
-            continue;
-
-        DPRINT1("  [%u] Ptr=%p Paged=%u Index=%u CPU=%u Time=%I64u Frames=%u\n",
-                i,
-                Entry->CorruptPointer,
-                Entry->PagedList,
-                Entry->Index,
-                Entry->Processor,
-                Entry->Timestamp,
-                Entry->Frames);
-        for (j = 0; j < Entry->Frames && j < RTL_NUMBER_OF(Entry->Stack); j++)
-        {
-            DPRINT1("        %p\n", Entry->Stack[j]);
-        }
-    }
-}
 #else
 FORCEINLINE
 VOID
@@ -507,57 +478,6 @@ ExpLogLookasideCorruption(
 #define POOL_BLOCK(x, i)    (PPOOL_HEADER)((ULONG_PTR)(x) + ((i) * POOL_BLOCK_SIZE))
 #define POOL_NEXT_BLOCK(x)  POOL_BLOCK((x), (x)->BlockSize)
 #define POOL_PREV_BLOCK(x)  POOL_BLOCK((x), -((x)->PreviousSize))
-
-#ifdef _WIN64
-FORCEINLINE
-BOOLEAN
-ExpIsCanonicalAddress64(
-    _In_ ULONG_PTR Address)
-{
-    LONG64 CanonicalHigh = (LONG64)Address >> 48;
-    return (CanonicalHigh == 0) || (CanonicalHigh == -1);
-}
-
-FORCEINLINE
-VOID
-ExpEnsureSListHeadIsSane(
-    _Inout_ PSLIST_HEADER SListHead)
-{
-    ULONGLONG Region;
-    ULONGLONG NextEntry;
-
-    if (!RtlpUse16ByteSLists) return;
-
-    /*
-     * For 16-byte SLIST headers on amd64 the next pointer is stored in the
-     * second QWORD with the low 4 bits reserved (HeaderType/Init/etc).
-     *
-     * If the head becomes corrupt (typically from overwriting a freed block's
-     * embedded SLIST_ENTRY), the next pointer can become non-canonical and
-     * will GP-fault in ExpInterlockedPopEntrySListFault16. Flush the list to
-     * keep the pool allocator alive long enough to diagnose the real culprit.
-     */
-    Region = SListHead->Region;
-    NextEntry = Region & 0xFFFFFFFFFFFFFFF0ULL;
-    if (NextEntry && !ExpIsCanonicalAddress64((ULONG_PTR)NextEntry))
-    {
-        DPRINT1("POOL: Corrupt SLIST head %p (Align=%I64x Region=%I64x Next=%p), flushing\n",
-                SListHead,
-                SListHead->Alignment,
-                Region,
-                (PVOID)(ULONG_PTR)NextEntry);
-        (VOID)InterlockedFlushSList(SListHead);
-    }
-}
-#else
-FORCEINLINE
-VOID
-ExpEnsureSListHeadIsSane(
-    _Inout_ PSLIST_HEADER SListHead)
-{
-    UNREFERENCED_PARAMETER(SListHead);
-}
-#endif
 
 /*
  * Pool list access debug macros, similar to Arthur's pfnlist.c work.

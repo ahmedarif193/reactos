@@ -82,8 +82,8 @@ USBPORT_XhciReadHcc64Bit(
         return FALSE;
     }
 
-    HccParams = READ_REGISTER_ULONG((volatile ULONG *)((PUCHAR)Resources->ResourceBase +
-                                                       USBPORT_XHCI_HCCPARAMS_OFFSET));
+    HccParams = READ_REGISTER_ULONG((PULONG)((PUCHAR)Resources->ResourceBase +
+                                             USBPORT_XHCI_HCCPARAMS_OFFSET));
     if (HccParams == 0 || HccParams == MAXULONG)
         return FALSE;
 

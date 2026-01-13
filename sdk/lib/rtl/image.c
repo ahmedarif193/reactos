@@ -21,25 +21,9 @@
 
 /* FUNCTIONS *****************************************************************/
 
-FORCEINLINE
-USHORT
-ChkSum(ULONG Sum, PUSHORT Src, ULONG Len)
-{
-    ULONG i;
-
-    for (i=0; i<Len; i++)
-    {
-        /* Sum up the current word */
-        Sum += Src[i];
-
-        /* Sum up everything above the low word as a carry */
-        Sum = (Sum & 0xFFFF) + (Sum >> 16);
-    }
-
-    /* Apply carry one more time and clamp to the USHORT */
-    return (Sum + (Sum >> 16)) & 0xFFFF;
-}
-
+#if defined(__GNUC__)
+__attribute__((unused))
+#endif
 BOOLEAN
 NTAPI
 LdrVerifyMappedImageMatchesChecksum(

@@ -16,7 +16,7 @@ PUBLIC DbgUserBreakPoint
 DbgUserBreakPoint:
 PUBLIC DbgBreakPoint
 .PROC DbgBreakPoint
-    .endprolog
+    .ENDPROLOG
     int 3
     ret
 .ENDP
@@ -25,7 +25,7 @@ PUBLIC RtlpBreakWithStatusInstruction
 RtlpBreakWithStatusInstruction:
 PUBLIC DbgBreakPointWithStatus
 .PROC DbgBreakPointWithStatus
-    .endprolog
+    .ENDPROLOG
     int 3
     ret
 .ENDP

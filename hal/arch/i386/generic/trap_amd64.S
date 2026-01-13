@@ -24,10 +24,10 @@ PUBLIC HalpClockInterrupt
 .PROC HalpClockInterrupt
     /* Create a minimal trap frame on the stack */
     push rbp
-    .pushreg rbp
+    .PUSHREG rbp
     mov rbp, rsp
-    .setframe rbp, 0
-    .endprolog
+    .SETFRAME rbp, 0
+    .ENDPROLOG
     
     /* Save volatile registers we'll use */
     push rax

@@ -68,7 +68,7 @@ page
 
         .code
 
-        public  ___ascii_strnicmp
+        PUBLIC  ___ascii_strnicmp
 .PROC ___ascii_strnicmp
 // Prolog. Original sources used ML's extended PROC feature to autogenerate this.
         push ebp
@@ -91,7 +91,7 @@ page
         mov     bl,'Z'
         mov     dh,'a'-'A'      // add to cap to make lower
 
-        align   4
+        ALIGN   4
 
 lupe:
         mov     ah,[esi]        // *first
@@ -154,4 +154,4 @@ toend:
         ret                     // _cdecl return
 
 .ENDP // ___ascii_strnicmp
-         end
+         END

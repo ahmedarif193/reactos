@@ -19,7 +19,8 @@ import argparse
 
 LOG_FILE = "/tmp/v.log"
 STALL_TIMEOUT = 10  # seconds
-BUILD_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/output-MinGW-amd64-Debug"
+# Use environment variable or default to AMD64
+BUILD_DIR = os.environ.get("REACTOS_BUILD_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/output-MinGW-amd64-Debug")
 FAT32_IMG = os.path.join(BUILD_DIR, "fat32.img")
 VM_NAME = "ROSAHCI1"
 
@@ -142,7 +143,8 @@ def start_qemu():
             "-device", "usb-kbd",
             "-device", "usb-tablet",
             "-display", "none",
-            "-no-reboot"
+            "-no-reboot",
+            "-no-shutdown"  # Halt instead of reset on triple fault
         ]
 
         qemu_process = subprocess.Popen(

@@ -69,7 +69,7 @@ page
 
         .code
 
-        public  __strrev
+        PUBLIC  __strrev
 .PROC __strrev
 // Prolog. Original sources used ML's extended PROC feature to autogenerate this.
         push ebp
@@ -113,4 +113,4 @@ done:
         ret                     // _cdecl return
 
 .ENDP // __strrev
-        end
+        END

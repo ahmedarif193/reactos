@@ -64,7 +64,7 @@ page
 
         .code
 
-        public  _strcmp
+        PUBLIC  _strcmp
 .PROC _strcmp
         // str1:ptr byte, \
         // str2:ptr byte
@@ -80,7 +80,7 @@ page
         test    edx,3
         jnz     short dopartial
 
-        align   4
+        ALIGN   4
 dodwords:
         mov     eax,[edx]
 
@@ -106,12 +106,12 @@ dodwords:
         test    ah,ah
         jnz     short dodwords
 
-        align   4
+        ALIGN   4
 doneeq:
         xor     eax,eax
         ret
 
-        align   8
+        ALIGN   8
 donene:
         // The instructions below should place -1 in eax if src < dst,
         // and 1 in eax if src > dst.
@@ -120,7 +120,7 @@ donene:
         or      eax,1
         ret
 
-        align   16
+        ALIGN   16
 dopartial:
         test    edx,1
         jz      short doword
@@ -137,7 +137,7 @@ dopartial:
         jz      short dodwords
 
 
-        align   4
+        ALIGN   4
 doword:
         mov     ax,[edx]
         add     edx,2
@@ -154,4 +154,4 @@ doword:
 
 .ENDP // _strcmp
 
-        end
+        END

@@ -24,10 +24,10 @@ ___chkstk_ms:
 .PROC __chkstk
 
     push rcx                    /* save temps */
-    .pushreg rcx
+    .PUSHREG rcx
     push rax
-    .pushreg rax
-    .endprolog
+    .PUSHREG rax
+    .ENDPROLOG
 
     cmp rax, PAGE_SIZE          /* > 4k ?*/
     lea rcx, [rsp + 24]         /* point past return addr */

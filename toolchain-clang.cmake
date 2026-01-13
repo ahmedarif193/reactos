@@ -367,13 +367,26 @@ endif()
 set(CMAKE_MC_COMPILER ${_CLANG_MINGW_WINDMC} CACHE FILEPATH "MinGW message compiler" FORCE)
 _clang_mingw_require_tool(_CLANG_MINGW_WINDRES "windres")
 set(CMAKE_RC_COMPILER ${_CLANG_MINGW_WINDRES} CACHE FILEPATH "MinGW resource compiler" FORCE)
-# Prefer GNU binutils dlltool when available; llvm-dlltool lacks --kill-at/--output-lib
-if(APPLE AND EXISTS "/opt/homebrew/bin/${_CLANG_MINGW_PREFIX}dlltool")
+# Prefer GNU binutils dlltool when available; llvm-dlltool lacks --output-delaylib
+# First check ROS_GNU_MINGW_TOOLCHAIN_PATH for GNU binutils dlltool
+set(_CLANG_GNU_DLLTOOL "")
+if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
+    set(_clang_gnu_dlltool_path "${ROS_GNU_MINGW_TOOLCHAIN_PATH}/${_CLANG_MINGW_PREFIX}dlltool${_CLANG_MINGW_SUFFIX}")
+    if(EXISTS "${_clang_gnu_dlltool_path}")
+        set(_CLANG_GNU_DLLTOOL "${_clang_gnu_dlltool_path}")
+    endif()
+    unset(_clang_gnu_dlltool_path)
+endif()
+if(_CLANG_GNU_DLLTOOL)
+    set(CMAKE_DLLTOOL "${_CLANG_GNU_DLLTOOL}" CACHE FILEPATH "MinGW dlltool" FORCE)
+    message(STATUS "Using GNU binutils dlltool: ${_CLANG_GNU_DLLTOOL}")
+elseif(APPLE AND EXISTS "/opt/homebrew/bin/${_CLANG_MINGW_PREFIX}dlltool")
     set(CMAKE_DLLTOOL "/opt/homebrew/bin/${_CLANG_MINGW_PREFIX}dlltool" CACHE FILEPATH "MinGW dlltool" FORCE)
 else()
     _clang_mingw_require_tool(_CLANG_MINGW_DLLTOOL "dlltool")
     set(CMAKE_DLLTOOL ${_CLANG_MINGW_DLLTOOL} CACHE FILEPATH "MinGW dlltool" FORCE)
 endif()
+unset(_CLANG_GNU_DLLTOOL)
 _clang_mingw_require_tool(_CLANG_MINGW_AR "ar")
 # Always use binutils from the MinGW toolchain for archive creation.
 # This avoids incompatibilities with llvm-dlltool option handling.

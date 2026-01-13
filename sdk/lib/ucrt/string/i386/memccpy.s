@@ -57,7 +57,7 @@ page
 
         .code
 
-        public  __memccpy
+        PUBLIC  __memccpy
 .PROC __memccpy
         // dest:ptr byte, \
         // src:ptr byte, \
@@ -135,4 +135,4 @@ toend:  pop     esi
 
 .ENDP // __memccpy
 
-        end
+        END

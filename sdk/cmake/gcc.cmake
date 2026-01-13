@@ -408,6 +408,10 @@ function(set_entrypoint MODULE ENTRYPOINT)
         if(_t_arch STREQUAL "arm64")
             target_link_options(${MODULE} PRIVATE "-Wl,--entry=__ReactOSNoEntry")
             target_sources(${MODULE} PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/crt/startup/noentry_arm64.c)
+        elseif(_t_arch STREQUAL "amd64")
+            # For amd64, use a noentry stub function
+            target_link_options(${MODULE} PRIVATE "-Wl,--entry=__ReactOSNoEntry")
+            target_sources(${MODULE} PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/crt/startup/noentry_amd64.c)
         endif()
     elseif(_t_arch STREQUAL "i386")
         set(_entrysymbol _${ENTRYPOINT})
@@ -448,7 +452,9 @@ function(set_module_type_toolchain MODULE TYPE)
         -Wl,--major-image-version,5 -Wl,--minor-image-version,01 -Wl,--major-os-version,5 -Wl,--minor-os-version,01)
 
     if(TYPE IN_LIST KERNEL_MODULE_TYPES)
-        target_link_options(${MODULE} PRIVATE -Wl,--exclude-all-symbols,-file-alignment=0x1000,-section-alignment=0x1000)
+        # Kernel modules require page-aligned sections for proper loading
+        target_link_options(${MODULE} PRIVATE
+            -Wl,--exclude-all-symbols,-file-alignment=0x1000,-section-alignment=0x1000)
 
         if(${TYPE} STREQUAL "wdmdriver")
             if(NOT MINGW_LINKER_IS_LLD)
@@ -518,18 +524,22 @@ endif()
 
 # Ensure dlltool gets the correct machine flags
 if(ARCH STREQUAL "i386")
-    # Ensure dlltool generates 32-bit code and assembles with 32-bit mode
-    # Derive the 'as' program from the toolchain path (replace ...-gcc with ...-as)
+    # Ensure dlltool generates 32-bit code and assembles with 32-bit mode.
+    # Derive the 'as' program from the toolchain path (replace ...-gcc with ...-as).
     set(_dlltool_as ${CMAKE_ASM_COMPILER})
     get_filename_component(_dlltool_as_name "${_dlltool_as}" NAME)
     if(_dlltool_as_name MATCHES "gcc(\\.exe)?$")
         string(REPLACE "gcc" "as" _dlltool_as "${_dlltool_as}")
     endif()
-    # x86_64-w64-mingw32-as accepts --32 to assemble 32-bit objects
-    if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-        set(DLLTOOL_EXTRA_ARGS -m i386 --as ${_dlltool_as} --as-flags "-m32 -c")
+    # Only multilib x86_64 assemblers need a 32-bit mode flag; native i686-as does not.
+    if(MINGW_TOOLCHAIN_PREFIX MATCHES "^x86_64-w64-mingw32-")
+        if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND _dlltool_as_name MATCHES "clang(\\+\\+)?(\\.exe)?$")
+            set(DLLTOOL_EXTRA_ARGS -m i386 --as ${_dlltool_as} --as-flags "-m32 -c")
+        else()
+            set(DLLTOOL_EXTRA_ARGS -m i386 --as ${_dlltool_as} --as-flags=--32)
+        endif()
     else()
-        set(DLLTOOL_EXTRA_ARGS -m i386 --as ${_dlltool_as} --as-flags=--32)
+        set(DLLTOOL_EXTRA_ARGS -m i386 --as ${_dlltool_as})
     endif()
 elseif(ARCH STREQUAL "amd64")
     set(DLLTOOL_EXTRA_ARGS -m i386:x86-64)
@@ -776,15 +786,56 @@ endmacro()
 # PSEH lib, needed with mingw
 set(PSEH_LIB "pseh")
 
+# Find i686 assembler for boot sector targets (16-bit code)
+# Boot sector code is always 16-bit x86 regardless of target architecture
+if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
+    # Try to find i686 assembler in ROS_GNU_MINGW_TOOLCHAIN_PATH parent directory
+    if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH)
+        get_filename_component(_ros_toolchain_parent "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" DIRECTORY)
+        get_filename_component(_ros_toolchain_parent "${_ros_toolchain_parent}" DIRECTORY)
+        set(_i686_gcc_path "${_ros_toolchain_parent}/i686-w64-mingw32/bin/i686-w64-mingw32-gcc")
+        if(EXISTS "${_i686_gcc_path}")
+            set(CMAKE_ASM16_COMPILER "${_i686_gcc_path}" CACHE FILEPATH "i686 assembler for boot sectors")
+        endif()
+    endif()
+    # Also check in TOOLCHAIN_PATH parent
+    if(NOT DEFINED CMAKE_ASM16_COMPILER AND DEFINED TOOLCHAIN_PATH)
+        get_filename_component(_toolchain_parent "${TOOLCHAIN_PATH}" DIRECTORY)
+        set(_i686_gcc_path "${_toolchain_parent}/i686-w64-mingw32-gcc")
+        if(EXISTS "${_i686_gcc_path}")
+            set(CMAKE_ASM16_COMPILER "${_i686_gcc_path}" CACHE FILEPATH "i686 assembler for boot sectors")
+        endif()
+    endif()
+    # Fallback: search in PATH
+    if(NOT DEFINED CMAKE_ASM16_COMPILER)
+        find_program(CMAKE_ASM16_COMPILER NAMES i686-w64-mingw32-gcc)
+    endif()
+    if(CMAKE_ASM16_COMPILER)
+        message(STATUS "Using i686 assembler for boot sectors: ${CMAKE_ASM16_COMPILER}")
+    elseif(ARCH STREQUAL "amd64")
+        message(WARNING "No i686 assembler found for 16-bit boot sectors; using ${CMAKE_ASM_COMPILER} as fallback")
+    endif()
+endif()
+
 function(CreateBootSectorTarget _target_name _asm_file _binary_file _base_address)
     set(_object_file ${_binary_file}.o)
 
     get_defines(_defines)
     get_includes(_includes)
 
+    # Use i686 assembler for boot sector code if available (boot sectors are 16-bit)
+    if(DEFINED CMAKE_ASM16_COMPILER AND CMAKE_ASM16_COMPILER)
+        set(_bootsect_asm "${CMAKE_ASM16_COMPILER}")
+        # Define _X86_ for 16-bit assembly to avoid x64 SEH macro definitions
+        set(_bootsect_defines "-D_X86_ -U_AMD64_ -U__x86_64__")
+    else()
+        set(_bootsect_asm "${CMAKE_ASM_COMPILER}")
+        set(_bootsect_defines "")
+    endif()
+
     add_custom_command(
         OUTPUT ${_object_file}
-        COMMAND ${CMAKE_ASM_COMPILER} -x assembler-with-cpp -o ${_object_file} -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm ${_includes} ${_defines} -D__ASM__ -c ${_asm_file}
+        COMMAND ${_bootsect_asm} -x assembler-with-cpp -o ${_object_file} -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm ${_includes} ${_defines} -D__ASM__ ${_bootsect_defines} -c ${_asm_file}
         DEPENDS ${_asm_file})
 
     add_custom_command(
@@ -926,11 +977,18 @@ if(NOT IS_ABSOLUTE "${GXX_EXECUTABLE}")
 endif()
 unset(_CLANG_CXX_FALLBACK)
 
-# Allow MMX/SSE2 builtins when using clang (llvm-mingw); some headers emit MMX intrinsics.
+# Allow MMX/SSE2 builtins when using Clang; some headers emit MMX intrinsics.
+# For i386: Do NOT add SSE globally - the bootloader runs before SSE is enabled in CR4.
+#           Bootloader targets explicitly disable SSE via target_compile_options.
+#           Kernel/HAL/drivers can use default Clang behavior (which is soft-float without SSE).
+# For amd64: SSE2 is part of the baseline architecture, so enable it globally.
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mmmx -msse2" CACHE STRING "C compiler flags" FORCE)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mmmx -msse2" CACHE STRING "C++ compiler flags" FORCE)
+    if(ARCH STREQUAL "amd64")
+        # AMD64 baseline includes SSE2, safe to enable globally
+        add_compile_options($<$<COMPILE_LANGUAGE:C>:-mmmx>)
+        add_compile_options($<$<COMPILE_LANGUAGE:C>:-msse2>)
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-mmmx>)
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-msse2>)
     endif()
     execute_process(COMMAND ${CMAKE_C_COMPILER} -print-resource-dir
         OUTPUT_VARIABLE CLANG_RESOURCE_DIR
@@ -1230,11 +1288,17 @@ if(_LIBSTDCCXX_INCLUDE_DIRS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         list(APPEND REACTOS_CXX_STL_INCLUDE_DIRS "$<$<COMPILE_LANGUAGE:CXX>:${_STDCPP_INCLUDE_DIR}>")
     endforeach()
 endif()
-if(_LIBSTDCCXX_IS_LIBCXX AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+# When using Clang with a MinGW libstdc++ toolchain, CMake detects the
+# include paths from g++ and marks them as "implicit". But Clang doesn't
+# actually know about these paths, so we need to remove them from the
+# implicit list to ensure they get passed explicitly on the command line.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     foreach(_STDCPP_INCLUDE_DIR IN LISTS _LIBSTDCCXX_INCLUDE_DIRS)
         list(REMOVE_ITEM CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES "${_STDCPP_INCLUDE_DIR}")
     endforeach()
-    set(REACTOS_CXX_STL_FORCE_NON_SYSTEM TRUE)
+    if(_LIBSTDCCXX_IS_LIBCXX)
+        set(REACTOS_CXX_STL_FORCE_NON_SYSTEM TRUE)
+    endif()
 endif()
 if(_LIBSTDCCXX_IS_LIBCXX)
     add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:REACTOS_LIBCXX>)

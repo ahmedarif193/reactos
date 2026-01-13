@@ -23,9 +23,12 @@
 #ifndef KJK_PSEH_EXCPT_H_
 #define KJK_PSEH_EXCPT_H_
 
-#define _SEH_CONTINUE_EXECUTION (-1)
-#define _SEH_CONTINUE_SEARCH (0)
-#define _SEH_EXECUTE_HANDLER (1)
+/* Ensure standard SEH disposition constants are available. */
+#include <vcruntime/excpt.h>
+
+#define _SEH_CONTINUE_EXECUTION EXCEPTION_CONTINUE_EXECUTION
+#define _SEH_CONTINUE_SEARCH EXCEPTION_CONTINUE_SEARCH
+#define _SEH_EXECUTE_HANDLER EXCEPTION_EXECUTE_HANDLER
 
 #endif
 

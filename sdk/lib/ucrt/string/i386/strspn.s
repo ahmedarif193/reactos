@@ -187,7 +187,7 @@ page
 
 #endif  // SSTRCSPN
 
-public  _STRSPN_
+PUBLIC  _STRSPN_
 
     .code
 
@@ -217,7 +217,7 @@ public  _STRSPN_
 
         mov     edx,[control]     // si = control string
 
-        align   4 // @WordSize
+        ALIGN   4 // @WordSize
 listnext:                    // init char bit map
         mov     al,[edx]
         or      al,al
@@ -236,7 +236,7 @@ listdone:
         or     ecx,-1 // set ecx to -1
 #endif
 
-        align   4 // @WordSize
+        ALIGN   4 // @WordSize
 dstnext:
 
 #ifndef   SSTRPBRK
@@ -275,4 +275,4 @@ dstdone:
         ret                     // _cdecl return
 
 .ENDP // _STRSPN_
-         end
+         END

@@ -19,6 +19,7 @@
 #define MI_POOL_COPY_BYTES    512
 #define MI_MAX_TRANSFER_SIZE  64 * 1024
 
+#ifdef _M_AMD64
 FORCEINLINE
 BOOLEAN
 MiIsUserAddressRangeValid64(
@@ -46,6 +47,7 @@ MiIsUserAddressRangeValid64(
     LastAddress = StartAddress + ((ULONG64)Length - 1);
     return LastAddress <= HighestUser;
 }
+#endif
 
 NTSTATUS NTAPI
 MiProtectVirtualMemory(IN PEPROCESS Process,

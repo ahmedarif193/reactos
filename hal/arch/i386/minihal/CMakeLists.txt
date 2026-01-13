@@ -44,5 +44,21 @@ endif()
 add_asm_files(mini_hal_asm ../generic/systimer.S)
 add_library(mini_hal ${MINI_HAL_SOURCE} ${mini_hal_asm})
 target_compile_definitions(mini_hal PRIVATE _BLDR_ _NTSYSTEM_ MINIHAL_HAS_BUS_SUPPORT)
+
+# Disable SSE/SSE2/AVX (FreeLoader runs before SSE is enabled in the CPU)
+# Note: This file is already i386-specific (hal/arch/i386/minihal)
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    target_compile_options(mini_hal PRIVATE
+        -mno-mmx
+        -mno-sse
+        -mno-sse2
+        -mno-sse3
+        -mno-ssse3
+        -mno-sse4.1
+        -mno-sse4.2
+        -mno-avx
+        -mno-avx2)
+endif()
+
 add_dependencies(mini_hal psdk bugcodes asm)
 add_pch(mini_hal ../include/hal.h MINI_HAL_SOURCE)

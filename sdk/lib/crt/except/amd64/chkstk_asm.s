@@ -14,13 +14,13 @@
 .code64
 
 FUNC __chkstk
-    .endprolog
+    .ENDPROLOG
     UNIMPLEMENTED chkstk
     ret
 ENDFUNC
 
 FUNC __alloca_probe
-    .endprolog
+    .ENDPROLOG
     UNIMPLEMENTED alloca_probe
     ret
 ENDFUNC

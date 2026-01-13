@@ -59,3 +59,19 @@ add_asm_files(blrtl_asm ${ASM_SOURCE})
 add_library(blrtl ${SOURCE} ${blrtl_asm})
 add_pch(blrtl ${NTOS_RTL_SOURCE_DIR}/rtl.h SOURCE)
 add_dependencies(blrtl psdk asm)
+
+if(ARCH STREQUAL "i386")
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        # Prevent using SSE/SSE2/AVX (FreeLoader runs before SSE is enabled in the CPU)
+        target_compile_options(blrtl PRIVATE
+            -mno-mmx
+            -mno-sse
+            -mno-sse2
+            -mno-sse3
+            -mno-ssse3
+            -mno-sse4.1
+            -mno-sse4.2
+            -mno-avx
+            -mno-avx2)
+    endif()
+endif()

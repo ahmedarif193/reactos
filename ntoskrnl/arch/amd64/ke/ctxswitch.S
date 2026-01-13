@@ -71,8 +71,8 @@ PUBLIC KiThreadStartup
      * mov [rsp + SfP3Home], r8
      * mov [rsp + SfP4Home], r9
      */
-    .allocstack (5 * 8)
-    .endprolog
+    .ALLOCSTACK (5 * 8)
+    .ENDPROLOG
 
     /* Clear all the non-volatile registers, so the thread won't be tempted to
      * expect any static data (like some badly coded usermode/win9x apps do) */
@@ -106,7 +106,7 @@ PUBLIC KiThreadStartup
 
 PUBLIC KiInvalidSystemThreadStartupExit
 .PROC KiInvalidSystemThreadStartupExit
-    .endprolog
+    .ENDPROLOG
 
     /* This is invalid! */
     int HEX(2C)
@@ -115,26 +115,26 @@ PUBLIC KiInvalidSystemThreadStartupExit
 
 PUBLIC KiUserThreadStartupExit
 .PROC KiUserThreadStartupExit
-    .allocstack (KEXCEPTION_FRAME_LENGTH - 8)
-    .savereg rbp, ExRbp
-    .savereg rbx, ExRbx
-    .savereg rdi, ExRdi
-    .savereg rsi, ExRsi
-    .savereg r12, ExR12
-    .savereg r13, ExR13
-    .savereg r14, ExR14
-    .savereg r15, ExR15
-    .savexmm128 xmm6, ExXmm6
-    .savexmm128 xmm7, ExXmm7
-    .savexmm128 xmm8, ExXmm8
-    .savexmm128 xmm9, ExXmm9
-    .savexmm128 xmm10, ExXmm10
-    .savexmm128 xmm11, ExXmm11
-    .savexmm128 xmm12, ExXmm12
-    .savexmm128 xmm13, ExXmm13
-    .savexmm128 xmm14, ExXmm14
-    .savexmm128 xmm15, ExXmm15
-    .endprolog
+    .ALLOCSTACK (KEXCEPTION_FRAME_LENGTH - 8)
+    .SAVEREG rbp, ExRbp
+    .SAVEREG rbx, ExRbx
+    .SAVEREG rdi, ExRdi
+    .SAVEREG rsi, ExRsi
+    .SAVEREG r12, ExR12
+    .SAVEREG r13, ExR13
+    .SAVEREG r14, ExR14
+    .SAVEREG r15, ExR15
+    .SAVEXMM128 xmm6, ExXmm6
+    .SAVEXMM128 xmm7, ExXmm7
+    .SAVEXMM128 xmm8, ExXmm8
+    .SAVEXMM128 xmm9, ExXmm9
+    .SAVEXMM128 xmm10, ExXmm10
+    .SAVEXMM128 xmm11, ExXmm11
+    .SAVEXMM128 xmm12, ExXmm12
+    .SAVEXMM128 xmm13, ExXmm13
+    .SAVEXMM128 xmm14, ExXmm14
+    .SAVEXMM128 xmm15, ExXmm15
+    .ENDPROLOG
 
     /* Restore the exception frame */
     RESTORE_EXCEPTION_STATE
@@ -171,10 +171,10 @@ PUBLIC KiUserThreadStartupExit
 .PROC KiSwapContextInternal
 
     push rbp
-    .pushreg rbp
+    .PUSHREG rbp
     sub rsp, 6 * 8
-    .allocstack (6 * 8)
-    .endprolog
+    .ALLOCSTACK (6 * 8)
+    .ENDPROLOG
 
     /* Wait for SwapBusy */
 .SwapBusySet:

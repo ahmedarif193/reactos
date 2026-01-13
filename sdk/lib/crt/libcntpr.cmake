@@ -39,6 +39,7 @@ target_compile_definitions(libcntpr
     _LIBCNT_
     __CRT__NO_INLINE
     CRTDLL)
+
 if(ARCH STREQUAL "arm64" AND TARGET msvcrt_host)
     target_link_libraries(libcntpr INTERFACE msvcrt_host)
 endif()
@@ -71,3 +72,39 @@ elseif(NOT WIN32)
     target_link_libraries(libcntpr INTERFACE atomic)
 endif()
 add_dependencies(libcntpr psdk asm)
+
+# Bootloader variant of libcntpr (bllibcntpr) - compiled without SSE for FreeLoader
+# FreeLoader runs before SSE is enabled in the CPU, so all code must avoid SSE instructions
+add_asm_files(bllibcntpr_asm ${LIBCNTPR_ASM_SOURCE})
+set(BLLIBCNTPR_SOURCE ${LIBCNTPR_SOURCE})
+if(ARCH STREQUAL "i386")
+    list(REMOVE_ITEM BLLIBCNTPR_SOURCE math/i386/libm_sse2.c)
+endif()
+add_library(bllibcntpr STATIC ${BLLIBCNTPR_SOURCE} ${bllibcntpr_asm})
+target_compile_definitions(bllibcntpr
+    PRIVATE
+    NO_RTL_INLINES
+    _NTSYSTEM_
+    _NTDLLBUILD_
+    _LIBCNT_
+    __CRT__NO_INLINE
+    CRTDLL
+    _BLDR_)
+
+# Disable SSE/SSE2/AVX for i386 bootloader build
+if(ARCH STREQUAL "i386")
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        target_compile_options(bllibcntpr PRIVATE
+            -mno-mmx
+            -mno-sse
+            -mno-sse2
+            -mno-sse3
+            -mno-ssse3
+            -mno-sse4.1
+            -mno-sse4.2
+            -mno-avx
+            -mno-avx2)
+    endif()
+endif()
+
+add_dependencies(bllibcntpr psdk asm)

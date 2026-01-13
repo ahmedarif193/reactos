@@ -54,7 +54,7 @@ page
 
         .code
 
-        public  __strset
+        PUBLIC  __strset
 .PROC __strset
 // Prolog. Original sources used ML's extended PROC feature to autogenerate this.
         push ebp
@@ -85,4 +85,4 @@ rep     stosb
         ret                     // _cdecl return
 
 .ENDP // __strset
-        end
+        END

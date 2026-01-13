@@ -27,8 +27,8 @@ Wow64PrepareForException:
 PUBLIC LdrInitializeThunk
 .PROC LdrInitializeThunk
     mov rbp, 0
-    .setframe rbp, 0
-    .endprolog
+    .SETFRAME rbp, 0
+    .ENDPROLOG
 
     /* First parameter is the APC context */
     mov rcx, r9
@@ -64,7 +64,7 @@ PUBLIC KiUserApcDispatcher
     .SAVEXMM128 xmm14, CxXmm14
     .SAVEXMM128 xmm15, CxXmm15
 
-    .endprolog
+    .ENDPROLOG
     /* We enter with a 16 byte aligned stack */
 
     mov rcx, [rsp + CONTEXT_P1Home] /* NormalContext */
@@ -85,7 +85,7 @@ PUBLIC KiUserApcDispatcher
 
 PUBLIC KiRaiseUserExceptionDispatcher
 .PROC KiRaiseUserExceptionDispatcher
-    .endprolog
+    .ENDPROLOG
     int 3
 
 .ENDP

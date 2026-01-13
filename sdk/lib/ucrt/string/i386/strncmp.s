@@ -92,7 +92,7 @@ PAGE_SIZE = HEX(1000)
 PAGE_MASK = PAGE_SIZE - 1       // mask for offset in MM page
 PAGE_SAFE_BLK = PAGE_SIZE - BLK_SIZE // maximum offset for safe block compare
 
-    public  _strncmp
+    PUBLIC  _strncmp
 .PROC _strncmp
         // uses ebx esi, \
         // str1:ptr byte, \
@@ -162,7 +162,7 @@ return_equal:
     pop       ebx
     ret
 
-    align     16
+    ALIGN     16
 
 return_not_equal:
     sbb       eax, eax  // AX=-1, CY=1 AX=0, CY=0
@@ -173,4 +173,4 @@ return_not_equal:
 
 .ENDP // _strncmp
 
-    end
+    END

@@ -7,47 +7,77 @@
 
 MACRO(ASSERT_TRAP_FRAME_INTS_ENABLED, Register)
 #if DBG
+#ifdef _USE_ML
     LOCAL IntsAreEnabled
     test dword ptr [Register + KTRAP_FRAME_EFlags], HEX(200)
     jnz IntsAreEnabled
     int HEX(2C)
 IntsAreEnabled:
+#else
+    test dword ptr [Register + KTRAP_FRAME_EFlags], HEX(200)
+    jnz 1f
+    int HEX(2C)
+1:
+#endif
 #endif
 ENDM
 
 MACRO(ASSERT_TRAP_FRAME_IRQL_VALID, Register)
 #if DBG
+#ifdef _USE_ML
     LOCAL IrqlIsValid
     mov rax, cr8
     cmp byte ptr [Register + KTRAP_FRAME_PreviousIrql], al
     je IrqlIsValid
     int HEX(2C)
 IrqlIsValid:
+#else
+    mov rax, cr8
+    cmp byte ptr [Register + KTRAP_FRAME_PreviousIrql], al
+    je 1f
+    int HEX(2C)
+1:
+#endif
 #endif
 ENDM
 
 MACRO(ASSERT_IRQL_PASSIVE)
 #if DBG
+#ifdef _USE_ML
     LOCAL IrqlIsPassive
     mov rax, cr8
     test rax, rax
     jz IrqlIsPassive
     int HEX(2C)
 IrqlIsPassive:
+#else
+    mov rax, cr8
+    test rax, rax
+    jz 1f
+    int HEX(2C)
+1:
+#endif
 #endif
 ENDM
 
 // Checks for user APCs and delivers them if necessary.
 // Clobbers all volatile registers except rax.
 MACRO(HANDLE_USER_APCS, ThreadReg, TrapFrame)
-    LOCAL NoUserApcPending
-
     /* Check for pending user APC */
     cmp byte ptr [ThreadReg + ThApcState + AsUserApcPending], 0
+#ifdef _USE_ML
+    LOCAL NoUserApcPending
     jz NoUserApcPending
+#else
+    jz 1f
+#endif
     lea rcx, [TrapFrame]
     call KiInitiateUserApc
+#ifdef _USE_ML
 NoUserApcPending:
+#else
+1:
+#endif
 ENDM
 
 APIC_EOI = HEX(0FFFFFFFFFFFE00B0)
@@ -73,8 +103,10 @@ TF_CHECKUSERAPC         = HEX(100)
  *
  */
 
+#ifdef _USE_ML
+
 /*
- * EnterTrap - Allocate KTRAP_FRAME_LENGTH and save registers to it
+ * EnterTrap - Allocate KTRAP_FRAME_LENGTH and save registers to it (MASM version)
  */
 MACRO(EnterTrap, Flags)
     LOCAL kernel_mode_entry
@@ -115,12 +147,12 @@ MACRO(EnterTrap, Flags)
     mov [rbp + KTRAP_FRAME_R11], r11
 
     /* Save volatile xmm registers */
-    movaps [rbp + KTRAP_FRAME_Xmm0], xmm0
-    movaps [rbp + KTRAP_FRAME_Xmm1], xmm1
-    movaps [rbp + KTRAP_FRAME_Xmm2], xmm2
-    movaps [rbp + KTRAP_FRAME_Xmm3], xmm3
-    movaps [rbp + KTRAP_FRAME_Xmm4], xmm4
-    movaps [rbp + KTRAP_FRAME_Xmm5], xmm5
+    movups [rbp + KTRAP_FRAME_Xmm0], xmm0
+    movups [rbp + KTRAP_FRAME_Xmm1], xmm1
+    movups [rbp + KTRAP_FRAME_Xmm2], xmm2
+    movups [rbp + KTRAP_FRAME_Xmm3], xmm3
+    movups [rbp + KTRAP_FRAME_Xmm4], xmm4
+    movups [rbp + KTRAP_FRAME_Xmm5], xmm5
 
     if (Flags AND TF_SEGMENTS)
         /* Save segment selectors */
@@ -147,7 +179,7 @@ MACRO(EnterTrap, Flags)
     jz kernel_mode_entry
 
     /* Set sane segments */
-    mov ax, (KGDT64_R3_DATA or RPL_MASK)
+    mov ax, (KGDT64_R3_DATA OR RPL_MASK)
     mov ds, ax
     mov es, ax
     swapgs
@@ -186,7 +218,7 @@ kernel_mode_entry:
 ENDM
 
 /*
- *  ExitTrap - Restore registers and free stack space
+ *  ExitTrap - Restore registers and free stack space (MASM version)
  */
 MACRO(ExitTrap, Flags)
     LOCAL kernel_mode_return
@@ -235,12 +267,12 @@ kernel_mode_return:
     mov r11, [rbp + KTRAP_FRAME_R11]
 
     /* Restore xmm registers */
-    movaps xmm0, [rbp + KTRAP_FRAME_Xmm0]
-    movaps xmm1, [rbp + KTRAP_FRAME_Xmm1]
-    movaps xmm2, [rbp + KTRAP_FRAME_Xmm2]
-    movaps xmm3, [rbp + KTRAP_FRAME_Xmm3]
-    movaps xmm4, [rbp + KTRAP_FRAME_Xmm4]
-    movaps xmm5, [rbp + KTRAP_FRAME_Xmm5]
+    movups xmm0, [rbp + KTRAP_FRAME_Xmm0]
+    movups xmm1, [rbp + KTRAP_FRAME_Xmm1]
+    movups xmm2, [rbp + KTRAP_FRAME_Xmm2]
+    movups xmm3, [rbp + KTRAP_FRAME_Xmm3]
+    movups xmm4, [rbp + KTRAP_FRAME_Xmm4]
+    movups xmm5, [rbp + KTRAP_FRAME_Xmm5]
 
     /* Restore MCXSR */
     ldmxcsr [rbp + KTRAP_FRAME_MxCsr]
@@ -277,3 +309,222 @@ MACRO(TRAP_ENTRY, Trap, Flags)
     ENDFUNC
 ENDM
 
+#else /* GAS */
+
+/* Undefine preprocessor macros that interfere with GAS .if/.else/.endif directives */
+#undef if
+#undef else
+#undef endif
+#undef elseif
+
+/*
+ * EnterTrap - GAS version that uses direct symbol evaluation in .if expressions
+ */
+.macro EnterTrap Flags
+
+    /* Save the trap flags for this trap */
+    CurrentTrapFlags = \Flags
+
+    /* Size of hardware trap frame - use .set for GAS to avoid forward reference issues */
+    .set __enter_has_error, ((\Flags) & TF_HAS_ERROR_CODE)
+    .if __enter_has_error
+        .PUSHFRAME code
+        SIZE_INITIAL_FRAME = 6 * 8
+    .else
+        .PUSHFRAME
+        SIZE_INITIAL_FRAME = 5 * 8
+    .endif
+
+    /* Make room for a KTRAP_FRAME */
+    sub rsp, (KTRAP_FRAME_LENGTH - SIZE_INITIAL_FRAME)
+    .seh_stackalloc (KTRAP_FRAME_LENGTH - SIZE_INITIAL_FRAME)
+
+    /* Save rbp */
+    mov [rsp + KTRAP_FRAME_Rbp], rbp
+    .seh_savereg rbp, KTRAP_FRAME_Rbp
+
+    /* Point rbp to the KTRAP_FRAME */
+    lea rbp, [rsp]
+    .seh_setframe rbp, 0
+
+    .seh_endprologue
+
+    /* Save volatile registers */
+    mov [rbp + KTRAP_FRAME_Rax], rax
+    mov [rbp + KTRAP_FRAME_Rcx], rcx
+    mov [rbp + KTRAP_FRAME_Rdx], rdx
+    mov [rbp + KTRAP_FRAME_R8], r8
+    mov [rbp + KTRAP_FRAME_R9], r9
+    mov [rbp + KTRAP_FRAME_R10], r10
+    mov [rbp + KTRAP_FRAME_R11], r11
+
+    /* Save volatile xmm registers */
+    movups [rbp + KTRAP_FRAME_Xmm0], xmm0
+    movups [rbp + KTRAP_FRAME_Xmm1], xmm1
+    movups [rbp + KTRAP_FRAME_Xmm2], xmm2
+    movups [rbp + KTRAP_FRAME_Xmm3], xmm3
+    movups [rbp + KTRAP_FRAME_Xmm4], xmm4
+    movups [rbp + KTRAP_FRAME_Xmm5], xmm5
+
+    .set __enter_save_segs, ((\Flags) & TF_SEGMENTS)
+    .if __enter_save_segs
+        /* Save segment selectors */
+        mov [rbp + KTRAP_FRAME_SegDs], ds
+        mov [rbp + KTRAP_FRAME_SegEs], es
+        mov [rbp + KTRAP_FRAME_SegFs], fs
+        mov [rbp + KTRAP_FRAME_SegGs], gs
+    .endif
+
+    /* Save MCXSR */
+    stmxcsr [rbp + KTRAP_FRAME_MxCsr]
+
+#if DBG
+    mov ecx, MSR_GS_BASE
+    rdmsr
+    mov [rbp + KTRAP_FRAME_GsBase], eax
+    mov [rbp + KTRAP_FRAME_GsBase + 4], edx
+#endif
+
+    /* Save previous mode and check if it was user mode */
+    mov ax, [rbp + KTRAP_FRAME_SegCs]
+    and al, 1
+    mov [rbp + KTRAP_FRAME_PreviousMode], al
+    jz .Lkernel_mode_entry\@
+
+    /* Set sane segments */
+    mov ax, (KGDT64_R3_DATA | RPL_MASK)
+    mov ds, ax
+    mov es, ax
+    swapgs
+
+    /* Load kernel MXCSR */
+    ldmxcsr gs:[PcMxCsr]
+
+    ASSERT_IRQL_PASSIVE
+
+.Lkernel_mode_entry\@:
+
+//    .set __enter_save_irql, ((\Flags) & TF_IRQL)
+//    .if __enter_save_irql
+        /* Save previous irql */
+        mov rax, cr8
+        mov [rbp + KTRAP_FRAME_PreviousIrql], al
+//    .endif
+
+    .set __enter_save_debug, ((\Flags) & TF_DEBUG)
+    .if __enter_save_debug
+        /* Save debug registers */
+        mov rax, dr0
+        mov [rbp + KTRAP_FRAME_Dr0], rax
+        mov rax, dr1
+        mov [rbp + KTRAP_FRAME_Dr1], rax
+        mov rax, dr2
+        mov [rbp + KTRAP_FRAME_Dr2], rax
+        mov rax, dr3
+        mov [rbp + KTRAP_FRAME_Dr3], rax
+        mov rax, dr6
+        mov [rbp + KTRAP_FRAME_Dr6], rax
+        mov rax, dr7
+        mov [rbp + KTRAP_FRAME_Dr7], rax
+    .endif
+
+    /* Make sure the direction flag is cleared */
+    cld
+.endm
+
+/*
+ *  ExitTrap - GAS version that uses direct symbol evaluation in .if expressions
+ */
+.macro ExitTrap Flags
+
+    ASSERT_TRAP_FRAME_IRQL_VALID rbp
+
+    .set __exit_restore_segs, ((\Flags) & TF_SEGMENTS)
+    .if __exit_restore_segs
+        /* Restore segment selectors */
+        mov ds, [rbp + KTRAP_FRAME_SegDs]
+        mov es, [rbp + KTRAP_FRAME_SegEs]
+        mov fs, [rbp + KTRAP_FRAME_SegFs]
+    .endif
+
+    .set __exit_restore_irql, ((\Flags) & TF_IRQL)
+    .if __exit_restore_irql
+        /* Restore previous irql */
+        movzx rax, byte ptr [rbp + KTRAP_FRAME_PreviousIrql]
+        mov cr8, rax
+    .endif
+
+    /* Check if we came from user mode */
+    test byte ptr [rbp + KTRAP_FRAME_SegCs], 1
+    jz .Lkernel_mode_return\@
+
+    .set __exit_check_userapc, ((\Flags) & TF_CHECKUSERAPC)
+    .if __exit_check_userapc
+        mov r10, gs:[PcCurrentThread]
+        HANDLE_USER_APCS r10, rbp
+    .endif
+
+    ASSERT_TRAP_FRAME_INTS_ENABLED rbp
+    ASSERT_IRQL_PASSIVE
+
+    cli
+
+    /* Swap gs to user mode */
+    swapgs
+
+.Lkernel_mode_return\@:
+
+    /* Restore volatile registers */
+    mov rax, [rbp + KTRAP_FRAME_Rax]
+    mov rcx, [rbp + KTRAP_FRAME_Rcx]
+    mov rdx, [rbp + KTRAP_FRAME_Rdx]
+    mov r8, [rbp + KTRAP_FRAME_R8]
+    mov r9, [rbp + KTRAP_FRAME_R9]
+    mov r10, [rbp + KTRAP_FRAME_R10]
+    mov r11, [rbp + KTRAP_FRAME_R11]
+
+    /* Restore xmm registers */
+    movups xmm0, [rbp + KTRAP_FRAME_Xmm0]
+    movups xmm1, [rbp + KTRAP_FRAME_Xmm1]
+    movups xmm2, [rbp + KTRAP_FRAME_Xmm2]
+    movups xmm3, [rbp + KTRAP_FRAME_Xmm3]
+    movups xmm4, [rbp + KTRAP_FRAME_Xmm4]
+    movups xmm5, [rbp + KTRAP_FRAME_Xmm5]
+
+    /* Restore MCXSR */
+    ldmxcsr [rbp + KTRAP_FRAME_MxCsr]
+
+    /* Restore rbp */
+    mov rbp, [rbp + KTRAP_FRAME_Rbp]
+
+    /* Adjust stack pointer */
+    add rsp, KTRAP_FRAME_Rip
+
+    .set __exit_send_eoi, ((\Flags) & TF_SEND_EOI)
+    .if __exit_send_eoi
+        /* Write 0 to the local APIC EOI register */
+        mov dword ptr [APIC_EOI], 0
+    .endif
+
+    /* Return from the trap */
+    iretq
+.endm
+
+
+.macro TRAP_ENTRY Trap, Flags
+    EXTERN \Trap\()Handler
+    PUBLIC \Trap
+    FUNC \Trap
+        /* Common code to create the trap frame */
+        EnterTrap \Flags
+
+        /* Call the C handler */
+        mov rcx, rbp
+        call \Trap\()Handler
+
+        /* Leave */
+        ExitTrap \Flags
+    ENDFUNC
+.endm
+
+#endif /* _USE_ML */
