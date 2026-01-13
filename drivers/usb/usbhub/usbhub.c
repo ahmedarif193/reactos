@@ -683,6 +683,14 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
         ResetRetry++;
     }
 
+    /*
+     * Clear the reset event pointer now that the wait is complete.
+     * The completion routine may have already NULLed it via InterlockedExchange,
+     * but we must ensure it's NULL before the stack variable goes out of scope
+     * to prevent use-after-free if another status change completion arrives.
+     */
+    InterlockedExchangePointer((PVOID)&HubExtension->pResetPortEvent, NULL);
+
     Status = USBH_SyncGetPortStatus(HubExtension,
                                     Port,
                                     &PortStatus,

@@ -13,6 +13,46 @@
 #define NDEBUG_USBPORT_CORE
 #include "usbdebug.h"
 
+static
+ULONG
+USBPORT_EncodeEndpointLpmPolicy(
+    _In_opt_ PUSBPORT_DEVICE_HANDLE DeviceHandle)
+{
+    ULONG Policy = 0;
+
+    if (!DeviceHandle)
+        return 0;
+
+    if (DeviceHandle->DeviceSpeed != UsbSuperSpeed ||
+        !DeviceHandle->LpmPolicyComputed)
+    {
+        return 0;
+    }
+
+    Policy |= USBPORT_EP_LPM_VALID;
+    if (DeviceHandle->LpmAllowU1)
+        Policy |= USBPORT_EP_LPM_ALLOW_U1;
+    if (DeviceHandle->LpmAllowU2)
+        Policy |= USBPORT_EP_LPM_ALLOW_U2;
+
+    Policy |= ((ULONG)DeviceHandle->SsU1ExitLatency & 0xFFu) << USBPORT_EP_LPM_U1_SHIFT;
+    Policy |= ((ULONG)DeviceHandle->SsU2ExitLatency & 0xFFFFu) << USBPORT_EP_LPM_U2_SHIFT;
+
+    return Policy;
+}
+
+static
+VOID
+USBPORT_ApplyEndpointLpmPolicy(
+    _Inout_ PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
+    _In_opt_ PUSBPORT_DEVICE_HANDLE DeviceHandle)
+{
+    if (!EndpointProperties)
+        return;
+
+    EndpointProperties->Reserved3 = USBPORT_EncodeEndpointLpmPolicy(DeviceHandle);
+}
+
 ULONG
 NTAPI
 USBPORT_CalculateUsbBandwidth(IN PDEVICE_OBJECT FdoDevice,
@@ -1194,6 +1234,8 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
                 EndpointProperties->BufferLength = HeaderBuffer->BufferLength; // BufferLength + LengthPadded;
             }
 
+            USBPORT_ApplyEndpointLpmPolicy(EndpointProperties, DeviceHandle);
+
             DPRINT1("USBPORT_OpenPipe: calling MiniportOpenEndpoint IRQL=%lu\n",
                     KeGetCurrentIrql());
             USBPORT_LOG_IRQL("OpenPipe before MiniportOpenEndpoint");
@@ -1445,6 +1487,8 @@ USBPORT_ReopenPipe(IN PDEVICE_OBJECT FdoDevice,
 
     if (NT_SUCCESS(Status))
     {
+        USBPORT_ApplyEndpointLpmPolicy(&Endpoint->EndpointProperties,
+                                       Endpoint->DeviceHandle);
         MiniportOpenEndpoint(FdoDevice, Endpoint);
 
         KeAcquireSpinLock(&Endpoint->EndpointSpinLock, &Endpoint->EndpointOldIrql);

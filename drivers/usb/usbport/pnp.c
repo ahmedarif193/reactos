@@ -61,6 +61,58 @@ USBPORT_EnsureInterruptApis(VOID)
     UsbPortInterruptApiResolved = TRUE;
 }
 
+#define USBPORT_XHCI_HCCPARAMS_OFFSET 0x10
+#define USBPORT_XHCI_HCC_64BIT_ADDR   0x00000001u
+
+static
+BOOLEAN
+USBPORT_XhciReadHcc64Bit(
+    _In_ PUSBPORT_RESOURCES Resources,
+    _Out_ PBOOLEAN Supports64Bit)
+{
+    ULONG HccParams;
+
+    if (!Resources || !Supports64Bit)
+        return FALSE;
+
+    if (!(Resources->ResourcesTypes & USBPORT_RESOURCES_MEMORY) ||
+        !Resources->ResourceBase ||
+        Resources->IoSpaceLength < (USBPORT_XHCI_HCCPARAMS_OFFSET + sizeof(ULONG)))
+    {
+        return FALSE;
+    }
+
+    HccParams = READ_REGISTER_ULONG((volatile ULONG *)((PUCHAR)Resources->ResourceBase +
+                                                       USBPORT_XHCI_HCCPARAMS_OFFSET));
+    if (HccParams == 0 || HccParams == MAXULONG)
+        return FALSE;
+
+    *Supports64Bit = ((HccParams & USBPORT_XHCI_HCC_64BIT_ADDR) != 0);
+    return TRUE;
+}
+
+static
+BOOLEAN
+USBPORT_DetermineDma64Bit(
+    _In_ PUSBPORT_RESOURCES Resources,
+    _In_ PUSBPORT_REGISTRATION_PACKET Packet)
+{
+    BOOLEAN Use64Bit = FALSE;
+
+    if (Packet && (Packet->MiniPortFlags & USB_MINIPORT_FLAGS_USB3))
+        Use64Bit = TRUE;
+
+    if (Packet && Packet->MiniPortVersion == USB_MINIPORT_VERSION_XHCI)
+    {
+        BOOLEAN Xhci64 = FALSE;
+
+        if (USBPORT_XhciReadHcc64Bit(Resources, &Xhci64))
+            Use64Bit = Xhci64;
+    }
+
+    return Use64Bit;
+}
+
 static
 VOID
 USBPORT_CleanupTransportRegistrations(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
@@ -895,6 +947,7 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     ULONG Limit2GB = 0;
     ULONG TotalBusBandwidth = 0;
     BOOLEAN IsCompanion = FALSE;
+    BOOLEAN Use64BitDma = FALSE;
     ULONG LegacyBIOS;
     ULONG MiniportFlags;
     ULONG ix;
@@ -935,7 +988,8 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     DeviceDescription.Version = DEVICE_DESCRIPTION_VERSION;
     DeviceDescription.Master = TRUE;
     DeviceDescription.ScatterGather = TRUE;
-    if (Packet->MiniPortFlags & USB_MINIPORT_FLAGS_USB3)
+    Use64BitDma = USBPORT_DetermineDma64Bit(UsbPortResources, Packet);
+    if (Use64BitDma)
     {
         DeviceDescription.Dma32BitAddresses = FALSE;
         DeviceDescription.Dma64BitAddresses = TRUE;
@@ -947,6 +1001,9 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
         DeviceDescription.Dma64BitAddresses = FALSE;
         DeviceDescription.DmaWidth = Width32Bits;
     }
+    UsbPortResources->Reserved &= ~USBPORT_RES_DMA_ADDR_MASK;
+    UsbPortResources->Reserved |= Use64BitDma ? USBPORT_RES_DMA_ADDR_64BIT
+                                              : USBPORT_RES_DMA_ADDR_32BIT;
     DeviceDescription.InterfaceType = PCIBus;
     DeviceDescription.DmaSpeed = Compatible;
     DeviceDescription.MaximumLength = MAXULONG;

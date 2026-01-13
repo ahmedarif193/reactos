@@ -719,6 +719,7 @@ DriverEntry(
     XhciRegPacket.MiniPortFlags = USB_MINIPORT_FLAGS_INTERRUPT |
                                   USB_MINIPORT_FLAGS_MEMORY_IO |
                                   USB_MINIPORT_FLAGS_USB3 |
+                                  USB_MINIPORT_FLAGS_WAKE_SUPPORT |
                                   /* Force USBPORT to poll if interrupts are lost. */
                                   USB_MINIPORT_FLAGS_POLLING;
 
@@ -1013,6 +1014,24 @@ XHCI_SetPortLinkState(
 
 static
 VOID
+XHCI_SetPortWakeBits(
+    _Inout_ PXHCI_EXTENSION Extension,
+    _In_ USHORT Port,
+    _In_ BOOLEAN Enable)
+{
+    ULONG WakeMask = XHCI_PORTSC_WCE | XHCI_PORTSC_WDE | XHCI_PORTSC_WOE;
+
+    if (!Extension)
+        return;
+
+    if (Enable)
+        (void)XHCI_ModifyPortBits(Extension, Port, WakeMask, 0, 0);
+    else
+        (void)XHCI_ModifyPortBits(Extension, Port, 0, WakeMask, 0);
+}
+
+static
+VOID
 XHCI_PowerOnAllPorts(
     _In_ PXHCI_EXTENSION Extension)
 {
@@ -1032,13 +1051,50 @@ XHCI_PowerOnAllPorts(
 
 static
 VOID
-XHCI_ConfigurePortLpm(
+XHCI_SetPortLpmTimeouts(
     _Inout_ PXHCI_EXTENSION Extension,
-    _In_ USHORT Port)
+    _In_ USHORT Port,
+    _In_ ULONG U1Timeout,
+    _In_ ULONG U2Timeout)
 {
     volatile ULONG *PortPmReg;
     ULONG Value;
     ULONG NewValue;
+
+    if (!Extension)
+        return;
+
+    if (Extension->Quirks & XHCI_QUIRK_LIMIT_U1U2)
+        return;
+
+    if (!XHCI_PortIsSuperSpeed(Extension, Port))
+        return;
+
+    PortPmReg = XHCI_GetPortPowerRegister(Extension, Port);
+    if (!PortPmReg)
+        return;
+
+    Value = XHCI_READ_REGISTER_ULONG(PortPmReg);
+    NewValue = Value;
+
+    NewValue &= ~(XHCI_PORTPMSC_U1_TIMEOUT_MASK |
+                  XHCI_PORTPMSC_U2_TIMEOUT_MASK);
+
+    if (U1Timeout != 0)
+        NewValue |= (U1Timeout << XHCI_PORTPMSC_U1_TIMEOUT_SHIFT);
+    if (U2Timeout != 0)
+        NewValue |= (U2Timeout << XHCI_PORTPMSC_U2_TIMEOUT_SHIFT);
+
+    if (NewValue != Value)
+        XHCI_WRITE_REGISTER_ULONG(PortPmReg, NewValue);
+}
+
+static
+VOID
+XHCI_ConfigurePortLpm(
+    _Inout_ PXHCI_EXTENSION Extension,
+    _In_ USHORT Port)
+{
     ULONG U1Timeout;
     ULONG U2Timeout;
 
@@ -1052,17 +1108,6 @@ XHCI_ConfigurePortLpm(
     /* Only SuperSpeed ports implement the U1/U2 timeout fields. */
     if (!XHCI_PortIsSuperSpeed(Extension, Port))
         return;
-
-    PortPmReg = XHCI_GetPortPowerRegister(Extension, Port);
-    if (!PortPmReg)
-        return;
-
-    Value = XHCI_READ_REGISTER_ULONG(PortPmReg);
-    NewValue = Value;
-
-    /* Clear any existing U1/U2 timeout values. */
-    NewValue &= ~(XHCI_PORTPMSC_U1_TIMEOUT_MASK |
-                  XHCI_PORTPMSC_U2_TIMEOUT_MASK);
 
     /*
      * Use the hardware-advertised maximum exit latencies from HCS3 as a
@@ -1079,13 +1124,7 @@ XHCI_ConfigurePortLpm(
     if (U2Timeout > 0xFFFF)
         U2Timeout = 0xFFFF;
 
-    if (U1Timeout != 0)
-        NewValue |= (U1Timeout << XHCI_PORTPMSC_U1_TIMEOUT_SHIFT);
-    if (U2Timeout != 0)
-        NewValue |= (U2Timeout << XHCI_PORTPMSC_U2_TIMEOUT_SHIFT);
-
-    if (NewValue != Value)
-        XHCI_WRITE_REGISTER_ULONG(PortPmReg, NewValue);
+    XHCI_SetPortLpmTimeouts(Extension, Port, U1Timeout, U2Timeout);
 }
 
 static
@@ -1106,6 +1145,68 @@ XHCI_ConfigureAllPortsLpm(
     {
         XHCI_ConfigurePortLpm(Extension, Port);
     }
+}
+
+static
+VOID
+XHCI_ApplyEndpointLpmPolicy(
+    _Inout_ PXHCI_EXTENSION Extension,
+    _In_ const USBPORT_ENDPOINT_PROPERTIES *EndpointProperties)
+{
+    ULONG LpmInfo;
+    ULONG U1Timeout;
+    ULONG U2Timeout;
+    UCHAR U1ExitLatency;
+    USHORT U2ExitLatency;
+    BOOLEAN AllowU1;
+    BOOLEAN AllowU2;
+
+    if (!Extension || !EndpointProperties)
+        return;
+
+    if (EndpointProperties->DeviceSpeed != UsbSuperSpeed)
+        return;
+
+    LpmInfo = EndpointProperties->Reserved3;
+    if ((LpmInfo & USBPORT_EP_LPM_VALID) == 0)
+        return;
+
+    if (Extension->Quirks & XHCI_QUIRK_LIMIT_U1U2)
+        return;
+
+    if (Extension->MaxU1ExitLatency == 0 && Extension->MaxU2ExitLatency == 0)
+        return;
+
+    AllowU1 = (LpmInfo & USBPORT_EP_LPM_ALLOW_U1) != 0;
+    AllowU2 = (LpmInfo & USBPORT_EP_LPM_ALLOW_U2) != 0;
+    U1ExitLatency = (UCHAR)((LpmInfo & USBPORT_EP_LPM_U1_MASK) >> USBPORT_EP_LPM_U1_SHIFT);
+    U2ExitLatency = (USHORT)((LpmInfo & USBPORT_EP_LPM_U2_MASK) >> USBPORT_EP_LPM_U2_SHIFT);
+
+    U1Timeout = 0;
+    U2Timeout = 0;
+
+    if (AllowU1 && Extension->MaxU1ExitLatency != 0)
+    {
+        U1Timeout = (U1ExitLatency != 0) ? U1ExitLatency : 1;
+        if (U1Timeout > Extension->MaxU1ExitLatency)
+            U1Timeout = Extension->MaxU1ExitLatency;
+        if (U1Timeout > 0xFF)
+            U1Timeout = 0xFF;
+    }
+
+    if (AllowU2 && Extension->MaxU2ExitLatency != 0)
+    {
+        U2Timeout = (U2ExitLatency != 0) ? U2ExitLatency : 1;
+        if (U2Timeout > Extension->MaxU2ExitLatency)
+            U2Timeout = Extension->MaxU2ExitLatency;
+        if (U2Timeout > 0xFFFF)
+            U2Timeout = 0xFFFF;
+    }
+
+    XHCI_SetPortLpmTimeouts(Extension,
+                            EndpointProperties->PortNumber,
+                            U1Timeout,
+                            U2Timeout);
 }
 
 static
@@ -2504,6 +2605,31 @@ XHCI_GetDescriptorBuffer(
 
 static
 BOOLEAN
+XHCI_DetermineDma64Bit(
+    _In_opt_ PUSBPORT_RESOURCES Resources,
+    _In_ ULONG HccParams)
+{
+    ULONG_PTR DmaFlags;
+    BOOLEAN Supports64Bit;
+
+    Supports64Bit = (BOOLEAN)(XHCI_HCC_64BIT_ADDR(HccParams) != 0);
+    if (!Supports64Bit)
+        return FALSE;
+
+    if (!Resources)
+        return Supports64Bit;
+
+    DmaFlags = Resources->Reserved & USBPORT_RES_DMA_ADDR_MASK;
+    if (DmaFlags == USBPORT_RES_DMA_ADDR_32BIT)
+        return FALSE;
+    if (DmaFlags == USBPORT_RES_DMA_ADDR_64BIT)
+        return TRUE;
+
+    return Supports64Bit;
+}
+
+static
+BOOLEAN
 XHCI_Requires32BitDma(
     _In_ PXHCI_EXTENSION Extension)
 {
@@ -2528,11 +2654,24 @@ XHCI_SgListHasHighAddress(
     for (Index = 0; Index < SgList->SgElementCount; Index++)
     {
         ULONGLONG Address = SgList->SgElement[Index].SgPhysicalAddress.QuadPart;
+        ULONGLONG Length = SgList->SgElement[Index].SgTransferLength;
+        ULONGLONG EndAddress;
 
-        if ((Address >> 32) != 0)
+        if (Length == 0)
+            continue;
+
+        EndAddress = Address + Length - 1;
+        if (EndAddress < Address)
         {
             if (HighAddress)
-                *HighAddress = Address;
+                *HighAddress = EndAddress;
+            return TRUE;
+        }
+
+        if ((Address >> 32) != 0 || (EndAddress >> 32) != 0)
+        {
+            if (HighAddress)
+                *HighAddress = (EndAddress >> 32) ? EndAddress : Address;
             return TRUE;
         }
     }
@@ -3828,8 +3967,9 @@ XHCI_ServiceEventRing(
         if (AcknowledgeInterrupt)
         {
             ULONG Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
-            Iman |= XHCI_IMAN_IP;
-            XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, Iman);
+            /* Write IP=1 (RW1C to clear) while preserving IE, mask reserved bits */
+            XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman,
+                                      XHCI_IMAN_IP | (Iman & XHCI_IMAN_IE));
         }
 
     }
@@ -6779,6 +6919,50 @@ XHCI_DetectHardwareQuirks(
                     VendorId,
                     DeviceId);
         }
+
+        /*
+         * VirtualBox Detection: VirtualBox's xHCI emulation uses Intel chip IDs
+         * (VID=8086 DID=1e31) but sets subsystem IDs to 0x0000:0x0000, which is
+         * unusual for real hardware. VirtualBox's xHCI has a known issue where
+         * writing the PR (Port Reset) bit to PORTSC causes the emulation to hang.
+         *
+         * Detection strategy:
+         * 1. Check if subsystem vendor ID is 0x80EE (Oracle VirtualBox)
+         * 2. Check if Intel xHCI (VID=8086) with subsystem IDs both zero
+         *    (real Intel hardware always has valid subsystem IDs)
+         */
+        {
+            USHORT SubsystemVendorId = 0;
+            USHORT SubsystemDeviceId = 0;
+
+            if (XHCI_ReadPciConfig(Extension, 0x2C, &SubsystemVendorId, sizeof(SubsystemVendorId)) &&
+                XHCI_ReadPciConfig(Extension, 0x2E, &SubsystemDeviceId, sizeof(SubsystemDeviceId)))
+            {
+                DPRINT1("usbxhci: PCI SubsysVID=%04x SubsysDID=%04x\n",
+                        SubsystemVendorId,
+                        SubsystemDeviceId);
+
+                /* VirtualBox uses subsystem vendor ID 0x80EE (Oracle) */
+                if (SubsystemVendorId == 0x80EE)
+                {
+                    Extension->Quirks |= XHCI_QUIRK_VBOX_PORT_RESET |
+                                         XHCI_QUIRK_VBOX_SPURIOUS_IMAN;
+                    DPRINT1("usbxhci: VirtualBox detected (SubsysVID=80EE) - enabling VBox workarounds\n");
+                }
+                /*
+                 * VirtualBox also emulates Intel xHCI but sets subsystem IDs to zero.
+                 * Real Intel controllers always have valid OEM subsystem IDs.
+                 * DID=1e31 is the Intel 7 Series/C210 Series USB xHCI which VirtualBox uses.
+                 */
+                else if (VendorId == 0x8086 && DeviceId == 0x1e31 &&
+                         SubsystemVendorId == 0x0000 && SubsystemDeviceId == 0x0000)
+                {
+                    Extension->Quirks |= XHCI_QUIRK_VBOX_PORT_RESET |
+                                         XHCI_QUIRK_VBOX_SPURIOUS_IMAN;
+                    DPRINT1("usbxhci: VirtualBox detected (Intel 8086:1e31 with zero subsys) - enabling VBox workarounds\n");
+                }
+            }
+        }
     }
 
     if (g_XhciNonCoherentDmaOverrideValid)
@@ -6789,14 +6973,15 @@ XHCI_DetectHardwareQuirks(
             Extension->Quirks &= ~XHCI_QUIRK_NON_COHERENT_DMA;
     }
 
-    DPRINT1("usbxhci: quirks=0x%lx (32b=%u slow=%u legacy=%u nopid=%u limitU=%u noncoh=%u)\n",
+    DPRINT1("usbxhci: quirks=0x%lx (32b=%u slow=%u legacy=%u nopid=%u limitU=%u noncoh=%u vbox=%u)\n",
             Extension->Quirks,
             (Extension->Quirks & XHCI_QUIRK_FORCE_32BIT_DMA) ? 1 : 0,
             (Extension->Quirks & XHCI_QUIRK_SLOW_HARD_RESET) ? 1 : 0,
             (Extension->Quirks & XHCI_QUIRK_LEGACY_BIOS_HANDOFF) ? 1 : 0,
             (Extension->Quirks & XHCI_QUIRK_NO_PORT_INDICATORS) ? 1 : 0,
             (Extension->Quirks & XHCI_QUIRK_LIMIT_U1U2) ? 1 : 0,
-            (Extension->Quirks & XHCI_QUIRK_NON_COHERENT_DMA) ? 1 : 0);
+            (Extension->Quirks & XHCI_QUIRK_NON_COHERENT_DMA) ? 1 : 0,
+            (Extension->Quirks & XHCI_QUIRK_VBOX_PORT_RESET) ? 1 : 0);
 }
 
 static ULONG
@@ -7428,7 +7613,6 @@ XHCI_ProgramInterrupterState(
     _Inout_ PXHCI_EXTENSION Extension)
 {
     PXHCI_INTERRUPTER_REGISTER_SET Interrupter;
-    ULONG Iman;
     ULONG Index;
 
     if (!Extension || !Extension->RuntimeRegisters)
@@ -7478,10 +7662,8 @@ XHCI_ProgramInterrupterState(
                              ((ULONG)(Extension->EventRingDequeuePointer & 0xFFFFFFFF)) |
                              XHCI_ERDP_BUSY);
 
-        Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
-        Iman |= XHCI_IMAN_IE;
-        Iman |= XHCI_IMAN_IP;
-        XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, Iman);
+        /* Enable interrupter: set IE and clear any pending IP (RW1C) */
+        XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, XHCI_IMAN_IE | XHCI_IMAN_IP);
 
         DPRINT1("usbxhci: intr%lu IMOD=%08lx ERST=%08lx:%08lx ERDP=%08lx:%08lx IMAN=%08lx\n",
                 Index,
@@ -9431,6 +9613,7 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
     KeInitializeSpinLock(&XhciEndpoint->Lock);
     XhciEndpoint->Extension = Extension;
     XhciEndpoint->EndpointProperties = *EndpointProperties;
+    XHCI_ApplyEndpointLpmPolicy(Extension, EndpointProperties);
     IsDefaultPipe = (EndpointProperties->EndpointAddress == 0 &&
                      EndpointProperties->TransferType == USBPORT_TRANSFER_TYPE_CONTROL);
 
@@ -10069,7 +10252,7 @@ XHCI_StartController(PVOID MiniPortExtension,
     XHCI_BuildProtocolPortMap(Extension);
 
     Extension->MaxScratchpadBuffers = XHCI_HCS2_MAX_SCRATCH(HcsParams2);
-    Extension->Supports64Bit = (BOOLEAN)(XHCI_HCC_64BIT_ADDR(HccParams) != 0);
+    Extension->Supports64Bit = XHCI_DetermineDma64Bit(UsbPortResources, HccParams);
     Extension->ContextSize = XHCI_HCC_64B_CONTEXT(HccParams) ? 64 : 32;
     Extension->ScratchpadCount = Extension->MaxScratchpadBuffers;
     if (Extension->ScratchpadCount > XHCI_MAX_SCRATCHPADS)
@@ -10544,6 +10727,8 @@ XHCI_InterruptService(PVOID MiniPortExtension)
     ULONG Status;
     ULONG AckMask;
     ULONG UsbSts;
+    PXHCI_INTERRUPTER_REGISTER_SET Interrupter;
+    ULONG Iman;
 
     if (!Extension || !Extension->OperationalRegisters || Extension->FatalError || Extension->StoppingOrRemoved)
         return FALSE;
@@ -10555,6 +10740,37 @@ XHCI_InterruptService(PVOID MiniPortExtension)
                         XHCI_USBSTS_PCD |
                         XHCI_USBSTS_HSE |
                         XHCI_USBSTS_HCE);
+
+    /*
+     * VirtualBox quirk: The xHCI emulation may assert the interrupt line
+     * (causing the ISR to be called) without actually setting UsbSts bits.
+     * To prevent an interrupt storm, check and clear IMAN.IP to deassert the
+     * interrupt line even when UsbSts shows nothing.
+     *
+     * This is only done when XHCI_QUIRK_VBOX_SPURIOUS_IMAN is set to avoid
+     * masking potential bugs on real hardware.
+     */
+    if ((Extension->Quirks & XHCI_QUIRK_VBOX_SPURIOUS_IMAN) &&
+        Extension->RuntimeRegisters)
+    {
+        Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
+        Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
+        if (Iman & XHCI_IMAN_IP)
+        {
+            /*
+             * Clear IP by writing 1 to it (RW1C). Preserve IE bit only,
+             * mask out reserved bits to avoid propagating garbage.
+             */
+            XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman,
+                                      XHCI_IMAN_IP | (Iman & XHCI_IMAN_IE));
+            if (!AckMask)
+            {
+                /* IMAN.IP was set but UsbSts had nothing - VirtualBox quirk */
+                XHCI_DPRINT_SHARED("usbxhci: ISR cleared IMAN.IP without UsbSts\n");
+                return TRUE; /* Claim the interrupt to stop the storm */
+            }
+        }
+    }
 
     if (!AckMask)
     {
@@ -10671,8 +10887,10 @@ XHCI_EnableInterrupts(PVOID MiniPortExtension)
 {
     PXHCI_EXTENSION Extension = MiniPortExtension;
     ULONG Command;
+    ULONG CommandAfter;
     PXHCI_INTERRUPTER_REGISTER_SET Interrupter;
     ULONG Iman;
+    ULONG ImanAfter;
 
     if (!Extension || !Extension->OperationalRegisters)
         return;
@@ -10682,13 +10900,22 @@ XHCI_EnableInterrupts(PVOID MiniPortExtension)
     XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd, Command);
     Extension->InterruptsEnabled = TRUE;
 
+    CommandAfter = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
+    DPRINT1("usbxhci: EnableInterrupts USBCMD before=%08lx after=%08lx (INTE=%u)\n",
+            Command & ~XHCI_USBCMD_INTE, CommandAfter, (CommandAfter & XHCI_USBCMD_INTE) ? 1 : 0);
+
     if (Extension->RuntimeRegisters)
     {
         Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
         Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
-        Iman |= XHCI_IMAN_IE;
-        Iman |= XHCI_IMAN_IP;
-        XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, Iman);
+        /* Enable interrupter: set IE and clear any pending IP (RW1C) */
+        XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, XHCI_IMAN_IE | XHCI_IMAN_IP);
+
+        ImanAfter = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
+        DPRINT1("usbxhci: EnableInterrupts IMAN before=%08lx after=%08lx (IE=%u IP=%u)\n",
+                Iman, ImanAfter,
+                (ImanAfter & XHCI_IMAN_IE) ? 1 : 0,
+                (ImanAfter & XHCI_IMAN_IP) ? 1 : 0);
     }
 }
 
@@ -11066,7 +11293,6 @@ XHCI_DisableInterrupts(PVOID MiniPortExtension)
     PXHCI_EXTENSION Extension = MiniPortExtension;
     ULONG Command;
     PXHCI_INTERRUPTER_REGISTER_SET Interrupter;
-    ULONG Iman;
 
     if (!Extension || !Extension->OperationalRegisters)
         return;
@@ -11079,9 +11305,11 @@ XHCI_DisableInterrupts(PVOID MiniPortExtension)
     if (Extension->RuntimeRegisters)
     {
         Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
-        Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
-        Iman &= ~XHCI_IMAN_IE;
-        XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, Iman);
+        /*
+         * Clear IE to disable interrupter. Also write IP=1 (RW1C) to clear
+         * any pending interrupt. Only write the defined bits, IE=0 disables.
+         */
+        XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, XHCI_IMAN_IP);
     }
 }
 
@@ -11653,12 +11881,21 @@ XHCI_RH_GetPortStatus(
         PortStatus->PortStatus.Usb30PortStatus.PortPower = 1;
     }
 
-    //DPRINT1("usbxhci: RH_GetPortStatus ext=%p port=%u PortSC=0x%08lx Status=0x%04x Change=0x%04x\n",
-    //        Extension,
-    //        Port,
-    //        PortValue,
-    //        PortStatus->PortStatus.AsUshort16,
-    //        PortStatus->PortChange.AsUshort16);
+    /*
+     * Trace port status for debugging - only log when there's an actual change
+     * to avoid spamming the log when CCS=1 (device connected but no change).
+     */
+    if (PortStatus->PortChange.AsUshort16 != 0)
+    {
+        DPRINT1("usbxhci: RH_GetPortStatus port=%u PortSC=0x%08lx (CCS=%u PED=%u Speed=%lu) Status=0x%04x Change=0x%04x\n",
+                Port,
+                PortValue,
+                (PortValue & XHCI_PORTSC_CCS) ? 1 : 0,
+                (PortValue & XHCI_PORTSC_PED) ? 1 : 0,
+                (PortValue & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT,
+                PortStatus->PortStatus.AsUshort16,
+                PortStatus->PortChange.AsUshort16);
+    }
 
     return MP_STATUS_SUCCESS;
 }
@@ -11709,14 +11946,110 @@ XHCI_RH_SetFeaturePortReset(
     _In_ PVOID MiniPortExtension,
     _In_ USHORT Port)
 {
-    DPRINT1("XHCI_RH_SetFeaturePortReset: Port=%u\n", Port);
     PXHCI_EXTENSION Extension = MiniPortExtension;
+    volatile ULONG *PortStatusReg;
+    ULONG PortValue;
 
     if (!Extension)
         return MP_STATUS_ERROR;
 
+    PortStatusReg = XHCI_GetPortStatusRegister(Extension, Port);
+    if (!PortStatusReg)
+        return MP_STATUS_ERROR;
+
+    PortValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
+    DPRINT1("XHCI_RH_SetFeaturePortReset: Port=%u PORTSC=%08lx (CCS=%u PED=%u Speed=%lu)\n",
+            Port,
+            PortValue,
+            (PortValue & XHCI_PORTSC_CCS) ? 1 : 0,
+            (PortValue & XHCI_PORTSC_PED) ? 1 : 0,
+            (PortValue & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT);
+
     if (XHCI_PortIsSuperSpeed(Extension, Port))
+    {
+        DPRINT1("XHCI: Port %u is SuperSpeed, using Warm Port Reset (WPR)\n", Port);
         return XHCI_ModifyPortBits(Extension, Port, XHCI_PORTSC_WPR, 0, 0);
+    }
+
+    /*
+     * VirtualBox Quirk: VirtualBox's xHCI emulation hangs when the PR (Port Reset)
+     * bit is written to PORTSC for USB 2.0 ports.
+     *
+     * Workaround: Skip the port reset entirely. VirtualBox's xHCI emulation
+     * typically has the device already in a usable state after connection.
+     * We simulate a successful reset by setting the Port Reset Change (PRC)
+     * bit in our shadow state so the hub driver sees the reset as complete.
+     *
+     * This is not ideal for real hardware but allows VirtualBox USB to work.
+     */
+    if (Extension->Quirks & XHCI_QUIRK_VBOX_PORT_RESET)
+    {
+        ULONG Attempt;
+        ULONG PostValue;
+        BOOLEAN PortEnabled = FALSE;
+
+        DPRINT1("XHCI: VirtualBox Quirk - Skipping port reset on Port %u (PED=%u)\n",
+                Port, (PortValue & XHCI_PORTSC_PED) ? 1 : 0);
+
+        /*
+         * If the port is already enabled, we can proceed without reset.
+         * If not, try to enable it directly by setting the port to U0 link state.
+         */
+        if (!(PortValue & XHCI_PORTSC_PED))
+        {
+            DPRINT1("XHCI: VirtualBox Quirk - Port %u not enabled, attempting U0 transition\n", Port);
+
+            /*
+             * Try setting link state to U0. On VirtualBox, the port might need
+             * power (PP) asserted along with link state write.
+             */
+            XHCI_ModifyPortBits(Extension, Port, XHCI_PORTSC_PP, 0, 0);
+            XHCI_SetPortLinkState(Extension, Port, PORT_LINK_STATE_U0);
+
+            /*
+             * Poll for PED to become 1 after U0 transition. VirtualBox may
+             * need a few microseconds to enable the port after link state change.
+             */
+            for (Attempt = 0; Attempt < 100; Attempt++)
+            {
+                PostValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
+                if (PostValue & XHCI_PORTSC_PED)
+                {
+                    PortEnabled = TRUE;
+                    DPRINT1("XHCI: VirtualBox Quirk - Port %u PED became 1 after %lu attempts\n",
+                            Port, Attempt + 1);
+                    break;
+                }
+                KeStallExecutionProcessor(100); /* 100us per attempt */
+            }
+
+            if (!PortEnabled)
+            {
+                PostValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
+                DPRINT1("XHCI: VirtualBox Quirk - Port %u PED still 0 after polling, PORTSC=%08lx\n",
+                        Port, PostValue);
+            }
+        }
+        else
+        {
+            PortEnabled = TRUE;
+        }
+
+        /*
+         * Set the PRC (Port Reset Change) in shadow to signal reset completion
+         * to the hub driver. This makes the driver think reset succeeded.
+         * Use InterlockedOr to ensure atomicity with ISR/DPC.
+         */
+        if (Port <= XHCI_MAX_PORTS)
+        {
+            InterlockedOr((volatile LONG *)&Extension->PortChangeMask[Port],
+                          XHCI_PORTSC_PRC);
+            DPRINT1("XHCI: VirtualBox Quirk - Set shadow PRC for Port %u (PED=%u)\n",
+                    Port, PortEnabled ? 1 : 0);
+        }
+
+        return MP_STATUS_SUCCESS;
+    }
 
     /* QEMU Quirk: Explicitly set PED (Enabled) and PP (Power) bits.
        QEMU's xHCI emulation often fails to enable the port or drops power
@@ -11724,13 +12057,14 @@ XHCI_RH_SetFeaturePortReset(
     if (Extension->Quirks & XHCI_QUIRK_IGNORE_STARTUP_HCE)
     {
         DPRINT1("XHCI: QEMU Quirk - Forcing PED | PP | PR on Port %u\n", Port);
-        return XHCI_ModifyPortBits(Extension, Port, 
-                                   XHCI_PORTSC_PED | XHCI_PORTSC_PR | XHCI_PORTSC_PP, 
+        return XHCI_ModifyPortBits(Extension, Port,
+                                   XHCI_PORTSC_PED | XHCI_PORTSC_PR | XHCI_PORTSC_PP,
                                    0, 0);
     }
 
-    /* Standard Behavior: Set PR (Port Reset). 
+    /* Standard Behavior: Set PR (Port Reset).
        Note: PP should be maintained if PPC is supported, but standard says PR is enough. */
+    DPRINT1("XHCI: Port %u standard reset - writing PORTSC_PR\n", Port);
     return XHCI_ModifyPortBits(Extension, Port, XHCI_PORTSC_PR, 0, 0);
 }
 
@@ -11766,15 +12100,15 @@ XHCI_RH_SetFeaturePortSuspend(
     _In_ USHORT Port)
 {
     PXHCI_EXTENSION Extension = MiniPortExtension;
+
+    /* Arm port wake events before entering U3 so remote wake propagates. */
+    XHCI_SetPortWakeBits(Extension, Port, TRUE);
+
     /*
      * Enter U3 (suspend) on the target port. The controller will signal
      * a port-status-change event when the link transitions into or out
      * of U3 so USBPORT can observe Suspend/SuspendChange via
      * XHCI_RH_GetPortStatus and generate wake notifications.
-     *
-     * TODO: For hardware that requires explicit per-port wake enable,
-     * consider programming the WCE/WDE/WOE bits here once ReactOS has
-     * a clear policy for selective suspend and remote-wake support.
      */
     return XHCI_SetPortLinkState(Extension, Port, PORT_LINK_STATE_U3);
 }
@@ -11850,7 +12184,10 @@ XHCI_RH_ClearFeaturePortSuspend(
 
     Status = XHCI_SetPortLinkState(Extension, Port, PORT_LINK_STATE_U0);
     if (Status == MP_STATUS_SUCCESS)
+    {
+        XHCI_SetPortWakeBits(Extension, Port, FALSE);
         XHCI_RH_AckPortChange(Extension, Port, XHCI_PORTSC_PLC);
+    }
 
     return Status;
 }

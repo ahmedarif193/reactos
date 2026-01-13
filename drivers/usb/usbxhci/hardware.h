@@ -126,7 +126,8 @@ typedef struct _XHCI_PROTOCOL_CAPABILITY {
 #define XHCI_PORTSC_WOE            0x08000000
 #define XHCI_PORTSC_DR             0x40000000
 #define XHCI_PORTSC_WPR            0x80000000
-#define XHCI_PORTSC_WRITE_MASK     0x80FF03FF
+#define XHCI_PORTSC_WRITE_MASK    (0x80FF03FF | XHCI_PORTSC_WCE | \
+                                   XHCI_PORTSC_WDE | XHCI_PORTSC_WOE)
 
 /* Per‑port power management (PORTPMSC) – SuperSpeed ports */
 #define XHCI_PORTPMSC_U1_TIMEOUT_MASK   0x0000FF00u
