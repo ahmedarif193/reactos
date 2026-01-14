@@ -37,25 +37,63 @@ __exituefi:
     /* Call the entry routine, passing the parameters */
     call _UefiExitBootServices
 
-    /* Retore old stack */
+    /* Restore old stack */
     mov esp, ebx
 
-    /* Retore non-volatiles */
+    /* Restore non-volatiles */
     pop ebx
     pop edi
     pop esi
     pop ebp
 
+    /* Save return address before GDT switch - we need it for far return */
+    pop eax                          /* Pop return address into EAX */
+
+    /*
+     * Disable interrupts before loading new GDT/IDT and keep them disabled.
+     *
+     * Rationale:
+     * - UEFI Boot Services have been terminated, so the UEFI IDT is no longer valid
+     * - We're switching from UEFI's GDT/IDT to our own minimal GDT/IDT
+     * - ReactOS kernel will set up its own IDT during early initialization
+     * - Interrupts must remain disabled until that IDT is ready
+     */
+    cli
+
 #ifdef _USE_ML
-    lidt fword ptr ds:[_i386idtptr]
     lgdt fword ptr [_gdtptr]
+    lidt fword ptr ds:[_i386idtptr]
 #else
     lgdt cs:[_gdtptr]
     lidt _i386idtptr
 #endif
 
-    /* All done */
-    ret
+    /*
+     * CRITICAL: After loading a new GDT, we MUST reload the segment registers.
+     * The old UEFI CS selector is no longer valid with our new GDT.
+     * Use a far return (retf) to atomically reload CS with our new selector.
+     *
+     * Stack frame for retf: [ESP+0]=EIP, [ESP+4]=CS
+     * CS selector 0x08 = 32-bit flat code segment in our GDT
+     *
+     * We push CS first, then EIP, so that after both pushes:
+     *   [ESP+0] = EIP (return address) - popped first by retf
+     *   [ESP+4] = CS (selector 0x08)   - popped second by retf
+     */
+    push HEX(08)                     /* Push CS selector FIRST (will be at ESP+4) */
+    push eax                         /* Push return address SECOND (will be at ESP+0) */
+
+    /* Reload data segment registers with new DS selector (0x10) */
+    mov ax, HEX(10)
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    xor ax, ax
+    mov fs, ax
+    mov gs, ax
+
+    /* Far return: pops EIP then CS, reloading CS with our new GDT selector */
+    retf
 
 // void __reloadsegment(VOID)
 PUBLIC __changestack

@@ -70,6 +70,9 @@ static ULONG CachedFreeldrCount;
 static BOOLEAN CachedMemoryMapValid;
 static BOOLEAN BootServicesExitedFlag;
 
+/* Track allocated page count for correct FreePages call */
+static UINTN EfiMemoryMapAllocatedPages = 0;
+
 /* Declared elsewhere */
 void _exituefi(VOID);
 
@@ -143,22 +146,31 @@ PUEFI_LoadMemoryMap(
 
         if (EfiMemoryMap)
         {
-            GlobalSystemTable->BootServices->FreePool(EfiMemoryMap);
+            /* Free the previously allocated pages using the tracked page count */
+            GlobalSystemTable->BootServices->FreePages((EFI_PHYSICAL_ADDRESS)(UINTN)EfiMemoryMap,
+                                                       EfiMemoryMapAllocatedPages);
             EfiMemoryMap = NULL;
+            EfiMemoryMapAllocatedPages = 0;
         }
 
-        Status = GlobalSystemTable->BootServices->AllocatePool(EfiLoaderData,
-                                                               Capacity,
-                                                               (VOID **)&EfiMemoryMap);
-        if (EFI_ERROR(Status) || !EfiMemoryMap)
+        /* Use AllocatePages for guaranteed 4KB alignment (required by some firmware) */
+        UINTN Pages = (Capacity + 4095) / 4096;
+        EFI_PHYSICAL_ADDRESS AllocAddr = 0;
+        Status = GlobalSystemTable->BootServices->AllocatePages(AllocateAnyPages,
+                                                                EfiLoaderData,
+                                                                Pages,
+                                                                &AllocAddr);
+        if (EFI_ERROR(Status))
         {
-            TRACE("AllocatePool(EfiMemoryMap, %lu) failed: %lx\n",
-                  (UINTN)Capacity, (UINTN)Status);
+            TRACE("AllocatePages(EfiMemoryMap, %lu pages) failed: %lx\n",
+                  (UINTN)Pages, (UINTN)Status);
             UiMessageBoxCritical("Unable to initialize memory manager.");
             /* Hard stop: callers assume a valid map after return. */
             FrLdrBugCheckWithMessage(0, __FILE__, __LINE__,
-                                     "AllocatePool for memory map failed: %lx", (UINTN)Status);
+                                     "AllocatePages for memory map failed: %lx", (UINTN)Status);
         }
+        EfiMemoryMap = (EFI_MEMORY_DESCRIPTOR *)(UINTN)AllocAddr;
+        EfiMemoryMapAllocatedPages = Pages;  /* Track what we actually allocated */
 
         UINTN TmpSize = Capacity;
         Status = GlobalSystemTable->BootServices->GetMemoryMap(&TmpSize,
@@ -374,6 +386,16 @@ UefiExitBootServices(VOID)
 
     TRACE("Attempting to exit boot services\n");
 
+    /*
+     * CRITICAL: Disable console and serial output BEFORE calling ExitBootServices.
+     * Some UEFI firmware implementations (including certain OVMF builds) may call
+     * back into console/serial protocols during ExitBootServices execution. If these
+     * protocols are still active, it can cause firmware crashes (observed as #UD
+     * exception at low addresses like 0x88011). Disabling them first prevents this.
+     */
+    UefiSerialDisableFirmware();
+    UefiConsMarkBootServicesExited();
+
     /* Per spec, fetch a *fresh* map/key immediately before ExitBootServices. */
     PUEFI_LoadMemoryMap(&MapKey, &MapBytes, &DescSize, &DescVersion);
 
@@ -382,14 +404,13 @@ UefiExitBootServices(VOID)
     /* Spec permits one retry: refetch key and try again. */
     if (EFI_ERROR(Status))
     {
-        TRACE("ExitBootServices first attempt failed: %lx, retrying\n", (UINTN)Status);
         PUEFI_LoadMemoryMap(&MapKey, &MapBytes, &DescSize, &DescVersion);
         Status = GlobalSystemTable->BootServices->ExitBootServices(GlobalImageHandle, MapKey);
     }
 
     if (EFI_ERROR(Status))
     {
-        TRACE("Failed to exit boot services: %lx\n", (UINTN)Status);
+        /* Can't TRACE here since serial is already disabled */
         FrLdrBugCheckWithMessage(EXIT_BOOTSERVICES_FAILURE,
                                  __FILE__,
                                  __LINE__,
@@ -398,11 +419,7 @@ UefiExitBootServices(VOID)
     }
     else
     {
-        TRACE("Exited boot services\n");
         BootServicesExitedFlag = TRUE;
-        /* Notify the console layer so it can switch to the GOP fallback. */
-        UefiConsMarkBootServicesExited();
-        UefiSerialDisableFirmware();
     }
 }
 

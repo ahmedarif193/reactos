@@ -99,7 +99,9 @@ add_dependencies(uefifreeldr_common bugcodes asm xdk)
 
 ## GCC builds need this extra thing for some reason...
 if(ARCH STREQUAL "i386" AND NOT MSVC)
-    target_link_libraries(uefifreeldr_common mini_hal)
+    # PRIVATE: mini_hal is only needed for uefifreeldr_common's own link requirements.
+    # The final uefildr target already links mini_hal directly (see line 155).
+    target_link_libraries(uefifreeldr_common PRIVATE mini_hal)
 endif()
 
 

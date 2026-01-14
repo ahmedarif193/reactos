@@ -19,14 +19,44 @@ import argparse
 
 LOG_FILE = "/tmp/v.log"
 STALL_TIMEOUT = 10  # seconds
-# Use environment variable or default to AMD64
-BUILD_DIR = os.environ.get("REACTOS_BUILD_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/output-MinGW-amd64-Debug")
+# Use environment variable, or current directory if it looks like a build dir, otherwise default to AMD64
+def get_build_dir():
+    if "REACTOS_BUILD_DIR" in os.environ:
+        return os.environ["REACTOS_BUILD_DIR"]
+    cwd = os.getcwd()
+    # Check if current directory looks like a ReactOS build directory
+    if os.path.exists(os.path.join(cwd, "build.ninja")) or "output-" in cwd:
+        return cwd
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/output-MinGW-amd64-Debug"
+BUILD_DIR = get_build_dir()
 FAT32_IMG = os.path.join(BUILD_DIR, "fat32.img")
 VM_NAME = "ROSAHCI1"
+
+# UEFI firmware paths - architecture dependent
+OVMF_X64_CODE = "/tmp/OVMF_CODE_latest.fd"
+OVMF_X64_VARS = "/tmp/OVMF_VARS_latest.fd"
+OVMF_IA32_CODE = "/usr/share/OVMF/OVMF32_CODE_4M.fd"
+OVMF_IA32_VARS = "/usr/share/OVMF/OVMF32_VARS_4M.fd"
+OVMF_IA32_VARS_TMP = "/tmp/OVMF32_VARS_4M.fd"  # Writable copy
 
 # Global state
 qemu_process = None
 use_qemu = False
+target_arch = "amd64"  # Detected from BUILD_DIR
+
+
+def detect_target_arch():
+    """Detect target architecture from build directory name."""
+    global target_arch
+    build_dir_lower = BUILD_DIR.lower()
+    if "i386" in build_dir_lower or "x86" in build_dir_lower:
+        target_arch = "i386"
+    elif "amd64" in build_dir_lower or "x64" in build_dir_lower:
+        target_arch = "amd64"
+    else:
+        # Default to amd64 if not detected
+        target_arch = "amd64"
+    return target_arch
 
 
 def create_fat32_img():
@@ -65,7 +95,8 @@ def force_kill_vm():
                 except Exception:
                     pass
         try:
-            subprocess.run(["pkill", "-9", "-f", "qemu-system-x86_64.*livecd.iso"],
+            # Kill both possible QEMU binaries
+            subprocess.run(["pkill", "-9", "-f", "qemu-system.*livecd.iso"],
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
         except Exception:
             pass
@@ -112,14 +143,39 @@ def build_livecd():
 
 def start_qemu():
     """Start QEMU with xHCI USB controller."""
-    global qemu_process
+    global qemu_process, target_arch
 
     livecd_path = os.path.join(BUILD_DIR, "livecd.iso")
 
-    print(f"Starting QEMU with xHCI USB...")
+    # Select architecture-specific settings
+    if target_arch == "i386":
+        qemu_binary = "qemu-system-i386"
+        ovmf_code = OVMF_IA32_CODE
+        ovmf_vars = OVMF_IA32_VARS_TMP
+        # Copy VARS file to writable location if not exists or outdated
+        if not os.path.exists(ovmf_vars) or os.path.getmtime(OVMF_IA32_VARS) > os.path.getmtime(ovmf_vars):
+            import shutil
+            shutil.copy(OVMF_IA32_VARS, ovmf_vars)
+            print(f"Copied IA32 OVMF VARS to {ovmf_vars}")
+    else:
+        qemu_binary = "qemu-system-x86_64"
+        ovmf_code = OVMF_X64_CODE
+        ovmf_vars = OVMF_X64_VARS
+
+    print(f"Starting QEMU ({target_arch}) with xHCI USB...")
+    print(f"  QEMU binary: {qemu_binary}")
+    print(f"  OVMF CODE: {ovmf_code}")
+    print(f"  OVMF VARS: {ovmf_vars}")
     print(f"  LiveCD: {livecd_path}")
     print(f"  FAT32 USB disk: {FAT32_IMG}")
     print(f"  Serial output: {LOG_FILE}")
+
+    # Verify OVMF firmware exists
+    if not os.path.exists(ovmf_code):
+        print(f"Error: OVMF CODE not found: {ovmf_code}")
+        if target_arch == "i386":
+            print("Install ovmf-ia32 package: sudo apt install ovmf-ia32")
+        return False
 
     try:
         open(LOG_FILE, 'w').close()
@@ -130,11 +186,13 @@ def start_qemu():
         log_fd = open(LOG_FILE, 'w')
 
         qemu_cmd = [
-            "qemu-system-x86_64",
+            qemu_binary,
             "-enable-kvm",
             "-smp", "1",
             "-m", "3G",
             "-M", "q35",
+            "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
+            "-drive", f"if=pflash,format=raw,file={ovmf_vars}",
             "-drive", f"file={livecd_path}",
             "-device", "qemu-xhci,id=xhci",
             "-drive", f"if=none,id=usbdisk,file={FAT32_IMG}",
@@ -159,7 +217,7 @@ def start_qemu():
         return True
 
     except FileNotFoundError:
-        print("Error: qemu-system-x86_64 not found. Is QEMU installed?")
+        print(f"Error: {qemu_binary} not found. Is QEMU installed?")
         return False
     except Exception as e:
         print(f"Error starting QEMU: {e}")
@@ -317,6 +375,9 @@ def main():
 
     use_qemu = args.qemu
 
+    # Detect target architecture from build directory
+    arch = detect_target_arch()
+
     atexit.register(force_kill_vm)
 
     signal.signal(signal.SIGINT, signal_handler)
@@ -324,9 +385,10 @@ def main():
     signal.signal(signal.SIGHUP, signal_handler)
     signal.signal(signal.SIGQUIT, signal_handler)
 
-    vm_type = "QEMU with xHCI USB" if use_qemu else "VirtualBox"
+    vm_type = f"QEMU ({arch}) with xHCI USB" if use_qemu else "VirtualBox"
     print("="*60)
     print(f"VM Monitor Script ({vm_type})")
+    print(f"Build directory: {BUILD_DIR}")
     print("="*60 + "\n")
 
     if not build_livecd():

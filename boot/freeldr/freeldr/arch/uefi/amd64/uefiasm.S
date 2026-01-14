@@ -34,7 +34,7 @@ _exituefi:
     /* Load the new UEFI service stack */
     xor     rbp, rbp
     mov     rsp, qword ptr [rip + UefiServiceStack]
-    
+
     /* Ensure 16-byte alignment (defensive programming) */
     and     rsp, -16
 
@@ -45,14 +45,14 @@ _exituefi:
 
     sub     rsp, 0x20                /* 32-byte shadow space for Win x64 ABI */
     call    UefiExitBootServices
-    
+
     /* Check return value (EFI_SUCCESS = 0) */
     test    rax, rax
     jz      .exit_success
-    
+
     /* Error case: you may want to handle this differently */
     /* For now, continue anyway, but could retry or halt */
-    
+
 .exit_success:
     add     rsp, 0x20
 
@@ -65,20 +65,53 @@ _exituefi:
     pop     rsi
     pop     rbp
 
-    /* Disable interrupts before loading new GDT */
+    /* Save return address before GDT switch - we need it for far return */
+    pop     rax                      /* Pop return address into RAX */
+
+    /*
+     * Disable interrupts before loading new GDT and keep them disabled.
+     *
+     * Rationale:
+     * - UEFI Boot Services have been terminated, so the UEFI IDT is no longer valid
+     * - We're switching from UEFI's GDT to our own minimal GDT
+     * - ReactOS kernel will set up its own IDT during early initialization
+     * - Interrupts must remain disabled until that IDT is ready
+     */
     cli
-    
+
 #ifdef _USE_ML
     lgdt    _gdtptr                  /* ml64: 10-byte descriptor inferred */
 #else
     lgdt    [rip + _gdtptr]          /* GAS: RIP-relative load of 10-byte GDTR */
 #endif
 
-    /* Re-enable interrupts if appropriate for your environment */
-    /* sti */
+    /*
+     * CRITICAL: After loading a new GDT, we MUST reload the segment registers.
+     * The old UEFI CS selector is no longer valid with our new GDT.
+     * Use a far return (lretq) to atomically reload CS with our new selector.
+     *
+     * Stack frame for lretq: [RSP+0]=RIP, [RSP+8]=CS
+     * CS selector 0x10 = long mode code segment in our GDT
+     *
+     * We push CS first, then RIP, so that after both pushes:
+     *   [RSP+0] = RIP (return address) - popped first by lretq
+     *   [RSP+8] = CS (selector 0x10)   - popped second by lretq
+     */
+    mov     rcx, HEX(10)             /* LMODE_CS selector */
+    push    rcx                      /* Push CS selector FIRST (will be at RSP+8) */
+    push    rax                      /* Push return address SECOND (will be at RSP+0) */
 
-    /* All done */
-    ret
+    /* Reload data segment registers with new DS selector (0x18) */
+    mov     ax, HEX(18)              /* LMODE_DS */
+    mov     ds, ax
+    mov     es, ax
+    mov     ss, ax
+    xor     ax, ax                   /* FS and GS should be NULL in long mode */
+    mov     fs, ax
+    mov     gs, ax
+
+    /* Far return: pops RIP then CS, reloading CS with our new GDT selector */
+    lretq
 
 // void _changestack(VOID)
 PUBLIC _changestack
@@ -112,7 +145,12 @@ gdt:
     .word HEX(FFFF), HEX(0000), HEX(9200), HEX(0000) /* 28: 16-bit real mode DS */
     .word HEX(FFFF), HEX(0000), HEX(9B00), HEX(00CF) /* 30: 32-bit compat mode CS */
 
-    /* GDT table pointer: 10 bytes (limit:2 + base:8) */
+    /*
+     * GDT table pointer: 10 bytes (limit:2 + base:8)
+     * Align to 2-byte boundary (minimum required for GDTR)
+     * The structure is naturally packed: 2-byte limit followed by 8-byte base
+     */
+    .align 2
 _gdtptr:
     .word HEX(0037)                  /* Limit = 7 entries * 8 - 1 = 0x37 */
     .quad gdt                        /* Base Address */
