@@ -19,6 +19,85 @@ EXTERN UefiExitBootServices:PROC
 
 .code64
 
+/*
+ * void UefiClearDebugState(VOID)
+ *
+ * Clear all x64 debug registers and sanitize CPU debug state before
+ * calling ExitBootServices. Some UEFI firmware implementations (notably
+ * VirtualBox) may have internal debug state that causes #DB exceptions
+ * if not properly cleared.
+ *
+ * This clears:
+ *   - DR0-DR3: Hardware breakpoint addresses
+ *   - DR6: Debug status register (set to default 0xFFFF0FF0)
+ *   - DR7: Debug control register (disable all breakpoints)
+ *   - RFLAGS.TF: Trap flag (single-step)
+ *   - RFLAGS.RF: Resume flag (suppress debug exceptions)
+ *
+ * Must be called from Ring 0 with interrupts enabled or disabled.
+ */
+PUBLIC UefiClearDebugState
+UefiClearDebugState:
+    push    rbp
+    mov     rbp, rsp
+    push    rbx
+
+    /*
+     * Clear hardware breakpoint address registers (DR0-DR3).
+     * These specify addresses that trigger debug exceptions.
+     */
+    xor     rax, rax
+    mov     dr0, rax
+    mov     dr1, rax
+    mov     dr2, rax
+    mov     dr3, rax
+
+    /*
+     * Clear DR7 (Debug Control Register) FIRST.
+     * Bit 10 must always be 1 (reserved, required).
+     * All other bits = 0 disables all hardware breakpoints.
+     * This prevents any debug exceptions from being generated
+     * while we clean up the rest of the debug state.
+     */
+    mov     rax, HEX(400)              /* Bit 10 = 1, all else = 0 */
+    mov     dr7, rax
+
+    /*
+     * Reset DR6 (Debug Status Register) to its default value.
+     * Intel SDM specifies that bits 0-3 should be cleared by software,
+     * and certain upper bits have fixed values.
+     * 0xFFFF0FF0 is the default/reset value:
+     *   - Bits 0-3 (B0-B3): 0 (no breakpoint triggered)
+     *   - Bits 4-11: Reserved, set to 1
+     *   - Bit 12: Reserved, 0
+     *   - Bit 13 (BD): 0 (no debug register access)
+     *   - Bit 14 (BS): 0 (no single-step)
+     *   - Bit 15 (BT): 0 (no task switch)
+     *   - Bits 16-31: Reserved, set to 1
+     */
+    mov     rax, HEX(FFFF0FF0)
+    mov     dr6, rax
+
+    /*
+     * Clear RFLAGS.TF (Trap Flag) and RFLAGS.RF (Resume Flag).
+     * TF enables single-step mode which generates #DB after each instruction.
+     * RF suppresses debug exceptions for one instruction.
+     * We want both cleared to ensure normal execution.
+     *
+     * RFLAGS bit positions:
+     *   TF = bit 8 (0x100)
+     *   RF = bit 16 (0x10000)
+     */
+    pushfq
+    pop     rax
+    and     rax, HEX(FFFFFFFFFFFEFEFF)  /* Clear TF (bit 8) and RF (bit 16) */
+    push    rax
+    popfq
+
+    pop     rbx
+    pop     rbp
+    ret
+
 // void _exituefi(VOID)
 PUBLIC _exituefi
 _exituefi:

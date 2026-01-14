@@ -263,6 +263,46 @@ DrvEnableSurface(
    }
 
    /*
+    * After SET_CURRENT_MODE, query the actual mode that the miniport set.
+    * This handles cases where the firmware rejected the mode switch and the
+    * miniport fell back to the current mode (e.g., VirtualBox UEFI after
+    * ExitBootServices where GOP mode changes are no longer possible).
+    */
+   {
+      VIDEO_MODE_INFORMATION actualMode = {0};
+      ULONG actualModeLen = 0;
+
+      if (!EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_QUERY_CURRENT_MODE,
+                              NULL, 0,
+                              &actualMode, sizeof(actualMode),
+                              &actualModeLen) &&
+          actualModeLen >= sizeof(actualMode))
+      {
+         if (actualMode.VisScreenWidth != ppdev->ScreenWidth ||
+             actualMode.VisScreenHeight != ppdev->ScreenHeight ||
+             actualMode.ScreenStride != ppdev->ScreenDelta)
+         {
+            FB_DBG("Mode changed by miniport: requested %ux%u -> actual %ux%u\n",
+                   (unsigned int)ppdev->ScreenWidth,
+                   (unsigned int)ppdev->ScreenHeight,
+                   (unsigned int)actualMode.VisScreenWidth,
+                   (unsigned int)actualMode.VisScreenHeight);
+
+            ppdev->ModeIndex = actualMode.ModeIndex;
+            ppdev->ScreenWidth = actualMode.VisScreenWidth;
+            ppdev->ScreenHeight = actualMode.VisScreenHeight;
+            ppdev->ScreenDelta = actualMode.ScreenStride;
+            ppdev->BitsPerPixel = (UCHAR)(actualMode.BitsPerPlane * actualMode.NumberOfPlanes);
+            ppdev->MemWidth = actualMode.VideoMemoryBitmapWidth;
+            ppdev->MemHeight = actualMode.VideoMemoryBitmapHeight;
+            ppdev->RedMask = actualMode.RedMask;
+            ppdev->GreenMask = actualMode.GreenMask;
+            ppdev->BlueMask = actualMode.BlueMask;
+         }
+      }
+   }
+
+   /*
     * Map the framebuffer into our memory.
     */
 

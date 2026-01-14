@@ -1532,6 +1532,15 @@ XHCI_RingEndpointDoorbell(
     Value = EndpointId & 0x1F;
     Value |= (StreamId & 0xFFFF) << 16;
     XHCI_WRITE_REGISTER_ULONG(&Extension->DoorbellArray->Doorbell[SlotIndex], Value);
+    /*
+     * Flush PCI posted writes by reading back the doorbell register.
+     * This is critical for VirtualBox UEFI mode where the doorbell write
+     * may be buffered and not actually delivered to the xHCI controller
+     * until a read forces the write to complete. Without this flush,
+     * the controller never sees the doorbell ring and the transfer hangs.
+     * Linux does the same flush after every doorbell write.
+     */
+    (void)XHCI_READ_REGISTER_ULONG(&Extension->DoorbellArray->Doorbell[SlotIndex]);
     if (SlotIndex != 0)
     {
         XHCI_DBG(XHCI_TRACE_TRANSFERS,
@@ -2469,13 +2478,21 @@ XHCI_SetEndpointDequeue(
     if (!Extension || !Slot || !Ring || EndpointId == 0)
         return MP_STATUS_ERROR;
 
-    ULONGLONG Dequeue = Ring->PhysicalAddress.QuadPart & ~0xFULL;
-    ULONG DcsBit = Ring->CycleState & 0x1;
+    /*
+     * Per xHCI spec section 6.4.3.9, the Set TR Dequeue Pointer TRB format:
+     * - Bits 63:4: New TR Dequeue Pointer (16-byte aligned)
+     * - Bits 3:1: Reserved
+     * - Bit 0: Dequeue Cycle State (DCS)
+     *
+     * The DCS must be encoded in bit 0 of the parameter, not in a separate field.
+     */
+    ULONGLONG Dequeue = (Ring->PhysicalAddress.QuadPart & ~0xFULL) |
+                        (Ring->CycleState & 0x1);
 
     return XHCI_SendCommand(Extension,
                             XHCI_TRB_TYPE_SET_DEQ,
                             Dequeue,
-                            DcsBit,
+                            0,  /* Context/Status is reserved for this command */
                             XHCI_COMMAND_SLOT_FIELD(Slot->SlotId) |
                                 XHCI_COMMAND_EP_FIELD(EndpointId),
                             XHCI_COMMAND_TIMEOUT_MS,
@@ -2492,6 +2509,8 @@ XHCI_PerformEndpointResetSequence(
     _In_ BOOLEAN RingDoorbell)
 {
     KIRQL OldIrql;
+    ULONG EpState = XHCI_EPCTX_STATE_DISABLED;
+    PVOID DevCtx;
 
     if (!Extension || !Endpoint || !Endpoint->Slot)
         return;
@@ -2503,8 +2522,41 @@ XHCI_PerformEndpointResetSequence(
     Endpoint->ActiveTransfer = NULL;
     KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
 
-    XHCI_StopEndpoint(Extension, Endpoint->Slot, Endpoint->EndpointId);
-    XHCI_ResetEndpoint(Extension, Endpoint->Slot, Endpoint->EndpointId);
+    /* Read current endpoint state to determine correct command sequence.
+     * Per xHCI spec:
+     * - Halted state: Issue Reset Endpoint (Halted -> Stopped)
+     * - Running state: Issue Stop Endpoint (Running -> Stopped)
+     * - Stopped state: Already stopped, proceed to Set TR Dequeue
+     */
+    DevCtx = Endpoint->Slot->DeviceContext.VirtualAddress;
+    if (DevCtx)
+    {
+        PXHCI_ENDPOINT_CONTEXT EpCtx = XHCI_GetDeviceEndpointContextVa(
+            Extension, DevCtx, Endpoint->EndpointId - 1);
+        if (EpCtx)
+            EpState = EpCtx->EpInfo & XHCI_EPCTX_STATE_MASK;
+    }
+
+    DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u state=%lu\n",
+            Endpoint->SlotId, Endpoint->EndpointId, EpState);
+
+    if (EpState == XHCI_EPCTX_STATE_HALTED)
+    {
+        MPSTATUS ResetStatus;
+        /* Halted endpoint: Use Reset Endpoint command to transition to Stopped */
+        ResetStatus = XHCI_ResetEndpoint(Extension, Endpoint->Slot, Endpoint->EndpointId);
+        DPRINT1("usbxhci: Reset Endpoint slot=%u ep=%u returned %lu\n",
+                Endpoint->SlotId, Endpoint->EndpointId, ResetStatus);
+    }
+    else if (EpState == XHCI_EPCTX_STATE_RUNNING)
+    {
+        MPSTATUS StopStatus;
+        /* Running endpoint: Use Stop Endpoint command to transition to Stopped */
+        StopStatus = XHCI_StopEndpoint(Extension, Endpoint->Slot, Endpoint->EndpointId);
+        DPRINT1("usbxhci: Stop Endpoint slot=%u ep=%u returned %lu\n",
+                Endpoint->SlotId, Endpoint->EndpointId, StopStatus);
+    }
+    /* For Stopped/Error/Disabled, no state transition command needed */
 
     XHCI_ResetEndpointRing(Endpoint);
     if (Endpoint->UsesStaticRing && Endpoint->Slot)
@@ -2540,6 +2592,19 @@ XHCI_PerformEndpointResetSequence(
                         Endpoint->EndpointId,
                         DeqStatus);
             }
+            else
+            {
+                DPRINT1("usbxhci: SetTRDequeue success slot=%u ep=%u EnqIdx=%lu Cycle=%lu\n",
+                        Endpoint->SlotId,
+                        Endpoint->EndpointId,
+                        Endpoint->TransferRing.EnqueueIndex,
+                        Endpoint->TransferRing.CycleState);
+            }
+        }
+        else
+        {
+            DPRINT1("usbxhci: SetTRDequeue skipped (QEMU HCE quirk) slot=%u ep=%u\n",
+                    Endpoint->SlotId, Endpoint->EndpointId);
         }
     }
 
@@ -2555,6 +2620,9 @@ static VOID NTAPI
 XHCI_EndpointResetWorker(PVOID Context)
 {
     PXHCI_EP_RESET_WORK Work = (PXHCI_EP_RESET_WORK)Context;
+    LONG NewCount;
+
+    DPRINT1("usbxhci: EndpointResetWorker enter Work=%p\n", Work);
 
     if (!Work)
         return;
@@ -2564,7 +2632,11 @@ XHCI_EndpointResetWorker(PVOID Context)
                                       Work->RingDoorbell);
 
     if (Work->Endpoint)
-        InterlockedDecrement(&Work->Endpoint->PendingWorkCount);
+    {
+        NewCount = InterlockedDecrement(&Work->Endpoint->PendingWorkCount);
+        DPRINT1("usbxhci: EndpointResetWorker done, slot=%u ep=%u PendingWorkCount now=%ld\n",
+                Work->Endpoint->SlotId, Work->Endpoint->EndpointId, NewCount);
+    }
 
     ExFreePoolWithTag(Work, XHCI_TAG);
 }
@@ -3715,6 +3787,20 @@ XHCI_ResetDeviceOnPort(
     if (!Slot)
         return MP_STATUS_ERROR;
 
+    /*
+     * VirtualBox xHCI emulation has a bug where RESET_DEVICE command
+     * doesn't properly reset the TR Dequeue Pointer, causing subsequent
+     * transfers to fail with USB_TRANSACTION_ERROR. Skip the RESET_DEVICE
+     * command entirely for VirtualBox - the device is already in a usable
+     * state after the port reset.
+     */
+    if (Extension->Quirks & XHCI_QUIRK_VBOX_POLL_XFERS)
+    {
+        DPRINT1("usbxhci: ResetDeviceOnPort: Skipping RESET_DEV for VBox quirk (slot %u port %u)\n",
+                Slot->SlotId, PortNumber);
+        return MP_STATUS_SUCCESS;
+    }
+
     Status = XHCI_SendCommand(Extension,
                               XHCI_TRB_TYPE_RESET_DEV,
                               0,
@@ -4810,6 +4896,7 @@ XHCI_Ep0PollDpc(
     _In_opt_ PVOID SystemArg2)
 {
     PXHCI_EXTENSION Extension = (PXHCI_EXTENSION)DeferredContext;
+    static ULONG PollDpcCount = 0;
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(SystemArg1);
@@ -4817,6 +4904,13 @@ XHCI_Ep0PollDpc(
 
     if (!Extension || Extension->FatalError || Extension->StoppingOrRemoved)
         return;
+
+    PollDpcCount++;
+    if ((PollDpcCount % 100) == 1) /* Log every 100th call to avoid spam */
+    {
+        DPRINT1("usbxhci: Ep0PollDpc #%lu counter=%ld\n",
+                PollDpcCount, Extension->Ep0PollCounter);
+    }
 
     XHCI_PollForWork(Extension, TRUE);
 
@@ -5198,6 +5292,20 @@ XHCI_HandleTransferEvent(
                 TrbPointer);
     }
 
+    /* Log all transfer completions for debugging */
+    if (CompletionCode != XHCI_COMPLETION_SUCCESS)
+    {
+        PUSBPORT_TRANSFER_PARAMETERS TParams = Transfer->TransferParameters;
+        DPRINT1("usbxhci: transfer complete slot=%u ep=%u code=%lu req=%lu bytes=%lu setupType=0x%02x bReq=0x%02x\n",
+                SlotId,
+                EndpointId,
+                CompletionCode,
+                RequestedLength,
+                BytesTransferred,
+                TParams ? TParams->SetupPacket.bmRequestType.B : 0xFF,
+                TParams ? TParams->SetupPacket.bRequest : 0xFF);
+    }
+
     switch (CompletionCode)
     {
         case XHCI_COMPLETION_SUCCESS:
@@ -5218,6 +5326,50 @@ XHCI_HandleTransferEvent(
         default:
             UsbdStatus = USBD_STATUS_REQUEST_FAILED;
             break;
+    }
+
+    /*
+     * xHCI spec section 4.6.8: When a Stall Error occurs on a control endpoint,
+     * the endpoint transitions to Halted state and will not process transfers
+     * until reset. Per USB spec, control endpoints auto-clear the stall on the
+     * next SETUP token, but the xHCI host controller must still be reset.
+     *
+     * Queue an asynchronous endpoint reset to restore the endpoint to Running
+     * state. This allows subsequent control transfers (e.g., HID GetProtocol
+     * after SetIdle fails with STALL) to complete rather than hang forever.
+     *
+     * This is especially important for VirtualBox UEFI where HID devices may
+     * STALL optional requests like SetIdle.
+     */
+    if (CompletionCode == XHCI_COMPLETION_STALL_ERROR &&
+        Endpoint->DefaultControl &&
+        Endpoint->Slot)
+    {
+        /*
+         * Control endpoint stalled. Per USB spec, control STALLs auto-clear,
+         * but xHCI requires explicit Reset Endpoint + Set TR Dequeue.
+         *
+         * Do the reset SYNCHRONOUSLY here, BEFORE returning the stall status
+         * to USBPORT. This ensures that when USBPORT immediately retries
+         * (which it does in the same DPC context), the endpoint is already
+         * in Running state and ready to accept new transfers.
+         *
+         * Note: This may take several hundred ms on VirtualBox xHCI, but it's
+         * the only reliable way to handle the immediate retry from USBPORT.
+         */
+        DPRINT1("usbxhci: control endpoint stall on slot %u, doing inline reset\n",
+                SlotId);
+        /*
+         * Pass RingDoorbell=FALSE because we're resetting an empty ring.
+         * Ringing the doorbell on an empty ring would cause the hardware
+         * to fetch the TRB at index 0, which may have stale contents with
+         * the wrong cycle bit (from before the ring wrapped), causing the
+         * endpoint to immediately halt again.
+         *
+         * The next submit will queue TRBs and ring the doorbell properly.
+         */
+        XHCI_PerformEndpointResetSequence(Extension, Endpoint, FALSE);
+        DPRINT1("usbxhci: slot %u EP0 inline reset complete\n", Endpoint->SlotId);
     }
 
     Transfer->CompletionTrbPointer = TrbPointer;
@@ -5509,10 +5661,17 @@ XHCI_GetEndpointState(
     switch (EpState)
     {
         case XHCI_EPCTX_STATE_RUNNING:
+        case XHCI_EPCTX_STATE_STOPPED:
+            /*
+             * Per xHCI spec, endpoints transition from Stopped to Running when
+             * the doorbell is rung with pending TRBs. After Configure Endpoint
+             * command, the endpoint is in Stopped state but is ready to accept
+             * transfers. Report ACTIVE so USBPORT doesn't wait indefinitely
+             * for a state transition that requires traffic to trigger.
+             */
             return USBPORT_ENDPOINT_ACTIVE;
 
         case XHCI_EPCTX_STATE_HALTED:
-        case XHCI_EPCTX_STATE_STOPPED:
         case XHCI_EPCTX_STATE_ERROR:
             return USBPORT_ENDPOINT_PAUSED;
 
@@ -6904,7 +7063,8 @@ XHCI_DetectHardwareQuirks(
             {
                 Extension->Quirks |= XHCI_QUIRK_IGNORE_STARTUP_HCE;
                 Extension->Quirks |= XHCI_QUIRK_QEMU_CONFIG_EP_ORDER;
-                DPRINT1("usbxhci: startup HCE quirk enabled for QEMU\n");
+                Extension->Quirks |= XHCI_QUIRK_QEMU_PORT_RESET;
+                DPRINT1("usbxhci: QEMU quirks enabled (HCE, CONFIG_EP, PORT_RESET)\n");
             }
             else
             {
@@ -6946,7 +7106,8 @@ XHCI_DetectHardwareQuirks(
                 if (SubsystemVendorId == 0x80EE)
                 {
                     Extension->Quirks |= XHCI_QUIRK_VBOX_PORT_RESET |
-                                         XHCI_QUIRK_VBOX_SPURIOUS_IMAN;
+                                         XHCI_QUIRK_VBOX_SPURIOUS_IMAN |
+                                         XHCI_QUIRK_VBOX_POLL_XFERS;
                     DPRINT1("usbxhci: VirtualBox detected (SubsysVID=80EE) - enabling VBox workarounds\n");
                 }
                 /*
@@ -6958,7 +7119,8 @@ XHCI_DetectHardwareQuirks(
                          SubsystemVendorId == 0x0000 && SubsystemDeviceId == 0x0000)
                 {
                     Extension->Quirks |= XHCI_QUIRK_VBOX_PORT_RESET |
-                                         XHCI_QUIRK_VBOX_SPURIOUS_IMAN;
+                                         XHCI_QUIRK_VBOX_SPURIOUS_IMAN |
+                                         XHCI_QUIRK_VBOX_POLL_XFERS;
                     DPRINT1("usbxhci: VirtualBox detected (Intel 8086:1e31 with zero subsys) - enabling VBox workarounds\n");
                 }
             }
@@ -8511,6 +8673,195 @@ XHCI_SubmitControlTransfer(
             return MP_STATUS_ERROR;
     }
 
+    /*
+     * After RESET_DEVICE, the slot may be in "not addressed" state. Transfers
+     * using cached endpoint handles will bypass OpenEndpoint and arrive here
+     * directly. We must re-address the device before any transfer can succeed.
+     * This can only be done at PASSIVE_LEVEL.
+     *
+     * Note: For VirtualBox (XHCI_QUIRK_VBOX_POLL_XFERS), we don't clear the
+     * Addressed flag on RESET_DEVICE since VBox doesn't properly implement it.
+     */
+    if (Endpoint->DefaultControl &&
+        Endpoint->Slot &&
+        !Endpoint->Slot->Addressed &&
+        KeGetCurrentIrql() <= PASSIVE_LEVEL)
+    {
+        MPSTATUS AddrStatus;
+        DPRINT1("usbxhci: slot %u not addressed, re-addressing before transfer\n",
+                Endpoint->SlotId);
+
+        AddrStatus = XHCI_AddressDeviceSlot(Extension,
+                                             Endpoint->Slot,
+                                             &Endpoint->EndpointProperties,
+                                             FALSE);
+        if (AddrStatus != MP_STATUS_SUCCESS)
+        {
+            DPRINT1("usbxhci: slot %u re-address failed %d\n", Endpoint->SlotId, AddrStatus);
+            return AddrStatus;
+        }
+        DPRINT1("usbxhci: slot %u re-addressed successfully\n", Endpoint->SlotId);
+        /* After re-address, the ring is reset to index 0 with cycle 1 */
+        Endpoint->TransferRing.EnqueueIndex = 0;
+        Endpoint->TransferRing.DequeueIndex = 0;
+        Endpoint->TransferRing.CycleState = 1;
+        if (Endpoint->Slot->Ep0NeedsDequeueReset)
+            Endpoint->Slot->Ep0NeedsDequeueReset = FALSE;
+    }
+    else if (Endpoint->DefaultControl &&
+             Endpoint->Slot &&
+             !Endpoint->Slot->Addressed &&
+             KeGetCurrentIrql() > PASSIVE_LEVEL)
+    {
+        /*
+         * At DISPATCH_LEVEL with unaddressed slot. After RESET_DEVICE, the
+         * slot is in Default state and EP0 should still work - the device
+         * responds at USB address 0. The ring was already reset by the
+         * RESET_DEVICE completion handler. Just log and proceed with the
+         * transfer - re-addressing will happen later at PASSIVE_LEVEL.
+         */
+        DPRINT1("usbxhci: slot %u not addressed at DISPATCH_LEVEL - proceeding with default address\n",
+                Endpoint->SlotId);
+    }
+
+    /*
+     * VirtualBox quirk: If EP0 needs a dequeue reset after RESET_DEVICE,
+     * issue SET_TR_DEQUEUE_POINTER to synchronize the hardware with software.
+     * The xHCI spec requires stopping the endpoint before SET_TR_DEQUEUE_POINTER.
+     *
+     * IMPORTANT: Commands can only be issued at PASSIVE_LEVEL. If we're at
+     * DISPATCH_LEVEL (IRQL=2), we must defer the reset. However, hidusb.sys
+     * expects synchronous transfer completion, so we need an alternative
+     * approach for DISPATCH_LEVEL:
+     *
+     * VirtualBox has a bug where RESET_DEVICE doesn't properly reset the
+     * TR Dequeue Pointer. At DISPATCH_LEVEL, we cannot issue commands, but
+     * we CAN synchronize the software ring state to match what the hardware
+     * thinks. By reading the hardware dequeue pointer and adjusting our
+     * software enqueue pointer to match, we can continue without commands.
+     */
+    if (Endpoint->DefaultControl &&
+        Endpoint->Slot &&
+        Endpoint->Slot->Ep0NeedsDequeueReset)
+    {
+        if (KeGetCurrentIrql() <= PASSIVE_LEVEL)
+        {
+            /* At PASSIVE_LEVEL - can issue commands to properly reset */
+            MPSTATUS DeqStatus;
+            DPRINT1("usbxhci: slot %u EP0 dequeue reset (VBox quirk) at PASSIVE\n", Endpoint->SlotId);
+
+            DeqStatus = XHCI_StopEndpoint(Extension, Endpoint->Slot, 1);
+            if (DeqStatus == MP_STATUS_SUCCESS)
+            {
+                DeqStatus = XHCI_SetEndpointDequeue(Extension,
+                                                     Endpoint->Slot,
+                                                     1,
+                                                     &Endpoint->TransferRing);
+                if (DeqStatus == MP_STATUS_SUCCESS)
+                {
+                    DPRINT1("usbxhci: slot %u EP0 dequeue reset complete\n", Endpoint->SlotId);
+                }
+                else
+                {
+                    DPRINT1("usbxhci: slot %u SET_TR_DEQUEUE_POINTER failed %d\n",
+                            Endpoint->SlotId, DeqStatus);
+                }
+            }
+            else
+            {
+                DPRINT1("usbxhci: slot %u STOP_ENDPOINT for dequeue reset failed %d\n",
+                        Endpoint->SlotId, DeqStatus);
+            }
+            Endpoint->Slot->Ep0NeedsDequeueReset = FALSE;
+        }
+        else
+        {
+            /*
+             * At DISPATCH_LEVEL - cannot issue commands. VirtualBox didn't
+             * reset the hardware dequeue pointer after RESET_DEVICE, so we
+             * need to sync our software state to the hardware's stale pointer.
+             * Read the hardware endpoint context and match our ring state.
+             */
+            PXHCI_ENDPOINT_CONTEXT EpCtx = XHCI_GetDeviceEndpointContextVa(
+                Extension,
+                Endpoint->Slot->DeviceContext.VirtualAddress,
+                0);
+            if (EpCtx)
+            {
+                ULONGLONG HwDequeue = EpCtx->TrDequeuePointer;
+                ULONGLONG HwDeqAddr = HwDequeue & ~0xFULL;
+                ULONG HwDeqDcs = (ULONG)(HwDequeue & 1);
+                ULONGLONG RingBase = Endpoint->TransferRing.PhysicalAddress.QuadPart;
+                ULONGLONG Offset;
+
+                if (HwDeqAddr >= RingBase &&
+                    HwDeqAddr < RingBase + Endpoint->TransferRing.Length)
+                {
+                    Offset = HwDeqAddr - RingBase;
+                    Endpoint->TransferRing.EnqueueIndex = (ULONG)(Offset / sizeof(XHCI_TRB));
+                    Endpoint->TransferRing.DequeueIndex = Endpoint->TransferRing.EnqueueIndex;
+                    Endpoint->TransferRing.CycleState = HwDeqDcs;
+
+                    /* Also update the slot's saved state */
+                    Endpoint->Slot->Ep0RingEnqueueIndex = Endpoint->TransferRing.EnqueueIndex;
+                    Endpoint->Slot->Ep0RingDequeueIndex = Endpoint->TransferRing.DequeueIndex;
+                    Endpoint->Slot->Ep0RingCycleState = Endpoint->TransferRing.CycleState;
+
+                    DPRINT1("usbxhci: slot %u EP0 sync to HW dequeue at DISPATCH: EnqIdx=%lu Cycle=%lu\n",
+                            Endpoint->SlotId,
+                            Endpoint->TransferRing.EnqueueIndex,
+                            Endpoint->TransferRing.CycleState);
+                }
+                else
+                {
+                    DPRINT1("usbxhci: slot %u EP0 HW dequeue %I64x out of range (base=%I64x)\n",
+                            Endpoint->SlotId, HwDeqAddr, RingBase);
+                }
+            }
+            Endpoint->Slot->Ep0NeedsDequeueReset = FALSE;
+        }
+    }
+
+    /*
+     * Check if the endpoint is halted. After a stall error (e.g., HID SetIdle
+     * rejection), the xHCI endpoint enters Halted state and won't process
+     * transfers until reset.
+     *
+     * The stall completion handler queues an async reset. We need to wait for
+     * it to complete before submitting new transfers. The endpoint transitions:
+     * Halted -> (Reset Endpoint cmd) -> Stopped -> (SetTRDequeue) -> Stopped
+     * -> (doorbell) -> Running.
+     *
+     * If endpoint is still Halted, either wait for reset or do it synchronously.
+     * If endpoint is Stopped (reset in progress), wait briefly for SetTRDequeue.
+     */
+    if (Endpoint->DefaultControl && Endpoint->Slot)
+    {
+        /*
+         * Check if a previous transfer stalled and flagged the endpoint for reset.
+         * This is a simpler and more predictable approach than async workers:
+         * the stall completion sets a flag, and the next submit does the reset
+         * synchronously at PASSIVE_LEVEL before proceeding.
+         */
+        if (Endpoint->Slot->Ep0NeedsStallReset)
+        {
+            if (KeGetCurrentIrql() <= PASSIVE_LEVEL)
+            {
+                DPRINT1("usbxhci: slot %u EP0 stall reset needed, doing synchronous reset\n",
+                        Endpoint->SlotId);
+                Endpoint->Slot->Ep0NeedsStallReset = FALSE;
+                XHCI_PerformEndpointResetSequence(Extension, Endpoint, FALSE);
+                DPRINT1("usbxhci: slot %u EP0 stall reset complete\n", Endpoint->SlotId);
+            }
+            else
+            {
+                DPRINT1("usbxhci: slot %u EP0 stall reset needed but IRQL=%lu, failing submit\n",
+                        Endpoint->SlotId, (ULONG)KeGetCurrentIrql());
+                return MP_STATUS_FAILURE;
+            }
+        }
+    }
+
     KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
     if (Endpoint->ActiveTransfer)
     {
@@ -9009,6 +9360,15 @@ XHCI_SubmitControlTransfer(
     {
         USHORT DoorbellStreamId = XHCI_SelectDoorbellStreamId(Endpoint, Transfer);
 
+        /* Log all control transfers for debugging HID class requests */
+        DPRINT1("usbxhci: CTRL submit slot=%u ep=%u setupType=0x%02x bReq=0x%02x wVal=0x%04x len=%lu\n",
+                Endpoint->SlotId,
+                Endpoint->EndpointId,
+                TransferParameters->SetupPacket.bmRequestType.B,
+                TransferParameters->SetupPacket.bRequest,
+                TransferParameters->SetupPacket.wValue.W,
+                TransferParameters->TransferBufferLength);
+
         if (TraceDevDesc)
         {
             DPRINT1("usbxhci: DEV doorbell slot=%u target=%u EnqIdx=%lu Cycle=%lu\n",
@@ -9031,10 +9391,15 @@ XHCI_SubmitControlTransfer(
      *
      * For EP0 enumeration transfers, schedule a short poll timer to drain the
      * event ring in case the first interrupt is missed (observed on QEMU).
+     *
+     * VirtualBox UEFI quirk: MSI interrupts may not be reliably delivered,
+     * causing transfers to hang indefinitely. Enable polling for ALL control
+     * transfers when VirtualBox is detected to ensure completions are processed.
      */
-    if (Endpoint->DefaultControl &&
-        (Transfer->Flags & (XHCI_TRANSFER_FLAG_SET_ADDRESS |
-                            XHCI_TRANSFER_FLAG_GET_DESCRIPTOR)))
+    if ((Endpoint->DefaultControl &&
+         (Transfer->Flags & (XHCI_TRANSFER_FLAG_SET_ADDRESS |
+                             XHCI_TRANSFER_FLAG_GET_DESCRIPTOR))) ||
+        (Extension->Quirks & XHCI_QUIRK_VBOX_POLL_XFERS))
     {
         Transfer->Flags |= XHCI_TRANSFER_FLAG_NEEDS_POLL;
         if (InterlockedIncrement(&Extension->Ep0PollCounter) == 1)
@@ -9469,6 +9834,17 @@ XHCI_SubmitSgTransfer(
                                    Endpoint->SlotId,
                                    Endpoint->DoorbellTarget,
                                    DoorbellStreamId);
+    }
+
+    /*
+     * VirtualBox UEFI quirk: MSI interrupts may not be reliably delivered.
+     * Enable polling for bulk/interrupt transfers when VirtualBox is detected.
+     */
+    if (Extension->Quirks & XHCI_QUIRK_VBOX_POLL_XFERS)
+    {
+        Transfer->Flags |= XHCI_TRANSFER_FLAG_NEEDS_POLL;
+        if (InterlockedIncrement(&Extension->Ep0PollCounter) == 1)
+            XHCI_ScheduleEp0Poll(Extension);
     }
 
     return MP_STATUS_SUCCESS;
@@ -11939,6 +12315,111 @@ XHCI_RH_ClearFeaturePortPower(
     return XHCI_ModifyPortBits(Extension, Port, 0, XHCI_PORTSC_PP, 0);
 }
 
+/*
+ * Quirk Handlers
+ *
+ * Isolated quirk handler functions for vendor-specific workarounds.
+ * Quirk detection is centralized in XHCI_DetectHardwareQuirks().
+ */
+
+/*
+ * XHCI_ApplyVBoxPortResetQuirk - Handle VirtualBox USB 2.0 port reset issues.
+ *
+ * VirtualBox's xHCI often reports CCS=1 but PED=0. This quirk forces
+ * PED|PP|PR and polls for port enable with a 20ms timeout.
+ */
+static
+MPSTATUS
+XHCI_ApplyVBoxPortResetQuirk(
+    _In_ PXHCI_EXTENSION Extension,
+    _In_ USHORT Port,
+    _In_ volatile ULONG *PortStatusReg,
+    _In_ ULONG PortValue)
+{
+    ULONG Attempt;
+    ULONG PostValue;
+    BOOLEAN PortEnabled = FALSE;
+
+    DPRINT1("XHCI: VBox Quirk - Port %u reset (CCS=%u PED=%u Speed=%lu)\n",
+            Port,
+            (PortValue & XHCI_PORTSC_CCS) ? 1 : 0,
+            (PortValue & XHCI_PORTSC_PED) ? 1 : 0,
+            (PortValue & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT);
+
+    /* If port is already enabled, skip reset */
+    if (PortValue & XHCI_PORTSC_PED)
+    {
+        DPRINT1("XHCI: VBox Quirk - Port %u already enabled\n", Port);
+        PortEnabled = TRUE;
+    }
+    else
+    {
+        /* Force PED|PP|PR to trigger port enable */
+        DPRINT1("XHCI: VBox Quirk - Port %u forcing PR|PP|PED\n", Port);
+        XHCI_ModifyPortBits(Extension, Port,
+                           XHCI_PORTSC_PR | XHCI_PORTSC_PP | XHCI_PORTSC_PED,
+                           0, 0);
+
+        /* Poll for PED with 20ms timeout (often enables within 1-2ms) */
+        for (Attempt = 0; Attempt < 100; Attempt++)
+        {
+            KeStallExecutionProcessor(200); /* 0.2ms per attempt = 20ms total */
+            PostValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
+            if (PostValue & XHCI_PORTSC_PED)
+            {
+                PortEnabled = TRUE;
+                DPRINT1("XHCI: VBox Quirk - Port %u PED=1 after ~%lu us\n",
+                        Port, (Attempt + 1) * 200);
+                break;
+            }
+        }
+
+        if (!PortEnabled)
+        {
+            PostValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
+            DPRINT1("XHCI: VBox Quirk - Port %u not enabled after 20ms, PORTSC=%08lx\n",
+                    Port, PostValue);
+
+            /* If no device connected, not an error */
+            if (!(PostValue & XHCI_PORTSC_CCS))
+            {
+                DPRINT1("XHCI: VBox Quirk - Port %u no device (CCS=0)\n", Port);
+                return MP_STATUS_SUCCESS;
+            }
+
+            DPRINT1("XHCI: VBox Quirk - Port %u reset failed\n", Port);
+            return MP_STATUS_ERROR;
+        }
+    }
+
+    /* Set shadow PRC to signal reset completion (1-based port indexing) */
+    if (Port >= 1 && Port <= XHCI_MAX_PORTS)
+    {
+        InterlockedOr((volatile LONG *)&Extension->PortChangeMask[Port],
+                      XHCI_PORTSC_PRC);
+        DPRINT1("XHCI: VBox Quirk - Port %u reset complete\n", Port);
+    }
+
+    return MP_STATUS_SUCCESS;
+}
+
+/*
+ * XHCI_ApplyQemuPortResetQuirk - Handle QEMU USB port reset issues.
+ *
+ * QEMU may drop port power during reset. Force PED|PP|PR together.
+ */
+static
+MPSTATUS
+XHCI_ApplyQemuPortResetQuirk(
+    _In_ PXHCI_EXTENSION Extension,
+    _In_ USHORT Port)
+{
+    DPRINT1("XHCI: QEMU Quirk - Forcing PED|PP|PR on Port %u\n", Port);
+    return XHCI_ModifyPortBits(Extension, Port,
+                               XHCI_PORTSC_PED | XHCI_PORTSC_PR | XHCI_PORTSC_PP,
+                               0, 0);
+}
+
 static
 MPSTATUS
 NTAPI
@@ -11965,105 +12446,26 @@ XHCI_RH_SetFeaturePortReset(
             (PortValue & XHCI_PORTSC_PED) ? 1 : 0,
             (PortValue & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT);
 
+    /* SuperSpeed ports use Warm Port Reset (WPR) */
     if (XHCI_PortIsSuperSpeed(Extension, Port))
     {
         DPRINT1("XHCI: Port %u is SuperSpeed, using Warm Port Reset (WPR)\n", Port);
         return XHCI_ModifyPortBits(Extension, Port, XHCI_PORTSC_WPR, 0, 0);
     }
 
-    /*
-     * VirtualBox Quirk: VirtualBox's xHCI emulation hangs when the PR (Port Reset)
-     * bit is written to PORTSC for USB 2.0 ports.
-     *
-     * Workaround: Skip the port reset entirely. VirtualBox's xHCI emulation
-     * typically has the device already in a usable state after connection.
-     * We simulate a successful reset by setting the Port Reset Change (PRC)
-     * bit in our shadow state so the hub driver sees the reset as complete.
-     *
-     * This is not ideal for real hardware but allows VirtualBox USB to work.
-     */
+    /* Apply VirtualBox quirk if detected */
     if (Extension->Quirks & XHCI_QUIRK_VBOX_PORT_RESET)
     {
-        ULONG Attempt;
-        ULONG PostValue;
-        BOOLEAN PortEnabled = FALSE;
-
-        DPRINT1("XHCI: VirtualBox Quirk - Skipping port reset on Port %u (PED=%u)\n",
-                Port, (PortValue & XHCI_PORTSC_PED) ? 1 : 0);
-
-        /*
-         * If the port is already enabled, we can proceed without reset.
-         * If not, try to enable it directly by setting the port to U0 link state.
-         */
-        if (!(PortValue & XHCI_PORTSC_PED))
-        {
-            DPRINT1("XHCI: VirtualBox Quirk - Port %u not enabled, attempting U0 transition\n", Port);
-
-            /*
-             * Try setting link state to U0. On VirtualBox, the port might need
-             * power (PP) asserted along with link state write.
-             */
-            XHCI_ModifyPortBits(Extension, Port, XHCI_PORTSC_PP, 0, 0);
-            XHCI_SetPortLinkState(Extension, Port, PORT_LINK_STATE_U0);
-
-            /*
-             * Poll for PED to become 1 after U0 transition. VirtualBox may
-             * need a few microseconds to enable the port after link state change.
-             */
-            for (Attempt = 0; Attempt < 100; Attempt++)
-            {
-                PostValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
-                if (PostValue & XHCI_PORTSC_PED)
-                {
-                    PortEnabled = TRUE;
-                    DPRINT1("XHCI: VirtualBox Quirk - Port %u PED became 1 after %lu attempts\n",
-                            Port, Attempt + 1);
-                    break;
-                }
-                KeStallExecutionProcessor(100); /* 100us per attempt */
-            }
-
-            if (!PortEnabled)
-            {
-                PostValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
-                DPRINT1("XHCI: VirtualBox Quirk - Port %u PED still 0 after polling, PORTSC=%08lx\n",
-                        Port, PostValue);
-            }
-        }
-        else
-        {
-            PortEnabled = TRUE;
-        }
-
-        /*
-         * Set the PRC (Port Reset Change) in shadow to signal reset completion
-         * to the hub driver. This makes the driver think reset succeeded.
-         * Use InterlockedOr to ensure atomicity with ISR/DPC.
-         */
-        if (Port <= XHCI_MAX_PORTS)
-        {
-            InterlockedOr((volatile LONG *)&Extension->PortChangeMask[Port],
-                          XHCI_PORTSC_PRC);
-            DPRINT1("XHCI: VirtualBox Quirk - Set shadow PRC for Port %u (PED=%u)\n",
-                    Port, PortEnabled ? 1 : 0);
-        }
-
-        return MP_STATUS_SUCCESS;
+        return XHCI_ApplyVBoxPortResetQuirk(Extension, Port, PortStatusReg, PortValue);
     }
 
-    /* QEMU Quirk: Explicitly set PED (Enabled) and PP (Power) bits.
-       QEMU's xHCI emulation often fails to enable the port or drops power
-       during a standard reset, causing enumeration failure. */
-    if (Extension->Quirks & XHCI_QUIRK_IGNORE_STARTUP_HCE)
+    /* Apply QEMU quirk if detected */
+    if (Extension->Quirks & XHCI_QUIRK_QEMU_PORT_RESET)
     {
-        DPRINT1("XHCI: QEMU Quirk - Forcing PED | PP | PR on Port %u\n", Port);
-        return XHCI_ModifyPortBits(Extension, Port,
-                                   XHCI_PORTSC_PED | XHCI_PORTSC_PR | XHCI_PORTSC_PP,
-                                   0, 0);
+        return XHCI_ApplyQemuPortResetQuirk(Extension, Port);
     }
 
-    /* Standard Behavior: Set PR (Port Reset).
-       Note: PP should be maintained if PPC is supported, but standard says PR is enough. */
+    /* Standard Behavior: Set PR (Port Reset) */
     DPRINT1("XHCI: Port %u standard reset - writing PORTSC_PR\n", Port);
     return XHCI_ModifyPortBits(Extension, Port, XHCI_PORTSC_PR, 0, 0);
 }

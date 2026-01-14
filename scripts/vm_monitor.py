@@ -2,7 +2,8 @@
 """
 VM Monitor Script
 Builds livecd, starts VM (VirtualBox or QEMU) and monitors for stalls.
-If log stops updating for more than 10 seconds, forcefully stops the VM.
+If log stops updating for more than 6 seconds, or total runtime exceeds 30 seconds,
+forcefully stops the VM.
 
 Usage:
   python3 vm_monitor.py          # Use VirtualBox (default)
@@ -18,7 +19,9 @@ import atexit
 import argparse
 
 LOG_FILE = "/tmp/v.log"
-STALL_TIMEOUT = 10  # seconds
+STALL_TIMEOUT = 6    # Log inactivity timeout
+HARD_TIMEOUT = 30    # Total maximum runtime seconds
+
 # Use environment variable, or current directory if it looks like a build dir, otherwise default to AMD64
 def get_build_dir():
     if "REACTOS_BUILD_DIR" in os.environ:
@@ -285,24 +288,37 @@ def append_to_log(filepath, message):
 
 
 def monitor_log():
-    """Monitor log file for stalls."""
+    """Monitor log file for stalls and enforce hard timeout."""
     global qemu_process, use_qemu
 
     stall_count = 0
     last_size = -1
     last_change_time = time.time()
+    
+    # Track overall runtime for Hard Timeout
+    overall_start_time = time.time()
 
     print(f"Monitoring log file: {LOG_FILE}")
     print(f"Stall timeout: {STALL_TIMEOUT} seconds")
+    print(f"Hard timeout: {HARD_TIMEOUT} seconds")
     print("Press Ctrl+C to stop monitoring.\n")
 
     # Wait for log file to appear and have content
     wait_count = 0
     while get_file_size(LOG_FILE) <= 0:
+        # Check hard timeout while waiting for log
+        if time.time() - overall_start_time > HARD_TIMEOUT:
+            print(f"\n{'='*60}")
+            print(f"HARD TIMEOUT ({HARD_TIMEOUT}s) reached while waiting for log creation.")
+            print(f"{'='*60}")
+            force_kill_vm()
+            return
+
         if wait_count % 10 == 0:
-            print(f"Waiting for log output...")
+            print(f"Waiting for log output... ({int(time.time() - overall_start_time)}s elapsed)")
         wait_count += 1
         time.sleep(0.5)
+        
         if use_qemu and qemu_process and qemu_process.poll() is not None:
             print(f"QEMU exited with code {qemu_process.returncode}")
             return
@@ -315,11 +331,23 @@ def monitor_log():
         while True:
             time.sleep(0.5)
 
+            # 1. Check Hard Timeout
+            total_runtime = time.time() - overall_start_time
+            if total_runtime > HARD_TIMEOUT:
+                print(f"\n{'='*60}")
+                print(f"HARD TIMEOUT REACHED! Running for {total_runtime:.1f} seconds.")
+                print(f"Stopping VM regardless of activity.")
+                print(f"{'='*60}")
+                force_kill_vm()
+                return
+
+            # 2. Check Process Status (QEMU only)
             if use_qemu and qemu_process and qemu_process.poll() is not None:
                 print(f"\nQEMU exited with code {qemu_process.returncode}")
                 print(f"Log available at: {LOG_FILE}")
                 return
 
+            # 3. Check Log Stall
             current_size = get_file_size(LOG_FILE)
             current_time = time.time()
 
@@ -334,7 +362,6 @@ def monitor_log():
                     stall_count += 1
                     print(f"\n{'='*60}")
                     print(f"STALL DETECTED! Log unchanged for {stall_duration:.1f} seconds")
-                    print(f"Stall count: {stall_count}")
                     print(f"{'='*60}")
 
                     has_xhci, has_usb = check_log_contents(LOG_FILE)
@@ -394,6 +421,14 @@ def main():
     if not build_livecd():
         print("Aborting due to build failure.")
         sys.exit(1)
+
+    # Clean up previous QEMU instances before starting a new one
+    print("Ensuring previous QEMU instances are stopped...")
+    try:
+        subprocess.run("sudo kill -9 $(pidof qemu-system-x86_64)", shell=True, 
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
     if use_qemu:
         if not create_fat32_img():

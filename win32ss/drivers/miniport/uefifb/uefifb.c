@@ -882,8 +882,11 @@ UefiFbBuildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
 {
     ULONG gopCount = 0, i, built = 0;
     LOADER_PARAMETER_FRAMEBUFFER fb;
+    LOADER_PARAMETER_FRAMEBUFFER currentFb;
     PVIDEO_MODE_INFORMATION modeTable;
     SIZE_T allocSize;
+    BOOLEAN modeSwitchingSupported = FALSE;
+    ULONG currentBpp = 0;
 
     if (!InbvQueryGopModeCount(&gopCount) || gopCount == 0)
     {
@@ -892,6 +895,85 @@ UefiFbBuildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
     }
 
     UEFIFB_LOG(1, "BuildModeTable: GOP reports %lu modes\n", gopCount);
+
+    /*
+     * Get current framebuffer info first. This is what the firmware is
+     * currently displaying.
+     */
+    if (!InbvGetGopFrameBufferInfo(&currentFb) ||
+        !UefiFbGetFramebufferBitsPerPixel(&currentFb, &currentBpp))
+    {
+        UEFIFB_LOG(0, "BuildModeTable: failed to get current framebuffer info\n");
+        return FALSE;
+    }
+
+    UEFIFB_LOG(1, "BuildModeTable: current firmware mode is %ux%u %ubpp\n",
+               (unsigned int)currentFb.HorizontalResolution,
+               (unsigned int)currentFb.VerticalResolution,
+               (unsigned int)currentBpp);
+
+    /*
+     * Test if mode switching is supported. After ExitBootServices, some
+     * firmware (e.g., VirtualBox UEFI) no longer allows GOP mode changes.
+     * InbvSetGopMode will fail for any mode that differs from the current.
+     *
+     * We test by trying to find a mode with different dimensions. If such
+     * a mode exists but InbvSetGopMode fails for it, mode switching is
+     * not supported.
+     */
+    for (i = 0; i < gopCount; ++i)
+    {
+        ULONG testBpp;
+
+        if (!InbvQueryGopModeInfo(i, &fb))
+            continue;
+
+        if (!UefiFbGetFramebufferBitsPerPixel(&fb, &testBpp))
+            continue;
+
+        /* Skip modes with same geometry as current - they don't test switching */
+        if (fb.HorizontalResolution == currentFb.HorizontalResolution &&
+            fb.VerticalResolution == currentFb.VerticalResolution)
+            continue;
+
+        /* Found a mode with different geometry - try to switch to it */
+        if (InbvSetGopMode(i))
+        {
+            /* Mode switch succeeded! Mode switching IS supported. */
+            modeSwitchingSupported = TRUE;
+
+            /* Switch back to original mode */
+            for (ULONG j = 0; j < gopCount; ++j)
+            {
+                LOADER_PARAMETER_FRAMEBUFFER origFb;
+                if (!InbvQueryGopModeInfo(j, &origFb))
+                    continue;
+                if (origFb.HorizontalResolution == currentFb.HorizontalResolution &&
+                    origFb.VerticalResolution == currentFb.VerticalResolution)
+                {
+                    (VOID)InbvSetGopMode(j);
+                    break;
+                }
+            }
+            break;
+        }
+        else
+        {
+            /* Mode switch failed - mode switching NOT supported */
+            modeSwitchingSupported = FALSE;
+            UEFIFB_LOG(0,
+                       "BuildModeTable: mode switching NOT supported (tested mode %lu: %ux%u)\n",
+                       (unsigned long)i,
+                       (unsigned int)fb.HorizontalResolution,
+                       (unsigned int)fb.VerticalResolution);
+            break;
+        }
+    }
+
+    if (modeSwitchingSupported)
+    {
+        UEFIFB_LOG(1, "BuildModeTable: mode switching IS supported\n");
+    }
 
     allocSize = sizeof(VIDEO_MODE_INFORMATION) * gopCount;
     modeTable = VideoPortAllocatePool(DevExt, 0, allocSize, 'bfEU');
@@ -922,12 +1004,34 @@ UefiFbBuildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
             if ((modeBpp != 32) && (modeBpp != 24))
             {
                 UEFIFB_LOG(1,
-                           "  skipping GOP mode %lu (%ux%u %lubpp)\n",
+                           "  skipping GOP mode %lu (%ux%u %lubpp) - unsupported bpp\n",
                            (unsigned long)i,
                            (unsigned int)DevExt->ModeInfo.VisScreenWidth,
                            (unsigned int)DevExt->ModeInfo.VisScreenHeight,
                            (unsigned long)modeBpp);
                 continue;
+            }
+
+            /*
+             * If mode switching is not supported, only include modes that
+             * match the current firmware mode's geometry. This ensures the
+             * display driver won't try to set a mode we can't actually use.
+             */
+            if (!modeSwitchingSupported)
+            {
+                if (DevExt->ModeInfo.VisScreenWidth != currentFb.HorizontalResolution ||
+                    DevExt->ModeInfo.VisScreenHeight != currentFb.VerticalResolution)
+                {
+                    UEFIFB_LOG(1,
+                               "  skipping GOP mode %lu (%ux%u) - mode switching disabled, "
+                               "geometry differs from current (%ux%u)\n",
+                               (unsigned long)i,
+                               (unsigned int)DevExt->ModeInfo.VisScreenWidth,
+                               (unsigned int)DevExt->ModeInfo.VisScreenHeight,
+                               (unsigned int)currentFb.HorizontalResolution,
+                               (unsigned int)currentFb.VerticalResolution);
+                    continue;
+                }
             }
         }
 
@@ -962,7 +1066,9 @@ UefiFbBuildModeTable(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt)
 
     DevExt->ModeTable = modeTable;
     DevExt->ModeCount = built;
-    UEFIFB_LOG(1, "BuildModeTable: built %lu modes\n", built);
+    UEFIFB_LOG(1, "BuildModeTable: built %lu modes (switching %s)\n",
+               built,
+               modeSwitchingSupported ? "supported" : "disabled");
     UefiFbMirrorDevExtToActiveChild(DevExt);
     return TRUE;
 }
@@ -1072,27 +1178,92 @@ UefiFbSetCurrentMode(_Inout_ PUEFIFB_DEVICE_EXTENSION DevExt,
         ULONG currentBpp;
 
         if (!InbvGetGopFrameBufferInfo(&currentFb) ||
-            !UefiFbGetFramebufferBitsPerPixel(&currentFb, &currentBpp) ||
-            currentFb.HorizontalResolution != req.VisScreenWidth ||
-            currentFb.VerticalResolution   != req.VisScreenHeight ||
-            currentBpp != requestedBpp)
+            !UefiFbGetFramebufferBitsPerPixel(&currentFb, &currentBpp))
         {
             UEFIFB_LOG(0,
-                       "SetCurrentMode: firmware refused matching mode (%ux%u %ubpp, %lu GOP modes)\n",
-                       (unsigned int)req.VisScreenWidth,
-                       (unsigned int)req.VisScreenHeight,
-                       (unsigned int)requestedBpp,
-                       (unsigned long)gopCount);
-            StatusBlock->Status = ERROR_INVALID_PARAMETER;
+                       "SetCurrentMode: failed to query current framebuffer info\n");
+            StatusBlock->Status = ERROR_DEV_NOT_EXIST;
             return FALSE;
         }
 
-        switched = TRUE;
-        UEFIFB_LOG(1,
-                   "SetCurrentMode: firmware already at requested mode (%ux%u %ubpp), skipping switch\n",
-                   (unsigned int)req.VisScreenWidth,
-                   (unsigned int)req.VisScreenHeight,
-                   (unsigned int)requestedBpp);
+        if (currentFb.HorizontalResolution == req.VisScreenWidth &&
+            currentFb.VerticalResolution   == req.VisScreenHeight &&
+            currentBpp == requestedBpp)
+        {
+            /* Current mode matches requested - just proceed */
+            switched = TRUE;
+            UEFIFB_LOG(1,
+                       "SetCurrentMode: firmware already at requested mode (%ux%u %ubpp), skipping switch\n",
+                       (unsigned int)req.VisScreenWidth,
+                       (unsigned int)req.VisScreenHeight,
+                       (unsigned int)requestedBpp);
+        }
+        else
+        {
+            /*
+             * Firmware rejected the mode switch and current mode differs from
+             * requested. This happens on VirtualBox UEFI after ExitBootServices
+             * where GOP mode changes are no longer possible. Instead of failing
+             * and causing BSOD 0xB4, fall back to whatever mode the firmware
+             * is currently using. Find a matching mode in our table or use the
+             * current firmware mode geometry directly.
+             */
+            ULONG fallbackIndex = MAXULONG;
+            ULONG j;
+
+            UEFIFB_LOG(0,
+                       "SetCurrentMode: firmware refused mode switch (%ux%u %ubpp -> %ux%u %ubpp), "
+                       "falling back to current firmware mode\n",
+                       (unsigned int)req.VisScreenWidth,
+                       (unsigned int)req.VisScreenHeight,
+                       (unsigned int)requestedBpp,
+                       (unsigned int)currentFb.HorizontalResolution,
+                       (unsigned int)currentFb.VerticalResolution,
+                       (unsigned int)currentBpp);
+
+            /* Search for a mode entry matching the current firmware geometry */
+            for (j = 0; j < DevExt->ModeCount; ++j)
+            {
+                PVIDEO_MODE_INFORMATION mode = &DevExt->ModeTable[j];
+                ULONG modeBpp = mode->BitsPerPlane * mode->NumberOfPlanes;
+                if (modeBpp == 0)
+                    modeBpp = mode->BitsPerPlane;
+
+                if (mode->VisScreenWidth == currentFb.HorizontalResolution &&
+                    mode->VisScreenHeight == currentFb.VerticalResolution &&
+                    modeBpp == currentBpp)
+                {
+                    fallbackIndex = j;
+                    break;
+                }
+            }
+
+            if (fallbackIndex != MAXULONG)
+            {
+                /* Found a matching mode - use it as the "requested" mode */
+                RequestedMode = fallbackIndex;
+                UEFIFB_LOG(1,
+                           "SetCurrentMode: using fallback mode index %lu (%ux%u %ubpp)\n",
+                           (unsigned long)fallbackIndex,
+                           (unsigned int)currentFb.HorizontalResolution,
+                           (unsigned int)currentFb.VerticalResolution,
+                           (unsigned int)currentBpp);
+            }
+            else
+            {
+                /*
+                 * No matching mode found in table. This shouldn't happen if the
+                 * mode table was built correctly, but handle it gracefully by
+                 * continuing with the current firmware info. The mode table entry
+                 * at RequestedMode will be stale, but ModeInfo will reflect reality.
+                 */
+                UEFIFB_LOG(0,
+                           "SetCurrentMode: no matching mode entry for current firmware mode, "
+                           "continuing with firmware geometry\n");
+            }
+
+            switched = TRUE;
+        }
     }
 
     /* Unmap any existing mapping before we refresh FB info */

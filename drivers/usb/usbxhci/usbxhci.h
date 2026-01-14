@@ -47,6 +47,8 @@
 #define XHCI_QUIRK_NON_COHERENT_DMA   0x00000080
 #define XHCI_QUIRK_VBOX_PORT_RESET    0x00000100
 #define XHCI_QUIRK_VBOX_SPURIOUS_IMAN 0x00000200
+#define XHCI_QUIRK_QEMU_PORT_RESET    0x00000400
+#define XHCI_QUIRK_VBOX_POLL_XFERS    0x00000800
 #define XHCI_BOUNCE_POOL_SLOTS 4
 #define XHCI_BOUNCE_BUFFER_SIZE 0x10000
 
@@ -115,6 +117,8 @@ typedef struct _XHCI_DEVICE_SLOT {
     BOOLEAN IsHub;
     BOOLEAN VirtualDevice;
     UCHAR VirtualConfigurationValue;
+    BOOLEAN Ep0NeedsDequeueReset;
+    BOOLEAN Ep0NeedsStallReset; /* Set on stall, cleared by next submit at PASSIVE */
 } XHCI_DEVICE_SLOT, *PXHCI_DEVICE_SLOT;
 
 typedef struct _XHCI_PROTOCOL_SEGMENT {
@@ -192,6 +196,7 @@ typedef struct _XHCI_EXTENSION {
   BOOLEAN StartupHcePersistent;
   ULONG Quirks;
     UCHAR DeviceAddressMap[XHCI_MAX_DEVICE_ADDRESS + 1];
+  /* Port arrays use 1-based indexing: [0] unused, [1]..[XHCI_MAX_PORTS] used */
   UCHAR PortLinkState[XHCI_MAX_PORTS + 1];
   BOOLEAN PortConnectStatus[XHCI_MAX_PORTS + 1];
   ULONG PortChangeMask[XHCI_MAX_PORTS + 1];

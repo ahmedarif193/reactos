@@ -387,14 +387,72 @@ UefiExitBootServices(VOID)
     TRACE("Attempting to exit boot services\n");
 
     /*
-     * CRITICAL: Disable console and serial output BEFORE calling ExitBootServices.
-     * Some UEFI firmware implementations (including certain OVMF builds) may call
-     * back into console/serial protocols during ExitBootServices execution. If these
-     * protocols are still active, it can cause firmware crashes (observed as #UD
-     * exception at low addresses like 0x88011). Disabling them first prevents this.
+     * CRITICAL: Prepare CPU and firmware state BEFORE calling ExitBootServices.
+     *
+     * 1. Disable the watchdog timer:
+     *    The UEFI watchdog is set to 5 minutes by default. While ExitBootServices
+     *    should disable it automatically, some firmware implementations have bugs.
+     *    Explicitly disabling it prevents any timer-related issues.
+     *
+     * 2. Clear debug registers (DR0-DR7) and debug-related flags:
+     *    Some UEFI firmware (notably VirtualBox) may have internal debug state that
+     *    triggers #DB (Debug Exception) during ExitBootServices. By clearing all
+     *    hardware breakpoint registers, debug status, and the trap flag, we ensure
+     *    no stale debug state causes unexpected exceptions inside the firmware.
+     *
+     * 3. Disable console and serial output:
+     *    Some UEFI firmware implementations (including certain OVMF builds) may call
+     *    back into console/serial protocols during ExitBootServices execution. If these
+     *    protocols are still active, it can cause firmware crashes.
+     *
+     * Tested and working on:
+     * - QEMU with OVMF (EDK2) - WORKS
      */
+
+    /* Disable the watchdog timer to prevent any timer-related issues */
+    TRACE("Disabling watchdog timer\n");
+    GlobalSystemTable->BootServices->SetWatchdogTimer(0, 0, 0, NULL);
+
+    /* Clear all x64 debug registers to prevent #DB exceptions */
+    TRACE("About to clear debug state\n");
+#if defined(_M_AMD64) || defined(__x86_64__)
+    TRACE("Calling UefiClearDebugState\n");
+    UefiClearDebugState();
+    TRACE("UefiClearDebugState returned\n");
+#else
+    TRACE("Skipping debug state clear (not AMD64)\n");
+#endif
+
+    /* Now disable serial and console - no more TRACE output after this */
     UefiSerialDisableFirmware();
     UefiConsMarkBootServicesExited();
+
+    /*
+     * WORKAROUND for VirtualBox UEFI firmware crash during ExitBootServices.
+     *
+     * VirtualBox's UEFI firmware (and potentially other buggy implementations)
+     * may crash during ExitBootServices with a page fault at address like
+     * CR2=0xFFFFFFFFFFFFFFDD (-35). This appears to be caused by the firmware
+     * iterating through internal protocol tracking structures that have become
+     * corrupted or contain invalid pointers.
+     *
+     * By clearing the console protocol pointers in the System Table before
+     * calling ExitBootServices, we prevent the firmware from attempting to
+     * perform cleanup operations on these protocols that might trigger the bug.
+     *
+     * This is safe because:
+     * - We've already disabled console and serial output above
+     * - Boot services are about to be terminated anyway
+     * - The UEFI spec doesn't require these to be valid for ExitBootServices
+     * - The protocol instances themselves remain intact; only the system table
+     *   pointers are cleared
+     */
+    if (GlobalSystemTable)
+    {
+        GlobalSystemTable->ConIn = NULL;
+        GlobalSystemTable->ConOut = NULL;
+        GlobalSystemTable->StdErr = NULL;
+    }
 
     /* Per spec, fetch a *fresh* map/key immediately before ExitBootServices. */
     PUEFI_LoadMemoryMap(&MapKey, &MapBytes, &DescSize, &DescVersion);

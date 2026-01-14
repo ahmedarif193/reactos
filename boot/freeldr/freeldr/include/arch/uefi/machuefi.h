@@ -155,6 +155,14 @@ UefiGopConsoleIsInitialized(VOID);
 VOID
 UefiConsMarkBootServicesExited(VOID);
 
+/*
+ * Clear all x64 debug registers and sanitize CPU debug state.
+ * Must be called before ExitBootServices to prevent #DB exceptions
+ * from stale UEFI firmware debug state (especially on VirtualBox).
+ */
+VOID
+UefiClearDebugState(VOID);
+
 BOOLEAN
 UefiIsCdRomHandle(IN EFI_HANDLE Handle);
 
