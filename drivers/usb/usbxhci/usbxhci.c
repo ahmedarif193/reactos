@@ -62,7 +62,9 @@
 
 #define XHCI_INVALID_LINK_STATE 0xFF
 #define USBPORT_NO_HUB_ADDRESS 0xFFFF
-#define XHCI_EP0_POLL_INTERVAL_US 50
+#define XHCI_TRANSFER_POLL_INTERVAL_US 500
+#define XHCI_EP0_STALL_RESET_TIMEOUT_MS 200
+#define XHCI_EP0_STALL_RESET_POLL_MS 1
 
 USBPORT_REGISTRATION_PACKET XhciRegPacket;
 static BOOLEAN g_XhciStartupHceQuirkOverrideValid;
@@ -200,11 +202,13 @@ static VOID NTAPI XHCI_RH_DisableIrq(PVOID MiniPortExtension);
 static VOID NTAPI XHCI_RH_EnableIrq(PVOID MiniPortExtension);
 static BOOLEAN XHCI_EventRingHasPendingTrb(PXHCI_EXTENSION Extension);
 static VOID XHCI_PollForWork(PXHCI_EXTENSION Extension, BOOLEAN AllowCallbacks);
-static VOID NTAPI XHCI_Ep0PollDpc(PKDPC Dpc,
-                                  PVOID DeferredContext,
-                                  PVOID SystemArg1,
-                                  PVOID SystemArg2);
-static VOID XHCI_ScheduleEp0Poll(PXHCI_EXTENSION Extension);
+static VOID NTAPI XHCI_TransferPollDpc(PKDPC Dpc,
+                                       PVOID DeferredContext,
+                                       PVOID SystemArg1,
+                                       PVOID SystemArg2);
+static VOID XHCI_ScheduleTransferPoll(PXHCI_EXTENSION Extension);
+static VOID XHCI_QueueEp0StallReset(PXHCI_EXTENSION Extension, PXHCI_ENDPOINT Endpoint);
+static MPSTATUS XHCI_WaitForEp0StallReset(PXHCI_EXTENSION Extension, PXHCI_ENDPOINT Endpoint);
 static VOID XHCI_TraceCommandRingState(PXHCI_EXTENSION Extension,
                                        PCSTR Reason,
                                        ULONGLONG CommandPointer,
@@ -461,6 +465,7 @@ typedef struct _XHCI_EP_RESET_WORK {
     PXHCI_EXTENSION Extension;
     PXHCI_ENDPOINT Endpoint;
     BOOLEAN RingDoorbell;
+    BOOLEAN ClearStallResetFlags;
 } XHCI_EP_RESET_WORK, *PXHCI_EP_RESET_WORK;
 typedef struct _XHCI_TT_UPDATE_WORK {
     WORK_QUEUE_ITEM Item;
@@ -2537,24 +2542,33 @@ XHCI_PerformEndpointResetSequence(
             EpState = EpCtx->EpInfo & XHCI_EPCTX_STATE_MASK;
     }
 
-    DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u state=%lu\n",
-            Endpoint->SlotId, Endpoint->EndpointId, EpState);
+    XHCI_DBG(XHCI_TRACE_TRANSFERS,
+             "usbxhci: EndpointResetSequence slot=%u ep=%u state=%lu\n",
+             Endpoint->SlotId,
+             Endpoint->EndpointId,
+             EpState);
 
     if (EpState == XHCI_EPCTX_STATE_HALTED)
     {
         MPSTATUS ResetStatus;
         /* Halted endpoint: Use Reset Endpoint command to transition to Stopped */
         ResetStatus = XHCI_ResetEndpoint(Extension, Endpoint->Slot, Endpoint->EndpointId);
-        DPRINT1("usbxhci: Reset Endpoint slot=%u ep=%u returned %lu\n",
-                Endpoint->SlotId, Endpoint->EndpointId, ResetStatus);
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: Reset Endpoint slot=%u ep=%u returned %lu\n",
+                 Endpoint->SlotId,
+                 Endpoint->EndpointId,
+                 ResetStatus);
     }
     else if (EpState == XHCI_EPCTX_STATE_RUNNING)
     {
         MPSTATUS StopStatus;
         /* Running endpoint: Use Stop Endpoint command to transition to Stopped */
         StopStatus = XHCI_StopEndpoint(Extension, Endpoint->Slot, Endpoint->EndpointId);
-        DPRINT1("usbxhci: Stop Endpoint slot=%u ep=%u returned %lu\n",
-                Endpoint->SlotId, Endpoint->EndpointId, StopStatus);
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: Stop Endpoint slot=%u ep=%u returned %lu\n",
+                 Endpoint->SlotId,
+                 Endpoint->EndpointId,
+                 StopStatus);
     }
     /* For Stopped/Error/Disabled, no state transition command needed */
 
@@ -2594,17 +2608,20 @@ XHCI_PerformEndpointResetSequence(
             }
             else
             {
-                DPRINT1("usbxhci: SetTRDequeue success slot=%u ep=%u EnqIdx=%lu Cycle=%lu\n",
-                        Endpoint->SlotId,
-                        Endpoint->EndpointId,
-                        Endpoint->TransferRing.EnqueueIndex,
-                        Endpoint->TransferRing.CycleState);
+                XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                         "usbxhci: SetTRDequeue success slot=%u ep=%u EnqIdx=%lu Cycle=%lu\n",
+                         Endpoint->SlotId,
+                         Endpoint->EndpointId,
+                         Endpoint->TransferRing.EnqueueIndex,
+                         Endpoint->TransferRing.CycleState);
             }
         }
         else
         {
-            DPRINT1("usbxhci: SetTRDequeue skipped (QEMU HCE quirk) slot=%u ep=%u\n",
-                    Endpoint->SlotId, Endpoint->EndpointId);
+            XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                     "usbxhci: SetTRDequeue skipped (QEMU HCE quirk) slot=%u ep=%u\n",
+                     Endpoint->SlotId,
+                     Endpoint->EndpointId);
         }
     }
 
@@ -2616,13 +2633,151 @@ XHCI_PerformEndpointResetSequence(
                                   0);
 }
 
+static
+VOID
+XHCI_QueueEp0StallReset(
+    _Inout_ PXHCI_EXTENSION Extension,
+    _Inout_ PXHCI_ENDPOINT Endpoint)
+{
+    PXHCI_DEVICE_SLOT Slot;
+    PXHCI_EP_RESET_WORK Work;
+
+    if (!Extension || !Endpoint || !Endpoint->DefaultControl)
+        return;
+
+    Slot = Endpoint->Slot;
+    if (!Slot)
+        return;
+
+    /*
+     * FIX: Check if a worker is already queued before trying to queue another.
+     * The Ep0StallResetQueued flag is the authoritative indicator of whether
+     * a reset worker is currently queued/running. If it's already 1, we don't
+     * need to do anything - the existing worker will handle the reset.
+     *
+     * We check this FIRST, before setting Ep0NeedsStallReset, to avoid the
+     * race where we unconditionally set the needs-reset flag even when a
+     * reset just completed (which could cause redundant resets).
+     *
+     * If no worker is queued, we atomically claim the queued slot, set the
+     * needs-reset flag, and proceed to allocate and queue the worker.
+     */
+    if (InterlockedCompareExchange(&Slot->Ep0StallResetQueued, 1, 0) != 0)
+    {
+        /* Worker already queued or running, nothing more to do */
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: slot %u EP0 stall reset worker already queued, skipping duplicate\n",
+                 Endpoint->SlotId);
+        return;
+    }
+
+    /*
+     * We've claimed the queued slot. Now set the needs-reset flag and
+     * reset the event before attempting allocation.
+     */
+    InterlockedExchange(&Slot->Ep0NeedsStallReset, 1);
+    KeResetEvent(&Slot->Ep0StallResetEvent);
+
+#if defined(NonPagedPoolNx)
+    Work = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(*Work), XHCI_TAG);
+#else
+    Work = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Work), XHCI_TAG);
+#endif
+    if (!Work)
+    {
+        InterlockedExchange(&Slot->Ep0StallResetQueued, 0);
+        KeSetEvent(&Slot->Ep0StallResetEvent, IO_NO_INCREMENT, FALSE);
+        return;
+    }
+
+    InterlockedIncrement(&Endpoint->PendingWorkCount);
+    Work->Extension = Extension;
+    Work->Endpoint = Endpoint;
+    Work->RingDoorbell = FALSE;
+    Work->ClearStallResetFlags = TRUE;
+    ExInitializeWorkItem(&Work->Item,
+                         XHCI_EndpointResetWorker,
+                         Work);
+    ExQueueWorkItem(&Work->Item, DelayedWorkQueue);
+
+    XHCI_DBG(XHCI_TRACE_TRANSFERS,
+             "usbxhci: queued EP0 stall reset work for slot %u\n",
+             Endpoint->SlotId);
+}
+
+static
+MPSTATUS
+XHCI_WaitForEp0StallReset(
+    _Inout_ PXHCI_EXTENSION Extension,
+    _Inout_ PXHCI_ENDPOINT Endpoint)
+{
+    PXHCI_DEVICE_SLOT Slot;
+    LARGE_INTEGER Timeout;
+    NTSTATUS WaitStatus;
+
+    if (!Extension || !Endpoint)
+        return MP_STATUS_ERROR;
+
+    Slot = Endpoint->Slot;
+    if (!Slot || !Slot->Ep0NeedsStallReset)
+        return MP_STATUS_SUCCESS;
+
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return MP_STATUS_FAILURE;
+
+    XHCI_QueueEp0StallReset(Extension, Endpoint);
+
+    /* If nothing is queued (allocation failure), perform the reset synchronously here. */
+    if (InterlockedCompareExchange(&Slot->Ep0StallResetQueued, 0, 0) == 0)
+    {
+        XHCI_PerformEndpointResetSequence(Extension, Endpoint, FALSE);
+        InterlockedExchange(&Slot->Ep0NeedsStallReset, 0);
+        KeSetEvent(&Slot->Ep0StallResetEvent, IO_NO_INCREMENT, FALSE);
+        return MP_STATUS_SUCCESS;
+    }
+
+    Timeout.QuadPart = -(LONGLONG)XHCI_EP0_STALL_RESET_TIMEOUT_MS * 10000LL;
+    WaitStatus = KeWaitForSingleObject(&Slot->Ep0StallResetEvent,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       &Timeout);
+    if (WaitStatus != STATUS_SUCCESS)
+    {
+        /*
+         * FIX: Timeout occurred, but the worker is likely still running.
+         * We must NOT clear Ep0StallResetQueued here because:
+         * 1. The worker will complete eventually and clear the flags itself
+         * 2. Clearing it here would allow a second worker to be queued,
+         *    causing races with the first worker still executing
+         * 3. The endpoint context might be in an intermediate state
+         *
+         * Return failure to let the upper layer retry. On the next attempt:
+         * - If the worker completed, Ep0NeedsStallReset will be 0 and we succeed
+         * - If still running, we'll wait again with fresh timeout
+         *
+         * The PendingWorkCount ensures the endpoint won't be torn down while
+         * the worker is running.
+         */
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: slot %u EP0 stall reset wait timed out, worker still running\n",
+                 Endpoint->SlotId);
+        return MP_STATUS_FAILURE;
+    }
+
+    return MP_STATUS_SUCCESS;
+}
+
 static VOID NTAPI
 XHCI_EndpointResetWorker(PVOID Context)
 {
     PXHCI_EP_RESET_WORK Work = (PXHCI_EP_RESET_WORK)Context;
     LONG NewCount;
 
-    DPRINT1("usbxhci: EndpointResetWorker enter Work=%p\n", Work);
+    XHCI_DBG(XHCI_TRACE_TRANSFERS,
+             "usbxhci: EndpointResetWorker enter Work=%p\n",
+             Work);
 
     if (!Work)
         return;
@@ -2631,11 +2786,25 @@ XHCI_EndpointResetWorker(PVOID Context)
                                       Work->Endpoint,
                                       Work->RingDoorbell);
 
+    if (Work->ClearStallResetFlags &&
+        Work->Endpoint &&
+        Work->Endpoint->Slot)
+    {
+        InterlockedExchange(&Work->Endpoint->Slot->Ep0NeedsStallReset, 0);
+        InterlockedExchange(&Work->Endpoint->Slot->Ep0StallResetQueued, 0);
+        KeSetEvent(&Work->Endpoint->Slot->Ep0StallResetEvent,
+                   IO_NO_INCREMENT,
+                   FALSE);
+    }
+
     if (Work->Endpoint)
     {
         NewCount = InterlockedDecrement(&Work->Endpoint->PendingWorkCount);
-        DPRINT1("usbxhci: EndpointResetWorker done, slot=%u ep=%u PendingWorkCount now=%ld\n",
-                Work->Endpoint->SlotId, Work->Endpoint->EndpointId, NewCount);
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: EndpointResetWorker done, slot=%u ep=%u PendingWorkCount now=%ld\n",
+                 Work->Endpoint->SlotId,
+                 Work->Endpoint->EndpointId,
+                 NewCount);
     }
 
     ExFreePoolWithTag(Work, XHCI_TAG);
@@ -4818,6 +4987,10 @@ XHCI_HandleCommandCompletion(
             Ep0->ActiveTransfer = NULL;
         }
 
+        InterlockedExchange(&Slot->Ep0NeedsStallReset, 0);
+        InterlockedExchange(&Slot->Ep0StallResetQueued, 0);
+        KeSetEvent(&Slot->Ep0StallResetEvent, IO_NO_INCREMENT, FALSE);
+
         DPRINT1("usbxhci: slot %u reset (EP0 ring reset to index 0)\n", SlotId);
     }
 }
@@ -4898,7 +5071,7 @@ XHCI_HandlePortChange(
 
 static
 VOID
-XHCI_ScheduleEp0Poll(
+XHCI_ScheduleTransferPoll(
     _Inout_ PXHCI_EXTENSION Extension)
 {
     LARGE_INTEGER DueTime;
@@ -4906,21 +5079,21 @@ XHCI_ScheduleEp0Poll(
     if (!Extension)
         return;
 
-    DueTime.QuadPart = -(LONGLONG)XHCI_EP0_POLL_INTERVAL_US * 10;
-    KeSetTimer(&Extension->Ep0PollTimer, DueTime, &Extension->Ep0PollDpc);
+    DueTime.QuadPart = -(LONGLONG)XHCI_TRANSFER_POLL_INTERVAL_US * 10;
+    KeSetTimer(&Extension->TransferPollTimer, DueTime, &Extension->TransferPollDpc);
 }
 
 static
 VOID
 NTAPI
-XHCI_Ep0PollDpc(
+XHCI_TransferPollDpc(
     _In_ PKDPC Dpc,
     _In_opt_ PVOID DeferredContext,
     _In_opt_ PVOID SystemArg1,
     _In_opt_ PVOID SystemArg2)
 {
     PXHCI_EXTENSION Extension = (PXHCI_EXTENSION)DeferredContext;
-    static ULONG PollDpcCount = 0;
+    static volatile LONG PollDpcCount = 0;
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(SystemArg1);
@@ -4929,17 +5102,17 @@ XHCI_Ep0PollDpc(
     if (!Extension || Extension->FatalError || Extension->StoppingOrRemoved)
         return;
 
-    PollDpcCount++;
+    InterlockedIncrement(&PollDpcCount);
     if ((PollDpcCount % 100) == 1) /* Log every 100th call to avoid spam */
-    {
-        DPRINT1("usbxhci: Ep0PollDpc #%lu counter=%ld\n",
-                PollDpcCount, Extension->Ep0PollCounter);
-    }
+        XHCI_DBG(XHCI_TRACE_EVENTS,
+                 "usbxhci: TransferPollDpc #%lu counter=%ld\n",
+                 PollDpcCount,
+                 Extension->TransferPollCounter);
 
     XHCI_PollForWork(Extension, TRUE);
 
-    if (InterlockedCompareExchange(&Extension->Ep0PollCounter, 0, 0) > 0)
-        XHCI_ScheduleEp0Poll(Extension);
+    if (InterlockedCompareExchange(&Extension->TransferPollCounter, 0, 0) > 0)
+        XHCI_ScheduleTransferPoll(Extension);
 }
 
 static
@@ -5167,29 +5340,32 @@ XHCI_HandleTransferEvent(
         if (!InTdRange)
         {
 #if DBG
-            DPRINT1("usbxhci: transfer event pointer mismatch slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
-                    SlotId,
-                    EndpointId,
-                    (ULONGLONG)Transfer->CompletionTrbPointer,
-                    (ULONGLONG)TrbPointer,
-                    CompletionCode);
+            XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                     "usbxhci: transfer event pointer mismatch slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
+                     SlotId,
+                     EndpointId,
+                     (ULONGLONG)Transfer->CompletionTrbPointer,
+                     (ULONGLONG)TrbPointer,
+                     CompletionCode);
             if (TraceBos)
             {
-                DPRINT1("usbxhci: BOS mismatch slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
-                        SlotId,
-                        EndpointId,
-                        (ULONGLONG)Transfer->CompletionTrbPointer,
-                        (ULONGLONG)TrbPointer,
-                        CompletionCode);
+                XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                         "usbxhci: BOS mismatch slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
+                         SlotId,
+                         EndpointId,
+                         (ULONGLONG)Transfer->CompletionTrbPointer,
+                         (ULONGLONG)TrbPointer,
+                         CompletionCode);
             }
             if (TraceDevDesc)
             {
-                DPRINT1("usbxhci: DEV mismatch slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
-                        SlotId,
-                        EndpointId,
-                        (ULONGLONG)Transfer->CompletionTrbPointer,
-                        (ULONGLONG)TrbPointer,
-                        CompletionCode);
+                XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                         "usbxhci: DEV mismatch slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
+                         SlotId,
+                         EndpointId,
+                         (ULONGLONG)Transfer->CompletionTrbPointer,
+                         (ULONGLONG)TrbPointer,
+                         CompletionCode);
             }
 #endif
             KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
@@ -5200,12 +5376,13 @@ XHCI_HandleTransferEvent(
             CompletionCode == XHCI_COMPLETION_SUCCESS)
         {
 #if DBG
-            DPRINT1("usbxhci: intermediate transfer event slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
-                    SlotId,
-                    EndpointId,
-                    (ULONGLONG)Transfer->CompletionTrbPointer,
-                    (ULONGLONG)TrbPointer,
-                    CompletionCode);
+            XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                     "usbxhci: intermediate transfer event slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
+                     SlotId,
+                     EndpointId,
+                     (ULONGLONG)Transfer->CompletionTrbPointer,
+                     (ULONGLONG)TrbPointer,
+                     CompletionCode);
 #endif
             /* Update transferred count but wait for the Status Stage event */
             Transfer->BytesTransferred = BytesTransferred;
@@ -5214,35 +5391,38 @@ XHCI_HandleTransferEvent(
         }
 
 #if DBG
-        DPRINT1("usbxhci: transfer event within TD range slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
-                SlotId,
-                EndpointId,
-                (ULONGLONG)Transfer->CompletionTrbPointer,
-                (ULONGLONG)TrbPointer,
-                CompletionCode);
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: transfer event within TD range slot=%u ep=%u exp=%I64x got=%I64x code=%lu\n",
+                 SlotId,
+                 EndpointId,
+                 (ULONGLONG)Transfer->CompletionTrbPointer,
+                 (ULONGLONG)TrbPointer,
+                 CompletionCode);
 #endif
     }
     if (TraceBos)
     {
-        DPRINT1("usbxhci: BOS complete slot=%u ep=%u trb=%I64x exp=%I64x bytes=%lu rem=%lu code=%lu\n",
-                SlotId,
-                EndpointId,
-                (ULONGLONG)TrbPointer,
-                (ULONGLONG)Transfer->CompletionTrbPointer,
-                BytesTransferred,
-                Remaining,
-                CompletionCode);
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: BOS complete slot=%u ep=%u trb=%I64x exp=%I64x bytes=%lu rem=%lu code=%lu\n",
+                 SlotId,
+                 EndpointId,
+                 (ULONGLONG)TrbPointer,
+                 (ULONGLONG)Transfer->CompletionTrbPointer,
+                 BytesTransferred,
+                 Remaining,
+                 CompletionCode);
     }
     if (TraceDevDesc)
     {
-        DPRINT1("usbxhci: DEV complete slot=%u ep=%u trb=%I64x exp=%I64x bytes=%lu rem=%lu code=%lu\n",
-                SlotId,
-                EndpointId,
-                (ULONGLONG)TrbPointer,
-                (ULONGLONG)Transfer->CompletionTrbPointer,
-                BytesTransferred,
-                Remaining,
-                CompletionCode);
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: DEV complete slot=%u ep=%u trb=%I64x exp=%I64x bytes=%lu rem=%lu code=%lu\n",
+                 SlotId,
+                 EndpointId,
+                 (ULONGLONG)TrbPointer,
+                 (ULONGLONG)Transfer->CompletionTrbPointer,
+                 BytesTransferred,
+                 Remaining,
+                 CompletionCode);
     }
     Endpoint->TransferRing.DequeueIndex = Endpoint->TransferRing.EnqueueIndex;
 
@@ -5282,16 +5462,17 @@ XHCI_HandleTransferEvent(
         Transfer->TransferParameters &&
         Transfer->TransferParameters->SetupPacket.wValue.HiByte == USB_CONFIGURATION_DESCRIPTOR_TYPE)
     {
-        DPRINT1("usbxhci: cfg desc event S%u E%u code=%lu req=%lu rem=%lu bytes=%lu ptr=%I64x first=%I64x last=%I64x\n",
-                SlotId,
-                EndpointId,
-                CompletionCode,
-                RequestedLength,
-                Remaining,
-                BytesTransferred,
-                TrbPointer,
-                (ULONGLONG)Transfer->TdFirstTrbPointer,
-                (ULONGLONG)Transfer->CompletionTrbPointer);
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: cfg desc event S%u E%u code=%lu req=%lu rem=%lu bytes=%lu ptr=%I64x first=%I64x last=%I64x\n",
+                 SlotId,
+                 EndpointId,
+                 CompletionCode,
+                 RequestedLength,
+                 Remaining,
+                 BytesTransferred,
+                 TrbPointer,
+                 (ULONGLONG)Transfer->TdFirstTrbPointer,
+                 (ULONGLONG)Transfer->CompletionTrbPointer);
     }
 
     XHCI_DBG(XHCI_TRACE_TRANSFERS,
@@ -5306,28 +5487,30 @@ XHCI_HandleTransferEvent(
 
     if (SlotId == 1 && (EndpointId == 3 || EndpointId == 4))
     {
-        DPRINT1("usbxhci: bulk xfer event S%u E%u Code=%lu Req=%lu Rem=%lu Bytes=%lu Ptr=%I64x\n",
-                SlotId,
-                EndpointId,
-                CompletionCode,
-                RequestedLength,
-                Remaining,
-                BytesTransferred,
-                TrbPointer);
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: bulk xfer event S%u E%u Code=%lu Req=%lu Rem=%lu Bytes=%lu Ptr=%I64x\n",
+                 SlotId,
+                 EndpointId,
+                 CompletionCode,
+                 RequestedLength,
+                 Remaining,
+                 BytesTransferred,
+                 TrbPointer);
     }
 
     /* Log all transfer completions for debugging */
     if (CompletionCode != XHCI_COMPLETION_SUCCESS)
     {
         PUSBPORT_TRANSFER_PARAMETERS TParams = Transfer->TransferParameters;
-        DPRINT1("usbxhci: transfer complete slot=%u ep=%u code=%lu req=%lu bytes=%lu setupType=0x%02x bReq=0x%02x\n",
-                SlotId,
-                EndpointId,
-                CompletionCode,
-                RequestedLength,
-                BytesTransferred,
-                TParams ? TParams->SetupPacket.bmRequestType.B : 0xFF,
-                TParams ? TParams->SetupPacket.bRequest : 0xFF);
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: transfer complete slot=%u ep=%u code=%lu req=%lu bytes=%lu setupType=0x%02x bReq=0x%02x\n",
+                 SlotId,
+                 EndpointId,
+                 CompletionCode,
+                 RequestedLength,
+                 BytesTransferred,
+                 TParams ? TParams->SetupPacket.bmRequestType.B : 0xFF,
+                 TParams ? TParams->SetupPacket.bRequest : 0xFF);
     }
 
     switch (CompletionCode)
@@ -5353,47 +5536,30 @@ XHCI_HandleTransferEvent(
     }
 
     /*
-     * xHCI spec section 4.6.8: When a Stall Error occurs on a control endpoint,
-     * the endpoint transitions to Halted state and will not process transfers
-     * until reset. Per USB spec, control endpoints auto-clear the stall on the
-     * next SETUP token, but the xHCI host controller must still be reset.
-     *
-     * Queue an asynchronous endpoint reset to restore the endpoint to Running
-     * state. This allows subsequent control transfers (e.g., HID GetProtocol
-     * after SetIdle fails with STALL) to complete rather than hang forever.
-     *
-     * This is especially important for VirtualBox UEFI where HID devices may
-     * STALL optional requests like SetIdle.
+     * Control endpoint errors can leave EP0 halted until a reset is issued.
+     * Treat STALL and USB_TRANSACTION_ERROR the same so the next control
+     * transfer does not hang waiting on a halted endpoint.
      */
-    if (CompletionCode == XHCI_COMPLETION_STALL_ERROR &&
+    if ((CompletionCode == XHCI_COMPLETION_STALL_ERROR ||
+         CompletionCode == XHCI_COMPLETION_USB_TRANSACTION_ERROR) &&
         Endpoint->DefaultControl &&
         Endpoint->Slot)
     {
-        /*
-         * Control endpoint stalled. Per USB spec, control STALLs auto-clear,
-         * but xHCI requires explicit Reset Endpoint + Set TR Dequeue.
-         *
-         * Do the reset SYNCHRONOUSLY here, BEFORE returning the stall status
-         * to USBPORT. This ensures that when USBPORT immediately retries
-         * (which it does in the same DPC context), the endpoint is already
-         * in Running state and ready to accept new transfers.
-         *
-         * Note: This may take several hundred ms on VirtualBox xHCI, but it's
-         * the only reliable way to handle the immediate retry from USBPORT.
-         */
-        DPRINT1("usbxhci: control endpoint stall on slot %u, doing inline reset\n",
-                SlotId);
-        /*
-         * Pass RingDoorbell=FALSE because we're resetting an empty ring.
-         * Ringing the doorbell on an empty ring would cause the hardware
-         * to fetch the TRB at index 0, which may have stale contents with
-         * the wrong cycle bit (from before the ring wrapped), causing the
-         * endpoint to immediately halt again.
-         *
-         * The next submit will queue TRBs and ring the doorbell properly.
-         */
-        XHCI_PerformEndpointResetSequence(Extension, Endpoint, FALSE);
-        DPRINT1("usbxhci: slot %u EP0 inline reset complete\n", Endpoint->SlotId);
+        if (Extension->Quirks & XHCI_QUIRK_VBOX_POLL_XFERS)
+        {
+            DPRINT1("usbxhci: EP0 error code=%lu, doing inline reset (VBox)\n",
+                    CompletionCode);
+            XHCI_PerformEndpointResetSequence(Extension, Endpoint, FALSE);
+            InterlockedExchange(&Endpoint->Slot->Ep0NeedsStallReset, 0);
+            InterlockedExchange(&Endpoint->Slot->Ep0StallResetQueued, 0);
+            KeSetEvent(&Endpoint->Slot->Ep0StallResetEvent,
+                       IO_NO_INCREMENT,
+                       FALSE);
+        }
+        else
+        {
+            XHCI_QueueEp0StallReset(Extension, Endpoint);
+        }
     }
 
     Transfer->CompletionTrbPointer = TrbPointer;
@@ -5403,8 +5569,8 @@ XHCI_HandleTransferEvent(
     if (Transfer->Flags & XHCI_TRANSFER_FLAG_NEEDS_POLL)
     {
         Transfer->Flags &= ~XHCI_TRANSFER_FLAG_NEEDS_POLL;
-        if (InterlockedDecrement(&Extension->Ep0PollCounter) <= 0)
-            KeCancelTimer(&Extension->Ep0PollTimer);
+        if (InterlockedDecrement(&Extension->TransferPollCounter) <= 0)
+            KeCancelTimer(&Extension->TransferPollTimer);
     }
 
     if (Transfer->Flags & (XHCI_TRANSFER_FLAG_SET_ADDRESS | XHCI_TRANSFER_FLAG_GET_DESCRIPTOR))
@@ -5498,6 +5664,9 @@ XHCI_AssignSlot(
     Slot->IsHub = FALSE;
     Slot->VirtualDevice = FALSE;
     Slot->VirtualConfigurationValue = 0;
+    KeInitializeEvent(&Slot->Ep0StallResetEvent, NotificationEvent, TRUE);
+    InterlockedExchange(&Slot->Ep0NeedsStallReset, 0);
+    InterlockedExchange(&Slot->Ep0StallResetQueued, 0);
 
     if (Extension->Dcbaa)
         Extension->Dcbaa[SlotId] = Slot->DeviceContext.PhysicalAddress.QuadPart;
@@ -6051,6 +6220,10 @@ XHCI_AddressDeviceSlot(
 
     if (!Extension || !Slot || !EndpointProperties)
         return MP_STATUS_ERROR;
+
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return MP_STATUS_FAILURE;
 
     SlotId = Slot->SlotId;
     DelayMs = ADDR_DEV_INITIAL_DELAY_MS;
@@ -8848,8 +9021,9 @@ XHCI_SubmitControlTransfer(
         KeGetCurrentIrql() <= PASSIVE_LEVEL)
     {
         MPSTATUS AddrStatus;
-        DPRINT1("usbxhci: slot %u not addressed, re-addressing before transfer\n",
-                Endpoint->SlotId);
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: slot %u not addressed, re-addressing before transfer\n",
+                 Endpoint->SlotId);
 
         AddrStatus = XHCI_AddressDeviceSlot(Extension,
                                              Endpoint->Slot,
@@ -8860,7 +9034,9 @@ XHCI_SubmitControlTransfer(
             DPRINT1("usbxhci: slot %u re-address failed %d\n", Endpoint->SlotId, AddrStatus);
             return AddrStatus;
         }
-        DPRINT1("usbxhci: slot %u re-addressed successfully\n", Endpoint->SlotId);
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: slot %u re-addressed successfully\n",
+                 Endpoint->SlotId);
         /* After re-address, the ring is reset to index 0 with cycle 1 */
         Endpoint->TransferRing.EnqueueIndex = 0;
         Endpoint->TransferRing.DequeueIndex = 0;
@@ -8880,8 +9056,9 @@ XHCI_SubmitControlTransfer(
          * RESET_DEVICE completion handler. Just log and proceed with the
          * transfer - re-addressing will happen later at PASSIVE_LEVEL.
          */
-        DPRINT1("usbxhci: slot %u not addressed at DISPATCH_LEVEL - proceeding with default address\n",
-                Endpoint->SlotId);
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: slot %u not addressed at DISPATCH_LEVEL - proceeding with default address\n",
+                 Endpoint->SlotId);
     }
 
     /*
@@ -8908,7 +9085,9 @@ XHCI_SubmitControlTransfer(
         {
             /* At PASSIVE_LEVEL - can issue commands to properly reset */
             MPSTATUS DeqStatus;
-            DPRINT1("usbxhci: slot %u EP0 dequeue reset (VBox quirk) at PASSIVE\n", Endpoint->SlotId);
+            XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                     "usbxhci: slot %u EP0 dequeue reset (VBox quirk) at PASSIVE\n",
+                     Endpoint->SlotId);
 
             DeqStatus = XHCI_StopEndpoint(Extension, Endpoint->Slot, 1);
             if (DeqStatus == MP_STATUS_SUCCESS)
@@ -8919,7 +9098,9 @@ XHCI_SubmitControlTransfer(
                                                      &Endpoint->TransferRing);
                 if (DeqStatus == MP_STATUS_SUCCESS)
                 {
-                    DPRINT1("usbxhci: slot %u EP0 dequeue reset complete\n", Endpoint->SlotId);
+                    XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                             "usbxhci: slot %u EP0 dequeue reset complete\n",
+                             Endpoint->SlotId);
                 }
                 else
                 {
@@ -8967,10 +9148,11 @@ XHCI_SubmitControlTransfer(
                     Endpoint->Slot->Ep0RingDequeueIndex = Endpoint->TransferRing.DequeueIndex;
                     Endpoint->Slot->Ep0RingCycleState = Endpoint->TransferRing.CycleState;
 
-                    DPRINT1("usbxhci: slot %u EP0 sync to HW dequeue at DISPATCH: EnqIdx=%lu Cycle=%lu\n",
-                            Endpoint->SlotId,
-                            Endpoint->TransferRing.EnqueueIndex,
-                            Endpoint->TransferRing.CycleState);
+                    XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                             "usbxhci: slot %u EP0 sync to HW dequeue at DISPATCH: EnqIdx=%lu Cycle=%lu\n",
+                             Endpoint->SlotId,
+                             Endpoint->TransferRing.EnqueueIndex,
+                             Endpoint->TransferRing.CycleState);
                 }
                 else
                 {
@@ -8995,29 +9177,68 @@ XHCI_SubmitControlTransfer(
      * If endpoint is still Halted, either wait for reset or do it synchronously.
      * If endpoint is Stopped (reset in progress), wait briefly for SetTRDequeue.
      */
+    if (Endpoint->DefaultControl &&
+        Endpoint->Slot &&
+        !Endpoint->Slot->Ep0NeedsStallReset &&
+        KeGetCurrentIrql() <= PASSIVE_LEVEL)
+    {
+        ULONG EpState = XHCI_EPCTX_STATE_DISABLED;
+        PVOID DevCtx = Endpoint->Slot->DeviceContext.VirtualAddress;
+
+        if (DevCtx)
+        {
+            PXHCI_ENDPOINT_CONTEXT EpCtx = XHCI_GetDeviceEndpointContextVa(
+                Extension,
+                DevCtx,
+                0);
+            if (EpCtx)
+                EpState = EpCtx->EpInfo & XHCI_EPCTX_STATE_MASK;
+        }
+
+        if (EpState == XHCI_EPCTX_STATE_HALTED)
+        {
+            DPRINT1("usbxhci: slot %u EP0 halted before submit, resetting\n",
+                    Endpoint->SlotId);
+            XHCI_PerformEndpointResetSequence(Extension, Endpoint, FALSE);
+        }
+    }
+
     if (Endpoint->DefaultControl && Endpoint->Slot)
     {
         /*
-         * Check if a previous transfer stalled and flagged the endpoint for reset.
-         * This is a simpler and more predictable approach than async workers:
-         * the stall completion sets a flag, and the next submit does the reset
-         * synchronously at PASSIVE_LEVEL before proceeding.
+         * A previous control transfer stalled. The completion path sets a flag
+         * and queues a PASSIVE_LEVEL reset. At PASSIVE_LEVEL wait for that
+         * reset to finish. At DISPATCH_LEVEL we queue the reset worker
+         * (safe via NonPagedPool allocation) but fail this transfer so the
+         * upper stack knows to retry.
          */
         if (Endpoint->Slot->Ep0NeedsStallReset)
         {
-            if (KeGetCurrentIrql() <= PASSIVE_LEVEL)
+            if (KeGetCurrentIrql() > PASSIVE_LEVEL)
             {
-                DPRINT1("usbxhci: slot %u EP0 stall reset needed, doing synchronous reset\n",
-                        Endpoint->SlotId);
-                Endpoint->Slot->Ep0NeedsStallReset = FALSE;
-                XHCI_PerformEndpointResetSequence(Extension, Endpoint, FALSE);
-                DPRINT1("usbxhci: slot %u EP0 stall reset complete\n", Endpoint->SlotId);
+                /*
+                 * FIX: We are at DISPATCH_LEVEL, so we cannot wait for the reset event.
+                 * However, we must ensure the reset process is actually started,
+                 * otherwise the endpoint might stay broken forever if the previous
+                 * completion handler failed to queue it (e.g., allocation failure).
+                 *
+                 * Queue the worker now (safe at DISPATCH_LEVEL via NonPagedPool),
+                 * then fail this specific transfer so the upper stack knows to retry.
+                 */
+                XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                         "usbxhci: slot %u EP0 stall reset needed at DISPATCH, queuing async reset and failing transfer\n",
+                         Endpoint->SlotId);
+
+                XHCI_QueueEp0StallReset(Extension, Endpoint);
+
+                return MP_STATUS_FAILURE;
             }
             else
             {
-                DPRINT1("usbxhci: slot %u EP0 stall reset needed but IRQL=%lu, failing submit\n",
-                        Endpoint->SlotId, (ULONG)KeGetCurrentIrql());
-                return MP_STATUS_FAILURE;
+                /* At PASSIVE_LEVEL, we can wait synchronously for the fix to complete */
+                Status = XHCI_WaitForEp0StallReset(Extension, Endpoint);
+                if (Status != MP_STATUS_SUCCESS)
+                    return Status;
             }
         }
     }
@@ -9058,14 +9279,15 @@ XHCI_SubmitControlTransfer(
     {
         Transfer->Flags |= XHCI_TRANSFER_FLAG_SET_ADDRESS;
         Transfer->NewAddress = (UCHAR)(TransferParameters->SetupPacket.wValue.W);
-        DPRINT1("usbxhci: SUBMIT SET_ADDRESS addr=%u port=%u hub=%u speed=%u len=%lu Slot=%p IsVirtual=%d\n",
-                Transfer->NewAddress,
-                Endpoint->EndpointProperties.PortNumber,
-                Endpoint->EndpointProperties.HubAddr,
-                Endpoint->EndpointProperties.DeviceSpeed,
-                TransferParameters->TransferBufferLength,
-                Endpoint->Slot,
-                XHCI_IsVirtualPort(Extension, Endpoint->EndpointProperties.PortNumber));
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: SUBMIT SET_ADDRESS addr=%u port=%u hub=%u speed=%u len=%lu Slot=%p IsVirtual=%d\n",
+                 Transfer->NewAddress,
+                 Endpoint->EndpointProperties.PortNumber,
+                 Endpoint->EndpointProperties.HubAddr,
+                 Endpoint->EndpointProperties.DeviceSpeed,
+                 TransferParameters->TransferBufferLength,
+                 Endpoint->Slot,
+                 XHCI_IsVirtualPort(Extension, Endpoint->EndpointProperties.PortNumber));
 
         /*
          * xHCI handles device addressing internally via ADDRESS_DEVICE command.
@@ -9085,8 +9307,10 @@ XHCI_SubmitControlTransfer(
         {
             PXHCI_SWENUM_WORK Work;
 
-            DPRINT1("usbxhci: SET_ADDRESS handling slot=%u Addressed=%d\n",
-                    Endpoint->Slot->SlotId, Endpoint->Slot->Addressed);
+            XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                     "usbxhci: SET_ADDRESS handling slot=%u Addressed=%d\n",
+                     Endpoint->Slot->SlotId,
+                     Endpoint->Slot->Addressed);
 
             /*
              * Try to acquire a reference for the SW-enum work. If the endpoint
@@ -9137,8 +9361,9 @@ XHCI_SubmitControlTransfer(
             if (!Endpoint->Slot->Addressed)
             {
                 Work->NeedsAddressDevice = TRUE;
-                DPRINT1("usbxhci: deferring ADDRESS_DEVICE to PASSIVE_LEVEL for slot %u\n",
-                        Endpoint->Slot->SlotId);
+                XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                         "usbxhci: deferring ADDRESS_DEVICE to PASSIVE_LEVEL for slot %u\n",
+                         Endpoint->Slot->SlotId);
             }
             else
             {
@@ -9147,8 +9372,10 @@ XHCI_SubmitControlTransfer(
                 Endpoint->Slot->UsbDeviceAddress = Transfer->NewAddress;
                 XHCI_UpdateDeviceAddressMap(Extension, Endpoint->Slot, Transfer->NewAddress);
 
-                DPRINT1("usbxhci: slot %u SET_ADDRESS to addr=%u (already addressed)\n",
-                        Endpoint->Slot->SlotId, Transfer->NewAddress);
+                XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                         "usbxhci: slot %u SET_ADDRESS to addr=%u (already addressed)\n",
+                         Endpoint->Slot->SlotId,
+                         Transfer->NewAddress);
 
                 Transfer->BytesTransferred = 0;
                 Transfer->UsbdStatus = USBD_STATUS_SUCCESS;
@@ -9176,20 +9403,22 @@ XHCI_SubmitControlTransfer(
         if (DescType == USB_BOS_DESCRIPTOR_TYPE)
         {
             TraceBos = TRUE;
-            DPRINT1("usbxhci: BOS submit len=%lu wLength=%u sgcount=%lu buf=%p\n",
-                    TransferParameters->TransferBufferLength,
-                    TransferParameters->SetupPacket.wLength,
-                    SgList ? SgList->SgElementCount : 0,
-                    SgList ? SgList->MappedSystemVa : NULL);
+            XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                     "usbxhci: BOS submit len=%lu wLength=%u sgcount=%lu buf=%p\n",
+                     TransferParameters->TransferBufferLength,
+                     TransferParameters->SetupPacket.wLength,
+                     SgList ? SgList->SgElementCount : 0,
+                     SgList ? SgList->MappedSystemVa : NULL);
         }
         else if (DescType == USB_DEVICE_DESCRIPTOR_TYPE)
         {
             TraceDevDesc = TRUE;
-            DPRINT1("usbxhci: DEV submit len=%lu wLength=%u sgcount=%lu buf=%p\n",
-                    TransferParameters->TransferBufferLength,
-                    TransferParameters->SetupPacket.wLength,
-                    SgList ? SgList->SgElementCount : 0,
-                    SgList ? SgList->MappedSystemVa : NULL);
+            XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                     "usbxhci: DEV submit len=%lu wLength=%u sgcount=%lu buf=%p\n",
+                     TransferParameters->TransferBufferLength,
+                     TransferParameters->SetupPacket.wLength,
+                     SgList ? SgList->SgElementCount : 0,
+                     SgList ? SgList->MappedSystemVa : NULL);
 
             /*
              * Diagnostic: Check the xHC's endpoint context to verify the
@@ -9211,13 +9440,14 @@ XHCI_SubmitControlTransfer(
                     ULONGLONG SwEnqueuePhys = Endpoint->TransferRing.PhysicalAddress.QuadPart +
                         ((ULONGLONG)Endpoint->TransferRing.EnqueueIndex * sizeof(XHCI_TRB));
 
-                    DPRINT1("usbxhci: DEV pre-submit EpState=%lu HwDeqAddr=%I64x HwDcs=%lu SwEnqPhys=%I64x EnqIdx=%lu SwCycle=%lu\n",
-                            EpState,
-                            HwDeqAddr,
-                            HwDeqDcs,
-                            SwEnqueuePhys,
-                            Endpoint->TransferRing.EnqueueIndex,
-                            Endpoint->TransferRing.CycleState);
+                    XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                             "usbxhci: DEV pre-submit EpState=%lu HwDeqAddr=%I64x HwDcs=%lu SwEnqPhys=%I64x EnqIdx=%lu SwCycle=%lu\n",
+                             EpState,
+                             HwDeqAddr,
+                             HwDeqDcs,
+                             SwEnqueuePhys,
+                             Endpoint->TransferRing.EnqueueIndex,
+                             Endpoint->TransferRing.CycleState);
 
                     /*
                      * NOTE: Per xHCI spec section 6.2.3, the TR Dequeue Pointer in the
@@ -9236,7 +9466,8 @@ XHCI_SubmitControlTransfer(
                      */
                     if (HwDeqAddr != SwEnqueuePhys && EpState == 1)
                     {
-                        DPRINT1("usbxhci: DEV note: HwDeq != SwEnq (expected for Running EP, HW ptr is stale)\n");
+                        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                                 "usbxhci: DEV note: HwDeq != SwEnq (expected for Running EP, HW ptr is stale)\n");
                     }
                 }
             }
@@ -9499,21 +9730,23 @@ XHCI_SubmitControlTransfer(
     Transfer->CompletionTrbPointer = PhysicalAddress;
     if (TraceBos)
     {
-        DPRINT1("usbxhci: BOS trbs first=%I64x last=%I64x data=%lu hasData=%u dir=%s\n",
-                (ULONGLONG)Transfer->TdFirstTrbPointer,
-                (ULONGLONG)Transfer->CompletionTrbPointer,
-                BosBytesProgrammed,
-                HasDataStage ? 1 : 0,
-                DataIn ? "IN" : "OUT");
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: BOS trbs first=%I64x last=%I64x data=%lu hasData=%u dir=%s\n",
+                 (ULONGLONG)Transfer->TdFirstTrbPointer,
+                 (ULONGLONG)Transfer->CompletionTrbPointer,
+                 BosBytesProgrammed,
+                 HasDataStage ? 1 : 0,
+                 DataIn ? "IN" : "OUT");
     }
     if (TraceDevDesc)
     {
-        DPRINT1("usbxhci: DEV trbs first=%I64x last=%I64x data=%lu hasData=%u dir=%s\n",
-                (ULONGLONG)Transfer->TdFirstTrbPointer,
-                (ULONGLONG)Transfer->CompletionTrbPointer,
-                DevDescBytesProgrammed,
-                HasDataStage ? 1 : 0,
-                DataIn ? "IN" : "OUT");
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: DEV trbs first=%I64x last=%I64x data=%lu hasData=%u dir=%s\n",
+                 (ULONGLONG)Transfer->TdFirstTrbPointer,
+                 (ULONGLONG)Transfer->CompletionTrbPointer,
+                 DevDescBytesProgrammed,
+                 HasDataStage ? 1 : 0,
+                 DataIn ? "IN" : "OUT");
     }
     XHCI_AdvanceTransferRing(&Endpoint->TransferRing);
 
@@ -9521,21 +9754,23 @@ XHCI_SubmitControlTransfer(
         USHORT DoorbellStreamId = XHCI_SelectDoorbellStreamId(Endpoint, Transfer);
 
         /* Log all control transfers for debugging HID class requests */
-        DPRINT1("usbxhci: CTRL submit slot=%u ep=%u setupType=0x%02x bReq=0x%02x wVal=0x%04x len=%lu\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId,
-                TransferParameters->SetupPacket.bmRequestType.B,
-                TransferParameters->SetupPacket.bRequest,
-                TransferParameters->SetupPacket.wValue.W,
-                TransferParameters->TransferBufferLength);
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: CTRL submit slot=%u ep=%u setupType=0x%02x bReq=0x%02x wVal=0x%04x len=%lu\n",
+                 Endpoint->SlotId,
+                 Endpoint->EndpointId,
+                 TransferParameters->SetupPacket.bmRequestType.B,
+                 TransferParameters->SetupPacket.bRequest,
+                 TransferParameters->SetupPacket.wValue.W,
+                 TransferParameters->TransferBufferLength);
 
         if (TraceDevDesc)
         {
-            DPRINT1("usbxhci: DEV doorbell slot=%u target=%u EnqIdx=%lu Cycle=%lu\n",
-                    Endpoint->SlotId,
-                    Endpoint->DoorbellTarget,
-                    Endpoint->TransferRing.EnqueueIndex,
-                    Endpoint->TransferRing.CycleState);
+            XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                     "usbxhci: DEV doorbell slot=%u target=%u EnqIdx=%lu Cycle=%lu\n",
+                     Endpoint->SlotId,
+                     Endpoint->DoorbellTarget,
+                     Endpoint->TransferRing.EnqueueIndex,
+                     Endpoint->TransferRing.CycleState);
         }
 
         KeMemoryBarrier();
@@ -9562,8 +9797,8 @@ XHCI_SubmitControlTransfer(
         (Extension->Quirks & XHCI_QUIRK_VBOX_POLL_XFERS))
     {
         Transfer->Flags |= XHCI_TRANSFER_FLAG_NEEDS_POLL;
-        if (InterlockedIncrement(&Extension->Ep0PollCounter) == 1)
-            XHCI_ScheduleEp0Poll(Extension);
+        if (InterlockedIncrement(&Extension->TransferPollCounter) == 1)
+            XHCI_ScheduleTransferPoll(Extension);
     }
 
     return MP_STATUS_SUCCESS;
@@ -9572,8 +9807,8 @@ Failure:
     if (Transfer->Flags & XHCI_TRANSFER_FLAG_NEEDS_POLL)
     {
         Transfer->Flags &= ~XHCI_TRANSFER_FLAG_NEEDS_POLL;
-        if (InterlockedDecrement(&Extension->Ep0PollCounter) <= 0)
-            KeCancelTimer(&Extension->Ep0PollTimer);
+        if (InterlockedDecrement(&Extension->TransferPollCounter) <= 0)
+            KeCancelTimer(&Extension->TransferPollTimer);
     }
     if (ProgrammedRing)
         XHCI_ResetEndpointRing(Endpoint);
@@ -9974,17 +10209,18 @@ XHCI_SubmitSgTransfer(
             }
         }
 
-        DPRINT1("usbxhci: bulk submit S%u E%u Req=%lu LastTrb=%I64x Buf=%I64x Len=%lu Enq=%lu CS=%lu EpState=%lx EpInfo2=%08lx\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId,
-                Transfer->RequestedLength,
-                (ULONGLONG)Transfer->CompletionTrbPointer,
-                Buffer,
-                TrbLen,
-                Endpoint->TransferRing.EnqueueIndex,
-                (ULONG)Endpoint->TransferRing.CycleState,
-                EpState,
-                EpInfo2);
+        XHCI_DBG(XHCI_TRACE_TRANSFERS,
+                 "usbxhci: bulk submit S%u E%u Req=%lu LastTrb=%I64x Buf=%I64x Len=%lu Enq=%lu CS=%lu EpState=%lx EpInfo2=%08lx\n",
+                 Endpoint->SlotId,
+                 Endpoint->EndpointId,
+                 Transfer->RequestedLength,
+                 (ULONGLONG)Transfer->CompletionTrbPointer,
+                 Buffer,
+                 TrbLen,
+                 Endpoint->TransferRing.EnqueueIndex,
+                 (ULONG)Endpoint->TransferRing.CycleState,
+                 EpState,
+                 EpInfo2);
     }
 
     {
@@ -10003,8 +10239,8 @@ XHCI_SubmitSgTransfer(
     if (Extension->Quirks & XHCI_QUIRK_VBOX_POLL_XFERS)
     {
         Transfer->Flags |= XHCI_TRANSFER_FLAG_NEEDS_POLL;
-        if (InterlockedIncrement(&Extension->Ep0PollCounter) == 1)
-            XHCI_ScheduleEp0Poll(Extension);
+        if (InterlockedIncrement(&Extension->TransferPollCounter) == 1)
+            XHCI_ScheduleTransferPoll(Extension);
     }
 
     return MP_STATUS_SUCCESS;
@@ -10566,9 +10802,9 @@ XHCI_StartController(PVOID MiniPortExtension,
     Extension->PortIndicatorsSupported = FALSE;
     Extension->StoppingOrRemoved = FALSE;
     Extension->Ep0WorkerCount = 0;
-    KeInitializeTimerEx(&Extension->Ep0PollTimer, NotificationTimer);
-    KeInitializeDpc(&Extension->Ep0PollDpc, XHCI_Ep0PollDpc, Extension);
-    Extension->Ep0PollCounter = 0;
+    KeInitializeTimerEx(&Extension->TransferPollTimer, NotificationTimer);
+    KeInitializeDpc(&Extension->TransferPollDpc, XHCI_TransferPollDpc, Extension);
+    Extension->TransferPollCounter = 0;
     XHCI_InitDeviceAddressMap(Extension);
     Extension->Resources = UsbPortResources;
     Extension->MmioBase = UsbPortResources->ResourceBase;
@@ -11081,8 +11317,8 @@ XHCI_StopController(PVOID MiniPortExtension,
     DPRINT1("usbxhci: StopController\n");
 
     Extension->StoppingOrRemoved = TRUE;
-    KeCancelTimer(&Extension->Ep0PollTimer);
-    InterlockedExchange(&Extension->Ep0PollCounter, 0);
+    KeCancelTimer(&Extension->TransferPollTimer);
+    InterlockedExchange(&Extension->TransferPollCounter, 0);
 
     /* Mark any pending SW-enum transfers as canceled so workers exit cleanly. */
     {
@@ -11572,6 +11808,7 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
             Work->Extension = Extension;
             Work->Endpoint = Endpoint;
             Work->RingDoorbell = TRUE;
+            Work->ClearStallResetFlags = FALSE;
             ExInitializeWorkItem(&Work->Item,
                                  XHCI_EndpointResetWorker,
                                  Work);
@@ -11707,6 +11944,7 @@ XHCI_SetEndpointStatus(PVOID MiniPortExtension,
             Work->Extension = Extension;
             Work->Endpoint = Endpoint;
             Work->RingDoorbell = TRUE;
+            Work->ClearStallResetFlags = FALSE;
             ExInitializeWorkItem(&Work->Item,
                                  XHCI_EndpointResetWorker,
                                  Work);

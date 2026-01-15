@@ -118,8 +118,10 @@ typedef struct _XHCI_DEVICE_SLOT {
     BOOLEAN IsHub;
     BOOLEAN VirtualDevice;
     UCHAR VirtualConfigurationValue;
-    BOOLEAN Ep0NeedsDequeueReset;
-    BOOLEAN Ep0NeedsStallReset; /* Set on stall, cleared by next submit at PASSIVE */
+    volatile LONG Ep0NeedsDequeueReset;
+    volatile LONG Ep0NeedsStallReset;    /* Set on stall, cleared by next submit at PASSIVE */
+    volatile LONG Ep0StallResetQueued;   /* Prevent duplicate stall-reset workers */
+    KEVENT Ep0StallResetEvent;
 } XHCI_DEVICE_SLOT, *PXHCI_DEVICE_SLOT;
 
 typedef struct _XHCI_PROTOCOL_SEGMENT {
@@ -226,9 +228,9 @@ typedef struct _XHCI_EXTENSION {
   volatile LONG Ep0WorkerCount;
   volatile LONG SwEnumWorkerCount;
   BOOLEAN StoppingOrRemoved;
-  KTIMER Ep0PollTimer;
-  KDPC Ep0PollDpc;
-  volatile LONG Ep0PollCounter;
+  KTIMER TransferPollTimer;
+  KDPC TransferPollDpc;
+  volatile LONG TransferPollCounter;
 } XHCI_EXTENSION, *PXHCI_EXTENSION;
 
 typedef struct _XHCI_COMMAND_CONTEXT {
