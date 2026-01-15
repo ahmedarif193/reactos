@@ -17,6 +17,9 @@
 
 #include <wine/unicode.h>
 
+/* For _ReturnAddress intrinsic */
+#include <intrin.h>
+
 /* GLOBALS *******************************************************************/
 
 extern BOOLEAN NlsMbCodePageTag;

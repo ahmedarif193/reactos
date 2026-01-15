@@ -491,6 +491,96 @@ IntDuplicateUnicodeString(
     return STATUS_SUCCESS;
 }
 
+/**
+ * @brief
+ * Helper to create the Video subkey under Control\Video\{GUID}
+ * with the Service value pointing to the driver service name.
+ *
+ * This key is required by win32k's EngpHasVgaDriver() function.
+ * The structure expected is:
+ *   Control\Video\{GUID}\Video\Service = "driver_service_name"
+ **/
+static
+NTSTATUS
+IntCreateVideoServiceKey(
+    _In_ PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension,
+    _In_ PUNICODE_STRING GuidKeyPath)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING VideoKeyName;
+    UNICODE_STRING ServiceValueName;
+    HANDLE VideoKey = NULL;
+    NTSTATUS Status;
+    PWCHAR ServiceName;
+    PWCHAR LastBackslash;
+    USHORT ServiceNameLength;
+    WCHAR VideoKeyBuffer[300];
+
+    /* Build the Video subkey path: GuidKeyPath + "\Video" */
+    if (GuidKeyPath->Length + sizeof(L"\\Video") > sizeof(VideoKeyBuffer))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    RtlCopyMemory(VideoKeyBuffer, GuidKeyPath->Buffer, GuidKeyPath->Length);
+    RtlCopyMemory((PUCHAR)VideoKeyBuffer + GuidKeyPath->Length,
+                  L"\\Video",
+                  sizeof(L"\\Video"));
+
+    RtlInitUnicodeString(&VideoKeyName, VideoKeyBuffer);
+
+    /* Create or open the Video subkey */
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &VideoKeyName,
+                               OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                               NULL,
+                               NULL);
+    Status = ZwCreateKey(&VideoKey,
+                         KEY_WRITE,
+                         &ObjectAttributes,
+                         0,
+                         NULL,
+                         REG_OPTION_NON_VOLATILE,
+                         NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        ERR_(VIDEOPRT, "Failed to create Video subkey '%wZ': 0x%lx\n",
+             &VideoKeyName, Status);
+        return Status;
+    }
+
+    /* Extract service name from driver registry path:
+     * \Registry\Machine\System\CurrentControlSet\Services\driver_name
+     * We need just "driver_name" */
+    if (DeviceExtension->DriverExtension &&
+        DeviceExtension->DriverExtension->RegistryPath.Buffer)
+    {
+        LastBackslash = wcsrchr(DeviceExtension->DriverExtension->RegistryPath.Buffer, L'\\');
+        if (LastBackslash)
+        {
+            ServiceName = LastBackslash + 1;
+            ServiceNameLength = (USHORT)(wcslen(ServiceName) * sizeof(WCHAR));
+
+            RtlInitUnicodeString(&ServiceValueName, L"Service");
+            Status = ZwSetValueKey(VideoKey,
+                                   &ServiceValueName,
+                                   0,
+                                   REG_SZ,
+                                   ServiceName,
+                                   ServiceNameLength + sizeof(UNICODE_NULL));
+            if (!NT_SUCCESS(Status))
+            {
+                WARN_(VIDEOPRT, "Failed to set Service value: 0x%lx\n", Status);
+            }
+            else
+            {
+                INFO_(VIDEOPRT, "Created Video\\Service = '%S'\n", ServiceName);
+            }
+        }
+    }
+
+    ObCloseHandle(VideoKey, KernelMode);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NTAPI
 IntCreateNewRegistryPath(
@@ -502,6 +592,7 @@ IntCreateNewRegistryPath(
     HANDLE DevInstRegKey, SettingsKey, NewKey;
     UCHAR VideoIdBuffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + GUID_STRING_LENGTH];
     UNICODE_STRING VideoIdString;
+    UNICODE_STRING GuidKeyPath;
     UUID VideoId;
     PKEY_VALUE_PARTIAL_INFORMATION ValueInformation ;
     NTSTATUS Status;
@@ -623,6 +714,12 @@ IntCreateNewRegistryPath(
         Status = RtlCreateRegistryKey(RTL_REGISTRY_ABSOLUTE,
                                       DeviceExtension->NewRegistryPath.Buffer);
     }
+
+    /* Save the GUID key path (without instance suffix) for Video subkey creation */
+    GuidKeyPath = DeviceExtension->NewRegistryPath;
+
+    /* Create the Video subkey with Service value - required by win32k's EngpHasVgaDriver() */
+    IntCreateVideoServiceKey(DeviceExtension, &GuidKeyPath);
 
     /* Append a the instance path */ /// \todo HACK
     RtlAppendUnicodeToString(&DeviceExtension->NewRegistryPath, L"\\");

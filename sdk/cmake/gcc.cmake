@@ -375,6 +375,17 @@ else()
     set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS_INIT} -Wl,--disable-stdcall-fixup")
 endif()
 
+# LLD linker defaults to 1MB stack size while GNU ld defaults to 2MB.
+# During DLL initialization, deep call chains can exhaust the default stack.
+# Set explicit 8MB stack size for LLD due to infinite recursion in Clang builds.
+#
+# WARNING: This is a workaround, not a fix. There is infinite recursion during
+# DLL initialization that consumes the entire stack regardless of size.
+# See STACK_EXHAUSTION_ANALYSIS.md for the full investigation.
+if(MINGW_LINKER_IS_LLD)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,0x800000")
+endif()
+
 set(CMAKE_C_COMPILE_OBJECT "<CMAKE_C_COMPILER> <DEFINES> ${_compress_debug_sections_flag} <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>")
 # FIXME: Once the GCC toolchain bugs are fixed, add _compress_debug_sections_flag to CXX too
 set(CMAKE_CXX_COMPILE_OBJECT "<CMAKE_CXX_COMPILER> <DEFINES> <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>")
@@ -504,7 +515,12 @@ function(add_delay_importlibs _module)
     if(_module_type STREQUAL "STATIC_LIBRARY")
         message(FATAL_ERROR "Cannot add delay imports to a static library")
     endif()
-    if(ARCH STREQUAL "arm64")
+    # LLD has a bug where it creates multiple .didat sections instead of merging
+    # the .didat$N subsections from dlltool-generated delay import libraries.
+    # This causes delay-load RVAs to point to wrong locations (empty data).
+    # ARM64 also doesn't support delay imports properly.
+    # For both cases, convert delay imports to regular imports as a workaround.
+    if(ARCH STREQUAL "arm64" OR MINGW_LINKER_IS_LLD)
         foreach(_lib ${ARGN})
             get_filename_component(_basename "${_lib}" NAME_WE)
             target_link_libraries(${_module} lib${_basename})
