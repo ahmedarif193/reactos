@@ -625,9 +625,9 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                USBHUB_FEATURE_PORT_RESET,
                                Port);
 
-        /* Do not wait the full 5 seconds; poll at 500 ms to avoid long stalls
-         * when controllers fail to raise a change interrupt. */
-        Timeout.QuadPart = -500 * 10000;
+        /* Do not wait the full 5 seconds; poll at a shorter interval if
+         * controllers fail to raise a change interrupt. */
+        Timeout.QuadPart = -((LONGLONG)USBHUB_RESET_PORT_POLL_MS * 10000);
 
         if (!NT_SUCCESS(Status))
         {
