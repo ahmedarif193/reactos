@@ -65,10 +65,9 @@ static BOOLEAN IsoSearchDirectoryBufferForFile(PVOID DirectoryBuffer, ULONG Dire
 {
     PDIR_RECORD    Record;
     ULONG        Offset;
-    ULONG i;
-    CHAR Name[32];
+    ULONG FileNameLength;
 
-    //TODO keep this TRACE("IsoSearchDirectoryBufferForFile() DirectoryBuffer = 0x%x DirectoryLength = %d FileName = %s\n", DirectoryBuffer, DirectoryLength, FileName);
+    FileNameLength = (ULONG)strlen(FileName);
 
     Offset = 0;
     Record = (PDIR_RECORD)DirectoryBuffer;
@@ -84,7 +83,9 @@ static BOOLEAN IsoSearchDirectoryBufferForFile(PVOID DirectoryBuffer, ULONG Dire
         }
 
         if (Offset >= DirectoryLength)
+        {
             return FALSE;
+        }
 
         if (Record->FileIdLength == 1 && Record->FileId[0] == 0)
         {
@@ -96,19 +97,22 @@ static BOOLEAN IsoSearchDirectoryBufferForFile(PVOID DirectoryBuffer, ULONG Dire
         }
         else
         {
-            for (i = 0; i < Record->FileIdLength && Record->FileId[i] != ';'; i++)
-                Name[i] = Record->FileId[i];
-            Name[i] = ANSI_NULL;
-            //TODO keep this TRACE("Name '%s'\n", Name);
+            ULONG NameLength = 0;
 
-            if (strlen(FileName) == strlen(Name) && _stricmp(FileName, Name) == 0)
+            while (NameLength < Record->FileIdLength && Record->FileId[NameLength] != ';')
+                NameLength++;
+
+            if (FileNameLength == NameLength)
             {
-                IsoFileInfoPointer->FileStart = Record->ExtentLocationL;
-                IsoFileInfoPointer->FileSize = Record->DataLengthL;
-                IsoFileInfoPointer->FilePointer = 0;
-                IsoFileInfoPointer->Directory = !!(Record->FileFlags & 0x02);
+                if (_strnicmp(FileName, (PCSTR)Record->FileId, NameLength) == 0)
+                {
+                    IsoFileInfoPointer->FileStart = Record->ExtentLocationL;
+                    IsoFileInfoPointer->FileSize = Record->DataLengthL;
+                    IsoFileInfoPointer->FilePointer = 0;
+                    IsoFileInfoPointer->Directory = !!(Record->FileFlags & 0x02);
 
-                return TRUE;
+                    return TRUE;
+                }
             }
 
         }
@@ -130,6 +134,7 @@ static ARC_STATUS IsoBufferDirectory(ULONG DeviceId, ULONG DirectoryStartSector,
 {
     PVOID DirectoryBuffer;
     ULONG SectorCount;
+    ULONG BufferSize;
     LARGE_INTEGER Position;
     ULONG Count;
     ARC_STATUS Status;
@@ -137,13 +142,14 @@ static ARC_STATUS IsoBufferDirectory(ULONG DeviceId, ULONG DirectoryStartSector,
     TRACE("IsoBufferDirectory() DirectoryStartSector = %d DirectoryLength = %d\n", DirectoryStartSector, DirectoryLength);
 
     SectorCount = ROUND_UP(DirectoryLength, SECTORSIZE) / SECTORSIZE;
+    BufferSize = SectorCount * SECTORSIZE;
     TRACE("Trying to read (DirectoryCount) %d sectors.\n", SectorCount);
 
     //
     // Attempt to allocate memory for directory buffer
     //
-    TRACE("Trying to allocate (DirectoryLength) %d bytes.\n", DirectoryLength);
-    DirectoryBuffer = FrLdrTempAlloc(DirectoryLength, TAG_ISO_BUFFER);
+    TRACE("Trying to allocate (DirectoryBuffer) %lu bytes.\n", BufferSize);
+    DirectoryBuffer = FrLdrTempAlloc(BufferSize, TAG_ISO_BUFFER);
     if (!DirectoryBuffer)
         return ENOMEM;
 
