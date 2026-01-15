@@ -417,7 +417,13 @@ IntVideoPortMapMemory(
    }
 
    AddressSpace = (ULONG)InIoSpace;
-   AddressSpace &= ~VIDEO_MEMORY_SPACE_USER_MODE;
+   /*
+    * Mask off flags that are only meaningful to videoprt, not HAL.
+    * VIDEO_MEMORY_SPACE_P6CACHE is a caching hint for MmMapIoSpace,
+    * VIDEO_MEMORY_SPACE_USER_MODE is for user/kernel mapping selection.
+    * HAL only cares about VIDEO_MEMORY_SPACE_IO (bit 0).
+    */
+   AddressSpace &= ~(VIDEO_MEMORY_SPACE_USER_MODE | VIDEO_MEMORY_SPACE_P6CACHE);
    if (HalTranslateBusAddress(
           DeviceExtension->AdapterInterfaceType,
           DeviceExtension->SystemIoBusNumber,

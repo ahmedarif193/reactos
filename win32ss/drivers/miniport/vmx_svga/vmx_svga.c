@@ -521,10 +521,16 @@ VmxEnsureFrameBufferCapacity(_Inout_ PHW_DEVICE_EXTENSION DevExt,
         DevExt->FrameBufferBase = NULL;
     }
 
+    /*
+     * Use VIDEO_MEMORY_SPACE_P6CACHE to request write-combined caching for the
+     * framebuffer. This matches the cache attributes used by UEFI GOP during boot.
+     * Without this flag, MmMapIoSpace uses MmNonCached which conflicts with the
+     * existing write-combined mapping, causing the memory manager to reject it.
+     */
     DevExt->FrameBufferBase = VideoPortGetDeviceBase(DevExt,
                                                      DevExt->FrameBuffer,
                                                      RequiredBytes,
-                                                     VIDEO_MEMORY_SPACE_MEMORY);
+                                                     VIDEO_MEMORY_SPACE_MEMORY | VIDEO_MEMORY_SPACE_P6CACHE);
     if (!DevExt->FrameBufferBase)
     {
         DPRINT1("VMX: framebuffer remap len=0x%lx failed; restoring previous mapping\n",
@@ -537,7 +543,7 @@ VmxEnsureFrameBufferCapacity(_Inout_ PHW_DEVICE_EXTENSION DevExt,
             DevExt->FrameBufferBase = VideoPortGetDeviceBase(DevExt,
                                                              DevExt->FrameBuffer,
                                                              oldLength,
-                                                             VIDEO_MEMORY_SPACE_MEMORY);
+                                                             VIDEO_MEMORY_SPACE_MEMORY | VIDEO_MEMORY_SPACE_P6CACHE);
             if (DevExt->FrameBufferBase)
             {
                 DevExt->FrameBufferLength = oldLength;
@@ -1720,10 +1726,13 @@ ProcessAccessRanges:
 
     if (DevExt->FrameBufferLength && DevExt->FrameBufferBase == NULL)
     {
+        /*
+         * Use write-combined caching for the framebuffer to match UEFI GOP's mapping.
+         */
         DevExt->FrameBufferBase = VideoPortGetDeviceBase(DevExt,
                                                          DevExt->FrameBuffer,
                                                          DevExt->FrameBufferLength,
-                                                         VIDEO_MEMORY_SPACE_MEMORY);
+                                                         VIDEO_MEMORY_SPACE_MEMORY | VIDEO_MEMORY_SPACE_P6CACHE);
         DPRINT1("VMX: mapped framebuffer @0x%I64x len=0x%lx -> %p\n",
                 DevExt->FrameBuffer.QuadPart,
                 DevExt->FrameBufferLength,
@@ -1876,10 +1885,13 @@ VmxInitDevice(IN PHW_DEVICE_EXTENSION DeviceExtension)
 
     if (!DeviceExtension->FrameBufferBase && FbSize)
     {
+        /*
+         * Use write-combined caching to match UEFI GOP's framebuffer mapping.
+         */
         DeviceExtension->FrameBufferBase = VideoPortGetDeviceBase(DeviceExtension,
                                                                   FbStart,
                                                                   FbSize,
-                                                                  VIDEO_MEMORY_SPACE_MEMORY);
+                                                                  VIDEO_MEMORY_SPACE_MEMORY | VIDEO_MEMORY_SPACE_P6CACHE);
         DPRINT1("VMX: deferred map framebuffer -> %p\n", DeviceExtension->FrameBufferBase);
         if (!DeviceExtension->FrameBufferBase)
         {
@@ -2306,7 +2318,10 @@ VmxMapVideoMemory(_Inout_ PHW_DEVICE_EXTENSION DevExt,
                   _Out_ PSTATUS_BLOCK StatusBlock)
 {
     VP_STATUS Status;
-    ULONG     inIoSpace = VIDEO_MEMORY_SPACE_MEMORY;
+    /*
+     * Use write-combined caching for framebuffer mappings to match UEFI GOP.
+     */
+    ULONG     inIoSpace = VIDEO_MEMORY_SPACE_MEMORY | VIDEO_MEMORY_SPACE_P6CACHE;
     ULONG     length;
 
     StatusBlock->Information = sizeof(VIDEO_MEMORY_INFORMATION);
