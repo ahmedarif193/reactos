@@ -68,3 +68,13 @@ __chkstk(void)
 }
 
 #endif /* ARM64 */
+
+#if defined(_M_IX86) || defined(__i386__)
+
+void
+__chkstk_ms(void)
+{
+    /* Stack probing is unnecessary in the loader; the stack is pre-reserved. */
+}
+
+#endif /* i386 */

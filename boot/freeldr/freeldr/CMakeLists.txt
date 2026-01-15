@@ -85,6 +85,9 @@ list(APPEND FREELDR_NTLDR_SOURCE
 
 if(ARCH STREQUAL "i386")
 
+    list(APPEND FREELDR_BOOTLIB_SOURCE
+        ${CMAKE_CURRENT_SOURCE_DIR}/lib/unwind_stubs.c)
+
     list(APPEND FREELDR_COMMON_ASM_SOURCE
         arch/i386/i386trap.S)
         # arch/i386/linux.S

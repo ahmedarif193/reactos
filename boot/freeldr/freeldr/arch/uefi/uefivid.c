@@ -805,7 +805,7 @@ UefiVideoClearScreenColor(ULONG Color, BOOLEAN FullScreen)
 
     VisibleHeight = framebufferData.ScreenHeight - (FullScreen ? 0 : 2 * TOP_BOTTOM_LINES);
     RowBytes = (SIZE_T)framebufferData.ScreenWidth * sizeof(ULONG);
-    Row = (PUCHAR)framebufferData.BaseAddress + (FullScreen ? 0 : TOP_BOTTOM_LINES) * Pitch;
+    Row = (PUCHAR)(ULONG_PTR)framebufferData.BaseAddress + (FullScreen ? 0 : TOP_BOTTOM_LINES) * Pitch;
 
     for (Line = 0; Line < VisibleHeight; Line++)
     {
@@ -872,7 +872,7 @@ UefiVideoOutputChar(UCHAR Char, unsigned X, unsigned Y, ULONG FgColor, ULONG BgC
     }
 
     FontPtr = BitmapFont8x16 + Char * CHAR_HEIGHT;
-    GlyphBase = (PUCHAR)framebufferData.BaseAddress +
+    GlyphBase = (PUCHAR)(ULONG_PTR)framebufferData.BaseAddress +
                 (Y * CHAR_HEIGHT + TOP_BOTTOM_LINES) * Pitch +
                 X * CHAR_WIDTH * sizeof(ULONG);
 
@@ -999,7 +999,7 @@ UefiVideoScrollUp(VOID)
         return;
 
     RowBytes = (SIZE_T)framebufferData.ScreenWidth * sizeof(ULONG);
-    Base = (PUCHAR)framebufferData.BaseAddress;
+    Base = (PUCHAR)(ULONG_PTR)framebufferData.BaseAddress;
     /* Replace bulk scroll with per-line copies excluding the BGRT area. */
     {
         ULONG CopyLines = VisiblePixelsY - CHAR_HEIGHT;
@@ -1447,7 +1447,7 @@ UefiVideoBlitBgrtBitmap(PBGRT_TABLE Bgrt)
     }
 
     Pitch = UefiVideoGetLineStride();
-    Framebuffer = (PUCHAR)framebufferData.BaseAddress;
+    Framebuffer = (PUCHAR)(ULONG_PTR)framebufferData.BaseAddress;
     if (Pitch == 0 || !Framebuffer || framebufferData.PixelFormat == PixelBltOnly)
     {
         /* Fallback to GOP->Blt path when no linear FB available */
