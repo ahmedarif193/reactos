@@ -674,6 +674,18 @@ USBPORT_ClosePipe(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
 
     Endpoint = PipeHandle->Endpoint;
 
+    /*
+     * Guard against NULL or invalid Endpoint pointer.
+     * This can happen if USBPORT_OpenPipe failed before allocating the
+     * endpoint, or if the endpoint was never properly initialized due to
+     * an ADDRESS_DEVICE failure in the miniport (xHCI).
+     */
+    if (!Endpoint || Endpoint == (PUSBPORT_ENDPOINT)-1)
+    {
+        DPRINT1("USBPORT_ClosePipe: Endpoint is NULL or invalid, nothing to close\n");
+        return;
+    }
+
     KeAcquireSpinLock(&FdoExtension->EndpointListSpinLock, &OldIrql);
 
     if (Endpoint->Flags & ENDPOINT_FLAG_ROOTHUB_EP0)

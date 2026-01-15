@@ -3316,10 +3316,34 @@ XHCI_SwEnumWorker(
             AddrStatus = XHCI_AddressDeviceSlot(Extension,
                                                  Slot,
                                                  &Work->EndpointProperties,
-                                                 FALSE);
+                                                 TRUE);  /* Disable slot on failure after retries exhausted */
             if (AddrStatus != MP_STATUS_SUCCESS)
             {
-                DPRINT1("usbxhci: deferred ADDRESS_DEVICE failed (Status=%d)\n", AddrStatus);
+                DPRINT1("usbxhci: deferred ADDRESS_DEVICE failed (Status=%d), slot %u disabled\n",
+                        AddrStatus, Slot->SlotId);
+
+                /*
+                 * ADDRESS_DEVICE failed after all retries. The slot has been disabled
+                 * by XHCI_AddressDeviceSlot (DisableOnFailure=TRUE). Mark the slot as
+                 * not in use to prevent any further access to this invalid slot state.
+                 * Clear the DCBAA entry so the xHC doesn't try to access the context.
+                 */
+                if (Extension->Dcbaa)
+                    Extension->Dcbaa[Slot->SlotId] = 0;
+                Slot->InUse = FALSE;
+                Slot->Addressed = FALSE;
+
+                /*
+                 * Unlink the endpoint from the slot to prevent CloseEndpoint from
+                 * trying to access the disabled slot later.
+                 */
+                if (ActiveEndpoint && ActiveEndpoint->Slot == Slot)
+                {
+                    if (ActiveEndpoint->EndpointId < RTL_NUMBER_OF(Slot->EndpointTable))
+                        Slot->EndpointTable[ActiveEndpoint->EndpointId] = NULL;
+                    ActiveEndpoint->Slot = NULL;
+                }
+
                 Transfer->BytesTransferred = 0;
                 Transfer->UsbdStatus = USBD_STATUS_DEV_NOT_RESPONDING;
                 /* Fall through to complete transfer with error */
@@ -6009,27 +6033,131 @@ XHCI_AddressDeviceSlot(
     MPSTATUS Status;
     ULONG CompletionCode = 0;
     UCHAR SlotId;
+    ULONG Attempt;
+    ULONG DelayMs;
+    LARGE_INTEGER Interval;
+
+    /*
+     * Maximum retries for USB_TRANSACTION_ERROR on ADDRESS_DEVICE.
+     * Real hardware (e.g., Intel N100) may need extra time for devices
+     * to stabilize after port reset, especially USB 2.0 devices behind
+     * USB 3.x root hub ports.
+     */
+#define ADDR_DEV_MAX_RETRIES 3
+#define ADDR_DEV_INITIAL_DELAY_MS 10
+#define ADDR_DEV_MAX_DELAY_MS 100
+#define ADDR_DEV_PORT_ENABLE_WAIT_MS 50
+#define ADDR_DEV_PORT_ENABLE_POLL_MS 5
 
     if (!Extension || !Slot || !EndpointProperties)
         return MP_STATUS_ERROR;
 
     SlotId = Slot->SlotId;
+    DelayMs = ADDR_DEV_INITIAL_DELAY_MS;
 
-    XHCI_PrepareDefaultControlContext(Extension, Slot, EndpointProperties);
+    /*
+     * Check if the port is enabled before issuing ADDRESS_DEVICE.
+     * On real hardware (e.g., Intel N100), the port may still be in the
+     * Polling state (PLS=7) after reset, not yet fully enabled (PED=0).
+     * Wait for port enable to complete to avoid USB_TRANSACTION_ERROR.
+     */
+    if (EndpointProperties->PortNumber > 0 &&
+        EndpointProperties->PortNumber <= Extension->NumberOfPorts)
+    {
+        volatile ULONG *PortScReg;
+        ULONG PortSc;
+        ULONG WaitMs = 0;
 
-    DPRINT1("usbxhci: EP0 bring-up: issuing ADDRESS_DEV for slot %u port=%u\n",
-            SlotId,
-            EndpointProperties->PortNumber);
+        PortScReg = XHCI_GetPortStatusRegister(Extension, EndpointProperties->PortNumber);
+        if (PortScReg)
+        {
+            PortSc = XHCI_READ_REGISTER_ULONG(PortScReg);
 
-    Status = XHCI_SendCommand(Extension,
-                              XHCI_TRB_TYPE_ADDRESS_DEV,
-                              Slot->InputContext.PhysicalAddress.QuadPart,
-                              0,
-                              XHCI_COMMAND_SLOT_FIELD(SlotId),
-                              XHCI_COMMAND_TIMEOUT_MS,
-                              TRUE,
-                              NULL,
-                              &CompletionCode);
+            /* Wait for port enable if device is connected but port not yet enabled */
+            while ((PortSc & XHCI_PORTSC_CCS) &&
+                   !(PortSc & XHCI_PORTSC_PED) &&
+                   WaitMs < ADDR_DEV_PORT_ENABLE_WAIT_MS)
+            {
+                if (WaitMs == 0)
+                {
+                    DPRINT1("usbxhci: ADDRESS_DEVICE waiting for port %u enable (PortSC=0x%08lx)\n",
+                            EndpointProperties->PortNumber, PortSc);
+                }
+
+                Interval.QuadPart = -(LONGLONG)ADDR_DEV_PORT_ENABLE_POLL_MS * 10000LL;
+                KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+                WaitMs += ADDR_DEV_PORT_ENABLE_POLL_MS;
+
+                PortSc = XHCI_READ_REGISTER_ULONG(PortScReg);
+            }
+
+            if (WaitMs > 0)
+            {
+                DPRINT1("usbxhci: ADDRESS_DEVICE port %u after %lu ms wait: PortSC=0x%08lx (PED=%u)\n",
+                        EndpointProperties->PortNumber, WaitMs, PortSc,
+                        (PortSc & XHCI_PORTSC_PED) ? 1 : 0);
+            }
+
+            /* If port disconnected during wait, fail immediately */
+            if (!(PortSc & XHCI_PORTSC_CCS))
+            {
+                DPRINT1("usbxhci: ADDRESS_DEVICE port %u device disconnected\n",
+                        EndpointProperties->PortNumber);
+                return MP_STATUS_FAILURE;
+            }
+        }
+    }
+
+    for (Attempt = 0; Attempt < ADDR_DEV_MAX_RETRIES; Attempt++)
+    {
+        if (Attempt > 0)
+        {
+            /*
+             * Wait before retry. Use KeDelayExecutionThread since we're
+             * at PASSIVE_LEVEL in the SwEnumWorker context.
+             */
+            DPRINT1("usbxhci: ADDRESS_DEVICE retry %lu for slot %u, waiting %lu ms\n",
+                    Attempt, SlotId, DelayMs);
+            Interval.QuadPart = -(LONGLONG)DelayMs * 10000LL;
+            KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+
+            /* Re-prepare context in case first attempt corrupted it */
+            XHCI_PrepareDefaultControlContext(Extension, Slot, EndpointProperties);
+
+            /* Increase delay for next retry (exponential backoff) */
+            DelayMs = min(DelayMs * 2, ADDR_DEV_MAX_DELAY_MS);
+        }
+        else
+        {
+            XHCI_PrepareDefaultControlContext(Extension, Slot, EndpointProperties);
+        }
+
+        DPRINT1("usbxhci: EP0 bring-up: issuing ADDRESS_DEV for slot %u port=%u (attempt %lu)\n",
+                SlotId,
+                EndpointProperties->PortNumber,
+                Attempt + 1);
+
+        Status = XHCI_SendCommand(Extension,
+                                  XHCI_TRB_TYPE_ADDRESS_DEV,
+                                  Slot->InputContext.PhysicalAddress.QuadPart,
+                                  0,
+                                  XHCI_COMMAND_SLOT_FIELD(SlotId),
+                                  XHCI_COMMAND_TIMEOUT_MS,
+                                  TRUE,
+                                  NULL,
+                                  &CompletionCode);
+
+        if (Status == MP_STATUS_SUCCESS)
+            break;
+
+        /*
+         * USB_TRANSACTION_ERROR (code 4) is retriable - the device may have
+         * stalled briefly during enumeration. This is common on real hardware
+         * but rare in QEMU/VirtualBox.
+         */
+        if ((UCHAR)CompletionCode != XHCI_COMPLETION_USB_TRANSACTION_ERROR)
+            break; /* Non-retriable error, stop trying */
+    }
     if (Status != MP_STATUS_SUCCESS)
     {
         UCHAR Cc = (UCHAR)CompletionCode;
@@ -6041,7 +6169,39 @@ XHCI_AddressDeviceSlot(
                 EndpointProperties->PortNumber,
                 EndpointProperties->MaxPacketSize);
 
-        if (Cc == XHCI_COMPLETION_CONTEXT_ERROR)
+        /*
+         * USB_TRANSACTION_ERROR (code 4) on ADDRESS_DEVICE is common on real
+         * hardware when the device stalls during enumeration. According to
+         * xHCI spec 4.6.5, this may be due to a Stall response from the device.
+         * The spec recommends issuing a Disable Slot command followed by an
+         * Enable Slot command to recover.
+         *
+         * This is different from QEMU/VirtualBox behavior where ADDRESS_DEVICE
+         * almost never fails with USB_TRANSACTION_ERROR.
+         */
+        if (Cc == XHCI_COMPLETION_USB_TRANSACTION_ERROR)
+        {
+            DPRINT1("usbxhci: USB_TRANSACTION_ERROR on ADDRESS_DEVICE for slot %u, "
+                    "device may have stalled during enumeration\n", SlotId);
+            XHCI_DumpInputContextForAddress(Extension, Slot);
+            XHCI_DumpAddressDeviceContext(Extension,
+                                          Slot,
+                                          0,
+                                          EndpointProperties->PortNumber,
+                                          Cc);
+
+            Slot->Ep0TransactionErrorCount++;
+            DPRINT1("usbxhci: EP0 USB_TRANSACTION_ERROR count for slot %u is now %lu\n",
+                    SlotId,
+                    Slot->Ep0TransactionErrorCount);
+
+            /*
+             * Don't escalate to fatal immediately; USB_TRANSACTION_ERROR is
+             * usually recoverable by retrying the enumeration at a higher level.
+             */
+            Status = MP_STATUS_FAILURE;
+        }
+        else if (Cc == XHCI_COMPLETION_CONTEXT_ERROR)
         {
             XHCI_DumpInputContextForAddress(Extension, Slot);
             XHCI_DumpAddressDeviceContext(Extension,

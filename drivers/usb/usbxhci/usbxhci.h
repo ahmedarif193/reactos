@@ -101,6 +101,7 @@ typedef struct _XHCI_DEVICE_SLOT {
     BOOLEAN Addressed;
     BOOLEAN Configured;
     ULONG Ep0ContextErrorCount;
+    ULONG Ep0TransactionErrorCount;
     UCHAR UsbDeviceAddress;
     UCHAR PortNumber;
     ULONG RouteString;
