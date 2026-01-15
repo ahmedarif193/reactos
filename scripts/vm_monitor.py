@@ -17,6 +17,7 @@ import sys
 import signal
 import atexit
 import argparse
+import shutil
 
 LOG_FILE = "/tmp/v.log"
 STALL_TIMEOUT = 6    # Log inactivity timeout
@@ -36,11 +37,38 @@ FAT32_IMG = os.path.join(BUILD_DIR, "fat32.img")
 VM_NAME = "ROSAHCI1"
 
 # UEFI firmware paths - architecture dependent
-OVMF_X64_CODE = "/tmp/OVMF_CODE_latest.fd"
-OVMF_X64_VARS = "/tmp/OVMF_VARS_latest.fd"
-OVMF_IA32_CODE = "/usr/share/OVMF/OVMF32_CODE_4M.fd"
-OVMF_IA32_VARS = "/usr/share/OVMF/OVMF32_VARS_4M.fd"
-OVMF_IA32_VARS_TMP = "/tmp/OVMF32_VARS_4M.fd"  # Writable copy
+OVMF_ENV_CODE_VARS = ["REACTOS_OVMF_CODE", "OVMF_CODE"]
+OVMF_ENV_VARS_VARS = ["REACTOS_OVMF_VARS", "OVMF_VARS"]
+
+OVMF_X64_CODE_CANDIDATES = [
+    "/tmp/OVMF_CODE_latest.fd",
+    "/usr/share/OVMF/OVMF_CODE.fd",
+    "/usr/share/OVMF/OVMF_CODE_4M.fd",
+    "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd",
+    "/usr/share/edk2/ovmf/OVMF_CODE.fd",
+]
+
+OVMF_X64_VARS_CANDIDATES = [
+    "/tmp/OVMF_VARS_latest.fd",
+    "/usr/share/OVMF/OVMF_VARS.fd",
+    "/usr/share/OVMF/OVMF_VARS_4M.fd",
+    "/usr/share/edk2-ovmf/x64/OVMF_VARS.fd",
+    "/usr/share/edk2/ovmf/OVMF_VARS.fd",
+]
+
+OVMF_IA32_CODE_CANDIDATES = [
+    "/usr/share/OVMF/OVMF32_CODE_4M.fd",
+    "/usr/share/OVMF/OVMF32_CODE.fd",
+    "/usr/share/edk2-ovmf/ia32/OVMF_CODE.fd",
+    "/usr/share/edk2/ovmf/OVMF32_CODE.fd",
+]
+
+OVMF_IA32_VARS_CANDIDATES = [
+    "/usr/share/OVMF/OVMF32_VARS_4M.fd",
+    "/usr/share/OVMF/OVMF32_VARS.fd",
+    "/usr/share/edk2-ovmf/ia32/OVMF_VARS.fd",
+    "/usr/share/edk2/ovmf/OVMF32_VARS.fd",
+]
 
 # Global state
 qemu_process = None
@@ -60,6 +88,79 @@ def detect_target_arch():
         # Default to amd64 if not detected
         target_arch = "amd64"
     return target_arch
+
+
+def env_path(var_names):
+    """Return the first set env var path from var_names, or None."""
+    for name in var_names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+def find_first_existing(paths):
+    """Return the first existing path in paths, or None."""
+    for path in paths:
+        if path and os.path.exists(path):
+            return path
+    return None
+
+
+def resolve_ovmf_paths(arch):
+    """Resolve OVMF CODE and VARS (writable) paths for the given arch."""
+    if arch == "i386":
+        code_candidates = OVMF_IA32_CODE_CANDIDATES
+        vars_candidates = OVMF_IA32_VARS_CANDIDATES
+        vars_local = os.path.join(BUILD_DIR, "OVMF32_VARS.fd")
+    else:
+        code_candidates = OVMF_X64_CODE_CANDIDATES
+        vars_candidates = OVMF_X64_VARS_CANDIDATES
+        vars_local = os.path.join(BUILD_DIR, "OVMF_VARS.fd")
+
+    code_env = env_path(OVMF_ENV_CODE_VARS)
+    vars_env = env_path(OVMF_ENV_VARS_VARS)
+
+    if code_env and os.path.exists(code_env):
+        ovmf_code = code_env
+    else:
+        ovmf_code = find_first_existing(code_candidates)
+
+    if vars_env:
+        if os.path.exists(vars_env) and os.access(vars_env, os.W_OK):
+            ovmf_vars = vars_env
+            ovmf_vars_template = None
+        else:
+            ovmf_vars = vars_env
+            ovmf_vars_template = find_first_existing(vars_candidates)
+    else:
+        ovmf_vars = vars_local
+        ovmf_vars_template = find_first_existing(vars_candidates)
+
+    return ovmf_code, ovmf_vars, ovmf_vars_template, code_candidates, vars_candidates
+
+
+def prepare_ovmf_vars(template_path, vars_path):
+    """Ensure a writable VARS file exists; copy template if needed."""
+    if template_path is None:
+        if os.path.exists(vars_path):
+            return True
+        print(f"Error: OVMF VARS not found: {vars_path}")
+        return False
+
+    if not os.path.exists(template_path):
+        print(f"Error: OVMF VARS template not found: {template_path}")
+        return False
+
+    try:
+        if (not os.path.exists(vars_path) or
+                os.path.getmtime(template_path) > os.path.getmtime(vars_path)):
+            shutil.copy(template_path, vars_path)
+            print(f"Copied OVMF VARS to {vars_path}")
+        return True
+    except Exception as e:
+        print(f"Error preparing OVMF VARS: {e}")
+        return False
 
 
 def create_fat32_img():
@@ -151,19 +252,8 @@ def start_qemu():
     livecd_path = os.path.join(BUILD_DIR, "livecd.iso")
 
     # Select architecture-specific settings
-    if target_arch == "i386":
-        qemu_binary = "qemu-system-i386"
-        ovmf_code = OVMF_IA32_CODE
-        ovmf_vars = OVMF_IA32_VARS_TMP
-        # Copy VARS file to writable location if not exists or outdated
-        if not os.path.exists(ovmf_vars) or os.path.getmtime(OVMF_IA32_VARS) > os.path.getmtime(ovmf_vars):
-            import shutil
-            shutil.copy(OVMF_IA32_VARS, ovmf_vars)
-            print(f"Copied IA32 OVMF VARS to {ovmf_vars}")
-    else:
-        qemu_binary = "qemu-system-x86_64"
-        ovmf_code = OVMF_X64_CODE
-        ovmf_vars = OVMF_X64_VARS
+    qemu_binary = "qemu-system-i386" if target_arch == "i386" else "qemu-system-x86_64"
+    ovmf_code, ovmf_vars, ovmf_vars_template, code_candidates, vars_candidates = resolve_ovmf_paths(target_arch)
 
     print(f"Starting QEMU ({target_arch}) with xHCI USB...")
     print(f"  QEMU binary: {qemu_binary}")
@@ -174,10 +264,16 @@ def start_qemu():
     print(f"  Serial output: {LOG_FILE}")
 
     # Verify OVMF firmware exists
-    if not os.path.exists(ovmf_code):
+    if not ovmf_code or not os.path.exists(ovmf_code):
         print(f"Error: OVMF CODE not found: {ovmf_code}")
+        print("Set REACTOS_OVMF_CODE or OVMF_CODE to override.")
+        print(f"Tried: {', '.join(code_candidates)}")
         if target_arch == "i386":
             print("Install ovmf-ia32 package: sudo apt install ovmf-ia32")
+        else:
+            print("Install ovmf package: sudo apt install ovmf")
+        return False
+    if not prepare_ovmf_vars(ovmf_vars_template, ovmf_vars):
         return False
 
     try:
@@ -195,14 +291,9 @@ def start_qemu():
             "-m", "3G",
             "-M", "q35",
             "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
-            "-drive", f"if=pflash,format=raw,file={ovmf_vars}",
-            "-drive", f"file={livecd_path}",
-            "-device", "qemu-xhci,id=xhci",
-            "-drive", f"if=none,id=usbdisk,file={FAT32_IMG}",
-            "-device", "usb-storage,drive=usbdisk",
+            "-cdrom", livecd_path,
+            "-boot", "d",  # Boot from CD-ROM
             "-serial", "stdio",
-            "-device", "usb-kbd",
-            "-device", "usb-tablet",
             "-display", "none",
             "-no-reboot",
             "-no-shutdown"  # Halt instead of reset on triple fault
