@@ -20,8 +20,10 @@ extern EFI_HANDLE GlobalImageHandle;
 VOID
 MachInit(const char *CmdLine)
 {
+#if DBG
     /* Suppress unused variable warning for DbgDefaultChannel */
     (void)DbgDefaultChannel;
+#endif
 
     RtlZeroMemory(&MachVtbl, sizeof(MachVtbl));
 

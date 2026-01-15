@@ -190,7 +190,7 @@ _exituefi:
     mov     gs, ax
 
     /* Far return: pops RIP then CS, reloading CS with our new GDT selector */
-    lretq
+    retf
 
 // void _changestack(VOID)
 PUBLIC _changestack
