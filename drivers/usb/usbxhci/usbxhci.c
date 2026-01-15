@@ -5519,17 +5519,96 @@ XHCI_HandleTransferEvent(
         case XHCI_COMPLETION_SHORT_PACKET:
             UsbdStatus = USBD_STATUS_SUCCESS;
             break;
+
         case XHCI_COMPLETION_STALL_ERROR:
             UsbdStatus = USBD_STATUS_STALL_PID;
             break;
+
+        case XHCI_COMPLETION_BABBLE_ERROR:
+            /* Babble indicates the device sent more data than expected.
+             * Map to BABBLE_DETECTED for proper upper-layer handling. */
+            UsbdStatus = USBD_STATUS_BABBLE_DETECTED;
+            break;
+
+        case XHCI_COMPLETION_DATA_BUFFER_ERROR:
+            /* Data buffer error: either overrun or underrun depending on direction */
+            UsbdStatus = (Transfer && Transfer->TransferParameters &&
+                         (Transfer->TransferParameters->TransferFlags & USBD_TRANSFER_DIRECTION_IN))
+                         ? USBD_STATUS_DATA_OVERRUN
+                         : USBD_STATUS_DATA_UNDERRUN;
+            break;
+
+        case XHCI_COMPLETION_USB_TRANSACTION_ERROR:
+            /* USB transaction errors (CRC, timeout, bitstuff, etc.) */
+            UsbdStatus = USBD_STATUS_CRC;
+            break;
+
         case XHCI_COMPLETION_STOPPED:
         case XHCI_COMPLETION_STOPPED_LENGTH_INVALID:
         case XHCI_COMPLETION_STOPPED_SHORT_PACKET:
-            /* Endpoint stopped (typically due to cancel/reset) – surface as a
+        case XHCI_COMPLETION_COMMAND_ABORTED:
+            /* Endpoint stopped (typically due to cancel/reset) - surface as a
              * canceled transfer rather than a generic failure to better match
              * Windows USBPORT semantics. */
             UsbdStatus = USBD_STATUS_CANCELED;
             break;
+
+        case XHCI_COMPLETION_RING_UNDERRUN:
+        case XHCI_COMPLETION_RING_OVERRUN:
+        case XHCI_COMPLETION_MISSED_SERVICE:
+        case XHCI_COMPLETION_ISOCH_BUFFER_OVERRUN:
+            /* Isochronous/streaming timing errors */
+            UsbdStatus = USBD_STATUS_ISOCH_REQUEST_FAILED;
+            break;
+
+        case XHCI_COMPLETION_NO_PING_RESPONSE:
+            /* No ping response - typically a device timeout on SuperSpeed */
+            UsbdStatus = USBD_STATUS_DEV_NOT_RESPONDING;
+            break;
+
+        case XHCI_COMPLETION_BANDWIDTH_ERROR:
+        case XHCI_COMPLETION_BANDWIDTH_OVERRUN:
+        case XHCI_COMPLETION_SECONDARY_BANDWIDTH:
+            /* Bandwidth allocation failures */
+            UsbdStatus = USBD_STATUS_NO_BANDWIDTH;
+            break;
+
+        case XHCI_COMPLETION_RESOURCE_ERROR:
+        case XHCI_COMPLETION_NO_SLOTS_ERROR:
+        case XHCI_COMPLETION_EVENT_RING_FULL:
+        case XHCI_COMPLETION_VF_EVENT_RING_FULL:
+            /* Resource exhaustion */
+            UsbdStatus = USBD_STATUS_INSUFFICIENT_RESOURCES;
+            break;
+
+        case XHCI_COMPLETION_CONTEXT_ERROR:
+        case XHCI_COMPLETION_CONTEXT_STATE_ERROR:
+        case XHCI_COMPLETION_PARAMETER_ERROR:
+        case XHCI_COMPLETION_SLOT_NOT_ENABLED:
+        case XHCI_COMPLETION_ENDPOINT_NOT_ENABLED:
+        case XHCI_COMPLETION_INVALID_STREAM_TYPE:
+        case XHCI_COMPLETION_INVALID_STREAM_ID:
+            /* Driver or hardware configuration errors */
+            UsbdStatus = USBD_STATUS_INTERNAL_HC_ERROR;
+            break;
+
+        case XHCI_COMPLETION_INCOMPATIBLE_DEVICE:
+            /* Device is incompatible with the port type/speed */
+            UsbdStatus = USBD_STATUS_ERROR_BUSY;
+            break;
+
+        case XHCI_COMPLETION_SPLIT_TRANSACTION:
+            /* Split transaction error (for HS/FS devices behind TT) */
+            UsbdStatus = USBD_STATUS_XACT_ERROR;
+            break;
+
+        case XHCI_COMPLETION_MAX_EXIT_LATENCY_ERROR:
+            /* Power management constraint violation */
+            UsbdStatus = USBD_STATUS_ERROR_BUSY;
+            break;
+
+        case XHCI_COMPLETION_EVENT_LOST:
+        case XHCI_COMPLETION_UNDEFINED_ERROR:
         default:
             UsbdStatus = USBD_STATUS_REQUEST_FAILED;
             break;
@@ -11862,7 +11941,49 @@ static VOID NTAPI
 XHCI_PollController(PVOID MiniPortExtension)
 {
     PXHCI_EXTENSION Extension = (PXHCI_EXTENSION)MiniPortExtension;
+    PXHCI_INTERRUPTER_REGISTER_SET Interrupter;
 
+    if (!Extension || Extension->FatalError || Extension->StoppingOrRemoved)
+        return;
+
+    /*
+     * VirtualBox and QEMU often miss interrupts or deliver them late.
+     * When called by USBPORT's polling timer, we must aggressively drain
+     * any pending work that interrupts should have triggered.
+     *
+     * Step 1: Clear any pending IMAN.IP that might be blocking new interrupts.
+     * This handles the VirtualBox quirk where IMAN.IP stays set without
+     * corresponding USBSTS bits.
+     */
+    if (Extension->RuntimeRegisters)
+    {
+        Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
+        ULONG Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
+        if (Iman & XHCI_IMAN_IP)
+        {
+            /* Clear IP by writing 1 (RW1C), preserve IE */
+            XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman,
+                                      XHCI_IMAN_IP | (Iman & XHCI_IMAN_IE));
+        }
+    }
+
+    /*
+     * Step 2: Check and acknowledge USBSTS.EINT/PCD directly.
+     * The ISR may have missed these on virtual machines.
+     */
+    if (Extension->OperationalRegisters)
+    {
+        ULONG UsbSts = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
+        if (UsbSts & (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD))
+        {
+            XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
+                                      UsbSts & (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD));
+            InterlockedOr((volatile LONG *)&Extension->PendingUsbSts,
+                          UsbSts & (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD));
+        }
+    }
+
+    /* Step 3: Process all pending work (events, completions, port changes) */
     XHCI_PollForWork(Extension, TRUE);
 }
 
@@ -12040,8 +12161,63 @@ XHCI_RebalanceEndpoint(PVOID MiniPortExtension,
 static VOID NTAPI
 XHCI_FlushInterrupts(PVOID MiniPortExtension)
 {
-    UNREFERENCED_PARAMETER(MiniPortExtension);
-    DPRINT1("usbxhci: FlushInterrupts (IRQL=%lu)\n", (ULONG)KeGetCurrentIrql());
+    PXHCI_EXTENSION Extension = (PXHCI_EXTENSION)MiniPortExtension;
+    PXHCI_INTERRUPTER_REGISTER_SET Interrupter;
+    ULONG UsbSts;
+    ULONG Iteration;
+
+    XHCI_DBG(XHCI_TRACE_EVENTS,
+             "usbxhci: FlushInterrupts (IRQL=%lu)\n",
+             (ULONG)KeGetCurrentIrql());
+
+    if (!Extension || !Extension->OperationalRegisters || Extension->FatalError)
+        return;
+
+    /*
+     * Drain any pending events that may not have triggered an interrupt.
+     * This is critical for QEMU and VirtualBox where interrupts may be
+     * missed or delayed. We perform multiple iterations to ensure all
+     * queued events are processed.
+     */
+    for (Iteration = 0; Iteration < 8; Iteration++)
+    {
+        BOOLEAN HadWork = FALSE;
+
+        /* Check and clear pending USBSTS bits */
+        UsbSts = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
+        if (UsbSts & (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD))
+        {
+            XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
+                                      UsbSts & (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD));
+            HadWork = TRUE;
+        }
+
+        /* Clear IMAN.IP if set (deassert interrupt line) */
+        if (Extension->RuntimeRegisters)
+        {
+            Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
+            ULONG Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
+            if (Iman & XHCI_IMAN_IP)
+            {
+                XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman,
+                                          XHCI_IMAN_IP | (Iman & XHCI_IMAN_IE));
+                HadWork = TRUE;
+            }
+        }
+
+        /* Service the event ring without triggering callbacks */
+        if (XHCI_EventRingHasPendingTrb(Extension))
+        {
+            XHCI_ServiceEventRing(Extension, FALSE, FALSE);
+            HadWork = TRUE;
+        }
+
+        if (!HadWork)
+            break;
+    }
+
+    /* Scan for port status changes that may have been missed */
+    XHCI_ScanPortStatusChanges(Extension, FALSE);
 }
 
 static MPSTATUS NTAPI
@@ -12796,6 +12972,18 @@ XHCI_ApplyVBoxPortResetQuirk(
         InterlockedOr((volatile LONG *)&Extension->PortChangeMask[Port],
                       XHCI_PORTSC_PRC);
         DPRINT1("XHCI: VBox Quirk - Port %u reset complete\n", Port);
+        if (XhciRegPacket.UsbPortInvalidateRootHub)
+        {
+            if (Extension->RhIrqEnabled)
+            {
+                Extension->RhPendingInvalidate = FALSE;
+                XhciRegPacket.UsbPortInvalidateRootHub(Extension);
+            }
+            else
+            {
+                Extension->RhPendingInvalidate = TRUE;
+            }
+        }
     }
 
     return MP_STATUS_SUCCESS;
