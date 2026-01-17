@@ -320,6 +320,14 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
             break;
     }
 
+#if defined(_M_ARM64)
+    if (IsIoMapping && CacheAttribute == MiNonCached)
+    {
+        /* MMIO should use Device-nGnRnE regardless of cache attributes. */
+        MI_SET_PTE_ATTR_INDEX(&TempPte, 0);
+    }
+#endif
+
     //
     // Sanity check and re-flush
     //

@@ -25,6 +25,13 @@ KdbpSymUnicodeToAnsi(IN PUNICODE_STRING Unicode,
                      OUT PCHAR Ansi,
                      IN ULONG Length);
 
+static
+BOOLEAN
+KdbpSafeCopyAnsiString(
+    OUT PCHAR Dest,
+    IN ULONG DestSize,
+    IN PCHAR Src);
+
 typedef struct _IMAGE_SYMBOL_INFO_CACHE
 {
     LIST_ENTRY ListEntry;
@@ -34,120 +41,12 @@ typedef struct _IMAGE_SYMBOL_INFO_CACHE
 }
 IMAGE_SYMBOL_INFO_CACHE, *PIMAGE_SYMBOL_INFO_CACHE;
 
-#define KDB_SYM_TAG 'bSyK'
-
-typedef struct _KDB_SYMBOL_WORK_ITEM
-{
-    LIST_ENTRY ListEntry;
-    UNICODE_STRING BaseDllName;
-    UNICODE_STRING FullDllName;
-    PVOID DllBase;
-    ULONG SizeOfImage;
-}
-KDB_SYMBOL_WORK_ITEM, *PKDB_SYMBOL_WORK_ITEM;
-
 static BOOLEAN LoadSymbols = FALSE;
 static LIST_ENTRY SymbolsToLoad;
 static KSPIN_LOCK SymbolsToLoadLock;
 static KEVENT SymbolsToLoadEvent;
 
 /* FUNCTIONS ****************************************************************/
-
-static
-BOOLEAN
-KdbpSymDuplicateUnicodeString(
-    _In_ PUNICODE_STRING Source,
-    _Out_ PUNICODE_STRING Destination)
-{
-    Destination->Length = 0;
-    Destination->MaximumLength = 0;
-    Destination->Buffer = NULL;
-
-    if (!Source || !Source->Length)
-        return TRUE;
-
-    Destination->MaximumLength = Source->Length + sizeof(WCHAR);
-    Destination->Buffer = ExAllocatePoolWithTag(NonPagedPool,
-                                                Destination->MaximumLength,
-                                                KDB_SYM_TAG);
-    if (!Destination->Buffer)
-        return FALSE;
-
-    RtlCopyMemory(Destination->Buffer, Source->Buffer, Source->Length);
-    Destination->Buffer[Source->Length / sizeof(WCHAR)] = UNICODE_NULL;
-    Destination->Length = Source->Length;
-    return TRUE;
-}
-
-static
-VOID
-KdbpSymFreeUnicodeString(
-    _Inout_ PUNICODE_STRING String)
-{
-    if (String->Buffer)
-    {
-        ExFreePoolWithTag(String->Buffer, KDB_SYM_TAG);
-        RtlZeroMemory(String, sizeof(*String));
-    }
-}
-
-static
-VOID
-KdbpSymFreeWorkItem(
-    _Inout_ PKDB_SYMBOL_WORK_ITEM WorkItem)
-{
-    if (!WorkItem)
-        return;
-
-    KdbpSymFreeUnicodeString(&WorkItem->BaseDllName);
-    KdbpSymFreeUnicodeString(&WorkItem->FullDllName);
-    ExFreePoolWithTag(WorkItem, KDB_SYM_TAG);
-}
-
-static
-BOOLEAN
-KdbpSymStoreSymbolInfo(
-    _In_ PUNICODE_STRING BaseDllName,
-    _In_opt_ PUNICODE_STRING FullDllName,
-    _In_ PVOID DllBase,
-    _In_ ULONG SizeOfImage,
-    _In_ PROSSYM_INFO RosSymInfo)
-{
-    PLIST_ENTRY CurrentEntry;
-    PLDR_DATA_TABLE_ENTRY LdrEntry;
-    KIRQL OldIrql;
-    BOOLEAN Stored = FALSE;
-
-    if (!BaseDllName || !BaseDllName->Length)
-        return FALSE;
-
-    KeAcquireSpinLock(&PsLoadedModuleSpinLock, &OldIrql);
-
-    CurrentEntry = PsLoadedModuleList.Flink;
-    while (CurrentEntry != &PsLoadedModuleList)
-    {
-        LdrEntry = CONTAINING_RECORD(CurrentEntry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-
-        if ((!(FullDllName && FullDllName->Length) ||
-             RtlEqualUnicodeString(&LdrEntry->FullDllName, FullDllName, TRUE)) &&
-            RtlEqualUnicodeString(&LdrEntry->BaseDllName, BaseDllName, TRUE) &&
-            LdrEntry->DllBase == DllBase &&
-            LdrEntry->SizeOfImage == SizeOfImage)
-        {
-            if (!LdrEntry->PatchInformation)
-            {
-                LdrEntry->PatchInformation = RosSymInfo;
-                Stored = TRUE;
-            }
-            break;
-        }
-
-        CurrentEntry = CurrentEntry->Flink;
-    }
-
-    KeReleaseSpinLock(&PsLoadedModuleSpinLock, OldIrql);
-    return Stored;
-}
 
 static
 BOOLEAN
@@ -173,6 +72,81 @@ KdbpSymSearchModuleList(
     }
 
     return FALSE;
+}
+
+/*! \brief Check if an address is in a code section (not data)
+ *
+ * Parses PE headers to verify the address falls within an executable section
+ * (typically .text). This filters out global variables and data structures
+ * that may appear in backtraces due to stack scanning.
+ *
+ * \param Address  The address to check
+ * \param LdrEntry The module containing the address
+ *
+ * \retval TRUE    Address is in a code (executable) section
+ * \retval FALSE   Address is in a data section or invalid
+ */
+BOOLEAN
+KdbpSymIsCodeAddress(
+    IN PVOID Address,
+    IN PLDR_DATA_TABLE_ENTRY LdrEntry)
+{
+    PIMAGE_DOS_HEADER DosHeader;
+    PIMAGE_NT_HEADERS NtHeaders;
+    PIMAGE_SECTION_HEADER SectionHeader;
+    ULONG_PTR RelativeAddress;
+    USHORT i;
+    BOOLEAN Result = FALSE;
+
+    if (!Address || !LdrEntry || !LdrEntry->DllBase)
+        return FALSE;
+
+    /* Wrap in exception handler - PE headers may be unmapped during crashes */
+    _SEH2_TRY
+    {
+        /* Get DOS and NT headers */
+        DosHeader = (PIMAGE_DOS_HEADER)LdrEntry->DllBase;
+        if (DosHeader->e_magic != IMAGE_DOS_SIGNATURE)
+        {
+            _SEH2_YIELD(return FALSE);
+        }
+
+        NtHeaders = (PIMAGE_NT_HEADERS)((ULONG_PTR)DosHeader + DosHeader->e_lfanew);
+        if (NtHeaders->Signature != IMAGE_NT_SIGNATURE)
+        {
+            _SEH2_YIELD(return FALSE);
+        }
+
+        /* Calculate relative address within the module */
+        RelativeAddress = (ULONG_PTR)Address - (ULONG_PTR)LdrEntry->DllBase;
+
+        /* Iterate through section headers */
+        SectionHeader = IMAGE_FIRST_SECTION(NtHeaders);
+        for (i = 0; i < NtHeaders->FileHeader.NumberOfSections; i++)
+        {
+            ULONG_PTR SectionStart = SectionHeader[i].VirtualAddress;
+            ULONG_PTR SectionEnd = SectionStart + SectionHeader[i].Misc.VirtualSize;
+
+            /* Check if address is in this section AND section is executable */
+            if (RelativeAddress >= SectionStart && RelativeAddress < SectionEnd)
+            {
+                /* IMAGE_SCN_MEM_EXECUTE = 0x20000000 */
+                if (SectionHeader[i].Characteristics & IMAGE_SCN_MEM_EXECUTE)
+                {
+                    Result = TRUE; /* Address is in an executable section */
+                }
+                break;
+            }
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        /* PE header access faulted - assume it's not code */
+        Result = FALSE;
+    }
+    _SEH2_END;
+
+    return Result;
 }
 
 /*! \brief Find a module...
@@ -303,6 +277,42 @@ KdbpSymFindModuleByName(
     return FALSE;
 }
 
+/**
+ * @brief   Find cached rossym info for a module by name.
+ *
+ * @param[in]   ModName
+ * Unicode string containing the module name to find.
+ *
+ * @return
+ * Pointer to the ROSSYM_INFO for the module, or NULL if not found.
+ **/
+PROSSYM_INFO
+KdbpSymFindCachedFile(
+    IN PUNICODE_STRING ModName)
+{
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    ANSI_STRING AnsiName;
+    CHAR NameBuffer[64];
+    NTSTATUS Status;
+
+    if (!ModName || ModName->Length == 0)
+        return NULL;
+
+    /* Convert Unicode name to ANSI */
+    AnsiName.Buffer = NameBuffer;
+    AnsiName.MaximumLength = sizeof(NameBuffer);
+    Status = RtlUnicodeStringToAnsiString(&AnsiName, ModName, FALSE);
+    if (!NT_SUCCESS(Status))
+        return NULL;
+
+    /* Use existing module lookup */
+    if (!KdbpSymFindModuleByName(NameBuffer, &LdrEntry))
+        return NULL;
+
+    /* Return the rossym info (PatchInformation) */
+    return (PROSSYM_INFO)LdrEntry->PatchInformation;
+}
+
 static
 BOOLEAN
 KdbpSymLookupSymbolInModule(
@@ -385,39 +395,6 @@ KdbpSymAddressFromName(
     return FALSE;
 }
 
-/*! \brief Find symbol info by module name
- *
- * \param ModName   Pointer to a UNICODE_STRING containing the module name.
- *
- * \retval PROSSYM_INFO    Symbol info for the module, or NULL if not found.
- */
-PROSSYM_INFO
-KdbpSymFindCachedFile(
-    IN PUNICODE_STRING ModName)
-{
-    PLIST_ENTRY CurrentEntry;
-    PLDR_DATA_TABLE_ENTRY LdrEntry;
-
-    KeAcquireSpinLockAtDpcLevel(&PsLoadedModuleSpinLock);
-
-    CurrentEntry = PsLoadedModuleList.Flink;
-    while (CurrentEntry != &PsLoadedModuleList)
-    {
-        LdrEntry = CONTAINING_RECORD(CurrentEntry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-
-        if (RtlEqualUnicodeString(&LdrEntry->BaseDllName, ModName, TRUE))
-        {
-            KeReleaseSpinLockFromDpcLevel(&PsLoadedModuleSpinLock);
-            return (PROSSYM_INFO)LdrEntry->PatchInformation;
-        }
-
-        CurrentEntry = CurrentEntry->Flink;
-    }
-
-    KeReleaseSpinLockFromDpcLevel(&PsLoadedModuleSpinLock);
-    return NULL;
-}
-
 static
 PCHAR
 NTAPI
@@ -443,7 +420,55 @@ KdbpSymUnicodeToAnsi(IN PUNICODE_STRING Unicode,
     return Ansi;
 }
 
-static volatile LONG KdbSymLookupInProgress = 0;
+static
+BOOLEAN
+KdbpSafeCopyAnsiString(
+    OUT PCHAR Dest,
+    IN ULONG DestSize,
+    IN PCHAR Src)
+{
+    ULONG i;
+    CHAR ch;
+
+    if (!Dest || DestSize == 0)
+        return FALSE;
+
+    Dest[0] = ANSI_NULL;
+    if (!Src)
+        return FALSE;
+
+    for (i = 0; i + 1 < DestSize; i++)
+    {
+        if (!NT_SUCCESS(KdbpSafeReadMemory(&ch, Src + i, sizeof(ch))))
+        {
+            Dest[i] = ANSI_NULL;
+            return FALSE;
+        }
+        Dest[i] = ch;
+        if (ch == ANSI_NULL)
+            return TRUE;
+    }
+
+    Dest[DestSize - 1] = ANSI_NULL;
+    return TRUE;
+}
+
+/*! \brief Print address...
+ *
+ * Tries to lookup line number, file name and function name for the given
+ * address and prints it.
+ * If no such information is found the address is printed in the format
+ * <module: offset>, otherwise the format will be
+ * <module: offset (filename:linenumber (functionname))>
+ *
+ * \retval TRUE  Module containing \a Address was found, \a Address was printed.
+ * \retval FALSE  No module containing \a Address was found, nothing was printed.
+ */
+/*
+ * Global debug flag for symbol lookup tracing.
+ * Set to TRUE to enable verbose debugging of DWARF symbol lookups.
+ */
+static BOOLEAN KdbSymDebugTrace = FALSE;
 
 /*! \brief Print address...
  *
@@ -475,52 +500,91 @@ KdbSymPrintAddress(
                         ModuleNameAnsi,
                         sizeof(ModuleNameAnsi));
 
-    if (LdrEntry->PatchInformation &&
-        InterlockedCompareExchange(&KdbSymLookupInProgress, 1, 0) == 0)
+    if (LdrEntry->PatchInformation)
     {
-#ifdef __ROS_DWARF__
-        ROSSYM_LINEINFO LineInfo = { 0 };
+        PROSSYM_INFO RosSymInfo = (PROSSYM_INFO)LdrEntry->PatchInformation;
 
-        _SEH2_TRY
+        /*
+         * Validate the rossym pointer before use.
+         * The rossym data is allocated in NonPagedPool so it should always be
+         * accessible. We do basic pointer validation to catch corruption.
+         */
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /* Check if RosSymInfo pointer is in kernel address space */
+        if ((ULONG_PTR)RosSymInfo >= 0xFFFF000000000000ULL)
+#endif /* _M_ARM64 || __aarch64__ */
         {
-            if (RosSymGetAddressInformation(LdrEntry->PatchInformation,
-                                            RelativeAddress,
-                                            &LineInfo))
+#ifdef __ROS_DWARF__
+            /* DWARF-based rossym: use ROSSYM_LINEINFO structure */
+            ROSSYM_LINEINFO LineInfo = {0};
+            BOOLEAN SymResult = FALSE;
+            CHAR FileNameBuf[256];
+            CHAR DirNameBuf[256];
+            CHAR FuncNameBuf[256];
+            PCHAR FileName = "??";
+            PCHAR DirName = NULL;
+            PCHAR FuncName = "??";
+            ULONG LineNumber = 0;
+
+            _SEH2_TRY
             {
-                if (LineInfo.DirectoryName && LineInfo.DirectoryName[0])
+                SymResult = RosSymGetAddressInformation(RosSymInfo,
+                                                        RelativeAddress,
+                                                        &LineInfo);
+
+                if (KdbSymDebugTrace && !SymResult)
+                {
+                    KdbPrintf("\n[DWARF-DEBUG] %s: offset %Ix - %s\n",
+                              ModuleNameAnsi, (SIZE_T)RelativeAddress,
+                              RosSymGetLastErrorString());
+                }
+
+                if (SymResult)
+                {
+                    LineNumber = LineInfo.LineNumber;
+
+                    if (KdbpSafeCopyAnsiString(FileNameBuf, sizeof(FileNameBuf), LineInfo.FileName))
+                        FileName = FileNameBuf;
+                    if (KdbpSafeCopyAnsiString(FuncNameBuf, sizeof(FuncNameBuf), LineInfo.FunctionName))
+                        FuncName = FuncNameBuf;
+                    if (KdbpSafeCopyAnsiString(DirNameBuf, sizeof(DirNameBuf), LineInfo.DirectoryName) &&
+                        DirNameBuf[0] != ANSI_NULL)
+                    {
+                        DirName = DirNameBuf;
+                    }
+                }
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                SymResult = FALSE;
+            }
+            _SEH2_END;
+
+            if (SymResult)
+            {
+                /* Print with directory path if available */
+                if (DirName)
                 {
                     KdbPrintf("<%s:%Ix (%s/%s:%d (%s))>",
                               ModuleNameAnsi, (SIZE_T)RelativeAddress,
-                              LineInfo.DirectoryName,
-                              LineInfo.FileName ? LineInfo.FileName : "",
-                              LineInfo.LineNumber,
-                              LineInfo.FunctionName ? LineInfo.FunctionName : "");
+                              DirName, FileName, LineNumber, FuncName);
                 }
                 else
                 {
                     KdbPrintf("<%s:%Ix (%s:%d (%s))>",
                               ModuleNameAnsi, (SIZE_T)RelativeAddress,
-                              LineInfo.FileName ? LineInfo.FileName : "",
-                              LineInfo.LineNumber,
-                              LineInfo.FunctionName ? LineInfo.FunctionName : "");
+                              FileName, LineNumber, FuncName);
                 }
                 Printed = TRUE;
                 RosSymFreeInfo(&LineInfo);
             }
-        }
-        _SEH2_FINALLY
-        {
-            InterlockedExchange(&KdbSymLookupInProgress, 0);
-        }
-        _SEH2_END;
 #else
-        ULONG LineNumber;
-        CHAR FileName[256];
-        CHAR FunctionName[256];
+            /* Legacy rossym: use separate parameters */
+            ULONG LineNumber;
+            CHAR FileName[256];
+            CHAR FunctionName[256];
 
-        _SEH2_TRY
-        {
-            if (RosSymGetAddressInformation(LdrEntry->PatchInformation,
+            if (RosSymGetAddressInformation(RosSymInfo,
                                             RelativeAddress,
                                             &LineNumber,
                                             FileName,
@@ -531,13 +595,8 @@ KdbSymPrintAddress(
                           FileName, LineNumber, FunctionName);
                 Printed = TRUE;
             }
+#endif /* __ROS_DWARF__ */
         }
-        _SEH2_FINALLY
-        {
-            InterlockedExchange(&KdbSymLookupInProgress, 0);
-        }
-        _SEH2_END;
-#endif
     }
 
     if (!Printed)
@@ -573,32 +632,26 @@ LoadSymbolsRoutine(
         NTSTATUS Status = KeWaitForSingleObject(&SymbolsToLoadEvent, WrKernel, KernelMode, FALSE, NULL);
         if (!NT_SUCCESS(Status))
         {
-            DPRINT("KeWaitForSingleObject failed: 0x%08x\n", Status);
+            DPRINT1("KeWaitForSingleObject failed?! 0x%08x\n", Status);
             LoadSymbols = FALSE;
             return;
         }
 
         while ((ListEntry = ExInterlockedRemoveHeadList(&SymbolsToLoad, &SymbolsToLoadLock)))
         {
-            PKDB_SYMBOL_WORK_ITEM WorkItem = CONTAINING_RECORD(ListEntry, KDB_SYMBOL_WORK_ITEM, ListEntry);
-            PROSSYM_INFO RosSymInfo = NULL;
+            PLDR_DATA_TABLE_ENTRY LdrEntry = CONTAINING_RECORD(ListEntry, LDR_DATA_TABLE_ENTRY, InInitializationOrderLinks);
             HANDLE FileHandle;
             OBJECT_ATTRIBUTES Attrib;
             IO_STATUS_BLOCK Iosb;
-
-            Status = STATUS_UNSUCCESSFUL;
-            if (WorkItem->FullDllName.Length)
-            {
-                InitializeObjectAttributes(&Attrib, &WorkItem->FullDllName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-                Status = ZwOpenFile(&FileHandle,
-                                    FILE_READ_ACCESS | SYNCHRONIZE,
-                                    &Attrib,
-                                    &Iosb,
-                                    FILE_SHARE_READ,
-                                    FILE_SYNCHRONOUS_IO_NONALERT);
-            }
-
-            if (!NT_SUCCESS(Status) && WorkItem->BaseDllName.Length)
+            InitializeObjectAttributes(&Attrib, &LdrEntry->FullDllName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+            DPRINT1("Trying %wZ\n", &LdrEntry->FullDllName);
+            Status = ZwOpenFile(&FileHandle,
+                                FILE_READ_ACCESS | SYNCHRONIZE,
+                                &Attrib,
+                                &Iosb,
+                                FILE_SHARE_READ,
+                                FILE_SYNCHRONOUS_IO_NONALERT);
+            if (!NT_SUCCESS(Status))
             {
                 /* Try system paths */
                 static const UNICODE_STRING System32Dir = RTL_CONSTANT_STRING(L"\\SystemRoot\\system32\\");
@@ -606,8 +659,9 @@ LoadSymbolsRoutine(
                 WCHAR ImagePathBuffer[256];
                 RtlInitEmptyUnicodeString(&ImagePath, ImagePathBuffer, sizeof(ImagePathBuffer));
                 RtlCopyUnicodeString(&ImagePath, &System32Dir);
-                RtlAppendUnicodeStringToString(&ImagePath, &WorkItem->BaseDllName);
+                RtlAppendUnicodeStringToString(&ImagePath, &LdrEntry->BaseDllName);
                 InitializeObjectAttributes(&Attrib, &ImagePath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+                DPRINT1("Trying %wZ\n", &ImagePath);
                 Status = ZwOpenFile(&FileHandle,
                                     FILE_READ_ACCESS | SYNCHRONIZE,
                                     &Attrib,
@@ -620,8 +674,9 @@ LoadSymbolsRoutine(
 
                     RtlInitEmptyUnicodeString(&ImagePath, ImagePathBuffer, sizeof(ImagePathBuffer));
                     RtlCopyUnicodeString(&ImagePath, &DriversDir);
-                    RtlAppendUnicodeStringToString(&ImagePath, &WorkItem->BaseDllName);
+                    RtlAppendUnicodeStringToString(&ImagePath, &LdrEntry->BaseDllName);
                     InitializeObjectAttributes(&Attrib, &ImagePath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+                    DPRINT1("Trying %wZ\n", &ImagePath);
                     Status = ZwOpenFile(&FileHandle,
                                         FILE_READ_ACCESS | SYNCHRONIZE,
                                         &Attrib,
@@ -633,36 +688,19 @@ LoadSymbolsRoutine(
 
             if (!NT_SUCCESS(Status))
             {
-                DPRINT("Failed opening file %wZ (%wZ) for symbols (0x%08x)\n",
-                       &WorkItem->FullDllName,
-                       &WorkItem->BaseDllName,
-                       Status);
-                KdbpSymFreeWorkItem(WorkItem);
+                DPRINT1("Failed opening file %wZ (%wZ) for reading symbols (0x%08x)\n", &LdrEntry->FullDllName, &LdrEntry->BaseDllName, Status);
+                /* We took a ref previously */
+                MmUnloadSystemImage(LdrEntry);
                 continue;
             }
 
             /* Hand it to Rossym */
-            if (!RosSymCreateFromFile(&FileHandle, &RosSymInfo))
-                RosSymInfo = NULL;
+            if (!RosSymCreateFromFile(&FileHandle, (PROSSYM_INFO*)&LdrEntry->PatchInformation))
+                LdrEntry->PatchInformation = NULL;
 
             /* We're done for this one. */
             NtClose(FileHandle);
-
-            /* Attach only if the original module is still loaded and matches. */
-            if (RosSymInfo &&
-                KdbpSymStoreSymbolInfo(&WorkItem->BaseDllName,
-                                       &WorkItem->FullDllName,
-                                       WorkItem->DllBase,
-                                       WorkItem->SizeOfImage,
-                                       RosSymInfo))
-            {
-                RosSymInfo = NULL;
-            }
-
-            if (RosSymInfo)
-                RosSymDelete(RosSymInfo);
-
-            KdbpSymFreeWorkItem(WorkItem);
+            MmUnloadSystemImage(LdrEntry);
         }
     }
 }
@@ -692,51 +730,44 @@ KdbSymProcessSymbols(
     }
 
     /*
-     * For DWARF-based builds, RosSymCreateFromMem allocates memory and does
-     * operations that require PASSIVE_LEVEL. Only try inline loading if we're
-     * at PASSIVE_LEVEL, otherwise always defer to the worker thread.
+     * In-memory symbol loading requires IRQL < DISPATCH_LEVEL because
+     * RosSymCreateFromMem internally calls RtlCreateUnicodeStringFromAsciiz
+     * which uses RtlAnsiStringToUnicodeString with paged pool allocation.
+     * The paged pool allocator has a PAGED_CODE() check that will bugcheck
+     * (BAD_POOL_CALLER with POOL_ALLOC_IRQL_INVALID) at DISPATCH_LEVEL.
+     *
+     * When called at DISPATCH_LEVEL (e.g., while holding PsLoadedModuleSpinLock),
+     * we must defer to the worker thread which runs at PASSIVE_LEVEL.
      */
-    if (KeGetCurrentIrql() == PASSIVE_LEVEL &&
-        RosSymCreateFromMem(LdrEntry->DllBase, LdrEntry->SizeOfImage, (PROSSYM_INFO*)&LdrEntry->PatchInformation))
+    if (KeGetCurrentIrql() < DISPATCH_LEVEL)
     {
-        return;
+        if (RosSymCreateFromMem(LdrEntry->DllBase, LdrEntry->SizeOfImage, (PROSSYM_INFO*)&LdrEntry->PatchInformation))
+        {
+            /* Symbols loaded successfully from in-memory image */
+            return;
+        }
     }
 
-    /* Tell our worker thread to read from it */
-    PKDB_SYMBOL_WORK_ITEM WorkItem = ExAllocatePoolWithTag(NonPagedPool,
-                                                           sizeof(*WorkItem),
-                                                           KDB_SYM_TAG);
-    if (!WorkItem)
-        return;
-
-    RtlZeroMemory(WorkItem, sizeof(*WorkItem));
-    /*
-     * Copy the names so the worker doesn't dereference a potentially
-     * unloaded LDR entry; we re-lookup under the module list lock before
-     * attaching symbols, so unloadable drivers are not pinned.
-     */
-    if (!KdbpSymDuplicateUnicodeString(&LdrEntry->BaseDllName, &WorkItem->BaseDllName) ||
-        !KdbpSymDuplicateUnicodeString(&LdrEntry->FullDllName, &WorkItem->FullDllName))
-    {
-        KdbpSymFreeWorkItem(WorkItem);
-        return;
-    }
-
-    WorkItem->DllBase = LdrEntry->DllBase;
-    WorkItem->SizeOfImage = LdrEntry->SizeOfImage;
+    /* Add a ref until we really process it */
+    LdrEntry->LoadCount++;
 
     /*
-     * Use KeAcquireSpinLock/KeReleaseSpinLock instead of the AtDpcLevel
-     * variants. KdbSymProcessSymbols may be called at PASSIVE_LEVEL from
-     * KdbSymInit after releasing PsLoadedModuleSpinLock for DWARF processing.
-     * The AtDpcLevel variants assume IRQL is already at DISPATCH_LEVEL, but
-     * that is not guaranteed here.
+     * Tell our worker thread to read from it.
+     *
+     * ARM64 FIX: Use KeAcquireSpinLock/KeReleaseSpinLock instead of the
+     * AtDpcLevel variants. This function can be called at PASSIVE_LEVEL
+     * (when RosSymCreateFromMem fails at low IRQL), but KeAcquireSpinLockAtDpcLevel
+     * requires IRQL >= DISPATCH_LEVEL and will bugcheck IRQL_NOT_GREATER_OR_EQUAL
+     * if called at lower IRQL.
+     *
+     * KeAcquireSpinLock properly raises IRQL to DISPATCH_LEVEL before acquiring
+     * the lock, avoiding the bugcheck.
      */
     {
-        KIRQL WorkItemIrql;
-        KeAcquireSpinLock(&SymbolsToLoadLock, &WorkItemIrql);
-        InsertTailList(&SymbolsToLoad, &WorkItem->ListEntry);
-        KeReleaseSpinLock(&SymbolsToLoadLock, WorkItemIrql);
+        KIRQL OldIrql;
+        KeAcquireSpinLock(&SymbolsToLoadLock, &OldIrql);
+        InsertTailList(&SymbolsToLoad, &LdrEntry->InInitializationOrderLinks);
+        KeReleaseSpinLock(&SymbolsToLoadLock, OldIrql);
     }
 
     KeSetEvent(&SymbolsToLoadEvent, IO_NO_INCREMENT, FALSE);
@@ -762,20 +793,14 @@ KdbSymInit(
 
     DPRINT("KdbSymInit() BootPhase=%d\n", BootPhase);
 
-#ifdef SEPARATE_DBG
-    DPRINT("KDBG symbols disabled for SEPARATE_DBG builds\n");
-    LoadSymbols = FALSE;
-    return FALSE;
-#endif
-
     if (BootPhase == 0)
     {
         PSTR CommandLine;
         SHORT Found = FALSE;
         CHAR YesNo;
 
-        /* By default, load symbols in DBG builds on supported architectures */
-#if DBG && (defined(_M_IX86) || defined(_M_AMD64))
+        /* By default, load symbols in DBG builds on x86 and x64. */
+#if DBG && (defined(_M_IX86) || defined(_M_AMD64) || defined(_AMD64_) || defined(__x86_64__) || defined(_M_ARM64) || defined(__aarch64__))
         LoadSymbols = TRUE;
 #else
         LoadSymbols = FALSE;
@@ -860,23 +885,31 @@ KdbSymInit(
                                       NULL);
         if (!NT_SUCCESS(Status))
         {
-            DPRINT("Failed starting symbols loader thread: 0x%08x\n", Status);
+            DPRINT1("Failed starting symbols loader thread: 0x%08x\n", Status);
             LoadSymbols = FALSE;
             return LoadSymbols;
         }
-
+        DPRINT1("starting symbols loader thread: 0x%08x\n", Status);
         RosSymInitKernelMode();
 
         /*
-         * For DWARF symbols, we need to process modules at PASSIVE_LEVEL.
-         * Collect all boot modules first while holding the spinlock,
-         * then process them after releasing it.
+         * Load symbols for all boot-loaded modules.
+         *
+         * We iterate through PsLoadedModuleList twice:
+         * 1. First pass: Count modules while holding the spinlock
+         * 2. Allocate array and copy module entries
+         * 3. Second pass: Process symbols at PASSIVE_LEVEL (without spinlock)
+         *
+         * This is necessary because RosSymCreateFromMem uses paged pool
+         * allocations internally (via RtlCreateUnicodeStringFromAsciiz),
+         * which cannot be done at DISPATCH_LEVEL when holding a spinlock.
          */
         {
-            PLDR_DATA_TABLE_ENTRY *ModuleArray;
-            ULONG ModuleCount = 0, i;
+            ULONG ModuleCount = 0;
+            PLDR_DATA_TABLE_ENTRY *ModuleArray = NULL;
+            ULONG i;
 
-            /* Count modules */
+            /* First pass: count modules */
             KeAcquireSpinLock(&PsLoadedModuleSpinLock, &OldIrql);
             for (ListEntry = PsLoadedModuleList.Flink;
                  ListEntry != &PsLoadedModuleList;
@@ -886,39 +919,41 @@ KdbSymInit(
             }
             KeReleaseSpinLock(&PsLoadedModuleSpinLock, OldIrql);
 
-            if (ModuleCount == 0)
-                return LoadSymbols;
 
-            /* Allocate array for module pointers */
-            ModuleArray = ExAllocatePoolWithTag(NonPagedPool,
-                                                ModuleCount * sizeof(PLDR_DATA_TABLE_ENTRY),
-                                                'mySK');
-            if (!ModuleArray)
+            if (ModuleCount > 0)
             {
-                DPRINT("Failed to allocate module array\n");
-                return LoadSymbols;
-            }
+                /* Allocate array at PASSIVE_LEVEL */
+                ModuleArray = ExAllocatePoolWithTag(NonPagedPool,
+                                                    ModuleCount * sizeof(PLDR_DATA_TABLE_ENTRY),
+                                                    'mysk');
+                if (ModuleArray)
+                {
+                    /* Second pass: copy module pointers */
+                    i = 0;
+                    KeAcquireSpinLock(&PsLoadedModuleSpinLock, &OldIrql);
+                    for (ListEntry = PsLoadedModuleList.Flink;
+                         ListEntry != &PsLoadedModuleList && i < ModuleCount;
+                         ListEntry = ListEntry->Flink)
+                    {
+                        PLDR_DATA_TABLE_ENTRY LdrEntry = CONTAINING_RECORD(ListEntry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+                        /* Take a reference to prevent unload while processing */
+                        LdrEntry->LoadCount++;
+                        ModuleArray[i++] = LdrEntry;
+                    }
+                    KeReleaseSpinLock(&PsLoadedModuleSpinLock, OldIrql);
 
-            /* Collect module pointers */
-            KeAcquireSpinLock(&PsLoadedModuleSpinLock, &OldIrql);
-            i = 0;
-            for (ListEntry = PsLoadedModuleList.Flink;
-                 ListEntry != &PsLoadedModuleList && i < ModuleCount;
-                 ListEntry = ListEntry->Flink)
-            {
-                PLDR_DATA_TABLE_ENTRY LdrEntry = CONTAINING_RECORD(ListEntry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-                ModuleArray[i++] = LdrEntry;
-            }
-            ModuleCount = i;
-            KeReleaseSpinLock(&PsLoadedModuleSpinLock, OldIrql);
+                    /* Third pass: process symbols at PASSIVE_LEVEL */
+                    for (i = 0; i < ModuleCount && ModuleArray[i]; i++)
+                    {
+                        PLDR_DATA_TABLE_ENTRY LdrEntry = ModuleArray[i];
+                        KdbSymProcessSymbols(LdrEntry, TRUE);
+                        /* Release the reference we took */
+                        LdrEntry->LoadCount--;
+                    }
 
-            /* Now process at PASSIVE_LEVEL */
-            for (i = 0; i < ModuleCount; i++)
-            {
-                KdbSymProcessSymbols(ModuleArray[i], TRUE);
+                    ExFreePoolWithTag(ModuleArray, 'mysk');
+                }
             }
-
-            ExFreePoolWithTag(ModuleArray, 'mySK');
         }
     }
 

@@ -778,6 +778,10 @@ KeInitThread(IN OUT PKTHREAD Thread,
     /* Initialize the Mutant List */
     InitializeListHead(&Thread->MutantListHead);
 
+    /* Initialize the Queue List Entry - CRITICAL for ARM64 */
+    InitializeListHead(&Thread->QueueListEntry);
+    Thread->Queue = NULL;
+
     /* Initialize the wait blocks */
     for (i = 0; i< (THREAD_WAIT_OBJECTS + 1); i++)
     {

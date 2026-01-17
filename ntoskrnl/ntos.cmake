@@ -487,17 +487,17 @@ if(NOT _WINKD_)
         # kdbg.c is the common entry point for debugger packets
         list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdbg.c)
 
-        # ARM64 uses kdb_shim.c instead of the x86-specific kdb.c/kdb_cli.c
-        # The shim provides all necessary functions for crash output
-        if(NOT NT_ARCH STREQUAL "arm64")
-            list(APPEND SOURCE
-                ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb.c
-                ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_cli.c
-                ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_cmdhist.c
-                ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_expr.c
-                ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_print.c
-                ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_symbols.c)
-        endif()
+        # All architectures now use the common KDB infrastructure.
+        # ARM64 provides architecture-specific extensions in kdb_shim.c
+        # (included separately in the ARM64 section above), but the common
+        # kdb*.c files provide the core functionality.
+        list(APPEND SOURCE
+            ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb.c
+            ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_cli.c
+            ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_cmdhist.c
+            ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_expr.c
+            ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_print.c
+            ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_symbols.c)
     endif()
 
     list(APPEND SOURCE

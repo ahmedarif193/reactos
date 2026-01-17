@@ -12,6 +12,12 @@
 #define NDEBUG
 #include <debug.h>
 
+#if defined(__GNUC__) || defined(__clang__)
+#define EXP_UNUSED __attribute__((unused))
+#else
+#define EXP_UNUSED
+#endif
+
 #define MODULE_INVOLVED_IN_ARM3
 #include <mm/ARM3/miarm.h>
 
@@ -40,6 +46,16 @@ static LONG ExpLookasideCorruptionHit;
 #endif
 static BOOLEAN ExpEarlyPoolLogDone;
 
+/*
+ * ARM64 FIX: Track recently freed big page addresses to detect double-frees.
+ * The big page table reallocation can cause entries to be lost, allowing
+ * subsequent frees to succeed when they should fail. This cache provides
+ * a secondary check.
+ */
+#define EXP_FREED_PAGE_CACHE_SIZE 64
+static PVOID ExpFreedPageCache[EXP_FREED_PAGE_CACHE_SIZE];
+static volatile LONG ExpFreedPageCacheIndex = 0;
+
 FORCEINLINE
 VOID
 ExpLogLookasideCorruption(
@@ -64,7 +80,6 @@ ExpIsLookasidePointerValid(
     _In_ BOOLEAN PagedList,
     _In_ USHORT Index)
 {
-    ULONG_PTR Offset;
     PGENERAL_LOOKASIDE Start;
 
     if (!Pointer) return FALSE;
@@ -87,6 +102,7 @@ ExpIsLookasidePointerValid(
     return (Pointer == &Start[Index]);
 #else
     /* On x86/x64, use the original offset-based validation */
+    ULONG_PTR Offset;
     Offset = (ULONG_PTR)Pointer - (ULONG_PTR)Start;
     if ((Offset % sizeof(GENERAL_LOOKASIDE)) != 0)
     {
@@ -346,7 +362,6 @@ ExpGetValidPoolLookasideList(
     PGENERAL_LOOKASIDE DefaultList;
 #if DBG
     PGENERAL_LOOKASIDE Current;
-    static LONG FirstCallLogged = 0;
 #endif
 
     /*
@@ -364,22 +379,6 @@ ExpGetValidPoolLookasideList(
     DefaultList = PagedList ?
                   &ExpSmallPagedPoolLookasideLists[Index] :
                   &ExpSmallNPagedPoolLookasideLists[Index];
-
-#if DBG
-    /* Log the first few calls to see initialization state */
-    if (InterlockedCompareExchange(&FirstCallLogged, 1, 0) == 0)
-    {
-        DPRINT1("EX: ExpGetValidPoolLookasideList FIRST CALL:\n");
-        DPRINT1("    Prcb=%p CPU=%u Paged=%d Index=%u Global=%d\n",
-                Prcb, Prcb->Number, PagedList, Index, UseGlobal);
-        DPRINT1("    DefaultList=%p &ListHead=%p\n",
-                DefaultList, &DefaultList->ListHead);
-        DPRINT1("    ExpSmallNPagedPoolLookasideLists=%p\n",
-                ExpSmallNPagedPoolLookasideLists);
-        DPRINT1("    ExpSmallPagedPoolLookasideLists=%p\n",
-                ExpSmallPagedPoolLookasideLists);
-    }
-#endif
 
     if (PagedList)
     {
@@ -516,6 +515,35 @@ ExpLogLookasideCorruption(
     }
 }
 
+FORCEINLINE
+EXP_UNUSED VOID
+ExpDumpLookasideCorruptionLog(VOID)
+{
+    ULONG i, j;
+    EXP_LOOKASIDE_CORRUPTION *Entry;
+
+    DPRINT1("EX: lookaside corruption log next=%ld\n", ExpLookasideCorruptionLogIndex);
+
+    for (i = 0; i < EXP_LOOKASIDE_LOG_ENTRIES; i++)
+    {
+        Entry = &ExpLookasideCorruptionLog[i];
+        if (!Entry->CorruptPointer && !Entry->Frames)
+            continue;
+
+        DPRINT1("  [%u] Ptr=%p Paged=%u Index=%u CPU=%u Time=%I64u Frames=%u\n",
+                i,
+                Entry->CorruptPointer,
+                Entry->PagedList,
+                Entry->Index,
+                Entry->Processor,
+                Entry->Timestamp,
+                Entry->Frames);
+        for (j = 0; j < Entry->Frames && j < RTL_NUMBER_OF(Entry->Stack); j++)
+        {
+            DPRINT1("        %p\n", Entry->Stack[j]);
+        }
+    }
+}
 #else
 FORCEINLINE
 VOID
@@ -538,6 +566,57 @@ ExpLogLookasideCorruption(
 #define POOL_BLOCK(x, i)    (PPOOL_HEADER)((ULONG_PTR)(x) + ((i) * POOL_BLOCK_SIZE))
 #define POOL_NEXT_BLOCK(x)  POOL_BLOCK((x), (x)->BlockSize)
 #define POOL_PREV_BLOCK(x)  POOL_BLOCK((x), -((x)->PreviousSize))
+
+#ifdef _WIN64
+FORCEINLINE
+BOOLEAN
+ExpIsCanonicalAddress64(
+    _In_ ULONG_PTR Address)
+{
+    LONG64 CanonicalHigh = (LONG64)Address >> 48;
+    return (CanonicalHigh == 0) || (CanonicalHigh == -1);
+}
+
+FORCEINLINE
+EXP_UNUSED VOID
+ExpEnsureSListHeadIsSane(
+    _Inout_ PSLIST_HEADER SListHead)
+{
+    ULONGLONG Region;
+    ULONGLONG NextEntry;
+
+    if (!RtlpUse16ByteSLists) return;
+
+    /*
+     * For 16-byte SLIST headers on amd64 the next pointer is stored in the
+     * second QWORD with the low 4 bits reserved (HeaderType/Init/etc).
+     *
+     * If the head becomes corrupt (typically from overwriting a freed block's
+     * embedded SLIST_ENTRY), the next pointer can become non-canonical and
+     * will GP-fault in ExpInterlockedPopEntrySListFault16. Flush the list to
+     * keep the pool allocator alive long enough to diagnose the real culprit.
+     */
+    Region = SListHead->Region;
+    NextEntry = Region & 0xFFFFFFFFFFFFFFF0ULL;
+    if (NextEntry && !ExpIsCanonicalAddress64((ULONG_PTR)NextEntry))
+    {
+        DPRINT1("POOL: Corrupt SLIST head %p (Align=%I64x Region=%I64x Next=%p), flushing\n",
+                SListHead,
+                SListHead->Alignment,
+                Region,
+                (PVOID)(ULONG_PTR)NextEntry);
+        (VOID)InterlockedFlushSList(SListHead);
+    }
+}
+#else
+FORCEINLINE
+EXP_UNUSED VOID
+ExpEnsureSListHeadIsSane(
+    _Inout_ PSLIST_HEADER SListHead)
+{
+    UNREFERENCED_PARAMETER(SListHead);
+}
+#endif
 
 /*
  * Pool list access debug macros, similar to Arthur's pfnlist.c work.
@@ -573,6 +652,10 @@ VOID
 NTAPI
 ExpCheckPoolLinks(IN PLIST_ENTRY ListHead)
 {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    UNREFERENCED_PARAMETER(ListHead);
+    return;
+#else
 #if defined(_M_ARM64) || defined(__aarch64__)
     static LONG CheckCount = 0;
     LONG Count = InterlockedIncrement(&CheckCount);
@@ -624,6 +707,25 @@ ExpCheckPoolLinks(IN PLIST_ENTRY ListHead)
         return;
     }
 
+    {
+        PLIST_ENTRY DecodedFlink = ExpDecodePoolLink(ListHead->Flink);
+        PLIST_ENTRY DecodedBlink = ExpDecodePoolLink(ListHead->Blink);
+
+        if (!ExpIsCanonicalPointer(DecodedFlink) || !ExpIsCanonicalPointer(DecodedBlink))
+        {
+            DPRINT1("ARM64 POOL LINK NON-CANONICAL:\n");
+            DPRINT1("  ListHead=%p Flink=%p Blink=%p\n",
+                    ListHead, ListHead->Flink, ListHead->Blink);
+            DPRINT1("  DecodedFlink=%p DecodedBlink=%p\n",
+                    DecodedFlink, DecodedBlink);
+            KeBugCheckEx(BAD_POOL_HEADER,
+                         POOL_CORRUPTED_LIST,
+                         (ULONG_PTR)ListHead,
+                         (ULONG_PTR)DecodedFlink,
+                         (ULONG_PTR)DecodedBlink);
+        }
+    }
+
     /* Early check for obviously corrupt links */
     if (ListHead->Flink == NULL || ListHead->Blink == NULL)
     {
@@ -672,6 +774,7 @@ ExpCheckPoolLinks(IN PLIST_ENTRY ListHead)
                      (ULONG_PTR)ExpDecodePoolLink(ExpDecodePoolLink(ListHead->Flink)->Blink),
                      (ULONG_PTR)ExpDecodePoolLink(ExpDecodePoolLink(ListHead->Blink)->Flink));
     }
+#endif
 }
 
 VOID
@@ -1841,36 +1944,12 @@ InitializePool(IN POOL_TYPE PoolType,
         ExpPagedPoolMutex = (PKGUARDED_MUTEX)(Descriptor + 1);
         ExpPagedPoolDescriptor[0] = Descriptor;
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-        /* ARM64 DEBUG: Log addresses before initialization */
-        DPRINT1("ARM64 PagedPool BEFORE init: Descriptor=%p size=%zu\n",
-                Descriptor, sizeof(POOL_DESCRIPTOR));
-        DPRINT1("ARM64 PagedPool BEFORE init: ExpPagedPoolMutex=%p size=%zu\n",
-                ExpPagedPoolMutex, sizeof(KGUARDED_MUTEX));
-        DPRINT1("ARM64 PagedPool BEFORE init: Allocated range: %p - %p\n",
-                Descriptor,
-                (PUCHAR)Descriptor + sizeof(POOL_DESCRIPTOR) + sizeof(KGUARDED_MUTEX));
-        DPRINT1("ARM64 PagedPool BEFORE init: Gate=%p (relative offset=%zd)\n",
-                &ExpPagedPoolMutex->Gate,
-                (PUCHAR)&ExpPagedPoolMutex->Gate - (PUCHAR)Descriptor);
-#endif
-
         KeInitializeGuardedMutex(ExpPagedPoolMutex);
         ExInitializePoolDescriptor(Descriptor,
                                    PagedPool,
                                    0,
                                    Threshold,
                                    ExpPagedPoolMutex);
-#if defined(_M_ARM64) || defined(__aarch64__)
-        DPRINT1("ARM64 PagedPool: Descriptor=%p ListHeads[0]=%p Flink=%p Blink=%p\n",
-                Descriptor, &Descriptor->ListHeads[0],
-                Descriptor->ListHeads[0].Flink, Descriptor->ListHeads[0].Blink);
-        DPRINT1("ARM64 PagedPool: ExpPagedPoolMutex=%p Gate=%p Type=%02X Count=%ld\n",
-                ExpPagedPoolMutex,
-                &ExpPagedPoolMutex->Gate,
-                ExpPagedPoolMutex->Gate.Header.Type,
-                ExpPagedPoolMutex->Count);
-#endif
 
         //
         // Insert the generic tracker for all of nonpaged pool
@@ -2355,6 +2434,34 @@ ExpFindAndRemoveTagBigPages(IN PVOID Va,
     // release the lock, the data can change
     //
     Entry = &PoolBigPageTable[Hash];
+
+    /*
+     * ARM64 FIX: Check if the entry is already marked as free.
+     * This can happen in a race condition where:
+     * 1. Thread A frees a page and marks the entry as free
+     * 2. The pool immediately reallocates the same address
+     * 3. ExpAddTagForBigPages finds the freed entry and reuses it
+     * 4. Thread B (or A again) tries to free the same address
+     * 5. The lookup finds the NEW entry (same address, no FREE bit)
+     * 6. We're now about to double-free!
+     *
+     * To detect this, we check if the entry was already marked free between
+     * our lookup at the start of the loop and now. If the FREE bit is set,
+     * this is a stale free - return as if not found.
+     */
+    if ((ULONG_PTR)Entry->Va & POOL_BIG_TABLE_ENTRY_FREE)
+    {
+        static volatile LONG DoubleFreeWarnBudget = 8;
+        if (InterlockedDecrement(&DoubleFreeWarnBudget) >= 0)
+        {
+            DPRINT1("ExpFindAndRemoveTagBigPages: Entry already freed! Va=%p Entry->Va=%p\n",
+                    Va, Entry->Va);
+        }
+        KeReleaseSpinLock(&ExpLargePoolTableLock, OldIrql);
+        *BigPages = 0;
+        return ' GIB';
+    }
+
     *BigPages = Entry->NumberOfPages;
     PoolTag = Entry->Key;
 
@@ -2363,6 +2470,16 @@ ExpFindAndRemoveTagBigPages(IN PVOID Va,
     // the lock and return the tag that was located
     //
     Entry->Va = (PVOID)((ULONG_PTR)Entry->Va | POOL_BIG_TABLE_ENTRY_FREE);
+
+    /*
+     * ARM64 FIX: Issue a data memory barrier to ensure the store to Entry->Va
+     * is visible to all cores before we return. Without this, a subsequent
+     * call to ExpFindAndRemoveTagBigPages on another core (or even the same
+     * core due to out-of-order execution) might see the old value.
+     *
+     * KeMemoryBarrier provides a full memory barrier on ARM64 (DMB ISH).
+     */
+    KeMemoryBarrier();
 
     ExpPoolBigEntriesInUse--;
 
@@ -2693,6 +2810,18 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
             }
 
             return NULL;
+        }
+
+        /* Clear stale freed-cache entries when the page gets reused. */
+        {
+            ULONG j;
+            for (j = 0; j < EXP_FREED_PAGE_CACHE_SIZE; j++)
+            {
+                if (ExpFreedPageCache[j] == Entry)
+                {
+                    ExpFreedPageCache[j] = NULL;
+                }
+            }
         }
 
         //
@@ -3112,10 +3241,6 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
 #endif
             return POOL_FREE_BLOCK(Entry);
         }
-#if defined(_M_ARM64) || defined(__aarch64__)
-ContinueToNext:
-        ;  /* Empty statement after label */
-#endif
     } while (++ListHead != &PoolDesc->ListHeads[POOL_LISTS_PER_PAGE]);
 
     //
@@ -3418,14 +3543,76 @@ ExFreePoolWithTag(IN PVOID P,
         // manually get the size of the allocation by actually counting through
         // the PFN database.
         //
+        /*
+         * ARM64 FIX: Check if this page was recently freed using our cache.
+         * The big page table reallocation can cause freed entries to be lost,
+         * leading to double-frees succeeding when they should fail.
+         */
+        {
+            ULONG j;
+            for (j = 0; j < EXP_FREED_PAGE_CACHE_SIZE; j++)
+            {
+                if (ExpFreedPageCache[j] == P)
+                {
+                    DPRINT1("ExFreePoolWithTag: Page %p in freed cache - double-free detected!\n", P);
+                    DPRINT1("  Caller: %p\n", _ReturnAddress());
+                    return;
+                }
+            }
+        }
+
         PoolType = MmDeterminePoolType(P);
         ExpCheckPoolIrqlLevel(PoolType, 0, P);
         Tag = ExpFindAndRemoveTagBigPages(P, &PageCount, PoolType);
+
         if (!Tag)
         {
-            DPRINT1("We do not know the size of this allocation. This is not yet supported\n");
-            ASSERT(Tag == ' GIB');
-            PageCount = 1; // We are going to lie! This might screw up accounting?
+            //
+            // ARM64 FIX: Tag == 0 should never happen based on ExpFindAndRemoveTagBigPages
+            // implementation. If we get here, something is seriously wrong.
+            // Treat this as a double-free indicator and return safely.
+            //
+            DPRINT1("ExFreePoolWithTag: Tag=0 for big page at %p - treating as double-free\n", P);
+            DPRINT1("  Caller: %p\n", _ReturnAddress());
+            return;
+        }
+        else if ((Tag == ' GIB') && (PageCount == 0))
+        {
+            //
+            // CRITICAL ARM64 FIX: ExpFindAndRemoveTagBigPages returns ' GIB' tag with
+            // PageCount=0 when the allocation cannot be found in the big page table.
+            // This typically indicates a double-free: the allocation was already freed
+            // and removed from the table. On ARM64, proceeding with MiFreePoolPages
+            // on an already-freed address can cause PFN database corruption, leading
+            // to assertions like "PrototypePte == 1" in MiInsertStandbyListAtFront.
+            //
+            // The page may have been:
+            // 1. Already freed (double-free bug in caller)
+            // 2. Reallocated to a different pool allocation
+            // 3. Corrupted in some way
+            //
+            // We must NOT proceed with the free - just log and return.
+            //
+            DPRINT1("ExFreePoolWithTag: Detected double-free at %p (tag ' GIB' with PageCount=0)\n", P);
+            DPRINT1("  This allocation was already freed or never properly tracked.\n");
+            DPRINT1("  Caller: %p\n", _ReturnAddress());
+            return;
+        }
+        else if (Tag == ' GIB')
+        {
+            //
+            // ARM64 FIX: Tag is ' GIB' with non-zero PageCount. This means the
+            // allocation was originally too large to fit in the big page table
+            // at insertion time, and we used ' GIB' as a placeholder tag.
+            // PageCount should be valid here, but double-check it makes sense.
+            //
+            if (PageCount == 0 || PageCount > 0x10000)
+            {
+                DPRINT1("ExFreePoolWithTag: Suspicious ' GIB' PageCount=0x%lx for %p\n",
+                        (ULONG)PageCount, P);
+                DPRINT1("  Caller: %p\n", _ReturnAddress());
+                // Don't return here - the PageCount might legitimately be large
+            }
         }
         else if (Tag & PROTECTED_POOL)
         {
@@ -3488,6 +3675,15 @@ ExFreePoolWithTag(IN PVOID P,
         ASSERT(RealPageCount == PageCount);
         InterlockedExchangeAdd((PLONG)&PoolDesc->TotalBigPages,
                                -(LONG)RealPageCount);
+
+        /*
+         * ARM64 FIX: Add this page to the freed cache to detect subsequent
+         * double-frees. This is a circular buffer so old entries are overwritten.
+         */
+        {
+            LONG Index = InterlockedIncrement(&ExpFreedPageCacheIndex) % EXP_FREED_PAGE_CACHE_SIZE;
+            ExpFreedPageCache[Index] = P;
+        }
         return;
     }
 

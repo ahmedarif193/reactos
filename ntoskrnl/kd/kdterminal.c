@@ -69,7 +69,29 @@ KdpInitTerminal(VOID)
 
     if (KdTermSerial)
     {
+#if defined(_M_ARM64)
+        /*
+         * On ARM64 with QEMU, the PL011 UART output often appears on the
+         * same console as screen output. Sending VT100 escape sequences
+         * causes garbage like "[?7h[c" to appear because the ESC character
+         * is consumed but the rest of the sequence is printed verbatim.
+         *
+         * Skip terminal type detection on ARM64, but still enable serial
+         * input by setting KdTermConnected = TRUE. This allows KDBG CLI
+         * to receive input from the serial console without sending VT100
+         * escape sequences that would cause garbage output.
+         */
+
+        /* Drain any pending input to start with clean buffer */
+        while (KdbpTryGetCharSerial(1000) != -1);
+
+        /* Enable serial input without VT100 terminal detection */
+        KdTermConnected = TRUE;
+#else
         ULONG Length;
+
+        /* Drain any pending input before sending commands */
+        while (KdbpTryGetCharSerial(1000) != -1);
 
         /* Enable line-wrap */
         KdbpSendCommandSerial("\x1b[?7h");
@@ -95,6 +117,13 @@ KdpInitTerminal(VOID)
 
         /* Terminal is connected (TRUE) or not connected (FALSE) */
         KdTermConnected = (Length > 0);
+
+        /*
+         * Final drain: consume any remaining characters that might have
+         * been echoed or buffered during terminal detection.
+         */
+        while (KdbpTryGetCharSerial(1000) != -1);
+#endif /* _M_ARM64 */
     }
     else
     {

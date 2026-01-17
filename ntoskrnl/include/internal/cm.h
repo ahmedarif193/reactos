@@ -45,6 +45,7 @@
 //
 #define CM_KCB_SIGNATURE                                'bKmC'
 #define CM_KCB_INVALID_SIGNATURE                        '4FmC'
+#define CM_KCB_ON_FREE_LIST_SIGNATURE                   'lFmC'  /* ARM64: KCB is on free list */
 
 //
 // CM_KEY_CONTROL_BLOCK ExtFlags

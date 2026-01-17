@@ -20,7 +20,11 @@ PIO_RESOURCE_LIST
 IopGetNextResourceList(
     _In_ const IO_RESOURCE_LIST *ResourceList)
 {
-    ASSERT((ResourceList->Count > 0) && (ResourceList->Count < 1000));
+    /* ARM64 FIX: Allow Count=0 for devices with no resources (e.g., ACPI_HAL).
+     * The HAL returns an empty resource list for certain devices, which is valid.
+     * Original assertion: (ResourceList->Count > 0) && (ResourceList->Count < 1000)
+     */
+    ASSERT(ResourceList->Count < 1000);
     return (PIO_RESOURCE_LIST)(
         &ResourceList->Descriptors[ResourceList->Count]);
 }
@@ -303,10 +307,23 @@ IopFindInterruptResource(
         if (MessageCount == 0)
             MessageCount = 1;
 
-        Status = IopAllocateIrqVectors(PRIMARY_VECTOR_BASE,
-                                       MAXULONG,
-                                       MessageCount,
-                                       &StartVector);
+        {
+            ULONG MinVector = PRIMARY_VECTOR_BASE;
+            ULONG MaxVector = MAXULONG;
+#if defined(_M_ARM64) || defined(__aarch64__)
+            ULONG MsiBase = 0;
+            ULONG MsiCount = 0;
+            if (HalGetMsiVectorRange(&MsiBase, &MsiCount) && MsiCount)
+            {
+                MinVector = MsiBase;
+                MaxVector = MsiBase + MsiCount - 1;
+            }
+#endif
+            Status = IopAllocateIrqVectors(MinVector,
+                                           MaxVector,
+                                           MessageCount,
+                                           &StartVector);
+        }
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("Failed to allocate %u message interrupt vectors (status 0x%08lx)\n",
@@ -1584,9 +1601,13 @@ IopTranslateDeviceResources(
                      Affinity = KeActiveProcessors;
 
                   /* Message IRQL must match the vector mapping expected by KeConnectInterrupt */
+#if defined(_M_ARM64)
+                  VectorIrql = DISPATCH_LEVEL;
+#else
                   VectorIrql = (KIRQL)(Vector >> 4);
                   if (VectorIrql < DISPATCH_LEVEL)
                      VectorIrql = DISPATCH_LEVEL;
+#endif
 
                   DescriptorTranslated->u.MessageInterrupt.Raw = DescriptorRaw->u.MessageInterrupt.Raw;
                   DescriptorTranslated->u.MessageInterrupt.Raw.Vector = Vector;

@@ -11,6 +11,27 @@ extern "C"
 {
 #endif
 
+/*
+ * ARM64 Memory Barrier Helper
+ *
+ * This macro ensures all memory operations before it are visible to all CPUs
+ * before any memory operations after it. Critical for synchronization primitives.
+ *
+ * DSB SY: Data Synchronization Barrier - ensures all memory accesses complete
+ * ISB: Instruction Synchronization Barrier - ensures CPU fetches fresh instructions
+ */
+#ifdef _M_ARM64
+#ifndef ARM64_SYNC_BARRIER
+#define ARM64_SYNC_BARRIER() \
+    do { \
+        __dmb(_ARM64_BARRIER_SY); \
+        __isb(_ARM64_BARRIER_SY); \
+    } while (0)
+#endif
+#else
+#define ARM64_SYNC_BARRIER() do { } while (0)
+#endif
+
 #if !defined(_M_ARM) && !defined(_M_ARM64)
 FORCEINLINE
 KPROCESSOR_MODE
@@ -759,6 +780,8 @@ KiReleaseDeviceQueueLock(IN PKLOCK_QUEUE_HANDLE DeviceLock)
         /* These ones can have multiple states, so we only decrease it */   \
         (Object)->Header.SignalState--;                                     \
     }                                                                       \
+    /* ARM64: Ensure signal state change is visible */                      \
+    ARM64_SYNC_BARRIER();                                                   \
 }
 
 //
@@ -893,10 +916,20 @@ KiRemoveEntryTimer(IN PKTIMER Timer)
 {
     ULONG Hand;
     PKTIMER_TABLE_ENTRY TableEntry;
+    PLIST_ENTRY Entry = &Timer->TimerListEntry;
+
+    /* ARM64: Validate list entry before removal to prevent crashes on corrupted lists */
+    if (Entry->Flink == NULL || Entry->Blink == NULL ||
+        (ULONG_PTR)Entry->Flink == (ULONG_PTR)-1 ||
+        (ULONG_PTR)Entry->Blink == (ULONG_PTR)-1)
+    {
+        /* List is corrupted or uninitialized, skip removal */
+        goto Cleanup;
+    }
 
     /* Remove the timer from the timer list and check if it's empty */
     Hand = Timer->Header.Hand;
-    if (RemoveEntryList(&Timer->TimerListEntry))
+    if (RemoveEntryList(Entry))
     {
         /* Get the respective timer table entry */
         TableEntry = &KiTimerTableListHead[Hand];
@@ -907,6 +940,7 @@ KiRemoveEntryTimer(IN PKTIMER Timer)
         }
     }
 
+Cleanup:
     /* Clear the list entries on dbg builds so we can tell the timer is gone */
 #if DBG
     Timer->TimerListEntry.Flink = NULL;
@@ -1006,6 +1040,7 @@ KxRemoveTreeTimer(IN PKTIMER Timer)
     ULONG Hand = Timer->Header.Hand;
     PKSPIN_LOCK_QUEUE LockQueue;
     PKTIMER_TABLE_ENTRY TimerEntry;
+    PLIST_ENTRY Entry = &Timer->TimerListEntry;
 
     /* Acquire timer lock */
     LockQueue = KiAcquireTimerLock(Hand);
@@ -1013,15 +1048,21 @@ KxRemoveTreeTimer(IN PKTIMER Timer)
     /* Set the timer as non-inserted */
     Timer->Header.Inserted = FALSE;
 
-    /* Remove it from the timer list */
-    if (RemoveEntryList(&Timer->TimerListEntry))
+    /* ARM64: Validate list entry before removal to prevent crashes on corrupted lists */
+    if (Entry->Flink != NULL && Entry->Blink != NULL &&
+        (ULONG_PTR)Entry->Flink != (ULONG_PTR)-1 &&
+        (ULONG_PTR)Entry->Blink != (ULONG_PTR)-1)
     {
-        /* Get the entry and check if it's empty */
-        TimerEntry = &KiTimerTableListHead[Hand];
-        if (IsListEmpty(&TimerEntry->Entry))
+        /* Remove it from the timer list */
+        if (RemoveEntryList(Entry))
         {
-            /* Clear the time then */
-            TimerEntry->Time.HighPart = 0xFFFFFFFF;
+            /* Get the entry and check if it's empty */
+            TimerEntry = &KiTimerTableListHead[Hand];
+            if (IsListEmpty(&TimerEntry->Entry))
+            {
+                /* Clear the time then */
+                TimerEntry->Time.HighPart = 0xFFFFFFFF;
+            }
         }
     }
 
@@ -1264,6 +1305,17 @@ KxUnwaitThread(IN DISPATCHER_HEADER *Object,
     PKTHREAD WaitThread;
     ULONG WaitKey;
 
+    /*
+     * ARM64 CRITICAL: Barrier before accessing wait list.
+     *
+     * The object's SignalState was just set to 1 by the caller.
+     * We must ensure that write is visible before we read the WaitListHead
+     * and attempt to unwait threads.
+     */
+#ifdef _M_ARM64
+    __dmb(_ARM64_BARRIER_SY);
+#endif
+
     /* Loop the Wait Entries */
     WaitList = &Object->WaitListHead;
     ASSERT(IsListEmpty(&Object->WaitListHead) == FALSE);
@@ -1308,6 +1360,16 @@ KxUnwaitThreadForEvent(IN PKEVENT Event,
     PKWAIT_BLOCK WaitBlock;
     PKTHREAD WaitThread;
 
+    /*
+     * ARM64 CRITICAL: Barrier before accessing wait list.
+     *
+     * The event's SignalState was just set to 1. We must ensure that write
+     * is visible before we read the WaitListHead and attempt to unwait threads.
+     */
+#ifdef _M_ARM64
+    __dmb(_ARM64_BARRIER_SY);
+#endif
+
     /* Loop the Wait Entries */
     WaitList = &Event->Header.WaitListHead;
     ASSERT(IsListEmpty(&Event->Header.WaitListHead) == FALSE);
@@ -1325,6 +1387,17 @@ KxUnwaitThreadForEvent(IN PKEVENT Event,
         {
             /* Un-signal it */
             Event->Header.SignalState = 0;
+
+            /*
+             * ARM64 CRITICAL: Barrier after unsignaling.
+             *
+             * We've just set SignalState to 0. We need to ensure this write
+             * is visible before we wake the thread, so the thread doesn't
+             * see a stale signaled state.
+             */
+#ifdef _M_ARM64
+            __dmb(_ARM64_BARRIER_SY);
+#endif
 
             /* Un-signal the event and unwait the thread */
             KiUnwaitThread(WaitThread, WaitBlock->WaitKey, Increment);
@@ -1448,11 +1521,22 @@ KiSelectReadyThread(IN KPRIORITY Priority,
     ASSERT(Thread->Affinity & AFFINITY_MASK(Prcb->Number));
     ASSERT(Thread->NextProcessor == Prcb->Number);
 
-    /* Remove it from the list */
-    if (RemoveEntryList(&Thread->WaitListEntry))
+    /* ARM64: Validate list entry before removal to prevent crashes on corrupted lists */
+    if (Thread->WaitListEntry.Flink != NULL && Thread->WaitListEntry.Blink != NULL &&
+        (ULONG_PTR)Thread->WaitListEntry.Flink != (ULONG_PTR)-1 &&
+        (ULONG_PTR)Thread->WaitListEntry.Blink != (ULONG_PTR)-1)
     {
-        /* The list is empty now, reset the ready summary */
-        Prcb->ReadySummary ^= PRIORITY_MASK(HighPriority);
+        /* Remove it from the list */
+        if (RemoveEntryList(&Thread->WaitListEntry))
+        {
+            /* The list is empty now, reset the ready summary */
+            Prcb->ReadySummary ^= PRIORITY_MASK(HighPriority);
+        }
+    }
+    else
+    {
+        /* List corrupted, cannot select this thread */
+        Thread = NULL;
     }
 
     /* Sanity check and return the thread */

@@ -187,6 +187,28 @@ KeSetEvent(IN PKEVENT Event,
     /* Set the Event to Signaled */
     Event->Header.SignalState = 1;
 
+    /*
+     * ARM64 CRITICAL: AGGRESSIVE memory barriers after setting event state.
+     *
+     * On ARM64, stores can be reordered and may not be visible to other threads
+     * immediately. We MUST ensure the SignalState write is visible to all CPUs
+     * before we check the WaitListHead and attempt to wake threads.
+     *
+     * TRIPLE BARRIER SEQUENCE:
+     * 1. DSB SY - Ensure ALL prior writes complete
+     * 2. ISB - Flush instruction pipeline
+     * 3. DMB SY - Ensure barrier effects visible to all CPUs
+     * 4. DSB SY - Final synchronization
+     *
+     * This aggressive approach ensures waiters can NEVER miss the signal.
+     */
+#ifdef _M_ARM64
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dsb sy" ::: "memory");
+#endif
+
     /* Check if the event just became signaled now, and it has waiters */
     if (!(PreviousState) && !(IsListEmpty(&Event->Header.WaitListHead)))
     {
@@ -244,6 +266,14 @@ KeSetEventBoostPriority(IN PKEVENT Event,
         /* Set the Event to Signaled */
         Event->Header.SignalState = 1;
 
+        /* ARM64: AGGRESSIVE QUAD barriers after setting event state */
+#ifdef _M_ARM64
+        __asm__ __volatile__("dmb sy" ::: "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+        __asm__ __volatile__("dmb sy" ::: "memory");
+        __asm__ __volatile__("dsb sy" ::: "memory");
+#endif
+
         /* Return */
         KiReleaseDispatcherLock(OldIrql);
         return;
@@ -269,18 +299,35 @@ KeSetEventBoostPriority(IN PKEVENT Event,
         WaitThread = WaitBlock->Thread;
         if (WaitingThread) *WaitingThread = WaitThread;
 
-        /* Calculate new priority */
-        Thread->Priority = KiComputeNewPriority(Thread, 0);
+        /* Validate that the waiting thread is actually in a wait state */
+        if (WaitThread->State == Waiting || WaitThread->State == GateWait)
+        {
+            /* Calculate new priority */
+            Thread->Priority = KiComputeNewPriority(Thread, 0);
 
-        /* Unlink the waiting thread */
-        KiUnlinkThread(WaitThread, STATUS_SUCCESS);
+            /* Unlink the waiting thread */
+            KiUnlinkThread(WaitThread, STATUS_SUCCESS);
 
-        /* Request priority boosting */
-        WaitThread->AdjustIncrement = Thread->Priority;
-        WaitThread->AdjustReason = AdjustBoost;
+            /* Request priority boosting */
+            WaitThread->AdjustIncrement = Thread->Priority;
+            WaitThread->AdjustReason = AdjustBoost;
 
-        /* Ready the thread */
-        KiReadyThread(WaitThread);
+            /* Ready the thread */
+            KiReadyThread(WaitThread);
+        }
+        else
+        {
+            /* Thread is not in a wait state - just signal the event */
+            Event->Header.SignalState = 1;
+
+            /* ARM64: AGGRESSIVE QUAD barriers after setting event state */
+#ifdef _M_ARM64
+            __asm__ __volatile__("dmb sy" ::: "memory");
+            __asm__ __volatile__("isb" ::: "memory");
+            __asm__ __volatile__("dmb sy" ::: "memory");
+            __asm__ __volatile__("dsb sy" ::: "memory");
+#endif
+        }
     }
 
     /* Release the Dispatcher Database Lock */

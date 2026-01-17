@@ -316,8 +316,21 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
         Thread->State = Standby;
         Prcb->NextThread = Thread;
 
-        /* Unlock the PRCB and return */
+        /* Unlock the PRCB */
         KiReleasePrcbLock(Prcb);
+
+        /*
+         * Request a DISPATCH interrupt to wake the idle CPU from WFE/HLT.
+         * This is critical for UP systems: when the idle loop is sleeping,
+         * it must be interrupted to check Prcb->NextThread and dispatch
+         * this newly-ready thread. Without this interrupt request, the
+         * thread would remain in Standby state indefinitely while the CPU
+         * stays idle (ARM64: WFE, x86: HLT, etc.).
+         *
+         * The interrupt handler (KiDispatchInterrupt) will check for
+         * Prcb->NextThread and perform the context switch.
+         */
+        HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
         return;
     }
 #endif // !CONFIG_SMP
@@ -474,9 +487,36 @@ KiSwapThread(IN PKTHREAD CurrentThread,
 
     /* Save the wait IRQL */
     WaitIrql = CurrentThread->WaitIrql;
+    /* Defensive: clamp corrupted wait IRQLs to avoid restoring garbage. */
+    if (WaitIrql > HIGH_LEVEL)
+    {
+#if DBG
+        DPRINT1("[arm64] KiSwapThread: invalid WaitIrql=%u (Thread=%p), clamping to DISPATCH_LEVEL\n",
+                WaitIrql,
+                CurrentThread);
+#endif
+        WaitIrql = DISPATCH_LEVEL;
+        CurrentThread->WaitIrql = WaitIrql;
+    }
 
     /* Swap contexts */
     ApcState = KiSwapContext(WaitIrql, CurrentThread);
+
+    /* We are now on the new thread's stack; refresh the thread/IRQL state. */
+    CurrentThread = KeGetCurrentThread();
+    ASSERT(CurrentThread != NULL);
+    WaitIrql = CurrentThread->WaitIrql;
+
+    if (WaitIrql > HIGH_LEVEL)
+    {
+#if DBG
+        DPRINT1("[arm64] KiSwapThread: invalid resume WaitIrql=%u (Thread=%p), clamping to DISPATCH_LEVEL\n",
+                WaitIrql,
+                CurrentThread);
+#endif
+        WaitIrql = DISPATCH_LEVEL;
+        CurrentThread->WaitIrql = WaitIrql;
+    }
 
     /* Get the wait status */
     WaitStatus = CurrentThread->WaitStatus;
@@ -494,6 +534,7 @@ KiSwapThread(IN PKTHREAD CurrentThread,
 
     /* Lower IRQL back to what it was and return the wait status */
     KeLowerIrql(WaitIrql);
+
     return WaitStatus;
 }
 
@@ -507,6 +548,8 @@ KiReadyThread(IN PKTHREAD Thread)
     if (Process->State != ProcessInMemory)
     {
         /* We don't page out processes in ROS */
+        DPRINT1("KiReadyThread: Process %p in unexpected state %u (Thread=%p)\n",
+                Process, Process->State, Thread);
         ASSERT(FALSE);
     }
     else if (!Thread->KernelStackResident)

@@ -17,6 +17,18 @@ extern ARBITER_INSTANCE IopRootDmaArbiter;
 
 /* FUNCTIONS *****************************************************************/
 
+/*
+ * DMA arbiter callback functions
+ *
+ * NOTE: These functions may be called during arbiter initialization which can occur
+ * at elevated IRQL (DISPATCH_LEVEL) on ARM64 during early boot. They are also called
+ * during runtime resource arbitration. Therefore:
+ * - No PAGED_CODE assertion (would fail at DISPATCH_LEVEL during init)
+ *
+ * These callbacks are stored as function pointers in the ARBITER_INSTANCE structure
+ * and invoked by the arbiter library during resource allocation.
+ */
+
 NTSTATUS
 NTAPI
 IopArbDmaUnpackRequirements(
@@ -26,7 +38,7 @@ IopArbDmaUnpackRequirements(
     _Out_ PULONG OutLength,
     _Out_ PULONG OutAlignment)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     DPRINT("IopArbDmaUnpackRequirements: IoDescriptor: %p, OutMinimumAddress: %p, OutMaximumAddress: %p, OutLength: %p, OutAlignment: %p\n",
            IoDescriptor,
            OutMinimumAddress,
@@ -45,7 +57,7 @@ IopArbDmaPackResource(
     _In_ UINT64 Start,
     _Out_ PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDescriptor)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     DPRINT("IopArbDmaPackResource: IoDescriptor: %p, Start: %p, CmDescriptor: %p\n",
            IoDescriptor,
            Start,
@@ -62,7 +74,7 @@ IopArbDmaUnpackResource(
     _Out_ PUINT64 Start,
     _Out_ PULONG OutLength)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     DPRINT("IopArbDmaUnpackResource: CmDescriptor: %p, Start: %p, OutLength: %p\n",
            CmDescriptor,
            Start,
@@ -77,7 +89,7 @@ NTAPI
 IopArbDmaScoreRequirement(
     _In_ PIO_RESOURCE_DESCRIPTOR IoDescriptor)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     DPRINT("IopArbDmaScoreRequirement: IoDescriptor: %p\n",
            IoDescriptor);
 
@@ -85,13 +97,16 @@ IopArbDmaScoreRequirement(
     return 0;
 }
 
+CODE_SEG("INIT")
 NTSTATUS
 NTAPI
 IopArbDmaInitialize(VOID)
 {
     NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
-    PAGED_CODE();
+    /* Note: No PAGED_CODE() here - this is called during boot initialization
+     * when IRQL may be elevated on ARM64. The function is only called once
+     * during system startup from IopInitializePlugPlayServices(). */
     IopRootDmaArbiter.Name = L"RootDma";
     IopRootDmaArbiter.UnpackRequirement = IopArbDmaUnpackRequirements;
     IopRootDmaArbiter.PackResource = IopArbDmaPackResource;

@@ -921,11 +921,18 @@ IopInitializeBuiltinDriver(IN PLDR_DATA_TABLE_ENTRY BootLdrEntry)
     /*
      * Initialize the driver
      */
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopInitializeBuiltinDriver: Initializing '%wZ'\n", ModuleName);
+#endif
     NTSTATUS driverEntryStatus;
     Status = IopInitializeDriverModule(LdrEntry,
                                        serviceHandle,
                                        &DriverObject,
                                        &driverEntryStatus);
+
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopInitializeBuiltinDriver: '%wZ' initialized, Status=0x%lx\n", ModuleName, Status);
+#endif
 
     if (!NT_SUCCESS(Status))
     {
@@ -1033,6 +1040,10 @@ Cleanup:
     /* Remove extra reference from IopInitializeDriverModule */
     ObDereferenceObject(DriverObject);
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopInitializeBuiltinDriver: '%wZ' RETURNING deviceAdded=%d\n", ModuleName, deviceAdded);
+#endif
+
     return deviceAdded;
 }
 
@@ -1112,6 +1123,7 @@ IopInitializeBootDrivers(VOID)
 
     /* Loop the boot drivers */
     ListHead = &KeLoaderBlock->BootDriverListHead;
+
     for (NextEntry = ListHead->Flink;
          NextEntry != ListHead;
          NextEntry = NextEntry->Flink)
@@ -1194,6 +1206,9 @@ IopInitializeBootDrivers(VOID)
     /* Loop each group index */
     for (i = 0; i < IopGroupIndex; i++)
     {
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IopInitializeBootDrivers: Processing group %lu/%lu\n", i, IopGroupIndex);
+#endif
         /* Loop each group table */
         for (NextEntry = IopGroupTable[i].Flink;
              NextEntry != &IopGroupTable[i];
@@ -1210,13 +1225,22 @@ IopInitializeBootDrivers(VOID)
             /* Initialize it */
             if (IopInitializeBuiltinDriver(LdrEntry))
             {
+#if defined(_M_ARM64)
+                DPRINT1("[arm64] IopInitializeBootDrivers: Driver added devices, queueing PiActionEnumRootDevices\n");
+#endif
                 // it does not make sense to enumerate the tree if there are no new devices added
                 PiQueueDeviceAction(IopRootDeviceNode->PhysicalDeviceObject,
                                     PiActionEnumRootDevices,
                                     NULL,
                                     NULL);
+#if defined(_M_ARM64)
+                DPRINT1("[arm64] IopInitializeBootDrivers: PiQueueDeviceAction returned, continuing loop\n");
+#endif
             }
         }
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IopInitializeBootDrivers: Group %lu done\n", i);
+#endif
     }
 
     /* HAL Root Bus is being initialized before loading the boot drivers so this may cause issues
@@ -1241,14 +1265,27 @@ IopInitializeSystemDrivers(VOID)
 {
     PUNICODE_STRING *DriverList, *SavedList;
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopInitializeSystemDrivers: ENTRY\n");
+#endif
     PiPerformSyncDeviceAction(IopRootDeviceNode->PhysicalDeviceObject, PiActionEnumDeviceTree);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopInitializeSystemDrivers: after PiPerformSyncDeviceAction\n");
+#endif
 
     /* HACK: No system drivers on the BootCD */
     if (KeLoaderBlock->SetupLdrBlock) return;
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopInitializeSystemDrivers: calling CmGetSystemDriverList\n");
+#endif
     /* Get the driver list */
     SavedList = DriverList = CmGetSystemDriverList();
     ASSERT(DriverList);
+
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopInitializeSystemDrivers: DriverList=%p\n", DriverList);
+#endif
 
     /* Loop it */
     while (*DriverList)
@@ -1528,6 +1565,10 @@ IopReinitializeDrivers(VOID)
     PDRIVER_REINIT_ITEM ReinitItem;
     PLIST_ENTRY Entry;
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopReinitializeDrivers: ENTRY\n");
+#endif
+
     /* Get the first entry and start looping */
     Entry = ExInterlockedRemoveHeadList(&DriverReinitListHead,
                                         &DriverReinitListLock);
@@ -1542,11 +1583,21 @@ IopReinitializeDrivers(VOID)
         /* Remove the device object flag */
         ReinitItem->DriverObject->Flags &= ~DRVO_REINIT_REGISTERED;
 
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IopReinitializeDrivers: calling ReinitRoutine for %wZ\n",
+                &ReinitItem->DriverObject->DriverName);
+#endif
+
         /* Call the routine */
         ReinitItem->ReinitRoutine(ReinitItem->DriverObject,
                                   ReinitItem->Context,
                                   ReinitItem->DriverObject->
                                   DriverExtension->Count);
+
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IopReinitializeDrivers: returned from ReinitRoutine for %wZ\n",
+                &ReinitItem->DriverObject->DriverName);
+#endif
 
         /* Free the entry */
         ExFreePool(Entry);
@@ -1555,6 +1606,9 @@ IopReinitializeDrivers(VOID)
         Entry = ExInterlockedRemoveHeadList(&DriverReinitListHead,
                                             &DriverReinitListLock);
     }
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopReinitializeDrivers: EXIT\n");
+#endif
 }
 
 VOID
@@ -1563,6 +1617,10 @@ IopReinitializeBootDrivers(VOID)
 {
     PDRIVER_REINIT_ITEM ReinitItem;
     PLIST_ENTRY Entry;
+
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopReinitializeBootDrivers: ENTRY\n");
+#endif
 
     /* Get the first entry and start looping */
     Entry = ExInterlockedRemoveHeadList(&DriverBootReinitListHead,
@@ -1603,6 +1661,11 @@ IopReinitializeBootDrivers(VOID)
             if ((strlen(name) >= 10) && (!_strnicmp(name, "ramdisk(0)", 10)))
                 RamdiskBoot = TRUE;
         }
+
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IopReinitializeBootDrivers: RamdiskBoot=%d, about to wait on PiEnumerationFinished\n",
+                RamdiskBoot);
+#endif
 
         if (RamdiskBoot)
         {
@@ -1654,6 +1717,9 @@ IopReinitializeBootDrivers(VOID)
             KeWaitForSingleObject(&PiEnumerationFinished, Executive, KernelMode, FALSE, NULL);
         }
     }
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopReinitializeBootDrivers: EXIT\n");
+#endif
 }
 
 /* PUBLIC FUNCTIONS ***********************************************************/
@@ -2178,6 +2244,7 @@ IopLoadUnloadDriverWorker(
 
     if (LoadParams->SetEvent)
     {
+        ASSERT(LoadParams->SetEvent == TRUE);
         KeSetEvent(&LoadParams->Event, 0, FALSE);
     }
 }
@@ -2197,6 +2264,9 @@ IopDoLoadUnloadDriver(
     _Inout_ PDRIVER_OBJECT *DriverObject)
 {
     LOAD_UNLOAD_PARAMS LoadParams;
+
+    /* Initialize the entire structure to ensure Event is zeroed */
+    RtlZeroMemory(&LoadParams, sizeof(LoadParams));
 
     /* Prepare parameters block */
     LoadParams.RegistryPath = RegistryPath;

@@ -17,6 +17,12 @@
 #define NDEBUG
 #include <debug.h>
 
+#if defined(_M_ARM64)
+#define EXP_ARM64_LOG(Stage) DPRINT1("%s\n", (Stage))
+#else
+#define EXP_ARM64_LOG(Stage) do { } while (0)
+#endif
+
 /* This is the size that we can expect from the win 2003 loader */
 #define LOADER_PARAMETER_EXTENSION_MIN_SIZE \
     RTL_SIZEOF_THROUGH_FIELD(LOADER_PARAMETER_EXTENSION, AcpiTableSize)
@@ -412,13 +418,17 @@ ExpInitNls(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Copy the codepage data in its new location. */
     ASSERT(SectionBase >= MmSystemRangeStart);
+    EXP_ARM64_LOG("[arm64] ExpInitNls Phase1: RtlCopyMemory to SectionBase");
     RtlCopyMemory(SectionBase, ExpNlsTableBase, ExpNlsTableSize);
 
     /* Free the previously allocated buffer and set the new location */
+    EXP_ARM64_LOG("[arm64] ExpInitNls Phase1: before ExFreePoolWithTag");
     ExFreePoolWithTag(ExpNlsTableBase, TAG_RTLI);
+    EXP_ARM64_LOG("[arm64] ExpInitNls Phase1: after ExFreePoolWithTag");
     ExpNlsTableBase = SectionBase;
 
     /* Initialize the NLS Tables */
+    EXP_ARM64_LOG("[arm64] ExpInitNls Phase1: before RtlInitNlsTables");
     RtlInitNlsTables((PVOID)((ULONG_PTR)ExpNlsTableBase +
                              ExpAnsiCodePageDataOffset),
                      (PVOID)((ULONG_PTR)ExpNlsTableBase +
@@ -426,12 +436,15 @@ ExpInitNls(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                      (PVOID)((ULONG_PTR)ExpNlsTableBase +
                              ExpUnicodeCaseTableDataOffset),
                      &ExpNlsTableInfo);
+    EXP_ARM64_LOG("[arm64] ExpInitNls Phase1: after RtlInitNlsTables");
     RtlResetRtlTranslations(&ExpNlsTableInfo);
+    EXP_ARM64_LOG("[arm64] ExpInitNls Phase1: after RtlResetRtlTranslations");
 
     /* Reset the base to 0 */
     SectionBase = NULL;
 
     /* Map the section in the system process */
+    EXP_ARM64_LOG("[arm64] ExpInitNls Phase1: before MmMapViewOfSection");
     Status = MmMapViewOfSection(ExpNlsSectionPointer,
                                 PsGetCurrentProcess(),
                                 &SectionBase,
@@ -442,15 +455,34 @@ ExpInitNls(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                                 ViewShare,
                                 0L,
                                 PAGE_READWRITE);
+    EXP_ARM64_LOG("[arm64] ExpInitNls Phase1: after MmMapViewOfSection");
     if (!NT_SUCCESS(Status))
     {
         /* Failed */
         KeBugCheckEx(PHASE1_INITIALIZATION_FAILED, Status, 5, 0, 0);
     }
 
-    /* Copy the table into the system process and set this as the base */
+    /*
+     * Copy the table into the system process and set this as the base.
+     *
+     * ARM64 Note: On ARM64, kernel code cannot directly access user-space
+     * addresses (SectionBase = 0x10000) because the kernel uses TTBR1
+     * (addresses >= 0xFFFF800000000000) while user space uses TTBR0.
+     * However, since both views map the same SEC_COMMIT section, the physical
+     * pages are shared and the data written via the system-space mapping
+     * is already visible in user space. The copy is therefore unnecessary.
+     */
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] ExpInitNls Phase1: SectionBase=%p (user) ExpNlsTableBase=%p (kernel) Size=0x%lx\n",
+            SectionBase, ExpNlsTableBase, (ULONG)ExpNlsTableSize);
+    DPRINT1("[arm64] ExpInitNls Phase1: Skipping redundant copy - section views share physical pages\n");
+    /* On ARM64, we keep ExpNlsTableBase pointing to kernel space mapping */
+    /* User-mode processes will use the user-space mapping at SectionBase */
+#else
     RtlCopyMemory(SectionBase, ExpNlsTableBase, ExpNlsTableSize);
     ExpNlsTableBase = SectionBase;
+#endif
+    EXP_ARM64_LOG("[arm64] ExpInitNls Phase1: complete");
 }
 
 CODE_SEG("INIT")
@@ -469,11 +501,18 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
     PRTL_USER_PROCESS_INFORMATION ProcessInformation;
     PRTL_USER_PROCESS_PARAMETERS ProcessParams = NULL;
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] ExpLoadInitialProcess: ENTRY\n");
+#endif
+
     NullString.Length = sizeof(WCHAR);
 
     /* Use the initial buffer, after the strings */
     ProcessInformation = &InitBuffer->ProcessInfo;
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] ExpLoadInitialProcess: Before ZwAllocateVirtualMemory\n");
+#endif
     /* Allocate memory for the process parameters */
     Size = sizeof(*ProcessParams) + ((MAX_WIN32_PATH * 6) * sizeof(WCHAR));
     Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
@@ -482,6 +521,10 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
                                      &Size,
                                      MEM_RESERVE | MEM_COMMIT,
                                      PAGE_READWRITE);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] ExpLoadInitialProcess: ZwAllocateVirtualMemory returned Status=0x%lx ProcessParams=%p\n",
+            Status, ProcessParams);
+#endif
     if (!NT_SUCCESS(Status))
     {
         /* Failed, display error */
@@ -501,6 +544,63 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
     ProcessParams->MaximumLength = (ULONG)Size;
     ProcessParams->Flags = RTL_USER_PROCESS_PARAMETERS_NORMALIZED |
                            RTL_USER_PROCESS_PARAMETERS_RESERVE_1MB;
+
+#if defined(_M_ARM64)
+    {
+        ULONG64 ttbr0, ttbr1;
+        __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr0));
+        __asm__ volatile("mrs %0, ttbr1_el1" : "=r"(ttbr1));
+        DPRINT1("[arm64] ExpLoadInitialProcess: TTBR0=0x%llx TTBR1=0x%llx\n",
+                (unsigned long long)ttbr0, (unsigned long long)ttbr1);
+
+        /* Walk TTBR0 page tables for ProcessParams address */
+        {
+            ULONG64 va = (ULONG64)ProcessParams;
+            ULONG64 l0_idx = (va >> 39) & 0x1FF;
+            ULONG64 l1_idx = (va >> 30) & 0x1FF;
+            ULONG64 l2_idx = (va >> 21) & 0x1FF;
+            ULONG64 l3_idx = (va >> 12) & 0x1FF;
+
+            /* Map TTBR0 L0 table using KSEG0 */
+            PULONG64 L0Table = (PULONG64)(0xFFFF800000000000ULL + (ttbr0 & ~0xFFFULL));
+            ULONG64 l0_entry = L0Table[l0_idx];
+            DPRINT1("[arm64] TTBR0 Walk: VA=%p L0[%llu]=%llx (valid=%d)\n",
+                    ProcessParams, l0_idx, l0_entry, (l0_entry & 3) == 3 ? 1 : 0);
+
+            if ((l0_entry & 3) == 3) {
+                PULONG64 L1Table = (PULONG64)(0xFFFF800000000000ULL + (l0_entry & 0xFFFFFFFFF000ULL));
+                ULONG64 l1_entry = L1Table[l1_idx];
+                DPRINT1("[arm64] TTBR0 Walk: L1[%llu]=%llx (valid=%d)\n",
+                        l1_idx, l1_entry, (l1_entry & 3) == 3 ? 1 : 0);
+
+                if ((l1_entry & 3) == 3) {
+                    PULONG64 L2Table = (PULONG64)(0xFFFF800000000000ULL + (l1_entry & 0xFFFFFFFFF000ULL));
+                    ULONG64 l2_entry = L2Table[l2_idx];
+                    DPRINT1("[arm64] TTBR0 Walk: L2[%llu]=%llx (valid=%d)\n",
+                            l2_idx, l2_entry, (l2_entry & 3) == 3 ? 1 : 0);
+
+                    if ((l2_entry & 3) == 3) {
+                        PULONG64 L3Table = (PULONG64)(0xFFFF800000000000ULL + (l2_entry & 0xFFFFFFFFF000ULL));
+                        ULONG64 l3_entry = L3Table[l3_idx];
+                        DPRINT1("[arm64] TTBR0 Walk: L3[%llu]=%llx (valid=%d)\n",
+                                l3_idx, l3_entry, (l3_entry & 3) == 3 ? 1 : 0);
+                    }
+                }
+            }
+        }
+    }
+    DPRINT1("[arm64] ExpLoadInitialProcess: ProcessParams=%p Size=0x%lx\n",
+            ProcessParams, (ULONG)Size);
+    /* Test if basic struct writes work */
+    __asm__ volatile("dmb sy" ::: "memory");
+    DPRINT1("[arm64] ExpLoadInitialProcess: Verify writes - Length=0x%x Max=0x%x Flags=0x%x\n",
+            ProcessParams->Length, ProcessParams->MaximumLength, ProcessParams->Flags);
+    /* Check if there's a valid PTE for this address */
+    {
+        PMMPTE PointerPte = MiAddressToPte(ProcessParams);
+        DPRINT1("[arm64] ExpLoadInitialProcess: PTE address=%p\n", PointerPte);
+    }
+#endif
 
     /* Allocate a page for the environment */
     Size = PAGE_SIZE;
@@ -529,28 +629,72 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
 
     /* Make a buffer for the DOS path */
     p = (PWSTR)(ProcessParams + 1);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] ExpLoadInitialProcess: Step1 - ProcessParams+1=%p\n", p);
+#endif
     ProcessParams->CurrentDirectory.DosPath.Buffer = p;
     ProcessParams->CurrentDirectory.DosPath.MaximumLength = MAX_WIN32_PATH *
                                                             sizeof(WCHAR);
+#if defined(_M_ARM64)
+    /* ARM64: Flush cache lines to ensure writes are visible */
+    {
+        ULONG_PTR addr = (ULONG_PTR)&ProcessParams->CurrentDirectory.DosPath;
+        ULONG_PTR end = addr + sizeof(ProcessParams->CurrentDirectory.DosPath);
+        for (ULONG_PTR va = addr & ~63ULL; va < end; va += 64)
+        {
+            __asm__ volatile("dc cvau, %0" : : "r"(va) : "memory");
+        }
+        __asm__ volatile("dsb ish\n\tisb" ::: "memory");
+    }
+    DPRINT1("[arm64] ExpLoadInitialProcess: Step2 - CurrentDirectory.DosPath.Buffer=%p Max=0x%x\n",
+            ProcessParams->CurrentDirectory.DosPath.Buffer,
+            ProcessParams->CurrentDirectory.DosPath.MaximumLength);
+#endif
 
     /* Copy the DOS path */
+#if defined(_M_ARM64)
+    __asm__ volatile("dmb sy" ::: "memory");
+    DPRINT1("[arm64] ExpLoadInitialProcess: Step2b - About to call RtlCopyUnicodeString\n");
+    DPRINT1("[arm64] ExpLoadInitialProcess: Step2b - Dest.Buffer=%p Dest.Max=0x%x\n",
+            ProcessParams->CurrentDirectory.DosPath.Buffer,
+            ProcessParams->CurrentDirectory.DosPath.MaximumLength);
+    DPRINT1("[arm64] ExpLoadInitialProcess: Step2b - Src.Buffer=%p Src.Length=0x%x\n",
+            NtSystemRoot.Buffer, NtSystemRoot.Length);
+#endif
     RtlCopyUnicodeString(&ProcessParams->CurrentDirectory.DosPath,
                          &NtSystemRoot);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] ExpLoadInitialProcess: Step3 - After RtlCopyUnicodeString (DOS path)\n");
+#endif
 
     /* Make a buffer for the DLL Path */
     p = (PWSTR)((PCHAR)ProcessParams->CurrentDirectory.DosPath.Buffer +
                 ProcessParams->CurrentDirectory.DosPath.MaximumLength);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] ExpLoadInitialProcess: Step4 - DllPath start=%p\n", p);
+#endif
     ProcessParams->DllPath.Buffer = p;
     ProcessParams->DllPath.MaximumLength = MAX_WIN32_PATH * sizeof(WCHAR);
 
     /* Copy the DLL path and append the system32 directory */
     RtlCopyUnicodeString(&ProcessParams->DllPath,
                          &ProcessParams->CurrentDirectory.DosPath);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] ExpLoadInitialProcess: Step5 - After RtlCopyUnicodeString (DLL path)\n");
+#endif
     RtlAppendUnicodeToString(&ProcessParams->DllPath, L"\\System32");
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] ExpLoadInitialProcess: Step6 - After RtlAppendUnicodeToString\n");
+#endif
 
     /* Make a buffer for the image name */
     p = (PWSTR)((PCHAR)ProcessParams->DllPath.Buffer +
                 ProcessParams->DllPath.MaximumLength);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] ExpLoadInitialProcess: Step7 - DllPath.Buffer=%p DllPath.MaximumLength=0x%x\n",
+            ProcessParams->DllPath.Buffer, ProcessParams->DllPath.MaximumLength);
+    DPRINT1("[arm64] ExpLoadInitialProcess: Step8 - Calculated ImagePathName.Buffer=%p\n", p);
+#endif
     ProcessParams->ImagePathName.Buffer = p;
     ProcessParams->ImagePathName.MaximumLength = MAX_WIN32_PATH * sizeof(WCHAR);
 
@@ -1017,28 +1161,26 @@ ExpInitializeExecutive(IN ULONG Cpu,
 #if defined(_M_ARM64) || defined(__aarch64__)
     {
         /* ARM64 debug: entry point marker */
-        extern VOID KiArm64BootStageLog(PCSTR Message);
-        KiArm64BootStageLog("[arm64] ExpInitializeExecutive: entry");
+        DPRINT1("%s\n", "[arm64] ExpInitializeExecutive: entry");
 
         /* Check LoaderBlock pointer validity */
         if ((ULONG_PTR)LoaderBlock < 0xFFFF800000000000ULL)
         {
-            KiArm64BootStageLog("[arm64] ExpInitializeExecutive: WARNING LoaderBlock is PA!");
+            DPRINT1("%s\n", "[arm64] ExpInitializeExecutive: WARNING LoaderBlock is PA!");
         }
 
         /* Memory barrier to ensure all previous memory accesses complete */
         __asm__ volatile("dsb sy" ::: "memory");
         __asm__ volatile("isb" ::: "memory");
 
-        KiArm64BootStageLog("[arm64] ExpInitializeExecutive: after DSB/ISB");
+        DPRINT1("%s\n", "[arm64] ExpInitializeExecutive: after DSB/ISB");
     }
 #endif
 
     /* Validate Loader */
 #if defined(_M_ARM64) || defined(__aarch64__)
     {
-        extern VOID KiArm64BootStageLog(PCSTR Message);
-        KiArm64BootStageLog("[arm64] ExpInitializeExecutive: before ExpIsLoaderValid");
+        DPRINT1("%s\n", "[arm64] ExpInitializeExecutive: before ExpIsLoaderValid");
     }
 #endif
     if (!ExpIsLoaderValid(LoaderBlock))
@@ -1052,23 +1194,20 @@ ExpInitializeExecutive(IN ULONG Cpu,
     }
 #if defined(_M_ARM64) || defined(__aarch64__)
     {
-        extern VOID KiArm64BootStageLog(PCSTR Message);
-        KiArm64BootStageLog("[arm64] ExpInitializeExecutive: after ExpIsLoaderValid");
+        DPRINT1("%s\n", "[arm64] ExpInitializeExecutive: after ExpIsLoaderValid");
     }
 #endif
 
     /* Initialize PRCB pool lookaside pointers */
 #if defined(_M_ARM64) || defined(__aarch64__)
     {
-        extern VOID KiArm64BootStageLog(PCSTR Message);
-        KiArm64BootStageLog("[arm64] ExpInitializeExecutive: before ExInitPoolLookasidePointers");
+        DPRINT1("%s\n", "[arm64] ExpInitializeExecutive: before ExInitPoolLookasidePointers");
     }
 #endif
     ExInitPoolLookasidePointers();
 #if defined(_M_ARM64) || defined(__aarch64__)
     {
-        extern VOID KiArm64BootStageLog(PCSTR Message);
-        KiArm64BootStageLog("[arm64] ExpInitializeExecutive: after ExInitPoolLookasidePointers");
+        DPRINT1("%s\n", "[arm64] ExpInitializeExecutive: after ExInitPoolLookasidePointers");
     }
 #endif
 
@@ -1169,12 +1308,14 @@ ExpInitializeExecutive(IN ULONG Cpu,
                      &ExpNlsTableInfo);
     RtlResetRtlTranslations(&ExpNlsTableInfo);
 
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: before HalInitSystem");
     /* Now initialize the HAL */
     if (!HalInitSystem(ExpInitializationPhase, LoaderBlock))
     {
         /* HAL failed to initialize, bugcheck */
         KeBugCheck(HAL_INITIALIZATION_FAILED);
     }
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: after HalInitSystem");
 
     /* Make sure interrupts are active now */
     _enable();
@@ -1229,14 +1370,20 @@ ExpInitializeExecutive(IN ULONG Cpu,
     /* Add loaded CmNtGlobalFlag value */
     NtGlobalFlag |= CmNtGlobalFlag;
 
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: before ExInitSystem");
     /* Initialize the executive at phase 0 */
     if (!ExInitSystem()) KeBugCheck(PHASE0_INITIALIZATION_FAILED);
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: after ExInitSystem");
 
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: before MmArmInitSystem(0)");
     /* Initialize the memory manager at phase 0 */
     if (!MmArmInitSystem(0, LoaderBlock)) KeBugCheck(PHASE0_INITIALIZATION_FAILED);
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: after MmArmInitSystem(0)");
 
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: before ExpLoadBootSymbols");
     /* Load boot symbols */
     ExpLoadBootSymbols(LoaderBlock);
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: after ExpLoadBootSymbols");
 
     /* Check if we should break after symbol load */
     if (KdBreakAfterSymbolLoad)
@@ -1259,7 +1406,9 @@ ExpInitializeExecutive(IN ULONG Cpu,
 #endif
 
     /* Make a copy of the NLS Tables */
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: before ExpInitNls");
     ExpInitNls(LoaderBlock);
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: after ExpInitNls");
 
     /* Get the kernel's load entry */
     NtosEntry = CONTAINING_RECORD(LoaderBlock->LoadOrderListHead.Flink,
@@ -1436,20 +1585,30 @@ ExpInitializeExecutive(IN ULONG Cpu,
     }
 #endif
 
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: before ObInitSystem");
     /* Create the Basic Object Manager Types to allow new Object Types */
     if (!ObInitSystem()) KeBugCheck(OBJECT_INITIALIZATION_FAILED);
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: after ObInitSystem");
 
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: before SeInitSystem");
     /* Load basic Security for other Managers */
     if (!SeInitSystem()) KeBugCheck(SECURITY_INITIALIZATION_FAILED);
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: after SeInitSystem");
 
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: before PsInitSystem");
     /* Initialize the Process Manager */
     if (!PsInitSystem(LoaderBlock)) KeBugCheck(PROCESS_INITIALIZATION_FAILED);
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: after PsInitSystem");
 
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: before PpInitSystem");
     /* Initialize the PnP Manager */
     if (!PpInitSystem()) KeBugCheck(PP0_INITIALIZATION_FAILED);
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: after PpInitSystem");
 
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: before DbgkInitialize");
     /* Initialize the User-Mode Debugging Subsystem */
     DbgkInitialize();
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: after DbgkInitialize");
 
     /* Calculate the tick count multiplier */
     ExpTickCountMultiplier = ExComputeTickCountMultiplier(KeMaximumIncrement);
@@ -1497,6 +1656,8 @@ Phase1InitializationDiscard(IN PVOID Context)
     HANDLE KeyHandle, OptionHandle;
     PRTL_USER_PROCESS_PARAMETERS ProcessParameters = NULL;
 
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: ENTRY");
+
     /* Allocate the initialization buffer */
     InitBuffer = ExAllocatePoolWithTag(NonPagedPool,
                                        sizeof(INIT_BUFFER),
@@ -1506,6 +1667,7 @@ Phase1InitializationDiscard(IN PVOID Context)
         /* Bugcheck */
         KeBugCheckEx(PHASE1_INITIALIZATION_FAILED, STATUS_NO_MEMORY, 8, 0, 0);
     }
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: InitBuffer allocated");
 
     /* Set to phase 1 */
     ExpInitializationPhase = 1;
@@ -1973,8 +2135,10 @@ Phase1InitializationDiscard(IN PVOID Context)
     /* Set maximum update to 75% */
     InbvSetProgressBarSubset(25, 75);
 
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: before IoInitSystem");
     /* Initialize the I/O Subsystem */
     if (!IoInitSystem(LoaderBlock)) KeBugCheck(IO1_INITIALIZATION_FAILED);
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: after IoInitSystem");
 
     /* Set maximum update to 100% */
     InbvSetProgressBarSubset(0, 100);
@@ -2103,8 +2267,10 @@ Phase1InitializationDiscard(IN PVOID Context)
         NtClose(OptionHandle);
     }
 
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: before MmArmInitSystem(2)");
     /* FIXME: This doesn't do anything for now */
     MmArmInitSystem(2, LoaderBlock);
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: after MmArmInitSystem(2)");
 
     /* Update progress bar */
     InbvUpdateProgressBar(80);
@@ -2114,22 +2280,30 @@ Phase1InitializationDiscard(IN PVOID Context)
     KeI386VdmInitialize();
 #endif
 
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: before PoInitSystem(1)");
     /* Initialize Power Subsystem in Phase 1*/
     if (!PoInitSystem(1)) KeBugCheck(INTERNAL_POWER_ERROR);
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: after PoInitSystem(1)");
 
     /* Update progress bar */
     InbvUpdateProgressBar(90);
 
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: before PsInitSystem(Phase1)");
     /* Initialize the Process Manager at Phase 1 */
     if (!PsInitSystem(LoaderBlock)) KeBugCheck(PROCESS1_INITIALIZATION_FAILED);
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: after PsInitSystem(Phase1)");
 
     /* Make sure nobody touches the loader block again */
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: before MmFreeLoaderBlock");
     if (LoaderBlock == KeLoaderBlock) KeLoaderBlock = NULL;
     MmFreeLoaderBlock(LoaderBlock);
     LoaderBlock = Context = NULL;
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: after MmFreeLoaderBlock");
 
     /* Initialize the SRM in phase 1 */
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: before SeRmInitPhase1");
     if (!SeRmInitPhase1()) KeBugCheck(PROCESS1_INITIALIZATION_FAILED);
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: after SeRmInitPhase1");
 
     /* Update progress bar */
     InbvUpdateProgressBar(100);
@@ -2140,9 +2314,11 @@ Phase1InitializationDiscard(IN PVOID Context)
     /* Allow strings to be displayed */
     InbvEnableDisplayString(TRUE);
 
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: before ExpLoadInitialProcess (SMSS)");
     /* Launch initial process */
     ProcessInfo = &InitBuffer->ProcessInfo;
     ExpLoadInitialProcess(InitBuffer, &ProcessParameters, &Environment);
+    EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: after ExpLoadInitialProcess (SMSS started!)");
 
     /* Wait 5 seconds for initial process to initialize */
     Timeout.QuadPart = Int32x32To64(5, -10000000);

@@ -66,12 +66,30 @@ NTAPI
 ExInitPoolLookasidePointers(VOID)
 {
     ULONG i;
-    PKPRCB Prcb = KeGetCurrentPrcb();
+    PKPRCB Prcb;
     PGENERAL_LOOKASIDE Entry;
 
-    DPRINT1("EX: ExInitPoolLookasidePointers called, Prcb=%p CPU=%u\n",
-            Prcb,
-            Prcb ? Prcb->Number : 0xFFFF);
+#ifdef _M_ARM64
+    /*
+     * ARM64 CRITICAL: Memory barrier before reading KeArm64CurrentPcr.
+     *
+     * On ARM64's weakly-ordered memory model, writes to global variables
+     * from KiInitializePcr may not be visible here without an explicit
+     * barrier, even though we're on the same CPU. This is especially
+     * important during early boot when caches may not be fully coherent.
+     *
+     * The barrier ensures we see the most recent value of KeArm64CurrentPcr
+     * that was written in KiInitializePcr, preventing us from reading
+     * stale/uninitialized data that could cause a hang or crash.
+     *
+     * NOTE: This function is called BEFORE KdInitSystem, so DbgPrint/DPRINT1
+     * cannot be used here - they would hang trying to access uninitialized
+     * KD structures.
+     */
+    __asm__ __volatile__("dmb ish" ::: "memory");
+#endif /* _M_ARM64 */
+
+    Prcb = KeGetCurrentPrcb();
 
     /*
      * ARM64 CRITICAL: On ARM64, the PRCB lookaside pointer arrays may contain
@@ -107,16 +125,6 @@ ExInitPoolLookasidePointers(VOID)
         Prcb->PPPagedLookasideList[i].P = Entry;
         Prcb->PPPagedLookasideList[i].L = Entry;
     }
-
-    DPRINT1("EX: ExInitPoolLookasidePointers complete - initialized %u lists\n",
-            NUMBER_POOL_LOOKASIDE_LISTS);
-    DPRINT1("EX:   ExpSmallNPagedPoolLookasideLists=%p\n",
-            ExpSmallNPagedPoolLookasideLists);
-    DPRINT1("EX:   ExpSmallPagedPoolLookasideLists=%p\n",
-            ExpSmallPagedPoolLookasideLists);
-    DPRINT1("EX:   Sample NPAGED[0].ListHead=%p Depth=%u\n",
-            &ExpSmallNPagedPoolLookasideLists[0].ListHead,
-            ExpSmallNPagedPoolLookasideLists[0].Depth);
 }
 
 CODE_SEG("INIT")

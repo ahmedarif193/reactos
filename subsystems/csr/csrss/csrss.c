@@ -35,7 +35,7 @@ CsrpSetDefaultProcessHardErrorMode(VOID)
 }
 
 int
-_cdecl
+__cdecl
 _main(int argc,
       char *argv[],
       char *envp[],

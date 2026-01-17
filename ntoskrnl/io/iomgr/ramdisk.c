@@ -340,7 +340,17 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
-    // Scan memory descriptors and pick the best candidate
+    //
+    // Scan memory descriptors and pick the best candidate.
+    //
+    // Selection priority (highest to lowest):
+    // 1. LoaderXIPRom with exact length match (legacy compatibility)
+    // 2. LoaderXIPRom with larger length
+    // 3. LoaderMemoryData with exact length match (preferred for new allocations)
+    // 4. LoaderMemoryData with larger length (least preferred, more likely to be wrong)
+    //
+    // The "exact match" heuristic helps avoid selecting the wrong LoaderMemoryData
+    // descriptor when multiple such descriptors exist (e.g., BGRT image, registry hives).
     //
     MemoryDescriptor = NULL;
     BestDescriptor = NULL;
@@ -353,6 +363,7 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         ULONGLONG AvailableLength;
         ULONGLONG RequiredLength;
         ULONGLONG Score;
+        BOOLEAN IsExactMatch;
 
         MemoryDescriptor = CONTAINING_RECORD(NextEntry,
                                              MEMORY_ALLOCATION_DESCRIPTOR,
@@ -380,8 +391,26 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             continue;
         }
 
-        /* Prefer LoaderXIPRom descriptors when both types satisfy the checks */
-        Score = AvailableLength;
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_ERROR_LEVEL,
+                   "IopStartRamdisk: candidate descriptor type=%lu basePage=0x%lx pages=%lu (len=%llu) avail=%llu req=%llu\n",
+                   MemoryDescriptor->MemoryType,
+                   MemoryDescriptor->BasePage,
+                   MemoryDescriptor->PageCount,
+                   CurrentDescriptorLength,
+                   AvailableLength,
+                   RequiredLength);
+
+        //
+        // Compute selection score:
+        // - Bit 63: LoaderXIPRom (highest priority type)
+        // - Bit 62: Exact length match (prefer descriptors sized exactly for the ramdisk)
+        // - Bits 0-61: Available length (tiebreaker, prefer larger)
+        //
+        IsExactMatch = LengthSpecified && (AvailableLength == RequiredLength);
+        Score = (AvailableLength & 0x3FFFFFFFFFFFFFFFULL);
+        if (IsExactMatch)
+            Score |= (1ull << 62);
         if (MemoryDescriptor->MemoryType == LoaderXIPRom)
             Score |= (1ull << 63);
 
@@ -412,12 +441,13 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     SelectedDescriptorLength = (ULONGLONG)MemoryDescriptor->PageCount << PAGE_SHIFT;
 
     DbgPrintEx(DPFLTR_DEFAULT_ID,
-               DPFLTR_TRACE_LEVEL,
-               "IopStartRamdisk: using descriptor type %lu base %I64u pages %I64u (%I64u bytes)\n",
+               DPFLTR_ERROR_LEVEL,
+               "IopStartRamdisk: SELECTED descriptor type=%lu basePage=0x%lx pages=%lu (%llu bytes) score=0x%llx\n",
                MemoryDescriptor->MemoryType,
                MemoryDescriptor->BasePage,
                MemoryDescriptor->PageCount,
-               SelectedDescriptorLength);
+               SelectedDescriptorLength,
+               BestScore);
 
     // Setup the input buffer
     //

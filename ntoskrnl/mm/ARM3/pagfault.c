@@ -49,6 +49,13 @@ MmRebalanceMemoryConsumersAndWait(VOID);
 
 /* GLOBALS ********************************************************************/
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+/* Debug counter to verify MmArmAccessFault entry */
+volatile LONG MmArmAccessFaultEntryCount = 0;
+volatile PVOID MmArmAccessFaultLastAddress = NULL;
+volatile LONG MmArmAccessFaultInFunction = 0;
+#endif
+
 #define HYDRA_PROCESS (PEPROCESS)1
 #if MI_TRACE_PFNS
 BOOLEAN UserPdeFault = FALSE;
@@ -473,6 +480,16 @@ MiCheckVirtualAddress(IN PVOID VirtualAddress,
         /* ReactOS does not have an image list yet, so bail out to failure case */
         ASSERT(IsListEmpty(&MmSessionSpace->ImageList));
     }
+    /*
+     * NOTE: Kernel section views (like VACB buffers) are NOT handled here.
+     * They are handled by the ROS memory manager (MmNotPresentFaultSectionView)
+     * which is called via MmNotPresentFault. The fault routing in MmAccessFault
+     * (mmfault.c) is responsible for directing kernel section view faults
+     * to the correct handler based on whether the VAD is marked as ROS VAD.
+     *
+     * If we reach MmArmAccessFault for a kernel section view, it means the
+     * fault routing is broken and needs to be fixed in MmAccessFault, not here.
+     */
 
     /* Default case -- failure */
     *ProtectCode = MM_NOACCESS;
@@ -975,6 +992,7 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
 
     /* Must be called with an valid prototype PTE, with the PFN lock held */
     MI_ASSERT_PFN_LOCK_HELD();
+
     ASSERT(PointerProtoPte->u.Hard.Valid == 1);
 
     /* Get the page */
@@ -986,6 +1004,29 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
 
     /* Increment the share count for the page table */
     PageTablePte = MiAddressToPte(PointerPte);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    //
+    // ARM64: Validate that the page table PTE is valid before accessing PageFrameNumber.
+    // This should always be true since we just wrote to PointerPte, but verify to catch
+    // any subtle issues with page table mapping.
+    //
+    if (!PageTablePte->u.Hard.Valid)
+    {
+        DPRINT1("[pagfault] MiCompleteProtoPteFault: PageTablePte is INVALID!\n");
+        DPRINT1("[pagfault]   PointerPte=%p PageTablePte=%p PageTablePte->u.Long=0x%llx\n",
+                PointerPte, PageTablePte, (unsigned long long)PageTablePte->u.Long);
+        DPRINT1("[pagfault]   This should never happen - the page table must be mapped to write PointerPte\n");
+        //
+        // On ARM64, accessing u.Hard.PageFrameNumber on an invalid PTE can return 0,
+        // which would cause a crash when accessing PFN database entry 0.
+        // Return an error instead.
+        //
+        MiReleasePfnLock(OldIrql);
+        return STATUS_INTERNAL_ERROR;
+    }
+#endif
+
     Pfn2 = MiGetPfnEntry(PageTablePte->u.Hard.PageFrameNumber);
     Pfn2->u2.ShareCount++;
 
@@ -1333,10 +1374,12 @@ MiResolveProtoPteFault(IN BOOLEAN StoreInstruction,
 
     /* Read the prototype PTE and check if it's valid */
     TempPte = *PointerProtoPte;
+
     if (TempPte.u.Hard.Valid == 1)
     {
         /* One more user of this mapped page */
         PageFrameIndex = PFN_FROM_PTE(&TempPte);
+
         Pfn1 = MiGetPfnEntry(PageFrameIndex);
         Pfn1->u2.ShareCount++;
 
@@ -1357,11 +1400,32 @@ MiResolveProtoPteFault(IN BOOLEAN StoreInstruction,
     {
         /* Release the lock */
         DPRINT1("Access on reserved section?\n");
+        DPRINT1("[pagfault] MiResolveProtoPteFault: Zero prototype PTE at %p for VA %p\n",
+                PointerProtoPte, Address);
         MiReleasePfnLock(OldIrql);
         return STATUS_ACCESS_VIOLATION;
     }
 
     /* There is no such thing as a decommitted prototype PTE */
+    if (TempPte.u.Long == MmDecommittedPte.u.Long)
+    {
+        DPRINT1("[pagfault] ERROR: Decommitted prototype PTE!\n");
+        DPRINT1("[pagfault]   VA: %p\n", Address);
+        DPRINT1("[pagfault]   PointerPte: %p (contains 0x%I64x)\n", PointerPte, PointerPte->u.Long);
+        DPRINT1("[pagfault]   PointerProtoPte: %p (contains 0x%I64x)\n", PointerProtoPte, TempPte.u.Long);
+        DPRINT1("[pagfault]   MmDecommittedPte: 0x%I64x\n", MmDecommittedPte.u.Long);
+
+        /* Check if this is System View Space */
+        extern PVOID MiSystemViewStart;
+        extern SIZE_T MmSystemViewSize;
+        if (MiSystemViewStart != NULL &&
+            (ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < ((ULONG_PTR)MiSystemViewStart + MmSystemViewSize))
+        {
+            DPRINT1("[pagfault] *** This is in System View Space! (Start=%p Size=0x%lx) ***\n",
+                    MiSystemViewStart, (ULONG)MmSystemViewSize);
+        }
+    }
     ASSERT(TempPte.u.Long != MmDecommittedPte.u.Long);
 
     /* Check for access rights on the PTE proper */
@@ -1499,6 +1563,7 @@ MiResolveProtoPteFault(IN BOOLEAN StoreInstruction,
                                           (ULONG)TempPte.u.Soft.Protection,
                                           Process,
                                           OldIrql);
+
 #if MI_TRACE_PFNS
         /* Update debug info */
         if (TrapInformation)
@@ -1506,7 +1571,7 @@ MiResolveProtoPteFault(IN BOOLEAN StoreInstruction,
         else
             MiGetPfnEntry(PointerProtoPte->u.Hard.PageFrameNumber)->CallSite = _ReturnAddress();
 #endif
-                                      
+
         ASSERT(NT_SUCCESS(Status));
     }
 
@@ -1565,6 +1630,7 @@ MiDispatchFault(IN ULONG FaultCode,
 
         /* Check if this is a kernel-mode address */
         SuperProtoPte = MiAddressToPte(PointerProtoPte);
+
         if (Address >= MmSystemRangeStart)
         {
             /* Lock the PFN database */
@@ -1573,7 +1639,77 @@ MiDispatchFault(IN ULONG FaultCode,
             /* Has the PTE been made valid yet? */
             if (!SuperProtoPte->u.Hard.Valid)
             {
+#if defined(_M_ARM64) || defined(__aarch64__)
+                /*
+                 * ARM64: The SuperProtoPte (PTE mapping the prototype PTE page) is invalid.
+                 * This occurs when prototype PTEs in paged pool haven't been mapped yet.
+                 *
+                 * On ARM64, System View Space prototype PTEs are allocated in paged pool
+                 * (e.g., 0xFFFFF8A000007B40), and the page containing these prototype PTEs
+                 * might not be mapped initially. Unlike x86/AMD64 where paged pool pages
+                 * are often pre-faulted, ARM64's memory initialization can leave these
+                 * unmapped until first access.
+                 *
+                 * Solution: Release the PFN lock and recursively fault to bring in the
+                 * SuperProtoPte page, then retry the original prototype PTE resolution.
+                 *
+                 * Windows NT behavior: According to Windows Internals and NT kernel sources,
+                 * MmAccessFault can be called recursively to resolve nested faults. The
+                 * MiDispatchFault Recursive parameter exists for this scenario, though
+                 * the actual recursive call happens at the MmAccessFault level.
+                 */
+                PVOID ProtoPteAddress = PointerProtoPte;
+
+                /* Release PFN lock before recursive fault - required for memory manager invariants */
+                MiReleasePfnLock(LockIrql);
+
+                DPRINT("ARM64: SuperProtoPte %p for ProtoPte %p is invalid, recursively faulting\n",
+                       SuperProtoPte, PointerProtoPte);
+
+                /*
+                 * Recursively fault on the prototype PTE address itself to bring in
+                 * the paged pool page containing the prototype PTE. This is a read
+                 * access (not a write), so use fault code 0x0 for not-present read.
+                 */
+                Status = MmArmAccessFault(0, /* Not present, read access */
+                                         ProtoPteAddress,
+                                         KernelMode,
+                                         TrapInformation);
+
+                if (!NT_SUCCESS(Status))
+                {
+                    DPRINT1("ARM64: Failed to fault in SuperProtoPte %p for ProtoPte %p, status=0x%lx\n",
+                           SuperProtoPte, PointerProtoPte, Status);
+                    return Status;
+                }
+
+                /*
+                 * The recursive fault succeeded. Now re-acquire the PFN lock and
+                 * verify the SuperProtoPte is now valid before proceeding.
+                 */
+                LockIrql = MiAcquirePfnLock();
+
+                if (!SuperProtoPte->u.Hard.Valid)
+                {
+                    /*
+                     * This should not happen - we just faulted it in. If we get here,
+                     * it indicates a race condition or memory corruption.
+                     */
+                    MiReleasePfnLock(LockIrql);
+                    DPRINT1("ARM64: SuperProtoPte %p still invalid after recursive fault\n", SuperProtoPte);
+                    return STATUS_IN_PAGE_ERROR;
+                }
+
+                DPRINT("ARM64: SuperProtoPte %p now valid (PFN=0x%lx), continuing with ProtoPte resolution\n",
+                       SuperProtoPte, SuperProtoPte->u.Hard.PageFrameNumber);
+#else
+                /*
+                 * On x86/AMD64, the SuperProtoPte should always be valid by the time
+                 * we reach this code path, as paged pool initialization pre-faults
+                 * the necessary pages. If we hit this, it's a bug.
+                 */
                 ASSERT(FALSE);
+#endif
             }
             else if (PointerPte->u.Hard.Valid == 1)
             {
@@ -1908,14 +2044,114 @@ MmArmAccessFault(IN ULONG FaultCode,
     ULONG Color;
     BOOLEAN IsSessionAddress;
     PMMPFN Pfn1;
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* Mark entry before any other code */
+    InterlockedExchange(&MmArmAccessFaultInFunction, 1);
+    InterlockedIncrement(&MmArmAccessFaultEntryCount);
+    MmArmAccessFaultLastAddress = Address;
+#endif
+
     DPRINT("ARM3 FAULT AT: %p\n", Address);
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* Reject non-canonical addresses early to avoid bogus user-range walks. */
+    {
+        LONG64 CanonicalHigh = (LONG64)(LONG_PTR)Address >> 48;
+        if ((CanonicalHigh != 0) && (CanonicalHigh != -1))
+        {
+            if (Mode == UserMode)
+            {
+                return STATUS_ACCESS_VIOLATION;
+            }
+            KeBugCheckEx(PAGE_FAULT_IN_NONPAGED_AREA,
+                         (ULONG_PTR)Address,
+                         FaultCode,
+                         (ULONG_PTR)TrapInformation,
+                         0xA64BAD2);
+        }
+    }
+#endif
+
+#if defined(_M_ARM64) || defined(__aarch64__)
     /*
-     * Note: On ARM64, the alias pages (PTE_BASE, PDE_BASE, PPE_BASE, PXE_BASE)
-     * must be set up during boot initialization in MiInitMachineDependent.
-     * We cannot call MiArm64MapAliasForPointer here because it can cause
-     * recursive faults when paged pool is not yet available.
+     * ARM64 self-map alias page mapping.
+     *
+     * On ARM64, the page table entries (PointerPxe, PointerPpe, PointerPde, PointerPte)
+     * are accessed via a self-mapping region (starting at PTE_BASE = 0xFFFFF68000000000).
+     * Unlike x86-64, ARM64 does not have a recursive page table structure that
+     * automatically maps all page table pages into the self-map region.
+     *
+     * We must ensure the alias pages backing these pointers are mapped BEFORE
+     * we try to dereference them. Otherwise, accessing PointerPte (which is in
+     * the self-map region) will cause a nested page fault.
+     *
+     * This must be done for ALL kernel addresses, not just page table addresses,
+     * because any kernel page fault requires us to read the page table entries.
      */
+    if (Address >= MmSystemRangeStart)
+    {
+        extern VOID MiArm64MapAliasForPointer(_In_ PVOID AliasVa);
+
+#if (_MI_PAGING_LEVELS == 4)
+        MiArm64MapAliasForPointer(PointerPxe);
+#endif
+#if (_MI_PAGING_LEVELS >= 3)
+        MiArm64MapAliasForPointer(PointerPpe);
+#endif
+        MiArm64MapAliasForPointer(PointerPde);
+        MiArm64MapAliasForPointer(PointerPte);
+
+        __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
+    }
+
+    /*
+     * ARM64 software Access Flag handling (TCR.HA=0):
+     * Some CPUs (cpu=host) do not support hardware AF updates, so valid entries
+     * with AF=0 raise an Access Flag fault. Detect that case via ESR and set AF.
+     */
+    if (TrapInformation != NULL)
+    {
+        PKTRAP_FRAME TrapFrame = (PKTRAP_FRAME)TrapInformation;
+        ULONG FaultStatus = TrapFrame->Esr & 0x3FULL;
+
+        /* Access flag fault at any level: 0x08-0x0B */
+        if ((FaultStatus & 0x3C) == 0x08)
+        {
+            ULONG FaultLevel = FaultStatus & 0x3;
+            PMMPTE AccessPte = PointerPte;
+
+#if (_MI_PAGING_LEVELS >= 3)
+            if (FaultLevel == 2)
+            {
+                AccessPte = (PMMPTE)PointerPde;
+            }
+            else if (FaultLevel == 1)
+            {
+                AccessPte = (PMMPTE)PointerPpe;
+            }
+#if (_MI_PAGING_LEVELS == 4)
+            else if (FaultLevel == 0)
+            {
+                AccessPte = (PMMPTE)PointerPxe;
+            }
+#endif
+#endif
+
+            if (AccessPte != NULL)
+            {
+                MMPTE AccessedPte = *AccessPte;
+                if (((AccessedPte.u.Long & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_INVALID) &&
+                    ((AccessedPte.u.Long & PTE_ACCESSED) == 0))
+                {
+                    AccessedPte.u.Long |= PTE_ACCESSED;
+                    MI_UPDATE_VALID_PTE(AccessPte, AccessedPte);
+                    return STATUS_SUCCESS;
+                }
+            }
+        }
+    }
+#endif
 
     /* Check for page fault on high IRQL */
     if (OldIrql > APC_LEVEL)
@@ -1942,19 +2178,57 @@ MmArmAccessFault(IN ULONG FaultCode,
                      OldIrql);
             if (TrapInformation)
             {
-                PKTRAP_FRAME TrapFrame = TrapInformation;
+#if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_ARM) || defined(_M_ARM64) || defined(__aarch64__)
 #ifdef _M_IX86
-                DbgPrint("MM:***EIP %p, EFL %p\n", TrapFrame->Eip, TrapFrame->EFlags);
-                DbgPrint("MM:***EAX %p, ECX %p EDX %p\n", TrapFrame->Eax, TrapFrame->Ecx, TrapFrame->Edx);
-                DbgPrint("MM:***EBX %p, ESI %p EDI %p\n", TrapFrame->Ebx, TrapFrame->Esi, TrapFrame->Edi);
+                DbgPrint("MM:***EIP %p, EFL %p\n",
+                         ((PKTRAP_FRAME)TrapInformation)->Eip,
+                         ((PKTRAP_FRAME)TrapInformation)->EFlags);
+                DbgPrint("MM:***EAX %p, ECX %p EDX %p\n",
+                         ((PKTRAP_FRAME)TrapInformation)->Eax,
+                         ((PKTRAP_FRAME)TrapInformation)->Ecx,
+                         ((PKTRAP_FRAME)TrapInformation)->Edx);
+                DbgPrint("MM:***EBX %p, ESI %p EDI %p\n",
+                         ((PKTRAP_FRAME)TrapInformation)->Ebx,
+                         ((PKTRAP_FRAME)TrapInformation)->Esi,
+                         ((PKTRAP_FRAME)TrapInformation)->Edi);
 #elif defined(_M_AMD64)
-                DbgPrint("MM:***RIP %p, EFL %p\n", TrapFrame->Rip, TrapFrame->EFlags);
-                DbgPrint("MM:***RAX %p, RCX %p RDX %p\n", TrapFrame->Rax, TrapFrame->Rcx, TrapFrame->Rdx);
-                DbgPrint("MM:***RBX %p, RSI %p RDI %p\n", TrapFrame->Rbx, TrapFrame->Rsi, TrapFrame->Rdi);
+                DbgPrint("MM:***RIP %p, EFL %p\n",
+                         ((PKTRAP_FRAME)TrapInformation)->Rip,
+                         ((PKTRAP_FRAME)TrapInformation)->EFlags);
+                DbgPrint("MM:***RAX %p, RCX %p RDX %p\n",
+                         ((PKTRAP_FRAME)TrapInformation)->Rax,
+                         ((PKTRAP_FRAME)TrapInformation)->Rcx,
+                         ((PKTRAP_FRAME)TrapInformation)->Rdx);
+                DbgPrint("MM:***RBX %p, RSI %p RDI %p\n",
+                         ((PKTRAP_FRAME)TrapInformation)->Rbx,
+                         ((PKTRAP_FRAME)TrapInformation)->Rsi,
+                         ((PKTRAP_FRAME)TrapInformation)->Rdi);
 #elif defined(_M_ARM)
-                DbgPrint("MM:***PC %p\n", TrapFrame->Pc);
-                DbgPrint("MM:***R0 %p, R1 %p R2 %p, R3 %p\n", TrapFrame->R0, TrapFrame->R1, TrapFrame->R2, TrapFrame->R3);
-                DbgPrint("MM:***R11 %p, R12 %p SP %p, LR %p\n", TrapFrame->R11, TrapFrame->R12, TrapFrame->Sp, TrapFrame->Lr);
+                DbgPrint("MM:***PC %p\n", ((PKTRAP_FRAME)TrapInformation)->Pc);
+                DbgPrint("MM:***R0 %p, R1 %p R2 %p, R3 %p\n",
+                         ((PKTRAP_FRAME)TrapInformation)->R0,
+                         ((PKTRAP_FRAME)TrapInformation)->R1,
+                         ((PKTRAP_FRAME)TrapInformation)->R2,
+                         ((PKTRAP_FRAME)TrapInformation)->R3);
+                DbgPrint("MM:***R11 %p, R12 %p SP %p, LR %p\n",
+                         ((PKTRAP_FRAME)TrapInformation)->R11,
+                         ((PKTRAP_FRAME)TrapInformation)->R12,
+                         ((PKTRAP_FRAME)TrapInformation)->Sp,
+                         ((PKTRAP_FRAME)TrapInformation)->Lr);
+#elif defined(_M_ARM64) || defined(__aarch64__)
+                DbgPrint("MM:***PC %p\n", (PVOID)(ULONG_PTR)((PKTRAP_FRAME)TrapInformation)->Pc);
+                DbgPrint("MM:***X0 %p, X1 %p X2 %p, X3 %p\n",
+                         (PVOID)(ULONG_PTR)((PKTRAP_FRAME)TrapInformation)->X0,
+                         (PVOID)(ULONG_PTR)((PKTRAP_FRAME)TrapInformation)->X1,
+                         (PVOID)(ULONG_PTR)((PKTRAP_FRAME)TrapInformation)->X2,
+                         (PVOID)(ULONG_PTR)((PKTRAP_FRAME)TrapInformation)->X3);
+                DbgPrint("MM:***FP %p, SP %p, LR %p\n",
+                         (PVOID)(ULONG_PTR)((PKTRAP_FRAME)TrapInformation)->Fp,
+                         (PVOID)(ULONG_PTR)((PKTRAP_FRAME)TrapInformation)->Sp,
+                         (PVOID)(ULONG_PTR)((PKTRAP_FRAME)TrapInformation)->Lr);
+#endif
+#else
+                UNREFERENCED_PARAMETER(TrapInformation);
 #endif
             }
 
@@ -2040,6 +2314,16 @@ MmArmAccessFault(IN ULONG FaultCode,
     /* Check for kernel fault address */
     if (Address >= MmSystemRangeStart)
     {
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /* Targeted debug for VACB address */
+        if ((ULONG64)Address >= 0xFFFF8000BCC00000ULL && (ULONG64)Address < 0xFFFF8000BD000000ULL)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[MmArmAccessFault] VACB addr=%p PXE=%llx PPE=%llx PDE=%llx PTE=%llx\n",
+                       Address, PointerPxe->u.Long, PointerPpe->u.Long, PointerPde->u.Long,
+                       PointerPte ? PointerPte->u.Long : 0);
+        }
+#endif
         /* Bail out, if the fault came from user mode */
         if (Mode == UserMode) return STATUS_ACCESS_VIOLATION;
 
@@ -2074,25 +2358,7 @@ MmArmAccessFault(IN ULONG FaultCode,
 
         /* The PDE is valid, so read the PTE */
         TempPte = *PointerPte;
-#if defined(_M_ARM64) || defined(__aarch64__)
-        {
-            /* ARM64 DIAGNOSTIC: Log PTE state to understand early-return path */
-            static volatile LONG DiagBudget = 5;
-            if ((DiagBudget > 0) && MI_IS_PAGE_TABLE_OR_HYPER_ADDRESS(Address))
-            {
-                if (InterlockedDecrement(&DiagBudget) >= 0)
-                {
-                    extern VOID KiArm64BootStageLog(_In_z_ PCSTR Message);
-                    CHAR Buffer[128];
-                    ULONG IsValid = MI_IS_PTE_VALID_ARM64(TempPte) ? 1 : 0;
-                    RtlStringCbPrintfA(Buffer, sizeof(Buffer),
-                        "[pagfault] Addr=%p PTE=0x%I64x Bits[1:0]=%u ValidL3=%u",
-                        Address, TempPte.u.Long, (ULONG)(TempPte.u.Long & 3), IsValid);
-                    KiArm64BootStageLog(Buffer);
-                }
-            }
-        }
-#endif
+
         /*
          * ARM64: Check if the PTE is valid using architecture-specific rules.
          * On ARM64, L3 page descriptors require bits [1:0] = 0b11 for validity.
@@ -2106,21 +2372,6 @@ MmArmAccessFault(IN ULONG FaultCode,
         if (TempPte.u.Hard.Valid == 1)
 #endif
         {
-#if defined(_M_ARM64) || defined(__aarch64__)
-            /* ARM64 DIAGNOSTIC: Log that we're entering early-return path */
-            static volatile LONG DiagBudget2 = 5;
-            if ((DiagBudget2 > 0) && MI_IS_PAGE_TABLE_OR_HYPER_ADDRESS(Address))
-            {
-                if (InterlockedDecrement(&DiagBudget2) >= 0)
-                {
-                    extern VOID KiArm64BootStageLog(_In_z_ PCSTR Message);
-                    CHAR Buffer[128];
-                    RtlStringCbPrintfA(Buffer, sizeof(Buffer),
-                        "[pagfault] Line2070: PTE valid, entering early-return path");
-                    KiArm64BootStageLog(Buffer);
-                }
-            }
-#endif
             /* Check if this was system space or session space */
             if (!IsSessionAddress)
             {
@@ -2197,20 +2448,6 @@ MmArmAccessFault(IN ULONG FaultCode,
                  */
                 if (MI_IS_PAGE_TABLE_OR_HYPER_ADDRESS(Address))
                 {
-                    static volatile LONG DiagBudget3 = 5;
-                    if (DiagBudget3 > 0)
-                    {
-                        if (InterlockedDecrement(&DiagBudget3) >= 0)
-                        {
-                            extern VOID KiArm64BootStageLog(_In_z_ PCSTR Message);
-                            CHAR Buffer[128];
-                            RtlStringCbPrintfA(Buffer, sizeof(Buffer),
-                                "[pagfault] Line2111: Invalidating TLB for self-map addr=%p",
-                                Address);
-                            KiArm64BootStageLog(Buffer);
-                        }
-                    }
-
                     /*
                      * Invalidate TLB for this specific VA using TLBI VAE1IS.
                      * - DSB ISHST: Ensure all prior stores (PTE writes) are visible
@@ -2299,23 +2536,6 @@ _WARN("Session space stuff is not implemented yet!")
                     "dsb ish\n\t"             /* Barrier before instruction fetch */
                     "isb"                      /* Synchronize context */
                     : : "r"(VaForTlbi) : "memory");
-            }
-
-            /* Log the first few self-map faults for debugging */
-            {
-                static volatile LONG LogBudget = 10;
-                if (LogBudget > 0)
-                {
-                    LONG Snapshot = InterlockedDecrement(&LogBudget);
-                    if (Snapshot >= 0)
-                    {
-                        DbgPrintEx(DPFLTR_MM_ID,
-                                   DPFLTR_INFO_LEVEL,
-                                   "[arm64] MmArmAccessFault: resolved self-map fault at %p (FaultCode=0x%lx)\n",
-                                   Address,
-                                   FaultCode);
-                    }
-                }
             }
 
             /* Return success - the faulting instruction will retry and succeed */
@@ -2453,18 +2673,53 @@ RetryKernel:
                              4);
             }
 
-            /* Get the prototype PTE! */
-            ProtoPte = MiProtoPteToPte(&TempPte);
-
-            /* Do we need to locate the prototype PTE in session space? */
-            if ((IsSessionAddress) &&
-                (TempPte.u.Soft.PageFileHigh == MI_PTE_LOOKUP_NEEDED))
+            /*
+             * Check if we need to locate the prototype PTE via VAD lookup.
+             * When PageFileHigh == MI_PTE_LOOKUP_NEEDED, the prototype PTE address
+             * is not encoded in the PTE itself and must be looked up.
+             *
+             * ARM64: This applies to System View Space and session space.
+             * The PTE format in these cases uses MMPTE_SOFTWARE with
+             * PageFileHigh=MI_PTE_LOOKUP_NEEDED as a sentinel value.
+             */
+            if (TempPte.u.Soft.PageFileHigh == MI_PTE_LOOKUP_NEEDED)
             {
-                /* Yep, go find it as well as the VAD for it */
+                /* Look up the prototype PTE via VAD */
                 ProtoPte = MiCheckVirtualAddress(Address,
                                                  &ProtectionCode,
                                                  &Vad);
-                ASSERT(ProtoPte != NULL);
+                if (!ProtoPte)
+                {
+                    /* Invalid address - bugcheck */
+                    KeBugCheckEx(PAGE_FAULT_IN_NONPAGED_AREA,
+                                 (ULONG_PTR)Address,
+                                 FaultCode,
+                                 (ULONG_PTR)TrapInformation,
+                                 0x100);
+                }
+            }
+            else
+            {
+                /*
+                 * The prototype PTE address is encoded in the PTE.
+                 * On ARM64/x64, this uses MMPTE_PROTOTYPE format with ProtoAddress
+                 * in bits 16-63 (sign-extended from bit 47).
+                 *
+                 * Decode the prototype PTE address from the PTE value.
+                 */
+                ProtoPte = MiProtoPteToPte(&TempPte);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+                /* Sanity check: prototype PTEs should be in kernel space */
+                if ((ULONG_PTR)ProtoPte < 0xFFFF000000000000ULL)
+                {
+                    KeBugCheckEx(PAGE_FAULT_IN_NONPAGED_AREA,
+                                 (ULONG_PTR)Address,
+                                 (ULONG_PTR)ProtoPte,
+                                 TempPte.u.Long,
+                                 0x200);
+                }
+#endif
             }
         }
         else
@@ -2483,18 +2738,38 @@ RetryKernel:
                              1);
             }
 
-            /* Check for no protecton at all */
+            /* Check for no protection at all */
             if (TempPte.u.Soft.Protection == MM_ZERO_ACCESS)
             {
-                /* Bugcheck the system! */
+                /*
+                 * ARM64/AMD64 KERNEL SECTION VIEW DEBUG:
+                 *
+                 * If we reach here with a kernel section view address, it means
+                 * the fault routing in MmAccessFault (mmfault.c) is broken.
+                 * Kernel section views should be routed to MmNotPresentFault,
+                 * NOT to MmArmAccessFault.
+                 *
+                 * Log diagnostic info before bugchecking.
+                 */
+#if defined(_M_ARM64) || defined(__aarch64__)
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[MmArmAccessFault] MM_ZERO_ACCESS at %p - should not be here for section views!\n",
+                    Address);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[MmArmAccessFault] TempPte=0x%llx FaultCode=%x\n",
+                    TempPte.u.Long, FaultCode);
+
+                /* Bugcheck - this address has no protection */
                 KeBugCheckEx(PAGE_FAULT_IN_NONPAGED_AREA,
                              (ULONG_PTR)Address,
                              FaultCode,
                              (ULONG_PTR)TrapInformation,
                              0);
+#endif
             }
         }
 
+// HandleProtoPte: /* Unused label - may be needed for future proto PTE handling */
         /* Check for demand page */
         if (MI_IS_WRITE_ACCESS(FaultCode) &&
             !(ProtoPte) &&
@@ -2558,7 +2833,11 @@ UserFault:
         ASSERT(PointerPxe->u.Long == 0);
 
         /* This is only possible for user mode addresses! */
-        ASSERT(PointerPte <= MiHighestUserPte);
+        if (PointerPte > MiHighestUserPte)
+        {
+            Status = STATUS_ACCESS_VIOLATION;
+            goto ExitUser;
+        }
 
         /* Check if we have a VAD */
         MiCheckVirtualAddress(Address, &ProtectionCode, &Vad);
@@ -2592,7 +2871,11 @@ UserFault:
         ASSERT(PointerPpe->u.Long == 0);
 
         /* This is only possible for user mode addresses! */
-        ASSERT(PointerPte <= MiHighestUserPte);
+        if (PointerPte > MiHighestUserPte)
+        {
+            Status = STATUS_ACCESS_VIOLATION;
+            goto ExitUser;
+        }
 
         /* Check if we have a VAD, unless we did this already */
         if (ProtectionCode == MM_INVALID_PROTECTION)
@@ -2760,7 +3043,7 @@ UserFault:
             if (CurrentProcess->Pcb.Flags.ExecuteEnable)
             {
                 /* Fix up the PTE to be executable */
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(__aarch64__)
                 TempPte.u.Hard.UserNoExecute = 0;
                 TempPte.u.Hard.PrivilegedNoExecute = 0;
 #else

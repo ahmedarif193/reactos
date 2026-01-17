@@ -77,11 +77,4 @@ add_library(ntdllsys ${ntdllsys_asm})
 set_target_properties(ntdllsys PROPERTIES LINKER_LANGUAGE "C")
 add_dependencies(ntdllsys asm ntos_syscalls)
 
-if(NT_ARCH STREQUAL "arm64" AND (CMAKE_C_COMPILER_ID STREQUAL "Clang" OR CMAKE_C_COMPILER_ID STREQUAL "GNU"))
-    add_custom_command(TARGET ntoskrnl POST_BUILD
-        COMMAND ${CMAKE_OBJCOPY} --only-keep-debug $<TARGET_FILE:ntoskrnl> $<TARGET_FILE:ntoskrnl>.dbg
-        COMMAND ${CMAKE_STRIP} --strip-debug $<TARGET_FILE:ntoskrnl>
-        COMMAND ${CMAKE_OBJCOPY} --add-gnu-debuglink=$<TARGET_FILE:ntoskrnl>.dbg $<TARGET_FILE:ntoskrnl>
-        COMMENT "Stripping debug info from ntoskrnl and saving to .dbg file"
-    )
-endif()
+# DWARF sections are preserved directly in the binary for rossym_new to parse

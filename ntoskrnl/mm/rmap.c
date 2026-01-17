@@ -382,6 +382,7 @@ MmInsertRmap(PFN_NUMBER Page, PEPROCESS Process,
         Address = (PVOID)PAGE_ROUND_DOWN(Address);
 
     new_entry = ExAllocateFromNPagedLookasideList(&RmapLookasideList);
+
     if (new_entry == NULL)
     {
         KeBugCheck(MEMORY_MANAGEMENT);
@@ -405,11 +406,11 @@ MmInsertRmap(PFN_NUMBER Page, PEPROCESS Process,
         !RMAP_IS_SEGMENT(Address) &&
         MmGetPfnForProcess(Process, Address) != Page)
     {
-        DPRINT1("Insert rmap (%d, 0x%.8X) 0x%.8X which doesn't match physical "
-                "address 0x%.8X\n", Process ? Process->UniqueProcessId : 0,
+        DPRINT1("Insert rmap (%d, 0x%p) 0x%p which doesn't match physical "
+                "address 0x%p\n", Process ? (int)(ULONG_PTR)Process->UniqueProcessId : 0,
                 Address,
-                MmGetPfnForProcess(Process, Address) << PAGE_SHIFT,
-                Page << PAGE_SHIFT);
+                (PVOID)(ULONG_PTR)(MmGetPfnForProcess(Process, Address) << PAGE_SHIFT),
+                (PVOID)(ULONG_PTR)(Page << PAGE_SHIFT));
         KeBugCheck(MEMORY_MANAGEMENT);
     }
 

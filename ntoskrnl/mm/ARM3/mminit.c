@@ -18,6 +18,22 @@
 
 extern PPOOL_DESCRIPTOR PoolVector[2];
 
+#if defined(_M_ARM64)
+/* ARM64: Forward declaration for System View Space PTE diagnostic helper */
+extern VOID MiArm64CheckSystemViewSpacePte(_In_z_ PCSTR Location);
+extern VOID MiArm64BuildPageTablePfnBitmap(VOID);
+extern BOOLEAN MiArm64IsPageTablePfn(_In_ PFN_NUMBER Pfn);
+static BOOLEAN MiArm64PfnDatabaseInitialized;
+
+#define MI_ARM64_MAX_PFN_RANGES 1024
+typedef struct _MI_ARM64_PFN_RANGE
+{
+    ULONG MemoryType;
+    PFN_NUMBER BasePage;
+    PFN_NUMBER PageCount;
+} MI_ARM64_PFN_RANGE;
+#endif
+
 /* GLOBALS ********************************************************************/
 
 //
@@ -472,6 +488,24 @@ MxGetNextPage(IN PFN_NUMBER PageCount)
 {
     PFN_NUMBER Pfn;
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    if (MiArm64PfnDatabaseInitialized && (PageCount == 1))
+    {
+        KIRQL OldIrql = MiAcquirePfnLock();
+        Pfn = MiRemoveAnyPage(MI_GET_NEXT_COLOR());
+        MiReleasePfnLock(OldIrql);
+        if (Pfn == 0)
+        {
+            KeBugCheckEx(INSTALL_MORE_MEMORY,
+                         MmNumberOfPhysicalPages,
+                         0,
+                         0,
+                         PageCount);
+        }
+        return Pfn;
+    }
+#endif
+
     /* Make sure we have enough pages */
     if (PageCount > MxFreeDescriptor->PageCount)
     {
@@ -487,6 +521,26 @@ MxGetNextPage(IN PFN_NUMBER PageCount)
     Pfn = MxFreeDescriptor->BasePage;
     MxFreeDescriptor->BasePage += PageCount;
     MxFreeDescriptor->PageCount -= PageCount;
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    if (MiArm64PfnDatabaseInitialized)
+    {
+        KIRQL OldIrql = MiAcquirePfnLock();
+        for (PFN_NUMBER Offset = 0; Offset < PageCount; ++Offset)
+        {
+            PMMPFN Pfn1 = MiGetPfnEntry(Pfn + Offset);
+            if (Pfn1 &&
+                ((Pfn1->u3.e1.PageLocation == FreePageList) ||
+                 (Pfn1->u3.e1.PageLocation == ZeroedPageList)) &&
+                ((Pfn1->u1.Flink != 0) || (Pfn1->u2.Blink != 0)))
+            {
+                MiUnlinkFreeOrZeroedPage(Pfn1);
+            }
+        }
+        MiReleasePfnLock(OldIrql);
+    }
+#endif
+
     return Pfn;
 }
 
@@ -664,11 +718,108 @@ MiMapPfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     PMEMORY_ALLOCATION_DESCRIPTOR MdBlock;
     PMMPTE PointerPte, LastPte;
     MMPTE TempPte = ValidKernelPte;
+#if defined(_M_ARM64)
+    BOOLEAN NeedTlbFlush = FALSE;
+#endif
+#if defined(_M_ARM64) && DBG
+    DbgPrint("[arm64] MiMapPfnDatabase: start FreePage=0x%I64x FreeCount=0x%I64x\n",
+             (ULONGLONG)MxFreeDescriptor->BasePage,
+             (ULONGLONG)MxFreeDescriptor->PageCount);
+#endif
 
     /* Get current page data, since we won't be using MxGetNextPage as it would corrupt our state */
     FreePage = MxFreeDescriptor->BasePage;
     FreePageCount = MxFreeDescriptor->PageCount;
+#if defined(_M_ARM64)
+    static MI_ARM64_PFN_RANGE Arm64Ranges[MI_ARM64_MAX_PFN_RANGES];
+    ULONG Arm64RangeCount = 0;
+#endif
+
     /* Loop the memory descriptors */
+#if defined(_M_ARM64)
+    NextEntry = LoaderBlock->MemoryDescriptorListHead.Flink;
+    while (NextEntry != &LoaderBlock->MemoryDescriptorListHead)
+    {
+        MdBlock = CONTAINING_RECORD(NextEntry,
+                                    MEMORY_ALLOCATION_DESCRIPTOR,
+                                    ListEntry);
+
+        if (Arm64RangeCount >= MI_ARM64_MAX_PFN_RANGES)
+        {
+            KeBugCheckEx(INSTALL_MORE_MEMORY,
+                         MmNumberOfPhysicalPages,
+                         Arm64RangeCount,
+                         MI_ARM64_MAX_PFN_RANGES,
+                         2);
+        }
+
+        Arm64Ranges[Arm64RangeCount].MemoryType = MdBlock->MemoryType;
+        if (MdBlock == MxFreeDescriptor)
+        {
+            Arm64Ranges[Arm64RangeCount].BasePage = MxOldFreeDescriptor.BasePage;
+            Arm64Ranges[Arm64RangeCount].PageCount = MxOldFreeDescriptor.PageCount;
+        }
+        else
+        {
+            Arm64Ranges[Arm64RangeCount].BasePage = MdBlock->BasePage;
+            Arm64Ranges[Arm64RangeCount].PageCount = MdBlock->PageCount;
+        }
+
+        Arm64RangeCount++;
+        NextEntry = MdBlock->ListEntry.Flink;
+    }
+
+    for (ULONG RangeIndex = 0; RangeIndex < Arm64RangeCount; RangeIndex++)
+    {
+        ULONG MemoryType = Arm64Ranges[RangeIndex].MemoryType;
+        if ((MemoryType == LoaderFirmwarePermanent) ||
+            (MemoryType == LoaderBBTMemory) ||
+            (MemoryType == LoaderSpecialMemory))
+        {
+            continue;
+        }
+
+        BasePage = Arm64Ranges[RangeIndex].BasePage;
+        PageCount = Arm64Ranges[RangeIndex].PageCount;
+
+        /* Get the PTEs for this range */
+        PointerPte = MiAddressToPte(&MmPfnDatabase[BasePage]);
+        LastPte = MiAddressToPte(((ULONG_PTR)&MmPfnDatabase[BasePage + PageCount]) - 1);
+        DPRINT("MD Type: %lx Base: %lx Count: %lx\n", MemoryType, BasePage, PageCount);
+        /* Loop them */
+        while (PointerPte <= LastPte)
+        {
+            /* We'll only touch PTEs that aren't already valid */
+            if (PointerPte->u.Hard.Valid == 0)
+            {
+                /* Use the next free page */
+                TempPte.u.Hard.PageFrameNumber = FreePage;
+                ASSERT(FreePageCount != 0);
+
+                /* Consume free pages */
+                FreePage++;
+                FreePageCount--;
+                if (!FreePageCount)
+                {
+                    /* Out of memory */
+                    KeBugCheckEx(INSTALL_MORE_MEMORY,
+                                 MmNumberOfPhysicalPages,
+                                 FreePageCount,
+                                 MxOldFreeDescriptor.PageCount,
+                                 1);
+                }
+
+                /* Write out this PTE */
+                ASSERT(PointerPte->u.Hard.Valid == 0);
+                *PointerPte = TempPte;
+                NeedTlbFlush = TRUE;
+            }
+
+            /* Next! */
+            PointerPte++;
+        }
+    }
+#else
     NextEntry = LoaderBlock->MemoryDescriptorListHead.Flink;
     while (NextEntry != &LoaderBlock->MemoryDescriptorListHead)
     {
@@ -741,6 +892,47 @@ MiMapPfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         /* Do the next address range */
         NextEntry = MdBlock->ListEntry.Flink;
     }
+#endif
+
+#if defined(_M_ARM64)
+#if DBG
+    DbgPrint("[arm64] MiMapPfnDatabase: PTE mapping complete, flushing TB\n");
+#endif
+    if (NeedTlbFlush)
+    {
+        KeFlushEntireTb(FALSE, TRUE);
+    }
+
+#if DBG
+    DbgPrint("[arm64] MiMapPfnDatabase: TB flush done, zeroing PFN DB\n");
+#endif
+    /* Zero PFN database entries now that the mappings are live. */
+    for (ULONG RangeIndex = 0; RangeIndex < Arm64RangeCount; RangeIndex++)
+    {
+        ULONG MemoryType = Arm64Ranges[RangeIndex].MemoryType;
+        if ((MemoryType == LoaderFirmwarePermanent) ||
+            (MemoryType == LoaderBBTMemory) ||
+            (MemoryType == LoaderSpecialMemory))
+        {
+            continue;
+        }
+
+        BasePage = Arm64Ranges[RangeIndex].BasePage;
+        PageCount = Arm64Ranges[RangeIndex].PageCount;
+
+        if (PageCount)
+        {
+            SIZE_T Bytes = (SIZE_T)PageCount * sizeof(MMPFN);
+            RtlZeroMemory(&MmPfnDatabase[BasePage], Bytes);
+        }
+    }
+
+#if defined(_M_ARM64) && DBG
+    DbgPrint("[arm64] MiMapPfnDatabase: done FreePage=0x%I64x FreeCount=0x%I64x\n",
+             (ULONGLONG)FreePage,
+             (ULONGLONG)FreePageCount);
+#endif
+#endif
 
     /* Now update the free descriptors to consume the pages we used up during the PFN allocation loop */
     MxFreeDescriptor->BasePage = FreePage;
@@ -859,12 +1051,39 @@ MiBuildPfnDatabaseFromPages(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                     {
                         /*
                          * Only add pages above the end of system code or pages
-                         * that are part of nonpaged pool
+                         * that are part of nonpaged pool.
+                         *
+                         * ARM64 Note: Exclude the KSEG0 direct physical memory mapping
+                         * (0xFFFF800000000000 and above). This region is a direct map
+                         * of all physical RAM for early boot page table access and does
+                         * not represent actual kernel allocations. Including it would
+                         * incorrectly mark all free physical pages as in-use.
                          */
+#ifdef _M_ARM64
+                        BOOLEAN ShouldInitializePfn = FALSE;
+                        /* On ARM64, only initialize PFN for actual kernel structures,
+                         * not the KSEG0 direct mapping */
+                        if ((BaseAddress < KSEG0_BASE) &&
+                            (BaseAddress >= 0xA0000000))
+                        {
+                            /* Legacy kernel region on ARM64 */
+                            ShouldInitializePfn = TRUE;
+                        }
+                        else if ((BaseAddress >= (ULONG_PTR)MmNonPagedPoolStart) &&
+                                 (BaseAddress < (ULONG_PTR)MmNonPagedPoolStart +
+                                                MmSizeOfNonPagedPoolInBytes))
+                        {
+                            /* Nonpaged pool region */
+                            ShouldInitializePfn = TRUE;
+                        }
+
+                        if (ShouldInitializePfn)
+#else
                         if ((BaseAddress >= 0xA0000000) ||
                             ((BaseAddress >= (ULONG_PTR)MmNonPagedPoolStart) &&
                              (BaseAddress < (ULONG_PTR)MmNonPagedPoolStart +
                                             MmSizeOfNonPagedPoolInBytes)))
+#endif
                         {
                             /* Get the PFN entry and make sure it too is valid */
                             Pfn2 = MiGetPfnEntry(PtePageIndex);
@@ -998,22 +1217,148 @@ MiBuildPfnDatabaseFromLoaderBlock(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                 PageFrameIndex += PageCount - 1;
                 Pfn1 = MiGetPfnEntry(PageFrameIndex);
 
+#if defined(_M_ARM64)
+                /* ARM64: Debug logging for free list population */
+                {
+                    PFN_NUMBER OrigPageCount = PageCount;
+                    PFN_NUMBER StartPfn = PageFrameIndex - PageCount + 1;
+
+                    /* Sample first few pages to check their state */
+                    if (MdBlock == MxFreeDescriptor)
+                    {
+                        CHAR DbgLog[256];
+                        PMMPFN SamplePfn = MiGetPfnEntry(StartPfn);
+                        if (NT_SUCCESS(RtlStringCbPrintfA(DbgLog, sizeof(DbgLog),
+                            "[arm64] MiBuildPfnDatabaseFromPages: MxFreeDescriptor block start_pfn=%lu count=%lu "
+                            "sample_refcnt=%u sample_sharecount=%u sample_location=%u",
+                            (ULONG)StartPfn, (ULONG)OrigPageCount,
+                            (unsigned)SamplePfn->u3.e2.ReferenceCount,
+                            (unsigned)SamplePfn->u2.ShareCount,
+                            (unsigned)SamplePfn->u3.e1.PageLocation)))
+                        {
+                            DPRINT1("%s\n", DbgLog);
+                        }
+                    }
+                }
+#endif
+
                 /* Lock the PFN Database */
                 OldIrql = MiAcquirePfnLock();
+#if defined(_M_ARM64)
+                {
+                    PFN_NUMBER PagesInserted = 0;
+                    PFN_NUMBER PagesSkipped = 0;
+                    PFN_NUMBER OrigPageCount = PageCount;
+#endif
                 while (PageCount--)
                 {
-                    /* If the page really has no references, mark it as free */
+                    /* CRITICAL FIX (ARM64): MxGetNextPage allocates pages from MxFreeDescriptor starting
+                     * at BasePage, incrementing it with each allocation. However, the loader block
+                     * descriptors are NOT updated to reflect these allocations. This means pages below
+                     * MxFreeDescriptor->BasePage were already allocated by MxGetNextPage before
+                     * MiInitializePfnDatabase ran.
+                     *
+                     * Problem: If we insert these already-allocated pages into the free list, they will
+                     * have PageLocation=ZeroedPageList but won't actually be in the list structure,
+                     * causing assertion failures when MiInitializePfnForOtherProcess tries to unlink them.
+                     *
+                     * Solution: For ALL descriptors (not just MxFreeDescriptor), skip pages below
+                     * MxFreeDescriptor->BasePage since those were already allocated. */
+                    BOOLEAN ShouldInsert = FALSE;
+
                     if (!Pfn1->u3.e2.ReferenceCount)
                     {
-                        /* Add it to the free list */
-                        Pfn1->u3.e1.CacheAttribute = MiNonCached;
-                        MiInsertPageInFreeList(PageFrameIndex);
+#if defined(_M_ARM64)
+                        /* Debug: Log if this is PFN 48000 */
+                        if (PageFrameIndex == 48000)
+                        {
+                            CHAR DbgLog[256];
+                            RtlStringCbPrintfA(DbgLog, sizeof(DbgLog),
+                                "[arm64] DEBUG: Desc type=%u base=%lu count=%lu, PFN 48000, MxFree->Base=%lu, Check: %lu >= %lu = %d",
+                                (unsigned)MdBlock->MemoryType, (ULONG)MdBlock->BasePage, (ULONG)OrigPageCount,
+                                (ULONG)MxFreeDescriptor->BasePage,
+                                (ULONG)PageFrameIndex, (ULONG)MxFreeDescriptor->BasePage,
+                                (int)(PageFrameIndex >= MxFreeDescriptor->BasePage));
+                            DPRINT1("%s\n", DbgLog);
+                        }
+
+                        /* On ARM64, check if page was already allocated via MxGetNextPage */
+                        if (PageFrameIndex >= MxFreeDescriptor->BasePage)
+                        {
+                            /* Page is still free - safe to insert */
+                            ShouldInsert = TRUE;
+                        }
+                        else
+                        {
+                            /* Page was allocated before PFN DB initialization - skip it */
+                            PagesSkipped++;
+                        }
+
+                        if (ShouldInsert && MiArm64IsPageTablePfn(PageFrameIndex))
+                        {
+                            /* Page is part of a page table - do not insert into free list */
+                            ShouldInsert = FALSE;
+                            PagesSkipped++;
+                        }
+#else
+                        /* Other architectures: insert normally */
+                        ShouldInsert = TRUE;
+#endif
+
+                        if (ShouldInsert)
+                        {
+                            /* Add it to the free list */
+                            Pfn1->u3.e1.CacheAttribute = MiNonCached;
+                            MiInsertPageInFreeList(PageFrameIndex);
+#if defined(_M_ARM64)
+                            PagesInserted++;
+#endif
+                        }
                     }
+#if defined(_M_ARM64)
+                    else
+                    {
+                        PagesSkipped++;
+                        /* Log first few skipped pages for debugging */
+                        if (PagesSkipped <= 5 && MdBlock == MxFreeDescriptor)
+                        {
+                            CHAR DbgLog[256];
+                            if (NT_SUCCESS(RtlStringCbPrintfA(DbgLog, sizeof(DbgLog),
+                                "[arm64] SKIPPED PFN %lu: refcnt=%u sharecount=%u location=%u pteaddr=%p frame=%lu",
+                                (ULONG)PageFrameIndex,
+                                (unsigned)Pfn1->u3.e2.ReferenceCount,
+                                (unsigned)Pfn1->u2.ShareCount,
+                                (unsigned)Pfn1->u3.e1.PageLocation,
+                                Pfn1->PteAddress,
+                                (ULONG)Pfn1->u4.PteFrame)))
+                            {
+                                DPRINT1("%s\n", DbgLog);
+                            }
+                        }
+                    }
+#endif
 
                     /* Go to the next page */
                     Pfn1--;
                     PageFrameIndex--;
                 }
+
+#if defined(_M_ARM64)
+                    /* Report results for this block */
+                    if (MdBlock == MxFreeDescriptor)
+                    {
+                        extern PFN_NUMBER MmAvailablePages;
+                        CHAR DbgLog[256];
+                        if (NT_SUCCESS(RtlStringCbPrintfA(DbgLog, sizeof(DbgLog),
+                            "[arm64] MxFreeDescriptor: total=%lu inserted=%lu skipped=%lu MmAvailablePages=%lu",
+                            (ULONG)OrigPageCount, (ULONG)PagesInserted, (ULONG)PagesSkipped,
+                            (ULONG)MmAvailablePages)))
+                        {
+                            DPRINT1("%s\n", DbgLog);
+                        }
+                    }
+                }
+#endif
 
                 /* Release PFN database */
                 MiReleasePfnLock(OldIrql);
@@ -1113,8 +1458,15 @@ VOID
 NTAPI
 MiInitializePfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    MiArm64BuildPageTablePfnBitmap();
+#endif
     /* Scan memory and start setting up PFN entries */
     MiBuildPfnDatabaseFromPages(LoaderBlock);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    MiArm64PfnDatabaseInitialized = TRUE;
+#endif
 
     /* Add the zero page */
     MiBuildPfnDatabaseZeroPage();
@@ -1124,6 +1476,7 @@ MiInitializePfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Finally add the pages for the PFN database itself */
     MiBuildPfnDatabaseSelf();
+
 }
 #endif /* !_M_AMD64 */
 
@@ -1303,9 +1656,19 @@ MiCreateMemoryEvent(IN PUNICODE_STRING Name,
                  RtlLengthSid(SeAliasAdminsSid) +
                  RtlLengthSid(SeWorldSid);
 
+#if defined(_M_ARM64)
+    /* CHECKPOINT: Before DACL allocation from paged pool */
+    MiArm64CheckSystemViewSpacePte("MiCreateMemoryEvent: Before DACL alloc");
+#endif
+
     /* Allocate space for the DACL */
     Dacl = ExAllocatePoolWithTag(PagedPool, DaclLength, TAG_DACL);
     if (!Dacl) return STATUS_INSUFFICIENT_RESOURCES;
+
+#if defined(_M_ARM64)
+    /* CHECKPOINT: After DACL allocation from paged pool */
+    MiArm64CheckSystemViewSpacePte("MiCreateMemoryEvent: After DACL alloc");
+#endif
 
     /* Setup the ACL inside it */
     Status = RtlCreateAcl(Dacl, DaclLength, ACL_REVISION);
@@ -1346,12 +1709,23 @@ MiCreateMemoryEvent(IN PUNICODE_STRING Name,
                                NULL,
                                &SecurityDescriptor);
 
+#if defined(_M_ARM64)
+    /* CHECKPOINT: Before ZwCreateEvent */
+    MiArm64CheckSystemViewSpacePte("MiCreateMemoryEvent: Before ZwCreateEvent");
+#endif
+
     /* Create the event */
     Status = ZwCreateEvent(&EventHandle,
                            EVENT_ALL_ACCESS,
                            &ObjectAttributes,
                            NotificationEvent,
                            FALSE);
+
+#if defined(_M_ARM64)
+    /* CHECKPOINT: After ZwCreateEvent */
+    MiArm64CheckSystemViewSpacePte("MiCreateMemoryEvent: After ZwCreateEvent");
+#endif
+
 CleanUp:
     /* Free the DACL */
     ExFreePoolWithTag(Dacl, TAG_DACL);
@@ -1430,25 +1804,74 @@ MiInitializeMemoryEvents(VOID)
     /* Make sure high threshold is actually higher than the low */
     MmHighMemoryThreshold = max(MmHighMemoryThreshold, MmLowMemoryThreshold);
 
+#if defined(_M_ARM64)
+    /* CHECKPOINT: Before creating memory events (before paged pool allocations) */
+    MiArm64CheckSystemViewSpacePte("MiInitMemEvents: Before event creation");
+#endif
+
     /* Create the memory events for all the thresholds */
     Status = MiCreateMemoryEvent(&LowString, &MiLowMemoryEvent);
     if (!NT_SUCCESS(Status)) return FALSE;
+#if defined(_M_ARM64)
+    MiArm64CheckSystemViewSpacePte("MiInitMemEvents: After LowMemoryEvent");
+#endif
+
     Status = MiCreateMemoryEvent(&HighString, &MiHighMemoryEvent);
     if (!NT_SUCCESS(Status)) return FALSE;
+#if defined(_M_ARM64)
+    MiArm64CheckSystemViewSpacePte("MiInitMemEvents: After HighMemoryEvent");
+#endif
+
     Status = MiCreateMemoryEvent(&LowPagedPoolString, &MiLowPagedPoolEvent);
     if (!NT_SUCCESS(Status)) return FALSE;
+#if defined(_M_ARM64)
+    MiArm64CheckSystemViewSpacePte("MiInitMemEvents: After LowPagedPoolEvent");
+#endif
+
     Status = MiCreateMemoryEvent(&HighPagedPoolString, &MiHighPagedPoolEvent);
     if (!NT_SUCCESS(Status)) return FALSE;
+#if defined(_M_ARM64)
+    MiArm64CheckSystemViewSpacePte("MiInitMemEvents: After HighPagedPoolEvent");
+#endif
+
     Status = MiCreateMemoryEvent(&LowNonPagedPoolString, &MiLowNonPagedPoolEvent);
     if (!NT_SUCCESS(Status)) return FALSE;
+#if defined(_M_ARM64)
+    MiArm64CheckSystemViewSpacePte("MiInitMemEvents: After LowNonPagedPoolEvent");
+#endif
+
     Status = MiCreateMemoryEvent(&HighNonPagedPoolString, &MiHighNonPagedPoolEvent);
     if (!NT_SUCCESS(Status)) return FALSE;
+#if defined(_M_ARM64)
+    MiArm64CheckSystemViewSpacePte("MiInitMemEvents: After HighNonPagedPoolEvent");
+#endif
+
+#if defined(_M_ARM64)
+    /* CHECKPOINT: Before calling MiInitializePoolEvents (second time) */
+    MiArm64CheckSystemViewSpacePte("MiInitMemEvents: Before MiInitializePoolEvents");
+#endif
 
     /* Now setup the pool events */
     MiInitializePoolEvents();
 
+#if defined(_M_ARM64)
+    /* CHECKPOINT: After MiInitializePoolEvents (second call) */
+    MiArm64CheckSystemViewSpacePte("MiInitMemEvents: After MiInitializePoolEvents");
+#endif
+
+#if defined(_M_ARM64)
+    /* CHECKPOINT: Before MiNotifyMemoryEvents */
+    MiArm64CheckSystemViewSpacePte("MiInitMemEvents: Before MiNotifyMemoryEvents");
+#endif
+
     /* Set the initial event state */
     MiNotifyMemoryEvents();
+
+#if defined(_M_ARM64)
+    /* CHECKPOINT: After MiNotifyMemoryEvents */
+    MiArm64CheckSystemViewSpacePte("MiInitMemEvents: After MiNotifyMemoryEvents");
+#endif
+
     return TRUE;
 }
 
@@ -1960,7 +2383,6 @@ MiBuildPagedPool(VOID)
 #else
     /* ARM64: PDEs are already set up. Just log for debugging. */
     {
-        extern VOID KiArm64BootStageLog(_In_z_ PCSTR Stage);
         CHAR Log[200];
         if (NT_SUCCESS(RtlStringCbPrintfA(Log, sizeof(Log),
                                           "[arm64] MiBuildPagedPool: PointerPde=%p (VA range %p-%p)",
@@ -1968,7 +2390,7 @@ MiBuildPagedPool(VOID)
                                           MmPagedPoolStart,
                                           MmPagedPoolEnd)))
         {
-            KiArm64BootStageLog(Log);
+            DPRINT1("%s\n", Log);
         }
     }
 #endif
@@ -1993,7 +2415,6 @@ MiBuildPagedPool(VOID)
      */
     {
         extern VOID MiArm64MapAliasForPointer(_In_ PVOID AliasVa);
-        extern VOID KiArm64BootStageLog(_In_z_ PCSTR Stage);
 
         /* Map the PDE alias for paged pool start */
         MiArm64MapAliasForPointer(PointerPde);
@@ -2007,7 +2428,7 @@ MiBuildPagedPool(VOID)
         /* Also map the PPE alias for paged pool to ensure full traversability */
         MiArm64MapAliasForPointer(MiAddressToPpe(MmPagedPoolStart));
 
-        KiArm64BootStageLog("[arm64] MiBuildPagedPool: mapped PDE/PTE aliases");
+        DPRINT1("%s\n", "[arm64] MiBuildPagedPool: mapped PDE/PTE aliases");
     }
 #endif
 
@@ -2017,7 +2438,8 @@ MiBuildPagedPool(VOID)
 #if defined(_M_ARM64)
     /* On ARM64, the PDE may already be valid from bootloader page tables.
      * If so, use the existing PDE entry and ensure its L3 table is zeroed. */
-    if (PointerPde->u.Hard.Valid == 1)
+    BOOLEAN PdeWasValid = (PointerPde->u.Hard.Valid == 1);
+    if (PdeWasValid)
     {
         PageFrameIndex = PFN_FROM_PDE(PointerPde);
         /* Zero the L3 table via KSEG0 (direct physical mapping) since
@@ -2040,9 +2462,17 @@ MiBuildPagedPool(VOID)
 //    Bla = PFN_FROM_PTE(PpeAddress(MmPagedPool...));
 
     /* Initialize the PFN entry for it */
-    MiInitializePfnForOtherProcess(PageFrameIndex,
-                                   (PMMPTE)PointerPde,
-                                   PFN_FROM_PTE(MiAddressToPpe(MmPagedPoolStart)));
+#if defined(_M_ARM64)
+    /* On ARM64, only initialize the PFN if we just allocated a new page.
+     * If the PDE was already valid from bootloader or early MM init, its PFN
+     * entry was already initialized by MiInitializePfnDatabase. */
+    if (!PdeWasValid)
+#endif
+    {
+        MiInitializePfnForOtherProcess(PageFrameIndex,
+                                       (PMMPTE)PointerPde,
+                                       PFN_FROM_PTE(MiAddressToPpe(MmPagedPoolStart)));
+    }
 #else
     /* Do it this way */
 //    Bla = MmSystemPageDirectory[(PointerPde - (PMMPTE)PDE_BASE) / PDE_PER_PAGE]
@@ -2081,9 +2511,38 @@ MiBuildPagedPool(VOID)
     // Allocate the allocation bitmap, which tells us which regions have not yet
     // been mapped into memory
     //
+#if defined(_M_ARM64)
+    {
+        extern PMEMORY_ALLOCATION_DESCRIPTOR MxFreeDescriptor;
+        CHAR TrackLog[256];
+        PFN_NUMBER PagesBeforeAllocMap = MxFreeDescriptor ? MxFreeDescriptor->PageCount : 0;
+        if (NT_SUCCESS(RtlStringCbPrintfA(TrackLog, sizeof(TrackLog),
+            "[arm64] BEFORE PagedPoolAllocationMap: Size=%lu MxFreeDescriptor=%lu MmAvailablePages=%lu",
+            (ULONG)Size,
+            (ULONG)PagesBeforeAllocMap,
+            (ULONG)MmAvailablePages)))
+        {
+            DPRINT1("%s\n", TrackLog);
+        }
+    }
+#endif
     MmPagedPoolInfo.PagedPoolAllocationMap = ExAllocatePoolWithTag(NonPagedPool,
                                                                    Size,
                                                                    TAG_MM);
+#if defined(_M_ARM64)
+    {
+        extern PMEMORY_ALLOCATION_DESCRIPTOR MxFreeDescriptor;
+        CHAR TrackLog[256];
+        PFN_NUMBER PagesAfterAllocMap = MxFreeDescriptor ? MxFreeDescriptor->PageCount : 0;
+        if (NT_SUCCESS(RtlStringCbPrintfA(TrackLog, sizeof(TrackLog),
+            "[arm64] AFTER PagedPoolAllocationMap: MxFreeDescriptor=%lu MmAvailablePages=%lu",
+            (ULONG)PagesAfterAllocMap,
+            (ULONG)MmAvailablePages)))
+        {
+            DPRINT1("%s\n", TrackLog);
+        }
+    }
+#endif
     ASSERT(MmPagedPoolInfo.PagedPoolAllocationMap);
 
     //
@@ -2102,9 +2561,38 @@ MiBuildPagedPool(VOID)
     // out which page is the last page of that allocation, and thus how big the
     // entire allocation is.
     //
+#if defined(_M_ARM64)
+    {
+        extern PMEMORY_ALLOCATION_DESCRIPTOR MxFreeDescriptor;
+        CHAR TrackLog[256];
+        PFN_NUMBER PagesBeforeEndMap = MxFreeDescriptor ? MxFreeDescriptor->PageCount : 0;
+        if (NT_SUCCESS(RtlStringCbPrintfA(TrackLog, sizeof(TrackLog),
+            "[arm64] BEFORE EndOfPagedPoolBitmap: Size=%lu MxFreeDescriptor=%lu MmAvailablePages=%lu",
+            (ULONG)Size,
+            (ULONG)PagesBeforeEndMap,
+            (ULONG)MmAvailablePages)))
+        {
+            DPRINT1("%s\n", TrackLog);
+        }
+    }
+#endif
     MmPagedPoolInfo.EndOfPagedPoolBitmap = ExAllocatePoolWithTag(NonPagedPool,
                                                                  Size,
                                                                  TAG_MM);
+#if defined(_M_ARM64)
+    {
+        extern PMEMORY_ALLOCATION_DESCRIPTOR MxFreeDescriptor;
+        CHAR TrackLog[256];
+        PFN_NUMBER PagesAfterEndMap = MxFreeDescriptor ? MxFreeDescriptor->PageCount : 0;
+        if (NT_SUCCESS(RtlStringCbPrintfA(TrackLog, sizeof(TrackLog),
+            "[arm64] AFTER EndOfPagedPoolBitmap: MxFreeDescriptor=%lu MmAvailablePages=%lu",
+            (ULONG)PagesAfterEndMap,
+            (ULONG)MmAvailablePages)))
+        {
+            DPRINT1("%s\n", TrackLog);
+        }
+    }
+#endif
     ASSERT(MmPagedPoolInfo.EndOfPagedPoolBitmap);
     RtlInitializeBitMap(MmPagedPoolInfo.EndOfPagedPoolBitmap,
                         (PULONG)(MmPagedPoolInfo.EndOfPagedPoolBitmap + 1),
@@ -2149,8 +2637,7 @@ MiBuildPagedPool(VOID)
     MmPagedPoolInitialized = TRUE;
 #if defined(_M_ARM64) || defined(__aarch64__)
     {
-        extern VOID KiArm64BootStageLog(_In_z_ PCSTR Stage);
-        KiArm64BootStageLog("[arm64] MiBuildPagedPool: ready");
+        DPRINT1("%s\n", "[arm64] MiBuildPagedPool: ready");
     }
 #endif
 }
@@ -2531,6 +3018,21 @@ MmArmInitSystem(IN ULONG Phase,
         /* Initialize the platform-specific parts */
         MiInitMachineDependent(LoaderBlock);
 
+        /* ARM64: Track pages after MiInitMachineDependent */
+#if defined(_M_ARM64)
+        {
+            CHAR TrackLog[200];
+            PFN_NUMBER PagesAfterMiInit = MxFreeDescriptor ? MxFreeDescriptor->PageCount : 0;
+            if (NT_SUCCESS(RtlStringCbPrintfA(TrackLog, sizeof(TrackLog),
+                "[arm64] AFTER MiInitMachineDependent: MxFreeDescriptor->PageCount=%lu MmAvailablePages=%lu",
+                (ULONG)PagesAfterMiInit,
+                (ULONG)MmAvailablePages)))
+            {
+                DPRINT1("%s\n", TrackLog);
+            }
+        }
+#endif
+
 #if DBG
         /* Prototype PTEs are assumed to be in paged pool, so check if the math works */
         PointerPte = (PMMPTE)MmPagedPoolStart;
@@ -2571,9 +3073,38 @@ MmArmInitSystem(IN ULONG Phase,
         // Allocate enough buffer for the PFN bitmap
         // Align it up to a 32-bit boundary
         //
+#if defined(_M_ARM64)
+        {
+            SIZE_T BitmapSize = (((MmHighestPhysicalPage + 1) + 31) / 32) * 4;
+            CHAR TrackLog[256];
+            PFN_NUMBER PagesBeforeBitmap = MxFreeDescriptor ? MxFreeDescriptor->PageCount : 0;
+            if (NT_SUCCESS(RtlStringCbPrintfA(TrackLog, sizeof(TrackLog),
+                "[arm64] BEFORE PFN Bitmap alloc: Size=%lu MxFreeDescriptor=%lu MmAvailablePages=%lu",
+                (ULONG)BitmapSize,
+                (ULONG)PagesBeforeBitmap,
+                (ULONG)MmAvailablePages)))
+            {
+                DPRINT1("%s\n", TrackLog);
+            }
+        }
+#endif
         Bitmap = ExAllocatePoolWithTag(NonPagedPool,
                                        (((MmHighestPhysicalPage + 1) + 31) / 32) * 4,
                                        TAG_MM);
+#if defined(_M_ARM64)
+        {
+            CHAR TrackLog[200];
+            PFN_NUMBER PagesAfterBitmap = MxFreeDescriptor ? MxFreeDescriptor->PageCount : 0;
+            if (NT_SUCCESS(RtlStringCbPrintfA(TrackLog, sizeof(TrackLog),
+                "[arm64] AFTER PFN Bitmap alloc: MxFreeDescriptor=%lu MmAvailablePages=%lu Bitmap=%p",
+                (ULONG)PagesAfterBitmap,
+                (ULONG)MmAvailablePages,
+                Bitmap)))
+            {
+                DPRINT1("%s\n", TrackLog);
+            }
+        }
+#endif
         if (!Bitmap)
         {
             //
@@ -2635,10 +3166,22 @@ MmArmInitSystem(IN ULONG Phase,
         MiInitializeLargePageSupport();
 
         /* Check if the registry says any drivers should be loaded with large pages */
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] MiInitializeDriverLargePageList: entry\n");
+#endif
         MiInitializeDriverLargePageList();
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] MiInitializeDriverLargePageList: done\n");
+#endif
 
         /* Relocate the boot drivers into system PTE space and fixup their PFNs */
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] MiReloadBootLoadedDrivers: entry\n");
+#endif
         MiReloadBootLoadedDrivers(LoaderBlock);
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] MiReloadBootLoadedDrivers: done\n");
+#endif
 
         /* FIXME: Call out into Driver Verifier for initialization  */
 
@@ -2752,13 +3295,13 @@ MmArmInitSystem(IN ULONG Phase,
         }
 
         /* Define limits for system cache */
-#ifdef _M_AMD64
+#if defined(_M_AMD64) || defined(_M_ARM64)
         MmSizeOfSystemCacheInPages = ((MI_SYSTEM_CACHE_END + 1) - MI_SYSTEM_CACHE_START) / PAGE_SIZE;
 #else
         MmSizeOfSystemCacheInPages = ((ULONG_PTR)MI_PAGED_POOL_START - (ULONG_PTR)MI_SYSTEM_CACHE_START) / PAGE_SIZE;
 #endif
         MmSystemCacheEnd = (PVOID)((ULONG_PTR)MmSystemCacheStart + (MmSizeOfSystemCacheInPages * PAGE_SIZE) - 1);
-#ifdef _M_AMD64
+#if defined(_M_AMD64) || defined(_M_ARM64)
         ASSERT(MmSystemCacheEnd == (PVOID)MI_SYSTEM_CACHE_END);
 #else
         ASSERT(MmSystemCacheEnd == (PVOID)((ULONG_PTR)MI_PAGED_POOL_START - 1));
@@ -2773,7 +3316,33 @@ MmArmInitSystem(IN ULONG Phase,
         MmTotalCommitLimitMaximum = MmTotalCommitLimit;
 
         /* Size up paged pool and build the shadow system page directory */
+#if defined(_M_ARM64)
+        {
+            CHAR TrackLog[200];
+            PFN_NUMBER PagesBeforePagedPool = MxFreeDescriptor ? MxFreeDescriptor->PageCount : 0;
+            if (NT_SUCCESS(RtlStringCbPrintfA(TrackLog, sizeof(TrackLog),
+                "[arm64] BEFORE MiBuildPagedPool: MxFreeDescriptor=%lu MmAvailablePages=%lu",
+                (ULONG)PagesBeforePagedPool,
+                (ULONG)MmAvailablePages)))
+            {
+                DPRINT1("%s\n", TrackLog);
+            }
+        }
+#endif
         MiBuildPagedPool();
+#if defined(_M_ARM64)
+        {
+            CHAR TrackLog[200];
+            PFN_NUMBER PagesAfterPagedPool = MxFreeDescriptor ? MxFreeDescriptor->PageCount : 0;
+            if (NT_SUCCESS(RtlStringCbPrintfA(TrackLog, sizeof(TrackLog),
+                "[arm64] AFTER MiBuildPagedPool: MxFreeDescriptor=%lu MmAvailablePages=%lu",
+                (ULONG)PagesAfterPagedPool,
+                (ULONG)MmAvailablePages)))
+            {
+                DPRINT1("%s\n", TrackLog);
+            }
+        }
+#endif
 
         /* Debugger physical memory support is now ready to be used */
         MmDebugPte = MiAddressToPte(MiDebugMapping);

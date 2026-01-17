@@ -187,7 +187,13 @@ KdpPrintToLogFile(
     /* Release the spinlock */
     KdbpReleaseLock(&KdpDebugLogSpinLock, OldIrql);
 
-    /* Signal the logger thread */
+    /*
+     * Signal the logger thread only if it's running.
+     * KdpLoggingEnabled is set to TRUE only after the logger thread starts,
+     * which happens after KeInitializeEvent is called in boot phase 2+.
+     * This check is critical on ARM64 to prevent dereferencing uninitialized
+     * event structures that may contain invalid pointers.
+     */
     if (OldIrql <= DISPATCH_LEVEL && KdpLoggingEnabled)
         KeSetEvent(&KdpLoggerThreadEvent, IO_NO_INCREMENT, FALSE);
 }
@@ -199,6 +205,11 @@ KdpDebugLogInit(
     _In_ ULONG BootPhase)
 {
     NTSTATUS Status = STATUS_SUCCESS;
+
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] KdpDebugLogInit: ENTRY BootPhase=%d KdpDebugMode.File=%d\n",
+            BootPhase, KdpDebugMode.File);
+#endif
 
     if (!KdpDebugMode.File)
         return STATUS_PORT_DISCONNECTED;
@@ -229,6 +240,15 @@ KdpDebugLogInit(
         /* Initialize spinlock */
         KeInitializeSpinLock(&KdpDebugLogSpinLock);
 
+        /*
+         * Initialize the logger event early (boot phase 1) to prevent
+         * KeSetEvent from misinterpreting zero-initialized list heads
+         * as a non-empty wait list. This is critical on ARM64 where
+         * uninitialized dispatcher objects can cause page faults.
+         * The event will be signaled in phase 2 when the thread is created.
+         */
+        KeInitializeEvent(&KdpLoggerThreadEvent, SynchronizationEvent, FALSE);
+
         /* Register for later BootPhase 2 reinitialization */
         DispatchTable->KdpInitRoutine = KdpDebugLogInit;
 
@@ -244,14 +264,23 @@ KdpDebugLogInit(
         KPRIORITY Priority;
 
         /* If we have already successfully opened the log file, bail out */
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] KdpDebugLogInit: Phase >= 2, KdpLogFileHandle=%p\n", KdpLogFileHandle);
+#endif
         if (KdpLogFileHandle != NULL)
             return STATUS_SUCCESS;
 
         /* Setup the log name */
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] KdpDebugLogInit: before RtlAnsiStringToUnicodeString\n");
+#endif
         Status = RtlAnsiStringToUnicodeString(&FileName, &KdpLogFileName, TRUE);
         if (!NT_SUCCESS(Status))
             goto Failure;
 
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] KdpDebugLogInit: before ZwCreateFile for %wZ\n", &FileName);
+#endif
         InitializeObjectAttributes(&ObjectAttributes,
                                    &FileName,
                                    OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
@@ -271,6 +300,9 @@ KdpDebugLogInit(
                                 FILE_SEQUENTIAL_ONLY | FILE_WRITE_THROUGH,
                               NULL,
                               0);
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] KdpDebugLogInit: ZwCreateFile returned 0x%08lx\n", Status);
+#endif
 
         RtlFreeUnicodeString(&FileName);
 
@@ -393,6 +425,9 @@ KdpSerialInit(
     _In_ PKD_DISPATCH_TABLE DispatchTable,
     _In_ ULONG BootPhase)
 {
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] KdpSerialInit: ENTRY BootPhase=%d\n", BootPhase);
+#endif
     if (!KdpDebugMode.Serial)
         return STATUS_PORT_DISCONNECTED;
 
@@ -516,6 +551,9 @@ KdpScreenInit(
     _In_ PKD_DISPATCH_TABLE DispatchTable,
     _In_ ULONG BootPhase)
 {
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] KdpScreenInit: ENTRY BootPhase=%d\n", BootPhase);
+#endif
     if (!KdpDebugMode.Screen)
         return STATUS_PORT_DISCONNECTED;
 
@@ -760,10 +798,12 @@ KdReceivePacket(
     ResponseString.MaximumLength = min(ResponseString.MaximumLength,
                                        DebugIo->u.GetString.LengthOfStringRead);
 
-    /* The prompt string has been printed by KdSendPacket; go to
-     * new line and print the kdb prompt -- for SYSREG2 support. */
-    KdIoPrintString("\n", 1);
-    KdIoPuts(KdbPromptStr.Buffer); // Alternatively, use "Input> "
+    /*
+     * The prompt string has already been printed by KdSendPacket.
+     * Do NOT print a newline here - we want the cursor to remain on
+     * the same line as the prompt so user input appears after "kdb:> ".
+     * KdIoReadLine() will print a newline when the user presses Enter.
+     */
 
     if (!(KdbDebugState & KD_DEBUG_KDSERIAL))
         KbdDisableMouse();

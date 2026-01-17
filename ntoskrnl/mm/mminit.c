@@ -138,6 +138,22 @@ MiInitSystemMemoryAreas(VOID)
 
     // KUSER_SHARED_DATA
     MiCreateArm3StaticMemoryArea((PVOID)KI_USER_SHARED_DATA, PAGE_SIZE, FALSE);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    //
+    // ARM64: Pre-map the PTE for KI_USER_SHARED_DATA in the self-map structure.
+    // This ensures that when Phase 1 tries to read the PTE at line 325, the
+    // self-map entry is already accessible and won't trigger a page fault while
+    // holding the paged pool mutex (IRQL 2).
+    //
+    {
+        PMMPTE SharedDataPte = MiAddressToPte((PVOID)KI_USER_SHARED_DATA);
+        DPRINT1("[MM] Phase 0: Pre-mapping PTE for KI_USER_SHARED_DATA (%p) at PTE address %p\n",
+                (PVOID)KI_USER_SHARED_DATA, SharedDataPte);
+        MiArm64MapAliasForPointer(SharedDataPte);
+        DPRINT1("[MM] Phase 0: PTE pre-mapping complete\n");
+    }
+#endif
 #endif /* _X86_ */
 
     MmUnlockAddressSpace(MmGetKernelAddressSpace());
@@ -301,6 +317,11 @@ MmInitSystem(IN ULONG Phase,
 
     DPRINT1("[MM] Phase 1: After MiInitializePoolEvents\n");
 
+#if defined(_M_ARM64)
+    /* CHECKPOINT: Before first paged pool allocation (SharedUserDataPte) */
+    MiArm64CheckSystemViewSpacePte("Before SharedUserDataPte allocation");
+#endif
+
     //
     // Create a PTE to double-map the shared data section. We allocate it
     // from paged pool so that we can't fault when trying to touch the PTE
@@ -312,39 +333,81 @@ MmInitSystem(IN ULONG Phase,
                           TAG_MM);
     if (!MmSharedUserDataPte) return FALSE;
 
+#if defined(_M_ARM64)
+    /* CHECKPOINT: After first paged pool allocation (SharedUserDataPte) */
+    MiArm64CheckSystemViewSpacePte("After SharedUserDataPte allocation");
+#endif
+
     //
     // Now get the PTE for shared data, and read the PFN that holds it
+    // (ARM64: The PTE self-map entry was pre-populated in Phase 0 to avoid
+    // page faults while holding the paged pool mutex at IRQL 2)
     //
     PointerPte = MiAddressToPte((PVOID)KI_USER_SHARED_DATA);
+    DPRINT1("[MM] Phase 1: Got PTE for KI_USER_SHARED_DATA at %p\n", PointerPte);
     ASSERT(PointerPte->u.Hard.Valid == 1);
+    DPRINT1("[MM] Phase 1: PTE is valid, getting PFN\n");
     PageFrameNumber = PFN_FROM_PTE(PointerPte);
+    DPRINT1("[MM] Phase 1: Got PFN %I64x\n", (ULONG64)PageFrameNumber);
 
     /* Build the PTE and write it */
+    DPRINT1("[MM] Phase 1: Building shared user data PTE\n");
     MI_MAKE_HARDWARE_PTE_KERNEL(&TempPte,
                                 PointerPte,
                                 MM_READONLY,
                                 PageFrameNumber);
     *MmSharedUserDataPte = TempPte;
+    DPRINT1("[MM] Phase 1: Shared user data PTE written\n");
 
     /* Initialize session working set support */
+    DPRINT1("[MM] Phase 1: Calling MiInitializeSessionWsSupport\n");
     MiInitializeSessionWsSupport();
+    DPRINT1("[MM] Phase 1: MiInitializeSessionWsSupport complete\n");
 
     /* Setup session IDs */
+    DPRINT1("[MM] Phase 1: Calling MiInitializeSessionIds\n");
     MiInitializeSessionIds();
+    DPRINT1("[MM] Phase 1: MiInitializeSessionIds complete\n");
+
+#if defined(_M_ARM64)
+    /* CHECKPOINT: Before MiInitializeMemoryEvents */
+    MiArm64CheckSystemViewSpacePte("Before MiInitializeMemoryEvents");
+#endif
 
     /* Setup the memory threshold events */
+    DPRINT1("[MM] Phase 1: Calling MiInitializeMemoryEvents\n");
     if (!MiInitializeMemoryEvents()) return FALSE;
+    DPRINT1("[MM] Phase 1: MiInitializeMemoryEvents complete\n");
+
+#if defined(_M_ARM64)
+    /* CHECKPOINT: After MiInitializeMemoryEvents (before MiInitBalancerThread) */
+    MiArm64CheckSystemViewSpacePte("After MiInitializeMemoryEvents");
+#endif
 
     /*
      * Unmap low memory
      */
     MiInitBalancerThread();
 
+#if defined(_M_ARM64)
+    /* CHECKPOINT: After MiInitBalancerThread */
+    MiArm64CheckSystemViewSpacePte("After MiInitBalancerThread");
+#endif
+
     /* Initialize the balance set manager */
     MmInitBsmThread();
 
+#if defined(_M_ARM64)
+    /* CHECKPOINT: After MmInitBsmThread */
+    MiArm64CheckSystemViewSpacePte("After MmInitBsmThread");
+#endif
+
     /* Loop the boot loaded images (under lock) */
     ExAcquireResourceExclusiveLite(&PsLoadedModuleResource, TRUE);
+#if defined(_M_ARM64)
+    DPRINT1("[MM] Phase 1: About to process boot loaded modules. PsLoadedModuleList @ %p, Flink=%p\n",
+            &PsLoadedModuleList, PsLoadedModuleList.Flink);
+#endif
     for (ListEntry = PsLoadedModuleList.Flink;
          ListEntry != &PsLoadedModuleList;
          ListEntry = ListEntry->Flink)
@@ -352,9 +415,28 @@ MmInitSystem(IN ULONG Phase,
         /* Get the data table entry */
         DataTableEntry = CONTAINING_RECORD(ListEntry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
 
+#if defined(_M_ARM64)
+        DPRINT1("[MM] Processing module: Base=%p Name=%wZ ListEntry=%p Flink=%p Blink=%p\n",
+                DataTableEntry->DllBase,
+                &DataTableEntry->BaseDllName,
+                ListEntry,
+                ListEntry->Flink,
+                ListEntry->Blink);
+#endif
+
         /* Set up the image protection */
         MiWriteProtectSystemImage(DataTableEntry->DllBase);
+
+#if defined(_M_ARM64)
+        DPRINT1("[MM] Finished module: Base=%p Name=%wZ Next ListEntry will be=%p\n",
+                DataTableEntry->DllBase,
+                &DataTableEntry->BaseDllName,
+                ListEntry->Flink);
+#endif
     }
+#if defined(_M_ARM64)
+    DPRINT1("[MM] Phase 1: Finished processing boot loaded modules.\n");
+#endif
     ExReleaseResourceLite(&PsLoadedModuleResource);
 
     return TRUE;

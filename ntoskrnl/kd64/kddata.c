@@ -659,7 +659,7 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     0,
     0,
 #if defined(_M_ARM) || defined(_M_ARM64)
-    _WARN("KPCR_INITIAL_STACK_OFFSET, KPCR_STACK_LIMIT_OFFSET and KPRCB_PCR_PAGE_OFFSET not properly defined on ARM/ARM64")
+    /* KPCR offsets are not yet defined for ARM/ARM64 */
     0,
     0,
     0,

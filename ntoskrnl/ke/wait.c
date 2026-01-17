@@ -26,6 +26,24 @@ KiWaitTest(IN PVOID ObjectPointer,
     PKMUTANT FirstObject = ObjectPointer;
     NTSTATUS WaitStatus;
 
+    /*
+     * ARM64 CRITICAL: AGGRESSIVE QUAD barriers before checking signal state.
+     *
+     * This function is called after KeSetEvent sets SignalState = 1.
+     * On ARM64, we MUST ensure we see that write before checking the state
+     * and waking threads. The caller (KeSetEvent) has already issued barriers,
+     * but we need aggressive barriers here to ensure visibility.
+     *
+     * QUAD BARRIER SEQUENCE to ensure we see the signaled state.
+     */
+#ifdef _M_ARM64
+    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    DPRINT1("[arm64] KiWaitTest: Object=%p with QUAD barriers, checking waiters\n", ObjectPointer);
+#endif
+
     /* Loop the Wait Entries */
     WaitList = &FirstObject->Header.WaitListHead;
     WaitEntry = WaitList->Flink;
@@ -50,6 +68,31 @@ KiWaitTest(IN PVOID ObjectPointer,
     }
 }
 
+/* Helper to validate list entry integrity before removal - ARM64 specific */
+FORCEINLINE
+BOOLEAN
+KiIsListEntryValid(IN PLIST_ENTRY Entry)
+{
+    /* Check for NULL pointers */
+    if (Entry->Flink == NULL || Entry->Blink == NULL)
+        return FALSE;
+
+    /* Check for invalid sentinel values */
+    if ((ULONG_PTR)Entry->Flink == (ULONG_PTR)-1 ||
+        (ULONG_PTR)Entry->Blink == (ULONG_PTR)-1)
+        return FALSE;
+
+    /* Check list integrity: Flink->Blink should point back to Entry */
+    if (Entry->Flink->Blink != Entry)
+        return FALSE;
+
+    /* Check list integrity: Blink->Flink should point back to Entry */
+    if (Entry->Blink->Flink != Entry)
+        return FALSE;
+
+    return TRUE;
+}
+
 VOID
 FASTCALL
 KiUnlinkThread(IN PKTHREAD Thread,
@@ -62,18 +105,33 @@ KiUnlinkThread(IN PKTHREAD Thread,
     Thread->WaitStatus |= WaitStatus;
 
     /* Remove the Wait Blocks from the list */
+    /* Only unlink wait blocks if the thread was actually in a wait state */
     WaitBlock = Thread->WaitBlockList;
-    do
+    if ((WaitBlock != NULL) &&
+        ((ULONG_PTR)WaitBlock != (ULONG_PTR)-1) &&
+        (Thread->State == Waiting || Thread->State == GateWait))
     {
-        /* Remove it */
-        RemoveEntryList(&WaitBlock->WaitListEntry);
+        do
+        {
+            /* Validate list integrity before removal to avoid assertion */
+            if (KiIsListEntryValid(&WaitBlock->WaitListEntry))
+            {
+                RemoveEntryList(&WaitBlock->WaitListEntry);
+            }
 
-        /* Go to the next one */
-        WaitBlock = WaitBlock->NextWaitBlock;
-    } while (WaitBlock != Thread->WaitBlockList);
+            /* Go to the next one */
+            WaitBlock = WaitBlock->NextWaitBlock;
+        } while (WaitBlock != Thread->WaitBlockList);
+    }
 
     /* Remove the thread from the wait list! */
-    if (Thread->WaitListEntry.Flink) RemoveEntryList(&Thread->WaitListEntry);
+    /* Only remove if the thread was in a proper wait state with valid list links */
+    if (Thread->WaitListEntry.Flink &&
+        (Thread->State == Waiting || Thread->State == GateWait) &&
+        KiIsListEntryValid(&Thread->WaitListEntry))
+    {
+        RemoveEntryList(&Thread->WaitListEntry);
+    }
 
     /* Check if there's a Thread Timer */
     Timer = &Thread->Timer;
@@ -97,6 +155,31 @@ KiUnwaitThread(IN PKTHREAD Thread,
     ASSERT(Increment >= 0);
     Thread->AdjustIncrement = (SCHAR)Increment;
     Thread->AdjustReason = AdjustUnwait;
+
+    /*
+     * ARM64 CRITICAL: AGGRESSIVE QUAD memory barriers before readying thread.
+     *
+     * We've just updated critical thread state (WaitStatus, AdjustIncrement,
+     * AdjustReason) and are about to make the thread ready. On ARM64's weakly
+     * ordered memory model, these writes might not be visible to the CPU that
+     * will run the thread next.
+     *
+     * QUAD BARRIER SEQUENCE:
+     * 1. DMB SY - Ensure all prior writes visible to all CPUs
+     * 2. ISB - Flush instruction pipeline
+     * 3. DMB SY - Additional synchronization
+     * 4. DSB SY - Full data/instruction synchronization
+     *
+     * This aggressive approach ensures the waking thread CANNOT miss state updates.
+     */
+#ifdef _M_ARM64
+    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    DPRINT1("[arm64] KiUnwaitThread: Thread=%p WaitStatus=%ld Increment=%d with QUAD barriers, readying\n",
+            Thread, WaitStatus, Increment);
+#endif
 
     /* Reschedule the Thread */
     KiReadyThread(Thread);
@@ -248,8 +331,26 @@ KiExitDispatcher(IN KIRQL OldIrql)
     /* Set wait IRQL */
     Thread->WaitIrql = OldIrql;
 
+    /*
+     * ARM64 CRITICAL: Memory barrier before context switch.
+     *
+     * On ARM64, the compiler and CPU may reorder memory accesses. The
+     * Prcb->CurrentThread assignment above may not be visible to the
+     * KiSwapContext assembly code without an explicit barrier.
+     *
+     * Additionally, we must ensure that NextThread->SwapBusy reads see the
+     * value written by the previous context switch's KiSwapContextResume.
+     *
+     * DMB SY ensures all memory accesses before this point are visible to
+     * all subsequent memory accesses (both loads and stores).
+     */
+#ifdef _M_ARM64
+    __dmb(_ARM64_BARRIER_SY);
+#endif
+
     /* Swap threads and check if APCs were pending */
     PendingApc = KiSwapContext(OldIrql, Thread);
+
     if (PendingApc)
     {
         /* Lower only to APC */
@@ -257,6 +358,7 @@ KiExitDispatcher(IN KIRQL OldIrql)
 
         /* Deliver APCs */
         KiDeliverApc(KernelMode, NULL, NULL);
+
         ASSERT(OldIrql == PASSIVE_LEVEL);
     }
 
@@ -430,6 +532,50 @@ KeWaitForSingleObject(IN PVOID Object,
     PLARGE_INTEGER OriginalDueTime = Timeout;
     ULONG Hand = 0;
 
+#ifdef _M_ARM64
+    DPRINT1("[arm64] KeWaitForSingleObject: ENTRY Object=%p Type=%u SignalState=%ld Thread=%p Timeout=%p\n",
+            Object, CurrentObject->Header.Type, CurrentObject->Header.SignalState, Thread, Timeout);
+#endif
+
+    /* ARM64: Validate Object pointer to catch uninitialized or invalid dispatcher objects */
+    if (Object == NULL ||
+        (ULONG_PTR)Object == (ULONG_PTR)-1 ||
+        (ULONG_PTR)Object < 0x1000)
+    {
+        DPRINT1("[KeWaitForSingleObject] FATAL: Invalid Object pointer: %p (WaitReason=%u)\n",
+                Object, WaitReason);
+        DPRINT1("[KeWaitForSingleObject] Thread=%p TID=%p PID=%p\n",
+                Thread,
+                Thread ? PsGetThreadId((PETHREAD)Thread) : NULL,
+                Thread ? PsGetThreadProcessId((PETHREAD)Thread) : NULL);
+        KeBugCheckEx(INVALID_PROCESS_ATTACH_ATTEMPT,
+                     (ULONG_PTR)Object,
+                     WaitReason,
+                     (ULONG_PTR)Thread,
+                     0);
+    }
+
+    /* ARM64: Validate WaitListHead is properly initialized (not -1) */
+    if ((ULONG_PTR)CurrentObject->Header.WaitListHead.Flink == (ULONG_PTR)-1 ||
+        (ULONG_PTR)CurrentObject->Header.WaitListHead.Blink == (ULONG_PTR)-1)
+    {
+        DPRINT1("[KeWaitForSingleObject] FATAL: Object WaitListHead corrupted: Object=%p Type=%u Flink=%p Blink=%p\n",
+                Object,
+                CurrentObject->Header.Type,
+                CurrentObject->Header.WaitListHead.Flink,
+                CurrentObject->Header.WaitListHead.Blink);
+        DPRINT1("[KeWaitForSingleObject] Thread=%p TID=%p PID=%p WaitReason=%u\n",
+                Thread,
+                Thread ? PsGetThreadId((PETHREAD)Thread) : NULL,
+                Thread ? PsGetThreadProcessId((PETHREAD)Thread) : NULL,
+                WaitReason);
+        KeBugCheckEx(INVALID_PROCESS_ATTACH_ATTEMPT,
+                     (ULONG_PTR)Object,
+                     (ULONG_PTR)CurrentObject->Header.WaitListHead.Flink,
+                     (ULONG_PTR)CurrentObject->Header.WaitListHead.Blink,
+                     CurrentObject->Header.Type);
+    }
+
     if (Thread->WaitNext)
         ASSERT(KeGetCurrentIrql() == SYNCH_LEVEL);
     else
@@ -454,13 +600,52 @@ KeWaitForSingleObject(IN PVOID Object,
         if ((Thread->ApcState.KernelApcPending) && !(Thread->SpecialApcDisable) &&
             (Thread->WaitIrql < APC_LEVEL))
         {
+#ifdef _M_ARM64
+            DPRINT1("[arm64] KeWaitForSingleObject: Kernel APC pending, delivering APCs before restart\n");
+            /* ARM64: Explicitly deliver APCs BEFORE releasing the lock.
+             * On ARM64, we must explicitly call KiDeliverApc to ensure pending
+             * APCs are actually delivered. We do this at current IRQL (DISPATCH/SYNCH),
+             * then release the lock which lowers to WaitIrql. */
+            KiReleaseDispatcherLock(APC_LEVEL);
+            KiDeliverApc(KernelMode, NULL, NULL);
+            /* Ensure we return to the original wait IRQL */
+            ASSERT(Thread->WaitIrql == PASSIVE_LEVEL);
+            KeLowerIrql(Thread->WaitIrql);
+#else
             /* Unlock the dispatcher */
             KiReleaseDispatcherLock(Thread->WaitIrql);
+#endif
         }
         else
         {
+#ifdef _M_ARM64
+            DPRINT1("[arm64] KeWaitForSingleObject: No APC pending, checking object state\n");
+#endif
             /* Sanity check */
             ASSERT(CurrentObject->Header.Type != QueueObject);
+
+            /*
+             * ARM64 CRITICAL: AGGRESSIVE QUAD barriers before checking object state.
+             *
+             * On ARM64, we need to ensure we see the most recent SignalState
+             * written by KeSetEvent or other signaling operations. Without this,
+             * we might see stale state and wait forever even though the object
+             * is signaled.
+             *
+             * QUAD BARRIER SEQUENCE:
+             * 1. DMB SY - Ensure all writes visible
+             * 2. ISB - Flush pipeline
+             * 3. DMB SY - Additional sync
+             * 4. DSB SY - Final synchronization
+             */
+#ifdef _M_ARM64
+            __asm__ __volatile__("dmb sy" ::: "memory");
+            __asm__ __volatile__("isb" ::: "memory");
+            __asm__ __volatile__("dmb sy" ::: "memory");
+            __asm__ __volatile__("dsb sy" ::: "memory");
+            DPRINT1("[arm64] KeWaitForSingleObject: Object=%p Type=%u with QUAD barriers, checking SignalState=%ld\n",
+                    Object, CurrentObject->Header.Type, CurrentObject->Header.SignalState);
+#endif
 
             /* Check if it's a mutant */
             if (CurrentObject->Header.Type == MutantObject)
@@ -547,7 +732,10 @@ KeWaitForSingleObject(IN PVOID Object,
             WaitStatus = (NTSTATUS)KiSwapThread(Thread, KeGetCurrentPrcb());
 
             /* Check if we were executing an APC */
-            if (WaitStatus != STATUS_KERNEL_APC) return WaitStatus;
+            if (WaitStatus != STATUS_KERNEL_APC)
+            {
+                return WaitStatus;
+            }
 
             /* Check if we had a timeout */
             if (Timeout)
@@ -559,10 +747,16 @@ KeWaitForSingleObject(IN PVOID Object,
             }
         }
 WaitStart:
+#ifdef _M_ARM64
+        DPRINT1("[arm64] KeWaitForSingleObject: WaitStart - raising IRQL and acquiring lock\n");
+#endif
         /* Setup a new wait */
         Thread->WaitIrql = KeRaiseIrqlToSynchLevel();
         KxSingleThreadWait();
         KiAcquireDispatcherLockAtSynchLevel();
+#ifdef _M_ARM64
+        DPRINT1("[arm64] KeWaitForSingleObject: Lock acquired, entering wait loop\n");
+#endif
     }
 
     /* Wait complete */

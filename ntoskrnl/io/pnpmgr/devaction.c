@@ -232,8 +232,7 @@ IopCreateDeviceInstancePath(
     DEVICE_CAPABILITIES DeviceCapabilities;
     BOOLEAN IsValidID;
 
-    DPRINT("Sending IRP_MN_QUERY_ID.BusQueryDeviceID to device stack\n");
-
+    RtlZeroMemory(&IoStatusBlock, sizeof(IoStatusBlock));
     Stack.Parameters.QueryId.IdType = BusQueryDeviceID;
     Status = IopInitiatePnpIrp(DeviceNode->PhysicalDeviceObject,
                                &IoStatusBlock,
@@ -977,14 +976,15 @@ IopQueryHardwareIds(PDEVICE_NODE DeviceNode,
     ULONG Length, TotalLength;
     BOOLEAN IsValidID;
 
-    DPRINT("Sending IRP_MN_QUERY_ID.BusQueryHardwareIDs to device stack\n");
-
+    /* CRITICAL: Initialize IoStatusBlock to prevent garbage data on ARM64 */
+    RtlZeroMemory(&IoStatusBlock, sizeof(IoStatusBlock));
     RtlZeroMemory(&Stack, sizeof(Stack));
     Stack.Parameters.QueryId.IdType = BusQueryHardwareIDs;
     Status = IopInitiatePnpIrp(DeviceNode->PhysicalDeviceObject,
                                &IoStatusBlock,
                                IRP_MN_QUERY_ID,
                                &Stack);
+
     if (NT_SUCCESS(Status))
     {
         IsValidID = IopValidateID((PWCHAR)IoStatusBlock.Information, BusQueryHardwareIDs);
@@ -997,17 +997,13 @@ IopQueryHardwareIds(PDEVICE_NODE DeviceNode,
         TotalLength = 0;
 
         Ptr = (PWSTR)IoStatusBlock.Information;
-        DPRINT("Hardware IDs:\n");
         while (*Ptr)
         {
-            DPRINT("  %S\n", Ptr);
             Length = (ULONG)wcslen(Ptr) + 1;
 
             Ptr += Length;
             TotalLength += Length;
         }
-        DPRINT("TotalLength: %hu\n", TotalLength);
-        DPRINT("\n");
 
         RtlInitUnicodeString(&ValueName, L"HardwareID");
         Status = ZwSetValueKey(InstanceKey,
@@ -1042,8 +1038,7 @@ IopQueryCompatibleIds(PDEVICE_NODE DeviceNode,
     ULONG Length, TotalLength;
     BOOLEAN IsValidID;
 
-    DPRINT("Sending IRP_MN_QUERY_ID.BusQueryCompatibleIDs to device stack\n");
-
+    RtlZeroMemory(&IoStatusBlock, sizeof(IoStatusBlock));
     RtlZeroMemory(&Stack, sizeof(Stack));
     Stack.Parameters.QueryId.IdType = BusQueryCompatibleIDs;
     Status = IopInitiatePnpIrp(DeviceNode->PhysicalDeviceObject,
@@ -1208,9 +1203,6 @@ PiInitializeDevNode(
     UNICODE_STRING InstancePathU;
     PDEVICE_OBJECT OldDeviceObject;
 
-    DPRINT("PiProcessNewDevNode(%p)\n", DeviceNode);
-    DPRINT("PDO 0x%p\n", DeviceNode->PhysicalDeviceObject);
-
     /*
      * FIXME: For critical errors, cleanup and disable device, but always
      * return STATUS_SUCCESS.
@@ -1223,6 +1215,7 @@ PiInitializeDevNode(
         {
             DPRINT1("IopCreateDeviceInstancePath() failed with status 0x%lx\n", Status);
         }
+        DPRINT1("PiInitializeDevNode: EXITING early with status 0x%08lx\n", Status);
         return Status;
     }
 
@@ -1868,6 +1861,7 @@ IopCancelPrepareDeviceForRemoval(PDEVICE_OBJECT DeviceObject)
 
     IopCancelRemoveDevice(DeviceObject);
 
+    RtlZeroMemory(&IoStatusBlock, sizeof(IoStatusBlock));
     Stack.Parameters.QueryDeviceRelations.Type = RemovalRelations;
 
     Status = IopInitiatePnpIrp(DeviceObject,
@@ -1907,7 +1901,6 @@ IopQueryRemoveDevice(IN PDEVICE_OBJECT DeviceObject)
 
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("Removal vetoed by %wZ\n", &DeviceNode->InstancePath);
         IopQueueTargetDeviceEvent(&GUID_DEVICE_REMOVAL_VETOED,
                                   &DeviceNode->InstancePath);
     }
@@ -2022,14 +2015,11 @@ IopPrepareDeviceForRemoval(IN PDEVICE_OBJECT DeviceObject, BOOLEAN Force)
 
     if ((DeviceNode->UserFlags & DNUF_NOT_DISABLEABLE) && !Force)
     {
-        DPRINT1("Removal not allowed for %wZ\n", &DeviceNode->InstancePath);
         return STATUS_UNSUCCESSFUL;
     }
 
     if (!Force && IopQueryRemoveDevice(DeviceObject) != STATUS_SUCCESS)
     {
-        DPRINT1("Removal vetoed by failing the query remove request\n");
-
         IopCancelRemoveDevice(DeviceObject);
 
         return STATUS_UNSUCCESSFUL;
@@ -2235,6 +2225,7 @@ IoRequestDeviceEject(IN PDEVICE_OBJECT PhysicalDeviceObject)
         goto cleanup;
     }
 
+    RtlZeroMemory(&IoStatusBlock, sizeof(IoStatusBlock));
     Stack.Parameters.QueryDeviceRelations.Type = EjectionRelations;
 
     Status = IopInitiatePnpIrp(PhysicalDeviceObject,
@@ -2356,7 +2347,6 @@ PiDevNodeStateMachine(
             case DeviceNodeUnspecified: // this state is not used
                 break;
             case DeviceNodeUninitialized:
-                DPRINT("DeviceNodeUninitialized %wZ\n", &currentNode->InstancePath);
                 status = PiInitializeDevNode(currentNode);
                 doProcessAgain = NT_SUCCESS(status);
                 break;
@@ -2411,7 +2401,6 @@ PiDevNodeStateMachine(
             case DeviceNodeStarted:
                 if (currentNode->Flags & DNF_REENUMERATE)
                 {
-                    DPRINT("DeviceNodeStarted REENUMERATE %wZ\n", &currentNode->InstancePath);
                     currentNode->Flags &= ~DNF_REENUMERATE;
                     status = PiIrpQueryDeviceRelations(currentNode, BusRelations);
 
@@ -2519,6 +2508,9 @@ skipEnum:
             }
             KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
         }
+        else
+        {
+        }
         ObDereferenceObject(referencedObject);
     } while (doProcessAgain || currentNode != RootNode);
 }
@@ -2561,12 +2553,24 @@ PipDeviceActionWorker(
     KIRQL OldIrql;
     PDEVICE_NODE deviceNode;
     NTSTATUS status;
+#if defined(_M_ARM64)
+    static ULONG WorkerCallCount = 0;
+    WorkerCallCount++;
+    DPRINT1("[arm64] PipDeviceActionWorker: ENTRY #%lu\n", WorkerCallCount);
+#endif
 
     KeAcquireSpinLock(&IopDeviceActionLock, &OldIrql);
+
+#if defined(_M_ARM64)
+    {
+        ULONG RequestCount = 0;
+#endif
+
     while (!IsListEmpty(&IopDeviceActionRequestList))
     {
         ListEntry = RemoveHeadList(&IopDeviceActionRequestList);
         KeReleaseSpinLock(&IopDeviceActionLock, OldIrql);
+
         Wrapper = CONTAINING_RECORD(ListEntry, DEVICE_ACTION_REQUEST_WRAPPER, Request.RequestListEntry);
         ASSERT(Wrapper->GuardStart == DEVICE_ACTION_GUARD);
         ASSERT(Wrapper->GuardEnd == DEVICE_ACTION_GUARD);
@@ -2579,8 +2583,11 @@ PipDeviceActionWorker(
 
         status = STATUS_SUCCESS;
 
-        DPRINT("Processing PnP request %p: DeviceObject - %p, Action - %s\n",
-               Request, Request->DeviceObject, ActionToStr(Request->Action));
+#if defined(_M_ARM64)
+        RequestCount++;
+        if (RequestCount % 10 == 1 || RequestCount <= 5)
+            DPRINT1("[arm64] PipDeviceActionWorker: Processing request #%lu Action=%u\n", RequestCount, Request->Action);
+#endif
 
         switch (Request->Action)
         {
@@ -2679,17 +2686,22 @@ PipDeviceActionWorker(
 
         DPRINT("Finished processing PnP request %p\n", Request);
         ObDereferenceObject(Request->DeviceObject);
-        DPRINT1("Freeing PnP request %p action %u status 0x%08lx\n",
-                Request,
-                Request->Action,
-                status);
         ASSERT(Wrapper->GuardStart == DEVICE_ACTION_GUARD);
         ASSERT(Wrapper->GuardEnd == DEVICE_ACTION_GUARD);
         Wrapper->GuardStart = Wrapper->GuardEnd = 0;
         ExFreePoolWithTag(Wrapper, TAG_IO);
         KeAcquireSpinLock(&IopDeviceActionLock, &OldIrql);
     }
+
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] PipDeviceActionWorker: Processed %lu requests total\n", RequestCount);
+    }
+#endif
+
     IopDeviceActionInProgress = FALSE;
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] PipDeviceActionWorker: EXIT - Signaling PiEnumerationFinished\n");
+#endif
     KeSetEvent(&PiEnumerationFinished, IO_NO_INCREMENT, FALSE);
     KeReleaseSpinLock(&IopDeviceActionLock, OldIrql);
 }
@@ -2715,16 +2727,12 @@ PiQueueDeviceAction(
     KIRQL OldIrql;
 
     Wrapper = ExAllocatePoolWithTag(NonPagedPoolMustSucceed, sizeof(*Wrapper), TAG_IO);
+    RtlZeroMemory(Wrapper, sizeof(*Wrapper));
     Wrapper->GuardStart = Wrapper->GuardEnd = DEVICE_ACTION_GUARD;
     Request = &Wrapper->Request;
 
     DPRINT("PiQueueDeviceAction: DeviceObject - %p, Request - %p, Action - %s\n",
         DeviceObject, Request, ActionToStr(Action));
-    DPRINT1("PiQueueDeviceAction: allocated %p (%lu bytes wrapper) for action %u\n",
-            Wrapper,
-            (ULONG)sizeof(*Wrapper),
-            Action);
-
     ObReferenceObject(DeviceObject);
 
     Request->DeviceObject = DeviceObject;
@@ -2735,6 +2743,23 @@ PiQueueDeviceAction(
     KeAcquireSpinLock(&IopDeviceActionLock, &OldIrql);
     InsertTailList(&IopDeviceActionRequestList, &Request->RequestListEntry);
 
+#if defined(_M_ARM64)
+    /* ARM64: Don't call worker synchronously - it can infinite loop on USB enumeration.
+     * Always queue to worker thread so boot can continue. */
+    if (IopDeviceActionInProgress || !PnPBootDriversLoaded)
+    {
+        KeReleaseSpinLock(&IopDeviceActionLock, OldIrql);
+        DPRINT1("[arm64] PiQueueDeviceAction: Worker already in progress or drivers not loaded, request queued\n");
+        return;
+    }
+    IopDeviceActionInProgress = TRUE;
+    KeClearEvent(&PiEnumerationFinished);
+    KeReleaseSpinLock(&IopDeviceActionLock, OldIrql);
+
+    ExInitializeWorkItem(&IopDeviceActionWorkItem, PipDeviceActionWorker, NULL);
+    ExQueueWorkItem(&IopDeviceActionWorkItem, DelayedWorkQueue);
+    DPRINT1("[arm64] PiQueueDeviceAction: Work item queued, returning immediately\n");
+#else
     if (Action == PiActionEnumRootDevices || Action == PiActionAddBootDevices)
     {
         ASSERT(!IopDeviceActionInProgress);
@@ -2758,6 +2783,7 @@ PiQueueDeviceAction(
 
     ExInitializeWorkItem(&IopDeviceActionWorkItem, PipDeviceActionWorker, NULL);
     ExQueueWorkItem(&IopDeviceActionWorkItem, DelayedWorkQueue);
+#endif
 }
 
 /**

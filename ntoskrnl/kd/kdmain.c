@@ -159,6 +159,20 @@ KdDebuggerInitialize0(
     if (KdpDebugMode.Value == 0)
         KdpDebugMode.Serial = TRUE;
 
+#if defined(_M_ARM64)
+    /*
+     * ARM64 does not have a PS/2 keyboard controller. On x86/AMD64, when
+     * KD_DEBUG_KDSERIAL is not set, the debugger reads input from the PS/2
+     * keyboard. Since ARM64 cannot do this, we must always use serial input
+     * when serial debugging is enabled. Without this, KdpReadTermKey() would
+     * call KdbpTryGetCharKeyboard() which returns -1 immediately on ARM64,
+     * causing an infinite loop in KdIoReadLine() that fills the input buffer
+     * with garbage (0xFF bytes) and hangs the debugger.
+     */
+    if (KdpDebugMode.Serial)
+        KdbDebugState |= KD_DEBUG_KDSERIAL;
+#endif
+
     /* Call the providers at Phase 0 */
     for (i = 0; i < RTL_NUMBER_OF(DispatchTable); i++)
     {
@@ -196,6 +210,10 @@ KdpDriverReinit(
     DPRINT("*** KD %sREINITIALIZATION - Phase %d ***\n",
            Context ? "" : "BOOT ", BootPhase);
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] KdpDriverReinit: Phase %d, Context=%p\n", BootPhase, Context);
+#endif
+
     /* Call the registered providers */
     for (CurrentEntry = KdProviders.Flink;
          CurrentEntry != &KdProviders; NOTHING)
@@ -210,10 +228,18 @@ KdpDriverReinit(
         /* Call it if it requires a reinitialization */
         if (CurrentTable->KdpInitRoutine)
         {
+#if defined(_M_ARM64)
+            DPRINT1("[arm64] KdpDriverReinit: calling KdpInitRoutine=%p for provider %p\n",
+                    CurrentTable->KdpInitRoutine, CurrentTable);
+#endif
             /* Get the initialization routine and reset it */
             KdpInitRoutine = CurrentTable->KdpInitRoutine;
             CurrentTable->KdpInitRoutine = NULL;
             CurrentTable->InitStatus = KdpInitRoutine(CurrentTable, BootPhase);
+#if defined(_M_ARM64)
+            DPRINT1("[arm64] KdpDriverReinit: KdpInitRoutine returned 0x%08lx\n",
+                    CurrentTable->InitStatus);
+#endif
             DPRINT("KdpInitRoutine(%p) returned 0x%08lx\n",
                    CurrentTable, CurrentTable->InitStatus);
 
@@ -222,6 +248,9 @@ KdpDriverReinit(
         }
     }
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] KdpDriverReinit: loop finished, ScheduleReinit=%d\n", ScheduleReinit);
+#endif
     DPRINT("ScheduleReinit: %s\n", ScheduleReinit ? "TRUE" : "FALSE");
     if (ScheduleReinit)
     {

@@ -575,6 +575,24 @@ CmpDereferenceKeyControlBlock(IN PCM_KEY_CONTROL_BLOCK Kcb)
     CMTRACE(CM_REFERENCE_DEBUG,
             "%s - Dereferencing KCB: %p\n", __FUNCTION__, Kcb);
 
+    /*
+     * ARM64 FIX: Validate KCB signature before dereferencing.
+     * This catches use-after-free scenarios where the KCB was freed
+     * but a stale pointer was later dereferenced through the delayed
+     * dereference mechanism.
+     */
+    if (Kcb->Signature == CM_KCB_INVALID_SIGNATURE)
+    {
+        DPRINT1("CmpDereferenceKeyControlBlock: KCB %p already freed, ignoring\n", Kcb);
+        return;
+    }
+    if (Kcb->Signature != CM_KCB_SIGNATURE)
+    {
+        DPRINT1("CmpDereferenceKeyControlBlock: KCB %p has invalid signature 0x%lx, ignoring\n",
+                Kcb, Kcb->Signature);
+        return;
+    }
+
     /* Get the ref count and update it */
     OldRefCount = *(PLONG)&Kcb->RefCount;
     NewRefCount = OldRefCount - 1;
@@ -608,6 +626,23 @@ CmpDereferenceKeyControlBlockWithLock(IN PCM_KEY_CONTROL_BLOCK Kcb,
 {
     CMTRACE(CM_REFERENCE_DEBUG,
             "%s - Dereferencing KCB: %p\n", __FUNCTION__, Kcb);
+
+    /*
+     * ARM64 FIX: Runtime check for KCB validity in addition to debug ASSERT.
+     * This is crucial for catching use-after-free bugs where the delayed
+     * dereference mechanism processes a stale KCB pointer.
+     */
+    if (Kcb->Signature == CM_KCB_INVALID_SIGNATURE)
+    {
+        DPRINT1("CmpDereferenceKeyControlBlockWithLock: KCB %p already freed, ignoring\n", Kcb);
+        return;
+    }
+    if (Kcb->Signature != CM_KCB_SIGNATURE)
+    {
+        DPRINT1("CmpDereferenceKeyControlBlockWithLock: KCB %p has invalid signature 0x%lx, ignoring\n",
+                Kcb, Kcb->Signature);
+        return;
+    }
 
     /* Sanity check */
     ASSERT_KCB_VALID(Kcb);

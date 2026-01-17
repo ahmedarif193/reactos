@@ -474,7 +474,10 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
 
     add_subdirectory(sdk/include)
 
-    if(ARCH MATCHES "64$")
+    if(ARCH STREQUAL "arm64")
+        # ARM64 needs lower base addresses due to IMAGE_REL_ARM64_ADDR32 relocation limits
+        include(sdk/cmake/baseaddress_arm64.cmake)
+    elseif(ARCH MATCHES "64$")
         include(sdk/cmake/baseaddress64.cmake)
     elseif(MSVC)
         include(sdk/cmake/baseaddress_msvc.cmake)

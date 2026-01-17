@@ -48,9 +48,12 @@
                    ((type) == KdbAccessWrite ? "write" :                  \
                    ((type) == KdbAccessReadWrite ? "rdwr" : "exec")))
 
+/* NPX state is x86/x64 FPU specific - not available on ARM64 */
+#if !defined(_M_ARM64)
 #define NPX_STATE_TO_STRING(state)                                        \
                    ((state) == NPX_STATE_LOADED ? "Loaded" :              \
                    ((state) == NPX_STATE_NOT_LOADED ? "Not loaded" : "Unknown"))
+#endif
 
 /* PROTOTYPES ****************************************************************/
 
@@ -70,7 +73,9 @@ static BOOLEAN KdbpCmdThread(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdProc(ULONG Argc, PCHAR Argv[]);
 
 static BOOLEAN KdbpCmdMod(ULONG Argc, PCHAR Argv[]);
+#if !defined(_M_ARM64)
 static BOOLEAN KdbpCmdGdtLdtIdt(ULONG Argc, PCHAR Argv[]);
+#endif
 static BOOLEAN KdbpCmdPcr(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdPciRange(ULONG Argc, PCHAR Argv[]);
 #ifdef _M_IX86
@@ -154,6 +159,31 @@ static volatile ULONG KdpDmesgFreeBytes = 0;
 static volatile ULONG KdbDmesgTotalWritten = 0;
 static volatile BOOLEAN KdbpIsInDmesgMode = FALSE;
 static KSPIN_LOCK KdpDmesgLogSpinLock;
+
+/*
+ * Reentrancy guard for KDB backtrace generation.
+ *
+ * CRITICAL: This prevents infinite recursion when the stack walker causes
+ * a page fault during backtrace generation. The sequence would be:
+ *   1. Initial crash triggers KDB
+ *   2. KDB generates backtrace via GetNextFrame
+ *   3. GetNextFrame calls RtlLookupFunctionEntry
+ *   4. RtlLookupFunctionEntry accesses unmapped PE header -> PAGE_FAULT
+ *   5. Page fault handler triggers KDB again
+ *   6. KDB tries to generate backtrace -> infinite recursion
+ *
+ * Per-processor guards ensure we detect and break the recursion.
+ */
+static volatile LONG g_KdbpBacktraceActive[MAXIMUM_PROCESSORS] = {0};
+
+/*
+ * NOTE: g_KdbpSkipRtlLookup is no longer used. Reentrancy protection is
+ * provided by g_KdbpBacktraceActive per-processor guard. The IRQL check
+ * (KeGetCurrentIrql() > DISPATCH_LEVEL) in GetNextFrame() handles cases
+ * where PE headers might not be accessible.
+ *
+ * REMOVED: static volatile BOOLEAN g_KdbpSkipRtlLookup = FALSE;
+ */
 
 const CSTRING KdbPromptStr = RTL_CONSTANT_STRING("kdb:> ");
 
@@ -395,9 +425,11 @@ static const struct
     /* System information */
     { NULL, NULL, "System info", NULL },
     { "mod", "mod [address]", "List all modules or the one containing address.", KdbpCmdMod },
+#if !defined(_M_ARM64)
     { "gdt", "gdt", "Display the global descriptor table.", KdbpCmdGdtLdtIdt },
     { "ldt", "ldt", "Display the local descriptor table.", KdbpCmdGdtLdtIdt },
     { "idt", "idt", "Display the interrupt descriptor table.", KdbpCmdGdtLdtIdt },
+#endif
     { "pcr", "pcr", "Display the processor control region.", KdbpCmdPcr },
     { "pcirange", "pcirange", "Display the HAL-advertised PCI bus span.", KdbpCmdPciRange },
 #ifdef _M_IX86
@@ -1043,14 +1075,6 @@ KdbpCmdRegs(
 {
     PCONTEXT Context = KdbCurrentTrapFrame;
     INT i;
-    static const PCHAR EflagsBits[32] = { " CF", NULL, " PF", " BIT3", " AF", " BIT5",
-                                          " ZF", " SF", " TF", " IF", " DF", " OF",
-                                          NULL, NULL, " NT", " BIT15", " RF", " VF",
-                                          " AC", " VIF", " VIP", " ID", " BIT22",
-                                          " BIT23", " BIT24", " BIT25", " BIT26",
-                                          " BIT27", " BIT28", " BIT29", " BIT30",
-                                          " BIT31" };
-
     if (Argv[0][0] == 'r') /* regs */
     {
 #ifdef _M_IX86
@@ -1066,7 +1090,7 @@ KdbpCmdRegs(
                   Context->Ecx, Context->Edx,
                   Context->Esi, Context->Edi,
                   Context->Ebp);
-#elif defined(_M_ARM64)
+#elif defined(_M_ARM64) || defined(__aarch64__)
         /* ARM64 general-purpose registers */
         KdbpPrint("   PC   0x%016llx     SP   0x%016llx\n"
                   "   LR   0x%016llx     FP   0x%016llx\n",
@@ -1129,8 +1153,16 @@ KdbpCmdRegs(
                   Context->Rsi, Context->Rdi,
                   Context->Rbp);
 #endif
-#ifndef _M_ARM64
+#if (defined(_M_IX86) || defined(_M_AMD64) || defined(__i386__) || defined(__x86_64__)) && \
+    !defined(_M_ARM64) && !defined(__aarch64__)
         /* Display the EFlags (x86/AMD64 only) */
+        static const PCHAR EflagsBits[32] = { " CF", NULL, " PF", " BIT3", " AF", " BIT5",
+                                              " ZF", " SF", " TF", " IF", " DF", " OF",
+                                              NULL, NULL, " NT", " BIT15", " RF", " VF",
+                                              " AC", " VIF", " VIP", " ID", " BIT22",
+                                              " BIT23", " BIT24", " BIT25", " BIT26",
+                                              " BIT27", " BIT28", " BIT29", " BIT30",
+                                              " BIT31" };
         KdbpPrint("EFLAGS  0x%08x ", Context->EFlags);
         for (i = 0; i < 32; i++)
         {
@@ -1436,7 +1468,130 @@ KdbpContextFromPrevTss(
 }
 #endif // _M_IX86
 
-#ifdef _M_AMD64
+#if defined(_M_AMD64) || defined(_M_ARM64)
+
+#if defined(_M_ARM64)
+/*
+ * NOTE: The following validation functions are currently unused because
+ * we now skip RtlLookupFunctionEntry entirely during crash/backtrace
+ * scenarios. Kept for potential future use.
+ */
+#if 0
+/*
+ * KdbpIsValidCodeAddressSafe - Validate that an address points to executable code
+ *
+ * This function checks whether a given address is a valid return address.
+ * Unlike the unsafe version, this one NEVER calls RtlLookupFunctionEntry
+ * because that function can cause page faults on unmapped PE headers, leading
+ * to recursive exceptions during crash handling.
+ *
+ * Instead, we use heuristics and module table lookups that are safe.
+ *
+ * Parameters:
+ *   Address - The address to validate as a potential return address
+ *
+ * Returns:
+ *   TRUE if the address appears to be valid executable code
+ *   FALSE otherwise
+ */
+static
+BOOLEAN
+KdbpIsValidCodeAddressSafe(
+    _In_ ULONG64 Address)
+{
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+
+    /* Quick sanity check - must be in kernel address space */
+    if (Address < 0xFFFF000000000000ULL)
+        return FALSE;
+
+    /* Must be 4-byte aligned (ARM64 instructions are 4 bytes) */
+    if ((Address & 0x3) != 0)
+        return FALSE;
+
+    /*
+     * Check if the address is within a loaded module's address range.
+     * KdbpSymFindModule is safe - it walks the module list without
+     * accessing PE headers that might be paged out.
+     */
+    if (!KdbpSymFindModule((PVOID)Address, -1, &LdrEntry))
+    {
+        /* Not in any known module - likely invalid */
+        return FALSE;
+    }
+
+    /*
+     * Check if it's in a code section using KdbpSymIsCodeAddress.
+     * This function is designed to be safe during exception handling.
+     */
+    return KdbpSymIsCodeAddress((PVOID)Address, LdrEntry);
+}
+#endif /* Disabled - kept for future use */
+
+/*
+ * KdbpIsValidCodeAddress - Validate that an address points to executable code
+ *
+ * This function checks whether a given address is a valid return address by
+ * verifying that it has a corresponding function entry in the .pdata section.
+ * This is critical for ARM64 stack unwinding because without proper validation,
+ * the unwinder can mistake data symbols (like global variables) for return
+ * addresses, producing bogus stack traces.
+ *
+ * SAFETY: At high IRQL (> DISPATCH_LEVEL), falls back to safer
+ * KdbpIsValidCodeAddressSafe() which doesn't touch PE headers.
+ *
+ * Parameters:
+ *   Address - The address to validate as a potential return address
+ *
+ * Returns:
+ *   TRUE if the address has a function entry (is in .text/code section)
+ *   FALSE if the address has no function entry (likely data, or leaf function)
+ */
+/*
+ * NOTE: This function is currently unused because the gap-based stack
+ * scanning code that would use it is disabled (see the #if 0 block in
+ * GetNextFrame). Kept for potential future use in non-crash contexts.
+ */
+#if 0
+static
+BOOLEAN
+KdbpIsValidCodeAddress(
+    _In_ ULONG64 Address)
+{
+    PRUNTIME_FUNCTION FunctionEntry;
+    ULONG64 ImageBase;
+
+    /* Quick sanity check - must be in kernel address space */
+    if (Address < 0xFFFF000000000000ULL)
+        return FALSE;
+
+    /* Must be 4-byte aligned (ARM64 instructions are 4 bytes) */
+    if ((Address & 0x3) != 0)
+        return FALSE;
+
+    /*
+     * At high IRQL, PE headers might not be accessible. Fall back to
+     * section-based validation that doesn't call RtlLookupFunctionEntry.
+     */
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+    {
+        return KdbpIsValidCodeAddressSafe(Address);
+    }
+
+    /*
+     * Lookup the function entry for this address.
+     * If found, the address is in a function's code range.
+     * If NULL, the address is either:
+     *   - In a data section (no .pdata entry)
+     *   - In a leaf function without unwind info
+     *   - Not in any loaded module
+     */
+    FunctionEntry = RtlLookupFunctionEntry(Address, (PULONG_PTR)&ImageBase, NULL);
+
+    return (FunctionEntry != NULL);
+}
+#endif /* Disabled - kept for future use */
+#endif /* _M_ARM64 */
 
 static
 BOOLEAN
@@ -1449,6 +1604,7 @@ GetNextFrame(
 
     _SEH2_TRY
     {
+#if defined(_M_AMD64)
         /* Lookup the FunctionEntry for the current RIP */
         FunctionEntry = RtlLookupFunctionEntry(Context->Rip, &ImageBase, NULL);
         if (FunctionEntry == NULL)
@@ -1470,6 +1626,420 @@ GetNextFrame(
                              &EstablisherFrame,
                              NULL);
         }
+#elif defined(_M_ARM64)
+        /*
+         * ARM64 stack unwinding strategy:
+         *
+         * 1. Try RtlVirtualUnwind with .pdata function entries (preferred)
+         *    - Skip only at high IRQL where PE headers may be inaccessible
+         * 2. Fall back to frame-pointer based unwinding
+         * 3. Gap-based scanning for frames without FP chain
+         * 4. Stack scanning fallback with BL/BLR validation
+         * 5. Use LR as last resort for leaf functions
+         *
+         * ARM64 uses a frame pointer chain where:
+         *   [FP+0] = previous FP (x29)
+         *   [FP+8] = return address (LR/x30)
+         *
+         * Reentrancy protection is provided by the per-processor guard in
+         * KdbpCmdBackTrace. If a page fault occurs during RtlLookupFunctionEntry,
+         * the recursive backtrace attempt will be detected and aborted.
+         */
+        {
+            ULONG64 OldPc = Context->Pc;
+            ULONG64 OldFp = Context->Fp;
+            ULONG64 OldLr = Context->Lr;
+            ULONG64 OldSp = Context->Sp;
+
+            /*
+             * SkipRtlLookup: Only skip RtlLookupFunctionEntry at high IRQL where
+             * PE headers might not be accessible. The per-processor reentrancy
+             * guard in KdbpCmdBackTrace prevents infinite recursion if a page
+             * fault occurs during RtlLookupFunctionEntry.
+             */
+            BOOLEAN SkipRtlLookup = (KeGetCurrentIrql() > DISPATCH_LEVEL);
+
+            FunctionEntry = NULL;
+
+            /*
+             * First try RtlVirtualUnwind if we have function entry data.
+             * Skip only if IRQL is too high (PE headers may be inaccessible).
+             */
+            if (!SkipRtlLookup)
+            {
+                _SEH2_TRY
+                {
+                    FunctionEntry = RtlLookupFunctionEntry(Context->Pc, (PULONG_PTR)&ImageBase, NULL);
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    /*
+                     * RtlLookupFunctionEntry can touch image metadata for the
+                     * current PC. If that memory is not accessible, do not let
+                     * the page fault recurse into KDB; fall back to FP/LR.
+                     */
+                    FunctionEntry = NULL;
+                }
+                _SEH2_END;
+            }
+
+            if (FunctionEntry != NULL)
+            {
+                CONTEXT TempContext = *Context;
+                BOOLEAN UnwindOk = TRUE;
+
+                _SEH2_TRY
+                {
+                    RtlVirtualUnwind(0, /* UNW_FLAG_NHANDLER */
+                                     ImageBase,
+                                     TempContext.Pc,
+                                     FunctionEntry,
+                                     &TempContext,
+                                     &HandlerData,
+                                     &EstablisherFrame,
+                                     NULL);
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    UnwindOk = FALSE;
+                }
+                _SEH2_END;
+
+                /*
+                 * Validate that we made progress:
+                 * - PC must change
+                 * - PC must be in kernel space
+                 * - SP should not go backwards significantly (allow small decreases for exception handling)
+                 */
+                BOOLEAN PcValid = (UnwindOk && TempContext.Pc != OldPc && TempContext.Pc >= 0xFFFF000000000000ULL);
+                /* Allow SP to decrease slightly (max 1KB) for exception context switches */
+                BOOLEAN SpReasonable = (UnwindOk &&
+                                        TempContext.Sp >= OldSp - 0x400 &&
+                                        TempContext.Sp < OldSp + 0x10000); /* Max 64KB frame */
+
+                if (PcValid && SpReasonable)
+                {
+                    *Context = TempContext;
+                    return TRUE;
+                }
+                /* RtlVirtualUnwind failed - fall through to FP chain */
+            }
+            else
+            {
+                /*
+                 * No .pdata entry - likely a leaf function or assembly stub.
+                 * Use LR as the return address (ARM64 ABI).
+                 *
+                 * IMPORTANT: Validate LR is in valid code range:
+                 * - >= 0xFFFF800000000000 (KSEG0, kernel space start)
+                 * - < 0xFFFFF8A000000000 (below paged pool)
+                 * This excludes pool allocations (0xFFFFA8...) which are higher.
+                 */
+                if (OldLr != 0 && OldLr != OldPc &&
+                    OldLr >= 0xFFFF800000000000ULL &&
+                    OldLr < 0xFFFFF8A000000000ULL &&
+                    (OldLr & 0x3) == 0)
+                {
+                    Context->Pc = OldLr;
+                    Context->Lr = 0;  /* Clear LR since we've used it */
+                    return TRUE;
+                }
+            }
+
+            /*
+             * Frame-pointer based unwinding strategies.
+             */
+            BOOLEAN FpNotZero = (OldFp != 0);
+            BOOLEAN FpNotFE = (OldFp != 0xFFFFFFFFFFFFFFFEULL);
+            BOOLEAN FpNotFF = (OldFp != 0xFFFFFFFFFFFFFFFFULL);
+            BOOLEAN FpInKernel = (OldFp >= 0xFFFF000000000000ULL);
+            BOOLEAN FpAligned = ((OldFp & 0x7) == 0);
+            BOOLEAN FpValid = (FpNotZero && FpNotFE && FpNotFF && FpInKernel && FpAligned);
+
+            /*
+             * Frame-pointer based unwinding - check FP chain first.
+             * ARM64 ABI: [FP] = previous FP, [FP+8] = return address (LR)
+             */
+            BOOLEAN FpInStackRange = (FpValid &&
+                                      OldFp >= OldSp &&
+                                      OldFp < OldSp + 0x10000);
+
+            if (FpInStackRange)
+            {
+                ULONG64 NewFp = 0, NewLr = 0;
+                NTSTATUS Status;
+
+                Status = KdbpSafeReadMemory(&NewFp, (PVOID)OldFp, sizeof(ULONG64));
+                if (NT_SUCCESS(Status))
+                {
+                    Status = KdbpSafeReadMemory(&NewLr, (PVOID)(OldFp + 8), sizeof(ULONG64));
+                }
+
+                if (NT_SUCCESS(Status))
+                {
+                    BOOLEAN NewFpValid = (NewFp == 0 ||
+                        (NewFp > OldFp &&
+                         NewFp < OldFp + 0x10000 &&
+                         (NewFp & 0x7) == 0));
+
+                    /*
+                     * Validate NewLr is a valid kernel code address:
+                     * - Must be in kernel space (>= KSEG0 at 0xFFFF800000000000)
+                     * - Must be below paged pool (< MI_PAGED_POOL_START at 0xFFFFF8A000000000)
+                     * - Code can be in KSEG0 (kernel) or system space (drivers at 0xFFFFF88000000000)
+                     * - Must be 4-byte aligned (ARM64 instruction alignment)
+                     */
+                    BOOLEAN NewLrValid = (NewLr != 0 &&
+                        NewLr >= 0xFFFF800000000000ULL &&
+                        NewLr < 0xFFFFF8A000000000ULL &&
+                        (NewLr & 0x3) == 0);
+
+                    /*
+                     * CRITICAL: Check if there's a gap between OldSp and OldFp.
+                     * If there's a significant gap (> 16 bytes), there might be
+                     * frames that didn't set up FP properly. Scan that gap first.
+                     *
+                     * Also scan if NewFp=0 (end of chain) because that often means
+                     * intermediate frames didn't establish FP chain at all.
+                     */
+                    ULONG64 SpFpGap = (OldFp > OldSp) ? (OldFp - OldSp) : 0;
+                    BOOLEAN ShouldScanGap = (SpFpGap > 0x20);  /* Gap > 32 bytes */
+
+                    if (ShouldScanGap && !SkipRtlLookup)
+                    {
+                        /*
+                         * Scan the gap between OldSp and OldFp for return addresses.
+                         * These are frames from functions that didn't set up FP chain.
+                         *
+                         * NOTE: This is disabled when SkipRtlLookup is TRUE because
+                         * the RtlLookupFunctionEntry call can cause page faults.
+                         */
+                        ULONG64 ScanEnd = OldFp;
+                        ULONG64 ScanAddr;
+
+                        for (ScanAddr = OldSp; ScanAddr < ScanEnd; ScanAddr += 8)
+                        {
+                            ULONG64 PotentialLr = 0;
+
+                            if (!NT_SUCCESS(KdbpSafeReadMemory(&PotentialLr, (PVOID)ScanAddr, sizeof(ULONG64))))
+                                break;
+
+                            /*
+                             * Validate LR: must be a valid kernel code address.
+                             * Range: [KSEG0, MI_PAGED_POOL_START) to include driver space.
+                             */
+                            if (PotentialLr == OldPc ||
+                                PotentialLr < 0xFFFF800000000000ULL ||
+                                PotentialLr >= 0xFFFFF8A000000000ULL ||
+                                (PotentialLr & 0x3) != 0)
+                            {
+                                continue;
+                            }
+
+                            /*
+                             * Validate the address belongs to executable code.
+                             * Do not require .pdata: leaf/asm routines may not have it.
+                             */
+                            BOOLEAN IsCodeAddress = FALSE;
+                            PLDR_DATA_TABLE_ENTRY ScanLdrEntry;
+
+                            if (KdbpSymFindModule((PVOID)PotentialLr, -1, &ScanLdrEntry) &&
+                                KdbpSymIsCodeAddress((PVOID)PotentialLr, ScanLdrEntry))
+                            {
+                                IsCodeAddress = TRUE;
+                            }
+
+                            if (IsCodeAddress)
+                            {
+                                /* Validate: preceded by BL or BLR */
+                                ULONG PrevInstr = 0;
+                                if (NT_SUCCESS(KdbpSafeReadMemory(&PrevInstr, (PVOID)(PotentialLr - 4), sizeof(ULONG))))
+                                {
+                                    BOOLEAN IsBL = ((PrevInstr & 0xFC000000) == 0x94000000);
+                                    BOOLEAN IsBLR = ((PrevInstr & 0xFFFFFC1F) == 0xD63F0000);
+
+                                    if (!IsBL && !IsBLR)
+                                        continue;
+                                }
+
+                                /* Found a return address */
+                                Context->Sp = ScanAddr + 8;
+                                Context->Fp = OldFp;  /* Keep FP for chain */
+                                Context->Pc = PotentialLr;
+                                Context->Lr = 0;
+                                return TRUE;
+                            }
+                        }
+                    }
+
+                    /* Use FP chain if valid */
+                    if (NewFpValid && NewLrValid)
+                    {
+                        Context->Sp = OldFp + 16;
+                        Context->Fp = NewFp;
+                        Context->Pc = NewLr;
+                        return TRUE;
+                    }
+                }
+            }
+
+            /*
+             * Stack scanning fallback when FP chain is invalid.
+             * Scan for return addresses with BL/BLR validation.
+             *
+             * NOTE: Skip this entirely when SkipRtlLookup is TRUE to avoid
+             * page faults from RtlLookupFunctionEntry during crash handling.
+             */
+            if (!SkipRtlLookup && (OldSp >= 0xFFFF000000000000ULL) && ((OldSp & 0x7) == 0))
+            {
+                ULONG64 ScanEnd = OldSp + 0x200;
+                ULONG64 ScanAddr;
+
+                for (ScanAddr = OldSp; ScanAddr < ScanEnd; ScanAddr += 8)
+                {
+                    ULONG64 PotentialLr = 0;
+
+                    if (!NT_SUCCESS(KdbpSafeReadMemory(&PotentialLr, (PVOID)ScanAddr, sizeof(ULONG64))))
+                        break;
+
+                    /*
+                     * Validate LR: must be a valid kernel code address.
+                     * Range: [KSEG0, MI_PAGED_POOL_START) to include driver space.
+                     */
+                    if (PotentialLr == OldPc ||
+                        PotentialLr < 0xFFFF800000000000ULL ||
+                        PotentialLr >= 0xFFFFF8A000000000ULL ||
+                        (PotentialLr & 0x3) != 0)
+                    {
+                        continue;
+                    }
+
+                    /*
+                     * Validate the address belongs to executable code.
+                     * Do not require .pdata: leaf/asm routines may not have it.
+                     */
+                    BOOLEAN IsCodeAddress = FALSE;
+                    PLDR_DATA_TABLE_ENTRY ScanLdrEntry;
+
+                    if (KdbpSymFindModule((PVOID)PotentialLr, -1, &ScanLdrEntry) &&
+                        KdbpSymIsCodeAddress((PVOID)PotentialLr, ScanLdrEntry))
+                    {
+                        IsCodeAddress = TRUE;
+                    }
+
+                    if (IsCodeAddress)
+                    {
+                        ULONG PrevInstr = 0;
+                        if (NT_SUCCESS(KdbpSafeReadMemory(&PrevInstr, (PVOID)(PotentialLr - 4), sizeof(ULONG))))
+                        {
+                            BOOLEAN IsBL = ((PrevInstr & 0xFC000000) == 0x94000000);
+                            BOOLEAN IsBLR = ((PrevInstr & 0xFFFFFC1F) == 0xD63F0000);
+
+                            if (!IsBL && !IsBLR)
+                                continue;
+                        }
+
+                        /* Check for FP at ScanAddr-8 */
+                        ULONG64 PotentialFp = 0;
+                        if (ScanAddr >= OldSp + 8)
+                        {
+                            KdbpSafeReadMemory(&PotentialFp, (PVOID)(ScanAddr - 8), sizeof(ULONG64));
+                        }
+
+                        /*
+                         * FP validation: FP should point to higher stack address.
+                         * Stack addresses are in kernel space, typically in the
+                         * system space range (0xFFFFF88000000000+) for kernel stacks.
+                         */
+                        BOOLEAN FpPointsUp = (PotentialFp >= 0xFFFFF88000000000ULL &&
+                                              PotentialFp < 0xFFFFF8A000000000ULL &&
+                                              (PotentialFp & 0x7) == 0 &&
+                                              PotentialFp > ScanAddr);
+                        ULONG64 NewFp = (PotentialFp == 0 || FpPointsUp) ? PotentialFp : OldFp;
+
+                        Context->Sp = ScanAddr + 8;
+                        Context->Fp = NewFp;
+                        Context->Pc = PotentialLr;
+                        Context->Lr = 0;
+                        return TRUE;
+                    }
+                }
+            }
+
+            /*
+             * DISABLED: SP-based stack scanning fallback.
+             * This is too aggressive and picks up random code pointers.
+             * Rely on LR and FP chain instead.
+             */
+#if 0
+            BOOLEAN NeedSpScan = (!FpInStackRange && OldSp >= 0xFFFF000000000000ULL && (OldSp & 0x7) == 0);
+            if (NeedSpScan)
+            {
+                ULONG64 ScanAddr;
+                ULONG64 MaxScan = OldSp + 0x400; /* Scan up to 1KB */
+
+                for (ScanAddr = OldSp; ScanAddr < MaxScan; ScanAddr += 8)
+                {
+                    ULONG64 PotentialLr = 0;
+                    NTSTATUS Status;
+
+                    Status = KdbpSafeReadMemory(&PotentialLr, (PVOID)ScanAddr, sizeof(ULONG64));
+                    if (!NT_SUCCESS(Status))
+                        break;
+
+                    /*
+                     * CRITICAL: Validate with KdbpIsValidCodeAddress to ensure
+                     * the address points to actual code, not data symbols.
+                     */
+                    if (PotentialLr != OldPc && TRUE /* DISABLED */)
+                    {
+                        /* Try to find associated FP at ScanAddr-8 */
+                        ULONG64 PotentialFp = 0;
+                        if (ScanAddr >= OldSp + 8)
+                        {
+                            KdbpSafeReadMemory(&PotentialFp, (PVOID)(ScanAddr - 8), sizeof(ULONG64));
+                        }
+
+                        /* Validate potential FP */
+                        if (PotentialFp == 0 ||
+                            (PotentialFp >= 0xFFFF000000000000ULL &&
+                             (PotentialFp & 0x7) == 0))
+                        {
+                            Context->Sp = ScanAddr + 8;
+                            Context->Fp = PotentialFp;
+                            Context->Pc = PotentialLr;
+                            Context->Lr = 0;
+                            return TRUE;
+                        }
+                    }
+                }
+            }
+#endif /* disabled SP-based scanning */
+
+            /*
+             * LR fallback for leaf functions or when FP chain is invalid.
+             * This is the last resort before giving up.
+             *
+             * IMPORTANT: Validate LR is in valid code range:
+             * - >= 0xFFFF800000000000 (KSEG0, kernel space start)
+             * - < 0xFFFFF8A000000000 (below paged pool)
+             * This excludes pool allocations (0xFFFFA8...) which are higher.
+             */
+            if (OldLr != 0 && OldLr != OldPc &&
+                OldLr >= 0xFFFF800000000000ULL &&
+                OldLr < 0xFFFFF8A000000000ULL &&
+                (OldLr & 0x3) == 0)
+            {
+                DPRINT("[UNWIND] Using LR=%p as fallback return address\n", (PVOID)OldLr);
+                Context->Pc = OldLr;
+                Context->Lr = 0;  /* Clear to prevent reuse */
+                /* Don't modify SP - leaf function didn't push anything */
+                return TRUE;
+            }
+
+            return FALSE;
+        }
+#endif
     }
     _SEH2_EXCEPT(1)
     {
@@ -1486,6 +2056,48 @@ KdbpCmdBackTrace(
     PCHAR Argv[])
 {
     CONTEXT Context = *KdbCurrentTrapFrame;
+    ULONG ProcessorNumber;
+    ULONG MaxFrames = 64;  /* Safety limit to prevent infinite loops */
+    ULONG FrameCount = 0;
+
+    /*
+     * CRITICAL: Set up reentrancy protection to prevent infinite recursion.
+     *
+     * If a page fault occurs during backtrace generation (e.g., when accessing
+     * unmapped PE headers via RtlLookupFunctionEntry), the fault handler may
+     * try to generate another backtrace, leading to infinite recursion.
+     *
+     * We use per-processor guards to detect and prevent this.
+     */
+    ProcessorNumber = KeGetCurrentProcessorNumber();
+    if (ProcessorNumber >= MAXIMUM_PROCESSORS)
+        ProcessorNumber = 0;
+
+    if (InterlockedCompareExchange(&g_KdbpBacktraceActive[ProcessorNumber], 1, 0) != 0)
+    {
+        /*
+         * Already generating a backtrace on this processor.
+         * This is a recursive call - return immediately to break the cycle.
+         */
+        KdbpPrint("WARNING: Recursive backtrace detected - aborting\n");
+        return TRUE;
+    }
+
+    /*
+     * NOTE: We do NOT set g_KdbpSkipRtlLookup here for normal backtraces.
+     * The per-processor guard above provides reentrancy protection. If a page
+     * fault occurs during RtlLookupFunctionEntry, the recursive backtrace will
+     * be caught by the guard and aborted - no infinite loop will occur.
+     *
+     * Setting g_KdbpSkipRtlLookup = TRUE would disable:
+     *   - RtlVirtualUnwind (pdata-based unwinding)
+     *   - Gap-based stack scanning
+     *   - Stack scanning fallbacks
+     * These are all needed for complete backtraces.
+     *
+     * The IRQL check in GetNextFrame() (KeGetCurrentIrql() > DISPATCH_LEVEL)
+     * handles the case where PE headers might not be accessible at high IRQL.
+     */
 
     /* Walk through the frames */
     KdbpPrint("Frames:\n");
@@ -1493,6 +2105,14 @@ KdbpCmdBackTrace(
     {
         BOOLEAN GotNextFrame;
 
+        /* Safety check to prevent infinite loops */
+        if (++FrameCount > MaxFrames)
+        {
+            KdbpPrint("... (truncated after %lu frames)\n", MaxFrames);
+            break;
+        }
+
+#if defined(_M_AMD64)
         KdbpPrint("[%p] ", (PVOID)Context.Rsp);
 
         /* Print the location after the call instruction */
@@ -1510,10 +2130,94 @@ KdbpCmdBackTrace(
             break;
         }
     } while ((Context.Rip != 0) && (Context.Rsp != 0));
+#elif defined(_M_ARM64)
+        /*
+         * ARM64 frame display:
+         * Use SP (stack pointer) as the frame address to match AMD64 format.
+         * AMD64 shows [RSP] <module:offset>, ARM64 shows [SP] <module:offset>.
+         *
+         * Only display frames that are actual code addresses (executable sections).
+         * Stack scanning may find data pointers (global variables, pool tags, etc.)
+         * which have symbols but are not return addresses - filter those out.
+         *
+         * IMPORTANT: Also filter by valid code address range to exclude:
+         * - Pool allocations (0xFFFFA8xxxxxxxxxx)
+         * - Stack addresses (0xFFFFF880050xxxxx)
+         * - Other non-code regions
+         */
+        {
+            PLDR_DATA_TABLE_ENTRY TempLdrEntry;
+
+            /*
+             * First, validate PC is in valid code range:
+             * - >= 0xFFFF800000000000 (KSEG0, kernel space start)
+             * - < 0xFFFFF8A000000000 (below paged pool start)
+             * Skip frames with invalid PC addresses (e.g., pool pointers).
+             *
+             * Also skip addresses that are clearly on the stack:
+             * - If PC is within 64KB of SP, it's likely a stack address, not code
+             * - This helps filter out stack data that happens to be in the valid range
+             */
+            BOOLEAN PcInCodeRange = (Context.Pc >= 0xFFFF800000000000ULL &&
+                                     Context.Pc < 0xFFFFF8A000000000ULL);
+            BOOLEAN PcOnStack = (Context.Pc >= Context.Sp &&
+                                 Context.Pc < Context.Sp + 0x10000); /* Within 64KB above SP */
+
+            if (!PcInCodeRange || PcOnStack)
+            {
+                /* Skip this frame - PC is not in valid code range or is on stack.
+                 * This filters out pool pointers, stack addresses, etc. */
+            }
+            else if (KdbpSymFindModule((PVOID)Context.Pc, -1, &TempLdrEntry))
+            {
+                /* Only display if address is in an executable (.text) section */
+                if (KdbpSymIsCodeAddress((PVOID)Context.Pc, TempLdrEntry))
+                {
+                    KdbpPrint("[%p] ", (PVOID)Context.Sp);
+                    if (!KdbSymPrintAddress((PVOID)Context.Pc, &Context))
+                        KdbpPrint("<%p>", (PVOID)Context.Pc);
+                    KdbpPrint("\n");
+                }
+                /* else: Skip - address is in data section (global variable) */
+            }
+            else
+            {
+                /*
+                 * Module not found in loaded module list but PC is in valid code range.
+                 * This can happen for:
+                 * - Dynamically loaded drivers not yet in PsLoadedModuleList
+                 * - Boot drivers loaded before PsLoadedModuleList is initialized
+                 * - Corrupt module list
+                 * Still print the raw address so we don't have "black holes" in the backtrace.
+                 */
+                KdbpPrint("[%p] <%p> (module not found)\n", (PVOID)Context.Sp, (PVOID)Context.Pc);
+            }
+        }
+
+        if (KdbOutputAborted)
+            break;
+
+        GotNextFrame = GetNextFrame(&Context);
+        if (!GotNextFrame)
+        {
+            /* End of stack walk - this is normal termination */
+            break;
+        }
+        /*
+         * Continue while PC is valid (in kernel space).
+         * FP may become 0 at end of frame chain but that's handled above.
+         */
+    } while (Context.Pc != 0 && Context.Pc >= 0xFFFF000000000000ULL);
+#endif
+
+    /* Release reentrancy guard */
+    InterlockedExchange(&g_KdbpBacktraceActive[ProcessorNumber], 0);
 
     return TRUE;
 }
-#else
+#endif /* _M_AMD64 || _M_ARM64 */
+
+#if !defined(_M_AMD64) && !defined(_M_ARM64)
 /*!\brief Displays a backtrace.
  */
 static BOOLEAN
@@ -1687,7 +2391,7 @@ CheckForParentTSS:
     return TRUE;
 }
 
-#endif // M_AMD64
+#endif /* !_M_AMD64 && !_M_ARM64 (x86 backtrace) */
 
 /*!\brief Continues execution of the system/leaves KDB.
  */
@@ -2175,7 +2879,7 @@ KdbpCmdThread(
                   "  Stack Base:     0x%08x\n"
                   "  Kernel Stack:   0x%08x\n"
                   "  Trap Frame:     0x%08x\n"
-#ifndef _M_AMD64
+#if !defined(_M_AMD64) && !defined(_M_ARM64)
                   "  NPX State:      %s (0x%x)\n"
 #endif
                   , (Argc < 2) ? "Current Thread:\n" : ""
@@ -2188,7 +2892,7 @@ KdbpCmdThread(
                   , Thread->Tcb.StackBase
                   , Thread->Tcb.KernelStack
                   , Thread->Tcb.TrapFrame
-#ifndef _M_AMD64
+#if !defined(_M_AMD64) && !defined(_M_ARM64)
                   , NPX_STATE_TO_STRING(Thread->Tcb.NpxState), Thread->Tcb.NpxState
 #endif
             );
@@ -2386,7 +3090,9 @@ KdbpCmdMod(
 }
 
 /*!\brief Displays GDT, LDT or IDT.
+ * NOTE: x86/x64 specific - ARM64 uses different descriptor mechanisms.
  */
+#if !defined(_M_ARM64)
 static BOOLEAN
 KdbpCmdGdtLdtIdt(
     ULONG Argc,
@@ -2603,6 +3309,7 @@ KdbpCmdGdtLdtIdt(
 
     return TRUE;
 }
+#endif /* !defined(_M_ARM64) */
 
 /*!\brief Displays the KPCR
  */
@@ -2657,7 +3364,20 @@ KdbpCmdPcr(
               , Pcr->VdmAlert
               , Pcr->SecondLevelCacheSize
               , Pcr->InterruptMode);
-#else
+#elif defined(_M_ARM64)
+    /* ARM64-specific PCR fields */
+    KdbpPrint("  Self:                          0x%p\n", Pcr->Self);
+    KdbpPrint("  CurrentPrcb:                   0x%p\n", Pcr->CurrentPrcb);
+    KdbpPrint("  LockArray:                     0x%p\n", Pcr->LockArray);
+    KdbpPrint("  Used_Self:                     0x%p\n", Pcr->Used_Self);
+    KdbpPrint("  CurrentIrql:                   %u\n", Pcr->CurrentIrql);
+    KdbpPrint("  SecondLevelCacheAssociativity: %u\n", Pcr->SecondLevelCacheAssociativity);
+    KdbpPrint("  MajorVersion:                  0x%x\n", Pcr->MajorVersion);
+    KdbpPrint("  MinorVersion:                  0x%x\n", Pcr->MinorVersion);
+    KdbpPrint("  StallScaleFactor:              0x%lx\n", Pcr->StallScaleFactor);
+    KdbpPrint("  SecondLevelCacheSize:          0x%lx\n", Pcr->SecondLevelCacheSize);
+    KdbpPrint("  KdVersionBlock:                0x%p\n", Pcr->KdVersionBlock);
+#else /* _M_AMD64 */
     KdbpPrint("  GdtBase:                       0x%p\n", Pcr->GdtBase);
     KdbpPrint("  TssBase:                       0x%p\n", Pcr->TssBase);
     KdbpPrint("  UserRsp:                       0x%p\n", (PVOID)Pcr->UserRsp);
@@ -3275,31 +3995,36 @@ KdbpPagerInternal(
             /* Disable the repetition of previous command with long many-page output */
             KdbRepeatLastCommand = FALSE;
 
-            if (KdbNumberOfColsPrinted > 0)
-                KdbPuts("\n");
-
-            if (DoPage)
-                Prompt = "--- Press q to abort, e/End,h/Home,u/PgUp, other key/PgDn ---";
-            else
-                Prompt = "--- Press q to abort, any other key to continue ---";
-
-            KdbPuts(Prompt);
-            c = KdpReadTermKey(&ScanCode);
-            if (DoPage) // Show pressed key
-                KdbPrintf(" '%c'/scan=%04x\n", c, ScanCode);
-            else
-                KdbPuts("\n");
-
-            RowsPrintedByTerminal++;
-
-            if (c == 'q')
+            if (!DoPage)
             {
-                KdbOutputAborted = TRUE;
-                return;
+                /*
+                 * Non-interactive mode (DoPage=FALSE): do not block waiting
+                 * for a key press. This is required for QEMU serial logging
+                 * where KDB output is consumed non-interactively.
+                 */
+                KdbNumberOfRowsPrinted = 0;
+                KdbNumberOfColsPrinted = 0;
             }
-
-            if (DoPage)
+            else
             {
+                if (KdbNumberOfColsPrinted > 0)
+                    KdbPuts("\n");
+
+                Prompt = "--- Press q to abort, e/End,h/Home,u/PgUp, other key/PgDn ---";
+
+                KdbPuts(Prompt);
+                c = KdpReadTermKey(&ScanCode);
+                /* Show pressed key */
+                KdbPrintf(" '%c'/scan=%04x\n", c, ScanCode);
+
+                RowsPrintedByTerminal++;
+
+                if (c == 'q')
+                {
+                    KdbOutputAborted = TRUE;
+                    return;
+                }
+
                 if (ScanCode == KEYSC_END || c == 'e')
                 {
                     PCHAR pBufEnd = Buffer + BufLength;
@@ -3317,10 +4042,10 @@ KdbpPagerInternal(
                     p = Buffer;
                     i = strcspn(p, "\n");
                 }
-            }
 
-            KdbNumberOfRowsPrinted = 0;
-            KdbNumberOfColsPrinted = 0;
+                KdbNumberOfRowsPrinted = 0;
+                KdbNumberOfColsPrinted = 0;
+            }
         }
 
         /* Insert a NUL after the line and print only the current line */
@@ -3382,7 +4107,8 @@ KdbpPager(
     _In_ ULONG BufLength)
 {
     /* Call the internal function */
-    KdbpPagerInternal(Buffer, BufLength, TRUE);
+    /* DISABLED: Pagination causes kernel to hang waiting for keyboard input in QEMU */
+    KdbpPagerInternal(Buffer, BufLength, FALSE);
 }
 
 /*!\brief Prints the given string with printf-like formatting.
@@ -3727,6 +4453,10 @@ KdbpCliInit(VOID)
     ULONG FileSize;
     PCHAR FileBuffer;
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] KdbpCliInit: ENTRY\n");
+#endif
+
     /* Don't load the KDBinit file if its buffer is already lying around */
     if (KdbInitFileBuffer)
         return STATUS_SUCCESS;
@@ -3739,11 +4469,17 @@ KdbpCliInit(VOID)
                                NULL,
                                NULL);
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] KdbpCliInit: before ZwOpenFile %wZ\n", &FileName);
+#endif
     /* Open the file */
     Status = ZwOpenFile(&hFile, FILE_READ_DATA | SYNCHRONIZE,
                         &ObjectAttributes, &Iosb, 0,
                         FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT |
                         FILE_NO_INTERMEDIATE_BUFFERING);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] KdbpCliInit: ZwOpenFile returned 0x%lx\n", Status);
+#endif
     if (!NT_SUCCESS(Status))
     {
         DPRINT("Could not open %wZ (Status 0x%lx)\n", &FileName, Status);
@@ -3931,14 +4667,24 @@ KdbInitialize(
 
     if (BootPhase >= 2)
     {
-        /* I/O is now set up for disk access: load the KDBinit file */
-        NTSTATUS Status = KdbpCliInit();
-
-        /* Schedule an I/O reinitialization if needed */
-        if (Status == STATUS_OBJECT_NAME_NOT_FOUND ||
-            Status == STATUS_OBJECT_PATH_NOT_FOUND)
+        /*
+         * Skip KDBinit loading in WinPE/LiveCD mode.
+         * The KDBinit file is not present on LiveCD and attempting
+         * to open \SystemRoot paths during early driver reinit phases
+         * can hang on ARM64 when the symlink isn't fully resolved yet.
+         */
+        extern BOOLEAN InitIsWinPEMode;
+        if (!InitIsWinPEMode)
         {
-            DispatchTable->KdpInitRoutine = KdbInitialize;
+            /* I/O is now set up for disk access: load the KDBinit file */
+            NTSTATUS Status = KdbpCliInit();
+
+            /* Schedule an I/O reinitialization if needed */
+            if (Status == STATUS_OBJECT_NAME_NOT_FOUND ||
+                Status == STATUS_OBJECT_PATH_NOT_FOUND)
+            {
+                DispatchTable->KdpInitRoutine = KdbInitialize;
+            }
         }
     }
 

@@ -37,40 +37,62 @@ BOOLEAN
 NTAPI
 LpcInitSystem(VOID)
 {
-    OBJECT_TYPE_INITIALIZER ObjectTypeInitializer;
     UNICODE_STRING Name;
 
     /* Setup the LPC Lock */
     KeInitializeGuardedMutex(&LpcpLock);
 
+    /*
+     * ARM64 FIX: Use separate OBJECT_TYPE_INITIALIZER variables to avoid
+     * compiler bug where structure pointer is offset by 8 bytes on reuse.
+     * See ARM64_STRUCTURE_POINTER_OFFSET_BUG.md for details.
+     */
+
     /* Create the Port Object Type */
-    RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
-    RtlInitUnicodeString(&Name, L"Port");
-    ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(LPCP_NONPAGED_PORT_QUEUE);
-    ObjectTypeInitializer.DefaultPagedPoolCharge = FIELD_OFFSET(LPCP_PORT_OBJECT, WaitEvent);
-    ObjectTypeInitializer.GenericMapping = LpcpPortMapping;
-    ObjectTypeInitializer.PoolType = PagedPool;
-    ObjectTypeInitializer.UseDefaultObject = TRUE;
-    ObjectTypeInitializer.CloseProcedure = LpcpClosePort;
-    ObjectTypeInitializer.DeleteProcedure = LpcpDeletePort;
-    ObjectTypeInitializer.ValidAccessMask = PORT_ALL_ACCESS;
-    ObjectTypeInitializer.InvalidAttributes = OBJ_VALID_ATTRIBUTES & ~OBJ_CASE_INSENSITIVE;
-    ObCreateObjectType(&Name,
-                       &ObjectTypeInitializer,
-                       NULL,
-                       &LpcPortObjectType);
+    {
+        OBJECT_TYPE_INITIALIZER PortTypeInitializer;
+        RtlZeroMemory(&PortTypeInitializer, sizeof(PortTypeInitializer));
+
+        RtlInitUnicodeString(&Name, L"Port");
+        PortTypeInitializer.Length = sizeof(PortTypeInitializer);
+        PortTypeInitializer.DefaultNonPagedPoolCharge = sizeof(LPCP_NONPAGED_PORT_QUEUE);
+        PortTypeInitializer.DefaultPagedPoolCharge = FIELD_OFFSET(LPCP_PORT_OBJECT, WaitEvent);
+        PortTypeInitializer.GenericMapping = LpcpPortMapping;
+        PortTypeInitializer.PoolType = PagedPool;
+        PortTypeInitializer.UseDefaultObject = TRUE;
+        PortTypeInitializer.CloseProcedure = LpcpClosePort;
+        PortTypeInitializer.DeleteProcedure = LpcpDeletePort;
+        PortTypeInitializer.ValidAccessMask = PORT_ALL_ACCESS;
+        PortTypeInitializer.InvalidAttributes = OBJ_VALID_ATTRIBUTES & ~OBJ_CASE_INSENSITIVE;
+
+        ObCreateObjectType(&Name,
+                           &PortTypeInitializer,
+                           NULL,
+                           &LpcPortObjectType);
+    }
 
     /* Create the Waitable Port Object Type */
-    RtlInitUnicodeString(&Name, L"WaitablePort");
-    ObjectTypeInitializer.PoolType = NonPagedPool;
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge += sizeof(LPCP_PORT_OBJECT);
-    ObjectTypeInitializer.DefaultPagedPoolCharge = 0;
-    ObjectTypeInitializer.UseDefaultObject = FALSE;
-    ObCreateObjectType(&Name,
-                       &ObjectTypeInitializer,
-                       NULL,
-                       &LpcWaitablePortObjectType);
+    {
+        OBJECT_TYPE_INITIALIZER WaitablePortTypeInitializer;
+        RtlZeroMemory(&WaitablePortTypeInitializer, sizeof(WaitablePortTypeInitializer));
+
+        RtlInitUnicodeString(&Name, L"WaitablePort");
+        WaitablePortTypeInitializer.Length = sizeof(WaitablePortTypeInitializer);
+        WaitablePortTypeInitializer.DefaultNonPagedPoolCharge = sizeof(LPCP_NONPAGED_PORT_QUEUE) + sizeof(LPCP_PORT_OBJECT);
+        WaitablePortTypeInitializer.DefaultPagedPoolCharge = 0;
+        WaitablePortTypeInitializer.GenericMapping = LpcpPortMapping;
+        WaitablePortTypeInitializer.PoolType = NonPagedPool;
+        WaitablePortTypeInitializer.UseDefaultObject = FALSE;
+        WaitablePortTypeInitializer.CloseProcedure = LpcpClosePort;
+        WaitablePortTypeInitializer.DeleteProcedure = LpcpDeletePort;
+        WaitablePortTypeInitializer.ValidAccessMask = PORT_ALL_ACCESS;
+        WaitablePortTypeInitializer.InvalidAttributes = OBJ_VALID_ATTRIBUTES & ~OBJ_CASE_INSENSITIVE;
+
+        ObCreateObjectType(&Name,
+                           &WaitablePortTypeInitializer,
+                           NULL,
+                           &LpcWaitablePortObjectType);
+    }
 
     /* Allocate the LPC lookaside list */
     LpcpMaxMessageSize = LPCP_MAX_MESSAGE_SIZE;

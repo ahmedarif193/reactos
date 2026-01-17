@@ -38,41 +38,6 @@ KeWaitForGate(IN PKGATE Gate,
     LONG_PTR Status;
     PKQUEUE Queue;
 
-    /* ARM64 DEBUG: Log gate details before assertion */
-    DPRINT1("KeWaitForGate: Gate=%p, Type=0x%x, SignalState=%ld, WaitReason=%d\n",
-            Gate,
-            Gate ? Gate->Header.Type : 0xFF,
-            Gate ? Gate->Header.SignalState : -1,
-            WaitReason);
-
-    /* If gate pointer looks suspicious, dump memory */
-    if (Gate && ((ULONG_PTR)Gate & 0xF) != 0)
-    {
-        DPRINT1("KeWaitForGate: WARNING - Gate pointer %p is not 16-byte aligned!\n", Gate);
-    }
-
-    /* Check if gate pointer points to valid kernel memory */
-    if (Gate)
-    {
-        ULONG_PTR GateAddr = (ULONG_PTR)Gate;
-        if (GateAddr < 0xFFFF000000000000ULL)
-        {
-            DPRINT1("KeWaitForGate: ERROR - Gate pointer %p is not in kernel space!\n", Gate);
-            DPRINT1("              First 8 bytes at gate: %016llX\n", *(PULONGLONG)Gate);
-        }
-        else
-        {
-            /* Dump the gate structure contents */
-            DPRINT1("KeWaitForGate: Gate dump: Type=%02X Size=%02X SignalState=%08lX\n",
-                    Gate->Header.Type,
-                    Gate->Header.Size,
-                    Gate->Header.SignalState);
-            DPRINT1("               WaitListHead: Flink=%p Blink=%p\n",
-                    Gate->Header.WaitListHead.Flink,
-                    Gate->Header.WaitListHead.Blink);
-        }
-    }
-
     ASSERT_GATE(Gate);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 

@@ -52,8 +52,27 @@ VOID
 FASTCALL
 ExAcquireFastMutex(IN OUT PFAST_MUTEX FastMutex)
 {
-    /* Call the inline */
-    _ExAcquireFastMutex(FastMutex);
+    KIRQL OldIrql;
+    LONG DecrementedCount;
+
+    ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+
+    /* Raise IRQL to APC */
+    KeRaiseIrql(APC_LEVEL, &OldIrql);
+
+    /* Decrease the count - this returns the NEW value */
+    DecrementedCount = InterlockedDecrement(&FastMutex->Count);
+
+    /* If already held, use slow path */
+    if (DecrementedCount != 0)
+    {
+        /* Someone is still holding it, use slow path */
+        KiAcquireFastMutex(FastMutex);
+    }
+
+    /* Set the owner and IRQL */
+    FastMutex->Owner = KeGetCurrentThread();
+    FastMutex->OldIrql = OldIrql;
 }
 
 /*

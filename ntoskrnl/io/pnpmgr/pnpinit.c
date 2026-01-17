@@ -44,6 +44,7 @@ IopDetermineDefaultInterfaceType(VOID)
     return Isa;
 }
 
+CODE_SEG("INIT")
 NTSTATUS
 NTAPI
 IopInitializeArbiters(VOID)
@@ -294,10 +295,22 @@ IopInitializePlugPlayServices(VOID)
     PDEVICE_OBJECT Pdo;
 
     /* Initialize locks and such */
+#if defined(_M_ARM64) && DBG
+    /*
+     * Debug logging to verify IRQL remains stable across spinlock initialization.
+     * The root cause of IRQL corruption (DISPATCH_LEVEL after KeInitializeSpinLock)
+     * was fixed in KiDispatchInterrupt() - IRQL restoration was incorrectly placed
+     * BEFORE KiQuantumEnd/context switch instead of AFTER.
+     */
+    DPRINT1("[arm64] IopInitializePlugPlayServices: entry, IRQL=%lu\n", (ULONG)KeGetCurrentIrql());
+#endif
     KeInitializeSpinLock(&IopDeviceTreeLock);
     KeInitializeSpinLock(&IopDeviceActionLock);
     InitializeListHead(&IopDeviceActionRequestList);
     KeInitializeEvent(&PiEnumerationFinished, NotificationEvent, TRUE);
+#if defined(_M_ARM64) && DBG
+    DPRINT1("[arm64] IopInitializePlugPlayServices: locks/event initialized, IRQL=%lu\n", (ULONG)KeGetCurrentIrql());
+#endif
 
     /* Get the default interface */
     PnpDefaultInterfaceType = IopDetermineDefaultInterfaceType();

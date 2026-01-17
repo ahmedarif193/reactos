@@ -18,6 +18,9 @@
 
 extern MM_AVL_TABLE MiRosKernelVadRoot;
 
+/* Debug logging for kernel section view fault routing - disabled in production */
+#define MMFAULT_DEBUG 0
+
 /* PRIVATE FUNCTIONS **********************************************************/
 
 NTSTATUS
@@ -67,16 +70,47 @@ MmpAccessFault(KPROCESSOR_MODE Mode,
         AddressSpace = &PsGetCurrentProcess()->Vm;
     }
 
+    /*
+     * Lock the address space if not already locked by caller.
+     * For kernel address space, check if we already hold the lock to avoid
+     * recursive locking during nested page faults.
+     *
+     * We track both:
+     * - WeAcquiredLock: TRUE if we acquired the lock in this call (need to release)
+     * - LockHeld: TRUE if the lock is held by us (passed to handlers)
+     */
+    BOOLEAN WeAcquiredLock = FALSE;
+    BOOLEAN LockHeld;
+
     if (!FromMdl)
     {
-        MmLockAddressSpace(AddressSpace);
+        PEPROCESS KernelProcess = CONTAINING_RECORD(MmGetKernelAddressSpace(), EPROCESS, Vm);
+        PKGUARDED_MUTEX KernelLock = &KernelProcess->AddressCreationLock;
+
+        /* Only lock if we don't already own it */
+        if (AddressSpace == MmGetKernelAddressSpace() &&
+            KernelLock->Owner == KeGetCurrentThread())
+        {
+            /* Already locked by us - nested fault */
+            WeAcquiredLock = FALSE;
+        }
+        else
+        {
+            MmLockAddressSpace(AddressSpace);
+            WeAcquiredLock = TRUE;
+        }
+        LockHeld = TRUE;
+    }
+    else
+    {
+        LockHeld = FALSE;
     }
     do
     {
         MemoryArea = MmLocateMemoryAreaByAddress(AddressSpace, (PVOID)Address);
         if (MemoryArea == NULL || MemoryArea->DeleteInProgress)
         {
-            if (!FromMdl)
+            if (WeAcquiredLock)
             {
                 MmUnlockAddressSpace(AddressSpace);
             }
@@ -89,16 +123,16 @@ MmpAccessFault(KPROCESSOR_MODE Mode,
             Status = MmAccessFaultSectionView(AddressSpace,
                                               MemoryArea,
                                               (PVOID)Address,
-                                              !FromMdl);
+                                              LockHeld);
             break;
 #ifdef NEWCC
         case MEMORY_AREA_CACHE:
             // This code locks for itself to keep from having to break a lock
             // passed in.
-            if (!FromMdl)
+            if (WeAcquiredLock)
                 MmUnlockAddressSpace(AddressSpace);
             Status = MmAccessFaultCacheSection(Mode, Address, FromMdl);
-            if (!FromMdl)
+            if (WeAcquiredLock)
                 MmLockAddressSpace(AddressSpace);
             break;
 #endif
@@ -110,7 +144,7 @@ MmpAccessFault(KPROCESSOR_MODE Mode,
     while (Status == STATUS_MM_RESTART_OPERATION);
 
     DPRINT("Completed page fault handling\n");
-    if (!FromMdl)
+    if (WeAcquiredLock)
     {
         MmUnlockAddressSpace(AddressSpace);
     }
@@ -161,9 +195,42 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
         AddressSpace = &PsGetCurrentProcess()->Vm;
     }
 
+    /*
+     * Lock the address space if not already locked by caller.
+     * For kernel address space, check if we already hold the lock to avoid
+     * recursive locking during nested page faults (e.g., when
+     * MmNotPresentFaultSectionView faults on a page table while handling
+     * the original section view fault).
+     *
+     * We track both:
+     * - WeAcquiredLock: TRUE if we acquired the lock in this call (need to release)
+     * - LockHeld: TRUE if the lock is held by us (passed to handlers)
+     */
+    BOOLEAN WeAcquiredLock = FALSE;
+    BOOLEAN LockHeld;
+
     if (!FromMdl)
     {
-        MmLockAddressSpace(AddressSpace);
+        PEPROCESS KernelProcess = CONTAINING_RECORD(MmGetKernelAddressSpace(), EPROCESS, Vm);
+        PKGUARDED_MUTEX KernelLock = &KernelProcess->AddressCreationLock;
+
+        /* Only lock if we don't already own it */
+        if (AddressSpace == MmGetKernelAddressSpace() &&
+            KernelLock->Owner == KeGetCurrentThread())
+        {
+            /* Already locked by us - nested fault */
+            WeAcquiredLock = FALSE;
+        }
+        else
+        {
+            MmLockAddressSpace(AddressSpace);
+            WeAcquiredLock = TRUE;
+        }
+        LockHeld = TRUE;
+    }
+    else
+    {
+        LockHeld = FALSE;
     }
 
     /*
@@ -174,7 +241,7 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
         MemoryArea = MmLocateMemoryAreaByAddress(AddressSpace, (PVOID)Address);
         if (MemoryArea == NULL || MemoryArea->DeleteInProgress)
         {
-            if (!FromMdl)
+            if (WeAcquiredLock)
             {
                 MmUnlockAddressSpace(AddressSpace);
             }
@@ -187,16 +254,16 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
             Status = MmNotPresentFaultSectionView(AddressSpace,
                                                   MemoryArea,
                                                   (PVOID)Address,
-                                                  !FromMdl);
+                                                  LockHeld);
             break;
 #ifdef NEWCC
         case MEMORY_AREA_CACHE:
             // This code locks for itself to keep from having to break a lock
             // passed in.
-            if (!FromMdl)
+            if (WeAcquiredLock)
                 MmUnlockAddressSpace(AddressSpace);
             Status = MmNotPresentFaultCacheSection(Mode, Address, FromMdl);
-            if (!FromMdl)
+            if (WeAcquiredLock)
                 MmLockAddressSpace(AddressSpace);
             break;
 #endif
@@ -208,7 +275,7 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
     while (Status == STATUS_MM_RESTART_OPERATION);
 
     DPRINT("Completed page fault handling\n");
-    if (!FromMdl)
+    if (WeAcquiredLock)
     {
         MmUnlockAddressSpace(AddressSpace);
     }
@@ -263,6 +330,25 @@ MmAccessFault(IN ULONG FaultCode,
             MiLockWorkingSetShared(PsGetCurrentThread(), &MmSystemCacheWs);
             Vad = MiLocateVad(&MiRosKernelVadRoot, Address);
 
+#if MMFAULT_DEBUG
+            if ((ULONG_PTR)Address >= 0xFFFF8000B0000000ULL &&
+                (ULONG_PTR)Address < 0xFFFF8000E0000000ULL)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[MmAccessFault] Kernel addr %p: Vad=%p IsRosMmVad=%d\n",
+                    Address, Vad,
+                    Vad ? (MI_IS_ROSMM_VAD(Vad) ? 1 : 0) : -1);
+                if (Vad)
+                {
+                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                        "[MmAccessFault] Vad->StartingVpn=0x%llx EndingVpn=0x%llx Spare=0x%x\n",
+                        (ULONGLONG)Vad->StartingVpn,
+                        (ULONGLONG)Vad->EndingVpn,
+                        Vad->u.VadFlags.Spare);
+                }
+            }
+#endif
+
             if ((Vad != NULL) && !MI_IS_ROSMM_VAD(Vad))
             {
                 IsArm3Fault = TRUE;
@@ -315,6 +401,7 @@ Retry:
         (ULONG_PTR)Address >= (ULONG_PTR)MmSystemRangeStart &&
         TrapInformation != NULL)
     {
+#if defined(_M_AMD64) || defined(_M_IX86)
         PKTRAP_FRAME TrapFrame = (PKTRAP_FRAME)TrapInformation;
 
 #if defined(_M_AMD64)
@@ -331,6 +418,7 @@ Retry:
                 (PVOID)TrapFrame->Ebp,
                 (PVOID)TrapFrame->Ecx,
                 (PVOID)TrapFrame->Edx);
+#endif
 #endif
     }
 

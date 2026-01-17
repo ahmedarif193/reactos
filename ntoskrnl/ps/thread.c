@@ -155,6 +155,15 @@ PspSystemThreadStartup(IN PKSTART_ROUTINE StartRoutine,
         if (!(Thread->Terminated) && !(Thread->DeadThread))
         {
             /* Call the Start Routine */
+            if (!StartRoutine)
+            {
+                DPRINT1("PS: NULL system thread start routine (Thread=%p StartContext=%p Caller=%p)\n",
+                        Thread,
+                        StartContext,
+                        _ReturnAddress());
+                PspTerminateThreadByPointer(Thread, STATUS_INVALID_PARAMETER, TRUE);
+                return;
+            }
             StartRoutine(StartContext);
         }
     }
@@ -200,6 +209,14 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     PSTRACE(PS_THREAD_DEBUG,
             "ThreadContext: %p TargetProcess: %p ProcessHandle: %p\n",
             ThreadContext, TargetProcess, ProcessHandle);
+
+    if (!ThreadContext && !StartRoutine)
+    {
+        DPRINT1("PS: NULL system thread start routine in PspCreateThread (StartContext=%p Caller=%p)\n",
+                StartContext,
+                _ReturnAddress());
+        return STATUS_INVALID_PARAMETER;
+    }
 
     /* If we were called from PsCreateSystemThread, then we're kernel mode */
     if (StartRoutine) PreviousMode = KernelMode;

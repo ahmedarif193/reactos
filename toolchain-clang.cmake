@@ -1,4 +1,12 @@
 
+# Use rossym (.rossym section) for debugging.
+# NO_ROSSYM=OFF enables the rsym tool to generate .rossym sections from DWARF,
+# which are embedded in the PE and can be loaded from memory by KDB.
+# This is required because DWARF section names use COFF string table offsets
+# (e.g., "/123") that are NOT mapped into memory when the PE is loaded,
+# making it impossible to resolve them at runtime.
+set(NO_ROSSYM OFF CACHE BOOL "Enable rossym generation from DWARF" FORCE)
+
 if(DEFINED ENV{_ROSBE_ROSSCRIPTDIR})
     set(CMAKE_SYSROOT $ENV{_ROSBE_ROSSCRIPTDIR}/$ENV{ROS_ARCH})
 endif()
@@ -238,16 +246,19 @@ unset(_REACTOS_CREATE_STATIC_LIBRARY)
 set(CMAKE_C_STANDARD_LIBRARIES "" CACHE STRING "Standard C Libraries")
 set(CMAKE_CXX_STANDARD_LIBRARIES "" CACHE STRING "Standard C++ Libraries")
 
-set(_CLANG_MINGW_LINKER_NAME "${_CLANG_MINGW_PREFIX}ld${_CLANG_MINGW_SUFFIX}")
-if(_CLANG_USE_HOST_TOOLS)
-    set(_CLANG_MINGW_LINKER_NAME "ld.lld")
-endif()
 set(_clang_prefer_gnu_ld FALSE)
-if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
+    # ARM64: Use GNU ld to avoid LLD "misaligned ldr/str offset" errors
     set(_clang_prefer_gnu_ld TRUE)
 endif()
+set(_CLANG_MINGW_LINKER_NAME "${_CLANG_MINGW_PREFIX}ld${_CLANG_MINGW_SUFFIX}")
+if(_CLANG_USE_HOST_TOOLS AND NOT _clang_prefer_gnu_ld)
+    # Only use LLD when not preferring GNU ld
+    set(_CLANG_MINGW_LINKER_NAME "ld.lld")
+endif()
 set(LD_EXECUTABLE "")
-if(_CLANG_USE_HOST_TOOLS)
+if(_CLANG_USE_HOST_TOOLS AND NOT _clang_prefer_gnu_ld)
+    # Use LLD only when NOT preferring GNU ld
     if(EXISTS "/opt/homebrew/bin/ld.lld")
         set(LD_EXECUTABLE "/opt/homebrew/bin/ld.lld")
     elseif(EXISTS "/opt/homebrew/opt/llvm/bin/ld.lld")
@@ -293,6 +304,20 @@ if(_clang_prefer_gnu_ld)
             set(LD_EXECUTABLE "${_clang_ros_gnu_linker}")
         endif()
         unset(_clang_ros_gnu_linker)
+    endif()
+    # macOS: Check common MinGW toolchain locations for ARM64
+    if(NOT LD_EXECUTABLE AND ARCH STREQUAL "arm64")
+        set(_macos_mingw_paths
+            "$ENV{HOME}/mingw-toolchains/aarch64-w64-mingw32/bin"
+            "/opt/homebrew/bin"
+            "/usr/local/bin")
+        foreach(_path ${_macos_mingw_paths})
+            if(EXISTS "${_path}/${_CLANG_MINGW_LINKER_NAME}")
+                set(LD_EXECUTABLE "${_path}/${_CLANG_MINGW_LINKER_NAME}")
+                break()
+            endif()
+        endforeach()
+        unset(_macos_mingw_paths)
     endif()
 endif()
 if(NOT LD_EXECUTABLE AND DEFINED TOOLCHAIN_PATH AND NOT "${TOOLCHAIN_PATH}" STREQUAL "")
@@ -378,31 +403,36 @@ _clang_mingw_require_tool(_CLANG_MINGW_WINDMC "windmc")
 set(CMAKE_MC_COMPILER ${_CLANG_MINGW_WINDMC} CACHE FILEPATH "MinGW message compiler" FORCE)
 _clang_mingw_require_tool(_CLANG_MINGW_WINDRES "windres")
 set(CMAKE_RC_COMPILER ${_CLANG_MINGW_WINDRES} CACHE FILEPATH "MinGW resource compiler" FORCE)
-# Prefer GNU binutils dlltool when available; llvm-dlltool lacks --output-delaylib
-# First check ROS_GNU_MINGW_TOOLCHAIN_PATH for GNU binutils dlltool
-set(_CLANG_GNU_DLLTOOL "")
-if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-    # Try prefixed name first (e.g. i686-w64-mingw32-dlltool)
-    set(_clang_gnu_dlltool_path "${ROS_GNU_MINGW_TOOLCHAIN_PATH}/${_CLANG_MINGW_PREFIX}dlltool${_CLANG_MINGW_SUFFIX}")
-    if(EXISTS "${_clang_gnu_dlltool_path}")
-        set(_CLANG_GNU_DLLTOOL "${_clang_gnu_dlltool_path}")
-    else()
-        # Try unprefixed name (common on macOS toolchains where binutils are installed without prefix)
-        set(_clang_gnu_dlltool_path "${ROS_GNU_MINGW_TOOLCHAIN_PATH}/dlltool")
-        if(EXISTS "${_clang_gnu_dlltool_path}")
-            set(_CLANG_GNU_DLLTOOL "${_clang_gnu_dlltool_path}")
+# Prefer GNU binutils dlltool when available; llvm-dlltool lacks --kill-at/--output-lib
+# and generates import stubs with IMAGE_REL_ARM64_ADDR32 relocations that cause overflow.
+# For ARM64, we MUST use binutils dlltool from ROS_GNU_MINGW_TOOLCHAIN_PATH because
+# it generates proper ADRP+LDR sequences with PAGE relocations that work across the
+# full 64-bit address space.
+if(ARCH STREQUAL "arm64")
+    # ARM64 requires binutils dlltool - llvm-dlltool generates short-form imports
+    # that use IMAGE_REL_ARM64_ADDR32 relocations causing linker overflow errors
+    if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
+        set(_clang_arm64_binutils_dlltool "${ROS_GNU_MINGW_TOOLCHAIN_PATH}/${_CLANG_MINGW_PREFIX}dlltool${_CLANG_MINGW_SUFFIX}")
+        if(EXISTS "${_clang_arm64_binutils_dlltool}")
+            set(CMAKE_DLLTOOL "${_clang_arm64_binutils_dlltool}" CACHE FILEPATH "MinGW dlltool" FORCE)
+            message(STATUS "ARM64: Using binutils dlltool from ${_clang_arm64_binutils_dlltool}")
+        else()
+            _clang_mingw_require_tool(_CLANG_MINGW_DLLTOOL "dlltool")
+            set(CMAKE_DLLTOOL ${_CLANG_MINGW_DLLTOOL} CACHE FILEPATH "MinGW dlltool" FORCE)
+            message(WARNING "ARM64: Binutils dlltool not found at ${_clang_arm64_binutils_dlltool}, using ${_CLANG_MINGW_DLLTOOL}")
         endif()
+        unset(_clang_arm64_binutils_dlltool)
+    else()
+        _clang_mingw_require_tool(_CLANG_MINGW_DLLTOOL "dlltool")
+        set(CMAKE_DLLTOOL ${_CLANG_MINGW_DLLTOOL} CACHE FILEPATH "MinGW dlltool" FORCE)
+        message(WARNING "ARM64: ROS_GNU_MINGW_TOOLCHAIN_PATH not set, using ${_CLANG_MINGW_DLLTOOL}")
     endif()
-    unset(_clang_gnu_dlltool_path)
-endif()
-if(_CLANG_GNU_DLLTOOL)
-    set(CMAKE_DLLTOOL "${_CLANG_GNU_DLLTOOL}" CACHE FILEPATH "MinGW dlltool" FORCE)
-    message(STATUS "Using GNU binutils dlltool: ${_CLANG_GNU_DLLTOOL}")
+elseif(APPLE AND EXISTS "/opt/homebrew/bin/${_CLANG_MINGW_PREFIX}dlltool")
+    set(CMAKE_DLLTOOL "/opt/homebrew/bin/${_CLANG_MINGW_PREFIX}dlltool" CACHE FILEPATH "MinGW dlltool" FORCE)
 else()
     _clang_mingw_require_tool(_CLANG_MINGW_DLLTOOL "dlltool")
     set(CMAKE_DLLTOOL ${_CLANG_MINGW_DLLTOOL} CACHE FILEPATH "MinGW dlltool" FORCE)
 endif()
-unset(_CLANG_GNU_DLLTOOL)
 _clang_mingw_require_tool(_CLANG_MINGW_AR "ar")
 # Always use binutils from the MinGW toolchain for archive creation.
 # This avoids incompatibilities with llvm-dlltool option handling.

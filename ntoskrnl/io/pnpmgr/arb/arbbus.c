@@ -17,6 +17,18 @@ extern ARBITER_INSTANCE IopRootBusNumberArbiter;
 
 /* FUNCTIONS *****************************************************************/
 
+/*
+ * Bus Number arbiter callback functions
+ *
+ * NOTE: These functions may be called during arbiter initialization which can occur
+ * at elevated IRQL (DISPATCH_LEVEL) on ARM64 during early boot. They are also called
+ * during runtime resource arbitration. Therefore:
+ * - No PAGED_CODE assertion (would fail at DISPATCH_LEVEL during init)
+ *
+ * These callbacks are stored as function pointers in the ARBITER_INSTANCE structure
+ * and invoked by the arbiter library during resource allocation.
+ */
+
 NTSTATUS
 NTAPI
 IopArbBusNumberUnpackRequirements(
@@ -26,7 +38,7 @@ IopArbBusNumberUnpackRequirements(
     _Out_ PULONG OutLength,
     _Out_ PULONG OutAlignment)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     DPRINT("IopArbBusNumberUnpackRequirements: IoDescriptor: %p, OutMinimumAddress: %p, OutMaximumAddress: %p, OutLength: %p, OutAlignment: %p\n",
            IoDescriptor,
            OutMinimumAddress,
@@ -45,7 +57,7 @@ IopArbBusNumberPackResource(
     _In_ UINT64 Start,
     _Out_ PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDescriptor)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     DPRINT("IopArbBusNumberPackResource: IoDescriptor: %p, Start: %I64x, CmDescriptor: %p\n",
            IoDescriptor,
            Start,
@@ -62,7 +74,7 @@ IopArbBusNumberUnpackResource(
     _Out_ PUINT64 Start,
     _Out_ PULONG OutLength)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     DPRINT("IopArbBusNumberUnpackResource: CmDescriptor: %p, Start: %p, OutLength: %p\n",
            CmDescriptor,
            Start,
@@ -77,7 +89,7 @@ NTAPI
 IopArbBusNumberScoreRequirement(
     _In_ PIO_RESOURCE_DESCRIPTOR IoDescriptor)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     DPRINT("IopArbBusNumberScoreRequirement: IoDescriptor: %p\n",
            IoDescriptor);
 
@@ -95,13 +107,16 @@ IopArbBusNumberScoreRequirement(
  * @retval STATUS_UNSUCCESSFUL
  * @retval STATUS_INSUFFICIENT_RESOURCES
  */
+CODE_SEG("INIT")
 NTSTATUS
 NTAPI
 IopArbBusNumberInitialize(VOID)
 {
     NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
-    PAGED_CODE();
+    /* Note: No PAGED_CODE() here - this is called during boot initialization
+     * when IRQL may be elevated on ARM64. The function is only called once
+     * during system startup from IopInitializePlugPlayServices(). */
     IopRootBusNumberArbiter.Name = L"RootBusNumber";
     IopRootBusNumberArbiter.UnpackRequirement = IopArbBusNumberUnpackRequirements;
     IopRootBusNumberArbiter.PackResource = IopArbBusNumberPackResource;

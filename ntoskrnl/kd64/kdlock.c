@@ -12,6 +12,8 @@
 #define NDEBUG
 #include <debug.h>
 
+extern BOOLEAN KdEnteredDebugger;
+
 /* PRIVATE FUNCTIONS *********************************************************/
 
 VOID
@@ -81,6 +83,13 @@ KdPollBreakIn(VOID)
     {
         /* Disable interrupts */
         Enable = KeDisableInterrupts();
+
+        /* Avoid re-entering while the debugger holds the port */
+        if (KdEnteredDebugger)
+        {
+            KeRestoreInterrupts(Enable);
+            return FALSE;
+        }
 
         /* Check if a CTRL-C is in the queue */
         if (KdpContext.KdpControlCPending)

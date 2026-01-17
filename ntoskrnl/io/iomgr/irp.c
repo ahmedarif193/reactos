@@ -250,6 +250,7 @@ IopCompleteRequest(IN PKAPC Apc,
     /* Get data from the APC */
     FileObject = (PFILE_OBJECT)*SystemArgument1;
     Irp = CONTAINING_RECORD(Apc, IRP, Tail.Apc);
+
     IOTRACE(IO_IRP_DEBUG,
             "%s - Completing IRP %p for %p\n",
             __FUNCTION__,
@@ -356,9 +357,34 @@ IopCompleteRequest(IN PKAPC Apc,
             _SEH2_END;
         }
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /*
+         * ARM64: Full memory barrier before accessing UserEvent.
+         *
+         * The Event structure is on the caller's stack. On ARM64, this APC may run
+         * on a different CPU than where the IRP was submitted. Without a barrier,
+         * the Event structure initialization (KeInitializeEvent) may not be visible
+         * to this CPU yet, causing corrupted Event->Header.Type.
+         *
+         * DSB SY ensures all prior writes (including Event init on other CPUs)
+         * are visible before we access the Event.
+         */
+        __asm__ __volatile__("dsb sy" ::: "memory");
+        /*
+         * ARM64 NOTE: We do NOT check Irp->Tail.Overlay.Thread here because the IRP
+         * may have been reused/recycled by the time this APC runs. The APC framework
+         * guarantees this APC runs on the thread it was queued to (which is correct).
+         * Checking Irp->Thread here would be reading potentially freed/reused memory.
+         */
+#endif
+
         /* Check if we have an event or a file object */
         if (Irp->UserEvent)
         {
+#if defined(_M_ARM64) || defined(__aarch64__)
+            /* ARM64: Barrier before signaling to ensure Event structure is fully visible */
+            __asm__ __volatile__("dsb sy" ::: "memory");
+#endif
             /* At the very least, this is a PKEVENT, so signal it always */
             KeSetEvent(Irp->UserEvent, 0, FALSE);
 
@@ -1100,7 +1126,7 @@ IoBuildSynchronousFsdRequest(IN ULONG MajorFunction,
                                         IoStatusBlock );
     if (!Irp) return NULL;
 
-    /* Set the Event which makes it Syncronous */
+    /* Set the Event which makes it Synchronous */
     Irp->UserEvent = Event;
 
     /* Sync IRPs are queued to requestor thread's irp cancel/cleanup list */
@@ -1275,6 +1301,7 @@ IofCallDriver(IN PDEVICE_OBJECT DeviceObject,
 {
     PDRIVER_OBJECT DriverObject;
     PIO_STACK_LOCATION StackPtr;
+    PDRIVER_DISPATCH DispatchRoutine;
 
     /* Make sure this is a valid IRP */
     ASSERT(Irp->Type == IO_TYPE_IRP);
@@ -1297,9 +1324,39 @@ IofCallDriver(IN PDEVICE_OBJECT DeviceObject,
     /* Get the Device Object */
     StackPtr->DeviceObject = DeviceObject;
 
+    /* Get the dispatch routine */
+    DispatchRoutine = DriverObject->MajorFunction[StackPtr->MajorFunction];
+
+#if defined(_M_ARM64)
+    /* Validate the dispatch routine pointer on ARM64 */
+    if ((ULONG_PTR)DispatchRoutine < (ULONG_PTR)MmSystemRangeStart ||
+        (ULONG_PTR)DispatchRoutine > (ULONG_PTR)-1 - PAGE_SIZE)
+    {
+        DPRINT1("[arm64] IofCallDriver: INVALID DispatchRoutine=%p for MajorFunction=%u DriverObject=%p (%wZ)\n",
+                DispatchRoutine, StackPtr->MajorFunction, DriverObject, &DriverObject->DriverName);
+        KeBugCheckEx(DRIVER_PORTION_MUST_BE_NONPAGED,
+                     (ULONG_PTR)DispatchRoutine,
+                     (ULONG_PTR)DriverObject,
+                     (ULONG_PTR)StackPtr->MajorFunction,
+                     0);
+    }
+
+    /* DEBUG: Log USB-related IRPs */
+    if (StackPtr->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL)
+    {
+        DPRINT1("[arm64] IofCallDriver: INTERNAL_DEVICE_CONTROL to %wZ Dispatch=%p\n",
+                &DriverObject->DriverName, DispatchRoutine);
+    }
+#endif
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* ARM64: Ensure all IRP setup (stack location, parameters) is visible
+     * to the dispatch routine before we call it */
+    __asm__ __volatile__("dmb sy" ::: "memory");
+#endif
+
     /* Call it */
-    return DriverObject->MajorFunction[StackPtr->MajorFunction](DeviceObject,
-                                                                Irp);
+    return DispatchRoutine(DeviceObject, Irp);
 }
 
 FORCEINLINE
@@ -1334,6 +1391,9 @@ IofCompleteRequest(IN PIRP Irp,
     ULONG Flags;
     NTSTATUS ErrorCode = STATUS_SUCCESS;
     PREPARSE_DATA_BUFFER DataBuffer = NULL;
+    PIO_STACK_LOCATION InitialStack = IoGetCurrentIrpStackLocation(Irp);
+    UCHAR MajorFunction = InitialStack ? InitialStack->MajorFunction : 0xFF;
+    UNREFERENCED_PARAMETER(MajorFunction);
     IOTRACE(IO_IRP_DEBUG,
             "%s - Completing IRP %p\n",
             __FUNCTION__,
@@ -1368,6 +1428,7 @@ IofCompleteRequest(IN PIRP Irp,
      * Because of this, we must loop until the current stack location is +1 of
      * the stack count, because when StackPtr is at the end, CurrentLocation is +1.
      */
+
     for (StackPtr = IoGetCurrentIrpStackLocation(Irp),
          Irp->CurrentLocation++,
          Irp->Tail.Overlay.CurrentStackLocation++;
@@ -1489,8 +1550,33 @@ IofCompleteRequest(IN PIRP Irp,
         Irp->Tail.Overlay.AuxiliaryBuffer = NULL;
     }
 
-    /* Check if this is a Paging I/O or Close Operation */
-    if (Irp->Flags & (IRP_PAGING_IO | IRP_CLOSE_OPERATION))
+    /*
+     * Check if this is a Paging I/O, Close Operation, or Synchronous Paging I/O.
+     *
+     * IMPORTANT: IRP_SYNCHRONOUS_PAGING_IO (0x40) and IRP_INPUT_OPERATION (0x40)
+     * share the same flag value! They are mutually exclusive - IRP_INPUT_OPERATION
+     * is used for device I/O control with buffered output, while IRP_SYNCHRONOUS_PAGING_IO
+     * is used for paging operations.
+     *
+     * To distinguish them: IRP_SYNCHRONOUS_PAGING_IO is ONLY valid when IRP_PAGING_IO
+     * is also set. IRP_INPUT_OPERATION is used with IRP_BUFFERED_IO for IOCTLs.
+     *
+     * ARM64 FIX: IRPs with IRP_SYNCHRONOUS_PAGING_IO set (but without IRP_PAGING_IO)
+     * must be completed synchronously to prevent use-after-free of the caller's
+     * stack-allocated UserEvent. Without this check, such IRPs would fall through
+     * to the APC completion path, where the Event may already be invalid by the
+     * time the APC is delivered.
+     *
+     * We only enter this path if:
+     * 1. IRP_PAGING_IO is set (real paging I/O), or
+     * 2. IRP_CLOSE_OPERATION is set, or
+     * 3. IRP_SYNCHRONOUS_PAGING_IO is set AND IRP_PAGING_IO is set (sync paging)
+     *
+     * We explicitly EXCLUDE buffered IOCTLs (IRP_BUFFERED_IO with IRP_INPUT_OPERATION).
+     */
+    if ((Irp->Flags & (IRP_PAGING_IO | IRP_CLOSE_OPERATION)) ||
+        ((Irp->Flags & IRP_SYNCHRONOUS_PAGING_IO) && (Irp->Flags & IRP_PAGING_IO) &&
+         !(Irp->Flags & IRP_BUFFERED_IO)))
     {
         /* Handle a Close Operation or Sync Paging I/O */
         if (Irp->Flags & (IRP_SYNCHRONOUS_PAGING_IO | IRP_CLOSE_OPERATION))
@@ -1503,6 +1589,20 @@ IofCompleteRequest(IN PIRP Irp,
             /* Free the IRP for a Paging I/O Only, Close is handled by us */
             if (Flags)
             {
+                /*
+                 * ARM64 FIX: Dequeue the IRP from the thread's IRP list before
+                 * freeing. IRPs created via IoBuildDeviceIoControlRequest are
+                 * queued to the thread, and must be dequeued before freeing to
+                 * avoid an assertion failure in IoFreeIrp.
+                 *
+                 * Enter a guarded region to disable APCs, as required by
+                 * IopUnQueueIrpFromThread to safely manipulate the thread's
+                 * IRP list without racing with IopCompleteRequest.
+                 */
+                KeEnterGuardedRegion();
+                IopUnQueueIrpFromThread(Irp);
+                KeLeaveGuardedRegion();
+
                 /* If we were using the reserve IRP, then call the appropriate
                  * free function (to make the IRP available again)
                  */
@@ -1571,6 +1671,140 @@ IofCompleteRequest(IN PIRP Irp,
     /* Get the thread and file object */
     Thread = Irp->Tail.Overlay.Thread;
     FileObject = Irp->Tail.Overlay.OriginalFileObject;
+
+    /*
+     * ARM64 FIX: Handle synchronous IRP completion for IRPs created by
+     * IoBuildDeviceIoControlRequest and similar functions.
+     *
+     * These IRPs have a UserEvent set but no FileObject. When such IRPs
+     * complete synchronously (PendingReturned is FALSE), the caller expects
+     * the output buffer to be valid immediately after IoCallDriver returns.
+     *
+     * However, the normal APC-based completion path would defer the buffer
+     * copy until the APC runs, which may be AFTER the caller has already
+     * accessed the buffer - leading to garbage data.
+     *
+     * Fix: For synchronous IRPs with buffered output, copy the buffer and
+     * signal the event inline, then free the IRP.
+     */
+    if (Irp->UserEvent != NULL &&
+        FileObject == NULL &&
+        !Irp->PendingReturned &&
+        (Irp->Flags & (IRP_BUFFERED_IO | IRP_INPUT_OPERATION)) ==
+            (IRP_BUFFERED_IO | IRP_INPUT_OPERATION) &&
+        !NT_ERROR(Irp->IoStatus.Status))
+    {
+        /* Copy the buffered data back to the user buffer */
+        if (Irp->IoStatus.Information > 0 &&
+            Irp->UserBuffer != NULL &&
+            Irp->AssociatedIrp.SystemBuffer != NULL)
+        {
+            _SEH2_TRY
+            {
+                RtlCopyMemory(Irp->UserBuffer,
+                              Irp->AssociatedIrp.SystemBuffer,
+                              Irp->IoStatus.Information);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Irp->IoStatus.Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+        }
+
+        /* Copy the IO status block */
+        if (Irp->UserIosb != NULL)
+        {
+            _SEH2_TRY
+            {
+                *Irp->UserIosb = Irp->IoStatus;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                /* Ignore */
+            }
+            _SEH2_END;
+        }
+
+        /* Signal the event */
+        KeSetEvent(Irp->UserEvent, PriorityBoost, FALSE);
+
+        /* Free the system buffer if allocated */
+        if (Irp->Flags & IRP_DEALLOCATE_BUFFER)
+        {
+            ExFreePool(Irp->AssociatedIrp.SystemBuffer);
+        }
+
+        /* Dequeue and free the IRP */
+        KeEnterGuardedRegion();
+        IopUnQueueIrpFromThread(Irp);
+        KeLeaveGuardedRegion();
+        IoFreeIrp(Irp);
+
+        return;
+    }
+
+    /*
+     * Synchronous completion with no FileObject (PnP, etc).
+     *
+     * The normal completion path queues a special kernel APC (IopCompleteRequest)
+     * to the requesting thread, which will later write *UserIosb and signal
+     * UserEvent.
+     *
+     * If the IRP completed synchronously (PendingReturned == FALSE), many
+     * callers do not wait on the stack-allocated event/IOSB and return
+     * immediately. The deferred APC may then run after the stack frame has
+     * unwound, causing use-after-free and assertions inside KeSetEvent.
+     *
+     * Publish the completion to the caller now and then clear the pointers so
+     * the queued APC will not touch stale stack addresses.
+     *
+     * ARM64 FIX: Use inline signaling WITH memory barriers to ensure the event
+     * state is visible to the waiting thread. Then clear UserEvent so the APC
+     * won't access the freed stack. This is the same as x86/x64 but with barriers.
+     */
+    if (Irp->UserEvent != NULL &&
+        FileObject == NULL &&
+        !Irp->PendingReturned)
+    {
+        if (Irp->UserIosb != NULL)
+        {
+            _SEH2_TRY
+            {
+                *Irp->UserIosb = Irp->IoStatus;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                /* Ignore */
+            }
+            _SEH2_END;
+        }
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /*
+         * ARM64: FULL synchronization barrier (DSB) BEFORE signaling to ensure
+         * ALL prior writes (IoStatus, IRP fields) are completed and visible
+         * to all observers before we signal the event.
+         */
+        __asm__ __volatile__("dsb sy" ::: "memory");
+#endif
+
+        KeSetEvent(Irp->UserEvent, PriorityBoost, FALSE);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /*
+         * ARM64: DSB + ISB AFTER signaling to ensure:
+         * 1. Event state change is fully completed (DSB)
+         * 2. Instruction pipeline is flushed (ISB)
+         * This ensures the signaled event is immediately visible to waiting threads.
+         */
+        __asm__ __volatile__("dsb sy; isb" ::: "memory");
+#endif
+
+        /* Clear pointers so APC won't access freed stack */
+        Irp->UserEvent = NULL;
+        Irp->UserIosb = NULL;
+    }
 
     /* Make sure the IRP isn't canceled */
     if (!Irp->Cancel)

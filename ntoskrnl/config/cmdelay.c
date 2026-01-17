@@ -147,11 +147,28 @@ CmpDelayCloseWorker(IN PVOID Context)
             /* Release the delayed close table lock */
             KeReleaseGuardedMutex(&CmpDelayedCloseTableLock);
 
-            /* Zero out the DelayCloseEntry pointer */
-            ListEntry->KeyControlBlock->DelayCloseEntry = NULL;
+            /*
+             * ARM64 FIX: Validate the KCB before cleaning it up.
+             * Check for already-freed KCB or corrupted memory.
+             */
+            if (ListEntry->KeyControlBlock->Signature == CM_KCB_INVALID_SIGNATURE)
+            {
+                DPRINT1("CmpDelayCloseWorker: KCB %p already freed, skipping cleanup\n",
+                        ListEntry->KeyControlBlock);
+            }
+            else if (ListEntry->KeyControlBlock->Signature != CM_KCB_SIGNATURE)
+            {
+                DPRINT1("CmpDelayCloseWorker: KCB %p has invalid signature 0x%lx, skipping cleanup\n",
+                        ListEntry->KeyControlBlock, ListEntry->KeyControlBlock->Signature);
+            }
+            else
+            {
+                /* Zero out the DelayCloseEntry pointer */
+                ListEntry->KeyControlBlock->DelayCloseEntry = NULL;
 
-            /* Cleanup the KCB cache */
-            CmpCleanUpKcbCacheWithLock(ListEntry->KeyControlBlock, FALSE);
+                /* Cleanup the KCB cache */
+                CmpCleanUpKcbCacheWithLock(ListEntry->KeyControlBlock, FALSE);
+            }
 
             /* Free the delay item */
             CmpFreeDelayItem(ListEntry);
@@ -248,8 +265,30 @@ CmpDelayDerefKCBWorker(IN PVOID Context)
         Entry = CONTAINING_RECORD(Entry, CM_DELAY_DEREF_KCB_ITEM, ListEntry);
         Entry->ListEntry.Flink = Entry->ListEntry.Blink = NULL;
 
-        /* Dereference and free */
-        CmpDereferenceKeyControlBlock(Entry->Kcb);
+        /*
+         * ARM64 FIX: Validate the KCB before dereferencing.
+         * The KCB pointer might be stale if the KCB was freed through another
+         * path before the delayed worker ran. Check the signature to detect this.
+         * A valid KCB has CM_KCB_SIGNATURE; a freed one has CM_KCB_INVALID_SIGNATURE.
+         * If the signature is neither, the memory has been corrupted or reused.
+         */
+        if (Entry->Kcb->Signature == CM_KCB_INVALID_SIGNATURE)
+        {
+            DPRINT1("CmpDelayDerefKCBWorker: KCB %p already freed (signature=0x%lx), skipping\n",
+                    Entry->Kcb, Entry->Kcb->Signature);
+            /* Don't dereference - just free the delay item */
+        }
+        else if (Entry->Kcb->Signature != CM_KCB_SIGNATURE)
+        {
+            DPRINT1("CmpDelayDerefKCBWorker: KCB %p has invalid signature 0x%lx (expected 0x%lx), skipping\n",
+                    Entry->Kcb, Entry->Kcb->Signature, CM_KCB_SIGNATURE);
+            /* Memory corrupted or reused - don't touch it */
+        }
+        else
+        {
+            /* Valid KCB - dereference it */
+            CmpDereferenceKeyControlBlock(Entry->Kcb);
+        }
         CmpFreeDelayItem(Entry);
 
         /* Lock the list again */

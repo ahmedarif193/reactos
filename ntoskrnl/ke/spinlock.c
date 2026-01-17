@@ -329,6 +329,50 @@ KeTryToAcquireSpinLockAtDpcLevel(IN OUT PKSPIN_LOCK SpinLock)
 #endif
 
 #ifdef CONFIG_SMP
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64 CRITICAL: Use LDAXR/STXR (Load-Acquire Exclusive / Store Exclusive)
+     * for a single atomic try-acquire operation.
+     *
+     * On ARM64's weakly-ordered memory model, a plain load followed by
+     * InterlockedBitTestAndSet is NOT atomic and can result in:
+     * 1. Reading a stale "unlocked" value when the lock is actually held
+     * 2. Race conditions between the initial check and the atomic set
+     *
+     * IMPORTANT: We use 64-bit operations because KSPIN_LOCK is 64-bit on ARM64.
+     * In DBG builds, the lock is overwritten with a 64-bit thread pointer.
+     * Using 32-bit operations would fail to detect a held lock (upper bits non-zero).
+     *
+     * Using LDAXR/STXR ensures:
+     * 1. Acquire semantics - we see the latest value
+     * 2. Atomicity - the load-check-set is a single operation
+     * 3. Proper pairing with STLR in KxReleaseSpinLock
+     */
+    {
+        ULONG tmp;
+        KSPIN_LOCK current;
+        ULONG acquired = 0;
+        KSPIN_LOCK *LockPtr = SpinLock;
+
+        __asm__ __volatile__(
+            "   ldaxr   %[current], [%[lockptr]]    \n"  /* current = *SpinLock (Load-Acquire Exclusive 64-bit) */
+            "   cbnz    %[current], 1f              \n"  /* if (current != 0) lock is busy, fail */
+            "   mov     %[current], #1              \n"  /* current = 1 (reuse for store value) */
+            "   stxr    %w[tmp], %[current], [%[lockptr]] \n"  /* Try: *SpinLock = 1 (64-bit store, status in w[tmp]) */
+            "   cbnz    %w[tmp], 1f                 \n"  /* if (store failed) someone else got it */
+            "   mov     %w[acquired], #1            \n"  /* acquired = 1 (success) */
+            "1:                                     \n"  /* done */
+            : [tmp] "=&r" (tmp), [current] "=&r" (current), [acquired] "=&r" (acquired)
+            : [lockptr] "r" (LockPtr)
+            : "memory"
+        );
+
+        if (!acquired)
+        {
+            return FALSE;
+        }
+    }
+#else
     /* Check if it's already acquired */
     if (!(*SpinLock))
     {
@@ -344,7 +388,8 @@ KeTryToAcquireSpinLockAtDpcLevel(IN OUT PKSPIN_LOCK SpinLock)
         /* It was already acquired */
         return FALSE;
     }
-#endif
+#endif /* _M_ARM64 */
+#endif /* CONFIG_SMP */
 
 #if DBG
     /* On debug builds, we OR in the KTHREAD */
@@ -474,6 +519,40 @@ BOOLEAN
 FASTCALL
 KeTestSpinLock(IN PKSPIN_LOCK SpinLock)
 {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64 CRITICAL: Use LDAR (Load-Acquire) to read the spinlock value.
+     *
+     * On ARM64's weakly-ordered memory model, a plain load (*SpinLock) can
+     * return a stale cached value, causing the caller to spin forever waiting
+     * for a lock that has already been released by another CPU.
+     *
+     * LDAR ensures:
+     * 1. Acquire semantics - we see the latest value written by any CPU
+     * 2. All loads/stores after this are ordered after the LDAR
+     * 3. Proper synchronization with STLR (Store-Release) used in KxReleaseSpinLock
+     *
+     * This is REQUIRED for the busy-wait loops in KdbpAcquireLock/KdpAcquireLock
+     * which call KeTestSpinLock in a tight loop.
+     */
+    KSPIN_LOCK Value;
+    __asm__ __volatile__(
+        "ldar   %x[val], [%[lockptr]]   \n"  /* Load-Acquire: val = *SpinLock */
+        : [val] "=r" (Value)
+        : [lockptr] "r" (SpinLock)
+        : "memory"
+    );
+
+    /* Test this spinlock */
+    if (Value)
+    {
+        /* Spinlock is busy, yield execution */
+        YieldProcessor();
+
+        /* Return busy flag */
+        return FALSE;
+    }
+#else
     /* Test this spinlock */
     if (*SpinLock)
     {
@@ -483,6 +562,7 @@ KeTestSpinLock(IN PKSPIN_LOCK SpinLock)
         /* Return busy flag */
         return FALSE;
     }
+#endif
 
     /* Spinlock appears to be free */
     return TRUE;

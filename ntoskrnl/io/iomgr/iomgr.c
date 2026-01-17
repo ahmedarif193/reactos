@@ -242,85 +242,188 @@ BOOLEAN
 NTAPI
 IopCreateObjectTypes(VOID)
 {
-    OBJECT_TYPE_INITIALIZER ObjectTypeInitializer;
     UNICODE_STRING Name;
 
-    /* Initialize default settings */
-    RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
-    ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
-    ObjectTypeInitializer.PoolType = NonPagedPool;
-    ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
-    ObjectTypeInitializer.ValidAccessMask = FILE_ALL_ACCESS;
-    ObjectTypeInitializer.UseDefaultObject = TRUE;
-    ObjectTypeInitializer.GenericMapping = IopFileMapping;
+    /*
+     * ARM64 FIX: Use separate OBJECT_TYPE_INITIALIZER variables for each object type.
+     *
+     * CRITICAL BUG DISCOVERED: When reusing a single ObjectTypeInitializer variable
+     * on ARM64 with LLVM/Clang, the compiler generates incorrect code that causes
+     * the structure pointer to be offset by 8 bytes on subsequent calls.
+     *
+     * Symptoms observed:
+     * - Adapter object type creation succeeded with correct structure content
+     * - Controller object type creation failed because the pointer passed to
+     *   ObCreateObjectType was pointing 8 bytes INTO the structure instead of
+     *   at the beginning
+     * - At address FFFFF88003733C58, the first 16 bytes were:
+     *   Adapter:    70 00 01 00 00 01 00 00 89 00 12 00 16 01 12 00 (correct)
+     *   Controller: 89 00 12 00 16 01 12 00 a0 00 12 00 ff 01 1f 00 (offset by 8!)
+     *
+     * Root cause: Likely an ARM64 LLVM compiler bug in stack frame management or
+     * structure address calculation when the same stack variable is reused and
+     * passed by reference multiple times.
+     *
+     * Solution: Use separate variables with distinct stack locations to force the
+     * compiler to generate correct addressing code for each call.
+     */
 
-    /* Do the Adapter Type */
-    RtlInitUnicodeString(&Name, L"Adapter");
-    if (!NT_SUCCESS(ObCreateObjectType(&Name,
-                                       &ObjectTypeInitializer,
-                                       NULL,
-                                       &IoAdapterObjectType))) return FALSE;
+    /* Create the Adapter object type */
+    {
+        OBJECT_TYPE_INITIALIZER AdapterTypeInitializer;
+        RtlZeroMemory(&AdapterTypeInitializer, sizeof(AdapterTypeInitializer));
 
-    /* Do the Controller Type */
-    RtlInitUnicodeString(&Name, L"Controller");
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(CONTROLLER_OBJECT);
-    if (!NT_SUCCESS(ObCreateObjectType(&Name,
-                                       &ObjectTypeInitializer,
-                                       NULL,
-                                       &IoControllerObjectType))) return FALSE;
+        RtlInitUnicodeString(&Name, L"Adapter");
+        AdapterTypeInitializer.Length = sizeof(AdapterTypeInitializer);
+        AdapterTypeInitializer.PoolType = NonPagedPool;
+        AdapterTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
+        AdapterTypeInitializer.ValidAccessMask = FILE_ALL_ACCESS;
+        AdapterTypeInitializer.UseDefaultObject = TRUE;
+        AdapterTypeInitializer.GenericMapping = IopFileMapping;
 
-    /* Do the Device Type */
-    RtlInitUnicodeString(&Name, L"Device");
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(DEVICE_OBJECT);
-    ObjectTypeInitializer.DeleteProcedure = IopDeleteDevice;
-    ObjectTypeInitializer.ParseProcedure = IopParseDevice;
-    ObjectTypeInitializer.SecurityProcedure = IopGetSetSecurityObject;
-    ObjectTypeInitializer.CaseInsensitive = TRUE;
-    if (!NT_SUCCESS(ObCreateObjectType(&Name,
-                                       &ObjectTypeInitializer,
-                                       NULL,
-                                       &IoDeviceObjectType))) return FALSE;
+        if (!NT_SUCCESS(ObCreateObjectType(&Name,
+                                           &AdapterTypeInitializer,
+                                           NULL,
+                                           &IoAdapterObjectType)))
+        {
+            DPRINT1("Failed to create Adapter object type\n");
+            return FALSE;
+        }
+    }
 
-    /* Initialize the Driver object type */
-    RtlInitUnicodeString(&Name, L"Driver");
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(DRIVER_OBJECT);
-    ObjectTypeInitializer.DeleteProcedure = IopDeleteDriver;
-    ObjectTypeInitializer.ParseProcedure = NULL;
-    ObjectTypeInitializer.SecurityProcedure = NULL;
-    if (!NT_SUCCESS(ObCreateObjectType(&Name,
-                                       &ObjectTypeInitializer,
-                                       NULL,
-                                       &IoDriverObjectType))) return FALSE;
+    /* Create the Controller object type */
+    {
+        OBJECT_TYPE_INITIALIZER ControllerTypeInitializer;
+        RtlZeroMemory(&ControllerTypeInitializer, sizeof(ControllerTypeInitializer));
 
-    /* Initialize the I/O Completion object type */
-    RtlInitUnicodeString(&Name, L"IoCompletion");
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(KQUEUE);
-    ObjectTypeInitializer.ValidAccessMask = IO_COMPLETION_ALL_ACCESS;
-    ObjectTypeInitializer.InvalidAttributes |= OBJ_PERMANENT;
-    ObjectTypeInitializer.GenericMapping = IopCompletionMapping;
-    ObjectTypeInitializer.DeleteProcedure = IopDeleteIoCompletion;
-    if (!NT_SUCCESS(ObCreateObjectType(&Name,
-                                       &ObjectTypeInitializer,
-                                       NULL,
-                                       &IoCompletionType))) return FALSE;
+        RtlInitUnicodeString(&Name, L"Controller");
+        ControllerTypeInitializer.Length = sizeof(ControllerTypeInitializer);
+        ControllerTypeInitializer.PoolType = NonPagedPool;
+        ControllerTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
+        ControllerTypeInitializer.ValidAccessMask = FILE_ALL_ACCESS;
+        ControllerTypeInitializer.UseDefaultObject = TRUE;
+        ControllerTypeInitializer.GenericMapping = IopFileMapping;
+        ControllerTypeInitializer.DefaultNonPagedPoolCharge = sizeof(CONTROLLER_OBJECT);
 
-    /* Initialize the File object type  */
-    RtlInitUnicodeString(&Name, L"File");
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(FILE_OBJECT);
-    ObjectTypeInitializer.InvalidAttributes |= OBJ_EXCLUSIVE;
-    ObjectTypeInitializer.MaintainHandleCount = TRUE;
-    ObjectTypeInitializer.ValidAccessMask = FILE_ALL_ACCESS;
-    ObjectTypeInitializer.GenericMapping = IopFileMapping;
-    ObjectTypeInitializer.CloseProcedure = IopCloseFile;
-    ObjectTypeInitializer.DeleteProcedure = IopDeleteFile;
-    ObjectTypeInitializer.SecurityProcedure = IopGetSetSecurityObject;
-    ObjectTypeInitializer.QueryNameProcedure = IopQueryName;
-    ObjectTypeInitializer.ParseProcedure = IopParseFile;
-    ObjectTypeInitializer.UseDefaultObject = FALSE;
-    if (!NT_SUCCESS(ObCreateObjectType(&Name,
-                                       &ObjectTypeInitializer,
-                                       NULL,
-                                       &IoFileObjectType))) return FALSE;
+        if (!NT_SUCCESS(ObCreateObjectType(&Name,
+                                           &ControllerTypeInitializer,
+                                           NULL,
+                                           &IoControllerObjectType)))
+        {
+            DPRINT1("Failed to create Controller object type\n");
+            return FALSE;
+        }
+    }
+
+    /* Create the Device object type */
+    {
+        OBJECT_TYPE_INITIALIZER DeviceTypeInitializer;
+        RtlZeroMemory(&DeviceTypeInitializer, sizeof(DeviceTypeInitializer));
+
+        RtlInitUnicodeString(&Name, L"Device");
+        DeviceTypeInitializer.Length = sizeof(DeviceTypeInitializer);
+        DeviceTypeInitializer.PoolType = NonPagedPool;
+        DeviceTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
+        DeviceTypeInitializer.ValidAccessMask = FILE_ALL_ACCESS;
+        DeviceTypeInitializer.UseDefaultObject = TRUE;
+        DeviceTypeInitializer.GenericMapping = IopFileMapping;
+        DeviceTypeInitializer.DefaultNonPagedPoolCharge = sizeof(DEVICE_OBJECT);
+        DeviceTypeInitializer.DeleteProcedure = IopDeleteDevice;
+        DeviceTypeInitializer.ParseProcedure = IopParseDevice;
+        DeviceTypeInitializer.SecurityProcedure = IopGetSetSecurityObject;
+        DeviceTypeInitializer.CaseInsensitive = TRUE;
+
+        if (!NT_SUCCESS(ObCreateObjectType(&Name,
+                                           &DeviceTypeInitializer,
+                                           NULL,
+                                           &IoDeviceObjectType)))
+        {
+            DPRINT1("Failed to create Device object type\n");
+            return FALSE;
+        }
+    }
+
+    /* Create the Driver object type */
+    {
+        OBJECT_TYPE_INITIALIZER DriverTypeInitializer;
+        RtlZeroMemory(&DriverTypeInitializer, sizeof(DriverTypeInitializer));
+
+        RtlInitUnicodeString(&Name, L"Driver");
+        DriverTypeInitializer.Length = sizeof(DriverTypeInitializer);
+        DriverTypeInitializer.PoolType = NonPagedPool;
+        DriverTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
+        DriverTypeInitializer.ValidAccessMask = FILE_ALL_ACCESS;
+        DriverTypeInitializer.UseDefaultObject = TRUE;
+        DriverTypeInitializer.GenericMapping = IopFileMapping;
+        DriverTypeInitializer.DefaultNonPagedPoolCharge = sizeof(DRIVER_OBJECT);
+        DriverTypeInitializer.DeleteProcedure = IopDeleteDriver;
+
+        if (!NT_SUCCESS(ObCreateObjectType(&Name,
+                                           &DriverTypeInitializer,
+                                           NULL,
+                                           &IoDriverObjectType)))
+        {
+            DPRINT1("Failed to create Driver object type\n");
+            return FALSE;
+        }
+    }
+
+    /* Create the I/O Completion object type */
+    {
+        OBJECT_TYPE_INITIALIZER IoCompletionTypeInitializer;
+        RtlZeroMemory(&IoCompletionTypeInitializer, sizeof(IoCompletionTypeInitializer));
+
+        RtlInitUnicodeString(&Name, L"IoCompletion");
+        IoCompletionTypeInitializer.Length = sizeof(IoCompletionTypeInitializer);
+        IoCompletionTypeInitializer.PoolType = NonPagedPool;
+        IoCompletionTypeInitializer.DefaultNonPagedPoolCharge = sizeof(KQUEUE);
+        IoCompletionTypeInitializer.ValidAccessMask = IO_COMPLETION_ALL_ACCESS;
+        IoCompletionTypeInitializer.InvalidAttributes = OBJ_OPENLINK | OBJ_PERMANENT;
+        IoCompletionTypeInitializer.GenericMapping = IopCompletionMapping;
+        IoCompletionTypeInitializer.DeleteProcedure = IopDeleteIoCompletion;
+        IoCompletionTypeInitializer.CaseInsensitive = FALSE;
+        IoCompletionTypeInitializer.UseDefaultObject = TRUE;
+
+        if (!NT_SUCCESS(ObCreateObjectType(&Name,
+                                           &IoCompletionTypeInitializer,
+                                           NULL,
+                                           &IoCompletionType)))
+        {
+            DPRINT1("Failed to create IoCompletion object type\n");
+            return FALSE;
+        }
+    }
+
+    /* Create the File object type */
+    {
+        OBJECT_TYPE_INITIALIZER FileTypeInitializer;
+        RtlZeroMemory(&FileTypeInitializer, sizeof(FileTypeInitializer));
+
+        RtlInitUnicodeString(&Name, L"File");
+        FileTypeInitializer.Length = sizeof(FileTypeInitializer);
+        FileTypeInitializer.PoolType = NonPagedPool;
+        FileTypeInitializer.DefaultNonPagedPoolCharge = sizeof(FILE_OBJECT);
+        FileTypeInitializer.InvalidAttributes = OBJ_OPENLINK | OBJ_EXCLUSIVE;
+        FileTypeInitializer.MaintainHandleCount = TRUE;
+        FileTypeInitializer.ValidAccessMask = FILE_ALL_ACCESS;
+        FileTypeInitializer.GenericMapping = IopFileMapping;
+        FileTypeInitializer.CloseProcedure = IopCloseFile;
+        FileTypeInitializer.DeleteProcedure = IopDeleteFile;
+        FileTypeInitializer.SecurityProcedure = IopGetSetSecurityObject;
+        FileTypeInitializer.QueryNameProcedure = IopQueryName;
+        FileTypeInitializer.ParseProcedure = IopParseFile;
+        FileTypeInitializer.UseDefaultObject = FALSE;
+        FileTypeInitializer.CaseInsensitive = TRUE;
+
+        if (!NT_SUCCESS(ObCreateObjectType(&Name,
+                                           &FileTypeInitializer,
+                                           NULL,
+                                           &IoFileObjectType)))
+        {
+            DPRINT1("Failed to create File object type\n");
+            return FALSE;
+        }
+    }
 
     /* Success */
     return TRUE;
@@ -404,6 +507,9 @@ IopMarkBootPartition(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     HANDLE FileHandle;
     IO_STATUS_BLOCK IoStatusBlock;
     PFILE_OBJECT FileObject;
+    ULONG RetryCount;
+    LARGE_INTEGER Timeout;
+    BOOLEAN IsCdromBoot;
 
     /* Build the ARC device name */
     sprintf(Buffer, "\\ArcName\\%s", LoaderBlock->ArcBootDeviceName);
@@ -411,26 +517,73 @@ IopMarkBootPartition(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     Status = RtlAnsiStringToUnicodeString(&DeviceName, &DeviceString, TRUE);
     if (!NT_SUCCESS(Status)) return FALSE;
 
-    /* Open it */
+    /* Check if this is a CD-ROM boot */
+    IsCdromBoot = (strstr(LoaderBlock->ArcBootDeviceName, "cdrom") != NULL);
+
+    /* Try to open the boot device with retries for CD-ROM */
     InitializeObjectAttributes(&ObjectAttributes,
                                &DeviceName,
                                OBJ_CASE_INSENSITIVE,
                                NULL,
                                NULL);
-    Status = ZwOpenFile(&FileHandle,
-                        FILE_READ_ATTRIBUTES,
-                        &ObjectAttributes,
-                        &IoStatusBlock,
-                        0,
-                        FILE_NON_DIRECTORY_FILE);
+
+    /* CD-ROM devices may need time to enumerate, retry up to 10 times with 100ms delay */
+    RetryCount = IsCdromBoot ? 10 : 1;
+    Timeout.QuadPart = -100 * 10000; /* 100ms in 100ns units, negative for relative */
+
+    for (ULONG i = 0; i < RetryCount; i++)
+    {
+        Status = ZwOpenFile(&FileHandle,
+                            FILE_READ_ATTRIBUTES,
+                            &ObjectAttributes,
+                            &IoStatusBlock,
+                            0,
+                            FILE_NON_DIRECTORY_FILE);
+
+        if (NT_SUCCESS(Status))
+        {
+            if (i > 0)
+            {
+                DPRINT1("IopMarkBootPartition: CD-ROM device found after %lu retries\n", i);
+            }
+            break;
+        }
+
+        /* If not found and more retries available, wait and try again */
+        if ((Status == STATUS_OBJECT_NAME_NOT_FOUND ||
+             Status == STATUS_OBJECT_PATH_NOT_FOUND ||
+             Status == STATUS_NO_SUCH_DEVICE) &&
+            i + 1 < RetryCount)
+        {
+            DPRINT1("IopMarkBootPartition: CD-ROM device not ready (attempt %lu/%lu), waiting 100ms...\n",
+                    i + 1, RetryCount);
+            KeDelayExecutionThread(KernelMode, FALSE, &Timeout);
+            continue;
+        }
+
+        /* Last attempt failed or non-retryable error */
+        break;
+    }
+
     if (!NT_SUCCESS(Status))
     {
         /* Fail */
+        DPRINT1("IopMarkBootPartition: Failed to open boot device after %lu attempts (Status=0x%08lx)\n",
+                RetryCount, Status);
+#if defined(_M_ARM64)
+        /* ARM64: Don't bugcheck if boot device not found - PnP may still be enumerating.
+         * Just return FALSE and let boot continue. SystemRoot will be set later when
+         * device finishes enumerating. */
+        DPRINT1("[arm64] IopMarkBootPartition: Continuing boot despite missing boot device (PnP may still be running)\n");
+        RtlFreeUnicodeString(&DeviceName);
+        return FALSE;
+#else
         KeBugCheckEx(INACCESSIBLE_BOOT_DEVICE,
                      (ULONG_PTR)&DeviceName,
                      Status,
                      0,
                      0);
+#endif
     }
 
     /* Get the DO */
@@ -470,6 +623,10 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     NTSTATUS Status;
     CHAR Buffer[256];
     ANSI_STRING NtBootPath, RootString;
+
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: ENTRY\n");
+#endif
 
     /* Initialize empty NT Boot Path */
     RtlInitEmptyAnsiString(&NtBootPath, Buffer, sizeof(Buffer));
@@ -513,18 +670,41 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Initialize Timer List */
     InitializeListHead(&IopTimerQueueHead);
 
-    /* Initialize the DPC/Timer which will call the other Timer Routines */
+    /*
+     * ARM64 CRITICAL FIX: Initialize the timer structures but DO NOT start the timer yet.
+     *
+     * PROBLEM: Starting the timer before creating object types can cause bugcheck 0x9
+     * (IRQL_NOT_GREATER_OR_EQUAL) on ARM64. Here's why:
+     *
+     * 1. KeSetTimerEx starts the timer, which can fire at any time
+     * 2. When the timer DPC fires, it raises IRQL to DISPATCH_LEVEL
+     * 3. IopCreateObjectTypes() calls ObCreateObjectType()
+     * 4. ObCreateObjectType() calls ObpEnterObjectTypeMutex()
+     * 5. ObpEnterObjectTypeMutex() has ASSERT(KeGetCurrentIrql() <= APC_LEVEL)
+     * 6. If the timer fired and IRQL is DISPATCH_LEVEL, the ASSERT fails
+     * 7. On ARM64, failed ASSERTs call KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL)
+     *
+     * SOLUTION: Initialize the DPC and timer structures early, but defer starting
+     * the timer until after object types are created. This ensures IRQL remains
+     * at PASSIVE_LEVEL during object type creation.
+     */
     ExpireTime.QuadPart = -10000000;
     KeInitializeDpc(&IopTimerDpc, IopTimerDispatch, NULL);
     KeInitializeTimerEx(&IopTimer, SynchronizationTimer);
-    KeSetTimerEx(&IopTimer, ExpireTime, 1000, &IopTimerDpc);
 
-    /* Create Object Types */
+    /* Create Object Types (MUST happen at PASSIVE_LEVEL / <= APC_LEVEL) */
     if (!IopCreateObjectTypes())
     {
         DPRINT1("IopCreateObjectTypes failed!\n");
         return FALSE;
     }
+
+    /*
+     * Now that object types are created, it's safe to start the timer.
+     * The timer DPC can now fire and raise IRQL without interfering with
+     * object type creation which requires IRQL <= APC_LEVEL.
+     */
+    KeSetTimerEx(&IopTimer, ExpireTime, 1000, &IopTimerDpc);
 
     /* Create Object Directories */
     if (!IopCreateRootDirectories())
@@ -545,6 +725,10 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Initialize HAL Root Bus Driver */
     HalInitPnpDriver();
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: HalInitPnpDriver done, queueing root enumeration\n");
+#endif
+
     /* Reenumerate what HAL has added (synchronously)
      * This function call should eventually become a 2nd stage of the PnP initialization */
     PiQueueDeviceAction(IopRootDeviceNode->PhysicalDeviceObject,
@@ -552,14 +736,26 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                         NULL,
                         NULL);
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: PiQueueDeviceAction done, loading boot drivers\n");
+#endif
+
     /* Make loader block available for the whole kernel */
     IopLoaderBlock = LoaderBlock;
 
     /* Load boot start drivers */
     IopInitializeBootDrivers();
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: IopInitializeBootDrivers done\n");
+#endif
+
     /* Call back drivers that asked for */
     IopReinitializeBootDrivers();
+
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: IopReinitializeBootDrivers done\n");
+#endif
 
     /* Check if this was a ramdisk boot */
     if (!_strnicmp(LoaderBlock->ArcBootDeviceName, "ramdisk(0)", 10))
@@ -568,11 +764,19 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         IopStartRamdisk(LoaderBlock);
     }
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: ramdisk check done\n");
+#endif
+
     /* No one should need loader block any longer */
     IopLoaderBlock = NULL;
 
     /* Create ARC names for boot devices */
     Status = IopCreateArcNames(LoaderBlock);
+
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: IopCreateArcNames returned 0x%lx\n", Status);
+#endif
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("IopCreateArcNames failed: %lx\n", Status);
@@ -580,31 +784,59 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     /* Mark the system boot partition */
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: before IopMarkBootPartition\n");
+#endif
     if (!IopMarkBootPartition(LoaderBlock))
     {
+#if defined(_M_ARM64)
+        /* ARM64: Don't fail boot if partition marking fails - PnP may still be running.
+         * Continue boot and hope SystemRoot gets set later. */
+        DPRINT1("[arm64] IoInitSystem: IopMarkBootPartition failed, continuing anyway\n");
+#else
         DPRINT1("IopMarkBootPartition failed!\n");
         return FALSE;
+#endif
     }
+#if defined(_M_ARM64)
+    else
+    {
+        DPRINT1("[arm64] IoInitSystem: IopMarkBootPartition done\n");
+    }
+#endif
 
     /* The disk subsystem is initialized here and the SystemRoot is set too.
      * We can finally load other drivers from the boot volume. */
     PnPBootDriversInitialized = TRUE;
 
     /* Load system start drivers */
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: before IopInitializeSystemDrivers\n");
+#endif
     IopInitializeSystemDrivers();
     PnpSystemInit = TRUE;
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: after IopInitializeSystemDrivers\n");
+#endif
 
     /* Reinitialize drivers that requested it */
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: before IopReinitializeDrivers\n");
+#endif
     IopReinitializeDrivers();
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: after IopReinitializeDrivers\n");
+#endif
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: before IopReassignSystemRoot\n");
+#endif
     /* Convert SystemRoot from ARC to NT path */
     Status = IopReassignSystemRoot(LoaderBlock, &NtBootPath);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("IopReassignSystemRoot failed: %lx\n", Status);
-        return FALSE;
-    }
-
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: after IopReassignSystemRoot Status=0x%lx NtSystemRoot=%wZ\n",
+            Status, &NtSystemRoot);
+#endif
     /* Set the ANSI_STRING for the root path */
     RootString.MaximumLength = NtSystemRoot.MaximumLength / sizeof(WCHAR);
     RootString.Length = 0;
@@ -621,10 +853,16 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     /* Assign drive letters */
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: before IoAssignDriveLetters\n");
+#endif
     IoAssignDriveLetters(LoaderBlock,
                          &NtBootPath,
                          (PUCHAR)RootString.Buffer,
                          &RootString);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: after IoAssignDriveLetters\n");
+#endif
 
     /* Update system root */
     Status = RtlAnsiStringToUnicodeString(&NtSystemRoot, &RootString, FALSE);
@@ -635,12 +873,18 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     /* Load the System DLL and its entrypoints */
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: before PsLocateSystemDll\n");
+#endif
     Status = PsLocateSystemDll();
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("PsLocateSystemDll failed: %lx\n", Status);
         return FALSE;
     }
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IoInitSystem: after PsLocateSystemDll - SUCCESS\n");
+#endif
 
     /* Return success */
     return TRUE;

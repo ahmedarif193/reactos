@@ -72,7 +72,7 @@ function(setup_host_tools)
         gen_syscalls)
     if(NOT MSVC)
         list(APPEND HOST_TOOLS pefixup)
-        list(APPEND HOST_TOOLS rsym)
+        # rsym tool removed - DWARF sections are used directly for symbol resolution
     endif()
 
     foreach(_tool ${HOST_TOOLS})

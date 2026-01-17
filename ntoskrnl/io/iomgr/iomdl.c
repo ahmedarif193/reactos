@@ -37,6 +37,7 @@ IoAllocateMdl(IN PVOID VirtualAddress,
 
     /* Calculate the number of pages for the allocation */
     Size = ADDRESS_AND_SIZE_TO_SPAN_PAGES(VirtualAddress, Length);
+
     if (Size > 23)
     {
         /* This is bigger then our fixed-size MDLs. Calculate real size */
@@ -59,6 +60,7 @@ IoAllocateMdl(IN PVOID VirtualAddress,
     {
         /* Allocate one from pool */
         Mdl = ExAllocatePoolWithTag(NonPagedPool, Size, TAG_MDL);
+
         if (!Mdl) return NULL;
     }
 

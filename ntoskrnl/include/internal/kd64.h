@@ -514,6 +514,14 @@ NTAPI
 KdLogDbgPrint(
     _In_ PSTRING String);
 
+VOID
+NTAPI
+KdpInitializeTimestampLock(VOID);
+
+ULONGLONG
+NTAPI
+KdpAcquireMonotonicTimestamp(VOID);
+
 ULONG
 KdpFormatDebugMessage(
     _Out_writes_bytes_(BufferLength) PCHAR Buffer,

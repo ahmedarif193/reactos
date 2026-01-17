@@ -345,11 +345,12 @@ IopCreateArcBootAliasFallback(
     }
     for (ULONG Index = 0; Index < CandidateCount; Index++)
     {
-    UNICODE_STRING *TargetString = &Candidates[Index];
-    PFILE_OBJECT FileObject;
-    PDEVICE_OBJECT DeviceObject;
-    NTSTATUS QueryStatus;
-    NTSTATUS LinkStatus;
+        UNICODE_STRING *TargetString = &Candidates[Index];
+        PFILE_OBJECT FileObject;
+        PDEVICE_OBJECT DeviceObject;
+        NTSTATUS QueryStatus;
+        NTSTATUS LinkStatus;
+
         QueryStatus = IoGetDeviceObjectPointer(TargetString,
                                                FILE_READ_ATTRIBUTES,
                                                &FileObject,
@@ -373,9 +374,7 @@ IopCreateArcBootAliasFallback(
         ObDereferenceObject(FileObject);
 
         LinkStatus = IoAssignArcName(&ArcUnicode, TargetString);
-        if (NT_SUCCESS(LinkStatus) ||
-            LinkStatus == STATUS_OBJECT_NAME_EXISTS ||
-            LinkStatus == STATUS_OBJECT_NAME_COLLISION)
+        if (NT_SUCCESS(LinkStatus))
         {
             ARC_WARN("CreateArcNames fallback mapped %s -> %wZ\n",
                      LoaderBlock->ArcBootDeviceName,
@@ -384,9 +383,41 @@ IopCreateArcBootAliasFallback(
             break;
         }
 
-        ARC_WARN("CreateArcNames fallback IoAssignArcName failed (0x%08lx) for %wZ\n",
-                 LinkStatus,
-                 TargetString);
+        /*
+         * If the symbolic link already exists, delete it and recreate it pointing
+         * to the correct target. The existing link may have been created earlier
+         * pointing to a non-existent or incorrect device.
+         */
+        if (LinkStatus == STATUS_OBJECT_NAME_EXISTS ||
+            LinkStatus == STATUS_OBJECT_NAME_COLLISION)
+        {
+            ARC_WARN("CreateArcNames fallback: ARC link already exists, recreating to point to %wZ\n",
+                     TargetString);
+
+            /* Delete the existing link */
+            IoDeleteSymbolicLink(&ArcUnicode);
+
+            /* Try to create it again */
+            LinkStatus = IoAssignArcName(&ArcUnicode, TargetString);
+            if (NT_SUCCESS(LinkStatus))
+            {
+                ARC_WARN("CreateArcNames fallback mapped %s -> %wZ (after recreate)\n",
+                         LoaderBlock->ArcBootDeviceName,
+                         TargetString);
+                Status = STATUS_SUCCESS;
+                break;
+            }
+
+            ARC_WARN("CreateArcNames fallback recreate failed (0x%08lx) for %wZ\n",
+                     LinkStatus,
+                     TargetString);
+        }
+        else
+        {
+            ARC_WARN("CreateArcNames fallback IoAssignArcName failed (0x%08lx) for %wZ\n",
+                     LinkStatus,
+                     TargetString);
+        }
     }
 
     ARC_WARN("CreateArcNames fallback status=0x%08lx RamdiskCandidatePresent=%d\n",
@@ -409,14 +440,33 @@ IopCreateArcBootAliasFallback(
         ARC_WARN("CreateArcNames fallback attempting direct map to \\Device\\Ramdisk0\n");
         RtlInitUnicodeString(&RamdiskTarget, L"\\Device\\Ramdisk0");
         LinkStatus = IoAssignArcName(&ArcUnicode, &RamdiskTarget);
-        if (NT_SUCCESS(LinkStatus) ||
-            LinkStatus == STATUS_OBJECT_NAME_EXISTS ||
-            LinkStatus == STATUS_OBJECT_NAME_COLLISION)
+        if (NT_SUCCESS(LinkStatus))
         {
             ARC_WARN("CreateArcNames fallback mapped %s -> %wZ (direct)\n",
                      LoaderBlock->ArcBootDeviceName,
                      &RamdiskTarget);
             Status = STATUS_SUCCESS;
+        }
+        else if (LinkStatus == STATUS_OBJECT_NAME_EXISTS ||
+                 LinkStatus == STATUS_OBJECT_NAME_COLLISION)
+        {
+            /* Delete existing link and recreate */
+            ARC_WARN("CreateArcNames fallback: direct ARC link already exists, recreating\n");
+            IoDeleteSymbolicLink(&ArcUnicode);
+            LinkStatus = IoAssignArcName(&ArcUnicode, &RamdiskTarget);
+            if (NT_SUCCESS(LinkStatus))
+            {
+                ARC_WARN("CreateArcNames fallback mapped %s -> %wZ (direct, after recreate)\n",
+                         LoaderBlock->ArcBootDeviceName,
+                         &RamdiskTarget);
+                Status = STATUS_SUCCESS;
+            }
+            else
+            {
+                ARC_WARN("CreateArcNames fallback direct recreate failed (0x%08lx) for %wZ\n",
+                         LinkStatus,
+                         &RamdiskTarget);
+            }
         }
         else
         {
@@ -753,6 +803,45 @@ IopCreateArcNames(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64 CD-ROM boot tolerance:
+     *
+     * On ARM64, UEFI firmware has already loaded all boot files into memory
+     * before transferring control to the kernel. Similar to ramdisk boots,
+     * physical CD-ROM access is not required to continue booting.
+     *
+     * Storage device enumeration happens asynchronously via PnP after this
+     * function returns. The CD-ROM device (\Device\CdRom0) will be created
+     * later when the storage stack completes initialization.
+     *
+     * Tolerate STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND,
+     * and STATUS_NO_SUCH_DEVICE errors for CD-ROM boots on ARM64, allowing
+     * the boot process to continue. The ARC name will be established later
+     * when storage drivers complete enumeration, or the system will use
+     * alternative boot paths.
+     */
+    if (!NT_SUCCESS(Status) && !RamdiskBoot)
+    {
+        BOOLEAN CdromBoot = (strstr(LoaderBlock->ArcBootDeviceName, "cdrom") != NULL);
+
+        if (CdromBoot)
+        {
+            if (Status == STATUS_OBJECT_PATH_NOT_FOUND ||
+                Status == STATUS_OBJECT_NAME_NOT_FOUND ||
+                Status == STATUS_NO_SUCH_DEVICE)
+            {
+                ARC_WARN("CreateArcNames: ARM64 CD-ROM boot tolerating device lookup failure "
+                         "(Status=0x%08lx, ArcBootDeviceName=%s); boot files already in memory\n",
+                         Status,
+                         LoaderBlock->ArcBootDeviceName);
+                Status = STATUS_SUCCESS;
+                FoundBoot = TRUE;
+            }
+        }
+    }
+#endif /* defined(_M_ARM64) || defined(__aarch64__) */
+
     /* Return success */
     ARC_TRACE("CreateArcNames done -> Status=0x%08lx FoundBoot=%d\n",
               Status,
@@ -959,6 +1048,11 @@ IopCreateArcNamesCd(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                 goto Cleanup;
             }
 
+            /* Initialize the event BEFORE building the IRP - critical for ARM64!
+             * The IRP completion routine may call KeSetEvent synchronously,
+             * so the event must be valid before the IRP is created. */
+            KeInitializeEvent(&Event, NotificationEvent, FALSE);
+
             /* Now, we'll ask the device its device number */
             Irp = IoBuildDeviceIoControlRequest(IOCTL_STORAGE_GET_DEVICE_NUMBER,
                                                 DeviceObject,
@@ -979,18 +1073,30 @@ IopCreateArcNamesCd(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             }
 
             /* Call the driver, and wait for it if needed */
-            KeInitializeEvent(&Event, NotificationEvent, FALSE);
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[ARC-CD] IOCTL_STORAGE_GET_DEVICE_NUMBER: calling driver...\n");
             Status = IoCallDriver(DeviceObject, Irp);
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[ARC-CD] IOCTL_STORAGE_GET_DEVICE_NUMBER: IoCallDriver returned 0x%lx\n", Status);
             if (Status == STATUS_PENDING)
             {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[ARC-CD] IOCTL_STORAGE_GET_DEVICE_NUMBER: waiting for event...\n");
                 KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
                 Status = IoStatusBlock.Status;
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[ARC-CD] IOCTL_STORAGE_GET_DEVICE_NUMBER: wait completed, status=0x%lx\n", Status);
             }
             if (!NT_SUCCESS(Status))
             {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[ARC-CD] IOCTL_STORAGE_GET_DEVICE_NUMBER: failed 0x%lx\n", Status);
                 ObDereferenceObject(FileObject);
                 goto Cleanup;
             }
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[ARC-CD] IOCTL_STORAGE_GET_DEVICE_NUMBER: succeeded, DeviceNumber=%lu\n",
+                       DeviceNumber.DeviceNumber);
 
             /* Finally, build proper device name */
             Status = IopFormatString(Buffer,
@@ -1056,6 +1162,15 @@ IopCreateArcNamesCd(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         /* Initiate data for reading cd and compute checksum */
         StartingOffset.QuadPart = 0x8000;
         CheckSum = 0;
+
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[ARC-CD] Building IRP_MJ_READ for checksum at offset 0x8000\n");
+
+        /* Initialize the event BEFORE building the IRP - critical for ARM64!
+         * The IRP completion routine may call KeSetEvent synchronously,
+         * so the event must be valid before the IRP is created. */
+        KeInitializeEvent(&Event, NotificationEvent, FALSE);
+
         Irp = IoBuildSynchronousFsdRequest(IRP_MJ_READ,
                                            DeviceObject,
                                            PartitionBuffer,
@@ -1066,13 +1181,22 @@ IopCreateArcNamesCd(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         if (Irp)
         {
             /* Call the driver, and wait for it if needed */
-            KeInitializeEvent(&Event, NotificationEvent, FALSE);
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[ARC-CD] IRP_MJ_READ: calling driver...\n");
             Status = IoCallDriver(DeviceObject, Irp);
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[ARC-CD] IRP_MJ_READ: IoCallDriver returned 0x%lx\n", Status);
             if (Status == STATUS_PENDING)
             {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[ARC-CD] IRP_MJ_READ: waiting for event...\n");
                 KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
                 Status = IoStatusBlock.Status;
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[ARC-CD] IRP_MJ_READ: wait completed, status=0x%lx\n", Status);
             }
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[ARC-CD] IRP_MJ_READ: completed with status=0x%lx\n", Status);
 
             /* If reading succeeded, compute checksum by adding data, 2048 bytes checksum */
             if (NT_SUCCESS(Status))
@@ -1081,7 +1205,14 @@ IopCreateArcNamesCd(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                 {
                     CheckSum += PartitionBuffer[i];
                 }
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[ARC-CD] Checksum computed: 0x%lx\n", CheckSum);
             }
+        }
+        else
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[ARC-CD] IRP_MJ_READ: IoBuildSynchronousFsdRequest failed!\n");
         }
 
         /* Dereference file object */
@@ -1271,6 +1402,11 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
                                               &DeviceObject);
             if (NT_SUCCESS(Status))
             {
+                /* Initialize the event BEFORE building the IRP - critical for ARM64!
+                 * The IRP completion routine may call KeSetEvent synchronously,
+                 * so the event must be valid before the IRP is created. */
+                KeInitializeEvent(&Event, NotificationEvent, FALSE);
+
                 /* Now, we'll ask the device its device number */
                 Irp = IoBuildDeviceIoControlRequest(IOCTL_STORAGE_GET_DEVICE_NUMBER,
                                                     DeviceObject,
@@ -1290,13 +1426,23 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
                 }
 
                 /* Call the driver, and wait for it if needed */
-                KeInitializeEvent(&Event, NotificationEvent, FALSE);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[ARC-DISK] IOCTL_STORAGE_GET_DEVICE_NUMBER: calling driver for %wZ...\n", &DeviceStringW);
                 Status = IoCallDriver(DeviceObject, Irp);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[ARC-DISK] IOCTL_STORAGE_GET_DEVICE_NUMBER: IoCallDriver returned 0x%lx\n", Status);
                 if (Status == STATUS_PENDING)
                 {
+                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                               "[ARC-DISK] IOCTL_STORAGE_GET_DEVICE_NUMBER: waiting for event...\n");
                     KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
                     Status = IoStatusBlock.Status;
+                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                               "[ARC-DISK] IOCTL_STORAGE_GET_DEVICE_NUMBER: wait completed, status=0x%lx\n", Status);
                 }
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[ARC-DISK] IOCTL_STORAGE_GET_DEVICE_NUMBER: completed with status=0x%lx DevNum=%lu\n",
+                           Status, DeviceNumber.DeviceNumber);
 
                 /* If we didn't get the appropriate data, just skip that disk */
                 if (!NT_SUCCESS(Status))
@@ -1377,6 +1523,14 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
             continue;
         }
 
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[ARC-DISK] Now probing IOCTL_DISK_GET_DRIVE_GEOMETRY for disk %lu...\n", DiskNumber);
+
+        /* Initialize the event BEFORE building the IRP - critical for ARM64!
+         * The IRP completion routine may call KeSetEvent synchronously,
+         * so the event must be valid before the IRP is created. */
+        KeInitializeEvent(&Event, NotificationEvent, FALSE);
+
         /* Let's ask the disk for its geometry */
         Irp = IoBuildDeviceIoControlRequest(IOCTL_DISK_GET_DRIVE_GEOMETRY,
                                             DeviceObject,
@@ -1396,12 +1550,19 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
         }
 
         /* Call the driver, and wait for it if needed */
-        KeInitializeEvent(&Event, NotificationEvent, FALSE);
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[ARC-DISK] IOCTL_DISK_GET_DRIVE_GEOMETRY: calling driver...\n");
         Status = IoCallDriver(DeviceObject, Irp);
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[ARC-DISK] IOCTL_DISK_GET_DRIVE_GEOMETRY: IoCallDriver returned 0x%lx\n", Status);
         if (Status == STATUS_PENDING)
         {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[ARC-DISK] IOCTL_DISK_GET_DRIVE_GEOMETRY: waiting for event...\n");
             KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
             Status = IoStatusBlock.Status;
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[ARC-DISK] IOCTL_DISK_GET_DRIVE_GEOMETRY: wait completed, status=0x%lx\n", Status);
         }
         /* Failure, skip disk */
         if (!NT_SUCCESS(Status))
@@ -1448,6 +1609,11 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
             goto Cleanup;
         }
 
+        /* Initialize the event BEFORE building the IRP - critical for ARM64!
+         * The IRP completion routine may call KeSetEvent synchronously,
+         * so the event must be valid before the IRP is created. */
+        KeInitializeEvent(&Event, NotificationEvent, FALSE);
+
         /* Read the first sector for computing checksum */
         Irp = IoBuildSynchronousFsdRequest(IRP_MJ_READ,
                                            DeviceObject,
@@ -1465,7 +1631,6 @@ IopCreateArcNamesDisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
         }
 
         /* Call the driver to perform reading */
-        KeInitializeEvent(&Event, NotificationEvent, FALSE);
         Status = IoCallDriver(DeviceObject, Irp);
         if (Status == STATUS_PENDING)
         {

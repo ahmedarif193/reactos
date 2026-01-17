@@ -6,8 +6,11 @@ If log stops updating for more than 6 seconds, or total runtime exceeds 30 secon
 forcefully stops the VM.
 
 Usage:
-  python3 vm_monitor.py          # Use VirtualBox (default)
-  python3 vm_monitor.py --qemu   # Use QEMU with xHCI USB
+  # Run from within your build directory (e.g., output-arm64)
+  python3 ../vm_monitor.py
+  
+  # Or if script is in the build dir:
+  python3 vm_monitor.py
 """
 
 import subprocess
@@ -19,22 +22,33 @@ import atexit
 import argparse
 import shutil
 
+# Configuration
 LOG_FILE = "/tmp/v.log"
 STALL_TIMEOUT = 6    # Log inactivity timeout
 HARD_TIMEOUT = 30    # Total maximum runtime seconds
+VM_NAME = "ROSAHCI1"
 
-# Use environment variable, or current directory if it looks like a build dir, otherwise default to AMD64
 def get_build_dir():
+    """
+    Returns the current working directory as the build directory.
+    Strictly assumes the script is executed FROM the output directory.
+    """
     if "REACTOS_BUILD_DIR" in os.environ:
         return os.environ["REACTOS_BUILD_DIR"]
+    
     cwd = os.getcwd()
-    # Check if current directory looks like a ReactOS build directory
-    if os.path.exists(os.path.join(cwd, "build.ninja")) or "output-" in cwd:
+    
+    # We validate strictly: must look like an output dir or contain build.ninja
+    # but we do NOT search parent directories.
+    if "output-" in os.path.basename(cwd) or os.path.exists(os.path.join(cwd, "build.ninja")):
         return cwd
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/output-MinGW-amd64-Debug"
+        
+    print(f"Warning: Current directory '{cwd}' does not look like a standard 'output-' directory.")
+    print("Proceeding using current directory as BUILD_DIR...")
+    return cwd
+
 BUILD_DIR = get_build_dir()
 FAT32_IMG = os.path.join(BUILD_DIR, "fat32.img")
-VM_NAME = "ROSAHCI1"
 
 # UEFI firmware paths - architecture dependent
 OVMF_ENV_CODE_VARS = ["REACTOS_OVMF_CODE", "OVMF_CODE"]
@@ -73,19 +87,21 @@ OVMF_IA32_VARS_CANDIDATES = [
 # Global state
 qemu_process = None
 use_qemu = False
-target_arch = "amd64"  # Detected from BUILD_DIR
+target_arch = "amd64" 
 
 
 def detect_target_arch():
     """Detect target architecture from build directory name."""
     global target_arch
     build_dir_lower = BUILD_DIR.lower()
-    if "i386" in build_dir_lower or "x86" in build_dir_lower:
+    
+    if "arm64" in build_dir_lower or "aarch64" in build_dir_lower:
+        target_arch = "arm64"
+    elif "i386" in build_dir_lower or "x86" in build_dir_lower or "i686" in build_dir_lower:
         target_arch = "i386"
     elif "amd64" in build_dir_lower or "x64" in build_dir_lower:
         target_arch = "amd64"
     else:
-        # Default to amd64 if not detected
         target_arch = "amd64"
     return target_arch
 
@@ -175,7 +191,6 @@ def create_fat32_img():
                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         subprocess.run(["mkfs.vfat", "-F", "32", FAT32_IMG],
                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-        print("FAT32 image created successfully.")
         return True
     except Exception as e:
         print(f"Error creating FAT32 image: {e}")
@@ -191,15 +206,12 @@ def force_kill_vm():
             try:
                 qemu_process.terminate()
                 qemu_process.wait(timeout=5)
-                print("QEMU terminated.")
             except Exception:
                 try:
                     qemu_process.kill()
-                    print("QEMU killed forcefully.")
                 except Exception:
                     pass
         try:
-            # Kill both possible QEMU binaries
             subprocess.run(["pkill", "-9", "-f", "qemu-system.*livecd.iso"],
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
         except Exception:
@@ -212,7 +224,6 @@ def force_kill_vm():
                 stderr=subprocess.PIPE,
                 timeout=10
             )
-            print(f"VM '{VM_NAME}' forcefully killed.")
         except Exception:
             pass
 
@@ -230,26 +241,67 @@ def build_livecd():
         )
         if result.returncode != 0:
             print(f"Build failed with return code {result.returncode}")
-            print(result.stdout.decode('utf-8', errors='ignore'))
             return False
         print("Build completed successfully.")
         return True
-    except subprocess.TimeoutExpired:
-        print("Error: Build timed out after 10 minutes")
-        return False
-    except FileNotFoundError:
-        print("Error: ninja not found. Is it installed?")
-        return False
     except Exception as e:
         print(f"Error building livecd: {e}")
         return False
 
 
 def start_qemu():
-    """Start QEMU with xHCI USB controller."""
+    """Start QEMU based on architecture."""
     global qemu_process, target_arch
 
     livecd_path = os.path.join(BUILD_DIR, "livecd.iso")
+    
+    # Reset log file
+    try:
+        open(LOG_FILE, 'w').close()
+    except Exception as e:
+        print(f"Error resetting log file: {e}")
+        return False
+
+    # ---------------- ARM64 CONFIGURATION ----------------
+    if target_arch == "arm64":
+        print(f"Starting QEMU (ARM64)...")
+        
+        # User defined backbone for ARM64
+        qemu_cmd = [
+            "qemu-system-aarch64",
+            "-machine", "virt,gic-version=3",
+            "-cpu", "cortex-a72",
+            "-m", "4G",
+            "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+            "-drive", f"file={livecd_path}",
+            "-device", "qemu-xhci",
+            "-device", "usb-kbd",
+            "-device", "usb-tablet",
+            "-device", "ramfb",
+            "-serial", f"file:{LOG_FILE}" 
+        ]
+
+        print(f"  Command: {' '.join(qemu_cmd)}")
+
+        try:
+            # Output stdout/stderr to console, but serial is redirected via the command argument
+            qemu_process = subprocess.Popen(
+                qemu_cmd,
+                cwd=BUILD_DIR,
+                stdout=subprocess.DEVNULL, 
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL
+            )
+            print(f"QEMU ARM64 started with PID {qemu_process.pid}")
+            return True
+        except Exception as e:
+            print(f"Error starting QEMU ARM64: {e}")
+            return False
+
+    # ---------------- X86 / X64 CONFIGURATION ----------------
+    use_uefi = True
+    ovmf_code = None
+    ovmf_vars = None
 
     # Select architecture-specific settings
     qemu_binary = "qemu-system-i386" if target_arch == "i386" else "qemu-system-x86_64"
@@ -277,11 +329,7 @@ def start_qemu():
         return False
 
     try:
-        open(LOG_FILE, 'w').close()
-    except Exception:
-        pass
-
-    try:
+        # Open log file for stdout redirection (x64 approach)
         log_fd = open(LOG_FILE, 'w')
 
         qemu_cmd = [
@@ -296,7 +344,7 @@ def start_qemu():
             "-serial", "stdio",
             "-display", "none",
             "-no-reboot",
-            "-no-shutdown"  # Halt instead of reset on triple fault
+            "-no-shutdown"
         ]
 
         qemu_process = subprocess.Popen(
@@ -310,9 +358,6 @@ def start_qemu():
         print(f"QEMU started with PID {qemu_process.pid}")
         return True
 
-    except FileNotFoundError:
-        print(f"Error: {qemu_binary} not found. Is QEMU installed?")
-        return False
     except Exception as e:
         print(f"Error starting QEMU: {e}")
         return False
@@ -329,9 +374,6 @@ def start_vbox():
         )
         print(f"VM '{VM_NAME}' start command issued.")
         return True
-    except FileNotFoundError:
-        print("Error: VBoxManage not found. Is VirtualBox installed?")
-        return False
     except Exception as e:
         print(f"Error starting VM: {e}")
         return False
@@ -346,7 +388,6 @@ def start_vm():
 
 
 def get_file_size(filepath):
-    """Get file size, returns -1 if file doesn't exist."""
     try:
         return os.path.getsize(filepath)
     except OSError:
@@ -354,7 +395,6 @@ def get_file_size(filepath):
 
 
 def check_log_contents(filepath):
-    """Check log file for specific strings."""
     try:
         with open(filepath, 'r', errors='ignore') as f:
             content = f.read()
@@ -366,15 +406,13 @@ def check_log_contents(filepath):
 
 
 def append_to_log(filepath, message):
-    """Append a message to the log file."""
     try:
         with open(filepath, 'a') as f:
             f.write(f"\n{'='*60}\n")
             f.write(f"{message}\n")
             f.write(f"{'='*60}\n")
         return True
-    except Exception as e:
-        print(f"Error appending to log: {e}")
+    except Exception:
         return False
 
 
@@ -386,27 +424,21 @@ def monitor_log():
     last_size = -1
     last_change_time = time.time()
     
-    # Track overall runtime for Hard Timeout
     overall_start_time = time.time()
 
     print(f"Monitoring log file: {LOG_FILE}")
     print(f"Stall timeout: {STALL_TIMEOUT} seconds")
     print(f"Hard timeout: {HARD_TIMEOUT} seconds")
-    print("Press Ctrl+C to stop monitoring.\n")
 
-    # Wait for log file to appear and have content
     wait_count = 0
     while get_file_size(LOG_FILE) <= 0:
-        # Check hard timeout while waiting for log
         if time.time() - overall_start_time > HARD_TIMEOUT:
-            print(f"\n{'='*60}")
-            print(f"HARD TIMEOUT ({HARD_TIMEOUT}s) reached while waiting for log creation.")
-            print(f"{'='*60}")
+            print(f"HARD TIMEOUT ({HARD_TIMEOUT}s) reached waiting for log.")
             force_kill_vm()
             return
 
         if wait_count % 10 == 0:
-            print(f"Waiting for log output... ({int(time.time() - overall_start_time)}s elapsed)")
+            print(f"Waiting for log output... ({int(time.time() - overall_start_time)}s)")
         wait_count += 1
         time.sleep(0.5)
         
@@ -425,17 +457,13 @@ def monitor_log():
             # 1. Check Hard Timeout
             total_runtime = time.time() - overall_start_time
             if total_runtime > HARD_TIMEOUT:
-                print(f"\n{'='*60}")
                 print(f"HARD TIMEOUT REACHED! Running for {total_runtime:.1f} seconds.")
-                print(f"Stopping VM regardless of activity.")
-                print(f"{'='*60}")
                 force_kill_vm()
                 return
 
             # 2. Check Process Status (QEMU only)
             if use_qemu and qemu_process and qemu_process.poll() is not None:
-                print(f"\nQEMU exited with code {qemu_process.returncode}")
-                print(f"Log available at: {LOG_FILE}")
+                print(f"QEMU exited with code {qemu_process.returncode}")
                 return
 
             # 3. Check Log Stall
@@ -445,47 +473,30 @@ def monitor_log():
             if current_size != last_size:
                 last_size = current_size
                 last_change_time = current_time
-                stall_count = 0
             else:
                 stall_duration = current_time - last_change_time
 
                 if stall_duration >= STALL_TIMEOUT:
-                    stall_count += 1
-                    print(f"\n{'='*60}")
                     print(f"STALL DETECTED! Log unchanged for {stall_duration:.1f} seconds")
-                    print(f"{'='*60}")
-
+                    
                     has_xhci, has_usb = check_log_contents(LOG_FILE)
-                    if has_xhci:
-                        print("XHCI driver activity detected in log.")
-                    if has_usb:
-                        print("USB device activity detected in log.")
-
                     stall_msg = f"Stall detected after {stall_duration:.1f}s. XHCI={has_xhci}, USB={has_usb}"
                     append_to_log(LOG_FILE, stall_msg)
 
                     force_kill_vm()
-
-                    print(f"\n{'='*60}")
-                    print(f"VM exited.")
-                    print(f"Log available at: {LOG_FILE}")
-                    print(f"{'='*60}")
                     return
 
     except KeyboardInterrupt:
-        print("\n\nMonitoring interrupted by user.")
-        print(f"Log available at: {LOG_FILE}")
+        print("\nMonitoring interrupted.")
 
 
 def signal_handler(sig, frame):
-    """Handle interrupt signals - force kill VM before exit."""
-    print(f"\n\nReceived signal {sig}. Killing VM and exiting...")
     force_kill_vm()
     sys.exit(0)
 
 
 def main():
-    global use_qemu
+    global use_qemu, target_arch
 
     parser = argparse.ArgumentParser(description='VM Monitor Script')
     parser.add_argument('--qemu', action='store_true', help='Use QEMU instead of VirtualBox')
@@ -493,37 +504,47 @@ def main():
 
     use_qemu = args.qemu
 
-    # Detect target architecture from build directory
-    arch = detect_target_arch()
+    # Detect target architecture from CWD
+    target_arch = detect_target_arch()
+    
+    # Force QEMU for ARM64 (VirtualBox does not exist for arm64)
+    if target_arch == "arm64":
+        use_qemu = True
 
     atexit.register(force_kill_vm)
-
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGHUP, signal_handler)
-    signal.signal(signal.SIGQUIT, signal_handler)
 
-    vm_type = f"QEMU ({arch}) with xHCI USB" if use_qemu else "VirtualBox"
+    vm_type = f"QEMU ({target_arch})" if use_qemu else "VirtualBox"
     print("="*60)
     print(f"VM Monitor Script ({vm_type})")
     print(f"Build directory: {BUILD_DIR}")
     print("="*60 + "\n")
 
     if not build_livecd():
-        print("Aborting due to build failure.")
         sys.exit(1)
 
-    # Clean up previous QEMU instances before starting a new one
-    print("Ensuring previous QEMU instances are stopped...")
-    try:
-        subprocess.run("sudo kill -9 $(pidof qemu-system-x86_64)", shell=True, 
-                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
+    # Cleanup: Only run on non-ARM64 architectures
+    if target_arch != "arm64":
+        print("Ensuring previous QEMU instances are stopped...")
+        try:
+            subprocess.run("sudo kill -9 $(pidof qemu-system-x86_64)", shell=True, 
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run("sudo kill -9 $(pidof qemu-system-i386)", shell=True, 
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    else:
+        # Simple cleanup for aarch64
+        try:
+            subprocess.run("pkill -9 -f qemu-system-aarch64", shell=True, 
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
 
-    if use_qemu:
+    if use_qemu and target_arch != "arm64":
         if not create_fat32_img():
-            print("Warning: Could not create FAT32 image, continuing anyway...")
+            print("Warning: Could not create FAT32 image...")
 
     if not start_vm():
         sys.exit(1)

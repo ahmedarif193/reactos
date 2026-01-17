@@ -15,6 +15,19 @@
 
 #include <ntoskrnl.h>
 
+/*
+ * ARM64 does not have traditional x86 I/O ports or a PS/2 controller.
+ * Keyboard input on ARM64 typically comes through memory-mapped I/O devices.
+ * Skip PS/2 controller operations on ARM64 to avoid hangs.
+ */
+#if defined(_M_ARM64) || defined(__aarch64__)
+#define KBD_PS2_SUPPORTED 0
+#else
+#define KBD_PS2_SUPPORTED 1
+#endif
+
+#if KBD_PS2_SUPPORTED
+
 #define KBD_STATUS_REG          0x64
 #define KBD_CNTL_REG            0x64
 #define KBD_DATA_REG            0x60
@@ -35,6 +48,9 @@
 #define kbd_read_input()        READ_PORT_UCHAR((PUCHAR)KBD_DATA_REG)
 #define kbd_read_status()       READ_PORT_UCHAR((PUCHAR)KBD_STATUS_REG)
 
+#endif /* KBD_PS2_SUPPORTED */
+
+#if KBD_PS2_SUPPORTED
 static unsigned char keyb_layout[2][128] =
 {
     "\000\0331234567890-=\177\t"                                        /* 0x00 - 0x0f */
@@ -53,10 +69,13 @@ static unsigned char keyb_layout[2][128] =
     "230\177\000\000\213\214\000\000\000\000\000\000\000\000\000\000"   /* 0x50 - 0x5f */
     "\r\000/"                                                           /* 0x60 - 0x6f */
 };
+#endif /* KBD_PS2_SUPPORTED */
 
 typedef UCHAR byte_t;
 
 /* FUNCTIONS *****************************************************************/
+
+#if KBD_PS2_SUPPORTED
 
 static VOID
 KbdSendCommandToMouse(UCHAR Command)
@@ -143,5 +162,32 @@ KdbpTryGetCharKeyboard(PULONG ScanCode, ULONG Retry)
 
     return -1;
 }
+
+#else /* !KBD_PS2_SUPPORTED (ARM64) */
+
+/*
+ * ARM64 stub implementations - no PS/2 controller available.
+ * These functions are no-ops on ARM64 to avoid hanging on I/O port access.
+ */
+VOID KbdEnableMouse(VOID)
+{
+    /* No-op on ARM64 - no PS/2 controller */
+}
+
+VOID KbdDisableMouse(VOID)
+{
+    /* No-op on ARM64 - no PS/2 controller */
+}
+
+CHAR
+KdbpTryGetCharKeyboard(PULONG ScanCode, ULONG Retry)
+{
+    UNREFERENCED_PARAMETER(ScanCode);
+    UNREFERENCED_PARAMETER(Retry);
+    /* ARM64 does not have PS/2 keyboard - always return no input */
+    return -1;
+}
+
+#endif /* KBD_PS2_SUPPORTED */
 
 /* EOF */

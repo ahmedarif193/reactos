@@ -1150,19 +1150,45 @@ ObCreateObjectType(IN PUNICODE_STRING TypeName,
     POBJECT_HEADER_CREATOR_INFO CreatorInfo;
 
     /* Verify parameters */
-    if (!(TypeName) ||
-        !(TypeName->Length) ||
-        (TypeName->Length % sizeof(WCHAR)) ||
-        !(ObjectTypeInitializer) ||
-        (ObjectTypeInitializer->Length != sizeof(*ObjectTypeInitializer)) ||
-        (ObjectTypeInitializer->InvalidAttributes & ~OBJ_VALID_KERNEL_ATTRIBUTES) ||
-        (ObjectTypeInitializer->MaintainHandleCount &&
-         (!(ObjectTypeInitializer->OpenProcedure) &&
-          !ObjectTypeInitializer->CloseProcedure)) ||
-        ((!ObjectTypeInitializer->UseDefaultObject) &&
-         (ObjectTypeInitializer->PoolType != NonPagedPool)))
+    if (!TypeName)
     {
-        /* Fail */
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!TypeName->Length)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (TypeName->Length % sizeof(WCHAR))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!ObjectTypeInitializer)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (ObjectTypeInitializer->Length != sizeof(*ObjectTypeInitializer))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (ObjectTypeInitializer->InvalidAttributes & ~OBJ_VALID_KERNEL_ATTRIBUTES)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (ObjectTypeInitializer->MaintainHandleCount &&
+        (!ObjectTypeInitializer->OpenProcedure && !ObjectTypeInitializer->CloseProcedure))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if ((!ObjectTypeInitializer->UseDefaultObject) &&
+        (ObjectTypeInitializer->PoolType != NonPagedPool))
+    {
         return STATUS_INVALID_PARAMETER;
     }
 

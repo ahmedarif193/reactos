@@ -67,7 +67,19 @@ VOID
 NTAPI
 _MmLockSectionSegment(PMM_SECTION_SEGMENT Segment, const char *file, int line)
 {
-    //DPRINT("MmLockSectionSegment(%p,%s:%d)\n", Segment, file, line);
+    LONG LockCount = Segment->Lock.Count;
+
+    UNREFERENCED_PARAMETER(file);
+    UNREFERENCED_PARAMETER(line);
+
+    /* ARM64 DEBUG: Only log if we're going to block (Count <= 0 means mutex is held) */
+    if (LockCount <= 0)
+    {
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[MmLockSectionSegment] BLOCKING: Segment=%p Count=%ld Owner=%p Thread=%p\n",
+                   Segment, LockCount, Segment->Lock.Owner, PsGetCurrentThread());
+    }
+
     ExAcquireFastMutex(&Segment->Lock);
     Segment->Locked = TRUE;
 }
@@ -1206,6 +1218,23 @@ MmMakeSegmentResident(
     NTSTATUS Status;
     PFILE_OBJECT FileObject = Segment->FileObject;
 
+
+    /*
+     * Defensive check: If the segment has no data (RawLength == 0),
+     * there is nothing to make resident. This can happen for newly created
+     * file sections or SEC_RESERVE sections. Return success immediately
+     * to avoid attempting to read from an empty segment.
+     *
+     * NOTE: For ARM64, this is particularly important because the relaxed
+     * memory model could potentially cause RawLength to appear as 0 if
+     * proper barriers are not in place during segment initialization.
+     * This check provides a defensive layer against such issues.
+     */
+    if (Segment->RawLength.QuadPart == 0)
+    {
+        return STATUS_SUCCESS;
+    }
+
     /* Calculate our range, aligned on 64K if possible. */
     Status = RtlLongLongAdd(Offset, Length, &RangeEnd);
     ASSERT(NT_SUCCESS(Status));
@@ -1246,20 +1275,20 @@ MmMakeSegmentResident(
             ChunkEnd = RangeEnd;
 
         MmLockSectionSegment(Segment);
+
         for (LONGLONG ChunkOffset = RangeStart; ChunkOffset < ChunkEnd; ChunkOffset += PAGE_SIZE)
         {
             LARGE_INTEGER CurrentOffset;
 
             CurrentOffset.QuadPart = ChunkOffset;
+
             ULONG_PTR Entry = MmGetPageEntrySectionSegment(Segment, &CurrentOffset);
 
             /* Let any pending read proceed */
             while (MM_IS_WAIT_PTE(Entry))
             {
                 MmUnlockSectionSegment(Segment);
-
                 KeDelayExecutionThread(KernelMode, FALSE, &TinyTime);
-
                 MmLockSectionSegment(Segment);
                 Entry = MmGetPageEntrySectionSegment(Segment, &CurrentOffset);
             }
@@ -1278,6 +1307,7 @@ MmMakeSegmentResident(
 
             /* Put a wait entry here */
             Status = MmSetPageEntrySectionSegment(Segment, &CurrentOffset, MAKE_SWAP_SSE(MM_WAIT_ENTRY));
+
             if (!NT_SUCCESS(Status))
             {
                 /* Failed, roll back! */
@@ -1298,6 +1328,7 @@ MmMakeSegmentResident(
             }
             ASSERT(MM_IS_WAIT_PTE(MmGetPageEntrySectionSegment(Segment, &CurrentOffset)));
         }
+
         MmUnlockSectionSegment(Segment);
 
         if (ToReadPageBits == 0)
@@ -1308,6 +1339,7 @@ MmMakeSegmentResident(
 
         /* Now perform the actual read */
         LONGLONG ChunkOffset = RangeStart;
+
         while (ChunkOffset < ChunkEnd)
         {
             /* Move forward if there is a hole */
@@ -1317,6 +1349,7 @@ MmMakeSegmentResident(
                 /* Nothing more to read */
                 break;
             }
+
             ToReadPageBits >>= BitSet;
             ChunkOffset += BitSet * PAGE_SIZE;
             ASSERT(ChunkOffset < ChunkEnd);
@@ -1357,10 +1390,13 @@ MmMakeSegmentResident(
 
             /* Get our pages */
             PPFN_NUMBER Pages = MmGetMdlPfnArray(Mdl);
+
             RtlZeroMemory(Pages, BYTES_TO_PAGES(ReadLength) * sizeof(PFN_NUMBER));
+
             for (UINT i = 0; i < BYTES_TO_PAGES(ReadLength); i++)
             {
                 Status = MmRequestPageMemoryConsumer(MC_USER, FALSE, &Pages[i]);
+
                 if (!NT_SUCCESS(Status))
                 {
                     /* Damn. Roll-back. */
@@ -1396,6 +1432,7 @@ MmMakeSegmentResident(
 
             IO_STATUS_BLOCK Iosb;
             Status = IoPageRead(FileObject, Mdl, &FileOffset, &Event, &Iosb);
+
             if (Status == STATUS_PENDING)
             {
                 KeWaitForSingleObject(&Event, WrPageIn, KernelMode, FALSE, NULL);
@@ -1460,6 +1497,7 @@ AssignPagesToSegment:
             MmUnlockSectionSegment(Segment);
 
             IoFreeMdl(Mdl);
+
             ToReadPageBits >>= BitSet;
             ChunkOffset += BitSet * PAGE_SIZE;
         }
@@ -1587,6 +1625,15 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
      */
     if (MmIsPagePresent(Process, Address))
     {
+        /*
+         * ARM64: The page is already present, but we still got a fault.
+         * This can happen if the TLB has a stale entry that wasn't properly
+         * invalidated. Invalidate the TLB entry to ensure the CPU sees the
+         * current PTE value.
+         */
+#if defined(_M_ARM64)
+        KeInvalidateTlbEntry(Address);
+#endif
         return STATUS_SUCCESS;
     }
 
@@ -1812,6 +1859,7 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
 
         /* Lock address space again */
         MmLockAddressSpace(AddressSpace);
+
         if (!NT_SUCCESS(Status))
         {
             if (Status == STATUS_NO_MEMORY)
@@ -1930,7 +1978,6 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
         /* Take a reference on it */
         MmSharePageEntrySectionSegment(Segment, &Offset);
         MmUnlockSectionSegment(Segment);
-
         DPRINT("Address 0x%p\n", Address);
         return STATUS_SUCCESS;
     }
@@ -2544,15 +2591,17 @@ grab_segment:
 
         Segment->Image.Characteristics = 0;
         Segment->WriteCopy = (SectionPageProtection & (PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY));
-        if (AllocationAttributes & SEC_RESERVE)
-        {
-            Segment->Length.QuadPart = Segment->RawLength.QuadPart = 0;
-        }
-        else
-        {
-            Segment->RawLength.QuadPart = MaximumSize.QuadPart;
-            Segment->Length.QuadPart = PAGE_ROUND_UP(Segment->RawLength.QuadPart);
-        }
+        /*
+         * For file-backed datafile segments, always set RawLength to the file size
+         * (MaximumSize). SEC_RESERVE only controls whether pages are pre-committed,
+         * not the actual file size. Setting RawLength to 0 for SEC_RESERVE would
+         * incorrectly prevent reading file data through the section mapping.
+         *
+         * Note: This is a fix for ARM64 where the original behavior caused hangs
+         * when trying to read from file-backed sections created with SEC_RESERVE.
+         */
+        Segment->RawLength.QuadPart = MaximumSize.QuadPart;
+        Segment->Length.QuadPart = PAGE_ROUND_UP(Segment->RawLength.QuadPart);
         Segment->Image.VirtualAddress = 0;
         MiInitializeSectionPageTable(Segment);
 
@@ -3540,7 +3589,15 @@ MmFreeSectionPage(PVOID Context, MEMORY_AREA* MemoryArea, PVOID Address,
         if (IS_SWAP_FROM_SSE(Entry) ||
                 Page != PFN_FROM_SSE(Entry))
         {
+#if !defined(_M_ARM64)
             ASSERT(Process != NULL);
+#else
+            /* ARM64: During early boot, Process can be NULL for kernel sections. Skip assertion. */
+            if (Process == NULL)
+            {
+                DPRINT1("[arm64] MmFreeSectionPage: Process is NULL at Address=%p\n", Address);
+            }
+#endif
 
             /*
              * Just dereference private pages

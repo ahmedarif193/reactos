@@ -1294,9 +1294,35 @@ MiDecrementReferenceCount(IN PMMPFN Pfn1,
     }
     else
     {
-        /* Otherwise, insert this page into the standby list */
-        ASSERT(Pfn1->u3.e1.RemovalRequested == 0);
-        MiInsertStandbyListAtFront(PageFrameIndex);
+#if defined(_M_ARM64) || defined(__aarch64__)
+        //
+        // ARM64 FIX: MiInsertStandbyListAtFront asserts that PrototypePte == 1.
+        // However, on ARM64, system pages like paged pool page tables don't have
+        // this flag set. When a page table's ShareCount drops to 0 and its
+        // RefCount hits 0, it ends up here. Instead of asserting, we put such
+        // pages directly into the free list.
+        //
+        // This is safe because:
+        // 1. The page is not modified (Modified == 0)
+        // 2. The page has no remaining references (RefCount == 0, ShareCount == 0)
+        // 3. The page was not explicitly deleted (MI_IS_PFN_DELETED returned false)
+        //
+        // For prototype PTE pages (shared sections), they will go to standby
+        // for potential reuse. For system pages without PrototypePte, they go
+        // directly to free.
+        //
+        if (Pfn1->u3.e1.PrototypePte == 0)
+        {
+            /* System page without PrototypePte - put in free list */
+            MiInsertPageInFreeList(PageFrameIndex);
+        }
+        else
+#endif
+        {
+            /* Otherwise, insert this page into the standby list */
+            ASSERT(Pfn1->u3.e1.RemovalRequested == 0);
+            MiInsertStandbyListAtFront(PageFrameIndex);
+        }
     }
 }
 
@@ -1307,9 +1333,45 @@ MiInitializePfnForOtherProcess(IN PFN_NUMBER PageFrameIndex,
                                IN PFN_NUMBER PteFrame)
 {
     PMMPFN Pfn1;
+    MMLISTS OldLocation;
+    KIRQL OldIrql = 0;
+    BOOLEAN WasOnFreeList = FALSE;
 
     /* Setup the PTE */
     Pfn1 = MI_PFN_ELEMENT(PageFrameIndex);
+
+    /* CRITICAL ARM64 FIX: Check if this page is currently on a free or zero list.
+     * This can happen when MiInitializePfnDatabase ran before this page table was created:
+     * 1. MiBuildPfnDatabaseFromLoaderBlock inserted all pages from MxFreeDescriptor into free list
+     * 2. Later, MxGetNextPage allocated this page for a page table (removed from MxFreeDescriptor but still on PFN free list)
+     * 3. Now we're trying to register it in the PFN database while it's still on the free list
+     * If we don't remove it from the free list, it will be reallocated by MiRemoveAnyPage!
+     *
+     * CRITICAL TIMING ISSUE FIX: We must verify the page is ACTUALLY linked in a list before
+     * trying to unlink it. MxGetNextPage() can create "orphaned" PFN entries where PageLocation
+     * is set to ZeroedPageList but Flink/Blink are 0 (page was removed from MxFreeDescriptor
+     * but MiBuildPfnDatabaseFromLoaderBlock() set PageLocation based on stale loader descriptors).
+     * Attempting to unlink such orphaned entries will trigger assertion failure at pfnlist.c:161.
+     */
+    OldLocation = Pfn1->u3.e1.PageLocation;
+    if ((OldLocation == FreePageList) || (OldLocation == ZeroedPageList))
+    {
+        /* CRITICAL: Check if page is actually linked in a list before unlinking.
+         * Orphaned entries have PageLocation set but Flink/Blink are both 0. */
+        if (Pfn1->u1.Flink != 0 || Pfn1->u2.Blink != 0)
+        {
+#if DBG && defined(_M_ARM64)
+            ASSERTMSG("ARM64 PFN still linked in free/zero list on MiInitializePfnForOtherProcess", FALSE);
+#endif
+            /* Acquire PFN lock to safely manipulate the free list */
+            OldIrql = MiAcquirePfnLock();
+
+            /* Remove from free/zero list before marking as ActiveAndValid */
+            MiUnlinkFreeOrZeroedPage(Pfn1);
+            WasOnFreeList = TRUE;
+        }
+    }
+
     Pfn1->PteAddress = PteAddress;
 
     /* Make this a software PTE */
@@ -1336,6 +1398,12 @@ MiInitializePfnForOtherProcess(IN PFN_NUMBER PageFrameIndex,
 
         DPRINT("Incrementing %p from %p\n", Pfn1, _ReturnAddress());
         Pfn1->u2.ShareCount++;
+    }
+
+    /* Release PFN lock if we acquired it to remove page from free list */
+    if (WasOnFreeList)
+    {
+        MiReleasePfnLock(OldIrql);
     }
 }
 

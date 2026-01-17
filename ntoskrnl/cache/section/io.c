@@ -181,10 +181,17 @@ MiSimpleRead(PFILE_OBJECT FileObject,
         }
     }
 
-    DPRINT("Paging IO Done: %08x\n", ReadStatus->Status);
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[_MiSimpleRead] Paging IO Done: Status=0x%lx Info=%lu\n",
+               ReadStatus->Status, (ULONG)ReadStatus->Information);
+
     /* When "ReadStatus->Information > 0" is false and "ReadStatus->Status == STATUS_END_OF_FILE" is true
      * it means that read pointer is out of file, so we must fail */
     Status = ReadStatus->Status == STATUS_END_OF_FILE && ReadStatus->Information > 0 ? STATUS_SUCCESS : ReadStatus->Status;
+
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[_MiSimpleRead] Returning Status=0x%lx\n", Status);
+
     return Status;
 }
 

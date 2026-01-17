@@ -130,6 +130,7 @@ function(ros_rust_target_from_arch _arch _out_var)
     elseif(_arch_lc STREQUAL "amd64")
         set(_triple "x86_64-pc-windows-gnu")
     elseif(_arch_lc STREQUAL "arm64")
+        # Default to gnullvm for Clang, but allow callers to downgrade to GNU when using GCC.
         set(_triple "aarch64-pc-windows-gnullvm")
     else()
         set(_triple "")
@@ -161,6 +162,11 @@ if(NOT DEFINED ROS_RUST_TARGET_TRIPLE)
         set(ROS_RUST_TARGET_TRIPLE "")
     endif()
 endif()
+if(ROS_RUST_TARGET_TRIPLE STREQUAL "aarch64-pc-windows-gnu")
+    # This target is not published by rustup; fall back to the supported gnullvm variant.
+    set(ROS_RUST_TARGET_TRIPLE "aarch64-pc-windows-gnullvm" CACHE STRING "Rust target triple" FORCE)
+endif()
+
 
 # Auto-install missing rust target if requested and rustup is present
 option(ROS_RUST_AUTO_INSTALL_TARGETS "Automatically install missing Rust targets via rustup" ON)
@@ -215,6 +221,48 @@ endif()
 # Defaults for cross-linking via MinGW
 set(ROS_RUST_LINKER "${CMAKE_C_COMPILER}")
 set(ROS_RUST_AR "${CMAKE_AR}")
+
+# GCC cannot parse LLVM-specific link flags emitted for gnullvm (e.g. --unwindlib).
+# When using a GCC toolchain with the gnullvm target, wrap the linker to strip
+# unsupported options but keep using the same MinGW binutils.
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND ROS_RUST_TARGET_TRIPLE MATCHES "gnullvm$")
+    set(_ros_rust_llvm_root "$ENV{ROS_LLVM_MINGW_ROOT}")
+    if(_ros_rust_llvm_root STREQUAL "" AND DEFINED ENV{HOME})
+        set(_ros_rust_llvm_root "$ENV{HOME}/mingw-toolchains/llvm-mingw-20251202-ucrt-ubuntu-22.04-x86_64")
+    endif()
+    if(EXISTS "${_ros_rust_llvm_root}/bin/aarch64-w64-mingw32-clang")
+        set(ROS_RUST_LINKER "${_ros_rust_llvm_root}/bin/aarch64-w64-mingw32-clang" CACHE STRING "Rust linker" FORCE)
+        if(EXISTS "${_ros_rust_llvm_root}/bin/aarch64-w64-mingw32-ar")
+            set(ROS_RUST_AR "${_ros_rust_llvm_root}/bin/aarch64-w64-mingw32-ar" CACHE STRING "Rust archiver" FORCE)
+        endif()
+    else()
+        set(_ros_rust_gcc_linker "${CMAKE_C_COMPILER}")
+        set(_ros_rust_gcc_wrapper "${CMAKE_BINARY_DIR}/rust-gcc-unwind-wrapper.sh")
+        set(_ros_rust_gcc_wrapper_content [=[
+#!/bin/sh
+set -e
+args=""
+for arg in "$@"; do
+  case "$arg" in
+    --unwindlib=*) ;;
+    *) args="${args} \"${arg}\"" ;;
+  esac
+done
+# shellcheck disable=SC2086
+eval "set --${args}"
+exec "@RUST_GCC_LINKER@" "$@"
+]=])
+        set(RUST_GCC_LINKER "${_ros_rust_gcc_linker}")
+        file(CONFIGURE OUTPUT "${_ros_rust_gcc_wrapper}" CONTENT "${_ros_rust_gcc_wrapper_content}" @ONLY)
+        file(CHMOD "${_ros_rust_gcc_wrapper}" FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ WORLD_READ)
+        set(ROS_RUST_LINKER "${_ros_rust_gcc_wrapper}" CACHE STRING "Rust linker" FORCE)
+        unset(RUST_GCC_LINKER)
+        unset(_ros_rust_gcc_linker)
+        unset(_ros_rust_gcc_wrapper)
+        unset(_ros_rust_gcc_wrapper_content)
+    endif()
+    unset(_ros_rust_llvm_root)
+endif()
 
 # If using Clang toolchain for C/C++, prefer MinGW GCC driver for Rust GNU targets.
 # For gnullvm targets, keep Clang (GCC does not accept LLVM-only flags like --unwindlib=none).
@@ -315,7 +363,12 @@ option(ENABLE_RUST "Enable building Rust-based modules" ON)
 option(ROS_RUST_USE_RSYM "Use rsym on Rust binaries (may fail due to long symbols)" OFF)
 set(ROS_RUST_ENABLED FALSE)
 if(ENABLE_RUST AND ROS_RUST_FOUND AND ROS_RUST_TARGET_TRIPLE)
-    set(ROS_RUST_ENABLED TRUE)
+    # Disable Rust for MinGW ARM64 - toolchain missing libunwind
+    if(ARCH STREQUAL "arm64" AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        message(STATUS "Rust disabled for MinGW ARM64 (missing libunwind in toolchain)")
+    else()
+        set(ROS_RUST_ENABLED TRUE)
+    endif()
 endif()
 
 # Helper: map CMake build configuration to Cargo profile directory name
@@ -458,6 +511,16 @@ function(ros_add_rust_executable _target)
         ${REACTOS_BINARY_DIR}/dll/win32/advapi32
         ${REACTOS_BINARY_DIR}/dll/win32/shell32
         ${REACTOS_BINARY_DIR}/dll/win32/gdi32)
+    if(_triple STREQUAL "aarch64-pc-windows-gnullvm")
+        set(_ros_unwind_hint "$ENV{HOME}/mingw-toolchains/llvm-mingw-20251202-ucrt-ubuntu-22.04-x86_64/aarch64-w64-mingw32/lib")
+        if(DEFINED ENV{ROS_LLVM_MINGW_ROOT} AND NOT "$ENV{ROS_LLVM_MINGW_ROOT}" STREQUAL "")
+            set(_ros_unwind_hint "$ENV{ROS_LLVM_MINGW_ROOT}/aarch64-w64-mingw32/lib")
+        endif()
+        if(EXISTS "${_ros_unwind_hint}")
+            list(APPEND _importlib_dirs "${_ros_unwind_hint}")
+        endif()
+        unset(_ros_unwind_hint)
+    endif()
     list(REMOVE_DUPLICATES _importlib_dirs)
 
     # Build RUSTFLAGS by extending the base '-C linker=...'
@@ -470,10 +533,13 @@ function(ros_add_rust_executable _target)
     set(_rust_target_extra "")
     # If we are actually using clang as the Rust linker, add the target so it
     # selects the MinGW cross toolchain instead of the host linker.
+    # Also use ld.lld to avoid Apple ld on macOS which doesn't understand GNU flags.
     if(ROS_RUST_LINKER STREQUAL "${CMAKE_C_COMPILER}" AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
         ros_clang_mingw_triplet_from_rust(${_triple} _clang_triplet)
         if(_clang_triplet)
             set(_rust_target_extra "${_rust_target_extra} -C link-arg=--target=${_clang_triplet}")
+            # Use LLD for cross-compilation (Apple ld doesn't understand GNU linker flags)
+            set(_rust_target_extra "${_rust_target_extra} -C link-arg=-fuse-ld=lld")
         endif()
     endif()
     if(_triple STREQUAL "i686-pc-windows-gnu")
@@ -506,6 +572,10 @@ void _Unwind_Resume(void *state)
         )
         set(_extra_link_objs ${_shim_o})
         set(_obj_link_args "-C link-arg=${_shim_o}")
+    endif()
+    if(_triple STREQUAL "aarch64-pc-windows-gnullvm" AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        # GCC-based gnullvm builds: avoid pulling in libunwind by aborting on panic.
+        set(_rust_target_extra "${_rust_target_extra} -C panic=abort")
     endif()
 
     # Optional extra link objects (e.g., unwind shims for i686)

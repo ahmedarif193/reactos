@@ -17,6 +17,18 @@ extern ARBITER_INSTANCE IopRootPortArbiter;
 
 /* FUNCTIONS *****************************************************************/
 
+/*
+ * Port/Memory arbiter callback functions
+ *
+ * NOTE: These functions may be called during arbiter initialization which can occur
+ * at elevated IRQL (DISPATCH_LEVEL) on ARM64 during early boot. They are also called
+ * during runtime resource arbitration. Therefore:
+ * - No PAGED_CODE assertion (would fail at DISPATCH_LEVEL during init)
+ *
+ * These callbacks are stored as function pointers in the ARBITER_INSTANCE structure
+ * and invoked by the arbiter library during resource allocation.
+ */
+
 NTSTATUS
 NTAPI
 IopPortMemUnpackRequirements(
@@ -26,7 +38,7 @@ IopPortMemUnpackRequirements(
     _Out_ PULONG OutLength,
     _Out_ PULONG OutAlignment)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     DPRINT("IopPortMemUnpackRequirements: IoDescriptor: %p, OutMinimumAddress: %p, OutMaximumAddress: %p, OutLength: %p, OutAlignment: %p\n",
            IoDescriptor,
            OutMinimumAddress,
@@ -45,7 +57,7 @@ IopPortMemPackResource(
     _In_ UINT64 Start,
     _Out_ PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDescriptor)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     DPRINT("IopPortMemPackResource: IoDescriptor: %p, Start: %p, CmDescriptor: %p\n",
            IoDescriptor,
            Start,
@@ -62,7 +74,7 @@ IopPortMemUnpackResource(
     _Out_ PUINT64 Start,
     _Out_ PULONG OutLength)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     DPRINT("IopPortMemUnpackResource: CmDescriptor: %p, Start: %p, OutLength: %p\n",
            CmDescriptor,
            Start,
@@ -77,7 +89,7 @@ NTAPI
 IopPortMemScoreRequirement(
     _In_ PIO_RESOURCE_DESCRIPTOR IoDescriptor)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     DPRINT("IopPortMemScoreRequirement: IoDescriptor: %p\n",
            IoDescriptor);
 
@@ -85,13 +97,16 @@ IopPortMemScoreRequirement(
     return 0;
 }
 
+CODE_SEG("INIT")
 NTSTATUS
 NTAPI
 IopArbPortInitialize(VOID)
 {
     NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
-    PAGED_CODE();
+    /* Note: No PAGED_CODE() here - this is called during boot initialization
+     * when IRQL may be elevated on ARM64. The function is only called once
+     * during system startup from IopInitializePlugPlayServices(). */
     IopRootPortArbiter.Name = L"RootPort";
     IopRootPortArbiter.UnpackRequirement = IopPortMemUnpackRequirements;
     IopRootPortArbiter.PackResource = IopPortMemPackResource;

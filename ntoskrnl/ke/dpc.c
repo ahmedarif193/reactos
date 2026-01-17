@@ -849,6 +849,21 @@ KeInsertQueueDpc(IN PKDPC Dpc,
     /* Release the lock */
     KiReleaseSpinLock(&DpcData->DpcLock);
 
+    /*
+     * ARM64 CRITICAL: Memory barrier AFTER releasing DPC lock!
+     *
+     * We just incremented DpcQueueDepth and added the DPC to the list while
+     * holding the DPC lock. On ARM64's weakly-ordered memory model, these
+     * writes might not be visible to other code (even on the same CPU) until
+     * we issue a memory barrier.
+     *
+     * Use DMB SY (full system barrier) to ensure all DPC queue writes are
+     * globally visible before we request the software interrupt.
+     */
+#if defined(_M_ARM64)
+    __asm__ __volatile__("dmb sy" ::: "memory");
+#endif
+
     /* Check if the DPC was inserted */
     if (DpcInserted)
     {

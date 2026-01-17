@@ -290,7 +290,17 @@ VOID
 NTAPI
 MmRebalanceMemoryConsumers(VOID)
 {
+    /* ARM64: Use acquire barrier when checking initialization flag to ensure we see
+     * the initialized event structures. This pairs with the release barrier in
+     * MiInitBalancerThread.
+     */
+#if defined(_M_ARM64) || defined(__aarch64__)
+    __dmb(_ARM64_BARRIER_ISH);  /* Data Memory Barrier - Inner Shareable */
+#endif
     if (!MiBalancerInitialized) return;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    __dmb(_ARM64_BARRIER_ISH);  /* Ensure all event initializations are visible */
+#endif
 
     if (InterlockedCompareExchange(&PageOutThreadActive, 1, 0) == 0)
     {
@@ -302,11 +312,21 @@ VOID
 NTAPI
 MmRebalanceMemoryConsumersAndWait(VOID)
 {
+    /* ARM64: Use acquire barrier when checking initialization flag to ensure we see
+     * the initialized event structures. This pairs with the release barrier in
+     * MiInitBalancerThread.
+     */
+#if defined(_M_ARM64) || defined(__aarch64__)
+    __dmb(_ARM64_BARRIER_ISH);  /* Data Memory Barrier - Inner Shareable */
+#endif
     if (!MiBalancerInitialized)
     {
         /* Balancer thread not ready yet; nothing to do */
         return;
     }
+#if defined(_M_ARM64) || defined(__aarch64__)
+    __dmb(_ARM64_BARRIER_ISH);  /* Ensure all event initializations are visible */
+#endif
 
     ASSERT(PsGetCurrentProcess()->AddressCreationLock.Owner != KeGetCurrentThread());
     ASSERT(!MM_ANY_WS_LOCK_HELD(PsGetCurrentThread()));
@@ -442,16 +462,27 @@ MiInitBalancerThread(VOID)
     NTSTATUS Status;
     LARGE_INTEGER Timeout;
 
+    DPRINT1("[MM] MiInitBalancerThread: Entry\n");
+    DPRINT1("[MM] MiInitBalancerThread: &MiBalancerEvent=%p &MiBalancerDoneEvent=%p &MiBalancerTimer=%p\n",
+            &MiBalancerEvent, &MiBalancerDoneEvent, &MiBalancerTimer);
+    DPRINT1("[MM] MiInitBalancerThread: &MiBalancerThreadHandle=%p &MiBalancerThreadId=%p\n",
+            &MiBalancerThreadHandle, &MiBalancerThreadId);
+    DPRINT1("[MM] MiInitBalancerThread: Initializing event at %p\n", &MiBalancerEvent);
     KeInitializeEvent(&MiBalancerEvent, SynchronizationEvent, FALSE);
+    DPRINT1("[MM] MiInitBalancerThread: Event MiBalancerEvent initialized\n");
     KeInitializeEvent(&MiBalancerDoneEvent, SynchronizationEvent, FALSE);
+    DPRINT1("[MM] MiInitBalancerThread: Event MiBalancerDoneEvent initialized\n");
     KeInitializeTimerEx(&MiBalancerTimer, SynchronizationTimer);
+    DPRINT1("[MM] MiInitBalancerThread: Timer initialized\n");
 
     Timeout.QuadPart = -20000000; /* 2 sec */
     KeSetTimerEx(&MiBalancerTimer,
                  Timeout,
                  2000,         /* 2 sec */
                  NULL);
+    DPRINT1("[MM] MiInitBalancerThread: Timer set\n");
 
+    DPRINT1("[MM] MiInitBalancerThread: About to create system thread\n");
     Status = PsCreateSystemThread(&MiBalancerThreadHandle,
                                   THREAD_ALL_ACCESS,
                                   NULL,
@@ -461,16 +492,31 @@ MiInitBalancerThread(VOID)
                                   NULL);
     if (!NT_SUCCESS(Status))
     {
+        DPRINT1("[MM] MiInitBalancerThread: PsCreateSystemThread FAILED with status 0x%lx\n", Status);
         KeBugCheck(MEMORY_MANAGEMENT);
     }
+    DPRINT1("[MM] MiInitBalancerThread: Thread created successfully, handle=%p\n", MiBalancerThreadHandle);
 
+    /* ARM64: Ensure all event initializations are visible before setting the initialized flag.
+     * On ARM64's relaxed memory model, other CPUs might see MiBalancerInitialized = TRUE
+     * before they see the initialized event structures, leading to crashes when they try
+     * to wait on uninitialized events. Use a release barrier to ensure proper ordering.
+     */
+#if defined(_M_ARM64) || defined(__aarch64__)
+    __dmb(_ARM64_BARRIER_ISH);  /* Data Memory Barrier - Inner Shareable */
+#endif
     MiBalancerInitialized = TRUE;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    __dmb(_ARM64_BARRIER_ISH);  /* Ensure flag write is visible before any subsequent operations */
+#endif
 
     Priority = LOW_REALTIME_PRIORITY + 1;
+    DPRINT1("[MM] MiInitBalancerThread: About to set thread priority to %d\n", Priority);
     NtSetInformationThread(MiBalancerThreadHandle,
                            ThreadPriority,
                            &Priority,
                            sizeof(Priority));
+    DPRINT1("[MM] MiInitBalancerThread: Exit successfully\n");
 
 }
 

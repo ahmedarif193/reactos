@@ -14,7 +14,6 @@
 /* FUNCTIONS *****************************************************************/
 
 static KD_CONTEXT KdbgKdContext;
-static ULONGLONG KdbgPerfFrequency;
 
 #undef KdSendPacket
 #define pKdSendPacket KdSendPacket
@@ -167,22 +166,27 @@ KdbPrintf(
     CHAR Buffer[1024];
     CHAR *Out = Buffer;
     SIZE_T Capacity = sizeof(Buffer);
+    ULONGLONG Microseconds;
+    ULONGLONG Seconds;
+    ULONGLONG Fractional;
 
-    /* Lazy-init performance counter frequency */
-    if (KdbgPerfFrequency == 0)
-    {
-        LARGE_INTEGER Freq;
-        (void)KeQueryPerformanceCounter(&Freq);
-        KdbgPerfFrequency = (Freq.QuadPart != 0) ? (ULONGLONG)Freq.QuadPart : 1ULL;
-    }
+    /*
+     * Acquire a monotonically increasing timestamp.
+     * This uses the centralized KdpAcquireMonotonicTimestamp() function
+     * which ensures:
+     * - Proper synchronization across multiple CPUs
+     * - ARM64-specific memory barriers (ISB before counter read, DMB for ordering)
+     * - Strict monotonicity even under concurrent access from multiple CPUs
+     *
+     * This ensures KDBG timestamps are consistent with KD timestamps.
+     */
+    Microseconds = KdpAcquireMonotonicTimestamp();
+    Seconds = Microseconds / 1000000ULL;
+    Fractional = Microseconds % 1000000ULL;
 
     /* Prepend timestamp in seconds.microseconds */
     {
-        LARGE_INTEGER Now = KeQueryPerformanceCounter(NULL);
-        ULONGLONG usec = (ULONGLONG)((Now.QuadPart * 1000000ULL) / KdbgPerfFrequency);
-        ULONGLONG secs = usec / 1000000ULL;
-        ULONGLONG micros = usec % 1000000ULL;
-        int n = _snprintf(Out, (int)Capacity, "[%10I64u.%06I64u] ", secs, micros);
+        int n = _snprintf(Out, (int)Capacity, "[%10I64u.%06I64u] ", Seconds, Fractional);
         if (n < 0) n = 0;
         if ((SIZE_T)n > Capacity) n = (int)Capacity;
         Out += n;

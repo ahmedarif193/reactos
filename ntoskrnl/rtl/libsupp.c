@@ -25,6 +25,10 @@ typedef struct _RTL_RANGE_ENTRY
 DECLSPEC_ALIGN(16) PAGED_LOOKASIDE_LIST RtlpRangeListEntryLookasideList;
 SIZE_T RtlpAllocDeallocQueryBufferSize = 128;
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+static PVOID RtlpDbgPrintOwner;
+#endif
+
 /* FUNCTIONS *****************************************************************/
 
 PVOID
@@ -84,15 +88,29 @@ BOOLEAN
 NTAPI
 RtlpSetInDbgPrint(VOID)
 {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    PVOID Self = KeGetCurrentThread();
+
+    if (RtlpDbgPrintOwner == Self) return TRUE;
+
+    InterlockedCompareExchangePointer(&RtlpDbgPrintOwner, Self, NULL);
+    return FALSE;
+#else
     /* Nothing to set in kernel mode */
     return FALSE;
+#endif
 }
 
 VOID
 NTAPI
 RtlpClearInDbgPrint(VOID)
 {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    PVOID Self = KeGetCurrentThread();
+    InterlockedCompareExchangePointer(&RtlpDbgPrintOwner, NULL, Self);
+#else
     /* Nothing to clear in kernel mode */
+#endif
 }
 
 KPROCESSOR_MODE
@@ -827,7 +845,7 @@ RtlCallVectoredContinueHandlers(_In_ PEXCEPTION_RECORD ExceptionRecord,
     return;
 }
 
-#ifdef _M_AMD64
+#if defined(_M_AMD64) || defined(_M_ARM64)
 
 PRUNTIME_FUNCTION
 NTAPI

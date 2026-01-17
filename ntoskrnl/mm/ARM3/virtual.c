@@ -216,6 +216,7 @@ MiMakeSystemAddressValid(IN PVOID PageTableVirtualAddress,
     NTSTATUS Status;
     BOOLEAN WsShared = FALSE, WsSafe = FALSE, LockChange = FALSE;
     PETHREAD CurrentThread = PsGetCurrentThread();
+    BOOLEAN HoldsProcessLock;
 
     /* Must be a non-pool page table, since those are double-mapped already */
     ASSERT(PageTableVirtualAddress > MM_HIGHEST_USER_ADDRESS);
@@ -225,17 +226,35 @@ MiMakeSystemAddressValid(IN PVOID PageTableVirtualAddress,
     /* Working set lock or PFN lock should be held */
     ASSERT(KeAreAllApcsDisabled() == TRUE);
 
+    /*
+     * Check if we actually hold the process working set lock.
+     * This may be FALSE when called from ROS section view code path,
+     * which uses kernel address space locking (via MmLockAddressSpace)
+     * rather than process working set locking.
+     */
+    HoldsProcessLock = MI_WS_OWNER(CurrentProcess);
+
     /* Check if the page table is valid */
     while (!MmIsAddressValid(PageTableVirtualAddress))
     {
-        /* Release the working set lock */
-        MiUnlockProcessWorkingSetForFault(CurrentProcess,
-                                          CurrentThread,
-                                          &WsSafe,
-                                          &WsShared);
+        if (HoldsProcessLock)
+        {
+            /* Release the working set lock */
+            MiUnlockProcessWorkingSetForFault(CurrentProcess,
+                                              CurrentThread,
+                                              &WsSafe,
+                                              &WsShared);
+        }
 
-        /* Fault it in */
-        Status = MmAccessFault(FALSE, PageTableVirtualAddress, KernelMode, NULL);
+        /*
+         * Fault in the page table.
+         * Pass a non-NULL TrapInformation to indicate this is a "real" page fault
+         * that needs proper locking, not an MDL probe (where caller holds locks).
+         * We use (PVOID)1 as a dummy value that just makes TrapInformation != NULL.
+         * The ROS section view handlers (MmNotPresentFaultSectionView) will acquire
+         * the kernel address space lock when FromMdl is FALSE.
+         */
+        Status = MmAccessFault(FALSE, PageTableVirtualAddress, KernelMode, (PVOID)1);
         if (!NT_SUCCESS(Status))
         {
             /* This should not fail */
@@ -246,11 +265,14 @@ MiMakeSystemAddressValid(IN PVOID PageTableVirtualAddress,
                          (ULONG_PTR)PageTableVirtualAddress);
         }
 
-        /* Lock the working set again */
-        MiLockProcessWorkingSetForFault(CurrentProcess,
-                                        CurrentThread,
-                                        WsSafe,
-                                        WsShared);
+        if (HoldsProcessLock)
+        {
+            /* Lock the working set again */
+            MiLockProcessWorkingSetForFault(CurrentProcess,
+                                            CurrentThread,
+                                            WsSafe,
+                                            WsShared);
+        }
 
         /* This flag will be useful later when we do better locking */
         LockChange = TRUE;
@@ -336,8 +358,30 @@ MiDeleteSystemPageableVm(IN PMMPTE PointerPte,
                 /* Actual valid, legitimate, pages */
                 if (ValidPages) (*ValidPages)++;
 
-                /* Get the page table entry */
-                PageTableIndex = Pfn1->u4.PteFrame;
+                /*
+                 * ARM64 FIX: Use the actual page table frame from the PTE, not u4.PteFrame.
+                 *
+                 * The u4.PteFrame field can become stale when physical pages are reused
+                 * for different virtual addresses. This happens because:
+                 * 1. Page is freed to free list
+                 * 2. Same physical page is allocated for a different VA (different PT)
+                 * 3. If the new allocation path doesn't update u4.PteFrame (e.g., SLIST),
+                 *    it still contains the old page table index
+                 *
+                 * By always calculating the page table from the actual PTE address,
+                 * we ensure we decrement the correct page table's ShareCount.
+                 */
+                {
+                    PMMPTE ActualPtePte = MiAddressToPte(PointerPte);
+
+                    /*
+                     * The PTE for the page table must be valid since we're freeing
+                     * a valid paged pool page.
+                     */
+                    ASSERT(ActualPtePte->u.Hard.Valid == 1);
+
+                    PageTableIndex = PFN_FROM_PTE(ActualPtePte);
+                }
                 Pfn2 = MiGetPfnEntry(PageTableIndex);
 
                 /* Lock the PFN database */

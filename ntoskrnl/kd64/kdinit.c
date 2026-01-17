@@ -181,6 +181,13 @@ KdInitSystem(
     {
         KdpInitialPerformanceCounter = KeQueryPerformanceCounter(&KdPerformanceCounterRate);
         KdpTimestampConfigured = TRUE;
+
+        /*
+         * Initialize the timestamp spinlock for monotonic timestamp generation.
+         * This must be done early to ensure thread-safe timestamp acquisition
+         * across multiple CPUs on ARM64 (and other architectures).
+         */
+        KdpInitializeTimestampLock();
     }
     else if (KdPerformanceCounterRate.QuadPart == 0)
     {
@@ -192,8 +199,10 @@ KdInitSystem(
         LoaderBlock->Extension->LoaderPerformanceData)
     {
         KdpTimeStampOffsetMicroseconds = LoaderBlock->Extension->LoaderPerformanceData->EndTime;
-        /* Debug: Print the received offset value */
-        KdpDprintf("KD: Received bootloader EndTime offset: %llu microseconds\n", KdpTimeStampOffsetMicroseconds);
+        /*
+         * Skip KdpDprintf here - this is called BEFORE the debugger is fully
+         * initialized and would hang on ARM64 due to spinlock/timestamp issues.
+         */
     }
 
     /* Check if we already initialized once */

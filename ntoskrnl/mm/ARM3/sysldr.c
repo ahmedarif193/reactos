@@ -1900,6 +1900,61 @@ MiReloadBootLoadedDrivers(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         /* Sanity check */
         ASSERT(*(PULONG)NewImageAddress == *(PULONG)DllBase);
 
+        /*
+         * Fix up the PFN linkage for the relocated driver pages.
+         * Each data page's PFN entry must be updated to point to the new PTE,
+         * and the new page table's ShareCount must be incremented for each
+         * data page it maps. This ensures MiDeleteSystemPageableVm can properly
+         * decrement the page table's ShareCount when the driver is unloaded.
+         */
+        {
+            PMMPTE PointerPtePte;
+            PFN_NUMBER PageFrameNumber, PageTableFrameNumber;
+            PMMPFN DataPfn, PageTablePfn;
+            KIRQL OldIrql;
+
+            /* Acquire PFN lock for safe manipulation of PFN entries */
+            OldIrql = MiAcquirePfnLock();
+
+            /* Reset pointers for PFN fixup loop */
+            PageVa = DllBase;
+            while (PointerPte < LastPte)
+            {
+                /* Get the data page's PFN */
+#if defined(_M_ARM64) || defined(__aarch64__)
+                PHYSICAL_ADDRESS Pa = MmGetPhysicalAddress(PageVa);
+                PageFrameNumber = (PFN_NUMBER)(Pa.QuadPart >> PAGE_SHIFT);
+#else
+                PageFrameNumber = PFN_FROM_PTE(PointerPte);
+#endif
+                DataPfn = MiGetPfnEntry(PageFrameNumber);
+
+                /* Get the page table's PFN from the PTE for the PTE */
+                PointerPtePte = MiAddressToPte(PointerPte);
+                ASSERT(PointerPtePte->u.Hard.Valid == 1);
+                PageTableFrameNumber = PFN_FROM_PTE(PointerPtePte);
+                ASSERT(PageTableFrameNumber != 0);
+
+                /* Update the data page's PFN entry to point to the new PTE */
+                DataPfn->PteAddress = PointerPte;
+                DataPfn->u4.PteFrame = PageTableFrameNumber;
+
+                /* Increment the page table's ShareCount for this data page */
+                PageTablePfn = MiGetPfnEntry(PageTableFrameNumber);
+                PageTablePfn->u2.ShareCount++;
+
+                /* Move on */
+                PointerPte++;
+                PageVa = (PVOID)((ULONG_PTR)PageVa + PAGE_SIZE);
+            }
+
+            /* Release PFN lock */
+            MiReleasePfnLock(OldIrql);
+
+            /* Reset pointer for subsequent code */
+            PointerPte -= PteCount;
+        }
+
         /* Set the image base to the address where the loader put it */
         NtHeader->OptionalHeader.ImageBase = (ULONG_PTR)DllBase;
 
@@ -1921,6 +1976,11 @@ MiReloadBootLoadedDrivers(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             }
         }
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /* Ensure relocated boot driver code is visible to the I-cache on ARM64. */
+        KeSweepICache(NewImageAddress, LdrEntry->SizeOfImage);
+#endif
+
         /* Update the loader entry */
         LdrEntry->DllBase = NewImageAddress;
 
@@ -1936,8 +1996,6 @@ MiReloadBootLoadedDrivers(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         LdrEntry->EntryPoint = (PVOID)((ULONG_PTR)NewImageAddress +
                                 NtHeader->OptionalHeader.AddressOfEntryPoint);
         LdrEntry->SizeOfImage = PteCount << PAGE_SHIFT;
-
-        /* FIXME: We'll need to fixup the PFN linkage when switching to ARM3 */
     }
 }
 
@@ -2473,6 +2531,46 @@ MiSetSystemCodeProtection(
 {
     PMMPTE PointerPte;
     MMPTE TempPte;
+#if defined(_M_ARM64)
+    extern PVOID MiSystemViewStart;
+    extern SIZE_T MmSystemViewSize;
+    PMMPTE SysViewFirstPte, SysViewLastPte;
+
+    /* ARM64: Validate PTE range doesn't overlap with System View Space.
+     * System View Space uses prototype PTEs for mapped sections, and should
+     * never be modified by MiSetSystemCodeProtection which expects valid
+     * hardware PTEs for kernel code/data sections.
+     *
+     * If System View Space has been initialized, calculate its PTE range
+     * and ensure our range doesn't intersect with it.
+     */
+    if (MiSystemViewStart != NULL && MmSystemViewSize > 0)
+    {
+        SysViewFirstPte = MiAddressToPte(MiSystemViewStart);
+        SysViewLastPte = MiAddressToPte((PUCHAR)MiSystemViewStart + MmSystemViewSize - 1);
+
+        /* Check for overlap: ranges [A,B] and [C,D] overlap if A <= D && C <= B */
+        if (FirstPte <= SysViewLastPte && SysViewFirstPte <= LastPte)
+        {
+            PVOID FirstVa = MiPteToAddress(FirstPte);
+            PVOID LastVa = MiPteToAddress(LastPte);
+
+            DPRINT1("[arm64] WARNING: MiSetSystemCodeProtection PTE range overlaps with System View Space!\n");
+            DPRINT1("  Requested VA range:   %p - %p\n", FirstVa, LastVa);
+            DPRINT1("  Requested PTE range:  %p - %p\n", FirstPte, LastPte);
+            DPRINT1("  SysView VA range:     %p - %p\n",
+                    MiSystemViewStart, (PUCHAR)MiSystemViewStart + MmSystemViewSize - 1);
+            DPRINT1("  SysView PTE range:    %p - %p\n", SysViewFirstPte, SysViewLastPte);
+            DPRINT1("  Protection:           0x%lx\n", Protection);
+            DPRINT1("  This indicates an invalid image base address or corrupted PE headers.\n");
+            DPRINT1("  Skipping protection to prevent System View Space corruption.\n");
+
+            /* Don't proceed - this would corrupt System View Space PTEs */
+            NT_ASSERT(FALSE);
+            return;
+        }
+    }
+#endif
 
     /* Loop the PTEs */
     for (PointerPte = FirstPte; PointerPte <= LastPte; PointerPte++)
@@ -2540,11 +2638,50 @@ MiWriteProtectSystemImage(
         return;
     }
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] MiWriteProtectSystemImage: ImageBase=%p\n", ImageBase);
+#endif
+
     /* Large page mapped images are not supported */
     NT_ASSERT(!MI_IS_PHYSICAL_ADDRESS(ImageBase));
 
     /* Session images are not yet supported */
     NT_ASSERT(!MI_IS_SESSION_ADDRESS(ImageBase));
+
+#if defined(_M_ARM64)
+    /* ARM64: Validate image base is not in System View Space.
+     * System View Space is used for section mappings (via MmMapViewInSystemSpace)
+     * and should never contain directly-loaded kernel modules.
+     * Kernel modules must be in KSEG0 or System PTE Space.
+     */
+    extern PVOID MiSystemViewStart;
+    extern SIZE_T MmSystemViewSize;
+    if (MiSystemViewStart != NULL && MmSystemViewSize > 0)
+    {
+        if ((ULONG_PTR)ImageBase >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)ImageBase < ((ULONG_PTR)MiSystemViewStart + MmSystemViewSize))
+        {
+            DPRINT1("ARM64: MiWriteProtectSystemImage called on invalid image in System View Space!\n");
+            DPRINT1("  ImageBase: %p\n", ImageBase);
+            DPRINT1("  SysView:   %p - %p\n",
+                    MiSystemViewStart, (PUCHAR)MiSystemViewStart + MmSystemViewSize - 1);
+            DPRINT1("  System View Space is for mapped sections, not loaded modules.\n");
+            NT_ASSERT(FALSE);
+            return;
+        }
+    }
+
+    /* ARM64: Additional validation - image should be in valid kernel ranges.
+     * Expected ranges: KSEG0 (0xFFFF8000_00000000+) or System PTE Space.
+     */
+    if ((ULONG_PTR)ImageBase < 0xFFFF800000000000ULL)
+    {
+        DPRINT1("ARM64: MiWriteProtectSystemImage called on non-kernel address!\n");
+        DPRINT1("  ImageBase: %p (expected >= 0xFFFF800000000000)\n", ImageBase);
+        NT_ASSERT(FALSE);
+        return;
+    }
+#endif
 
     /* Get the NT headers */
     NtHeaders = RtlImageNtHeader(ImageBase);
@@ -3343,6 +3480,11 @@ LoaderScan:
         DPRINT1("LdrRelocateImageWithBias failed with status 0x%x\n", Status);
         goto Quickie;
     }
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* Ensure relocated code is visible to the I-cache on ARM64. */
+    KeSweepICache(ModuleLoadBase, DriverSize);
+#endif
 
     /* Get the NT Header */
     NtHeader = RtlImageNtHeader(ModuleLoadBase);

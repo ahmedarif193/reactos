@@ -1031,6 +1031,28 @@ FORCEINLINE
 KIRQL
 MiAcquirePfnLock(VOID)
 {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64 DEBUG: Check if we're in a system fault path - if so, we should NOT
+     * be acquiring the PFN lock because the caller should have used MxGetNextPage
+     * or another lockless path. Log if this occurs and continue (bugcheck will happen anyway).
+     */
+    {
+        extern volatile LONG MiArm64InSystemFault[];
+        ULONG CpuIndex = KeGetCurrentProcessorNumber();
+        if (CpuIndex < MAXIMUM_PROCESSORS && MiArm64InSystemFault[CpuIndex] >= 2)
+        {
+            static volatile LONG PfnLockInSysFltBudget = 5;
+            LONG Snap = InterlockedDecrement(&PfnLockInSysFltBudget);
+            if (Snap >= 0)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[MiAcquirePfnLock] CRITICAL: Acquiring PFN lock while InSystemFault>=%d on CPU=%lu! Caller should use lockless path.\n",
+                    MiArm64InSystemFault[CpuIndex], CpuIndex);
+            }
+        }
+    }
+#endif
     return KeAcquireQueuedSpinLock(LockQueuePfnLock);
 }
 
@@ -1053,10 +1075,22 @@ VOID
 MiAcquirePfnLockAtDpcLevel(VOID)
 {
     PKSPIN_LOCK_QUEUE LockQueue;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    extern volatile LONG MiArm64PfnLockDepth[MAXIMUM_PROCESSORS];
+#endif
 
     ASSERT(KeGetCurrentIrql() >= DISPATCH_LEVEL);
     LockQueue = &KeGetCurrentPrcb()->LockQueue[LockQueuePfnLock];
     KeAcquireQueuedSpinLockAtDpcLevel(LockQueue);
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        ULONG CpuIndex = KeGetCurrentProcessorNumber();
+        if (CpuIndex < MAXIMUM_PROCESSORS)
+        {
+            InterlockedIncrement(&MiArm64PfnLockDepth[CpuIndex]);
+        }
+    }
+#endif
 }
 
 _Requires_lock_held_(MmPfnLock)
@@ -1067,9 +1101,21 @@ VOID
 MiReleasePfnLockFromDpcLevel(VOID)
 {
     PKSPIN_LOCK_QUEUE LockQueue;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    extern volatile LONG MiArm64PfnLockDepth[MAXIMUM_PROCESSORS];
+#endif
 
     LockQueue = &KeGetCurrentPrcb()->LockQueue[LockQueuePfnLock];
     KeReleaseQueuedSpinLockFromDpcLevel(LockQueue);
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        ULONG CpuIndex = KeGetCurrentProcessorNumber();
+        if (CpuIndex < MAXIMUM_PROCESSORS)
+        {
+            InterlockedDecrement(&MiArm64PfnLockDepth[CpuIndex]);
+        }
+    }
+#endif
     ASSERT(KeGetCurrentIrql() >= DISPATCH_LEVEL);
 }
 
@@ -1860,6 +1906,13 @@ _Requires_exclusive_lock_held_(WorkingSet->WorkingSetMutex)
 VOID
 NTAPI
 MiInitializeWorkingSetList(_Inout_ PMMSUPPORT WorkingSet);
+
+/* ARM64-specific MM functions ***********************************************/
+#if defined(_M_ARM64) || defined(__aarch64__)
+VOID
+MiArm64MapAliasForPointer(
+    _In_ PVOID AliasVa);
+#endif
 
 #ifdef __cplusplus
 } // extern "C"

@@ -16,7 +16,11 @@
 
 extern ARBITER_INSTANCE IopRootIrqArbiter;
 static RTL_BITMAP IopArbIrqBitmap;
+#if defined(_M_ARM64) || defined(__aarch64__)
+static ULONG IopArbIrqBitmapBuffer[512]; /* 512 * 32 = 16384 vectors (LPI range) */
+#else
 static ULONG IopArbIrqBitmapBuffer[8]; /* 8 * 32 = 256 vectors */
+#endif
 static KSPIN_LOCK IopArbIrqLock;
 static VOID IopArbIrqRebuildBitmap(_In_ PRTL_RANGE_LIST Allocation);
 static VOID IopArbIrqMarkReservedLocked(VOID);
@@ -373,6 +377,18 @@ IopReleaseIrqVectors(
 
 /* FUNCTIONS *****************************************************************/
 
+/*
+ * IRQ arbiter callback functions
+ *
+ * NOTE: These functions may be called during arbiter initialization which can occur
+ * at elevated IRQL (DISPATCH_LEVEL) on ARM64 during early boot. They are also called
+ * during runtime resource arbitration. Therefore:
+ * - No PAGED_CODE assertion (would fail at DISPATCH_LEVEL during init)
+ *
+ * These callbacks are stored as function pointers in the ARBITER_INSTANCE structure
+ * and invoked by the arbiter library during resource allocation.
+ */
+
 NTSTATUS
 NTAPI
 IopArbIrqUnpackRequirements(
@@ -382,7 +398,7 @@ IopArbIrqUnpackRequirements(
     _Out_ PULONG OutLength,
     _Out_ PULONG OutAlignment)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     IopArbIrqEnsureInitialized();
     DPRINT("IopArbIrqUnpackRequirements: IoDescriptor: %p, OutMinimumAddress: %p, OutMaximumAddress: %p, OutLength: %p, OutAlignment: %p\n",
            IoDescriptor,
@@ -422,7 +438,7 @@ IopArbIrqPackResource(
     _In_ UINT64 Start,
     _Out_ PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDescriptor)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     IopArbIrqEnsureInitialized();
     DPRINT("IopArbIrqPackResource: IoDescriptor: %p, Start: %p, CmDescriptor: %p\n",
            IoDescriptor,
@@ -491,7 +507,7 @@ IopArbIrqUnpackResource(
     _Out_ PUINT64 Start,
     _Out_ PULONG OutLength)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     DPRINT("IopArbIrqUnpackResource: CmDescriptor: %p, Start: %p, OutLength: %p\n",
            CmDescriptor,
            Start,
@@ -517,7 +533,7 @@ NTAPI
 IopArbIrqScoreRequirement(
     _In_ PIO_RESOURCE_DESCRIPTOR IoDescriptor)
 {
-    PAGED_CODE();
+    /* No PAGED_CODE() - may be called during boot at elevated IRQL on ARM64 */
     DPRINT("IopArbIrqScoreRequirement: IoDescriptor: %p\n",
            IoDescriptor);
 
@@ -528,13 +544,16 @@ IopArbIrqScoreRequirement(
     return 0;
 }
 
+CODE_SEG("INIT")
 NTSTATUS
 NTAPI
 IopArbIrqInitialize(VOID)
 {
     NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
-    PAGED_CODE();
+    /* Note: No PAGED_CODE() here - this is called during boot initialization
+     * when IRQL may be elevated on ARM64. The function is only called once
+     * during system startup from IopInitializePlugPlayServices(). */
     IopArbIrqEarlyInit();
     IopArbIrqMarkSciReserved();
 

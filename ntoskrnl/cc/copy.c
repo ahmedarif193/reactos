@@ -207,16 +207,27 @@ CcPerformReadAhead(
             goto Clear;
         }
 
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[CcPerformReadAhead] Before SEH2_TRY CcRosEnsureVacbResident (partial)\n");
         _SEH2_TRY
         {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[CcPerformReadAhead] Inside SEH2_TRY, calling CcRosEnsureVacbResident\n");
             Success = CcRosEnsureVacbResident(Vacb, TRUE, FALSE,
                     CurrentOffset % VACB_MAPPING_GRANULARITY, PartialLength);
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[CcPerformReadAhead] CcRosEnsureVacbResident returned %d\n", Success);
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[CcPerformReadAhead] In SEH2_EXCEPT handler\n");
             Success = FALSE;
         }
         _SEH2_END
+
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[CcPerformReadAhead] After SEH2_END Success=%d\n", Success);
 
         if (!Success)
         {
@@ -231,10 +242,15 @@ CcPerformReadAhead(
         CurrentOffset += PartialLength;
     }
 
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[CcPerformReadAhead] Entering while loop, Length=%lu\n", Length);
     while (Length > 0)
     {
         ASSERT(CurrentOffset % VACB_MAPPING_GRANULARITY == 0);
         PartialLength = min(VACB_MAPPING_GRANULARITY, Length);
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[CcPerformReadAhead] Loop iter: Offset=0x%llx PartialLength=%lu\n",
+                   CurrentOffset, PartialLength);
         Status = CcRosRequestVacb(SharedCacheMap,
                                   CurrentOffset,
                                   &Vacb);
@@ -244,15 +260,26 @@ CcPerformReadAhead(
             goto Clear;
         }
 
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[CcPerformReadAhead] Before SEH2_TRY (main loop)\n");
         _SEH2_TRY
         {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[CcPerformReadAhead] Inside SEH2_TRY (main), calling CcRosEnsureVacbResident\n");
             Success = CcRosEnsureVacbResident(Vacb, TRUE, FALSE, 0, PartialLength);
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[CcPerformReadAhead] CcRosEnsureVacbResident returned %d (main)\n", Success);
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[CcPerformReadAhead] In SEH2_EXCEPT handler (main)\n");
             Success = FALSE;
         }
         _SEH2_END
+
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[CcPerformReadAhead] After SEH2_END (main) Success=%d\n", Success);
 
         if (!Success)
         {
@@ -261,15 +288,25 @@ CcPerformReadAhead(
             goto Clear;
         }
 
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[CcPerformReadAhead] Calling CcRosReleaseVacb\n");
         CcRosReleaseVacb(SharedCacheMap, Vacb, FALSE, FALSE);
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[CcPerformReadAhead] CcRosReleaseVacb returned\n");
 
         Length -= PartialLength;
         CurrentOffset += PartialLength;
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[CcPerformReadAhead] Remaining Length=%lu\n", Length);
     }
 
 Clear:
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[CcPerformReadAhead] At Clear label\n");
     /* See previous comment about private cache map */
     OldIrql = KeAcquireQueuedSpinLock(LockQueueMasterLock);
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[CcPerformReadAhead] KeAcquireQueuedSpinLock returned\n");
     PrivateCacheMap = FileObject->PrivateCacheMap;
     if (PrivateCacheMap != NULL)
     {
@@ -279,15 +316,25 @@ Clear:
         KeReleaseSpinLockFromDpcLevel(&PrivateCacheMap->ReadAheadSpinLock);
     }
     KeReleaseQueuedSpinLock(LockQueueMasterLock, OldIrql);
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[CcPerformReadAhead] KeReleaseQueuedSpinLock done\n");
 
     /* If file was locked, release it */
     if (Locked)
     {
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[CcPerformReadAhead] Calling ReleaseFromReadAhead\n");
         SharedCacheMap->Callbacks->ReleaseFromReadAhead(SharedCacheMap->LazyWriteContext);
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[CcPerformReadAhead] ReleaseFromReadAhead returned\n");
     }
 
     /* And drop our extra reference (See: CcScheduleReadAhead) */
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[CcPerformReadAhead] Calling ObDereferenceObject\n");
     ObDereferenceObject(FileObject);
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[CcPerformReadAhead] ObDereferenceObject returned, exiting\n");
 
     return;
 }

@@ -49,6 +49,48 @@ KEVENT ExpThreadSetManagerShutdownEvent;
 PETHREAD ExpWorkerThreadBalanceManagerPtr;
 PETHREAD ExpLastWorkerThread;
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+volatile PETHREAD ExpArm64LastWorkerThread;
+volatile PEX_WORK_QUEUE ExpArm64LastWorkerQueue;
+volatile ULONG ExpArm64LastWorkerQueueType;
+volatile PWORK_QUEUE_ITEM ExpArm64LastWorkItem;
+volatile PVOID ExpArm64LastWorkerRoutine;
+volatile PVOID ExpArm64LastWorkerParameter;
+volatile BOOLEAN ExpArm64WorkerRoutineActive;
+#endif
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+static
+BOOLEAN
+ExpIsExecutableRoutine(_In_ PVOID Routine)
+{
+    PLDR_DATA_TABLE_ENTRY LdrEntry = NULL;
+    BOOLEAN InKernel = FALSE;
+    PVOID ImageBase;
+    PIMAGE_NT_HEADERS NtHeaders;
+    PIMAGE_SECTION_HEADER Section;
+    ULONG_PTR Rva;
+
+    if (Routine == NULL)
+        return FALSE;
+
+    ImageBase = KiPcToFileHeader(Routine, &LdrEntry, FALSE, &InKernel);
+    if (ImageBase == NULL)
+        return FALSE;
+
+    NtHeaders = RtlImageNtHeader(ImageBase);
+    if (NtHeaders == NULL)
+        return FALSE;
+
+    Rva = (ULONG_PTR)Routine - (ULONG_PTR)ImageBase;
+    Section = RtlImageRvaToSection(NtHeaders, ImageBase, (ULONG)Rva);
+    if (Section == NULL)
+        return FALSE;
+
+    return (Section->Characteristics & IMAGE_SCN_MEM_EXECUTE) != 0;
+}
+#endif
+
 /* PRIVATE FUNCTIONS *********************************************************/
 
 /*++
@@ -154,8 +196,36 @@ ProcessLoop:
         /* Make sure nobody is trying to play smart with us */
         ASSERT((ULONG_PTR)WorkItem->WorkerRoutine > MmUserProbeAddress);
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+        ExpArm64LastWorkerThread = Thread;
+        ExpArm64LastWorkerQueue = WorkQueue;
+        ExpArm64LastWorkerQueueType = (ULONG)WorkQueueType;
+        ExpArm64LastWorkItem = WorkItem;
+        ExpArm64LastWorkerRoutine = (PVOID)WorkItem->WorkerRoutine;
+        ExpArm64LastWorkerParameter = WorkItem->Parameter;
+        ExpArm64WorkerRoutineActive = TRUE;
+
+        if (!ExpIsExecutableRoutine(WorkItem->WorkerRoutine))
+        {
+            DPRINT1("Invalid worker routine %p (WorkItem=%p Queue=%p Param=%p)\n",
+                    WorkItem->WorkerRoutine,
+                    WorkItem,
+                    WorkQueue,
+                    WorkItem->Parameter);
+            KeBugCheckEx(INVALID_WORK_QUEUE_ITEM,
+                         (ULONG_PTR)WorkItem,
+                         (ULONG_PTR)WorkQueue,
+                         (ULONG_PTR)WorkItem->Parameter,
+                         (ULONG_PTR)WorkItem->WorkerRoutine);
+        }
+#endif
+
         /* Call the Worker Routine */
         WorkItem->WorkerRoutine(WorkItem->Parameter);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+        ExpArm64WorkerRoutineActive = FALSE;
+#endif
 
         /* Make sure APCs are not disabled */
         if (Thread->Tcb.CombinedApcDisable != 0)
@@ -272,8 +342,7 @@ ExpCreateWorkerThread(WORK_QUEUE_TYPE WorkQueueType,
                                   UlongToPtr(Context));
     if (!NT_SUCCESS(Status))
     {
-        /* Well... */
-        DPRINT1("Failed to create worker thread: 0x%08x\n", Status);
+        /* Failed to create the thread */
         return;
     }
 
@@ -352,9 +421,8 @@ ExpDetectWorkerThreadDeadlock(VOID)
             (Queue->DynamicThreadCount < 16))
         {
             /* Stuff is still on the queue and nobody did anything about it */
-            DPRINT1("EX: Work Queue Deadlock detected: %lu\n", i);
+            DPRINT("EX: Work Queue Deadlock detected: %lu\n", i);
             ExpCreateWorkerThread(i, TRUE);
-            DPRINT1("Dynamic threads queued %d\n", Queue->DynamicThreadCount);
         }
 
         /* Update our data */
@@ -398,7 +466,6 @@ ExpCheckDynamicThreadCount(VOID)
             (Queue->DynamicThreadCount < 16))
         {
             /* Create a new thread */
-            DPRINT1("EX: Creating new dynamic thread as requested\n");
             ExpCreateWorkerThread(i, TRUE);
         }
     }
@@ -528,6 +595,8 @@ ExpInitializeWorkerThreads(VOID)
     ULONG i;
     NTSTATUS Status;
 
+    DPRINT1("[arm64] ExpInitializeWorkerThreads: ENTRY\n");
+
     /* Setup the stack swap support */
     ExInitializeFastMutex(&ExpWorkerSwapinMutex);
     InitializeListHead(&ExpWorkerListHead);
@@ -564,10 +633,14 @@ ExpInitializeWorkerThreads(VOID)
                       NotificationEvent,
                       FALSE);
 
+    DPRINT1("[arm64] ExpInitializeWorkerThreads: Creating %lu critical, %lu delayed threads\n",
+            CriticalThreads, DelayedThreads);
+
     /* Create the built-in worker threads for the critical queue */
     for (i = 0; i < CriticalThreads; i++)
     {
         /* Create the thread */
+        DPRINT1("[arm64] ExpInitializeWorkerThreads: Creating critical worker %lu\n", i);
         ExpCreateWorkerThread(CriticalWorkQueue, FALSE);
         ExCriticalWorkerThreads++;
     }
@@ -576,12 +649,50 @@ ExpInitializeWorkerThreads(VOID)
     for (i = 0; i < DelayedThreads; i++)
     {
         /* Create the thread */
+        DPRINT1("[arm64] ExpInitializeWorkerThreads: Creating delayed worker %lu\n", i);
         ExpCreateWorkerThread(DelayedWorkQueue, FALSE);
         ExDelayedWorkerThreads++;
     }
 
     /* Create the built-in worker thread for the hypercritical queue */
+    DPRINT1("[arm64] ExpInitializeWorkerThreads: Creating hypercritical worker\n");
     ExpCreateWorkerThread(HyperCriticalWorkQueue, FALSE);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64 FIX: Force scheduler to run worker threads.
+     *
+     * On ARM64 during early boot, there are no timer interrupts yet, so threads
+     * are never preempted. Worker threads are created in Ready state but never
+     * get a chance to run unless we explicitly yield. Without this, when code
+     * later calls ExQueueWorkItem(), no thread is waiting on the queue (workers
+     * are still in Ready state), so the work item is just queued and never
+     * processed.
+     *
+     * We use NtYieldExecution to voluntarily give up the CPU to other ready
+     * threads. This allows worker threads to:
+     * 1. Start executing ExpWorkerThreadEntryPoint
+     * 2. Call KeRemoveQueue which puts them in the Wait state
+     * 3. Be ready to receive work items when ExQueueWorkItem is called
+     *
+     * This is a workaround until proper timer interrupt support is implemented.
+     */
+    {
+        ULONG YieldCount;
+        ULONG TotalWorkers = ExCriticalWorkerThreads + ExDelayedWorkerThreads + 1;
+
+        DPRINT1("[arm64] ExpInitializeWorkerThreads: Yielding %lu times for %lu workers\n",
+                TotalWorkers * 2, TotalWorkers);
+
+        /* Yield multiple times - once for each worker to start, once to wait */
+        for (YieldCount = 0; YieldCount < TotalWorkers * 2; YieldCount++)
+        {
+            NtYieldExecution();
+        }
+
+        DPRINT1("[arm64] ExpInitializeWorkerThreads: Yield complete\n");
+    }
+#endif
 
     /* Create the balance set manager thread */
     Status = PsCreateSystemThread(&ThreadHandle,
@@ -756,9 +867,6 @@ ExQueueWorkItem(IN PWORK_QUEUE_ITEM WorkItem,
         (WorkQueue->DynamicThreadCount < 16))
     {
         /* Let the balance manager know about it */
-        DPRINT1("Requesting a new thread. CurrentCount: %lu. MaxCount: %lu\n",
-                WorkQueue->WorkerQueue.CurrentCount,
-                WorkQueue->WorkerQueue.MaximumCount);
         KeSetEvent(&ExpThreadSetManagerEvent, 0, FALSE);
     }
 }

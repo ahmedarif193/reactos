@@ -59,6 +59,15 @@ ExpWin32SessionCallout(
     KAPC_STATE ApcState;
     NTSTATUS Status;
 
+    /* If Win32k.sys is not loaded yet, the callout procedure will be NULL.
+     * This can happen during early boot when creating Win32 object types.
+     * Return success to allow object type creation to proceed. */
+    if (CalloutProcedure == NULL)
+    {
+        DPRINT("ExpWin32SessionCallout: CalloutProcedure is NULL (Win32k not loaded)\n");
+        return STATUS_SUCCESS;
+    }
+
     /* The objects have a common header. And the kernel accesses it!
        Thanks MS for this kind of retarded "design"! */
     Win32ObjectHeader = Object;
@@ -258,44 +267,95 @@ BOOLEAN
 NTAPI
 ExpWin32kInit(VOID)
 {
-    OBJECT_TYPE_INITIALIZER ObjectTypeInitializer;
+    /*
+     * Win32k Object Type Initialization Strategy:
+     *
+     * This function creates the WindowStation and Desktop object TYPES during
+     * Phase 1 kernel initialization. This is intentional and correct behavior:
+     *
+     * 1. Object types are created NOW (Phase 1), before win32k.sys loads
+     * 2. The callback pointers (ExpDesktopObjectOpen, etc.) are initially NULL
+     * 3. ExpWin32SessionCallout() handles NULL callbacks gracefully (returns success)
+     * 4. Later, when win32k.sys loads via DriverEntry(), it calls:
+     *    - PsEstablishWin32Callouts() to fill in the callback pointers
+     *    - InitWindowStationImpl() and InitDesktopImpl() to configure type properties
+     *
+     * This design separates object TYPE creation (kernel's job) from object type
+     * CONFIGURATION and actual object creation (win32k's job when sessions start).
+     *
+     * ARM64 Note: The previous ARM64-specific skip was removed because by Phase 1,
+     * MmInitSystem(1, ...) has already expanded pool memory, providing sufficient
+     * resources even with 64KB pages. The object types themselves are lightweight
+     * metadata structures, not large allocations.
+     */
     UNICODE_STRING Name;
     NTSTATUS Status;
-    DPRINT("Creating Win32 Object Types\n");
+
+    /*
+     * ARM64 FIX: Use separate OBJECT_TYPE_INITIALIZER variables to avoid
+     * compiler bug where structure pointer is offset by 8 bytes on reuse.
+     * See ARM64_STRUCTURE_POINTER_OFFSET_BUG.md for details.
+     */
 
     /* Create the window station Object Type */
-    RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
-    RtlInitUnicodeString(&Name, L"WindowStation");
-    ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
-    ObjectTypeInitializer.GenericMapping = ExpWindowStationMapping;
-    ObjectTypeInitializer.PoolType = NonPagedPool;
-    ObjectTypeInitializer.DeleteProcedure = ExpWinStaObjectDelete;
-    ObjectTypeInitializer.ParseProcedure = ExpWinStaObjectParse;
-    ObjectTypeInitializer.OkayToCloseProcedure = ExpWindowStationOkToClose;
-    ObjectTypeInitializer.SecurityRequired = TRUE;
-    ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK |
-                                              OBJ_PERMANENT |
-                                              OBJ_EXCLUSIVE;
-    ObjectTypeInitializer.ValidAccessMask = STANDARD_RIGHTS_REQUIRED;
-    Status = ObCreateObjectType(&Name,
-                                &ObjectTypeInitializer,
-                                NULL,
-                                &ExWindowStationObjectType);
-    if (!NT_SUCCESS(Status)) return FALSE;
+    {
+        OBJECT_TYPE_INITIALIZER WinStaTypeInitializer;
+        RtlZeroMemory(&WinStaTypeInitializer, sizeof(WinStaTypeInitializer));
+
+        RtlInitUnicodeString(&Name, L"WindowStation");
+        WinStaTypeInitializer.Length = sizeof(WinStaTypeInitializer);
+        WinStaTypeInitializer.GenericMapping = ExpWindowStationMapping;
+        WinStaTypeInitializer.PoolType = NonPagedPool;
+        WinStaTypeInitializer.DeleteProcedure = ExpWinStaObjectDelete;
+        WinStaTypeInitializer.ParseProcedure = ExpWinStaObjectParse;
+        WinStaTypeInitializer.OkayToCloseProcedure = ExpWindowStationOkToClose;
+        WinStaTypeInitializer.SecurityRequired = TRUE;
+        WinStaTypeInitializer.InvalidAttributes = OBJ_OPENLINK |
+                                                  OBJ_PERMANENT |
+                                                  OBJ_EXCLUSIVE;
+        WinStaTypeInitializer.ValidAccessMask = STANDARD_RIGHTS_REQUIRED;
+
+        Status = ObCreateObjectType(&Name,
+                                    &WinStaTypeInitializer,
+                                    NULL,
+                                    &ExWindowStationObjectType);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("ExpWin32kInit: Failed to create WindowStation object type - Status=0x%08lx\n", Status);
+            return FALSE;
+        }
+    }
 
     /* Create desktop object type */
-    RtlInitUnicodeString(&Name, L"Desktop");
-    ObjectTypeInitializer.GenericMapping = ExpDesktopMapping;
-    ObjectTypeInitializer.DeleteProcedure = ExpDesktopDelete;
-    ObjectTypeInitializer.ParseProcedure = NULL;
-    ObjectTypeInitializer.OkayToCloseProcedure = ExpDesktopOkToClose;
-    ObjectTypeInitializer.OpenProcedure = ExpDesktopOpen;
-    ObjectTypeInitializer.CloseProcedure = ExpDesktopClose;
-    Status = ObCreateObjectType(&Name,
-                                &ObjectTypeInitializer,
-                                NULL,
-                                &ExDesktopObjectType);
-    if (!NT_SUCCESS(Status)) return FALSE;
+    {
+        OBJECT_TYPE_INITIALIZER DesktopTypeInitializer;
+        RtlZeroMemory(&DesktopTypeInitializer, sizeof(DesktopTypeInitializer));
+
+        RtlInitUnicodeString(&Name, L"Desktop");
+        DesktopTypeInitializer.Length = sizeof(DesktopTypeInitializer);
+        DesktopTypeInitializer.GenericMapping = ExpDesktopMapping;
+        DesktopTypeInitializer.PoolType = NonPagedPool;
+        DesktopTypeInitializer.DeleteProcedure = ExpDesktopDelete;
+        DesktopTypeInitializer.ParseProcedure = NULL;
+        DesktopTypeInitializer.OkayToCloseProcedure = ExpDesktopOkToClose;
+        DesktopTypeInitializer.OpenProcedure = ExpDesktopOpen;
+        DesktopTypeInitializer.CloseProcedure = ExpDesktopClose;
+        DesktopTypeInitializer.SecurityRequired = TRUE;
+        DesktopTypeInitializer.InvalidAttributes = OBJ_OPENLINK |
+                                                  OBJ_PERMANENT |
+                                                  OBJ_EXCLUSIVE;
+        DesktopTypeInitializer.ValidAccessMask = STANDARD_RIGHTS_REQUIRED;
+
+        Status = ObCreateObjectType(&Name,
+                                    &DesktopTypeInitializer,
+                                    NULL,
+                                    &ExDesktopObjectType);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("ExpWin32kInit: Failed to create Desktop object type - Status=0x%08lx\n", Status);
+            return FALSE;
+        }
+    }
 
     return TRUE;
 }

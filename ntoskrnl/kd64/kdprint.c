@@ -15,6 +15,196 @@
 
 #define KD_PRINT_MAX_BYTES 512
 
+/*
+ * ARM64 Monotonic Timestamp Support
+ *
+ * On ARM64, the following issues can cause non-monotonic timestamps:
+ * 1. Multiple CPUs reading cntpct_el0 concurrently without synchronization
+ * 2. ARM64's relaxed memory model allowing out-of-order execution
+ * 3. Different code paths (KdpDprintf vs KdpPrint) using different time sources
+ *
+ * This implementation provides:
+ * - A spinlock-protected timestamp acquisition function
+ * - A global "last timestamp" to ensure strict monotonicity
+ * - Proper memory barriers for ARM64
+ * - Unified timestamp source (performance counter) for all debug output
+ */
+
+/* Global state for monotonic timestamp generation */
+static KSPIN_LOCK KdpTimestampSpinLock;
+static volatile ULONGLONG KdpLastTimestampMicroseconds = 0;
+static BOOLEAN KdpTimestampSpinLockInitialized = FALSE;
+
+/* Forward declarations */
+KIRQL NTAPI KdpAcquireLock(_In_ PKSPIN_LOCK SpinLock);
+VOID NTAPI KdpReleaseLock(_In_ PKSPIN_LOCK SpinLock, _In_ KIRQL OldIrql);
+
+/**
+ * @brief Acquires a monotonically increasing timestamp in microseconds.
+ *
+ * This function ensures that timestamps are always monotonically increasing,
+ * even when called concurrently from multiple CPUs. On ARM64, this is critical
+ * because:
+ * - The performance counter can be read out of order due to speculative execution
+ * - Multiple CPUs may read similar values that get printed in non-chronological order
+ * - The relaxed memory model requires explicit synchronization
+ *
+ * @return Monotonically increasing timestamp in microseconds since boot.
+ */
+ULONGLONG
+NTAPI
+KdpAcquireMonotonicTimestamp(VOID)
+{
+    ULONGLONG Microseconds = 0;
+    ULONGLONG LastTimestamp;
+    LARGE_INTEGER Counter;
+    ULONGLONG Frequency;
+    ULONGLONG Delta;
+    KIRQL OldIrql;
+    BOOLEAN UseLock;
+
+    /*
+     * Check if spinlock is initialized. During very early boot, the spinlock
+     * may not be initialized yet. In that case, we fall back to unsynchronized
+     * access which is acceptable since early boot is typically single-threaded.
+     */
+    UseLock = KdpTimestampSpinLockInitialized;
+
+    /*
+     * ARM64-specific: Issue an ISB (Instruction Synchronization Barrier) before
+     * reading the performance counter to ensure all prior instructions have
+     * completed. This prevents speculative reads of the counter from returning
+     * stale or out-of-order values.
+     */
+#if defined(_M_ARM64)
+    __asm__ __volatile__("isb" ::: "memory");
+#endif
+
+    /* Get timestamp using performance counter */
+    if (KdPerformanceCounterRate.QuadPart != 0)
+    {
+        Counter = KeQueryPerformanceCounter(NULL);
+        Frequency = (ULONGLONG)KdPerformanceCounterRate.QuadPart;
+
+        /* Calculate time elapsed since kernel start */
+        if (Counter.QuadPart >= KdpInitialPerformanceCounter.QuadPart)
+            Delta = (ULONGLONG)(Counter.QuadPart - KdpInitialPerformanceCounter.QuadPart);
+        else
+            Delta = 0;
+
+        /* Convert to microseconds */
+        Microseconds = (Delta * 1000000ULL) / Frequency;
+
+        /* Add bootloader offset to get continuous timestamp */
+        Microseconds += KdpTimeStampOffsetMicroseconds;
+    }
+    else
+    {
+        /*
+         * Fallback when performance counter is not yet initialized.
+         * Use KeQueryInterruptTime if available, otherwise use a simple counter.
+         */
+        ULONGLONG InterruptTime = KeQueryInterruptTime();
+        if (InterruptTime != 0)
+        {
+            /* Convert from 100ns units to microseconds */
+            Microseconds = InterruptTime / 10ULL;
+            Microseconds += KdpTimeStampOffsetMicroseconds;
+        }
+        else
+        {
+            /* Very early boot - use TSC on x86/x64 or counter on ARM64 */
+#if defined(_M_AMD64) || defined(_M_IX86)
+            ULONGLONG Tsc = __rdtsc();
+            /* Assume ~2GHz CPU (2000 cycles per microsecond) */
+            Microseconds = Tsc / 2000;
+#else
+            /* ARM64 fallback: just return last + 1 to maintain monotonicity */
+            Microseconds = KdpLastTimestampMicroseconds + 1;
+#endif
+        }
+    }
+
+    /*
+     * Ensure monotonicity: the timestamp must be strictly greater than the
+     * last recorded timestamp. This handles cases where:
+     * - Two CPUs read the counter at nearly the same time
+     * - Counter wraps around (extremely unlikely but possible)
+     * - Clock adjustments or drift between reads
+     */
+    if (UseLock)
+    {
+        /* Acquire lock at HIGH_LEVEL to prevent preemption */
+        OldIrql = KdpAcquireLock(&KdpTimestampSpinLock);
+
+        /*
+         * ARM64-specific: Memory barrier to ensure we see the latest value
+         * of KdpLastTimestampMicroseconds after acquiring the lock.
+         */
+#if defined(_M_ARM64)
+        __asm__ __volatile__("dmb ish" ::: "memory");
+#endif
+
+        LastTimestamp = KdpLastTimestampMicroseconds;
+
+        /* Ensure strict monotonicity */
+        if (Microseconds <= LastTimestamp)
+        {
+            Microseconds = LastTimestamp + 1;
+        }
+
+        /* Update the global last timestamp */
+        KdpLastTimestampMicroseconds = Microseconds;
+
+        /*
+         * ARM64-specific: Memory barrier to ensure the updated timestamp
+         * is visible to other CPUs before we release the lock.
+         */
+#if defined(_M_ARM64)
+        __asm__ __volatile__("dmb ish" ::: "memory");
+#endif
+
+        KdpReleaseLock(&KdpTimestampSpinLock, OldIrql);
+    }
+    else
+    {
+        /*
+         * No lock available (early boot). Use atomic compare-exchange to
+         * try to maintain monotonicity without full synchronization.
+         */
+        do
+        {
+            LastTimestamp = KdpLastTimestampMicroseconds;
+            if (Microseconds <= LastTimestamp)
+            {
+                Microseconds = LastTimestamp + 1;
+            }
+        } while (InterlockedCompareExchange64(
+                    (volatile LONGLONG*)&KdpLastTimestampMicroseconds,
+                    (LONGLONG)Microseconds,
+                    (LONGLONG)LastTimestamp) != (LONGLONG)LastTimestamp);
+    }
+
+    return Microseconds;
+}
+
+/**
+ * @brief Initializes the timestamp spinlock.
+ *
+ * This must be called during kernel initialization before multi-threaded
+ * debug output begins. It is safe to call multiple times.
+ */
+VOID
+NTAPI
+KdpInitializeTimestampLock(VOID)
+{
+    if (!KdpTimestampSpinLockInitialized)
+    {
+        KeInitializeSpinLock(&KdpTimestampSpinLock);
+        KdpTimestampSpinLockInitialized = TRUE;
+    }
+}
+
 /* FUNCTIONS *****************************************************************/
 
 KIRQL
@@ -490,19 +680,14 @@ KdpPrint(
                                 Handled);
     }
 
-    /* Build a timestamp prefix to align all kernel prints with KD banner */
-    Microseconds = KeQueryInterruptTime() / 10ULL; /* 100ns -> usec */
-    if (Microseconds == 0)
-    {
-#if defined(_M_AMD64) || defined(_M_IX86)
-        ULONGLONG Tsc = __rdtsc();
-        Microseconds = Tsc / 2000; /* coarse fallback */
-#else
-        static ULONGLONG FallbackCounter = 0;
-        Microseconds = FallbackCounter++;
-#endif
-    }
-    Microseconds += KdpTimeStampOffsetMicroseconds;
+    /*
+     * Acquire a monotonically increasing timestamp.
+     * This uses the centralized timestamp function which ensures:
+     * - Proper synchronization across multiple CPUs
+     * - ARM64-specific memory barriers
+     * - Strict monotonicity even under concurrent access
+     */
+    Microseconds = KdpAcquireMonotonicTimestamp();
 
     Seconds = Microseconds / 1000000ULL;
     Fractional = Microseconds % 1000000ULL;
@@ -559,45 +744,24 @@ KdpDprintf(
     USHORT Length;
     va_list ap;
     CHAR Buffer[512];
-    ULONGLONG Microseconds = 0;
-    ULONGLONG Seconds = 0;
-    ULONGLONG Fractional = 0;
+    ULONGLONG Microseconds;
+    ULONGLONG Seconds;
+    ULONGLONG Fractional;
     USHORT TimestampLength = 0;
-    LARGE_INTEGER Counter;
-    ULONGLONG Frequency;
-    ULONGLONG Delta;
 
-    /* Get timestamp using performance counter */
-    if (KdPerformanceCounterRate.QuadPart != 0)
-    {
-        Counter = KeQueryPerformanceCounter(NULL);
-        Frequency = (ULONGLONG)KdPerformanceCounterRate.QuadPart;
-
-        /* Calculate time elapsed since kernel start */
-        if (Counter.QuadPart >= KdpInitialPerformanceCounter.QuadPart)
-            Delta = (ULONGLONG)(Counter.QuadPart - KdpInitialPerformanceCounter.QuadPart);
-        else
-            Delta = 0;
-
-        /* Convert to microseconds */
-        Microseconds = (Delta * 1000000ULL) / Frequency;
-
-        /* Add bootloader offset to get continuous timestamp */
-        Microseconds += KdpTimeStampOffsetMicroseconds;
-    }
-    else
-    {
-        /* Fallback: Use TSC if performance counter not initialized */
-#if defined(_M_AMD64) || defined(_M_IX86)
-        ULONGLONG Tsc = __rdtsc();
-        /* Assume ~2GHz CPU (2000 cycles per microsecond) */
-        Microseconds = Tsc / 2000;
-#else
-        /* For other architectures, use a simple counter as fallback */
-        static ULONGLONG Counter = 0;
-        Microseconds = Counter++;
-#endif
-    }
+    /*
+     * Acquire a monotonically increasing timestamp.
+     * This uses the centralized timestamp function which ensures:
+     * - Proper synchronization across multiple CPUs
+     * - ARM64-specific memory barriers (ISB before counter read, DMB for ordering)
+     * - Strict monotonicity even under concurrent access from multiple CPUs
+     *
+     * This is critical on ARM64 where:
+     * - The cntpct_el0 register can be speculatively read out of order
+     * - Multiple CPUs can interleave reads and prints
+     * - The relaxed memory model requires explicit barriers
+     */
+    Microseconds = KdpAcquireMonotonicTimestamp();
 
     /* Convert to seconds and fractional part */
     Seconds = Microseconds / 1000000ULL;

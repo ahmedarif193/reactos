@@ -1540,6 +1540,27 @@ MiCreatePagingFileMap(OUT PSEGMENT *Segment,
     }
     *Segment = NewSegment;
 
+#if defined(_M_ARM64)
+    /* ARM64 DIAGNOSTIC: Log segment allocation address to diagnose System View Space issue */
+    {
+        extern PVOID MiSystemViewStart, MmPagedPoolStart;
+        extern SIZE_T MmSystemViewSize;
+        DPRINT1("[arm64] MiCreatePagingFileMap: NewSegment=%p (PteCount=%lu)\n",
+                NewSegment, (ULONG)PteCount);
+        DPRINT1("  MmPagedPoolStart=%p MiSystemViewStart=%p MmSystemViewSize=0x%lx\n",
+                MmPagedPoolStart, MiSystemViewStart, (ULONG)MmSystemViewSize);
+
+        /* Check if allocation landed in System View Space by mistake */
+        if (MiSystemViewStart != NULL &&
+            (ULONG_PTR)NewSegment >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)NewSegment < ((ULONG_PTR)MiSystemViewStart + MmSystemViewSize))
+        {
+            DPRINT1("  *** ERROR: Segment allocated in System View Space instead of Paged Pool! ***\n");
+            DPRINT1("  This will cause a crash when filling prototype PTEs.\n");
+        }
+    }
+#endif
+
     /* Now allocate the control area, which has the subsection structure */
     ControlArea = ExAllocatePoolWithTag(NonPagedPool,
                                         sizeof(CONTROL_AREA) + sizeof(SUBSECTION),
@@ -1587,10 +1608,22 @@ MiCreatePagingFileMap(OUT PSEGMENT *Segment,
 
     /* Start with an empty PTE, unless this is a commit operation */
     TempPte.u.Long = 0;
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] MiCreatePagingFileMap: After TempPte.u.Long=0: TempPte.u.Long=0x%llx\n",
+            (unsigned long long)TempPte.u.Long);
+    DPRINT1("[arm64] MiCreatePagingFileMap: AllocationAttributes=0x%lx SEC_COMMIT=0x%lx ProtectionMask=0x%lx\n",
+            (ULONG)AllocationAttributes, (ULONG)SEC_COMMIT, (ULONG)ProtectionMask);
+#endif
     if (AllocationAttributes & SEC_COMMIT)
     {
         /* In which case, write down the protection mask in the Prototype PTEs */
         TempPte.u.Soft.Protection = ProtectionMask;
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] MiCreatePagingFileMap: After setting Protection=%lu: TempPte.u.Long=0x%llx\n",
+                (ULONG)ProtectionMask, (unsigned long long)TempPte.u.Long);
+        DPRINT1("[arm64] MiCreatePagingFileMap: TempPte.u.Soft.Protection=%lu (should be %lu)\n",
+                (ULONG)TempPte.u.Soft.Protection, (ULONG)ProtectionMask);
+#endif
 
         /* For accounting, also mark these pages as being committed */
         NewSegment->NumberOfCommittedPages = PteCount;
@@ -1601,6 +1634,12 @@ MiCreatePagingFileMap(OUT PSEGMENT *Segment,
 
     /* Write out the prototype PTEs, for now they're simply demand zero */
 #ifdef _WIN64
+#if defined(_M_ARM64)
+    /* ARM64 DIAGNOSTIC: Log prototype PTE initialization */
+    DPRINT1("[arm64] MiCreatePagingFileMap: Filling %lu PTEs at %p (size=0x%lx) with value 0x%llx\n",
+            (ULONG)PteCount, PointerPte, (ULONG)(PteCount * sizeof(MMPTE)),
+            (unsigned long long)TempPte.u.Long);
+#endif
     RtlFillMemoryUlonglong(PointerPte, PteCount * sizeof(MMPTE), TempPte.u.Long);
 #else
     RtlFillMemoryUlong(PointerPte, PteCount * sizeof(MMPTE), TempPte.u.Long);

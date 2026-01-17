@@ -165,16 +165,31 @@ MiReadFilePage(PMMSUPPORT AddressSpace,
     Mdl->MdlFlags |= MDL_PAGES_LOCKED;
 
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
+
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[MiReadFilePage] Before IoPageRead: FileOffset=0x%llx\n", FileOffset->QuadPart);
+
     Status = IoPageRead(FileObject, Mdl, FileOffset, &Event, &IOSB);
+
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[MiReadFilePage] IoPageRead returned 0x%lx\n", Status);
+
     if (Status == STATUS_PENDING)
     {
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[MiReadFilePage] Calling KeWaitForSingleObject\n");
         KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[MiReadFilePage] KeWaitForSingleObject returned, IOSB.Status=0x%lx\n", IOSB.Status);
         Status = IOSB.Status;
     }
     if (Mdl->MdlFlags & MDL_MAPPED_TO_SYSTEM_VA)
     {
         MmUnmapLockedPages (Mdl->MappedSystemVa, Mdl);
     }
+
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[MiReadFilePage] After MDL unmap, calling MiMapPageInHyperSpace\n");
 
     PageBuf = MiMapPageInHyperSpace(PsGetCurrentProcess(), *Page, &OldIrql);
     if (!PageBuf)

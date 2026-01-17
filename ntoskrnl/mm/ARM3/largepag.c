@@ -72,8 +72,15 @@ MiInitializeDriverLargePageList(VOID)
     /* Initialize the list */
     InitializeListHead(&MiLargePageDriverList);
 
-    /* Bail out if there's nothing */
-    if (MmLargePageDriverBufferLength == 0xFFFFFFFF) return;
+    /* Bail out if there's nothing or the buffer length is invalid */
+    if ((MmLargePageDriverBufferLength == 0xFFFFFFFF) ||
+        (MmLargePageDriverBufferLength == 0) ||
+        (MmLargePageDriverBufferLength > sizeof(MmLargePageDriverBuffer)))
+    {
+        DPRINT1("[arm64] MiInitializeDriverLargePageList: skip (len=%lu)\n",
+                MmLargePageDriverBufferLength);
+        return;
+    }
 
     /* Loop from start to finish */
     p = MmLargePageDriverBuffer;
