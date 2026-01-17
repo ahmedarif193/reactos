@@ -11,6 +11,9 @@ SECTIONS
   {
     __rsrc_start__ = . ;
     *(.rsrc)
+    /* llvm-windres generates split .rsrc$01 (directory) and .rsrc$02 (data) sections.
+     * SORT ensures $01 comes before $02 which is required for proper resource lookup. */
+    *(SORT(.rsrc$*))
     __rsrc_end__ = . ;
   }
 }
