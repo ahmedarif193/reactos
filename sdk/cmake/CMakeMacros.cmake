@@ -40,16 +40,25 @@ function(add_message_headers _type)
         get_filename_component(_file_name ${_file} NAME_WE)
         set(_converted_file ${CMAKE_CURRENT_BINARY_DIR}/${_file}) ## ${_file_name}.mc
         set(_source_file ${CMAKE_CURRENT_SOURCE_DIR}/${_file})    ## ${_file_name}.mc
+        set(_rc_file ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.rc)
         utf16le_convert(${_source_file} ${_converted_file} nobom)
         macro_mc(${_flag} ${_converted_file})
+        # Workaround for llvm-windres not recognizing MESSAGETABLE as resource type 11.
+        # Replace the keyword with the numeric ID so the resource is properly typed.
+        if(CMAKE_HOST_WIN32)
+            set(_fixup_cmd powershell -Command "(Get-Content '${_rc_file}') -replace 'MESSAGETABLE', '11' | Set-Content '${_rc_file}'")
+        else()
+            set(_fixup_cmd sed -i.bak "s/MESSAGETABLE/11/g" "${_rc_file}")
+        endif()
         add_custom_command(
-            OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.h ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.rc
+            OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.h ${_rc_file}
             COMMAND ${COMMAND_MC}
+            COMMAND ${_fixup_cmd}
             DEPENDS "${_converted_file}")
         set_source_files_properties(
-            ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.h ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.rc
+            ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.h ${_rc_file}
             PROPERTIES GENERATED TRUE)
-        add_custom_target(${_file_name} ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.h ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.rc)
+        add_custom_target(${_file_name} ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.h ${_rc_file})
     endforeach()
 endfunction()
 
