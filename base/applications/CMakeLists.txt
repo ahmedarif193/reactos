@@ -49,5 +49,5 @@ add_subdirectory(winver)
 add_subdirectory(wordpad)
 add_subdirectory(write)
 add_subdirectory(wusa)
-add_subdirectory(rusthello)
-add_subdirectory(rustwin)
+#add_subdirectory(rusthello) # Disabled - linker issues on macOS
+#add_subdirectory(rustwin)

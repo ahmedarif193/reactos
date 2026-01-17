@@ -120,7 +120,7 @@ PrintMessageV(
     ...)
 {
     LPTSTR lpMsgBuf;
-    va_list args = NULL;
+    va_list args;
     DWORD RetVal;
 
     va_start(args, dwMessage);

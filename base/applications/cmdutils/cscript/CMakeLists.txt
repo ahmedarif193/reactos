@@ -14,7 +14,10 @@ add_idl_headers(cscript_idlheader ihost.idl)
 add_typelib(ihost.idl)
 set_source_files_properties(rsrc.rc PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/ihost.tlb)
 target_link_libraries(cscript uuid wine oldnames)
-set_module_type(cscript win32cui UNICODE)
+# Note: cscript uses wWinMain (shared with wscript), so we need win32gui for the entry point.
+# We manually set the subsystem to console to get the console window.
+set_module_type(cscript win32gui UNICODE)
+set_subsystem(cscript console)
 add_delay_importlibs(cscript shlwapi)
 add_importlibs(cscript shell32 oleaut32 ole32 advapi32 user32 msvcrt kernel32 ntdll)
 add_dependencies(cscript stdole2 cscript_idlheader)

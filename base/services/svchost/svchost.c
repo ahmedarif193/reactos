@@ -826,7 +826,7 @@ GetServiceMainFunctions (
     DWORD dwError, cbDllLength, cbData, dwType;
     PSVCHOST_DLL pDll;
     ACTCTXW actCtx;
-    LPCWSTR pszDllPath;
+    LPCWSTR pszDllPath = NULL;
     HKEY hKey;
     HANDLE hActCtx;
     LPWSTR lpData;
@@ -973,6 +973,10 @@ GetServiceMainFunctions (
             /* Try the next character */
             cbDllLength--;
         }
+
+        /* If no separator found, use the whole buffer */
+        if (pszDllPath == NULL)
+            pszDllPath = szDllBuffer;
     }
 
     /* See if we already have a matching DLL and manifest for this service */

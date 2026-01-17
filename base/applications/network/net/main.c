@@ -95,7 +95,7 @@ PrintMessageStringV(
     ...)
 {
     PWSTR pBuffer;
-    va_list args = NULL;
+    va_list args;
 
     va_start(args, dwMessage);
 
