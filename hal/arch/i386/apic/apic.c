@@ -263,6 +263,7 @@ ApicSendEOI(void)
     ApicWrite(APIC_EOI, 0);
 }
 
+__attribute__((unused))
 FORCEINLINE
 KIRQL
 ApicGetProcessorIrql(VOID)

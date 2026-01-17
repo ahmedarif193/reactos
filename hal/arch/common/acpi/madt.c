@@ -260,12 +260,36 @@ HalpParseApicTables(
                          InterruptOverride->GlobalIrq,
                          InterruptOverride->IntiFlags);
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+                /*
+                 * ARM64: Accept any bus number.
+                 * ARM64 platforms do not have an ISA bus. They use platform buses
+                 * and the GIC (Generic Interrupt Controller). The bus field in MADT
+                 * interrupt override entries may be non-zero on ARM64 systems, and
+                 * rejecting them would cause loss of critical interrupt routing info.
+                 */
+                (void)InterruptOverride->Bus; /* Unused on ARM64 */
+#else
+                /*
+                 * x86/AMD64: Only accept ISA bus (bus 0) interrupt overrides.
+                 * The PIC vector redirect table is specifically for ISA IRQ remapping.
+                 */
                 if (InterruptOverride->Bus != 0) // 0 = ISA
                 {
                     DPRINT01("Invalid Bus: %p, %u\n", InterruptOverride, InterruptOverride->Bus);
                     return;
                 }
+#endif
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+                /*
+                 * ARM64: Skip PIC vector redirect table population.
+                 * ARM64 uses GIC with GSI numbers directly, not through a legacy PIC.
+                 * The HalpPicVectorRedirect array is only 16 elements for x86 ISA IRQs.
+                 * We still reserve the GSI below, but don't update the redirect table.
+                 */
+                (void)0; /* No-op, proceed to GSI reservation */
+#else
                 if (InterruptOverride->SourceIrq >= _countof(HalpPicVectorRedirect))
                 {
                     DPRINT01("Invalid SourceIrq: %p, %u\n",
@@ -275,6 +299,7 @@ HalpParseApicTables(
 
                 // Note: GlobalIrq is not validated in any way (yet).
                 HalpPicVectorRedirect[InterruptOverride->SourceIrq] = InterruptOverride->GlobalIrq;
+#endif /* !ARM64 - End of PIC vector redirect handling */
 
                 /* Reserve the override GSI so it won't be allocated */
                 OverrideVector = InterruptOverride->GlobalIrq;

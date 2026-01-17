@@ -10,11 +10,18 @@
 
 #include <hal.h>
 #include <halacpi.h>
+#if defined(_M_ARM64) || defined(__aarch64__)
+#include <halacpi_arm64.h>
+#endif
 #include <halpcie.h>
 #include <ntifs.h>
+#include <ndk/extypes.h>
+#include <ndk/kefuncs.h>
 #include <reactos/hal/acpi_cstate.h>
 #include <stdarg.h>
-#define NDEBUG
+#include <ntstrsafe.h>
+/* NDEBUG temporarily disabled for ARM64 ACPI debugging */
+//#define NDEBUG
 #include <debug.h>
 extern VOID NTAPI IopReserveIrqVectors(_In_reads_(Count) PULONG Vectors, _In_ ULONG Count);
 /* Legacy PCI config uses the global lock from the legacy PCI bus support */
@@ -24,6 +31,25 @@ extern VOID HalpPciLogEcamCoverage(VOID);
 extern BOOLEAN NTAPI HalpIsApicInterruptController(VOID);
 
 NTSYSAPI NTSTATUS NTAPI NtShutdownSystem(_In_ SHUTDOWN_ACTION Action);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+#define HALP_ARM64 1
+#endif
+
+#ifndef _ARC_
+PCONFIGURATION_COMPONENT_DATA
+NTAPI
+KeFindConfigurationNextEntry(
+    _In_ PCONFIGURATION_COMPONENT_DATA Child,
+    _In_ CONFIGURATION_CLASS Class,
+    _In_ CONFIGURATION_TYPE Type,
+    _In_opt_ PULONG ComponentKey,
+    _In_ PCONFIGURATION_COMPONENT_DATA *NextLink
+    );
+#endif
+
+int __cdecl _vsnprintf(char *Buffer, size_t Count, const char *Format, va_list Args);
+int __cdecl _snprintf(char *Buffer, size_t Count, const char *Format, ...);
 
 #ifndef ACPI_PM1_STATUS_BUS_MASTER
 #define ACPI_PM1_STATUS_BUS_MASTER     0x0010
@@ -39,6 +65,13 @@ NTSYSAPI NTSTATUS NTAPI NtShutdownSystem(_In_ SHUTDOWN_ACTION Action);
 
 LIST_ENTRY HalpAcpiTableCacheList;
 FAST_MUTEX HalpAcpiTableCacheLock;
+/*
+ * Explicit initialization flag for ARM64.
+ * BSS may not be zeroed on ARM64 early boot, so we use a sentinel value
+ * in .data section (non-zero initializer places it in .data, not .bss).
+ * Value changes from 0xDEADBEEF to 0x12345678 after initialization.
+ */
+static volatile ULONG HalpAcpiTableCacheInitFlag = 0xDEADBEEFu;
 
 BOOLEAN HalpProcessedACPIPhase0;
 BOOLEAN HalpPhysicalMemoryMayAppearAbove4GB;
@@ -52,7 +85,9 @@ PBOOT_TABLE HalpSimpleBootFlagTable;
 
 PHYSICAL_ADDRESS HalpMaxHotPlugMemoryAddress;
 PHYSICAL_ADDRESS HalpLowStubPhysicalAddress;
+#if !defined(HALP_ARM64)
 PHARDWARE_PTE HalpPteForFlush;
+#endif
 PVOID HalpVirtAddrForFlush;
 PVOID HalpLowStub;
 
@@ -140,6 +175,13 @@ HalpPciReadConfigDwordLegacy(
     _In_ UCHAR FunctionNumber,
     _In_ UCHAR RegisterOffset)
 {
+#if defined(HALP_ARM64)
+    UNREFERENCED_PARAMETER(BusNumber);
+    UNREFERENCED_PARAMETER(DeviceNumber);
+    UNREFERENCED_PARAMETER(FunctionNumber);
+    UNREFERENCED_PARAMETER(RegisterOffset);
+    return 0xFFFFFFFF;
+#else
     ULONG Address;
     ULONG Value;
     UCHAR ConfigControl;
@@ -164,6 +206,7 @@ HalpPciReadConfigDwordLegacy(
 
     KeReleaseSpinLock(&HalpPCIConfigLock, OldIrql);
     return Value;
+#endif
 }
 
 static __inline ULONGLONG
@@ -582,7 +625,7 @@ HalpAcpiValidateEcamAllocation(
 static const CHAR HalpAcpiVBoxOemId[6] = {'V','B','O','X',' ',' '};
 static const CHAR HalpAcpiVBoxMcfgId[8] = {'V','B','O','X','M','C','F','G'};
 
-static
+static __attribute__((unused))
 BOOLEAN
 HalpAcpiIsVirtualBoxMcfg(
     _In_ PHALP_ACPI_MCFG Mcfg,
@@ -627,7 +670,7 @@ HalpAcpiIsVirtualBoxMcfg(
 }
 
 CODE_SEG("INIT")
-static
+static __attribute__((unused))
 BOOLEAN
 HalpAcpiForceVirtualBoxPciExpress(
     _In_ ULONGLONG BaseAddress,
@@ -635,6 +678,15 @@ HalpAcpiForceVirtualBoxPciExpress(
     _Out_opt_ PULONG LegacyVendorValue,
     _Out_opt_ PULONG MmconfigVendorValue)
 {
+#if defined(HALP_ARM64)
+    UNREFERENCED_PARAMETER(BaseAddress);
+    UNREFERENCED_PARAMETER(Length);
+    if (LegacyVendorValue)
+        *LegacyVendorValue = 0xFFFFFFFF;
+    if (MmconfigVendorValue)
+        *MmconfigVendorValue = 0xFFFFFFFF;
+    return FALSE;
+#else
     ULONGLONG LengthBits;
     ULONGLONG Value;
     ULONG Address;
@@ -776,6 +828,7 @@ HalpAcpiForceVirtualBoxPciExpress(
             AddressRegisterAfterHigh);
 
     return Success;
+#endif
 }
 
 #define HALP_ACPI_OVERRIDE_ALIGNMENT   8
@@ -1801,14 +1854,17 @@ HalpAcpiGetTableFromBios(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
                 return NULL;
             }
 
-            /* We found it, break out */
-            DPRINT("Found ACPI table %c%c%c%c at 0x%p\n",
-                    Header->Signature & 0xFF,
-                    (Header->Signature & 0xFF00) >> 8,
-                    (Header->Signature & 0xFF0000) >> 16,
-                    (Header->Signature & 0xFF000000) >> 24,
-                    Header);
-            if (Header->Signature == Signature) break;
+            /* Check if this is the table we're looking for */
+            if (Header->Signature == Signature)
+            {
+                DPRINT("Found ACPI table %c%c%c%c at 0x%p\n",
+                        Header->Signature & 0xFF,
+                        (Header->Signature & 0xFF00) >> 8,
+                        (Header->Signature & 0xFF0000) >> 16,
+                        (Header->Signature & 0xFF000000) >> 24,
+                        Header);
+                break;
+            }
         }
 
         /* Did we end up here back at the last entry? */
@@ -1954,8 +2010,16 @@ HalAcpiGetTable(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
     /* Is this phase0 */
     if (LoaderBlock)
     {
-        /* Initialize the cache first */
-        if (!NT_SUCCESS(HalpAcpiTableCacheInit(LoaderBlock))) return NULL;
+        /*
+         * Initialize the cache first, but skip if already initialized.
+         * This quick check avoids redundant function calls and debug logging
+         * when HalAcpiGetTable is called multiple times during Phase 0.
+         * The sentinel value 0x12345678 indicates successful initialization.
+         */
+        if (HalpAcpiTableCacheInitFlag != 0x12345678u)
+        {
+            if (!NT_SUCCESS(HalpAcpiTableCacheInit(LoaderBlock))) return NULL;
+        }
     }
     else
     {
@@ -2101,9 +2165,16 @@ HalpAcpiFindRsdtPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
         return STATUS_NOT_FOUND;
     }
 
+    DPRINT1("HAL: Found ACPI BIOS component entry\n");
+
     /* The configuration data is a resource list, and the BIOS node follows */
     ResourceList = ComponentEntry->ConfigurationData;
     NodeData = (PACPI_BIOS_MULTI_NODE)(ResourceList + 1);
+
+    DPRINT1("HAL: ACPI BIOS node: RsdpAddress=%I64x RsdtAddress=%I64x Count=%lu\n",
+            NodeData->RsdpAddress.QuadPart,
+            NodeData->RsdtAddress.QuadPart,
+            NodeData->Count);
 
     /* How many E820 memory entries are there? */
     NodeLength = sizeof(ACPI_BIOS_MULTI_NODE) +
@@ -2182,15 +2253,34 @@ HalpAcpiTableCacheInit(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     PRSDT Rsdt;
     PLOADER_PARAMETER_EXTENSION LoaderExtension;
 
-    /* Only initialize once */
-    if (HalpAcpiTableCacheList.Flink) return Status;
+    /*
+     * Check if already initialized using explicit flag.
+     * BSS may contain garbage on ARM64 early boot, so we use a sentinel value
+     * stored in .data section (non-zero initializer ensures it's in .data).
+     * 0xDEADBEEF = not yet initialized
+     * 0x12345678 = already initialized
+     *
+     * Note: HalAcpiGetTable now checks this flag before calling us, so we
+     * should rarely hit the "already initialized" case. This check remains
+     * as a safety guard for any direct callers.
+     */
+    if (HalpAcpiTableCacheInitFlag == 0x12345678u)
+    {
+        return Status;
+    }
+
+    /* Verify we have the expected sentinel value */
+    if (HalpAcpiTableCacheInitFlag != 0xDEADBEEFu)
+    {
+        DPRINT1("HAL: WARNING - InitFlag has unexpected value 0x%08lx (expected 0xDEADBEEF)\n",
+                HalpAcpiTableCacheInitFlag);
+    }
+
+    DPRINT1("HAL: HalpAcpiTableCacheInit initializing ACPI table cache\n");
 
     /* Setup the lock and table */
     ExInitializeFastMutex(&HalpAcpiTableCacheLock);
     InitializeListHead(&HalpAcpiTableCacheList);
-
-    /* Inform about checksum policy */
-    DPRINT1("ACPI: Early table checksum verification enabled\n");
 
     /* Find the RSDT */
     Status = HalpAcpiFindRsdtPhase0(LoaderBlock, &AcpiMultiNode);
@@ -2286,6 +2376,10 @@ HalpAcpiTableCacheInit(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     /* Cache the RSDT */
+    DbgPrint("HAL: Caching %s header (sig=%lx len=%lu)\n",
+             (Rsdt->Header.Signature == XSDT_SIGNATURE) ? "XSDT" : "RSDT",
+             Rsdt->Header.Signature,
+             Rsdt->Header.Length);
     HalpAcpiCacheTable(&Rsdt->Header);
 
     /* Check for compatible loader block extension */
@@ -2305,7 +2399,16 @@ HalpAcpiTableCacheInit(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
      * each table once so that the ACPI summary log reflects the full
      * firmware table set and later lookups hit the cache.
      */
+    DPRINT1("HAL: Enumerating ACPI tables from %s at %I64x, len=%lu\n",
+            (Rsdt->Header.Signature == XSDT_SIGNATURE) ? "XSDT" : "RSDT",
+            HalpAcpiRootTablePhysicalAddress.QuadPart,
+            Rsdt->Header.Length);
     HalpAcpiEnumerateRootTables(LoaderBlock, Rsdt);
+    DPRINT1("HAL: ACPI table enumeration complete\n");
+
+    /* Mark as initialized for future calls */
+    HalpAcpiTableCacheInitFlag = 0x12345678u;
+    DPRINT1("HAL: ACPI table cache initialized successfully\n");
 
     /* Done */
     return Status;
@@ -2474,7 +2577,6 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     NTSTATUS Status;
     PFADT Fadt;
     ULONG TableLength;
-    PHYSICAL_ADDRESS PhysicalAddress;
 
     /* Only do this once */
     if (HalpProcessedACPIPhase0) return STATUS_SUCCESS;
@@ -2484,7 +2586,9 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     if (!NT_SUCCESS(Status)) return Status;
 
     /* Grab the FADT */
+    DbgPrint("HAL: About to lookup FADT (signature=%lx)\n", FADT_SIGNATURE);
     Fadt = HalAcpiGetTable(LoaderBlock, FADT_SIGNATURE);
+    DbgPrint("HAL: HalAcpiGetTable(FADT) returned %p\n", Fadt);
     if (!Fadt)
     {
         /* Fail */
@@ -2553,6 +2657,7 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                             Remainder);
                 }
 
+#if !defined(HALP_ARM64)
                 if (HalpAcpiIsVirtualBoxMcfg(Mcfg, EntryCount))
                 {
                     const HALP_ACPI_MCFG_ALLOCATION *FirstAllocation;
@@ -2651,6 +2756,7 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                             "HAL: VirtualBox firmware does not decode PCI Express MMCONFIG; forcing legacy configuration space access for this segment.");
                     }
                 }
+#endif
 
                 if (EntryCount != 0)
                 {
@@ -2707,6 +2813,9 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Setup the ACPI timer */
     HaliAcpiTimerInit(0, 0);
 
+#if !defined(HALP_ARM64)
+    PHYSICAL_ADDRESS PhysicalAddress;
+
     /* Do we have a low stub address yet? */
     if (!HalpLowStubPhysicalAddress.QuadPart)
     {
@@ -2726,9 +2835,14 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     PhysicalAddress.QuadPart = 0x100000;
     HalpVirtAddrForFlush = HalpMapPhysicalMemory64(PhysicalAddress, 1);
     HalpPteForFlush = HalAddressToPte(HalpVirtAddrForFlush);
+#endif
 
     /* Don't do this again */
     HalpProcessedACPIPhase0 = TRUE;
+
+#if defined(HALP_ARM64)
+    HalpAcpiDiscoverArm64Tables(LoaderBlock);
+#endif
 
     /* Setup the boot table */
     HalpInitBootTable(LoaderBlock);
@@ -2842,9 +2956,13 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
 
     /*
-     * Identify the ACPI HAL flavor more accurately when APIC support is linked in.
+     * Identify the ACPI HAL flavor more accurately based on architecture.
      * This is user-visible via HalReportResourceUsage().
      */
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* ARM64 always uses GIC (Generic Interrupt Controller) */
+    HalName = L"ACPI ARM64-based System";
+#else
     if (HalpIsApicInterruptController())
     {
 #ifdef _M_AMD64
@@ -2853,6 +2971,7 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         HalName = L"ACPI x86-based PC";
 #endif
     }
+#endif
     /* Return success */
     return STATUS_SUCCESS;
 }
@@ -2866,7 +2985,7 @@ HalpAppendFormatA(
     ...)
 {
     SIZE_T Length;
-    INT Written;
+    NTSTATUS Status;
     va_list Args;
 
     if (BufferSize == 0)
@@ -2878,16 +2997,16 @@ HalpAppendFormatA(
         return;
 
     va_start(Args, Format);
-    Written = _vsnprintf(Buffer + Length, BufferSize - Length, Format, Args);
+    Status = RtlStringCbVPrintfA(Buffer + Length, BufferSize - Length, Format, Args);
     va_end(Args);
 
-    if (Written < 0)
+    if (!NT_SUCCESS(Status))
         Buffer[BufferSize - 1] = '\0';
 }
 
 /* Helper function to show PCI BAR size */
 CODE_SEG("INIT")
-static VOID
+static __attribute__((unused)) VOID
 ShowSize(ULONGLONG Size, PCHAR Buffer, SIZE_T BufferSize)
 {
     if (!Size) return;
@@ -3002,10 +3121,10 @@ HalpAcpiAccessConfigEcam(
         if (!HalpAcpiEcamForceLegacyLogged)
         {
             CHAR msg[128];
-            _snprintf(msg,
-                      sizeof(msg),
-                      "HAL: ECAM disabled for segment %u due to firmware decode failure; using legacy configuration space.",
-                      Allocation->PciSegment);
+            RtlStringCbPrintfA(msg,
+                               sizeof(msg),
+                               "HAL: ECAM disabled for segment %u due to firmware decode failure; using legacy configuration space.",
+                               Allocation->PciSegment);
             HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
             HalpAcpiEcamForceLegacyLogged = TRUE;
         }
@@ -3031,10 +3150,10 @@ HalpAcpiAccessConfigEcam(
         else if (State == HALP_ACPI_ECAM_STATE_DISABLED)
         {
             CHAR msg[128];
-            _snprintf(msg,
-                      sizeof(msg),
-                      "HAL: ECAM disabled for segment %u; using legacy configuration space.",
-                      Allocation->PciSegment);
+            RtlStringCbPrintfA(msg,
+                               sizeof(msg),
+                               "HAL: ECAM disabled for segment %u; using legacy configuration space.",
+                               Allocation->PciSegment);
             HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
             return FALSE;
         }
@@ -3209,6 +3328,142 @@ HalpAcpiGetEcamAddress(
     Address->QuadPart = Base;
     return TRUE;
 }
+
+/*
+ * ARM64-specific PCI configuration space access functions.
+ * ARM64 uses only ECAM (PCIe memory-mapped configuration) - there is no
+ * legacy I/O port-based PCI configuration mechanism on ARM64.
+ */
+#if defined(HALP_ARM64)
+
+/* ARM64 stub for PCI stubs initialization - no legacy PCI on ARM64 */
+CODE_SEG("INIT")
+static
+VOID
+NTAPI
+HalpInitializePciStubsArm64(VOID)
+{
+    /* ARM64 uses ECAM exclusively - no legacy PCI initialization needed */
+    DPRINT("HAL: ARM64 PCI stubs initialized (ECAM-only mode)\n");
+}
+
+/* ARM64 stub for NMI crash flag - not applicable on ARM64 */
+CODE_SEG("INIT")
+static
+VOID
+NTAPI
+HalpGetNMICrashFlagArm64(VOID)
+{
+    /* NMI crash flag is x86-specific; ARM64 uses different mechanisms */
+}
+
+/* ARM64-specific Phase0 PCI config read using ECAM only */
+CODE_SEG("INIT")
+static
+ULONG
+HalpPhase0GetPciDataByOffsetArm64(
+    _In_ ULONG Bus,
+    _In_ PCI_SLOT_NUMBER PciSlot,
+    _Out_writes_bytes_all_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length)
+{
+    /*
+     * ARM64 has no legacy PCI configuration mechanism (CF8/CFC ports).
+     * All PCI configuration space access must go through ECAM.
+     */
+    if (Length == 0)
+    {
+        return 0;
+    }
+
+    if (HalpAcpiAccessConfigEcam(FALSE,
+                                 HALP_ACPI_SEGMENT_ANY,
+                                 Bus,
+                                 PciSlot,
+                                 Buffer,
+                                 Offset,
+                                 Length))
+    {
+        return Length;
+    }
+
+    /* ECAM access failed - fill with 0xFF (device not present) */
+    RtlFillMemory(Buffer, Length, 0xFF);
+    return Length;
+}
+
+/* ARM64-specific Phase0 PCI config write using ECAM only */
+CODE_SEG("INIT")
+static
+ULONG
+HalpPhase0SetPciDataByOffsetArm64(
+    _In_ ULONG Bus,
+    _In_ PCI_SLOT_NUMBER PciSlot,
+    _In_reads_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length)
+{
+    /*
+     * ARM64 has no legacy PCI configuration mechanism (CF8/CFC ports).
+     * All PCI configuration space access must go through ECAM.
+     */
+    if (Length == 0)
+    {
+        return 0;
+    }
+
+    if (HalpAcpiAccessConfigEcam(TRUE,
+                                 HALP_ACPI_SEGMENT_ANY,
+                                 Bus,
+                                 PciSlot,
+                                 Buffer,
+                                 Offset,
+                                 Length))
+    {
+        return Length;
+    }
+
+    /* ECAM access failed */
+    return 0;
+}
+
+/*
+ * ARM64 GSI diagnostic structures - ARM64 uses GIC for interrupt routing,
+ * not the x86 GSI (Global System Interrupt) model. Provide stubs.
+ */
+typedef struct _HALP_PCI_GSI_DIAG
+{
+    BOOLEAN FromFirmware;
+    USHORT Segment;
+    UCHAR Bus;
+    UCHAR Device;
+    UCHAR Function;
+    UCHAR Pin;
+} HALP_PCI_GSI_DIAG, *PHALP_PCI_GSI_DIAG;
+
+static __inline
+BOOLEAN
+HalpPciDescribeGsi(
+    _In_ ULONG Gsi,
+    _Out_ PHALP_PCI_GSI_DIAG Diag)
+{
+    /* ARM64 uses GIC, not GSI - always return FALSE */
+    UNREFERENCED_PARAMETER(Gsi);
+    if (Diag)
+    {
+        RtlZeroMemory(Diag, sizeof(*Diag));
+    }
+    return FALSE;
+}
+
+/* Macros to use ARM64-specific functions */
+#define HalpInitializePciStubs() HalpInitializePciStubsArm64()
+#define HalpGetNMICrashFlag() HalpGetNMICrashFlagArm64()
+#define HalpPhase0GetPciDataByOffset HalpPhase0GetPciDataByOffsetArm64
+#define HalpPhase0SetPciDataByOffset HalpPhase0SetPciDataByOffsetArm64
+
+#endif /* HALP_ARM64 */
 
 /* These includes provide the PCI device/vendor lookup tables */
 #define NEWLINE "\n"
@@ -3399,6 +3654,12 @@ HalpDebugPciDumpCapabilitiesAcpi(
         return;
     }
 
+#if defined(_M_ARM64)
+    /* Skip extended capability reads on ARM64 - they can hang if ECAM doesn't support extended config space */
+    DbgPrint("[arm64][PCI] Skipping extended capability reads for device %02x:%02x.%x\n",
+             BusNumber, PciSlot.u.bits.DeviceNumber, PciSlot.u.bits.FunctionNumber);
+    return;
+#else
     {
         USHORT Offset;
         ULONG ExtVisited[32];
@@ -3509,6 +3770,7 @@ HalpDebugPciDumpCapabilitiesAcpi(
             Offset = NextOffset;
         }
     }
+#endif /* !_M_ARM64 */
 }
 
 /* Enhanced PCI device enumeration with rich output */
@@ -3947,8 +4209,10 @@ HalpAcpiEnumeratePciBusDebug(VOID)
     /* Setup the PCI stub support */
     HalpInitializePciStubs();
 
-    /* Force legacy PCI configuration mechanism 1 to be enabled */
+#if !defined(HALP_ARM64)
+    /* Force legacy PCI configuration mechanism 1 to be enabled (x86/amd64 only) */
     WRITE_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB, 0x01);
+#endif
 
     /* Set the NMI crash flag */
     HalpGetNMICrashFlag();
@@ -3963,6 +4227,10 @@ HalpAcpiEnumeratePciBusDebug(VOID)
     for (BusNumber = 0; BusNumber < 256; BusNumber++)
     {
         BOOLEAN BusHadAnyDevice = FALSE;
+
+#if defined(_M_ARM64)
+        DbgPrint("[arm64][PCI] Starting bus %u scan\n", BusNumber);
+#endif
 
         /* Try to read from bus - if it fails, still try all slots for bus 0 */
         PciSlot.u.AsULONG = 0;
@@ -4006,6 +4274,9 @@ HalpAcpiEnumeratePciBusDebug(VOID)
             /* If not bus 0, assume no more buses and stop */
             if (BusNumber != 0)
             {
+#if defined(_M_ARM64)
+                DbgPrint("[arm64][PCI] No devices on bus %u, stopping enumeration\n", BusNumber);
+#endif
                 break;
             }
             /* For bus 0, continue scanning all devices/functions to see if anyone responds */
@@ -4090,6 +4361,9 @@ HalpAcpiEnumeratePciBusDebug(VOID)
         }
     }
 
+#if defined(_M_ARM64)
+    DbgPrint("[arm64][PCI] Enumeration complete, calling HalpPciLogEcamCoverage\n");
+#endif
     HalpPciLogEcamCoverage();
     DbgPrint("\n====== END PCI BUS DETECTION =======\n\n");
 }
@@ -4174,7 +4448,22 @@ HalpBuildAcpiResourceList(IN PIO_RESOURCE_REQUIREMENTS_LIST ResourceList)
         ResourceList->List[0].Descriptors[0].ShareDisposition = CmResourceShareShared;
 
         /* Get the interrupt number */
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /*
+         * ARM64: Use SCI vector directly without PIC redirection.
+         * ARM64 uses GIC (Generic Interrupt Controller) with GSI numbers,
+         * not a legacy x86 PIC. The HalpPicVectorRedirect array is only
+         * 16 elements (for ISA IRQs 0-15), but ARM64 GSI numbers can be
+         * much higher. Using the SCI vector directly is correct for GIC.
+         */
+        Interrupt = HalpFixedAcpiDescTable.sci_int_vector;
+#else
+        /*
+         * x86/AMD64: Use PIC vector redirect table to map legacy IRQ
+         * to the actual GSI after applying MADT interrupt overrides.
+         */
         Interrupt = HalpPicVectorRedirect[HalpFixedAcpiDescTable.sci_int_vector];
+#endif
         /* Cache SCI GSI for downstream components (APIC routing override) */
         HalpSciGsi = Interrupt;
         ResourceList->List[0].Descriptors[0].u.Interrupt.MinimumVector = Interrupt;

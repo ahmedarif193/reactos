@@ -32,6 +32,8 @@ HalpAcpiCacheSingleTableAtAddress(
     CHAR CheckSum;
     PCHAR CurrentByte;
 
+    DbgPrint("HAL: CacheSingle: mapping PA %I64x\n", PhysicalAddress.QuadPart);
+
     /* Map an initial 2 pages to read the header */
     if (LoaderBlock)
     {
@@ -44,15 +46,29 @@ HalpAcpiCacheSingleTableAtAddress(
 
     if (!Header)
     {
+        DbgPrint("HAL: CacheSingle: FAILED to map PA %I64x\n", PhysicalAddress.QuadPart);
         DPRINT1("HAL: Failed to map ACPI table at %I64x for enumeration\n",
                 (unsigned long long)PhysicalAddress.QuadPart);
         return;
     }
 
+    DbgPrint("HAL: CacheSingle: mapped PA %I64x -> VA %p, sig=%c%c%c%c len=%lu\n",
+             PhysicalAddress.QuadPart, Header,
+             Header->Signature & 0xFF,
+             (Header->Signature & 0xFF00) >> 8,
+             (Header->Signature & 0xFF0000) >> 16,
+             (Header->Signature & 0xFF000000) >> 24,
+             Header->Length);
+
     /* Skip root tables; they are handled separately */
     if ((Header->Signature == RSDT_SIGNATURE) ||
         (Header->Signature == XSDT_SIGNATURE))
     {
+        DbgPrint("HAL: CacheSingle: skipping root table %c%c%c%c\n",
+                 Header->Signature & 0xFF,
+                 (Header->Signature & 0xFF00) >> 8,
+                 (Header->Signature & 0xFF0000) >> 16,
+                 (Header->Signature & 0xFF000000) >> 24);
         if (LoaderBlock)
             HalpUnmapVirtualAddress(Header, 2);
         else
@@ -63,6 +79,11 @@ HalpAcpiCacheSingleTableAtAddress(
     /* Do not duplicate already cached tables */
     if (HalpAcpiGetCachedTable(Header->Signature))
     {
+        DbgPrint("HAL: CacheSingle: table %c%c%c%c already cached\n",
+                 Header->Signature & 0xFF,
+                 (Header->Signature & 0xFF00) >> 8,
+                 (Header->Signature & 0xFF0000) >> 16,
+                 (Header->Signature & 0xFF000000) >> 24);
         if (LoaderBlock)
             HalpUnmapVirtualAddress(Header, 2);
         else
@@ -123,6 +144,7 @@ HalpAcpiCacheSingleTableAtAddress(
     /* Copy into HAL-owned memory and cache it */
     {
         PDESCRIPTION_HEADER CachedCopy;
+        ULONG Sig = Header->Signature;
 
         CachedCopy = HalpAcpiCopyBiosTable(LoaderBlock, Header);
 
@@ -132,9 +154,22 @@ HalpAcpiCacheSingleTableAtAddress(
             MmUnmapIoSpace(Header, PageCount << PAGE_SHIFT);
 
         if (!CachedCopy)
+        {
+            DbgPrint("HAL: CacheSingle: HalpAcpiCopyBiosTable FAILED for %c%c%c%c\n",
+                     Sig & 0xFF,
+                     (Sig & 0xFF00) >> 8,
+                     (Sig & 0xFF0000) >> 16,
+                     (Sig & 0xFF000000) >> 24);
             return;
+        }
 
         HalpAcpiCacheTable(CachedCopy);
+        DbgPrint("HAL: CacheSingle: Successfully cached %c%c%c%c at %p\n",
+                 Sig & 0xFF,
+                 (Sig & 0xFF00) >> 8,
+                 (Sig & 0xFF0000) >> 16,
+                 (Sig & 0xFF000000) >> 24,
+                 CachedCopy);
     }
 }
 
@@ -152,7 +187,18 @@ HalpAcpiEnumerateRootTables(
     PHYSICAL_ADDRESS PhysicalAddress;
 
     if (!Root)
+    {
+        DbgPrint("HAL: HalpAcpiEnumerateRootTables: Root is NULL\n");
         return;
+    }
+
+    DbgPrint("HAL: HalpAcpiEnumerateRootTables: Root=%p Sig=%c%c%c%c Len=%lu\n",
+             Root,
+             Root->Header.Signature & 0xFF,
+             (Root->Header.Signature & 0xFF00) >> 8,
+             (Root->Header.Signature & 0xFF0000) >> 16,
+             (Root->Header.Signature & 0xFF000000) >> 24,
+             Root->Header.Length);
 
     /* Determine table format and iterate entries */
     if (Root->Header.Signature == RSDT_SIGNATURE)
@@ -160,13 +206,18 @@ HalpAcpiEnumerateRootTables(
         TableLength = Root->Header.Length;
         Offset = FIELD_OFFSET(RSDT, Tables);
         if (TableLength < Offset)
+        {
+            DbgPrint("HAL: RSDT too small: len=%lu offset=%lu\n", TableLength, Offset);
             return;
+        }
 
         EntryCount = (TableLength - Offset) / sizeof(ULONG);
+        DbgPrint("HAL: RSDT has %lu table entries\n", EntryCount);
         for (Index = 0; Index < EntryCount; ++Index)
         {
             PhysicalAddress.LowPart = Root->Tables[Index];
             PhysicalAddress.HighPart = 0;
+            DbgPrint("HAL: RSDT[%lu] = %I64x\n", Index, PhysicalAddress.QuadPart);
             HalpAcpiCacheSingleTableAtAddress(LoaderBlock, PhysicalAddress);
         }
     }
@@ -177,14 +228,24 @@ HalpAcpiEnumerateRootTables(
         TableLength = Xsdt->Header.Length;
         Offset = FIELD_OFFSET(XSDT, Tables);
         if (TableLength < Offset)
+        {
+            DbgPrint("HAL: XSDT too small: len=%lu offset=%lu\n", TableLength, Offset);
             return;
+        }
 
         EntryCount = (TableLength - Offset) / sizeof(PHYSICAL_ADDRESS);
+        DbgPrint("HAL: XSDT has %lu table entries\n", EntryCount);
         for (Index = 0; Index < EntryCount; ++Index)
         {
             PhysicalAddress = Xsdt->Tables[Index];
+            DbgPrint("HAL: XSDT[%lu] = %I64x\n", Index, PhysicalAddress.QuadPart);
             HalpAcpiCacheSingleTableAtAddress(LoaderBlock, PhysicalAddress);
         }
+    }
+    else
+    {
+        DbgPrint("HAL: HalpAcpiEnumerateRootTables: Unknown root signature %lx\n",
+                 Root->Header.Signature);
     }
 }
 
