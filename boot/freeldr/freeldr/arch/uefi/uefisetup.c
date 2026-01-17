@@ -9,22 +9,30 @@
 
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WARNING);
+#if DBG
+static void __attribute__((unused)) __dbg_channel_keep(void) { (void)DbgDefaultChannel; }
+#endif
 
 /* GLOBALS ********************************************************************/
 
 extern EFI_SYSTEM_TABLE* GlobalSystemTable;
 extern EFI_HANDLE GlobalImageHandle;
 
+/* Forward declaration for ARM64-specific initialization */
+#if defined(_M_ARM64) || defined(__aarch64__)
+extern VOID Arm64MachInit(const char *CmdLine);
+#endif
+
 /* FUNCTIONS ******************************************************************/
 
 VOID
 MachInit(const char *CmdLine)
 {
-#if DBG
-    /* Suppress unused variable warning for DbgDefaultChannel */
-    (void)DbgDefaultChannel;
-#endif
-
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* On ARM64, use architecture-specific initialization which handles
+     * ARM64-specific requirements like custom PrepareForReactOS */
+    Arm64MachInit(CmdLine);
+#else
     RtlZeroMemory(&MachVtbl, sizeof(MachVtbl));
 
     MachVtbl.ConsPutChar = UefiConsPutChar;
@@ -56,4 +64,5 @@ MachInit(const char *CmdLine)
     MachVtbl.InitializeBootDevices = UefiInitializeBootDevices;
     MachVtbl.HwDetect = UefiHwDetect;
     MachVtbl.HwIdle = UefiHwIdle;
+#endif
 }

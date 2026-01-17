@@ -20,7 +20,6 @@
 #define NDEBUG
 #include <debug.h>
 
-#if defined(_M_ARM64)
 
 /*
  * Stub exported symbol so the file links once ARM64 trap handling is wired up.
@@ -43,10 +42,4 @@ KiHandleKernelSListFaultArm64(
     return FALSE;
 }
 
-#else
-
-/* Keep the compiler quiet when this placeholder is included in non-ARM64 builds. */
-typedef int __ke_traphdlr_c_requires_arm64_host;
-
-#endif /* _M_ARM64 */
 

@@ -53,3 +53,21 @@ RamDiskFormatFat32(IN PVOID BaseAddress,
 
 extern PVOID gInitRamDiskBase;
 extern ULONG gInitRamDiskSize;
+
+/*
+ * RamDiskGetBackingStore - Get ramdisk backing store information for kernel.
+ *
+ * Returns the base page and page count of the ramdisk backing store.
+ * This information is used by the kernel's memory manager to mark these
+ * pages as non-reclaimable (ROM) in the PFN database, ensuring the ramdisk
+ * backing store remains stable throughout the system lifetime.
+ *
+ * @param BasePage - Receives the base page frame number of the ramdisk.
+ * @param PageCount - Receives the number of pages in the ramdisk.
+ *
+ * @return TRUE if ramdisk is active and parameters are set, FALSE otherwise.
+ */
+BOOLEAN
+RamDiskGetBackingStore(
+    OUT PFN_NUMBER *BasePage,
+    OUT PFN_NUMBER *PageCount);

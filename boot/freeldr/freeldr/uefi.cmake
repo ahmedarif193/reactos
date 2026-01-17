@@ -78,7 +78,10 @@ add_library(uefifreeldr_common
     ${UEFILDR_BOOTMGR_SOURCE}
     ${FREELDR_NTLDR_SOURCE})
 
-target_link_libraries(uefifreeldr_common PUBLIC apisets $<$<CONFIG:Debug>:rossym>)
+target_link_libraries(uefifreeldr_common PUBLIC apisets)
+if(KDBG)
+    target_link_libraries(uefifreeldr_common PUBLIC rossym)
+endif()
 
 target_compile_definitions(uefifreeldr_common PRIVATE UEFIBOOT)
 
@@ -99,9 +102,7 @@ add_dependencies(uefifreeldr_common bugcodes asm xdk)
 
 ## GCC builds need this extra thing for some reason...
 if(ARCH STREQUAL "i386" AND NOT MSVC)
-    # PRIVATE: mini_hal is only needed for uefifreeldr_common's own link requirements.
-    # The final uefildr target already links mini_hal directly (see line 155).
-    target_link_libraries(uefifreeldr_common PRIVATE mini_hal)
+    target_link_libraries(uefifreeldr_common PUBLIC mini_hal)
 endif()
 
 
@@ -147,6 +148,7 @@ endif()
 else()
     target_link_options(uefildr PRIVATE -Wl,--file-alignment,0x200,--section-alignment,0x200)
     target_link_options(uefildr PRIVATE -Wl,--as-needed)
+    # DWARF sections are preserved directly in the binary for rossym_new to parse
 endif()
 
 set_subsystem(uefildr EFI_APPLICATION)

@@ -56,6 +56,15 @@ CmiGetNextResourceDescriptor(
 {
     const CM_PARTIAL_RESOURCE_DESCRIPTOR *LastPartialDescriptor;
 
+    /* Handle empty partial resource list case - avoid unsigned underflow when Count == 0 */
+    if (ResourceDescriptor->PartialResourceList.Count == 0)
+    {
+        /* When the list is empty, the next full descriptor immediately follows
+           the PartialDescriptors array (which has zero elements) */
+        return (PCM_FULL_RESOURCE_DESCRIPTOR)
+            &ResourceDescriptor->PartialResourceList.PartialDescriptors[0];
+    }
+
     /* Calculate the location of the last partial descriptor, which can have a
        variable size! */
     LastPartialDescriptor = &ResourceDescriptor->PartialResourceList.PartialDescriptors[

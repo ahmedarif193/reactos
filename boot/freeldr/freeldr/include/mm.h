@@ -163,9 +163,11 @@ BOOLEAN    MmInitializeMemoryManager(VOID);
 VOID    MmInitializeHeap(PVOID PageLookupTable);
 PVOID    MmAllocateMemory(SIZE_T MemorySize);
 PVOID    MmAllocateMemoryWithType(SIZE_T MemorySize, TYPE_OF_MEMORY MemoryType);
+PVOID    MmAllocateMemoryWithTypeOptional(SIZE_T MemorySize, TYPE_OF_MEMORY MemoryType);
 VOID    MmFreeMemory(PVOID MemoryPointer);
 PVOID    MmAllocateMemoryAtAddress(SIZE_T MemorySize, PVOID DesiredAddress, TYPE_OF_MEMORY MemoryType);
 PVOID    MmAllocateHighestMemoryBelowAddress(SIZE_T MemorySize, PVOID DesiredAddress, TYPE_OF_MEMORY MemoryType);
+PVOID    MmAllocateHighestMemoryBelowAddressOptional(SIZE_T MemorySize, PVOID DesiredAddress, TYPE_OF_MEMORY MemoryType);
 
 PFN_NUMBER MmGetHighestPhysicalPage(VOID);
 PFN_NUMBER MmGetHighestPhysicalPageFromBios(VOID);  // Uncapped value including high memory

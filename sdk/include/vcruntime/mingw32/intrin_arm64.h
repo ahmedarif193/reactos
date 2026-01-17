@@ -90,6 +90,28 @@ __INTRIN_INLINE unsigned char _BitScanReverse(unsigned long *Index, unsigned lon
 unsigned char _BitScanReverse(unsigned long *, unsigned long);
 #endif
 
+#if !__has_builtin(_interlockedbittestandset)
+__INTRIN_INLINE unsigned char _interlockedbittestandset(volatile long *Base, long Bit)
+{
+    long mask = 1L << (Bit & 31);
+    long previous = __atomic_fetch_or(Base, mask, __ATOMIC_SEQ_CST);
+    return (previous & mask) != 0;
+}
+#else
+unsigned char _interlockedbittestandset(volatile long *, long);
+#endif
+
+#if !__has_builtin(_interlockedbittestandreset)
+__INTRIN_INLINE unsigned char _interlockedbittestandreset(volatile long *Base, long Bit)
+{
+    long mask = 1L << (Bit & 31);
+    long previous = __atomic_fetch_and(Base, ~mask, __ATOMIC_SEQ_CST);
+    return (previous & mask) != 0;
+}
+#else
+unsigned char _interlockedbittestandreset(volatile long *, long);
+#endif
+
 #if !__has_builtin(_interlockedbittestandset64)
 __INTRIN_INLINE unsigned char _interlockedbittestandset64(volatile long long *Base, long long Bit)
 {
@@ -490,6 +512,54 @@ __INTRIN_INLINE short _InterlockedOr16(volatile short *Destination, short Value)
 }
 #else
 short _InterlockedOr16(volatile short *, short);
+#endif
+
+#if !__has_builtin(_InterlockedIncrement16)
+__INTRIN_INLINE short _InterlockedIncrement16(volatile short *Addend)
+{
+    unsigned int oldValue;
+    unsigned int newValue;
+    unsigned int status;
+
+    __asm__ __volatile__(
+        "1:\n"
+        "ldaxrh %w0, [%3]\n"      /* oldValue = *Addend (acquire) */
+        "add %w1, %w0, #1\n"      /* newValue = oldValue + 1      */
+        "stlxrh %w2, %w1, [%3]\n" /* attempt store (release)      */
+        "cbnz %w2, 1b\n"          /* retry on failure             */
+        : "=&r"(oldValue), "=&r"(newValue), "=&r"(status)
+        : "r"(Addend)
+        : "memory");
+
+    /* Windows _InterlockedIncrement16 returns the new value */
+    return (short)newValue;
+}
+#else
+short _InterlockedIncrement16(volatile short *);
+#endif
+
+#if !__has_builtin(_InterlockedDecrement16)
+__INTRIN_INLINE short _InterlockedDecrement16(volatile short *Addend)
+{
+    unsigned int oldValue;
+    unsigned int newValue;
+    unsigned int status;
+
+    __asm__ __volatile__(
+        "1:\n"
+        "ldaxrh %w0, [%3]\n"      /* oldValue = *Addend (acquire) */
+        "sub %w1, %w0, #1\n"      /* newValue = oldValue - 1      */
+        "stlxrh %w2, %w1, [%3]\n" /* attempt store (release)      */
+        "cbnz %w2, 1b\n"          /* retry on failure             */
+        : "=&r"(oldValue), "=&r"(newValue), "=&r"(status)
+        : "r"(Addend)
+        : "memory");
+
+    /* Windows _InterlockedDecrement16 returns the new value */
+    return (short)newValue;
+}
+#else
+short _InterlockedDecrement16(volatile short *);
 #endif
 
 #if !__has_builtin(_rotr8)

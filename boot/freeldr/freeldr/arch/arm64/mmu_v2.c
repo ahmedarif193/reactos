@@ -21,7 +21,7 @@ DBG_DEFAULT_CHANNEL(WARNING);
 #define ARM64_SELF_PPE_BASE   0xFFFFF6FB7DA00000ULL
 #define ARM64_SELF_PXE_BASE   0xFFFFF6FB7DBED000ULL
 
-#define ARM64_PFN_DB_BASE          0xFFFFFB0000000000ULL
+#define ARM64_PFN_DB_BASE          0xFFFFFA8000000000ULL
 #define ARM64_PFN_DB_RESERVE_SIZE  (512ULL << 20) /* 512MB for PFN DB + metadata */
 #define ARM64_NONPAGED_RESERVE_SIZE (512ULL << 20)
 
@@ -42,6 +42,8 @@ DBG_DEFAULT_CHANNEL(WARNING);
 
 #define ARM64_ALIGN_UP(value, alignment) \
     (((value) + ((alignment) - 1ULL)) & ~((alignment) - 1ULL))
+#define ARM64_ALIGN_DOWN(value, alignment) \
+    ((value) & ~((alignment) - 1ULL))
 
 #define ARM64_DEFAULT_SECONDARY_COLORS   8ULL /* FIXME: keep in sync with MmSecondaryColors (MiInitSystem) */
 #define ARM64_MINIMUM_NONPAGED_POOL_SIZE (256ULL * 1024ULL)
@@ -91,7 +93,7 @@ static inline VOID UartPutc(char Ch)
 {
     while (PL011_FR & PL011_TXFF)
     {
-        __asm__ __volatile__("wfi");
+        __asm__ __volatile__("yield");
     }
     PL011_DR = (unsigned char)Ch;
 }
@@ -149,7 +151,18 @@ static inline VOID UartPutHex32(ULONG Value)
 #define ARM64_MAP_ATTR_PXN 0
 #endif
 
+/* Block size fallbacks if arch headers don't provide them. */
+#ifndef ARM64_BLOCK_SIZE_1G
+#define ARM64_BLOCK_SIZE_1G            (1ULL << 30)
+#define ARM64_BLOCK_MASK_1G            (ARM64_BLOCK_SIZE_1G - 1ULL)
+#endif
+#ifndef ARM64_BLOCK_SIZE_2M
+#define ARM64_BLOCK_SIZE_2M            (1ULL << 21)
+#define ARM64_BLOCK_MASK_2M            (ARM64_BLOCK_SIZE_2M - 1ULL)
+#endif
+
 extern EFI_SYSTEM_TABLE *GlobalSystemTable;
+extern LIST_ENTRY FrLdrModuleList;
 
 /* ---------- Barrier & TLBI helpers (multicore-safe) ---------- */
 
@@ -171,6 +184,33 @@ static inline void tlbi_va_all_levels(ULONGLONG va)
 {
     /* Invalidate TLB entries for this VA at all levels */
     tlbi_vaae1is_by_va(va);
+}
+
+static inline void tlbi_va_entry(ULONGLONG va, ULONGLONG size)
+{
+    if ((size >= ARM64_BLOCK_SIZE_1G) && ((va & ARM64_BLOCK_MASK_1G) == 0))
+    {
+        tlbi_vaae1is_by_va(va);
+        return;
+    }
+    if ((size >= ARM64_BLOCK_SIZE_2M) && ((va & ARM64_BLOCK_MASK_2M) == 0))
+    {
+        tlbi_vaae1is_by_va(va);
+        return;
+    }
+    tlbi_vaae1is_by_va(va);
+}
+
+static inline void tlbi_va_range(ULONGLONG start, ULONGLONG end)
+{
+    if (end <= start)
+        return;
+
+    ULONGLONG va = start & ~(PAGE_SIZE - 1);
+    ULONGLONG finish = (end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+    for (; va < finish; va += PAGE_SIZE)
+        tlbi_vaae1is_by_va(va);
 }
 
 /* ---------- Descriptor bits ---------- */
@@ -225,10 +265,7 @@ sanitize_block_attrs(UINT64 attrs)
     return sanitized;
 }
 
-#ifndef ARM64_BLOCK_SIZE_2M
-#define ARM64_BLOCK_SIZE_2M            (1ULL << 21)
-#define ARM64_BLOCK_MASK_2M            (ARM64_BLOCK_SIZE_2M - 1ULL)
-#endif
+/* ARM64_BLOCK_SIZE_* fallbacks moved above TLBI helpers. */
 
 /* Descriptor classification helpers */
 #define DESC_VALID(e)     (((e) & PTE_TYPE_VALID) != 0)
@@ -301,7 +338,35 @@ static BOOLEAN page_tables_initialized = FALSE;
 #define ARM64_PT_ENTRIES           512U
 #define ARM64_PT_BYTES             (ARM64_PT_ENTRIES * sizeof(UINT64))
 #define ARM64_L2_TABLES_PER_L1     16U   /* accommodate identity maps >4GiB after ExitBootServices */
-#define ARM64_L3_TABLES_PER_L2     64U
+/*
+ * L3 table pool sizing:
+ * - Total L3 tables per L0 slot = L2_TABLES_PER_L1 * L3_TABLES_PER_L2
+ * - For 8GB kernel mapping: need 8 L2 tables * 512 L3 per L2 = 4096 L3 tables
+ * - We use a FLAT pool per L0 slot to avoid per-L2 slot exhaustion issues
+ * - Each L0 slot covers 512GB, but we only map first 16GB (L2_TABLES_PER_L1 * 1GB)
+ */
+#define ARM64_L3_TABLES_PER_L2     512U  /* L3 tables per L2 slot (for array sizing) */
+#define ARM64_L3_TABLES_PER_L0     (ARM64_L2_TABLES_PER_L1 * ARM64_L3_TABLES_PER_L2)  /* Total L3 tables per L0 slot */
+
+/*
+ * Extra kernel L0 slots for special regions (outside KSEG0).
+ * These need pre-allocated page tables since they are mapped after ExitBootServices.
+ *
+ * L0 indices for special kernel regions:
+ *   - 493 (0x1ED): Self-map (ARM64_SELF_PXE_BASE)
+ *   - 494 (0x1EE): Hyperspace (ARM64_HYPERSPACE_BASE)
+ *   - 497 (0x1F1): Paged Pool / Debug mapping
+ *   - 501 (0x1F5): PFN Database
+ */
+#define ARM64_EXTRA_L0_SLOT_SELFMAP    493U  /* 0x1ED - Self-map region */
+#define ARM64_EXTRA_L0_SLOT_HYPERSPACE 494U  /* 0x1EE - Hyperspace */
+#define ARM64_EXTRA_L0_SLOT_PAGEDPOOL  497U  /* 0x1F1 - Paged pool / Debug */
+#define ARM64_EXTRA_L0_SLOT_PFNDB      501U  /* 0x1F5 - PFN Database */
+
+#define ARM64_EXTRA_KERNEL_SLOTS       4U    /* Number of extra kernel L0 slots */
+#define ARM64_EXTRA_L2_PER_SLOT        4U    /* L2 tables per extra slot */
+#define ARM64_EXTRA_L3_PER_L2          512U  /* L3 tables per L2 in extra slots (flat pool) */
+#define ARM64_EXTRA_L3_PER_SLOT        (ARM64_EXTRA_L2_PER_SLOT * ARM64_EXTRA_L3_PER_L2)  /* Total L3 tables per extra slot (2048) */
 
 /* Page tables allocated from low memory so VA==PA during boot */
 static UINT64                *arm64_l0_page_table;
@@ -324,9 +389,35 @@ static UINT64 (*arm64_user_l3_tables)
     [ARM64_L3_TABLES_PER_L2]
     [ARM64_PT_ENTRIES];
 static UINT64 arm64_l2_next_index[ARM64_KERNEL_L1_TABLES] = {0};
-static UINT64 arm64_l3_next_index[ARM64_KERNEL_L1_TABLES][ARM64_L2_TABLES_PER_L1] = {{0}};
+/*
+ * L3 pool tracking: use FLAT per-L0-slot index instead of per-L2-slot.
+ * This avoids exhaustion when memory descriptors cause uneven L2 slot usage.
+ * The L3 tables are stored in a 3D array [l0_slot][l2_slot][index], but
+ * we allocate linearly across all L2 slots within an L0 slot.
+ */
+static UINT64 arm64_l3_next_index[ARM64_KERNEL_L1_TABLES] = {0};  /* FLAT: per-L0 slot, not per-L2 slot */
 static UINT64 arm64_user_l2_next_index[ARM64_USER_L1_TABLES] = {0};
-static UINT64 arm64_user_l3_next_index[ARM64_USER_L1_TABLES][ARM64_L2_TABLES_PER_L1] = {{0}};
+static UINT64 arm64_user_l3_next_index[ARM64_USER_L1_TABLES] = {0};  /* FLAT: per-L0 slot */
+
+/*
+ * Extra kernel L0 slots for special regions (Hyperspace, Paged Pool, PFN DB, etc.)
+ * These are pre-allocated to avoid needing Boot Services during kernel mapping.
+ */
+static const UINT64 arm64_extra_kernel_l0_slots[ARM64_EXTRA_KERNEL_SLOTS] = {
+    ARM64_EXTRA_L0_SLOT_SELFMAP,    /* 493 */
+    ARM64_EXTRA_L0_SLOT_HYPERSPACE, /* 494 */
+    ARM64_EXTRA_L0_SLOT_PAGEDPOOL,  /* 497 */
+    ARM64_EXTRA_L0_SLOT_PFNDB       /* 502 */
+};
+
+/* Page tables for extra kernel slots - pointers set during allocation */
+static UINT64 *arm64_extra_l1_tables[ARM64_EXTRA_KERNEL_SLOTS];
+static UINT64 (*arm64_extra_l2_tables)[ARM64_EXTRA_L2_PER_SLOT][ARM64_PT_ENTRIES];
+static UINT64 (*arm64_extra_l3_tables)[ARM64_EXTRA_L2_PER_SLOT][ARM64_EXTRA_L3_PER_L2][ARM64_PT_ENTRIES];
+
+/* Tracking indices for extra kernel slots - FLAT allocation like main kernel pool */
+static UINT64 arm64_extra_l2_next_index[ARM64_EXTRA_KERNEL_SLOTS] = {0};
+static UINT64 arm64_extra_l3_next_index[ARM64_EXTRA_KERNEL_SLOTS] = {0};  /* FLAT: per-extra-slot, not per-L2 slot */
 
 /* Dedicated tables for KUSER shared page mappings */
 static BOOLEAN mmu_enabled = FALSE;
@@ -397,10 +488,85 @@ static UINT8 arm64_user_l3_tables_storage_raw[
     ARM64_USER_L1_TABLES * ARM64_L2_TABLES_PER_L1 * ARM64_L3_TABLES_PER_L2 * ARM64_PT_BYTES + PAGE_SIZE]
     __attribute__((aligned(4096)));
 
+/* Static storage for extra kernel L0 slots (Hyperspace, Paged Pool, PFN DB, etc.) */
+static UINT8 arm64_extra_l1_tables_storage_raw[
+    ARM64_EXTRA_KERNEL_SLOTS * ARM64_PT_BYTES + PAGE_SIZE]
+    __attribute__((aligned(4096)));
+static UINT8 arm64_extra_l2_tables_storage_raw[
+    ARM64_EXTRA_KERNEL_SLOTS * ARM64_EXTRA_L2_PER_SLOT * ARM64_PT_BYTES + PAGE_SIZE]
+    __attribute__((aligned(4096)));
+static UINT8 arm64_extra_l3_tables_storage_raw[
+    ARM64_EXTRA_KERNEL_SLOTS * ARM64_EXTRA_L2_PER_SLOT * ARM64_EXTRA_L3_PER_L2 * ARM64_PT_BYTES + PAGE_SIZE]
+    __attribute__((aligned(4096)));
+
 #define ARM64_STATIC_EXTRA_PT_PAGES 4096
 static UINT8 arm64_static_extra_pt_arena[ARM64_STATIC_EXTRA_PT_PAGES * PAGE_SIZE]
     __attribute__((aligned(4096)));
 static UINT64 arm64_static_extra_pt_offset = 0;
+
+/* Retype page-table allocations so the kernel won't reclaim them as LoaderLoadedProgram. */
+typedef struct _ARM64_PT_ALLOCATION
+{
+    EFI_PHYSICAL_ADDRESS Base;
+    UINTN Pages;
+} ARM64_PT_ALLOCATION;
+
+#define ARM64_PT_ALLOCATION_MAX 64
+static ARM64_PT_ALLOCATION Arm64PtAllocations[ARM64_PT_ALLOCATION_MAX];
+static UINTN Arm64PtAllocationCount = 0;
+static BOOLEAN Arm64PtAllocationsApplied = FALSE;
+
+VOID Arm64ApplyDeferredPageTableMemoryTypes(VOID);
+
+static VOID
+Arm64RecordPageTableAllocation(EFI_PHYSICAL_ADDRESS Base, UINTN Pages)
+{
+    if (Pages == 0)
+        return;
+
+    if (PageLookupTableAddress && Arm64PtAllocationsApplied)
+    {
+        MmSetMemoryType((PVOID)(ULONG_PTR)Base, Pages * PAGE_SIZE, LoaderMemoryData);
+        return;
+    }
+
+    if (Arm64PtAllocationCount < ARRAYSIZE(Arm64PtAllocations))
+    {
+        Arm64PtAllocations[Arm64PtAllocationCount].Base = Base;
+        Arm64PtAllocations[Arm64PtAllocationCount].Pages = Pages;
+        Arm64PtAllocationCount++;
+    }
+    else
+    {
+        ERR("ARM64: PT allocation tracking overflow (base=0x%llx pages=%llu)\n",
+            (unsigned long long)Base,
+            (unsigned long long)Pages);
+    }
+
+    if (PageLookupTableAddress && !Arm64PtAllocationsApplied)
+    {
+        Arm64ApplyDeferredPageTableMemoryTypes();
+    }
+}
+
+VOID
+Arm64ApplyDeferredPageTableMemoryTypes(VOID)
+{
+    if (Arm64PtAllocationsApplied || !PageLookupTableAddress)
+        return;
+
+    for (UINTN i = 0; i < Arm64PtAllocationCount; ++i)
+    {
+        if (Arm64PtAllocations[i].Pages == 0)
+            continue;
+
+        MmSetMemoryType((PVOID)(ULONG_PTR)Arm64PtAllocations[i].Base,
+                        Arm64PtAllocations[i].Pages * PAGE_SIZE,
+                        LoaderMemoryData);
+    }
+
+    Arm64PtAllocationsApplied = TRUE;
+}
 
 static VOID verify_page_aligned(const VOID *ptr, const char *name)
 {
@@ -421,6 +587,29 @@ static VOID* align_page_storage(VOID *storage)
     return (VOID *)(uintptr_t)addr;
 }
 
+/*
+ * Look up the index into arm64_extra_kernel_l0_slots for a given L0 index.
+ * Returns the slot index (0..ARM64_EXTRA_KERNEL_SLOTS-1) if found, or
+ * ARM64_EXTRA_KERNEL_SLOTS if not an extra kernel slot.
+ */
+static inline UINT64 get_extra_kernel_slot_index(UINT64 l0_idx)
+{
+    for (UINT64 i = 0; i < ARM64_EXTRA_KERNEL_SLOTS; ++i)
+    {
+        if (arm64_extra_kernel_l0_slots[i] == l0_idx)
+            return i;
+    }
+    return ARM64_EXTRA_KERNEL_SLOTS;  /* Not found */
+}
+
+/*
+ * Check if an L0 index belongs to the extra kernel slots.
+ */
+static inline BOOLEAN is_extra_kernel_slot(UINT64 l0_idx)
+{
+    return get_extra_kernel_slot_index(l0_idx) < ARM64_EXTRA_KERNEL_SLOTS;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Prototypes                                                                 */
 /* -------------------------------------------------------------------------- */
@@ -434,9 +623,27 @@ static VOID set_ttbr_tcr_mair(int el, UINT64 table0, UINT64 table1, UINT64 tcr, 
 static VOID debug_dump_static_mapping(UINT64 va);
 
 static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64 attrs);
-static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_table, UINT64 l1_index);
-static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_table, UINT64 l2_index);
+static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_table, UINT64 l1_index, UINT64 va);
+static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_table, UINT64 l2_index, UINT64 va);
 static UINT64 get_l2_slot_index(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_table);
+static BOOLEAN Arm64UpdateMappingAttributes(ULONGLONG Va, ULONGLONG Size, UINT64 set_mask, UINT64 clear_mask);
+static VOID Arm64ApplyImageSectionProtections(VOID);
+
+/* PL011 UART debugging helpers - defined early for use throughout */
+static inline VOID Pl011RawPutc(char Ch)
+{
+    volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+    while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+    Uart[0] = Ch;
+}
+
+static inline VOID Pl011RawPuts(const char *S)
+{
+    while (*S) { if (*S == '\n') Pl011RawPutc('\r'); Pl011RawPutc(*S++); }
+}
+
+#define ARM64_PT_VERBOSE 0
+#define ARM64_PT_LOG(S) do { if (ARM64_PT_VERBOSE) Pl011RawPuts(S); } while (0)
 
 /* NEW: public functions used before they are defined later in this file */
 BOOLEAN Arm64MapVirtualMemory(ULONGLONG VirtualAddress,
@@ -467,6 +674,46 @@ static VOID use_static_page_tables(VOID)
     arm64_user_l3_tables = (UINT64 (*)[ARM64_L2_TABLES_PER_L1][ARM64_L3_TABLES_PER_L2][ARM64_PT_ENTRIES])
         align_page_storage(arm64_user_l3_tables_storage_raw);
 
+    /* Initialize extra kernel L0 slot tables (Hyperspace, Paged Pool, PFN DB, etc.) */
+    {
+        UINT8 *l1_base = (UINT8 *)align_page_storage(arm64_extra_l1_tables_storage_raw);
+        for (UINT64 i = 0; i < ARM64_EXTRA_KERNEL_SLOTS; ++i)
+        {
+            arm64_extra_l1_tables[i] = (UINT64 *)(l1_base + i * ARM64_PT_BYTES);
+        }
+    }
+    arm64_extra_l2_tables = (UINT64 (*)[ARM64_EXTRA_L2_PER_SLOT][ARM64_PT_ENTRIES])
+        align_page_storage(arm64_extra_l2_tables_storage_raw);
+    arm64_extra_l3_tables = (UINT64 (*)[ARM64_EXTRA_L2_PER_SLOT][ARM64_EXTRA_L3_PER_L2][ARM64_PT_ENTRIES])
+        align_page_storage(arm64_extra_l3_tables_storage_raw);
+
+    Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(ULONG_PTR)arm64_l0_page_table, 1);
+    Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(ULONG_PTR)arm64_kernel_l0_table, 1);
+    Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(ULONG_PTR)arm64_kuser_l1_table, 1);
+    Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(ULONG_PTR)arm64_kuser_l2_table, 1);
+    Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(ULONG_PTR)arm64_kuser_l3_table, 1);
+    Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(ULONG_PTR)arm64_l1_page_tables,
+                                   ARM64_USER_L1_TABLES);
+    Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(ULONG_PTR)arm64_kernel_l1_tables,
+                                   ARM64_KERNEL_L1_TABLES);
+    Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(ULONG_PTR)arm64_kernel_l2_tables,
+                                   ARM64_KERNEL_L1_TABLES * ARM64_L2_TABLES_PER_L1);
+    Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(ULONG_PTR)arm64_kernel_l3_tables,
+                                   ARM64_KERNEL_L1_TABLES * ARM64_L2_TABLES_PER_L1 *
+                                       ARM64_L3_TABLES_PER_L2);
+    Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(ULONG_PTR)arm64_user_l2_tables,
+                                   ARM64_USER_L1_TABLES * ARM64_L2_TABLES_PER_L1);
+    Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(ULONG_PTR)arm64_user_l3_tables,
+                                   ARM64_USER_L1_TABLES * ARM64_L2_TABLES_PER_L1 *
+                                       ARM64_L3_TABLES_PER_L2);
+    Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(ULONG_PTR)arm64_extra_l1_tables[0],
+                                   ARM64_EXTRA_KERNEL_SLOTS);
+    Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(ULONG_PTR)arm64_extra_l2_tables,
+                                   ARM64_EXTRA_KERNEL_SLOTS * ARM64_EXTRA_L2_PER_SLOT);
+    Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(ULONG_PTR)arm64_extra_l3_tables,
+                                   ARM64_EXTRA_KERNEL_SLOTS * ARM64_EXTRA_L2_PER_SLOT *
+                                       ARM64_EXTRA_L3_PER_L2);
+
     {
         const struct {
             const char *name;
@@ -483,10 +730,18 @@ static VOID use_static_page_tables(VOID)
             {"TTBR1_L3", arm64_kernel_l3_tables},
             {"TTBR0_L2", arm64_user_l2_tables},
             {"TTBR0_L3", arm64_user_l3_tables},
+            {"EXTRA_L2", arm64_extra_l2_tables},
+            {"EXTRA_L3", arm64_extra_l3_tables},
         };
 
         for (ULONG i = 0; i < sizeof(tables) / sizeof(tables[0]); ++i)
             verify_page_aligned(tables[i].ptr, tables[i].name);
+
+        /* Also verify extra L1 tables */
+        for (UINT64 i = 0; i < ARM64_EXTRA_KERNEL_SLOTS; ++i)
+        {
+            verify_page_aligned(arm64_extra_l1_tables[i], "EXTRA_L1");
+        }
     }
 }
 
@@ -525,6 +780,7 @@ allocate_pt_pages(UINTN pages, const char *label)
         ptr = (VOID *)(uintptr_t)aligned_abs;
         arm64_static_extra_pt_offset = required;
         RtlZeroMemory(ptr, bytes);
+        Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(UINT64)(uintptr_t)ptr, pages);
 
         /* Verify alignment before returning */
         if (((UINT64)(uintptr_t)ptr & (PAGE_SIZE - 1ULL)) != 0)
@@ -554,6 +810,7 @@ allocate_pt_pages(UINTN pages, const char *label)
 
     ptr = (VOID *)(uintptr_t)addr;
     RtlZeroMemory(ptr, pages * PAGE_SIZE);
+    Arm64RecordPageTableAllocation(addr, pages);
     TRACE("ARM64: Allocated %s @ 0x%llx (%u pages)\n",
           label, (unsigned long long)addr, (unsigned)pages);
     return ptr;
@@ -621,6 +878,45 @@ static BOOLEAN allocate_page_table_memory(VOID)
         return TRUE;
     }
 
+    /* Allocate extra kernel L0 slot tables (Hyperspace, Paged Pool, PFN DB, etc.) */
+    {
+        BOOLEAN alloc_failed = FALSE;
+        for (UINT64 i = 0; i < ARM64_EXTRA_KERNEL_SLOTS; ++i)
+        {
+            arm64_extra_l1_tables[i] = allocate_pt_pages(1, "EXTRA L1");
+            if (!arm64_extra_l1_tables[i])
+            {
+                alloc_failed = TRUE;
+                break;
+            }
+        }
+        if (!alloc_failed)
+        {
+            arm64_extra_l2_tables = (UINT64 (*)[ARM64_EXTRA_L2_PER_SLOT][ARM64_PT_ENTRIES])
+                allocate_pt_pages(ARM64_EXTRA_KERNEL_SLOTS * ARM64_EXTRA_L2_PER_SLOT,
+                                  "EXTRA L2 pool");
+            arm64_extra_l3_tables = (UINT64 (*)[ARM64_EXTRA_L2_PER_SLOT][ARM64_EXTRA_L3_PER_L2][ARM64_PT_ENTRIES])
+                allocate_pt_pages(ARM64_EXTRA_KERNEL_SLOTS * ARM64_EXTRA_L2_PER_SLOT * ARM64_EXTRA_L3_PER_L2,
+                                  "EXTRA L3 pool");
+            if (!arm64_extra_l2_tables || !arm64_extra_l3_tables)
+                alloc_failed = TRUE;
+        }
+        if (alloc_failed)
+        {
+            /* Fallback to static storage for extra tables only */
+            UINT8 *l1_base = (UINT8 *)align_page_storage(arm64_extra_l1_tables_storage_raw);
+            for (UINT64 i = 0; i < ARM64_EXTRA_KERNEL_SLOTS; ++i)
+            {
+                arm64_extra_l1_tables[i] = (UINT64 *)(l1_base + i * ARM64_PT_BYTES);
+            }
+            arm64_extra_l2_tables = (UINT64 (*)[ARM64_EXTRA_L2_PER_SLOT][ARM64_PT_ENTRIES])
+                align_page_storage(arm64_extra_l2_tables_storage_raw);
+            arm64_extra_l3_tables = (UINT64 (*)[ARM64_EXTRA_L2_PER_SLOT][ARM64_EXTRA_L3_PER_L2][ARM64_PT_ENTRIES])
+                align_page_storage(arm64_extra_l3_tables_storage_raw);
+            TRACE("ARM64: Using static storage for extra kernel tables\n");
+        }
+    }
+
     page_table_memory_allocated = TRUE;
     return TRUE;
 }
@@ -653,8 +949,8 @@ static VOID set_ttbr_tcr_mair(int el, UINT64 table0, UINT64 table1, UINT64 tcr, 
 static VOID debug_dump_static_mapping(UINT64 va);
 
 static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64 attrs);
-static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_table, UINT64 l1_index);
-static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_table, UINT64 l2_index);
+static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_table, UINT64 l1_index, UINT64 va);
+static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_table, UINT64 l2_index, UINT64 va);
 static UINT64 get_l2_slot_index(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_table);
 
 typedef enum _ARM64_MAPPING_TARGET
@@ -696,7 +992,8 @@ static VOID Arm64MappingPlanInit(PARM64_MAPPING_PLAN Plan,
                                  ULONG Count);
 static BOOLEAN Arm64MappingPlanApply(ARM64_MAPPING_PLAN *Plan,
                                      ARM64_MAPPING_TARGET Target);
-static UINT64 Arm64MemoryAttributesForDescriptor(const FREELDR_MEMORY_DESCRIPTOR *Descriptor);
+static UINT64 Arm64MemoryAttributesForDescriptor(const FREELDR_MEMORY_DESCRIPTOR *Descriptor,
+                                                 BOOLEAN IdentityMap);
 static BOOLEAN Arm64DescriptorMapsInKernel(const FREELDR_MEMORY_DESCRIPTOR *Descriptor);
 static BOOLEAN Arm64DescriptorIsSystemMemory(const FREELDR_MEMORY_DESCRIPTOR *Descriptor);
 static BOOLEAN Arm64MappingPlanAddMapping(PARM64_MAPPING_PLAN Plan,
@@ -770,15 +1067,15 @@ static inline void pte_write(UINT64 *entry, UINT64 val)
     ARM64_DSB_ISHST(); /* Ensure PTE store is visible before we invalidate TLBs */
 }
 
-/* Heavy (boot-safe) BBM: clear -> DSB ISHST -> TLBI all -> DSB ISH -> ISB -> set */
-static inline void pte_replace_break_before_make(UINT64 *entry, UINT64 newval)
+/* Heavy (boot-safe) BBM: clear -> TLBI range -> DSB ISH -> ISB -> set */
+static inline void pte_replace_break_before_make(UINT64 *entry, UINT64 newval, UINT64 va, UINT64 size)
 {
     if (*entry == newval) {
         return;
     }
     if (DESC_VALID(*entry)) {
         pte_write(entry, 0);
-        TLBI_VMALLE1IS();
+        tlbi_va_entry(va, size);
         ARM64_DSB_ISH();
         ARM64_ISB();
     }
@@ -951,7 +1248,7 @@ static VOID set_ttbr_tcr_mair(int el, UINT64 table0, UINT64 table1, UINT64 tcr, 
 
 /* ---------- Page-table allocation helpers ---------- */
 
-static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_table, UINT64 l1_index)
+static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_table, UINT64 l1_index, UINT64 va)
 {
     UINT64 entry = l1_table[l1_index];
 
@@ -980,10 +1277,25 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
                 }
                 else
                 {
-                    /* Fallback: allocate a one-off L2 table for non-KSEG0 kernel slot */
-                    split_table = allocate_pt_pages(1, "TTBR1 L2 (split)");
-                    if (!split_table)
-                        return NULL;
+                    /* Check if this is a pre-allocated extra kernel slot */
+                    UINT64 extra_slot = get_extra_kernel_slot_index(l0_slot);
+                    if (extra_slot < ARM64_EXTRA_KERNEL_SLOTS && arm64_extra_l2_tables)
+                    {
+                        if (arm64_extra_l2_next_index[extra_slot] >= ARM64_EXTRA_L2_PER_SLOT) {
+                            ERR("ARM64: Extra L2 table pool exhausted for L0 slot %llu (limit %u)\n",
+                                (unsigned long long)l0_slot, ARM64_EXTRA_L2_PER_SLOT);
+                            return NULL;
+                        }
+                        UINT64 index = arm64_extra_l2_next_index[extra_slot]++;
+                        split_table = arm64_extra_l2_tables[extra_slot][index];
+                    }
+                    else
+                    {
+                        /* Fallback: allocate a one-off L2 table for non-KSEG0 kernel slot */
+                        split_table = allocate_pt_pages(1, "TTBR1 L2 (split)");
+                        if (!split_table)
+                            return NULL;
+                    }
                 }
             }
             else
@@ -1006,8 +1318,11 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
                 split_table[i] = pa | PTE_TYPE_VALID | PTE_TYPE_BLOCK | block_attrs;
             }
 
+            UINT64 va_base = va & ~ARM64_BLOCK_MASK_1G;
             pte_replace_break_before_make(&l1_table[l1_index],
-                                          phys_from_ptr(split_table) | PTE_TABLE_ATTRS);
+                                          phys_from_ptr(split_table) | PTE_TABLE_ATTRS,
+                                          va_base,
+                                          ARM64_BLOCK_SIZE_1G);
             return split_table;
         }
 
@@ -1035,14 +1350,33 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
         }
         else
         {
-            /* Fallback: allocate a one-off L2 table when outside KSEG0 pool */
-            UINT64 *new_table = allocate_pt_pages(1, "TTBR1 L2 (extra)");
-            if (!new_table)
-                return NULL;
-            RtlZeroMemory(new_table, PAGE_SIZE);
-            pte_write(&l1_table[l1_index],
-                      (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
-            return new_table;
+            /* Check if this is a pre-allocated extra kernel slot */
+            UINT64 extra_slot = get_extra_kernel_slot_index(l0_slot);
+            if (extra_slot < ARM64_EXTRA_KERNEL_SLOTS && arm64_extra_l2_tables)
+            {
+                if (arm64_extra_l2_next_index[extra_slot] >= ARM64_EXTRA_L2_PER_SLOT) {
+                    ERR("ARM64: Extra L2 table pool exhausted for L0 slot %llu (limit %u)\n",
+                        (unsigned long long)l0_slot, ARM64_EXTRA_L2_PER_SLOT);
+                    return NULL;
+                }
+                UINT64 index = arm64_extra_l2_next_index[extra_slot]++;
+                UINT64 *new_table = arm64_extra_l2_tables[extra_slot][index];
+                RtlZeroMemory(new_table, PAGE_SIZE);
+                pte_write(&l1_table[l1_index],
+                          (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
+                return new_table;
+            }
+            else
+            {
+                /* Fallback: allocate a one-off L2 table when outside KSEG0 pool */
+                UINT64 *new_table = allocate_pt_pages(1, "TTBR1 L2 (extra)");
+                if (!new_table)
+                    return NULL;
+                RtlZeroMemory(new_table, PAGE_SIZE);
+                pte_write(&l1_table[l1_index],
+                          (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
+                return new_table;
+            }
         }
     }
 
@@ -1061,7 +1395,7 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
     return new_table;
 }
 
-static UINT64 get_l2_slot_index(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_table)
+static __attribute__((unused)) UINT64 get_l2_slot_index(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_table)
 {
     if (is_kernel)
     {
@@ -1076,15 +1410,143 @@ static UINT64 get_l2_slot_index(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_ta
     return (UINT64)(l2_table - &arm64_user_l2_tables[l0_slot][0][0]) / 512ULL;
 }
 
-static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_table, UINT64 l2_index)
+/*
+ * Helper to allocate an L3 table from a flat pool.
+ * The L3 tables are stored in a 3D array [l0_slot][l2_slot][index], but we
+ * allocate linearly using a single counter per L0 slot. This avoids per-L2-slot
+ * exhaustion issues when memory descriptors cause uneven L2 slot usage.
+ *
+ * Returns the allocated L3 table pointer, or NULL on failure.
+ */
+static UINT64* alloc_kernel_l3_from_flat_pool(UINT64 l0_slot)
+{
+    char buf[256];
+    UINT64 flat_idx = arm64_l3_next_index[l0_slot];
+
+    /* Debug: check if arm64_kernel_l3_tables is NULL */
+    if (!arm64_kernel_l3_tables)
+    {
+        Pl011RawPuts("[L3] FATAL: arm64_kernel_l3_tables is NULL\n");
+        return NULL;
+    }
+
+    if (flat_idx >= ARM64_L3_TABLES_PER_L0)
+    {
+        RtlStringCbPrintfA(buf, sizeof(buf),
+            "[L3] Kernel L3 pool exhausted for L0=%llu flat_idx=%llu limit=%u\n",
+            (unsigned long long)l0_slot,
+            (unsigned long long)flat_idx,
+            ARM64_L3_TABLES_PER_L0);
+        Pl011RawPuts(buf);
+        return NULL;
+    }
+
+    /* Convert flat index to [l2_slot][index] for array access */
+    UINT64 l2_slot_for_alloc = flat_idx / ARM64_L3_TABLES_PER_L2;
+    UINT64 idx_in_l2_slot = flat_idx % ARM64_L3_TABLES_PER_L2;
+
+    UINT64 *result = arm64_kernel_l3_tables[l0_slot][l2_slot_for_alloc][idx_in_l2_slot];
+
+    if (!result)
+    {
+        Pl011RawPuts("[L3] FATAL: result is NULL from array\n");
+        return NULL;
+    }
+
+    arm64_l3_next_index[l0_slot]++;
+    return result;
+}
+
+static UINT64* alloc_user_l3_from_flat_pool(UINT64 l0_slot)
+{
+    UINT64 flat_idx = arm64_user_l3_next_index[l0_slot];
+    if (flat_idx >= ARM64_L3_TABLES_PER_L0)
+    {
+        char buf[256];
+        RtlStringCbPrintfA(buf, sizeof(buf),
+            "[L3] User L3 pool exhausted for L0=%llu flat_idx=%llu limit=%u\n",
+            (unsigned long long)l0_slot,
+            (unsigned long long)flat_idx,
+            ARM64_L3_TABLES_PER_L0);
+        Pl011RawPuts(buf);
+        return NULL;
+    }
+
+    UINT64 l2_slot_for_alloc = flat_idx / ARM64_L3_TABLES_PER_L2;
+    UINT64 idx_in_l2_slot = flat_idx % ARM64_L3_TABLES_PER_L2;
+
+    arm64_user_l3_next_index[l0_slot]++;
+    return arm64_user_l3_tables[l0_slot][l2_slot_for_alloc][idx_in_l2_slot];
+}
+
+/*
+ * Helper to allocate an L3 table from the FLAT extra kernel pool.
+ * Similar to alloc_kernel_l3_from_flat_pool but for extra kernel slots
+ * (Hyperspace, Paged Pool, PFN DB, etc.). Uses a single flat index per
+ * extra slot to avoid per-L2-slot exhaustion issues.
+ *
+ * Returns the allocated L3 table pointer, or NULL on failure.
+ */
+static UINT64* alloc_extra_l3_from_flat_pool(UINT64 extra_slot)
+{
+    char buf[256];
+
+    if (extra_slot >= ARM64_EXTRA_KERNEL_SLOTS)
+    {
+        Pl011RawPuts("[L3] FATAL: invalid extra_slot in alloc_extra_l3_from_flat_pool\n");
+        return NULL;
+    }
+
+    if (!arm64_extra_l3_tables)
+    {
+        Pl011RawPuts("[L3] FATAL: arm64_extra_l3_tables is NULL\n");
+        return NULL;
+    }
+
+    UINT64 flat_idx = arm64_extra_l3_next_index[extra_slot];
+
+    if (flat_idx >= ARM64_EXTRA_L3_PER_SLOT)
+    {
+        RtlStringCbPrintfA(buf, sizeof(buf),
+            "[L3] Extra L3 pool exhausted for extra_slot=%llu flat_idx=%llu limit=%u\n",
+            (unsigned long long)extra_slot,
+            (unsigned long long)flat_idx,
+            ARM64_EXTRA_L3_PER_SLOT);
+        Pl011RawPuts(buf);
+        return NULL;
+    }
+
+    /* Convert flat index to [l2_slot][index] for array access */
+    UINT64 l2_slot_for_alloc = flat_idx / ARM64_EXTRA_L3_PER_L2;
+    UINT64 idx_in_l2_slot = flat_idx % ARM64_EXTRA_L3_PER_L2;
+
+    UINT64 *result = arm64_extra_l3_tables[extra_slot][l2_slot_for_alloc][idx_in_l2_slot];
+
+    if (!result)
+    {
+        RtlStringCbPrintfA(buf, sizeof(buf),
+            "[L3] FATAL: result is NULL from extra array at [%llu][%llu][%llu]\n",
+            (unsigned long long)extra_slot,
+            (unsigned long long)l2_slot_for_alloc,
+            (unsigned long long)idx_in_l2_slot);
+        Pl011RawPuts(buf);
+        return NULL;
+    }
+
+    arm64_extra_l3_next_index[extra_slot]++;
+    return result;
+}
+
+static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_table, UINT64 l2_index, UINT64 va)
 {
     UINT64 entry = l2_table[l2_index];
-    UINT64 l2_slot = 0;
     BOOLEAN kernel_pool = is_kernel && (l0_slot < ARM64_KERNEL_L1_TABLES);
     BOOLEAN user_pool = (!is_kernel) && (l0_slot < ARM64_USER_L1_TABLES);
-    if (kernel_pool || user_pool)
-        l2_slot = get_l2_slot_index(is_kernel, l0_slot, l2_table);
+    /* Check if this is an extra kernel slot */
+    UINT64 extra_slot = is_kernel ? get_extra_kernel_slot_index(l0_slot) : ARM64_EXTRA_KERNEL_SLOTS;
+    BOOLEAN extra_pool = is_kernel && (extra_slot < ARM64_EXTRA_KERNEL_SLOTS) && arm64_extra_l3_tables;
 
+    /* Debug: check the pool selection */
     if (DESC_VALID(entry)) {
         if (DESC_IS_TABLE(entry))
             return (UINT64 *)PA_TO_VA(entry & ~0xFFFULL);
@@ -1099,16 +1561,16 @@ static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_tab
             {
                 if (kernel_pool)
                 {
-                    if (l2_slot >= ARM64_L2_TABLES_PER_L1) return NULL;
-                    if (arm64_l3_next_index[l0_slot][l2_slot] >= ARM64_L3_TABLES_PER_L2) {
-                        ERR("ARM64: L3 table pool exhausted for kernel L0=%llu L2=%llu (limit %u)\n",
-                            (unsigned long long)l0_slot,
-                            (unsigned long long)l2_slot,
-                            ARM64_L3_TABLES_PER_L2);
+                    split_table = alloc_kernel_l3_from_flat_pool(l0_slot);
+                    if (!split_table)
                         return NULL;
-                    }
-                    UINT64 index = arm64_l3_next_index[l0_slot][l2_slot]++;
-                    split_table = arm64_kernel_l3_tables[l0_slot][l2_slot][index];
+                }
+                else if (extra_pool)
+                {
+                    /* Use pre-allocated extra L3 tables with FLAT pool allocation */
+                    split_table = alloc_extra_l3_from_flat_pool(extra_slot);
+                    if (!split_table)
+                        return NULL;
                 }
                 else
                 {
@@ -1120,17 +1582,9 @@ static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_tab
             else
             {
                 if (!user_pool) return NULL;
-                if (l2_slot >= ARM64_L2_TABLES_PER_L1) return NULL;
-                if (arm64_user_l3_next_index[l0_slot][l2_slot] >= ARM64_L3_TABLES_PER_L2)
-                {
-                    ERR("ARM64: L3 table pool exhausted for user L0=%llu L2=%llu (limit %u)\n",
-                        (unsigned long long)l0_slot,
-                        (unsigned long long)l2_slot,
-                        ARM64_L3_TABLES_PER_L2);
+                split_table = alloc_user_l3_from_flat_pool(l0_slot);
+                if (!split_table)
                     return NULL;
-                }
-                UINT64 index = arm64_user_l3_next_index[l0_slot][l2_slot]++;
-                split_table = arm64_user_l3_tables[l0_slot][l2_slot][index];
             }
 
             RtlZeroMemory(split_table, PAGE_SIZE);
@@ -1140,8 +1594,11 @@ static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_tab
                 split_table[i] = pa | PTE_TYPE_VALID | PTE_TYPE_PAGE | block_attrs;
             }
 
+            UINT64 va_base = va & ~ARM64_BLOCK_MASK_2M;
             pte_replace_break_before_make(&l2_table[l2_index],
-                                          phys_from_ptr(split_table) | PTE_TABLE_ATTRS);
+                                          phys_from_ptr(split_table) | PTE_TABLE_ATTRS,
+                                          va_base,
+                                          ARM64_BLOCK_SIZE_2M);
             return split_table;
         }
 
@@ -1151,28 +1608,12 @@ static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_tab
         return NULL;
     }
 
+    /* Entry is not valid - allocate a new L3 table */
     if (is_kernel)
     {
         if (kernel_pool)
         {
-            if (l2_slot >= ARM64_L2_TABLES_PER_L1) return NULL;
-            if (arm64_l3_next_index[l0_slot][l2_slot] >= ARM64_L3_TABLES_PER_L2) {
-                ERR("ARM64: L3 table pool exhausted for kernel L0=%llu L2=%llu (limit %u)\n",
-                    (unsigned long long)l0_slot,
-                    (unsigned long long)l2_slot,
-                    ARM64_L3_TABLES_PER_L2);
-                return NULL;
-            }
-            UINT64 index = arm64_l3_next_index[l0_slot][l2_slot]++;
-            UINT64 *new_table = arm64_kernel_l3_tables[l0_slot][l2_slot][index];
-            RtlZeroMemory(new_table, PAGE_SIZE);
-            pte_write(&l2_table[l2_index],
-                      (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
-            return new_table;
-        }
-        else
-        {
-            UINT64 *new_table = allocate_pt_pages(1, "TTBR1 L3 (extra)");
+            UINT64 *new_table = alloc_kernel_l3_from_flat_pool(l0_slot);
             if (!new_table)
                 return NULL;
             RtlZeroMemory(new_table, PAGE_SIZE);
@@ -1180,20 +1621,42 @@ static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_tab
                       (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
             return new_table;
         }
+        else if (extra_pool)
+        {
+            /* Use pre-allocated extra L3 tables with FLAT pool allocation */
+            UINT64 *new_table = alloc_extra_l3_from_flat_pool(extra_slot);
+            if (!new_table)
+                return NULL;
+            RtlZeroMemory(new_table, PAGE_SIZE);
+            pte_write(&l2_table[l2_index],
+                      (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
+            return new_table;
+        }
+        else
+        {
+            ERR("ARM64: ensure_l3_table KERNEL fallback to allocate_pt_pages for L0=%llu (not in kernel_pool or extra_pool)\n",
+                (unsigned long long)l0_slot);
+            UINT64 *new_table = allocate_pt_pages(1, "TTBR1 L3 (extra)");
+            if (!new_table) {
+                ERR("ARM64: allocate_pt_pages FAILED (likely post-ExitBootServices)\n");
+                return NULL;
+            }
+            RtlZeroMemory(new_table, PAGE_SIZE);
+            pte_write(&l2_table[l2_index],
+                      (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
+            return new_table;
+        }
     }
 
-    if (!user_pool) return NULL;
-    if (l2_slot >= ARM64_L2_TABLES_PER_L1) return NULL;
-    if (arm64_user_l3_next_index[l0_slot][l2_slot] >= ARM64_L3_TABLES_PER_L2) {
-        ERR("ARM64: L3 table pool exhausted for user L0=%llu L2=%llu (limit %u)\n",
-            (unsigned long long)l0_slot,
-            (unsigned long long)l2_slot,
-            ARM64_L3_TABLES_PER_L2);
+    /* User space path - use flat pool allocation */
+    if (!user_pool) {
+        Pl011RawPuts("[L3] ensure_l3_table: not user_pool\n");
         return NULL;
     }
 
-    UINT64 index = arm64_user_l3_next_index[l0_slot][l2_slot]++;
-    UINT64 *new_table = arm64_user_l3_tables[l0_slot][l2_slot][index];
+    UINT64 *new_table = alloc_user_l3_from_flat_pool(l0_slot);
+    if (!new_table)
+        return NULL;
     RtlZeroMemory(new_table, PAGE_SIZE);
     pte_write(&l2_table[l2_index],
               (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
@@ -1237,17 +1700,41 @@ static BOOLEAN Arm64SetupSelfMapWindows(VOID)
     return TRUE;
 }
 
+static inline VOID arm64_icache_sync_range(UINT64 start, UINT64 end)
+{
+    if (end <= start)
+        return;
+
+    if (mmu_enabled)
+    {
+        Arm64InvalidateInstructionCacheRange(start, end);
+        return;
+    }
+
+    __asm__ volatile("ic iallu" ::: "memory");
+    ARM64_DSB_ISH();
+    ARM64_ISB();
+}
+
 /* ---------- Page-table construction ---------- */
 
 static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64 attrs)
 {
     UINT64 end = va + size;
     const UINT64 self_idx = (ARM64_SELF_PXE_BASE >> ARM64_PXI_SHIFT) & ARM64_PX_MASK;
+    BOOLEAN executable = ((attrs & (PTE_BLOCK_PXN | PTE_BLOCK_UXN)) !=
+                          (PTE_BLOCK_PXN | PTE_BLOCK_UXN));
+    BOOLEAN tlbi_needed = FALSE;
+    UINT64 flush_start, flush_end;
 
     /* Align to 4K */
     va &= ~(PAGE_SIZE - 1);
     pa &= ~(PAGE_SIZE - 1);
     end = (end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    flush_start = va;
+    flush_end = end;
+
+    ARM64_PT_LOG("[MAP] map_region_hierarchical: entry\n");
 
     while (va < end)
     {
@@ -1274,6 +1761,7 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
             l0_table = arm64_l0_page_table;
             if (l0_idx >= ARM64_USER_L1_TABLES)
             {
+                Pl011RawPuts("[MAP] User L0 index out of range\n");
                 return FALSE;
             }
         }
@@ -1281,22 +1769,35 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
         if (is_kernel) {
             BOOLEAN in_pool = (l0_idx >= ARM64_KSEG0_L0_INDEX) &&
                               (l0_idx < (ARM64_KSEG0_L0_INDEX + ARM64_KERNEL_L1_TABLES));
-            if (!DESC_VALID(l0_table[l0_idx])) {
-                if (in_pool) {
-                    UINT64 slot = l0_idx - ARM64_KSEG0_L0_INDEX;
+            if (in_pool) {
+                UINT64 slot = l0_idx - ARM64_KSEG0_L0_INDEX;
+                if (!DESC_VALID(l0_table[l0_idx])) {
                     pte_write(&l0_table[l0_idx],
                               (phys_from_ptr(&arm64_kernel_l1_tables[slot][0]) | PTE_TABLE_ATTRS));
-                } else {
+                }
+                /* Use direct pointer for in-pool tables - safe before MMU enabled */
+                l1_table = arm64_kernel_l1_tables[slot];
+            } else {
+                if (!DESC_VALID(l0_table[l0_idx])) {
                     UINT64 *new_l1 = allocate_pt_pages(1, "TTBR1 L1 (extra)");
-                    if (!new_l1)
+                    if (!new_l1) {
+                        Pl011RawPuts("[MAP] allocate_pt_pages failed for extra L1\n");
                         return FALSE;
+                    }
                     RtlZeroMemory(new_l1, PAGE_SIZE);
                     pte_write(&l0_table[l0_idx],
                               (phys_from_ptr(new_l1) | PTE_TABLE_ATTRS));
+                    /* Use the pointer we just allocated */
+                    l1_table = new_l1;
+                } else {
+                    /*
+                     * Entry already valid but not in pool - must have been
+                     * allocated earlier. PA_TO_VA is identity, works under UEFI
+                     * identity mapping for allocated memory.
+                     */
+                    l1_table = (UINT64 *)PA_TO_VA(l0_table[l0_idx] & ~0xFFFULL);
                 }
             }
-            /* Resolve L1 table VA from descriptor (works for both pool and extra) */
-            l1_table = (UINT64 *)PA_TO_VA(l0_table[l0_idx] & ~0xFFFULL);
         } else {
             if (!DESC_VALID(l0_table[l0_idx])) {
                 pte_write(&l0_table[l0_idx],
@@ -1325,7 +1826,12 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
             (va % 0x40000000ULL) == 0 && (pa % 0x40000000ULL) == 0 && remaining >= 0x40000000ULL)
         {
             if (!DESC_IS_TABLE(l1_table[l1_idx])) {
-                pte_replace_break_before_make(&l1_table[l1_idx], pa | PTE_TYPE_VALID | PTE_TYPE_BLOCK | attrs);
+                pte_replace_break_before_make(&l1_table[l1_idx],
+                                              pa | PTE_TYPE_VALID | PTE_TYPE_BLOCK | attrs,
+                                              va,
+                                              ARM64_BLOCK_SIZE_1G);
+                tlbi_va_entry(va, ARM64_BLOCK_SIZE_1G);
+                tlbi_needed = TRUE;
                 va += 0x40000000ULL;
                 pa += 0x40000000ULL;
                 continue;
@@ -1339,13 +1845,19 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
             BOOLEAN in_pool = is_kernel && (l0_idx >= ARM64_KSEG0_L0_INDEX) &&
                               (l0_idx < (ARM64_KSEG0_L0_INDEX + ARM64_KERNEL_L1_TABLES));
             UINT64 l0_slot = is_kernel ? (in_pool ? (l0_idx - ARM64_KSEG0_L0_INDEX) : l0_idx) : l0_idx;
-            UINT64 *l2_table_ptr = ensure_l2_table(is_kernel, l0_slot, l1_table, l1_idx);
-            if (!l2_table_ptr)
+            UINT64 *l2_table_ptr = ensure_l2_table(is_kernel, l0_slot, l1_table, l1_idx, va);
+            if (!l2_table_ptr) {
+                Pl011RawPuts("[MAP] ensure_l2_table FAILED (2MB block path)\n");
                 return FALSE;
+            }
 
             if (!DESC_IS_TABLE(l2_table_ptr[l2_idx])) {
-                pte_replace_break_before_make(&l2_table_ptr[l2_idx], pa | PTE_TYPE_VALID |
-                    PTE_TYPE_BLOCK | attrs);
+                pte_replace_break_before_make(&l2_table_ptr[l2_idx],
+                                              pa | PTE_TYPE_VALID | PTE_TYPE_BLOCK | attrs,
+                                              va,
+                                              ARM64_BLOCK_SIZE_2M);
+                tlbi_va_entry(va, ARM64_BLOCK_SIZE_2M);
+                tlbi_needed = TRUE;
                 va += 0x200000ULL;
                 pa += 0x200000ULL;
                 continue;
@@ -1357,30 +1869,53 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
             BOOLEAN in_pool = is_kernel && (l0_idx >= ARM64_KSEG0_L0_INDEX) &&
                               (l0_idx < (ARM64_KSEG0_L0_INDEX + ARM64_KERNEL_L1_TABLES));
             UINT64 l0_slot = is_kernel ? (in_pool ? (l0_idx - ARM64_KSEG0_L0_INDEX) : l0_idx) : l0_idx;
-            UINT64 *l2_table_ptr = ensure_l2_table(is_kernel, l0_slot, l1_table, l1_idx);
-            if (!l2_table_ptr)
-                return FALSE;
 
-            UINT64 *l3_table_ptr = ensure_l3_table(is_kernel, l0_slot, l2_table_ptr, l2_idx);
-            if (!l3_table_ptr)
+            UINT64 *l2_table_ptr = ensure_l2_table(is_kernel, l0_slot, l1_table, l1_idx, va);
+            if (!l2_table_ptr) {
+                char buf[256];
+                RtlStringCbPrintfA(buf, sizeof(buf),
+                    "[MAP] ensure_l2_table FAILED l0_slot=%llu l1_idx=%llu\n",
+                    (unsigned long long)l0_slot,
+                    (unsigned long long)l1_idx);
+                Pl011RawPuts(buf);
                 return FALSE;
+            }
+
+            UINT64 *l3_table_ptr = ensure_l3_table(is_kernel, l0_slot, l2_table_ptr, l2_idx, va);
+            if (!l3_table_ptr) {
+                char buf[256];
+                RtlStringCbPrintfA(buf, sizeof(buf),
+                    "[MAP] ensure_l3_table FAILED l0_slot=%llu l2_idx=%llu flat_should_be=%llu\n",
+                    (unsigned long long)l0_slot,
+                    (unsigned long long)l2_idx,
+                    (unsigned long long)(l1_idx * 512 + l2_idx));
+                Pl011RawPuts(buf);
+                return FALSE;
+            }
 
             pte_replace_break_before_make(&l3_table_ptr[l3_idx],
-                      (pa & ~0xFFFULL) | PTE_TYPE_VALID | PTE_TYPE_PAGE | attrs);
+                                          (pa & ~0xFFFULL) | PTE_TYPE_VALID | PTE_TYPE_PAGE | attrs,
+                                          va,
+                                          PAGE_SIZE);
+            tlbi_va_entry(va, PAGE_SIZE);
+            tlbi_needed = TRUE;
         }
 
         va += PAGE_SIZE;
         pa += PAGE_SIZE;
     }
 
-    /* Global TLB invalidate for simplicity (safe during boot) */
-    TLBI_VMALLE1IS();
-    ARM64_DSB_ISH();
-    ARM64_ISB();
-    /* Conservative I-cache maintenance after creating new mappings (bootloader-safe) */
-    __asm__ volatile("ic iallu" ::: "memory");
-    ARM64_DSB_ISH();
-    ARM64_ISB();
+    /* Ensure all issued TLB invalidations are complete. */
+    if (tlbi_needed)
+    {
+        ARM64_DSB_ISH();
+        ARM64_ISB();
+        if (executable)
+        {
+            /* I-cache maintenance only when execution is permitted. */
+            arm64_icache_sync_range(flush_start, flush_end);
+        }
+    }
     return TRUE;
 }
 
@@ -1395,19 +1930,39 @@ Arm64MappingPlanInit(
     Plan->RequestCount = 0;
 }
 
-static UINT64
-Arm64MemoryAttributesForDescriptor(
+static BOOLEAN
+Arm64DescriptorIsExecutable(
     const FREELDR_MEMORY_DESCRIPTOR *Descriptor)
 {
     switch (Descriptor->MemoryType)
     {
+        case LoaderLoadedProgram:
+        case LoaderSystemCode:
+        case LoaderHalCode:
+        case LoaderBootDriver:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
+static UINT64
+Arm64MemoryAttributesForDescriptor(
+    const FREELDR_MEMORY_DESCRIPTOR *Descriptor,
+    BOOLEAN IdentityMap)
+{
+    UINT64 attrs;
+
+    switch (Descriptor->MemoryType)
+    {
         case LoaderFirmwarePermanent:
         case LoaderFirmwareTemporary:
-            return PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_DEVICE_nGnRnE) |
-                   PTE_BLOCK_OUTER_SHARE |
-                   PTE_BLOCK_AF |
-                   PTE_BLOCK_PXN |
-                   PTE_BLOCK_UXN;
+            attrs = PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_DEVICE_nGnRnE) |
+                    PTE_BLOCK_OUTER_SHARE |
+                    PTE_BLOCK_AF |
+                    PTE_BLOCK_PXN |
+                    PTE_BLOCK_UXN;
+            break;
 
         case LoaderFree:
         case LoaderLoadedProgram:
@@ -1418,10 +1973,19 @@ Arm64MemoryAttributesForDescriptor(
         case LoaderSystemBlock:
         case LoaderSpecialMemory:
         default:
-            return PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_NORMAL_WB) |
-                   PTE_BLOCK_INNER_SHARE |
-                   PTE_BLOCK_AF;
+            attrs = PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_NORMAL_WB) |
+                    PTE_BLOCK_INNER_SHARE |
+                    PTE_BLOCK_AF;
+            break;
     }
+
+    if (!Arm64DescriptorIsExecutable(Descriptor))
+        attrs |= PTE_BLOCK_PXN | PTE_BLOCK_UXN;
+
+    if (IdentityMap)
+        attrs |= PTE_BLOCK_NG;
+
+    return attrs;
 }
 
 static BOOLEAN
@@ -1704,14 +2268,30 @@ Arm64EnsureRangeTables(
         BOOLEAN in_pool = KernelSpace && (l0_idx >= ARM64_KSEG0_L0_INDEX) &&
                           (l0_idx < (ARM64_KSEG0_L0_INDEX + ARM64_KERNEL_L1_TABLES));
         UINT64 l0_slot = KernelSpace ? (in_pool ? (l0_idx - ARM64_KSEG0_L0_INDEX) : l0_idx) : l0_idx;
+
+        /* Debug: check if l0_slot is out of range */
+        if (KernelSpace && l0_slot >= 100 && l0_slot < ARM64_EXTRA_KERNEL_SLOTS + 100) {
+            char buf[256];
+            RtlStringCbPrintfA(buf, sizeof(buf),
+                "[EnsureRange] DEBUG: Va=0x%llx l0_idx=%llu in_pool=%d l0_slot=%llu ARM64_KSEG0_L0_INDEX=%llu\n",
+                (unsigned long long)Va,
+                (unsigned long long)l0_idx,
+                in_pool,
+                (unsigned long long)l0_slot,
+                (unsigned long long)ARM64_KSEG0_L0_INDEX);
+            Pl011RawPuts(buf);
+        }
+
         BOOLEAN l2_valid_before = FALSE;
         if (log_va)
         {
             l2_valid_before = DESC_VALID(l1_table[l1_idx]);
         }
-        UINT64 *l2_table_ptr = ensure_l2_table(KernelSpace, l0_slot, l1_table, l1_idx);
-        if (!l2_table_ptr)
+        UINT64 *l2_table_ptr = ensure_l2_table(KernelSpace, l0_slot, l1_table, l1_idx, Va);
+        if (!l2_table_ptr) {
+            Pl011RawPuts("[EnsureRange] ensure_l2_table FAILED\n");
             return FALSE;
+        }
 
         if (log_va)
         {
@@ -1730,9 +2310,18 @@ Arm64EnsureRangeTables(
             l3_valid_before = DESC_VALID(l2_table_ptr[l2_idx]);
         }
 
-        UINT64 *l3_table_ptr = ensure_l3_table(KernelSpace, l0_slot, l2_table_ptr, l2_idx);
-        if (!l3_table_ptr)
+        UINT64 *l3_table_ptr = ensure_l3_table(KernelSpace, l0_slot, l2_table_ptr, l2_idx, Va);
+        if (!l3_table_ptr) {
+            char buf[256];
+            RtlStringCbPrintfA(buf, sizeof(buf),
+                "[EnsureRange] ensure_l3_table FAILED l0_slot=%llu l2_idx=%llu l1_idx=%llu flat_should_be=%llu\n",
+                (unsigned long long)l0_slot,
+                (unsigned long long)l2_idx,
+                (unsigned long long)l1_idx,
+                (unsigned long long)(l1_idx * 512 + l2_idx));
+            Pl011RawPuts(buf);
             return FALSE;
+        }
 
         if (log_va)
         {
@@ -1769,7 +2358,8 @@ Arm64MappingPlanApply(
         const FREELDR_MEMORY_DESCRIPTOR *Descriptor = &Plan->MemoryMap[Index];
         UINT64 PhysicalStart = (UINT64)Descriptor->BasePage * PAGE_SIZE;
         UINT64 Size = (UINT64)Descriptor->PageCount * PAGE_SIZE;
-        UINT64 Attributes = Arm64MemoryAttributesForDescriptor(Descriptor);
+        UINT64 Attributes = Arm64MemoryAttributesForDescriptor(Descriptor,
+                                                               Target == Arm64MappingIdentity);
         const UINT64 map_limit = ((UINT64)MM_MAX_PAGE_LOADER_MAPPED << PAGE_SHIFT);
 
         if (Size == 0)
@@ -1824,11 +2414,7 @@ Arm64MappingPlanApply(
                                      Request->Size,
                                      Request->Attributes))
         {
-            ERR("ARM64: explicit mapping failed target=%d VA=0x%llx PA=0x%llx size=0x%llx\n",
-                Target,
-                (unsigned long long)Request->VirtualBase,
-                (unsigned long long)Request->PhysicalBase,
-                (unsigned long long)Request->Size);
+            Pl011RawPuts("[PLAN] map_region_hierarchical FAILED\n");
             return FALSE;
         }
     }
@@ -1844,10 +2430,7 @@ Arm64MappingPlanApply(
                                     Request->Size,
                                     (Target == Arm64MappingKernel)))
         {
-            ERR("ARM64: ensure tables failed target=%d VA=0x%llx size=0x%llx\n",
-                Target,
-                (unsigned long long)Request->VirtualBase,
-                (unsigned long long)Request->Size);
+            Pl011RawPuts("[PLAN] Arm64EnsureRangeTables FAILED\n");
             return FALSE;
         }
     }
@@ -1858,6 +2441,176 @@ Arm64MappingPlanApply(
     return TRUE;
 }
 
+static BOOLEAN
+Arm64UpdateMappingAttributes(ULONGLONG Va, ULONGLONG Size, UINT64 set_mask, UINT64 clear_mask)
+{
+    if (Size == 0)
+        return TRUE;
+
+    ULONGLONG start = ARM64_ALIGN_DOWN(Va, PAGE_SIZE);
+    ULONGLONG end = ARM64_ALIGN_UP(Va + Size, PAGE_SIZE);
+
+    while (start < end)
+    {
+        BOOLEAN kernel_va = (start >= ARM64_KSEG0_BASE);
+        UINT64 l0_idx = (start >> 39) & 0x1FF;
+        UINT64 l1_idx = (start >> 30) & 0x1FF;
+        UINT64 l2_idx = (start >> 21) & 0x1FF;
+        UINT64 l3_idx = (start >> 12) & 0x1FF;
+        UINT64 *l0_table = kernel_va ? arm64_kernel_l0_table : arm64_l0_page_table;
+        UINT64 *l1_table;
+        UINT64 l1_entry;
+
+        if (!l0_table)
+            return FALSE;
+
+        if (kernel_va)
+        {
+            if (l0_idx < ARM64_KSEG0_L0_INDEX ||
+                l0_idx >= (ARM64_KSEG0_L0_INDEX + ARM64_KERNEL_L1_TABLES))
+            {
+                start += PAGE_SIZE;
+                continue;
+            }
+        }
+        else if (l0_idx >= ARM64_USER_L1_TABLES)
+        {
+            start += PAGE_SIZE;
+            continue;
+        }
+
+        if (!DESC_VALID(l0_table[l0_idx]) || !DESC_IS_TABLE(l0_table[l0_idx]))
+        {
+            start += PAGE_SIZE;
+            continue;
+        }
+
+        if (kernel_va)
+        {
+            BOOLEAN in_pool = (l0_idx >= ARM64_KSEG0_L0_INDEX) &&
+                              (l0_idx < (ARM64_KSEG0_L0_INDEX + ARM64_KERNEL_L1_TABLES));
+            if (in_pool)
+                l1_table = arm64_kernel_l1_tables[l0_idx - ARM64_KSEG0_L0_INDEX];
+            else
+                l1_table = (UINT64 *)PA_TO_VA(l0_table[l0_idx] & ~0xFFFULL);
+        }
+        else
+        {
+            l1_table = arm64_l1_page_tables[l0_idx];
+        }
+
+        l1_entry = l1_table[l1_idx];
+        if (!DESC_VALID(l1_entry))
+        {
+            start += PAGE_SIZE;
+            continue;
+        }
+
+        BOOLEAN in_pool = kernel_va && (l0_idx >= ARM64_KSEG0_L0_INDEX) &&
+                          (l0_idx < (ARM64_KSEG0_L0_INDEX + ARM64_KERNEL_L1_TABLES));
+        UINT64 l0_slot = kernel_va ? (in_pool ? (l0_idx - ARM64_KSEG0_L0_INDEX) : l0_idx) : l0_idx;
+
+        UINT64 *l2_table_ptr = ensure_l2_table(kernel_va, l0_slot, l1_table, l1_idx, start);
+        if (!l2_table_ptr)
+            return FALSE;
+
+        if (!DESC_VALID(l2_table_ptr[l2_idx]))
+        {
+            start += PAGE_SIZE;
+            continue;
+        }
+
+        UINT64 *l3_table_ptr = ensure_l3_table(kernel_va, l0_slot, l2_table_ptr, l2_idx, start);
+        if (!l3_table_ptr)
+            return FALSE;
+
+        UINT64 *pte = &l3_table_ptr[l3_idx];
+        if (!DESC_IS_PAGE(*pte))
+        {
+            start += PAGE_SIZE;
+            continue;
+        }
+
+        UINT64 newval = (*pte & ~clear_mask) | set_mask;
+        if (newval != *pte)
+            pte_replace_break_before_make(pte, newval, start, PAGE_SIZE);
+
+        start += PAGE_SIZE;
+    }
+
+    return TRUE;
+}
+
+static VOID
+Arm64ApplySectionAttributes(ULONGLONG SectionBase,
+                            ULONGLONG SectionSize,
+                            BOOLEAN Executable,
+                            BOOLEAN Writable)
+{
+    UINT64 set_mask = 0;
+    UINT64 clear_mask = 0;
+
+    if (Executable)
+        clear_mask |= (PTE_BLOCK_PXN | PTE_BLOCK_UXN);
+    else
+        set_mask |= (PTE_BLOCK_PXN | PTE_BLOCK_UXN);
+
+    if (Writable)
+        clear_mask |= PTE_BLOCK_RO;
+    else
+        set_mask |= PTE_BLOCK_RO;
+
+    Arm64UpdateMappingAttributes(SectionBase, SectionSize, set_mask, clear_mask);
+
+    if (SectionBase < ARM64_KSEG0_BASE)
+    {
+        Arm64UpdateMappingAttributes(ARM64_KSEG0_BASE | SectionBase,
+                                     SectionSize,
+                                     set_mask,
+                                     clear_mask);
+    }
+}
+
+static VOID
+Arm64ApplyImageSectionProtections(VOID)
+{
+    for (PLIST_ENTRY entry = FrLdrModuleList.Flink;
+         entry != &FrLdrModuleList;
+         entry = entry->Flink)
+    {
+        PLDR_DATA_TABLE_ENTRY dte =
+            CONTAINING_RECORD(entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+        ULONGLONG image_base = (ULONGLONG)(ULONG_PTR)dte->DllBase;
+
+        if (!image_base || dte->SizeOfImage == 0)
+            continue;
+
+        PIMAGE_NT_HEADERS nt = RtlImageNtHeader((PVOID)(ULONG_PTR)image_base);
+        if (!nt)
+            continue;
+
+        ULONG headers_size = nt->OptionalHeader.SizeOfHeaders;
+        if (headers_size)
+            Arm64ApplySectionAttributes(image_base, headers_size, FALSE, FALSE);
+
+        PIMAGE_SECTION_HEADER section = IMAGE_FIRST_SECTION(nt);
+        for (ULONG i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section)
+        {
+            ULONG raw_size = section->SizeOfRawData;
+            ULONG virt_size = section->Misc.VirtualSize;
+            ULONGLONG sec_size = (virt_size > raw_size) ? virt_size : raw_size;
+            if (sec_size == 0)
+                continue;
+
+            ULONGLONG sec_base = image_base + section->VirtualAddress;
+            BOOLEAN exec = (section->Characteristics & IMAGE_SCN_MEM_EXECUTE) != 0;
+            BOOLEAN write = (section->Characteristics & IMAGE_SCN_MEM_WRITE) != 0;
+
+            Arm64ApplySectionAttributes(sec_base, sec_size, exec, write);
+        }
+    }
+}
+
 static VOID setup_pgtables(VOID)
 {
     ULONG MemoryMapSize;
@@ -1865,17 +2618,40 @@ static VOID setup_pgtables(VOID)
     ULONG i;
 
     TRACE("ARM64:  setup_pgtables BEGIN\n");
+    Pl011RawPuts("[PT] setup_pgtables: zeroing page tables\n");
+
+    if (!arm64_l0_page_table || !arm64_kernel_l0_table || !arm64_kuser_l1_table ||
+        !arm64_kuser_l2_table || !arm64_kuser_l3_table || !arm64_l1_page_tables ||
+        !arm64_kernel_l1_tables || !arm64_kernel_l2_tables || !arm64_kernel_l3_tables)
+    {
+        Pl011RawPuts("[PT] ERROR: One or more page table pointers are NULL!\n");
+        for (;;) __asm__ volatile("wfi");
+    }
 
     RtlZeroMemory(arm64_l0_page_table, ARM64_PT_BYTES);
+    Pl011RawPuts("[PT] Zeroed arm64_l0_page_table\n");
     RtlZeroMemory(arm64_l1_page_tables, ARM64_USER_L1_TABLES * ARM64_PT_BYTES);
+    Pl011RawPuts("[PT] Zeroed arm64_l1_page_tables\n");
     RtlZeroMemory(arm64_kernel_l0_table, ARM64_PT_BYTES);
+    Pl011RawPuts("[PT] Zeroed arm64_kernel_l0_table\n");
     RtlZeroMemory(arm64_kernel_l1_tables, ARM64_KERNEL_L1_TABLES * ARM64_PT_BYTES);
+    Pl011RawPuts("[PT] Zeroed arm64_kernel_l1_tables\n");
+    Pl011RawPuts("[PT] About to zero arm64_kuser_l1_table\n");
     RtlZeroMemory(arm64_kuser_l1_table, ARM64_PT_BYTES);
+    Pl011RawPuts("[PT] Zeroed arm64_kuser_l1_table\n");
+
+    Pl011RawPuts("[PT] About to zero arm64_kernel_l2_tables\n");
     RtlZeroMemory(arm64_kernel_l2_tables,
                   ARM64_KERNEL_L1_TABLES * ARM64_L2_TABLES_PER_L1 * ARM64_PT_BYTES);
+    Pl011RawPuts("[PT] Zeroed arm64_kernel_l2_tables\n");
+
+    Pl011RawPuts("[PT] About to zero arm64_kernel_l3_tables\n");
     RtlZeroMemory(arm64_kernel_l3_tables,
                   ARM64_KERNEL_L1_TABLES * ARM64_L2_TABLES_PER_L1 * ARM64_L3_TABLES_PER_L2
                   * ARM64_PT_BYTES);
+    Pl011RawPuts("[PT] Zeroed arm64_kernel_l3_tables\n");
+
+    Pl011RawPuts("[PT] Zeroing remaining page tables...\n");
     RtlZeroMemory(arm64_kuser_l2_table, ARM64_PT_BYTES);
     RtlZeroMemory(arm64_kuser_l3_table, ARM64_PT_BYTES);
     RtlZeroMemory(arm64_user_l2_tables,
@@ -1888,12 +2664,31 @@ static VOID setup_pgtables(VOID)
     RtlZeroMemory(arm64_user_l2_next_index, sizeof(arm64_user_l2_next_index));
     RtlZeroMemory(arm64_user_l3_next_index, sizeof(arm64_user_l3_next_index));
 
+    /* Zero extra kernel slot tables if allocated */
+    if (arm64_extra_l2_tables)
+    {
+        RtlZeroMemory(arm64_extra_l2_tables,
+                      ARM64_EXTRA_KERNEL_SLOTS * ARM64_EXTRA_L2_PER_SLOT * ARM64_PT_BYTES);
+    }
+    if (arm64_extra_l3_tables)
+    {
+        RtlZeroMemory(arm64_extra_l3_tables,
+                      ARM64_EXTRA_KERNEL_SLOTS * ARM64_EXTRA_L2_PER_SLOT * ARM64_EXTRA_L3_PER_L2
+                      * ARM64_PT_BYTES);
+    }
+    RtlZeroMemory(arm64_extra_l2_next_index, sizeof(arm64_extra_l2_next_index));
+    RtlZeroMemory(arm64_extra_l3_next_index, sizeof(arm64_extra_l3_next_index));
+    Pl011RawPuts("[PT] All page tables zeroed\n");
+
+    Pl011RawPuts("[PT] Setting up TTBR0 L0 entries\n");
     /* TTBR0 L0 */
     for (i = 0; i < ARM64_USER_L1_TABLES; i++) {
         pte_write(&arm64_l0_page_table[i],
                   (phys_from_ptr(&arm64_l1_page_tables[i][0]) | PTE_TABLE_ATTRS));
     }
+    Pl011RawPuts("[PT] TTBR0 L0 entries set\n");
 
+    Pl011RawPuts("[PT] Setting up TTBR1 L0 for KSEG0\n");
     /* TTBR1 L0 for KSEG0 */
     for (i = 0; i < ARM64_KERNEL_L1_TABLES; i++) {
         UINT64 l0_index = ARM64_KSEG0_L0_INDEX + i;
@@ -1904,7 +2699,9 @@ static VOID setup_pgtables(VOID)
                   l0_index, i, (unsigned long long)phys_from_ptr(&arm64_kernel_l1_tables[i][0]));
         }
     }
+    Pl011RawPuts("[PT] TTBR1 L0 entries set\n");
 
+    Pl011RawPuts("[PT] Setting up self-map\n");
     /* Seed the recursive self-map so the kernel can access PXE/PPE/PDE/PTE windows. */
     {
         const UINT64 self_idx = (ARM64_SELF_PXE_BASE >> ARM64_PXI_SHIFT) & ARM64_PX_MASK;
@@ -1927,12 +2724,15 @@ static VOID setup_pgtables(VOID)
         UartPutHex64(root_pa);
         UartPuts("\n");
 
+        Pl011RawPuts("[PT] Calling Arm64SetupSelfMapWindows\n");
         if (!Arm64SetupSelfMapWindows())
         {
             ERR("ARM64-SELFMAP: Failed to confirm self-map windows\n");
             UartPuts("ARM64-SELFMAP: ERROR - Self-map verification failed!\n");
         }
+        Pl011RawPuts("[PT] Arm64SetupSelfMapWindows completed - Self-map windows verified\n");
 
+        Pl011RawPuts("[PT] Verifying L0[493] self-map entry\n");
         {
             UINT64 verify_entry = arm64_kernel_l0_table[self_idx];
             if ((verify_entry & ~0xFFFULL) != root_pa) {
@@ -1945,12 +2745,15 @@ static VOID setup_pgtables(VOID)
                 TRACE("ARM64-SELFMAP: L0[493] verified OK after setup (0x%llx)\n",
                       (unsigned long long)verify_entry);
             }
+            Pl011RawPuts("[PT] L0[493] verification complete\n");
 
             /* Verify that kernel space L0[256] is a table descriptor, not a block */
+            Pl011RawPuts("[PT] Reading L0[256] entry\n");
             UINT64 l0_256_entry = arm64_kernel_l0_table[256];
             BOOLEAN is_table = DESC_IS_TABLE(l0_256_entry);
             BOOLEAN is_block = DESC_IS_BLOCK(l0_256_entry);
             BOOLEAN is_valid = DESC_VALID(l0_256_entry);
+            Pl011RawPuts("[PT] L0[256] entry read, printing info\n");
 
             UartPuts("ARM64-SELFMAP: L0[256] = 0x");
             UartPutHex64(l0_256_entry);
@@ -1967,12 +2770,25 @@ static VOID setup_pgtables(VOID)
                     (unsigned long long)l0_256_entry);
                 UartPuts("ARM64-SELFMAP: CRITICAL ERROR - L0[256] is not a table!\n");
             } else if (is_table) {
-                /* Also check L1[1] to ensure it's a table too */
-                UINT64 *l1_table = (UINT64 *)PA_TO_VA(l0_256_entry & ~0xFFFULL);
+                Pl011RawPuts("[PT] Checking L1[1] - using direct pointer (not PA dereference)\n");
+                /*
+                 * CRITICAL FIX: Use the direct C pointer to arm64_kernel_l1_tables[0]
+                 * instead of dereferencing the physical address from the PTE.
+                 *
+                 * During early boot, MMU may not be enabled or UEFI's page tables
+                 * may not have identity mapping for our page table memory.
+                 * Using PA_TO_VA() which is identity mapping would crash if the
+                 * physical address isn't actually mapped.
+                 *
+                 * L0[256] points to arm64_kernel_l1_tables[0] (slot 0 since 256 - 256 = 0)
+                 */
+                UINT64 *l1_table = arm64_kernel_l1_tables[0];  /* Direct pointer, not PA dereference */
+                Pl011RawPuts("[PT] Got L1 table pointer, reading L1[1]\n");
                 UINT64 l1_1_entry = l1_table[1];
                 BOOLEAN l1_is_table = DESC_IS_TABLE(l1_1_entry);
                 BOOLEAN l1_is_block = DESC_IS_BLOCK(l1_1_entry);
                 BOOLEAN l1_is_valid = DESC_VALID(l1_1_entry);
+                Pl011RawPuts("[PT] L1[1] entry read successfully\n");
 
                 UartPuts("ARM64-SELFMAP: L1[1] = 0x");
                 UartPutHex64(l1_1_entry);
@@ -1989,54 +2805,84 @@ static VOID setup_pgtables(VOID)
                         (unsigned long long)l1_1_entry);
                     UartPuts("ARM64-SELFMAP: CRITICAL ERROR - L1[1] should be table, not block!\n");
                 }
+                Pl011RawPuts("[PT] L1[1] verification complete\n");
             }
         }
+        Pl011RawPuts("[PT] Self-map verification block complete\n");
     }
 
-    /* Pre-seed TTBR1 L0 slots the kernel uses immediately (nonpaged pool & PFN DB). */
+    /* Pre-seed TTBR1 L0 slots for extra kernel regions using pre-allocated tables.
+     * This ensures we don't need Boot Services allocations during kernel mapping.
+     * The extra L0 slots (493, 494, 497, 502) map to:
+     *   - 493: Self-map (ARM64_SELF_PXE_BASE)
+     *   - 494: Hyperspace (ARM64_HYPERSPACE_BASE)
+     *   - 497: Paged Pool / Debug mapping
+     *   - 502: PFN Database
+     */
+    Pl011RawPuts("[PT] Pre-seeding TTBR1 L0 slots with extra kernel tables\n");
     {
-        const UINT64 needed_slots[] = { 0x1F1ULL, 0x1F5ULL, 0x1F6ULL };
-        for (UINTN i = 0; i < sizeof(needed_slots)/sizeof(needed_slots[0]); ++i)
+        for (UINT64 i = 0; i < ARM64_EXTRA_KERNEL_SLOTS; ++i)
         {
-            UINT64 idx = needed_slots[i];
+            UINT64 idx = arm64_extra_kernel_l0_slots[i];
             UINT64 e = arm64_kernel_l0_table[idx];
             if (!DESC_VALID(e))
             {
-                UINT64 *new_l1 = allocate_pt_pages(1, "TTBR1 L1 (seed)");
-                if (new_l1)
+                UINT64 *l1_table = arm64_extra_l1_tables[i];
+                if (l1_table)
                 {
-                    RtlZeroMemory(new_l1, PAGE_SIZE);
-                    UINT64 desc = phys_from_ptr(new_l1) | PTE_TABLE_ATTRS;
+                    RtlZeroMemory(l1_table, PAGE_SIZE);
+                    UINT64 desc = phys_from_ptr(l1_table) | PTE_TABLE_ATTRS;
                     pte_write(&arm64_kernel_l0_table[idx], desc);
-                    TRACE("ARM64: Seeded TTBR1 L0[%llu] with new L1 @PA 0x%llx\n",
+                    TRACE("ARM64: Seeded TTBR1 L0[%llu] with extra L1[%llu] @PA 0x%llx\n",
                           (unsigned long long)idx,
-                          (unsigned long long)phys_from_ptr(new_l1));
+                          (unsigned long long)i,
+                          (unsigned long long)phys_from_ptr(l1_table));
                 }
                 else
                 {
-                    ERR("ARM64: Failed to allocate seeded L1 for L0[%llu]\n",
-                        (unsigned long long)idx);
+                    /* Fallback to allocation if pre-allocated table not available */
+                    UINT64 *new_l1 = allocate_pt_pages(1, "TTBR1 L1 (extra seed)");
+                    if (new_l1)
+                    {
+                        RtlZeroMemory(new_l1, PAGE_SIZE);
+                        UINT64 desc = phys_from_ptr(new_l1) | PTE_TABLE_ATTRS;
+                        pte_write(&arm64_kernel_l0_table[idx], desc);
+                        arm64_extra_l1_tables[i] = new_l1;  /* Store for later use */
+                        TRACE("ARM64: Allocated TTBR1 L0[%llu] L1 @PA 0x%llx\n",
+                              (unsigned long long)idx,
+                              (unsigned long long)phys_from_ptr(new_l1));
+                    }
+                    else
+                    {
+                        ERR("ARM64: Failed to allocate seeded L1 for L0[%llu]\n",
+                            (unsigned long long)idx);
+                    }
                 }
             }
         }
-        TLBI_VMALLE1IS();
-        ARM64_DSB_ISH();
-        ARM64_ISB();
     }
+    Pl011RawPuts("[PT] TTBR1 L0 slots pre-seeded\n");
 
+    Pl011RawPuts("[PT] Getting UEFI memory map\n");
     MemoryMap = UefiMemGetMemoryMap(&MemoryMapSize);
+    Pl011RawPuts("[PT] Memory map retrieved\n");
     if (MemoryMap)
     {
+        Pl011RawPuts("[PT] Memory map valid, starting identity mapping\n");
         ARM64_MAPPING_PLAN Plan;
         ARM64_RESERVATION_HINTS Reservation = {0};
 
         /* ========== DIAGNOSTIC: Dump memory map for identity mapping ========== */
+        Pl011RawPuts("[PT] Skipping diagnostic block (TRACE unavailable post-EBS)\n");
+        #if 0  // Disabled - TRACE() doesn't work after ExitBootServices
         {
             UINT64 current_pc;
             UINT64 loader_start = 0, loader_end = 0;
             BOOLEAN loader_found = FALSE;
 
+            Pl011RawPuts("[PT] About to read current PC\n");
             __asm__ volatile("adr %0, ." : "=r"(current_pc));
+            Pl011RawPuts("[PT] PC read complete\n");
 
             TRACE("ARM64-DIAG: ============================================\n");
             TRACE("ARM64-DIAG: MEMORY MAP FOR IDENTITY MAPPING\n");
@@ -2146,9 +2992,12 @@ static VOID setup_pgtables(VOID)
 
             TRACE("ARM64-DIAG: ============================================\n");
         }
+        #endif  // End disabled diagnostic block
         /* ========== END DIAGNOSTIC ========== */
 
+        Pl011RawPuts("[PT] About to derive reservation hints\n");
         Arm64DeriveReservationHints(MemoryMap, MemoryMapSize, &Reservation);
+        Pl011RawPuts("[PT] Reservation hints derived\n");
 
         ULONGLONG pfnReserveBytes = Reservation.PfnBytes ? Reservation.PfnBytes : ARM64_PFN_DB_RESERVE_SIZE;
         ULONGLONG nonPagedReserveBytes = Reservation.NonPagedBytes ? Reservation.NonPagedBytes : ARM64_NONPAGED_RESERVE_SIZE;
@@ -2162,76 +3011,92 @@ static VOID setup_pgtables(VOID)
               (unsigned long long)pfnReserveBytes,
               (unsigned long long)nonPagedReserveBytes);
 
+        Pl011RawPuts("[PT] Initializing mapping plan\n");
         Arm64MappingPlanInit(&Plan, MemoryMap, MemoryMapSize);
+        Pl011RawPuts("[PT] Mapping plan initialized\n");
 
+        Pl011RawPuts("[PT] Queuing hyperspace tables\n");
         if (!Arm64MappingPlanEnsureTables(&Plan,
                                           ARM64_HYPERSPACE_BASE,
                                           ARM64_HYPERSPACE_BYTES))
         {
-            ERR("ARM64: Failed to queue hyperspace table reservation\n");
+            Pl011RawPuts("[PT] FAILED to queue hyperspace\n");
             return;
         }
+        Pl011RawPuts("[PT] Hyperspace queued\n");
 
+        Pl011RawPuts("[PT] Queuing debug mapping tables\n");
         if (!Arm64MappingPlanEnsureTables(&Plan,
                                           ARM64_DEBUG_MAPPING_BASE,
                                           ARM64_DEBUG_MAPPING_BYTES))
         {
-            ERR("ARM64: Failed to queue debug mapping reservation\n");
+            Pl011RawPuts("[PT] FAILED to queue debug mapping\n");
             return;
         }
+        Pl011RawPuts("[PT] Debug mapping queued\n");
 
+        Pl011RawPuts("[PT] Queuing PFN database tables\n");
         if (!Arm64MappingPlanEnsureTables(&Plan,
                                           ARM64_PFN_DB_BASE,
                                           pfnReserveBytes))
         {
-            ERR("ARM64: Failed to queue PFN database reservation\n");
+            Pl011RawPuts("[PT] FAILED to queue PFN database\n");
             return;
         }
+        Pl011RawPuts("[PT] PFN database queued\n");
 
+        Pl011RawPuts("[PT] Queuing nonpaged pool tables\n");
         if (!Arm64MappingPlanEnsureTables(&Plan,
                                           ARM64_PFN_DB_BASE + pfnReserveBytes,
                                           nonPagedReserveBytes))
         {
-            ERR("ARM64: Failed to queue nonpaged pool reservation\n");
+            Pl011RawPuts("[PT] FAILED to queue nonpaged pool\n");
             return;
         }
+        Pl011RawPuts("[PT] Nonpaged pool queued\n");
 
+        Pl011RawPuts("[PT] Queuing paged pool tables\n");
         if (!Arm64MappingPlanEnsureTables(&Plan,
                                           ARM64_PAGED_POOL_BASE,
                                           ARM64_PAGED_POOL_INIT_BYTES))
         {
-            ERR("ARM64: Failed to queue paged pool reservation\n");
+            Pl011RawPuts("[PT] FAILED to queue paged pool\n");
             return;
         }
+        Pl011RawPuts("[PT] Paged pool queued\n");
 
         /* Explicitly map PL011 UART for early debug (Identity) */
+        Pl011RawPuts("[PT] Mapping PL011 UART\n");
         {
             UINT64 uart_pa = 0x09000000;
             UINT64 uart_attrs = PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_DEVICE_nGnRnE) |
                                 PTE_BLOCK_OUTER_SHARE | PTE_BLOCK_AF | PTE_BLOCK_PXN | PTE_BLOCK_UXN;
             if (!map_region_hierarchical(uart_pa, uart_pa, PAGE_SIZE, uart_attrs))
             {
-                ERR("ARM64: Failed to identity map PL011 UART\n");
+                Pl011RawPuts("[PT] FAILED to map PL011 UART\n");
             }
             else
             {
-                TRACE("ARM64: PL011 UART identity mapped at 0x%llx\n", (unsigned long long)uart_pa);
+                Pl011RawPuts("[PT] PL011 UART mapped\n");
             }
         }
 
+        Pl011RawPuts("[PT] Applying identity mapping plan\n");
         if (!Arm64MappingPlanApply(&Plan, Arm64MappingIdentity))
         {
-            ERR("ARM64: Failed to apply identity mapping plan\n");
+            Pl011RawPuts("[PT] FAILED to apply identity mapping\n");
             return;
         }
+        Pl011RawPuts("[PT] Identity mapping applied\n");
 
+        Pl011RawPuts("[PT] Applying kernel mapping plan\n");
         if (!Arm64MappingPlanApply(&Plan, Arm64MappingKernel))
         {
-            ERR("ARM64: Kernel mapping plan failed (FATAL)\n");
-            UartPuts("ARM64: FATAL - Kernel mapping failed\n");
+            Pl011RawPuts("[PT] FATAL - Kernel mapping failed\n");
             for (;;)
                 __asm__ volatile("wfi");
         }
+        Pl011RawPuts("[PT] Kernel mapping applied\n");
     }
 
     TRACE("ARM64:  setup_pgtables END\n");
@@ -2358,7 +3223,7 @@ Arm64VerifyIdentityMapping(UINT64 va, UINT64 *out_pa, UINT64 *out_attrs)
 /*
  * Diagnostic: Dump L2 pool allocation state for debugging
  */
-static VOID
+static __attribute__((unused)) VOID
 Arm64DumpL2PoolState(VOID)
 {
     TRACE("ARM64-DIAG: L2 pool state (user/identity):\n");
@@ -2372,17 +3237,6 @@ Arm64DumpL2PoolState(VOID)
 }
 
 /* Direct PL011 UART for post-ExitBootServices debugging */
-static inline VOID Pl011RawPutc(char Ch)
-{
-    volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-    while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-    Uart[0] = Ch;
-}
-static inline VOID Pl011RawPuts(const char *S)
-{
-    while (*S) { if (*S == '\n') Pl011RawPutc('\r'); Pl011RawPutc(*S++); }
-}
-
 VOID Arm64EnablePageTables(VOID)
 {
     Pl011RawPuts("[PT] Arm64EnablePageTables START\n");
@@ -2395,6 +3249,10 @@ VOID Arm64EnablePageTables(VOID)
     UINT64 sctlr = 0;
 
     Pl011RawPuts("[PT] get_effective_el done\n");
+
+    if (!page_tables_initialized)
+        ensure_page_tables_initialized();
+    Arm64ApplyImageSectionProtections();
 
     /*
      * Windows loaders always run EL1; if we somehow arrived here in plain EL2
@@ -2654,18 +3512,27 @@ VOID Arm64EnablePageTables(VOID)
 static VOID ensure_page_tables_initialized(VOID)
 {
     if (page_tables_initialized)
+    {
+        ARM64_PT_LOG("[PT] Page tables already initialized\n");
         return;
+    }
+
+    Pl011RawPuts("[PT] Initializing page tables...\n");
 
     if (!allocate_page_table_memory())
     {
         ERR("ARM64: Page table allocation failed\n");
         UartPuts("ARM64: FATAL unable to allocate page table arena\n");
+        Pl011RawPuts("[PT] ERROR: allocate_page_table_memory FAILED\n");
         for (;;)
             __asm__ volatile("wfi");
     }
 
+    Pl011RawPuts("[PT] Page table memory allocated, calling setup_pgtables\n");
     setup_pgtables();
+    Pl011RawPuts("[PT] setup_pgtables completed\n");
     page_tables_initialized = TRUE;
+    Pl011RawPuts("[PT] Page tables initialized successfully\n");
 }
 
 /* ---------- Public MMU control ---------- */
@@ -2763,7 +3630,13 @@ VOID Arm64SetupKernelHandoffMMU(VOID)
             /* Also verify L0[256] and L1[1] are table descriptors for proper self-map operation */
             UINT64 l0_256_entry = arm64_kernel_l0_table[256];
             if (DESC_IS_TABLE(l0_256_entry)) {
-                UINT64 *l1_table = (UINT64 *)PA_TO_VA(l0_256_entry & ~0xFFFULL);
+                /*
+                 * CRITICAL: Use direct pointer to arm64_kernel_l1_tables[0]
+                 * since L0[256] maps to slot 0 (256 - ARM64_KSEG0_L0_INDEX = 0)
+                 * PA_TO_VA is identity and would try to dereference PA as VA,
+                 * which may fail if MMU is not enabled or no identity map exists.
+                 */
+                UINT64 *l1_table = arm64_kernel_l1_tables[0];  /* Direct pointer */
                 UINT64 l1_1_entry = l1_table[1];
                 UartPuts("ARM64-SELFMAP: Handoff check - L0[256]=0x");
                 UartPutHex64(l0_256_entry);
@@ -2895,7 +3768,14 @@ VOID Arm64SetupKernelHandoffMMU(VOID)
         {
             /* Check L1 */
             UINT64 l1_idx = (kernel_va >> 30) & 0x1FF;
-            UINT64 *l1_table = (UINT64 *)PA_TO_VA(l0_entry & ~0xFFFULL);
+            /*
+             * Use direct pointer for in-pool L1 tables instead of PA_TO_VA.
+             * l0_idx = 256 = ARM64_KSEG0_L0_INDEX, so slot = 0.
+             */
+            UINT64 slot = l0_idx - ARM64_KSEG0_L0_INDEX;
+            UINT64 *l1_table = (slot < ARM64_KERNEL_L1_TABLES) ?
+                               arm64_kernel_l1_tables[slot] :
+                               (UINT64 *)PA_TO_VA(l0_entry & ~0xFFFULL);
             UINT64 l1_entry = l1_table[l1_idx];
             TRACE("ARM64: L1[%lld]=0x%llx (valid=%d)\n",
                   l1_idx, l1_entry, (l1_entry & PTE_TYPE_VALID) ? 1 : 0);
@@ -3214,16 +4094,18 @@ VOID Arm64SetupKernelHandoffMMU(VOID)
                                  PTE_TYPE_VALID | PTE_TYPE_BLOCK |
                                  PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_NORMAL_WB) |
                                  PTE_BLOCK_INNER_SHARE | PTE_BLOCK_AF);
-                pte_replace_break_before_make(&arm64_kernel_l1_tables[slot][kernel_l1_idx], newval);
+                pte_replace_break_before_make(&arm64_kernel_l1_tables[slot][kernel_l1_idx],
+                                              newval,
+                                              kernel_virt_base,
+                                              ARM64_BLOCK_SIZE_1G);
 
                 /* Per-VA flush (all ASIDs) */
                 tlbi_vaae1is_by_va(kernel_virt_base);
                 ARM64_DSB_ISH();
                 ARM64_ISB();
-                /* Conservatively sync I-cache if this mapping may become executable soon */
-                __asm__ volatile("ic iallu" ::: "memory");
-                ARM64_DSB_ISH();
-                ARM64_ISB();
+                /* Sync I-cache if this mapping may become executable soon */
+                arm64_icache_sync_range(kernel_virt_base,
+                                        kernel_virt_base + ARM64_BLOCK_SIZE_1G);
             }
         }
         TRACE("ARM64: EL1 handoff tables primed\n");
@@ -3294,7 +4176,8 @@ VOID Arm64SetupKernelHandoffMMU(VOID)
  * Map a virtual range to a physical range.
  * - Requires 4KiB alignment for VA, PA, and Size.
  * - Uses block mappings where possible, otherwise 4KiB pages.
- * - Safe for use during early boot; heavy global TLB + I-cache maintenance.
+ * - Safe for use during early boot; range-based TLB invalidation and
+ *   conditional I-cache maintenance for executable mappings.
  */
 BOOLEAN Arm64MapVirtualMemory(ULONGLONG VirtualAddress,
                               ULONGLONG PhysicalAddress,
@@ -3316,6 +4199,8 @@ BOOLEAN Arm64MapVirtualMemory(ULONGLONG VirtualAddress,
     attrs = PTE_BLOCK_MEMTYPE(mem_type) | PTE_BLOCK_INNER_SHARE | PTE_BLOCK_AF;
     if (!executable)
         attrs |= PTE_BLOCK_PXN | PTE_BLOCK_UXN;
+    if (VirtualAddress < ARM64_KSEG0_BASE)
+        attrs |= PTE_BLOCK_NG;
 
     if (!map_region_hierarchical(VirtualAddress, PhysicalAddress, Size, attrs))
     {
@@ -3324,7 +4209,7 @@ BOOLEAN Arm64MapVirtualMemory(ULONGLONG VirtualAddress,
         return FALSE;
     }
 
-    /* map_region_hierarchical already does global TLBI + I-cache maintenance. */
+    /* map_region_hierarchical already does range-based TLBI + I-cache maintenance. */
     return TRUE;
 }
 
@@ -3375,9 +4260,12 @@ Arm64MapUserSharedDataPage(ULONGLONG VirtualAddress,
                   PTE_TYPE_PAGE |
                   attrs;
 
-    pte_replace_break_before_make(&arm64_kuser_l3_table[l3_idx], desc);
+    pte_replace_break_before_make(&arm64_kuser_l3_table[l3_idx],
+                                  desc,
+                                  VirtualAddress,
+                                  PAGE_SIZE);
 
-    TLBI_VMALLE1IS();
+    tlbi_va_entry(VirtualAddress, PAGE_SIZE);
     ARM64_DSB_ISH();
     ARM64_ISB();
 
@@ -3448,7 +4336,10 @@ BOOLEAN Arm64UnmapVirtualMemory(ULONGLONG VirtualAddress, ULONGLONG Size)
                 TRACE("ARM64: Cannot partially unmap 1GiB block at VA 0x%llx\n", va);
                 return FALSE;
             }
-            pte_replace_break_before_make(&l1_table[l1_idx], 0);
+            pte_replace_break_before_make(&l1_table[l1_idx],
+                                          0,
+                                          va,
+                                          ARM64_BLOCK_SIZE_1G);
             va += ARM64_BLOCK_SIZE_1G;
             continue;
         }
@@ -3468,7 +4359,10 @@ BOOLEAN Arm64UnmapVirtualMemory(ULONGLONG VirtualAddress, ULONGLONG Size)
                 TRACE("ARM64: Cannot partially unmap 2MiB block at VA 0x%llx\n", va);
                 return FALSE;
             }
-            pte_replace_break_before_make(&l2_table[l2_idx], 0);
+            pte_replace_break_before_make(&l2_table[l2_idx],
+                                          0,
+                                          va,
+                                          ARM64_BLOCK_SIZE_2M);
             va += ARM64_BLOCK_SIZE_2M;
             continue;
         }
@@ -3487,13 +4381,13 @@ BOOLEAN Arm64UnmapVirtualMemory(ULONGLONG VirtualAddress, ULONGLONG Size)
             return FALSE;
         }
 
-        pte_replace_break_before_make(&l3_table[l3_idx], 0);
+        pte_replace_break_before_make(&l3_table[l3_idx],
+                                      0,
+                                      va,
+                                      PAGE_SIZE);
         va += PAGE_SIZE;
     }
 
-    TLBI_VMALLE1IS();
-    ARM64_DSB_ISH();
-    ARM64_ISB();
     return TRUE;
 }
 
@@ -3628,19 +4522,10 @@ VOID Arm64FlushTlbRange(ULONGLONG VirtualAddress, ULONGLONG Size)
 {
     ULONGLONG end = VirtualAddress + Size;
 
-    if (Size >= ARM64_BLOCK_SIZE_1G)
-    {
-        TLBI_VMALLE1IS();
-    }
-    else
-    {
-        for (ULONGLONG addr = (VirtualAddress & ~0xFFFULL);
-             addr < end;
-             addr += 0x1000ULL)
-        {
-            tlbi_vaae1is_by_va(addr);
-        }
-    }
+    if (Size == 0)
+        return;
+
+    tlbi_va_range(VirtualAddress, end);
     ARM64_DSB_ISH();
     ARM64_ISB();
 }

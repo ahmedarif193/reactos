@@ -513,9 +513,6 @@ PeLdrpScanImportAddressTable(
     /* Go through each thunk in the table and bind it */
     while (((PIMAGE_THUNK_DATA)VaToPa(ThunkName))->u1.AddressOfData != 0)
     {
-        PIMAGE_THUNK_DATA ThunkDataPA = VaToPa(ThunkData);
-        ULONG_PTR BeforeValue = ThunkDataPA->u1.Function;
-
         /* Bind it */
         Success = PeLdrpBindImportName(ModuleListHead,
                                        DllBase,

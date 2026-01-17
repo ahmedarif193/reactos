@@ -27,7 +27,7 @@ KiArm64VectorLogOnly(
                                       "[arm64] PermVector: id=%lu esr=0x%lx far=%p",
                                       VectorId, Esr, (PVOID)Far)))
     {
-        KiArm64BootStageLog(Buf);
+        DPRINT1("%s\n", Buf);
     }
     DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_TRACE_LEVEL,
                "[arm64] PermVector: id=%lu esr=0x%lx far=%p\n",
@@ -55,7 +55,7 @@ KeInitExceptions(VOID)
                                           "[arm64] KeInitExceptions: VBAR -> %p (final vectors on)",
                                           (PVOID)(ULONG_PTR)Vbar)))
         {
-            KiArm64BootStageLog(Buf);
+            DPRINT1("%s\n", Buf);
         }
         KdpDprintf("[arm64] KeInitExceptions: VBAR -> %p\n", (PVOID)(ULONG_PTR)Vbar);
     }
@@ -68,7 +68,7 @@ KeInitExceptions(VOID)
                                           (ULONG)KiArm64SvcConfigured,
                                           (ULONG)KiArm64IrqFiqConfigured)))
         {
-            KiArm64BootStageLog(Buf);
+            DPRINT1("%s\n", Buf);
         }
     }
 }

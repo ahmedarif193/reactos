@@ -2,11 +2,11 @@
 
 /* Define to a function attribute for Microsoft hotpatch assembly prefix. */
 #ifndef DECLSPEC_HOTPATCH
-#if defined(_MSC_VER) || defined(__clang__)
-/* FIXME: https://llvm.org/bugs/show_bug.cgi?id=10212 */
-#define DECLSPEC_HOTPATCH
+#if defined(_MSC_VER) || defined(__clang__) || !(defined(__i386__) || defined(__x86_64__))
+ /* Only x86/amd64 GCC supports __ms_hook_prologue__; ignore elsewhere. */
+# define DECLSPEC_HOTPATCH
 #else
-#define DECLSPEC_HOTPATCH __attribute__((__ms_hook_prologue__))
+# define DECLSPEC_HOTPATCH __attribute__((__ms_hook_prologue__))
 #endif
 #endif /* DECLSPEC_HOTPATCH */
 

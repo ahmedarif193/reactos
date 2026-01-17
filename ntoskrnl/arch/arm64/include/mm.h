@@ -123,9 +123,15 @@
 #define MI_MAKE_DIRTY_PAGE(x)      ((x)->u.Hard.NotDirty = 0)
 #define MI_MAKE_CLEAN_PAGE(x)      ((x)->u.Hard.NotDirty = 1)
 #define MI_MAKE_ACCESSED_PAGE(x)   ((x)->u.Hard.Accessed = 1)
-#define MI_PAGE_DISABLE_CACHE(x)   ((x)->u.Hard.CacheType = 2)
-#define MI_PAGE_WRITE_THROUGH(x)   ((x)->u.Hard.CacheType = 1)
-#define MI_PAGE_WRITE_COMBINED(x)  ((x)->u.Hard.CacheType = 3)
+#define MI_SET_PTE_ATTR_INDEX(x, idx)            \
+    do                                           \
+    {                                            \
+        (x)->u.Hard.CacheType = (ULONG)((idx) & 0x3); \
+        (x)->u.Hard.OsAvailable2 = (ULONG)(((idx) >> 2) & 0x1); \
+    } while (0)
+#define MI_PAGE_DISABLE_CACHE(x)   MI_SET_PTE_ATTR_INDEX((x), 1)
+#define MI_PAGE_WRITE_THROUGH(x)   MI_SET_PTE_ATTR_INDEX((x), 1)
+#define MI_PAGE_WRITE_COMBINED(x)  MI_SET_PTE_ATTR_INDEX((x), 2)
 #define MI_IS_PAGE_LARGE(x)        ((x)->u.Hard.NotLargePage == 0)
 #define MI_IS_PAGE_WRITEABLE(x)    ((x)->u.Hard.Writable == 1)
 #define MI_IS_PAGE_COPY_ON_WRITE(x)((x)->u.Hard.CopyOnWrite == 1)
@@ -294,8 +300,39 @@ MiPdeToPxe(PMMPDE PointerPde)
 #define MiIsPteOnPxeBoundary(PointerPte) \
     ((((ULONG_PTR)PointerPte) & (PPE_PER_PAGE * PDE_PER_PAGE * PAGE_SIZE - 1)) == 0)
 
+/*
+ * MiIsPdeForAddressValid - Check if all page table levels are valid for an address.
+ *
+ * This function checks if the PXE, PPE, and PDE for a given address are all
+ * valid (present) in the page table hierarchy. It does NOT cause page faults
+ * and is safe to call during page fault handling.
+ *
+ * ARM64 uses 4 levels of page tables (PXE -> PPE -> PDE -> PTE), so we must
+ * check all three upper levels before accessing the PTE.
+ */
+FORCEINLINE
+BOOLEAN
+MiIsPdeForAddressValid(PVOID Address)
+{
+    return ((MiAddressToPxe(Address)->u.Hard.Valid) &&
+            (MiAddressToPpe(Address)->u.Hard.Valid) &&
+            (MiAddressToPde(Address)->u.Hard.Valid));
+}
+
+//
+// Decodes a Prototype PTE into the underlying PTE
+// Must shift the entire 64-bit value to ensure sign extension from bit 47
+//
 #define MiProtoPteToPte(x)                  \
-    (PMMPTE)(((LONG64)(x)->u.Long) >> 16)
+    (PMMPTE)(((LONG64)(x)->u.Long) >> 16) /* Sign extend 48 bits */
 
 #define MiSubsectionPteToSubsection(x)                              \
         (PMMPTE)((LONG64)(x)->u.Subsect.SubsectionAddress)
+
+//
+// ARM64-specific MM diagnostics and helper functions
+//
+VOID
+MiArm64CheckSystemViewSpacePte(
+    _In_z_ PCSTR Location
+);

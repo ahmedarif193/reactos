@@ -22,6 +22,10 @@
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(UI);
 
+#ifdef UEFIBOOT
+extern BOOLEAN UefiIsFramebufferReady(VOID);
+#endif
+
 /* No BGRT-aware gating in generic UI layer; refresh policy is handled in the
  * platform video backend (UEFI GOP) and via partial commits where needed. */
 
@@ -64,34 +68,39 @@ ULONG UiScreenHeight;   // Screen Height
  */
 UI_PROGRESS_BAR UiProgressBar = {{0}};
 
-UIVTBL UiVtbl =
-{
-    NoUiInitialize,
-    NoUiUnInitialize,
-    NoUiDrawBackdrop,
-    NoUiFillArea,
-    NoUiDrawShadow,
-    NoUiDrawBox,
-    NoUiDrawText,
-    NoUiDrawText2,
-    NoUiDrawCenteredText,
-    NoUiDrawStatusText,
-    NoUiUpdateDateTime,
-    NoUiMessageBox,
-    NoUiMessageBoxCritical,
-    NoUiDrawProgressBarCenter,
-    NoUiDrawProgressBar,
-    NoUiSetProgressBarText,
-    NoUiTickProgressBar,
-    NoUiClearProgressBar,
-    NoUiEditBox,
-    NoUiTextToColor,
-    NoUiTextToFillStyle,
-    NoUiFadeInBackdrop,
-    NoUiFadeOut,
-    NoUiDisplayMenu,
-    NoUiDrawMenu,
-};
+#define UI_NOUI_VTBL_INIT \
+{ \
+    NoUiInitialize, \
+    NoUiUnInitialize, \
+    NoUiDrawBackdrop, \
+    NoUiFillArea, \
+    NoUiDrawShadow, \
+    NoUiDrawBox, \
+    NoUiDrawText, \
+    NoUiDrawText2, \
+    NoUiDrawCenteredText, \
+    NoUiDrawStatusText, \
+    NoUiUpdateDateTime, \
+    NoUiMessageBox, \
+    NoUiMessageBoxCritical, \
+    NoUiDrawProgressBarCenter, \
+    NoUiDrawProgressBar, \
+    NoUiSetProgressBarText, \
+    NoUiTickProgressBar, \
+    NoUiClearProgressBar, \
+    NoUiEditBox, \
+    NoUiTextToColor, \
+    NoUiTextToFillStyle, \
+    NoUiFadeInBackdrop, \
+    NoUiFadeOut, \
+    NoUiDisplayMenu, \
+    NoUiDrawMenu, \
+}
+
+static const UIVTBL UiNoUiVtbl = UI_NOUI_VTBL_INIT;
+UIVTBL UiVtbl = UI_NOUI_VTBL_INIT;
+
+#undef UI_NOUI_VTBL_INIT
 
 BOOLEAN UiInitialize(BOOLEAN ShowUi)
 {
@@ -110,6 +119,20 @@ BOOLEAN UiInitialize(BOOLEAN ShowUi)
         }
         return TRUE;
     }
+
+#ifdef UEFIBOOT
+    if (!UefiIsFramebufferReady())
+    {
+        WARN("UEFI GOP framebuffer unavailable, forcing NoUI\n");
+        UiVtbl = UiNoUiVtbl;
+        if (!UiVtbl.Initialize())
+        {
+            MachVideoSetDisplayMode(NULL, FALSE);
+            return FALSE;
+        }
+        return TRUE;
+    }
+#endif
 
     TRACE("Initializing User Interface.\n");
     TRACE("Reading UI settings from [Display] section.\n");

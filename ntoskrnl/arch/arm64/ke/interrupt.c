@@ -16,8 +16,10 @@
 /* HAL extension: not yet declared in public headers for ARM64 */
 extern ULONG FASTCALL HalGetInterruptSource(VOID);
 
-/* Simple vector→KINTERRUPT chain table (INTIDs up to 1023 for GICv2/v3) */
-#define ARM64_MAX_INTID 1024
+/* Simple vector→KINTERRUPT chain table (SPIs + optional LPIs) */
+#define ARM64_LPI_BASE 8192
+#define ARM64_LPI_COUNT 1024
+#define ARM64_MAX_INTID (ARM64_LPI_BASE + ARM64_LPI_COUNT)
 #define ARM64_SGI_IPI 0
 #define ARM64_SGI_APC 1
 #define ARM64_SGI_DPC 2
@@ -33,6 +35,7 @@ static KINTERRUPT KiArm64DpcInterrupt;
 static KSPIN_LOCK KiArm64DpcLock;
 static KINTERRUPT KiArm64ApcInterrupt;
 static KSPIN_LOCK KiArm64ApcLock;
+static BOOLEAN KiArm64UseVirtualTimer = TRUE;
 
 BOOLEAN
 NTAPI
@@ -51,37 +54,170 @@ KiDeliverApc(
     _In_ PKEXCEPTION_FRAME ExceptionFrame,
     _In_ PKTRAP_FRAME TrapFrame);
 
+/*
+ * ARM64 Generic Timer register accessors.
+ *
+ * CNTP_* registers control the EL1 physical timer (PPI 30 non-secure, 29 secure).
+ * CNTV_* registers control the EL1 virtual timer (PPI 27).
+ *
+ * Timer control register (CTL) bits:
+ *   Bit 0 (ENABLE):  1 = timer enabled
+ *   Bit 1 (IMASK):   1 = interrupt masked (disabled)
+ *   Bit 2 (ISTATUS): read-only, 1 = timer condition met
+ *
+ * TVAL is a signed countdown value; when it reaches zero, ISTATUS is set.
+ * Writing TVAL also updates CVAL (compare value) = CNTPCT + TVAL.
+ *
+ * ISB is required after writing CTL to ensure the enable/disable takes effect
+ * before subsequent code executes. For TVAL writes during ISR reload, ISB
+ * is optional but recommended for deterministic timing.
+ */
+
 static __inline ULONGLONG KiArm64ReadCntFrq(void)
 {
-    ULONGLONG v; __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(v)); return v;
-}
-static __inline VOID KiArm64WriteCntpTval(ULONGLONG v)
-{
-    __asm__ __volatile__("msr cntp_tval_el0, %0" :: "r"(v));
-}
-static __inline VOID KiArm64WriteCntpCtl(ULONG v)
-{
-    __asm__ __volatile__("msr cntp_ctl_el0, %0" :: "r"((ULONGLONG)v));
+    ULONGLONG v;
+    __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(v));
+    return v;
 }
 
+static __inline ULONGLONG KiArm64ReadCntpct(void)
+{
+    ULONGLONG v;
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(v));
+    return v;
+}
+
+static __inline ULONGLONG KiArm64ReadCntvct(void)
+{
+    ULONGLONG v;
+    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(v));
+    return v;
+}
+
+static __inline ULONG KiArm64ReadCntpCtl(void)
+{
+    ULONGLONG v;
+    __asm__ __volatile__("mrs %0, cntp_ctl_el0" : "=r"(v));
+    return (ULONG)v;
+}
+
+static __inline ULONG KiArm64ReadCntvCtl(void)
+{
+    ULONGLONG v;
+    __asm__ __volatile__("mrs %0, cntv_ctl_el0" : "=r"(v));
+    return (ULONG)v;
+}
+
+static __inline VOID KiArm64WriteCntpTval(ULONGLONG v)
+{
+    __asm__ __volatile__("msr cntp_tval_el0, %0" :: "r"(v) : "memory");
+}
+
+static __inline VOID KiArm64WriteCntpCtl(ULONG v)
+{
+    /*
+     * ISB is required after writing CTL to ensure the timer enable/disable
+     * takes effect immediately. Without ISB, subsequent instructions may
+     * execute before the timer state change is visible.
+     */
+    __asm__ __volatile__("msr cntp_ctl_el0, %0; isb" :: "r"((ULONGLONG)v) : "memory");
+}
+
+static __inline VOID KiArm64WriteCntvTval(ULONGLONG v)
+{
+    __asm__ __volatile__("msr cntv_tval_el0, %0" :: "r"(v) : "memory");
+}
+
+static __inline VOID KiArm64WriteCntvCtl(ULONG v)
+{
+    /*
+     * ISB is required after writing CTL to ensure the timer enable/disable
+     * takes effect immediately. Without ISB, subsequent instructions may
+     * execute before the timer state change is visible.
+     */
+    __asm__ __volatile__("msr cntv_ctl_el0, %0; isb" :: "r"((ULONGLONG)v) : "memory");
+}
+
+/*
+ * KeUpdateSystemTime - Update system time and call scheduler tick.
+ * Declared in ntoskrnl/include/internal/ke.h
+ */
+VOID
+FASTCALL
+KeUpdateSystemTime(
+    IN PKTRAP_FRAME TrapFrame,
+    IN ULONG Increment,
+    IN KIRQL Irql);
+
+/* From ntoskrnl/ke/clock.c - default time increment (100ns units) */
+extern ULONG KeTimeIncrement;
+
+/*
+ * ARM64 Timer ISR - Called at CLOCK_LEVEL/DISPATCH_LEVEL on each tick.
+ *
+ * This is the heart of the scheduler tick. We must:
+ * 1. Reload the timer for the next tick
+ * 2. Call KeUpdateSystemTime to update time and schedule
+ *
+ * The timer runs at ~100 Hz (10ms per tick = 100,000 100ns units).
+ *
+ * NOTE: Do NOT use DPRINT1 or any debug print in this ISR!
+ * The print subsystem uses spinlocks and we can deadlock if the
+ * timer fires while HalInitSystem is holding the debug print lock.
+ */
 static BOOLEAN NTAPI
 KiArm64TimerIsr(
     _In_ PKINTERRUPT Interrupt,
     _In_opt_ PVOID ServiceContext)
 {
     ULONGLONG period = (ServiceContext) ? *(volatile ULONGLONG*)ServiceContext : KiArm64TimerPeriodTicks;
+    ULONG Increment;
     UNREFERENCED_PARAMETER(Interrupt);
 
-    /* Reload next tick */
-    KiArm64WriteCntpTval(period);
+    /* Reload next tick FIRST to minimize jitter */
+    if (KiArm64UseVirtualTimer)
+        KiArm64WriteCntvTval(period);
+    else
+        KiArm64WriteCntpTval(period);
 
-    /* Light heartbeat (very sparse to avoid spam) */
-    static volatile LONG tick;
-    LONG t = InterlockedIncrement(&tick);
-    if ((t & 0x3FF) == 1)
+    /*
+     * Calculate the time increment in 100-nanosecond units.
+     * Default: 10ms = 100,000 units (100 Hz timer).
+     * Use KeTimeIncrement if available, otherwise compute from period.
+     */
+    Increment = KeTimeIncrement;
+    if (Increment == 0)
     {
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_TRACE_LEVEL, "[arm64] Timer tick %ld\n", t);
+        /* Fallback: 10ms at 100 Hz */
+        Increment = 100000;
     }
+
+    /*
+     * Call KeUpdateSystemTime to:
+     * - Update SharedUserData->InterruptTime
+     * - Update SharedUserData->SystemTime
+     * - Update KeTickCount
+     * - Call KeUpdateRunTime for thread/process accounting
+     * - Check for timer expirations
+     * - Handle debugger break-in
+     *
+     * ARM64 FIX: Pass a non-NULL value for TrapFrame!
+     *
+     * KiCheckForTimerExpiration sets Prcb->TimerRequest = (ULONG_PTR)TrapFrame.
+     * If TrapFrame is NULL, TimerRequest is set to 0, which is interpreted as
+     * "no timer request pending" by KfLowerIrql and KiDispatchInterrupt.
+     *
+     * This causes waiting threads (KeDelayExecutionThread, KeWaitForSingleObject
+     * with timeout, etc.) to NEVER wake up because timer expirations are not
+     * processed.
+     *
+     * We pass -1 (0xFFFFFFFFFFFFFFFF) as a sentinel value to indicate that a timer
+     * request is pending but no trap frame is available. KiTimerExpiration will
+     * handle this correctly - it only uses TrapFrame for profiling which we don't
+     * support yet.
+     */
+    KeUpdateSystemTime((PKTRAP_FRAME)(ULONG_PTR)-1, Increment, CLOCK_LEVEL);
+
     return TRUE;
 }
 
@@ -120,16 +256,90 @@ KiArm64ApcIsr(
     return TRUE;
 }
 
+/*
+ * KiArm64StartTimer - Initialize and start the ARM64 generic timer.
+ *
+ * This function programs the architected timer to fire at 100 Hz (10ms period).
+ * The timer is used for the system clock tick, which drives:
+ *   - KeUpdateSystemTime (system time and interrupt time)
+ *   - Thread quantum expiration (scheduler preemption)
+ *   - Timer DPC expiration
+ *   - Profiling (if enabled)
+ *
+ * We use the virtual timer (CNTV) by default as it's always accessible from EL1,
+ * even under a hypervisor. The physical timer (CNTP) may require secure world
+ * or hypervisor permissions on some platforms.
+ *
+ * Timer configuration:
+ *   CNTFRQ_EL0: Counter frequency in Hz (typically 1-100 MHz)
+ *   CNTV_TVAL_EL0: Countdown value (fires when reaches 0)
+ *   CNTV_CTL_EL0: Control (bit 0=ENABLE, bit 1=IMASK)
+ *
+ * For 100 Hz timer with 24.576 MHz counter: TVAL = 24576000 / 100 = 245760 ticks
+ * For 100 Hz timer with 100 MHz counter:    TVAL = 100000000 / 100 = 1000000 ticks
+ */
 static VOID
 KiArm64StartTimer(VOID)
 {
-    ULONGLONG frq = KiArm64ReadCntFrq();
-    if (frq == 0) frq = 100000000ULL; /* safe default */
-    /* Target ~100 Hz */
+    ULONGLONG frq;
+    ULONG ctl;
+
+    /* Read counter frequency from CNTFRQ_EL0 */
+    frq = KiArm64ReadCntFrq();
+
+    /*
+     * Validate frequency - if zero or unreasonable, use a safe default.
+     * QEMU virt uses 62.5 MHz (62500000), real hardware varies widely:
+     *   - Cortex-A53/A72: typically 19.2 MHz or 24.576 MHz
+     *   - Apple M1: 24 MHz
+     *   - QEMU: 62.5 MHz or 1 GHz depending on configuration
+     */
+    if (frq == 0 || frq > 10000000000ULL)
+    {
+        DPRINT1("[arm64] CNTFRQ_EL0 invalid (0x%llx), using 100 MHz default\n", frq);
+        frq = 100000000ULL;
+    }
+
+    /*
+     * Calculate ticks per 10ms period (100 Hz).
+     * This gives us the reload value for TVAL.
+     */
     KiArm64TimerPeriodTicks = frq / 100ULL;
-    KiArm64WriteCntpTval(KiArm64TimerPeriodTicks);
-    /* Enable and unmask: ENABLE=1, IMASK=0 */
-    KiArm64WriteCntpCtl(1);
+
+    DPRINT1("[arm64] Timer: freq=%llu Hz, period=%llu ticks (10ms), using %s timer\n",
+            frq, KiArm64TimerPeriodTicks,
+            KiArm64UseVirtualTimer ? "virtual (CNTV)" : "physical (CNTP)");
+
+    if (KiArm64UseVirtualTimer)
+    {
+        /*
+         * Configure virtual timer (CNTV):
+         * 1. Set countdown value in CNTV_TVAL_EL0
+         * 2. Enable timer with ENABLE=1, IMASK=0 in CNTV_CTL_EL0
+         */
+        KiArm64WriteCntvTval(KiArm64TimerPeriodTicks);
+        KiArm64WriteCntvCtl(1); /* ENABLE=1, IMASK=0 */
+
+        /* Verify configuration */
+        ctl = KiArm64ReadCntvCtl();
+        DPRINT1("[arm64] CNTV_CTL_EL0 = 0x%lx (ENABLE=%lu, IMASK=%lu, ISTATUS=%lu)\n",
+                ctl, ctl & 1, (ctl >> 1) & 1, (ctl >> 2) & 1);
+    }
+    else
+    {
+        /*
+         * Configure physical timer (CNTP):
+         * 1. Set countdown value in CNTP_TVAL_EL0
+         * 2. Enable timer with ENABLE=1, IMASK=0 in CNTP_CTL_EL0
+         */
+        KiArm64WriteCntpTval(KiArm64TimerPeriodTicks);
+        KiArm64WriteCntpCtl(1); /* ENABLE=1, IMASK=0 */
+
+        /* Verify configuration */
+        ctl = KiArm64ReadCntpCtl();
+        DPRINT1("[arm64] CNTP_CTL_EL0 = 0x%lx (ENABLE=%lu, IMASK=%lu, ISTATUS=%lu)\n",
+                ctl, ctl & 1, (ctl >> 1) & 1, (ctl >> 2) & 1);
+    }
 }
 
 CODE_SEG("INIT")
@@ -138,33 +348,6 @@ NTAPI
 KeInitInterrupts(VOID)
 {
     KeInitializeSpinLock(&KiArm64IntTableLock);
-    {
-        CHAR Buf[96];
-        CHAR Buf2[160];
-        if (NT_SUCCESS(RtlStringCbPrintfA(Buf, sizeof(Buf),
-                                          "[arm64] KeInitInterrupts: entry Pcr=%p Irql=%lu",
-                                          KeArm64CurrentPcr,
-                                          (ULONG)KeArm64CurrentIrql)))
-        {
-            KiArm64BootStageLog(Buf);
-        }
-
-        if (NT_SUCCESS(RtlStringCbPrintfA(Buf2, sizeof(Buf2),
-                                          "[arm64] KeInitInterrupts: KINTERRUPT sizeof=%lu Offsets: ListEntry=%lu ServiceRoutine=%lu ServiceContext=%lu ActualLock=%lu Vector=%lu Irql=%lu Mode=%lu Connected=%lu",
-                                          (ULONG)sizeof(KINTERRUPT),
-                                          (ULONG)FIELD_OFFSET(KINTERRUPT, InterruptListEntry),
-                                          (ULONG)FIELD_OFFSET(KINTERRUPT, ServiceRoutine),
-                                          (ULONG)FIELD_OFFSET(KINTERRUPT, ServiceContext),
-                                          (ULONG)FIELD_OFFSET(KINTERRUPT, ActualLock),
-                                          (ULONG)FIELD_OFFSET(KINTERRUPT, Vector),
-                                          (ULONG)FIELD_OFFSET(KINTERRUPT, Irql),
-                                          (ULONG)FIELD_OFFSET(KINTERRUPT, Mode),
-                                          (ULONG)FIELD_OFFSET(KINTERRUPT, Connected))))
-        {
-            KiArm64BootStageLog(Buf2);
-        }
-    }
-    KiArm64BootStageLog("[arm64] KeInitInterrupts: HAL/GIC init");
 
     /* Wire SGIs for IPI/APC/DPC */
     KeInitializeSpinLock(&KiArm64IpiLock);
@@ -209,40 +392,64 @@ KeInitInterrupts(VOID)
                           FALSE);
     (VOID)KeConnectInterrupt(&KiArm64ApcInterrupt);
 
-    /* Wire the generic timer (PPI INTID 30) for a periodic heartbeat */
+    /*
+     * Wire the generic timer (PPI) for a periodic clock tick.
+     *
+     * ARM64 Generic Timer PPIs:
+     *   INTID 29 = Secure EL1 Physical Timer (CNTP_S)
+     *   INTID 30 = Non-secure EL1 Physical Timer (CNTP_NS)
+     *   INTID 27 = Virtual Timer (CNTV)
+     *   INTID 26 = Hypervisor Timer (CNTHP)
+     *
+     * We use the virtual timer (27) by default as it's always available
+     * in EL1, or the physical timer (30) in secure environments.
+     *
+     * The clock ISR runs at CLOCK_LEVEL (13) which is higher than device
+     * interrupts but lower than IPI_LEVEL. This allows the scheduler
+     * tick to preempt device ISRs for accurate timing.
+     */
     {
-        KiArm64BootStageLog("[arm64] KeInitInterrupts: before KeInitializeInterrupt(timer)");
+        ULONG TimerIntId = KiArm64UseVirtualTimer ? 27 : 30;
+
+        DPRINT1("[arm64] KeInitInterrupts: Connecting timer PPI %lu at CLOCK_LEVEL (%u)\n",
+                TimerIntId, CLOCK_LEVEL);
+
         KeInitializeSpinLock(&KiArm64TimerLock);
         KeInitializeInterrupt(&KiArm64TimerInterrupt,
                               KiArm64TimerIsr,
                               &KiArm64TimerPeriodTicks,
                               &KiArm64TimerLock,
-                              30, /* PPI: non-secure physical timer */
-                              DISPATCH_LEVEL,
-                              DISPATCH_LEVEL,
+                              TimerIntId,
+                              CLOCK_LEVEL,
+                              CLOCK_LEVEL,
                               LevelSensitive,
                               FALSE,
                               0,
                               FALSE);
-        KiArm64BootStageLog("[arm64] KeInitInterrupts: before KeConnectInterrupt(timer)");
         if (KeConnectInterrupt(&KiArm64TimerInterrupt))
         {
+            ULONGLONG daif_before, daif_after;
+
+            DPRINT1("[arm64] KeInitInterrupts: Timer interrupt connected to PPI %lu, starting timer\n",
+                    TimerIntId);
             KiArm64StartTimer();
-            /* Ensure IRQs are unmasked at the CPU (clear I bit) */
+
+            /*
+             * Enable IRQ delivery at the CPU by clearing the I bit in DAIF.
+             * This allows the GIC to deliver interrupts to this CPU.
+             * The timer will now start firing at 100 Hz.
+             */
+            __asm__ __volatile__("mrs %0, daif" : "=r"(daif_before));
             __asm__ __volatile__("msr daifclr, #2" ::: "memory");
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_TRACE_LEVEL,
-                       "[arm64] Timer configured: CNTFRQ=%llu period=%llu ticks (INTID=30)\n",
-                       KiArm64ReadCntFrq(),
-                       KiArm64TimerPeriodTicks);
-            KiArm64BootStageLog("[arm64] KeInitInterrupts: timer connected & enabled");
+            __asm__ __volatile__("isb" ::: "memory");
+            __asm__ __volatile__("mrs %0, daif" : "=r"(daif_after));
+            DPRINT1("[arm64] KeInitInterrupts: IRQs enabled (DAIF: 0x%llx -> 0x%llx)\n",
+                    daif_before, daif_after);
         }
         else
         {
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_ERROR_LEVEL,
-                       "[arm64] Timer connect failed (INTID=30)\n");
-            KiArm64BootStageLog("[arm64] KeInitInterrupts: timer connect failed");
+            DPRINT1("[arm64] KeInitInterrupts: FAILED to connect timer interrupt PPI %lu!\n",
+                    TimerIntId);
         }
     }
 }
@@ -339,7 +546,8 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
     }
 
     Begun = HalBeginSystemInterrupt(RequestIrql, IntId, &OldIrql);
-    if (!Begun) return;
+    if (!Begun)
+        return;
 
     if (Head == NULL)
     {
@@ -347,8 +555,9 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
         return;
     }
 
-    /* Dispatch to kernel’s ISR chain */
+    /* Dispatch to kernel's ISR chain */
     KiArm64DispatchChain(IntId, OldIrql);
+
     UNREFERENCED_PARAMETER(VectorId);
 }
 
@@ -417,7 +626,7 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
                                       (ULONG)Interrupt->Mode,
                                       (ULONG)Interrupt->ShareVector)))
     {
-        KiArm64BootStageLog(Buf);
+        DPRINT1("%s\n", Buf);
     }
 
     if (NT_SUCCESS(RtlStringCbPrintfA(Buf2,
@@ -425,7 +634,7 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
                                       "[arm64] KeConnectInterrupt: before KeAcquireSpinLock Vec=%lu",
                                       (ULONG)Vector)))
     {
-        KiArm64BootStageLog(Buf2);
+        DPRINT1("%s\n", Buf2);
     }
 
     KeAcquireSpinLock(&KiArm64IntTableLock, &OldIrql);
@@ -442,10 +651,10 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
                                           (ULONG)Interrupt->Irql,
                                           (ULONG)Interrupt->Mode)))
         {
-            KiArm64BootStageLog(Buf);
+            DPRINT1("%s\n", Buf);
         }
         HalEnableSystemInterrupt(Vector, Interrupt->Irql, Interrupt->Mode);
-        KiArm64BootStageLog("[arm64] KeConnectInterrupt: HalEnableSystemInterrupt returned");
+        DPRINT1("%s\n", "[arm64] KeConnectInterrupt: HalEnableSystemInterrupt returned");
         Interrupt->Connected = TRUE;
     }
     else
@@ -468,7 +677,7 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
                                       (ULONG)Vector,
                                       (ULONG)OldIrql)))
     {
-        KiArm64BootStageLog(Buf2);
+        DPRINT1("%s\n", Buf2);
     }
 
     KeReleaseSpinLock(&KiArm64IntTableLock, OldIrql);
@@ -478,7 +687,7 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
                                       "[arm64] KeConnectInterrupt: after KeReleaseSpinLock Vec=%lu",
                                       (ULONG)Vector)))
     {
-        KiArm64BootStageLog(Buf2);
+        DPRINT1("%s\n", Buf2);
     }
     if (NT_SUCCESS(RtlStringCbPrintfA(Buf,
                                       sizeof(Buf),
@@ -486,7 +695,7 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
                                       (ULONG)Vector,
                                       (ULONG)Interrupt->Connected)))
     {
-        KiArm64BootStageLog(Buf);
+        DPRINT1("%s\n", Buf);
     }
     return Interrupt->Connected;
 }

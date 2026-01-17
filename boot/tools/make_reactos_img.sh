@@ -145,9 +145,12 @@ BOOT_DOSMBR="$BUILD_ROOT/boot/freeldr/bootsect/dosmbr.bin"
 BOOT_FAT16="$BUILD_ROOT/boot/freeldr/bootsect/fat.bin"
 BOOT_FAT32="$BUILD_ROOT/boot/freeldr/bootsect/fat32.bin"
 
-for f in "$BOOT_DOSMBR" "$BOOT_FAT16" "$BOOT_FAT32"; do
-  [[ -f "$f" ]] || err "Missing build artifact: $f"
-done
+# Only check for BIOS boot sectors if not in UEFI-only mode
+if (( UEFI_ONLY == 0 )); then
+  for f in "$BOOT_DOSMBR" "$BOOT_FAT16" "$BOOT_FAT32"; do
+    [[ -f "$f" ]] || err "Missing build artifact: $f"
+  done
+fi
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT

@@ -659,6 +659,30 @@ WinLdrScanRegistry(
     if (!Success)
         goto Quit;
 
+    /* ARM64 DEBUG: Dump boot drivers found by CmpFindDrivers */
+    {
+        ULONG DriverCount = 0;
+        PLIST_ENTRY Entry;
+        PBOOT_DRIVER_NODE DriverNode;
+
+        TRACE("[arm64] WinLdrScanRegistry: After CmpFindDrivers, BootDriverListHead=%p\n",
+              BootDriverListHead);
+
+        for (Entry = BootDriverListHead->Flink;
+             Entry != BootDriverListHead;
+             Entry = Entry->Flink)
+        {
+            DriverNode = CONTAINING_RECORD(Entry, BOOT_DRIVER_NODE, ListEntry.Link);
+            DriverCount++;
+            TRACE("[arm64] BootDriver[%lu]: Name='%wZ' FilePath='%wZ' Group='%wZ'\n",
+                  DriverCount,
+                  &DriverNode->Name,
+                  &DriverNode->ListEntry.FilePath,
+                  &DriverNode->Group);
+        }
+        TRACE("[arm64] WinLdrScanRegistry: Total %lu boot drivers enumerated\n", DriverCount);
+    }
+
     /* Sort by group/tag */
     Success = CmpSortDriverList(SystemHive,
                                 HKEY_TO_HCI(CurrentControlSetKey),

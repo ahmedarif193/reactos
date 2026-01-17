@@ -38,4 +38,10 @@
 
 #endif /* ABI_ALIGN_FUN */
 
+/* force_align_arg_pointer is x86-specific; disable on other architectures. */
+#if defined(__aarch64__) || defined(_M_ARM64) || defined(__arm__)
+#undef attribute_align_arg
+#define attribute_align_arg
+#endif
+
 #endif /* MPG123_H_ABI_ALIGN */

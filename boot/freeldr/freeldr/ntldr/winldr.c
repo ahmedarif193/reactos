@@ -1441,18 +1441,55 @@ LoadAndBootWindows(
         Status = RamDiskInitialize(FALSE, BootOptions, SystemPartition);
         if (Status != ESUCCESS)
         {
-            if (FileName && (FileNameLength >= 7))
+            if (!FileName && Status == ENOMEM)
             {
-                FileName += 7;
-                FileNameLength -= 7;
-                UiMessageBox("Failed to load RAM disk file '%.*s'",
-                             FileNameLength, FileName);
+                /* Fallback to read-only media when RAM disk allocation fails. */
+                static const PCSTR OptionsToRemove[] =
+                {
+                    "/RDRAMSIZE=",
+                    "/RDPATH=",
+                    "/RDIMAGEOFFSET=",
+                    "/RDIMAGELENGTH=",
+                    NULL
+                };
+                PCSTR SubPath;
+                CHAR SubPathCopy[sizeof(BootPath)];
+
+                WARN("RAM disk allocation failed; continuing with read-only media.\n");
+                UiDrawStatusText("RAM disk allocation failed; using read-only media.");
+
+                NtLdrUpdateLoadOptions(BootOptions,
+                                       sizeof(BootOptions),
+                                       TRUE,
+                                       NULL,
+                                       OptionsToRemove);
+
+                SubPath = strchr(BootPath, '\\');
+                if (!SubPath)
+                    SubPath = "\\";
+                RtlStringCbCopyA(SubPathCopy, sizeof(SubPathCopy), SubPath);
+
+                RtlStringCbCopyA(BootPath, sizeof(BootPath), SystemPartition);
+                if (SubPathCopy[0] != '\\' && SubPathCopy[0] != '/')
+                    RtlStringCbCatA(BootPath, sizeof(BootPath), "\\");
+                RtlStringCbCatA(BootPath, sizeof(BootPath), SubPathCopy);
+                TRACE("BootPath fallback to '%s'\n", BootPath);
             }
             else
             {
-                UiMessageBox("Failed to expand LiveCD into RAM.");
+                if (FileName && (FileNameLength >= 7))
+                {
+                    FileName += 7;
+                    FileNameLength -= 7;
+                    UiMessageBox("Failed to load RAM disk file '%.*s'",
+                                 FileNameLength, FileName);
+                }
+                else
+                {
+                    UiMessageBox("Failed to expand LiveCD into RAM.");
+                }
+                return Status;
             }
-            return Status;
         }
         else if (RamDiskGetRequestedSize() != 0)
         {

@@ -46,6 +46,10 @@ extern REACTOS_INTERNAL_BGCONTEXT framebufferData;
 /* Provided elsewhere */
 extern char __ImageBase;
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+VOID Arm64InitializeExceptions(VOID);
+#endif
+
 /* From your other unit */
 extern ULONG
 AddMemoryDescriptor(
@@ -69,9 +73,6 @@ static PFREELDR_MEMORY_DESCRIPTOR CachedFreeldrMem;
 static ULONG CachedFreeldrCount;
 static BOOLEAN CachedMemoryMapValid;
 static BOOLEAN BootServicesExitedFlag;
-
-/* Track allocated page count for correct FreePages call */
-static UINTN EfiMemoryMapAllocatedPages = 0;
 
 /* Declared elsewhere */
 void _exituefi(VOID);
@@ -146,31 +147,22 @@ PUEFI_LoadMemoryMap(
 
         if (EfiMemoryMap)
         {
-            /* Free the previously allocated pages using the tracked page count */
-            GlobalSystemTable->BootServices->FreePages((EFI_PHYSICAL_ADDRESS)(UINTN)EfiMemoryMap,
-                                                       EfiMemoryMapAllocatedPages);
+            GlobalSystemTable->BootServices->FreePool(EfiMemoryMap);
             EfiMemoryMap = NULL;
-            EfiMemoryMapAllocatedPages = 0;
         }
 
-        /* Use AllocatePages for guaranteed 4KB alignment (required by some firmware) */
-        UINTN Pages = (Capacity + 4095) / 4096;
-        EFI_PHYSICAL_ADDRESS AllocAddr = 0;
-        Status = GlobalSystemTable->BootServices->AllocatePages(AllocateAnyPages,
-                                                                EfiLoaderData,
-                                                                Pages,
-                                                                &AllocAddr);
-        if (EFI_ERROR(Status))
+        Status = GlobalSystemTable->BootServices->AllocatePool(EfiLoaderData,
+                                                               Capacity,
+                                                               (VOID **)&EfiMemoryMap);
+        if (EFI_ERROR(Status) || !EfiMemoryMap)
         {
-            TRACE("AllocatePages(EfiMemoryMap, %lu pages) failed: %lx\n",
-                  (UINTN)Pages, (UINTN)Status);
+            TRACE("AllocatePool(EfiMemoryMap, %lu) failed: %lx\n",
+                  (UINTN)Capacity, (UINTN)Status);
             UiMessageBoxCritical("Unable to initialize memory manager.");
             /* Hard stop: callers assume a valid map after return. */
             FrLdrBugCheckWithMessage(0, __FILE__, __LINE__,
-                                     "AllocatePages for memory map failed: %lx", (UINTN)Status);
+                                     "AllocatePool for memory map failed: %lx", (UINTN)Status);
         }
-        EfiMemoryMap = (EFI_MEMORY_DESCRIPTOR *)(UINTN)AllocAddr;
-        EfiMemoryMapAllocatedPages = Pages;  /* Track what we actually allocated */
 
         UINTN TmpSize = Capacity;
         Status = GlobalSystemTable->BootServices->GetMemoryMap(&TmpSize,
@@ -328,19 +320,26 @@ UefiMemGetMemoryMap(_Out_ ULONG *MemoryMapSize /* OUT: number of entries */)
     {
         TYPE_OF_MEMORY Mt = UefiConvertToFreeldrDesc(MapEntry->Type);
 
-        /* Try to reserve ConventionalMemory so firmware doesn’t reuse it later. */
+        /* Try to reserve ConventionalMemory so firmware doesn't reuse it later.
+         *
+         * NOTE: If pinning fails, we continue treating the memory as LoaderFree.
+         * The AllocatePages call may fail for various reasons (memory already
+         * allocated by us, firmware quirks, overlapping regions, etc.) that don't
+         * mean the memory is truly unavailable. Demoting to LoaderFirmwareTemporary
+         * on failure was causing ARM64 UEFI systems (like QEMU virt) to have
+         * significantly reduced usable memory, breaking ramdisk allocation.
+         *
+         * The pinning is a best-effort optimization to prevent firmware from
+         * reusing memory between GetMemoryMap and ExitBootServices. If it fails,
+         * we accept a small race window rather than losing the memory entirely.
+         */
         if (Mt == LoaderFree)
         {
-            EFI_STATUS Res =
-                GlobalSystemTable->BootServices->AllocatePages(AllocateAddress,
-                                                               EfiLoaderData,
-                                                               MapEntry->NumberOfPages,
-                                                               &MapEntry->PhysicalStart);
-            if (EFI_ERROR(Res))
-            {
-                /* Could not pin; mark as temporary so we don’t assume ownership. */
-                Mt = LoaderFirmwareTemporary;
-            }
+            GlobalSystemTable->BootServices->AllocatePages(AllocateAddress,
+                                                           EfiLoaderData,
+                                                           MapEntry->NumberOfPages,
+                                                           &MapEntry->PhysicalStart);
+            /* Ignore errors - memory remains LoaderFree regardless of pinning success */
         }
 
         /* Track the maximum span of our own image (LoaderLoadedProgram). */
@@ -394,36 +393,36 @@ UefiExitBootServices(VOID)
      *    should disable it automatically, some firmware implementations have bugs.
      *    Explicitly disabling it prevents any timer-related issues.
      *
-     * 2. Clear debug registers (DR0-DR7) and debug-related flags:
+     * 2. Clear debug registers (DR0-DR7) and debug-related flags (x86/x64 only):
      *    Some UEFI firmware (notably VirtualBox) may have internal debug state that
      *    triggers #DB (Debug Exception) during ExitBootServices. By clearing all
      *    hardware breakpoint registers, debug status, and the trap flag, we ensure
      *    no stale debug state causes unexpected exceptions inside the firmware.
      *
-     * 3. Disable console and serial output:
+     * 3. Disable console and serial output (x86/x64 only):
      *    Some UEFI firmware implementations (including certain OVMF builds) may call
      *    back into console/serial protocols during ExitBootServices execution. If these
      *    protocols are still active, it can cause firmware crashes.
      *
-     * Tested and working on:
-     * - QEMU with OVMF (EDK2) - WORKS
+     * Note: ARM64 defers serial/console shutdown to after ExitBootServices to keep
+     * debug output visible during the transition.
      */
 
     /* Disable the watchdog timer to prevent any timer-related issues */
     TRACE("Disabling watchdog timer\n");
     GlobalSystemTable->BootServices->SetWatchdogTimer(0, 0, 0, NULL);
 
-    /* Clear all x64 debug registers to prevent #DB exceptions */
-    TRACE("About to clear debug state\n");
 #if defined(_M_AMD64) || defined(__x86_64__)
+    /* Clear all x64 debug registers to prevent #DB exceptions */
     TRACE("Calling UefiClearDebugState\n");
     UefiClearDebugState();
     TRACE("UefiClearDebugState returned\n");
-#else
-    TRACE("Skipping debug state clear (not AMD64)\n");
 #endif
 
-    /* Now disable serial and console - no more TRACE output after this */
+#if !defined(_M_ARM64) && !defined(__aarch64__)
+    /* On x86/x64, disable serial and console BEFORE ExitBootServices.
+     * Some UEFI firmware may call back into these protocols during
+     * ExitBootServices execution, causing crashes. */
     UefiSerialDisableFirmware();
     UefiConsMarkBootServicesExited();
 
@@ -439,13 +438,6 @@ UefiExitBootServices(VOID)
      * By clearing the console protocol pointers in the System Table before
      * calling ExitBootServices, we prevent the firmware from attempting to
      * perform cleanup operations on these protocols that might trigger the bug.
-     *
-     * This is safe because:
-     * - We've already disabled console and serial output above
-     * - Boot services are about to be terminated anyway
-     * - The UEFI spec doesn't require these to be valid for ExitBootServices
-     * - The protocol instances themselves remain intact; only the system table
-     *   pointers are cleared
      */
     if (GlobalSystemTable)
     {
@@ -453,6 +445,7 @@ UefiExitBootServices(VOID)
         GlobalSystemTable->ConOut = NULL;
         GlobalSystemTable->StdErr = NULL;
     }
+#endif /* !_M_ARM64 && !__aarch64__ */
 
     /* Per spec, fetch a *fresh* map/key immediately before ExitBootServices. */
     PUEFI_LoadMemoryMap(&MapKey, &MapBytes, &DescSize, &DescVersion);
@@ -462,13 +455,14 @@ UefiExitBootServices(VOID)
     /* Spec permits one retry: refetch key and try again. */
     if (EFI_ERROR(Status))
     {
+        TRACE("ExitBootServices first attempt failed: %lx, retrying\n", (UINTN)Status);
         PUEFI_LoadMemoryMap(&MapKey, &MapBytes, &DescSize, &DescVersion);
         Status = GlobalSystemTable->BootServices->ExitBootServices(GlobalImageHandle, MapKey);
     }
 
     if (EFI_ERROR(Status))
     {
-        /* Can't TRACE here since serial is already disabled */
+        /* Note: TRACE may not work on x86/x64 since serial was disabled above */
         FrLdrBugCheckWithMessage(EXIT_BOOTSERVICES_FAILURE,
                                  __FILE__,
                                  __LINE__,
@@ -477,12 +471,34 @@ UefiExitBootServices(VOID)
     }
     else
     {
+        TRACE("Exited boot services\n");
         BootServicesExitedFlag = TRUE;
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /* On ARM64, console/serial shutdown is deferred to after ExitBootServices
+         * to keep debug output visible during the transition. */
+        UefiConsMarkBootServicesExited();
+        /* Install exception vectors while we still have a stable identity map. */
+        Arm64InitializeExceptions();
+        /* Note: ARM64 intentionally does NOT call UefiSerialDisableFirmware()
+         * here to keep post-EBS debug output visible. */
+#endif
     }
 }
 
 VOID
 UefiPrepareForReactOS(VOID)
 {
+    /*
+     * Exit UEFI boot services. After this call:
+     * - UEFI boot services are no longer available
+     * - Memory map is finalized
+     * - We have full control of the system
+     *
+     * On ARM64, _exituefi performs critical cache maintenance after
+     * ExitBootServices to ensure instruction cache coherency, and
+     * preserves the return address in a callee-saved register to
+     * avoid stack corruption issues.
+     */
     _exituefi();
 }

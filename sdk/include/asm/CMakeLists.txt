@@ -4,6 +4,11 @@ add_library(genincdata MODULE genincdata.c)
 set_entrypoint(genincdata 0)
 add_dependencies(genincdata bugcodes psdk xdk)
 
+# Workaround: rsym has a memory corruption bug when processing this DLL
+# that causes it to be killed by macOS. Since this is just a code generator
+# tool that doesn't need runtime symbol debugging, skip rsym for this target.
+set_property(TARGET genincdata PROPERTY NO_ROSSYM TRUE)
+
 if(MSVC)
     set(OPT_MS "-ms")
 else()

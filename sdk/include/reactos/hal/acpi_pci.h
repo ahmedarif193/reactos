@@ -129,6 +129,39 @@ HalQueryPciMsiSupport(
     );
 
 NTHALAPI
+BOOLEAN
+NTAPI
+HalGetMsiMessageAddress(
+    _In_ ULONGLONG Vector,
+    _In_ ULONGLONG Affinity,
+    _Out_ PULONG AddressLow,
+    _Out_opt_ PULONG AddressHigh,
+    _Out_ PUSHORT Data
+    );
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+NTHALAPI
+BOOLEAN
+NTAPI
+HalGetMsiMessageAddressEx(
+    _In_ USHORT RequesterId,
+    _In_ ULONGLONG Vector,
+    _In_ ULONGLONG Affinity,
+    _Out_ PULONG AddressLow,
+    _Out_opt_ PULONG AddressHigh,
+    _Out_ PUSHORT Data
+    );
+#endif
+
+NTHALAPI
+BOOLEAN
+NTAPI
+HalGetMsiVectorRange(
+    _Out_ PULONG BaseVector,
+    _Out_ PULONG VectorCount
+    );
+
+NTHALAPI
 VOID
 NTAPI
 HalpRecordPciMaxGsi(

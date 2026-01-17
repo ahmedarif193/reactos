@@ -103,8 +103,8 @@ static VOID UartPuts(const char* s) { (void)s; }
 #else
 static inline VOID UartPutc(char c)
 {
-    /* Use WFI instead of busy NOP while TX FIFO is full. */
-    while (PL011_FR & PL011_TXFF) { __asm__ __volatile__("wfi"); }
+    /* Use yield instead of wfi while TX FIFO is full (wfi hangs on Apple Silicon HVF). */
+    while (PL011_FR & PL011_TXFF) { __asm__ __volatile__("yield"); }
     PL011_DR = (unsigned char)c;
 }
 static VOID UartPuts(const char* s)
@@ -117,6 +117,15 @@ static VOID UartPuts(const char* s)
 /* -------------------------------------------------------------------------- */
 /* ARM64-specific data structures for kernel initialization                   */
 /* -------------------------------------------------------------------------- */
+/*
+ * PCR allocation size.
+ * The KIPCR structure on ARM64 is approximately 15KB (0x3AC0 bytes) because
+ * it contains an embedded KPRCB which includes large arrays like
+ * DispatcherReadyListHead[32], LockQueue[], PPLookasideList[], etc.
+ * We allocate 4 pages (16KB) to be safe with alignment.
+ */
+#define PCR_ALLOCATION_SIZE     (4 * PAGE_SIZE)
+
 typedef struct _ARM64_KERNEL_DATA
 {
     CHAR KernelStack[KERNEL_STACK_SIZE];    /* Main kernel stack */
@@ -124,8 +133,8 @@ typedef struct _ARM64_KERNEL_DATA
     CHAR InterruptStack[KERNEL_STACK_SIZE]; /* Interrupt handling stack */
     CHAR InitialProcess[PAGE_SIZE];         /* Initial system process */
     CHAR InitialThread[PAGE_SIZE];          /* Initial system thread */
-    CHAR Prcb[PAGE_SIZE];                   /* Processor Control Block */
-    CHAR Pcr[PAGE_SIZE];                    /* Processor Control Region */
+    CHAR Prcb[PAGE_SIZE];                   /* Processor Control Block (unused, PCR embeds PRCB) */
+    CHAR Pcr[PCR_ALLOCATION_SIZE];          /* Processor Control Region (~15KB with embedded PRCB) */
 } ARM64_KERNEL_DATA, *PARM64_KERNEL_DATA;
 
 static PARM64_KERNEL_DATA KernelDataBlock = NULL;
@@ -189,45 +198,15 @@ Arm64LoaderZeroSharedUserData(VOID)
 }
 
 /* -------------------------------------------------------------------------- */
-/* Hierarchical range mapping (1G -> 2M -> 4K)                                */
+/* Range mapping (map_region_hierarchical handles block selection)            */
 /* -------------------------------------------------------------------------- */
 static BOOLEAN
 Arm64MapRangeHierarchical(ULONGLONG Va, ULONGLONG Pa, ULONGLONG Size, ULONG Attrs)
 {
-    while (Size)
-    {
-        if (IS_ALIGNED(Va, ARM64_BLOCK_SIZE_1G) &&
-            IS_ALIGNED(Pa, ARM64_BLOCK_SIZE_1G) &&
-            Size >= ARM64_BLOCK_SIZE_1G)
-        {
-            if (!Arm64MapVirtualMemory(Va, Pa, ARM64_BLOCK_SIZE_1G, Attrs))
-                return FALSE;
-            Va   += ARM64_BLOCK_SIZE_1G;
-            Pa   += ARM64_BLOCK_SIZE_1G;
-            Size -= ARM64_BLOCK_SIZE_1G;
-            continue;
-        }
+    if (Size == 0)
+        return TRUE;
 
-        if (IS_ALIGNED(Va, ARM64_BLOCK_SIZE_2M) &&
-            IS_ALIGNED(Pa, ARM64_BLOCK_SIZE_2M) &&
-            Size >= ARM64_BLOCK_SIZE_2M)
-        {
-            if (!Arm64MapVirtualMemory(Va, Pa, ARM64_BLOCK_SIZE_2M, Attrs))
-                return FALSE;
-            Va   += ARM64_BLOCK_SIZE_2M;
-            Pa   += ARM64_BLOCK_SIZE_2M;
-            Size -= ARM64_BLOCK_SIZE_2M;
-            continue;
-        }
-
-        /* Map a single 4KB page (fallback) */
-        if (!Arm64MapVirtualMemory(Va, Pa, MM_PAGE_SIZE, Attrs))
-            return FALSE;
-        Va   += MM_PAGE_SIZE;
-        Pa   += MM_PAGE_SIZE;
-        Size -= MM_PAGE_SIZE;
-    }
-    return TRUE;
+    return Arm64MapVirtualMemory(Va, Pa, Size, Attrs);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -247,9 +226,24 @@ MempSetupPaging(
     ULONGLONG phys_end   = phys_start + (((ULONGLONG)NumberOfPages) << MM_PAGE_SHIFT);
     ULONGLONG length     = phys_end - phys_start;
 
-    /* Prefer non-exec identity mappings; exec only for kernel VA */
-    const ULONG attrs_id = ARM64_MAP_ATTR_NORMAL | ARM64_MAP_ATTR_UXN | ARM64_MAP_ATTR_PXN;
+    /* Prefer non-exec identity mappings; keep the loader's own range executable. */
+    const ULONG attrs_id_exec = ARM64_MAP_ATTR_NORMAL | ARM64_MAP_ATTR_EXECUTE;
+    const ULONG attrs_id_nx = ARM64_MAP_ATTR_NORMAL | ARM64_MAP_ATTR_UXN | ARM64_MAP_ATTR_PXN;
+    ULONG attrs_id = attrs_id_nx;
     const ULONG attrs_kv = ARM64_MAP_ATTR_NORMAL | ARM64_MAP_ATTR_EXECUTE;
+
+    if (!KernelMapping)
+    {
+        ULONGLONG current_pc;
+        __asm__ volatile("adr %0, ." : "=r"(current_pc));
+        if (current_pc >= phys_start && current_pc < phys_end)
+        {
+            attrs_id = attrs_id_exec;
+            TRACE("ARM64: Exec identity map for loader range 0x%llx..0x%llx\n",
+                  (unsigned long long)phys_start,
+                  (unsigned long long)phys_end);
+        }
+    }
 
     TRACE("ARM64: MempSetupPaging StartPage=0x%lx, Pages=0x%lx, KernelMapping=%d\n",
           (ULONG)StartPage, (ULONG)NumberOfPages, KernelMapping);
@@ -481,17 +475,60 @@ Arm64SetupForNt(
 {
     TRACE("ARM64: Setting up for NT kernel\n");
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "[PL011] Arm64SetupForNt entered\r\n";
+        while (*msg) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = *msg++;
+        }
+    }
+#endif
+
     /* ARM64 doesn't use GDT/IDT or TSS like x86 */
     *GdtIdt = NULL;
     *PcrBasePage = 0;
     *TssBasePage = 0;
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "[PL011] About to allocate kernel data structures\r\n";
+        while (*msg) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = *msg++;
+        }
+    }
+#endif
+
     /* Allocate kernel data structures including stacks */
     if (!Arm64AllocateKernelDataStructures())
     {
         ERR("ARM64: Failed to allocate kernel data structures\n");
+#if defined(_M_ARM64) || defined(__aarch64__)
+        {
+            volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+            const char *msg = "[PL011] ERROR: Arm64AllocateKernelDataStructures FAILED\r\n";
+            while (*msg) {
+                while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+                Uart[0] = *msg++;
+            }
+        }
+#endif
         return FALSE;
     }
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "[PL011] Kernel data structures allocated successfully\r\n";
+        while (*msg) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = *msg++;
+        }
+    }
+#endif
 
     /*
      * Populate LoaderBlock with stack and structure pointers.
@@ -608,8 +645,31 @@ WinLdrSetupMachineDependent(
     ULONG PcrBasePage = 0;
     ULONG TssBasePage = 0;
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* Direct PL011 UART output - works after ExitBootServices */
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "[PL011] WinLdrSetupMachineDependent entered\r\n";
+        while (*msg) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = *msg++;
+        }
+    }
+#endif
+
     /* Delegate to the ARM64-specific setup; GDT/IDT/TSS are not used on AArch64 */
     (void)Arm64SetupForNt(LoaderBlock, &GdtIdt, &PcrBasePage, &TssBasePage);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "[PL011] WinLdrSetupMachineDependent completed\r\n";
+        while (*msg) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = *msg++;
+        }
+    }
+#endif
 }
 
 /* -------------------------------------------------------------------------- */
@@ -627,6 +687,8 @@ Arm64InitializeMemory(
         ERR("ARM64: Invalid LoaderBlock\n");
         return FALSE;
     }
+
+    Arm64ApplyDeferredPageTableMemoryTypes();
 
     /* Memory descriptors are built later by WinLdrSetupMemoryLayout(). */
     TRACE("ARM64: Memory management structures initialized\n");
@@ -647,6 +709,10 @@ Arm64ConfigureProcessorContext(USHORT OperatingSystemVersion)
      * own page tables (TTBR0 identity, TTBR1 kernel) to ensure KSEG0
      * is accessible for the jump to the kernel.
      */
+#ifdef UEFIBOOT
+    /* Avoid firmware serial callbacks once we swap translation tables. */
+    UefiSerialDisableFirmware();
+#endif
     Arm64EnablePageTables();
 }
 
@@ -673,6 +739,17 @@ Arm64AllocateKernelDataStructures(VOID)
 {
     TRACE("ARM64: Allocating kernel data structures\n");
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "[PL011] Arm64AllocateKernelDataStructures entered\r\n";
+        while (*msg) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = *msg++;
+        }
+    }
+#endif
+
     /* Allocate the ARM64 kernel data block which contains all stacks and structures.
        This returns a physical allocation in the loader's address space. */
     KernelDataBlock = MmAllocateMemoryWithType(sizeof(ARM64_KERNEL_DATA), LoaderMemoryData);
@@ -680,11 +757,43 @@ Arm64AllocateKernelDataStructures(VOID)
     {
         ERR("ARM64: Failed to allocate kernel data block of size %zu bytes\n",
             sizeof(ARM64_KERNEL_DATA));
+#if defined(_M_ARM64) || defined(__aarch64__)
+        {
+            volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+            const char *msg = "[PL011] ERROR: MmAllocateMemoryWithType FAILED\r\n";
+            while (*msg) {
+                while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+                Uart[0] = *msg++;
+            }
+        }
+#endif
         return FALSE;
     }
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "[PL011] MmAllocateMemoryWithType succeeded\r\n";
+        while (*msg) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = *msg++;
+        }
+    }
+#endif
+
     /* Zero out the entire data block for clean initialization */
     RtlZeroMemory(KernelDataBlock, sizeof(ARM64_KERNEL_DATA));
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "[PL011] RtlZeroMemory completed\r\n";
+        while (*msg) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = *msg++;
+        }
+    }
+#endif
 
     /*
      * Initialize the KTHREAD structure's stack fields.
@@ -722,6 +831,17 @@ Arm64AllocateKernelDataStructures(VOID)
     TRACE("ARM64: Prcb at %p, Process at %p, Thread at %p\n",
           KernelDataBlock->Prcb, KernelDataBlock->InitialProcess, KernelDataBlock->InitialThread);
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "[PL011] About to map kernel data block\r\n";
+        while (*msg) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = *msg++;
+        }
+    }
+#endif
+
     /* Mirror the kernel data block into KSEG0 so the kernel stack & PCR are accessible */
     {
         ULONGLONG block_pa = (ULONGLONG)(ULONG_PTR)KernelDataBlock;
@@ -738,6 +858,16 @@ Arm64AllocateKernelDataStructures(VOID)
                 (unsigned long long)block_pa,
                 (unsigned long long)block_va,
                 (unsigned long long)map_size);
+#if defined(_M_ARM64) || defined(__aarch64__)
+            {
+                volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+                const char *msg = "[PL011] ERROR: Arm64MapVirtualMemory FAILED\r\n";
+                while (*msg) {
+                    while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+                    Uart[0] = *msg++;
+                }
+            }
+#endif
             return FALSE;
         }
 
@@ -746,8 +876,42 @@ Arm64AllocateKernelDataStructures(VOID)
               (unsigned long long)map_size);
     }
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "[PL011] Kernel data block mapped, checking shared user data\r\n";
+        while (*msg) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = *msg++;
+        }
+    }
+#endif
+
     if (!Arm64EnsureSharedUserDataMapped())
+    {
+#if defined(_M_ARM64) || defined(__aarch64__)
+        {
+            volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+            const char *msg = "[PL011] ERROR: Arm64EnsureSharedUserDataMapped FAILED\r\n";
+            while (*msg) {
+                while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+                Uart[0] = *msg++;
+            }
+        }
+#endif
         return FALSE;
+    }
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "[PL011] Arm64AllocateKernelDataStructures completed successfully\r\n";
+        while (*msg) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = *msg++;
+        }
+    }
+#endif
 
     return TRUE;
 }

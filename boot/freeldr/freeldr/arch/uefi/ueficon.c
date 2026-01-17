@@ -231,6 +231,9 @@ UefiConsSyncCursorFromFirmware(VOID)
 {
     EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL* ConOut;
 
+    if (!BootServicesAvailable())
+        return;
+
     ConOut = UefiGetConOut();
     if (ConOut == NULL || ConOut->Mode == NULL)
         return;
@@ -413,7 +416,6 @@ UefiConsGetCh(VOID)
 VOID
 UefiConsMarkBootServicesExited(VOID)
 {
-    UefiConsSyncCursorFromFirmware();
     BootServicesExited = TRUE;
     
     /* Reposition the cursor if the GOP console is already initialised. */

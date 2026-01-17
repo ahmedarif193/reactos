@@ -15,7 +15,13 @@
 #define IMAGE_FILE_MACHINE_AMD64 0x8664
 #define IMAGE_FILE_MACHINE_IA64 0x0200
 
+#define IMAGE_DIRECTORY_ENTRY_EXCEPTION	3
 #define IMAGE_DIRECTORY_ENTRY_BASERELOC	5
+
+/* Machine types */
+#ifndef IMAGE_FILE_MACHINE_ARM64
+#define IMAGE_FILE_MACHINE_ARM64 0xAA64
+#endif
 
 #define IMAGE_SCN_TYPE_NOLOAD     0x00000002
 #define IMAGE_SCN_TYPE_NO_PAD     0x00000008
@@ -265,3 +271,47 @@ typedef struct _IMAGE_SYMBOL UNALIGNED *PIMAGE_SYMBOL;
 #define IMAGE_NT_SIGNATURE 0x00004550
 
 #define IMAGE_FIRST_SECTION(h) ((PIMAGE_SECTION_HEADER) ((ULONG_PTR)h+FIELD_OFFSET(IMAGE_NT_HEADERS,OptionalHeader)+((PIMAGE_NT_HEADERS)(h))->FileHeader.SizeOfOptionalHeader))
+
+/*
+ * ARM64 exception data (.pdata) structures
+ * Used for unwinding and function boundary detection
+ */
+#pragma pack(push,4)
+typedef struct _ARM64_RUNTIME_FUNCTION {
+    DWORD BeginAddress;
+    union {
+        DWORD UnwindData;
+        struct {
+            DWORD Flag : 2;
+            DWORD FunctionLength : 11;
+            DWORD RegF : 3;
+            DWORD RegI : 4;
+            DWORD H : 1;
+            DWORD CR : 2;
+            DWORD FrameSize : 9;
+        };
+    };
+} ARM64_RUNTIME_FUNCTION, *PARM64_RUNTIME_FUNCTION;
+
+/*
+ * ARM64 .pdata Flag values:
+ *   0 = PdataRefToFullXdata: UnwindData is RVA to XDATA header
+ *   1 = PdataPackedUnwindFunction: Packed unwind data
+ *   2 = PdataPackedUnwindFragment: Function fragment
+ */
+#define ARM64_PDATA_FLAG_FULL_XDATA  0
+#define ARM64_PDATA_FLAG_PACKED      1
+#define ARM64_PDATA_FLAG_FRAGMENT    2
+
+/*
+ * ARM64 XDATA header (when Flag == 0)
+ */
+typedef struct _ARM64_XDATA_HEADER {
+    DWORD FunctionLength : 18;
+    DWORD Version : 2;
+    DWORD ExceptionDataPresent : 1;
+    DWORD EpilogInHeader : 1;
+    DWORD EpilogCount : 5;
+    DWORD CodeWords : 5;
+} ARM64_XDATA_HEADER, *PARM64_XDATA_HEADER;
+#pragma pack(pop)

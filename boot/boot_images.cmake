@@ -1,9 +1,8 @@
 ## efisys.bin
 
 # EFI platform ID, used in environ/CMakelists.txt for bootmgfw filename naming also.
-if(ARCH STREQUAL "i386")
-    set(EFI_PLATFORM_ID "ia32")
-elseif(ARCH STREQUAL "amd64")
+# UEFI bootloader is not built for i386
+if(ARCH STREQUAL "amd64")
     set(EFI_PLATFORM_ID "x64")
 elseif(ARCH STREQUAL "ia64")
     set(EFI_PLATFORM_ID "ia64")
@@ -11,7 +10,7 @@ elseif(ARCH STREQUAL "arm")
     set(EFI_PLATFORM_ID "arm")
 elseif(ARCH STREQUAL "arm64")
     set(EFI_PLATFORM_ID "aa64")
-else()
+elseif(NOT ARCH STREQUAL "i386")
     message(FATAL_ERROR "Unknown ARCH '" ${ARCH} "', cannot generate a valid UEFI boot filename.")
 endif()
 
@@ -29,16 +28,30 @@ if(DEFINED EFI_PLATFORM_ID)
     endif()
 
     add_custom_target(efisys
-        COMMAND native-fatten ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin -format 5760 EFIBOOT
+        COMMAND native-fatten ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin -format 8192 EFIBOOT
             ${_efisys_boot_args}
             -add ${REACTOS_SOURCE_DIR}/boot/bootdata/bootcd.ini freeldr.ini
             -mkdir EFI -mkdir EFI/BOOT -add $<TARGET_FILE:uefildr> EFI/BOOT/boot${EFI_PLATFORM_ID}.efi
         DEPENDS ${_efisys_deps}
         VERBATIM)
+
+    set(_efisys_livecd_deps native-fatten uefildr ${REACTOS_SOURCE_DIR}/boot/bootdata/livecd.ini)
+    if(_HAVE_BIOS_BOOT)
+        list(APPEND _efisys_livecd_deps fat)
+    endif()
+
+    add_custom_target(efisys_livecd
+        COMMAND native-fatten ${CMAKE_CURRENT_BINARY_DIR}/efisys_livecd.bin -format 8192 EFIBOOT
+            ${_efisys_boot_args}
+            -add ${REACTOS_SOURCE_DIR}/boot/bootdata/livecd.ini freeldr.ini
+            -mkdir EFI -mkdir EFI/BOOT -add $<TARGET_FILE:uefildr> EFI/BOOT/boot${EFI_PLATFORM_ID}.efi
+        DEPENDS ${_efisys_livecd_deps}
+        VERBATIM)
 endif()
 
 # ISO image EFI boot parameters
-set(ISO_EFI_BOOT_PARAMS)
+set(ISO_EFI_BOOT_PARAMS_SETUP)
+set(ISO_EFI_BOOT_PARAMS_LIVECD)
 set(ISO_BIOS_BOOT_PARAMS_ISOBOOT)
 set(ISO_BIOS_BOOT_PARAMS_ISOBTRT)
 if(_HAVE_BIOS_BOOT)
@@ -57,11 +70,14 @@ if(_HAVE_BIOS_BOOT)
     set(_isobtrt_file ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/isobtrt.bin) # get_target_property(_isobtrt_file isobtrt LOCATION)
 endif()
 if(DEFINED EFI_PLATFORM_ID)
-    set(_efisys_file  ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin) # get_target_property(_efisys_file  efisys  LOCATION)
+    set(_efisys_setup_file  ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin) # get_target_property(_efisys_file  efisys  LOCATION)
+    set(_efisys_livecd_file ${CMAKE_CURRENT_BINARY_DIR}/efisys_livecd.bin)
     if(_HAVE_BIOS_BOOT)
-        list(APPEND ISO_EFI_BOOT_PARAMS -eltorito-alt-boot -eltorito-platform efi -eltorito-boot loader/efisys.bin -no-emul-boot)
+        list(APPEND ISO_EFI_BOOT_PARAMS_SETUP  -eltorito-alt-boot -eltorito-platform efi -eltorito-boot loader/efisys.bin -no-emul-boot)
+        list(APPEND ISO_EFI_BOOT_PARAMS_LIVECD -eltorito-alt-boot -eltorito-platform efi -eltorito-boot loader/efisys_livecd.bin -no-emul-boot)
     else()
-        list(APPEND ISO_EFI_BOOT_PARAMS -eltorito-platform efi -eltorito-boot loader/efisys.bin -no-emul-boot)
+        list(APPEND ISO_EFI_BOOT_PARAMS_SETUP  -eltorito-platform efi -eltorito-boot loader/efisys.bin -no-emul-boot)
+        list(APPEND ISO_EFI_BOOT_PARAMS_LIVECD -eltorito-platform efi -eltorito-boot loader/efisys_livecd.bin -no-emul-boot)
     endif()
 endif()
 
@@ -88,7 +104,8 @@ if(_HAVE_BIOS_BOOT)
     string(APPEND ISO_SORT_FILE_DATA "${_isobtrt_file} 2\n")
 endif()
 if(DEFINED EFI_PLATFORM_ID)
-    string(APPEND ISO_SORT_FILE_DATA "${_efisys_file} 1\n")
+    string(APPEND ISO_SORT_FILE_DATA "${_efisys_setup_file} 1\n")
+    string(APPEND ISO_SORT_FILE_DATA "${_efisys_livecd_file} 1\n")
 endif()
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/bootfiles.sort ${ISO_SORT_FILE_DATA})
 
@@ -96,7 +113,7 @@ file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/bootfiles.sort ${ISO_SORT_FILE_DATA})
 set(ISO_MANUFACTURER "ReactOS Project") # For both the publisher and the preparer
 set(ISO_VOLNAME      "ReactOS")         # For both the Volume ID and the Volume set ID
 
-# Standard output artifact names (no branch/commit tagging)
+# Always use simple, non-tagged filenames
 set(REACTOS_LIVECD_ISO        ${REACTOS_BINARY_DIR}/livecd.iso)
 set(REACTOS_BOOTCD_ISO        ${REACTOS_BINARY_DIR}/bootcd.iso)
 set(REACTOS_BOOTCDREGTEST_ISO ${REACTOS_BINARY_DIR}/bootcdregtest.iso)
@@ -154,7 +171,7 @@ endif()
 add_custom_target(bootcd
     COMMAND native-mkisofs -quiet -o ${REACTOS_BOOTCD_ISO} -iso-level 4
         -publisher ${ISO_MANUFACTURER} -preparer ${ISO_MANUFACTURER} -volid ${ISO_VOLNAME} -volset ${ISO_VOLNAME}
-        ${ISO_BIOS_BOOT_PARAMS_ISOBOOT} ${ISO_EFI_BOOT_PARAMS} -hide boot.catalog
+        ${ISO_BIOS_BOOT_PARAMS_ISOBOOT} ${ISO_EFI_BOOT_PARAMS_SETUP} -hide boot.catalog
         -sort ${CMAKE_CURRENT_BINARY_DIR}/bootfiles.sort
         -no-cache-inodes -graft-points -path-list ${CMAKE_CURRENT_BINARY_DIR}/bootcd.$<CONFIG>.lst
     ${_BOOTCD_ISOHYBRID_CMD}
@@ -176,7 +193,7 @@ endif()
 add_custom_target(bootcdregtest
     COMMAND native-mkisofs -quiet -o ${REACTOS_BOOTCDREGTEST_ISO} -iso-level 4
         -publisher ${ISO_MANUFACTURER} -preparer ${ISO_MANUFACTURER} -volid ${ISO_VOLNAME} -volset ${ISO_VOLNAME}
-        ${ISO_BIOS_BOOT_PARAMS_ISOBTRT} ${ISO_EFI_BOOT_PARAMS} -hide boot.catalog
+        ${ISO_BIOS_BOOT_PARAMS_ISOBTRT} ${ISO_EFI_BOOT_PARAMS_SETUP} -hide boot.catalog
         -sort ${CMAKE_CURRENT_BINARY_DIR}/bootfiles.sort
         -no-cache-inodes -graft-points -path-list ${CMAKE_CURRENT_BINARY_DIR}/bootcdregtest.$<CONFIG>.lst
     ${_BOOTCDREGTEST_ISOHYBRID_CMD}
@@ -205,7 +222,7 @@ endif()
 add_custom_target(livecd
     COMMAND native-mkisofs -quiet -o ${REACTOS_LIVECD_ISO} -iso-level 4
         -publisher ${ISO_MANUFACTURER} -preparer ${ISO_MANUFACTURER} -volid ${ISO_VOLNAME} -volset ${ISO_VOLNAME}
-        ${ISO_BIOS_BOOT_PARAMS_ISOBOOT} ${ISO_EFI_BOOT_PARAMS} -hide boot.catalog
+        ${ISO_BIOS_BOOT_PARAMS_ISOBOOT} ${ISO_EFI_BOOT_PARAMS_LIVECD} -hide boot.catalog
         -sort ${CMAKE_CURRENT_BINARY_DIR}/bootfiles.sort
         -no-cache-inodes -graft-points -path-list ${CMAKE_CURRENT_BINARY_DIR}/livecd.$<CONFIG>.lst
     ${_LIVECD_ISOHYBRID_CMD}
@@ -415,7 +432,7 @@ endif()
 add_custom_target(hybridcd
     COMMAND native-mkisofs -quiet -o ${REACTOS_HYBRIDCD_ISO} -iso-level 4
         -publisher ${ISO_MANUFACTURER} -preparer ${ISO_MANUFACTURER} -volid ${ISO_VOLNAME} -volset ${ISO_VOLNAME}
-        ${ISO_BIOS_BOOT_PARAMS_ISOBOOT} ${ISO_EFI_BOOT_PARAMS} -hide boot.catalog
+        ${ISO_BIOS_BOOT_PARAMS_ISOBOOT} ${ISO_EFI_BOOT_PARAMS_LIVECD} -hide boot.catalog
         -sort ${CMAKE_CURRENT_BINARY_DIR}/bootfiles.sort
         -duplicates-once -no-cache-inodes -graft-points -path-list ${CMAKE_CURRENT_BINARY_DIR}/hybridcd.$<CONFIG>.lst
     ${_HYBRIDCD_ISOHYBRID_CMD}
@@ -424,7 +441,8 @@ add_custom_target(hybridcd
 
 if(DEFINED EFI_PLATFORM_ID)
     # For things like flashing USB drives, we also add the efi file into efi/boot.
-    add_cd_file(TARGET efisys FILE ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin DESTINATION loader NO_CAB NOT_IN_HYBRIDCD FOR bootcd regtest livecd hybridcd)
+    add_cd_file(TARGET efisys FILE ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin DESTINATION loader NO_CAB NOT_IN_HYBRIDCD FOR bootcd regtest)
+    add_cd_file(TARGET efisys_livecd FILE ${CMAKE_CURRENT_BINARY_DIR}/efisys_livecd.bin DESTINATION loader NO_CAB NOT_IN_HYBRIDCD FOR livecd hybridcd)
 
     add_cd_file(
         TARGET uefildr
@@ -454,6 +472,16 @@ add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/liveimg.cmake.lst "Profiles" "
 # Aggregator for building everything needed by liveimg without invoking ISO tools.
 add_custom_target(liveimg_deps)
 
+# Boot sector dependencies (only for BIOS boot architectures)
+set(_LIVEIMG_BOOTSECT_DEPS)
+set(_LIVEIMG_UEFI_FLAG)
+if(_HAVE_BIOS_BOOT)
+    set(_LIVEIMG_BOOTSECT_DEPS dosmbr fat fat32)
+else()
+    # For UEFI-only architectures (ARM64, etc.), skip BIOS boot sector installation
+    set(_LIVEIMG_UEFI_FLAG --uefi-only)
+endif()
+
 add_custom_target(liveimg
     COMMAND /usr/bin/env bash ${CMAKE_SOURCE_DIR}/boot/tools/make_reactos_img.sh
             --mode fat32
@@ -461,7 +489,8 @@ add_custom_target(liveimg
             --size $<IF:$<CONFIG:Release>,400,600>
             --build-root ${REACTOS_BINARY_DIR}
             --list ${CMAKE_CURRENT_BINARY_DIR}/liveimg.$<CONFIG>.lst
-    DEPENDS liveimg_deps dosmbr fat fat32 ${CMAKE_CURRENT_BINARY_DIR}/liveimg.$<CONFIG>.lst
+            ${_LIVEIMG_UEFI_FLAG}
+    DEPENDS liveimg_deps ${_LIVEIMG_BOOTSECT_DEPS} ${CMAKE_CURRENT_BINARY_DIR}/liveimg.$<CONFIG>.lst
     VERBATIM)
 
 # Ensure packaging depends on multilib subbuild when enabled

@@ -98,8 +98,12 @@ static BOOLEAN UefiMmioRangePresent(UINT64 PhysAddr, UINT64 Length)
         UINT64 dEnd   = dStart + ((UINT64)D->NumberOfPages << 12);
         if (Start >= dStart && End <= dEnd)
         {
-            if (D->Type == EfiMemoryMappedIO || D->Type == EfiMemoryMappedIOPortSpace)
+            if (D->Type == EfiMemoryMappedIO ||
+                D->Type == EfiMemoryMappedIOPortSpace ||
+                D->Type == EfiReservedMemoryType)
+            {
                 present = TRUE;
+            }
             break;
         }
     }
@@ -447,8 +451,6 @@ VOID UefiSerialDisableFirmware(VOID)
     FirmwareSerialDisabled = TRUE;
     SerialIoProtocol = NULL;
 #if defined(_M_ARM64) || defined(__aarch64__)
-    if (!Pl011Present)
-        UefiUpdatePl011FromSpcr();
     if (Pl011Present)
         UsePL011Fallback = TRUE;
 #endif

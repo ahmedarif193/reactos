@@ -42,9 +42,23 @@ KeInvalidateTlbEntry(
 {
     ULONG_PTR Va = (ULONG_PTR)Address >> PAGE_SHIFT;
 
-    __asm__ __volatile__("dsb ishst" ::: "memory");
+    /*
+     * ARM64 TLB invalidation sequence for page fault handling.
+     *
+     * Use full system barriers (dsb sy) instead of inner-shareable (dsb ish)
+     * to ensure maximum synchronization. This is critical for user-mode
+     * addresses where the CPU may have cached a "negative" TLB entry from
+     * the fault, and we need to ensure the new valid PTE is visible.
+     *
+     * Sequence:
+     * 1. DSB SY - Full system barrier ensures the PTE store is complete
+     * 2. TLBI VAAE1IS - Broadcast TLB invalidation to all CPUs for this VA
+     * 3. DSB SY - Wait for TLB invalidation to complete
+     * 4. ISB - Synchronize instruction stream with barrier effects
+     */
+    __asm__ __volatile__("dsb sy" ::: "memory");
     __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va));
-    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("dsb sy" ::: "memory");
     __asm__ __volatile__("isb" ::: "memory");
 }
 
@@ -79,12 +93,36 @@ KeSweepICache(
     _In_opt_ PVOID BaseAddress,
     _In_ SIZE_T FlushSize)
 {
-    UNREFERENCED_PARAMETER(BaseAddress);
-    UNREFERENCED_PARAMETER(FlushSize);
+    ULONG64 Ctr;
+    ULONG DLine, ILine;
+    ULONG_PTR Start, End, Addr;
 
-    __asm__ __volatile__("ic iallu" ::: "memory");
+    if (!BaseAddress || FlushSize == 0)
+    {
+        /* ic ialluis broadcasts to all CPUs in inner shareable domain (SMP-safe) */
+        __asm__ __volatile__("ic ialluis\n\tdsb ish\n\tisb" ::: "memory");
+        return;
+    }
+
+    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+    DLine = 4u << ((Ctr >> 16) & 0xF);
+    ILine = 4u << (Ctr & 0xF);
+
+    /* Clean D-cache to PoU for the modified range before invalidating I-cache. */
+    Start = (ULONG_PTR)BaseAddress & ~(ULONG_PTR)(DLine - 1);
+    End = (ULONG_PTR)BaseAddress + FlushSize;
+    for (Addr = Start; Addr < End; Addr += DLine)
+    {
+        __asm__ __volatile__("dc cvau, %0" :: "r"(Addr) : "memory");
+    }
     __asm__ __volatile__("dsb ish" ::: "memory");
-    __asm__ __volatile__("isb" ::: "memory");
+
+    Start = (ULONG_PTR)BaseAddress & ~(ULONG_PTR)(ILine - 1);
+    for (Addr = Start; Addr < End; Addr += ILine)
+    {
+        __asm__ __volatile__("ic ivau, %0" :: "r"(Addr) : "memory");
+    }
+    __asm__ __volatile__("dsb ish\n\tisb" ::: "memory");
 }
 
 ULONG
@@ -203,6 +241,14 @@ KeGetTrapFrameStackRegister(
 }
 
 FORCEINLINE
+ULONG_PTR
+KeGetTrapFrameFrameRegister(
+    _In_ PKTRAP_FRAME TrapFrame)
+{
+    return TrapFrame->Fp;
+}
+
+FORCEINLINE
 PULONG_PTR
 KiGetUserModeStackAddress(void)
 {
@@ -231,9 +277,6 @@ HalSweepDcache(VOID);
 
 VOID
 HalSweepIcache(VOID);
-
-VOID
-KiArm64BootStageLog(_In_z_ PCSTR Stage);
 
 /* Final exception/interrupt readiness flags (for bring-up diagnostics) */
 extern BOOLEAN KiArm64FinalVectorsInstalled;

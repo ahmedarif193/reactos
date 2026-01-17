@@ -152,39 +152,85 @@ static VOID Arm64Beep(VOID)
 }
 #endif
 
+/* Direct PL011 UART output for post-ExitBootServices debugging */
+#define PL011_UART_BASE   0x09000000UL
+static inline VOID Arm64RawUartPutc(char Ch)
+{
+    volatile ULONG *Uart = (volatile ULONG *)PL011_UART_BASE;
+    while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+    Uart[0] = Ch;
+}
+static inline VOID Arm64RawUartPuts(const char *S)
+{
+    while (*S) { if (*S == '\n') Arm64RawUartPutc('\r'); Arm64RawUartPutc(*S++); }
+}
+
 static VOID Arm64PrepareForReactOS(VOID)
 {
     TRACE("ARM64: Preparing for ReactOS kernel handoff\n");
-    
-    /* Disable interrupts */
-    Arm64DisableInterrupts();
-    
-    /* Disable timer interrupts */
-    Arm64DisableTimerInterrupt();
-    
-    /* Complete cache maintenance using ARM64 specific routines */
-    Arm64CompleteCacheMaintenance();
-    
-    /* Refresh loaded-image info before we lose Boot Services */
-    UefiInitializeDebugImageInfo();
 
-    /* Use UEFI preparation which exits boot services */
+    /*
+     * NOTE: We intentionally do NOT call UefiInitializeDebugImageInfo() here.
+     * It was already called once during Arm64MachInit() and allocates memory
+     * from the UEFI pool. If any memory corruption occurred during the boot
+     * process (driver loading, ramdisk operations, etc.), the FreePool calls
+     * in UefiInitializeDebugImageInfo would trigger UEFI pool validation and
+     * cause "CR has Bad Signature" assertions. By skipping the refresh, we
+     * avoid triggering pool validation on potentially corrupted allocations.
+     *
+     * The debug image info from the initial call is still valid for backtraces.
+     */
+
+    /* Use UEFI preparation which exits boot services.
+     *
+     * IMPORTANT: Do NOT call Arm64CompleteCacheMaintenance() before this!
+     * The cache maintenance uses dc cisw (clean and invalidate by set/way)
+     * which can corrupt UEFI's internal data structures by invalidating
+     * dirty cache lines that the firmware's pool allocator is using.
+     * This causes "CR has Bad Signature" assertions in EDK2's Pool.c.
+     *
+     * The _exituefi() assembly routine in uefiasm.S already performs
+     * proper cache maintenance (ic iallu, dsb, isb) AFTER ExitBootServices
+     * when UEFI services are no longer in use.
+     */
     UefiPrepareForReactOS();
 
-    /* Post-ExitBootServices: it is now safe to install our vectors/timer */
-    TRACE("ARM64: Post-ExitBootServices initialization\n");
+    /*
+     * POST-EXITBOOTSERVICES: UEFI services are NO longer available.
+     * From this point on, use only direct hardware access for debug output.
+     * Now it is safe to disable interrupts and perform cache maintenance.
+     */
+
+    /* Disable interrupts now that we have left UEFI boot services */
+    Arm64DisableInterrupts();
+
+    /* Disable timer interrupts */
+    Arm64DisableTimerInterrupt();
+
+    /* Complete cache maintenance - safe to do now after ExitBootServices */
+    Arm64CompleteCacheMaintenance();
+
+    /*
+     * POST-EXITBOOTSERVICES: UEFI services are NO longer available.
+     * From this point on, use only direct hardware access for debug output.
+     */
+    Arm64RawUartPuts("[ARM64] Post-ExitBootServices: returned from UefiPrepareForReactOS\n");
 
     /* Install FreeLDR synchronous trap handlers so we log detailed faults */
+    Arm64RawUartPuts("[ARM64] Installing exception vectors...\n");
     Arm64InitializeExceptions();
+    Arm64RawUartPuts("[ARM64] Exception vectors installed\n");
 
     /* Initialize generic timer for timekeeping/delays */
+    Arm64RawUartPuts("[ARM64] Initializing timer...\n");
     Arm64InitializeTimer();
+    Arm64RawUartPuts("[ARM64] Timer initialized\n");
 
     /* Final memory barriers */
     Arm64DataMemoryBarrier();
     Arm64InstructionBarrier();
 
-    TRACE("ARM64: Ready for kernel handoff\n");
+    Arm64RawUartPuts("[ARM64] Arm64PrepareForReactOS complete, returning to loader\n");
 }
 
 /* ARM64 memory management - using UEFI implementation */
@@ -571,8 +617,11 @@ VOID Arm64MachInit(const char *CmdLine)
     if (GlobalSystemTable && GlobalSystemTable->ConOut)
         GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"ARM64: MachInit entry\r\n");
 
-    /* Install exception vectors immediately so we log early faults */
-    Arm64InitializeExceptions();
+    /* IMPORTANT: Do NOT install exception vectors during MachInit on UEFI!
+     * UEFI firmware has its own exception handling, and installing our vectors
+     * while UEFI Boot Services are active will conflict with firmware exception
+     * handlers. We install vectors later in Arm64PrepareForReactOS after
+     * ExitBootServices when we have full control of the system. */
 
     /* Gather loaded-image information for future backtraces */
     UefiInitializeDebugImageInfo();

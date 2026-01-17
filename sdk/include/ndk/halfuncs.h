@@ -29,6 +29,21 @@ Author:
 
 #ifndef NTOS_MODE_USER
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+typedef struct _HAL_ARM64_TIMER_CONFIG
+{
+    ULONG Vector;              /* GIC INTID for the architected timer PPI */
+    BOOLEAN UseVirtual;        /* TRUE -> CNTV, FALSE -> CNTP */
+    KINTERRUPT_MODE Mode;      /* LevelSensitive vs. Latched from GTDT flags */
+} HAL_ARM64_TIMER_CONFIG, *PHAL_ARM64_TIMER_CONFIG;
+
+NTHALAPI
+BOOLEAN
+NTAPI
+HalQueryArm64TimerConfig(
+    _Out_ PHAL_ARM64_TIMER_CONFIG Config);
+#endif
+
 //
 // Private HAL Callbacks
 //
@@ -321,6 +336,29 @@ HalIsIoApicPresent(
     VOID
 );
 
+//
+// MSI Support (ARM64)
+//
+#if defined(_M_ARM64) || defined(__aarch64__)
+NTHALAPI
+BOOLEAN
+NTAPI
+HalGetMsiVectorRange(
+    _Out_ PULONG BaseVector,
+    _Out_ PULONG VectorCount
+);
+
+NTHALAPI
+BOOLEAN
+NTAPI
+HalGetMsiMessageAddress(
+    _In_ ULONGLONG Vector,
+    _In_ ULONGLONG Affinity,
+    _Out_ PULONG AddressLow,
+    _Out_opt_ PULONG AddressHigh,
+    _Out_ PUSHORT Data
+);
+#endif
 
 //
 // BIOS call API

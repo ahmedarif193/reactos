@@ -28,16 +28,21 @@ DBG_DEFAULT_CHANNEL(MEMORY);
 
 PFN_NUMBER LoaderPagesSpanned = 0;
 
-PVOID MmAllocateMemoryWithType(SIZE_T MemorySize, TYPE_OF_MEMORY MemoryType)
+static
+PVOID
+MmAllocateMemoryWithTypeInternal(SIZE_T MemorySize,
+                                 TYPE_OF_MEMORY MemoryType,
+                                 BOOLEAN ShowUi)
 {
-    PFN_NUMBER    PagesNeeded;
-    PFN_NUMBER    FirstFreePageFromEnd;
-    PVOID    MemPointer;
+    PFN_NUMBER PagesNeeded;
+    PFN_NUMBER FirstFreePageFromEnd;
+    PVOID MemPointer;
 
     if (MemorySize == 0)
     {
         WARN("MmAllocateMemory() called for 0 bytes. Returning NULL.\n");
-        UiMessageBoxCritical("Memory allocation failed: MmAllocateMemory() called for 0 bytes.");
+        if (ShowUi)
+            UiMessageBoxCritical("Memory allocation failed: MmAllocateMemory() called for 0 bytes.");
         return NULL;
     }
 
@@ -52,7 +57,8 @@ PVOID MmAllocateMemoryWithType(SIZE_T MemorySize, TYPE_OF_MEMORY MemoryType)
     if (FreePagesInLookupTable < PagesNeeded)
     {
         ERR("Memory allocation failed in MmAllocateMemory(). Not enough free memory to allocate %d bytes.\n", MemorySize);
-        UiMessageBoxCritical("Memory allocation failed: out of memory.");
+        if (ShowUi)
+            UiMessageBoxCritical("Memory allocation failed: out of memory.");
         return NULL;
     }
 
@@ -61,7 +67,8 @@ PVOID MmAllocateMemoryWithType(SIZE_T MemorySize, TYPE_OF_MEMORY MemoryType)
     if (FirstFreePageFromEnd == 0)
     {
         ERR("Memory allocation failed in MmAllocateMemory(). Not enough free memory to allocate %d bytes.\n", MemorySize);
-        UiMessageBoxCritical("Memory allocation failed: out of memory.");
+        if (ShowUi)
+            UiMessageBoxCritical("Memory allocation failed: out of memory.");
         return NULL;
     }
 
@@ -80,6 +87,16 @@ PVOID MmAllocateMemoryWithType(SIZE_T MemorySize, TYPE_OF_MEMORY MemoryType)
 
     // Now return the pointer
     return MemPointer;
+}
+
+PVOID MmAllocateMemoryWithType(SIZE_T MemorySize, TYPE_OF_MEMORY MemoryType)
+{
+    return MmAllocateMemoryWithTypeInternal(MemorySize, MemoryType, TRUE);
+}
+
+PVOID MmAllocateMemoryWithTypeOptional(SIZE_T MemorySize, TYPE_OF_MEMORY MemoryType)
+{
+    return MmAllocateMemoryWithTypeInternal(MemorySize, MemoryType, FALSE);
 }
 
 PVOID MmAllocateMemoryAtAddress(SIZE_T MemorySize, PVOID DesiredAddress, TYPE_OF_MEMORY MemoryType)
@@ -157,7 +174,12 @@ VOID MmSetMemoryType(PVOID MemoryAddress, SIZE_T MemorySize, TYPE_OF_MEMORY NewT
     MmAllocatePagesInLookupTable(PageLookupTableAddress, StartPageNumber, PagesNeeded, NewType);
 }
 
-PVOID MmAllocateHighestMemoryBelowAddress(SIZE_T MemorySize, PVOID DesiredAddress, TYPE_OF_MEMORY MemoryType)
+static
+PVOID
+MmAllocateHighestMemoryBelowAddressInternal(SIZE_T MemorySize,
+                                            PVOID DesiredAddress,
+                                            TYPE_OF_MEMORY MemoryType,
+                                            BOOLEAN ShowUi)
 {
     PFN_NUMBER        PagesNeeded;
     PFN_NUMBER        FirstFreePageFromEnd;
@@ -167,7 +189,8 @@ PVOID MmAllocateHighestMemoryBelowAddress(SIZE_T MemorySize, PVOID DesiredAddres
     if (MemorySize == 0)
     {
         WARN("MmAllocateHighestMemoryBelowAddress() called for 0 bytes. Returning NULL.\n");
-        UiMessageBoxCritical("Memory allocation failed: MmAllocateHighestMemoryBelowAddress() called for 0 bytes.");
+        if (ShowUi)
+            UiMessageBoxCritical("Memory allocation failed: MmAllocateHighestMemoryBelowAddress() called for 0 bytes.");
         return NULL;
     }
 
@@ -183,7 +206,8 @@ PVOID MmAllocateHighestMemoryBelowAddress(SIZE_T MemorySize, PVOID DesiredAddres
     if (FreePagesInLookupTable < PagesNeeded)
     {
         ERR("Memory allocation failed in MmAllocateHighestMemoryBelowAddress(). Not enough free memory to allocate %d bytes.\n", MemorySize);
-        UiMessageBoxCritical("Memory allocation failed: out of memory.");
+        if (ShowUi)
+            UiMessageBoxCritical("Memory allocation failed: out of memory.");
         return NULL;
     }
 
@@ -192,7 +216,8 @@ PVOID MmAllocateHighestMemoryBelowAddress(SIZE_T MemorySize, PVOID DesiredAddres
     if (FirstFreePageFromEnd == 0)
     {
         ERR("Memory allocation failed in MmAllocateHighestMemoryBelowAddress(). Not enough free memory to allocate %d bytes.\n", MemorySize);
-        UiMessageBoxCritical("Memory allocation failed: out of memory.");
+        if (ShowUi)
+            UiMessageBoxCritical("Memory allocation failed: out of memory.");
         return NULL;
     }
 
@@ -210,6 +235,16 @@ PVOID MmAllocateHighestMemoryBelowAddress(SIZE_T MemorySize, PVOID DesiredAddres
 
     // Now return the pointer
     return MemPointer;
+}
+
+PVOID MmAllocateHighestMemoryBelowAddress(SIZE_T MemorySize, PVOID DesiredAddress, TYPE_OF_MEMORY MemoryType)
+{
+    return MmAllocateHighestMemoryBelowAddressInternal(MemorySize, DesiredAddress, MemoryType, TRUE);
+}
+
+PVOID MmAllocateHighestMemoryBelowAddressOptional(SIZE_T MemorySize, PVOID DesiredAddress, TYPE_OF_MEMORY MemoryType)
+{
+    return MmAllocateHighestMemoryBelowAddressInternal(MemorySize, DesiredAddress, MemoryType, FALSE);
 }
 
 VOID MmFreeMemory(PVOID MemoryPointer)

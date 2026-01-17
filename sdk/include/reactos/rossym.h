@@ -152,6 +152,7 @@ BOOLEAN RosSymGetAddressInformation(PROSSYM_INFO RosSymInfo,
 #endif
 VOID RosSymFreeInfo(PROSSYM_LINEINFO RosSymLineInfo);
 VOID RosSymDelete(PROSSYM_INFO RosSymInfo);
+const char* RosSymGetLastErrorString(void);
 BOOLEAN
 RosSymAggregate(PROSSYM_INFO RosSymInfo, PCHAR Type, PROSSYM_AGGREGATE Aggregate);
 VOID RosSymFreeAggregate(PROSSYM_AGGREGATE Aggregate);

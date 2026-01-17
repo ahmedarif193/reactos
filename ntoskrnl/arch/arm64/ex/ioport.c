@@ -1,17 +1,24 @@
 /*
  * PROJECT:         ReactOS Kernel (ARM64)
- * PURPOSE:         I/O register access stubs
+ * LICENSE:         GPL - See COPYING in the top level directory
+ * PURPOSE:         I/O register access functions for export
+ * NOTE:            These functions are exported from ntoskrnl for binary
+ *                  compatibility with drivers. Most code should use the
+ *                  inline macro versions from ioaccess.h for performance.
  */
 
+/* Don't use the inline macros - we need actual function definitions here */
+#define NO_PORT_MACROS
 #include <ntoskrnl.h>
 #define NDEBUG
 #include <debug.h>
 
 /*
- * ARM64 MMIO accessors
- * Implement READ/WRITE_REGISTER_* as volatile MMIO accesses with
- * minimal ordering. For now we rely on the volatile access itself;
- * callers (e.g. serial drivers) typically insert their own barriers.
+ * Exported MMIO accessor functions for ARM64
+ *
+ * These are callable function versions of the macros defined in ioaccess.h.
+ * They exist for ntoskrnl export compatibility. Normal code should use the
+ * inline macros for better performance.
  */
 
 UCHAR
@@ -19,7 +26,9 @@ NTAPI
 READ_REGISTER_UCHAR(
     _In_ PUCHAR Register)
 {
-    return *(volatile UCHAR const *)Register;
+    UCHAR Value = *(volatile UCHAR const *)Register;
+    __asm__ __volatile__("dmb sy" ::: "memory");
+    return Value;
 }
 
 USHORT
@@ -27,7 +36,9 @@ NTAPI
 READ_REGISTER_USHORT(
     _In_ PUSHORT Register)
 {
-    return *(volatile USHORT const *)Register;
+    USHORT Value = *(volatile USHORT const *)Register;
+    __asm__ __volatile__("dmb sy" ::: "memory");
+    return Value;
 }
 
 ULONG
@@ -35,34 +46,42 @@ NTAPI
 READ_REGISTER_ULONG(
     _In_ PULONG Register)
 {
-    return *(volatile ULONG const *)Register;
+    ULONG Value = *(volatile ULONG const *)Register;
+    __asm__ __volatile__("dmb sy" ::: "memory");
+    return Value;
 }
 
 VOID
 NTAPI
 WRITE_REGISTER_UCHAR(
-    _Inout_ PUCHAR Register,
+    _In_ PUCHAR Register,
     _In_ UCHAR Value)
 {
+    __asm__ __volatile__("dmb sy" ::: "memory");
     *(volatile UCHAR *)Register = Value;
+    __asm__ __volatile__("dmb sy" ::: "memory");
 }
 
 VOID
 NTAPI
 WRITE_REGISTER_USHORT(
-    _Inout_ PUSHORT Register,
+    _In_ PUSHORT Register,
     _In_ USHORT Value)
 {
+    __asm__ __volatile__("dmb sy" ::: "memory");
     *(volatile USHORT *)Register = Value;
+    __asm__ __volatile__("dmb sy" ::: "memory");
 }
 
 VOID
 NTAPI
 WRITE_REGISTER_ULONG(
-    _Inout_ PULONG Register,
+    _In_ PULONG Register,
     _In_ ULONG Value)
 {
+    __asm__ __volatile__("dmb sy" ::: "memory");
     *(volatile ULONG *)Register = Value;
+    __asm__ __volatile__("dmb sy" ::: "memory");
 }
 
 VOID
@@ -75,6 +94,7 @@ READ_REGISTER_BUFFER_UCHAR(
     volatile const UCHAR *Src = (volatile const UCHAR *)Register;
     while (Count--)
         *Buffer++ = *Src;
+    __asm__ __volatile__("dmb sy" ::: "memory");
 }
 
 VOID
@@ -87,6 +107,7 @@ READ_REGISTER_BUFFER_USHORT(
     volatile const USHORT *Src = (volatile const USHORT *)Register;
     while (Count--)
         *Buffer++ = *Src;
+    __asm__ __volatile__("dmb sy" ::: "memory");
 }
 
 VOID
@@ -99,40 +120,47 @@ READ_REGISTER_BUFFER_ULONG(
     volatile const ULONG *Src = (volatile const ULONG *)Register;
     while (Count--)
         *Buffer++ = *Src;
+    __asm__ __volatile__("dmb sy" ::: "memory");
 }
 
 VOID
 NTAPI
 WRITE_REGISTER_BUFFER_UCHAR(
-    _Inout_ PUCHAR Register,
+    _In_ PUCHAR Register,
     _In_reads_(Count) PUCHAR Buffer,
     _In_ ULONG Count)
 {
     volatile UCHAR *Dst = (volatile UCHAR *)Register;
+    __asm__ __volatile__("dmb sy" ::: "memory");
     while (Count--)
         *Dst = *Buffer++;
+    __asm__ __volatile__("dmb sy" ::: "memory");
 }
 
 VOID
 NTAPI
 WRITE_REGISTER_BUFFER_USHORT(
-    _Inout_ PUSHORT Register,
+    _In_ PUSHORT Register,
     _In_reads_(Count) PUSHORT Buffer,
     _In_ ULONG Count)
 {
     volatile USHORT *Dst = (volatile USHORT *)Register;
+    __asm__ __volatile__("dmb sy" ::: "memory");
     while (Count--)
         *Dst = *Buffer++;
+    __asm__ __volatile__("dmb sy" ::: "memory");
 }
 
 VOID
 NTAPI
 WRITE_REGISTER_BUFFER_ULONG(
-    _Inout_ PULONG Register,
+    _In_ PULONG Register,
     _In_reads_(Count) PULONG Buffer,
     _In_ ULONG Count)
 {
     volatile ULONG *Dst = (volatile ULONG *)Register;
+    __asm__ __volatile__("dmb sy" ::: "memory");
     while (Count--)
         *Dst = *Buffer++;
+    __asm__ __volatile__("dmb sy" ::: "memory");
 }

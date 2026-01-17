@@ -33,7 +33,7 @@ static VOID TrapUartPutc(char Ch)
 {
     while (PL011_FR & PL011_TXFF)
     {
-        __asm__ __volatile__("wfi");
+        __asm__ __volatile__("yield");
     }
     PL011_DR = (unsigned char)Ch;
 }

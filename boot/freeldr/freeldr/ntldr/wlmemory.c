@@ -152,6 +152,16 @@ MempSetupPagingForRegion(
 
         /* Pages not in use */
         case LoaderFree:
+#if defined(_M_ARM64) || defined(__aarch64__)
+            /*
+             * On ARM64, we must map LoaderFree memory into KSEG0 so the kernel
+             * can access it for the PFN database and other memory management
+             * structures. Unlike x86/amd64 which can do demand paging for free
+             * pages, ARM64's KSEG0 model requires pre-mapped physical memory.
+             */
+            Status = MI_LOADER_SETUP_PAGING(BasePage, PageCount, TRUE);
+            break;
+#endif
         case LoaderBad:
             break;
 
@@ -187,6 +197,18 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
     ULONG LastPageType;
     //PKTSS Tss;
     BOOLEAN Status;
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* Direct PL011 UART output - works after ExitBootServices */
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "[PL011] WinLdrSetupMemoryLayout entered\r\n";
+        while (*msg) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = *msg++;
+        }
+    }
+#endif
 
     /* Cleanup heap */
     FrLdrHeapCleanupAll();
@@ -366,6 +388,17 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
 
 #if defined(_M_IX86)
     MiLoaderTrimKernelMappings();
+#endif
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
+        const char *msg = "[PL011] WinLdrSetupMemoryLayout completed\r\n";
+        while (*msg) {
+            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+            Uart[0] = *msg++;
+        }
+    }
 #endif
 
     return TRUE;

@@ -142,7 +142,15 @@ MMPTE ValidKernelPteLocal = {
     }
 };
 MMPDE ValidKernelPdeLocal = {.u.Hard.Valid = 1, .u.Hard.Accessed = 1};
-MMPTE MmDecommittedPte = {.u.Long = (MM_READWRITE << MM_PTE_SOFTWARE_PROTECTION_BITS)};
+
+/* Template PTE for decommitted page.
+ * CRITICAL: Must use MM_DECOMMIT, NOT MM_READWRITE!
+ * On ARM64, MMPTE_SOFTWARE.Protection is at bits 1-5, so MM_PTE_SOFTWARE_PROTECTION_BITS = 1.
+ * Using MM_READWRITE (0x4) would create value 0x8, which collides with legitimate
+ * prototype PTEs that have MM_READWRITE protection.
+ * MM_DECOMMIT = MM_GUARDPAGE (0x10) creates unique value 0x20 that won't appear
+ * in normal prototype PTEs, making the assertion in MiResolveProtoPteFault valid. */
+MMPTE MmDecommittedPte = {.u.Long = (MM_DECOMMIT << MM_PTE_SOFTWARE_PROTECTION_BITS)};
 
 /* TODO(ARM64): The above globals mimic the legacy layouts purely to unblock
  * the build. Replace with real hardware descriptors once paging support is
@@ -301,11 +309,174 @@ KeSwitchKernelStack(
     return StackBase;
 }
 
+/*
+ * Forward declarations for ARM64 kernel initialization functions
+ */
+VOID
+NTAPI
+KiInitializePcr(
+    _In_ ULONG ProcessorNumber,
+    _Inout_ PKIPCR Pcr,
+    _In_ PKTHREAD IdleThread,
+    _In_opt_ PVOID PanicStack,
+    _In_ PVOID DpcStack);
+
+VOID
+NTAPI
+KiInitializeSystem(
+    _Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock);
+
+/*
+ * ARM64 AP (Application Processor) info structure for SMP boot.
+ * This mirrors the x86 APINFO structure but with ARM64-specific fields.
+ */
+typedef struct _ARM64_APINFO
+{
+    DECLSPEC_ALIGN(PAGE_SIZE) UCHAR IdtData[PAGE_SIZE];  /* Reserved for future IDT-like use */
+    KIPCR Pcr;
+    ETHREAD Thread;
+} ARM64_APINFO, *PARM64_APINFO;
+
 CODE_SEG("INIT")
 VOID
 NTAPI
 KeStartAllProcessors(
     VOID)
 {
-    DPRINT1("ARM64 TODO: KeStartAllProcessors is a stub\n");
+    PVOID KernelStack;
+    PVOID DPCStack;
+    PARM64_APINFO APInfo;
+    ULONG ProcessorCount;
+    ULONG MaximumProcessors;
+
+    /*
+     * ARM64 SMP Boot Implementation
+     *
+     * This function is called to start all secondary processors (APs).
+     * For each AP, we:
+     * 1. Allocate and initialize a PCR (Processor Control Region)
+     * 2. Create kernel and DPC stacks
+     * 3. Set up the processor state for initial entry
+     * 4. Call HalStartNextProcessor to wake the AP via PSCI CPU_ON
+     *
+     * The HAL handles the actual PSCI interaction and trampoline setup.
+     */
+
+    /* Start with the system maximum processor count */
+    MaximumProcessors = MAXIMUM_PROCESSORS;
+
+    /*
+     * TODO: Limit processors based on command line options when available.
+     * For now, we use the compiled-in maximum. Command-line processor
+     * limiting would require kernel command-line parsing integration:
+     * - /NUMPROC=N: Maximum number of processors to use
+     * - /ONECPU: Use only one processor (equivalent to /NUMPROC=1)
+     *
+     * These would set KeNumprocSpecified and KeBootprocSpecified.
+     */
+
+    DPRINT1("[arm64] KeStartAllProcessors: Max=%lu\n", MaximumProcessors);
+
+    /* Start from processor 1 since BSP (processor 0) is already running */
+    for (ProcessorCount = 1; ProcessorCount < MaximumProcessors; ++ProcessorCount)
+    {
+        KernelStack = NULL;
+        DPCStack = NULL;
+        APInfo = NULL;
+
+        /* Allocate structures for a new CPU */
+        APInfo = ExAllocatePoolZero(NonPagedPool, sizeof(*APInfo), TAG_KERNEL);
+        if (!APInfo)
+        {
+            DPRINT1("[arm64] KeStartAllProcessors: Failed to allocate APInfo for CPU %lu\n",
+                    ProcessorCount);
+            break;
+        }
+        ASSERT(ALIGN_DOWN_POINTER_BY(APInfo, PAGE_SIZE) == APInfo);
+
+        KernelStack = MmCreateKernelStack(FALSE, 0);
+        if (!KernelStack)
+        {
+            DPRINT1("[arm64] KeStartAllProcessors: Failed to create kernel stack for CPU %lu\n",
+                    ProcessorCount);
+            break;
+        }
+
+        DPCStack = MmCreateKernelStack(FALSE, 0);
+        if (!DPCStack)
+        {
+            DPRINT1("[arm64] KeStartAllProcessors: Failed to create DPC stack for CPU %lu\n",
+                    ProcessorCount);
+            break;
+        }
+
+        /* Initialize a new PCR for this AP */
+        KiInitializePcr(ProcessorCount,
+                        &APInfo->Pcr,
+                        (PKTHREAD)&APInfo->Thread,
+                        NULL,   /* ARM64 doesn't use separate panic stack here */
+                        DPCStack);
+
+        /* Set up processor state for AP initialization */
+        {
+            PKPROCESSOR_STATE ProcessorState = &APInfo->Pcr.Prcb.ProcessorState;
+            RtlZeroMemory(ProcessorState, sizeof(*ProcessorState));
+
+            /*
+             * For ARM64, we need to set up the context frame with:
+             * - Pc: Entry point (KiInitializeSystem or similar)
+             * - Sp: Kernel stack pointer
+             * - X0: First argument (LoaderBlock)
+             *
+             * The HAL trampoline will:
+             * 1. Enable MMU with proper page tables
+             * 2. Set up stack and registers from this context
+             * 3. Jump to the kernel entry point
+             */
+            ProcessorState->ContextFrame.Pc = (DWORD64)KiInitializeSystem;
+            ProcessorState->ContextFrame.Sp = (DWORD64)KernelStack;
+
+            /* Store ARM64 system registers if needed */
+            ProcessorState->ArchState.Ttbr0_El1 = 0; /* HAL will use BSP's value */
+            ProcessorState->ArchState.Ttbr1_El1 = 0; /* HAL will use BSP's value */
+
+            /* Update LoaderBlock for this processor */
+            KeLoaderBlock->KernelStack = (ULONG_PTR)KernelStack;
+            KeLoaderBlock->Prcb = (ULONG_PTR)&APInfo->Pcr.Prcb;
+            KeLoaderBlock->Thread = (ULONG_PTR)APInfo->Pcr.Prcb.IdleThread;
+
+            DPRINT1("[arm64] KeStartAllProcessors: Attempting to start CPU %lu\n",
+                    ProcessorCount);
+
+            /* Call HAL to start the processor */
+            if (!HalStartNextProcessor(KeLoaderBlock, ProcessorState))
+            {
+                DPRINT1("[arm64] KeStartAllProcessors: HalStartNextProcessor failed for CPU %lu\n",
+                        ProcessorCount);
+                break;
+            }
+
+            /* Wait for AP to signal it has started */
+            while (KeLoaderBlock->Prcb != 0)
+            {
+                KeMemoryBarrier();
+                YieldProcessor();
+            }
+
+            DPRINT1("[arm64] KeStartAllProcessors: CPU %lu started successfully\n",
+                    ProcessorCount);
+        }
+    }
+
+    /* Clean up if last attempt failed */
+    ProcessorCount--;
+
+    if (APInfo)
+        ExFreePoolWithTag(APInfo, TAG_KERNEL);
+    if (KernelStack)
+        MmDeleteKernelStack(KernelStack, FALSE);
+    if (DPCStack)
+        MmDeleteKernelStack(DPCStack, FALSE);
+
+    DPRINT1("[arm64] KeStartAllProcessors: Successfully started %lu APs\n", ProcessorCount);
 }

@@ -7,8 +7,55 @@
 
 #include <ntoskrnl.h>
 #include <ntstrsafe.h>
+#include <reactos/drivers/acpi/acpi.h>
 #define NDEBUG
 #include <debug.h>
+
+/*
+ * PL011 UART early debug helpers for pre-KD initialization tracing.
+ * Base address is QEMU virt machine's PL011 UART at 0x09000000.
+ * The UART must be identity-mapped before use; the bootloader sets this up.
+ */
+#define KI_ARM64_PL011_BASE     0x09000000UL
+#define KI_ARM64_PL011_VA       (0xFFFF800000000000ULL + KI_ARM64_PL011_BASE)
+#define KI_ARM64_PL011_FR_TXFF  (1U << 5)
+
+CODE_SEG("INIT")
+static inline VOID
+KiArm64RawPutc(char Ch)
+{
+    volatile ULONG *Uart = (volatile ULONG *)KI_ARM64_PL011_VA;
+    while (Uart[0x18 / sizeof(ULONG)] & KI_ARM64_PL011_FR_TXFF) {}
+    Uart[0] = (ULONG)Ch;
+}
+
+CODE_SEG("INIT")
+static inline VOID
+KiArm64RawPuts(const char *Str)
+{
+    while (*Str)
+    {
+        if (*Str == '\n')
+            KiArm64RawPutc('\r');
+        KiArm64RawPutc(*Str++);
+    }
+}
+
+CODE_SEG("INIT")
+static inline VOID
+KiArm64RawPutHex64(UINT64 Value)
+{
+    static const char Hex[] = "0123456789ABCDEF";
+    char Buf[17];
+    int i;
+    for (i = 15; i >= 0; i--)
+    {
+        Buf[i] = Hex[Value & 0xF];
+        Value >>= 4;
+    }
+    Buf[16] = '\0';
+    KiArm64RawPuts(Buf);
+}
 
 typedef struct _ARM64_EARLY_GPRS
 {
@@ -28,16 +75,11 @@ KiArm64EarlyVectorHandler(_In_ UINT64 VectorId,
                           _In_ UINT64 FaultAddress,
                           _In_opt_ PARM64_EARLY_GPRS Registers);
 
-/* PL011 defaults mirror the QEMU virt platform; the loader will override them
- * whenever it exposes a concrete UART configuration. */
-#define ARM64_EARLY_UART_PHYS_BASE  0x09000000ULL
-#define ARM64_PL011_DR              0x00
-#define ARM64_PL011_FR              0x18
-#define ARM64_PL011_FR_TXFF         (1u << 5)
-
 #define ARM64_KSEG0_BASE            0xFFFF800000000000ULL
 /* Memory attribute indices in MAIR_EL1 */
 #define ARM64_MEM_ATTR_DEVICE_nGnRnE 0x0ULL
+#define ARM64_MEM_ATTR_NORMAL_NC     0x1ULL
+#define ARM64_MEM_ATTR_NORMAL_WC     0x2ULL
 #define ARM64_MEM_ATTR_NORMAL_WB     0x4ULL
 #define ARM64_PTE_TYPE_BLOCK        0x1ULL
 #define ARM64_PTE_TYPE_TABLE        0x3ULL
@@ -47,11 +89,19 @@ KiArm64EarlyVectorHandler(_In_ UINT64 VectorId,
 #define ARM64_PTE_BLOCK_PXN         (1ULL << 53)
 #define ARM64_PTE_BLOCK_UXN         (1ULL << 54)
 #define ARM64_PTE_TABLE_NSTABLE     (1ULL << 63)
+#define ARM64_IDENTITY_DEFAULT_ATTRS (ARM64_PTE_TYPE_BLOCK | \
+                                      (ARM64_MEM_ATTR_NORMAL_WB << ARM64_PTE_BLOCK_ATTR_INDEX_SHIFT) | \
+                                      ARM64_PTE_BLOCK_INNER_SHARE | \
+                                      ARM64_PTE_BLOCK_AF | \
+                                      ARM64_PTE_BLOCK_UXN | \
+                                      ARM64_PTE_BLOCK_PXN)
 #define ARM64_IDENTITY_MIN_BYTES    (512ULL << 20) /* 512 MB */
 #define ARM64_L1_BLOCK_SHIFT        30
 #define ARM64_L2_BLOCK_SHIFT        21
 #define ARM64_L2_BLOCK_SIZE         (1ULL << ARM64_L2_BLOCK_SHIFT)
 #define ARM64_L1_MAX_ENTRIES        512
+#define ARM64_GICR_STRIDE_DEFAULT   0x20000ULL
+#define ARM64_GICR_MAX_MAP_BYTES    (64ULL << 20)
 
 #define ARM64_IDENTITY_L0_ENTRIES   512
 #define ARM64_IDENTITY_L1_ENTRIES   512
@@ -70,6 +120,87 @@ extern const UINT64 KiArm64EarlyVectorTable[];
 static UINT64 *KiArm64IdentityL0;
 static UINT64 *KiArm64IdentityL1;
 static UINT64 (*KiArm64IdentityL2)[512];
+static BOOLEAN KiArm64IdentityMapActive;
+
+#define ACPI_MADT_TYPE_GENERIC_INTERRUPT      0x0B
+#define ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR    0x0C
+#define ACPI_MADT_TYPE_GENERIC_MSI_FRAME      0x0D
+#define ACPI_MADT_TYPE_GENERIC_REDISTRIBUTOR  0x0E
+#define ACPI_MADT_TYPE_GENERIC_TRANSLATOR     0x0F
+
+typedef struct _ACPI_SUBTABLE_HEADER
+{
+    UCHAR Type;
+    UCHAR Length;
+} ACPI_SUBTABLE_HEADER, *PACPI_SUBTABLE_HEADER;
+
+#include <pshpack1.h>
+typedef struct _ACPI_MADT
+{
+    DESCRIPTION_HEADER Header;
+    ULONG LocalApicAddress;
+    ULONG Flags;
+} ACPI_MADT, *PACPI_MADT;
+
+typedef struct _ACPI_MADT_GENERIC_DISTRIBUTOR
+{
+    ACPI_SUBTABLE_HEADER Header;
+    USHORT Reserved;
+    ULONG GicId;
+    ULONGLONG BaseAddress;
+    ULONG SystemVectorBase;
+    UCHAR GicVersion;
+    UCHAR Reserved2[3];
+} ACPI_MADT_GENERIC_DISTRIBUTOR, *PACPI_MADT_GENERIC_DISTRIBUTOR;
+
+typedef struct _ACPI_MADT_GENERIC_INTERRUPT
+{
+    ACPI_SUBTABLE_HEADER Header;
+    USHORT Reserved;
+    ULONG CpuInterfaceNumber;
+    ULONG AcpiProcessorUid;
+    ULONG Flags;
+    ULONG ParkingProtocolVersion;
+    ULONG PerformanceInterrupt;
+    ULONGLONG ParkedAddress;
+    ULONGLONG BaseAddress;
+    ULONGLONG GicvBaseAddress;
+    ULONGLONG GichBaseAddress;
+    ULONG VgicMaintenanceInterrupt;
+    ULONG Reserved2;
+    ULONGLONG GicrBaseAddress;
+    ULONGLONG Mpidr;
+} ACPI_MADT_GENERIC_INTERRUPT, *PACPI_MADT_GENERIC_INTERRUPT;
+
+typedef struct _ACPI_MADT_GENERIC_REDISTRIBUTOR
+{
+    ACPI_SUBTABLE_HEADER Header;
+    USHORT Reserved;
+    ULONGLONG BaseAddress;
+    ULONG Length;
+    ULONG Reserved2;
+} ACPI_MADT_GENERIC_REDISTRIBUTOR, *PACPI_MADT_GENERIC_REDISTRIBUTOR;
+
+typedef struct _ACPI_MADT_GENERIC_MSI_FRAME
+{
+    ACPI_SUBTABLE_HEADER Header;
+    USHORT Reserved;
+    ULONG MsiFrameId;
+    ULONGLONG BaseAddress;
+    ULONG Flags;
+    USHORT SpiCount;
+    USHORT SpiBase;
+} ACPI_MADT_GENERIC_MSI_FRAME, *PACPI_MADT_GENERIC_MSI_FRAME;
+
+typedef struct _ACPI_MADT_GENERIC_TRANSLATOR
+{
+    ACPI_SUBTABLE_HEADER Header;
+    USHORT Reserved;
+    ULONG TranslationId;
+    ULONGLONG BaseAddress;
+    ULONG Reserved2;
+} ACPI_MADT_GENERIC_TRANSLATOR, *PACPI_MADT_GENERIC_TRANSLATOR;
+#include <poppack.h>
 
 typedef struct _ARM64_EARLY_TRAP_STATE
 {
@@ -140,11 +271,7 @@ typedef struct _ARM64_BOOT_CONTEXT
     UINT64 Ttbr0El1;
     UINT64 Ttbr1El1;
     UINT64 MairEl1;
-    UINT64 UartPhysicalBase;
 } ARM64_BOOT_CONTEXT, *PARM64_BOOT_CONTEXT;
-
-static volatile ULONG *KiArm64BootUartBase = (volatile ULONG *)ARM64_EARLY_UART_PHYS_BASE;
-static BOOLEAN KiArm64BootSerialReady = FALSE;
 
 /* Boot stack (CPU0): mirror amd64 boot stack handoff behavior */
 UCHAR DECLSPEC_ALIGN(16) KiArm64P0BootStackData[KERNEL_STACK_SIZE] = {0};
@@ -154,56 +281,6 @@ PVOID KiArm64P0BootStack = &KiArm64P0BootStackData[KERNEL_STACK_SIZE];
 DECLSPEC_NORETURN VOID KiArm64SwitchToBootStack(ULONG_PTR InitialStack,
                                                 PLOADER_PARAMETER_BLOCK LoaderBlock);
 CODE_SEG("INIT") DECLSPEC_NORETURN VOID NTAPI KiArm64SystemStartupBootStack(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock);
-
-static __inline VOID KiArm64VectorUartPutc(char Ch)
-{
-    volatile ULONG *Uart = (volatile ULONG *)(ULONG_PTR)ARM64_EARLY_UART_PHYS_BASE;
-    if (!Uart) return;
-    /* Bound the wait to avoid wedging on a stuck UART */
-    for (ULONG spins = 0x10000;
-         (Uart[ARM64_PL011_FR / sizeof(ULONG)] & ARM64_PL011_FR_TXFF) && spins != 0;
-         --spins)
-    {
-        __asm__ __volatile__("wfi");
-    }
-    Uart[ARM64_PL011_DR / sizeof(ULONG)] = (ULONG)(unsigned char)Ch;
-}
-
-static __inline VOID KiArm64VectorUartPuts(const char *S)
-{
-    if (!S) return;
-    while (*S)
-    {
-        if (*S == '\n') KiArm64VectorUartPutc('\r');
-        KiArm64VectorUartPutc(*S++);
-    }
-}
-
-static __inline VOID KiArm64VectorUartPutHex64(ULONGLONG V)
-{
-    static const char H[] = "0123456789ABCDEF";
-    for (int i = 15; i >= 0; --i)
-    {
-        ULONG shift = (ULONG)i * 4;
-        KiArm64VectorUartPutc(H[(V >> shift) & 0xFULL]);
-    }
-}
-
-CODE_SEG("INIT")
-static VOID
-KiArm64EmitEntryMarker(VOID)
-{
-    volatile ULONG *Uart = (volatile ULONG *)(ULONG_PTR)ARM64_EARLY_UART_PHYS_BASE;
-    ULONG Wait = 0x100000;
-
-    if (!Uart)
-        return;
-
-    while ((Uart[ARM64_PL011_FR / sizeof(ULONG)] & ARM64_PL011_FR_TXFF) && --Wait)
-        ;
-
-    Uart[ARM64_PL011_DR / sizeof(ULONG)] = (ULONG)'K';
-}
 
 CODE_SEG("INIT")
 static UINT64
@@ -232,23 +309,8 @@ CODE_SEG("INIT")
 static DECLSPEC_NORETURN VOID
 KiArm64FatalHalt(VOID);
 
-CODE_SEG("INIT")
-static SIZE_T
-KiArm64BootStringLength(_In_z_ PCSTR Text)
-{
-    SIZE_T Length = 0;
-
-    if (!Text)
-        return 0;
-
-    while (Text[Length] != '\0')
-    {
-        Length++;
-    }
-
-    return Length;
-}
-
+/* KiArm64DescribeEsr is defined in trapdump.c */
+#if 0
 CODE_SEG("INIT")
 static PCSTR
 KiArm64DescribeEsr(_In_ UINT64 ExceptionSyndrome)
@@ -262,6 +324,40 @@ KiArm64DescribeEsr(_In_ UINT64 ExceptionSyndrome)
     }
 
     return "Unknown";
+}
+#endif
+
+CODE_SEG("INIT")
+static VOID
+KiArm64MapIdentityRange(_In_ UINT64 PhysicalStart,
+                        _In_ UINT64 PhysicalEnd,
+                        _In_ UINT64 Attributes);
+
+CODE_SEG("INIT")
+static VOID
+KiArm64MapIdentityAcpiRange(_In_ UINT64 PhysicalStart,
+                            _In_ ULONG Length)
+{
+    UINT64 Start;
+    UINT64 End;
+
+    if (Length == 0)
+        Length = sizeof(DESCRIPTION_HEADER);
+
+    Start = PhysicalStart & ~(ARM64_L2_BLOCK_SIZE - 1ULL);
+    End = (PhysicalStart + (UINT64)Length + ARM64_L2_BLOCK_SIZE - 1ULL) &
+          ~(ARM64_L2_BLOCK_SIZE - 1ULL);
+    if (End <= Start)
+        End = Start + ARM64_L2_BLOCK_SIZE;
+
+    KiArm64MapIdentityRange(Start, End, ARM64_IDENTITY_DEFAULT_ATTRS);
+    if (KiArm64IdentityMapActive)
+    {
+        __asm__ __volatile__("dsb ishst" ::: "memory");
+        __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+        __asm__ __volatile__("dsb ish" ::: "memory");
+        __asm__ __volatile__("isb");
+    }
 }
 
 CODE_SEG("INIT")
@@ -299,6 +395,492 @@ KiArm64IsMappableMemoryType(_In_ TYPE_OF_MEMORY MemoryType)
         default:
             return FALSE;
     }
+}
+
+CODE_SEG("INIT")
+static UINT64
+KiArm64ReadUnalignedU64(_In_ const VOID *Source)
+{
+    UINT64 Value;
+    RtlCopyMemory(&Value, Source, sizeof(Value));
+    return Value;
+}
+
+CODE_SEG("INIT")
+static PRSDP
+KiArm64FindRsdp(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PCONFIGURATION_COMPONENT_DATA ComponentEntry;
+    PCONFIGURATION_COMPONENT_DATA Next = NULL;
+    PCM_PARTIAL_RESOURCE_LIST ResourceList;
+    PACPI_BIOS_MULTI_NODE NodeData;
+
+    if (!KiArm64IdentityMapActive)
+        return NULL;
+
+    if (!LoaderBlock || !LoaderBlock->ConfigurationRoot)
+        return NULL;
+
+    ComponentEntry = KeFindConfigurationNextEntry(LoaderBlock->ConfigurationRoot,
+                                                  AdapterClass,
+                                                  MultiFunctionAdapter,
+                                                  0,
+                                                  &Next);
+    while (ComponentEntry)
+    {
+        if (ComponentEntry->ComponentEntry.Identifier &&
+            !_stricmp(ComponentEntry->ComponentEntry.Identifier, "ACPI BIOS"))
+        {
+            break;
+        }
+
+        Next = ComponentEntry;
+        ComponentEntry = KeFindConfigurationNextEntry(LoaderBlock->ConfigurationRoot,
+                                                      AdapterClass,
+                                                      MultiFunctionAdapter,
+                                                      NULL,
+                                                      &Next);
+    }
+
+    if (!ComponentEntry || !ComponentEntry->ConfigurationData)
+        return NULL;
+
+    ResourceList = ComponentEntry->ConfigurationData;
+    NodeData = (PACPI_BIOS_MULTI_NODE)(ResourceList + 1);
+    if (!NodeData || !NodeData->RsdpAddress.QuadPart)
+        return NULL;
+
+    KiArm64MapIdentityAcpiRange(NodeData->RsdpAddress.QuadPart, sizeof(RSDP));
+    PRSDP Rsdp = (PRSDP)(ULONG_PTR)NodeData->RsdpAddress.QuadPart;
+    if (!Rsdp || (Rsdp->Signature != RSDP_SIGNATURE))
+        return NULL;
+
+    return Rsdp;
+}
+
+CODE_SEG("INIT")
+static PDESCRIPTION_HEADER
+KiArm64GetAcpiTable(_In_opt_ PRSDP Rsdp,
+                    _In_ ULONG Signature)
+{
+    ULONG Count;
+    ULONG Index;
+
+    if (!Rsdp)
+        return NULL;
+
+    if (!KiArm64IdentityMapActive)
+        return NULL;
+
+    if ((Rsdp->Revision >= 2) && (Rsdp->XsdtAddress.QuadPart != 0))
+    {
+        UINT64 XsdtPa = Rsdp->XsdtAddress.QuadPart;
+        KiArm64MapIdentityAcpiRange(XsdtPa, sizeof(DESCRIPTION_HEADER));
+        PXSDT Xsdt = (PXSDT)(ULONG_PTR)XsdtPa;
+        ULONG Length = Xsdt->Header.Length;
+
+        if ((Xsdt->Header.Signature != XSDT_SIGNATURE) ||
+            (Length < sizeof(DESCRIPTION_HEADER)))
+        {
+            return NULL;
+        }
+
+        KiArm64MapIdentityAcpiRange(XsdtPa, Length);
+        Count = (Length - sizeof(DESCRIPTION_HEADER)) / sizeof(PHYSICAL_ADDRESS);
+        for (Index = 0; Index < Count; ++Index)
+        {
+            ULONGLONG TablePa = KiArm64ReadUnalignedU64(&Xsdt->Tables[Index]);
+            PDESCRIPTION_HEADER Header;
+
+            if (TablePa == 0)
+                continue;
+
+            KiArm64MapIdentityAcpiRange(TablePa, sizeof(DESCRIPTION_HEADER));
+            Header = (PDESCRIPTION_HEADER)(ULONG_PTR)TablePa;
+            if (Header->Signature == Signature)
+            {
+                KiArm64MapIdentityAcpiRange(TablePa, Header->Length);
+                return Header;
+            }
+        }
+    }
+    else if (Rsdp->RsdtAddress != 0)
+    {
+        UINT64 RsdtPa = (UINT64)Rsdp->RsdtAddress;
+        KiArm64MapIdentityAcpiRange(RsdtPa, sizeof(DESCRIPTION_HEADER));
+        PRSDT Rsdt = (PRSDT)(ULONG_PTR)RsdtPa;
+        ULONG Length = Rsdt->Header.Length;
+
+        if ((Rsdt->Header.Signature != RSDT_SIGNATURE) ||
+            (Length < sizeof(DESCRIPTION_HEADER)))
+        {
+            return NULL;
+        }
+
+        KiArm64MapIdentityAcpiRange(RsdtPa, Length);
+        Count = (Length - sizeof(DESCRIPTION_HEADER)) / sizeof(ULONG);
+        for (Index = 0; Index < Count; ++Index)
+        {
+            ULONG TablePa = Rsdt->Tables[Index];
+            PDESCRIPTION_HEADER Header;
+
+            if (TablePa == 0)
+                continue;
+
+            KiArm64MapIdentityAcpiRange(TablePa, sizeof(DESCRIPTION_HEADER));
+            Header = (PDESCRIPTION_HEADER)(ULONG_PTR)TablePa;
+            if (Header->Signature == Signature)
+            {
+                KiArm64MapIdentityAcpiRange(TablePa, Header->Length);
+                return Header;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+/*
+ * KiArm64MapAllAcpiTables
+ *
+ * Enumerates all ACPI tables referenced by the XSDT/RSDT and ensures each
+ * table is fully identity-mapped. This is critical for the HAL's ACPI
+ * initialization which uses HalpMapPhysicalMemory64 in identity-mapping
+ * mode before Mm is available.
+ *
+ * Without this, tables like FACP (FADT) would only have their headers
+ * mapped during KiArm64GetAcpiTable lookups, causing page faults when the
+ * HAL tries to read full table contents.
+ */
+CODE_SEG("INIT")
+static VOID
+KiArm64MapAllAcpiTables(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PRSDP Rsdp;
+    ULONG Count;
+    ULONG Index;
+
+    if (!KiArm64IdentityMapActive)
+    {
+        return;
+    }
+
+    Rsdp = KiArm64FindRsdp(LoaderBlock);
+    if (!Rsdp)
+    {
+        return;
+    }
+
+    if ((Rsdp->Revision >= 2) && (Rsdp->XsdtAddress.QuadPart != 0))
+    {
+        UINT64 XsdtPa = Rsdp->XsdtAddress.QuadPart;
+        PXSDT Xsdt;
+        ULONG Length;
+
+        /* Map XSDT header first */
+        KiArm64MapIdentityAcpiRange(XsdtPa, sizeof(DESCRIPTION_HEADER));
+        Xsdt = (PXSDT)(ULONG_PTR)XsdtPa;
+        Length = Xsdt->Header.Length;
+
+        if ((Xsdt->Header.Signature != XSDT_SIGNATURE) ||
+            (Length < sizeof(DESCRIPTION_HEADER)))
+        {
+            return;
+        }
+
+        /* Map full XSDT */
+        KiArm64MapIdentityAcpiRange(XsdtPa, Length);
+
+        /* Enumerate and map all tables */
+        Count = (Length - sizeof(DESCRIPTION_HEADER)) / sizeof(PHYSICAL_ADDRESS);
+
+        for (Index = 0; Index < Count; ++Index)
+        {
+            ULONGLONG TablePa = KiArm64ReadUnalignedU64(&Xsdt->Tables[Index]);
+            PDESCRIPTION_HEADER Header;
+
+            if (TablePa == 0)
+                continue;
+
+            /* Map table header to read its length */
+            KiArm64MapIdentityAcpiRange(TablePa, sizeof(DESCRIPTION_HEADER));
+            Header = (PDESCRIPTION_HEADER)(ULONG_PTR)TablePa;
+
+            /* Now map the entire table */
+            if (Header->Length > sizeof(DESCRIPTION_HEADER))
+            {
+                KiArm64MapIdentityAcpiRange(TablePa, Header->Length);
+            }
+        }
+    }
+    else if (Rsdp->RsdtAddress != 0)
+    {
+        UINT64 RsdtPa = (UINT64)Rsdp->RsdtAddress;
+        PRSDT Rsdt;
+        ULONG Length;
+
+        /* Map RSDT header first */
+        KiArm64MapIdentityAcpiRange(RsdtPa, sizeof(DESCRIPTION_HEADER));
+        Rsdt = (PRSDT)(ULONG_PTR)RsdtPa;
+        Length = Rsdt->Header.Length;
+
+        if ((Rsdt->Header.Signature != RSDT_SIGNATURE) ||
+            (Length < sizeof(DESCRIPTION_HEADER)))
+        {
+            return;
+        }
+
+        /* Map full RSDT */
+        KiArm64MapIdentityAcpiRange(RsdtPa, Length);
+
+        /* Enumerate and map all tables */
+        Count = (Length - sizeof(DESCRIPTION_HEADER)) / sizeof(ULONG);
+        for (Index = 0; Index < Count; ++Index)
+        {
+            ULONG TablePa = Rsdt->Tables[Index];
+            PDESCRIPTION_HEADER Header;
+
+            if (TablePa == 0)
+                continue;
+
+            /* Map table header to read its length */
+            KiArm64MapIdentityAcpiRange(TablePa, sizeof(DESCRIPTION_HEADER));
+            Header = (PDESCRIPTION_HEADER)(ULONG_PTR)TablePa;
+
+            /* Now map the entire table */
+            if (Header->Length > sizeof(DESCRIPTION_HEADER))
+            {
+                KiArm64MapIdentityAcpiRange(TablePa, Header->Length);
+            }
+        }
+    }
+}
+
+CODE_SEG("INIT")
+static BOOLEAN
+KiArm64IsRangeMappedByDescriptors(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+                                  _In_ UINT64 Start,
+                                  _In_ UINT64 End);
+
+CODE_SEG("INIT")
+static VOID
+KiArm64MapIdentityDeviceBlock(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+                              _In_ UINT64 Base,
+                              _In_ UINT64 Attributes)
+{
+    UINT64 Start;
+
+    if (Base == 0)
+        return;
+
+    Start = Base & ~(ARM64_L2_BLOCK_SIZE - 1ULL);
+
+    if (KiArm64IsRangeMappedByDescriptors(LoaderBlock,
+                                          Start,
+                                          Start + ARM64_L2_BLOCK_SIZE))
+    {
+        return;
+    }
+
+    KiArm64MapIdentityRange(Start, Start + ARM64_L2_BLOCK_SIZE, Attributes);
+}
+
+CODE_SEG("INIT")
+static VOID
+KiArm64MapIdentityDeviceRange(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+                              _In_ UINT64 Base,
+                              _In_ UINT64 Length,
+                              _In_ UINT64 Attributes)
+{
+    UINT64 Start;
+    UINT64 End;
+
+    if (Base == 0 || Length == 0)
+        return;
+
+    Start = Base & ~(ARM64_L2_BLOCK_SIZE - 1ULL);
+    End = (Base + Length + ARM64_L2_BLOCK_SIZE - 1ULL) & ~(ARM64_L2_BLOCK_SIZE - 1ULL);
+
+    for (UINT64 Cursor = Start; Cursor < End; Cursor += ARM64_L2_BLOCK_SIZE)
+    {
+        KiArm64MapIdentityDeviceBlock(LoaderBlock, Cursor, Attributes);
+    }
+}
+
+CODE_SEG("INIT")
+static BOOLEAN
+KiArm64MapGicMmioFromMadt(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+                          _In_ UINT64 Attributes)
+{
+    PRSDP Rsdp;
+    PACPI_MADT Madt;
+    ULONG Offset;
+    ULONG TotalLength;
+    BOOLEAN Mapped = FALSE;
+    BOOLEAN MappedGicd = FALSE;
+    BOOLEAN MappedGicc = FALSE;
+    BOOLEAN HasGicrEntry = FALSE;
+
+    Rsdp = KiArm64FindRsdp(LoaderBlock);
+    if (!Rsdp)
+        return FALSE;
+
+    Madt = (PACPI_MADT)KiArm64GetAcpiTable(Rsdp, APIC_SIGNATURE);
+    if (!Madt)
+        return FALSE;
+
+    TotalLength = Madt->Header.Length;
+    if (TotalLength < sizeof(ACPI_MADT))
+        return FALSE;
+
+    Offset = sizeof(ACPI_MADT);
+    while (Offset + sizeof(ACPI_SUBTABLE_HEADER) <= TotalLength)
+    {
+        PACPI_SUBTABLE_HEADER Entry = (PACPI_SUBTABLE_HEADER)((ULONG_PTR)Madt + Offset);
+
+        if (Entry->Length < sizeof(ACPI_SUBTABLE_HEADER))
+            break;
+
+        if (Offset + Entry->Length > TotalLength)
+            break;
+
+        switch (Entry->Type)
+        {
+            case ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR:
+            {
+                if (!MappedGicd && Entry->Length >= sizeof(ACPI_MADT_GENERIC_DISTRIBUTOR))
+                {
+                    PACPI_MADT_GENERIC_DISTRIBUTOR Dist =
+                        (PACPI_MADT_GENERIC_DISTRIBUTOR)Entry;
+                    UINT64 Base = KiArm64ReadUnalignedU64(&Dist->BaseAddress);
+
+                    if (Base)
+                    {
+                        KiArm64MapIdentityDeviceBlock(LoaderBlock, Base, Attributes);
+                        Mapped = TRUE;
+                        MappedGicd = TRUE;
+                    }
+                }
+                break;
+            }
+            case ACPI_MADT_TYPE_GENERIC_REDISTRIBUTOR:
+            {
+                if (Entry->Length >= sizeof(ACPI_MADT_GENERIC_REDISTRIBUTOR))
+                {
+                    PACPI_MADT_GENERIC_REDISTRIBUTOR Redist =
+                        (PACPI_MADT_GENERIC_REDISTRIBUTOR)Entry;
+                    UINT64 Base = KiArm64ReadUnalignedU64(&Redist->BaseAddress);
+                    ULONG Length;
+
+                    RtlCopyMemory(&Length, &Redist->Length, sizeof(Length));
+                    if (Base)
+                    {
+                        UINT64 MapLength = Length ? (UINT64)Length :
+                            (UINT64)MAXIMUM_PROCESSORS * ARM64_GICR_STRIDE_DEFAULT;
+
+                        if (MapLength > ARM64_GICR_MAX_MAP_BYTES)
+                            MapLength = ARM64_GICR_MAX_MAP_BYTES;
+
+                        KiArm64MapIdentityDeviceRange(LoaderBlock, Base, MapLength, Attributes);
+                        Mapped = TRUE;
+                    }
+                    HasGicrEntry = TRUE;
+                }
+                break;
+            }
+            case ACPI_MADT_TYPE_GENERIC_TRANSLATOR:
+            {
+                if (Entry->Length >= sizeof(ACPI_MADT_GENERIC_TRANSLATOR))
+                {
+                    PACPI_MADT_GENERIC_TRANSLATOR Its =
+                        (PACPI_MADT_GENERIC_TRANSLATOR)Entry;
+                    UINT64 Base = KiArm64ReadUnalignedU64(&Its->BaseAddress);
+
+                    if (Base)
+                    {
+                        KiArm64MapIdentityDeviceBlock(LoaderBlock, Base, Attributes);
+                        Mapped = TRUE;
+                    }
+                }
+                break;
+            }
+            case ACPI_MADT_TYPE_GENERIC_MSI_FRAME:
+            {
+                if (Entry->Length >= sizeof(ACPI_MADT_GENERIC_MSI_FRAME))
+                {
+                    PACPI_MADT_GENERIC_MSI_FRAME Frame =
+                        (PACPI_MADT_GENERIC_MSI_FRAME)Entry;
+                    UINT64 Base = KiArm64ReadUnalignedU64(&Frame->BaseAddress);
+
+                    if (Base)
+                    {
+                        KiArm64MapIdentityDeviceBlock(LoaderBlock, Base, Attributes);
+                        Mapped = TRUE;
+                    }
+                }
+                break;
+            }
+            case ACPI_MADT_TYPE_GENERIC_INTERRUPT:
+            {
+                if (!MappedGicc && Entry->Length >= sizeof(ACPI_MADT_GENERIC_INTERRUPT))
+                {
+                    PACPI_MADT_GENERIC_INTERRUPT Gicc =
+                        (PACPI_MADT_GENERIC_INTERRUPT)Entry;
+                    UINT64 Base = KiArm64ReadUnalignedU64(&Gicc->BaseAddress);
+                    UINT64 GicrBase = KiArm64ReadUnalignedU64(&Gicc->GicrBaseAddress);
+
+                    if (Base)
+                    {
+                        KiArm64MapIdentityDeviceBlock(LoaderBlock, Base, Attributes);
+                        Mapped = TRUE;
+                        MappedGicc = TRUE;
+                    }
+
+                    if (!HasGicrEntry && GicrBase)
+                    {
+                        KiArm64MapIdentityDeviceBlock(LoaderBlock, GicrBase, Attributes);
+                        Mapped = TRUE;
+                    }
+                }
+                break;
+            }
+            default:
+                break;
+        }
+
+        Offset += Entry->Length;
+    }
+
+    return Mapped;
+}
+
+CODE_SEG("INIT")
+static BOOLEAN
+KiArm64IsRangeMappedByDescriptors(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+                                  _In_ UINT64 Start,
+                                  _In_ UINT64 End)
+{
+    if (!LoaderBlock || (End <= Start))
+        return FALSE;
+
+    for (PLIST_ENTRY Entry = LoaderBlock->MemoryDescriptorListHead.Flink;
+         Entry != &LoaderBlock->MemoryDescriptorListHead;
+         Entry = Entry->Flink)
+    {
+        PMEMORY_ALLOCATION_DESCRIPTOR Descriptor =
+            CONTAINING_RECORD(Entry, MEMORY_ALLOCATION_DESCRIPTOR, ListEntry);
+
+        if (!KiArm64IsMappableMemoryType(Descriptor->MemoryType))
+            continue;
+
+        UINT64 RangeStart = (UINT64)Descriptor->BasePage << PAGE_SHIFT;
+        UINT64 RangeEnd = RangeStart + ((UINT64)Descriptor->PageCount << PAGE_SHIFT);
+
+        if ((Start < RangeEnd) && (End > RangeStart))
+            return TRUE;
+    }
+
+    return FALSE;
 }
 
 CODE_SEG("INIT")
@@ -348,106 +930,6 @@ KiArm64ReadMairEl1(VOID)
 
 CODE_SEG("INIT")
 static VOID
-KiArm64BootSerialWaitTxFifo(VOID)
-{
-    if (!KiArm64BootSerialReady)
-        return;
-    /* Bound the wait to prevent indefinite spin if UART is wedged */
-    for (ULONG spins = 0x100000;
-         (KiArm64BootUartBase[ARM64_PL011_FR / sizeof(ULONG)] & ARM64_PL011_FR_TXFF) && spins != 0;
-         --spins)
-    {
-        /* busy-wait */
-    }
-}
-
-CODE_SEG("INIT")
-static VOID
-KiArm64BootSerialPutChar(_In_ CHAR Character)
-{
-    if (!KiArm64BootSerialReady)
-        return;
-
-    if (Character == '\n')
-    {
-        KiArm64BootSerialWaitTxFifo();
-        KiArm64BootUartBase[ARM64_PL011_DR / sizeof(ULONG)] = '\r';
-    }
-
-    KiArm64BootSerialWaitTxFifo();
-    KiArm64BootUartBase[ARM64_PL011_DR / sizeof(ULONG)] = (ULONG)Character;
-}
-
-CODE_SEG("INIT")
-static VOID
-KiArm64BootSerialWrite(_In_reads_bytes_opt_(Count) const CHAR *Buffer,
-                       _In_ SIZE_T Count)
-{
-    if (!Buffer || !Count)
-        return;
-
-    while (Count--)
-    {
-        KiArm64BootSerialPutChar(*Buffer++);
-    }
-}
-
-CODE_SEG("INIT")
-static VOID
-KiArm64BootSerialWriteLine(_In_z_ PCSTR Text)
-{
-    if (!Text)
-        return;
-
-    while (*Text)
-    {
-        KiArm64BootSerialPutChar(*Text++);
-    }
-
-    KiArm64BootSerialPutChar('\n');
-}
-
-CODE_SEG("INIT")
-static VOID
-KiArm64BootSerialInitialize(_Inout_ PARM64_BOOT_CONTEXT BootContext)
-{
-    ULONGLONG UartBase = ARM64_EARLY_UART_PHYS_BASE;
-    PLOADER_PARAMETER_BLOCK LoaderBlock = BootContext->LoaderBlock;
-
-    if (LoaderBlock && LoaderBlock->Extension && LoaderBlock->Extension->HeadlessLoaderBlock)
-    {
-        PHEADLESS_LOADER_BLOCK Headless = LoaderBlock->Extension->HeadlessLoaderBlock;
-
-        if (Headless->PortAddress && Headless->IsMMIODevice)
-        {
-            UartBase = (ULONGLONG)(ULONG_PTR)Headless->PortAddress;
-        }
-        /* If PortAddress is not an MMIO device, keep default MMIO UART on ARM64 */
-    }
-
-    KiArm64BootUartBase = (volatile ULONG *)(ULONG_PTR)UartBase;
-    BootContext->UartPhysicalBase = KiArm64VirtualToPhysical(UartBase);
-    KiArm64BootSerialReady = TRUE;
-
-    {
-        CHAR Buffer[96];
-        if (NT_SUCCESS(RtlStringCbPrintfA(Buffer,
-                                          sizeof(Buffer),
-                                          "[arm64] Boot serial console enabled @0x%llx",
-                                          UartBase)))
-        {
-            KiArm64BootSerialWrite(Buffer, KiArm64BootStringLength(Buffer));
-            KiArm64BootSerialPutChar('\n');
-        }
-        else
-        {
-            KiArm64BootSerialWriteLine("[arm64] Boot serial console enabled");
-        }
-    }
-}
-
-CODE_SEG("INIT")
-static VOID
 KiArm64CaptureMmuState(_Out_ PARM64_BOOT_CONTEXT BootContext)
 {
     BootContext->SctlrEl1 = KiArm64ReadSctlrEl1();
@@ -456,93 +938,6 @@ KiArm64CaptureMmuState(_Out_ PARM64_BOOT_CONTEXT BootContext)
     BootContext->Ttbr1El1 = KiArm64ReadTtbr1El1();
     BootContext->MairEl1 = KiArm64ReadMairEl1();
     BootContext->MmuEnabled = (BootContext->SctlrEl1 & 1ULL) != 0;
-}
-
-CODE_SEG("INIT")
-static VOID
-KiArm64DumpBootContext(_In_ PARM64_BOOT_CONTEXT BootContext)
-{
-    CHAR Buffer[128];
-    SIZE_T Length;
-
-    Length = 0;
-    if (NT_SUCCESS(RtlStringCbPrintfA(Buffer,
-                                      sizeof(Buffer),
-                                      "[arm64] sctlr=0x%llx tcr=0x%llx mair=0x%llx\n",
-                                      BootContext->SctlrEl1,
-                                      BootContext->TcrEl1,
-                                      BootContext->MairEl1)))
-    {
-        Length = KiArm64BootStringLength(Buffer);
-        KiArm64BootSerialWrite(Buffer, Length);
-    }
-
-    if (NT_SUCCESS(RtlStringCbPrintfA(Buffer,
-                                      sizeof(Buffer),
-                                      "[arm64] ttbr0=0x%llx ttbr1=0x%llx mmu=%s\n",
-                                      BootContext->Ttbr0El1,
-                                      BootContext->Ttbr1El1,
-                                      BootContext->MmuEnabled ? "on" : "off")))
-    {
-        Length = KiArm64BootStringLength(Buffer);
-        KiArm64BootSerialWrite(Buffer, Length);
-    }
-
-    if (BootContext->UartPhysicalBase &&
-        NT_SUCCESS(RtlStringCbPrintfA(Buffer,
-                                      sizeof(Buffer),
-                                      "[arm64] uart=0x%llx\n",
-                                      BootContext->UartPhysicalBase)))
-    {
-        Length = KiArm64BootStringLength(Buffer);
-        KiArm64BootSerialWrite(Buffer, Length);
-    }
-}
-
-VOID
-KiArm64BootStageLog(_In_z_ PCSTR Stage)
-{
-    /*
-     * WORKAROUND/FIXME: Keep a universal stage logger callable even when
-     * INIT text is discarded. Write directly to the PL011 UART when the
-     * early console is initialized, and also emit to DbgPrintEx so the
-     * message appears in the normal kernel debug stream later.
-     */
-    if (Stage)
-    {
-        if (KiArm64BootSerialReady)
-        {
-            /* Minimal inline send to avoid relying on INIT-only helpers */
-            const CHAR *p = Stage;
-            while (*p)
-            {
-                /* Wait until TX FIFO has room */
-                for (ULONG spins = 0x100000;
-                     (KiArm64BootUartBase[ARM64_PL011_FR / sizeof(ULONG)] & ARM64_PL011_FR_TXFF) && spins != 0;
-                     --spins) { /* busy-wait */ }
-
-                if (*p == '\n')
-                {
-                    /* Write CR before LF */
-                    for (ULONG spins = 0x100000;
-                         (KiArm64BootUartBase[ARM64_PL011_FR / sizeof(ULONG)] & ARM64_PL011_FR_TXFF) && spins != 0;
-                         --spins) { /* busy-wait */ }
-                    KiArm64BootUartBase[ARM64_PL011_DR / sizeof(ULONG)] = '\r';
-                }
-
-                KiArm64BootUartBase[ARM64_PL011_DR / sizeof(ULONG)] = (ULONG)(*p++);
-            }
-
-            /* Append newline */
-            for (ULONG spins = 0x100000;
-                 (KiArm64BootUartBase[ARM64_PL011_FR / sizeof(ULONG)] & ARM64_PL011_FR_TXFF) && spins != 0;
-                 --spins) { /* busy-wait */ }
-            KiArm64BootUartBase[ARM64_PL011_DR / sizeof(ULONG)] = (ULONG)'\n';
-        }
-
-        /* Also mirror to kernel debug stream when available */
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL, "%s\n", Stage);
-    }
 }
 
 CODE_SEG("INIT")
@@ -613,14 +1008,8 @@ KiArm64EarlyVectorHandler(_In_ UINT64 VectorId,
                           _In_ UINT64 FaultAddress,
                           _In_opt_ PARM64_EARLY_GPRS Registers)
 {
-    PCSTR VectorName = (VectorId < RTL_NUMBER_OF(KiArm64VectorNames) &&
-                        KiArm64VectorNames[VectorId]) ? KiArm64VectorNames[VectorId]
-                                                       : "Unknown";
-    PCSTR EsrDesc = KiArm64DescribeEsr(ExceptionSyndrome);
-    ULONG Iss = (ULONG)(ExceptionSyndrome & 0x1FFFFFFULL);
     UINT64 Spsr, Elr;
     ARM64_EARLY_GPRS LocalRegisters = {0};
-    BOOLEAN ShouldLog;
 
     __asm__ __volatile__("mrs %0, spsr_el1" : "=r"(Spsr));
     __asm__ __volatile__("mrs %0, elr_el1"  : "=r"(Elr));
@@ -638,42 +1027,6 @@ KiArm64EarlyVectorHandler(_In_ UINT64 VectorId,
     KiArm64LastTrapState.Spsr = Spsr;
     KiArm64TrapStateValid = TRUE;
 
-    ShouldLog = TRUE;
-
-    if (ShouldLog)
-    {
-        KiArm64VectorUartPuts("[vector] id=");
-        KiArm64VectorUartPutHex64(VectorId);
-        KiArm64VectorUartPuts(" esr=");
-        KiArm64VectorUartPutHex64(ExceptionSyndrome);
-        KiArm64VectorUartPuts(" far=");
-        KiArm64VectorUartPutHex64(FaultAddress);
-        KiArm64VectorUartPuts(" elr=");
-        KiArm64VectorUartPutHex64(Elr);
-        KiArm64VectorUartPuts(" x0=");
-        KiArm64VectorUartPutHex64(LocalRegisters.X0);
-        KiArm64VectorUartPuts(" x30=");
-        KiArm64VectorUartPutHex64(LocalRegisters.Sp); /* placeholder */
-        KiArm64VectorUartPuts("\n");
-    }
-
-    if (ShouldLog)
-    {
-        DbgPrint("[arm64] vector %llu (%s) esr=0x%llx (%s) iss=0x%lx far=0x%llx elr=0x%llx spsr=0x%llx x0=0x%llx x1=0x%llx x2=0x%llx x3=0x%llx sp=0x%llx\n",
-                 VectorId,
-                 VectorName,
-                 ExceptionSyndrome,
-                 EsrDesc,
-                 Iss,
-                 FaultAddress,
-                 Elr,
-                 Spsr,
-                 LocalRegisters.X0,
-                 LocalRegisters.X1,
-                 LocalRegisters.X2,
-                 LocalRegisters.X3,
-                 LocalRegisters.Sp);
-    }
 
     /*
      * If final vectors are installed, return and let the permanent
@@ -731,6 +1084,23 @@ KiArm64EnsureMairDeviceNgnrne(_In_ UINT64 CurrentMair)
 
 CODE_SEG("INIT")
 static UINT64
+KiArm64EnsureMairNormalNc(_In_ UINT64 CurrentMair,
+                          _In_ UINT64 AttrIndex)
+{
+    const UINT64 AttributeMask = 0xFFULL << (AttrIndex * 8);
+    UINT64 Updated = (CurrentMair & ~AttributeMask) | (0x44ULL << (AttrIndex * 8));
+
+    if (Updated != CurrentMair)
+    {
+        __asm__ __volatile__("msr mair_el1, %0" :: "r"(Updated));
+        __asm__ __volatile__("isb");
+    }
+
+    return Updated;
+}
+
+CODE_SEG("INIT")
+static UINT64
 KiArm64AlignUp(_In_ UINT64 Value,
                _In_ UINT64 Alignment)
 {
@@ -760,33 +1130,8 @@ CODE_SEG("INIT")
 static VOID
 KiArm64InstallEarlyExceptionVectors(VOID)
 {
-    ULONG_PTR PreVbar = 0;
-    __asm__ __volatile__("mrs %0, vbar_el1" : "=r"(PreVbar));
-    /* Pre-KD: avoid KdpDprintf, use boot UART logging only */
-    {
-        CHAR Buf[96];
-        if (NT_SUCCESS(RtlStringCbPrintfA(Buf, sizeof(Buf),
-                                          "[arm64] EarlyVectors: previous VBAR = %p",
-                                          (PVOID)PreVbar)))
-        {
-            KiArm64BootSerialWrite(Buf, KiArm64BootStringLength(Buf));
-            KiArm64BootSerialPutChar('\n');
-        }
-    }
-
     __asm__ __volatile__("msr vbar_el1, %0" :: "r"((ULONG_PTR)&KiArm64EarlyVectorTable));
     __asm__ __volatile__("isb");
-    {
-        CHAR Buf[96];
-        if (NT_SUCCESS(RtlStringCbPrintfA(Buf, sizeof(Buf),
-                                          "[arm64] EarlyVectors: installed VBAR = %p",
-                                          (PVOID)(ULONG_PTR)&KiArm64EarlyVectorTable)))
-        {
-            KiArm64BootSerialWrite(Buf, KiArm64BootStringLength(Buf));
-            KiArm64BootSerialPutChar('\n');
-        }
-    }
-    KiArm64BootStageLog("[arm64] early exception vectors installed");
 }
 
 CODE_SEG("INIT")
@@ -930,104 +1275,20 @@ KiArm64EnsureIdentityMapping(_Inout_ PARM64_BOOT_CONTEXT BootContext)
         KiArm64MapIdentityRange(0, ARM64_IDENTITY_MIN_BYTES, BlockAttributes);
     }
 
-    if (KiArm64BootSerialReady)
-    {
-        CHAR MapBuf[128];
-        UINT64 L0Entry = KiArm64IdentityL0[0];
-        UINT64 L1Entry0 = KiArm64IdentityL1[0];
-        UINT64 UartPte = 0;
-
-        if (BootContext->UartPhysicalBase != 0)
-        {
-            UINT64 UartStart = BootContext->UartPhysicalBase & ~(ARM64_L2_BLOCK_SIZE - 1ULL);
-            UINT64 L1Index = UartStart >> ARM64_L1_BLOCK_SHIFT;
-            UINT64 L2Index = (UartStart >> ARM64_L2_BLOCK_SHIFT) & 0x1FFULL;
-
-            if (L1Index < ARM64_L1_MAX_ENTRIES)
-            {
-                UartPte = KiArm64IdentityL2[L1Index][L2Index];
-            }
-        }
-
-        if (NT_SUCCESS(RtlStringCbPrintfA(MapBuf,
-                                          sizeof(MapBuf),
-                                          "[arm64] identity: L0[0]=0x%llx L1[0]=0x%llx UartPte=0x%llx",
-                                          L0Entry,
-                                          L1Entry0,
-                                          UartPte)))
-        {
-            KiArm64BootSerialWrite(MapBuf, KiArm64BootStringLength(MapBuf));
-            KiArm64BootSerialPutChar('\n');
-        }
-    }
-
-    if (HighestPhysical != 0 && KiArm64BootSerialReady)
-    {
-        CHAR Coverage[96];
-        if (NT_SUCCESS(RtlStringCbPrintfA(Coverage,
-                                          sizeof(Coverage),
-                                          "[arm64] identity top=0x%llx",
-                                          HighestPhysical)))
-        {
-            KiArm64BootSerialWrite(Coverage, KiArm64BootStringLength(Coverage));
-            KiArm64BootSerialPutChar('\n');
-        }
-    }
-
-    KiArm64BootStageLog("[arm64] identity: before MAIR");
-
-    /* Program MAIR for Normal-WB and Device-nGnRnE attributes */
+    /* Program MAIR for Normal-WB, Normal-NC, and Device-nGnRnE attributes */
     UpdatedMair = KiArm64EnsureMairNormalWb(BootContext->MairEl1);
+    UpdatedMair = KiArm64EnsureMairNormalNc(UpdatedMair, ARM64_MEM_ATTR_NORMAL_NC);
+    UpdatedMair = KiArm64EnsureMairNormalNc(UpdatedMair, ARM64_MEM_ATTR_NORMAL_WC);
     UpdatedMair = KiArm64EnsureMairDeviceNgnrne(UpdatedMair);
     BootContext->MairEl1 = UpdatedMair;
 
-    KiArm64BootStageLog("[arm64] identity: after MAIR");
-
-    /* Identity map the UART MMIO page as Device-nGnRnE */
-    if (BootContext->UartPhysicalBase != 0)
-    {
-        UINT64 UartStart = BootContext->UartPhysicalBase & ~(ARM64_L2_BLOCK_SIZE - 1ULL);
-        UINT64 UartEnd = UartStart + ARM64_L2_BLOCK_SIZE;
-        UINT64 DeviceBlockAttrs = ARM64_PTE_TYPE_BLOCK |
-                                  (ARM64_MEM_ATTR_DEVICE_nGnRnE << ARM64_PTE_BLOCK_ATTR_INDEX_SHIFT) |
-                                  ARM64_PTE_BLOCK_AF |
-                                  ARM64_PTE_BLOCK_UXN |
-                                  ARM64_PTE_BLOCK_PXN;
-        KiArm64MapIdentityRange(UartStart, UartEnd, DeviceBlockAttrs);
-    }
-
-    KiArm64BootStageLog("[arm64] identity: after UART map");
-
-    /* Map common GIC MMIO (QEMU virt: 0x0800_0000..0x0802_0000) */
-    {
-        const UINT64 GicStart = 0x08000000ULL & ~(ARM64_L2_BLOCK_SIZE - 1ULL);
-        const UINT64 GicEnd   = GicStart + (2 * ARM64_L2_BLOCK_SIZE);
-        UINT64 DeviceBlockAttrs = ARM64_PTE_TYPE_BLOCK |
-                                  (ARM64_MEM_ATTR_DEVICE_nGnRnE << ARM64_PTE_BLOCK_ATTR_INDEX_SHIFT) |
-                                  ARM64_PTE_BLOCK_AF |
-                                  ARM64_PTE_BLOCK_UXN |
-                                  ARM64_PTE_BLOCK_PXN;
-        KiArm64MapIdentityRange(GicStart, GicEnd, DeviceBlockAttrs);
-    }
-
-    KiArm64BootStageLog("[arm64] identity: after GIC map");
+    UINT64 DeviceBlockAttrs = ARM64_PTE_TYPE_BLOCK |
+                              (ARM64_MEM_ATTR_DEVICE_nGnRnE << ARM64_PTE_BLOCK_ATTR_INDEX_SHIFT) |
+                              ARM64_PTE_BLOCK_AF |
+                              ARM64_PTE_BLOCK_UXN |
+                              ARM64_PTE_BLOCK_PXN;
 
     Ttbr0Physical = KiArm64VirtualToPhysical((ULONG_PTR)KiArm64IdentityL0);
-
-    if (KiArm64BootSerialReady)
-    {
-        CHAR Buf[96];
-        if (NT_SUCCESS(RtlStringCbPrintfA(Buf,
-                                          sizeof(Buf),
-                                          "[arm64] identity: ttbr0 phys=0x%llx",
-                                          Ttbr0Physical)))
-        {
-            KiArm64BootSerialWrite(Buf, KiArm64BootStringLength(Buf));
-            KiArm64BootSerialPutChar('\n');
-        }
-    }
-
-    KiArm64BootStageLog("[arm64] identity: before TTBR0 switch");
 
     __asm__ __volatile__("dsb ishst" ::: "memory");
     __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(Ttbr0Physical));
@@ -1036,22 +1297,58 @@ KiArm64EnsureIdentityMapping(_Inout_ PARM64_BOOT_CONTEXT BootContext)
     __asm__ __volatile__("dsb ish" ::: "memory");
     __asm__ __volatile__("isb");
 
-    KiArm64BootStageLog("[arm64] identity: after TTBR0 switch");
 
     BootContext->Ttbr0El1 = Ttbr0Physical;
     BootContext->MmuEnabled = TRUE;
+    KiArm64IdentityMapActive = TRUE;
 
-    KiArm64BootStageLog("[arm64] identity mapping initialised");
-}
+    /* Map GIC MMIO windows based on MADT, fallback to QEMU virt defaults. */
+    if (!KiArm64MapGicMmioFromMadt(LoaderBlock, DeviceBlockAttrs))
+    {
+        /*
+         * Map the QEMU virt default GIC regions:
+         *   - GICD: 0x08000000
+         *   - GICC: 0x08010000
+         *   - GICH/GICV: 0x08030000-0x08050000
+         */
+        const UINT64 GicStart = 0x08000000ULL & ~(ARM64_L2_BLOCK_SIZE - 1ULL);
+        const UINT64 GicEnd = GicStart + (8 * ARM64_L2_BLOCK_SIZE);
 
-CODE_SEG("INIT")
-static VOID
-KiArm64HandoverToPhase1(_Inout_ ARM64_BOOT_CONTEXT *BootContext)
-{
-    UNREFERENCED_PARAMETER(BootContext);
+        KiArm64MapIdentityRange(GicStart, GicEnd, DeviceBlockAttrs);
+    }
 
-    KiArm64BootStageLog("[arm64] entering KiInitializeSystem");
-    KiInitializeSystem(BootContext->LoaderBlock);
+    /*
+     * QEMU GICv3 redistributor region is typically at 0x80a0000 for highmem=off,
+     * but at 0x100000000 (4GB) for highmem=on or when using TCG emulation with
+     * more than 4GB RAM. Always map the 4GB GICR region to handle both cases.
+     * Note: The HAL now detects when ACPI reports highmem GICR addresses that
+     * don't match actual hardware and falls back to the lowmem region.
+     */
+    {
+        const UINT64 GicrHighStart = 0x100000000ULL;
+        const UINT64 GicrHighEnd = GicrHighStart + (64ULL << 20);  /* 64MB for GICR */
+        KiArm64MapIdentityRange(GicrHighStart, GicrHighEnd, DeviceBlockAttrs);
+    }
+
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("isb");
+
+
+    /*
+     * Map ALL ACPI tables from the XSDT/RSDT so that the HAL can access
+     * them during ACPI phase 0 initialization. The HAL's HalpMapPhysicalMemory64
+     * uses identity mapping before Mm is initialized, so all ACPI table pages
+     * must be pre-mapped in the identity page tables.
+     */
+    KiArm64MapAllAcpiTables(LoaderBlock);
+
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("isb");
+
 }
 
 DECLSPEC_NORETURN
@@ -1062,24 +1359,16 @@ KiSystemStartup(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     ARM64_BOOT_CONTEXT BootContext = {0};
 
-    /* Keep KiArm64HandoverToPhase1 reachable for GCC/MinGW (unused warning). */
-    if (0)
-    {
-        KiArm64HandoverToPhase1(&BootContext);
-    }
-
-    KiArm64EmitEntryMarker();
-
-    BootContext.LoaderBlock = LoaderBlock;
-    KiArm64BootSerialInitialize(&BootContext);
-
-    KiArm64BootStageLog("[arm64] KiSystemStartup entered");
-
-    KiArm64CaptureMmuState(&BootContext);
-    KiArm64DumpBootContext(&BootContext);
-
+    /*
+     * Install early exception vectors FIRST, before any memory access that
+     * could fault. This ensures we get diagnostic output if UART or other
+     * early accesses cause translation faults.
+     */
     KiArm64InstallEarlyExceptionVectors();
 
+    BootContext.LoaderBlock = LoaderBlock;
+
+    KiArm64CaptureMmuState(&BootContext);
     KiArm64EnsureIdentityMapping(&BootContext);
 
     /* Switch to a clean boot stack before entering KiInitializeSystem */
@@ -1088,36 +1377,11 @@ KiSystemStartup(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     {
         LoaderBlock->KernelStack += ARM64_KSEG0_BASE;
     }
-    {
-        CHAR Stage[160];
-        if (NT_SUCCESS(RtlStringCbPrintfA(Stage,
-                                          sizeof(Stage),
-                                          "[arm64] bootstack: raw=%p adjusted=%p",
-                                          KiArm64P0BootStack,
-                                          (PVOID)LoaderBlock->KernelStack)))
-        {
-            KiArm64BootStageLog(Stage);
-        }
-    }
-
-    {
-        ULONG_PTR InitialStack = LoaderBlock->KernelStack;
-        KiArm64BootStageLog("[arm64] switching to boot stack");
-        KiArm64SwitchToBootStack(InitialStack, LoaderBlock);
-    }
+    KiArm64SwitchToBootStack(LoaderBlock->KernelStack, LoaderBlock);
 
     /* Not reached */
-    KiArm64BootStageLog("[arm64] KiSwitchToBootStack returned unexpectedly");
     KiArm64FatalHalt();
 }
-#define ARM64_PL011_BASE 0x09000000ULL
-#define ARM64_PL011_DR   0x00
-#define ARM64_PL011_FR   0x18
-#define ARM64_PL011_FR_TXFF (1u << 5)
-static __inline VOID KiArm64VectorUartPutc(char Ch);
-static __inline VOID KiArm64VectorUartPuts(const char *S);
-static __inline VOID KiArm64VectorUartPutHex64(ULONGLONG V);
-
 CODE_SEG("INIT")
 DECLSPEC_NORETURN VOID NTAPI
 KiArm64SystemStartupBootStack(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
@@ -1125,37 +1389,11 @@ KiArm64SystemStartupBootStack(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     /*
      * ARM64 Boot Stack Initialization
      *
-     * This function is called on the clean boot stack before entering the main
-     * kernel initialization. It must perform critical early initialization that
-     * other subsystems depend on, similar to amd64's KiSystemStartupBootStack.
-     *
-     * Key responsibilities:
-     * 1. Initialize pool lookaside list pointers in the PRCB
-     * 2. Set up any architecture-specific state needed for early boot
-     * 3. Hand off to the main kernel initialization
+     * This function runs on the clean boot stack before entering the main
+     * kernel initialization and then hands off to KiInitializeSystem.
      */
-
-    /* Declare the pool lookaside initialization function from ex/lookas.c */
-    extern VOID NTAPI ExInitPoolLookasidePointers(VOID);
-
-    KiArm64BootStageLog("[arm64] KiSystemStartupBootStack: initializing pool lookaside pointers");
-
-    /*
-     * CRITICAL: Initialize pool lookaside list pointers BEFORE calling KiInitializeSystem.
-     *
-     * The PRCB contains per-CPU pointers to lookaside lists that are used by the pool
-     * allocator (ExAllocatePoolWithTag/ExFreePoolWithTag). These must be initialized
-     * before any pool allocations occur, otherwise the allocator will dereference
-     * NULL or uninitialized pointers when trying to use the lookaside lists.
-     *
-     * On amd64, this is done in KiSystemStartupBootStack before KiInitializeKernel.
-     * We must do the same on ARM64 to avoid crashes in RtlInterlockedPopEntrySList
-     * when ExAllocatePoolWithTag tries to pop from an uninitialized lookaside list.
-     */
-    ExInitPoolLookasidePointers();
-
-    KiArm64BootStageLog("[arm64] KiSystemStartupBootStack: entering KiInitializeSystem");
     KiInitializeSystem(LoaderBlock);
-    KiArm64BootStageLog("[arm64] KiSystemStartupBootStack: KiInitializeSystem returned unexpectedly");
+
+    /* Should never return */
     KiArm64FatalHalt();
 }

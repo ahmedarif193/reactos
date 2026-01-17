@@ -24,6 +24,14 @@
 #undef __stdcall
 #endif
 #define __stdcall
+#if defined(_M_ARM64) || defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM)
+#undef __thiscall
+#define __thiscall
+#ifdef __fastcall
+#undef __fastcall
+#endif
+#define __fastcall
+#endif
 #endif
 
 #ifdef __GNUC__
@@ -73,6 +81,12 @@
 # else
 #  define __UNUSED_PARAM(x) x
 # endif
+#endif
+
+#if defined(__GNUC__) && !defined(__clang__) && (defined(__i386__) || defined(__x86_64__))
+# define DECLSPEC_HOTPATCH __attribute__((__ms_hook_prologue__))
+#else
+# define DECLSPEC_HOTPATCH
 #endif
 
 #ifdef __cplusplus
@@ -269,4 +283,3 @@ allow GCC to optimize away some EH unwind code, at least in DW2 case.  */
 #include "_mingw_mac.h"
 
 #endif /* !_INC_MINGW */
-

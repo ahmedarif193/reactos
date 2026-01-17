@@ -174,6 +174,7 @@ DECLARE_INTERFACE_(IBanneredBar, IUnknown)//, "596A9A94-013E-11d1-8D34-00A0C90F2
 /*****************************************************************************
  * IGlobalFolderSettings interface
  */
+#include <pshpack4.h>
 struct DEFFOLDERSETTINGS
 {
 #ifdef __cplusplus
@@ -188,6 +189,7 @@ struct DEFFOLDERSETTINGS
     UINT Counter; // Incremented every time default folder settings are applied. Invalidates a cache?
     UINT ViewPriority; // VIEW_PRIORITY_*
 };
+#include <poppack.h>
 
 #undef  INTERFACE
 #define INTERFACE   IGlobalFolderSettings

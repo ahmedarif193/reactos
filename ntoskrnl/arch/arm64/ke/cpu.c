@@ -142,9 +142,48 @@ VOID
 KiFlushSingleTb(_In_ BOOLEAN Invalid,
                 _In_ PVOID VirtualAddress)
 {
-    ARM64_STUB();
+    ULONG_PTR Addr = (ULONG_PTR)VirtualAddress;
+
     UNREFERENCED_PARAMETER(Invalid);
-    UNREFERENCED_PARAMETER(VirtualAddress);
+
+    /*
+     * ARM64 TLB invalidation for a single virtual address.
+     *
+     * The ARM64 architecture uses a weakly-ordered memory model and requires
+     * explicit synchronization barriers to ensure TLB invalidations are
+     * properly ordered with respect to page table updates:
+     *
+     * 1. DSB ISH - Ensure all prior stores (PTE writes) are visible to
+     *              all cores before the TLB invalidation
+     * 2. TLBI     - Invalidate the TLB entry for this specific VA
+     * 3. DSB ISH - Ensure the TLB invalidation completes before subsequent
+     *              memory accesses
+     * 4. ISB      - Synchronize instruction fetch (required for code pages)
+     *
+     * TLBI VAE1IS: TLB Invalidate by VA, EL1, Inner Shareable
+     * - Invalidates TLB entries for the specified VA in EL1
+     * - Inner Shareable ensures invalidation is broadcast to all cores
+     *   in the inner shareable domain
+     * - The VA must be shifted right by 12 bits (page aligned)
+     *
+     * Windows ARM64 Compliance: This matches the Windows kernel's approach
+     * of using inner-shareable TLB operations for single-address invalidation.
+     */
+
+    /* Shift VA right by PAGE_SHIFT (12 bits) as required by TLBI instruction */
+    Addr >>= PAGE_SHIFT;
+
+    /* Ensure all prior PTE stores are visible before TLB invalidation */
+    __asm__ __volatile__("dsb ish" ::: "memory");
+
+    /* Invalidate TLB entry for this VA at EL1, inner shareable */
+    __asm__ __volatile__("tlbi vae1is, %0" :: "r"(Addr) : "memory");
+
+    /* Ensure TLB invalidation completes before subsequent memory accesses */
+    __asm__ __volatile__("dsb ish" ::: "memory");
+
+    /* Synchronize instruction fetch (critical for executable pages) */
+    __asm__ __volatile__("isb" ::: "memory");
 }
 
 VOID
@@ -412,16 +451,175 @@ KiRestoreProcessorState(
     KiRestoreProcessorControlState(&Prcb->ProcessorState);
 }
 
+/*
+ * @implemented
+ * KeFlushIoBuffers - Flush CPU data caches for DMA correctness on ARM64.
+ *
+ * ARM64 uses a weakly-ordered memory model and does NOT have cache-coherent DMA
+ * by default (unlike x86/AMD64). This means that when a DMA device reads or writes
+ * memory, the CPU caches may contain stale data or unflushed writes.
+ *
+ * For DMA correctness, we must perform explicit cache maintenance:
+ *
+ * - ReadOperation == TRUE (device-to-memory DMA, e.g., disk read):
+ *   The device will write data directly to RAM. We must INVALIDATE the CPU's
+ *   data cache lines covering this memory region so subsequent CPU reads fetch
+ *   the fresh data from RAM rather than stale cached data. We use DC CIVAC
+ *   (Clean and Invalidate by VA to Point of Coherency) which ensures any dirty
+ *   cache data is written back before invalidation.
+ *
+ * - ReadOperation == FALSE (memory-to-device DMA, e.g., disk write):
+ *   The CPU has written data that the device will read. We must CLEAN (flush)
+ *   the CPU's data cache to ensure all modified cache lines are written back
+ *   to RAM so the device sees the correct data. We use DC CVAC (Clean by VA
+ *   to Point of Coherency).
+ *
+ * The DmaOperation parameter indicates whether this is for an actual DMA transfer.
+ * If KiDmaIoCoherency is set, the hardware provides DMA coherency and we can
+ * skip cache maintenance for DMA operations.
+ *
+ * Cache line alignment is critical: ARM64 cache maintenance operates on cache
+ * lines (typically 64 bytes). We must align to cache line boundaries to avoid
+ * corrupting adjacent data.
+ *
+ * Memory barriers (DSB ISH) ensure cache operations complete before returning.
+ */
 VOID
 NTAPI
 KeFlushIoBuffers(_Inout_ PMDL Mdl,
                  _In_ BOOLEAN ReadOperation,
                  _In_ BOOLEAN DmaOperation)
 {
-    ARM64_STUB();
-    UNREFERENCED_PARAMETER(Mdl);
-    UNREFERENCED_PARAMETER(ReadOperation);
-    UNREFERENCED_PARAMETER(DmaOperation);
+    PVOID VirtualAddress;
+    ULONG Length;
+    ULONG_PTR StartAddress;
+    ULONG_PTR EndAddress;
+    ULONG_PTR CacheAddress;
+    ULONG CacheLineSize;
+
+    /*
+     * If the MDL is NULL or has zero byte count, there is nothing to flush.
+     */
+    if (Mdl == NULL || Mdl->ByteCount == 0)
+    {
+        return;
+    }
+
+    /*
+     * For DMA operations, check if the hardware provides DMA coherency.
+     * If KiDmaIoCoherency is non-zero, the system has cache-coherent DMA
+     * and explicit cache maintenance is not needed.
+     */
+    if (DmaOperation && KiDmaIoCoherency)
+    {
+        return;
+    }
+
+    /*
+     * Get the virtual address for cache maintenance operations.
+     * We need the system virtual address mapped for the MDL.
+     *
+     * If the MDL is already mapped (MDL_MAPPED_TO_SYSTEM_VA) or the source
+     * is from nonpaged pool (MDL_SOURCE_IS_NONPAGED_POOL), use MappedSystemVa.
+     * Otherwise, we cannot safely access the memory for cache maintenance.
+     */
+    if (Mdl->MdlFlags & (MDL_MAPPED_TO_SYSTEM_VA | MDL_SOURCE_IS_NONPAGED_POOL))
+    {
+        VirtualAddress = Mdl->MappedSystemVa;
+    }
+    else
+    {
+        /*
+         * MDL not mapped to system VA. For buffers that are only mapped into
+         * user space, we cannot perform cache maintenance from kernel mode
+         * without first mapping them. In this case, skip the flush.
+         *
+         * Note: In a complete implementation, we might need to temporarily
+         * map the pages for cache maintenance. However, most DMA paths ensure
+         * the MDL is properly mapped before calling KeFlushIoBuffers.
+         */
+        return;
+    }
+
+    if (VirtualAddress == NULL)
+    {
+        return;
+    }
+
+    Length = Mdl->ByteCount;
+
+    /*
+     * Get the cache line size. The ARM64 architecture allows variable cache
+     * line sizes read from CTR_EL0.DminLine field. We use the globally cached
+     * value from KeLargestCacheLine which should be set during early init.
+     * Default is 64 bytes if not explicitly initialized.
+     */
+    CacheLineSize = KeLargestCacheLine;
+    if (CacheLineSize == 0)
+    {
+        CacheLineSize = 64;  /* Default ARM64 cache line size */
+    }
+
+    /*
+     * Align the start address down to cache line boundary.
+     * Align the end address up to ensure we cover all affected cache lines.
+     */
+    StartAddress = (ULONG_PTR)VirtualAddress & ~((ULONG_PTR)CacheLineSize - 1);
+    EndAddress = ((ULONG_PTR)VirtualAddress + Length + CacheLineSize - 1) &
+                 ~((ULONG_PTR)CacheLineSize - 1);
+
+    /*
+     * Perform cache maintenance based on operation type.
+     */
+    if (ReadOperation)
+    {
+        /*
+         * Device-to-memory (DMA read): Invalidate cache lines.
+         *
+         * DC CIVAC: Clean and Invalidate by VA to Point of Coherency
+         * - First cleans (writes back) any dirty data to memory
+         * - Then invalidates the cache line
+         *
+         * We use CIVAC instead of just IVAC (Invalidate) because:
+         * 1. IVAC may not be available from EL1 on all implementations
+         * 2. If there was dirty data in the cache line (from adjacent writes),
+         *    we need to preserve it by writing it back before invalidation
+         *
+         * DSB ISH before: Ensure all prior memory accesses complete
+         * DSB ISH after: Ensure cache operations complete before return
+         */
+        __asm__ __volatile__("dsb ish" ::: "memory");
+
+        for (CacheAddress = StartAddress; CacheAddress < EndAddress;
+             CacheAddress += CacheLineSize)
+        {
+            __asm__ __volatile__("dc civac, %0" :: "r"(CacheAddress) : "memory");
+        }
+
+        __asm__ __volatile__("dsb ish" ::: "memory");
+    }
+    else
+    {
+        /*
+         * Memory-to-device (DMA write): Clean cache lines.
+         *
+         * DC CVAC: Clean by VA to Point of Coherency
+         * - Writes back any dirty data from cache to memory
+         * - Leaves the cache line valid (still cached)
+         *
+         * This ensures the DMA device will read the correct data from RAM.
+         *
+         * DSB ISH after: Ensure all clean operations complete before the
+         * DMA transfer starts, so the device sees consistent data.
+         */
+        for (CacheAddress = StartAddress; CacheAddress < EndAddress;
+             CacheAddress += CacheLineSize)
+        {
+            __asm__ __volatile__("dc cvac, %0" :: "r"(CacheAddress) : "memory");
+        }
+
+        __asm__ __volatile__("dsb ish" ::: "memory");
+    }
 }
 
 NTSTATUS

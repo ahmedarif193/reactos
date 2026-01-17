@@ -54,9 +54,11 @@ $ZwFuncEndName
     .align 2
     .global Zw\Name
 Zw\Name:
-    mov x8, #SyscallId
-    svc #0
-    ret
+    /* Kernel-mode Zw* functions directly call Nt* instead of using svc */
+    /* This matches Windows ARM64 behavior and avoids exception overhead */
+    adrp x16, Nt\Name
+    add x16, x16, #:lo12:Nt\Name
+    br x16
     .set SyscallId, SyscallId + 1
     .endm
 

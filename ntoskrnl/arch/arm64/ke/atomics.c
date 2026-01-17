@@ -9,10 +9,6 @@
 #include <ntoskrnl.h>
 #include <ndk/rtlfuncs.h>
 
-PSLIST_ENTRY NTAPI RtlInterlockedPopEntrySList(PSLIST_HEADER ListHead);
-PSLIST_ENTRY NTAPI RtlInterlockedPushEntrySList(PSLIST_HEADER ListHead, PSLIST_ENTRY ListEntry);
-PSLIST_ENTRY NTAPI RtlInterlockedFlushSList(PSLIST_HEADER ListHead);
-
 /* TODO(ARM64): Replace these helpers with proper barrier-aware routines once
  * the full interlocked/atomic support layer lands. */
 
@@ -439,6 +435,17 @@ __aarch64_swp8_acq(
 {
     return __atomic_exchange_n(Destination, Value, __ATOMIC_ACQUIRE);
 }
+
+/*
+ * ExpInterlocked*SList wrappers.
+ * We provide explicit wrappers because #pragma redefine_extname behaves
+ * inconsistently between GCC (renames symbol entirely, breaking callers)
+ * and clang (doesn't work on COFF targets). The pragma is disabled for
+ * ARM64 in sdk/lib/rtl/slist.c, so we must provide these here.
+ */
+PSLIST_ENTRY NTAPI RtlInterlockedPopEntrySList(PSLIST_HEADER ListHead);
+PSLIST_ENTRY NTAPI RtlInterlockedPushEntrySList(PSLIST_HEADER ListHead, PSLIST_ENTRY ListEntry);
+PSLIST_ENTRY NTAPI RtlInterlockedFlushSList(PSLIST_HEADER ListHead);
 
 NTKERNELAPI
 PSLIST_ENTRY

@@ -38,22 +38,14 @@ struct _KPCR;
 #define ARM64_STUB() UNIMPLEMENTED_DBGBREAK()
 
 VOID
-KiArm64BootStageLog(_In_z_ PCSTR Stage);
-VOID
 KdpDprintf(
     _In_z_ PCSTR Format,
     ...);
 extern ULONGLONG KdpTimeStampOffsetMicroseconds;
 
-static ULONGLONG KiArm64PcrBannerFallbackCounter;
-static VOID
-KiArm64EmitStageLog(_In_z_ PCSTR Stage)
-{
-    KiArm64BootStageLog(Stage);
-}
-
 extern BOOLEAN KdDebuggerNotPresent;
 extern BOOLEAN RtlpUse16ByteSLists;
+extern VOID NTAPI ExInitPoolLookasidePointers(VOID);
 
 KINTERRUPT KxUnexpectedInterrupt;
 ULONG KeNumberProcessIds;
@@ -121,13 +113,6 @@ VOID
 KiArm64PrepareBootPcr(_Inout_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     PKIPCR Pcr;
-
-    /* Keep stage-log helpers reachable to avoid unused warnings on GCC. */
-    if (0)
-    {
-        KiArm64EmitStageLog("KiArm64PrepareBootPcr");
-        ++KiArm64PcrBannerFallbackCounter;
-    }
 
     RtlZeroMemory(&KiArm64BootPcr, sizeof(KiArm64BootPcr));
 
@@ -197,7 +182,6 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
                    _In_ CCHAR Number,
                    _Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
-    KiArm64BootStageLog("[arm64] KiInitializeKernel: entry");
     PKTHREAD Thread;
     ULONG_PTR DirectoryTableBase[2] = {0, 0};
     /* Quiet bring-up: suppress verbose kernel init traces */
@@ -238,9 +222,7 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
         SharedUserData->ProcessorFeatures[PF_COMPARE_EXCHANGE128] = TRUE;
 
         KeLowerIrql(APC_LEVEL);
-        KiArm64BootStageLog("[arm64] KiInitializeKernel: before KiInitSystem");
         KiInitSystem();
-        KiArm64BootStageLog("[arm64] KiInitializeKernel: after KiInitSystem");
 
 #if DBG
         /* Print CPU features banner using KD (parity with amd64) */
@@ -280,48 +262,18 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     Prcb->IdleThread = InitThread;
     /* quiet */
 
-    KiArm64BootStageLog("[arm64] KiInitializeKernel: before ExpInitializeExecutive");
-
-#if defined(_M_ARM64) || defined(__aarch64__)
-    {
-        UINT64 sp_el0, current_sp, daif, sctlr;
-        CHAR buf[200];
-
-        /* Read SP_EL0 to check if it has a stale value */
-        __asm__ volatile("mrs %0, sp_el0" : "=r"(sp_el0));
-        __asm__ volatile("mov %0, sp" : "=r"(current_sp));
-        __asm__ volatile("mrs %0, daif" : "=r"(daif));
-        __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
-
-        RtlStringCbPrintfA(buf, sizeof(buf),
-            "[arm64] SP_EL0=0x%llx SP=0x%llx DAIF=0x%llx SCTLR=0x%llx",
-            (unsigned long long)sp_el0,
-            (unsigned long long)current_sp,
-            (unsigned long long)daif,
-            (unsigned long long)sctlr);
-        KiArm64BootStageLog(buf);
-
-        /* Clear SP_EL0 to a known value so we can detect if it's being used */
-        __asm__ volatile("msr sp_el0, %0" :: "r"((UINT64)0xDEAD0000DEAD0000ULL));
-        __asm__ volatile("isb");
-
-        KiArm64BootStageLog("[arm64] SP_EL0 set to sentinel, calling ExpInitializeExecutive");
-    }
-#endif
+    /* Clear SP_EL0 to a known value so we can detect if it's being used */
+    __asm__ volatile("msr sp_el0, %0" :: "r"((UINT64)0xDEAD0000DEAD0000ULL));
+    __asm__ volatile("isb");
 
     ExpInitializeExecutive(Number, LoaderBlock);
-    KiArm64BootStageLog("[arm64] KiInitializeKernel: after ExpInitializeExecutive");
 
-#if defined(_M_ARM64)
     /*
      * ARM64 parity with amd64: Do NOT invoke Phase1Initialization directly
      * from the Idle thread. PsInitSystem (phase 0) creates a dedicated
      * system thread to run Phase1Initialization. The scheduler will pick it
      * up after we drop Idle's priority below normal.
      */
-    KiArm64BootStageLog("[arm64] KiInitializeKernel: Phase 1 will run in a system thread");
-#endif
-
     if (Number == 0)
     {
         KiTimeIncrementReciprocal =
@@ -351,7 +303,6 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     {
         Thread->WaitIrql = DISPATCH_LEVEL;
     }
-    KiArm64BootStageLog("[arm64] KiInitializeKernel: entering idle loop");
     KiIdleLoop();
 }
 
@@ -376,6 +327,23 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     KeArm64CurrentIrql = PASSIVE_LEVEL;
     KeArm64DpcRoutineActive = FALSE;
     KeArm64CurrentThread = IdleThread;
+
+    /*
+     * ARM64 CRITICAL: Issue a data memory barrier after updating global
+     * processor state variables. On ARM64's weakly-ordered memory model,
+     * stores to global variables may not be visible to subsequent reads
+     * (even on the same CPU in early boot before caches are fully coherent)
+     * without an explicit barrier.
+     *
+     * This ensures that when ExInitPoolLookasidePointers (or any other code)
+     * reads KeArm64CurrentPcr, it sees the value we just wrote, not stale
+     * data or uninitialized memory.
+     *
+     * DMB ISH (Inner Shareable) is sufficient here as we're on a single CPU
+     * during early boot, but it ensures proper ordering with respect to any
+     * memory-mapped I/O or cache operations.
+     */
+    __asm__ __volatile__("dmb ish" ::: "memory");
 
     Pcr->Self = (struct _KPCR *)Pcr;
     Pcr->CurrentPrcb = &Pcr->Prcb;
@@ -523,23 +491,17 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     PARM64_LOADER_BLOCK Arm64Block;
     KAFFINITY ProcessorMask;
     ULONG ProcessorNumber;
-    ULONG_PTR VectorBase;
-    ULONGLONG Ttbr0;
-    ULONGLONG Ttbr1;
-    KiArm64BootStageLog("[arm64] KiInitializeSystem: begin");
+
     KiArm64PrepareBootPcr(LoaderBlock);
-    KiArm64BootStageLog("[arm64] KiInitializeSystem: PCR prepared");
 
     if (LoaderBlock == NULL)
     {
         KeBugCheckEx(PHASE0_INITIALIZATION_FAILED, 'A64K', 'LDR', 0, 0);
     }
-    KiArm64BootStageLog("[arm64] KiInitializeSystem: loader validated");
 
     KeLoaderBlock = LoaderBlock;
     Arm64Block = &LoaderBlock->u.Arm64;
 
-#if defined(_M_ARM64) || defined(__aarch64__)
 #define ARM64_LDR_TO_VIRT(Value) \
     (((ULONG_PTR)(Value) < (ULONG_PTR)KSEG0_BASE) ? \
         ((ULONG_PTR)(Value) + (ULONG_PTR)KSEG0_BASE) : \
@@ -556,7 +518,6 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     Arm64Block->InterruptStack = ARM64_LDR_TO_VIRT(Arm64Block->InterruptStack);
 
 #undef ARM64_LDR_TO_VIRT
-#endif
 
     InitialThread = (PKTHREAD)(ULONG_PTR)LoaderBlock->Thread;
     InitialProcess = (PKPROCESS)(ULONG_PTR)LoaderBlock->Process;
@@ -580,19 +541,6 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                                                  (ULONG_PTR)KSEG0_BASE);
         }
 
-        {
-            CHAR Stage[200];
-            if (NT_SUCCESS(RtlStringCbPrintfA(Stage,
-                                              sizeof(Stage),
-                                              "[arm64] init thread stacks: th=%p init=%p limit=%p kernel=%p",
-                                              InitialThread,
-                                              InitialThread->InitialStack,
-                                              (PVOID)InitialThread->StackLimit,
-                                              InitialThread->KernelStack)))
-            {
-                KiArm64BootStageLog(Stage);
-            }
-        }
     }
 
     if (InitialThread != NULL)
@@ -620,13 +568,13 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
+    ExInitPoolLookasidePointers();
+
     if (ProcessorNumber == 0)
     {
-        KiArm64BootStageLog("[arm64] KiInitializeSystem: preparing caches");
         KeFlushTb();
         HalSweepIcache();
         HalSweepDcache();
-        KiArm64BootStageLog("[arm64] KiInitializeSystem: caches flushed");
 
         if ((InitialThread != NULL) && (InitialProcess != NULL))
         {
@@ -635,11 +583,77 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     HalInitializeProcessor(ProcessorNumber, KeLoaderBlock);
-    KiArm64BootStageLog("[arm64] KiInitializeSystem: HAL init complete");
     DbgPrintEx(DPFLTR_DEFAULT_ID,
                DPFLTR_TRACE_LEVEL,
                "[arm64] KiInitializeSystem: cpu %lu HAL ready\n",
                ProcessorNumber);
+
+    /*
+     * ARM64: Configure CPU features based on hardware capabilities.
+     * Use ID registers to detect features before disabling unsupported ones.
+     *
+     * LAZY FP/SVE CONTEXT SWITCHING:
+     * We now support lazy floating-point context switching. This means:
+     * 1. FP/NEON access is initially enabled for the kernel (essential)
+     * 2. SVE access causes a trap, which allocates state on first use
+     * 3. SME access causes a trap (not yet fully implemented)
+     * 4. Per-thread FP state is saved/restored only when needed
+     *
+     * This provides optimal performance for threads that don't use FP/SVE.
+     */
+    if (ProcessorNumber == 0)
+    {
+        ULONG64 Pfr0, Pfr1, Cpacr;
+        BOOLEAN HasSve, HasSme;
+
+        /* Read Processor Feature Registers to detect hardware capabilities */
+        __asm__ __volatile__("mrs %0, id_aa64pfr0_el1" : "=r"(Pfr0));
+        __asm__ __volatile__("mrs %0, id_aa64pfr1_el1" : "=r"(Pfr1));
+
+        /* Check bits [35:32] of PFR0 for SVE support */
+        HasSve = ((Pfr0 >> 32) & 0xF) != 0;
+
+        /* Check bits [27:24] of PFR1 for SME support */
+        HasSme = ((Pfr1 >> 24) & 0xF) != 0;
+
+        /* Read current CPACR_EL1 */
+        __asm__ __volatile__("mrs %0, cpacr_el1" : "=r"(Cpacr));
+
+        /*
+         * Enable FP/ASIMD for kernel initialization.
+         * During boot we need FP enabled, but after thread scheduling starts,
+         * we use lazy context switching (trap-on-first-use).
+         */
+        Cpacr |= (3ULL << 20); /* FPEN = 11 (no trap on FP) */
+
+        /*
+         * SVE: Enable with lazy context switching via trap-on-first-use.
+         * When a thread first uses SVE, it will trap and we allocate state.
+         * This is more efficient than disabling SVE entirely because:
+         * 1. User-mode apps with SVE-optimized libraries can still work
+         * 2. We only pay the cost of SVE state for threads that use it
+         */
+        if (HasSve)
+        {
+            Cpacr &= ~(3ULL << 16); /* ZEN = 00 (trap SVE -> lazy context switch) */
+        }
+
+        /*
+         * SME: Trap for now. Full SME support would require:
+         * 1. Streaming SVE mode context save/restore
+         * 2. ZA (matrix) state management
+         * 3. PSTATE.SM/ZA bit handling
+         * For now, SME traps are handled but state is not preserved.
+         */
+        if (HasSme)
+        {
+            Cpacr &= ~(3ULL << 24); /* SMEN = 00 (trap SME instructions) */
+        }
+
+        /* Apply configuration */
+        __asm__ __volatile__("msr cpacr_el1, %0" : : "r"(Cpacr));
+        __asm__ __volatile__("isb" ::: "memory");
+    }
 
     ProcessorMask = (Pcr != NULL) ?
                     Pcr->Prcb.SetMember :
@@ -668,25 +682,12 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 LdrCoreCopy[i] = *LdrEntry;
                 InsertTailList(&PsLoadedModuleList, &LdrCoreCopy[i].InLoadOrderLinks);
             }
-            KiArm64BootStageLog("[arm64] KiInitializeSystem: pre-seeded PsLoadedModuleList");
         }
 
         /* Initialize interrupts (arch/HAL stub), then install final vectors */
         KeInitInterrupts();
         /* Install final exception vectors and configure traps before KD */
-        KiArm64BootStageLog("[arm64] KiInitializeSystem: installing final exceptions");
         KeInitExceptions();
-        {
-            CHAR Buf[128];
-            __asm__ __volatile__("mrs %0, vbar_el1" : "=r"(VectorBase));
-            if (NT_SUCCESS(RtlStringCbPrintfA(Buf, sizeof(Buf),
-                                              "[arm64] KiInitializeSystem: after KeInitExceptions VBAR=%p final=%lu",
-                                              (PVOID)VectorBase,
-                                              (ULONG)KiArm64FinalVectorsInstalled)))
-            {
-                KiArm64BootStageLog(Buf);
-            }
-        }
 
         /*
          * Initialize debug register counts from ID_AA64DFR0_EL1 before KD init.
@@ -695,24 +696,13 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          */
         KiInitializeDebugRegisterCounts();
 
-        KiArm64BootStageLog("[arm64] KiInitializeSystem: enabling KD");
-        /* After KD enable, use normal DPRINT1 path (parity with amd64) */
-        DPRINT1("[arm64] KiInitializeSystem: boot cpu enabling KD\n");
         KdInitSystem(0, KeLoaderBlock);
 
         /* KD is present right after banner; continue */
-        DPRINT1("[arm64] KD present after banner\n");
-
-        /* removed noisy stage log around KdPollBreakIn */
-        /* Skip GIC sysreg probe here; can trap on some firmware setups */
-
-        KiArm64BootStageLog("[arm64] post-banner: entering KdPollBreakIn");
         if (KdPollBreakIn())
         {
             DbgBreakPointWithStatus(DBG_STATUS_CONTROL_C);
         }
-        KiArm64BootStageLog("[arm64] post-banner: after KdPollBreakIn");
-        /* removed noisy stage log around KdPollBreakIn */
     }
 
     /*
@@ -721,64 +711,22 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
      * until we're ready to handle them properly.
      * DAIF immediate bits: D=3, A=2, I=1, F=0 -> clear I+F = 0x3
      */
-    {
-        UINT64 daif_before, daif_after;
-        CHAR buf[200];
-        __asm__ volatile("mrs %0, daif" : "=r"(daif_before));
-        __asm__ __volatile__("msr daifclr, #0x3" ::: "memory");
-        __asm__ volatile("isb");
-        __asm__ volatile("mrs %0, daif" : "=r"(daif_after));
-        RtlStringCbPrintfA(buf, sizeof(buf),
-            "[arm64] DAIF before=0x%llx after=0x%llx (SError should be masked)",
-            (unsigned long long)daif_before,
-            (unsigned long long)daif_after);
-        KiArm64BootStageLog(buf);
-    }
+    __asm__ __volatile__("msr daifclr, #0x3" ::: "memory");
+    __asm__ volatile("isb");
 
     KfLowerIrql(DISPATCH_LEVEL);
     if (Pcr != NULL)
     {
         Pcr->CurrentIrql = DISPATCH_LEVEL;
     }
-    /* removed redundant stage log: IRQL lowered (DPRINT1 covers it) */
-
-    DPRINT1("[arm64] KiInitializeSystem: cpu %lu irql lowered to %lu\n",
-            ProcessorNumber,
-            (ULONG)DISPATCH_LEVEL);
 
     if (Pcr == NULL)
     {
         Pcr = KeArm64CurrentPcr;
     }
 
-    __asm__ __volatile__("mrs %0, vbar_el1" : "=r"(VectorBase));
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-
-    /* Emit a single KD-formatted banner (parity with amd64) */
-    KdpDprintf("(%s:%d) Pcr = %p, Vbar = %p, TTBR0 = 0x%016llX, TTBR1 = 0x%016llX\n",
-               __RELFILE__,
-               __LINE__,
-               (PVOID)Pcr,
-               (PVOID)VectorBase,
-               Ttbr0,
-               Ttbr1);
-
-    /* Also emit via DPRINT1 to validate DbgPrint path with masks enabled */
-    DPRINT1("Pcr = %p, Vbar = %p, TTBR0 = 0x%016llX, TTBR1 = 0x%016llX\n",
-            (PVOID)Pcr,
-            (PVOID)VectorBase,
-            Ttbr0,
-            Ttbr1);
-    /* KD already present */
-        /* bring-up: avoid stray test print; rely on KD logs above */
     if ((InitialThread != NULL) && (Pcr != NULL))
     {
-        DPRINT1("[arm64] KiInitializeSystem: cpu %lu entering KiInitializeKernel\n",
-                ProcessorNumber);
-
-        /* Switch to standard DPRINT1 (parity with amd64) */
-        DPRINT1("[arm64] KiInitializeSystem: calling KiInitializeKernel\n");
         KiInitializeKernel((PKPROCESS)(ULONG_PTR)LoaderBlock->Process,
                            InitialThread,
                            (PVOID)(ULONG_PTR)LoaderBlock->KernelStack,
@@ -797,6 +745,5 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
-    KiArm64BootStageLog("[arm64] KiInitializeSystem: entering idle loop");
     KiIdleLoop();
 }

@@ -653,6 +653,9 @@ typedef struct _KPRCB
     // On Win 8.1+ the FeatureBits field is extended to 64 bits
     ULONG FeatureBitsHigh;
 #endif
+    // ARM64: Per-CPU flag for HIGH_LEVEL->lower IRQL transition re-entrancy guard
+    // Prevents interrupt storm from nested IRQL lowering during debug prints
+    volatile LONG InHighLevelTransition;
 #endif
 } KPRCB, *PKPRCB;
 

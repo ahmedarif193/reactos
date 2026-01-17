@@ -46,8 +46,17 @@ __atomic_load_16(
     _In_ const volatile VOID *Source,
     _In_ int MemoryOrder)
 {
+    ULONGLONG Low, High;
+
     UNREFERENCED_PARAMETER(MemoryOrder);
-    return *(__uint128_t volatile const *)Source;
+
+    __asm__ __volatile__("ldaxp %0, %1, [%2]"
+                         : "=&r"(Low), "=&r"(High)
+                         : "r"(Source)
+                         : "memory");
+    __asm__ __volatile__("clrex" ::: "memory");
+
+    return ((__uint128_t)High << 64) | (__uint128_t)Low;
 }
 
 _Bool
@@ -59,21 +68,47 @@ __atomic_compare_exchange_16(
     _In_ int SuccessOrder,
     _In_ int FailureOrder)
 {
-    __uint128_t Current;
+    ULONGLONG ExpectedLow, ExpectedHigh;
+    ULONGLONG DesiredLow, DesiredHigh;
+    ULONGLONG OldLow, OldHigh;
+    ULONG Status;
 
     UNREFERENCED_PARAMETER(Weak);
     UNREFERENCED_PARAMETER(SuccessOrder);
     UNREFERENCED_PARAMETER(FailureOrder);
 
-    Current = *(__uint128_t volatile *)Destination;
-    if (Current == *(__uint128_t *)Expected)
-    {
-        *(__uint128_t volatile *)Destination = Desired;
-        return 1;
-    }
+    /* Match GCC's libatomic semantics (strong CAS); always use acq-rel here. */
+    ExpectedLow = ((volatile ULONGLONG *)Expected)[0];
+    ExpectedHigh = ((volatile ULONGLONG *)Expected)[1];
 
-    *(__uint128_t *)Expected = Current;
-    return 0;
+    DesiredLow = (ULONGLONG)Desired;
+    DesiredHigh = (ULONGLONG)(Desired >> 64);
+
+    for (;;)
+    {
+        __asm__ __volatile__("ldaxp %0, %1, [%2]"
+                             : "=&r"(OldLow), "=&r"(OldHigh)
+                             : "r"(Destination)
+                             : "memory");
+
+        if ((OldLow != ExpectedLow) || (OldHigh != ExpectedHigh))
+        {
+            ((volatile ULONGLONG *)Expected)[0] = OldLow;
+            ((volatile ULONGLONG *)Expected)[1] = OldHigh;
+            __asm__ __volatile__("clrex" ::: "memory");
+            return 0;
+        }
+
+        __asm__ __volatile__("stlxp %w0, %1, %2, [%3]"
+                             : "=&r"(Status)
+                             : "r"(DesiredLow), "r"(DesiredHigh), "r"(Destination)
+                             : "memory");
+
+        if (Status == 0)
+        {
+            return 1;
+        }
+    }
 }
 
 int
@@ -234,14 +269,23 @@ VOID
 __cdecl
 _disable(VOID)
 {
-    __asm__ __volatile__("msr daifset, #0xf" ::: "memory");
+    /*
+     * Mask IRQ only (I bit). Keep SError (A) unmasked per IRQL policy
+     * and avoid forcing full DAIF state changes that bypass IRQL tracking.
+     * ISB is sufficient for DAIF changes (no memory ordering required).
+     */
+    __asm__ __volatile__("msr daifset, #0x2\n\tisb" ::: "memory");
 }
 
 VOID
 __cdecl
 _enable(VOID)
 {
-    __asm__ __volatile__("msr daifclr, #0xf" ::: "memory");
+    /*
+     * IRQL is enforced via GIC priority masking; DAIF.I is a global gate.
+     * ISB is sufficient for DAIF changes (no memory ordering required).
+     */
+    __asm__ __volatile__("msr daifclr, #0x2\n\tisb" ::: "memory");
 }
 
 #if !__has_builtin(_rotl)

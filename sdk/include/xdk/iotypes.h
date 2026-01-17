@@ -3178,7 +3178,7 @@ typedef struct _HAL_PORT_RANGE_INTERFACE {
 
 } HAL_PORT_RANGE_INTERFACE, *PHAL_PORT_RANGE_INTERFACE;
 
-#if !defined(_AMD64_) && !defined(_ARM_)
+#if !defined(_AMD64_) && !defined(_ARM_) && !defined(_ARM64_)
 #include <pshpack4.h>
 #endif
 
@@ -3390,7 +3390,7 @@ typedef struct _IO_STACK_LOCATION {
   PVOID Context;
 } IO_STACK_LOCATION, *PIO_STACK_LOCATION;
 
-#if !defined(_AMD64_) && !defined(_ARM_)
+#if !defined(_AMD64_) && !defined(_ARM_) && !defined(_ARM64_)
 #include "poppack.h"
 #endif
 

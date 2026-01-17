@@ -35,6 +35,7 @@ VOID Arm64InitializeExceptions(VOID);
 BOOLEAN Arm64CanInitializeExceptions(VOID);
 VOID Arm64DisableMMU(VOID);
 BOOLEAN Arm64IsMMUEnabled(VOID);
+VOID Arm64ApplyDeferredPageTableMemoryTypes(VOID);
 BOOLEAN Arm64MapVirtualMemory(ULONGLONG VirtualAddress, ULONGLONG PhysicalAddress, ULONGLONG Size, ULONG Attributes);
 BOOLEAN Arm64UnmapVirtualMemory(ULONGLONG VirtualAddress, ULONGLONG Size);
 BOOLEAN Arm64MapUserSharedDataPage(ULONGLONG VirtualAddress, ULONGLONG PhysicalAddress, ULONG Attributes);

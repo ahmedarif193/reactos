@@ -159,9 +159,12 @@ UefiConsMarkBootServicesExited(VOID);
  * Clear all x64 debug registers and sanitize CPU debug state.
  * Must be called before ExitBootServices to prevent #DB exceptions
  * from stale UEFI firmware debug state (especially on VirtualBox).
+ * Only available on AMD64/x86_64 architecture.
  */
+#if defined(_M_AMD64) || defined(__x86_64__)
 VOID
 UefiClearDebugState(VOID);
+#endif
 
 BOOLEAN
 UefiIsCdRomHandle(IN EFI_HANDLE Handle);

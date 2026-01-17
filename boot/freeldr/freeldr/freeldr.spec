@@ -45,8 +45,10 @@
 # Mm
 @ cdecl AddMemoryDescriptor()
 @ cdecl MmAllocateHighestMemoryBelowAddress()
+@ cdecl MmAllocateHighestMemoryBelowAddressOptional()
 @ cdecl MmAllocateMemoryAtAddress()
 @ cdecl MmAllocateMemoryWithType()
+@ cdecl MmAllocateMemoryWithTypeOptional()
 @ cdecl MmFreeMemory()
 @ cdecl MmGetBiosMemoryMap()
 @ cdecl MmGetHighestPhysicalPage()

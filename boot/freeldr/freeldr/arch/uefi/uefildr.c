@@ -83,11 +83,13 @@ EfiEntry(
         goto Quit;
     }
 
-    /* Setup GOP now that the heap is available */
-    if (UefiInitializeVideo() != EFI_SUCCESS)
+    /* Setup GOP now that the heap is available (optional for headless boots) */
     {
-        ERR("Failed to setup GOP\n");
-        goto Quit;
+        EFI_STATUS VideoStatus = UefiInitializeVideo();
+        if (EFI_ERROR(VideoStatus))
+        {
+            WARN("UEFI GOP unavailable (Status %lx); continuing headless\n", VideoStatus);
+        }
     }
 
     /* UI pre-initialization */

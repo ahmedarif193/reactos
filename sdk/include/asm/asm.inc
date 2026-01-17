@@ -194,6 +194,10 @@ data32 MACRO opcode:VARARG
     opcode
 ENDM
 
+io_delay MACRO
+    out 80h, al
+ENDM
+
 UNIMPLEMENTED2 MACRO file, line, func
     jmp UNIMPLEMENTED2_IMPL
 UNIMPLEMENTED_MSG: .ascii "WARNING:  %s at %s:%d is UNIMPLEMENTED!", 10, 0
@@ -260,21 +264,6 @@ ENDM
 
 .altmacro
 
-/*
- * GAS 2.45 treats macro names case-insensitively, so only define the uppercase
- * macros and use the C preprocessor to alias MASM-style lowercase directives.
- */
-#define public PUBLIC
-#define align ALIGN
-#define end END
-#define allocstack ALLOCSTACK
-#define pushframe PUSHFRAME
-#define pushreg PUSHREG
-#define savereg SAVEREG
-#define savexmm128 SAVEXMM128
-#define setframe SETFRAME
-#define endprolog ENDPROLOG
-
 /* Explicit radix in GAS syntax */
 #define BIN(x) 0b##x
 #define OCT(x) 0##x
@@ -284,11 +273,6 @@ ENDM
 /* Macro values need to be marked */
 #define VAL(x) \x
 
-/* MASM-style boolean operators for GAS expressions */
-/* Use '&&' so .altmacro emits a literal '&' after macro expansion. */
-#define AND &&
-#define OR |
-
 #define CR  "\r"
 #define LF  "\n"
 #define NUL "\0"
@@ -296,12 +280,6 @@ ENDM
 /* Due to MASM's reverse syntax, we are forced to use a precompiler macro */
 #define MACRO(...) .macro __VA_ARGS__
 #define ENDM .endm
-/* LOCAL is a MASM directive for unique labels per macro expansion.
-   For GAS, we use .set with a generated unique name (using macro name prefix).
-   This is a no-op that allows the label declaration line to be ignored. */
-.macro LOCAL name:vararg
-    /* Intentionally empty - just consume the LOCAL directive */
-.endm
 
 /* To avoid reverse syntax we provide a new macro .PROC, replacing PROC... */
 .macro .PROC name
@@ -342,7 +320,8 @@ ENDM
 .macro .endcode16
 .endm
 
-.macro ALIGN x
+/* MASM compatible ALIGN */
+.macro align x
     .align x
 .endm
 
@@ -372,25 +351,12 @@ ENDM
     opcode
 .endm
 
-/* I/O delay macro - replacement for 'jmp $+2' which is MASM syntax */
 .macro io_delay
-    jmp 1f
-1:
-.endm
-
-/* MASM-style 'jmp $+2' syntax support via macro */
-.macro IODELAY
-    jmp 1f
-1:
+    out 0x80, al
 .endm
 
 .macro retf
-#ifdef _X86_
-    lret
-#else
-    /* Far return in x64 mode: REX.W prefix (0x48) + RETF opcode (0xCB) */
-    .byte 0x48, 0xCB
-#endif
+    retfq
 .endm
 
 /* MASM compatible EXTERN */
@@ -422,49 +388,38 @@ ENDM
     .endif
 .endm
 
-/* Macros for x64 stack unwind OPs - only define for x64 targets */
-#ifndef _X86_
-.macro .ALLOCSTACK size
+/* Macros for x64 stack unwind OPs */
+.macro .allocstack size
     .seh_stackalloc \size
 .endm
 
-#ifdef __clang__
-.macro .PUSHFRAME param
-    .seh_pushframe
-.endm
-#else
-.macro .PUSHFRAME param
+.macro .pushframe param
+    /*
+     * FIXME. .seh_pushframe doesn't accept code argument.
+     * Patch sent.
+     */
     .seh_pushframe \param
 .endm
-#endif
 
-.macro .PUSHREG reg
+.macro .pushreg reg
     .seh_pushreg \reg
 .endm
 
-.macro .SAVEREG reg, offset
+.macro .savereg reg, offset
     .seh_savereg \reg, \offset
 .endm
 
-.macro .SAVEXMM128 reg, offset
+.macro .savexmm128 reg, offset
     .seh_savexmm \reg, \offset
 .endm
 
-.macro .SETFRAME reg, offset
+.macro .setframe reg, offset
     .seh_setframe \reg, \offset
 .endm
 
-#ifdef __clang__
-/* Clang doesn't have .seh_code built-in, so define it */
-.macro .seh_code
-    .text
-.endm
-#endif
-
-.macro .ENDPROLOG
+.macro .endprolog
     .seh_endprologue
 .endm
-#endif /* !_X86_ */
 
 .macro absolute address
     __absolute__address__ = \address
@@ -475,22 +430,6 @@ ENDM
     __absolute__address__ = __absolute__address__ + \size
 .endm
 
-#ifdef __clang__
-/* Clang version: avoid file path due to backslash escape sequence issues */
-.macro UNIMPLEMENTED2 file, line, func
-    jmp 3f
-1:  .ascii "Unimplemented %s (line %d)", CR, LF, NUL
-2:  .asciz "\func"
-3:
-    sub rsp, 0x20
-    lea rcx, 1b[rip]
-    lea rdx, 2b[rip]
-    mov r8, \line
-    call DbgPrint
-    add rsp, 0x20
-.endm
-#else
-/* GCC version: includes file path */
 .macro UNIMPLEMENTED2 file, line, func
     jmp 4f
 1:  .ascii "Unimplemented %s (%s:%d)", CR, LF, NUL
@@ -505,7 +444,6 @@ ENDM
     call DbgPrint
     add rsp, 0x20
 .endm
-#endif
 #define UNIMPLEMENTED UNIMPLEMENTED2 __FILE__, __LINE__,
 
 /* MASM/ML uses ".if" for runtime conditionals, and "if" for compile time

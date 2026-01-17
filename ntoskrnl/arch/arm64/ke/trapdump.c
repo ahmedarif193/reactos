@@ -18,9 +18,7 @@ extern BOOLEAN KdDebuggerEnabled;
 extern BOOLEAN KdDebuggerNotPresent;
 #define KI_ARM64_MIN_KERNEL_ADDRESS 0xFFFF000000000000ULL
 
-VOID KiArm64BootStageLog(_In_z_ PCSTR Stage);
 
-#if defined(_M_ARM64) || defined(__aarch64__)
 extern ULONG ExpPoolFlags;
 extern POOL_DESCRIPTOR NonPagedPoolDescriptor;
 extern PPOOL_DESCRIPTOR PoolVector[2];
@@ -130,7 +128,6 @@ volatile ULONG * const __ObpObjectSecurityModeRefptr __asm__(".refptr.ObpObjectS
 
 __attribute__((used, section(".rdata$.refptr.ObpProtectionMode")))
 volatile ULONG * const __ObpProtectionModeRefptr __asm__(".refptr.ObpProtectionMode") = &ObpProtectionMode;
-#endif
 #endif
 
 
@@ -258,6 +255,7 @@ KiArm64DumpStackSnapshot(_In_ const ARM64_EARLY_TRAP_STATE *State,
     return FALSE;
 }
 
+#if DBG && defined(ARM64_TRAP_DUMP_BACKTRACE)
 static BOOLEAN
 KiArm64DumpBacktrace(_In_ const ARM64_EARLY_TRAP_STATE *State,
                      _In_opt_ PARM64_EARLY_LOG_SINK Sink)
@@ -337,6 +335,7 @@ KiArm64DumpBacktrace(_In_ const ARM64_EARLY_TRAP_STATE *State,
     return Success;
 #undef ARM64_TRAPDBG_PREFIX
 }
+#endif
 
 VOID
 KiArm64DumpEarlyTrapState(_In_ const ARM64_EARLY_TRAP_STATE *State,
@@ -371,7 +370,6 @@ KiArm64DumpEarlyTrapState(_In_ const ARM64_EARLY_TRAP_STATE *State,
                        State->Spsr);
     KiArm64EmitLine(Sink, Buffer);
 
-#if defined(_M_ARM64) || defined(__aarch64__)
     {
         LONG traceSlot = InterlockedIncrement(&MiArm64TrapTraceIndex);
         ULONG slot = (ULONG)traceSlot & 3u;
@@ -442,6 +440,7 @@ KiArm64DumpEarlyTrapState(_In_ const ARM64_EARLY_TRAP_STATE *State,
                 KiArm64EmitLine(Sink, Buffer);
             }
 
+#if DBG && defined(ARM64_TRAP_DUMP_PTES)
             /* Also print PTEs for x8/x9 if they look like kernel VAs */
             {
                 ULONG_PTR a8 = (ULONG_PTR)State->Registers.X[8];
@@ -472,6 +471,7 @@ KiArm64DumpEarlyTrapState(_In_ const ARM64_EARLY_TRAP_STATE *State,
                     }
                 }
             }
+#endif
 
             if (NT_SUCCESS(RtlStringCbPrintfA(Buffer,
                                               sizeof(Buffer),
@@ -838,7 +838,6 @@ KiArm64DumpEarlyTrapState(_In_ const ARM64_EARLY_TRAP_STATE *State,
             }
         }
     }
-#endif
 
     KiArm64EmitLine(Sink, "Registers:");
     KiArm64DumpRegisterState(State, Sink);
@@ -848,10 +847,12 @@ KiArm64DumpEarlyTrapState(_In_ const ARM64_EARLY_TRAP_STATE *State,
         /* Stack snapshot printed by helper */
     }
 
+#if DBG && defined(ARM64_TRAP_DUMP_BACKTRACE)
     if (KiArm64DumpBacktrace(State, Sink))
     {
         /* Backtrace printed by helper */
     }
+#endif
 }
 
 static
@@ -877,7 +878,6 @@ KiArm64DbgLogSink(_In_reads_bytes_(Length) const CHAR *Text,
     }
 }
 
-#if defined(_M_ARM64) || defined(__aarch64__)
 static volatile LONG KiArm64StageLogDepth;
 
 static
@@ -923,7 +923,7 @@ KiArm64StageLogSink(_In_reads_bytes_(Length) const CHAR *Text,
                        "[arm64] TrapDiagDbg: StageLog emit depth=%ld text='%s'\n",
                        Depth,
                        Scratch);
-            KiArm64BootStageLog(Scratch);
+            DPRINT1("%s\n", Scratch);
         }
 
         Text += Chunk;
@@ -936,7 +936,6 @@ KiArm64StageLogSink(_In_reads_bytes_(Length) const CHAR *Text,
                "[arm64] TrapDiagDbg: StageLog exit depth=%ld\n",
                Depth - 1);
 }
-#endif
 
 static
 VOID
@@ -947,13 +946,11 @@ KiArm64InitializeBugCheckState(
     RtlZeroMemory(State, sizeof(*State));
 
     /* Keep optional text sinks reachable to avoid unused warnings on GCC. */
-#if defined(_M_ARM64) || defined(__aarch64__)
     if (0)
     {
         KiArm64DbgLogSink(NULL, 0);
         KiArm64StageLogSink(NULL, 0);
     }
-#endif
 
     State->VectorId = (ULONG64)BugCheckCode;
 }
