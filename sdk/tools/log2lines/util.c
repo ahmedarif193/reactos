@@ -117,6 +117,32 @@ basename(char *path)
     return path;
 }
 
+char *
+convert_path(const char *path)
+{
+    char *newpath;
+    size_t i;
+
+    if (!path)
+        return NULL;
+
+    newpath = strdup(path);
+    if (!newpath)
+        return NULL;
+
+    for (i = 0; newpath[i] != '\0'; ++i)
+    {
+#ifdef DOS_PATHS
+        if (newpath[i] == '/')
+            newpath[i] = '\\';
+#else
+        if (newpath[i] == '\\')
+            newpath[i] = '/';
+#endif
+    }
+    return newpath;
+}
+
 const char *
 getFmt(const char *a)
 {
@@ -185,6 +211,59 @@ copy_file(char *src, char *dst)
         return 2;
     }
     return 0;
+}
+
+void *
+load_file(const char *path, size_t *length)
+{
+    FILE *file;
+    long size;
+    void *data;
+
+    if (length)
+        *length = 0;
+
+    file = fopen(path, "rb");
+    if (!file)
+        return NULL;
+
+    if (fseek(file, 0, SEEK_END) != 0)
+    {
+        fclose(file);
+        return NULL;
+    }
+
+    size = ftell(file);
+    if (size <= 0)
+    {
+        fclose(file);
+        return NULL;
+    }
+
+    if (fseek(file, 0, SEEK_SET) != 0)
+    {
+        fclose(file);
+        return NULL;
+    }
+
+    data = malloc((size_t)size);
+    if (!data)
+    {
+        fclose(file);
+        return NULL;
+    }
+
+    if (fread(data, 1, (size_t)size, file) != (size_t)size)
+    {
+        fclose(file);
+        free(data);
+        return NULL;
+    }
+
+    fclose(file);
+    if (length)
+        *length = (size_t)size;
+    return data;
 }
 
 /* EOF */

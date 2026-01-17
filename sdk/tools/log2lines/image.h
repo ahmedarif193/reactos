@@ -7,7 +7,9 @@
 
 #pragma once
 
-#include <rsym.h>
+#include <typedefs.h>
+#include <pecoff.h>
+#include <reactos/rossym.h>
 
 size_t fixup_offset(size_t ImageBase, size_t offset);
 

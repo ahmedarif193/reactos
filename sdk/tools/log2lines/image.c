@@ -7,11 +7,11 @@
 
 #include <errno.h>
 #include <string.h>
-#include <rsym.h>
 
 #include "compat.h"
 #include "util.h"
 #include "options.h"
+#include "image.h"
 #include "log2lines.h"
 #include <sys/types.h>
 
@@ -38,7 +38,7 @@ fixup_offset(size_t ImageBase, size_t offset)
 PROSSYM_ENTRY
 find_offset(void *data, size_t offset)
 {
-    PSYMBOLFILE_HEADER RosSymHeader = (PSYMBOLFILE_HEADER)data;
+    PROSSYM_HEADER RosSymHeader = (PROSSYM_HEADER)data;
     PROSSYM_ENTRY Entries = (PROSSYM_ENTRY)((char *)data + RosSymHeader->SymbolsOffset);
     size_t symbols = RosSymHeader->SymbolsLength / sizeof(ROSSYM_ENTRY);
     size_t i;

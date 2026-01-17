@@ -2,7 +2,8 @@
 
 #include <stdio.h>
 #include <limits.h>
-#include <rsym.h>
+#include <typedefs.h>
+#include <reactos/rossym.h>
 
 #include "config.h"
 #include "stat.h"

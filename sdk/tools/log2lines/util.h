@@ -41,10 +41,12 @@
 int file_exists(char *name);
 int mkPath(char *path, int isDir);
 char *basename(char *path);
+char *convert_path(const char *path);
 const char *getFmt(const char *a);
 long my_atoi(const char *a);
 int isOffset(const char *a);
 int copy_file(char *src, char *dst);
+void *load_file(const char *path, size_t *length);
 int set_LogFile(FILE **plogFile);
 
 /* EOF */

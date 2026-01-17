@@ -106,7 +106,7 @@ report(FILE *outFile)
 static int
 print_offset(void *data, size_t offset, char *toString)
 {
-    PSYMBOLFILE_HEADER RosSymHeader = (PSYMBOLFILE_HEADER)data;
+    PROSSYM_HEADER RosSymHeader = (PROSSYM_HEADER)data;
     PROSSYM_ENTRY e = NULL;
     PROSSYM_ENTRY e2 = NULL;
     int bFileOffsetChanged = 0;
