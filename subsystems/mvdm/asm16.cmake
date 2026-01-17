@@ -43,7 +43,7 @@ function(add_asm16_bin _target _binary_file _base_address)
     ##
     ## All this part is the same as CreateBootSectorTarget
     ##
-    # Use i686 assembler for 16-bit code if available (same as boot sectors)
+    # Use i686 GCC assembler for 16-bit code (clang doesn't support 16-bit relocations)
     if(DEFINED CMAKE_ASM16_COMPILER AND CMAKE_ASM16_COMPILER)
         set(_asm16_compiler "${CMAKE_ASM16_COMPILER}")
     else()

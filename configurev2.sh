@@ -86,12 +86,14 @@ ensure_mingw_toolchain() {
     local url="$2"
     local target_dir="${DEFAULT_TOOLCHAIN_ROOT}/${prefix}"
     local bin_dir="${target_dir}/bin"
+    local gcc_binary="${bin_dir}/${prefix}-gcc"
 
     if [ -z "$prefix" ] || [ -z "$url" ]; then
         return
     fi
 
-    if [ -d "$bin_dir" ]; then
+    # Check for actual gcc compiler, not just bin directory (which might only have binutils)
+    if [ -x "$gcc_binary" ]; then
         return
     fi
 
@@ -413,6 +415,18 @@ if [ "$USER_PROVIDED_TOOLCHAIN_PATH" -eq 0 ]; then
                 if [ -n "$MINGW_AARCH64_URL" ]; then
                     ensure_mingw_toolchain "aarch64-w64-mingw32" "$MINGW_AARCH64_URL"
                 fi
+                ;;
+        esac
+    fi
+    # For amd64 targets with GCC, we need i686 GNU gcc for 16-bit boot sector code.
+    # Clang builds use llvm-mingw which handles this differently.
+    if [ "$USE_CLANG" -eq 0 ]; then
+        case "$ARCH" in
+            amd64|x86_64)
+                _saved_root="$DEFAULT_TOOLCHAIN_ROOT"
+                DEFAULT_TOOLCHAIN_ROOT="${HOME}/mingw-toolchains"
+                ensure_mingw_toolchain "i686-w64-mingw32" "$MINGW_I686_URL"
+                DEFAULT_TOOLCHAIN_ROOT="$_saved_root"
                 ;;
         esac
     fi

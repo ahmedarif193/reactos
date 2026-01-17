@@ -803,10 +803,21 @@ endmacro()
 set(PSEH_LIB "pseh")
 
 # Find i686 assembler for boot sector targets (16-bit code)
-# Boot sector code is always 16-bit x86 regardless of target architecture
-if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
+# Boot sector code is 16-bit x86, only needed for amd64 targets
+# NOTE: Clang cannot handle 16-bit x86 relocations, so we MUST use GCC for this
+if(ARCH STREQUAL "amd64")
+    # Search for i686-w64-mingw32-gcc for 16-bit boot sector code
+    # This is required even for Clang builds because clang doesn't support 16-bit relocations
+
+    # Check in standard mingw-toolchains location first (macOS cross-compile setup)
+    if(NOT DEFINED CMAKE_ASM16_COMPILER)
+        set(_i686_gcc_path "$ENV{HOME}/mingw-toolchains/bin/i686-w64-mingw32-gcc")
+        if(EXISTS "${_i686_gcc_path}")
+            set(CMAKE_ASM16_COMPILER "${_i686_gcc_path}" CACHE FILEPATH "i686 assembler for boot sectors")
+        endif()
+    endif()
     # Try to find i686 assembler in ROS_GNU_MINGW_TOOLCHAIN_PATH parent directory
-    if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH)
+    if(NOT DEFINED CMAKE_ASM16_COMPILER AND DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH)
         get_filename_component(_ros_toolchain_parent "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" DIRECTORY)
         get_filename_component(_ros_toolchain_parent "${_ros_toolchain_parent}" DIRECTORY)
         set(_i686_gcc_path "${_ros_toolchain_parent}/i686-w64-mingw32/bin/i686-w64-mingw32-gcc")
@@ -814,10 +825,10 @@ if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
             set(CMAKE_ASM16_COMPILER "${_i686_gcc_path}" CACHE FILEPATH "i686 assembler for boot sectors")
         endif()
     endif()
-    # Also check in TOOLCHAIN_PATH parent
+    # Check in TOOLCHAIN_PATH's parent bin directory
     if(NOT DEFINED CMAKE_ASM16_COMPILER AND DEFINED TOOLCHAIN_PATH)
         get_filename_component(_toolchain_parent "${TOOLCHAIN_PATH}" DIRECTORY)
-        set(_i686_gcc_path "${_toolchain_parent}/i686-w64-mingw32-gcc")
+        set(_i686_gcc_path "${_toolchain_parent}/bin/i686-w64-mingw32-gcc")
         if(EXISTS "${_i686_gcc_path}")
             set(CMAKE_ASM16_COMPILER "${_i686_gcc_path}" CACHE FILEPATH "i686 assembler for boot sectors")
         endif()
@@ -827,9 +838,10 @@ if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
         find_program(CMAKE_ASM16_COMPILER NAMES i686-w64-mingw32-gcc)
     endif()
     if(CMAKE_ASM16_COMPILER)
-        message(STATUS "Using i686 assembler for boot sectors: ${CMAKE_ASM16_COMPILER}")
-    elseif(ARCH STREQUAL "amd64")
-        message(WARNING "No i686 assembler found for 16-bit boot sectors; using ${CMAKE_ASM_COMPILER} as fallback")
+        message(STATUS "Using i686 GCC for boot sectors: ${CMAKE_ASM16_COMPILER}")
+    else()
+        message(WARNING "No i686 GCC found for 16-bit boot sectors. Boot sector compilation will fail!")
+        message(WARNING "Install i686-w64-mingw32-gcc or set CMAKE_ASM16_COMPILER manually.")
     endif()
 endif()
 
@@ -839,11 +851,11 @@ function(CreateBootSectorTarget _target_name _asm_file _binary_file _base_addres
     get_defines(_defines)
     get_includes(_includes)
 
-    # Use i686 assembler for boot sector code if available (boot sectors are 16-bit)
+    # Use i686 GCC assembler for boot sector code (16-bit x86 code requires GCC, clang doesn't support it)
     if(DEFINED CMAKE_ASM16_COMPILER AND CMAKE_ASM16_COMPILER)
         set(_bootsect_asm "${CMAKE_ASM16_COMPILER}")
         # Define _X86_ for 16-bit assembly to avoid x64 SEH macro definitions
-        set(_bootsect_defines "-D_X86_ -U_AMD64_ -U__x86_64__")
+        set(_bootsect_defines -D_X86_ -U_AMD64_ -U__x86_64__)
     else()
         set(_bootsect_asm "${CMAKE_ASM_COMPILER}")
         set(_bootsect_defines "")
