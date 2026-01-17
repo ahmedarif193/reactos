@@ -7,6 +7,7 @@
 #include <ntifs.h>
 #include <arc/arc.h>
 #include <ndk/kefuncs.h>
+#include <ndk/inbvfuncs.h>
 #include <ioaccess.h>
 #include <halfuncs.h>
 #include <reactos/hal/acpi_pci.h>
@@ -4770,7 +4771,8 @@ NTAPI
 HalDisplayString(
     _In_ PCH String)
 {
-    UNREFERENCED_PARAMETER(String);
+    /* Call the Inbv driver */
+    InbvDisplayString(String);
 }
 
 /*
