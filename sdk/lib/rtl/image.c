@@ -19,11 +19,16 @@
 
 #define RVA(m, b) ((PVOID)((ULONG_PTR)(b) + (ULONG_PTR)(m)))
 
+/* ARM64 PE relocation types (from Microsoft PE/COFF specification) */
+#ifndef IMAGE_REL_BASED_ARM64_PAGEBASE_REL21
+#define IMAGE_REL_BASED_ARM64_PAGEBASE_REL21 11
+#endif
+#ifndef IMAGE_REL_BASED_ARM64_PAGEOFFSET_12A
+#define IMAGE_REL_BASED_ARM64_PAGEOFFSET_12A 12
+#endif
+
 /* FUNCTIONS *****************************************************************/
 
-#if defined(__GNUC__)
-__attribute__((unused))
-#endif
 BOOLEAN
 NTAPI
 LdrVerifyMappedImageMatchesChecksum(
@@ -425,6 +430,108 @@ LdrProcessRelocationBlockLongLong(
             LongLongPtr = (PUINT64)RVA(Address, Offset);
             *LongLongPtr = SWAPQ(*LongLongPtr) + Delta;
             break;
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+        case IMAGE_REL_BASED_ARM64_PAGEBASE_REL21:
+            {
+                /*
+                 * ARM64 ADRP instruction relocation.
+                 * ADRP Xd, label: Adds a 4KB page-aligned offset to PC and writes result to Xd.
+                 * Instruction encoding: [31][30:29][28:24][23:5 immhi][4:0 Rd]
+                 * Bit 31: op (1 for ADRP)
+                 * Bits 30:29: immlo (low 2 bits of offset)
+                 * Bits 28:24: opcode (10000 for ADRP)
+                 * Bits 23:5: immhi (high 19 bits of offset)
+                 * Bits 4:0: Rd (destination register)
+                 */
+                PULONG InstrPtr = (PULONG)RVA(Address, Offset);
+                ULONG Instr = *InstrPtr;
+
+                /* Extract the current 21-bit page offset from the instruction */
+                ULONG ImmLo = (Instr >> 29) & 0x3;           /* bits [30:29] */
+                ULONG ImmHi = (Instr >> 5) & 0x7FFFF;        /* bits [23:5] */
+                LONGLONG CurrentPageOffset = ((LONGLONG)((ImmHi << 2) | ImmLo)) << 12;
+
+                /* Sign-extend from 33 bits to 64 bits */
+                if (CurrentPageOffset & (1LL << 32))
+                    CurrentPageOffset |= 0xFFFFFFFE00000000LL;
+
+                /* Calculate new page offset by adding the relocation delta */
+                LONGLONG NewPageOffset = CurrentPageOffset + Delta;
+
+                /* Extract the 21-bit offset (page-aligned, so divide by 4KB) */
+                LONGLONG PageDelta = (NewPageOffset >> 12) & 0x1FFFFF;
+
+                /* Reconstruct immlo and immhi */
+                ULONG NewImmLo = (ULONG)(PageDelta & 0x3);
+                ULONG NewImmHi = (ULONG)((PageDelta >> 2) & 0x7FFFF);
+
+                /* Update the instruction while preserving other fields */
+                Instr = (Instr & 0x9F00001F) |           /* Keep op, opcode, and Rd */
+                        (NewImmLo << 29) |                /* Update immlo [30:29] */
+                        (NewImmHi << 5);                  /* Update immhi [23:5] */
+
+                *InstrPtr = Instr;
+            }
+            break;
+
+        case IMAGE_REL_BASED_ARM64_PAGEOFFSET_12A:
+            {
+                /*
+                 * ARM64 ADD/LDR/STR immediate offset relocation.
+                 * ADD Xd, Xn, #imm12 or LDR Xt, [Xn, #imm12] or STR Xt, [Xn, #imm12]
+                 * This fixup adjusts the 12-bit immediate field to match the lower 12 bits
+                 * of the relocated address.
+                 *
+                 * ADD encoding: [31:24][23:22][21:10 imm12][9:5 Rn][4:0 Rd]
+                 * LDR/STR encoding: [31:30 size][29:27][26][25:24][23:22][21:10 imm12][9:5 Rn][4:0 Rt]
+                 */
+                PULONG InstrPtr = (PULONG)RVA(Address, Offset);
+                ULONG Instr = *InstrPtr;
+
+                /* Extract the current 12-bit immediate from instruction [21:10] */
+                ULONG CurrentImm = (Instr >> 10) & 0xFFF;
+
+                /* Calculate byte offset from page base */
+                ULONG ByteOffset;
+                ULONG Size = (Instr >> 30) & 0x3;
+
+                /* For LDR/STR, the immediate is scaled by access size, so unscale it first */
+                if ((Instr & 0x3B000000) == 0x39000000)  /* LDR/STR with immediate offset */
+                {
+                    /* Unscale: Size 0 = byte (*1), Size 1 = halfword (*2),
+                     * Size 2 = word (*4), Size 3 = doubleword (*8) */
+                    ByteOffset = CurrentImm << Size;
+                }
+                else  /* ADD or other instructions */
+                {
+                    /* ADD uses byte offset directly */
+                    ByteOffset = CurrentImm;
+                }
+
+                /* Apply relocation delta to the byte offset
+                 * NewTargetAddr = OldTargetAddr + Delta
+                 * NewPageOffset = (NewTargetAddr & 0xFFF) = ((OldTargetAddr & 0xFFF) + (Delta & 0xFFF)) & 0xFFF */
+                ByteOffset = (ByteOffset + (ULONG)(Delta & 0xFFF)) & 0xFFF;
+
+                /* Scale back for LDR/STR instructions */
+                ULONG NewImm;
+                if ((Instr & 0x3B000000) == 0x39000000)  /* LDR/STR with immediate offset */
+                {
+                    NewImm = ByteOffset >> Size;
+                }
+                else  /* ADD or other instructions */
+                {
+                    NewImm = ByteOffset;
+                }
+
+                /* Update the 12-bit immediate field [21:10] */
+                Instr = (Instr & 0xFFC003FF) | ((NewImm & 0xFFF) << 10);
+
+                *InstrPtr = Instr;
+            }
+            break;
+#endif /* ARM64 */
 
         case IMAGE_REL_BASED_HIGHADJ:
         case IMAGE_REL_BASED_MIPS_JMPADDR:

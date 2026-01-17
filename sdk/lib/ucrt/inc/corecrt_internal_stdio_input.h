@@ -1082,7 +1082,7 @@ public:
           _input_adapter                  {input_adapter                                               },
           _format_parser                  {options, reinterpret_cast<unsigned_char_type const*>(format)},
           _locale                         {locale                                                      },
-          _valist                         {arglist                                                     },
+          _valist                         (arglist                                                     ),
           _receiving_arguments_assigned   {0                                                           }
     {
     }

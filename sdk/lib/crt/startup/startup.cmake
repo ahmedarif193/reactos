@@ -22,8 +22,10 @@ list(APPEND CRT_STARTUP_SOURCE
     startup/dll_argv.c
     startup/dllargv.c
     startup/wdllargv.c
-    startup/crt0_c.c
-    startup/crt0_w.c
+    # Note: crt0_c.c and crt0_w.c are NOT included here because they are
+    # compiled directly into GUI applications via set_module_type() in
+    # CMakeMacros.cmake. This avoids conflicts with console applications
+    # that define their own main/wmain functions.
     startup/dllentry.c
     startup/reactos.c
 )

@@ -917,7 +917,7 @@ protected:
         : _options           {0            },
           _ptd               {ptd          },
           _format_it         {nullptr      },
-          _valist_it         {nullptr      },
+          _valist_it         (),
           _characters_written{0            },
           _state             {state::normal},
           _flags             {0            },

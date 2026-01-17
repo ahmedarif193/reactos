@@ -86,6 +86,21 @@ FindEntry(IN PROSSYM_INFO RosSymInfo, IN ULONG_PTR RelativeAddress)
         }               /* else move left */
     }
 
+  /*
+   * Gap detection: If the found entry is too far from the query address,
+   * it's likely in an uncovered region (optimized code, inlined functions, etc.)
+   * Return NULL to avoid reporting incorrect function names in backtraces.
+   *
+   * Use a 512-byte threshold:
+   * - Source lines with debug info are typically close together (< 512 bytes)
+   * - Larger gaps indicate we're beyond the last debug line in a function
+   * - Prevents wrong function attribution when binary search finds previous function
+   */
+  if (Low && RelativeAddress - Low->Address > 0x200)
+    {
+      return NULL;
+    }
+
   return Low;
 }
 
@@ -100,6 +115,17 @@ RosSymGetAddressInformation(PROSSYM_INFO RosSymInfo,
   PROSSYM_ENTRY RosSymEntry;
 
   DPRINT("RelativeAddress = 0x%08x\n", RelativeAddress);
+
+  /*
+   * Defensive NULL check: On ARM64, the debugger may call this function
+   * with a corrupted or NULL RosSymInfo pointer. Early NULL check prevents
+   * cascading crashes in the debugger's backtrace handler.
+   */
+  if (RosSymInfo == NULL)
+    {
+      DPRINT1("RosSymInfo is NULL\n");
+      return FALSE;
+    }
 
   if (RosSymInfo->Symbols == NULL || RosSymInfo->SymbolsCount == 0 ||
       RosSymInfo->Strings == NULL || RosSymInfo->StringsLength == 0)
@@ -132,25 +158,40 @@ RosSymGetAddressInformation(PROSSYM_INFO RosSymInfo,
         }
       else
         {
-          /* Prefer the nearest previous entry carrying a file name */
-          PROSSYM_ENTRY Prev = RosSymEntry;
-          while (Prev > RosSymInfo->Symbols)
+          /*
+           * Don't inherit file names from previous entries if this entry has a function name.
+           * Assembly functions (like memset_asm.S) have FunctionOffset but no FileOffset.
+           * Inheriting from the previous C function (like memmove.c) is misleading.
+           *
+           * Only inherit within the same function (no FunctionOffset) or for same-address entries.
+           */
+          if (RosSymEntry->FunctionOffset == 0)
             {
-              Prev--;
-              if (Prev->FileOffset != 0)
+              /* No function name - OK to inherit from nearby entries */
+              PROSSYM_ENTRY Prev = RosSymEntry;
+              ULONG_PTR MaxDistance = 0x1000; /* 4KB max distance */
+
+              while (Prev > RosSymInfo->Symbols)
                 {
-                  Name = (PCHAR) RosSymInfo->Strings + Prev->FileOffset;
-                  break;
+                  Prev--;
+                  if (RosSymEntry->Address - Prev->Address > MaxDistance)
+                    break;
+                  if (Prev->FileOffset != 0 && Prev->SourceLine != 0)
+                    {
+                      Name = (PCHAR) RosSymInfo->Strings + Prev->FileOffset;
+                      break;
+                    }
                 }
             }
-          /* If still empty, try forward among same-address ties */
+
+          /* Try forward among same-address ties */
           if (*Name == '\0')
             {
               PROSSYM_ENTRY Next = RosSymEntry + 1;
               PROSSYM_ENTRY End = RosSymInfo->Symbols + RosSymInfo->SymbolsCount;
               while (Next < End && Next->Address == RosSymEntry->Address)
                 {
-                  if (Next->FileOffset != 0)
+                  if (Next->FileOffset != 0 && Next->SourceLine != 0)
                     {
                       Name = (PCHAR) RosSymInfo->Strings + Next->FileOffset;
                       break;

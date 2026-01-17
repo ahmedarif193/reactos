@@ -25,8 +25,13 @@ dwarfopen(Pe *pe)
 	if(res < 0) goto err;
 	if(dwarfpreallocabbrev(d) < 0) goto err;
 
-	res = pe->loadsection(pe, ".debug_aranges", &d->aranges);
-	if(res < 0) goto err;
+	/*
+	 * .debug_aranges is optional - many modules built without -gdwarf-aranges
+	 * or with certain compiler configurations don't have this section.
+	 * The dwarfaddrtounit function has a fallback mechanism that searches
+	 * compilation unit ranges directly when aranges is missing.
+	 */
+	pe->loadsection(pe, ".debug_aranges", &d->aranges);
 
 	res = pe->loadsection(pe, ".debug_line", &d->line);
 	if(res < 0) goto err;
@@ -72,6 +77,7 @@ dwarfclose(Dwarf *d)
 	free(d->info.data);
 	free(d->loc.data);
 	free(d->acache.buf);
+	dwarffreeaddrcache(d);
 	pefree(d->pe);
 	free(d);
 }

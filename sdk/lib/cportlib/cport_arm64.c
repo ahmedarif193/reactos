@@ -36,15 +36,6 @@
 
 #define PL011_INPUT_CLOCK   24000000UL
 #define PL011_TIMEOUT       (1024 * 512)
-#define CPPORT_ECHO_GUARD_MAX   0x10000UL
-
-FORCEINLINE
-BOOLEAN
-Pl011TxBusy(
-    _In_ ULONG Flags)
-{
-    return (Flags & (PL011_FR_TXFF | PL011_FR_BUSY)) != 0;
-}
 
 /* HELPERS ********************************************************************/
 
@@ -185,7 +176,6 @@ CpInitialize(
     Port->Address  = Address;
     Port->BaudRate = 0;
     Port->Flags    = 0;
-    Port->EchoDiscard = 0;
 
     /* Mask all interrupts while the debugger owns the UART */
     Pl011WriteRegister(Address, PL011_IMSC_OFFSET, 0);
@@ -194,8 +184,6 @@ CpInitialize(
 
     /* Drop any stale bytes queued before KD takes ownership */
     Pl011FlushReceive(Address);
-    Port->EchoDiscard = 0;
-    Port->Flags &= ~CPPORT_FLAG_SUPPRESS_ECHO;
 
     return STATUS_SUCCESS;
 }
@@ -261,41 +249,44 @@ CpGetByte(
         return CP_GET_ERROR;
     }
 
-    Timeout = Wait ? PL011_TIMEOUT : (Poll ? 1UL : 0UL);
+    /*
+     * Match the x86 cportlib behavior: when Wait=FALSE, try once.
+     * The original ARM64 code used (Poll ? 1UL : 0UL) when Wait=FALSE,
+     * which meant 0 iterations when Poll=FALSE. But the x86 code uses
+     * LimitCount=1 when Wait=FALSE regardless of Poll, meaning it tries once.
+     *
+     * This is critical for interactive input: the caller (KdbpTryGetCharSerial)
+     * loops calling CpGetByte with Wait=FALSE, Poll=FALSE and expects each call
+     * to check the UART once and return immediately with success or nodata.
+     */
+    Timeout = Wait ? PL011_TIMEOUT : 1UL;
 
     do
     {
         Flags = Pl011ReadRegister(Port->Address, PL011_FR_OFFSET);
 
-        if ((Port->Flags & CPPORT_FLAG_SUPPRESS_ECHO) != 0)
-        {
-            if (Pl011TxBusy(Flags) || (Port->EchoDiscard != 0))
-            {
-                /* TX path still draining: do not treat RX as data yet. */
-                goto WaitOrExit;
-            }
+        /*
+         * Echo suppression logic has been removed.
+         *
+         * The original echo suppression was designed for half-duplex or loopback
+         * scenarios where transmitted bytes would echo back. However, this caused
+         * a critical bug: after outputting the "kdb:> " prompt, EchoDiscard would
+         * be non-zero, and CpGetByte would refuse to read any RX data because it
+         * was waiting for echo characters that would never arrive in a normal
+         * serial terminal setup.
+         *
+         * The x86 cportlib has no echo suppression, and QEMU's PL011 UART does
+         * not echo transmitted characters back to RX. Therefore, removing this
+         * logic matches the x86 behavior and fixes interactive serial input.
+         */
 
-            Port->Flags &= ~CPPORT_FLAG_SUPPRESS_ECHO;
-            Port->EchoDiscard = 0;
-        }
-
-        if (Port->EchoDiscard != 0)
-        {
-            if ((Flags & PL011_FR_RXFE) == 0)
-            {
-                (VOID)Pl011ReadRegister(Port->Address, PL011_DR_OFFSET);
-                Port->EchoDiscard--;
-                continue;
-            }
-        }
-
+        /* Check if RX FIFO has data (RXFE = RX FIFO Empty, so we want it clear) */
         if ((Flags & PL011_FR_RXFE) == 0)
         {
             *Byte = (UCHAR)(Pl011ReadRegister(Port->Address, PL011_DR_OFFSET) & 0xFF);
             return CP_GET_SUCCESS;
         }
 
-WaitOrExit:
         if (!Wait)
         {
             return CP_GET_NODATA;
@@ -312,41 +303,26 @@ CpPutByte(
     IN PCPPORT Port,
     IN UCHAR Byte)
 {
-    ULONG Flags;
-    BOOLEAN RecordEcho = FALSE;
+    ULONG spins;
 
     if ((Port == NULL) || (Port->Address == NULL))
     {
         return;
     }
 
-    /* Bounded wait to avoid wedging if TX never drains */
+    /*
+     * Wait for TX FIFO to have space. Use a bounded wait to avoid
+     * wedging if the UART is broken or TX never drains.
+     */
+    spins = PL011_TIMEOUT;
+    while ((Pl011ReadRegister(Port->Address, PL011_FR_OFFSET) & PL011_FR_TXFF) && (spins-- > 0))
     {
-        ULONG spins = PL011_TIMEOUT;
-        while ((Pl011ReadRegister(Port->Address, PL011_FR_OFFSET) & PL011_FR_TXFF) && (spins-- > 0))
-        {
-            __asm__ __volatile__("yield");
-        }
-        /* If it still looks full, try once anyway */
+        /* ARM64 yield instruction to reduce power and allow other threads */
+        __asm__ __volatile__("yield");
     }
 
-    Flags = Pl011ReadRegister(Port->Address, PL011_FR_OFFSET);
-    if ((Flags & PL011_FR_RXFE) != 0)
-    {
-        Port->Flags |= CPPORT_FLAG_SUPPRESS_ECHO;
-        RecordEcho = TRUE;
-    }
-    else
-    {
-        Port->Flags &= ~CPPORT_FLAG_SUPPRESS_ECHO;
-    }
-
+    /* Write the byte to the data register */
     Pl011WriteRegister(Port->Address, PL011_DR_OFFSET, (ULONG)Byte);
-
-    if (RecordEcho && Port->EchoDiscard < CPPORT_ECHO_GUARD_MAX)
-    {
-        Port->EchoDiscard++;
-    }
 }
 
 /* EOF */

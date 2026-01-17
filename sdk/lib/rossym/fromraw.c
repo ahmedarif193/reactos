@@ -25,7 +25,12 @@ RosSymCreateFromRaw(PVOID RawData, ULONG_PTR DataSize, PROSSYM_INFO *RosSymInfo)
       || RosSymHeader->StringsOffset < RosSymHeader->SymbolsOffset + RosSymHeader->SymbolsLength
       || DataSize < RosSymHeader->StringsOffset + RosSymHeader->StringsLength)
     {
-      DPRINT1("Invalid ROSSYM_HEADER\n");
+      DbgPrint("rossym: invalid header symOff=%lu symLen=%lu strOff=%lu strLen=%lu size=%Ix\n",
+               RosSymHeader->SymbolsOffset,
+               RosSymHeader->SymbolsLength,
+               RosSymHeader->StringsOffset,
+               RosSymHeader->StringsLength,
+               (SIZE_T)DataSize);
       return FALSE;
     }
 
@@ -38,11 +43,15 @@ RosSymCreateFromRaw(PVOID RawData, ULONG_PTR DataSize, PROSSYM_INFO *RosSymInfo)
     ULONG Count;
     SIZE_T allocSize;
 
-#if defined(_WIN64) || defined(_M_AMD64) || defined(__x86_64__)
-    /* On-disk entries are packed to 4-byte alignment (8+4+4+4 = 20 bytes). Prefer
-       this raw format first to avoid ambiguity when SymbolsLength is divisible by
-       both 20 and sizeof(ROSSYM_ENTRY). */
-    const ULONG rawEntrySize = 8 + 4 + 4 + 4;
+/*
+     * 64-bit platforms: ARM64, AMD64, x86_64
+     * On-disk entries are packed to 4-byte alignment (8+4+4+4 = 20 bytes).
+     * Runtime ROSSYM_ENTRY on 64-bit is 24 bytes due to ULONG_PTR alignment.
+     * Prefer the raw format first to avoid ambiguity when SymbolsLength is
+     * divisible by both 20 and sizeof(ROSSYM_ENTRY).
+     */
+#if defined(_WIN64) || defined(_M_AMD64) || defined(__x86_64__) || defined(_M_ARM64) || defined(__aarch64__)
+    const ULONG rawEntrySize = 8 + 4 + 4 + 4;  /* 20 bytes on-disk format */
     if (SymbolsLength % rawEntrySize == 0)
     {
         Count = SymbolsLength / rawEntrySize;
@@ -53,7 +62,10 @@ RosSymCreateFromRaw(PVOID RawData, ULONG_PTR DataSize, PROSSYM_INFO *RosSymInfo)
     }
     else
     {
-        DPRINT1("rossym: unexpected symbols length\n");
+        DbgPrint("rossym: unexpected symbols length %lu (rawEntry=%lu, rossym=%lu)\n",
+                 SymbolsLength,
+                 rawEntrySize,
+                 (ULONG)sizeof(ROSSYM_ENTRY));
         return FALSE;
     }
 #else
@@ -65,7 +77,10 @@ RosSymCreateFromRaw(PVOID RawData, ULONG_PTR DataSize, PROSSYM_INFO *RosSymInfo)
     *RosSymInfo = RosSymAllocMem(allocSize);
     if (NULL == *RosSymInfo)
     {
-      DPRINT1("Failed to allocate memory for rossym\n");
+      DbgPrint("rossym: allocation failure size=%Ix entries=%lu strings=%lu\n",
+               allocSize,
+               Count,
+               StringsLength);
       return FALSE;
     }
 
@@ -74,7 +89,7 @@ RosSymCreateFromRaw(PVOID RawData, ULONG_PTR DataSize, PROSSYM_INFO *RosSymInfo)
     (*RosSymInfo)->Strings = (PCHAR) *RosSymInfo + sizeof(ROSSYM_INFO) + (Count * sizeof(ROSSYM_ENTRY));
     (*RosSymInfo)->StringsLength = StringsLength;
 
-#if defined(_WIN64) || defined(_M_AMD64) || defined(__x86_64__)
+#if defined(_WIN64) || defined(_M_AMD64) || defined(__x86_64__) || defined(_M_ARM64) || defined(__aarch64__)
     if (SymbolsLength % rawEntrySize == 0)
     {
         /* Expand from 20-byte raw entries into 24-byte runtime entries */

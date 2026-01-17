@@ -6,6 +6,8 @@
  * PROGRAMMER:      Timo Kreuzer (timo.kreuzer@reactos.org)
  */
 
+#include <stdlib.h>
+
 extern unsigned int __abort_behavior;
 
 /*!
@@ -16,7 +18,7 @@ extern unsigned int __abort_behavior;
  * \return The old flags value.
  */
 unsigned int
-_cdecl
+__cdecl
 _set_abort_behavior(
     unsigned int flags,
     unsigned int mask)
@@ -36,4 +38,3 @@ _set_abort_behavior(
     /* Return the old flags */
     return old_flags;
 }
-

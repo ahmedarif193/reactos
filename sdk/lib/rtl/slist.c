@@ -589,7 +589,12 @@ RtlInterlockedFlushSList(
 #pragma comment(linker, "/alternatename:ExpInterlockedPopEntrySList=RtlInterlockedPopEntrySList")
 #pragma comment(linker, "/alternatename:ExpInterlockedPushEntrySList=RtlInterlockedPushEntrySList")
 #pragma comment(linker, "/alternatename:ExpInterlockedFlushSList=RtlInterlockedFlushSList")
-#else
+#elif !defined(_M_ARM64)
+/*
+ * ARM64: Don't use #pragma redefine_extname - it behaves differently between
+ * GCC (renames symbol entirely) and clang (doesn't work on COFF targets).
+ * Instead, the kernel provides explicit ExpInterlocked*SList wrappers.
+ */
 #pragma redefine_extname RtlInterlockedPopEntrySList ExpInterlockedPopEntrySList
 #pragma redefine_extname RtlInterlockedPushEntrySList ExpInterlockedPushEntrySList
 #pragma redefine_extname RtlInterlockedFlushSList ExpInterlockedFlushSList

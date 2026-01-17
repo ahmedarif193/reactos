@@ -11,7 +11,10 @@
 /* INCLUDES ******************************************************************/
 
 /* PAGED_CODE equivalent for user-mode RTL */
-#if DBG
+#if DBG && !defined(_NTOSKRNL_)
+/* In kernel mode, RTL functions can be called at any IRQL (including from
+ * spinlock-protected code at DISPATCH_LEVEL), so we cannot enforce the
+ * APC_LEVEL restriction. Only check in user-mode (NTDLL). */
 extern VOID FASTCALL CHECK_PAGED_CODE_RTL(char *file, int line);
 #define PAGED_CODE_RTL() CHECK_PAGED_CODE_RTL(__FILE__, __LINE__)
 #else

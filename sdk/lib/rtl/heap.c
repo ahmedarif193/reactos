@@ -62,9 +62,6 @@ UCHAR RtlpBitsClearLow[] =
     4,0,1,0,2,0,1,0,3,0,1,0,2,0,1,0
 };
 
-#if defined(__GNUC__)
-__attribute__((unused))
-#endif
 /* Maximum size of a tail-filling pattern used for compare operation */
 UCHAR FillPattern[HEAP_ENTRY_SIZE] =
 {

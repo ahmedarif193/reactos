@@ -18,6 +18,11 @@
 
 #include "cppexcept.h"
 
+#if defined(__aarch64__) || defined(_M_ARM64) || defined(__arm__)
+#undef __thiscall
+#define __thiscall
+#endif
+
 #ifdef _MSC_VER
 #define __ASM_VTABLE(name,funcs)
 #else

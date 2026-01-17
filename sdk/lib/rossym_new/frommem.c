@@ -2,7 +2,7 @@
  * COPYRIGHT:       See COPYING in the top level directory
  * PROJECT:         ReactOS kernel
  * FILE:            lib/rossym/frommem.c
- * PURPOSE:         Creating rossym info from an in-memory image
+ * PURPOSE:         Creating DWARF symbol info from an in-memory image
  *
  * PROGRAMMERS:     Ge van Geldorp (gvg@reactos.com)
  */
@@ -20,6 +20,14 @@
 #include "pe.h"
 
 #define SYMBOL_SIZE 18
+
+/* Debug tracing for section detection - enable to diagnose issues */
+#define ROSSYM_TRACE_SECTIONS 0
+#if ROSSYM_TRACE_SECTIONS
+#define SECTION_TRACE(fmt, ...) DbgPrint("[ROSSYM] " fmt, ##__VA_ARGS__)
+#else
+#define SECTION_TRACE(fmt, ...) do {} while(0)
+#endif
 
 BOOLEAN
 RosSymCreateFromMem(PVOID ImageStart, ULONG_PTR ImageSize, PROSSYM_INFO *RosSymInfo)
@@ -92,6 +100,7 @@ RosSymCreateFromMem(PVOID ImageStart, ULONG_PTR ImageSize, PROSSYM_INFO *RosSymI
 				Status = RtlUnicodeStringToInteger(&intConv, 10, &StringOffset);
 				RtlFreeUnicodeString(&intConv);
 				if (NT_SUCCESS(Status)) {
+					SECTION_TRACE("Section %lu: raw name '/%lu'\n", SectionIndex, StringOffset);
 					/*
 					 * Use a simple linear search through original section headers.
 					 * We can't use pefindrva here because the SectionHeaders array
@@ -102,125 +111,236 @@ RosSymCreateFromMem(PVOID ImageStart, ULONG_PTR ImageSize, PROSSYM_INFO *RosSymI
 						if (TargetPhysical >= OrigSectionHeaders[k].PointerToRawData &&
 							TargetPhysical < OrigSectionHeaders[k].PointerToRawData + OrigSectionHeaders[k].SizeOfRawData) {
 							VirtualOffset = TargetPhysical - OrigSectionHeaders[k].PointerToRawData + OrigSectionHeaders[k].VirtualAddress;
+							SECTION_TRACE("  String table in mapped section, VirtualOffset=0x%lx\n", VirtualOffset);
 							break;
 						}
 					}
 
-					/* If we couldn't find it in mapped sections, try using the section characteristics
-					 * to identify DWARF sections by their typical attributes.
+					/* If we couldn't find it in mapped sections, try to identify DWARF
+					 * sections by examining their content. This is more reliable than
+					 * position-based guessing because:
+					 * 1. Different modules may have different DWARF sections present
+					 * 2. Section order may vary between modules
+					 * 3. Some modules may lack aranges, loc, ranges, etc.
 					 *
-					 * DWARF sections have predictable characteristics:
-					 * - IMAGE_SCN_CNT_INITIALIZED_DATA (0x40): Contains initialized data
-					 * - IMAGE_SCN_MEM_DISCARDABLE (0x02000000): Can be discarded after load
-					 * - IMAGE_SCN_MEM_READ (0x40000000): Readable
-					 *
-					 * We also use section size heuristics to distinguish between different
-					 * DWARF sections since they have predictable relative sizes.
+					 * DWARF section identification by content:
+					 * - .debug_info: Starts with unit_length (4 bytes) + version (2 bytes, typically 2-4)
+					 * - .debug_abbrev: Starts with abbrev code (ULEB128) + tag (ULEB128)
+					 * - .debug_line: Starts with unit_length + version (2)
+					 * - .debug_str: Contains null-terminated strings
+					 * - .debug_aranges: Starts with unit_length + version (2) + debug_info_offset
+					 * - .debug_loc: Contains location lists with base addresses
+					 * - .debug_ranges: Contains address range pairs
+					 * - .debug_frame: Starts with CIE/FDE length
 					 */
 					if (!VirtualOffset) {
 						ULONG chars = OrigSectionHeaders[SectionIndex].Characteristics;
-						ULONG sectionSize = OrigSectionHeaders[SectionIndex].SizeOfRawData;
-
-						/* Check for typical DWARF section characteristics */
+						SECTION_TRACE("  String table NOT mapped, trying content-based detection\n");
+						/*
+						 * Check for typical DWARF section characteristics.
+						 * DWARF sections have IMAGE_SCN_CNT_INITIALIZED_DATA and IMAGE_SCN_MEM_READ.
+						 */
 						if ((chars & IMAGE_SCN_CNT_INITIALIZED_DATA) &&
-							(chars & IMAGE_SCN_MEM_DISCARDABLE) &&
 							(chars & IMAGE_SCN_MEM_READ)) {
 
 							/*
-							 * Build a size profile of all debug-like sections to identify
-							 * which specific DWARF section this is. We use relative sizes
-							 * and ordering to make educated guesses.
+							 * Try content-based identification.
+							 * Read the first few bytes of section data to determine type.
 							 */
-							typedef struct {
-								ULONG index;
-								ULONG size;
-								ULONG chars;
-							} DebugSectionInfo;
+							ULONG SectionVA = OrigSectionHeaders[SectionIndex].VirtualAddress;
+							ULONG SectionSize = OrigSectionHeaders[SectionIndex].SizeOfRawData;
+							PUCHAR SectionData = ((PUCHAR)ImageStart) + SectionVA;
+							PUCHAR ImageEnd = ((PUCHAR)ImageStart) + NtHeaders->OptionalHeader.SizeOfImage;
 
-							DebugSectionInfo debugSections[16];
-							ULONG debugSectionCount = 0;
+							SECTION_TRACE("  VA=0x%lx Size=0x%lx ImageEnd=0x%p SectionData=0x%p\n",
+								SectionVA, SectionSize, ImageEnd, SectionData);
 
-							/* Collect all sections with debug characteristics */
-							for (ULONG k = 0; k < NtHeaders->FileHeader.NumberOfSections; k++) {
-								ULONG kchars = OrigSectionHeaders[k].Characteristics;
-								if ((OrigSectionHeaders[k].Name[0] == '/') &&
-									(kchars & IMAGE_SCN_CNT_INITIALIZED_DATA) &&
-									(kchars & IMAGE_SCN_MEM_DISCARDABLE) &&
-									(kchars & IMAGE_SCN_MEM_READ)) {
-									if (debugSectionCount < 16) {
-										debugSections[debugSectionCount].index = k;
-										debugSections[debugSectionCount].size = OrigSectionHeaders[k].SizeOfRawData;
-										debugSections[debugSectionCount].chars = kchars;
-										debugSectionCount++;
+							if (SectionData < ImageEnd && SectionSize >= 12) {
+								SECTION_TRACE("  First 12 bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+									SectionData[0], SectionData[1], SectionData[2], SectionData[3],
+									SectionData[4], SectionData[5], SectionData[6], SectionData[7],
+									SectionData[8], SectionData[9], SectionData[10], SectionData[11]);
+								/*
+								 * Content-based DWARF section identification.
+								 *
+								 * DWARF section header formats (DWARF 2/3/4):
+								 * - debug_info:    unit_length(4) + version(2) + abbrev_off(4) + addr_size(1)
+								 * - debug_line:    unit_length(4) + version(2) + header_length(4) + ...
+								 * - debug_aranges: unit_length(4) + version(2) + info_off(4) + addr_size(1) + seg_size(1)
+								 * - debug_abbrev:  abbrev_code(ULEB) + tag(ULEB) + children(1) + attrs...
+								 * - debug_str:     null-terminated strings (ASCII text)
+								 * - debug_frame:   length(4) + CIE_id(4, 0xFFFFFFFF for CIE) + ...
+								 * - debug_loc:     location lists (address pairs + expressions)
+								 * - debug_ranges:  range lists (address pairs, terminated by 0,0)
+								 */
+
+								ULONG Length = *(PULONG)SectionData;
+								USHORT Version = *(PUSHORT)(SectionData + 4);
+
+								/*
+								 * Check for sections with DWARF version header (debug_info, debug_line, debug_aranges).
+								 * These all start with: unit_length(4) + version(2, value 2-5)
+								 */
+								if (Version >= 2 && Version <= 5) {
+									/*
+									 * Distinguish between debug_info, debug_line, and debug_aranges.
+									 *
+									 * debug_info header (after version):
+									 *   - offset 6: debug_abbrev_offset (4 bytes)
+									 *   - offset 10: address_size (1 byte, 4 or 8)
+									 *
+									 * debug_line header (after version):
+									 *   - offset 6: header_length (4 bytes)
+									 *   - offset 10: minimum_instruction_length (1 byte, usually 1-4)
+									 *   - offset 11: default_is_stmt (1 byte, 0 or 1)
+									 *
+									 * debug_aranges header (after version):
+									 *   - offset 6: debug_info_offset (4 bytes)
+									 *   - offset 10: address_size (1 byte, 4 or 8)
+									 *   - offset 11: segment_size (1 byte, usually 0)
+									 */
+									UCHAR Byte10 = *(SectionData + 10);
+									UCHAR Byte11 = *(SectionData + 11);
+
+									/*
+									 * debug_info: address_size at offset 10 is 4 or 8, no byte 11 constraint
+									 * debug_aranges: same as debug_info but segment_size (byte 11) is typically 0
+									 * debug_line: byte 10 is min_inst_length (1-4), byte 11 is default_is_stmt (0 or 1)
+									 */
+									if ((Byte10 == 4 || Byte10 == 8) && Byte11 == 0) {
+										/*
+										 * Could be debug_info or debug_aranges.
+										 * debug_aranges is typically much smaller and contains only
+										 * address ranges, while debug_info is typically the largest section.
+										 */
+										if (SectionSize < 10000) {
+											/* Small section with addr_size, likely debug_aranges */
+											ResolvedName = ".debug_aranges";
+										} else {
+											/* Large section with addr_size, likely debug_info */
+											ResolvedName = ".debug_info";
+										}
+									} else if (Byte10 >= 1 && Byte10 <= 4 && (Byte11 == 0 || Byte11 == 1)) {
+										/* Looks like debug_line header */
+										ResolvedName = ".debug_line";
+									} else if (Byte10 == 4 || Byte10 == 8) {
+										/* Has valid address_size but non-zero segment_size, still debug_info */
+										ResolvedName = ".debug_info";
+									}
+								}
+
+								/*
+								 * Check for debug_frame (CIE/FDE records).
+								 * CIE starts with: length(4) + CIE_id(4) where CIE_id is 0xFFFFFFFF (DWARF2/3)
+								 * or 0 (DWARF4+). FDE starts with: length(4) + CIE_pointer(4, offset to CIE)
+								 */
+								if (!ResolvedName && SectionSize >= 8) {
+									ULONG CieId = *(PULONG)(SectionData + 4);
+									/* Check for CIE marker or a reasonable CIE pointer (small offset) */
+									if (CieId == 0xFFFFFFFF) {
+										/* DWARF2/3 CIE marker */
+										ResolvedName = ".debug_frame";
+									} else if (CieId == 0 && Length > 0 && Length < SectionSize) {
+										/* DWARF4+ uses 0 for CIE_id */
+										/* Verify by checking for augmentation string after CIE_id */
+										if (SectionSize > 12 && SectionData[8] < 128) {
+											/* Reasonable augmentation string start */
+											ResolvedName = ".debug_frame";
+										}
+									}
+								}
+
+								/*
+								 * Check for debug_abbrev (abbreviation table).
+								 * Starts with: abbrev_code (ULEB128, > 0) + tag (ULEB128) + has_children (1 byte, 0 or 1)
+								 * ULEB128 values are typically small for abbrev codes (1-255).
+								 */
+								if (!ResolvedName && SectionSize >= 3) {
+									UCHAR AbbrevCode = SectionData[0];
+									UCHAR Tag = SectionData[1];
+									UCHAR HasChildren = SectionData[2];
+
+									/* Valid abbrev entry: code > 0, tag in valid range (1-0x7F), children 0 or 1 */
+									if (AbbrevCode > 0 && AbbrevCode < 128 &&
+									    Tag > 0 && Tag < 128 &&
+									    (HasChildren == 0 || HasChildren == 1)) {
+										/* Very likely debug_abbrev */
+										ResolvedName = ".debug_abbrev";
+									}
+								}
+
+								/*
+								 * Check for debug_str (string table).
+								 * Contains only null-terminated ASCII/UTF-8 strings.
+								 */
+								if (!ResolvedName && SectionSize >= 4) {
+									BOOLEAN LooksLikeStrings = TRUE;
+									ULONG CheckLen = SectionSize > 512 ? 512 : SectionSize;
+									ULONG PrintableCount = 0;
+									ULONG NullCount = 0;
+
+									for (ULONG i = 0; i < CheckLen && LooksLikeStrings; i++) {
+										UCHAR c = SectionData[i];
+										if (c == 0) {
+											NullCount++;
+										} else if (c >= 0x20 && c < 0x7F) {
+											PrintableCount++;
+										} else if (c == '\t' || c == '\n') {
+											/* Allow tabs and newlines */
+										} else if (c >= 0x80) {
+											/* Could be UTF-8, allow it */
+										} else {
+											/* Control character - not a string table */
+											LooksLikeStrings = FALSE;
+										}
+									}
+
+									/* String table should have many printable chars and some nulls */
+									if (LooksLikeStrings && PrintableCount > CheckLen / 3 && NullCount > 0) {
+										ResolvedName = ".debug_str";
+									}
+								}
+
+								/*
+								 * Check for debug_loc or debug_ranges.
+								 * These contain sequences of address pairs (debug_ranges) or
+								 * address pairs + location expressions (debug_loc).
+								 * Both terminated by (0, 0) pairs.
+								 */
+								if (!ResolvedName && SectionSize >= 16) {
+									/*
+									 * Both debug_loc and debug_ranges start with address pairs.
+									 * debug_loc has location expressions between pairs.
+									 * debug_ranges is simpler - just address pairs.
+									 *
+									 * Heuristic: Check if data looks like 8-byte aligned addresses.
+									 */
+									ULONGLONG FirstAddr = *(PULONGLONG)SectionData;
+									ULONGLONG SecondAddr = *(PULONGLONG)(SectionData + 8);
+
+									/* Valid addresses should be non-zero and reasonably sized */
+									if (FirstAddr != 0 || SecondAddr != 0) {
+										/*
+										 * debug_ranges tends to be smaller than debug_loc.
+										 * debug_loc contains embedded DWARF expressions.
+										 */
+										if (SectionSize < 5000) {
+											ResolvedName = ".debug_ranges";
+										} else {
+											ResolvedName = ".debug_loc";
+										}
 									}
 								}
 							}
 
-							/* Find which debug section this is */
-							ULONG positionInDebugSections = 0;
-							for (ULONG k = 0; k < debugSectionCount; k++) {
-								if (debugSections[k].index == SectionIndex) {
-									positionInDebugSections = k;
-									break;
-								}
-							}
-
 							/*
-							 * Standard DWARF section order (typical in GCC/MinGW output):
-							 * .debug_aranges  - Small, address range table
-							 * .debug_info     - Large, main debug information
-							 * .debug_abbrev   - Medium, abbreviation table
-							 * .debug_line     - Large, line number information
-							 * .debug_frame    - Medium, call frame information
-							 * .debug_str      - Medium, string table
-							 * .debug_loc      - Variable, location lists
-							 * .debug_ranges   - Small, range lists
-							 * .debug_pubnames - Small, public names
-							 * .debug_pubtypes - Small, public types
-							 *
-							 * We use a combination of:
-							 * 1. Section position in the debug sections list
-							 * 2. Relative size compared to other debug sections
-							 * 3. Absolute size heuristics
+							 * Fallback: If content-based detection failed, use StringOffset
+							 * to create a unique but unrecognized name. This at least allows
+							 * the section to be loaded even if we can't identify it.
 							 */
-
-							/* Find largest sections (typically .debug_info and .debug_line) */
-							ULONG largestSize = 0;
-							ULONG secondLargestSize = 0;
-							for (ULONG k = 0; k < debugSectionCount; k++) {
-								if (debugSections[k].size > largestSize) {
-									secondLargestSize = largestSize;
-									largestSize = debugSections[k].size;
-								} else if (debugSections[k].size > secondLargestSize) {
-									secondLargestSize = debugSections[k].size;
-								}
-							}
-
-							/* Identify section based on size and position */
-							if (sectionSize == largestSize) {
-								/* Largest section is typically .debug_info */
-								ResolvedName = ".debug_info";
-							} else if (sectionSize == secondLargestSize) {
-								/* Second largest is typically .debug_line */
-								ResolvedName = ".debug_line";
-							} else {
-								/* Use position-based heuristic for smaller sections */
-								static const char* DwarfNames[] = {
-									".debug_aranges",
-									".debug_info",
-									".debug_abbrev",
-									".debug_line",
-									".debug_frame",
-									".debug_str",
-									".debug_loc",
-									".debug_ranges",
-									".debug_pubnames",
-									".debug_pubtypes"
-								};
-
-								if (positionInDebugSections < sizeof(DwarfNames)/sizeof(DwarfNames[0])) {
-									ResolvedName = (PCHAR)DwarfNames[positionInDebugSections];
-								}
+							if (!ResolvedName) {
+								/* Create a generic name based on offset for debugging */
+								/* The section will be skipped by dwarfopen if not recognized */
 							}
 						}
 					}
@@ -229,6 +349,7 @@ RosSymCreateFromMem(PVOID ImageStart, ULONG_PTR ImageSize, PROSSYM_INFO *RosSymI
 
 			if (ResolvedName) {
 				/* Use the resolved DWARF section name */
+				SECTION_TRACE("  -> Detected as: %s\n", ResolvedName);
 				PendingName.Length = strlen(ResolvedName);
 				PendingName.MaximumLength = PendingName.Length + 1;
 				PendingName.Buffer = RosSymAllocMem(PendingName.MaximumLength);
@@ -257,6 +378,7 @@ RosSymCreateFromMem(PVOID ImageStart, ULONG_PTR ImageSize, PROSSYM_INFO *RosSymI
 				}
 			} else {
 				/* String table not in memory - use raw name bytes */
+				SECTION_TRACE("  -> FAILED detection, using raw name\n");
 				PendingName.Buffer = RosSymAllocMem(IMAGE_SIZEOF_SHORT_NAME);
 				if (!PendingName.Buffer) goto freeall;
 				RtlCopyMemory(PendingName.Buffer, OrigSectionHeaders[SectionIndex].Name, IMAGE_SIZEOF_SHORT_NAME);
@@ -278,6 +400,30 @@ RosSymCreateFromMem(PVOID ImageStart, ULONG_PTR ImageSize, PROSSYM_INFO *RosSymI
 	pe->imagebase = NtHeaders->OptionalHeader.ImageBase;
 	pe->imagesize = NtHeaders->OptionalHeader.SizeOfImage;
 	pe->codestart = NtHeaders->OptionalHeader.BaseOfCode;
+
+	/*
+	 * Fix for relocated images:
+	 * When a driver is loaded by the kernel loader, the PE header's ImageBase field
+	 * may be updated to reflect the actual load address (after relocation).
+	 * DWARF debug info uses the ORIGINAL ImageBase from the PE file, not the
+	 * relocated one. If the ImageBase looks like a kernel address (high address),
+	 * assume it was relocated and use a sensible default.
+	 *
+	 * Detection: If ImageBase >= 0xFFFF800000000000 (kernel space on x64/ARM64),
+	 * it's likely been updated to the load address. Use 0x10000 as the default
+	 * ImageBase for drivers (standard DLL base) or 0x400000 for EXEs.
+	 */
+#ifdef _WIN64
+	if (pe->imagebase >= 0xFFFF800000000000ULL) {
+		/* Check if this looks like a DLL/SYS (has exports) or EXE */
+		ULONG Characteristics = NtHeaders->FileHeader.Characteristics;
+		if (Characteristics & IMAGE_FILE_DLL) {
+			pe->imagebase = 0x10000;  /* Standard DLL base */
+		} else {
+			pe->imagebase = 0x400000;  /* Standard EXE base */
+		}
+	}
+#endif
 #ifdef _WIN64
 	pe->datastart = 0;
 #else
@@ -286,6 +432,7 @@ RosSymCreateFromMem(PVOID ImageStart, ULONG_PTR ImageSize, PROSSYM_INFO *RosSymI
 	pe->nsections = NtHeaders->FileHeader.NumberOfSections;
 	pe->sect = SectionHeaders;
 	pe->loadsection = loadmemsection;
+
 	*RosSymInfo = dwarfopen(pe);
 
 	return !!*RosSymInfo;

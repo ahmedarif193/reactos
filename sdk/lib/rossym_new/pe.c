@@ -8,18 +8,13 @@ PeSect *pesection(Pe *pe, const char *name)
 	int i;
 	ANSI_STRING WantName;
 	RtlInitAnsiString(&WantName, name);
-	werrstr("Searching for section %s\n", name);
 	for (i = 0; i < pe->nsections; i++) {
 		PANSI_STRING AnsiString = ANSI_NAME_STRING(&pe->sect[i]);
 		if (WantName.Length == AnsiString->Length &&
 			!memcmp(AnsiString->Buffer, name, WantName.Length)) {
-			werrstr("Found %s (%d) @ %x (%x)\n", name, i,
-				   ((PCHAR)pe->imagebase)+pe->sect[i].hdr.VirtualAddress,
-				   pe->sect[i].hdr.SizeOfRawData);
 			return &pe->sect[i];
 		}
 	}
-	werrstr("%s not found\n", name);
 	return nil;
 }
 

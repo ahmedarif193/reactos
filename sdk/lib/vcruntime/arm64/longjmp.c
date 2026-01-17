@@ -41,4 +41,6 @@ void __cdecl longjmp(
                 (PVOID)jumpBuffer->Lr,
                 &exceptionRecord,
                 (PVOID)(ULONG_PTR)_Value);
+
+    __builtin_unreachable();
 }

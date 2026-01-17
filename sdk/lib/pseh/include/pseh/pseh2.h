@@ -44,7 +44,7 @@
 
 #include "pseh2_64.h"
 
-#elif defined(_USE_DUMMY_PSEH) || defined (__arm__) || defined(_M_AMD64)
+#elif defined(_USE_DUMMY_PSEH) || defined (__arm__) || defined(__aarch64__) || defined(_M_ARM64) || defined(_M_AMD64)
 
 #ifdef __cplusplus
 extern"C"

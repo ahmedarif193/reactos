@@ -2,7 +2,7 @@
  * COPYRIGHT:       See COPYING in the top level directory
  * PROJECT:         ReactOS kernel
  * FILE:            lib/rossym/find.c
- * PURPOSE:         Find symbol info for an address
+ * PURPOSE:         Find symbol info for an address (DWARF format)
  *
  * PROGRAMMERS:     Ge van Geldorp (gvg@reactos.com)
  */
@@ -40,6 +40,45 @@
 #define NDEBUG
 #include <debug.h>
 
+/*
+ * Last error tracking for symbol lookups.
+ * This allows callers to understand why a lookup failed.
+ */
+typedef enum _ROSSYM_ERROR_CODE {
+    ROSSYM_ERROR_NONE = 0,
+    ROSSYM_ERROR_NULL_INFO,
+    ROSSYM_ERROR_NULL_PE,
+    ROSSYM_ERROR_NO_ARANGES,
+    ROSSYM_ERROR_NO_INFO_SECTION,
+    ROSSYM_ERROR_NO_LINE_SECTION,
+    ROSSYM_ERROR_ADDR_NOT_IN_UNIT,
+    ROSSYM_ERROR_NO_STMTLIST,
+    ROSSYM_ERROR_LINE_PARSE_FAILED,
+    ROSSYM_ERROR_NO_FUNCTION_FOUND
+} ROSSYM_ERROR_CODE;
+
+static ROSSYM_ERROR_CODE RosSymLastError = ROSSYM_ERROR_NONE;
+
+/*
+ * Get the last error as a string for debugging purposes.
+ */
+const char* RosSymGetLastErrorString(void)
+{
+    switch (RosSymLastError) {
+    case ROSSYM_ERROR_NONE:            return "None";
+    case ROSSYM_ERROR_NULL_INFO:       return "NULL RosSymInfo";
+    case ROSSYM_ERROR_NULL_PE:         return "NULL PE info";
+    case ROSSYM_ERROR_NO_ARANGES:      return "No .debug_aranges section";
+    case ROSSYM_ERROR_NO_INFO_SECTION: return "No .debug_info section";
+    case ROSSYM_ERROR_NO_LINE_SECTION: return "No .debug_line section";
+    case ROSSYM_ERROR_ADDR_NOT_IN_UNIT:return "Address not in any compilation unit";
+    case ROSSYM_ERROR_NO_STMTLIST:     return "No statement list in compilation unit";
+    case ROSSYM_ERROR_LINE_PARSE_FAILED: return "Failed to parse line information";
+    case ROSSYM_ERROR_NO_FUNCTION_FOUND: return "Line info found but no function name";
+    default:                           return "Unknown error";
+    }
+}
+
 BOOLEAN
 RosSymGetAddressInformation
 (PROSSYM_INFO RosSymInfo,
@@ -55,8 +94,28 @@ RosSymGetAddressInformation
     DwarfExpr cfa = { };
     ULONG_PTR cfaLocation;
 
-    if (!RosSymInfo || !RosSymInfo->pe || !RosSymLineInfo)
+    RosSymLastError = ROSSYM_ERROR_NONE;
+
+    if (!RosSymInfo || !RosSymLineInfo) {
+        RosSymLastError = ROSSYM_ERROR_NULL_INFO;
         return FALSE;
+    }
+
+    /* DWARF format - use the DWARF parser */
+    if (!RosSymInfo->pe) {
+        RosSymLastError = ROSSYM_ERROR_NULL_PE;
+        return FALSE;
+    }
+
+    /* Check if essential DWARF sections are present */
+    if (!RosSymInfo->info.data || RosSymInfo->info.len == 0) {
+        RosSymLastError = ROSSYM_ERROR_NO_INFO_SECTION;
+        return FALSE;
+    }
+    if (!RosSymInfo->line.data || RosSymInfo->line.len == 0) {
+        RosSymLastError = ROSSYM_ERROR_NO_LINE_SECTION;
+        return FALSE;
+    }
 
     FullPC = RelativeAddress + RosSymInfo->pe->imagebase;
 
@@ -65,8 +124,32 @@ RosSymGetAddressInformation
                         &RosSymLineInfo->DirectoryName,
                         &RosSymLineInfo->FunctionName,
                         &RosSymLineInfo->LineNumber);
-    if (res == -1)
+    if (res == -1) {
+        /*
+         * dwarfpctoline failed. The failure could be in:
+         * 1. dwarfaddrtounit - address not found in any compilation unit
+         * 2. dwarflookuptag - compilation unit DIE not found
+         * 3. Line program parsing
+         *
+         * Since we can't easily distinguish these without adding more state,
+         * we report based on what sections are available.
+         */
+        if (!RosSymInfo->aranges.data || RosSymInfo->aranges.len == 0) {
+            /*
+             * No aranges section - this is expected, we use fallback.
+             * The failure is likely in finding the compilation unit.
+             */
+            RosSymLastError = ROSSYM_ERROR_ADDR_NOT_IN_UNIT;
+        } else {
+            /*
+             * Has aranges but still failed - could be:
+             * - Address not covered by aranges
+             * - Line program parsing failed
+             */
+            RosSymLastError = ROSSYM_ERROR_LINE_PARSE_FAILED;
+        }
         return FALSE;
+    }
 
     RosSymLineInfo->NumParams = 0;
     if (!(RosSymLineInfo->Flags & ROSSYM_LINEINFO_HAS_REGISTERS))

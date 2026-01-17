@@ -23,6 +23,18 @@ elseif(ARCH STREQUAL "amd64")
     list(APPEND CRT_MEM_ASM_SOURCE
         ${LIBCNTPR_MEM_ASM_SOURCE}
     )
+elseif(ARCH STREQUAL "arm64")
+    list(APPEND LIBCNTPR_MEM_ASM_SOURCE
+        mem/arm64/memset_asm.S
+    )
+    list(APPEND LIBCNTPR_MEM_SOURCE
+        mem/memchr.c
+        mem/memcpy.c
+        mem/memmove.c
+    )
+    list(APPEND CRT_MEM_ASM_SOURCE
+        ${LIBCNTPR_MEM_ASM_SOURCE}
+    )
 else()
     list(APPEND LIBCNTPR_MEM_SOURCE
         mem/memchr.c

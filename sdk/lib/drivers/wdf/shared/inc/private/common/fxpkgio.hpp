@@ -25,7 +25,10 @@ Revision History:
 #ifndef _FXPKGIO_H_
 #define _FXPKGIO_H_
 
-
+#if defined(_M_ARM64) || defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM)
+#undef __fastcall
+#define __fastcall
+#endif
 
 
 #include "fxpkgioshared.hpp"

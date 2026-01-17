@@ -111,12 +111,16 @@ RtlLookupFunctionEntry(
     ULONG IndexLo, IndexHi, IndexMid;
 
     FunctionTable = RtlLookupFunctionTable(ControlPc, ImageBase, &TableLength);
+    DPRINT("[RtlLookupFunctionEntry] ControlPc=%p ImageBase=%p FunctionTable=%p TableLength=%u\n",
+            (PVOID)ControlPc, (PVOID)*ImageBase, FunctionTable, TableLength);
     if (FunctionTable == NULL)
     {
+        DPRINT("[RtlLookupFunctionEntry] FunctionTable is NULL, trying dynamic\n");
         return RtlpLookupDynamicFunctionEntry(ControlPc, ImageBase, HistoryTable);
     }
 
     ControlPc -= *ImageBase;
+    DPRINT("[RtlLookupFunctionEntry] RVA=0x%lx\n", (ULONG)ControlPc);
 
     IndexLo = 0;
     IndexHi = TableLength;
@@ -130,6 +134,9 @@ RtlLookupFunctionEntry(
         FunctionEnd = FunctionEntry->BeginAddress +
                       RtlpArm64FunctionLength(FunctionEntry, *ImageBase);
 
+        DPRINT("[RtlLookupFunctionEntry] Search: IndexMid=%u Begin=0x%lx End=0x%lx RVA=0x%lx\n",
+                IndexMid, FunctionEntry->BeginAddress, FunctionEnd, (ULONG)ControlPc);
+
         if (ControlPc < FunctionEntry->BeginAddress)
         {
             IndexHi = IndexMid;
@@ -140,10 +147,12 @@ RtlLookupFunctionEntry(
         }
         else
         {
+            DPRINT("[RtlLookupFunctionEntry] FOUND at index %u\n", IndexMid);
             return FunctionEntry;
         }
     }
 
+    DPRINT("[RtlLookupFunctionEntry] NOT FOUND\n");
     return NULL;
 }
 
@@ -173,6 +182,22 @@ RtlpIsStackPointerValid(
     return (StackPointer >= LowLimit) &&
            (StackPointer < HighLimit) &&
            ((StackPointer & 0xF) == 0);
+}
+
+static __inline
+BOOL
+RtlpIsStackAddressValid(
+    _In_ ULONG64 Address,
+    _In_ ULONG64 LowLimit,
+    _In_ ULONG64 HighLimit,
+    _In_ ULONG Size)
+{
+    ULONG64 End = Address + Size;
+
+    return (Address >= LowLimit) &&
+           (End > Address) &&
+           (End <= HighLimit) &&
+           ((Address & 0x7) == 0);
 }
 
 typedef enum _ARM64_UNWIND_OP_KIND
@@ -591,16 +616,23 @@ RtlpArm64DecodeUnwindOps(
     return TRUE;
 }
 
-static VOID
+static
+BOOLEAN
 RtlpArm64ApplyUnwindOps(
     _In_reads_(OpCount) const ARM64_UNWIND_OP *Ops,
     _In_ ULONG OpCount,
     _Inout_ PCONTEXT ContextRecord,
-    _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers)
+    _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers,
+    _In_ ULONG64 StackLow,
+    _In_ ULONG64 StackHigh)
 {
     while (OpCount--)
     {
         const ARM64_UNWIND_OP *Op = &Ops[OpCount];
+
+        if (!RtlpIsStackPointerValid(ContextRecord->Sp, StackLow, StackHigh))
+            return FALSE;
+
         ULONG64 Address = ContextRecord->Sp + Op->Offset;
 
         switch (Op->Kind)
@@ -609,23 +641,38 @@ RtlpArm64ApplyUnwindOps(
                 ContextRecord->Sp += Op->Delta;
                 continue;
             case Arm64UnwindOpSaveInt:
+                if (!RtlpIsStackAddressValid(Address, StackLow, StackHigh, sizeof(ULONG64)))
+                    return FALSE;
                 RtlpArm64RestoreIntReg(ContextRecord, ContextPointers, Op->Reg, Address);
                 break;
             case Arm64UnwindOpSaveIntPair:
+                if (!RtlpIsStackAddressValid(Address, StackLow, StackHigh, 2 * sizeof(ULONG64)))
+                    return FALSE;
                 RtlpArm64RestoreIntReg(ContextRecord, ContextPointers, Op->Reg, Address);
                 RtlpArm64RestoreIntReg(ContextRecord, ContextPointers, Op->Reg2, Address + sizeof(ULONG64));
                 break;
             case Arm64UnwindOpSaveFp:
+                if (!RtlpIsStackAddressValid(Address, StackLow, StackHigh, sizeof(ULONG64)))
+                    return FALSE;
                 RtlpArm64RestoreFpReg(ContextRecord, ContextPointers, Op->Reg, Address);
                 break;
             case Arm64UnwindOpSaveFpPair:
+                if (!RtlpIsStackAddressValid(Address, StackLow, StackHigh, 2 * sizeof(ULONG64)))
+                    return FALSE;
                 RtlpArm64RestoreFpReg(ContextRecord, ContextPointers, Op->Reg, Address);
                 RtlpArm64RestoreFpReg(ContextRecord, ContextPointers, Op->Reg2, Address + sizeof(ULONG64));
                 break;
             case Arm64UnwindOpSaveQ:
+                if (!RtlpIsStackAddressValid(Address, StackLow, StackHigh, 2 * sizeof(ULONG64)))
+                    return FALSE;
                 RtlpArm64RestoreQReg(ContextRecord, Op->Reg, Address);
                 break;
             case Arm64UnwindOpSaveQPair:
+                if (!RtlpIsStackAddressValid(Address, StackLow, StackHigh, 2 * sizeof(ULONG64)) ||
+                    !RtlpIsStackAddressValid(Address + 16, StackLow, StackHigh, 2 * sizeof(ULONG64)))
+                {
+                    return FALSE;
+                }
                 RtlpArm64RestoreQReg(ContextRecord, Op->Reg, Address);
                 RtlpArm64RestoreQReg(ContextRecord, Op->Reg2, Address + 16);
                 break;
@@ -638,6 +685,8 @@ RtlpArm64ApplyUnwindOps(
             ContextRecord->Sp += Op->Delta;
         }
     }
+
+    return RtlpIsStackPointerValid(ContextRecord->Sp, StackLow, StackHigh);
 }
 
 BOOLEAN
@@ -877,6 +926,7 @@ RtlVirtualUnwind(
     ULONG RegI = 0, RegF = 0, Cr = 0, Home = 0;
     ULONG64 FrameBytes = 0;
     ULONG64 FrameBase;
+    ULONG_PTR StackLow, StackHigh;
     ULONG Offset = 0;
     ULONG64 SavedFp = ContextRecord->Fp;
     ULONG64 SavedLr = ContextRecord->Lr;
@@ -896,6 +946,7 @@ RtlVirtualUnwind(
         RtlZeroMemory(ContextPointers, sizeof(*ContextPointers));
 
     FrameBase = ContextRecord->Sp;
+    RtlpGetStackLimits(&StackLow, &StackHigh);
 
     if (FunctionEntry != NULL)
     {
@@ -950,11 +1001,25 @@ RtlVirtualUnwind(
 
     FrameBytes = (ULONG64)FrameSize * 16;
 
+    DPRINT("[RtlVirtualUnwind] Entry: PC=%p SP=%p FP=%p LR=%p Flag=%u FrameSize=%u UseXdata=%d\n",
+            (PVOID)ControlPc, (PVOID)ContextRecord->Sp,
+            (PVOID)ContextRecord->Fp, (PVOID)ContextRecord->Lr,
+            Flag, FrameSize, UseXdata);
+
     if (UseXdata)
     {
         if (OpCount != 0)
         {
-            RtlpArm64ApplyUnwindOps(Ops, OpCount, ContextRecord, ContextPointers);
+            CONTEXT OriginalContext = *ContextRecord;
+
+            if (!RtlpArm64ApplyUnwindOps(Ops, OpCount, ContextRecord, ContextPointers, StackLow, StackHigh))
+            {
+                *ContextRecord = OriginalContext;
+                if (HandlerType == UNW_FLAG_NHANDLER)
+                    return NULL;
+
+                RtlRaiseStatus(STATUS_BAD_STACK);
+            }
         }
         SavedFp = ContextRecord->Fp;
         SavedLr = ContextRecord->Lr;
@@ -1016,6 +1081,15 @@ RtlVirtualUnwind(
         }
 
         ContextRecord->Sp = FrameBase + FrameBytes;
+    }
+    else if (FrameBytes == 0)
+    {
+        /*
+         * Leaf function with no stack frame: the return address remains in LR.
+         * Do not touch SP, simply advance PC to LR.
+         */
+        SavedFp = ContextRecord->Fp;
+        SavedLr = ContextRecord->Lr;
     }
     else if (ContextRecord->Fp != 0)
     {

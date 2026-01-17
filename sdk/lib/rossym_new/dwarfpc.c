@@ -373,8 +373,12 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
     *function = nil;
     lastline = 0;
 
-    runit = dwarfaddrtounit(d, pc, &unit);
-    if (runit == 0) {
+    /*
+     * Search for function name in the compilation unit.
+     * Note: We reuse the 'unit' value from the initial dwarfaddrtounit() call
+     * at the top of this function, avoiding redundant O(log n) lookups.
+     */
+    {
         DwarfSym compunit = { };
         int renum = dwarfenumunit(d, unit, &compunit);
         if (renum < 0)
@@ -393,9 +397,8 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
         }
     }
 
-    // Next search by declaration
-    runit = dwarfaddrtounit(d, pc, &unit);
-    if (runit == 0) {
+    /* Next search by declaration line (fallback when address range doesn't match) */
+    {
         DwarfSym compunit = { };
         int renum = dwarfenumunit(d, unit, &compunit);
         if (renum < 0)

@@ -448,6 +448,16 @@ struct DwarfAbbrev
 
 struct _Pe;
 
+/*
+ * Address range cache entry for fast PC to compilation unit lookup.
+ * Sorted by lowpc for binary search.
+ */
+typedef struct DwarfAddrRangeEntry {
+	ULONG_PTR lowpc;
+	ULONG_PTR highpc;
+	ulong unit;
+} DwarfAddrRangeEntry;
+
 struct Dwarf
 {
 	struct _Pe *pe;
@@ -476,6 +486,13 @@ struct Dwarf
 		int maxa;
 		int maxattr;
 	} acache;
+
+	/* Address range cache for fast PC to unit lookup (O(log n) binary search) */
+	struct {
+		DwarfAddrRangeEntry *entries;
+		int nentries;
+		int built;	/* 0 = not built, 1 = built, -1 = build failed */
+	} addrcache;
 };
 
 struct DwarfStack
@@ -489,5 +506,8 @@ DwarfAbbrev *dwarfgetabbrev(Dwarf*, ulong, ulong);
 int dwarfpreallocabbrev(Dwarf*);
 
 int dwarfgetinfounit(Dwarf*, ulong, DwarfBlock*);
+
+/* Address cache management */
+void dwarffreeaddrcache(Dwarf*);
 
 #define MAXIMUM_DWARF_NAME_SIZE 64

@@ -46,8 +46,10 @@ extern void __cdecl _fpreset (void);
 EXCEPTION_DISPOSITION __mingw_SEH_error_handler(struct _EXCEPTION_RECORD *, void *, struct _CONTEXT *, void *);
 
 #define MAX_PDATA_ENTRIES 32
+#if !defined(__aarch64__) && !defined(_M_ARM64)
 static RUNTIME_FUNCTION emu_pdata[MAX_PDATA_ENTRIES];
 static UNWIND_INFO emu_xdata[MAX_PDATA_ENTRIES];
+#endif
 
 int
 __mingw_init_ehandler (void)

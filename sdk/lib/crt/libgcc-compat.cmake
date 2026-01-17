@@ -21,7 +21,13 @@ if(ARCH STREQUAL "i386")
         math/i386/aullshr_asm.s
         math/i386/gcc_compat.s
     )
+elseif(ARCH STREQUAL "arm64")
+    list(APPEND LIBGCC_COMPAT_SOURCE
+        startup/arm64/libgcc_compat.c
+    )
+endif()
 
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "arm64")
     add_asm_files(libgcc_compat_asm ${LIBGCC_COMPAT_SOURCE})
     add_library(gcc-compat STATIC ${libgcc_compat_asm})
     set_target_properties(gcc-compat PROPERTIES LINKER_LANGUAGE "C")

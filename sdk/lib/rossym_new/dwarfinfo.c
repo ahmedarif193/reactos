@@ -196,11 +196,24 @@ dwarflookupfn(Dwarf *d, ulong unit, ULONG_PTR pc, DwarfSym *s)
     DwarfSym compunit = { };
     if(dwarfenumunit(d, unit, &compunit) < 0)
         return -1;
+
+    /*
+     * Search direct children of the compilation unit for a subprogram
+     * containing the PC. This is a simple linear search that doesn't
+     * recurse into nested structures.
+     *
+     * Note: Subprograms nested inside namespaces or other structures
+     * won't be found by this search. A more complete implementation
+     * would need to recursively search all children, but that can
+     * cause issues at high IRQLs due to memory access patterns.
+     */
     while(dwarfnextsymat(d, &compunit, s) == 0){
         if(s->attrs.tag != TagSubprogram)
             continue;
-        if(s->attrs.lowpc <= pc && pc < s->attrs.highpc)
-            return 0;
+        if(s->attrs.have.lowpc && s->attrs.have.highpc) {
+            if(s->attrs.lowpc <= pc && pc < s->attrs.highpc)
+                return 0;
+        }
     }
     werrstr("fn containing pc %p not found", (PVOID)pc);
     return -1;

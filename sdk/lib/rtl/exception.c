@@ -219,6 +219,16 @@ static VOID
     DbgPrint("R4: %lx   R5: %lx   R6: %lx    R7: %lx\n", pc->R4, pc->R5, pc->R6, pc->R7);
     DbgPrint("R8: %lx   R9: %lx  R10: %lx   R11: %lx\n", pc->R8, pc->R9, pc->R10, pc->R11);
     DbgPrint("R12: %lx\n", pc->R12);
+#elif defined(_M_ARM64)
+    DbgPrint("Pc: %I64x   Lr: %I64x   Sp: %I64x   Cpsr: %lx\n", pc->Pc, pc->Lr, pc->Sp, pc->Cpsr);
+    DbgPrint("X0: %I64x   X1: %I64x   X2: %I64x   X3: %I64x\n", pc->X0, pc->X1, pc->X2, pc->X3);
+    DbgPrint("X4: %I64x   X5: %I64x   X6: %I64x   X7: %I64x\n", pc->X4, pc->X5, pc->X6, pc->X7);
+    DbgPrint("X8: %I64x   X9: %I64x   X10: %I64x   X11: %I64x\n", pc->X8, pc->X9, pc->X10, pc->X11);
+    DbgPrint("X12: %I64x  X13: %I64x   X14: %I64x   X15: %I64x\n", pc->X12, pc->X13, pc->X14, pc->X15);
+    DbgPrint("X16: %I64x  X17: %I64x   X18: %I64x   X19: %I64x\n", pc->X16, pc->X17, pc->X18, pc->X19);
+    DbgPrint("X20: %I64x  X21: %I64x   X22: %I64x   X23: %I64x\n", pc->X20, pc->X21, pc->X22, pc->X23);
+    DbgPrint("X24: %I64x  X25: %I64x   X26: %I64x   X27: %I64x\n", pc->X24, pc->X25, pc->X26, pc->X27);
+    DbgPrint("X28: %I64x  Fp: %I64x\n", pc->X28, pc->Fp);
 #else
 #pragma message ("Unknown architecture")
 #endif

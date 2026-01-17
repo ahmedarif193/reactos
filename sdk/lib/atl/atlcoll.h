@@ -107,7 +107,14 @@ public:
     #pragma GCC diagnostic push
     #pragma GCC diagnostic ignored "-Wclass-memaccess"
 #endif
+#if defined(__clang__)
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wnontrivial-memcall"
+#endif
         memmove(Dest, Source, NumElements * sizeof(T));
+#if defined(__clang__)
+    #pragma clang diagnostic pop
+#endif
 #if defined(__GNUC__) && __GNUC__ >= 8
     #pragma GCC diagnostic pop
 #endif
