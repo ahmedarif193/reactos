@@ -160,12 +160,17 @@ Arguments:
 
     Vbo.QuadPart = StartingVbo;
 
+    DbgPrint("[FatReadVolumeFile] Before CcMapData: Vbo=0x%llx ByteCount=%lu\n",
+             Vbo.QuadPart, ByteCount);
+
     if (!CcMapData( Vcb->VirtualVolumeFile,
                     &Vbo,
                     ByteCount,
                     BooleanFlagOn(IrpContext->Flags, IRP_CONTEXT_FLAG_WAIT),
                     Bcb,
                     Buffer )) {
+
+        DbgPrint("[FatReadVolumeFile] CcMapData returned FALSE\n");
 
         NT_ASSERT( !FlagOn(IrpContext->Flags, IRP_CONTEXT_FLAG_WAIT) );
 
@@ -176,10 +181,14 @@ Arguments:
         FatRaiseStatus( IrpContext, STATUS_CANT_WAIT );
     }
 
+    DbgPrint("[FatReadVolumeFile] CcMapData returned TRUE, Bcb=%p Buffer=%p\n",
+             *Bcb, *Buffer);
+
     DbgDoit( IrpContext->PinCount += 1 )
 
     DebugTrace(-1, Dbg, "FatReadVolumeFile -> VOID, *BCB = %p\n", *Bcb);
 
+    DbgPrint("[FatReadVolumeFile] Returning from FatReadVolumeFile\n");
     return;
 }
 

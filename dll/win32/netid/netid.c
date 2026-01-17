@@ -53,7 +53,7 @@ FormatMessageBox(
     ...)
 {
     WCHAR szTitle[256], szMessage[256], szText[512];
-    va_list args = NULL;
+    va_list args;
 
     LoadStringW(hDllInstance, 4, szTitle, ARRAYSIZE(szTitle));
 

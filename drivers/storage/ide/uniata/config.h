@@ -119,7 +119,7 @@
   #define DDKAPI          __attribute__((stdcall))
  #endif
  #ifndef DDKCDECLAPI
-  #define DDKCDECLAPI     __attribute__((cdecl))
+ #define DDKCDECLAPI     __attribute__((cdecl))
  #endif
  #ifndef DDKFASTAPI
   #define DDKFASTAPI      __attribute__((fastcall))
@@ -138,7 +138,7 @@
   #define DDKAPI          __stdcall
  #endif
  #ifndef DDKCDECLAPI
-  #define DDKCDECLAPI     _cdecl
+ #define DDKCDECLAPI     _cdecl
  #endif
  #ifndef DDKFASTAPI
   #define DDKFASTAPI      __fastcall
@@ -147,6 +147,11 @@
  #define DECLSPEC_NAKED   __declspec(naked)
 
 #endif //__GNUC__
+
+#if defined(_M_ARM64) || defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM)
+#undef DDKFASTAPI
+#define DDKFASTAPI
+#endif
 
 
 #endif //__UNIATA_CONFIG__H__

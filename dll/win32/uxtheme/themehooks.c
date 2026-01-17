@@ -410,7 +410,7 @@ HRESULT GetDiaogTextureBrush(HTHEME theme, HWND hwnd, HDC hdc, HBRUSH* result, B
     if (pwndData->hTabBackgroundBrush == NULL)
     {
         HBITMAP hbmp;
-        RECT dummy, bmpRect;
+        RECT dummy = {0}, bmpRect;
         BOOL hasImageAlpha;
         HRESULT hr;
 

@@ -39,7 +39,7 @@
 #define WNNC_DRIVER( major, minor ) ( major * 0x00010000 + minor )
 
 
-ULONG _cdecl NFS41DbgPrint( __in LPTSTR Format, ... )
+ULONG __cdecl NFS41DbgPrint( __in LPTSTR Format, ... )
 {
     ULONG rc = 0;
     TCHAR szbuffer[256];

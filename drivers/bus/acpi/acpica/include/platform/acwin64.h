@@ -127,7 +127,13 @@
 #ifdef ACPI_APPLICATION
 #define ACPI_FLUSH_CPU_CACHE()
 #else
+#if defined(_M_AMD64) || defined(__x86_64__) || defined(_M_IX86) || defined(__i386__)
 #define ACPI_FLUSH_CPU_CACHE()  __wbinvd()
+#elif defined(_M_ARM64) || defined(__aarch64__)
+#define ACPI_FLUSH_CPU_CACHE()  __asm__ __volatile__("dsb sy\nisb" ::: "memory")
+#else
+#define ACPI_FLUSH_CPU_CACHE()
+#endif
 #endif
 
 #define ACPI_ACQUIRE_GLOBAL_LOCK(FacsPtr, Acq) \

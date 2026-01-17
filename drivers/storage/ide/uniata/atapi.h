@@ -98,7 +98,7 @@ ScsiDebugPrint(
 #ifndef USE_DBGPRINT_LOGGER
 /*
 ULONG
-_cdecl
+__cdecl
 DbgPrint(
     PCH Format,
     ...
@@ -1508,7 +1508,7 @@ extern ULONG g_LogToDisplay;
 
 extern "C"
 VOID
-_cdecl
+__cdecl
 _PrintNtConsole(
     PCCH DebugMessage,
     ...

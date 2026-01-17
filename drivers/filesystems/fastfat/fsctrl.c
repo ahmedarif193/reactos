@@ -2636,6 +2636,8 @@ Return Value:
     BOOLEAN Result;
     BIOS_PARAMETER_BLOCK Bpb = {0};
 
+    DbgPrint("[FatIsBootSectorFat] Entry, BootSector=%p\n", BootSector);
+
     DebugTrace(+1, Dbg, "FatIsBootSectorFat, BootSector = %p\n", BootSector);
 
     //
@@ -2648,7 +2650,13 @@ Return Value:
     //  Unpack the bios and then test everything
     //
 
+    DbgPrint("[FatIsBootSectorFat] About to call FatUnpackBios, &BootSector->PackedBpb=%p\n",
+             &BootSector->PackedBpb);
+    DbgPrint("[FatIsBootSectorFat] First byte access test: BootSector->Jump[0]=0x%02x\n",
+             BootSector->Jump[0]);
+    DbgPrint("[FatIsBootSectorFat] First byte read succeeded, calling FatUnpackBios\n");
     FatUnpackBios( &Bpb, &BootSector->PackedBpb );
+    DbgPrint("[FatIsBootSectorFat] FatUnpackBios returned\n");
     if (Bpb.Sectors != 0) { Bpb.LargeSectors = 0; }
 
     if ((BootSector->Jump[0] != 0xe9) &&

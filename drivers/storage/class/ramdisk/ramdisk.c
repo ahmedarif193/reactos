@@ -3302,6 +3302,13 @@ RamdiskReadWrite(IN PDEVICE_OBJECT DeviceObject,
     // Length = IoStackLocation->Parameters.Read.Length;
     // ByteOffset = IoStackLocation->Parameters.Read.ByteOffset;
 
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "RamdiskReadWrite[Drive]: %s offset=%I64x len=%lu DiskType=%lu\n",
+               IoStackLocation->MajorFunction == IRP_MJ_READ ? "READ" : "WRITE",
+               IoStackLocation->Parameters.Read.ByteOffset.QuadPart,
+               IoStackLocation->Parameters.Read.Length,
+               DeviceExtension->DiskType);
+
     /* FIXME: Validate offset */
 
     /* FIXME: Validate sector */
@@ -3319,11 +3326,18 @@ RamdiskReadWrite(IN PDEVICE_OBJECT DeviceObject,
     if (DeviceExtension->DiskType > RAMDISK_MEMORY_MAPPED_DISK)
     {
         /* Do it sync */
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "RamdiskReadWrite[Drive]: calling RamdiskReadWriteReal (sync path)\n");
         Status = RamdiskReadWriteReal(Irp, DeviceExtension);
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "RamdiskReadWrite[Drive]: RamdiskReadWriteReal returned 0x%lx, info=%lu\n",
+                   Status, (ULONG)Irp->IoStatus.Information);
         goto Complete;
     }
 
     /* Queue it to the worker */
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "RamdiskReadWrite[Drive]: queueing to worker thread (async path)\n");
     Status = SendIrpToThread(DeviceObject, Irp);
     ReturnStatus = STATUS_PENDING;
 
@@ -3332,10 +3346,16 @@ RamdiskReadWrite(IN PDEVICE_OBJECT DeviceObject,
     {
 Complete:
         /* Complete the IRP */
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "RamdiskReadWrite[Drive]: completing IRP status=0x%lx info=%lu\n",
+                   Status, (ULONG)Irp->IoStatus.Information);
         Irp->IoStatus.Status = Status;
         IoCompleteRequest(Irp, IO_DISK_INCREMENT);
         ReturnStatus = Status;
     }
+
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "RamdiskReadWrite[Drive]: returning 0x%lx\n", ReturnStatus);
 
     /* Return to caller */
     return ReturnStatus;
@@ -4462,14 +4482,6 @@ CompleteRequest:
     {
         /* Release the lock before completing non-pended IRPs */
         IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   NT_SUCCESS(Status) ? DPFLTR_INFO_LEVEL : DPFLTR_ERROR_LEVEL,
-                   "RamdiskDeviceControl[%s]: completed %s (0x%lx) -> 0x%lx info=%lu\n",
-                   DeviceTypeName,
-                   IoctlName ? IoctlName : "IOCTL",
-                   IoControlCode,
-                   Status,
-                   Information);
         /* Complete the request */
         Irp->IoStatus.Status = Status;
         Irp->IoStatus.Information = Information;

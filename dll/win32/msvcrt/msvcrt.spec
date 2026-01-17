@@ -1337,7 +1337,7 @@
 @ cdecl exp(double)
 @ cdecl -arch=x86_64,arm,arm64 expf(long)
 @ cdecl fabs(double)
-@ cdecl -arch=arm fabsf(double)
+@ cdecl -arch=arm,arm64 fabsf(double)
 @ cdecl fclose(ptr)
 @ cdecl feof(ptr)
 @ cdecl ferror(ptr)

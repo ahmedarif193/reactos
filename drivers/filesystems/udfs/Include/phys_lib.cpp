@@ -465,6 +465,7 @@ UDFTWrite(
 #ifdef _BROWSE_UDF_
     PEXTENT_MAP RelocExtent;
     PEXTENT_MAP RelocExtent_saved = NULL;
+    uint32 i;
 #endif //_BROWSE_UDF_
     uint32 retry;
     BOOLEAN res_acq = FALSE;
@@ -472,7 +473,6 @@ UDFTWrite(
     OSSTATUS RC = STATUS_SUCCESS;
     uint32 rLba;
     uint32 BCount;
-    uint32 i;
 
 #ifdef DBG
     //ASSERT(!(LBA & (32-1)));
@@ -568,6 +568,7 @@ retry_2:
             if(!OS_SUCCESS(RC)) break;
             *((uint32*)&Buffer) += RelocExtent->extLength;
         }
+        (void)i; /* suppress set-but-not-used warning */
 #endif //_BROWSE_UDF_
 try_exit: NOTHING;
     } _SEH2_FINALLY {
@@ -607,8 +608,8 @@ UDFTRead(
     uint32 retry;
     PVCB Vcb = (PVCB)_Vcb;
     uint32 BCount = Length >> Vcb->BlockSizeBits;
-    uint32 i;
 #ifdef _BROWSE_UDF_
+    uint32 i;
     PEXTENT_MAP RelocExtent;
     PEXTENT_MAP RelocExtent_saved = NULL;
     BOOLEAN res_acq = FALSE;
@@ -708,6 +709,7 @@ TR_continue:
             if(!OS_SUCCESS(RC)) break;
             *((uint32*)&Buffer) += RelocExtent->extLength;
         }
+        (void)i; /* suppress set-but-not-used warning */
 try_exit: NOTHING;
     } _SEH2_FINALLY {
         if(res_acq) {
@@ -3706,7 +3708,7 @@ UDFPrepareForReadOperation(
 
 //        OSSTATUS RC;
 
-        RC = UDFSyncCache(Vcb);
+        (void)UDFSyncCache(Vcb);
     }
     if( (Vcb->VCBFlags & UDF_VCB_LAST_WRITE) &&
        !(Vcb->VCBFlags & UDF_VCB_FLAGS_NO_SYNC_CACHE) &&
@@ -3815,6 +3817,7 @@ check_for_data_track:
         UDFPrint(("    seek workaround, LBA %x, status %x\n", i, RC));
     }
     DbgFreePool(tmp);
+    (void)RC; /* suppress set-but-not-used warning */
 #endif //_BROWSE_UDF_
 
     return STATUS_SUCCESS;

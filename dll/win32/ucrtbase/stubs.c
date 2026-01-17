@@ -310,7 +310,7 @@ void* __cdecl operator_new(size_t size)
     return malloc(size);
 }
 
-void _cdecl operator_delete(void *mem)
+void __cdecl operator_delete(void *mem)
 {
     free(mem);
 }

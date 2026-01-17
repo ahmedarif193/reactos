@@ -39,7 +39,7 @@ static void ReuseReceiveBufferPowerOff(PARANDIS_ADAPTER *pContext, pIONetDescrip
 #define MAX_VLAN_ID     4095
 
 #if 0
-void FORCEINLINE DebugDumpPacket(LPCSTR prefix, PVOID header, int level)
+static void FORCEINLINE DebugDumpPacket(LPCSTR prefix, PVOID header, int level)
 {
     PUCHAR peth = (PUCHAR)header;
     DPrintf(level, ("[%s] %02X%02X%02X%02X%02X%02X => %02X%02X%02X%02X%02X%02X", prefix,
@@ -47,7 +47,7 @@ void FORCEINLINE DebugDumpPacket(LPCSTR prefix, PVOID header, int level)
         peth[0], peth[1], peth[2], peth[3], peth[4], peth[5]));
 }
 #else
-void FORCEINLINE DebugDumpPacket(LPCSTR prefix, PVOID header, int level)
+static void FORCEINLINE DebugDumpPacket(LPCSTR prefix, PVOID header, int level)
 {
 }
 #endif

@@ -855,7 +855,10 @@ USBH_SyncGetRootHubPdo(IN PDEVICE_OBJECT DeviceObject,
     PIO_STACK_LOCATION IoStack;
     NTSTATUS Status;
 
-    DPRINT("USBH_SyncGetRootHubPdo: ... \n");
+    DPRINT1("USBH_SyncGetRootHubPdo: Target=%p Driver=%wZ StackSize=%lu\n",
+            DeviceObject,
+            (DeviceObject && DeviceObject->DriverObject) ? &DeviceObject->DriverObject->DriverName : NULL,
+            DeviceObject ? (ULONG)DeviceObject->StackSize : 0);
 
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
 
@@ -877,6 +880,13 @@ USBH_SyncGetRootHubPdo(IN PDEVICE_OBJECT DeviceObject,
     IoStack = IoGetNextIrpStackLocation(Irp);
     IoStack->Parameters.Others.Argument1 = OutPdo1;
     IoStack->Parameters.Others.Argument2 = OutPdo2;
+
+    DPRINT1("USBH_SyncGetRootHubPdo: Irp=%p Major=%02x IoCtl=%08lx Arg1=%p Arg2=%p\n",
+            Irp,
+            IoStack->MajorFunction,
+            IoStack->Parameters.DeviceIoControl.IoControlCode,
+            IoStack->Parameters.Others.Argument1,
+            IoStack->Parameters.Others.Argument2);
 
     Status = IoCallDriver(DeviceObject, Irp);
 

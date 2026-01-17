@@ -5,6 +5,7 @@
 #include <cmreslist.h>
 #include <ntstrsafe.h>
 #include <reactos/hal/acpi_pci.h>
+#include <ndk/halfuncs.h>
 #include "pcidef.h"
 
 #define TAG_PCI '0ICP'

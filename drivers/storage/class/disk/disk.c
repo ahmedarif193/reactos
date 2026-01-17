@@ -3800,6 +3800,10 @@ Return Value:
     PAGED_CODE();
     CHECK_IRQL();
 
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[DISK-IOCTL] GetDriveGeometryEx: ENTRY - DeviceObject=%p\n",
+               DeviceObject);
+
     //
     // Setup parameters
     //
@@ -3810,6 +3814,10 @@ Return Value:
     irpStack = IoGetCurrentIrpStackLocation ( Irp );
     geometryEx = NULL;
     OutputBufferLength = irpStack->Parameters.DeviceIoControl.OutputBufferLength;
+
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[DISK-IOCTL] GetDriveGeometryEx: BufferLen=%lu Required=%lu\n",
+               OutputBufferLength, FIELD_OFFSET(DISK_GEOMETRY_EX, Data));
 
     //
     // Check that the buffer is large enough. It must be large enough
@@ -3850,8 +3858,17 @@ Return Value:
     //
 
     geometryEx = (PDISK_GEOMETRY_EX_INTERNAL)Irp->AssociatedIrp.SystemBuffer;
+
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[DISK-IOCTL] GetDriveGeometryEx: FDO=%p DevNum=%lu BytesPerSector=%lu (before copy)\n",
+               DeviceObject,
+               fdoExtension->DeviceNumber,
+               fdoExtension->DiskGeometry.BytesPerSector);
+
     geometryEx->Geometry = fdoExtension->DiskGeometry;
     if (geometryEx->Geometry.BytesPerSector == 0) {
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[DISK-IOCTL] GetDriveGeometryEx: BytesPerSector was 0, setting to 512\n");
         geometryEx->Geometry.BytesPerSector = 512;
     }
     geometryEx->DiskSize = commonExtension->PartitionZeroExtension->CommonExtension.PartitionLength;

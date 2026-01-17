@@ -712,8 +712,9 @@ static inline ULONG safe_multiply(ULONG a, ULONG b)
 
 static inline void safe_buffer_increment(MIDL_STUB_MESSAGE *pStubMsg, ULONG size)
 {
-    if ((pStubMsg->Buffer + size < pStubMsg->Buffer) || /* integer overflow of pStubMsg->Buffer */
-        (pStubMsg->Buffer + size > (unsigned char *)pStubMsg->RpcMsg->Buffer + pStubMsg->BufferLength))
+    unsigned char *bufend = (unsigned char *)pStubMsg->RpcMsg->Buffer + pStubMsg->BufferLength;
+    if ((size > (SIZE_T)(bufend - pStubMsg->Buffer)) || /* integer overflow check */
+        (pStubMsg->Buffer + size > bufend))
         RpcRaiseException(RPC_X_BAD_STUB_DATA);
     pStubMsg->Buffer += size;
 }
@@ -733,7 +734,7 @@ static inline void safe_buffer_length_increment(MIDL_STUB_MESSAGE *pStubMsg, ULO
  * to do so */
 static inline void safe_copy_from_buffer(MIDL_STUB_MESSAGE *pStubMsg, void *p, ULONG size)
 {
-    if ((pStubMsg->Buffer + size < pStubMsg->Buffer) || /* integer overflow of pStubMsg->Buffer */
+    if ((size > (SIZE_T)(pStubMsg->BufferEnd - pStubMsg->Buffer)) || /* integer overflow check */
         (pStubMsg->Buffer + size > pStubMsg->BufferEnd))
     {
         ERR("buffer overflow - Buffer = %p, BufferEnd = %p, size = %u\n",
@@ -749,12 +750,12 @@ static inline void safe_copy_from_buffer(MIDL_STUB_MESSAGE *pStubMsg, void *p, U
 /* copies data to the buffer, checking that there is enough space to do so */
 static inline void safe_copy_to_buffer(MIDL_STUB_MESSAGE *pStubMsg, const void *p, ULONG size)
 {
-    if ((pStubMsg->Buffer + size < pStubMsg->Buffer) || /* integer overflow of pStubMsg->Buffer */
-        (pStubMsg->Buffer + size > (unsigned char *)pStubMsg->RpcMsg->Buffer + pStubMsg->BufferLength))
+    unsigned char *bufend = (unsigned char *)pStubMsg->RpcMsg->Buffer + pStubMsg->BufferLength;
+    if ((size > (SIZE_T)(bufend - pStubMsg->Buffer)) || /* integer overflow check */
+        (pStubMsg->Buffer + size > bufend))
     {
         ERR("buffer overflow - Buffer = %p, BufferEnd = %p, size = %u\n",
-            pStubMsg->Buffer, (unsigned char *)pStubMsg->RpcMsg->Buffer + pStubMsg->BufferLength,
-            size);
+            pStubMsg->Buffer, bufend, size);
         RpcRaiseException(RPC_X_BAD_STUB_DATA);
     }
     memcpy(pStubMsg->Buffer, p, size);
@@ -768,7 +769,7 @@ static void validate_string_data(MIDL_STUB_MESSAGE *pStubMsg, ULONG bufsize, ULO
     ULONG i;
 
     /* verify the buffer is safe to access */
-    if ((pStubMsg->Buffer + bufsize < pStubMsg->Buffer) ||
+    if ((bufsize > (SIZE_T)(pStubMsg->BufferEnd - pStubMsg->Buffer)) ||
         (pStubMsg->Buffer + bufsize > pStubMsg->BufferEnd))
     {
         ERR("bufsize 0x%x exceeded buffer end %p of buffer %p\n", bufsize,

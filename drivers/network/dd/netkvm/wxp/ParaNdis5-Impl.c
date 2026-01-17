@@ -1208,10 +1208,9 @@ static __inline tSendEntry * PrepareSendEntry(PARANDIS_ADAPTER *pContext, PNDIS_
         DPrintf(1, ("[%s] Sending packet of %d with %s", __FUNCTION__, len, offloadName));
         if (pContext->bDoIPCheckTx)
         {
-            tTcpIpPacketParsingResult res;
             VOID *pcopy = ParaNdis_AllocateMemory(pContext, len);
             ParaNdis_PacketCopier(pse->packet, pcopy, len, pse, TRUE);
-            res = ParaNdis_CheckSumVerify(
+            (void)ParaNdis_CheckSumVerify(
                 RtlOffsetToPointer(pcopy, pContext->Offload.ipHeaderOffset),
                 len,
                 pcrAnyChecksum/* | pcrFixAnyChecksum*/,

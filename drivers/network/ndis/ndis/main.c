@@ -72,7 +72,7 @@ DriverEntry(
  * @implemented
  */
 VOID
-_cdecl
+__cdecl
 NdisWriteErrorLogEntry(
     IN  NDIS_HANDLE     NdisAdapterHandle,
     IN  NDIS_ERROR_CODE ErrorCode,

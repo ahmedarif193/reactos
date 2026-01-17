@@ -2172,10 +2172,41 @@ static void dwarf2_set_line_number(struct module* module, ULONG_PTR address,
 
     TRACE("%s %lx %s %u\n",
           debugstr_w(module->module.ModuleName), address, debugstr_a(source_get(module, *psrc)), line);
+
     if (!(symt = symt_find_nearest(module, address)) ||
         symt->symt.tag != SymTagFunction) return;
     func = (struct symt_function*)symt;
     symt_add_func_line(module, func, *psrc, line, address - func->address);
+}
+
+static BOOL dwarf2_stmt_list_valid_offset(const dwarf2_section_t* sections, ULONG_PTR offset)
+{
+    ULONG_PTR length;
+    unsigned short version;
+    unsigned char opcode_base;
+    ULONG_PTR section_size;
+
+    if (!sections[section_line].address || sections[section_line].address == IMAGE_NO_MAP)
+        return FALSE;
+
+    section_size = sections[section_line].size;
+    if (section_size < 4 || offset > section_size - 4)
+        return FALSE;
+
+    length = dwarf2_get_u4(sections[section_line].address + offset);
+    if (!length || length > section_size - offset - 4)
+        return FALSE;
+
+    /* version + header_len + {min_insn, default_stmt, line_base, line_range, opcode_base} */
+    if (length < 2 + 4 + 5)
+        return FALSE;
+
+    version = dwarf2_get_u2(sections[section_line].address + offset + 4);
+    opcode_base = *(sections[section_line].address + offset + 14);
+    if (version < 2 || !opcode_base)
+        return FALSE;
+
+    return TRUE;
 }
 
 static BOOL dwarf2_parse_line_numbers(const dwarf2_section_t* sections,
@@ -2185,6 +2216,10 @@ static BOOL dwarf2_parse_line_numbers(const dwarf2_section_t* sections,
 {
     dwarf2_traverse_context_t   traverse;
     ULONG_PTR                   length;
+    ULONG_PTR                   section_size;
+    unsigned short              version;
+    ULONG_PTR                   header_len;
+    const unsigned char*        prologue_end;
     unsigned                    insn_size, default_stmt;
     unsigned                    line_range, opcode_base;
     int                         line_base;
@@ -2194,10 +2229,11 @@ static BOOL dwarf2_parse_line_numbers(const dwarf2_section_t* sections,
     const char**                p;
 
     /* section with line numbers stripped */
-    if (sections[section_line].address == IMAGE_NO_MAP)
+    if (!sections[section_line].address || sections[section_line].address == IMAGE_NO_MAP)
         return FALSE;
 
-    if (offset + 4 > sections[section_line].size)
+    section_size = sections[section_line].size;
+    if (section_size < 4 || offset > section_size - 4)
     {
         WARN("out of bounds offset\n");
         return FALSE;
@@ -2207,31 +2243,68 @@ static BOOL dwarf2_parse_line_numbers(const dwarf2_section_t* sections,
     traverse.word_size = ctx->module->format_info[DFI_DWARF]->u.dwarf2_info->word_size;
 
     length = dwarf2_parse_u4(&traverse);
-    traverse.end_data = sections[section_line].address + offset + length;
-
-    if (offset + 4 + length > sections[section_line].size)
+    if (!length || length > section_size - offset - 4)
     {
         WARN("out of bounds header\n");
         return FALSE;
     }
-    dwarf2_parse_u2(&traverse); /* version */
-    dwarf2_parse_u4(&traverse); /* header_len */
+    traverse.end_data = traverse.data + length;
+
+    version = dwarf2_parse_u2(&traverse);
+    header_len = dwarf2_parse_u4(&traverse);
+    if (header_len > (ULONG_PTR)(traverse.end_data - traverse.data))
+    {
+        WARN("out of bounds prologue\n");
+        return FALSE;
+    }
+    prologue_end = traverse.data + header_len;
+
+    /* DWARF line tables for this parser are expected to be DWARF2+ */
+    if (version < 2)
+    {
+        WARN("unsupported DWARF line table version %u\n", version);
+        return FALSE;
+    }
+
+    if (traverse.data + 5 > prologue_end)
+    {
+        WARN("out of bounds line table header\n");
+        return FALSE;
+    }
     insn_size = dwarf2_parse_byte(&traverse);
     default_stmt = dwarf2_parse_byte(&traverse);
     line_base = (signed char)dwarf2_parse_byte(&traverse);
     line_range = dwarf2_parse_byte(&traverse);
     opcode_base = dwarf2_parse_byte(&traverse);
+    if (!opcode_base)
+    {
+        WARN("invalid opcode base\n");
+        return FALSE;
+    }
 
     opcode_len = traverse.data;
+    if (traverse.data + opcode_base - 1 > prologue_end)
+    {
+        WARN("out of bounds opcode lengths\n");
+        return FALSE;
+    }
     traverse.data += opcode_base - 1;
 
     vector_init(&dirs, sizeof(const char*), 4);
     p = vector_add(&dirs, &ctx->pool);
     *p = compile_dir ? compile_dir : ".";
-    while (*traverse.data)
+    while (traverse.data < prologue_end && *traverse.data)
     {
         const char*  rel = (const char*)traverse.data;
-        unsigned     rellen = strlen(rel);
+        const unsigned char* end = memchr(traverse.data, 0, prologue_end - traverse.data);
+        unsigned     rellen;
+
+        if (!end)
+        {
+            WARN("unterminated include directory\n");
+            return FALSE;
+        }
+        rellen = end - traverse.data;
         TRACE("Got include %s\n", debugstr_a(rel));
         traverse.data += rellen + 1;
         p = vector_add(&dirs, &ctx->pool);
@@ -2250,25 +2323,49 @@ static BOOL dwarf2_parse_line_numbers(const dwarf2_section_t* sections,
         }
 
     }
+    if (traverse.data >= prologue_end)
+    {
+        WARN("missing include directory terminator\n");
+        return FALSE;
+    }
     traverse.data++;
 
     vector_init(&files, sizeof(unsigned), 16);
-    while (*traverse.data)
+    while (traverse.data < prologue_end && *traverse.data)
     {
         unsigned int    dir_index, mod_time;
         const char*     name;
         const char*     dir;
         unsigned*       psrc;
+        const unsigned char* end;
+        const char**    pdir;
 
         name = (const char*)traverse.data;
-        traverse.data += strlen(name) + 1;
+        end = memchr(traverse.data, 0, prologue_end - traverse.data);
+        if (!end)
+        {
+            WARN("unterminated file name\n");
+            return FALSE;
+        }
+        traverse.data = end + 1;
         dir_index = dwarf2_leb128_as_unsigned(&traverse);
         mod_time = dwarf2_leb128_as_unsigned(&traverse);
         length = dwarf2_leb128_as_unsigned(&traverse);
-        dir = *(const char**)vector_at(&dirs, dir_index);
+        pdir = vector_at(&dirs, dir_index);
+        if (!pdir)
+        {
+            WARN("invalid directory index %u\n", dir_index);
+            return FALSE;
+        }
+        dir = *pdir;
         TRACE("Got file %s/%s (%u,%lu)\n", debugstr_a(dir), debugstr_a(name), mod_time, length);
         psrc = vector_add(&files, &ctx->pool);
         *psrc = source_new(ctx->module, dir, name);
+    }
+    if (traverse.data >= prologue_end)
+    {
+        WARN("missing file table terminator\n");
+        return FALSE;
     }
     traverse.data++;
 
@@ -2457,17 +2554,27 @@ static BOOL dwarf2_parse_compilation_unit(const dwarf2_section_t* sections,
         }
         if (dwarf2_find_attribute(&ctx, di, DW_AT_stmt_list, &stmt_list))
         {
-#if defined(__REACTOS__) && defined(__clang__)
-            unsigned long stmt_list_val = stmt_list.u.uvalue;
-            if (stmt_list_val > module->module.BaseOfImage)
+            ULONG_PTR stmt_list_val = stmt_list.u.uvalue;
+            ULONG_PTR stmt_list_off = stmt_list_val;
+            ULONG_PTR line_section_base;
+            ULONG_PTR addr_off = 0;
+            BOOL ok_off, ok_addr = FALSE;
+
+            line_section_base = module->module.BaseOfImage + sections[section_line].rva;
+            ok_off = dwarf2_stmt_list_valid_offset(sections, stmt_list_val);
+
+            if (stmt_list_val >= line_section_base)
             {
-                /* FIXME: Clang is recording this as an address, not an offset */
-                stmt_list_val -= module->module.BaseOfImage + sections[section_line].rva;
+                addr_off = stmt_list_val - line_section_base;
+                ok_addr = dwarf2_stmt_list_valid_offset(sections, addr_off);
+
+                /* Clang can record DW_AT_stmt_list as an address, not an offset. */
+                if ((stmt_list.form == DW_FORM_addr || stmt_list.form == DW_FORM_ref_addr) && ok_addr)
+                    stmt_list_off = addr_off;
+                else if (!ok_off && ok_addr)
+                    stmt_list_off = addr_off;
             }
-            if (dwarf2_parse_line_numbers(sections, &ctx, comp_dir.u.string, stmt_list_val))
-#else
-            if (dwarf2_parse_line_numbers(sections, &ctx, comp_dir.u.string, stmt_list.u.uvalue))
-#endif
+            if (dwarf2_parse_line_numbers(sections, &ctx, comp_dir.u.string, stmt_list_off))
                 module->module.LineNumbers = TRUE;
         }
         ret = TRUE;

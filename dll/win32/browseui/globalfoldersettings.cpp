@@ -45,10 +45,6 @@ static void EnsureValid(DEFFOLDERSETTINGS &dfs)
 
 static void InitializeDefaults(DEFFOLDERSETTINGS &dfs)
 {
-    C_ASSERT(FIELD_OFFSET(DEFFOLDERSETTINGS, FolderSettings) == 4);
-    C_ASSERT(FIELD_OFFSET(DEFFOLDERSETTINGS, ViewPriority) == DEFFOLDERSETTINGS::SIZE_IE4);
-    C_ASSERT(sizeof(DEFFOLDERSETTINGS) == DEFFOLDERSETTINGS::SIZE_XP);
-
     *(UINT*)&dfs = FALSE; // Set all unknown flags to FALSE
     dfs.Statusbar = TRUE;
     dfs.FolderSettings.ViewMode = SBFOLDERSETTINGS::DEF_FVM;

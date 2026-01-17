@@ -23,7 +23,15 @@
 #include "xxhash.h"
 #include "crc32c.h"
 #if defined(_ARM_) || defined(_ARM64_)
+#if defined(__has_include)
+#if __has_include(<arm_neon.h>)
+#define BTRFS_HAVE_ARM_NEON 1
 #include <arm_neon.h>
+#endif
+#endif
+#endif
+#ifndef BTRFS_HAVE_ARM_NEON
+#define BTRFS_HAVE_ARM_NEON 0
 #endif
 #ifndef __REACTOS__
 #ifndef _MSC_VER
@@ -290,7 +298,7 @@ bool is_top_level(_In_ PIRP Irp) {
 static void __stdcall do_xor_basic(uint8_t* buf1, uint8_t* buf2, uint32_t len) {
     uint32_t j;
 
-#if defined(_ARM_) || defined(_ARM64_)
+#if BTRFS_HAVE_ARM_NEON
     uint64x2_t x1, x2;
 
     if (((uintptr_t)buf1 & 0xf) == 0 && ((uintptr_t)buf2 & 0xf) == 0) {

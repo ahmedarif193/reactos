@@ -29,6 +29,9 @@ if(NOT CMAKE_CROSSCOMPILING)
 
     add_library(dbghelphost ${SOURCE})
     target_link_libraries(dbghelphost PRIVATE host_includes)
+    if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
+        target_compile_definitions(dbghelphost PRIVATE _TARGET_PE64)
+    endif()
 else()
     add_definitions(
         -D_WINE

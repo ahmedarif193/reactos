@@ -607,7 +607,10 @@ USBPORT_PdoInternalDeviceControl(IN PDEVICE_OBJECT PdoDevice,
 
     if (IoCtl == IOCTL_INTERNAL_USB_GET_ROOTHUB_PDO)
     {
-        DPRINT("USBPORT_PdoInternalDeviceControl: IOCTL_INTERNAL_USB_GET_ROOTHUB_PDO\n");
+        DPRINT1("USBPORT_PdoInternalDeviceControl: IOCTL_INTERNAL_USB_GET_ROOTHUB_PDO Pdo=%p Arg1=%p Arg2=%p\n",
+                PdoDevice,
+                IoStack->Parameters.Others.Argument1,
+                IoStack->Parameters.Others.Argument2);
 
         if (IoStack->Parameters.Others.Argument1)
             *(PVOID *)IoStack->Parameters.Others.Argument1 = PdoDevice;
@@ -1401,18 +1404,61 @@ NTAPI
 USBPORT_FdoInternalDeviceControl(IN PDEVICE_OBJECT FdoDevice,
                                  IN PIRP Irp)
 {
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
     PIO_STACK_LOCATION IoStack;
     ULONG IoCtl;
-    NTSTATUS Status = STATUS_INVALID_DEVICE_REQUEST;
+    NTSTATUS Status;
 
+    FdoExtension = FdoDevice->DeviceExtension;
     IoStack = IoGetCurrentIrpStackLocation(Irp);
     IoCtl = IoStack->Parameters.DeviceIoControl.IoControlCode;
 
-    DPRINT("USBPORT_FdoInternalDeviceControl: FdoDevice - %p, Irp - %p, IoCtl - %x\n",
-           FdoDevice,
-           Irp,
-           IoCtl);
+    //DPRINT("USBPORT_FdoInternalDeviceControl: FdoDevice - %p, Irp - %p, IoCtl - %x\n",
+    //       FdoDevice,
+    //       Irp,
+    //       IoCtl);
 
+    if (IoCtl == IOCTL_INTERNAL_USB_GET_ROOTHUB_PDO)
+    {
+        PDEVICE_OBJECT RootHubPdo;
+
+        RootHubPdo = FdoExtension->RootHubPdo;
+
+        DPRINT1("USBPORT_FdoInternalDeviceControl: IOCTL_INTERNAL_USB_GET_ROOTHUB_PDO Fdo=%p RootHubPdo=%p Arg1=%p Arg2=%p\n",
+                FdoDevice,
+                RootHubPdo,
+                IoStack->Parameters.Others.Argument1,
+                IoStack->Parameters.Others.Argument2);
+
+        if (IoStack->Parameters.Others.Argument1)
+        {
+            *(PDEVICE_OBJECT *)IoStack->Parameters.Others.Argument1 = RootHubPdo;
+        }
+
+        if (IoStack->Parameters.Others.Argument2)
+        {
+            *(PDEVICE_OBJECT *)IoStack->Parameters.Others.Argument2 = RootHubPdo;
+        }
+
+        Status = RootHubPdo ? STATUS_SUCCESS : STATUS_DEVICE_NOT_READY;
+        goto Exit;
+    }
+
+    if (IoCtl == IOCTL_INTERNAL_USB_GET_HUB_COUNT)
+    {
+        if (IoStack->Parameters.Others.Argument1)
+        {
+            ++*(PULONG)IoStack->Parameters.Others.Argument1;
+        }
+
+        Status = STATUS_SUCCESS;
+        goto Exit;
+    }
+
+    DPRINT("USBPORT_FdoInternalDeviceControl: INVALID INTERNAL DEVICE CONTROL\n");
+    Status = STATUS_INVALID_DEVICE_REQUEST;
+
+Exit:
     Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information = 0;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);

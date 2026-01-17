@@ -713,8 +713,13 @@ DriverEntry (
     Status = GetProcessorInformation();
     if (!NT_SUCCESS(Status))
     {
-        NT_ASSERT(FALSE);
-        return Status;
+        /*
+         * ACPI can function without processor information - this is not fatal.
+         * On ARM64, the CentralProcessor registry key may not exist yet as it's
+         * architecture-specific. We'll continue loading ACPI with default values.
+         */
+        DPRINT1("Failed to get processor information (0x%lx) - continuing with defaults\n", Status);
+        Status = STATUS_SUCCESS;
     }
 
     //

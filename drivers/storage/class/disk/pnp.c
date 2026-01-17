@@ -392,6 +392,12 @@ Return Value:
 
 
     //
+    // Zero-initialize the DiskGeometry structure to prevent using uninitialized values
+    // if ClassReadDriveCapacity fails.
+    //
+    RtlZeroMemory(&fdoExtension->DiskGeometry, sizeof(DISK_GEOMETRY));
+
+    //
     // Read the drive capacity.  Don't use the disk version of the routine here
     // since we don't know the disk signature yet - the disk version will
     // attempt to determine the BIOS reported geometry.

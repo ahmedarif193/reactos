@@ -11708,7 +11708,7 @@ HalDisplayString (
 
 extern "C"
 VOID
-_cdecl
+__cdecl
 _PrintNtConsole(
     PCCH DebugMessage,
     ...

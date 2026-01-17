@@ -24,6 +24,16 @@ DEFINE_GUID(GUID_REACTOS_PCI_ROOT_BUS_INTERFACE,
 #define DBGPRINT(...)
 #endif
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+static __inline USHORT
+PciPdoRequesterId(_In_ PPCI_DEVICE Device)
+{
+    return (USHORT)(((Device->BusNumber & 0xFFu) << 8) |
+                    ((Device->SlotNumber.u.bits.DeviceNumber & 0x1Fu) << 3) |
+                    (Device->SlotNumber.u.bits.FunctionNumber & 0x7u));
+}
+#endif
+
 static
 BOOLEAN
 PciPdoIsBusInRange(
@@ -463,6 +473,7 @@ PciPdoDetermineInterruptPolicy(
     *AllowMsix = UseMsix;
 }
 
+#if !defined(_M_ARM64)
 static
 ULONG
 PciPdoSelectDestinationId(
@@ -482,6 +493,7 @@ PciPdoSelectDestinationId(
 
     return Index;
 }
+#endif
 
 static
 BOOLEAN
@@ -537,7 +549,9 @@ PciPdoEnableMsi(
     USHORT Control;
     BOOLEAN Is64Bit;
     ULONG MessageCount;
+#if !defined(_M_ARM64)
     ULONG DestId;
+#endif
     KAFFINITY Affinity;
     ULONG Vector;
 
@@ -559,11 +573,28 @@ PciPdoEnableMsi(
              TranslatedDescriptor->u.MessageInterrupt.Translated.Vector :
              RawDescriptor->u.MessageInterrupt.Raw.Vector;
 
+#if defined(_M_ARM64)
+    if (!HalGetMsiMessageAddressEx(PciPdoRequesterId(Device),
+                                   (ULONGLONG)Vector,
+                                   (ULONGLONG)Affinity,
+                                   &MessageAddressLow,
+                                   &MessageAddressHigh,
+                                   &MessageData) &&
+        !HalGetMsiMessageAddress((ULONGLONG)Vector,
+                                 (ULONGLONG)Affinity,
+                                 &MessageAddressLow,
+                                 &MessageAddressHigh,
+                                 &MessageData))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+#else
     DestId = PciPdoSelectDestinationId(Affinity);
 
     MessageAddressLow = 0xFEE00000 | (DestId << 12);
     MessageAddressHigh = 0;
     MessageData = (USHORT)(Vector & 0xFF);
+#endif
 
     Control = Device->MsiControl;
     Control &= ~(PCI_MSI_FLAGS_QSIZE | PCI_MSI_FLAGS_ENABLE);
@@ -653,7 +684,9 @@ PciPdoEnableMsix(
         USHORT Data;
         KAFFINITY Affinity;
         ULONG Vector;
+#if !defined(_M_ARM64)
         ULONG DestId;
+#endif
         PPCI_MSIX_TABLE_ENTRY Entry;
 
         Affinity = Messages[i].Affinity;
@@ -661,10 +694,29 @@ PciPdoEnableMsix(
             Affinity = KeQueryActiveProcessors();
 
         Vector = Messages[i].Vector;
+#if defined(_M_ARM64)
+        if (!HalGetMsiMessageAddressEx(PciPdoRequesterId(Device),
+                                       (ULONGLONG)Vector,
+                                       (ULONGLONG)Affinity,
+                                       &AddressLow,
+                                       &AddressHigh,
+                                       &Data) &&
+            !HalGetMsiMessageAddress((ULONGLONG)Vector,
+                                     (ULONGLONG)Affinity,
+                                     &AddressLow,
+                                     &AddressHigh,
+                                     &Data))
+        {
+            MmUnmapIoSpace(TableMapping,
+                           ProgramCount * sizeof(PCI_MSIX_TABLE_ENTRY));
+            return STATUS_NOT_SUPPORTED;
+        }
+#else
         DestId = PciPdoSelectDestinationId(Affinity);
 
         AddressLow = 0xFEE00000 | (DestId << 12);
         Data = (USHORT)(Vector & 0xFF);
+#endif
 
         Entry = (PPCI_MSIX_TABLE_ENTRY)((PUCHAR)TableMapping + (i * sizeof(PCI_MSIX_TABLE_ENTRY)));
         Entry->MessageAddressLow = AddressLow;
