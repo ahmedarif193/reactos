@@ -331,8 +331,8 @@ Fast486InterruptInternal(PFAST486_STATE State,
         {
             FAST486_TSS Tss;
             PFAST486_LEGACY_TSS LegacyTss = (PFAST486_LEGACY_TSS)&Tss;
-            USHORT NewSs;
-            ULONG NewEsp;
+            USHORT NewSs = 0;
+            ULONG NewEsp = 0;
 
             /* Read the TSS */
             if (!Fast486ReadLinearMemory(State,
@@ -1171,8 +1171,8 @@ Fast486CallGate(PFAST486_STATE State,
     {
         if (Call)
         {
-            USHORT NewSs;
-            ULONG NewEsp;
+            USHORT NewSs = 0;
+            ULONG NewEsp = 0;
 
             /* Read the TSS */
             if (!Fast486ReadLinearMemory(State,

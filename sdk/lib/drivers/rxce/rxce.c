@@ -3485,7 +3485,7 @@ RxFindOrConstructVirtualNetRoot(
     while (TRUE)
     {
         PNET_ROOT NetRoot;
-        PV_NET_ROOT SavedVNetRoot;
+        PV_NET_ROOT SavedVNetRoot = NULL;
 
         /* Look in prefix table */
         Container = RxPrefixTableLookupName(RxDeviceObject->pRxNetNameTable, CanonicalName, RemainingName, &ConnectionID);

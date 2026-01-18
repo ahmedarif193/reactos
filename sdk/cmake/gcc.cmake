@@ -218,15 +218,12 @@ endif()
 
 # Warnings, errors
 # Only treat warnings as errors for Debug builds (GCC only)
-# Disable for ARM64 GCC - too many unused variable warnings to fix
-if((CMAKE_BUILD_TYPE STREQUAL "Debug") AND (NOT CMAKE_C_COMPILER_ID STREQUAL Clang) AND (NOT ARCH STREQUAL "arm64"))
+if((CMAKE_BUILD_TYPE STREQUAL "Debug") AND (NOT CMAKE_C_COMPILER_ID STREQUAL Clang))
     add_compile_options(-Werror)
 endif()
 
 add_compile_options(-Wall -Wpointer-arith)
-if(NOT ARCH STREQUAL "arm64")
-    add_compile_options(-Werror=maybe-uninitialized)
-endif()
+add_compile_options(-Werror=maybe-uninitialized)
 
 # Disable some overzealous warnings
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
@@ -242,7 +239,6 @@ add_compile_options(
     -Wno-deprecated
     -Wno-unused-result
     -Wno-format
-    -Wno-maybe-uninitialized
 )
 
 if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
@@ -530,8 +526,6 @@ function(set_module_type_toolchain MODULE TYPE)
             if(NOT MODULE STREQUAL "ntdll")
                 target_link_libraries(${MODULE} libgcc)
             endif()
-            target_link_options(${MODULE} PRIVATE "-Wl,--whole-archive" "$<TARGET_FILE:gcc-compat>" "-Wl,--no-whole-archive")
-            add_dependencies(${MODULE} gcc-compat)
         endif()
     endif()
 

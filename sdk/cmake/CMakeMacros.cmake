@@ -743,20 +743,8 @@ function(set_module_type MODULE TYPE)
     elseif(${TYPE} STREQUAL win32gui)
         if(__module_UNICODE)
             set_entrypoint(${MODULE} wWinMainCRTStartup)
-            # Add the wmain->wWinMain bridge for GUI apps
-            if(NOT MSVC)
-                target_sources(${MODULE} PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/crt/startup/crt0_w.c)
-                # Allow multiple definition to handle CRT startup objects
-                target_link_options(${MODULE} PRIVATE "LINKER:--allow-multiple-definition")
-            endif()
         else()
             set_entrypoint(${MODULE} WinMainCRTStartup)
-            # Add the main->WinMain bridge for GUI apps
-            if(NOT MSVC)
-                target_sources(${MODULE} PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/crt/startup/crt0_c.c)
-                # Allow multiple definition to handle CRT startup objects
-                target_link_options(${MODULE} PRIVATE "LINKER:--allow-multiple-definition")
-            endif()
         endif()
     elseif((${TYPE} STREQUAL win32dll) OR (${TYPE} STREQUAL win32ocx)
             OR (${TYPE} STREQUAL cpl))

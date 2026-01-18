@@ -725,7 +725,7 @@ FAST486_OPCODE_HANDLER(Fast486ExtOpcodeBitTest)
     BOOLEAN OperandSize, AddressSize;
     FAST486_MOD_REG_RM ModRegRm;
     UINT DataSize;
-    ULONG BitNumber;
+    ULONG BitNumber = 0;
 
     OperandSize = AddressSize = State->SegmentRegs[FAST486_REG_CS].Size;
     TOGGLE_OPSIZE(OperandSize);
@@ -909,7 +909,7 @@ FAST486_OPCODE_HANDLER(Fast486ExtOpcodeBts)
     BOOLEAN OperandSize, AddressSize;
     FAST486_MOD_REG_RM ModRegRm;
     UINT DataSize;
-    ULONG BitNumber;
+    ULONG BitNumber = 0;
 
     OperandSize = AddressSize = State->SegmentRegs[FAST486_REG_CS].Size;
     TOGGLE_OPSIZE(OperandSize);
@@ -1646,7 +1646,7 @@ FAST486_OPCODE_HANDLER(Fast486ExtOpcodeBsf)
     ULONG Value = 0;
     BOOLEAN OperandSize, AddressSize;
     FAST486_MOD_REG_RM ModRegRm;
-    ULONG BitNumber;
+    ULONG BitNumber = 0;
     UINT DataSize;
 
     OperandSize = AddressSize = State->SegmentRegs[FAST486_REG_CS].Size;
@@ -1715,7 +1715,7 @@ FAST486_OPCODE_HANDLER(Fast486ExtOpcodeBsr)
     ULONG Value = 0;
     BOOLEAN OperandSize, AddressSize;
     FAST486_MOD_REG_RM ModRegRm;
-    ULONG BitNumber;
+    ULONG BitNumber = 0;
     UINT DataSize;
 
     OperandSize = AddressSize = State->SegmentRegs[FAST486_REG_CS].Size;

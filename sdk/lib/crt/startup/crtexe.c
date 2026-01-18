@@ -59,6 +59,12 @@ extern int mingw_app_type;
 HINSTANCE __mingw_winmain_hInstance;
 _TCHAR *__mingw_winmain_lpCmdLine;
 DWORD __mingw_winmain_nShowCmd;
+#if defined(__GNUC__)
+extern int main (int argc, char **argv, char **envp) __attribute__((weak));
+extern int wmain (int argc, wchar_t **argv, wchar_t **envp) __attribute__((weak));
+extern int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) __attribute__((weak));
+extern int wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nShowCmd) __attribute__((weak));
+#endif
 
 static int argc;
 extern void __main(void);
@@ -303,12 +309,68 @@ __tmainCRTStartup (void)
 #endif
     /* C++ initialization.
        gcc inserts this call automatically for a function called main, but not for wmain.  */
+#if defined(__GNUC__)
+    if (mingw_app_type)
+    {
+        if (wWinMain)
+        {
+            mainret = wWinMain((HINSTANCE)&__ImageBase,
+                               NULL,
+                               __mingw_winmain_lpCmdLine,
+                               __mingw_winmain_nShowCmd);
+        }
+        else
+        {
+            _amsg_exit(31);
+        }
+    }
+    else
+    {
+        if (wmain)
+        {
+            mainret = wmain(argc, argv, envp);
+        }
+        else
+        {
+            _amsg_exit(31);
+        }
+    }
+#else
     mainret = wmain (argc, argv, envp);
+#endif
 #else
 #if !defined(__arm__) && !defined(__aarch64__)
     __initenv = envp;
 #endif
+#if defined(__GNUC__)
+    if (mingw_app_type)
+    {
+        if (WinMain)
+        {
+            mainret = WinMain((HINSTANCE)&__ImageBase,
+                              NULL,
+                              (LPSTR)__mingw_winmain_lpCmdLine,
+                              __mingw_winmain_nShowCmd);
+        }
+        else
+        {
+            _amsg_exit(31);
+        }
+    }
+    else
+    {
+        if (main)
+        {
+            mainret = main(argc, argv, envp);
+        }
+        else
+        {
+            _amsg_exit(31);
+        }
+    }
+#else
     mainret = main (argc, argv, envp);
+#endif
 #endif
 
 #ifdef __GNUC__

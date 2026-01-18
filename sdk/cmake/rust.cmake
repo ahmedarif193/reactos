@@ -361,11 +361,13 @@ endfunction()
 # Whether Rust is enabled for the build (controlled by presence and option)
 option(ENABLE_RUST "Enable building Rust-based modules" ON)
 option(ROS_RUST_USE_RSYM "Use rsym on Rust binaries (may fail due to long symbols)" OFF)
+# MinGW ARM64 ships without libunwind in some toolchains; allow opt-in override.
+option(ROS_RUST_ALLOW_MINGW_ARM64 "Force-enable Rust on MinGW ARM64 toolchains" OFF)
 set(ROS_RUST_ENABLED FALSE)
 if(ENABLE_RUST AND ROS_RUST_FOUND AND ROS_RUST_TARGET_TRIPLE)
-    # Disable Rust for MinGW ARM64 - toolchain missing libunwind
-    if(ARCH STREQUAL "arm64" AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
-        message(STATUS "Rust disabled for MinGW ARM64 (missing libunwind in toolchain)")
+    # Guard MinGW ARM64 when libunwind is commonly missing; allow opt-in override.
+    if(ARCH STREQUAL "arm64" AND CMAKE_C_COMPILER_ID STREQUAL "GNU" AND NOT ROS_RUST_ALLOW_MINGW_ARM64)
+        message(STATUS "Rust disabled for MinGW ARM64 (missing libunwind in toolchain). Set ROS_RUST_ALLOW_MINGW_ARM64=ON to force enable.")
     else()
         set(ROS_RUST_ENABLED TRUE)
     endif()

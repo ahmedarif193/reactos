@@ -825,7 +825,7 @@ VOID
 RxAdjustFileTimesAndSize(
     PRX_CONTEXT RxContext)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     LARGE_INTEGER CurrentTime;
     FILE_BASIC_INFORMATION FileBasicInfo;
     FILE_END_OF_FILE_INFORMATION FileEOFInfo;
@@ -1042,7 +1042,7 @@ RxCancelNotifyChangeDirectoryRequestsForVNetRoot(
    BOOLEAN ForceFilesClosed)
 {
     KIRQL OldIrql;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PLIST_ENTRY Entry;
     PRX_CONTEXT Context;
     LIST_ENTRY ContextsToCancel;
@@ -1354,7 +1354,7 @@ RxCanonicalizeNameAndObtainNetRoot(
     PUNICODE_STRING FileName,
     PUNICODE_STRING NetRootName)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     NET_ROOT_TYPE NetRootType;
     UNICODE_STRING CanonicalName;
 
@@ -1536,7 +1536,7 @@ RxCloseAssociatedSrvOpen(
     IN PRX_CONTEXT RxContext OPTIONAL)
 {
     PFCB Fcb;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PSRV_OPEN SrvOpen;
     BOOLEAN CloseSrvOpen;
     PRX_CONTEXT LocalContext;
@@ -1732,7 +1732,7 @@ NTSTATUS
 RxCollapseOrCreateSrvOpen(
     PRX_CONTEXT RxContext)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     ULONG Disposition;
     PSRV_OPEN SrvOpen;
     USHORT ShareAccess;
@@ -1919,7 +1919,7 @@ RxCommonCleanup(
     PFCB Fcb;
     PFOBX Fobx;
     ULONG OpenCount;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PNET_ROOT NetRoot;
     PFILE_OBJECT FileObject;
     LARGE_INTEGER TruncateSize;
@@ -2287,7 +2287,7 @@ RxCommonClose(
 #define BugCheckFileId RDBSS_BUG_CHECK_CLOSE
     PFCB Fcb;
     PFOBX Fobx;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PFILE_OBJECT FileObject;
     BOOLEAN DereferenceFobx, AcquiredFcb;
 
@@ -2818,7 +2818,7 @@ RxCommonDirectoryControl(
 {
     PFCB Fcb;
     PFOBX Fobx;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PIO_STACK_LOCATION Stack;
 
     PAGED_CODE();
@@ -3143,7 +3143,7 @@ RxCommonQueryVolumeInformation(
     PIRP Irp;
     PFCB Fcb;
     PFOBX Fobx;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PIO_STACK_LOCATION Stack;
 
     PAGED_CODE();
@@ -3187,7 +3187,7 @@ RxCommonRead(
     PFCB Fcb;
     PIRP Irp;
     PFOBX Fobx;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PNET_ROOT NetRoot;
     PVOID SystemBuffer;
     PFILE_OBJECT FileObject;
@@ -3655,7 +3655,7 @@ RxCommonSetInformation(
     PIRP Irp;
     PFCB Fcb;
     PFOBX Fobx;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PNET_ROOT NetRoot;
     PIO_STACK_LOCATION Stack;
     FILE_INFORMATION_CLASS Class;
@@ -3933,7 +3933,7 @@ RxCommonWrite(
     PIRP Irp;
     PFCB Fcb;
     PFOBX Fobx;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PNET_ROOT NetRoot;
     PSRV_OPEN SrvOpen;
     PFILE_OBJECT FileObject;
@@ -3943,7 +3943,7 @@ RxCommonWrite(
     PLOWIO_CONTEXT LowIoContext;
     PRDBSS_DEVICE_OBJECT RxDeviceObject;
     ULONG WriteLength, CapturedRxContextSerialNumber = RxContext->SerialNumber;
-    LONGLONG FileSize, ValidDataLength, InitialFileSize, InitialValidDataLength;
+    LONGLONG FileSize, ValidDataLength, InitialFileSize = 0, InitialValidDataLength = 0;
     BOOLEAN CanWait, PagingIo, NoCache, Sync, NormalFile, WriteToEof, IsPipe, NoPreposting, InFsp, RecursiveWriteThrough, CalledByLazyWriter, SwitchBackToAsync, ExtendingFile, ExtendingValidData, UnwindOutstandingAsync, ResourceOwnerSet, PostIrp, ContextReferenced;
 
     PAGED_CODE();

@@ -1022,6 +1022,8 @@ Fast486ParseModRegRm(PFAST486_STATE State,
 {
     UCHAR ModRmByte, Mode, RegMem;
 
+    ModRegRm->MemoryAddress = 0;
+
     /* Fetch the MOD REG R/M byte */
     if (!Fast486FetchByte(State, &ModRmByte))
     {

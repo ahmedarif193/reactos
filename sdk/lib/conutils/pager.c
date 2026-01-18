@@ -71,8 +71,8 @@ GetNextLine(
     IN SIZE_T cch)
 {
     SIZE_T ich = Pager->ich;
-    SIZE_T ichStart;
-    SIZE_T cchLine;
+    SIZE_T ichStart = 0;
+    SIZE_T cchLine = 0;
     BOOL bCacheLine;
 
     Pager->ichCurr = 0;

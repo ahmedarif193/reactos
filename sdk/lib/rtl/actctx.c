@@ -4940,7 +4940,7 @@ static NTSTATUS add_progid_record(ACTIVATION_CONTEXT* actctx, struct strsection_
     struct string_index **index, ULONG *data_offset, ULONG *global_offset, ULONG rosterindex)
 {
     unsigned int i, j;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     for (i = 0; i < entities->num; i++)
     {

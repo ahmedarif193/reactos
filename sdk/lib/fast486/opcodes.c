@@ -4310,8 +4310,8 @@ FAST486_OPCODE_HANDLER(Fast486OpcodeRetFar)
     ULONG Offset = 0;
     USHORT BytesToPop = 0;
     BOOLEAN Size = State->SegmentRegs[FAST486_REG_CS].Size;
-    ULONG StackPtr;
-    ULONG StackSel;
+    ULONG StackPtr = 0;
+    ULONG StackSel = 0;
     UCHAR OldCpl = Fast486GetCurrentPrivLevel(State);
 
     /* Make sure this is the right instruction */
@@ -4477,7 +4477,7 @@ FAST486_OPCODE_HANDLER(Fast486OpcodeInt)
 FAST486_OPCODE_HANDLER(Fast486OpcodeIret)
 {
     FAST486_SEG_REGS i;
-    ULONG InstPtr, CodeSel, StackPtr, StackSel;
+    ULONG InstPtr, CodeSel, StackPtr = 0, StackSel = 0;
     FAST486_FLAGS_REG NewFlags;
     BOOLEAN Size = State->SegmentRegs[FAST486_REG_CS].Size;
 

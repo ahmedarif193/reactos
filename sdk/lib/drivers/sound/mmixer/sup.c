@@ -674,7 +674,7 @@ MMixerSetGetVolumeControlDetails(
     LPMIXERCONTROLDETAILS_UNSIGNED Input;
     LONG Value;
     ULONG Index, Channel;
-    MIXER_STATUS Status;
+    MIXER_STATUS Status = MM_STATUS_SUCCESS;
     LPMIXERVOLUME_DATA VolumeData;
 
     if (MixerControlDetails->cbDetails != sizeof(MIXERCONTROLDETAILS_UNSIGNED))

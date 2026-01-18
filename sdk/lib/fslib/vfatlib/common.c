@@ -65,7 +65,7 @@ FatWipeSectors(
     LARGE_INTEGER FileOffset;
     ULONGLONG Sector;
     ULONG Length;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     Length = SectorsPerCluster * BytesPerSector;
 

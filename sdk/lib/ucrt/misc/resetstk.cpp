@@ -28,7 +28,7 @@
 
 extern "C" int __cdecl _resetstkoflw()
 {
-    LPBYTE pStack, pStackBase, pMaxGuard, pMinGuard;
+    LPBYTE pStack = NULL, pStackBase, pMaxGuard, pMinGuard;
     MEMORY_BASIC_INFORMATION mbi;
     SYSTEM_INFO si;
     DWORD PageSize;
@@ -36,12 +36,9 @@ extern "C" int __cdecl _resetstkoflw()
     DWORD flOldProtect;
     ULONG StackSizeInBytes;
 
-    // Use _alloca() to get the current stack pointer
-#pragma warning(push)
-#pragma warning(disable:6255)
-    // prefast(6255): This alloca is safe and we do not want a __try here
-    pStack = (LPBYTE)_alloca(1);
-#pragma warning(pop)
+    /* Use a local address as the reference stack pointer */
+    volatile char marker = 0;
+    pStack = (LPBYTE)&marker;
 
     // Find the base of the stack.
 

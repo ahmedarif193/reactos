@@ -161,7 +161,7 @@ PeLdrpBindImportName(
     ULONG Ordinal;
     PULONG NameTable, FunctionTable;
     PUSHORT OrdinalTable;
-    LONG High, Low, Middle, Result;
+    LONG High, Low, Middle = 0, Result = 1;
     ULONG Hint;
     PIMAGE_IMPORT_BY_NAME ImportData;
     PCHAR ExportName, ForwarderName;
