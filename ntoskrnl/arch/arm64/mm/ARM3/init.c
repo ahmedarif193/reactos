@@ -335,6 +335,56 @@ MiArm64NormalizePoolPfnFlagsRange(_In_ PVOID Base,
         PMMPFN pf = MiGetPfnEntry(pfn);
         if (pf && (MiGetPfnEntryIndex(pf) <= MmHighestPhysicalPage))
         {
+            /*
+             * ARM64 CRITICAL FIX: Initialize PFN entries for data pages allocated
+             * by MiMapPTEs during early boot. These pages were allocated via
+             * MxGetNextPage before the PFN database was ready, so their PFN entries
+             * have RefCount=0 and PageLocation=ZeroedPageList (uninitialized).
+             *
+             * When MmProbeAndLockPages is later called on these pool pages, it
+             * calls MiReferenceProbedPageAndBumpLockCount which asserts RefCount != 0.
+             * This caused the crash in SCSI port driver during FdoSendInquiry.
+             *
+             * We must properly initialize these fields:
+             * - ReferenceCount = 1 (page is in use)
+             * - ShareCount = 1 (one reference to the page)
+             * - PageLocation = ActiveAndValid (page is active)
+             * - PteAddress = PTE that maps this page
+             * - PteFrame = PFN of the page table containing the PTE
+             *
+             * Only initialize if the page appears uninitialized (RefCount=0).
+             * Already-initialized pages from expansion allocations have proper values.
+             */
+            if (pf->u3.e2.ReferenceCount == 0)
+            {
+                PMMPTE PointerPte = MiAddressToPte((PVOID)va);
+                PMMPTE PointerPtePte = MiAddressToPte(PointerPte);
+                PFN_NUMBER PageTableFrameNumber = 0;
+
+                /* Get the PFN of the page table containing the PTE */
+                if (PointerPtePte->u.Hard.Valid)
+                {
+                    PageTableFrameNumber = PFN_FROM_PTE(PointerPtePte);
+                }
+
+                pf->u3.e2.ReferenceCount = 1;
+                pf->u2.ShareCount = 1;
+                pf->u3.e1.PageLocation = ActiveAndValid;
+                pf->PteAddress = PointerPte;
+                pf->u4.PteFrame = PageTableFrameNumber;
+
+                /* Also increment the share count of the page table */
+                if (PageTableFrameNumber != 0 && PageTableFrameNumber <= MmHighestPhysicalPage)
+                {
+                    PMMPFN PageTablePfn = MiGetPfnEntry(PageTableFrameNumber);
+                    if (PageTablePfn)
+                    {
+                        PageTablePfn->u2.ShareCount++;
+                    }
+                }
+            }
+
+            /* Clear allocation flags regardless of whether we initialized RefCount */
             pf->u3.e1.StartOfAllocation = 0;
             pf->u3.e1.EndOfAllocation = 0;
             pf->u4.VerifierAllocation = 0;
@@ -1867,6 +1917,7 @@ MiArm64RegisterFreeLdrPageTables(VOID)
              * Solution: Only register the page if it's NOT already initialized (ReferenceCount == 0)
              * OR if it's genuinely in a free/zero list (Flink != 0 AND Blink != 0). */
             BOOLEAN ShouldRegister = FALSE;
+            BOOLEAN ManualRegister = FALSE;
 
             if (RootPfnEntry->u3.e2.ReferenceCount == 0)
             {
@@ -1877,13 +1928,8 @@ MiArm64RegisterFreeLdrPageTables(VOID)
                       RootPfnEntry->u3.e1.PageLocation == ZeroedPageList) &&
                      (RootPfnEntry->u1.Flink == 0 && RootPfnEntry->u2.Blink == 0))
             {
-                /* Orphaned entry: has PageLocation set but not actually in list - skip registration */
-                CHAR Log[256];
-                RtlStringCbPrintfA(Log, sizeof(Log),
-                    "[arm64] Skipping L0 PFN %lu: orphaned entry (location=%u but Flink/Blink=0, already allocated)",
-                    (ULONG)RootPfn, (unsigned)RootPfnEntry->u3.e1.PageLocation);
-                DPRINT("%s\n", Log);
-                ShouldRegister = FALSE;
+                /* Orphaned entry: Manually mark as ActiveAndValid */
+                ManualRegister = TRUE;
             }
             else
             {
@@ -1897,6 +1943,18 @@ MiArm64RegisterFreeLdrPageTables(VOID)
                 MiInitializePfnForOtherProcess(RootPfn, (PVOID)(ULONG_PTR)RootPa, 0);
                 L0TablesRegistered++;
                 TotalPageTablesRegistered++;
+            }
+            else if (ManualRegister)
+            {
+                RootPfnEntry->u3.e2.ReferenceCount = 1;
+                RootPfnEntry->u2.ShareCount = 1;
+                RootPfnEntry->u3.e1.PageLocation = ActiveAndValid;
+                RootPfnEntry->u3.e1.Modified = 1;
+                RootPfnEntry->u4.PteFrame = 0;
+                RootPfnEntry->PteAddress = (PVOID)(ULONG_PTR)RootPa;
+                L0TablesRegistered++;
+                TotalPageTablesRegistered++;
+                DPRINT("[arm64] Manually registered L0 PFN %lu (orphaned)\n", (ULONG)RootPfn);
             }
         }
     }
@@ -1926,6 +1984,7 @@ MiArm64RegisterFreeLdrPageTables(VOID)
                 /* CRITICAL FIX: Check if the PFN is actually linked in a list before registering.
                  * Same orphaned entry check as for L0 table. */
                 BOOLEAN ShouldRegister = FALSE;
+                BOOLEAN ManualRegister = FALSE;
 
                 if (L1PfnEntry->u3.e2.ReferenceCount == 0)
                 {
@@ -1936,13 +1995,8 @@ MiArm64RegisterFreeLdrPageTables(VOID)
                           L1PfnEntry->u3.e1.PageLocation == ZeroedPageList) &&
                          (L1PfnEntry->u1.Flink == 0 && L1PfnEntry->u2.Blink == 0))
                 {
-                    /* Orphaned entry: has PageLocation set but not actually in list - skip registration */
-                    CHAR Log[256];
-                    RtlStringCbPrintfA(Log, sizeof(Log),
-                        "[arm64] Skipping L1 PFN %lu: orphaned entry (location=%u but Flink/Blink=0, already allocated)",
-                        (ULONG)L1Pfn, (unsigned)L1PfnEntry->u3.e1.PageLocation);
-                    DPRINT("%s\n", Log);
-                    ShouldRegister = FALSE;
+                    /* Orphaned entry: Manually mark as ActiveAndValid */
+                    ManualRegister = TRUE;
                 }
                 else
                 {
@@ -1958,6 +2012,19 @@ MiArm64RegisterFreeLdrPageTables(VOID)
                                                    RootPfn);
                     L1TablesRegistered++;
                     TotalPageTablesRegistered++;
+                }
+                else if (ManualRegister)
+                {
+                    L1PfnEntry->u3.e2.ReferenceCount = 1;
+                    L1PfnEntry->u2.ShareCount = 1;
+                    L1PfnEntry->u3.e1.PageLocation = ActiveAndValid;
+                    L1PfnEntry->u3.e1.Modified = 1;
+                    L1PfnEntry->u4.PteFrame = RootPfn;
+                    L1PfnEntry->PteAddress = (PVOID)(ULONG_PTR)&L0Table[L0Index];
+                    MiGetPfnEntry(RootPfn)->u2.ShareCount++;
+                    L1TablesRegistered++;
+                    TotalPageTablesRegistered++;
+                    DPRINT("[arm64] Manually registered L1 PFN %lu (orphaned)\n", (ULONG)L1Pfn);
                 }
             }
         }
@@ -1987,6 +2054,7 @@ MiArm64RegisterFreeLdrPageTables(VOID)
                     /* CRITICAL FIX: Check if the PFN is actually linked in a list before registering.
                      * Same orphaned entry check as for L0/L1 tables. */
                     BOOLEAN ShouldRegister = FALSE;
+                    BOOLEAN ManualRegister = FALSE;
 
                     if (L2PfnEntry->u3.e2.ReferenceCount == 0)
                     {
@@ -1997,13 +2065,8 @@ MiArm64RegisterFreeLdrPageTables(VOID)
                               L2PfnEntry->u3.e1.PageLocation == ZeroedPageList) &&
                              (L2PfnEntry->u1.Flink == 0 && L2PfnEntry->u2.Blink == 0))
                     {
-                        /* Orphaned entry: has PageLocation set but not actually in list - skip registration */
-                        CHAR Log[256];
-                        RtlStringCbPrintfA(Log, sizeof(Log),
-                            "[arm64] Skipping L2 PFN %lu: orphaned entry (location=%u but Flink/Blink=0, already allocated)",
-                            (ULONG)L2Pfn, (unsigned)L2PfnEntry->u3.e1.PageLocation);
-                        DPRINT("%s\n", Log);
-                        ShouldRegister = FALSE;
+                        /* Orphaned entry: Manually mark as ActiveAndValid */
+                        ManualRegister = TRUE;
                     }
                     else
                     {
@@ -2019,6 +2082,19 @@ MiArm64RegisterFreeLdrPageTables(VOID)
                                                        L1Pfn);
                         L2TablesRegistered++;
                         TotalPageTablesRegistered++;
+                    }
+                    else if (ManualRegister)
+                    {
+                        L2PfnEntry->u3.e2.ReferenceCount = 1;
+                        L2PfnEntry->u2.ShareCount = 1;
+                        L2PfnEntry->u3.e1.PageLocation = ActiveAndValid;
+                        L2PfnEntry->u3.e1.Modified = 1;
+                        L2PfnEntry->u4.PteFrame = L1Pfn;
+                        L2PfnEntry->PteAddress = (PVOID)(ULONG_PTR)&L1Table[L1Index];
+                        MiGetPfnEntry(L1Pfn)->u2.ShareCount++;
+                        L2TablesRegistered++;
+                        TotalPageTablesRegistered++;
+                        DPRINT("[arm64] Manually registered L2 PFN %lu (orphaned)\n", (ULONG)L2Pfn);
                     }
                 }
             }
@@ -2048,6 +2124,7 @@ MiArm64RegisterFreeLdrPageTables(VOID)
                         /* CRITICAL FIX: Check if the PFN is actually linked in a list before registering.
                          * Same orphaned entry check as for L0/L1/L2 tables. */
                         BOOLEAN ShouldRegister = FALSE;
+                        BOOLEAN ManualRegister = FALSE;
 
                         if (L3PfnEntry->u3.e2.ReferenceCount == 0)
                         {
@@ -2058,13 +2135,8 @@ MiArm64RegisterFreeLdrPageTables(VOID)
                                   L3PfnEntry->u3.e1.PageLocation == ZeroedPageList) &&
                                  (L3PfnEntry->u1.Flink == 0 && L3PfnEntry->u2.Blink == 0))
                         {
-                            /* Orphaned entry: has PageLocation set but not actually in list - skip registration */
-                            CHAR Log[256];
-                            RtlStringCbPrintfA(Log, sizeof(Log),
-                                "[arm64] Skipping L3 PFN %lu: orphaned entry (location=%u but Flink/Blink=0, already allocated)",
-                                (ULONG)L3Pfn, (unsigned)L3PfnEntry->u3.e1.PageLocation);
-                            DPRINT("%s\n", Log);
-                            ShouldRegister = FALSE;
+                            /* Orphaned entry: Manually mark as ActiveAndValid */
+                            ManualRegister = TRUE;
                         }
                         else
                         {
@@ -2080,6 +2152,19 @@ MiArm64RegisterFreeLdrPageTables(VOID)
                                                            L2Pfn);
                             L3TablesRegistered++;
                             TotalPageTablesRegistered++;
+                        }
+                        else if (ManualRegister)
+                        {
+                            L3PfnEntry->u3.e2.ReferenceCount = 1;
+                            L3PfnEntry->u2.ShareCount = 1;
+                            L3PfnEntry->u3.e1.PageLocation = ActiveAndValid;
+                            L3PfnEntry->u3.e1.Modified = 1;
+                            L3PfnEntry->u4.PteFrame = L2Pfn;
+                            L3PfnEntry->PteAddress = (PVOID)(ULONG_PTR)&L2Table[L2Index];
+                            MiGetPfnEntry(L2Pfn)->u2.ShareCount++;
+                            L3TablesRegistered++;
+                            TotalPageTablesRegistered++;
+                            DPRINT("[arm64] Manually registered L3 PFN %lu (orphaned)\n", (ULONG)L3Pfn);
                         }
                     }
                 }

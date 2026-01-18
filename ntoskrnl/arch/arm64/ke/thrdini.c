@@ -145,7 +145,6 @@ KiIdleLoop(VOID)
 {
     PKPRCB Prcb = KeGetCurrentPrcb();
     static ULONG IdleLoopCounter = 0;
-    static ULONG LastLogCounter = 0;
     static BOOLEAN FirstIdle = TRUE;
 
     DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,

@@ -299,35 +299,18 @@ KeSetEventBoostPriority(IN PKEVENT Event,
         WaitThread = WaitBlock->Thread;
         if (WaitingThread) *WaitingThread = WaitThread;
 
-        /* Validate that the waiting thread is actually in a wait state */
-        if (WaitThread->State == Waiting || WaitThread->State == GateWait)
-        {
-            /* Calculate new priority */
-            Thread->Priority = KiComputeNewPriority(Thread, 0);
+        /* Calculate new priority */
+        Thread->Priority = KiComputeNewPriority(Thread, 0);
 
-            /* Unlink the waiting thread */
-            KiUnlinkThread(WaitThread, STATUS_SUCCESS);
+        /* Unlink the waiting thread */
+        KiUnlinkThread(WaitThread, STATUS_SUCCESS);
 
-            /* Request priority boosting */
-            WaitThread->AdjustIncrement = Thread->Priority;
-            WaitThread->AdjustReason = AdjustBoost;
+        /* Request priority boosting */
+        WaitThread->AdjustIncrement = Thread->Priority;
+        WaitThread->AdjustReason = AdjustBoost;
 
-            /* Ready the thread */
-            KiReadyThread(WaitThread);
-        }
-        else
-        {
-            /* Thread is not in a wait state - just signal the event */
-            Event->Header.SignalState = 1;
-
-            /* ARM64: AGGRESSIVE QUAD barriers after setting event state */
-#ifdef _M_ARM64
-            __asm__ __volatile__("dmb sy" ::: "memory");
-            __asm__ __volatile__("isb" ::: "memory");
-            __asm__ __volatile__("dmb sy" ::: "memory");
-            __asm__ __volatile__("dsb sy" ::: "memory");
-#endif
-        }
+        /* Ready the thread */
+        KiReadyThread(WaitThread);
     }
 
     /* Release the Dispatcher Database Lock */

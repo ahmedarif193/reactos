@@ -1578,7 +1578,7 @@ NtCreateToken(
     LARGE_INTEGER LocalExpirationTime = {{0, 0}};
     LUID LocalAuthenticationId;
     TOKEN_SOURCE LocalTokenSource;
-    SECURITY_QUALITY_OF_SERVICE LocalSecurityQos;
+    SECURITY_QUALITY_OF_SERVICE LocalSecurityQos = {0};
     PLUID_AND_ATTRIBUTES CapturedPrivileges = NULL;
     PSID_AND_ATTRIBUTES CapturedUser = NULL;
     PSID_AND_ATTRIBUTES CapturedGroups = NULL;

@@ -299,6 +299,25 @@ MmAccessFault(IN ULONG FaultCode,
     NTSTATUS Status;
     BOOLEAN IsArm3Fault = FALSE;
 
+    /*
+     * ARM64 FIX: At elevated IRQL (> APC_LEVEL), we cannot acquire working set
+     * locks which are required for the VAD lookup path. Route directly to
+     * MmArmAccessFault which has proper high-IRQL fault handling.
+     *
+     * This can happen when:
+     * 1. A page fault occurs while holding a spinlock (DISPATCH_LEVEL)
+     * 2. The fault handler needs to resolve a demand-paged kernel address
+     * 3. The PTE chain lookup causes a nested fault on self-map aliases
+     *
+     * MmArmAccessFault will either:
+     * - Handle the fault if the page tables are already mapped
+     * - Bugcheck if the fault cannot be resolved at high IRQL
+     */
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return MmArmAccessFault(FaultCode, Address, Mode, TrapInformation);
+    }
+
     /* Cute little hack for ROS */
     if ((ULONG_PTR)Address >= (ULONG_PTR)MmSystemRangeStart)
     {

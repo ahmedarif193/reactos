@@ -280,6 +280,7 @@ IopCreateObjectTypes(VOID)
         AdapterTypeInitializer.ValidAccessMask = FILE_ALL_ACCESS;
         AdapterTypeInitializer.UseDefaultObject = TRUE;
         AdapterTypeInitializer.GenericMapping = IopFileMapping;
+        AdapterTypeInitializer.CaseInsensitive = TRUE;
 
         if (!NT_SUCCESS(ObCreateObjectType(&Name,
                                            &AdapterTypeInitializer,
@@ -304,6 +305,7 @@ IopCreateObjectTypes(VOID)
         ControllerTypeInitializer.UseDefaultObject = TRUE;
         ControllerTypeInitializer.GenericMapping = IopFileMapping;
         ControllerTypeInitializer.DefaultNonPagedPoolCharge = sizeof(CONTROLLER_OBJECT);
+        ControllerTypeInitializer.CaseInsensitive = TRUE;
 
         if (!NT_SUCCESS(ObCreateObjectType(&Name,
                                            &ControllerTypeInitializer,
@@ -357,6 +359,7 @@ IopCreateObjectTypes(VOID)
         DriverTypeInitializer.GenericMapping = IopFileMapping;
         DriverTypeInitializer.DefaultNonPagedPoolCharge = sizeof(DRIVER_OBJECT);
         DriverTypeInitializer.DeleteProcedure = IopDeleteDriver;
+        DriverTypeInitializer.CaseInsensitive = TRUE;
 
         if (!NT_SUCCESS(ObCreateObjectType(&Name,
                                            &DriverTypeInitializer,
@@ -570,20 +573,11 @@ IopMarkBootPartition(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         /* Fail */
         DPRINT1("IopMarkBootPartition: Failed to open boot device after %lu attempts (Status=0x%08lx)\n",
                 RetryCount, Status);
-#if defined(_M_ARM64)
-        /* ARM64: Don't bugcheck if boot device not found - PnP may still be enumerating.
-         * Just return FALSE and let boot continue. SystemRoot will be set later when
-         * device finishes enumerating. */
-        DPRINT1("[arm64] IopMarkBootPartition: Continuing boot despite missing boot device (PnP may still be running)\n");
-        RtlFreeUnicodeString(&DeviceName);
-        return FALSE;
-#else
         KeBugCheckEx(INACCESSIBLE_BOOT_DEVICE,
                      (ULONG_PTR)&DeviceName,
                      Status,
                      0,
                      0);
-#endif
     }
 
     /* Get the DO */
@@ -837,6 +831,11 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     DPRINT1("[arm64] IoInitSystem: after IopReassignSystemRoot Status=0x%lx NtSystemRoot=%wZ\n",
             Status, &NtSystemRoot);
 #endif
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("IopReassignSystemRoot failed: %lx\n", Status);
+        return FALSE;
+    }
     /* Set the ANSI_STRING for the root path */
     RootString.MaximumLength = NtSystemRoot.MaximumLength / sizeof(WCHAR);
     RootString.Length = 0;

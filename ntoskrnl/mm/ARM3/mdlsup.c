@@ -1149,6 +1149,55 @@ MmProbeAndLockPages(IN PMDL Mdl,
         // Use the PFN lock
         //
         UsePfnLock = TRUE;
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /*
+         * ARM64 SELF-MAP PRE-MAPPING:
+         *
+         * Unlike x86-64 which has a recursive page table structure, ARM64 uses
+         * explicit alias mappings for the self-map (PTE_BASE region). When we
+         * hold the PFN lock (DISPATCH_LEVEL), we cannot handle page faults on
+         * unmapped self-map alias pages because the fault handler would need to
+         * allocate memory (which requires IRQL < DISPATCH_LEVEL).
+         *
+         * Before acquiring the PFN lock, we must ensure that ALL self-map alias
+         * pages we'll access during the MDL loop are already mapped. This includes:
+         * - PointerPxe, PointerPpe, PointerPde, PointerPte for the start address
+         * - All PTEs between StartAddress and LastAddress
+         *
+         * We call MiArm64MapAliasForPointer for each PTE pointer. This function
+         * will allocate page table pages if needed BEFORE we raise IRQL.
+         */
+        {
+            extern VOID MiArm64MapAliasForPointer(_In_ PVOID AliasVa);
+            PVOID TempAddress;
+            PMMPTE TempPte;
+            PMMPDE TempPde;
+            PMMPDE TempPpe;
+            PMMPDE TempPxe;
+
+            /* Map self-map aliases for the entire range we'll be accessing */
+            for (TempAddress = StartAddress;
+                 TempAddress < LastAddress;
+                 TempAddress = (PVOID)((ULONG_PTR)TempAddress + PAGE_SIZE))
+            {
+                TempPte = MiAddressToPte(TempAddress);
+                TempPde = MiAddressToPde(TempAddress);
+                TempPpe = MiAddressToPpe(TempAddress);
+                TempPxe = MiAddressToPxe(TempAddress);
+
+                /* Ensure self-map alias pages are mapped for each level */
+                MiArm64MapAliasForPointer(TempPxe);
+                MiArm64MapAliasForPointer(TempPpe);
+                MiArm64MapAliasForPointer(TempPde);
+                MiArm64MapAliasForPointer(TempPte);
+            }
+
+            /* Ensure TLB sees the new mappings */
+            __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
+        }
+#endif /* _M_ARM64 */
+
         OldIrql = MiAcquirePfnLock();
     }
     else
@@ -1190,6 +1239,7 @@ MmProbeAndLockPages(IN PMDL Mdl,
         // Assume failure and check for non-mapped pages
         //
         *MdlPages = LIST_HEAD;
+
         while (
 #if (_MI_PAGING_LEVELS == 4)
                (PointerPxe->u.Hard.Valid == 0) ||

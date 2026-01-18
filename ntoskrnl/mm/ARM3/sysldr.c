@@ -2624,9 +2624,9 @@ MiWriteProtectSystemImage(
     _In_ PVOID ImageBase)
 {
     PIMAGE_NT_HEADERS NtHeaders;
-    PIMAGE_SECTION_HEADER SectionHeaders, Section;
+    PIMAGE_SECTION_HEADER SectionHeaders, Section = NULL;
     ULONG i;
-    PVOID SectionBase, SectionEnd;
+    PVOID SectionBase, SectionEnd = NULL;
     ULONG SectionSize;
     ULONG Protection;
     PMMPTE FirstPte, LastPte;
@@ -2704,6 +2704,7 @@ MiWriteProtectSystemImage(
 
     /* Get the base address of the first section */
     SectionBase = Add2Ptr(ImageBase, SectionHeaders[0].VirtualAddress);
+    SectionEnd = SectionBase;
 
     /* Start protecting the image header as R/W */
     FirstPte = MiAddressToPte(ImageBase);

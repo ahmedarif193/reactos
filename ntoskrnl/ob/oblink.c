@@ -33,7 +33,7 @@ ObpProcessDosDeviceSymbolicLink(IN POBJECT_SYMBOLIC_LINK SymbolicLink,
     POBJECT_HEADER ObjectHeader;
     POBJECT_HEADER_NAME_INFO ObjectNameInfo;
     BOOLEAN DirectoryLocked;
-    PVOID Object;
+    PVOID Object = NULL;
 
     /*
      * To prevent endless reparsing, setting an upper limit on the

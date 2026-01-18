@@ -41,7 +41,6 @@ KiWaitTest(IN PVOID ObjectPointer,
     __asm__ __volatile__("isb" ::: "memory");
     __asm__ __volatile__("dmb sy" ::: "memory");
     __asm__ __volatile__("dsb sy" ::: "memory");
-    DPRINT1("[arm64] KiWaitTest: Object=%p with QUAD barriers, checking waiters\n", ObjectPointer);
 #endif
 
     /* Loop the Wait Entries */
@@ -68,31 +67,6 @@ KiWaitTest(IN PVOID ObjectPointer,
     }
 }
 
-/* Helper to validate list entry integrity before removal - ARM64 specific */
-FORCEINLINE
-BOOLEAN
-KiIsListEntryValid(IN PLIST_ENTRY Entry)
-{
-    /* Check for NULL pointers */
-    if (Entry->Flink == NULL || Entry->Blink == NULL)
-        return FALSE;
-
-    /* Check for invalid sentinel values */
-    if ((ULONG_PTR)Entry->Flink == (ULONG_PTR)-1 ||
-        (ULONG_PTR)Entry->Blink == (ULONG_PTR)-1)
-        return FALSE;
-
-    /* Check list integrity: Flink->Blink should point back to Entry */
-    if (Entry->Flink->Blink != Entry)
-        return FALSE;
-
-    /* Check list integrity: Blink->Flink should point back to Entry */
-    if (Entry->Blink->Flink != Entry)
-        return FALSE;
-
-    return TRUE;
-}
-
 VOID
 FASTCALL
 KiUnlinkThread(IN PKTHREAD Thread,
@@ -113,11 +87,7 @@ KiUnlinkThread(IN PKTHREAD Thread,
     {
         do
         {
-            /* Validate list integrity before removal to avoid assertion */
-            if (KiIsListEntryValid(&WaitBlock->WaitListEntry))
-            {
-                RemoveEntryList(&WaitBlock->WaitListEntry);
-            }
+            RemoveEntryList(&WaitBlock->WaitListEntry);
 
             /* Go to the next one */
             WaitBlock = WaitBlock->NextWaitBlock;
@@ -125,10 +95,9 @@ KiUnlinkThread(IN PKTHREAD Thread,
     }
 
     /* Remove the thread from the wait list! */
-    /* Only remove if the thread was in a proper wait state with valid list links */
+    /* Only remove if the thread was in a proper wait state */
     if (Thread->WaitListEntry.Flink &&
-        (Thread->State == Waiting || Thread->State == GateWait) &&
-        KiIsListEntryValid(&Thread->WaitListEntry))
+        (Thread->State == Waiting || Thread->State == GateWait))
     {
         RemoveEntryList(&Thread->WaitListEntry);
     }
@@ -177,8 +146,6 @@ KiUnwaitThread(IN PKTHREAD Thread,
     __asm__ __volatile__("isb" ::: "memory");
     __asm__ __volatile__("dmb sy" ::: "memory");
     __asm__ __volatile__("dsb sy" ::: "memory");
-    DPRINT1("[arm64] KiUnwaitThread: Thread=%p WaitStatus=%ld Increment=%d with QUAD barriers, readying\n",
-            Thread, WaitStatus, Increment);
 #endif
 
     /* Reschedule the Thread */
@@ -532,11 +499,6 @@ KeWaitForSingleObject(IN PVOID Object,
     PLARGE_INTEGER OriginalDueTime = Timeout;
     ULONG Hand = 0;
 
-#ifdef _M_ARM64
-    DPRINT1("[arm64] KeWaitForSingleObject: ENTRY Object=%p Type=%u SignalState=%ld Thread=%p Timeout=%p\n",
-            Object, CurrentObject->Header.Type, CurrentObject->Header.SignalState, Thread, Timeout);
-#endif
-
     /* ARM64: Validate Object pointer to catch uninitialized or invalid dispatcher objects */
     if (Object == NULL ||
         (ULONG_PTR)Object == (ULONG_PTR)-1 ||
@@ -601,7 +563,6 @@ KeWaitForSingleObject(IN PVOID Object,
             (Thread->WaitIrql < APC_LEVEL))
         {
 #ifdef _M_ARM64
-            DPRINT1("[arm64] KeWaitForSingleObject: Kernel APC pending, delivering APCs before restart\n");
             /* ARM64: Explicitly deliver APCs BEFORE releasing the lock.
              * On ARM64, we must explicitly call KiDeliverApc to ensure pending
              * APCs are actually delivered. We do this at current IRQL (DISPATCH/SYNCH),
@@ -618,9 +579,6 @@ KeWaitForSingleObject(IN PVOID Object,
         }
         else
         {
-#ifdef _M_ARM64
-            DPRINT1("[arm64] KeWaitForSingleObject: No APC pending, checking object state\n");
-#endif
             /* Sanity check */
             ASSERT(CurrentObject->Header.Type != QueueObject);
 
@@ -643,8 +601,6 @@ KeWaitForSingleObject(IN PVOID Object,
             __asm__ __volatile__("isb" ::: "memory");
             __asm__ __volatile__("dmb sy" ::: "memory");
             __asm__ __volatile__("dsb sy" ::: "memory");
-            DPRINT1("[arm64] KeWaitForSingleObject: Object=%p Type=%u with QUAD barriers, checking SignalState=%ld\n",
-                    Object, CurrentObject->Header.Type, CurrentObject->Header.SignalState);
 #endif
 
             /* Check if it's a mutant */
@@ -747,16 +703,10 @@ KeWaitForSingleObject(IN PVOID Object,
             }
         }
 WaitStart:
-#ifdef _M_ARM64
-        DPRINT1("[arm64] KeWaitForSingleObject: WaitStart - raising IRQL and acquiring lock\n");
-#endif
         /* Setup a new wait */
         Thread->WaitIrql = KeRaiseIrqlToSynchLevel();
         KxSingleThreadWait();
         KiAcquireDispatcherLockAtSynchLevel();
-#ifdef _M_ARM64
-        DPRINT1("[arm64] KeWaitForSingleObject: Lock acquired, entering wait loop\n");
-#endif
     }
 
     /* Wait complete */

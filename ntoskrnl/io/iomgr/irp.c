@@ -1327,12 +1327,11 @@ IofCallDriver(IN PDEVICE_OBJECT DeviceObject,
     /* Get the dispatch routine */
     DispatchRoutine = DriverObject->MajorFunction[StackPtr->MajorFunction];
 
-#if defined(_M_ARM64)
-    /* Validate the dispatch routine pointer on ARM64 */
+    /* Validate the dispatch routine pointer */
     if ((ULONG_PTR)DispatchRoutine < (ULONG_PTR)MmSystemRangeStart ||
         (ULONG_PTR)DispatchRoutine > (ULONG_PTR)-1 - PAGE_SIZE)
     {
-        DPRINT1("[arm64] IofCallDriver: INVALID DispatchRoutine=%p for MajorFunction=%u DriverObject=%p (%wZ)\n",
+        DPRINT1("IofCallDriver: INVALID DispatchRoutine=%p for MajorFunction=%u DriverObject=%p (%wZ)\n",
                 DispatchRoutine, StackPtr->MajorFunction, DriverObject, &DriverObject->DriverName);
         KeBugCheckEx(DRIVER_PORTION_MUST_BE_NONPAGED,
                      (ULONG_PTR)DispatchRoutine,
@@ -1344,10 +1343,14 @@ IofCallDriver(IN PDEVICE_OBJECT DeviceObject,
     /* DEBUG: Log USB-related IRPs */
     if (StackPtr->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL)
     {
-        DPRINT1("[arm64] IofCallDriver: INTERNAL_DEVICE_CONTROL to %wZ Dispatch=%p\n",
+        /*
+         * Note: DriverName might not be safe to access at high IRQL if paged,
+         * but for debugging we take the risk or should check IRQL.
+         * Keeping simple for now as per original logic.
+         */
+        DPRINT("IofCallDriver: INTERNAL_DEVICE_CONTROL to %wZ Dispatch=%p\n",
                 &DriverObject->DriverName, DispatchRoutine);
     }
-#endif
 
 #if defined(_M_ARM64) || defined(__aarch64__)
     /* ARM64: Ensure all IRP setup (stack location, parameters) is visible

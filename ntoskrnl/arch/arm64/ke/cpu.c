@@ -530,15 +530,16 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
     else
     {
         /*
-         * MDL not mapped to system VA. For buffers that are only mapped into
-         * user space, we cannot perform cache maintenance from kernel mode
-         * without first mapping them. In this case, skip the flush.
-         *
-         * Note: In a complete implementation, we might need to temporarily
-         * map the pages for cache maintenance. However, most DMA paths ensure
-         * the MDL is properly mapped before calling KeFlushIoBuffers.
+         * MDL not mapped to system VA. Attempt to map it temporarily so we can
+         * perform cache maintenance instead of silently skipping.
          */
-        return;
+        VirtualAddress = MmGetSystemAddressForMdlSafe(Mdl, NormalPagePriority);
+        if (VirtualAddress == NULL)
+        {
+            DPRINT1("KeFlushIoBuffers: MDL %p not mapped and map failed, skipping cache maintenance (ReadOperation=%d DmaOperation=%d)\n",
+                    Mdl, ReadOperation, DmaOperation);
+            return;
+        }
     }
 
     if (VirtualAddress == NULL)

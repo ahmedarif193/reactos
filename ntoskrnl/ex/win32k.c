@@ -61,11 +61,11 @@ ExpWin32SessionCallout(
 
     /* If Win32k.sys is not loaded yet, the callout procedure will be NULL.
      * This can happen during early boot when creating Win32 object types.
-     * Return success to allow object type creation to proceed. */
+     * Fail fast so missing callouts don't mask bootstrap issues. */
     if (CalloutProcedure == NULL)
     {
-        DPRINT("ExpWin32SessionCallout: CalloutProcedure is NULL (Win32k not loaded)\n");
-        return STATUS_SUCCESS;
+        DPRINT1("ExpWin32SessionCallout: CalloutProcedure is NULL (Win32k not loaded)\n");
+        return STATUS_INVALID_SYSTEM_SERVICE;
     }
 
     /* The objects have a common header. And the kernel accesses it!

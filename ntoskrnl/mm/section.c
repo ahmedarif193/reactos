@@ -5194,6 +5194,7 @@ MmFlushSegment(
     _Out_opt_ PIO_STATUS_BLOCK Iosb)
 {
     LARGE_INTEGER FlushStart, FlushEnd;
+    FlushEnd.QuadPart = 0;
     NTSTATUS Status;
 
     if (Offset)

@@ -2021,6 +2021,7 @@ NtWaitForDebugEvent(IN HANDLE DebugHandle,
     /* Clear the initial wait state change structure and the timeout */
     RtlZeroMemory(&WaitStateChange, sizeof(WaitStateChange));
     LocalTimeOut.QuadPart = 0;
+    StartTime.QuadPart = 0;
 
     /* Check if we were called from user mode */
     if (PreviousMode != KernelMode)

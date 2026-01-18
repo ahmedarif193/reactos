@@ -43,22 +43,13 @@ KeInvalidateTlbEntry(
     ULONG_PTR Va = (ULONG_PTR)Address >> PAGE_SHIFT;
 
     /*
-     * ARM64 TLB invalidation sequence for page fault handling.
-     *
-     * Use full system barriers (dsb sy) instead of inner-shareable (dsb ish)
-     * to ensure maximum synchronization. This is critical for user-mode
-     * addresses where the CPU may have cached a "negative" TLB entry from
-     * the fault, and we need to ensure the new valid PTE is visible.
-     *
-     * Sequence:
-     * 1. DSB SY - Full system barrier ensures the PTE store is complete
-     * 2. TLBI VAAE1IS - Broadcast TLB invalidation to all CPUs for this VA
-     * 3. DSB SY - Wait for TLB invalidation to complete
-     * 4. ISB - Synchronize instruction stream with barrier effects
+     * Use inner-shareable barriers (dsb ish) consistent with Windows.
+     * Full-system barriers (dsb sy) are heavier and generally unnecessary
+     * for EL1 VA invalidation.
      */
-    __asm__ __volatile__("dsb sy" ::: "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
     __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va));
-    __asm__ __volatile__("dsb sy" ::: "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
     __asm__ __volatile__("isb" ::: "memory");
 }
 

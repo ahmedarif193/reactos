@@ -468,6 +468,7 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         ProcessTypeInitializer.GenericMapping = PspProcessMapping;
         ProcessTypeInitializer.ValidAccessMask = PROCESS_ALL_ACCESS;
         ProcessTypeInitializer.DeleteProcedure = PspDeleteProcess;
+        ProcessTypeInitializer.CaseInsensitive = TRUE;
 
         ObCreateObjectType(&Name, &ProcessTypeInitializer, NULL, &PsProcessType);
     }
@@ -488,6 +489,7 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         ThreadTypeInitializer.GenericMapping = PspThreadMapping;
         ThreadTypeInitializer.ValidAccessMask = THREAD_ALL_ACCESS;
         ThreadTypeInitializer.DeleteProcedure = PspDeleteThread;
+        ThreadTypeInitializer.CaseInsensitive = TRUE;
 
         ObCreateObjectType(&Name, &ThreadTypeInitializer, NULL, &PsThreadType);
     }
@@ -506,6 +508,7 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         JobTypeInitializer.GenericMapping = PspJobMapping;
         JobTypeInitializer.ValidAccessMask = JOB_OBJECT_ALL_ACCESS;
         JobTypeInitializer.DeleteProcedure = PspDeleteJob;
+        JobTypeInitializer.CaseInsensitive = TRUE;
 
         ObCreateObjectType(&Name, &JobTypeInitializer, NULL, &PsJobType);
     }

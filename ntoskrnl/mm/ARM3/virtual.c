@@ -91,6 +91,13 @@ MiCalculatePageCommitment(IN ULONG_PTR StartingAddress,
     ASSERT(EndingAddress >= StartingAddress);
     PointerPte = MiAddressToPte(StartingAddress);
     LastPte = MiAddressToPte(EndingAddress);
+#if _MI_PAGING_LEVELS >= 3
+    PointerPpe = MiPteToPpe(PointerPte);
+#if _MI_PAGING_LEVELS == 4
+    PointerPxe = MiPteToPxe(PointerPte);
+#endif
+#endif
+    PointerPde = MiPteToPde(PointerPte);
 
     /*
      * In case this is a committed VAD, assume the whole range is committed

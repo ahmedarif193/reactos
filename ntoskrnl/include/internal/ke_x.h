@@ -918,15 +918,6 @@ KiRemoveEntryTimer(IN PKTIMER Timer)
     PKTIMER_TABLE_ENTRY TableEntry;
     PLIST_ENTRY Entry = &Timer->TimerListEntry;
 
-    /* ARM64: Validate list entry before removal to prevent crashes on corrupted lists */
-    if (Entry->Flink == NULL || Entry->Blink == NULL ||
-        (ULONG_PTR)Entry->Flink == (ULONG_PTR)-1 ||
-        (ULONG_PTR)Entry->Blink == (ULONG_PTR)-1)
-    {
-        /* List is corrupted or uninitialized, skip removal */
-        goto Cleanup;
-    }
-
     /* Remove the timer from the timer list and check if it's empty */
     Hand = Timer->Header.Hand;
     if (RemoveEntryList(Entry))
@@ -940,7 +931,6 @@ KiRemoveEntryTimer(IN PKTIMER Timer)
         }
     }
 
-Cleanup:
     /* Clear the list entries on dbg builds so we can tell the timer is gone */
 #if DBG
     Timer->TimerListEntry.Flink = NULL;
@@ -1048,21 +1038,15 @@ KxRemoveTreeTimer(IN PKTIMER Timer)
     /* Set the timer as non-inserted */
     Timer->Header.Inserted = FALSE;
 
-    /* ARM64: Validate list entry before removal to prevent crashes on corrupted lists */
-    if (Entry->Flink != NULL && Entry->Blink != NULL &&
-        (ULONG_PTR)Entry->Flink != (ULONG_PTR)-1 &&
-        (ULONG_PTR)Entry->Blink != (ULONG_PTR)-1)
+    /* Remove it from the timer list */
+    if (RemoveEntryList(Entry))
     {
-        /* Remove it from the timer list */
-        if (RemoveEntryList(Entry))
+        /* Get the entry and check if it's empty */
+        TimerEntry = &KiTimerTableListHead[Hand];
+        if (IsListEmpty(&TimerEntry->Entry))
         {
-            /* Get the entry and check if it's empty */
-            TimerEntry = &KiTimerTableListHead[Hand];
-            if (IsListEmpty(&TimerEntry->Entry))
-            {
-                /* Clear the time then */
-                TimerEntry->Time.HighPart = 0xFFFFFFFF;
-            }
+            /* Clear the time then */
+            TimerEntry->Time.HighPart = 0xFFFFFFFF;
         }
     }
 
@@ -1521,22 +1505,11 @@ KiSelectReadyThread(IN KPRIORITY Priority,
     ASSERT(Thread->Affinity & AFFINITY_MASK(Prcb->Number));
     ASSERT(Thread->NextProcessor == Prcb->Number);
 
-    /* ARM64: Validate list entry before removal to prevent crashes on corrupted lists */
-    if (Thread->WaitListEntry.Flink != NULL && Thread->WaitListEntry.Blink != NULL &&
-        (ULONG_PTR)Thread->WaitListEntry.Flink != (ULONG_PTR)-1 &&
-        (ULONG_PTR)Thread->WaitListEntry.Blink != (ULONG_PTR)-1)
+    /* Remove it from the list */
+    if (RemoveEntryList(&Thread->WaitListEntry))
     {
-        /* Remove it from the list */
-        if (RemoveEntryList(&Thread->WaitListEntry))
-        {
-            /* The list is empty now, reset the ready summary */
-            Prcb->ReadySummary ^= PRIORITY_MASK(HighPriority);
-        }
-    }
-    else
-    {
-        /* List corrupted, cannot select this thread */
-        Thread = NULL;
+        /* The list is empty now, reset the ready summary */
+        Prcb->ReadySummary ^= PRIORITY_MASK(HighPriority);
     }
 
     /* Sanity check and return the thread */

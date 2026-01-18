@@ -5222,6 +5222,30 @@ static BOOLEAN HalpArm64DmaAdapterInitialized = FALSE;
  * PADAPTER_OBJECT (used by the HAL's Io* functions).
  * Since ADAPTER_OBJECT starts with DMA_ADAPTER, we can safely cast.
  */
+static NTSTATUS NTAPI
+HalpArm64AllocateAdapterChannel(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ ULONG NumberOfMapRegisters,
+    _In_ PDRIVER_CONTROL ExecutionRoutine,
+    _In_ PVOID Context)
+{
+    /*
+     * ARM64 FIX: Use IoAllocateAdapterChannel instead of calling the execution
+     * routine directly. IoAllocateAdapterChannel properly initializes the
+     * Wait Context Block (WCB) with DeviceObject->CurrentIrp, which is needed
+     * by drivers like SCSIPORT that expect the IRP in SpiAdapterControl.
+     *
+     * Previously we called ExecutionRoutine directly with NULL for the IRP,
+     * which caused crashes when the driver tried to access Irp->MdlAddress.
+     */
+    return IoAllocateAdapterChannel((PADAPTER_OBJECT)DmaAdapter,
+                                    DeviceObject,
+                                    NumberOfMapRegisters,
+                                    ExecutionRoutine,
+                                    Context);
+}
+
 static PVOID NTAPI
 HalpArm64AllocateCommonBuffer(
     _In_ PDMA_ADAPTER DmaAdapter,
@@ -5411,7 +5435,7 @@ HalGetAdapter(
         HalpArm64DmaOperations.PutDmaAdapter = NULL; /* TODO */
         HalpArm64DmaOperations.AllocateCommonBuffer = HalpArm64AllocateCommonBuffer;
         HalpArm64DmaOperations.FreeCommonBuffer = HalpArm64FreeCommonBuffer;
-        HalpArm64DmaOperations.AllocateAdapterChannel = NULL; /* TODO */
+        HalpArm64DmaOperations.AllocateAdapterChannel = HalpArm64AllocateAdapterChannel;
         HalpArm64DmaOperations.FlushAdapterBuffers = HalpArm64FlushAdapterBuffers;
         HalpArm64DmaOperations.FreeAdapterChannel = HalpArm64FreeAdapterChannel;
         HalpArm64DmaOperations.FreeMapRegisters = HalpArm64FreeMapRegisters;
@@ -6581,12 +6605,22 @@ IoMapTransfer(
     }
 
     /* Get the physical address */
-    PhysicalAddress = MmGetPhysicalAddress(CurrentVa);
+    if (Mdl)
+    {
+        PPFN_NUMBER PfnArray = MmGetMdlPfnArray(Mdl);
+        ULONG_PTR Offset = (ULONG_PTR)CurrentVa - (ULONG_PTR)Mdl->StartVa;
+        ULONG PageIndex = (ULONG)(Offset >> PAGE_SHIFT);
+        PhysicalAddress.QuadPart = ((ULONGLONG)PfnArray[PageIndex] << PAGE_SHIFT) + (Offset & (PAGE_SIZE - 1));
+    }
+    else
+    {
+        PhysicalAddress = MmGetPhysicalAddress(CurrentVa);
+    }
 
     if (PhysicalAddress.QuadPart == 0)
     {
-        DPRINT1("[arm64][HAL] IoMapTransfer: failed to get physical address for VA %p\n",
-                CurrentVa);
+        DPRINT1("[arm64][HAL] IoMapTransfer: failed to get physical address for VA %p (Mdl=%p)\n",
+                CurrentVa, Mdl);
         *Length = 0;
         return (PHYSICAL_ADDRESS){0};
     }

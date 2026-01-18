@@ -1604,7 +1604,7 @@ NtQueryObject(IN HANDLE ObjectHandle,
     NTSTATUS Status;
     POBJECT_HEADER_QUOTA_INFO ObjectQuota;
     SECURITY_INFORMATION SecurityInformation;
-    POBJECT_TYPE ObjectType;
+    POBJECT_TYPE ObjectType = NULL;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     PAGED_CODE();
 

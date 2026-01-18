@@ -23,7 +23,7 @@ KeFindNextRightSetAffinity(IN UCHAR Number,
                            IN KAFFINITY Set)
 {
     KAFFINITY Bit;
-    ULONG Result;
+    ULONG Result = 0;
     ASSERT(Set != 0);
 
     /* Calculate the mask */

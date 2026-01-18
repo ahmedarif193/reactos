@@ -27,7 +27,7 @@ READ_REGISTER_UCHAR(
     _In_ PUCHAR Register)
 {
     UCHAR Value = *(volatile UCHAR const *)Register;
-    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dsb ld" ::: "memory");
     return Value;
 }
 
@@ -37,7 +37,7 @@ READ_REGISTER_USHORT(
     _In_ PUSHORT Register)
 {
     USHORT Value = *(volatile USHORT const *)Register;
-    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dsb ld" ::: "memory");
     return Value;
 }
 
@@ -47,7 +47,7 @@ READ_REGISTER_ULONG(
     _In_ PULONG Register)
 {
     ULONG Value = *(volatile ULONG const *)Register;
-    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dsb ld" ::: "memory");
     return Value;
 }
 
@@ -57,9 +57,8 @@ WRITE_REGISTER_UCHAR(
     _In_ PUCHAR Register,
     _In_ UCHAR Value)
 {
-    __asm__ __volatile__("dmb sy" ::: "memory");
     *(volatile UCHAR *)Register = Value;
-    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dsb st" ::: "memory");
 }
 
 VOID
@@ -68,9 +67,8 @@ WRITE_REGISTER_USHORT(
     _In_ PUSHORT Register,
     _In_ USHORT Value)
 {
-    __asm__ __volatile__("dmb sy" ::: "memory");
     *(volatile USHORT *)Register = Value;
-    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dsb st" ::: "memory");
 }
 
 VOID
@@ -79,9 +77,8 @@ WRITE_REGISTER_ULONG(
     _In_ PULONG Register,
     _In_ ULONG Value)
 {
-    __asm__ __volatile__("dmb sy" ::: "memory");
     *(volatile ULONG *)Register = Value;
-    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dsb st" ::: "memory");
 }
 
 VOID
@@ -94,7 +91,7 @@ READ_REGISTER_BUFFER_UCHAR(
     volatile const UCHAR *Src = (volatile const UCHAR *)Register;
     while (Count--)
         *Buffer++ = *Src;
-    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dsb ld" ::: "memory");
 }
 
 VOID
@@ -107,7 +104,7 @@ READ_REGISTER_BUFFER_USHORT(
     volatile const USHORT *Src = (volatile const USHORT *)Register;
     while (Count--)
         *Buffer++ = *Src;
-    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dsb ld" ::: "memory");
 }
 
 VOID
@@ -120,7 +117,7 @@ READ_REGISTER_BUFFER_ULONG(
     volatile const ULONG *Src = (volatile const ULONG *)Register;
     while (Count--)
         *Buffer++ = *Src;
-    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dsb ld" ::: "memory");
 }
 
 VOID
@@ -131,10 +128,9 @@ WRITE_REGISTER_BUFFER_UCHAR(
     _In_ ULONG Count)
 {
     volatile UCHAR *Dst = (volatile UCHAR *)Register;
-    __asm__ __volatile__("dmb sy" ::: "memory");
     while (Count--)
         *Dst = *Buffer++;
-    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dsb st" ::: "memory");
 }
 
 VOID
@@ -145,10 +141,9 @@ WRITE_REGISTER_BUFFER_USHORT(
     _In_ ULONG Count)
 {
     volatile USHORT *Dst = (volatile USHORT *)Register;
-    __asm__ __volatile__("dmb sy" ::: "memory");
     while (Count--)
         *Dst = *Buffer++;
-    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dsb st" ::: "memory");
 }
 
 VOID
@@ -159,8 +154,7 @@ WRITE_REGISTER_BUFFER_ULONG(
     _In_ ULONG Count)
 {
     volatile ULONG *Dst = (volatile ULONG *)Register;
-    __asm__ __volatile__("dmb sy" ::: "memory");
     while (Count--)
         *Dst = *Buffer++;
-    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dsb st" ::: "memory");
 }

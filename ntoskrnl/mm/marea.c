@@ -496,7 +496,7 @@ MiRosCleanupMemoryArea(
 {
     PMEMORY_AREA MemoryArea;
     PVOID BaseAddress;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     /* We must be called from MmCleanupAddressSpace and nowhere else!
        Make sure things are as expected... */

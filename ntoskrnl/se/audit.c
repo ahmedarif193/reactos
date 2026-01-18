@@ -1639,7 +1639,7 @@ NtOpenObjectAuditAlarm(
     ULONG PrivilegeCount, PrivilegeSetSize;
     volatile PPRIVILEGE_SET CapturedPrivilegeSet;
     BOOLEAN LocalGenerateOnClose;
-    PVOID CapturedHandleId;
+    PVOID CapturedHandleId = NULL;
     SECURITY_SUBJECT_CONTEXT SubjectContext;
     NTSTATUS Status;
     PAGED_CODE();

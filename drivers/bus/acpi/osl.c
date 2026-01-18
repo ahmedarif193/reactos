@@ -125,7 +125,7 @@ AcpiOsMapMemory (
     PHYSICAL_ADDRESS Address;
     PVOID Ptr;
 
-    DPRINT("AcpiOsMapMemory(phys 0x%llx  size 0x%lX)\n",
+    DPRINT1("AcpiOsMapMemory(phys 0x%llx  size 0x%lX)\n",
            (unsigned long long)phys, (unsigned long)length);
 
     /*
@@ -133,13 +133,23 @@ AcpiOsMapMemory (
      * Previous code truncated to 32-bit via (ULONG) cast, causing mapping
      * failures when UEFI firmware places ACPI tables above 4GB (e.g., at
      * 0x17CB43xxx on ARM64 QEMU virt with cortex-a57/a72 CPUs).
+     *
+     * Also use MmCached instead of MmNonCached. ACPI tables typically reside
+     * in RAM (EfiACPIReclaimMemory), which is already mapped as Inner-Shareable
+     * Write-Back (Cached) by the kernel. Creating a second non-cached mapping
+     * creates a mismatched memory attribute alias, which is UNPREDICTABLE on
+     * ARMv8 and causes hangs/crashes.
      */
     Address.QuadPart = phys;
-    Ptr = MmMapIoSpace(Address, length, MmNonCached);
+    Ptr = MmMapIoSpace(Address, length, MmCached);
     if (!Ptr)
     {
         DPRINT1("AcpiOsMapMemory: MmMapIoSpace failed for phys=0x%llx len=0x%lX\n",
                 (unsigned long long)phys, (unsigned long)length);
+    }
+    else
+    {
+        DPRINT1("AcpiOsMapMemory: Mapped to %p\n", Ptr);
     }
 
     return Ptr;
@@ -150,7 +160,7 @@ AcpiOsUnmapMemory (
     void                    *virt,
     ACPI_SIZE               length)
 {
-    DPRINT("AcpiOsMapMemory(phys 0x%p  size 0x%X)\n", virt, length);
+    DPRINT1("AcpiOsUnmapMemory(virt 0x%p  size 0x%X)\n", virt, length);
 
     ASSERT(virt);
 
@@ -724,7 +734,7 @@ AcpiOsReadPort (
     UINT32                  *Value,
     UINT32                  Width)
 {
-    DPRINT("AcpiOsReadPort %p, width %d\n",Address,Width);
+    DPRINT1("AcpiOsReadPort %p, width %d\n",Address,Width);
 
     switch (Width)
     {
@@ -754,7 +764,7 @@ AcpiOsWritePort (
     UINT32                  Value,
     UINT32                  Width)
 {
-    DPRINT("AcpiOsWritePort %p, width %d\n",Address,Width);
+    DPRINT1("AcpiOsWritePort %p, width %d\n",Address,Width);
     switch (Width)
     {
     case 8:

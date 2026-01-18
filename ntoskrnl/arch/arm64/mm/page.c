@@ -635,7 +635,6 @@ MmCreateVirtualMappingUnsafeEx(
         ULONG PxeIndex, PpeIndex, PdeIndex;
         KIRQL OldIrql;
         ULONG Color;
-        BOOLEAN CreatedPpe = FALSE, CreatedPde = FALSE, CreatedPte = FALSE;
 
         ASSERT(Address < MmSystemRangeStart);
         ASSERT(Process == PsGetCurrentProcess());
@@ -726,7 +725,6 @@ MmCreateVirtualMappingUnsafeEx(
             TempPte.u.Hard.PageFrameNumber = PpePfn;
             TempPte.u.Hard.Owner = 0;  /* No APTable restriction */
             MappedPage[PxeIndex] = TempPte;
-            CreatedPpe = TRUE;
 
             DPRINT1("Created PXE for user address %p: PxeIndex=%lu PxePfn=0x%lx PpePfn=0x%lx\n",
                     Address, PxeIndex, PxePfn, PpePfn);
@@ -786,7 +784,6 @@ MmCreateVirtualMappingUnsafeEx(
             TempPte.u.Hard.PageFrameNumber = PdePfn;
             TempPte.u.Hard.Owner = 0;  /* No APTable restriction */
             MappedPage[PpeIndex] = TempPte;
-            CreatedPde = TRUE;
 
             DPRINT1("Created PPE for user address %p: PpeIndex=%lu PdePfn=0x%lx\n",
                     Address, PpeIndex, PdePfn);
@@ -862,7 +859,6 @@ MmCreateVirtualMappingUnsafeEx(
                        "[PDE DEBUG] Written to PDE[%lu] at %p, readback = 0x%llx (NotLargePage=%d)\n",
                        PdeIndex, &MappedPage[PdeIndex], (ULONG64)MappedPage[PdeIndex].u.Long,
                        (int)MappedPage[PdeIndex].u.Hard.NotLargePage);
-            CreatedPte = TRUE;
 
             DPRINT1("Created PDE for user address %p: PdeIndex=%lu PtePfn=0x%lx\n",
                     Address, PdeIndex, PtePfn);

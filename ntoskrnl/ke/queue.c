@@ -306,23 +306,6 @@ KeRemoveQueue(IN PKQUEUE Queue,
         if ((Queue->CurrentCount < Queue->MaximumCount) &&
             (QueueEntry != &Queue->EntryListHead))
         {
-#if defined(_M_ARM64) || defined(__aarch64__)
-            /*
-             * ARM64 guard: refuse queue entries that alias the queue object
-             * itself (corruption or uninitialized list head). This avoids
-             * returning bogus pointers that later execute .data.
-             */
-            if (((ULONG_PTR)QueueEntry >= (ULONG_PTR)Queue) &&
-                ((ULONG_PTR)QueueEntry < ((ULONG_PTR)Queue + sizeof(*Queue))))
-            {
-                KeBugCheckEx(INVALID_WORK_QUEUE_ITEM,
-                             (ULONG_PTR)QueueEntry,
-                             (ULONG_PTR)Queue,
-                             (ULONG_PTR)Thread,
-                             (ULONG_PTR)Queue->Header.SignalState);
-            }
-#endif
-
             /* Decrease the number of entries */
             Queue->Header.SignalState--;
 

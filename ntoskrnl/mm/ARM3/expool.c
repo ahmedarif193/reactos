@@ -653,58 +653,14 @@ NTAPI
 ExpCheckPoolLinks(IN PLIST_ENTRY ListHead)
 {
 #if defined(_M_ARM64) || defined(__aarch64__)
-    UNREFERENCED_PARAMETER(ListHead);
-    return;
-#else
-#if defined(_M_ARM64) || defined(__aarch64__)
     static LONG CheckCount = 0;
     LONG Count = InterlockedIncrement(&CheckCount);
-    BOOLEAN IsValidPoolAddr = FALSE;
-    ULONG_PTR Addr = (ULONG_PTR)ListHead;
 
-    /*
-     * ARM64: First check if ListHead is in a valid pool region.
-     * During early boot, some code paths may pass garbage addresses.
-     * We need to verify the address is either:
-     * 1. In NonPagedPoolDescriptor ListHeads array
-     * 2. In PagedPoolDescriptor ListHeads array (if initialized)
-     * 3. In NonPagedPool memory region (0xFFFFFA81...)
-     * 4. In PagedPool memory region (0xFFFFF8A0...)
-     */
-
-    /* Check if in NonPagedPoolDescriptor */
-    if (Addr >= (ULONG_PTR)&NonPagedPoolDescriptor &&
-        Addr < (ULONG_PTR)&NonPagedPoolDescriptor + sizeof(POOL_DESCRIPTOR))
+    /* Log calls around the crash point to understand call pattern */
+    if (Count <= 10 || (Count >= 40 && Count <= 50))
     {
-        IsValidPoolAddr = TRUE;
-    }
-    /* Check if in PagedPoolDescriptor */
-    else if (ExpPagedPoolDescriptor[0] != NULL &&
-             Addr >= (ULONG_PTR)ExpPagedPoolDescriptor[0] &&
-             Addr < (ULONG_PTR)ExpPagedPoolDescriptor[0] + sizeof(POOL_DESCRIPTOR))
-    {
-        IsValidPoolAddr = TRUE;
-    }
-    /* Check if in NonPagedPool memory region (0xFFFFFA81...) */
-    else if (Addr >= 0xFFFFFA8100000000ULL && Addr < 0xFFFFFA8200000000ULL)
-    {
-        IsValidPoolAddr = TRUE;
-    }
-    /* Check if in PagedPool memory region (0xFFFFF8A0...) */
-    else if (Addr >= 0xFFFFF8A000000000ULL && Addr < 0xFFFFF8B000000000ULL)
-    {
-        IsValidPoolAddr = TRUE;
-    }
-
-    if (!IsValidPoolAddr)
-    {
-        DPRINT1("ARM64 ExpCheckPoolLinks[%d]: SKIPPING invalid addr %p (not in pool region)\n",
-                Count, ListHead);
-        DPRINT1("  NonPagedDesc=%p-%p PagedDesc=%p\n",
-                &NonPagedPoolDescriptor,
-                (PUCHAR)&NonPagedPoolDescriptor + sizeof(POOL_DESCRIPTOR),
-                ExpPagedPoolDescriptor[0]);
-        return;
+        DPRINT1("ARM64 ExpCheckPoolLinks[%d]: ListHead=%p Flink=%p Blink=%p\n",
+                Count, ListHead, ListHead->Flink, ListHead->Blink);
     }
 
     {
@@ -740,13 +696,6 @@ ExpCheckPoolLinks(IN PLIST_ENTRY ListHead)
                      (ULONG_PTR)ListHead->Flink,
                      (ULONG_PTR)ListHead->Blink);
     }
-
-    /* Log calls around the crash point to understand call pattern */
-    if (Count <= 10 || (Count >= 40 && Count <= 50))
-    {
-        DPRINT1("ARM64 ExpCheckPoolLinks[%d]: ListHead=%p Flink=%p Blink=%p\n",
-                Count, ListHead, ListHead->Flink, ListHead->Blink);
-    }
 #endif
     if ((ExpDecodePoolLink(ExpDecodePoolLink(ListHead->Flink)->Blink) != ListHead) ||
         (ExpDecodePoolLink(ExpDecodePoolLink(ListHead->Blink)->Flink) != ListHead))
@@ -774,7 +723,6 @@ ExpCheckPoolLinks(IN PLIST_ENTRY ListHead)
                      (ULONG_PTR)ExpDecodePoolLink(ExpDecodePoolLink(ListHead->Flink)->Blink),
                      (ULONG_PTR)ExpDecodePoolLink(ExpDecodePoolLink(ListHead->Blink)->Flink));
     }
-#endif
 }
 
 VOID

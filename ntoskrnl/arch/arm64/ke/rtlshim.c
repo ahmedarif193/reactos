@@ -72,6 +72,7 @@ __atomic_compare_exchange_16(
     ULONGLONG DesiredLow, DesiredHigh;
     ULONGLONG OldLow, OldHigh;
     ULONG Status;
+    ULONG Retries = 1 << 20; /* bounded retries to avoid livelock on MMIO/shared lines */
 
     UNREFERENCED_PARAMETER(Weak);
     UNREFERENCED_PARAMETER(SuccessOrder);
@@ -107,6 +108,15 @@ __atomic_compare_exchange_16(
         if (Status == 0)
         {
             return 1;
+        }
+
+        if (--Retries == 0)
+        {
+            __asm__ __volatile__("clrex" ::: "memory");
+            DPRINT1("__atomic_compare_exchange_16: retry budget exhausted for %p\n", Destination);
+            ((volatile ULONGLONG *)Expected)[0] = OldLow;
+            ((volatile ULONGLONG *)Expected)[1] = OldHigh;
+            return 0;
         }
     }
 }

@@ -673,29 +673,6 @@ KiArm64HandleSynchronousException(
 #endif
 
 #if DBG
-                /* Limited early boot data abort logging to catch alias/KSEG0 faults. */
-                {
-                    static volatile LONG AbortLogBudget = 4;
-                    if (AbortLogBudget > 0)
-                    {
-                        LONG Snap = InterlockedDecrement(&AbortLogBudget);
-                        if (Snap >= 0)
-                        {
-                            PVOID LrPointer = (PVOID)(ULONG_PTR)Context->State.Registers.X[30];
-                            PVOID Arg0 = (PVOID)(ULONG_PTR)Context->State.Registers.X[0];
-                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                       "[arm64] DA early: esr=0x%lx far=%p elr=%p lr=%p x0=%p write=%d mode=%d\n",
-                                       Esr,
-                                       (PVOID)(ULONG_PTR)Context->State.FaultAddress,
-                                       (PVOID)(ULONG_PTR)Context->State.Elr,
-                                       LrPointer,
-                                       Arg0,
-                                       WriteAccess,
-                                       PreviousMode);
-                        }
-                    }
-                }
-
                 /* BUG #15: Log ALL data aborts to low user addresses */
                 if ((ULONG64)Context->State.FaultAddress < 0x100000ULL)
                 {
@@ -790,9 +767,6 @@ KiArm64HandleSynchronousException(
                         (ULONG64)AddressArg < 0xFFFF8000BD000000ULL)
                     {
                         ULONG64 CurrentSp;
-                        PETHREAD Thread = PsGetCurrentThread();
-                        PVOID StackBase = (PVOID)Thread->Tcb.StackBase;
-                        PVOID StackLimit = (PVOID)Thread->Tcb.StackLimit;
                         __asm__ __volatile__("mov %0, sp" : "=r"(CurrentSp));
                         DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                                    "[arm64] DataAbort: VACB far=%p SP=%p Count=%ld InFunc=%ld\n",

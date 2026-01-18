@@ -260,6 +260,7 @@ Bus_StartFdo (
 
     SET_NEW_PNP_STATE(FdoData->Common, Started);
 
+    DPRINT1("Bus_StartFdo: Calling AcpiInitializeSubsystem\n");
     //
     // Initialize ACPICA robustly (let it allocate as needed).
     //
@@ -270,6 +271,7 @@ Bus_StartFdo (
         return STATUS_UNSUCCESSFUL;
     }
 
+    DPRINT1("Bus_StartFdo: Calling AcpiInitializeTables\n");
     // Use dynamic table sizing, allow ACPICA to allocate (third param TRUE)
     AcpiStatus = AcpiInitializeTables(NULL, 0, TRUE);
     if (ACPI_FAILURE(AcpiStatus))
@@ -278,6 +280,7 @@ Bus_StartFdo (
         return STATUS_UNSUCCESSFUL;
     }
 
+    DPRINT1("Bus_StartFdo: Calling AcpiLoadTables\n");
     AcpiStatus = AcpiLoadTables();
     if (ACPI_FAILURE(AcpiStatus))
     {
@@ -293,7 +296,7 @@ Bus_StartFdo (
         // Non-fatal for bring-up; continue.
     }
 
-    DPRINT("Acpi subsystem init\n");
+    DPRINT1("Bus_StartFdo: Calling acpi_init\n");
 
     AcpiStatus = acpi_init();
     if (!ACPI_SUCCESS(AcpiStatus))
@@ -303,7 +306,9 @@ Bus_StartFdo (
         return STATUS_UNSUCCESSFUL;
     }
 
+    DPRINT1("Bus_StartFdo: Calling ACPIEnumerateDevices\n");
     status = ACPIEnumerateDevices(FdoData);
+    DPRINT1("Bus_StartFdo: ACPIEnumerateDevices done (Status 0x%x)\n", status);
     return status;
 }
 

@@ -785,7 +785,7 @@ NTAPI
 KiXmmExceptionHandler(
     IN PKTRAP_FRAME TrapFrame)
 {
-    ULONG ExceptionCode;
+    ULONG ExceptionCode = STATUS_ILLEGAL_INSTRUCTION;
 
     if ((TrapFrame->MxCsr & _MM_EXCEPT_INVALID) &&
         !(TrapFrame->MxCsr & _MM_MASK_INVALID))

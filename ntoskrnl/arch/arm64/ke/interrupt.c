@@ -35,7 +35,7 @@ static KINTERRUPT KiArm64DpcInterrupt;
 static KSPIN_LOCK KiArm64DpcLock;
 static KINTERRUPT KiArm64ApcInterrupt;
 static KSPIN_LOCK KiArm64ApcLock;
-static BOOLEAN KiArm64UseVirtualTimer = TRUE;
+static BOOLEAN KiArm64UseVirtualTimer = FALSE; /* match Windows: kernel uses physical timer */
 
 BOOLEAN
 NTAPI
@@ -401,8 +401,8 @@ KeInitInterrupts(VOID)
      *   INTID 27 = Virtual Timer (CNTV)
      *   INTID 26 = Hypervisor Timer (CNTHP)
      *
-     * We use the virtual timer (27) by default as it's always available
-     * in EL1, or the physical timer (30) in secure environments.
+     * We use the physical timer (30) by default to match Windows behavior.
+     * The virtual timer (27) can be enabled in virtualization scenarios.
      *
      * The clock ISR runs at CLOCK_LEVEL (13) which is higher than device
      * interrupts but lower than IPI_LEVEL. This allows the scheduler

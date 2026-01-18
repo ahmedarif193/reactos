@@ -55,28 +55,8 @@ KiThreadStartup:
     ldr     x19, [sp, #SfStartRoutine]
     ldr     x20, [sp, #SfStartContext]
 
-    /* Pop the start frame before invoking the system routine */
+    /* Pop the start frame before invoking the system routine; SP stays aligned */
     add     sp, sp, #KSTART_FRAME_LENGTH
-
-    /*
-     * ARM64 CRITICAL: Ensure 16-byte stack alignment before calling functions.
-     *
-     * The ARM64 ABI requires SP to be 16-byte aligned at function call sites.
-     * After popping KSWITCH_FRAME (0x70) and KSTART_FRAME (0x28), the total
-     * offset is 0x98, which is NOT 16-byte aligned (0x98 mod 16 = 8).
-     *
-     * We must align SP down to the next 16-byte boundary before calling
-     * the system routine. Since we're at the top of the kernel stack,
-     * there's room to spare.
-     *
-     * Note: AMD64's KSTART_FRAME is 0x30 bytes (6 fields) which maintains
-     * 16-byte alignment. ARM64's KSTART_FRAME is only 0x28 bytes (5 fields).
-     *
-     * We use a scratch register since AND doesn't allow SP as destination.
-     */
-    mov     x9, sp
-    and     x9, x9, #~0xF    /* Align to 16-byte boundary */
-    mov     sp, x9
 
     /*
      * CRITICAL: Lower IRQL to APC_LEVEL before calling the system routine.

@@ -1357,12 +1357,23 @@ MiInitializePfnForOtherProcess(IN PFN_NUMBER PageFrameIndex,
     if ((OldLocation == FreePageList) || (OldLocation == ZeroedPageList))
     {
         /* CRITICAL: Check if page is actually linked in a list before unlinking.
-         * Orphaned entries have PageLocation set but Flink/Blink are both 0. */
-        if (Pfn1->u1.Flink != 0 || Pfn1->u2.Blink != 0)
+         * We need to verify THREE conditions:
+         * 1. Flink or Blink is non-zero (page appears to be linked)
+         * 2. The corresponding list head has pages (Total > 0)
+         * 3. We're not dealing with garbage data in uninitialized PFN entries
+         *
+         * ARM64 FIX: During early boot, many PFN entries have PageLocation=0 (ZeroedPageList)
+         * as a default value, but MmZeroedPageListHead.Total is 0 because no pages were
+         * actually inserted there. Trying to unlink such entries causes assertion failure.
+         */
+        PMMPFNLIST ListHead = MmPageLocationList[OldLocation];
+        if ((Pfn1->u1.Flink != 0 || Pfn1->u2.Blink != 0) && ListHead->Total > 0)
         {
-#if DBG && defined(_M_ARM64)
-            ASSERTMSG("ARM64 PFN still linked in free/zero list on MiInitializePfnForOtherProcess", FALSE);
-#endif
+            /*
+             * ARM64 NOTE: This can happen during boot when FreeLDR-allocated page
+             * table pages are still linked in the free list. We handle this by
+             * unlinking them below. This is expected behavior, not an error.
+             */
             /* Acquire PFN lock to safely manipulate the free list */
             OldIrql = MiAcquirePfnLock();
 

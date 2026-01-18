@@ -45,8 +45,8 @@ extern KIRQL KeArm64CurrentIrql;
 #undef KeRaiseIrql
 #undef KeGetCurrentIrql
 
-#define ARM64_MASK_IRQ()   __asm__ __volatile__("msr daifset, #0x2" ::: "memory")
-#define ARM64_UNMASK_IRQ() __asm__ __volatile__("msr daifclr, #0x2" ::: "memory")
+#define ARM64_MASK_IRQ()   __asm__ __volatile__("msr daifset, #0x3" ::: "memory") /* mask IRQ+FIQ */
+#define ARM64_UNMASK_IRQ() __asm__ __volatile__("msr daifclr, #0x3" ::: "memory") /* unmask IRQ+FIQ */
 #define ARM64_MASK_ALL()   __asm__ __volatile__("msr daifset, #0xf" ::: "memory")
 /*
  * Don't unmask SError (bit 2 in immediate = A) during IRQL transitions.
@@ -54,12 +54,6 @@ extern KIRQL KeArm64CurrentIrql;
  * Unmask only D, I, F (bits 3, 1, 0 = 0xB).
  */
 #define ARM64_UNMASK_ALL() __asm__ __volatile__("msr daifclr, #0xb" ::: "memory")
-#define ARM64_SYNC_BARRIER()                                                     \
-    do                                                                           \
-    {                                                                            \
-        __asm__ __volatile__("dsb sy" ::: "memory");                            \
-        __asm__ __volatile__("isb" ::: "memory");                               \
-    } while (0)
 
 FORCEINLINE
 KIRQL
@@ -233,25 +227,8 @@ KfLowerIrql(
     KIRQL OldIrql = KiQueryCurrentIrql();
     CHAR Buf[128];
 
-    /*
-     * ARM64 FIX: Validate NewIrql before any comparison.
-     *
-     * Valid IRQL values are 0-15 (PASSIVE_LEVEL to HIGH_LEVEL).
-     * Any value > HIGH_LEVEL is garbage, likely from:
-     * 1. Stack corruption
-     * 2. Register clobbering during interrupt handling
-     * 3. Use-after-free of a structure containing saved IRQL
-     *
-     * The value 0xC0 (192) is particularly suspicious as it matches the ARM64
-     * DAIF register value (D+A bits set), suggesting a calling convention
-     * or register usage issue.
-     *
-     * When garbage IRQL is detected, clamp to OldIrql (no-op) to prevent
-     * further damage, but log extensively for debugging.
-     */
     if (NewIrql > HIGH_LEVEL)
     {
-        static volatile LONG GarbageIrqlWarnBudget = 8;
         PVOID RetAddr = _ReturnAddress();
         PVOID FramePtr;
         ULONG64 LinkReg;
@@ -260,39 +237,9 @@ KfLowerIrql(
         __asm__ __volatile__("mov %0, x29" : "=r"(FramePtr));
         __asm__ __volatile__("mov %0, x30" : "=r"(LinkReg));
 
-        if (InterlockedDecrement(&GarbageIrqlWarnBudget) >= 0)
-        {
-            DPRINT1("[arm64] KfLowerIrql: GARBAGE NewIrql=%lu (0x%02X) > HIGH_LEVEL! OldIrql=%lu\n",
-                    (ULONG)NewIrql, (ULONG)NewIrql, (ULONG)OldIrql);
-            DPRINT1("[arm64] KfLowerIrql: Caller=%p FP=%p LR=%p\n",
-                    RetAddr, FramePtr, (PVOID)LinkReg);
-            DPRINT1("[arm64] KfLowerIrql: Thread=%p CurrentIrql(PCR)=%lu\n",
-                    KeGetCurrentThread(),
-                    (ULONG)KiQueryCurrentIrql());
-
-            /*
-             * Additional validation: Check if return address looks valid.
-             * Valid kernel addresses on ARM64 are in the FFFF8000... range.
-             * If the return address looks corrupted, bugcheck now to capture
-             * better state rather than returning to garbage code.
-             */
-            if ((ULONG_PTR)RetAddr < 0xFFFF000000000000ULL)
-            {
-                DPRINT1("[arm64] KfLowerIrql: FATAL - Caller=%p is NOT a valid kernel address!\n",
-                        RetAddr);
-                KeBugCheckEx(KERNEL_STACK_INPAGE_ERROR,
-                             (ULONG_PTR)NewIrql,
-                             (ULONG_PTR)RetAddr,
-                             (ULONG_PTR)LinkReg,
-                             0xA64BAD1);
-            }
-        }
-        /*
-         * Clamp to OldIrql effectively making this a no-op.
-         * The caller has garbage IRQL saved, but we maintain current state.
-         * This prevents cascading failures while still allowing debugging.
-         */
-        NewIrql = OldIrql;
+        DPRINT1("[arm64] KfLowerIrql: invalid NewIrql=%lu (OldIrql=%lu) Caller=%p FP=%p LR=%p\n",
+                (ULONG)NewIrql, (ULONG)OldIrql, RetAddr, FramePtr, (PVOID)LinkReg);
+        KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL, NewIrql, OldIrql, (ULONG_PTR)RetAddr, (ULONG_PTR)LinkReg);
     }
 
     if (NewIrql > OldIrql)

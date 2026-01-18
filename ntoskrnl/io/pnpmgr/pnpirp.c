@@ -81,10 +81,8 @@ IopSynchronousCall(
          * copies Irp->IoStatus to *Irp->UserIosb. However, the APC might not
          * run immediately - it's queued and will fire at a later scheduling point.
          *
-         * We MUST copy the IoStatus manually here, because:
-         * 1. We're about to return and destroy the stack-local IoStatusBlock
-         * 2. We'll NULL out Irp->UserIosb below to prevent use-after-free
-         * 3. When the APC eventually fires, it will see UserIosb==NULL and skip the copy
+         * We MUST copy the IoStatus manually here, because we're about to return
+         * and destroy the stack-local IoStatusBlock while the APC may run later.
          *
          * This ensures we capture the Information field (e.g., hardware ID string
          * pointer) that the driver set in Irp->IoStatus.Information.
@@ -92,18 +90,6 @@ IopSynchronousCall(
         IoStatusBlock = Irp->IoStatus;
         Status = IoStatusBlock.Status;
     }
-
-    /*
-     * CRITICAL: Clear UserEvent and UserIosb to prevent use-after-free!
-     * Even if IoCallDriver returned success (not STATUS_PENDING), the IRP
-     * completion might be delivered asynchronously via APC. If we return now,
-     * the stack-allocated Event and IoStatusBlock will be destroyed, but the
-     * APC might still fire later and try to access them, causing corruption.
-     * By clearing these pointers, we ensure IopCompleteRequest won't try to
-     * signal the event or write to the IOSB after we return.
-     */
-    Irp->UserEvent = NULL;
-    Irp->UserIosb = NULL;
 
     /* Remove the reference */
     ObDereferenceObject(TopDeviceObject);

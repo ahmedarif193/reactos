@@ -2743,47 +2743,30 @@ PiQueueDeviceAction(
     KeAcquireSpinLock(&IopDeviceActionLock, &OldIrql);
     InsertTailList(&IopDeviceActionRequestList, &Request->RequestListEntry);
 
-#if defined(_M_ARM64)
-    /* ARM64: Don't call worker synchronously - it can infinite loop on USB enumeration.
-     * Always queue to worker thread so boot can continue. */
-    if (IopDeviceActionInProgress || !PnPBootDriversLoaded)
-    {
-        KeReleaseSpinLock(&IopDeviceActionLock, OldIrql);
-        DPRINT1("[arm64] PiQueueDeviceAction: Worker already in progress or drivers not loaded, request queued\n");
-        return;
-    }
-    IopDeviceActionInProgress = TRUE;
-    KeClearEvent(&PiEnumerationFinished);
-    KeReleaseSpinLock(&IopDeviceActionLock, OldIrql);
-
-    ExInitializeWorkItem(&IopDeviceActionWorkItem, PipDeviceActionWorker, NULL);
-    ExQueueWorkItem(&IopDeviceActionWorkItem, DelayedWorkQueue);
-    DPRINT1("[arm64] PiQueueDeviceAction: Work item queued, returning immediately\n");
-#else
     if (Action == PiActionEnumRootDevices || Action == PiActionAddBootDevices)
     {
         ASSERT(!IopDeviceActionInProgress);
-
         IopDeviceActionInProgress = TRUE;
         KeClearEvent(&PiEnumerationFinished);
         KeReleaseSpinLock(&IopDeviceActionLock, OldIrql);
 
         PipDeviceActionWorker(NULL);
-        return;
     }
-
-    if (IopDeviceActionInProgress || !PnPBootDriversLoaded)
+    else
     {
-        KeReleaseSpinLock(&IopDeviceActionLock, OldIrql);
-        return;
-    }
-    IopDeviceActionInProgress = TRUE;
-    KeClearEvent(&PiEnumerationFinished);
-    KeReleaseSpinLock(&IopDeviceActionLock, OldIrql);
+        if (IopDeviceActionInProgress || !PnPBootDriversLoaded)
+        {
+            KeReleaseSpinLock(&IopDeviceActionLock, OldIrql);
+            return;
+        }
 
-    ExInitializeWorkItem(&IopDeviceActionWorkItem, PipDeviceActionWorker, NULL);
-    ExQueueWorkItem(&IopDeviceActionWorkItem, DelayedWorkQueue);
-#endif
+        IopDeviceActionInProgress = TRUE;
+        KeClearEvent(&PiEnumerationFinished);
+        KeReleaseSpinLock(&IopDeviceActionLock, OldIrql);
+
+        ExInitializeWorkItem(&IopDeviceActionWorkItem, PipDeviceActionWorker, NULL);
+        ExQueueWorkItem(&IopDeviceActionWorkItem, DelayedWorkQueue);
+    }
 }
 
 /**

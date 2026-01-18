@@ -564,7 +564,7 @@ ExAllocateCacheAwareRundownProtection(IN POOL_TYPE PoolType,
 {
     PEX_RUNDOWN_REF RunRef;
     PVOID PoolToFree, RunRefs;
-    ULONG RunRefSize, Count, Align;
+    ULONG RunRefSize, Count, Align = sizeof(PVOID);
     PEX_RUNDOWN_REF_CACHE_AWARE RunRefCacheAware;
 
     PAGED_CODE();
@@ -742,4 +742,3 @@ ExSizeOfRundownProtectionCacheAware(VOID)
     /* Return total size (master structure and runrefs) */
     return Size + sizeof(EX_RUNDOWN_REF_CACHE_AWARE);
 }
-

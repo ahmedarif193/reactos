@@ -17,9 +17,9 @@ NTSTATUS
 NTAPI
 CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
-    UNICODE_STRING KeyName, ValueName;
+    UNICODE_STRING KeyName;
     OBJECT_ATTRIBUTES ObjectAttributes;
-    ULONG Length, i, Disposition;
+    ULONG i, Disposition;
     NTSTATUS Status;
     HANDLE KeyHandle, SystemHandle;
     CONFIGURATION_COMPONENT_DATA ConfigData;
@@ -135,6 +135,8 @@ CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBl
             /* Set VendorIdentifier based on MIDR_EL1 implementer field */
             {
                 const WCHAR *VendorName;
+                UNICODE_STRING ValueName;
+                ULONG Length;
 
                 /*
                  * Common ARM64 implementers:
@@ -165,6 +167,7 @@ CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBl
             /* Set processor speed if available */
             if (Prcb->MHz)
             {
+                UNICODE_STRING ValueName;
                 RtlInitUnicodeString(&ValueName, L"~MHz");
                 Status = NtSetValueKey(KeyHandle,
                                        &ValueName,
@@ -179,6 +182,8 @@ CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBl
             /* Set a generic processor name string for ARM64 */
             {
                 WCHAR ProcessorName[64];
+                UNICODE_STRING ValueName;
+                ULONG Length;
                 swprintf(ProcessorName, L"ARMv8 Processor");
 
                 RtlInitUnicodeString(&ValueName, L"ProcessorNameString");

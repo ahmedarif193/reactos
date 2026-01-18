@@ -36,6 +36,10 @@ def get_build_dir():
     if "REACTOS_BUILD_DIR" in os.environ:
         return os.environ["REACTOS_BUILD_DIR"]
     
+    # Check for specific output directory first if running from root
+    if os.path.exists("output-Clang-arm64-Debug"):
+        return os.path.abspath("output-Clang-arm64-Debug")
+
     cwd = os.getcwd()
     
     # We validate strictly: must look like an output dir or contain build.ninja
@@ -266,14 +270,31 @@ def start_qemu():
     if target_arch == "arm64":
         print(f"Starting QEMU (ARM64)...")
         
+        # Determine UEFI firmware path based on OS
+        if sys.platform == "darwin":
+            # macOS (Homebrew) path
+            uefi_firmware = "/opt/homebrew/share/qemu/edk2-aarch64-code.fd"
+            bios_arg = ["-drive", f"if=pflash,format=raw,readonly=on,file={uefi_firmware}"]
+        else:
+            # Linux default path
+            uefi_firmware = "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
+            bios_arg = ["-bios", uefi_firmware]
+
+        if not os.path.exists(uefi_firmware):
+             print(f"Warning: UEFI firmware not found at {uefi_firmware}")
+
         # User defined backbone for ARM64
         qemu_cmd = [
             "qemu-system-aarch64",
             "-machine", "virt,gic-version=3",
             "-cpu", "cortex-a72",
-            "-m", "4G",
-            "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
-            "-drive", f"file={livecd_path}",
+            "-m", "4G"
+        ] + bios_arg + [
+            # Dual-attach strategy: VirtIO for UEFI boot, AHCI for ReactOS driver support
+            "-drive", f"file={livecd_path},if=virtio,format=raw,readonly=on",
+            "-device", "ahci,id=ahci",
+            "-device", "ide-cd,bus=ahci.0,drive=cdrom_ahci",
+            "-drive", f"file={livecd_path},format=raw,if=none,id=cdrom_ahci,readonly=on",
             "-device", "qemu-xhci",
             "-device", "usb-kbd",
             "-device", "usb-tablet",

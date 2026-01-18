@@ -803,45 +803,6 @@ IopCreateArcNames(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    /*
-     * ARM64 CD-ROM boot tolerance:
-     *
-     * On ARM64, UEFI firmware has already loaded all boot files into memory
-     * before transferring control to the kernel. Similar to ramdisk boots,
-     * physical CD-ROM access is not required to continue booting.
-     *
-     * Storage device enumeration happens asynchronously via PnP after this
-     * function returns. The CD-ROM device (\Device\CdRom0) will be created
-     * later when the storage stack completes initialization.
-     *
-     * Tolerate STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND,
-     * and STATUS_NO_SUCH_DEVICE errors for CD-ROM boots on ARM64, allowing
-     * the boot process to continue. The ARC name will be established later
-     * when storage drivers complete enumeration, or the system will use
-     * alternative boot paths.
-     */
-    if (!NT_SUCCESS(Status) && !RamdiskBoot)
-    {
-        BOOLEAN CdromBoot = (strstr(LoaderBlock->ArcBootDeviceName, "cdrom") != NULL);
-
-        if (CdromBoot)
-        {
-            if (Status == STATUS_OBJECT_PATH_NOT_FOUND ||
-                Status == STATUS_OBJECT_NAME_NOT_FOUND ||
-                Status == STATUS_NO_SUCH_DEVICE)
-            {
-                ARC_WARN("CreateArcNames: ARM64 CD-ROM boot tolerating device lookup failure "
-                         "(Status=0x%08lx, ArcBootDeviceName=%s); boot files already in memory\n",
-                         Status,
-                         LoaderBlock->ArcBootDeviceName);
-                Status = STATUS_SUCCESS;
-                FoundBoot = TRUE;
-            }
-        }
-    }
-#endif /* defined(_M_ARM64) || defined(__aarch64__) */
-
     /* Return success */
     ARC_TRACE("CreateArcNames done -> Status=0x%08lx FoundBoot=%d\n",
               Status,

@@ -64,6 +64,7 @@ LpcInitSystem(VOID)
         PortTypeInitializer.DeleteProcedure = LpcpDeletePort;
         PortTypeInitializer.ValidAccessMask = PORT_ALL_ACCESS;
         PortTypeInitializer.InvalidAttributes = OBJ_VALID_ATTRIBUTES & ~OBJ_CASE_INSENSITIVE;
+        PortTypeInitializer.CaseInsensitive = TRUE;
 
         ObCreateObjectType(&Name,
                            &PortTypeInitializer,
@@ -87,6 +88,7 @@ LpcInitSystem(VOID)
         WaitablePortTypeInitializer.DeleteProcedure = LpcpDeletePort;
         WaitablePortTypeInitializer.ValidAccessMask = PORT_ALL_ACCESS;
         WaitablePortTypeInitializer.InvalidAttributes = OBJ_VALID_ATTRIBUTES & ~OBJ_CASE_INSENSITIVE;
+        WaitablePortTypeInitializer.CaseInsensitive = TRUE;
 
         ObCreateObjectType(&Name,
                            &WaitablePortTypeInitializer,

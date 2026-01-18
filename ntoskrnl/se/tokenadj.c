@@ -269,6 +269,8 @@ SepAdjustGroups(
     /* Begin looping all the groups in the token */
     for (GroupsInToken = 0; GroupsInToken < Token->UserAndGroupCount; GroupsInToken++)
     {
+        NewAttributes = Token->UserAndGroups[GroupsInToken].Attributes;
+
         /* Does the caller want to reset groups to default states? */
         if (ResetToDefaultStates)
         {

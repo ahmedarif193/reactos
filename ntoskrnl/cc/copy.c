@@ -132,7 +132,7 @@ CcPerformReadAhead(
 {
     NTSTATUS Status;
     LONGLONG CurrentOffset;
-    KIRQL OldIrql;
+    KIRQL OldIrql = PASSIVE_LEVEL;
     PROS_SHARED_CACHE_MAP SharedCacheMap;
     PROS_VACB Vacb;
     ULONG PartialLength;
@@ -350,7 +350,7 @@ CcCanIWrite (
     IN BOOLEAN Wait,
     IN BOOLEAN Retrying)
 {
-    KIRQL OldIrql;
+    KIRQL OldIrql = PASSIVE_LEVEL;
     KEVENT WaitEvent;
     ULONG Length, Pages;
     BOOLEAN PerFileDefer;

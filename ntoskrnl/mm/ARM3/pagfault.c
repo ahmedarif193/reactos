@@ -1914,7 +1914,7 @@ MiDispatchFault(IN ULONG FaultCode,
     if (TempPte.u.Soft.Transition)
     {
         PKEVENT* InPageBlock = NULL;
-        PKEVENT PreviousPageEvent;
+        PKEVENT PreviousPageEvent = NULL;
         KEVENT CurrentPageEvent;
 
         /* Lock the PFN database */
@@ -2302,12 +2302,12 @@ MmArmAccessFault(IN ULONG FaultCode,
                 );
             }
 
-            DPRINT1("ARM64: Created self-map alias at high IRQL for %p\n", Address);
+            DPRINT("ARM64: Created self-map alias at high IRQL for %p\n", Address);
         }
 #endif
 
         /* Nothing is actually wrong */
-        DPRINT1("Fault at IRQL %u is ok (%p)\n", OldIrql, Address);
+        DPRINT("Fault at IRQL %u is ok (%p)\n", OldIrql, Address);
         return STATUS_SUCCESS;
     }
 

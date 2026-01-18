@@ -265,18 +265,19 @@ MmInitGlobalKernelPageDirectory(VOID)
      * - We only mirror the first PDE page that covers MmSystemRangeStart.
      *   This keeps behavior similar to ARM32 and avoids overcommitting a
      *   large global array that is not referenced on ARM64 paths.
-     * - PDE_BASE points to the linear self-map of the page directory level;
-     *   treating it as an array allows us to read current kernel PDE entries
-     *   without walking the hierarchy. Each entry is 8 bytes and there are
-     *   PDE_PER_PAGE (512) entries per PDE page on ARM64.
+     * - PDE_BASE points to the linear self-map of the page directory level.
+     *   However, we must access the specific PDE page covering kernel space,
+     *   not the base of the region (which corresponds to user space and may
+     *   not be valid/mapped).
      * - We skip the PTE_BASE and HYPER_SPACE slots: those are self-map and
      *   hyperspace PDEs managed elsewhere (and can have special semantics).
      * - We never overwrite a non-zero MmGlobalKernelPageDirectory entry: if
      *   something pre-seeded a slot, we keep that, mirroring i386/ARM logic.
      * - Concurrency: runs during early MmInitSystem; single-threaded.
      */
-    /* Current kernel PDE page (self-mapped view) */
-    PULONG_PTR CurrentPde = (PULONG_PTR)PDE_BASE;
+#if 0
+    /* Current kernel PDE page (self-mapped view) corresponding to start of kernel space */
+    PULONG_PTR CurrentPde = (PULONG_PTR)PAGE_ALIGN(MiAddressToPde(MmSystemRangeStart));
     /* First index of the kernel range within the current PDE page */
     const ULONG start = MiGetPdeOffset(MmSystemRangeStart);
     /* Indices of special regions to be skipped */
@@ -295,6 +296,7 @@ MmInitGlobalKernelPageDirectory(VOID)
             MmGlobalKernelPageDirectory[i] = CurrentPde[i];
         }
     }
+#endif
 }
 
 PVOID

@@ -83,7 +83,7 @@ KiFindIdealProcessor(
 {
     PKPRCB OriginalIdealPrcb;
     KAFFINITY NodeMask;
-    ULONG Processor;
+    ULONG Processor = 0;
 
     /* Check if we can use the original ideal processor */
     if (ProcessorSet & AFFINITY_MASK(OriginalIdealProcessor))
@@ -117,7 +117,7 @@ KiSelectNextProcessor(
     _In_ PKTHREAD Thread)
 {
     KAFFINITY PreferredSet, IdleSet;
-    ULONG Processor;
+    ULONG Processor = 0;
 
     /* Start with the affinity */
     PreferredSet = Thread->Affinity;
@@ -487,17 +487,6 @@ KiSwapThread(IN PKTHREAD CurrentThread,
 
     /* Save the wait IRQL */
     WaitIrql = CurrentThread->WaitIrql;
-    /* Defensive: clamp corrupted wait IRQLs to avoid restoring garbage. */
-    if (WaitIrql > HIGH_LEVEL)
-    {
-#if DBG
-        DPRINT1("[arm64] KiSwapThread: invalid WaitIrql=%u (Thread=%p), clamping to DISPATCH_LEVEL\n",
-                WaitIrql,
-                CurrentThread);
-#endif
-        WaitIrql = DISPATCH_LEVEL;
-        CurrentThread->WaitIrql = WaitIrql;
-    }
 
     /* Swap contexts */
     ApcState = KiSwapContext(WaitIrql, CurrentThread);
@@ -506,17 +495,6 @@ KiSwapThread(IN PKTHREAD CurrentThread,
     CurrentThread = KeGetCurrentThread();
     ASSERT(CurrentThread != NULL);
     WaitIrql = CurrentThread->WaitIrql;
-
-    if (WaitIrql > HIGH_LEVEL)
-    {
-#if DBG
-        DPRINT1("[arm64] KiSwapThread: invalid resume WaitIrql=%u (Thread=%p), clamping to DISPATCH_LEVEL\n",
-                WaitIrql,
-                CurrentThread);
-#endif
-        WaitIrql = DISPATCH_LEVEL;
-        CurrentThread->WaitIrql = WaitIrql;
-    }
 
     /* Get the wait status */
     WaitStatus = CurrentThread->WaitStatus;

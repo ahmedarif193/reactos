@@ -1027,6 +1027,7 @@ FsRtlNotifyFilterReportChange(IN PNOTIFY_SYNC NotifySync,
     ParentName.Length = 0;
     ParentName.MaximumLength = 0;
     ParentName.Buffer = NULL;
+    LastPartOffset = 0;
     IsStream = FALSE;
 
     PAGED_CODE();
@@ -1673,4 +1674,3 @@ FsRtlNotifyUninitializeSync(IN PNOTIFY_SYNC *NotifySync)
         *NotifySync = NULL;
     }
 }
-

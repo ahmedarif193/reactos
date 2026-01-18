@@ -49,48 +49,6 @@ KEVENT ExpThreadSetManagerShutdownEvent;
 PETHREAD ExpWorkerThreadBalanceManagerPtr;
 PETHREAD ExpLastWorkerThread;
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-volatile PETHREAD ExpArm64LastWorkerThread;
-volatile PEX_WORK_QUEUE ExpArm64LastWorkerQueue;
-volatile ULONG ExpArm64LastWorkerQueueType;
-volatile PWORK_QUEUE_ITEM ExpArm64LastWorkItem;
-volatile PVOID ExpArm64LastWorkerRoutine;
-volatile PVOID ExpArm64LastWorkerParameter;
-volatile BOOLEAN ExpArm64WorkerRoutineActive;
-#endif
-
-#if defined(_M_ARM64) || defined(__aarch64__)
-static
-BOOLEAN
-ExpIsExecutableRoutine(_In_ PVOID Routine)
-{
-    PLDR_DATA_TABLE_ENTRY LdrEntry = NULL;
-    BOOLEAN InKernel = FALSE;
-    PVOID ImageBase;
-    PIMAGE_NT_HEADERS NtHeaders;
-    PIMAGE_SECTION_HEADER Section;
-    ULONG_PTR Rva;
-
-    if (Routine == NULL)
-        return FALSE;
-
-    ImageBase = KiPcToFileHeader(Routine, &LdrEntry, FALSE, &InKernel);
-    if (ImageBase == NULL)
-        return FALSE;
-
-    NtHeaders = RtlImageNtHeader(ImageBase);
-    if (NtHeaders == NULL)
-        return FALSE;
-
-    Rva = (ULONG_PTR)Routine - (ULONG_PTR)ImageBase;
-    Section = RtlImageRvaToSection(NtHeaders, ImageBase, (ULONG)Rva);
-    if (Section == NULL)
-        return FALSE;
-
-    return (Section->Characteristics & IMAGE_SCN_MEM_EXECUTE) != 0;
-}
-#endif
-
 /* PRIVATE FUNCTIONS *********************************************************/
 
 /*++
@@ -196,36 +154,8 @@ ProcessLoop:
         /* Make sure nobody is trying to play smart with us */
         ASSERT((ULONG_PTR)WorkItem->WorkerRoutine > MmUserProbeAddress);
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-        ExpArm64LastWorkerThread = Thread;
-        ExpArm64LastWorkerQueue = WorkQueue;
-        ExpArm64LastWorkerQueueType = (ULONG)WorkQueueType;
-        ExpArm64LastWorkItem = WorkItem;
-        ExpArm64LastWorkerRoutine = (PVOID)WorkItem->WorkerRoutine;
-        ExpArm64LastWorkerParameter = WorkItem->Parameter;
-        ExpArm64WorkerRoutineActive = TRUE;
-
-        if (!ExpIsExecutableRoutine(WorkItem->WorkerRoutine))
-        {
-            DPRINT1("Invalid worker routine %p (WorkItem=%p Queue=%p Param=%p)\n",
-                    WorkItem->WorkerRoutine,
-                    WorkItem,
-                    WorkQueue,
-                    WorkItem->Parameter);
-            KeBugCheckEx(INVALID_WORK_QUEUE_ITEM,
-                         (ULONG_PTR)WorkItem,
-                         (ULONG_PTR)WorkQueue,
-                         (ULONG_PTR)WorkItem->Parameter,
-                         (ULONG_PTR)WorkItem->WorkerRoutine);
-        }
-#endif
-
         /* Call the Worker Routine */
         WorkItem->WorkerRoutine(WorkItem->Parameter);
-
-#if defined(_M_ARM64) || defined(__aarch64__)
-        ExpArm64WorkerRoutineActive = FALSE;
-#endif
 
         /* Make sure APCs are not disabled */
         if (Thread->Tcb.CombinedApcDisable != 0)

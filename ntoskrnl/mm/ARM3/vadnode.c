@@ -159,7 +159,7 @@ MiCheckForConflictingNode(IN ULONG_PTR StartVpn,
                           IN PMM_AVL_TABLE Table,
                           OUT PMMADDRESS_NODE *NodeOrParent)
 {
-    PMMADDRESS_NODE ParentNode, CurrentNode;
+    PMMADDRESS_NODE ParentNode = NULL, CurrentNode;
 
     ASSERT_LOCKED_FOR_READ(Table);
 
@@ -876,4 +876,3 @@ MiCheckSecuredVad(IN PMMVAD Vad,
 }
 
 /* EOF */
-
