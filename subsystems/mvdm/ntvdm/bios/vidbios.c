@@ -2645,7 +2645,7 @@ static VOID VidBiosDrawGlyph(WORD CharData, BOOLEAN UseAttr, BYTE Page, BYTE Row
             PUCHAR Font = (PUCHAR)FAR_POINTER(((PULONG)BaseAddress)[0x43]);
             PUCHAR Glyph = &Font[LOBYTE(CharData) * Bda->CharacterHeight];
             BOOLEAN Xor = (HIBYTE(CharData) & 0x80) ? TRUE : FALSE;
-            BYTE OldRotate;
+            BYTE OldRotate = 0;
             BYTE DoubledBits[] =
             {
                 0x00, 0x03, 0x0C, 0x0F, 0x30, 0x33, 0x3C, 0x3F,
@@ -2702,7 +2702,7 @@ static VOID VidBiosDrawGlyph(WORD CharData, BOOLEAN UseAttr, BYTE Page, BYTE Row
             PUCHAR Font = (PUCHAR)FAR_POINTER(((PULONG)BaseAddress)[0x43]);
             PUCHAR Glyph = &Font[LOBYTE(CharData) * Bda->CharacterHeight];
             BOOLEAN Xor = (HIBYTE(CharData) & 0x80) ? TRUE : FALSE;
-            BYTE OldRotate;
+            BYTE OldRotate = 0;
 
             if (Xor)
             {
@@ -2755,7 +2755,7 @@ static VOID VidBiosDrawGlyph(WORD CharData, BOOLEAN UseAttr, BYTE Page, BYTE Row
             PUCHAR Font = (PUCHAR)FAR_POINTER(((PULONG)BaseAddress)[0x43]);
             PUCHAR Glyph = &Font[LOBYTE(CharData) * Bda->CharacterHeight];
             BOOLEAN Xor = (HIBYTE(CharData) & 0x80) ? TRUE : FALSE;
-            BYTE OldPlaneWrite, OldReset, OldEnableReset, OldRotate, OldMode;
+            BYTE OldPlaneWrite, OldReset, OldEnableReset, OldRotate = 0, OldMode;
 
             /* Write to all planes */
             IOWriteB(VGA_SEQ_INDEX, VGA_SEQ_MASK_REG);

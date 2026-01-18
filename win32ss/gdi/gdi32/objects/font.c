@@ -1660,7 +1660,7 @@ CreateFontIndirectExA(const ENUMLOGFONTEXDVA *elfexd)
 {
     if (elfexd)
     {
-        ENUMLOGFONTEXDVW Logfont;
+        ENUMLOGFONTEXDVW Logfont = {0};
 
         EnumLogFontExW2A( (LPENUMLOGFONTEXA) elfexd,
                           &Logfont.elfEnumLogfontEx );

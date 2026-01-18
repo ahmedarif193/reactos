@@ -583,7 +583,7 @@ CheckForCurrentHostname(CONST CHAR * Name, PFIXED_INFO network_info)
 {
     PCHAR TempName;
     DWORD AdapterAddressesSize, Status;
-    IP4_ADDRESS ret = 0, Address;
+    IP4_ADDRESS ret = 0, Address = 0;
     PIP_ADAPTER_ADDRESSES Addresses = NULL, pip;
     BOOL Found = FALSE;
 

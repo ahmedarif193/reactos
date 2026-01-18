@@ -283,15 +283,15 @@ void ReadClipboardFile(LPCWSTR lpFileName)
     DWORD SizeOfFileHeader, SizeOfFormatHeader;
 
     WORD wFileIdentifier;
-    WORD wFormatCount;
-    DWORD dwFormatID;
-    DWORD dwLenData;
-    DWORD dwOffData;
-    PVOID szName;
+    WORD wFormatCount = 0;
+    DWORD dwFormatID = 0;
+    DWORD dwLenData = 0;
+    DWORD dwOffData = 0;
+    PVOID szName = NULL;
 
     HANDLE hFile;
     DWORD dwBytesRead;
-    BOOL bResult;
+    BOOL bResult = FALSE;
     int i;
 
     /* Open the file for read access */
@@ -390,6 +390,8 @@ void ReadClipboardFile(LPCWSTR lpFileName)
                 szName     = ((NTCLIPFORMATHEADER*)pClipFormatArray)->szName;
                 break;
         }
+
+        bResult = TRUE;
 
         switch (dwFormatID)
         {

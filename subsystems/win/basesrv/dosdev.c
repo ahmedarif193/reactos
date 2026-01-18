@@ -512,7 +512,7 @@ CSR_API(BaseSrvDefineDosDevice)
     WCHAR CurrentChar;
     PWSTR OrigPtr;
     PWSTR InterPtr;
-    BOOLEAN RemoveFound;
+    BOOLEAN RemoveFound = FALSE;
 
     if (!CsrValidateMessageBuffer(ApiMessage,
                                   (PVOID*)&DefineDosDeviceRequest->DeviceName.Buffer,

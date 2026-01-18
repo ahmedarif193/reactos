@@ -31,7 +31,7 @@ BOOLEAN DIB_XXBPP_StretchBlt(SURFOBJ *DestSurf, SURFOBJ *SourceSurf, SURFOBJ *Ma
   LONG SrcHeight;
   LONG SrcWidth;
   LONG MaskCy;
-  LONG SourceCy;
+  LONG SourceCy = 0;
 
   ULONG Color;
   ULONG Dest, Source = 0, Pattern = 0;

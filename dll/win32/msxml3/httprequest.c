@@ -553,7 +553,7 @@ static void add_response_header(httprequest *This, const WCHAR *data, int len)
 {
     struct httpheader *entry;
     const WCHAR *ptr = data;
-    BSTR header, value;
+    BSTR header = NULL, value = NULL;
 
     while (*ptr)
     {

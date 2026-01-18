@@ -749,7 +749,7 @@ HRESULT WINAPI CRecycleBin::CompareIDs(LPARAM lParam, PCUIDLIST_RELATIVE pidl1, 
     LPCWSTR pName1, pName2;
     FILETIME ft1, ft2;
     SHFILEINFOW shfi1, shfi2;
-    int result;
+    int result = 0;
     HRESULT hr = CFSFolder::CompareSortFoldersFirst(pidl1, pidl2);
     if (SUCCEEDED(hr))
         return hr;

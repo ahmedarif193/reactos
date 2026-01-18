@@ -233,7 +233,7 @@ CDrvDefExt::PaintStaticControls(HWND hwndDlg, LPDRAWITEMSTRUCT pDrawItem)
         {
             double cos_val = (x - xCenter) * 2.0f / cx;
             INT y = yCenter + (INT)(sin(acos(cos_val)) * cy / 2) - 1;
-            HPEN hCenterPen;
+            HPEN hCenterPen = hOldPen;
 
             if (m_FreeSpacePerc < 50 && x == xRadial)
                 SelectObject(pDrawItem->hDC, hDarkBluePen);

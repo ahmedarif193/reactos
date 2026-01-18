@@ -634,7 +634,7 @@ DWORD WINAPI SdbQueryDataExTagID(PDB pdb, TAGID tiExe, LPCWSTR lpszDataName, LPD
 {
     TAGID tiData, tiValueType, tiValue;
     DWORD dwDataType, dwSizeRequired, dwInputSize;
-    LPCWSTR lpStringData;
+    LPCWSTR lpStringData = NULL;
     /* Not supported yet */
     if (!lpszDataName)
         return ERROR_INVALID_PARAMETER;

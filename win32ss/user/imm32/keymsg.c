@@ -378,10 +378,10 @@ static LRESULT
 Imm32ProcessRequest(HIMC hIMC, PWND pWnd, DWORD dwCommand, LPVOID pData, BOOL bAnsiAPI)
 {
     HWND hWnd;
-    DWORD ret = 0, dwCharPos, cchCompStr, dwSize;
+    DWORD ret = 0, dwCharPos = 0, cchCompStr, dwSize;
     LPVOID pCS, pTempData = pData;
     LPRECONVERTSTRING pRS;
-    LPIMECHARPOSITION pICP;
+    LPIMECHARPOSITION pICP = NULL;
     PCLIENTIMC pClientImc;
     UINT uCodePage = CP_ACP;
     BOOL bAnsiWnd = !!(pWnd->state & WNDS_ANSIWINDOWPROC);
@@ -487,11 +487,11 @@ Imm32ProcessRequest(HIMC hIMC, PWND pWnd, DWORD dwCommand, LPVOID pData, BOOL bA
             break;
 
         case IMR_QUERYCHARPOSITION:
-            if (bAnsiAPI == bAnsiWnd)
-                goto DoIt; /* No conversion needed */
-
             pICP = pData;
             dwCharPos = pICP->dwCharPos;
+
+            if (bAnsiAPI == bAnsiWnd)
+                goto DoIt; /* No conversion needed */
 
             if (bAnsiAPI)
             {

@@ -627,8 +627,8 @@ CON_API(SrvGetConsoleAliases,
     }
 
     {
-        LPSTR  TargetBufferA;
-        LPWSTR TargetBufferW;
+        LPSTR  TargetBufferA = NULL;
+        LPWSTR TargetBufferW = NULL;
         UINT TargetBufferLength = GetAllAliasesRequest->AliasesBufferLength;
 
         PALIAS_ENTRY CurEntry = Header->Data;
@@ -751,8 +751,8 @@ CON_API(SrvGetConsoleAliasExes,
     {
         PALIAS_HEADER RootHeader = Console->Aliases;
 
-        LPSTR  TargetBufferA;
-        LPWSTR TargetBufferW;
+        LPSTR  TargetBufferA = NULL;
+        LPWSTR TargetBufferW = NULL;
         UINT TargetBufferSize = GetAliasesExesRequest->Length;
 
         UINT Offset = 0;

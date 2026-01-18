@@ -491,7 +491,7 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
 
       case GL_UNSIGNED_BYTE:
          for (pixel=0; pixel<numPixels; pixel++) {
-            GLubyte red, green, blue, alpha;
+            GLubyte red = 0, green = 0, blue = 0, alpha = 255;
             switch (image->Format) {
                case GL_COLOR_INDEX:
                   if (decode_internal_format(internalFormat)==GL_COLOR_INDEX) {
@@ -646,7 +646,7 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
 
       case GL_FLOAT:
          for (pixel=0; pixel<numPixels; pixel++) {
-            GLfloat red, green, blue, alpha;
+            GLfloat red = 0.0F, green = 0.0F, blue = 0.0F, alpha = 0.0F;
             switch (texImage->Format) {
                case GL_COLOR_INDEX:
                   if (decode_internal_format(internalFormat)==GL_COLOR_INDEX) {
@@ -1887,4 +1887,3 @@ void gl_CopyTexSubImage2D( GLcontext *ctx,
       gl_error( ctx, GL_INVALID_OPERATION, "glCopyTexSubImage2D" );
    }
 }
-

@@ -326,7 +326,7 @@ static RPC_STATUS rpcrt4_conn_create_pipe(RpcConnection *conn)
 #ifdef __REACTOS__
     DWORD ErrCode;
     SECURITY_ATTRIBUTES SecurityAttributes;
-    PSECURITY_DESCRIPTOR PipeSecDesc;
+    PSECURITY_DESCRIPTOR PipeSecDesc = NULL;
 #endif
 
     TRACE("listening on %s\n", connection->listen_pipe);

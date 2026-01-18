@@ -915,6 +915,8 @@ GLuint gl_userclip_polygon( GLcontext* ctx, GLuint n, GLuint vlist[] )
    inlist = vlist;
    outlist = vlist2;
 
+   outcount = incount;
+
    for (p=0;p<MAX_CLIP_PLANES;p++) {
       if (ctx->Transform.ClipEnabled[p]) {
 	 register float a = ctx->Transform.ClipEquation[p][0];

@@ -280,6 +280,7 @@ ParseLines(const FILECOMPARE *pFC, HANDLE *phMapping,
     }
 
     ich = 0;
+    ichNext = 0;
     cch = cbView / sizeof(TCHAR);
     fLast = (pib->QuadPart + cbView >= pcb->QuadPart);
     while (ich < cch &&

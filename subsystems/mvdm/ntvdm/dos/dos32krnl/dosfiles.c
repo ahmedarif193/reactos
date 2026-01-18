@@ -186,7 +186,7 @@ WORD DosCreateFileEx(LPWORD Handle,
                      WORD Attributes)
 {
     WORD LastError;
-    HANDLE FileHandle;
+    HANDLE FileHandle = INVALID_HANDLE_VALUE;
     PDOS_DEVICE_NODE Node;
     WORD DosHandle;
     ACCESS_MASK AccessMode = 0;
@@ -399,7 +399,7 @@ WORD DosCreateFileEx(LPWORD Handle,
     if (DescriptorId == 0xFF)
     {
         /* Close the file and return the error code */
-        CloseHandle(FileHandle);
+        if (FileHandle != INVALID_HANDLE_VALUE) CloseHandle(FileHandle);
         return ERROR_TOO_MANY_OPEN_FILES;
     }
 
@@ -430,7 +430,7 @@ WORD DosCreateFileEx(LPWORD Handle,
     if (DosHandle == INVALID_DOS_HANDLE)
     {
         /* Close the file and return the error code */
-        CloseHandle(FileHandle);
+        if (FileHandle != INVALID_HANDLE_VALUE) CloseHandle(FileHandle);
         return ERROR_TOO_MANY_OPEN_FILES;
     }
 
@@ -444,7 +444,7 @@ WORD DosCreateFile(LPWORD Handle,
                    DWORD CreationDisposition,
                    WORD Attributes)
 {
-    HANDLE FileHandle;
+    HANDLE FileHandle = INVALID_HANDLE_VALUE;
     PDOS_DEVICE_NODE Node;
     WORD DosHandle;
     BYTE DescriptorId;
@@ -479,7 +479,7 @@ WORD DosCreateFile(LPWORD Handle,
     if (DescriptorId == 0xFF)
     {
         /* Close the file and return the error code */
-        CloseHandle(FileHandle);
+        if (FileHandle != INVALID_HANDLE_VALUE) CloseHandle(FileHandle);
         return ERROR_TOO_MANY_OPEN_FILES;
     }
 
@@ -509,7 +509,7 @@ WORD DosCreateFile(LPWORD Handle,
     if (DosHandle == INVALID_DOS_HANDLE)
     {
         /* Close the file and return the error code */
-        CloseHandle(FileHandle);
+        if (FileHandle != INVALID_HANDLE_VALUE) CloseHandle(FileHandle);
         return ERROR_TOO_MANY_OPEN_FILES;
     }
 
@@ -522,7 +522,7 @@ WORD DosOpenFile(LPWORD Handle,
                  LPCSTR FilePath,
                  BYTE AccessShareModes)
 {
-    HANDLE FileHandle = NULL;
+    HANDLE FileHandle = INVALID_HANDLE_VALUE;
     PDOS_DEVICE_NODE Node;
     WORD DosHandle;
     BYTE DescriptorId;
@@ -631,7 +631,7 @@ WORD DosOpenFile(LPWORD Handle,
     if (DescriptorId == 0xFF)
     {
         /* Close the file and return the error code */
-        CloseHandle(FileHandle);
+        if (FileHandle != INVALID_HANDLE_VALUE) CloseHandle(FileHandle);
         return ERROR_TOO_MANY_OPEN_FILES;
     }
 
@@ -662,7 +662,7 @@ WORD DosOpenFile(LPWORD Handle,
     if (DosHandle == INVALID_DOS_HANDLE)
     {
         /* Close the file and return the error code */
-        CloseHandle(FileHandle);
+        if (FileHandle != INVALID_HANDLE_VALUE) CloseHandle(FileHandle);
         return ERROR_TOO_MANY_OPEN_FILES;
     }
 

@@ -5288,7 +5288,7 @@ ftGdiGetTextCharsetInfo(
     FONTSIGNATURE fs;
     TT_OS2 *pOS2;
     FT_Face Face;
-    CHARSETINFO csi;
+    CHARSETINFO csi = {0};
     DWORD cp, fs0;
     USHORT usACP, usOEM;
 
@@ -6960,7 +6960,7 @@ IntExtTextOutW(
     INT glyph_index, i;
     FT_Face face;
     FT_BitmapGlyph realglyph;
-    LONGLONG X64, Y64, RealXStart64, RealYStart64, DeltaX64, DeltaY64;
+    LONGLONG X64, Y64, RealXStart64, RealYStart64, DeltaX64 = 0, DeltaY64 = 0;
     ULONG previous;
     RECTL DestRect, MaskRect;
     HBITMAP hbmGlyph;

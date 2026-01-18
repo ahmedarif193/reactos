@@ -560,7 +560,7 @@ static VOID WINAPI XmsBopProcedure(LPWORD Stack)
         /* Allocate Extended Memory Block */
         case 0x09:
         {
-            WORD Handle;
+            WORD Handle = 0;
             UCHAR Result = XmsAlloc(getDX(), &Handle);
 
             if (Result == XMS_STATUS_SUCCESS)

@@ -200,7 +200,7 @@ void WhoamiPrintTable(WhoamiTable *pTable)
 {
     UINT i, j;
     UINT CurRow, CurCol;
-    UINT *ColLength;
+    UINT *ColLength = NULL;
 
 
     if (!pTable)
@@ -293,7 +293,7 @@ void WhoamiPrintTable(WhoamiTable *pTable)
                     continue;
 
                 /* if the user especified /nh then skip the column labels */
-                if (NoHeader && i == 0)
+                if (NoHeader && CurRow == 0)
                     continue;
 
                 for (CurCol = 0; CurCol < pTable->Cols; CurCol++)

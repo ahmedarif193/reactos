@@ -4661,7 +4661,7 @@ PopupMenuWndProc(
    LPARAM lParam,
    LRESULT *lResult)
 {
-  PPOPUPMENU pPopupMenu;
+  PPOPUPMENU pPopupMenu = NULL;
 
   *lResult = 0;
 

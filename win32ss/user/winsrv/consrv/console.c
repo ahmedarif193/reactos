@@ -535,7 +535,7 @@ ConSrvInitConsole(OUT PHANDLE NewConsoleHandle,
                   IN PCSR_PROCESS ConsoleLeaderProcess)
 {
     NTSTATUS Status;
-    HANDLE ConsoleHandle;
+    HANDLE ConsoleHandle = NULL;
     PCONSRV_CONSOLE Console;
 
     BYTE ConsoleInfoBuffer[sizeof(CONSOLE_STATE_INFO) + MAX_PATH * sizeof(WCHAR)]; // CONSRV console information
@@ -807,6 +807,14 @@ ConSrvInitConsole(OUT PHANDLE NewConsoleHandle,
     }
 #endif
     Status = InsertConsole(&ConsoleHandle, Console);
+    if (!NT_SUCCESS(Status))
+    {
+        NtClose(Console->InitEvents[INIT_FAILURE]);
+        NtClose(Console->InitEvents[INIT_SUCCESS]);
+        ConDrvDeleteConsole((PCONSOLE)Console);
+        ConSrvDeinitTerminal(&Terminal);
+        return Status;
+    }
 
     // FIXME! We do not support at all asynchronous console creation!
     NtSetEvent(Console->InitEvents[INIT_SUCCESS], NULL);

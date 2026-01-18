@@ -286,3 +286,20 @@ _tWinMain(IN HINSTANCE hInstance,
 
     return StartWithDesktop(hInstance);
 }
+
+extern "C" int
+wmain(int argc, wchar_t** argv, wchar_t** envp)
+{
+    STARTUPINFOW StartupInfo = { sizeof(StartupInfo) };
+    INT ShowCmd;
+
+    UNREFERENCED_PARAMETER(argc);
+    UNREFERENCED_PARAMETER(argv);
+    UNREFERENCED_PARAMETER(envp);
+
+    GetStartupInfoW(&StartupInfo);
+    ShowCmd = (StartupInfo.dwFlags & STARTF_USESHOWWINDOW) ?
+              StartupInfo.wShowWindow : SW_SHOWNORMAL;
+
+    return _tWinMain(GetModuleHandleW(NULL), NULL, GetCommandLineW(), ShowCmd);
+}

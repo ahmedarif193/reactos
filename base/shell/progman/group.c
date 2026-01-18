@@ -265,7 +265,7 @@ GROUP_GroupWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
                 case LVN_BEGINDRAG:
                 {
-                    POINT ptMin;
+                    POINT ptMin = {0, 0};
 
                     BOOL bFirst = TRUE;
                     for (iItem = SendMessageA(group->hListView, LVM_GETNEXTITEM, -1, LVNI_SELECTED);

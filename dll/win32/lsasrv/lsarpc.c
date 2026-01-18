@@ -2588,7 +2588,7 @@ LsarEnumerateAccountsWithUserRight(
     PPRIVILEGE_SET PrivilegeSet;
     PLSAPR_ACCOUNT_INFORMATION EnumBuffer = NULL, ReturnBuffer;
     ULONG SubKeyCount = 0;
-    ULONG EnumIndex, EnumCount;
+    ULONG EnumIndex = 0, EnumCount = 0;
     ULONG Size, i;
     BOOL Found;
     NTSTATUS Status;

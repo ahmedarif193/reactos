@@ -719,8 +719,8 @@ CDefaultContextMenu::AddStaticContextMenusToMenu(
     UINT ntver = RosGetProcessEffectiveVersion();
     MENUITEMINFOW mii = { sizeof(mii) };
     WCHAR wszDispVerb[80]; // The limit on XP. If the friendly string is longer, it falls back to the verb key.
-    UINT fState, idVerbRes;
-    UINT cIds = 0, indexFirst = *pIndexMenu, indexDefault;
+    UINT fState, idVerbRes = 0;
+    UINT cIds = 0, indexFirst = *pIndexMenu, indexDefault = *pIndexMenu;
     int iDefVerbIndex = -1;
 
     mii.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE | MIIM_DATA;

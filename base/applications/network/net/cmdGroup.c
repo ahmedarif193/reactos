@@ -169,7 +169,7 @@ cmdGroup(
     GROUP_INFO_0 Info0;
     GROUP_INFO_1 Info1;
     GROUP_INFO_1002 Info1002;
-    NET_API_STATUS Status;
+    NET_API_STATUS Status = NERR_Success;
 
     if (argc == 2)
     {

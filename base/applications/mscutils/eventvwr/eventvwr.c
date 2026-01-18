@@ -1162,7 +1162,7 @@ FormatByteSize(LONGLONG cbSize, LPWSTR pwszResult, UINT cchResultMax)
 {
     UINT cchWritten, cchRemaining;
     LPWSTR pwszEnd;
-    size_t cchStringRemaining;
+    size_t cchStringRemaining = 0;
 
     /* Write formated bytes count */
     cchWritten = FormatInteger(cbSize, pwszResult, cchResultMax);
@@ -1185,7 +1185,7 @@ FormatFileSizeWithBytes(const PULARGE_INTEGER lpQwSize, LPWSTR pwszResult, UINT 
 {
     UINT cchWritten, cchRemaining;
     LPWSTR pwszEnd;
-    size_t cchCopyRemaining;
+    size_t cchCopyRemaining = 0;
 
     /* Format bytes in KBs, MBs etc */
     if (StrFormatByteSizeW(lpQwSize->QuadPart, pwszResult, cchResultMax) == NULL)
@@ -1221,7 +1221,7 @@ GetFileTimeString(LPFILETIME lpFileTime, LPWSTR pwszResult, UINT cchResult)
     SYSTEMTIME st;
     int cchWritten;
     UINT cchRemaining = cchResult;
-    size_t cchCopyRemaining;
+    size_t cchCopyRemaining = 0;
     LPWSTR pwszEnd = pwszResult;
 
     if (!FileTimeToLocalFileTime(lpFileTime, &ft) || !FileTimeToSystemTime(&ft, &st))

@@ -177,8 +177,8 @@ LPITEMIDLIST CBandSiteMenu::_GetQLaunchPidl(BOOL refresh)
 
 HRESULT CBandSiteMenu::_CreateBuiltInISFBand(UINT uID, REFIID riid, void** ppv)
 {
-    LPITEMIDLIST pidl;
-    HRESULT hr;
+    LPITEMIDLIST pidl = NULL;
+    HRESULT hr = E_INVALIDARG;
 
     switch (uID)
     {
@@ -199,6 +199,8 @@ HRESULT CBandSiteMenu::_CreateBuiltInISFBand(UINT uID, REFIID riid, void** ppv)
             pidl = _GetQLaunchPidl(true);
             break;
         }
+        default:
+            return E_INVALIDARG;
     }
 
     if (pidl == NULL)

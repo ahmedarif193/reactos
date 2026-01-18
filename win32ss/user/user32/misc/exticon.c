@@ -807,7 +807,7 @@ static UINT ICO_ExtractIconExW(
                       RetPtr[0] = CreateIconFromResourceEx(idata, igdataent->Size,
                           TRUE, 0x00030000, cx1, cy1, flags);
                       if (cx2 && cy2)
-                          RetPtr[1] = CreateIconFromResourceEx(idata, idataent->Size,
+                          RetPtr[1] = CreateIconFromResourceEx(idata, igdataent->Size,
                               TRUE, 0x00030000, cx2, cy2, flags);
                       ret = 1;  // Set number of icons found
                       goto end; // Success so Exit

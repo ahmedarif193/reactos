@@ -22,7 +22,7 @@ VOID DecompressBitmap(SIZEL Size, BYTE *CompressedBits, BYTE *UncompressedBits,
                       LONG Delta, ULONG Format, ULONG cjSizeImage)
 {
     INT x = 0, y = Size.cy - 1;
-    INT i, c, c2, length;
+    INT i, c = 0, c2 = 0, length;
     INT width = Size.cx, height = y;
     BYTE *begin = CompressedBits;
     BYTE *bits = CompressedBits;

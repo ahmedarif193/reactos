@@ -658,7 +658,7 @@ static HRESULT exec_assoc_view( struct view *view )
     {
         ULONG count;
         IWbemClassObject *obj;
-        struct table *table;
+        struct table *table = NULL;
         VARIANT var;
 
         IEnumWbemClassObject_Next( iter, WBEM_INFINITE, 1, &obj, &count );

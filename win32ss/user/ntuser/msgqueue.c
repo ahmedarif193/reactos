@@ -1080,6 +1080,7 @@ co_MsqSendMessage(PTHREADINFO ptirec,
    PLIST_ENTRY Entry;
    PWND pWnd;
    BOOLEAN SwapStateEnabled;
+    BOOLEAN SwapStateSet = FALSE;
    LRESULT Result = 0;   //// Result could be trashed. ////
 
    pti = PsGetCurrentThreadWin32Thread();
@@ -1179,6 +1180,7 @@ co_MsqSendMessage(PTHREADINFO ptirec,
    if (pti->cEnterCount == 0)
    {
       SwapStateEnabled = KeSetKernelStackSwapEnable(FALSE);
+      SwapStateSet = TRUE;
    }
    pti->cEnterCount++;
 
@@ -1292,7 +1294,7 @@ co_MsqSendMessage(PTHREADINFO ptirec,
    }
 
    // Count is nil, restore swapping of the stack.
-   if (--pti->cEnterCount == 0 )
+   if (--pti->cEnterCount == 0 && SwapStateSet)
    {
       KeSetKernelStackSwapEnable(SwapStateEnabled);
    }

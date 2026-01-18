@@ -1159,7 +1159,7 @@ static DWORD _ConvertAtoW(PCSTR strSrc, PCWSTR* pStrDest, BOOL isList)
  */
 int WINAPI SHFileOperationA(LPSHFILEOPSTRUCTA lpFileOp)
 {
-    int errCode, retCode;
+    int errCode, retCode = 0;
     SHFILEOPSTRUCTW nFileOp = { 0 };
 
     // Convert A information to W

@@ -217,7 +217,7 @@ NetworkInitPageDlgProc(
     LPARAM lParam)
 {
     PNETWORKSETUPDATA pNetworkSetupData;
-    PSETUPDATA pSetupData;
+    PSETUPDATA pSetupData = NULL;
     LPNMHDR lpnm;
 
     /* Retrieve pointer to the global setup data */
@@ -291,7 +291,7 @@ NetworkSettingsPageDlgProc(
     LPARAM lParam)
 {
     PNETWORKSETUPDATA pNetworkSetupData;
-    PSETUPDATA pSetupData;
+    PSETUPDATA pSetupData = NULL;
     LPNMHDR lpnm;
 
     /* Retrieve pointer to the global setup data */
@@ -377,7 +377,7 @@ NetworkComponentPageDlgProc(
     LPARAM lParam)
 {
     PNETWORKSETUPDATA pNetworkSetupData;
-    PSETUPDATA pSetupData;
+    PSETUPDATA pSetupData = NULL;
     LPNMHDR lpnm;
 
     /* Retrieve pointer to the global setup data */
@@ -445,7 +445,7 @@ NetworkDomainPageDlgProc(
     LPARAM lParam)
 {
     PNETWORKSETUPDATA pNetworkSetupData;
-    PSETUPDATA pSetupData;
+    PSETUPDATA pSetupData = NULL;
     WCHAR DomainName[51];
     WCHAR Title[64];
     WCHAR ErrorName[256];

@@ -53,7 +53,7 @@ WhereSearchGeneric(LPCWSTR pattern, LPWSTR path, size_t path_len, BOOL bDir,
 {
     LPWSTR pch;
     size_t cch;
-    BOOL ret;
+    BOOL ret = TRUE;
     WIN32_FIND_DATAW data;
     HANDLE hFind = FindFirstFileExW(path, FindExInfoStandard, &data, FindExSearchNameMatch,
                                     NULL, 0);

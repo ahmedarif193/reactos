@@ -239,7 +239,7 @@ RunOnceExInstance::RunOnceExInstance(_In_ HKEY BaseKey)
         return;
     }
 
-    ULONG cchTitle;
+    ULONG cchTitle = 0;
     Error = m_RegKey.QueryStringValue(L"Title", NULL, &cchTitle);
     if (Error == ERROR_SUCCESS)
     {

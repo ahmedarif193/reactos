@@ -120,7 +120,7 @@ HRESULT STDMETHODCALLTYPE  CMenuBand::SetMenu(
     HWND hwnd,
     DWORD dwFlags)
 {
-    HRESULT hr;
+    HRESULT hr = S_OK;
 
     TRACE("CMenuBand::SetMenu called, hmenu=%p; hwnd=%p, flags=%x\n", hmenu, hwnd, dwFlags);
 

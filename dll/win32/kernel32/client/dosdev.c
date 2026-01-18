@@ -575,6 +575,7 @@ QueryDosDeviceW(
     }
 
     Buffer = NULL;
+    Length = 0;
     _SEH2_TRY
     {
         if (lpDeviceName != NULL)

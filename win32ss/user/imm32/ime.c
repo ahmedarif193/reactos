@@ -1555,16 +1555,17 @@ ImmSetConversionStatus(
     if (IS_NULL_UNEXPECTEDLY(pIC))
         return FALSE;
 
+    dwOldConversion = pIC->fdwConversion;
+    dwOldSentence = pIC->fdwSentence;
+
     if (pIC->fdwConversion != fdwConversion)
     {
-        dwOldConversion = pIC->fdwConversion;
         pIC->fdwConversion = fdwConversion;
         fConversionChange = TRUE;
     }
 
     if (pIC->fdwSentence != fdwSentence)
     {
-        dwOldSentence = pIC->fdwSentence;
         pIC->fdwSentence = fdwSentence;
         fSentenceChange = TRUE;
     }

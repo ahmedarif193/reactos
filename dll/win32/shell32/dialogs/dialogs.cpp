@@ -780,7 +780,7 @@ static void FillList(HWND hCb, LPWSTR pszLatest, UINT cchStr, BOOL fShowDefault)
     HKEY hkey;
     WCHAR *pszList = NULL, *pszCmd = NULL, *pszTmp = NULL, cMatch = 0, cMax = 0x60;
     WCHAR szIndex[2] = L"-";
-    UINT cchLatest;
+    UINT cchLatest = 0;
     DWORD dwType, icList = 0, icCmd = 0;
     LRESULT lRet;
     UINT Nix;

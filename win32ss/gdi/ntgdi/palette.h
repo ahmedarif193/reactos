@@ -129,7 +129,7 @@ FORCEINLINE
 ULONG
 CalculateShift(ULONG ulMask1, ULONG ulMask2)
 {
-    ULONG ulShift1, ulShift2;
+    ULONG ulShift1 = 0, ulShift2 = 0;
     BitScanReverse(&ulShift1, ulMask1);
     BitScanReverse(&ulShift2, ulMask2);
     ulShift2 -= ulShift1;
@@ -162,4 +162,3 @@ NTAPI
 GreCreatePaletteInternal(
     IN LPLOGPALETTE pLogPal,
     IN UINT cEntries);
-

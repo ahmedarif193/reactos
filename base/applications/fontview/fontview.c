@@ -117,7 +117,7 @@ wWinMain(HINSTANCE hThisInstance,
     HWND hMainWnd;
     MSG msg;
     WNDCLASSEXW wincl;
-    LPCWSTR fileName;
+    LPCWSTR fileName = NULL;
 
     switch (GetUserDefaultUILanguage())
     {
@@ -135,6 +135,7 @@ wWinMain(HINSTANCE hThisInstance,
     argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (argc < 2)
     {
+        return 0;
 #if 0
         WCHAR szFileName[MAX_PATH] = L"";
         OPENFILENAMEW fontOpen;
@@ -200,6 +201,9 @@ wWinMain(HINSTANCE hThisInstance,
                 fileName = argv[i];
             }
         }
+        if (!fileName)
+            return 0;
+
         g_fileName = fileName;
     }
 

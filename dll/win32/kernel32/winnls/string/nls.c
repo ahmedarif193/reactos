@@ -494,7 +494,7 @@ IntMultiByteToWideCharUTF8(DWORD Flags,
                            INT WideCharCount)
 {
     LPCSTR MbsEnd, MbsPtrSave;
-    UCHAR Char, TrailLength;
+    UCHAR Char, TrailLength = 0;
     WCHAR WideChar;
     LONG Count;
     BOOL CharIsValid, StringIsValid = TRUE;

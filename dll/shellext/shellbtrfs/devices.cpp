@@ -332,7 +332,7 @@ void BtrfsDeviceAdd::populate_device_tree(HWND tree) {
     HWND hwnd = GetParent(tree);
     unsigned int i;
     ULONG last_disk_num = 0xffffffff;
-    HTREEITEM diskitem;
+    HTREEITEM diskitem = nullptr;
     NTSTATUS Status;
     OBJECT_ATTRIBUTES attr;
     UNICODE_STRING us;
@@ -395,7 +395,9 @@ void BtrfsDeviceAdd::populate_device_tree(HWND tree) {
             HTREEITEM item;
             wstring name, size;
 
-            if (device_list[i].disk_num != 0xffffffff && device_list[i].disk_num == last_disk_num)
+            if (device_list[i].disk_num != 0xffffffff &&
+                device_list[i].disk_num == last_disk_num &&
+                diskitem != nullptr)
                 tis.hParent = diskitem;
             else
                 tis.hParent = TVI_ROOT;

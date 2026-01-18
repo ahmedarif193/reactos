@@ -500,7 +500,7 @@ cleanup:
 BOOL BUTTON_DrawIml(HDC hDC, const BUTTON_IMAGELIST *pimlData, RECT *prc, BOOL bOnlyCalc, int index)
 {
     SIZE ImageSize;
-    int left, top, count;
+    int left = 0, top = 0, count;
 
     if (!pimlData->himl)
         return FALSE;
