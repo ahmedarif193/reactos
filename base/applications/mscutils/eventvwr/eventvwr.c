@@ -743,7 +743,7 @@ GetMessageStringFromDll(
     IN va_list* Arguments OPTIONAL)
 {
     HMODULE hLibrary;
-    DWORD dwLength;
+    DWORD dwLength = 0;
     LPWSTR lpMsgBuf = NULL;
 
     hLibrary = LoadLibraryExW(lpMessageDll, NULL,

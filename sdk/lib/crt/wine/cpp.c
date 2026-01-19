@@ -752,7 +752,7 @@ void CDECL unexpected(void)
 #ifndef __x86_64__
 const type_info* CDECL __RTtypeid(void *cppobj)
 {
-    const type_info *ret;
+    const type_info *ret = NULL;
 
     if (!cppobj)
     {
@@ -839,7 +839,7 @@ void* CDECL __RTDynamicCast(void *cppobj, int unknown,
                                    type_info *src, type_info *dst,
                                    int do_throw)
 {
-    void *ret;
+    void *ret = NULL;
 
     if (!cppobj) return NULL;
 
@@ -979,7 +979,7 @@ void* CDECL __RTDynamicCast(void *cppobj, int unknown,
  */
 void* CDECL __RTCastToVoid(void *cppobj)
 {
-    void *ret;
+    void *ret = NULL;
 
     if (!cppobj) return NULL;
 

@@ -66,6 +66,9 @@ function(add_rpcproxy_files)
             COMMAND native-widl ${INCLUDES} ${DEFINES} ${IDL_FLAGS} -h -o ${CMAKE_CURRENT_BINARY_DIR}/${NAME}_p.h ${FILE}
             DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${FILE} ${EXTRA_DEP} native-widl
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        # Suppress uninitialized variable warnings in generated RPC proxy code
+        set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/${NAME}_p.c
+            PROPERTIES COMPILE_OPTIONS "-Wno-maybe-uninitialized")
     endforeach()
 
     # Extra pass to generate dlldata

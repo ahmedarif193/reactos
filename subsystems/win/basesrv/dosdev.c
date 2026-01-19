@@ -96,7 +96,7 @@ NTSTATUS
 IsGlobalSymbolicLink(HANDLE LinkHandle,
                      PBOOLEAN IsGlobal)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     DWORD ReturnLength;
     UNICODE_STRING GlobalString;
     OBJECT_NAME_INFORMATION NameInfo, *PNameInfo;

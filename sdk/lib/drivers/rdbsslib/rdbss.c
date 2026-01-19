@@ -2922,7 +2922,7 @@ RxCommonQueryInformation(
     PIRP Irp;
     PFOBX Fobx;
     BOOLEAN Locked;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PIO_STACK_LOCATION Stack;
     FILE_INFORMATION_CLASS FileInfoClass;
 
@@ -7557,7 +7557,7 @@ RxNotifyChangeDirectory(
     PRX_CONTEXT RxContext)
 {
     PIRP Irp;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PIO_STACK_LOCATION Stack;
 
     PAGED_CODE();
@@ -9046,7 +9046,7 @@ RxSetRenameInfo(
     PRX_CONTEXT RxContext)
 {
     ULONG Length;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PFCB RenameFcb, Fcb;
     PIO_STACK_LOCATION Stack;
     PFILE_RENAME_INFORMATION RenameInfo, UserInfo;

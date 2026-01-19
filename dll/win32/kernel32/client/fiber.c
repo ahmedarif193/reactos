@@ -399,7 +399,7 @@ BOOL
 WINAPI
 FlsFree(DWORD dwFlsIndex)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
     PPEB Peb = NtCurrentPeb();
 
     if (dwFlsIndex >= FLS_MAXIMUM_AVAILABLE)

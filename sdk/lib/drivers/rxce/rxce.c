@@ -5252,7 +5252,7 @@ RxLockUserBuffer(
     IN LOCK_OPERATION Operation,
     IN ULONG BufferLength)
 {
-    PIRP Irp;
+    PIRP Irp = NULL;
     PMDL Mdl = NULL;
 
     PAGED_CODE();

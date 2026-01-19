@@ -555,7 +555,7 @@ BasepOpenFileForMove(IN LPCWSTR File,
                      IN ULONG OpenOptions)
 {
     RTL_RELATIVE_NAME_U RelativeName;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     IO_STATUS_BLOCK IoStatusBlock;
     FILE_ATTRIBUTE_TAG_INFORMATION TagInfo;
     ULONG IntShareAccess;
@@ -1389,7 +1389,7 @@ PrivMoveFileIdentityW(IN LPCWSTR lpSource, IN LPCWSTR lpDestination, IN DWORD dw
     LPWSTR RelativeSource, RelativeDestination;
     HANDLE SourceHandle, DestinationHandle;
     OBJECT_ATTRIBUTES ObjectAttributesSource, ObjectAttributesDestination;
-    NTSTATUS Status, OldStatus = STATUS_SUCCESS;
+    NTSTATUS Status = STATUS_SUCCESS, OldStatus = STATUS_SUCCESS;
     ACCESS_MASK DestAccess;
     IO_STATUS_BLOCK IoStatusBlock;
     FILE_BASIC_INFORMATION SourceInformation, DestinationInformation;

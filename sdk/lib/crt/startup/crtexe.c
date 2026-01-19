@@ -62,8 +62,8 @@ DWORD __mingw_winmain_nShowCmd;
 #if defined(__GNUC__)
 extern int main (int argc, char **argv, char **envp) __attribute__((weak));
 extern int wmain (int argc, wchar_t **argv, wchar_t **envp) __attribute__((weak));
-extern int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) __attribute__((weak));
-extern int wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nShowCmd) __attribute__((weak));
+extern int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) __attribute__((weak));
+extern int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nShowCmd) __attribute__((weak));
 #endif
 
 static int argc;

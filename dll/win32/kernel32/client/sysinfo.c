@@ -88,7 +88,7 @@ BaseQuerySystemFirmware(
     SYSTEM_FIRMWARE_TABLE_INFORMATION* SysFirmwareInfo;
     ULONG Result = 0, ReturnedSize;
     ULONG TotalSize = BufferSize + sizeof(SYSTEM_FIRMWARE_TABLE_INFORMATION);
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     SysFirmwareInfo = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, TotalSize);
     if (!SysFirmwareInfo)

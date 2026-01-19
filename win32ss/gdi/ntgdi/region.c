@@ -3815,7 +3815,7 @@ NtGdiExtCreateRegion(
     DWORD iType = 0;
     DWORD dwSize = 0;
     UINT i;
-    RECT* rects;
+    RECT* rects = NULL;
     NTSTATUS Status = STATUS_SUCCESS;
     MATRIX matrix;
     XFORMOBJ xo;
