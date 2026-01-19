@@ -26,6 +26,250 @@ typedef struct _DMA_CONTEXT {
     PNDIS_PACKET Packet;
 } DMA_CONTEXT, *PDMA_CONTEXT;
 
+#if NDIS_SUPPORT_NDIS6
+
+/*
+ * Forward declaration of NDIS6_MINIPORT_DRIVER_BLOCK
+ * This structure is defined in miniport6.c
+ */
+typedef struct _NDIS6_MINIPORT_DRIVER_BLOCK_FWD {
+    LIST_ENTRY ListEntry;
+    PDRIVER_OBJECT DriverObject;
+    UNICODE_STRING RegistryPath;
+    NDIS_HANDLE MiniportDriverContext;
+    NDIS_MINIPORT_DRIVER_CHARACTERISTICS Characteristics;
+    ULONG Flags;
+    LONG RefCount;
+} NDIS6_MINIPORT_DRIVER_BLOCK_FWD, *PNDIS6_MINIPORT_DRIVER_BLOCK_FWD;
+
+/*
+ * Context for tracking NDIS 5.x to 6.x send conversion
+ * Stored in NBL's ProtocolReserved for completion tracking
+ */
+typedef struct _NDIS6_SEND_CONTEXT {
+    PNDIS_PACKET OriginalPacket;
+    PADAPTER_BINDING AdapterBinding;
+    PLOGICAL_ADAPTER Adapter;
+} NDIS6_SEND_CONTEXT, *PNDIS6_SEND_CONTEXT;
+
+/*
+ * MiniIsNdis6Adapter
+ * Checks if the adapter is an NDIS 6.x adapter
+ */
+static BOOLEAN
+ProIsNdis6Adapter(
+    PLOGICAL_ADAPTER Adapter)
+{
+    PNDIS_M_DRIVER_BLOCK DriverHandle;
+    PVOID Handler;
+
+    if (Adapter == NULL)
+        return FALSE;
+
+    DriverHandle = Adapter->NdisMiniportBlock.DriverHandle;
+    if (DriverHandle == NULL)
+        return FALSE;
+
+    /*
+     * For NDIS 6.x adapters, DriverHandle points to NDIS6_MINIPORT_DRIVER_BLOCK.
+     * The MiniportCharacteristics field would contain garbage or different data.
+     * Check if QueryInformationHandler looks like a valid function pointer.
+     */
+    Handler = (PVOID)DriverHandle->MiniportCharacteristics.QueryInformationHandler;
+
+#ifdef _M_AMD64
+    if (Handler == NULL ||
+        (ULONG_PTR)Handler < 0xFFFFF80000000000ULL ||
+        ((ULONG_PTR)Handler & 0xF) != 0)
+    {
+        return TRUE;
+    }
+#else
+    if (Handler == NULL ||
+        (ULONG_PTR)Handler < 0x80000000UL)
+    {
+        return TRUE;
+    }
+#endif
+
+    return FALSE;
+}
+
+/*
+ * ProSendPacketToNdis6Miniport
+ * Converts an NDIS_PACKET to NET_BUFFER_LIST and sends to NDIS 6.x miniport
+ */
+static NDIS_STATUS
+ProSendPacketToNdis6Miniport(
+    PLOGICAL_ADAPTER Adapter,
+    PNDIS_PACKET Packet,
+    PADAPTER_BINDING AdapterBinding)
+{
+    PDEVICE_OBJECT DeviceObject;
+    PNDIS6_MINIPORT_DRIVER_BLOCK_FWD DriverBlock;
+    PVOID MiniportAdapterContext;
+    PNET_BUFFER_LIST NetBufferList;
+    PNET_BUFFER NetBuffer;
+    PNDIS_BUFFER NdisBuffer;
+    PMDL MdlChain;
+    PMDL CurrentMdl;
+    PMDL PrevMdl = NULL;
+    PVOID BufferVa = NULL;
+    UINT BufferLength = 0;
+    UINT TotalLength;
+
+    UNREFERENCED_PARAMETER(CurrentMdl);
+    UNREFERENCED_PARAMETER(PrevMdl);
+    UNREFERENCED_PARAMETER(BufferVa);
+    UNREFERENCED_PARAMETER(BufferLength);
+    UINT BufferCount;
+    KIRQL OldIrql;
+    PNDIS6_SEND_CONTEXT SendContext;
+
+    DbgPrint("NDIS6-SEND: ProSendPacketToNdis6Miniport - Adapter=%p, Packet=%p\n",
+             Adapter, Packet);
+
+    /* Get the device object from the miniport block */
+    DeviceObject = Adapter->NdisMiniportBlock.DeviceObject;
+    if (DeviceObject == NULL || DeviceObject->DeviceExtension == NULL)
+    {
+        DbgPrint("NDIS6-SEND: No device object\n");
+        return NDIS_STATUS_FAILURE;
+    }
+
+    /* Get driver block and adapter context from device extension */
+    DriverBlock = (PNDIS6_MINIPORT_DRIVER_BLOCK_FWD)((PVOID*)DeviceObject->DeviceExtension)[0];
+    MiniportAdapterContext = ((PVOID*)DeviceObject->DeviceExtension)[2];
+
+    if (DriverBlock == NULL)
+    {
+        DbgPrint("NDIS6-SEND: No driver block\n");
+        return NDIS_STATUS_FAILURE;
+    }
+
+    if (DriverBlock->Characteristics.SendNetBufferListsHandler == NULL)
+    {
+        DbgPrint("NDIS6-SEND: No SendNetBufferListsHandler\n");
+        return NDIS_STATUS_FAILURE;
+    }
+
+    /*
+     * Convert NDIS_PACKET buffers to MDL chain for NET_BUFFER.
+     * NDIS_BUFFER is typedef'd to MDL, so we can use them directly.
+     */
+    NdisQueryPacket(Packet, NULL, &BufferCount, &NdisBuffer, &TotalLength);
+
+    DbgPrint("NDIS6-SEND: Packet has %u buffers, total length=%u\n",
+             BufferCount, TotalLength);
+
+    if (NdisBuffer == NULL || TotalLength == 0)
+    {
+        DbgPrint("NDIS6-SEND: Empty packet\n");
+        return NDIS_STATUS_FAILURE;
+    }
+
+    /*
+     * NDIS_BUFFER is the same as MDL, so we can use the buffer chain directly.
+     * However, NDIS 5.x may have set up the chain differently, so we need to
+     * verify and potentially rebuild the MDL chain.
+     */
+    MdlChain = (PMDL)NdisBuffer;
+
+    /*
+     * Allocate a NET_BUFFER_LIST with embedded NET_BUFFER.
+     * We allocate everything from non-paged pool for simplicity.
+     */
+    NetBufferList = ExAllocatePoolWithTag(NonPagedPool,
+                                          sizeof(NET_BUFFER_LIST) + sizeof(NET_BUFFER) + sizeof(NDIS6_SEND_CONTEXT),
+                                          'lbNS');  /* SNBL - Send NBL */
+    if (NetBufferList == NULL)
+    {
+        DbgPrint("NDIS6-SEND: Failed to allocate NBL\n");
+        return NDIS_STATUS_RESOURCES;
+    }
+
+    RtlZeroMemory(NetBufferList, sizeof(NET_BUFFER_LIST) + sizeof(NET_BUFFER) + sizeof(NDIS6_SEND_CONTEXT));
+
+    /* Initialize NET_BUFFER_LIST */
+    NetBufferList->Next = NULL;
+    NetBufferList->NdisPoolHandle = NULL;  /* Not from a pool */
+    NetBufferList->SourceHandle = (NDIS_HANDLE)AdapterBinding;  /* Store for completion */
+    NetBufferList->Status = NDIS_STATUS_SUCCESS;
+
+    /* NET_BUFFER is immediately after NET_BUFFER_LIST */
+    NetBuffer = (PNET_BUFFER)((PUCHAR)NetBufferList + sizeof(NET_BUFFER_LIST));
+    NetBufferList->FirstNetBuffer = NetBuffer;
+
+    /* Initialize NET_BUFFER */
+    NetBuffer->Next = NULL;
+    NetBuffer->MdlChain = MdlChain;
+    NetBuffer->CurrentMdl = MdlChain;
+    NetBuffer->CurrentMdlOffset = 0;
+    NetBuffer->DataOffset = 0;
+    NetBuffer->DataLength = TotalLength;
+    NetBuffer->NdisPoolHandle = NULL;
+
+    /* Store context for completion */
+    SendContext = (PNDIS6_SEND_CONTEXT)((PUCHAR)NetBuffer + sizeof(NET_BUFFER));
+    SendContext->OriginalPacket = Packet;
+    SendContext->AdapterBinding = AdapterBinding;
+    SendContext->Adapter = Adapter;
+
+    /* Store context pointer in NBL's protocol reserved area */
+    *(PNDIS6_SEND_CONTEXT*)&NetBufferList->ProtocolReserved[0] = SendContext;
+
+    DbgPrint("NDIS6-SEND: Created NBL=%p, NB=%p, MdlChain=%p, DataLength=%lu\n",
+             NetBufferList, NetBuffer, MdlChain, (unsigned long)NetBuffer->DataLength);
+
+    /* Print first few bytes of packet for debugging - only in debug builds */
+#ifdef DBG
+    {
+        PUCHAR Data;
+        ULONG DataLen;
+        PMDL FirstMdl = MdlChain;
+        if (FirstMdl != NULL)
+        {
+            Data = MmGetSystemAddressForMdlSafe(FirstMdl, NormalPagePriority);
+            DataLen = MmGetMdlByteCount(FirstMdl);
+            if (Data != NULL && DataLen >= 14)
+            {
+                DbgPrint("NDIS6-SEND: Packet header: %02X:%02X:%02X:%02X:%02X:%02X -> %02X:%02X:%02X:%02X:%02X:%02X\n",
+                         Data[6], Data[7], Data[8], Data[9], Data[10], Data[11],
+                         Data[0], Data[1], Data[2], Data[3], Data[4], Data[5]);
+            }
+        }
+    }
+#endif
+
+    /*
+     * Call the miniport's SendNetBufferListsHandler.
+     * Handler is called at DISPATCH_LEVEL.
+     */
+    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+
+    DbgPrint("NDIS6-SEND: Calling SendNetBufferListsHandler at %p\n",
+             DriverBlock->Characteristics.SendNetBufferListsHandler);
+
+    DriverBlock->Characteristics.SendNetBufferListsHandler(
+        MiniportAdapterContext,
+        NetBufferList,
+        NDIS_DEFAULT_PORT_NUMBER,
+        0);  /* SendFlags */
+
+    KeLowerIrql(OldIrql);
+
+    DbgPrint("NDIS6-SEND: SendNetBufferListsHandler returned\n");
+
+    /*
+     * SendNetBufferListsHandler always returns asynchronously.
+     * The completion will come via NdisMSendNetBufferListsComplete.
+     * Return PENDING and let the completion handler deal with freeing.
+     */
+    return NDIS_STATUS_PENDING;
+}
+
+#endif /* NDIS_SUPPORT_NDIS6 */
+
 PNET_PNP_EVENT
 ProSetupPnPEvent(
     NET_PNP_EVENT_CODE EventCode,
@@ -397,6 +641,20 @@ proSendPacketToMiniport(PLOGICAL_ADAPTER Adapter, PNDIS_PACKET Packet)
 
    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
 
+#if NDIS_SUPPORT_NDIS6
+   /*
+    * Check if this is an NDIS 6.x adapter.
+    * For NDIS 6.x adapters, we need to convert the packet to a NET_BUFFER_LIST
+    * and call SendNetBufferListsHandler instead of the legacy handlers.
+    */
+   if (ProIsNdis6Adapter(Adapter))
+   {
+       PADAPTER_BINDING AdapterBinding = (PADAPTER_BINDING)Packet->Reserved[1];
+       DbgPrint("NDIS6-SEND: Detected NDIS 6.x adapter, routing to ProSendPacketToNdis6Miniport\n");
+       return ProSendPacketToNdis6Miniport(Adapter, Packet, AdapterBinding);
+   }
+#endif /* NDIS_SUPPORT_NDIS6 */
+
    if(MiniIsBusy(Adapter, NdisWorkItemSend)) {
       NDIS_DbgPrint(MID_TRACE, ("Busy: NdisWorkItemSend.\n"));
 
@@ -676,6 +934,138 @@ ProTransferData(
         return NDIS_STATUS_SUCCESS;
     }
 
+#if NDIS_SUPPORT_NDIS6
+    /*
+     * For NDIS 6.x adapters, the MacReceiveContext is actually a NET_BUFFER_LIST.
+     * We need to copy data directly from the NBL instead of calling a TransferDataHandler
+     * (which doesn't exist for NDIS 6.x miniports).
+     */
+    if (ProIsNdis6Adapter(Adapter))
+    {
+        PNET_BUFFER_LIST Nbl = (PNET_BUFFER_LIST)MacReceiveContext;
+        PNET_BUFFER Nb;
+        PMDL CurrentMdl;
+        PUCHAR SrcData;
+        PUCHAR DstData;
+        PNDIS_BUFFER DstBuffer;
+        UINT SrcOffset;
+        UINT DstOffset;
+        UINT SrcLength;
+        UINT DstLength;
+        UINT CopyLength;
+        UINT TotalCopied = 0;
+        UINT HeaderSize;
+
+        DbgPrint("NDIS6-XFER: ProTransferData for NDIS 6.x - NBL=%p, ByteOffset=%u, BytesToTransfer=%u\n",
+                 Nbl, ByteOffset, BytesToTransfer);
+
+        if (Nbl == NULL)
+        {
+            DbgPrint("NDIS6-XFER: NULL NBL in MacReceiveContext\n");
+            *BytesTransferred = 0;
+            return NDIS_STATUS_FAILURE;
+        }
+
+        /* Get the first NET_BUFFER */
+        Nb = NET_BUFFER_LIST_FIRST_NB(Nbl);
+        if (Nb == NULL)
+        {
+            DbgPrint("NDIS6-XFER: NBL has no NET_BUFFER\n");
+            *BytesTransferred = 0;
+            return NDIS_STATUS_FAILURE;
+        }
+
+        /* Get header size */
+        HeaderSize = Adapter->MediumHeaderSize;
+        if (HeaderSize == 0)
+        {
+            HeaderSize = 14;  /* Default Ethernet header */
+        }
+
+        /* Get the first MDL and adjust for NET_BUFFER offset */
+        CurrentMdl = NET_BUFFER_CURRENT_MDL(Nb);
+        SrcOffset = NET_BUFFER_CURRENT_MDL_OFFSET(Nb);
+
+        /* Skip the header - ByteOffset is relative to data after header */
+        SrcOffset += HeaderSize + ByteOffset;
+
+        /* Get the first destination buffer from the packet */
+        NdisQueryPacket(Packet, NULL, NULL, &DstBuffer, NULL);
+        if (DstBuffer == NULL)
+        {
+            DbgPrint("NDIS6-XFER: Destination packet has no buffer\n");
+            *BytesTransferred = 0;
+            return NDIS_STATUS_FAILURE;
+        }
+
+        /* Get destination buffer info */
+        NdisQueryBuffer(DstBuffer, (PVOID*)&DstData, &DstLength);
+        DstOffset = 0;
+
+        /* Walk through the MDL chain and destination buffers, copying data */
+        while (BytesToTransfer > 0 && CurrentMdl != NULL && DstBuffer != NULL)
+        {
+            /* Get source data from current MDL */
+            SrcData = MmGetSystemAddressForMdlSafe(CurrentMdl, NormalPagePriority);
+            if (SrcData == NULL)
+            {
+                DbgPrint("NDIS6-XFER: Cannot map MDL\n");
+                break;
+            }
+
+            SrcLength = MmGetMdlByteCount(CurrentMdl);
+
+            /* Skip bytes in this MDL if needed */
+            if (SrcOffset >= SrcLength)
+            {
+                SrcOffset -= SrcLength;
+                CurrentMdl = CurrentMdl->Next;
+                continue;
+            }
+
+            SrcData += SrcOffset;
+            SrcLength -= SrcOffset;
+            SrcOffset = 0;
+
+            /* Copy data */
+            while (SrcLength > 0 && BytesToTransfer > 0 && DstBuffer != NULL)
+            {
+                /* Calculate how much we can copy in this iteration */
+                CopyLength = min(SrcLength, DstLength - DstOffset);
+                CopyLength = min(CopyLength, BytesToTransfer);
+
+                if (CopyLength > 0)
+                {
+                    RtlCopyMemory(DstData + DstOffset, SrcData, CopyLength);
+                    SrcData += CopyLength;
+                    SrcLength -= CopyLength;
+                    DstOffset += CopyLength;
+                    TotalCopied += CopyLength;
+                    BytesToTransfer -= CopyLength;
+                }
+
+                /* Move to next destination buffer if current is full */
+                if (DstOffset >= DstLength)
+                {
+                    NdisGetNextBuffer(DstBuffer, &DstBuffer);
+                    if (DstBuffer != NULL)
+                    {
+                        NdisQueryBuffer(DstBuffer, (PVOID*)&DstData, &DstLength);
+                        DstOffset = 0;
+                    }
+                }
+            }
+
+            /* Move to next MDL */
+            CurrentMdl = CurrentMdl->Next;
+        }
+
+        *BytesTransferred = TotalCopied;
+        DbgPrint("NDIS6-XFER: Transferred %u bytes\n", TotalCopied);
+        return NDIS_STATUS_SUCCESS;
+    }
+#endif /* NDIS_SUPPORT_NDIS6 */
+
     ASSERT(Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.TransferDataHandler);
 
     KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
@@ -796,6 +1186,7 @@ NdisOpenAdapter(
   PPROTOCOL_BINDING Protocol = GET_PROTOCOL_BINDING(NdisProtocolHandle);
 
   NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  NDIS_DbgPrint(MAX_TRACE, ("Opening adapter '%wZ'\n", AdapterName));
 
   if(!NdisProtocolHandle)
     {
@@ -804,13 +1195,16 @@ NdisOpenAdapter(
       return;
     }
 
+  NDIS_DbgPrint(MAX_TRACE, ("Protocol='%wZ'\n", &Protocol->Chars.Name));
+
   Adapter = MiniLocateDevice(AdapterName);
   if (!Adapter)
     {
-      NDIS_DbgPrint(MIN_TRACE, ("Adapter not found.\n"));
+      NDIS_DbgPrint(MIN_TRACE, ("Adapter '%wZ' not found.\n", AdapterName));
       *Status = NDIS_STATUS_ADAPTER_NOT_FOUND;
       return;
     }
+  NDIS_DbgPrint(MAX_TRACE, ("Found adapter %p\n", Adapter));
 
   /* Find the media type in the list provided by the protocol driver */
   Found = FALSE;
@@ -1081,6 +1475,20 @@ ndisBindMiniportsToProtocol(OUT PNDIS_STATUS Status, IN PPROTOCOL_BINDING Protoc
             BIND_HANDLER BindHandler = ProtocolCharacteristics->BindAdapterHandler;
             if(BindHandler)
             {
+                ULONG_PTR HandlerAddr = (ULONG_PTR)BindHandler;
+                DbgPrint("NDIS: BindHandler=%p for '%wZ'\n", BindHandler, &DeviceName);
+
+                /* Validate that the handler looks like a valid kernel address */
+#ifdef _M_AMD64
+                if (HandlerAddr < 0xFFFF800000000000ULL)
+#else
+                if (HandlerAddr < 0x80000000UL)
+#endif
+                {
+                    DbgPrint("NDIS: ERROR - Invalid BindHandler %p (not a kernel address!)\n", BindHandler);
+                    goto next;
+                }
+
                 BindHandler(Status, BindContext, &DeviceName, &RegistryPath, 0);
                 NDIS_DbgPrint(MID_TRACE, ("%wZ's BindAdapter handler returned 0x%x for %wZ\n", &ProtocolCharacteristics->Name, *Status, &DeviceName));
             }
@@ -1174,6 +1582,22 @@ NdisRegisterProtocol(
     }
 
   /* set up the protocol block */
+  DbgPrint("NDIS: NdisRegisterProtocol - Version %u.%u, CharLen=%u, MinSize=%u\n",
+           ProtocolCharacteristics->MajorNdisVersion,
+           ProtocolCharacteristics->MinorNdisVersion,
+           CharacteristicsLength, MinSize);
+  DbgPrint("NDIS: Incoming BindAdapterHandler=%p\n",
+           ((NDIS40_PROTOCOL_CHARACTERISTICS*)ProtocolCharacteristics)->BindAdapterHandler);
+  DbgPrint("NDIS: PROTOCOL_BINDING size=%u, Chars offset=%u\n",
+           (ULONG)sizeof(PROTOCOL_BINDING),
+           (ULONG)FIELD_OFFSET(PROTOCOL_BINDING, Chars));
+  DbgPrint("NDIS: NDIS_PROTOCOL_CHARACTERISTICS size=%u, NDIS40 size=%u\n",
+           (ULONG)sizeof(NDIS_PROTOCOL_CHARACTERISTICS),
+           (ULONG)sizeof(NDIS40_PROTOCOL_CHARACTERISTICS));
+  DbgPrint("NDIS: BindAdapterHandler offset in NDIS40=%u, in NDIS_PROTOCOL=%u\n",
+           (ULONG)FIELD_OFFSET(NDIS40_PROTOCOL_CHARACTERISTICS, BindAdapterHandler),
+           (ULONG)FIELD_OFFSET(NDIS_PROTOCOL_CHARACTERISTICS, BindAdapterHandler));
+
   Protocol = ExAllocatePool(NonPagedPool, sizeof(PROTOCOL_BINDING));
   if (!Protocol)
     {
@@ -1184,6 +1608,9 @@ NdisRegisterProtocol(
 
   RtlZeroMemory(Protocol, sizeof(PROTOCOL_BINDING));
   RtlCopyMemory(&Protocol->Chars, ProtocolCharacteristics, MinSize);
+
+  DbgPrint("NDIS: After copy, Protocol=%p, Protocol->Chars.BindAdapterHandler=%p\n",
+           Protocol, Protocol->Chars.BindAdapterHandler);
 
   NtStatus = RtlUpcaseUnicodeString(&Protocol->Chars.Name, &ProtocolCharacteristics->Name, TRUE);
   if (!NT_SUCCESS(NtStatus))

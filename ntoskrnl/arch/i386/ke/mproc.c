@@ -38,8 +38,8 @@ VOID
 NTAPI
 KeStartAllProcessors(VOID)
 {
-    PVOID KernelStack, DPCStack;
-    PAPINFO APInfo;
+    PVOID KernelStack = NULL, DPCStack = NULL;
+    PAPINFO APInfo = NULL;
     ULONG ProcessorCount;
     ULONG MaximumProcessors;
 

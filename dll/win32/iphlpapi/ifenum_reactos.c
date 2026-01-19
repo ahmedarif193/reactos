@@ -164,6 +164,8 @@ static NTSTATUS getInterfaceInfoSet( HANDLE tcpFile,
     IFInfo *infoSetInt = 0;
     int curInterf = 0, i;
 
+    TRACE("getInterfaceInfoSet: tdiGetEntityIDSet returned status=0x%lx, numEntities=%lu\n", status, numEntities);
+
     if (!NT_SUCCESS(status)) {
         ERR("getInterfaceInfoSet: tdiGetEntityIDSet() failed: 0x%lx\n", status);
         return status;
@@ -174,7 +176,10 @@ static NTSTATUS getInterfaceInfoSet( HANDLE tcpFile,
 
     if( infoSetInt ) {
         for( i = 0; i < numEntities; i++ ) {
+            TRACE("getInterfaceInfoSet: Entity %d: tei_entity=%04x, tei_instance=%08x\n",
+                   i, entIDSet[i].tei_entity, entIDSet[i].tei_instance);
             if( isInterface( &entIDSet[i] ) ) {
+                TRACE("getInterfaceInfoSet: Entity %d is an interface\n", i);
                 infoSetInt[curInterf].entity_id = entIDSet[i];
                 status = tdiGetMibForIfEntity
                     ( tcpFile,

@@ -1286,9 +1286,20 @@ VOID GetName( PUNICODE_STRING RegistryKey,
               PUNICODE_STRING OutName ) {
     PWCHAR Ptr;
     UNICODE_STRING PartialRegistryKey;
+    SIZE_T PrefixLen;
+
+    /* Calculate the prefix length */
+    PrefixLen = wcslen(CCS_ROOT L"\\Services\\");
+
+    /* Make sure the registry key is long enough */
+    if ((RegistryKey->Length / sizeof(WCHAR)) <= PrefixLen) {
+        TI_DbgPrint(MIN_TRACE, ("Registry key too short: %wZ\n", RegistryKey));
+        RtlInitUnicodeString(OutName, L"");
+        return;
+    }
 
     PartialRegistryKey.Buffer =
-        RegistryKey->Buffer + wcslen(CCS_ROOT L"\\Services\\");
+        RegistryKey->Buffer + PrefixLen;
     Ptr = PartialRegistryKey.Buffer;
 
     while( *Ptr != L'\\' &&
@@ -1296,10 +1307,12 @@ VOID GetName( PUNICODE_STRING RegistryKey,
         Ptr++;
 
     PartialRegistryKey.Length = PartialRegistryKey.MaximumLength =
-        (Ptr - PartialRegistryKey.Buffer) * sizeof(WCHAR);
+        (USHORT)((Ptr - PartialRegistryKey.Buffer) * sizeof(WCHAR));
 
     RtlInitUnicodeString( OutName, L"" );
     AppendUnicodeString( OutName, &PartialRegistryKey, FALSE );
+
+    TI_DbgPrint(DEBUG_DATALINK, ("Extracted interface name: %wZ\n", OutName));
 }
 
 BOOLEAN BindAdapter(
@@ -1322,6 +1335,7 @@ BOOLEAN BindAdapter(
     NDIS_MEDIA_STATE MediaState;
 
     TI_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
+    TI_DbgPrint(DEBUG_DATALINK, ("RegistryPath: %wZ\n", RegistryPath));
 
     Adapter->State = LAN_STATE_OPENING;
 

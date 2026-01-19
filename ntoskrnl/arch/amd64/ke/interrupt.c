@@ -92,6 +92,10 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
         return FALSE;
     }
 
+    DbgPrint("KeConnectInterrupt: Vector=%u, Irql=%u, SyncIrql=%u, Mode=%d, CPU=%d\n",
+             Interrupt->Vector, Interrupt->Irql, Interrupt->SynchronizeIrql,
+             Interrupt->Mode, Interrupt->Number);
+
     ASSERT(Interrupt->Number < KeNumberProcessors);
     ASSERT(Interrupt->Irql <= HIGH_LEVEL);
     ASSERT(Interrupt->SynchronizeIrql >= Interrupt->Irql);
@@ -117,6 +121,9 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
         /* Set normal dispatch address */
         Interrupt->DispatchAddress = KiInterruptDispatch;
 
+        DbgPrint("KeConnectInterrupt: Registering IDT handler for Vector=%u, DispatchCode=%p\n",
+                 Interrupt->Vector, Interrupt->DispatchCode);
+
         /* Set the new handler */
         KeRegisterInterruptHandler(Interrupt->Vector,
                                    Interrupt->DispatchCode);
@@ -130,6 +137,17 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
             DPRINT1("HalEnableSystemInterrupt failed\n");
             KeRegisterInterruptHandler(Interrupt->Vector, CurrentHandler);
             goto Cleanup;
+        }
+
+        DbgPrint("KeConnectInterrupt: Vector=%u successfully enabled via HalEnableSystemInterrupt\n",
+                 Interrupt->Vector);
+
+        /* Debug: Verify IDT entry after registration */
+        {
+            PKIDTENTRY64 Idt = &KeGetPcr()->IdtBase[HalVectorToIDTEntry(Interrupt->Vector)];
+            ULONG64 Handler = (ULONG64)Idt->OffsetLow | ((ULONG64)Idt->OffsetMiddle << 16) | ((ULONG64)Idt->OffsetHigh << 32);
+            DbgPrint("KeConnectInterrupt: IDT[%u] entry: Handler=0x%p, Present=%d\n",
+                     Interrupt->Vector, (PVOID)Handler, Idt->Present);
         }
     }
     else

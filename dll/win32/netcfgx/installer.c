@@ -168,6 +168,9 @@ InstallNetDevice(
     PWSTR pszNameBuffer = NULL;
     PWSTR ptr;
 
+    ERR("InstallNetDevice: UuidString=%S, Characteristics=0x%lx, BusType=%S\n",
+        UuidString, Characteristics, BusType ? BusType : L"(null)");
+
     DeviceInstallParams.cbSize = sizeof(DeviceInstallParams);
     if (!SetupDiGetDeviceInstallParamsW(DeviceInfoSet,
                                         DeviceInfoData,
@@ -438,6 +441,9 @@ InstallNetDevice(
         goto cleanup;
     }
 
+    ERR("InstallNetDevice: Successfully created Connection key for %S, Name=%S, PnpInstanceID=%S\n",
+        UuidString, pszNameBuffer, InstanceId);
+
     /* Write linkage information in Tcpip service */
     rc = RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Linkage", 0, NULL, REG_OPTION_NON_VOLATILE, KEY_QUERY_VALUE | KEY_SET_VALUE, NULL, &hKey, NULL);
     if (rc != ERROR_SUCCESS)
@@ -543,8 +549,14 @@ NetClassInstaller(
     LONG rc;
     DWORD dwLength;
 
+    ERR("NetClassInstaller: InstallFunction=%lu, DeviceInfoSet=%p, DeviceInfoData=%p\n",
+        InstallFunction, DeviceInfoSet, DeviceInfoData);
+
     if (InstallFunction != DIF_INSTALLDEVICE)
+    {
+        ERR("NetClassInstaller: Not DIF_INSTALLDEVICE, returning ERROR_DI_DO_DEFAULT\n");
         return ERROR_DI_DO_DEFAULT;
+    }
 
     TRACE("%lu %p %p\n", InstallFunction, DeviceInfoSet, DeviceInfoData);
 

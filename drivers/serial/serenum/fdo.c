@@ -4,7 +4,7 @@
  * FILE:            drivers/bus/serenum/fdo.c
  * PURPOSE:         IRP_MJ_PNP operations for FDOs
  *
- * PROGRAMMERS:     Hervé Poussineau (hpoussin@reactos.org)
+ * PROGRAMMERS:     Hervï¿½ Poussineau (hpoussin@reactos.org)
  */
 
 #include "serenum.h"
@@ -129,10 +129,21 @@ SerenumFdoQueryBusRelations(
 	}
 	NumPDO = (DeviceExtension->AttachedPdo != NULL ? 1 : 0);
 
-	DeviceRelations = (PDEVICE_RELATIONS)ExAllocatePoolWithTag(
-		PagedPool,
-		sizeof(DEVICE_RELATIONS) + sizeof(PDEVICE_OBJECT) * (NumPDO - 1),
-		SERENUM_TAG);
+	/* Allocate device relations structure */
+	if (NumPDO > 1)
+	{
+		DeviceRelations = (PDEVICE_RELATIONS)ExAllocatePoolWithTag(
+			PagedPool,
+			sizeof(DEVICE_RELATIONS) + sizeof(PDEVICE_OBJECT) * (NumPDO - 1),
+			SERENUM_TAG);
+	}
+	else
+	{
+		DeviceRelations = (PDEVICE_RELATIONS)ExAllocatePoolWithTag(
+			PagedPool,
+			sizeof(DEVICE_RELATIONS),
+			SERENUM_TAG);
+	}
 	if (!DeviceRelations)
 		return STATUS_INSUFFICIENT_RESOURCES;
 

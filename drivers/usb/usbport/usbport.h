@@ -416,6 +416,7 @@ typedef struct _USBPORT_DEVICE_EXTENSION {
   PVOID MiniPortExt;
   PUSBPORT_MINIPORT_INTERFACE MiniPortInterface;
   USBPORT_RESOURCES UsbPortResources;
+  PHYSICAL_ADDRESS MemoryBasePhysical; /* Physical address of memory BAR for MSI-X */
   PUSBPORT_COMMON_BUFFER_HEADER MiniPortCommonBuffer;
   KSPIN_LOCK MiniportSpinLock;
   /* Bus Interface */

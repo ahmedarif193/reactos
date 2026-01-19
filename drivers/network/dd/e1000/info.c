@@ -4,6 +4,7 @@
  * PURPOSE:     Miniport information callbacks
  * COPYRIGHT:   2013 Cameron Gutman (cameron.gutman@reactos.org)
  *              2018 Mark Jansen (mark.jansen@reactos.org)
+ *              2024 ReactOS Team - Power management and improved statistics
  */
 
 #include "nic.h"
@@ -46,7 +47,14 @@ static NDIS_OID SupportedOidList[] =
     OID_GEN_RCV_ERROR,
     OID_GEN_RCV_NO_BUFFER,
 
+    /* Power Management */
     OID_PNP_CAPABILITIES,
+    OID_PNP_SET_POWER,
+    OID_PNP_QUERY_POWER,
+    OID_PNP_ENABLE_WAKE_UP,
+
+    /* Task Offload - for future checksum offload reporting */
+    /* OID_TCP_TASK_OFFLOAD - Add when full checksum offload OID support is needed */
 };
 
 static
@@ -55,8 +63,29 @@ NICQueryStatisticCounter(
     _In_ PE1000_ADAPTER Adapter,
     _In_ NDIS_OID Oid)
 {
-    /* TODO */
-    return 0;
+    /* Update statistics from hardware before returning */
+    NICUpdateStatistics(Adapter);
+
+    switch (Oid)
+    {
+    case OID_GEN_XMIT_OK:
+        return Adapter->Statistics.TxPackets;
+
+    case OID_GEN_RCV_OK:
+        return Adapter->Statistics.RxPackets;
+
+    case OID_GEN_XMIT_ERROR:
+        return Adapter->Statistics.TxErrors;
+
+    case OID_GEN_RCV_ERROR:
+        return Adapter->Statistics.RxErrors;
+
+    case OID_GEN_RCV_NO_BUFFER:
+        return Adapter->Statistics.RxNoBuffer;
+
+    default:
+        return 0;
+    }
 }
 
 static
@@ -65,8 +94,18 @@ NICFillPowerManagementCapabilities(
     _In_ PE1000_ADAPTER Adapter,
     _Out_ PNDIS_PNP_CAPABILITIES Capabilities)
 {
-    /* TODO */
-    return NDIS_STATUS_NOT_SUPPORTED;
+    PNDIS_PM_WAKE_UP_CAPABILITIES WakeUpCaps;
+
+    RtlZeroMemory(Capabilities, sizeof(NDIS_PNP_CAPABILITIES));
+
+    WakeUpCaps = &Capabilities->WakeUpCapabilities;
+
+    /* Report power management capabilities */
+    WakeUpCaps->MinMagicPacketWakeUp = NdisDeviceStateD3;  /* Magic packet supported from D3 */
+    WakeUpCaps->MinPatternWakeUp = NdisDeviceStateUnspecified;  /* Pattern match not currently supported */
+    WakeUpCaps->MinLinkChangeWakeUp = NdisDeviceStateD3;  /* Link change wake from D3 */
+
+    return NDIS_STATUS_SUCCESS;
 }
 
 NDIS_STATUS
@@ -90,6 +129,7 @@ MiniportQueryInformation(
         ULONG64 Ulong64;
         NDIS_MEDIUM Medium;
         NDIS_PNP_CAPABILITIES PmCapabilities;
+        NDIS_DEVICE_POWER_STATE PowerState;
     } GenericInfo;
 
     status = NDIS_STATUS_SUCCESS;
@@ -108,8 +148,7 @@ MiniportQueryInformation(
         break;
 
     case OID_GEN_HARDWARE_STATUS:
-        UNIMPLEMENTED_DBGBREAK();
-        GenericInfo.Ulong = (ULONG)NdisHardwareStatusReady; //FIXME
+        GenericInfo.Ulong = (ULONG)NdisHardwareStatusReady;
         break;
 
     case OID_GEN_MEDIA_SUPPORTED:
@@ -142,11 +181,13 @@ MiniportQueryInformation(
         break;
 
     case OID_GEN_TRANSMIT_BUFFER_SPACE:
-        GenericInfo.Ulong = MAXIMUM_FRAME_SIZE;
+        /* Report space based on descriptor ring size */
+        GenericInfo.Ulong = MAXIMUM_FRAME_SIZE * NUM_TRANSMIT_DESCRIPTORS;
         break;
 
     case OID_GEN_RECEIVE_BUFFER_SPACE:
-        GenericInfo.Ulong = RECEIVE_BUFFER_SIZE;
+        /* Report space based on descriptor ring size */
+        GenericInfo.Ulong = RECEIVE_BUFFER_SIZE * NUM_RECEIVE_DESCRIPTORS;
         break;
 
     case OID_GEN_VENDOR_ID:
@@ -181,7 +222,12 @@ MiniportQueryInformation(
         break;
 
     case OID_GEN_MAXIMUM_SEND_PACKETS:
-        GenericInfo.Ulong = 1;
+        /*
+         * Report the number of TX descriptors available for batch sends.
+         * This is used by NDIS to determine how many packets can be
+         * submitted in a single MiniportSendPackets call.
+         */
+        GenericInfo.Ulong = NUM_TRANSMIT_DESCRIPTORS;
         break;
 
     case OID_GEN_MAC_OPTIONS:
@@ -217,12 +263,12 @@ MiniportQueryInformation(
         if (InformationBufferLength >= sizeof(ULONG64))
         {
             *BytesWritten = sizeof(ULONG64);
-            NdisMoveMemory(InformationBuffer, copySource, sizeof(ULONG64));
+            NdisMoveMemory(InformationBuffer, &GenericInfo.Ulong64, sizeof(ULONG64));
         }
         else if (InformationBufferLength >= sizeof(ULONG))
         {
             *BytesWritten = sizeof(ULONG);
-            NdisMoveMemory(InformationBuffer, copySource, sizeof(ULONG));
+            NdisMoveMemory(InformationBuffer, &GenericInfo.Ulong64, sizeof(ULONG));
         }
         else
         {
@@ -235,8 +281,38 @@ MiniportQueryInformation(
     case OID_PNP_CAPABILITIES:
     {
         copyLength = sizeof(NDIS_PNP_CAPABILITIES);
-
         status = NICFillPowerManagementCapabilities(Adapter, &GenericInfo.PmCapabilities);
+        break;
+    }
+
+    case OID_PNP_QUERY_POWER:
+    {
+        /*
+         * Query whether the device can transition to the specified power state.
+         * We support all power states, so always return success.
+         */
+        if (InformationBufferLength < sizeof(NDIS_DEVICE_POWER_STATE))
+        {
+            *BytesNeeded = sizeof(NDIS_DEVICE_POWER_STATE);
+            *BytesWritten = 0;
+            return NDIS_STATUS_BUFFER_TOO_SHORT;
+        }
+
+        NdisMoveMemory(&GenericInfo.PowerState, InformationBuffer, sizeof(NDIS_DEVICE_POWER_STATE));
+        status = NICQueryPowerState(Adapter, GenericInfo.PowerState);
+
+        *BytesWritten = 0;
+        *BytesNeeded = 0;
+        return status;
+    }
+
+    case OID_PNP_ENABLE_WAKE_UP:
+    {
+        GenericInfo.Ulong = 0;
+        if (Adapter->WakeOnMagicPacket)
+            GenericInfo.Ulong |= NDIS_PNP_WAKE_UP_MAGIC_PACKET;
+        if (Adapter->WakeOnLinkChange)
+            GenericInfo.Ulong |= NDIS_PNP_WAKE_UP_LINK_CHANGE;
         break;
     }
 
@@ -354,7 +430,7 @@ MiniportSetInformation(
         }
         else
         {
-            // Ignore this...
+            /* Accept but ignore - we always indicate full packet */
         }
 
         break;
@@ -383,6 +459,55 @@ MiniportSetInformation(
         NICUpdateMulticastList(Adapter);
         break;
 
+    case OID_PNP_SET_POWER:
+    {
+        NDIS_DEVICE_POWER_STATE NewPowerState;
+
+        if (InformationBufferLength < sizeof(NDIS_DEVICE_POWER_STATE))
+        {
+            *BytesRead = 0;
+            *BytesNeeded = sizeof(NDIS_DEVICE_POWER_STATE);
+            status = NDIS_STATUS_INVALID_LENGTH;
+            break;
+        }
+
+        NdisMoveMemory(&NewPowerState, InformationBuffer, sizeof(NDIS_DEVICE_POWER_STATE));
+
+        NDIS_DbgPrint(MID_TRACE, ("OID_PNP_SET_POWER: Transitioning to D%d\n",
+                                  NewPowerState - NdisDeviceStateD0));
+
+        status = NICSetPowerState(Adapter, NewPowerState);
+
+        *BytesRead = sizeof(NDIS_DEVICE_POWER_STATE);
+        *BytesNeeded = 0;
+        return status;
+    }
+
+    case OID_PNP_ENABLE_WAKE_UP:
+    {
+        ULONG WakeUpFlags;
+
+        if (InformationBufferLength < sizeof(ULONG))
+        {
+            *BytesRead = 0;
+            *BytesNeeded = sizeof(ULONG);
+            status = NDIS_STATUS_INVALID_LENGTH;
+            break;
+        }
+
+        NdisMoveMemory(&WakeUpFlags, InformationBuffer, sizeof(ULONG));
+
+        Adapter->WakeOnMagicPacket = (WakeUpFlags & NDIS_PNP_WAKE_UP_MAGIC_PACKET) ? TRUE : FALSE;
+        Adapter->WakeOnLinkChange = (WakeUpFlags & NDIS_PNP_WAKE_UP_LINK_CHANGE) ? TRUE : FALSE;
+
+        NDIS_DbgPrint(MID_TRACE, ("Wake-up enabled: Magic=%d, Link=%d\n",
+                                  Adapter->WakeOnMagicPacket, Adapter->WakeOnLinkChange));
+
+        *BytesRead = sizeof(ULONG);
+        *BytesNeeded = 0;
+        return NDIS_STATUS_SUCCESS;
+    }
+
     default:
         NDIS_DbgPrint(MIN_TRACE, ("Unknown OID 0x%x(%s)\n", Oid, Oid2Str(Oid)));
         status = NDIS_STATUS_NOT_SUPPORTED;
@@ -399,4 +524,3 @@ MiniportSetInformation(
 
     return status;
 }
-

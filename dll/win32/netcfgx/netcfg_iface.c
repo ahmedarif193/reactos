@@ -414,11 +414,15 @@ EnumerateNetworkAdapter(NetCfgComponentItem ** pHead)
     WCHAR szName[130] = L"SYSTEM\\CurrentControlSet\\Control\\Network\\{4D36E972-E325-11CE-BFC1-08002BE10318}\\";
     NetCfgComponentItem * pLast = NULL, *pCurrent;
 
+    TRACE("EnumerateNetworkAdapter: Starting enumeration\n");
+
     hInfo = SetupDiGetClassDevs(&GUID_DEVCLASS_NET, NULL, NULL, DIGCF_PRESENT );
     if (!hInfo)
     {
+        TRACE("EnumerateNetworkAdapter: SetupDiGetClassDevs failed, error=%lu\n", GetLastError());
         return E_FAIL;
     }
+    TRACE("EnumerateNetworkAdapter: SetupDiGetClassDevs succeeded, hInfo=%p\n", hInfo);
 
     dwIndex = 0;
     do
@@ -428,23 +432,36 @@ EnumerateNetworkAdapter(NetCfgComponentItem ** pHead)
 
         /* get device info */
         if (!SetupDiEnumDeviceInfo(hInfo, dwIndex++, &DevInfo))
+        {
+            TRACE("EnumerateNetworkAdapter: SetupDiEnumDeviceInfo ended at index %lu, error=%lu\n", dwIndex-1, GetLastError());
             break;
+        }
+        TRACE("EnumerateNetworkAdapter: Found device at index %lu\n", dwIndex-1);
 
         /* get device software registry path */
         if (!SetupDiGetDeviceRegistryPropertyW(hInfo, &DevInfo, SPDRP_DRIVER, NULL, (LPBYTE)&szDetail[39], sizeof(szDetail)/sizeof(WCHAR) - 40, &dwSize))
+        {
+            TRACE("EnumerateNetworkAdapter: SPDRP_DRIVER failed for index %lu, error=%lu\n", dwIndex-1, GetLastError());
             break;
+        }
+        TRACE("EnumerateNetworkAdapter: SPDRP_DRIVER=%S\n", &szDetail[39]);
 
         /* open device registry key */
         if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, szDetail, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+        {
+            TRACE("EnumerateNetworkAdapter: RegOpenKeyExW failed for %S\n", szDetail);
             break;
+        }
 
         /* query NetCfgInstanceId for current device */
         dwSize = sizeof(szNetCfg);
         if (RegQueryValueExW(hKey, L"NetCfgInstanceId", NULL, NULL, (LPBYTE)szNetCfg, &dwSize) != ERROR_SUCCESS)
         {
+            TRACE("EnumerateNetworkAdapter: NetCfgInstanceId not found for %S\n", szDetail);
             RegCloseKey(hKey);
             break;
         }
+        TRACE("EnumerateNetworkAdapter: NetCfgInstanceId=%S\n", szNetCfg);
 
         /* allocate new INetConnectionItem */
         pCurrent = CoTaskMemAlloc(sizeof(NetCfgComponentItem));

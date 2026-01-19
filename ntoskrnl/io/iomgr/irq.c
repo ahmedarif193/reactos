@@ -256,6 +256,219 @@ IoDisconnectInterrupt(PKINTERRUPT InterruptObject)
     ExFreePoolWithTag(IoInterrupt, TAG_IO_INTERRUPT);
 }
 
+/*
+ * MSI-X table entry structure (16 bytes per entry)
+ */
+typedef struct _MSIX_TABLE_ENTRY {
+    ULONG MessageAddressLow;
+    ULONG MessageAddressHigh;
+    ULONG MessageData;
+    ULONG VectorControl;
+} MSIX_TABLE_ENTRY, *PMSIX_TABLE_ENTRY;
+
+#define PCI_CAPABILITY_ID_MSIX 0x11
+
+/*
+ * IopProgramMsixTable - Program MSI-X table entries for a device
+ *
+ * This function programs the MSI-X table in the device's BAR with the
+ * message address and data for each interrupt vector.
+ *
+ * Parameters:
+ *   PhysicalDeviceObject - The PDO for the PCI device
+ *   MessageInfo - Information about the message-based interrupts
+ *   ResourceList - Allocated resources containing memory BAR info
+ *
+ * Returns:
+ *   STATUS_SUCCESS on success, error status otherwise
+ */
+static __attribute__((unused))
+NTSTATUS
+IopProgramMsixTable(
+    _In_ PDEVICE_OBJECT PhysicalDeviceObject,
+    _In_ PIO_INTERRUPT_MESSAGE_INFO MessageInfo,
+    _In_ PCM_RESOURCE_LIST ResourceList)
+{
+    NTSTATUS Status;
+    BUS_INTERFACE_STANDARD BusInterface;
+    UCHAR CapOffset;
+    UCHAR CapId;
+    UCHAR NextCap;
+    USHORT MsixControl;
+    ULONG TableOffsetBir;
+    ULONG TableBar;
+    ULONG TableOffset;
+    PHYSICAL_ADDRESS MsixBarPhysical;
+    SIZE_T MsixBarLength = 0;
+    PVOID MsixBarVirtual = NULL;
+    PMSIX_TABLE_ENTRY MsixTable;
+    ULONG i;
+    PCM_FULL_RESOURCE_DESCRIPTOR FullDesc;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDesc;
+    BOOLEAN FoundBar = FALSE;
+
+    /* Get BUS_INTERFACE_STANDARD from the PDO */
+    Status = IoGetDeviceProperty(PhysicalDeviceObject,
+                                 DevicePropertyBusTypeGuid,
+                                 0,
+                                 NULL,
+                                 NULL);
+
+    /* Query for BUS_INTERFACE_STANDARD */
+    {
+        IO_STATUS_BLOCK IoStatus;
+        KEVENT Event;
+        PIRP Irp;
+        PIO_STACK_LOCATION IrpStack;
+
+        KeInitializeEvent(&Event, NotificationEvent, FALSE);
+
+        Irp = IoBuildSynchronousFsdRequest(IRP_MJ_PNP,
+                                           PhysicalDeviceObject,
+                                           NULL,
+                                           0,
+                                           NULL,
+                                           &Event,
+                                           &IoStatus);
+        if (!Irp)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        IrpStack = IoGetNextIrpStackLocation(Irp);
+        IrpStack->MinorFunction = IRP_MN_QUERY_INTERFACE;
+        IrpStack->Parameters.QueryInterface.InterfaceType = &GUID_BUS_INTERFACE_STANDARD;
+        IrpStack->Parameters.QueryInterface.Size = sizeof(BUS_INTERFACE_STANDARD);
+        IrpStack->Parameters.QueryInterface.Version = 1;
+        IrpStack->Parameters.QueryInterface.Interface = (PINTERFACE)&BusInterface;
+        IrpStack->Parameters.QueryInterface.InterfaceSpecificData = NULL;
+
+        Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+
+        Status = IoCallDriver(PhysicalDeviceObject, Irp);
+        if (Status == STATUS_PENDING)
+        {
+            KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+            Status = IoStatus.Status;
+        }
+
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("IopProgramMsixTable: Failed to get BUS_INTERFACE_STANDARD: 0x%x\n", Status);
+            return Status;
+        }
+    }
+
+    /* Find MSI-X capability */
+    CapOffset = 0;
+    BusInterface.GetBusData(BusInterface.Context, PCI_WHICHSPACE_CONFIG,
+                            &CapOffset, 0x34, sizeof(CapOffset));
+
+    while (CapOffset != 0 && CapOffset != 0xFF)
+    {
+        BusInterface.GetBusData(BusInterface.Context, PCI_WHICHSPACE_CONFIG,
+                                &CapId, CapOffset, sizeof(CapId));
+
+        if (CapId == PCI_CAPABILITY_ID_MSIX)
+            break;
+
+        BusInterface.GetBusData(BusInterface.Context, PCI_WHICHSPACE_CONFIG,
+                                &NextCap, CapOffset + 1, sizeof(NextCap));
+        CapOffset = NextCap;
+    }
+
+    if (CapOffset == 0 || CapOffset == 0xFF || CapId != PCI_CAPABILITY_ID_MSIX)
+    {
+        DPRINT1("IopProgramMsixTable: MSI-X capability not found\n");
+        BusInterface.InterfaceDereference(BusInterface.Context);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    /* Read MSI-X control and table offset/BIR */
+    BusInterface.GetBusData(BusInterface.Context, PCI_WHICHSPACE_CONFIG,
+                            &MsixControl, CapOffset + 2, sizeof(MsixControl));
+    BusInterface.GetBusData(BusInterface.Context, PCI_WHICHSPACE_CONFIG,
+                            &TableOffsetBir, CapOffset + 4, sizeof(TableOffsetBir));
+
+    TableBar = TableOffsetBir & 0x7;
+    TableOffset = TableOffsetBir & ~0x7;
+
+    DPRINT("IopProgramMsixTable: MSI-X Cap at 0x%x, Control=0x%04x, TableBAR=%u, TableOffset=0x%x\n",
+           CapOffset, MsixControl, TableBar, TableOffset);
+
+    /* Find the BAR in the resources */
+    FullDesc = &ResourceList->List[0];
+    for (i = 0; i < ResourceList->Count && !FoundBar; i++, FullDesc++)
+    {
+        PCM_PARTIAL_RESOURCE_LIST PartialList = &FullDesc->PartialResourceList;
+        ULONG j;
+        ULONG MemoryBarIndex = 0;
+
+        for (j = 0; j < PartialList->Count; j++)
+        {
+            PartialDesc = &PartialList->PartialDescriptors[j];
+            if (PartialDesc->Type == CmResourceTypeMemory)
+            {
+                if (MemoryBarIndex == TableBar)
+                {
+                    MsixBarPhysical = PartialDesc->u.Memory.Start;
+                    MsixBarLength = PartialDesc->u.Memory.Length;
+                    FoundBar = TRUE;
+                    break;
+                }
+                MemoryBarIndex++;
+            }
+        }
+    }
+
+    if (!FoundBar)
+    {
+        DPRINT1("IopProgramMsixTable: Could not find BAR%u in resources\n", TableBar);
+        BusInterface.InterfaceDereference(BusInterface.Context);
+        return STATUS_RESOURCE_DATA_NOT_FOUND;
+    }
+
+    /* Map the MSI-X table BAR */
+    MsixBarVirtual = MmMapIoSpace(MsixBarPhysical, MsixBarLength, MmNonCached);
+    if (!MsixBarVirtual)
+    {
+        DPRINT1("IopProgramMsixTable: Failed to map MSI-X BAR\n");
+        BusInterface.InterfaceDereference(BusInterface.Context);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    /* Program each table entry */
+    MsixTable = (PMSIX_TABLE_ENTRY)((PUCHAR)MsixBarVirtual + TableOffset);
+
+    for (i = 0; i < MessageInfo->MessageCount; i++)
+    {
+        PIO_INTERRUPT_MESSAGE_INFO_ENTRY InfoEntry = &MessageInfo->MessageInfo[i];
+
+        DPRINT("IopProgramMsixTable: Entry[%u]: Addr=0x%I64x Data=0x%x Vector=%u\n",
+               i, InfoEntry->MessageAddress.QuadPart, InfoEntry->MessageData, InfoEntry->Vector);
+
+        MsixTable[i].MessageAddressLow = (ULONG)InfoEntry->MessageAddress.LowPart;
+        MsixTable[i].MessageAddressHigh = (ULONG)InfoEntry->MessageAddress.HighPart;
+        MsixTable[i].MessageData = InfoEntry->MessageData;
+        MsixTable[i].VectorControl = 0;  /* Unmask the vector */
+    }
+
+    /* Enable MSI-X if not already enabled */
+    if (!(MsixControl & 0x8000))
+    {
+        MsixControl |= 0x8000;  /* Set MSI-X Enable bit */
+        MsixControl &= ~0x4000; /* Clear Function Mask */
+        BusInterface.SetBusData(BusInterface.Context, PCI_WHICHSPACE_CONFIG,
+                                &MsixControl, CapOffset + 2, sizeof(MsixControl));
+        DPRINT("IopProgramMsixTable: Enabled MSI-X (Control=0x%04x)\n", MsixControl);
+    }
+
+    /* Unmap and cleanup */
+    MmUnmapIoSpace(MsixBarVirtual, MsixBarLength);
+    BusInterface.InterfaceDereference(BusInterface.Context);
+
+    DPRINT("IopProgramMsixTable: Successfully programmed %u MSI-X entries\n", MessageInfo->MessageCount);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 IopConnectInterruptExFullySpecific(
     _Inout_ PIO_CONNECT_INTERRUPT_PARAMETERS Parameters)
@@ -396,8 +609,12 @@ IoConnectInterruptEx(
             MessageInfo->UnifiedIrql = (KIRQL)Descriptor->u.MessageInterrupt.Translated.Level;
             MessageInfo->MessageCount = MessageCount;
 
-            Mode = (Descriptor->Flags & CM_RESOURCE_INTERRUPT_LATCHED) ?
-                   Latched : LevelSensitive;
+            /*
+             * MSI/MSI-X interrupts are inherently edge-triggered (latched).
+             * The LATCHED flag may not be set in the resource descriptor,
+             * but we must always use Latched mode to prevent interrupt storms.
+             */
+            Mode = Latched;
             Affinity = Descriptor->u.MessageInterrupt.Translated.Affinity ?
                        Descriptor->u.MessageInterrupt.Translated.Affinity :
                        KeActiveProcessors;
@@ -464,6 +681,13 @@ IoConnectInterruptEx(
 
                 InfoEntry->InterruptObject = &Entry->Interrupt;
             }
+
+            /*
+             * Note: MSI-X table programming is handled by individual drivers or
+             * driver frameworks (like NDIS) that call device-specific setup routines.
+             * The kernel provides the vector information, but actual hardware
+             * table programming is done at the driver level.
+             */
 
             ExFreePoolWithTag(ResourceList, TAG_IO_INTERRUPT);
 

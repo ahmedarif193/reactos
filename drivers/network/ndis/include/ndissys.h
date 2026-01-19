@@ -61,4 +61,26 @@ ExGetCurrentProcessorCpuUsage(
 #define KefReleaseSpinLockFromDpcLevel KeReleaseSpinLockFromDpcLevel
 #endif
 
+/* NDIS 6.x support */
+#if NDIS_SUPPORT_NDIS6
+
+/* NDIS 6.x internal functions (miniport6_state.c) */
+NDIS_STATUS
+Ndis6iSetAdapterRunning(
+    _In_ NDIS_HANDLE MiniportAdapterHandle);
+
+NDIS_STATUS
+Ndis6iSetAdapterHalting(
+    _In_ NDIS_HANDLE MiniportAdapterHandle);
+
+VOID
+Ndis6iSetAdapterHalted(
+    _In_ NDIS_HANDLE MiniportAdapterHandle);
+
+NDIS_MINIPORT_ADAPTER_STATE
+Ndis6iGetAdapterState(
+    _In_ NDIS_HANDLE MiniportAdapterHandle);
+
+#endif /* NDIS_SUPPORT_NDIS6 */
+
 #endif /* __NDISSYS_H */

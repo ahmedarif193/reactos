@@ -292,3 +292,40 @@
  @ stdcall TrFilterDprIndicateReceive(ptr ptr ptr long ptr long long)
  @ stdcall TrFilterDprIndicateReceiveComplete(ptr)
  @ stdcall NdisScheduleWorkItem(ptr)
+# NDIS 6.x Miniport Driver Registration APIs
+@ stdcall NdisRegisterMiniportDriver(ptr ptr ptr ptr ptr)
+@ stdcall NdisDeregisterMiniportDriver(ptr)
+@ stdcall NdisMIndicateReceiveNetBufferLists(ptr ptr long long long)
+@ stdcall NdisMSendNetBufferListsComplete(ptr ptr long)
+@ stdcall NdisReturnNetBufferLists(ptr ptr long)
+# NDIS 6.x Pause/Restart State Machine APIs
+@ stdcall NdisMSetMiniportAttributes(ptr ptr)
+@ stdcall NdisMPauseComplete(ptr)
+@ stdcall NdisMRestartComplete(ptr long)
+# NDIS 6.x Status Indication APIs
+@ stdcall NdisMIndicateStatusEx(ptr ptr)
+# NDIS 6.x OID Request APIs
+@ stdcall NdisMOidRequestComplete(ptr ptr long)
+@ stdcall NdisMCancelOidRequest(ptr ptr)
+@ stdcall NdisMDirectOidRequestComplete(ptr ptr long)
+# NDIS 6.x NET_BUFFER/NET_BUFFER_LIST Pool Management APIs
+@ stdcall NdisAllocateNetBufferListPool(ptr ptr)
+@ stdcall NdisFreeNetBufferListPool(ptr)
+@ stdcall NdisAllocateNetBufferList(ptr long long)
+@ stdcall NdisFreeNetBufferList(ptr)
+@ stdcall NdisAllocateNetBufferPool(ptr ptr)
+@ stdcall NdisFreeNetBufferPool(ptr)
+@ stdcall NdisAllocateNetBuffer(ptr ptr long long)
+@ stdcall NdisFreeNetBuffer(ptr)
+@ stdcall NdisAllocateNetBufferAndNetBufferList(ptr long long ptr long long)
+@ stdcall NdisRetreatNetBufferDataStart(ptr long long ptr)
+@ stdcall NdisAdvanceNetBufferDataStart(ptr long long ptr)
+# NDIS 6.x Interrupt Handling APIs
+@ stdcall NdisMRegisterInterruptEx(ptr ptr ptr ptr)
+@ stdcall NdisMDeregisterInterruptEx(ptr)
+@ stdcall NdisMSynchronizeWithInterruptEx(ptr long ptr ptr)
+@ stdcall NdisMQueueDpc(ptr long long ptr)
+@ stdcall NdisMQueueDpcEx(ptr long ptr ptr)
+# NDIS 6.x Scatter-Gather DMA APIs
+@ stdcall NdisMRegisterScatterGatherDma(ptr ptr ptr)
+@ stdcall NdisMDeregisterScatterGatherDma(ptr)

@@ -6,6 +6,8 @@ add_definitions(
     -DNDIS_WRAPPER
     -DNDIS51
     -DNDIS51_MINIPORT
+    -DNDIS60
+    -DNDIS60_MINIPORT
     -DNDIS_LEGACY_DRIVER
     -DNDIS_LEGACY_MINIPORT
     -DNDIS_LEGACY_PROTOCOL
@@ -27,6 +29,12 @@ list(APPEND SOURCE
     ndis/main.c
     ndis/memory.c
     ndis/miniport.c
+    # NDIS 6.x miniport files - enabled for NDIS 6.x support
+    ndis/miniport6.c
+    ndis/miniport6_int.c
+    ndis/miniport6_nbl.c
+    ndis/miniport6_oid.c
+    ndis/miniport6_state.c
     ndis/misc.c
     ndis/protocol.c
     ndis/string.c

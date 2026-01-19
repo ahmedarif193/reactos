@@ -702,10 +702,12 @@ MiniLocateDevice(
     KIRQL OldIrql;
     PLIST_ENTRY CurrentEntry;
     PLOGICAL_ADAPTER Adapter = 0;
+    ULONG AdapterCount = 0;
 
     ASSERT(AdapterName);
 
     NDIS_DbgPrint(DEBUG_MINIPORT, ("Called.\n"));
+    NDIS_DbgPrint(DEBUG_MINIPORT, ("Looking for '%wZ'\n", AdapterName));
 
     if(IsListEmpty(&AdapterListHead))
     {
@@ -722,8 +724,12 @@ MiniLocateDevice(
         while (CurrentEntry != &AdapterListHead)
         {
             Adapter = CONTAINING_RECORD(CurrentEntry, LOGICAL_ADAPTER, ListEntry);
+            AdapterCount++;
 
             ASSERT(Adapter);
+
+            NDIS_DbgPrint(DEBUG_MINIPORT, ("Checking adapter[%lu]: '%wZ'\n",
+                     AdapterCount - 1, &Adapter->NdisMiniportBlock.MiniportName));
 
             NDIS_DbgPrint(DEBUG_MINIPORT, ("Examining adapter 0x%lx\n", Adapter));
 
@@ -731,6 +737,7 @@ MiniLocateDevice(
              * right now and I'd rather use a working API than reimplement it here */
             if (RtlCompareUnicodeString(AdapterName, &Adapter->NdisMiniportBlock.MiniportName, TRUE) == 0)
             {
+                NDIS_DbgPrint(DEBUG_MINIPORT, ("MATCH! Adapter=%p\n", Adapter));
                 break;
             }
 
@@ -740,12 +747,16 @@ MiniLocateDevice(
     }
     KeReleaseSpinLock(&AdapterListLock, OldIrql);
 
+    NDIS_DbgPrint(DEBUG_MINIPORT, ("Scanned %lu adapters\n", AdapterCount));
+
     if(Adapter)
     {
         NDIS_DbgPrint(DEBUG_MINIPORT, ("Leaving. Adapter found at 0x%x\n", Adapter));
     }
     else
     {
+        DbgPrint("NDIS: MiniLocateDevice - Adapter '%wZ' NOT FOUND after scanning %lu adapters\n",
+                 AdapterName, AdapterCount);
         NDIS_DbgPrint(MIN_TRACE, ("Leaving (adapter not found for %wZ).\n", AdapterName));
     }
 
@@ -1103,6 +1114,61 @@ MiniDequeueWorkItem(
     }
 }
 
+/*
+ * Check if this is an NDIS 6.x adapter by examining the device object extension.
+ * NDIS 6.x adapters have their device extension set up differently.
+ */
+static BOOLEAN
+MiniIsNdis6Adapter(
+    PLOGICAL_ADAPTER Adapter)
+{
+    /*
+     * For NDIS 6.x adapters, we store the DriverHandle as a pointer to
+     * NDIS6_MINIPORT_DRIVER_BLOCK. However, the safest way to check is to
+     * verify that the MiniportCharacteristics.QueryInformationHandler is valid.
+     *
+     * If the pointer value looks like a bogus pointer (not in kernel address space
+     * or not properly aligned), it's likely an NDIS 6.x adapter.
+     *
+     * NDIS 6.x adapters don't have QueryInformationHandler/SetInformationHandler;
+     * they use OidRequestHandler instead.
+     */
+    PNDIS_M_DRIVER_BLOCK DriverHandle = Adapter->NdisMiniportBlock.DriverHandle;
+
+    if (DriverHandle == NULL)
+        return FALSE;
+
+    /*
+     * Check if QueryInformationHandler looks like a valid function pointer.
+     * For NDIS 5.x, this should be a valid kernel-mode address.
+     * For NDIS 6.x, this field would be at an offset within NDIS6_MINIPORT_DRIVER_BLOCK
+     * which has a different structure, so it would contain garbage.
+     */
+    PVOID Handler = (PVOID)DriverHandle->MiniportCharacteristics.QueryInformationHandler;
+
+    /*
+     * Valid kernel function pointers on x64 are typically in the range 0xFFFFF80000000000 to 0xFFFFFFFFFFFFFFFF
+     * and are 16-byte aligned (function entry points).
+     * If the pointer doesn't look valid, assume NDIS 6.x.
+     */
+#ifdef _M_AMD64
+    if (Handler == NULL ||
+        (ULONG_PTR)Handler < 0xFFFFF80000000000ULL ||
+        ((ULONG_PTR)Handler & 0xF) != 0)
+    {
+        return TRUE;
+    }
+#else
+    if (Handler == NULL ||
+        (ULONG_PTR)Handler < 0x80000000UL)
+    {
+        return TRUE;
+    }
+#endif
+
+    return FALSE;
+}
+
 NDIS_STATUS
 MiniDoRequest(
     PLOGICAL_ADAPTER Adapter,
@@ -1119,6 +1185,24 @@ MiniDoRequest(
     NDIS_STATUS Status;
     KIRQL OldIrql;
     NDIS_DbgPrint(DEBUG_MINIPORT, ("Called.\n"));
+
+    /* Check if this is an NDIS 6.x adapter */
+    if (MiniIsNdis6Adapter(Adapter))
+    {
+        /*
+         * For NDIS 6.x adapters, we need to use the OidRequestHandler.
+         * This requires converting the NDIS_REQUEST to an NDIS_OID_REQUEST
+         * and calling through the NDIS 6.x driver characteristics.
+         */
+        NDIS_DbgPrint(MAX_TRACE, ("NDIS 6.x adapter, forwarding to Ndis6iHandleOidRequest\n"));
+#if NDIS_SUPPORT_NDIS6
+        extern NDIS_STATUS Ndis6iHandleOidRequest(PLOGICAL_ADAPTER Adapter, PNDIS_REQUEST NdisRequest);
+        return Ndis6iHandleOidRequest(Adapter, NdisRequest);
+#else
+        NDIS_DbgPrint(MIN_TRACE, ("NDIS 6.x support not compiled in\n"));
+        return NDIS_STATUS_NOT_SUPPORTED;
+#endif
+    }
 
     KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
 

@@ -970,6 +970,21 @@ NdisMRegisterInterrupt(
       "SharedInterrupt (%d)  InterruptMode (0x%X)\n",
       InterruptVector, InterruptLevel, SharedInterrupt, InterruptMode));
 
+  /*
+   * Debug logging for MSI investigation.
+   * The Vector and Level values from the driver come from the CM_PARTIAL_RESOURCE_DESCRIPTOR.
+   * For legacy interrupts, these are bus-relative values that need translation.
+   * For MSI/MSI-X, these are already system vectors allocated by the IRQ arbiter.
+   */
+  DbgPrint("NDIS: NdisMRegisterInterrupt entry\n");
+  DbgPrint("NDIS:   InterruptVector=%u (0x%x)\n", InterruptVector, InterruptVector);
+  DbgPrint("NDIS:   InterruptLevel=%u (0x%x)\n", InterruptLevel, InterruptLevel);
+  DbgPrint("NDIS:   SharedInterrupt=%d\n", SharedInterrupt);
+  DbgPrint("NDIS:   InterruptMode=%d (%s)\n", InterruptMode,
+           (InterruptMode == NdisInterruptLatched) ? "Latched" : "Level");
+  DbgPrint("NDIS:   BusType=%d BusNumber=%u\n",
+           Adapter->NdisMiniportBlock.BusType, Adapter->NdisMiniportBlock.BusNumber);
+
   RtlZeroMemory(Interrupt, sizeof(NDIS_MINIPORT_INTERRUPT));
 
   KeInitializeSpinLock(&Interrupt->DpcCountLock);
@@ -982,14 +997,83 @@ NdisMRegisterInterrupt(
   Interrupt->IsrRequested = RequestIsr;
   Interrupt->Miniport = &Adapter->NdisMiniportBlock;
 
-  MappedIRQ = HalGetInterruptVector((INTERFACE_TYPE)Adapter->NdisMiniportBlock.BusType, Adapter->NdisMiniportBlock.BusNumber,
-                                    InterruptLevel, InterruptVector, &DIrql,
-                                    &Affinity);
+  /*
+   * For MSI/MSI-X interrupts, the InterruptVector already contains the
+   * system interrupt vector allocated by the IRQ arbiter. We should NOT
+   * call HalGetInterruptVector because that expects bus-relative values.
+   *
+   * Detect MSI by checking if the vector is in the MSI range (typically > 31
+   * on x86/x64 since legacy IRQs are 0-23, and MSI vectors are allocated
+   * from higher ranges).
+   *
+   * On x86/x64, interrupt vectors 0x30 and above are typically used for
+   * device interrupts including MSI. If Level == Vector and both are >= 32,
+   * this is likely an MSI vector that's already translated.
+   *
+   * Note: This is a heuristic. A proper solution would be to add a new
+   * parameter to NdisMRegisterInterrupt to indicate MSI mode, but that
+   * would break ABI compatibility.
+   */
+  if (InterruptLevel == InterruptVector && InterruptVector >= 32)
+  {
+      /*
+       * This appears to be an MSI/MSI-X vector.
+       * The vector is already the system interrupt vector.
+       * Compute IRQL based on the vector number.
+       *
+       * On x86/x64, IRQL is derived from the vector:
+       * - Vectors 0x30-0x3F -> IRQL 3
+       * - Vectors 0x40-0x4F -> IRQL 4
+       * ... and so on up to IRQL 26 (CLOCK_LEVEL-1)
+       *
+       * Formula: IRQL = (Vector >> 4)
+       *
+       * But we also need to ensure we stay within device IRQL range.
+       * For MSI, use a fixed device IRQL in the safe range.
+       */
+      MappedIRQ = InterruptVector;
+      DIrql = (KIRQL)((InterruptVector >> 4) & 0xF);
+
+      /* Clamp IRQL to valid device range (DISPATCH_LEVEL+1 to CLOCK_LEVEL-1) */
+      if (DIrql < DISPATCH_LEVEL + 1)
+          DIrql = DISPATCH_LEVEL + 1;
+      if (DIrql > CLOCK_LEVEL - 1)
+          DIrql = CLOCK_LEVEL - 1;
+
+      /* MSI targets the first processor by default */
+      Affinity = 1;
+
+      DbgPrint("NDIS: MSI/MSI-X detected - using vector directly: MappedIRQ=%u DIrql=%u\n",
+               MappedIRQ, (ULONG)DIrql);
+  }
+  else
+  {
+      /*
+       * Legacy interrupt mode - call HalGetInterruptVector to translate
+       * the bus-relative interrupt to a system interrupt vector.
+       */
+      DbgPrint("NDIS: Calling HalGetInterruptVector(BusType=%d, BusNum=%u, Level=%u, Vector=%u)\n",
+               (INTERFACE_TYPE)Adapter->NdisMiniportBlock.BusType,
+               Adapter->NdisMiniportBlock.BusNumber,
+               InterruptLevel, InterruptVector);
+
+      MappedIRQ = HalGetInterruptVector((INTERFACE_TYPE)Adapter->NdisMiniportBlock.BusType, Adapter->NdisMiniportBlock.BusNumber,
+                                        InterruptLevel, InterruptVector, &DIrql,
+                                        &Affinity);
+
+      DbgPrint("NDIS: HalGetInterruptVector returned: MappedIRQ=%u (0x%x) DIrql=%u Affinity=0x%Ix\n",
+               MappedIRQ, MappedIRQ, (ULONG)DIrql, (ULONG_PTR)Affinity);
+  }
 
   NDIS_DbgPrint(MAX_TRACE, ("Connecting to interrupt vector (0x%X)  Affinity (0x%X).\n", MappedIRQ, Affinity));
 
+  DbgPrint("NDIS: Calling IoConnectInterrupt(Vector=%u, DIrql=%u, Mode=%d, Shared=%d, Affinity=0x%Ix)\n",
+           MappedIRQ, (ULONG)DIrql, InterruptMode, SharedInterrupt, (ULONG_PTR)Affinity);
+
   Status = IoConnectInterrupt(&Interrupt->InterruptObject, ServiceRoutine, Interrupt, &Interrupt->DpcCountLock, MappedIRQ,
       DIrql, DIrql, InterruptMode, SharedInterrupt, Affinity, FALSE);
+
+  DbgPrint("NDIS: IoConnectInterrupt returned Status=0x%08x\n", Status);
 
   NDIS_DbgPrint(MAX_TRACE, ("Leaving. Status (0x%X).\n", Status));
 
@@ -1209,6 +1293,143 @@ NdisMInitializeScatterGatherDma(
     Adapter->NdisMiniportBlock.ScatterGatherListSize = 1;
 
     return NDIS_STATUS_SUCCESS;
+}
+
+
+/*
+ * @implemented
+ */
+NDIS_STATUS
+EXPORT
+NdisMRegisterScatterGatherDma(
+    IN  NDIS_HANDLE MiniportAdapterHandle,
+    IN  PNDIS_SG_DMA_DESCRIPTION DmaDescription,
+    OUT PNDIS_HANDLE NdisMiniportDmaHandle)
+/*
+ * FUNCTION:
+ *    Registers a miniport for scatter-gather DMA operations (NDIS 6.x)
+ * ARGUMENTS:
+ *    MiniportAdapterHandle - Handle returned by NdisMRegisterMiniport or
+ *                           DeviceObject for NDIS 6.x miniports
+ *    DmaDescription - Scatter-gather DMA description
+ *    NdisMiniportDmaHandle - Receives the DMA adapter handle
+ * NOTES:
+ *    NDIS 6.0
+ *    For NDIS 6.x miniports, MiniportAdapterHandle is actually a DeviceObject.
+ *    We need to get the DMA adapter directly from the PDO stored in the
+ *    device extension.
+ */
+{
+    BOOLEAN Dma64BitAddresses;
+    DEVICE_DESCRIPTION DeviceDesc;
+    ULONG MapRegisters;
+    PDEVICE_OBJECT DeviceObject;
+    PDEVICE_OBJECT PhysicalDeviceObject;
+    PDMA_ADAPTER DmaAdapter;
+
+    NDIS_DbgPrint(MAX_TRACE, ("NdisMRegisterScatterGatherDma called.\n"));
+
+    if (!DmaDescription || !NdisMiniportDmaHandle) {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    *NdisMiniportDmaHandle = NULL;
+
+    /* Determine 64-bit DMA support from flags */
+    Dma64BitAddresses = (DmaDescription->Flags & 0x00000001) ? TRUE : FALSE;
+
+    /*
+     * In NDIS 6.x, MiniportAdapterHandle is actually a DeviceObject, not a
+     * LOGICAL_ADAPTER. We need to extract the PDO from the device extension
+     * to get the DMA adapter.
+     *
+     * The device extension layout (from Ndis6AddDevice):
+     *   [0] = DriverBlock pointer
+     *   [1] = PhysicalDeviceObject (PDO)
+     *   [2] = Adapter context (set during init)
+     *   [3] = NextDeviceObject (attached device)
+     */
+    DeviceObject = (PDEVICE_OBJECT)MiniportAdapterHandle;
+    if (DeviceObject == NULL || DeviceObject->DeviceExtension == NULL) {
+        NDIS_DbgPrint(MIN_TRACE, ("Invalid device object\n"));
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    PhysicalDeviceObject = ((PVOID*)DeviceObject->DeviceExtension)[1];
+    if (PhysicalDeviceObject == NULL) {
+        NDIS_DbgPrint(MIN_TRACE, ("No PDO in device extension\n"));
+        return NDIS_STATUS_RESOURCES;
+    }
+
+    /* Setup device description for DMA adapter */
+    RtlZeroMemory(&DeviceDesc, sizeof(DEVICE_DESCRIPTION));
+    DeviceDesc.Version = DEVICE_DESCRIPTION_VERSION;
+    DeviceDesc.Master = TRUE;
+    DeviceDesc.ScatterGather = TRUE;
+    DeviceDesc.Dma32BitAddresses = TRUE;
+    DeviceDesc.Dma64BitAddresses = Dma64BitAddresses;
+    DeviceDesc.InterfaceType = PCIBus;
+    DeviceDesc.MaximumLength = DmaDescription->MaximumPhysicalMapping;
+
+    /* Get the DMA adapter from the PDO */
+    DmaAdapter = IoGetDmaAdapter(PhysicalDeviceObject, &DeviceDesc, &MapRegisters);
+    if (DmaAdapter == NULL) {
+        NDIS_DbgPrint(MIN_TRACE, ("IoGetDmaAdapter failed\n"));
+        return NDIS_STATUS_RESOURCES;
+    }
+
+    NDIS_DbgPrint(MID_TRACE, ("DMA adapter obtained: %p, MapRegisters=%lu\n",
+                              DmaAdapter, MapRegisters));
+
+    /* Return the DMA adapter as the handle */
+    *NdisMiniportDmaHandle = (NDIS_HANDLE)DmaAdapter;
+
+    /*
+     * Store the DMA adapter in the device extension so that NdisMAllocateSharedMemory
+     * can find it. For NDIS 6.x, the device extension layout is:
+     *   [0] = DriverBlock pointer
+     *   [1] = PhysicalDeviceObject (PDO)
+     *   [2] = Adapter context
+     *   [3] = NextDeviceObject
+     *   [4] = DMA adapter (stored here for shared memory allocation)
+     */
+    ((PVOID*)DeviceObject->DeviceExtension)[4] = DmaAdapter;
+
+    NDIS_DbgPrint(MID_TRACE, ("DMA adapter stored in DeviceExtension[4]: %p\n", DmaAdapter));
+
+    return NDIS_STATUS_SUCCESS;
+}
+
+
+/*
+ * @implemented
+ */
+VOID
+EXPORT
+NdisMDeregisterScatterGatherDma(
+    IN  NDIS_HANDLE NdisMiniportDmaHandle)
+/*
+ * FUNCTION:
+ *    Deregisters scatter-gather DMA (NDIS 6.x)
+ * ARGUMENTS:
+ *    NdisMiniportDmaHandle - DMA handle returned by NdisMRegisterScatterGatherDma
+ *                           (this is actually a PDMA_ADAPTER)
+ * NOTES:
+ *    NDIS 6.0
+ *    For NDIS 6.x, NdisMRegisterScatterGatherDma returns the DMA adapter directly,
+ *    so we need to release it here using the adapter's PutDmaAdapter method.
+ */
+{
+    PDMA_ADAPTER DmaAdapter = (PDMA_ADAPTER)NdisMiniportDmaHandle;
+
+    NDIS_DbgPrint(MAX_TRACE, ("NdisMDeregisterScatterGatherDma called.\n"));
+
+    if (DmaAdapter != NULL && DmaAdapter->DmaOperations != NULL &&
+        DmaAdapter->DmaOperations->PutDmaAdapter != NULL)
+    {
+        DmaAdapter->DmaOperations->PutDmaAdapter(DmaAdapter);
+        NDIS_DbgPrint(MID_TRACE, ("DMA adapter released.\n"));
+    }
 }
 
 

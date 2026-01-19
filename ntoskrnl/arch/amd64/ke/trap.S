@@ -719,22 +719,20 @@ PUBLIC KiIpiInterrupt
 .ENDP
 
 
+EXTERN KiUnexpectedInterruptHandler:PROC
+
 PUBLIC KiUnexpectedInterrupt
 FUNC KiUnexpectedInterrupt
-    /* The error code is the vector */
+    /* The error code is the vector (pushed as signed 8-bit, now sign-extended) */
     EnterTrap (TF_HAS_ERROR_CODE OR TF_SAVE_ALL)
 
-#if 0
-    /* Set bugcheck parameters */
-    mov ecx, TRAP_CAUSE_UNKNOWN
-    mov rdx, [rbp + KTRAP_FRAME_ErrorCode] // the vector
-    mov r8, 0 // The unknown floating-point exception
-    mov r9, 0 // The enabled and asserted status bits
-    sub rsp, 8
-    mov [rbp + KTRAP_FRAME_P5 + 8], rbp // trap frame
-    call KeBugCheckWithTf
-    JMP_SELF
-#endif
+    /* The vector was pushed as (Vector - 128), so add 128 to get the real vector */
+    mov ecx, [rbp + KTRAP_FRAME_ErrorCode]
+    add ecx, 128
+
+    /* Call the C handler to log the unexpected vector */
+    call KiUnexpectedInterruptHandler
+
     /* Return */
     ExitTrap TF_SAVE_ALL
 ENDFUNC

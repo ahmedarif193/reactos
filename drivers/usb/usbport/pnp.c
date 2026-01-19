@@ -36,6 +36,188 @@ static PFN_IO_CONNECT_INTERRUPT_EX UsbPortIoConnectInterruptEx = NULL;
 static PFN_IO_DISCONNECT_INTERRUPT_EX UsbPortIoDisconnectInterruptEx = NULL;
 static BOOLEAN UsbPortInterruptApiResolved = FALSE;
 
+/*
+ * USBPORT_ProgramMsixTable - Program MSI-X table entries for the USB controller
+ *
+ * This function programs the MSI-X table in the PCI device to deliver
+ * interrupts to the correct CPU/vector. This is required because
+ * IoConnectInterruptEx only sets up the IDT entries but doesn't program
+ * the hardware MSI-X table.
+ */
+static
+NTSTATUS
+USBPORT_ProgramMsixTable(
+    _In_ PDEVICE_OBJECT FdoDevice,
+    _In_ PIO_INTERRUPT_MESSAGE_INFO MessageInfo)
+{
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PBUS_INTERFACE_STANDARD BusInterface;
+    PCI_COMMON_CONFIG PciConfig;
+    ULONG BytesRead;
+    UCHAR MsixCapOffset = 0;
+    USHORT MsixControl;
+    ULONG TableBar;
+    ULONG TableOffset;
+    PHYSICAL_ADDRESS MsixTablePhysical;
+    PVOID MsixTableVa = NULL;
+    ULONG i;
+
+    FdoExtension = FdoDevice->DeviceExtension;
+    BusInterface = &FdoExtension->BusInterface;
+
+    /* Verify we have a valid bus interface */
+    if (!BusInterface->GetBusData || !BusInterface->SetBusData)
+    {
+        DPRINT1("USBPORT_ProgramMsixTable: BusInterface not available\n");
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    /* Read PCI config to find MSI-X capability */
+    BytesRead = BusInterface->GetBusData(BusInterface->Context,
+                                         PCI_WHICHSPACE_CONFIG,
+                                         &PciConfig,
+                                         0,
+                                         sizeof(PciConfig));
+    if (BytesRead < PCI_COMMON_HDR_LENGTH)
+    {
+        DPRINT1("USBPORT_ProgramMsixTable: Failed to read PCI config\n");
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    /* Find MSI-X capability */
+    if (PciConfig.Status & PCI_STATUS_CAPABILITIES_LIST)
+    {
+        UCHAR CapPtr = PciConfig.u.type0.CapabilitiesPtr & ~0x3;
+
+        while (CapPtr != 0)
+        {
+            UCHAR CapId;
+            BusInterface->GetBusData(BusInterface->Context,
+                                     PCI_WHICHSPACE_CONFIG,
+                                     &CapId,
+                                     CapPtr,
+                                     sizeof(CapId));
+            if (CapId == 0x11) /* MSI-X */
+            {
+                MsixCapOffset = CapPtr;
+                break;
+            }
+            BusInterface->GetBusData(BusInterface->Context,
+                                     PCI_WHICHSPACE_CONFIG,
+                                     &CapPtr,
+                                     CapPtr + 1,
+                                     sizeof(CapPtr));
+            CapPtr &= ~0x3;
+        }
+    }
+
+    if (MsixCapOffset == 0)
+    {
+        DPRINT1("USBPORT_ProgramMsixTable: MSI-X capability not found\n");
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    /* Read MSI-X control and table info */
+    BusInterface->GetBusData(BusInterface->Context,
+                             PCI_WHICHSPACE_CONFIG,
+                             &MsixControl,
+                             MsixCapOffset + 2,
+                             sizeof(MsixControl));
+
+    {
+        ULONG TableInfo;
+        BusInterface->GetBusData(BusInterface->Context,
+                                 PCI_WHICHSPACE_CONFIG,
+                                 &TableInfo,
+                                 MsixCapOffset + 4,
+                                 sizeof(TableInfo));
+        TableBar = TableInfo & 0x7;
+        TableOffset = TableInfo & ~0x7;
+    }
+
+    DPRINT1("USBPORT_ProgramMsixTable: MSI-X Cap at 0x%x, Control=0x%04x, TableBAR=%u, TableOffset=0x%x\n",
+            MsixCapOffset, MsixControl, TableBar, TableOffset);
+
+    /*
+     * Use the physical address from the resource list instead of reading
+     * from PCI config space. The PnP manager has already assigned and
+     * translated the BAR addresses, and they are stored in our extension.
+     * Note: We assume TableBAR=0 corresponds to the main memory BAR.
+     */
+    if (TableBar != 0)
+    {
+        DPRINT1("USBPORT_ProgramMsixTable: MSI-X table not in BAR0, unsupported (TableBAR=%u)\n", TableBar);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    MsixTablePhysical.QuadPart = FdoExtension->MemoryBasePhysical.QuadPart + TableOffset;
+
+    DPRINT1("USBPORT_ProgramMsixTable: MSI-X table at PA=0x%I64x (MemoryBase=0x%I64x + Offset=0x%x)\n",
+            MsixTablePhysical.QuadPart, FdoExtension->MemoryBasePhysical.QuadPart, TableOffset);
+
+    /* Map MSI-X table */
+    MsixTableVa = MmMapIoSpace(MsixTablePhysical,
+                               MessageInfo->MessageCount * 16,
+                               MmNonCached);
+    if (!MsixTableVa)
+    {
+        DPRINT1("USBPORT_ProgramMsixTable: Failed to map MSI-X table\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    /* Program each MSI-X table entry */
+    for (i = 0; i < MessageInfo->MessageCount; i++)
+    {
+        PIO_INTERRUPT_MESSAGE_INFO_ENTRY Entry = &MessageInfo->MessageInfo[i];
+        volatile ULONG *TableEntry = (volatile ULONG *)((PUCHAR)MsixTableVa + (i * 16));
+
+        /* Message Address Low (offset 0) */
+        TableEntry[0] = (ULONG)Entry->MessageAddress.LowPart;
+        /* Message Address High (offset 4) */
+        TableEntry[1] = (ULONG)Entry->MessageAddress.HighPart;
+        /* Message Data (offset 8) */
+        TableEntry[2] = Entry->MessageData;
+        /* Vector Control (offset 12) - 0 = unmasked */
+        TableEntry[3] = 0;
+
+        DPRINT("USBPORT_ProgramMsixTable: Entry[%u]: Addr=0x%I64x Data=0x%x Vector=%u\n",
+                i, Entry->MessageAddress.QuadPart, Entry->MessageData, Entry->Vector);
+    }
+
+    MmUnmapIoSpace(MsixTableVa, MessageInfo->MessageCount * 16);
+
+    /* Enable MSI-X in the capability register */
+    MsixControl |= 0x8000; /* Set MSI-X Enable bit */
+    MsixControl &= ~0x4000; /* Clear Function Mask */
+
+    BusInterface->SetBusData(BusInterface->Context,
+                             PCI_WHICHSPACE_CONFIG,
+                             &MsixControl,
+                             MsixCapOffset + 2,
+                             sizeof(MsixControl));
+
+    /* Also disable INTx */
+    {
+        USHORT Command;
+        BusInterface->GetBusData(BusInterface->Context,
+                                 PCI_WHICHSPACE_CONFIG,
+                                 &Command,
+                                 FIELD_OFFSET(PCI_COMMON_CONFIG, Command),
+                                 sizeof(Command));
+        Command |= 0x400; /* Interrupt Disable */
+        BusInterface->SetBusData(BusInterface->Context,
+                                 PCI_WHICHSPACE_CONFIG,
+                                 &Command,
+                                 FIELD_OFFSET(PCI_COMMON_CONFIG, Command),
+                                 sizeof(Command));
+    }
+
+    DPRINT1("USBPORT_ProgramMsixTable: Successfully programmed %u MSI-X entries\n",
+            MessageInfo->MessageCount);
+
+    return STATUS_SUCCESS;
+}
+
 static
 VOID
 USBPORT_EnsureInterruptApis(VOID)
@@ -1271,12 +1453,28 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
         Status = UsbPortIoConnectInterruptEx(&ConnectParameters);
         if (NT_SUCCESS(Status) && FdoExtension->InterruptMessageInfo)
         {
+            NTSTATUS MsixStatus;
+
             FdoExtension->InterruptObject =
                 FdoExtension->InterruptMessageInfo->MessageInfo[0].InterruptObject;
             FdoExtension->MessageInterruptsEnabled = TRUE;
             FdoExtension->MessageInterruptCount =
                 (UCHAR)FdoExtension->InterruptMessageInfo->MessageCount;
             FdoExtension->Flags |= USBPORT_FLAG_INT_CONNECTED;
+
+            /* Program MSI-X table with vector information */
+            MsixStatus = USBPORT_ProgramMsixTable(
+                FdoDevice,
+                FdoExtension->InterruptMessageInfo);
+            if (!NT_SUCCESS(MsixStatus))
+            {
+                DPRINT1("USBPORT_StartDevice: MSI-X table programming failed (0x%lx), continuing anyway\n",
+                        MsixStatus);
+            }
+            else
+            {
+                DPRINT("USBPORT_StartDevice: MSI-X table programmed successfully\n");
+            }
         }
         else
         {
@@ -1560,6 +1758,8 @@ USBPORT_ParseResources(IN PDEVICE_OBJECT FdoDevice,
 
         if (MemoryDescriptor && NT_SUCCESS(Status))
         {
+            PUSBPORT_DEVICE_EXTENSION FdoExtension = FdoDevice->DeviceExtension;
+
             UsbPortResources->IoSpaceLength = MemoryDescriptor->u.Memory.Length;
 
             UsbPortResources->ResourceBase = MmMapIoSpace(MemoryDescriptor->u.Memory.Start,
@@ -1569,6 +1769,8 @@ USBPORT_ParseResources(IN PDEVICE_OBJECT FdoDevice,
             if (UsbPortResources->ResourceBase)
             {
                 UsbPortResources->ResourcesTypes |= USBPORT_RESOURCES_MEMORY;
+                /* Store physical address for MSI-X table programming */
+                FdoExtension->MemoryBasePhysical = MemoryDescriptor->u.Memory.Start;
             }
             else
             {
@@ -1618,9 +1820,22 @@ USBPORT_ParseResources(IN PDEVICE_OBJECT FdoDevice,
             UsbPortResources->ShareVector =
                 (InterruptDescriptor->ShareDisposition == CmResourceShareShared);
 
-            UsbPortResources->InterruptMode =
-                (InterruptDescriptor->Flags & CM_RESOURCE_INTERRUPT_LATCHED) ?
-                    Latched : LevelSensitive;
+            /*
+             * MSI/MSI-X interrupts are inherently edge-triggered. The LATCHED flag
+             * may not be set in the resource descriptor, but we must use edge-
+             * triggered mode to prevent interrupt storms.
+             */
+            if (InterruptDescriptor->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
+            {
+                UsbPortResources->InterruptMode = Latched;
+                UsbPortResources->ShareVector = FALSE; /* MSI can't be shared */
+            }
+            else
+            {
+                UsbPortResources->InterruptMode =
+                    (InterruptDescriptor->Flags & CM_RESOURCE_INTERRUPT_LATCHED) ?
+                        Latched : LevelSensitive;
+            }
         }
     }
     else

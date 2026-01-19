@@ -49,7 +49,7 @@ SepValidateObjectTypeList(
 {
     PGUID ObjectTypeGuid;
     ULONG ObjectTypeIndex;
-    USHORT Level, PrevLevel;
+    USHORT Level, PrevLevel = 0;
     SIZE_T Size;
 
     /* Ensure we do not hit an integer overflow */

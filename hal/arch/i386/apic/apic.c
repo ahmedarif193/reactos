@@ -827,6 +827,9 @@ HalEnableSystemInterrupt(
     /* Get the irq for this vector */
     Index = HalpVectorToIndex[Vector];
 
+    DPRINT1("HalEnableSystemInterrupt: Vector=%u, Irql=%u, Mode=%d, Index=0x%02x\n",
+            Vector, Irql, InterruptMode, Index);
+
     /* Check if its valid */
     if (Index == APIC_FREE_VECTOR)
     {
@@ -835,6 +838,8 @@ HalEnableSystemInterrupt(
          * that does not require IOAPIC programming and mark it reserved so
          * later lookups (Begin/Disable) do not assert.
          */
+        DPRINT1("HalEnableSystemInterrupt: Vector=%u is MSI/MSI-X (no IOAPIC entry), marking as reserved\n",
+                Vector);
         HalpVectorToIndex[Vector] = APIC_RESERVED_VECTOR;
         return TRUE;
     }

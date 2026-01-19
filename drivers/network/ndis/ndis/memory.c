@@ -141,6 +141,45 @@ NdisFreeMemory(
 }
 
 /*
+ * Helper function to check if a handle is an NDIS 6.x device object
+ * Returns the DMA adapter if it's NDIS 6.x, NULL otherwise
+ */
+static PDMA_ADAPTER
+NdispGetNdis6DmaAdapter(
+    IN NDIS_HANDLE MiniportAdapterHandle)
+{
+    PDEVICE_OBJECT DeviceObject;
+
+    /*
+     * For NDIS 6.x, MiniportAdapterHandle is a PDEVICE_OBJECT.
+     * For NDIS 5.x, it's a PLOGICAL_ADAPTER where the first member
+     * is NDIS_MINIPORT_BLOCK.
+     *
+     * We can distinguish them by checking if the object looks like
+     * a DEVICE_OBJECT (Type == IO_TYPE_DEVICE == 3).
+     *
+     * For NDIS 6.x device objects created by Ndis6AddDevice:
+     *   DeviceExtension[4] contains the DMA adapter set by
+     *   NdisMRegisterScatterGatherDma.
+     */
+    DeviceObject = (PDEVICE_OBJECT)MiniportAdapterHandle;
+
+    /* Check if this looks like a device object */
+    if (DeviceObject != NULL &&
+        DeviceObject->Type == IO_TYPE_DEVICE &&
+        DeviceObject->DeviceExtension != NULL)
+    {
+        PDMA_ADAPTER DmaAdapter = ((PVOID*)DeviceObject->DeviceExtension)[4];
+        if (DmaAdapter != NULL)
+        {
+            return DmaAdapter;
+        }
+    }
+
+    return NULL;
+}
+
+/*
  * @implemented
  */
 VOID
@@ -161,9 +200,11 @@ NdisMAllocateSharedMemory(
  *     PhysicalAddress:  Physical address corresponding to virtual address
  * NOTES:
  *     - Cached is ignored; we always allocate non-cached
+ *     - For NDIS 6.x, MiniportAdapterHandle is a PDEVICE_OBJECT and the
+ *       DMA adapter is stored in DeviceExtension[4] by NdisMRegisterScatterGatherDma
  */
 {
-  PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)MiniportAdapterHandle;
+  PDMA_ADAPTER DmaAdapter;
 
   NDIS_DbgPrint(MAX_TRACE,("Called.\n"));
 
@@ -176,8 +217,28 @@ NdisMAllocateSharedMemory(
                    1);
   }
 
-  *VirtualAddress = Adapter->NdisMiniportBlock.SystemAdapterObject->DmaOperations->AllocateCommonBuffer(
-      Adapter->NdisMiniportBlock.SystemAdapterObject, Length, PhysicalAddress, Cached);
+  /* Check if this is an NDIS 6.x handle */
+  DmaAdapter = NdispGetNdis6DmaAdapter(MiniportAdapterHandle);
+  if (DmaAdapter != NULL)
+  {
+      /* NDIS 6.x path - use DMA adapter from device extension */
+      NDIS_DbgPrint(MID_TRACE, ("NDIS 6.x shared memory allocation: Length=%lu, DmaAdapter=%p\n",
+                                Length, DmaAdapter));
+
+      *VirtualAddress = DmaAdapter->DmaOperations->AllocateCommonBuffer(
+          DmaAdapter, Length, PhysicalAddress, Cached);
+
+      NDIS_DbgPrint(MID_TRACE, ("NDIS 6.x AllocateCommonBuffer returned VA=%p PA=0x%I64x\n",
+                                *VirtualAddress, PhysicalAddress->QuadPart));
+  }
+  else
+  {
+      /* NDIS 5.x path - use SystemAdapterObject from LOGICAL_ADAPTER */
+      PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)MiniportAdapterHandle;
+
+      *VirtualAddress = Adapter->NdisMiniportBlock.SystemAdapterObject->DmaOperations->AllocateCommonBuffer(
+          Adapter->NdisMiniportBlock.SystemAdapterObject, Length, PhysicalAddress, Cached);
+  }
 }
 
 VOID
@@ -229,65 +290,123 @@ NdisMFreeSharedMemory(
  * NOTES:
  *     - This function can be called at dispatch_level or passive_level.
  *       Therefore we have to do this in a worker thread.
+ *     - For NDIS 6.x, MiniportAdapterHandle is a PDEVICE_OBJECT and the
+ *       DMA adapter is stored in DeviceExtension[4]
  */
 {
-  PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)MiniportAdapterHandle;
   PMINIPORT_SHARED_MEMORY Memory;
-  PDMA_ADAPTER DmaAdapter = Adapter->NdisMiniportBlock.SystemAdapterObject;
+  PDMA_ADAPTER DmaAdapter;
+  PDEVICE_OBJECT DeviceObject;
 
   NDIS_DbgPrint(MAX_TRACE,("Called.\n"));
 
   ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
 
-  /* Call FreeCommonBuffer synchronously if we are at PASSIVE_LEVEL */
-  if (KeGetCurrentIrql() == PASSIVE_LEVEL)
+  /* Check if this is an NDIS 6.x handle */
+  DmaAdapter = NdispGetNdis6DmaAdapter(MiniportAdapterHandle);
+  if (DmaAdapter != NULL)
   {
-      /* We need this case because we free shared memory asynchronously
-       * and the miniport (and DMA adapter object) could be freed before
-       * our work item executes. Lucky for us, the scenarios where the
-       * freeing needs to be synchronous (failed init, MiniportHalt,
-       * and driver unload) are all at PASSIVE_LEVEL so we can just
-       * call FreeCommonBuffer synchronously and not have to worry
-       * about the miniport falling out from under us */
+      /* NDIS 6.x path */
+      DeviceObject = (PDEVICE_OBJECT)MiniportAdapterHandle;
 
-      NDIS_DbgPrint(MID_TRACE,("Freeing shared memory synchronously\n"));
+      NDIS_DbgPrint(MID_TRACE, ("NDIS 6.x FreeSharedMemory: VA=%p, DmaAdapter=%p\n",
+                                VirtualAddress, DmaAdapter));
 
-      DmaAdapter->DmaOperations->FreeCommonBuffer(DmaAdapter,
-                                                  Length,
-                                                  PhysicalAddress,
-                                                  VirtualAddress,
-                                                  Cached);
-      return;
+      /* Call FreeCommonBuffer synchronously if we are at PASSIVE_LEVEL */
+      if (KeGetCurrentIrql() == PASSIVE_LEVEL)
+      {
+          DmaAdapter->DmaOperations->FreeCommonBuffer(DmaAdapter,
+                                                      Length,
+                                                      PhysicalAddress,
+                                                      VirtualAddress,
+                                                      Cached);
+          return;
+      }
+
+      /* Queue work item for DISPATCH_LEVEL */
+      Memory = ExAllocatePool(NonPagedPool, sizeof(MINIPORT_SHARED_MEMORY));
+      if (!Memory)
+      {
+          NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+          return;
+      }
+
+      Memory->AdapterObject = DmaAdapter;
+      Memory->Length = Length;
+      Memory->PhysicalAddress = PhysicalAddress;
+      Memory->VirtualAddress = VirtualAddress;
+      Memory->Cached = Cached;
+      Memory->Adapter = NULL;  /* Not used for NDIS 6.x */
+
+      Memory->WorkItem = IoAllocateWorkItem(DeviceObject);
+      if (!Memory->WorkItem)
+      {
+          NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+          ExFreePool(Memory);
+          return;
+      }
+
+      IoQueueWorkItem(Memory->WorkItem,
+                      NdisMFreeSharedMemoryPassive,
+                      CriticalWorkQueue,
+                      Memory);
   }
-
-  /* Must be NonpagedPool because by definition we're at DISPATCH_LEVEL */
-  Memory = ExAllocatePool(NonPagedPool, sizeof(MINIPORT_SHARED_MEMORY));
-
-  if(!Memory)
-    {
-      NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
-      return;
-    }
-
-  Memory->AdapterObject = Adapter->NdisMiniportBlock.SystemAdapterObject;
-  Memory->Length = Length;
-  Memory->PhysicalAddress = PhysicalAddress;
-  Memory->VirtualAddress = VirtualAddress;
-  Memory->Cached = Cached;
-  Memory->Adapter = &Adapter->NdisMiniportBlock;
-
-  Memory->WorkItem = IoAllocateWorkItem(Adapter->NdisMiniportBlock.DeviceObject);
-  if (!Memory->WorkItem)
+  else
   {
-      NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
-      ExFreePool(Memory);
-      return;
-  }
+      /* NDIS 5.x path */
+      PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)MiniportAdapterHandle;
+      DmaAdapter = Adapter->NdisMiniportBlock.SystemAdapterObject;
 
-  IoQueueWorkItem(Memory->WorkItem,
-                  NdisMFreeSharedMemoryPassive,
-                  CriticalWorkQueue,
-                  Memory);
+      /* Call FreeCommonBuffer synchronously if we are at PASSIVE_LEVEL */
+      if (KeGetCurrentIrql() == PASSIVE_LEVEL)
+      {
+          /* We need this case because we free shared memory asynchronously
+           * and the miniport (and DMA adapter object) could be freed before
+           * our work item executes. Lucky for us, the scenarios where the
+           * freeing needs to be synchronous (failed init, MiniportHalt,
+           * and driver unload) are all at PASSIVE_LEVEL so we can just
+           * call FreeCommonBuffer synchronously and not have to worry
+           * about the miniport falling out from under us */
+
+          NDIS_DbgPrint(MID_TRACE,("Freeing shared memory synchronously\n"));
+
+          DmaAdapter->DmaOperations->FreeCommonBuffer(DmaAdapter,
+                                                      Length,
+                                                      PhysicalAddress,
+                                                      VirtualAddress,
+                                                      Cached);
+          return;
+      }
+
+      /* Must be NonpagedPool because by definition we're at DISPATCH_LEVEL */
+      Memory = ExAllocatePool(NonPagedPool, sizeof(MINIPORT_SHARED_MEMORY));
+
+      if(!Memory)
+        {
+          NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+          return;
+        }
+
+      Memory->AdapterObject = Adapter->NdisMiniportBlock.SystemAdapterObject;
+      Memory->Length = Length;
+      Memory->PhysicalAddress = PhysicalAddress;
+      Memory->VirtualAddress = VirtualAddress;
+      Memory->Cached = Cached;
+      Memory->Adapter = &Adapter->NdisMiniportBlock;
+
+      Memory->WorkItem = IoAllocateWorkItem(Adapter->NdisMiniportBlock.DeviceObject);
+      if (!Memory->WorkItem)
+      {
+          NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+          ExFreePool(Memory);
+          return;
+      }
+
+      IoQueueWorkItem(Memory->WorkItem,
+                      NdisMFreeSharedMemoryPassive,
+                      CriticalWorkQueue,
+                      Memory);
+  }
 }
 
 VOID

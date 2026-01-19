@@ -11617,7 +11617,7 @@ XHCI_InterruptService(PVOID MiniPortExtension)
             if (!AckMask)
             {
                 /* IMAN.IP was set but UsbSts had nothing - VirtualBox quirk */
-                XHCI_DPRINT_SHARED("usbxhci: ISR cleared IMAN.IP without UsbSts\n");
+                XHCI_DPRINT_SHARED("usbxhci: ISR cleared IMAN.IP without UsbSts, Iman=0x%x\n", Iman);
                 return TRUE; /* Claim the interrupt to stop the storm */
             }
         }

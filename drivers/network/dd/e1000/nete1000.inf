@@ -55,6 +55,7 @@ DefaultDestDir = 12
 %IntelE1000_108A.DeviceDesc% = E1000_Inst.ndi,PCI\VEN_8086&DEV_108A
 %IntelE1000_1099.DeviceDesc% = E1000_Inst.ndi,PCI\VEN_8086&DEV_1099
 %IntelE1000_10B5.DeviceDesc% = E1000_Inst.ndi,PCI\VEN_8086&DEV_10B5
+%IntelE1000_10D3.DeviceDesc% = E1000_Inst.ndi,PCI\VEN_8086&DEV_10D3
 
 ;----------------------------- E1000 DRIVER -----------------------------
 
@@ -77,8 +78,8 @@ AddService = e1000, 0x00000002, E1000_Service_Inst
 
 [E1000_Service_Inst]
 ServiceType   = 1
-StartType     = 3
-ErrorControl  = 0
+StartType     = 0
+ErrorControl  = 1
 ServiceBinary = %12%\e1000.sys
 LoadOrderGroup = NDIS
 
@@ -128,6 +129,7 @@ IntelE1000_107C.DeviceDesc = "Intel 82541PI PCI Ethernet Adapter"
 IntelE1000_108A.DeviceDesc = "Intel 82546GB PCI-E Ethernet Adapter"
 IntelE1000_1099.DeviceDesc = "Intel 82546GB Quad Copper PCI Ethernet Adapter"
 IntelE1000_10B5.DeviceDesc = "Intel 82546GB Quad Copper KSP3 PCI-X Ethernet Adapter"
+IntelE1000_10D3.DeviceDesc = "Intel 82574L Gigabit Network Connection"
 
 [Strings.0415]
 IntelE1000_1000.DeviceDesc = "Karta Intel 82542-based PCI Ethernet Adapter"
@@ -167,6 +169,7 @@ IntelE1000_107C.DeviceDesc = "Karta Intel 82541PI PCI Ethernet Adapter"
 IntelE1000_108A.DeviceDesc = "Karta Intel 82546GB PCI-E Ethernet Adapter"
 IntelE1000_1099.DeviceDesc = "Karta Intel 82546GB Quad Copper PCI Ethernet Adapter"
 IntelE1000_10B5.DeviceDesc = "Karta Intel 82546GB Quad Copper KSP3 PCI-X Ethernet Adapter"
+IntelE1000_10D3.DeviceDesc = "Karta Intel 82574L Gigabit Network Connection"
 
 [Strings.0a]
 IntelE1000_1000.DeviceDesc = "Adaptador de Ethernet 82542-based PCI"
@@ -205,4 +208,5 @@ IntelE1000_107B.DeviceDesc = "Adaptador de Ethernet 82546GB SerDes PCI"
 IntelE1000_107C.DeviceDesc = "Adaptador de Ethernet 82541PI PCI"
 IntelE1000_108A.DeviceDesc = "Adaptador de Ethernet 82546GB PCI-E"
 IntelE1000_1099.DeviceDesc = "Adaptador de Ethernet 82546GB Quad Copper PCI"
-IntelE1000_10B5.DeviceDesc = "Adaptador de Ethernet 82546GB Quad Copper KSP3 PCI-X"
+IntelE1000_10B5.DeviceDesc = "Adaptador de Ethernet 82546GB Quad Copper KSP3 PCI-X Ethernet Adapter"
+IntelE1000_10D3.DeviceDesc = "Adaptador de Ethernet Intel 82574L Gigabit"

@@ -530,10 +530,16 @@ CNetConnectionManager::EnumerateINetConnections()
     WCHAR szName[130] = L"SYSTEM\\CurrentControlSet\\Control\\Network\\{4D36E972-E325-11CE-BFC1-08002BE10318}\\";
     PINetConnectionItem pCurrent = NULL;
 
+    TRACE("EnumerateINetConnections: Starting network adapter enumeration\n");
+
     /* get the IfTable */
     dwSize = 0;
     if (GetIfTable(NULL, &dwSize, TRUE) != ERROR_INSUFFICIENT_BUFFER)
+    {
+        TRACE("EnumerateINetConnections: GetIfTable initial call failed\n");
         return E_FAIL;
+    }
+    TRACE("EnumerateINetConnections: GetIfTable needs %lu bytes\n", dwSize);
 
     pIfTable = static_cast<PMIB_IFTABLE>(CoTaskMemAlloc(dwSize));
     if (!pIfTable)
@@ -542,17 +548,21 @@ CNetConnectionManager::EnumerateINetConnections()
     dwResult = GetIfTable(pIfTable, &dwSize, TRUE);
     if (dwResult != NO_ERROR)
     {
+        TRACE("EnumerateINetConnections: GetIfTable failed with %lu\n", dwResult);
         CoTaskMemFree(pIfTable);
         return HRESULT_FROM_WIN32(dwResult);
     }
+    TRACE("EnumerateINetConnections: GetIfTable returned %lu interfaces\n", pIfTable->dwNumEntries);
 
     dwSize = 0;
     dwResult = GetAdaptersInfo(NULL, &dwSize);
     if (dwResult!= ERROR_BUFFER_OVERFLOW)
     {
+        TRACE("EnumerateINetConnections: GetAdaptersInfo initial call failed with %lu\n", dwResult);
         CoTaskMemFree(pIfTable);
         return HRESULT_FROM_WIN32(dwResult);
     }
+    TRACE("EnumerateINetConnections: GetAdaptersInfo needs %lu bytes\n", dwSize);
 
     pAdapterInfo = static_cast<PIP_ADAPTER_INFO>(CoTaskMemAlloc(dwSize));
     if (!pAdapterInfo)
@@ -564,18 +574,31 @@ CNetConnectionManager::EnumerateINetConnections()
     dwResult = GetAdaptersInfo(pAdapterInfo, &dwSize);
     if (dwResult != NO_ERROR)
     {
+        TRACE("EnumerateINetConnections: GetAdaptersInfo failed with %lu\n", dwResult);
         CoTaskMemFree(pIfTable);
         CoTaskMemFree(pAdapterInfo);
         return HRESULT_FROM_WIN32(dwResult);
+    }
+    /* Log all adapters from GetAdaptersInfo */
+    {
+        IP_ADAPTER_INFO *pCurAdapter = pAdapterInfo;
+        while (pCurAdapter)
+        {
+            TRACE("EnumerateINetConnections: GetAdaptersInfo returned adapter: Name=%s, Desc=%s, Index=%lu\n",
+                  pCurAdapter->AdapterName, pCurAdapter->Description, pCurAdapter->Index);
+            pCurAdapter = pCurAdapter->Next;
+        }
     }
 
     hInfo = SetupDiGetClassDevs(&GUID_DEVCLASS_NET, NULL, NULL, DIGCF_PRESENT );
     if (!hInfo)
     {
+        TRACE("EnumerateINetConnections: SetupDiGetClassDevs failed\n");
         CoTaskMemFree(pIfTable);
         CoTaskMemFree(pAdapterInfo);
         return E_FAIL;
     }
+    TRACE("EnumerateINetConnections: SetupDiGetClassDevs succeeded\n");
 
     dwIndex = 0;
     do
@@ -585,28 +608,45 @@ CNetConnectionManager::EnumerateINetConnections()
 
         /* get device info */
         if (!SetupDiEnumDeviceInfo(hInfo, dwIndex++, &DevInfo))
+        {
+            TRACE("EnumerateINetConnections: SetupDiEnumDeviceInfo ended at index %lu, error=%lu\n", dwIndex-1, GetLastError());
             break;
+        }
+        TRACE("EnumerateINetConnections: Processing device at index %lu\n", dwIndex-1);
 
         /* get device software registry path */
         if (!SetupDiGetDeviceRegistryPropertyW(hInfo, &DevInfo, SPDRP_DRIVER, NULL, (LPBYTE)&szDetail[39], sizeof(szDetail)/sizeof(WCHAR) - 40, &dwSize))
+        {
+            TRACE("EnumerateINetConnections: SPDRP_DRIVER failed for index %lu, error=%lu\n", dwIndex-1, GetLastError());
             break;
+        }
+        TRACE("EnumerateINetConnections: SPDRP_DRIVER=%S\n", &szDetail[39]);
 
         /* open device registry key */
         if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, szDetail, 0, KEY_READ, &hSubKey) != ERROR_SUCCESS)
+        {
+            TRACE("EnumerateINetConnections: RegOpenKeyExW failed for %S\n", szDetail);
             break;
+        }
 
         /* query NetCfgInstanceId for current device */
         dwSize = sizeof(szNetCfg);
         if (RegQueryValueExW(hSubKey, L"NetCfgInstanceId", NULL, NULL, (LPBYTE)szNetCfg, &dwSize) != ERROR_SUCCESS)
         {
+            TRACE("EnumerateINetConnections: NetCfgInstanceId not found for %S\n", szDetail);
             RegCloseKey(hSubKey);
             break;
         }
         RegCloseKey(hSubKey);
+        TRACE("EnumerateINetConnections: NetCfgInstanceId=%S\n", szNetCfg);
 
         /* get the current adapter index from NetCfgInstanceId */
         if (!GetAdapterIndexFromNetCfgInstanceId(pAdapterInfo, szNetCfg, &dwAdapterIndex))
+        {
+            TRACE("EnumerateINetConnections: GetAdapterIndexFromNetCfgInstanceId failed for %S - adapter not in IP stack\n", szNetCfg);
             continue;
+        }
+        TRACE("EnumerateINetConnections: Matched to adapter index %lu\n", dwAdapterIndex);
 
         /* get detailed adapter info */
         ZeroMemory(&IfEntry, sizeof(IfEntry));

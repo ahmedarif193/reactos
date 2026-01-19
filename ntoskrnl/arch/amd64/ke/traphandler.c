@@ -482,3 +482,23 @@ KiSystemService(
     /* Propagate the return status into the trap frame */
     TrapFrame->Rax = Status;
 }
+
+/*
+ * KiUnexpectedInterruptHandler
+ *
+ * Handles unexpected interrupts on AMD64. This is called when an interrupt
+ * arrives at a vector that hasn't been registered via KeConnectInterrupt.
+ * The function logs the vector for debugging purposes.
+ */
+VOID
+NTAPI
+KiUnexpectedInterruptHandler(
+    IN ULONG Vector)
+{
+    /*
+     * Log the unexpected interrupt. This is useful for debugging MSI-X
+     * interrupt delivery issues - if we see vector 65 here, it means
+     * the IDT wasn't properly updated with the interrupt handler.
+     */
+    DbgPrint("!!! UNEXPECTED INTERRUPT: Vector=%u (0x%02x) !!!\n", Vector, Vector);
+}

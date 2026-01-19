@@ -5,6 +5,7 @@
  * COPYRIGHT:   2013 Cameron Gutman (cameron.gutman@reactos.org)
  *              2018 Mark Jansen (mark.jansen@reactos.org)
  *              2019 Victor Perevertkin (victor.perevertkin@reactos.org)
+ *              2024 ReactOS Team - Modernization for 82574L PCIe support
  */
 
 #ifndef _E1000_PCH_
@@ -19,10 +20,67 @@
 #define MAXIMUM_FRAME_SIZE   1522
 #define RECEIVE_BUFFER_SIZE  2048
 
-#define DRIVER_VERSION 1
+#define DRIVER_VERSION 2
 
 #define DEFAULT_INTERRUPT_MASK  (E1000_IMS_LSC | E1000_IMS_TXDW | E1000_IMS_TXQE | E1000_IMS_RXDMT0 | E1000_IMS_RXT0 | E1000_IMS_TXD_LOW)
 
+/* Interrupt mode enumeration */
+typedef enum _E1000_INTERRUPT_MODE {
+    E1000_INTERRUPT_MODE_LEGACY = 0,    /* Line-based (INTx) interrupts */
+    E1000_INTERRUPT_MODE_MSI,           /* Message Signaled Interrupts (single vector) */
+    E1000_INTERRUPT_MODE_MSIX           /* MSI-X (multiple vectors) */
+} E1000_INTERRUPT_MODE;
+
+/* Power state enumeration (matches NDIS device states) */
+typedef enum _E1000_POWER_STATE {
+    E1000PowerStateD0 = 0,      /* Fully operational */
+    E1000PowerStateD1,          /* Light sleep */
+    E1000PowerStateD2,          /* Deeper sleep */
+    E1000PowerStateD3           /* Lowest power, device may lose context */
+} E1000_POWER_STATE;
+
+/* Checksum offload capabilities */
+typedef struct _E1000_CHECKSUM_OFFLOAD {
+    BOOLEAN TxIpChecksum;       /* TX IP header checksum offload supported */
+    BOOLEAN TxTcpChecksum;      /* TX TCP checksum offload supported */
+    BOOLEAN TxUdpChecksum;      /* TX UDP checksum offload supported */
+    BOOLEAN RxIpChecksum;       /* RX IP header checksum offload supported */
+    BOOLEAN RxTcpChecksum;      /* RX TCP checksum offload supported */
+    BOOLEAN RxUdpChecksum;      /* RX UDP checksum offload supported */
+
+    /* Currently enabled settings (may be different from supported) */
+    BOOLEAN TxChecksumEnabled;
+    BOOLEAN RxChecksumEnabled;
+} E1000_CHECKSUM_OFFLOAD, *PE1000_CHECKSUM_OFFLOAD;
+
+/* Interrupt coalescing / adaptive moderation */
+typedef struct _E1000_INTERRUPT_MODERATION {
+    BOOLEAN AdaptiveEnabled;    /* TRUE if adaptive moderation is active */
+    ULONG CurrentItr;           /* Current interrupt throttle rate */
+    ULONG PacketsSinceLastAdjust;
+    ULONG BytesSinceLastAdjust;
+    ULONG AdjustmentInterval;   /* Ticks between adjustments */
+} E1000_INTERRUPT_MODERATION, *PE1000_INTERRUPT_MODERATION;
+
+/* Statistics counters (read from hardware) */
+typedef struct _E1000_STATISTICS {
+    ULONG64 TxPackets;
+    ULONG64 RxPackets;
+    ULONG64 TxBytes;
+    ULONG64 RxBytes;
+    ULONG64 TxErrors;
+    ULONG64 RxErrors;
+    ULONG64 RxNoBuffer;
+    ULONG64 RxCrcErrors;
+    ULONG64 RxAlignErrors;
+    ULONG64 TxCollisions;
+} E1000_STATISTICS, *PE1000_STATISTICS;
+
+/* Device serial number (from PCIe capability) */
+typedef struct _E1000_DEVICE_SERIAL_NUMBER {
+    BOOLEAN Valid;
+    UCHAR Serial[8];            /* 64-bit serial number */
+} E1000_DEVICE_SERIAL_NUMBER, *PE1000_DEVICE_SERIAL_NUMBER;
 
 typedef struct _E1000_ADAPTER
 {
@@ -31,13 +89,20 @@ typedef struct _E1000_ADAPTER
     NDIS_PHYSICAL_ADDRESS IoAddress;
     ULONG IoLength;
 
-    // NDIS_SPIN_LOCK AdapterLock;
+    /* MSI-X BAR (if present) */
+    volatile PUCHAR MsixBase;
+    NDIS_PHYSICAL_ADDRESS MsixAddress;
+    ULONG MsixLength;
 
     NDIS_HANDLE AdapterHandle;
     USHORT VendorID;
     USHORT DeviceID;
     USHORT SubsystemID;
     USHORT SubsystemVendorID;
+
+    /* Device type flags */
+    BOOLEAN IsPCIe;         /* TRUE if this is a PCIe device (82574L, etc.) */
+    BOOLEAN HasFlash;       /* TRUE if NVM is flash instead of EEPROM */
 
     UCHAR PermanentMacAddress[IEEE_802_ADDR_LENGTH];
 
@@ -55,11 +120,14 @@ typedef struct _E1000_ADAPTER
     ULONG IoPortLength;
     volatile PUCHAR IoPort;
 
-    /* Interrupt */
+    /* Interrupt - Legacy mode */
     ULONG InterruptVector;
     ULONG InterruptLevel;
     BOOLEAN InterruptShared;
     ULONG InterruptFlags;
+
+    /* Legacy IRQ from PCI config space (for fallback) */
+    UCHAR PciInterruptLine;
 
     NDIS_MINIPORT_INTERRUPT Interrupt;
     BOOLEAN InterruptRegistered;
@@ -68,6 +136,17 @@ typedef struct _E1000_ADAPTER
 
     _Interlocked_
     volatile LONG InterruptPending;
+
+    /* Interrupt mode (Legacy/MSI/MSI-X) */
+    E1000_INTERRUPT_MODE InterruptMode;
+
+    /* MSI-X support */
+    ULONG MsixVectorCount;          /* Number of MSI-X vectors allocated (0-5) */
+    BOOLEAN MsixEnabled;            /* TRUE if MSI-X is active */
+    BOOLEAN MsiEnabled;             /* TRUE if MSI is active */
+
+    /* Interrupt coalescing */
+    E1000_INTERRUPT_MODERATION InterruptModeration;
 
 
     /* Transmit */
@@ -80,6 +159,9 @@ typedef struct _E1000_ADAPTER
     ULONG LastTxDesc;
     BOOLEAN TxFull;
 
+    /* TX lock for batch send */
+    NDIS_SPIN_LOCK TxLock;
+
 
     /* Receive */
     PE1000_RECEIVE_DESCRIPTOR ReceiveDescriptors;
@@ -90,8 +172,39 @@ typedef struct _E1000_ADAPTER
     NDIS_PHYSICAL_ADDRESS ReceiveBufferPa;
     ULONG ReceiveBufferEntrySize;
 
+    /* RX lock */
+    NDIS_SPIN_LOCK RxLock;
+
+
+    /* Checksum offload */
+    E1000_CHECKSUM_OFFLOAD ChecksumOffload;
+
+    /* Power Management */
+    E1000_POWER_STATE CurrentPowerState;
+    E1000_POWER_STATE RequestedPowerState;
+    BOOLEAN WakeOnMagicPacket;          /* Wake on magic packet enabled */
+    BOOLEAN WakeOnPatternMatch;         /* Wake on pattern match enabled */
+    BOOLEAN WakeOnLinkChange;           /* Wake on link status change */
+    NDIS_DEVICE_POWER_STATE NdisPowerState;
+
+    /* Device serial number */
+    E1000_DEVICE_SERIAL_NUMBER DeviceSerialNumber;
+
+    /* Statistics */
+    E1000_STATISTICS Statistics;
+
+    /* AER - Advanced Error Reporting */
+    BOOLEAN AerCapable;                 /* TRUE if AER capability detected */
+    ULONG AerCapOffset;                 /* PCI config space offset for AER */
+    ULONG LastUncorrectableError;       /* Last uncorrectable error status */
+    ULONG LastCorrectableError;         /* Last correctable error status */
+
 } E1000_ADAPTER, *PE1000_ADAPTER;
 
+
+/* ============================================================================
+ * Function Prototypes - Hardware Operations
+ * ============================================================================ */
 
 BOOLEAN
 NTAPI
@@ -165,12 +278,83 @@ NTAPI
 NICUpdateLinkStatus(
     IN PE1000_ADAPTER Adapter);
 
+
+/* ============================================================================
+ * Function Prototypes - Checksum Offload
+ * ============================================================================ */
+
+VOID
+NTAPI
+NICInitializeChecksumOffload(
+    IN PE1000_ADAPTER Adapter);
+
+NDIS_STATUS
+NTAPI
+NICEnableChecksumOffload(
+    IN PE1000_ADAPTER Adapter,
+    IN BOOLEAN EnableTx,
+    IN BOOLEAN EnableRx);
+
+NDIS_STATUS
+NTAPI
+NICDisableChecksumOffload(
+    IN PE1000_ADAPTER Adapter);
+
+
+/* ============================================================================
+ * Function Prototypes - Power Management
+ * ============================================================================ */
+
+NDIS_STATUS
+NTAPI
+NICSetPowerState(
+    IN PE1000_ADAPTER Adapter,
+    IN NDIS_DEVICE_POWER_STATE PowerState);
+
+NDIS_STATUS
+NTAPI
+NICQueryPowerState(
+    IN PE1000_ADAPTER Adapter,
+    IN NDIS_DEVICE_POWER_STATE PowerState);
+
+VOID
+NTAPI
+NICSaveDeviceState(
+    IN PE1000_ADAPTER Adapter);
+
+VOID
+NTAPI
+NICRestoreDeviceState(
+    IN PE1000_ADAPTER Adapter);
+
+
+/* ============================================================================
+ * Function Prototypes - Statistics
+ * ============================================================================ */
+
+VOID
+NTAPI
+NICUpdateStatistics(
+    IN PE1000_ADAPTER Adapter);
+
+
+/* ============================================================================
+ * Function Prototypes - Miniport Handlers
+ * ============================================================================ */
+
 NDIS_STATUS
 NTAPI
 MiniportSend(
     _In_ NDIS_HANDLE MiniportAdapterContext,
     _In_ PNDIS_PACKET Packet,
     _In_ UINT Flags);
+
+VOID
+NTAPI
+MiniportSendPackets(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ PPNDIS_PACKET PacketArray,
+    _In_ UINT NumberOfPackets);
 
 NDIS_STATUS
 NTAPI
@@ -204,6 +388,11 @@ NTAPI
 MiniportHandleInterrupt(
     IN NDIS_HANDLE MiniportAdapterContext);
 
+
+/* ============================================================================
+ * Inline Functions - Register Access
+ * ============================================================================ */
+
 FORCEINLINE
 VOID
 E1000ReadUlong(
@@ -234,7 +423,7 @@ E1000WriteIoUlong(
     volatile ULONG Dummy;
 
     NdisRawWritePortUlong((PULONG)(Adapter->IoPort), Address);
-    NdisReadRegisterUlong(Adapter->IoBase + E1000_REG_STATUS, &Dummy);
+    NdisReadRegisterUlong((PULONG)(Adapter->IoBase + E1000_REG_STATUS), &Dummy);
     NdisRawWritePortUlong((PULONG)(Adapter->IoPort + 4), Value);
 }
 
@@ -243,7 +432,7 @@ VOID
 NICApplyInterruptMask(
     _In_ PE1000_ADAPTER Adapter)
 {
-    E1000WriteUlong(Adapter, E1000_REG_IMS, Adapter->InterruptMask /*| 0x1F6DC*/);
+    E1000WriteUlong(Adapter, E1000_REG_IMS, Adapter->InterruptMask);
 }
 
 FORCEINLINE
@@ -253,5 +442,34 @@ NICDisableInterrupts(
 {
     E1000WriteUlong(Adapter, E1000_REG_IMC, ~0);
 }
+
+
+/* ============================================================================
+ * Inline Functions - Transmit Helpers
+ * ============================================================================ */
+
+FORCEINLINE
+ULONG
+NICGetFreeTxDescriptors(
+    _In_ PE1000_ADAPTER Adapter)
+{
+    if (Adapter->TxFull)
+        return 0;
+
+    if (Adapter->CurrentTxDesc >= Adapter->LastTxDesc)
+        return NUM_TRANSMIT_DESCRIPTORS - (Adapter->CurrentTxDesc - Adapter->LastTxDesc) - 1;
+    else
+        return Adapter->LastTxDesc - Adapter->CurrentTxDesc - 1;
+}
+
+FORCEINLINE
+BOOLEAN
+NICIsTxDescriptorAvailable(
+    _In_ PE1000_ADAPTER Adapter,
+    _In_ ULONG Count)
+{
+    return NICGetFreeTxDescriptors(Adapter) >= Count;
+}
+
 
 #endif /* _E1000_PCH_ */
