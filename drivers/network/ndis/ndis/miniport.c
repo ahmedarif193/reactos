@@ -1122,29 +1122,53 @@ static BOOLEAN
 MiniIsNdis6Adapter(
     PLOGICAL_ADAPTER Adapter)
 {
-    /*
-     * For NDIS 6.x adapters, we store the DriverHandle as a pointer to
-     * NDIS6_MINIPORT_DRIVER_BLOCK. However, the safest way to check is to
-     * verify that the MiniportCharacteristics.QueryInformationHandler is valid.
-     *
-     * If the pointer value looks like a bogus pointer (not in kernel address space
-     * or not properly aligned), it's likely an NDIS 6.x adapter.
-     *
-     * NDIS 6.x adapters don't have QueryInformationHandler/SetInformationHandler;
-     * they use OidRequestHandler instead.
-     */
-    PNDIS_M_DRIVER_BLOCK DriverHandle = Adapter->NdisMiniportBlock.DriverHandle;
+    PNDIS_M_DRIVER_BLOCK DriverHandle;
+    PDEVICE_OBJECT DeviceObject;
+    PDRIVER_OBJECT DriverObject;
+    PVOID DriverExtension;
+    PVOID Handler;
 
+    /*
+     * NDIS 6.x adapters are registered via NdisRegisterMiniportDriver which creates
+     * an NDIS6_MINIPORT_DRIVER_BLOCK and stores it in a driver object extension
+     * with ID 'ND6I'. This is the most reliable way to detect NDIS 6.x adapters.
+     *
+     * For NDIS 5.x adapters, DriverHandle points to NDIS_M_DRIVER_BLOCK.
+     * For NDIS 6.x adapters, DriverHandle points to NDIS6_MINIPORT_DRIVER_BLOCK.
+     */
+
+    if (Adapter == NULL)
+        return FALSE;
+
+    DriverHandle = Adapter->NdisMiniportBlock.DriverHandle;
     if (DriverHandle == NULL)
         return FALSE;
 
+    /* Try to get the device object to check the driver */
+    DeviceObject = Adapter->NdisMiniportBlock.DeviceObject;
+    if (DeviceObject != NULL && DeviceObject->DriverObject != NULL)
+    {
+        DriverObject = DeviceObject->DriverObject;
+
+        /*
+         * Check if the driver has an NDIS 6.x driver extension.
+         * NDIS6_DRIVER_EXTENSION_ID is defined as ((PVOID)'ND6I')
+         */
+#define NDIS6_DRIVER_EXTENSION_ID ((PVOID)'ND6I')
+        DriverExtension = IoGetDriverObjectExtension(DriverObject, NDIS6_DRIVER_EXTENSION_ID);
+        if (DriverExtension != NULL)
+        {
+            return TRUE;
+        }
+    }
+
     /*
-     * Check if QueryInformationHandler looks like a valid function pointer.
+     * Fallback: Check if QueryInformationHandler looks like a valid function pointer.
      * For NDIS 5.x, this should be a valid kernel-mode address.
      * For NDIS 6.x, this field would be at an offset within NDIS6_MINIPORT_DRIVER_BLOCK
      * which has a different structure, so it would contain garbage.
      */
-    PVOID Handler = (PVOID)DriverHandle->MiniportCharacteristics.QueryInformationHandler;
+    Handler = (PVOID)DriverHandle->MiniportCharacteristics.QueryInformationHandler;
 
     /*
      * Valid kernel function pointers on x64 are typically in the range 0xFFFFF80000000000 to 0xFFFFFFFFFFFFFFFF
@@ -1215,23 +1239,67 @@ MiniDoRequest(
         switch (NdisRequest->RequestType)
         {
         case NdisRequestQueryInformation:
-            Status = (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.QueryInformationHandler)(
-                Adapter->NdisMiniportBlock.MiniportAdapterContext,
-                NdisRequest->DATA.QUERY_INFORMATION.Oid,
-                NdisRequest->DATA.QUERY_INFORMATION.InformationBuffer,
-                NdisRequest->DATA.QUERY_INFORMATION.InformationBufferLength,
-                (PULONG)&NdisRequest->DATA.QUERY_INFORMATION.BytesWritten,
-                (PULONG)&NdisRequest->DATA.QUERY_INFORMATION.BytesNeeded);
+            {
+                PVOID QueryHandler = (PVOID)Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.QueryInformationHandler;
+
+                /*
+                 * Validate the function pointer before calling.
+                 * This is a safety check in case an NDIS 6.x adapter wasn't detected properly.
+                 */
+#ifdef _M_AMD64
+                if (QueryHandler == NULL || (ULONG_PTR)QueryHandler < 0xFFFFF80000000000ULL)
+#else
+                if (QueryHandler == NULL || (ULONG_PTR)QueryHandler < 0x80000000UL)
+#endif
+                {
+                    NDIS_DbgPrint(MIN_TRACE, ("Invalid QueryInformationHandler %p - likely NDIS 6.x adapter!\n", QueryHandler));
+                    KeAcquireSpinLockAtDpcLevel(&Adapter->NdisMiniportBlock.Lock);
+                    Adapter->NdisMiniportBlock.PendingRequest = NULL;
+                    KeReleaseSpinLockFromDpcLevel(&Adapter->NdisMiniportBlock.Lock);
+                    KeLowerIrql(OldIrql);
+                    return NDIS_STATUS_NOT_SUPPORTED;
+                }
+
+                Status = (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.QueryInformationHandler)(
+                    Adapter->NdisMiniportBlock.MiniportAdapterContext,
+                    NdisRequest->DATA.QUERY_INFORMATION.Oid,
+                    NdisRequest->DATA.QUERY_INFORMATION.InformationBuffer,
+                    NdisRequest->DATA.QUERY_INFORMATION.InformationBufferLength,
+                    (PULONG)&NdisRequest->DATA.QUERY_INFORMATION.BytesWritten,
+                    (PULONG)&NdisRequest->DATA.QUERY_INFORMATION.BytesNeeded);
+            }
             break;
 
         case NdisRequestSetInformation:
-            Status = (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.SetInformationHandler)(
-                Adapter->NdisMiniportBlock.MiniportAdapterContext,
-                NdisRequest->DATA.SET_INFORMATION.Oid,
-                NdisRequest->DATA.SET_INFORMATION.InformationBuffer,
-                NdisRequest->DATA.SET_INFORMATION.InformationBufferLength,
-                (PULONG)&NdisRequest->DATA.SET_INFORMATION.BytesRead,
-                (PULONG)&NdisRequest->DATA.SET_INFORMATION.BytesNeeded);
+            {
+                PVOID SetHandler = (PVOID)Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.SetInformationHandler;
+
+                /*
+                 * Validate the function pointer before calling.
+                 * This is a safety check in case an NDIS 6.x adapter wasn't detected properly.
+                 */
+#ifdef _M_AMD64
+                if (SetHandler == NULL || (ULONG_PTR)SetHandler < 0xFFFFF80000000000ULL)
+#else
+                if (SetHandler == NULL || (ULONG_PTR)SetHandler < 0x80000000UL)
+#endif
+                {
+                    NDIS_DbgPrint(MIN_TRACE, ("Invalid SetInformationHandler %p - likely NDIS 6.x adapter!\n", SetHandler));
+                    KeAcquireSpinLockAtDpcLevel(&Adapter->NdisMiniportBlock.Lock);
+                    Adapter->NdisMiniportBlock.PendingRequest = NULL;
+                    KeReleaseSpinLockFromDpcLevel(&Adapter->NdisMiniportBlock.Lock);
+                    KeLowerIrql(OldIrql);
+                    return NDIS_STATUS_NOT_SUPPORTED;
+                }
+
+                Status = (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.SetInformationHandler)(
+                    Adapter->NdisMiniportBlock.MiniportAdapterContext,
+                    NdisRequest->DATA.SET_INFORMATION.Oid,
+                    NdisRequest->DATA.SET_INFORMATION.InformationBuffer,
+                    NdisRequest->DATA.SET_INFORMATION.InformationBufferLength,
+                    (PULONG)&NdisRequest->DATA.SET_INFORMATION.BytesRead,
+                    (PULONG)&NdisRequest->DATA.SET_INFORMATION.BytesNeeded);
+            }
             break;
 
         default:
