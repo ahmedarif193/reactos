@@ -1029,21 +1029,15 @@ MI_MAKE_HARDWARE_PTE_USER(IN PMMPTE NewPte,
 
 #if defined(_M_ARM64)
 //
-// Builds a Prototype PTE for the address of the PTE
+// ARM64 uses arch-specific MI_MAKE_PROTOTYPE_PTE in ntoskrnl/arch/arm64/include/mm.h
+// which uses shift-based encoding instead of bitfield assignment for MinGW compatibility.
 //
-FORCEINLINE
-VOID
-MI_MAKE_PROTOTYPE_PTE(
-    _Out_ PMMPTE NewPte,
-    _In_ PMMPTE PointerPte)
-{
-    NewPte->u.Long = 0;
-    NewPte->u.Proto.Prototype = 1;
-    NewPte->u.Proto.ProtoAddress = (ULONG_PTR)PointerPte;
-}
 
 //
 // Builds a Subsection PTE for the address of the Segment
+//
+// TODO: This may also need shift-based encoding like MI_MAKE_PROTOTYPE_PTE,
+// but subsection PTEs haven't triggered MinGW issues yet.
 //
 FORCEINLINE
 VOID

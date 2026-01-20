@@ -99,7 +99,7 @@ static VOID Arm64PopulatePsciConfiguration(PLOADER_PARAMETER_BLOCK LoaderBlock);
 
 #ifdef UEFIBOOT
 static inline VOID UartPutc(char c) { (void)c; }
-static VOID UartPuts(const char* s) { (void)s; }
+static VOID UartPuts(const char* s) { while (s && *s) UartPutc(*s++); }
 #else
 static inline VOID UartPutc(char c)
 {

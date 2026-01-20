@@ -3589,6 +3589,11 @@ MmFreeSectionPage(PVOID Context, MEMORY_AREA* MemoryArea, PVOID Address,
         if (IS_SWAP_FROM_SSE(Entry) ||
                 Page != PFN_FROM_SSE(Entry))
         {
+#if defined(_M_ARM64)
+            /* ARM64: Debug logging to understand the condition */
+            DPRINT1("[arm64] MmFreeSectionPage: Entering private page path - Entry=0x%I64x, Page=0x%I64x, PFN_FROM_SSE=0x%I64x, IS_SWAP=%d, Address=%p\n",
+                    Entry, Page, PFN_FROM_SSE(Entry), IS_SWAP_FROM_SSE(Entry), Address);
+#endif
 #if !defined(_M_ARM64)
             ASSERT(Process != NULL);
 #else
@@ -3601,22 +3606,60 @@ MmFreeSectionPage(PVOID Context, MEMORY_AREA* MemoryArea, PVOID Address,
 
             /*
              * Just dereference private pages
+             *
+             * ARM64: Check if this is actually a ROS PFN before accessing ROS-specific
+             * fields (SwapEntry, RmapListHead). During early boot or certain section
+             * mappings, pages might be allocated through ARM3 path and not marked as
+             * ROS PFNs (AweAllocation==FALSE).
              */
-            SavedSwapEntry = MmGetSavedSwapEntryPage(Page);
-            if (SavedSwapEntry != 0)
+            KIRQL PfnOldIrql = MiAcquirePfnLock();
+            PMMPFN Pfn1 = MiGetPfnEntry(Page);
+            BOOLEAN IsRosPfn = (Pfn1 && MI_IS_ROS_PFN(Pfn1));
+            MiReleasePfnLock(PfnOldIrql);
+
+            if (IsRosPfn)
             {
-                MmFreeSwapPage(SavedSwapEntry);
-                MmSetSavedSwapEntryPage(Page, 0);
-            }
-            MmDeleteRmap(Page, Process, Address);
+                SavedSwapEntry = MmGetSavedSwapEntryPage(Page);
+                if (SavedSwapEntry != 0)
+                {
+                    MmFreeSwapPage(SavedSwapEntry);
+                    MmSetSavedSwapEntryPage(Page, 0);
+                }
+                MmDeleteRmap(Page, Process, Address);
 #if DBG
-            {
-                KIRQL OldIrql = MiAcquirePfnLock();
-                ASSERT(MmGetRmapListHeadPage(Page) == NULL);
-                MiReleasePfnLock(OldIrql);
-            }
+                {
+                    KIRQL OldIrql = MiAcquirePfnLock();
+                    ASSERT(MmGetRmapListHeadPage(Page) == NULL);
+                    MiReleasePfnLock(OldIrql);
+                }
 #endif
-            MmReleasePageMemoryConsumer(MC_USER, Page);
+                MmReleasePageMemoryConsumer(MC_USER, Page);
+            }
+            else
+            {
+#if defined(_M_ARM64)
+                /* ARM64: This is not a ROS PFN, so it doesn't have ROS-specific fields.
+                 * This can happen when a page was allocated via ARM3 path or during early
+                 * boot with incorrect section segment entry tracking.
+                 *
+                 * In this case, we should treat it like a shared section page and call
+                 * MmUnsharePageEntrySectionSegment to properly handle the reference counting.
+                 */
+                DPRINT1("[arm64] MmFreeSectionPage: Page 0x%I64x is not a ROS PFN (AweAllocation==FALSE), treating as shared page\n", Page);
+
+                if (Process)
+                {
+                    MmDeleteRmap(Page, Process, Address);
+                }
+
+                /* Handle it as a shared section page */
+                MmUnsharePageEntrySectionSegment(MemoryArea, Segment, &Offset, Process ? Dirty : FALSE, FALSE, NULL);
+#else
+                /* On other architectures, this should not happen */
+                DPRINT1("WARNING: Non-ROS PFN 0x%I64x in private page cleanup path\n", Page);
+                ASSERT(FALSE);
+#endif
+            }
         }
         else
         {
@@ -4604,12 +4647,19 @@ MmMapViewInSystemSpaceEx (
 
     if (MiIsRosSectionObject(SectionObject) == FALSE)
     {
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] MmMapViewInSystemSpaceEx: ARM3 section path\n");
+#endif
         return MiMapViewInSystemSpace(SectionObject,
                                       &MmSession,
                                       MappedBase,
                                       ViewSize,
                                       SectionOffset);
     }
+
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] MmMapViewInSystemSpaceEx: Legacy section path\n");
+#endif
 
     DPRINT("MmMapViewInSystemSpaceEx() called\n");
 

@@ -123,6 +123,10 @@ C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, State.FaultAddress) == 0x10);
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, State.Elr) == 0x18);
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, State.Spsr) == 0x20);
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, State.Registers.X[0]) == 0x28);
+C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, State.Registers.Sp) == 0x120);
+C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, State.Registers.Pc) == 0x128);
+C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, State.Registers.Pstate) == 0x130);
+C_ASSERT(sizeof(ARM64_EARLY_TRAP_STATE) == 0x138);  /* State should end at 0x138 */
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, TrapFramePointer) == 0x138);
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, ExceptionFramePointer) == 0x140);
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, TrapFrame) == 0x148);
@@ -165,7 +169,7 @@ KiArm64InitializeTrapFrame(
     TrapFrame->Spsr = (ULONG)Context->State.Spsr;
     TrapFrame->Esr = (ULONG)Context->State.ExceptionSyndrome;
     TrapFrame->Sp = Context->State.Registers.Sp;
-    TrapFrame->Pc = Context->State.Registers.Pc;
+    TrapFrame->Pc = Context->State.Elr;
     TrapFrame->Lr = Context->State.Registers.X[30];
     TrapFrame->Fp = Context->State.Registers.X[29];
 
@@ -487,6 +491,16 @@ KiArm64HandleSynchronousException(
     NTSTATUS Status;
     BOOLEAN WriteAccess;
 
+    /* Log ALL synchronous exceptions to diagnose illegal instruction */
+    if (EsrClass != 0x15 && EsrClass != 0x11) /* Skip logging for SVC */
+    {
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[arm64] SyncException: Class=0x%02lx ESR=0x%08lx ELR=%p FAR=%p\n",
+                   EsrClass, Esr,
+                   (PVOID)(ULONG_PTR)Context->State.Elr,
+                   (PVOID)(ULONG_PTR)Context->State.FaultAddress);
+    }
+
     /*
      * ARM64 memory model: Ensure exception state from assembly is visible.
      * The DSB/ISB in assembly ensures system register reads are complete,
@@ -630,6 +644,40 @@ KiArm64HandleSynchronousException(
             PETHREAD CurrentThread;
             ULONG64 CurrentSp;
             PVOID StackLimit;
+
+#if DBG
+            /* Debug: Detect repeated faults on the same address */
+            static volatile PVOID LastFaultAddress = NULL;
+            static volatile LONG LastFaultCount = 0;
+            PVOID CurrentFaultAddr = (PVOID)(ULONG_PTR)Context->State.FaultAddress;
+
+            if (CurrentFaultAddr == LastFaultAddress)
+            {
+                LONG Count = InterlockedIncrement(&LastFaultCount);
+                if (Count >= 2 && Count <= 5)
+                {
+                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                               "[arm64] DA REPEATED FAULT #%ld: addr=%p elr=%p\n",
+                               Count, CurrentFaultAddr, (PVOID)(ULONG_PTR)Context->State.Elr);
+                }
+                else if (Count > 10)
+                {
+                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                               "[arm64] DA FAULT LOOP DETECTED: addr=%p count=%ld - BUGCHECK!\n",
+                               CurrentFaultAddr, Count);
+                    KeBugCheckEx(PAGE_FAULT_IN_NONPAGED_AREA,
+                                 (ULONG_PTR)CurrentFaultAddr,
+                                 (ULONG_PTR)Context->State.Elr,
+                                 Count,
+                                 0xFA017100UL);
+                }
+            }
+            else
+            {
+                LastFaultAddress = CurrentFaultAddr;
+                InterlockedExchange(&LastFaultCount, 1);
+            }
+#endif
 
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);

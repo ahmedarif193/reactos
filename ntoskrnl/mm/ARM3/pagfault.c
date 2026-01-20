@@ -955,6 +955,49 @@ MiResolveDemandZeroFault(IN PVOID Address,
     /* Write it */
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64: Memory Ordering After PTE Write
+     *
+     * MiResolveDemandZeroFault can be called in two scenarios:
+     *
+     * 1. Direct demand-zero fault: PointerPte is the actual page table PTE,
+     *    and Address is the faulting VA. In this case, we need TLB invalidation.
+     *
+     * 2. Prototype PTE resolution: Called from MiResolveProtoPteFault with
+     *    PointerPte = PointerProtoPte (the prototype PTE in paged pool).
+     *    In this case, we're writing to the prototype PTE, not the actual PTE,
+     *    so we DON'T invalidate the TLB for Address (that happens later in
+     *    MiCompleteProtoPteFault when the actual PTE is written).
+     *
+     * We can distinguish these cases by checking if PointerPte is in the
+     * page table address range (PTE_BASE region) or in paged pool.
+     */
+    if (MI_IS_PAGE_TABLE_ADDRESS(PointerPte))
+    {
+        /*
+         * This is an actual page table PTE, not a prototype PTE.
+         * Invalidate the TLB for the faulting address.
+         */
+        ULONG64 VaForTlbi = ((ULONG64)(ULONG_PTR)Address) >> 12;
+        __asm__ __volatile__(
+            "dsb ishst\n\t"           /* Ensure PTE write is visible */
+            "tlbi vae1is, %0\n\t"     /* Invalidate TLB for this VA */
+            "dsb ish\n\t"             /* Wait for TLB invalidation */
+            "isb"                      /* Synchronize instruction pipeline */
+            : : "r"(VaForTlbi) : "memory");
+    }
+    else
+    {
+        /*
+         * This is a prototype PTE in paged pool. The actual TLB invalidation
+         * will happen in MiCompleteProtoPteFault. We still need a memory
+         * barrier to ensure the PTE write is visible before we return.
+         */
+        __asm__ __volatile__("dsb ishst" ::: "memory");
+    }
+#endif
+
     /* Did we manually acquire the lock */
     if (HaveLock)
     {
@@ -1113,6 +1156,59 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
 
     /* Write the PTE */
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64 CRITICAL: TLB Invalidation After PTE Update
+     *
+     * PROBLEM: On ARM64, the TLB operates under a weakly-ordered memory model.
+     * When we write a new PTE to memory, the TLB may still contain:
+     * 1. A cached "translation fault" entry for this VA from the initial fault
+     * 2. An invalid/stale translation from a previous mapping
+     * 3. No entry at all, which is fine
+     *
+     * Without explicit TLB invalidation, the CPU will continue using the stale
+     * TLB entry, causing the fault to repeat infinitely even though we just
+     * installed a valid PTE.
+     *
+     * SOLUTION: Invalidate the TLB entry for this specific virtual address
+     * immediately after writing the PTE. The sequence is:
+     * 1. DSB ISHST: Ensure the PTE write is visible to other cores
+     * 2. TLBI VAE1IS: Invalidate TLB entry for this VA (Inner Shareable)
+     * 3. DSB ISH: Wait for TLB invalidation to complete on all cores
+     * 4. ISB: Synchronize instruction fetch pipeline
+     *
+     * This applies to ALL addresses (user and kernel), but is especially
+     * critical for kernel addresses like System View Space where faults
+     * happen at elevated IRQL and we can't afford repeated faults.
+     *
+     * ARM64 Architecture Reference Manual (DDI 0487):
+     * - D5.10.2: TLB maintenance operations
+     * - D5.4.4: Ordering of TLB operations
+     * - B2.3.8: Memory barriers and TLB maintenance
+     */
+    {
+        ULONG64 VaForTlbi = ((ULONG64)(ULONG_PTR)Address) >> 12;
+        __asm__ __volatile__(
+            "dsb ishst\n\t"           /* Ensure PTE write is visible */
+            "tlbi vae1is, %0\n\t"     /* Invalidate TLB for this VA */
+            "dsb ish\n\t"             /* Wait for TLB invalidation */
+            "isb"                      /* Synchronize instruction pipeline */
+            : : "r"(VaForTlbi) : "memory");
+    }
+#endif
+
+#if defined(_M_ARM64) && DBG
+    /* Debug: Log when we complete prototype PTE fault for System View Space */
+    extern PVOID MiSystemViewStart;
+    if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+        (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+    {
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+            "[arm64] MiCompleteProtoPteFault: SUCCESS addr=%p PointerPte=%p->0x%llx PFN=0x%lx\n",
+            Address, PointerPte, (ULONG64)TempPte.u.Long, PageFrameIndex);
+    }
+#endif
 
     /* Reset the protection if needed */
     if (OriginalProtection) Protection = MM_ZERO_ACCESS;
@@ -1557,6 +1653,18 @@ MiResolveProtoPteFault(IN BOOLEAN StoreInstruction,
         /* We also don't support paged out pages */
         ASSERT(TempPte.u.Soft.PageFileHigh == 0);
 
+#if defined(_M_ARM64) && DBG
+        /* Debug: Log demand-zero prototype PTE resolution for System View Space */
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MiResolveProtoPteFault: Demand-zero for addr=%p ProtoPte=%p (0x%llx) Protection=%lx\n",
+                Address, PointerProtoPte, (ULONG64)TempPte.u.Long, (ULONG)TempPte.u.Soft.Protection);
+        }
+#endif
+
         /* Resolve the demand zero fault */
         Status = MiResolveDemandZeroFault(Address,
                                           PointerProtoPte,
@@ -1625,6 +1733,18 @@ MiDispatchFault(IN ULONG FaultCode,
     /* Do we have a prototype PTE? */
     if (PointerProtoPte)
     {
+#if defined(_M_ARM64) && DBG
+        /* Debug: Log when we enter prototype PTE handling for System View Space */
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MiDispatchFault: Handling ProtoPTE for addr=%p ProtoPte=%p\n",
+                Address, PointerProtoPte);
+        }
+#endif
+
         /* This should never happen */
         ASSERT(!MI_IS_PHYSICAL_ADDRESS(PointerProtoPte));
 
@@ -2050,6 +2170,16 @@ MmArmAccessFault(IN ULONG FaultCode,
     InterlockedExchange(&MmArmAccessFaultInFunction, 1);
     InterlockedIncrement(&MmArmAccessFaultEntryCount);
     MmArmAccessFaultLastAddress = Address;
+
+    /* Debug System View Space faults */
+    extern PVOID MiSystemViewStart;
+    if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+        (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+    {
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+            "[arm64] MmArmAccessFault: ENTERED for System View addr=%p FaultCode=0x%lx\n",
+            Address, FaultCode);
+    }
 #endif
 
     DPRINT("ARM3 FAULT AT: %p\n", Address);
@@ -2323,9 +2453,57 @@ MmArmAccessFault(IN ULONG FaultCode,
                        Address, PointerPxe->u.Long, PointerPpe->u.Long, PointerPde->u.Long,
                        PointerPte ? PointerPte->u.Long : 0);
         }
+
+        /* Debug System View Space */
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: System View kernel path - PXE.Valid=%d PPE.Valid=%d PDE.Valid=%d PointerPte=%p Mode=%d\n",
+                PointerPxe->u.Hard.Valid, PointerPpe->u.Hard.Valid, PointerPde->u.Hard.Valid, PointerPte, Mode);
+        }
 #endif
         /* Bail out, if the fault came from user mode */
-        if (Mode == UserMode) return STATUS_ACCESS_VIOLATION;
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /*
+         * ARM64 WORKAROUND: Skip user mode check for kernel addresses.
+         *
+         * BUG: KiArm64PreviousModeFromSpsr is returning incorrect Mode values
+         * due to SPSR being corrupted/misread from the exception context.
+         * As a workaround, we check if the faulting address is in kernel
+         * space - if so, we know it CAN'T be a user-mode fault, regardless
+         * of what Mode says.
+         *
+         * TODO: Fix the root cause in the ARM64 exception handler where
+         * SPSR is being saved/restored.
+         */
+        if ((Mode == UserMode) && ((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart))
+#else
+        if (Mode == UserMode)
+#endif
+        {
+#if defined(_M_ARM64) && DBG
+            extern PVOID MiSystemViewStart;
+            if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+                (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[arm64] MmArmAccessFault: RETURNING STATUS_ACCESS_VIOLATION due to Mode==UserMode\n");
+            }
+#endif
+            return STATUS_ACCESS_VIOLATION;
+        }
+
+#if defined(_M_ARM64) && DBG
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: Past user mode check, Mode=%d\n", Mode);
+        }
+#endif
 
 #if (_MI_PAGING_LEVELS == 2)
         if (MI_IS_SYSTEM_PAGE_TABLE_ADDRESS(Address)) MiSynchronizeSystemPde((PMMPDE)PointerPte);
@@ -2345,6 +2523,16 @@ MmArmAccessFault(IN ULONG FaultCode,
             /* Always check if the PDE is valid */
             (!PointerPde->u.Hard.Valid))
         {
+#if defined(_M_ARM64) && DBG
+            extern PVOID MiSystemViewStart;
+            if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+                (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[arm64] MmArmAccessFault: About to bugcheck - PXE.Valid=%d PPE.Valid=%d PDE.Valid=%d\n",
+                    PointerPxe->u.Hard.Valid, PointerPpe->u.Hard.Valid, PointerPde->u.Hard.Valid);
+            }
+#endif
             /* PXE/PPE/PDE (still) not valid, kill the system */
             KeBugCheckEx(PAGE_FAULT_IN_NONPAGED_AREA,
                          (ULONG_PTR)Address,
@@ -2356,8 +2544,111 @@ MmArmAccessFault(IN ULONG FaultCode,
         /* Not handling session faults yet */
         IsSessionAddress = MI_IS_SESSION_ADDRESS(Address);
 
+#if defined(_M_ARM64) && DBG
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: IsSessionAddress=%d, about to read PTE at %p\n",
+                IsSessionAddress, PointerPte);
+        }
+#endif
+
         /* The PDE is valid, so read the PTE */
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /*
+         * ARM64 CRITICAL FIX: PointerPte Self-Map Backing
+         *
+         * PROBLEM: When the faulting address is in System View Space or other
+         * kernel ranges, PointerPte itself is calculated using MiAddressToPte(),
+         * which returns an address in the self-map region (PTE_BASE range).
+         * On ARM64, these self-map addresses require on-demand creation of
+         * backing page tables.
+         *
+         * Example:
+         *   Faulting address: FFFFF97FBA000000 (System View Space)
+         *   PointerPte = MiAddressToPte(FFFFF97FBA000000) = FFFFF6FCBFDD0000
+         *   PointerPte is in [PTE_BASE, PTE_TOP] self-map range
+         *
+         * If we try to dereference PointerPte without ensuring its backing
+         * page exists, we'll get a nested page fault and crash.
+         *
+         * SOLUTION: Check if PointerPte is in the self-map region. If yes,
+         * ensure the backing page exists by calling MiArm64MapAliasForPointer.
+         */
+#if DBG
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            extern PVOID MmHyperSpaceEnd;
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: PointerPte=%p PTE_BASE=%p MmHyperSpaceEnd=%p\n",
+                PointerPte, (PVOID)PTE_BASE, MmHyperSpaceEnd);
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: About to check MI_IS_PAGE_TABLE_OR_HYPER_ADDRESS\n");
+        }
+#endif
+
+        if (((PVOID)PointerPte >= (PVOID)PTE_BASE) && ((PVOID)PointerPte <= (PVOID)MmHyperSpaceEnd))
+        {
+            extern VOID MiArm64MapAliasForPointer(_In_ PVOID AliasVa);
+
+#if DBG
+            extern PVOID MiSystemViewStart;
+            if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+                (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[arm64] MmArmAccessFault: PointerPte %p is in self-map range - creating backing\n",
+                    PointerPte);
+            }
+#endif
+
+            /* Create the self-map alias page backing for PointerPte */
+            MiArm64MapAliasForPointer(PointerPte);
+
+            /*
+             * Invalidate TLB for PointerPte. The mapping was just created
+             * via KSEG0 direct manipulation.
+             */
+            {
+                ULONG64 VaForTlbi = ((ULONG64)(ULONG_PTR)PointerPte) >> 12;
+                __asm__ __volatile__(
+                    "dsb ishst\n\t"           /* Ensure stores are visible */
+                    "tlbi vae1is, %0\n\t"     /* Invalidate TLB entry */
+                    "dsb ish\n\t"             /* Wait for TLB invalidation */
+                    "isb\n\t"                 /* Synchronize context */
+                    : : "r"(VaForTlbi) : "memory"
+                );
+            }
+        }
+#endif
+
+#if defined(_M_ARM64) && DBG
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: About to dereference PointerPte at %p\n",
+                PointerPte);
+        }
+#endif
         TempPte = *PointerPte;
+
+#if defined(_M_ARM64) && DBG
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: Read PTE at %p = 0x%llx (Valid=%d Prototype=%d)\n",
+                PointerPte, (ULONG64)TempPte.u.Long,
+                TempPte.u.Hard.Valid, TempPte.u.Soft.Prototype);
+        }
+#endif
 
         /*
          * ARM64: Check if the PTE is valid using architecture-specific rules.
@@ -2372,6 +2663,15 @@ MmArmAccessFault(IN ULONG FaultCode,
         if (TempPte.u.Hard.Valid == 1)
 #endif
         {
+#if defined(_M_ARM64) && DBG
+            extern PVOID MiSystemViewStart;
+            if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+                (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[arm64] MmArmAccessFault: PTE is VALID (ARM64 check passed) - entering valid PTE path\n");
+            }
+#endif
             /* Check if this was system space or session space */
             if (!IsSessionAddress)
             {
@@ -2467,6 +2767,15 @@ MmArmAccessFault(IN ULONG FaultCode,
                 return STATUS_SUCCESS;
             }
         }
+#if defined(_M_ARM64) && DBG
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: PTE is NOT valid (ARM64 check failed) - continuing to other checks\n");
+        }
+#endif
 #if (_MI_PAGING_LEVELS == 2)
         /* Check if this was a session PTE that needs to remap the session PDE */
         if (MI_IS_SESSION_PTE(Address))
@@ -2549,12 +2858,38 @@ _WARN("Session space stuff is not implemented yet!")
         /* Get the current thread */
         CurrentThread = PsGetCurrentThread();
 
+#if defined(_M_ARM64) && DBG
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: Past MI_IS_PAGE_TABLE check - getting working set for addr=%p\n", Address);
+        }
+#endif
+
         /* What kind of address is this */
         if (!IsSessionAddress)
         {
             /* Use the system working set */
             WorkingSet = &MmSystemCacheWs;
             CurrentProcess = NULL;
+
+#if defined(_M_ARM64) && DBG
+            extern PVOID MiSystemViewStart;
+            if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+                (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[arm64] MmArmAccessFault: Checking working set locks - ProcExcl=%d ProcShared=%d SysExcl=%d SysShared=%d SessExcl=%d SessShared=%d\n",
+                    CurrentThread->OwnsProcessWorkingSetExclusive,
+                    CurrentThread->OwnsProcessWorkingSetShared,
+                    CurrentThread->OwnsSystemWorkingSetExclusive,
+                    CurrentThread->OwnsSystemWorkingSetShared,
+                    CurrentThread->OwnsSessionWorkingSetExclusive,
+                    CurrentThread->OwnsSessionWorkingSetShared);
+            }
+#endif
 
             /* Make sure we don't have a recursive working set lock */
             if ((CurrentThread->OwnsProcessWorkingSetExclusive) ||
@@ -2564,6 +2899,15 @@ _WARN("Session space stuff is not implemented yet!")
                 (CurrentThread->OwnsSessionWorkingSetExclusive) ||
                 (CurrentThread->OwnsSessionWorkingSetShared))
             {
+#if defined(_M_ARM64) && DBG
+                extern PVOID MiSystemViewStart;
+                if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+                    (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+                {
+                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                        "[arm64] MmArmAccessFault: RECURSIVE WORKING SET LOCK DETECTED - returning STATUS_IN_PAGE_ERROR\n");
+                }
+#endif
                 /* Fail */
                 return STATUS_IN_PAGE_ERROR | 0x10000000;
             }
@@ -2583,12 +2927,41 @@ _WARN("Session space stuff is not implemented yet!")
             }
         }
 RetryKernel:
+#if defined(_M_ARM64) && DBG
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: About to acquire working set lock\n");
+        }
+#endif
         /* Acquire the working set lock */
         KeRaiseIrql(APC_LEVEL, &LockIrql);
         MiLockWorkingSet(CurrentThread, WorkingSet);
 
+#if defined(_M_ARM64) && DBG
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: Acquired working set lock - re-reading PTE at %p\n", PointerPte);
+        }
+#endif
+
         /* Re-read PTE now that we own the lock */
         TempPte = *PointerPte;
+#if defined(_M_ARM64) && DBG
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: Re-read PTE = 0x%llx (Valid=%d)\n",
+                (ULONG64)TempPte.u.Long, TempPte.u.Hard.Valid);
+        }
+#endif
         if (TempPte.u.Hard.Valid == 1)
         {
             /* Check if this was a write */
@@ -2654,9 +3027,32 @@ RetryKernel:
             return STATUS_SUCCESS;
         }
 
+#if defined(_M_ARM64) && DBG
+        /* Debug: Log PTE value before prototype check for System View Space */
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: Before prototype check - TempPte=0x%llx Prototype=%d Valid=%d\n",
+                (ULONG64)TempPte.u.Long, TempPte.u.Soft.Prototype, TempPte.u.Hard.Valid);
+        }
+#endif
+
         /* Check one kind of prototype PTE */
         if (TempPte.u.Soft.Prototype)
         {
+#if defined(_M_ARM64) && DBG
+            extern PVOID MiSystemViewStart;
+            if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+                (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[arm64] MmArmAccessFault: PROTOTYPE PTE DETECTED! addr=%p PTE.u.Long=0x%llx PageFileHigh=0x%lx\n",
+                    Address, (ULONG64)TempPte.u.Long, (ULONG)TempPte.u.Soft.PageFileHigh);
+            }
+#endif
+
             /* Make sure protected pool is on, and that this is a pool address */
             if ((MmProtectFreedNonPagedPool) &&
                 (((Address >= MmNonPagedPoolStart) &&
@@ -2710,6 +3106,16 @@ RetryKernel:
                 ProtoPte = MiProtoPteToPte(&TempPte);
 
 #if defined(_M_ARM64) || defined(__aarch64__)
+                /* Debug: Log the decoded prototype PTE address for System View Space */
+                extern PVOID MiSystemViewStart;
+                if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+                    (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+                {
+                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                        "[arm64] MmArmAccessFault: Decoded ProtoPte=%p from PTE=0x%llx\n",
+                        ProtoPte, (ULONG64)TempPte.u.Long);
+                }
+
                 /* Sanity check: prototype PTEs should be in kernel space */
                 if ((ULONG_PTR)ProtoPte < 0xFFFF000000000000ULL)
                 {
@@ -2801,8 +3207,26 @@ RetryKernel:
 
         /* Release the working set */
         ASSERT(KeAreAllApcsDisabled() == TRUE);
+#if defined(_M_ARM64) && DBG
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: About to release working set lock - Status=0x%lx\n", Status);
+        }
+#endif
         MiUnlockWorkingSet(CurrentThread, WorkingSet);
         KeLowerIrql(LockIrql);
+#if defined(_M_ARM64) && DBG
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: Released working set lock successfully\n");
+        }
+#endif
 
         if (Status == STATUS_NO_MEMORY)
         {

@@ -2704,7 +2704,7 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
              */
             DPRINT("%s\n", "[arm64] MiInitMachineDependent: pre-mapping system view space page tables");
 
-            /* WORKAROUND: Disable interrupts while mapping System View Space to prevent
+            /* Disable interrupts while mapping System View Space to prevent
              * timer interrupt handler from accessing System View Space before page tables exist. */
             ULONG64 SavedDaif;
             __asm__ __volatile__(
@@ -3216,7 +3216,7 @@ MiMapPPEs(
                 if (Pfn != 0)
                 {
                     /* Initialize the new L1 table page before publishing. */
-                    /* WORKAROUND: Use manual zeroing instead of RtlZeroMemory to avoid
+                    /* Use manual zeroing instead of RtlZeroMemory to avoid
                      * potential page fault in optimized memset implementation. */
                     {
                         volatile UINT64 *ZeroPtr = (volatile UINT64 *)MiArm64PfnToKseg0(Pfn);

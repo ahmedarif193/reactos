@@ -605,7 +605,7 @@ static inline UINT64 get_extra_kernel_slot_index(UINT64 l0_idx)
 /*
  * Check if an L0 index belongs to the extra kernel slots.
  */
-static inline BOOLEAN is_extra_kernel_slot(UINT64 l0_idx)
+static __attribute__((unused)) inline BOOLEAN is_extra_kernel_slot(UINT64 l0_idx)
 {
     return get_extra_kernel_slot_index(l0_idx) < ARM64_EXTRA_KERNEL_SLOTS;
 }

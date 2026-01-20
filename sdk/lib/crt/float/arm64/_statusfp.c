@@ -9,7 +9,7 @@
 unsigned int
 _statusfp(void)
 {
-    unsigned long fpsr = 0;
+    unsigned long long fpsr = 0;
 
     __asm__ __volatile__("mrs %0, fpsr" : "=r"(fpsr));
     return (unsigned int)fpsr;

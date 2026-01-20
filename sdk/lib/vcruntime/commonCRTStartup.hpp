@@ -18,8 +18,8 @@
 // Defined in winnt.h
 #define FAST_FAIL_FATAL_APP_EXIT 7
 
-extern "C" int __cdecl main(int, char**, char**);
-extern "C" int __cdecl wmain(int, wchar_t**, wchar_t**);
+int __cdecl main(int, char**, char**);
+int __cdecl wmain(int, wchar_t**, wchar_t**);
 
 template<typename Tmain>
 static int call_main();

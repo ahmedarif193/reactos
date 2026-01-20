@@ -349,6 +349,18 @@ MmAccessFault(IN ULONG FaultCode,
             MiLockWorkingSetShared(PsGetCurrentThread(), &MmSystemCacheWs);
             Vad = MiLocateVad(&MiRosKernelVadRoot, Address);
 
+#if defined(_M_ARM64) && DBG
+            /* Debug System View Space faults */
+            extern PVOID MiSystemViewStart;
+            if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+                (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)  /* First 16MB */
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[arm64] MmAccessFault: System View Space addr=%p Vad=%p IsRosVad=%d\n",
+                    Address, Vad, Vad ? (MI_IS_ROSMM_VAD(Vad) ? 1 : 0) : -1);
+            }
+#endif
+
 #if MMFAULT_DEBUG
             if ((ULONG_PTR)Address >= 0xFFFF8000B0000000ULL &&
                 (ULONG_PTR)Address < 0xFFFF8000E0000000ULL)
@@ -399,8 +411,44 @@ MmAccessFault(IN ULONG FaultCode,
     {
         /* This is an ARM3 fault */
         DPRINT("ARM3 fault %p\n", Vad);
-        return MmArmAccessFault(FaultCode, Address, Mode, TrapInformation);
+
+#if defined(_M_ARM64) && DBG
+        /* Debug System View Space routing */
+        extern PVOID MiSystemViewStart;
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmAccessFault: Routing to MmArmAccessFault for %p\n", Address);
+        }
+#endif
+
+        {
+            NTSTATUS Status = MmArmAccessFault(FaultCode, Address, Mode, TrapInformation);
+#if defined(_M_ARM64) && DBG
+            extern PVOID MiSystemViewStart;
+            if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+                (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[arm64] MmAccessFault: MmArmAccessFault returned Status=0x%lx for addr=%p\n",
+                    Status, Address);
+            }
+#endif
+            return Status;
+        }
     }
+
+#if defined(_M_ARM64) && DBG
+    /* Debug: we're taking the ROS path */
+    extern PVOID MiSystemViewStart;
+    if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+        (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+    {
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+            "[arm64] MmAccessFault: Taking ROS path for %p (Vad=%p)\n", Address, Vad);
+    }
+#endif
 
 Retry:
     /* Keep same old ReactOS Behaviour */

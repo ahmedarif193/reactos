@@ -325,6 +325,48 @@ MiIsPdeForAddressValid(PVOID Address)
 #define MiProtoPteToPte(x)                  \
     (PMMPTE)(((LONG64)(x)->u.Long) >> 16) /* Sign extend 48 bits */
 
+//
+// Builds a Prototype PTE for the address of the PTE
+//
+// CRITICAL: This must use the shift-based approach, NOT bitfield assignment.
+// ARM64 canonical kernel addresses have bits 48-63 all set to 1 (sign extension
+// from bit 47). If we use bitfield assignment (ProtoAddress:48), the upper 16
+// bits get truncated and cannot be recovered by sign extension.
+//
+// The shift-based approach:
+// 1. Shifts the address left by 16 bits: 0xFFFFF8A0...BA0 << 16 = 0xF8A0...BA00000
+// 2. Stores in u.Long (bits 16-63 contain the shifted address, bit 63=1)
+// 3. Sets Prototype bit
+// 4. On decode: u.Long >> 16 (arithmetic shift) sign-extends from bit 63,
+//    restoring: 0xFFFFF8A0...BA0
+//
+// MinGW fix: MinGW's bitfield handling causes incorrect sign extension,
+// resulting in 0xFFFFFFF8A0...BA0 instead of 0xFFFFF8A0...BA0.
+//
+FORCEINLINE
+VOID
+MI_MAKE_PROTOTYPE_PTE(
+    _Out_ PMMPTE NewPte,
+    _In_ PMMPTE PointerPte)
+{
+    /* Store the address by shifting it into position */
+    NewPte->u.Long = (ULONG64)PointerPte << 16;
+
+    /* Mark it as a prototype PTE */
+    NewPte->u.Proto.Prototype = 1;
+
+#if DBG
+    /* Verify encoding/decoding works */
+    PMMPTE Decoded = MiProtoPteToPte(NewPte);
+    if (Decoded != PointerPte)
+    {
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[arm64] MI_MAKE_PROTOTYPE_PTE: ENCODING ERROR! Original=%p Encoded=0x%llx Decoded=%p\n",
+                   PointerPte, (ULONG64)NewPte->u.Long, Decoded);
+    }
+#endif
+}
+
 #define MiSubsectionPteToSubsection(x)                              \
         (PMMPTE)((LONG64)(x)->u.Subsect.SubsectionAddress)
 
@@ -335,3 +377,6 @@ VOID
 MiArm64CheckSystemViewSpacePte(
     _In_z_ PCSTR Location
 );
+
+// ARM64 mm.h included successfully - shift-based MI_MAKE_PROTOTYPE_PTE active
+

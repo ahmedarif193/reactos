@@ -407,9 +407,20 @@ ExpInitNls(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     /* Map the NLS Section in system space */
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] ExpInitNls Phase1: Before MmMapViewInSystemSpace\n");
+    DPRINT1("[arm64]   SectionBase (input):  %p\n", SectionBase);
+    DPRINT1("[arm64]   ExpNlsTableSize:      0x%lx\n", (ULONG)ExpNlsTableSize);
+#endif
     Status = MmMapViewInSystemSpace(ExpNlsSectionPointer,
                                     &SectionBase,
                                     &ExpNlsTableSize);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] ExpInitNls Phase1: After MmMapViewInSystemSpace\n");
+    DPRINT1("[arm64]   Status:               0x%08lx\n", Status);
+    DPRINT1("[arm64]   SectionBase (output): %p\n", SectionBase);
+    DPRINT1("[arm64]   ExpNlsTableSize:      0x%lx\n", (ULONG)ExpNlsTableSize);
+#endif
     if (!NT_SUCCESS(Status))
     {
         /* Failed */
@@ -418,8 +429,28 @@ ExpInitNls(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Copy the codepage data in its new location. */
     ASSERT(SectionBase >= MmSystemRangeStart);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] ExpInitNls Phase1: About to RtlCopyMemory\n");
+    DPRINT1("[arm64]   Destination (SectionBase):    %p\n", SectionBase);
+    DPRINT1("[arm64]   Source (ExpNlsTableBase):     %p\n", ExpNlsTableBase);
+    DPRINT1("[arm64]   Size (ExpNlsTableSize):       0x%lx (%lu bytes)\n", (ULONG)ExpNlsTableSize, (ULONG)ExpNlsTableSize);
+    DPRINT1("[arm64]   MmSystemRangeStart:           %p\n", MmSystemRangeStart);
+
+    /*
+     * ARM64 WORKAROUND: Use memmove instead of memcpy for prototype PTE faults.
+     *
+     * When copying to System View Space (which uses prototype PTEs), memcpy can
+     * cause issues with overlapping memory or incorrect pointer arithmetic after
+     * page faults. memmove handles overlapping regions correctly and appears to
+     * generate better code for ARM64 with MinGW.
+     */
+    DPRINT1("[arm64] ExpInitNls Phase1: Using memmove for copy\n");
+    memmove(SectionBase, ExpNlsTableBase, ExpNlsTableSize);
+    DPRINT1("[arm64] ExpInitNls Phase1: memmove completed\n");
+#else
     EXP_ARM64_LOG("[arm64] ExpInitNls Phase1: RtlCopyMemory to SectionBase");
     RtlCopyMemory(SectionBase, ExpNlsTableBase, ExpNlsTableSize);
+#endif
 
     /* Free the previously allocated buffer and set the new location */
     EXP_ARM64_LOG("[arm64] ExpInitNls Phase1: before ExFreePoolWithTag");

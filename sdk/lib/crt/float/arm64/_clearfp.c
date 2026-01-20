@@ -9,7 +9,7 @@
 unsigned int
 _clearfp(void)
 {
-    unsigned long fpsr = 0;
+    unsigned long long fpsr = 0;
 
     __asm__ __volatile__("mrs %0, fpsr" : "=r"(fpsr));
     __asm__ __volatile__("msr fpsr, xzr");

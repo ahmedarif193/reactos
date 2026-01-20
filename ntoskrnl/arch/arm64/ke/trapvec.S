@@ -18,9 +18,9 @@ KiArm64VectorTable:
 .equ ARM64_EARLY_STATE_ELR,           0x18
 .equ ARM64_EARLY_STATE_SPSR,          0x20
 .equ ARM64_EARLY_STATE_REGS,          0x28
-.equ ARM64_EARLY_STATE_REG_SP,        0x120
-.equ ARM64_EARLY_STATE_REG_PC,        0x128
-.equ ARM64_EARLY_STATE_REG_PSTATE,    0x130
+.equ ARM64_EARLY_STATE_REG_SP,        0x120   /* X[0..30] = 0x28 + (31*8) = 0x120 */
+.equ ARM64_EARLY_STATE_REG_PC,        0x128   /* Sp + 8 = 0x128 */
+.equ ARM64_EARLY_STATE_REG_PSTATE,    0x130   /* Pc + 8 = 0x130 */
 .equ ARM64_EARLY_STATE_TRAP_PTR,      0x138
 .equ ARM64_EARLY_STATE_EXC_PTR,       0x140
 .equ ARM64_EARLY_STATE_TRAP_FRAME,    0x148
@@ -91,12 +91,19 @@ label:                                                                   \
     dsb sy;                                                              \
     isb;                                                                 \
     cbz x0, 1f;                                                          \
+    /* Second barrier to ensure trap frame writes are visible */        \
+    dsb ishst;                                                           \
     ldr x2, [sp, #ARM64_EARLY_STATE_TRAP_PTR];                           \
     ldr x3, [sp, #ARM64_EARLY_STATE_EXC_PTR];                            \
+    /* Ensure trap frame pointers are loaded before cleaning stack */   \
+    dsb ld;                                                              \
     add sp, sp, #ARM64_EARLY_STATE_SIZE;                                 \
     ldp x29, x30, [sp], #16;                                             \
     mov x0, x2;                                                          \
     mov x1, x3;                                                          \
+    /* Full barrier before calling return path */                       \
+    dsb sy;                                                              \
+    isb;                                                                 \
     b KiTrapReturn;                                                      \
 1:  mov x0, sp;                                                          \
     bl KiArm64BugCheckEntry;                                             \
