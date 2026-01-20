@@ -31,28 +31,21 @@ VM_NAME = "ROSAHCI1"
 def get_build_dir():
     """
     Returns the current working directory as the build directory.
-    Strictly enforces that the script is executed FROM the output directory.
+    Strictly assumes the script is executed FROM the output directory.
     """
-    # Allow override via environment variable
     if "REACTOS_BUILD_DIR" in os.environ:
         return os.environ["REACTOS_BUILD_DIR"]
     
     cwd = os.getcwd()
     
     # We validate strictly: must look like an output dir or contain build.ninja
-    # We do NOT search parent directories or hardcoded fallbacks.
+    # but we do NOT search parent directories.
     if "output-" in os.path.basename(cwd) or os.path.exists(os.path.join(cwd, "build.ninja")):
         return cwd
         
-    # Validation failed
-    print("=" * 60)
-    print(f"ERROR: Current directory '{cwd}' is not a valid build directory.")
-    print("=" * 60)
-    print("Please execute this script FROM your output directory.")
-    print("Example:")
-    print("  cd output-Clang-arm64-Debug")
-    print("  python3 ../vm_monitor.py")
-    sys.exit(1)
+    print(f"Warning: Current directory '{cwd}' does not look like a standard 'output-' directory.")
+    print("Proceeding using current directory as BUILD_DIR...")
+    return cwd
 
 BUILD_DIR = get_build_dir()
 FAT32_IMG = os.path.join(BUILD_DIR, "fat32.img")
@@ -273,31 +266,14 @@ def start_qemu():
     if target_arch == "arm64":
         print(f"Starting QEMU (ARM64)...")
         
-        # Determine UEFI firmware path based on OS
-        if sys.platform == "darwin":
-            # macOS (Homebrew) path
-            uefi_firmware = "/opt/homebrew/share/qemu/edk2-aarch64-code.fd"
-            bios_arg = ["-drive", f"if=pflash,format=raw,readonly=on,file={uefi_firmware}"]
-        else:
-            # Linux default path
-            uefi_firmware = "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
-            bios_arg = ["-bios", uefi_firmware]
-
-        if not os.path.exists(uefi_firmware):
-             print(f"Warning: UEFI firmware not found at {uefi_firmware}")
-
         # User defined backbone for ARM64
         qemu_cmd = [
             "qemu-system-aarch64",
             "-machine", "virt,gic-version=3",
             "-cpu", "cortex-a72",
-            "-m", "4G"
-        ] + bios_arg + [
-            # Dual-attach strategy: VirtIO for UEFI boot, AHCI for ReactOS driver support
-            "-drive", f"file={livecd_path},if=virtio,format=raw,readonly=on",
-            "-device", "ahci,id=ahci",
-            "-device", "ide-cd,bus=ahci.0,drive=cdrom_ahci",
-            "-drive", f"file={livecd_path},format=raw,if=none,id=cdrom_ahci,readonly=on",
+            "-m", "4G",
+            "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+            "-drive", f"file={livecd_path}",
             "-device", "qemu-xhci",
             "-device", "usb-kbd",
             "-device", "usb-tablet",
@@ -340,17 +316,17 @@ def start_qemu():
     print(f"  Serial output: {LOG_FILE}")
 
     # Verify OVMF firmware exists
-    # if not ovmf_code or not os.path.exists(ovmf_code):
-    #     print(f"Error: OVMF CODE not found: {ovmf_code}")
-    #     print("Set REACTOS_OVMF_CODE or OVMF_CODE to override.")
-    #     print(f"Tried: {', '.join(code_candidates)}")
-    #     if target_arch == "i386":
-    #         print("Install ovmf-ia32 package: sudo apt install ovmf-ia32")
-    #     else:
-    #         print("Install ovmf package: sudo apt install ovmf")
-    #     return False
-    # if not prepare_ovmf_vars(ovmf_vars_template, ovmf_vars):
-    #     return False
+    if not ovmf_code or not os.path.exists(ovmf_code):
+        print(f"Error: OVMF CODE not found: {ovmf_code}")
+        print("Set REACTOS_OVMF_CODE or OVMF_CODE to override.")
+        print(f"Tried: {', '.join(code_candidates)}")
+        if target_arch == "i386":
+            print("Install ovmf-ia32 package: sudo apt install ovmf-ia32")
+        else:
+            print("Install ovmf package: sudo apt install ovmf")
+        return False
+    if not prepare_ovmf_vars(ovmf_vars_template, ovmf_vars):
+        return False
 
     try:
         # Open log file for stdout redirection (x64 approach)
@@ -358,17 +334,13 @@ def start_qemu():
 
         qemu_cmd = [
             qemu_binary,
-            # "-enable-kvm",
+            "-enable-kvm",
             "-smp", "1",
             "-m", "3G",
             "-M", "q35",
-            # "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
+            "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
             "-cdrom", livecd_path,
             "-boot", "d",  # Boot from CD-ROM
-            # xHCI controller with USB keyboard/mouse for testing MSI/MSI-X
-            "-device", "qemu-xhci,id=xhci",
-            "-device", "usb-kbd,bus=xhci.0",
-            "-device", "usb-tablet,bus=xhci.0",
             "-serial", "stdio",
             "-display", "none",
             "-no-reboot",
@@ -551,6 +523,24 @@ def main():
 
     if not build_livecd():
         sys.exit(1)
+
+    # Cleanup: Only run on non-ARM64 architectures
+    if target_arch != "arm64":
+        print("Ensuring previous QEMU instances are stopped...")
+        try:
+            subprocess.run("sudo kill -9 $(pidof qemu-system-x86_64)", shell=True, 
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run("sudo kill -9 $(pidof qemu-system-i386)", shell=True, 
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    else:
+        # Simple cleanup for aarch64
+        try:
+            subprocess.run("pkill -9 -f qemu-system-aarch64", shell=True, 
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
 
     if use_qemu and target_arch != "arm64":
         if not create_fat32_img():
