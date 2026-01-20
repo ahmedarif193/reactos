@@ -1291,13 +1291,80 @@ MiMapViewInSystemSpace(
         return STATUS_INVALID_VIEW_SIZE;
     }
 
-    /* Check if the caller wanted a larger section than the view */
-    if (SectionOffset->QuadPart + *ViewSize > SectionSize)
+    /*
+     * View Size Validation vs Section Size:
+     *
+     * For SEC_COMMIT sections (ControlArea->u.Flags.Commit == 1):
+     *   Physical memory is pre-allocated at section creation time.
+     *   ViewSize MUST NOT exceed SectionSize because there are no physical pages
+     *   beyond SectionSize to map. Enforce strict validation.
+     *
+     * For SEC_RESERVE sections (ControlArea->u.Flags.Reserve == 1):
+     *   Only virtual address space is reserved at section creation time.
+     *   Physical pages are allocated on-demand via page faults (see MmAccessFault).
+     *   ViewSize CAN exceed SectionSize because:
+     *     1. SectionSize is just a hint/minimum size
+     *     2. The view determines how much VA space to reserve
+     *     3. Actual data size is determined by page fault behavior
+     *
+     * Windows Cache Manager creates 62-byte SEC_RESERVE sections, then maps
+     * 256KB VACBs (Shared Cache Map views). The VACB size determines the VA
+     * reservation, not the tiny section size hint. This is standard behavior.
+     *
+     * IMPORTANT: We still validate that ViewSize doesn't cause integer overflow
+     * or exceed reasonable bounds (checked above and below).
+     */
+    if (ControlArea->u.Flags.Commit)
     {
-        /* Fail */
-        DPRINT1("View is too large\n");
-        MiDereferenceControlArea(ControlArea);
-        return STATUS_INVALID_VIEW_SIZE;
+        /* SEC_COMMIT: Strict validation - view cannot exceed committed pages */
+        if (SectionOffset->QuadPart + *ViewSize > SectionSize)
+        {
+            DPRINT1("SEC_COMMIT view exceeds section: "
+                    "SectionOffset=0x%I64x ViewSize=0x%lx SectionSize=0x%I64x\n",
+                    SectionOffset->QuadPart, (ULONG)*ViewSize, SectionSize);
+            MiDereferenceControlArea(ControlArea);
+            return STATUS_INVALID_VIEW_SIZE;
+        }
+    }
+    else if (ControlArea->u.Flags.Reserve)
+    {
+        /*
+         * SEC_RESERVE: Allow ViewSize > SectionSize
+         *
+         * The section size is a creation-time hint. The view size determines the
+         * actual VA reservation. Physical pages are allocated on page fault.
+         * No validation needed here - the view just reserves address space.
+         *
+         * Example from Windows 11 ARM64:
+         *   CcInitializeCacheManager creates a 62-byte SEC_RESERVE section
+         *   CcCreateVacbArray maps 256KB views (VACB_MAPPING_GRANULARITY)
+         *   Result: 256KB of VA reserved, pages faulted in as needed
+         */
+#if defined(_M_ARM64) && DBG
+        if (SectionOffset->QuadPart + *ViewSize > SectionSize)
+        {
+            DPRINT1("[arm64] SEC_RESERVE: ViewSize (0x%lx) exceeds SectionSize (0x%I64x) - OK\n"
+                    "  This is expected for Cache Manager VACBs and other demand-paged mappings.\n"
+                    "  Physical pages will be allocated on page fault via MmAccessFault.\n",
+                    (ULONG)*ViewSize, SectionSize);
+        }
+#endif
+    }
+    else
+    {
+        /*
+         * Neither SEC_COMMIT nor SEC_RESERVE flag is set.
+         * This might be an older code path or invalid section.
+         * Apply strict validation to be safe.
+         */
+        if (SectionOffset->QuadPart + *ViewSize > SectionSize)
+        {
+            DPRINT1("View exceeds section (no Commit/Reserve flag): "
+                    "SectionOffset=0x%I64x ViewSize=0x%lx SectionSize=0x%I64x\n",
+                    SectionOffset->QuadPart, (ULONG)*ViewSize, SectionSize);
+            MiDereferenceControlArea(ControlArea);
+            return STATUS_INVALID_VIEW_SIZE;
+        }
     }
 
     /* Get the number of 64K buckets required for this mapping */
@@ -1339,7 +1406,7 @@ MiMapViewInSystemSpace(
         ASSERT(NT_SUCCESS(Status));
     }
 
-    /* Create the actual prototype PTEs for this mapping */
+    /* Create prototype PTE pointers in the mapping PTEs */
     Status = MiAddMappedPtes(MiAddressToPte(Base),
                              BYTES_TO_PAGES(*ViewSize),
                              ControlArea,
@@ -1606,6 +1673,14 @@ MiMapViewOfDataSection(IN PCONTROL_AREA ControlArea,
     return STATUS_SUCCESS;
 }
 
+/* Forward declaration for MiCreatePagingFileMap */
+static
+NTSTATUS
+MiCreatePagingFileMap(OUT PSEGMENT *Segment,
+                      IN ULONG64 MaximumSize,
+                      IN ULONG ProtectionMask,
+                      IN ULONG AllocationAttributes);
+
 static
 NTSTATUS
 MiCreateDataFileMap(IN PFILE_OBJECT File,
@@ -1615,7 +1690,58 @@ MiCreateDataFileMap(IN PFILE_OBJECT File,
                     IN ULONG AllocationAttributes,
                     IN ULONG IgnoreFileSizing)
 {
-    /* Not yet implemented */
+#if defined(_M_ARM64)
+    /* ARM64: For SEC_RESERVE file-backed sections (Cache Manager), create a
+     * pagefile-backed segment instead. SEC_RESERVE doesn't require actual file I/O,
+     * just prototype PTEs for demand-paging. This avoids implementing full file-backed
+     * segments while still providing ARM3 section benefits (FFFFF97F... addresses,
+     * prototype PTE demand-paging that works correctly after Cycle 18). */
+    if (AllocationAttributes & SEC_RESERVE)
+    {
+        ULONG ProtectionMask;
+        ULONG64 ActualSize;
+
+        /* Convert the page protection to a protection mask */
+        ProtectionMask = MiMakeProtectionMask(SectionPageProtection);
+        if (ProtectionMask == MM_INVALID_PROTECTION)
+        {
+            *Segment = NULL;
+            return STATUS_INVALID_PAGE_PROTECTION;
+        }
+
+        /*
+         * SEC_RESERVE sections are used by Cache Manager for VACBs.
+         * The section size may be small (e.g., file header size), but views
+         * will be mapped at VACB_MAPPING_GRANULARITY (256KB) boundaries.
+         *
+         * We must create enough prototype PTEs to cover at least one VACB.
+         * Otherwise, MiAddMappedPtes will run out of prototype PTEs when
+         * trying to map a 256KB view from a 62-byte section.
+         *
+         * Round up to VACB_MAPPING_GRANULARITY (0x40000) to ensure we have
+         * enough PTEs for the largest possible view that Cache Manager will create.
+         */
+        ActualSize = MaximumSize->QuadPart;
+        if (ActualSize < VACB_MAPPING_GRANULARITY)
+        {
+            ActualSize = VACB_MAPPING_GRANULARITY;
+#if DBG
+            DPRINT1("[arm64] MiCreateDataFileMap: Rounding up SEC_RESERVE section size:\n"
+                    "  Requested: 0x%I64x\n"
+                    "  Actual: 0x%I64x (VACB_MAPPING_GRANULARITY)\n",
+                    MaximumSize->QuadPart, ActualSize);
+#endif
+        }
+
+        /* Create a pagefile-backed segment with sufficient prototype PTEs */
+        return MiCreatePagingFileMap(Segment,
+                                     ActualSize,
+                                     ProtectionMask,
+                                     AllocationAttributes);
+    }
+#endif
+
+    /* Not yet implemented for non-RESERVE or non-ARM64 */
     ASSERT(FALSE);
     *Segment = NULL;
     return STATUS_NOT_IMPLEMENTED;
@@ -1738,27 +1864,49 @@ MiCreatePagingFileMap(OUT PSEGMENT *Segment,
     /* The subsection's base address is the first Prototype PTE in the segment */
     Subsection->SubsectionBase = PointerPte;
 
-    /* Start with an empty PTE, unless this is a commit operation */
+    /*
+     * Initialize the template PTE for prototype PTEs.
+     *
+     * CRITICAL FIX: Always set the Protection field in prototype PTEs, even for
+     * SEC_RESERVE sections. The Protection field is required by MiResolveProtoPteFault
+     * to determine page permissions when servicing demand-zero faults.
+     *
+     * SEC_COMMIT vs SEC_RESERVE difference:
+     * - SEC_COMMIT: Protection is set AND NumberOfCommittedPages is incremented (pages pre-allocated)
+     * - SEC_RESERVE: Protection is set BUT NumberOfCommittedPages stays 0 (pages allocated on demand)
+     *
+     * Previously, SEC_RESERVE left prototype PTEs completely zero (TempPte.u.Long = 0),
+     * causing MiResolveProtoPteFault to reject them with STATUS_ACCESS_VIOLATION.
+     * This broke Cache Manager VACB access for SEC_RESERVE file-backed sections.
+     *
+     * Windows NT behavior: Prototype PTEs always encode protection, regardless of
+     * commit status. The commit flag affects memory accounting, not PTE encoding.
+     */
     TempPte.u.Long = 0;
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] MiCreatePagingFileMap: After TempPte.u.Long=0: TempPte.u.Long=0x%llx\n",
-            (unsigned long long)TempPte.u.Long);
-    DPRINT1("[arm64] MiCreatePagingFileMap: AllocationAttributes=0x%lx SEC_COMMIT=0x%lx ProtectionMask=0x%lx\n",
-            (ULONG)AllocationAttributes, (ULONG)SEC_COMMIT, (ULONG)ProtectionMask);
-#endif
-    if (AllocationAttributes & SEC_COMMIT)
-    {
-        /* In which case, write down the protection mask in the Prototype PTEs */
-        TempPte.u.Soft.Protection = ProtectionMask;
-#if defined(_M_ARM64)
-        DPRINT1("[arm64] MiCreatePagingFileMap: After setting Protection=%lu: TempPte.u.Long=0x%llx\n",
-                (ULONG)ProtectionMask, (unsigned long long)TempPte.u.Long);
-        DPRINT1("[arm64] MiCreatePagingFileMap: TempPte.u.Soft.Protection=%lu (should be %lu)\n",
-                (ULONG)TempPte.u.Soft.Protection, (ULONG)ProtectionMask);
+    TempPte.u.Soft.Protection = ProtectionMask;
+
+#if defined(_M_ARM64) && DBG
+    DPRINT1("[arm64] MiCreatePagingFileMap: Initialized prototype PTE template:\n"
+            "  AllocationAttributes=0x%lx (SEC_COMMIT=%d SEC_RESERVE=%d)\n"
+            "  ProtectionMask=0x%lx\n"
+            "  TempPte.u.Long=0x%llx\n"
+            "  TempPte.u.Soft.Protection=%lu\n",
+            (ULONG)AllocationAttributes,
+            !!(AllocationAttributes & SEC_COMMIT),
+            !!(AllocationAttributes & SEC_RESERVE),
+            (ULONG)ProtectionMask,
+            (unsigned long long)TempPte.u.Long,
+            (ULONG)TempPte.u.Soft.Protection);
 #endif
 
-        /* For accounting, also mark these pages as being committed */
+    /* For SEC_COMMIT, mark pages as committed for accounting purposes */
+    if (AllocationAttributes & SEC_COMMIT)
+    {
         NewSegment->NumberOfCommittedPages = PteCount;
+#if defined(_M_ARM64) && DBG
+        DPRINT1("[arm64] MiCreatePagingFileMap: SEC_COMMIT detected, NumberOfCommittedPages=%lu\n",
+                (ULONG)PteCount);
+#endif
     }
 
     /* The template PTE itself for the segment should also have the mask set */
@@ -2398,17 +2546,41 @@ MmCreateArm3Section(OUT PVOID *SectionObject,
         /* These cannot be mapped with large pages */
         if (AllocationAttributes & SEC_LARGE_PAGES) return STATUS_INVALID_PARAMETER_6;
 
+#if !defined(_M_ARM64)
         /* For now, only support the mechanism through a file handle */
         ASSERT(FileObject == NULL);
+#else
+        /* ARM64: Allow FileObject for SEC_RESERVE sections (Cache Manager).
+         * MiCreateDataFileMap will handle it by creating a pagefile-backed segment. */
+        if (FileObject && !(AllocationAttributes & SEC_RESERVE))
+        {
+            DPRINT1("[arm64] FileObject passed without SEC_RESERVE - not supported\n");
+            return STATUS_NOT_SUPPORTED;
+        }
+#endif
 
         /* Reference the file handle to get the object */
-        Status = ObReferenceObjectByHandle(FileHandle,
+        if (FileHandle)
+        {
+            Status = ObReferenceObjectByHandle(FileHandle,
                                            MmMakeFileAccess[ProtectionMask],
                                            IoFileObjectType,
                                            PreviousMode,
                                            (PVOID*)&File,
                                            NULL);
-        if (!NT_SUCCESS(Status)) return Status;
+            if (!NT_SUCCESS(Status)) return Status;
+        }
+        else if (FileObject)
+        {
+            /* File object was passed directly (e.g., from Cache Manager) */
+            File = FileObject;
+            ObReferenceObject(File);
+        }
+        else
+        {
+            /* Should not reach here - checked above */
+            return STATUS_INVALID_PARAMETER;
+        }
 
         /* Make sure Cc has been doing its job */
         if (!File->SectionObjectPointer)
@@ -2465,11 +2637,35 @@ MmCreateArm3Section(OUT PVOID *SectionObject,
         ASSERT(File->SectionObjectPointer->DataSectionObject == NULL);
         NewSegment = NULL;
 
+#if !defined(_M_ARM64)
         /* Write down that this CA is being created, and set it */
         ControlArea->u.Flags.BeingCreated = TRUE;
         ASSERT((AllocationAttributes & SEC_IMAGE) == 0);
         PreviousSectionPointer = File->SectionObjectPointer;
         File->SectionObjectPointer->DataSectionObject = ControlArea;
+#else
+        /*
+         * ARM64: For SEC_RESERVE, don't set DataSectionObject.
+         * MiCreateDataFileMap will create a pagefile-backed segment (not file-backed),
+         * so we shouldn't pollute the SectionObjectPointer with an unused ControlArea.
+         * RosMm code (e.g., MiGrabDataSection) expects DataSectionObject to be a RosMm
+         * segment, not an ARM3 ControlArea.
+         */
+        if (!(AllocationAttributes & SEC_RESERVE))
+        {
+            /* Real file-backed section - set DataSectionObject */
+            ControlArea->u.Flags.BeingCreated = TRUE;
+            ASSERT((AllocationAttributes & SEC_IMAGE) == 0);
+            PreviousSectionPointer = File->SectionObjectPointer;
+            File->SectionObjectPointer->DataSectionObject = ControlArea;
+        }
+        else
+        {
+            /* SEC_RESERVE: Don't set DataSectionObject (pagefile-backed, not file-backed) */
+            ControlArea->u.Flags.BeingCreated = TRUE;
+            PreviousSectionPointer = File->SectionObjectPointer;
+        }
+#endif
 
         /* We can release the PFN lock now */
         MiReleasePfnLock(OldIrql);
@@ -2500,9 +2696,18 @@ MmCreateArm3Section(OUT PVOID *SectionObject,
             ASSERT(ControlArea->u.Flags.FilePointerNull == 0);
             ControlArea->u.Flags.FilePointerNull = TRUE;
 
+#if !defined(_M_ARM64)
             /* Delete the data section object */
             ASSERT((AllocationAttributes & SEC_IMAGE) == 0);
             File->SectionObjectPointer->DataSectionObject = NULL;
+#else
+            /* ARM64: Only clear DataSectionObject if we set it (not for SEC_RESERVE) */
+            if (!(AllocationAttributes & SEC_RESERVE))
+            {
+                ASSERT((AllocationAttributes & SEC_IMAGE) == 0);
+                File->SectionObjectPointer->DataSectionObject = NULL;
+            }
+#endif
 
             /* No longer being created */
             ControlArea->u.Flags.BeingCreated = FALSE;
@@ -2582,8 +2787,22 @@ MmCreateArm3Section(OUT PVOID *SectionObject,
         ASSERT((AllocationAttributes & SEC_IMAGE) == 0);
         ASSERT(Segment->ControlArea->u.Flags.Rom == 0);
 
-        /* Take off the being created flag, and then release the lock */
+        /*
+         * Take off the being created flag on BOTH control areas:
+         * 1. The file-backed ControlArea (created at line 2551 for file path)
+         * 2. The pagefile-backed Segment->ControlArea (created by MiCreatePagingFileMap
+         *    for SEC_RESERVE sections that got redirected from file-backed to pagefile-backed)
+         *
+         * For SEC_RESERVE file-backed sections, MiCreateDataFileMap creates a pagefile-backed
+         * segment (via MiCreatePagingFileMap), which has its own ControlArea. The Section object
+         * will reference Segment->ControlArea, so we must clear BeingCreated there too.
+         */
         ControlArea->u.Flags.BeingCreated = FALSE;
+        if (Segment->ControlArea != ControlArea)
+        {
+            /* Different control areas - clear the segment's CA too (SEC_RESERVE redirect case) */
+            Segment->ControlArea->u.Flags.BeingCreated = FALSE;
+        }
         MiReleasePfnLock(OldIrql);
     }
 
@@ -2824,13 +3043,32 @@ MmMapViewOfArm3Section(IN PVOID SectionObject,
         return STATUS_INVALID_VIEW_SIZE;
     }
 
-    /* Check if the offset and size are bigger than the section itself */
-    if (((ULONG64)SectionOffset->QuadPart + *ViewSize) >
-         (ULONG64)Section->SizeOfSection.QuadPart)
+    /*
+     * View Size Validation for User-Mode Mappings:
+     * Same principle as MiMapViewInSystemSpace - SEC_RESERVE allows ViewSize > SectionSize
+     */
+    if (!ControlArea->u.Flags.Reserve)
     {
-        DPRINT1("Section offset is larger than section\n");
-        return STATUS_INVALID_VIEW_SIZE;
+        /* For non-SEC_RESERVE sections, enforce strict size limits */
+        if (((ULONG64)SectionOffset->QuadPart + *ViewSize) >
+             (ULONG64)Section->SizeOfSection.QuadPart)
+        {
+            DPRINT1("View exceeds section: SectionOffset=0x%I64x ViewSize=0x%lx SectionSize=0x%I64x\n",
+                    SectionOffset->QuadPart, (ULONG)*ViewSize, Section->SizeOfSection.QuadPart);
+            return STATUS_INVALID_VIEW_SIZE;
+        }
     }
+#if defined(_M_ARM64) && DBG
+    else
+    {
+        /* SEC_RESERVE: Log if view exceeds section (this is allowed) */
+        if (((ULONG64)SectionOffset->QuadPart + *ViewSize) >
+             (ULONG64)Section->SizeOfSection.QuadPart)
+        {
+            DPRINT1("[arm64] SEC_RESERVE user mapping: ViewSize exceeds SectionSize - OK\n");
+        }
+    }
+#endif
 
     /* Check if the caller did not specify a view size */
     if (!(*ViewSize))
@@ -2855,11 +3093,19 @@ MmMapViewOfArm3Section(IN PVOID SectionObject,
         return STATUS_INVALID_PARAMETER_5;
     }
 
-    /* Check if the view size is larger than the section */
-    if (*ViewSize > (ULONG64)Section->SizeOfSection.QuadPart)
+    /*
+     * Final view size validation:
+     * For SEC_RESERVE, skip this check (already validated above).
+     * This allows Cache Manager and other subsystems to map larger views
+     * than the section creation size.
+     */
+    if (!ControlArea->u.Flags.Reserve)
     {
-        DPRINT1("The view is larger than the section\n");
-        return STATUS_INVALID_VIEW_SIZE;
+        if (*ViewSize > (ULONG64)Section->SizeOfSection.QuadPart)
+        {
+            DPRINT1("The view is larger than the section\n");
+            return STATUS_INVALID_VIEW_SIZE;
+        }
     }
 
     /* Compute and validate the protection mask */

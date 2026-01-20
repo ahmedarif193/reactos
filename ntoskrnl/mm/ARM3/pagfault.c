@@ -3222,6 +3222,64 @@ RetryKernel:
                                  TempPte.u.Long,
                                  0x200);
                 }
+
+                /*
+                 * ARM64 CRITICAL FIX: Ensure ProtoPte Address is Accessible
+                 *
+                 * PROBLEM: The prototype PTE is stored in paged pool (kernel heap).
+                 * On ARM64, when we try to dereference ProtoPte, we need the page table
+                 * entries (PxE/PPE/PDE/PTE) backing that kernel address to be valid.
+                 *
+                 * Unlike x86-64's recursive page table, ARM64 uses self-mapping aliases
+                 * for PTE access. The page table entries for ProtoPte's address must
+                 * have their self-map aliases created before we can dereference ProtoPte.
+                 *
+                 * SOLUTION: Before accessing *ProtoPte, ensure its page table chain is
+                 * accessible by mapping the self-map aliases for the PTE pointers.
+                 *
+                 * This is the REAL fix for demand-paging: making sure we can READ the
+                 * prototype PTE to determine what physical page to map.
+                 */
+                {
+                    extern VOID MiArm64MapAliasForPointer(_In_ PVOID AliasVa);
+                    PMMPTE ProtoPtePte = MiAddressToPte(ProtoPte);
+                    PMMPDE ProtoPtePde = MiAddressToPde(ProtoPte);
+#if (_MI_PAGING_LEVELS >= 3)
+                    PMMPDE ProtoPtePpe = MiAddressToPpe(ProtoPte);
+#if (_MI_PAGING_LEVELS == 4)
+                    PMMPDE ProtoPtePxe = MiAddressToPxe(ProtoPte);
+#endif
+#endif
+
+                    /* Map aliases for the page table entries of ProtoPte */
+#if (_MI_PAGING_LEVELS == 4)
+                    MiArm64MapAliasForPointer(ProtoPtePxe);
+#endif
+#if (_MI_PAGING_LEVELS >= 3)
+                    MiArm64MapAliasForPointer(ProtoPtePpe);
+#endif
+                    MiArm64MapAliasForPointer(ProtoPtePde);
+                    MiArm64MapAliasForPointer(ProtoPtePte);
+
+                    /*
+                     * ARM64 Memory Ordering: Ensure alias creation is complete.
+                     * DSB ISHST ensures all prior stores (alias PTE writes) are visible.
+                     * ISB ensures subsequent instruction fetches see the new mappings.
+                     */
+                    __asm__ __volatile__(
+                        "dsb ishst\n\t"
+                        "isb\n\t"
+                        ::: "memory"
+                    );
+
+                    if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+                        (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+                    {
+                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                            "[arm64] MmArmAccessFault: Ensured ProtoPte=%p is accessible (mapped page table entries)\n",
+                            ProtoPte);
+                    }
+                }
 #endif
             }
         }

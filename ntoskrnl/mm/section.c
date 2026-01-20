@@ -4790,100 +4790,6 @@ MmMapViewInSystemSpaceEx (
                                 SectionOffset->QuadPart,
                                 SEC_RESERVE);
 
-#if defined(_M_ARM64)
-    /*
-     * ARM64: Pre-populate PTEs for System Cache VACB mappings
-     *
-     * On ARM64, demand-paging for System Cache addresses has issues with:
-     * 1. PTE self-mapping recursion (accessing PTEs for kernel addresses)
-     * 2. TTBR0/TTBR1 separation (can't access user PTEs from kernel context)
-     * 3. Prototype PTE resolution for section views not fully implemented
-     *
-     * Solution: Create hardware PTEs immediately instead of faulting later.
-     *
-     * We walk through the section segment entries (SSEs) and create
-     * hardware PTEs pointing to the correct physical pages. This avoids
-     * the broken demand-paging path entirely.
-     *
-     * Performance: This only happens once when creating the VACB mapping
-     * (typically 256KB). Far better than page faulting 64 times (one per 4KB).
-     */
-    if (NT_SUCCESS(Status) && Segment && *MappedBase != NULL)
-    {
-        ULONG_PTR CurrentVa = (ULONG_PTR)*MappedBase;
-        ULONG_PTR EndVa = CurrentVa + *ViewSize;
-        LARGE_INTEGER FileOffset;
-        ULONG PagesCreated = 0;
-
-        FileOffset.QuadPart = SectionOffset->QuadPart;
-
-        DPRINT1("[arm64] MmMapViewInSystemSpaceEx: Pre-populating PTEs for VA range %p-%p (size 0x%zx)\n",
-                CurrentVa, EndVa, *ViewSize);
-
-        while (CurrentVa < EndVa)
-        {
-            /* Get the section segment entry for this file offset */
-            ULONG_PTR Entry = MmGetPageEntrySectionSegment(Segment, &FileOffset);
-
-            if (Entry && !IS_SWAP_FROM_SSE(Entry))
-            {
-                PFN_NUMBER Pfn = PFN_FROM_SSE(Entry);
-
-                if (Pfn != 0)
-                {
-                    NTSTATUS PteStatus;
-
-                    /*
-                     * Create PTE using MmCreateVirtualMappingUnsafe.
-                     * This function manually walks page tables (doesn't use PTE self-mapping)
-                     * and handles TTBR1 page table walking directly with cache maintenance.
-                     */
-                    PteStatus = MmCreateVirtualMappingUnsafe(
-                        NULL,                    /* Kernel mapping (Process = NULL) */
-                        (PVOID)CurrentVa,       /* Virtual address */
-                        PAGE_READWRITE,         /* Protection */
-                        Pfn);                   /* Physical page frame number */
-
-                    if (!NT_SUCCESS(PteStatus))
-                    {
-                        DPRINT1("[arm64] MmMapViewInSystemSpaceEx: Failed to create PTE at VA %p for PFN 0x%zx, Status=0x%lx\n",
-                                CurrentVa, (ULONG_PTR)Pfn, PteStatus);
-                    }
-                    else
-                    {
-                        PagesCreated++;
-                        DPRINT("[arm64] MmMapViewInSystemSpaceEx: Created PTE at VA %p -> PFN 0x%zx\n",
-                                CurrentVa, (ULONG_PTR)Pfn);
-                    }
-                }
-                else
-                {
-                    DPRINT("[arm64] MmMapViewInSystemSpaceEx: Entry exists but PFN is 0 at offset 0x%I64x\n",
-                            FileOffset.QuadPart);
-                }
-            }
-            else
-            {
-                if (Entry)
-                {
-                    DPRINT("[arm64] MmMapViewInSystemSpaceEx: Entry is swap at offset 0x%I64x\n",
-                            FileOffset.QuadPart);
-                }
-                /*
-                 * No entry exists yet. This is normal for sparse files or
-                 * pages that haven't been read from disk yet.
-                 * Leave the PTE empty - it will fault on first access.
-                 */
-            }
-
-            CurrentVa += PAGE_SIZE;
-            FileOffset.QuadPart += PAGE_SIZE;
-        }
-
-        DPRINT1("[arm64] MmMapViewInSystemSpaceEx: PTE pre-population complete. Created %lu PTEs out of %lu pages\n",
-                PagesCreated, (ULONG)(*ViewSize / PAGE_SIZE));
-    }
-#endif
 
     MmUnlockSectionSegment(Segment);
     MmUnlockAddressSpace(AddressSpace);
@@ -4984,6 +4890,9 @@ MmCreateSection (OUT PVOID  * Section,
     {
         if (!(FileObject) && !(FileHandle))
         {
+#if defined(_M_ARM64)
+            DPRINT1("[arm64] MmCreateSection: Taking ARM3 path (no file)\n");
+#endif
             return MmCreateArm3Section(Section,
                                        DesiredAccess,
                                        ObjectAttributes,
@@ -4993,6 +4902,14 @@ MmCreateSection (OUT PVOID  * Section,
                                        FileHandle,
                                        FileObject);
         }
+#if defined(_M_ARM64)
+        else
+        {
+            DPRINT1("[arm64] MmCreateSection: FileObject=%p FileHandle=%p AllocationAttributes=0x%lx\n",
+                    FileObject, FileHandle, AllocationAttributes);
+            DPRINT1("[arm64] MmCreateSection: Taking LEGACY ROS path (has file)\n");
+        }
+#endif
     }
 
     /* Convert section flag to page flag */
@@ -5009,6 +4926,25 @@ MmCreateSection (OUT PVOID  * Section,
     /* Check if this is going to be a data or image backed file section */
     if ((FileHandle) || (FileObject))
     {
+#if defined(_M_ARM64)
+        /* ARM64: For SEC_RESERVE file-backed sections (Cache Manager), use ARM3.
+         * ARM3's MiCreateDataFileMap will create a pagefile-backed segment for SEC_RESERVE,
+         * providing ARM3 section benefits (FFFFF97F... addresses with prototype PTE
+         * demand-paging that works correctly after Cycle 18). */
+        if ((AllocationAttributes & SEC_RESERVE) && FileObject)
+        {
+            DPRINT1("[arm64] MmCreateSection: Redirecting file-backed SEC_RESERVE to ARM3\n");
+            return MmCreateArm3Section(Section,
+                                       DesiredAccess,
+                                       ObjectAttributes,
+                                       MaximumSize,
+                                       SectionPageProtection,
+                                       AllocationAttributes &~ 1,
+                                       FileHandle,
+                                       FileObject);
+        }
+#endif
+
         /* These cannot be mapped with large pages */
         if (AllocationAttributes & SEC_LARGE_PAGES)
         {
@@ -5330,8 +5266,22 @@ MmMakeDataSectionResident(
 {
     PMM_SECTION_SEGMENT Segment = MiGrabDataSection(SectionObjectPointer);
 
+#if defined(_M_ARM64)
+    /*
+     * ARM64: For SEC_RESERVE sections created via ARM3, there may be no RosMm segment.
+     * ARM3 handles mapping, but doesn't support file I/O yet. SEC_RESERVE sections
+     * are demand-paged from zero (no actual file backing), so we can safely skip
+     * making data resident - it will be zero-filled on page fault.
+     */
+    if (!Segment)
+    {
+        /* No RosMm segment (ARM3 SEC_RESERVE section) - data is demand-zero */
+        return STATUS_SUCCESS;
+    }
+#else
     /* There must be a segment for this call */
     ASSERT(Segment);
+#endif
 
     NTSTATUS Status = MmMakeSegmentResident(Segment, Offset, Length, ValidDataLength, FALSE);
 

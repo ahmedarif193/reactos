@@ -308,14 +308,73 @@ MiPdeToPxe(PMMPDE PointerPde)
  *
  * ARM64 uses 4 levels of page tables (PXE -> PPE -> PDE -> PTE), so we must
  * check all three upper levels before accessing the PTE.
+ *
+ * CRITICAL FIX: On ARM64, we CANNOT use the self-map addresses (MiAddressToPxe,
+ * MiAddressToPpe, MiAddressToPde) directly because the self-map page table entries
+ * themselves may not be initialized. Accessing an uninitialized self-map address
+ * during page fault handling causes a double fault (recursive page fault).
+ *
+ * For example, when checking if address 0xFFFFF98000004008 is valid:
+ * - MiAddressToPde(0xFFFFF98000004008) returns 0xFFFFF6FB7DBF3000
+ * - But the self-map entry for 0xFFFFF6FB7DBF3000 may not be present
+ * - Accessing it causes another page fault, leading to infinite recursion
+ *
+ * Solution: Walk the page table hierarchy via physical addresses using KSEG0
+ * (the identity-mapped physical memory region at 0xFFFF800000000000). This
+ * approach reads the page tables directly from physical memory without relying
+ * on the self-map being initialized.
  */
 FORCEINLINE
 BOOLEAN
 MiIsPdeForAddressValid(PVOID Address)
 {
-    return ((MiAddressToPxe(Address)->u.Hard.Valid) &&
-            (MiAddressToPpe(Address)->u.Hard.Valid) &&
-            (MiAddressToPde(Address)->u.Hard.Valid));
+    UINT64 Ttbr1;
+    UINT64 RootPa;
+    volatile UINT64 *L0, *L1, *L2;
+    UINT64 E0, E1, E2;
+    ULONG L0Index, L1Index, L2Index;
+
+    /* Mask for extracting physical address from page table entry (bits 47:12) */
+    #define ARM64_PTE_ADDR_MASK_LOCAL 0x0000FFFFFFFFF000ULL
+
+    /* Read TTBR1_EL1 to get the root page table physical address */
+    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+
+    /* Extract physical address from TTBR1 (mask out ASID bits) */
+    RootPa = Ttbr1 & ARM64_PTE_ADDR_MASK_LOCAL;
+
+    /* Map root table via KSEG0 (identity-mapped physical memory) */
+    L0 = (volatile UINT64 *)(KSEG0_BASE | RootPa);
+
+    /* Calculate indices for each level */
+    L0Index = MiAddressToPxi(Address);
+    L1Index = (((ULONG64)Address >> PPI_SHIFT) & 0x1FF);
+    L2Index = (((ULONG64)Address >> PDI_SHIFT) & 0x1FF);
+
+    /* Check L0 (PXE) - read via KSEG0, no self-map dependency */
+    E0 = L0[L0Index];
+    if ((E0 & 1ULL) == 0)
+        return FALSE;
+
+    /* Map L1 table via KSEG0 */
+    L1 = (volatile UINT64 *)(KSEG0_BASE | (E0 & ARM64_PTE_ADDR_MASK_LOCAL));
+
+    /* Check L1 (PPE) */
+    E1 = L1[L1Index];
+    if ((E1 & 1ULL) == 0)
+        return FALSE;
+
+    /* Map L2 table via KSEG0 */
+    L2 = (volatile UINT64 *)(KSEG0_BASE | (E1 & ARM64_PTE_ADDR_MASK_LOCAL));
+
+    /* Check L2 (PDE) */
+    E2 = L2[L2Index];
+    if ((E2 & 1ULL) == 0)
+        return FALSE;
+
+    #undef ARM64_PTE_ADDR_MASK_LOCAL
+
+    return TRUE;
 }
 
 //
@@ -366,6 +425,50 @@ MI_MAKE_PROTOTYPE_PTE(
     }
 #endif
 }
+
+//
+// ARM64 Prototype PTE Decoder Macros
+//
+// These macros decode the shift-based prototype PTE encoding used by ARM64.
+// MI_MAKE_PROTOTYPE_PTE encodes: PTE.u.Long = (ProtoPteAddress << 16) | 0x0400 (Prototype bit)
+//
+
+//
+// Macro: MI_IS_PROTO_PTE
+// Check if a PTE is a prototype PTE pointer (not a valid hardware PTE)
+//
+#define MI_IS_PROTO_PTE(Pte) \
+    (((Pte)->u.Proto.Prototype == 1) && ((Pte)->u.Hard.Valid == 0))
+
+//
+// Macro: MI_PROTO_PTE_ADDRESS
+// Decode a prototype PTE pointer to get the address of the actual prototype PTE
+//
+// On ARM64, the address is encoded by shifting left by 16 bits.
+// To decode: shift right by 16 bits with sign extension to preserve high kernel bits.
+//
+// Example:
+//   Original: 0xFFFFF8A000007C30 (kernel address)
+//   Encoded:  0xFFFFF8A000007C30 << 16 = 0xF8A000007C300000
+//                                         (0x400 bit set for Prototype)
+//                                       = 0xF8A000007C300400
+//   Decoded:  (INT64)0xF8A000007C300400 >> 16 = 0xFFFFF8A000007C30 (sign-extended)
+//
+// CRITICAL: Must use signed right-shift (INT64) to preserve high bits for kernel addresses.
+//
+#define MI_PROTO_PTE_ADDRESS(Pte) \
+    ((PMMPTE)(((INT64)(Pte)->u.Long) >> 16))
+
+//
+// Alternative decoder that extracts the address from the bitfield union
+// (in case the shift-based encoding changes in the future)
+//
+// Note: On ARM64, we rely on the simple shift encoding for performance.
+// The bitfield union (ProtoAddressLow/High) is not used.
+//
+#define MI_PROTO_PTE_ADDRESS_FROM_BITFIELD(Pte) \
+    ((PMMPTE)(((ULONG_PTR)(Pte)->u.Proto.ProtoAddressHigh << 32) | \
+              ((ULONG_PTR)(Pte)->u.Proto.ProtoAddressLow)))
 
 #define MiSubsectionPteToSubsection(x)                              \
         (PMMPTE)((LONG64)(x)->u.Subsect.SubsectionAddress)

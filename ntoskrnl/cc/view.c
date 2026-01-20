@@ -1419,6 +1419,11 @@ CcRosInitializeFileCache (
 
         ASSERT(SharedCacheMap->Section == NULL);
 
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] CcRosInitializeFileCache: Creating section for FileObject=%p Size=0x%I64x\n",
+                FileObject, SharedCacheMap->SectionSize.QuadPart);
+#endif
+
         Status = MmCreateSection(
             &SharedCacheMap->Section,
             SECTION_ALL_ACCESS,
@@ -1428,6 +1433,11 @@ CcRosInitializeFileCache (
             SEC_RESERVE,
             NULL,
             FileObject);
+
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] CcRosInitializeFileCache: MmCreateSection returned Status=0x%lx Section=%p\n",
+                Status, SharedCacheMap->Section);
+#endif
 
         ASSERT(NT_SUCCESS(Status));
 
