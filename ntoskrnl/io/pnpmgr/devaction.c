@@ -2325,10 +2325,56 @@ PiDevNodeStateMachine(
     BOOLEAN doProcessAgain;
     PDEVICE_NODE currentNode = RootNode;
     PDEVICE_OBJECT referencedObject;
+#if defined(_M_ARM64)
+    static ULONG CallCount = 0;
+    ULONG IterationCount = 0;
+    LARGE_INTEGER StartTime, CurrentTime;
+
+    CallCount++;
+    DPRINT1("[arm64] PiDevNodeStateMachine: ENTRY #%lu RootNode=%p State=%u Path=%wZ\n",
+            CallCount, RootNode, RootNode->State, &RootNode->InstancePath);
+    KeQueryTickCount(&StartTime);
+#endif
 
     do
     {
         doProcessAgain = FALSE;
+
+#if defined(_M_ARM64)
+        // Watchdog: detect infinite loops (> 100000 iterations or > 5 seconds)
+        IterationCount++;
+        KeQueryTickCount(&CurrentTime);
+
+        if (IterationCount > 100000)
+        {
+            DPRINT1("[arm64] PiDevNodeStateMachine: WATCHDOG - Too many iterations (%lu)!\n", IterationCount);
+            DPRINT1("[arm64]   CurrentNode=%p State=%u Flags=0x%08lx Path=%wZ\n",
+                    currentNode, currentNode->State, currentNode->Flags, &currentNode->InstancePath);
+            DPRINT1("[arm64]   RootNode=%p doProcessAgain=%u\n", RootNode, doProcessAgain);
+            KeBugCheckEx(UNEXPECTED_KERNEL_MODE_TRAP, 0xA64001, (ULONG_PTR)currentNode, IterationCount, 0);
+        }
+
+        LARGE_INTEGER ElapsedTicks;
+        ElapsedTicks.QuadPart = CurrentTime.QuadPart - StartTime.QuadPart;
+        ULONG ElapsedMs = (ULONG)((ElapsedTicks.QuadPart * KeQueryTimeIncrement()) / 10000);
+
+        if (ElapsedMs > 5000)
+        {
+            DPRINT1("[arm64] PiDevNodeStateMachine: WATCHDOG - Timeout (%lu ms, %lu iterations)!\n",
+                    ElapsedMs, IterationCount);
+            DPRINT1("[arm64]   CurrentNode=%p State=%u Flags=0x%08lx Path=%wZ\n",
+                    currentNode, currentNode->State, currentNode->Flags, &currentNode->InstancePath);
+            KeBugCheckEx(UNEXPECTED_KERNEL_MODE_TRAP, 0xA64002, (ULONG_PTR)currentNode, ElapsedMs, IterationCount);
+        }
+
+        // Log every 1000 iterations for debugging
+        if (IterationCount % 1000 == 0)
+        {
+            DPRINT1("[arm64] PiDevNodeStateMachine: Iteration %lu Node=%p State=%u Flags=0x%08lx Path=%wZ\n",
+                    IterationCount, currentNode, currentNode->State, currentNode->Flags,
+                    &currentNode->InstancePath);
+        }
+#endif
 
         // The device can be removed during processing, but we still need its Parent and Sibling
         // links to continue the tree traversal. So keep the link till the and of a cycle
@@ -2342,26 +2388,59 @@ PiDevNodeStateMachine(
             goto skipEnum;
         }
 
+#if defined(_M_ARM64)
+        // ARM64 FIX: Skip nodes with uninitialized or empty InstancePath
+        // This prevents infinite loops where newly created PDOs haven't been
+        // properly initialized yet. The state machine will process them in
+        // a later call once they're properly set up.
+        if (currentNode->InstancePath.Length == 0 ||
+            currentNode->InstancePath.Buffer == NULL)
+        {
+            if (IterationCount <= 50 || IterationCount % 100 == 0)
+            {
+                DPRINT1("[arm64] Skipping node %p with empty InstancePath (State=%u)\n",
+                        currentNode, currentNode->State);
+            }
+            goto skipEnum;
+        }
+#endif
+
         switch (currentNode->State)
         {
             case DeviceNodeUnspecified: // this state is not used
                 break;
             case DeviceNodeUninitialized:
+#if defined(_M_ARM64)
+                if (IterationCount <= 50 || IterationCount % 100 == 0)
+                    DPRINT1("[arm64] State: DeviceNodeUninitialized %wZ\n", &currentNode->InstancePath);
+#endif
                 status = PiInitializeDevNode(currentNode);
                 doProcessAgain = NT_SUCCESS(status);
                 break;
             case DeviceNodeInitialized:
                 DPRINT("DeviceNodeInitialized %wZ\n", &currentNode->InstancePath);
+#if defined(_M_ARM64)
+                if (IterationCount <= 50 || IterationCount % 100 == 0)
+                    DPRINT1("[arm64] State: DeviceNodeInitialized %wZ\n", &currentNode->InstancePath);
+#endif
                 status = PiCallDriverAddDevice(currentNode, PnPBootDriversInitialized);
                 doProcessAgain = NT_SUCCESS(status);
                 break;
             case DeviceNodeDriversAdded:
                 DPRINT("DeviceNodeDriversAdded %wZ\n", &currentNode->InstancePath);
+#if defined(_M_ARM64)
+                if (IterationCount <= 50 || IterationCount % 100 == 0)
+                    DPRINT1("[arm64] State: DeviceNodeDriversAdded %wZ\n", &currentNode->InstancePath);
+#endif
                 status = IopAssignDeviceResources(currentNode);
                 doProcessAgain = NT_SUCCESS(status);
                 break;
             case DeviceNodeResourcesAssigned:
                 DPRINT("DeviceNodeResourcesAssigned %wZ\n", &currentNode->InstancePath);
+#if defined(_M_ARM64)
+                if (IterationCount <= 50 || IterationCount % 100 == 0)
+                    DPRINT1("[arm64] State: DeviceNodeResourcesAssigned %wZ\n", &currentNode->InstancePath);
+#endif
                 // send IRP_MN_START_DEVICE
                 PiIrpStartDevice(currentNode);
 
@@ -2373,6 +2452,10 @@ PiDevNodeStateMachine(
                 break;
             case DeviceNodeStartCompletion:
                 DPRINT("DeviceNodeStartCompletion %wZ\n", &currentNode->InstancePath);
+#if defined(_M_ARM64)
+                if (IterationCount <= 50 || IterationCount % 100 == 0)
+                    DPRINT1("[arm64] State: DeviceNodeStartCompletion %wZ\n", &currentNode->InstancePath);
+#endif
                 status = currentNode->CompletionStatus;
                 doProcessAgain = TRUE;
                 if (!NT_SUCCESS(status))
@@ -2394,15 +2477,32 @@ PiDevNodeStateMachine(
                 break;
             case DeviceNodeStartPostWork:
                 DPRINT("DeviceNodeStartPostWork %wZ\n", &currentNode->InstancePath);
+#if defined(_M_ARM64)
+                if (IterationCount <= 50 || IterationCount % 100 == 0)
+                    DPRINT1("[arm64] State: DeviceNodeStartPostWork %wZ\n", &currentNode->InstancePath);
+#endif
                 // TODO: inspect the status
                 status = PiStartDeviceFinal(currentNode);
                 doProcessAgain = TRUE;
                 break;
             case DeviceNodeStarted:
+#if defined(_M_ARM64)
+                if (IterationCount <= 50 || IterationCount % 100 == 0)
+                    DPRINT1("[arm64] State: DeviceNodeStarted %wZ Flags=0x%08lx\n",
+                            &currentNode->InstancePath, currentNode->Flags);
+#endif
                 if (currentNode->Flags & DNF_REENUMERATE)
                 {
+#if defined(_M_ARM64)
+                    if (IterationCount <= 50 || IterationCount % 100 == 0)
+                        DPRINT1("[arm64]   -> Reenumerating (before PiIrpQueryDeviceRelations)\n");
+#endif
                     currentNode->Flags &= ~DNF_REENUMERATE;
                     status = PiIrpQueryDeviceRelations(currentNode, BusRelations);
+#if defined(_M_ARM64)
+                    if (IterationCount <= 50 || IterationCount % 100 == 0)
+                        DPRINT1("[arm64]   -> Reenumerating (after PiIrpQueryDeviceRelations status=0x%lx)\n", status);
+#endif
 
                     // again, skip DeviceNodeEnumeratePending as with the starting sequence
                     PiSetDevNodeState(currentNode, DeviceNodeEnumerateCompletion);
@@ -2452,7 +2552,17 @@ PiDevNodeStateMachine(
                 break;
             case DeviceNodeEnumerateCompletion:
                 DPRINT("DeviceNodeEnumerateCompletion %wZ\n", &currentNode->InstancePath);
+#if defined(_M_ARM64)
+                if (IterationCount <= 50 || IterationCount % 100 == 0)
+                    DPRINT1("[arm64] State: DeviceNodeEnumerateCompletion %wZ (before PiEnumerateDevice)\n",
+                            &currentNode->InstancePath);
+#endif
                 status = PiEnumerateDevice(currentNode);
+#if defined(_M_ARM64)
+                if (IterationCount <= 50 || IterationCount % 100 == 0)
+                    DPRINT1("[arm64] State: DeviceNodeEnumerateCompletion %wZ (after PiEnumerateDevice status=0x%lx)\n",
+                            &currentNode->InstancePath, status);
+#endif
                 doProcessAgain = TRUE;
                 break;
             case DeviceNodeAwaitingQueuedDeletion:
@@ -2478,6 +2588,11 @@ PiDevNodeStateMachine(
 skipEnum:
         if (!doProcessAgain)
         {
+#if defined(_M_ARM64)
+            if (IterationCount <= 50 || IterationCount % 100 == 0)
+                DPRINT1("[arm64] Tree navigation: currentNode=%p %wZ doProcessAgain=0\n",
+                        currentNode, &currentNode->InstancePath);
+#endif
             KIRQL OldIrql;
             KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
             /* If we have a child, simply go down the tree */
@@ -2485,6 +2600,11 @@ skipEnum:
             {
                 ASSERT(currentNode->Child->Parent == currentNode);
                 currentNode = currentNode->Child;
+#if defined(_M_ARM64)
+                if (IterationCount <= 50 || IterationCount % 100 == 0)
+                    DPRINT1("[arm64] Tree navigation: going down to child %p %wZ\n",
+                            currentNode, &currentNode->InstancePath);
+#endif
             }
             else
             {
@@ -2495,6 +2615,11 @@ skipEnum:
                     {
                         ASSERT(currentNode->Sibling->Parent == currentNode->Parent);
                         currentNode = currentNode->Sibling;
+#if defined(_M_ARM64)
+                        if (IterationCount <= 50 || IterationCount % 100 == 0)
+                            DPRINT1("[arm64] Tree navigation: going sideways to sibling %p %wZ\n",
+                                    currentNode, &currentNode->InstancePath);
+#endif
                         break;
                     }
                     else
@@ -2502,6 +2627,11 @@ skipEnum:
                         /* We're the last sibling -- go back up */
                         ASSERT(currentNode->Parent->LastChild == currentNode);
                         currentNode = currentNode->Parent;
+#if defined(_M_ARM64)
+                        if (IterationCount <= 50 || IterationCount % 100 == 0)
+                            DPRINT1("[arm64] Tree navigation: going up to parent %p %wZ\n",
+                                    currentNode, &currentNode->InstancePath);
+#endif
                     }
                     /* We already visited the parent and all its children, so keep looking */
                 }
@@ -2512,7 +2642,19 @@ skipEnum:
         {
         }
         ObDereferenceObject(referencedObject);
+#if defined(_M_ARM64)
+        if (IterationCount <= 50 || IterationCount % 100 == 0)
+        {
+            DPRINT1("[arm64] End of iteration %lu: currentNode=%p %wZ RootNode=%p doProcessAgain=%u continue=%u\n",
+                    IterationCount, currentNode, &currentNode->InstancePath, RootNode,
+                    doProcessAgain, (doProcessAgain || currentNode != RootNode) ? 1 : 0);
+        }
+#endif
     } while (doProcessAgain || currentNode != RootNode);
+
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] PiDevNodeStateMachine: EXIT #%lu after %lu iterations\n", CallCount, IterationCount);
+#endif
 }
 
 #ifdef DBG

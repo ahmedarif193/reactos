@@ -447,6 +447,11 @@ KiSwapThread(IN PKTHREAD CurrentThread,
     PKTHREAD NextThread;
     ASSERT(KeGetCurrentIrql() >= DISPATCH_LEVEL);
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] KiSwapThread: ENTRY - CurrentThread=%p State=%u WaitReason=%u\n",
+            CurrentThread, CurrentThread->State, CurrentThread->WaitReason);
+#endif
+
     /* Acquire the PRCB lock */
     KiAcquirePrcbLock(Prcb);
 
@@ -481,12 +486,21 @@ KiSwapThread(IN PKTHREAD CurrentThread,
         }
     }
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] KiSwapThread: Switching from Thread=%p to Thread=%p (State=%u)\n",
+            CurrentThread, NextThread, NextThread->State);
+#endif
+
     /* Sanity check and release the PRCB */
     ASSERT(CurrentThread != Prcb->IdleThread);
     KiReleasePrcbLock(Prcb);
 
     /* Save the wait IRQL */
     WaitIrql = CurrentThread->WaitIrql;
+
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] KiSwapThread: About to call KiSwapContext, WaitIrql=%u\n", WaitIrql);
+#endif
 
     /* Swap contexts */
     ApcState = KiSwapContext(WaitIrql, CurrentThread);
@@ -498,6 +512,11 @@ KiSwapThread(IN PKTHREAD CurrentThread,
 
     /* Get the wait status */
     WaitStatus = CurrentThread->WaitStatus;
+
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] KiSwapThread: Resumed on Thread=%p, WaitStatus=0x%lx, WaitIrql=%u, ApcState=%u\n",
+            CurrentThread, WaitStatus, WaitIrql, ApcState);
+#endif
 
     /* Check if we need to deliver APCs */
     if (ApcState)
@@ -513,6 +532,10 @@ KiSwapThread(IN PKTHREAD CurrentThread,
     /* Lower IRQL back to what it was and return the wait status */
     KeLowerIrql(WaitIrql);
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] KiSwapThread: Returning WaitStatus=0x%lx\n", WaitStatus);
+#endif
+
     return WaitStatus;
 }
 
@@ -521,6 +544,11 @@ NTAPI
 KiReadyThread(IN PKTHREAD Thread)
 {
     IN PKPROCESS Process = Thread->ApcState.Process;
+
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] KiReadyThread: Making Thread=%p ready (State=%u WaitReason=%u)\n",
+            Thread, Thread->State, Thread->WaitReason);
+#endif
 
     /* Check if the process is paged out */
     if (Process->State != ProcessInMemory)
@@ -545,8 +573,28 @@ KiReadyThread(IN PKTHREAD Thread)
     }
     else
     {
+        /*
+         * ARM64 CRITICAL: Memory barrier before inserting thread into ready list.
+         *
+         * On ARM64's weakly-ordered memory model, state updates made before calling
+         * KiReadyThread (e.g., setting WaitStatus, clearing wait blocks) might not
+         * be visible to other CPUs when they dequeue this thread from the ready list.
+         *
+         * The barrier ensures:
+         * 1. All thread state updates are visible before thread appears on ready list
+         * 2. Scheduler on other CPUs sees consistent state when selecting this thread
+         * 3. No race between thread becoming ready and state being visible
+         */
+#ifdef _M_ARM64
+        __asm__ __volatile__("dmb sy" ::: "memory");
+#endif
+
         /* Insert the thread on the deferred ready list */
         KiInsertDeferredReadyList(Thread);
+
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] KiReadyThread: Thread=%p inserted into deferred ready list\n", Thread);
+#endif
     }
 }
 

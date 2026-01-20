@@ -339,6 +339,7 @@ KiSwapContextResume(
     _Inout_ PKTHREAD NewThread)
 {
     PKPRCB Prcb;
+    PKPROCESS OldProcess, NewProcess;
 
     ASSERT(OldThread != NULL);
     ASSERT(NewThread != NULL);
@@ -355,8 +356,33 @@ KiSwapContextResume(
         Prcb->CurrentThread = NewThread;
     }
 
-    /* Skip address space switch during bring-up to avoid TLB issues */
-    /* TODO: Implement proper TTBR switch when user-mode is supported */
+    /*
+     * ARM64: Switch address space (TTBR0) when moving to a different process.
+     * This is critical for user-mode execution - without this, user-mode code
+     * would execute with the wrong page tables and access the wrong memory.
+     *
+     * KiSwapProcess will:
+     * 1. Update process ActiveProcessors for SMP
+     * 2. Write the new process's DirectoryTableBase[0] to TTBR0_EL1
+     * 3. Perform necessary TLB invalidation
+     */
+    OldProcess = OldThread->ApcState.Process;
+    NewProcess = NewThread->ApcState.Process;
+    if (OldProcess != NewProcess)
+    {
+        KiSwapProcess(NewProcess, OldProcess);
+    }
+
+    /*
+     * ARM64: Set the TEB pointer in TPIDR_EL0 for user mode.
+     * This register is used by user-mode code (via NtCurrentTeb macro) to
+     * access thread-local storage. The Windows ARM64 ABI also uses X18
+     * as the TEB pointer, which we set in KiTrapReturn before ERET.
+     */
+    if (NewThread->Teb)
+    {
+        __asm__ __volatile__("msr tpidr_el0, %0" :: "r"(NewThread->Teb) : "memory");
+    }
 
     if (NewThread->ApcState.KernelApcPending &&
         !NewThread->SpecialApcDisable &&

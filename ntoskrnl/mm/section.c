@@ -1480,6 +1480,23 @@ Failed:
 AssignPagesToSegment:
             MmLockSectionSegment(Segment);
 
+#if defined(_M_ARM64)
+            /* ARM64: Log PFN assignments to trace physical address mapping */
+            if (ChunkOffset == 0 && FileObject)
+            {
+                DPRINT1("[MmMakeSegmentResident ARM64] Assigning pages for FileOffset=%I64x File=%wZ\n",
+                        FileOffset.QuadPart, &FileObject->FileName);
+                DPRINT1("[MmMakeSegmentResident ARM64] ChunkOffset=%I64x ReadLength=%lu NumPages=%lu\n",
+                        ChunkOffset, ReadLength, BYTES_TO_PAGES(ReadLength));
+                for (UINT i = 0; i < BYTES_TO_PAGES(ReadLength); i++)
+                {
+                    DPRINT1("[MmMakeSegmentResident ARM64]   Page[%u]: PFN=0x%I64x PA=0x%I64x SegOffset=%I64x\n",
+                            i, (ULONG64)Pages[i], (ULONG64)(Pages[i] << PAGE_SHIFT),
+                            ChunkOffset + (i * PAGE_SIZE));
+                }
+            }
+#endif
+
             for (UINT i = 0; i < BYTES_TO_PAGES(ReadLength); i++)
             {
                 ULONG_PTR Entry = MAKE_SSE(Pages[i] << PAGE_SHIFT, 0);
@@ -3614,7 +3631,27 @@ MmFreeSectionPage(PVOID Context, MEMORY_AREA* MemoryArea, PVOID Address,
              */
             KIRQL PfnOldIrql = MiAcquirePfnLock();
             PMMPFN Pfn1 = MiGetPfnEntry(Page);
-            BOOLEAN IsRosPfn = (Pfn1 && MI_IS_ROS_PFN(Pfn1));
+            BOOLEAN IsRosPfn = FALSE;
+
+#if defined(_M_ARM64)
+            /* ARM64: The PFN database is sparsely mapped - only ranges corresponding to
+             * actual physical memory are mapped by MiMapPfnDatabase. If we try to access
+             * a PFN entry outside those ranges (e.g., for pages in MMIO regions or beyond
+             * physical RAM), we'll fault. Check if the PTE mapping the PFN entry is valid
+             * before accessing PFN fields. This is critical at DISPATCH_LEVEL (IRQL 2)
+             * where we cannot handle page faults. */
+            if (Pfn1)
+            {
+                PMMPTE PfnPte = MiAddressToPte(Pfn1);
+                if (PfnPte->u.Hard.Valid)
+                {
+                    IsRosPfn = MI_IS_ROS_PFN(Pfn1);
+                }
+                /* else: PFN entry not mapped, treat as non-ROS PFN (ARM3 path) */
+            }
+#else
+            IsRosPfn = (Pfn1 && MI_IS_ROS_PFN(Pfn1));
+#endif
             MiReleasePfnLock(PfnOldIrql);
 
             if (IsRosPfn)
@@ -3638,24 +3675,54 @@ MmFreeSectionPage(PVOID Context, MEMORY_AREA* MemoryArea, PVOID Address,
             else
             {
 #if defined(_M_ARM64)
-                /* ARM64: This is not a ROS PFN, so it doesn't have ROS-specific fields.
-                 * This can happen when a page was allocated via ARM3 path or during early
-                 * boot with incorrect section segment entry tracking.
+                /* ARM64: This is an ARM3-allocated private page (e.g., from copy-on-write).
+                 * We cannot use ROS-specific cleanup (MmReleasePageMemoryConsumer) because
+                 * it asserts for ROS PFNs only.
                  *
-                 * In this case, we should treat it like a shared section page and call
-                 * MmUnsharePageEntrySectionSegment to properly handle the reference counting.
+                 * IMPORTANT: We cannot call MmUnsharePageEntrySectionSegment here! That function
+                 * decrements the share count in the Section Segment Entry, which tracks the
+                 * *original shared page* (PFN_FROM_SSE), not this private copy. For private
+                 * pages (where Page != PFN_FROM_SSE), the SSE may have a zero share count,
+                 * causing a bugcheck "Zero share count for unshare".
+                 *
+                 * For ARM3 private pages, we use ARM3's PFN management:
+                 * 1. Delete the RMAP entry (if there's a process context)
+                 * 2. Mark the PFN as deleted
+                 * 3. Decrement the share count, which will free the page
                  */
-                DPRINT1("[arm64] MmFreeSectionPage: Page 0x%I64x is not a ROS PFN (AweAllocation==FALSE), treating as shared page\n", Page);
+                DPRINT("[arm64] MmFreeSectionPage: ARM3 private page 0x%I64x (SSE points to 0x%I64x)\n", Page, PFN_FROM_SSE(Entry));
 
+                /* Remove RMAP entry if there's a process (safe for ARM3 PFNs - returns early if no RMAP) */
                 if (Process)
                 {
                     MmDeleteRmap(Page, Process, Address);
                 }
 
-                /* Handle it as a shared section page */
-                MmUnsharePageEntrySectionSegment(MemoryArea, Segment, &Offset, Process ? Dirty : FALSE, FALSE, NULL);
+                /* Use ARM3's mechanism to free the page.
+                 * The PTE has already been deleted by MmDeleteVirtualMapping in the caller.
+                 */
+                {
+                    KIRQL OldIrql = MiAcquirePfnLock();
+                    PMMPFN Pfn1 = MiGetPfnEntry(Page);
+                    if (Pfn1)
+                    {
+                        /* ARM64: Check if the PFN entry is actually mapped before accessing it.
+                         * The PFN database is sparsely mapped - see comment above at line 3619. */
+                        PMMPTE PfnPte = MiAddressToPte(Pfn1);
+                        if (PfnPte->u.Hard.Valid)
+                        {
+                            /* Mark PFN as deleted so MiDecrementShareCount will free it immediately */
+                            MI_SET_PFN_DELETED(Pfn1);
+                            /* Decrement share count, which will return page to free list */
+                            MiDecrementShareCount(Pfn1, Page);
+                        }
+                        /* else: PFN entry not mapped, page is outside physical memory ranges.
+                         * This can happen for MMIO regions or invalid page numbers. Skip cleanup. */
+                    }
+                    MiReleasePfnLock(OldIrql);
+                }
 #else
-                /* On other architectures, this should not happen */
+                /* On other architectures, all private pages should be ROS PFNs */
                 DPRINT1("WARNING: Non-ROS PFN 0x%I64x in private page cleanup path\n", Page);
                 ASSERT(FALSE);
 #endif
@@ -4722,6 +4789,101 @@ MmMapViewInSystemSpaceEx (
                                 PAGE_READWRITE,
                                 SectionOffset->QuadPart,
                                 SEC_RESERVE);
+
+#if defined(_M_ARM64)
+    /*
+     * ARM64: Pre-populate PTEs for System Cache VACB mappings
+     *
+     * On ARM64, demand-paging for System Cache addresses has issues with:
+     * 1. PTE self-mapping recursion (accessing PTEs for kernel addresses)
+     * 2. TTBR0/TTBR1 separation (can't access user PTEs from kernel context)
+     * 3. Prototype PTE resolution for section views not fully implemented
+     *
+     * Solution: Create hardware PTEs immediately instead of faulting later.
+     *
+     * We walk through the section segment entries (SSEs) and create
+     * hardware PTEs pointing to the correct physical pages. This avoids
+     * the broken demand-paging path entirely.
+     *
+     * Performance: This only happens once when creating the VACB mapping
+     * (typically 256KB). Far better than page faulting 64 times (one per 4KB).
+     */
+    if (NT_SUCCESS(Status) && Segment && *MappedBase != NULL)
+    {
+        ULONG_PTR CurrentVa = (ULONG_PTR)*MappedBase;
+        ULONG_PTR EndVa = CurrentVa + *ViewSize;
+        LARGE_INTEGER FileOffset;
+        ULONG PagesCreated = 0;
+
+        FileOffset.QuadPart = SectionOffset->QuadPart;
+
+        DPRINT1("[arm64] MmMapViewInSystemSpaceEx: Pre-populating PTEs for VA range %p-%p (size 0x%zx)\n",
+                CurrentVa, EndVa, *ViewSize);
+
+        while (CurrentVa < EndVa)
+        {
+            /* Get the section segment entry for this file offset */
+            ULONG_PTR Entry = MmGetPageEntrySectionSegment(Segment, &FileOffset);
+
+            if (Entry && !IS_SWAP_FROM_SSE(Entry))
+            {
+                PFN_NUMBER Pfn = PFN_FROM_SSE(Entry);
+
+                if (Pfn != 0)
+                {
+                    NTSTATUS PteStatus;
+
+                    /*
+                     * Create PTE using MmCreateVirtualMappingUnsafe.
+                     * This function manually walks page tables (doesn't use PTE self-mapping)
+                     * and handles TTBR1 page table walking directly with cache maintenance.
+                     */
+                    PteStatus = MmCreateVirtualMappingUnsafe(
+                        NULL,                    /* Kernel mapping (Process = NULL) */
+                        (PVOID)CurrentVa,       /* Virtual address */
+                        PAGE_READWRITE,         /* Protection */
+                        Pfn);                   /* Physical page frame number */
+
+                    if (!NT_SUCCESS(PteStatus))
+                    {
+                        DPRINT1("[arm64] MmMapViewInSystemSpaceEx: Failed to create PTE at VA %p for PFN 0x%zx, Status=0x%lx\n",
+                                CurrentVa, (ULONG_PTR)Pfn, PteStatus);
+                    }
+                    else
+                    {
+                        PagesCreated++;
+                        DPRINT("[arm64] MmMapViewInSystemSpaceEx: Created PTE at VA %p -> PFN 0x%zx\n",
+                                CurrentVa, (ULONG_PTR)Pfn);
+                    }
+                }
+                else
+                {
+                    DPRINT("[arm64] MmMapViewInSystemSpaceEx: Entry exists but PFN is 0 at offset 0x%I64x\n",
+                            FileOffset.QuadPart);
+                }
+            }
+            else
+            {
+                if (Entry)
+                {
+                    DPRINT("[arm64] MmMapViewInSystemSpaceEx: Entry is swap at offset 0x%I64x\n",
+                            FileOffset.QuadPart);
+                }
+                /*
+                 * No entry exists yet. This is normal for sparse files or
+                 * pages that haven't been read from disk yet.
+                 * Leave the PTE empty - it will fault on first access.
+                 */
+            }
+
+            CurrentVa += PAGE_SIZE;
+            FileOffset.QuadPart += PAGE_SIZE;
+        }
+
+        DPRINT1("[arm64] MmMapViewInSystemSpaceEx: PTE pre-population complete. Created %lu PTEs out of %lu pages\n",
+                PagesCreated, (ULONG)(*ViewSize / PAGE_SIZE));
+    }
+#endif
 
     MmUnlockSectionSegment(Segment);
     MmUnlockAddressSpace(AddressSpace);

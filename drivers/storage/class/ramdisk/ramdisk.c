@@ -2061,11 +2061,12 @@ SkipBootSectorProbe:
             DriveExtension->NumberOfHeads = 16;
         }
 
-        DPRINT1("RamdiskCreateDiskDevice: geometry BPS=%lu SPT=%lu Heads=%lu ExportAsCd=%u\n",
+        DPRINT1("RamdiskCreateDiskDevice: geometry BPS=%lu SPT=%lu Heads=%lu ExportAsCd=%u HiddenSectors=%lu\n",
                 DriveExtension->BytesPerSector,
                 DriveExtension->SectorsPerTrack,
                 DriveExtension->NumberOfHeads,
-                Input->Options.ExportAsCd);
+                Input->Options.ExportAsCd,
+                DriveExtension->HiddenSectors);
 
         if (DriveExtension->BytesPerSector > 0)
         {
@@ -2993,6 +2994,29 @@ RamdiskReadWriteReal(IN PIRP Irp,
     TransferLength = IoStackLocation->Parameters.Read.Length;
     BytesLeft = TransferLength;
 
+    /* TEMPORARILY DISABLED: Add partition offset to diagnose issue
+     * The data being read suggests offset is already being added somewhere.
+     */
+    if (FALSE && DeviceExtension->HiddenSectors > 0 && DeviceExtension->BytesPerSector > 0)
+    {
+        ULONGLONG PartitionOffset = (ULONGLONG)DeviceExtension->HiddenSectors * DeviceExtension->BytesPerSector;
+        CurrentOffset.QuadPart += PartitionOffset;
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_ERROR_LEVEL,
+                   "RamdiskReadWriteReal[Drive]: Applied partition offset - HiddenSectors=%lu BPS=%lu offset=+%I64u origOffset=%I64x newOffset=%I64x\n",
+                   DeviceExtension->HiddenSectors,
+                   DeviceExtension->BytesPerSector,
+                   PartitionOffset,
+                   IoStackLocation->Parameters.Read.ByteOffset.QuadPart,
+                   CurrentOffset.QuadPart);
+    }
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "RamdiskReadWriteReal[Drive]: Reading at offset %I64x (orig %I64x) Hidden=%lu\n",
+               CurrentOffset.QuadPart,
+               IoStackLocation->Parameters.Read.ByteOffset.QuadPart,
+               DeviceExtension->HiddenSectors);
+
     if (IoStackLocation->MajorFunction == IRP_MJ_WRITE &&
         (DeviceExtension->DiskOptions.Readonly || DeviceExtension->DiskOptions.ExportAsCd))
     {
@@ -3129,6 +3153,21 @@ RamdiskReadWriteReal(IN PIRP Irp,
                            raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7]);
             }
         }
+        /* Debug: dump boot sector reads (original offset 0 from filesystem) */
+        if ((IoStackLocation->MajorFunction == IRP_MJ_READ) &&
+            (IoStackLocation->Parameters.Read.ByteOffset.QuadPart == 0) &&
+            CopyLength >= 32)
+        {
+            const PUCHAR raw = (PUCHAR)BaseAddress;
+            PHYSICAL_ADDRESS PhysAddr = MmGetPhysicalAddress((PVOID)raw);
+            DbgPrintEx(DPFLTR_DEFAULT_ID,
+                       DPFLTR_ERROR_LEVEL,
+                       "RamdiskReadWriteReal[Drive]: Boot sector dump (FS offset 0 -> disk offset %I64x, VA=%p, PA=%I64x):\n"
+                       "  %02X %02X %02X %02X %02X %02X %02X %02X | %02X %02X %02X %02X %02X %02X %02X %02X\n",
+                       CurrentOffset.QuadPart, raw, PhysAddr.QuadPart,
+                       raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
+                       raw[8], raw[9], raw[10], raw[11], raw[12], raw[13], raw[14], raw[15]);
+        }
         if ((IoStackLocation->MajorFunction == IRP_MJ_READ) &&
             (CurrentOffset.QuadPart == 0) &&
             CopyLength >= 32)
@@ -3195,6 +3234,36 @@ RamdiskReadWriteReal(IN PIRP Irp,
             Destination = BaseAddress;
             Source = CurrentBase;
             RtlCopyMemory(Destination, Source, CopyLength);
+
+#if defined(_M_ARM64)
+            /*
+             * ARM64 Cache Coherency: Flush after ramdisk write
+             *
+             * After writing data to the ramdisk buffer, we must flush the cache
+             * to ensure coherency. The cache manager (CcMapData) may later map
+             * the same physical memory through a different virtual address.
+             * Without flushing here, CcMapData might read stale cached data.
+             *
+             * This is the correct architectural layer for cache maintenance:
+             * - The ramdisk driver knows when data changes (write operation)
+             * - Flush happens once per write, not on every read
+             * - Follows Windows pattern for device drivers using KeFlushIoBuffers
+             *
+             * KeFlushIoBuffers will:
+             * - Clean (DC CVAC) cache lines to write data to Point of Coherency
+             * - Ensure subsequent mappings see the updated data
+             * - Use proper cache line alignment and memory barriers
+             *
+             * Parameters:
+             * - Mdl: The IRP's MDL containing the write buffer
+             * - ReadOperation: FALSE (this is a write, memory-to-device)
+             * - DmaOperation: FALSE (ramdisk is not a real DMA device)
+             */
+            if (Mdl != NULL)
+            {
+                KeFlushIoBuffers(Mdl, FALSE, FALSE);
+            }
+#endif
         }
         else
         {

@@ -955,6 +955,28 @@ MiResolveDemandZeroFault(IN PVOID Address,
     /* Write it */
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
 
+#if defined(_M_ARM64) && DBG
+    /* ARM64 Debug: Log prototype PTE creation */
+    extern PVOID MiSystemViewStart;
+    if (!MI_IS_PAGE_TABLE_ADDRESS(PointerPte))  /* This is a prototype PTE */
+    {
+        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MiResolveDemandZeroFault: Wrote prototype PTE\n"
+                "  Address=%p\n"
+                "  PointerPte=%p (PROTO PTE in paged pool)\n"
+                "  TempPte.u.Long=0x%llx\n"
+                "  PageFrameNumber=0x%llx (PA=0x%llx)\n",
+                Address,
+                PointerPte,
+                (ULONG64)TempPte.u.Long,
+                (ULONG64)PageFrameNumber, (ULONG64)(PageFrameNumber << PAGE_SHIFT));
+        }
+    }
+#endif
+
 #if defined(_M_ARM64) || defined(__aarch64__)
     /*
      * ARM64: Memory Ordering After PTE Write
@@ -1040,6 +1062,23 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
 
     /* Get the page */
     PageFrameIndex = PFN_FROM_PTE(PointerProtoPte);
+
+#if defined(_M_ARM64) && DBG
+    /* ARM64 Debug: Log PFN extraction from prototype PTE */
+    extern PVOID MiSystemViewStart;
+    if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+        (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+    {
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+            "[arm64] MiCompleteProtoPteFault: PFN extraction\n"
+            "  Address=%p\n"
+            "  PointerProtoPte=%p ProtoPte->u.Long=0x%llx\n"
+            "  PageFrameNumber=0x%llx (PA=0x%llx)\n",
+            Address,
+            PointerProtoPte, (ULONG64)PointerProtoPte->u.Long,
+            (ULONG64)PageFrameIndex, (ULONG64)(PageFrameIndex << PAGE_SHIFT));
+    }
+#endif
 
     /* Get the PFN entry and set it as a prototype PTE */
     Pfn1 = MiGetPfnEntry(PageFrameIndex);
@@ -1156,6 +1195,27 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
 
     /* Write the PTE */
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
+
+#if defined(_M_ARM64) && DBG
+    /* ARM64 Debug: Log final PTE write */
+    extern PVOID MiSystemViewStart;
+    if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
+        (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
+    {
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+            "[arm64] MiCompleteProtoPteFault: Wrote FINAL PTE\n"
+            "  Address=%p\n"
+            "  PointerPte=%p (actual page table PTE)\n"
+            "  TempPte.u.Long=0x%llx\n"
+            "  PageFrameNumber=0x%llx (PA=0x%llx)\n"
+            "  Protection=0x%lx\n",
+            Address,
+            PointerPte,
+            (ULONG64)TempPte.u.Long,
+            (ULONG64)PageFrameIndex, (ULONG64)(PageFrameIndex << PAGE_SHIFT),
+            (ULONG)Protection);
+    }
+#endif
 
 #if defined(_M_ARM64) || defined(__aarch64__)
     /*
@@ -2222,7 +2282,44 @@ MmArmAccessFault(IN ULONG FaultCode,
     if (Address >= MmSystemRangeStart)
     {
         extern VOID MiArm64MapAliasForPointer(_In_ PVOID AliasVa);
+        extern PVOID MmHyperSpaceEnd;
 
+        /*
+         * CRITICAL FIX FOR CYCLE 15: Handle faults on PTE addresses themselves.
+         * When the faulting address is ALREADY in the self-map region (PTE_BASE to
+         * MmHyperSpaceEnd), we need to create the alias mapping for the address FIRST,
+         * BEFORE trying to calculate its page table pointers (which would cause
+         * recursive self-map address calculations and nested faults).
+         */
+        if (((PVOID)Address >= (PVOID)PTE_BASE) && ((PVOID)Address <= MmHyperSpaceEnd))
+        {
+            /* The faulting address is a PTE/PDE/PPE/PXE or Hyperspace address.
+             * Create its alias mapping FIRST before accessing its page table entries.
+             * This prevents infinite recursion where MiAddressToPte(PTE_addr) tries
+             * to access another unmapped PTE address. */
+            MiArm64MapAliasForPointer(Address);
+
+            /* TLB invalidation for the alias page we just created */
+            {
+                ULONG64 VaForTlbi = ((ULONG64)(ULONG_PTR)Address) >> 12;
+                __asm__ __volatile__(
+                    "dsb ishst\n\t"           /* Ensure stores are visible */
+                    "tlbi vae1is, %0\n\t"     /* Invalidate TLB entry */
+                    "dsb ish\n\t"             /* Wait for TLB invalidation */
+                    "isb\n\t"                 /* Synchronize context */
+                    : : "r"(VaForTlbi) : "memory"
+                );
+            }
+
+            /* Now that Address itself is accessible, we can return SUCCESS.
+             * The fault will retry and the access will succeed. */
+            DPRINT("ARM64: Created self-map alias for PTE/Hyperspace address %p\n", Address);
+            InterlockedExchange(&MmArmAccessFaultInFunction, 0);
+            return STATUS_SUCCESS;
+        }
+
+        /* For normal kernel addresses (not in self-map region), ensure the
+         * page table pointers themselves (PointerPxe/Ppe/Pde/Pte) are accessible */
 #if (_MI_PAGING_LEVELS == 4)
         MiArm64MapAliasForPointer(PointerPxe);
 #endif

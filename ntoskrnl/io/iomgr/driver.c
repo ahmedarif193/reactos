@@ -1266,17 +1266,36 @@ IopInitializeSystemDrivers(VOID)
     PUNICODE_STRING *DriverList, *SavedList;
 
 #if defined(_M_ARM64)
-    DPRINT1("[arm64] IopInitializeSystemDrivers: ENTRY\n");
+    DPRINT1("[arm64] IopInitializeSystemDrivers: ENTRY (Cycle 14 - system drivers RE-ENABLED)\n");
+    DPRINT1("[arm64] IopInitializeSystemDrivers: IRQL=%u Thread=%p State=%u\n",
+            KeGetCurrentIrql(), PsGetCurrentThread(), PsGetCurrentThread()->Tcb.State);
 #endif
     PiPerformSyncDeviceAction(IopRootDeviceNode->PhysicalDeviceObject, PiActionEnumDeviceTree);
 #if defined(_M_ARM64)
     DPRINT1("[arm64] IopInitializeSystemDrivers: after PiPerformSyncDeviceAction\n");
+    DPRINT1("[arm64] IopInitializeSystemDrivers: KeLoaderBlock=%p SetupLdrBlock=%p\n",
+            KeLoaderBlock, KeLoaderBlock ? KeLoaderBlock->SetupLdrBlock : NULL);
 #endif
 
     /* HACK: No system drivers on the BootCD */
-    if (KeLoaderBlock->SetupLdrBlock) return;
+    if (KeLoaderBlock->SetupLdrBlock)
+    {
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IopInitializeSystemDrivers: SetupLdrBlock is set (LiveCD mode), skipping system driver loading\n");
+#endif
+        /* Still queue the device enumeration action before returning */
+        PiQueueDeviceAction(IopRootDeviceNode->PhysicalDeviceObject,
+                            PiActionEnumDeviceTree,
+                            NULL,
+                            NULL);
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IopInitializeSystemDrivers: EXIT (early return for LiveCD)\n");
+#endif
+        return;
+    }
 
 #if defined(_M_ARM64)
+    DPRINT1("[arm64] IopInitializeSystemDrivers: NOT a LiveCD boot, proceeding with system driver loading\n");
     DPRINT1("[arm64] IopInitializeSystemDrivers: calling CmGetSystemDriverList\n");
 #endif
     /* Get the driver list */
@@ -1284,12 +1303,16 @@ IopInitializeSystemDrivers(VOID)
     ASSERT(DriverList);
 
 #if defined(_M_ARM64)
-    DPRINT1("[arm64] IopInitializeSystemDrivers: DriverList=%p\n", DriverList);
+    DPRINT1("[arm64] IopInitializeSystemDrivers: DriverList=%p *DriverList=%p\n", DriverList, *DriverList);
 #endif
 
     /* Loop it */
     while (*DriverList)
     {
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IopInitializeSystemDrivers: Loading driver %wZ (IRQL=%u)\n",
+                *DriverList, KeGetCurrentIrql());
+#endif
         /* Load the driver */
         ZwLoadDriver(*DriverList);
 
@@ -1305,10 +1328,16 @@ IopInitializeSystemDrivers(VOID)
     /* Free the list */
     ExFreePool(SavedList);
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopInitializeSystemDrivers: Before PiQueueDeviceAction\n");
+#endif
     PiQueueDeviceAction(IopRootDeviceNode->PhysicalDeviceObject,
                         PiActionEnumDeviceTree,
                         NULL,
                         NULL);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopInitializeSystemDrivers: EXIT\n");
+#endif
 }
 
 /*
@@ -2100,6 +2129,11 @@ IopLoadDriver(
     PLDR_DATA_TABLE_ENTRY ModuleObject;
     PVOID BaseAddress;
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopLoadDriver: ENTRY - IRQL=%u Thread=%p State=%u\n",
+            KeGetCurrentIrql(), PsGetCurrentThread(), PsGetCurrentThread()->Tcb.State);
+#endif
+
     PKEY_VALUE_FULL_INFORMATION kvInfo;
     Status = IopGetRegistryValue(ServiceHandle, L"ImagePath", &kvInfo);
     if (NT_SUCCESS(Status))
@@ -2148,8 +2182,16 @@ IopLoadDriver(
 
     DPRINT("FullImagePath: '%wZ'\n", &ImagePath);
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopLoadDriver: About to enter critical region for %wZ\n", &ImagePath);
+#endif
+
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(&IopDriverLoadResource, TRUE);
+
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopLoadDriver: Acquired IopDriverLoadResource, calling MmLoadSystemImage\n");
+#endif
 
     /*
      * Load the driver module
@@ -2161,10 +2203,18 @@ IopLoadDriver(
     if (!NT_SUCCESS(Status))
     {
         DPRINT("MmLoadSystemImage() failed (Status %lx)\n", Status);
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IopLoadDriver: MmLoadSystemImage FAILED with status 0x%lx\n", Status);
+#endif
         ExReleaseResourceLite(&IopDriverLoadResource);
         KeLeaveCriticalRegion();
         return Status;
     }
+
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] IopLoadDriver: MmLoadSystemImage succeeded, ModuleObject=%p BaseAddress=%p\n",
+            ModuleObject, BaseAddress);
+#endif
 
     // Display the loading message
     ULONG infoLength;
@@ -2230,14 +2280,26 @@ IopLoadUnloadDriverWorker(
         // load request
         HANDLE serviceHandle;
         NTSTATUS status;
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IopLoadUnloadDriverWorker: Before IopOpenRegistryKeyEx for %wZ\n", LoadParams->RegistryPath);
+#endif
         status = IopOpenRegistryKeyEx(&serviceHandle, NULL, LoadParams->RegistryPath, KEY_READ);
         if (!NT_SUCCESS(status))
         {
+#if defined(_M_ARM64)
+            DPRINT1("[arm64] IopLoadUnloadDriverWorker: IopOpenRegistryKeyEx failed: 0x%lx\n", status);
+#endif
             LoadParams->Status = status;
         }
         else
         {
+#if defined(_M_ARM64)
+            DPRINT1("[arm64] IopLoadUnloadDriverWorker: Before IopLoadDriver\n");
+#endif
             LoadParams->Status = IopLoadDriver(serviceHandle, &LoadParams->DriverObject);
+#if defined(_M_ARM64)
+            DPRINT1("[arm64] IopLoadUnloadDriverWorker: IopLoadDriver returned 0x%lx\n", LoadParams->Status);
+#endif
             ZwClose(serviceHandle);
         }
     }
@@ -2274,6 +2336,9 @@ IopDoLoadUnloadDriver(
 
     if (PsGetCurrentProcess() != PsInitialSystemProcess)
     {
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IopDoLoadUnloadDriver: NOT in system process, queuing work item for %wZ\n", RegistryPath);
+#endif
         LoadParams.SetEvent = TRUE;
         KeInitializeEvent(&LoadParams.Event, NotificationEvent, FALSE);
 
@@ -2281,14 +2346,26 @@ IopDoLoadUnloadDriver(
         ExInitializeWorkItem(&LoadParams.WorkItem, IopLoadUnloadDriverWorker, &LoadParams);
         ExQueueWorkItem(&LoadParams.WorkItem, DelayedWorkQueue);
 
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IopDoLoadUnloadDriver: Before KeWaitForSingleObject\n");
+#endif
         /* And wait till it completes */
         KeWaitForSingleObject(&LoadParams.Event, UserRequest, KernelMode, FALSE, NULL);
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IopDoLoadUnloadDriver: After KeWaitForSingleObject\n");
+#endif
     }
     else
     {
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IopDoLoadUnloadDriver: In system process, calling worker directly for %wZ\n", RegistryPath);
+#endif
         /* If we're already in a system process, call it right here */
         LoadParams.SetEvent = FALSE;
         IopLoadUnloadDriverWorker(&LoadParams);
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IopDoLoadUnloadDriver: Worker returned\n");
+#endif
     }
 
     return LoadParams.Status;

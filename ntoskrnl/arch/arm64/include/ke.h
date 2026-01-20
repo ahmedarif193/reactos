@@ -255,7 +255,21 @@ KiGetLinkedTrapFrame(
 }
 
 #define KeGetTrapFrame(Thread) ((PKTRAP_FRAME)((Thread)->TrapFrame))
-#define KeGetExceptionFrame(Thread) ((PKEXCEPTION_FRAME)((Thread)->TrapFrame))
+
+/*
+ * KeGetExceptionFrame - Get the exception frame for a thread
+ *
+ * On ARM64, the user thread stack layout (KUINIT_FRAME) is:
+ *   KSWITCH_FRAME    <- lowest address (Thread->KernelStack)
+ *   KSTART_FRAME
+ *   KEXCEPTION_FRAME <- exception frame is BEFORE trap frame
+ *   KTRAP_FRAME      <- highest address (Thread->TrapFrame)
+ *
+ * So the exception frame is at (TrapFrame - sizeof(KEXCEPTION_FRAME)).
+ * This matches AMD64 and ARM32 behavior.
+ */
+#define KeGetExceptionFrame(Thread) \
+    ((PKEXCEPTION_FRAME)((ULONG_PTR)KeGetTrapFrame(Thread) - sizeof(KEXCEPTION_FRAME)))
 
 #define KiGetPreviousMode(TrapFrame) \
     (((TrapFrame)->Spsr & 0xF) == 0 ? UserMode : KernelMode)

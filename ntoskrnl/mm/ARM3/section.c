@@ -410,6 +410,8 @@ MiAddMappedPtes(IN PMMPTE FirstPte,
     MMPTE TempPte;
     PMMPTE PointerPte, ProtoPte, LastProtoPte, LastPte;
     PSUBSECTION Subsection;
+    BOOLEAN IsRosFileBackedSection = FALSE;
+    PMM_SECTION_SEGMENT RosSegment = NULL;
 
     /* Mapping at offset not supported yet */
     ASSERT(SectionOffset == 0);
@@ -417,7 +419,56 @@ MiAddMappedPtes(IN PMMPTE FirstPte,
     /* ARM3 doesn't support this yet */
     ASSERT(ControlArea->u.Flags.GlobalOnlyPerSession == 0);
     ASSERT(ControlArea->u.Flags.Rom == 0);
-    ASSERT(ControlArea->FilePointer == NULL);
+
+    /*
+     * ARM3/ROS Hybrid Support for File-Backed Sections:
+     *
+     * This function is called by ARM3's MiMapViewInSystemSpace, which can map:
+     * 1. Pure ARM3 sections (paging file-backed, no FilePointer)
+     * 2. ARM3 file-backed sections (have FilePointer but use ARM3 Segment structure)
+     * 3. ROS sections that were wrapped by ARM3 (rare hybrid case)
+     *
+     * We only want to apply the SSE pre-population logic to TRUE ROS sections.
+     * ROS sections have:
+     * - Section->u.Flags.filler == 1 (MiIsRosSectionObject)
+     * - Segment points to MM_SECTION_SEGMENT with SSE table
+     *
+     * However, we can't easily get the Section object here, only ControlArea.
+     * So we use a heuristic: if FilePointer exists AND Segment->ControlArea == ControlArea,
+     * AND the Segment doesn't have the ARM3-specific PrototypePte field at the expected
+     * location, it's likely a ROS section.
+     *
+     * For now, DISABLE this hybrid logic until we can properly identify ROS sections
+     * from within MiAddMappedPtes. The ramdisk uses the ROS path anyway (not ARM3).
+     */
+#if 0  // DISABLED: Need proper ROS section detection
+    if (ControlArea->FilePointer != NULL && ControlArea->Segment != NULL)
+    {
+        /*
+         * ISSUE: ARM3 can also create file-backed sections (e.g., NLS section)
+         * which have FilePointer but use SEGMENT structure, not MM_SECTION_SEGMENT.
+         * We can't safely cast to MM_SECTION_SEGMENT without knowing if it's truly
+         * a ROS section.
+         *
+         * TODO: Add proper detection by checking Section->u.Flags.filler or
+         * passing a flag from MiMapViewInSystemSpace indicating section type.
+         */
+        RosSegment = (PMM_SECTION_SEGMENT)ControlArea->Segment;
+        IsRosFileBackedSection = TRUE;
+
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] MiAddMappedPtes: Detected ROS file-backed section\n"
+                "  ControlArea=%p FilePointer=%p Segment=%p\n"
+                "  Will pre-populate prototype PTEs with hardware PTEs from SSEs\n",
+                ControlArea, ControlArea->FilePointer, RosSegment);
+#endif
+    }
+    else
+#endif
+    {
+        /* ARM3 section - may or may not have FilePointer */
+        /* FilePointer can exist for ARM3 file-backed sections (e.g., NLS data) */
+    }
 
     /* Sanity checks */
     ASSERT(PteCount != 0);
@@ -450,16 +501,80 @@ MiAddMappedPtes(IN PMMPTE FirstPte,
         /* The PTE should be completely clear */
         ASSERT(PointerPte->u.Long == 0);
 
-        /* Build the prototype PTE and write it */
+        /*
+         * ARM3/ROS Hybrid: For ROS file-backed sections, pre-populate the
+         * prototype PTEs with valid hardware PTEs pointing to the actual
+         * physical pages (from SSEs) instead of leaving them as demand-zero.
+         * This fixes the ramdisk mapping issue where page faults were
+         * allocating new pages instead of using the existing ramdisk PFNs.
+         */
+        if (IsRosFileBackedSection && ProtoPte->u.Long == 0)
+        {
+            /*
+             * The prototype PTE is currently zero (demand-zero).
+             * Query the ROS segment to see if there's a physical page already
+             * allocated for this offset via SSE (Section Segment Entry).
+             */
+            LARGE_INTEGER FileOffset;
+            ULONG_PTR SseEntry;
+            PFN_NUMBER Pfn;
+
+            /* Calculate file offset for this prototype PTE */
+            FileOffset.QuadPart = SectionOffset + ((ProtoPte - Subsection->SubsectionBase) << PAGE_SHIFT);
+
+            /* Get the SSE entry for this offset */
+            SseEntry = MmGetPageEntrySectionSegment(RosSegment, &FileOffset);
+
+            /* Check if SSE has a valid PFN (not swapped, not zero) */
+            if (SseEntry != 0 && !IS_SWAP_FROM_SSE(SseEntry))
+            {
+                Pfn = PFN_FROM_SSE(SseEntry);
+
+                if (Pfn != 0)
+                {
+                    /*
+                     * We have a valid PFN! Build a valid hardware PTE.
+                     * Use ValidKernelPte as template and set the PFN.
+                     */
+                    extern MMPTE ValidKernelPte;
+                    TempPte = ValidKernelPte;
+                    TempPte.u.Hard.PageFrameNumber = Pfn;
+
+                    /* Write the hardware PTE directly to the prototype PTE */
+                    MI_WRITE_VALID_PTE(ProtoPte, TempPte);
+
+#if defined(_M_ARM64) && DBG
+                    /* Log the first few pre-populated PTEs */
+                    if ((PointerPte - FirstPte) < 3)
+                    {
+                        DPRINT1("[arm64] MiAddMappedPtes: Pre-populated ProtoPTE[%lu] with hardware PTE\n"
+                                "  FileOffset=0x%I64x SSE=0x%I64x PFN=0x%I64x\n"
+                                "  ProtoPTE=%p contents=0x%llx (Valid=%d)\n",
+                                (ULONG)(PointerPte - FirstPte),
+                                FileOffset.QuadPart, SseEntry, (ULONG64)Pfn,
+                                ProtoPte, (ULONG64)ProtoPte->u.Long,
+                                (int)ProtoPte->u.Hard.Valid);
+                    }
+#endif
+                }
+            }
+        }
+
+        /* Build the prototype PTE reference and write it to the actual PTE */
         MI_MAKE_PROTOTYPE_PTE(&TempPte, ProtoPte);
 
 #if defined(_M_ARM64) && DBG
         /* Log the first few prototype PTE mappings for debugging */
         if ((PointerPte - FirstPte) < 3)
         {
-            DPRINT1("[arm64] MiAddMappedPtes: PTE[%lu] at %p -> ProtoPTE %p (encoded=0x%llx)\n",
+            DPRINT1("[arm64] MiAddMappedPtes: PTE[%lu] at %p -> ProtoPTE %p\n"
+                    "  Encoded proto PTE=0x%llx\n"
+                    "  ProtoPTE contents=0x%llx (Valid=%d PFN=0x%llx)\n",
                     (ULONG)(PointerPte - FirstPte), PointerPte, ProtoPte,
-                    (ULONG64)TempPte.u.Long);
+                    (ULONG64)TempPte.u.Long,
+                    (ULONG64)ProtoPte->u.Long,
+                    (int)ProtoPte->u.Hard.Valid,
+                    (ULONG64)(ProtoPte->u.Hard.Valid ? ProtoPte->u.Hard.PageFrameNumber : 0));
         }
 #endif
 

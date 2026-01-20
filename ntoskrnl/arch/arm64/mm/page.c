@@ -1053,6 +1053,65 @@ MmCreateVirtualMappingUnsafeEx(
      */
     KeInvalidateTlbEntry(Address);
 
+    /*
+     * ARM64 Cache Coherency for Kernel Mappings.
+     *
+     * Critical Fix: When mapping RAM with cached attributes in kernel space
+     * (e.g., cache manager mapping ramdisk pages via section views), we must
+     * ensure data cache coherency. Without explicit cache maintenance, the CPU
+     * may serve stale data from D-cache for the newly mapped virtual address.
+     *
+     * Problem Scenario:
+     * 1. Ramdisk writes boot sector (0xEB 58 90) to physical page via VA1
+     * 2. Data is written to memory and may be in D-cache at VA1
+     * 3. Cache manager maps same physical page to VA2 (new cache line)
+     * 4. Cache manager reads VA2 -> might get stale data from uninitialized cache
+     * 5. Result: Filesystem mount fails with corrupted boot sector (0x4d instead of 0xEB)
+     *
+     * Solution: Invalidate the D-cache by virtual address BEFORE the first access.
+     * This ensures the CPU fetches data from memory (Point of Coherency) rather
+     * than from stale cache lines.
+     *
+     * We use DC IVAC (Data Cache Invalidate by VA to PoC) which:
+     * - Invalidates cache lines without writing back (safe for newly mapped pages)
+     * - Forces subsequent reads to fetch from physical memory
+     * - Ensures reads from the new VA see the correct physical data
+     *
+     * This is necessary because ARM64 has multiple cache levels (L1D, L2) and
+     * different virtual addresses mapping to the same physical page may have
+     * different cache line states.
+     */
+    {
+        ULONG64 Ctr;
+        ULONG DcacheLineSize;
+        ULONG_PTR Va;
+
+        /* Read CTR_EL0 to get D-cache line size */
+        __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+        DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+
+        /* Invalidate D-cache for the newly mapped page */
+        Va = (ULONG_PTR)Address & ~(ULONG_PTR)(PAGE_SIZE - 1);
+
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[ARM64 Cache] DC CIVAC for Address=%p PFN=0x%llx DLineSize=%lu\n",
+                   (PVOID)Va, (ULONG64)Page, DcacheLineSize);
+
+        /* Invalidate each cache line in the page */
+        for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
+        {
+            /*
+             * DC CIVAC (Clean and Invalidate by VA to PoC) is safer than DC IVAC
+             * because it ensures any dirty data from previous mappings is written
+             * back before invalidation, preventing data loss.
+             */
+            __asm__ __volatile__("dc civac, %0" :: "r"(Va + offset) : "memory");
+        }
+
+        /* Ensure cache operations complete before continuing */
+        __asm__ __volatile__("dsb ish" ::: "memory");
+    }
+
     return STATUS_SUCCESS;
 }
 

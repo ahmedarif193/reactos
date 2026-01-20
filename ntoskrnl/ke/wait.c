@@ -517,6 +517,21 @@ KeWaitForSingleObject(IN PVOID Object,
                      0);
     }
 
+#if defined(_M_ARM64)
+    /* ARM64: Log wait attempts during Phase1 to diagnose deadlocks */
+    if (WaitReason != WrDispatchInt && WaitReason != WrQueue)
+    {
+        DPRINT1("[arm64] KeWaitForSingleObject: ENTRY - Object=%p Type=%u SignalState=%ld Reason=%u IRQL=%u\n",
+                Object, CurrentObject->Header.Type, CurrentObject->Header.SignalState,
+                WaitReason, KeGetCurrentIrql());
+        DPRINT1("[arm64] KeWaitForSingleObject: Thread=%p TID=%p State=%u Priority=%u\n",
+                Thread,
+                PsGetThreadId((PETHREAD)Thread),
+                Thread->State,
+                Thread->Priority);
+    }
+#endif
+
     /* ARM64: Validate WaitListHead is properly initialized (not -1) */
     if ((ULONG_PTR)CurrentObject->Header.WaitListHead.Flink == (ULONG_PTR)-1 ||
         (ULONG_PTR)CurrentObject->Header.WaitListHead.Blink == (ULONG_PTR)-1)
@@ -685,11 +700,33 @@ KeWaitForSingleObject(IN PVOID Object,
             }
 
             /* Do the actual swap */
+#if defined(_M_ARM64)
+            if (WaitReason != WrDispatchInt && WaitReason != WrQueue)
+            {
+                DPRINT1("[arm64] KeWaitForSingleObject: About to call KiSwapThread, Thread State=%u\n",
+                        Thread->State);
+            }
+#endif
+
             WaitStatus = (NTSTATUS)KiSwapThread(Thread, KeGetCurrentPrcb());
+
+#if defined(_M_ARM64)
+            if (WaitReason != WrDispatchInt && WaitReason != WrQueue)
+            {
+                DPRINT1("[arm64] KeWaitForSingleObject: KiSwapThread returned Status=0x%lx, Thread State=%u\n",
+                        WaitStatus, Thread->State);
+            }
+#endif
 
             /* Check if we were executing an APC */
             if (WaitStatus != STATUS_KERNEL_APC)
             {
+#if defined(_M_ARM64)
+                if (WaitReason != WrDispatchInt && WaitReason != WrQueue)
+                {
+                    DPRINT1("[arm64] KeWaitForSingleObject: Returning Status=0x%lx\n", WaitStatus);
+                }
+#endif
                 return WaitStatus;
             }
 

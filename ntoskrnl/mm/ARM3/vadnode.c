@@ -513,7 +513,25 @@ MiFindEmptyAddressRangeInTree(IN SIZE_T Length,
     /* Check for kernel mode table (memory areas) */
     if (Table->Unused == 1)
     {
+#if defined(_M_ARM64)
+        /* ARM64: Start kernel VA allocations from System Cache region.
+         *
+         * On ARM64, the kernel address space has multiple regions:
+         * - 0xFFFF800000000000 (KSEG0_BASE): Direct physical mapping region
+         *   In this region, MMU ignores PTEs and directly maps VA to PA.
+         *   DO NOT allocate VACBs or section views here!
+         * - 0xFFFFF98000000000 (MI_SYSTEM_CACHE_START): System Cache region
+         *   This is where cache manager VACBs and section views MUST be allocated.
+         *   PTEs are used, allowing correct PA mapping via page tables.
+         *
+         * If we allocate in KSEG0, cache manager will access wrong physical memory
+         * because the direct mapping formula (VA = PA + KSEG0_BASE) doesn't match
+         * the PFNs stored in PTEs by MmMakeSegmentResident.
+         */
+        LowVpn = ALIGN_UP_BY(MI_SYSTEM_CACHE_START >> PAGE_SHIFT, AlignmentVpn);
+#else
         LowVpn = ALIGN_UP_BY((ULONG_PTR)MmSystemRangeStart >> PAGE_SHIFT, AlignmentVpn);
+#endif
     }
 
     /* Check if the table is empty */
@@ -573,7 +591,15 @@ MiFindEmptyAddressRangeInTree(IN SIZE_T Length,
     /* Check for kernel mode table (memory areas) */
     if (Table->Unused == 1)
     {
+#if defined(_M_ARM64)
+        /* ARM64: Constrain kernel VA allocations to System Cache region.
+         * System Cache: 0xFFFFF98000000000 - 0xFFFFFA7FFFFFFFFF
+         * This ensures VACBs stay in the PTE-mapped region, not KSEG0.
+         */
+        HighestVpn = ALIGN_UP_BY((MI_SYSTEM_CACHE_END + 1) >> PAGE_SHIFT, AlignmentVpn);
+#else
         HighestVpn = ALIGN_UP_BY((ULONG_PTR)(LONG_PTR)-1 >> PAGE_SHIFT, AlignmentVpn);
+#endif
     }
 
     if (HighestVpn >= LowVpn + PageCount)
@@ -616,7 +642,15 @@ MiFindEmptyAddressRangeDownTree(IN SIZE_T Length,
     /* Check for kernel mode table (memory areas) */
     if (Table->Unused == 1)
     {
+#if defined(_M_ARM64)
+        /* ARM64: Start kernel VA allocations from System Cache region (same reason as above).
+         * VACBs and section views must be allocated in System Cache VA range where PTEs
+         * control the mapping, not in KSEG0 direct-mapped region.
+         */
+        LowVpn = ALIGN_UP_BY(MI_SYSTEM_CACHE_START >> PAGE_SHIFT, AlignmentVpn);
+#else
         LowVpn = ALIGN_UP_BY((ULONG_PTR)MmSystemRangeStart >> PAGE_SHIFT, AlignmentVpn);
+#endif
     }
     else
     {

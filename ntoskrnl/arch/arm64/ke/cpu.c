@@ -344,11 +344,89 @@ BOOLEAN
 NTAPI
 KeInvalidateAllCaches(VOID)
 {
-    /* Global cache maintenance sequence (parity with amd64 KeInvalidateAllCaches). */
+    /*
+     * ARM64 cache maintenance for coherency.
+     *
+     * Unlike x86/AMD64 which has hardware cache coherency, ARM64 requires
+     * explicit cache maintenance operations. When mapping physical RAM
+     * (e.g., ramdisk) with cached attributes, we must ensure data cache
+     * coherency to prevent stale cache lines from being read.
+     *
+     * Sequence:
+     * 1. DC CIVAC (Data Cache Clean and Invalidate by VA to PoC) - Not
+     *    practical here as we don't have specific VAs, so we use set/way ops
+     * 2. IC IALLU (Instruction Cache Invalidate All to PoU)
+     * 3. DSB + ISB to ensure ordering
+     *
+     * For set/way operations, we perform a full D-cache clean and invalidate
+     * operation to ensure all dirty data is written back and stale lines removed.
+     * This is necessary when establishing new mappings to RAM (MmMapIoSpace with
+     * MmCached) to prevent the cache manager from reading stale data.
+     */
     __asm__ __volatile__("dsb ish" ::: "memory");
+
+    /*
+     * Clean and invalidate entire data cache to Point of Coherency.
+     * This ensures that:
+     * - All dirty cache lines are written back to RAM
+     * - All cache lines are invalidated so subsequent reads fetch from RAM
+     *
+     * We use a simplified loop over cache levels. A production implementation
+     * would read CLIDR_EL1 to determine actual cache levels and sizes.
+     */
+    {
+        ULONG64 Clidr, Ccsidr, NumSets, NumWays, LineSize;
+        ULONG Level, SetLoop, WayLoop, WayShift, SetShift;
+        ULONG64 SetWayValue;
+
+        /* Read Cache Level ID Register to get cache topology */
+        __asm__ __volatile__("mrs %0, clidr_el1" : "=r"(Clidr));
+
+        /* Clean and invalidate all data/unified caches (typically L1D, L2) */
+        for (Level = 0; Level < 3; Level++)
+        {
+            /* Check if this level has a data or unified cache */
+            ULONG CacheType = (Clidr >> (Level * 3)) & 0x7;
+            if (CacheType < 2) /* 0=none, 1=I-cache only */
+                break;
+
+            /* Select the cache level in CSSELR_EL1 (Level:1, 0=data cache) */
+            __asm__ __volatile__("msr csselr_el1, %0" :: "r"((ULONG64)(Level << 1)) : "memory");
+            __asm__ __volatile__("isb" ::: "memory");
+
+            /* Read Current Cache Size ID Register */
+            __asm__ __volatile__("mrs %0, ccsidr_el1" : "=r"(Ccsidr));
+
+            /* Extract cache geometry: LineSize = 2^(LineSize+4) bytes */
+            LineSize = (Ccsidr & 0x7) + 4;
+            NumWays = ((Ccsidr >> 3) & 0x3FF) + 1;
+            NumSets = ((Ccsidr >> 13) & 0x7FFF) + 1;
+
+            /* Calculate bit positions for set/way operations */
+            WayShift = __builtin_clz((unsigned int)NumWays - 1);
+            SetShift = LineSize;
+
+            /* Clean and invalidate all sets and ways */
+            for (WayLoop = 0; WayLoop < NumWays; WayLoop++)
+            {
+                for (SetLoop = 0; SetLoop < NumSets; SetLoop++)
+                {
+                    SetWayValue = (((ULONG64)Level) << 1) |
+                                  (((ULONG64)SetLoop) << SetShift) |
+                                  (((ULONG64)WayLoop) << WayShift);
+                    __asm__ __volatile__("dc cisw, %0" :: "r"(SetWayValue) : "memory");
+                }
+            }
+        }
+    }
+
+    __asm__ __volatile__("dsb ish" ::: "memory");
+
+    /* Invalidate instruction cache */
     __asm__ __volatile__("ic iallu" ::: "memory");
     __asm__ __volatile__("dsb ish" ::: "memory");
     __asm__ __volatile__("isb" ::: "memory");
+
     return TRUE;
 }
 

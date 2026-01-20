@@ -873,16 +873,23 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Load the System DLL and its entrypoints */
 #if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: before PsLocateSystemDll\n");
+    DPRINT1("[arm64] IoInitSystem: RE-ENABLING PsLocateSystemDll (Cycle 14 - finding deadlock)\n");
+    DPRINT1("[arm64] IoInitSystem: Current IRQL=%u Thread=%p State=%u\n",
+            KeGetCurrentIrql(), PsGetCurrentThread(), PsGetCurrentThread()->Tcb.State);
 #endif
     Status = PsLocateSystemDll();
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("PsLocateSystemDll failed: %lx\n", Status);
+#if defined(_M_ARM64)
+        DPRINT1("[arm64] IoInitSystem: PsLocateSystemDll FAILED with status 0x%lx\n", Status);
+        DPRINT1("[arm64] IoInitSystem: Thread State after fail=%u WaitReason=%u\n",
+                PsGetCurrentThread()->Tcb.State, PsGetCurrentThread()->Tcb.WaitReason);
+#endif
         return FALSE;
     }
 #if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: after PsLocateSystemDll - SUCCESS\n");
+    DPRINT1("[arm64] IoInitSystem: PsLocateSystemDll completed successfully!\n");
 #endif
 
     /* Return success */

@@ -209,7 +209,7 @@ KiInitializeUserApc(
 
     ApcFrame = (PUAPC_FRAME)ALIGN_DOWN_POINTER_BY(TrapFrame->Sp - sizeof(*ApcFrame), 16);
 
-    LocalContext.ContextFlags = CONTEXT_FULL | CONTEXT_INTEGER;
+    LocalContext.ContextFlags = CONTEXT_FULL | CONTEXT_INTEGER | CONTEXT_ARM64;
     KeTrapFrameToContext(TrapFrame, NULL, &LocalContext);
 
     Stack = (ULONG_PTR)ApcFrame;
