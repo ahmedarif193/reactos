@@ -2343,12 +2343,31 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     if (MiArm64CanTouchSystemPageTables())
     {
-        /* Seed the system process CR3-equivalent (TTBR1) into DirectoryTableBase[0]. */
+        /* ARM64: On ARM64, DirectoryTableBase[0] represents the user address space
+         * page table root, which is TTBR0_EL1 (not TTBR1_EL1).
+         *
+         * TTBR0_EL1 = User space page tables (addresses 0x0000000000000000 - 0x0000FFFFFFFFFFFF)
+         * TTBR1_EL1 = Kernel space page tables (addresses 0xFFFF000000000000 - 0xFFFFFFFFFFFFFFFF)
+         *
+         * Windows/ReactOS convention:
+         *   DirectoryTableBase[0] = User page table root (TTBR0 on ARM64, CR3 on x86)
+         *   DirectoryTableBase[1] = Hyperspace page table root
+         *
+         * The Idle/System process needs a valid TTBR0 so it can allocate user-mode
+         * memory for process parameters in ExpLoadInitialProcess.
+         */
         {
-            UINT64 Ttbr1;
+            UINT64 Ttbr0, Ttbr1;
+            __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
             __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+
+            /* Set DirectoryTableBase[0] to TTBR0 (user space page tables) */
             PsGetCurrentProcess()->Pcb.DirectoryTableBase[0] =
-                (ULONG_PTR)MI_ARM64_TTBR_TO_PA(Ttbr1);
+                (ULONG_PTR)MI_ARM64_TTBR_TO_PA(Ttbr0);
+
+            DPRINT1("[arm64] MiInitMachineDependent: System process DirectoryTableBase[0]=0x%llx (TTBR0=0x%llx, TTBR1=0x%llx)\n",
+                    (UINT64)PsGetCurrentProcess()->Pcb.DirectoryTableBase[0],
+                    Ttbr0, Ttbr1);
         }
         MiArm64SeedAccessFlagsForKernelTables();
         /* Seed alias windows early to avoid fault-time alias recursion. */

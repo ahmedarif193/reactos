@@ -542,8 +542,36 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
     ProcessInformation = &InitBuffer->ProcessInfo;
 
 #if defined(_M_ARM64)
+    DPRINT1("[arm64] ExpLoadInitialProcess: Before allocating ProcessParams\n");
+
+    /* ARM64 workaround: ZwAllocateVirtualMemory doesn't work properly for user-mode
+     * addresses in the System process because the memory manager's PTE manipulation
+     * functions (MiAddressToPte, etc.) use self-mapping which only works for TTBR1
+     * (kernel space), not TTBR0 (user space).
+     *
+     * Instead, allocate the memory in kernel space (non-paged pool) and use it
+     * directly. We'll copy it to the new process's user space later.
+     */
+    Size = sizeof(*ProcessParams) + ((MAX_WIN32_PATH * 6) * sizeof(WCHAR));
+    ProcessParams = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)Size, 'spmS');
+    if (!ProcessParams)
+    {
+        /* Failed, display error */
+        _snwprintf(InitBuffer->DebugBuffer,
+                   sizeof(InitBuffer->DebugBuffer)/sizeof(WCHAR),
+                   L"INIT: Unable to allocate Process Parameters (ARM64 pool)");
+        RtlInitUnicodeString(&DebugString, InitBuffer->DebugBuffer);
+        ZwDisplayString(&DebugString);
+
+        /* Bugcheck the system */
+        KeBugCheckEx(SESSION1_INITIALIZATION_FAILED, STATUS_NO_MEMORY, 0, 0, 0);
+    }
+    RtlZeroMemory(ProcessParams, (SIZE_T)Size);
+    Status = STATUS_SUCCESS;
+    DPRINT1("[arm64] ExpLoadInitialProcess: Allocated ProcessParams in kernel pool at %p Size=0x%lx\n",
+            ProcessParams, (ULONG)Size);
+#else
     DPRINT1("[arm64] ExpLoadInitialProcess: Before ZwAllocateVirtualMemory\n");
-#endif
     /* Allocate memory for the process parameters */
     Size = sizeof(*ProcessParams) + ((MAX_WIN32_PATH * 6) * sizeof(WCHAR));
     Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
@@ -552,10 +580,8 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
                                      &Size,
                                      MEM_RESERVE | MEM_COMMIT,
                                      PAGE_READWRITE);
-#if defined(_M_ARM64)
     DPRINT1("[arm64] ExpLoadInitialProcess: ZwAllocateVirtualMemory returned Status=0x%lx ProcessParams=%p\n",
             Status, ProcessParams);
-#endif
     if (!NT_SUCCESS(Status))
     {
         /* Failed, display error */
@@ -569,6 +595,7 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
         /* Bugcheck the system */
         KeBugCheckEx(SESSION1_INITIALIZATION_FAILED, Status, 0, 0, 0);
     }
+#endif
 
     /* Setup the basic header, and give the process the low 1MB to itself */
     ProcessParams->Length = (ULONG)Size;
@@ -576,64 +603,27 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
     ProcessParams->Flags = RTL_USER_PROCESS_PARAMETERS_NORMALIZED |
                            RTL_USER_PROCESS_PARAMETERS_RESERVE_1MB;
 
-#if defined(_M_ARM64)
-    {
-        ULONG64 ttbr0, ttbr1;
-        __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr0));
-        __asm__ volatile("mrs %0, ttbr1_el1" : "=r"(ttbr1));
-        DPRINT1("[arm64] ExpLoadInitialProcess: TTBR0=0x%llx TTBR1=0x%llx\n",
-                (unsigned long long)ttbr0, (unsigned long long)ttbr1);
-
-        /* Walk TTBR0 page tables for ProcessParams address */
-        {
-            ULONG64 va = (ULONG64)ProcessParams;
-            ULONG64 l0_idx = (va >> 39) & 0x1FF;
-            ULONG64 l1_idx = (va >> 30) & 0x1FF;
-            ULONG64 l2_idx = (va >> 21) & 0x1FF;
-            ULONG64 l3_idx = (va >> 12) & 0x1FF;
-
-            /* Map TTBR0 L0 table using KSEG0 */
-            PULONG64 L0Table = (PULONG64)(0xFFFF800000000000ULL + (ttbr0 & ~0xFFFULL));
-            ULONG64 l0_entry = L0Table[l0_idx];
-            DPRINT1("[arm64] TTBR0 Walk: VA=%p L0[%llu]=%llx (valid=%d)\n",
-                    ProcessParams, l0_idx, l0_entry, (l0_entry & 3) == 3 ? 1 : 0);
-
-            if ((l0_entry & 3) == 3) {
-                PULONG64 L1Table = (PULONG64)(0xFFFF800000000000ULL + (l0_entry & 0xFFFFFFFFF000ULL));
-                ULONG64 l1_entry = L1Table[l1_idx];
-                DPRINT1("[arm64] TTBR0 Walk: L1[%llu]=%llx (valid=%d)\n",
-                        l1_idx, l1_entry, (l1_entry & 3) == 3 ? 1 : 0);
-
-                if ((l1_entry & 3) == 3) {
-                    PULONG64 L2Table = (PULONG64)(0xFFFF800000000000ULL + (l1_entry & 0xFFFFFFFFF000ULL));
-                    ULONG64 l2_entry = L2Table[l2_idx];
-                    DPRINT1("[arm64] TTBR0 Walk: L2[%llu]=%llx (valid=%d)\n",
-                            l2_idx, l2_entry, (l2_entry & 3) == 3 ? 1 : 0);
-
-                    if ((l2_entry & 3) == 3) {
-                        PULONG64 L3Table = (PULONG64)(0xFFFF800000000000ULL + (l2_entry & 0xFFFFFFFFF000ULL));
-                        ULONG64 l3_entry = L3Table[l3_idx];
-                        DPRINT1("[arm64] TTBR0 Walk: L3[%llu]=%llx (valid=%d)\n",
-                                l3_idx, l3_entry, (l3_entry & 3) == 3 ? 1 : 0);
-                    }
-                }
-            }
-        }
-    }
-    DPRINT1("[arm64] ExpLoadInitialProcess: ProcessParams=%p Size=0x%lx\n",
-            ProcessParams, (ULONG)Size);
-    /* Test if basic struct writes work */
-    __asm__ volatile("dmb sy" ::: "memory");
-    DPRINT1("[arm64] ExpLoadInitialProcess: Verify writes - Length=0x%x Max=0x%x Flags=0x%x\n",
-            ProcessParams->Length, ProcessParams->MaximumLength, ProcessParams->Flags);
-    /* Check if there's a valid PTE for this address */
-    {
-        PMMPTE PointerPte = MiAddressToPte(ProcessParams);
-        DPRINT1("[arm64] ExpLoadInitialProcess: PTE address=%p\n", PointerPte);
-    }
-#endif
-
     /* Allocate a page for the environment */
+#if defined(_M_ARM64)
+    /* ARM64: Same issue as ProcessParams - allocate in kernel pool */
+    Size = PAGE_SIZE;
+    EnvironmentPtr = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)Size, 'vnES');
+    if (!EnvironmentPtr)
+    {
+        /* Failed, display error */
+        _snwprintf(InitBuffer->DebugBuffer,
+                   sizeof(InitBuffer->DebugBuffer)/sizeof(WCHAR),
+                   L"INIT: Unable to allocate Process Environment (ARM64 pool)");
+        RtlInitUnicodeString(&DebugString, InitBuffer->DebugBuffer);
+        ZwDisplayString(&DebugString);
+
+        /* Bugcheck the system */
+        KeBugCheckEx(SESSION2_INITIALIZATION_FAILED, STATUS_NO_MEMORY, 0, 0, 0);
+    }
+    RtlZeroMemory(EnvironmentPtr, (SIZE_T)Size);
+    DPRINT1("[arm64] ExpLoadInitialProcess: Allocated Environment in kernel pool at %p Size=0x%lx\n",
+            EnvironmentPtr, (ULONG)Size);
+#else
     Size = PAGE_SIZE;
     Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
                                      &EnvironmentPtr,
@@ -654,6 +644,7 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
         /* Bugcheck the system */
         KeBugCheckEx(SESSION2_INITIALIZATION_FAILED, Status, 0, 0, 0);
     }
+#endif
 
     /* Write the pointer */
     ProcessParams->Environment = EnvironmentPtr;
@@ -2321,7 +2312,26 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: before PsInitSystem(Phase1)");
     /* Initialize the Process Manager at Phase 1 */
+#if defined(_M_ARM64)
+    /*
+     * ARM64 WORKAROUND: Skip PsInitSystem Phase1 because we skipped PsLocateSystemDll.
+     *
+     * PsInitSystem Phase1 calls PspInitializeSystemDll which requires PspSystemDllBase
+     * to be valid (non-NULL). Since we skipped PsLocateSystemDll to avoid the ZwOpenFile
+     * deadlock, PspSystemDllBase is NULL and PspInitializeSystemDll would bugcheck.
+     *
+     * Skipping this is safe because PspInitializeSystemDll only:
+     * 1. Looks up ntdll.dll export addresses (LdrInitializeThunk, KiUserApcDispatcher, etc.)
+     * 2. Stores these in global variables for user-mode thread startup
+     *
+     * Since we have no user-mode processes yet, these aren't needed.
+     *
+     * TODO: Re-enable when PsLocateSystemDll deadlock is fixed.
+     */
+    DPRINT1("[arm64] Phase1InitializationDiscard: SKIPPING PsInitSystem(Phase1) - ntdll.dll not loaded\n");
+#else
     if (!PsInitSystem(LoaderBlock)) KeBugCheck(PROCESS1_INITIALIZATION_FAILED);
+#endif
     EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: after PsInitSystem(Phase1)");
 
     /* Make sure nobody touches the loader block again */
