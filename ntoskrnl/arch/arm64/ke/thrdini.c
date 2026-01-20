@@ -6,7 +6,7 @@
  */
 
 #include <ntoskrnl.h>
-#define NDEBUG
+//#define NDEBUG  /* Temporarily disabled for timer debugging */
 #include <debug.h>
 
 /*
@@ -163,6 +163,20 @@ KiIdleLoop(VOID)
             DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                        "[KiIdleLoop] Alive loop=%lu ReadySummary=0x%llx NextThread=%p\n",
                        IdleLoopCounter, (ULONG64)Prcb->ReadySummary, Prcb->NextThread);
+
+            /* [CYCLE33] Check interrupt state and timer status */
+            {
+                ULONG64 Daif, CntpCtl;
+                __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
+                __asm__ __volatile__("mrs %0, cntp_ctl_el0" : "=r"(CntpCtl));
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[CYCLE33] IdleLoop: DAIF=0x%llx CNTP_CTL=0x%llx (ENABLE=%d IMASK=%d ISTATUS=%d)\n",
+                           Daif, CntpCtl,
+                           (int)(CntpCtl & 1),       /* bit 0: ENABLE */
+                           (int)((CntpCtl >> 1) & 1), /* bit 1: IMASK */
+                           (int)((CntpCtl >> 2) & 1)  /* bit 2: ISTATUS (pending) */
+                );
+            }
         }
 
         /*
@@ -452,6 +466,10 @@ KiDispatchInterrupt(VOID)
         (Prcb->TimerRequest) ||
         (Prcb->DeferredReadyListHead.Next))
     {
+        DPRINT1("[arm64] KiDispatchInterrupt: DpcDepth=%lu, TimerReq=%lu, DefReady=%p\n",
+                Prcb->DpcData[0].DpcQueueDepth,
+                (ULONG)Prcb->TimerRequest,
+                Prcb->DeferredReadyListHead.Next);
         KiRetireDpcList(Prcb);
     }
 

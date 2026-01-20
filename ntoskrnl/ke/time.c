@@ -9,7 +9,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <ntoskrnl.h>
-#define NDEBUG
+//#define NDEBUG  /* Temporarily disabled for timer debugging */
 #include <debug.h>
 
 /* GLOBALS ********************************************************************/
@@ -51,6 +51,10 @@ KiCheckForTimerExpiration(
         /* Check if we are already doing expiration */
         if (!Prcb->TimerRequest)
         {
+#if defined(_M_ARM64)
+            DPRINT1("[arm64] KiCheckForTimerExpiration: Setting TimerRequest, Hand=%lu, IntTime=%llu\n",
+                    Hand, InterruptTime.QuadPart);
+#endif
             /* Request a DPC to handle this */
             Prcb->TimerRequest = (ULONG_PTR)TrapFrame;
             Prcb->TimerHand = Hand;

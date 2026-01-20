@@ -1430,7 +1430,7 @@ CcRosInitializeFileCache (
             NULL,
             &SharedCacheMap->SectionSize,
             PAGE_READWRITE,
-            SEC_RESERVE,
+            0,  /* No special flags - create regular file-backed section */
             NULL,
             FileObject);
 

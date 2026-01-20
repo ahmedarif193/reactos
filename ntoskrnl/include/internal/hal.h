@@ -340,3 +340,9 @@ typedef struct _PTE
     ULONG StartingSector;
     ULONG PartitionLength;
 } PTE, *PPTE;
+
+//
+// [CYCLE36] ARM64 GIC diagnostics
+// Note: HalDumpGicStateOnSpurious is now a static function in HAL,
+// not exported. Remove this declaration as it's no longer needed.
+//

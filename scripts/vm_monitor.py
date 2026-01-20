@@ -270,7 +270,7 @@ def start_qemu():
         qemu_cmd = [
             "qemu-system-aarch64",
             "-machine", "virt,gic-version=3",
-            "-cpu", "cortex-a72",
+            "-cpu", "cortex-a76",
             "-m", "4G",
             "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
             "-drive", f"file={livecd_path}",

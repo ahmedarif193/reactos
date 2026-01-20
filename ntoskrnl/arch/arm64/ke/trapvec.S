@@ -30,6 +30,9 @@ KiArm64VectorTable:
 #define PERM_VECTOR_SYNC(label, id)                                      \
     .global label;                                                       \
 label:                                                                   \
+    /* CRITICAL: Mask IRQs immediately to prevent nested IRQ during sync exception */ \
+    /* ARM64 does NOT auto-mask IRQ on sync exceptions, only on IRQ/FIQ entry */ \
+    msr daifset, #0x3;  /* Mask IRQ+FIQ (bits 1 and 0) */                \
     stp x29, x30, [sp, #-16]!;                                           \
     mov x29, sp;                                                         \
     sub sp, sp, #ARM64_EARLY_STATE_SIZE;                                 \
@@ -113,7 +116,7 @@ label:                                                                   \
     .global label;                                                       \
 label:                                                                   \
     /* Preserve volatile state for IRQ/FIQ dispatch */                   \
-    sub sp, sp, #0xB0; /* 22 regs * 8 bytes */                           \
+    sub sp, sp, #0xC0; /* Save extra space for x20-x21 (non-volatiles) */ \
     stp x0,  x1,  [sp, #0x00];                                           \
     stp x2,  x3,  [sp, #0x10];                                           \
     stp x4,  x5,  [sp, #0x20];                                           \
@@ -124,7 +127,8 @@ label:                                                                   \
     stp x14, x15, [sp, #0x70];                                           \
     stp x16, x17, [sp, #0x80];                                           \
     stp x18, x19, [sp, #0x90];                                           \
-    stp x29, x30, [sp, #0xA0];                                           \
+    stp x20, x21, [sp, #0xA0]; /* Save x20-x21 (callee-saved) */        \
+    stp x29, x30, [sp, #0xB0];                                           \
     /* Memory barrier before calling C code to ensure register saves visible */ \
     dsb sy;                                                              \
     isb;                                                                 \
@@ -135,7 +139,8 @@ label:                                                                   \
     dsb sy;                                                              \
     isb;                                                                 \
     /* Restore volatile state */                                         \
-    ldp x29, x30, [sp, #0xA0];                                           \
+    ldp x29, x30, [sp, #0xB0];                                           \
+    ldp x20, x21, [sp, #0xA0]; /* Restore x20-x21 (callee-saved) */     \
     ldp x18, x19, [sp, #0x90];                                           \
     ldp x16, x17, [sp, #0x80];                                           \
     ldp x14, x15, [sp, #0x70];                                           \
@@ -146,7 +151,7 @@ label:                                                                   \
     ldp x4,  x5,  [sp, #0x20];                                           \
     ldp x2,  x3,  [sp, #0x10];                                           \
     ldp x0,  x1,  [sp, #0x00];                                           \
-    add sp, sp, #0xB0;                                                   \
+    add sp, sp, #0xC0;                                                   \
     /* Final barrier before exception return */                          \
     dsb sy;                                                              \
     isb;                                                                 \

@@ -283,6 +283,16 @@ HalSweepDcache(VOID);
 VOID
 HalSweepIcache(VOID);
 
+/* ARM64 GIC Priority Masking for IRQL Management */
+VOID
+FASTCALL
+HalSetGicPriorityMask(
+    _In_ KIRQL Irql);
+
+ULONG
+FASTCALL
+HalGetGicPriorityMask(VOID);
+
 /* Final exception/interrupt readiness flags (for bring-up diagnostics) */
 extern BOOLEAN KiArm64FinalVectorsInstalled;
 extern BOOLEAN KiArm64SvcConfigured;

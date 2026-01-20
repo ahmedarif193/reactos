@@ -10,7 +10,7 @@
  */
 
 #include <ntoskrnl.h>
-#define NDEBUG
+//#define NDEBUG  /* Temporarily disabled for timer debugging */
 #include <debug.h>
 
 /* HAL extension: not yet declared in public headers for ARM64 */
@@ -36,6 +36,22 @@ static KSPIN_LOCK KiArm64DpcLock;
 static KINTERRUPT KiArm64ApcInterrupt;
 static KSPIN_LOCK KiArm64ApcLock;
 static BOOLEAN KiArm64UseVirtualTimer = FALSE; /* match Windows: kernel uses physical timer */
+
+/* CYCLE 30: Global diagnostic counters for timer ISR debugging */
+ULONG KiTimerIsrCallCount = 0;        /* Incremented in ISR */
+ULONG KiInitInterruptsCallCount = 0;  /* Set to 1 when KeInitInterrupts runs */
+ULONG KiTimerStartedFlag = 0;         /* Set to 1 when timer is started */
+ULONG KiTimerCtlReadback = 0;         /* Timer control register readback */
+
+/* CYCLE31: Raw UART for debugging - defined early so all functions can use it */
+#define PL011_VA 0xFFFF800009000000ULL
+static inline void KiRawDebugPuts(const char *str) {
+    volatile ULONG *uart = (volatile ULONG *)PL011_VA;
+    while (*str) {
+        while (uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+        uart[0] = *str++;
+    }
+}
 
 BOOLEAN
 NTAPI
@@ -174,6 +190,9 @@ KiArm64TimerIsr(
     ULONG Increment;
     UNREFERENCED_PARAMETER(Interrupt);
 
+    /* CYCLE 30: Increment ISR call counter for diagnostics */
+    KiTimerIsrCallCount++;
+
     /* Reload next tick FIRST to minimize jitter */
     if (KiArm64UseVirtualTimer)
         KiArm64WriteCntvTval(period);
@@ -216,6 +235,20 @@ KiArm64TimerIsr(
      * handle this correctly - it only uses TrapFrame for profiling which we don't
      * support yet.
      */
+
+    static ULONG TimerIsrCount = 0;
+    TimerIsrCount++;
+    if ((TimerIsrCount % 100) == 0)
+    {
+        DbgPrint("[arm64][TimerISR] tick #%lu, TickCount=%lu\n",
+                TimerIsrCount, KeTickCount.LowPart);
+    }
+    else if (TimerIsrCount <= 10)
+    {
+        /* Show first 10 ticks for debugging */
+        DbgPrint("[arm64][TimerISR] tick #%lu (early)\n", TimerIsrCount);
+    }
+
     KeUpdateSystemTime((PKTRAP_FRAME)(ULONG_PTR)-1, Increment, CLOCK_LEVEL);
 
     return TRUE;
@@ -284,8 +317,10 @@ KiArm64StartTimer(VOID)
     ULONGLONG frq;
     ULONG ctl;
 
+    KiRawDebugPuts("[CYCLE31] KiArm64StartTimer: ENTRY\n");
     /* Read counter frequency from CNTFRQ_EL0 */
     frq = KiArm64ReadCntFrq();
+    KiRawDebugPuts("[CYCLE31] Read CNTFRQ_EL0\n");
 
     /*
      * Validate frequency - if zero or unreasonable, use a safe default.
@@ -332,14 +367,23 @@ KiArm64StartTimer(VOID)
          * 1. Set countdown value in CNTP_TVAL_EL0
          * 2. Enable timer with ENABLE=1, IMASK=0 in CNTP_CTL_EL0
          */
+        KiRawDebugPuts("[CYCLE31] Writing CNTP_TVAL...\n");
         KiArm64WriteCntpTval(KiArm64TimerPeriodTicks);
+        KiRawDebugPuts("[CYCLE31] Writing CNTP_CTL (enable)...\n");
         KiArm64WriteCntpCtl(1); /* ENABLE=1, IMASK=0 */
 
         /* Verify configuration */
+        KiRawDebugPuts("[CYCLE31] Reading CNTP_CTL...\n");
         ctl = KiArm64ReadCntpCtl();
+        KiRawDebugPuts("[CYCLE31] CNTP_CTL read complete\n");
         DPRINT1("[arm64] CNTP_CTL_EL0 = 0x%lx (ENABLE=%lu, IMASK=%lu, ISTATUS=%lu)\n",
                 ctl, ctl & 1, (ctl >> 1) & 1, (ctl >> 2) & 1);
     }
+
+    KiRawDebugPuts("[CYCLE31] Timer setup complete\n");
+    /* CYCLE 30: Store readback value and set flag */
+    KiTimerCtlReadback = ctl;
+    KiTimerStartedFlag = 1;
 }
 
 CODE_SEG("INIT")
@@ -347,6 +391,14 @@ VOID
 NTAPI
 KeInitInterrupts(VOID)
 {
+    /* CYCLE31: Use raw UART */
+    KiRawDebugPuts("[CYCLE31] KeInitInterrupts ENTERED\n");
+    /* Raw debug output to verify execution */
+    HalDisplayString("[KeInitInterrupts] ENTRY\r\n");
+
+    /* CYCLE 30: Set diagnostic flag */
+    KiInitInterruptsCallCount = 1;
+
     KeInitializeSpinLock(&KiArm64IntTableLock);
 
     /* Wire SGIs for IPI/APC/DPC */
@@ -411,8 +463,8 @@ KeInitInterrupts(VOID)
     {
         ULONG TimerIntId = KiArm64UseVirtualTimer ? 27 : 30;
 
-        DPRINT1("[arm64] KeInitInterrupts: Connecting timer PPI %lu at CLOCK_LEVEL (%u)\n",
-                TimerIntId, CLOCK_LEVEL);
+        HalDisplayString("[KeInitInterrupts] About to connect timer PPI\r\n");
+        KiRawDebugPuts("[CYCLE31] About to KeInitializeInterrupt for timer\n");
 
         KeInitializeSpinLock(&KiArm64TimerLock);
         KeInitializeInterrupt(&KiArm64TimerInterrupt,
@@ -426,13 +478,15 @@ KeInitInterrupts(VOID)
                               FALSE,
                               0,
                               FALSE);
+        KiRawDebugPuts("[CYCLE31] About to KeConnectInterrupt\n");
         if (KeConnectInterrupt(&KiArm64TimerInterrupt))
         {
             ULONGLONG daif_before, daif_after;
 
-            DPRINT1("[arm64] KeInitInterrupts: Timer interrupt connected to PPI %lu, starting timer\n",
-                    TimerIntId);
+            KiRawDebugPuts("[CYCLE31] Timer connected! About to start...\n");
+            HalDisplayString("[KeInitInterrupts] Timer connected, starting...\r\n");
             KiArm64StartTimer();
+            KiRawDebugPuts("[CYCLE31] KiArm64StartTimer returned\n");
 
             /*
              * Enable IRQ delivery at the CPU by clearing the I bit in DAIF.
@@ -443,15 +497,30 @@ KeInitInterrupts(VOID)
             __asm__ __volatile__("msr daifclr, #2" ::: "memory");
             __asm__ __volatile__("isb" ::: "memory");
             __asm__ __volatile__("mrs %0, daif" : "=r"(daif_after));
-            DPRINT1("[arm64] KeInitInterrupts: IRQs enabled (DAIF: 0x%llx -> 0x%llx)\n",
-                    daif_before, daif_after);
+            KiRawDebugPuts("[CYCLE31] IRQs enabled\n");
+            HalDisplayString("[KeInitInterrupts] IRQs enabled, timer active\r\n");
         }
         else
         {
-            DPRINT1("[arm64] KeInitInterrupts: FAILED to connect timer interrupt PPI %lu!\n",
-                    TimerIntId);
+            KiRawDebugPuts("[CYCLE31] FAILED to connect timer!\n");
+            HalDisplayString("[KeInitInterrupts] FAILED to connect timer!\r\n");
         }
     }
+
+    /* [CYCLE33] Verify interrupt state after initialization */
+    {
+        ULONG64 Daif;
+        __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
+        DPRINT1("[CYCLE33] KeInitInterrupts EXIT: DAIF=0x%llx (I=%d F=%d A=%d D=%d)\n",
+                Daif,
+                (int)((Daif >> 7) & 1), /* I bit */
+                (int)((Daif >> 6) & 1), /* F bit */
+                (int)((Daif >> 8) & 1), /* A bit */
+                (int)((Daif >> 9) & 1)  /* D bit */
+        );
+    }
+
+    KiRawDebugPuts("[CYCLE31] KeInitInterrupts EXITING\n");
 }
 
 static
@@ -531,13 +600,41 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
     KIRQL RequestIrql = DISPATCH_LEVEL;
     PKINTERRUPT Head;
     BOOLEAN Begun;
+    static ULONG InterruptCounter = 0;
+
+    /* [CYCLE38] Count IRQ entries but NO DPRINT - debug output can corrupt state! */
+    InterruptCounter++;
 
     /* Ask HAL for current INTID */
     IntId = HalGetInterruptSource();
 
-    /* Spurious or unsupported */
+    /* [CYCLE38] Spurious interrupt handling - must be minimal and safe */
     if ((IntId == 0) || (IntId >= ARM64_MAX_INTID))
+    {
+        /*
+         * [CYCLE38] CRITICAL: Spurious interrupt handling must be minimal!
+         *
+         * A spurious interrupt (IntId=1023) means the GIC had no pending interrupt
+         * to deliver when we read ICC_IAR1_EL1. This is normal and can happen if:
+         * - The interrupt was deasserted between IRQ and IAR read
+         * - Priority masking changed between IRQ and IAR read
+         * - Edge case in GIC state machine
+         *
+         * For spurious interrupts, we MUST:
+         * 1. NOT call HalBeginSystemInterrupt (no IRQL change, no state modification)
+         * 2. NOT call HalEndSystemInterrupt (no IAR read was acknowledged)
+         * 3. NOT call DPRINT1 or any complex logging (stack corruption risk)
+         * 4. Just return immediately - the IRQ assembly will restore registers and ERET
+         *
+         * The key insight: Reading IAR with result 1023 means "no interrupt acknowledged",
+         * so there's nothing to EOI. The GIC is already in the correct state.
+         *
+         * DAIF state: Hardware masked IRQs on entry, ERET will restore from SPSR.
+         * IRQL state: Unchanged (we never called HalBeginSystemInterrupt).
+         * Stack state: Only async handler's 0xB0 byte frame, will be restored on return.
+         */
         return;
+    }
 
     Head = KiArm64IntTable[IntId];
     if (Head != NULL)
@@ -640,8 +737,10 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
     KeAcquireSpinLock(&KiArm64IntTableLock, &OldIrql);
 
     Head = KiArm64IntTable[Vector];
+    KiRawDebugPuts("[CYCLE32] KeConnectInterrupt: after table lookup\n");
     if (!Head)
     {
+        KiRawDebugPuts("[CYCLE32] Head is NULL, registering new interrupt\n");
         InitializeListHead(&Interrupt->InterruptListEntry);
         KiArm64IntTable[Vector] = Interrupt;
         if (NT_SUCCESS(RtlStringCbPrintfA(Buf,
@@ -652,13 +751,18 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
                                           (ULONG)Interrupt->Mode)))
         {
             DPRINT1("%s\n", Buf);
+            KiRawDebugPuts(Buf);
+            KiRawDebugPuts("\n");
         }
+        KiRawDebugPuts("[CYCLE32] About to call HalEnableSystemInterrupt\n");
         HalEnableSystemInterrupt(Vector, Interrupt->Irql, Interrupt->Mode);
+        KiRawDebugPuts("[CYCLE32] HalEnableSystemInterrupt returned\n");
         DPRINT1("%s\n", "[arm64] KeConnectInterrupt: HalEnableSystemInterrupt returned");
         Interrupt->Connected = TRUE;
     }
     else
     {
+        KiRawDebugPuts("[CYCLE32] Head is NOT NULL, checking sharing\n");
         if ((Interrupt->ShareVector == 0) || (Head->ShareVector == 0) ||
             (Interrupt->Mode != Head->Mode))
         {

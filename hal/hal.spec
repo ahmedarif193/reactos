@@ -29,6 +29,8 @@
 @ stdcall HalGetEnvironmentVariable(str long str)
 @ fastcall -arch=arm,arm64 HalGetInterruptSource()
 @ stdcall HalGetInterruptVector(long long long long ptr ptr)
+@ fastcall -arch=arm64 HalSetGicPriorityMask(long)
+@ fastcall -arch=arm64 HalGetGicPriorityMask()
 @ stdcall HalIsAcpiBusMasterActive()
 @ stdcall HalGetAcpiSciVector()
 ;@ stdcall -arch=x86_64 HalHandleMcheck()

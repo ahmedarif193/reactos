@@ -66,7 +66,7 @@ typedef struct _ARM64_EARLY_GPRS
     UINT64 Sp;
 } ARM64_EARLY_GPRS, *PARM64_EARLY_GPRS;
 
-VOID
+DECLSPEC_NORETURN VOID NTAPI
 KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock);
 
 VOID
@@ -1359,6 +1359,9 @@ KiSystemStartup(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     ARM64_BOOT_CONTEXT BootContext = {0};
 
+    /* CYCLE31: Trace boot path to verify this function is called */
+    KiArm64RawPuts("[CYCLE31] KiSystemStartup ENTRY\n");
+
     /*
      * Install early exception vectors FIRST, before any memory access that
      * could fault. This ensures we get diagnostic output if UART or other
@@ -1392,6 +1395,8 @@ KiArm64SystemStartupBootStack(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
      * This function runs on the clean boot stack before entering the main
      * kernel initialization and then hands off to KiInitializeSystem.
      */
+    /* CYCLE31: Trace boot path before calling KiInitializeSystem */
+    KiArm64RawPuts("[CYCLE31] KiArm64SystemStartupBootStack: about to call KiInitializeSystem\n");
     KiInitializeSystem(LoaderBlock);
 
     /* Should never return */

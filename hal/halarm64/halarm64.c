@@ -97,6 +97,8 @@ extern BOOLEAN HalpGicIsGicv4_1;
 extern PHALP_GIC_VPE *HalpGicVpeTable;
 extern ULONG HalpGicVpeTableSize;
 
+/* KiHalInitialized flag is now set by kernel (ex/init.c), not by HAL */
+
 /*
  * HAL PnP driver initialization function - defined in halpnpdd.c
  * Called by HalInitSystem to set HalInitPnpDriver callback for PnP enumeration.
@@ -1463,9 +1465,13 @@ PUCHAR KdComPortInUse = NULL;
 #define GICR_TYPER        0x008
 #define GICR_WAKER        0x014
 #define GICR_IGROUPR0     0x080
+#define GICR_IGRPMODR0    0xD00  /* Group modifier register (determines Secure/NonSecure) */
 #define GICR_ISENABLER0   0x100
 #define GICR_ICENABLER0   0x180
+#define GICR_ISPENDR0     0x200
 #define GICR_ICPENDR0     0x280
+#define GICR_ISACTIVER0   0x300
+#define GICR_ICACTIVER0   0x380
 #define GICR_IPRIORITYR   0x400
 #define GICR_ICFGR0       0xC00  /* Interrupt config register for SGIs (read-only) */
 #define GICR_ICFGR1       0xC04  /* Interrupt config register for PPIs */
@@ -1706,6 +1712,11 @@ static __inline volatile ULONG *HalpMmio(ULONG_PTR Base, ULONG Offset);
 static __inline ULONGLONG HalpMmioRead64(ULONG_PTR Base, ULONG Offset);
 static __inline VOID HalpMmioWrite64(ULONG_PTR Base, ULONG Offset, ULONGLONG Value);
 static __inline ULONG_PTR HalpGicrBase(_In_ ULONG Cpu);
+
+/* ARM64 system register accessors - forward declarations */
+FORCEINLINE ULONGLONG HalpReadMpidr(void);
+FORCEINLINE ULONGLONG HalpReadMidr(void);
+FORCEINLINE ULONGLONG HalpReadPfr0(void);
 
 static __inline ULONG
 HalpGicItsLog2(_In_ ULONG Value)
@@ -3105,42 +3116,121 @@ HalpInitGicRedistributor(_In_ ULONG Cpu)
 {
     ULONG_PTR Base = HalpGicrBase(Cpu);
     ULONG_PTR SgiBase = HalpGicrSgiBase(Cpu);
+    ULONGLONG Mpidr = HalpReadMpidr();
+    ULONGLONG Typer;
+
+    DPRINT1("[arm64][GICR] Initializing redistributor for CPU %lu\n", Cpu);
+    DPRINT1("[arm64][GICR]   MPIDR=0x%llx\n", Mpidr);
+    DPRINT1("[arm64][GICR]   RD_Base=0x%p\n", (PVOID)Base);
+    DPRINT1("[arm64][GICR]   SGI_Base=0x%p (offset=0x%lx)\n", (PVOID)SgiBase, HalpGicrSgiOffset);
 
     if (Base == 0)
     {
-        DPRINT1("[arm64][HAL] GICR base unavailable for CPU %lu\n", Cpu);
+        DPRINT1("[arm64][GICR] ERROR: GICR base unavailable for CPU %lu!\n", Cpu);
         return;
     }
 
-    /* Wake redistributor and wait for ChildrenAsleep to clear */
+    /* Read and display GICR_TYPER for verification */
+    Typer = HalpMmioRead64(Base, GICR_TYPER);
+    DPRINT1("[arm64][GICR]   TYPER=0x%llx\n", Typer);
+    DPRINT1("[arm64][GICR]   TYPER.Affinity=0x%08lx (extracted from bits [63:32])\n",
+            (ULONG)((Typer >> 32) & 0xFFFFFFFF));
+
+    /*
+     * [CYCLE36] Wake redistributor and wait for ChildrenAsleep to clear
+     *
+     * GICR_WAKER register is implementation-defined in GICv3:
+     *   - Some use bit 1 for ProcessorSleep, bit 2 for ChildrenAsleep
+     *   - Others use bit 0 for ProcessorSleep, bit 1 for ChildrenAsleep
+     *   - QEMU appears to NOT implement WAKER properly (always reads 0)
+     *
+     * Strategy: Try both conventions, and if WAKER is all-zeros, skip the wait.
+     */
     volatile ULONG *Waker = HalpMmio(Base, GICR_WAKER);
     ULONG W = *Waker;
+    DPRINT1("[CYCLE36][GICR] WAKER before wake: 0x%08lx\n", W);
 
-    W &= ~(1u << 0); /* Clear ProcessorSleep */
-    *Waker = W;
-
-    ULONG Spins;
-    for (Spins = 0x100000; Spins != 0; --Spins)
+    /* If WAKER is not implemented (reads as 0), skip wakeup sequence */
+    if (W == 0)
     {
-        if (((*Waker) & (1u << 2)) == 0) /* ChildrenAsleep */
-            break;
-        __asm__ __volatile__("yield");
+        DPRINT1("[CYCLE36][GICR] WAKER reads as 0 - redistributor may not implement power management, continuing\n");
     }
-    if (Spins == 0)
+    else
     {
-        DPRINT1("[arm64][HAL] WARNING: GICR wakeup timeout for CPU %lu\n", Cpu);
+        /* Try clearing both bit 0 and bit 1 (different implementations) */
+        W &= ~((1u << 0) | (1u << 1));
+        *Waker = W;
+
+        /* Memory barrier to ensure write completes before polling */
+        __asm__ __volatile__("dsb sy" ::: "memory");
+
+        /* Poll for ChildrenAsleep to clear (check both bit 1 and bit 2) */
+        ULONG Spins;
+        for (Spins = 0x100000; Spins != 0; --Spins)
+        {
+            W = *Waker;
+            /* Consider awake if bits 1 and 2 are both clear */
+            if ((W & ((1u << 1) | (1u << 2))) == 0)
+                break;
+            __asm__ __volatile__("yield");
+        }
+
+        W = *Waker;
+        DPRINT1("[CYCLE36][GICR] WAKER after wake: 0x%08lx (spins left=%lu)\n", W, Spins);
+
+        if (Spins == 0)
+        {
+            DPRINT1("[CYCLE36][GICR] WARNING: GICR wakeup timeout for CPU %lu (WAKER still 0x%08lx)\n", Cpu, W);
+            /* Continue anyway - redistributor might still work */
+        }
     }
 
     /* Clear any pending SGI/PPI interrupts first */
     *HalpMmio(SgiBase, GICR_ICPENDR0) = 0xFFFFFFFF;
 
-    /* Configure all SGI/PPI as Non-secure Group1 */
-    *HalpMmio(SgiBase, GICR_IGROUPR0) = 0xFFFFFFFF;
+    /*
+     * [CYCLE36] CRITICAL FIX: Configure interrupts as Group 1 Non-Secure
+     *
+     * GICv3 uses TWO registers to determine interrupt group:
+     * - GICR_IGROUPR0: Group bit (0=Group0, 1=Group1)
+     * - GICR_IGRPMODR0: Modifier bit (determines Secure/NonSecure for Group1)
+     *
+     * Group assignment table:
+     *   IGROUPR[i] | IGRPMODR[i] | Result
+     *   -----------|-------------|-----------------
+     *       0      |      0      | Group 0
+     *       0      |      1      | Group 1 Secure
+     *       1      |      0      | Group 1 Non-Secure  <-- What we want
+     *       1      |      1      | Reserved
+     *
+     * For EL1 Non-Secure (our case):
+     * - Interrupts must be Group 1 Non-Secure
+     * - Delivered via ICC_IAR1_EL1 (not ICC_IAR0_EL1)
+     * - Enabled via ICC_IGRPEN1_EL1.Enable
+     */
+    *HalpMmio(SgiBase, GICR_IGROUPR0) = 0xFFFFFFFF;  /* All Group 1 */
+    *HalpMmio(SgiBase, GICR_IGRPMODR0) = 0x00000000; /* Non-Secure (not Secure) */
+    DPRINT1("[CYCLE36][GICR] Configured all SGI/PPI as Group 1 Non-Secure\n");
 
-    /* Set priorities to medium (0xA0) for all SGI/PPI */
+    /*
+     * [CYCLE36] CRITICAL FIX: Priority masking issue
+     *
+     * Set priorities to 0x00 (highest priority) for all SGI/PPI.
+     *
+     * The ICC_PMR_EL1 reads back as 0xF8 (not 0xFF as written), indicating
+     * the implementation only supports 5 priority bits [7:3].
+     *
+     * In GIC priority comparison: LOWER number = HIGHER priority.
+     * PMR=0xF8 masks interrupts with priority < 0xF8 (lower priority).
+     *
+     * Old value 0xA0 was being masked (0xA0 < 0xF8), causing spurious
+     * interrupt returns (IntId=1023) when timer fired.
+     *
+     * Fix: Use 0x00 for highest priority, ensuring interrupts pass PMR mask.
+     */
     for (ULONG i = 0; i < 32; i += 4)
     {
-        *HalpMmio(SgiBase, GICR_IPRIORITYR + i) = 0xA0A0A0A0;
+        *HalpMmio(SgiBase, GICR_IPRIORITYR + i) = 0x00000000;
     }
 
     /*
@@ -3173,8 +3263,46 @@ HalpInitGicRedistributor(_In_ ULONG Cpu)
      * (IPI for multiprocessor synchronization), not for software interrupt simulation.
      */
 
-    /* Deliberately keep all SGIs DISABLED - this is the correct ARM64 behavior */
-    *HalpMmio(SgiBase, GICR_ICENABLER0) = 0xFFFFFFFF; /* Disable all SGI/PPI */
+    /*
+     * [CYCLE36] Configure PPI trigger modes in GICR_ICFGR1
+     *
+     * ICFGR1 controls PPIs 16-31 (2 bits per interrupt):
+     *   Bits [2n+1:2n] for PPI (16+n)
+     *   Bit 2n+1: 0=level-sensitive, 1=edge-triggered
+     *   Bit 2n:   Reserved (SBZ)
+     *
+     * ARM Generic Timer PPIs:
+     *   PPI 30 (phys timer): Should be LEVEL-sensitive
+     *   PPI 27 (virt timer): Should be LEVEL-sensitive
+     *
+     * For PPI 30: offset = (30-16)*2 = 28, so bits [29:28]
+     * Set bit 29 = 0 for level-sensitive
+     */
+    ULONG Icfgr1 = *HalpMmio(SgiBase, GICR_ICFGR1);
+    /* Clear edge trigger bits for PPI 27 and 30 (set to level-sensitive) */
+    Icfgr1 &= ~((1u << 23) | (1u << 29)); /* PPI 27 bit 23, PPI 30 bit 29 */
+    *HalpMmio(SgiBase, GICR_ICFGR1) = Icfgr1;
+    DPRINT1("[CYCLE36][GICR] ICFGR1=0x%08lx (PPI 27,30 set to level-sensitive)\n", Icfgr1);
+
+    /*
+     * [CYCLE35] CRITICAL FIX: Only disable SGIs, NOT PPIs!
+     *
+     * The comment above correctly states we should disable SGIs (0-15),
+     * but the old code was disabling ALL interrupts including PPIs (16-31).
+     * This prevented the timer PPI (30) from ever being enabled.
+     *
+     * Fix: Only write to the SGI bits (0-15), leaving PPI bits (16-31) alone.
+     * PPIs will be enabled later by HalEnableSystemInterrupt when needed.
+     */
+    *HalpMmio(SgiBase, GICR_ICENABLER0) = 0x0000FFFF; /* Disable only SGIs (0-15) */
+
+    /* Memory barrier after redistributor configuration */
+    __asm__ __volatile__("dsb sy" ::: "memory");
+
+    /* Verify final state */
+    ULONG IsEnabler = *HalpMmio(SgiBase, GICR_ISENABLER0);
+    DPRINT1("[CYCLE35][GICR] Final ISENABLER0=0x%08lx (SGIs disabled, PPIs ready for enable)\n", IsEnabler);
+    DPRINT1("[arm64][GICR] Redistributor initialization complete for CPU %lu\n", Cpu);
 }
 
 static ULONG HalpArm64ActiveIntId[MAXIMUM_PROCESSORS];
@@ -3235,6 +3363,11 @@ FORCEINLINE VOID HalpWriteIccPmr(unsigned int v)
     __asm__ __volatile__("msr icc_pmr_el1, %0; isb" :: "r"((ULONGLONG)v) : "memory");
 }
 
+FORCEINLINE unsigned int HalpReadIccPmr(void)
+{
+    ULONGLONG v; __asm__ __volatile__("mrs %0, icc_pmr_el1" : "=r"(v)); return (unsigned int)v;
+}
+
 FORCEINLINE VOID HalpWriteIccBpr1(unsigned int v)
 {
     __asm__ __volatile__("msr icc_bpr1_el1, %0; isb" :: "r"((ULONGLONG)v) : "memory");
@@ -3243,6 +3376,11 @@ FORCEINLINE VOID HalpWriteIccBpr1(unsigned int v)
 FORCEINLINE VOID HalpWriteIccIgrpen1(unsigned int v)
 {
     __asm__ __volatile__("msr icc_igrpen1_el1, %0; isb" :: "r"((ULONGLONG)v) : "memory");
+}
+
+FORCEINLINE unsigned int HalpReadIccIgrpen1(void)
+{
+    ULONGLONG v; __asm__ __volatile__("mrs %0, icc_igrpen1_el1" : "=r"(v)); return (unsigned int)v;
 }
 
 FORCEINLINE VOID HalpWriteIccSgi1r(ULONGLONG v)
@@ -3968,9 +4106,74 @@ HalInitSystem(
             }
             DPRINT1("[arm64][HAL] Using %s CPU interface\n",
                     HalpGicUseSysRegs ? "GICv3 system-register" : "GICv2 legacy (GICC)");
+
+            /*
+             * [CYCLE37] Phase 1: Enable GIC CPU interface Group 1 delivery
+             *
+             * Now that MM initialization is complete and the system is stable,
+             * we can safely enable ICC_IGRPEN1_EL1 to allow Group 1 interrupts
+             * (including the timer PPI) to be delivered to the CPU.
+             *
+             * This was kept disabled in Phase 0 to prevent spurious interrupts
+             * from causing crashes during early MM initialization.
+             *
+             * CRITICAL: We must raise IRQL to HIGH_LEVEL before enabling ICC_IGRPEN1_EL1
+             * to prevent interrupts from being delivered while we're in the middle of
+             * the enable sequence. At PASSIVE_LEVEL, DAIF.I=0 so IRQs are unmasked.
+             * If a spurious interrupt arrives during the ICC write, it can corrupt
+             * the return address and cause a crash.
+             */
+            if (HalpGicUseSysRegs)
+            {
+                KIRQL OldIrql;
+                ULONG Igrpen1;
+
+                DPRINT1("[CYCLE37] HalInitSystem Phase1: Raising IRQL before enabling ICC_IGRPEN1_EL1...\n");
+                OldIrql = KfRaiseIrql(HIGH_LEVEL);
+
+                DPRINT1("[CYCLE37] HalInitSystem Phase1: Enabling ICC_IGRPEN1_EL1 (IRQL=%u->%u)...\n",
+                        OldIrql, KeGetCurrentIrql());
+                HalpWriteIccIgrpen1(1); /* Enable Group1 interrupt delivery */
+
+                /* Barrier to ensure the enable takes effect */
+                __asm__ __volatile__("dsb sy" ::: "memory");
+                __asm__ __volatile__("isb" ::: "memory");
+
+                /* Verify it was enabled */
+                Igrpen1 = HalpReadIccIgrpen1();
+                DPRINT1("[CYCLE37] HalInitSystem Phase1: ICC_IGRPEN1_EL1=0x%x (interrupts now ENABLED)\n", Igrpen1);
+
+                /* Lower IRQL - interrupts can now be delivered */
+                KfLowerIrql(OldIrql);
+                DPRINT1("[CYCLE37] HalInitSystem Phase1: Lowered IRQL from %u to %u, interrupts ACTIVE\n",
+                        HIGH_LEVEL, KeGetCurrentIrql());
+            }
+            else
+            {
+                /*
+                 * For GICv2 legacy interface, GICC_CTLR was already enabled
+                 * in Phase 0 (EnableGrp0=1). No additional enablement needed.
+                 */
+                DPRINT1("[CYCLE37] HalInitSystem Phase1: GICv2 legacy CPU IF already enabled\n");
+            }
         }
         return TRUE;
     }
+
+    /*
+     * NOTE: KiHalInitialized flag is now set by the kernel (ex/init.c) after
+     * HalInitSystem(0) returns, not by the HAL. This eliminates circular
+     * import dependencies (HAL importing kernel, kernel importing HAL).
+     *
+     * Boot sequence:
+     *   1. Kernel entry, PE loader resolves HAL imports
+     *   2. Early kernel init - KiHalInitialized = FALSE (binary DAIF masking)
+     *   3. HalInitSystem(0) called and completes
+     *   4. Kernel sets KiHalInitialized = TRUE in Phase1InitializationDiscard
+     *   5. GIC priority masking becomes active for IRQL transitions
+     *
+     * The HAL no longer needs to call back into the kernel to enable GIC support.
+     */
 
     DPRINT1("[arm64][HAL] HalInitSystem: phase0 begin\n");
 
@@ -4077,10 +4280,13 @@ HalInitSystem(
 
     DPRINT1("[arm64][HAL] HalInitSystem: GICD groups/disable done\n");
 
-    /* Set priorities to medium (0xA0) */
+    /*
+     * [CYCLE36] Set priorities to 0x00 (highest) for all SPIs.
+     * This matches the PPI priority fix and ensures interrupts pass the PMR mask.
+     */
     for (i = 32; i < lines; i += 4)
     {
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IPRIORITYR + (i & ~3)) = 0xA0A0A0A0;
+        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IPRIORITYR + (i & ~3)) = 0x00000000;
     }
 
     if (HalpGicUseSysRegs)
@@ -4138,10 +4344,13 @@ HalInitSystem(
          */
         *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IGROUPR + 0) = 0x00000000; /* G0 */
 
-        /* Set SGI/PPI priorities to medium (0xA0) */
+        /*
+         * [CYCLE36] Set SGI/PPI priorities to 0x00 (highest).
+         * Matches the GICv3 fix for priority masking.
+         */
         for (ULONG i = 0; i < 32; i += 4)
         {
-            *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IPRIORITYR + i) = 0xA0A0A0A0;
+            *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IPRIORITYR + i) = 0x00000000;
         }
 
         /*
@@ -4172,15 +4381,27 @@ HalInitSystem(
      * GICD_CTLR bits:
      *   Bit 0: EnableGrp0 - Group 0 interrupts
      *   Bit 1: EnableGrp1 - Group 1 (non-secure) interrupts
+     *   Bit 4: ARE_NS - Affinity Routing Enable (GICv3 only)
      *
      * For GIC-v2 on QEMU with Apple HVF, enabling Group 1 (bit 1) causes a hang.
      * This appears to be a QEMU HVF GIC-v2 emulation bug. As a workaround, we
      * configure all interrupts as Group 0 and only enable Group 0 here.
      *
-     * For GIC-v3, we use the normal Group 1 configuration via system registers,
-     * which is handled separately in HalpInitGicRedistributor.
+     * For GIC-v3, we MUST enable BOTH Group 0 and Group 1 because:
+     *   - SPIs are configured as Group 1 (GICD_IGROUPR)
+     *   - PPIs are configured as Group 1 in redistributor (GICR_IGROUPR0)
+     *   - ICC_IGRPEN1_EL1 is enabled for Group 1 interrupt delivery
+     * [CYCLE34] Fix: Enable Group 1 for GICv3 to allow PPI timer delivery
      */
-    *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_CTLR) = 0x1; /* EnableGrp0 only */
+    if (HalpGicUseSysRegs)
+    {
+        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_CTLR) = 0x13; /* EnableGrp0 | EnableGrp1NS | ARE_NS */
+        DPRINT1("[CYCLE34] GICD_CTLR set to 0x13 (Group0+Group1+ARE for GICv3)\n");
+    }
+    else
+    {
+        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_CTLR) = 0x1; /* EnableGrp0 only for GICv2 */
+    }
 
     /* Barrier to ensure GICD enable completes before CPU interface configuration */
     __asm__ __volatile__("dsb sy" ::: "memory");
@@ -4195,9 +4416,42 @@ HalInitSystem(
     /* CPU interface: system registers (v3+) or legacy GICC (v2) */
     if (HalpGicUseSysRegs)
     {
+        ULONG Sre, Pmr;
+
+        /* [CYCLE37] Enable system register access and configure priority mask */
+        Sre = HalpReadIccSre();
+        Sre |= 0x1; /* SRE bit */
+        HalpWriteIccSre(Sre);
+        Sre = HalpReadIccSre();
+
         HalpWriteIccPmr(0xFF); /* allow all priorities */
         HalpWriteIccBpr1(0);
-        HalpWriteIccIgrpen1(1); /* enable Group1 */
+
+        /*
+         * [CYCLE37] DO NOT enable ICC_IGRPEN1_EL1 in Phase 0!
+         *
+         * CRITICAL: We must keep ICC_IGRPEN1_EL1=0 during Phase 0 to prevent
+         * spurious interrupts from being delivered during early MM initialization.
+         *
+         * Even though IRQL=HIGH_LEVEL masks IRQs via DAIF.I=1, there are brief
+         * windows during IRQL transitions where interrupts can be delivered.
+         * If a spurious interrupt (IntId=1023) arrives during MmArmInitSystem
+         * Phase 0, the interrupt handler may dereference NULL pointers or access
+         * uninitialized structures, causing crashes.
+         *
+         * The timer is already configured but won't fire yet (ISTATUS=0), so
+         * spurious IntId=1023 is expected. By keeping IGRPEN1=0, we prevent
+         * these spurious interrupts from reaching the CPU until the system is
+         * fully initialized.
+         *
+         * ICC_IGRPEN1_EL1 will be enabled in Phase 1 after MM initialization.
+         */
+        HalpWriteIccIgrpen1(0); /* KEEP DISABLED in Phase 0 */
+
+        /* [CYCLE37] Read back and verify */
+        Pmr = HalpReadIccPmr();
+        DPRINT1("[CYCLE37] HalInitSystem Phase0: GICv3 CPU IF: SRE=0x%x PMR=0x%x IGRPEN1=DISABLED\n", Sre, Pmr);
+        DPRINT1("[CYCLE37] ICC_IGRPEN1_EL1 will be enabled in Phase 1 after MM init\n");
     }
     else
     {
@@ -4841,10 +5095,29 @@ HalEnableSystemInterrupt(
     /* Calculate GIC priority from IRQL */
     priority = HalpIrqlToGicPriority(Irql);
 
+    HalArm64RawPuts("[CYCLE32] HalEnableSystemInterrupt: Entry\n");
+
     if (HalpGicUseSysRegs && Vector < 32)
     {
         /* PPI (16-31): use Redistributor registers */
-        ULONG_PTR SgiBase = HalpGicrSgiBase(KeGetCurrentProcessorNumber());
+        ULONG Cpu = KeGetCurrentProcessorNumber();
+        ULONG_PTR RdBase = HalpGicrBase(Cpu);
+        ULONG_PTR SgiBase = HalpGicrSgiBase(Cpu);
+        ULONG IsEnablerBefore, IsEnablerAfter;
+
+        HalArm64RawPuts("[CYCLE32] HalEnableSystemInterrupt: PPI path\n");
+        DPRINT1("[arm64][PPI] Enabling PPI %lu on CPU %lu\n", Vector, Cpu);
+        DPRINT1("[arm64][PPI]   GICR_Base=0x%p SGI_Base=0x%p\n", (PVOID)RdBase, (PVOID)SgiBase);
+
+        if (SgiBase == 0)
+        {
+            DPRINT1("[arm64][PPI] ERROR: SgiBase is NULL for CPU %lu!\n", Cpu);
+            return FALSE;
+        }
+
+        /* Read current enable state */
+        IsEnablerBefore = *HalpMmio(SgiBase, GICR_ISENABLER0);
+        DPRINT1("[arm64][PPI]   ISENABLER0 before: 0x%08lx\n", IsEnablerBefore);
 
         /* Set priority for this interrupt */
         prioReg = GICR_IPRIORITYR + (Vector & ~3);
@@ -4854,12 +5127,42 @@ HalEnableSystemInterrupt(
         prioVal |= ((ULONG)priority << prioShift);
         *HalpMmio(SgiBase, prioReg) = prioVal;
 
+        /* Memory barrier after priority write */
+        __asm__ __volatile__("dsb sy" ::: "memory");
+
+        DPRINT1("[arm64][PPI]   Priority reg offset=0x%lx shift=%lu value=0x%02X\n",
+                prioReg, prioShift, priority);
+
         /* Enable the interrupt */
         *HalpMmio(SgiBase, GICR_ISENABLER0) = (1u << bit);
+
+        /* Memory barrier after enable */
+        __asm__ __volatile__("dsb sy" ::: "memory");
+
+        /* Verify it was enabled */
+        IsEnablerAfter = *HalpMmio(SgiBase, GICR_ISENABLER0);
+        DPRINT1("[arm64][PPI]   ISENABLER0 after: 0x%08lx (bit %lu = %lu)\n",
+                IsEnablerAfter, bit, (IsEnablerAfter >> bit) & 1);
+
+        if (!(IsEnablerAfter & (1u << bit)))
+        {
+            DPRINT1("[arm64][PPI] WARNING: PPI %lu did not enable! Retrying...\n", Vector);
+            /* Retry the enable */
+            *HalpMmio(SgiBase, GICR_ISENABLER0) = (1u << bit);
+            __asm__ __volatile__("dsb sy" ::: "memory");
+            IsEnablerAfter = *HalpMmio(SgiBase, GICR_ISENABLER0);
+            DPRINT1("[arm64][PPI]   ISENABLER0 after retry: 0x%08lx\n", IsEnablerAfter);
+        }
     }
     else
     {
         /* SPI (32+): use Distributor registers */
+        ULONG IsEnablerBefore, IsEnablerAfter;
+
+        DPRINT("[arm64][SPI] Enabling SPI %lu\n", Vector);
+
+        /* Read current enable state */
+        IsEnablerBefore = *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISENABLER + reg * 4);
 
         /* Set priority for this interrupt */
         prioReg = GICD_IPRIORITYR + (Vector & ~3);
@@ -4869,12 +5172,23 @@ HalEnableSystemInterrupt(
         prioVal |= ((ULONG)priority << prioShift);
         *HalpMmio((ULONG_PTR)HalpGicdBase, prioReg) = prioVal;
 
+        /* Memory barrier after priority write */
+        __asm__ __volatile__("dsb sy" ::: "memory");
+
         /* Enable the interrupt */
         *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISENABLER + reg * 4) = (1u << bit);
+
+        /* Memory barrier after enable */
+        __asm__ __volatile__("dsb sy" ::: "memory");
+
+        /* Verify it was enabled */
+        IsEnablerAfter = *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISENABLER + reg * 4);
+        DPRINT("[arm64][SPI]   ISENABLER before: 0x%08lx after: 0x%08lx (bit %lu = %lu)\n",
+               IsEnablerBefore, IsEnablerAfter, bit, (IsEnablerAfter >> bit) & 1);
     }
 
-    DPRINT("[arm64] HalEnableSystemInterrupt: Vector=%lu IRQL=%u GICPriority=0x%02X\n",
-           Vector, Irql, priority);
+    DPRINT1("[arm64] HalEnableSystemInterrupt: Vector=%lu IRQL=%u GICPriority=0x%02X COMPLETE\n",
+            Vector, Irql, priority);
 
     return TRUE;
 }
@@ -5896,26 +6210,254 @@ HalGetInterruptVector(
     return Vector;
 }
 
+/* [CYCLE36] Forward declaration */
+static VOID NTAPI HalDumpGicStateOnSpurious(ULONG IntId);
+
 ULONG
 FASTCALL
 HalGetInterruptSource(VOID)
 {
-    /*
-     * NOTE: Do NOT use DPRINT1 or any debug print in this function!
-     * This is called from ISR context and the print subsystem uses spinlocks.
-     * We can deadlock if this is called while holding the debug print lock.
-     */
+    ULONG IntId;
+    static ULONG SpuriousCount = 0;
+
     if (HalpGicUseSysRegs)
     {
-        return HalpReadIccIar1();
+        IntId = HalpReadIccIar1();
     }
     else
     {
         if (HalpGiccBase == 0)
             return 0;
 
-        return *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_IAR) & 0x3FFu;
+        IntId = *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_IAR) & 0x3FFu;
     }
+
+    /*
+     * [CYCLE38] DISABLED: Spurious interrupt diagnostics.
+     * The DPRINT1 calls in HalDumpGicStateOnSpurious may be causing stack
+     * overflow or register corruption during nested interrupt handling.
+     * Disable to test if spurious interrupts work without diagnostics.
+     */
+    #if 0
+    if ((IntId >= 1020) && (SpuriousCount == 0))
+    {
+        SpuriousCount++;
+        HalDumpGicStateOnSpurious(IntId);
+    }
+    #endif
+
+    return IntId;
+}
+
+/*
+ * [CYCLE36] HalDumpGicStateOnSpurious - Comprehensive GIC diagnostics for spurious interrupts
+ */
+static VOID
+NTAPI
+HalDumpGicStateOnSpurious(ULONG IntId)
+{
+    if (!HalpGicUseSysRegs)
+        return; /* Only for GICv3 */
+
+    /* Read all relevant CPU interface registers */
+    ULONG Pmr = HalpReadIccPmr();
+    ULONG Igrpen1 = HalpReadIccIgrpen1();
+    ULONG Sre = HalpReadIccSre();
+    ULONGLONG Ctlr;
+    __asm__ __volatile__("mrs %0, icc_ctlr_el1" : "=r"(Ctlr));
+
+    /* Read redistributor state for PPI 30 (timer) */
+    ULONG_PTR SgiBase = HalpGicrSgiBase(0);
+    ULONG IsEnabler = *HalpMmio(SgiBase, GICR_ISENABLER0);
+    ULONG IsPendr = *HalpMmio(SgiBase, GICR_ISPENDR0);
+    ULONG IsActiveR = *HalpMmio(SgiBase, GICR_ISACTIVER0);
+    ULONG IGroupR = *HalpMmio(SgiBase, GICR_IGROUPR0);
+    ULONG IGroupModR = *HalpMmio(SgiBase, GICR_IGRPMODR0);
+
+    /* Read PPI 30 priority (offset 30*1 = byte 30, in word 28-31) */
+    ULONG PriReg = *HalpMmio(SgiBase, GICR_IPRIORITYR + 28);
+    ULONG Pri30 = (PriReg >> ((30 % 4) * 8)) & 0xFF;
+
+    /* Read ICFGR1 to check trigger mode for PPI 30 */
+    ULONG Icfgr1 = *HalpMmio(SgiBase, GICR_ICFGR1);
+    ULONG TriggerBit = (Icfgr1 >> (((30 - 16) % 16) * 2 + 1)) & 1;
+
+    /* Read timer state */
+    ULONGLONG CntpCtl, CntpTval;
+    __asm__ __volatile__("mrs %0, cntp_ctl_el0" : "=r"(CntpCtl));
+    __asm__ __volatile__("mrs %0, cntp_tval_el0" : "=r"(CntpTval));
+
+    DPRINT1("[CYCLE36] ===== SPURIOUS INTERRUPT %lu DIAGNOSTICS =====\n", IntId);
+    DPRINT1("[CYCLE36] CPU Interface: PMR=0x%x IGRPEN1=%u SRE=0x%x CTLR=0x%llx\n",
+            Pmr, Igrpen1, Sre, Ctlr);
+    DPRINT1("[CYCLE36] GICR PPI state:\n");
+    DPRINT1("[CYCLE36]   ISENABLER0 =0x%08lx (PPI30=%d)\n", IsEnabler, (IsEnabler >> 30) & 1);
+    DPRINT1("[CYCLE36]   ISPENDR0   =0x%08lx (PPI30=%d)\n", IsPendr, (IsPendr >> 30) & 1);
+    DPRINT1("[CYCLE36]   ISACTIVER0 =0x%08lx (PPI30=%d)\n", IsActiveR, (IsActiveR >> 30) & 1);
+    DPRINT1("[CYCLE36]   IGROUPR0   =0x%08lx (PPI30=%d)\n", IGroupR, (IGroupR >> 30) & 1);
+    DPRINT1("[CYCLE36]   IGRPMODR0  =0x%08lx (PPI30=%d) - 0=NonSecure, 1=Secure\n", IGroupModR, (IGroupModR >> 30) & 1);
+    DPRINT1("[CYCLE36]   PPI30 Group=%s\n",
+            ((IGroupR >> 30) & 1) ?
+                (((IGroupModR >> 30) & 1) ? "Reserved" : "Group1-NonSecure") :
+                (((IGroupModR >> 30) & 1) ? "Group1-Secure" : "Group0"));
+    DPRINT1("[CYCLE36]   PPI30 Priority=0x%02lx (want < PMR=0x%x to pass)\n", Pri30, Pmr);
+    DPRINT1("[CYCLE36]   PPI30 Trigger=%s\n", TriggerBit ? "EDGE" : "LEVEL");
+    DPRINT1("[CYCLE36] Timer: CNTP_CTL=0x%llx (EN=%d IMASK=%d ISTATUS=%d) TVAL=0x%llx\n",
+            CntpCtl, (int)(CntpCtl & 1), (int)((CntpCtl >> 1) & 1),
+            (int)((CntpCtl >> 2) & 1), CntpTval);
+    DPRINT1("[CYCLE36] =========================================\n");
+}
+
+/*
+ * HalSetGicPriorityMask - Set GIC interrupt priority mask for IRQL-based filtering
+ *
+ * CRITICAL GIC SEMANTICS (CORRECTED):
+ * ====================================
+ * The GIC Priority Mask Register (ICC_PMR_EL1 / GICC_PMR) filters interrupts based
+ * on their assigned priority. The GIC signals an interrupt if and only if:
+ *
+ *   interrupt_priority < PMR
+ *
+ * In other words, PMR is a THRESHOLD:
+ *   - Lower PMR value = MORE RESTRICTIVE (blocks more interrupts)
+ *   - Higher PMR value = MORE PERMISSIVE (allows more interrupts)
+ *
+ * GIC Priority Assignment (lower numeric value = higher urgency):
+ *   0x10 = IPI_LEVEL (14) - Inter-processor interrupts
+ *   0x20 = CLOCK_LEVEL (13) - Timer/scheduler tick
+ *   0x30 = DEVICE_LEVEL (12) - Highest-priority device
+ *   0x40 = DEVICE_LEVEL (11)
+ *   ...
+ *   0xC0 = DEVICE_LEVEL (3) - Lowest-priority device
+ *
+ * Windows IRQL Semantics (higher IRQL = more restrictive):
+ *   IRQL 0-2 (PASSIVE/DISPATCH): Allow all interrupts
+ *   IRQL 3-12 (DEVICE): Block this device level and below, allow higher-priority devices + timer + IPI
+ *   IRQL 13 (CLOCK): Block all devices, allow IPI only
+ *   IRQL 14 (IPI): Block everything except "NMI-like" events
+ *   IRQL 15 (HIGH): Block everything (DAIF.I=1 + PMR=0x00)
+ *
+ * CORRECT PMR MAPPING TABLE:
+ * ==========================
+ * IRQL | Windows Semantics                  | Allowed Priorities | PMR Value
+ * -----|------------------------------------|--------------------|----------
+ *  0-2 | Allow all interrupts               | 0x10-0xC0          | 0xFF
+ *  3   | Allow devices 4-12, timer, IPI     | 0x10-0xB0          | 0xC0
+ *  4   | Allow devices 5-12, timer, IPI     | 0x10-0xA0          | 0xB0
+ *  5   | Allow devices 6-12, timer, IPI     | 0x10-0x90          | 0xA0
+ *  6   | Allow devices 7-12, timer, IPI     | 0x10-0x80          | 0x90
+ *  7   | Allow devices 8-12, timer, IPI     | 0x10-0x70          | 0x80
+ *  8   | Allow devices 9-12, timer, IPI     | 0x10-0x60          | 0x70
+ *  9   | Allow devices 10-12, timer, IPI    | 0x10-0x50          | 0x60
+ *  10  | Allow devices 11-12, timer, IPI    | 0x10-0x40          | 0x50
+ *  11  | Allow device 12, timer, IPI        | 0x10-0x30          | 0x40
+ *  12  | Allow timer, IPI only              | 0x10-0x20          | 0x30
+ *  13  | Allow IPI only                     | 0x10               | 0x20
+ *  14  | Allow "NMI" only (priorities < 10) | 0x00-0x0F          | 0x10
+ *  15  | Block everything (DAIF.I=1)        | none               | 0x00
+ *
+ * Example: At IRQL=13 (CLOCK_LEVEL), we want to allow IPI (priority 0x10) but
+ * block timer (priority 0x20) and all devices (priorities 0x30-0xC0).
+ * So we set PMR=0x20, which allows only priorities < 0x20, i.e., 0x00-0x1F.
+ *
+ * This FIXES the previous implementation which had the semantics backwards and
+ * would cause deadlocks when waiting for timer interrupts at DISPATCH_LEVEL.
+ */
+VOID
+FASTCALL
+HalSetGicPriorityMask(
+    _In_ KIRQL Irql)
+{
+    UCHAR Priority;
+
+    /*
+     * Map IRQL to PMR threshold value.
+     * Remember: interrupts are signaled if their priority is LESS THAN PMR.
+     * Higher IRQL → lower PMR (more restrictive).
+     */
+    if (Irql >= HIGH_LEVEL)
+    {
+        /* HIGH_LEVEL (15): Block everything. PMR=0x00 blocks all (no priority < 0). */
+        Priority = 0x00;
+    }
+    else if (Irql >= IPI_LEVEL)
+    {
+        /* IPI_LEVEL (14): Allow only priorities < 0x10 (i.e., 0x00-0x0F, "NMI-like"). */
+        Priority = 0x10;
+    }
+    else if (Irql >= CLOCK_LEVEL)
+    {
+        /* CLOCK_LEVEL (13): Allow only IPI (priority 0x10 < 0x20). Block timer. */
+        Priority = 0x20;
+    }
+    else if (Irql >= DISPATCH_LEVEL + 1)
+    {
+        /*
+         * DEVICE_LEVEL (3-12): Block devices at this IRQL and below, allow higher devices + timer + IPI.
+         *
+         * IRQL 3  → device priority 0xC0 → set PMR=0xC0 (allow 0x10-0xBF, block 0xC0+)
+         * IRQL 4  → device priority 0xB0 → set PMR=0xB0 (allow 0x10-0xAF, block 0xB0+)
+         * ...
+         * IRQL 12 → device priority 0x30 → set PMR=0x30 (allow 0x10-0x2F, block 0x30+)
+         *
+         * Formula: IRQL 3+N → PMR = 0xC0 - (N * 0x10)
+         */
+        ULONG DeviceOffset = Irql - (DISPATCH_LEVEL + 1);
+        if (DeviceOffset > 9)
+            DeviceOffset = 9;
+        Priority = (UCHAR)(0xC0 - (DeviceOffset * 0x10));
+    }
+    else
+    {
+        /* PASSIVE_LEVEL/DISPATCH_LEVEL (0-2): Allow all interrupts. PMR=0xFF (most permissive). */
+        Priority = 0xFF;
+    }
+
+    /*
+     * Write the priority mask to the GIC.
+     * For GICv3, we use ICC_PMR_EL1 system register.
+     * For GICv2, we use GICC_PMR MMIO register.
+     */
+    if (HalpGicUseSysRegs)
+    {
+        HalpWriteIccPmr(Priority);
+    }
+    else
+    {
+        if (HalpGiccBase != 0)
+        {
+            *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_PMR) = Priority;
+            /* Memory barrier to ensure PMR write completes */
+            __asm__ __volatile__("dsb sy" ::: "memory");
+        }
+    }
+}
+
+/*
+ * HalGetGicPriorityMask - Read current GIC interrupt priority mask
+ *
+ * Returns the current ICC_PMR_EL1/GICC_PMR value for debugging.
+ *
+ * IMPORTANT: Return type is ULONG to match hal.spec declaration and
+ * ARM64 fastcall ABI. The internal PMR value is a byte, but we cast
+ * to ULONG for ABI compliance (fastcall returns in W0/X0 register).
+ */
+ULONG
+FASTCALL
+HalGetGicPriorityMask(VOID)
+{
+    if (HalpGicUseSysRegs)
+    {
+        return (ULONG)HalpReadIccPmr();
+    }
+    else
+    {
+        if (HalpGiccBase != 0)
+        {
+            return (ULONG)*HalpMmio((ULONG_PTR)HalpGiccBase, GICC_PMR);
+        }
+    }
+    return 0xFF;
 }
 
 VOID

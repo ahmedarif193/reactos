@@ -743,6 +743,10 @@
 @ fastcall -arch=i386 KiEoiHelper(ptr) #ReactOS-Specific
 @ fastcall -arch=i386,arm KiAcquireSpinLock(ptr)
 @ extern KiBugCheckData
+@ extern -arch=arm64 KiTimerIsrCallCount
+@ extern -arch=arm64 KiInitInterruptsCallCount
+@ extern -arch=arm64 KiTimerStartedFlag
+@ extern -arch=arm64 KiTimerCtlReadback
 @ stdcall KiCheckForKernelApcDelivery()
 @ fastcall -arch=i386 KiCheckForSListAddress(ptr)
 @ stdcall -arch=i386 KiCoprocessorError()

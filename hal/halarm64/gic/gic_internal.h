@@ -1072,6 +1072,24 @@ HalpWriteIccIgrpen1(
 }
 
 FORCEINLINE
+unsigned int
+HalpReadIccPmr(VOID)
+{
+    ULONGLONG v;
+    __asm__ __volatile__("mrs %0, icc_pmr_el1" : "=r"(v));
+    return (unsigned int)v;
+}
+
+FORCEINLINE
+unsigned int
+HalpReadIccIgrpen1(VOID)
+{
+    ULONGLONG v;
+    __asm__ __volatile__("mrs %0, icc_igrpen1_el1" : "=r"(v));
+    return (unsigned int)v;
+}
+
+FORCEINLINE
 VOID
 HalpWriteIccSgi1r(
     _In_ ULONGLONG v)

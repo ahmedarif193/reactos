@@ -296,7 +296,8 @@ MiInsertInSystemSpace(IN PMMSESSION Session,
                       IN PCONTROL_AREA ControlArea)
 {
     PVOID Base;
-    ULONG Entry, Hash, i, HashSize;
+    ULONG_PTR Entry;  /* ARM64 FIX: Must be ULONG_PTR, not ULONG, to avoid truncating 64-bit addresses in hash table */
+    ULONG Hash, i, HashSize;
     PMMVIEW OldTable;
     PAGED_CODE();
 
@@ -379,8 +380,21 @@ MiInsertInSystemSpace(IN PMMSESSION Session,
     /* Compute the base address */
     Base = (PVOID)((ULONG_PTR)Session->SystemSpaceViewStart + (i * MI_SYSTEM_VIEW_BUCKET_SIZE));
 
-    /* Get the hash entry for this allocation */
-    Entry = ((ULONG_PTR)Base & ~(MI_SYSTEM_VIEW_BUCKET_SIZE - 1)) + Buckets;
+    /*
+     * ARM64 FIX: Compute hash entry for 64-bit addresses
+     *
+     * The mask ~(MI_SYSTEM_VIEW_BUCKET_SIZE - 1) must be cast to ULONG_PTR before
+     * applying bitwise NOT. Otherwise, on 64-bit platforms, the 32-bit constant
+     * 0xFFFF is negated to 0xFFFF0000 (32-bit), which zero-extends to
+     * 0x00000000FFFF0000 (64-bit), truncating the upper 32 bits of the address.
+     *
+     * Correct:   Entry = (0xFFFFF97FBA030000 & 0xFFFFFFFFFFFF0000) + 4 = 0xFFFFF97FBA030004
+     * Incorrect: Entry = (0xFFFFF97FBA030000 & 0x00000000FFFF0000) + 4 = 0x00000000BA030004
+     *
+     * This truncation caused hash mismatches between insert and remove operations,
+     * resulting in BUGCHECK 0xD7 (DRIVER_UNMAPPING_INVALID_VIEW).
+     */
+    Entry = ((ULONG_PTR)Base & ~((ULONG_PTR)(MI_SYSTEM_VIEW_BUCKET_SIZE - 1))) + Buckets;
     Hash = (Entry >> 16) % Session->SystemSpaceHashKey;
 
     /* Loop hash entries until a free one is found */
@@ -2316,7 +2330,7 @@ MiRemoveMappedPtes(IN PVOID BaseAddress,
                    IN PCONTROL_AREA ControlArea,
                    IN PMMSUPPORT Ws)
 {
-    PMMPTE PointerPte, ProtoPte;//, FirstPte;
+    PMMPTE PointerPte;//, FirstPte;
     PMMPDE PointerPde, SystemMapPde;
     PMMPFN Pfn1, Pfn2;
     MMPTE PteContents;
@@ -2381,11 +2395,34 @@ MiRemoveMappedPtes(IN PVOID BaseAddress,
             /* Check if this is a prototype pointer PTE */
             if (PteContents.u.Soft.Prototype == 1)
             {
-                /* Get the prototype PTE */
-                ProtoPte = MiProtoPteToPte(&PteContents);
+                /*
+                 * ARM64 FIX: Handle prototype PTEs that were demand-paged.
+                 *
+                 * For SEC_RESERVE sections, prototype PTEs are initialized with protection
+                 * bits (e.g., 0x8 for PAGE_READWRITE). When a page is demand-faulted,
+                 * MiResolveDemandZeroFault allocates a physical page and sets the prototype
+                 * PTE to valid state (Hard.Valid == 1).
+                 *
+                 * During unmapping, we can encounter two scenarios:
+                 * 1. Prototype PTE is still in demand-zero state (only protection bits) -
+                 *    the virtual address was never accessed. Nothing to cleanup.
+                 * 2. Prototype PTE is valid (has a physical page) - the virtual address
+                 *    was faulted in, but NOT through this particular virtual PTE (the
+                 *    virtual PTE is still a prototype pointer, meaning this specific
+                 *    view never faulted the page, but another view did).
+                 *
+                 * The old code asserted that prototype PTEs should be zero, which is
+                 * incorrect for SEC_RESERVE (which has protection bits) and also fails
+                 * when the prototype PTE was faulted by another view.
+                 *
+                 * Windows NT behavior: When unmapping a view with prototype pointer PTEs,
+                 * simply erase the virtual PTE. The prototype PTE cleanup happens when
+                 * the segment is deleted (in MiSegmentDelete), not when individual views
+                 * are unmapped. This is because prototype PTEs are shared across all views.
+                 */
 
-                /* We don't support anything else atm */
-                ASSERT(ProtoPte->u.Long == 0);
+                /* The prototype PTE is shared - don't try to clean it up here */
+                /* MiSegmentDelete() will handle cleanup when the segment is destroyed */
             }
         }
 

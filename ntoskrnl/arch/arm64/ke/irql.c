@@ -35,11 +35,34 @@
  */
 
 #include <ntoskrnl.h>
-#define NDEBUG
+//#define NDEBUG  /* Temporarily disabled for timer debugging */
 #include <debug.h>
 
 extern PKIPCR KeArm64CurrentPcr;
 extern KIRQL KeArm64CurrentIrql;
+
+/*
+ * KiHalInitialized - Flag tracking whether HAL.DLL has been initialized
+ *
+ * CRITICAL: This flag prevents calls to HalSetGicPriorityMask() before the HAL
+ * is loaded and its import table is resolved. During early kernel boot (before
+ * HalInitSystem), HAL imports are not yet available and calling them causes
+ * immediate crashes (jump to NULL or unresolved address).
+ *
+ * Boot sequence:
+ *   1. FreeLdr jumps to kernel entry point
+ *   2. Kernel PE loader resolves imports from HAL.DLL
+ *   3. Early kernel init (PCR setup, etc.) - KiHalInitialized = FALSE
+ *   4. HalInitSystem(0) is called and returns successfully
+ *   5. Phase1InitializationDiscard sets KiHalInitialized = TRUE (see ex/init.c)
+ *   6. GIC priority masking becomes available
+ *
+ * Until KiHalInitialized is TRUE, we use DAIF masking exclusively.
+ *
+ * IMPORTANT: This flag is set by the kernel (ex/init.c), NOT by the HAL.
+ * This avoids circular import dependencies between kernel and HAL.
+ */
+BOOLEAN KiHalInitialized = FALSE;
 
 #undef KeLowerIrql
 #undef KeRaiseIrql
@@ -79,6 +102,19 @@ KiSetCurrentIrql(
     KeArm64CurrentIrql = Irql;
 }
 
+/*
+ * KiHalInitialized flag is set by the kernel's Phase1InitializationDiscard()
+ * right after HalInitSystem(0) returns successfully. This ensures HAL exports
+ * are available before we start using GIC priority masking.
+ *
+ * Prior design (REMOVED): HAL called KeArmInitializeGicSupport() to flip this flag.
+ * This created a circular import dependency (HAL imports kernel, kernel imports HAL).
+ *
+ * New design: Kernel owns the flag and sets it after HalInitSystem(0) completes.
+ * This eliminates the circular dependency and gives the kernel explicit control
+ * over when GIC priority masking becomes active.
+ */
+
 ULONG
 NTAPI
 KeGetCurrentProcessorNumber(VOID)
@@ -106,20 +142,57 @@ KeGetCurrentProcessorNumberEx(
 }
 
 /*
- * Re-entrancy guard for HIGH_LEVEL->lower IRQL transitions.
+ * KiApplyIrqMaskForIrqlTransition - Apply ARM64 GIC priority mask for IRQL changes
  *
- * Problem: When lowering from HIGH_LEVEL, we unmask interrupts. If any code
- * called during the transition (e.g., DPC dispatch, debug prints) raises to
- * HIGH_LEVEL and then lowers again, we would re-enter the unmask path,
- * causing an interrupt storm as pending interrupts fire repeatedly.
+ * ARCHITECTURAL DESIGN:
+ * ====================
+ * ARM64 uses the GIC (Generic Interrupt Controller) priority masking to implement
+ * Windows IRQL semantics. Unlike x86 where the PIC/APIC mask individual interrupt
+ * vectors, ARM64 uses a priority threshold register (ICC_PMR_EL1) that blocks
+ * interrupts below a certain priority level.
  *
- * Solution: Use a per-CPU flag (in PRCB) to detect re-entrancy. If we're already
- * in the process of unmasking from HIGH_LEVEL, skip the unmask on nested
- * transitions. The outer transition will complete the unmask.
+ * GIC Priority Mapping (lower priority number = higher urgency):
+ *   IRQL 15 (HIGH_LEVEL)  -> GIC priority 0x00 (highest, masks all)
+ *   IRQL 14 (IPI_LEVEL)   -> GIC priority 0x10
+ *   IRQL 13 (CLOCK_LEVEL) -> GIC priority 0x20
+ *   IRQL 12-3 (DEVICE)    -> GIC priority 0x30-0xC0
+ *   IRQL 2-0 (PASSIVE/DISPATCH) -> GIC priority 0xFF (lowest, allows all)
  *
- * CRITICAL SMP FIX: The flag is now stored in the PRCB (Per-Processor Control Block)
- * instead of a global variable. This ensures each CPU has its own independent flag,
- * preventing false re-entrancy detection when multiple CPUs lower IRQL simultaneously.
+ * CRITICAL FIX FOR TIMER INTERRUPTS:
+ * ===================================
+ * The old implementation used binary DAIF masking (all IRQs on/off) which meant
+ * that raising IRQL to DISPATCH_LEVEL would mask ALL interrupts, including the
+ * timer interrupt at CLOCK_LEVEL. This caused timer interrupts to never fire,
+ * preventing waiting threads from waking up.
+ *
+ * The new implementation uses GIC priority masking, which allows high-priority
+ * interrupts (timer, IPI) to preempt low-priority code (device ISRs, DPCs).
+ *
+ * For example:
+ *   - At PASSIVE_LEVEL (IRQL=0): PMR=0xFF, all interrupts allowed
+ *   - At DISPATCH_LEVEL (IRQL=2): PMR=0xFF, all hardware interrupts still allowed
+ *   - At DEVICE_LEVEL (IRQL=5): PMR=0x80, blocks lower device interrupts, allows timer/IPI
+ *   - At CLOCK_LEVEL (IRQL=13): PMR=0x20, blocks all except IPI
+ *   - At HIGH_LEVEL (IRQL=15): PMR=0x00, blocks all interrupts (via DAIF.I)
+ *
+ * DAIF USAGE:
+ * ===========
+ * DAIF.I (bit 7 in DAIF) is only used at HIGH_LEVEL to completely disable interrupt
+ * delivery at the CPU core. At all other IRQLs, DAIF.I is cleared and the GIC
+ * priority mask controls which interrupts are delivered.
+ *
+ * This matches Windows 11 ARM64 behavior where:
+ *   - HIGH_LEVEL: DAIF.I=1 (CPU-level masking, no interrupts at all)
+ *   - All other levels: DAIF.I=0 (CPU accepts interrupts), ICC_PMR_EL1 controls filtering
+ *
+ * MEMORY ORDERING:
+ * ================
+ * We use DSB SY barriers to ensure:
+ *   1. IRQL value writes are visible before ICC_PMR_EL1 writes
+ *   2. ICC_PMR_EL1 writes complete before any subsequent code executes
+ *
+ * This prevents race conditions where an interrupt fires before the new IRQL
+ * is visible, causing incorrect IRQL checks in the ISR.
  */
 
 VOID
@@ -127,66 +200,114 @@ KiApplyIrqMaskForIrqlTransition(
     _In_ KIRQL OldIrql,
     _In_ KIRQL NewIrql)
 {
-    if (NewIrql > OldIrql)
+    /*
+     * EARLY BOOT GUARD: Before HAL is initialized, use DAIF masking exclusively.
+     *
+     * During early kernel boot (before HalInitSystem), HAL.DLL imports are not
+     * yet resolved. Calling HalSetGicPriorityMask() at this stage would jump to
+     * an unresolved address (0 or garbage), causing an immediate crash.
+     *
+     * Until KiHalInitialized is TRUE, we use the legacy binary DAIF masking
+     * (all IRQs on/off). This is safe because:
+     *   1. During early boot, interrupts should remain masked (HIGH_LEVEL)
+     *   2. HalInitSystem(0) completes and kernel sets KiHalInitialized = TRUE
+     *   3. After that point, timer interrupts can preempt DPC/device code
+     */
+    if (!KiHalInitialized)
     {
-        if ((OldIrql < HIGH_LEVEL) && (NewIrql >= HIGH_LEVEL))
+        /* Fallback to binary DAIF masking before HAL is initialized */
+        if (NewIrql >= HIGH_LEVEL)
         {
             ARM64_MASK_ALL();
             ARM64_SYNC_BARRIER();
         }
-        else if ((OldIrql < DISPATCH_LEVEL) && (NewIrql >= DISPATCH_LEVEL))
+        else if (OldIrql >= HIGH_LEVEL && NewIrql < HIGH_LEVEL)
         {
-            ARM64_MASK_IRQ();
+            ARM64_UNMASK_ALL();
             ARM64_SYNC_BARRIER();
         }
+        /* For other transitions, do nothing (keep current DAIF state) */
+        return;
     }
-    else if (NewIrql < OldIrql)
-    {
-        if ((OldIrql >= HIGH_LEVEL) && (NewIrql < HIGH_LEVEL))
-        {
-            PKPRCB Prcb = KeGetCurrentPrcb();
 
-            /*
-             * Check for re-entrancy using the per-CPU flag in PRCB.
-             * If we're already in a HIGH_LEVEL->lower transition on THIS CPU,
-             * skip the unmask. The outer transition will handle it.
-             *
-             * This fixes the SMP bug where a global flag would cause false
-             * re-entrancy detection when multiple CPUs lower IRQL concurrently.
-             */
-            if (Prcb && InterlockedCompareExchange(&Prcb->InHighLevelTransition, 1, 0) != 0)
+    /*
+     * HAL IS INITIALIZED: Use GIC priority masking for fine-grained IRQL control.
+     *
+     * For HIGH_LEVEL transitions, we still use DAIF masking to completely
+     * disable interrupts at the CPU core. This is the most restrictive level.
+     */
+    if (NewIrql >= HIGH_LEVEL && OldIrql < HIGH_LEVEL)
+    {
+        /* Raising to HIGH_LEVEL: Mask all interrupts via DAIF */
+        ARM64_MASK_ALL();
+        ARM64_SYNC_BARRIER();
+        /* Also set GIC PMR to most restrictive for defense in depth */
+        HalSetGicPriorityMask(HIGH_LEVEL);
+        return;
+    }
+
+    if (OldIrql >= HIGH_LEVEL && NewIrql < HIGH_LEVEL)
+    {
+        PKPRCB Prcb = KeGetCurrentPrcb();
+
+        /*
+         * Lowering from HIGH_LEVEL: Unmask interrupts via DAIF and set GIC PMR.
+         *
+         * Re-entrancy guard: If we're already in a HIGH_LEVEL->lower transition,
+         * skip the unmask to prevent interrupt storms. The outer transition will
+         * complete the unmask.
+         *
+         * CRITICAL: Only the thread that successfully sets the flag (wins the
+         * CompareExchange) is responsible for clearing it. Re-entrant threads
+         * must NOT touch the flag.
+         */
+        if (Prcb)
+        {
+            LONG OldFlag = InterlockedCompareExchange(&Prcb->InHighLevelTransition, 1, 0);
+            if (OldFlag != 0)
             {
-                /* Re-entrancy detected on this CPU - skip unmask, just mask if needed */
-                if (NewIrql >= DISPATCH_LEVEL)
-                {
-                    ARM64_MASK_IRQ();
-                    ARM64_SYNC_BARRIER();
-                }
+                /* Re-entrancy detected - just update GIC PMR, don't touch DAIF or flag */
+                HalSetGicPriorityMask(NewIrql);
                 return;
             }
 
-            /* Not re-entrant - perform the full unmask sequence */
+            /* We won the race - perform full unmask sequence and clear flag */
+            HalSetGicPriorityMask(NewIrql);
+            ARM64_SYNC_BARRIER();
+            ARM64_UNMASK_ALL();  /* Clear DAIF.I to allow interrupts */
+            ARM64_SYNC_BARRIER();
+
+            /*
+             * Clear re-entrancy flag unconditionally. We MUST clear it because
+             * we're the thread that set it. No early returns between setting
+             * and clearing to prevent flag leakage.
+             */
+            InterlockedExchange(&Prcb->InHighLevelTransition, 0);
+        }
+        else
+        {
+            /*
+             * No PRCB available (very early boot). Just do the transition
+             * without re-entrancy protection. This is safe because we're
+             * single-threaded at this stage.
+             */
+            HalSetGicPriorityMask(NewIrql);
+            ARM64_SYNC_BARRIER();
             ARM64_UNMASK_ALL();
             ARM64_SYNC_BARRIER();
-
-            if (NewIrql >= DISPATCH_LEVEL)
-            {
-                ARM64_MASK_IRQ();
-                ARM64_SYNC_BARRIER();
-            }
-
-            /* Clear per-CPU re-entrancy flag */
-            if (Prcb)
-            {
-                InterlockedExchange(&Prcb->InHighLevelTransition, 0);
-            }
         }
-        else if ((OldIrql >= DISPATCH_LEVEL) && (NewIrql < DISPATCH_LEVEL))
-        {
-            ARM64_UNMASK_IRQ();
-            ARM64_SYNC_BARRIER();
-        }
+        return;
     }
+
+    /*
+     * For all other IRQL transitions (not involving HIGH_LEVEL), use GIC
+     * priority masking exclusively. DAIF.I remains cleared.
+     *
+     * This allows high-priority interrupts (timer at CLOCK_LEVEL=13) to
+     * preempt lower-priority code (device ISRs, DPCs at DISPATCH_LEVEL=2).
+     */
+    HalSetGicPriorityMask(NewIrql);
+    ARM64_SYNC_BARRIER();
 }
 
 KIRQL
@@ -311,6 +432,9 @@ KfLowerIrql(
                      Prcb->TimerRequest ||
                      Prcb->DpcData[0].DpcQueueDepth != 0))
         {
+            DPRINT1("[arm64] KfLowerIrql: Calling KiDispatchInterrupt (NewIrql=%u, OldIrql=%u, DpcReq=%u, TimerReq=%lu)\n",
+                    NewIrql, OldIrql, Prcb->DpcInterruptRequested, (ULONG)Prcb->TimerRequest);
+
             /*
              * Clear the DpcInterruptRequested flag FIRST to prevent re-delivery.
              * Note: TimerRequest is cleared by KiDispatchInterrupt itself.

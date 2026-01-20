@@ -11,7 +11,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
-#define NDEBUG
+//#define NDEBUG  /* Temporarily disabled for timer debugging */
 #include <debug.h>
 
 /* GLOBALS *******************************************************************/
@@ -161,6 +161,10 @@ KiTimerExpiration(IN PKDPC Dpc,
                 /* Check if there's any waiters */
                 if (!IsListEmpty(&Timer->Header.WaitListHead))
                 {
+#if defined(_M_ARM64)
+                    DPRINT1("[arm64] KiTimerExpiration: Timer %p expired, unwaking waiters (Type=%u)\n",
+                            Timer, Timer->Header.Type);
+#endif
                     /* Check the type of event */
                     if (Timer->Header.Type == TimerNotificationObject)
                     {
@@ -587,6 +591,10 @@ KiRetireDpcList(IN PKPRCB Prcb)
             /* It is, get the timer hand and disable timer request */
             TimerHand = Prcb->TimerHand;
             Prcb->TimerRequest = 0;
+
+#if defined(_M_ARM64)
+            DPRINT1("[arm64] KiRetireDpcList: Processing TimerRequest, Hand=%lu\n", (ULONG)TimerHand);
+#endif
 
             /* Expire timers with interrupts enabled */
             _enable();

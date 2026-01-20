@@ -98,6 +98,14 @@ PVOID ExpNlsSectionPointer;
 
 /* CMOS Timer Sanity */
 BOOLEAN ExCmosClockIsSane = TRUE;
+
+/* CYCLE 30: Timer ISR diagnostic counters (defined in arch/arm64/ke/interrupt.c) */
+#if defined(_M_ARM64) || defined(__aarch64__)
+extern ULONG KiTimerIsrCallCount;
+extern ULONG KiInitInterruptsCallCount;
+extern ULONG KiTimerStartedFlag;
+extern ULONG KiTimerCtlReadback;
+#endif
 BOOLEAN ExpRealTimeIsUniversal;
 
 /* FUNCTIONS ****************************************************************/
@@ -1339,6 +1347,22 @@ ExpInitializeExecutive(IN ULONG Cpu,
     }
     EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: after HalInitSystem");
 
+#if defined(_M_ARM64)
+    /*
+     * ARM64: Enable GIC priority masking for IRQL management.
+     *
+     * Now that HalInitSystem(0) has completed successfully, the HAL's exports
+     * (including HalSetGicPriorityMask) are fully initialized and safe to call.
+     * Setting KiHalInitialized allows the kernel's IRQL subsystem to use GIC
+     * priority masking instead of binary DAIF masking.
+     *
+     * CRITICAL: This must be set by the kernel, NOT by the HAL, to avoid
+     * circular import dependencies (HAL importing kernel exports).
+     */
+    extern BOOLEAN KiHalInitialized;
+    KiHalInitialized = TRUE;
+#endif
+
     /* Make sure interrupts are active now */
     _enable();
 
@@ -2161,6 +2185,28 @@ Phase1InitializationDiscard(IN PVOID Context)
     /* Initialize the I/O Subsystem */
     if (!IoInitSystem(LoaderBlock)) KeBugCheck(IO1_INITIALIZATION_FAILED);
     EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: after IoInitSystem");
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * CYCLE 30: Timer ISR Diagnostics
+     * Print timer state AFTER IoInitSystem when logging is fully working.
+     * These counters help diagnose why timer interrupts aren't firing:
+     * - KiInitInterruptsCallCount: Should be 1 if KeInitInterrupts was called
+     * - KiTimerStartedFlag: Should be 1 if timer was configured
+     * - KiTimerIsrCallCount: Should be >0 if timer ISR is firing
+     * - KiTimerCtlReadback: Timer control register state
+     */
+    DPRINT1("========== CYCLE 30: TIMER ISR DIAGNOSTICS ==========\n");
+    DPRINT1("[TIMER DIAG] KeInitInterrupts called: %lu\n", KiInitInterruptsCallCount);
+    DPRINT1("[TIMER DIAG] Timer started: %lu\n", KiTimerStartedFlag);
+    DPRINT1("[TIMER DIAG] Timer ISR count: %lu\n", KiTimerIsrCallCount);
+    DPRINT1("[TIMER DIAG] Timer CTL readback: 0x%lx (ENABLE=%lu, IMASK=%lu, ISTATUS=%lu)\n",
+            KiTimerCtlReadback,
+            KiTimerCtlReadback & 1,
+            (KiTimerCtlReadback >> 1) & 1,
+            (KiTimerCtlReadback >> 2) & 1);
+    DPRINT1("====================================================\n");
+#endif
 
     /* Set maximum update to 100% */
     InbvSetProgressBarSubset(0, 100);

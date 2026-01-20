@@ -6,7 +6,7 @@
  */
 
 #include <ntoskrnl.h>
-#define NDEBUG
+//#define NDEBUG  /* Temporarily disabled for timer debugging */
 #include <debug.h>
 
 struct _KPCR;
@@ -36,6 +36,16 @@ struct _KPCR;
 #endif
 
 #define ARM64_STUB() UNIMPLEMENTED_DBGBREAK()
+
+/* CYCLE31: Raw UART output for debugging - works even if DPRINT doesn't */
+#define PL011_VA 0xFFFF800009000000ULL
+static FORCEINLINE VOID KiArm64RawPuts(const char *str) {
+    volatile ULONG *uart = (volatile ULONG *)PL011_VA;
+    while (*str) {
+        while (uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}  /* Wait for TXFF */
+        uart[0] = *str++;
+    }
+}
 
 VOID
 KdpDprintf(
@@ -483,6 +493,7 @@ KiInitializeMachineType(VOID)
 
 DECLSPEC_NORETURN
 VOID
+NTAPI
 KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     PKIPCR Pcr;
@@ -492,7 +503,13 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     KAFFINITY ProcessorMask;
     ULONG ProcessorNumber;
 
+    /* CYCLE31: Use raw UART to verify this function is called */
+    KiArm64RawPuts("[CYCLE31] ***** KiInitializeSystem in kiinit.c ENTRY *****\n");
+    DPRINT1("[CYCLE30] ======== KiInitializeSystem ENTRY ========\n");
+    KiArm64RawPuts("[CYCLE31] About to call KiArm64PrepareBootPcr\n");
     KiArm64PrepareBootPcr(LoaderBlock);
+    KiArm64RawPuts("[CYCLE31] After KiArm64PrepareBootPcr\n");
+    DPRINT1("[CYCLE30] KiArm64PrepareBootPcr done\n");
 
     if (LoaderBlock == NULL)
     {
@@ -664,8 +681,24 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     KfRaiseIrql(HIGH_LEVEL);
 
+    HalDisplayString("[KiInitSys] Raised to HIGH_LEVEL\r\n");
+    KiArm64RawPuts("[CYCLE31] After raising to HIGH_LEVEL\n");
+    DPRINT1("[CYCLE31] KiInitializeSystem: ProcessorNumber=%lu, KeNumberProcessors=%lu\n", ProcessorNumber, KeNumberProcessors);
+
+    /* CYCLE31: Use HalDisplayString which always works */
+    {
+        char buf[128];
+        RtlStringCbPrintfA(buf, sizeof(buf), "[CYCLE31] ProcessorNumber=%lu KeNumberProcessors=%lu\r\n", ProcessorNumber, KeNumberProcessors);
+        HalDisplayString(buf);
+        KiArm64RawPuts(buf);
+    }
+
+    KiArm64RawPuts("[CYCLE31] About to check if CPU 0\n");
     if (ProcessorNumber == 0)
     {
+        KiArm64RawPuts("[CYCLE31] YES, CPU 0 path!\n");
+        HalDisplayString("[KiInitSys] CPU 0 path - about to call KeInitInterrupts\r\n");
+        DPRINT1("[CYCLE30] KiInitializeSystem: CPU 0 path, calling KeInitInterrupts...\n");
         /* Pre-seed core modules for KD banner parity (mirror amd64 minimal) */
         {
             PLIST_ENTRY Entry;
@@ -685,7 +718,13 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
 
         /* Initialize interrupts (arch/HAL stub), then install final vectors */
+        HalDisplayString("[KiInitSys] Calling KeInitInterrupts...\r\n");
+        KiArm64RawPuts("[CYCLE31] ***** ABOUT TO CALL KeInitInterrupts *****\n");
+        DPRINT1("[CYCLE30] About to call KeInitInterrupts\n");
         KeInitInterrupts();
+        KiArm64RawPuts("[CYCLE31] ***** KeInitInterrupts RETURNED *****\n");
+        DPRINT1("[CYCLE30] KeInitInterrupts returned\n");
+        HalDisplayString("[KiInitSys] KeInitInterrupts returned\r\n");
         /* Install final exception vectors and configure traps before KD */
         KeInitExceptions();
 
