@@ -14,6 +14,13 @@
 #include <debug.h>
 
 extern ULONG NtGlobalFlag;
+#ifdef KDBG
+BOOLEAN
+NTAPI
+KdbpGetStackLimitsOverride(
+    _Out_ PULONG_PTR LowLimit,
+    _Out_ PULONG_PTR HighLimit);
+#endif
 
 typedef struct _RTL_RANGE_ENTRY
 {
@@ -531,6 +538,10 @@ RtlpGetStackLimits(
     OUT PULONG_PTR LowLimit,
     OUT PULONG_PTR HighLimit)
 {
+#ifdef KDBG
+    if (KdbpGetStackLimitsOverride(LowLimit, HighLimit))
+        return;
+#endif
     PKTHREAD CurrentThread = KeGetCurrentThread();
     *LowLimit = (ULONG_PTR)CurrentThread->StackLimit;
 #ifdef _M_IX86

@@ -200,6 +200,7 @@ KiApplyIrqMaskForIrqlTransition(
     _In_ KIRQL OldIrql,
     _In_ KIRQL NewIrql)
 {
+
     /*
      * EARLY BOOT GUARD: Before HAL is initialized, use DAIF masking exclusively.
      *
@@ -432,9 +433,6 @@ KfLowerIrql(
                      Prcb->TimerRequest ||
                      Prcb->DpcData[0].DpcQueueDepth != 0))
         {
-            DPRINT1("[arm64] KfLowerIrql: Calling KiDispatchInterrupt (NewIrql=%u, OldIrql=%u, DpcReq=%u, TimerReq=%lu)\n",
-                    NewIrql, OldIrql, Prcb->DpcInterruptRequested, (ULONG)Prcb->TimerRequest);
-
             /*
              * Clear the DpcInterruptRequested flag FIRST to prevent re-delivery.
              * Note: TimerRequest is cleared by KiDispatchInterrupt itself.

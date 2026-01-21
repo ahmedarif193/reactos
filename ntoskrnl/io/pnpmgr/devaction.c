@@ -2328,7 +2328,7 @@ PiDevNodeStateMachine(
 #if defined(_M_ARM64)
     static ULONG CallCount = 0;
     ULONG IterationCount = 0;
-    LARGE_INTEGER StartTime, CurrentTime;
+    LARGE_INTEGER StartTime;
 
     CallCount++;
     DPRINT1("[arm64] PiDevNodeStateMachine: ENTRY #%lu RootNode=%p State=%u Path=%wZ\n",

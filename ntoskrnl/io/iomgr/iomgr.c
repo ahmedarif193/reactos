@@ -740,9 +740,7 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Load boot start drivers */
     IopInitializeBootDrivers();
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: IopInitializeBootDrivers done\n");
-#endif
+    DPRINT1("BOOT DRIVERS LOADED\n");
 
     /* Call back drivers that asked for */
     IopReinitializeBootDrivers();

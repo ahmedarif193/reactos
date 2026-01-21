@@ -16,6 +16,14 @@
 #define NDEBUG
 #include "debug.h"
 
+#if DBG && defined(__ROS_DWARF__)
+static VOID
+KdbRosSymSelfTest(
+    _In_ PROSSYM_INFO RosSymInfo,
+    _In_ PCCH ModuleName,
+    _In_ ULONG_PTR LoadedBase);
+#endif
+
 /* GLOBALS ******************************************************************/
 
 static
@@ -696,7 +704,25 @@ LoadSymbolsRoutine(
 
             /* Hand it to Rossym */
             if (!RosSymCreateFromFile(&FileHandle, (PROSSYM_INFO*)&LdrEntry->PatchInformation))
+            {
                 LdrEntry->PatchInformation = NULL;
+            }
+#if DBG && defined(__ROS_DWARF__)
+            else
+            {
+                CHAR ModuleName[64] = "??";
+                ANSI_STRING Ansi = {0};
+
+                Ansi.Buffer = ModuleName;
+                Ansi.MaximumLength = sizeof(ModuleName) - 1;
+                if (NT_SUCCESS(RtlUnicodeStringToAnsiString(&Ansi, &LdrEntry->BaseDllName, FALSE)))
+                {
+                    ModuleName[Ansi.Length] = ANSI_NULL;
+                    if (_stricmp(ModuleName, "ntoskrnl.exe") == 0)
+                        KdbRosSymSelfTest((PROSSYM_INFO)LdrEntry->PatchInformation, ModuleName, (ULONG_PTR)LdrEntry->DllBase);
+                }
+            }
+#endif
 
             /* We're done for this one. */
             NtClose(FileHandle);
@@ -744,6 +770,22 @@ KdbSymProcessSymbols(
         if (RosSymCreateFromMem(LdrEntry->DllBase, LdrEntry->SizeOfImage, (PROSSYM_INFO*)&LdrEntry->PatchInformation))
         {
             /* Symbols loaded successfully from in-memory image */
+#if DBG && defined(__ROS_DWARF__)
+            if (LdrEntry->PatchInformation)
+            {
+                CHAR ModuleName[64] = "??";
+                ANSI_STRING Ansi = {0};
+
+                Ansi.Buffer = ModuleName;
+                Ansi.MaximumLength = sizeof(ModuleName) - 1;
+                if (NT_SUCCESS(RtlUnicodeStringToAnsiString(&Ansi, &LdrEntry->BaseDllName, FALSE)))
+                {
+                    ModuleName[Ansi.Length] = ANSI_NULL;
+                    if (_stricmp(ModuleName, "ntoskrnl.exe") == 0)
+                        KdbRosSymSelfTest((PROSSYM_INFO)LdrEntry->PatchInformation, ModuleName, (ULONG_PTR)LdrEntry->DllBase);
+                }
+            }
+#endif
             return;
         }
     }
@@ -961,3 +1003,39 @@ KdbSymInit(
 }
 
 /* EOF */
+#if DBG && defined(__ROS_DWARF__)
+static VOID
+KdbRosSymSelfTest(
+    _In_ PROSSYM_INFO RosSymInfo,
+    _In_ PCCH ModuleName,
+    _In_ ULONG_PTR LoadedBase)
+{
+    static BOOLEAN RanSelfTest = FALSE;
+    const ULONG_PTR TestAddrs[] = {0x55c704, 0x4951c8};
+    ULONG i;
+
+    if (RanSelfTest || !RosSymInfo)
+        return;
+
+    RanSelfTest = TRUE;
+
+    for (i = 0; i < sizeof(TestAddrs)/sizeof(TestAddrs[0]); i++)
+    {
+        ULONG_PTR Rel = TestAddrs[i] - LoadedBase;
+        ROSSYM_LINEINFO LineInfo = {0};
+
+        if (RosSymGetAddressInformation(RosSymInfo, Rel, &LineInfo))
+        {
+            DbgPrint("[ROSSYM-SELFTEST] %s:%p -> %s:%lu (%s)\n",
+                     ModuleName,
+                     (PVOID)TestAddrs[i],
+                     LineInfo.FileName ? LineInfo.FileName : "?(file)",
+                     (unsigned long)LineInfo.LineNumber,
+                     LineInfo.FunctionName ? LineInfo.FunctionName : "?(func)");
+            RosSymFreeInfo(&LineInfo);
+        }
+    }
+}
+#else
+#define KdbRosSymSelfTest(_info, _name, _base) ((void)0)
+#endif

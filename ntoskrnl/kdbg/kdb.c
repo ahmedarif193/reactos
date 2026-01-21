@@ -98,6 +98,11 @@ static __inline void __kdb_writeeflags(ULONG_PTR flags)
 
 static LONG KdbEntryCount = 0;
 static DECLSPEC_ALIGN(KDB_STACK_ALIGN) CHAR KdbStack[KDB_STACK_SIZE];
+#ifdef KDBG
+static volatile BOOLEAN KdbStackLimitsOverrideActive = FALSE;
+static ULONG_PTR KdbOriginalStackLimit = 0;
+static ULONG_PTR KdbOriginalStackBase = 0;
+#endif
 
 static ULONG KdbBreakPointCount = 0;  /* Number of used breakpoints in the array */
 static KDB_BREAKPOINT KdbBreakPoints[KDB_MAXIMUM_BREAKPOINT_COUNT] = {{0}};  /* Breakpoint array */
@@ -1312,6 +1317,35 @@ KdbpCallMainLoop(VOID)
     KdbpCliMainLoop(KdbEnteredOnSingleStep);
 }
 
+#ifdef KDBG
+BOOLEAN
+NTAPI
+KdbpGetStackLimitsOverride(
+    _Out_ PULONG_PTR LowLimit,
+    _Out_ PULONG_PTR HighLimit)
+{
+    if (!KdbStackLimitsOverrideActive || !LowLimit || !HighLimit)
+        return FALSE;
+
+    if (KdbCurrentThread == NULL)
+        return FALSE;
+
+    if (KdbCurrentThread == KdbOriginalThread)
+    {
+        if ((KdbOriginalStackLimit == 0) || (KdbOriginalStackBase == 0))
+            return FALSE;
+
+        *LowLimit = KdbOriginalStackLimit;
+        *HighLimit = KdbOriginalStackBase;
+        return TRUE;
+    }
+
+    *LowLimit = KdbCurrentThread->Tcb.StackLimit;
+    *HighLimit = (ULONG_PTR)KdbCurrentThread->Tcb.InitialStack;
+    return TRUE;
+}
+#endif
+
 /**
  * @brief
  * Internal function to enter KDBG and run the specified procedure.
@@ -1343,6 +1377,12 @@ KdbpInternalEnter(
     SavedStackBase = Thread->Tcb.StackBase;
     SavedStackLimit = Thread->Tcb.StackLimit;
     SavedKernelStack = Thread->Tcb.KernelStack;
+#ifdef KDBG
+    /* Preserve original stack bounds for unwind validation while on KdbStack. */
+    KdbOriginalStackLimit = SavedStackLimit;
+    KdbOriginalStackBase = (ULONG_PTR)SavedInitialStack;
+    KdbStackLimitsOverrideActive = TRUE;
+#endif
     Thread->Tcb.InitialStack = Thread->Tcb.StackBase = (char*)KdbStack + KDB_STACK_SIZE;
     Thread->Tcb.StackLimit = (ULONG_PTR)KdbStack;
     Thread->Tcb.KernelStack = (char*)KdbStack + KDB_STACK_SIZE;
@@ -1353,6 +1393,11 @@ KdbpInternalEnter(
     Thread->Tcb.StackBase = SavedStackBase;
     Thread->Tcb.StackLimit = SavedStackLimit;
     Thread->Tcb.KernelStack = SavedKernelStack;
+#ifdef KDBG
+    KdbStackLimitsOverrideActive = FALSE;
+    KdbOriginalStackLimit = 0;
+    KdbOriginalStackBase = 0;
+#endif
 
     /* Release the display */
     if (KdpDebugMode.Screen)

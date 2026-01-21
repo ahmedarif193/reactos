@@ -424,23 +424,37 @@ ExpInitNls(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Copy the codepage data in its new location. */
     ASSERT(SectionBase >= MmSystemRangeStart);
 #if defined(_M_ARM64)
-    DPRINT1("[arm64] ExpInitNls Phase1: About to RtlCopyMemory\n");
-    DPRINT1("[arm64]   Destination (SectionBase):    %p\n", SectionBase);
-    DPRINT1("[arm64]   Source (ExpNlsTableBase):     %p\n", ExpNlsTableBase);
-    DPRINT1("[arm64]   Size (ExpNlsTableSize):       0x%lx (%lu bytes)\n", (ULONG)ExpNlsTableSize, (ULONG)ExpNlsTableSize);
-    DPRINT1("[arm64]   MmSystemRangeStart:           %p\n", MmSystemRangeStart);
-
     /*
-     * ARM64 WORKAROUND: Use memmove instead of memcpy for prototype PTE faults.
+     * ARM64 CRITICAL FIX: Pre-fault all destination pages before memmove.
      *
-     * When copying to System View Space (which uses prototype PTEs), memcpy can
-     * cause issues with overlapping memory or incorrect pointer arithmetic after
-     * page faults. memmove handles overlapping regions correctly and appears to
-     * generate better code for ARM64 with MinGW.
+     * On ARM64, memmove uses SIMD (NEON) registers for efficient memory copy.
+     * However, the current trap frame does NOT save/restore SIMD registers (V0-V31).
+     * If a page fault occurs mid-copy, the SIMD registers containing source data
+     * are clobbered by the fault handler, causing zeros or garbage to be written.
+     *
+     * WORKAROUND: Touch each destination page with a simple scalar write before
+     * the copy starts. This triggers the demand-zero page faults using scalar
+     * registers which ARE properly saved/restored in the trap frame.
+     *
+     * TODO: The proper fix is to save/restore SIMD registers in KTRAP_FRAME.
      */
-    DPRINT1("[arm64] ExpInitNls Phase1: Using memmove for copy\n");
+    {
+        volatile PUCHAR PagePtr;
+        SIZE_T Offset;
+
+        for (Offset = 0; Offset < ExpNlsTableSize; Offset += PAGE_SIZE)
+        {
+            PagePtr = (volatile PUCHAR)((ULONG_PTR)SectionBase + Offset);
+            /* Simple scalar write to trigger page fault */
+            *PagePtr = 0;
+            /* Memory barrier to ensure fault completes before next iteration */
+            __dsb(_ARM64_BARRIER_SY);
+        }
+    }
+
+    /* Now copy data with memmove - pages are already faulted in */
     memmove(SectionBase, ExpNlsTableBase, ExpNlsTableSize);
-    DPRINT1("[arm64] ExpInitNls Phase1: memmove completed\n");
+    __dsb(_ARM64_BARRIER_SY);
 #else
     EXP_ARM64_LOG("[arm64] ExpInitNls Phase1: RtlCopyMemory to SectionBase");
     RtlCopyMemory(SectionBase, ExpNlsTableBase, ExpNlsTableSize);

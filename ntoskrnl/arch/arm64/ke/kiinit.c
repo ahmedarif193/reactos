@@ -503,19 +503,17 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     KAFFINITY ProcessorMask;
     ULONG ProcessorNumber;
 
-    /* CYCLE31: Use raw UART to verify this function is called */
-    KiArm64RawPuts("[CYCLE31] ***** KiInitializeSystem in kiinit.c ENTRY *****\n");
-    DPRINT1("[CYCLE30] ======== KiInitializeSystem ENTRY ========\n");
-    KiArm64RawPuts("[CYCLE31] About to call KiArm64PrepareBootPcr\n");
+    KiArm64RawPuts("[KiInitSys] ENTRY\n");
     KiArm64PrepareBootPcr(LoaderBlock);
-    KiArm64RawPuts("[CYCLE31] After KiArm64PrepareBootPcr\n");
-    DPRINT1("[CYCLE30] KiArm64PrepareBootPcr done\n");
+    KiArm64RawPuts("[KiInitSys] PrepareBootPcr done\n");
 
     if (LoaderBlock == NULL)
     {
+        KiArm64RawPuts("[KiInitSys] LoaderBlock NULL - BUGCHECK\n");
         KeBugCheckEx(PHASE0_INITIALIZATION_FAILED, 'A64K', 'LDR', 0, 0);
     }
 
+    KiArm64RawPuts("[KiInitSys] LoaderBlock OK\n");
     KeLoaderBlock = LoaderBlock;
     Arm64Block = &LoaderBlock->u.Arm64;
 
@@ -567,17 +565,21 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     ProcessorNumber = (ULONG)(UCHAR)KeNumberProcessors;
 
+    KiArm64RawPuts("[KiInitSys] getting Pcr\n");
     Pcr = (Arm64Block->PcrPage != 0) ?
           (PKIPCR)(ULONG_PTR)Arm64Block->PcrPage :
           KeArm64CurrentPcr;
 
+    KiArm64RawPuts("[KiInitSys] Pcr obtained\n");
     if (Pcr != NULL)
     {
+        KiArm64RawPuts("[KiInitSys] calling KiInitializePcr\n");
         KiInitializePcr(ProcessorNumber,
                         Pcr,
                         InitialThread,
                         (PVOID)(ULONG_PTR)Arm64Block->PanicStack,
                         (PVOID)(ULONG_PTR)Arm64Block->InterruptStack);
+        KiArm64RawPuts("[KiInitSys] KiInitializePcr done\n");
 
         if (LoaderBlock->KernelStack != 0)
         {
@@ -585,7 +587,9 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
+    KiArm64RawPuts("[KiInitSys] calling ExInitPoolLookasidePointers\n");
     ExInitPoolLookasidePointers();
+    KiArm64RawPuts("[KiInitSys] ExInitPoolLookasidePointers done\n");
 
     if (ProcessorNumber == 0)
     {
@@ -599,12 +603,12 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
+    KiArm64RawPuts("[KiInitSys] calling HalInitializeProcessor\n");
     HalInitializeProcessor(ProcessorNumber, KeLoaderBlock);
-    DbgPrintEx(DPFLTR_DEFAULT_ID,
-               DPFLTR_TRACE_LEVEL,
-               "[arm64] KiInitializeSystem: cpu %lu HAL ready\n",
-               ProcessorNumber);
+    KiArm64RawPuts("[KiInitSys] HalInitializeProcessor done\n");
+    /* Skip DbgPrintEx for now, KD not yet initialized */
 
+    KiArm64RawPuts("[KiInitSys] CPU features config start\n");
     /*
      * ARM64: Configure CPU features based on hardware capabilities.
      * Use ID registers to detect features before disabling unsupported ones.
@@ -671,6 +675,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         __asm__ __volatile__("msr cpacr_el1, %0" : : "r"(Cpacr));
         __asm__ __volatile__("isb" ::: "memory");
     }
+    KiArm64RawPuts("[KiInitSys] CPU features config done\n");
 
     ProcessorMask = (Pcr != NULL) ?
                     Pcr->Prcb.SetMember :
@@ -679,26 +684,16 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     KeActiveProcessors |= ProcessorMask;
     KeNumberProcessors++;
 
+    KiArm64RawPuts("[KiInitSys] calling KfRaiseIrql(HIGH_LEVEL)\n");
     KfRaiseIrql(HIGH_LEVEL);
+    KiArm64RawPuts("[KiInitSys] KfRaiseIrql done\n");
 
+    KiArm64RawPuts("[KiInitSys] calling HalDisplayString\n");
     HalDisplayString("[KiInitSys] Raised to HIGH_LEVEL\r\n");
-    KiArm64RawPuts("[CYCLE31] After raising to HIGH_LEVEL\n");
-    DPRINT1("[CYCLE31] KiInitializeSystem: ProcessorNumber=%lu, KeNumberProcessors=%lu\n", ProcessorNumber, KeNumberProcessors);
-
-    /* CYCLE31: Use HalDisplayString which always works */
-    {
-        char buf[128];
-        RtlStringCbPrintfA(buf, sizeof(buf), "[CYCLE31] ProcessorNumber=%lu KeNumberProcessors=%lu\r\n", ProcessorNumber, KeNumberProcessors);
-        HalDisplayString(buf);
-        KiArm64RawPuts(buf);
-    }
-
-    KiArm64RawPuts("[CYCLE31] About to check if CPU 0\n");
+    KiArm64RawPuts("[KiInitSys] HalDisplayString done\n");
     if (ProcessorNumber == 0)
     {
-        KiArm64RawPuts("[CYCLE31] YES, CPU 0 path!\n");
-        HalDisplayString("[KiInitSys] CPU 0 path - about to call KeInitInterrupts\r\n");
-        DPRINT1("[CYCLE30] KiInitializeSystem: CPU 0 path, calling KeInitInterrupts...\n");
+        KiArm64RawPuts("[KiInitSys] Pre-seed core modules\n");
         /* Pre-seed core modules for KD banner parity (mirror amd64 minimal) */
         {
             PLIST_ENTRY Entry;
@@ -716,26 +711,28 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 InsertTailList(&PsLoadedModuleList, &LdrCoreCopy[i].InLoadOrderLinks);
             }
         }
+        KiArm64RawPuts("[KiInitSys] Pre-seed done\n");
 
+        KiArm64RawPuts("[KiInitSys] calling KeInitInterrupts\n");
         /* Initialize interrupts (arch/HAL stub), then install final vectors */
-        HalDisplayString("[KiInitSys] Calling KeInitInterrupts...\r\n");
-        KiArm64RawPuts("[CYCLE31] ***** ABOUT TO CALL KeInitInterrupts *****\n");
-        DPRINT1("[CYCLE30] About to call KeInitInterrupts\n");
         KeInitInterrupts();
-        KiArm64RawPuts("[CYCLE31] ***** KeInitInterrupts RETURNED *****\n");
-        DPRINT1("[CYCLE30] KeInitInterrupts returned\n");
-        HalDisplayString("[KiInitSys] KeInitInterrupts returned\r\n");
+        KiArm64RawPuts("[KiInitSys] KeInitInterrupts done\n");
         /* Install final exception vectors and configure traps before KD */
+        KiArm64RawPuts("[KiInitSys] calling KeInitExceptions\n");
         KeInitExceptions();
+        KiArm64RawPuts("[KiInitSys] KeInitExceptions done\n");
 
         /*
          * Initialize debug register counts from ID_AA64DFR0_EL1 before KD init.
          * This must happen before any code path that calls KiSaveProcessorControlState,
          * which occurs during KD symbol loading.
          */
+        KiArm64RawPuts("[KiInitSys] calling KiInitializeDebugRegisterCounts\n");
         KiInitializeDebugRegisterCounts();
+        KiArm64RawPuts("[KiInitSys] calling KdInitSystem\n");
 
         KdInitSystem(0, KeLoaderBlock);
+        KiArm64RawPuts("[KiInitSys] KdInitSystem done\n");
 
         /* KD is present right after banner; continue */
         if (KdPollBreakIn())
