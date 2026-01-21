@@ -1743,7 +1743,6 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
         UINT64 l2_idx = (va >> 21) & 0x1FF;
         UINT64 l3_idx = (va >> 12) & 0x1FF;
         UINT64 *l0_table, *l1_table;
-        UINT64 remaining = end - va;
         BOOLEAN is_kernel = (va >= ARM64_KSEG0_BASE);
 
         /* Never allow generic mappings in the self-map L0 slot. */
@@ -1807,45 +1806,30 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
         }
 
         /*
-         * CRITICAL: Disable large block mappings for kernel space to ensure
-         * the recursive self-map functions correctly.
+         * Block mappings policy:
          *
-         * The self-map at L0[493] points back to L0 itself. When the kernel
-         * accesses a PTE via the self-map (e.g., L0[493]->L1[256]->L2[1]->L3[18]),
-         * it's actually traversing L0[256]->L1[1]->L2[18]. For this to work,
-         * ALL intermediate entries must be TABLE descriptors, not BLOCK descriptors.
+         * For kernel space (TTBR1): Always use 4KB pages. The self-map at L0[493]
+         * requires all intermediate entries to be TABLE descriptors to allow
+         * PTE access via the recursive self-map structure.
          *
-         * If we create 1GB or 2MB blocks in kernel space, the self-map breaks
-         * because it encounters a BLOCK descriptor when it expects a TABLE descriptor.
+         * For identity mapping (TTBR0): Use 2MB blocks for efficiency. The
+         * identity mapping is ONLY used during early boot before the kernel
+         * switches to its own page tables. Page fault handling for user
+         * processes is not a concern because:
+         * 1. User processes don't exist during boot
+         * 2. The kernel will create its own page tables for user processes
+         * 3. This identity mapping is discarded after boot completes
          *
-         * For user space (TTBR0), large blocks are fine since there's no self-map.
+         * Using 2MB blocks reduces mapping time from millions of iterations
+         * to thousands, making boot feasible within reasonable time.
          */
+        UINT64 remaining = end - va;
 
-        /* 1GiB block if possible (ONLY for user space) */
-        if (!is_kernel &&
-            (va % 0x40000000ULL) == 0 && (pa % 0x40000000ULL) == 0 && remaining >= 0x40000000ULL)
-        {
-            if (!DESC_IS_TABLE(l1_table[l1_idx])) {
-                pte_replace_break_before_make(&l1_table[l1_idx],
-                                              pa | PTE_TYPE_VALID | PTE_TYPE_BLOCK | attrs,
-                                              va,
-                                              ARM64_BLOCK_SIZE_1G);
-                tlbi_va_entry(va, ARM64_BLOCK_SIZE_1G);
-                tlbi_needed = TRUE;
-                va += 0x40000000ULL;
-                pa += 0x40000000ULL;
-                continue;
-            }
-        }
-
-        /* 2MiB block if possible (ONLY for user space) */
+        /* 2MiB block if possible (ONLY for identity mapping / user space) */
         if (!is_kernel &&
             (va & 0x1FFFFFULL) == 0 && (pa & 0x1FFFFFULL) == 0 && remaining >= 0x200000ULL)
         {
-            BOOLEAN in_pool = is_kernel && (l0_idx >= ARM64_KSEG0_L0_INDEX) &&
-                              (l0_idx < (ARM64_KSEG0_L0_INDEX + ARM64_KERNEL_L1_TABLES));
-            UINT64 l0_slot = is_kernel ? (in_pool ? (l0_idx - ARM64_KSEG0_L0_INDEX) : l0_idx) : l0_idx;
-            UINT64 *l2_table_ptr = ensure_l2_table(is_kernel, l0_slot, l1_table, l1_idx, va);
+            UINT64 *l2_table_ptr = ensure_l2_table(FALSE, l0_idx, l1_table, l1_idx, va);
             if (!l2_table_ptr) {
                 Pl011RawPuts("[MAP] ensure_l2_table FAILED (2MB block path)\n");
                 return FALSE;
@@ -4665,4 +4649,74 @@ static VOID debug_dump_static_mapping(UINT64 va)
 VOID Arm64DebugDumpMapping(UINT64 VirtualAddress)
 {
     debug_dump_static_mapping(VirtualAddress);
+}
+
+/*
+ * Arm64ClearIdentityMappings - Clean up identity mappings before kernel handoff
+ *
+ * FreeLoader creates identity mappings in TTBR0's L0 entries (indices 0-3 for the
+ * first 4TB of physical address space) to allow code to run while switching page
+ * tables. These mappings occupy user-space virtual address range (0x0000...).
+ *
+ * The NT kernel expects user-space to be completely unmapped for a new process.
+ * If these identity mappings remain, they can:
+ * 1. Clash with kernel user-mode address allocations
+ * 2. Cause security issues (kernel accessible from user space)
+ * 3. Confuse the memory manager's PTE tracking
+ *
+ * This function clears the TTBR0 L0 entries (user-space page table root) to ensure
+ * a clean slate for the kernel. Called just before jumping to the kernel entry point.
+ *
+ * Note: The kernel code (executing in TTBR1 space) continues to run from kernel
+ * virtual addresses (0xFFFF...) which are unaffected by clearing TTBR0.
+ */
+VOID Arm64ClearIdentityMappings(VOID)
+{
+    ULONG i;
+
+    if (!page_tables_initialized || !mmu_enabled)
+    {
+        Pl011RawPuts("[PT] Arm64ClearIdentityMappings: Skipped (not initialized or MMU off)\n");
+        return;
+    }
+
+    if (!arm64_l0_page_table)
+    {
+        Pl011RawPuts("[PT] Arm64ClearIdentityMappings: No TTBR0 page table!\n");
+        return;
+    }
+
+    Pl011RawPuts("[PT] Arm64ClearIdentityMappings: Clearing user-space identity mappings\n");
+
+    /*
+     * Clear all L0 entries in TTBR0's page table.
+     * This removes all user-space identity mappings.
+     *
+     * ARM64_USER_L1_TABLES defines how many L0 slots we use for user-space
+     * identity mappings (typically 4, covering 4TB).
+     */
+    for (i = 0; i < ARM64_USER_L1_TABLES; i++)
+    {
+        if (arm64_l0_page_table[i] != 0)
+        {
+            arm64_l0_page_table[i] = 0;
+        }
+    }
+
+    /*
+     * Memory barriers and TLB invalidation.
+     *
+     * DSB ISHST: Ensure L0 writes are visible to table walkers
+     * TLBI VMALLE1IS: Invalidate all TLB entries for EL1 (both TTBR0 and TTBR1)
+     * DSB ISH: Wait for TLB invalidation to complete
+     * ISB: Synchronize instruction stream
+     */
+    ARM64_DSB_ISHST();
+    __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+    ARM64_DSB_ISH();
+    ARM64_ISB();
+
+    identity_mapping_enabled = FALSE;
+
+    Pl011RawPuts("[PT] Arm64ClearIdentityMappings: Identity mappings cleared\n");
 }

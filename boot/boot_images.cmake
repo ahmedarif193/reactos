@@ -481,6 +481,10 @@ else()
     # For UEFI-only architectures (ARM64, etc.), skip BIOS boot sector installation
     set(_LIVEIMG_UEFI_FLAG --uefi-only)
 endif()
+set(_LIVEIMG_EFI_PLATFORM_ARG)
+if(DEFINED EFI_PLATFORM_ID)
+    set(_LIVEIMG_EFI_PLATFORM_ARG --efi-platform ${EFI_PLATFORM_ID})
+endif()
 
 add_custom_target(liveimg
     COMMAND /usr/bin/env bash ${CMAKE_SOURCE_DIR}/boot/tools/make_reactos_img.sh
@@ -490,6 +494,7 @@ add_custom_target(liveimg
             --build-root ${REACTOS_BINARY_DIR}
             --list ${CMAKE_CURRENT_BINARY_DIR}/liveimg.$<CONFIG>.lst
             ${_LIVEIMG_UEFI_FLAG}
+            ${_LIVEIMG_EFI_PLATFORM_ARG}
     DEPENDS liveimg_deps ${_LIVEIMG_BOOTSECT_DEPS} ${CMAKE_CURRENT_BINARY_DIR}/liveimg.$<CONFIG>.lst
     VERBATIM)
 

@@ -696,6 +696,7 @@ Arm64InitializeMemory(
 }
 
 extern VOID Arm64EnablePageTables(VOID);
+extern VOID Arm64ClearIdentityMappings(VOID);
 
 static VOID
 Arm64ConfigureProcessorContext(USHORT OperatingSystemVersion)
@@ -714,6 +715,24 @@ Arm64ConfigureProcessorContext(USHORT OperatingSystemVersion)
     UefiSerialDisableFirmware();
 #endif
     Arm64EnablePageTables();
+
+    /*
+     * Clean up identity mappings in TTBR0 (user space) before kernel entry.
+     *
+     * FreeLoader creates identity mappings in low memory (0x0000...) to allow
+     * code to run during page table switches. These mappings occupy user-space
+     * virtual addresses and would clash with the kernel's user-mode memory
+     * management if left in place.
+     *
+     * The kernel code runs from kernel-space addresses (0xFFFF..., TTBR1) so
+     * clearing TTBR0 mappings is safe. The kernel will set up fresh user-space
+     * page tables for each process.
+     *
+     * NOTE: This MUST be called AFTER Arm64EnablePageTables() because we need
+     * the MMU enabled and page tables active for the TLB invalidation to work.
+     * It MUST be called BEFORE jumping to KiSystemStartup().
+     */
+    Arm64ClearIdentityMappings();
 }
 
 /* WinLdrpDumpMemoryDescriptors and WinLdrLoadModule are defined in the main winldr.c */

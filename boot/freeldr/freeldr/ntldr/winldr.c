@@ -1813,6 +1813,16 @@ WinLdrpDumpMemoryDescriptors(PLOADER_PARAMETER_BLOCK LoaderBlock)
         TRACE("BP %08X PC %04X MT %d\n", MemoryDescriptor->BasePage,
             MemoryDescriptor->PageCount, MemoryDescriptor->MemoryType);
 
+        /* Highlight ramdisk-related memory types for debugging */
+        if (MemoryDescriptor->MemoryType == LoaderXIPRom)
+        {
+            ERR(">>> RAMDISK DESCRIPTOR: BasePage=0x%lX PageCount=0x%lX PhysAddr=0x%I64X Size=%I64u bytes\n",
+                MemoryDescriptor->BasePage,
+                MemoryDescriptor->PageCount,
+                (ULONGLONG)MemoryDescriptor->BasePage << PAGE_SHIFT,
+                (ULONGLONG)MemoryDescriptor->PageCount << PAGE_SHIFT);
+        }
+
         NextMd = MemoryDescriptor->ListEntry.Flink;
     }
 }

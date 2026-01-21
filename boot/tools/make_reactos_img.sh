@@ -10,7 +10,7 @@
 #
 # Usage (fat32 mode):
 #   make_reactos_img.sh --mode fat32 --output liveimg.img --size <MiB> \
-#       --build-root <build-dir> --list <livecd.<cfg>.lst> [--uefi-only] [--viostor <path>]
+#       --build-root <build-dir> --list <livecd.<cfg>.lst> [--uefi-only] [--efi-platform <id>] [--viostor <path>]
 #
 # Notes:
 # - fat32 mode installs ReactOS MBR and FAT boot sectors and mirrors the LiveCD
@@ -28,6 +28,7 @@ OUT_IMG=""
 MBR_FILE=""
 PART_TYPE=""
 UEFI=0
+EFI_PLATFORM_ID="${EFI_PLATFORM_ID-}"
 
 # fat32 mode vars
 SIZE_MIB=600
@@ -59,6 +60,8 @@ while [[ $# -gt 0 ]]; do
       LIST_FILE="$2"; shift 2;;
     --uefi-only)
       UEFI_ONLY=1; shift 1;;
+    --efi-platform)
+      EFI_PLATFORM_ID="$2"; shift 2;;
     --viostor)
       VIOSTOR_SRC="$2"; shift 2;;
     -h|--help)
@@ -144,6 +147,20 @@ UEFILDR_EFI="$BUILD_ROOT/boot/freeldr/freeldr/uefildr.efi"
 BOOT_DOSMBR="$BUILD_ROOT/boot/freeldr/bootsect/dosmbr.bin"
 BOOT_FAT16="$BUILD_ROOT/boot/freeldr/bootsect/fat.bin"
 BOOT_FAT32="$BUILD_ROOT/boot/freeldr/bootsect/fat32.bin"
+BCD_HIVE="$BUILD_ROOT/boot/bootdata/BCD"
+
+EFI_BOOT_NAME="bootx64.efi"
+if [[ -n "${EFI_PLATFORM_ID}" ]]; then
+  EFI_BOOT_NAME="boot${EFI_PLATFORM_ID,,}.efi"
+elif [[ -f "$BUILD_ROOT/CMakeCache.txt" ]]; then
+  arch="$(awk -F= '/^ARCH:/{print $2; exit}' "$BUILD_ROOT/CMakeCache.txt")"
+  case "$arch" in
+    amd64) EFI_BOOT_NAME="bootx64.efi" ;;
+    ia64) EFI_BOOT_NAME="bootia64.efi" ;;
+    arm) EFI_BOOT_NAME="bootarm.efi" ;;
+    arm64) EFI_BOOT_NAME="bootaa64.efi" ;;
+  esac
+fi
 
 # Only check for BIOS boot sectors if not in UEFI-only mode
 if (( UEFI_ONLY == 0 )); then
@@ -270,7 +287,12 @@ done < "$LIST_FILE"
 if [[ -f "$UEFILDR_EFI" ]]; then
   fat_mkdir_p "/efi/boot"
   # Add/overwrite to be safe
-  add_file "$UEFILDR_EFI" "/efi/boot/bootx64.efi"
+  add_file "$UEFILDR_EFI" "/efi/boot/$EFI_BOOT_NAME"
+  fat_mkdir_p "/efi/microsoft/boot"
+  add_file "$UEFILDR_EFI" "/efi/microsoft/boot/bootmgfw.efi"
+  if [[ -f "$BCD_HIVE" ]]; then
+    add_file "$BCD_HIVE" "/efi/microsoft/boot/BCD"
+  fi
 fi
 
 # For BIOS boot, ensure FREELDR.SYS is present at root (in addition to loader/freeldr.sys)
