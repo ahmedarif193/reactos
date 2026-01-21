@@ -399,9 +399,9 @@ def start_qemu(rpi_mode=False):
         # Open log file for stdout redirection (x64 approach)
         log_fd = open(LOG_FILE, 'w')
 
+        is_darwin = platform.system() == "Darwin"
         qemu_cmd = [
             qemu_binary,
-            "-enable-kvm",
             "-smp", "1",
             "-m", "3G",
             "-M", "q35",
@@ -413,6 +413,13 @@ def start_qemu(rpi_mode=False):
             "-no-reboot",
             "-no-shutdown"
         ]
+
+        # Add acceleration: TCG on macOS, KVM on Linux
+        if is_darwin:
+            qemu_cmd.insert(1, "-accel")
+            qemu_cmd.insert(2, "tcg")
+        else:
+            qemu_cmd.insert(1, "-enable-kvm")
 
         qemu_process = subprocess.Popen(
             qemu_cmd,
@@ -594,23 +601,26 @@ def main():
     if not build_livecd():
         sys.exit(1)
 
-    # Cleanup: Only run on non-ARM64 architectures
-    if target_arch != "arm64":
-        print("Ensuring previous QEMU instances are stopped...")
-        try:
-            subprocess.run("sudo kill -9 $(pidof qemu-system-x86_64)", shell=True, 
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run("sudo kill -9 $(pidof qemu-system-i386)", shell=True, 
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
-    else:
-        # Simple cleanup for aarch64
-        try:
-            subprocess.run("pkill -9 -f qemu-system-aarch64", shell=True, 
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
+    # Cleanup: Stop previous QEMU instances (skip on darwin/macOS)
+    is_darwin = platform.system() == "Darwin"
+
+    if not is_darwin:
+        if target_arch != "arm64":
+            print("Ensuring previous QEMU instances are stopped...")
+            try:
+                subprocess.run("sudo kill -9 $(pidof qemu-system-x86_64)", shell=True,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run("sudo kill -9 $(pidof qemu-system-i386)", shell=True,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+        else:
+            # Simple cleanup for aarch64
+            try:
+                subprocess.run("pkill -9 -f qemu-system-aarch64", shell=True,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
 
     if use_qemu and target_arch != "arm64":
         if not create_fat32_img():
