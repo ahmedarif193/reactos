@@ -14,7 +14,10 @@
  *   x0 = InitialStack (new SP)
  *   x1 = LoaderBlock (to become x0 for the C wrapper)
  */
+    .seh_proc KiArm64SwitchToBootStack
 KiArm64SwitchToBootStack:
+    /* SEH: This is a tail-call that switches stacks - no return */
+    .seh_endprologue
     /* Ensure SP_EL1 is selected before updating the stack pointer */
     msr     spsel, #1
     isb
@@ -24,5 +27,6 @@ KiArm64SwitchToBootStack:
     mov     x0, x1
     /* Branch to C wrapper; never returns */
     b       KiArm64SystemStartupBootStack
+    .seh_endproc
 
     // no .type/.size directives to keep asms happy in mingw/clang env

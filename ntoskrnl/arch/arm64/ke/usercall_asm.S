@@ -7,15 +7,30 @@
     .extern KiUserModeCallout
 
     .global KiCallUserMode
+    .seh_proc KiCallUserMode
 KiCallUserMode:
-    sub     sp, sp, #KEXCEPTION_FRAME_LENGTH
+    /*
+     * SEH: Stack must be 16-byte aligned. KEXCEPTION_FRAME_LENGTH (0xC8) is not aligned,
+     * so we allocate 0xD0 (208 bytes) which is 16-byte aligned and matches SEH directive.
+     */
+    sub     sp, sp, #0xD0
+    .seh_stackalloc 0xd0
     stp     x19, x20, [sp, #ExX19]
+    .seh_save_regp x19, ExX19
     stp     x21, x22, [sp, #ExX21]
+    .seh_save_regp x21, ExX21
     stp     x23, x24, [sp, #ExX23]
+    .seh_save_regp x23, ExX23
     stp     x25, x26, [sp, #ExX25]
+    .seh_save_regp x25, ExX25
     stp     x27, x28, [sp, #ExX27]
+    .seh_save_regp x27, ExX27
     str     x29, [sp, #ExFp]
+    .seh_save_reg x29, ExFp
     str     x30, [sp, #ExLr]
+    .seh_save_reg x30, ExLr
+    .seh_endprologue
+    /* Save return address again (not tracked by SEH) */
     str     x30, [sp, #ExReturn]
 
     mrs     x9, fpcr
@@ -41,11 +56,15 @@ KiCallUserMode:
     ldp     x27, x28, [sp, #ExX27]
     ldr     x29, [sp, #ExFp]
     ldr     x30, [sp, #ExLr]
-    add     sp, sp, #KEXCEPTION_FRAME_LENGTH
+    add     sp, sp, #0xD0
     ret
+    .seh_endproc
 
     .global KiCallbackReturn
+    .seh_proc KiCallbackReturn
 KiCallbackReturn:
+    /* SEH: This is a non-local return - restores frame from x0 */
+    .seh_endprologue
     mov     sp, x0
     mov     x9, x1
 
@@ -62,7 +81,8 @@ KiCallbackReturn:
     ldr     x29, [sp, #ExFp]
     ldr     x30, [sp, #ExLr]
 
-    add     sp, sp, #KEXCEPTION_FRAME_LENGTH
+    add     sp, sp, #0xD0
 
     mov     x0, x9
     ret
+    .seh_endproc

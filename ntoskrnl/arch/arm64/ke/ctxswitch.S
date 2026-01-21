@@ -29,7 +29,15 @@
  * For system threads, SystemRoutine is PspSystemThreadStartup which will
  * further lower IRQL to PASSIVE_LEVEL before calling StartRoutine.
  */
+    .seh_proc KiThreadStartup
 KiThreadStartup:
+    /*
+     * SEH: This is a special entry point - no prologue in traditional sense.
+     * SP already points to KSWITCH_FRAME set up by KiInitializeContextThread.
+     * We declare no frame here since we consume the existing switch frame.
+     */
+    .seh_endprologue
+
     /* Clear non-volatile registers to prevent stale data leaking to new thread */
     mov     x19, xzr
     mov     x20, xzr
@@ -83,6 +91,7 @@ KiThreadStartup:
 
     /* Should never return */
     brk     #0xf000
+    .seh_endproc
 
 
     .extern KiSwapContextResume
@@ -97,15 +106,24 @@ KiThreadStartup:
  *     _In_ KIRQL WaitIrql,
  *     _Inout_ PKTHREAD CurrentThread);
  */
+    .seh_proc KiSwapContext
 KiSwapContext:
     /* Reserve space for the switch frame and save non-volatile registers */
     sub     sp, sp, #KSWITCH_FRAME_LENGTH
+    .seh_stackalloc KSWITCH_FRAME_LENGTH
     stp     x19, x20, [sp, #SwX19]
+    .seh_save_regp x19, SwX19
     stp     x21, x22, [sp, #SwX21]
+    .seh_save_regp x21, SwX21
     stp     x23, x24, [sp, #SwX23]
+    .seh_save_regp x23, SwX23
     stp     x25, x26, [sp, #SwX25]
+    .seh_save_regp x25, SwX25
     stp     x27, x28, [sp, #SwX27]
+    .seh_save_regp x27, SwX27
     str     x29, [sp, #SwFp]
+    .seh_save_reg x29, SwFp
+    .seh_endprologue
 
     /*
      * ARM64 CRITICAL: We need to save TWO return addresses:
@@ -172,6 +190,7 @@ KiSwapContext:
     ldr     x9,  [sp, #SwReturn]   /* Load caller's return address */
     add     sp, sp, #KSWITCH_FRAME_LENGTH
     ret     x9                      /* Return to our caller */
+    .seh_endproc
 
 /* Note: Debug logging strings were removed after fixing KiThreadStartup.
  * The key fixes were:
@@ -205,7 +224,14 @@ KiSwapContext:
  * to the NEW thread's saved return address.
  */
     .align 4
+    .seh_proc KiSwapContextInternal
 KiSwapContextInternal:
+    /*
+     * SEH: This function operates on the caller's stack frame (KSWITCH_FRAME).
+     * It doesn't create its own frame - it modifies SP to switch stacks.
+     * We declare a minimal frame to allow unwinding.
+     */
+    .seh_endprologue
     /* Wait until the incoming thread clears its SwapBusy bit */
 .Lswapbusy_wait:
     ldrb    w3, [x2, #ThSwapBusy]
@@ -273,3 +299,4 @@ KiSwapContextInternal:
     bl      KiSwapContextResume
     ldr     x9, [sp, #SwReturn]  /* Load KiThreadStartup address */
     br      x9                   /* Jump to KiThreadStartup (SP points to KSWITCH_FRAME) */
+    .seh_endproc

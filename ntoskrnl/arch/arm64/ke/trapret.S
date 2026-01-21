@@ -6,7 +6,14 @@
 
     .global KiTrapReturn
 
+    .seh_proc KiTrapReturn
 KiTrapReturn:
+    /*
+     * SEH: This is a special function that restores context from trap frame.
+     * It doesn't have a normal prologue/epilogue - it consumes parameters
+     * (x0 = TrapFrame, x1 = ExceptionFrame) and returns via eret.
+     */
+    .seh_endprologue
     mov     x20, x0                  /* Trap frame */
     mov     x21, x1                  /* Exception frame */
 
@@ -79,12 +86,17 @@ KiTrapReturn:
     dsb     sy
     isb
     eret
+    .seh_endproc
 
 
     .align 4
     .global KiArm64BugCheckEntry
+    .seh_proc KiArm64BugCheckEntry
 KiArm64BugCheckEntry:
+    /* SEH: Simple tail-call trampoline, no frame */
+    .seh_endprologue
     ldr     x16, =KiArm64BugCheckSynchronousException
     br      x16
+    .seh_endproc
 
     .ltorg

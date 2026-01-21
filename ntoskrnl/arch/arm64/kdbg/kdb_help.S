@@ -16,11 +16,16 @@
  * This function switches to a new stack, calls the function, then switches
  * back. We use x19 (callee-saved) to preserve the original SP across the call.
  */
+    .seh_proc KdbpStackSwitchAndCall
 KdbpStackSwitchAndCall:
     /* Save callee-saved registers and link register on current stack */
     stp     x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     stp     x19, x20, [sp, #16]
+    .seh_save_regp x19, 16
     mov     x29, sp
+    .seh_set_fp
+    .seh_endprologue
 
     /* Save original SP in callee-saved register (survives the call) */
     mov     x19, sp
@@ -45,5 +50,6 @@ KdbpStackSwitchAndCall:
     ldp     x19, x20, [sp, #16]
     ldp     x29, x30, [sp], #32
     ret
+    .seh_endproc
 
     /* no .size for COFF/Mingw */
