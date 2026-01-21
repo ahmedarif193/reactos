@@ -12462,7 +12462,7 @@ NextExp:
 			if(pData->hHeader) {
 				HDITEM		sItem;
 				TV_COLUMN  *pCol = (TV_COLUMN *)lParam;
-				int bWantMark;
+				int bWantMark = 0;
 				unsigned	uCol;
 				
 				uCol = U(wParam);

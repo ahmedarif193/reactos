@@ -169,7 +169,7 @@ CreateFreeLoaderIniForReactOS(
     IN PCWSTR IniPath,
     IN PCWSTR ArcPath)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PVOID BootStoreHandle;
 
     /* Initialize the INI file and create the common FreeLdr sections */
@@ -195,7 +195,7 @@ CreateFreeLoaderIniForReactOSAndBootSector(
     IN PCWSTR BootPath,
     IN PCWSTR BootSector)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PVOID BootStoreHandle;
     UCHAR xxBootEntry[FIELD_OFFSET(BOOT_STORE_ENTRY, OsOptions) + sizeof(BOOTSECTOR_OPTIONS)];
     PBOOT_STORE_ENTRY BootEntry = (PBOOT_STORE_ENTRY)&xxBootEntry;
@@ -1492,7 +1492,7 @@ InstallBootManagerAndBootEntriesWorker(
     _In_ PCUNICODE_STRING DestinationArcPath,
     _In_ ULONG_PTR Options)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     BOOLEAN IsBIOS = ((ArchType == ARCH_PcAT) || (ArchType == ARCH_NEC98x86));
     UCHAR InstallType = (Options & 0x03);
 
@@ -1819,6 +1819,9 @@ InstallBootManagerAndBootEntries(
                 ArchType, SystemRootPath,
                 DiskNumber, PartitionStyle, IsSuperFloppy, FileSystem,
                 SourceRootPath, DestinationArcPath, Options);
+
+    if (Status == STATUS_UNSUCCESSFUL)
+        Status = STATUS_NOT_SUPPORTED;
 
 Quit:
     NtClose(DeviceHandle);
