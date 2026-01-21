@@ -80,8 +80,15 @@ MiMapPageInHyperSpace(IN PEPROCESS Process,
     {
         //
         // Reset the PTEs
+        // ARM64: Use MI_HYPERSPACE_PTES - 1 because MI_HYPERSPACE_PTES is the COUNT,
+        // and we need the last valid INDEX (0-based). For ARM64 with 256 PTEs,
+        // valid indices are 0-255, so reset to 255.
         //
+#if defined(_M_ARM64) || defined(__aarch64__)
+        Offset = MI_HYPERSPACE_PTES - 1;
+#else
         Offset = MI_HYPERSPACE_PTES;
+#endif
         KeFlushProcessTb();
     }
 
@@ -94,6 +101,7 @@ MiMapPageInHyperSpace(IN PEPROCESS Process,
     // Write the current PTE
     //
     PointerPte += Offset;
+
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
 
     //

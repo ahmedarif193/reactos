@@ -1411,6 +1411,14 @@ MmMakeSegmentResident(
             LARGE_INTEGER FileOffset;
             FileOffset.QuadPart = Segment->Image.FileOffset + ChunkOffset;
 
+#if defined(_M_ARM64)
+            /* Debug: trace file read offset, file name, and PFNs (Cycle 57 enhanced) */
+            DPRINT1("[arm64] MmMakeSegmentResident: File='%wZ' FileObj=%p FsContext=%p\n",
+                    &FileObject->FileName, FileObject, FileObject->FsContext);
+            DPRINT1("[arm64] MmMakeSegmentResident: Reading FileOffset=0x%I64x ChunkOffset=0x%I64x Segment->FileOffset=0x%I64x ReadLen=%lu PFN[0]=0x%I64x\n",
+                    FileOffset.QuadPart, ChunkOffset, Segment->Image.FileOffset, ReadLength, (ULONG64)Pages[0]);
+#endif
+
             /* Clamp to VDL */
             if (ValidDataLength && ((FileOffset.QuadPart + ReadLength) > ValidDataLength->QuadPart))
             {
@@ -1481,18 +1489,19 @@ AssignPagesToSegment:
             MmLockSectionSegment(Segment);
 
 #if defined(_M_ARM64)
-            /* ARM64: Log PFN assignments to trace physical address mapping */
-            if (ChunkOffset == 0 && FileObject)
+            /* Debug: check what data was read into the first page */
+            if (BYTES_TO_PAGES(ReadLength) > 0)
             {
-                DPRINT1("[MmMakeSegmentResident ARM64] Assigning pages for FileOffset=%I64x File=%wZ\n",
-                        FileOffset.QuadPart, &FileObject->FileName);
-                DPRINT1("[MmMakeSegmentResident ARM64] ChunkOffset=%I64x ReadLength=%lu NumPages=%lu\n",
-                        ChunkOffset, ReadLength, BYTES_TO_PAGES(ReadLength));
-                for (UINT i = 0; i < BYTES_TO_PAGES(ReadLength); i++)
+                KIRQL HyperIrql;
+                PVOID TempVa = MiMapPageInHyperSpace(PsGetCurrentProcess(), Pages[0], &HyperIrql);
+                if (TempVa)
                 {
-                    DPRINT1("[MmMakeSegmentResident ARM64]   Page[%u]: PFN=0x%I64x PA=0x%I64x SegOffset=%I64x\n",
-                            i, (ULONG64)Pages[i], (ULONG64)(Pages[i] << PAGE_SHIFT),
-                            ChunkOffset + (i * PAGE_SIZE));
+                    PUCHAR Data = (PUCHAR)TempVa;
+                    DPRINT1("[arm64] MmMakeSegmentResident: After IoPageRead - PFN[0]=0x%I64x First16bytes: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n",
+                            (ULONG64)Pages[0],
+                            Data[0], Data[1], Data[2], Data[3], Data[4], Data[5], Data[6], Data[7],
+                            Data[8], Data[9], Data[10], Data[11], Data[12], Data[13], Data[14], Data[15]);
+                    MiUnmapPageInHyperSpace(PsGetCurrentProcess(), TempVa, HyperIrql);
                 }
             }
 #endif
@@ -1828,6 +1837,16 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
      * Get the entry corresponding to the offset within the section
      */
     Entry = MmGetPageEntrySectionSegment(Segment, &Offset);
+
+#if defined(_M_ARM64)
+    /* Debug: trace section view page faults for user space DLLs */
+    if (PAddress < MmSystemRangeStart)
+    {
+        DPRINT1("[arm64] MmNotPresentFaultSectionView: VA=%p Offset=0x%I64x Entry=0x%I64x FileOffset=0x%I64x RawLen=0x%I64x\n",
+                PAddress, Offset.QuadPart, Entry, Segment->Image.FileOffset, Segment->RawLength.QuadPart);
+    }
+#endif
+
     if (Entry == 0)
     {
         /*
@@ -1864,6 +1883,17 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
 
         MmUnlockSectionSegment(Segment);
         MmUnlockAddressSpace(AddressSpace);
+
+#if defined(_M_ARM64)
+        /*
+         * ARM64 DEBUG (Cycle 57): Trace segment FileObject before reading
+         */
+        DPRINT1("[arm64] MmNotPresentFaultSectionView: About to read segment data\n");
+        DPRINT1("[arm64] MmNotPresentFaultSectionView: Segment=%p FileObj=%p File='%wZ'\n",
+                Segment, Segment->FileObject, &Segment->FileObject->FileName);
+        DPRINT1("[arm64] MmNotPresentFaultSectionView: Segment->Image.FileOffset=0x%I64x Offset=0x%I64x\n",
+                (LONGLONG)Segment->Image.FileOffset, Offset.QuadPart);
+#endif
 
         /* The data must be paged in. Lock the file, so that the VDL doesn't get updated behind us. */
         FsRtlAcquireFileExclusive(Segment->FileObject);
@@ -1978,6 +2008,15 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
     {
         /* We already have a page on this section offset. Map it into the process address space. */
         Page = PFN_FROM_SSE(Entry);
+
+#if defined(_M_ARM64)
+        /* Debug: trace the PFN being mapped for user space */
+        if (PAddress < MmSystemRangeStart)
+        {
+            DPRINT1("[arm64] MmNotPresentFaultSectionView: Mapping VA=%p to PFN=0x%I64x (Entry=0x%I64x)\n",
+                    PAddress, (ULONG64)Page, Entry);
+        }
+#endif
 
         Status = MmCreateVirtualMapping(Process,
                                         PAddress,
@@ -2765,6 +2804,41 @@ ExeFmtpReadFile(IN PVOID File,
 
     UsedSize = (ULONG)Iosb.Information;
 
+#if defined(_M_ARM64)
+    /*
+     * ARM64 DEBUG (Cycle 57): Dump what was read for PE header validation
+     * If FAT metadata is being read instead of PE file, the first bytes will
+     * show FAT boot sector signature (0xEB, 0x3C or 0xEB, 0x58) instead of MZ (0x4D, 0x5A)
+     */
+    if (NT_SUCCESS(Status) && UsedSize >= 16)
+    {
+        PUCHAR RawData = (PUCHAR)Buffer;
+        DPRINT1("[arm64] ExeFmtpReadFile: File='%wZ' FileOffset=0x%I64x BufferSize=%lu UsedSize=%lu\n",
+                &FileObject->FileName, FileOffset.QuadPart, BufferSize, UsedSize);
+        DPRINT1("[arm64] ExeFmtpReadFile: First 32 bytes: "
+                "%02X %02X %02X %02X %02X %02X %02X %02X "
+                "%02X %02X %02X %02X %02X %02X %02X %02X "
+                "%02X %02X %02X %02X %02X %02X %02X %02X "
+                "%02X %02X %02X %02X %02X %02X %02X %02X\n",
+                RawData[0], RawData[1], RawData[2], RawData[3],
+                RawData[4], RawData[5], RawData[6], RawData[7],
+                RawData[8], RawData[9], RawData[10], RawData[11],
+                RawData[12], RawData[13], RawData[14], RawData[15],
+                RawData[16], RawData[17], RawData[18], RawData[19],
+                RawData[20], RawData[21], RawData[22], RawData[23],
+                RawData[24], RawData[25], RawData[26], RawData[27],
+                RawData[28], RawData[29], RawData[30], RawData[31]);
+        /* Check for common wrong signatures */
+        if (RawData[0] == 0xEB || (RawData[0] == 0x00 && RawData[1] == 0x00))
+        {
+            DPRINT1("[arm64] ExeFmtpReadFile: WARNING - Data looks like FAT boot sector (0x%02X) not PE file (expected 0x4D 0x5A)!\n",
+                    RawData[0]);
+            DPRINT1("[arm64] ExeFmtpReadFile: FileObject=%p FsContext=%p SOP=%p\n",
+                    FileObject, FileObject->FsContext, FileObject->SectionObjectPointer);
+        }
+    }
+#endif
+
     if(NT_SUCCESS(Status) && UsedSize < OffsetAdjustment)
     {
         Status = STATUS_IN_PAGE_ERROR;
@@ -3290,6 +3364,25 @@ MmCreateImageSection(PSECTION *SectionObject,
     PMM_IMAGE_SECTION_OBJECT ImageSectionObject;
     KIRQL OldIrql;
 
+#if defined(_M_ARM64)
+    /*
+     * ARM64 DEBUG (Cycle 57): Trace FileObject for section creation
+     * This helps diagnose if the wrong FileObject is being used for driver sections
+     */
+    DPRINT1("[arm64] MmCreateImageSection: FileObject=%p FileName='%wZ' SOP=%p\n",
+            FileObject,
+            FileObject ? &FileObject->FileName : NULL,
+            FileObject ? FileObject->SectionObjectPointer : NULL);
+    if (FileObject && FileObject->FsContext)
+    {
+        /* Try to get FCB info - FsContext points to the FCB in most file systems */
+        PFSRTL_COMMON_FCB_HEADER FcbHeader = (PFSRTL_COMMON_FCB_HEADER)FileObject->FsContext;
+        DPRINT1("[arm64] MmCreateImageSection: FsContext=%p FileSize=0x%I64x AllocationSize=0x%I64x\n",
+                FileObject->FsContext,
+                FcbHeader->FileSize.QuadPart,
+                FcbHeader->AllocationSize.QuadPart);
+    }
+#endif
 
     if (FileObject == NULL)
         return STATUS_INVALID_FILE_FOR_SECTION;
@@ -3542,6 +3635,42 @@ MmMapViewOfSegment(
 
     MmInitializeRegion(&MArea->SectionData.RegionListHead,
                        ViewSize, 0, Protect);
+
+#if defined(_M_ARM64)
+    /*
+     * ARM64 Cycle 57: Clear any stale PTEs in the newly mapped VA range.
+     *
+     * FreeLoader creates identity mappings in user space (TTBR0) during boot.
+     * These mappings may cover the VA range we just reserved. If so, reads from
+     * this VA range would hit FreeLoader's identity-mapped physical pages
+     * instead of the section data (which is demand-loaded on page faults).
+     *
+     * Solution: Walk the page table hierarchy for this VA range and invalidate
+     * any existing PTEs. This ensures page faults occur when the section is
+     * accessed, which will properly populate the pages with file data.
+     *
+     * NOTE: We only do this for user-space section views mapped in a process
+     * context (i.e., Process != NULL and Address < MmSystemRangeStart).
+     */
+    {
+        /*
+         * ARM64 Cycle 57: DISABLED stale PTE clearing.
+         *
+         * The stale PTE clearing code was causing issues because:
+         * 1. FreeLoader creates 2MB block descriptors (not L3 page tables)
+         * 2. Clearing the L2 block descriptor removes the entire mapping
+         * 3. The page fault handler can't create mappings without page tables
+         *
+         * For now, we need a different approach:
+         * - Either fix FreeLoader to not create identity mappings
+         * - Or use a different VA range for section views (not 0-2MB)
+         * - Or have the page fault handler create page tables on demand
+         */
+        UNREFERENCED_PARAMETER(AddressSpace);
+        DPRINT1("[arm64] MmMapViewOfSegment: Skipping stale PTE clearing for Base=%p (DISABLED)\n",
+                *BaseAddress);
+    }
+#endif
 
     return STATUS_SUCCESS;
 }
@@ -4790,9 +4919,19 @@ MmMapViewInSystemSpaceEx (
                                 SectionOffset->QuadPart,
                                 SEC_RESERVE);
 
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] MmMapViewInSystemSpaceEx: MmMapViewOfSegment returned Status=0x%lx Base=%p\n",
+            Status, *MappedBase);
+#endif
 
     MmUnlockSectionSegment(Segment);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] MmMapViewInSystemSpaceEx: After MmUnlockSectionSegment\n");
+#endif
     MmUnlockAddressSpace(AddressSpace);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64] MmMapViewInSystemSpaceEx: Returning Status=0x%lx\n", Status);
+#endif
 
     return Status;
 }

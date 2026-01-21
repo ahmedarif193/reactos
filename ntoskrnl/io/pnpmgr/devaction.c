@@ -2340,42 +2340,6 @@ PiDevNodeStateMachine(
     {
         doProcessAgain = FALSE;
 
-#if defined(_M_ARM64)
-        // Watchdog: detect infinite loops (> 100000 iterations or > 5 seconds)
-        IterationCount++;
-        KeQueryTickCount(&CurrentTime);
-
-        if (IterationCount > 100000)
-        {
-            DPRINT1("[arm64] PiDevNodeStateMachine: WATCHDOG - Too many iterations (%lu)!\n", IterationCount);
-            DPRINT1("[arm64]   CurrentNode=%p State=%u Flags=0x%08lx Path=%wZ\n",
-                    currentNode, currentNode->State, currentNode->Flags, &currentNode->InstancePath);
-            DPRINT1("[arm64]   RootNode=%p doProcessAgain=%u\n", RootNode, doProcessAgain);
-            KeBugCheckEx(UNEXPECTED_KERNEL_MODE_TRAP, 0xA64001, (ULONG_PTR)currentNode, IterationCount, 0);
-        }
-
-        LARGE_INTEGER ElapsedTicks;
-        ElapsedTicks.QuadPart = CurrentTime.QuadPart - StartTime.QuadPart;
-        ULONG ElapsedMs = (ULONG)((ElapsedTicks.QuadPart * KeQueryTimeIncrement()) / 10000);
-
-        if (ElapsedMs > 5000)
-        {
-            DPRINT1("[arm64] PiDevNodeStateMachine: WATCHDOG - Timeout (%lu ms, %lu iterations)!\n",
-                    ElapsedMs, IterationCount);
-            DPRINT1("[arm64]   CurrentNode=%p State=%u Flags=0x%08lx Path=%wZ\n",
-                    currentNode, currentNode->State, currentNode->Flags, &currentNode->InstancePath);
-            KeBugCheckEx(UNEXPECTED_KERNEL_MODE_TRAP, 0xA64002, (ULONG_PTR)currentNode, ElapsedMs, IterationCount);
-        }
-
-        // Log every 1000 iterations for debugging
-        if (IterationCount % 1000 == 0)
-        {
-            DPRINT1("[arm64] PiDevNodeStateMachine: Iteration %lu Node=%p State=%u Flags=0x%08lx Path=%wZ\n",
-                    IterationCount, currentNode, currentNode->State, currentNode->Flags,
-                    &currentNode->InstancePath);
-        }
-#endif
-
         // The device can be removed during processing, but we still need its Parent and Sibling
         // links to continue the tree traversal. So keep the link till the and of a cycle
         referencedObject = currentNode->PhysicalDeviceObject;
@@ -2387,23 +2351,6 @@ PiDevNodeStateMachine(
         {
             goto skipEnum;
         }
-
-#if defined(_M_ARM64)
-        // ARM64 FIX: Skip nodes with uninitialized or empty InstancePath
-        // This prevents infinite loops where newly created PDOs haven't been
-        // properly initialized yet. The state machine will process them in
-        // a later call once they're properly set up.
-        if (currentNode->InstancePath.Length == 0 ||
-            currentNode->InstancePath.Buffer == NULL)
-        {
-            if (IterationCount <= 50 || IterationCount % 100 == 0)
-            {
-                DPRINT1("[arm64] Skipping node %p with empty InstancePath (State=%u)\n",
-                        currentNode, currentNode->State);
-            }
-            goto skipEnum;
-        }
-#endif
 
         switch (currentNode->State)
         {

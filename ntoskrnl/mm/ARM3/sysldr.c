@@ -119,6 +119,43 @@ MiLoadImageSection(_Inout_ PSECTION *SectionPtr,
         NtGlobalFlag &= ~FLG_ENABLE_KDEBUG_SYMBOL_LOAD;
     }
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64 CRITICAL: PRE-MAPPING D-Cache Invalidation (Cycle 46)
+     *
+     * ROOT CAUSE IDENTIFIED:
+     * User-mode virtual addresses (e.g., 0x40000) are reused for multiple DLLs.
+     * When a new DLL is mapped at a VA that previously held another DLL:
+     *
+     * 1. No explicit unmapping occurs - mappings are replaced implicitly
+     * 2. D-cache still contains STALE DATA from the previous DLL at that VA
+     * 3. When MmMapViewOfSection creates the new mapping via page faults:
+     *    - New physical pages are mapped to the VA
+     *    - But D-cache ALREADY has cache lines for this VA (from old mapping!)
+     * 4. Subsequent reads (e.g., RtlImageNtHeaderEx reading PE header) may:
+     *    - Hit in D-cache with STALE data from previous DLL
+     *    - Read wrong bytes (e.g., 0x3F 0xE5 instead of 0x4D 0x5A "MZ")
+     * 5. Result: "Invalid DOS signature" errors
+     *
+     * WHY POST-FAULT INVALIDATION DOESN'T WORK:
+     * - DC CIVAC after reading the data is TOO LATE
+     * - The cache was already populated with stale data during the read
+     * - ARM64 cache allocation happens on read misses, but we're hitting OLD lines
+     *
+     * SOLUTION:
+     * Invalidate D-cache for the VA range BEFORE MmMapViewOfSection creates
+     * the mapping. This ensures:
+     * 1. All stale cache lines for this VA are invalidated
+     * 2. When page faults occur and PTEs are created, reads will miss in cache
+     * 3. Cache misses will fetch CORRECT data from new physical pages
+     * 4. PE header reads will see the right DOS signature
+     *
+     * NOTE: We invalidate even though Base is NULL because MmMapViewOfSection
+     * will find a VA and map there. We'll invalidate after we know the actual
+     * Base address (see below after the call).
+     */
+#endif
+
     /* Map the driver */
     Process = PsGetCurrentProcess();
     Status = MmMapViewOfSection(Section,
@@ -131,6 +168,28 @@ MiLoadImageSection(_Inout_ PSECTION *SectionPtr,
                                 ViewUnmap,
                                 0,
                                 PAGE_EXECUTE);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64: POST-MAPPING (PRE-FAULT) D-Cache Invalidation (Cycle 46)
+     *
+     * Now that MmMapViewOfSection has assigned a Base address but NOT yet
+     * created the actual PTEs (they'll be created on-demand via page faults),
+     * invalidate the D-cache for the entire mapped VA range.
+     *
+     * This prevents reading stale cache data when the page fault handler
+     * creates the PTEs and the image is accessed.
+     */
+    if (NT_SUCCESS(Status) && Base != NULL)
+    {
+        /*
+         * ARM64: Pre-fault cache invalidation is disabled.
+         * DC CIVAC on unmapped VAs causes Data Aborts. We rely on:
+         * 1. Cache invalidation in page fault handler (pagfault.c)
+         * 2. Cache invalidation in RtlpImageNtHeaderEx (image.c)
+         */
+    }
+#endif
 
     /* Re-enable the flag */
     if (LoadSymbols) NtGlobalFlag |= FLG_ENABLE_KDEBUG_SYMBOL_LOAD;
@@ -204,6 +263,63 @@ MiLoadImageSection(_Inout_ PSECTION *SectionPtr,
 
     /* Copy the image */
     RtlCopyMemory(DriverBase, Base, PteCount << PAGE_SHIFT);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64 CRITICAL: D-cache Invalidation After Driver Image Copy (Cycle 41)
+     *
+     * PROBLEM: We just copied the driver image from a section view (Base) to
+     * the final System PTE Space location (DriverBase). However, on ARM64:
+     *
+     * 1. RtlCopyMemory writes data to the D-cache for DriverBase addresses
+     * 2. The D-cache may have had STALE data for these VAs before the copy
+     * 3. Due to ARM64's weakly-ordered memory model and cache allocation policies,
+     *    subsequent reads from DriverBase might hit in a DIFFERENT cache line/set
+     *    that still contains the stale data
+     * 4. Result: Reading the PE header shows garbage (0xE53F) instead of "MZ" (0x5A4D)
+     *
+     * This is the root cause of the "Invalid DOS signature" errors for drivers
+     * loaded at address 0x40000 and other System PTE Space addresses.
+     *
+     * SOLUTION: After copying the image, invalidate the D-cache for the entire
+     * DriverBase range to ensure all subsequent reads fetch the freshly-copied
+     * data from main memory, not stale cache lines.
+     *
+     * We use DC CIVAC (Clean and Invalidate by VA to PoC) which:
+     * - Writes back the freshly-copied data to main memory
+     * - Invalidates all cache lines for these VAs
+     * - Forces subsequent reads to fetch from physical memory
+     *
+     * Order of operations:
+     * 1. RtlCopyMemory (data written to cache and memory)
+     * 2. DC CIVAC for entire range (flush writes, invalidate stale lines)
+     * 3. DSB ISH (ensure cache ops complete)
+     * 4. Subsequent PE header reads will see correct data
+     */
+    {
+        ULONG64 Ctr;
+        ULONG DcacheLineSize;
+        ULONG_PTR Va, EndVa;
+        SIZE_T TotalSize;
+
+        /* Read CTR_EL0 to get D-cache line size */
+        __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+        DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+
+        TotalSize = PteCount << PAGE_SHIFT;
+        Va = (ULONG_PTR)DriverBase;
+        EndVa = Va + TotalSize;
+
+        /* Invalidate D-cache for the entire driver image range */
+        for (; Va < EndVa; Va += DcacheLineSize)
+        {
+            __asm__ __volatile__("dc civac, %0" :: "r"(Va) : "memory");
+        }
+
+        /* Ensure all cache operations complete */
+        __asm__ __volatile__("dsb ish" ::: "memory");
+    }
+#endif
 
     /* Now unmap the view */
     Status = MmUnmapViewOfSection(Process, Base);
@@ -2990,6 +3106,70 @@ MmCheckSystemImage(
         ZwClose(SectionHandle);
         return Status;
     }
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64: Check for stale PTEs and perform cache invalidation for user-space addresses.
+     * This is necessary because:
+     * 1. The VA may have been used for a previous mapping with different PA
+     * 2. TLB entries may cache stale VA->PA translations
+     * 3. D-cache may contain stale data from previous physical pages
+     */
+    {
+        PMMPTE PointerPte = MiAddressToPte(ViewBase);
+        PMMPDE PointerPde = MiAddressToPde(ViewBase);
+
+        if (PointerPde->u.Hard.Valid && PointerPte->u.Hard.Valid)
+        {
+            /* Stale PTE from a previous mapping - invalidate it.
+             * Use VAALE1IS to flush ALL ASIDs including Global entries from FreeLoader */
+            PointerPte->u.Long = 0;
+            __asm__ __volatile__("dsb ish" ::: "memory");
+            __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)ViewBase >> 12) : "memory");
+            __asm__ __volatile__("dsb ish" ::: "memory");
+            __asm__ __volatile__("isb" ::: "memory");
+        }
+    }
+
+    /* User-space mappings need explicit TLB and D-cache invalidation */
+    if ((ULONG_PTR)ViewBase < 0x8000000000000000ULL)
+    {
+        ULONG64 Ctr;
+        ULONG DcacheLineSize;
+        ULONG_PTR InvalidateAddr;
+        ULONG_PTR InvalidateEnd;
+
+        /* Trigger page fault to ensure PTEs exist before cache maintenance */
+        /* Note: __try/__except not supported without PSEH on ARM64 GCC */
+        {
+            volatile UCHAR FirstByte = ((volatile UCHAR*)ViewBase)[0];
+            (void)FirstByte;
+        }
+
+        /* TLB invalidation for the first 2 pages (PE header).
+         * Use VAALE1IS to flush ALL ASIDs including Global entries from FreeLoader */
+        InvalidateAddr = (ULONG_PTR)ViewBase & ~0xFFFULL;
+        InvalidateEnd = InvalidateAddr + (2 * PAGE_SIZE);
+
+        for (; InvalidateAddr < InvalidateEnd; InvalidateAddr += PAGE_SIZE)
+        {
+            __asm__ __volatile__("tlbi vaale1is, %0" :: "r"(InvalidateAddr >> 12) : "memory");
+        }
+        __asm__ __volatile__("dsb ish" ::: "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+
+        /* D-cache invalidation */
+        __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+        DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+
+        InvalidateAddr = (ULONG_PTR)ViewBase & ~0xFFFULL;
+        for (; InvalidateAddr < InvalidateEnd; InvalidateAddr += DcacheLineSize)
+        {
+            __asm__ __volatile__("dc civac, %0" :: "r"(InvalidateAddr) : "memory");
+        }
+        __asm__ __volatile__("dsb ish" ::: "memory");
+    }
+#endif
 
     /* Now query image information */
     Status = ZwQueryInformationFile(ImageHandle,

@@ -271,6 +271,16 @@ typedef struct _MEMORY_AREA
 #define MI_SET_ROSMM_VAD(Vad) do { (Vad)->u.VadFlags.Spare |= 2; } while (0)
 #define MI_IS_ROSMM_VAD(Vad) (((Vad)->u.VadFlags.Spare & 2) != 0)
 
+#if defined(_M_ARM64)
+/* ARM64 Cycle 57: Clear stale user PTEs from FreeLoader's identity mapping */
+VOID
+NTAPI
+MiArm64ClearStaleUserPtes(
+    _In_ PVOID StartVa,
+    _In_ SIZE_T Size,
+    _In_ PEPROCESS Process);
+#endif
+
 typedef struct _MM_RMAP_ENTRY
 {
    struct _MM_RMAP_ENTRY* Next;

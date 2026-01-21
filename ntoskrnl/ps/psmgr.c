@@ -207,6 +207,7 @@ PspMapSystemDll(IN PEPROCESS Process,
                                 ViewShare,
                                 0,
                                 PAGE_READWRITE);
+
     if (Status != STATUS_SUCCESS)
     {
         /* Normalize status code */

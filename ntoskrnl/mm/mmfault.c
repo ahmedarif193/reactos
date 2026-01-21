@@ -343,6 +343,14 @@ MmAccessFault(IN ULONG FaultCode,
     /* Is there a ReactOS address space yet? */
     if (MmGetKernelAddressSpace())
     {
+#if defined(_M_ARM64)
+        /* Debug: trace user-space faults */
+        if (Address <= MM_HIGHEST_USER_ADDRESS && (ULONG_PTR)Address >= 0xFE000000)
+        {
+            DPRINT1("[arm64] MmAccessFault: HIGH USER addr=%p FaultCode=0x%lx Mode=%d\n",
+                    Address, FaultCode, Mode);
+        }
+#endif
         if (Address > MM_HIGHEST_USER_ADDRESS)
         {
             /* Check if this is an ARM3 memory area */
@@ -392,6 +400,15 @@ MmAccessFault(IN ULONG FaultCode,
             /* Could this be a VAD fault from user-mode? */
             MiLockProcessWorkingSetShared(PsGetCurrentProcess(), PsGetCurrentThread());
             Vad = MiLocateVad(&PsGetCurrentProcess()->VadRoot, Address);
+
+#if defined(_M_ARM64)
+            /* Debug: trace high user address VAD lookup */
+            if ((ULONG_PTR)Address >= 0xFE000000)
+            {
+                DPRINT1("[arm64] MmAccessFault: User VAD lookup addr=%p Vad=%p IsRos=%d\n",
+                        Address, Vad, Vad ? (MI_IS_ROSMM_VAD(Vad) ? 1 : 0) : -1);
+            }
+#endif
 
             if ((Vad != NULL) && !MI_IS_ROSMM_VAD(Vad))
             {

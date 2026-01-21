@@ -166,6 +166,19 @@ KeUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
     /* Check if we came from user mode */
 #if defined(_M_IX86) || defined(_M_AMD64)
     if (KiUserTrap(TrapFrame) || (TrapFrame->EFlags & EFLAGS_V86_MASK))
+#elif defined(_M_ARM64)
+    /*
+     * ARM64: The timer ISR may pass (PKTRAP_FRAME)-1 as a sentinel value
+     * to indicate no trap frame is available. Check for this before
+     * dereferencing TrapFrame.
+     *
+     * If TrapFrame is (PKTRAP_FRAME)-1, we can't determine PreviousMode,
+     * so assume KernelMode (since interrupts at IRQL > DISPATCH_LEVEL
+     * always interrupt kernel code, not user mode).
+     */
+    if (TrapFrame != (PKTRAP_FRAME)(ULONG_PTR)-1 &&
+        TrapFrame != NULL &&
+        TrapFrame->PreviousMode == UserMode)
 #else
     if (TrapFrame->PreviousMode == UserMode)
 #endif

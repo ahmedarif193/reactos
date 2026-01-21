@@ -39,7 +39,7 @@ struct _KPCR;
 
 /* CYCLE31: Raw UART output for debugging - works even if DPRINT doesn't */
 #define PL011_VA 0xFFFF800009000000ULL
-static FORCEINLINE VOID KiArm64RawPuts(const char *str) {
+FORCEINLINE VOID KiArm64RawPuts(const char *str) {
     volatile ULONG *uart = (volatile ULONG *)PL011_VA;
     while (*str) {
         while (uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}  /* Wait for TXFF */

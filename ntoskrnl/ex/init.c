@@ -17,11 +17,8 @@
 #define NDEBUG
 #include <debug.h>
 
-#if defined(_M_ARM64)
-#define EXP_ARM64_LOG(Stage) DPRINT1("%s\n", (Stage))
-#else
+/* ARM64: Disable verbose initialization logging */
 #define EXP_ARM64_LOG(Stage) do { } while (0)
-#endif
 
 /* This is the size that we can expect from the win 2003 loader */
 #define LOADER_PARAMETER_EXTENSION_MIN_SIZE \
@@ -415,20 +412,9 @@ ExpInitNls(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     /* Map the NLS Section in system space */
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] ExpInitNls Phase1: Before MmMapViewInSystemSpace\n");
-    DPRINT1("[arm64]   SectionBase (input):  %p\n", SectionBase);
-    DPRINT1("[arm64]   ExpNlsTableSize:      0x%lx\n", (ULONG)ExpNlsTableSize);
-#endif
     Status = MmMapViewInSystemSpace(ExpNlsSectionPointer,
                                     &SectionBase,
                                     &ExpNlsTableSize);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] ExpInitNls Phase1: After MmMapViewInSystemSpace\n");
-    DPRINT1("[arm64]   Status:               0x%08lx\n", Status);
-    DPRINT1("[arm64]   SectionBase (output): %p\n", SectionBase);
-    DPRINT1("[arm64]   ExpNlsTableSize:      0x%lx\n", (ULONG)ExpNlsTableSize);
-#endif
     if (!NT_SUCCESS(Status))
     {
         /* Failed */
@@ -1359,15 +1345,20 @@ ExpInitializeExecutive(IN ULONG Cpu,
      * CRITICAL: This must be set by the kernel, NOT by the HAL, to avoid
      * circular import dependencies (HAL importing kernel exports).
      */
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: setting KiHalInitialized=TRUE");
     extern BOOLEAN KiHalInitialized;
     KiHalInitialized = TRUE;
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: KiHalInitialized set");
 #endif
 
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: about to _enable()");
     /* Make sure interrupts are active now */
     _enable();
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: _enable() done");
 
     /* Clear the crypto exponent */
     SharedUserData->CryptoExponent = 0;
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: CryptoExponent cleared");
 
     /* Set global flags for the checked build */
 #if DBG
@@ -1375,6 +1366,7 @@ ExpInitializeExecutive(IN ULONG Cpu,
                     FLG_ENABLE_KDEBUG_SYMBOL_LOAD;
 #endif
 
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: about to setup NtSystemRoot");
     /* Setup NT System Root Path */
     Status = RtlStringCbPrintfA(Buffer,
                                 sizeof(Buffer),
@@ -1386,10 +1378,12 @@ ExpInitializeExecutive(IN ULONG Cpu,
     {
         KeBugCheckEx(SESSION3_INITIALIZATION_FAILED, Status, 0, 0, 0);
     }
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: RtlStringCbPrintfA done");
 
     /* Convert to ANSI_STRING and null-terminate it */
     RtlInitString(&AnsiPath, Buffer);
     Buffer[--AnsiPath.Length] = ANSI_NULL;
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: AnsiPath set up");
 
     /* Get the string from KUSER_SHARED_DATA's buffer */
     RtlInitEmptyUnicodeString(&NtSystemRoot,
@@ -1399,12 +1393,16 @@ ExpInitializeExecutive(IN ULONG Cpu,
     /* Now fill it in */
     Status = RtlAnsiStringToUnicodeString(&NtSystemRoot, &AnsiPath, FALSE);
     if (!NT_SUCCESS(Status)) KeBugCheck(SESSION3_INITIALIZATION_FAILED);
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: NtSystemRoot set up");
 
     /* Setup bugcheck messages */
     KiInitializeBugCheck();
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: KiInitializeBugCheck done");
 
     /* Setup initial system settings */
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: calling CmGetSystemControlValues");
     CmGetSystemControlValues(LoaderBlock->RegistryBase, CmControlVector);
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: CmGetSystemControlValues done");
 
     /* Set the Service Pack Number and add it to the CSD Version number if needed */
     CmNtSpBuildNumber = VER_PRODUCTBUILD_QFE;
@@ -2358,26 +2356,7 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: before PsInitSystem(Phase1)");
     /* Initialize the Process Manager at Phase 1 */
-#if defined(_M_ARM64)
-    /*
-     * ARM64 WORKAROUND: Skip PsInitSystem Phase1 because we skipped PsLocateSystemDll.
-     *
-     * PsInitSystem Phase1 calls PspInitializeSystemDll which requires PspSystemDllBase
-     * to be valid (non-NULL). Since we skipped PsLocateSystemDll to avoid the ZwOpenFile
-     * deadlock, PspSystemDllBase is NULL and PspInitializeSystemDll would bugcheck.
-     *
-     * Skipping this is safe because PspInitializeSystemDll only:
-     * 1. Looks up ntdll.dll export addresses (LdrInitializeThunk, KiUserApcDispatcher, etc.)
-     * 2. Stores these in global variables for user-mode thread startup
-     *
-     * Since we have no user-mode processes yet, these aren't needed.
-     *
-     * TODO: Re-enable when PsLocateSystemDll deadlock is fixed.
-     */
-    DPRINT1("[arm64] Phase1InitializationDiscard: SKIPPING PsInitSystem(Phase1) - ntdll.dll not loaded\n");
-#else
     if (!PsInitSystem(LoaderBlock)) KeBugCheck(PROCESS1_INITIALIZATION_FAILED);
-#endif
     EXP_ARM64_LOG("[arm64] Phase1InitializationDiscard: after PsInitSystem(Phase1)");
 
     /* Make sure nobody touches the loader block again */

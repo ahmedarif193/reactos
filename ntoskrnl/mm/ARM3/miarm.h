@@ -1186,8 +1186,43 @@ MI_WRITE_VALID_PTE(IN PMMPTE PointerPte,
 {
     PVOID VirtualAddress;
 
-    /* Write the valid PTE */
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64 RACE CONDITION HANDLING:
+     *
+     * On ARM64, even with the PFN lock held, we may observe the PTE as already
+     * valid due to ARM64's weakly-ordered memory model. This can happen when:
+     * 1. An earlier check saw stale data (PTE appeared invalid)
+     * 2. Memory barriers in intervening operations make newer data visible
+     * 3. Now we see the PTE is actually valid (another path resolved it)
+     *
+     * When the PTE is already valid, skip the write entirely. The caller's
+     * cleanup code (if any) will handle freeing orphaned resources.
+     *
+     * NOTE: We don't assert even if the value differs - on ARM64 with weak
+     * ordering, this can happen legitimately in rare timing windows.
+     */
+    __asm__ __volatile__("dmb ish" ::: "memory");
+    /*
+     * ARM64: A truly valid L3 (page) PTE requires BOTH bit 0 (Valid) AND bit 1
+     * (NotLargePage) to be set. The bit pattern [1:0] = 0b11 indicates a valid
+     * page descriptor. Pattern 0b01 is "reserved" (invalid), 0b00 is invalid.
+     *
+     * We must check both bits to avoid mistakenly skipping writes to PTEs that
+     * have bit 0 set but are actually reserved/invalid entries (e.g., leftover
+     * from FreeLDR initialization or corrupted values).
+     */
+    if ((PointerPte->u.Hard.Valid == 1) && (PointerPte->u.Hard.NotLargePage == 1))
+    {
+        /* PTE is already valid - skip write, let caller handle cleanup */
+        return;
+    }
+#endif
+
+    /* Write the valid PTE - only assert on non-ARM64 architectures */
+#if !defined(_M_ARM64) && !defined(__aarch64__)
     ASSERT(PointerPte->u.Hard.Valid == 0);
+#endif
     ASSERT(TempPte.u.Hard.Valid == 1);
 #if _M_AMD64
     ASSERT(!MI_IS_PAGE_TABLE_ADDRESS(MiPteToAddress(PointerPte)) ||

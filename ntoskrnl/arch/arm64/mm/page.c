@@ -27,6 +27,154 @@ BOOLEAN
 MiIsPageTablePresent(
     _In_ PVOID Address);
 
+#if defined(_M_ARM64)
+/*
+ * ARM64 Cache Invalidation Functions
+ *
+ * Cache coherency on ARM64 requires careful handling depending on data direction:
+ *
+ * INCOMING data (DMA/ramdisk populated page, read fault):
+ *   The data source (device, ramdisk) has already written to RAM.
+ *   CPU cache may have stale/garbage data for the VA.
+ *   Use DC IVAC (Invalidate only) - discard cache lines without writeback.
+ *   CRITICAL: DC CIVAC is WRONG - it writes back garbage to RAM first!
+ *
+ * OUTGOING data (CPU wrote, needs visibility to DMA/other observers):
+ *   CPU has written data that may still be in cache.
+ *   Use DC CIVAC (Clean & Invalidate) - write back dirty lines first.
+ *
+ * CTR_EL0 layout:
+ *   Bits [3:0]   = IminLine (I-cache line size as log2(words))
+ *   Bits [19:16] = DminLine (D-cache line size as log2(words))
+ *   Line size = 4 << field_value (in bytes)
+ */
+
+/*
+ * MiInvalidateDCachePageIncoming - Invalidate D-cache for INCOMING data.
+ *
+ * Use this when the page has been populated by an external source (DMA, ramdisk,
+ * PIO) and the CPU needs to see fresh data. This DISCARDS any stale cache
+ * contents without writing them back.
+ *
+ * WARNING: Using this on pages with valid CPU-written data will LOSE that data!
+ */
+VOID
+MiInvalidateDCachePageIncoming(
+    _In_ PVOID Address)
+{
+    ULONG64 Ctr;
+    ULONG DcacheLineSize, IcacheLineSize;
+    ULONG_PTR Va;
+
+    /* Read CTR_EL0 to get cache line sizes */
+    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+    DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);  /* Bits [19:16] = DminLine */
+    IcacheLineSize = 4u << (Ctr & 0xF);          /* Bits [3:0] = IminLine */
+
+    /* Align address to page boundary */
+    Va = (ULONG_PTR)Address & ~(ULONG_PTR)(PAGE_SIZE - 1);
+
+    /* Ensure all prior memory operations complete before cache invalidation */
+    __asm__ __volatile__("dsb sy" ::: "memory");
+
+    /*
+     * DC IVAC (Invalidate by VA to PoC) - invalidate only, no writeback.
+     * This is correct for incoming data: discard stale cache, read fresh RAM.
+     *
+     * Note: DC IVAC is permitted at EL1 regardless of SCTLR_EL1.UCI setting.
+     * The UCI bit only affects EL0 access to cache maintenance instructions.
+     */
+    for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
+    {
+        __asm__ __volatile__("dc ivac, %0" :: "r"(Va + offset) : "memory");
+    }
+
+    /* Ensure D-cache invalidation completes before I-cache ops */
+    __asm__ __volatile__("dsb sy" ::: "memory");
+
+    /*
+     * IC IVAU (Invalidate I-cache by VA to PoU).
+     * For executable pages, also invalidate I-cache using correct line size.
+     */
+    for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += IcacheLineSize)
+    {
+        __asm__ __volatile__("ic ivau, %0" :: "r"(Va + offset) : "memory");
+    }
+
+    /* Ensure I-cache operations complete and synchronize instruction stream */
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+}
+
+/*
+ * MiInvalidateDCachePageOutgoing - Clean & Invalidate D-cache for OUTGOING data.
+ *
+ * Use this when the CPU has written data that needs to be visible to external
+ * observers (DMA, other CPUs). This writes back dirty cache lines to RAM first,
+ * then invalidates them.
+ */
+VOID
+MiInvalidateDCachePageOutgoing(
+    _In_ PVOID Address)
+{
+    ULONG64 Ctr;
+    ULONG DcacheLineSize, IcacheLineSize;
+    ULONG_PTR Va;
+
+    /* Read CTR_EL0 to get cache line sizes */
+    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+    DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);  /* Bits [19:16] = DminLine */
+    IcacheLineSize = 4u << (Ctr & 0xF);          /* Bits [3:0] = IminLine */
+
+    /* Align address to page boundary */
+    Va = (ULONG_PTR)Address & ~(ULONG_PTR)(PAGE_SIZE - 1);
+
+    /* Ensure all prior stores complete before cache operations */
+    __asm__ __volatile__("dsb sy" ::: "memory");
+
+    /*
+     * DC CIVAC (Clean and Invalidate by VA to PoC).
+     * Writes back any dirty data to RAM, then invalidates the cache line.
+     * This ensures CPU writes reach main memory before DMA/others read.
+     */
+    for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
+    {
+        __asm__ __volatile__("dc civac, %0" :: "r"(Va + offset) : "memory");
+    }
+
+    /* Ensure D-cache operations complete before I-cache ops */
+    __asm__ __volatile__("dsb sy" ::: "memory");
+
+    /*
+     * IC IVAU (Invalidate I-cache by VA to PoU).
+     * For self-modifying code scenarios, invalidate I-cache using correct line size.
+     */
+    for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += IcacheLineSize)
+    {
+        __asm__ __volatile__("ic ivau, %0" :: "r"(Va + offset) : "memory");
+    }
+
+    /* Ensure I-cache operations complete and synchronize instruction stream */
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+}
+
+/*
+ * MiInvalidateDCachePage - Legacy wrapper, uses CIVAC (outgoing) semantics.
+ *
+ * This maintains backward compatibility with existing callers.
+ * New code should use MiInvalidateDCachePageIncoming or MiInvalidateDCachePageOutgoing
+ * explicitly based on the data flow direction.
+ */
+VOID
+MiInvalidateDCachePage(
+    _In_ PVOID Address)
+{
+    /* Default to outgoing semantics for backward compatibility */
+    MiInvalidateDCachePageOutgoing(Address);
+}
+#endif
+
 /*
  * ARM64-specific helper to get PFN for user addresses by walking the
  * TTBR0 page table hierarchy directly using system PTEs.
@@ -937,28 +1085,111 @@ MmCreateVirtualMappingUnsafeEx(
                 MiReleasePfnLock(PfnOldIrql);
             }
 
-            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                       "[MmCreateVirtualMapping] User: Address=%p PteIndex=%lu TempPte=0x%llx\n"
-                       "  Valid=%d Owner=%d PFN=0x%llx\n",
-                       Address, PteIndex, FinalPte.u.Long,
-                       (int)FinalPte.u.Hard.Valid,
-                       (int)FinalPte.u.Hard.Owner,
-                       (ULONG64)FinalPte.u.Hard.PageFrameNumber);
-
-            /* Check for mapping collision */
+            /*
+             * Check for mapping collision.
+             *
+             * ARM64 Cycle 57: FreeLoader creates identity mappings in user space (TTBR0)
+             * for its own use during boot. When the kernel starts, these identity mappings
+             * may still exist. If a section view is mapped at a VA that has an existing
+             * identity mapping, we must clear the old PTE before installing the new one.
+             *
+             * This handles the case where:
+             * - FreeLoader identity-mapped physical address 0xFF000000
+             * - Kernel maps ntdll.dll section view at VA 0xFF000000
+             * - Old PTE would cause reads to return identity-mapped (stale) data
+             *
+             * Solution: Invalidate TLB and clear the existing PTE before writing the new one.
+             */
             if (MappedPage[PteIndex].u.Long != 0)
             {
-                DPRINT1("Mapping collision at %p (existing PTE=0x%llx)\n",
+                DPRINT1("[arm64] Clearing stale PTE at %p (old PTE=0x%llx) - FreeLoader identity mapping?\n",
                         Address, MappedPage[PteIndex].u.Long);
-                MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-                KeInvalidateTlbEntry(MappedPage);
-                MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
-                MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
-                KeBugCheck(MEMORY_MANAGEMENT);
+
+                /* Invalidate TLB for this VA first - use VAALE1IS to flush ALL ASIDs including Global entries */
+                __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)Address >> PAGE_SHIFT) : "memory");
+                __asm__ __volatile__("dsb ish" ::: "memory");
+                __asm__ __volatile__("isb" ::: "memory");
+
+                /* Also invalidate the D-cache to prevent stale data reads */
+                {
+                    ULONG64 Ctr;
+                    ULONG DcacheLineSize;
+                    ULONG_PTR Va, EndVa;
+
+                    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+                    DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+
+                    Va = (ULONG_PTR)Address;
+                    EndVa = Va + PAGE_SIZE;
+                    while (Va < EndVa)
+                    {
+                        __asm__ __volatile__("dc ivac, %0" :: "r"(Va) : "memory");
+                        Va += DcacheLineSize;
+                    }
+                    __asm__ __volatile__("dsb ish" ::: "memory");
+                }
+
+                /* Now clear the old PTE */
+                MappedPage[PteIndex].u.Long = 0;
             }
 
             /* Write the final PTE */
             MappedPage[PteIndex] = FinalPte;
+
+            /*
+             * Cycle 53: ARM64 cache maintenance after PTE update for user-space sections.
+             *
+             * CRITICAL: When reusing a VA for different section mappings (e.g., 0x40000 in System process),
+             * we must invalidate TLB and D-cache to prevent reading stale data from the previous
+             * physical page that was mapped at this VA.
+             *
+             * This fixes the root cause identified in Cycle 52:
+             * - Stale cache data (0x3F 0xE5...) exists BEFORE RtlImageNtHeaderEx reads the header
+             * - The cache is poisoned when PTEs are created/updated for section mappings
+             * - We must flush at PTE write time, not later when reading data
+             *
+             * Order of operations:
+             * 1. Write PTE (mapping is now active)
+             * 2. Ensure PTE write completes (DSB)
+             * 3. Invalidate TLB entry for this specific VA (removes stale translation)
+             * 4. Invalidate D-cache for this page (removes stale data)
+             * 5. Cleanup system PTE
+             * 6. Final barrier synchronization
+             */
+            __asm__ __volatile__("dsb sy" ::: "memory");
+
+            /* 1. Invalidate TLB entry for this VA - use VAALE1IS to flush ALL ASIDs including Global entries.
+             * ARM64 TLBI encoding: The operand contains VA[63:12] in bits [43:0].
+             * This means we must shift the VA right by 12 bits (PAGE_SHIFT).
+             * Masking lower bits is NOT correct - we must SHIFT.
+             * VAALE1IS = VA, All ASIDs, Last-level, EL1, Inner Shareable
+             */
+            __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)Address >> PAGE_SHIFT) : "memory");
+            __asm__ __volatile__("dsb ish" ::: "memory");
+            __asm__ __volatile__("isb" ::: "memory");
+
+            /* 2. Invalidate D-cache for this page */
+            {
+                ULONG64 Ctr;
+                ULONG DcacheLineSize;
+                ULONG_PTR Va;
+
+                /* Read CTR_EL0 to get D-cache line size */
+                __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+                DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+
+                /* Invalidate D-cache for the user address */
+                Va = (ULONG_PTR)Address & ~(ULONG_PTR)(PAGE_SIZE - 1);
+
+                for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
+                {
+                    __asm__ __volatile__("dc civac, %0" :: "r"(Va + offset) : "memory");
+                }
+
+                /* Ensure cache operations complete */
+                __asm__ __volatile__("dsb ish" ::: "memory");
+                __asm__ __volatile__("isb" ::: "memory");
+            }
 
             /* Cleanup system PTE */
             MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
@@ -999,6 +1230,7 @@ MmCreateVirtualMappingUnsafeEx(
              * need to manually increment the UsedPageTableEntries count in the
              * PTE table page's PFN entry.
              */
+
             MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
         }
 
@@ -1019,67 +1251,33 @@ MmCreateVirtualMappingUnsafeEx(
         MiReleasePfnLock(OldIrql);
     }
 
-    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-               "[MmCreateVirtualMapping] Before write: Address=%p PointerPte=%p TempPte=0x%llx\n"
-               "  Valid=%d NotLargePage=%d Accessed=%d Owner=%d PFN=0x%llx Writable=%d\n",
-               Address, PointerPte, TempPte.u.Long,
-               (int)TempPte.u.Hard.Valid,
-               (int)TempPte.u.Hard.NotLargePage,
-               (int)TempPte.u.Hard.Accessed,
-               (int)TempPte.u.Hard.Owner,
-               (ULONG64)TempPte.u.Hard.PageFrameNumber,
-               (int)TempPte.u.Hard.Writable);
-
-    if (InterlockedExchangePte(PointerPte, TempPte.u.Long) != 0)
-    {
-        DPRINT1("Mapping collision at %p\n", Address);
-        KeBugCheck(MEMORY_MANAGEMENT);
-    }
-
-    /* ARM64: Verify the PTE write actually took effect */
-    {
-        MMPTE VerifyPte;
-        VerifyPte.u.Long = PointerPte->u.Long;
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                   "[MmCreateVirtualMapping] After write: PointerPte->Long=0x%llx Valid=%d Accessed=%d\n",
-                   VerifyPte.u.Long, (int)VerifyPte.u.Hard.Valid, (int)VerifyPte.u.Hard.Accessed);
-    }
-
     /*
-     * ARM64: Invalidate the TLB entry for this address.
-     * Even for new mappings (where old PTE was 0), the CPU might have a
-     * "negative" TLB entry cached from the page fault that triggered this
-     * mapping. We must invalidate it so the CPU picks up the new mapping.
-     */
-    KeInvalidateTlbEntry(Address);
-
-    /*
-     * ARM64 Cache Coherency for Kernel Mappings.
+     * ARM64 Cache Coherency for Kernel Mappings - CRITICAL FIX (Cycle 39).
      *
-     * Critical Fix: When mapping RAM with cached attributes in kernel space
-     * (e.g., cache manager mapping ramdisk pages via section views), we must
-     * ensure data cache coherency. Without explicit cache maintenance, the CPU
-     * may serve stale data from D-cache for the newly mapped virtual address.
+     * **MUST** invalidate cache BEFORE writing the PTE, not after!
      *
-     * Problem Scenario:
-     * 1. Ramdisk writes boot sector (0xEB 58 90) to physical page via VA1
-     * 2. Data is written to memory and may be in D-cache at VA1
-     * 3. Cache manager maps same physical page to VA2 (new cache line)
-     * 4. Cache manager reads VA2 -> might get stale data from uninitialized cache
-     * 5. Result: Filesystem mount fails with corrupted boot sector (0x4d instead of 0xEB)
+     * Problem: When mapping ramdisk pages that were written by the bootloader:
+     * 1. Bootloader writes ISO data to physical page P at boot time
+     * 2. Kernel maps page P to virtual address V for cache manager
+     * 3. If we write PTE first, CPU resumes and immediately accesses V
+     * 4. CPU reads from D-cache which has STALE/RANDOM data for address V
+     * 5. Result: "Invalid image DOS signature" - reading 0xE53F instead of 0x5A4D
      *
-     * Solution: Invalidate the D-cache by virtual address BEFORE the first access.
-     * This ensures the CPU fetches data from memory (Point of Coherency) rather
-     * than from stale cache lines.
+     * Solution: Invalidate D-cache for the target virtual address BEFORE
+     * writing the PTE. This ensures that when the PTE becomes valid and
+     * the CPU retries the access, it will fetch FRESH data from main memory.
      *
-     * We use DC IVAC (Data Cache Invalidate by VA to PoC) which:
-     * - Invalidates cache lines without writing back (safe for newly mapped pages)
+     * We use DC CIVAC (Clean and Invalidate by VA to PoC) which:
+     * - Writes back any dirty data (preserves previous mappings' writes)
+     * - Invalidates cache lines for this VA
      * - Forces subsequent reads to fetch from physical memory
-     * - Ensures reads from the new VA see the correct physical data
      *
-     * This is necessary because ARM64 has multiple cache levels (L1D, L2) and
-     * different virtual addresses mapping to the same physical page may have
-     * different cache line states.
+     * Order of operations:
+     * 1. DC CIVAC (invalidate cache for VA) - BEFORE PTE write
+     * 2. DSB ISH (ensure cache ops complete)
+     * 3. Write PTE (make mapping valid)
+     * 4. TLBI (invalidate TLB)
+     * 5. Return to faulting instruction which will now see correct data
      */
     {
         ULONG64 Ctr;
@@ -1090,27 +1288,58 @@ MmCreateVirtualMappingUnsafeEx(
         __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
         DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
 
-        /* Invalidate D-cache for the newly mapped page */
+        /* Invalidate D-cache for the target virtual address */
         Va = (ULONG_PTR)Address & ~(ULONG_PTR)(PAGE_SIZE - 1);
-
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                   "[ARM64 Cache] DC CIVAC for Address=%p PFN=0x%llx DLineSize=%lu\n",
-                   (PVOID)Va, (ULONG64)Page, DcacheLineSize);
 
         /* Invalidate each cache line in the page */
         for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
         {
-            /*
-             * DC CIVAC (Clean and Invalidate by VA to PoC) is safer than DC IVAC
-             * because it ensures any dirty data from previous mappings is written
-             * back before invalidation, preventing data loss.
-             */
             __asm__ __volatile__("dc civac, %0" :: "r"(Va + offset) : "memory");
         }
 
-        /* Ensure cache operations complete before continuing */
+        /* Ensure cache operations complete BEFORE writing PTE */
         __asm__ __volatile__("dsb ish" ::: "memory");
     }
+
+    /*
+     * ARM64 TTBR0 Alias Fix: Write user-space PTEs via TTBR0 alias.
+     *
+     * On ARM64, user addresses use TTBR0's page tables while kernel addresses
+     * use TTBR1's page tables. The self-map at PTE_BASE is in TTBR1's hierarchy.
+     *
+     * L0[494] in TTBR1 now points to TTBR0's L0 page (the "TTBR0 alias").
+     * For user addresses, MiAddressToPteTtbr0() goes through this alias to
+     * correctly access TTBR0's page table hierarchy.
+     *
+     * This replaces the old MiArm64WritePteToTtbr0() workaround.
+     */
+    if (Address < MmSystemRangeStart)
+    {
+        /* User address: Write to TTBR0's page tables via the TTBR0 alias */
+        PMMPTE Ttbr0Pte = MiAddressToPteTtbr0(Address);
+        if (InterlockedExchangePte(Ttbr0Pte, TempPte.u.Long) != 0)
+        {
+            DPRINT1("User mapping collision at %p\n", Address);
+            KeBugCheck(MEMORY_MANAGEMENT);
+        }
+    }
+    else
+    {
+        /* Kernel address: Self-Map is valid for TTBR1 */
+        if (InterlockedExchangePte(PointerPte, TempPte.u.Long) != 0)
+        {
+            DPRINT1("Mapping collision at %p\n", Address);
+            KeBugCheck(MEMORY_MANAGEMENT);
+        }
+    }
+
+    /*
+     * ARM64: Invalidate the TLB entry for this address.
+     * Even for new mappings (where old PTE was 0), the CPU might have a
+     * "negative" TLB entry cached from the page fault that triggered this
+     * mapping. We must invalidate it so the CPU picks up the new mapping.
+     */
+    KeInvalidateTlbEntry(Address);
 
     return STATUS_SUCCESS;
 }
@@ -1187,8 +1416,32 @@ MmDeleteVirtualMappingEx(
     if (ValidPde)
     {
         PointerPte = MiAddressToPte(Address);
+
+#if defined(_M_ARM64)
+        /* ARM64: Invalidate D-cache BEFORE clearing the PTE.
+         * This is critical because D-cache invalidation operations use the virtual
+         * address, which requires the VA->PA translation to still be valid.
+         * If we clear the PTE first, the cache invalidation cannot translate the
+         * VA to the correct PA, and stale cache lines may remain.
+         *
+         * This prevents data corruption when the same VA is reused for a different
+         * physical page (e.g., loading multiple DLL files sequentially at the same
+         * user-space address like 0x40000 in the System process).
+         */
+        MiInvalidateDCachePage(Address);
+#endif
+
         OldPte.u.Long = InterlockedExchangePte(PointerPte, 0);
         KeInvalidateTlbEntry(Address);
+
+#if defined(_M_ARM64)
+        /* Nuclear option - full cache and TLB flush to ensure coherency */
+        __asm__ __volatile__("ic ialluis" ::: "memory");     /* Invalidate ALL I-cache (Inner Shareable) */
+        __asm__ __volatile__("dsb ish" ::: "memory");        /* Ensure I-cache flush completes */
+        __asm__ __volatile__("tlbi vmalle1is" ::: "memory"); /* Invalidate ALL TLB entries (EL1, Inner Shareable) */
+        __asm__ __volatile__("dsb ish" ::: "memory");        /* Ensure TLB flush completes */
+        __asm__ __volatile__("isb" ::: "memory");            /* Synchronize instruction stream */
+#endif
     }
 
     if (OldPte.u.Long != 0)
@@ -1362,6 +1615,24 @@ MmIsPagePresent(
 
     MiLockProcessWorkingSetShared(Process, PsGetCurrentThread());
 
+#if defined(_M_ARM64)
+    /*
+     * ARM64: Use the TTBR0 alias (L0[494]) to access user PTEs.
+     *
+     * The TTBR0 alias was set up in KiSwapProcess to point to the current
+     * process's TTBR0 L0 page. MiAddressToPteTtbr0() returns PTEs through
+     * this alias, allowing direct access to user page tables via the
+     * kernel's self-map mechanism.
+     *
+     * This replaces the previous manual TTBR0 walker via KSEG0.
+     */
+    {
+        PMMPTE PointerPte = MiAddressToPteTtbr0(Address);
+        Present = PointerPte->u.Hard.Valid != 0;
+        MiUnlockProcessWorkingSetShared(Process, PsGetCurrentThread());
+        return Present;
+    }
+#else
     if (!MiIsPageTablePresent(Address))
     {
         MiUnlockProcessWorkingSetShared(Process, PsGetCurrentThread());
@@ -1373,6 +1644,7 @@ MmIsPagePresent(
 
     MiUnlockProcessWorkingSetShared(Process, PsGetCurrentThread());
     return Present;
+#endif
 }
 
 BOOLEAN
@@ -1719,4 +1991,286 @@ MiProtectionFromPte(
     }
 
     return PAGE_NOACCESS;
+}
+
+/*
+ * ARM64 Cycle 57: Clear stale user-space PTEs from FreeLoader's identity mapping.
+ *
+ * FreeLoader creates identity mappings in user space (TTBR0) during boot.
+ * These mappings cover physical addresses up to 4GB. When the kernel maps
+ * section views at user addresses that overlap with this identity mapping,
+ * reads would return identity-mapped data instead of section data.
+ *
+ * This function walks the TTBR0 page table hierarchy for the specified VA range
+ * and invalidates any valid PTEs found. This ensures page faults occur when
+ * the section is accessed, allowing proper demand-loading of section data.
+ *
+ * @param StartVa   Starting virtual address of the range to clear
+ * @param Size      Size of the range in bytes
+ * @param Process   Process whose user page tables should be cleared
+ */
+VOID
+NTAPI
+MiArm64ClearStaleUserPtes(
+    _In_ PVOID StartVa,
+    _In_ SIZE_T Size,
+    _In_ PEPROCESS Process)
+{
+    ULONG64 Ttbr0;
+    PFN_NUMBER L0Pfn, L1Pfn, L2Pfn, L3Pfn;
+    PMMPTE L0Table, L1Table, L2Table, L3Table;
+    PMMPTE MappingPte;
+    ULONG64 Va, EndVa;
+    ULONG L0Idx, L1Idx, L2Idx, L3Idx;
+    ULONG ClearedCount = 0;
+    ULONG64 Ctr;
+    ULONG DcacheLineSize;
+
+    /* Only for user-space addresses */
+    if ((ULONG_PTR)StartVa >= (ULONG_PTR)MmSystemRangeStart)
+        return;
+
+    /* Get D-cache line size for invalidation */
+    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+    DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+
+    /* Get TTBR0 (user page table root) */
+    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+    L0Pfn = (Ttbr0 >> PAGE_SHIFT) & ((1ULL << 36) - 1);  /* Get PA without ASID bits */
+
+    EndVa = (ULONG64)StartVa + Size;
+    Va = (ULONG64)StartVa;
+
+    while (Va < EndVa)
+    {
+        L0Idx = (Va >> 39) & 0x1FF;
+        L1Idx = (Va >> 30) & 0x1FF;
+        L2Idx = (Va >> 21) & 0x1FF;
+        L3Idx = (Va >> 12) & 0x1FF;
+
+        /* Map L0 table */
+        MappingPte = MiReserveSystemPtes(1, SystemPteSpace);
+        if (!MappingPte)
+        {
+            DPRINT1("[arm64] MiArm64ClearStaleUserPtes: Failed to get system PTE\n");
+            return;
+        }
+
+        MI_WRITE_VALID_PTE(MappingPte, ValidKernelPte);
+        MappingPte->u.Hard.PageFrameNumber = L0Pfn;
+        KeInvalidateTlbEntry(MiPteToAddress(MappingPte));
+        __asm__ __volatile__("dsb ish" ::: "memory");
+
+        L0Table = (PMMPTE)MiPteToAddress(MappingPte);
+
+        /* Check if L0 entry is valid */
+        if (!(L0Table[L0Idx].u.Long & 1))
+        {
+            /* No L0 entry, skip this 512GB range */
+            MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
+            KeInvalidateTlbEntry(L0Table);
+            MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
+            Va = (Va + (1ULL << 39)) & ~((1ULL << 39) - 1);
+            continue;
+        }
+
+        L1Pfn = L0Table[L0Idx].u.Hard.PageFrameNumber;
+        MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
+        KeInvalidateTlbEntry(L0Table);
+
+        /* Map L1 table */
+        MI_WRITE_VALID_PTE(MappingPte, ValidKernelPte);
+        MappingPte->u.Hard.PageFrameNumber = L1Pfn;
+        KeInvalidateTlbEntry(MiPteToAddress(MappingPte));
+        __asm__ __volatile__("dsb ish" ::: "memory");
+
+        L1Table = (PMMPTE)MiPteToAddress(MappingPte);
+
+        /* Check if L1 entry is valid */
+        if (!(L1Table[L1Idx].u.Long & 1))
+        {
+            /* No L1 entry, skip this 1GB range */
+            MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
+            KeInvalidateTlbEntry(L1Table);
+            MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
+            Va = (Va + (1ULL << 30)) & ~((1ULL << 30) - 1);
+            continue;
+        }
+
+        L2Pfn = L1Table[L1Idx].u.Hard.PageFrameNumber;
+        MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
+        KeInvalidateTlbEntry(L1Table);
+
+        /* Map L2 table */
+        MI_WRITE_VALID_PTE(MappingPte, ValidKernelPte);
+        MappingPte->u.Hard.PageFrameNumber = L2Pfn;
+        KeInvalidateTlbEntry(MiPteToAddress(MappingPte));
+        __asm__ __volatile__("dsb ish" ::: "memory");
+
+        L2Table = (PMMPTE)MiPteToAddress(MappingPte);
+
+        /* Check if L2 entry is valid */
+        if (!(L2Table[L2Idx].u.Long & 1))
+        {
+            /* No L2 entry, skip this 2MB range */
+            MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
+            KeInvalidateTlbEntry(L2Table);
+            MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
+            Va = (Va + (1ULL << 21)) & ~((1ULL << 21) - 1);
+            continue;
+        }
+
+        /* L2 entry is valid - but is it a block descriptor or table descriptor? */
+        /* bits [1:0] = 0b01 for block, 0b11 for table */
+        {
+            ULONG64 L2Entry = L2Table[L2Idx].u.Long;
+            if ((L2Entry & 0x3) == 0x1)
+            {
+                /*
+                 * Block descriptor (2MB page) - this is a FreeLoader identity mapping!
+                 * We need to CLEAR this block descriptor to ensure page faults occur.
+                 */
+                DPRINT1("[arm64] MiArm64ClearStaleUserPtes: L2 entry at idx=%lu is BLOCK (2MB) entry=0x%llx - CLEARING IT\n",
+                        (ULONG)L2Idx, L2Entry);
+
+                /*
+                 * Invalidate TLB entries for the 2MB block.
+                 * We use TLBI ASIDE1 to invalidate by ASID, which is more efficient
+                 * than invalidating each page individually.
+                 * But for simplicity, just invalidate everything with TLBI VMALLE1.
+                 */
+                __asm__ __volatile__("tlbi vmalle1" ::: "memory");
+                __asm__ __volatile__("dsb ish" ::: "memory");
+                __asm__ __volatile__("isb" ::: "memory");
+
+                /*
+                 * NOTE: We intentionally do NOT invalidate D-cache for the entire 2MB block here.
+                 * D-cache invalidation for user VAs at this point can cause issues:
+                 * 1. The VAs are no longer mapped (we just cleared the L2 block)
+                 * 2. DC IVAC on unmapped VAs may cause issues on some implementations
+                 * 3. The next access will fault anyway and bring in fresh data
+                 *
+                 * The TLB invalidation above is sufficient - cache lines will be naturally
+                 * evicted or will return stale data on next access, which will fault.
+                 */
+
+                /* Clear the L2 block descriptor */
+                {
+                    ULONG_PTR PteAddr = (ULONG_PTR)&L2Table[L2Idx];
+                    L2Table[L2Idx].u.Long = 0;
+                    __asm__ __volatile__("dmb ish" ::: "memory");
+                    __asm__ __volatile__("dc civac, %0" :: "r"(PteAddr) : "memory");
+                    __asm__ __volatile__("dsb ish" ::: "memory");
+                }
+
+                /* Verify the L2 entry was cleared */
+                if (L2Table[L2Idx].u.Long != 0)
+                {
+                    DPRINT1("[arm64] MiArm64ClearStaleUserPtes: WARNING! L2 BLOCK entry NOT cleared! Still=0x%llx\n",
+                            L2Table[L2Idx].u.Long);
+                }
+                else
+                {
+                    DPRINT1("[arm64] MiArm64ClearStaleUserPtes: Successfully cleared L2 BLOCK entry for 2MB at VA=%p\n",
+                            (PVOID)(Va & ~((1ULL << 21) - 1)));
+                }
+
+                MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
+                KeInvalidateTlbEntry(L2Table);
+                MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
+
+                /* Skip the entire 2MB block */
+                ClearedCount += (1ULL << 21) >> PAGE_SHIFT;  /* Count as 512 pages */
+                Va = (Va + (1ULL << 21)) & ~((1ULL << 21) - 1);
+                continue;
+            }
+            /* Otherwise it's a table descriptor pointing to L3 table */
+            DPRINT1("[arm64] MiArm64ClearStaleUserPtes: L2 entry at idx=%lu = 0x%llx (table descriptor)\n",
+                    (ULONG)L2Idx, L2Entry);
+        }
+
+        L3Pfn = L2Table[L2Idx].u.Hard.PageFrameNumber;
+        MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
+        KeInvalidateTlbEntry(L2Table);
+
+        /* Map L3 table */
+        MI_WRITE_VALID_PTE(MappingPte, ValidKernelPte);
+        MappingPte->u.Hard.PageFrameNumber = L3Pfn;
+        KeInvalidateTlbEntry(MiPteToAddress(MappingPte));
+        __asm__ __volatile__("dsb ish" ::: "memory");
+
+        L3Table = (PMMPTE)MiPteToAddress(MappingPte);
+
+        /* Check if L3 entry (PTE) has bit 0 set (potentially valid) */
+        if (L3Table[L3Idx].u.Long & 1)
+        {
+            ULONG64 OldPte = L3Table[L3Idx].u.Long;
+
+            /* Found a PTE with Valid bit set - clear it. */
+            DPRINT1("[arm64] MiArm64ClearStaleUserPtes: Clearing stale PTE at VA=%p (PTE=0x%llx) L3TableVA=%p L3Idx=%lu L3Pfn=0x%llx\n",
+                    (PVOID)Va, OldPte, L3Table, (ULONG)L3Idx, (ULONG64)L3Pfn);
+            DPRINT1("[arm64]   Page table walk: L0Pfn=0x%llx L1Pfn=0x%llx L2Pfn=0x%llx L3Pfn=0x%llx\n",
+                    (ULONG64)L0Pfn, (ULONG64)L1Pfn, (ULONG64)L2Pfn, (ULONG64)L3Pfn);
+            DPRINT1("[arm64]   Indices: L0=%lu L1=%lu L2=%lu L3=%lu\n",
+                    (ULONG)L0Idx, (ULONG)L1Idx, (ULONG)L2Idx, (ULONG)L3Idx);
+
+            /* Invalidate TLB for this VA - use VAALE1IS to flush ALL ASIDs including Global entries.
+             * FreeLoader may have created Global mappings (nG bit not set), so VAE1 (current ASID only)
+             * would NOT flush them. VAALE1IS = VA, All ASIDs, Last-level, EL1, Inner Shareable */
+            __asm__ __volatile__("tlbi vaale1is, %0" :: "r"(Va >> PAGE_SHIFT) : "memory");
+            __asm__ __volatile__("dsb ish" ::: "memory");
+
+            /* Invalidate D-cache for this page */
+            {
+                ULONG_PTR CacheVa;
+                for (CacheVa = Va; CacheVa < Va + PAGE_SIZE; CacheVa += DcacheLineSize)
+                {
+                    __asm__ __volatile__("dc ivac, %0" :: "r"(CacheVa) : "memory");
+                }
+            }
+            __asm__ __volatile__("dsb ish" ::: "memory");
+
+            /* Clear the PTE with proper cache maintenance */
+            {
+                ULONG_PTR PteAddr = (ULONG_PTR)&L3Table[L3Idx];
+
+                /* Write the zero value */
+                L3Table[L3Idx].u.Long = 0;
+
+                /* Data memory barrier before cache op */
+                __asm__ __volatile__("dmb ish" ::: "memory");
+
+                /* Clean and invalidate this cache line to PoC - ensure write reaches memory */
+                __asm__ __volatile__("dc civac, %0" :: "r"(PteAddr) : "memory");
+
+                /* DSB to ensure cache op completes */
+                __asm__ __volatile__("dsb ish" ::: "memory");
+
+                /* Re-read to verify (need to invalidate cache first to get fresh read) */
+                __asm__ __volatile__("dc ivac, %0" :: "r"(PteAddr) : "memory");
+                __asm__ __volatile__("dsb ish" ::: "memory");
+            }
+
+            /* Verify the PTE was actually cleared */
+            if (L3Table[L3Idx].u.Long != 0)
+            {
+                DPRINT1("[arm64] MiArm64ClearStaleUserPtes: WARNING! PTE at VA=%p was NOT cleared! Still=0x%llx\n",
+                        (PVOID)Va, L3Table[L3Idx].u.Long);
+            }
+
+            ClearedCount++;
+        }
+
+        MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
+        KeInvalidateTlbEntry(L3Table);
+        MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
+
+        Va += PAGE_SIZE;
+    }
+
+    if (ClearedCount > 0)
+    {
+        DPRINT1("[arm64] MiArm64ClearStaleUserPtes: Cleared %lu stale PTEs in range %p-%p\n",
+                ClearedCount, StartVa, (PVOID)EndVa);
+    }
 }

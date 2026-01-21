@@ -495,10 +495,17 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
            SelectedDescriptorLength - (ULONGLONG)RamdiskCreate.DiskOffset);
 
     DbgPrintEx(DPFLTR_DEFAULT_ID,
-               DPFLTR_INFO_LEVEL,
+               DPFLTR_ERROR_LEVEL,
                "IopStartRamdisk: effective length %I64u, offset %ld\n",
                RamdiskCreate.DiskLength.QuadPart,
                RamdiskCreate.DiskOffset);
+
+    /* Debug: Show physical address that will be used */
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "IopStartRamdisk: BasePage=0x%lX -> PhysicalAddress=0x%I64X (ramdisk physical memory)\n",
+               (ULONG)RamdiskCreate.BasePage,
+               (ULONGLONG)RamdiskCreate.BasePage << PAGE_SHIFT);
 
     //
     // Setup object attributes

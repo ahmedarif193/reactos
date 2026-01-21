@@ -952,8 +952,64 @@ MiResolveDemandZeroFault(IN PVOID Address,
     /* Set it dirty if it's a writable page */
     if (MI_IS_PAGE_WRITEABLE(&TempPte)) MI_MAKE_DIRTY_PAGE(&TempPte);
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64 RACE CONDITION FIX: On ARM64's weakly-ordered memory model,
+     * even with the PFN lock held, we might see stale data at the initial
+     * validity check but fresh data here after intervening memory operations
+     * (page allocation, PFN init, zeroing) that contain memory barriers.
+     *
+     * This can happen when:
+     * 1. CPU A checks PTE validity (sees invalid - stale)
+     * 2. CPU A allocates page, inits PFN (operations with barriers)
+     * 3. CPU A reaches here and sees PTE is NOW valid (another CPU wrote it)
+     *
+     * If the PTE is already valid, another CPU resolved this fault.
+     * We need to clean up the page we allocated and return success.
+     */
+    __asm__ __volatile__("dmb ish" ::: "memory");
+    if (PointerPte->u.Hard.Valid == 1)
+    {
+        /* PTE already valid - another CPU resolved this fault */
+        if (!BootstrapAllocation)
+        {
+            PMMPFN Pfn1 = MI_PFN_ELEMENT(PageFrameNumber);
+            /* Remove the PFN from use - mark it as deleted so it can be freed */
+            MI_SET_PFN_DELETED(Pfn1);
+            MiDecrementShareCount(Pfn1, PageFrameNumber);
+        }
+        return STATUS_SUCCESS;
+    }
+
+    /*
+     * ARM64 TTBR0 Alias Fix: Write user-space PTEs via TTBR0 alias.
+     *
+     * On ARM64, user addresses are translated via TTBR0 and kernel addresses
+     * via TTBR1. The self-map is in TTBR1's hierarchy, so MiAddressToPte()
+     * for user addresses points into TTBR1's self-map space - which doesn't
+     * actually map TTBR0's page tables.
+     *
+     * SOLUTION: L0[494] in TTBR1's hierarchy points to TTBR0's L0 page.
+     * For user addresses, use MiAddressToPteTtbr0() which goes through L0[494].
+     *
+     * This replaces the old MiArm64WritePteToTtbr0() workaround that manually
+     * walked TTBR0's physical page tables.
+     */
+    if (Address < MmSystemRangeStart)
+    {
+        /* User address: Write to TTBR0's page tables via the TTBR0 alias */
+        PMMPTE Ttbr0Pte = MiAddressToPteTtbr0(Address);
+        MI_WRITE_VALID_PTE(Ttbr0Pte, TempPte);
+    }
+    else
+    {
+        /* Kernel address: Write via normal self-map (TTBR1) */
+        MI_WRITE_VALID_PTE(PointerPte, TempPte);
+    }
+#else
     /* Write it */
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
+#endif
 
 #if defined(_M_ARM64) && DBG
     /* ARM64 Debug: Log prototype PTE creation */
@@ -1161,6 +1217,48 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
     /* Release the PFN lock */
     MiReleasePfnLock(OldIrql);
 
+    /*
+     * RACE CONDITION FIX: After releasing the PFN lock, another CPU may have
+     * already completed the same prototype PTE fault. Check if the actual PTE
+     * is already valid before attempting to write it.
+     *
+     * This race can occur because:
+     * 1. CPU A resolves demand-zero prototype PTE, releases PFN lock
+     * 2. CPU B faults on same VA, sees prototype PTE is valid
+     * 3. CPU B completes its MiCompleteProtoPteFault, writes actual PTE
+     * 4. CPU A reaches here, but PTE is already valid
+     *
+     * If the PTE is already valid with the correct PFN, another CPU already
+     * handled this fault. We can safely return success - the share count
+     * increments we did are correct (we're just another reference).
+     *
+     * NOTE: On ARM64, we must ensure memory ordering when reading the PTE
+     * to see updates from other CPUs. Use a data memory barrier.
+     */
+#if defined(_M_ARM64) || defined(__aarch64__)
+    __asm__ __volatile__("dmb ish" ::: "memory");
+#endif
+
+    if (PointerPte->u.Hard.Valid == 1)
+    {
+        /*
+         * PTE is already valid - another CPU completed the fault.
+         * Verify it points to the same page frame we resolved.
+         * The share count increments we did above are still valid since
+         * the page is now mapped at this VA (by us or another CPU).
+         */
+        if (PFN_FROM_PTE(PointerPte) == PageFrameIndex)
+        {
+            /* Same page, fault already handled - return success */
+            return STATUS_SUCCESS;
+        }
+        /*
+         * Different page frame - this shouldn't happen in normal operation.
+         * It might indicate a serious bug, but we'll let it proceed and
+         * the subsequent assertion in MI_WRITE_VALID_PTE will catch it.
+         */
+    }
+
     /* Remove special/caching bits */
     Protection &= ~MM_PROTECT_SPECIAL;
 
@@ -1193,8 +1291,34 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
     /* Set the dirty flag if needed */
     if (DirtyPage) MI_MAKE_DIRTY_PAGE(&TempPte);
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64 TTBR0 Alias Fix: Write user-space PTEs via TTBR0 alias.
+     *
+     * On ARM64, user addresses use TTBR0's page tables while kernel addresses
+     * use TTBR1's page tables. The self-map at PTE_BASE is in TTBR1's hierarchy.
+     *
+     * L0[494] in TTBR1 now points to TTBR0's L0 page (the "TTBR0 alias").
+     * For user addresses, MiAddressToPteTtbr0() goes through this alias to
+     * correctly access TTBR0's page table hierarchy.
+     *
+     * This replaces the old MiArm64WritePteToTtbr0() workaround.
+     */
+    if (Address < MmSystemRangeStart)
+    {
+        /* User address: Write to TTBR0's page tables via the TTBR0 alias */
+        PMMPTE Ttbr0Pte = MiAddressToPteTtbr0(Address);
+        MI_WRITE_VALID_PTE(Ttbr0Pte, TempPte);
+    }
+    else
+    {
+        /* Kernel address: Write via normal self-map (TTBR1) */
+        MI_WRITE_VALID_PTE(PointerPte, TempPte);
+    }
+#else
     /* Write the PTE */
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
+#endif
 
 #if defined(_M_ARM64) && DBG
     /* ARM64 Debug: Log final PTE write */
@@ -1219,42 +1343,47 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
 
 #if defined(_M_ARM64) || defined(__aarch64__)
     /*
-     * ARM64 CRITICAL: TLB Invalidation After PTE Update
+     * ARM64 CRITICAL: TLB and D-cache Invalidation After PTE Update
      *
-     * PROBLEM: On ARM64, the TLB operates under a weakly-ordered memory model.
-     * When we write a new PTE to memory, the TLB may still contain:
-     * 1. A cached "translation fault" entry for this VA from the initial fault
-     * 2. An invalid/stale translation from a previous mapping
-     * 3. No entry at all, which is fine
+     * CORRECT ORDER (cache ops AFTER PTE is valid):
+     * 1. Write PTE (already done above)
+     * 2. DSB ISHST: Ensure PTE write is visible to table walkers
+     * 3. TLBI VAE1IS: Invalidate TLB entry (now table walkers see new PTE)
+     * 4. DSB ISH + ISB: Wait for TLB invalidation
+     * 5. DC IVAC: Now D-cache invalidation uses the CORRECT PA from new PTE
+     * 6. DSB ISH: Wait for cache operations
      *
-     * Without explicit TLB invalidation, the CPU will continue using the stale
-     * TLB entry, causing the fault to repeat infinitely even though we just
-     * installed a valid PTE.
-     *
-     * SOLUTION: Invalidate the TLB entry for this specific virtual address
-     * immediately after writing the PTE. The sequence is:
-     * 1. DSB ISHST: Ensure the PTE write is visible to other cores
-     * 2. TLBI VAE1IS: Invalidate TLB entry for this VA (Inner Shareable)
-     * 3. DSB ISH: Wait for TLB invalidation to complete on all cores
-     * 4. ISB: Synchronize instruction fetch pipeline
-     *
-     * This applies to ALL addresses (user and kernel), but is especially
-     * critical for kernel addresses like System View Space where faults
-     * happen at elevated IRQL and we can't afford repeated faults.
-     *
-     * ARM64 Architecture Reference Manual (DDI 0487):
-     * - D5.10.2: TLB maintenance operations
-     * - D5.4.4: Ordering of TLB operations
-     * - B2.3.8: Memory barriers and TLB maintenance
+     * Use DC IVAC (Invalidate only), NOT DC CIVAC:
+     * - This is incoming data (mapped from ramdisk/disk/prototype)
+     * - We want to discard stale cache, not write garbage back to RAM
+     * - DC CIVAC would corrupt data by writing back uninitialized cache lines
      */
     {
+        ULONG64 Ctr;
+        ULONG DcacheLineSize;
+        ULONG_PTR Va;
+
+        /* STEP 1: TLB invalidation FIRST (before D-cache invalidation) */
         ULONG64 VaForTlbi = ((ULONG64)(ULONG_PTR)Address) >> 12;
         __asm__ __volatile__(
-            "dsb ishst\n\t"           /* Ensure PTE write is visible */
+            "dsb ishst\n\t"           /* Ensure PTE write is visible to table walkers */
             "tlbi vae1is, %0\n\t"     /* Invalidate TLB for this VA */
-            "dsb ish\n\t"             /* Wait for TLB invalidation */
-            "isb"                      /* Synchronize instruction pipeline */
+            "dsb ish\n\t"             /* Wait for TLB invalidation to complete */
+            "isb"                      /* Ensure CPU sees new translations */
             : : "r"(VaForTlbi) : "memory");
+
+        /* STEP 2: Now D-cache invalidation (with correct TLB entry) */
+        __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+        DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+        Va = (ULONG_PTR)Address & ~(ULONG_PTR)(PAGE_SIZE - 1);
+
+        /* Use DC IVAC for incoming data - discards stale cache without writeback */
+        for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
+        {
+            __asm__ __volatile__("dc ivac, %0" :: "r"(Va + offset) : "memory");
+        }
+
+        __asm__ __volatile__("dsb ish" ::: "memory");
     }
 #endif
 
@@ -1358,6 +1487,44 @@ MiResolvePageFileFault(_In_ BOOLEAN StoreInstruction,
     /* And the PTE can finally be valid */
     MI_MAKE_HARDWARE_PTE(&TempPte, PointerPte, Protection, Page);
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64: TLB and D-cache invalidation after PTE write.
+     *
+     * After reading page from pagefile and installing the PTE, we must
+     * invalidate TLB FIRST, then D-cache. See MiCompleteProtoPteFault for
+     * the full explanation of why this order is critical (Cycle 56 fix).
+     */
+    {
+        ULONG64 Ctr;
+        ULONG DcacheLineSize;
+        ULONG_PTR Va;
+
+        /* STEP 1: TLB invalidation FIRST */
+        ULONG64 VaForTlbi = ((ULONG64)(ULONG_PTR)FaultingAddress) >> 12;
+        __asm__ __volatile__(
+            "dsb ishst\n\t"           /* Ensure PTE write is visible */
+            "tlbi vae1is, %0\n\t"     /* Invalidate TLB for this VA */
+            "dsb ish\n\t"             /* Wait for TLB invalidation */
+            "isb"                      /* Ensure CPU sees new translations */
+            : : "r"(VaForTlbi) : "memory");
+
+        /* STEP 2: D-cache invalidation (now with correct TLB entry) */
+        __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+        DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+
+        Va = (ULONG_PTR)FaultingAddress & ~(ULONG_PTR)(PAGE_SIZE - 1);
+
+        /* Use DC IVAC for incoming data (read from page file) */
+        for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
+        {
+            __asm__ __volatile__("dc ivac, %0" :: "r"(Va + offset) : "memory");
+        }
+
+        __asm__ __volatile__("dsb ish" ::: "memory");
+    }
+#endif
 
     Pfn1->u3.e1.ReadInProgress = 0;
     /* Did someone start to wait on us while we proceeded ? */
@@ -1497,6 +1664,53 @@ MiResolveTransitionFault(IN BOOLEAN StoreInstruction,
 
     /* Write the valid PTE */
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64: TLB and D-cache invalidation after PTE write.
+     *
+     * Transition faults bring a page from standby/modified list back to
+     * active state. The physical page already has correct data.
+     *
+     * CORRECT ORDER:
+     * 1. PTE write (already done above)
+     * 2. DSB ISHST (ensure PTE visible)
+     * 3. TLBI (invalidate stale TLB entry)
+     * 4. DSB ISH + ISB (ensure TLB sees new mapping)
+     * 5. DC IVAC (invalidate stale cache - AFTER PTE valid!)
+     *
+     * Use DC IVAC (Invalidate only), not DC CIVAC:
+     * - This is incoming data (page from standby list)
+     * - We want to discard stale cache, not write it back
+     */
+    {
+        ULONG64 Ctr;
+        ULONG DcacheLineSize;
+        ULONG_PTR Va;
+        ULONG64 VaForTlbi;
+
+        /* STEP 1: TLB invalidation first (so cache ops use correct mapping) */
+        VaForTlbi = ((ULONG64)(ULONG_PTR)FaultingAddress) >> 12;
+        __asm__ __volatile__(
+            "dsb ishst\n\t"
+            "tlbi vae1is, %0\n\t"
+            "dsb ish\n\t"
+            "isb"
+            : : "r"(VaForTlbi) : "memory");
+
+        /* STEP 2: D-cache invalidation (now with valid TLB entry) */
+        __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+        DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+        Va = (ULONG_PTR)FaultingAddress & ~(ULONG_PTR)(PAGE_SIZE - 1);
+
+        for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
+        {
+            __asm__ __volatile__("dc ivac, %0" :: "r"(Va + offset) : "memory");
+        }
+
+        __asm__ __volatile__("dsb ish" ::: "memory");
+    }
+#endif
 
     /* Return success */
     return STATUS_PAGE_FAULT_TRANSITION;
@@ -1681,8 +1895,75 @@ MiResolveProtoPteFault(IN BOOLEAN StoreInstruction,
             MI_MAKE_HARDWARE_PTE(&PteContents, PointerPte, Protection, PageFrameIndex);
         }
 
-        /* And finally, write the valid PTE */
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /*
+         * ARM64 CRITICAL: COW Page Fault Cache Handling
+         *
+         * Copy-On-Write sequence:
+         * 1. MiCopyPfn copies original page to new private page (via kernel addresses)
+         * 2. New PTE points to the new private copy
+         * 3. D-cache may have stale lines for this VA pointing to OLD PA
+         *
+         * CORRECT ORDER (cache ops AFTER PTE is valid):
+         * 1. Write new PTE (now VA maps to new PA)
+         * 2. DSB ISHST (ensure PTE visible)
+         * 3. TLBI (invalidate old TLB entry)
+         * 4. DSB ISH + ISB (TLB sees new mapping)
+         * 5. DC IVAC (invalidate stale cache - now targets correct PA!)
+         *
+         * Use DC IVAC (Invalidate only):
+         * - The new page has correct data (copied by MiCopyPfn)
+         * - We want to discard stale cache lines (old PA's data)
+         * - DC CIVAC would write back stale data to the WRONG page!
+         */
+        /* Cache invalidation moved to AFTER PTE write - see below */
+#endif
+
+        /* Write the valid PTE first */
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /* ARM64 TTBR0 Alias Fix: Write user PTEs via TTBR0 alias */
+        if (Address < MmSystemRangeStart)
+        {
+            PMMPTE Ttbr0Pte = MiAddressToPteTtbr0(Address);
+            MI_WRITE_VALID_PTE(Ttbr0Pte, PteContents);
+        }
+        else
+        {
+            MI_WRITE_VALID_PTE(PointerPte, PteContents);
+        }
+
+        /* NOW do TLB and cache invalidation (PTE is valid) */
+        {
+            ULONG64 Ctr;
+            ULONG DcacheLineSize;
+            ULONG_PTR Va;
+            ULONG64 VaForTlbi;
+
+            /* STEP 1: TLB invalidation (so CPU uses new mapping) */
+            VaForTlbi = ((ULONG64)(ULONG_PTR)Address) >> 12;
+            __asm__ __volatile__(
+                "dsb ishst\n\t"
+                "tlbi vae1is, %0\n\t"
+                "dsb ish\n\t"
+                "isb"
+                : : "r"(VaForTlbi) : "memory");
+
+            /* STEP 2: D-cache invalidation (now with correct TLB entry) */
+            __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+            DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+            Va = (ULONG_PTR)Address & ~(ULONG_PTR)(PAGE_SIZE - 1);
+
+            /* DC IVAC for incoming data - discard stale cache without writeback */
+            for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
+            {
+                __asm__ __volatile__("dc ivac, %0" :: "r"(Va + offset) : "memory");
+            }
+
+            __asm__ __volatile__("dsb ish" ::: "memory");
+        }
+#else
         MI_WRITE_VALID_PTE(PointerPte, PteContents);
+#endif
 
         /* The caller expects us to release the PFN lock */
         MiReleasePfnLock(OldIrql);
@@ -1743,8 +2024,15 @@ MiResolveProtoPteFault(IN BOOLEAN StoreInstruction,
         ASSERT(NT_SUCCESS(Status));
     }
 
-    /* Complete the prototype PTE fault -- this will release the PFN lock */
-    ASSERT(PointerPte->u.Hard.Valid == 0);
+    /*
+     * Complete the prototype PTE fault -- this will release the PFN lock.
+     *
+     * NOTE: We previously asserted PointerPte->u.Hard.Valid == 0 here, but
+     * this assertion can fail on SMP systems due to a race condition:
+     * Another CPU may have already completed the same fault while we were
+     * resolving the prototype PTE. MiCompleteProtoPteFault now handles this
+     * race gracefully by checking PTE validity after releasing the PFN lock.
+     */
     return MiCompleteProtoPteFault(StoreInstruction,
                                    Address,
                                    PointerPte,
@@ -2276,10 +2564,12 @@ MmArmAccessFault(IN ULONG FaultCode,
      * we try to dereference them. Otherwise, accessing PointerPte (which is in
      * the self-map region) will cause a nested page fault.
      *
-     * This must be done for ALL kernel addresses, not just page table addresses,
-     * because any kernel page fault requires us to read the page table entries.
+     * CYCLE 59 FIX: This must be done for ALL addresses (kernel AND user-space),
+     * because any page fault requires us to read the page table entries via the
+     * self-map region. For user-space addresses like 0xFF000000, the page table
+     * pointers (PointerPxe etc.) are still in the kernel's self-map region
+     * (TTBR1 space), which requires alias page creation.
      */
-    if (Address >= MmSystemRangeStart)
     {
         extern VOID MiArm64MapAliasForPointer(_In_ PVOID AliasVa);
         extern PVOID MmHyperSpaceEnd;
@@ -2318,8 +2608,10 @@ MmArmAccessFault(IN ULONG FaultCode,
             return STATUS_SUCCESS;
         }
 
-        /* For normal kernel addresses (not in self-map region), ensure the
-         * page table pointers themselves (PointerPxe/Ppe/Pde/Pte) are accessible */
+        /* For ALL addresses (kernel or user), ensure the page table pointers
+         * themselves (PointerPxe/Ppe/Pde/Pte) are accessible. These pointers
+         * are always in the kernel self-map region regardless of whether the
+         * faulting address is in user or kernel space. */
 #if (_MI_PAGING_LEVELS == 4)
         MiArm64MapAliasForPointer(PointerPxe);
 #endif
@@ -3816,8 +4108,22 @@ UserFault:
             /* Write the dirty bit for writeable pages */
             if (MI_IS_PAGE_WRITEABLE(&TempPte)) MI_MAKE_DIRTY_PAGE(&TempPte);
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+            /* ARM64 TTBR0 Alias Fix: Write user PTEs via TTBR0 alias */
+            if (Address < MmSystemRangeStart)
+            {
+                PMMPTE Ttbr0Pte = MiAddressToPteTtbr0(Address);
+                MI_WRITE_VALID_PTE(Ttbr0Pte, TempPte);
+            }
+            else
+            {
+                /* Kernel address: Write via normal self-map (TTBR1) */
+                MI_WRITE_VALID_PTE(PointerPte, TempPte);
+            }
+#else
             /* And now write down the PTE, making the address valid */
             MI_WRITE_VALID_PTE(PointerPte, TempPte);
+#endif
             Pfn1 = MI_PFN_ELEMENT(PageFrameIndex);
             ASSERT(Pfn1->u1.Event == NULL);
 

@@ -1192,6 +1192,85 @@ MiArm64MapPxeAlias(VOID)
     DPRINT("%s\n", "[arm64] MiArm64MapPxeAlias: self-map alias root configured");
 }
 
+/*
+ * MiArm64InitializeTtbr0Alias - Initialize the TTBR0 alias in TTBR1's self-map
+ *
+ * This function sets up L0[494] in TTBR1's page table hierarchy to point to
+ * the current TTBR0's L0 page table. This enables MiAddressToPteTtbr0() and
+ * related functions to correctly access user-space page table entries through
+ * the kernel's self-map mechanism.
+ *
+ * This is the architectural fix for the "split-brain page table" issue where
+ * MiAddressToPte(UserAddress) returns a VA in TTBR1's self-map space that
+ * doesn't actually map TTBR0's page tables.
+ *
+ * Called during MiInitMachineDependent after the basic self-map is set up.
+ */
+VOID
+MiArm64InitializeTtbr0Alias(VOID)
+{
+    UINT64 Ttbr0, Ttbr1;
+    UINT64 Ttbr0Pa, Ttbr1Pa;
+    volatile UINT64 *L0Table;
+
+    DPRINT("%s\n", "[arm64] MiArm64InitializeTtbr0Alias: entry");
+
+    /* Read both TTBRs */
+    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+
+    Ttbr0Pa = MI_ARM64_TTBR_TO_PA(Ttbr0);
+    Ttbr1Pa = MI_ARM64_TTBR_TO_PA(Ttbr1);
+
+    /* Access L0 table via KSEG0 direct mapping */
+    L0Table = (volatile UINT64 *)MiArm64PhysToKseg0(Ttbr1Pa);
+
+    /*
+     * Set L0[494] to point to TTBR0's L0 page table.
+     *
+     * This creates an alias in TTBR1's self-map that allows accessing
+     * TTBR0's page table hierarchy. When accessing PTEs for user addresses,
+     * we use PTE_BASE_TTBR0 which routes through L0[494] instead of the
+     * normal self-map at L0[493].
+     *
+     * Descriptor format: Table descriptor (type = 0b11) pointing to TTBR0's L0 PA
+     */
+    {
+        UINT64 AliasEntry = (Ttbr0Pa & ARM64_PTE_ADDR_MASK) | ARM64_PTE_TYPE_TABLE;
+        UINT64 CurrentEntry = L0Table[PXE_TTBR0_ALIAS_INDEX];
+
+        if (CurrentEntry != AliasEntry)
+        {
+            CHAR Log[256];
+            if (NT_SUCCESS(RtlStringCbPrintfA(Log, sizeof(Log),
+                "[arm64] MiArm64InitializeTtbr0Alias: Setting L0[%u] = 0x%llx (TTBR0 PA=0x%llx)",
+                PXE_TTBR0_ALIAS_INDEX,
+                (unsigned long long)AliasEntry,
+                (unsigned long long)Ttbr0Pa)))
+            {
+                DPRINT("%s\n", Log);
+            }
+
+            L0Table[PXE_TTBR0_ALIAS_INDEX] = AliasEntry;
+
+            /* Memory barriers and TLB invalidation */
+            __asm__ __volatile__(
+                "dsb ishst\n\t"
+                "tlbi vmalle1is\n\t"
+                "dsb ish\n\t"
+                "isb"
+                ::: "memory"
+            );
+        }
+        else
+        {
+            DPRINT("%s\n", "[arm64] MiArm64InitializeTtbr0Alias: L0[494] already configured");
+        }
+    }
+
+    DPRINT("%s\n", "[arm64] MiArm64InitializeTtbr0Alias: TTBR0 alias initialized");
+}
+
 VOID
 MiArm64MapAliasForPointer(
     _In_ PVOID AliasVa)
@@ -2374,6 +2453,16 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         DPRINT("%s\n", "[arm64] MiInitMachineDependent: seeding alias windows");
         MiArm64MapPxeAlias();
 
+        /*
+         * ARM64 TTBR0 Alias: Initialize L0[494] to point to TTBR0's L0 page.
+         *
+         * This is the architectural fix for the split-brain page table issue.
+         * With this alias, MiAddressToPteTtbr0(UserAddress) will correctly
+         * access TTBR0's page tables through the kernel's self-map mechanism.
+         */
+        DPRINT("%s\n", "[arm64] MiInitMachineDependent: initializing TTBR0 alias");
+        MiArm64InitializeTtbr0Alias();
+
         /* Pre-map PFN DB page table levels (parity with amd64):
          * Ensure PPEs and PDEs exist for the PFN DB span so the PTE_BASE
          * leaf can be safely touched by MiMapPfnDatabase. */
@@ -2546,7 +2635,10 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         MiMapPDEs((PVOID)MI_MAPPING_RANGE_START, (PVOID)MI_MAPPING_RANGE_END);
         MmFirstReservedMappingPte = MiAddressToPte((PVOID)MI_MAPPING_RANGE_START);
         MmLastReservedMappingPte = MiAddressToPte((PVOID)MI_MAPPING_RANGE_END);
-        MmFirstReservedMappingPte->u.Hard.PageFrameNumber = MI_HYPERSPACE_PTES;
+        /* Initialize hyperspace mapping offset to last valid index (MI_HYPERSPACE_PTES - 1).
+         * The hypermap code uses this as the first PTE index to access, then decrements.
+         * With MI_HYPERSPACE_PTES = 256, valid indices are 0-255, so start at 255. */
+        MmFirstReservedMappingPte->u.Hard.PageFrameNumber = MI_HYPERSPACE_PTES - 1;
 
         DPRINT("%s\n", "[arm64] MiInitMachineDependent: initializing PFN database");
 
@@ -3592,6 +3684,19 @@ MiMapPDEs(
                 // {
                 //     DPRINT("%s\n", Stage);
                 // }
+            }
+            else
+            {
+                /* L2 entry already valid - FreeLDR created this L3 table.
+                 * We must still map it in the self-map for PTE access.
+                 * This is critical for hyperspace and other regions where
+                 * FreeLDR pre-creates L3 tables but the kernel needs to
+                 * access them via the self-map (PTE_BASE). */
+                PFN_NUMBER ExistingPfn = (Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
+                PMMPTE PtePointer = MiAddressToPte(TargetVa);
+                PVOID SelfVa = (PVOID)((ULONG_PTR)PtePointer & ~((ULONG_PTR)PAGE_SIZE - 1ULL));
+
+                MiArm64MapPageTablePage(Ttbr1, SelfVa, ExistingPfn);
             }
         }
     }

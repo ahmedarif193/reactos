@@ -70,6 +70,109 @@ KiSystemService(
     _Inout_ PKTRAP_FRAME TrapFrame,
     _In_ ULONG Instruction);
 
+/*
+ * MiArm64UpdateTtbr0Alias - Update TTBR0 alias in TTBR1's self-map hierarchy
+ *
+ * !!! WARNING: !SMP_SAFE !!!
+ *
+ * This function is ARCHITECTURALLY UNSAFE for SMP systems because:
+ *
+ * 1. TTBR1 (Kernel Page Table Root) is SHARED across all processors.
+ * 2. L0[494] is a single entry in TTBR1's hierarchy - updating it affects ALL CPUs.
+ * 3. If CPU 0 switches to Process A and updates L0[494] to point to A's TTBR0,
+ *    CPU 1 (which may be running Process B) now sees Process A's user page tables
+ *    through its self-map, NOT Process B's tables.
+ *
+ * Example race condition:
+ *   - CPU 0 runs Process A, sets L0[494] -> A's TTBR0
+ *   - CPU 1 runs Process B, needs to access B's PTEs via MiAddressToPteTtbr0()
+ *   - CPU 1 reads L0[494] -> gets A's TTBR0 -> WRONG PROCESS'S PAGE TABLES!
+ *
+ * For Phase 1 (Single Core bring-up), this is acceptable.
+ * For SMP support, each CPU would need its own TTBR0 alias index, or the
+ * alias mechanism must be redesigned (e.g., per-CPU page table overlays).
+ *
+ * This function updates L0[494] in TTBR1's page table hierarchy to point to
+ * the current process's TTBR0 L0 page. This enables the self-map to work for
+ * user-space addresses by routing MiAddressToPteTtbr0() through the alias.
+ *
+ * Called during context switch (KiSwapProcess) and during early initialization.
+ *
+ * Parameters:
+ *   Ttbr0Pa - Physical address of the new TTBR0 L0 page table
+ */
+static __inline VOID
+MiArm64UpdateTtbr0Alias(ULONG64 Ttbr0Pa)
+{
+    UINT64 Ttbr1;
+    UINT64 Ttbr1Pa;
+    volatile UINT64 *L0Table;
+
+    /* ARM64 PTE constants */
+    #define ARM64_TTBR0_ALIAS_INDEX 494
+    #define ARM64_PTE_TABLE_VALID   0x3ULL
+    #define ARM64_PTE_ADDR_MASK_    0x0000FFFFFFFFF000ULL
+
+    /* Read TTBR1 to get the kernel page table root */
+    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+    Ttbr1Pa = Ttbr1 & ARM64_PTE_ADDR_MASK_;
+
+    /* Access L0 table via KSEG0 direct mapping (0xFFFF800000000000 + PA) */
+    L0Table = (volatile UINT64 *)(0xFFFF800000000000ULL | Ttbr1Pa);
+
+    /*
+     * Update L0[494] to point to TTBR0's L0 page.
+     *
+     * The descriptor is a table descriptor (type = 0b11) pointing to
+     * the physical address of TTBR0's L0 page table. This creates an
+     * alias in TTBR1's self-map space that allows accessing TTBR0's
+     * page table hierarchy.
+     *
+     * Descriptor format for table entries:
+     *   [63:48] = Reserved (SBZ for non-secure)
+     *   [47:12] = Next-level table address (PA)
+     *   [11:2]  = Ignored
+     *   [1:0]   = 0b11 (table descriptor)
+     */
+    {
+        UINT64 OldEntry = L0Table[ARM64_TTBR0_ALIAS_INDEX];
+        UINT64 NewEntry = (Ttbr0Pa & ARM64_PTE_ADDR_MASK_) | ARM64_PTE_TABLE_VALID;
+
+        /* Only update if changed to avoid unnecessary TLB invalidation */
+        if (OldEntry != NewEntry)
+        {
+            L0Table[ARM64_TTBR0_ALIAS_INDEX] = NewEntry;
+
+            /*
+             * Memory barrier and TLB invalidation for the alias entry.
+             *
+             * DSB ISHST: Ensure the PTE write is visible to all observers
+             * TLBI VMALLE1IS: Invalidate all TLB entries at EL1 (Inner Shareable)
+             * DSB ISH: Ensure TLB invalidation completes
+             * ISB: Synchronize instruction stream
+             *
+             * TODO: Optimize TLB invalidation once correctness is verified.
+             * Currently using TLBI VMALLE1IS (global flush) which is heavy-handed.
+             * Could potentially use TLBI VAE1IS with the specific VA range
+             * (PTE_BASE_TTBR0 through PXE_BASE_TTBR0 + PAGE_SIZE), but this
+             * requires careful calculation of all affected self-map VAs.
+             * For now, correctness over performance.
+             */
+            __asm__ __volatile__(
+                "dsb ishst\n\t"
+                "tlbi vmalle1is\n\t"
+                "dsb ish\n\t"
+                "isb"
+                ::: "memory"
+            );
+        }
+    }
+
+    #undef ARM64_TTBR0_ALIAS_INDEX
+    #undef ARM64_PTE_TABLE_VALID
+    #undef ARM64_PTE_ADDR_MASK_
+}
+
 VOID
 NTAPI
 KiSwapProcess(_Inout_ PKPROCESS NewProcess,
@@ -105,6 +208,22 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
     }
 
     ASSERT(NewProcess->DirectoryTableBase[0] != 0);
+
+    /*
+     * ARM64 TTBR0 Alias Update
+     *
+     * Before switching TTBR0 to the new process, update the TTBR0 alias
+     * entry (L0[494]) in TTBR1's self-map to point to the new process's
+     * TTBR0 L0 page. This ensures that MiAddressToPteTtbr0() and related
+     * functions can correctly access the new process's user-space PTEs
+     * through the kernel's self-map mechanism.
+     *
+     * Order matters:
+     * 1. Update alias (so self-map sees new tables)
+     * 2. Update TTBR0 (so hardware uses new tables)
+     */
+    MiArm64UpdateTtbr0Alias(NewProcess->DirectoryTableBase[0]);
+
     KiArm64WriteUserTtbr(NewProcess->DirectoryTableBase[0]);
 }
 
@@ -602,6 +721,65 @@ KiArm64HandleSynchronousException(
 
             if (NT_SUCCESS(Status))
             {
+                /*
+                 * ARM64 CRITICAL: Cache Invalidation After Instruction Fetch Fault.
+                 *
+                 * For instruction fetch faults, we must invalidate BOTH I-cache
+                 * and D-cache before returning to retry the instruction fetch.
+                 *
+                 * Why both caches?
+                 * - I-cache: Contains instruction data for virtual addresses
+                 * - D-cache: Modern ARM64 uses Harvard cache architecture where
+                 *   instruction fetches can be satisfied from either cache
+                 *
+                 * The page fault handler just mapped fresh code from the ramdisk,
+                 * but the caches may contain stale data for this virtual address.
+                 * We must ensure the CPU fetches the FRESH instructions from the
+                 * newly mapped physical page.
+                 *
+                 * Cache invalidation strategy for INCOMING code:
+                 * - DC IVAC (Invalidate only) for D-cache - discard stale data
+                 *   DO NOT use DC CIVAC - it would write back garbage to RAM!
+                 * - IC IVAU for I-cache - standard instruction cache invalidation
+                 *
+                 * Order: DC IVAC -> DSB ISH -> IC IVAU -> DSB ISH -> ISB
+                 */
+                {
+                    ULONG64 Ctr;
+                    ULONG DcacheLineSize, IcacheLineSize;
+                    ULONG_PTR Va;
+
+                    /* Read CTR_EL0 to get cache line sizes */
+                    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+                    DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+                    IcacheLineSize = 4u << (Ctr & 0xF);
+
+                    /* Align fault address to page boundary */
+                    Va = (ULONG_PTR)Context->State.FaultAddress & ~(ULONG_PTR)(PAGE_SIZE - 1);
+
+                    /*
+                     * D-cache: Use DC IVAC (Invalidate only) for incoming code.
+                     * This discards stale cache lines without writing back garbage.
+                     */
+                    for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
+                    {
+                        __asm__ __volatile__("dc ivac, %0" :: "r"(Va + offset) : "memory");
+                    }
+
+                    /* Ensure D-cache invalidation completes before I-cache ops */
+                    __asm__ __volatile__("dsb ish" ::: "memory");
+
+                    /* Invalidate I-cache for the entire page */
+                    for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += IcacheLineSize)
+                    {
+                        __asm__ __volatile__("ic ivau, %0" :: "r"(Va + offset) : "memory");
+                    }
+
+                    /* Ensure all cache operations complete */
+                    __asm__ __volatile__("dsb ish" ::: "memory");
+                    __asm__ __volatile__("isb" ::: "memory");
+                }
+
                 Context->TrapFramePointer = TrapFrame;
                 Context->ExceptionFramePointer = &Context->ExceptionFrame;
                 KiArm64ClearTrapActive();
@@ -856,6 +1034,68 @@ KiArm64HandleSynchronousException(
 
             if (NT_SUCCESS(Status))
             {
+                /*
+                 * ARM64 CRITICAL: Cache Invalidation After Page Fault
+                 *
+                 * After successfully handling a page fault, we MUST invalidate the
+                 * D-cache for the faulting address BEFORE returning to retry the
+                 * instruction.
+                 *
+                 * Cache Invalidation Strategy:
+                 *
+                 * For INCOMING data (read faults, DMA/PIO populated pages):
+                 *   Use DC IVAC (Invalidate by VA to PoC) - just discard cache lines.
+                 *   The data source (ramdisk, disk, DMA) has already written to RAM.
+                 *   We want to discard any stale cache data so CPU reads fresh RAM.
+                 *
+                 *   CRITICAL: DC CIVAC (Clean & Invalidate) is WRONG for incoming data!
+                 *   CIVAC writes back dirty cache lines before invalidating. If the
+                 *   cache has garbage (uninitialized or from previous mapping), CIVAC
+                 *   writes that garbage to RAM, overwriting the good data.
+                 *   Example: Cache has 0xE53F, RAM has "MZ" -> CIVAC writes 0xE53F to RAM!
+                 *
+                 * For OUTGOING data (CPU wrote, DMA needs to read):
+                 *   Use DC CIVAC (Clean & Invalidate) - write back dirty lines first.
+                 *   We want to ensure CPU writes reach RAM before DMA reads.
+                 *
+                 * Read faults (data abort, not write) = INCOMING data = DC IVAC
+                 * Write faults for COW/demand-zero = page is zeroed, then INCOMING = DC IVAC
+                 *
+                 * NOTE: DC IVAC may trap at EL0 if SCTLR_EL1.UCI is not set.
+                 * Since we're in EL1 (kernel mode), DC IVAC is always permitted.
+                 *
+                 * Order of operations:
+                 * 1. MmAccessFault creates the mapping (PTE now valid)
+                 * 2. DSB ISHST + TLBI + DSB ISH + ISB (already done in fault handler)
+                 * 3. DC IVAC for entire page (invalidate stale cache)
+                 * 4. DSB ISH (ensure cache ops complete)
+                 * 5. Return to retry instruction (will read fresh data)
+                 */
+                {
+                    ULONG64 Ctr;
+                    ULONG DcacheLineSize;
+                    ULONG_PTR Va;
+
+                    /* Read CTR_EL0 to get D-cache line size */
+                    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+                    DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+
+                    /* Align fault address to page boundary */
+                    Va = (ULONG_PTR)Context->State.FaultAddress & ~(ULONG_PTR)(PAGE_SIZE - 1);
+
+                    /*
+                     * Use DC IVAC (Invalidate only) for incoming data.
+                     * This discards stale cache lines without writing back garbage.
+                     */
+                    for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
+                    {
+                        __asm__ __volatile__("dc ivac, %0" :: "r"(Va + offset) : "memory");
+                    }
+
+                    /* Ensure all cache operations complete before returning */
+                    __asm__ __volatile__("dsb ish" ::: "memory");
+                }
+
                 Context->TrapFramePointer = TrapFrame;
                 Context->ExceptionFramePointer = &Context->ExceptionFrame;
                 KiArm64ClearTrapActive();

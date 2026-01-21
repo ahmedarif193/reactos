@@ -19,6 +19,35 @@
 #define PPI_MASK       (PPE_PER_PAGE - 1)
 #define PXI_MASK       (PXE_PER_PAGE - 1)
 
+/*
+ * ARM64 Self-Map Architecture for TTBR0/TTBR1 Split
+ *
+ * On ARM64, user addresses (0x0000...) are translated via TTBR0_EL1 and
+ * kernel addresses (0xFFFF...) are translated via TTBR1_EL1. The NT Memory
+ * Manager's self-map is built into TTBR1's hierarchy at L0 index 493.
+ *
+ * PROBLEM: MiAddressToPte(UserAddress) returns a VA in TTBR1's self-map space,
+ * but that doesn't map TTBR0's page tables. The self-map only covers TTBR1.
+ *
+ * SOLUTION: Reserve L0 index 494 in TTBR1's hierarchy as a "TTBR0 Alias" slot.
+ * This slot's L0 entry points to the current process's TTBR0 L0 page table.
+ * On context switch (KiSwapProcess), we update this alias entry.
+ *
+ * Layout:
+ *   L0[493] = Self-map recursive entry (points to TTBR1's own L0)
+ *   L0[494] = TTBR0 alias entry (points to current TTBR0's L0)
+ *
+ * When accessing PTEs for user addresses:
+ *   - Original self-map formula returns addresses in 0xFFFFF68000000000 range
+ *   - We detect user-range PTEs and redirect to 0xFFFFF70000000000 range
+ *   - The L0[494] alias ensures we actually walk TTBR0's page tables
+ *
+ * Self-map L0 index: 493 (0x1ED)
+ * TTBR0 alias L0 index: 494 (0x1EE)
+ */
+#define PXE_SELFMAP_INDEX   493
+#define PXE_TTBR0_ALIAS_INDEX 494
+
 #define PXE_BASE    0xFFFFF6FB7DBED000ULL
 #define PXE_SELFMAP 0xFFFFF6FB7DBEDF68ULL
 #define PPE_BASE    0xFFFFF6FB7DA00000ULL
@@ -28,6 +57,47 @@
 #define PPE_TOP     0xFFFFF6FB7DBFFFFFULL
 #define PDE_TOP     0xFFFFF6FB7FFFFFFFULL
 #define PTE_TOP     0xFFFFF6FFFFFFFFFFULL
+
+/*
+ * TTBR0 Alias Self-Map Bases
+ *
+ * These addresses correspond to viewing TTBR0's page tables through the
+ * TTBR0 alias slot at L0[494]. The derivation uses the L0-index delta from
+ * the self-map base addresses.
+ *
+ * Derivation:
+ *   delta = (PXE_TTBR0_ALIAS_INDEX - PXE_SELFMAP_INDEX) << 39
+ *         = (494 - 493) << 39
+ *         = 1 << 39
+ *         = 0x8000000000 (512 GB)
+ *
+ *   PTE_BASE_TTBR0 = PTE_BASE + delta
+ *                  = 0xFFFFF68000000000 + 0x8000000000
+ *                  = 0xFFFFF70000000000
+ *
+ *   PDE_BASE_TTBR0 = PDE_BASE + delta
+ *                  = 0xFFFFF6FB40000000 + 0x8000000000
+ *                  = 0xFFFFF6FBC0000000
+ *
+ *   PPE_BASE_TTBR0 = PPE_BASE + delta
+ *                  = 0xFFFFF6FB7DA00000 + 0x8000000000
+ *                  = 0xFFFFF6FBFDA00000
+ *
+ *   PXE_BASE_TTBR0 = PXE_BASE + delta
+ *                  = 0xFFFFF6FB7DBED000 + 0x8000000000
+ *                  = 0xFFFFF6FBFDBED000
+ *
+ * For user addresses 0x0000... through 0x0000FFFFFFFFFFFF:
+ *   PTE for user VA = PTE_BASE_TTBR0 + (VA >> 9)
+ *
+ * Note: L0[494] must be updated in KiSwapProcess to point to the new
+ * process's TTBR0 L0 page table.
+ */
+#define TTBR0_ALIAS_DELTA       (1ULL << 39)  /* 512 GB = (494 - 493) << 39 */
+#define PTE_BASE_TTBR0  (PTE_BASE + TTBR0_ALIAS_DELTA)  /* 0xFFFFF70000000000 */
+#define PDE_BASE_TTBR0  (PDE_BASE + TTBR0_ALIAS_DELTA)  /* 0xFFFFF6FBC0000000 */
+#define PPE_BASE_TTBR0  (PPE_BASE + TTBR0_ALIAS_DELTA)  /* 0xFFFFF6FBFDA00000 */
+#define PXE_BASE_TTBR0  (PXE_BASE + TTBR0_ALIAS_DELTA)  /* 0xFFFFF6FBFDBED000 */
 
 #define KSEG0_BASE  0xFFFF800000000000ULL
 
@@ -100,7 +170,7 @@
 #define MI_MAX_SECONDARY_COLORS                 1024
 #define MI_NUMBER_SYSTEM_PTES                   22000
 #define MI_MAX_FREE_PAGE_LISTS                  4
-#define MI_HYPERSPACE_PTES                     (256 - 1)
+#define MI_HYPERSPACE_PTES                     256
 #define MI_ZERO_PTES                           (32)
 #define MI_MAX_ZERO_BITS                        53
 #define SESSION_POOL_LOOKASIDES                 21
@@ -206,6 +276,87 @@ ULONG
 MiAddressToPxi(PVOID Address)
 {
     return ((((ULONG64)Address) >> PXI_SHIFT) & 0x1FF);
+}
+
+/*
+ * MiIsUserAddress - Check if address is in user space (TTBR0 range)
+ *
+ * On ARM64 with 48-bit VAs:
+ *   User space:   0x0000000000000000 - 0x0000FFFFFFFFFFFF (below 2^48)
+ *   Kernel space: 0xFFFF000000000000 - 0xFFFFFFFFFFFFFFFF
+ *
+ * The check uses 0x0001000000000000 (2^48) as the boundary:
+ *   - Addresses below 2^48 are user addresses (TTBR0)
+ *   - Addresses at or above 0xFFFF000000000000 are kernel addresses (TTBR1)
+ *
+ * Note: The actual TTBR selection on ARM64 hardware is based on bit 55
+ * (the highest implemented VA bit for 48-bit VA configurations), but
+ * this simpler comparison works because:
+ *   - Valid user addresses are always < 2^48
+ *   - Valid kernel addresses are always >= 0xFFFF000000000000 (canonical form)
+ *   - The gap between 0x0001000000000000 and 0xFFFF000000000000 contains
+ *     no valid addresses (non-canonical)
+ */
+FORCEINLINE
+BOOLEAN
+MiIsUserAddress(PVOID Address)
+{
+    return ((ULONG64)Address < 0x0001000000000000ULL);
+}
+
+/*
+ * MiAddressToPteTtbr0 - Get PTE address for a user-space address via TTBR0 alias
+ *
+ * This function returns the PTE address for a user-space virtual address,
+ * routed through the TTBR0 alias slot at L0[494]. This ensures we're actually
+ * accessing the page tables in TTBR0's hierarchy, not TTBR1's self-map.
+ *
+ * IMPORTANT: L0[494] must be initialized to point to the current process's
+ * TTBR0 L0 page before calling this function.
+ */
+FORCEINLINE
+PMMPTE
+MiAddressToPteTtbr0(PVOID Address)
+{
+    ULONG64 Offset = (ULONG64)Address >> (PTI_SHIFT - 3);
+    Offset &= 0xFFFFFFFFFULL << 3;  /* Mask to 36-bit entry offset (512GB space) */
+    return (PMMPTE)(PTE_BASE_TTBR0 + Offset);
+}
+
+/*
+ * MiAddressToPdeTtbr0 - Get PDE address for a user-space address via TTBR0 alias
+ */
+FORCEINLINE
+PMMPTE
+MiAddressToPdeTtbr0(PVOID Address)
+{
+    ULONG64 Offset = (ULONG64)Address >> (PDI_SHIFT - 3);
+    Offset &= 0x7FFFFFFULL << 3;  /* Mask to 27-bit entry offset */
+    return (PMMPTE)(PDE_BASE_TTBR0 + Offset);
+}
+
+/*
+ * MiAddressToPpeTtbr0 - Get PPE address for a user-space address via TTBR0 alias
+ */
+FORCEINLINE
+PMMPTE
+MiAddressToPpeTtbr0(PVOID Address)
+{
+    ULONG64 Offset = (ULONG64)Address >> (PPI_SHIFT - 3);
+    Offset &= 0x3FFFFULL << 3;  /* Mask to 18-bit entry offset */
+    return (PMMPTE)(PPE_BASE_TTBR0 + Offset);
+}
+
+/*
+ * MiAddressToPxeTtbr0 - Get PXE address for a user-space address via TTBR0 alias
+ */
+FORCEINLINE
+PMMPTE
+MiAddressToPxeTtbr0(PVOID Address)
+{
+    ULONG64 Offset = (ULONG64)Address >> (PXI_SHIFT - 3);
+    Offset &= PXI_MASK << 3;  /* Mask to 9-bit entry offset */
+    return (PMMPTE)(PXE_BASE_TTBR0 + Offset);
 }
 
 FORCEINLINE
