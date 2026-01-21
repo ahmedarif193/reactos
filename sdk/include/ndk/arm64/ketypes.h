@@ -238,6 +238,7 @@ typedef struct _KSTART_FRAME
     ULONG64 SystemRoutine;
     ULONG64 Parameter;
     ULONG64 Return;
+    ULONG64 Padding;  /* ARM64: Pad to 48 bytes for 16-byte stack alignment */
 } KSTART_FRAME, *PKSTART_FRAME;
 
 typedef struct _KSWITCH_FRAME

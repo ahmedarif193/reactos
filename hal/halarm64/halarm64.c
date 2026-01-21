@@ -4128,11 +4128,7 @@ HalInitSystem(
                 KIRQL OldIrql;
                 ULONG Igrpen1;
 
-                DPRINT1("[CYCLE37] HalInitSystem Phase1: Raising IRQL before enabling ICC_IGRPEN1_EL1...\n");
                 OldIrql = KfRaiseIrql(HIGH_LEVEL);
-
-                DPRINT1("[CYCLE37] HalInitSystem Phase1: Enabling ICC_IGRPEN1_EL1 (IRQL=%u->%u)...\n",
-                        OldIrql, KeGetCurrentIrql());
                 HalpWriteIccIgrpen1(1); /* Enable Group1 interrupt delivery */
 
                 /* Barrier to ensure the enable takes effect */
@@ -5095,29 +5091,18 @@ HalEnableSystemInterrupt(
     /* Calculate GIC priority from IRQL */
     priority = HalpIrqlToGicPriority(Irql);
 
-    HalArm64RawPuts("[CYCLE32] HalEnableSystemInterrupt: Entry\n");
-
     if (HalpGicUseSysRegs && Vector < 32)
     {
         /* PPI (16-31): use Redistributor registers */
         ULONG Cpu = KeGetCurrentProcessorNumber();
-        ULONG_PTR RdBase = HalpGicrBase(Cpu);
         ULONG_PTR SgiBase = HalpGicrSgiBase(Cpu);
-        ULONG IsEnablerBefore, IsEnablerAfter;
-
-        HalArm64RawPuts("[CYCLE32] HalEnableSystemInterrupt: PPI path\n");
-        DPRINT1("[arm64][PPI] Enabling PPI %lu on CPU %lu\n", Vector, Cpu);
-        DPRINT1("[arm64][PPI]   GICR_Base=0x%p SGI_Base=0x%p\n", (PVOID)RdBase, (PVOID)SgiBase);
+        ULONG IsEnablerAfter;
 
         if (SgiBase == 0)
         {
             DPRINT1("[arm64][PPI] ERROR: SgiBase is NULL for CPU %lu!\n", Cpu);
             return FALSE;
         }
-
-        /* Read current enable state */
-        IsEnablerBefore = *HalpMmio(SgiBase, GICR_ISENABLER0);
-        DPRINT1("[arm64][PPI]   ISENABLER0 before: 0x%08lx\n", IsEnablerBefore);
 
         /* Set priority for this interrupt */
         prioReg = GICR_IPRIORITYR + (Vector & ~3);
@@ -5130,9 +5115,6 @@ HalEnableSystemInterrupt(
         /* Memory barrier after priority write */
         __asm__ __volatile__("dsb sy" ::: "memory");
 
-        DPRINT1("[arm64][PPI]   Priority reg offset=0x%lx shift=%lu value=0x%02X\n",
-                prioReg, prioShift, priority);
-
         /* Enable the interrupt */
         *HalpMmio(SgiBase, GICR_ISENABLER0) = (1u << bit);
 
@@ -5141,8 +5123,6 @@ HalEnableSystemInterrupt(
 
         /* Verify it was enabled */
         IsEnablerAfter = *HalpMmio(SgiBase, GICR_ISENABLER0);
-        DPRINT1("[arm64][PPI]   ISENABLER0 after: 0x%08lx (bit %lu = %lu)\n",
-                IsEnablerAfter, bit, (IsEnablerAfter >> bit) & 1);
 
         if (!(IsEnablerAfter & (1u << bit)))
         {
@@ -5150,8 +5130,6 @@ HalEnableSystemInterrupt(
             /* Retry the enable */
             *HalpMmio(SgiBase, GICR_ISENABLER0) = (1u << bit);
             __asm__ __volatile__("dsb sy" ::: "memory");
-            IsEnablerAfter = *HalpMmio(SgiBase, GICR_ISENABLER0);
-            DPRINT1("[arm64][PPI]   ISENABLER0 after retry: 0x%08lx\n", IsEnablerAfter);
         }
     }
     else
@@ -6210,15 +6188,11 @@ HalGetInterruptVector(
     return Vector;
 }
 
-/* [CYCLE36] Forward declaration */
-static VOID NTAPI HalDumpGicStateOnSpurious(ULONG IntId);
-
 ULONG
 FASTCALL
 HalGetInterruptSource(VOID)
 {
     ULONG IntId;
-    static ULONG SpuriousCount = 0;
 
     if (HalpGicUseSysRegs)
     {
@@ -6232,80 +6206,7 @@ HalGetInterruptSource(VOID)
         IntId = *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_IAR) & 0x3FFu;
     }
 
-    /*
-     * [CYCLE38] DISABLED: Spurious interrupt diagnostics.
-     * The DPRINT1 calls in HalDumpGicStateOnSpurious may be causing stack
-     * overflow or register corruption during nested interrupt handling.
-     * Disable to test if spurious interrupts work without diagnostics.
-     */
-    #if 0
-    if ((IntId >= 1020) && (SpuriousCount == 0))
-    {
-        SpuriousCount++;
-        HalDumpGicStateOnSpurious(IntId);
-    }
-    #endif
-
     return IntId;
-}
-
-/*
- * [CYCLE36] HalDumpGicStateOnSpurious - Comprehensive GIC diagnostics for spurious interrupts
- */
-static VOID
-NTAPI
-HalDumpGicStateOnSpurious(ULONG IntId)
-{
-    if (!HalpGicUseSysRegs)
-        return; /* Only for GICv3 */
-
-    /* Read all relevant CPU interface registers */
-    ULONG Pmr = HalpReadIccPmr();
-    ULONG Igrpen1 = HalpReadIccIgrpen1();
-    ULONG Sre = HalpReadIccSre();
-    ULONGLONG Ctlr;
-    __asm__ __volatile__("mrs %0, icc_ctlr_el1" : "=r"(Ctlr));
-
-    /* Read redistributor state for PPI 30 (timer) */
-    ULONG_PTR SgiBase = HalpGicrSgiBase(0);
-    ULONG IsEnabler = *HalpMmio(SgiBase, GICR_ISENABLER0);
-    ULONG IsPendr = *HalpMmio(SgiBase, GICR_ISPENDR0);
-    ULONG IsActiveR = *HalpMmio(SgiBase, GICR_ISACTIVER0);
-    ULONG IGroupR = *HalpMmio(SgiBase, GICR_IGROUPR0);
-    ULONG IGroupModR = *HalpMmio(SgiBase, GICR_IGRPMODR0);
-
-    /* Read PPI 30 priority (offset 30*1 = byte 30, in word 28-31) */
-    ULONG PriReg = *HalpMmio(SgiBase, GICR_IPRIORITYR + 28);
-    ULONG Pri30 = (PriReg >> ((30 % 4) * 8)) & 0xFF;
-
-    /* Read ICFGR1 to check trigger mode for PPI 30 */
-    ULONG Icfgr1 = *HalpMmio(SgiBase, GICR_ICFGR1);
-    ULONG TriggerBit = (Icfgr1 >> (((30 - 16) % 16) * 2 + 1)) & 1;
-
-    /* Read timer state */
-    ULONGLONG CntpCtl, CntpTval;
-    __asm__ __volatile__("mrs %0, cntp_ctl_el0" : "=r"(CntpCtl));
-    __asm__ __volatile__("mrs %0, cntp_tval_el0" : "=r"(CntpTval));
-
-    DPRINT1("[CYCLE36] ===== SPURIOUS INTERRUPT %lu DIAGNOSTICS =====\n", IntId);
-    DPRINT1("[CYCLE36] CPU Interface: PMR=0x%x IGRPEN1=%u SRE=0x%x CTLR=0x%llx\n",
-            Pmr, Igrpen1, Sre, Ctlr);
-    DPRINT1("[CYCLE36] GICR PPI state:\n");
-    DPRINT1("[CYCLE36]   ISENABLER0 =0x%08lx (PPI30=%d)\n", IsEnabler, (IsEnabler >> 30) & 1);
-    DPRINT1("[CYCLE36]   ISPENDR0   =0x%08lx (PPI30=%d)\n", IsPendr, (IsPendr >> 30) & 1);
-    DPRINT1("[CYCLE36]   ISACTIVER0 =0x%08lx (PPI30=%d)\n", IsActiveR, (IsActiveR >> 30) & 1);
-    DPRINT1("[CYCLE36]   IGROUPR0   =0x%08lx (PPI30=%d)\n", IGroupR, (IGroupR >> 30) & 1);
-    DPRINT1("[CYCLE36]   IGRPMODR0  =0x%08lx (PPI30=%d) - 0=NonSecure, 1=Secure\n", IGroupModR, (IGroupModR >> 30) & 1);
-    DPRINT1("[CYCLE36]   PPI30 Group=%s\n",
-            ((IGroupR >> 30) & 1) ?
-                (((IGroupModR >> 30) & 1) ? "Reserved" : "Group1-NonSecure") :
-                (((IGroupModR >> 30) & 1) ? "Group1-Secure" : "Group0"));
-    DPRINT1("[CYCLE36]   PPI30 Priority=0x%02lx (want < PMR=0x%x to pass)\n", Pri30, Pmr);
-    DPRINT1("[CYCLE36]   PPI30 Trigger=%s\n", TriggerBit ? "EDGE" : "LEVEL");
-    DPRINT1("[CYCLE36] Timer: CNTP_CTL=0x%llx (EN=%d IMASK=%d ISTATUS=%d) TVAL=0x%llx\n",
-            CntpCtl, (int)(CntpCtl & 1), (int)((CntpCtl >> 1) & 1),
-            (int)((CntpCtl >> 2) & 1), CntpTval);
-    DPRINT1("[CYCLE36] =========================================\n");
 }
 
 /*

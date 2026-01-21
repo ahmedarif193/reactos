@@ -21,6 +21,7 @@ import signal
 import atexit
 import argparse
 import shutil
+import platform
 
 # Configuration
 LOG_FILE = "/tmp/v.log"
@@ -249,7 +250,7 @@ def build_livecd():
         return False
 
 
-def start_qemu():
+def start_qemu(rpi_mode=False):
     """Start QEMU based on architecture."""
     global qemu_process, target_arch
 
@@ -264,22 +265,88 @@ def start_qemu():
 
     # ---------------- ARM64 CONFIGURATION ----------------
     if target_arch == "arm64":
-        print(f"Starting QEMU (ARM64)...")
-        
-        # User defined backbone for ARM64
-        qemu_cmd = [
-            "qemu-system-aarch64",
-            "-machine", "virt,gic-version=3",
-            "-cpu", "cortex-a76",
-            "-m", "4G",
-            "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
-            "-drive", f"file={livecd_path}",
-            "-device", "qemu-xhci",
-            "-device", "usb-kbd",
-            "-device", "usb-tablet",
-            "-device", "ramfb",
-            "-serial", f"file:{LOG_FILE}" 
-        ]
+        is_darwin = platform.system() == "Darwin"
+        if rpi_mode:
+            mode_str = "RPI emulation (cortex-a76)"
+        else:
+            mode_str = "HVF accelerated (max)" if is_darwin else "CPU max (4 cores)"
+        print(f"Starting QEMU (ARM64 - {mode_str})...")
+
+        # Darwin-specific configuration (macOS)
+        if is_darwin:
+            if rpi_mode:
+                # Raspberry Pi emulation mode (cortex-a76, no HVF)
+                qemu_cmd = [
+                    "qemu-system-aarch64",
+                    "-device", "ramfb",
+                    "-machine", "virt,gic-version=3",
+                    "-cpu", "cortex-a76",
+                    "-m", "2G",
+                    "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
+                    "-drive", f"if=virtio,media=cdrom,readonly=on,file={livecd_path}",
+                    "-boot", "order=d,menu=on",
+                    "-display", "none",
+                    "-serial", f"file:{LOG_FILE}",
+                    "-device", "qemu-xhci,id=xhci",
+                    "-device", "usb-kbd,bus=xhci.0",
+                    "-device", "usb-mouse,bus=xhci.0"
+                ]
+            else:
+                # HVF accelerated mode (max CPU features)
+                qemu_cmd = [
+                    "qemu-system-aarch64",
+                    "-accel", "hvf",
+                    "-smp", "4",
+                    "-device", "ramfb",
+                    "-machine", "virt,gic-version=3",
+                    "-cpu", "max",
+                    "-m", "2G",
+                    "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
+                    "-drive", f"if=virtio,media=cdrom,readonly=on,file={livecd_path}",
+                    "-boot", "order=d,menu=on",
+                    "-display", "none",
+                    "-serial", f"file:{LOG_FILE}",
+                    "-device", "qemu-xhci,id=xhci",
+                    "-device", "usb-kbd,bus=xhci.0",
+                    "-device", "usb-mouse,bus=xhci.0"
+                ]
+        else:
+            # Linux/other systems
+            if rpi_mode:
+                # Raspberry Pi emulation mode
+                qemu_cmd = [
+                    "qemu-system-aarch64",
+                    "-device", "ramfb",
+                    "-machine", "virt,gic-version=3",
+                    "-cpu", "cortex-a76",
+                    "-m", "2G",
+                    "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+                    "-drive", f"if=virtio,media=cdrom,readonly=on,file={livecd_path}",
+                    "-boot", "order=d,menu=on",
+                    "-display", "none",
+                    "-serial", f"file:{LOG_FILE}",
+                    "-device", "qemu-xhci,id=xhci",
+                    "-device", "usb-kbd,bus=xhci.0",
+                    "-device", "usb-mouse,bus=xhci.0"
+                ]
+            else:
+                # Default accelerated mode
+                qemu_cmd = [
+                    "qemu-system-aarch64",
+                    "-smp", "4",
+                    "-device", "ramfb",
+                    "-machine", "virt,gic-version=3",
+                    "-cpu", "max",
+                    "-m", "4G",
+                    "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+                    "-drive", f"if=virtio,media=cdrom,readonly=on,file={livecd_path}",
+                    "-boot", "order=d,menu=on",
+                    "-display", "none",
+                    "-serial", f"file:{LOG_FILE}",
+                    "-device", "qemu-xhci,id=xhci",
+                    "-device", "usb-kbd,bus=xhci.0",
+                    "-device", "usb-mouse,bus=xhci.0"
+                ]
 
         print(f"  Command: {' '.join(qemu_cmd)}")
 
@@ -288,7 +355,7 @@ def start_qemu():
             qemu_process = subprocess.Popen(
                 qemu_cmd,
                 cwd=BUILD_DIR,
-                stdout=subprocess.DEVNULL, 
+                stdout=subprocess.DEVNULL,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL
             )
@@ -379,10 +446,10 @@ def start_vbox():
         return False
 
 
-def start_vm():
+def start_vm(rpi_mode=False):
     """Start the VM (QEMU or VirtualBox)."""
     if use_qemu:
-        return start_qemu()
+        return start_qemu(rpi_mode)
     else:
         return start_vbox()
 
@@ -500,6 +567,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='VM Monitor Script')
     parser.add_argument('--qemu', action='store_true', help='Use QEMU instead of VirtualBox')
+    parser.add_argument('--rpi', action='store_true', help='Use Raspberry Pi emulation mode (cortex-a76, no HVF)')
     args = parser.parse_args()
 
     use_qemu = args.qemu
@@ -516,6 +584,8 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
 
     vm_type = f"QEMU ({target_arch})" if use_qemu else "VirtualBox"
+    if args.rpi:
+        vm_type += " - RPI Mode"
     print("="*60)
     print(f"VM Monitor Script ({vm_type})")
     print(f"Build directory: {BUILD_DIR}")
@@ -546,7 +616,7 @@ def main():
         if not create_fat32_img():
             print("Warning: Could not create FAT32 image...")
 
-    if not start_vm():
+    if not start_vm(rpi_mode=args.rpi):
         sys.exit(1)
 
     time.sleep(2)

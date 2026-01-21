@@ -15,6 +15,7 @@
 
 #define NDEBUG
 #include <debug.h>
+
 #define trace 0
 enum
 {
@@ -43,7 +44,8 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
     uchar *prog, *opcount, *end, *dirs;
     ULONG off, unit, len, vers, x;
     ULONG_PTR lastline;
-    int i, first, firstline, op, quantum, isstmt, linebase, linerange, opcodebase;
+    int i, first, firstline, op, quantum, isstmt, linebase, opcodebase;
+    int linerange;
     ULONG_PTR a;
     LONG_PTR l;
     char *files, *s;
@@ -59,8 +61,9 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
     memset(proc, 0, sizeof(*proc));
 
     int runit = dwarfaddrtounit(d, pc, &unit);
-    if (runit < 0)
+    if (runit < 0) {
         return -1;
+    }
     int rtag = dwarflookuptag(d, unit, TagCompileUnit, &sym);
     if (rtag < 0)
         return -1;
@@ -105,8 +108,12 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
 
     quantum = dwarfget1(&b);
     isstmt = dwarfget1(&b);
-    linebase = (schar)dwarfget1(&b);
-    linerange = (schar)dwarfget1(&b);
+    linebase = (schar)dwarfget1(&b);  /* line_base is signed per DWARF spec */
+    linerange = (int)dwarfget1(&b);   /* line_range is unsigned in DWARF, keep signed math */
+    if (linerange <= 0) {
+        werrstr("bad line range");
+        return -1;
+    }
     opcodebase = dwarfget1(&b);
 
     opcount = b.p-1;
@@ -156,9 +163,15 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
         op = dwarfget1(&b);
         if(trace) werrstr("\tline %lu, addr %p, op %d %.10H", cur.line, (PVOID)cur.addr, op, b.p);
         if(op >= opcodebase){
-            a = (op - opcodebase) / linerange;
-            l = (op - opcodebase) % linerange + linebase;
-            cur.line += l;
+            int opdelta = op - opcodebase;
+            a = opdelta / linerange;
+            l = (opdelta % linerange) + linebase;
+            /* Protect against line underflow: line must remain >= 1 */
+            if (l < 0 && (ULONG)(-l) > cur.line) {
+                cur.line = 1;  /* Clamp to minimum valid line */
+            } else {
+                cur.line += l;
+            }
             cur.addr += a * quantum;
             if(trace) werrstr(" +%d,%d", a, l);
         emit:
@@ -249,7 +262,12 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
             case 3:	/* advance line */
                 l = dwarfget128s(&b);
                 if(trace) werrstr(" advance line + %lld", (LONGLONG)l);
-                cur.line += l;
+                /* Protect against line underflow: line must remain >= 1 */
+                if (l < 0 && (ULONG)(-l) > cur.line) {
+                    cur.line = 1;  /* Clamp to minimum valid line */
+                } else {
+                    cur.line += l;
+                }
                 break;
             case 4:	/* set file */
                 if(trace) werrstr(" set file");
@@ -367,6 +385,7 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
 
 	if (!cdir)
 		cdir = "";
+
     if (dir)
         *dir = cdir;
 

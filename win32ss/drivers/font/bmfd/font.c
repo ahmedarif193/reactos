@@ -140,7 +140,7 @@ ParseFonFile(
     }
 
     /* Get pointer to OS2 header and veryfy it is valid */
-    pOs2Header = (PVOID)((PCHAR)pDosHeader + GETVAL(pDosHeader->e_lfanew));
+    pOs2Header = (PVOID)((PUCHAR)pDosHeader + GETVAL(pDosHeader->e_lfanew));
     pStart += sizeof(IMAGE_DOS_HEADER);
     if (!IsValidPtr(pOs2Header, sizeof(IMAGE_OS2_HEADER), pStart, pEnd, 4))
     {
@@ -149,7 +149,7 @@ ParseFonFile(
     }
 
     /* Get pointer to resource table and verify it is valid */
-    pResTable = (PVOID)((PCHAR)pOs2Header + GETVAL(pOs2Header->ne_rsrctab));
+    pResTable = (PVOID)((PUCHAR)pOs2Header + GETVAL(pOs2Header->ne_rsrctab));
     pStart = (PCHAR)pOs2Header;
     if (!IsValidPtr(pResTable, sizeof(NE_RESTABLE), pStart, pEnd, 1))
     {

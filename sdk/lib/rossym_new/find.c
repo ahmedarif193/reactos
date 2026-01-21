@@ -118,7 +118,6 @@ RosSymGetAddressInformation
     }
 
     FullPC = RelativeAddress + RosSymInfo->pe->imagebase;
-
     res = dwarfpctoline(RosSymInfo, &proc, FullPC,
                         &RosSymLineInfo->FileName,
                         &RosSymLineInfo->DirectoryName,

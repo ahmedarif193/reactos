@@ -117,23 +117,67 @@ RosSymCreateFromMem(PVOID ImageStart, ULONG_PTR ImageSize, PROSSYM_INFO *RosSymI
 					}
 
 					/* If we couldn't find it in mapped sections, try to identify DWARF
-					 * sections by examining their content. This is more reliable than
-					 * position-based guessing because:
-					 * 1. Different modules may have different DWARF sections present
-					 * 2. Section order may vary between modules
-					 * 3. Some modules may lack aranges, loc, ranges, etc.
+					 * sections by their string table offset. GCC/MinGW always emits
+					 * debug sections in a consistent order, so the string table offsets
+					 * are predictable:
+					 *   /4   -> .debug_aranges
+					 *   /19  -> .debug_info
+					 *   /31  -> .debug_abbrev
+					 *   /45  -> .debug_line
+					 *   /57  -> .debug_frame
+					 *   /70  -> .debug_str
+					 *   /81  -> .debug_loc
+					 *   /92  -> .debug_ranges
 					 *
-					 * DWARF section identification by content:
-					 * - .debug_info: Starts with unit_length (4 bytes) + version (2 bytes, typically 2-4)
-					 * - .debug_abbrev: Starts with abbrev code (ULEB128) + tag (ULEB128)
-					 * - .debug_line: Starts with unit_length + version (2)
-					 * - .debug_str: Contains null-terminated strings
-					 * - .debug_aranges: Starts with unit_length + version (2) + debug_info_offset
-					 * - .debug_loc: Contains location lists with base addresses
-					 * - .debug_ranges: Contains address range pairs
-					 * - .debug_frame: Starts with CIE/FDE length
+					 * Note: Clang uses different offsets due to different section ordering.
+					 * This offset-based detection is specifically for GCC/MinGW toolchains.
 					 */
 					if (!VirtualOffset) {
+						/*
+						 * Try offset-based detection for GCC and Clang toolchains.
+						 * Both toolchains emit debug sections in consistent orders, so
+						 * the string table offsets are predictable:
+						 *
+						 * GCC/MinGW offsets (with .debug_frame):
+						 *   /4=aranges /19=info /31=abbrev /45=line /57=frame /70=str /81=loc /92=ranges
+						 *
+						 * Clang offsets (no .debug_frame at this position):
+						 *   /4=aranges /19=info /31=abbrev /45=line /57=str /68=loc /79=ranges
+						 *
+						 * Note: The first 4 sections (aranges, info, abbrev, line) have identical
+						 * offsets (4, 19, 31, 45) in both GCC and Clang. After that, they diverge
+						 * because GCC includes .debug_frame while Clang doesn't.
+						 *
+						 * Offset 57 is ambiguous: GCC=frame, Clang=str. We handle this by using
+						 * content detection for offset 57 (falls through to content-based path).
+						 */
+						switch (StringOffset) {
+						/* Common to both GCC and Clang */
+						case 4:  ResolvedName = ".debug_aranges"; break;
+						case 19: ResolvedName = ".debug_info"; break;
+						case 31: ResolvedName = ".debug_abbrev"; break;
+						case 45: ResolvedName = ".debug_line"; break;
+						/* GCC-specific offsets (after .debug_frame at 57) */
+						case 70: ResolvedName = ".debug_str"; break;
+						case 81: ResolvedName = ".debug_loc"; break;
+						case 92: ResolvedName = ".debug_ranges"; break;
+						/* Clang-specific offsets (no .debug_frame, so different layout) */
+						case 68: ResolvedName = ".debug_loc"; break;
+						case 79: ResolvedName = ".debug_ranges"; break;
+						/* Note: offset 57 is intentionally NOT handled here because it's
+						 * ambiguous between GCC (.debug_frame) and Clang (.debug_str).
+						 * Content-based detection will handle it. */
+						}
+
+						if (ResolvedName) {
+							SECTION_TRACE("  Matched by string table offset: %s\n", ResolvedName);
+						}
+					}
+
+					/* If offset-based detection didn't work, fall back to content-based
+					 * detection. This handles Clang builds and non-standard section orders.
+					 */
+					if (!VirtualOffset && !ResolvedName) {
 						ULONG chars = OrigSectionHeaders[SectionIndex].Characteristics;
 						SECTION_TRACE("  String table NOT mapped, trying content-based detection\n");
 						/*

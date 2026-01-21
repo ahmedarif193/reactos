@@ -231,7 +231,7 @@ BmfdQueryMaxExtents(
 {
     ULONG cjMaxWidth, cjMaxBitmapSize;
     PFONTINFO16 pFontInfo;
-    ULONG xScale, yScale;
+    LONG xScale, yScale;
 
     if (pfddm)
     {
@@ -266,16 +266,16 @@ BmfdQueryMaxExtents(
 
         if (pfont->ulAngle == 90 || pfont->ulAngle == 270)
         {
-            pfddm->cxMax = xScale * GETVAL(pFontInfo->dfPixHeight);
-            pfddm->cyMax = yScale * GETVAL(pFontInfo->dfMaxWidth);
-            pfddm->fxMaxAscender = yScale * GETVAL(pFontInfo->dfAscent) << 4;
+            pfddm->cxMax = (ULONG)(xScale * GETVAL(pFontInfo->dfPixHeight));
+            pfddm->cyMax = (ULONG)(yScale * GETVAL(pFontInfo->dfMaxWidth));
+            pfddm->fxMaxAscender = (LONG)(yScale * GETVAL(pFontInfo->dfAscent) << 4);
             pfddm->fxMaxDescender = (pfddm->cyMax << 4) - pfddm->fxMaxAscender;
         }
         else
         {
-            pfddm->cxMax = xScale * GETVAL(pFontInfo->dfMaxWidth);
-            pfddm->cyMax = yScale * GETVAL(pFontInfo->dfPixHeight);
-            pfddm->fxMaxAscender = yScale * GETVAL(pFontInfo->dfAscent) << 4;
+            pfddm->cxMax = (ULONG)(xScale * GETVAL(pFontInfo->dfMaxWidth));
+            pfddm->cyMax = (ULONG)(yScale * GETVAL(pFontInfo->dfPixHeight));
+            pfddm->fxMaxAscender = (LONG)(yScale * GETVAL(pFontInfo->dfAscent) << 4);
             pfddm->fxMaxDescender = (pfddm->cyMax << 4) - pfddm->fxMaxAscender;
         }
 
