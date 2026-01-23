@@ -2121,9 +2121,16 @@ XHCI_ConfigureSlotEndpoint(
         return MP_STATUS_ERROR;
     }
 
+    /*
+     * Use DequeueIndex (not EnqueueIndex) when reconfiguring an active endpoint.
+     * The dequeue pointer must point to where the controller should resume reading,
+     * not where new TRBs are being added. Using EnqueueIndex would skip all pending
+     * transfers that are queued between DequeueIndex and EnqueueIndex, causing those
+     * transfers to be silently lost.
+     */
     DequeuePtr =
         ((Endpoint->TransferRing.PhysicalAddress.QuadPart +
-          ((ULONGLONG)Endpoint->TransferRing.EnqueueIndex * sizeof(XHCI_TRB))) & ~0xFULL) |
+          ((ULONGLONG)Endpoint->TransferRing.DequeueIndex * sizeof(XHCI_TRB))) & ~0xFULL) |
         (Endpoint->TransferRing.CycleState & 0x1);
 
     XhciEndpointContextInit(EpCtx,
@@ -2250,9 +2257,10 @@ XHCI_ConfigureSlotEndpoint(
                 continue;
             }
 
+            /* Same as above: use DequeueIndex to preserve pending transfers */
             ExistingDequeuePtr =
                 ((ExistingEndpoint->TransferRing.PhysicalAddress.QuadPart +
-                  ((ULONGLONG)ExistingEndpoint->TransferRing.EnqueueIndex * sizeof(XHCI_TRB))) & ~0xFULL) |
+                  ((ULONGLONG)ExistingEndpoint->TransferRing.DequeueIndex * sizeof(XHCI_TRB))) & ~0xFULL) |
                 (ExistingEndpoint->TransferRing.CycleState & 0x1);
 
             XhciEndpointContextInit(EpCtx,
