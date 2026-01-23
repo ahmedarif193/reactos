@@ -1335,6 +1335,17 @@ UefiInitializeBootDevices(VOID)
     /* Populate the ARC disk list so the Windows boot loader sees every disk. */
     UefiEnumerateArcDisks();
 
+    /* Register all CD-ROM devices so fallback logic can find them */
+    {
+        ULONG CdCount = UefiGetCdromCount();
+        for (i = 0; i < CdCount; i++)
+        {
+            CHAR CdArcName[64];
+            RtlStringCbPrintfA(CdArcName, sizeof(CdArcName), "multi(0)disk(0)cdrom(%lu)", i);
+            FsRegisterDevice(CdArcName, &UefiDiskVtbl);
+        }
+    }
+
     /* Add it, if it's a cdrom */
     GlobalSystemTable->BootServices->HandleProtocol(handles[UefiBootRootIdentifier], &bioGuid, (void**)&bio);
     IsCdBoot = (FrldrBootPartition == 0xFF);
