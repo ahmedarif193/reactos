@@ -139,16 +139,9 @@ static ARC_STATUS IsoBufferDirectory(ULONG DeviceId, ULONG DirectoryStartSector,
     ULONG Count;
     ARC_STATUS Status;
 
-    TRACE("IsoBufferDirectory() DirectoryStartSector = %d DirectoryLength = %d\n", DirectoryStartSector, DirectoryLength);
-
     SectorCount = ROUND_UP(DirectoryLength, SECTORSIZE) / SECTORSIZE;
     BufferSize = SectorCount * SECTORSIZE;
-    TRACE("Trying to read (DirectoryCount) %d sectors.\n", SectorCount);
 
-    //
-    // Attempt to allocate memory for directory buffer
-    //
-    TRACE("Trying to allocate (DirectoryBuffer) %lu bytes.\n", BufferSize);
     DirectoryBuffer = FrLdrTempAlloc(BufferSize, TAG_ISO_BUFFER);
     if (!DirectoryBuffer)
         return ENOMEM;
@@ -341,8 +334,6 @@ ARC_STATUS IsoOpen(CHAR* Path, OPENMODE OpenMode, ULONG* FileId)
         return EACCES;
 
     DeviceId = FsGetDeviceId(*FileId);
-
-    TRACE("IsoOpen() FileName = %s\n", Path);
 
     FileHandle = FrLdrTempAlloc(sizeof(*FileHandle), TAG_ISO_FILE);
     if (!FileHandle)

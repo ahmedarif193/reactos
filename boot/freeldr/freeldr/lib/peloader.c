@@ -877,20 +877,16 @@ PeLdrLoadImageEx(
     ULONG i, BytesRead;
 
     PELOADER_TRACE("PeLdrLoadImage('%s', %ld)\n", FilePath, MemoryType);
-    DbgPrint("PeLdrLoadImageEx: Opening file '%s'\n", FilePath);
 
     /* Open the image file */
     Status = ArcOpen((PSTR)FilePath, OpenReadOnly, &FileId);
     if (Status != ESUCCESS)
     {
-        DbgPrint("PeLdrLoadImageEx: ArcOpen failed for '%s', Status=%u\n", FilePath, Status);
-        WARN("ArcOpen('%s') failed. Status: %u\n", FilePath, Status);
+        ERR("PeLdrLoadImageEx: Failed to open '%s', Status=%u\n", FilePath, Status);
         return FALSE;
     }
-    DbgPrint("PeLdrLoadImageEx: File opened successfully, FileId=%lu\n", FileId);
 
     /* Load the first 2 sectors of the image so we can read the PE header */
-    DbgPrint("PeLdrLoadImageEx: Reading PE headers...\n");
     Status = ArcRead(FileId, HeadersBuffer, SECTOR_SIZE * 2, &BytesRead);
     if (Status != ESUCCESS)
     {
@@ -1055,7 +1051,7 @@ PeLdrLoadImageEx(
             Status = ArcRead(FileId, (PUCHAR)PhysicalBase + SectionHeader->VirtualAddress, SizeOfRawData, &BytesRead);
             if (Status != ESUCCESS)
             {
-                ERR("PeLdrLoadImage(): Error reading section from file!\n");
+                ERR("PeLdrLoadImage('%s'): Error reading section, Status=%u\n", FilePath, Status);
                 break;
             }
         }
@@ -1080,7 +1076,6 @@ PeLdrLoadImageEx(
     /* Relocate the image, if it needs it */
     if (NtHeaders->OptionalHeader.ImageBase != (ULONG_PTR)VirtualBase)
     {
-        WARN("Relocating %p -> %p\n", NtHeaders->OptionalHeader.ImageBase, VirtualBase);
         RelocStatus = LdrRelocateImageWithBias(PhysicalBase,
                                                (ULONG_PTR)VirtualBase - (ULONG_PTR)PhysicalBase,
                                                "FreeLdr",

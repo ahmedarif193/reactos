@@ -21,7 +21,6 @@
 
 #define NDEBUG
 #include <debug.h>
-DBG_DEFAULT_CHANNEL(INIFILE);
 
 PLIST_ENTRY IniGetFileSectionListHead(VOID)
 {
@@ -45,7 +44,6 @@ BOOLEAN IniOpenSection(PCSTR SectionName, ULONG_PTR* SectionId)
             // We found it
             if (SectionId)
                 *SectionId = (ULONG_PTR)Section;
-            TRACE("IniOpenSection() Found it! SectionId = 0x%x\n", SectionId);
             return TRUE;
         }
     }
@@ -56,8 +54,6 @@ ULONG IniGetNumSectionItems(ULONG_PTR SectionId)
 {
     PINI_SECTION Section = (PINI_SECTION)SectionId;
 
-    TRACE("IniGetNumSectionItems() SectionId = 0x%x\n", SectionId);
-    TRACE("IniGetNumSectionItems() Item count = %d\n", Section->SectionItemCount);
 
     return Section->SectionItemCount;
 }
@@ -121,7 +117,6 @@ BOOLEAN IniReadSettingByNumber(ULONG_PTR SectionId, ULONG SettingNumber, PCHAR S
     SectionItem = IniGetSettingByNumber(SectionId, SettingNumber);
     if (!SectionItem)
     {
-        TRACE("IniReadSettingByNumber() Setting number %d not found.\n", SettingNumber);
         return FALSE;
     }
     strncpy(SettingName, SectionItem->ItemName, NameSize - 1);

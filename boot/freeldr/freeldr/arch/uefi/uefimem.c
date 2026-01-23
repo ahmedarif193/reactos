@@ -50,10 +50,6 @@ extern REACTOS_INTERNAL_BGCONTEXT framebufferData;
 /* Provided elsewhere */
 extern char __ImageBase;
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-VOID Arm64InitializeExceptions(VOID);
-#endif
-
 /* From your other unit */
 extern ULONG
 AddMemoryDescriptor(

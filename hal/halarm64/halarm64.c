@@ -38,40 +38,6 @@
 #define HAL_ARM64_PL011_VA       (0xFFFF800000000000ULL + HAL_ARM64_PL011_BASE)
 #define HAL_ARM64_PL011_FR_TXFF  (1U << 5)
 
-static inline VOID
-HalArm64RawPutc(char Ch)
-{
-    volatile ULONG *Uart = (volatile ULONG *)HAL_ARM64_PL011_VA;
-    while (Uart[0x18 / sizeof(ULONG)] & HAL_ARM64_PL011_FR_TXFF) {}
-    Uart[0] = (ULONG)Ch;
-}
-
-static inline VOID
-HalArm64RawPuts(const char *Str)
-{
-    while (*Str)
-    {
-        if (*Str == '\n')
-            HalArm64RawPutc('\r');
-        HalArm64RawPutc(*Str++);
-    }
-}
-
-static inline VOID
-HalArm64RawPutHex64(UINT64 Value)
-{
-    static const char Hex[] = "0123456789ABCDEF";
-    char Buf[17];
-    int i;
-    for (i = 15; i >= 0; i--)
-    {
-        Buf[i] = Hex[Value & 0xF];
-        Value >>= 4;
-    }
-    Buf[16] = '\0';
-    HalArm64RawPuts(Buf);
-}
-
 /*
  * GICv4 VLPI/vPE support forward declarations
  * These are defined in gic/gic_internal.h and implemented in gic module

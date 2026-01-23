@@ -31,8 +31,6 @@ typedef struct _ARM64_CONTEXT
 VOID Arm64MachInit(const char *CmdLine);
 VOID Arm64InitializeMMU(VOID);
 VOID Arm64SetupKernelHandoffMMU(VOID);
-VOID Arm64InitializeExceptions(VOID);
-BOOLEAN Arm64CanInitializeExceptions(VOID);
 VOID Arm64DisableMMU(VOID);
 BOOLEAN Arm64IsMMUEnabled(VOID);
 VOID Arm64ApplyDeferredPageTableMemoryTypes(VOID);

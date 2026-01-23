@@ -442,7 +442,6 @@ RegImportBinaryHive(
     BOOLEAN Success;
     PCM_KEY_NODE KeyNode;
 
-    TRACE("RegImportBinaryHive(%p, 0x%lx)\n", ChunkBase, ChunkSize);
 
     /* Assume that we don't need boot recover, unless we have to */
     ((PHBASE_BLOCK)ChunkBase)->BootRecover = HBOOT_NO_BOOT_RECOVER;
@@ -508,7 +507,6 @@ RegInitCurrentControlSet(
     PCM_KEY_NODE KeyNode;
     BOOLEAN AutoSelect;
 
-    TRACE("RegInitCurrentControlSet\n");
 
     /* Choose which control set to open and set it as the new "Current" */
     RtlInitUnicodeString(&ControlSetName,
@@ -591,8 +589,6 @@ RegEnumKey(
     HCELL_INDEX CellIndex;
     USHORT NameLength;
 
-    TRACE("RegEnumKey(%p, %lu, %p, %p->%u)\n",
-          Key, Index, Name, NameSize, NameSize ? *NameSize : 0);
 
     /* Get the key node */
     KeyNode = GET_CM_KEY_NODE(Hive, Key);
@@ -602,8 +598,6 @@ RegEnumKey(
     CellIndex = CmpFindSubKeyByNumber(Hive, KeyNode, Index);
     if (CellIndex == HCELL_NIL)
     {
-        TRACE("RegEnumKey index out of bounds (%d) in key (%.*s)\n",
-              Index, KeyNode->NameLength, KeyNode->Name);
         HvReleaseCell(Hive, HKEY_TO_HCI(Key));
         return ERROR_NO_MORE_ITEMS;
     }
@@ -645,7 +639,6 @@ RegEnumKey(
     if (SubKey != NULL)
         *SubKey = HCI_TO_HKEY(CellIndex);
 
-    TRACE("RegEnumKey done -> %u, '%.*S'\n", *NameSize, *NameSize, Name);
     return ERROR_SUCCESS;
 }
 #endif
@@ -662,7 +655,6 @@ RegOpenKey(
     PCM_KEY_NODE KeyNode;
     HCELL_INDEX CellIndex;
 
-    TRACE("RegOpenKey(%p, '%S', %p)\n", ParentKey, KeyName, Key);
 
     /* Initialize the remaining path name */
     RtlInitUnicodeString(&RemainingPath, KeyName);
@@ -675,7 +667,6 @@ RegOpenKey(
         UNICODE_STRING MachinePath = RTL_CONSTANT_STRING(L"MACHINE");
         UNICODE_STRING SystemPath = RTL_CONSTANT_STRING(L"SYSTEM");
 
-        TRACE("RegOpenKey: absolute path\n");
 
         if ((RemainingPath.Length < sizeof(WCHAR)) ||
             RemainingPath.Buffer[0] != '\\')
@@ -693,7 +684,6 @@ RegOpenKey(
         GetNextPathElement(&SubKeyName1, &RemainingPath);
         GetNextPathElement(&SubKeyName2, &RemainingPath);
         GetNextPathElement(&SubKeyName3, &RemainingPath);
-        TRACE("RegOpenKey: %wZ / %wZ / %wZ\n", &SubKeyName1, &SubKeyName2, &SubKeyName3);
 
         /* Check if we have the correct path */
         if (!RtlEqualUnicodeString(&SubKeyName1, &RegistryPath, TRUE) ||
@@ -736,14 +726,12 @@ RegOpenKey(
     ASSERT(KeyNode);
     ASSERT(KeyNode->Signature == CM_KEY_NODE_SIGNATURE);
 
-    TRACE("RegOpenKey: RemainingPath '%wZ'\n", &RemainingPath);
 
     /* Loop while there are path elements */
     while (GetNextPathElement(&SubKeyName, &RemainingPath))
     {
         HCELL_INDEX NextCellIndex;
 
-        TRACE("RegOpenKey: next element '%wZ'\n", &SubKeyName);
 
         /* Get the next sub key */
         NextCellIndex = CmpFindSubKeyByName(Hive, KeyNode, &SubKeyName);
@@ -819,8 +807,6 @@ RegQueryValue(
     HCELL_INDEX CellIndex;
     UNICODE_STRING ValueNameString;
 
-    TRACE("RegQueryValue(%p, '%S', %p, %p, %p)\n",
-          Key, ValueName, Type, Data, DataSize);
 
     /* Get the key node */
     KeyNode = GET_CM_KEY_NODE(Hive, Key);
@@ -832,8 +818,6 @@ RegQueryValue(
     CellIndex = CmpFindValueByName(Hive, KeyNode, &ValueNameString);
     if (CellIndex == HCELL_NIL)
     {
-        TRACE("RegQueryValue value not found in key (%.*s)\n",
-              KeyNode->NameLength, KeyNode->Name);
         HvReleaseCell(Hive, HKEY_TO_HCI(Key));
         return ERROR_FILE_NOT_FOUND;
     }
@@ -864,7 +848,6 @@ RegSetValueDword(
     ULONG ExistingLength;
     BOOLEAN IsSmall;
 
-    TRACE("RegSetValueDword(%p, '%S', %lu)\n", Key, ValueName, Data);
 
     /* Get the key node */
     KeyNode = GET_CM_KEY_NODE(Hive, Key);
@@ -877,7 +860,6 @@ RegSetValueDword(
     HvReleaseCell(Hive, HKEY_TO_HCI(Key));
     if (CellIndex == HCELL_NIL)
     {
-        TRACE("RegSetValueDword: value '%S' not found\n", ValueName);
         return ERROR_FILE_NOT_FOUND;
     }
 
@@ -929,8 +911,6 @@ RegEnumValue(
     PCM_KEY_VALUE ValueCell;
     USHORT NameLength;
 
-    TRACE("RegEnumValue(%p, %lu, %S, %p, %p, %p, %p (%lu))\n",
-          Key, Index, ValueName, NameSize, Type, Data, DataSize, *DataSize);
 
     /* Get the key node */
     KeyNode = GET_CM_KEY_NODE(Hive, Key);
@@ -987,7 +967,6 @@ RegEnumValue(
     HvReleaseCell(Hive, KeyNode->ValueList.List);
     HvReleaseCell(Hive, HKEY_TO_HCI(Key));
 
-    TRACE("RegEnumValue done -> %u, '%.*S'\n", *NameSize, *NameSize, ValueName);
     return ERROR_SUCCESS;
 }
 #endif

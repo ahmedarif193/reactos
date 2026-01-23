@@ -23,7 +23,6 @@
 /* Forward declarations only for functions without public headers */
 #if defined(_M_ARM64) || defined(__aarch64__)
 VOID UefiArm64PrintBacktrace(ULONG_PTR Fp, ULONG_PTR StackTop, ULONG_PTR StackBottom);
-VOID Arm64HandleException(VOID* Ctx);
 #endif
 #if defined(_M_AMD64) || defined(__x86_64__)
 VOID UefiAmd64PrintBacktrace(ULONG_PTR Rbp, ULONG_PTR StackTop, ULONG_PTR StackBottom);
@@ -37,9 +36,6 @@ const FREELDR_SYMBOL_ENTRY gFreeldrSymtab[] = {
     { "UefiInitializeDebugImageInfo",     (const VOID*)&UefiInitializeDebugImageInfo },
 
 #if defined(_M_ARM64) || defined(__aarch64__)
-    { "Arm64CanInitializeExceptions",     (const VOID*)&Arm64CanInitializeExceptions },
-    { "Arm64InitializeExceptions",        (const VOID*)&Arm64InitializeExceptions },
-    { "Arm64HandleException",             (const VOID*)&Arm64HandleException },
     { "UefiArm64PrintBacktrace",          (const VOID*)&UefiArm64PrintBacktrace },
 #endif
 #if defined(_M_AMD64) || defined(__x86_64__)

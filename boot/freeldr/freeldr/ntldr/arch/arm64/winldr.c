@@ -14,12 +14,10 @@
 #include <ntldr/winldr.h>
 #include <peloader.h>
 #include <arch/arm64/arm64.h>
-#ifdef UEFIBOOT
 #include <uefildr.h>
 #include <drivers/acpi/acpi.h>
 #include <reactos/arm64/early_uart.h>
 extern EFI_SYSTEM_TABLE *GlobalSystemTable;
-#endif
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WINDOWS);
 
@@ -83,11 +81,9 @@ DBG_DEFAULT_CHANNEL(WINDOWS);
 #define KI_USER_SHARED_DATA     0xFFFFF78000000000ULL
 #endif
 
-#ifdef UEFIBOOT
 static PRSDP Arm64LocateRsdp(VOID);
 static PFADT Arm64LocateFadt(VOID);
 static VOID Arm64PopulatePsciConfiguration(PLOADER_PARAMETER_BLOCK LoaderBlock);
-#endif
 
 /* -------------------------------------------------------------------------- */
 /* Minimal PL011 UART helper for bring-up logs                                 */
@@ -107,21 +103,6 @@ static VOID Arm64PopulatePsciConfiguration(PLOADER_PARAMETER_BLOCK LoaderBlock);
 #define PL011_DR     (*(volatile ULONG *)(PL011_BASE + 0x00))
 #define PL011_FR     (*(volatile ULONG *)(PL011_BASE + 0x18))
 #define PL011_TXFF   (1u << 5)
-
-/*
- * Raw UART output for debugging. Uses platform-specific PL011_BASE.
- * Works after ExitBootServices when UEFI console is unavailable.
- */
-static inline VOID UartPutc(char c)
-{
-    /* Use yield instead of wfi while TX FIFO is full (wfi hangs on Apple Silicon HVF). */
-    while (PL011_FR & PL011_TXFF) { __asm__ __volatile__("yield"); }
-    PL011_DR = (unsigned char)c;
-}
-static VOID UartPuts(const char* s)
-{
-    while (*s) { if (*s == '\n') UartPutc('\r'); UartPutc(*s++); }
-}
 
 /* -------------------------------------------------------------------------- */
 /* ARM64-specific data structures for kernel initialization                   */
@@ -189,10 +170,6 @@ Arm64EnsureSharedUserDataMapped(VOID)
 
     Arm64SharedUserDataPage = shared_page;
 
-    TRACE("ARM64: SharedUserData mapped VA=0x%llx -> PA=0x%llx\n",
-          (unsigned long long)shared_va,
-          (unsigned long long)shared_pa);
-
     return TRUE;
 }
 
@@ -248,9 +225,6 @@ MempSetupPaging(
         if (current_pc >= phys_start && current_pc < phys_end)
         {
             attrs_id = attrs_id_exec;
-            TRACE("ARM64: Exec identity map for loader range 0x%llx..0x%llx\n",
-                  (unsigned long long)phys_start,
-                  (unsigned long long)phys_end);
         }
     }
 
@@ -285,15 +259,12 @@ VOID
 MempUnmapPage(
     PFN_NUMBER Page)
 {
-    /* ARM64 page unmapping - not typically used by the bootloader */
-    TRACE("ARM64: Unmapping page 0x%lx (not implemented in bootloader)\n", (ULONG)Page);
     UNIMPLEMENTED;
 }
 
 VOID
 MempDump(VOID)
 {
-    TRACE("ARM64: Memory dump requested (no-op placeholder)\n");
 }
 
 /* -------------------------------------------------------------------------- */
@@ -323,12 +294,7 @@ Arm64FillCacheInfoFromCtr(PLOADER_PARAMETER_BLOCK LoaderBlock)
     LoaderBlock->u.Arm64.FirstLevelIcacheFillSize  = icache_line_bytes;
     LoaderBlock->u.Arm64.SecondLevelDcacheFillSize = dcache_line_bytes; /* heuristic */
     LoaderBlock->u.Arm64.SecondLevelIcacheFillSize = icache_line_bytes; /* heuristic */
-
-    TRACE("ARM64: Cache line sizes from CTR_EL0: I=%lu B, D=%lu B\n",
-          icache_line_bytes, dcache_line_bytes);
 }
-
-#ifdef UEFIBOOT
 static
 PRSDP
 Arm64LocateRsdp(VOID)
@@ -431,7 +397,6 @@ Arm64PopulatePsciConfiguration(PLOADER_PARAMETER_BLOCK LoaderBlock)
     PFADT Fadt = Arm64LocateFadt();
     if (!Fadt)
     {
-        TRACE("ARM64: PSCI detection: FADT not found, defaulting to SMC\n");
         LoaderBlock->u.Arm64.PsciConduit = ARM64_PSCI_METHOD_SMC;
         LoaderBlock->u.Arm64.PsciFlags = 0;
         return;
@@ -439,7 +404,6 @@ Arm64PopulatePsciConfiguration(PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     if (Fadt->Header.Length < FIELD_OFFSET(FADT, arm_boot_arch) + sizeof(Fadt->arm_boot_arch))
     {
-        TRACE("ARM64: PSCI detection: FADT lacks ArmBootArch field, defaulting to SMC\n");
         LoaderBlock->u.Arm64.PsciConduit = ARM64_PSCI_METHOD_SMC;
         LoaderBlock->u.Arm64.PsciFlags = 0;
         return;
@@ -450,7 +414,6 @@ Arm64PopulatePsciConfiguration(PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     if (!(ArmBootFlags & ARM64_FADT_PSCI_COMPLIANT))
     {
-        TRACE("ARM64: PSCI detection: ArmBootArch does not advertise PSCI, defaulting to SMC\n");
         LoaderBlock->u.Arm64.PsciConduit = ARM64_PSCI_METHOD_SMC;
         return;
     }
@@ -458,15 +421,12 @@ Arm64PopulatePsciConfiguration(PLOADER_PARAMETER_BLOCK LoaderBlock)
     if (ArmBootFlags & ARM64_FADT_PSCI_USE_HVC)
     {
         LoaderBlock->u.Arm64.PsciConduit = ARM64_PSCI_METHOD_HVC;
-        TRACE("ARM64: PSCI detection: ACPI indicates HVC conduit\n");
     }
     else
     {
         LoaderBlock->u.Arm64.PsciConduit = ARM64_PSCI_METHOD_SMC;
-        TRACE("ARM64: PSCI detection: ACPI indicates SMC conduit\n");
     }
 }
-#endif /* UEFIBOOT */
 
 BOOLEAN
 Arm64SetupForNt(
@@ -475,9 +435,6 @@ Arm64SetupForNt(
     IN ULONG *PcrBasePage,
     IN ULONG *TssBasePage)
 {
-    TRACE("ARM64: Setting up for NT kernel\n");
-
-
     /* ARM64 doesn't use GDT/IDT or TSS like x86 */
     *GdtIdt = NULL;
     *PcrBasePage = 0;
@@ -513,26 +470,11 @@ Arm64SetupForNt(
     LoaderBlock->u.Arm64.PanicStack      = (PanicStackPA      < ARM64_KSEG0_BASE) ? (PanicStackPA      + ARM64_KSEG0_BASE) : PanicStackPA;
     LoaderBlock->u.Arm64.InterruptStack  = (InterruptStackPA  < ARM64_KSEG0_BASE) ? (InterruptStackPA  + ARM64_KSEG0_BASE) : InterruptStackPA;
 
-    TRACE("ARM64: LoaderBlock stack pointers - Kernel=0x%llx Panic=0x%llx Interrupt=0x%llx\n",
-          (unsigned long long)LoaderBlock->KernelStack,
-          (unsigned long long)LoaderBlock->u.Arm64.PanicStack,
-          (unsigned long long)LoaderBlock->u.Arm64.InterruptStack);
     LoaderBlock->u.Arm64.PcrPage         = (PcrPA             < ARM64_KSEG0_BASE) ? (PcrPA             + ARM64_KSEG0_BASE) : PcrPA;
     LoaderBlock->u.Arm64.PdrPage         = 0; /* Not used on ARM64 */
     LoaderBlock->Prcb                     = (PrcbPA           < ARM64_KSEG0_BASE) ? (PrcbPA            + ARM64_KSEG0_BASE) : PrcbPA;
     LoaderBlock->Process                  = (ProcessPA        < ARM64_KSEG0_BASE) ? (ProcessPA         + ARM64_KSEG0_BASE) : ProcessPA;
     LoaderBlock->Thread                   = (ThreadPA         < ARM64_KSEG0_BASE) ? (ThreadPA          + ARM64_KSEG0_BASE) : ThreadPA;
-
-    TRACE("ARM64: Populated LoaderBlock - KernelStack=0x%llx (VA), PanicStack=0x%llx (VA), InterruptStack=0x%llx (VA)\n",
-          (unsigned long long)LoaderBlock->KernelStack,
-          (unsigned long long)LoaderBlock->u.Arm64.PanicStack,
-          (unsigned long long)LoaderBlock->u.Arm64.InterruptStack);
-    TRACE("ARM64: Physical addresses - KernelStack=0x%llx, PanicStack=0x%llx, InterruptStack=0x%llx\n",
-          (unsigned long long)KernelStackPA,
-          (unsigned long long)PanicStackPA,
-          (unsigned long long)InterruptStackPA);
-    TRACE("ARM64: VA conversion check - KSEG0_BASE=0x%llx\n",
-          (unsigned long long)ARM64_KSEG0_BASE);
 
     /* Initialize ARM64 cache configuration information */
     /* Conservative capacities; fill sizes from hardware (CTR_EL0) */
@@ -544,33 +486,19 @@ Arm64SetupForNt(
 
     LoaderBlock->u.Arm64.PsciConduit = ARM64_PSCI_METHOD_SMC;
     LoaderBlock->u.Arm64.PsciFlags   = 0;
-#ifdef UEFIBOOT
     Arm64PopulatePsciConfiguration(LoaderBlock);
-    TRACE("ARM64: PSCI configuration - conduit=%lu flags=0x%04lx\n",
-          LoaderBlock->u.Arm64.PsciConduit,
-          LoaderBlock->u.Arm64.PsciFlags);
 
-    /*
-     * Pass the detected UART address to the kernel.
-     * This was detected earlier via ACPI SPCR or SMBIOS and stored in EarlyUartBaseAddress.
-     * The kernel needs this to initialize its early UART output before KD is available.
-     */
+    /* Pass the detected UART address to the kernel */
     LoaderBlock->u.Arm64.EarlyUartAddress = EarlyUartBaseAddress;
-    TRACE("ARM64: Early UART address passed to kernel: 0x%llx\n",
-          (unsigned long long)LoaderBlock->u.Arm64.EarlyUartAddress);
-
-    /* Any additional exception vector setup is expected to be done by the kernel */
 
     /* Ensure memory is properly prepared */
     if (!Arm64InitializeMemory(LoaderBlock))
     {
-        ERR("ARM64: Failed to initialize memory for NT\n");
+        ERR("failed to initialize memory for NT\n");
         return FALSE;
     }
 
-    TRACE("ARM64: Successfully set up for NT kernel\n");
     return TRUE;
-#endif
 }
 
 VOID
@@ -601,18 +529,10 @@ BOOLEAN
 Arm64InitializeMemory(
     IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
-    TRACE("ARM64: Initializing memory management structures\n");
-
     if (!LoaderBlock)
-    {
-        ERR("ARM64: Invalid LoaderBlock\n");
         return FALSE;
-    }
 
     Arm64ApplyDeferredPageTableMemoryTypes();
-
-    /* Memory descriptors are built later by WinLdrSetupMemoryLayout(). */
-    TRACE("ARM64: Memory management structures initialized\n");
     return TRUE;
 }
 
@@ -624,26 +544,14 @@ Arm64ConfigureProcessorContext(USHORT OperatingSystemVersion)
 {
     UNREFERENCED_PARAMETER(OperatingSystemVersion);
 
-    TRACE("ARM64: WinLdrSetProcessorContext\n");
-
-    /* DEBUG: Test UART before page table switch */
-    EarlyUartPuts("\r\n[WinLdr] BEFORE Arm64EnablePageTables\r\n");
-    EarlyUartPuts("[WinLdr] EarlyUartBaseAddress = 0x");
-    EarlyUartPutHex(EarlyUartBaseAddress, 16);
-    EarlyUartPuts("\r\n");
-
     /*
      * UEFI typically leaves us in EL1 with MMU on. We now switch to our
      * own page tables (TTBR0 identity, TTBR1 kernel) to ensure KSEG0
      * is accessible for the jump to the kernel.
      */
-#ifdef UEFIBOOT
     /* Avoid firmware serial callbacks once we swap translation tables. */
     UefiSerialDisableFirmware();
     Arm64EnablePageTables();
-
-    /* DEBUG: Test UART after page table switch */
-    EarlyUartPuts("[WinLdr] AFTER Arm64EnablePageTables\r\n");
 
     /*
      * NOTE: We do NOT clear TTBR0 identity mappings here because:
@@ -656,7 +564,6 @@ Arm64ConfigureProcessorContext(USHORT OperatingSystemVersion)
      * kernel's memory manager will clear TTBR0 when setting up the first
      * user process.
      */
-#endif
 }
 
 /* WinLdrpDumpMemoryDescriptors and WinLdrLoadModule are defined in the main winldr.c */
@@ -680,15 +587,11 @@ WinLdrCheckForLoadedDll(
 static BOOLEAN
 Arm64AllocateKernelDataStructures(VOID)
 {
-    TRACE("ARM64: Allocating kernel data structures\n");
-
-    /* Allocate the ARM64 kernel data block which contains all stacks and structures.
-       This returns a physical allocation in the loader's address space. */
+    /* Allocate the ARM64 kernel data block which contains all stacks and structures. */
     KernelDataBlock = MmAllocateMemoryWithType(sizeof(ARM64_KERNEL_DATA), LoaderMemoryData);
     if (!KernelDataBlock)
     {
-        ERR("ARM64: Failed to allocate kernel data block of size %zu bytes\n",
-            sizeof(ARM64_KERNEL_DATA));
+        ERR("failed to allocate kernel data block\n");
         return FALSE;
     }
 
@@ -718,18 +621,7 @@ Arm64AllocateKernelDataStructures(VOID)
         ThreadPtr[0x30 / sizeof(ULONG_PTR)] = StackLimit;   /* StackLimit */
         ThreadPtr[0x38 / sizeof(ULONG_PTR)] = StackTop;     /* StackBase */
         ThreadPtr[0x58 / sizeof(ULONG_PTR)] = StackTop;     /* KernelStack */
-
-        TRACE("ARM64: InitialThread stack initialized: InitialStack=0x%llx StackLimit=0x%llx KernelStack=0x%llx\n",
-              (unsigned long long)StackTop,
-              (unsigned long long)StackLimit,
-              (unsigned long long)StackTop);
     }
-
-    TRACE("ARM64: Successfully allocated kernel data structures at %p\n", KernelDataBlock);
-    TRACE("ARM64: KernelStack at %p, PanicStack at %p, InterruptStack at %p\n",
-          KernelDataBlock->KernelStack, KernelDataBlock->PanicStack, KernelDataBlock->InterruptStack);
-    TRACE("ARM64: Prcb at %p, Process at %p, Thread at %p\n",
-          KernelDataBlock->Prcb, KernelDataBlock->InitialProcess, KernelDataBlock->InitialThread);
 
     /* Mirror the kernel data block into KSEG0 so the kernel stack & PCR are accessible */
     {
@@ -749,10 +641,6 @@ Arm64AllocateKernelDataStructures(VOID)
                 (unsigned long long)map_size);
             return FALSE;
         }
-
-        TRACE("ARM64: Kernel data block mapped VA=0x%llx size=0x%llx\n",
-              (unsigned long long)block_va,
-              (unsigned long long)map_size);
     }
 
     if (!Arm64EnsureSharedUserDataMapped())

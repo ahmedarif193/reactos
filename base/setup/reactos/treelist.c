@@ -5131,7 +5131,6 @@ static int TreeListDeleteColumn(TreeListData *pData, unsigned uCol) {
 	int			iXoff;
 	int			iNum;
 	int			iCnt;
-	int			iVar;
 	int			iSub;
 	int			iAll;
 	int			iFix;
@@ -5164,7 +5163,6 @@ static int TreeListDeleteColumn(TreeListData *pData, unsigned uCol) {
 	iDelta	= pData->aColumn[uCol].sSize;
 	iSub	= pData->aColumn[uCol].bWeight;
 	iCnt	= 0;
-	iVar	= 0;
 	iFix	= 0;
 	iAll	= 0;
 
@@ -5176,7 +5174,6 @@ static int TreeListDeleteColumn(TreeListData *pData, unsigned uCol) {
 			continue;
 		}
 
-		iVar +=	pData->aColumn[uPos].sSize;
 		iAll += pData->aColumn[uPos].bWeight;
 		iCnt += 1;
 	}

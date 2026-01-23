@@ -197,9 +197,6 @@ static VOID Arm64PrepareForReactOS(VOID)
     /* Complete cache maintenance - safe to do now after ExitBootServices */
     Arm64CompleteCacheMaintenance();
 
-    /* Install FreeLDR synchronous trap handlers so we log detailed faults */
-    Arm64InitializeExceptions();
-
     /* Initialize generic timer for timekeeping/delays */
     Arm64InitializeTimer();
 

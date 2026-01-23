@@ -146,7 +146,6 @@ WinLdrInitSystemHive(
         HiveName = "SYSTEM";
     }
 
-    TRACE("WinLdrInitSystemHive: loading hive %s%s\n", SearchPath, HiveName);
     Success = WinLdrLoadSystemHive(LoaderBlock, SearchPath, HiveName, &Reason);
     if (!Success)
     {
@@ -264,8 +263,6 @@ WinLdrDisableLegacyBootDriversForUefi(VOID)
             {
                 if (RegSetValueDword(ServiceKey, L"Start", SERVICE_DISABLED) == ERROR_SUCCESS)
                 {
-                    TRACE("UEFI boot: disabling legacy service '%S'\n",
-                          WinLdrLegacyBootServices[Index]);
                 }
             }
         }
@@ -325,8 +322,6 @@ BOOLEAN WinLdrScanSystemHive(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock,
         return FALSE;
     }
 
-    TRACE("NLS data: '%wZ' '%wZ' '%wZ' '%wZ'\n",
-          &AnsiFileName, &OemFileName, &LangFileName, &OemHalFileName);
 
     /* Load NLS data */
     RtlStringCbCopyA(SearchPath, sizeof(SearchPath), SystemRoot);
@@ -337,7 +332,6 @@ BOOLEAN WinLdrScanSystemHive(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock,
                                 &OemFileName,
                                 &LangFileName,
                                 &OemHalFileName);
-    TRACE("NLS data loading %s\n", Success ? "successful" : "failed");
 
     return TRUE;
 }
@@ -506,7 +500,6 @@ WinLdrLoadNLSData(
     if (Status != ESUCCESS)
         goto Quit;
     AnsiFileSize = FileInfo.EndingAddress.LowPart;
-    TRACE("AnsiFileSize: %d\n", AnsiFileSize);
 
     /* Open OEM file and store its length */
     if (AnsiEqualsOem)
@@ -529,7 +522,6 @@ WinLdrLoadNLSData(
             goto Quit;
         OemFileSize = FileInfo.EndingAddress.LowPart;
     }
-    TRACE("OemFileSize: %d\n", OemFileSize);
 
     /* Finally open the language codepage file and store its length */
     RtlStringCbPrintfA(FileName, sizeof(FileName), "%s%wZ",
@@ -545,7 +537,6 @@ WinLdrLoadNLSData(
     if (Status != ESUCCESS)
         goto Quit;
     LangFileSize = FileInfo.EndingAddress.LowPart;
-    TRACE("LangFileSize: %d\n", LangFileSize);
 
     //
     // TODO: The OEMHAL file.
@@ -658,30 +649,6 @@ WinLdrScanRegistry(
                              BootDriverListHead);
     if (!Success)
         goto Quit;
-
-    /* ARM64 DEBUG: Dump boot drivers found by CmpFindDrivers */
-    {
-        ULONG DriverCount = 0;
-        PLIST_ENTRY Entry;
-        PBOOT_DRIVER_NODE DriverNode;
-
-        TRACE("[arm64] WinLdrScanRegistry: After CmpFindDrivers, BootDriverListHead=%p\n",
-              BootDriverListHead);
-
-        for (Entry = BootDriverListHead->Flink;
-             Entry != BootDriverListHead;
-             Entry = Entry->Flink)
-        {
-            DriverNode = CONTAINING_RECORD(Entry, BOOT_DRIVER_NODE, ListEntry.Link);
-            DriverCount++;
-            TRACE("[arm64] BootDriver[%lu]: Name='%wZ' FilePath='%wZ' Group='%wZ'\n",
-                  DriverCount,
-                  &DriverNode->Name,
-                  &DriverNode->ListEntry.FilePath,
-                  &DriverNode->Group);
-        }
-        TRACE("[arm64] WinLdrScanRegistry: Total %lu boot drivers enumerated\n", DriverCount);
-    }
 
     /* Sort by group/tag */
     Success = CmpSortDriverList(SystemHive,

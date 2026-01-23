@@ -14,9 +14,11 @@
 #include <asm.inc>
 #include <freeldr/include/arch/pc/x86common.h>
 
+/* Disabled: boot directly without waiting for keypress
 #ifndef ROS_REGTEST
 #define WAIT_FOR_KEY
 #endif
+*/
 
 
 .code16
@@ -171,6 +173,9 @@ relocated:
     dec cx
     jz .boot_harddisk
     jmp .next_second
+#else
+    // WAIT_FOR_KEY not defined: boot directly into FreeLDR
+    jmp .boot_freeldr
 #endif
 
 .boot_harddisk:

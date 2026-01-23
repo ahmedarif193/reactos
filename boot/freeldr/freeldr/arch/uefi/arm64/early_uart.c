@@ -26,8 +26,6 @@
 #define _EARLY_UART_IMPL
 #include <reactos/arm64/early_uart.h>
 
-DBG_DEFAULT_CHANNEL(WARNING);
-
 /*
  * Global runtime-detected UART state.
  * These are accessed by the inline functions in early_uart.h.
@@ -643,13 +641,6 @@ EarlyUartInitialize(UINT64 UartBaseOverride)
     }
 
     EarlyUartInitialized = TRUE;
-
-    /* Output detection result (only if UART is working) */
-    EarlyUartPuts("\r\n[EarlyUART] Platform detected: ");
-    EarlyUartPuts(EarlyUartGetPlatformName(EarlyUartPlatformId));
-    EarlyUartPuts("\r\n[EarlyUART] UART base address: 0x");
-    EarlyUartPutHex(EarlyUartBaseAddress, 16);
-    EarlyUartPuts("\r\n");
 
     return TRUE;
 }

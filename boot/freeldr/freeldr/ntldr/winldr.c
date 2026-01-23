@@ -73,7 +73,6 @@ NtLdrOutputLoadMsg(
     if (SosEnabled)
     {
         printf("  %s\n", FileName);
-        TRACE("Loading: %s\n", FileName);
     }
     else
     {
@@ -592,8 +591,6 @@ WinLdrLoadDeviceDriver(PLIST_ENTRY LoadOrderListHead,
         *DriverPath = ANSI_NULL;
     }
 
-    TRACE("DriverPath: '%s', DllName: '%s', LPB\n", DriverPath, DllName);
-
     // Check if driver is already loaded
     Success = PeLdrCheckForLoadedDll(LoadOrderListHead, DllName, DriverDTE);
     if (Success)
@@ -697,10 +694,6 @@ WinLdrLoadBootDrivers(PLOADER_PARAMETER_BLOCK LoaderBlock,
             }
         }
 #endif
-
-        TRACE("BootDriver %wZ DTE %08X RegPath: %wZ\n",
-              &BootDriver->FilePath, BootDriver->LdrEntry,
-              &BootDriver->RegistryPath);
 
         // Paths are relative (FIXME: Are they always relative?)
 
@@ -1744,28 +1737,16 @@ LoadAndBootWindowsCommon(
     TRACE("Hello from paged mode, KiSystemStartup %p, LoaderBlockVA %p!\n",
           KiSystemStartup, LoaderBlockVA);
 
-#if defined(_M_ARM64)
-    EarlyUartPuts("\r\n[WinLdr] Before zeroing SharedUserData\r\n");
-#endif
-
     /* Zero KI_USER_SHARED_DATA page */
     {
         volatile PVOID SharedUserDataVa = (PVOID)KI_USER_SHARED_DATA;
         RtlZeroMemory((PVOID)SharedUserDataVa, MM_PAGE_SIZE);
     }
 
-#if defined(_M_ARM64)
-    EarlyUartPuts("[WinLdr] SharedUserData zeroed\r\n");
-#endif
-
     WinLdrpDumpMemoryDescriptors(LoaderBlockVA);
     WinLdrpDumpBootDriver(LoaderBlockVA);
 #ifndef _M_AMD64
     WinLdrpDumpArcDisks(LoaderBlockVA);
-#endif
-
-#if defined(_M_ARM64)
-    EarlyUartPuts("[WinLdr] Dumps done\r\n");
 #endif
 
     /*
@@ -1775,11 +1756,13 @@ LoadAndBootWindowsCommon(
     WinLdrSystemBlock->LoaderPerformanceData.EndTime = DbgQueryMicrosecondsSinceBoot();
 
 #if defined(_M_ARM64)
-    EarlyUartPuts("[WinLdr] KiSystemStartup = 0x");
+    EarlyUartPuts("[winldr] jumping to kernel 0x");
     EarlyUartPutHex((UINT64)(ULONG_PTR)KiSystemStartup, 16);
-    EarlyUartPuts("\r\n[WinLdr] LoaderBlockVA = 0x");
+    EarlyUartPuts(" LoaderBlockVA 0x");
     EarlyUartPutHex((UINT64)(ULONG_PTR)LoaderBlockVA, 16);
-    EarlyUartPuts("\r\n[WinLdr] JUMPING TO KERNEL NOW!\r\n");
+    EarlyUartPutc('\n');
+#else
+    TRACE("[winldr] jumping to kernel %p, LoaderBlockVA %p\n", KiSystemStartup, LoaderBlockVA);
 #endif
 
     /* Pass control */
@@ -1799,9 +1782,6 @@ WinLdrpDumpMemoryDescriptors(PLOADER_PARAMETER_BLOCK LoaderBlock)
     while (NextMd != &LoaderBlock->MemoryDescriptorListHead)
     {
         MemoryDescriptor = CONTAINING_RECORD(NextMd, MEMORY_ALLOCATION_DESCRIPTOR, ListEntry);
-
-        TRACE("BP %08X PC %04X MT %d\n", MemoryDescriptor->BasePage,
-            MemoryDescriptor->PageCount, MemoryDescriptor->MemoryType);
 
         /* Highlight ramdisk-related memory types for debugging */
         if (MemoryDescriptor->MemoryType == LoaderXIPRom)
