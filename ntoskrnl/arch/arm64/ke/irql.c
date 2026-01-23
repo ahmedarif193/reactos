@@ -373,7 +373,6 @@ KfLowerIrql(
     _In_ KIRQL NewIrql)
 {
     KIRQL OldIrql = KiQueryCurrentIrql();
-    CHAR Buf[128];
 
     if (NewIrql > HIGH_LEVEL)
     {
@@ -385,23 +384,11 @@ KfLowerIrql(
         __asm__ __volatile__("mov %0, x29" : "=r"(FramePtr));
         __asm__ __volatile__("mov %0, x30" : "=r"(LinkReg));
 
-        DPRINT1("[arm64] KfLowerIrql: invalid NewIrql=%lu (OldIrql=%lu) Caller=%p FP=%p LR=%p\n",
-                (ULONG)NewIrql, (ULONG)OldIrql, RetAddr, FramePtr, (PVOID)LinkReg);
         KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL, NewIrql, OldIrql, (ULONG_PTR)RetAddr, (ULONG_PTR)LinkReg);
     }
 
     if (NewIrql > OldIrql)
     {
-        if (NT_SUCCESS(RtlStringCbPrintfA(Buf,
-                                          sizeof(Buf),
-                                          "[arm64] KfLowerIrql: BUGCHECK OldIrql=%lu NewIrql=%lu",
-                                          (ULONG)OldIrql,
-                                          (ULONG)NewIrql)))
-        {
-            DPRINT1("%s\n", Buf);
-        }
-
-        DPRINT1("KfLowerIrql: raising IRQL via lower request (%u -> %u)\n", OldIrql, NewIrql);
         KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL, NewIrql, OldIrql, 0, 0);
     }
 

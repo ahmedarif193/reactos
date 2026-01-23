@@ -96,25 +96,12 @@ KeAcquireQueuedSpinLock(
     Prcb = KeGetCurrentPrcb();
     if (Prcb == NULL)
     {
-        CHAR Buf[128];
-        if (NT_SUCCESS(RtlStringCbPrintfA(Buf, sizeof(Buf),
-            "[arm64] KeAcquireQueuedSpinLock: NULL PRCB for LockNumber=%lu", (ULONG)LockNumber)))
-        {
-            DPRINT1("%s\n", Buf);
-        }
         KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 1, LockNumber, 0, 0);
     }
 
     Lock = Prcb->LockQueue[LockNumber].Lock;
     if (Lock == NULL)
     {
-        CHAR Buf[192];
-        if (NT_SUCCESS(RtlStringCbPrintfA(Buf, sizeof(Buf),
-            "[arm64] KeAcquireQueuedSpinLock: NULL Lock for LockNumber=%lu Prcb=%p KeArm64CurrentPcr=%p",
-            (ULONG)LockNumber, Prcb, KeArm64CurrentPcr)))
-        {
-            DPRINT1("%s\n", Buf);
-        }
         KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 2, LockNumber, (ULONG_PTR)Prcb, (ULONG_PTR)KeArm64CurrentPcr);
     }
 
@@ -159,25 +146,12 @@ KeReleaseQueuedSpinLock(
     Prcb = KeGetCurrentPrcb();
     if (Prcb == NULL)
     {
-        CHAR Buf[128];
-        if (NT_SUCCESS(RtlStringCbPrintfA(Buf, sizeof(Buf),
-            "[arm64] KeReleaseQueuedSpinLock: NULL PRCB for LockNumber=%lu", (ULONG)LockNumber)))
-        {
-            DPRINT1("%s\n", Buf);
-        }
         KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 3, LockNumber, 0, 0);
     }
 
     Lock = Prcb->LockQueue[LockNumber].Lock;
     if (Lock == NULL)
     {
-        CHAR Buf[192];
-        if (NT_SUCCESS(RtlStringCbPrintfA(Buf, sizeof(Buf),
-            "[arm64] KeReleaseQueuedSpinLock: NULL Lock for LockNumber=%lu Prcb=%p KeArm64CurrentPcr=%p",
-            (ULONG)LockNumber, Prcb, KeArm64CurrentPcr)))
-        {
-            DPRINT1("%s\n", Buf);
-        }
         KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 4, LockNumber, (ULONG_PTR)Prcb, (ULONG_PTR)KeArm64CurrentPcr);
     }
 

@@ -22,13 +22,6 @@ KiArm64VectorLogOnly(
     _In_ ULONG_PTR Far,
     _In_ ULONG VectorId)
 {
-    CHAR Buf[128];
-    if (NT_SUCCESS(RtlStringCbPrintfA(Buf, sizeof(Buf),
-                                      "[arm64] PermVector: id=%lu esr=0x%lx far=%p",
-                                      VectorId, Esr, (PVOID)Far)))
-    {
-        DPRINT1("%s\n", Buf);
-    }
     DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_TRACE_LEVEL,
                "[arm64] PermVector: id=%lu esr=0x%lx far=%p\n",
                VectorId, Esr, (PVOID)Far);

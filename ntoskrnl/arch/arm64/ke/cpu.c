@@ -71,67 +71,12 @@ KiInitializeDebugRegisterCounts(VOID)
 }
 
 #if DBG
-static __inline ULONGLONG KiRead_ID_AA64PFR0_EL1(void)
-{
-    ULONGLONG v; __asm__ __volatile__("mrs %0, id_aa64pfr0_el1" : "=r"(v)); return v;
-}
-static __inline ULONGLONG KiRead_ID_AA64ISAR0_EL1(void)
-{
-    ULONGLONG v; __asm__ __volatile__("mrs %0, id_aa64isar0_el1" : "=r"(v)); return v;
-}
-static __inline ULONGLONG KiRead_ID_AA64ISAR1_EL1(void)
-{
-    ULONGLONG v; __asm__ __volatile__("mrs %0, id_aa64isar1_el1" : "=r"(v)); return v;
-}
-
-static __inline ULONG KiField4(ULONGLONG v, int shift)
-{
-    return (ULONG)((v >> shift) & 0xFULL);
-}
-
 CODE_SEG("INIT")
 VOID
 KiReportCpuFeatures(IN PKPRCB Prcb)
 {
-    ULONGLONG pfr0 = KiRead_ID_AA64PFR0_EL1();
-    ULONGLONG isar0 = KiRead_ID_AA64ISAR0_EL1();
-    ULONGLONG isar1 = KiRead_ID_AA64ISAR1_EL1();
-    CHAR Line[256] = {0};
-
+    /* Debug logging removed */
     UNREFERENCED_PARAMETER(Prcb);
-
-    RtlStringCbPrintfA(Line, sizeof(Line), "Supported CPU features:");
-
-    /* Core execution levels and SIMD */
-    if (KiField4(pfr0, 16)) RtlStringCbCatA(Line, sizeof(Line), " FP");
-    if (KiField4(pfr0, 20)) RtlStringCbCatA(Line, sizeof(Line), " ASIMD");
-    if (KiField4(pfr0, 32)) RtlStringCbCatA(Line, sizeof(Line), " SVE");
-
-    /* ID_AA64ISAR0 feature blocks */
-    if (KiField4(isar0, 4))  RtlStringCbCatA(Line, sizeof(Line), " AES");
-    if (KiField4(isar0, 4) >= 2) RtlStringCbCatA(Line, sizeof(Line), " PMULL");
-    if (KiField4(isar0, 8))  RtlStringCbCatA(Line, sizeof(Line), " SHA1");
-    if (KiField4(isar0, 12)) RtlStringCbCatA(Line, sizeof(Line), " SHA2");
-    if (KiField4(isar0, 16)) RtlStringCbCatA(Line, sizeof(Line), " CRC32");
-    if (KiField4(isar0, 20)) RtlStringCbCatA(Line, sizeof(Line), " ATOMICS");
-    if (KiField4(isar0, 24)) RtlStringCbCatA(Line, sizeof(Line), " RDM");
-    if (KiField4(isar0, 28)) RtlStringCbCatA(Line, sizeof(Line), " SHA3");
-    if (KiField4(isar0, 32)) RtlStringCbCatA(Line, sizeof(Line), " SM3");
-    if (KiField4(isar0, 36)) RtlStringCbCatA(Line, sizeof(Line), " SM4");
-    if (KiField4(isar0, 40)) RtlStringCbCatA(Line, sizeof(Line), " DOTPROD");
-    if (KiField4(isar0, 44)) RtlStringCbCatA(Line, sizeof(Line), " FHM");
-
-    /* ID_AA64ISAR1 feature blocks */
-    if (KiField4(isar1, 0))  RtlStringCbCatA(Line, sizeof(Line), " DPB");
-    if (KiField4(isar1, 12)) RtlStringCbCatA(Line, sizeof(Line), " JSCVT");
-    if (KiField4(isar1, 16)) RtlStringCbCatA(Line, sizeof(Line), " FCMA");
-    if (KiField4(isar1, 20)) RtlStringCbCatA(Line, sizeof(Line), " LRCPC");
-    if (KiField4(isar1, 28)) RtlStringCbCatA(Line, sizeof(Line), " SPECRES");
-    if (KiField4(isar1, 32)) RtlStringCbCatA(Line, sizeof(Line), " SB");
-    if (KiField4(isar1, 44)) RtlStringCbCatA(Line, sizeof(Line), " I8MM");
-    if (KiField4(isar1, 48)) RtlStringCbCatA(Line, sizeof(Line), " BF16");
-
-    DPRINT1("%s\n", Line);
 }
 #endif
 

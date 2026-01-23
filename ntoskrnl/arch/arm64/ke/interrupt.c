@@ -48,6 +48,11 @@ ULONG KiTimerCtlReadback = 0;         /* Timer control register readback */
 static inline void KiRawDebugPuts(const char *str) {
     volatile ULONG *uart = (volatile ULONG *)KI_ARM64_PL011_VA;
     while (*str) {
+        /* Convert \n to \r\n for proper serial terminal line handling */
+        if (*str == '\n') {
+            while (uart[0x18 / sizeof(ULONG)] & KI_ARM64_PL011_FR_TXFF) {}
+            uart[0] = '\r';
+        }
         while (uart[0x18 / sizeof(ULONG)] & KI_ARM64_PL011_FR_TXFF) {}
         uart[0] = *str++;
     }
@@ -708,31 +713,9 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
     KIRQL OldIrql;
     PKINTERRUPT Head;
     ULONG Vector = Interrupt->Vector;
-    CHAR Buf[128];
-    CHAR Buf2[128];
 
     if (Vector >= ARM64_MAX_INTID) return FALSE;
     if (Interrupt->Connected) return TRUE;
-
-    if (NT_SUCCESS(RtlStringCbPrintfA(Buf,
-                                      sizeof(Buf),
-                                      "[arm64] KeConnectInterrupt: entry Int=%p Vec=%lu Irql=%lu Mode=%lu Share=%lu",
-                                      Interrupt,
-                                      (ULONG)Vector,
-                                      (ULONG)Interrupt->Irql,
-                                      (ULONG)Interrupt->Mode,
-                                      (ULONG)Interrupt->ShareVector)))
-    {
-        DPRINT1("%s\n", Buf);
-    }
-
-    if (NT_SUCCESS(RtlStringCbPrintfA(Buf2,
-                                      sizeof(Buf2),
-                                      "[arm64] KeConnectInterrupt: before KeAcquireSpinLock Vec=%lu",
-                                      (ULONG)Vector)))
-    {
-        DPRINT1("%s\n", Buf2);
-    }
 
     KeAcquireSpinLock(&KiArm64IntTableLock, &OldIrql);
 
@@ -760,21 +743,6 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
 
     KeReleaseSpinLock(&KiArm64IntTableLock, OldIrql);
 
-    if (NT_SUCCESS(RtlStringCbPrintfA(Buf2,
-                                      sizeof(Buf2),
-                                      "[arm64] KeConnectInterrupt: after KeReleaseSpinLock Vec=%lu",
-                                      (ULONG)Vector)))
-    {
-        DPRINT1("%s\n", Buf2);
-    }
-    if (NT_SUCCESS(RtlStringCbPrintfA(Buf,
-                                      sizeof(Buf),
-                                      "[arm64] KeConnectInterrupt: exit Vec=%lu Connected=%lu",
-                                      (ULONG)Vector,
-                                      (ULONG)Interrupt->Connected)))
-    {
-        DPRINT1("%s\n", Buf);
-    }
     return Interrupt->Connected;
 }
 

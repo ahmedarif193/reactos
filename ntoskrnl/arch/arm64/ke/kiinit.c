@@ -42,6 +42,11 @@ struct _KPCR;
 FORCEINLINE VOID KiArm64RawPuts(const char *str) {
     volatile ULONG *uart = (volatile ULONG *)KI_ARM64_PL011_VA;
     while (*str) {
+        /* Convert \n to \r\n for proper serial terminal line handling */
+        if (*str == '\n') {
+            while (uart[0x18 / sizeof(ULONG)] & KI_ARM64_PL011_FR_TXFF) {}
+            uart[0] = '\r';
+        }
         while (uart[0x18 / sizeof(ULONG)] & KI_ARM64_PL011_FR_TXFF) {}
         uart[0] = *str++;
     }
