@@ -561,14 +561,6 @@ MmAccessFault(IN ULONG FaultCode,
     /* Is there a ReactOS address space yet? */
     if (MmGetKernelAddressSpace())
     {
-#if defined(_M_ARM64)
-        /* Debug: trace user-space faults */
-        if (Address <= MM_HIGHEST_USER_ADDRESS && (ULONG_PTR)Address >= 0xFE000000)
-        {
-            DPRINT1("[arm64] MmAccessFault: HIGH USER addr=%p FaultCode=0x%lx Mode=%d\n",
-                    Address, FaultCode, Mode);
-        }
-#endif
         if (Address > MM_HIGHEST_USER_ADDRESS)
         {
 #if defined(_M_ARM64)
@@ -599,39 +591,9 @@ MmAccessFault(IN ULONG FaultCode,
             }
 #endif
 
-#if defined(_M_ARM64)
-            /* ARM64 DEBUG: Log System Cache faults */
-            if ((ULONG_PTR)Address >= 0xFFFFF98000000000ULL &&
-                (ULONG_PTR)Address < 0xFFFFFA8000000000ULL)
-            {
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[arm64] MmAccessFault: SYSCACHE ENTRY addr=%p FaultCode=0x%lx\n",
-                    Address, FaultCode);
-            }
-#endif
             /* Check if this is an ARM3 memory area */
             MiLockWorkingSetShared(PsGetCurrentThread(), &MmSystemCacheWs);
-#if defined(_M_ARM64)
-            if ((ULONG_PTR)Address >= 0xFFFFF98000000000ULL &&
-                (ULONG_PTR)Address < 0xFFFFFA8000000000ULL)
-            {
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[arm64] MmAccessFault: SYSCACHE after WS lock addr=%p\n", Address);
-            }
-#endif
             Vad = MiLocateVad(&MiRosKernelVadRoot, Address);
-
-#if defined(_M_ARM64) && DBG
-            /* Debug System View Space faults */
-            extern PVOID MiSystemViewStart;
-            if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
-                (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)  /* First 16MB */
-            {
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[arm64] MmAccessFault: System View Space addr=%p Vad=%p IsRosVad=%d\n",
-                    Address, Vad, Vad ? (MI_IS_ROSMM_VAD(Vad) ? 1 : 0) : -1);
-            }
-#endif
 
 #if MMFAULT_DEBUG
             if ((ULONG_PTR)Address >= 0xFFFF8000B0000000ULL &&
@@ -657,15 +619,6 @@ MmAccessFault(IN ULONG FaultCode,
                 IsArm3Fault = TRUE;
             }
 
-#if defined(_M_ARM64)
-            if ((ULONG_PTR)Address >= 0xFFFFF98000000000ULL &&
-                (ULONG_PTR)Address < 0xFFFFFA8000000000ULL)
-            {
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[arm64] MmAccessFault: SYSCACHE Vad=%p IsRos=%d IsArm3=%d\n",
-                    Vad, Vad ? (MI_IS_ROSMM_VAD(Vad) ? 1 : 0) : -1, IsArm3Fault);
-            }
-#endif
             MiUnlockWorkingSetShared(PsGetCurrentThread(), &MmSystemCacheWs);
         }
         else
@@ -673,15 +626,6 @@ MmAccessFault(IN ULONG FaultCode,
             /* Could this be a VAD fault from user-mode? */
             MiLockProcessWorkingSetShared(PsGetCurrentProcess(), PsGetCurrentThread());
             Vad = MiLocateVad(&PsGetCurrentProcess()->VadRoot, Address);
-
-#if defined(_M_ARM64)
-            /* Debug: trace high user address VAD lookup */
-            if ((ULONG_PTR)Address >= 0xFE000000)
-            {
-                DPRINT1("[arm64] MmAccessFault: User VAD lookup addr=%p Vad=%p IsRos=%d\n",
-                        Address, Vad, Vad ? (MI_IS_ROSMM_VAD(Vad) ? 1 : 0) : -1);
-            }
-#endif
 
             if ((Vad != NULL) && !MI_IS_ROSMM_VAD(Vad))
             {
@@ -702,55 +646,13 @@ MmAccessFault(IN ULONG FaultCode,
         /* This is an ARM3 fault */
         DPRINT("ARM3 fault %p\n", Vad);
 
-#if defined(_M_ARM64) && DBG
-        /* Debug System View Space routing */
-        extern PVOID MiSystemViewStart;
-        if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
-            (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
-        {
-            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                "[arm64] MmAccessFault: Routing to MmArmAccessFault for %p\n", Address);
-        }
-#endif
-
         {
             NTSTATUS Status = MmArmAccessFault(FaultCode, Address, Mode, TrapInformation);
-#if defined(_M_ARM64) && DBG
-            extern PVOID MiSystemViewStart;
-            if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
-                (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
-            {
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[arm64] MmAccessFault: MmArmAccessFault returned Status=0x%lx for addr=%p\n",
-                    Status, Address);
-            }
-#endif
             return Status;
         }
     }
 
-#if defined(_M_ARM64) && DBG
-    /* Debug: we're taking the ROS path */
-    extern PVOID MiSystemViewStart;
-    if ((ULONG_PTR)Address >= (ULONG_PTR)MiSystemViewStart &&
-        (ULONG_PTR)Address < (ULONG_PTR)MiSystemViewStart + 0x1000000)
-    {
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-            "[arm64] MmAccessFault: Taking ROS path for %p (Vad=%p)\n", Address, Vad);
-    }
-#endif
-
 Retry:
-#if defined(_M_ARM64)
-    /* ARM64 DEBUG: Log System Cache routing to ROS path */
-    if ((ULONG_PTR)Address >= 0xFFFFF98000000000ULL &&
-        (ULONG_PTR)Address < 0xFFFFFA8000000000ULL)
-    {
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-            "[arm64] MmAccessFault: SYSCACHE ROS path addr=%p NotPresent=%d\n",
-            Address, MI_IS_NOT_PRESENT_FAULT(FaultCode));
-    }
-#endif
     /* Keep same old ReactOS Behaviour */
     if (!MI_IS_NOT_PRESENT_FAULT(FaultCode))
     {
@@ -762,16 +664,6 @@ Retry:
         /* Call not present */
         Status = MmNotPresentFault(Mode, (ULONG_PTR)Address, TrapInformation ? FALSE : TRUE);
     }
-#if defined(_M_ARM64)
-    /* ARM64 DEBUG: Log System Cache result */
-    if ((ULONG_PTR)Address >= 0xFFFFF98000000000ULL &&
-        (ULONG_PTR)Address < 0xFFFFFA8000000000ULL)
-    {
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-            "[arm64] MmAccessFault: SYSCACHE result addr=%p Status=0x%lx\n",
-            Address, Status);
-    }
-#endif
 
     if ((Status == STATUS_ACCESS_VIOLATION) &&
         (Mode != KernelMode) &&

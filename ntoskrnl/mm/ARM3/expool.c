@@ -255,54 +255,6 @@ ExpIsCanonicalPointer(_In_ PVOID Pointer)
 static LONG ExpPoolTraceBudget = 64;
 #define POOL_TRACE_TARGET_BYTES 24
 static LONG ExpPoolAnyBudget = 256;
-/* Trace lookaside index 2 (size 24) push/pop to find corruptors. */
-static LONG ExpLookasideTraceBudget = 64;
-/* Temporary: bypass lookaside index 2 (size 24) to isolate head corruption. */
-static BOOLEAN ExpDisableIndex2Lookaside = TRUE;
-static LONG ExpLookasideBypassLogged = 0;
-
-FORCEINLINE
-VOID
-ExpTraceLookasideOp(
-    _In_ PCSTR Action,
-    _In_ BOOLEAN PagedList,
-    _In_ USHORT Index,
-    _In_ PVOID Entry,
-    _In_ ULONG Tag)
-{
-    USHORT Frames;
-    PVOID Stack[6];
-    UCHAR Raw[8];
-    PHYSICAL_ADDRESS Pa;
-    USHORT i;
-
-    if (Index != 2)
-        return;
-    if (InterlockedDecrement(&ExpLookasideTraceBudget) < 0)
-        return;
-
-    Pa = MmGetPhysicalAddress(Entry);
-    RtlZeroMemory(Raw, sizeof(Raw));
-    if (MmIsAddressValid(Entry))
-        RtlCopyMemory(Raw, Entry, sizeof(Raw));
-
-    Frames = RtlCaptureStackBackTrace(1,
-                                      RTL_NUMBER_OF(Stack),
-                                      Stack,
-                                      NULL);
-
-    DPRINT1("EX: lookaside %s (Paged=%d Idx=2) entry=%p pa=%I64x tag=%.4s raw=%02x %02x %02x %02x %02x %02x %02x %02x\n",
-            Action,
-            PagedList ? 1 : 0,
-            Entry,
-            Pa.QuadPart,
-            (char *)&Tag,
-            Raw[0], Raw[1], Raw[2], Raw[3], Raw[4], Raw[5], Raw[6], Raw[7]);
-    for (i = 0; i < Frames && i < RTL_NUMBER_OF(Stack); i++)
-    {
-        DPRINT1("    frame %u: %p\n", i, Stack[i]);
-    }
-}
 
 FORCEINLINE
 VOID
@@ -2823,18 +2775,6 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
         PGENERAL_LOOKASIDE UsedList = NULL;
         BOOLEAN PagedList = (PoolType == PagedPool);
         USHORT LookasideIndex = i - 1;
-        BOOLEAN SkipIndexLookaside = FALSE;
-
-#if DBG
-        if (LookasideIndex == 2 && ExpDisableIndex2Lookaside)
-        {
-            SkipIndexLookaside = TRUE;
-            if (InterlockedCompareExchange(&ExpLookasideBypassLogged, 1, 0) == 0)
-            {
-                DPRINT1("EX: bypassing lookaside index 2 (size=24) to isolate head corruption\n");
-            }
-        }
-#endif
 
         Entry = NULL;
 
@@ -2842,7 +2782,7 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
         ExpGetValidPoolLookasideList(Prcb, PagedList, LookasideIndex, FALSE);
         ExpGetValidPoolLookasideList(Prcb, PagedList, LookasideIndex, TRUE);
 
-        if (!ExpDisablePoolLookaside && !SkipIndexLookaside)
+        if (!ExpDisablePoolLookaside)
         {
             //
             // Try popping it from the per-CPU lookaside list
@@ -3716,26 +3656,13 @@ ExFreePoolWithTag(IN PVOID P,
     {
         BOOLEAN PagedList = (PoolType == PagedPool);
         USHORT LookasideIndex = BlockSize - 1;
-        BOOLEAN SkipIndexLookaside = FALSE;
 
         /* Always validate the stored lookaside pointers to catch corruption. */
         ExpGetValidPoolLookasideList(Prcb, PagedList, LookasideIndex, FALSE);
         ExpGetValidPoolLookasideList(Prcb, PagedList, LookasideIndex, TRUE);
 
-#if DBG
-        if (LookasideIndex == 2 && ExpDisableIndex2Lookaside)
+        if (!ExpDisablePoolLookaside)
         {
-            SkipIndexLookaside = TRUE;
-            if (InterlockedCompareExchange(&ExpLookasideBypassLogged, 1, 0) == 0)
-            {
-                DPRINT1("EX: bypassing lookaside index 2 (size=24) to isolate head corruption\n");
-            }
-        }
-#endif
-
-        if (!ExpDisablePoolLookaside && !SkipIndexLookaside)
-        {
-            ULONG TraceTag = Tag;
             //
             // Try pushing it into the per-CPU lookaside list
             //
@@ -3746,13 +3673,6 @@ ExFreePoolWithTag(IN PVOID P,
             if (LookasideList != NULL &&
                 ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
             {
-#if DBG
-                ExpTraceLookasideOp("push-pcpu",
-                                    PagedList,
-                                    LookasideIndex,
-                                    P,
-                                    TraceTag);
-#endif
 #if defined(_WIN64)
                 if (!ExpIsCanonicalPointer(P))
                 {
@@ -3798,13 +3718,6 @@ ExFreePoolWithTag(IN PVOID P,
             if (LookasideList != NULL &&
                 ExpValidateLookasideHead(Prcb, LookasideList, PagedList, LookasideIndex))
             {
-#if DBG
-                ExpTraceLookasideOp("push-global",
-                                    PagedList,
-                                    LookasideIndex,
-                                    P,
-                                    TraceTag);
-#endif
 #if defined(_WIN64)
                 if (!ExpIsCanonicalPointer(P))
                 {
