@@ -366,53 +366,74 @@ def start_qemu(rpi_mode=False):
             return False
 
     # ---------------- X86 / X64 CONFIGURATION ----------------
-    use_uefi = True
+    # i386 uses BIOS boot (no UEFI needed), amd64 uses UEFI
+    use_uefi = (target_arch != "i386")
     ovmf_code = None
     ovmf_vars = None
 
     # Select architecture-specific settings
     qemu_binary = "qemu-system-i386" if target_arch == "i386" else "qemu-system-x86_64"
-    ovmf_code, ovmf_vars, ovmf_vars_template, code_candidates, vars_candidates = resolve_ovmf_paths(target_arch)
+
+    if use_uefi:
+        ovmf_code, ovmf_vars, ovmf_vars_template, code_candidates, vars_candidates = resolve_ovmf_paths(target_arch)
 
     print(f"Starting QEMU ({target_arch}) with xHCI USB...")
     print(f"  QEMU binary: {qemu_binary}")
-    print(f"  OVMF CODE: {ovmf_code}")
-    print(f"  OVMF VARS: {ovmf_vars}")
+    print(f"  Boot mode: {'UEFI' if use_uefi else 'BIOS'}")
+    if use_uefi:
+        print(f"  OVMF CODE: {ovmf_code}")
+        print(f"  OVMF VARS: {ovmf_vars}")
     print(f"  LiveCD: {livecd_path}")
     print(f"  FAT32 USB disk: {FAT32_IMG}")
     print(f"  Serial output: {LOG_FILE}")
 
-    # Verify OVMF firmware exists
-    if not ovmf_code or not os.path.exists(ovmf_code):
-        print(f"Error: OVMF CODE not found: {ovmf_code}")
-        print("Set REACTOS_OVMF_CODE or OVMF_CODE to override.")
-        print(f"Tried: {', '.join(code_candidates)}")
-        if target_arch == "i386":
-            print("Install ovmf-ia32 package: sudo apt install ovmf-ia32")
-        else:
+    # Verify OVMF firmware exists (only for UEFI boot)
+    if use_uefi:
+        if not ovmf_code or not os.path.exists(ovmf_code):
+            print(f"Error: OVMF CODE not found: {ovmf_code}")
+            print("Set REACTOS_OVMF_CODE or OVMF_CODE to override.")
+            print(f"Tried: {', '.join(code_candidates)}")
             print("Install ovmf package: sudo apt install ovmf")
-        return False
-    if not prepare_ovmf_vars(ovmf_vars_template, ovmf_vars):
-        return False
+            return False
+        if not prepare_ovmf_vars(ovmf_vars_template, ovmf_vars):
+            return False
 
     try:
-        # Open log file for stdout redirection (x64 approach)
-        log_fd = open(LOG_FILE, 'w')
-
         is_darwin = platform.system() == "Darwin"
-        qemu_cmd = [
-            qemu_binary,
-            "-smp", "1",
-            "-m", "3G",
-            "-M", "q35",
-            "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
-            "-cdrom", livecd_path,
-            "-boot", "d",  # Boot from CD-ROM
-            "-serial", "stdio",
-            "-display", "none",
-            "-no-reboot",
-            "-no-shutdown"
-        ]
+        log_fd = None
+
+        if use_uefi:
+            # Open log file for stdout redirection (UEFI uses serial stdio)
+            log_fd = open(LOG_FILE, 'w')
+            # UEFI boot for amd64
+            qemu_cmd = [
+                qemu_binary,
+                "-smp", "1",
+                "-m", "3G",
+                "-M", "q35",
+                "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
+                "-cdrom", livecd_path,
+                "-boot", "d",  # Boot from CD-ROM
+                "-serial", "stdio",
+                "-display", "none",
+                "-no-reboot",
+                "-no-shutdown"
+            ]
+        else:
+            # BIOS boot for i386
+            qemu_cmd = [
+                qemu_binary,
+                "-M", "q35",
+                "-m", "3G",
+                "-drive", f"file={livecd_path},format=raw,if=ide,index=0,media=cdrom",
+                "-boot", "order=d",
+                "-serial", f"file:{LOG_FILE}",
+                "-device", "qemu-xhci,id=xhci",
+                "-device", "usb-kbd,bus=xhci.0",
+                "-device", "usb-mouse,bus=xhci.0",
+                "-drive", f"if=none,id=usbdisk,format=raw,file={FAT32_IMG}",
+                "-device", "usb-storage,bus=xhci.0,drive=usbdisk"
+            ]
 
         # Add acceleration: TCG on macOS, KVM on Linux
         if is_darwin:
@@ -421,13 +442,26 @@ def start_qemu(rpi_mode=False):
         else:
             qemu_cmd.insert(1, "-enable-kvm")
 
-        qemu_process = subprocess.Popen(
-            qemu_cmd,
-            cwd=BUILD_DIR,
-            stdout=log_fd,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL
-        )
+        print(f"  Command: {' '.join(qemu_cmd)}")
+
+        if use_uefi:
+            # UEFI mode: serial goes to stdio, redirect to log file
+            qemu_process = subprocess.Popen(
+                qemu_cmd,
+                cwd=BUILD_DIR,
+                stdout=log_fd,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL
+            )
+        else:
+            # BIOS mode: serial goes directly to file via QEMU
+            qemu_process = subprocess.Popen(
+                qemu_cmd,
+                cwd=BUILD_DIR,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL
+            )
 
         print(f"QEMU started with PID {qemu_process.pid}")
         return True
