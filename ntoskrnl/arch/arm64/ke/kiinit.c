@@ -6,8 +6,9 @@
  */
 
 #include <ntoskrnl.h>
-//#define NDEBUG  /* Temporarily disabled for timer debugging */
+#define NDEBUG
 #include <debug.h>
+#include "../include/arm64pl011.h"
 
 struct _KPCR;
 
@@ -37,12 +38,11 @@ struct _KPCR;
 
 #define ARM64_STUB() UNIMPLEMENTED_DBGBREAK()
 
-/* CYCLE31: Raw UART output for debugging - works even if DPRINT doesn't */
-#define PL011_VA 0xFFFF800009000000ULL
+/* Raw UART output for early boot debugging before KD is initialized */
 FORCEINLINE VOID KiArm64RawPuts(const char *str) {
-    volatile ULONG *uart = (volatile ULONG *)PL011_VA;
+    volatile ULONG *uart = (volatile ULONG *)KI_ARM64_PL011_VA;
     while (*str) {
-        while (uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}  /* Wait for TXFF */
+        while (uart[0x18 / sizeof(ULONG)] & KI_ARM64_PL011_FR_TXFF) {}
         uart[0] = *str++;
     }
 }

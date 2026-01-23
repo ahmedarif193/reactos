@@ -28,6 +28,10 @@ extern VOID UefiVideoRefreshBootLogo(VOID);
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WINDOWS);
 
+#if defined(_M_ARM64)
+#include <reactos/arm64/early_uart.h>
+#endif
+
 ULONG ArcGetDiskCount(VOID);
 PARC_DISK_SIGNATURE_EX ArcGetDiskInfo(ULONG Index);
 
@@ -1740,16 +1744,28 @@ LoadAndBootWindowsCommon(
     TRACE("Hello from paged mode, KiSystemStartup %p, LoaderBlockVA %p!\n",
           KiSystemStartup, LoaderBlockVA);
 
+#if defined(_M_ARM64)
+    EarlyUartPuts("\r\n[WinLdr] Before zeroing SharedUserData\r\n");
+#endif
+
     /* Zero KI_USER_SHARED_DATA page */
     {
         volatile PVOID SharedUserDataVa = (PVOID)KI_USER_SHARED_DATA;
         RtlZeroMemory((PVOID)SharedUserDataVa, MM_PAGE_SIZE);
     }
 
+#if defined(_M_ARM64)
+    EarlyUartPuts("[WinLdr] SharedUserData zeroed\r\n");
+#endif
+
     WinLdrpDumpMemoryDescriptors(LoaderBlockVA);
     WinLdrpDumpBootDriver(LoaderBlockVA);
 #ifndef _M_AMD64
     WinLdrpDumpArcDisks(LoaderBlockVA);
+#endif
+
+#if defined(_M_ARM64)
+    EarlyUartPuts("[WinLdr] Dumps done\r\n");
 #endif
 
     /*
@@ -1758,38 +1774,12 @@ LoadAndBootWindowsCommon(
      */
     WinLdrSystemBlock->LoaderPerformanceData.EndTime = DbgQueryMicrosecondsSinceBoot();
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    /* ARM64: Direct PL011 UART output for debugging kernel jump */
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "\r\n[ARM64] About to jump to kernel entry: ";
-        const char *end = "\r\n";
-        const char *hex = "0123456789ABCDEF";
-        ULONG_PTR addr = (ULONG_PTR)KiSystemStartup;
-
-        /* Wait for TXFF and print message */
-        while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-        while (*msg) { while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {} Uart[0] = *msg++; }
-
-        /* Print address as hex */
-        for (int i = 60; i >= 0; i -= 4) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = hex[(addr >> i) & 0xF];
-        }
-
-        /* Print LoaderBlockVA address */
-        while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {} Uart[0] = ' ';
-        while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {} Uart[0] = 'L';
-        while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {} Uart[0] = 'B';
-        while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {} Uart[0] = '=';
-        addr = (ULONG_PTR)LoaderBlockVA;
-        for (int i = 60; i >= 0; i -= 4) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = hex[(addr >> i) & 0xF];
-        }
-
-        while (*end) { while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {} Uart[0] = *end++; }
-    }
+#if defined(_M_ARM64)
+    EarlyUartPuts("[WinLdr] KiSystemStartup = 0x");
+    EarlyUartPutHex((UINT64)(ULONG_PTR)KiSystemStartup, 16);
+    EarlyUartPuts("\r\n[WinLdr] LoaderBlockVA = 0x");
+    EarlyUartPutHex((UINT64)(ULONG_PTR)LoaderBlockVA, 16);
+    EarlyUartPuts("\r\n[WinLdr] JUMPING TO KERNEL NOW!\r\n");
 #endif
 
     /* Pass control */

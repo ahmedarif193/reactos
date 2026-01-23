@@ -29,3 +29,6 @@ typedef FREELDR_FRAMEBUFFER_INFO REACTOS_INTERNAL_BGCONTEXT;
 typedef FREELDR_FRAMEBUFFER_INFO *PREACTOS_INTERNAL_BGCONTEXT;
 
 VOID __cdecl BootMain(IN PCCH CmdLine);
+
+/* Flag indicating whether UEFI Boot Services have been exited */
+extern volatile BOOLEAN BootServicesExitedFlag;

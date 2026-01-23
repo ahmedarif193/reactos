@@ -111,43 +111,6 @@ _exituefi:
     dsb sy
     isb
 
-    /* DEBUG: Output to PL011 UART that we returned from ExitBootServices */
-    /* PL011 UART base = 0x09000000, DR at offset 0, FR at offset 0x18 */
-    mov x0, #0x09000000
-    /* Wait for TX FIFO not full (bit 5 of FR) and output '[' */
-1:  ldr w1, [x0, #0x18]
-    tbnz w1, #5, 1b
-    mov w1, #'['
-    str w1, [x0]
-1:  ldr w1, [x0, #0x18]
-    tbnz w1, #5, 1b
-    mov w1, #'E'
-    str w1, [x0]
-1:  ldr w1, [x0, #0x18]
-    tbnz w1, #5, 1b
-    mov w1, #'X'
-    str w1, [x0]
-1:  ldr w1, [x0, #0x18]
-    tbnz w1, #5, 1b
-    mov w1, #'I'
-    str w1, [x0]
-1:  ldr w1, [x0, #0x18]
-    tbnz w1, #5, 1b
-    mov w1, #'T'
-    str w1, [x0]
-1:  ldr w1, [x0, #0x18]
-    tbnz w1, #5, 1b
-    mov w1, #']'
-    str w1, [x0]
-1:  ldr w1, [x0, #0x18]
-    tbnz w1, #5, 1b
-    mov w1, #'\r'
-    str w1, [x0]
-1:  ldr w1, [x0, #0x18]
-    tbnz w1, #5, 1b
-    mov w1, #'\n'
-    str w1, [x0]
-
     /*
      * RESTORE STATE
      *

@@ -432,6 +432,7 @@ elseif(NT_ARCH STREQUAL "arm64")
         ${NTOS_ARCH_DIR}/ke/boot.c
         ${NTOS_ARCH_DIR}/ke/context.c
         ${NTOS_ARCH_DIR}/ke/cpu.c
+        ${NTOS_ARCH_DIR}/ke/early_uart.c
         ${NTOS_ARCH_DIR}/ke/exceptinit.c
         ${NTOS_ARCH_DIR}/ke/exp.c
         ${NTOS_ARCH_DIR}/ke/floatstubs.c

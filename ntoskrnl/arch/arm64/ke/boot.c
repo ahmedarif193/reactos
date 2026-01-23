@@ -10,36 +10,7 @@
 #include <reactos/drivers/acpi/acpi.h>
 #define NDEBUG
 #include <debug.h>
-
-/*
- * PL011 UART early debug helpers for pre-KD initialization tracing.
- * Base address is QEMU virt machine's PL011 UART at 0x09000000.
- * The UART must be identity-mapped before use; the bootloader sets this up.
- */
-#define KI_ARM64_PL011_BASE     0x09000000UL
-#define KI_ARM64_PL011_VA       (0xFFFF800000000000ULL + KI_ARM64_PL011_BASE)
-#define KI_ARM64_PL011_FR_TXFF  (1U << 5)
-
-CODE_SEG("INIT")
-static inline VOID
-KiArm64RawPutc(char Ch)
-{
-    volatile ULONG *Uart = (volatile ULONG *)KI_ARM64_PL011_VA;
-    while (Uart[0x18 / sizeof(ULONG)] & KI_ARM64_PL011_FR_TXFF) {}
-    Uart[0] = (ULONG)Ch;
-}
-
-CODE_SEG("INIT")
-static inline VOID
-KiArm64RawPuts(const char *Str)
-{
-    while (*Str)
-    {
-        if (*Str == '\n')
-            KiArm64RawPutc('\r');
-        KiArm64RawPutc(*Str++);
-    }
-}
+#include "../include/arm64pl011.h"
 
 typedef struct _ARM64_EARLY_GPRS
 {
@@ -1343,8 +1314,24 @@ KiSystemStartup(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     ARM64_BOOT_CONTEXT BootContext = {0};
 
-    /* CYCLE31: Trace boot path to verify this function is called */
-    KiArm64RawPuts("[CYCLE31] KiSystemStartup ENTRY\n");
+    /*
+     * Initialize kernel UART from loader block.
+     * The bootloader detected the UART address via ACPI SPCR or SMBIOS
+     * and passed it in LoaderBlock->u.Arm64.EarlyUartAddress.
+     */
+    if (LoaderBlock && LoaderBlock->u.Arm64.EarlyUartAddress != 0)
+    {
+        EarlyUartBaseAddress = LoaderBlock->u.Arm64.EarlyUartAddress;
+        EarlyUartPlatformId = Arm64PlatformGenericAcpi;
+        EarlyUartInitialized = TRUE;
+    }
+    else
+    {
+        /* Fallback to QEMU default if loader didn't provide address */
+        EarlyUartBaseAddress = 0x09000000ULL;
+        EarlyUartPlatformId = Arm64PlatformQemuVirt;
+        EarlyUartInitialized = TRUE;
+    }
 
     /*
      * Install early exception vectors FIRST, before any memory access that
@@ -1379,8 +1366,6 @@ KiArm64SystemStartupBootStack(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
      * This function runs on the clean boot stack before entering the main
      * kernel initialization and then hands off to KiInitializeSystem.
      */
-    /* CYCLE31: Trace boot path before calling KiInitializeSystem */
-    KiArm64RawPuts("[CYCLE31] KiArm64SystemStartupBootStack: about to call KiInitializeSystem\n");
     KiInitializeSystem(LoaderBlock);
 
     /* Should never return */

@@ -198,12 +198,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInf
     if(SEPARATE_DBG)
         add_compile_options(-gdwarf-2 -ggdb)
     else()
-        add_compile_options(-gdwarf-2 -gstrict-dwarf)
-        if(NOT CMAKE_C_COMPILER_ID STREQUAL Clang)
-            # NOTE: Disabled -femit-struct-debug-detailed and -feliminate-unused-debug-symbols
-            # to get full debug info with file paths and line numbers in stack traces.
-            # This increases binary size significantly, especially for bootloaders.
-            # add_compile_options(-femit-struct-debug-detailed=none -feliminate-unused-debug-symbols)
+        if(MINIMAL_DEBUG_INFO)
+            add_compile_options(-g1 -gstrict-dwarf)
+        else()
+            add_compile_options(-gdwarf-2 -gstrict-dwarf)
         endif()
     endif()
 endif()

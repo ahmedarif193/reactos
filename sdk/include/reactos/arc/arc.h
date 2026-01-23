@@ -806,6 +806,13 @@ typedef struct _ARM64_LOADER_BLOCK
     ULONG_PTR InterruptStack;
     ULONG_PTR PcrPage;
     ULONG_PTR PdrPage;
+    /*
+     * EarlyUartAddress: Physical address of the PL011-compatible UART.
+     * Detected by FreeLoader at boot time via ACPI SPCR or SMBIOS, and
+     * passed to the kernel for early debug output before KD is available.
+     * The kernel accesses this via KSEG0 mapping (VA = KSEG0_BASE + PA).
+     */
+    ULONGLONG EarlyUartAddress;
 #else
     ULONG PlaceHolder;
 #endif

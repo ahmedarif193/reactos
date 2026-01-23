@@ -24,6 +24,8 @@
 //
 #define CPPORT_FLAG_MODEM_CONTROL   0x02
 #define CPPORT_FLAG_SUPPRESS_ECHO   0x04
+/* Keep existing UART baud/divisors (do not reprogram) */
+#define CPPORT_FLAG_KEEP_BAUD       0x08
 
 typedef struct _CPPORT
 {

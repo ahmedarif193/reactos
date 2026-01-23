@@ -111,9 +111,6 @@ MempSetupPagingForRegion(
 {
     BOOLEAN Status = TRUE;
 
-    TRACE("MempSetupPagingForRegion(BasePage=0x%lx, PageCount=0x%lx, Type=%ld)\n",
-          BasePage, PageCount, Type);
-
     /* Make sure we don't map too high */
     if (BasePage + PageCount > MmGetLoaderPagesSpanned()) return;
 
@@ -198,17 +195,6 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
     //PKTSS Tss;
     BOOLEAN Status;
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    /* Direct PL011 UART output - works after ExitBootServices */
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "[PL011] WinLdrSetupMemoryLayout entered\r\n";
-        while (*msg) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = *msg++;
-        }
-    }
-#endif
 
     /* Cleanup heap */
     FrLdrHeapCleanupAll();
@@ -390,16 +376,6 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
     MiLoaderTrimKernelMappings();
 #endif
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "[PL011] WinLdrSetupMemoryLayout completed\r\n";
-        while (*msg) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = *msg++;
-        }
-    }
-#endif
 
     return TRUE;
 }

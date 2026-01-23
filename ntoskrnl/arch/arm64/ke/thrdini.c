@@ -6,7 +6,7 @@
  */
 
 #include <ntoskrnl.h>
-//#define NDEBUG  /* Temporarily disabled for timer debugging */
+#define NDEBUG
 #include <debug.h>
 
 /*

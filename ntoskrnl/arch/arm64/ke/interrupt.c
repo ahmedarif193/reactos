@@ -10,8 +10,9 @@
  */
 
 #include <ntoskrnl.h>
-//#define NDEBUG  /* Temporarily disabled for timer debugging */
+#define NDEBUG
 #include <debug.h>
+#include "../include/arm64pl011.h"
 
 /* HAL extension: not yet declared in public headers for ARM64 */
 extern ULONG FASTCALL HalGetInterruptSource(VOID);
@@ -43,12 +44,11 @@ ULONG KiInitInterruptsCallCount = 0;  /* Set to 1 when KeInitInterrupts runs */
 ULONG KiTimerStartedFlag = 0;         /* Set to 1 when timer is started */
 ULONG KiTimerCtlReadback = 0;         /* Timer control register readback */
 
-/* CYCLE31: Raw UART for debugging - defined early so all functions can use it */
-#define PL011_VA 0xFFFF800009000000ULL
+/* Raw UART for early boot debugging before KD is initialized */
 static inline void KiRawDebugPuts(const char *str) {
-    volatile ULONG *uart = (volatile ULONG *)PL011_VA;
+    volatile ULONG *uart = (volatile ULONG *)KI_ARM64_PL011_VA;
     while (*str) {
-        while (uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
+        while (uart[0x18 / sizeof(ULONG)] & KI_ARM64_PL011_FR_TXFF) {}
         uart[0] = *str++;
     }
 }
@@ -200,7 +200,7 @@ KiArm64TimerIsr(
 #ifdef KDBG
     if ((KiTimerIsrCallCount % 10) == 0)
     {
-        *(volatile UCHAR *)PL011_VA = '~';
+        *(volatile UCHAR *)KI_ARM64_PL011_VA = '~';
     }
 #endif /* KDBG */
 

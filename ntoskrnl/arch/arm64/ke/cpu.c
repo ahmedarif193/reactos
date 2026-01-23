@@ -68,9 +68,6 @@ KiInitializeDebugRegisterCounts(VOID)
         KiArm64NumBreakpoints = 8;
     if (KiArm64NumWatchpoints > 2)
         KiArm64NumWatchpoints = 2;
-
-    DPRINT1("[arm64] Debug registers: %u breakpoints, %u watchpoints\n",
-            KiArm64NumBreakpoints, KiArm64NumWatchpoints);
 }
 
 #if DBG

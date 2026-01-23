@@ -31,12 +31,13 @@ UEFI=0
 EFI_PLATFORM_ID="${EFI_PLATFORM_ID-}"
 
 # fat32 mode vars
-SIZE_MIB=600
+SIZE_MIB=300
 BUILD_ROOT=""
 LIST_FILE=""
 UEFI_ONLY=0
 FATTEN_BIN=""
 VIOSTOR_SRC=""
+ARM64_BOOT_DIR=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -64,6 +65,8 @@ while [[ $# -gt 0 ]]; do
       EFI_PLATFORM_ID="$2"; shift 2;;
     --viostor)
       VIOSTOR_SRC="$2"; shift 2;;
+    --arm64-boot-dir)
+      ARM64_BOOT_DIR="$2"; shift 2;;
     -h|--help)
       sed -n '1,120p' "$0"; exit 0;;
     *)
@@ -306,6 +309,36 @@ fi
 if [[ -n "$VIOSTOR_SRC" && -f "$VIOSTOR_SRC" ]]; then
   fat_mkdir_p "/reactos/system32/drivers"
   add_file "$VIOSTOR_SRC" "/reactos/system32/drivers/viostor.sys"
+fi
+
+# ARM64 hardware boot files: embedded at build time from platform directories
+if [[ -n "$ARM64_BOOT_DIR" && -d "$ARM64_BOOT_DIR" ]]; then
+  info "Embedding ARM64 boot files from $ARM64_BOOT_DIR"
+
+  # Raspberry Pi 5 support
+  if [[ -d "$ARM64_BOOT_DIR/rpi5" ]]; then
+    rpi5_dir="$ARM64_BOOT_DIR/rpi5"
+
+    # UEFI firmware
+    if [[ -f "$rpi5_dir/RPI_EFI.fd" ]]; then
+      add_file "$rpi5_dir/RPI_EFI.fd" "/RPI_EFI.fd"
+      info "Added RPI5: RPI_EFI.fd"
+    fi
+
+    # Device tree blob
+    if [[ -f "$rpi5_dir/bcm2712-rpi-5-b.dtb" ]]; then
+      add_file "$rpi5_dir/bcm2712-rpi-5-b.dtb" "/bcm2712-rpi-5-b.dtb"
+      info "Added RPI5: bcm2712-rpi-5-b.dtb"
+    fi
+
+    # Boot configuration
+    if [[ -f "$rpi5_dir/config.txt" ]]; then
+      add_file "$rpi5_dir/config.txt" "/config.txt"
+      info "Added RPI5: config.txt"
+    fi
+  fi
+
+  # Future platforms (RPI4, etc.) can be added here
 fi
 
 info "Embedding partition into disk image"

@@ -18,70 +18,26 @@ UefiArm64PrintBacktrace(
     ULONG_PTR StackBottom);
 #endif
 
-#define PL011_BASE   0x09000000U
-#define PL011_FR     (*(volatile ULONG *)(PL011_BASE + 0x18))
-#define PL011_DR     (*(volatile ULONG *)(PL011_BASE + 0x00))
-#define PL011_TXFF   (1u << 5)
+/*
+ * Use the runtime-detected early UART for trap output.
+ * The early_uart.h provides EarlyUartPutc/EarlyUartPuts/EarlyUartPutHex
+ * that use the platform-detected UART address.
+ */
+#include <reactos/arm64/early_uart.h>
 
-#ifdef UEFIBOOT
-#define TrapUartPutc(Ch)                ((void)(Ch))
-#define TrapUartPuts(String)            ((void)(String))
-#define TrapUartPutHex(Value, Nibbles)  ((void)(Value), (void)(Nibbles))
-#define TrapUartPutDec(Value)           ((void)(Value))
-#else
-static VOID TrapUartPutc(char Ch)
-{
-    while (PL011_FR & PL011_TXFF)
-    {
-        __asm__ __volatile__("yield");
-    }
-    PL011_DR = (unsigned char)Ch;
-}
-
-static VOID TrapUartPuts(const char *String)
-{
-    while (*String)
-    {
-        if (*String == '\n')
-            TrapUartPutc('\r');
-        TrapUartPutc(*String++);
-    }
-}
-
-static VOID TrapUartPutHex(ULONGLONG Value, ULONG Nibbles)
-{
-    static const char HexDigits[] = "0123456789ABCDEF";
-
-    for (LONG Index = (LONG)Nibbles - 1; Index >= 0; --Index)
-    {
-        ULONG Shift = (ULONG)Index * 4;
-        TrapUartPutc(HexDigits[(Value >> Shift) & 0xFULL]);
-    }
-}
+/*
+ * Trap UART output macros - use the runtime-detected early UART.
+ * These work both under UEFI boot (after EarlyUartInitialize) and
+ * non-UEFI boot (direct hardware access with detected address).
+ */
+#define TrapUartPutc(Ch)                EarlyUartPutc(Ch)
+#define TrapUartPuts(String)            EarlyUartPuts(String)
+#define TrapUartPutHex(Value, Nibbles)  EarlyUartPutHex((UINT64)(Value), (Nibbles))
 
 static VOID TrapUartPutDec(ULONG Value)
 {
-    char Buffer[10];
-    ULONG Pos = 0;
-
-    if (Value == 0)
-    {
-        TrapUartPutc('0');
-        return;
-    }
-
-    while (Value && Pos < RTL_NUMBER_OF(Buffer))
-    {
-        Buffer[Pos++] = (char)('0' + (Value % 10));
-        Value /= 10;
-    }
-
-    while (Pos)
-    {
-        TrapUartPutc(Buffer[--Pos]);
-    }
+    EarlyUartPutDec(Value);
 }
-#endif
 
 DBG_DEFAULT_CHANNEL(WARNING);
 

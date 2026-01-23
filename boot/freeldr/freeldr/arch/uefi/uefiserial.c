@@ -27,8 +27,21 @@ static BOOLEAN FirmwareSerialDisabled = FALSE;
 EFI_GUID gEfiSerialIoProtocolGuid = EFI_SERIAL_IO_PROTOCOL_GUID;
 
 #if defined(_M_ARM64) || defined(__aarch64__)
-/* PL011 UART registers and addresses for ARM64 platforms */
-#define PL011_UART_BASE    0x09000000  /* QEMU ARM64 virt machine UART0 address */
+/* PL011 UART registers and addresses for ARM64 platforms
+ *
+ * Platform-specific UART addresses:
+ *   - QEMU virt:    0x09000000
+ *   - Raspberry Pi 5 (BCM2712): 0x107d001000 (UART0 on debug header)
+ *   - Raspberry Pi 4 (BCM2711): 0xFE201000
+ */
+#if defined(TARGET_QEMU_VIRT)
+#define PL011_UART_BASE    0x09000000ULL
+#elif defined(TARGET_RPI4)
+#define PL011_UART_BASE    0xFE201000ULL
+#else
+/* Default to Raspberry Pi 5 (BCM2712) */
+#define PL011_UART_BASE    0x107D001000ULL
+#endif
 #define PL011_DR           0x000       /* Data Register */
 #define PL011_FR           0x018       /* Flag Register */
 #define PL011_FR_TXFF      (1 << 5)    /* Transmit FIFO Full */

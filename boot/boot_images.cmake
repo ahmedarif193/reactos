@@ -1,5 +1,8 @@
 ## efisys.bin
 
+# Include ARM64 hardware boot media configuration
+include(${CMAKE_SOURCE_DIR}/media/boot/arm64_boot_media.cmake)
+
 # EFI platform ID, used in environ/CMakelists.txt for bootmgfw filename naming also.
 # UEFI bootloader is not built for i386
 if(ARCH STREQUAL "amd64")
@@ -219,12 +222,21 @@ if(_HAVE_BIOS_BOOT)
     set(_LIVECD_ISOHYBRID_DEPS isombr native-isohybrid)
 endif()
 
+# ARM64 boot files: add as graft-points at build time (after path-list)
+set(_LIVECD_ARM64_GRAFT "")
+if(ARM64_BOOT_GRAFT_POINTS)
+    foreach(_graft IN LISTS ARM64_BOOT_GRAFT_POINTS)
+        list(APPEND _LIVECD_ARM64_GRAFT "${_graft}")
+    endforeach()
+endif()
+
 add_custom_target(livecd
     COMMAND native-mkisofs -quiet -o ${REACTOS_LIVECD_ISO} -iso-level 4
         -publisher ${ISO_MANUFACTURER} -preparer ${ISO_MANUFACTURER} -volid ${ISO_VOLNAME} -volset ${ISO_VOLNAME}
         ${ISO_BIOS_BOOT_PARAMS_ISOBOOT} ${ISO_EFI_BOOT_PARAMS_LIVECD} -hide boot.catalog
         -sort ${CMAKE_CURRENT_BINARY_DIR}/bootfiles.sort
         -no-cache-inodes -graft-points -path-list ${CMAKE_CURRENT_BINARY_DIR}/livecd.$<CONFIG>.lst
+        ${_LIVECD_ARM64_GRAFT}
     ${_LIVECD_ISOHYBRID_CMD}
     DEPENDS native-mkisofs ${_LIVECD_ISOHYBRID_DEPS}
     VERBATIM)
@@ -429,12 +441,23 @@ if(_HAVE_BIOS_BOOT)
     set(_HYBRIDCD_ISOHYBRID_DEPS isombr native-isohybrid)
 endif()
 
+# ARM64 boot files: add as graft-points at build time (after path-list)
+set(_HYBRIDCD_ARM64_GRAFT "")
+if(ARM64_BOOT_GRAFT_POINTS)
+    # For hybridcd, prefix with livecd/ to match the hybrid structure
+    foreach(_graft IN LISTS ARM64_BOOT_GRAFT_POINTS)
+        string(REGEX REPLACE "^([^=]+)=" "livecd/\\1=" _graft_prefixed "${_graft}")
+        list(APPEND _HYBRIDCD_ARM64_GRAFT "${_graft_prefixed}")
+    endforeach()
+endif()
+
 add_custom_target(hybridcd
     COMMAND native-mkisofs -quiet -o ${REACTOS_HYBRIDCD_ISO} -iso-level 4
         -publisher ${ISO_MANUFACTURER} -preparer ${ISO_MANUFACTURER} -volid ${ISO_VOLNAME} -volset ${ISO_VOLNAME}
         ${ISO_BIOS_BOOT_PARAMS_ISOBOOT} ${ISO_EFI_BOOT_PARAMS_LIVECD} -hide boot.catalog
         -sort ${CMAKE_CURRENT_BINARY_DIR}/bootfiles.sort
         -duplicates-once -no-cache-inodes -graft-points -path-list ${CMAKE_CURRENT_BINARY_DIR}/hybridcd.$<CONFIG>.lst
+        ${_HYBRIDCD_ARM64_GRAFT}
     ${_HYBRIDCD_ISOHYBRID_CMD}
     DEPENDS bootcd livecd ${_HYBRIDCD_ISOHYBRID_DEPS}
     VERBATIM)
@@ -467,6 +490,7 @@ add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/liveimg.cmake.lst "Profiles" "
 # LiveIMG: BIOS/UEFI bootable, RW FAT32 disk image with all bootcd and livecd files.
 # - Combines bootcd and livecd file sets to create a complete RW system.
 # - Adds boot code (dosmbr/fat32) and ensures UEFI loader is present.
+# - ARM64 boot files are added by the script at build time.
 # - Incremental: depends on the aggregated file list and collected deps.
 
 # Aggregator for building everything needed by liveimg without invoking ISO tools.
@@ -486,15 +510,22 @@ if(DEFINED EFI_PLATFORM_ID)
     set(_LIVEIMG_EFI_PLATFORM_ARG --efi-platform ${EFI_PLATFORM_ID})
 endif()
 
+# ARM64 boot files: pass directory to script for build-time embedding
+set(_LIVEIMG_ARM64_BOOT_DIR)
+if(ARM64_BOOT_GRAFT_POINTS)
+    set(_LIVEIMG_ARM64_BOOT_DIR --arm64-boot-dir ${_ARM64_BOOT_MEDIA_DIR})
+endif()
+
 add_custom_target(liveimg
     COMMAND /usr/bin/env bash ${CMAKE_SOURCE_DIR}/boot/tools/make_reactos_img.sh
             --mode fat32
             --output ${REACTOS_LIVEIMG_IMG}
-            --size $<IF:$<CONFIG:Release>,400,600>
+            --size $<IF:$<CONFIG:Release>,300,300>
             --build-root ${REACTOS_BINARY_DIR}
             --list ${CMAKE_CURRENT_BINARY_DIR}/liveimg.$<CONFIG>.lst
             ${_LIVEIMG_UEFI_FLAG}
             ${_LIVEIMG_EFI_PLATFORM_ARG}
+            ${_LIVEIMG_ARM64_BOOT_DIR}
     DEPENDS liveimg_deps ${_LIVEIMG_BOOTSECT_DEPS} ${CMAKE_CURRENT_BINARY_DIR}/liveimg.$<CONFIG>.lst
     VERBATIM)
 

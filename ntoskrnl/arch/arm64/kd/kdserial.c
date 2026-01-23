@@ -8,6 +8,8 @@
 #include <ntoskrnl.h>
 #define NDEBUG
 #include <debug.h>
+#include <reactos/libs/cportlib/cportlib.h>
+#include "../include/arm64pl011.h"
 
 CPPORT DefaultPort = {0};
 extern BOOLEAN KdDebuggerNotPresent;
@@ -43,7 +45,9 @@ KdArm64DrainReceiveFifo(
 
 /*
  * ARM64 KD serial transport over PL011 (MMIO)
- * QEMU virt exposes PL011 at 0x09000000; later we can query ACPI SPCR.
+ * Platform-specific UART addresses are defined in arm64pl011.h.
+ * The default is RPi5 at 0x107d001000; QEMU virt uses 0x09000000.
+ * Later we can query ACPI SPCR for runtime detection.
  */
 BOOLEAN
 NTAPI
@@ -62,7 +66,7 @@ KdPortInitializeEx(_Inout_ PCPPORT PortInformation,
     else
     {
         if (ComPortNumber == 1)
-            Base = (PUCHAR)(ULONG_PTR)0x09000000ULL; /* QEMU virt PL011 */
+            Base = (PUCHAR)KI_ARM64_PL011_VA; /* QEMU virt PL011 via KSEG0 identity map */
         else
             Base = NULL;
     }
@@ -70,6 +74,8 @@ KdPortInitializeEx(_Inout_ PCPPORT PortInformation,
     Baud = (PortInformation->BaudRate != 0) ? PortInformation->BaudRate : 115200;
 
     PortInformation->Address = Base;
+    if (EarlyUartInitialized && (EarlyUartBaseAddress != 0))
+        PortInformation->Flags |= CPPORT_FLAG_KEEP_BAUD;
     Status = CpInitialize(PortInformation, Base, Baud);
     if (!NT_SUCCESS(Status))
     {

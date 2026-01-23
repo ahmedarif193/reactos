@@ -62,72 +62,13 @@ DBG_DEFAULT_CHANNEL(WARNING);
 #define ARM64_PX_MASK         0x1FFULL
 #define ARM64_PXI_SHIFT       39
 
-/* Simple UART output for critical debugging during MMU switches */
-#define PL011_BASE   0x09000000U
-#define PL011_FR     (*(volatile ULONG *)(PL011_BASE + 0x18))
-#define PL011_DR     (*(volatile ULONG *)(PL011_BASE + 0x00))
-#define PL011_TXFF   (1u << 5)
+/* UART output using runtime-detected address from early_uart.h */
+#include <reactos/arm64/early_uart.h>
 
-#ifdef UEFIBOOT
-static inline VOID UartPutc(char Ch)
-{
-    (void)Ch;
-}
-
-static inline VOID UartPuts(const char *String)
-{
-    (void)String;
-}
-
-static inline VOID UartPutHex64(ULONGLONG Value)
-{
-    (void)Value;
-}
-
-static inline VOID UartPutHex32(ULONG Value)
-{
-    (void)Value;
-}
-#else
-static inline VOID UartPutc(char Ch)
-{
-    while (PL011_FR & PL011_TXFF)
-    {
-        __asm__ __volatile__("yield");
-    }
-    PL011_DR = (unsigned char)Ch;
-}
-
-static inline VOID UartPuts(const char *String)
-{
-    while (*String)
-    {
-        if (*String == '\n')
-            UartPutc('\r');
-        UartPutc(*String++);
-    }
-}
-
-static inline VOID UartPutHex64(ULONGLONG Value)
-{
-    static const char HexDigits[] = "0123456789ABCDEF";
-    for (LONG Index = 15; Index >= 0; --Index)
-    {
-        ULONG Shift = (ULONG)Index * 4;
-        UartPutc(HexDigits[(Value >> Shift) & 0xFULL]);
-    }
-}
-
-static inline VOID UartPutHex32(ULONG Value)
-{
-    static const char HexDigits[] = "0123456789ABCDEF";
-    for (LONG Index = 7; Index >= 0; --Index)
-    {
-        ULONG Shift = (ULONG)Index * 4;
-        UartPutc(HexDigits[(Value >> Shift) & 0xFUL]);
-    }
-}
-#endif
+static inline VOID UartPutc(char Ch) { EarlyUartPutc(Ch); }
+static inline VOID UartPuts(const char *String) { EarlyUartPuts(String); }
+static inline VOID UartPutHex64(ULONGLONG Value) { EarlyUartPutHex(Value, 16); }
+static inline VOID UartPutHex32(ULONG Value) { EarlyUartPutHex((UINT64)Value, 8); }
 
 /* ARRAYSIZE fallback if not defined */
 #ifndef ARRAYSIZE
@@ -331,7 +272,8 @@ static BOOLEAN page_tables_initialized = FALSE;
 
 #define ARM64_KSEG0_L0_INDEX      (((ULONGLONG)ARM64_KSEG0_BASE >> 39) & 0x1FFULL)
 #define ARM64_KERNEL_L1_TABLES    4U
-#define ARM64_USER_L1_TABLES      4U
+/* 8 L1 tables to cover 4TB user address range for high physical addresses */
+#define ARM64_USER_L1_TABLES      8U
 #define ARM64_KUSER_SHARED_L0_INDEX (((ULONGLONG)KI_USER_SHARED_DATA >> 39) & 0x1FFULL)
 
 /* Page table bookkeeping */
@@ -440,19 +382,21 @@ extern SIZE_T OsLoaderSize;
 #define TCR_EL12_SYSREG    "S3_5_C2_C0_2"
 #define MAIR_EL12_SYSREG   "S3_5_C10_C2_0"
 
-/*
- * Convert a pointer in the identity window (VA == PA) to a physical address.
- * MUST NOT be called with a KSEG0 or other high-half VA.
- */
+/* Convert identity-mapped pointer to physical address */
 static UINT64 phys_from_ptr(const VOID *ptr)
 {
     UINT64 va = (UINT64)(uintptr_t)ptr;
 
+    if (va == 0)
+    {
+        EarlyUartPuts("[PT] FATAL: NULL page table pointer\n");
+        for (;;) __asm__ volatile("wfi");
+    }
+
     if (va >= ARM64_KSEG0_BASE)
     {
-        UartPuts("ARM64: FATAL phys_from_ptr outside identity window\n");
-        for (;;)
-            __asm__ volatile("wfi");
+        EarlyUartPuts("[PT] FATAL: VA outside identity window\n");
+        for (;;) __asm__ volatile("wfi");
     }
 
     return va;
@@ -629,18 +573,9 @@ static UINT64 get_l2_slot_index(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_ta
 static BOOLEAN Arm64UpdateMappingAttributes(ULONGLONG Va, ULONGLONG Size, UINT64 set_mask, UINT64 clear_mask);
 static VOID Arm64ApplyImageSectionProtections(VOID);
 
-/* PL011 UART debugging helpers - defined early for use throughout */
-static inline VOID Pl011RawPutc(char Ch)
-{
-    volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-    while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-    Uart[0] = Ch;
-}
-
-static inline VOID Pl011RawPuts(const char *S)
-{
-    while (*S) { if (*S == '\n') Pl011RawPutc('\r'); Pl011RawPutc(*S++); }
-}
+/* PL011 UART debugging helpers - enabled for page table debugging */
+static inline VOID Pl011RawPutc(char Ch) { EarlyUartPutc(Ch); }
+static inline VOID Pl011RawPuts(const char *S) { EarlyUartPuts(S); }
 
 #define ARM64_PT_VERBOSE 0
 #define ARM64_PT_LOG(S) do { if (ARM64_PT_VERBOSE) Pl011RawPuts(S); } while (0)
@@ -805,6 +740,22 @@ allocate_pt_pages(UINTN pages, const char *label)
         ERR("ARM64: AllocatePages failed for %s (%u pages): %lx\n",
             label, (unsigned)pages, (ULONG_PTR)status);
         UartPuts("ARM64: ERROR allocating page table memory\n");
+        return NULL;
+    }
+
+    /*
+     * CRITICAL: Validate the returned address.
+     * Some UEFI firmwares (e.g., RPi5) may return 0 or an otherwise invalid
+     * address even when AllocatePages reports success. Address 0 is never
+     * valid for page tables, and addresses must be page-aligned.
+     */
+    if (addr == 0 || (addr & (PAGE_SIZE - 1)) != 0)
+    {
+        ERR("ARM64: AllocatePages returned invalid address 0x%llx for %s\n",
+            (unsigned long long)addr, label);
+        UartPuts("ARM64: ERROR invalid page table address from UEFI\n");
+        /* Free the bogus allocation if possible (addr=0 free is harmless) */
+        bs->FreePages(addr, pages);
         return NULL;
     }
 
@@ -2099,13 +2050,6 @@ Arm64MappingPlanAddMapping(
     Request->Attributes = Attributes;
     Request->TableOnly = TableOnly;
 
-    TRACE("ARM64: MappingPlan add target=%d VA=0x%llx PA=0x%llx size=0x%llx attrs=0x%lx\n",
-          Target,
-          (unsigned long long)Request->VirtualBase,
-          (unsigned long long)Request->PhysicalBase,
-          (unsigned long long)Request->Size,
-          Attributes);
-
     return TRUE;
 }
 
@@ -2139,14 +2083,6 @@ Arm64EnsureRangeTables(
     const ULONGLONG traceKseg0High = 0x143000000ULL;
     const ULONGLONG tracePagedHigh = ARM64_PAGED_POOL_BASE + ARM64_PAGED_POOL_INIT_BYTES;
     BOOLEAN traceEntry = KernelSpace;
-
-    if (traceEntry)
-    {
-        TRACE("ARM64: EnsureRangeTables base=0x%llx size=0x%llx kernel=%d\n",
-              (unsigned long long)VirtualBase,
-              (unsigned long long)Size,
-              KernelSpace);
-    }
 
     while (Va < End)
     {
@@ -2201,14 +2137,6 @@ Arm64EnsureRangeTables(
                     pte_write(&l0_table[l0_idx],
                               phys_from_ptr(&arm64_kernel_l1_tables[slot][0]) | PTE_TYPE_VALID
                               | PTE_TYPE_TABLE);
-                    l1_table = arm64_kernel_l1_tables[slot];
-                    if (log_va)
-                    {
-                        TRACE("ARM64: EnsureRangeTables VA=0x%llx allocated L1 slot=%llu table=%p\n",
-                              (unsigned long long)Va,
-                              (unsigned long long)slot,
-                              (void *)l1_table);
-                    }
                 }
                 else
                 {
@@ -2218,13 +2146,6 @@ Arm64EnsureRangeTables(
                     RtlZeroMemory(new_l1, PAGE_SIZE);
                     pte_write(&l0_table[l0_idx],
                               phys_from_ptr(new_l1) | PTE_TABLE_ATTRS);
-                    l1_table = new_l1;
-                    if (log_va)
-                    {
-                        TRACE("ARM64: EnsureRangeTables VA=0x%llx allocated extra L1 table=%p\n",
-                              (unsigned long long)Va,
-                              (void *)l1_table);
-                    }
                 }
             }
             else
@@ -2277,16 +2198,6 @@ Arm64EnsureRangeTables(
             return FALSE;
         }
 
-        if (log_va)
-        {
-            TRACE("ARM64: EnsureRangeTables VA=0x%llx L0=%llu L1=%llu L2=%p (%s) phys=0x%llx\n",
-                  (unsigned long long)Va,
-                  (unsigned long long)l0_idx,
-                  (unsigned long long)l1_idx,
-                  (void *)l2_table_ptr,
-                  l2_valid_before ? "existing" : "new",
-                  (unsigned long long)phys_span);
-        }
 
         BOOLEAN l3_valid_before = FALSE;
         if (log_va)
@@ -3049,19 +2960,50 @@ static VOID setup_pgtables(VOID)
         }
         Pl011RawPuts("[PT] Paged pool queued\n");
 
-        /* Explicitly map PL011 UART for early debug (Identity) */
+        /* Explicitly map PL011 UART for early debug (Identity + KSEG0) */
         Pl011RawPuts("[PT] Mapping PL011 UART\n");
         {
-            UINT64 uart_pa = 0x09000000;
+            /*
+             * Use runtime-detected UART address from early_uart.h.
+             * EarlyUartBaseAddress is set by EarlyUartInitialize() which is called
+             * before page table setup (in uefimain or early boot code).
+             */
+            UINT64 uart_pa = EarlyUartBaseAddress;
             UINT64 uart_attrs = PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_DEVICE_nGnRnE) |
                                 PTE_BLOCK_OUTER_SHARE | PTE_BLOCK_AF | PTE_BLOCK_PXN | PTE_BLOCK_UXN;
+
+            /* Sanity check - if UART not initialized, fall back to QEMU default */
+            if (uart_pa == 0)
+            {
+                uart_pa = 0x09000000;
+                Pl011RawPuts("[PT] Warning: UART not detected, using QEMU default\n");
+            }
+
+            /* Identity mapping for bootloader use (VA == PA) */
             if (!map_region_hierarchical(uart_pa, uart_pa, PAGE_SIZE, uart_attrs))
             {
-                Pl011RawPuts("[PT] FAILED to map PL011 UART\n");
+                Pl011RawPuts("[PT] FAILED to map PL011 UART (identity)\n");
             }
             else
             {
-                Pl011RawPuts("[PT] PL011 UART mapped\n");
+                Pl011RawPuts("[PT] PL011 UART identity mapped\n");
+            }
+
+            /*
+             * KSEG0 mapping for kernel use.
+             * The kernel accesses UART via: VA = ARM64_KSEG0_BASE + uart_pa
+             * This mapping MUST exist or the kernel will fault on first UART access.
+             */
+            {
+                UINT64 uart_kseg0_va = ARM64_KSEG0_BASE | uart_pa;
+                if (!map_region_hierarchical(uart_kseg0_va, uart_pa, PAGE_SIZE, uart_attrs))
+                {
+                    Pl011RawPuts("[PT] FAILED to map PL011 UART (KSEG0)\n");
+                }
+                else
+                {
+                    Pl011RawPuts("[PT] PL011 UART KSEG0 mapped\n");
+                }
             }
         }
 
@@ -3274,7 +3216,18 @@ VOID Arm64EnablePageTables(VOID)
     // TRACE("ARM64: PT_EN: Orig SCTLR=0x%llx\n", (unsigned long long)sctlr);
 
     UINT64 sctlr_off = sctlr & ~(SCTLR_EL1_M | SCTLR_EL1_C);
-    
+
+    /*
+     * CRITICAL: Flush data caches before disabling them.
+     * On real hardware (e.g., RPi5), cached writes to global state
+     * (like page table pointers) may be lost if we disable caches
+     * without cleaning. QEMU tends to mask this.
+     */
+    Pl011RawPuts("[PT] Flushing dcache before MMU off\n");
+    Arm64FlushDataCacheAll();
+    ARM64_DSB_ISH();
+    ARM64_ISB();
+
     Pl011RawPuts("[PT] Disabling MMU\n");
     // TRACE("ARM64: PT_EN: Disabling MMU\n");
     if (el == 1 || el12) {
@@ -3290,8 +3243,72 @@ VOID Arm64EnablePageTables(VOID)
 
     /* 2. Update Translation Registers (MAIR first, then TCR, then TTBRs) */
     Pl011RawPuts("[PT] Getting page table ptrs\n");
+
+    /*
+     * CRITICAL VALIDATION: Ensure page table pointers are valid.
+     * On some platforms (e.g., RPi5), UEFI AllocatePages may return 0 or
+     * allocation may fail silently, leaving these pointers NULL.
+     */
+    if (!arm64_l0_page_table || !arm64_kernel_l0_table)
+    {
+        Pl011RawPuts("[PT] FATAL: Page table pointers are NULL!\n");
+        Pl011RawPuts("[PT] arm64_l0_page_table=0x");
+        {
+            const char *hex = "0123456789ABCDEF";
+            UINT64 val = (UINT64)(uintptr_t)arm64_l0_page_table;
+            for (int i = 60; i >= 0; i -= 4) Pl011RawPutc(hex[(val >> i) & 0xF]);
+        }
+        Pl011RawPuts("\n[PT] arm64_kernel_l0_table=0x");
+        {
+            const char *hex = "0123456789ABCDEF";
+            UINT64 val = (UINT64)(uintptr_t)arm64_kernel_l0_table;
+            for (int i = 60; i >= 0; i -= 4) Pl011RawPutc(hex[(val >> i) & 0xF]);
+        }
+        Pl011RawPuts("\n[PT] Attempting fallback to static storage...\n");
+
+        /*
+         * Emergency fallback: use static storage for ALL page tables.
+         * We must initialize ALL page table pointers, not just L0 tables,
+         * because setup_pgtables() validates all of them:
+         *   - arm64_l0_page_table, arm64_kernel_l0_table
+         *   - arm64_kuser_l1_table, arm64_kuser_l2_table, arm64_kuser_l3_table
+         *   - arm64_l1_page_tables, arm64_kernel_l1_tables
+         *   - arm64_kernel_l2_tables, arm64_kernel_l3_tables
+         */
+        use_static_page_tables();
+
+        Pl011RawPuts("[PT] After fallback: arm64_l0_page_table=0x");
+        {
+            const char *hex = "0123456789ABCDEF";
+            UINT64 val = (UINT64)(uintptr_t)arm64_l0_page_table;
+            for (int i = 60; i >= 0; i -= 4) Pl011RawPutc(hex[(val >> i) & 0xF]);
+        }
+        Pl011RawPuts("\n");
+
+        /* If still NULL after fallback, we cannot proceed */
+        if (!arm64_l0_page_table || !arm64_kernel_l0_table ||
+            !arm64_kuser_l1_table || !arm64_kuser_l2_table || !arm64_kuser_l3_table ||
+            !arm64_l1_page_tables || !arm64_kernel_l1_tables ||
+            !arm64_kernel_l2_tables || !arm64_kernel_l3_tables)
+        {
+            Pl011RawPuts("[PT] FATAL: Cannot recover page table pointers!\n");
+            for (;;) __asm__ volatile("wfi");
+        }
+
+        /*
+         * Re-run page table setup since we switched to static storage.
+         * This is necessary because the original setup_pgtables() may have
+         * populated different (now-invalid) page table memory.
+         */
+        Pl011RawPuts("[PT] Re-initializing page tables with static storage...\n");
+        setup_pgtables();
+        Pl011RawPuts("[PT] Re-initialization complete\n");
+    }
+
+    /* Get final pointers after any potential fallback */
     const VOID *table0_ptr = (const VOID *)(uintptr_t)arm64_l0_page_table;
     const VOID *table1_ptr = (const VOID *)(uintptr_t)arm64_kernel_l0_table;
+
     Pl011RawPuts("[PT] Calling phys_from_ptr\n");
     UINT64 phys_table0 = phys_from_ptr(table0_ptr);
     UINT64 phys_table1 = phys_from_ptr(table1_ptr);
@@ -3355,12 +3372,96 @@ VOID Arm64EnablePageTables(VOID)
     Pl011RawPuts("[PT] barriers done\n");
     // TRACE("ARM64: PT_EN: TLB Invalidated\n");
 
+    /*
+     * ========== CRITICAL: Ensure PC/SP/VBAR regions are identity-mapped ==========
+     *
+     * On some platforms (e.g., Raspberry Pi 5), the bootloader may be loaded at
+     * physical addresses that are not covered by UEFI memory descriptors, or the
+     * memory map may not include the exact region where freeldr code resides.
+     *
+     * This section MUST run BEFORE verification to ensure we don't hang on
+     * platforms where the PC is not already mapped by the memory descriptor loop.
+     *
+     * We map the critical regions:
+     * 1. Current PC (where we're executing from) - 2MB aligned block + next block
+     * 2. Stack pointer region - 2MB aligned block
+     * 3. Exception vector region - 2MB aligned block
+     */
+    Pl011RawPuts("[PT] Ensuring critical regions are identity-mapped\n");
+    {
+        const char *hex = "0123456789ABCDEF";
+        UINT64 pc_val, sp_val;
+        extern UINT8 arm64_exception_vectors[];
+        UINT64 vbar = (UINT64)(uintptr_t)arm64_exception_vectors;
+
+        /* Standard attributes for code/data: Normal WB, Inner Shareable, AF set */
+        UINT64 code_attrs = PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_NORMAL_WB) |
+                            PTE_BLOCK_INNER_SHARE | PTE_BLOCK_AF;
+
+        /* Get current PC and SP */
+        __asm__ volatile("adr %0, ." : "=r"(pc_val));
+        __asm__ volatile("mov %0, sp" : "=r"(sp_val));
+
+        /* Map PC region (2MB aligned) */
+        {
+            UINT64 pc_2mb_base = pc_val & ~((1ULL << 21) - 1);
+            Pl011RawPuts("[PT] Mapping PC region at 0x");
+            for (int i = 60; i >= 0; i -= 4) Pl011RawPutc(hex[(pc_2mb_base >> i) & 0xF]);
+            Pl011RawPuts("\n");
+
+            if (!map_region_hierarchical(pc_2mb_base, pc_2mb_base, 2 * 1024 * 1024, code_attrs)) {
+                Pl011RawPuts("[PT] WARNING: Failed to map PC region\n");
+            }
+            /* Also map next 2MB block in case we're near a boundary */
+            map_region_hierarchical(pc_2mb_base + (2*1024*1024), pc_2mb_base + (2*1024*1024),
+                                    2*1024*1024, code_attrs);
+        }
+
+        /* Map SP region (2MB aligned) */
+        {
+            UINT64 sp_2mb_base = sp_val & ~((1ULL << 21) - 1);
+            if (sp_2mb_base != (pc_val & ~((1ULL << 21) - 1))) {
+                Pl011RawPuts("[PT] Mapping SP region at 0x");
+                for (int i = 60; i >= 0; i -= 4) Pl011RawPutc(hex[(sp_2mb_base >> i) & 0xF]);
+                Pl011RawPuts("\n");
+
+                if (!map_region_hierarchical(sp_2mb_base, sp_2mb_base, 2 * 1024 * 1024, code_attrs)) {
+                    Pl011RawPuts("[PT] WARNING: Failed to map SP region\n");
+                }
+            }
+        }
+
+        /* Map VBAR region (2MB aligned) */
+        {
+            UINT64 vbar_2mb_base = vbar & ~((1ULL << 21) - 1);
+            UINT64 pc_2mb_base = pc_val & ~((1ULL << 21) - 1);
+            UINT64 sp_2mb_base = sp_val & ~((1ULL << 21) - 1);
+            if (vbar_2mb_base != pc_2mb_base && vbar_2mb_base != sp_2mb_base) {
+                Pl011RawPuts("[PT] Mapping VBAR region at 0x");
+                for (int i = 60; i >= 0; i -= 4) Pl011RawPutc(hex[(vbar_2mb_base >> i) & 0xF]);
+                Pl011RawPuts("\n");
+
+                if (!map_region_hierarchical(vbar_2mb_base, vbar_2mb_base, 2 * 1024 * 1024, code_attrs)) {
+                    Pl011RawPuts("[PT] WARNING: Failed to map VBAR region\n");
+                }
+            }
+        }
+
+        Pl011RawPuts("[PT] Critical regions mapped\n");
+
+        /* Clean dcache to ensure page table writes are visible to the table walker */
+        __asm_dcache_all(0);
+        ARM64_DSB_ISH();
+        Pl011RawPuts("[PT] Dcache cleaned after critical region mapping\n");
+    }
+    /* ========== END CRITICAL REGION MAPPING ========== */
+
     Pl011RawPuts("[PT] Starting diagnostics\n");
     /* ========== DIAGNOSTIC: Verify identity mapping before MMU enable ========== */
     /*
-     * NOTE: This diagnostic section is disabled because TRACE/ERR macros don't work
-     * after ExitBootServices. The verification logic remains for future debugging
-     * but all output is suppressed to avoid hangs.
+     * NOTE: This verification runs AFTER we've ensured the critical regions are
+     * mapped. If verification still fails, there's a fundamental problem with
+     * the page table structure or the mapping function.
      */
     {
         UINT64 current_pc;
@@ -3379,7 +3480,12 @@ VOID Arm64EnablePageTables(VOID)
 
         if (!mapping_valid)
         {
-            Pl011RawPuts("[PT] CRITICAL: PC not identity-mapped!\n");
+            Pl011RawPuts("[PT] CRITICAL: PC not identity-mapped after explicit mapping!\n");
+            /* Print the PC value for debugging */
+            const char *hex = "0123456789ABCDEF";
+            Pl011RawPuts("[PT] PC=0x");
+            for (int i = 60; i >= 0; i -= 4) Pl011RawPutc(hex[(current_pc >> i) & 0xF]);
+            Pl011RawPuts("\n");
             /* Don't proceed - hang here */
             for (;;)
                 __asm__ volatile("wfi");
@@ -3396,7 +3502,7 @@ VOID Arm64EnablePageTables(VOID)
 
             if (!Arm64VerifyIdentityMapping(vbar, NULL, NULL))
             {
-                Pl011RawPuts("[PT] CRITICAL: Exception vector not mapped!\n");
+                Pl011RawPuts("[PT] WARNING: Exception vector not mapped!\n");
             }
             else
             {
@@ -3411,7 +3517,7 @@ VOID Arm64EnablePageTables(VOID)
 
             if (!Arm64VerifyIdentityMapping(sp, NULL, NULL))
             {
-                Pl011RawPuts("[PT] CRITICAL: Stack not mapped!\n");
+                Pl011RawPuts("[PT] WARNING: Stack not mapped!\n");
             }
             else
             {
@@ -3440,36 +3546,16 @@ VOID Arm64EnablePageTables(VOID)
     ARM64_DSB_ISH();
 
     Pl011RawPuts("[PT] Re-enabling MMU\n");
-    /* Dump key addresses for debugging */
+    /* Dump key addresses for debugging - PC region was already mapped earlier */
     {
         UINT64 pc_val;
         const char *hex = "0123456789ABCDEF";
         __asm__ volatile("adr %0, ." : "=r"(pc_val));
-        Pl011RawPuts("[PT] PC=0x");
+        Pl011RawPuts("[PT] Final PC=0x");
         for (int i = 60; i >= 0; i -= 4) Pl011RawPutc(hex[(pc_val >> i) & 0xF]);
         Pl011RawPuts(" TTBR0=0x");
         for (int i = 60; i >= 0; i -= 4) Pl011RawPutc(hex[(phys_table0 >> i) & 0xF]);
         Pl011RawPuts("\n");
-
-        /* CRITICAL: Ensure current PC region is identity-mapped */
-        UINT64 pc_2mb_base = pc_val & ~((1ULL << 21) - 1); /* 2MB aligned */
-        UINT64 pc_attrs = PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_NORMAL_WB) |
-                          PTE_BLOCK_INNER_SHARE | PTE_BLOCK_AF;
-        Pl011RawPuts("[PT] Ensuring PC region identity mapped at 0x");
-        for (int i = 60; i >= 0; i -= 4) Pl011RawPutc(hex[(pc_2mb_base >> i) & 0xF]);
-        Pl011RawPuts("\n");
-        if (!map_region_hierarchical(pc_2mb_base, pc_2mb_base, 2 * 1024 * 1024, pc_attrs)) {
-            Pl011RawPuts("[PT] FAILED to map PC region!\n");
-        } else {
-            Pl011RawPuts("[PT] PC region mapped OK\n");
-        }
-        /* Also ensure next 2MB block in case we're near a boundary */
-        if (!map_region_hierarchical(pc_2mb_base + (2*1024*1024), pc_2mb_base + (2*1024*1024), 2*1024*1024, pc_attrs)) {
-            Pl011RawPuts("[PT] Warning: next 2MB block map failed\n");
-        }
-        /* Re-clean dcache after mapping changes */
-        __asm_dcache_all(0);
-        ARM64_DSB_ISH();
     }
     // TRACE("ARM64: PT_EN: Re-enabling MMU (WXN cleared), SCTLR=0x%llx\n", (unsigned long long)sctlr_on);
     if (el == 1 || el12) {

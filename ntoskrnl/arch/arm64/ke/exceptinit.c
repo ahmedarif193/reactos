@@ -48,27 +48,4 @@ KeInitExceptions(VOID)
     KiArm64FinalVectorsInstalled = TRUE;
     KiArm64SvcConfigured = TRUE;
     KiArm64IrqFiqConfigured = TRUE;
-
-    {
-        CHAR Buf[128];
-        if (NT_SUCCESS(RtlStringCbPrintfA(Buf, sizeof(Buf),
-                                          "[arm64] KeInitExceptions: VBAR -> %p (final vectors on)",
-                                          (PVOID)(ULONG_PTR)Vbar)))
-        {
-            DPRINT1("%s\n", Buf);
-        }
-        KdpDprintf("[arm64] KeInitExceptions: VBAR -> %p\n", (PVOID)(ULONG_PTR)Vbar);
-    }
-
-    {
-        CHAR Buf[128];
-        if (NT_SUCCESS(RtlStringCbPrintfA(Buf, sizeof(Buf),
-                                          "[arm64] KeInitExceptions: flags final=%lu svc=%lu irq=%lu",
-                                          (ULONG)KiArm64FinalVectorsInstalled,
-                                          (ULONG)KiArm64SvcConfigured,
-                                          (ULONG)KiArm64IrqFiqConfigured)))
-        {
-            DPRINT1("%s\n", Buf);
-        }
-    }
 }

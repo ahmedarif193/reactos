@@ -21,8 +21,20 @@
 /*
  * PL011 UART early debug helpers for pre-KD initialization tracing.
  * These are used for early HAL debugging before the kernel debugger is ready.
+ *
+ * Platform-specific UART physical addresses:
+ *   - QEMU virt:    0x09000000
+ *   - Raspberry Pi 5 (BCM2712): 0x107d001000 (UART0 on debug header)
+ *   - Raspberry Pi 4 (BCM2711): 0xFE201000
  */
-#define HAL_ARM64_PL011_BASE     0x09000000UL
+#if defined(TARGET_QEMU_VIRT)
+#define HAL_ARM64_PL011_BASE     0x09000000ULL
+#elif defined(TARGET_RPI4)
+#define HAL_ARM64_PL011_BASE     0xFE201000ULL
+#else
+/* Default to Raspberry Pi 5 (BCM2712) */
+#define HAL_ARM64_PL011_BASE     0x107D001000ULL
+#endif
 #define HAL_ARM64_PL011_VA       (0xFFFF800000000000ULL + HAL_ARM64_PL011_BASE)
 #define HAL_ARM64_PL011_FR_TXFF  (1U << 5)
 

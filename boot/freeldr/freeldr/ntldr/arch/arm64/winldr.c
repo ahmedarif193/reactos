@@ -17,6 +17,7 @@
 #ifdef UEFIBOOT
 #include <uefildr.h>
 #include <drivers/acpi/acpi.h>
+#include <reactos/arm64/early_uart.h>
 extern EFI_SYSTEM_TABLE *GlobalSystemTable;
 #endif
 #include <debug.h>
@@ -89,18 +90,28 @@ static VOID Arm64PopulatePsciConfiguration(PLOADER_PARAMETER_BLOCK LoaderBlock);
 #endif
 
 /* -------------------------------------------------------------------------- */
-/* Minimal PL011 UART helper for bring-up logs (QEMU -M virt default)         */
+/* Minimal PL011 UART helper for bring-up logs                                 */
+/* Platform-specific UART addresses:                                           */
+/*   - QEMU virt:    0x09000000                                                */
+/*   - Raspberry Pi 5 (BCM2712): 0x107d001000 (UART0 on debug header)          */
+/*   - Raspberry Pi 4 (BCM2711): 0xFE201000                                    */
 /* -------------------------------------------------------------------------- */
-#if defined(_M_ARM64) || defined(__aarch64__)
-#define PL011_BASE   0x09000000U      /* QEMU virt PL011 base */
+#if defined(TARGET_QEMU_VIRT)
+#define PL011_BASE   0x09000000ULL
+#elif defined(TARGET_RPI4)
+#define PL011_BASE   0xFE201000ULL
+#else
+/* Default to Raspberry Pi 5 (BCM2712) */
+#define PL011_BASE   0x107D001000ULL
+#endif
 #define PL011_DR     (*(volatile ULONG *)(PL011_BASE + 0x00))
 #define PL011_FR     (*(volatile ULONG *)(PL011_BASE + 0x18))
 #define PL011_TXFF   (1u << 5)
 
-#ifdef UEFIBOOT
-static inline VOID UartPutc(char c) { (void)c; }
-static VOID UartPuts(const char* s) { while (s && *s) UartPutc(*s++); }
-#else
+/*
+ * Raw UART output for debugging. Uses platform-specific PL011_BASE.
+ * Works after ExitBootServices when UEFI console is unavailable.
+ */
 static inline VOID UartPutc(char c)
 {
     /* Use yield instead of wfi while TX FIFO is full (wfi hangs on Apple Silicon HVF). */
@@ -111,8 +122,6 @@ static VOID UartPuts(const char* s)
 {
     while (*s) { if (*s == '\n') UartPutc('\r'); UartPutc(*s++); }
 }
-#endif
-#endif
 
 /* -------------------------------------------------------------------------- */
 /* ARM64-specific data structures for kernel initialization                   */
@@ -244,13 +253,6 @@ MempSetupPaging(
                   (unsigned long long)phys_end);
         }
     }
-
-    TRACE("ARM64: MempSetupPaging StartPage=0x%lx, Pages=0x%lx, KernelMapping=%d\n",
-          (ULONG)StartPage, (ULONG)NumberOfPages, KernelMapping);
-    TRACE("ARM64:   range PA [0x%llx, 0x%llx) len=0x%llx\n",
-          (unsigned long long)phys_start,
-          (unsigned long long)phys_end,
-          (unsigned long long)length);
 
     /* TTBR0: identity map the exact range, using hierarchical granularity */
     if (!Arm64MapRangeHierarchical(phys_start, phys_start, length, attrs_id))
@@ -475,60 +477,19 @@ Arm64SetupForNt(
 {
     TRACE("ARM64: Setting up for NT kernel\n");
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "[PL011] Arm64SetupForNt entered\r\n";
-        while (*msg) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = *msg++;
-        }
-    }
-#endif
 
     /* ARM64 doesn't use GDT/IDT or TSS like x86 */
     *GdtIdt = NULL;
     *PcrBasePage = 0;
     *TssBasePage = 0;
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "[PL011] About to allocate kernel data structures\r\n";
-        while (*msg) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = *msg++;
-        }
-    }
-#endif
 
     /* Allocate kernel data structures including stacks */
     if (!Arm64AllocateKernelDataStructures())
     {
         ERR("ARM64: Failed to allocate kernel data structures\n");
-#if defined(_M_ARM64) || defined(__aarch64__)
-        {
-            volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-            const char *msg = "[PL011] ERROR: Arm64AllocateKernelDataStructures FAILED\r\n";
-            while (*msg) {
-                while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-                Uart[0] = *msg++;
-            }
-        }
-#endif
         return FALSE;
     }
-
-#if defined(_M_ARM64) || defined(__aarch64__)
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "[PL011] Kernel data structures allocated successfully\r\n";
-        while (*msg) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = *msg++;
-        }
-    }
-#endif
 
     /*
      * Populate LoaderBlock with stack and structure pointers.
@@ -585,10 +546,18 @@ Arm64SetupForNt(
     LoaderBlock->u.Arm64.PsciFlags   = 0;
 #ifdef UEFIBOOT
     Arm64PopulatePsciConfiguration(LoaderBlock);
-#endif
     TRACE("ARM64: PSCI configuration - conduit=%lu flags=0x%04lx\n",
           LoaderBlock->u.Arm64.PsciConduit,
           LoaderBlock->u.Arm64.PsciFlags);
+
+    /*
+     * Pass the detected UART address to the kernel.
+     * This was detected earlier via ACPI SPCR or SMBIOS and stored in EarlyUartBaseAddress.
+     * The kernel needs this to initialize its early UART output before KD is available.
+     */
+    LoaderBlock->u.Arm64.EarlyUartAddress = EarlyUartBaseAddress;
+    TRACE("ARM64: Early UART address passed to kernel: 0x%llx\n",
+          (unsigned long long)LoaderBlock->u.Arm64.EarlyUartAddress);
 
     /* Any additional exception vector setup is expected to be done by the kernel */
 
@@ -601,39 +570,14 @@ Arm64SetupForNt(
 
     TRACE("ARM64: Successfully set up for NT kernel\n");
     return TRUE;
+#endif
 }
 
 VOID
 WinLdrSetProcessorContext(
     _In_ USHORT OperatingSystemVersion)
 {
-#if defined(_M_ARM64) || defined(__aarch64__)
-    /* Direct PL011 UART output - works after ExitBootServices */
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "\r\n[PL011] WinLdrSetProcessorContext entered\r\n";
-        while (*msg) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = *msg++;
-        }
-    }
-    UartPuts("ARM64: WinLdrSetProcessorContext called\n");
-#endif
-
     Arm64ConfigureProcessorContext(OperatingSystemVersion);
-
-#if defined(_M_ARM64) || defined(__aarch64__)
-    /* Direct PL011 UART output after page table enable */
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "[PL011] WinLdrSetProcessorContext completed\r\n";
-        while (*msg) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = *msg++;
-        }
-    }
-    UartPuts("ARM64: WinLdrSetProcessorContext completed\n");
-#endif
 }
 
 /* Provide the machine-dependent setup entry used by the generic NT loader path */
@@ -645,31 +589,8 @@ WinLdrSetupMachineDependent(
     ULONG PcrBasePage = 0;
     ULONG TssBasePage = 0;
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    /* Direct PL011 UART output - works after ExitBootServices */
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "[PL011] WinLdrSetupMachineDependent entered\r\n";
-        while (*msg) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = *msg++;
-        }
-    }
-#endif
-
     /* Delegate to the ARM64-specific setup; GDT/IDT/TSS are not used on AArch64 */
     (void)Arm64SetupForNt(LoaderBlock, &GdtIdt, &PcrBasePage, &TssBasePage);
-
-#if defined(_M_ARM64) || defined(__aarch64__)
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "[PL011] WinLdrSetupMachineDependent completed\r\n";
-        while (*msg) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = *msg++;
-        }
-    }
-#endif
 }
 
 /* -------------------------------------------------------------------------- */
@@ -705,6 +626,12 @@ Arm64ConfigureProcessorContext(USHORT OperatingSystemVersion)
 
     TRACE("ARM64: WinLdrSetProcessorContext\n");
 
+    /* DEBUG: Test UART before page table switch */
+    EarlyUartPuts("\r\n[WinLdr] BEFORE Arm64EnablePageTables\r\n");
+    EarlyUartPuts("[WinLdr] EarlyUartBaseAddress = 0x");
+    EarlyUartPutHex(EarlyUartBaseAddress, 16);
+    EarlyUartPuts("\r\n");
+
     /*
      * UEFI typically leaves us in EL1 with MMU on. We now switch to our
      * own page tables (TTBR0 identity, TTBR1 kernel) to ensure KSEG0
@@ -713,26 +640,23 @@ Arm64ConfigureProcessorContext(USHORT OperatingSystemVersion)
 #ifdef UEFIBOOT
     /* Avoid firmware serial callbacks once we swap translation tables. */
     UefiSerialDisableFirmware();
-#endif
     Arm64EnablePageTables();
 
+    /* DEBUG: Test UART after page table switch */
+    EarlyUartPuts("[WinLdr] AFTER Arm64EnablePageTables\r\n");
+
     /*
-     * Clean up identity mappings in TTBR0 (user space) before kernel entry.
+     * NOTE: We do NOT clear TTBR0 identity mappings here because:
+     * 1. FreeLoader is still executing from identity-mapped addresses
+     * 2. Clearing TTBR0 now would cause translation faults when returning
+     * 3. The kernel will clear these mappings itself after initialization
      *
-     * FreeLoader creates identity mappings in low memory (0x0000...) to allow
-     * code to run during page table switches. These mappings occupy user-space
-     * virtual addresses and would clash with the kernel's user-mode memory
-     * management if left in place.
-     *
-     * The kernel code runs from kernel-space addresses (0xFFFF..., TTBR1) so
-     * clearing TTBR0 mappings is safe. The kernel will set up fresh user-space
-     * page tables for each process.
-     *
-     * NOTE: This MUST be called AFTER Arm64EnablePageTables() because we need
-     * the MMU enabled and page tables active for the TLB invalidation to work.
-     * It MUST be called BEFORE jumping to KiSystemStartup().
+     * The identity mappings in TTBR0 are harmless during kernel startup
+     * because the kernel runs from TTBR1 (kernel space 0xFFFF...). The
+     * kernel's memory manager will clear TTBR0 when setting up the first
+     * user process.
      */
-    Arm64ClearIdentityMappings();
+#endif
 }
 
 /* WinLdrpDumpMemoryDescriptors and WinLdrLoadModule are defined in the main winldr.c */
@@ -758,17 +682,6 @@ Arm64AllocateKernelDataStructures(VOID)
 {
     TRACE("ARM64: Allocating kernel data structures\n");
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "[PL011] Arm64AllocateKernelDataStructures entered\r\n";
-        while (*msg) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = *msg++;
-        }
-    }
-#endif
-
     /* Allocate the ARM64 kernel data block which contains all stacks and structures.
        This returns a physical allocation in the loader's address space. */
     KernelDataBlock = MmAllocateMemoryWithType(sizeof(ARM64_KERNEL_DATA), LoaderMemoryData);
@@ -776,43 +689,11 @@ Arm64AllocateKernelDataStructures(VOID)
     {
         ERR("ARM64: Failed to allocate kernel data block of size %zu bytes\n",
             sizeof(ARM64_KERNEL_DATA));
-#if defined(_M_ARM64) || defined(__aarch64__)
-        {
-            volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-            const char *msg = "[PL011] ERROR: MmAllocateMemoryWithType FAILED\r\n";
-            while (*msg) {
-                while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-                Uart[0] = *msg++;
-            }
-        }
-#endif
         return FALSE;
     }
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "[PL011] MmAllocateMemoryWithType succeeded\r\n";
-        while (*msg) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = *msg++;
-        }
-    }
-#endif
-
     /* Zero out the entire data block for clean initialization */
     RtlZeroMemory(KernelDataBlock, sizeof(ARM64_KERNEL_DATA));
-
-#if defined(_M_ARM64) || defined(__aarch64__)
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "[PL011] RtlZeroMemory completed\r\n";
-        while (*msg) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = *msg++;
-        }
-    }
-#endif
 
     /*
      * Initialize the KTHREAD structure's stack fields.
@@ -850,17 +731,6 @@ Arm64AllocateKernelDataStructures(VOID)
     TRACE("ARM64: Prcb at %p, Process at %p, Thread at %p\n",
           KernelDataBlock->Prcb, KernelDataBlock->InitialProcess, KernelDataBlock->InitialThread);
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "[PL011] About to map kernel data block\r\n";
-        while (*msg) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = *msg++;
-        }
-    }
-#endif
-
     /* Mirror the kernel data block into KSEG0 so the kernel stack & PCR are accessible */
     {
         ULONGLONG block_pa = (ULONGLONG)(ULONG_PTR)KernelDataBlock;
@@ -877,16 +747,6 @@ Arm64AllocateKernelDataStructures(VOID)
                 (unsigned long long)block_pa,
                 (unsigned long long)block_va,
                 (unsigned long long)map_size);
-#if defined(_M_ARM64) || defined(__aarch64__)
-            {
-                volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-                const char *msg = "[PL011] ERROR: Arm64MapVirtualMemory FAILED\r\n";
-                while (*msg) {
-                    while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-                    Uart[0] = *msg++;
-                }
-            }
-#endif
             return FALSE;
         }
 
@@ -895,42 +755,10 @@ Arm64AllocateKernelDataStructures(VOID)
               (unsigned long long)map_size);
     }
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "[PL011] Kernel data block mapped, checking shared user data\r\n";
-        while (*msg) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = *msg++;
-        }
-    }
-#endif
-
     if (!Arm64EnsureSharedUserDataMapped())
     {
-#if defined(_M_ARM64) || defined(__aarch64__)
-        {
-            volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-            const char *msg = "[PL011] ERROR: Arm64EnsureSharedUserDataMapped FAILED\r\n";
-            while (*msg) {
-                while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-                Uart[0] = *msg++;
-            }
-        }
-#endif
         return FALSE;
     }
-
-#if defined(_M_ARM64) || defined(__aarch64__)
-    {
-        volatile ULONG *Uart = (volatile ULONG *)0x09000000UL;
-        const char *msg = "[PL011] Arm64AllocateKernelDataStructures completed successfully\r\n";
-        while (*msg) {
-            while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-            Uart[0] = *msg++;
-        }
-    }
-#endif
 
     return TRUE;
 }

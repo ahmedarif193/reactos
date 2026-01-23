@@ -778,7 +778,16 @@ UefiGetBlockHandleForFileId(ULONG FileId)
 PCCHAR
 UefiGetArcPathForFileId(ULONG FileId)
 {
-    DISKCONTEXT* Context = FsGetDeviceSpecific(FileId);
+    DISKCONTEXT* Context;
+    ULONG DeviceId;
+
+    /* Get the underlying disk device from the file */
+    DeviceId = FsGetDeviceId(FileId);
+    if (DeviceId == INVALID_FILE_ID)
+        return NULL;
+
+    /* Get the disk context from the device */
+    Context = FsGetDeviceSpecific(DeviceId);
     return (Context && Context->ArcDevicePath[0]) ? Context->ArcDevicePath : NULL;
 }
 

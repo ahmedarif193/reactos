@@ -206,11 +206,6 @@ KdpDebugLogInit(
 {
     NTSTATUS Status = STATUS_SUCCESS;
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] KdpDebugLogInit: ENTRY BootPhase=%d KdpDebugMode.File=%d\n",
-            BootPhase, KdpDebugMode.File);
-#endif
-
     if (!KdpDebugMode.File)
         return STATUS_PORT_DISCONNECTED;
 

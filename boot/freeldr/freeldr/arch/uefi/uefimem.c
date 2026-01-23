@@ -12,6 +12,10 @@
 #include <uefildr.h>
 #include <debug.h>
 
+#ifdef _M_ARM64
+#include <reactos/arm64/early_uart.h>
+#endif
+
 DBG_DEFAULT_CHANNEL(WARNING);
 
 /* HELPERS *******************************************************************/
@@ -72,7 +76,7 @@ EFI_HANDLE PublicBootHandle;
 static PFREELDR_MEMORY_DESCRIPTOR CachedFreeldrMem;
 static ULONG CachedFreeldrCount;
 static BOOLEAN CachedMemoryMapValid;
-static BOOLEAN BootServicesExitedFlag;
+volatile BOOLEAN BootServicesExitedFlag; /* Non-static, volatile: read by timer.c across translation units */
 
 /* Declared elsewhere */
 void _exituefi(VOID);
@@ -474,15 +478,11 @@ UefiExitBootServices(VOID)
         TRACE("Exited boot services\n");
         BootServicesExitedFlag = TRUE;
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-        /* On ARM64, console/serial shutdown is deferred to after ExitBootServices
-         * to keep debug output visible during the transition. */
-        UefiConsMarkBootServicesExited();
-        /* Install exception vectors while we still have a stable identity map. */
-        Arm64InitializeExceptions();
-        /* Note: ARM64 intentionally does NOT call UefiSerialDisableFirmware()
-         * here to keep post-EBS debug output visible. */
-#endif
+        /*
+         * NOTE: Cannot use UART here! After ExitBootServices, UEFI's identity
+         * mappings are GONE. Any memory access to unmapped addresses will fault.
+         * UART output only works AFTER our page tables are set up in mmu_v2.c.
+         */
     }
 }
 

@@ -5,6 +5,9 @@
 # WOW64 multilib: build a 32-bit SysWOW64 subset inside amd64 builds
 set(WOW64_MULTILIB OFF CACHE BOOL "Build a 32-bit SysWOW64 subset inside amd64 builds (no external i386 root required)")
 
+# Debug info: ON = symbols only (5MB), OFF = full debug (24MB)
+set(MINIMAL_DEBUG_INFO ON CACHE BOOL "Generate minimal debug info (symbols only)")
+
 # Build type (Debug, Release, MinSizeRel, RelWithDebInfo)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Choose the type of build." FORCE)

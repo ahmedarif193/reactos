@@ -11,6 +11,7 @@
 #include <uefildr.h>
 #include <arch/uefi/machuefi.h>
 #include <arch/uefi/uefisym.h>
+#include <reactos/arm64/early_uart.h>
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(HWDETECT);
 
@@ -152,23 +153,8 @@ static VOID Arm64Beep(VOID)
 }
 #endif
 
-/* Direct PL011 UART output for post-ExitBootServices debugging */
-#define PL011_UART_BASE   0x09000000UL
-static inline VOID Arm64RawUartPutc(char Ch)
-{
-    volatile ULONG *Uart = (volatile ULONG *)PL011_UART_BASE;
-    while (Uart[0x18 / sizeof(ULONG)] & (1 << 5)) {}
-    Uart[0] = Ch;
-}
-static inline VOID Arm64RawUartPuts(const char *S)
-{
-    while (*S) { if (*S == '\n') Arm64RawUartPutc('\r'); Arm64RawUartPutc(*S++); }
-}
-
 static VOID Arm64PrepareForReactOS(VOID)
 {
-    TRACE("ARM64: Preparing for ReactOS kernel handoff\n");
-
     /*
      * NOTE: We intentionally do NOT call UefiInitializeDebugImageInfo() here.
      * It was already called once during Arm64MachInit() and allocates memory
@@ -193,6 +179,7 @@ static VOID Arm64PrepareForReactOS(VOID)
      * proper cache maintenance (ic iallu, dsb, isb) AFTER ExitBootServices
      * when UEFI services are no longer in use.
      */
+
     UefiPrepareForReactOS();
 
     /*
@@ -210,27 +197,15 @@ static VOID Arm64PrepareForReactOS(VOID)
     /* Complete cache maintenance - safe to do now after ExitBootServices */
     Arm64CompleteCacheMaintenance();
 
-    /*
-     * POST-EXITBOOTSERVICES: UEFI services are NO longer available.
-     * From this point on, use only direct hardware access for debug output.
-     */
-    Arm64RawUartPuts("[ARM64] Post-ExitBootServices: returned from UefiPrepareForReactOS\n");
-
     /* Install FreeLDR synchronous trap handlers so we log detailed faults */
-    Arm64RawUartPuts("[ARM64] Installing exception vectors...\n");
     Arm64InitializeExceptions();
-    Arm64RawUartPuts("[ARM64] Exception vectors installed\n");
 
     /* Initialize generic timer for timekeeping/delays */
-    Arm64RawUartPuts("[ARM64] Initializing timer...\n");
     Arm64InitializeTimer();
-    Arm64RawUartPuts("[ARM64] Timer initialized\n");
 
     /* Final memory barriers */
     Arm64DataMemoryBarrier();
     Arm64InstructionBarrier();
-
-    Arm64RawUartPuts("[ARM64] Arm64PrepareForReactOS complete, returning to loader\n");
 }
 
 /* ARM64 memory management - using UEFI implementation */
@@ -613,11 +588,10 @@ static TIMEINFO* Arm64GetTime(VOID)
 /* Initialize machine abstraction for ARM64 */
 VOID Arm64MachInit(const char *CmdLine)
 {
-    /* Use early debug output to pinpoint crash */
-    if (GlobalSystemTable && GlobalSystemTable->ConOut)
-        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"ARM64: MachInit entry\r\n");
+    /* Initialize early UART detection for platform-specific UART address */
+    EarlyUartInitialize(0);
 
-    /* IMPORTANT: Do NOT install exception vectors during MachInit on UEFI!
+    /* Do NOT install exception vectors during MachInit on UEFI!
      * UEFI firmware has its own exception handling, and installing our vectors
      * while UEFI Boot Services are active will conflict with firmware exception
      * handlers. We install vectors later in Arm64PrepareForReactOS after
@@ -629,11 +603,6 @@ VOID Arm64MachInit(const char *CmdLine)
     /* ARM64 UEFI: Disable screen debug output to keep console clean */
     DebugDisableScreenPort();
 
-    /* Timer initialization deferred - will be done on first use */
-    /* Arm64InitializeTimer() is called lazily from timer functions */
-    if (GlobalSystemTable && GlobalSystemTable->ConOut)
-        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"ARM64: Deferring timer init\r\n");
-
     /* Skip TRACE until we know it's safe */
     /* TRACE("ARM64: Initializing machine abstraction layer\n"); */
 
@@ -641,30 +610,13 @@ VOID Arm64MachInit(const char *CmdLine)
     /* Arm64InitializeTimer(); - Skip, can trap under UEFI */
     /* Arm64InitializeMMU(); - Skip, UEFI manages memory */
 
-    if (GlobalSystemTable && GlobalSystemTable->ConOut)
-        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"ARM64: About to clear MachVtbl\r\n");
-
     /* Clear the machine vtable */
     RtlZeroMemory(&MachVtbl, sizeof(MachVtbl));
 
-    if (GlobalSystemTable && GlobalSystemTable->ConOut)
-        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"ARM64: MachVtbl cleared\r\n");
-
-    /* Console functions - Use UEFI directly */
-    if (GlobalSystemTable && GlobalSystemTable->ConOut)
-        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"ARM64: Setting console functions\r\n");
     MachVtbl.ConsPutChar = UefiConsPutChar;
     MachVtbl.ConsKbHit = UefiConsKbHit;
     MachVtbl.ConsGetCh = UefiConsGetCh;
-
-    if (GlobalSystemTable && GlobalSystemTable->ConOut)
-        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"ARM64: Console functions set\r\n");
-
-    /* Video functions - These all route to UEFI implementations */
-    /* Check if these might be calling something that's not initialized yet */
-    if (GlobalSystemTable && GlobalSystemTable->ConOut)
-        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"ARM64: Setting video functions - using UEFI implementations\r\n");
-
+    
     /* Use direct UEFI function pointers instead of ARM64 wrappers for now */
     MachVtbl.VideoClearScreen = UefiVideoClearScreen;
     MachVtbl.VideoSetDisplayMode = UefiVideoSetDisplayMode;
@@ -679,14 +631,6 @@ VOID Arm64MachInit(const char *CmdLine)
     MachVtbl.VideoSetPaletteColor = UefiVideoSetPaletteColor;
     MachVtbl.VideoGetPaletteColor = UefiVideoGetPaletteColor;
     MachVtbl.VideoSync = UefiVideoSync;
-
-    if (GlobalSystemTable && GlobalSystemTable->ConOut)
-        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"ARM64: Video functions set\r\n");
-
-    /* System functions - Use UEFI directly for most */
-    if (GlobalSystemTable && GlobalSystemTable->ConOut)
-        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"ARM64: Setting system functions\r\n");
-
     MachVtbl.Beep = UefiPcBeep;
     MachVtbl.PrepareForReactOS = Arm64PrepareForReactOS;
     MachVtbl.GetMemoryMap = UefiMemGetMemoryMap;
@@ -704,9 +648,6 @@ VOID Arm64MachInit(const char *CmdLine)
     MachVtbl.InitializeBootDevices = UefiInitializeBootDevices;
     MachVtbl.GetTime = UefiGetTime;
 
-    if (GlobalSystemTable && GlobalSystemTable->ConOut)
-        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"ARM64: All functions set\r\n");
-
     /* TRACE("ARM64: Machine abstraction layer initialized\n"); - Skip TRACE for now */
 
     /* Note: UefiInitializeVideo() will be called from the common UEFI path in uefisetup.c */
@@ -720,11 +661,6 @@ VOID Arm64MachInit(const char *CmdLine)
     /* Initialize GOP (Graphics Output Protocol) for ARM64 */
     /* REMOVED: GOP initialization is deferred until first use in UefiVideoSetDisplayMode */
     /* This avoids issues with double initialization and ensures proper sequencing */
-    if (GlobalSystemTable && GlobalSystemTable->ConOut)
-        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"ARM64: Deferring GOP initialization to first use\r\n");
-
-    if (GlobalSystemTable && GlobalSystemTable->ConOut)
-        GlobalSystemTable->ConOut->OutputString(GlobalSystemTable->ConOut, L"ARM64: MachInit complete, returning\r\n");
 
     /* Use the debug channel to avoid warning */
     UseDebugChannel();

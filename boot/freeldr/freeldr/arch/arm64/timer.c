@@ -43,28 +43,60 @@ static BOOLEAN sunxi_a64_erratum = FALSE;
 /* Get timer frequency */
 ULONGLONG Arm64GetTimerFrequency(VOID)
 {
-#ifdef UEFIBOOT
-    /* Under UEFI, use a safe default frequency to avoid system register access */
-    /* Most ARM64 systems use 24MHz or 19.2MHz */
-    return 24000000ULL; /* 24MHz default */
-#else
+    /*
+     * cntfrq_el0 is readable from EL0 on all compliant ARM64 implementations.
+     * The UEFI firmware must configure CNTKCTL_EL1.EL0PCTEN to allow EL0
+     * access to the physical counter. This is required by UEFI spec since
+     * boot services use the timer.
+     *
+     * Reading cntfrq_el0 should NOT trap on compliant firmware, even during
+     * Boot Services. We previously used a hardcoded default which caused
+     * timestamp calculations to be incorrect.
+     */
     ULONGLONG cntfrq;
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r" (cntfrq));
+
+    /* Sanity check: if frequency is 0, use a reasonable default */
+    if (cntfrq == 0)
+    {
+        /* Most ARM64 systems use 24MHz or 19.2MHz */
+        cntfrq = 24000000ULL;
+    }
+
     return cntfrq;
-#endif
 }
 
 /* Read counter with errata workarounds - Based on U-Boot */
 static ULONGLONG timer_read_counter_safe(VOID)
 {
-#ifdef UEFIBOOT
-    /* Under UEFI, use a simple incrementing counter to avoid system register traps */
-    /* We can't use UEFI Runtime Services here as they might not be available yet */
-    static ULONGLONG fallback_counter = 0;
-    return fallback_counter += 24000; /* Increment by 1ms worth of ticks */
-#else
-    ULONGLONG cntpct, temp;
+    ULONGLONG cntpct;
+#ifndef UEFIBOOT
+    ULONGLONG temp;
+#endif
 
+    /*
+     * cntpct_el0 is the physical counter and should be readable from EL0
+     * on compliant UEFI firmware. The firmware must set CNTKCTL_EL1.EL0PCTEN
+     * to allow this access. Reading cntpct_el0 should NOT trap.
+     *
+     * Previously we used a fake incrementing counter under UEFIBOOT which
+     * caused timestamp values to be zero/invalid when the kernel started.
+     * This broke timing-dependent code.
+     *
+     * The erratum workarounds below are applied when the CPU is known to
+     * have timing counter issues. Under UEFI boot, we skip the errata
+     * detection (which requires MIDR access that may trap) but still do
+     * a standard read which is safe on most platforms.
+     */
+
+#ifdef UEFIBOOT
+    /* Under UEFI: simple read without errata workarounds */
+    /* Most modern ARM64 SoCs don't need the errata workarounds */
+    __asm__ volatile("isb");
+    __asm__ volatile("mrs %0, cntpct_el0" : "=r" (cntpct));
+    return cntpct;
+#else
+    /* Non-UEFI path with errata workarounds */
     if (fsl_erratum_a008585) {
         /*
          * FSL erratum A-008585: ARM generic timer counter has the
@@ -80,7 +112,6 @@ static ULONGLONG timer_read_counter_safe(VOID)
             __asm__ volatile("mrs %0, cntpct_el0" : "=r" (temp));
         }
         return cntpct;
-#ifndef UEFIBOOT
     } else if (sunxi_a64_erratum) {
         /*
          * Sunxi A64 erratum: Sometimes flips lower 11 bits of counter
@@ -91,7 +122,6 @@ static ULONGLONG timer_read_counter_safe(VOID)
             __asm__ volatile("mrs %0, cntpct_el0" : "=r" (cntpct));
         } while ((cntpct & 0x7FF) == 0x7FF || (cntpct & 0x7FF) == 0x000);
         return cntpct;
-#endif
     } else {
         /* Standard read */
         __asm__ volatile("isb");

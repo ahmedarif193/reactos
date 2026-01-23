@@ -267,7 +267,6 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
 {
     ASSERT(NewProcess != NULL);
 
-    /* Use UART output to avoid DPRINT1 hang during TTBR0-switched state */
 #ifdef CONFIG_SMP
     {
         PKIPCR Pcr = KeGetPcr();
@@ -1330,8 +1329,7 @@ KiArm64HandleSynchronousException(
                         InterlockedExchange(&KiArm64DataAbortOwner[ProcessorIndex], 0);
                     }
 
-                    /* ARM64 DEBUG: Log before MmAccessFault for USER address faults */
-Status = MmAccessFault(FaultCodeArg, AddressArg, PreviousMode, TrapFrame);
+                    Status = MmAccessFault(FaultCodeArg, AddressArg, PreviousMode, TrapFrame);
 
                     /* ARM64 DEBUG: Log after MmAccessFault for System Cache faults */
                     if ((ULONG64)AddressArg >= 0xFFFFF98000000000ULL &&

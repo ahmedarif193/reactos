@@ -247,13 +247,14 @@ FrLdrHeapCleanupAll(VOID)
     PHEAP Heap;
 
     Heap = FrLdrDefaultHeap;
-    TRACE("Heap statistics for default heap:\n"
-          "CurrentAlloc=0x%lx, MaxAlloc=0x%lx, LargestAllocation=0x%lx\n"
-          "NumAllocs=%ld, NumFrees=%ld\n",
-          Heap->CurrentAllocBytes, Heap->MaxAllocBytes, Heap->LargestAllocation,
-          Heap->NumAllocs, Heap->NumFrees);
-    TRACE("AllocTime = %I64d, FreeTime = %I64d, sum = %I64d\n",
-        Heap->AllocationTime, Heap->FreeTime, Heap->AllocationTime + Heap->FreeTime);
+    /* Verbose heap statistics disabled for clean boot output */
+    // TRACE("Heap statistics for default heap:\n"
+    //       "CurrentAlloc=0x%lx, MaxAlloc=0x%lx, LargestAllocation=0x%lx\n"
+    //       "NumAllocs=%ld, NumFrees=%ld\n",
+    //       Heap->CurrentAllocBytes, Heap->MaxAllocBytes, Heap->LargestAllocation,
+    //       Heap->NumAllocs, Heap->NumFrees);
+    // TRACE("AllocTime = %I64d, FreeTime = %I64d, sum = %I64d\n",
+    //     Heap->AllocationTime, Heap->FreeTime, Heap->AllocationTime + Heap->FreeTime);
 #endif
 
     /* Release free pages from the default heap */
@@ -261,11 +262,12 @@ FrLdrHeapCleanupAll(VOID)
 
 #if DBG
     Heap = FrLdrTempHeap;
-    TRACE("Heap statistics for temp heap:\n"
-          "CurrentAlloc=0x%lx, MaxAlloc=0x%lx, LargestAllocation=0x%lx\n"
-          "NumAllocs=%ld, NumFrees=%ld\n",
-          Heap->CurrentAllocBytes, Heap->MaxAllocBytes, Heap->LargestAllocation,
-          Heap->NumAllocs, Heap->NumFrees);
+    /* Verbose heap statistics disabled for clean boot output */
+    // TRACE("Heap statistics for temp heap:\n"
+    //       "CurrentAlloc=0x%lx, MaxAlloc=0x%lx, LargestAllocation=0x%lx\n"
+    //       "NumAllocs=%ld, NumFrees=%ld\n",
+    //       Heap->CurrentAllocBytes, Heap->MaxAllocBytes, Heap->LargestAllocation,
+    //       Heap->NumAllocs, Heap->NumFrees);
 #endif
 
     /* Destroy the temp heap */

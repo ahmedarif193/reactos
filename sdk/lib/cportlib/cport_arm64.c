@@ -173,14 +173,43 @@ CpInitialize(
         return STATUS_INVALID_PARAMETER;
     }
 
+    USHORT SavedFlags = Port->Flags;
+
     Port->Address  = Address;
     Port->BaudRate = 0;
-    Port->Flags    = 0;
+    Port->Flags    = SavedFlags;
+    Port->EchoDiscard = 0;
 
     /* Mask all interrupts while the debugger owns the UART */
     Pl011WriteRegister(Address, PL011_IMSC_OFFSET, 0);
 
-    CpSetBaud(Port, BaudRate);
+    if (Port->Flags & CPPORT_FLAG_KEEP_BAUD)
+    {
+        ULONG Control = Pl011ReadRegister(Address, PL011_CR_OFFSET);
+
+        /* If UART is disabled, fall back to full initialization */
+        if ((Control & (PL011_CR_UARTEN | PL011_CR_TXE)) != (PL011_CR_UARTEN | PL011_CR_TXE))
+        {
+            CpSetBaud(Port, BaudRate);
+        }
+        else
+        {
+            /* Preserve existing baud/divisors set by firmware */
+            Port->BaudRate = (BaudRate != 0) ? BaudRate : 115200;
+
+            /* Ensure RX/TX are enabled while keeping divisors intact */
+            if ((Control & (PL011_CR_TXE | PL011_CR_RXE)) != (PL011_CR_TXE | PL011_CR_RXE))
+            {
+                Pl011WriteRegister(Address,
+                                   PL011_CR_OFFSET,
+                                   Control | PL011_CR_UARTEN | PL011_CR_TXE | PL011_CR_RXE);
+            }
+        }
+    }
+    else
+    {
+        CpSetBaud(Port, BaudRate);
+    }
 
     /* Drop any stale bytes queued before KD takes ownership */
     Pl011FlushReceive(Address);
