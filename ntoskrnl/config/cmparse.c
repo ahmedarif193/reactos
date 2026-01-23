@@ -312,7 +312,7 @@ CmpDoCreateChild(IN PHHIVE Hive,
     /* Fill out the key node */
     KeyNode->Signature = CM_KEY_NODE_SIGNATURE;
     KeyNode->Flags = Flags;
-    KeQuerySystemTime(&KeyNode->LastWriteTime);
+    { LARGE_INTEGER SystemTime; KeQuerySystemTime(&SystemTime); KeyNode->LastWriteTime.QuadPart = SystemTime.QuadPart; }
     KeyNode->Spare = 0;
     KeyNode->Parent = ParentCell;
     KeyNode->SubKeyCounts[Stable] = 0;
@@ -545,8 +545,8 @@ CmpDoCreate(IN PHHIVE Hive,
 
         /* Update the timestamp */
         KeQuerySystemTime(&TimeStamp);
-        KeyNode->LastWriteTime = TimeStamp;
-        KeyBody->KeyControlBlock->ParentKcb->KcbLastWriteTime = TimeStamp;
+        KeyNode->LastWriteTime.QuadPart = TimeStamp.QuadPart;
+        KeyBody->KeyControlBlock->ParentKcb->KcbLastWriteTime.QuadPart = TimeStamp.QuadPart;
 
         /* Check if we need to update name maximum */
         if (KeyNode->MaxNameLen < Name->Length)
@@ -995,7 +995,7 @@ CmpCreateLinkNode(IN PHHIVE Hive,
         KeyNode->NameLength = CmpCopyName(Hive, KeyNode->Name, &Name);
         if (KeyNode->NameLength < Name.Length) KeyNode->Flags |= KEY_COMP_NAME;
         KeQuerySystemTime(&TimeStamp);
-        KeyNode->LastWriteTime = TimeStamp;
+        KeyNode->LastWriteTime.QuadPart = TimeStamp.QuadPart;
 
         /* Clear out the rest */
         KeyNode->SubKeyCounts[Stable] = 0;
@@ -1041,8 +1041,8 @@ CmpCreateLinkNode(IN PHHIVE Hive,
 
         /* Update the timestamp */
         KeQuerySystemTime(&TimeStamp);
-        KeyNode->LastWriteTime = TimeStamp;
-        KeyBody->KeyControlBlock->ParentKcb->KcbLastWriteTime = TimeStamp;
+        KeyNode->LastWriteTime.QuadPart = TimeStamp.QuadPart;
+        KeyBody->KeyControlBlock->ParentKcb->KcbLastWriteTime.QuadPart = TimeStamp.QuadPart;
 
         /* Check if we need to update name maximum */
         if (KeyNode->MaxNameLen < Name.Length)

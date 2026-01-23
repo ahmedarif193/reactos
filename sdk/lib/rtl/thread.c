@@ -82,12 +82,19 @@ RtlpCreateUserStack(IN HANDLE ProcessHandle,
 
     /* Reserve memory for the stack */
     Stack = 0;
-    Status = ZwAllocateVirtualMemory(ProcessHandle,
-                                     (PVOID*)&Stack,
-                                     StackZeroBits,
-                                     &StackReserve,
-                                     MEM_RESERVE,
-                                     PAGE_READWRITE);
+    {
+        ULONG AllocationType = MEM_RESERVE;
+#if defined(_WIN64)
+        /* Match NT behavior: prefer high addresses for stacks on 64-bit. */
+        AllocationType |= MEM_TOP_DOWN;
+#endif
+        Status = ZwAllocateVirtualMemory(ProcessHandle,
+                                         (PVOID*)&Stack,
+                                         StackZeroBits,
+                                         &StackReserve,
+                                         AllocationType,
+                                         PAGE_READWRITE);
+    }
     if (!NT_SUCCESS(Status)) return Status;
 
     /* Now set up some basic Initial TEB Parameters */

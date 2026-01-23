@@ -11,9 +11,7 @@
 #undef KeReleaseSpinLock
 
 extern BOOLEAN ExpArm64PoolBootstrapMode;
-#if defined(_M_ARM64) || defined(__aarch64__)
 extern volatile LONG MiArm64PfnLockDepth[MAXIMUM_PROCESSORS];
-#endif
 
 KIRQL
 FASTCALL
@@ -121,7 +119,6 @@ KeAcquireQueuedSpinLock(
     }
 
     KxAcquireSpinLock(Lock);
-#if defined(_M_ARM64) || defined(__aarch64__)
     if (LockNumber == LockQueuePfnLock)
     {
         ULONG CpuIndex = KeGetCurrentProcessorNumber();
@@ -130,7 +127,6 @@ KeAcquireQueuedSpinLock(
             InterlockedIncrement(&MiArm64PfnLockDepth[CpuIndex]);
         }
     }
-#endif
     return OldIrql;
 }
 
@@ -186,7 +182,6 @@ KeReleaseQueuedSpinLock(
     }
 
     KxReleaseSpinLock(Lock);
-#if defined(_M_ARM64) || defined(__aarch64__)
     if (LockNumber == LockQueuePfnLock)
     {
         ULONG CpuIndex = KeGetCurrentProcessorNumber();
@@ -195,7 +190,6 @@ KeReleaseQueuedSpinLock(
             InterlockedDecrement(&MiArm64PfnLockDepth[CpuIndex]);
         }
     }
-#endif
     KeLowerIrql(OldIrql);
 }
 

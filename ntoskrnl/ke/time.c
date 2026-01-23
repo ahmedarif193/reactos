@@ -51,10 +51,7 @@ KiCheckForTimerExpiration(
         /* Check if we are already doing expiration */
         if (!Prcb->TimerRequest)
         {
-#if defined(_M_ARM64)
-            DPRINT1("[arm64] KiCheckForTimerExpiration: Setting TimerRequest, Hand=%lu, IntTime=%llu\n",
-                    Hand, InterruptTime.QuadPart);
-#endif
+        /* Debug disabled for performance */
             /* Request a DPC to handle this */
             Prcb->TimerRequest = (ULONG_PTR)TrapFrame;
             Prcb->TimerHand = Hand;
@@ -101,12 +98,19 @@ KeUpdateSystemTime(IN PKTRAP_FRAME TrapFrame,
     /* Update the tick offset */
     OldTickOffset = InterlockedExchangeAdd(&KiTickOffset, -(LONG)Increment);
 
-    /* If the debugger is enabled, check for break-in request */
+    /*
+     * Break-in polling:
+     *
+     * On KDBG builds we use the built-in debugger and do not support KD break-in
+     * packets. Polling here (timer ISR context) can also lead to spurious entries
+     * into KDBG on headless transports. Keep it disabled for KDBG builds.
+     */
+#ifndef KDBG
     if (KdDebuggerEnabled && KdPollBreakIn())
     {
-        /* Break-in requested! */
         DbgBreakPointWithStatus(DBG_STATUS_CONTROL_C);
     }
+#endif
 
     /* Check for full tick */
     if (OldTickOffset <= (LONG)Increment)

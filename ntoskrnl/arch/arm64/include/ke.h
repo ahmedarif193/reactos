@@ -43,12 +43,27 @@ KeInvalidateTlbEntry(
     ULONG_PTR Va = (ULONG_PTR)Address >> PAGE_SHIFT;
 
     /*
-     * Use inner-shareable barriers (dsb ish) consistent with Windows.
-     * Full-system barriers (dsb sy) are heavier and generally unnecessary
-     * for EL1 VA invalidation.
+     * ARM64 TLB Invalidation (Bring-up / Debug mode)
+     *
+     * TEMPORARY: Using vmalle1is (full EL1 TLB flush, inner shareable) instead
+     * of targeted tlbi vaae1is. This is a "nuke it from orbit" approach that
+     * masks potential ASID/alias/ordering bugs but has severe performance impact.
+     *
+     * Performance impact: vmalle1is flushes ALL EL1 TLB entries across all CPUs
+     * in the inner-shareable domain. On every mapping change or fault path, this
+     * destroys TLB locality and will cause crawling performance once filesystem
+     * cache and paging are active.
+     *
+     * TODO for production: Replace with targeted invalidation once ASID discipline
+     * and alias handling are verified correct:
+     *   __asm__ __volatile__("dsb ishst" ::: "memory");
+     *   __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
+     *   __asm__ __volatile__("dsb ish" ::: "memory");
+     *   __asm__ __volatile__("isb" ::: "memory");
      */
+    (void)Va;  /* Unused - full flush for bring-up */
     __asm__ __volatile__("dsb ish" ::: "memory");
-    __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va));
+    __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
     __asm__ __volatile__("dsb ish" ::: "memory");
     __asm__ __volatile__("isb" ::: "memory");
 }
@@ -68,6 +83,20 @@ VOID
 KiArm64WriteUserTtbr(
     _In_ ULONGLONG DirectoryBase)
 {
+    /*
+     * ARM64 ASID Note (Bring-up):
+     *
+     * TTBR0_EL1 format: [ASID:16][BADDR:48] (with 16-bit ASID if supported).
+     * Here we mask to page alignment, effectively setting ASID=0.
+     *
+     * This is INTENTIONAL for single-core bring-up:
+     * - We flush the entire TLB (vmalle1is) on every context switch
+     * - No ASID-based TLB tagging is used yet
+     * - All processes share ASID=0 semantics
+     *
+     * For SMP/performance: Must preserve ASID bits from DirectoryTableBase,
+     * use targeted TLBI (aside1is), and properly manage ASID allocation.
+     */
     ULONGLONG MaskedBase = DirectoryBase & ~((ULONGLONG)PAGE_SIZE - 1ULL);
 
     __asm__ __volatile__("dsb ishst" ::: "memory");

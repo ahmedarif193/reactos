@@ -230,7 +230,19 @@ MmTrimUserMemory(ULONG Target, ULONG Priority, PULONG NrFreedPages)
                 /* Be sure this is still valid. */
                 if (MmIsAddressValid(Address))
                 {
+#if defined(_M_ARM64) || defined(__aarch64__)
+                    /*
+                     * ARM64: Use MiAddressToPteSafe for user addresses.
+                     *
+                     * ARM64 has split page tables (TTBR0 for user, TTBR1 for kernel).
+                     * MiAddressToPte always uses PTE_BASE which maps TTBR1's self-map.
+                     * For user addresses we need MiAddressToPteTtbr0 which uses the
+                     * TTBR0 alias at PTE_BASE_TTBR0. MiAddressToPteSafe handles this.
+                     */
+                    PMMPTE Pte = MiAddressToPteSafe(Address);
+#else
                     PMMPTE Pte = MiAddressToPte(Address);
+#endif
                     Accessed = Accessed || Pte->u.Hard.Accessed;
                     Pte->u.Hard.Accessed = 0;
 

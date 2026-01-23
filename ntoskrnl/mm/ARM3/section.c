@@ -15,12 +15,6 @@
 #define MODULE_INVOLVED_IN_ARM3
 #include <mm/ARM3/miarm.h>
 
-#if defined(_M_ARM64)
-// Verify that the ARM64-specific MI_MAKE_PROTOTYPE_PTE is being used
-// (shift-based from arch/arm64/include/mm.h, not bitfield-based from miarm.h)
-#pragma message("ARM64: Verifying shift-based MI_MAKE_PROTOTYPE_PTE is active")
-#endif
-
 /* GLOBALS ********************************************************************/
 
 ACCESS_MASK MmMakeSectionAccess[8] =

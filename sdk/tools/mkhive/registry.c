@@ -21,8 +21,8 @@
  * PROJECT:         ReactOS hive maker
  * FILE:            tools/mkhive/registry.c
  * PURPOSE:         Registry code
- * PROGRAMMERS:     Hervé Poussineau
- *                  Hermès Bélusca-Maïto
+ * PROGRAMMERS:     Herve Poussineau
+ *                  Hermes Belusca-Maito
  */
 
 /* INCLUDES *****************************************************************/
@@ -613,7 +613,7 @@ RegDeleteKeyW(
                 ASSERT(HvIsCellDirty(Hive, ParentCell));
 
                 /* Update the write time */
-                KeQuerySystemTime(&Parent->LastWriteTime);
+                { LARGE_INTEGER SystemTime; KeQuerySystemTime(&SystemTime); Parent->LastWriteTime.QuadPart = SystemTime.QuadPart; }
 
                 /* Release the cell */
                 HvReleaseCell(Hive, ParentCell);
@@ -812,7 +812,7 @@ RegSetValueExW(
         KeyNode->MaxValueDataLen = cbData;
 
     /* Save the write time */
-    KeQuerySystemTime(&KeyNode->LastWriteTime);
+    { LARGE_INTEGER SystemTime; KeQuerySystemTime(&SystemTime); KeyNode->LastWriteTime.QuadPart = SystemTime.QuadPart; }
 
     return ERROR_SUCCESS;
 }
@@ -974,7 +974,7 @@ RegDeleteValueW(
     }
 
     /* Set the last write time */
-    KeQuerySystemTime(&KeyNode->LastWriteTime);
+    { LARGE_INTEGER SystemTime; KeQuerySystemTime(&SystemTime); KeyNode->LastWriteTime.QuadPart = SystemTime.QuadPart; }
 
     /* Sanity check */
     ASSERT(HvIsCellDirty(Hive, Key->KeyCellOffset));

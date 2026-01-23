@@ -2635,9 +2635,22 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         MiMapPDEs((PVOID)MI_MAPPING_RANGE_START, (PVOID)MI_MAPPING_RANGE_END);
         MmFirstReservedMappingPte = MiAddressToPte((PVOID)MI_MAPPING_RANGE_START);
         MmLastReservedMappingPte = MiAddressToPte((PVOID)MI_MAPPING_RANGE_END);
-        /* Initialize hyperspace mapping offset to last valid index (MI_HYPERSPACE_PTES - 1).
-         * The hypermap code uses this as the first PTE index to access, then decrements.
-         * With MI_HYPERSPACE_PTES = 256, valid indices are 0-255, so start at 255. */
+
+        /*
+         * ARM64: Initialize HyperSpace offset counter.
+         *
+         * NOTE: We do NOT clear the HyperSpace PTEs here because:
+         * 1. FreeLDR may have set up PTEs with "reserved" descriptors (bits [1:0] = 01)
+         * 2. Writing to certain PTEs (specifically index 72) during early boot can cause hangs
+         * 3. The HyperSpace mapping code handles this by:
+         *    - Pre-flushing TLB before modifying PTEs
+         *    - Clearing "reserved" PTEs to 0 before writing valid values
+         *    - Skipping problematic index 72 entirely
+         *    - Post-flushing TLB after writing PTEs (via MI_WRITE_VALID_PTE)
+         *
+         * The HyperSpace PTEs will be properly initialized on first use via
+         * MiMapPageInHyperSpace which handles all ARM64-specific requirements.
+         */
         MmFirstReservedMappingPte->u.Hard.PageFrameNumber = MI_HYPERSPACE_PTES - 1;
 
         DPRINT("%s\n", "[arm64] MiInitMachineDependent: initializing PFN database");
@@ -3068,6 +3081,63 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             }
 
             DPRINT("%s\n", "[arm64] MiInitMachineDependent: session space alias pages mapped");
+        }
+
+        /* CRITICAL for ARM64: Pre-map page tables for System Cache.
+         * The System Cache region (MI_SYSTEM_CACHE_START to MI_SYSTEM_CACHE_END) is used
+         * by the file system cache (CcRos* functions). When section views are mapped
+         * into this region, MmCreateVirtualMapping needs to access the self-map PTEs.
+         * If the intermediate page tables (PPE, PDE) don't exist, the self-map access
+         * will fault, causing a crash during volume mount.
+         *
+         * NOTE: We only pre-map a reasonable initial portion of the cache space
+         * (first 1GB) since the full 1TB range would consume too many pages.
+         */
+        {
+            PVOID SysCacheStart = MmSystemCacheStart;
+            /* Pre-map only first 1GB to conserve memory - more will be mapped on demand */
+            PVOID SysCacheEnd = (PUCHAR)SysCacheStart + (1ULL * 1024 * 1024 * 1024) - 1;
+
+            DPRINT("%s\n", "[arm64] MiInitMachineDependent: pre-mapping system cache page tables");
+            MiMapPPEs(SysCacheStart, SysCacheEnd);
+            MiMapPDEs(SysCacheStart, SysCacheEnd);
+
+            /* Ensure the self-map alias pages for System Cache are accessible */
+            PMMPTE FirstPte = MiAddressToPte(SysCacheStart);
+            PMMPTE LastPte = MiAddressToPte(SysCacheEnd);
+            PMMPDE FirstPde = MiAddressToPde(SysCacheStart);
+            PMMPDE LastPde = MiAddressToPde(SysCacheEnd);
+            PMMPPE FirstPpe = MiAddressToPpe(SysCacheStart);
+            PMMPPE LastPpe = MiAddressToPpe(SysCacheEnd);
+
+            DPRINT("%s\n", "[arm64] MiInitMachineDependent: mapping system cache alias pages");
+
+            /* Ensure the PPE alias pages are backed */
+            MiArm64MapAliasForPointer(FirstPpe);
+            if (LastPpe != FirstPpe)
+            {
+                MiArm64MapAliasForPointer(LastPpe);
+            }
+
+            /* Ensure the PDE alias pages are backed */
+            MiArm64MapAliasForPointer(FirstPde);
+            if (LastPde != FirstPde)
+            {
+                MiArm64MapAliasForPointer(LastPde);
+            }
+
+            /* Ensure the PTE alias pages are backed */
+            for (PMMPTE CurrentPte = FirstPte; CurrentPte <= LastPte; CurrentPte += 512)
+            {
+                MiArm64MapAliasForPointer(CurrentPte);
+            }
+            if (((ULONG_PTR)LastPte & ~((ULONG_PTR)PAGE_SIZE - 1)) !=
+                ((ULONG_PTR)(FirstPte + ((LastPte - FirstPte) / 512) * 512) & ~((ULONG_PTR)PAGE_SIZE - 1)))
+            {
+                MiArm64MapAliasForPointer(LastPte);
+            }
+
+            DPRINT("%s\n", "[arm64] MiInitMachineDependent: system cache page tables mapped");
         }
 
         /* CRITICAL for ARM64: Pre-map self-map entries for NonPaged Pool Expansion.

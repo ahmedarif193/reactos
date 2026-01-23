@@ -46,8 +46,9 @@ CmCreateRootNode(
     /* Setup the cell */
     KeyCell->Signature = CM_KEY_NODE_SIGNATURE;
     KeyCell->Flags = KEY_HIVE_ENTRY | KEY_NO_DELETE;
-    // KeQuerySystemTime(&KeyCell->LastWriteTime);
-    KeyCell->LastWriteTime.QuadPart = 0ULL;
+    /* Use 32-bit part access to avoid unaligned 64-bit ops on ARM64 */
+    KeyCell->LastWriteTime.LowPart = 0;
+    KeyCell->LastWriteTime.HighPart = 0;
     KeyCell->Parent = HCELL_NIL;
     KeyCell->SubKeyCounts[Stable] = 0;
     KeyCell->SubKeyCounts[Volatile] = 0;

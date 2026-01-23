@@ -217,6 +217,14 @@ if(ARCH STREQUAL "arm64")
     # DISABLED: Frame pointer preservation causes kernel hang during early boot
     # The .pdata validation is sufficient to filter data symbols from stack traces
     # add_compile_options(-fno-omit-frame-pointer)
+
+    # Prevent GCC from replacing memcpy/memmove with its own builtin versions.
+    # GCC's builtin memcpy on ARM64 can use LDP (Load Pair) instructions which
+    # cause issues when page faults occur during instruction retry. The trap
+    # frame saves register state at fault time, but GCC may have reused registers
+    # for intermediate values, causing incorrect addresses on retry.
+    add_compile_options(-fno-builtin-memcpy)
+    add_compile_options(-fno-builtin-memmove)
 endif()
 
 # Warnings, errors

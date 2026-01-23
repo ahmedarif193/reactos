@@ -207,13 +207,19 @@ KiInitializeUserApc(
 
     UNREFERENCED_PARAMETER(ExceptionFrame);
 
+
     ApcFrame = (PUAPC_FRAME)ALIGN_DOWN_POINTER_BY(TrapFrame->Sp - sizeof(*ApcFrame), 16);
+
+
 
     LocalContext.ContextFlags = CONTEXT_FULL | CONTEXT_INTEGER | CONTEXT_ARM64;
     KeTrapFrameToContext(TrapFrame, NULL, &LocalContext);
 
+
     Stack = (ULONG_PTR)ApcFrame;
     ProbeForWrite(ApcFrame, sizeof(*ApcFrame), TYPE_ALIGNMENT(UAPC_FRAME));
+
+
     RtlMoveMemory(&ApcFrame->Context, &LocalContext, sizeof(LocalContext));
     ApcFrame->MachineFrame.Pc = TrapFrame->Pc;
     ApcFrame->MachineFrame.Sp = TrapFrame->Sp;
@@ -225,6 +231,7 @@ KiInitializeUserApc(
     TrapFrame->Sp = Stack;
     TrapFrame->Pc = (ULONG_PTR)KeUserApcDispatcher;
     TrapFrame->Lr = (ULONG_PTR)KeUserApcDispatcher;
+
 }
 
 NTSTATUS

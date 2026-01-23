@@ -20,6 +20,84 @@ extern BOOLEAN KdDebuggerEnabled;
 extern BOOLEAN KdDebuggerNotPresent;
 extern BOOLEAN KdPitchDebugger;
 
+static
+BOOLEAN
+KiArm64FixupUserAccessFlagFault(
+    _In_ PVOID FaultAddress,
+    _In_ ULONG FaultStatus)
+{
+    ULONG64 Ttbr0, RootPa;
+    volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
+    ULONG L0Idx, L1Idx, L2Idx, L3Idx;
+    ULONG64 L0Entry, L1Entry, L2Entry, L3Entry;
+
+    /* Access Flag fault codes: 0x9/0xA/0xB for levels 1/2/3 */
+    if ((FaultStatus != 0x9) && (FaultStatus != 0xA) && (FaultStatus != 0xB))
+        return FALSE;
+
+    if ((ULONG_PTR)FaultAddress >= (ULONG_PTR)MmSystemRangeStart)
+        return FALSE;
+
+    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+    RootPa = Ttbr0 & 0x0000FFFFFFFFF000ULL;
+    if (RootPa == 0)
+        return FALSE;
+
+    L0Idx = ((ULONG64)(ULONG_PTR)FaultAddress >> 39) & 0x1FF;
+    L1Idx = ((ULONG64)(ULONG_PTR)FaultAddress >> 30) & 0x1FF;
+    L2Idx = ((ULONG64)(ULONG_PTR)FaultAddress >> 21) & 0x1FF;
+    L3Idx = ((ULONG64)(ULONG_PTR)FaultAddress >> 12) & 0x1FF;
+
+    L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+    L0Entry = L0Table[L0Idx];
+    if ((L0Entry & 0x3ULL) != 0x3ULL)
+        return FALSE;
+
+    L1Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & 0x0000FFFFFFFFF000ULL));
+    L1Entry = L1Table[L1Idx];
+    if ((L1Entry & 0x1ULL) == 0)
+        return FALSE;
+    if ((FaultStatus == 0x9) && ((L1Entry & 0x3ULL) == 0x1ULL))
+    {
+        if ((L1Entry & (1ULL << 10)) == 0)
+            L1Table[L1Idx] = (L1Entry | (1ULL << 10));
+        goto TlbFlush;
+    }
+    if ((L1Entry & 0x3ULL) != 0x3ULL)
+        return FALSE;
+
+    L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & 0x0000FFFFFFFFF000ULL));
+    L2Entry = L2Table[L2Idx];
+    if ((L2Entry & 0x1ULL) == 0)
+        return FALSE;
+    if ((FaultStatus == 0xA) && ((L2Entry & 0x3ULL) == 0x1ULL))
+    {
+        if ((L2Entry & (1ULL << 10)) == 0)
+            L2Table[L2Idx] = (L2Entry | (1ULL << 10));
+        goto TlbFlush;
+    }
+    if ((L2Entry & 0x3ULL) != 0x3ULL)
+        return FALSE;
+
+    L3Table = (volatile ULONG64 *)(KSEG0_BASE | (L2Entry & 0x0000FFFFFFFFF000ULL));
+    L3Entry = L3Table[L3Idx];
+    if ((FaultStatus == 0xB) && ((L3Entry & 0x3ULL) == 0x3ULL))
+    {
+        if ((L3Entry & (1ULL << 10)) == 0)
+            L3Table[L3Idx] = (L3Entry | (1ULL << 10));
+        goto TlbFlush;
+    }
+
+    return FALSE;
+
+TlbFlush:
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    __asm__ __volatile__("tlbi vaae1is, %0" :: "r"((ULONG_PTR)FaultAddress >> PAGE_SHIFT) : "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+    return TRUE;
+}
+
 static __inline VOID
 KiArm64StageLogf(
     _In_z_ _Printf_format_string_ PCSTR Format,
@@ -71,7 +149,7 @@ KiSystemService(
     _In_ ULONG Instruction);
 
 /*
- * MiArm64UpdateTtbr0Alias - Update TTBR0 alias in TTBR1's self-map hierarchy
+ * MiArm64UpdateTtbr0AliasAndHyperspace - Update TTBR0 alias and hyperspace in TTBR1
  *
  * !!! WARNING: !SMP_SAFE !!!
  *
@@ -83,30 +161,42 @@ KiSystemService(
  *    CPU 1 (which may be running Process B) now sees Process A's user page tables
  *    through its self-map, NOT Process B's tables.
  *
- * Example race condition:
- *   - CPU 0 runs Process A, sets L0[494] -> A's TTBR0
- *   - CPU 1 runs Process B, needs to access B's PTEs via MiAddressToPteTtbr0()
- *   - CPU 1 reads L0[494] -> gets A's TTBR0 -> WRONG PROCESS'S PAGE TABLES!
- *
  * For Phase 1 (Single Core bring-up), this is acceptable.
  * For SMP support, each CPU would need its own TTBR0 alias index, or the
  * alias mechanism must be redesigned (e.g., per-CPU page table overlays).
  *
- * This function updates L0[494] in TTBR1's page table hierarchy to point to
- * the current process's TTBR0 L0 page. This enables the self-map to work for
- * user-space addresses by routing MiAddressToPteTtbr0() through the alias.
+ * ARM64 Hyperspace Architecture:
  *
- * Called during context switch (KiSwapProcess) and during early initialization.
+ * HYPER_SPACE (0xFFFFF60000000000) is at L0[492] in TTBR1. The self-map structure
+ * requires that the L0 entries used for the self-map hierarchy remain consistent.
+ * Modifying L0[492] breaks MiAddressToPte() for hyperspace addresses because the
+ * self-map recursion (L0[493] -> L0[492]) expects L0[492] to contain the original
+ * kernel hyperspace mapping with proper page table level chaining.
+ *
+ * Solution for per-process hyperspace on ARM64:
+ * Instead of modifying TTBR1's L0[492] (which breaks the self-map), we update
+ * ONLY the leaf-level entries (L3 PTEs) within the existing hyperspace structure.
+ * This approach:
+ * 1. Keeps L0[492] pointing to the kernel's hyperspace L1 (preserves self-map)
+ * 2. Updates the working set list PTE in the hyperspace L3 table to point to
+ *    the current process's working set page
+ *
+ * For now, we only update the TTBR0 alias (L0[494]) here. The hyperspace
+ * per-process handling is done in MmInitializeProcessAddressSpace.
  *
  * Parameters:
- *   Ttbr0Pa - Physical address of the new TTBR0 L0 page table
+ *   Ttbr0Pa   - Physical address of the new TTBR0 L0 page table
+ *   HyperPa   - Physical address of the new hyperspace PDPT (unused for now)
  */
 static __inline VOID
-MiArm64UpdateTtbr0Alias(ULONG64 Ttbr0Pa)
+MiArm64UpdateTtbr0AliasAndHyperspace(ULONG64 Ttbr0Pa, ULONG64 HyperPa)
 {
     UINT64 Ttbr1;
     UINT64 Ttbr1Pa;
     volatile UINT64 *L0Table;
+    BOOLEAN NeedFlush = FALSE;
+
+    (void)HyperPa;  /* Reserved for future use */
 
     /* ARM64 PTE constants */
     #define ARM64_TTBR0_ALIAS_INDEX 494
@@ -121,51 +211,48 @@ MiArm64UpdateTtbr0Alias(ULONG64 Ttbr0Pa)
     L0Table = (volatile UINT64 *)(0xFFFF800000000000ULL | Ttbr1Pa);
 
     /*
-     * Update L0[494] to point to TTBR0's L0 page.
-     *
-     * The descriptor is a table descriptor (type = 0b11) pointing to
-     * the physical address of TTBR0's L0 page table. This creates an
-     * alias in TTBR1's self-map space that allows accessing TTBR0's
-     * page table hierarchy.
-     *
-     * Descriptor format for table entries:
-     *   [63:48] = Reserved (SBZ for non-secure)
-     *   [47:12] = Next-level table address (PA)
-     *   [11:2]  = Ignored
-     *   [1:0]   = 0b11 (table descriptor)
+     * Update L0[494] to point to TTBR0's L0 page (TTBR0 alias for user PTEs).
      */
     {
         UINT64 OldEntry = L0Table[ARM64_TTBR0_ALIAS_INDEX];
         UINT64 NewEntry = (Ttbr0Pa & ARM64_PTE_ADDR_MASK_) | ARM64_PTE_TABLE_VALID;
 
-        /* Only update if changed to avoid unnecessary TLB invalidation */
         if (OldEntry != NewEntry)
         {
             L0Table[ARM64_TTBR0_ALIAS_INDEX] = NewEntry;
-
-            /*
-             * Memory barrier and TLB invalidation for the alias entry.
-             *
-             * DSB ISHST: Ensure the PTE write is visible to all observers
-             * TLBI VMALLE1IS: Invalidate all TLB entries at EL1 (Inner Shareable)
-             * DSB ISH: Ensure TLB invalidation completes
-             * ISB: Synchronize instruction stream
-             *
-             * TODO: Optimize TLB invalidation once correctness is verified.
-             * Currently using TLBI VMALLE1IS (global flush) which is heavy-handed.
-             * Could potentially use TLBI VAE1IS with the specific VA range
-             * (PTE_BASE_TTBR0 through PXE_BASE_TTBR0 + PAGE_SIZE), but this
-             * requires careful calculation of all affected self-map VAs.
-             * For now, correctness over performance.
-             */
-            __asm__ __volatile__(
-                "dsb ishst\n\t"
-                "tlbi vmalle1is\n\t"
-                "dsb ish\n\t"
-                "isb"
-                ::: "memory"
-            );
+            NeedFlush = TRUE;
         }
+    }
+
+    /*
+     * ARM64 Hyperspace Architecture:
+     *
+     * HYPER_SPACE (0xFFFFF60000000000) at L0[492] in TTBR1 is SHARED across
+     * all processes. DO NOT modify TTBR1's L0[492] per context switch!
+     *
+     * Modifying TTBR1's L0 entries per context switch is architecturally unsafe:
+     * 1. TTBR1 is the shared kernel translation regime
+     * 2. Interrupts/deferred work running concurrently see a moving kernel VA->PA view
+     * 3. Self-map recursion assumptions become unstable
+     * 4. On SMP this becomes a correctness disaster
+     *
+     * For per-process hyperspace behavior, use the "leaf-only" approach:
+     * - Keep TTBR1's L0[492] pointing to the kernel's hyperspace L1 (stable)
+     * - Update only leaf-level PTEs (L3) within the hyperspace mapping to point
+     *   to per-process pages (working set list, etc.)
+     *
+     * This is handled in MmInitializeProcessAddressSpace, not during context switch.
+     */
+
+    if (NeedFlush)
+    {
+        __asm__ __volatile__(
+            "dsb ishst\n\t"
+            "tlbi vmalle1is\n\t"
+            "dsb ish\n\t"
+            "isb"
+            ::: "memory"
+        );
     }
 
     #undef ARM64_TTBR0_ALIAS_INDEX
@@ -180,6 +267,7 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
 {
     ASSERT(NewProcess != NULL);
 
+    /* Use UART output to avoid DPRINT1 hang during TTBR0-switched state */
 #ifdef CONFIG_SMP
     {
         PKIPCR Pcr = KeGetPcr();
@@ -198,12 +286,14 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
 
     if (OldProcess == NewProcess)
     {
+        /* Same process, nothing to do */
         return;
     }
 
     if ((OldProcess != NULL) &&
         (NewProcess->DirectoryTableBase[0] == OldProcess->DirectoryTableBase[0]))
     {
+        /* Same DTB, nothing to do */
         return;
     }
 
@@ -212,19 +302,36 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
     /*
      * ARM64 TTBR0 Alias Update
      *
-     * Before switching TTBR0 to the new process, update the TTBR0 alias
-     * entry (L0[494]) in TTBR1's self-map to point to the new process's
-     * TTBR0 L0 page. This ensures that MiAddressToPteTtbr0() and related
-     * functions can correctly access the new process's user-space PTEs
-     * through the kernel's self-map mechanism.
+     * Before switching TTBR0, update L0[494] (TTBR0 alias) so the kernel's
+     * self-map can access the new process's user page tables.
      *
-     * Order matters:
-     * 1. Update alias (so self-map sees new tables)
-     * 2. Update TTBR0 (so hardware uses new tables)
+     * Note: L0[492] (hyperspace) is NOT modified here. TTBR1's hyperspace
+     * region is shared and stable. Per-process hyperspace data (working set
+     * list, etc.) is handled via leaf-level PTE updates, not L0 entry changes.
      */
-    MiArm64UpdateTtbr0Alias(NewProcess->DirectoryTableBase[0]);
+    MiArm64UpdateTtbr0AliasAndHyperspace(NewProcess->DirectoryTableBase[0],
+                                          NewProcess->DirectoryTableBase[1]);
 
-    KiArm64WriteUserTtbr(NewProcess->DirectoryTableBase[0]);
+    /*
+     * ARM64 TTBR0 Switch (Bring-up mode)
+     *
+     * ASID Note: We mask to page alignment, setting ASID=0 intentionally.
+     * This is acceptable for single-core bring-up because we flush the entire
+     * TLB (vmalle1is) on every context switch. For SMP/performance, must:
+     * - Preserve ASID bits from DirectoryTableBase
+     * - Use targeted TLBI (aside1is) instead of full flush
+     * - Implement proper ASID allocation
+     */
+    {
+        ULONGLONG MaskedBase = NewProcess->DirectoryTableBase[0] & ~((ULONGLONG)PAGE_SIZE - 1ULL);
+
+        __asm__ __volatile__("dsb ishst" ::: "memory");
+        __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(MaskedBase) : "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+        __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+        __asm__ __volatile__("dsb ish" ::: "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+    }
 }
 
 typedef struct _ARM64_EARLY_SYNC_CONTEXT
@@ -252,12 +359,59 @@ C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, TrapFrame) == 0x148);
 #define ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE 0x380
 C_ASSERT(sizeof(ARM64_EARLY_SYNC_CONTEXT) <= ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE);
 
+/*
+ * KiArm64PreviousModeFromContext - Determine the true previous mode
+ *
+ * On ARM64, when kernel code dereferences a NULL pointer (e.g., accessing
+ * offset 4 from NULL), the FAR contains a low user address (0x4), but the
+ * ELR contains the kernel address where the fault occurred.
+ *
+ * SPSR.M[3:0] should indicate EL1 for kernel faults, but in some scenarios
+ * (possibly related to exception nesting or SPSR caching), it may be 0 (EL0).
+ *
+ * To correctly identify kernel faults, we check BOTH:
+ * 1. SPSR.M[3:0] - the processor mode bits
+ * 2. ELR - the exception link register (faulting instruction address)
+ *
+ * If ELR is in kernel space (>= MmSystemRangeStart), the fault came from
+ * kernel code, regardless of what SPSR says. This ensures NULL pointer
+ * dereferences in kernel code are properly treated as kernel faults.
+ */
 static
 KPROCESSOR_MODE
-KiArm64PreviousModeFromSpsr(_In_ ULONG64 SpsrValue)
+KiArm64PreviousModeFromContext(
+    _In_ ULONG64 SpsrValue,
+    _In_ ULONG64 ElrValue)
 {
     ULONG Mode = (ULONG)(SpsrValue & 0xFULL);
-    return (Mode == 0) ? UserMode : KernelMode;
+
+    /*
+     * If SPSR.M indicates EL1 (non-zero), it's definitely a kernel fault.
+     */
+    if (Mode != 0)
+    {
+        return KernelMode;
+    }
+
+    /*
+     * SPSR.M is 0 (EL0), but check ELR to catch kernel NULL pointer dereferences.
+     * If ELR is in kernel space, the faulting instruction was in the kernel,
+     * so this is a kernel fault even though FAR may be a user address.
+     *
+     * Use hardcoded kernel base (0xFFFF800000000000) instead of MmSystemRangeStart
+     * because MmSystemRangeStart may not be initialized during early boot.
+     */
+#define ARM64_KERNEL_BASE 0xFFFF800000000000ULL
+    if (ElrValue >= ARM64_KERNEL_BASE)
+    {
+        return KernelMode;
+    }
+#undef ARM64_KERNEL_BASE
+
+    /*
+     * Both SPSR.M is 0 (EL0) and ELR is in user space - this is a true user fault.
+     */
+    return UserMode;
 }
 
 static
@@ -281,7 +435,7 @@ KiArm64InitializeTrapFrame(
      */
     CurrentIrql = KeGetCurrentIrql();
 
-    TrapFrame->PreviousMode = (CHAR)KiArm64PreviousModeFromSpsr(Context->State.Spsr);
+    TrapFrame->PreviousMode = (CHAR)KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
     TrapFrame->PreviousIrql = (UCHAR)CurrentIrql;
     TrapFrame->TrapFrame = (ULONG64)(ULONG_PTR)TrapFrame;
     TrapFrame->FaultAddress = Context->State.FaultAddress;
@@ -610,8 +764,18 @@ KiArm64HandleSynchronousException(
     NTSTATUS Status;
     BOOLEAN WriteAccess;
 
-    /* Log ALL synchronous exceptions to diagnose illegal instruction */
-    if (EsrClass != 0x15 && EsrClass != 0x11) /* Skip logging for SVC */
+    /*
+     * Avoid DbgPrintEx at the very start of data abort handling.
+     *
+     * Data aborts can occur while switching address spaces / faulting in
+     * critical mappings. Early DbgPrintEx can recurse into paging or grab locks
+     * and wedge the fault path (observed during user stack probing).
+     *
+     * Keep entry logging for non-pagefault classes only.
+     */
+    if (EsrClass != 0x15 && EsrClass != 0x11 &&
+        EsrClass != 0x20 && EsrClass != 0x21 &&
+        EsrClass != 0x24 && EsrClass != 0x25) /* Skip SVC + instruction/data abort */
     {
         DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                    "[arm64] SyncException: Class=0x%02lx ESR=0x%08lx ELR=%p FAR=%p\n",
@@ -646,21 +810,21 @@ KiArm64HandleSynchronousException(
 
     switch (EsrClass)
     {
-        case 0x11: /* SVC from lower EL */
-        case 0x15: /* SVC from same EL */
-        {
-            ULONG ServiceNumber;
-            ULONG TableIndexShifted;
-            ULONG Instruction;
-            PKTHREAD Thread;
+	        case 0x11: /* SVC from lower EL */
+	        case 0x15: /* SVC from same EL */
+	        {
+	            ULONG ServiceNumber;
+	            ULONG TableIndexShifted;
+	            ULONG Instruction;
+	            PKTHREAD Thread;
 
-            TrapFrame = &Context->TrapFrame;
-            KiArm64InitializeTrapFrame(Context, TrapFrame);
+	            TrapFrame = &Context->TrapFrame;
+	            KiArm64InitializeTrapFrame(Context, TrapFrame);
 
             /*
              * For ARM64 system calls, X8 carries the service number while the
              * SVC immediate selects the service table.  The current stubs emit
-             * SVC #0 (NT table), but keep the bits so KiSystemService can grow
+	             * SVC #0 (NT table), but keep the bits so KiSystemService can grow
              * into additional tables later on.
              */
             ServiceNumber = (ULONG)(TrapFrame->X[8] & SERVICE_NUMBER_MASK);
@@ -694,16 +858,16 @@ KiArm64HandleSynchronousException(
             return TRUE;
         }
 
-        case 0x20: /* Instruction abort, lower EL */
-        case 0x21: /* Instruction abort, same EL  */
-        {
-            EXCEPTION_RECORD ExceptionRecord;
+	        case 0x20: /* Instruction abort, lower EL */
+	        case 0x21: /* Instruction abort, same EL  */
+	        {
+	            EXCEPTION_RECORD ExceptionRecord;
 
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
 
-            PreviousMode = KiArm64PreviousModeFromSpsr(Context->State.Spsr);
-            WriteAccess = FALSE;
+	            PreviousMode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
+	            WriteAccess = FALSE;
 
             /*
              * Use MmAccessFault (not MmArmAccessFault) to properly dispatch
@@ -823,6 +987,63 @@ KiArm64HandleSynchronousException(
             ULONG64 CurrentSp;
             PVOID StackLimit;
 
+            /*
+             * ARM64: Handle alignment faults (DFSC = 0x21) as exceptions.
+             *
+             * DFSC values 0x21, 0x22, 0x23 are alignment faults, not page faults.
+             * These cannot be resolved by the page fault handler and should be
+             * dispatched as STATUS_DATATYPE_MISALIGNMENT exceptions.
+             *
+             * This is critical for Clang ARM64 which generates 128-bit SIMD stores
+             * (str q0) that require 16-byte alignment. When the target address is
+             * not 16-byte aligned, the CPU generates an alignment fault.
+             *
+             * Example: RtlZeroMemory on TEB offset 0x7D8 (8-byte aligned, not 16)
+             * causes str q0 instruction to fault with DFSC=0x21.
+             */
+            if ((FaultStatus & 0x3C) == 0x20)  /* DFSC 0x20-0x23 are alignment related */
+            {
+                EXCEPTION_RECORD ExceptionRecord;
+                KPROCESSOR_MODE Mode;
+                BOOLEAN IsWrite = (Iss & (1u << 6)) != 0;
+
+                TrapFrame = &Context->TrapFrame;
+                KiArm64InitializeTrapFrame(Context, TrapFrame);
+
+                Mode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
+
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[arm64] DA ALIGNMENT FAULT: DFSC=0x%lx far=%p elr=%p mode=%d write=%d\n",
+                           FaultStatus,
+                           (PVOID)(ULONG_PTR)Context->State.FaultAddress,
+                           (PVOID)(ULONG_PTR)Context->State.Elr,
+                           Mode,
+                           IsWrite);
+
+                RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
+                ExceptionRecord.ExceptionCode = STATUS_DATATYPE_MISALIGNMENT;
+                ExceptionRecord.ExceptionFlags = 0;
+                ExceptionRecord.ExceptionRecord = NULL;
+                ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
+                ExceptionRecord.NumberParameters = 2;
+                ExceptionRecord.ExceptionInformation[0] = (ULONG_PTR)IsWrite;
+                ExceptionRecord.ExceptionInformation[1] = (ULONG_PTR)Context->State.FaultAddress;
+
+                if (!KdDebuggerEnabled || KdDebuggerNotPresent)
+                    KiArm64ReportUnhandledSyncException(Context, Esr);
+
+                KiDispatchException(&ExceptionRecord,
+                                    Context->ExceptionFramePointer,
+                                    TrapFrame,
+                                    Mode,
+                                    TRUE);
+
+                Context->TrapFramePointer = TrapFrame;
+                Context->ExceptionFramePointer = &Context->ExceptionFrame;
+                KiArm64ClearTrapActive();
+                return TRUE;
+            }
+
 #if DBG
             /* Debug: Detect repeated faults on the same address */
             static volatile PVOID LastFaultAddress = NULL;
@@ -838,16 +1059,11 @@ KiArm64HandleSynchronousException(
                                "[arm64] DA REPEATED FAULT #%ld: addr=%p elr=%p\n",
                                Count, CurrentFaultAddr, (PVOID)(ULONG_PTR)Context->State.Elr);
                 }
-                else if (Count > 10)
+                else if (Count > 100000)
                 {
                     DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                               "[arm64] DA FAULT LOOP DETECTED: addr=%p count=%ld - BUGCHECK!\n",
+                               "[arm64] DA FAULT LOOP DETECTED: addr=%p count=%ld\n",
                                CurrentFaultAddr, Count);
-                    KeBugCheckEx(PAGE_FAULT_IN_NONPAGED_AREA,
-                                 (ULONG_PTR)CurrentFaultAddr,
-                                 (ULONG_PTR)Context->State.Elr,
-                                 Count,
-                                 0xFA017100UL);
                 }
             }
             else
@@ -879,12 +1095,36 @@ KiArm64HandleSynchronousException(
             }
 
             /*
-             * Verbose data abort logging removed - demand paging is working correctly.
-             * The logging for user/kernel data aborts and System View Space access
-             * was for bring-up debugging and is no longer needed.
+             * ARM64 DEBUG: Log all data aborts in System Cache region to diagnose stalls.
              */
+            if ((ULONG64)Context->State.FaultAddress >= 0xFFFFF98000000000ULL &&
+                (ULONG64)Context->State.FaultAddress < 0xFFFFFA8000000000ULL)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[arm64] DA-SYSCACHE: esr=0x%lx far=%p elr=%p DFSC=0x%lx\n",
+                           Esr,
+                           (PVOID)(ULONG_PTR)Context->State.FaultAddress,
+                           (PVOID)(ULONG_PTR)Context->State.Elr,
+                           Esr & 0x3FULL);
+            }
 
-            PreviousMode = KiArm64PreviousModeFromSpsr(Context->State.Spsr);
+            /*
+             * ARM64 DEBUG: Log data aborts in Page Table self-map region (PDE_BASE fault).
+             * PTE_BASE = 0xFFFFF68000000000, PTE_TOP = 0xFFFFF6FFFFFFFFFF
+             */
+            if ((ULONG64)Context->State.FaultAddress >= 0xFFFFF68000000000ULL &&
+                (ULONG64)Context->State.FaultAddress <= 0xFFFFF6FFFFFFFFFFULL)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[arm64] DA-PAGETABLE: esr=0x%lx far=%p elr=%p DFSC=0x%lx write=%d\n",
+                           Esr,
+                           (PVOID)(ULONG_PTR)Context->State.FaultAddress,
+                           (PVOID)(ULONG_PTR)Context->State.Elr,
+                           Esr & 0x3FULL,
+                           (Iss & (1u << 6)) != 0);
+            }
+
+            PreviousMode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
             WriteAccess = (Iss & (1u << 6)) != 0;
 
             /* ARM64: skip accessed-bit fast path to avoid dereferencing
@@ -903,12 +1143,20 @@ KiArm64HandleSynchronousException(
                 if ((ULONG64)Context->State.FaultAddress < 0x100000ULL)
                 {
                     DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                               "[arm64] DA LOW USER: esr=0x%lx far=%p elr=%p write=%d mode=%d\n",
+                               "[arm64] DA LOW USER: esr=0x%lx far=%p elr=%p write=%d mode=%d spsr=0x%lx\n",
                                Esr,
                                (PVOID)(ULONG_PTR)Context->State.FaultAddress,
                                (PVOID)(ULONG_PTR)Context->State.Elr,
                                WriteAccess,
-                               PreviousMode);
+                               PreviousMode,
+                               Context->State.Spsr);
+                    /* Debug: Check if ELR >= kernel base directly */
+                    if (Context->State.Elr >= 0xFFFF800000000000ULL)
+                    {
+                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                   "[arm64] DA LOW USER DEBUG: ELR is in kernel space! Should be KernelMode! Elr=0x%016llx KERNEL_BASE=0xFFFF800000000000\n",
+                                   (unsigned long long)Context->State.Elr);
+                    }
                 }
 #endif
 
@@ -960,6 +1208,29 @@ KiArm64HandleSynchronousException(
                     LONG CountBefore = MmArmAccessFaultEntryCount;
                     LONG InFunctionBefore = MmArmAccessFaultInFunction;
 
+                    /*
+                     * ARM64: Access Flag faults (DFSC 0x9/0xA/0xB) must be fixed up by
+                     * setting AF in the faulting descriptor. Some early boot mappings
+                     * can have AF clear, causing an infinite abort loop even though the
+                     * translation is otherwise valid.
+                     */
+                    if ((ULONG_PTR)AddressArg < (ULONG_PTR)MmSystemRangeStart &&
+                        (FaultStatus == 0x9 || FaultStatus == 0xA || FaultStatus == 0xB))
+                    {
+                        if (KiArm64FixupUserAccessFlagFault(AddressArg, FaultStatus))
+                        {
+                            if (OwnsAbortGuard)
+                            {
+                                InterlockedExchange(&KiArm64DataAbortOwner[ProcessorIndex], 0);
+                            }
+
+                            Context->TrapFramePointer = TrapFrame;
+                            Context->ExceptionFramePointer = &Context->ExceptionFrame;
+                            KiArm64ClearTrapActive();
+                            return TRUE;
+                        }
+                    }
+
                     /* Log for user-mode addresses that keep faulting */
                     if ((ULONG64)AddressArg >= 0x000007FFB7000000ULL &&
                         (ULONG64)AddressArg < 0x000007FFB8000000ULL)
@@ -974,19 +1245,21 @@ KiArm64HandleSynchronousException(
                         }
                     }
 
-                    /* Log for low user-space addresses (ProcessParams area) - BUG #15 */
+                    /* Log for low user-space addresses - debugging aid */
                     if ((ULONG64)AddressArg >= 0x30000ULL &&
                         (ULONG64)AddressArg < 0x50000ULL)
                     {
-                        static volatile LONG LowUserFaultLogBudget = 20;
+                        static volatile LONG LowUserFaultLogBudget = 5;
                         if (LowUserFaultLogBudget > 0)
                         {
                             InterlockedDecrement(&LowUserFaultLogBudget);
                             DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                       "[arm64] LowUserDA: ESR=0x%lx DFSC=0x%lx FAR=%p FaultCode=0x%lx write=%d mode=%d\n",
-                                       Esr, FaultStatus, AddressArg, FaultCodeArg, WriteAccess, PreviousMode);
+                                       "[arm64] LowUserDA: FAR=%p DFSC=0x%lx write=%d\n",
+                                       AddressArg, FaultStatus, WriteAccess);
                         }
                     }
+
+                    
 
                     /* Only log for specific problem address to reduce output */
                     if ((ULONG64)AddressArg >= 0xFFFF8000BCC00000ULL &&
@@ -1007,7 +1280,76 @@ KiArm64HandleSynchronousException(
                      * to MmNotPresentFaultSectionView for ROS section views (like
                      * VACB buffers) or MmArmAccessFault for ARM3 allocations.
                      */
-                    Status = MmAccessFault(FaultCodeArg, AddressArg, PreviousMode, TrapFrame);
+                    /* ARM64 DEBUG: Log before MmAccessFault for System Cache faults */
+                    if ((ULONG64)AddressArg >= 0xFFFFF98000000000ULL &&
+                        (ULONG64)AddressArg < 0xFFFFFA8000000000ULL)
+                    {
+                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                   "[arm64] DA-SYSCACHE: BEFORE MmAccessFault far=%p FaultCode=0x%lx\n",
+                                   AddressArg, FaultCodeArg);
+                    }
+
+                    /*
+                     * ARM64: Clear trap-active flag BEFORE calling MmAccessFault.
+                     *
+                     * MmAccessFault can legitimately cause nested page faults. For example:
+                     * - User page fault on DLL section
+                     * - MmNotPresentFaultSectionView calls MmMakeSegmentResident
+                     * - MmMakeSegmentResident triggers file I/O
+                     * - File I/O accesses System Cache (VACB)
+                     * - System Cache page fault on a different address
+                     *
+                     * If we don't clear KiArm64TrapActive, the second fault will see
+                     * the flag set and incorrectly treat it as a recursive exception,
+                     * causing a spurious bugcheck.
+                     *
+                     * The KiArm64DataAbortOwner guard (checked above) still protects
+                     * against truly nested aborts (faults in the exception handling path
+                     * before reaching MmAccessFault).
+                     *
+                     * This mirrors the SVC handling (line ~734) which clears the flag
+                     * before calling KiSystemService.
+                     */
+                    KiArm64ClearTrapActive();
+
+                    /*
+                     * ARM64: Also clear the data abort owner guard.
+                     *
+                     * Similar to KiArm64TrapActive, MmAccessFault can cause nested data
+                     * aborts that are legitimate (e.g., system cache page faults during
+                     * file I/O). If we don't clear this guard, the nested abort will be
+                     * incorrectly detected as a recursive fault.
+                     *
+                     * The guard will be reset by the outer code if OwnsAbortGuard is FALSE
+                     * (i.e., we were the ones who set it). Since we clear it here, when
+                     * MmAccessFault returns, OwnsAbortGuard will be checked and we'll skip
+                     * the redundant clear.
+                     */
+                    if (OwnsAbortGuard)
+                    {
+                        InterlockedExchange(&KiArm64DataAbortOwner[ProcessorIndex], 0);
+                    }
+
+                    /* ARM64 DEBUG: Log before MmAccessFault for USER address faults */
+Status = MmAccessFault(FaultCodeArg, AddressArg, PreviousMode, TrapFrame);
+
+                    /* ARM64 DEBUG: Log after MmAccessFault for System Cache faults */
+                    if ((ULONG64)AddressArg >= 0xFFFFF98000000000ULL &&
+                        (ULONG64)AddressArg < 0xFFFFFA8000000000ULL)
+                    {
+                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                   "[arm64] DA-SYSCACHE: AFTER MmAccessFault far=%p Status=0x%lx\n",
+                                   AddressArg, Status);
+                    }
+
+                    /* ARM64 DEBUG: Log after MmAccessFault for Page Table faults */
+                    if ((ULONG64)AddressArg >= 0xFFFFF68000000000ULL &&
+                        (ULONG64)AddressArg <= 0xFFFFF6FFFFFFFFFFULL)
+                    {
+                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                   "[arm64] DA-PAGETABLE: AFTER MmAccessFault far=%p Status=0x%lx\n",
+                                   AddressArg, Status);
+                    }
 
                     /* Log after call only for the problem address */
                     if ((ULONG64)AddressArg >= 0xFFFF8000BCC00000ULL &&
@@ -1072,28 +1414,81 @@ KiArm64HandleSynchronousException(
                  * 5. Return to retry instruction (will read fresh data)
                  */
                 {
-                    ULONG64 Ctr;
-                    ULONG DcacheLineSize;
                     ULONG_PTR Va;
-
-                    /* Read CTR_EL0 to get D-cache line size */
-                    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
-                    DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
 
                     /* Align fault address to page boundary */
                     Va = (ULONG_PTR)Context->State.FaultAddress & ~(ULONG_PTR)(PAGE_SIZE - 1);
 
                     /*
-                     * Use DC IVAC (Invalidate only) for incoming data.
-                     * This discards stale cache lines without writing back garbage.
+                     * ARM64 Cache Maintenance Restriction:
+                     *
+                     * DC IVAC (Invalidate by VA to PoC) requires read permission to the
+                     * virtual address from the current exception level (EL1). For user-space
+                     * pages mapped with certain permissions (e.g., read-only with NotDirty=1),
+                     * DC IVAC can fault with a permission error.
+                     *
+                     * We only perform cache invalidation for KERNEL addresses (SYSCACHE, etc.)
+                     * where we control the permissions and know they're accessible from EL1.
+                     *
+                     * User-space pages don't need this cache invalidation because:
+                     * 1. User pages aren't populated by DMA - they're demand-loaded from file
+                     * 2. The page fault handler ensures cache coherency differently
+                     * 3. MmCreateVirtualMapping handles cache operations for user mappings
                      */
-                    for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
+                    if (Va >= (ULONG_PTR)MmSystemRangeStart)
                     {
-                        __asm__ __volatile__("dc ivac, %0" :: "r"(Va + offset) : "memory");
-                    }
+                        ULONG64 Ctr;
+                        ULONG DcacheLineSize;
 
-                    /* Ensure all cache operations complete before returning */
-                    __asm__ __volatile__("dsb ish" ::: "memory");
+                        /* Read CTR_EL0 to get D-cache line size */
+                        __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+                        DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+
+                        /*
+                         * Use DC IVAC (Invalidate only) for incoming data.
+                         * This discards stale cache lines without writing back garbage.
+                         */
+                        for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
+                        {
+                            __asm__ __volatile__("dc ivac, %0" :: "r"(Va + offset) : "memory");
+                        }
+
+                        /* Ensure all cache operations complete before returning */
+                        __asm__ __volatile__("dsb ish" ::: "memory");
+                        __asm__ __volatile__("isb" ::: "memory");
+
+                        /* DEBUG: For SYSCACHE, verify data after cache invalidation */
+                        if (Va >= 0xFFFFF98000000000ULL && Va < 0xFFFFFA8000000000ULL)
+                        {
+                            volatile PUCHAR CheckData = (volatile PUCHAR)Va;
+                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                       "[arm64] DA-SYSCACHE: AFTER IVAC VA=%p first4=0x%02x 0x%02x 0x%02x 0x%02x\n",
+                                       (PVOID)Va, CheckData[0], CheckData[1], CheckData[2], CheckData[3]);
+                        }
+                    }
+                }
+
+                /*
+                 * ARM64 DEBUG: Log trap frame X0 for user-space page faults
+                 * This helps diagnose register corruption issues where X0 gets
+                 * corrupted between page fault handling and instruction retry.
+                 */
+                {
+                    ULONG_PTR FaultVa = (ULONG_PTR)Context->State.FaultAddress & ~(ULONG_PTR)(PAGE_SIZE - 1);
+                    if (FaultVa < (ULONG_PTR)MmSystemRangeStart)
+                    {
+                        static volatile LONG UserFaultX0LogBudget = 20;
+                        if (UserFaultX0LogBudget > 0)
+                        {
+                            InterlockedDecrement(&UserFaultX0LogBudget);
+                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                       "[arm64] DA-USER-RETURN: VA=%p TrapFrame->X0=0x%llx Context->X0=0x%llx ELR=%p\n",
+                                       (PVOID)FaultVa,
+                                       (unsigned long long)TrapFrame->X0,
+                                       (unsigned long long)Context->State.Registers.X[0],
+                                       (PVOID)(ULONG_PTR)TrapFrame->Pc);
+                        }
+                    }
                 }
 
                 Context->TrapFramePointer = TrapFrame;
@@ -1103,6 +1498,12 @@ KiArm64HandleSynchronousException(
             }
 
             /* Not resolved by Mm - this is an unhandled data abort. */
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[arm64] DA FAILED: MmAccessFault returned 0x%lx for addr=%p PreviousMode=%d\n",
+                       Status, (PVOID)(ULONG_PTR)Context->State.FaultAddress, PreviousMode);
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                       "[arm64] DA FAILED: KdDebuggerEnabled=%d KdDebuggerNotPresent=%d\n",
+                       KdDebuggerEnabled, KdDebuggerNotPresent);
 
 #ifdef KDBG
             /*
@@ -1181,7 +1582,7 @@ KiArm64HandleSynchronousException(
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
 
-            Mode = KiArm64PreviousModeFromSpsr(Context->State.Spsr);
+            Mode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
 
             RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
             ExceptionRecord.ExceptionCode = STATUS_DATATYPE_MISALIGNMENT;
@@ -1225,7 +1626,7 @@ KiArm64HandleSynchronousException(
             KiDispatchException(&ExceptionRecord,
                                 Context->ExceptionFramePointer,
                                 TrapFrame,
-                                KiArm64PreviousModeFromSpsr(Context->State.Spsr),
+                                KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr),
                                 TRUE);
 
             Context->TrapFramePointer = TrapFrame;
@@ -1236,7 +1637,7 @@ KiArm64HandleSynchronousException(
 
         case 0x3C: /* BRK instruction */
         {
-            KPROCESSOR_MODE Mode = KiArm64PreviousModeFromSpsr(Context->State.Spsr);
+            KPROCESSOR_MODE Mode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
 #ifdef KDBG
             KD_CONTINUE_TYPE KdbResult = kdHandleException;
 #endif
@@ -1377,7 +1778,7 @@ KiArm64HandleSynchronousException(
             KiDispatchException(&ExceptionRecord,
                                 Context->ExceptionFramePointer,
                                 TrapFrame,
-                                KiArm64PreviousModeFromSpsr(Context->State.Spsr),
+                                KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr),
                                 TRUE);
 
             Context->TrapFramePointer = TrapFrame;

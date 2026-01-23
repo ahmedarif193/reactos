@@ -13,6 +13,24 @@
 #define NDEBUG
 #include <debug.h>
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+/*
+ * Forward declaration for HalGetMsiMessageAddressEx.
+ * On ARM64 with GIC ITS, MSI addresses are programmed via the ITS TRANSLATER
+ * register, not the x86-style APIC MSI address format.
+ */
+BOOLEAN
+NTAPI
+HalGetMsiMessageAddressEx(
+    _In_ USHORT RequesterId,
+    _In_ ULONGLONG Vector,
+    _In_ ULONGLONG Affinity,
+    _Out_ PULONG AddressLow,
+    _Out_opt_ PULONG AddressHigh,
+    _Out_ PUSHORT Data
+    );
+#endif
+
 typedef struct _IO_MESSAGE_CONNECT_CONTEXT
 {
     KSPIN_LOCK MessageLock;
@@ -647,8 +665,71 @@ IoConnectInterruptEx(
 
                 TargetMask = IopSelectMessageTarget(Affinity, i, &ApicId);
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+                /*
+                 * On ARM64 with GIC ITS, MSI addresses are assigned via the ITS.
+                 * Query the HAL to get the proper MSI address (GITS_TRANSLATER)
+                 * and data (EventID) for this interrupt vector.
+                 */
+                {
+                    ULONG BusNumber = 0;
+                    ULONG DeviceAddress = 0;
+                    ULONG BufLen;
+                    USHORT RequesterId;
+                    ULONG AddrLow, AddrHigh = 0;
+                    USHORT MsiData;
+
+                    /* Get PCI bus number and device address to form RequesterId */
+                    BufLen = sizeof(BusNumber);
+                    IoGetDeviceProperty(Parameters->MessageBased.PhysicalDeviceObject,
+                                        DevicePropertyBusNumber,
+                                        BufLen,
+                                        &BusNumber,
+                                        &BufLen);
+
+                    BufLen = sizeof(DeviceAddress);
+                    IoGetDeviceProperty(Parameters->MessageBased.PhysicalDeviceObject,
+                                        DevicePropertyAddress,
+                                        BufLen,
+                                        &DeviceAddress,
+                                        &BufLen);
+
+                    /* RequesterId format: (Bus << 8) | (Device << 3) | Function
+                     * DeviceAddress format: (Device << 16) | Function */
+                    RequesterId = (USHORT)((BusNumber << 8) |
+                                           ((DeviceAddress >> 16) << 3) |
+                                           (DeviceAddress & 0x7));
+
+                    DPRINT1("IoConnectInterruptEx[ARM64]: Vector=%u ReqId=0x%04x (Bus=%u Dev=%u Fn=%u)\n",
+                            Vector, RequesterId, BusNumber,
+                            (DeviceAddress >> 16) & 0x1F, DeviceAddress & 0x7);
+
+                    if (HalGetMsiMessageAddressEx(RequesterId,
+                                                  (ULONGLONG)Vector,
+                                                  Affinity,
+                                                  &AddrLow,
+                                                  &AddrHigh,
+                                                  &MsiData))
+                    {
+                        InfoEntry->MessageAddress.LowPart = AddrLow;
+                        InfoEntry->MessageAddress.HighPart = AddrHigh;
+                        InfoEntry->MessageData = MsiData;
+                        DPRINT1("IoConnectInterruptEx[ARM64]: MsiAddr=0x%08x%08x Data=0x%x\n",
+                                AddrHigh, AddrLow, MsiData);
+                    }
+                    else
+                    {
+                        /* Fall back to generic x86-style MSI address */
+                        DPRINT1("IoConnectInterruptEx[ARM64]: HalGetMsiMessageAddressEx failed, using fallback\n");
+                        InfoEntry->MessageAddress.QuadPart = 0xFEE00000 | ((ULONGLONG)ApicId << 12);
+                        InfoEntry->MessageData = Vector & 0xFF;
+                    }
+                }
+#else
+                /* x86/x64: Use APIC MSI address format */
                 InfoEntry->MessageAddress.QuadPart = 0xFEE00000 | ((ULONGLONG)ApicId << 12);
                 InfoEntry->MessageData = Vector & 0xFF;
+#endif
                 InfoEntry->TargetProcessorSet = TargetMask;
                 InfoEntry->Vector = Vector;
                 InfoEntry->Irql = ConnectIrql;

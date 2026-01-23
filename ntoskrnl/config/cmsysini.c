@@ -1036,7 +1036,7 @@ CmpCreateRootNode(IN PHHIVE Hive,
     /* Setup the cell */
     KeyCell->Signature = CM_KEY_NODE_SIGNATURE;
     KeyCell->Flags = KEY_HIVE_ENTRY | KEY_NO_DELETE;
-    KeQuerySystemTime(&KeyCell->LastWriteTime);
+    { LARGE_INTEGER SystemTime; KeQuerySystemTime(&SystemTime); KeyCell->LastWriteTime.QuadPart = SystemTime.QuadPart; }
     KeyCell->Parent = HCELL_NIL;
     KeyCell->SubKeyCounts[Stable] = 0;
     KeyCell->SubKeyCounts[Volatile] = 0;

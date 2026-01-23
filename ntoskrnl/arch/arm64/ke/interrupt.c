@@ -35,7 +35,7 @@ static KINTERRUPT KiArm64DpcInterrupt;
 static KSPIN_LOCK KiArm64DpcLock;
 static KINTERRUPT KiArm64ApcInterrupt;
 static KSPIN_LOCK KiArm64ApcLock;
-static BOOLEAN KiArm64UseVirtualTimer = TRUE; /* Use virtual timer for HVF/hypervisor compatibility */
+static BOOLEAN KiArm64UseVirtualTimer = TRUE; /* Use virtual timer - physical timer doesn't work under HVF */
 
 /* CYCLE 30: Global diagnostic counters for timer ISR debugging */
 ULONG KiTimerIsrCallCount = 0;        /* Incremented in ISR */
@@ -96,20 +96,6 @@ static __inline ULONGLONG KiArm64ReadCntFrq(void)
     return v;
 }
 
-static __inline ULONGLONG KiArm64ReadCntpct(void)
-{
-    ULONGLONG v;
-    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(v));
-    return v;
-}
-
-static __inline ULONGLONG KiArm64ReadCntvct(void)
-{
-    ULONGLONG v;
-    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(v));
-    return v;
-}
-
 static __inline ULONG KiArm64ReadCntpCtl(void)
 {
     ULONGLONG v;
@@ -126,7 +112,13 @@ static __inline ULONG KiArm64ReadCntvCtl(void)
 
 static __inline VOID KiArm64WriteCntpTval(ULONGLONG v)
 {
-    __asm__ __volatile__("msr cntp_tval_el0, %0" :: "r"(v) : "memory");
+    /*
+     * ISB is required after writing TVAL to ensure the timer reload takes
+     * effect immediately. The ARM Architecture Reference Manual states that
+     * changes to timer registers may not be visible until an ISB is executed.
+     * Without ISB, the timer interrupt may not fire at the expected time.
+     */
+    __asm__ __volatile__("msr cntp_tval_el0, %0; isb" :: "r"(v) : "memory");
 }
 
 static __inline VOID KiArm64WriteCntpCtl(ULONG v)
@@ -141,7 +133,13 @@ static __inline VOID KiArm64WriteCntpCtl(ULONG v)
 
 static __inline VOID KiArm64WriteCntvTval(ULONGLONG v)
 {
-    __asm__ __volatile__("msr cntv_tval_el0, %0" :: "r"(v) : "memory");
+    /*
+     * ISB is required after writing TVAL to ensure the timer reload takes
+     * effect immediately. The ARM Architecture Reference Manual states that
+     * changes to timer registers may not be visible until an ISB is executed.
+     * Without ISB, the timer interrupt may not fire at the expected time.
+     */
+    __asm__ __volatile__("msr cntv_tval_el0, %0; isb" :: "r"(v) : "memory");
 }
 
 static __inline VOID KiArm64WriteCntvCtl(ULONG v)
@@ -192,6 +190,19 @@ KiArm64TimerIsr(
 
     /* CYCLE 30: Increment ISR call counter for diagnostics */
     KiTimerIsrCallCount++;
+
+    /*
+     * VM monitor heartbeat: keep the serial log moving even when user-mode is
+     * quiet. Use a single raw UART byte write (no locks, no FIFO polling).
+     *
+     * NOTE: Rate-limit to ~10Hz (100Hz timer).
+     */
+#ifdef KDBG
+    if ((KiTimerIsrCallCount % 10) == 0)
+    {
+        *(volatile UCHAR *)PL011_VA = '~';
+    }
+#endif /* KDBG */
 
     /* Reload next tick FIRST to minimize jitter */
     if (KiArm64UseVirtualTimer)
@@ -508,6 +519,42 @@ KeInitInterrupts(VOID)
     KiRawDebugPuts("[KeInitInterrupts] EXIT\n");
 }
 
+/*
+ * KeReenableTimerInterrupt - Re-enable the timer PPI after HAL initialization
+ *
+ * BACKGROUND:
+ * The timer PPI (Private Peripheral Interrupt) is initially connected via
+ * KeConnectInterrupt during early kernel initialization (KeInitInterrupts).
+ * However, at that point, the HAL's GIC initialization hasn't run yet, so
+ * HalpGicUseSysRegs is FALSE. This causes HalEnableSystemInterrupt to take
+ * the wrong code path and the PPI is not actually enabled in the GIC.
+ *
+ * After HalInitSystem(0) completes, HalpGicUseSysRegs is properly set and
+ * the GIC redistributor is configured. This function re-enables the timer
+ * PPI to ensure it's properly routed through the GIC.
+ *
+ * This fixes the "5-second timer gap" bug where the timer would only fire
+ * sporadically during USB enumeration because the PPI wasn't properly enabled.
+ */
+VOID
+NTAPI
+KeReenableTimerInterrupt(VOID)
+{
+    ULONG TimerIntId = KiArm64UseVirtualTimer ? 27 : 30;
+
+    DPRINT1("[arm64] KeReenableTimerInterrupt: Re-enabling timer PPI (INTID=%lu)\n", TimerIntId);
+
+    /*
+     * Re-enable the timer interrupt in the GIC.
+     * Now that HalInitSystem(0) has run, HalpGicUseSysRegs is properly set
+     * and the GIC redistributor is configured. This call will properly
+     * enable the PPI in the redistributor's ISENABLER0 register.
+     */
+    HalEnableSystemInterrupt(TimerIntId, CLOCK_LEVEL, LevelSensitive);
+
+    DPRINT1("[arm64] KeReenableTimerInterrupt: Timer PPI re-enabled\n");
+}
+
 static
 VOID
 KiArm64DispatchChain(_In_ ULONG IntId,
@@ -585,41 +632,9 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
     KIRQL RequestIrql = DISPATCH_LEVEL;
     PKINTERRUPT Head;
     BOOLEAN Begun;
-    static ULONG InterruptCounter = 0;
-
-    /* [CYCLE38] Count IRQ entries but NO DPRINT - debug output can corrupt state! */
-    InterruptCounter++;
 
     /* Ask HAL for current INTID */
     IntId = HalGetInterruptSource();
-
-    /* [CYCLE38] Spurious interrupt handling - must be minimal and safe */
-    if ((IntId == 0) || (IntId >= ARM64_MAX_INTID))
-    {
-        /*
-         * [CYCLE38] CRITICAL: Spurious interrupt handling must be minimal!
-         *
-         * A spurious interrupt (IntId=1023) means the GIC had no pending interrupt
-         * to deliver when we read ICC_IAR1_EL1. This is normal and can happen if:
-         * - The interrupt was deasserted between IRQ and IAR read
-         * - Priority masking changed between IRQ and IAR read
-         * - Edge case in GIC state machine
-         *
-         * For spurious interrupts, we MUST:
-         * 1. NOT call HalBeginSystemInterrupt (no IRQL change, no state modification)
-         * 2. NOT call HalEndSystemInterrupt (no IAR read was acknowledged)
-         * 3. NOT call DPRINT1 or any complex logging (stack corruption risk)
-         * 4. Just return immediately - the IRQ assembly will restore registers and ERET
-         *
-         * The key insight: Reading IAR with result 1023 means "no interrupt acknowledged",
-         * so there's nothing to EOI. The GIC is already in the correct state.
-         *
-         * DAIF state: Hardware masked IRQs on entry, ERET will restore from SPSR.
-         * IRQL state: Unchanged (we never called HalBeginSystemInterrupt).
-         * Stack state: Only async handler's 0xB0 byte frame, will be restored on return.
-         */
-        return;
-    }
 
     Head = KiArm64IntTable[IntId];
     if (Head != NULL)

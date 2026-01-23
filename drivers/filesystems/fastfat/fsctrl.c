@@ -395,20 +395,24 @@ FatAddMcbEntry (
 
     NT_ASSERT( SectorCount != 0 );
 
+#if DBG
     if (Mcb != &Vcb->DirtyFatMcb) {
         NT_ASSERT( FatNonSparseMcb( Vcb, Mcb, &SparseVbo, &SparseByteCount ) ||
                 ((SparseVbo == Vbo) && (SparseByteCount == SectorCount )) );
     }
+#endif
 
     Result = FsRtlAddLargeMcbEntry( Mcb,
                                   ((LONGLONG) Vbo),
                                   ((LONGLONG) Lbo),
                                   ((LONGLONG) SectorCount) );
 
+#if DBG
     if (Mcb != &Vcb->DirtyFatMcb) {
         NT_ASSERT( FatNonSparseMcb( Vcb, Mcb, &SparseVbo, &SparseByteCount ) ||
                 ((SparseVbo == Vbo) && (SparseByteCount == SectorCount )) );
     }
+#endif
 
     return Result;
 }
@@ -2650,13 +2654,7 @@ Return Value:
     //  Unpack the bios and then test everything
     //
 
-    DbgPrint("[FatIsBootSectorFat] About to call FatUnpackBios, &BootSector->PackedBpb=%p\n",
-             &BootSector->PackedBpb);
-    DbgPrint("[FatIsBootSectorFat] First byte access test: BootSector->Jump[0]=0x%02x\n",
-             BootSector->Jump[0]);
-    DbgPrint("[FatIsBootSectorFat] First byte read succeeded, calling FatUnpackBios\n");
     FatUnpackBios( &Bpb, &BootSector->PackedBpb );
-    DbgPrint("[FatIsBootSectorFat] FatUnpackBios returned\n");
     if (Bpb.Sectors != 0) { Bpb.LargeSectors = 0; }
 
     if ((BootSector->Jump[0] != 0xe9) &&

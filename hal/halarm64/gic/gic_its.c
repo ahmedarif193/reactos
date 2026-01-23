@@ -1578,15 +1578,26 @@ HalpGicItsInitAllNodes(VOID)
 BOOLEAN
 HalpGicItsInitialize(VOID)
 {
+    DPRINT1("[arm64][ITS] HalpGicItsInitialize: entry, InitFailed=%d Initialized=%d Present=%d NodeCount=%lu\n",
+            (int)HalpGicItsInitFailed, (int)HalpGicItsInitialized,
+            (int)HalpGicItsPresent, HalpGicItsNodeCount);
+
     if (HalpGicItsInitFailed)
+    {
+        DPRINT1("[arm64][ITS] HalpGicItsInitialize: returning FALSE (InitFailed)\n");
         return FALSE;
+    }
 
     if (HalpGicItsInitialized)
+    {
+        DPRINT1("[arm64][ITS] HalpGicItsInitialize: returning TRUE (already initialized)\n");
         return TRUE;
+    }
 
     if (!HalpGicItsPresent || HalpGicItsNodeCount == 0)
     {
-        DPRINT1("[arm64][ITS] No ITS present\n");
+        DPRINT1("[arm64][ITS] No ITS present (Present=%d NodeCount=%lu)\n",
+                (int)HalpGicItsPresent, HalpGicItsNodeCount);
         return FALSE;
     }
 

@@ -161,10 +161,7 @@ KiTimerExpiration(IN PKDPC Dpc,
                 /* Check if there's any waiters */
                 if (!IsListEmpty(&Timer->Header.WaitListHead))
                 {
-#if defined(_M_ARM64)
-                    DPRINT1("[arm64] KiTimerExpiration: Timer %p expired, unwaking waiters (Type=%u)\n",
-                            Timer, Timer->Header.Type);
-#endif
+                    /* Debug disabled for performance */
                     /* Check the type of event */
                     if (Timer->Header.Type == TimerNotificationObject)
                     {
@@ -592,9 +589,7 @@ KiRetireDpcList(IN PKPRCB Prcb)
             TimerHand = Prcb->TimerHand;
             Prcb->TimerRequest = 0;
 
-#if defined(_M_ARM64)
-            DPRINT1("[arm64] KiRetireDpcList: Processing TimerRequest, Hand=%lu\n", (ULONG)TimerHand);
-#endif
+            /* Debug disabled for performance */
 
             /* Expire timers with interrupts enabled */
             _enable();

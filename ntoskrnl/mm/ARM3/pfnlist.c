@@ -121,6 +121,23 @@ VOID
 NTAPI
 MiZeroPhysicalPage(IN PFN_NUMBER PageFrameIndex)
 {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64 FIX: Use KSEG0 direct mapping instead of hyperspace.
+     *
+     * On ARM64, hyperspace uses per-process page tables that are switched
+     * when attaching to a process. The MmFirstReservedMappingPte pointer
+     * was calculated for the System process's hyperspace at boot time.
+     * When attached to a different process, the self-map chain for hyperspace
+     * addresses is broken, causing faults when trying to access hyperspace PTEs.
+     *
+     * Since ARM64 has the KSEG0 identity map (0xFFFF800000000000 + PA = VA),
+     * we can directly access any physical page without hyperspace mapping.
+     * This is simpler and avoids the hyperspace self-map issues.
+     */
+    PVOID VirtualAddress = (PVOID)(0xFFFF800000000000ULL | ((ULONG64)PageFrameIndex << PAGE_SHIFT));
+    KeZeroPages(VirtualAddress, PAGE_SIZE);
+#else
     KIRQL OldIrql;
     PVOID VirtualAddress;
     PEPROCESS Process = PsGetCurrentProcess();
@@ -130,6 +147,7 @@ MiZeroPhysicalPage(IN PFN_NUMBER PageFrameIndex)
     ASSERT(VirtualAddress);
     KeZeroPages(VirtualAddress, PAGE_SIZE);
     MiUnmapPageInHyperSpace(Process, VirtualAddress, OldIrql);
+#endif
 }
 
 VOID
@@ -498,20 +516,19 @@ MiRemoveAnyPage(IN ULONG Color)
             /* Check the free list */
             ASSERT_LIST_INVARIANT(&MmFreePageListHead);
             PageIndex = MmFreePageListHead.Flink;
-            Color = PageIndex & MmSecondaryColorMask;
             if (PageIndex == LIST_HEAD)
             {
                 /* Check the zero list */
                 ASSERT_LIST_INVARIANT(&MmZeroedPageListHead);
                 PageIndex = MmZeroedPageListHead.Flink;
-                Color = PageIndex & MmSecondaryColorMask;
-                ASSERT(PageIndex != LIST_HEAD);
                 if (PageIndex == LIST_HEAD)
                 {
                     /* FIXME: Should check the standby list */
                     ASSERT(MmZeroedPageListHead.Total == 0);
+                    return 0;
                 }
             }
+            Color = PageIndex & MmSecondaryColorMask;
         }
     }
 
@@ -568,13 +585,13 @@ MiRemoveZeroPage(IN ULONG Color)
                 /* Check the free list */
                 ASSERT_LIST_INVARIANT(&MmFreePageListHead);
                 PageIndex = MmFreePageListHead.Flink;
-                Color = PageIndex & MmSecondaryColorMask;
-                ASSERT(PageIndex != LIST_HEAD);
                 if (PageIndex == LIST_HEAD)
                 {
                     /* FIXME: Should check the standby list */
                     ASSERT(MmZeroedPageListHead.Total == 0);
+                    return 0;
                 }
+                Color = PageIndex & MmSecondaryColorMask;
             }
         }
         else

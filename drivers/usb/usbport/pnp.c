@@ -171,6 +171,39 @@ USBPORT_ProgramMsixTable(
         PIO_INTERRUPT_MESSAGE_INFO_ENTRY Entry = &MessageInfo->MessageInfo[i];
         volatile ULONG *TableEntry = (volatile ULONG *)((PUCHAR)MsixTableVa + (i * 16));
 
+#if defined(_M_ARM64)
+        /*
+         * ARM64: Validate that the message address is a valid GIC ITS or GICv2m
+         * address. If IoConnectInterruptEx couldn't get a proper ARM64 MSI address
+         * from the HAL, it falls back to the x86 APIC address 0xFEE00000 which
+         * doesn't work on ARM64. We must detect this and fail so the driver
+         * falls back to line-based interrupts.
+         */
+        if ((Entry->MessageAddress.LowPart & 0xFFF00000) == 0xFEE00000)
+        {
+            USHORT DisableControl;
+
+            DPRINT1("USBPORT_ProgramMsixTable: Entry[%u] has invalid x86 APIC address 0x%I64x - MSI-X not available\n",
+                    i, Entry->MessageAddress.QuadPart);
+            MmUnmapIoSpace(MsixTableVa, MessageInfo->MessageCount * 16);
+
+            /*
+             * Explicitly disable MSI-X in the PCI device to prevent the miniport
+             * driver from re-enabling it. Clear enable (bit 15), set mask (bit 14).
+             */
+            DisableControl = MsixControl & ~0x8000; /* Clear enable */
+            DisableControl |= 0x4000;               /* Set function mask */
+            BusInterface->SetBusData(BusInterface->Context,
+                                     PCI_WHICHSPACE_CONFIG,
+                                     &DisableControl,
+                                     MsixCapOffset + 2,
+                                     sizeof(DisableControl));
+            DPRINT1("USBPORT_ProgramMsixTable: Disabled MSI-X (control=0x%04x)\n", DisableControl);
+
+            return STATUS_NOT_SUPPORTED;
+        }
+#endif
+
         /* Message Address Low (offset 0) */
         TableEntry[0] = (ULONG)Entry->MessageAddress.LowPart;
         /* Message Address High (offset 4) */
@@ -217,6 +250,204 @@ USBPORT_ProgramMsixTable(
 
     return STATUS_SUCCESS;
 }
+
+#if defined(_M_ARM64)
+/*
+ * USBPORT_GetLegacyInterruptVector - Get legacy INTx vector for ARM64 fallback
+ *
+ * When MSI-X programming fails on ARM64 (e.g., when ITS is unavailable), this
+ * function queries the PCI bus interface to get the device's legacy interrupt
+ * line and translates it to a system vector using HalGetInterruptVector.
+ *
+ * Parameters:
+ *   FdoDevice       - The FDO device object for the USB controller
+ *   PdoDevice       - The PDO device object (physical device)
+ *   OutVector       - Receives the translated system vector
+ *   OutLevel        - Receives the IRQL level
+ *   OutAffinity     - Receives the processor affinity
+ *
+ * Returns:
+ *   STATUS_SUCCESS if the legacy interrupt vector was obtained
+ *   STATUS_NOT_SUPPORTED if legacy interrupts are not available
+ *   STATUS_INSUFFICIENT_RESOURCES on allocation failure
+ */
+static
+NTSTATUS
+USBPORT_GetLegacyInterruptVector(
+    _In_ PDEVICE_OBJECT FdoDevice,
+    _In_ PDEVICE_OBJECT PdoDevice,
+    _Out_ PULONG OutVector,
+    _Out_ PKIRQL OutLevel,
+    _Out_ PKAFFINITY OutAffinity)
+{
+    BUS_INTERFACE_STANDARD BusInterface;
+    KEVENT Event;
+    NTSTATUS Status;
+    PIRP Irp;
+    IO_STATUS_BLOCK IoStatusBlock;
+    PIO_STACK_LOCATION IrpSp;
+    PDEVICE_OBJECT TargetDevice;
+    UCHAR InterruptLine;
+    ULONG BusNumber;
+    ULONG ResultLength;
+    ULONG Vector;
+    KIRQL Irql;
+    KAFFINITY Affinity;
+
+    UNREFERENCED_PARAMETER(FdoDevice);
+
+    *OutVector = 0;
+    *OutLevel = 0;
+    *OutAffinity = 0;
+
+    if (!PdoDevice)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Get the bus number */
+    Status = IoGetDeviceProperty(PdoDevice,
+                                 DevicePropertyBusNumber,
+                                 sizeof(BusNumber),
+                                 &BusNumber,
+                                 &ResultLength);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("USBPORT_GetLegacyInterruptVector: Failed to get bus number (0x%lx)\n", Status);
+        return Status;
+    }
+
+    /* Get the top of the device stack to send the query */
+    TargetDevice = IoGetAttachedDeviceReference(PdoDevice);
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+
+    /* Build IRP to query bus interface */
+    Irp = IoBuildSynchronousFsdRequest(IRP_MJ_PNP,
+                                        TargetDevice,
+                                        NULL,
+                                        0,
+                                        NULL,
+                                        &Event,
+                                        &IoStatusBlock);
+    if (!Irp)
+    {
+        ObDereferenceObject(TargetDevice);
+        DPRINT1("USBPORT_GetLegacyInterruptVector: Failed to allocate IRP\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+    RtlZeroMemory(&BusInterface, sizeof(BusInterface));
+
+    IrpSp = IoGetNextIrpStackLocation(Irp);
+    IrpSp->MajorFunction = IRP_MJ_PNP;
+    IrpSp->MinorFunction = IRP_MN_QUERY_INTERFACE;
+    IrpSp->Parameters.QueryInterface.InterfaceType = &GUID_BUS_INTERFACE_STANDARD;
+    IrpSp->Parameters.QueryInterface.Size = sizeof(BUS_INTERFACE_STANDARD);
+    IrpSp->Parameters.QueryInterface.Version = 1;
+    IrpSp->Parameters.QueryInterface.Interface = (PINTERFACE)&BusInterface;
+    IrpSp->Parameters.QueryInterface.InterfaceSpecificData = NULL;
+
+    Status = IoCallDriver(TargetDevice, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatusBlock.Status;
+    }
+
+    ObDereferenceObject(TargetDevice);
+
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("USBPORT_GetLegacyInterruptVector: Bus interface query failed (0x%lx)\n", Status);
+        return Status;
+    }
+
+    /*
+     * Read the PCI common header from offset 0 with full length.
+     *
+     * On ARM64, the HAL's bus data hook translates the InterruptLine field
+     * using ACPI _PRT routing tables ONLY when reading from offset 0 with
+     * length >= PCI_COMMON_HDR_LENGTH (64 bytes). Reading just the
+     * InterruptLine byte directly bypasses this translation and returns
+     * the raw PCI config value (often 0xFF on UEFI systems).
+     *
+     * By reading the full header, we ensure the HAL applies the _PRT
+     * translation and returns the correct GSI in the InterruptLine field.
+     */
+    if (!BusInterface.GetBusData)
+    {
+        if (BusInterface.InterfaceDereference)
+            BusInterface.InterfaceDereference(BusInterface.Context);
+        DPRINT1("USBPORT_GetLegacyInterruptVector: GetBusData not available\n");
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    {
+        PCI_COMMON_CONFIG PciConfig;
+        ULONG ReadLen;
+
+        RtlZeroMemory(&PciConfig, sizeof(PciConfig));
+
+        /* Read PCI common header from offset 0 to trigger HAL _PRT translation */
+        ReadLen = BusInterface.GetBusData(BusInterface.Context,
+                                          PCI_WHICHSPACE_CONFIG,
+                                          &PciConfig,
+                                          0,
+                                          PCI_COMMON_HDR_LENGTH);
+
+        /* Release the bus interface reference */
+        if (BusInterface.InterfaceDereference)
+            BusInterface.InterfaceDereference(BusInterface.Context);
+
+        if (ReadLen < PCI_COMMON_HDR_LENGTH)
+        {
+            DPRINT1("USBPORT_GetLegacyInterruptVector: Failed to read PCI header (read %lu/%lu)\n",
+                    ReadLen, (ULONG)PCI_COMMON_HDR_LENGTH);
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        InterruptLine = PciConfig.u.type0.InterruptLine;
+        DPRINT1("USBPORT_GetLegacyInterruptVector: PCI Header read - InterruptLine=0x%02x Pin=%u\n",
+                InterruptLine, PciConfig.u.type0.InterruptPin);
+    }
+
+    if (InterruptLine == 0xFF || InterruptLine == 0)
+    {
+        DPRINT1("USBPORT_GetLegacyInterruptVector: No legacy interrupt line (InterruptLine=0x%02x)\n",
+                InterruptLine);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    DPRINT1("USBPORT_GetLegacyInterruptVector: PCI InterruptLine=%u (0x%02x) Bus=%lu\n",
+            InterruptLine, InterruptLine, BusNumber);
+
+    /* Translate the interrupt line to system vector using HalGetInterruptVector.
+     * On ARM64, the interrupt line from PCI config is typically a GSI (Global System Interrupt).
+     * HalGetInterruptVector will translate it to the correct SPI vector for the GIC.
+     */
+    Vector = HalGetInterruptVector(PCIBus,
+                                   BusNumber,
+                                   InterruptLine,  /* BusInterruptLevel */
+                                   InterruptLine,  /* BusInterruptVector */
+                                   &Irql,
+                                   &Affinity);
+
+    if (Vector == 0)
+    {
+        DPRINT1("USBPORT_GetLegacyInterruptVector: HalGetInterruptVector returned 0\n");
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    DPRINT1("USBPORT_GetLegacyInterruptVector: Translated to Vector=%lu IRQL=%u Affinity=0x%lx\n",
+            Vector, Irql, (ULONG)Affinity);
+
+    *OutVector = Vector;
+    *OutLevel = Irql;
+    *OutAffinity = Affinity;
+
+    return STATUS_SUCCESS;
+}
+#endif /* _M_ARM64 */
 
 static
 VOID
@@ -1468,8 +1699,34 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
                 FdoExtension->InterruptMessageInfo);
             if (!NT_SUCCESS(MsixStatus))
             {
-                DPRINT1("USBPORT_StartDevice: MSI-X table programming failed (0x%lx), continuing anyway\n",
+                DPRINT1("USBPORT_StartDevice: MSI-X table programming failed (0x%lx), falling back to INTx\n",
                         MsixStatus);
+
+                /*
+                 * MSI-X programming failed - disconnect message-based interrupt
+                 * and fall back to legacy line-based INTx.
+                 */
+                DPRINT1("USBPORT_StartDevice: Disconnecting MSI-X interrupt...\n");
+                if (UsbPortIoDisconnectInterruptEx)
+                {
+                    IO_DISCONNECT_INTERRUPT_PARAMETERS DisconnectParameters;
+                    RtlZeroMemory(&DisconnectParameters, sizeof(DisconnectParameters));
+                    DisconnectParameters.Version = CONNECT_MESSAGE_BASED;
+                    DisconnectParameters.ConnectionContext.InterruptMessageTable =
+                        FdoExtension->InterruptMessageInfo;
+                    UsbPortIoDisconnectInterruptEx(&DisconnectParameters);
+                    DPRINT1("USBPORT_StartDevice: MSI-X interrupt disconnected\n");
+                }
+                else
+                {
+                    DPRINT1("USBPORT_StartDevice: WARNING: UsbPortIoDisconnectInterruptEx is NULL!\n");
+                }
+
+                FdoExtension->InterruptObject = NULL;
+                FdoExtension->InterruptMessageInfo = NULL;
+                FdoExtension->MessageInterruptsEnabled = FALSE;
+                FdoExtension->MessageInterruptCount = 0;
+                FdoExtension->Flags &= ~USBPORT_FLAG_INT_CONNECTED;
             }
             else
             {
@@ -1507,21 +1764,70 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
 
     if (!(FdoExtension->Flags & USBPORT_FLAG_INT_CONNECTED))
     {
+        ULONG FallbackVector = UsbPortResources->InterruptVector;
+        KIRQL FallbackLevel = UsbPortResources->InterruptLevel;
+        KAFFINITY FallbackAffinity = UsbPortResources->InterruptAffinity;
+
+#if defined(_M_ARM64)
+        /*
+         * On ARM64, if the resources contain a message interrupt (LPI vector)
+         * but MSI-X programming failed, we need to fall back to the legacy
+         * INTx interrupt line. The LPI vector (e.g., 8192+) cannot be used
+         * with IoConnectInterrupt because it requires ITS device mapping.
+         *
+         * Query the PCI bus interface to get the legacy interrupt line and
+         * translate it to a system vector using HalGetInterruptVector.
+         */
+        if (UsbPortResources->InterruptFlags & CM_RESOURCE_INTERRUPT_MESSAGE)
+        {
+            ULONG LegacyVector = 0;
+            KIRQL LegacyLevel = 0;
+            KAFFINITY LegacyAffinity = 0;
+            NTSTATUS LegacyStatus;
+
+            DPRINT1("USBPORT_StartDevice: ARM64 MSI-X fallback - querying legacy INTx\n");
+
+            LegacyStatus = USBPORT_GetLegacyInterruptVector(
+                FdoDevice,
+                FdoExtension->CommonExtension.LowerPdoDevice,
+                &LegacyVector,
+                &LegacyLevel,
+                &LegacyAffinity);
+
+            if (NT_SUCCESS(LegacyStatus) && LegacyVector != 0)
+            {
+                DPRINT1("USBPORT_StartDevice: Using legacy INTx Vector=%lu Level=%u Affinity=0x%lx\n",
+                        LegacyVector, LegacyLevel, (ULONG)LegacyAffinity);
+                FallbackVector = LegacyVector;
+                FallbackLevel = LegacyLevel;
+                FallbackAffinity = LegacyAffinity;
+                /* Legacy INTx is level-triggered, shared */
+                UsbPortResources->InterruptMode = LevelSensitive;
+                UsbPortResources->ShareVector = TRUE;
+            }
+            else
+            {
+                DPRINT1("USBPORT_StartDevice: Failed to get legacy INTx (0x%lx), trying original vector\n",
+                        LegacyStatus);
+            }
+        }
+#endif /* _M_ARM64 */
+
         Status = IoConnectInterrupt(&FdoExtension->InterruptObject,
                                     USBPORT_InterruptService,
                                     (PVOID)FdoDevice,
                                     0,
-                                    UsbPortResources->InterruptVector,
-                                    UsbPortResources->InterruptLevel,
-                                    UsbPortResources->InterruptLevel,
+                                    FallbackVector,
+                                    FallbackLevel,
+                                    FallbackLevel,
                                     UsbPortResources->InterruptMode,
                                     UsbPortResources->ShareVector,
-                                    UsbPortResources->InterruptAffinity,
+                                    FallbackAffinity,
                                     0);
 
         if (!NT_SUCCESS(Status))
         {
-            DPRINT1("USBPORT_StartDevice: IoConnectInterrupt failed!\n");
+            DPRINT1("USBPORT_StartDevice: IoConnectInterrupt failed (Vector=%lu)!\n", FallbackVector);
             goto ExitWithError;
         }
 

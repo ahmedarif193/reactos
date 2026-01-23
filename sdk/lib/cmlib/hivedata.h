@@ -130,6 +130,22 @@ typedef enum
 
 #include <pshpack1.h>
 
+//
+// Packed Large Integer
+//
+typedef union _PACKED_LARGE_INTEGER {
+    struct {
+        ULONG LowPart;
+        LONG HighPart;
+    };
+    struct {
+        ULONG LowPart;
+        LONG HighPart;
+    } u;
+    LONGLONG QuadPart;
+} PACKED_LARGE_INTEGER, *PPACKED_LARGE_INTEGER;
+
+
 /**
  * @name HBASE_BLOCK
  *
@@ -148,7 +164,7 @@ typedef struct _HBASE_BLOCK
     ULONG Sequence2;
 
     /* When this hive file was last modified */
-    LARGE_INTEGER TimeStamp;
+    PACKED_LARGE_INTEGER TimeStamp;
 
     /* Registry format major version (1) */
     ULONG Major;
@@ -203,7 +219,7 @@ typedef struct _HBIN
     ULONG Reserved1[2];
 
     /* When this bin was last modified */
-    LARGE_INTEGER TimeStamp;
+    PACKED_LARGE_INTEGER TimeStamp;
 
     /* Unused (In-memory only) */
     ULONG Spare;

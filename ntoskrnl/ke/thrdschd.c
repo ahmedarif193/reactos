@@ -447,10 +447,7 @@ KiSwapThread(IN PKTHREAD CurrentThread,
     PKTHREAD NextThread;
     ASSERT(KeGetCurrentIrql() >= DISPATCH_LEVEL);
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] KiSwapThread: ENTRY - CurrentThread=%p State=%u WaitReason=%u\n",
-            CurrentThread, CurrentThread->State, CurrentThread->WaitReason);
-#endif
+    /* Debug disabled for performance */
 
     /* Acquire the PRCB lock */
     KiAcquirePrcbLock(Prcb);
@@ -486,10 +483,7 @@ KiSwapThread(IN PKTHREAD CurrentThread,
         }
     }
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] KiSwapThread: Switching from Thread=%p to Thread=%p (State=%u)\n",
-            CurrentThread, NextThread, NextThread->State);
-#endif
+    /* Debug disabled for performance */
 
     /* Sanity check and release the PRCB */
     ASSERT(CurrentThread != Prcb->IdleThread);
@@ -498,9 +492,7 @@ KiSwapThread(IN PKTHREAD CurrentThread,
     /* Save the wait IRQL */
     WaitIrql = CurrentThread->WaitIrql;
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] KiSwapThread: About to call KiSwapContext, WaitIrql=%u\n", WaitIrql);
-#endif
+    /* Debug disabled for performance */
 
     /* Swap contexts */
     ApcState = KiSwapContext(WaitIrql, CurrentThread);
@@ -513,10 +505,7 @@ KiSwapThread(IN PKTHREAD CurrentThread,
     /* Get the wait status */
     WaitStatus = CurrentThread->WaitStatus;
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] KiSwapThread: Resumed on Thread=%p, WaitStatus=0x%lx, WaitIrql=%u, ApcState=%u\n",
-            CurrentThread, WaitStatus, WaitIrql, ApcState);
-#endif
+    /* Debug disabled for performance */
 
     /* Check if we need to deliver APCs */
     if (ApcState)
@@ -532,9 +521,7 @@ KiSwapThread(IN PKTHREAD CurrentThread,
     /* Lower IRQL back to what it was and return the wait status */
     KeLowerIrql(WaitIrql);
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] KiSwapThread: Returning WaitStatus=0x%lx\n", WaitStatus);
-#endif
+    /* Debug disabled for performance */
 
     return WaitStatus;
 }
@@ -545,10 +532,7 @@ KiReadyThread(IN PKTHREAD Thread)
 {
     IN PKPROCESS Process = Thread->ApcState.Process;
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] KiReadyThread: Making Thread=%p ready (State=%u WaitReason=%u)\n",
-            Thread, Thread->State, Thread->WaitReason);
-#endif
+    /* Debug disabled for performance */
 
     /* Check if the process is paged out */
     if (Process->State != ProcessInMemory)
@@ -592,9 +576,7 @@ KiReadyThread(IN PKTHREAD Thread)
         /* Insert the thread on the deferred ready list */
         KiInsertDeferredReadyList(Thread);
 
-#if defined(_M_ARM64)
-        DPRINT1("[arm64] KiReadyThread: Thread=%p inserted into deferred ready list\n", Thread);
-#endif
+        /* Debug disabled for performance */
     }
 }
 

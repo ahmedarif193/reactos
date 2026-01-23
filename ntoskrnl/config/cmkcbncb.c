@@ -823,7 +823,7 @@ CmpCreateKeyControlBlock(IN PHHIVE Hive,
             }
 
             /* Setup the other data */
-            Kcb->KcbLastWriteTime = Node->LastWriteTime;
+            Kcb->KcbLastWriteTime.QuadPart = Node->LastWriteTime.QuadPart;
             Kcb->KcbMaxNameLen = (USHORT)Node->MaxNameLen;
             Kcb->KcbMaxValueNameLen = (USHORT)Node->MaxValueNameLen;
             Kcb->KcbMaxValueDataLen = Node->MaxValueDataLen;
@@ -878,7 +878,7 @@ CmpCreateKeyControlBlock(IN PHHIVE Hive,
                 /* Setup the other data */
                 Kcb->SubKeyCount = Node->SubKeyCounts[Stable] +
                                    Node->SubKeyCounts[Volatile];
-                Kcb->KcbLastWriteTime = Node->LastWriteTime;
+                Kcb->KcbLastWriteTime.QuadPart = Node->LastWriteTime.QuadPart;
                 Kcb->KcbMaxNameLen = (USHORT)Node->MaxNameLen;
                 Kcb->KcbMaxValueNameLen = (USHORT)Node->MaxValueNameLen;
                 Kcb->KcbMaxValueDataLen = (USHORT)Node->MaxValueDataLen;

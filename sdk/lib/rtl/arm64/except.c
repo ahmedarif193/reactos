@@ -30,15 +30,23 @@ RtlInitializeContext(
     _In_ PTHREAD_START_ROUTINE ThreadStartAddress,
     _In_ PINITIAL_TEB StackBase)
 {
+    /*
+     * Note: Despite the PINITIAL_TEB type, the caller passes InitialTeb.StackBase
+     * (a PVOID) directly. This is a historical API quirk shared across all
+     * architectures - the parameter is actually the stack base address, not
+     * a pointer to an INITIAL_TEB structure.
+     */
     UNREFERENCED_PARAMETER(ProcessHandle);
 
     RtlZeroMemory(ThreadContext, sizeof(*ThreadContext));
 
-    ThreadContext->ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+    ThreadContext->ContextFlags = CONTEXT_ARM64 | CONTEXT_CONTROL | CONTEXT_INTEGER;
     ThreadContext->Pc = (DWORD64)(ULONG_PTR)ThreadStartAddress;
-    ThreadContext->Sp = (DWORD64)(ULONG_PTR)StackBase->StackBase;
+    /* ARM64 requires 16-byte stack alignment */
+    ThreadContext->Sp = (DWORD64)(ULONG_PTR)StackBase & ~(DWORD64)15;
     ThreadContext->X[0] = (DWORD64)(ULONG_PTR)ThreadStartParam;
-    ThreadContext->Cpsr = 0x20000000;
+    /* EL0t, interrupts enabled, NZCV = 0 */
+    ThreadContext->Cpsr = 0;
 }
 
 BOOLEAN

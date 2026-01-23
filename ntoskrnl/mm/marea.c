@@ -120,9 +120,9 @@ MmIsAddressRangeFree(
     PMMADDRESS_NODE Node;
     TABLE_SEARCH_RESULT Result;
 
+
     Process = MmGetAddressSpaceOwner(AddressSpace);
     Table = (Process != NULL) ? &Process->VadRoot : &MiRosKernelVadRoot;
-
     Result = MiCheckForConflictingNode(StartVpn, EndVpn, Table, &Node);
 
     return (Result != TableFoundNode);

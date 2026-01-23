@@ -21,8 +21,8 @@
  * PROJECT:         ReactOS hive maker
  * FILE:            tools/mkhive/cmi.c
  * PURPOSE:         Registry file manipulation routines
- * PROGRAMMERS:     Hervé Poussineau
- *                  Hermès Bélusca-Maïto
+ * PROGRAMMERS:     Herve Poussineau
+ *                  Hermes Belusca-Maito
  */
 
 /* INCLUDES *****************************************************************/
@@ -239,7 +239,7 @@ CmiCreateSubKey(
 
     NewKeyCell->Signature = CM_KEY_NODE_SIGNATURE;
     NewKeyCell->Flags = (VolatileKey ? KEY_IS_VOLATILE : 0);
-    KeQuerySystemTime(&NewKeyCell->LastWriteTime);
+    { LARGE_INTEGER SystemTime; KeQuerySystemTime(&SystemTime); NewKeyCell->LastWriteTime.QuadPart = SystemTime.QuadPart; }
     NewKeyCell->Parent = ParentKeyCellOffset;
     NewKeyCell->SubKeyCounts[Stable] = 0;
     NewKeyCell->SubKeyCounts[Volatile] = 0;
@@ -331,7 +331,7 @@ CmiAddSubKey(
     VERIFY_KEY_CELL(ParentKeyCell);
 
     /* Update the timestamp */
-    KeQuerySystemTime(&ParentKeyCell->LastWriteTime);
+    { LARGE_INTEGER SystemTime; KeQuerySystemTime(&SystemTime); ParentKeyCell->LastWriteTime.QuadPart = SystemTime.QuadPart; }
 
     /* Check if we need to update name maximum, update it if so */
     if (ParentKeyCell->MaxNameLen < SubKeyName->Length)

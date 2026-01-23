@@ -231,6 +231,8 @@ typedef struct _XHCI_EXTENSION {
   KTIMER TransferPollTimer;
   KDPC TransferPollDpc;
   volatile LONG TransferPollCounter;
+  /* Debug counters */
+  volatile ULONG IsrCallCount;
 } XHCI_EXTENSION, *PXHCI_EXTENSION;
 
 typedef struct _XHCI_COMMAND_CONTEXT {

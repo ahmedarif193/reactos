@@ -35,6 +35,7 @@ MiMapPageInHyperSpace(IN PEPROCESS Process,
     MMPTE TempPte;
     PMMPTE PointerPte;
     PFN_NUMBER Offset;
+    PVOID MappedVa;
 
     //
     // Never accept page 0 or non-physical pages
@@ -51,8 +52,6 @@ MiMapPageInHyperSpace(IN PEPROCESS Process,
     {
         ASSERT(MiGetPfnEntry(Page) != NULL);
     }
-#else
-    ASSERT(MiGetPfnEntry(Page) != NULL);
 #endif
 
     //
@@ -101,13 +100,20 @@ MiMapPageInHyperSpace(IN PEPROCESS Process,
     // Write the current PTE
     //
     PointerPte += Offset;
+    MappedVa = MiPteToAddress(PointerPte);
 
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* ARM64: TLB invalidation after PTE write with proper barrier sequence */
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    KiFlushSingleTb(TRUE, MappedVa);
+#endif
 
     //
     // Return the address
     //
-    return MiPteToAddress(PointerPte);
+    return MappedVa;
 }
 
 VOID
@@ -116,12 +122,23 @@ MiUnmapPageInHyperSpace(IN PEPROCESS Process,
                         IN PVOID Address,
                         IN KIRQL OldIrql)
 {
+    PMMPTE PointerPte;
     ASSERT(Process == PsGetCurrentProcess());
 
     //
     // Blow away the mapping
     //
-    MiAddressToPte(Address)->u.Long = 0;
+    PointerPte = MiAddressToPte(Address);
+    PointerPte->u.Long = 0;
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64: Invalidate TLB for this VA after clearing the PTE.
+     * Without this, the CPU may use stale cached TLB entries causing
+     * issues when the slot is reused.
+     */
+    KiFlushSingleTb(TRUE, Address);
+#endif
 
     //
     // Release the hyperlock

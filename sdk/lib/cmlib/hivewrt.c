@@ -500,7 +500,13 @@ HvSyncHive(
 
 #if !defined(_BLDR_)
     /* Update hive header modification time */
-    KeQuerySystemTime(&RegistryHive->BaseBlock->TimeStamp);
+    {
+        LARGE_INTEGER SystemTime;
+        KeQuerySystemTime(&SystemTime);
+        /* Use 32-bit part access to avoid unaligned 64-bit ops on ARM64 */
+        RegistryHive->BaseBlock->TimeStamp.LowPart = SystemTime.LowPart;
+        RegistryHive->BaseBlock->TimeStamp.HighPart = SystemTime.HighPart;
+    }
 #endif
 
     /* Update the hive log file if present */
@@ -601,7 +607,13 @@ HvWriteHive(
 
 #if !defined(_BLDR_)
     /* Update hive header modification time */
-    KeQuerySystemTime(&RegistryHive->BaseBlock->TimeStamp);
+    {
+        LARGE_INTEGER SystemTime;
+        KeQuerySystemTime(&SystemTime);
+        /* Use 32-bit part access to avoid unaligned 64-bit ops on ARM64 */
+        RegistryHive->BaseBlock->TimeStamp.LowPart = SystemTime.LowPart;
+        RegistryHive->BaseBlock->TimeStamp.HighPart = SystemTime.HighPart;
+    }
 #endif
 
     /* Update hive file */
@@ -640,7 +652,13 @@ HvWriteAlternateHive(
 
 #if !defined(_BLDR_)
     /* Update hive header modification time */
-    KeQuerySystemTime(&RegistryHive->BaseBlock->TimeStamp);
+    {
+        LARGE_INTEGER SystemTime;
+        KeQuerySystemTime(&SystemTime);
+        /* Use 32-bit part access to avoid unaligned 64-bit ops on ARM64 */
+        RegistryHive->BaseBlock->TimeStamp.LowPart = SystemTime.LowPart;
+        RegistryHive->BaseBlock->TimeStamp.HighPart = SystemTime.HighPart;
+    }
 #endif
 
     /* Update hive file */

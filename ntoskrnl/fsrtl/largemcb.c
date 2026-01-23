@@ -14,6 +14,13 @@
 #define NDEBUG
 #include <debug.h>
 
+#define MCB_DEBUG_ENABLED 0
+#if MCB_DEBUG_ENABLED
+#define MCB_DPRINT(...) DbgPrint("[MCB] " __VA_ARGS__)
+#else
+#define MCB_DPRINT(...) do {} while(0)
+#endif
+
 #define MIN(x,y) (((x)<(y))?(x):(y))
 #define MAX(x,y) (((x)>(y))?(x):(y))
 
@@ -147,6 +154,8 @@ FsRtlAddBaseMcbEntry(IN PBASE_MCB OpaqueMcb,
     LONGLONG IntLbn, IntSectorCount;
 
     DPRINT("FsRtlAddBaseMcbEntry(%p, %I64d, %I64d, %I64d)\n", OpaqueMcb, Vbn, Lbn, SectorCount);
+    MCB_DPRINT("FsRtlAddBaseMcbEntry: Mcb=%p Vbn=%lld Lbn=%lld SectorCount=%lld PairCount=%lu\n",
+               OpaqueMcb, (long long)Vbn, (long long)Lbn, (long long)SectorCount, Mcb->PairCount);
 
     if (Vbn < 0)
     {
@@ -222,8 +231,13 @@ FsRtlAddBaseMcbEntry(IN PBASE_MCB OpaqueMcb,
     Mcb->Mapping->Table.CompareRoutine = McbMappingCompare;
 
     /* finally insert the resulting run */
+    MCB_DPRINT("FsRtlAddBaseMcbEntry: Inserting Node StartVbn=%lld EndVbn=%lld Lbn=%lld\n",
+               (long long)Node.RunStartVbn.QuadPart, (long long)Node.RunEndVbn.QuadPart,
+               (long long)Node.StartingLbn.QuadPart);
     RtlInsertElementGenericTable(&Mcb->Mapping->Table, &Node, sizeof(Node), &NewElement);
     ++Mcb->PairCount;
+    MCB_DPRINT("FsRtlAddBaseMcbEntry: Insert result NewElement=%d PairCount=%lu\n",
+               NewElement, Mcb->PairCount);
     ASSERT(NewElement);
 
     // NB: Two consecutive runs can only be merged, if actual LBNs also match!
@@ -343,14 +357,25 @@ FsRtlGetNextBaseMcbEntry(IN PBASE_MCB OpaqueMcb,
     ULONGLONG LastVbn = 0;
     ULONGLONG LastSectorCount = 0;
 
+    MCB_DPRINT("FsRtlGetNextBaseMcbEntry: Mcb=%p RunIndex=%lu\n", OpaqueMcb, RunIndex);
+
     // Traverse the tree
     for (Run = (PLARGE_MCB_MAPPING_ENTRY)RtlEnumerateGenericTable(&Mcb->Mapping->Table, TRUE);
     Run;
         Run = (PLARGE_MCB_MAPPING_ENTRY)RtlEnumerateGenericTable(&Mcb->Mapping->Table, FALSE))
     {
+        MCB_DPRINT("FsRtlGetNextBaseMcbEntry: Run[%lu] StartVbn=%lld EndVbn=%lld Lbn=%lld (LastVbn=%llu LastCount=%llu)\n",
+                   CurrentIndex, (long long)Run->RunStartVbn.QuadPart,
+                   (long long)Run->RunEndVbn.QuadPart, (long long)Run->StartingLbn.QuadPart,
+                   (unsigned long long)LastVbn, (unsigned long long)LastSectorCount);
+
         // is the current index a hole?
         if (Run->RunStartVbn.QuadPart > (LastVbn + LastSectorCount))
         {
+            MCB_DPRINT("FsRtlGetNextBaseMcbEntry: HOLE detected at index %lu! Gap from %llu to %lld\n",
+                       CurrentIndex, (unsigned long long)(LastVbn + LastSectorCount),
+                       (long long)Run->RunStartVbn.QuadPart);
+
             // Is this the index we're looking for?
             if (RunIndex == CurrentIndex)
             {

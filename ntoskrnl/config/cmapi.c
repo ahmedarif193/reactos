@@ -422,7 +422,7 @@ CmpQueryKeyData(IN PHHIVE Hive,
             }
 
             /* Copy the basic information */
-            Info->KeyBasicInformation.LastWriteTime = Node->LastWriteTime;
+            Info->KeyBasicInformation.LastWriteTime.QuadPart = Node->LastWriteTime.QuadPart;
             Info->KeyBasicInformation.TitleIndex = 0;
             Info->KeyBasicInformation.NameLength = NameLength;
 
@@ -480,7 +480,7 @@ CmpQueryKeyData(IN PHHIVE Hive,
             }
 
             /* Copy the basic information */
-            Info->KeyNodeInformation.LastWriteTime = Node->LastWriteTime;
+            Info->KeyNodeInformation.LastWriteTime.QuadPart = Node->LastWriteTime.QuadPart;
             Info->KeyNodeInformation.TitleIndex = 0;
             Info->KeyNodeInformation.ClassLength = Node->ClassLength;
             Info->KeyNodeInformation.NameLength = NameLength;
@@ -578,7 +578,7 @@ CmpQueryKeyData(IN PHHIVE Hive,
             }
 
             /* Now copy all the basic information */
-            Info->KeyFullInformation.LastWriteTime = Node->LastWriteTime;
+            Info->KeyFullInformation.LastWriteTime.QuadPart = Node->LastWriteTime.QuadPart;
             Info->KeyFullInformation.TitleIndex = 0;
             Info->KeyFullInformation.ClassLength = Node->ClassLength;
             Info->KeyFullInformation.SubKeys = Node->SubKeyCounts[Stable] +
@@ -868,8 +868,8 @@ DoAgain:
         }
 
         /* Save the write time */
-        KeQuerySystemTime(&Parent->LastWriteTime);
-        Kcb->KcbLastWriteTime = Parent->LastWriteTime;
+        { LARGE_INTEGER SystemTime; KeQuerySystemTime(&SystemTime); Parent->LastWriteTime.QuadPart = SystemTime.QuadPart; }
+        Kcb->KcbLastWriteTime.QuadPart = Parent->LastWriteTime.QuadPart;
 
         /* Check if the cell is cached */
         if (Found && CMP_IS_CELL_CACHED(Kcb->ValueCache.ValueList))
@@ -1014,8 +1014,8 @@ CmDeleteValueKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
         }
 
         /* Set the last write time */
-        KeQuerySystemTime(&Parent->LastWriteTime);
-        Kcb->KcbLastWriteTime = Parent->LastWriteTime;
+        { LARGE_INTEGER SystemTime; KeQuerySystemTime(&SystemTime); Parent->LastWriteTime.QuadPart = SystemTime.QuadPart; }
+        Kcb->KcbLastWriteTime.QuadPart = Parent->LastWriteTime.QuadPart;
 
         /* Sanity check */
         ASSERT(Parent->MaxValueNameLen == Kcb->KcbMaxValueNameLen);
@@ -1441,7 +1441,7 @@ CmpQueryKeyDataFromCache(
     }
 
     /* Fill the structure */
-    KeyCachedInfo->LastWriteTime = Kcb->KcbLastWriteTime;
+    KeyCachedInfo->LastWriteTime.QuadPart = Kcb->KcbLastWriteTime.QuadPart;
     KeyCachedInfo->TitleIndex = 0;
     KeyCachedInfo->NameLength = NameLength;
     KeyCachedInfo->Values = Kcb->ValueCache.Count;
@@ -1896,8 +1896,8 @@ CmDeleteKey(IN PCM_KEY_BODY KeyBody)
                 ASSERT(HvIsCellDirty(Hive, ParentCell));
 
                 /* Update the write time */
-                KeQuerySystemTime(&Parent->LastWriteTime);
-                Kcb->ParentKcb->KcbLastWriteTime = Parent->LastWriteTime;
+                { LARGE_INTEGER SystemTime; KeQuerySystemTime(&SystemTime); Parent->LastWriteTime.QuadPart = SystemTime.QuadPart; }
+                Kcb->ParentKcb->KcbLastWriteTime.QuadPart = Parent->LastWriteTime.QuadPart;
 
                 /* Release the cell */
                 HvReleaseCell(Hive, ParentCell);

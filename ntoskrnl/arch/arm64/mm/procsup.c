@@ -85,13 +85,21 @@ MiArchCreateProcessAddressSpace(
                   MiAddressToPxe(0) + Index,
                   PAGE_SIZE - Index * sizeof(MMPTE));
 
-    /* Install kernel recursive entry and hyperspace pointer */
-    TempPte = ValidKernelPte;
+    /*
+     * Install kernel recursive entry and hyperspace pointer.
+     *
+     * ARM64 FIX: Use ValidKernelPde (table descriptor template) instead of
+     * ValidKernelPte (page descriptor template). On ARM64, table descriptors
+     * (L0/L1/L2) have different attribute layouts than page descriptors (L3).
+     * ValidKernelPte has Writable=1 at bit 55, which is reserved in table
+     * descriptors and can cause translation faults.
+     */
+    TempPte.u.Long = ValidKernelPde.u.Long;
     TempPte.u.Hard.PageFrameNumber = RootPfn;
     Index = MiAddressToPxi((PVOID)PXE_SELFMAP);
     PageTable[Index] = TempPte;
 
-    TempPte = ValidKernelPte;
+    TempPte.u.Long = ValidKernelPde.u.Long;
     TempPte.u.Hard.PageFrameNumber = HyperPfn;
     Index = MiAddressToPxi((PVOID)HYPER_SPACE);
     PageTable[Index] = TempPte;
@@ -105,8 +113,9 @@ MiArchCreateProcessAddressSpace(
     *MappingPte = MapPte;
     KeInvalidateTlbEntry(PageTable);
 
+    /* L1 table entry - use table descriptor template */
     PageTable = MiPteToAddress(MappingPte);
-    TempPte = ValidKernelPte;
+    TempPte.u.Long = ValidKernelPde.u.Long;
     TempPte.u.Hard.PageFrameNumber = HyperPdPfn;
     PageTable[0] = TempPte;
 
@@ -115,8 +124,9 @@ MiArchCreateProcessAddressSpace(
     *MappingPte = MapPte;
     KeInvalidateTlbEntry(PageTable);
 
+    /* L2 table entry - use table descriptor template */
     PageTable = MiPteToAddress(MappingPte);
-    TempPte = ValidKernelPte;
+    TempPte.u.Long = ValidKernelPde.u.Long;
     TempPte.u.Hard.PageFrameNumber = HyperPtPfn;
     PageTable[0] = TempPte;
 

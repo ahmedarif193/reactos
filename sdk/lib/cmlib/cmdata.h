@@ -91,7 +91,7 @@ typedef struct _CM_KEY_NODE
 {
     USHORT Signature;
     USHORT Flags;
-    LARGE_INTEGER LastWriteTime;
+    PACKED_LARGE_INTEGER LastWriteTime;
     ULONG Spare;
     HCELL_INDEX Parent;
     ULONG SubKeyCounts[HTYPE_COUNT];

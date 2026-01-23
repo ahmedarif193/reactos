@@ -28,6 +28,8 @@ RtlpMapFile(PUNICODE_STRING ImageFileName,
     HANDLE hFile = NULL;
     IO_STATUS_BLOCK IoStatusBlock;
 
+    DPRINT1("[arm64] RtlpMapFile: ENTRY File='%wZ'\n", ImageFileName);
+
     /* Open the Image File */
     InitializeObjectAttributes(&ObjectAttributes,
                                ImageFileName,
@@ -46,7 +48,10 @@ RtlpMapFile(PUNICODE_STRING ImageFileName,
         return Status;
     }
 
+    DPRINT1("[arm64] RtlpMapFile: ZwOpenFile returned 0x%x hFile=%p\n", Status, hFile);
+
     /* Now create a section for this image */
+    DPRINT1("[arm64] RtlpMapFile: Calling ZwCreateSection\n");
     Status = ZwCreateSection(Section,
                              SECTION_ALL_ACCESS,
                              NULL,
@@ -54,12 +59,16 @@ RtlpMapFile(PUNICODE_STRING ImageFileName,
                              PAGE_EXECUTE,
                              SEC_IMAGE,
                              hFile);
+    DPRINT1("[arm64] RtlpMapFile: ZwCreateSection returned 0x%x Section=%p\n", Status, Section ? *Section : NULL);
+
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to create section for image file, Status = 0x%08X\n", Status);
     }
 
+    DPRINT1("[arm64] RtlpMapFile: Closing hFile\n");
     ZwClose(hFile);
+    DPRINT1("[arm64] RtlpMapFile: EXIT Status=0x%x\n", Status);
     return Status;
 }
 
@@ -207,7 +216,7 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
     PROCESS_BASIC_INFORMATION ProcessBasicInfo;
     OBJECT_ATTRIBUTES ObjectAttributes;
     UNICODE_STRING DebugString = RTL_CONSTANT_STRING(L"\\WindowsSS");
-    DPRINT("RtlCreateUserProcess: %wZ\n", ImageFileName);
+    DPRINT1("[arm64] RtlCreateUserProcess: ENTRY File='%wZ'\n", ImageFileName);
 
     /* Map and Load the File */
     Status = RtlpMapFile(ImageFileName,
@@ -218,6 +227,8 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
         DPRINT1("Could not map process image\n");
         return Status;
     }
+
+    DPRINT1("[arm64] RtlCreateUserProcess: After RtlpMapFile hSection=%p\n", hSection);
 
     /* Clean out the current directory handle if we won't use it */
     if (!InheritHandles) ProcessParameters->CurrentDirectory.Handle = NULL;
@@ -242,6 +253,8 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
         ObjectAttributes.ObjectName = &DebugString;
     }
 
+    DPRINT1("[arm64] RtlCreateUserProcess: Calling ZwCreateProcess\n");
+
     /* Create Kernel Process Object */
     Status = ZwCreateProcess(&ProcessInfo->ProcessHandle,
                              PROCESS_ALL_ACCESS,
@@ -251,6 +264,10 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
                              hSection,
                              DebugPort,
                              ExceptionPort);
+
+    DPRINT1("[arm64] RtlCreateUserProcess: ZwCreateProcess returned 0x%x ProcessHandle=%p\n",
+            Status, ProcessInfo ? ProcessInfo->ProcessHandle : NULL);
+
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Could not create Kernel Process Object\n");

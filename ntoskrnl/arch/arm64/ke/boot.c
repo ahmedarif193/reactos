@@ -41,22 +41,6 @@ KiArm64RawPuts(const char *Str)
     }
 }
 
-CODE_SEG("INIT")
-static inline VOID
-KiArm64RawPutHex64(UINT64 Value)
-{
-    static const char Hex[] = "0123456789ABCDEF";
-    char Buf[17];
-    int i;
-    for (i = 15; i >= 0; i--)
-    {
-        Buf[i] = Hex[Value & 0xF];
-        Value >>= 4;
-    }
-    Buf[16] = '\0';
-    KiArm64RawPuts(Buf);
-}
-
 typedef struct _ARM64_EARLY_GPRS
 {
     UINT64 X0;

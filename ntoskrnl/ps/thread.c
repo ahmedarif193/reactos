@@ -49,7 +49,7 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
     else
     {
         /* Get the Locale ID and save Preferred Proc */
-        Teb =  NtCurrentTeb();
+        Teb = NtCurrentTeb();
         Teb->CurrentLocale = MmGetSessionLocaleId();
         Teb->IdealProcessor = Thread->Tcb.IdealProcessor;
     }
@@ -74,15 +74,25 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
         KeRaiseIrql(APC_LEVEL, &OldIrql);
 
         /* Queue the User APC */
-        KiInitializeUserApc(KeGetExceptionFrame(&Thread->Tcb),
-                            KeGetTrapFrame(&Thread->Tcb),
+        {
+            PKEXCEPTION_FRAME ExceptionFrame;
+            PKTRAP_FRAME TrapFrame;
+
+            ExceptionFrame = KeGetExceptionFrame(&Thread->Tcb);
+            TrapFrame = KeGetTrapFrame(&Thread->Tcb);
+
+
+            KiInitializeUserApc(ExceptionFrame,
+                                TrapFrame,
                             PspSystemDllEntryPoint,
                             NULL,
                             PspSystemDllBase,
                             NULL);
+        }
 
         /* Lower it back to passive */
         KeLowerIrql(PASSIVE_LEVEL);
+
     }
     else
     {
@@ -93,6 +103,37 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
     }
 
     /* Do we have a cookie set yet? */
+#ifdef _M_ARM64
+    /*
+     * ARM64: Avoid using InterlockedCompareExchange() here.
+     *
+     * Our ARM64 toolchain implements InterlockedCompareExchange via
+     * __atomic_compare_exchange_n(), which may livelock on mappings that
+     * do not support exclusive monitors (e.g. Device memory attributes).
+     *
+     * The cookie only needs to become non-zero; if multiple CPUs race,
+     * any resulting non-zero value is acceptable.
+     */
+    if (!SharedUserData->Cookie)
+    {
+        ULONGLONG Counter;
+        ULONG NewCookie;
+        PKPRCB Prcb;
+
+        /* Use the virtual counter as an entropy source (available on QEMU virt). */
+        __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(Counter));
+
+        Prcb = KeGetCurrentPrcb();
+        NewCookie = (ULONG)(Prcb->MmPageFaultCount ^
+                            Prcb->InterruptTime ^
+                            (ULONG)Counter ^
+                            (ULONG)(Counter >> 32) ^
+                            (ULONG)(ULONG_PTR)Prcb);
+        if (!NewCookie) NewCookie = 1;
+
+        SharedUserData->Cookie = NewCookie;
+    }
+#else
     while (!SharedUserData->Cookie)
     {
         LARGE_INTEGER SystemTime;
@@ -111,6 +152,7 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
                                    NewCookie,
                                    0);
     }
+#endif
 }
 
 LONG

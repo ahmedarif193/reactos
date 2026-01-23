@@ -5135,6 +5135,15 @@ Return Value:
                 if (FreeClusterCount) {
 
                     *FreeClusterCount += ClustersThisRun;
+                }
+
+                /*
+                 * Only update ClustersFree during the initial setup phase.
+                 * When switching windows (SetupWindows=FALSE, SwitchToWindow provided),
+                 * ClustersFree was already computed during the setup phase.
+                 * Adding to it here would cause double-counting.
+                 */
+                if (SetupWindows) {
                     CurrentWindow->ClustersFree += ClustersThisRun;
                 }
 
@@ -5204,6 +5213,13 @@ Return Value:
             if (FreeClusterCount) {
 
                 *FreeClusterCount += ClustersThisRun;
+            }
+
+            /*
+             * Only update ClustersFree during the initial setup phase.
+             * When switching windows, ClustersFree is already counted.
+             */
+            if (SetupWindows) {
                 CurrentWindow->ClustersFree += ClustersThisRun;
             }
 

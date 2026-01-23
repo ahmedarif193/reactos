@@ -442,7 +442,9 @@ static VOID XHCI_RingCommandDoorbell(PXHCI_EXTENSION Extension);
 static VOID XHCI_ServiceEventRing(PXHCI_EXTENSION Extension,
                                   BOOLEAN AcknowledgeInterrupt,
                                   BOOLEAN AllowCallbacks);
+#if !defined(_M_ARM64)
 static BOOLEAN XHCI_EnableMsix(PXHCI_EXTENSION Extension);
+#endif
 /* Async EP0 bring-up context and callback */
 typedef struct _XHCI_EP0_BRINGUP_CTX {
     PXHCI_ENDPOINT Endpoint;
@@ -663,7 +665,9 @@ static VOID XHCI_DetectHardwareQuirks(PXHCI_EXTENSION Extension);
 static ULONG XHCI_FindExtendedCapability(PXHCI_EXTENSION Extension, UCHAR CapabilityId);
 static MPSTATUS XHCI_DisableLegacySupport(PXHCI_EXTENSION Extension);
 static VOID XHCI_ProbeMsiMsix(PXHCI_EXTENSION Extension);
+#if !defined(_M_ARM64)
 static BOOLEAN XHCI_WritePciConfig(PXHCI_EXTENSION Extension, ULONG Offset, PVOID Buffer, ULONG Length);
+#endif
 static VOID XHCI_BuildProtocolPortMap(PXHCI_EXTENSION Extension);
 static volatile ULONG *XHCI_GetPortPowerRegister(PXHCI_EXTENSION Extension, USHORT Port);
 static VOID XHCI_ConfigurePortLpm(PXHCI_EXTENSION Extension, USHORT Port);
@@ -7997,6 +8001,7 @@ XHCI_ReadPciConfig(
                                                       Length) == MP_STATUS_SUCCESS);
 }
 
+#if !defined(_M_ARM64)
 static BOOLEAN
 XHCI_WritePciConfig(
     _In_ PXHCI_EXTENSION Extension,
@@ -8014,6 +8019,7 @@ XHCI_WritePciConfig(
                                                       Offset,
                                                       Length) == MP_STATUS_SUCCESS);
 }
+#endif /* !_M_ARM64 */
 
 static BOOLEAN
 XHCI_EnablePciBusMaster(
@@ -8148,6 +8154,19 @@ XHCI_ProbeMsiMsix(
             Extension->MsixEnabled ? 1 : 0);
 }
 
+#if !defined(_M_ARM64)
+/*
+ * XHCI_EnableMsix - Enable MSI-X in the PCI device
+ *
+ * On x86/x64, the miniport driver can enable MSI-X directly because the APIC
+ * MSI address format is fixed and doesn't require HAL involvement.
+ *
+ * On ARM64, MSI-X requires the GIC ITS (Interrupt Translation Service) which
+ * must be set up by the HAL. If ITS setup fails (e.g., QEMU HVF doesn't support
+ * ITS), USBPORT falls back to legacy INTx. In this case, the miniport should
+ * NOT try to enable MSI-X because the MSI-X table contains invalid addresses.
+ * Therefore, this function is not used on ARM64.
+ */
 static BOOLEAN
 XHCI_EnableMsix(
     _Inout_ PXHCI_EXTENSION Extension)
@@ -8180,6 +8199,7 @@ XHCI_EnableMsix(
     DPRINT1("usbxhci: enabled MSI-X (control=0x%04x)\n", MsixControl);
     return TRUE;
 }
+#endif /* !_M_ARM64 */
 
 static
 VOID
@@ -10959,11 +10979,23 @@ XHCI_StartController(PVOID MiniPortExtension,
     }
     /* Probe for MSI/MSI-X capabilities */
     XHCI_ProbeMsiMsix(Extension);
+#if !defined(_M_ARM64)
+    /*
+     * On x86/x64, we can enable MSI-X ourselves if the hardware supports it.
+     * On ARM64, MSI-X requires the GIC ITS which may not be available or may have
+     * failed initialization (e.g., QEMU HVF doesn't support ITS). On ARM64, we rely
+     * on USBPORT to set up MSI-X; if USBPORT failed, MSI-X will not be enabled in
+     * the PCI config and we should not try to enable it ourselves.
+     */
     if (Extension->MsixSupported && !Extension->MsixEnabled)
     {
         if (!XHCI_EnableMsix(Extension))
             DPRINT1("usbxhci: failed to enable MSI-X, continuing with legacy IRQ\n");
     }
+#else
+    DPRINT1("usbxhci: ARM64: MSI-X enable delegated to USBPORT (MsixEnabled=%d)\n",
+            Extension->MsixEnabled);
+#endif
     /* Prefer message interrupts; if none assigned, fall back to legacy but warn. */
     if ((UsbPortResources->InterruptFlags & CM_RESOURCE_INTERRUPT_MESSAGE) == 0 &&
         (Extension->MsiSupported || Extension->MsixSupported))
@@ -10972,6 +11004,23 @@ XHCI_StartController(PVOID MiniPortExtension,
         Extension->MsixEnabled = FALSE;
         Extension->MsiEnabled = FALSE;
     }
+
+#if defined(_M_ARM64)
+    /*
+     * ARM64: On ARM64, MSI-X requires the GIC ITS to be functional. If the ITS
+     * setup failed (e.g., QEMU HVF doesn't support ITS), the USBPORT layer falls
+     * back to legacy INTx but the resource flags still indicate message interrupt.
+     * Detect this by checking if MSI-X is actually enabled in hardware.
+     */
+    DPRINT1("usbxhci: ARM64 check: IntFlags=0x%lx MsixEnabled=%d MsiEnabled=%d\n",
+            UsbPortResources->InterruptFlags, Extension->MsixEnabled, Extension->MsiEnabled);
+    if ((UsbPortResources->InterruptFlags & CM_RESOURCE_INTERRUPT_MESSAGE) &&
+        !Extension->MsixEnabled && !Extension->MsiEnabled)
+    {
+        DPRINT1("usbxhci: ARM64: Resource says message interrupt but MSI/MSI-X not enabled in hardware; using legacy INTx\n");
+        UsbPortResources->InterruptFlags &= ~CM_RESOURCE_INTERRUPT_MESSAGE;
+    }
+#endif
 
     if (UsbPortResources->InterruptFlags & CM_RESOURCE_INTERRUPT_MESSAGE)
     {
@@ -11587,22 +11636,26 @@ XHCI_InterruptService(PVOID MiniPortExtension)
     XHCI_DPRINT_SHARED("usbxhci: ISR (IRQL=%lu)\n", (ULONG)KeGetCurrentIrql());
 
     Status = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
+
     AckMask = Status & (XHCI_USBSTS_EINT |
                         XHCI_USBSTS_PCD |
                         XHCI_USBSTS_HSE |
                         XHCI_USBSTS_HCE);
 
     /*
-     * VirtualBox quirk: The xHCI emulation may assert the interrupt line
-     * (causing the ISR to be called) without actually setting UsbSts bits.
-     * To prevent an interrupt storm, check and clear IMAN.IP to deassert the
-     * interrupt line even when UsbSts shows nothing.
+     * VirtualBox/QEMU quirk: Some xHCI emulations may assert the interrupt line
+     * (causing the ISR to be called) without setting UsbSts bits, particularly
+     * for port status changes. The interrupt is signaled via IMAN.IP instead.
      *
-     * This is only done when XHCI_QUIRK_VBOX_SPURIOUS_IMAN is set to avoid
-     * masking potential bugs on real hardware.
+     * On ARM64 with legacy INTx (level-triggered), QEMU's XHCI emulation appears
+     * to use IMAN.IP to signal interrupts without always setting UsbSts.EINT.
+     * Check IMAN.IP and handle events even when UsbSts is empty.
+     *
+     * This is also needed for VirtualBox which has a similar behavior pattern.
+     * We apply this unconditionally when using legacy interrupts since there's
+     * no downside to checking IMAN.IP.
      */
-    if ((Extension->Quirks & XHCI_QUIRK_VBOX_SPURIOUS_IMAN) &&
-        Extension->RuntimeRegisters)
+    if (Extension->RuntimeRegisters)
     {
         Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
         Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
@@ -11616,9 +11669,17 @@ XHCI_InterruptService(PVOID MiniPortExtension)
                                       XHCI_IMAN_IP | (Iman & XHCI_IMAN_IE));
             if (!AckMask)
             {
-                /* IMAN.IP was set but UsbSts had nothing - VirtualBox quirk */
-                XHCI_DPRINT_SHARED("usbxhci: ISR cleared IMAN.IP without UsbSts, Iman=0x%x\n", Iman);
-                return TRUE; /* Claim the interrupt to stop the storm */
+                /*
+                 * IMAN.IP was set but UsbSts had nothing. This can happen when:
+                 * 1. VirtualBox/QEMU quirk where interrupts use IMAN.IP only
+                 * 2. Port status changes on some controllers
+                 *
+                 * Trigger the DPC to process any pending events from the Event Ring.
+                 * Mark PCD in PendingUsbSts to ensure the DPC checks ports.
+                 */
+                DPRINT1("usbxhci: ISR cleared IMAN.IP without UsbSts, Iman=0x%x\n", Iman);
+                InterlockedOr((volatile LONG *)&Extension->PendingUsbSts, XHCI_USBSTS_PCD);
+                return TRUE; /* Claim the interrupt and queue DPC */
             }
         }
     }
@@ -11648,6 +11709,23 @@ XHCI_InterruptService(PVOID MiniPortExtension)
     }
 
     XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts, AckMask);
+
+    /*
+     * Note on IMAN.IP clearing:
+     *
+     * For XHCI, IMAN.IP (Interrupt Pending) needs to be cleared for level-triggered
+     * legacy INTx interrupts. However, we must NOT clear it here in the ISR because:
+     *
+     * 1. The controller will re-assert IMAN.IP if there are pending events
+     * 2. The DPC processes events and updates ERDP which naturally clears IP
+     * 3. Prematurely clearing IP can cause lost interrupts
+     *
+     * For MSI/MSI-X (edge-triggered), IP auto-clears after the interrupt message
+     * is sent, so we don't need to touch it.
+     *
+     * The VirtualBox quirk code above handles the special case where IP is set
+     * but UsbSts shows nothing - that's the only case we should manually clear IP.
+     */
 
     InterlockedOr((volatile LONG *)&Extension->PendingUsbSts, AckMask);
 

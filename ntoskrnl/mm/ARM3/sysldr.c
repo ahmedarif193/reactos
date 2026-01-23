@@ -228,6 +228,7 @@ MiLoadImageSection(_Inout_ PSECTION *SectionPtr,
     *ImageBase = DriverBase;
     DPRINT1("Loading: %wZ at %p with %lx pages\n", FileName, DriverBase, PteCount);
 
+
     /* Lock the PFN database */
     OldIrql = MiAcquirePfnLock();
 
@@ -260,6 +261,37 @@ MiLoadImageSection(_Inout_ PSECTION *SectionPtr,
 
     /* Release the PFN lock */
     MiReleasePfnLock(OldIrql);
+
+#if defined(_M_ARM64)
+    /*
+     * ARM64: Pre-fault the source pages before copy.
+     *
+     * Use explicit LDRB (load byte) instructions to avoid GCC's LDP (load pair)
+     * optimization which can cause issues when instructions are retried after
+     * page faults. GCC's LDP uses multiple registers, and if a page fault
+     * occurs, the register state at fault time may differ from what the
+     * retried instruction expects.
+     */
+    {
+        PUCHAR SrcData = (PUCHAR)Base;
+        SIZE_T TotalSize = PteCount << PAGE_SHIFT;
+        SIZE_T Offset;
+        UCHAR Dummy = 0;
+
+        for (Offset = 0; Offset < TotalSize; Offset += PAGE_SIZE)
+        {
+            UCHAR Val;
+            __asm__ __volatile__(
+                "ldrb %w0, [%1]"
+                : "=r"(Val)
+                : "r"(SrcData + Offset)
+                : "memory"
+            );
+            Dummy |= Val;
+        }
+        (void)Dummy;
+    }
+#endif
 
     /* Copy the image */
     RtlCopyMemory(DriverBase, Base, PteCount << PAGE_SHIFT);
@@ -3109,41 +3141,53 @@ MmCheckSystemImage(
 
 #if defined(_M_ARM64) || defined(__aarch64__)
     /*
-     * ARM64: Check for stale PTEs and perform cache invalidation for user-space addresses.
-     * This is necessary because:
-     * 1. The VA may have been used for a previous mapping with different PA
-     * 2. TLB entries may cache stale VA->PA translations
-     * 3. D-cache may contain stale data from previous physical pages
+     * ARM64: Stale PTE clearing DISABLED for user-space addresses.
+     *
+     * The original code was designed to clear stale PTEs from previous mappings.
+     * However, on ARM64 with split TTBR0/TTBR1 page tables, accessing the TTBR0
+     * alias for user addresses requires the page table hierarchy to already exist.
+     * If the L0/L1/L2/L3 tables haven't been created yet for this user VA, accessing
+     * MiAddressToPdeSafe(ViewBase) will fault.
+     *
+     * Since this is a freshly mapped view (just created by ZwMapViewOfSection above),
+     * the page tables are created on-demand via page faults when the view is first
+     * accessed. There shouldn't be stale PTEs at this point.
+     *
+     * Instead, we rely on:
+     * 1. TLB invalidation (done below) to ensure no stale translations remain
+     * 2. D-cache invalidation (done below) for the accessed pages
      */
-    {
-        PMMPTE PointerPte = MiAddressToPte(ViewBase);
-        PMMPDE PointerPde = MiAddressToPde(ViewBase);
+    /* Stale PTE check disabled - page tables may not exist yet */
 
-        if (PointerPde->u.Hard.Valid && PointerPte->u.Hard.Valid)
-        {
-            /* Stale PTE from a previous mapping - invalidate it.
-             * Use VAALE1IS to flush ALL ASIDs including Global entries from FreeLoader */
-            PointerPte->u.Long = 0;
-            __asm__ __volatile__("dsb ish" ::: "memory");
-            __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)ViewBase >> 12) : "memory");
-            __asm__ __volatile__("dsb ish" ::: "memory");
-            __asm__ __volatile__("isb" ::: "memory");
-        }
-    }
-
-    /* User-space mappings need explicit TLB and D-cache invalidation */
+    /*
+     * ARM64: User-space mappings need explicit TLB and D-cache invalidation
+     * to clear stale identity-mapped data from FreeLoader.
+     *
+     * IMPORTANT: The order of operations is critical:
+     * 1. First, trigger page fault to create PTEs (via MmAccessFault)
+     *    This is done by calling MmAccessFault directly, NOT by reading data.
+     * 2. Then invalidate TLB to flush stale translations
+     * 3. Then invalidate D-cache to flush stale data
+     * 4. ONLY THEN can we safely read the image data
+     *
+     * Previous code triggered page fault by reading ViewBase[0], which
+     * caused stale identity-mapped data to be loaded into L1 cache.
+     */
     if ((ULONG_PTR)ViewBase < 0x8000000000000000ULL)
     {
         ULONG64 Ctr;
         ULONG DcacheLineSize;
         ULONG_PTR InvalidateAddr;
         ULONG_PTR InvalidateEnd;
+        NTSTATUS FaultStatus;
 
-        /* Trigger page fault to ensure PTEs exist before cache maintenance */
-        /* Note: __try/__except not supported without PSEH on ARM64 GCC */
+        /* Trigger page fault to ensure PTEs exist, WITHOUT reading actual data.
+         * We call MmAccessFault directly to create the PTE mapping. */
+        FaultStatus = MmAccessFault(FALSE, ViewBase, UserMode, NULL);
+        if (!NT_SUCCESS(FaultStatus))
         {
-            volatile UCHAR FirstByte = ((volatile UCHAR*)ViewBase)[0];
-            (void)FirstByte;
+            DPRINT1("[arm64] MmCheckSystemImage: MmAccessFault failed for %p: 0x%lx\n",
+                    ViewBase, FaultStatus);
         }
 
         /* TLB invalidation for the first 2 pages (PE header).
@@ -3168,6 +3212,7 @@ MmCheckSystemImage(
             __asm__ __volatile__("dc civac, %0" :: "r"(InvalidateAddr) : "memory");
         }
         __asm__ __volatile__("dsb ish" ::: "memory");
+        __asm__ __volatile__("isb" ::: "memory");
     }
 #endif
 

@@ -37,6 +37,26 @@ if((CMAKE_C_COMPILER_ID STREQUAL "Clang") OR (CMAKE_C_COMPILER_ID STREQUAL "GNU"
         # Enable xsave feature on x86/x64
         add_compile_options(-mxsave)
     endif()
+    if(NT_ARCH STREQUAL "arm64")
+        #
+        # ARM64: Prevent compiler from inlining memset with SIMD instructions.
+        #
+        # Clang's builtin memset uses 128-bit SIMD stores (str q0) which require
+        # 16-byte alignment. The kernel memory allocator doesn't guarantee this
+        # for all structures (e.g., TEB fields may only be 8-byte aligned),
+        # causing alignment faults.
+        #
+        # With -fno-builtin-memset, the compiler calls the external memset symbol
+        # which is provided by memset_asm.S. This implementation uses 64-bit
+        # stores (str x0) that only require 8-byte alignment.
+        #
+        # We also add -mstrict-align to prevent unaligned memory accesses in
+        # general. ARM64 does support unaligned accesses but they can be slower
+        # and may cause issues with certain memory types.
+        #
+        add_compile_options(-fno-builtin-memset)
+        add_compile_options(-mstrict-align)
+    endif()
 endif()
 
 list(APPEND PCH_SKIP_SOURCE

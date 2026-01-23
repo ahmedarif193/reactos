@@ -707,6 +707,7 @@ RtlpUnwindInternal(
     ULONG_PTR StackLow, StackHigh;
     ULONG64 ImageBase, EstablisherFrame;
     CONTEXT UnwindContext;
+    ULONG FrameCount = 0;
 
     RtlpGetStackLimits(&StackLow, &StackHigh);
     if (TargetFrame != NULL)
@@ -725,6 +726,13 @@ RtlpUnwindInternal(
 
     while (TRUE)
     {
+        FrameCount++;
+        if (FrameCount > 100)
+        {
+            ExceptionRecord->ExceptionFlags |= EXCEPTION_STACK_INVALID;
+            return FALSE;
+        }
+
         if (!RtlpIsStackPointerValid(UnwindContext.Sp, StackLow, StackHigh))
         {
             if (HandlerType == UNW_FLAG_EHANDLER)

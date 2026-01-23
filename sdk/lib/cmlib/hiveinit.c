@@ -260,7 +260,9 @@ HvpCreateHive(
     BaseBlock->Length = 0;
     BaseBlock->Sequence1 = 1;
     BaseBlock->Sequence2 = 1;
-    BaseBlock->TimeStamp.QuadPart = 0ULL;
+    /* Use 32-bit part access to avoid unaligned 64-bit ops on ARM64 */
+    BaseBlock->TimeStamp.LowPart = 0;
+    BaseBlock->TimeStamp.HighPart = 0;
 
     /*
      * No need to compute the checksum since
@@ -620,8 +622,10 @@ HvpGetHiveHeader(
         /*
          * There's still hope for this hive so acknowledge the
          * caller this hive needs a recoverable header.
+         * Use 32-bit part access to avoid unaligned 64-bit ops on ARM64.
          */
-        *TimeStamp = BaseBlock->TimeStamp;
+        TimeStamp->LowPart = BaseBlock->TimeStamp.LowPart;
+        TimeStamp->HighPart = BaseBlock->TimeStamp.HighPart;
         DPRINT1("The hive is not fully corrupt, the base block needs to be RECOVERED\n");
         return RecoverHeader;
     }
@@ -638,14 +642,18 @@ HvpGetHiveHeader(
     if (!HvpVerifyHiveHeader(BaseBlock, HFILE_TYPE_PRIMARY))
     {
         DPRINT1("The hive base header block needs to be RECOVERED\n");
-        *TimeStamp = BaseBlock->TimeStamp;
+        /* Use 32-bit part access to avoid unaligned 64-bit ops on ARM64 */
+        TimeStamp->LowPart = BaseBlock->TimeStamp.LowPart;
+        TimeStamp->HighPart = BaseBlock->TimeStamp.HighPart;
         Hive->Free(BaseBlock, Hive->BaseBlockAlloc);
         return RecoverHeader;
     }
 
     /* Return information */
     *HiveBaseBlock = BaseBlock;
-    *TimeStamp = BaseBlock->TimeStamp;
+    /* Use 32-bit part access to avoid unaligned 64-bit ops on ARM64 */
+    TimeStamp->LowPart = BaseBlock->TimeStamp.LowPart;
+    TimeStamp->HighPart = BaseBlock->TimeStamp.HighPart;
     return HiveSuccess;
 }
 

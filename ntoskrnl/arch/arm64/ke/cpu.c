@@ -574,6 +574,7 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
     ULONG_PTR EndAddress;
     ULONG_PTR CacheAddress;
     ULONG CacheLineSize;
+    BOOLEAN MappedByUs = FALSE;
 
     /*
      * If the MDL is NULL or has zero byte count, there is nothing to flush.
@@ -610,6 +611,7 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
         /*
          * MDL not mapped to system VA. Attempt to map it temporarily so we can
          * perform cache maintenance instead of silently skipping.
+         * Track that we did the mapping so we can unmap it before returning.
          */
         VirtualAddress = MmGetSystemAddressForMdlSafe(Mdl, NormalPagePriority);
         if (VirtualAddress == NULL)
@@ -618,6 +620,7 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
                     Mdl, ReadOperation, DmaOperation);
             return;
         }
+        MappedByUs = TRUE;
     }
 
     if (VirtualAddress == NULL)
@@ -646,6 +649,9 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
     StartAddress = (ULONG_PTR)VirtualAddress & ~((ULONG_PTR)CacheLineSize - 1);
     EndAddress = ((ULONG_PTR)VirtualAddress + Length + CacheLineSize - 1) &
                  ~((ULONG_PTR)CacheLineSize - 1);
+
+    DPRINT1("[arm64] KeFlushIoBuffers: MDL %p VA=%p Len=%lu Start=0x%p End=0x%p Read=%d DMA=%d MappedByUs=%d\n",
+            Mdl, VirtualAddress, Length, (PVOID)StartAddress, (PVOID)EndAddress, ReadOperation, DmaOperation, MappedByUs);
 
     /*
      * Perform cache maintenance based on operation type.
@@ -698,6 +704,16 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
         }
 
         __asm__ __volatile__("dsb ish" ::: "memory");
+    }
+
+    /*
+     * If we mapped the MDL ourselves, unmap it now to leave the MDL in the
+     * same state we found it. This prevents leaving the MDL mapped when the
+     * caller expects it to be unmapped (e.g., before IoFreeMdl).
+     */
+    if (MappedByUs && (Mdl->MdlFlags & MDL_MAPPED_TO_SYSTEM_VA))
+    {
+        MmUnmapLockedPages(VirtualAddress, Mdl);
     }
 }
 

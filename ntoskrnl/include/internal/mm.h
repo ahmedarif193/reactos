@@ -1042,26 +1042,7 @@ KIRQL
 MiAcquirePfnLock(VOID)
 {
 #if defined(_M_ARM64) || defined(__aarch64__)
-    /*
-     * ARM64 DEBUG: Check if we're in a system fault path - if so, we should NOT
-     * be acquiring the PFN lock because the caller should have used MxGetNextPage
-     * or another lockless path. Log if this occurs and continue (bugcheck will happen anyway).
-     */
-    {
-        extern volatile LONG MiArm64InSystemFault[];
-        ULONG CpuIndex = KeGetCurrentProcessorNumber();
-        if (CpuIndex < MAXIMUM_PROCESSORS && MiArm64InSystemFault[CpuIndex] >= 2)
-        {
-            static volatile LONG PfnLockInSysFltBudget = 5;
-            LONG Snap = InterlockedDecrement(&PfnLockInSysFltBudget);
-            if (Snap >= 0)
-            {
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[MiAcquirePfnLock] CRITICAL: Acquiring PFN lock while InSystemFault>=%d on CPU=%lu! Caller should use lockless path.\n",
-                    MiArm64InSystemFault[CpuIndex], CpuIndex);
-            }
-        }
-    }
+    /* Avoid DbgPrintEx in the PFN lock path on ARM64. */
 #endif
     return KeAcquireQueuedSpinLock(LockQueuePfnLock);
 }

@@ -333,12 +333,18 @@ HalpAcpiDiscoverArm64Tables(
         PACPI_SUBTABLE_HEADER Entry =
             (PACPI_SUBTABLE_HEADER)((ULONG_PTR)Madt + sizeof(*Madt));
 
+        DPRINT1("[arm64][ACPI] MADT: Parsing table at %p, length=%lu\n",
+                Madt, Madt->Header.Length);
+
         while ((ULONG_PTR)Entry + sizeof(*Entry) <= TableEnd)
         {
             if (Entry->Length < sizeof(*Entry))
                 break;
             if ((ULONG_PTR)Entry + Entry->Length > TableEnd)
                 break;
+
+            DPRINT1("[arm64][ACPI] MADT: Entry Type=0x%x Length=%u\n",
+                    Entry->Type, Entry->Length);
 
             switch (Entry->Type)
             {

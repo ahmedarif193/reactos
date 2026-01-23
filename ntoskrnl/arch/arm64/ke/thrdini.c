@@ -157,8 +157,9 @@ KiIdleLoop(VOID)
         /*
          * Every few iterations, print that we're alive.
          * This helps detect if the idle loop is running but stuck.
+         * DEBUG: Reduced from 100000 to 10000 to get more frequent timer status
          */
-        if (IdleLoopCounter % 100000 == 1)
+        if (IdleLoopCounter % 10000 == 1)
         {
             DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                        "[KiIdleLoop] Alive loop=%lu ReadySummary=0x%llx NextThread=%p\n",
@@ -166,15 +167,22 @@ KiIdleLoop(VOID)
 
             /* [CYCLE33] Check interrupt state and timer status */
             {
-                ULONG64 Daif, CntvCtl;
+                ULONG64 Daif, CntvCtl, IccPmr, IccIgrpen1;
+                extern ULONG KiTimerIsrCallCount;
+
                 __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
                 __asm__ __volatile__("mrs %0, cntv_ctl_el0" : "=r"(CntvCtl)); /* Virtual timer */
+                __asm__ __volatile__("mrs %0, icc_pmr_el1" : "=r"(IccPmr));
+                __asm__ __volatile__("mrs %0, icc_igrpen1_el1" : "=r"(IccIgrpen1));
                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                           "[CYCLE33] IdleLoop: DAIF=0x%llx CNTV_CTL=0x%llx (ENABLE=%d IMASK=%d ISTATUS=%d)\n",
+                           "[CYCLE33] IdleLoop: DAIF=0x%llx CNTV_CTL=0x%llx (EN=%d IM=%d IS=%d) ISRCnt=%lu PMR=0x%llx GRPEN1=%llu\n",
                            Daif, CntvCtl,
                            (int)(CntvCtl & 1),       /* bit 0: ENABLE */
                            (int)((CntvCtl >> 1) & 1), /* bit 1: IMASK */
-                           (int)((CntvCtl >> 2) & 1)  /* bit 2: ISTATUS (pending) */
+                           (int)((CntvCtl >> 2) & 1), /* bit 2: ISTATUS (pending) */
+                           KiTimerIsrCallCount,
+                           IccPmr,
+                           IccIgrpen1
                 );
             }
         }
@@ -274,8 +282,23 @@ KiIdleLoop(VOID)
             continue;
         }
 
-        KeStallExecutionProcessor(50);
-        __asm__ __volatile__("wfe" ::: "memory");
+        /*
+         * ARM64 Idle: Skip WFE/WFI entirely and just yield CPU time.
+         *
+         * Under Apple HVF, both WFE and WFI have issues with timer interrupts:
+         * - WFE: Timer interrupts fire sporadically (once per ~second instead of 100Hz)
+         * - WFI: Same issue - the vCPU timer doesn't wake reliably
+         *
+         * The root cause appears to be that QEMU HVF doesn't properly virtualize
+         * the ARM generic timer when the vCPU is in a low-power state.
+         *
+         * For now, use a simple busy-wait with yield to allow other vCPUs to run.
+         * This consumes more host CPU but ensures timers fire reliably.
+         *
+         * TODO: Investigate if there's a QEMU HVF flag or configuration to fix this.
+         */
+        KeStallExecutionProcessor(1000); /* 1ms delay */
+        __asm__ __volatile__("yield" ::: "memory");
     }
 }
 
@@ -502,6 +525,7 @@ KiDispatchInterrupt(VOID)
      * Following the AMD64 KiDpcInterruptHandler pattern:
      * 1. Disable interrupts to prevent new hardware interrupts during lowering
      * 2. Call KeLowerIrql to restore original IRQL
+     * 3. Re-enable interrupts (ARM64-specific: DAIF.I must be explicitly cleared)
      *
      * Note: KeLowerIrql may check for DpcInterruptRequested and call back into
      * KiDispatchInterrupt, but this is safe because:
@@ -510,7 +534,14 @@ KiDispatchInterrupt(VOID)
      *   were queued during our dispatch processing
      *
      * If no new DPCs were queued, KeLowerIrql simply lowers the IRQL.
+     *
+     * ARM64 CRITICAL: Unlike x86/AMD64 where IRET restores RFLAGS.IF automatically,
+     * ARM64's DAIF.I bit persists after function return. We must explicitly call
+     * _enable() to unmask interrupts after KeLowerIrql() completes. Without this,
+     * the timer interrupt (PPI 27) would remain masked and never fire, causing
+     * massive delays in timer expiration (100+ second gaps between timer ticks).
      */
     _disable();
     KeLowerIrql(OldIrql);
+    _enable();
 }

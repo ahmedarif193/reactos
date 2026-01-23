@@ -18,11 +18,14 @@
 #define GETVAL(x) (x)
 #else
 // FIXME: BE
+// Use inline functions to avoid boolean context warnings with ternary operators
+static __inline UCHAR _GetVal1(const void *p) { return *(const UCHAR*)p; }
+static __inline USHORT _GetVal2(const void *p) { const UCHAR *b = (const UCHAR*)p; return (USHORT)(b[0] | (b[1] << 8)); }
+static __inline ULONG _GetVal4(const void *p) { const UCHAR *b = (const UCHAR*)p; return (ULONG)(b[0] | (b[1] << 8) | (b[2] << 16) | ((ULONG)b[3] << 24)); }
 #define GETVAL(x) \
-    (sizeof(x) == 1) ? (x) : \
-    (sizeof(x) == 2) ? (((PCHAR)&(x))[0] + (((PCHAR)&(x))[1] << 8)) : \
-    (((PCHAR)&(x))[0] + (((PCHAR)&(x))[1] << 8) + (((PCHAR)&(x))[2] << 16) + \
-     (((PCHAR)&(x))[3] << 24))
+    ((sizeof(x) == 1) ? (ULONG)_GetVal1(&(x)) : \
+     (sizeof(x) == 2) ? (ULONG)_GetVal2(&(x)) : \
+     _GetVal4(&(x)))
 
 #endif
 

@@ -3679,18 +3679,18 @@ MiLockVirtualMemory(
        can be de-committed. Assume success for now. */
     Status = STATUS_SUCCESS;
 
-    /* Get the PTE and PDE */
-    PointerPte = MiAddressToPte(*BaseAddress);
-    PointerPde = MiAddressToPde(*BaseAddress);
+    /* Get the PTE and PDE - use safe macros for ARM64 split page table support */
+    PointerPte = MiAddressToPteSafe(*BaseAddress);
+    PointerPde = MiAddressToPdeSafe(*BaseAddress);
 #if (_MI_PAGING_LEVELS >= 3)
-    PointerPpe = MiAddressToPpe(*BaseAddress);
+    PointerPpe = MiAddressToPpeSafe(*BaseAddress);
 #endif
 #if (_MI_PAGING_LEVELS == 4)
-    PointerPxe = MiAddressToPxe(*BaseAddress);
+    PointerPxe = MiAddressToPxeSafe(*BaseAddress);
 #endif
 
     /* Get the last PTE */
-    LastPte = MiAddressToPte((PVOID)((ULONG_PTR)EndAddress - 1));
+    LastPte = MiAddressToPteSafe((PVOID)((ULONG_PTR)EndAddress - 1));
 
     /* Lock the process working set */
     MiLockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
@@ -3980,18 +3980,18 @@ MiUnlockVirtualMemory(
         goto Cleanup;
     }
 
-    /* Get the PTE and PDE */
-    PointerPte = MiAddressToPte(*BaseAddress);
-    PointerPde = MiAddressToPde(*BaseAddress);
+    /* Get the PTE and PDE - use safe macros for ARM64 split page table support */
+    PointerPte = MiAddressToPteSafe(*BaseAddress);
+    PointerPde = MiAddressToPdeSafe(*BaseAddress);
 #if (_MI_PAGING_LEVELS >= 3)
-    PointerPpe = MiAddressToPpe(*BaseAddress);
+    PointerPpe = MiAddressToPpeSafe(*BaseAddress);
 #endif
 #if (_MI_PAGING_LEVELS == 4)
-    PointerPxe = MiAddressToPxe(*BaseAddress);
+    PointerPxe = MiAddressToPxeSafe(*BaseAddress);
 #endif
 
     /* Get the last PTE */
-    LastPte = MiAddressToPte((PVOID)((ULONG_PTR)EndAddress - 1));
+    LastPte = MiAddressToPteSafe((PVOID)((ULONG_PTR)EndAddress - 1));
 
     /* Lock the process working set */
     MiLockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
@@ -4055,14 +4055,14 @@ MiUnlockVirtualMemory(
 
     /* All pages in the region were locked, so unlock them all */
 
-    /* Get the PTE and PDE */
-    PointerPte = MiAddressToPte(*BaseAddress);
-    PointerPde = MiAddressToPde(*BaseAddress);
+    /* Get the PTE and PDE - use safe macros for ARM64 split page table support */
+    PointerPte = MiAddressToPteSafe(*BaseAddress);
+    PointerPde = MiAddressToPdeSafe(*BaseAddress);
 #if (_MI_PAGING_LEVELS >= 3)
-    PointerPpe = MiAddressToPpe(*BaseAddress);
+    PointerPpe = MiAddressToPpeSafe(*BaseAddress);
 #endif
 #if (_MI_PAGING_LEVELS == 4)
-    PointerPxe = MiAddressToPxe(*BaseAddress);
+    PointerPxe = MiAddressToPxeSafe(*BaseAddress);
 #endif
 
     /* Loop the pages */
@@ -6093,6 +6093,24 @@ MmGetPhysicalAddress(PVOID Address)
     PHYSICAL_ADDRESS PhysicalAddress;
     MMPDE TempPde;
     MMPTE TempPte;
+
+#if defined(_M_ARM64)
+    /* Debug: For SYSCACHE addresses, log the page table walk */
+    if ((ULONG_PTR)Address >= 0xFFFFF98000000000ULL &&
+        (ULONG_PTR)Address < 0xFFFFFA8000000000ULL)
+    {
+        PMMPXE Pxe = MiAddressToPxe(Address);
+        PMMPPE Ppe = MiAddressToPpe(Address);
+        PMMPDE Pde = MiAddressToPde(Address);
+        PMMPTE Pte = MiAddressToPte(Address);
+
+        DPRINT1("[arm64] MmGetPhysicalAddress: SYSCACHE VA=%p\n", Address);
+        DPRINT1("[arm64]   PXE@%p = 0x%llx Valid=%d\n", Pxe, (ULONG64)Pxe->u.Long, (int)Pxe->u.Hard.Valid);
+        DPRINT1("[arm64]   PPE@%p = 0x%llx Valid=%d\n", Ppe, (ULONG64)Ppe->u.Long, (int)Ppe->u.Hard.Valid);
+        DPRINT1("[arm64]   PDE@%p = 0x%llx Valid=%d\n", Pde, (ULONG64)Pde->u.Long, (int)Pde->u.Hard.Valid);
+        DPRINT1("[arm64]   PTE@%p = 0x%llx Valid=%d\n", Pte, (ULONG64)Pte->u.Long, (int)Pte->u.Hard.Valid);
+    }
+#endif
 
     /* Check if the PXE/PPE/PDE is valid */
     if (

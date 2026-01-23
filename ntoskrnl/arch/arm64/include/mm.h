@@ -112,8 +112,27 @@
 #define MI_USER_PROBE_ADDRESS           (PVOID)0x000007FFFFFE0000ULL
 #define MI_DEFAULT_SYSTEM_RANGE_START   (PVOID)0xFFFF800000000000ULL
 #define MI_REAL_SYSTEM_RANGE_START             0xFFFF800000000000ULL
-#define HYPER_SPACE                            0xFFFFF70000000000ULL
-#define HYPER_SPACE_END                        0xFFFFF77FFFFFFFFFULL
+/*
+ * ARM64 HYPER_SPACE Location Fix:
+ *
+ * PROBLEM: The original HYPER_SPACE at 0xFFFFF70000000000 overlapped with
+ * PTE_BASE_TTBR0 (the TTBR0 alias region at L0[494]). This caused hyperspace
+ * PTEs to be inaccessible because the self-map only properly covers L0[493].
+ *
+ * When MiMapPageInHyperSpace accessed MiAddressToPte(HYPER_SPACE), the
+ * resulting PTE address was in a region without valid intermediate page tables,
+ * causing Data Abort crashes.
+ *
+ * SOLUTION: Relocate HYPER_SPACE to 0xFFFFF60000000000, which is at the start
+ * of L0[493] (the normal kernel self-map region). This ensures hyperspace PTEs
+ * are accessible through the standard self-map mechanism.
+ *
+ * Memory layout change:
+ *   Old: HYPER_SPACE = 0xFFFFF70000000000 (L0[494], TTBR0 alias - BROKEN)
+ *   New: HYPER_SPACE = 0xFFFFF60000000000 (L0[493], normal self-map - WORKING)
+ */
+#define HYPER_SPACE                            0xFFFFF60000000000ULL
+#define HYPER_SPACE_END                        0xFFFFF67FFFFFFFFFULL
 #define MI_SYSTEM_CACHE_WS_START               0xFFFFF78000001000ULL
 #define MI_SYSTEM_SPACE_START                  0xFFFFF88000000000ULL
 #define MI_DEBUG_MAPPING                (PVOID)0xFFFFF89FFFFFF000ULL
@@ -357,6 +376,59 @@ MiAddressToPxeTtbr0(PVOID Address)
     ULONG64 Offset = (ULONG64)Address >> (PXI_SHIFT - 3);
     Offset &= PXI_MASK << 3;  /* Mask to 9-bit entry offset */
     return (PMMPTE)(PXE_BASE_TTBR0 + Offset);
+}
+
+/*
+ * MiAddressToPteSafe / MiAddressToPdeSafe / etc.
+ *
+ * ARM64 split page table aware macros that automatically select the correct
+ * self-map alias based on whether the address is in user or kernel space.
+ *
+ * For user addresses (< MmSystemRangeStart): Use TTBR0 alias (L0[494])
+ * For kernel addresses (>= MmSystemRangeStart): Use TTBR1 self-map
+ *
+ * These macros MUST be used in any code that accesses page tables for addresses
+ * that could be either user or kernel space (e.g., generic MM code that handles
+ * both user process mappings and kernel mappings).
+ */
+FORCEINLINE
+PMMPTE
+MiAddressToPteSafe(PVOID Address)
+{
+    if ((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart)
+        return MiAddressToPteTtbr0(Address);
+    else
+        return MiAddressToPte(Address);
+}
+
+FORCEINLINE
+PMMPTE
+MiAddressToPdeSafe(PVOID Address)
+{
+    if ((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart)
+        return MiAddressToPdeTtbr0(Address);
+    else
+        return MiAddressToPde(Address);
+}
+
+FORCEINLINE
+PMMPTE
+MiAddressToPpeSafe(PVOID Address)
+{
+    if ((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart)
+        return MiAddressToPpeTtbr0(Address);
+    else
+        return MiAddressToPpe(Address);
+}
+
+FORCEINLINE
+PMMPTE
+MiAddressToPxeSafe(PVOID Address)
+{
+    if ((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart)
+        return MiAddressToPxeTtbr0(Address);
+    else
+        return MiAddressToPxe(Address);
 }
 
 FORCEINLINE
@@ -630,6 +702,17 @@ MI_MAKE_PROTOTYPE_PTE(
 VOID
 MiArm64CheckSystemViewSpacePte(
     _In_z_ PCSTR Location
+);
+
+//
+// ARM64-specific internal MM functions
+//
+NTSTATUS
+NTAPI
+MiArm64MapUserPage(
+    _In_ ULONG_PTR VirtualAddress,
+    _In_ PFN_NUMBER PageFrameNumber,
+    _In_ ULONG Protection
 );
 
 // ARM64 mm.h included successfully - shift-based MI_MAKE_PROTOTYPE_PTE active

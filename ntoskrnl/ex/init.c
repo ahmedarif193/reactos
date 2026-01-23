@@ -1363,6 +1363,24 @@ ExpInitializeExecutive(IN ULONG Cpu,
     extern BOOLEAN KiHalInitialized;
     KiHalInitialized = TRUE;
     EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: KiHalInitialized set");
+
+    /*
+     * ARM64: Re-enable the timer PPI now that the GIC is fully initialized.
+     *
+     * During early boot, KeInitInterrupts() connects the timer interrupt before
+     * HalInitSystem(0) runs. At that point, HalpGicUseSysRegs is FALSE and the
+     * timer PPI is not properly enabled in the GIC redistributor.
+     *
+     * Now that HalInitSystem(0) has configured the GIC, we re-enable the timer
+     * PPI to ensure it's properly routed through the redistributor.
+     *
+     * This fixes the "5-second timer gap" bug where timer interrupts would
+     * not fire consistently during USB enumeration.
+     */
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: re-enabling timer PPI");
+    extern VOID NTAPI KeReenableTimerInterrupt(VOID);
+    KeReenableTimerInterrupt();
+    EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: timer PPI re-enabled");
 #endif
 
     EXP_ARM64_LOG("[arm64] ExpInitializeExecutive: about to _enable()");

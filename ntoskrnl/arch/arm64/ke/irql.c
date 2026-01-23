@@ -302,13 +302,39 @@ KiApplyIrqMaskForIrqlTransition(
 
     /*
      * For all other IRQL transitions (not involving HIGH_LEVEL), use GIC
-     * priority masking exclusively. DAIF.I remains cleared.
+     * priority masking exclusively.
      *
      * This allows high-priority interrupts (timer at CLOCK_LEVEL=13) to
      * preempt lower-priority code (device ISRs, DPCs at DISPATCH_LEVEL=2).
+     *
+     * ARM64 CRITICAL FIX: When LOWERING IRQL, we must ensure DAIF.I is cleared!
+     *
+     * Various code paths may have called _disable() (which sets DAIF.I=1) for
+     * critical sections, spinlocks, or atomic operations. Unlike x86 where
+     * cli/sti is automatically restored on function return via RFLAGS, ARM64's
+     * DAIF.I persists across function calls.
+     *
+     * If DAIF.I is left set after lowering IRQL, the timer interrupt (PPI 27)
+     * cannot be delivered to the CPU even though the GIC has it pending. This
+     * causes catastrophic timer stalls (100+ second gaps between timer ticks).
+     *
+     * We clear DAIF.I when lowering IRQL to ensure interrupts can be delivered
+     * according to the GIC priority mask. Code that needs interrupts disabled
+     * must use proper IRQL raising (KfRaiseIrql to HIGH_LEVEL), not just _disable().
      */
     HalSetGicPriorityMask(NewIrql);
     ARM64_SYNC_BARRIER();
+
+    /*
+     * Clear DAIF.I when lowering IRQL to allow interrupts to be delivered.
+     * Only do this when actually lowering (NewIrql < OldIrql) to avoid
+     * unnecessary interrupt window creation when raising IRQL.
+     */
+    if (NewIrql < OldIrql)
+    {
+        ARM64_UNMASK_IRQ();
+        ARM64_SYNC_BARRIER();
+    }
 }
 
 KIRQL
@@ -429,6 +455,18 @@ KfLowerIrql(
     if (NewIrql < DISPATCH_LEVEL)
     {
         PKPRCB Prcb = KeGetCurrentPrcb();
+
+        /* Debug: Periodically log when we check for DPC delivery (disabled for performance) */
+#if 0
+        static ULONG DpcCheckCounter = 0;
+        DpcCheckCounter++;
+        if (DpcCheckCounter % 10000 == 1 && Prcb)
+        {
+            DPRINT1("[arm64] KfLowerIrql DPC check: Old=%u New=%u TimerReq=%p DpcReq=%d DpcDepth=%lu\n",
+                    OldIrql, NewIrql, (PVOID)Prcb->TimerRequest,
+                    Prcb->DpcInterruptRequested, Prcb->DpcData[0].DpcQueueDepth);
+        }
+#endif
         if (Prcb && (Prcb->DpcInterruptRequested ||
                      Prcb->TimerRequest ||
                      Prcb->DpcData[0].DpcQueueDepth != 0))

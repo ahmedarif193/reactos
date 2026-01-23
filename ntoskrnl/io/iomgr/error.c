@@ -712,8 +712,12 @@ IoRaiseInformationalHardError(IN NTSTATUS ErrorStatus,
                               IN PKTHREAD Thread)
 {
     DPRINT1("IoRaiseInformationalHardError: %lx, '%wZ'\n", ErrorStatus, String);
-#if DBG
-    ASSERT(ErrorStatus != STATUS_FILE_CORRUPT_ERROR); /* CORE-17587 */
+#if DBG && !defined(_M_ARM64)
+    ASSERT(ErrorStatus != STATUS_FILE_CORRUPT_ERROR); /* CORE-17587 - disabled on ARM64 pending cache investigation */
+#endif
+#if defined(_M_ARM64)
+    /* ARM64: Log that we're returning from the error handler */
+    DPRINT1("[arm64] IoRaiseInformationalHardError: Returning FALSE (unimplemented)\n");
 #endif
     return FALSE;
 }

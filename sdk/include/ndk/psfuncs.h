@@ -427,10 +427,16 @@ FORCEINLINE struct _TEB * NtCurrentTeb(VOID)
     // return (struct _TEB *)KeGetPcr()->Used_Self;
     return (struct _TEB *)(ULONG_PTR)_MoveFromCoprocessor(CP15_TPIDRURW);
 #elif defined (_M_ARM64) || defined(__aarch64__) || defined(__arm64__)
+    /*
+     * Windows ARM64 ABI: TEB pointer is in x18 (the platform register).
+     * Do NOT use tpidr_el0 - that breaks Windows ABI compatibility.
+     */
 #if defined(__GNUC__) || defined(__clang__)
     struct _TEB *Teb;
     __asm__ __volatile__("mov %0, x18" : "=r"(Teb));
     return Teb;
+#elif defined(_MSC_VER)
+    return (struct _TEB *)__getReg(18);
 #else
     return 0;
 #endif

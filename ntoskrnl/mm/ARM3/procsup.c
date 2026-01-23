@@ -573,6 +573,50 @@ MmCreatePeb(IN PEPROCESS Process,
         return Status;
     }
 
+#ifdef _M_ARM64
+    /*
+     * ARM64 PEB Pre-mapping:
+     *
+     * Pre-allocate and map the PEB page before the SEH block accesses it.
+     * This ensures the page is available when RtlZeroMemory tries to write
+     * to the PEB address, avoiding reliance on demand-zero page fault handling
+     * which can have issues during attached process context.
+     */
+    {
+        PFN_NUMBER PebPagePfn;
+        KIRQL OldIrql = MiAcquirePfnLock();
+
+        MI_SET_USAGE(MI_USAGE_PEB_TEB);
+        MI_SET_PROCESS(Process);
+
+        PebPagePfn = MiRemoveZeroPage(MI_GET_NEXT_PROCESS_COLOR(Process));
+        if (PebPagePfn == 0)
+        {
+            PebPagePfn = MiRemoveAnyPage(MI_GET_NEXT_PROCESS_COLOR(Process));
+            if (PebPagePfn == 0)
+            {
+                MiReleasePfnLock(OldIrql);
+                KeDetachProcess();
+                return STATUS_NO_MEMORY;
+            }
+            /* Zero the page via KSEG0 direct mapping */
+            RtlZeroMemory((PVOID)(0xFFFF800000000000ULL | (PebPagePfn << PAGE_SHIFT)), PAGE_SIZE);
+        }
+
+        MiReleasePfnLock(OldIrql);
+
+        NTSTATUS MapStatus = MiArm64MapUserPage((ULONG_PTR)Peb, PebPagePfn, PAGE_READWRITE);
+        if (!NT_SUCCESS(MapStatus))
+        {
+            OldIrql = MiAcquirePfnLock();
+            MiInsertPageInFreeList(PebPagePfn);
+            MiReleasePfnLock(OldIrql);
+            KeDetachProcess();
+            return MapStatus;
+        }
+    }
+#endif
+
     //
     // Use SEH in case we can't load the PEB
     //
@@ -955,9 +999,7 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     NTSTATUS Status = STATUS_SUCCESS;
     SIZE_T ViewSize = 0;
     PVOID ImageBase = 0;
-    PMMPTE PointerPte;
     KIRQL OldIrql;
-    PMMPDE PointerPde;
     PMMPFN Pfn;
     PFN_NUMBER PageFrameNumber;
     UNICODE_STRING FileName;
@@ -965,19 +1007,35 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     PCHAR Destination;
     USHORT Length = 0;
 
+#ifndef _M_ARM64
+    /* These variables are only used in the non-ARM64 path for PFN initialization */
+    PMMPTE PointerPte;
+    PMMPDE PointerPde;
 #if (_MI_PAGING_LEVELS >= 3)
     PMMPPE PointerPpe;
 #endif
 #if (_MI_PAGING_LEVELS == 4)
     PMMPXE PointerPxe;
 #endif
+#endif /* !_M_ARM64 */
+
+    DPRINT1("[arm64] MmInitializeProcessAddressSpace: ENTRY Process=%p Section=%p\n", Process, Section);
 
     /* We should have a PDE */
     ASSERT(Process->Pcb.DirectoryTableBase[0] != 0);
     ASSERT(Process->PdeUpdateNeeded == FALSE);
 
+    DPRINT1("[arm64] MmInitializeProcessAddressSpace: Attaching to process DTB=0x%llx\n",
+            (ULONGLONG)Process->Pcb.DirectoryTableBase[0]);
+
     /* Attach to the process */
     KeAttachProcess(&Process->Pcb);
+
+    /* Use direct UART output after TTBR0 switch - DPRINT1 hangs after process swap */
+#ifdef _M_ARM64
+#else
+    DPRINT1("[arm64] MmInitializeProcessAddressSpace: Attached to process\n");
+#endif
 
     /* The address space should now been in phase 1 or 0 */
     ASSERT(Process->AddressSpaceInitialized <= 1);
@@ -991,24 +1049,140 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     ASSERT(Process->VadRoot.NumberGenericTableElements == 0);
     Process->VadRoot.BalancedRoot.u1.Parent = &Process->VadRoot.BalancedRoot;
 
+    /* Use direct UART output after TTBR0 switch - DPRINT1 hangs after process swap */
+#ifdef _M_ARM64
+#else
+    DPRINT1("[arm64] MmInitializeProcessAddressSpace: Before MiLockProcessWorkingSet\n");
+#endif
+
     /* Lock our working set */
     MiLockProcessWorkingSet(Process, PsGetCurrentThread());
+
+    /* Use direct UART output after TTBR0 switch - DPRINT1 hangs after process swap */
+#ifdef _M_ARM64
+#else
+    DPRINT1("[arm64] MmInitializeProcessAddressSpace: After MiLockProcessWorkingSet\n");
+#endif
+
+    /* Use UART for logging after TTBR0 switch */
 
     /* Lock PFN database */
     OldIrql = MiAcquirePfnLock();
 
+
     /* Setup the PFN for the PDE base of this process */
 #if (_MI_PAGING_LEVELS == 4)
-    PointerPte = MiAddressToPte(PXE_BASE);
-#elif (_MI_PAGING_LEVELS == 3)
-    PointerPte = MiAddressToPte(PPE_BASE);
+#ifdef _M_ARM64
+    /*
+     * ARM64 FIX: On ARM64, TTBR0 (user) and TTBR1 (kernel) are separate.
+     * The self-map structure doesn't work correctly through the TTBR0 alias
+     * because the address decoding requires multiple levels of recursion that
+     * aren't set up in TTBR0's page tables.
+     *
+     * For the process root page directory (L0 table), we initialize the PFN
+     * entry directly without using MiInitializePfn (which needs to dereference
+     * the PointerPte). This is similar to what MiInitializePfnForOtherProcess
+     * does, but inline to avoid lock recursion issues (we already hold PFN lock).
+     *
+     * The PteAddress stored is PXE_SELFMAP from TTBR1's perspective. This will
+     * be wrong if accessed later, but the root page directory PFN is special
+     * and typically not accessed through normal PTE paths.
+     */
+PageFrameNumber = Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT;
+    {
+        PMMPFN Pfn1 = MI_PFN_ELEMENT(PageFrameNumber);
+
+        /* Store the PTE address (TTBR1's self-map address for now) */
+        Pfn1->PteAddress = (PMMPTE)PXE_SELFMAP;
+
+        /* Make this a software demand-zero PTE for OriginalPte */
+        MI_MAKE_SOFTWARE_PTE(&Pfn1->OriginalPte, MM_READWRITE);
+
+        /* Setup the page as active and valid */
+        ASSERT(Pfn1->u3.e2.ReferenceCount == 0);
+        Pfn1->u3.e2.ReferenceCount = 1;
+        Pfn1->u2.ShareCount = 1;
+        Pfn1->u3.e1.PageLocation = ActiveAndValid;
+        Pfn1->u3.e1.Modified = TRUE;
+        Pfn1->u4.InPageError = FALSE;
+
+        /* Self-referential: PteFrame points to itself */
+        Pfn1->u4.PteFrame = PageFrameNumber;
+    }
 #else
-    PointerPte = MiAddressToPte(PDE_BASE);
-#endif
+    PointerPte = MiAddressToPte(PXE_BASE);
     PageFrameNumber = PFN_FROM_PTE(PointerPte);
     ASSERT(Process->Pcb.DirectoryTableBase[0] == PageFrameNumber * PAGE_SIZE);
     MiInitializePfn(PageFrameNumber, PointerPte, TRUE);
+#endif
+#elif (_MI_PAGING_LEVELS == 3)
+    PointerPte = MiAddressToPte(PPE_BASE);
+    PageFrameNumber = PFN_FROM_PTE(PointerPte);
+    ASSERT(Process->Pcb.DirectoryTableBase[0] == PageFrameNumber * PAGE_SIZE);
+    MiInitializePfn(PageFrameNumber, PointerPte, TRUE);
+#else
+    PointerPte = MiAddressToPte(PDE_BASE);
+    PageFrameNumber = PFN_FROM_PTE(PointerPte);
+    ASSERT(Process->Pcb.DirectoryTableBase[0] == PageFrameNumber * PAGE_SIZE);
+    MiInitializePfn(PageFrameNumber, PointerPte, TRUE);
+#endif
 
+#ifdef _M_ARM64
+/*
+     * ARM64 FIX: Hyperspace and WorkingSetList PFN initialization.
+     *
+     * On ARM64, HYPER_SPACE (0xFFFFF60000000000) is in TTBR1's address space.
+     * TTBR1 is shared across all processes and doesn't change on context switch.
+     * The hyperspace tables were set up in MiArchCreateProcessAddressSpace in
+     * the new process's TTBR0 L0, but that's not actually used because TTBR1
+     * handles these addresses.
+     *
+     * For now, we use the DirectoryTableBase[1] value which holds the hyperspace
+     * PDPT PFN, and initialize the PFN entries using inline code (similar to
+     * what we did for the root L0).
+     *
+     * TODO: This is a workaround. The proper fix would be to either:
+     * 1. Make hyperspace per-TTBR1 (very complex)
+     * 2. Relocate hyperspace to TTBR0 range (requires protection)
+     * 3. Use a different hyperspace mechanism for ARM64
+     */
+/* Initialize PFN for hyperspace root (L0[492] entry in TTBR0, stored in DTB[1]) */
+    PageFrameNumber = Process->Pcb.DirectoryTableBase[1] >> PAGE_SHIFT;
+    {
+        PMMPFN Pfn1 = MI_PFN_ELEMENT(PageFrameNumber);
+        PFN_NUMBER RootPfn = Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT;
+
+        Pfn1->PteAddress = MiAddressToPxe((PVOID)HYPER_SPACE);
+        MI_MAKE_SOFTWARE_PTE(&Pfn1->OriginalPte, MM_READWRITE);
+        ASSERT(Pfn1->u3.e2.ReferenceCount == 0);
+        Pfn1->u3.e2.ReferenceCount = 1;
+        Pfn1->u2.ShareCount = 1;
+        Pfn1->u3.e1.PageLocation = ActiveAndValid;
+        Pfn1->u3.e1.Modified = TRUE;
+        Pfn1->u4.InPageError = FALSE;
+        /* Hyperspace is contained in the root L0 */
+        Pfn1->u4.PteFrame = RootPfn;
+    }
+
+/* Initialize PFN for WorkingSetList (which was allocated in MiArchCreateProcessAddressSpace) */
+PageFrameNumber = Process->WorkingSetPage;
+    {
+        PMMPFN Pfn1 = MI_PFN_ELEMENT(PageFrameNumber);
+        PFN_NUMBER HyperPfn = Process->Pcb.DirectoryTableBase[1] >> PAGE_SHIFT;
+
+        Pfn1->PteAddress = MiAddressToPte(MmWorkingSetList);
+        MI_MAKE_SOFTWARE_PTE(&Pfn1->OriginalPte, MM_READWRITE);
+        ASSERT(Pfn1->u3.e2.ReferenceCount == 0);
+        Pfn1->u3.e2.ReferenceCount = 1;
+        Pfn1->u2.ShareCount = 1;
+        Pfn1->u3.e1.PageLocation = ActiveAndValid;
+        Pfn1->u3.e1.Modified = TRUE;
+        Pfn1->u4.InPageError = FALSE;
+        /* WorkingSetList's PTE is in hyperspace */
+        Pfn1->u4.PteFrame = HyperPfn;
+    }
+
+#else /* !_M_ARM64 */
     /* Do the same for hyperspace */
     PointerPde = MiAddressToPde(HYPER_SPACE);
     PageFrameNumber = PFN_FROM_PTE(PointerPde);
@@ -1025,6 +1199,7 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     ASSERT(Process->Pcb.DirectoryTableBase[1] == PageFrameNumber * PAGE_SIZE);
 #endif
 #endif
+
 #if (_MI_PAGING_LEVELS == 4)
     PointerPxe = MiAddressToPxe((PVOID)HYPER_SPACE);
     PageFrameNumber = PFN_FROM_PTE(PointerPxe);
@@ -1036,19 +1211,26 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     PointerPte = MiAddressToPte(MmWorkingSetList);
     PageFrameNumber = PFN_FROM_PTE(PointerPte);
     MiInitializePfn(PageFrameNumber, PointerPte, TRUE);
+#endif /* _M_ARM64 */
 
     /* All our pages are now active & valid. Release the lock. */
     MiReleasePfnLock(OldIrql);
+
 
     /* This should be in hyper space, but not in the mapping range */
     Process->Vm.VmWorkingSetList = MmWorkingSetList;
     ASSERT(((ULONG_PTR)MmWorkingSetList >= MI_MAPPING_RANGE_END) && ((ULONG_PTR)MmWorkingSetList <= HYPER_SPACE_END));
 
+
     /* Now initialize the working set list */
     MiInitializeWorkingSetList(&Process->Vm);
 
+
     /* The rule is that the owner process is always in the FLINK of the PDE's PFN entry */
+
     Pfn = MiGetPfnEntry(Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT);
+
+
     ASSERT(Pfn->u4.PteFrame == MiGetPfnEntryIndex(Pfn));
     ASSERT(Pfn->u1.WsIndex == 0);
     Pfn->u1.Event = (PKEVENT)Process;
@@ -1056,8 +1238,10 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     /* Sanity check */
     ASSERT(Process->PhysicalVadRoot == NULL);
 
+
     /* Release the process working set */
     MiUnlockProcessWorkingSet(Process, PsGetCurrentThread());
+
 
 #ifdef _M_AMD64
     /* On x64 we need a VAD for the shared user page */
@@ -1069,11 +1253,21 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     }
 #endif
 
+#ifdef _M_ARM64
+#else
+    DPRINT1("[arm64] MmInitializeProcessAddressSpace: Checking Section=%p\n", Section);
+#endif
+
     /* Check if there's a Section Object */
     if (Section)
     {
+
         /* Determine the image file name and save it to EPROCESS */
         PFILE_OBJECT FileObject = MmGetFileObjectForSection(Section);
+#ifndef _M_ARM64
+        DPRINT1("[arm64] MmInitializeProcessAddressSpace: FileObject=%p FileName='%wZ'\n",
+                FileObject, FileObject ? &FileObject->FileName : NULL);
+#endif
         FileName = FileObject->FileName;
         Source = (PWCHAR)((PCHAR)FileName.Buffer + FileName.Length);
         if (FileName.Buffer)
@@ -1102,20 +1296,42 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
         while (Length--) *Destination++ = (UCHAR)*Source++;
         *Destination = ANSI_NULL;
 
+#ifdef _M_ARM64
+#else
+        DPRINT1("[arm64] MmInitializeProcessAddressSpace: Process->ImageFileName='%s'\n",
+                Process->ImageFileName);
+#endif
+
         /* Check if caller wants an audit name */
         if (AuditName)
         {
+#ifdef _M_ARM64
+#else
             /* Setup the audit name */
+            DPRINT1("[arm64] MmInitializeProcessAddressSpace: Setting up audit name\n");
+#endif
             Status = SeInitializeProcessAuditName(FileObject, FALSE, AuditName);
             if (!NT_SUCCESS(Status))
             {
+#ifdef _M_ARM64
+#else
                 /* Fail */
+                DPRINT1("[arm64] MmInitializeProcessAddressSpace: SeInitializeProcessAuditName FAILED 0x%x\n", Status);
+#endif
                 KeDetachProcess();
                 return Status;
             }
+#ifdef _M_ARM64
+#else
+            DPRINT1("[arm64] MmInitializeProcessAddressSpace: Audit name set\n");
+#endif
         }
 
+#ifdef _M_ARM64
+#else
         /* Map the section */
+        DPRINT1("[arm64] MmInitializeProcessAddressSpace: Calling MmMapViewOfSection\n");
+#endif
         Status = MmMapViewOfSection(Section,
                                     Process,
                                     (PVOID*)&ImageBase,
@@ -1126,13 +1342,20 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
                                     ViewUnmap,
                                     MEM_COMMIT,
                                     PAGE_READWRITE);
+#ifdef _M_ARM64
+#else
+        DPRINT1("[arm64] MmInitializeProcessAddressSpace: MmMapViewOfSection returned 0x%x ImageBase=%p ViewSize=0x%Ix\n",
+                Status, ImageBase, ViewSize);
+#endif
 
         /* Save the pointer */
         Process->SectionBaseAddress = ImageBase;
     }
 
+
     /* Be nice and detach */
     KeDetachProcess();
+
 
     /* Return status to caller */
     return Status;

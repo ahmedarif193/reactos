@@ -175,6 +175,18 @@ MiAddressToPxe(PVOID Address)
     return (PMMPTE)(PXE_BASE + Offset);
 }
 
+/*
+ * MiAddressToPteSafe / MiAddressToPdeSafe / etc.
+ *
+ * On x86_64, user and kernel page tables share the same self-map, so
+ * these are just aliases for the regular macros. On ARM64, these need
+ * to select between TTBR0 and TTBR1 aliases based on address range.
+ */
+#define MiAddressToPteSafe(x) MiAddressToPte(x)
+#define MiAddressToPdeSafe(x) MiAddressToPde(x)
+#define MiAddressToPpeSafe(x) MiAddressToPpe(x)
+#define MiAddressToPxeSafe(x) MiAddressToPxe(x)
+
 /* Convert an address to a corresponding PTE offset/index */
 FORCEINLINE
 ULONG

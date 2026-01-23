@@ -624,18 +624,47 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
      */
     if (ProcessorNumber == 0)
     {
-        ULONG64 Pfr0, Pfr1, Cpacr;
+        ULONG64 Pfr0, Pfr1, Mmfr1, Cpacr;
         BOOLEAN HasSve, HasSme;
 
         /* Read Processor Feature Registers to detect hardware capabilities */
         __asm__ __volatile__("mrs %0, id_aa64pfr0_el1" : "=r"(Pfr0));
         __asm__ __volatile__("mrs %0, id_aa64pfr1_el1" : "=r"(Pfr1));
+        __asm__ __volatile__("mrs %0, id_aa64mmfr1_el1" : "=r"(Mmfr1));
 
         /* Check bits [35:32] of PFR0 for SVE support */
         HasSve = ((Pfr0 >> 32) & 0xF) != 0;
 
         /* Check bits [27:24] of PFR1 for SME support */
         HasSme = ((Pfr1 >> 24) & 0xF) != 0;
+
+        /*
+         * PAN (Privileged Access Never):
+         *
+         * ReactOS currently performs a number of kernel-mode accesses to user
+         * virtual addresses (e.g. ProbeForWrite) without explicit uaccess guards.
+         * If PAN is enabled, these accesses will repeatedly fault with a
+         * permission fault (DFSC=0xB) and can wedge early boot.
+         *
+         * Disable PAN globally for now when the CPU advertises the feature.
+         * Follow-up work should implement proper uaccess enable/disable around
+         * all user-pointer dereferences (Windows 10/11 behavior).
+         */
+        if (((Mmfr1 >> 20) & 0xFULL) != 0)
+        {
+            ULONG64 PanVal = 0;
+            /*
+             * LLVM's assembler rejects the architectural "msr pan, #imm"
+             * syntax when building for -march=armv8-a. Use the encoded sysreg
+             * form for PSTATE.PAN instead (op0=3, op1=0, CRn=4, CRm=2, op2=3).
+             */
+            __asm__ __volatile__("msr s3_0_c4_c2_3, %0" :: "r"(PanVal) : "memory");
+            __asm__ __volatile__("isb" ::: "memory");
+
+            /* Boot-time warning: PAN disabled for bring-up */
+            DPRINT1("[arm64] WARNING: PAN (Privileged Access Never) DISABLED for bring-up!\n");
+            DPRINT1("[arm64] TODO: Implement proper uaccess enable/disable discipline.\n");
+        }
 
         /* Read current CPACR_EL1 */
         __asm__ __volatile__("mrs %0, cpacr_el1" : "=r"(Cpacr));

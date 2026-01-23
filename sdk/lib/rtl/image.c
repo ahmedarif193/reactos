@@ -175,6 +175,9 @@ RtlpImageNtHeaderEx(
 
     /* Check if the DOS Signature matches */
     DosHeader = Base;
+
+/* ARM64 debug logging removed - was causing excessive log output */
+
     if (DosHeader->e_magic != IMAGE_DOS_SIGNATURE)
     {
         /* Not a valid COFF */

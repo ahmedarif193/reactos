@@ -23,6 +23,148 @@ extern MM_AVL_TABLE MiRosKernelVadRoot;
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+/*
+ * ARM64-specific: Handle demand-zero fault for ARM3 VADs (e.g., PEB/TEB).
+ *
+ * ARM3 allocates PEB/TEB via MiInsertVadEx which creates ARM3 VADs, not ROS
+ * memory areas. When a page fault occurs on these addresses, MmLocateMemoryArea
+ * returns NULL (since it only finds ROS memory areas), but we still need to
+ * handle the demand-zero fault.
+ *
+ * This function:
+ * 1. Allocates a physical page
+ * 2. Creates the page table hierarchy in TTBR0 via KSEG0 (direct mapping)
+ * 3. Maps the page at the faulting address
+ */
+NTSTATUS
+NTAPI
+MiArm64HandleUserDemandZero(
+    _In_ PVOID Address,
+    _In_ ULONG ProtectionCode,
+    _In_ PMMVAD Vad)
+{
+    NTSTATUS Status;
+    PFN_NUMBER PageFrameIndex;
+    PEPROCESS Process;
+    PETHREAD Thread;
+    KIRQL OldIrql;
+    ULONG_PTR VirtualAddress = (ULONG_PTR)Address;
+
+    /* Debug output */
+Process = PsGetCurrentProcess();
+    Thread = PsGetCurrentThread();
+
+    /* Lock the working set */
+    MiLockProcessWorkingSet(Process, Thread);
+
+    /* Allocate a zero page */
+    OldIrql = MiAcquirePfnLock();
+
+    MI_SET_USAGE(MI_USAGE_PEB_TEB);
+    MI_SET_PROCESS(Process);
+
+    /* Get a zeroed page - track if we need to zero it ourselves */
+    BOOLEAN NeedToZeroPage = FALSE;
+    PageFrameIndex = MiRemoveZeroPage(MI_GET_NEXT_PROCESS_COLOR(Process));
+    if (PageFrameIndex == 0)
+    {
+        /* No zeroed pages available, get any page */
+        PageFrameIndex = MiRemoveAnyPage(MI_GET_NEXT_PROCESS_COLOR(Process));
+        if (PageFrameIndex == 0)
+        {
+            MiReleasePfnLock(OldIrql);
+            MiUnlockProcessWorkingSet(Process, Thread);
+            return STATUS_NO_MEMORY;
+        }
+        /* CRITICAL: Must zero pages from MiRemoveAnyPage to prevent info leak */
+        NeedToZeroPage = TRUE;
+    }
+
+    MiReleasePfnLock(OldIrql);
+
+    /*
+     * SECURITY FIX: Zero the page if we got it from MiRemoveAnyPage.
+     * Failure to do so exposes stale physical memory (potentially containing
+     * sensitive data like passwords, kernel data, etc.) to user space.
+     *
+     * Use MiZeroPhysicalPage which maps via hyperspace and zeros safely.
+     */
+    if (NeedToZeroPage)
+    {
+        MiZeroPhysicalPage(PageFrameIndex);
+    }
+
+    /* Create the page table mapping via KSEG0 */
+
+    /* Convert MM protection to PTE protection */
+    ULONG PteProtection;
+    switch (ProtectionCode)
+    {
+        case MM_READONLY:
+            PteProtection = PAGE_READONLY;
+            break;
+        case MM_READWRITE:
+            PteProtection = PAGE_READWRITE;
+            break;
+        case MM_EXECUTE:
+            PteProtection = PAGE_EXECUTE;
+            break;
+        case MM_EXECUTE_READ:
+            PteProtection = PAGE_EXECUTE_READ;
+            break;
+        case MM_EXECUTE_READWRITE:
+            PteProtection = PAGE_EXECUTE_READWRITE;
+            break;
+        default:
+            PteProtection = PAGE_READWRITE;
+            break;
+    }
+
+    Status = MiArm64MapUserPage(VirtualAddress, PageFrameIndex, PteProtection);
+
+    if (!NT_SUCCESS(Status))
+    {
+        /* Failed to map - return the page */
+        OldIrql = MiAcquirePfnLock();
+        MiInsertPageInFreeList(PageFrameIndex);
+        MiReleasePfnLock(OldIrql);
+
+        MiUnlockProcessWorkingSet(Process, Thread);
+
+return Status;
+    }
+
+    /* Initialize the PFN entry */
+    OldIrql = MiAcquirePfnLock();
+
+    /*
+     * For ARM64 user demand-zero pages, we use a simplified PFN setup.
+     * The page is private to the process and demand-paged.
+     *
+     * TODO: PteFrame should be set to the PFN of the page table page containing
+     * this PTE. For now we use 0 which is technically wrong but works for
+     * bring-up because we don't do trimming/outswapping of these pages yet.
+     * This MUST be fixed before enabling working set trimming on ARM64.
+     */
+    PMMPFN Pfn1 = MI_PFN_ELEMENT(PageFrameIndex);
+    Pfn1->u3.e2.ReferenceCount = 1;
+    Pfn1->u2.ShareCount = 1;
+    Pfn1->u3.e1.PageLocation = ActiveAndValid;
+    Pfn1->u3.e1.PrototypePte = 0;
+    /* TODO: Calculate actual PteFrame from the page table page PFN */
+    Pfn1->u4.PteFrame = 0;
+    Pfn1->OriginalPte.u.Long = 0;
+    Pfn1->OriginalPte.u.Soft.Protection = ProtectionCode;
+
+    MiReleasePfnLock(OldIrql);
+
+    MiUnlockProcessWorkingSet(Process, Thread);
+
+return STATUS_SUCCESS;
+}
+#endif /* _M_ARM64 */
+
 NTSTATUS
 NTAPI
 MmpAccessFault(KPROCESSOR_MODE Mode,
@@ -163,6 +305,10 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
 
     DPRINT("MmNotPresentFault(Mode %d, Address %x)\n", Mode, Address);
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* Debug: trace entry to MmNotPresentFault for user addresses */
+#endif
+
     if (KeGetCurrentIrql() >= DISPATCH_LEVEL)
     {
         DPRINT1("Page fault at high IRQL was %u, address %x\n", KeGetCurrentIrql(), Address);
@@ -241,6 +387,57 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
         MemoryArea = MmLocateMemoryAreaByAddress(AddressSpace, (PVOID)Address);
         if (MemoryArea == NULL || MemoryArea->DeleteInProgress)
         {
+#if defined(_M_ARM64) || defined(__aarch64__)
+            /*
+             * ARM64: Check if this is an ARM3 VAD (e.g., PEB/TEB allocation).
+             * MmLocateMemoryAreaByAddress returns NULL for ARM3 VADs because
+             * they're not ROS memory areas. We need to handle demand-zero
+             * faults for these allocations separately.
+             *
+             * LOCKING: MiLocateAddress accesses PsGetCurrentProcess()->VadRoot
+             * which requires holding the process working set lock or
+             * AddressCreationLock. We verify we're faulting in our own process
+             * context (which is always true for user-mode page faults), and
+             * MmLockAddressSpace acquires AddressCreationLock for user spaces.
+             *
+             * CRITICAL: Only do this for USER addresses in our own process.
+             */
+            PMMVAD Arm3Vad = NULL;
+
+            /* Only check ARM3 VAD for user addresses in current process */
+            if (Address < (ULONG_PTR)MmSystemRangeStart)
+            {
+                PEPROCESS CurrentProcess = PsGetCurrentProcess();
+
+                /*
+                 * Verify we're faulting in our own process context.
+                 * User faults should always be in current process; if not,
+                 * we cannot safely access the VAD tree.
+                 */
+                if (AddressSpace == &CurrentProcess->Vm)
+                {
+                    /* Check if there's an ARM3 VAD for this address */
+                    Arm3Vad = MiLocateAddress((PVOID)Address);
+                }
+            }
+
+            if (Arm3Vad != NULL)
+            {
+                /*
+                 * Get protection from the VAD. For PEB/TEB allocations,
+                 * the protection is stored in Vad->u.VadFlags.Protection.
+                 */
+                ULONG ProtectionCode = Arm3Vad->u.VadFlags.Protection;
+
+                /* This is an ARM3 VAD - handle via MiArm64HandleUserDemandZero */
+                Status = MiArm64HandleUserDemandZero((PVOID)Address, ProtectionCode, Arm3Vad);
+                if (WeAcquiredLock)
+                {
+                    MmUnlockAddressSpace(AddressSpace);
+                }
+                return Status;
+            }
+#endif
             if (WeAcquiredLock)
             {
                 MmUnlockAddressSpace(AddressSpace);
@@ -340,6 +537,27 @@ MmAccessFault(IN ULONG FaultCode,
         return MmArmAccessFault(FaultCode, Address, Mode, TrapInformation);
     }
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64 User Address Fast Path:
+     *
+     * For user addresses on ARM64, we MUST route to MmArmAccessFault first.
+     * MmArmAccessFault has been updated with proper TTBR0 alias handling
+     * (using MiAddressToPteTtbr0 instead of MiAddressToPte) for user addresses.
+     *
+     * If we continue to the VAD lookup path below, code may inadvertently
+     * access page tables via the regular self-map (MiAddressToPde), which
+     * doesn't work for user addresses on ARM64 (causes fault at PDE_BASE).
+     *
+     * MmArmAccessFault will handle the fault properly and route back to
+     * ReactOS section handling if needed.
+     */
+    if (Address < MmSystemRangeStart)
+    {
+        return MmArmAccessFault(FaultCode, Address, Mode, TrapInformation);
+    }
+#endif
+
     /* Is there a ReactOS address space yet? */
     if (MmGetKernelAddressSpace())
     {
@@ -353,8 +571,54 @@ MmAccessFault(IN ULONG FaultCode,
 #endif
         if (Address > MM_HIGHEST_USER_ADDRESS)
         {
+#if defined(_M_ARM64)
+            /*
+             * ARM64 PAGE TABLE / HYPERSPACE FAST PATH:
+             *
+             * Addresses in the page table self-map region (PTE_BASE to MmHyperSpaceEnd)
+             * or TTBR0 alias region (PTE_BASE_TTBR0 to HYPER_SPACE_END) MUST be routed
+             * directly to MmArmAccessFault WITHOUT acquiring any working set locks.
+             *
+             * These faults typically occur during nested page table manipulation:
+             * 1. Code handles a user fault and acquires process WS lock
+             * 2. Page table manipulation accesses self-map addresses
+             * 3. Self-map address faults (page table page not yet mapped)
+             * 4. If we try to acquire MmSystemCacheWs lock here, we hit:
+             *    "Assertion failed: !MM_ANY_WS_LOCK_HELD(Thread)"
+             *
+             * MmArmAccessFault handles self-map/hyperspace faults specially via
+             * MiArm64MapAliasForPointer without needing any VAD lookup.
+             *
+             * ARM64 FIX: Use PXE_TOP (not MmHyperSpaceEnd) as the upper bound.
+             * HYPER_SPACE is at L0[492], while the self-map (PTE_BASE) starts at L0[493].
+             * HYPER_SPACE_END < PTE_BASE, so using it would never match self-map addresses!
+             */
+            if (((ULONG_PTR)Address >= PTE_BASE && (ULONG_PTR)Address <= (ULONG_PTR)PXE_TOP))
+            {
+                return MmArmAccessFault(FaultCode, Address, Mode, TrapInformation);
+            }
+#endif
+
+#if defined(_M_ARM64)
+            /* ARM64 DEBUG: Log System Cache faults */
+            if ((ULONG_PTR)Address >= 0xFFFFF98000000000ULL &&
+                (ULONG_PTR)Address < 0xFFFFFA8000000000ULL)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[arm64] MmAccessFault: SYSCACHE ENTRY addr=%p FaultCode=0x%lx\n",
+                    Address, FaultCode);
+            }
+#endif
             /* Check if this is an ARM3 memory area */
             MiLockWorkingSetShared(PsGetCurrentThread(), &MmSystemCacheWs);
+#if defined(_M_ARM64)
+            if ((ULONG_PTR)Address >= 0xFFFFF98000000000ULL &&
+                (ULONG_PTR)Address < 0xFFFFFA8000000000ULL)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[arm64] MmAccessFault: SYSCACHE after WS lock addr=%p\n", Address);
+            }
+#endif
             Vad = MiLocateVad(&MiRosKernelVadRoot, Address);
 
 #if defined(_M_ARM64) && DBG
@@ -393,6 +657,15 @@ MmAccessFault(IN ULONG FaultCode,
                 IsArm3Fault = TRUE;
             }
 
+#if defined(_M_ARM64)
+            if ((ULONG_PTR)Address >= 0xFFFFF98000000000ULL &&
+                (ULONG_PTR)Address < 0xFFFFFA8000000000ULL)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[arm64] MmAccessFault: SYSCACHE Vad=%p IsRos=%d IsArm3=%d\n",
+                    Vad, Vad ? (MI_IS_ROSMM_VAD(Vad) ? 1 : 0) : -1, IsArm3Fault);
+            }
+#endif
             MiUnlockWorkingSetShared(PsGetCurrentThread(), &MmSystemCacheWs);
         }
         else
@@ -468,6 +741,16 @@ MmAccessFault(IN ULONG FaultCode,
 #endif
 
 Retry:
+#if defined(_M_ARM64)
+    /* ARM64 DEBUG: Log System Cache routing to ROS path */
+    if ((ULONG_PTR)Address >= 0xFFFFF98000000000ULL &&
+        (ULONG_PTR)Address < 0xFFFFFA8000000000ULL)
+    {
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+            "[arm64] MmAccessFault: SYSCACHE ROS path addr=%p NotPresent=%d\n",
+            Address, MI_IS_NOT_PRESENT_FAULT(FaultCode));
+    }
+#endif
     /* Keep same old ReactOS Behaviour */
     if (!MI_IS_NOT_PRESENT_FAULT(FaultCode))
     {
@@ -479,6 +762,16 @@ Retry:
         /* Call not present */
         Status = MmNotPresentFault(Mode, (ULONG_PTR)Address, TrapInformation ? FALSE : TRUE);
     }
+#if defined(_M_ARM64)
+    /* ARM64 DEBUG: Log System Cache result */
+    if ((ULONG_PTR)Address >= 0xFFFFF98000000000ULL &&
+        (ULONG_PTR)Address < 0xFFFFFA8000000000ULL)
+    {
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+            "[arm64] MmAccessFault: SYSCACHE result addr=%p Status=0x%lx\n",
+            Address, Status);
+    }
+#endif
 
     if ((Status == STATUS_ACCESS_VIOLATION) &&
         (Mode != KernelMode) &&

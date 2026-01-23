@@ -47,21 +47,87 @@ KiArm64SyncBugcheckLoop:
 
 /*
  * KiArm64SyncVectorCommon - Common synchronous exception handler
- * Entry: w0 = vector ID, x29/x30 saved on stack at [sp], sp = original - 16
+ *
+ * Entry:
+ *   x0 = ORIGINAL x0 from faulting code (PRESERVED by caller!)
+ *   x1 = vector ID (caller set this after saving original x1)
+ *   x2-x8, x12-x27 = original values from faulting code (unchanged by caller)
+ *   x9, x10, x11, x28, x29, x30 = saved by caller to stack
+ *
+ *   Caller's stack frame at [sp] (80 bytes):
+ *     [sp+0]  = saved original x0
+ *     [sp+8]  = saved original x1
+ *     [sp+16] = saved original x9
+ *     [sp+24] = saved original x10
+ *     [sp+32] = saved original x11
+ *     [sp+40] = saved original x28
+ *     [sp+48] = padding
+ *     [sp+56] = padding
+ *     [sp+64] = saved original x29
+ *     [sp+72] = saved original x30
+ *   Original SP = current SP + 80
+ *
  * This function sets up the early state and dispatches to C handler.
  * Never returns - either goes to KiTrapReturn or bugcheck loop.
+ *
+ * BUG FIX: x9, x10, x11 are now saved by the caller BEFORE this function
+ * can clobber them. This ensures page fault retries have correct register
+ * values even when the faulting instruction uses volatile registers x9-x11.
  */
     .global KiArm64SyncVectorCommon
     .seh_proc KiArm64SyncVectorCommon
 KiArm64SyncVectorCommon:
     .seh_endprologue
-    /* Save vector ID in callee-saved register */
-    mov w19, w0
-    /* Large stack allocation for early state */
+
+    /*
+     * Entry state:
+     *   x1 = vector ID (caller set this)
+     *   x2-x8, x12-x27 = original values from faulting code (unchanged by caller)
+     *   x0 = ALSO original (caller preserved it by saving to stack before mov w1, #id)
+     *   x9, x10, x11, x28, x29, x30 = caller saved these to stack
+     *
+     *   Caller's stack frame at [sp] (80 bytes):
+     *     [sp+0]  = saved original x0
+     *     [sp+8]  = saved original x1
+     *     [sp+16] = saved original x9
+     *     [sp+24] = saved original x10
+     *     [sp+32] = saved original x11
+     *     [sp+40] = saved original x28
+     *     [sp+48] = padding
+     *     [sp+56] = padding
+     *     [sp+64] = saved original x29
+     *     [sp+72] = saved original x30
+     *
+     * x0 is still original. x1 is vector ID.
+     * x9/x10/x11/x28 can be freely used as scratch (originals on stack).
+     */
+
+    /* Save vector ID (currently in x1) to x28 temp register.
+     * x28's original was already saved by caller at [sp+40].
+     */
+    mov x28, x1                  /* Temporarily save vector ID */
+
+    /* Allocate space for early state */
     sub sp, sp, #ARM64_EARLY_STATE_SIZE
-    /* Save all registers */
+
+    /* Store vector ID */
+    str x28, [sp, #ARM64_EARLY_STATE_VECTORID]
+
+    /*
+     * Save x0 - this is the ORIGINAL value from faulting code!
+     * The caller saved it to stack but didn't clobber x0 itself.
+     */
     str x0,  [sp, #(ARM64_EARLY_STATE_REGS + 0 * 8)]
-    str x1,  [sp, #(ARM64_EARLY_STATE_REGS + 1 * 8)]
+
+    /*
+     * Get original x1 from caller's stack frame.
+     * Caller's frame is at sp + ARM64_EARLY_STATE_SIZE (80 bytes now)
+     */
+    add x9, sp, #ARM64_EARLY_STATE_SIZE
+    ldr x10, [x9, #8]            /* Load original x1 from [caller_sp + 8] */
+    str x10, [sp, #(ARM64_EARLY_STATE_REGS + 1 * 8)]
+
+    /* Save x2-x8 (these are original, untouched by caller) */
     str x2,  [sp, #(ARM64_EARLY_STATE_REGS + 2 * 8)]
     str x3,  [sp, #(ARM64_EARLY_STATE_REGS + 3 * 8)]
     str x4,  [sp, #(ARM64_EARLY_STATE_REGS + 4 * 8)]
@@ -69,9 +135,21 @@ KiArm64SyncVectorCommon:
     str x6,  [sp, #(ARM64_EARLY_STATE_REGS + 6 * 8)]
     str x7,  [sp, #(ARM64_EARLY_STATE_REGS + 7 * 8)]
     str x8,  [sp, #(ARM64_EARLY_STATE_REGS + 8 * 8)]
-    str x9,  [sp, #(ARM64_EARLY_STATE_REGS + 9 * 8)]
+
+    /*
+     * x9-x11 are volatile/caller-saved but CRITICAL for page fault handling!
+     * The caller has saved their original values to the stack frame.
+     * Load them from caller's frame and save to early state.
+     * x9 currently points to caller's frame.
+     */
+    ldr x10, [x9, #16]           /* Load original x9 from caller's frame */
+    str x10, [sp, #(ARM64_EARLY_STATE_REGS + 9 * 8)]
+    ldr x10, [x9, #24]           /* Load original x10 from caller's frame */
     str x10, [sp, #(ARM64_EARLY_STATE_REGS + 10 * 8)]
-    str x11, [sp, #(ARM64_EARLY_STATE_REGS + 11 * 8)]
+    ldr x10, [x9, #32]           /* Load original x11 from caller's frame */
+    str x10, [sp, #(ARM64_EARLY_STATE_REGS + 11 * 8)]
+
+    /* Save x12-x18 (original, untouched by caller) */
     str x12, [sp, #(ARM64_EARLY_STATE_REGS + 12 * 8)]
     str x13, [sp, #(ARM64_EARLY_STATE_REGS + 13 * 8)]
     str x14, [sp, #(ARM64_EARLY_STATE_REGS + 14 * 8)]
@@ -79,6 +157,8 @@ KiArm64SyncVectorCommon:
     str x16, [sp, #(ARM64_EARLY_STATE_REGS + 16 * 8)]
     str x17, [sp, #(ARM64_EARLY_STATE_REGS + 17 * 8)]
     str x18, [sp, #(ARM64_EARLY_STATE_REGS + 18 * 8)]
+
+    /* Save x19-x27 (callee-saved, original - these were NOT touched by caller) */
     str x19, [sp, #(ARM64_EARLY_STATE_REGS + 19 * 8)]
     str x20, [sp, #(ARM64_EARLY_STATE_REGS + 20 * 8)]
     str x21, [sp, #(ARM64_EARLY_STATE_REGS + 21 * 8)]
@@ -88,16 +168,21 @@ KiArm64SyncVectorCommon:
     str x25, [sp, #(ARM64_EARLY_STATE_REGS + 25 * 8)]
     str x26, [sp, #(ARM64_EARLY_STATE_REGS + 26 * 8)]
     str x27, [sp, #(ARM64_EARLY_STATE_REGS + 27 * 8)]
-    str x28, [sp, #(ARM64_EARLY_STATE_REGS + 28 * 8)]
-    /* Get original x29/x30 from caller's frame (at sp + ARM64_EARLY_STATE_SIZE) */
-    add x9, sp, #ARM64_EARLY_STATE_SIZE
-    ldr x10, [x9]           /* Original x29 */
+
+    /* Get original x28 from caller's frame - at offset 40 in 80-byte frame */
+    ldr x11, [x9, #40]           /* Load original x28 from [caller_sp + 40] */
+    str x11, [sp, #(ARM64_EARLY_STATE_REGS + 28 * 8)]
+
+    /* Get original x29/x30 from caller's frame - at offsets 64, 72 */
+    ldr x10, [x9, #64]           /* Original x29 at [caller_sp + 64] */
     str x10, [sp, #(ARM64_EARLY_STATE_REGS + 29 * 8)]
-    ldr x11, [x9, #8]       /* Original x30 */
+    ldr x11, [x9, #72]           /* Original x30 at [caller_sp + 72] */
     str x11, [sp, #(ARM64_EARLY_STATE_REGS + 30 * 8)]
-    /* Calculate original SP (before caller's push) */
-    add x12, x9, #16
+
+    /* Calculate original SP (before caller's 80-byte frame) */
+    add x12, x9, #80
     str x12, [sp, #ARM64_EARLY_STATE_REG_SP]
+
     /* Save exception registers */
     mrs x13, elr_el1
     str x13, [sp, #ARM64_EARLY_STATE_ELR]
@@ -109,163 +194,282 @@ KiArm64SyncVectorCommon:
     str x15, [sp, #ARM64_EARLY_STATE_ESR]
     mrs x16, far_el1
     str x16, [sp, #ARM64_EARLY_STATE_FAR]
-    /* Store vector ID */
-    str x19, [sp, #ARM64_EARLY_STATE_VECTORID]
+
+    /* Initialize trap/exc pointers to NULL */
     str xzr, [sp, #ARM64_EARLY_STATE_TRAP_PTR]
     str xzr, [sp, #ARM64_EARLY_STATE_EXC_PTR]
+
     /* Memory barriers */
     dsb sy
     isb
+
+    /* Allow IRQs during the C handler (page faults may require progress). */
+    msr daifclr, #0x2
+    isb
+
     /* Call C handler */
     mov x0, sp
     bl KiArm64HandleSynchronousException
     dsb sy
     isb
+
     /* Check result */
     cbz x0, .Lsync_bugcheck
+
     /* Success path */
     dsb ishst
     ldr x2, [sp, #ARM64_EARLY_STATE_TRAP_PTR]
     ldr x3, [sp, #ARM64_EARLY_STATE_EXC_PTR]
     dsb ld
     add sp, sp, #ARM64_EARLY_STATE_SIZE
-    /* Pop caller's frame */
-    ldp x29, x30, [sp], #16
+
+    /* Pop caller's 80-byte frame (x0, x1, x9, x10, x11, x28, padding*2, x29, x30) */
+    add sp, sp, #80
+
     /* Set up args for KiTrapReturn */
     mov x0, x2
     mov x1, x3
     dsb sy
     isb
     b KiTrapReturn
+
 .Lsync_bugcheck:
     mov x0, sp
     b KiArm64SyncBugcheckLoop
     .seh_endproc
 
-/* Sync handler: SyncSp0 (vector 0) */
+/*
+ * Sync handler: SyncSp0 (vector 0)
+ *
+ * CRITICAL: We must save ALL volatile registers that the common handler uses
+ * as scratch BEFORE the common handler can clobber them. This includes:
+ * - x0, x1: Used by common handler for vector ID and frame pointer
+ * - x9, x10, x11: Used as scratch registers in common handler
+ * - x28: Used as temp to hold vector ID
+ * - x29, x30: Frame pointer and link register
+ *
+ * Stack frame layout (80 bytes, 16-byte aligned):
+ *   [sp+0]  = original x0
+ *   [sp+8]  = original x1
+ *   [sp+16] = original x9  (volatile, used as scratch in common handler)
+ *   [sp+24] = original x10 (volatile, used as scratch in common handler)
+ *   [sp+32] = original x11 (volatile, used as scratch in common handler)
+ *   [sp+40] = original x28 (callee-saved, used as temp for vector ID)
+ *   [sp+48] = padding (for 16-byte alignment)
+ *   [sp+56] = padding
+ *   [sp+64] = original x29
+ *   [sp+72] = original x30
+ *
+ * BUG FIX: Previously x9-x11 were not saved by the caller, so when the common
+ * handler used them as scratch, their original values were lost. This caused
+ * page fault retries to fail when the faulting instruction used x9-x11.
+ */
     .global KiArm64PermVectorSyncSp0_Handler
     .seh_proc KiArm64PermVectorSyncSp0_Handler
 KiArm64PermVectorSyncSp0_Handler:
     msr daifset, #0x3
     .seh_nop
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
-    mov x29, sp
-    .seh_set_fp
+    stp x0, x1, [sp, #-80]!       /* Save original x0, x1 FIRST */
+    .seh_stackalloc 80
+    stp x9, x10, [sp, #16]        /* Save x9, x10 before common handler uses them */
+    .seh_nop
+    stp x11, x28, [sp, #32]       /* Save x11, x28 */
+    .seh_nop
+    stp x29, x30, [sp, #64]       /* Save x29, x30 */
+    .seh_save_fplr 64
+    add x29, sp, #64
+    .seh_add_fp 64
     .seh_endprologue
-    mov w0, #0
+    mov w1, #0                    /* Vector ID in x1, preserving x0 */
     bl KiArm64SyncVectorCommon
     brk #0xf001
     .seh_endproc
 
-/* Sync handler: SyncSpx (vector 4) */
+/* Sync handler: SyncSpx (vector 4) - MAIN KERNEL SYNC EXCEPTION VECTOR
+ *
+ * Stack frame layout (80 bytes, 16-byte aligned):
+ *   [sp+0]  = original x0
+ *   [sp+8]  = original x1
+ *   [sp+16] = original x9  (volatile, used as scratch in common handler)
+ *   [sp+24] = original x10 (volatile, used as scratch in common handler)
+ *   [sp+32] = original x11 (volatile, used as scratch in common handler)
+ *   [sp+40] = original x28 (callee-saved, used as temp for vector ID)
+ *   [sp+48] = padding
+ *   [sp+56] = padding
+ *   [sp+64] = original x29
+ *   [sp+72] = original x30
+ */
     .global KiArm64PermVectorSyncSpx_Handler
     .seh_proc KiArm64PermVectorSyncSpx_Handler
 KiArm64PermVectorSyncSpx_Handler:
     msr daifset, #0x3
     .seh_nop
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
-    mov x29, sp
-    .seh_set_fp
+    stp x0, x1, [sp, #-80]!       /* Save original x0, x1 FIRST */
+    .seh_stackalloc 80
+    stp x9, x10, [sp, #16]        /* Save x9, x10 before common handler uses them */
+    .seh_nop
+    stp x11, x28, [sp, #32]       /* Save x11, x28 */
+    .seh_nop
+    stp x29, x30, [sp, #64]       /* Save x29, x30 */
+    .seh_save_fplr 64
+    add x29, sp, #64
+    .seh_add_fp 64
     .seh_endprologue
-    mov w0, #4
+    mov w1, #4                    /* Vector ID in x1, preserving x0 */
     bl KiArm64SyncVectorCommon
     brk #0xf001
     .seh_endproc
 
-/* Sync handler: SyncLowerA64 (vector 8) */
+/* Sync handler: SyncLowerA64 (vector 8) - same 80-byte frame as SyncSpx */
     .global KiArm64PermVectorSyncLowerA64_Handler
     .seh_proc KiArm64PermVectorSyncLowerA64_Handler
 KiArm64PermVectorSyncLowerA64_Handler:
     msr daifset, #0x3
     .seh_nop
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
-    mov x29, sp
-    .seh_set_fp
+    stp x0, x1, [sp, #-80]!       /* Save original x0, x1 FIRST */
+    .seh_stackalloc 80
+    stp x9, x10, [sp, #16]        /* Save x9, x10 before common handler uses them */
+    .seh_nop
+    stp x11, x28, [sp, #32]       /* Save x11, x28 */
+    .seh_nop
+    stp x29, x30, [sp, #64]       /* Save x29, x30 */
+    .seh_save_fplr 64
+    add x29, sp, #64
+    .seh_add_fp 64
     .seh_endprologue
-    mov w0, #8
+
+#ifdef KDBG
+    /* DEBUG: One-shot marker for first SYNC-from-EL0 entry (vector 8). */
+    adrp x9, KiArm64SyncLowerOnce
+    ldr  w10, [x9, #:lo12:KiArm64SyncLowerOnce]
+    cbnz w10, 1f
+    mov  w10, #1
+    str  w10, [x9, #:lo12:KiArm64SyncLowerOnce]
+    ldr  x9, =0xFFFF800009000000
+    mov  w10, #'S'
+    strb w10, [x9]
+    mov  w10, #'Y'
+    strb w10, [x9]
+    mov  w10, #'N'
+    strb w10, [x9]
+    mov  w10, #'8'
+    strb w10, [x9]
+    mov  w10, #'\n'
+    strb w10, [x9]
+1:
+#endif /* KDBG */
+
+    mov w1, #8                    /* Vector ID in x1, preserving x0 */
     bl KiArm64SyncVectorCommon
     brk #0xf001
     .seh_endproc
 
-/* Sync handler: SyncLowerA32 (vector 12) */
+/* Sync handler: SyncLowerA32 (vector 12) - same 80-byte frame as SyncSpx */
     .global KiArm64PermVectorSyncLowerA32_Handler
     .seh_proc KiArm64PermVectorSyncLowerA32_Handler
 KiArm64PermVectorSyncLowerA32_Handler:
     msr daifset, #0x3
     .seh_nop
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
-    mov x29, sp
-    .seh_set_fp
+    stp x0, x1, [sp, #-80]!       /* Save original x0, x1 FIRST */
+    .seh_stackalloc 80
+    stp x9, x10, [sp, #16]        /* Save x9, x10 before common handler uses them */
+    .seh_nop
+    stp x11, x28, [sp, #32]       /* Save x11, x28 */
+    .seh_nop
+    stp x29, x30, [sp, #64]       /* Save x29, x30 */
+    .seh_save_fplr 64
+    add x29, sp, #64
+    .seh_add_fp 64
     .seh_endprologue
-    mov w0, #12
+    mov w1, #12                   /* Vector ID in x1, preserving x0 */
     bl KiArm64SyncVectorCommon
     brk #0xf001
     .seh_endproc
 
-/* SError handler: SErrorSp0 (vector 3) */
+/* SError handler: SErrorSp0 (vector 3) - same 80-byte frame as SyncSpx */
     .global KiArm64PermVectorSErrorSp0_Handler
     .seh_proc KiArm64PermVectorSErrorSp0_Handler
 KiArm64PermVectorSErrorSp0_Handler:
     msr daifset, #0x3
     .seh_nop
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
-    mov x29, sp
-    .seh_set_fp
+    stp x0, x1, [sp, #-80]!       /* Save original x0, x1 FIRST */
+    .seh_stackalloc 80
+    stp x9, x10, [sp, #16]        /* Save x9, x10 before common handler uses them */
+    .seh_nop
+    stp x11, x28, [sp, #32]       /* Save x11, x28 */
+    .seh_nop
+    stp x29, x30, [sp, #64]       /* Save x29, x30 */
+    .seh_save_fplr 64
+    add x29, sp, #64
+    .seh_add_fp 64
     .seh_endprologue
-    mov w0, #3
+    mov w1, #3                    /* Vector ID in x1, preserving x0 */
     bl KiArm64SyncVectorCommon
     brk #0xf001
     .seh_endproc
 
-/* SError handler: SErrorSpx (vector 7) */
+/* SError handler: SErrorSpx (vector 7) - same 80-byte frame as SyncSpx */
     .global KiArm64PermVectorSErrorSpx_Handler
     .seh_proc KiArm64PermVectorSErrorSpx_Handler
 KiArm64PermVectorSErrorSpx_Handler:
     msr daifset, #0x3
     .seh_nop
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
-    mov x29, sp
-    .seh_set_fp
+    stp x0, x1, [sp, #-80]!       /* Save original x0, x1 FIRST */
+    .seh_stackalloc 80
+    stp x9, x10, [sp, #16]        /* Save x9, x10 before common handler uses them */
+    .seh_nop
+    stp x11, x28, [sp, #32]       /* Save x11, x28 */
+    .seh_nop
+    stp x29, x30, [sp, #64]       /* Save x29, x30 */
+    .seh_save_fplr 64
+    add x29, sp, #64
+    .seh_add_fp 64
     .seh_endprologue
-    mov w0, #7
+    mov w1, #7                    /* Vector ID in x1, preserving x0 */
     bl KiArm64SyncVectorCommon
     brk #0xf001
     .seh_endproc
 
-/* SError handler: SErrorLowerA64 (vector 11) */
+/* SError handler: SErrorLowerA64 (vector 11) - same 80-byte frame as SyncSpx */
     .global KiArm64PermVectorSErrorLowerA64_Handler
     .seh_proc KiArm64PermVectorSErrorLowerA64_Handler
 KiArm64PermVectorSErrorLowerA64_Handler:
     msr daifset, #0x3
     .seh_nop
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
-    mov x29, sp
-    .seh_set_fp
+    stp x0, x1, [sp, #-80]!       /* Save original x0, x1 FIRST */
+    .seh_stackalloc 80
+    stp x9, x10, [sp, #16]        /* Save x9, x10 before common handler uses them */
+    .seh_nop
+    stp x11, x28, [sp, #32]       /* Save x11, x28 */
+    .seh_nop
+    stp x29, x30, [sp, #64]       /* Save x29, x30 */
+    .seh_save_fplr 64
+    add x29, sp, #64
+    .seh_add_fp 64
     .seh_endprologue
-    mov w0, #11
+    mov w1, #11                   /* Vector ID in x1, preserving x0 */
     bl KiArm64SyncVectorCommon
     brk #0xf001
     .seh_endproc
 
-/* SError handler: SErrorLowerA32 (vector 15) */
+/* SError handler: SErrorLowerA32 (vector 15) - same 80-byte frame as SyncSpx */
     .global KiArm64PermVectorSErrorLowerA32_Handler
     .seh_proc KiArm64PermVectorSErrorLowerA32_Handler
 KiArm64PermVectorSErrorLowerA32_Handler:
     msr daifset, #0x3
     .seh_nop
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
-    mov x29, sp
-    .seh_set_fp
+    stp x0, x1, [sp, #-80]!       /* Save original x0, x1 FIRST */
+    .seh_stackalloc 80
+    stp x9, x10, [sp, #16]        /* Save x9, x10 before common handler uses them */
+    .seh_nop
+    stp x11, x28, [sp, #32]       /* Save x11, x28 */
+    .seh_nop
+    stp x29, x30, [sp, #64]       /* Save x29, x30 */
+    .seh_save_fplr 64
+    add x29, sp, #64
+    .seh_add_fp 64
     .seh_endprologue
-    mov w0, #15
+    mov w1, #15                   /* Vector ID in x1, preserving x0 */
     bl KiArm64SyncVectorCommon
     brk #0xf001
     .seh_endproc
@@ -498,6 +702,28 @@ KiArm64PermVectorIrqLowerA64_Handler:
     stp x14, x15, [sp, #0x70]
     stp x16, x17, [sp, #0x80]
     stp x18, x19, [sp, #0x90]
+
+#ifdef KDBG
+    /* DEBUG: One-shot marker for first IRQ-from-EL0 entry (vector 9). */
+    adrp x9, KiArm64IrqLowerOnce
+    ldr  w10, [x9, #:lo12:KiArm64IrqLowerOnce]
+    cbnz w10, 1f
+    mov  w10, #1
+    str  w10, [x9, #:lo12:KiArm64IrqLowerOnce]
+    ldr  x9, =0xFFFF800009000000
+    mov  w10, #'I'
+    strb w10, [x9]
+    mov  w10, #'R'
+    strb w10, [x9]
+    mov  w10, #'Q'
+    strb w10, [x9]
+    mov  w10, #'9'
+    strb w10, [x9]
+    mov  w10, #'\n'
+    strb w10, [x9]
+1:
+#endif /* KDBG */
+
     dsb sy
     isb
     mov w0, #9
@@ -524,6 +750,16 @@ KiArm64PermVectorIrqLowerA64_Handler:
     isb
     eret
     .seh_endproc
+
+#ifdef KDBG
+    .bss
+    .align 4
+KiArm64IrqLowerOnce:
+    .word 0
+KiArm64SyncLowerOnce:
+    .word 0
+    .text
+#endif /* KDBG */
 
 /* FIQ handler: FiqLowerA64 (vector 10) */
     .global KiArm64PermVectorFiqLowerA64_Handler

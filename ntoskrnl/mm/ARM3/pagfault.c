@@ -47,6 +47,13 @@ VOID
 NTAPI
 MmRebalanceMemoryConsumersAndWait(VOID);
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+/* RosMM not-present fault handler - used for ARM64 user address routing */
+NTSTATUS
+NTAPI
+MmNotPresentFault(KPROCESSOR_MODE Mode, ULONG_PTR Address, BOOLEAN FromMdl);
+#endif
+
 /* GLOBALS ********************************************************************/
 
 #if defined(_M_ARM64) || defined(__aarch64__)
@@ -62,6 +69,358 @@ BOOLEAN UserPdeFault = FALSE;
 #endif
 
 /* PRIVATE FUNCTIONS **********************************************************/
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+/*
+ * MiArm64GetTtbr0PageTableDepth - Check how deep TTBR0's page tables exist for a user VA.
+ *
+ * On ARM64, the TTBR0 alias (L0[494] in TTBR1) points to TTBR0's L0 page table.
+ * Accessing PTE_BASE_TTBR0 + offset to read a user PTE requires that TTBR0's
+ * L0/L1/L2/L3 tables exist along the path to that PTE.
+ *
+ * If the page tables don't exist, trying to read through the TTBR0 alias will
+ * cause a nested page fault, leading to working set lock recursion.
+ *
+ * This function walks TTBR0's page tables PHYSICALLY (via KSEG0) to determine
+ * how deep the page tables exist for a given user VA, without causing faults.
+ *
+ * Returns:
+ *   0 - L0 entry doesn't exist (or invalid TTBR0)
+ *   1 - L0 exists, L1 doesn't
+ *   2 - L1 exists, L2 doesn't
+ *   3 - L2 exists, L3 doesn't
+ *   4 - All levels exist (L3/PTE is accessible)
+ *
+ * Outputs (if non-NULL):
+ *   OutL0Entry - Raw L0 table descriptor
+ *   OutL1Entry - Raw L1 table descriptor (if depth >= 1)
+ *   OutL2Entry - Raw L2 table descriptor (if depth >= 2)
+ *   OutL3Entry - Raw L3/PTE entry (if depth >= 3)
+ */
+static
+ULONG
+MiArm64GetTtbr0PageTableDepth(
+    _In_ PVOID UserVa,
+    _Out_opt_ PULONG64 OutL0Entry,
+    _Out_opt_ PULONG64 OutL1Entry,
+    _Out_opt_ PULONG64 OutL2Entry,
+    _Out_opt_ PULONG64 OutL3Entry)
+{
+    ULONG64 Ttbr0;
+    ULONG64 RootPa;
+    volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
+    ULONG L0Idx, L1Idx, L2Idx, L3Idx;
+    ULONG64 L0Entry, L1Entry, L2Entry, L3Entry;
+
+    /* Initialize outputs to 0 */
+    if (OutL0Entry) *OutL0Entry = 0;
+    if (OutL1Entry) *OutL1Entry = 0;
+    if (OutL2Entry) *OutL2Entry = 0;
+    if (OutL3Entry) *OutL3Entry = 0;
+
+    /* Must be a user address */
+    if (UserVa >= MmSystemRangeStart)
+        return 0;
+
+    /* Read TTBR0 to get the user page table root */
+    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+    RootPa = Ttbr0 & 0x0000FFFFFFFFF000ULL;  /* Extract PA, mask ASID bits */
+    if (RootPa == 0)
+        return 0;
+
+    /* Calculate indices for each level */
+    L0Idx = ((ULONG64)(ULONG_PTR)UserVa >> 39) & 0x1FF;
+    L1Idx = ((ULONG64)(ULONG_PTR)UserVa >> 30) & 0x1FF;
+    L2Idx = ((ULONG64)(ULONG_PTR)UserVa >> 21) & 0x1FF;
+    L3Idx = ((ULONG64)(ULONG_PTR)UserVa >> 12) & 0x1FF;
+
+    /* Access L0 table via KSEG0 direct mapping */
+    L0Table = (volatile ULONG64 *)(0xFFFF800000000000ULL | RootPa);
+    L0Entry = L0Table[L0Idx];
+    if (OutL0Entry) *OutL0Entry = L0Entry;
+
+    /* Check L0 entry validity - must be a table descriptor (bits[1:0]=0b11) */
+    if ((L0Entry & 0x3ULL) != 0x3ULL)
+        return 0;
+
+    /* Access L1 table */
+    L1Table = (volatile ULONG64 *)(0xFFFF800000000000ULL | (L0Entry & 0x0000FFFFFFFFF000ULL));
+    L1Entry = L1Table[L1Idx];
+    if (OutL1Entry) *OutL1Entry = L1Entry;
+
+    /* L1 could be a 1GB block (bits[1:0]=0b01) or table (0b11) or invalid (0b00) */
+    if ((L1Entry & 0x1ULL) == 0)
+        return 1;  /* L1 invalid */
+    if ((L1Entry & 0x3ULL) == 0x1ULL)
+        return 4;  /* L1 is 1GB block - address is mapped */
+
+    /* L1 is table, access L2 */
+    L2Table = (volatile ULONG64 *)(0xFFFF800000000000ULL | (L1Entry & 0x0000FFFFFFFFF000ULL));
+    L2Entry = L2Table[L2Idx];
+    if (OutL2Entry) *OutL2Entry = L2Entry;
+
+    /* L2 could be a 2MB block or table or invalid */
+    if ((L2Entry & 0x1ULL) == 0)
+        return 2;  /* L2 invalid */
+    if ((L2Entry & 0x3ULL) == 0x1ULL)
+        return 4;  /* L2 is 2MB block - address is mapped */
+
+    /* L2 is table, access L3 */
+    L3Table = (volatile ULONG64 *)(0xFFFF800000000000ULL | (L2Entry & 0x0000FFFFFFFFF000ULL));
+    L3Entry = L3Table[L3Idx];
+    if (OutL3Entry) *OutL3Entry = L3Entry;
+
+    /* L3 entries: page (0b11) or invalid (0b00). Note: L3 never has block descriptors. */
+    if ((L3Entry & 0x1ULL) == 0)
+        return 3;  /* L3/PTE invalid - page not present */
+
+    return 4;  /* All levels exist, page is mapped */
+}
+
+/*
+ * MiArm64MapUserPage - Map a physical page at a user VA in TTBR0.
+ *
+ * This function creates the page table hierarchy if needed and maps
+ * the physical page at the specified user virtual address.
+ *
+ * All operations are done via KSEG0 direct mapping since the TTBR0
+ * alias addressing scheme is broken on ARM64.
+ */
+NTSTATUS
+NTAPI
+MiArm64MapUserPage(
+    _In_ ULONG_PTR VirtualAddress,
+    _In_ PFN_NUMBER PageFrameNumber,
+    _In_ ULONG Protection)
+{
+    ULONG64 Ttbr0;
+    ULONG64 RootPa;
+    volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
+    ULONG L0Idx, L1Idx, L2Idx, L3Idx;
+    ULONG64 L0Entry, L1Entry, L2Entry, L3Entry;
+    ULONG64 NewPte;
+    PFN_NUMBER NewTablePfn;
+    KIRQL OldIrql;
+    PEPROCESS Process = PsGetCurrentProcess();
+
+    /* Debug output */
+/* Must be a user address */
+    if (VirtualAddress >= (ULONG_PTR)MmSystemRangeStart)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Read TTBR0 to get the user page table root */
+    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+    RootPa = Ttbr0 & 0x0000FFFFFFFFF000ULL;
+    if (RootPa == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Calculate indices for each level */
+    L0Idx = (VirtualAddress >> 39) & 0x1FF;
+    L1Idx = (VirtualAddress >> 30) & 0x1FF;
+    L2Idx = (VirtualAddress >> 21) & 0x1FF;
+    L3Idx = (VirtualAddress >> 12) & 0x1FF;
+
+    /* Access L0 table via KSEG0 direct mapping */
+    L0Table = (volatile ULONG64 *)(0xFFFF800000000000ULL | RootPa);
+    L0Entry = L0Table[L0Idx];
+
+    /* Check if we need to create L1 table */
+    if ((L0Entry & 0x3ULL) != 0x3ULL)
+    {
+        /* Allocate a new page table page */
+        OldIrql = MiAcquirePfnLock();
+        MI_SET_USAGE(MI_USAGE_PAGE_TABLE);
+        MI_SET_PROCESS(Process);
+        NewTablePfn = MiRemoveZeroPage(MI_GET_NEXT_PROCESS_COLOR(Process));
+        if (NewTablePfn == 0)
+        {
+            NewTablePfn = MiRemoveAnyPage(MI_GET_NEXT_PROCESS_COLOR(Process));
+            if (NewTablePfn == 0)
+            {
+                MiReleasePfnLock(OldIrql);
+                return STATUS_NO_MEMORY;
+            }
+            /* Zero the page */
+            RtlZeroMemory((PVOID)(0xFFFF800000000000ULL | (NewTablePfn << PAGE_SHIFT)), PAGE_SIZE);
+        }
+        MiReleasePfnLock(OldIrql);
+
+        /* Create L0 table descriptor */
+        L0Entry = (NewTablePfn << PAGE_SHIFT) | 0x3ULL;  /* Table descriptor */
+        L0Table[L0Idx] = L0Entry;
+
+        /* Memory barrier to ensure the write is visible before accessing the new table */
+        __asm__ __volatile__("dmb ishst" ::: "memory");
+    }
+
+    /* Access L1 table */
+    L1Table = (volatile ULONG64 *)(0xFFFF800000000000ULL | (L0Entry & 0x0000FFFFFFFFF000ULL));
+    L1Entry = L1Table[L1Idx];
+
+    /* Check if we need to create L2 table (skip if L1 is a 1GB block) */
+    if ((L1Entry & 0x3ULL) == 0x1ULL)
+    {
+        /* L1 is a 1GB block - cannot create page table here */
+        return STATUS_CONFLICTING_ADDRESSES;
+    }
+
+    if ((L1Entry & 0x3ULL) != 0x3ULL)
+    {
+        /* Allocate a new page table page */
+        OldIrql = MiAcquirePfnLock();
+        MI_SET_USAGE(MI_USAGE_PAGE_TABLE);
+        MI_SET_PROCESS(Process);
+        NewTablePfn = MiRemoveZeroPage(MI_GET_NEXT_PROCESS_COLOR(Process));
+        if (NewTablePfn == 0)
+        {
+            NewTablePfn = MiRemoveAnyPage(MI_GET_NEXT_PROCESS_COLOR(Process));
+            if (NewTablePfn == 0)
+            {
+                MiReleasePfnLock(OldIrql);
+                return STATUS_NO_MEMORY;
+            }
+            RtlZeroMemory((PVOID)(0xFFFF800000000000ULL | (NewTablePfn << PAGE_SHIFT)), PAGE_SIZE);
+        }
+        MiReleasePfnLock(OldIrql);
+
+        L1Entry = (NewTablePfn << PAGE_SHIFT) | 0x3ULL;
+        L1Table[L1Idx] = L1Entry;
+        __asm__ __volatile__("dmb ishst" ::: "memory");
+    }
+
+    /* Access L2 table */
+    L2Table = (volatile ULONG64 *)(0xFFFF800000000000ULL | (L1Entry & 0x0000FFFFFFFFF000ULL));
+    L2Entry = L2Table[L2Idx];
+
+    /* Check if we need to create L3 table (skip if L2 is a 2MB block) */
+    if ((L2Entry & 0x3ULL) == 0x1ULL)
+    {
+        /* L2 is a 2MB block - cannot create page table here */
+        return STATUS_CONFLICTING_ADDRESSES;
+    }
+
+    if ((L2Entry & 0x3ULL) != 0x3ULL)
+    {
+        /* Allocate a new page table page */
+        OldIrql = MiAcquirePfnLock();
+        MI_SET_USAGE(MI_USAGE_PAGE_TABLE);
+        MI_SET_PROCESS(Process);
+        NewTablePfn = MiRemoveZeroPage(MI_GET_NEXT_PROCESS_COLOR(Process));
+        if (NewTablePfn == 0)
+        {
+            NewTablePfn = MiRemoveAnyPage(MI_GET_NEXT_PROCESS_COLOR(Process));
+            if (NewTablePfn == 0)
+            {
+                MiReleasePfnLock(OldIrql);
+                return STATUS_NO_MEMORY;
+            }
+            RtlZeroMemory((PVOID)(0xFFFF800000000000ULL | (NewTablePfn << PAGE_SHIFT)), PAGE_SIZE);
+        }
+        MiReleasePfnLock(OldIrql);
+
+        L2Entry = (NewTablePfn << PAGE_SHIFT) | 0x3ULL;
+        L2Table[L2Idx] = L2Entry;
+        __asm__ __volatile__("dmb ishst" ::: "memory");
+    }
+
+    /* Access L3 table */
+    L3Table = (volatile ULONG64 *)(0xFFFF800000000000ULL | (L2Entry & 0x0000FFFFFFFFF000ULL));
+    L3Entry = L3Table[L3Idx];
+
+    /* Check if already mapped */
+    if ((L3Entry & 0x1ULL) != 0)
+    {
+        /* Page already mapped - this is not necessarily an error.
+         * If we're here during a page fault, it means the TLB was stale.
+         * Just do a TLB invalidation and return success. */
+/* TLB invalidation for the existing mapping */
+        {
+            ULONG64 VaForTlbi = VirtualAddress >> 12;
+            __asm__ __volatile__(
+                "dsb ishst\n\t"
+                "tlbi vae1is, %0\n\t"
+                "dsb ish\n\t"
+                "isb\n\t"
+                : : "r"(VaForTlbi) : "memory"
+            );
+        }
+        return STATUS_SUCCESS;
+    }
+
+    /*
+     * Build the L3 PTE (page descriptor).
+     * ARM64 L3 page descriptor format (4KB granule):
+     *   [63:52] = Upper attributes (UXN, PXN, Contiguous, etc.)
+     *   [51:48] = Reserved (PBHA if enabled)
+     *   [47:12] = Output address (PA of the page)
+     *   [11:2]  = Lower attributes (AF, SH, AP, AttrIndx)
+     *   [1:0]   = 0b11 (page descriptor)
+     */
+    NewPte = ((ULONG64)PageFrameNumber << PAGE_SHIFT);  /* PA */
+    NewPte |= 0x3ULL;  /* Page descriptor */
+    NewPte |= (1ULL << 10);  /* AF (Access Flag) - required */
+
+    /* Memory attributes: Normal, Inner/Outer Write-Back Cacheable */
+    NewPte |= (0ULL << 2);  /* AttrIndx = 0 (Normal Memory in MAIR) */
+
+    /* Shareability: Inner Shareable for SMP */
+    NewPte |= (3ULL << 8);  /* SH = Inner Shareable */
+
+    /* Access permissions */
+    switch (Protection)
+    {
+        case PAGE_READONLY:
+            NewPte |= (1ULL << 7);  /* AP[2] = 1 (read-only) */
+            NewPte |= (1ULL << 6);  /* AP[1] = 1 (user accessible) */
+            NewPte |= (1ULL << 54); /* UXN = 1 (no execute) */
+            NewPte |= (1ULL << 53); /* PXN = 1 (no privileged execute) */
+            break;
+        case PAGE_READWRITE:
+            NewPte |= (0ULL << 7);  /* AP[2] = 0 (read-write) */
+            NewPte |= (1ULL << 6);  /* AP[1] = 1 (user accessible) */
+            NewPte |= (1ULL << 54); /* UXN = 1 (no execute) */
+            NewPte |= (1ULL << 53); /* PXN = 1 (no privileged execute) */
+            break;
+        case PAGE_EXECUTE:
+        case PAGE_EXECUTE_READ:
+            NewPte |= (1ULL << 7);  /* AP[2] = 1 (read-only) */
+            NewPte |= (1ULL << 6);  /* AP[1] = 1 (user accessible) */
+            /* UXN = 0 (user can execute), PXN = 1 (kernel cannot execute) */
+            NewPte |= (1ULL << 53); /* PXN = 1 */
+            break;
+        case PAGE_EXECUTE_READWRITE:
+            NewPte |= (0ULL << 7);  /* AP[2] = 0 (read-write) */
+            NewPte |= (1ULL << 6);  /* AP[1] = 1 (user accessible) */
+            /* UXN = 0 (user can execute), PXN = 1 (kernel cannot execute) */
+            NewPte |= (1ULL << 53); /* PXN = 1 */
+            break;
+        default:
+            /* Default to read-write */
+            NewPte |= (0ULL << 7);
+            NewPte |= (1ULL << 6);
+            NewPte |= (1ULL << 54);
+            NewPte |= (1ULL << 53);
+            break;
+    }
+
+    /* Write the PTE */
+    L3Table[L3Idx] = NewPte;
+
+    /* TLB invalidation for the new mapping */
+    {
+        ULONG64 VaForTlbi = VirtualAddress >> 12;
+        __asm__ __volatile__(
+            "dsb ishst\n\t"
+            "tlbi vae1is, %0\n\t"
+            "dsb ish\n\t"
+            "isb\n\t"
+            : : "r"(VaForTlbi) : "memory"
+        );
+    }
+
+return STATUS_SUCCESS;
+}
+#endif /* _M_ARM64 */
 
 static
 NTSTATUS
@@ -2493,15 +2852,131 @@ MmArmAccessFault(IN ULONG FaultCode,
 {
     KIRQL OldIrql = KeGetCurrentIrql(), LockIrql;
     PMMPTE ProtoPte = NULL;
-    PMMPTE PointerPte = MiAddressToPte(Address);
-    PMMPDE PointerPde = MiAddressToPde(Address);
+    PMMPTE PointerPte;
+    PMMPDE PointerPde;
 #if (_MI_PAGING_LEVELS >= 3)
-    PMMPDE PointerPpe = MiAddressToPpe(Address);
+    PMMPDE PointerPpe;
 #if (_MI_PAGING_LEVELS == 4)
-    PMMPDE PointerPxe = MiAddressToPxe(Address);
+    PMMPDE PointerPxe;
 #endif
 #endif
     MMPTE TempPte;
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* Debug: Log entry for user addresses */
+    if (Address < MmSystemRangeStart)
+    {
+        static volatile LONG UserFaultLogBudget = 50;
+        if (UserFaultLogBudget > 0)
+        {
+            InterlockedDecrement(&UserFaultLogBudget);
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: USER ENTRY addr=%p FaultCode=0x%lx\n",
+                Address, FaultCode);
+        }
+        /* Debug: Always log for problem address 0x40000 */
+        if ((ULONG_PTR)Address >= 0x30000 && (ULONG_PTR)Address < 0x50000)
+        {
+            ULONG64 Ttbr0Val;
+            __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0Val));
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "[arm64] MmArmAccessFault: LOWUSER addr=%p TTBR0=0x%llx\n",
+                Address, (unsigned long long)Ttbr0Val);
+        }
+    }
+
+    /*
+     * Ttbr0DepthEarly: Declared at function scope so it's visible throughout.
+     * This tracks how deep TTBR0's page tables exist for user addresses.
+     * Initialized to 4 (all levels exist) - updated below for user addresses.
+     */
+    ULONG Ttbr0DepthEarly = 4;
+
+    /*
+     * ARM64 TTBR0/TTBR1 Split Page Table Fix:
+     *
+     * On ARM64, user addresses (< MmSystemRangeStart) are translated via TTBR0,
+     * while kernel addresses (>= MmSystemRangeStart) are translated via TTBR1.
+     *
+     * The kernel's self-map (PTE_BASE, PDE_BASE, etc.) is in TTBR1's hierarchy.
+     * MiAddressToPte/Pde/etc. for user addresses returns self-map addresses that
+     * point into TTBR1's hierarchy - but TTBR1 doesn't map user page tables!
+     *
+     * CRITICAL: For user addresses, we CANNOT safely access PointerPte/Pde/Ppe/Pxe
+     * through the TTBR0 alias if the corresponding page tables in TTBR0 don't exist.
+     * We first check TTBR0 page table depth by walking physically via KSEG0, then
+     * only set pointers to TTBR0 alias addresses for levels that exist. For levels
+     * that don't exist, we point to a static zero PTE so the code sees "invalid".
+     *
+     * Static zero PTE - always reads as 0 (invalid entry).
+     */
+    static const MMPTE MiArm64ZeroPte = {0};
+
+    if (Address < MmSystemRangeStart)
+    {
+        /* User address: Check TTBR0 page table depth FIRST */
+        Ttbr0DepthEarly = MiArm64GetTtbr0PageTableDepth(Address, NULL, NULL, NULL, NULL);
+
+        /*
+         * ARM64 TTBR0 ALIAS DESIGN FLAW FIX:
+         *
+         * The TTBR0 alias addresses (PXE_BASE_TTBR0, PPE_BASE_TTBR0, etc.) are
+         * BROKEN and cannot be safely dereferenced. The issue is that these
+         * addresses go through L0[494] (the TTBR0 alias), but their L1 index
+         * is 493 (pointing into the kernel self-map region), not 0 (pointing
+         * to user address L0 entries).
+         *
+         * For example, PXE_BASE_TTBR0 = 0xFFFFF77B7DBED000:
+         *   - L0 index = 494 (correct, goes through TTBR0 alias)
+         *   - L1 index = 493 (WRONG - accesses TTBR0's L0[493] which doesn't exist)
+         *
+         * TTBR0's L0 table only has valid entries for user addresses (indices
+         * 0-255), not kernel self-map indices (493).
+         *
+         * SOLUTION: For user addresses, ALWAYS set pointers to &MiArm64ZeroPte.
+         * Use Ttbr0DepthEarly to check page table existence, and use
+         * MiArm64GetTtbr0PageTableDepth() to read actual entry values via KSEG0.
+         *
+         * Ttbr0DepthEarly values:
+         *   0 = L0 doesn't exist
+         *   1 = L0 exists, L1/PPE doesn't
+         *   2 = L1 exists, L2/PDE doesn't
+         *   3 = L2 exists, L3/PTE doesn't
+         *   4 = All levels exist
+         */
+#if (_MI_PAGING_LEVELS == 4)
+        /* Never dereference TTBR0 alias addresses - they're broken */
+        PointerPxe = (PMMPDE)&MiArm64ZeroPte;
+#endif
+#if (_MI_PAGING_LEVELS >= 3)
+        PointerPpe = (PMMPDE)&MiArm64ZeroPte;
+#endif
+        PointerPde = (PMMPDE)&MiArm64ZeroPte;
+        PointerPte = (PMMPTE)&MiArm64ZeroPte;
+    }
+    else
+    {
+        /* Kernel address: Use normal TTBR1 self-map */
+        PointerPte = MiAddressToPte(Address);
+        PointerPde = MiAddressToPde(Address);
+#if (_MI_PAGING_LEVELS >= 3)
+        PointerPpe = MiAddressToPpe(Address);
+#if (_MI_PAGING_LEVELS == 4)
+        PointerPxe = MiAddressToPxe(Address);
+#endif
+#endif
+    }
+#else
+    /* Non-ARM64: Use standard self-map addresses */
+    PointerPte = MiAddressToPte(Address);
+    PointerPde = MiAddressToPde(Address);
+#if (_MI_PAGING_LEVELS >= 3)
+    PointerPpe = MiAddressToPpe(Address);
+#if (_MI_PAGING_LEVELS == 4)
+    PointerPxe = MiAddressToPxe(Address);
+#endif
+#endif
+#endif
     PETHREAD CurrentThread;
     PEPROCESS CurrentProcess;
     NTSTATUS Status;
@@ -2572,17 +3047,57 @@ MmArmAccessFault(IN ULONG FaultCode,
      */
     {
         extern VOID MiArm64MapAliasForPointer(_In_ PVOID AliasVa);
-        extern PVOID MmHyperSpaceEnd;
 
         /*
          * CRITICAL FIX FOR CYCLE 15: Handle faults on PTE addresses themselves.
          * When the faulting address is ALREADY in the self-map region (PTE_BASE to
-         * MmHyperSpaceEnd), we need to create the alias mapping for the address FIRST,
+         * PXE_TOP), we need to create the alias mapping for the address FIRST,
          * BEFORE trying to calculate its page table pointers (which would cause
          * recursive self-map address calculations and nested faults).
+         *
+         * ARM64 FIX: The check must use PXE_TOP (not MmHyperSpaceEnd) because:
+         * - HYPER_SPACE (0xFFFFF60000000000) is at L0[492]
+         * - Self-map PTE_BASE (0xFFFFF68000000000) starts at L0[493]
+         * - HYPER_SPACE_END < PTE_BASE, so the original check never matched self-map addresses!
+         *
+         * The self-map region spans from PTE_BASE to just past PXE_SELFMAP (end of L0[493] region).
          */
-        if (((PVOID)Address >= (PVOID)PTE_BASE) && ((PVOID)Address <= MmHyperSpaceEnd))
+        if (((PVOID)Address >= (PVOID)PTE_BASE) && ((PVOID)Address <= (PVOID)PXE_TOP))
         {
+            /*
+             * ARM64 DEBUG: If the faulting address is at PDE_BASE for a USER address
+             * (offset 0 corresponds to user VA 0x0 - 0x1FFFFF), log this as an error.
+             * This indicates code is using MiAddressToPde() for user addresses instead
+             * of MiAddressToPdeSafe() / MiAddressToPdeTtbr0().
+             */
+            if (Address == (PVOID)PDE_BASE)
+            {
+                PKTRAP_FRAME TrapFrame = (PKTRAP_FRAME)TrapInformation;
+                ULONG64 FaultingPc = 0;
+                ULONG64 NtoskrnlBase = 0xFFFF800044020000ULL; /* From boot log */
+                ULONG64 Offset = 0;
+
+                if (TrapFrame && MmIsAddressValid(TrapFrame))
+                {
+                    FaultingPc = TrapFrame->Pc;
+                    if (FaultingPc >= NtoskrnlBase)
+                        Offset = FaultingPc - NtoskrnlBase;
+                }
+
+                /* PDE_BASE + 0 = PDE for user VA 0x0 - 0x1FFFFF */
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[arm64] ERROR: Fault at PDE_BASE=%p - code is accessing kernel self-map for user address!\n",
+                           Address);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[arm64] ERROR: Caller should use MiAddressToPdeSafe() or MiAddressToPdeTtbr0().\n");
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[arm64] ERROR: TrapFrame=%p FaultingPC=%p Offset=0x%llx\n",
+                           TrapFrame, (PVOID)FaultingPc, Offset);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[arm64] ERROR: The function at ntoskrnl+0x%llx is using MiAddressToPde for user addresses!\n",
+                           Offset);
+            }
+
             /* The faulting address is a PTE/PDE/PPE/PXE or Hyperspace address.
              * Create its alias mapping FIRST before accessing its page table entries.
              * This prevents infinite recursion where MiAddressToPte(PTE_addr) tries
@@ -2608,28 +3123,55 @@ MmArmAccessFault(IN ULONG FaultCode,
             return STATUS_SUCCESS;
         }
 
-        /* For ALL addresses (kernel or user), ensure the page table pointers
-         * themselves (PointerPxe/Ppe/Pde/Pte) are accessible. These pointers
-         * are always in the kernel self-map region regardless of whether the
-         * faulting address is in user or kernel space. */
+        /*
+         * For kernel addresses: Ensure the self-map alias pages are backed.
+         * For user addresses: TTBR0 alias doesn't need alias page setup - it uses
+         * TTBR0's page tables directly. We check TTBR0 page table existence separately.
+         */
+        if (Address >= MmSystemRangeStart)
+        {
+            /* Kernel address: Create self-map alias page backing if needed */
 #if (_MI_PAGING_LEVELS == 4)
-        MiArm64MapAliasForPointer(PointerPxe);
+            MiArm64MapAliasForPointer(PointerPxe);
 #endif
 #if (_MI_PAGING_LEVELS >= 3)
-        MiArm64MapAliasForPointer(PointerPpe);
+            MiArm64MapAliasForPointer(PointerPpe);
 #endif
-        MiArm64MapAliasForPointer(PointerPde);
-        MiArm64MapAliasForPointer(PointerPte);
+            MiArm64MapAliasForPointer(PointerPde);
+            MiArm64MapAliasForPointer(PointerPte);
+            __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
+        }
+        /* For user addresses, TTBR0's page tables are accessed directly through
+         * the L0[494] alias. We don't need to create alias pages.
+         * Page table existence was already checked above via Ttbr0DepthEarly,
+         * and pointers for missing levels now point to MiArm64ZeroPte. */
+    }
 
-        __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
+    /*
+     * ARM64 User Address Page Table Existence Check:
+     *
+     * We already computed Ttbr0DepthEarly above and set PointerPxe/Ppe/Pde/Pte
+     * accordingly. For levels that don't exist, the pointers point to a static
+     * zero entry, so dereferencing is safe (returns 0/invalid).
+     */
+
+    /* Skip Access Flag handling if page tables don't fully exist */
+    if (Address < MmSystemRangeStart && Ttbr0DepthEarly < 4)
+    {
+        goto AfterAccessFlagCheck;
     }
 
     /*
      * ARM64 software Access Flag handling (TCR.HA=0):
      * Some CPUs (cpu=host) do not support hardware AF updates, so valid entries
      * with AF=0 raise an Access Flag fault. Detect that case via ESR and set AF.
+     *
+     * NOTE: TrapInformation may be a dummy value like (PVOID)1 when called from
+     * MiMakeSystemAddressValid() to indicate "not an MDL probe". We must validate
+     * that TrapInformation is actually a valid kernel pointer before dereferencing.
      */
-    if (TrapInformation != NULL)
+    if (TrapInformation != NULL &&
+        (ULONG_PTR)TrapInformation >= (ULONG_PTR)MmSystemRangeStart)
     {
         PKTRAP_FRAME TrapFrame = (PKTRAP_FRAME)TrapInformation;
         ULONG FaultStatus = TrapFrame->Esr & 0x3FULL;
@@ -2670,6 +3212,9 @@ MmArmAccessFault(IN ULONG FaultCode,
             }
         }
     }
+
+AfterAccessFlagCheck:
+    ;  /* Label needs a statement */
 #endif
 
     /* Check for page fault on high IRQL */
@@ -2681,15 +3226,29 @@ MmArmAccessFault(IN ULONG FaultCode,
         MiCheckPdeForPagedPool(Address);
 #endif
         /* Check if any of the top-level pages are invalid */
-        if (
+        BOOLEAN PtesInvalid = FALSE;
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /* ARM64: For user addresses, use Ttbr0DepthEarly instead of dereferencing pointers */
+        if (Address < MmSystemRangeStart)
+        {
+            /* Ttbr0DepthEarly < 4 means page tables don't fully exist */
+            PtesInvalid = (Ttbr0DepthEarly < 4);
+        }
+        else
+#endif
+        {
+            /* Kernel addresses (all archs) or non-ARM64: Safe to dereference */
+            PtesInvalid = (
 #if (_MI_PAGING_LEVELS == 4)
-            (PointerPxe->u.Hard.Valid == 0) ||
+                (PointerPxe->u.Hard.Valid == 0) ||
 #endif
 #if (_MI_PAGING_LEVELS >= 3)
-            (PointerPpe->u.Hard.Valid == 0) ||
+                (PointerPpe->u.Hard.Valid == 0) ||
 #endif
-            (PointerPde->u.Hard.Valid == 0) ||
-            (PointerPte->u.Hard.Valid == 0))
+                (PointerPde->u.Hard.Valid == 0) ||
+                (PointerPte->u.Hard.Valid == 0));
+        }
+        if (PtesInvalid)
         {
             /* This fault is not valid, print out some debugging help */
             DbgPrint("MM:***PAGE FAULT AT IRQL > 1  Va %p, IRQL %lx\n",
@@ -2980,7 +3539,8 @@ MmArmAccessFault(IN ULONG FaultCode,
         }
 #endif
 
-        if (((PVOID)PointerPte >= (PVOID)PTE_BASE) && ((PVOID)PointerPte <= (PVOID)MmHyperSpaceEnd))
+        /* ARM64 FIX: Use PXE_TOP instead of MmHyperSpaceEnd - see comment above */
+        if (((PVOID)PointerPte >= (PVOID)PTE_BASE) && ((PVOID)PointerPte <= (PVOID)PXE_TOP))
         {
             extern VOID MiArm64MapAliasForPointer(_In_ PVOID AliasVa);
 
@@ -3688,6 +4248,40 @@ RetryKernel:
 
     /* This is a user fault */
 UserFault:
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64 USER FAULT ROUTING TO RosMM:
+     *
+     * The ARM3 page fault handler cannot correctly handle user address faults
+     * on ARM64 because the TTBR0 alias addressing scheme is fundamentally
+     * broken. The alias addresses (PXE_BASE_TTBR0, PPE_BASE_TTBR0, etc.) have
+     * L1 indices that point into the kernel self-map region (index 493),
+     * not into the valid user address L0 entries (indices 0-255).
+     *
+     * Instead of trying to fix this complex issue in ARM3, we route user
+     * address faults to the ReactOS legacy MM (RosMM) via MmNotPresentFault.
+     * RosMM handles page faults through section view management and doesn't
+     * rely on the self-map addressing scheme.
+     *
+     * This is a clean solution because:
+     * 1. RosMM already handles user address faults correctly
+     * 2. It avoids complex changes to ARM3's page table manipulation
+     * 3. User address page tables are managed via KSEG0 direct mapping
+     */
+    if (Address < MmSystemRangeStart)
+    {
+        NTSTATUS RosMmStatus;
+
+        /* Call RosMM's not-present fault handler for user addresses */
+        RosMmStatus = MmNotPresentFault(Mode, (ULONG_PTR)Address, FALSE);
+
+        /* Clear the in-function flag before returning */
+        InterlockedExchange(&MmArmAccessFaultInFunction, 0);
+
+        return RosMmStatus;
+    }
+#endif
+
     CurrentThread = PsGetCurrentThread();
     CurrentProcess = (PEPROCESS)CurrentThread->Tcb.ApcState.Process;
 

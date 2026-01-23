@@ -33,18 +33,24 @@ VOID
 NTAPI
 MiInitializeLargePageSupport(VOID)
 {
+    /*
+     * Initialize the process tracking list.
+     * MmProcessList is used by MiArchCreateProcessAddressSpace on builds
+     * that carry EPROCESS::MmProcessLinks (i386/ARM64).
+     */
+    InitializeListHead(&MmProcessList);
+#ifndef _M_AMD64
+    InsertTailList(&MmProcessList, &PsGetCurrentProcess()->MmProcessLinks);
+#endif
+
 #if _MI_PAGING_LEVELS > 2
-    DPRINT1("MiInitializeLargePageSupport: PAE/x64 Not Implemented\n");
+    DPRINT1("MiInitializeLargePageSupport: PAE/x64 Large Page Not Implemented\n");
     //ASSERT(FALSE);
 #else
     /* Initialize the large-page hyperspace PTE used for initial mapping */
     MiLargePageHyperPte = MiReserveSystemPtes(1, SystemPteSpace);
     ASSERT(MiLargePageHyperPte);
     MiLargePageHyperPte->u.Long = 0;
-
-    /* Initialize the process tracking list, and insert the system process */
-    InitializeListHead(&MmProcessList);
-    InsertTailList(&MmProcessList, &PsGetCurrentProcess()->MmProcessLinks);
 #endif
 }
 
