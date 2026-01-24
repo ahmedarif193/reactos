@@ -1,0 +1,82 @@
+; USB RNDIS Network Driver Installation File
+; ReactOS USB RNDIS Driver
+; Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = Net
+ClassGUID   = {4d36e972-e325-11ce-bfc1-08002be10318}
+Provider    = %ReactOS%
+DriverVer   = 01/24/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%Generic% = GenericDevices,NTx86,NTamd64
+%VBox% = VBoxDevices,NTx86,NTamd64
+
+; Generic RNDIS devices
+[GenericDevices.NTx86]
+%RNDIS.DeviceDesc% = RNDIS.Install, USB\Class_02&SubClass_02&Prot_FF
+%RNDIS.DeviceDesc% = RNDIS.Install, USB\Class_E0&SubClass_01&Prot_03
+%RNDIS.DeviceDesc% = RNDIS.Install, USB\Class_EF&SubClass_01&Prot_01
+
+[GenericDevices.NTamd64]
+%RNDIS.DeviceDesc% = RNDIS.Install, USB\Class_02&SubClass_02&Prot_FF
+%RNDIS.DeviceDesc% = RNDIS.Install, USB\Class_E0&SubClass_01&Prot_03
+%RNDIS.DeviceDesc% = RNDIS.Install, USB\Class_EF&SubClass_01&Prot_01
+
+; VirtualBox USB Ethernet
+[VBoxDevices.NTx86]
+%VBox.DeviceDesc% = RNDIS.Install, USB\VID_80EE&PID_0040
+
+[VBoxDevices.NTamd64]
+%VBox.DeviceDesc% = RNDIS.Install, USB\VID_80EE&PID_0040
+
+[RNDIS.Install]
+Characteristics = 0x84   ; NCF_HAS_UI | NCF_PHYSICAL
+BusType         = 15     ; PNPBus
+AddReg          = RNDIS.Reg
+CopyFiles       = RNDIS.CopyFiles
+
+[RNDIS.Install.Services]
+AddService = usbrndis, 2, RNDIS.Service, RNDIS.EventLog
+
+[RNDIS.Reg]
+HKR, Ndi,               Service,    0, "usbrndis"
+HKR, Ndi\Interfaces,    UpperRange, 0, "ndis5"
+HKR, Ndi\Interfaces,    LowerRange, 0, "ethernet"
+
+[RNDIS.CopyFiles]
+usbrndis.sys
+
+[RNDIS.Service]
+DisplayName    = %RNDIS.ServiceDesc%
+ServiceType    = 1      ; SERVICE_KERNEL_DRIVER
+StartType      = 3      ; SERVICE_DEMAND_START
+ErrorControl   = 1      ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\usbrndis.sys
+LoadOrderGroup = NDIS
+
+[RNDIS.EventLog]
+AddReg = RNDIS.EventLog.Reg
+
+[RNDIS.EventLog.Reg]
+HKR, , EventMessageFile, 0x00020000, "%%SystemRoot%%\System32\netevent.dll"
+HKR, , TypesSupported,   0x00010001, 7
+
+[SourceDisksNames]
+1 = %DiskName%
+
+[SourceDisksFiles]
+usbrndis.sys = 1
+
+[Strings]
+ReactOS            = "ReactOS Team"
+Generic            = "Generic"
+VBox               = "Oracle VirtualBox"
+RNDIS.DeviceDesc   = "USB RNDIS Network Adapter"
+VBox.DeviceDesc    = "VirtualBox USB Ethernet Adapter"
+RNDIS.ServiceDesc  = "USB RNDIS Network Driver"
+DiskName           = "USB RNDIS Driver Installation Disk"
