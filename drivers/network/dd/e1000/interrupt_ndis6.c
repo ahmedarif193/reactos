@@ -719,6 +719,24 @@ E1000MiniportInterruptDpc(
             E1000ProcessTxCompletions(&Adapter->TxQueues[1]);
         }
     }
+    else
+    {
+        /*
+         * Workaround: QEMU e1000e may not set TX interrupt bits correctly.
+         * Check TX ring status even if no TX interrupt was signaled.
+         */
+        PE1000_TX_QUEUE TxQueue = &Adapter->TxQueues[0];
+
+        if (TxQueue->Descriptors != NULL && TxQueue->Head != TxQueue->Tail)
+        {
+            volatile PE1000_TRANSMIT_DESCRIPTOR TxDesc = &TxQueue->Descriptors[TxQueue->Head];
+            if (TxDesc->Status & E1000_TDESC_STATUS_DD)
+            {
+                DbgPrint("E1000: DPC - TX poll: found completed descriptor at head %u\n", TxQueue->Head);
+                E1000ProcessTxCompletions(&Adapter->TxQueues[0]);
+            }
+        }
+    }
 
     /* Process received packets */
     if (ProcessRx)
