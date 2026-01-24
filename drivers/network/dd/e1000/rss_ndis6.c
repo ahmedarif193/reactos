@@ -62,7 +62,7 @@ E1000InitializeRss(
         }
     }
 
-    DbgPrint("E1000: RSS initialized - %u queues available\n", Adapter->RssConfig.QueueCount);
+    DPRINT1("E1000: RSS initialized - %u queues available\n", Adapter->RssConfig.QueueCount);
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -201,7 +201,7 @@ E1000ConfigureRss(
         Adapter->RssConfig.Enabled = TRUE;
     }
 
-    DbgPrint("E1000: RSS configured - HashTypes=0x%08x, Queues=%u\n",
+    DPRINT1("E1000: RSS configured - HashTypes=0x%08x, Queues=%u\n",
              Adapter->RssConfig.HashTypes, Adapter->RssConfig.QueueCount);
 
     return NDIS_STATUS_SUCCESS;
@@ -229,5 +229,5 @@ E1000DisableRss(
 
     Adapter->RssConfig.Enabled = FALSE;
 
-    DbgPrint("E1000: RSS disabled\n");
+    DPRINT1("E1000: RSS disabled\n");
 }

@@ -332,7 +332,7 @@ NdisSetTimer(
   ASSERT_IRQL(DISPATCH_LEVEL);
   ASSERT(Timer);
 
-  NDIS_DbgPrint(MAX_TRACE, ("Called. Timer is: 0x%x, Timeout is: %ld\n", Timer, MillisecondsToDelay));
+  DPRINT("Called. Timer is: 0x%x, Timeout is: %ld\n", Timer, MillisecondsToDelay);
 
   /* relative delays are negative, absolute are positive; resolution is 100ns */
   Timeout.QuadPart = Int32x32To64(MillisecondsToDelay, -10000);
@@ -350,8 +350,8 @@ NdisSetTimerEx(
     IN UINT  MillisecondsToDelay,
     IN PVOID  FunctionContext)
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Called. Timer is: 0x%x, Timeout is: %ld, FunctionContext is: 0x%x\n",
-                               Timer, MillisecondsToDelay, FunctionContext));
+    DPRINT("Called. Timer is: 0x%x, Timeout is: %ld, FunctionContext is: 0x%x\n",
+                               Timer, MillisecondsToDelay, FunctionContext);
 
     Timer->Dpc.DeferredContext = FunctionContext;
 

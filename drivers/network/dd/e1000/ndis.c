@@ -40,7 +40,7 @@ MiniportReset(
     Status = NICSoftReset(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NICSoftReset failed (0x%x)\n", Status));
+        DPRINT1("NICSoftReset failed (0x%x)\n", Status);
         E1000_INIT_DBG(("MiniportReset: soft reset FAILED 0x%x\n", Status));
         return Status;
     }
@@ -50,7 +50,7 @@ MiniportReset(
     Status = NICEnableTxRx(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NICEnableTxRx failed (0x%x)\n", Status));
+        DPRINT1("NICEnableTxRx failed (0x%x)\n", Status);
         E1000_INIT_DBG(("MiniportReset: enable TX/RX FAILED 0x%x\n", Status));
         return Status;
     }
@@ -75,13 +75,13 @@ MiniportHalt(
 {
     PE1000_ADAPTER Adapter = (PE1000_ADAPTER)MiniportAdapterContext;
 
-    NDIS_DbgPrint(MID_TRACE, ("MiniportHalt called\n"));
+    DPRINT1("MiniportHalt called\n");
     E1000_INIT_DBG(("MiniportHalt: entering\n"));
 
     ASSERT(Adapter != NULL);
     if (Adapter == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("MiniportHalt: NULL adapter context!\n"));
+        DPRINT1("MiniportHalt: NULL adapter context!\n");
         return;
     }
 
@@ -137,7 +137,7 @@ MiniportInitialize(
     UINT ResourceListSize;
     PCI_COMMON_CONFIG PciConfig;
 
-    NDIS_DbgPrint(MID_TRACE, ("MiniportInitialize called\n"));
+    DPRINT1("MiniportInitialize called\n");
     E1000_INIT_DBG(("MiniportInitialize: ========== DRIVER INITIALIZATION START ==========\n"));
     E1000_INIT_DBG(("MiniportInitialize: AdapterHandle=%p\n", MiniportAdapterHandle));
 
@@ -160,7 +160,7 @@ MiniportInitialize(
 
     if (i == MediumArraySize)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("802.3 medium was not found in the medium array\n"));
+        DPRINT1("802.3 medium was not found in the medium array\n");
         E1000_INIT_DBG(("MiniportInitialize: FAILED - 802.3 medium not found\n"));
         E1000_STAT_INC32(InitFailed);
         return NDIS_STATUS_UNSUPPORTED_MEDIA;
@@ -176,7 +176,7 @@ MiniportInitialize(
                                        E1000_TAG);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate adapter context (0x%x)\n", Status));
+        DPRINT1("Failed to allocate adapter context (0x%x)\n", Status);
         E1000_INIT_DBG(("MiniportInitialize: FAILED - could not allocate adapter context 0x%x\n", Status));
         E1000_STAT_INC32(InitFailed);
         return NDIS_STATUS_RESOURCES;
@@ -233,7 +233,7 @@ MiniportInitialize(
         ULONG CapReadCount = 0;
         const ULONG MaxCaps = 48; /* Prevent infinite loops */
 
-        DbgPrint("E1000: PCI Capability List:\n");
+        DPRINT1("E1000: PCI Capability List:\n");
 
         while (CapPtr != 0 && CapReadCount < MaxCaps)
         {
@@ -247,7 +247,7 @@ MiniportInitialize(
             CapId = CapData[0];
             NextPtr = CapData[1];
 
-            DbgPrint("E1000:   [0x%02x] Cap ID=0x%02x (%s)\n",
+            DPRINT1("E1000:   [0x%02x] Cap ID=0x%02x (%s)\n",
                      CapPtr, CapId,
                      (CapId == 0x05) ? "MSI" :
                      (CapId == 0x10) ? "PCIe" :
@@ -270,13 +270,13 @@ MiniportInitialize(
                 MsiEnableVectors = 1 << ((MsiControl >> 4) & 0x7); /* Bits 6:4 = MME */
                 Is64Bit = (MsiControl & 0x80) != 0;
 
-                DbgPrint("E1000:       MSI Control=0x%04x\n", MsiControl);
-                DbgPrint("E1000:       Enable=%d MaxVectors=%u EnabledVectors=%u 64Bit=%d\n",
+                DPRINT("E1000:       MSI Control=0x%04x\n", MsiControl);
+                DPRINT1("E1000:       Enable=%d MaxVectors=%u EnabledVectors=%u 64Bit=%d\n",
                          (MsiControl & 0x01) ? 1 : 0, MsiMaxVectors, MsiEnableVectors, Is64Bit);
 
                 NdisReadPciSlotInformation(Adapter->AdapterHandle, 0,
                                            CapPtr + 4, &MsiAddrLo, sizeof(MsiAddrLo));
-                DbgPrint("E1000:       Message Address Low=0x%08x\n", MsiAddrLo);
+                DPRINT1("E1000:       Message Address Low=0x%08x\n", MsiAddrLo);
 
                 if (Is64Bit)
                 {
@@ -284,14 +284,14 @@ MiniportInitialize(
                                                CapPtr + 8, &MsiAddrHi, sizeof(MsiAddrHi));
                     NdisReadPciSlotInformation(Adapter->AdapterHandle, 0,
                                                CapPtr + 12, &MsiData, sizeof(MsiData));
-                    DbgPrint("E1000:       Message Address High=0x%08x\n", MsiAddrHi);
+                    DPRINT1("E1000:       Message Address High=0x%08x\n", MsiAddrHi);
                 }
                 else
                 {
                     NdisReadPciSlotInformation(Adapter->AdapterHandle, 0,
                                                CapPtr + 8, &MsiData, sizeof(MsiData));
                 }
-                DbgPrint("E1000:       Message Data=0x%04x (vector %u)\n", MsiData, MsiData & 0xFF);
+                DPRINT1("E1000:       Message Data=0x%04x (vector %u)\n", MsiData, MsiData & 0xFF);
             }
             else if (CapId == 0x11) /* MSI-X */
             {
@@ -313,13 +313,13 @@ MiniportInitialize(
                 MsixPbaOffset &= ~0x7;
                 TableSize = (MsixControl & 0x7FF) + 1;
 
-                DbgPrint("E1000:       MSI-X Control=0x%04x\n", MsixControl);
-                DbgPrint("E1000:       Enable=%d FunctionMask=%d TableSize=%u\n",
+                DPRINT("E1000:       MSI-X Control=0x%04x\n", MsixControl);
+                DPRINT1("E1000:       Enable=%d FunctionMask=%d TableSize=%u\n",
                          (MsixControl & 0x8000) ? 1 : 0,
                          (MsixControl & 0x4000) ? 1 : 0,
                          TableSize);
-                DbgPrint("E1000:       Table: BAR%u Offset=0x%x\n", TableBir, MsixTableOffset);
-                DbgPrint("E1000:       PBA:   BAR%u Offset=0x%x\n", PbaBir, MsixPbaOffset);
+                DPRINT1("E1000:       Table: BAR%u Offset=0x%x\n", TableBir, MsixTableOffset);
+                DPRINT1("E1000:       PBA:   BAR%u Offset=0x%x\n", PbaBir, MsixPbaOffset);
             }
 
             CapPtr = NextPtr;
@@ -328,14 +328,14 @@ MiniportInitialize(
     }
     else
     {
-        DbgPrint("E1000: No PCI capabilities (Status=0x%04x)\n", PciConfig.Status);
+        DPRINT1("E1000: No PCI capabilities (Status=0x%04x)\n", PciConfig.Status);
     }
 
     /* Recognize hardware */
     E1000_INIT_DBG(("MiniportInitialize: recognizing hardware\n"));
     if (!NICRecognizeHardware(Adapter))
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Hardware not recognized\n"));
+        DPRINT1("Hardware not recognized\n");
         E1000_INIT_DBG(("MiniportInitialize: FAILED - hardware not recognized\n"));
         Status = NDIS_STATUS_UNSUPPORTED_MEDIA;
         E1000_STAT_INC32(InitFailed);
@@ -353,7 +353,7 @@ MiniportInitialize(
                                &ResourceListSize);
     if (Status != NDIS_STATUS_RESOURCES)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unexpected failure of NdisMQueryAdapterResources (0x%x)\n", Status));
+        DPRINT1("Unexpected failure of NdisMQueryAdapterResources (0x%x)\n", Status);
         E1000_INIT_DBG(("MiniportInitialize: FAILED - NdisMQueryAdapterResources unexpected result 0x%x\n", Status));
         Status = NDIS_STATUS_FAILURE;
         E1000_STAT_INC32(InitFailed);
@@ -367,7 +367,7 @@ MiniportInitialize(
                                 E1000_TAG);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate resource list (0x%x)\n", Status));
+        DPRINT1("Failed to allocate resource list (0x%x)\n", Status);
         E1000_INIT_DBG(("MiniportInitialize: FAILED - could not allocate resource list 0x%x\n", Status));
         E1000_STAT_INC32(InitFailed);
         goto Cleanup;
@@ -379,7 +379,7 @@ MiniportInitialize(
                                &ResourceListSize);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unexpected failure of NdisMQueryAdapterResources (0x%x)\n", Status));
+        DPRINT1("Unexpected failure of NdisMQueryAdapterResources (0x%x)\n", Status);
         E1000_INIT_DBG(("MiniportInitialize: FAILED - NdisMQueryAdapterResources second call 0x%x\n", Status));
         E1000_STAT_INC32(InitFailed);
         goto Cleanup;
@@ -400,7 +400,7 @@ MiniportInitialize(
 
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Adapter didn't receive enough resources\n"));
+        DPRINT1("Adapter didn't receive enough resources\n");
         E1000_INIT_DBG(("MiniportInitialize: FAILED - adapter resources initialization 0x%x\n", Status));
         E1000_STAT_INC32(InitFailed);
         goto Cleanup;
@@ -420,7 +420,7 @@ MiniportInitialize(
                                              MAXIMUM_FRAME_SIZE);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unable to configure DMA\n"));
+        DPRINT1("Unable to configure DMA\n");
         E1000_INIT_DBG(("MiniportInitialize: FAILED - DMA initialization 0x%x\n", Status));
         Status = NDIS_STATUS_RESOURCES;
         E1000_STAT_INC32(InitFailed);
@@ -433,7 +433,7 @@ MiniportInitialize(
     Status = NICAllocateIoResources(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unable to allocate resources\n"));
+        DPRINT1("Unable to allocate resources\n");
         E1000_INIT_DBG(("MiniportInitialize: FAILED - IO resource allocation 0x%x\n", Status));
         Status = NDIS_STATUS_RESOURCES;
         E1000_STAT_INC32(InitFailed);
@@ -455,7 +455,7 @@ MiniportInitialize(
     Status = NICPowerOn(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unable to power on NIC (0x%x)\n", Status));
+        DPRINT1("Unable to power on NIC (0x%x)\n", Status);
         E1000_INIT_DBG(("MiniportInitialize: FAILED - power on 0x%x\n", Status));
         E1000_STAT_INC32(InitFailed);
         goto Cleanup;
@@ -467,7 +467,7 @@ MiniportInitialize(
     Status = NICSoftReset(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unable to reset the NIC (0x%x)\n", Status));
+        DPRINT1("Unable to reset the NIC (0x%x)\n", Status);
         E1000_INIT_DBG(("MiniportInitialize: FAILED - soft reset 0x%x\n", Status));
         E1000_STAT_INC32(InitFailed);
         goto Cleanup;
@@ -479,7 +479,7 @@ MiniportInitialize(
     Status = NICGetPermanentMacAddress(Adapter, Adapter->PermanentMacAddress);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unable to get the fixed MAC address (0x%x)\n", Status));
+        DPRINT1("Unable to get the fixed MAC address (0x%x)\n", Status);
         E1000_INIT_DBG(("MiniportInitialize: FAILED - MAC address read 0x%x\n", Status));
         E1000_STAT_INC32(InitFailed);
         goto Cleanup;
@@ -515,7 +515,7 @@ MiniportInitialize(
     Status = NICRegisterInterrupts(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unable to register interrupt (0x%x)\n", Status));
+        DPRINT1("Unable to register interrupt (0x%x)\n", Status);
         E1000_INIT_DBG(("MiniportInitialize: FAILED - interrupt registration 0x%x\n", Status));
         E1000_STAT_INC32(InitFailed);
         goto Cleanup;
@@ -534,7 +534,7 @@ MiniportInitialize(
     Status = NICEnableTxRx(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unable to enable TX and RX (0x%x)\n", Status));
+        DPRINT1("Unable to enable TX and RX (0x%x)\n", Status);
         E1000_INIT_DBG(("MiniportInitialize: FAILED - enable TX/RX 0x%x\n", Status));
         E1000_STAT_INC32(InitFailed);
         goto Cleanup;
@@ -581,8 +581,8 @@ DriverEntry(
     NDIS_MINIPORT_CHARACTERISTICS Characteristics = { 0 };
     NDIS_STATUS Status;
 
-    DbgPrint("E1000: DriverEntry - ReactOS Intel PRO/1000 Driver\n");
-    DbgPrint("E1000: Version %u.%u, Build Date: " __DATE__ " " __TIME__ "\n",
+    DPRINT1("E1000: DriverEntry - ReactOS Intel PRO/1000 Driver\n");
+    DPRINT1("E1000: Version %u.%u, Build Date: " __DATE__ " " __TIME__ "\n",
              DRIVER_VERSION >> 8, DRIVER_VERSION & 0xFF);
 
     E1000_INIT_DBG(("DriverEntry: DriverObject=%p RegistryPath=%wZ\n", DriverObject, RegistryPath));
@@ -612,7 +612,7 @@ DriverEntry(
     NdisMInitializeWrapper(&WrapperHandle, DriverObject, RegistryPath, NULL);
     if (!WrapperHandle)
     {
-        DbgPrint("E1000: NdisMInitializeWrapper failed\n");
+        DPRINT1("E1000: NdisMInitializeWrapper failed\n");
         E1000_INIT_DBG(("DriverEntry: FAILED - NdisMInitializeWrapper returned NULL\n"));
         return NDIS_STATUS_FAILURE;
     }
@@ -622,13 +622,13 @@ DriverEntry(
     Status = NdisMRegisterMiniport(WrapperHandle, &Characteristics, sizeof(Characteristics));
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: NdisMRegisterMiniport failed (0x%x)\n", Status);
+        DPRINT1("E1000: NdisMRegisterMiniport failed (0x%x)\n", Status);
         E1000_INIT_DBG(("DriverEntry: FAILED - NdisMRegisterMiniport 0x%x\n", Status));
         NdisTerminateWrapper(WrapperHandle, 0);
         return NDIS_STATUS_FAILURE;
     }
 
-    DbgPrint("E1000: Driver loaded successfully\n");
+    DPRINT1("E1000: Driver loaded successfully\n");
     E1000_INIT_DBG(("DriverEntry: miniport registered successfully\n"));
 
     return NDIS_STATUS_SUCCESS;

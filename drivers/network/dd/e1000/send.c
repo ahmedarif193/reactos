@@ -34,7 +34,7 @@ NICTransmitPacketInternal(
     volatile PE1000_TRANSMIT_DESCRIPTOR TransmitDescriptor;
     ULONG DescIndex;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* Validate inputs */
     E1000_ASSERT_TX_VALID((PVOID)1, Length);  /* Packet validation done by caller */
@@ -82,7 +82,7 @@ NICTransmitPacketInternal(
 
     if (Adapter->CurrentTxDesc == Adapter->LastTxDesc)
     {
-        NDIS_DbgPrint(MID_TRACE, ("All TX descriptors are full now\n"));
+        DPRINT1("All TX descriptors are full now\n");
         E1000_TX_DBG(("TX ring FULL: current=%u last=%u\n",
                       Adapter->CurrentTxDesc, Adapter->LastTxDesc));
         Adapter->TxFull = TRUE;
@@ -141,7 +141,7 @@ MiniportSend(
     /* Validate packet */
     if (Packet == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NULL packet received\n"));
+        DPRINT1("NULL packet received\n");
         E1000_STAT_INC(TxFailed);
         return NDIS_STATUS_FAILURE;
     }
@@ -152,7 +152,7 @@ MiniportSend(
     ASSERT(sgList != NULL);
     if (sgList == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Packet has no scatter-gather list\n"));
+        DPRINT1("Packet has no scatter-gather list\n");
         E1000_STAT_INC(TxFailed);
         return NDIS_STATUS_FAILURE;
     }
@@ -160,7 +160,7 @@ MiniportSend(
     ASSERT(sgList->NumberOfElements >= 1);
     if (sgList->NumberOfElements == 0)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Packet has zero scatter-gather elements\n"));
+        DPRINT1("Packet has zero scatter-gather elements\n");
         E1000_STAT_INC(TxFailed);
         return NDIS_STATUS_FAILURE;
     }
@@ -168,15 +168,15 @@ MiniportSend(
     ASSERT(sgList->Elements[0].Length <= MAXIMUM_FRAME_SIZE);
     if (sgList->Elements[0].Length > MAXIMUM_FRAME_SIZE)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Packet too large: %u > %u\n",
-                                  sgList->Elements[0].Length, MAXIMUM_FRAME_SIZE));
+        DPRINT1("Packet too large: %u > %u\n",
+                                  sgList->Elements[0].Length, MAXIMUM_FRAME_SIZE);
         E1000_STAT_INC(TxFailed);
         return NDIS_STATUS_FAILURE;
     }
 
     if (sgList->Elements[0].Length == 0)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Zero-length packet\n"));
+        DPRINT1("Zero-length packet\n");
         E1000_STAT_INC(TxFailed);
         return NDIS_STATUS_FAILURE;
     }
@@ -187,7 +187,7 @@ MiniportSend(
     if (Adapter->TxFull)
     {
         NdisReleaseSpinLock(&Adapter->TxLock);
-        NDIS_DbgPrint(MIN_TRACE, ("All TX descriptors are full\n"));
+        DPRINT1("All TX descriptors are full\n");
         E1000_TX_DBG(("TX FULL: Rejecting packet, current=%u last=%u\n",
                       Adapter->CurrentTxDesc, Adapter->LastTxDesc));
         E1000_STAT_INC(TxDropped);
@@ -217,7 +217,7 @@ MiniportSend(
         if (Status != NDIS_STATUS_SUCCESS)
         {
             NdisReleaseSpinLock(&Adapter->TxLock);
-            NDIS_DbgPrint(MIN_TRACE, ("Transmit packet failed\n"));
+            DPRINT1("Transmit packet failed\n");
             E1000_STAT_INC(TxFailed);
             return Status;
         }
@@ -232,8 +232,8 @@ MiniportSend(
         if (FreeDesc < sgList->NumberOfElements)
         {
             NdisReleaseSpinLock(&Adapter->TxLock);
-            NDIS_DbgPrint(MIN_TRACE, ("Not enough TX descriptors for SG list (%u needed, %u free)\n",
-                                      sgList->NumberOfElements, FreeDesc));
+            DPRINT1("Not enough TX descriptors for SG list (%u needed, %u free)\n",
+                                      sgList->NumberOfElements, FreeDesc);
             E1000_TX_DBG(("TX SG OVERFLOW: need=%u free=%u\n",
                           sgList->NumberOfElements, FreeDesc));
             E1000_STAT_INC(TxDropped);
@@ -328,7 +328,7 @@ MiniportSendPackets(
     ULONG PacketsQueued = 0;
     ULONG TotalBytesQueued = 0;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called with %u packets.\n", NumberOfPackets));
+    DPRINT("Called with %u packets.\n", NumberOfPackets);
 
     E1000_TX_DBG(("MiniportSendPackets: %u packets\n", NumberOfPackets));
     E1000_STAT_INC32(TxBatchCount);
@@ -359,8 +359,8 @@ MiniportSendPackets(
         }
     }
 
-    NDIS_DbgPrint(MAX_TRACE, ("Need %u descriptors, have %u free\n",
-                              TotalDescriptorsNeeded, FreeDescriptors));
+    DPRINT("Need %u descriptors, have %u free\n",
+                              TotalDescriptorsNeeded, FreeDescriptors);
 
     E1000_TX_DBG(("TX batch needs %u descriptors, have %u\n",
                   TotalDescriptorsNeeded, FreeDescriptors));
@@ -377,7 +377,7 @@ MiniportSendPackets(
         /* Validate packet */
         if (Packet == NULL)
         {
-            NDIS_DbgPrint(MIN_TRACE, ("Packet %u is NULL\n", i));
+            DPRINT1("Packet %u is NULL\n", i);
             E1000_STAT_INC(TxFailed);
             continue;
         }
@@ -387,7 +387,7 @@ MiniportSendPackets(
         if (sgList == NULL)
         {
             /* No scatter-gather list - fail this packet */
-            NDIS_DbgPrint(MIN_TRACE, ("Packet %u has no SG list\n", i));
+            DPRINT1("Packet %u has no SG list\n", i);
             E1000_TX_DBG(("TX batch packet %u: no SG list, failing\n", i));
             NdisReleaseSpinLock(&Adapter->TxLock);
             NdisMSendComplete(Adapter->AdapterHandle, Packet, NDIS_STATUS_FAILURE);
@@ -398,7 +398,7 @@ MiniportSendPackets(
 
         if (sgList->NumberOfElements == 0)
         {
-            NDIS_DbgPrint(MIN_TRACE, ("Packet %u has zero SG elements\n", i));
+            DPRINT1("Packet %u has zero SG elements\n", i);
             NdisReleaseSpinLock(&Adapter->TxLock);
             NdisMSendComplete(Adapter->AdapterHandle, Packet, NDIS_STATUS_FAILURE);
             NdisAcquireSpinLock(&Adapter->TxLock);
@@ -411,9 +411,9 @@ MiniportSendPackets(
         if (FreeDescriptors < sgList->NumberOfElements)
         {
             /* Not enough descriptors - complete with RESOURCES status */
-            NDIS_DbgPrint(MID_TRACE, ("Not enough TX descriptors for packet %u "
+            DPRINT1("Not enough TX descriptors for packet %u "
                                        "(%u needed, %u free)\n",
-                                       i, sgList->NumberOfElements, FreeDescriptors));
+                                       i, sgList->NumberOfElements, FreeDescriptors);
             E1000_TX_DBG(("TX batch packet %u: not enough descriptors (need=%u free=%u)\n",
                           i, sgList->NumberOfElements, FreeDescriptors));
             NdisReleaseSpinLock(&Adapter->TxLock);
@@ -434,14 +434,14 @@ MiniportSendPackets(
             /* Validate element */
             if (sgList->Elements[j].Length == 0)
             {
-                NDIS_DbgPrint(MIN_TRACE, ("Packet %u SG element %u has zero length\n", i, j));
+                DPRINT1("Packet %u SG element %u has zero length\n", i, j);
                 continue;
             }
 
             if (sgList->Elements[j].Length > MAXIMUM_FRAME_SIZE)
             {
-                NDIS_DbgPrint(MIN_TRACE, ("Packet %u SG element %u too large: %u\n",
-                                          i, j, sgList->Elements[j].Length));
+                DPRINT1("Packet %u SG element %u too large: %u\n",
+                                          i, j, sgList->Elements[j].Length);
                 Status = NDIS_STATUS_FAILURE;
                 break;
             }
@@ -514,8 +514,8 @@ MiniportSendPackets(
     {
         E1000WriteUlong(Adapter, E1000_REG_TDT, Adapter->CurrentTxDesc);
 
-        NDIS_DbgPrint(MAX_TRACE, ("Queued %u packets, TDT=%u\n",
-                                  PacketsQueued, Adapter->CurrentTxDesc));
+        DPRINT("Queued %u packets, TDT=%u\n",
+                                  PacketsQueued, Adapter->CurrentTxDesc);
 
         E1000_TX_DBG(("TX batch complete: %u packets, %u bytes, TDT=%u\n",
                       PacketsQueued, TotalBytesQueued, Adapter->CurrentTxDesc));

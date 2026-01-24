@@ -152,12 +152,12 @@ NdisMapFile(
 {
   PNDIS_HANDLE_OBJECT HandleObject = (PNDIS_HANDLE_OBJECT) FileHandle;
 
-  NDIS_DbgPrint(MAX_TRACE, ("called: FileHandle 0x%x\n", FileHandle));
+  DPRINT("called: FileHandle 0x%x\n", FileHandle);
 
   if (HandleObject->Mapped)
   {
       /* If a file already mapped we will return an error code */
-      NDIS_DbgPrint(MIN_TRACE, ("File already mapped\n"));
+      DPRINT1("File already mapped\n");
       *Status = NDIS_STATUS_ALREADY_MAPPED;
       return;
   }
@@ -179,7 +179,7 @@ NdisUnmapFile(
 {
   PNDIS_HANDLE_OBJECT HandleObject = (PNDIS_HANDLE_OBJECT) FileHandle;
 
-  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  DPRINT("Called.\n");
 
   HandleObject->Mapped = FALSE;
 }
@@ -196,7 +196,7 @@ NdisCloseFile(
 
   ASSERT_IRQL(PASSIVE_LEVEL);
 
-  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  DPRINT("Called.\n");
 
   ASSERT ( FileHandle );
 
@@ -231,7 +231,7 @@ NdisOpenFile(
 
   ASSERT_IRQL(PASSIVE_LEVEL);
 
-  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  DPRINT("Called.\n");
 
   ASSERT ( Status && FileName );
 
@@ -244,7 +244,7 @@ NdisOpenFile(
 
   if ( !FullFileName.Buffer )
   {
-    NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+    DPRINT1("Insufficient resources\n");
     *Status = NDIS_STATUS_RESOURCES;
     goto cleanup;
   }
@@ -252,7 +252,7 @@ NdisOpenFile(
   FileHandleObject = ExAllocatePool ( NonPagedPool, sizeof(NDIS_HANDLE_OBJECT) );
   if ( !FileHandleObject )
   {
-    NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+    DPRINT1("Insufficient resources\n");
     *Status = NDIS_STATUS_RESOURCES;
     goto cleanup;
   }
@@ -262,7 +262,7 @@ NdisOpenFile(
   NtStatus = RtlAppendUnicodeStringToString ( &FullFileName, FileName );
   if ( !NT_SUCCESS(NtStatus) )
   {
-    NDIS_DbgPrint(MIN_TRACE, ("RtlAppendUnicodeStringToString failed (%x)\n", NtStatus));
+    DPRINT("RtlAppendUnicodeStringToString failed (%x)\n", NtStatus);
     *Status = NDIS_STATUS_FAILURE;
     goto cleanup;
   }
@@ -288,7 +288,7 @@ NdisOpenFile(
 
   if ( !NT_SUCCESS(NtStatus) )
   {
-    NDIS_DbgPrint(MIN_TRACE, ("ZwCreateFile failed (%x) Name %wZ\n", NtStatus, FileName));
+    DPRINT1("ZwCreateFile failed (%x) Name %wZ\n", NtStatus, FileName);
     *Status = NDIS_STATUS_FILE_NOT_FOUND;
     goto cleanup;
   }
@@ -301,13 +301,13 @@ NdisOpenFile(
     FileStandardInformation);
   if (!NT_SUCCESS(NtStatus))
   {
-    NDIS_DbgPrint(MIN_TRACE, ("ZwQueryInformationFile failed (%x) Name %wZ\n", NtStatus, FileName));
+    DPRINT1("ZwQueryInformationFile failed (%x) Name %wZ\n", NtStatus, FileName);
     *Status = NDIS_STATUS_ERROR_READING_FILE;
     goto cleanup;
   }
   if (StandardInfo.EndOfFile.HighPart != 0 || StandardInfo.EndOfFile.LowPart == 0)
   {
-    NDIS_DbgPrint(MIN_TRACE, ("ZwQueryInformationFile failed Name %wZ\n", FileName));
+    DPRINT1("ZwQueryInformationFile failed Name %wZ\n", FileName);
     *Status = NDIS_STATUS_ERROR_READING_FILE;
     goto cleanup;
   }
@@ -316,7 +316,7 @@ NdisOpenFile(
   FileHandleObject->MapBuffer = ExAllocatePool( NonPagedPool, NtFileLength );
   if (!FileHandleObject->MapBuffer)
   {
-    NDIS_DbgPrint(MIN_TRACE, ("ExAllocatePool failed Name %wZ\n", FileName));
+    DPRINT1("ExAllocatePool failed Name %wZ\n", FileName);
     *Status = NDIS_STATUS_ERROR_READING_FILE;
     goto cleanup;
   }
@@ -333,7 +333,7 @@ NdisOpenFile(
     NULL);
   if ( !NT_SUCCESS(NtStatus) || IoStatusBlock.Information != NtFileLength )
   {
-    NDIS_DbgPrint(MIN_TRACE, ("ZwReadFile failed (%x) Name %wZ\n", NtStatus, FileName));
+    DPRINT1("ZwReadFile failed (%x) Name %wZ\n", NtStatus, FileName);
     *Status = NDIS_STATUS_ERROR_READING_FILE;
     goto cleanup;
   }
@@ -393,7 +393,7 @@ NdisGetCurrentProcessorCounts(
  *    NDIS 5.0
  */
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     ExGetCurrentProcessorCounts( (PULONG) pIdleCount, (PULONG) pKernelAndUser, (PULONG) pIndex);
 }
@@ -409,7 +409,7 @@ NdisGetSystemUpTime(OUT PULONG pSystemUpTime)
     ULONG Increment;
     LARGE_INTEGER TickCount;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* Get the increment and current tick count */
     Increment = KeQueryTimeIncrement();
@@ -506,7 +506,7 @@ ndisProcWorkItemHandler(PVOID pContext)
 {
     PNDIS_WORK_ITEM pNdisItem = (PNDIS_WORK_ITEM)pContext;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     pNdisItem->Routine(pNdisItem, pNdisItem->Context);
 }
@@ -518,7 +518,7 @@ NdisScheduleWorkItem(
 {
     PWORK_QUEUE_ITEM pntWorkItem = (PWORK_QUEUE_ITEM)pWorkItem->WrapperReserved;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     ExInitializeWorkItem(pntWorkItem, ndisProcWorkItemHandler, pWorkItem);
     ExQueueWorkItem(pntWorkItem, DelayedWorkQueue);
@@ -538,7 +538,7 @@ NdisGetCurrentProcessorCpuUsage(
  *     pCpuUsage = Pointer to a buffer to place CPU usage
  */
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     ExGetCurrentProcessorCpuUsage(pCpuUsage);
 }
@@ -550,7 +550,7 @@ ULONG
 EXPORT
 NdisGetSharedDataAlignment(VOID)
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     return KeGetRecommendedSharedDataAlignment();
 }
@@ -562,7 +562,7 @@ UINT
 EXPORT
 NdisGetVersion(VOID)
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     return NDIS_VERSION;
 }
@@ -578,7 +578,7 @@ NdisGeneratePartialCancelId(VOID)
 
     PartialCancelId = (UCHAR)InterlockedIncrement(&CancelId);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Cancel ID %u\n", PartialCancelId));
+    DPRINT1("Cancel ID %u\n", PartialCancelId);
 
     return PartialCancelId;
 }

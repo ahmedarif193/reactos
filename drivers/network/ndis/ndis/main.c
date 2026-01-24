@@ -13,13 +13,6 @@
 
 #include "ndissys.h"
 
-#if DBG
-
-/* See debug.h for debug/trace constants */
-ULONG DebugTraceLevel = MIN_TRACE;
-
-#endif /* DBG */
-
 LONG CancelId;
 
 
@@ -31,7 +24,7 @@ VOID NTAPI MainUnload(
  *     DriverObject = Pointer to driver object created by the system
  */
 {
-  NDIS_DbgPrint(MAX_TRACE, ("Leaving.\n"));
+  DPRINT("Leaving.\n");
 }
 
 
@@ -49,7 +42,7 @@ DriverEntry(
  *     Status of driver initialization
  */
 {
-  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  DPRINT("Called.\n");
 
   InitializeListHead(&ProtocolListHead);
   KeInitializeSpinLock(&ProtocolListLock);
@@ -91,7 +84,7 @@ NdisWriteErrorLogEntry(
  *     - FIXME - this needs to be properly implemented once we have an event log
  */
 {
-  NDIS_DbgPrint(MIN_TRACE, ("ERROR: ErrorCode 0x%x\n", ErrorCode));
+  DPRINT1("ERROR: ErrorCode 0x%x\n", ErrorCode);
   /* ASSERT(0); */
 }
 
@@ -127,7 +120,7 @@ NdisWriteEventLogEntry(
   /*
    * just returning true until we have an event log
    */
-  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  DPRINT("Called.\n");
   return NDIS_STATUS_SUCCESS;
 }
 

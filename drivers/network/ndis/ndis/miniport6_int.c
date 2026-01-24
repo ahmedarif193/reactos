@@ -102,7 +102,7 @@ Ndis6iInterruptIsr(
 
     UNREFERENCED_PARAMETER(Interrupt);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Ndis6iInterruptIsr called\n"));
+    DPRINT("Ndis6iInterruptIsr called\n");
 
     /* Call the miniport's ISR handler */
     if (IntBlock->Characteristics.InterruptHandler != NULL)
@@ -145,7 +145,7 @@ Ndis6iInterruptDpc(
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Ndis6iInterruptDpc called\n"));
+    DPRINT("Ndis6iInterruptDpc called\n");
 
     if (IntBlock == NULL)
     {
@@ -199,7 +199,7 @@ Ndis6iMessageIsr(
 
     UNREFERENCED_PARAMETER(Interrupt);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Ndis6iMessageIsr called, MessageId=%lu\n", MessageId));
+    DPRINT("Ndis6iMessageIsr called, MessageId=%lu\n", MessageId);
 
     /* Call the miniport's MSI ISR handler */
     if (IntBlock->Characteristics.MessageInterruptHandler != NULL)
@@ -249,7 +249,7 @@ Ndis6iMessageDpc(
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Ndis6iMessageDpc called\n"));
+    DPRINT("Ndis6iMessageDpc called\n");
 
     if (IntBlock == NULL)
     {
@@ -302,13 +302,13 @@ Ndis6iConnectLineBased(
     PCM_RESOURCE_LIST ResourceList;
     ULONG i;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Ndis6iConnectLineBased called\n"));
+    DPRINT("Ndis6iConnectLineBased called\n");
 
     /* Find the interrupt resource from the allocated resources */
     ResourceList = AdapterBlock->AllocatedResourcesTranslated;
     if (ResourceList == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("No translated resources available\n"));
+        DPRINT1("No translated resources available\n");
         return NDIS_STATUS_RESOURCE_CONFLICT;
     }
 
@@ -327,7 +327,7 @@ Ndis6iConnectLineBased(
 
     if (InterruptDesc == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("No interrupt resource found\n"));
+        DPRINT("No interrupt resource found\n");
         return NDIS_STATUS_RESOURCE_CONFLICT;
     }
 
@@ -336,8 +336,8 @@ Ndis6iConnectLineBased(
     Dirql = (KIRQL)InterruptDesc->u.Interrupt.Level;
     Affinity = InterruptDesc->u.Interrupt.Affinity;
 
-    NDIS_DbgPrint(MID_TRACE, ("Connecting to interrupt Vector=0x%x, Level=%d, Affinity=0x%lx\n",
-        MappedIrq, Dirql, (ULONG)Affinity));
+    DPRINT("Connecting to interrupt Vector=0x%x, Level=%d, Affinity=0x%lx\n",
+        MappedIrq, Dirql, (ULONG)Affinity);
 
     /* Initialize the DPC */
     KeInitializeDpc(&IntBlock->InterruptDpc, Ndis6iInterruptDpc, IntBlock);
@@ -359,7 +359,7 @@ Ndis6iConnectLineBased(
 
     if (!NT_SUCCESS(Status))
     {
-        NDIS_DbgPrint(MIN_TRACE, ("IoConnectInterrupt failed: 0x%x\n", Status));
+        DPRINT("IoConnectInterrupt failed: 0x%x\n", Status);
 
         if (Status == STATUS_INSUFFICIENT_RESOURCES)
         {
@@ -371,7 +371,7 @@ Ndis6iConnectLineBased(
     IntBlock->InterruptType = NDIS_CONNECT_LINE_BASED;
     IntBlock->Connected = TRUE;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Line-based interrupt connected successfully\n"));
+    DPRINT("Line-based interrupt connected successfully\n");
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -399,13 +399,13 @@ Ndis6iConnectMessageBased(
     ULONG i;
     ULONG MessageCount = 0;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Ndis6iConnectMessageBased called\n"));
+    DPRINT("Ndis6iConnectMessageBased called\n");
 
     /* Check if MSI handlers are provided */
     if (IntBlock->Characteristics.MessageInterruptHandler == NULL ||
         IntBlock->Characteristics.MessageInterruptDpcHandler == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("MSI handlers not provided\n"));
+        DPRINT("MSI handlers not provided\n");
         return NDIS_STATUS_NOT_SUPPORTED;
     }
 
@@ -413,7 +413,7 @@ Ndis6iConnectMessageBased(
     ResourceList = AdapterBlock->AllocatedResourcesTranslated;
     if (ResourceList == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("No translated resources available\n"));
+        DPRINT1("No translated resources available\n");
         return NDIS_STATUS_NOT_SUPPORTED;
     }
 
@@ -434,7 +434,7 @@ Ndis6iConnectMessageBased(
 
     if (MessageDesc == NULL || MessageCount == 0)
     {
-        NDIS_DbgPrint(MID_TRACE, ("No MSI resources found, falling back to line-based\n"));
+        DPRINT("No MSI resources found, falling back to line-based\n");
         return NDIS_STATUS_NOT_SUPPORTED;
     }
 
@@ -454,7 +454,7 @@ Ndis6iConnectMessageBased(
 
     if (IntBlock->MessageInterruptObjects == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate interrupt object array\n"));
+        DPRINT("Failed to allocate interrupt object array\n");
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -470,7 +470,7 @@ Ndis6iConnectMessageBased(
     {
         ExFreePoolWithTag(IntBlock->MessageInterruptObjects, NDIS6_INT_TAG);
         IntBlock->MessageInterruptObjects = NULL;
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate DPC array\n"));
+        DPRINT1("Failed to allocate DPC array\n");
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -514,7 +514,7 @@ Ndis6iConnectMessageBased(
 
         if (!FoundResource)
         {
-            NDIS_DbgPrint(MIN_TRACE, ("No message interrupt resource found\n"));
+            DPRINT("No message interrupt resource found\n");
             ExFreePoolWithTag(IntBlock->MessageDpcs, NDIS6_DPC_TAG);
             ExFreePoolWithTag(IntBlock->MessageInterruptObjects, NDIS6_INT_TAG);
             IntBlock->MessageDpcs = NULL;
@@ -537,7 +537,7 @@ Ndis6iConnectMessageBased(
 
         if (!NT_SUCCESS(Status))
         {
-            NDIS_DbgPrint(MIN_TRACE, ("IoConnectInterrupt for MSI failed: 0x%x\n", Status));
+            DPRINT("IoConnectInterrupt for MSI failed: 0x%x\n", Status);
             ExFreePoolWithTag(IntBlock->MessageDpcs, NDIS6_DPC_TAG);
             ExFreePoolWithTag(IntBlock->MessageInterruptObjects, NDIS6_INT_TAG);
             IntBlock->MessageDpcs = NULL;
@@ -552,8 +552,8 @@ Ndis6iConnectMessageBased(
     /* Update the characteristics with the interrupt type */
     IntBlock->Characteristics.InterruptType = NDIS_CONNECT_MESSAGE_BASED;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Message-based interrupt connected successfully, MessageCount=%lu\n",
-        MessageCount));
+    DPRINT("Message-based interrupt connected successfully, MessageCount=%lu\n",
+        MessageCount);
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -571,7 +571,7 @@ Ndis6iDisconnectInterrupt(
 {
     ULONG i;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Ndis6iDisconnectInterrupt called\n"));
+    DPRINT("Ndis6iDisconnectInterrupt called\n");
 
     if (!IntBlock->Connected)
     {
@@ -628,7 +628,7 @@ Ndis6iDisconnectInterrupt(
 
     IntBlock->Connected = FALSE;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Interrupt disconnected\n"));
+    DPRINT("Interrupt disconnected\n");
 }
 
 /*
@@ -758,7 +758,7 @@ Ndis6iProgramMsixTable(
 
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("NDIS6: Ndis6iProgramMsixTable: Failed to get BUS_INTERFACE_STANDARD: 0x%x\n", Status);
+            DPRINT1("NDIS6: Ndis6iProgramMsixTable: Failed to get BUS_INTERFACE_STANDARD: 0x%x\n", Status);
             return Status;
         }
     }
@@ -783,7 +783,7 @@ Ndis6iProgramMsixTable(
 
     if (CapOffset == 0 || CapOffset == 0xFF || CapId != NDIS_PCI_CAPABILITY_ID_MSIX)
     {
-        DbgPrint("NDIS6: Ndis6iProgramMsixTable: MSI-X capability not found\n");
+        DPRINT("NDIS6: Ndis6iProgramMsixTable: MSI-X capability not found\n");
         BusInterface.InterfaceDereference(BusInterface.Context);
         return STATUS_NOT_SUPPORTED;
     }
@@ -797,7 +797,7 @@ Ndis6iProgramMsixTable(
     TableBar = TableOffsetBir & 0x7;
     TableOffset = TableOffsetBir & ~0x7;
 
-    DbgPrint("NDIS6: MSI-X Cap at 0x%x, Control=0x%04x, TableBAR=%u, TableOffset=0x%x\n",
+    DPRINT("NDIS6: MSI-X Cap at 0x%x, Control=0x%04x, TableBAR=%u, TableOffset=0x%x\n",
              CapOffset, MsixControl, TableBar, TableOffset);
 
     /*
@@ -816,7 +816,7 @@ Ndis6iProgramMsixTable(
         /* Check if it's a memory BAR (bit 0 = 0) */
         if (BarValue & 1)
         {
-            DbgPrint("NDIS6: BAR%u is I/O space, not memory\n", TableBar);
+            DPRINT1("NDIS6: BAR%u is I/O space, not memory\n", TableBar);
             BusInterface.InterfaceDereference(BusInterface.Context);
             return STATUS_NOT_SUPPORTED;
         }
@@ -833,7 +833,7 @@ Ndis6iProgramMsixTable(
             TargetBarPhysical.HighPart = BarHigh;
         }
 
-        DbgPrint("NDIS6: BAR%u physical address from PCI config: 0x%I64x\n",
+        DPRINT1("NDIS6: BAR%u physical address from PCI config: 0x%I64x\n",
                  TableBar, TargetBarPhysical.QuadPart);
 
         /* Now find this BAR in the allocated resources */
@@ -854,7 +854,7 @@ Ndis6iProgramMsixTable(
                         MsixBarPhysical = PartialDesc->u.Memory.Start;
                         MsixBarLength = PartialDesc->u.Memory.Length;
                         FoundBar = TRUE;
-                        DbgPrint("NDIS6: Found MSI-X BAR resource at 0x%I64x, len=%u\n",
+                        DPRINT("NDIS6: Found MSI-X BAR resource at 0x%I64x, len=%u\n",
                                  MsixBarPhysical.QuadPart, (ULONG)MsixBarLength);
                         break;
                     }
@@ -865,7 +865,7 @@ Ndis6iProgramMsixTable(
 
     if (!FoundBar)
     {
-        DbgPrint("NDIS6: Ndis6iProgramMsixTable: Could not find BAR%u in resources\n", TableBar);
+        DPRINT1("NDIS6: Ndis6iProgramMsixTable: Could not find BAR%u in resources\n", TableBar);
         BusInterface.InterfaceDereference(BusInterface.Context);
         return STATUS_RESOURCE_DATA_NOT_FOUND;
     }
@@ -874,7 +874,7 @@ Ndis6iProgramMsixTable(
     MsixBarVirtual = MmMapIoSpace(MsixBarPhysical, MsixBarLength, MmNonCached);
     if (!MsixBarVirtual)
     {
-        DbgPrint("NDIS6: Ndis6iProgramMsixTable: Failed to map MSI-X BAR\n");
+        DPRINT("NDIS6: Ndis6iProgramMsixTable: Failed to map MSI-X BAR\n");
         BusInterface.InterfaceDereference(BusInterface.Context);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -893,7 +893,7 @@ Ndis6iProgramMsixTable(
     /* Compute MSI message address: 0xFEE00000 | (ApicId << 12) */
     MessageAddress = 0xFEE00000ULL | ((ULONGLONG)ApicId << 12);
 
-    DbgPrint("NDIS6: Programming MSI-X Entry[0]: Addr=0x%I64x Data=0x%x (Vector=%u, ApicId=%u)\n",
+    DPRINT("NDIS6: Programming MSI-X Entry[0]: Addr=0x%I64x Data=0x%x (Vector=%u, ApicId=%u)\n",
              MessageAddress, Vector & 0xFF, Vector, ApicId);
 
     /*
@@ -914,7 +914,7 @@ Ndis6iProgramMsixTable(
     MsixControl = (MsixControl | 0x8000 | 0x4000);  /* Enable + Function Mask */
     BusInterface.SetBusData(BusInterface.Context, PCI_WHICHSPACE_CONFIG,
                             &MsixControl, CapOffset + 2, sizeof(MsixControl));
-    DbgPrint("NDIS6: MSI-X enabled with function mask (Control=0x%04x)\n", MsixControl);
+    DPRINT("NDIS6: MSI-X enabled with function mask (Control=0x%04x)\n", MsixControl);
 
     /* Step 2: Mask the individual vector */
     MsixTable[0].VectorControl = 1;  /* Mask the vector */
@@ -931,7 +931,7 @@ Ndis6iProgramMsixTable(
     KeMemoryBarrier();
 
     /* Verify the MSI-X table programming */
-    DbgPrint("NDIS6: MSI-X Table readback: AddrLow=0x%08x AddrHigh=0x%08x Data=0x%08x VectorControl=0x%08x\n",
+    DPRINT("NDIS6: MSI-X Table readback: AddrLow=0x%08x AddrHigh=0x%08x Data=0x%08x VectorControl=0x%08x\n",
              MsixTable[0].MessageAddressLow, MsixTable[0].MessageAddressHigh,
              MsixTable[0].MessageData, MsixTable[0].VectorControl);
 
@@ -945,7 +945,7 @@ Ndis6iProgramMsixTable(
         USHORT ReadbackControl = 0;
         BusInterface.GetBusData(BusInterface.Context, PCI_WHICHSPACE_CONFIG,
                                 &ReadbackControl, CapOffset + 2, sizeof(ReadbackControl));
-        DbgPrint("NDIS6: MSI-X fully enabled (wrote=0x%04x, readback=0x%04x)\n",
+        DPRINT("NDIS6: MSI-X fully enabled (wrote=0x%04x, readback=0x%04x)\n",
                  MsixControl, ReadbackControl);
     }
 
@@ -956,7 +956,7 @@ Ndis6iProgramMsixTable(
         MsixControl &= ~0x4000; /* Clear Function Mask */
         BusInterface.SetBusData(BusInterface.Context, PCI_WHICHSPACE_CONFIG,
                                 &MsixControl, CapOffset + 2, sizeof(MsixControl));
-        DbgPrint("NDIS6: Enabled MSI-X (Control=0x%04x)\n", MsixControl);
+        DPRINT("NDIS6: Enabled MSI-X (Control=0x%04x)\n", MsixControl);
     }
 
     /*
@@ -971,7 +971,7 @@ Ndis6iProgramMsixTable(
 
         BusInterface.GetBusData(BusInterface.Context, PCI_WHICHSPACE_CONFIG,
                                 &PciCommand, 0x04, sizeof(PciCommand));
-        DbgPrint("NDIS6: PCI Command before INTx disable: 0x%04x (check: %d)\n",
+        DPRINT1("NDIS6: PCI Command before INTx disable: 0x%04x (check: %d)\n",
                  PciCommand, !(PciCommand & 0x0400));
 
         if (!(PciCommand & 0x0400))
@@ -979,13 +979,13 @@ Ndis6iProgramMsixTable(
             PciCommand |= 0x0400;  /* Set Interrupt Disable bit */
             BytesWritten = BusInterface.SetBusData(BusInterface.Context, PCI_WHICHSPACE_CONFIG,
                                                    &PciCommand, 0x04, sizeof(PciCommand));
-            DbgPrint("NDIS6: Disabled INTx (PCI Command=0x%04x, BytesWritten=%u)\n",
+            DPRINT1("NDIS6: Disabled INTx (PCI Command=0x%04x, BytesWritten=%u)\n",
                      PciCommand, BytesWritten);
 
             /* Verify the write */
             BusInterface.GetBusData(BusInterface.Context, PCI_WHICHSPACE_CONFIG,
                                     &PciCommand, 0x04, sizeof(PciCommand));
-            DbgPrint("NDIS6: PCI Command after INTx disable: 0x%04x\n", PciCommand);
+            DPRINT1("NDIS6: PCI Command after INTx disable: 0x%04x\n", PciCommand);
         }
     }
 
@@ -993,7 +993,7 @@ Ndis6iProgramMsixTable(
     MmUnmapIoSpace(MsixBarVirtual, MsixBarLength);
     BusInterface.InterfaceDereference(BusInterface.Context);
 
-    DbgPrint("NDIS6: Successfully programmed MSI-X table\n");
+    DPRINT("NDIS6: Successfully programmed MSI-X table\n");
     return STATUS_SUCCESS;
 }
 
@@ -1018,8 +1018,8 @@ Ndis6iConnectLineBasedNdis6(
     KINTERRUPT_MODE InterruptMode;
     BOOLEAN ShareVector;
 
-    NDIS_DbgPrint(MID_TRACE, ("Ndis6iConnectLineBasedNdis6 called, ResourceList=%p, MsiSupported=%d\n",
-                              ResourceList, MsiSupportedByDriver));
+    DPRINT("Ndis6iConnectLineBasedNdis6 called, ResourceList=%p, MsiSupported=%d\n",
+                              ResourceList, MsiSupportedByDriver);
 
     /* Search for an interrupt resource */
     PCM_PARTIAL_RESOURCE_DESCRIPTOR MsiInterruptDesc = NULL;
@@ -1064,7 +1064,7 @@ Ndis6iConnectLineBasedNdis6(
      */
     if (!MsiSupportedByDriver && LegacyInterruptDesc != NULL)
     {
-        DbgPrint("NDIS6: Driver disabled MSI, using legacy interrupt resource\n");
+        DPRINT("NDIS6: Driver disabled MSI, using legacy interrupt resource\n");
         InterruptDesc = LegacyInterruptDesc;
     }
     else if (!MsiSupportedByDriver && MsiInterruptDesc != NULL && InterruptDesc == NULL)
@@ -1073,13 +1073,13 @@ Ndis6iConnectLineBasedNdis6(
          * Driver disabled MSI but there's no legacy interrupt and only MSI is available.
          * Use MSI resource but treat it as legacy (the code below handles this case).
          */
-        DbgPrint("NDIS6: Driver disabled MSI but only MSI resource available. Using MSI as fallback.\n");
+        DPRINT("NDIS6: Driver disabled MSI but only MSI resource available. Using MSI as fallback.\n");
         InterruptDesc = MsiInterruptDesc;
     }
 
     if (InterruptDesc == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("No interrupt resource found\n"));
+        DPRINT("No interrupt resource found\n");
         return NDIS_STATUS_RESOURCE_CONFLICT;
     }
 
@@ -1092,7 +1092,7 @@ Ndis6iConnectLineBasedNdis6(
      */
     IsMessageInterrupt = (InterruptDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) != 0;
 
-    DbgPrint("NDIS6: Interrupt resource Flags=0x%04x, IsMessage=%d, MsiSupportedByDriver=%d\n",
+    DPRINT("NDIS6: Interrupt resource Flags=0x%04x, IsMessage=%d, MsiSupportedByDriver=%d\n",
              InterruptDesc->Flags, IsMessageInterrupt, MsiSupportedByDriver);
 
     /*
@@ -1102,7 +1102,7 @@ Ndis6iConnectLineBasedNdis6(
      */
     if (IsMessageInterrupt && !MsiSupportedByDriver)
     {
-        DbgPrint("NDIS6: WARNING - MSI resource but driver disabled MSI. Treating as legacy.\n");
+        DPRINT("NDIS6: WARNING - MSI resource but driver disabled MSI. Treating as legacy.\n");
         IsMessageInterrupt = FALSE;
     }
 
@@ -1126,9 +1126,9 @@ Ndis6iConnectLineBasedNdis6(
         InterruptMode = Latched;
         ShareVector = FALSE;
 
-        DbgPrint("NDIS6: MESSAGE interrupt - Vector=%u, Level=%u, Affinity=0x%Ix\n",
+        DPRINT("NDIS6: MESSAGE interrupt - Vector=%u, Level=%u, Affinity=0x%Ix\n",
                  MappedIrq, Dirql, (ULONG_PTR)Affinity);
-        DbgPrint("NDIS6:   Raw MessageCount=%u\n",
+        DPRINT1("NDIS6:   Raw MessageCount=%u\n",
                  InterruptDesc->u.MessageInterrupt.Raw.MessageCount);
 
         /* Update interrupt type to indicate message-based */
@@ -1150,7 +1150,7 @@ Ndis6iConnectLineBasedNdis6(
         InterruptMode = Latched;
         ShareVector = FALSE;
 
-        DbgPrint("NDIS6: MSI resource treated as legacy - Vector=%u, Level=%u, Affinity=0x%Ix\n",
+        DPRINT("NDIS6: MSI resource treated as legacy - Vector=%u, Level=%u, Affinity=0x%Ix\n",
                  MappedIrq, Dirql, (ULONG_PTR)Affinity);
 
         IntBlock->InterruptType = NDIS_CONNECT_LINE_BASED;
@@ -1166,15 +1166,15 @@ Ndis6iConnectLineBasedNdis6(
                         Latched : LevelSensitive;
         ShareVector = (InterruptDesc->ShareDisposition == CmResourceShareShared);
 
-        DbgPrint("NDIS6: Legacy interrupt - Vector=%u, Level=%u, Affinity=0x%Ix, Shared=%d\n",
+        DPRINT("NDIS6: Legacy interrupt - Vector=%u, Level=%u, Affinity=0x%Ix, Shared=%d\n",
                  MappedIrq, Dirql, (ULONG_PTR)Affinity, ShareVector);
 
         IntBlock->InterruptType = NDIS_CONNECT_LINE_BASED;
     }
 
-    NDIS_DbgPrint(MID_TRACE, ("NDIS6 Connecting to interrupt Vector=0x%x, Level=%d, Affinity=0x%lx, Mode=%s, Shared=%d\n",
+    DPRINT("NDIS6 Connecting to interrupt Vector=0x%x, Level=%d, Affinity=0x%lx, Mode=%s, Shared=%d\n",
         MappedIrq, Dirql, (ULONG)Affinity,
-        (InterruptMode == Latched) ? "Latched" : "Level", ShareVector));
+        (InterruptMode == Latched) ? "Latched" : "Level", ShareVector);
 
     /* Initialize the DPC */
     KeInitializeDpc(&IntBlock->InterruptDpc, Ndis6iInterruptDpc, IntBlock);
@@ -1195,8 +1195,8 @@ Ndis6iConnectLineBasedNdis6(
 
     if (!NT_SUCCESS(Status))
     {
-        NDIS_DbgPrint(MIN_TRACE, ("IoConnectInterrupt failed: 0x%x\n", Status));
-        DbgPrint("NDIS6: IoConnectInterrupt FAILED: Status=0x%08x\n", Status);
+        DPRINT("IoConnectInterrupt failed: 0x%x\n", Status);
+        DPRINT("NDIS6: IoConnectInterrupt FAILED: Status=0x%08x\n", Status);
 
         if (Status == STATUS_INSUFFICIENT_RESOURCES)
         {
@@ -1207,7 +1207,7 @@ Ndis6iConnectLineBasedNdis6(
 
     IntBlock->Connected = TRUE;
 
-    DbgPrint("NDIS6: Interrupt connected successfully - Type=%s\n",
+    DPRINT("NDIS6: Interrupt connected successfully - Type=%s\n",
              (IntBlock->InterruptType == NDIS_CONNECT_MESSAGE_BASED) ? "MESSAGE" : "LINE");
 
     /*
@@ -1238,21 +1238,21 @@ Ndis6iConnectLineBasedNdis6(
         {
             NTSTATUS MsixStatus;
 
-            DbgPrint("NDIS6: Programming MSI-X table for message interrupt (PDO=%p)\n", Pdo);
+            DPRINT("NDIS6: Programming MSI-X table for message interrupt (PDO=%p)\n", Pdo);
             MsixStatus = Ndis6iProgramMsixTable(Pdo, MappedIrq, Dirql, Affinity, ResourceList);
             if (!NT_SUCCESS(MsixStatus))
             {
-                DbgPrint("NDIS6: MSI-X table programming failed: 0x%x (interrupts may not work)\n", MsixStatus);
+                DPRINT("NDIS6: MSI-X table programming failed: 0x%x (interrupts may not work)\n", MsixStatus);
             }
         }
         else
         {
-            DbgPrint("NDIS6: Could not find PDO for MSI-X programming\n");
+            DPRINT("NDIS6: Could not find PDO for MSI-X programming\n");
         }
     }
 
-    NDIS_DbgPrint(MID_TRACE, ("NDIS6 interrupt connected successfully, Type=%d\n",
-        IntBlock->InterruptType));
+    DPRINT("NDIS6 interrupt connected successfully, Type=%d\n",
+        IntBlock->InterruptType);
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -1273,14 +1273,14 @@ NdisMRegisterInterruptEx(
     PCM_RESOURCE_LIST Ndis6Resources;
     NDIS_STATUS Status;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMRegisterInterruptEx called\n"));
+    DPRINT("NdisMRegisterInterruptEx called\n");
 
     /* Validate parameters */
     if (MiniportAdapterHandle == NULL ||
         MiniportInterruptCharacteristics == NULL ||
         NdisInterruptHandle == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid parameter\n"));
+        DPRINT1("Invalid parameter\n");
         return NDIS_STATUS_INVALID_PARAMETER;
     }
 
@@ -1290,15 +1290,15 @@ NdisMRegisterInterruptEx(
     if (MiniportInterruptCharacteristics->Header.Type != NDIS_OBJECT_TYPE_MINIPORT_INTERRUPT)
     {
         /* Be lenient - some drivers may not set the type correctly */
-        NDIS_DbgPrint(MID_TRACE, ("Warning: Unexpected object type 0x%x\n",
-            MiniportInterruptCharacteristics->Header.Type));
+        DPRINT1("Warning: Unexpected object type 0x%x\n",
+            MiniportInterruptCharacteristics->Header.Type);
     }
 
     /* Validate required handlers */
     if (MiniportInterruptCharacteristics->InterruptHandler == NULL ||
         MiniportInterruptCharacteristics->InterruptDpcHandler == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Required interrupt handlers not provided\n"));
+        DPRINT("Required interrupt handlers not provided\n");
         return NDIS_STATUS_INVALID_PARAMETER;
     }
 
@@ -1308,7 +1308,7 @@ NdisMRegisterInterruptEx(
                                      NDIS6_INT_TAG);
     if (IntBlock == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate interrupt block\n"));
+        DPRINT("Failed to allocate interrupt block\n");
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -1344,9 +1344,9 @@ NdisMRegisterInterruptEx(
          * if the resource has CM_RESOURCE_INTERRUPT_MESSAGE flag set and
          * configure for MSI/MSI-X accordingly.
          */
-        NDIS_DbgPrint(MID_TRACE, ("NDIS 6.x interrupt registration, Resources=%p\n", Ndis6Resources));
+        DPRINT("NDIS 6.x interrupt registration, Resources=%p\n", Ndis6Resources);
 
-        DbgPrint("NDIS6: NdisMRegisterInterruptEx - MsiSupported=%d, MsgHandler=%p, MsgDpcHandler=%p\n",
+        DPRINT("NDIS6: NdisMRegisterInterruptEx - MsiSupported=%d, MsgHandler=%p, MsgDpcHandler=%p\n",
                  MiniportInterruptCharacteristics->MsiSupported,
                  MiniportInterruptCharacteristics->MessageInterruptHandler,
                  MiniportInterruptCharacteristics->MessageInterruptDpcHandler);
@@ -1364,8 +1364,8 @@ NdisMRegisterInterruptEx(
         if (Status != NDIS_STATUS_SUCCESS)
         {
             ExFreePoolWithTag(IntBlock, NDIS6_INT_TAG);
-            NDIS_DbgPrint(MIN_TRACE, ("Failed to connect NDIS 6.x interrupt: 0x%x\n", Status));
-            DbgPrint("NDIS6: NdisMRegisterInterruptEx FAILED: Status=0x%08x\n", Status);
+            DPRINT("Failed to connect NDIS 6.x interrupt: 0x%x\n", Status);
+            DPRINT("NDIS6: NdisMRegisterInterruptEx FAILED: Status=0x%08x\n", Status);
             return Status;
         }
 
@@ -1374,11 +1374,11 @@ NdisMRegisterInterruptEx(
 
         *NdisInterruptHandle = (NDIS_HANDLE)IntBlock;
 
-        DbgPrint("NDIS6: NdisMRegisterInterruptEx completed - Type=%s\n",
+        DPRINT("NDIS6: NdisMRegisterInterruptEx completed - Type=%s\n",
                  (IntBlock->InterruptType == NDIS_CONNECT_MESSAGE_BASED) ? "MESSAGE" : "LINE");
 
-        NDIS_DbgPrint(MID_TRACE, ("NDIS 6.x NdisMRegisterInterruptEx completed successfully, Type=%d\n",
-            IntBlock->InterruptType));
+        DPRINT("NDIS 6.x NdisMRegisterInterruptEx completed successfully, Type=%d\n",
+            IntBlock->InterruptType);
 
         return NDIS_STATUS_SUCCESS;
     }
@@ -1397,7 +1397,7 @@ NdisMRegisterInterruptEx(
         if (Status == NDIS_STATUS_NOT_SUPPORTED)
         {
             /* Fall back to line-based */
-            NDIS_DbgPrint(MID_TRACE, ("MSI not available, falling back to line-based\n"));
+            DPRINT("MSI not available, falling back to line-based\n");
             Status = Ndis6iConnectLineBased(IntBlock, &Adapter->NdisMiniportBlock);
         }
     }
@@ -1410,7 +1410,7 @@ NdisMRegisterInterruptEx(
     if (Status != NDIS_STATUS_SUCCESS)
     {
         ExFreePoolWithTag(IntBlock, NDIS6_INT_TAG);
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to connect interrupt: 0x%x\n", Status));
+        DPRINT("Failed to connect interrupt: 0x%x\n", Status);
         return Status;
     }
 
@@ -1422,8 +1422,8 @@ NdisMRegisterInterruptEx(
 
     *NdisInterruptHandle = (NDIS_HANDLE)IntBlock;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMRegisterInterruptEx completed successfully, Type=%d\n",
-        IntBlock->InterruptType));
+    DPRINT("NdisMRegisterInterruptEx completed successfully, Type=%d\n",
+        IntBlock->InterruptType);
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -1439,11 +1439,11 @@ NdisMDeregisterInterruptEx(
     PNDIS6_INTERRUPT_BLOCK IntBlock;
     PLOGICAL_ADAPTER Adapter;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMDeregisterInterruptEx called\n"));
+    DPRINT("NdisMDeregisterInterruptEx called\n");
 
     if (NdisInterruptHandle == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NULL interrupt handle\n"));
+        DPRINT("NULL interrupt handle\n");
         return;
     }
 
@@ -1462,7 +1462,7 @@ NdisMDeregisterInterruptEx(
     /* Free the interrupt block */
     ExFreePoolWithTag(IntBlock, NDIS6_INT_TAG);
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMDeregisterInterruptEx completed\n"));
+    DPRINT("NdisMDeregisterInterruptEx completed\n");
 }
 
 /*
@@ -1480,11 +1480,11 @@ NdisMSynchronizeWithInterruptEx(
     PKINTERRUPT InterruptObject;
     BOOLEAN Result;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMSynchronizeWithInterruptEx called, MessageId=%lu\n", MessageId));
+    DPRINT("NdisMSynchronizeWithInterruptEx called, MessageId=%lu\n", MessageId);
 
     if (NdisInterruptHandle == NULL || SynchronizeFunction == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid parameter\n"));
+        DPRINT1("Invalid parameter\n");
         return FALSE;
     }
 
@@ -1492,7 +1492,7 @@ NdisMSynchronizeWithInterruptEx(
 
     if (!IntBlock->Connected)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Interrupt not connected\n"));
+        DPRINT("Interrupt not connected\n");
         return FALSE;
     }
 
@@ -1502,8 +1502,8 @@ NdisMSynchronizeWithInterruptEx(
         if (IntBlock->MessageInterruptObjects == NULL ||
             MessageId >= IntBlock->MessageCount)
         {
-            NDIS_DbgPrint(MIN_TRACE, ("Invalid MessageId %lu (max %lu)\n",
-                MessageId, IntBlock->MessageCount));
+            DPRINT1("Invalid MessageId %lu (max %lu)\n",
+                MessageId, IntBlock->MessageCount);
             return FALSE;
         }
         InterruptObject = IntBlock->MessageInterruptObjects[MessageId];
@@ -1516,7 +1516,7 @@ NdisMSynchronizeWithInterruptEx(
 
     if (InterruptObject == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("No interrupt object for MessageId %lu\n", MessageId));
+        DPRINT("No interrupt object for MessageId %lu\n", MessageId);
         return FALSE;
     }
 
@@ -1544,8 +1544,8 @@ NdisMQueueDpc(
     ULONG ProcessorIndex;
     ULONG ProcessorMask;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMQueueDpc called, MessageId=%lu, TargetProcessors=0x%x\n",
-        MessageId, TargetProcessors));
+    DPRINT("NdisMQueueDpc called, MessageId=%lu, TargetProcessors=0x%x\n",
+        MessageId, TargetProcessors);
 
     if (NdisInterruptHandle == NULL)
     {
@@ -1625,7 +1625,7 @@ NdisMQueueDpcEx(
 {
     PNDIS6_INTERRUPT_BLOCK IntBlock;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMQueueDpcEx called, MessageId=%lu\n", MessageId));
+    DPRINT("NdisMQueueDpcEx called, MessageId=%lu\n", MessageId);
 
     if (NdisInterruptHandle == NULL || TargetProcessors == NULL)
     {
@@ -1656,8 +1656,8 @@ NdisMQueueDpcEx(
          * For processor groups > 0, we would need KeSetTargetProcessorDpcEx
          * For now, queue to the current processor as a fallback
          */
-        NDIS_DbgPrint(MID_TRACE, ("Processor group %u not fully supported, using current processor\n",
-            TargetProcessors->Group));
+        DPRINT1("Processor group %u not fully supported, using current processor\n",
+            TargetProcessors->Group);
 
         return NdisMQueueDpc(NdisInterruptHandle, MessageId,
                             (1 << KeGetCurrentProcessorNumber()),

@@ -153,9 +153,22 @@ typedef struct _E1000_RX_BUFFER
  * Transmit Queue Structure
  *
  * Manages a single transmit queue (82574L supports 2 TX queues)
+ *
+ * Structure is aligned to cache line boundary (64 bytes) for performance.
+ * This prevents false sharing when TX and RX queues are accessed from
+ * different CPUs, which is common in MSI-X configurations.
  * ============================================================================ */
 
-typedef struct _E1000_TX_QUEUE
+/* Cache line size for alignment - typical x86/x64 value */
+#define E1000_CACHE_LINE_SIZE       64
+
+/* TX Queue Flags */
+#define E1000_TX_QUEUE_STOPPED      0x00000001  /* Queue stopped due to no descriptors */
+
+/* TX queue wake threshold - wake queue when this many descriptors available */
+#define E1000_TX_WAKE_THRESHOLD     32
+
+typedef struct DECLSPEC_ALIGN(E1000_CACHE_LINE_SIZE) _E1000_TX_QUEUE
 {
     /* Back-pointer to adapter */
     PE1000_ADAPTER          Adapter;
@@ -196,15 +209,28 @@ typedef struct _E1000_TX_QUEUE
     LARGE_INTEGER           LastCompletionTime;
     BOOLEAN                 Watchdog;
 
+    /* TX Queue Flow Control */
+    volatile LONG           Flags;          /* E1000_TX_QUEUE_STOPPED, etc. */
+
 } E1000_TX_QUEUE, *PE1000_TX_QUEUE;
 
 /* ============================================================================
  * Receive Queue Structure
  *
  * Manages a single receive queue (82574L supports 2 RX queues)
+ *
+ * Structure is aligned to cache line boundary (64 bytes) for performance.
+ * This prevents false sharing when TX and RX queues are accessed from
+ * different CPUs, which is common in MSI-X configurations.
  * ============================================================================ */
 
-typedef struct _E1000_RX_QUEUE
+/* RX buffer write threshold - batch RDT updates until this many cleaned */
+#define E1000_RX_BUFFER_WRITE       16
+
+/* Default RX budget per DPC - process up to this many packets per interrupt */
+#define E1000_RX_DEFAULT_BUDGET     64
+
+typedef struct DECLSPEC_ALIGN(E1000_CACHE_LINE_SIZE) _E1000_RX_QUEUE
 {
     /* Back-pointer to adapter */
     PE1000_ADAPTER          Adapter;
@@ -244,6 +270,9 @@ typedef struct _E1000_RX_QUEUE
 
     /* Interrupt vector for this queue (MSI-X) */
     ULONG                   InterruptVector;
+
+    /* Batched RDT update tracking */
+    ULONG                   CleanedCount;   /* Buffers cleaned since last RDT update */
 
 } E1000_RX_QUEUE, *PE1000_RX_QUEUE;
 
@@ -552,6 +581,46 @@ typedef struct _E1000_ADAPTER
     /* ========== Lookahead size ========== */
     ULONG                   LookaheadSize;
 
+    /* ========== Adaptive Interrupt Throttle Rate (ITR) ========== */
+
+    /*
+     * Traffic tracking for adaptive ITR adjustment.
+     * Updated during DPC processing to measure traffic patterns.
+     */
+    ULONG64                 TotalRxPackets;     /* Packets received in current interval */
+    ULONG64                 TotalTxPackets;     /* Packets transmitted in current interval */
+    ULONG64                 TotalRxBytes;       /* Bytes received in current interval */
+    ULONG64                 TotalTxBytes;       /* Bytes transmitted in current interval */
+
+    /*
+     * Current ITR configuration.
+     * Uses Linux e1000e-style adaptive interrupt moderation.
+     * ITR values are in 256ns units for the hardware register.
+     *
+     * ItrSetting modes:
+     *   0=lowest_latency: ITR 5000 (~780 int/sec) - responsive for small packets
+     *   1=low_latency:    ITR 10000 (~390 int/sec) - balanced
+     *   2=bulk_latency:   ITR 20000 (~195 int/sec) - throughput optimized
+     *   3=dynamic:        Auto-adjust based on traffic patterns
+     */
+    ULONG                   CurrentItr;         /* Current ITR register value (256ns units) */
+    ULONG                   ItrSetting;         /* ITR mode setting */
+#define E1000_ITR_SETTING_LOWEST_LATENCY    0   /* High int rate for responsiveness */
+#define E1000_ITR_SETTING_LOW_LATENCY       1   /* Balanced mode */
+#define E1000_ITR_SETTING_BULK_LATENCY      2   /* Low int rate for throughput */
+#define E1000_ITR_SETTING_DYNAMIC           3   /* Auto-adjust based on traffic */
+
+    /* Last ITR adjustment timestamp */
+    LARGE_INTEGER           LastItrUpdateTime;
+
+    /* ========== Budget-Based RX Processing ========== */
+
+    /*
+     * Indicates more NBLs are pending after hitting budget limit.
+     * When TRUE, interrupts should NOT be re-enabled to allow NDIS to reschedule.
+     */
+    volatile BOOLEAN        MoreNblsPending;
+
 } E1000_ADAPTER, *PE1000_ADAPTER;
 
 
@@ -671,13 +740,19 @@ E1000FreeRxQueue(
     _In_ PE1000_RX_QUEUE RxQueue
     );
 
-VOID
+ULONG
 E1000IndicateReceive(
-    _In_ PE1000_RX_QUEUE RxQueue
+    _In_ PE1000_RX_QUEUE RxQueue,
+    _In_ ULONG Budget
     );
 
 NDIS_STATUS
 E1000AllocateRxBuffers(
+    _In_ PE1000_RX_QUEUE RxQueue
+    );
+
+VOID
+E1000RefillRxBuffers(
     _In_ PE1000_RX_QUEUE RxQueue
     );
 

@@ -126,14 +126,14 @@ ProSendPacketToNdis6Miniport(
     KIRQL OldIrql;
     PNDIS6_SEND_CONTEXT SendContext;
 
-    DbgPrint("NDIS6-SEND: ProSendPacketToNdis6Miniport - Adapter=%p, Packet=%p\n",
+    DPRINT("ProSendPacketToNdis6Miniport - Adapter=%p, Packet=%p\n",
              Adapter, Packet);
 
     /* Get the device object from the miniport block */
     DeviceObject = Adapter->NdisMiniportBlock.DeviceObject;
     if (DeviceObject == NULL || DeviceObject->DeviceExtension == NULL)
     {
-        DbgPrint("NDIS6-SEND: No device object\n");
+        DPRINT1("No device object\n");
         return NDIS_STATUS_FAILURE;
     }
 
@@ -143,13 +143,13 @@ ProSendPacketToNdis6Miniport(
 
     if (DriverBlock == NULL)
     {
-        DbgPrint("NDIS6-SEND: No driver block\n");
+        DPRINT1("No driver block\n");
         return NDIS_STATUS_FAILURE;
     }
 
     if (DriverBlock->Characteristics.SendNetBufferListsHandler == NULL)
     {
-        DbgPrint("NDIS6-SEND: No SendNetBufferListsHandler\n");
+        DPRINT1("No SendNetBufferListsHandler\n");
         return NDIS_STATUS_FAILURE;
     }
 
@@ -159,12 +159,12 @@ ProSendPacketToNdis6Miniport(
      */
     NdisQueryPacket(Packet, NULL, &BufferCount, &NdisBuffer, &TotalLength);
 
-    DbgPrint("NDIS6-SEND: Packet has %u buffers, total length=%u\n",
+    DPRINT("Packet has %u buffers, total length=%u\n",
              BufferCount, TotalLength);
 
     if (NdisBuffer == NULL || TotalLength == 0)
     {
-        DbgPrint("NDIS6-SEND: Empty packet\n");
+        DPRINT("Empty packet\n");
         return NDIS_STATUS_FAILURE;
     }
 
@@ -184,7 +184,7 @@ ProSendPacketToNdis6Miniport(
                                           'lbNS');  /* SNBL - Send NBL */
     if (NetBufferList == NULL)
     {
-        DbgPrint("NDIS6-SEND: Failed to allocate NBL\n");
+        DPRINT1("Failed to allocate NBL\n");
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -218,8 +218,8 @@ ProSendPacketToNdis6Miniport(
     /* Store context pointer in NBL's protocol reserved area */
     *(PNDIS6_SEND_CONTEXT*)&NetBufferList->ProtocolReserved[0] = SendContext;
 
-    DbgPrint("NDIS6-SEND: Created NBL=%p, NB=%p, MdlChain=%p, DataLength=%lu\n",
-             NetBufferList, NetBuffer, MdlChain, (unsigned long)NetBuffer->DataLength);
+    DPRINT("Created NBL=%p, NB=%p, MdlChain=%p, DataLength=%lu\n",
+           NetBufferList, NetBuffer, MdlChain, (unsigned long)NetBuffer->DataLength);
 
     /* Print first few bytes of packet for debugging - only in debug builds */
 #ifdef DBG
@@ -233,7 +233,7 @@ ProSendPacketToNdis6Miniport(
             DataLen = MmGetMdlByteCount(FirstMdl);
             if (Data != NULL && DataLen >= 14)
             {
-                DbgPrint("NDIS6-SEND: Packet header: %02X:%02X:%02X:%02X:%02X:%02X -> %02X:%02X:%02X:%02X:%02X:%02X\n",
+                DPRINT("Packet header: %02X:%02X:%02X:%02X:%02X:%02X -> %02X:%02X:%02X:%02X:%02X:%02X\n",
                          Data[6], Data[7], Data[8], Data[9], Data[10], Data[11],
                          Data[0], Data[1], Data[2], Data[3], Data[4], Data[5]);
             }
@@ -247,8 +247,8 @@ ProSendPacketToNdis6Miniport(
      */
     KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
 
-    DbgPrint("NDIS6-SEND: Calling SendNetBufferListsHandler at %p\n",
-             DriverBlock->Characteristics.SendNetBufferListsHandler);
+    DPRINT("Calling SendNetBufferListsHandler at %p\n",
+           DriverBlock->Characteristics.SendNetBufferListsHandler);
 
     DriverBlock->Characteristics.SendNetBufferListsHandler(
         MiniportAdapterContext,
@@ -258,7 +258,7 @@ ProSendPacketToNdis6Miniport(
 
     KeLowerIrql(OldIrql);
 
-    DbgPrint("NDIS6-SEND: SendNetBufferListsHandler returned\n");
+    DPRINT("SendNetBufferListsHandler returned\n");
 
     /*
      * SendNetBufferListsHandler always returns asynchronously.
@@ -280,7 +280,7 @@ ProSetupPnPEvent(
 
     PnPEvent = ExAllocatePool(PagedPool, sizeof(NET_PNP_EVENT));
     if (!PnPEvent) {
-        NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+        DPRINT1("Insufficient resources\n");
         return NULL;
     }
 
@@ -293,7 +293,7 @@ ProSetupPnPEvent(
         PnPEvent->Buffer = ExAllocatePool(PagedPool, EventBufferLength);
         if (!PnPEvent->Buffer)
         {
-            NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+            DPRINT1("Insufficient resources\n");
             ExFreePool(PnPEvent);
             return NULL;
         }
@@ -364,7 +364,7 @@ NdisIPwrSetPower(
 
   PnPEvent = ProSetupPnPEvent(NetEventSetPower, &Stack->Parameters.Power.State, sizeof(NDIS_DEVICE_POWER_STATE));
   if (!PnPEvent) {
-      NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+      DPRINT1("Insufficient resources\n");
       return NDIS_STATUS_RESOURCES;
   }
 
@@ -385,7 +385,7 @@ NdisIPwrQueryPower(
 
   PnPEvent = ProSetupPnPEvent(NetEventQueryPower, &Stack->Parameters.Power.State, sizeof(NDIS_DEVICE_POWER_STATE));
   if (!PnPEvent) {
-      NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+      DPRINT1("Insufficient resources\n");
       return NDIS_STATUS_RESOURCES;
   }
 
@@ -404,7 +404,7 @@ NdisIPnPQueryStopDevice(
 
   PnPEvent = ProSetupPnPEvent(NetEventQueryRemoveDevice, NULL, 0);
   if (!PnPEvent) {
-      NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+      DPRINT1("Insufficient resources\n");
       return NDIS_STATUS_RESOURCES;
   }
 
@@ -422,7 +422,7 @@ NdisIPnPCancelStopDevice(
 
   PnPEvent = ProSetupPnPEvent(NetEventCancelRemoveDevice, NULL, 0);
   if (!PnPEvent) {
-      NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+      DPRINT1("Insufficient resources\n");
       return NDIS_STATUS_RESOURCES;
   }
 
@@ -452,7 +452,7 @@ NdisCompleteBindAdapter(
   PROTOCOL_BINDING *Protocol = (PROTOCOL_BINDING *)BindAdapterContext;
 
   if (!NT_SUCCESS(Status)) {
-      NDIS_DbgPrint(MIN_TRACE, ("Binding failed (%x)\n", Status));
+      DPRINT1("Binding failed (%x)\n", Status);
       return;
   }
 
@@ -476,7 +476,7 @@ NdisCompleteUnbindAdapter(
   PROTOCOL_BINDING *Protocol = (PROTOCOL_BINDING *)UnbindAdapterContext;
 
   if (!NT_SUCCESS(Status)) {
-      NDIS_DbgPrint(MIN_TRACE, ("Unbinding failed (%x)\n", Status));
+      DPRINT1("Unbinding failed (%x)\n", Status);
       return;
   }
 
@@ -503,7 +503,7 @@ ProIndicatePacket(
   KIRQL OldIrql;
   PUCHAR LookaheadBuffer;
 
-  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  DPRINT("Called.\n");
 
 #if DBG
   MiniDisplayPacket(Packet, "INDICATE");
@@ -513,11 +513,11 @@ ProIndicatePacket(
 
   LookaheadBuffer = ExAllocatePool(NonPagedPool, PacketLength);
   if (!LookaheadBuffer) {
-      NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+      DPRINT1("Insufficient resources\n");
       return NDIS_STATUS_RESOURCES;
   }
 
-  NDIS_DbgPrint(MAX_TRACE, ("acquiring miniport block lock\n"));
+  DPRINT("acquiring miniport block lock\n");
   KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
     {
       BufferedLength = CopyPacketToBuffer(LookaheadBuffer, Packet, 0, PacketLength);
@@ -565,7 +565,7 @@ ProRequest(
   PLOGICAL_ADAPTER Adapter;
   PNDIS_REQUEST_MAC_BLOCK MacBlock = (PNDIS_REQUEST_MAC_BLOCK)NdisRequest->MacReserved;
 
-  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  DPRINT("Called.\n");
 
   ASSERT(MacBindingHandle);
   AdapterBinding = GET_ADAPTER_BINDING(MacBindingHandle);
@@ -612,7 +612,7 @@ ScatterGatherSendPacket(
    PNDIS_PACKET Packet = DmaContext->Packet;
    NDIS_STATUS Status;
 
-   NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+   DPRINT("Called.\n");
 
    NDIS_PER_PACKET_INFO_FROM_PACKET(Packet,
                                     ScatterGatherListPacketInfo) = ScatterGather;
@@ -620,7 +620,7 @@ ScatterGatherSendPacket(
    Status = proSendPacketToMiniport(Adapter, Packet);
 
    if (Status != NDIS_STATUS_PENDING) {
-       NDIS_DbgPrint(MAX_TRACE, ("Completing packet.\n"));
+       DPRINT("Completing packet.\n");
        MiniSendComplete(Adapter,
                         Packet,
                         Status);
@@ -639,7 +639,7 @@ proSendPacketToMiniport(PLOGICAL_ADAPTER Adapter, PNDIS_PACKET Packet)
    KIRQL RaiseOldIrql;
    NDIS_STATUS NdisStatus;
 
-   NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+   DPRINT("Called.\n");
 
 #if NDIS_SUPPORT_NDIS6
    /*
@@ -650,13 +650,13 @@ proSendPacketToMiniport(PLOGICAL_ADAPTER Adapter, PNDIS_PACKET Packet)
    if (ProIsNdis6Adapter(Adapter))
    {
        PADAPTER_BINDING AdapterBinding = (PADAPTER_BINDING)Packet->Reserved[1];
-       DbgPrint("NDIS6-SEND: Detected NDIS 6.x adapter, routing to ProSendPacketToNdis6Miniport\n");
+       DPRINT("Detected NDIS 6.x adapter, routing to ProSendPacketToNdis6Miniport\n");
        return ProSendPacketToNdis6Miniport(Adapter, Packet, AdapterBinding);
    }
 #endif /* NDIS_SUPPORT_NDIS6 */
 
    if(MiniIsBusy(Adapter, NdisWorkItemSend)) {
-      NDIS_DbgPrint(MID_TRACE, ("Busy: NdisWorkItemSend.\n"));
+      DPRINT1("Busy: NdisWorkItemSend.\n");
 
       MiniQueueWorkItem(Adapter, NdisWorkItemSend, Packet, FALSE);
       return NDIS_STATUS_PENDING;
@@ -670,7 +670,7 @@ proSendPacketToMiniport(PLOGICAL_ADAPTER Adapter, PNDIS_PACKET Packet)
    {
         if(Adapter->NdisMiniportBlock.Flags & NDIS_ATTRIBUTE_DESERIALIZE)
         {
-            NDIS_DbgPrint(MAX_TRACE, ("Calling miniport's SendPackets handler\n"));
+            DPRINT("Calling miniport's SendPackets handler\n");
             (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.SendPacketsHandler)(
              Adapter->NdisMiniportBlock.MiniportAdapterContext, &Packet, 1);
              NdisStatus = NDIS_STATUS_PENDING;
@@ -678,7 +678,7 @@ proSendPacketToMiniport(PLOGICAL_ADAPTER Adapter, PNDIS_PACKET Packet)
             /* SendPackets is called at DISPATCH_LEVEL for all serialized miniports */
             KeRaiseIrql(DISPATCH_LEVEL, &RaiseOldIrql);
             {
-               NDIS_DbgPrint(MAX_TRACE, ("Calling miniport's SendPackets handler\n"));
+               DPRINT("Calling miniport's SendPackets handler\n");
                (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.SendPacketsHandler)(
                 Adapter->NdisMiniportBlock.MiniportAdapterContext, &Packet, 1);
             }
@@ -699,17 +699,17 @@ proSendPacketToMiniport(PLOGICAL_ADAPTER Adapter, PNDIS_PACKET Packet)
    } else {
         if(Adapter->NdisMiniportBlock.Flags & NDIS_ATTRIBUTE_DESERIALIZE)
         {
-            NDIS_DbgPrint(MAX_TRACE, ("Calling miniport's Send handler\n"));
+            DPRINT1("Calling miniport's Send handler\n");
             NdisStatus = (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.SendHandler)(
                           Adapter->NdisMiniportBlock.MiniportAdapterContext, Packet, Packet->Private.Flags);
-            NDIS_DbgPrint(MAX_TRACE, ("back from miniport's send handler\n"));
+            DPRINT1("back from miniport's send handler\n");
         } else {
             /* Send is called at DISPATCH_LEVEL for all serialized miniports */
             KeRaiseIrql(DISPATCH_LEVEL, &RaiseOldIrql);
-            NDIS_DbgPrint(MAX_TRACE, ("Calling miniport's Send handler\n"));
+            DPRINT1("Calling miniport's Send handler\n");
             NdisStatus = (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.SendHandler)(
                           Adapter->NdisMiniportBlock.MiniportAdapterContext, Packet, Packet->Private.Flags);
-            NDIS_DbgPrint(MAX_TRACE, ("back from miniport's send handler\n"));
+            DPRINT1("back from miniport's send handler\n");
             KeLowerIrql(RaiseOldIrql);
 
             if (NdisStatus == NDIS_STATUS_RESOURCES) {
@@ -749,7 +749,7 @@ ProSend(
   UINT PacketLength;
   KIRQL OldIrql;
 
-  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  DPRINT("Called.\n");
 
   ASSERT(MacBindingHandle);
   AdapterBinding = GET_ADAPTER_BINDING(MacBindingHandle);
@@ -785,7 +785,7 @@ ProSend(
     } else {
         if (Adapter->NdisMiniportBlock.ScatterGatherListSize != 0)
         {
-            NDIS_DbgPrint(MID_TRACE, ("Using Scatter/Gather DMA\n"));
+            DPRINT1("Using Scatter/Gather DMA\n");
 
             NdisQueryPacket(Packet,
                             NULL,
@@ -795,7 +795,7 @@ ProSend(
 
             Context = ExAllocatePool(NonPagedPool, sizeof(DMA_CONTEXT));
             if (!Context) {
-                NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+                DPRINT1("Insufficient resources\n");
                 return NDIS_STATUS_RESOURCES;
             }
 
@@ -819,7 +819,7 @@ ProSend(
             KeLowerIrql(OldIrql);
 
             if (!NT_SUCCESS(NdisStatus)) {
-                NDIS_DbgPrint(MIN_TRACE, ("GetScatterGatherList failed! (%x)\n", NdisStatus));
+                DPRINT1("GetScatterGatherList failed! (%x)\n", NdisStatus);
                 return NdisStatus;
             }
 
@@ -917,13 +917,13 @@ ProTransferData(
     NDIS_STATUS Status;
     KIRQL OldIrql;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* FIXME: Interrupts must be disabled for adapter */
     /* XXX sd - why is that true? */
 
     if (Adapter->NdisMiniportBlock.IndicatedPacket[KeGetCurrentProcessorNumber()]) {
-	NDIS_DbgPrint(MAX_TRACE, ("LoopPacket\n"));
+	DPRINT("LoopPacket\n");
         /* NDIS is responsible for looping this packet */
         NdisCopyFromPacketToPacket(Packet,
                                    ByteOffset + Adapter->MediumHeaderSize,
@@ -956,12 +956,12 @@ ProTransferData(
         UINT TotalCopied = 0;
         UINT HeaderSize;
 
-        DbgPrint("NDIS6-XFER: ProTransferData for NDIS 6.x - NBL=%p, ByteOffset=%u, BytesToTransfer=%u\n",
+        DPRINT1("ProTransferData for NDIS 6.x - NBL=%p, ByteOffset=%u, BytesToTransfer=%u\n",
                  Nbl, ByteOffset, BytesToTransfer);
 
         if (Nbl == NULL)
         {
-            DbgPrint("NDIS6-XFER: NULL NBL in MacReceiveContext\n");
+            DPRINT1("NULL NBL in MacReceiveContext\n");
             *BytesTransferred = 0;
             return NDIS_STATUS_FAILURE;
         }
@@ -970,7 +970,7 @@ ProTransferData(
         Nb = NET_BUFFER_LIST_FIRST_NB(Nbl);
         if (Nb == NULL)
         {
-            DbgPrint("NDIS6-XFER: NBL has no NET_BUFFER\n");
+            DPRINT1("NBL has no NET_BUFFER\n");
             *BytesTransferred = 0;
             return NDIS_STATUS_FAILURE;
         }
@@ -993,7 +993,7 @@ ProTransferData(
         NdisQueryPacket(Packet, NULL, NULL, &DstBuffer, NULL);
         if (DstBuffer == NULL)
         {
-            DbgPrint("NDIS6-XFER: Destination packet has no buffer\n");
+            DPRINT("Destination packet has no buffer\n");
             *BytesTransferred = 0;
             return NDIS_STATUS_FAILURE;
         }
@@ -1009,7 +1009,7 @@ ProTransferData(
             SrcData = MmGetSystemAddressForMdlSafe(CurrentMdl, NormalPagePriority);
             if (SrcData == NULL)
             {
-                DbgPrint("NDIS6-XFER: Cannot map MDL\n");
+                DPRINT1("Cannot map MDL\n");
                 break;
             }
 
@@ -1061,7 +1061,7 @@ ProTransferData(
         }
 
         *BytesTransferred = TotalCopied;
-        DbgPrint("NDIS6-XFER: Transferred %u bytes\n", TotalCopied);
+        DPRINT1("Transferred %u bytes\n", TotalCopied);
         return NDIS_STATUS_SUCCESS;
     }
 #endif /* NDIS_SUPPORT_NDIS6 */
@@ -1102,7 +1102,7 @@ NdisCloseAdapter(
 {
     PADAPTER_BINDING AdapterBinding = GET_ADAPTER_BINDING(NdisBindingHandle);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* Remove from protocol's bound adapters list */
     ExInterlockedRemoveEntryList(&AdapterBinding->ProtocolListEntry, &AdapterBinding->ProtocolBinding->Lock);
@@ -1133,7 +1133,7 @@ NdisDeregisterProtocol(
 {
     PPROTOCOL_BINDING Protocol = GET_PROTOCOL_BINDING(NdisProtocolHandle);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* FIXME: Make sure no adapter bindings exist */
 
@@ -1185,26 +1185,26 @@ NdisOpenAdapter(
   PADAPTER_BINDING AdapterBinding;
   PPROTOCOL_BINDING Protocol = GET_PROTOCOL_BINDING(NdisProtocolHandle);
 
-  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
-  NDIS_DbgPrint(MAX_TRACE, ("Opening adapter '%wZ'\n", AdapterName));
+  DPRINT("Called.\n");
+  DPRINT1("Opening adapter '%wZ'\n", AdapterName);
 
   if(!NdisProtocolHandle)
     {
-      NDIS_DbgPrint(MIN_TRACE, ("NdisProtocolHandle is NULL\n"));
+      DPRINT1("NdisProtocolHandle is NULL\n");
       *OpenErrorStatus = *Status = NDIS_STATUS_FAILURE;
       return;
     }
 
-  NDIS_DbgPrint(MAX_TRACE, ("Protocol='%wZ'\n", &Protocol->Chars.Name));
+  DPRINT1("Protocol='%wZ'\n", &Protocol->Chars.Name);
 
   Adapter = MiniLocateDevice(AdapterName);
   if (!Adapter)
     {
-      NDIS_DbgPrint(MIN_TRACE, ("Adapter '%wZ' not found.\n", AdapterName));
+      DPRINT1("Adapter '%wZ' not found.\n", AdapterName);
       *Status = NDIS_STATUS_ADAPTER_NOT_FOUND;
       return;
     }
-  NDIS_DbgPrint(MAX_TRACE, ("Found adapter %p\n", Adapter));
+  DPRINT1("Found adapter %p\n", Adapter);
 
   /* Find the media type in the list provided by the protocol driver */
   Found = FALSE;
@@ -1220,7 +1220,7 @@ NdisOpenAdapter(
 
   if (!Found)
     {
-      NDIS_DbgPrint(MIN_TRACE, ("Medium is not supported.\n"));
+      DPRINT1("Medium is not supported.\n");
       *Status = NDIS_STATUS_UNSUPPORTED_MEDIA;
       return;
     }
@@ -1230,7 +1230,7 @@ NdisOpenAdapter(
   AdapterBinding = ExAllocatePool(NonPagedPool, sizeof(ADAPTER_BINDING));
   if (!AdapterBinding)
     {
-      NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources.\n"));
+      DPRINT1("Insufficient resources.\n");
       *Status = NDIS_STATUS_RESOURCES;
       return;
     }
@@ -1259,7 +1259,7 @@ NdisOpenAdapter(
   ExInterlockedInsertTailList(&Protocol->AdapterListHead, &AdapterBinding->ProtocolListEntry, &Protocol->Lock);
 
   /* Put protocol on adapter's bound protocols list */
-  NDIS_DbgPrint(MAX_TRACE, ("acquiring miniport block lock\n"));
+  DPRINT("acquiring miniport block lock\n");
   ExInterlockedInsertTailList(&Adapter->ProtocolListHead, &AdapterBinding->AdapterListEntry, &Adapter->NdisMiniportBlock.Lock);
 
   *NdisBindingHandle = (NDIS_HANDLE)AdapterBinding;
@@ -1322,7 +1322,7 @@ ndisBindMiniportsToProtocol(OUT PNDIS_STATUS Status, IN PPROTOCOL_BINDING Protoc
     RegistryPathStr = ExAllocatePoolWithTag(PagedPool, sizeof(SERVICES_KEY) + ProtocolCharacteristics->Name.Length + sizeof(LINKAGE_KEY), NDIS_TAG + __LINE__);
     if(!RegistryPathStr)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources.\n"));
+        DPRINT1("Insufficient resources.\n");
         *Status = NDIS_STATUS_RESOURCES;
         return;
     }
@@ -1333,7 +1333,7 @@ ndisBindMiniportsToProtocol(OUT PNDIS_STATUS Status, IN PPROTOCOL_BINDING Protoc
     wcscat(RegistryPathStr, LINKAGE_KEY);
 
     RtlInitUnicodeString(&RegistryPath, RegistryPathStr);
-    NDIS_DbgPrint(MAX_TRACE, ("Opening configuration key: %wZ\n", &RegistryPath));
+    DPRINT1("Opening configuration key: %wZ\n", &RegistryPath);
 
     InitializeObjectAttributes(&ObjectAttributes, &RegistryPath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
     NtStatus = ZwOpenKey(&DriverKeyHandle, KEY_READ, &ObjectAttributes);
@@ -1342,14 +1342,14 @@ ndisBindMiniportsToProtocol(OUT PNDIS_STATUS Status, IN PPROTOCOL_BINDING Protoc
 
     if(NT_SUCCESS(NtStatus))
     {
-        NDIS_DbgPrint(MAX_TRACE, ("Successfully opened the registry configuration\n"));
+        DPRINT1("Successfully opened the registry configuration\n");
 
         RtlInitUnicodeString(&ValueName, L"Bind");
 
         NtStatus = ZwQueryValueKey(DriverKeyHandle, &ValueName, KeyValuePartialInformation, NULL, 0, &ResultLength);
         if(NtStatus != STATUS_BUFFER_OVERFLOW && NtStatus != STATUS_BUFFER_TOO_SMALL && NtStatus != STATUS_SUCCESS)
         {
-            NDIS_DbgPrint(MIN_TRACE, ("Unable to query the Bind value for size\n"));
+            DPRINT1("Unable to query the Bind value for size\n");
             ZwClose(DriverKeyHandle);
         }
         else
@@ -1357,7 +1357,7 @@ ndisBindMiniportsToProtocol(OUT PNDIS_STATUS Status, IN PPROTOCOL_BINDING Protoc
             KeyInformation = ExAllocatePoolWithTag(PagedPool, sizeof(KEY_VALUE_PARTIAL_INFORMATION) + ResultLength, NDIS_TAG + __LINE__);
             if(!KeyInformation)
             {
-                NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources.\n"));
+                DPRINT1("Insufficient resources.\n");
                 ZwClose(DriverKeyHandle);
                 NtStatus = STATUS_NO_MEMORY;
             }
@@ -1370,7 +1370,7 @@ ndisBindMiniportsToProtocol(OUT PNDIS_STATUS Status, IN PPROTOCOL_BINDING Protoc
 
                 if(!NT_SUCCESS(NtStatus))
                 {
-                    NDIS_DbgPrint(MIN_TRACE, ("Unable to query the Bind value\n"));
+                    DPRINT1("Unable to query the Bind value\n");
                     ExFreePool(KeyInformation);
                     KeyInformation = NULL;
                 }
@@ -1380,14 +1380,14 @@ ndisBindMiniportsToProtocol(OUT PNDIS_STATUS Status, IN PPROTOCOL_BINDING Protoc
 
     if (!NT_SUCCESS(NtStatus))
     {
-        NDIS_DbgPrint(MID_TRACE, ("Performing global bind for protocol '%wZ'\n", &ProtocolCharacteristics->Name));
+        DPRINT1("Performing global bind for protocol '%wZ'\n", &ProtocolCharacteristics->Name);
         KeyInformation = NULL;
 
         CurrentEntry = AdapterListHead.Flink;
     }
     else
     {
-        NDIS_DbgPrint(MID_TRACE, ("Performing standard bind for protocol '%wZ'\n", &ProtocolCharacteristics->Name));
+        DPRINT1("Performing standard bind for protocol '%wZ'\n", &ProtocolCharacteristics->Name);
 
         DataPtr = (WCHAR*)KeyInformation->Data;
     }
@@ -1454,7 +1454,7 @@ ndisBindMiniportsToProtocol(OUT PNDIS_STATUS Status, IN PPROTOCOL_BINDING Protoc
         RegistryPathStr = ExAllocatePool(PagedPool, PathLength);
         if(!RegistryPathStr)
         {
-            NDIS_DbgPrint(MIN_TRACE, ("insufficient resources.\n"));
+            DPRINT1("insufficient resources.\n");
             *Status = NDIS_STATUS_RESOURCES;
             break;
         }
@@ -1468,15 +1468,15 @@ ndisBindMiniportsToProtocol(OUT PNDIS_STATUS Status, IN PPROTOCOL_BINDING Protoc
 
         RtlInitUnicodeString(&RegistryPath, RegistryPathStr);
 
-        NDIS_DbgPrint(MAX_TRACE, ("Calling protocol's BindAdapter handler with DeviceName %wZ and RegistryPath %wZ\n",
-                                  &DeviceName, &RegistryPath));
+        DPRINT1("Calling protocol's BindAdapter handler with DeviceName %wZ and RegistryPath %wZ\n",
+                                  &DeviceName, &RegistryPath);
 
         {
             BIND_HANDLER BindHandler = ProtocolCharacteristics->BindAdapterHandler;
             if(BindHandler)
             {
                 ULONG_PTR HandlerAddr = (ULONG_PTR)BindHandler;
-                DbgPrint("NDIS: BindHandler=%p for '%wZ'\n", BindHandler, &DeviceName);
+                DPRINT1("BindHandler=%p for '%wZ'\n", BindHandler, &DeviceName);
 
                 /* Validate that the handler looks like a valid kernel address */
 #ifdef _M_AMD64
@@ -1485,15 +1485,15 @@ ndisBindMiniportsToProtocol(OUT PNDIS_STATUS Status, IN PPROTOCOL_BINDING Protoc
                 if (HandlerAddr < 0x80000000UL)
 #endif
                 {
-                    DbgPrint("NDIS: ERROR - Invalid BindHandler %p (not a kernel address!)\n", BindHandler);
+                    DPRINT1("ERROR - Invalid BindHandler %p (not a kernel address!)\n", BindHandler);
                     goto next;
                 }
 
                 BindHandler(Status, BindContext, &DeviceName, &RegistryPath, 0);
-                NDIS_DbgPrint(MID_TRACE, ("%wZ's BindAdapter handler returned 0x%x for %wZ\n", &ProtocolCharacteristics->Name, *Status, &DeviceName));
+                DPRINT1("%wZ's BindAdapter handler returned 0x%x for %wZ\n", &ProtocolCharacteristics->Name, *Status, &DeviceName);
             }
             else
-                NDIS_DbgPrint(MID_TRACE, ("No protocol bind handler specified\n"));
+                DPRINT1("No protocol bind handler specified\n");
         }
 
     next:
@@ -1547,7 +1547,7 @@ NdisRegisterProtocol(
   UINT MinSize;
   PNET_PNP_EVENT PnPEvent;
 
-  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  DPRINT("Called.\n");
 
   *NdisProtocolHandle = NULL;
 
@@ -1556,7 +1556,7 @@ NdisRegisterProtocol(
     {
     case 0x03:
       /* we don't really want to support ndis3 drivers - so we complain for now */
-      NDIS_DbgPrint(MID_TRACE, ("NDIS 3 protocol attempting to register\n"));
+      DPRINT1("NDIS 3 protocol attempting to register\n");
       MinSize = sizeof(NDIS30_PROTOCOL_CHARACTERISTICS);
       break;
 
@@ -1570,38 +1570,38 @@ NdisRegisterProtocol(
 
     default:
       *Status = NDIS_STATUS_BAD_VERSION;
-      NDIS_DbgPrint(MIN_TRACE, ("Incorrect characteristics size\n"));
+      DPRINT1("Incorrect characteristics size\n");
       return;
     }
 
   if (CharacteristicsLength < MinSize)
     {
-      NDIS_DbgPrint(MIN_TRACE, ("Bad protocol characteristics.\n"));
+      DPRINT1("Bad protocol characteristics.\n");
       *Status = NDIS_STATUS_BAD_CHARACTERISTICS;
       return;
     }
 
   /* set up the protocol block */
-  DbgPrint("NDIS: NdisRegisterProtocol - Version %u.%u, CharLen=%u, MinSize=%u\n",
+  DPRINT1("NdisRegisterProtocol - Version %u.%u, CharLen=%u, MinSize=%u\n",
            ProtocolCharacteristics->MajorNdisVersion,
            ProtocolCharacteristics->MinorNdisVersion,
            CharacteristicsLength, MinSize);
-  DbgPrint("NDIS: Incoming BindAdapterHandler=%p\n",
+  DPRINT1("Incoming BindAdapterHandler=%p\n",
            ((NDIS40_PROTOCOL_CHARACTERISTICS*)ProtocolCharacteristics)->BindAdapterHandler);
-  DbgPrint("NDIS: PROTOCOL_BINDING size=%u, Chars offset=%u\n",
+  DPRINT1("PROTOCOL_BINDING size=%u, Chars offset=%u\n",
            (ULONG)sizeof(PROTOCOL_BINDING),
            (ULONG)FIELD_OFFSET(PROTOCOL_BINDING, Chars));
-  DbgPrint("NDIS: NDIS_PROTOCOL_CHARACTERISTICS size=%u, NDIS40 size=%u\n",
+  DPRINT1("NDIS_PROTOCOL_CHARACTERISTICS size=%u, NDIS40 size=%u\n",
            (ULONG)sizeof(NDIS_PROTOCOL_CHARACTERISTICS),
            (ULONG)sizeof(NDIS40_PROTOCOL_CHARACTERISTICS));
-  DbgPrint("NDIS: BindAdapterHandler offset in NDIS40=%u, in NDIS_PROTOCOL=%u\n",
+  DPRINT1("BindAdapterHandler offset in NDIS40=%u, in NDIS_PROTOCOL=%u\n",
            (ULONG)FIELD_OFFSET(NDIS40_PROTOCOL_CHARACTERISTICS, BindAdapterHandler),
            (ULONG)FIELD_OFFSET(NDIS_PROTOCOL_CHARACTERISTICS, BindAdapterHandler));
 
   Protocol = ExAllocatePool(NonPagedPool, sizeof(PROTOCOL_BINDING));
   if (!Protocol)
     {
-      NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources.\n"));
+      DPRINT1("Insufficient resources.\n");
       *Status = NDIS_STATUS_RESOURCES;
       return;
     }
@@ -1609,13 +1609,13 @@ NdisRegisterProtocol(
   RtlZeroMemory(Protocol, sizeof(PROTOCOL_BINDING));
   RtlCopyMemory(&Protocol->Chars, ProtocolCharacteristics, MinSize);
 
-  DbgPrint("NDIS: After copy, Protocol=%p, Protocol->Chars.BindAdapterHandler=%p\n",
+  DPRINT1("After copy, Protocol=%p, Protocol->Chars.BindAdapterHandler=%p\n",
            Protocol, Protocol->Chars.BindAdapterHandler);
 
   NtStatus = RtlUpcaseUnicodeString(&Protocol->Chars.Name, &ProtocolCharacteristics->Name, TRUE);
   if (!NT_SUCCESS(NtStatus))
     {
-      NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources.\n"));
+      DPRINT1("Insufficient resources.\n");
       ExFreePool(Protocol);
       *Status = NDIS_STATUS_RESOURCES;
       return;
@@ -1652,7 +1652,7 @@ NdisRegisterProtocol(
   if (*Status == NDIS_STATUS_SUCCESS) {
       ExInterlockedInsertTailList(&ProtocolListHead, &Protocol->ListEntry, &ProtocolListLock);
   } else {
-      NDIS_DbgPrint(MIN_TRACE, ("Binding failed (%x)\n", *Status));
+      DPRINT1("Binding failed (%x)\n", *Status);
       ExFreePool(Protocol);
       *NdisProtocolHandle = NULL;
   }
@@ -1791,7 +1791,7 @@ NdisGetDriverHandle(
 
     if (!Binding)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Bad binding handle\n"));
+        DPRINT1("Bad binding handle\n");
         *NdisDriverHandle = NULL;
         return;
     }

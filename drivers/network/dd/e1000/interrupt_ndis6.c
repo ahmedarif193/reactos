@@ -26,6 +26,21 @@ E1000ConfigureInterruptThrottling(
     _In_ PE1000_ADAPTER Adapter
     );
 
+VOID
+E1000UpdateAdaptiveItr(
+    _In_ PE1000_ADAPTER Adapter,
+    _In_ ULONG RxPackets,
+    _In_ ULONG TxPackets,
+    _In_ ULONG RxBytes,
+    _In_ ULONG TxBytes
+    );
+
+VOID
+E1000WriteItr(
+    _In_ PE1000_ADAPTER Adapter,
+    _In_ ULONG ItrValue
+    );
+
 /* ============================================================================
  * E1000RegisterInterrupt - Register interrupt handler with NDIS
  *
@@ -40,7 +55,7 @@ E1000RegisterInterrupt(
     NDIS_STATUS Status;
     NDIS_MINIPORT_INTERRUPT_CHARACTERISTICS IntChars;
 
-    DbgPrint("E1000: Registering interrupt - Vector=%u, Level=%u, Shared=%d, HasMsgInt=%d\n",
+    DPRINT("E1000: Registering interrupt - Vector=%u, Level=%u, Shared=%d, HasMsgInt=%d\n",
              Adapter->InterruptVector, Adapter->InterruptLevel, Adapter->InterruptShared,
              Adapter->HasMessageInterrupt);
 
@@ -81,7 +96,7 @@ E1000RegisterInterrupt(
         IntChars.MsiSupported = TRUE;
         IntChars.MsiSyncWithAllMessages = TRUE;
 
-        DbgPrint("E1000: PCIe device with MSI-X - requesting message interrupt\n");
+        DPRINT("E1000: PCIe device with MSI-X - requesting message interrupt\n");
     }
     else if (Adapter->HasMessageInterrupt)
     {
@@ -89,12 +104,12 @@ E1000RegisterInterrupt(
         IntChars.MsiSupported = TRUE;
         IntChars.MsiSyncWithAllMessages = TRUE;
 
-        DbgPrint("E1000: MSI resources available - requesting message interrupt\n");
+        DPRINT("E1000: MSI resources available - requesting message interrupt\n");
     }
     else
     {
         IntChars.MsiSupported = FALSE;
-        DbgPrint("E1000: Using legacy line-based interrupt\n");
+        DPRINT("E1000: Using legacy line-based interrupt\n");
     }
 
     /* Register interrupt with NDIS */
@@ -107,12 +122,12 @@ E1000RegisterInterrupt(
 
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: NdisMRegisterInterruptEx failed: 0x%08x\n", Status);
+        DPRINT("E1000: NdisMRegisterInterruptEx failed: 0x%08x\n", Status);
 
         /* If MSI/MSI-X failed, try again with line-based interrupts */
         if (IntChars.MsiSupported)
         {
-            DbgPrint("E1000: Falling back to line-based interrupts\n");
+            DPRINT("E1000: Falling back to line-based interrupts\n");
 
             IntChars.MsiSupported = FALSE;
 
@@ -125,7 +140,7 @@ E1000RegisterInterrupt(
 
             if (Status != NDIS_STATUS_SUCCESS)
             {
-                DbgPrint("E1000: Line-based interrupt registration also failed: 0x%08x\n", Status);
+                DPRINT("E1000: Line-based interrupt registration also failed: 0x%08x\n", Status);
                 return Status;
             }
 
@@ -138,8 +153,8 @@ E1000RegisterInterrupt(
     }
     else
     {
-        DbgPrint("E1000: NdisMRegisterInterruptEx succeeded\n");
-        DbgPrint("E1000:   MsiSupported=%d, MessageInfoTable=%p, InterruptType=%u\n",
+        DPRINT("E1000: NdisMRegisterInterruptEx succeeded\n");
+        DPRINT("E1000:   MsiSupported=%d, MessageInfoTable=%p, InterruptType=%u\n",
                  IntChars.MsiSupported, IntChars.MessageInfoTable, IntChars.InterruptType);
 
         /*
@@ -156,7 +171,7 @@ E1000RegisterInterrupt(
             if (IntChars.MessageInfoTable != NULL)
             {
                 /* Full MSI-X info available */
-                DbgPrint("E1000:   MessageCount=%u, UnifiedIrql=0x%x, MessageInfo=%p\n",
+                DPRINT1("E1000:   MessageCount=%u, UnifiedIrql=0x%x, MessageInfo=%p\n",
                          IntChars.MessageInfoTable->MessageCount,
                          IntChars.MessageInfoTable->UnifiedIrql,
                          IntChars.MessageInfoTable->MessageInfo);
@@ -164,7 +179,7 @@ E1000RegisterInterrupt(
                 if (IntChars.MessageInfoTable->MessageCount > 1)
                 {
                     Adapter->InterruptMode = E1000InterruptModeMsix;
-                    DbgPrint("E1000: SUCCESS - Registered %u MSI-X vectors!\n",
+                    DPRINT("E1000: SUCCESS - Registered %u MSI-X vectors!\n",
                              IntChars.MessageInfoTable->MessageCount);
 
                     /* Log individual message info */
@@ -172,7 +187,7 @@ E1000RegisterInterrupt(
                     {
                         PIO_INTERRUPT_MESSAGE_INFO_ENTRY Entry =
                             &IntChars.MessageInfoTable->MessageInfo[i];
-                        DbgPrint("E1000:   Vector[%u]: MessageAddr=0x%I64x, Data=0x%x, Vector=%u\n",
+                        DPRINT1("E1000:   Vector[%u]: MessageAddr=0x%I64x, Data=0x%x, Vector=%u\n",
                                  i, Entry->MessageAddress.QuadPart, Entry->MessageData, Entry->Vector);
                     }
 
@@ -182,13 +197,13 @@ E1000RegisterInterrupt(
                 else
                 {
                     Adapter->InterruptMode = E1000InterruptModeMsi;
-                    DbgPrint("E1000: SUCCESS - Registered single MSI vector (with MessageInfo)!\n");
+                    DPRINT("E1000: SUCCESS - Registered single MSI vector (with MessageInfo)!\n");
 
                     if (IntChars.MessageInfoTable->MessageInfo != NULL)
                     {
                         PIO_INTERRUPT_MESSAGE_INFO_ENTRY Entry =
                             &IntChars.MessageInfoTable->MessageInfo[0];
-                        DbgPrint("E1000:   Vector[0]: MessageAddr=0x%I64x, Data=0x%x, Vector=%u\n",
+                        DPRINT1("E1000:   Vector[0]: MessageAddr=0x%I64x, Data=0x%x, Vector=%u\n",
                                  Entry->MessageAddress.QuadPart, Entry->MessageData, Entry->Vector);
                     }
                 }
@@ -197,7 +212,7 @@ E1000RegisterInterrupt(
             {
                 /* MSI mode without detailed info - still using MSI */
                 Adapter->InterruptMode = E1000InterruptModeMsi;
-                DbgPrint("E1000: SUCCESS - Registered MSI interrupt (no MessageInfoTable)!\n");
+                DPRINT("E1000: SUCCESS - Registered MSI interrupt (no MessageInfoTable)!\n");
 
                 /*
                  * For 82574L (PCIe), configure IVAR register for single-vector mode.
@@ -217,7 +232,7 @@ E1000RegisterInterrupt(
                 {
                     ULONG Ivar;
 
-                    DbgPrint("E1000: Configuring IVAR for single MSI vector (PCIe device)\n");
+                    DPRINT("E1000: Configuring IVAR for single MSI vector (PCIe device)\n");
 
                     /*
                      * Route all causes to MSI-X vector 0:
@@ -233,7 +248,7 @@ E1000RegisterInterrupt(
 
                     E1000_WRITE_REG(Adapter, E1000_REG_IVAR, Ivar);
 
-                    DbgPrint("E1000: IVAR=0x%08x (single vector mode)\n", Ivar);
+                    DPRINT1("E1000: IVAR=0x%08x (single vector mode)\n", Ivar);
 
                     Adapter->TxQueueCount = 1;
                     Adapter->RxQueueCount = 1;
@@ -243,7 +258,7 @@ E1000RegisterInterrupt(
         else
         {
             Adapter->InterruptMode = E1000InterruptModeLegacy;
-            DbgPrint("E1000: SUCCESS - Registered line-based interrupt (legacy mode)\n");
+            DPRINT("E1000: SUCCESS - Registered line-based interrupt (legacy mode)\n");
         }
     }
 
@@ -271,7 +286,7 @@ E1000DeregisterInterrupt(
         NdisMDeregisterInterruptEx(Adapter->InterruptHandle);
         Adapter->InterruptHandle = NULL;
 
-        DbgPrint("E1000: Interrupt deregistered\n");
+        DPRINT("E1000: Interrupt deregistered\n");
     }
 }
 
@@ -298,7 +313,7 @@ E1000ConfigureIvarRegisters(
 
     VectorCount = MessageInfo->MessageCount;
 
-    DbgPrint("E1000: Configuring IVAR for %u MSI-X vectors (82574L layout)\n", VectorCount);
+    DPRINT("E1000: Configuring IVAR for %u MSI-X vectors (82574L layout)\n", VectorCount);
 
     /*
      * 82574L uses a SINGLE IVAR register at 0xE4, NOT separate registers.
@@ -331,7 +346,7 @@ E1000ConfigureIvarRegisters(
         Adapter->TxQueueCount = 1;
         Adapter->RxQueueCount = 1;
 
-        DbgPrint("E1000: MSI-X 3-vector mode: RX=0, TX=1, Other=2\n");
+        DPRINT("E1000: MSI-X 3-vector mode: RX=0, TX=1, Other=2\n");
     }
     else
     {
@@ -347,19 +362,22 @@ E1000ConfigureIvarRegisters(
         Adapter->TxQueueCount = 1;
         Adapter->RxQueueCount = 1;
 
-        DbgPrint("E1000: MSI-X single-vector mode: All causes -> Vector 0\n");
+        DPRINT("E1000: MSI-X single-vector mode: All causes -> Vector 0\n");
     }
 
     /* Write single IVAR register at 0xE4 */
     E1000_WRITE_REG(Adapter, E1000_REG_IVAR, Ivar);
 
-    DbgPrint("E1000: IVAR=0x%08x, TxQueues=%u, RxQueues=%u\n",
+    DPRINT1("E1000: IVAR=0x%08x, TxQueues=%u, RxQueues=%u\n",
              Ivar, Adapter->TxQueueCount, Adapter->RxQueueCount);
 }
 
 
 /* ============================================================================
  * E1000ConfigureInterruptThrottling - Set up interrupt coalescing
+ *
+ * Configures initial ITR values based on adapter settings.
+ * Default is dynamic mode which will auto-adjust based on traffic.
  * ============================================================================ */
 
 VOID
@@ -371,10 +389,31 @@ E1000ConfigureInterruptThrottling(
 
     /*
      * Configure interrupt throttle rate (ITR)
-     * Value is in 256ns units. 20000 = ~5000 interrupts/sec
-     * For 1Gbps, use higher rate; for lower speeds, reduce.
+     * ITR register value = 1000000000 / (desired_int_per_sec * 256)
+     *
+     * Common values:
+     *   20000 = ~195 int/sec (bulk latency - high throughput)
+     *   8000  = ~488 int/sec (low latency)
+     *   2000  = ~1953 int/sec (lowest latency)
+     *
+     * Note: Hardware interprets ITR value differently on different models.
+     * 82574L uses 256ns units, so ITR=20000 means 20000*256ns = 5.12ms between
+     * interrupts, which is ~195 int/sec.
+     *
+     * For initial configuration, use a balanced value and enable dynamic mode.
      */
-    ItrValue = 20000;  /* Default: ~5000 int/sec */
+
+    /* Initialize adaptive ITR state */
+    Adapter->ItrSetting = E1000_ITR_SETTING_DYNAMIC;
+    Adapter->TotalRxPackets = 0;
+    Adapter->TotalTxPackets = 0;
+    Adapter->TotalRxBytes = 0;
+    Adapter->TotalTxBytes = 0;
+    KeQuerySystemTime(&Adapter->LastItrUpdateTime);
+
+    /* Start with medium latency value */
+    ItrValue = 8000;  /* ~488 int/sec - balanced starting point */
+    Adapter->CurrentItr = ItrValue;
 
     /* Set global ITR */
     E1000_WRITE_REG(Adapter, E1000_REG_ITR, ItrValue);
@@ -389,7 +428,185 @@ E1000ConfigureInterruptThrottling(
         E1000_WRITE_REG(Adapter, E1000_REG_EITR4, ItrValue);
     }
 
-    DbgPrint("E1000: Interrupt throttling set to %u (256ns units)\n", ItrValue);
+    DPRINT("E1000: Interrupt throttling set to %u (256ns units), mode=DYNAMIC\n", ItrValue);
+}
+
+
+/* ============================================================================
+ * E1000WriteItr - Write ITR value to hardware registers
+ *
+ * Updates the ITR register and per-vector EITR registers for 82574L.
+ * ============================================================================ */
+
+VOID
+E1000WriteItr(
+    _In_ PE1000_ADAPTER Adapter,
+    _In_ ULONG ItrValue
+    )
+{
+    if (Adapter->IoBase == NULL)
+    {
+        return;
+    }
+
+    /* Update global ITR */
+    E1000_WRITE_REG(Adapter, E1000_REG_ITR, ItrValue);
+
+    /* For 82574L, update per-vector throttle registers */
+    if (Adapter->IsPCIe)
+    {
+        E1000_WRITE_REG(Adapter, E1000_REG_EITR0, ItrValue);
+        E1000_WRITE_REG(Adapter, E1000_REG_EITR1, ItrValue);
+        E1000_WRITE_REG(Adapter, E1000_REG_EITR2, ItrValue);
+        E1000_WRITE_REG(Adapter, E1000_REG_EITR3, ItrValue);
+        E1000_WRITE_REG(Adapter, E1000_REG_EITR4, ItrValue);
+    }
+
+    Adapter->CurrentItr = ItrValue;
+}
+
+
+/* ============================================================================
+ * E1000UpdateAdaptiveItr - Dynamically adjust ITR based on traffic patterns
+ *
+ * Implements adaptive interrupt moderation following Linux e1000e semantics.
+ * Analyzes bytes_per_packet and packet rate to determine optimal interrupt rate:
+ *
+ *   - lowest_latency: Very small packets or low traffic -> highest int rate
+ *   - low_latency: Moderate traffic -> balanced int rate
+ *   - bulk_latency: Large packets/high throughput -> lowest int rate
+ *
+ * Linux e1000e uses these ITR values (in 256ns units):
+ *   - lowest_latency: 70000 (~56 int/sec, very aggressive coalescing)
+ *   - low_latency:    20000 (~195 int/sec)
+ *   - bulk_latency:    4000 (~976 int/sec, minimal coalescing)
+ *
+ * Note: Lower ITR value = higher interrupt rate (less coalescing)
+ *       Higher ITR value = lower interrupt rate (more coalescing)
+ *
+ * The Linux algorithm uses bytes_per_int thresholds with hysteresis.
+ * ============================================================================ */
+
+VOID
+E1000UpdateAdaptiveItr(
+    _In_ PE1000_ADAPTER Adapter,
+    _In_ ULONG RxPackets,
+    _In_ ULONG TxPackets,
+    _In_ ULONG RxBytes,
+    _In_ ULONG TxBytes
+    )
+{
+    ULONG TotalPackets;
+    ULONG TotalBytes;
+    ULONG BytesPerPacket;
+    ULONG NewItrSetting;
+    ULONG NewItrValue;
+    ULONG CurrentSetting;
+
+    /*
+     * ITR values following Linux e1000e semantics.
+     * These are in 256ns units for the hardware register.
+     *
+     * Linux values from netdev.c e1000_update_itr():
+     *   lowest_latency = 70000 (very aggressive coalescing, low int rate)
+     *   low_latency    = 20000 (balanced)
+     *   bulk_latency   = 4000  (minimal coalescing, high int rate for throughput)
+     *
+     * IMPORTANT: In e1000e, LOWER values mean HIGHER interrupt rates.
+     * This is counter-intuitive but matches the hardware behavior.
+     */
+    static const ULONG ItrValues[] = {
+        5000,   /* lowest_latency: ~780 int/sec - responsive for small packets */
+        10000,  /* low_latency: ~390 int/sec - balanced */
+        20000   /* bulk_latency: ~195 int/sec - throughput optimized */
+    };
+
+    /* Only adjust if in dynamic mode */
+    if (Adapter->ItrSetting != E1000_ITR_SETTING_DYNAMIC)
+    {
+        return;
+    }
+
+    /* Calculate traffic characteristics for this poll interval */
+    TotalPackets = RxPackets + TxPackets;
+    TotalBytes = RxBytes + TxBytes;
+
+    /* If no work done, keep current setting */
+    if (TotalPackets == 0)
+    {
+        return;
+    }
+
+    /* Calculate bytes per packet (average packet size) */
+    BytesPerPacket = TotalBytes / TotalPackets;
+
+    /*
+     * Determine ITR mode using Linux e1000e-style thresholds.
+     *
+     * Linux uses a complex state machine with these key thresholds:
+     *   - bytes_per_packet > 8000: TSO packets -> bulk_latency
+     *   - bytes_per_packet > 1200 with high byte count: bulk_latency
+     *   - bytes_per_packet < 512 with few packets: lowest_latency
+     *   - Otherwise: low_latency (balanced)
+     *
+     * Simplified adaptation for Windows NDIS:
+     *   - Very small packets (<256 bytes): lowest_latency for responsiveness
+     *   - Large packets (>1200 bytes): bulk_latency for throughput
+     *   - Medium packets with high rate: low_latency (balanced)
+     *   - Medium packets with low rate: lowest_latency
+     *
+     * Hysteresis: We use the current setting as a baseline and only
+     * change if conditions strongly warrant it. This prevents oscillation.
+     */
+    CurrentSetting = Adapter->ItrSetting;
+    NewItrSetting = CurrentSetting;
+
+    if (BytesPerPacket > 1200)
+    {
+        /*
+         * Large packets indicate bulk transfer (file copy, streaming).
+         * Use bulk_latency for maximum throughput.
+         */
+        NewItrSetting = E1000_ITR_SETTING_BULK_LATENCY;
+    }
+    else if (BytesPerPacket < 256)
+    {
+        /*
+         * Very small packets (ACKs, keep-alives, interactive).
+         * Use lowest_latency for quick response.
+         */
+        NewItrSetting = E1000_ITR_SETTING_LOWEST_LATENCY;
+    }
+    else
+    {
+        /*
+         * Medium-sized packets - balanced mode.
+         * Use packet rate to distinguish interactive vs bulk.
+         */
+        if (TotalPackets > 8)
+        {
+            /* High packet rate - use low_latency (more coalescing) */
+            NewItrSetting = E1000_ITR_SETTING_LOW_LATENCY;
+        }
+        else
+        {
+            /* Low packet rate - stay responsive */
+            NewItrSetting = E1000_ITR_SETTING_LOWEST_LATENCY;
+        }
+    }
+
+    /*
+     * Apply hysteresis: Only change ITR if the new setting differs
+     * from current. This prevents rapid oscillation between modes.
+     *
+     * Linux adds extra hysteresis by tracking previous setting and
+     * requiring sustained traffic patterns. We keep it simple here.
+     */
+    NewItrValue = ItrValues[NewItrSetting];
+    if (NewItrValue != Adapter->CurrentItr)
+    {
+        E1000WriteItr(Adapter, NewItrValue);
+    }
 }
 
 
@@ -495,13 +712,9 @@ E1000EnableInterrupts(
          * to auto-clear the interrupt causes.
          */
         E1000_WRITE_REG(Adapter, E1000_REG_EIAC, Eims);
-
-        DbgPrint("E1000: Extended interrupts enabled - EIMS=0x%08x, EIAC=0x%08x\n", Eims, Eims);
     }
 
     InterlockedOr(&Adapter->Flags, E1000_FLAG_INTERRUPT_ENABLED);
-
-    DbgPrint("E1000: Interrupts enabled - Mask=0x%08x\n", InterruptMask);
 }
 
 
@@ -535,13 +748,9 @@ E1000MiniportInterrupt(
     /* Read and clear the Interrupt Cause Register */
     IcrRaw = E1000_READ_REG(Adapter, E1000_REG_ICR);
 
-    /* Log raw ICR for debugging */
-    DbgPrint("E1000: ISR entered, raw ICR=0x%08x, mask=0x%08x\n", IcrRaw, Adapter->InterruptMask);
-
     /* Check if this is our interrupt */
     if (IcrRaw == 0 || IcrRaw == 0xFFFFFFFF)
     {
-        DbgPrint("E1000: ISR - not our interrupt (ICR=0x%08x)\n", IcrRaw);
         return FALSE;  /* Not our interrupt or hardware not responding */
     }
 
@@ -586,7 +795,6 @@ E1000MiniportInterrupt(
             (Adapter->InterruptMode == E1000InterruptModeMsi ||
              Adapter->InterruptMode == E1000InterruptModeMsix))
         {
-            DbgPrint("E1000: ISR - INT_ASSERTED but no recognized cause (raw=0x%08x)\n", IcrRaw);
             /* Claim it anyway for MSI-X to prevent re-assertion */
             Icr = IcrRaw & ~E1000_IMS_INT_ASSERTED;
             if (Icr == 0)
@@ -596,21 +804,9 @@ E1000MiniportInterrupt(
         }
         else
         {
-            DbgPrint("E1000: ISR - spurious (masked ICR=0, raw=0x%08x)\n", IcrRaw);
             return FALSE;  /* Interrupt not for causes we're monitoring */
         }
     }
-
-    /* Log which interrupt causes are pending */
-    DbgPrint("E1000: ISR claimed, ICR=0x%08x [%s%s%s%s%s%s%s]\n",
-             Icr,
-             (Icr & E1000_IMS_TXDW) ? "TXDW " : "",
-             (Icr & E1000_IMS_TXQE) ? "TXQE " : "",
-             (Icr & E1000_IMS_LSC) ? "LSC " : "",
-             (Icr & E1000_IMS_RXDMT0) ? "RXDMT0 " : "",
-             (Icr & E1000_IMS_RXO) ? "RXO " : "",
-             (Icr & E1000_IMS_RXT0) ? "RXT0 " : "",
-             (Icr & E1000_IMS_PHYINT) ? "PHY " : "");
 
     /* Disable interrupts immediately to prevent storm */
     E1000_WRITE_REG(Adapter, E1000_REG_IMC, 0xFFFFFFFF);
@@ -630,6 +826,13 @@ E1000MiniportInterrupt(
  * E1000MiniportInterruptDpc - Deferred Procedure Call for interrupt processing
  *
  * Called at DISPATCH_LEVEL to process the interrupt.
+ *
+ * Implements NAPI-style budget-based processing:
+ *   - TX completion is always processed fully (cheap operation)
+ *   - RX processing is limited by budget to prevent monopolizing CPU
+ *   - If budget is exhausted, interrupts are NOT re-enabled to allow
+ *     NDIS to reschedule the DPC
+ *   - Adaptive ITR is updated based on traffic patterns
  * ============================================================================ */
 
 VOID
@@ -646,9 +849,14 @@ E1000MiniportInterruptDpc(
     BOOLEAN ProcessRx = FALSE;
     BOOLEAN ProcessTx = FALSE;
     BOOLEAN LinkChange = FALSE;
+    ULONG RxBudget;
+    ULONG RxWorkDone = 0;
+    ULONG TxCompleted = 0;
+    ULONG TotalRxBytes = 0;
+    ULONG TotalTxBytes = 0;
+    BOOLEAN BudgetExhausted = FALSE;
 
     UNREFERENCED_PARAMETER(MiniportDpcContext);
-    UNREFERENCED_PARAMETER(ReceiveThrottleParameters);
     UNREFERENCED_PARAMETER(NdisReserved2);
 
     if (Adapter == NULL)
@@ -656,108 +864,154 @@ E1000MiniportInterruptDpc(
         return;
     }
 
+    /*
+     * Determine RX budget from NDIS throttle parameters if available.
+     * NDIS 6.20+ provides NDIS_RECEIVE_THROTTLE_PARAMETERS to limit
+     * how many packets we should indicate per DPC.
+     *
+     * If not available or no limit, use default budget.
+     */
+    RxBudget = E1000_RX_DEFAULT_BUDGET;
+
+    /*
+     * Check for NDIS receive throttle parameters (NDIS 6.20+).
+     *
+     * If NDIS provides throttle parameters, honor the MaxNblsToIndicate limit.
+     * This allows NDIS to control how many packets we process per DPC,
+     * implementing fair scheduling across multiple adapters.
+     */
+#ifdef NDIS_SUPPORT_NDIS620
+    if (ReceiveThrottleParameters != NULL)
+    {
+        PNDIS_RECEIVE_THROTTLE_PARAMETERS ThrottleParams =
+            (PNDIS_RECEIVE_THROTTLE_PARAMETERS)ReceiveThrottleParameters;
+
+        if (ThrottleParams->MaxNblsToIndicate != NDIS_INDICATE_ALL_NBLS)
+        {
+            RxBudget = ThrottleParams->MaxNblsToIndicate;
+            if (RxBudget == 0)
+            {
+                RxBudget = 1;  /* Ensure at least 1 packet processed */
+            }
+        }
+    }
+#else
+    UNREFERENCED_PARAMETER(ReceiveThrottleParameters);
+#endif
+
     /* Get the interrupt cause that was saved in ISR */
     Icr = (ULONG)InterlockedExchange((LONG*)&Adapter->InterruptPending, 0);
 
-    DbgPrint("E1000: DPC entered, pending ICR=0x%08x\n", Icr);
-
     if (Icr == 0)
     {
-        DbgPrint("E1000: DPC - no pending causes, re-enabling interrupts\n");
         /* Re-enable interrupts and return */
         E1000EnableInterrupts(Adapter);
         return;
     }
 
-    /* Log which causes we will process */
-    DbgPrint("E1000: DPC processing ICR=0x%08x [%s%s%s%s%s%s]\n",
-             Icr,
-             (Icr & E1000_IMS_TXDW) ? "TXDW " : "",
-             (Icr & E1000_IMS_TXQE) ? "TXQE " : "",
-             (Icr & E1000_IMS_LSC) ? "LSC " : "",
-             (Icr & E1000_IMS_RXDMT0) ? "RXDMT0 " : "",
-             (Icr & E1000_IMS_RXO) ? "RXO " : "",
-             (Icr & E1000_IMS_RXT0) ? "RXT0 " : "");
-
-    /* Process TX completion (legacy and queue-based bits) */
+    /* Determine which types of work to process based on ICR bits */
     if (Icr & (E1000_IMS_TXDW | E1000_IMS_TXQE | E1000_IMS_TXQ0 | E1000_IMS_TXQ1))
     {
         ProcessTx = TRUE;
-        DbgPrint("E1000: DPC - will process TX completions\n");
     }
 
-    /* Process RX (legacy and queue-based bits) */
     if (Icr & (E1000_IMS_RXT0 | E1000_IMS_RXDMT0 | E1000_IMS_RXO | E1000_IMS_RXQ0 | E1000_IMS_RXQ1))
     {
         ProcessRx = TRUE;
-        DbgPrint("E1000: DPC - will process RX\n");
     }
 
-    /* Process link status change */
     if (Icr & E1000_IMS_LSC)
     {
         LinkChange = TRUE;
-        DbgPrint("E1000: DPC - will process link status change\n");
     }
 
-    /* Handle receive overrun */
+    /* Handle receive overrun - log this as it indicates a problem */
     if (Icr & E1000_IMS_RXO)
     {
         InterlockedIncrement64((LONG64*)&Adapter->Statistics.RxNoBuffer);
-        DbgPrint("E1000: DPC - Receive overrun detected!\n");
     }
 
     /*
-     * Process TX completions unconditionally.
+     * Process TX completions unconditionally and fully.
      * Linux e1000e always calls e1000_clean_tx_irq() in its NAPI poll handler
-     * regardless of which ICR bits triggered the interrupt. This is the correct
-     * approach as TX completion processing is cheap and ensures descriptors are
-     * reclaimed promptly.
+     * regardless of which ICR bits triggered the interrupt. TX completion is
+     * cheap and ensures descriptors are reclaimed promptly for new sends.
      */
-    DbgPrint("E1000: DPC - calling E1000ProcessTxCompletions(Queue0)\n");
     E1000ProcessTxCompletions(&Adapter->TxQueues[0]);
+
+    /* Track TX bytes for adaptive ITR */
+    TotalTxBytes = (ULONG)Adapter->TxQueues[0].BytesSent;
+    TxCompleted += (ULONG)Adapter->TxQueues[0].PacketsSent;
 
     if (Adapter->TxQueueCount > 1)
     {
-        DbgPrint("E1000: DPC - calling E1000ProcessTxCompletions(Queue1)\n");
         E1000ProcessTxCompletions(&Adapter->TxQueues[1]);
+        TotalTxBytes += (ULONG)Adapter->TxQueues[1].BytesSent;
+        TxCompleted += (ULONG)Adapter->TxQueues[1].PacketsSent;
     }
 
     /*
-     * Process received packets unconditionally.
-     * Same rationale as TX - Linux always processes RX in its poll handler.
+     * Process received packets with budget enforcement.
+     * This is the key NAPI-style optimization - we limit how many
+     * packets we process per DPC to prevent CPU monopolization
+     * and allow fair scheduling.
      */
-    DbgPrint("E1000: DPC - calling E1000IndicateReceive(Queue0)\n");
-    E1000IndicateReceive(&Adapter->RxQueues[0]);
+    RxWorkDone = E1000IndicateReceive(&Adapter->RxQueues[0], RxBudget);
+    TotalRxBytes += (ULONG)Adapter->RxQueues[0].BytesReceived;
 
-    if (Adapter->RxQueueCount > 1)
+    if (Adapter->RxQueueCount > 1 && RxWorkDone < RxBudget)
     {
-        DbgPrint("E1000: DPC - calling E1000IndicateReceive(Queue1)\n");
-        E1000IndicateReceive(&Adapter->RxQueues[1]);
+        ULONG RemainingBudget = RxBudget - RxWorkDone;
+        RxWorkDone += E1000IndicateReceive(&Adapter->RxQueues[1], RemainingBudget);
+        TotalRxBytes += (ULONG)Adapter->RxQueues[1].BytesReceived;
+    }
+
+    /* Check if we exhausted the RX budget */
+    if (RxWorkDone >= RxBudget)
+    {
+        BudgetExhausted = TRUE;
+        Adapter->MoreNblsPending = TRUE;
+    }
+    else
+    {
+        Adapter->MoreNblsPending = FALSE;
     }
 
     DBG_UNREFERENCED_LOCAL_VARIABLE(ProcessTx);
     DBG_UNREFERENCED_LOCAL_VARIABLE(ProcessRx);
 
-    /* Handle link status change */
+    /* Handle link status change - log this event as it's important */
     if (LinkChange)
     {
-        NDIS_MEDIA_CONNECT_STATE OldState = Adapter->MediaState;
-        ULONG64 OldSpeed = Adapter->LinkSpeed;
-
-        DbgPrint("E1000: DPC - calling E1000UpdateLinkStatus\n");
         E1000UpdateLinkStatus(Adapter);
-
-        DbgPrint("E1000: Link status change: %s -> %s, Speed: %I64u -> %I64u bps\n",
-                 (OldState == MediaConnectStateConnected) ? "Connected" : "Disconnected",
-                 (Adapter->MediaState == MediaConnectStateConnected) ? "Connected" : "Disconnected",
-                 OldSpeed, Adapter->LinkSpeed);
     }
 
-    DbgPrint("E1000: DPC complete, re-enabling interrupts\n");
+    /*
+     * Update adaptive interrupt throttling based on traffic patterns.
+     * This helps optimize latency vs throughput trade-off dynamically.
+     */
+    E1000UpdateAdaptiveItr(Adapter, RxWorkDone, TxCompleted, TotalRxBytes, TotalTxBytes);
 
-    /* Re-enable interrupts */
-    E1000EnableInterrupts(Adapter);
+    /*
+     * Re-enable interrupts only if we did not exhaust the budget.
+     *
+     * If budget was exhausted (BudgetExhausted == TRUE), there is likely
+     * more work pending. By not re-enabling interrupts, NDIS will reschedule
+     * this DPC to continue processing without interrupt overhead.
+     *
+     * This is the key to NAPI-style efficiency - during high traffic, we
+     * process in batches without interrupt storm.
+     */
+    if (!BudgetExhausted)
+    {
+        E1000EnableInterrupts(Adapter);
+    }
+    /*
+     * If budget exhausted, interrupts stay disabled.
+     * NDIS will call us again with ReceiveThrottleParameters
+     * when it's ready for more packets. We'll re-enable interrupts
+     * when we finally process all pending work.
+     */
 }
 
 

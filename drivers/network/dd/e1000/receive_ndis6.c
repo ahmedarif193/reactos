@@ -58,14 +58,14 @@ E1000InitializeRxQueue(
 
     if (RxQueue->Descriptors == NULL)
     {
-        DbgPrint("E1000: Failed to allocate RX descriptor ring for queue %u\n", QueueIndex);
+        DPRINT("E1000: Failed to allocate RX descriptor ring for queue %u\n", QueueIndex);
         NdisFreeSpinLock(&RxQueue->Lock);
         return NDIS_STATUS_RESOURCES;
     }
 
     NdisZeroMemory((PVOID)RxQueue->Descriptors, DescriptorSize);
 
-    DbgPrint("E1000: RX queue %u descriptors at VA=%p PA=0x%I64x\n",
+    DPRINT("E1000: RX queue %u descriptors at VA=%p PA=0x%I64x\n",
              QueueIndex, RxQueue->Descriptors, RxQueue->DescriptorsPa.QuadPart);
 
     /* Allocate RX buffer tracking array */
@@ -78,7 +78,7 @@ E1000InitializeRxQueue(
 
     if (RxQueue->Buffers == NULL)
     {
-        DbgPrint("E1000: Failed to allocate RX buffer tracking for queue %u\n", QueueIndex);
+        DPRINT1("E1000: Failed to allocate RX buffer tracking for queue %u\n", QueueIndex);
         NdisMFreeSharedMemory(
             Adapter->MiniportAdapterHandle,
             DescriptorSize,
@@ -96,6 +96,9 @@ E1000InitializeRxQueue(
     RxQueue->Head = 0;
     RxQueue->Tail = 0;
 
+    /* Initialize batched RDT update counter */
+    RxQueue->CleanedCount = 0;
+
     /* Initialize indication DPC */
     KeInitializeDpc(&RxQueue->IndicateDpc, E1000RxIndicateDpc, RxQueue);
 
@@ -103,7 +106,7 @@ E1000InitializeRxQueue(
     Status = E1000AllocateRxBuffers(RxQueue);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: Failed to allocate RX buffers for queue %u: 0x%08x\n", QueueIndex, Status);
+        DPRINT1("E1000: Failed to allocate RX buffers for queue %u: 0x%08x\n", QueueIndex, Status);
         NdisFreeMemory(RxQueue->Buffers, sizeof(E1000_RX_BUFFER) * RxQueue->Count, 0);
         NdisMFreeSharedMemory(
             Adapter->MiniportAdapterHandle,
@@ -149,7 +152,7 @@ E1000InitializeRxQueue(
         E1000_WRITE_REG(Adapter, E1000_REG_RCTL, RctlValue);
     }
 
-    DbgPrint("E1000: RX queue %u initialized: %u descriptors, %u bytes\n",
+    DPRINT("E1000: RX queue %u initialized: %u descriptors, %u bytes\n",
              QueueIndex, RxQueue->Count, DescriptorSize);
 
     return NDIS_STATUS_SUCCESS;
@@ -191,7 +194,7 @@ E1000AllocateRxBuffers(
 
         if (BufferVa == NULL)
         {
-            DbgPrint("E1000: Failed to allocate RX buffer %u\n", i);
+            DPRINT1("E1000: Failed to allocate RX buffer %u\n", i);
             /* Free previously allocated buffers */
             while (i > 0)
             {
@@ -222,7 +225,7 @@ E1000AllocateRxBuffers(
         RxDesc->Special = 0;
     }
 
-    DbgPrint("E1000: Allocated %u RX buffers (each %u bytes)\n",
+    DPRINT1("E1000: Allocated %u RX buffers (each %u bytes)\n",
              RxQueue->Count, E1000_RX_BUFFER_SIZE);
 
     return NDIS_STATUS_SUCCESS;
@@ -304,7 +307,7 @@ E1000FreeRxQueue(
 
     NdisFreeSpinLock(&RxQueue->Lock);
 
-    DbgPrint("E1000: RX queue %u freed\n", RxQueue->QueueIndex);
+    DPRINT1("E1000: RX queue %u freed\n", RxQueue->QueueIndex);
 }
 
 
@@ -312,11 +315,19 @@ E1000FreeRxQueue(
  * E1000IndicateReceive - Indicate received packets to NDIS
  *
  * Called from DPC to process received descriptors and indicate NBLs.
+ *
+ * Implements budget-based NAPI-style processing:
+ *   - Processes up to 'Budget' packets per call
+ *   - Returns the number of packets actually processed (work_done)
+ *   - If work_done >= Budget, caller should NOT re-enable interrupts
+ *
+ * This prevents CPU monopolization during high traffic bursts.
  * ============================================================================ */
 
-VOID
+ULONG
 E1000IndicateReceive(
-    _In_ PE1000_RX_QUEUE RxQueue
+    _In_ PE1000_RX_QUEUE RxQueue,
+    _In_ ULONG Budget
     )
 {
     PE1000_ADAPTER Adapter = RxQueue->Adapter;
@@ -330,47 +341,58 @@ E1000IndicateReceive(
     ULONG Head;
     ULONG PacketLength;
     ULONG PacketsReceived = 0;
+    ULONG WorkDone = 0;
     NDIS_TCP_IP_CHECKSUM_NET_BUFFER_LIST_INFO ChecksumInfo;
 
-    DbgPrint("E1000-RX: E1000IndicateReceive - Queue=%p, Adapter=%p, Head=%u, Tail=%u\n",
-             RxQueue, Adapter, RxQueue->Head, RxQueue->Tail);
+    /* Ensure budget is at least 1 */
+    if (Budget == 0)
+    {
+        Budget = 1;
+    }
 
     /* Check adapter state */
     if (!E1000IsAdapterStarted(Adapter) || E1000IsAdapterPaused(Adapter))
     {
-        DbgPrint("E1000-RX: Adapter state check failed - Started=%d, Paused=%d, Flags=0x%08x\n",
-                 E1000IsAdapterStarted(Adapter), E1000IsAdapterPaused(Adapter), Adapter->Flags);
-        return;
+        return 0;
     }
 
     NdisAcquireSpinLock(&RxQueue->Lock);
 
     Head = RxQueue->Head;
 
-    DbgPrint("E1000-RX: Starting to process descriptors at Head=%u\n", Head);
+    /*
+     * Memory barrier before reading descriptor status.
+     * Ensures we see the latest status written by hardware.
+     * This matches Linux's dma_rmb() in e1000_clean_rx_irq().
+     */
+    KeMemoryBarrier();
 
-    /* Process received descriptors */
-    while (TRUE)
+    /* Process received descriptors up to budget limit */
+    while (WorkDone < Budget)
     {
         RxDesc = &RxQueue->Descriptors[Head];
 
         /* Check if descriptor is done (DD bit set) */
         if (!(RxDesc->Status & E1000_RXDESC_STAT_DD))
         {
-            DbgPrint("E1000-RX: Descriptor %u not done (Status=0x%02x), stopping\n", Head, RxDesc->Status);
             break;  /* No more completed descriptors */
         }
+
+        /*
+         * Read barrier after checking DD status.
+         * Ensures we read packet data only after confirming DD is set.
+         */
+        KeMemoryBarrier();
 
         RxBuffer = &RxQueue->Buffers[Head];
         PacketLength = RxDesc->Length;
 
-        DbgPrint("E1000-RX: Processing desc %u: Status=0x%02x, Length=%u, Errors=0x%02x\n",
-                 Head, RxDesc->Status, PacketLength, RxDesc->Errors);
+        /* Count this as work done regardless of success/failure */
+        WorkDone++;
 
         /* Check for errors */
         if (RxDesc->Errors != 0)
         {
-            DbgPrint("E1000: RX error at descriptor %u: errors=0x%02x\n", Head, RxDesc->Errors);
             RxQueue->ReceiveErrors++;
             goto NextDescriptor;
         }
@@ -378,7 +400,6 @@ E1000IndicateReceive(
         /* Check for end-of-packet (we don't support multi-descriptor packets) */
         if (!(RxDesc->Status & E1000_RXDESC_STAT_EOP))
         {
-            DbgPrint("E1000: Multi-descriptor packet at %u (not supported)\n", Head);
             RxQueue->ReceiveErrors++;
             goto NextDescriptor;
         }
@@ -386,7 +407,6 @@ E1000IndicateReceive(
         /* Validate packet length */
         if (PacketLength < E1000_MIN_FRAME_SIZE || PacketLength > E1000_MAX_FRAME_SIZE)
         {
-            DbgPrint("E1000: Invalid packet length %u at descriptor %u\n", PacketLength, Head);
             RxQueue->ReceiveErrors++;
             goto NextDescriptor;
         }
@@ -400,7 +420,6 @@ E1000IndicateReceive(
 
         if (Mdl == NULL)
         {
-            DbgPrint("E1000: Failed to allocate MDL for RX packet\n");
             RxQueue->DroppedPackets++;
             goto NextDescriptor;
         }
@@ -416,7 +435,6 @@ E1000IndicateReceive(
 
         if (Nbl == NULL)
         {
-            DbgPrint("E1000: Failed to allocate NBL for RX packet\n");
             NdisFreeMdl(Mdl);
             RxQueue->DroppedPackets++;
             goto NextDescriptor;
@@ -504,6 +522,8 @@ NextDescriptor:
 
     /* Update adapter statistics */
     InterlockedExchangeAdd64((LONG64*)&Adapter->Statistics.RxPackets, PacketsReceived);
+
+    return WorkDone;
 }
 
 
@@ -511,6 +531,14 @@ NextDescriptor:
  * E1000ReturnNetBufferLists - Return NBLs back to the miniport
  *
  * Called by NDIS when protocol drivers are done with indicated NBLs.
+ *
+ * Implements batched RDT updates for efficiency:
+ *   - Tracks CleanedCount of buffers returned since last RDT write
+ *   - Only writes RDT when CleanedCount >= E1000_RX_BUFFER_WRITE (16)
+ *   - This reduces register write overhead and improves cache behavior
+ *
+ * Like Linux e1000_alloc_rx_buffers(), batching RDT updates is important
+ * because register writes are expensive (PCIe round-trips).
  * ============================================================================ */
 
 VOID
@@ -529,6 +557,7 @@ E1000ReturnNetBufferLists(
     PMDL Mdl;
     ULONG RefillCount = 0;
     ULONG Tail;
+    BOOLEAN UpdateRdt = FALSE;
 
     UNREFERENCED_PARAMETER(ReturnFlags);
 
@@ -566,11 +595,76 @@ E1000ReturnNetBufferLists(
         RefillCount++;
     }
 
-    /* Update hardware tail register to give descriptors back to hardware */
     if (RefillCount > 0)
     {
         RxQueue->Tail = Tail;
+
+        /* Accumulate cleaned count for batched RDT updates */
+        RxQueue->CleanedCount += RefillCount;
+
+        /*
+         * Only write RDT when we have accumulated enough cleaned buffers.
+         * This batching reduces register write overhead.
+         *
+         * Like Linux e1000_alloc_rx_buffers():
+         *   if (cleaned_count >= E1000_RX_BUFFER_WRITE) {
+         *       writel(i, ring->tail);
+         *       cleaned_count = 0;
+         *   }
+         */
+        if (RxQueue->CleanedCount >= E1000_RX_BUFFER_WRITE)
+        {
+            UpdateRdt = TRUE;
+        }
+    }
+
+    NdisReleaseSpinLock(&RxQueue->Lock);
+
+    /* Update RDT outside the lock to minimize lock hold time */
+    if (UpdateRdt)
+    {
+        /*
+         * Memory barrier before RDT write.
+         * Ensures all descriptor updates are visible before telling
+         * hardware about new buffers.
+         */
+        KeMemoryBarrier();
+
         E1000_WRITE_REG(Adapter, E1000_REG_RDT, Tail);
+
+        /* Reset cleaned count after RDT update */
+        InterlockedExchange((LONG*)&RxQueue->CleanedCount, 0);
+    }
+}
+
+
+/* ============================================================================
+ * E1000RefillRxBuffers - Flush pending RDT update
+ *
+ * Called periodically or at end of receive indication to ensure any
+ * pending cleaned buffers are returned to hardware even if below threshold.
+ * This prevents buffer starvation on low-traffic paths.
+ * ============================================================================ */
+
+VOID
+E1000RefillRxBuffers(
+    _In_ PE1000_RX_QUEUE RxQueue
+    )
+{
+    PE1000_ADAPTER Adapter = RxQueue->Adapter;
+    ULONG CleanedCount;
+
+    NdisAcquireSpinLock(&RxQueue->Lock);
+
+    CleanedCount = RxQueue->CleanedCount;
+
+    if (CleanedCount > 0)
+    {
+        /* Memory barrier before RDT write */
+        KeMemoryBarrier();
+
+        E1000_WRITE_REG(Adapter, E1000_REG_RDT, RxQueue->Tail);
+        RxQueue->CleanedCount = 0;
     }
 
     NdisReleaseSpinLock(&RxQueue->Lock);
@@ -579,6 +673,10 @@ E1000ReturnNetBufferLists(
 
 /* ============================================================================
  * E1000RxIndicateDpc - DPC routine for RX indication
+ *
+ * Note: This DPC is typically not used in the main interrupt path.
+ * The main interrupt DPC (E1000MiniportInterruptDpc) calls E1000IndicateReceive
+ * directly with budget support. This DPC is a fallback for other use cases.
  * ============================================================================ */
 
 VOID
@@ -598,6 +696,11 @@ E1000RxIndicateDpc(
 
     if (RxQueue != NULL)
     {
-        E1000IndicateReceive(RxQueue);
+        /*
+         * When called from standalone DPC (not main interrupt path),
+         * use the default budget. The main interrupt handler uses
+         * NDIS throttle parameters for budget control.
+         */
+        E1000IndicateReceive(RxQueue, E1000_RX_DEFAULT_BUDGET);
     }
 }

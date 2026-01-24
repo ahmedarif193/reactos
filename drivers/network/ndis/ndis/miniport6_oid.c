@@ -80,7 +80,7 @@ Ndis6iAllocateOidRequestContext(
                                     NDIS_TAG);
     if (Context == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate OID request context\n"));
+        DPRINT1("Failed to allocate OID request context\n");
         return NULL;
     }
 
@@ -102,8 +102,8 @@ Ndis6iAllocateOidRequestContext(
     InsertTailList(&Ndis6OidRequestList, &Context->ListEntry);
     KeReleaseSpinLock(&Ndis6OidRequestListLock, OldIrql);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Allocated OID context %p for request %p (Direct=%d)\n",
-        Context, Request, IsDirect));
+    DPRINT1("Allocated OID context %p for request %p (Direct=%d)\n",
+        Context, Request, IsDirect);
 
     return Context;
 }
@@ -131,7 +131,7 @@ Ndis6iFreeOidRequestContext(
     RemoveEntryList(&Context->ListEntry);
     KeReleaseSpinLock(&Ndis6OidRequestListLock, OldIrql);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Freed OID context %p\n", Context));
+    DPRINT1("Freed OID context %p\n", Context);
 
     ExFreePoolWithTag(Context, NDIS_TAG);
 }
@@ -269,7 +269,7 @@ Ndis6iCompleteOidRequest(
 
     if (Context == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NULL context in completion\n"));
+        DPRINT1("NULL context in completion\n");
         return;
     }
 
@@ -279,8 +279,8 @@ Ndis6iCompleteOidRequest(
 
     Oid = Ndis6iGetOidFromRequest(Context->Request);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Completing OID 0x%08x with status 0x%x (Direct=%d)\n",
-        Oid, Status, IsDirect));
+    DPRINT1("Completing OID 0x%08x with status 0x%x (Direct=%d)\n",
+        Oid, Status, IsDirect);
 
     /* Signal completion event for synchronous waiters */
     KeSetEvent(&Context->CompletionEvent, IO_NO_INCREMENT, FALSE);
@@ -306,13 +306,13 @@ NdisMOidRequestComplete(
 {
     PNDIS6_OID_REQUEST_CONTEXT Context;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMOidRequestComplete called: Handle=%p, Request=%p, Status=0x%x\n",
-        MiniportAdapterHandle, OidRequest, Status));
+    DPRINT("NdisMOidRequestComplete called: Handle=%p, Request=%p, Status=0x%x\n",
+        MiniportAdapterHandle, OidRequest, Status);
 
     /* Validate parameters */
     if (MiniportAdapterHandle == NULL || OidRequest == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid parameter\n"));
+        DPRINT1("Invalid parameter\n");
         return;
     }
 
@@ -320,8 +320,8 @@ NdisMOidRequestComplete(
     Context = Ndis6iFindOidRequestContext(MiniportAdapterHandle, OidRequest);
     if (Context == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("OID request context not found for request %p\n",
-            OidRequest));
+        DPRINT1("OID request context not found for request %p\n",
+            OidRequest);
         /*
          * Even if we don't find the context, this is still a valid call.
          * The miniport may be completing a request that was submitted
@@ -333,7 +333,7 @@ NdisMOidRequestComplete(
     /* Verify this is not a direct OID request */
     if (Context->IsDirect)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Direct OID request completed via NdisMOidRequestComplete\n"));
+        DPRINT1("Direct OID request completed via NdisMOidRequestComplete\n");
         /* Allow it but log the inconsistency */
     }
 
@@ -343,7 +343,7 @@ NdisMOidRequestComplete(
     /* Free the context */
     Ndis6iFreeOidRequestContext(Context);
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMOidRequestComplete completed\n"));
+    DPRINT1("NdisMOidRequestComplete completed\n");
 }
 
 /*
@@ -357,13 +357,13 @@ NdisMCancelOidRequest(
 {
     PNDIS6_OID_REQUEST_CONTEXT Context;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMCancelOidRequest called: Handle=%p, RequestId=%p\n",
-        MiniportAdapterHandle, RequestId));
+    DPRINT("NdisMCancelOidRequest called: Handle=%p, RequestId=%p\n",
+        MiniportAdapterHandle, RequestId);
 
     /* Validate parameters */
     if (MiniportAdapterHandle == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid adapter handle\n"));
+        DPRINT1("Invalid adapter handle\n");
         return;
     }
 
@@ -371,15 +371,15 @@ NdisMCancelOidRequest(
     Context = Ndis6iFindOidRequestContextByRequestId(MiniportAdapterHandle, RequestId);
     if (Context == NULL)
     {
-        NDIS_DbgPrint(MID_TRACE, ("OID request with ID %p not found or already completed\n",
-            RequestId));
+        DPRINT1("OID request with ID %p not found or already completed\n",
+            RequestId);
         return;
     }
 
     /* Mark as cancelled */
     Context->IsCancelled = TRUE;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Marked OID request %p as cancelled\n", Context->Request));
+    DPRINT1("Marked OID request %p as cancelled\n", Context->Request);
 
     /*
      * TODO: In a full implementation, we would:
@@ -401,13 +401,13 @@ NdisMDirectOidRequestComplete(
 {
     PNDIS6_OID_REQUEST_CONTEXT Context;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMDirectOidRequestComplete called: Handle=%p, Request=%p, Status=0x%x\n",
-        MiniportAdapterHandle, OidRequest, Status));
+    DPRINT("NdisMDirectOidRequestComplete called: Handle=%p, Request=%p, Status=0x%x\n",
+        MiniportAdapterHandle, OidRequest, Status);
 
     /* Validate parameters */
     if (MiniportAdapterHandle == NULL || OidRequest == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid parameter\n"));
+        DPRINT1("Invalid parameter\n");
         return;
     }
 
@@ -415,15 +415,15 @@ NdisMDirectOidRequestComplete(
     Context = Ndis6iFindOidRequestContext(MiniportAdapterHandle, OidRequest);
     if (Context == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Direct OID request context not found for request %p\n",
-            OidRequest));
+        DPRINT1("Direct OID request context not found for request %p\n",
+            OidRequest);
         return;
     }
 
     /* Verify this is a direct OID request */
     if (!Context->IsDirect)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Non-direct OID request completed via NdisMDirectOidRequestComplete\n"));
+        DPRINT1("Non-direct OID request completed via NdisMDirectOidRequestComplete\n");
         /* Allow it but log the inconsistency */
     }
 
@@ -433,7 +433,7 @@ NdisMDirectOidRequestComplete(
     /* Free the context */
     Ndis6iFreeOidRequestContext(Context);
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMDirectOidRequestComplete completed\n"));
+    DPRINT1("NdisMDirectOidRequestComplete completed\n");
 }
 #endif /* NDIS_SUPPORT_NDIS61 */
 
@@ -479,7 +479,7 @@ Ndis6iSubmitOidRequest(
     PNDIS6_MINIPORT_DRIVER_BLOCK DriverBlock;
     PVOID MiniportAdapterContext;
 
-    DbgPrint("NDIS6: Ndis6iSubmitOidRequest: Handle=%p, Request=%p, IsDirect=%d\n",
+    DPRINT1("NDIS6: Ndis6iSubmitOidRequest: Handle=%p, Request=%p, IsDirect=%d\n",
         MiniportHandle, Request, IsDirect);
 
     /* Validate parameters */
@@ -492,13 +492,13 @@ Ndis6iSubmitOidRequest(
     if (Request->Header.Type != NDIS_OBJECT_TYPE_OID_REQUEST ||
         Request->Header.Revision < NDIS_OID_REQUEST_REVISION_1)
     {
-        DbgPrint("NDIS6: Invalid OID request header\n");
+        DPRINT1("NDIS6: Invalid OID request header\n");
         return NDIS_STATUS_INVALID_PARAMETER;
     }
 
     Oid = Ndis6iGetOidFromRequest(Request);
 
-    DbgPrint("NDIS6: Submitting OID 0x%08x, Type=%d\n",
+    DPRINT1("NDIS6: Submitting OID 0x%08x, Type=%d\n",
         Oid, Request->RequestType);
 
     /*
@@ -523,19 +523,19 @@ Ndis6iSubmitOidRequest(
         Adapter = (PLOGICAL_ADAPTER)((PVOID*)DeviceObject->DeviceExtension)[6];
         UNREFERENCED_PARAMETER(Adapter);  /* Used for debugging/future use */
 
-        DbgPrint("NDIS6: DriverBlock=%p, AdapterContext=%p, Adapter=%p\n",
+        DPRINT1("NDIS6: DriverBlock=%p, AdapterContext=%p, Adapter=%p\n",
                  DriverBlock, MiniportAdapterContext, Adapter);
     }
     else
     {
-        DbgPrint("NDIS6: No device extension, cannot submit OID\n");
+        DPRINT1("NDIS6: No device extension, cannot submit OID\n");
         return NDIS_STATUS_INVALID_PARAMETER;
     }
 
     /* Verify we have the driver block and handler */
     if (DriverBlock == NULL)
     {
-        DbgPrint("NDIS6: No driver block available\n");
+        DPRINT1("NDIS6: No driver block available\n");
         return NDIS_STATUS_FAILURE;
     }
 
@@ -545,11 +545,11 @@ Ndis6iSubmitOidRequest(
 #if NDIS_SUPPORT_NDIS61
         if (DriverBlock->Characteristics.DirectOidRequestHandler == NULL)
         {
-            DbgPrint("NDIS6: DirectOidRequestHandler is NULL\n");
+            DPRINT1("NDIS6: DirectOidRequestHandler is NULL\n");
             return NDIS_STATUS_NOT_SUPPORTED;
         }
 #else
-        DbgPrint("NDIS6: Direct OID requests not supported in NDIS 6.0\n");
+        DPRINT1("NDIS6: Direct OID requests not supported in NDIS 6.0\n");
         return NDIS_STATUS_NOT_SUPPORTED;
 #endif
     }
@@ -557,7 +557,7 @@ Ndis6iSubmitOidRequest(
     {
         if (DriverBlock->Characteristics.OidRequestHandler == NULL)
         {
-            DbgPrint("NDIS6: OidRequestHandler is NULL\n");
+            DPRINT1("NDIS6: OidRequestHandler is NULL\n");
             return NDIS_STATUS_NOT_SUPPORTED;
         }
     }
@@ -587,7 +587,7 @@ Ndis6iSubmitOidRequest(
 #if NDIS_SUPPORT_NDIS61
         MINIPORT_OID_REQUEST *DirectHandler =
             (MINIPORT_OID_REQUEST*)DriverBlock->Characteristics.DirectOidRequestHandler;
-        DbgPrint("NDIS6: Calling DirectOidRequestHandler for OID 0x%08x\n", Oid);
+        DPRINT1("NDIS6: Calling DirectOidRequestHandler for OID 0x%08x\n", Oid);
         Status = DirectHandler(MiniportAdapterContext, Request);
 #else
         Status = NDIS_STATUS_NOT_SUPPORTED;
@@ -595,11 +595,11 @@ Ndis6iSubmitOidRequest(
     }
     else
     {
-        DbgPrint("NDIS6: Calling OidRequestHandler for OID 0x%08x\n", Oid);
+        DPRINT1("NDIS6: Calling OidRequestHandler for OID 0x%08x\n", Oid);
         Status = DriverBlock->Characteristics.OidRequestHandler(MiniportAdapterContext, Request);
     }
 
-    DbgPrint("NDIS6: OidRequestHandler returned 0x%x\n", Status);
+    DPRINT1("NDIS6: OidRequestHandler returned 0x%x\n", Status);
 
     /*
      * If the request completed synchronously (not PENDING),
@@ -616,7 +616,7 @@ Ndis6iSubmitOidRequest(
         Ndis6iFreeOidRequestContext(Context);
     }
 
-    DbgPrint("NDIS6: Ndis6iSubmitOidRequest returning 0x%x\n", Status);
+    DPRINT("NDIS6: Ndis6iSubmitOidRequest returning 0x%x\n", Status);
 
     return Status;
 }
@@ -646,8 +646,8 @@ Ndis6iSynchronousOidRequest(
     NTSTATUS WaitStatus;
     LARGE_INTEGER Timeout;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Ndis6iSynchronousOidRequest: Handle=%p, Request=%p\n",
-        MiniportHandle, Request));
+    DPRINT1("Ndis6iSynchronousOidRequest: Handle=%p, Request=%p\n",
+        MiniportHandle, Request);
 
     /* Submit the request */
     Status = Ndis6iSubmitOidRequest(MiniportHandle, Request, FALSE);
@@ -662,7 +662,7 @@ Ndis6iSynchronousOidRequest(
     Context = Ndis6iFindOidRequestContext(MiniportHandle, Request);
     if (Context == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Context not found after submit\n"));
+        DPRINT1("Context not found after submit\n");
         return NDIS_STATUS_FAILURE;
     }
 
@@ -686,7 +686,7 @@ Ndis6iSynchronousOidRequest(
 
     if (WaitStatus == STATUS_TIMEOUT)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Synchronous OID request timed out\n"));
+        DPRINT1("Synchronous OID request timed out\n");
         Context->IsCancelled = TRUE;
         Status = NDIS_STATUS_REQUEST_ABORTED;
     }
@@ -698,7 +698,7 @@ Ndis6iSynchronousOidRequest(
     /* Free the context */
     Ndis6iFreeOidRequestContext(Context);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Ndis6iSynchronousOidRequest returning 0x%x\n", Status));
+    DPRINT("Ndis6iSynchronousOidRequest returning 0x%x\n", Status);
 
     return Status;
 }
@@ -728,8 +728,8 @@ Ndis6iMapLegacyOidToNdis6(
 {
     PNDIS_OID_REQUEST Request;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Ndis6iMapLegacyOidToNdis6: LegacyRequest=%p\n",
-        LegacyRequest));
+    DPRINT1("Ndis6iMapLegacyOidToNdis6: LegacyRequest=%p\n",
+        LegacyRequest);
 
     if (LegacyRequest == NULL || Ndis6Request == NULL)
     {
@@ -744,7 +744,7 @@ Ndis6iMapLegacyOidToNdis6(
                                     NDIS_TAG);
     if (Request == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate NDIS_OID_REQUEST\n"));
+        DPRINT1("Failed to allocate NDIS_OID_REQUEST\n");
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -789,15 +789,15 @@ Ndis6iMapLegacyOidToNdis6(
             break;
 
         default:
-            NDIS_DbgPrint(MIN_TRACE, ("Unsupported legacy request type: %d\n",
-                LegacyRequest->RequestType));
+            DPRINT1("Unsupported legacy request type: %d\n",
+                LegacyRequest->RequestType);
             ExFreePoolWithTag(Request, NDIS_TAG);
             return NDIS_STATUS_NOT_SUPPORTED;
     }
 
     *Ndis6Request = Request;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Mapped legacy request to NDIS 6.x request %p\n", Request));
+    DPRINT1("Mapped legacy request to NDIS 6.x request %p\n", Request);
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -886,14 +886,14 @@ Ndis6iHandleOidRequest(
     PNDIS6_MINIPORT_DRIVER_BLOCK DriverBlock;
     PVOID MiniportAdapterContext;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Ndis6iHandleOidRequest - Adapter=%p, Request=%p, Type=%d\n",
-             Adapter, NdisRequest, NdisRequest->RequestType));
+    DPRINT("Ndis6iHandleOidRequest - Adapter=%p, Request=%p, Type=%d\n",
+           Adapter, NdisRequest, NdisRequest->RequestType);
 
     /* Get the device object from the miniport block */
     DeviceObject = Adapter->NdisMiniportBlock.DeviceObject;
     if (DeviceObject == NULL || DeviceObject->DeviceExtension == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("No device object\n"));
+        DPRINT1("No device object\n");
         return NDIS_STATUS_FAILURE;
     }
 
@@ -903,13 +903,13 @@ Ndis6iHandleOidRequest(
 
     if (DriverBlock == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("No driver block\n"));
+        DPRINT1("No driver block\n");
         return NDIS_STATUS_FAILURE;
     }
 
     if (DriverBlock->Characteristics.OidRequestHandler == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("No OidRequestHandler\n"));
+        DPRINT1("No OidRequestHandler\n");
         return NDIS_STATUS_NOT_SUPPORTED;
     }
 
@@ -938,7 +938,7 @@ Ndis6iHandleOidRequest(
             OidRequest.DATA.QUERY_INFORMATION.BytesWritten = 0;
             OidRequest.DATA.QUERY_INFORMATION.BytesNeeded = 0;
 
-            NDIS_DbgPrint(MAX_TRACE, ("Query OID 0x%08x\n", OidRequest.DATA.QUERY_INFORMATION.Oid));
+            DPRINT("Query OID 0x%08x\n", OidRequest.DATA.QUERY_INFORMATION.Oid);
             break;
 
         case NdisRequestSetInformation:
@@ -951,11 +951,11 @@ Ndis6iHandleOidRequest(
             OidRequest.DATA.SET_INFORMATION.BytesRead = 0;
             OidRequest.DATA.SET_INFORMATION.BytesNeeded = 0;
 
-            NDIS_DbgPrint(MAX_TRACE, ("Set OID 0x%08x\n", OidRequest.DATA.SET_INFORMATION.Oid));
+            DPRINT("Set OID 0x%08x\n", OidRequest.DATA.SET_INFORMATION.Oid);
             break;
 
         default:
-            NDIS_DbgPrint(MIN_TRACE, ("Unsupported request type %d\n", NdisRequest->RequestType));
+            DPRINT1("Unsupported request type %d\n", NdisRequest->RequestType);
             return NDIS_STATUS_NOT_SUPPORTED;
     }
 
@@ -964,7 +964,7 @@ Ndis6iHandleOidRequest(
                 MiniportAdapterContext,
                 &OidRequest);
 
-    NDIS_DbgPrint(MAX_TRACE, ("OidRequestHandler returned 0x%x\n", Status));
+    DPRINT("OidRequestHandler returned 0x%x\n", Status);
 
     /* Copy results back to legacy request */
     if (Status != NDIS_STATUS_PENDING)

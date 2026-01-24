@@ -443,7 +443,7 @@ E1000QueryInformation(
             return Status;
 
         default:
-            DbgPrint("E1000: Unsupported query OID 0x%08x\n", Oid);
+            DPRINT1("E1000: Unsupported query OID 0x%08x\n", Oid);
             Status = NDIS_STATUS_NOT_SUPPORTED;
             return Status;
     }
@@ -635,7 +635,7 @@ E1000SetInformation(
             break;
 
         default:
-            DbgPrint("E1000: Unsupported set OID 0x%08x\n", Oid);
+            DPRINT1("E1000: Unsupported set OID 0x%08x\n", Oid);
             Status = NDIS_STATUS_NOT_SUPPORTED;
             break;
     }

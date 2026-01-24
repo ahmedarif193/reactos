@@ -323,7 +323,7 @@ MiniportQueryInformation(
     }
 
     default:
-        NDIS_DbgPrint(MIN_TRACE, ("Unknown OID 0x%x(%s)\n", Oid, Oid2Str(Oid)));
+        DPRINT1("Unknown OID 0x%x(%s)\n", Oid, Oid2Str(Oid));
         status = NDIS_STATUS_NOT_SUPPORTED;
         break;
     }
@@ -349,8 +349,8 @@ MiniportQueryInformation(
         *BytesNeeded = 0;
     }
 
-    NDIS_DbgPrint(MAX_TRACE, ("Query OID 0x%x(%s): Completed with status 0x%x (%d, %d)\n",
-                              Oid, Oid2Str(Oid), status, *BytesWritten, *BytesNeeded));
+    DPRINT("Query OID 0x%x(%s): Completed with status 0x%x (%d, %d)\n",
+                              Oid, Oid2Str(Oid), status, *BytesWritten, *BytesNeeded);
     return status;
 }
 
@@ -407,7 +407,7 @@ MiniportSetInformation(
         status = NICApplyPacketFilter(Adapter);
         if (status != NDIS_STATUS_SUCCESS)
         {
-            NDIS_DbgPrint(MIN_TRACE, ("Failed to apply new packet filter (0x%x)\n", status));
+            DPRINT1("Failed to apply new packet filter (0x%x)\n", status);
             break;
         }
 
@@ -473,8 +473,8 @@ MiniportSetInformation(
 
         NdisMoveMemory(&NewPowerState, InformationBuffer, sizeof(NDIS_DEVICE_POWER_STATE));
 
-        NDIS_DbgPrint(MID_TRACE, ("OID_PNP_SET_POWER: Transitioning to D%d\n",
-                                  NewPowerState - NdisDeviceStateD0));
+        DPRINT1("OID_PNP_SET_POWER: Transitioning to D%d\n",
+                                  NewPowerState - NdisDeviceStateD0);
 
         status = NICSetPowerState(Adapter, NewPowerState);
 
@@ -500,8 +500,8 @@ MiniportSetInformation(
         Adapter->WakeOnMagicPacket = (WakeUpFlags & NDIS_PNP_WAKE_UP_MAGIC_PACKET) ? TRUE : FALSE;
         Adapter->WakeOnLinkChange = (WakeUpFlags & NDIS_PNP_WAKE_UP_LINK_CHANGE) ? TRUE : FALSE;
 
-        NDIS_DbgPrint(MID_TRACE, ("Wake-up enabled: Magic=%d, Link=%d\n",
-                                  Adapter->WakeOnMagicPacket, Adapter->WakeOnLinkChange));
+        DPRINT1("Wake-up enabled: Magic=%d, Link=%d\n",
+                                  Adapter->WakeOnMagicPacket, Adapter->WakeOnLinkChange);
 
         *BytesRead = sizeof(ULONG);
         *BytesNeeded = 0;
@@ -509,7 +509,7 @@ MiniportSetInformation(
     }
 
     default:
-        NDIS_DbgPrint(MIN_TRACE, ("Unknown OID 0x%x(%s)\n", Oid, Oid2Str(Oid)));
+        DPRINT1("Unknown OID 0x%x(%s)\n", Oid, Oid2Str(Oid));
         status = NDIS_STATUS_NOT_SUPPORTED;
         *BytesRead = 0;
         *BytesNeeded = 0;

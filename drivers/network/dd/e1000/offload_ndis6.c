@@ -90,7 +90,7 @@ E1000InitializeOffloadCapabilities(
     Adapter->ChecksumOffload.RxTcpChecksumEnabled = TRUE;
     Adapter->ChecksumOffload.RxUdpChecksumEnabled = TRUE;
 
-    DbgPrint("E1000: Offload capabilities initialized (IPv4 TX/RX checksum enabled)\n");
+    DPRINT1("E1000: Offload capabilities initialized (IPv4 TX/RX checksum enabled)\n");
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -233,7 +233,7 @@ E1000SetOffloadParameters(
         E1000_WRITE_REG(Adapter, E1000_REG_RXCSUM, RxcsumValue);
     }
 
-    DbgPrint("E1000: Offload parameters updated - IP TX=%d RX=%d, TCP TX=%d RX=%d, UDP TX=%d RX=%d\n",
+    DPRINT1("E1000: Offload parameters updated - IP TX=%d RX=%d, TCP TX=%d RX=%d, UDP TX=%d RX=%d\n",
              Adapter->ChecksumOffload.TxIpChecksumEnabled,
              Adapter->ChecksumOffload.RxIpChecksumEnabled,
              Adapter->ChecksumOffload.TxTcpChecksumEnabled,

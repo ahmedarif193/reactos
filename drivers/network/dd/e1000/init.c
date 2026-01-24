@@ -24,7 +24,6 @@ PDRIVER_OBJECT g_DriverObject = NULL;
 
 /* Debug trace level */
 #if DBG
-ULONG DebugTraceLevel = MIN_TRACE | DEBUG_INIT | DEBUG_LINK;
 #endif
 
 /* ============================================================================
@@ -69,11 +68,11 @@ DriverEntry(
     NDIS_STATUS Status;
     NDIS_MINIPORT_DRIVER_CHARACTERISTICS MiniportChars;
 
-    DbgPrint("E1000: ========== DRIVER ENTRY ==========\n");
-    DbgPrint("E1000: ReactOS Intel PRO/1000 NDIS 6.x Driver\n");
-    DbgPrint("E1000: Version %u.%u, Build Date: " __DATE__ " " __TIME__ "\n",
+    DPRINT1("E1000: ========== DRIVER ENTRY ==========\n");
+    DPRINT1("E1000: ReactOS Intel PRO/1000 NDIS 6.x Driver\n");
+    DPRINT1("E1000: Version %u.%u, Build Date: " __DATE__ " " __TIME__ "\n",
              DRIVER_VERSION >> 8, DRIVER_VERSION & 0xFF);
-    DbgPrint("E1000: NDIS Version: %u.%u\n", NDIS_MINIPORT_MAJOR_VERSION, NDIS_MINIPORT_MINOR_VERSION);
+    DPRINT1("E1000: NDIS Version: %u.%u\n", NDIS_MINIPORT_MAJOR_VERSION, NDIS_MINIPORT_MINOR_VERSION);
 
     g_DriverObject = DriverObject;
 
@@ -112,7 +111,7 @@ DriverEntry(
     /* Set flags - NDIS 6.30 allows interrupt moderation */
     MiniportChars.Flags = 0;
 
-    DbgPrint("E1000: Registering miniport driver with NDIS 6.%d\n",
+    DPRINT("E1000: Registering miniport driver with NDIS 6.%d\n",
              NDIS_MINIPORT_MINOR_VERSION);
 
     /* Register with NDIS */
@@ -126,11 +125,11 @@ DriverEntry(
 
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: NdisRegisterMiniportDriver failed with status 0x%08x\n", Status);
+        DPRINT1("E1000: NdisRegisterMiniportDriver failed with status 0x%08x\n", Status);
         return Status;
     }
 
-    DbgPrint("E1000: Driver registered successfully, handle = %p\n", g_NdisMiniportDriverHandle);
+    DPRINT1("E1000: Driver registered successfully, handle = %p\n", g_NdisMiniportDriverHandle);
 
     return STATUS_SUCCESS;
 }
@@ -150,7 +149,7 @@ E1000MiniportDriverUnload(
 {
     UNREFERENCED_PARAMETER(DriverObject);
 
-    DbgPrint("E1000: MiniportDriverUnload\n");
+    DPRINT1("E1000: MiniportDriverUnload\n");
 
     if (g_NdisMiniportDriverHandle != NULL)
     {
@@ -158,7 +157,7 @@ E1000MiniportDriverUnload(
         g_NdisMiniportDriverHandle = NULL;
     }
 
-    DbgPrint("E1000: Driver unloaded\n");
+    DPRINT1("E1000: Driver unloaded\n");
 }
 
 
@@ -190,8 +189,8 @@ E1000MiniportInitializeEx(
 
     UNREFERENCED_PARAMETER(MiniportDriverContext);
 
-    DbgPrint("E1000: ========== ADAPTER INITIALIZATION START ==========\n");
-    DbgPrint("E1000: MiniportInitializeEx - NdisMiniportHandle=%p\n", NdisMiniportHandle);
+    DPRINT1("E1000: ========== ADAPTER INITIALIZATION START ==========\n");
+    DPRINT1("E1000: MiniportInitializeEx - NdisMiniportHandle=%p\n", NdisMiniportHandle);
 
     /* Allocate adapter context */
     Adapter = NdisAllocateMemoryWithTagPriority(
@@ -203,7 +202,7 @@ E1000MiniportInitializeEx(
 
     if (Adapter == NULL)
     {
-        DbgPrint("E1000: Failed to allocate adapter context\n");
+        DPRINT1("E1000: Failed to allocate adapter context\n");
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -224,12 +223,12 @@ E1000MiniportInitializeEx(
         if (DeviceObject != NULL && DeviceObject->DeviceExtension != NULL)
         {
             Adapter->PhysicalDeviceObject = ((PVOID*)DeviceObject->DeviceExtension)[1];
-            DbgPrint("E1000: Extracted PDO=%p from DeviceObject=%p\n",
+            DPRINT1("E1000: Extracted PDO=%p from DeviceObject=%p\n",
                      Adapter->PhysicalDeviceObject, DeviceObject);
         }
         else
         {
-            DbgPrint("E1000: Warning - Could not extract PDO from MiniportHandle\n");
+            DPRINT1("E1000: Warning - Could not extract PDO from MiniportHandle\n");
             Adapter->PhysicalDeviceObject = NULL;
         }
     }
@@ -246,7 +245,7 @@ E1000MiniportInitializeEx(
     Status = E1000SetRegistrationAttributes(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: Failed to set registration attributes: 0x%08x\n", Status);
+        DPRINT1("E1000: Failed to set registration attributes: 0x%08x\n", Status);
         goto Cleanup;
     }
 
@@ -254,7 +253,7 @@ E1000MiniportInitializeEx(
     ResourceList = MiniportInitParameters->AllocatedResources;
     if (ResourceList == NULL)
     {
-        DbgPrint("E1000: No resources allocated for adapter\n");
+        DPRINT1("E1000: No resources allocated for adapter\n");
         Status = NDIS_STATUS_RESOURCES;
         goto Cleanup;
     }
@@ -263,27 +262,27 @@ E1000MiniportInitializeEx(
     Status = E1000MapHardwareResources(Adapter, ResourceList);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: Failed to map hardware resources: 0x%08x\n", Status);
+        DPRINT1("E1000: Failed to map hardware resources: 0x%08x\n", Status);
         goto Cleanup;
     }
 
     /* Verify this is a supported Intel E1000 device */
     if (!E1000RecognizeHardware(Adapter))
     {
-        DbgPrint("E1000: Unrecognized hardware (Vendor=0x%04x, Device=0x%04x)\n",
+        DPRINT1("E1000: Unrecognized hardware (Vendor=0x%04x, Device=0x%04x)\n",
                  Adapter->VendorId, Adapter->DeviceId);
         Status = NDIS_STATUS_ADAPTER_NOT_FOUND;
         goto Cleanup;
     }
 
-    DbgPrint("E1000: Found Intel E1000 device (0x%04x:0x%04x), IsPCIe=%d\n",
+    DPRINT1("E1000: Found Intel E1000 device (0x%04x:0x%04x), IsPCIe=%d\n",
              Adapter->VendorId, Adapter->DeviceId, Adapter->IsPCIe);
 
     /* Allocate adapter hardware resources (descriptor rings, buffers) */
     Status = E1000AllocateAdapterResources(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: Failed to allocate adapter resources: 0x%08x\n", Status);
+        DPRINT1("E1000: Failed to allocate adapter resources: 0x%08x\n", Status);
         goto Cleanup;
     }
 
@@ -291,7 +290,7 @@ E1000MiniportInitializeEx(
     Status = E1000InitializeHardware(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: Failed to initialize hardware: 0x%08x\n", Status);
+        DPRINT1("E1000: Failed to initialize hardware: 0x%08x\n", Status);
         goto Cleanup;
     }
 
@@ -299,11 +298,11 @@ E1000MiniportInitializeEx(
     Status = E1000ReadMacAddress(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: Failed to read MAC address: 0x%08x\n", Status);
+        DPRINT1("E1000: Failed to read MAC address: 0x%08x\n", Status);
         goto Cleanup;
     }
 
-    DbgPrint("E1000: MAC Address: %02x:%02x:%02x:%02x:%02x:%02x\n",
+    DPRINT1("E1000: MAC Address: %02x:%02x:%02x:%02x:%02x:%02x\n",
              Adapter->PermanentMacAddress[0], Adapter->PermanentMacAddress[1],
              Adapter->PermanentMacAddress[2], Adapter->PermanentMacAddress[3],
              Adapter->PermanentMacAddress[4], Adapter->PermanentMacAddress[5]);
@@ -317,7 +316,7 @@ E1000MiniportInitializeEx(
         Status = E1000InitializeTxQueue(Adapter, i);
         if (Status != NDIS_STATUS_SUCCESS)
         {
-            DbgPrint("E1000: Failed to initialize TX queue %u: 0x%08x\n", i, Status);
+            DPRINT1("E1000: Failed to initialize TX queue %u: 0x%08x\n", i, Status);
             goto Cleanup;
         }
     }
@@ -328,7 +327,7 @@ E1000MiniportInitializeEx(
         Status = E1000InitializeRxQueue(Adapter, i);
         if (Status != NDIS_STATUS_SUCCESS)
         {
-            DbgPrint("E1000: Failed to initialize RX queue %u: 0x%08x\n", i, Status);
+            DPRINT1("E1000: Failed to initialize RX queue %u: 0x%08x\n", i, Status);
             goto Cleanup;
         }
     }
@@ -337,7 +336,7 @@ E1000MiniportInitializeEx(
     Status = E1000RegisterInterrupt(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: Failed to register interrupt: 0x%08x\n", Status);
+        DPRINT("E1000: Failed to register interrupt: 0x%08x\n", Status);
         goto Cleanup;
     }
 
@@ -345,7 +344,7 @@ E1000MiniportInitializeEx(
     Status = E1000SetGeneralAttributes(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: Failed to set general attributes: 0x%08x\n", Status);
+        DPRINT1("E1000: Failed to set general attributes: 0x%08x\n", Status);
         goto Cleanup;
     }
 
@@ -353,7 +352,7 @@ E1000MiniportInitializeEx(
     Status = E1000SetOffloadAttributes(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: Failed to set offload attributes: 0x%08x\n", Status);
+        DPRINT1("E1000: Failed to set offload attributes: 0x%08x\n", Status);
         goto Cleanup;
     }
 
@@ -361,7 +360,7 @@ E1000MiniportInitializeEx(
     Status = E1000SetupLink(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: Failed to setup link: 0x%08x\n", Status);
+        DPRINT1("E1000: Failed to setup link: 0x%08x\n", Status);
         /* Non-fatal - link may come up later */
     }
 
@@ -372,21 +371,21 @@ E1000MiniportInitializeEx(
     E1000EnableInterrupts(Adapter);
 
     /* Print initialization summary */
-    DbgPrint("E1000: ========== INITIALIZATION COMPLETE ==========\n");
-    DbgPrint("E1000: Device: 0x%04x:0x%04x, PCIe=%d\n",
+    DPRINT1("E1000: ========== INITIALIZATION COMPLETE ==========\n");
+    DPRINT1("E1000: Device: 0x%04x:0x%04x, PCIe=%d\n",
              Adapter->VendorId, Adapter->DeviceId, Adapter->IsPCIe);
-    DbgPrint("E1000: MAC Address: %02x:%02x:%02x:%02x:%02x:%02x\n",
+    DPRINT1("E1000: MAC Address: %02x:%02x:%02x:%02x:%02x:%02x\n",
              Adapter->PermanentMacAddress[0], Adapter->PermanentMacAddress[1],
              Adapter->PermanentMacAddress[2], Adapter->PermanentMacAddress[3],
              Adapter->PermanentMacAddress[4], Adapter->PermanentMacAddress[5]);
-    DbgPrint("E1000: I/O Base: %p (PA: 0x%I64x, Len: %u)\n",
+    DPRINT1("E1000: I/O Base: %p (PA: 0x%I64x, Len: %u)\n",
              Adapter->IoBase, Adapter->IoAddress.QuadPart, Adapter->IoLength);
-    DbgPrint("E1000: Interrupt: Vector=%u Level=%u Shared=%d\n",
+    DPRINT("E1000: Interrupt: Vector=%u Level=%u Shared=%d\n",
              Adapter->InterruptVector, Adapter->InterruptLevel, Adapter->InterruptShared);
-    DbgPrint("E1000: Queues: TX=%u RX=%u\n", Adapter->TxQueueCount, Adapter->RxQueueCount);
-    DbgPrint("E1000: DMA Handle: %p, NBL Pool: %p\n",
+    DPRINT1("E1000: Queues: TX=%u RX=%u\n", Adapter->TxQueueCount, Adapter->RxQueueCount);
+    DPRINT1("E1000: DMA Handle: %p, NBL Pool: %p\n",
              Adapter->DmaAdapterHandle, Adapter->RxNblPool);
-    DbgPrint("E1000: ==============================================\n");
+    DPRINT1("E1000: ==============================================\n");
 
     return NDIS_STATUS_SUCCESS;
 
@@ -421,7 +420,7 @@ E1000MiniportHaltEx(
 
     UNREFERENCED_PARAMETER(HaltAction);
 
-    DbgPrint("E1000: MiniportHaltEx - Halting adapter (Action=%d)\n", HaltAction);
+    DPRINT1("E1000: MiniportHaltEx - Halting adapter (Action=%d)\n", HaltAction);
 
     if (Adapter == NULL)
     {
@@ -474,7 +473,7 @@ E1000MiniportHaltEx(
     /* Free adapter context */
     NdisFreeMemory(Adapter, sizeof(E1000_ADAPTER), 0);
 
-    DbgPrint("E1000: Adapter halted\n");
+    DPRINT1("E1000: Adapter halted\n");
 }
 
 
@@ -491,7 +490,7 @@ E1000MiniportShutdownEx(
 {
     PE1000_ADAPTER Adapter = (PE1000_ADAPTER)MiniportAdapterContext;
 
-    DbgPrint("E1000: MiniportShutdownEx (Action=%d)\n", ShutdownAction);
+    DPRINT1("E1000: MiniportShutdownEx (Action=%d)\n", ShutdownAction);
 
     if (Adapter == NULL || Adapter->IoBase == NULL)
     {
@@ -531,16 +530,16 @@ E1000MiniportDevicePnPEventNotify(
     switch (NetDevicePnPEvent->DevicePnPEvent)
     {
         case NdisDevicePnPEventSurpriseRemoved:
-            DbgPrint("E1000: Surprise removal detected\n");
+            DPRINT1("E1000: Surprise removal detected\n");
             InterlockedOr(&Adapter->Flags, E1000_FLAG_ADAPTER_HALTING);
             break;
 
         case NdisDevicePnPEventPowerProfileChanged:
-            DbgPrint("E1000: Power profile changed\n");
+            DPRINT1("E1000: Power profile changed\n");
             break;
 
         default:
-            DbgPrint("E1000: PnP event %d\n", NetDevicePnPEvent->DevicePnPEvent);
+            DPRINT1("E1000: PnP event %d\n", NetDevicePnPEvent->DevicePnPEvent);
             break;
     }
 }
@@ -756,7 +755,7 @@ E1000QueryBusInterface(
 
     if (Adapter->PhysicalDeviceObject == NULL)
     {
-        DbgPrint("E1000: No PDO available for bus interface query\n");
+        DPRINT1("E1000: No PDO available for bus interface query\n");
         return NDIS_STATUS_FAILURE;
     }
 
@@ -775,7 +774,7 @@ E1000QueryBusInterface(
     if (Irp == NULL)
     {
         ObDereferenceObject(TargetDevice);
-        DbgPrint("E1000: Failed to allocate IRP for bus interface query\n");
+        DPRINT1("E1000: Failed to allocate IRP for bus interface query\n");
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -802,12 +801,12 @@ E1000QueryBusInterface(
 
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("E1000: Bus interface query failed: 0x%x\n", Status);
+        DPRINT1("E1000: Bus interface query failed: 0x%x\n", Status);
         return NDIS_STATUS_FAILURE;
     }
 
     Adapter->BusInterfaceValid = TRUE;
-    DbgPrint("E1000: Successfully obtained BUS_INTERFACE_STANDARD from PDO\n");
+    DPRINT1("E1000: Successfully obtained BUS_INTERFACE_STANDARD from PDO\n");
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -839,7 +838,7 @@ E1000ReadPciConfig(
     }
 
     /* Fallback: use HAL with bus 0, slot 0 (this is wrong but better than nothing) */
-    DbgPrint("E1000: Warning - Using fallback PCI config read (may read wrong device)\n");
+    DPRINT1("E1000: Warning - Using fallback PCI config read (may read wrong device)\n");
     return HalGetBusDataByOffset(PCIConfiguration, 0, 0, Buffer, Offset, Length);
 }
 
@@ -859,7 +858,7 @@ E1000MapHardwareResources(
     BOOLEAN FoundMemory = FALSE;
     BOOLEAN FoundInterrupt = FALSE;
 
-    DbgPrint("E1000: Parsing %u resources\n", ResourceList->Count);
+    DPRINT1("E1000: Parsing %u resources\n", ResourceList->Count);
 
     for (i = 0; i < ResourceList->Count; i++)
     {
@@ -888,12 +887,12 @@ E1000MapHardwareResources(
 
                     if (Adapter->IoBase == NULL)
                     {
-                        DbgPrint("E1000: Failed to map I/O memory\n");
+                        DPRINT1("E1000: Failed to map I/O memory\n");
                         return NDIS_STATUS_RESOURCES;
                     }
 
                     FoundMemory = TRUE;
-                    DbgPrint("E1000: Mapped memory BAR0 at %p (PA: 0x%I64x, Len: %u)\n",
+                    DPRINT1("E1000: Mapped memory BAR0 at %p (PA: 0x%I64x, Len: %u)\n",
                              Adapter->IoBase, Adapter->IoAddress.QuadPart, Adapter->IoLength);
                 }
                 else if (Resource->u.Memory.Length == (16 * 1024))
@@ -901,7 +900,7 @@ E1000MapHardwareResources(
                     /* MSI-X BAR */
                     Adapter->MsixAddress = Resource->u.Memory.Start;
                     Adapter->MsixLength = Resource->u.Memory.Length;
-                    DbgPrint("E1000: Found MSI-X BAR at 0x%I64x (Len: %u)\n",
+                    DPRINT("E1000: Found MSI-X BAR at 0x%I64x (Len: %u)\n",
                              Adapter->MsixAddress.QuadPart, Adapter->MsixLength);
                 }
                 break;
@@ -909,7 +908,7 @@ E1000MapHardwareResources(
             case CmResourceTypePort:
                 Adapter->IoPortAddress = Resource->u.Port.Start.LowPart;
                 Adapter->IoPortLength = Resource->u.Port.Length;
-                DbgPrint("E1000: Found I/O port at 0x%x (Len: %u)\n",
+                DPRINT1("E1000: Found I/O port at 0x%x (Len: %u)\n",
                          Adapter->IoPortAddress, Adapter->IoPortLength);
                 break;
 
@@ -923,7 +922,7 @@ E1000MapHardwareResources(
                  * MSI:    u.MessageInterrupt.Translated.Level/Vector/Affinity
                  *         u.MessageInterrupt.Raw.MessageCount indicates number of MSI vectors
                  */
-                DbgPrint("E1000: Interrupt resource: Type=%d, Flags=0x%04x, ShareDisp=%d\n",
+                DPRINT("E1000: Interrupt resource: Type=%d, Flags=0x%04x, ShareDisp=%d\n",
                          Resource->Type, Resource->Flags, Resource->ShareDisposition);
 
                 if (Resource->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
@@ -939,12 +938,12 @@ E1000MapHardwareResources(
                     /* Check if we have multiple MSI vectors (MSI-X) */
                     /* Note: MessageCount in Raw structure indicates allocated vectors */
 
-                    DbgPrint("E1000: MESSAGE interrupt detected!\n");
-                    DbgPrint("E1000:   Translated: Vector=%u, Level=%u, Affinity=0x%Ix\n",
+                    DPRINT("E1000: MESSAGE interrupt detected!\n");
+                    DPRINT1("E1000:   Translated: Vector=%u, Level=%u, Affinity=0x%Ix\n",
                              Resource->u.MessageInterrupt.Translated.Vector,
                              Resource->u.MessageInterrupt.Translated.Level,
                              (ULONG_PTR)Resource->u.MessageInterrupt.Translated.Affinity);
-                    DbgPrint("E1000:   Raw: Reserved=%u, MessageCount=%u, Vector=%u, Affinity=0x%Ix\n",
+                    DPRINT1("E1000:   Raw: Reserved=%u, MessageCount=%u, Vector=%u, Affinity=0x%Ix\n",
                              Resource->u.MessageInterrupt.Raw.Reserved,
                              Resource->u.MessageInterrupt.Raw.MessageCount,
                              Resource->u.MessageInterrupt.Raw.Vector,
@@ -961,27 +960,27 @@ E1000MapHardwareResources(
                     Adapter->InterruptShared = (Resource->ShareDisposition == CmResourceShareShared);
                     Adapter->HasMessageInterrupt = FALSE;
 
-                    DbgPrint("E1000: Legacy interrupt detected\n");
-                    DbgPrint("E1000:   Vector=%u, Level=%u, Affinity=0x%Ix, Shared=%d\n",
+                    DPRINT("E1000: Legacy interrupt detected\n");
+                    DPRINT1("E1000:   Vector=%u, Level=%u, Affinity=0x%Ix, Shared=%d\n",
                              Adapter->InterruptVector, Adapter->InterruptLevel,
                              (ULONG_PTR)Adapter->InterruptAffinity, Adapter->InterruptShared);
                 }
 
                 FoundInterrupt = TRUE;
-                DbgPrint("E1000: Found interrupt: Vector=%u, Level=%u, Shared=%d, MessageInt=%d\n",
+                DPRINT("E1000: Found interrupt: Vector=%u, Level=%u, Shared=%d, MessageInt=%d\n",
                          Adapter->InterruptVector, Adapter->InterruptLevel,
                          Adapter->InterruptShared, Adapter->HasMessageInterrupt);
                 break;
 
             default:
-                DbgPrint("E1000: Unknown resource type %d\n", Resource->Type);
+                DPRINT1("E1000: Unknown resource type %d\n", Resource->Type);
                 break;
         }
     }
 
     if (!FoundMemory || !FoundInterrupt)
     {
-        DbgPrint("E1000: Missing required resources (Memory=%d, Interrupt=%d)\n",
+        DPRINT("E1000: Missing required resources (Memory=%d, Interrupt=%d)\n",
                  FoundMemory, FoundInterrupt);
         return NDIS_STATUS_RESOURCES;
     }
@@ -997,7 +996,7 @@ E1000MapHardwareResources(
         /* Query the bus interface from PDO - this must be done first */
         if (E1000QueryBusInterface(Adapter) != NDIS_STATUS_SUCCESS)
         {
-            DbgPrint("E1000: Warning - Failed to query bus interface, PCI config reads may fail\n");
+            DPRINT1("E1000: Warning - Failed to query bus interface, PCI config reads may fail\n");
         }
 
         BytesRead = E1000ReadPciConfig(Adapter, 0, &PciConfig, sizeof(PCI_COMMON_CONFIG));
@@ -1010,11 +1009,11 @@ E1000MapHardwareResources(
             Adapter->SubsystemId = PciConfig.u.type0.SubSystemID;
             Adapter->RevisionId = PciConfig.RevisionID;
 
-            DbgPrint("E1000: ========== PCI CONFIGURATION ==========\n");
-            DbgPrint("E1000: Vendor=0x%04x Device=0x%04x SubVendor=0x%04x SubDevice=0x%04x\n",
+            DPRINT1("E1000: ========== PCI CONFIGURATION ==========\n");
+            DPRINT1("E1000: Vendor=0x%04x Device=0x%04x SubVendor=0x%04x SubDevice=0x%04x\n",
                      Adapter->VendorId, Adapter->DeviceId,
                      Adapter->SubsystemVendorId, Adapter->SubsystemId);
-            DbgPrint("E1000: Revision=%u Command=0x%04x Status=0x%04x\n",
+            DPRINT1("E1000: Revision=%u Command=0x%04x Status=0x%04x\n",
                      Adapter->RevisionId, PciConfig.Command, PciConfig.Status);
 
             /* Parse PCI capability list to find and log MSI/MSI-X capabilities */
@@ -1024,7 +1023,7 @@ E1000MapHardwareResources(
                 ULONG CapReadCount = 0;
                 const ULONG MaxCaps = 48;
 
-                DbgPrint("E1000: PCI Capability List:\n");
+                DPRINT1("E1000: PCI Capability List:\n");
 
                 while (CapPtr != 0 && CapReadCount < MaxCaps)
                 {
@@ -1035,7 +1034,7 @@ E1000MapHardwareResources(
                     CapId = CapData[0];
                     NextPtr = CapData[1];
 
-                    DbgPrint("E1000:   [0x%02x] Cap ID=0x%02x (%s)\n",
+                    DPRINT1("E1000:   [0x%02x] Cap ID=0x%02x (%s)\n",
                              CapPtr, CapId,
                              (CapId == 0x05) ? "MSI" :
                              (CapId == 0x10) ? "PCIe" :
@@ -1056,12 +1055,12 @@ E1000MapHardwareResources(
                         MsiEnableVectors = 1 << ((MsiControl >> 4) & 0x7);
                         Is64Bit = (MsiControl & 0x80) != 0;
 
-                        DbgPrint("E1000:       MSI Control=0x%04x Enable=%d MaxVectors=%u EnabledVectors=%u 64Bit=%d\n",
+                        DPRINT("E1000:       MSI Control=0x%04x Enable=%d MaxVectors=%u EnabledVectors=%u 64Bit=%d\n",
                                  MsiControl, (MsiControl & 0x01) ? 1 : 0,
                                  MsiMaxVectors, MsiEnableVectors, Is64Bit);
 
                         E1000ReadPciConfig(Adapter, CapPtr + 4, &MsiAddrLo, sizeof(MsiAddrLo));
-                        DbgPrint("E1000:       Message Address Low=0x%08x\n", MsiAddrLo);
+                        DPRINT1("E1000:       Message Address Low=0x%08x\n", MsiAddrLo);
 
                         if (Is64Bit)
                         {
@@ -1071,7 +1070,7 @@ E1000MapHardwareResources(
                         {
                             E1000ReadPciConfig(Adapter, CapPtr + 8, &MsiData, sizeof(MsiData));
                         }
-                        DbgPrint("E1000:       Message Data=0x%04x (vector %u)\n", MsiData, MsiData & 0xFF);
+                        DPRINT1("E1000:       Message Data=0x%04x (vector %u)\n", MsiData, MsiData & 0xFF);
                     }
                     else if (CapId == 0x11) /* MSI-X */
                     {
@@ -1090,12 +1089,12 @@ E1000MapHardwareResources(
                         MsixPbaOffset &= ~0x7;
                         TableSize = (MsixControl & 0x7FF) + 1;
 
-                        DbgPrint("E1000:       MSI-X Control=0x%04x Enable=%d FunctionMask=%d TableSize=%u\n",
+                        DPRINT("E1000:       MSI-X Control=0x%04x Enable=%d FunctionMask=%d TableSize=%u\n",
                                  MsixControl,
                                  (MsixControl & 0x8000) ? 1 : 0,
                                  (MsixControl & 0x4000) ? 1 : 0,
                                  TableSize);
-                        DbgPrint("E1000:       Table: BAR%u Offset=0x%x  PBA: BAR%u Offset=0x%x\n",
+                        DPRINT1("E1000:       Table: BAR%u Offset=0x%x  PBA: BAR%u Offset=0x%x\n",
                                  TableBir, MsixTableOffset, PbaBir, MsixPbaOffset);
                     }
 
@@ -1105,13 +1104,13 @@ E1000MapHardwareResources(
             }
             else
             {
-                DbgPrint("E1000: No PCI capabilities (Status=0x%04x)\n", PciConfig.Status);
+                DPRINT1("E1000: No PCI capabilities (Status=0x%04x)\n", PciConfig.Status);
             }
-            DbgPrint("E1000: ==========================================\n");
+            DPRINT1("E1000: ==========================================\n");
         }
         else
         {
-            DbgPrint("E1000: Warning - Could not read PCI config space (read %u bytes)\n", BytesRead);
+            DPRINT1("E1000: Warning - Could not read PCI config space (read %u bytes)\n", BytesRead);
             /* Set default vendor ID for Intel */
             Adapter->VendorId = 0x8086;
         }
@@ -1152,7 +1151,7 @@ E1000AllocateAdapterResources(
 
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: Failed to register scatter-gather DMA: 0x%08x\n", Status);
+        DPRINT1("E1000: Failed to register scatter-gather DMA: 0x%08x\n", Status);
         return Status;
     }
 
@@ -1174,12 +1173,12 @@ E1000AllocateAdapterResources(
 
     if (Adapter->RxNblPool == NULL)
     {
-        DbgPrint("E1000: Failed to allocate RX NBL pool\n");
+        DPRINT1("E1000: Failed to allocate RX NBL pool\n");
         NdisMDeregisterScatterGatherDma(Adapter->DmaAdapterHandle);
         return NDIS_STATUS_RESOURCES;
     }
 
-    DbgPrint("E1000: Allocated adapter resources - DMA handle=%p, NBL pool=%p\n",
+    DPRINT1("E1000: Allocated adapter resources - DMA handle=%p, NBL pool=%p\n",
              Adapter->DmaAdapterHandle, Adapter->RxNblPool);
 
     return NDIS_STATUS_SUCCESS;
@@ -1223,7 +1222,7 @@ E1000FreeAdapterResources(
         Adapter->MsixTableBase = NULL;
     }
 
-    DbgPrint("E1000: Freed adapter resources\n");
+    DPRINT1("E1000: Freed adapter resources\n");
 }
 
 
@@ -1256,7 +1255,7 @@ E1000ReadMacAddress(
     if ((RalLow == 0 && RalHigh == 0) ||
         (RalLow == 0xFFFFFFFF && RalHigh == 0xFFFFFFFF))
     {
-        DbgPrint("E1000: Invalid MAC address in RAL/RAH registers\n");
+        DPRINT1("E1000: Invalid MAC address in RAL/RAH registers\n");
         return NDIS_STATUS_FAILURE;
     }
 

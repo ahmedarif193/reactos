@@ -29,11 +29,10 @@ NdisIsPciBusInRange(
 
     if (BusNumber < MinBus || BusNumber > MaxBus)
     {
-        NDIS_DbgPrint(MIN_TRACE,
-                      ("NDIS: Skipping PCI configuration access on bus %lu; firmware range is [%lu-%lu].\n",
+        DPRINT1("NDIS: Skipping PCI configuration access on bus %lu; firmware range is [%lu-%lu].\n",
                        BusNumber,
                        MinBus,
-                       MaxBus));
+                       MaxBus);
         return FALSE;
     }
 
@@ -99,7 +98,7 @@ NdisMPciAssignResources(
   if (Adapter->NdisMiniportBlock.BusType != NdisInterfacePci ||
       Adapter->NdisMiniportBlock.AllocatedResources == NULL)
     {
-      NDIS_DbgPrint(MIN_TRACE, ("Bad bus type or no resources\n"));
+      DPRINT1("Bad bus type or no resources\n");
       *AssignedResources = NULL;
       return NDIS_STATUS_FAILURE;
     }
@@ -158,11 +157,11 @@ NdisMQueryAdapterResources(
   PAGED_CODE();
   ASSERT((Status && ResourceList) || (BufferSize && *BufferSize == 0));
 
-  NDIS_DbgPrint(MAX_TRACE, ("Called\n"));
+  DPRINT("Called\n");
 
   if (Adapter->NdisMiniportBlock.AllocatedResources == NULL)
     {
-      NDIS_DbgPrint(MIN_TRACE, ("No allocated resources!\n"));
+      DPRINT1("No allocated resources!\n");
       *Status = NDIS_STATUS_FAILURE;
       return;
     }
@@ -268,12 +267,12 @@ NdisReadEisaSlotInformation(
     ULONG Ret;
     PVOID Buffer;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* We are called only at PASSIVE_LEVEL */
     Buffer = ExAllocatePool(PagedPool, sizeof(NDIS_EISA_FUNCTION_INFORMATION));
     if (!Buffer) {
-         NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources.\n"));
+         DPRINT1("Insufficient resources.\n");
         *Status = NDIS_STATUS_RESOURCES;
         return;
     }
@@ -285,7 +284,7 @@ NdisReadEisaSlotInformation(
                         sizeof(NDIS_EISA_FUNCTION_INFORMATION));
 
     if (Ret == 0 || Ret == 2) {
-        NDIS_DbgPrint(MIN_TRACE, ("HalGetBusData failed.\n"));
+        DPRINT1("HalGetBusData failed.\n");
         ExFreePool(Buffer);
         *Status = NDIS_STATUS_FAILURE;
         return;
@@ -320,7 +319,7 @@ NdisReadPcmciaAttributeMemory(
 {
     PLOGICAL_ADAPTER Adapter = NdisAdapterHandle;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     return HalGetBusDataByOffset(PCMCIAConfiguration,
                                  Adapter->NdisMiniportBlock.BusNumber,
@@ -350,7 +349,7 @@ NdisWritePcmciaAttributeMemory(
 {
     PLOGICAL_ADAPTER Adapter = NdisAdapterHandle;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     return HalSetBusDataByOffset(PCMCIAConfiguration,
                                  Adapter->NdisMiniportBlock.BusNumber,
@@ -379,7 +378,7 @@ NdisOverrideBusNumber(
     PNDIS_WRAPPER_CONTEXT Wrapper = WrapperConfigurationContext;
     PLOGICAL_ADAPTER Adapter = MiniportAdapterHandle;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     Wrapper->BusNumber = BusNumber;
 

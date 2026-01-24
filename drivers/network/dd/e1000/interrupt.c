@@ -74,7 +74,7 @@ MiniportHandleInterrupt(
     PE1000_ADAPTER Adapter = (PE1000_ADAPTER)MiniportAdapterContext;
     volatile PE1000_TRANSMIT_DESCRIPTOR TransmitDescriptor;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     InterruptPending = _InterlockedExchange(&Adapter->InterruptPending, 0);
 
@@ -90,7 +90,7 @@ MiniportHandleInterrupt(
         ULONG OldLinkSpeed = Adapter->LinkSpeedMbps;
 
         InterruptPending &= ~E1000_IMS_LSC;
-        NDIS_DbgPrint(MAX_TRACE, ("Link status changed!.\n"));
+        DPRINT("Link status changed!.\n");
 
         E1000_STAT_INC32(LinkInterrupts);
 
@@ -114,7 +114,7 @@ MiniportHandleInterrupt(
     if (InterruptPending & E1000_IMS_PHYINT)
     {
         InterruptPending &= ~E1000_IMS_PHYINT;
-        NDIS_DbgPrint(MAX_TRACE, ("PHY interrupt - updating link status.\n"));
+        DPRINT("PHY interrupt - updating link status.\n");
 
         E1000_INT_DBG(("PHY interrupt received\n"));
         E1000_STAT_INC32(OtherInterrupts);
@@ -128,7 +128,7 @@ MiniportHandleInterrupt(
     if (InterruptPending & E1000_IMS_RXO)
     {
         InterruptPending &= ~E1000_IMS_RXO;
-        NDIS_DbgPrint(MID_TRACE, ("Receive overrun detected!\n"));
+        DPRINT1("Receive overrun detected!\n");
 
         E1000_RX_DBG(("RX OVERRUN detected!\n"));
         E1000_STAT_INC32(RxNoBuffer);
@@ -194,7 +194,7 @@ MiniportHandleInterrupt(
             /* Check for receive errors */
             if (ReceiveDescriptor->Errors)
             {
-                NDIS_DbgPrint(MID_TRACE, ("Receive error: 0x%02x\n", ReceiveDescriptor->Errors));
+                DPRINT1("Receive error: 0x%02x\n", ReceiveDescriptor->Errors);
                 Adapter->Statistics.RxErrors++;
                 ErrorCount++;
 
@@ -222,13 +222,13 @@ MiniportHandleInterrupt(
                 }
                 if (ReceiveDescriptor->Errors & E1000_RDESC_ERR_IPE)
                 {
-                    NDIS_DbgPrint(MID_TRACE, ("IP checksum error detected by hardware\n"));
+                    DPRINT1("IP checksum error detected by hardware\n");
                     E1000_CSUM_DBG(("RX IP checksum ERROR on desc %u\n", CurrRxDesc));
                     E1000_STAT_INC32(RxChecksumBad);
                 }
                 if (ReceiveDescriptor->Errors & E1000_RDESC_ERR_TCPE)
                 {
-                    NDIS_DbgPrint(MID_TRACE, ("TCP/UDP checksum error detected by hardware\n"));
+                    DPRINT1("TCP/UDP checksum error detected by hardware\n");
                     E1000_CSUM_DBG(("RX TCP/UDP checksum ERROR on desc %u\n", CurrRxDesc));
                     E1000_STAT_INC32(RxChecksumBad);
                 }
@@ -242,7 +242,7 @@ MiniportHandleInterrupt(
             /* Check for End of Packet - we don't support multi-descriptor packets yet */
             if (!(ReceiveDescriptor->Status & E1000_RDESC_STATUS_EOP))
             {
-                NDIS_DbgPrint(MIN_TRACE, ("Multi-descriptor packet not supported\n"));
+                DPRINT1("Multi-descriptor packet not supported\n");
                 E1000_RX_DBG(("RX desc %u: multi-descriptor packet (no EOP), dropping\n", CurrRxDesc));
                 E1000_STAT_INC32(RxMultiDesc);
                 E1000_STAT_INC(RxDropped);
@@ -322,7 +322,7 @@ MiniportHandleInterrupt(
             }
             else
             {
-                NDIS_DbgPrint(MIN_TRACE, ("Got a NULL descriptor"));
+                DPRINT1("Got a NULL descriptor");
                 E1000_RX_DBG(("RX desc %u: NULL descriptor (len=%u addr=0x%I64x)\n",
                               CurrRxDesc, ReceiveDescriptor->Length, ReceiveDescriptor->Address));
                 E1000_STAT_INC(RxFailed);
@@ -346,8 +346,8 @@ NextReceiveDescriptor:
             /* Write back new tail value */
             E1000WriteUlong(Adapter, E1000_REG_RDT, RxDescTail);
 
-            NDIS_DbgPrint(MAX_TRACE, ("Rx done (RDH: %u, RDT: %u, Packets: %u, Bytes: %u)\n",
-                                      RxDescHead, RxDescTail, PacketsReceived, BytesReceived));
+            DPRINT("Rx done (RDH: %u, RDT: %u, Packets: %u, Bytes: %u)\n",
+                                      RxDescHead, RxDescTail, PacketsReceived, BytesReceived);
 
             E1000_RX_DBG(("RX complete: %u packets, %u bytes, %u errors, RDT=%u\n",
                           PacketsReceived, BytesReceived, ErrorCount, RxDescTail));
@@ -441,8 +441,8 @@ NextReceiveDescriptor:
 
         if (NumPackets)
         {
-            NDIS_DbgPrint(MAX_TRACE, ("Tx: (TDH: %u, TDT: %u)\n", Adapter->CurrentTxDesc, Adapter->LastTxDesc));
-            NDIS_DbgPrint(MAX_TRACE, ("Tx Done: %u packets to ack\n", NumPackets));
+            DPRINT("Tx: (TDH: %u, TDT: %u)\n", Adapter->CurrentTxDesc, Adapter->LastTxDesc);
+            DPRINT("Tx Done: %u packets to ack\n", NumPackets);
 
             E1000_TX_DBG(("TX complete: %u packets, %u descriptors freed, last=%u\n",
                           NumPackets, DescriptorsFreed, Adapter->LastTxDesc));
@@ -463,7 +463,7 @@ NextReceiveDescriptor:
      * ======================================================================== */
     if (InterruptPending != 0)
     {
-        NDIS_DbgPrint(MID_TRACE, ("Unhandled interrupt bits: 0x%08x\n", InterruptPending));
+        DPRINT1("Unhandled interrupt bits: 0x%08x\n", InterruptPending);
 
         E1000_INT_DBG(("Unhandled interrupt bits: 0x%08x\n", InterruptPending));
         E1000_STAT_INC32(UnhandledInterrupts);

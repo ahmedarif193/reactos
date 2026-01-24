@@ -1244,4 +1244,43 @@ typedef struct _NDIS_MINIPORT_ADAPTER_OFFLOAD_ATTRIBUTES {
 #define NDIS_SG_DMA_64_BIT_ADDRESS          0x00000001
 #endif
 
+/* ============================================================================
+ * NDIS 6.20+ Receive Throttle Parameters
+ *
+ * Used for budget-based receive processing (NAPI-style).
+ * NDIS passes this to MiniportInterruptDpc to limit how many
+ * packets the driver should indicate per DPC.
+ * ============================================================================ */
+
+/* Indicate all available NBLs without limit */
+#ifndef NDIS_INDICATE_ALL_NBLS
+#define NDIS_INDICATE_ALL_NBLS              ((ULONG)-1)
+#endif
+
+/* Feature flag indicating NDIS 6.20+ support */
+#ifndef NDIS_SUPPORT_NDIS620
+#if (NDIS_MINIPORT_MAJOR_VERSION >= 6) && (NDIS_MINIPORT_MINOR_VERSION >= 20)
+#define NDIS_SUPPORT_NDIS620                1
+#endif
+#endif
+
+#ifndef NDIS_RECEIVE_THROTTLE_PARAMETERS_DEFINED
+/*
+ * NDIS_RECEIVE_THROTTLE_PARAMETERS structure
+ *
+ * Passed to MiniportInterruptDpc in ReceiveThrottleParameters parameter
+ * for NDIS 6.20 and later.
+ *
+ * MaxNblsToIndicate: Maximum number of NBLs the driver should indicate.
+ *                    Set to NDIS_INDICATE_ALL_NBLS if no limit.
+ * MoreNblsPending:   Output - driver sets TRUE if more NBLs are pending
+ *                    after reaching the budget limit. NDIS will reschedule.
+ */
+typedef struct _NDIS_RECEIVE_THROTTLE_PARAMETERS {
+    ULONG   MaxNblsToIndicate;
+    ULONG   MoreNblsPending;
+} NDIS_RECEIVE_THROTTLE_PARAMETERS, *PNDIS_RECEIVE_THROTTLE_PARAMETERS;
+#define NDIS_RECEIVE_THROTTLE_PARAMETERS_DEFINED 1
+#endif
+
 /* EOF */

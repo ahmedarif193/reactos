@@ -181,8 +181,8 @@ Ndis6iSetAdapterState(
 
     if (!Ndis6iValidateStateTransition(OldState, NewState))
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid state transition from %s to %s\n",
-            Ndis6iGetStateName(OldState), Ndis6iGetStateName(NewState)));
+        DPRINT1("Invalid state transition from %s to %s\n",
+            Ndis6iGetStateName(OldState), Ndis6iGetStateName(NewState));
         KeReleaseSpinLock(&StateBlock->StateLock, OldIrql);
         return NDIS_STATUS_INVALID_STATE;
     }
@@ -190,8 +190,8 @@ Ndis6iSetAdapterState(
     StateBlock->PreviousState = OldState;
     StateBlock->CurrentState = NewState;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Adapter state transition: %s -> %s\n",
-        Ndis6iGetStateName(OldState), Ndis6iGetStateName(NewState)));
+    DPRINT1("Adapter state transition: %s -> %s\n",
+        Ndis6iGetStateName(OldState), Ndis6iGetStateName(NewState));
 
     KeReleaseSpinLock(&StateBlock->StateLock, OldIrql);
 
@@ -268,7 +268,7 @@ Ndis6iCreateAdapterStateBlock(
                                        NDIS_TAG);
     if (StateBlock == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate adapter state block\n"));
+        DPRINT1("Failed to allocate adapter state block\n");
         return NULL;
     }
 
@@ -287,8 +287,8 @@ Ndis6iCreateAdapterStateBlock(
     InsertTailList(&Ndis6AdapterStateList, &StateBlock->ListEntry);
     KeReleaseSpinLock(&Ndis6AdapterStateListLock, OldIrql);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Created adapter state block for handle %p\n",
-        MiniportAdapterHandle));
+    DPRINT1("Created adapter state block for handle %p\n",
+        MiniportAdapterHandle);
 
     return StateBlock;
 }
@@ -319,8 +319,8 @@ Ndis6iRemoveAdapterStateBlock(
 
     ExFreePoolWithTag(StateBlock, NDIS_TAG);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Removed adapter state block for handle %p\n",
-        MiniportAdapterHandle));
+    DPRINT1("Removed adapter state block for handle %p\n",
+        MiniportAdapterHandle);
 }
 
 /*
@@ -334,13 +334,13 @@ NdisMPauseComplete(
     PNDIS6_ADAPTER_STATE_BLOCK StateBlock;
     NDIS_STATUS Status;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMPauseComplete called for handle %p\n",
-        MiniportAdapterHandle));
+    DPRINT("NdisMPauseComplete called for handle %p\n",
+        MiniportAdapterHandle);
 
     /* Validate handle */
     if (MiniportAdapterHandle == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid adapter handle\n"));
+        DPRINT1("Invalid adapter handle\n");
         return;
     }
 
@@ -348,16 +348,16 @@ NdisMPauseComplete(
     StateBlock = Ndis6iFindAdapterStateBlock(MiniportAdapterHandle);
     if (StateBlock == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Adapter state block not found for handle %p\n",
-            MiniportAdapterHandle));
+        DPRINT1("Adapter state block not found for handle %p\n",
+            MiniportAdapterHandle);
         return;
     }
 
     /* Verify we're in Pausing state */
     if (StateBlock->CurrentState != NdisMiniportAdapterStatePausing)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NdisMPauseComplete called but adapter is not in Pausing state (current: %s)\n",
-            Ndis6iGetStateName(StateBlock->CurrentState)));
+        DPRINT("NdisMPauseComplete called but adapter is not in Pausing state (current: %s)\n",
+            Ndis6iGetStateName(StateBlock->CurrentState));
         return;
     }
 
@@ -365,15 +365,15 @@ NdisMPauseComplete(
     Status = Ndis6iSetAdapterState(StateBlock, NdisMiniportAdapterStatePaused);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to transition to Paused state: 0x%x\n", Status));
+        DPRINT1("Failed to transition to Paused state: 0x%x\n", Status);
         return;
     }
 
     /* Signal pause complete event */
     KeSetEvent(&StateBlock->PauseCompleteEvent, IO_NO_INCREMENT, FALSE);
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMPauseComplete: Adapter %p is now Paused\n",
-        MiniportAdapterHandle));
+    DPRINT1("NdisMPauseComplete: Adapter %p is now Paused\n",
+        MiniportAdapterHandle);
 
     /*
      * TODO: Complete any pending pause IRP
@@ -397,13 +397,13 @@ NdisMRestartComplete(
     NDIS_MINIPORT_ADAPTER_STATE TargetState;
     NDIS_STATUS TransitionStatus;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMRestartComplete called for handle %p, Status 0x%x\n",
-        MiniportAdapterHandle, Status));
+    DPRINT("NdisMRestartComplete called for handle %p, Status 0x%x\n",
+        MiniportAdapterHandle, Status);
 
     /* Validate handle */
     if (MiniportAdapterHandle == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid adapter handle\n"));
+        DPRINT1("Invalid adapter handle\n");
         return;
     }
 
@@ -411,16 +411,16 @@ NdisMRestartComplete(
     StateBlock = Ndis6iFindAdapterStateBlock(MiniportAdapterHandle);
     if (StateBlock == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Adapter state block not found for handle %p\n",
-            MiniportAdapterHandle));
+        DPRINT1("Adapter state block not found for handle %p\n",
+            MiniportAdapterHandle);
         return;
     }
 
     /* Verify we're in Restarting state */
     if (StateBlock->CurrentState != NdisMiniportAdapterStateRestarting)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NdisMRestartComplete called but adapter is not in Restarting state (current: %s)\n",
-            Ndis6iGetStateName(StateBlock->CurrentState)));
+        DPRINT("NdisMRestartComplete called but adapter is not in Restarting state (current: %s)\n",
+            Ndis6iGetStateName(StateBlock->CurrentState));
         return;
     }
 
@@ -431,28 +431,28 @@ NdisMRestartComplete(
     if (Status == NDIS_STATUS_SUCCESS)
     {
         TargetState = NdisMiniportAdapterStateRunning;
-        NDIS_DbgPrint(MAX_TRACE, ("Restart succeeded, transitioning to Running\n"));
+        DPRINT1("Restart succeeded, transitioning to Running\n");
     }
     else
     {
         TargetState = NdisMiniportAdapterStatePaused;
-        NDIS_DbgPrint(MID_TRACE, ("Restart failed (0x%x), transitioning back to Paused\n", Status));
+        DPRINT1("Restart failed (0x%x), transitioning back to Paused\n", Status);
     }
 
     /* Transition to target state */
     TransitionStatus = Ndis6iSetAdapterState(StateBlock, TargetState);
     if (TransitionStatus != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to transition to %s state: 0x%x\n",
-            Ndis6iGetStateName(TargetState), TransitionStatus));
+        DPRINT1("Failed to transition to %s state: 0x%x\n",
+            Ndis6iGetStateName(TargetState), TransitionStatus);
         return;
     }
 
     /* Signal restart complete event */
     KeSetEvent(&StateBlock->RestartCompleteEvent, IO_NO_INCREMENT, FALSE);
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMRestartComplete: Adapter %p is now %s\n",
-        MiniportAdapterHandle, Ndis6iGetStateName(TargetState)));
+    DPRINT1("NdisMRestartComplete: Adapter %p is now %s\n",
+        MiniportAdapterHandle, Ndis6iGetStateName(TargetState));
 
     /*
      * TODO: Complete any pending restart IRP
@@ -476,13 +476,13 @@ NdisMSetMiniportAttributes(
     PNDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES RegAttrs;
     PNDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES GenAttrs;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMSetMiniportAttributes called for handle %p\n",
-        NdisMiniportHandle));
+    DPRINT("NdisMSetMiniportAttributes called for handle %p\n",
+        NdisMiniportHandle);
 
     /* Validate parameters */
     if (NdisMiniportHandle == NULL || MiniportAttributes == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid parameter\n"));
+        DPRINT1("Invalid parameter\n");
         return NDIS_STATUS_INVALID_PARAMETER;
     }
 
@@ -490,7 +490,7 @@ NdisMSetMiniportAttributes(
     StateBlock = Ndis6iCreateAdapterStateBlock(NdisMiniportHandle);
     if (StateBlock == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to create/find adapter state block\n"));
+        DPRINT1("Failed to create/find adapter state block\n");
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -503,7 +503,7 @@ NdisMSetMiniportAttributes(
             /* Validate revision */
             if (RegAttrs->Header.Revision < NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES_REVISION_1)
             {
-                NDIS_DbgPrint(MIN_TRACE, ("Invalid registration attributes revision\n"));
+                DPRINT1("Invalid registration attributes revision\n");
                 return NDIS_STATUS_INVALID_PARAMETER;
             }
 
@@ -530,7 +530,7 @@ NdisMSetMiniportAttributes(
                 if (DeviceObject && DeviceObject->DeviceExtension)
                 {
                     ((PVOID*)DeviceObject->DeviceExtension)[2] = RegAttrs->MiniportAdapterContext;
-                    DbgPrint("NDIS6: NdisMSetMiniportAttributes - stored AdapterContext=%p in DeviceExtension[2]\n",
+                    DPRINT1("NDIS6: NdisMSetMiniportAttributes - stored AdapterContext=%p in DeviceExtension[2]\n",
                              RegAttrs->MiniportAdapterContext);
                 }
             }
@@ -541,8 +541,8 @@ NdisMSetMiniportAttributes(
                 Ndis6iSetAdapterState(StateBlock, NdisMiniportAdapterStateInitializing);
             }
 
-            NDIS_DbgPrint(MAX_TRACE, ("Stored registration attributes: Context=%p, Flags=0x%x\n",
-                RegAttrs->MiniportAdapterContext, RegAttrs->AttributeFlags));
+            DPRINT1("Stored registration attributes: Context=%p, Flags=0x%x\n",
+                RegAttrs->MiniportAdapterContext, RegAttrs->AttributeFlags);
             break;
 
         case NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES:
@@ -551,7 +551,7 @@ NdisMSetMiniportAttributes(
             /* Validate revision */
             if (GenAttrs->Header.Revision < NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_1)
             {
-                NDIS_DbgPrint(MIN_TRACE, ("Invalid general attributes revision\n"));
+                DPRINT1("Invalid general attributes revision\n");
                 return NDIS_STATUS_INVALID_PARAMETER;
             }
 
@@ -563,13 +563,13 @@ NdisMSetMiniportAttributes(
             StateBlock->MediaConnectState = GenAttrs->MediaConnectState;
             StateBlock->MediaDuplexState = GenAttrs->MediaDuplexState;
 
-            NDIS_DbgPrint(MAX_TRACE, ("Stored general attributes: MediaType=%d, MTU=%lu\n",
-                GenAttrs->MediaType, GenAttrs->MtuSize));
+            DPRINT1("Stored general attributes: MediaType=%d, MTU=%lu\n",
+                GenAttrs->MediaType, GenAttrs->MtuSize);
             break;
 
         default:
-            NDIS_DbgPrint(MID_TRACE, ("Unsupported attribute type: 0x%x (stub)\n",
-                MiniportAttributes->RegistrationAttributes.Header.Type));
+            DPRINT1("Unsupported attribute type: 0x%x (stub)\n",
+                MiniportAttributes->RegistrationAttributes.Header.Type);
             /* For unsupported types, we accept but don't process */
             break;
     }
@@ -598,8 +598,8 @@ Ndis6iInitiateAdapterPause(
     PNDIS6_ADAPTER_STATE_BLOCK StateBlock;
     NDIS_STATUS Status;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Initiating pause for adapter %p, reason 0x%x\n",
-        MiniportAdapterHandle, PauseReason));
+    DPRINT1("Initiating pause for adapter %p, reason 0x%x\n",
+        MiniportAdapterHandle, PauseReason);
 
     StateBlock = Ndis6iFindAdapterStateBlock(MiniportAdapterHandle);
     if (StateBlock == NULL)
@@ -610,8 +610,8 @@ Ndis6iInitiateAdapterPause(
     /* Verify we're in Running state */
     if (StateBlock->CurrentState != NdisMiniportAdapterStateRunning)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Cannot pause adapter - not in Running state (current: %s)\n",
-            Ndis6iGetStateName(StateBlock->CurrentState)));
+        DPRINT1("Cannot pause adapter - not in Running state (current: %s)\n",
+            Ndis6iGetStateName(StateBlock->CurrentState));
         return NDIS_STATUS_INVALID_STATE;
     }
 
@@ -659,8 +659,8 @@ Ndis6iInitiateAdapterRestart(
     PNDIS6_ADAPTER_STATE_BLOCK StateBlock;
     NDIS_STATUS Status;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Initiating restart for adapter %p\n",
-        MiniportAdapterHandle));
+    DPRINT1("Initiating restart for adapter %p\n",
+        MiniportAdapterHandle);
 
     StateBlock = Ndis6iFindAdapterStateBlock(MiniportAdapterHandle);
     if (StateBlock == NULL)
@@ -671,8 +671,8 @@ Ndis6iInitiateAdapterRestart(
     /* Verify we're in Paused state */
     if (StateBlock->CurrentState != NdisMiniportAdapterStatePaused)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Cannot restart adapter - not in Paused state (current: %s)\n",
-            Ndis6iGetStateName(StateBlock->CurrentState)));
+        DPRINT1("Cannot restart adapter - not in Paused state (current: %s)\n",
+            Ndis6iGetStateName(StateBlock->CurrentState));
         return NDIS_STATUS_INVALID_STATE;
     }
 

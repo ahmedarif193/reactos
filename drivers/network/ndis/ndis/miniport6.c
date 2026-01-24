@@ -76,60 +76,60 @@ ValidateMiniportDriverCharacteristics(
     /* Validate header */
     if (Characteristics->Header.Type != NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid object type: 0x%x\n",
-            Characteristics->Header.Type));
+        DPRINT1("Invalid object type: 0x%x\n",
+            Characteristics->Header.Type);
         return NDIS_STATUS_BAD_CHARACTERISTICS;
     }
 
     /* Validate NDIS version */
     if (Characteristics->MajorNdisVersion < 6)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid NDIS version: %d.%d\n",
+        DPRINT1("Invalid NDIS version: %d.%d\n",
             Characteristics->MajorNdisVersion,
-            Characteristics->MinorNdisVersion));
+            Characteristics->MinorNdisVersion);
         return NDIS_STATUS_BAD_VERSION;
     }
 
     /* Validate required handlers for NDIS 6.x */
     if (Characteristics->InitializeHandlerEx == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("InitializeHandlerEx is required\n"));
+        DPRINT1("InitializeHandlerEx is required\n");
         return NDIS_STATUS_BAD_CHARACTERISTICS;
     }
 
     if (Characteristics->HaltHandlerEx == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("HaltHandlerEx is required\n"));
+        DPRINT1("HaltHandlerEx is required\n");
         return NDIS_STATUS_BAD_CHARACTERISTICS;
     }
 
     if (Characteristics->PauseHandler == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("PauseHandler is required\n"));
+        DPRINT1("PauseHandler is required\n");
         return NDIS_STATUS_BAD_CHARACTERISTICS;
     }
 
     if (Characteristics->RestartHandler == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("RestartHandler is required\n"));
+        DPRINT1("RestartHandler is required\n");
         return NDIS_STATUS_BAD_CHARACTERISTICS;
     }
 
     if (Characteristics->OidRequestHandler == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("OidRequestHandler is required\n"));
+        DPRINT1("OidRequestHandler is required\n");
         return NDIS_STATUS_BAD_CHARACTERISTICS;
     }
 
     if (Characteristics->SendNetBufferListsHandler == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("SendNetBufferListsHandler is required\n"));
+        DPRINT1("SendNetBufferListsHandler is required\n");
         return NDIS_STATUS_BAD_CHARACTERISTICS;
     }
 
     if (Characteristics->ReturnNetBufferListsHandler == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("ReturnNetBufferListsHandler is required\n"));
+        DPRINT1("ReturnNetBufferListsHandler is required\n");
         return NDIS_STATUS_BAD_CHARACTERISTICS;
     }
 
@@ -157,8 +157,8 @@ NdisRegisterMiniportDriver(
     ULONG RegistryPathLength;
     ULONG i;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisRegisterMiniportDriver called\n"));
-    DbgPrint("NDIS: NdisRegisterMiniportDriver - DriverObject=%p\n", DriverObject);
+    DPRINT("NdisRegisterMiniportDriver called\n");
+    DPRINT1("NdisRegisterMiniportDriver - DriverObject=%p\n", DriverObject);
 
     /* Initialize NDIS 6.x support if needed */
     InitializeNdis6MiniportSupport();
@@ -169,7 +169,7 @@ NdisRegisterMiniportDriver(
         MiniportDriverCharacteristics == NULL ||
         NdisMiniportDriverHandle == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid parameter\n"));
+        DPRINT1("Invalid parameter\n");
         return NDIS_STATUS_INVALID_PARAMETER;
     }
 
@@ -179,7 +179,7 @@ NdisRegisterMiniportDriver(
     Status = ValidateMiniportDriverCharacteristics(MiniportDriverCharacteristics);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid characteristics: 0x%x\n", Status));
+        DPRINT1("Invalid characteristics: 0x%x\n", Status);
         return Status;
     }
 
@@ -189,7 +189,7 @@ NdisRegisterMiniportDriver(
                                         NDIS_TAG);
     if (DriverBlock == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate driver block\n"));
+        DPRINT1("Failed to allocate driver block\n");
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -203,7 +203,7 @@ NdisRegisterMiniportDriver(
     if (RegistryPathBuffer == NULL)
     {
         ExFreePoolWithTag(DriverBlock, NDIS_TAG);
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate registry path\n"));
+        DPRINT1("Failed to allocate registry path\n");
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -238,7 +238,7 @@ NdisRegisterMiniportDriver(
                                                (PVOID*)&DriverBlockPtr);
     if (!NT_SUCCESS(NtStatus))
     {
-        DbgPrint("NDIS: Failed to allocate driver object extension: 0x%x\n", NtStatus);
+        DPRINT1("Failed to allocate driver object extension: 0x%x\n", NtStatus);
         ExFreePoolWithTag(DriverBlock->RegistryPath.Buffer, NDIS_TAG);
         ExFreePoolWithTag(DriverBlock, NDIS_TAG);
         return NDIS_STATUS_FAILURE;
@@ -260,7 +260,7 @@ NdisRegisterMiniportDriver(
     /* Hook the AddDevice routine - this is critical for PnP to work */
     DriverObject->DriverExtension->AddDevice = Ndis6AddDevice;
 
-    DbgPrint("NDIS: Hooked AddDevice=%p, MajorFunction[0]=%p\n",
+    DPRINT1("Hooked AddDevice=%p, MajorFunction[0]=%p\n",
              DriverObject->DriverExtension->AddDevice,
              DriverObject->MajorFunction[0]);
 
@@ -273,7 +273,7 @@ NdisRegisterMiniportDriver(
 
         if (Status != NDIS_STATUS_SUCCESS)
         {
-            NDIS_DbgPrint(MIN_TRACE, ("SetOptionsHandler failed: 0x%x\n", Status));
+            DPRINT1("SetOptionsHandler failed: 0x%x\n", Status);
             /* Remove from list on failure */
             KeAcquireSpinLock(&Ndis6MiniportDriverListLock, &OldIrql);
             RemoveEntryList(&DriverBlock->ListEntry);
@@ -287,7 +287,7 @@ NdisRegisterMiniportDriver(
 
     *NdisMiniportDriverHandle = (NDIS_HANDLE)DriverBlock;
 
-    DbgPrint("NDIS: NdisRegisterMiniportDriver completed successfully, handle=%p\n", DriverBlock);
+    DPRINT1("NdisRegisterMiniportDriver completed successfully, handle=%p\n", DriverBlock);
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -303,11 +303,11 @@ NdisDeregisterMiniportDriver(
     PNDIS6_MINIPORT_DRIVER_BLOCK DriverBlock;
     KIRQL OldIrql;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisDeregisterMiniportDriver called\n"));
+    DPRINT("NdisDeregisterMiniportDriver called\n");
 
     if (NdisMiniportDriverHandle == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid handle\n"));
+        DPRINT1("Invalid handle\n");
         return;
     }
 
@@ -317,8 +317,8 @@ NdisDeregisterMiniportDriver(
     if (InterlockedDecrement(&DriverBlock->RefCount) > 0)
     {
         /* Still in use, don't free yet */
-        NDIS_DbgPrint(MID_TRACE, ("Driver block still in use, RefCount=%ld\n",
-            DriverBlock->RefCount));
+        DPRINT1("Driver block still in use, RefCount=%ld\n",
+            DriverBlock->RefCount);
         return;
     }
 
@@ -342,7 +342,7 @@ NdisDeregisterMiniportDriver(
 
     ExFreePoolWithTag(DriverBlock, NDIS_TAG);
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisDeregisterMiniportDriver completed\n"));
+    DPRINT1("NdisDeregisterMiniportDriver completed\n");
 }
 
 /*
@@ -378,27 +378,27 @@ NdisMIndicateReceiveNetBufferLists(
     /* Initialize OldIrql to avoid compiler warning - it's only used when !AtDispatchLevel */
     OldIrql = PASSIVE_LEVEL;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisMIndicateReceiveNetBufferLists - Handle=%p, NBLs=%p, Count=%lu\n",
-             MiniportAdapterHandle, NetBufferLists, NumberOfNetBufferLists));
+    DPRINT("NdisMIndicateReceiveNetBufferLists - Handle=%p, NBLs=%p, Count=%lu\n",
+           MiniportAdapterHandle, NetBufferLists, NumberOfNetBufferLists);
 
     /* Validate parameters */
     if (MiniportAdapterHandle == NULL || NetBufferLists == NULL || NumberOfNetBufferLists == 0)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NdisMIndicateReceiveNetBufferLists - invalid parameters\n"));
+        DPRINT1("NdisMIndicateReceiveNetBufferLists - invalid parameters\n");
         return;
     }
 
     /* Get the LOGICAL_ADAPTER from device extension */
     if (DeviceObject->DeviceExtension == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NdisMIndicateReceiveNetBufferLists - no device extension\n"));
+        DPRINT1("NdisMIndicateReceiveNetBufferLists - no device extension\n");
         return;
     }
 
     Adapter = (PLOGICAL_ADAPTER)((PVOID*)DeviceObject->DeviceExtension)[6];
     if (Adapter == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NdisMIndicateReceiveNetBufferLists - no LOGICAL_ADAPTER\n"));
+        DPRINT1("NdisMIndicateReceiveNetBufferLists - no LOGICAL_ADAPTER\n");
         return;
     }
 
@@ -430,7 +430,7 @@ NdisMIndicateReceiveNetBufferLists(
     /* Check if any protocols are bound */
     if (Adapter->ProtocolListHead.Flink == &Adapter->ProtocolListHead)
     {
-        DbgPrint("NDIS6-RCV: No protocols bound to adapter\n");
+        DPRINT1("No protocols bound to adapter\n");
         goto done;
     }
 
@@ -444,7 +444,7 @@ NdisMIndicateReceiveNetBufferLists(
         CurrentNb = NET_BUFFER_LIST_FIRST_NB(CurrentNbl);
         if (CurrentNb == NULL)
         {
-            DbgPrint("NDIS6-RCV: NBL %p has no NET_BUFFER\n", CurrentNbl);
+            DPRINT1("NBL %p has no NET_BUFFER\n", CurrentNbl);
             continue;
         }
 
@@ -452,7 +452,7 @@ NdisMIndicateReceiveNetBufferLists(
         FirstMdl = NET_BUFFER_CURRENT_MDL(CurrentNb);
         if (FirstMdl == NULL)
         {
-            DbgPrint("NDIS6-RCV: NB %p has no MDL\n", CurrentNb);
+            DPRINT1("NB %p has no MDL\n", CurrentNb);
             continue;
         }
 
@@ -460,7 +460,7 @@ NdisMIndicateReceiveNetBufferLists(
         PacketData = MmGetSystemAddressForMdlSafe(FirstMdl, NormalPagePriority);
         if (PacketData == NULL)
         {
-            DbgPrint("NDIS6-RCV: Cannot map MDL %p\n", FirstMdl);
+            DPRINT1("Cannot map MDL %p\n", FirstMdl);
             continue;
         }
 
@@ -480,7 +480,7 @@ NdisMIndicateReceiveNetBufferLists(
 
         if (PacketDataLength < HeaderSize)
         {
-            DbgPrint("NDIS6-RCV: Packet too small: %lu < %lu\n", PacketDataLength, HeaderSize);
+            DPRINT("Packet too small: %lu < %lu\n", PacketDataLength, HeaderSize);
             continue;
         }
 
@@ -488,7 +488,7 @@ NdisMIndicateReceiveNetBufferLists(
 #ifdef DBG
         if (PacketDataLength >= 14)
         {
-            DbgPrint("NDIS6-RCV: Packet %lu bytes: %02X:%02X:%02X:%02X:%02X:%02X <- %02X:%02X:%02X:%02X:%02X:%02X (type=%02X%02X)\n",
+            DPRINT("Packet %lu bytes: %02X:%02X:%02X:%02X:%02X:%02X <- %02X:%02X:%02X:%02X:%02X:%02X (type=%02X%02X)\n",
                      TotalPacketLength,
                      PacketData[0], PacketData[1], PacketData[2], PacketData[3], PacketData[4], PacketData[5],
                      PacketData[6], PacketData[7], PacketData[8], PacketData[9], PacketData[10], PacketData[11],
@@ -506,7 +506,7 @@ NdisMIndicateReceiveNetBufferLists(
             LookaheadSize = PacketDataLength - HeaderSize;
         }
 
-        DbgPrint("NDIS6-RCV: Header=%p (%u bytes), Lookahead=%p (%u bytes), Total=%u\n",
+        DPRINT("Header=%p (%u bytes), Lookahead=%p (%u bytes), Total=%u\n",
                  PacketData, HeaderSize, LookaheadBuffer, LookaheadSize, TotalPacketLength);
 
         /* Indicate to each bound protocol */
@@ -518,8 +518,8 @@ NdisMIndicateReceiveNetBufferLists(
             if (AdapterBinding->ProtocolBinding != NULL &&
                 AdapterBinding->ProtocolBinding->Chars.ReceiveHandler != NULL)
             {
-                DbgPrint("NDIS6-RCV: Indicating to protocol '%wZ'\n",
-                         &AdapterBinding->ProtocolBinding->Chars.Name);
+                DPRINT("Indicating to protocol '%wZ'\n",
+                       &AdapterBinding->ProtocolBinding->Chars.Name);
 
                 /*
                  * Call the legacy ReceiveHandler.
@@ -556,7 +556,7 @@ NdisMIndicateReceiveNetBufferLists(
                         LookaheadSize,            /* LookaheadBufferSize */
                         TotalPacketLength - HeaderSize);  /* PacketSize */
 
-                    DbgPrint("NDIS6-RCV: ReceiveHandler returned Status=0x%x\n", RcvStatus);
+                    DPRINT("ReceiveHandler returned Status=0x%x\n", RcvStatus);
                 }
 
                 /* Re-acquire the lock */
@@ -592,7 +592,7 @@ done:
      */
     if (ResourcesFlag)
     {
-        DbgPrint("NDIS6-RCV: Resources flag set - miniport retains NBL ownership\n");
+        DPRINT1("Resources flag set - miniport retains NBL ownership\n");
     }
     else
     {
@@ -612,22 +612,22 @@ done:
 
         if (DriverBlock != NULL && DriverBlock->Characteristics.ReturnNetBufferListsHandler != NULL)
         {
-            DbgPrint("NDIS6-RCV: Returning %lu NBLs to miniport\n", NblCount);
+            DPRINT("Returning %lu NBLs to miniport\n", NblCount);
 
             DriverBlock->Characteristics.ReturnNetBufferListsHandler(
                 MiniportAdapterContext,
                 NetBufferLists,
                 0);  /* ReturnFlags */
 
-            DbgPrint("NDIS6-RCV: ReturnNetBufferListsHandler returned\n");
+            DPRINT("ReturnNetBufferListsHandler returned\n");
         }
         else
         {
-            DbgPrint("NDIS6-RCV: No ReturnNetBufferListsHandler, NBLs not returned\n");
+            DPRINT1("No ReturnNetBufferListsHandler, NBLs not returned\n");
         }
     }
 
-    DbgPrint("NDIS6-RCV: NdisMIndicateReceiveNetBufferLists completed\n");
+    DPRINT("NdisMIndicateReceiveNetBufferLists completed\n");
 }
 
 /*
@@ -662,27 +662,27 @@ NdisMSendNetBufferListsComplete(
     PNDIS_PACKET OriginalPacket;
     NDIS_STATUS NdisStatus;
 
-    DbgPrint("NDIS6: NdisMSendNetBufferListsComplete - Handle=%p, NBLs=%p, Flags=0x%x\n",
-             MiniportAdapterHandle, NetBufferLists, SendCompleteFlags);
+    DPRINT("NdisMSendNetBufferListsComplete - Handle=%p, NBLs=%p, Flags=0x%x\n",
+           MiniportAdapterHandle, NetBufferLists, SendCompleteFlags);
 
     /* Validate parameters */
     if (MiniportAdapterHandle == NULL || NetBufferLists == NULL)
     {
-        DbgPrint("NDIS6: NdisMSendNetBufferListsComplete - invalid parameters\n");
+        DPRINT1("NdisMSendNetBufferListsComplete - invalid parameters\n");
         return;
     }
 
     /* Get the LOGICAL_ADAPTER from device extension */
     if (DeviceObject->DeviceExtension == NULL)
     {
-        DbgPrint("NDIS6: NdisMSendNetBufferListsComplete - no device extension\n");
+        DPRINT1("NdisMSendNetBufferListsComplete - no device extension\n");
         return;
     }
 
     Adapter = (PLOGICAL_ADAPTER)((PVOID*)DeviceObject->DeviceExtension)[6];
     if (Adapter == NULL)
     {
-        DbgPrint("NDIS6: NdisMSendNetBufferListsComplete - no LOGICAL_ADAPTER\n");
+        DPRINT1("NdisMSendNetBufferListsComplete - no LOGICAL_ADAPTER\n");
         return;
     }
 
@@ -714,8 +714,8 @@ NdisMSendNetBufferListsComplete(
         /* Convert NBL status to NDIS status */
         NdisStatus = CurrentNbl->Status;
 
-        DbgPrint("NDIS6: Completing NBL %p, Status=0x%x, SourceHandle=%p\n",
-                 CurrentNbl, NdisStatus, CurrentNbl->SourceHandle);
+        DPRINT("Completing NBL %p, Status=0x%x, SourceHandle=%p\n",
+               CurrentNbl, NdisStatus, CurrentNbl->SourceHandle);
 
         /*
          * Check if this NBL has a send context from NDIS 5.x packet conversion.
@@ -729,15 +729,15 @@ NdisMSendNetBufferListsComplete(
             OriginalPacket = SendContext->OriginalPacket;
             AdapterBinding = SendContext->AdapterBinding;
 
-            DbgPrint("NDIS6: Completing converted packet %p, AdapterBinding=%p\n",
+            DPRINT("Completing converted packet %p, AdapterBinding=%p\n",
                      OriginalPacket, AdapterBinding);
 
             if (AdapterBinding != NULL &&
                 AdapterBinding->ProtocolBinding != NULL &&
                 AdapterBinding->ProtocolBinding->Chars.SendCompleteHandler != NULL)
             {
-                DbgPrint("NDIS6: Calling SendCompleteHandler for protocol '%wZ'\n",
-                         &AdapterBinding->ProtocolBinding->Chars.Name);
+                DPRINT("Calling SendCompleteHandler for protocol '%wZ'\n",
+                       &AdapterBinding->ProtocolBinding->Chars.Name);
 
                 /* Call the protocol's SendCompleteHandler */
                 (*AdapterBinding->ProtocolBinding->Chars.SendCompleteHandler)(
@@ -745,11 +745,11 @@ NdisMSendNetBufferListsComplete(
                     OriginalPacket,
                     NdisStatus);
 
-                DbgPrint("NDIS6: SendCompleteHandler returned\n");
+                DPRINT("SendCompleteHandler returned\n");
             }
             else
             {
-                DbgPrint("NDIS6: No SendCompleteHandler for packet %p\n", OriginalPacket);
+                DPRINT("No SendCompleteHandler for packet %p\n", OriginalPacket);
             }
 
             /*
@@ -759,7 +759,7 @@ NdisMSendNetBufferListsComplete(
              */
             ExFreePoolWithTag(CurrentNbl, 'lbNS');  /* SNBL - Send NBL, must match protocol.c */
 
-            DbgPrint("NDIS6: Freed NBL %p\n", CurrentNbl);
+            DPRINT("Freed NBL %p\n", CurrentNbl);
         }
         else
         {
@@ -770,12 +770,12 @@ NdisMSendNetBufferListsComplete(
                 AdapterBinding->ProtocolBinding != NULL &&
                 AdapterBinding->ProtocolBinding->Chars.SendCompleteHandler != NULL)
             {
-                DbgPrint("NDIS6: NBL %p has no context but has valid binding, cannot complete\n",
+                DPRINT1("NBL %p has no context but has valid binding, cannot complete\n",
                          CurrentNbl);
             }
             else
             {
-                DbgPrint("NDIS6: NBL %p has no valid context or binding for completion\n",
+                DPRINT1("NBL %p has no valid context or binding for completion\n",
                          CurrentNbl);
             }
         }
@@ -787,7 +787,7 @@ NdisMSendNetBufferListsComplete(
         KeLowerIrql(OldIrql);
     }
 
-    DbgPrint("NDIS6: NdisMSendNetBufferListsComplete completed %lu NBLs\n", CompletedCount);
+    DPRINT("NdisMSendNetBufferListsComplete completed %lu NBLs\n", CompletedCount);
 }
 
 /*
@@ -821,13 +821,13 @@ NdisReturnNetBufferLists(
     BOOLEAN AtDispatchLevel;
     ULONG ReturnedCount = 0;
 
-    DbgPrint("NDIS6: NdisReturnNetBufferLists - Handle=%p, NBLs=%p, Flags=0x%x\n",
+    DPRINT1("NdisReturnNetBufferLists - Handle=%p, NBLs=%p, Flags=0x%x\n",
              NdisBindingHandle, NetBufferLists, ReturnFlags);
 
     /* Validate parameters */
     if (NdisBindingHandle == NULL || NetBufferLists == NULL)
     {
-        DbgPrint("NDIS6: NdisReturnNetBufferLists - invalid parameters\n");
+        DPRINT1("NdisReturnNetBufferLists - invalid parameters\n");
         return;
     }
 
@@ -853,7 +853,7 @@ NdisReturnNetBufferLists(
 
         if (Adapter == NULL)
         {
-            DbgPrint("NDIS6: NBL %p has no SourceHandle, cannot return\n", CurrentNbl);
+            DPRINT1("NBL %p has no SourceHandle, cannot return\n", CurrentNbl);
             CurrentNbl = NextNbl;
             continue;
         }
@@ -862,7 +862,7 @@ NdisReturnNetBufferLists(
         DeviceObject = Adapter->NdisMiniportBlock.DeviceObject;
         if (DeviceObject == NULL || DeviceObject->DeviceExtension == NULL)
         {
-            DbgPrint("NDIS6: Cannot find device for adapter %p\n", Adapter);
+            DPRINT1("Cannot find device for adapter %p\n", Adapter);
             CurrentNbl = NextNbl;
             continue;
         }
@@ -873,7 +873,7 @@ NdisReturnNetBufferLists(
         if (DriverBlock == NULL ||
             DriverBlock->Characteristics.ReturnNetBufferListsHandler == NULL)
         {
-            DbgPrint("NDIS6: No ReturnNetBufferListsHandler for adapter %p\n", Adapter);
+            DPRINT1("No ReturnNetBufferListsHandler for adapter %p\n", Adapter);
             CurrentNbl = NextNbl;
             continue;
         }
@@ -887,7 +887,7 @@ NdisReturnNetBufferLists(
             KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
         }
 
-        DbgPrint("NDIS6: Calling ReturnNetBufferListsHandler for NBL %p\n", CurrentNbl);
+        DPRINT1("Calling ReturnNetBufferListsHandler for NBL %p\n", CurrentNbl);
 
         DriverBlock->Characteristics.ReturnNetBufferListsHandler(
             MiniportAdapterContext,
@@ -903,7 +903,7 @@ NdisReturnNetBufferLists(
         CurrentNbl = NextNbl;
     }
 
-    DbgPrint("NDIS6: NdisReturnNetBufferLists returned %lu NBLs\n", ReturnedCount);
+    DPRINT1("NdisReturnNetBufferLists returned %lu NBLs\n", ReturnedCount);
 }
 
 /*
@@ -927,14 +927,14 @@ Ndis6AddDevice(
     WCHAR DeviceNameBuffer[64];
     UNICODE_STRING DeviceName;
 
-    DbgPrint("NDIS6: AddDevice called - DriverObject=%p, PDO=%p\n",
+    DPRINT("AddDevice called - DriverObject=%p, PDO=%p\n",
              DriverObject, PhysicalDeviceObject);
 
     /* Get our driver block from the driver object extension */
     DriverBlockPtr = IoGetDriverObjectExtension(DriverObject, NDIS6_DRIVER_EXTENSION_ID);
     if (DriverBlockPtr == NULL)
     {
-        DbgPrint("NDIS6: AddDevice - Can't get driver object extension\n");
+        DPRINT1("AddDevice - Can't get driver object extension\n");
         return STATUS_UNSUCCESSFUL;
     }
     DriverBlock = *DriverBlockPtr;
@@ -960,7 +960,7 @@ Ndis6AddDevice(
     }
     RtlInitUnicodeString(&DeviceName, DeviceNameBuffer);
 
-    DbgPrint("NDIS6: Creating device %wZ\n", &DeviceName);
+    DPRINT1("Creating device %wZ\n", &DeviceName);
 
     /* Create the device object - use a simple device extension for now */
     Status = IoCreateDevice(DriverObject,
@@ -972,7 +972,7 @@ Ndis6AddDevice(
                             &DeviceObject);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("NDIS6: IoCreateDevice failed: 0x%x\n", Status);
+        DPRINT1("IoCreateDevice failed: 0x%x\n", Status);
         return Status;
     }
 
@@ -985,7 +985,7 @@ Ndis6AddDevice(
     NextDeviceObject = IoAttachDeviceToDeviceStack(DeviceObject, PhysicalDeviceObject);
     if (NextDeviceObject == NULL)
     {
-        DbgPrint("NDIS6: IoAttachDeviceToDeviceStack failed\n");
+        DPRINT1("IoAttachDeviceToDeviceStack failed\n");
         IoDeleteDevice(DeviceObject);
         return STATUS_UNSUCCESSFUL;
     }
@@ -996,7 +996,7 @@ Ndis6AddDevice(
     DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
     DeviceObject->Flags |= DO_BUFFERED_IO;
 
-    DbgPrint("NDIS6: AddDevice complete - DeviceObject=%p, NextDevice=%p\n",
+    DPRINT1("AddDevice complete - DeviceObject=%p, NextDevice=%p\n",
              DeviceObject, NextDeviceObject);
 
     return STATUS_SUCCESS;
@@ -1050,27 +1050,27 @@ Ndis6HandleStartDevice(
     DriverBlock = ((PVOID*)DeviceObject->DeviceExtension)[0];
     NextDeviceObject = ((PVOID*)DeviceObject->DeviceExtension)[3];
 
-    DbgPrint("NDIS6: START_DEVICE - calling InitializeHandlerEx\n");
+    DPRINT1("START_DEVICE - calling InitializeHandlerEx\n");
 
     /* Save the resources BEFORE passing the IRP down */
     AllocatedResources = IrpSp->Parameters.StartDevice.AllocatedResources;
     AllocatedResourcesTranslated = IrpSp->Parameters.StartDevice.AllocatedResourcesTranslated;
 
-    DbgPrint("NDIS6: Resources=%p, ResourcesTranslated=%p\n",
+    DPRINT1("Resources=%p, ResourcesTranslated=%p\n",
              AllocatedResources, AllocatedResourcesTranslated);
 
     if (AllocatedResourcesTranslated)
     {
-        DbgPrint("NDIS6: ResourcesTranslated Count=%u\n", AllocatedResourcesTranslated->Count);
+        DPRINT1("ResourcesTranslated Count=%u\n", AllocatedResourcesTranslated->Count);
         if (AllocatedResourcesTranslated->Count > 0)
         {
             ULONG i;
             PCM_PARTIAL_RESOURCE_LIST PartialList = &AllocatedResourcesTranslated->List[0].PartialResourceList;
-            DbgPrint("NDIS6: PartialResourceList Count=%u\n", PartialList->Count);
+            DPRINT1("PartialResourceList Count=%u\n", PartialList->Count);
             for (i = 0; i < PartialList->Count && i < 10; i++)
             {
                 PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc = &PartialList->PartialDescriptors[i];
-                DbgPrint("NDIS6:   Resource[%u]: Type=%u\n", i, Desc->Type);
+                DPRINT1("  Resource[%u]: Type=%u\n", i, Desc->Type);
             }
         }
     }
@@ -1089,7 +1089,7 @@ Ndis6HandleStartDevice(
 
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("NDIS6: Lower driver START_DEVICE failed: 0x%x\n", Status);
+        DPRINT1("Lower driver START_DEVICE failed: 0x%x\n", Status);
         Irp->IoStatus.Status = Status;
         IoCompleteRequest(Irp, IO_NO_INCREMENT);
         return Status;
@@ -1109,7 +1109,7 @@ Ndis6HandleStartDevice(
         InitParams.AllocatedResources = (PNDIS_RESOURCE_LIST)&AllocatedResourcesTranslated->List[0].PartialResourceList;
     }
 
-    DbgPrint("NDIS6: Calling InitializeHandlerEx, Resources=%p\n", InitParams.AllocatedResources);
+    DPRINT1("Calling InitializeHandlerEx, Resources=%p\n", InitParams.AllocatedResources);
 
     /*
      * Store the allocated resources in the device extension for later use by
@@ -1138,7 +1138,7 @@ Ndis6HandleStartDevice(
         {
             RtlCopyMemory(ResourcesCopy, AllocatedResourcesTranslated, ResourceListSize);
             ((PVOID*)DeviceObject->DeviceExtension)[5] = ResourcesCopy;
-            DbgPrint("NDIS6: Stored resources copy at DeviceExtension[5]: %p\n", ResourcesCopy);
+            DPRINT1("Stored resources copy at DeviceExtension[5]: %p\n", ResourcesCopy);
         }
     }
 
@@ -1151,7 +1151,7 @@ Ndis6HandleStartDevice(
                         DriverBlock->MiniportDriverContext,
                         &InitParams);
 
-        DbgPrint("NDIS6: InitializeHandlerEx returned 0x%x\n", NdisStatus);
+        DPRINT1("InitializeHandlerEx returned 0x%x\n", NdisStatus);
 
         if (NdisStatus != NDIS_STATUS_SUCCESS)
         {
@@ -1162,7 +1162,7 @@ Ndis6HandleStartDevice(
 
         /* Transition adapter to Running state */
         Ndis6iSetAdapterRunning(DeviceObject);
-        DbgPrint("NDIS6: Adapter transitioned to Running state\n");
+        DPRINT1("Adapter transitioned to Running state\n");
 
         /* Announce adapter to protocols */
         Ndis6iAnnounceAdapterToProtocols(DeviceObject, DriverBlock);
@@ -1200,7 +1200,7 @@ Ndis6GenericIrpHandler(
         NextDeviceObject = NULL;
     }
 
-    DbgPrint("NDIS6: IRP MajorFunction=0x%x MinorFunction=0x%x\n",
+    DPRINT1("IRP MajorFunction=0x%x MinorFunction=0x%x\n",
              IrpSp->MajorFunction, IrpSp->MinorFunction);
 
     switch (IrpSp->MajorFunction)
@@ -1209,7 +1209,7 @@ Ndis6GenericIrpHandler(
             switch (IrpSp->MinorFunction)
             {
                 case IRP_MN_START_DEVICE:
-                    DbgPrint("NDIS6: IRP_MN_START_DEVICE\n");
+                    DPRINT1("NDIS6: IRP_MN_START_DEVICE\n");
                     return Ndis6HandleStartDevice(DeviceObject, Irp);
 
                 case IRP_MN_QUERY_REMOVE_DEVICE:
@@ -1218,13 +1218,13 @@ Ndis6GenericIrpHandler(
                 case IRP_MN_STOP_DEVICE:
                 case IRP_MN_QUERY_STOP_DEVICE:
                 case IRP_MN_CANCEL_STOP_DEVICE:
-                    DbgPrint("NDIS6: PnP minor function 0x%x\n", IrpSp->MinorFunction);
+                    DPRINT1("NDIS6: PnP minor function 0x%x\n", IrpSp->MinorFunction);
                     break;
             }
             break;
 
         case IRP_MJ_POWER:
-            DbgPrint("NDIS6: IRP_MJ_POWER\n");
+            DPRINT1("NDIS6: IRP_MJ_POWER\n");
             break;
     }
 
@@ -1272,7 +1272,7 @@ Ndis6iGetNetCfgInstanceId(
                                      &KeyHandle);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("NDIS6: IoOpenDeviceRegistryKey failed: 0x%x\n", Status);
+        DPRINT1("NDIS6: IoOpenDeviceRegistryKey failed: 0x%x\n", Status);
         return Status;
     }
 
@@ -1292,13 +1292,13 @@ Ndis6iGetNetCfgInstanceId(
 
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("NDIS6: ZwQueryValueKey(NetCfgInstanceId) failed: 0x%x\n", Status);
+        DPRINT1("NDIS6: ZwQueryValueKey(NetCfgInstanceId) failed: 0x%x\n", Status);
         return Status;
     }
 
     if (ValueInfo->Type != REG_SZ)
     {
-        DbgPrint("NDIS6: NetCfgInstanceId is not REG_SZ (type=%lu)\n", ValueInfo->Type);
+        DPRINT1("NDIS6: NetCfgInstanceId is not REG_SZ (type=%lu)\n", ValueInfo->Type);
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -1306,12 +1306,12 @@ Ndis6iGetNetCfgInstanceId(
     GuidString = (PWCHAR)ValueInfo->Data;
     GuidLength = ValueInfo->DataLength / sizeof(WCHAR);
 
-    DbgPrint("NDIS6: NetCfgInstanceId = %S\n", GuidString);
+    DPRINT("NDIS6: NetCfgInstanceId = %S\n", GuidString);
 
     /* Build device name: \\Device\\{GUID} */
     if (BufferLength < (8 + GuidLength) * sizeof(WCHAR))
     {
-        DbgPrint("NDIS6: Buffer too small for adapter name\n");
+        DPRINT1("NDIS6: Buffer too small for adapter name\n");
         return STATUS_BUFFER_TOO_SMALL;
     }
 
@@ -1320,7 +1320,7 @@ Ndis6iGetNetCfgInstanceId(
     /* Ensure null termination */
     AdapterNameBuffer[8 + GuidLength - 1] = L'\0';
 
-    DbgPrint("NDIS6: Adapter device name = %S\n", AdapterNameBuffer);
+    DPRINT1("NDIS6: Adapter device name = %S\n", AdapterNameBuffer);
 
     return STATUS_SUCCESS;
 }
@@ -1353,25 +1353,25 @@ Ndis6iAnnounceAdapterToProtocols(
 
     UNREFERENCED_PARAMETER(GotGuidName);
 
-    DbgPrint("NDIS6: Announcing adapter to protocols - DeviceObject=%p\n", DeviceObject);
+    DPRINT1("NDIS6: Announcing adapter to protocols - DeviceObject=%p\n", DeviceObject);
 
     /* Get adapter context from device extension */
     AdapterContext = ((PVOID*)DeviceObject->DeviceExtension)[2];
     PhysicalDeviceObject = ((PVOID*)DeviceObject->DeviceExtension)[1];
 
-    DbgPrint("NDIS6: Adapter context = %p\n", AdapterContext);
+    DPRINT1("NDIS6: Adapter context = %p\n", AdapterContext);
 
     /* Try to get the NetCfgInstanceId (GUID) from registry */
     Status = Ndis6iGetNetCfgInstanceId(PhysicalDeviceObject, AdapterNameBuffer, sizeof(AdapterNameBuffer));
     if (NT_SUCCESS(Status))
     {
         GotGuidName = TRUE;
-        DbgPrint("NDIS6: Using GUID-based adapter name from registry\n");
+        DPRINT1("NDIS6: Using GUID-based adapter name from registry\n");
     }
     else
     {
         /* Fall back to generating a name */
-        DbgPrint("NDIS6: Failed to get NetCfgInstanceId (0x%x), generating name\n", Status);
+        DPRINT1("NDIS6: Failed to get NetCfgInstanceId (0x%x), generating name\n", Status);
         Index = InterlockedIncrement((LONG*)&Ndis6AdapterIndex) - 1;
         p = AdapterNameBuffer;
         RtlCopyMemory(p, L"\\Device\\NDIS6_", 14 * sizeof(WCHAR));
@@ -1388,7 +1388,7 @@ Ndis6iAnnounceAdapterToProtocols(
     Adapter = ExAllocatePoolWithTag(NonPagedPool, sizeof(LOGICAL_ADAPTER), NDIS_TAG);
     if (Adapter == NULL)
     {
-        DbgPrint("NDIS6: Failed to allocate LOGICAL_ADAPTER\n");
+        DPRINT1("NDIS6: Failed to allocate LOGICAL_ADAPTER\n");
         return;
     }
 
@@ -1406,7 +1406,7 @@ Ndis6iAnnounceAdapterToProtocols(
                       Adapter->NdisMiniportBlock.MiniportName.MaximumLength);
     }
 
-    DbgPrint("NDIS6: Created adapter %wZ\n", &Adapter->NdisMiniportBlock.MiniportName);
+    DPRINT1("NDIS6: Created adapter %wZ\n", &Adapter->NdisMiniportBlock.MiniportName);
 
     /* Initialize adapter fields */
     Adapter->NdisMiniportBlock.MediaType = NdisMedium802_3;  /* Ethernet */
@@ -1429,32 +1429,32 @@ Ndis6iAnnounceAdapterToProtocols(
     ((PVOID*)DeviceObject->DeviceExtension)[6] = Adapter;
 
     /* Add adapter to the global adapter list */
-    DbgPrint("NDIS6: Adding adapter to AdapterListHead\n");
+    DPRINT1("NDIS6: Adding adapter to AdapterListHead\n");
     ExInterlockedInsertTailList(&AdapterListHead, &Adapter->ListEntry, &AdapterListLock);
 
     /*
      * Notify all registered protocols about the new adapter
      * by calling their BindAdapterHandler
      */
-    DbgPrint("NDIS6: Refreshing protocol bindings\n");
+    DPRINT1("NDIS6: Refreshing protocol bindings\n");
 
     CurrentEntry = ProtocolListHead.Flink;
     while (CurrentEntry != &ProtocolListHead)
     {
         Protocol = CONTAINING_RECORD(CurrentEntry, PROTOCOL_BINDING, ListEntry);
 
-        DbgPrint("NDIS6: Protocol=%p, CurrentEntry=%p\n", Protocol, CurrentEntry);
-        DbgPrint("NDIS6: PROTOCOL_BINDING size=%u, Chars offset=%u\n",
+        DPRINT1("NDIS6: Protocol=%p, CurrentEntry=%p\n", Protocol, CurrentEntry);
+        DPRINT1("NDIS6: PROTOCOL_BINDING size=%u, Chars offset=%u\n",
                  (ULONG)sizeof(PROTOCOL_BINDING),
                  (ULONG)FIELD_OFFSET(PROTOCOL_BINDING, Chars));
-        DbgPrint("NDIS6: NDIS_PROTOCOL_CHARACTERISTICS size=%u\n",
+        DPRINT1("NDIS6: NDIS_PROTOCOL_CHARACTERISTICS size=%u\n",
                  (ULONG)sizeof(NDIS_PROTOCOL_CHARACTERISTICS));
-        DbgPrint("NDIS6: BindAdapterHandler offset in Chars=%u\n",
+        DPRINT1("NDIS6: BindAdapterHandler offset in Chars=%u\n",
                  (ULONG)FIELD_OFFSET(NDIS_PROTOCOL_CHARACTERISTICS, BindAdapterHandler));
-        DbgPrint("NDIS6: MajorNdisVersion=%u, MinorNdisVersion=%u\n",
+        DPRINT1("NDIS6: MajorNdisVersion=%u, MinorNdisVersion=%u\n",
                  Protocol->Chars.MajorNdisVersion, Protocol->Chars.MinorNdisVersion);
-        DbgPrint("NDIS6: BindAdapterHandler=%p\n", Protocol->Chars.BindAdapterHandler);
-        DbgPrint("NDIS6: Checking protocol '%wZ' for binding\n", &Protocol->Chars.Name);
+        DPRINT1("NDIS6: BindAdapterHandler=%p\n", Protocol->Chars.BindAdapterHandler);
+        DPRINT1("NDIS6: Checking protocol '%wZ' for binding\n", &Protocol->Chars.Name);
 
         if (Protocol->Chars.BindAdapterHandler != NULL)
         {
@@ -1469,12 +1469,12 @@ Ndis6iAnnounceAdapterToProtocols(
             if (HandlerAddr < 0x80000000UL)
 #endif
             {
-                DbgPrint("NDIS6: ERROR - Invalid BindAdapterHandler %p (not a kernel address!)\n",
+                DPRINT1("NDIS6: ERROR - Invalid BindAdapterHandler %p (not a kernel address!)\n",
                          Protocol->Chars.BindAdapterHandler);
-                DbgPrint("NDIS6: Protocol->Chars raw bytes at BindAdapterHandler offset:\n");
+                DPRINT1("NDIS6: Protocol->Chars raw bytes at BindAdapterHandler offset:\n");
                 {
                     PUCHAR RawBytes = (PUCHAR)&Protocol->Chars.BindAdapterHandler;
-                    DbgPrint("NDIS6:   %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                    DPRINT1("NDIS6:   %02x %02x %02x %02x %02x %02x %02x %02x\n",
                              RawBytes[0], RawBytes[1], RawBytes[2], RawBytes[3],
                              RawBytes[4], RawBytes[5], RawBytes[6], RawBytes[7]);
                 }
@@ -1496,7 +1496,7 @@ Ndis6iAnnounceAdapterToProtocols(
             }
             RtlInitUnicodeString(&RegistryPath, RegistryPathBuffer);
 
-            DbgPrint("NDIS6: Calling BindAdapterHandler for '%wZ' with device '%wZ'\n",
+            DPRINT1("NDIS6: Calling BindAdapterHandler for '%wZ' with device '%wZ'\n",
                      &Protocol->Chars.Name, &Adapter->NdisMiniportBlock.MiniportName);
 
             /* Call the protocol's BindAdapterHandler */
@@ -1507,17 +1507,17 @@ Ndis6iAnnounceAdapterToProtocols(
                 &RegistryPath,
                 0);    /* SystemSpecific1 */
 
-            DbgPrint("NDIS6: BindAdapterHandler returned 0x%x\n", BindStatus);
+            DPRINT1("NDIS6: BindAdapterHandler returned 0x%x\n", BindStatus);
         }
         else
         {
-            DbgPrint("NDIS6: Protocol has no BindAdapterHandler\n");
+            DPRINT1("NDIS6: Protocol has no BindAdapterHandler\n");
         }
 
         CurrentEntry = CurrentEntry->Flink;
     }
 
-    DbgPrint("NDIS6: Adapter announcement complete\n");
+    DPRINT1("NDIS6: Adapter announcement complete\n");
 }
 
 /*
@@ -1538,20 +1538,20 @@ NdisMIndicateStatusEx(
     PVOID LegacyStatusBuffer;
     UINT LegacyStatusBufferSize;
 
-    DbgPrint("NDIS6: NdisMIndicateStatusEx - Handle=%p, StatusCode=0x%x\n",
+    DPRINT1("NDIS6: NdisMIndicateStatusEx - Handle=%p, StatusCode=0x%x\n",
              MiniportAdapterHandle, StatusIndication->StatusCode);
 
     /* Validate parameters */
     if (MiniportAdapterHandle == NULL || StatusIndication == NULL)
     {
-        DbgPrint("NDIS6: NdisMIndicateStatusEx - invalid parameters\n");
+        DPRINT1("NDIS6: NdisMIndicateStatusEx - invalid parameters\n");
         return;
     }
 
     /* Get the LOGICAL_ADAPTER from device extension */
     if (DeviceObject->DeviceExtension == NULL)
     {
-        DbgPrint("NDIS6: NdisMIndicateStatusEx - no device extension\n");
+        DPRINT1("NDIS6: NdisMIndicateStatusEx - no device extension\n");
         return;
     }
 
@@ -1564,7 +1564,7 @@ NdisMIndicateStatusEx(
          * This is expected - silently return since there are no protocols
          * bound yet anyway.
          */
-        DbgPrint("NDIS6: NdisMIndicateStatusEx - no LOGICAL_ADAPTER yet (during init), ignoring status 0x%x\n",
+        DPRINT("NDIS6: NdisMIndicateStatusEx - no LOGICAL_ADAPTER yet (during init), ignoring status 0x%x\n",
                  StatusIndication->StatusCode);
         return;
     }
@@ -1576,7 +1576,7 @@ NdisMIndicateStatusEx(
             if (StatusIndication->StatusBufferSize >= sizeof(NDIS_LINK_STATE))
             {
                 PNDIS_LINK_STATE LinkState = (PNDIS_LINK_STATE)StatusIndication->StatusBuffer;
-                DbgPrint("NDIS6: Link state change - MediaConnectState=%d, XmitSpeed=%llu, RcvSpeed=%llu\n",
+                DPRINT1("NDIS6: Link state change - MediaConnectState=%d, XmitSpeed=%llu, RcvSpeed=%llu\n",
                          LinkState->MediaConnectState,
                          (unsigned long long)LinkState->XmitLinkSpeed,
                          (unsigned long long)LinkState->RcvLinkSpeed);
@@ -1604,22 +1604,22 @@ NdisMIndicateStatusEx(
             break;
 
         case NDIS_STATUS_MEDIA_CONNECT:
-            DbgPrint("NDIS6: Media connected\n");
+            DPRINT1("NDIS6: Media connected\n");
             LegacyStatus = NDIS_STATUS_MEDIA_CONNECT;
             break;
 
         case NDIS_STATUS_MEDIA_DISCONNECT:
-            DbgPrint("NDIS6: Media disconnected\n");
+            DPRINT1("NDIS6: Media disconnected\n");
             LegacyStatus = NDIS_STATUS_MEDIA_DISCONNECT;
             break;
 
         case NDIS_STATUS_OPER_STATUS:
-            DbgPrint("NDIS6: Operational status change\n");
+            DPRINT1("NDIS6: Operational status change\n");
             LegacyStatus = StatusIndication->StatusCode;
             break;
 
         default:
-            DbgPrint("NDIS6: Status indication 0x%x (size=%lu)\n",
+            DPRINT1("NDIS6: Status indication 0x%x (size=%lu)\n",
                      StatusIndication->StatusCode,
                      StatusIndication->StatusBufferSize);
             LegacyStatus = StatusIndication->StatusCode;
@@ -1638,7 +1638,7 @@ NdisMIndicateStatusEx(
 
     if (CurrentEntry == &Adapter->ProtocolListHead)
     {
-        DbgPrint("NDIS6: No protocols bound to adapter for status indication\n");
+        DPRINT1("NDIS6: No protocols bound to adapter for status indication\n");
     }
 
     while (CurrentEntry != &Adapter->ProtocolListHead)
@@ -1647,7 +1647,7 @@ NdisMIndicateStatusEx(
 
         if (AdapterBinding->ProtocolBinding != NULL)
         {
-            DbgPrint("NDIS6: Indicating status 0x%x to protocol '%wZ'\n",
+            DPRINT1("NDIS6: Indicating status 0x%x to protocol '%wZ'\n",
                      LegacyStatus, &AdapterBinding->ProtocolBinding->Chars.Name);
 
             /*
@@ -1660,7 +1660,7 @@ NdisMIndicateStatusEx(
              */
             if (AdapterBinding->ProtocolBinding->Chars.StatusHandler != NULL)
             {
-                DbgPrint("NDIS6: Calling protocol StatusHandler\n");
+                DPRINT1("NDIS6: Calling protocol StatusHandler\n");
 
                 /* Release lock before calling protocol handler */
                 KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
@@ -1690,7 +1690,7 @@ NdisMIndicateStatusEx(
             }
             else
             {
-                DbgPrint("NDIS6: Protocol has no StatusHandler\n");
+                DPRINT1("NDIS6: Protocol has no StatusHandler\n");
             }
         }
 
@@ -1700,7 +1700,7 @@ NdisMIndicateStatusEx(
     /* Release adapter lock */
     KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
 
-    DbgPrint("NDIS6: NdisMIndicateStatusEx completed\n");
+    DPRINT1("NDIS6: NdisMIndicateStatusEx completed\n");
 }
 
 #endif /* NDIS_SUPPORT_NDIS6 */

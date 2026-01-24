@@ -10,6 +10,10 @@
 #ifndef __NDISSYS_H
 #define __NDISSYS_H
 
+#ifndef NDEBUG
+#define NDEBUG
+#endif
+
 #include <ndis.h>
 
 #include "debug.h"

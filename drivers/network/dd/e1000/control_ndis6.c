@@ -32,7 +32,7 @@ E1000MiniportPause(
 
     UNREFERENCED_PARAMETER(PauseParameters);
 
-    DbgPrint("E1000: MiniportPause\n");
+    DPRINT1("E1000: MiniportPause\n");
 
     /* Set pausing flag */
     InterlockedOr(&Adapter->Flags, E1000_FLAG_ADAPTER_PAUSING);
@@ -59,7 +59,7 @@ E1000MiniportPause(
     InterlockedAnd(&Adapter->Flags, ~E1000_FLAG_ADAPTER_PAUSING);
     InterlockedOr(&Adapter->Flags, E1000_FLAG_ADAPTER_PAUSED);
 
-    DbgPrint("E1000: MiniportPause complete\n");
+    DPRINT1("E1000: MiniportPause complete\n");
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -83,12 +83,12 @@ E1000MiniportRestart(
 
     UNREFERENCED_PARAMETER(RestartParameters);
 
-    DbgPrint("E1000: MiniportRestart\n");
+    DPRINT1("E1000: MiniportRestart\n");
 
     /* Check that we were paused */
     if (!(InterlockedCompareExchange(&Adapter->Flags, 0, 0) & E1000_FLAG_ADAPTER_PAUSED))
     {
-        DbgPrint("E1000: MiniportRestart called but not paused\n");
+        DPRINT("E1000: MiniportRestart called but not paused\n");
         return NDIS_STATUS_FAILURE;
     }
 
@@ -109,7 +109,7 @@ E1000MiniportRestart(
     /* Re-enable interrupts */
     E1000EnableInterrupts(Adapter);
 
-    DbgPrint("E1000: MiniportRestart complete\n");
+    DPRINT1("E1000: MiniportRestart complete\n");
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -132,7 +132,7 @@ E1000MiniportResetEx(
     NDIS_STATUS Status;
     ULONG i;
 
-    DbgPrint("E1000: MiniportResetEx\n");
+    DPRINT1("E1000: MiniportResetEx\n");
 
     /* Set reset flag */
     InterlockedOr(&Adapter->Flags, E1000_FLAG_ADAPTER_RESET);
@@ -177,7 +177,7 @@ E1000MiniportResetEx(
     Status = E1000ResetHardware(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: MiniportResetEx - Hardware reset failed 0x%08x\n", Status);
+        DPRINT1("E1000: MiniportResetEx - Hardware reset failed 0x%08x\n", Status);
         InterlockedAnd(&Adapter->Flags, ~E1000_FLAG_ADAPTER_RESET);
         return Status;
     }
@@ -236,7 +236,7 @@ E1000MiniportResetEx(
     /* MAC address will be preserved */
     *AddressingReset = FALSE;
 
-    DbgPrint("E1000: MiniportResetEx complete\n");
+    DPRINT1("E1000: MiniportResetEx complete\n");
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -281,7 +281,7 @@ E1000MiniportCheckForHangEx(
 
         if (CurrentTime.QuadPart > Timeout.QuadPart)
         {
-            DbgPrint("E1000: TX appears hung - Head=%u, Tail=%u\n",
+            DPRINT1("E1000: TX appears hung - Head=%u, Tail=%u\n",
                      TxQueue->Head, TxQueue->Tail);
             Hung = TRUE;
         }
@@ -297,7 +297,7 @@ E1000MiniportCheckForHangEx(
         /* Check for PHY reset stuck */
         if (StatusReg == 0xFFFFFFFF)
         {
-            DbgPrint("E1000: Hardware not responding (STATUS=0xFFFFFFFF)\n");
+            DPRINT1("E1000: Hardware not responding (STATUS=0xFFFFFFFF)\n");
             Hung = TRUE;
         }
     }

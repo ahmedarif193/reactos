@@ -8,37 +8,11 @@
  */
 
 #pragma once
+#include <reactos/debug.h>
 
 /* ============================================================================
  * Debug Trace Levels (standard levels)
  * ============================================================================ */
-
-#define NORMAL_MASK    0x000000FF
-#define SPECIAL_MASK   0xFFFFFF00
-#define MIN_TRACE      0x00000001
-#define MID_TRACE      0x00000002
-#define MAX_TRACE      0x00000003
-
-/* ============================================================================
- * Debug Categories (bit flags for targeted debugging)
- * ============================================================================ */
-
-#define DEBUG_MEMORY   0x00000100   /* Memory allocation/deallocation */
-#define DEBUG_TX       0x00000200   /* Transmit path */
-#define DEBUG_RX       0x00000400   /* Receive path */
-#define DEBUG_INIT     0x00000800   /* Initialization/shutdown */
-#define DEBUG_INT      0x00001000   /* Interrupt handling */
-#define DEBUG_POWER    0x00002000   /* Power management */
-#define DEBUG_CHECKSUM 0x00004000   /* Checksum offload */
-#define DEBUG_LINK     0x00008000   /* Link status changes */
-#define DEBUG_OID      0x00010000   /* OID requests */
-#define DEBUG_RING     0x00020000   /* Descriptor ring operations */
-#define DEBUG_STATS    0x00040000   /* Statistics */
-#define DEBUG_HW       0x00080000   /* Hardware register access */
-
-/* Combined debug masks */
-#define DEBUG_TRAFFIC  (DEBUG_TX | DEBUG_RX)
-#define DEBUG_ULTRA    0xFFFFFFFF
 
 /* ============================================================================
  * Rate Limiting for High-Frequency Events
@@ -49,6 +23,13 @@
 
 /* Maximum messages per interval for rate-limited logging */
 #define DEBUG_RATE_LIMIT_MAX        10
+
+#ifdef ASSERT_IRQL
+#undef ASSERT_IRQL
+#endif
+#ifdef ASSERT_IRQL_EQUAL
+#undef ASSERT_IRQL_EQUAL
+#endif
 
 /* ============================================================================
  * Debug Statistics Structure
@@ -119,24 +100,8 @@ typedef struct _E1000_DEBUG_STATS {
 
 #if DBG
 
-/* Global debug trace level - can be modified at runtime */
-extern ULONG DebugTraceLevel;
-
 /* Global debug statistics - available even in release builds for diagnostics */
 extern E1000_DEBUG_STATS DebugStats;
-
-
-/* ============================================================================
- * Core Debug Print Macro
- * ============================================================================ */
-
-#define NDIS_DbgPrint(_t_, _x_) \
-    if ((_t_ > NORMAL_MASK) \
-        ? (DebugTraceLevel & _t_) > NORMAL_MASK \
-        : (DebugTraceLevel & NORMAL_MASK) >= _t_) { \
-        DbgPrint("(%s:%d)(%s) ", __FILE__, __LINE__, __FUNCTION__); \
-        DbgPrint _x_ ; \
-    }
 
 
 /* ============================================================================
@@ -145,47 +110,47 @@ extern E1000_DEBUG_STATS DebugStats;
 
 /* TX path debugging */
 #define E1000_TX_DBG(_x_) \
-    NDIS_DbgPrint(DEBUG_TX, _x_)
+    DPRINT _x_
 
 /* RX path debugging */
 #define E1000_RX_DBG(_x_) \
-    NDIS_DbgPrint(DEBUG_RX, _x_)
+    DPRINT _x_
 
 /* Initialization debugging */
 #define E1000_INIT_DBG(_x_) \
-    NDIS_DbgPrint(DEBUG_INIT, _x_)
+    DPRINT _x_
 
 /* Interrupt debugging */
 #define E1000_INT_DBG(_x_) \
-    NDIS_DbgPrint(DEBUG_INT, _x_)
+    DPRINT _x_
 
 /* Power management debugging */
 #define E1000_POWER_DBG(_x_) \
-    NDIS_DbgPrint(DEBUG_POWER, _x_)
+    DPRINT _x_
 
 /* Checksum debugging */
 #define E1000_CSUM_DBG(_x_) \
-    NDIS_DbgPrint(DEBUG_CHECKSUM, _x_)
+    DPRINT _x_
 
 /* Link status debugging */
 #define E1000_LINK_DBG(_x_) \
-    NDIS_DbgPrint(DEBUG_LINK, _x_)
+    DPRINT _x_
 
 /* OID debugging */
 #define E1000_OID_DBG(_x_) \
-    NDIS_DbgPrint(DEBUG_OID, _x_)
+    DPRINT _x_
 
 /* Descriptor ring debugging */
 #define E1000_RING_DBG(_x_) \
-    NDIS_DbgPrint(DEBUG_RING, _x_)
+    DPRINT _x_
 
 /* Statistics debugging */
 #define E1000_STATS_DBG(_x_) \
-    NDIS_DbgPrint(DEBUG_STATS, _x_)
+    DPRINT _x_
 
 /* Hardware register debugging */
 #define E1000_HW_DBG(_x_) \
-    NDIS_DbgPrint(DEBUG_HW, _x_)
+    DPRINT _x_
 
 
 /* ============================================================================
@@ -284,33 +249,12 @@ extern E1000_DEBUG_STATS DebugStats;
     InterlockedIncrement((volatile LONG*)&DebugStats._field_)
 
 
-/* ============================================================================
- * Rate-Limited Debug Macros
- * ============================================================================ */
-
-/* Rate-limited debug print (for high-frequency events like per-packet logging) */
-#define NDIS_DbgPrint_RateLimited(_t_, _x_) \
-    do { \
-        LARGE_INTEGER _now; \
-        KeQueryTickCount(&_now); \
-        if ((_now.QuadPart - DebugStats.LastRateLimitCheck.QuadPart) > DEBUG_RATE_LIMIT_INTERVAL) { \
-            DebugStats.LastRateLimitCheck = _now; \
-            DebugStats.MessagesThisInterval = 0; \
-        } \
-        if (DebugStats.MessagesThisInterval < DEBUG_RATE_LIMIT_MAX) { \
-            DebugStats.MessagesThisInterval++; \
-            NDIS_DbgPrint(_t_, _x_); \
-        } \
-    } while (0)
-
-
 #else /* !DBG */
 
 /* ============================================================================
  * Release Build - Disable All Debug Macros
  * ============================================================================ */
 
-#define NDIS_DbgPrint(_t_, _x_)
 #define E1000_TX_DBG(_x_)
 #define E1000_RX_DBG(_x_)
 #define E1000_INIT_DBG(_x_)
@@ -341,8 +285,6 @@ extern E1000_DEBUG_STATS DebugStats;
 #define E1000_STAT_ADD(_field_, _value_)
 #define E1000_STAT_INC32(_field_)
 
-#define NDIS_DbgPrint_RateLimited(_t_, _x_)
-
 #endif /* DBG */
 
 
@@ -350,16 +292,26 @@ extern E1000_DEBUG_STATS DebugStats;
  * Common Macros (both debug and release builds)
  * ============================================================================ */
 
+#ifdef assert
+#undef assert
+#endif
 #define assert(x) ASSERT(x)
 #define assert_irql(x) ASSERT_IRQL(x)
 
+#ifdef UNIMPLEMENTED
+#undef UNIMPLEMENTED
+#endif
+#ifdef UNIMPLEMENTED_DBGBREAK
+#undef UNIMPLEMENTED_DBGBREAK
+#endif
+
 #define UNIMPLEMENTED \
-    NDIS_DbgPrint(MIN_TRACE, ("UNIMPLEMENTED.\n"));
+    DPRINT1("UNIMPLEMENTED.\n");
 
 #define UNIMPLEMENTED_DBGBREAK(...) \
     do { \
-        NDIS_DbgPrint(MIN_TRACE, ("UNIMPLEMENTED.\n")); \
-        DbgPrint("" __VA_ARGS__); \
+        DPRINT1("UNIMPLEMENTED.\n"); \
+        DPRINT1("" __VA_ARGS__); \
         DbgBreakPoint(); \
     } while (0)
 
@@ -385,4 +337,3 @@ VOID E1000_ResetDebugStats(VOID);
 
 /* Initialize debug subsystem */
 VOID E1000_InitDebug(VOID);
-

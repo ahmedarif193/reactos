@@ -75,7 +75,7 @@ UINT CopyBufferToBufferChain(
     UINT BytesCopied, BytesToCopy, DstSize;
     PUCHAR DstData;
 
-    NDIS_DbgPrint(MAX_TRACE, ("DstBuffer (0x%X)  DstOffset (0x%X)  SrcData (0x%X)  Length (%d)\n", DstBuffer, DstOffset, SrcData, Length));
+    DPRINT1("DstBuffer (0x%X)  DstOffset (0x%X)  SrcData (0x%X)  Length (%d)\n", DstBuffer, DstOffset, SrcData, Length);
 
     /* Skip DstOffset bytes in the destination buffer chain */
     if (SkipToOffset(DstBuffer, DstOffset, &DstData, &DstSize) == 0xFFFFFFFF)
@@ -132,7 +132,7 @@ UINT CopyBufferChainToBuffer(
     UINT BytesCopied, BytesToCopy, SrcSize;
     PUCHAR SrcData;
 
-    NDIS_DbgPrint(MAX_TRACE, ("DstData 0x%X  SrcBuffer 0x%X  SrcOffset 0x%X  Length %d\n",DstData,SrcBuffer, SrcOffset, Length));
+    DPRINT1("DstData 0x%X  SrcBuffer 0x%X  SrcOffset 0x%X  Length %d\n",DstData,SrcBuffer, SrcOffset, Length);
 
     /* Skip SrcOffset bytes in the source buffer chain */
     if (SkipToOffset(SrcBuffer, SrcOffset, &SrcData, &SrcSize) == 0xFFFFFFFF)
@@ -143,7 +143,7 @@ UINT CopyBufferChainToBuffer(
     for (;;) {
         BytesToCopy = MIN(SrcSize, Length);
 
-        NDIS_DbgPrint(MAX_TRACE, ("Copying (%d) bytes from 0x%X to 0x%X\n", BytesToCopy, SrcData, DstData));
+        DPRINT1("Copying (%d) bytes from 0x%X to 0x%X\n", BytesToCopy, SrcData, DstData);
 
         RtlCopyMemory((PVOID)DstData, (PVOID)SrcData, BytesToCopy);
         BytesCopied += BytesToCopy;
@@ -193,7 +193,7 @@ UINT CopyPacketToBuffer(
     UINT FirstLength;
     UINT TotalLength;
 
-    NDIS_DbgPrint(MAX_TRACE, ("DstData (0x%X)  SrcPacket (0x%X)  SrcOffset (0x%X)  Length (%d)\n", DstData, SrcPacket, SrcOffset, Length));
+    DPRINT("DstData (0x%X)  SrcPacket (0x%X)  SrcOffset (0x%X)  Length (%d)\n", DstData, SrcPacket, SrcOffset, Length);
 
     NdisGetFirstBufferFromPacket(SrcPacket,
                                  &FirstBuffer,
@@ -231,7 +231,7 @@ UINT CopyPacketToBufferChain(
     UINT DstSize, SrcSize;
     UINT Count, Total;
 
-    NDIS_DbgPrint(MAX_TRACE, ("DstBuffer (0x%X)  DstOffset (0x%X)  SrcPacket (0x%X)  SrcOffset (0x%X)  Length (%d)\n", DstBuffer, DstOffset, SrcPacket, SrcOffset, Length));
+    DPRINT("DstBuffer (0x%X)  DstOffset (0x%X)  SrcPacket (0x%X)  SrcOffset (0x%X)  Length (%d)\n", DstBuffer, DstOffset, SrcPacket, SrcOffset, Length);
 
     /* Skip DstOffset bytes in the destination buffer chain */
     NdisQueryBuffer(DstBuffer, (PVOID)&DstData, &DstSize);
@@ -358,7 +358,7 @@ NdisAllocateBuffer(
         (*Buffer)->Next = NULL;
         *Status = NDIS_STATUS_SUCCESS;
     } else {
-        NDIS_DbgPrint(MIN_TRACE, ("IoAllocateMdl failed (%x, %lx)\n", VirtualAddress, Length));
+        DPRINT1("IoAllocateMdl failed (%x, %lx)\n", VirtualAddress, Length);
         *Status = NDIS_STATUS_FAILURE;
     }
 }
@@ -463,15 +463,15 @@ NdisAllocatePacketPoolEx(
     UINT Size, Length, i;
     PNDIS_PACKET Packet, NextPacket;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Status (0x%X)  PoolHandle (0x%X)  "
+    DPRINT1("Status (0x%X)  PoolHandle (0x%X)  "
         "NumberOfDescriptors (%d)  ProtocolReservedLength (%d).\n",
-        Status, PoolHandle, NumberOfDescriptors, ProtocolReservedLength));
+        Status, PoolHandle, NumberOfDescriptors, ProtocolReservedLength);
 
     *PoolHandle = NULL;
 
     if (NumberOfDescriptors > 0xffff)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid number of descriptors (%lx)\n", NumberOfDescriptors))
+        DPRINT("Invalid number of descriptors (%lx)\n", NumberOfDescriptors);
         *Status = NDIS_STATUS_RESOURCES;
     }
     else
@@ -479,7 +479,7 @@ NdisAllocatePacketPoolEx(
         NumberOfDescriptors += NumberOfOverflowDescriptors;
         if (NumberOfDescriptors > 0xffff)
         {
-            NDIS_DbgPrint(MIN_TRACE, ("Total number of descriptors > 0xffff (%lx)\n", NumberOfDescriptors));
+            DPRINT("Total number of descriptors > 0xffff (%lx)\n", NumberOfDescriptors);
             NumberOfDescriptors = 0xffff;
         }
 
@@ -508,7 +508,7 @@ NdisAllocatePacketPoolEx(
                 Packet->Reserved[0] = 0;
             }
             else {
-                NDIS_DbgPrint(MIN_TRACE, ("Attempted to allocate a packet pool with 0 descriptors\n"));
+                DPRINT("Attempted to allocate a packet pool with 0 descriptors\n");
                 Pool->FreeList = NULL;
             }
 
@@ -695,15 +695,15 @@ NdisDprAllocatePacketNonInterlocked(
     PNDIS_PACKET Temp;
     PNDISI_PACKET_POOL Pool = (PNDISI_PACKET_POOL)PoolHandle;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Status (0x%X)  Packet (0x%X)  PoolHandle (0x%X).\n",
-        Status, Packet, PoolHandle));
+    DPRINT("Status (0x%X)  Packet (0x%X)  PoolHandle (0x%X).\n",
+        Status, Packet, PoolHandle);
 
     *Packet = NULL;
 
     if (Pool == NULL)
     {
         *Status = NDIS_STATUS_FAILURE;
-        NDIS_DbgPrint(MIN_TRACE, ("Called passed a bad pool handle\n"));
+        DPRINT("Called passed a bad pool handle\n");
         return;
     }
 
@@ -722,7 +722,7 @@ NdisDprAllocatePacketNonInterlocked(
         *Packet = Temp;
         *Status = NDIS_STATUS_SUCCESS;
     } else {
-        NDIS_DbgPrint(MIN_TRACE, ("No more free descriptors\n"));
+        DPRINT("No more free descriptors\n");
         *Status = NDIS_STATUS_RESOURCES;
     }
 }
@@ -762,7 +762,7 @@ NdisDprFreePacketNonInterlocked(
  *     Packet = Pointer to packet to free
  */
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Packet (0x%X).\n", Packet));
+    DPRINT("Packet (0x%X).\n", Packet);
 
     Packet->Reserved[0]          = (ULONG_PTR)((NDISI_PACKET_POOL*)Packet->Private.Pool)->FreeList;
     ((NDISI_PACKET_POOL*)Packet->Private.Pool)->FreeList = Packet;
@@ -896,7 +896,7 @@ NdisGetFirstBufferFromPacket(
         *_FirstBufferVA = MmGetSystemAddressForMdl(Buffer);
         Buffer = Buffer->Next;
     } else {
-        NDIS_DbgPrint(MID_TRACE, ("No buffers linked to this packet\n"));
+        DPRINT("No buffers linked to this packet\n");
         *_FirstBufferLength = 0;
         *_FirstBufferVA = NULL;
     }
@@ -933,7 +933,7 @@ NdisGetFirstBufferFromPacketSafe(
         *_FirstBufferVA = MmGetSystemAddressForMdlSafe(Buffer, Priority);
         Buffer = Buffer->Next;
     } else {
-        NDIS_DbgPrint(MID_TRACE, ("No buffers linked to this packet\n"));
+        DPRINT("No buffers linked to this packet\n");
         *_FirstBufferLength = 0;
         *_FirstBufferVA = NULL;
     }
@@ -1036,7 +1036,7 @@ NdisUnchainBufferAtBack(
                     &NdisBuffer,
                     NULL);
     if (!NdisBuffer) {
-        NDIS_DbgPrint(MID_TRACE, ("No buffer to unchain\n"));
+        DPRINT1("No buffer to unchain\n");
         *Buffer = NULL;
         return;
     }
@@ -1085,7 +1085,7 @@ NdisUnchainBufferAtFront(
                     &NdisBuffer,
                     NULL);
     if (!NdisBuffer) {
-        NDIS_DbgPrint(MID_TRACE, ("No buffer to unchain\n"));
+        DPRINT1("No buffer to unchain\n");
         *Buffer = NULL;
         return;
     }
@@ -1127,12 +1127,12 @@ NdisCopyBuffer(
 {
     PVOID CurrentVa = (PUCHAR)(MmGetMdlVirtualAddress((PNDIS_BUFFER)MemoryDescriptor)) + Offset;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called\n"));
+    DPRINT("Called\n");
 
     *Buffer = IoAllocateMdl(CurrentVa, Length, FALSE, FALSE, NULL);
     if (!*Buffer)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("IoAllocateMdl failed (%x, %lx)\n", CurrentVa, Length));
+        DPRINT1("IoAllocateMdl failed (%x, %lx)\n", CurrentVa, Length);
         *Status = NDIS_STATUS_FAILURE;
         return;
     }
@@ -1292,7 +1292,7 @@ NdisIMCopySendCompletePerPacketInfo(
      * NdisIMCopySendCompletePerPacketInfo?
      */
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     RtlCopyMemory(NDIS_PACKET_EXTENSION_FROM_PACKET(DstPacket),
                   NDIS_PACKET_EXTENSION_FROM_PACKET(SrcPacket),
@@ -1319,7 +1319,7 @@ NdisIMCopySendPerPacketInfo(
      * NdisIMCopySendCompletePerPacketInfo?
      */
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     RtlCopyMemory(NDIS_PACKET_EXTENSION_FROM_PACKET(DstPacket),
                   NDIS_PACKET_EXTENSION_FROM_PACKET(SrcPacket),

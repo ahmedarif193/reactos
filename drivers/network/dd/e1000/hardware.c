@@ -138,12 +138,12 @@ static BOOLEAN E1000ReadMdic(IN PE1000_ADAPTER Adapter, IN ULONG Address, USHORT
     }
     if (!(Mdic & E1000_MDIC_R))
     {
-        NDIS_DbgPrint(MIN_TRACE, ("MDI Read incomplete\n"));
+        DPRINT1("MDI Read incomplete\n");
         return FALSE;
     }
     if (Mdic & E1000_MDIC_E)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("MDI Read error\n"));
+        DPRINT1("MDI Read error\n");
         return FALSE;
     }
 
@@ -152,8 +152,8 @@ static BOOLEAN E1000ReadMdic(IN PE1000_ADAPTER Adapter, IN ULONG Address, USHORT
     if (ResultAddress!= Address)
     {
         /* Add locking? */
-        NDIS_DbgPrint(MIN_TRACE, ("MDI Read got wrong address (%d instead of %d)\n",
-                                  ResultAddress, Address));
+        DPRINT1("MDI Read got wrong address (%d instead of %d)\n",
+                                  ResultAddress, Address);
         return FALSE;
     }
     *Result = (USHORT) Mdic;
@@ -206,8 +206,8 @@ static BOOLEAN E1000ReadEeprom(IN PE1000_ADAPTER Adapter, IN UCHAR Address, USHO
 
     if (!(Value & DoneBit))
     {
-        NDIS_DbgPrint(MIN_TRACE, ("EEPROM Read incomplete (Addr=%u, Value=0x%08x, IsPCIe=%d)\n",
-                                  Address, Value, Adapter->IsPCIe));
+        DPRINT1("EEPROM Read incomplete (Addr=%u, Value=0x%08x, IsPCIe=%d)\n",
+                                  Address, Value, Adapter->IsPCIe);
         return FALSE;
     }
 
@@ -232,7 +232,7 @@ BOOLEAN E1000ValidateNvmChecksum(IN PE1000_ADAPTER Adapter)
 
     if (Checksum != NVM_MAGIC_SUM)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("EEPROM has an invalid checksum of 0x%x\n", (ULONG)Checksum));
+        DPRINT1("EEPROM has an invalid checksum of 0x%x\n", (ULONG)Checksum);
         return FALSE;
     }
 
@@ -273,8 +273,8 @@ static VOID E1000DetectPCIeDevice(IN PE1000_ADAPTER Adapter)
         }
     }
 
-    NDIS_DbgPrint(MID_TRACE, ("Device 0x%04x: IsPCIe=%d\n",
-                              Adapter->DeviceId, Adapter->IsPCIe));
+    DPRINT1("Device 0x%04x: IsPCIe=%d\n",
+                              Adapter->DeviceId, Adapter->IsPCIe);
 }
 
 /*
@@ -301,7 +301,7 @@ static VOID E1000DetectFlashNvm(IN PE1000_ADAPTER Adapter)
             Adapter->HasFlash = TRUE;
         }
 
-        NDIS_DbgPrint(MID_TRACE, ("EECD=0x%08x, HasFlash=%d\n", Eecd, Adapter->HasFlash));
+        DPRINT1("EECD=0x%08x, HasFlash=%d\n", Eecd, Adapter->HasFlash);
     }
 }
 
@@ -340,7 +340,7 @@ static VOID E1000ReadDeviceSerialNumber(IN PE1000_ADAPTER Adapter)
         if (Word0 != 0 || Word1 != 0 || Word2 != 0 || Word3 != 0)
         {
             Adapter->DeviceSerialNumber.Valid = TRUE;
-            NDIS_DbgPrint(MID_TRACE, ("Device Serial: %02X%02X%02X%02X%02X%02X%02X%02X\n",
+            DPRINT1("Device Serial: %02X%02X%02X%02X%02X%02X%02X%02X\n",
                 Adapter->DeviceSerialNumber.Serial[7],
                 Adapter->DeviceSerialNumber.Serial[6],
                 Adapter->DeviceSerialNumber.Serial[5],
@@ -348,7 +348,7 @@ static VOID E1000ReadDeviceSerialNumber(IN PE1000_ADAPTER Adapter)
                 Adapter->DeviceSerialNumber.Serial[3],
                 Adapter->DeviceSerialNumber.Serial[2],
                 Adapter->DeviceSerialNumber.Serial[1],
-                Adapter->DeviceSerialNumber.Serial[0]));
+                Adapter->DeviceSerialNumber.Serial[0]);
         }
     }
 }
@@ -369,14 +369,14 @@ NICRecognizeHardware(
     IN PE1000_ADAPTER Adapter)
 {
     UINT n;
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     E1000_INIT_DBG(("[INIT] NICRecognizeHardware: VendorID=0x%04x DeviceID=0x%04x\n",
                     Adapter->VendorID, Adapter->DeviceID));
 
     if (Adapter->VendorID != HW_VENDOR_INTEL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unknown vendor: 0x%x\n", Adapter->VendorID));
+        DPRINT1("Unknown vendor: 0x%x\n", Adapter->VendorID);
         E1000_INIT_DBG(("[INIT] FAILED: Unknown vendor 0x%04x (expected 0x%04x)\n",
                         Adapter->VendorID, HW_VENDOR_INTEL));
         return FALSE;
@@ -396,7 +396,7 @@ NICRecognizeHardware(
         }
     }
 
-    NDIS_DbgPrint(MIN_TRACE, ("Unknown device: 0x%x\n", Adapter->DeviceID));
+    DPRINT1("Unknown device: 0x%x\n", Adapter->DeviceID);
     E1000_INIT_DBG(("[INIT] FAILED: Unknown DeviceID 0x%04x not in supported list\n",
                     Adapter->DeviceID));
 
@@ -410,18 +410,18 @@ NICInitializeAdapterResources(
     IN PNDIS_RESOURCE_LIST ResourceList)
 {
     UINT n;
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     E1000_INIT_DBG(("[INIT] NICInitializeAdapterResources: parsing %u resources\n",
                     ResourceList->Count));
 
-    DbgPrint("E1000: NICInitializeAdapterResources: parsing %u resources\n", ResourceList->Count);
+    DPRINT1("E1000: NICInitializeAdapterResources: parsing %u resources\n", ResourceList->Count);
 
     for (n = 0; n < ResourceList->Count; n++)
     {
         PCM_PARTIAL_RESOURCE_DESCRIPTOR ResourceDescriptor = ResourceList->PartialDescriptors + n;
 
-        DbgPrint("E1000: Resource[%u]: Type=%u Flags=0x%x ShareDisposition=%u\n",
+        DPRINT1("E1000: Resource[%u]: Type=%u Flags=0x%x ShareDisposition=%u\n",
                  n, ResourceDescriptor->Type, ResourceDescriptor->Flags,
                  ResourceDescriptor->ShareDisposition);
 
@@ -434,11 +434,11 @@ NICInitializeAdapterResources(
             Adapter->IoPortAddress = ResourceDescriptor->u.Port.Start.LowPart;
             Adapter->IoPortLength = ResourceDescriptor->u.Port.Length;
 
-            DbgPrint("E1000: I/O Port: Start=0x%x Length=%u\n",
+            DPRINT1("E1000: I/O Port: Start=0x%x Length=%u\n",
                      Adapter->IoPortAddress, Adapter->IoPortLength);
-            NDIS_DbgPrint(MID_TRACE, ("I/O port range is %p to %p\n",
+            DPRINT1("I/O port range is %p to %p\n",
                                       Adapter->IoPortAddress,
-                                      Adapter->IoPortAddress + Adapter->IoPortLength));
+                                      Adapter->IoPortAddress + Adapter->IoPortLength);
             break;
         case CmResourceTypeInterrupt:
             /*
@@ -479,23 +479,23 @@ NICInitializeAdapterResources(
 
                 Adapter->InterruptMode = E1000_INTERRUPT_MODE_MSI;
 
-                DbgPrint("E1000: MSI Interrupt Resource:\n");
-                DbgPrint("E1000:   Raw.Reserved=%u\n", ResourceDescriptor->u.MessageInterrupt.Raw.Reserved);
-                DbgPrint("E1000:   Raw.MessageCount=%u\n", ResourceDescriptor->u.MessageInterrupt.Raw.MessageCount);
-                DbgPrint("E1000:   Raw.Vector=%u (0x%x)\n",
+                DPRINT("E1000: MSI Interrupt Resource:\n");
+                DPRINT("E1000:   Raw.Reserved=%u\n", ResourceDescriptor->u.MessageInterrupt.Raw.Reserved);
+                DPRINT("E1000:   Raw.MessageCount=%u\n", ResourceDescriptor->u.MessageInterrupt.Raw.MessageCount);
+                DPRINT1("E1000:   Raw.Vector=%u (0x%x)\n",
                          ResourceDescriptor->u.MessageInterrupt.Raw.Vector,
                          ResourceDescriptor->u.MessageInterrupt.Raw.Vector);
-                DbgPrint("E1000:   Raw.Affinity=0x%Ix\n",
+                DPRINT1("E1000:   Raw.Affinity=0x%Ix\n",
                          (ULONG_PTR)ResourceDescriptor->u.MessageInterrupt.Raw.Affinity);
-                DbgPrint("E1000:   Flags=0x%x ShareDisposition=%u\n",
+                DPRINT1("E1000:   Flags=0x%x ShareDisposition=%u\n",
                          ResourceDescriptor->Flags, ResourceDescriptor->ShareDisposition);
-                DbgPrint("E1000:   Interpreted: Vector=%u Level=%u MessageCount=%u Shared=%d\n",
+                DPRINT1("E1000:   Interpreted: Vector=%u Level=%u MessageCount=%u Shared=%d\n",
                          Adapter->InterruptVector, Adapter->InterruptLevel,
                          Adapter->MsixVectorCount, Adapter->InterruptShared);
 
-                NDIS_DbgPrint(MID_TRACE, ("MSI/MSI-X interrupt resource: Vector=%u MessageCount=%u Flags=0x%x\n",
+                DPRINT1("MSI/MSI-X interrupt resource: Vector=%u MessageCount=%u Flags=0x%x\n",
                                           Adapter->InterruptVector, Adapter->MsixVectorCount,
-                                          ResourceDescriptor->Flags));
+                                          ResourceDescriptor->Flags);
             }
             else
             {
@@ -512,30 +512,30 @@ NICInitializeAdapterResources(
                 Adapter->InterruptMode = E1000_INTERRUPT_MODE_LEGACY;
                 Adapter->MsixVectorCount = 0;
 
-                DbgPrint("E1000: Legacy Interrupt Resource:\n");
-                DbgPrint("E1000:   Level=%u (0x%x)\n",
+                DPRINT("E1000: Legacy Interrupt Resource:\n");
+                DPRINT1("E1000:   Level=%u (0x%x)\n",
                          ResourceDescriptor->u.Interrupt.Level,
                          ResourceDescriptor->u.Interrupt.Level);
-                DbgPrint("E1000:   Vector=%u (0x%x)\n",
+                DPRINT1("E1000:   Vector=%u (0x%x)\n",
                          ResourceDescriptor->u.Interrupt.Vector,
                          ResourceDescriptor->u.Interrupt.Vector);
-                DbgPrint("E1000:   Affinity=0x%Ix\n",
+                DPRINT1("E1000:   Affinity=0x%Ix\n",
                          (ULONG_PTR)ResourceDescriptor->u.Interrupt.Affinity);
-                DbgPrint("E1000:   Flags=0x%x ShareDisposition=%u\n",
+                DPRINT1("E1000:   Flags=0x%x ShareDisposition=%u\n",
                          ResourceDescriptor->Flags, ResourceDescriptor->ShareDisposition);
 
-                NDIS_DbgPrint(MID_TRACE, ("Legacy interrupt resource: Vector=%u Level=%u Flags=0x%x\n",
+                DPRINT1("Legacy interrupt resource: Vector=%u Level=%u Flags=0x%x\n",
                                           Adapter->InterruptVector, Adapter->InterruptLevel,
-                                          ResourceDescriptor->Flags));
+                                          ResourceDescriptor->Flags);
             }
 
-            NDIS_DbgPrint(MID_TRACE, ("IRQ: Vector=%u Level=%u Shared=%d Flags=0x%x Mode=%s\n",
+            DPRINT1("IRQ: Vector=%u Level=%u Shared=%d Flags=0x%x Mode=%s\n",
                                       Adapter->InterruptVector,
                                       Adapter->InterruptLevel,
                                       Adapter->InterruptShared,
                                       Adapter->InterruptFlags,
                                       (Adapter->InterruptMode == E1000_INTERRUPT_MODE_LEGACY) ? "Legacy" :
-                                      (Adapter->InterruptMode == E1000_INTERRUPT_MODE_MSI) ? "MSI" : "MSI-X"));
+                                      (Adapter->InterruptMode == E1000_INTERRUPT_MODE_MSI) ? "MSI" : "MSI-X");
             break;
         case CmResourceTypeMemory:
             /*
@@ -546,7 +546,7 @@ NICInitializeAdapterResources(
              *   BAR2: 16KB - MSI-X tables (for 82574L)
              * We only want the first 128KB BAR for the main registers.
              */
-            DbgPrint("E1000: Memory Resource: Start=0x%I64x Length=%u (0x%x)\n",
+            DPRINT1("E1000: Memory Resource: Start=0x%I64x Length=%u (0x%x)\n",
                      ResourceDescriptor->u.Memory.Start.QuadPart,
                      ResourceDescriptor->u.Memory.Length,
                      ResourceDescriptor->u.Memory.Length);
@@ -556,39 +556,39 @@ NICInitializeAdapterResources(
             {
                 Adapter->IoAddress.QuadPart = ResourceDescriptor->u.Memory.Start.QuadPart;
                 Adapter->IoLength = ResourceDescriptor->u.Memory.Length;
-                DbgPrint("E1000:   -> Main register BAR (128KB)\n");
-                NDIS_DbgPrint(MID_TRACE, ("Memory range is %I64x to %I64x\n",
+                DPRINT1("E1000:   -> Main register BAR (128KB)\n");
+                DPRINT1("Memory range is %I64x to %I64x\n",
                                           Adapter->IoAddress.QuadPart,
-                                          Adapter->IoAddress.QuadPart + Adapter->IoLength));
+                                          Adapter->IoAddress.QuadPart + Adapter->IoLength);
             }
             else if (ResourceDescriptor->u.Memory.Length == (16 * 1024))
             {
                 /* MSI-X BAR - record it for later use */
                 Adapter->MsixAddress.QuadPart = ResourceDescriptor->u.Memory.Start.QuadPart;
                 Adapter->MsixLength = ResourceDescriptor->u.Memory.Length;
-                DbgPrint("E1000:   -> MSI-X table BAR (16KB)\n");
-                NDIS_DbgPrint(MID_TRACE, ("MSI-X table at %I64x (size %u)\n",
+                DPRINT("E1000:   -> MSI-X table BAR (16KB)\n");
+                DPRINT1("MSI-X table at %I64x (size %u)\n",
                                           Adapter->MsixAddress.QuadPart,
-                                          Adapter->MsixLength));
+                                          Adapter->MsixLength);
             }
             else
             {
-                DbgPrint("E1000:   -> Skipping (unknown BAR type)\n");
-                NDIS_DbgPrint(MID_TRACE, ("Skipping memory region at %I64x (size %u)\n",
+                DPRINT1("E1000:   -> Skipping (unknown BAR type)\n");
+                DPRINT1("Skipping memory region at %I64x (size %u)\n",
                                           ResourceDescriptor->u.Memory.Start.QuadPart,
-                                          ResourceDescriptor->u.Memory.Length));
+                                          ResourceDescriptor->u.Memory.Length);
             }
             break;
 
         default:
-            NDIS_DbgPrint(MIN_TRACE, ("Unrecognized resource type: 0x%x\n", ResourceDescriptor->Type));
+            DPRINT1("Unrecognized resource type: 0x%x\n", ResourceDescriptor->Type);
             break;
         }
     }
 
     if (Adapter->IoAddress.QuadPart == 0 || Adapter->IoPortAddress == 0 || Adapter->InterruptVector == 0)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Adapter didn't receive enough resources\n"));
+        DPRINT1("Adapter didn't receive enough resources\n");
         E1000_INIT_DBG(("[INIT] FAILED: Missing resources - IoAddr=%I64x IoPort=0x%x IntVec=%u\n",
                         Adapter->IoAddress.QuadPart, Adapter->IoPortAddress, Adapter->InterruptVector));
         return NDIS_STATUS_RESOURCES;
@@ -609,7 +609,7 @@ NICAllocateIoResources(
     ULONG AllocationSize;
     UINT n;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     E1000_INIT_DBG(("[INIT] NICAllocateIoResources: Allocating hardware resources\n"));
 
@@ -622,7 +622,7 @@ NICAllocateIoResources(
                                       Adapter->IoPortLength);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unable to register IO port range (0x%x)\n", Status));
+        DPRINT1("Unable to register IO port range (0x%x)\n", Status);
         E1000_INIT_DBG(("[INIT] FAILED: NdisMRegisterIoPortRange returned 0x%08x\n", Status));
         return NDIS_STATUS_RESOURCES;
     }
@@ -637,7 +637,7 @@ NICAllocateIoResources(
                              Adapter->IoLength);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unable to map IO space (0x%x)\n", Status));
+        DPRINT1("Unable to map IO space (0x%x)\n", Status);
         E1000_INIT_DBG(("[INIT] FAILED: NdisMMapIoSpace returned 0x%08x\n", Status));
         return NDIS_STATUS_RESOURCES;
     }
@@ -665,14 +665,14 @@ NICAllocateIoResources(
         if (Status != NDIS_STATUS_SUCCESS)
         {
             /* MSI-X mapping failure is not fatal - we'll fall back to legacy interrupts */
-            NDIS_DbgPrint(MIN_TRACE, ("Unable to map MSI-X space (0x%x), will use legacy interrupts\n", Status));
+            DPRINT1("Unable to map MSI-X space (0x%x), will use legacy interrupts\n", Status);
             E1000_INIT_DBG(("[INIT] MSI-X BAR mapping failed - using legacy interrupts\n"));
             Adapter->MsixBase = NULL;
         }
         else
         {
             ULONG TableEntry;
-            NDIS_DbgPrint(MID_TRACE, ("MSI-X BAR mapped at %p\n", Adapter->MsixBase));
+            DPRINT1("MSI-X BAR mapped at %p\n", Adapter->MsixBase);
             E1000_INIT_DBG(("[INIT] MSI-X BAR mapped: VA=%p\n", Adapter->MsixBase));
 
             /*
@@ -686,7 +686,7 @@ NICAllocateIoResources(
              *
              * 82574L has 5 MSI-X vectors (entries 0-4).
              */
-            DbgPrint("E1000: MSI-X Table contents:\n");
+            DPRINT("E1000: MSI-X Table contents:\n");
             for (TableEntry = 0; TableEntry < 5; TableEntry++)
             {
                 volatile PULONG Entry = (volatile PULONG)(Adapter->MsixBase + (TableEntry * 16));
@@ -695,7 +695,7 @@ NICAllocateIoResources(
                 ULONG MsgData = Entry[2];
                 ULONG VecCtrl = Entry[3];
 
-                DbgPrint("E1000:   [%u] AddrLo=0x%08x AddrHi=0x%08x Data=0x%08x Ctrl=0x%08x %s\n",
+                DPRINT1("E1000:   [%u] AddrLo=0x%08x AddrHi=0x%08x Data=0x%08x Ctrl=0x%08x %s\n",
                          TableEntry, MsgAddrLo, MsgAddrHi, MsgData, VecCtrl,
                          (VecCtrl & 1) ? "(masked)" : "(active)");
             }
@@ -720,15 +720,15 @@ NICAllocateIoResources(
                               &Adapter->TransmitDescriptorsPa);
     if (Adapter->TransmitDescriptors == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unable to allocate transmit descriptors\n"));
+        DPRINT1("Unable to allocate transmit descriptors\n");
         E1000_INIT_DBG(("[INIT] FAILED: TX descriptor allocation failed\n"));
         return NDIS_STATUS_RESOURCES;
     }
 
-    NDIS_DbgPrint(MID_TRACE, ("Allocated %d TX descriptors at VA=%p PA=%I64x\n",
+    DPRINT1("Allocated %d TX descriptors at VA=%p PA=%I64x\n",
                               NUM_TRANSMIT_DESCRIPTORS,
                               Adapter->TransmitDescriptors,
-                              Adapter->TransmitDescriptorsPa.QuadPart));
+                              Adapter->TransmitDescriptorsPa.QuadPart);
     E1000_RING_DBG(("[RING] TX ring allocated: VA=%p PA=0x%I64x\n",
                     Adapter->TransmitDescriptors, Adapter->TransmitDescriptorsPa.QuadPart));
 
@@ -750,15 +750,15 @@ NICAllocateIoResources(
                               &Adapter->ReceiveDescriptorsPa);
     if (Adapter->ReceiveDescriptors == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unable to allocate receive descriptors\n"));
+        DPRINT1("Unable to allocate receive descriptors\n");
         E1000_INIT_DBG(("[INIT] FAILED: RX descriptor allocation failed\n"));
         return NDIS_STATUS_RESOURCES;
     }
 
-    NDIS_DbgPrint(MID_TRACE, ("Allocated %d RX descriptors at VA=%p PA=%I64x\n",
+    DPRINT1("Allocated %d RX descriptors at VA=%p PA=%I64x\n",
                               NUM_RECEIVE_DESCRIPTORS,
                               Adapter->ReceiveDescriptors,
-                              Adapter->ReceiveDescriptorsPa.QuadPart));
+                              Adapter->ReceiveDescriptorsPa.QuadPart);
     E1000_RING_DBG(("[RING] RX ring allocated: VA=%p PA=0x%I64x\n",
                     Adapter->ReceiveDescriptors, Adapter->ReceiveDescriptorsPa.QuadPart));
 
@@ -777,7 +777,7 @@ NICAllocateIoResources(
 
     if (Adapter->ReceiveBuffer == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unable to allocate receive buffer\n"));
+        DPRINT1("Unable to allocate receive buffer\n");
         E1000_INIT_DBG(("[INIT] FAILED: RX buffer allocation failed\n"));
         return NDIS_STATUS_RESOURCES;
     }
@@ -805,26 +805,26 @@ NICRegisterInterrupts(
     NDIS_INTERRUPT_MODE InterruptType;
     ULONG InterruptVector;
     ULONG InterruptLevel;
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /*
      * Extensive MSI/MSI-X debug logging
      */
-    DbgPrint("E1000: NICRegisterInterrupts entry\n");
-    DbgPrint("E1000:   InterruptVector=%u (0x%x)\n", Adapter->InterruptVector, Adapter->InterruptVector);
-    DbgPrint("E1000:   InterruptLevel=%u (0x%x)\n", Adapter->InterruptLevel, Adapter->InterruptLevel);
-    DbgPrint("E1000:   InterruptShared=%d\n", Adapter->InterruptShared);
-    DbgPrint("E1000:   InterruptFlags=0x%x\n", Adapter->InterruptFlags);
-    DbgPrint("E1000:   PciInterruptLine=%u\n", Adapter->PciInterruptLine);
-    DbgPrint("E1000:   InterruptMode=%d (%s)\n", Adapter->InterruptMode,
+    DPRINT("E1000: NICRegisterInterrupts entry\n");
+    DPRINT("E1000:   InterruptVector=%u (0x%x)\n", Adapter->InterruptVector, Adapter->InterruptVector);
+    DPRINT("E1000:   InterruptLevel=%u (0x%x)\n", Adapter->InterruptLevel, Adapter->InterruptLevel);
+    DPRINT("E1000:   InterruptShared=%d\n", Adapter->InterruptShared);
+    DPRINT("E1000:   InterruptFlags=0x%x\n", Adapter->InterruptFlags);
+    DPRINT("E1000:   PciInterruptLine=%u\n", Adapter->PciInterruptLine);
+    DPRINT("E1000:   InterruptMode=%d (%s)\n", Adapter->InterruptMode,
              (Adapter->InterruptMode == E1000_INTERRUPT_MODE_LEGACY) ? "Legacy" :
              (Adapter->InterruptMode == E1000_INTERRUPT_MODE_MSI) ? "MSI" : "MSI-X");
-    DbgPrint("E1000:   MsixVectorCount=%u\n", Adapter->MsixVectorCount);
-    DbgPrint("E1000:   MsixAddress=0x%I64x MsixLength=%u MsixBase=%p\n",
+    DPRINT1("E1000:   MsixVectorCount=%u\n", Adapter->MsixVectorCount);
+    DPRINT1("E1000:   MsixAddress=0x%I64x MsixLength=%u MsixBase=%p\n",
              Adapter->MsixAddress.QuadPart, Adapter->MsixLength, Adapter->MsixBase);
-    DbgPrint("E1000:   CM_RESOURCE_INTERRUPT_MESSAGE=%s\n",
+    DPRINT1("E1000:   CM_RESOURCE_INTERRUPT_MESSAGE=%s\n",
              (Adapter->InterruptFlags & CM_RESOURCE_INTERRUPT_MESSAGE) ? "YES" : "NO");
-    DbgPrint("E1000:   CM_RESOURCE_INTERRUPT_LATCHED=%s\n",
+    DPRINT1("E1000:   CM_RESOURCE_INTERRUPT_LATCHED=%s\n",
              (Adapter->InterruptFlags & CM_RESOURCE_INTERRUPT_LATCHED) ? "YES" : "NO");
 
     E1000_INT_DBG(("[INT] NICRegisterInterrupts: vector=%u level=%u shared=%d flags=0x%x\n",
@@ -877,12 +877,12 @@ NICRegisterInterrupts(
         if (Adapter->InterruptFlags & CM_RESOURCE_INTERRUPT_LATCHED)
         {
             InterruptType = NdisInterruptLatched;
-            DbgPrint("E1000: MSI mode: edge-triggered (latched)\n");
+            DPRINT("E1000: MSI mode: edge-triggered (latched)\n");
         }
         else
         {
             InterruptType = NdisInterruptLevelSensitive;
-            DbgPrint("E1000: MSI mode: level-sensitive (translated by HAL)\n");
+            DPRINT("E1000: MSI mode: level-sensitive (translated by HAL)\n");
         }
 
         /*
@@ -893,20 +893,20 @@ NICRegisterInterrupts(
         {
             Adapter->InterruptMode = E1000_INTERRUPT_MODE_MSIX;
             Adapter->MsixEnabled = TRUE;
-            DbgPrint("E1000: Using MSI-X mode with %u vectors\n", Adapter->MsixVectorCount);
+            DPRINT("E1000: Using MSI-X mode with %u vectors\n", Adapter->MsixVectorCount);
         }
         else
         {
             Adapter->InterruptMode = E1000_INTERRUPT_MODE_MSI;
             Adapter->MsiEnabled = TRUE;
-            DbgPrint("E1000: Using MSI mode (single vector)\n");
+            DPRINT("E1000: Using MSI mode (single vector)\n");
         }
 
         /*
          * MSI/MSI-X interrupts are device-exclusive (not shared)
          * unless the descriptor says otherwise.
          */
-        DbgPrint("E1000: MSI interrupt registration: Vector=%u Level=%u Type=%s Shared=%d\n",
+        DPRINT("E1000: MSI interrupt registration: Vector=%u Level=%u Type=%s Shared=%d\n",
                  InterruptVector, InterruptLevel,
                  (InterruptType == NdisInterruptLatched) ? "Latched" : "Level",
                  Adapter->InterruptShared);
@@ -929,17 +929,17 @@ NICRegisterInterrupts(
         if (Adapter->InterruptFlags & CM_RESOURCE_INTERRUPT_LATCHED)
         {
             InterruptType = NdisInterruptLatched;
-            DbgPrint("E1000: Legacy mode: edge-triggered (latched)\n");
+            DPRINT1("E1000: Legacy mode: edge-triggered (latched)\n");
             E1000_INT_DBG(("[INT] Using legacy latched (edge-triggered) interrupt mode\n"));
         }
         else
         {
             InterruptType = NdisInterruptLevelSensitive;
-            DbgPrint("E1000: Legacy mode: level-sensitive\n");
+            DPRINT1("E1000: Legacy mode: level-sensitive\n");
             E1000_INT_DBG(("[INT] Using legacy level-sensitive interrupt mode\n"));
         }
 
-        DbgPrint("E1000: Legacy interrupt registration: Vector=%u Level=%u Type=%s Shared=%d\n",
+        DPRINT("E1000: Legacy interrupt registration: Vector=%u Level=%u Type=%s Shared=%d\n",
                  InterruptVector, InterruptLevel,
                  (InterruptType == NdisInterruptLatched) ? "Latched" : "Level",
                  Adapter->InterruptShared);
@@ -949,7 +949,7 @@ NICRegisterInterrupts(
                    InterruptVector, InterruptLevel, Adapter->InterruptShared,
                    (InterruptType == NdisInterruptLatched) ? "Latched" : "Level"));
 
-    DbgPrint("E1000: Calling NdisMRegisterInterrupt(Vector=%u, Level=%u, Shared=%d, Mode=%d)\n",
+    DPRINT("E1000: Calling NdisMRegisterInterrupt(Vector=%u, Level=%u, Shared=%d, Mode=%d)\n",
              InterruptVector, InterruptLevel, Adapter->InterruptShared, InterruptType);
 
     Status = NdisMRegisterInterrupt(&Adapter->Interrupt,
@@ -960,34 +960,34 @@ NICRegisterInterrupts(
                                     Adapter->InterruptShared,
                                     InterruptType);
 
-    DbgPrint("E1000: NdisMRegisterInterrupt returned 0x%08x\n", Status);
+    DPRINT("E1000: NdisMRegisterInterrupt returned 0x%08x\n", Status);
 
     if (Status == NDIS_STATUS_SUCCESS)
     {
         Adapter->InterruptRegistered = TRUE;
 
-        DbgPrint("E1000: Interrupt registered successfully\n");
-        DbgPrint("E1000:   Final mode: %s\n",
+        DPRINT("E1000: Interrupt registered successfully\n");
+        DPRINT1("E1000:   Final mode: %s\n",
                  (Adapter->InterruptMode == E1000_INTERRUPT_MODE_LEGACY) ? "Legacy" :
                  (Adapter->InterruptMode == E1000_INTERRUPT_MODE_MSI) ? "MSI" : "MSI-X");
 
-        NDIS_DbgPrint(MID_TRACE, ("Registered interrupt: vector=%u level=%u shared=%d type=%s mode=%s\n",
+        DPRINT1("Registered interrupt: vector=%u level=%u shared=%d type=%s mode=%s\n",
                                   InterruptVector, InterruptLevel,
                                   Adapter->InterruptShared,
                                   (InterruptType == NdisInterruptLatched) ? "latched" : "level-sensitive",
                                   (Adapter->InterruptMode == E1000_INTERRUPT_MODE_MSI) ? "MSI" :
-                                  (Adapter->InterruptMode == E1000_INTERRUPT_MODE_MSIX) ? "MSI-X" : "Legacy"));
+                                  (Adapter->InterruptMode == E1000_INTERRUPT_MODE_MSIX) ? "MSI-X" : "Legacy");
         E1000_INT_DBG(("[INT] Interrupt registered successfully\n"));
     }
     else
     {
-        DbgPrint("E1000: FAILED to register interrupt: Status=0x%08x\n", Status);
-        DbgPrint("E1000:   Vector=%u Level=%u Shared=%d Flags=0x%x\n",
+        DPRINT("E1000: FAILED to register interrupt: Status=0x%08x\n", Status);
+        DPRINT1("E1000:   Vector=%u Level=%u Shared=%d Flags=0x%x\n",
                  InterruptVector, InterruptLevel,
                  Adapter->InterruptShared, Adapter->InterruptFlags);
 
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to register interrupt: Status=0x%x Vector=%u Level=%u\n",
-                                  Status, InterruptVector, InterruptLevel));
+        DPRINT1("Failed to register interrupt: Status=0x%x Vector=%u Level=%u\n",
+                                  Status, InterruptVector, InterruptLevel);
         E1000_INIT_DBG(("[INIT] FAILED: NdisMRegisterInterrupt returned 0x%08x\n", Status));
         E1000_INIT_DBG(("[INIT] Interrupt params: Vector=%u Level=%u Shared=%d Flags=0x%x\n",
                         InterruptVector, InterruptLevel,
@@ -1002,7 +1002,7 @@ NTAPI
 NICUnregisterInterrupts(
     IN PE1000_ADAPTER Adapter)
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     if (Adapter->InterruptRegistered)
     {
@@ -1024,7 +1024,7 @@ NTAPI
 NICReleaseIoResources(
     IN PE1000_ADAPTER Adapter)
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     E1000_INIT_DBG(("[INIT] NICReleaseIoResources: Releasing hardware resources\n"));
 
@@ -1116,7 +1116,7 @@ NICPowerOn(
     IN PE1000_ADAPTER Adapter)
 {
     NDIS_STATUS Status;
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     E1000_POWER_DBG(("[POWER] NICPowerOn: Powering on adapter\n"));
     E1000_STAT_INC32(PowerTransitions);
@@ -1158,7 +1158,7 @@ NICSoftReset(
     IN PE1000_ADAPTER Adapter)
 {
     ULONG Value, ResetAttempts;
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     E1000_HW_DBG(("[HW] NICSoftReset: Beginning hardware reset sequence\n"));
     E1000_STAT_INC32(ResetCount);
@@ -1182,7 +1182,7 @@ NICSoftReset(
 
         if (!(Value & E1000_CTRL_RST))
         {
-            NDIS_DbgPrint(MAX_TRACE, ("Device is back (%u)\n", ResetAttempts));
+            DPRINT("Device is back (%u)\n", ResetAttempts);
             E1000_HW_DBG(("[HW] Reset complete after %u attempts\n", ResetAttempts + 1));
 
             NICDisableInterrupts(Adapter);
@@ -1200,7 +1200,7 @@ NICSoftReset(
         }
     }
 
-    NDIS_DbgPrint(MIN_TRACE, ("Device did not recover\n"));
+    DPRINT1("Device did not recover\n");
     E1000_HW_DBG(("[HW] FAILED: Reset timed out after %u attempts\n", MAX_RESET_ATTEMPTS));
     return NDIS_STATUS_FAILURE;
 }
@@ -1238,8 +1238,8 @@ static VOID NICConfigureIVAR(IN PE1000_ADAPTER Adapter)
         ULONG IvarMisc = (E1000_IVAR_VALID | E1000_MSIX_VECTOR_OTHER) << E1000_IVAR_MISC_OTHER_SHIFT;
         E1000WriteUlong(Adapter, E1000_IVAR_MISC, IvarMisc);
 
-        NDIS_DbgPrint(MID_TRACE, ("Configured MSI-X IVAR: IVAR0=0x%08x, IVAR_MISC=0x%08x\n",
-                                  Ivar0, IvarMisc));
+        DPRINT1("Configured MSI-X IVAR: IVAR0=0x%08x, IVAR_MISC=0x%08x\n",
+                                  Ivar0, IvarMisc);
     }
     else
     {
@@ -1262,7 +1262,7 @@ static VOID NICConfigureIVAR(IN PE1000_ADAPTER Adapter)
          */
         E1000WriteUlong(Adapter, E1000_IVAR_MISC, 0x80);
 
-        NDIS_DbgPrint(MID_TRACE, ("Configured legacy IVAR for PCIe device\n"));
+        DPRINT1("Configured legacy IVAR for PCIe device\n");
     }
 }
 
@@ -1299,8 +1299,8 @@ static VOID NICConfigureInterruptThrottling(IN PE1000_ADAPTER Adapter)
         E1000WriteUlong(Adapter, E1000_REG_EITR4, ItrValue);
     }
 
-    NDIS_DbgPrint(MID_TRACE, ("Interrupt throttling configured: ITR=%u (~%u int/sec)\n",
-                              ItrValue, ItrValue ? (1000000000 / (ItrValue * 256)) : 0));
+    DPRINT1("Interrupt throttling configured: ITR=%u (~%u int/sec)\n",
+                              ItrValue, ItrValue ? (1000000000 / (ItrValue * 256)) : 0);
 }
 
 
@@ -1311,7 +1311,7 @@ NICEnableTxRx(
 {
     ULONG Value;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     E1000_INIT_DBG(("[INIT] NICEnableTxRx: Configuring TX/RX engines\n"));
 
@@ -1329,8 +1329,8 @@ NICEnableTxRx(
     if (Adapter->PacketFilter == 0)
     {
         Adapter->PacketFilter = NDIS_PACKET_TYPE_DIRECTED | NDIS_PACKET_TYPE_BROADCAST;
-        NDIS_DbgPrint(MID_TRACE, ("Set default packet filter: 0x%08x (DIRECTED|BROADCAST)\n",
-                                  Adapter->PacketFilter));
+        DPRINT1("Set default packet filter: 0x%08x (DIRECTED|BROADCAST)\n",
+                                  Adapter->PacketFilter);
         E1000_INIT_DBG(("[INIT] Default packet filter set: 0x%08x\n", Adapter->PacketFilter));
     }
 
@@ -1343,7 +1343,7 @@ NICEnableTxRx(
     /* Configure interrupt throttling */
     NICConfigureInterruptThrottling(Adapter);
 
-    NDIS_DbgPrint(MID_TRACE, ("Setting up transmit.\n"));
+    DPRINT1("Setting up transmit.\n");
     E1000_RING_DBG(("[RING] Configuring TX descriptor ring\n"));
 
     /* Make sure the thing is disabled first. */
@@ -1380,7 +1380,7 @@ NICEnableTxRx(
 
     E1000WriteUlong(Adapter, E1000_REG_TIPG, E1000_TIPG_IPGT_DEF | E1000_TIPG_IPGR1_DEF | E1000_TIPG_IPGR2_DEF);
 
-    NDIS_DbgPrint(MID_TRACE, ("Setting up receive.\n"));
+    DPRINT1("Setting up receive.\n");
     E1000_RING_DBG(("[RING] Configuring RX descriptor ring\n"));
 
     /* Make sure the thing is disabled first. */
@@ -1421,8 +1421,8 @@ NICEnableTxRx(
     E1000WriteUlong(Adapter, E1000_REG_RCTL, Value);
     E1000_HW_DBG(("[HW] RCTL=0x%08x (RX enabled with filter mask)\n", Value));
 
-    NDIS_DbgPrint(MID_TRACE, ("TX/RX enabled. TX descriptors=%d, RX descriptors=%d\n",
-                              NUM_TRANSMIT_DESCRIPTORS, NUM_RECEIVE_DESCRIPTORS));
+    DPRINT1("TX/RX enabled. TX descriptors=%d, RX descriptors=%d\n",
+                              NUM_TRANSMIT_DESCRIPTORS, NUM_RECEIVE_DESCRIPTORS);
     E1000_INIT_DBG(("[INIT] NICEnableTxRx: TX/RX engines enabled, %d TX desc, %d RX desc\n",
                     NUM_TRANSMIT_DESCRIPTORS, NUM_RECEIVE_DESCRIPTORS));
 
@@ -1436,7 +1436,7 @@ NICDisableTxRx(
 {
     ULONG Value;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     E1000_INIT_DBG(("[INIT] NICDisableTxRx: Disabling TX/RX engines\n"));
 
@@ -1464,7 +1464,7 @@ NICGetPermanentMacAddress(
     USHORT AddrWord;
     UINT n;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* Should we read from RAL/RAH first? */
     for (n = 0; n < (IEEE_802_ADDR_LENGTH / 2); ++n)
@@ -1476,13 +1476,13 @@ NICGetPermanentMacAddress(
     }
 
 #if 0
-    NDIS_DbgPrint(MIN_TRACE, ("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+    DPRINT1("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
                               Adapter->PermanentMacAddress[0],
                               Adapter->PermanentMacAddress[1],
                               Adapter->PermanentMacAddress[2],
                               Adapter->PermanentMacAddress[3],
                               Adapter->PermanentMacAddress[4],
-                              Adapter->PermanentMacAddress[5]));
+                              Adapter->PermanentMacAddress[5]);
 #endif
     return NDIS_STATUS_SUCCESS;
 }
@@ -1493,7 +1493,7 @@ NICUpdateMulticastList(
     IN PE1000_ADAPTER Adapter)
 {
     UINT n;
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     // FIXME: Use 'Adapter->MulticastListSize'? Check the datasheet
     for (n = 0; n < MAXIMUM_MULTICAST_ADDRESSES; ++n)
@@ -1545,7 +1545,7 @@ NICUpdateLinkStatus(
     ULONG OldLinkSpeed;
     static ULONG SpeedValues[] = { 10, 100, 1000, 1000 };
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* Save old state for change detection */
     OldMediaState = Adapter->MediaState;
@@ -1577,7 +1577,7 @@ NTAPI
 NICInitializeChecksumOffload(
     IN PE1000_ADAPTER Adapter)
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     E1000_CSUM_DBG(("[CSUM] NICInitializeChecksumOffload: Initializing offload capabilities\n"));
 
@@ -1615,7 +1615,7 @@ NICInitializeChecksumOffload(
     Adapter->ChecksumOffload.TxChecksumEnabled = FALSE;
     Adapter->ChecksumOffload.RxChecksumEnabled = FALSE;
 
-    NDIS_DbgPrint(MID_TRACE, ("Checksum offload capabilities initialized\n"));
+    DPRINT1("Checksum offload capabilities initialized\n");
     E1000_CSUM_DBG(("[CSUM] Capabilities: TX(IP=%d TCP=%d UDP=%d) RX(IP=%d TCP=%d UDP=%d)\n",
                     Adapter->ChecksumOffload.TxIpChecksum,
                     Adapter->ChecksumOffload.TxTcpChecksum,
@@ -1634,7 +1634,7 @@ NICEnableChecksumOffload(
 {
     ULONG RxcsumValue = 0;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called (EnableTx=%d, EnableRx=%d).\n", EnableTx, EnableRx));
+    DPRINT("Called (EnableTx=%d, EnableRx=%d).\n", EnableTx, EnableRx);
 
     E1000_CSUM_DBG(("[CSUM] NICEnableChecksumOffload: TX=%s RX=%s\n",
                     EnableTx ? "ENABLE" : "DISABLE",
@@ -1687,10 +1687,10 @@ NICEnableChecksumOffload(
         E1000_CSUM_DBG(("[CSUM] TX checksum offload disabled\n"));
     }
 
-    NDIS_DbgPrint(MID_TRACE, ("Checksum offload: RXCSUM=0x%08x, TxEnabled=%d, RxEnabled=%d\n",
+    DPRINT1("Checksum offload: RXCSUM=0x%08x, TxEnabled=%d, RxEnabled=%d\n",
                               RxcsumValue,
                               Adapter->ChecksumOffload.TxChecksumEnabled,
-                              Adapter->ChecksumOffload.RxChecksumEnabled));
+                              Adapter->ChecksumOffload.RxChecksumEnabled);
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -1700,7 +1700,7 @@ NTAPI
 NICDisableChecksumOffload(
     IN PE1000_ADAPTER Adapter)
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     E1000_CSUM_DBG(("[CSUM] NICDisableChecksumOffload: Disabling all checksum offload\n"));
 
@@ -1729,7 +1729,7 @@ NICSetPowerState(
 {
     NDIS_DEVICE_POWER_STATE OldPowerState = Adapter->NdisPowerState;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called (PowerState=%d).\n", PowerState));
+    DPRINT("Called (PowerState=%d).\n", PowerState);
 
     E1000_POWER_DBG(("[POWER] NICSetPowerState: D%d -> D%d\n",
                      OldPowerState - NdisDeviceStateD0,
@@ -1819,8 +1819,8 @@ NICSetPowerState(
     }
 
     Adapter->NdisPowerState = PowerState;
-    NDIS_DbgPrint(MID_TRACE, ("Power state changed to D%d\n",
-                              PowerState - NdisDeviceStateD0));
+    DPRINT1("Power state changed to D%d\n",
+                              PowerState - NdisDeviceStateD0);
     E1000_POWER_DBG(("[POWER] Power state transition complete: D%d\n",
                      PowerState - NdisDeviceStateD0));
 
@@ -1833,7 +1833,7 @@ NICQueryPowerState(
     IN PE1000_ADAPTER Adapter,
     IN NDIS_DEVICE_POWER_STATE PowerState)
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Called (PowerState=%d).\n", PowerState));
+    DPRINT("Called (PowerState=%d).\n", PowerState);
 
     /* We support all power states */
     return NDIS_STATUS_SUCCESS;
@@ -1844,7 +1844,7 @@ NTAPI
 NICSaveDeviceState(
     IN PE1000_ADAPTER Adapter)
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     E1000_POWER_DBG(("[POWER] NICSaveDeviceState: Saving adapter state\n"));
 
@@ -1860,7 +1860,7 @@ NTAPI
 NICRestoreDeviceState(
     IN PE1000_ADAPTER Adapter)
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     E1000_POWER_DBG(("[POWER] NICRestoreDeviceState: Restoring adapter state\n"));
 
@@ -1982,12 +1982,12 @@ E1000RecognizeHardware(
 {
     UINT n;
 
-    DbgPrint("E1000: E1000RecognizeHardware - VendorId=0x%04x DeviceId=0x%04x\n",
+    DPRINT1("E1000: E1000RecognizeHardware - VendorId=0x%04x DeviceId=0x%04x\n",
              Adapter->VendorId, Adapter->DeviceId);
 
     if (Adapter->VendorId != HW_VENDOR_INTEL)
     {
-        DbgPrint("E1000: Unknown vendor: 0x%04x (expected 0x8086)\n", Adapter->VendorId);
+        DPRINT1("E1000: Unknown vendor: 0x%04x (expected 0x8086)\n", Adapter->VendorId);
         return FALSE;
     }
 
@@ -1995,7 +1995,7 @@ E1000RecognizeHardware(
     {
         if (SupportedDevices[n] == Adapter->DeviceId)
         {
-            DbgPrint("E1000: Device recognized: Intel NIC DeviceId=0x%04x\n", Adapter->DeviceId);
+            DPRINT1("E1000: Device recognized: Intel NIC DeviceId=0x%04x\n", Adapter->DeviceId);
 
             /* Detect device type (PCIe vs PCI) - needed for EEPROM access */
             Adapter->IsPCIe = FALSE;
@@ -2011,12 +2011,12 @@ E1000RecognizeHardware(
                 }
             }
 
-            DbgPrint("E1000: Device type: %s\n", Adapter->IsPCIe ? "PCIe" : "PCI");
+            DPRINT1("E1000: Device type: %s\n", Adapter->IsPCIe ? "PCIe" : "PCI");
             return TRUE;
         }
     }
 
-    DbgPrint("E1000: Unknown device: 0x%04x not in supported list\n", Adapter->DeviceId);
+    DPRINT1("E1000: Unknown device: 0x%04x not in supported list\n", Adapter->DeviceId);
     return FALSE;
 }
 
@@ -2033,11 +2033,11 @@ E1000ResetHardware(
 {
     ULONG Value, ResetAttempts;
 
-    DbgPrint("E1000: E1000ResetHardware - Beginning hardware reset\n");
+    DPRINT1("E1000: E1000ResetHardware - Beginning hardware reset\n");
 
     if (Adapter->IoBase == NULL)
     {
-        DbgPrint("E1000: ResetHardware - IoBase not mapped\n");
+        DPRINT1("E1000: ResetHardware - IoBase not mapped\n");
         return NDIS_STATUS_HARD_ERRORS;
     }
 
@@ -2060,7 +2060,7 @@ E1000ResetHardware(
 
         if (!(Value & E1000_CTRL_RST))
         {
-            DbgPrint("E1000: Reset complete after %u attempts\n", ResetAttempts + 1);
+            DPRINT1("E1000: Reset complete after %u attempts\n", ResetAttempts + 1);
 
             /* Clear pending interrupts */
             Value = E1000_READ_REG(Adapter, E1000_REG_ICR);
@@ -2079,7 +2079,7 @@ E1000ResetHardware(
         }
     }
 
-    DbgPrint("E1000: Reset timed out after %u attempts\n", MAX_RESET_ATTEMPTS);
+    DPRINT1("E1000: Reset timed out after %u attempts\n", MAX_RESET_ATTEMPTS);
     return NDIS_STATUS_HARD_ERRORS;
 }
 
@@ -2098,7 +2098,7 @@ E1000SetupLink(
     ULONG TctlValue;
     ULONG RctlValue;
 
-    DbgPrint("E1000: E1000SetupLink - Configuring link\n");
+    DPRINT("E1000: E1000SetupLink - Configuring link\n");
 
     if (Adapter->IoBase == NULL)
     {
@@ -2134,7 +2134,7 @@ E1000SetupLink(
 
     Adapter->AutoNegotiate = TRUE;
 
-    DbgPrint("E1000: Link setup complete - MediaState=%d, Speed=%I64u\n",
+    DPRINT1("E1000: Link setup complete - MediaState=%d, Speed=%I64u\n",
              Adapter->MediaState, Adapter->LinkSpeed);
 
     return NDIS_STATUS_SUCCESS;
@@ -2195,7 +2195,7 @@ E1000UpdateLinkStatus(
         NDIS_STATUS_INDICATION StatusIndication;
         NDIS_LINK_STATE LinkState;
 
-        DbgPrint("E1000: Link state changed: %s, Speed=%I64u bps, Duplex=%s\n",
+        DPRINT1("E1000: Link state changed: %s, Speed=%I64u bps, Duplex=%s\n",
                  (Adapter->MediaState == MediaConnectStateConnected) ? "Connected" : "Disconnected",
                  Adapter->LinkSpeed,
                  Adapter->FullDuplex ? "Full" : "Half");
@@ -2224,7 +2224,7 @@ E1000UpdateLinkStatus(
             StatusIndication.StatusBuffer = &LinkState;
             StatusIndication.StatusBufferSize = sizeof(LinkState);
 
-            DbgPrint("E1000: Indicating link state to NDIS - Handle=%p, State=%d\n",
+            DPRINT1("E1000: Indicating link state to NDIS - Handle=%p, State=%d\n",
                      Adapter->MiniportAdapterHandle, Adapter->MediaState);
 
             NdisMIndicateStatusEx(Adapter->MiniportAdapterHandle, &StatusIndication);
@@ -2306,7 +2306,7 @@ E1000SetPacketFilter(
 {
     ULONG RctlValue;
 
-    DbgPrint("E1000: E1000SetPacketFilter - Filter=0x%08x\n", PacketFilter);
+    DPRINT("E1000: E1000SetPacketFilter - Filter=0x%08x\n", PacketFilter);
 
     if (Adapter->IoBase == NULL)
     {
@@ -2354,7 +2354,7 @@ E1000SetMulticastList(
     ULONG i;
     PUCHAR Address;
 
-    DbgPrint("E1000: E1000SetMulticastList - Count=%u\n", MulticastCount);
+    DPRINT1("E1000: E1000SetMulticastList - Count=%u\n", MulticastCount);
 
     if (Adapter->IoBase == NULL)
     {

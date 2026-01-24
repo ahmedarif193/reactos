@@ -45,7 +45,7 @@ EthCreateFilter(
     }
   else
     {
-      NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+      DPRINT1("Insufficient resources\n");
       *Filter = NULL;
       return FALSE;
     }
@@ -92,7 +92,7 @@ EthFilterDprIndicateReceive(
      * in the boot process with Filter NULL.  We need to investigate whether
      * this should be handled or not allowed. */
     if( !Filter ) {
-        NDIS_DbgPrint(MIN_TRACE, ("Filter is NULL\n"));
+        DPRINT1("Filter is NULL\n");
         return;
     }
     MiniIndicateData((PLOGICAL_ADAPTER)((PETHI_FILTER)Filter)->Miniport,
@@ -122,16 +122,16 @@ EthFilterDprIndicateReceiveComplete(
   PLOGICAL_ADAPTER Adapter;
   PADAPTER_BINDING AdapterBinding;
 
-  NDIS_DbgPrint(DEBUG_MINIPORT, ("Called.\n"));
+  DPRINT("Called.\n");
 
   if( !Filter ) {
-      NDIS_DbgPrint(MIN_TRACE, ("Filter is NULL\n"));
+      DPRINT1("Filter is NULL\n");
       return;
   }
 
   Adapter = (PLOGICAL_ADAPTER)((PETHI_FILTER)Filter)->Miniport;
 
-  NDIS_DbgPrint(MAX_TRACE, ("acquiring miniport block lock\n"));
+  DPRINT("acquiring miniport block lock\n");
   KeAcquireSpinLockAtDpcLevel(&Adapter->NdisMiniportBlock.Lock);
     {
       CurrentEntry = Adapter->ProtocolListHead.Flink;

@@ -35,13 +35,13 @@ NdisAllocateMemoryWithTag(
 {
   PVOID Block;
 
-  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  DPRINT("Called.\n");
 
   Block = ExAllocatePoolWithTag(NonPagedPool, Length, Tag);
   *VirtualAddress = Block;
 
   if (!Block) {
-    NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate memory (%lx)\n", Length));
+    DPRINT1("Failed to allocate memory (%lx)\n", Length);
     return NDIS_STATUS_FAILURE;
   }
 
@@ -72,7 +72,7 @@ NdisAllocateMemory(
  *     NDIS_STATUS_FAILURE on failure
  */
 {
-  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  DPRINT("Called.\n");
 
   if (MemoryFlags & NDIS_MEMORY_CONTIGUOUS)
   {
@@ -95,7 +95,7 @@ NdisAllocateMemory(
   }
 
   if (!*VirtualAddress) {
-    NDIS_DbgPrint(MIN_TRACE, ("Allocation failed (%lx, %lx)\n", MemoryFlags, Length));
+    DPRINT1("Allocation failed (%lx, %lx)\n", MemoryFlags, Length);
     return NDIS_STATUS_FAILURE;
   }
 
@@ -119,7 +119,7 @@ NdisFreeMemory(
  *     MemoryFlags    = Memory flags passed to NdisAllocateMemory
  */
 {
-  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  DPRINT("Called.\n");
 
   if (MemoryFlags & NDIS_MEMORY_CONTIGUOUS)
   {
@@ -206,7 +206,7 @@ NdisMAllocateSharedMemory(
 {
   PDMA_ADAPTER DmaAdapter;
 
-  NDIS_DbgPrint(MAX_TRACE,("Called.\n"));
+  DPRINT("Called.\n");
 
   if (KeGetCurrentIrql() != PASSIVE_LEVEL)
   {
@@ -222,14 +222,14 @@ NdisMAllocateSharedMemory(
   if (DmaAdapter != NULL)
   {
       /* NDIS 6.x path - use DMA adapter from device extension */
-      NDIS_DbgPrint(MID_TRACE, ("NDIS 6.x shared memory allocation: Length=%lu, DmaAdapter=%p\n",
-                                Length, DmaAdapter));
+      DPRINT1("NDIS 6.x shared memory allocation: Length=%lu, DmaAdapter=%p\n",
+                                Length, DmaAdapter);
 
       *VirtualAddress = DmaAdapter->DmaOperations->AllocateCommonBuffer(
           DmaAdapter, Length, PhysicalAddress, Cached);
 
-      NDIS_DbgPrint(MID_TRACE, ("NDIS 6.x AllocateCommonBuffer returned VA=%p PA=0x%I64x\n",
-                                *VirtualAddress, PhysicalAddress->QuadPart));
+      DPRINT1("NDIS 6.x AllocateCommonBuffer returned VA=%p PA=0x%I64x\n",
+                                *VirtualAddress, PhysicalAddress->QuadPart);
   }
   else
   {
@@ -256,7 +256,7 @@ NdisMFreeSharedMemoryPassive(
 {
   PMINIPORT_SHARED_MEMORY Memory = (PMINIPORT_SHARED_MEMORY)Context;
 
-  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  DPRINT("Called.\n");
 
   ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
 
@@ -298,7 +298,7 @@ NdisMFreeSharedMemory(
   PDMA_ADAPTER DmaAdapter;
   PDEVICE_OBJECT DeviceObject;
 
-  NDIS_DbgPrint(MAX_TRACE,("Called.\n"));
+  DPRINT("Called.\n");
 
   ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
 
@@ -309,8 +309,8 @@ NdisMFreeSharedMemory(
       /* NDIS 6.x path */
       DeviceObject = (PDEVICE_OBJECT)MiniportAdapterHandle;
 
-      NDIS_DbgPrint(MID_TRACE, ("NDIS 6.x FreeSharedMemory: VA=%p, DmaAdapter=%p\n",
-                                VirtualAddress, DmaAdapter));
+      DPRINT1("NDIS 6.x FreeSharedMemory: VA=%p, DmaAdapter=%p\n",
+                                VirtualAddress, DmaAdapter);
 
       /* Call FreeCommonBuffer synchronously if we are at PASSIVE_LEVEL */
       if (KeGetCurrentIrql() == PASSIVE_LEVEL)
@@ -327,7 +327,7 @@ NdisMFreeSharedMemory(
       Memory = ExAllocatePool(NonPagedPool, sizeof(MINIPORT_SHARED_MEMORY));
       if (!Memory)
       {
-          NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+          DPRINT1("Insufficient resources\n");
           return;
       }
 
@@ -341,7 +341,7 @@ NdisMFreeSharedMemory(
       Memory->WorkItem = IoAllocateWorkItem(DeviceObject);
       if (!Memory->WorkItem)
       {
-          NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+          DPRINT1("Insufficient resources\n");
           ExFreePool(Memory);
           return;
       }
@@ -368,7 +368,7 @@ NdisMFreeSharedMemory(
            * call FreeCommonBuffer synchronously and not have to worry
            * about the miniport falling out from under us */
 
-          NDIS_DbgPrint(MID_TRACE,("Freeing shared memory synchronously\n"));
+          DPRINT1("Freeing shared memory synchronously\n");
 
           DmaAdapter->DmaOperations->FreeCommonBuffer(DmaAdapter,
                                                       Length,
@@ -383,7 +383,7 @@ NdisMFreeSharedMemory(
 
       if(!Memory)
         {
-          NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+          DPRINT1("Insufficient resources\n");
           return;
         }
 
@@ -397,7 +397,7 @@ NdisMFreeSharedMemory(
       Memory->WorkItem = IoAllocateWorkItem(Adapter->NdisMiniportBlock.DeviceObject);
       if (!Memory->WorkItem)
       {
-          NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+          DPRINT1("Insufficient resources\n");
           ExFreePool(Memory);
           return;
       }
@@ -424,7 +424,7 @@ NdisMAllocateSharedMemoryPassive(
 {
   PMINIPORT_SHARED_MEMORY Memory = (PMINIPORT_SHARED_MEMORY)Context;
 
-  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  DPRINT("Called.\n");
 
   ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
 
@@ -455,7 +455,7 @@ NdisMAllocateSharedMemoryAsync(
   PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)MiniportAdapterHandle;
   PMINIPORT_SHARED_MEMORY Memory;
 
-  NDIS_DbgPrint(MAX_TRACE,("Called.\n"));
+  DPRINT("Called.\n");
 
   ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
 
@@ -464,7 +464,7 @@ NdisMAllocateSharedMemoryAsync(
 
   if(!Memory)
     {
-      NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+      DPRINT1("Insufficient resources\n");
       return NDIS_STATUS_FAILURE;
     }
 
@@ -477,7 +477,7 @@ NdisMAllocateSharedMemoryAsync(
   Memory->WorkItem = IoAllocateWorkItem(Adapter->NdisMiniportBlock.DeviceObject);
   if (!Memory->WorkItem)
   {
-      NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+      DPRINT1("Insufficient resources\n");
       ExFreePool(Memory);
       return NDIS_STATUS_FAILURE;
   }

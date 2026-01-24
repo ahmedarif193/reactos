@@ -25,7 +25,7 @@ E1000SetPower(
 {
     NDIS_STATUS Status = NDIS_STATUS_SUCCESS;
 
-    DbgPrint("E1000: SetPower - Transitioning from D%d to D%d\n",
+    DPRINT1("E1000: SetPower - Transitioning from D%d to D%d\n",
              Adapter->NdisPowerState - NdisDeviceStateD0,
              PowerState - NdisDeviceStateD0);
 
@@ -83,13 +83,13 @@ E1000PowerUp(
 {
     NDIS_STATUS Status;
 
-    DbgPrint("E1000: PowerUp - Restoring to D0\n");
+    DPRINT("E1000: PowerUp - Restoring to D0\n");
 
     /* Reset and reinitialize hardware */
     Status = E1000ResetHardware(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: PowerUp failed - Hardware reset error 0x%08x\n", Status);
+        DPRINT1("E1000: PowerUp failed - Hardware reset error 0x%08x\n", Status);
         return Status;
     }
 
@@ -97,7 +97,7 @@ E1000PowerUp(
     Status = E1000SetupLink(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DbgPrint("E1000: PowerUp warning - Link setup returned 0x%08x\n", Status);
+        DPRINT1("E1000: PowerUp warning - Link setup returned 0x%08x\n", Status);
         /* Non-fatal - link may come up later */
     }
 
@@ -113,7 +113,7 @@ E1000PowerUp(
     /* Mark as started */
     InterlockedOr(&Adapter->Flags, E1000_FLAG_ADAPTER_STARTED);
 
-    DbgPrint("E1000: PowerUp complete\n");
+    DPRINT1("E1000: PowerUp complete\n");
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -129,7 +129,7 @@ E1000PowerDown(
     _In_ NDIS_DEVICE_POWER_STATE PowerState
     )
 {
-    DbgPrint("E1000: PowerDown - Entering D%d\n", PowerState - NdisDeviceStateD0);
+    DPRINT("E1000: PowerDown - Entering D%d\n", PowerState - NdisDeviceStateD0);
 
     /* Mark as not started */
     InterlockedAnd(&Adapter->Flags, ~E1000_FLAG_ADAPTER_STARTED);
@@ -155,7 +155,7 @@ E1000PowerDown(
         }
     }
 
-    DbgPrint("E1000: PowerDown complete\n");
+    DPRINT1("E1000: PowerDown complete\n");
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -180,7 +180,7 @@ E1000ConfigureWakeOnLan(
         return;
     }
 
-    DbgPrint("E1000: Configuring Wake-on-LAN - Magic=%d, Link=%d\n",
+    DPRINT("E1000: Configuring Wake-on-LAN - Magic=%d, Link=%d\n",
              Adapter->WakeOnMagicPacket, Adapter->WakeOnLinkChange);
 
     /* Read current CTRL register */
@@ -231,5 +231,5 @@ E1000ConfigureWakeOnLan(
         /* For now, just ensure the basic wake-up is configured */
     }
 
-    DbgPrint("E1000: Wake-on-LAN configured - WUC=0x%08x\n", WucValue);
+    DPRINT1("E1000: Wake-on-LAN configured - WUC=0x%08x\n", WucValue);
 }

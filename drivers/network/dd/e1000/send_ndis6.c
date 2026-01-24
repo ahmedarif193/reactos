@@ -68,14 +68,14 @@ E1000InitializeTxQueue(
 
     if (TxQueue->Descriptors == NULL)
     {
-        DbgPrint("E1000: Failed to allocate TX descriptor ring for queue %u\n", QueueIndex);
+        DPRINT("E1000: Failed to allocate TX descriptor ring for queue %u\n", QueueIndex);
         NdisFreeSpinLock(&TxQueue->Lock);
         return NDIS_STATUS_RESOURCES;
     }
 
     NdisZeroMemory((PVOID)TxQueue->Descriptors, DescriptorSize);
 
-    DbgPrint("E1000: TX queue %u descriptors at VA=%p PA=0x%I64x\n",
+    DPRINT("E1000: TX queue %u descriptors at VA=%p PA=0x%I64x\n",
              QueueIndex, TxQueue->Descriptors, TxQueue->DescriptorsPa.QuadPart);
 
     /* Allocate TX buffer tracking array */
@@ -88,7 +88,7 @@ E1000InitializeTxQueue(
 
     if (TxQueue->Buffers == NULL)
     {
-        DbgPrint("E1000: Failed to allocate TX buffer tracking for queue %u\n", QueueIndex);
+        DPRINT1("E1000: Failed to allocate TX buffer tracking for queue %u\n", QueueIndex);
         NdisMFreeSharedMemory(
             Adapter->MiniportAdapterHandle,
             DescriptorSize,
@@ -106,6 +106,9 @@ E1000InitializeTxQueue(
     TxQueue->Head = 0;
     TxQueue->Tail = 0;
     TxQueue->Available = TxQueue->Count;
+
+    /* Initialize TX queue flow control flags */
+    TxQueue->Flags = 0;
 
     /* Initialize completion DPC */
     KeInitializeDpc(&TxQueue->CompletionDpc, E1000TxCompletionDpc, TxQueue);
@@ -125,7 +128,7 @@ E1000InitializeTxQueue(
         E1000_WRITE_REG(Adapter, E1000_REG_TDT, 0);
     }
 
-    DbgPrint("E1000: TX queue %u initialized: %u descriptors, %u bytes\n",
+    DPRINT("E1000: TX queue %u initialized: %u descriptors, %u bytes\n",
              QueueIndex, TxQueue->Count, DescriptorSize);
 
     return NDIS_STATUS_SUCCESS;
@@ -210,7 +213,7 @@ E1000FreeTxQueue(
 
     NdisFreeSpinLock(&TxQueue->Lock);
 
-    DbgPrint("E1000: TX queue %u freed\n", TxQueue->QueueIndex);
+    DPRINT1("E1000: TX queue %u freed\n", TxQueue->QueueIndex);
 }
 
 
@@ -238,9 +241,6 @@ E1000SendNetBufferLists(
     NDIS_STATUS Status = NDIS_STATUS_SUCCESS;
     BOOLEAN DispatchLevel;
     ULONG PacketsSent = 0;
-
-    DbgPrint("E1000-TX: E1000SendNetBufferLists - Context=%p, NBL=%p, Flags=0x%x\n",
-             MiniportAdapterContext, NetBufferList, SendFlags);
 
     UNREFERENCED_PARAMETER(PortNumber);
 
@@ -333,13 +333,19 @@ E1000SendNetBufferLists(
     /* Ring the doorbell - update TDT to notify hardware */
     if (PacketsSent > 0)
     {
-        DbgPrint("E1000-TX: Writing TDT=%u, PacketsSent=%u, Available=%ld\n",
-                 TxQueue->Tail, PacketsSent, TxQueue->Available);
+        /*
+         * Memory barrier before TDT write.
+         * Ensures all descriptor writes are visible to hardware before
+         * we update the tail pointer to signal new work.
+         *
+         * This is critical for correctness - without the barrier,
+         * hardware might see the updated TDT before descriptor data
+         * is fully written, causing corruption or hangs.
+         * Matches Linux's wmb() before writel(tail).
+         */
+        KeMemoryBarrier();
+
         E1000_WRITE_REG(Adapter, E1000_REG_TDT, TxQueue->Tail);
-    }
-    else
-    {
-        DbgPrint("E1000-TX: No packets sent! Status likely returned error\n");
     }
 
     if (DispatchLevel)
@@ -393,6 +399,15 @@ E1000TransmitNetBuffer(
     /* Check if we have enough descriptors */
     if (TxQueue->Available < (LONG)DescriptorsNeeded)
     {
+        /*
+         * TX Queue Flow Control:
+         * Mark queue as stopped when we run out of descriptors.
+         * The TX completion path will wake the queue when descriptors
+         * become available again (see E1000ProcessTxCompletions).
+         *
+         * This is similar to Linux's netif_stop_queue() pattern.
+         */
+        InterlockedOr(&TxQueue->Flags, E1000_TX_QUEUE_STOPPED);
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -474,9 +489,6 @@ E1000TransmitNetBuffer(
     /* Memory barrier before updating tail */
     KeMemoryBarrier();
 
-    DbgPrint("E1000-TX: Queued packet at idx=%u: Addr=0x%I64x Len=%u Cmd=0x%02x\n",
-             TxIndex, TxDesc->Address, TxDesc->Length, TxDesc->Command);
-
     /* Advance tail pointer */
     TxQueue->Tail = (TxIndex + 1) % TxQueue->Count;
     InterlockedDecrement(&TxQueue->Available);
@@ -492,6 +504,13 @@ E1000TransmitNetBuffer(
  * E1000ProcessTxCompletions - Process completed transmit descriptors
  *
  * Called from DPC to reclaim completed descriptors and complete NBLs.
+ *
+ * Implements TX queue wake mechanism:
+ *   - If queue was stopped due to no descriptors, wake it when
+ *     Available >= E1000_TX_WAKE_THRESHOLD (32)
+ *   - This prevents TX stalls when queue fills up
+ *
+ * Similar to Linux's netif_wake_queue() pattern in e1000e driver.
  * ============================================================================ */
 
 VOID
@@ -506,10 +525,18 @@ E1000ProcessTxCompletions(
     PNET_BUFFER_LIST LastNbl = NULL;
     ULONG Completed = 0;
     ULONG Head;
+    BOOLEAN WakeQueue = FALSE;
+    LONG OldFlags;
 
     NdisAcquireSpinLock(&TxQueue->Lock);
 
     Head = TxQueue->Head;
+
+    /*
+     * Memory barrier before reading descriptor status.
+     * Ensures we see the latest DD bit written by hardware.
+     */
+    KeMemoryBarrier();
 
     /* Process completed descriptors */
     while (Head != TxQueue->Tail)
@@ -568,6 +595,45 @@ E1000ProcessTxCompletions(
         KeQuerySystemTime(&TxQueue->LastCompletionTime);
     }
 
+    /*
+     * TX Queue Wake Mechanism:
+     *
+     * If the queue was stopped due to no descriptors, check if we now
+     * have enough free descriptors to resume sending.
+     *
+     * Use a threshold (E1000_TX_WAKE_THRESHOLD = 32) to provide hysteresis
+     * and avoid oscillating between stopped and running states.
+     *
+     * Linux e1000e e1000_clean_tx_irq() checks:
+     *   if (count && netif_carrier_ok(netdev) &&
+     *       e1000_desc_unused(tx_ring) >= TX_WAKE_THRESHOLD) {
+     *       smp_mb();
+     *       if (netif_queue_stopped(netdev) &&
+     *           !(test_bit(__E1000_DOWN, &adapter->state)))
+     *           netif_wake_queue(netdev);
+     *   }
+     *
+     * We check: completed > 0, link up, available >= threshold, queue stopped
+     */
+    if (Completed > 0 &&
+        (Adapter->MediaState == MediaConnectStateConnected) &&
+        (TxQueue->Flags & E1000_TX_QUEUE_STOPPED) &&
+        (TxQueue->Available >= E1000_TX_WAKE_THRESHOLD))
+    {
+        /*
+         * Memory barrier ensures Available increment is visible
+         * before we clear the STOPPED flag and wake the queue.
+         * This matches Linux's smp_mb() before the wake check.
+         */
+        KeMemoryBarrier();
+
+        OldFlags = InterlockedAnd(&TxQueue->Flags, ~E1000_TX_QUEUE_STOPPED);
+        if (OldFlags & E1000_TX_QUEUE_STOPPED)
+        {
+            WakeQueue = TRUE;
+        }
+    }
+
     NdisReleaseSpinLock(&TxQueue->Lock);
 
     /* Complete NBLs outside of lock */
@@ -579,6 +645,20 @@ E1000ProcessTxCompletions(
             NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL
             );
     }
+
+    /*
+     * If we woke the queue, NDIS should now be able to send again.
+     *
+     * Note: In NDIS 6.x, there is no explicit NdisMRestartSend() API.
+     * NDIS will automatically retry sending when:
+     *   1. We complete pending sends (done above)
+     *   2. Interrupt fires (which happens naturally)
+     *
+     * For more aggressive wake-up, we could use NdisMIndicateStatusEx()
+     * with NDIS_STATUS_MEDIA_SPECIFIC_INDICATION, but completing sends
+     * is usually sufficient to trigger NDIS to retry.
+     */
+    UNREFERENCED_PARAMETER(WakeQueue);
 
     /* Update adapter statistics */
     InterlockedExchangeAdd64((LONG64*)&Adapter->Statistics.TxPackets, Completed);

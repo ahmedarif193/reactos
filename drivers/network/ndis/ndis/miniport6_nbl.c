@@ -247,12 +247,12 @@ NdisAllocateNetBufferListPool(
     ULONG AllocationSize;
     ULONG PoolTag;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisAllocateNetBufferListPool called\n"));
+    DPRINT("NdisAllocateNetBufferListPool called\n");
 
     /* Validate parameters */
     if (Parameters == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NULL parameters\n"));
+        DPRINT1("NULL parameters\n");
         return NULL;
     }
 
@@ -260,7 +260,7 @@ NdisAllocateNetBufferListPool(
     if (Parameters->Header.Type != NDIS_OBJECT_TYPE_DEFAULT ||
         Parameters->Header.Revision < NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid parameters header\n"));
+        DPRINT1("Invalid parameters header\n");
         return NULL;
     }
 
@@ -270,7 +270,7 @@ NdisAllocateNetBufferListPool(
                                  NDIS_NBL_POOL_TAG);
     if (Pool == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate NBL pool structure\n"));
+        DPRINT1("Failed to allocate NBL pool structure\n");
         return NULL;
     }
 
@@ -315,8 +315,8 @@ NdisAllocateNetBufferListPool(
                                     PoolTag,
                                     0);    /* Depth - use default */
 
-    NDIS_DbgPrint(MAX_TRACE, ("Created NBL pool %p, AllocSize=%lu, Tag=0x%x\n",
-        Pool, AllocationSize, PoolTag));
+    DPRINT1("Created NBL pool %p, AllocSize=%lu, Tag=0x%x\n",
+        Pool, AllocationSize, PoolTag);
 
     return (NDIS_HANDLE)Pool;
 }
@@ -331,11 +331,11 @@ NdisFreeNetBufferListPool(
 {
     PNDIS6_NBL_POOL Pool;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisFreeNetBufferListPool called for handle %p\n", PoolHandle));
+    DPRINT("NdisFreeNetBufferListPool called for handle %p\n", PoolHandle);
 
     if (PoolHandle == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NULL pool handle\n"));
+        DPRINT1("NULL pool handle\n");
         return;
     }
 
@@ -344,8 +344,8 @@ NdisFreeNetBufferListPool(
     /* Check for leaked allocations */
     if (Pool->AllocatedCount > 0)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("WARNING: Freeing NBL pool with %ld outstanding allocations\n",
-            Pool->AllocatedCount));
+        DPRINT1("WARNING: Freeing NBL pool with %ld outstanding allocations\n",
+            Pool->AllocatedCount);
     }
 
     /* Delete the lookaside list */
@@ -354,7 +354,7 @@ NdisFreeNetBufferListPool(
     /* Free the pool structure */
     ExFreePoolWithTag(Pool, NDIS_NBL_POOL_TAG);
 
-    NDIS_DbgPrint(MAX_TRACE, ("NBL pool freed\n"));
+    DPRINT1("NBL pool freed\n");
 }
 
 /*
@@ -371,11 +371,11 @@ NdisAllocateNetBufferList(
     PNET_BUFFER_LIST NetBufferList;
     USHORT EffectiveContextSize;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisAllocateNetBufferList called\n"));
+    DPRINT("NdisAllocateNetBufferList called\n");
 
     if (PoolHandle == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NULL pool handle\n"));
+        DPRINT1("NULL pool handle\n");
         return NULL;
     }
 
@@ -388,7 +388,7 @@ NdisAllocateNetBufferList(
     NetBufferList = ExAllocateFromNPagedLookasideList(&Pool->LookasideList);
     if (NetBufferList == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate from lookaside list\n"));
+        DPRINT1("Failed to allocate from lookaside list\n");
         return NULL;
     }
 
@@ -417,8 +417,8 @@ NdisAllocateNetBufferList(
     /* Increment allocation count */
     InterlockedIncrement(&Pool->AllocatedCount);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Allocated NBL %p from pool %p (count=%ld)\n",
-        NetBufferList, Pool, Pool->AllocatedCount));
+    DPRINT("Allocated NBL %p from pool %p (count=%ld)\n",
+           NetBufferList, Pool, Pool->AllocatedCount);
 
     return NetBufferList;
 }
@@ -433,11 +433,11 @@ NdisFreeNetBufferList(
 {
     PNDIS6_NBL_POOL Pool;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisFreeNetBufferList called for NBL %p\n", NetBufferList));
+    DPRINT("NdisFreeNetBufferList called for NBL %p\n", NetBufferList);
 
     if (NetBufferList == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NULL NetBufferList\n"));
+        DPRINT1("NULL NetBufferList\n");
         return;
     }
 
@@ -445,7 +445,7 @@ NdisFreeNetBufferList(
     Pool = (PNDIS6_NBL_POOL)NetBufferList->NdisPoolHandle;
     if (Pool == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NBL has NULL pool handle\n"));
+        DPRINT1("NBL has NULL pool handle\n");
         return;
     }
 
@@ -458,7 +458,7 @@ NdisFreeNetBufferList(
     /* Return to lookaside list */
     ExFreeToNPagedLookasideList(&Pool->LookasideList, NetBufferList);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Freed NBL to pool (count=%ld)\n", Pool->AllocatedCount));
+    DPRINT("Freed NBL to pool (count=%ld)\n", Pool->AllocatedCount);
 }
 
 /*
@@ -474,12 +474,12 @@ NdisAllocateNetBufferPool(
     ULONG AllocationSize;
     ULONG PoolTag;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisAllocateNetBufferPool called\n"));
+    DPRINT("NdisAllocateNetBufferPool called\n");
 
     /* Validate parameters */
     if (Parameters == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NULL parameters\n"));
+        DPRINT1("NULL parameters\n");
         return NULL;
     }
 
@@ -487,7 +487,7 @@ NdisAllocateNetBufferPool(
     if (Parameters->Header.Type != NDIS_OBJECT_TYPE_DEFAULT ||
         Parameters->Header.Revision < NET_BUFFER_POOL_PARAMETERS_REVISION_1)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Invalid parameters header\n"));
+        DPRINT1("Invalid parameters header\n");
         return NULL;
     }
 
@@ -497,7 +497,7 @@ NdisAllocateNetBufferPool(
                                  NDIS_NB_POOL_TAG);
     if (Pool == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate NB pool structure\n"));
+        DPRINT1("Failed to allocate NB pool structure\n");
         return NULL;
     }
 
@@ -529,8 +529,8 @@ NdisAllocateNetBufferPool(
                                     PoolTag,
                                     0);    /* Depth - use default */
 
-    NDIS_DbgPrint(MAX_TRACE, ("Created NB pool %p, AllocSize=%lu, Tag=0x%x\n",
-        Pool, AllocationSize, PoolTag));
+    DPRINT1("Created NB pool %p, AllocSize=%lu, Tag=0x%x\n",
+        Pool, AllocationSize, PoolTag);
 
     return (NDIS_HANDLE)Pool;
 }
@@ -545,11 +545,11 @@ NdisFreeNetBufferPool(
 {
     PNDIS6_NB_POOL Pool;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisFreeNetBufferPool called for handle %p\n", PoolHandle));
+    DPRINT("NdisFreeNetBufferPool called for handle %p\n", PoolHandle);
 
     if (PoolHandle == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NULL pool handle\n"));
+        DPRINT1("NULL pool handle\n");
         return;
     }
 
@@ -558,8 +558,8 @@ NdisFreeNetBufferPool(
     /* Check for leaked allocations */
     if (Pool->AllocatedCount > 0)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("WARNING: Freeing NB pool with %ld outstanding allocations\n",
-            Pool->AllocatedCount));
+        DPRINT1("WARNING: Freeing NB pool with %ld outstanding allocations\n",
+            Pool->AllocatedCount);
     }
 
     /* Delete the lookaside list */
@@ -568,7 +568,7 @@ NdisFreeNetBufferPool(
     /* Free the pool structure */
     ExFreePoolWithTag(Pool, NDIS_NB_POOL_TAG);
 
-    NDIS_DbgPrint(MAX_TRACE, ("NB pool freed\n"));
+    DPRINT1("NB pool freed\n");
 }
 
 /*
@@ -585,11 +585,11 @@ NdisAllocateNetBuffer(
     PNDIS6_NB_POOL Pool;
     PNET_BUFFER NetBuffer;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisAllocateNetBuffer called\n"));
+    DPRINT("NdisAllocateNetBuffer called\n");
 
     if (PoolHandle == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NULL pool handle\n"));
+        DPRINT1("NULL pool handle\n");
         return NULL;
     }
 
@@ -599,7 +599,7 @@ NdisAllocateNetBuffer(
     NetBuffer = ExAllocateFromNPagedLookasideList(&Pool->LookasideList);
     if (NetBuffer == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate from lookaside list\n"));
+        DPRINT1("Failed to allocate from lookaside list\n");
         return NULL;
     }
 
@@ -609,8 +609,8 @@ NdisAllocateNetBuffer(
     /* Increment allocation count */
     InterlockedIncrement(&Pool->AllocatedCount);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Allocated NB %p from pool %p (count=%ld)\n",
-        NetBuffer, Pool, Pool->AllocatedCount));
+    DPRINT1("Allocated NB %p from pool %p (count=%ld)\n",
+        NetBuffer, Pool, Pool->AllocatedCount);
 
     return NetBuffer;
 }
@@ -625,11 +625,11 @@ NdisFreeNetBuffer(
 {
     PNDIS6_NB_POOL Pool;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisFreeNetBuffer called for NB %p\n", NetBuffer));
+    DPRINT("NdisFreeNetBuffer called for NB %p\n", NetBuffer);
 
     if (NetBuffer == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NULL NetBuffer\n"));
+        DPRINT1("NULL NetBuffer\n");
         return;
     }
 
@@ -637,7 +637,7 @@ NdisFreeNetBuffer(
     Pool = (PNDIS6_NB_POOL)NetBuffer->NdisPoolHandle;
     if (Pool == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NB has NULL pool handle\n"));
+        DPRINT1("NB has NULL pool handle\n");
         return;
     }
 
@@ -649,7 +649,7 @@ NdisFreeNetBuffer(
     /* Return to lookaside list */
     ExFreeToNPagedLookasideList(&Pool->LookasideList, NetBuffer);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Freed NB to pool (count=%ld)\n", Pool->AllocatedCount));
+    DPRINT1("Freed NB to pool (count=%ld)\n", Pool->AllocatedCount);
 }
 
 /*
@@ -670,11 +670,11 @@ NdisAllocateNetBufferAndNetBufferList(
     PNET_BUFFER NetBuffer;
     SIZE_T ActualDataLength;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisAllocateNetBufferAndNetBufferList called\n"));
+    DPRINT("NdisAllocateNetBufferAndNetBufferList called\n");
 
     if (PoolHandle == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("NULL pool handle\n"));
+        DPRINT1("NULL pool handle\n");
         return NULL;
     }
 
@@ -684,7 +684,7 @@ NdisAllocateNetBufferAndNetBufferList(
     NetBufferList = NdisAllocateNetBufferList(PoolHandle, ContextSize, ContextBackFill);
     if (NetBufferList == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate NBL\n"));
+        DPRINT1("Failed to allocate NBL\n");
         return NULL;
     }
 
@@ -710,7 +710,7 @@ NdisAllocateNetBufferAndNetBufferList(
         if (NetBuffer == NULL)
         {
             NdisFreeNetBufferList(NetBufferList);
-            NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate NB\n"));
+            DPRINT1("Failed to allocate NB\n");
             return NULL;
         }
 
@@ -730,7 +730,7 @@ NdisAllocateNetBufferAndNetBufferList(
         NetBufferList->FirstNetBuffer = NetBuffer;
     }
 
-    NDIS_DbgPrint(MAX_TRACE, ("Allocated NBL %p with NB %p\n", NetBufferList, NetBuffer));
+    DPRINT("Allocated NBL %p with NB %p\n", NetBufferList, NetBuffer);
 
     return NetBufferList;
 }
@@ -750,8 +750,8 @@ NdisRetreatNetBufferDataStart(
     PMDL NewMdl;
     ULONG NewMdlSize;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisRetreatNetBufferDataStart: NB=%p, Delta=%lu, BackFill=%lu\n",
-        NetBuffer, DataOffsetDelta, DataBackFill));
+    DPRINT1("NdisRetreatNetBufferDataStart: NB=%p, Delta=%lu, BackFill=%lu\n",
+        NetBuffer, DataOffsetDelta, DataBackFill);
 
     if (NetBuffer == NULL)
     {
@@ -784,7 +784,7 @@ NdisRetreatNetBufferDataStart(
             NetBuffer->CurrentMdlOffset = NetBuffer->DataOffset;
         }
 
-        NDIS_DbgPrint(MAX_TRACE, ("Retreat satisfied within existing space\n"));
+        DPRINT1("Retreat satisfied within existing space\n");
         return NDIS_STATUS_SUCCESS;
     }
 
@@ -794,7 +794,7 @@ NdisRetreatNetBufferDataStart(
      */
     if (AllocateMdlHandler == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Need new MDL but no allocator provided\n"));
+        DPRINT1("Need new MDL but no allocator provided\n");
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -805,7 +805,7 @@ NdisRetreatNetBufferDataStart(
     NewMdl = AllocateMdlHandler(NewMdlSize);
     if (NewMdl == NULL)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("MDL allocation failed\n"));
+        DPRINT1("MDL allocation failed\n");
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -819,7 +819,7 @@ NdisRetreatNetBufferDataStart(
     NetBuffer->CurrentMdlOffset = DataBackFill;
     NetBuffer->DataLength += DataOffsetDelta;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Retreat required new MDL, NewSize=%lu\n", NewMdlSize));
+    DPRINT1("Retreat required new MDL, NewSize=%lu\n", NewMdlSize);
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -840,8 +840,8 @@ NdisAdvanceNetBufferDataStart(
     ULONG RemainingAdvance;
     ULONG MdlDataLength;
 
-    NDIS_DbgPrint(MAX_TRACE, ("NdisAdvanceNetBufferDataStart: NB=%p, Delta=%lu, FreeMdl=%d\n",
-        NetBuffer, DataOffsetDelta, FreeMdl));
+    DPRINT1("NdisAdvanceNetBufferDataStart: NB=%p, Delta=%lu, FreeMdl=%d\n",
+        NetBuffer, DataOffsetDelta, FreeMdl);
 
     if (NetBuffer == NULL || DataOffsetDelta == 0)
     {
@@ -851,7 +851,7 @@ NdisAdvanceNetBufferDataStart(
     /* Ensure we don't advance past the data */
     if (DataOffsetDelta > NetBuffer->DataLength)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("WARNING: Advancing past data length\n"));
+        DPRINT1("WARNING: Advancing past data length\n");
         DataOffsetDelta = (ULONG)NetBuffer->DataLength;
     }
 
@@ -909,8 +909,8 @@ NdisAdvanceNetBufferDataStart(
     /* Update data length */
     NetBuffer->DataLength -= DataOffsetDelta;
 
-    NDIS_DbgPrint(MAX_TRACE, ("After advance: DataOffset=%lu, DataLength=%lu\n",
-        NetBuffer->DataOffset, (ULONG)NetBuffer->DataLength));
+    DPRINT1("After advance: DataOffset=%lu, DataLength=%lu\n",
+        NetBuffer->DataOffset, (ULONG)NetBuffer->DataLength);
 }
 
 #endif /* NDIS_SUPPORT_NDIS6 */

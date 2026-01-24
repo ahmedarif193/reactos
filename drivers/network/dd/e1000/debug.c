@@ -17,17 +17,6 @@
  * ============================================================================ */
 
 #if DBG
-/*
- * Debug trace level - controls which messages are printed
- * Can be modified at runtime via debugger or registry
- *
- * Default: MIN_TRACE (0x01) - Only critical messages
- * Set to DEBUG_ULTRA (0xFFFFFFFF) for all messages
- * Or combine specific flags: DEBUG_TX | DEBUG_RX | DEBUG_INT | MID_TRACE
- *
- * Note: DebugTraceLevel is defined in init.c to avoid multiple definition errors
- */
-
 /* Global debug statistics */
 E1000_DEBUG_STATS DebugStats = {0};
 #endif /* DBG */
@@ -263,9 +252,7 @@ VOID E1000_InitDebug(VOID)
     /* Record initialization time */
     KeQueryTickCount(&DebugStats.InitTime);
 
-    DbgPrint("E1000: Debug subsystem initialized (TraceLevel=0x%08x)\n", DebugTraceLevel);
-    DbgPrint("E1000: Debug categories: TX=0x%x RX=0x%x INT=0x%x INIT=0x%x LINK=0x%x\n",
-             DEBUG_TX, DEBUG_RX, DEBUG_INT, DEBUG_INIT, DEBUG_LINK);
+    DPRINT1("E1000: Debug subsystem initialized\n");
 }
 
 
@@ -282,7 +269,7 @@ VOID E1000_ResetDebugStats(VOID)
     /* Preserve initialization time */
     DebugStats.InitTime = InitTime;
 
-    DbgPrint("E1000: Debug statistics reset\n");
+    DPRINT("E1000: Debug statistics reset\n");
 }
 
 
@@ -297,43 +284,43 @@ VOID E1000_DumpDriverState(IN PVOID AdapterContext)
 
     if (Adapter == NULL)
     {
-        DbgPrint("E1000: Cannot dump state - NULL adapter\n");
+        DPRINT("E1000: Cannot dump state - NULL adapter\n");
         return;
     }
 
-    DbgPrint("\n");
-    DbgPrint("============================================================\n");
-    DbgPrint("E1000 Driver State Dump (NDIS 6.x)\n");
-    DbgPrint("============================================================\n");
+    DPRINT1("\n");
+    DPRINT1("============================================================\n");
+    DPRINT("E1000 Driver State Dump (NDIS 6.x)\n");
+    DPRINT1("============================================================\n");
 
     /* Basic adapter info */
-    DbgPrint("Adapter Handle:     %p\n", Adapter->MiniportAdapterHandle);
-    DbgPrint("Vendor/Device ID:   %04x:%04x\n", Adapter->VendorId, Adapter->DeviceId);
-    DbgPrint("Subsystem:          %04x:%04x\n", Adapter->SubsystemVendorId, Adapter->SubsystemId);
-    DbgPrint("Is PCIe:            %s\n", Adapter->IsPCIe ? "Yes" : "No");
+    DPRINT1("Adapter Handle:     %p\n", Adapter->MiniportAdapterHandle);
+    DPRINT1("Vendor/Device ID:   %04x:%04x\n", Adapter->VendorId, Adapter->DeviceId);
+    DPRINT1("Subsystem:          %04x:%04x\n", Adapter->SubsystemVendorId, Adapter->SubsystemId);
+    DPRINT1("Is PCIe:            %s\n", Adapter->IsPCIe ? "Yes" : "No");
 
     /* MAC address */
-    DbgPrint("MAC Address:        %02x:%02x:%02x:%02x:%02x:%02x\n",
+    DPRINT1("MAC Address:        %02x:%02x:%02x:%02x:%02x:%02x\n",
              Adapter->PermanentMacAddress[0], Adapter->PermanentMacAddress[1],
              Adapter->PermanentMacAddress[2], Adapter->PermanentMacAddress[3],
              Adapter->PermanentMacAddress[4], Adapter->PermanentMacAddress[5]);
 
     /* Link status */
-    DbgPrint("Media State:        %s\n",
+    DPRINT1("Media State:        %s\n",
              Adapter->MediaState == MediaConnectStateConnected ? "Connected" : "Disconnected");
-    DbgPrint("Link Speed:         %I64u bps\n", Adapter->LinkSpeed);
+    DPRINT1("Link Speed:         %I64u bps\n", Adapter->LinkSpeed);
 
     /* Memory mapping */
-    DbgPrint("IoBase:             %p (PA: 0x%I64x, Len: %u)\n",
+    DPRINT1("IoBase:             %p (PA: 0x%I64x, Len: %u)\n",
              Adapter->IoBase, Adapter->IoAddress.QuadPart, Adapter->IoLength);
-    DbgPrint("IoPort:             0x%x (Len: %u)\n",
+    DPRINT1("IoPort:             0x%x (Len: %u)\n",
              Adapter->IoPortAddress, Adapter->IoPortLength);
 
     /* Interrupt info */
-    DbgPrint("Interrupt:          Vector=%u Level=%u Shared=%s\n",
+    DPRINT("Interrupt:          Vector=%u Level=%u Shared=%s\n",
              Adapter->InterruptVector, Adapter->InterruptLevel,
              Adapter->InterruptShared ? "Yes" : "No");
-    DbgPrint("Interrupt Mask:     0x%08x\n", Adapter->InterruptMask);
+    DPRINT("Interrupt Mask:     0x%08x\n", Adapter->InterruptMask);
 
     /* TX state - read hardware registers */
     if (Adapter->IoBase)
@@ -348,42 +335,42 @@ VOID E1000_DumpDriverState(IN PVOID AdapterContext)
         TdhReg = TdtReg = RdhReg = RdtReg = 0;
     }
 
-    DbgPrint("\nTransmit State (Queue Count: %u):\n", Adapter->TxQueueCount);
+    DPRINT1("\nTransmit State (Queue Count: %u):\n", Adapter->TxQueueCount);
     if (Adapter->TxQueueCount > 0)
     {
         PE1000_TX_QUEUE TxQueue = &Adapter->TxQueues[0];
-        DbgPrint("  Queue 0:\n");
-        DbgPrint("    Descriptors:    %p\n", TxQueue->Descriptors);
-        DbgPrint("    Head/Tail:      %u / %u\n", TxQueue->Head, TxQueue->Tail);
-        DbgPrint("    HW Head/Tail:   %u / %u\n", TdhReg, TdtReg);
+        DPRINT1("  Queue 0:\n");
+        DPRINT("    Descriptors:    %p\n", TxQueue->Descriptors);
+        DPRINT1("    Head/Tail:      %u / %u\n", TxQueue->Head, TxQueue->Tail);
+        DPRINT1("    HW Head/Tail:   %u / %u\n", TdhReg, TdtReg);
     }
 
-    DbgPrint("\nReceive State (Queue Count: %u):\n", Adapter->RxQueueCount);
+    DPRINT1("\nReceive State (Queue Count: %u):\n", Adapter->RxQueueCount);
     if (Adapter->RxQueueCount > 0)
     {
         PE1000_RX_QUEUE RxQueue = &Adapter->RxQueues[0];
-        DbgPrint("  Queue 0:\n");
-        DbgPrint("    Descriptors:    %p\n", RxQueue->Descriptors);
-        DbgPrint("    Head/Tail:      %u / %u\n", RxQueue->Head, RxQueue->Tail);
-        DbgPrint("    HW Head/Tail:   %u / %u\n", RdhReg, RdtReg);
+        DPRINT1("  Queue 0:\n");
+        DPRINT("    Descriptors:    %p\n", RxQueue->Descriptors);
+        DPRINT1("    Head/Tail:      %u / %u\n", RxQueue->Head, RxQueue->Tail);
+        DPRINT1("    HW Head/Tail:   %u / %u\n", RdhReg, RdtReg);
     }
 
     /* Checksum offload */
-    DbgPrint("\nChecksum Offload:\n");
-    DbgPrint("  TX IP Enabled:    %s\n", Adapter->ChecksumOffload.TxIpChecksumEnabled ? "Yes" : "No");
-    DbgPrint("  RX IP Enabled:    %s\n", Adapter->ChecksumOffload.RxIpChecksumEnabled ? "Yes" : "No");
+    DPRINT1("\nChecksum Offload:\n");
+    DPRINT1("  TX IP Enabled:    %s\n", Adapter->ChecksumOffload.TxIpChecksumEnabled ? "Yes" : "No");
+    DPRINT1("  RX IP Enabled:    %s\n", Adapter->ChecksumOffload.RxIpChecksumEnabled ? "Yes" : "No");
 
     /* Power state */
-    DbgPrint("\nPower Management:\n");
-    DbgPrint("  Current State:    D%d\n", Adapter->CurrentPowerState);
-    DbgPrint("  Wake on Magic:    %s\n", Adapter->WakeOnMagicPacket ? "Yes" : "No");
-    DbgPrint("  Wake on Link:     %s\n", Adapter->WakeOnLinkChange ? "Yes" : "No");
+    DPRINT1("\nPower Management:\n");
+    DPRINT1("  Current State:    D%d\n", Adapter->CurrentPowerState);
+    DPRINT("  Wake on Magic:    %s\n", Adapter->WakeOnMagicPacket ? "Yes" : "No");
+    DPRINT1("  Wake on Link:     %s\n", Adapter->WakeOnLinkChange ? "Yes" : "No");
 
     /* Packet filter */
-    DbgPrint("\nPacket Filter:      0x%08x\n", Adapter->PacketFilter);
-    DbgPrint("Flags:              0x%08x\n", Adapter->Flags);
+    DPRINT("\nPacket Filter:      0x%08x\n", Adapter->PacketFilter);
+    DPRINT1("Flags:              0x%08x\n", Adapter->Flags);
 
-    DbgPrint("============================================================\n\n");
+    DPRINT1("============================================================\n\n");
 }
 
 
@@ -399,57 +386,57 @@ VOID E1000_DumpStatistics(VOID)
     KeQueryTickCount(&Now);
     Uptime = (Now.QuadPart - DebugStats.InitTime.QuadPart);
 
-    DbgPrint("\n");
-    DbgPrint("============================================================\n");
-    DbgPrint("E1000 Debug Statistics\n");
-    DbgPrint("============================================================\n");
+    DPRINT1("\n");
+    DPRINT1("============================================================\n");
+    DPRINT("E1000 Debug Statistics\n");
+    DPRINT1("============================================================\n");
 
-    DbgPrint("Uptime (ticks):     %I64u\n", Uptime);
+    DPRINT1("Uptime (ticks):     %I64u\n", Uptime);
 
-    DbgPrint("\nTransmit Statistics:\n");
-    DbgPrint("  TX Attempts:      %I64d\n", DebugStats.TxAttempts);
-    DbgPrint("  TX Success:       %I64d\n", DebugStats.TxSuccess);
-    DbgPrint("  TX Failed:        %I64d\n", DebugStats.TxFailed);
-    DbgPrint("  TX Bytes:         %I64d\n", DebugStats.TxBytes);
-    DbgPrint("  TX Dropped:       %I64d\n", DebugStats.TxDropped);
-    DbgPrint("  TX Ring Full:     %u\n", DebugStats.TxRingFull);
-    DbgPrint("  TX Batch Calls:   %u\n", DebugStats.TxBatchCount);
-    DbgPrint("  TX Single Calls:  %u\n", DebugStats.TxSingleCount);
-    DbgPrint("  TX Max Desc Used: %u\n", DebugStats.TxMaxDescriptorsUsed);
+    DPRINT("\nTransmit Statistics:\n");
+    DPRINT("  TX Attempts:      %I64d\n", DebugStats.TxAttempts);
+    DPRINT("  TX Success:       %I64d\n", DebugStats.TxSuccess);
+    DPRINT("  TX Failed:        %I64d\n", DebugStats.TxFailed);
+    DPRINT("  TX Bytes:         %I64d\n", DebugStats.TxBytes);
+    DPRINT("  TX Dropped:       %I64d\n", DebugStats.TxDropped);
+    DPRINT("  TX Ring Full:     %u\n", DebugStats.TxRingFull);
+    DPRINT("  TX Batch Calls:   %u\n", DebugStats.TxBatchCount);
+    DPRINT("  TX Single Calls:  %u\n", DebugStats.TxSingleCount);
+    DPRINT("  TX Max Desc Used: %u\n", DebugStats.TxMaxDescriptorsUsed);
 
-    DbgPrint("\nReceive Statistics:\n");
-    DbgPrint("  RX Attempts:      %I64d\n", DebugStats.RxAttempts);
-    DbgPrint("  RX Success:       %I64d\n", DebugStats.RxSuccess);
-    DbgPrint("  RX Failed:        %I64d\n", DebugStats.RxFailed);
-    DbgPrint("  RX Bytes:         %I64d\n", DebugStats.RxBytes);
-    DbgPrint("  RX Dropped:       %I64d\n", DebugStats.RxDropped);
-    DbgPrint("  RX No Buffer:     %u\n", DebugStats.RxNoBuffer);
-    DbgPrint("  RX Checksum Good: %u\n", DebugStats.RxChecksumGood);
-    DbgPrint("  RX Checksum Bad:  %u\n", DebugStats.RxChecksumBad);
-    DbgPrint("  RX CRC Errors:    %u\n", DebugStats.RxCrcErrors);
-    DbgPrint("  RX Align Errors:  %u\n", DebugStats.RxAlignErrors);
-    DbgPrint("  RX Multi-Desc:    %u\n", DebugStats.RxMultiDesc);
+    DPRINT("\nReceive Statistics:\n");
+    DPRINT("  RX Attempts:      %I64d\n", DebugStats.RxAttempts);
+    DPRINT("  RX Success:       %I64d\n", DebugStats.RxSuccess);
+    DPRINT("  RX Failed:        %I64d\n", DebugStats.RxFailed);
+    DPRINT("  RX Bytes:         %I64d\n", DebugStats.RxBytes);
+    DPRINT("  RX Dropped:       %I64d\n", DebugStats.RxDropped);
+    DPRINT("  RX No Buffer:     %u\n", DebugStats.RxNoBuffer);
+    DPRINT("  RX Checksum Good: %u\n", DebugStats.RxChecksumGood);
+    DPRINT("  RX Checksum Bad:  %u\n", DebugStats.RxChecksumBad);
+    DPRINT("  RX CRC Errors:    %u\n", DebugStats.RxCrcErrors);
+    DPRINT("  RX Align Errors:  %u\n", DebugStats.RxAlignErrors);
+    DPRINT("  RX Multi-Desc:    %u\n", DebugStats.RxMultiDesc);
 
-    DbgPrint("\nInterrupt Statistics:\n");
-    DbgPrint("  Total Interrupts: %I64d\n", DebugStats.Interrupts);
-    DbgPrint("  Spurious:         %u\n", DebugStats.SpuriousInterrupts);
-    DbgPrint("  TX Interrupts:    %u\n", DebugStats.TxInterrupts);
-    DbgPrint("  RX Interrupts:    %u\n", DebugStats.RxInterrupts);
-    DbgPrint("  Link Interrupts:  %u\n", DebugStats.LinkInterrupts);
-    DbgPrint("  Other:            %u\n", DebugStats.OtherInterrupts);
-    DbgPrint("  Unhandled:        %u\n", DebugStats.UnhandledInterrupts);
+    DPRINT("\nInterrupt Statistics:\n");
+    DPRINT("  Total Interrupts: %I64d\n", DebugStats.Interrupts);
+    DPRINT("  Spurious:         %u\n", DebugStats.SpuriousInterrupts);
+    DPRINT("  TX Interrupts:    %u\n", DebugStats.TxInterrupts);
+    DPRINT("  RX Interrupts:    %u\n", DebugStats.RxInterrupts);
+    DPRINT("  Link Interrupts:  %u\n", DebugStats.LinkInterrupts);
+    DPRINT("  Other:            %u\n", DebugStats.OtherInterrupts);
+    DPRINT("  Unhandled:        %u\n", DebugStats.UnhandledInterrupts);
 
-    DbgPrint("\nInitialization Statistics:\n");
-    DbgPrint("  Init Attempts:    %u\n", DebugStats.InitAttempts);
-    DbgPrint("  Init Success:     %u\n", DebugStats.InitSuccess);
-    DbgPrint("  Init Failed:      %u\n", DebugStats.InitFailed);
-    DbgPrint("  Reset Count:      %u\n", DebugStats.ResetCount);
+    DPRINT("\nInitialization Statistics:\n");
+    DPRINT("  Init Attempts:    %u\n", DebugStats.InitAttempts);
+    DPRINT("  Init Success:     %u\n", DebugStats.InitSuccess);
+    DPRINT("  Init Failed:      %u\n", DebugStats.InitFailed);
+    DPRINT("  Reset Count:      %u\n", DebugStats.ResetCount);
 
-    DbgPrint("\nPower Management:\n");
-    DbgPrint("  Transitions:      %u\n", DebugStats.PowerTransitions);
-    DbgPrint("  Wake Events:      %u\n", DebugStats.WakeEvents);
+    DPRINT1("\nPower Management:\n");
+    DPRINT("  Transitions:      %u\n", DebugStats.PowerTransitions);
+    DPRINT("  Wake Events:      %u\n", DebugStats.WakeEvents);
 
-    DbgPrint("============================================================\n\n");
+    DPRINT1("============================================================\n\n");
 }
 
 
@@ -467,14 +454,14 @@ VOID E1000_DumpTxRing(IN PVOID AdapterContext)
 
     if (Adapter == NULL || Adapter->TxQueueCount == 0)
     {
-        DbgPrint("E1000: Cannot dump TX ring - NULL adapter or no queues\n");
+        DPRINT("E1000: Cannot dump TX ring - NULL adapter or no queues\n");
         return;
     }
 
     TxQueue = &Adapter->TxQueues[0];
     if (TxQueue->Descriptors == NULL)
     {
-        DbgPrint("E1000: Cannot dump TX ring - NULL descriptors\n");
+        DPRINT("E1000: Cannot dump TX ring - NULL descriptors\n");
         return;
     }
 
@@ -489,19 +476,19 @@ VOID E1000_DumpTxRing(IN PVOID AdapterContext)
         TdhReg = TdtReg = 0;
     }
 
-    DbgPrint("\n");
-    DbgPrint("============================================================\n");
-    DbgPrint("E1000 TX Descriptor Ring Dump (NDIS 6.x)\n");
-    DbgPrint("============================================================\n");
-    DbgPrint("Ring Base:    %p\n", TxQueue->Descriptors);
-    DbgPrint("SW Head:      %u\n", TxQueue->Head);
-    DbgPrint("SW Tail:      %u\n", TxQueue->Tail);
-    DbgPrint("HW Head:      %u\n", TdhReg);
-    DbgPrint("HW Tail:      %u\n", TdtReg);
-    DbgPrint("Count:        %u\n", TxQueue->Count);
-    DbgPrint("\nDescriptor Details (showing active range):\n");
-    DbgPrint("Idx  Address          Length Cmd  Stat\n");
-    DbgPrint("---- ---------------- ------ ---- ----\n");
+    DPRINT1("\n");
+    DPRINT1("============================================================\n");
+    DPRINT("E1000 TX Descriptor Ring Dump (NDIS 6.x)\n");
+    DPRINT1("============================================================\n");
+    DPRINT("Ring Base:    %p\n", TxQueue->Descriptors);
+    DPRINT1("SW Head:      %u\n", TxQueue->Head);
+    DPRINT1("SW Tail:      %u\n", TxQueue->Tail);
+    DPRINT1("HW Head:      %u\n", TdhReg);
+    DPRINT1("HW Tail:      %u\n", TdtReg);
+    DPRINT1("Count:        %u\n", TxQueue->Count);
+    DPRINT("\nDescriptor Details (showing active range):\n");
+    DPRINT1("Idx  Address          Length Cmd  Stat\n");
+    DPRINT1("---- ---------------- ------ ---- ----\n");
 
     /* Show descriptors around the current position */
     for (i = 0; i < TxQueue->Count && i < E1000_NUM_TX_DESC; i++)
@@ -513,7 +500,7 @@ VOID E1000_DumpTxRing(IN PVOID AdapterContext)
             i == TxQueue->Head || i == TxQueue->Tail ||
             i == TdhReg || i == TdtReg)
         {
-            DbgPrint("%3u%s %016I64x %5u  %02x   %02x\n",
+            DPRINT1("%3u%s %016I64x %5u  %02x   %02x\n",
                      i,
                      (i == TxQueue->Head) ? "H" :
                      (i == TxQueue->Tail) ? "T" :
@@ -526,7 +513,7 @@ VOID E1000_DumpTxRing(IN PVOID AdapterContext)
         }
     }
 
-    DbgPrint("============================================================\n\n");
+    DPRINT1("============================================================\n\n");
 }
 
 
@@ -544,14 +531,14 @@ VOID E1000_DumpRxRing(IN PVOID AdapterContext)
 
     if (Adapter == NULL || Adapter->RxQueueCount == 0)
     {
-        DbgPrint("E1000: Cannot dump RX ring - NULL adapter or no queues\n");
+        DPRINT("E1000: Cannot dump RX ring - NULL adapter or no queues\n");
         return;
     }
 
     RxQueue = &Adapter->RxQueues[0];
     if (RxQueue->Descriptors == NULL)
     {
-        DbgPrint("E1000: Cannot dump RX ring - NULL descriptors\n");
+        DPRINT("E1000: Cannot dump RX ring - NULL descriptors\n");
         return;
     }
 
@@ -566,19 +553,19 @@ VOID E1000_DumpRxRing(IN PVOID AdapterContext)
         RdhReg = RdtReg = 0;
     }
 
-    DbgPrint("\n");
-    DbgPrint("============================================================\n");
-    DbgPrint("E1000 RX Descriptor Ring Dump (NDIS 6.x)\n");
-    DbgPrint("============================================================\n");
-    DbgPrint("Ring Base:    %p\n", RxQueue->Descriptors);
-    DbgPrint("SW Head:      %u\n", RxQueue->Head);
-    DbgPrint("SW Tail:      %u\n", RxQueue->Tail);
-    DbgPrint("HW Head:      %u\n", RdhReg);
-    DbgPrint("HW Tail:      %u\n", RdtReg);
-    DbgPrint("Count:        %u\n", RxQueue->Count);
-    DbgPrint("\nDescriptor Details (showing descriptors with status):\n");
-    DbgPrint("Idx  Address          Length Status Errors\n");
-    DbgPrint("---- ---------------- ------ ------ ------\n");
+    DPRINT1("\n");
+    DPRINT1("============================================================\n");
+    DPRINT("E1000 RX Descriptor Ring Dump (NDIS 6.x)\n");
+    DPRINT1("============================================================\n");
+    DPRINT("Ring Base:    %p\n", RxQueue->Descriptors);
+    DPRINT1("SW Head:      %u\n", RxQueue->Head);
+    DPRINT1("SW Tail:      %u\n", RxQueue->Tail);
+    DPRINT1("HW Head:      %u\n", RdhReg);
+    DPRINT1("HW Tail:      %u\n", RdtReg);
+    DPRINT1("Count:        %u\n", RxQueue->Count);
+    DPRINT("\nDescriptor Details (showing descriptors with status):\n");
+    DPRINT1("Idx  Address          Length Status Errors\n");
+    DPRINT1("---- ---------------- ------ ------ ------\n");
 
     /* Show descriptors with status set */
     for (i = 0; i < RxQueue->Count && i < E1000_NUM_RX_DESC; i++)
@@ -589,7 +576,7 @@ VOID E1000_DumpRxRing(IN PVOID AdapterContext)
         if (Desc->Status != 0 || i == RdhReg || i == RdtReg ||
             i == RxQueue->Head || i == RxQueue->Tail)
         {
-            DbgPrint("%3u%s %016I64x %5u    %02x     %02x\n",
+            DPRINT1("%3u%s %016I64x %5u    %02x     %02x\n",
                      i,
                      (i == RxQueue->Head) ? "H" :
                      (i == RxQueue->Tail) ? "T" :
@@ -602,7 +589,7 @@ VOID E1000_DumpRxRing(IN PVOID AdapterContext)
         }
     }
 
-    DbgPrint("============================================================\n\n");
+    DPRINT1("============================================================\n\n");
 }
 
 #else /* !DBG */
