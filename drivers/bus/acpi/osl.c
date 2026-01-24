@@ -734,8 +734,6 @@ AcpiOsReadPort (
     UINT32                  *Value,
     UINT32                  Width)
 {
-    DPRINT1("AcpiOsReadPort %p, width %d\n",Address,Width);
-
     switch (Width)
     {
     case 8:
@@ -764,7 +762,6 @@ AcpiOsWritePort (
     UINT32                  Value,
     UINT32                  Width)
 {
-    DPRINT1("AcpiOsWritePort %p, width %d\n",Address,Width);
     switch (Width)
     {
     case 8:
