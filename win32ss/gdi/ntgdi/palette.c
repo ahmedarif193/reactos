@@ -732,7 +732,7 @@ IntGdiRealizePalette(HDC hDC)
 {
     UINT realize = 0;
     PDC pdc;
-    PALETTE *ppalSurf, *ppalDC;
+    PALETTE *ppalSurf;
 
     pdc = DC_LockDc(hDC);
     if (!pdc)
@@ -759,7 +759,6 @@ IntGdiRealizePalette(HDC hDC)
 
     /// FIXME: shouldn't dereference pSurface while the PDEV is not locked
     ppalSurf = pdc->dclevel.pSurface->ppal;
-    ppalDC = pdc->dclevel.ppal;
 
     if (!(ppalSurf->flFlags & PAL_INDEXED))
     {
@@ -767,7 +766,13 @@ IntGdiRealizePalette(HDC hDC)
         goto cleanup;
     }
 
-    ASSERT(ppalDC->flFlags & PAL_INDEXED);
+#if DBG
+    {
+        PALETTE *ppalDC;
+        ppalDC = pdc->dclevel.ppal;
+        ASSERT(ppalDC->flFlags & PAL_INDEXED);
+    }
+#endif
 
     DPRINT1("RealizePalette unimplemented for %s\n", 
             (pdc->dctype == DCTYPE_MEMORY ? "memory managed DCs" : "device DCs"));

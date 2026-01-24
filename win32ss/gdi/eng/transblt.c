@@ -217,7 +217,6 @@ IntEngTransparentBlt(
     BOOL Ret;
     RECTL OutputRect, InputClippedRect;
     SURFACE *psurfDest;
-    SURFACE *psurfSource;
     RECTL InputRect;
     LONG InputClWidth, InputClHeight, InputWidth, InputHeight;
 
@@ -226,10 +225,12 @@ IntEngTransparentBlt(
     ASSERT(DestRect);
 
     psurfDest = CONTAINING_RECORD(psoDest, SURFACE, SurfObj);
+#if DBG
+    SURFACE *psurfSource;
     psurfSource = CONTAINING_RECORD(psoSource, SURFACE, SurfObj);
-
-    ASSERT(psurfDest);
     ASSERT(psurfSource);
+#endif
+    ASSERT(psurfDest);
 
     /* If no clip object is given, use trivial one */
     if (!Clip) Clip = (CLIPOBJ *)&gxcoTrivial;

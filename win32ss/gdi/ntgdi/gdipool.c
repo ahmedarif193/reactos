@@ -94,7 +94,6 @@ static
 VOID
 GdiPoolDeleteSection(PGDI_POOL pPool, PGDI_POOL_SECTION pSection)
 {
-    NTSTATUS status;
     SIZE_T cjSize = 0;
 
     /* Should not have any allocations */
@@ -107,11 +106,15 @@ GdiPoolDeleteSection(PGDI_POOL pPool, PGDI_POOL_SECTION pSection)
     }
 
     /* Release the virtual memory */
-    status = ZwFreeVirtualMemory(NtCurrentProcess(),
-                                 &pSection->pvBaseAddress,
-                                 &cjSize,
-                                 MEM_RELEASE);
-    ASSERT(NT_SUCCESS(status));
+    {
+        NTSTATUS status;
+        status = ZwFreeVirtualMemory(NtCurrentProcess(),
+                                     &pSection->pvBaseAddress,
+                                     &cjSize,
+                                     MEM_RELEASE);
+        ASSERT(NT_SUCCESS(status));
+        DBG_UNREFERENCED_LOCAL_VARIABLE(status);
+    }
 
     /* Free the section object */
     EngFreeMem(pSection);

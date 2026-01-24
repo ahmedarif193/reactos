@@ -1245,8 +1245,6 @@ FatCopyFileFromIso(
     Result = f_open(&FileObject, DestinationPath, FA_WRITE | FA_READ | FA_CREATE_ALWAYS);
     if (Result == FR_DENIED)
     {
-        FRESULT ChmodResult;
-        FRESULT UnlinkResult;
         FRESULT StatResult;
 
         StatResult = f_stat(DestinationPath, &ExistingInfo);
@@ -1257,12 +1255,21 @@ FatCopyFileFromIso(
             return TRUE;
         }
 
-        ChmodResult = f_chmod(DestinationPath, 0, AM_RDO | AM_ARC | AM_HID | AM_SYS);
-        UnlinkResult = f_unlink(DestinationPath);
-        WARN("FatCopyFileFromIso: retry clearing attrs for '%s' (chmod=%u unlink=%u)\n",
-             DestinationPath,
-             ChmodResult,
-             UnlinkResult);
+#if DBG
+        {
+            FRESULT ChmodResult;
+            FRESULT UnlinkResult;
+            ChmodResult = f_chmod(DestinationPath, 0, AM_RDO | AM_ARC | AM_HID | AM_SYS);
+            UnlinkResult = f_unlink(DestinationPath);
+            WARN("FatCopyFileFromIso: retry clearing attrs for '%s' (chmod=%u unlink=%u)\n",
+                 DestinationPath,
+                 ChmodResult,
+                 UnlinkResult);
+        }
+#else
+        f_chmod(DestinationPath, 0, AM_RDO | AM_ARC | AM_HID | AM_SYS);
+        f_unlink(DestinationPath);
+#endif
 
         Result = f_open(&FileObject, DestinationPath, FA_WRITE | FA_READ | FA_CREATE_ALWAYS);
     }

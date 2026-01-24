@@ -176,7 +176,6 @@ InitVideo(VOID)
 VOID
 UserRefreshDisplay(IN PPDEVOBJ ppdev)
 {
-    ULONG_PTR ulResult;
     // PVOID pvOldCursor;
 
     // TODO: Re-enable the cursor reset code once this function becomes called
@@ -193,8 +192,12 @@ UserRefreshDisplay(IN PPDEVOBJ ppdev)
     // pvOldCursor = UserSetCursor(NULL, TRUE);
 
     /* Do the mode switch -- Use the actual same current mode */
-    ulResult = PDEVOBJ_bSwitchMode(ppdev, ppdev->pdmwDev);
-    ASSERT(ulResult);
+    {
+        ULONG_PTR ulResult;
+        ulResult = PDEVOBJ_bSwitchMode(ppdev, ppdev->pdmwDev);
+        ASSERT(ulResult);
+        DBG_UNREFERENCED_LOCAL_VARIABLE(ulResult);
+    }
 
     /* Restore mouse pointer, no hooks called */
     // pvOldCursor = UserSetCursor(pvOldCursor, TRUE);

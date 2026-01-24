@@ -56,6 +56,8 @@ UINT CountInterfaces() {
 
     TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
 
+    DBG_UNREFERENCED_LOCAL_VARIABLE(CurrentIF);
+
     return Count;
 }
 

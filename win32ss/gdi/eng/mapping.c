@@ -73,8 +73,6 @@ EngUnmapSectionView(
     _In_ ULONG cjOffset,
     _In_ HANDLE hSecure)
 {
-    NTSTATUS Status;
-
     /* Unsecure the memory */
     EngUnsecureMem(hSecure);
 
@@ -82,8 +80,12 @@ EngUnmapSectionView(
     pvBits = (PUCHAR)pvBits - (cjOffset & (MM_ALLOCATION_GRANULARITY - 1));
 
     /* Unmap the section view */
-    Status = MmUnmapViewOfSection(PsGetCurrentProcess(), pvBits);
-    ASSERT(NT_SUCCESS(Status));
+    {
+        NTSTATUS Status;
+        Status = MmUnmapViewOfSection(PsGetCurrentProcess(), pvBits);
+        ASSERT(NT_SUCCESS(Status));
+        DBG_UNREFERENCED_LOCAL_VARIABLE(Status);
+    }
 }
 
 PVOID

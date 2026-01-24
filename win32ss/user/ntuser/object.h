@@ -44,21 +44,23 @@ UserDerefObjectCo(PVOID obj)
 {
     PTHREADINFO W32Thread;
     PSINGLE_LIST_ENTRY ReferenceEntry;
+#if DBG
     PUSER_REFERENCE_ENTRY UserReferenceEntry;
+#endif
 
     ASSERT(obj != NULL);
     W32Thread = PsGetCurrentThreadWin32Thread();
     ASSERT(W32Thread != NULL);
     ReferenceEntry = PopEntryList(&W32Thread->ReferencesList);
     ASSERT(ReferenceEntry != NULL);
+#if DBG
     UserReferenceEntry = CONTAINING_RECORD(ReferenceEntry, USER_REFERENCE_ENTRY, Entry);
     ASSERT(UserReferenceEntry != NULL);
-
     ASSERT(obj == UserReferenceEntry->obj);
-    UserDereferenceObject(obj);
-#if DBG
     W32Thread->cRefObjectCo--;
 #endif
+    DBG_UNREFERENCED_LOCAL_VARIABLE(ReferenceEntry);
+    UserDereferenceObject(obj);
 }
 
 void FreeProcMarkObject(_In_ PVOID Object);

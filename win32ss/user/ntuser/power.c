@@ -35,11 +35,9 @@ IntHandlePowerEventWorker(
     _In_ PWIN32_POWEREVENT_PARAMETERS pParameters)
 {
     PSPOWEREVENTTYPE PwrEventType;
-    ULONG Code;
 
     /* Cache the power event parameters and handle the power callout */
     PwrEventType = pParameters->EventNumber;
-    Code = pParameters->Code;
     switch (PwrEventType)
     {
         case PsW32SystemTime:
@@ -57,7 +55,7 @@ IntHandlePowerEventWorker(
 
         default:
         {
-            TRACE("Power event of type %d is currently UNIMPLEMENTED (code %lu)\n", PwrEventType, Code);
+            TRACE("Power event of type %d is currently UNIMPLEMENTED (code %lu)\n", PwrEventType, pParameters->Code);
             break;
         }
     }

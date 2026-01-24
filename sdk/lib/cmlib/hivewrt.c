@@ -39,8 +39,8 @@ VOID
 HvpValidateBaseHeader(
     _In_ PHHIVE RegistryHive)
 {
+#if DBG
     PHBASE_BLOCK BaseBlock;
-
     /*
      * Cache the base block and validate it.
      * Especially...
@@ -54,6 +54,9 @@ HvpValidateBaseHeader(
     ASSERT(BaseBlock->Signature == HV_HBLOCK_SIGNATURE);
     ASSERT(BaseBlock->Format == HBASE_FORMAT_MEMORY);
     ASSERT(BaseBlock->Major == HSYS_MAJOR);
+#else
+    UNREFERENCED_PARAMETER(RegistryHive);
+#endif
 }
 
 /**

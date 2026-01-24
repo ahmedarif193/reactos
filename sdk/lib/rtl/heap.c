@@ -1372,7 +1372,6 @@ RtlpCoalesceFreeBlocks (PHEAP Heap,
                         BOOLEAN Remove)
 {
     PHEAP_FREE_ENTRY CurrentEntry, NextEntry;
-    UCHAR SegmentOffset;
 
     /* Get the previous entry */
     CurrentEntry = (PHEAP_FREE_ENTRY)((PHEAP_ENTRY)FreeEntry - FreeEntry->PreviousSize);
@@ -1413,8 +1412,11 @@ RtlpCoalesceFreeBlocks (PHEAP Heap,
         }
         else
         {
+#if DBG
+            UCHAR SegmentOffset;
             SegmentOffset = FreeEntry->SegmentOffset;
             ASSERT(SegmentOffset < HEAP_SEGMENTS);
+#endif
         }
     }
 
@@ -1453,8 +1455,11 @@ RtlpCoalesceFreeBlocks (PHEAP Heap,
             }
             else
             {
+#if DBG
+                UCHAR SegmentOffset;
                 SegmentOffset = FreeEntry->SegmentOffset;
                 ASSERT(SegmentOffset < HEAP_SEGMENTS);
+#endif
             }
         }
     }
@@ -2159,7 +2164,6 @@ RtlpSplitEntry(PHEAP Heap,
     UCHAR FreeFlags, EntryFlags = HEAP_ENTRY_BUSY;
     PHEAP_ENTRY InUseEntry;
     SIZE_T FreeSize;
-    UCHAR SegmentOffset;
 
     /* Add extra flags in case of settable user value feature is requested,
        or there is a tag (small or normal) or there is a request to
@@ -2273,8 +2277,11 @@ RtlpSplitEntry(PHEAP Heap,
             FreeFlags = 0;
             if (SplitBlock->Flags & HEAP_ENTRY_LAST_ENTRY)
             {
+#if DBG
+                UCHAR SegmentOffset;
                 SegmentOffset = SplitBlock->SegmentOffset;
                 ASSERT(SegmentOffset < HEAP_SEGMENTS);
+#endif
             }
         }
     }
@@ -2793,7 +2800,6 @@ RtlpGrowBlockInPlace (IN PHEAP Heap,
     PHEAP_FREE_ENTRY FreeEntry, UnusedEntry, FollowingEntry;
     SIZE_T FreeSize, PrevSize, TailPart, AddedSize = 0;
     PHEAP_ENTRY_EXTRA OldExtra, NewExtra;
-    UCHAR SegmentOffset;
 
     /* We can't grow beyond specified threshold */
     if (Index > Heap->VirtualMemoryThreshold)
@@ -2895,8 +2901,11 @@ RtlpGrowBlockInPlace (IN PHEAP Heap,
         }
         else
         {
+#if DBG
+            UCHAR SegmentOffset;
             SegmentOffset = InUseEntry->SegmentOffset;
             ASSERT(SegmentOffset < HEAP_SEGMENTS);
+#endif
         }
     }
     else
@@ -2910,8 +2919,11 @@ RtlpGrowBlockInPlace (IN PHEAP Heap,
         /* Update the following block or set the last entry in the segment */
         if (RememberFlags & HEAP_ENTRY_LAST_ENTRY)
         {
+#if DBG
+            UCHAR SegmentOffset;
             SegmentOffset = UnusedEntry->SegmentOffset;
             ASSERT(SegmentOffset < HEAP_SEGMENTS);
+#endif
 
             /* Set flags and size */
             UnusedEntry->Flags = RememberFlags;
@@ -2964,8 +2976,11 @@ RtlpGrowBlockInPlace (IN PHEAP Heap,
                     }
                     else
                     {
+#if DBG
+                        UCHAR SegmentOffset;
                         SegmentOffset = UnusedEntry->SegmentOffset;
                         ASSERT(SegmentOffset < HEAP_SEGMENTS);
+#endif
                     }
 
                     /* Insert it back and update total size */
@@ -3076,7 +3091,6 @@ RtlReAllocateHeap(HANDLE HeapPtr,
     SIZE_T RemainderBytes, ExtraSize;
     PHEAP_VIRTUAL_ALLOC_ENTRY VirtualAllocBlock;
     EXCEPTION_RECORD ExceptionRecord;
-    UCHAR SegmentOffset;
 
     /* Return success in case of a null pointer */
     if (!Ptr)
@@ -3307,8 +3321,11 @@ RtlReAllocateHeap(HANDLE HeapPtr,
                 /* Is that the last entry */
                 if (FreeFlags & HEAP_ENTRY_LAST_ENTRY)
                 {
+#if DBG
+                    UCHAR SegmentOffset;
                     SegmentOffset = SplitBlock->SegmentOffset;
                     ASSERT(SegmentOffset < HEAP_SEGMENTS);
+#endif
 
                     /* Set its size and insert it to the list */
                     SplitBlock->Size = (USHORT)FreeSize;
@@ -3359,8 +3376,11 @@ RtlReAllocateHeap(HANDLE HeapPtr,
                             }
                             else
                             {
+#if DBG
+                                UCHAR SegmentOffset;
                                 SegmentOffset = SplitBlock->SegmentOffset;
                                 ASSERT(SegmentOffset < HEAP_SEGMENTS);
+#endif
                             }
 
                             /* Insert the new one back and update total size */

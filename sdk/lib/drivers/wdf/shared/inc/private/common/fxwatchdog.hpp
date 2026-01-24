@@ -40,7 +40,6 @@ struct FxWatchdog {
         )
     {
         LARGE_INTEGER time;
-        NTSTATUS status;
 
         if (State & WdfDevStateNP) {
             //
@@ -55,15 +54,23 @@ struct FxWatchdog {
             // If the state function returns, then we'll cancel the timer
             // and no love will be lost.
             //
-            status = m_Timer.Initialize(this, _WatchdogDpc, 0);
+#if DBG
+            {
+                NTSTATUS status;
+                status = m_Timer.Initialize(this, _WatchdogDpc, 0);
 
-            //
-            // This code is not used in UM. Hence we can assert and assume that
-            // timer start will always be successful.
-            //
+                //
+                // This code is not used in UM. Hence we can assert and assume that
+                // timer start will always be successful.
+                //
+                WDF_VERIFY_KM_ONLY_CODE();
+
+                FX_ASSERT_AND_ASSUME_FOR_PREFAST(NT_SUCCESS(status));
+            }
+#else
+            (void)m_Timer.Initialize(this, _WatchdogDpc, 0);
             WDF_VERIFY_KM_ONLY_CODE();
-
-            FX_ASSERT_AND_ASSUME_FOR_PREFAST(NT_SUCCESS(status));
+#endif
 
             m_CallingThread = Mx::MxGetCurrentThread();
 

@@ -18,6 +18,7 @@ LIST_ENTRY FIBListHead;
 KSPIN_LOCK FIBLock;
 
 void RouterDumpRoutes() {
+#if DBG
     PLIST_ENTRY CurrentEntry;
     PLIST_ENTRY NextEntry;
     PFIB_ENTRY Current;
@@ -40,6 +41,7 @@ void RouterDumpRoutes() {
     }
 
     TI_DbgPrint(DEBUG_ROUTER,("Dumping Routes ... Done\n"));
+#endif
 }
 
 VOID FreeFIB(

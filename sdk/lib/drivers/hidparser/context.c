@@ -188,7 +188,6 @@ HidParser_BuildCollectionContext(
     IN ULONG ContextSize)
 {
     PHID_COLLECTION_CONTEXT CollectionContext;
-    ULONG CollectionSize;
 
     //
     // init context
@@ -199,12 +198,18 @@ HidParser_BuildCollectionContext(
     //
     // store collections
     //
-    CollectionSize = HidParser_StoreCollection(RootCollection, CollectionContext, 0);
-
-    //
-    // sanity check
-    //
-    ASSERT(CollectionSize + sizeof(HID_COLLECTION_CONTEXT) == ContextSize);
+#if DBG
+    {
+        ULONG CollectionSize;
+        CollectionSize = HidParser_StoreCollection(RootCollection, CollectionContext, 0);
+        //
+        // sanity check
+        //
+        ASSERT(CollectionSize + sizeof(HID_COLLECTION_CONTEXT) == ContextSize);
+    }
+#else
+    HidParser_StoreCollection(RootCollection, CollectionContext, 0);
+#endif
 
     DPRINT("CollectionContext %p\n", CollectionContext);
     DPRINT("CollectionContext RawData %p\n", CollectionContext->RawData);

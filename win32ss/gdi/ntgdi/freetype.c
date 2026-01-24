@@ -3272,7 +3272,6 @@ IntGetOutlineTextMetrics(PFONTGDI FontGDI,
     FT_Fixed XScale, YScale;
     FT_WinFNT_HeaderRec WinFNT;
     FT_Error Error;
-    BYTE *pb;
     FONT_NAMES FontNames;
     PSHARED_FACE SharedFace = FontGDI->SharedFace;
     PSHARED_FACE_CACHE Cache;
@@ -3411,9 +3410,15 @@ IntGetOutlineTextMetrics(PFONTGDI FontGDI,
 skip_os2:
     if (!bLocked)
         IntUnLockFreeType();
-
-    pb = IntStoreFontNames(&FontNames, Otm);
-    ASSERT(pb - (BYTE*)Otm == Cache->OutlineRequiredSize);
+#if DBG
+    {
+        BYTE *pb;
+        pb = IntStoreFontNames(&FontNames, Otm);
+        ASSERT(pb - (BYTE*)Otm == Cache->OutlineRequiredSize);
+    }
+#else
+    IntStoreFontNames(&FontNames, Otm);
+#endif
 
     IntFreeFontNames(&FontNames);
 
@@ -6860,14 +6865,15 @@ IntEngFillPolygon(
     IN UINT cPoints,
     IN BRUSHOBJ *BrushObj)
 {
-    SURFACE *psurf = dc->dclevel.pSurface;
     RECT Rect;
     UINT i;
     INT x, y;
 
     ASSERT_DC_PREPARED(dc);
+#if DBG
+    SURFACE *psurf = dc->dclevel.pSurface;
     ASSERT(psurf != NULL);
-
+#endif
     Rect.left = Rect.right = pPoints[0].x;
     Rect.top = Rect.bottom = pPoints[0].y;
     for (i = 1; i < cPoints; ++i)

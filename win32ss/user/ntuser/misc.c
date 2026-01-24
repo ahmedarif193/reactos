@@ -733,6 +733,7 @@ IntSafeCopyUnicodeStringTerminateNULL(PUNICODE_STRING Dest,
 
 void UserDbgAssertThreadInfo(BOOL showCaller)
 {
+#if DBG
     PTEB Teb;
     PPROCESSINFO ppi;
     PCLIENTINFO pci;
@@ -774,6 +775,8 @@ void UserDbgAssertThreadInfo(BOOL showCaller)
         pci->dwTIFlags = pti->TIF_flags;
     }
 */
+#endif
+    DBG_UNREFERENCED_PARAMETER(showCaller);
 }
 
 void

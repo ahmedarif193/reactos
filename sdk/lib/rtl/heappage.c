@@ -471,18 +471,26 @@ VOID NTAPI
 RtlpDphPlaceOnBusyList(PDPH_HEAP_ROOT DphRoot, PDPH_HEAP_BLOCK DphNode)
 {
     BOOLEAN NewElement;
-    PVOID AddressUserData;
 
     DPRINT("RtlpDphPlaceOnBusyList(%p %p)\n", DphRoot, DphNode);
 
     /* Add it to the AVL busy nodes table */
     DphRoot->NodeToAllocate = DphNode;
-    AddressUserData = RtlInsertElementGenericTableAvl(&DphRoot->BusyNodesTable,
-                                                      &DphNode->pUserAllocation,
-                                                      sizeof(ULONG_PTR),
-                                                      &NewElement);
-
-    ASSERT(AddressUserData == &DphNode->pUserAllocation);
+#if DBG
+    {
+        PVOID AddressUserData;
+        AddressUserData = RtlInsertElementGenericTableAvl(&DphRoot->BusyNodesTable,
+                                                          &DphNode->pUserAllocation,
+                                                          sizeof(ULONG_PTR),
+                                                          &NewElement);
+        ASSERT(AddressUserData == &DphNode->pUserAllocation);
+    }
+#else
+    RtlInsertElementGenericTableAvl(&DphRoot->BusyNodesTable,
+                                    &DphNode->pUserAllocation,
+                                    sizeof(ULONG_PTR),
+                                    &NewElement);
+#endif
     ASSERT(NewElement == TRUE);
 
     /* Update heap counters */
@@ -642,13 +650,18 @@ VOID NTAPI
 RtlpDphRemoveFromBusyList(PDPH_HEAP_ROOT DphRoot,
                           PDPH_HEAP_BLOCK Node)
 {
-    BOOLEAN ElementPresent;
-
     DPRINT("RtlpDphRemoveFromBusyList(%p %p)\n", DphRoot, Node);
 
     /* Delete it from busy nodes table */
-    ElementPresent = RtlDeleteElementGenericTableAvl(&DphRoot->BusyNodesTable, &Node->pUserAllocation);
-    ASSERT(ElementPresent == TRUE);
+#if DBG
+    {
+        BOOLEAN ElementPresent;
+        ElementPresent = RtlDeleteElementGenericTableAvl(&DphRoot->BusyNodesTable, &Node->pUserAllocation);
+        ASSERT(ElementPresent == TRUE);
+    }
+#else
+    RtlDeleteElementGenericTableAvl(&DphRoot->BusyNodesTable, &Node->pUserAllocation);
+#endif
 
     /* Update counters */
     DphRoot->nBusyAllocations--;
@@ -735,6 +748,7 @@ RtlpDphCoalesceNodeIntoAvailable(PDPH_HEAP_ROOT DphRoot,
 
             /* There is no way this can fail, we committed this memory! */
             ASSERT(NT_SUCCESS(Status));
+            DBG_UNREFERENCED_LOCAL_VARIABLE(Status);
 
             if ((PUCHAR)MemoryBasicInfo.AllocationBase <= PrevNode->pVirtualBlock)
             {
@@ -778,6 +792,7 @@ RtlpDphCoalesceNodeIntoAvailable(PDPH_HEAP_ROOT DphRoot,
 
                 /* There is no way this can fail, we committed this memory! */
                 ASSERT(NT_SUCCESS(Status));
+                DBG_UNREFERENCED_LOCAL_VARIABLE(Status);
 
                 if ((PUCHAR)MemoryBasicInfo.AllocationBase <= Node->pVirtualBlock)
                 {

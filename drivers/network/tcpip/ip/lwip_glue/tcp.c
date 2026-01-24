@@ -102,7 +102,7 @@ NTSTATUS LibTCPGetDataFromConnectionQueue(PCONNECTION_ENDPOINT Connection, PUCHA
     PQUEUE_ENTRY qp;
     struct pbuf* p;
     NTSTATUS Status;
-    UINT ReadLength, PayloadLength, Offset, Copied;
+    UINT ReadLength, PayloadLength, Offset;
 
     (*Received) = 0;
 
@@ -130,8 +130,15 @@ NTSTATUS LibTCPGetDataFromConnectionQueue(PCONNECTION_ENDPOINT Connection, PUCHA
                 qp = NULL;
             }
 
-            Copied = pbuf_copy_partial(p, RecvBuffer, ReadLength, Offset);
-            ASSERT(Copied == ReadLength);
+#if DBG
+            {
+                UINT Copied;
+                Copied = pbuf_copy_partial(p, RecvBuffer, ReadLength, Offset);
+                ASSERT(Copied == ReadLength);
+            }
+#else
+            pbuf_copy_partial(p, RecvBuffer, ReadLength, Offset);
+#endif
 
             /* Update trackers */
             RecvLen -= ReadLength;

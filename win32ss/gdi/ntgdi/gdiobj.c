@@ -792,7 +792,7 @@ GDIOBJ_TryLockObject(
         KeEnterCriticalRegion();
         if(!ExTryAcquirePushLockExclusive(&pobj->pushlock))
         {
-            ULONG cRefs, ulIndex;
+            ULONG ulIndex;
             /* Already owned. Clean up and leave. */
             KeLeaveCriticalRegion();
 
@@ -801,8 +801,12 @@ GDIOBJ_TryLockObject(
 
             /* Decrement reference count */
             ASSERT((gpaulRefCount[ulIndex] & REF_MASK_COUNT) > 0);
-            cRefs = InterlockedDecrement((LONG*)&gpaulRefCount[ulIndex]);
-            ASSERT(cRefs & REF_MASK_VALID);
+            {
+                ULONG cRefs;
+                cRefs = InterlockedDecrement((LONG*)&gpaulRefCount[ulIndex]);
+                ASSERT(cRefs & REF_MASK_VALID);
+                DBG_UNREFERENCED_LOCAL_VARIABLE(cRefs);
+            }
 
             return NULL;
         }
@@ -879,7 +883,7 @@ VOID
 NTAPI
 GDIOBJ_vUnlockObject(POBJ pobj)
 {
-    ULONG cRefs, ulIndex;
+    ULONG ulIndex;
     ASSERT(pobj->cExclusiveLock > 0);
 
     /* Decrease lock count */
@@ -903,8 +907,12 @@ GDIOBJ_vUnlockObject(POBJ pobj)
 
     /* Decrement reference count */
     ASSERT((gpaulRefCount[ulIndex] & REF_MASK_COUNT) > 0);
-    cRefs = InterlockedDecrement((LONG*)&gpaulRefCount[ulIndex]);
-    ASSERT(cRefs & REF_MASK_VALID);
+    {
+        ULONG cRefs;
+        cRefs = InterlockedDecrement((LONG*)&gpaulRefCount[ulIndex]);
+        ASSERT(cRefs & REF_MASK_VALID);
+        DBG_UNREFERENCED_LOCAL_VARIABLE(cRefs);
+    }
 }
 
 HGDIOBJ

@@ -652,7 +652,6 @@ HidParser_AddMainItem(
     NTSTATUS Status;
     ULONG Index;
     PHID_REPORT NewReport;
-    BOOLEAN Found;
 
     //
     // first grow report item array
@@ -671,8 +670,13 @@ HidParser_AddMainItem(
         //
         // update current top level collection
         //
+#if DBG
+        BOOLEAN Found;
         Found = HidParser_UpdateCollectionReport(ParserContext, Report, NewReport);
         ASSERT(Found);
+#else
+        HidParser_UpdateCollectionReport(ParserContext, Report, NewReport);
+#endif
     }
 
     //

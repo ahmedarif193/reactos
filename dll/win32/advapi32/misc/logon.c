@@ -649,7 +649,7 @@ CreateProcessAsUserCommon(
     _In_opt_ LPSECURITY_ATTRIBUTES lpThreadAttributes,
     _Inout_ LPPROCESS_INFORMATION lpProcessInformation)
 {
-    NTSTATUS Status = STATUS_SUCCESS, StatusOnExit;
+    NTSTATUS Status = STATUS_SUCCESS;
     BOOL Success;
     TOKEN_TYPE Type;
     ULONG ReturnLength;
@@ -893,11 +893,6 @@ Quit:
      */
     if (OriginalImpersonationToken != NULL)
     {
-        StatusOnExit = NtSetInformationThread(NtCurrentThread(),
-                                              ThreadImpersonationToken,
-                                              &OriginalImpersonationToken,
-                                              sizeof(OriginalImpersonationToken));
-
         /*
          * We really must assert ourselves that we successfully
          * set the original token back, otherwise if we fail
@@ -907,7 +902,21 @@ Quit:
          * with the original status code that could have been
          * returned by someone else above in this function code.
          */
-        ASSERT(NT_SUCCESS(StatusOnExit));
+#if DBG
+        {
+            NTSTATUS StatusOnExit;
+            StatusOnExit = NtSetInformationThread(NtCurrentThread(),
+                                                  ThreadImpersonationToken,
+                                                  &OriginalImpersonationToken,
+                                                  sizeof(OriginalImpersonationToken));
+            ASSERT(NT_SUCCESS(StatusOnExit));
+        }
+#else
+        NtSetInformationThread(NtCurrentThread(),
+                               ThreadImpersonationToken,
+                               &OriginalImpersonationToken,
+                               sizeof(OriginalImpersonationToken));
+#endif
 
         /* De-reference it */
         NtClose(OriginalImpersonationToken);

@@ -264,7 +264,6 @@ MMixerGetPinInstanceCount(
     KSP_PIN PinRequest;
     KSPIN_CINSTANCES PinInstances;
     ULONG BytesReturned;
-    MIXER_STATUS Status;
 
     /* query the instance count */
     PinRequest.Reserved = 0;
@@ -273,7 +272,14 @@ MMixerGetPinInstanceCount(
     PinRequest.Property.Flags = KSPROPERTY_TYPE_GET;
     PinRequest.Property.Id = KSPROPERTY_PIN_CINSTANCES;
 
-    Status = MixerContext->Control(hFilter, IOCTL_KS_PROPERTY, (PVOID)&PinRequest, sizeof(KSP_PIN), (PVOID)&PinInstances, sizeof(KSPIN_CINSTANCES), &BytesReturned);
-    ASSERT(Status == MM_STATUS_SUCCESS);
+#if DBG
+    {
+        MIXER_STATUS Status;
+        Status = MixerContext->Control(hFilter, IOCTL_KS_PROPERTY, (PVOID)&PinRequest, sizeof(KSP_PIN), (PVOID)&PinInstances, sizeof(KSPIN_CINSTANCES), &BytesReturned);
+        ASSERT(Status == MM_STATUS_SUCCESS);
+    }
+#else
+    MixerContext->Control(hFilter, IOCTL_KS_PROPERTY, (PVOID)&PinRequest, sizeof(KSP_PIN), (PVOID)&PinInstances, sizeof(KSPIN_CINSTANCES), &BytesReturned);
+#endif
     return PinInstances.CurrentCount;
 }

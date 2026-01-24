@@ -33,12 +33,16 @@ NTSTATUS AddGenericHeaderIPv4(
  */
 {
     PIPv4_HEADER IPHeader;
+#if DBG
     ULONG BufferSize;
+#endif
 
     TI_DbgPrint(MID_TRACE, ("Packet: %x NdisPacket %x\n",
 			    IPPacket, IPPacket->NdisPacket));
 
+#if DBG
     BufferSize = sizeof(IPv4_HEADER) + ExtraLength;
+#endif
 
     GetDataPtr( IPPacket->NdisPacket,
 		0,
