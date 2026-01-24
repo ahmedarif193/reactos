@@ -6270,7 +6270,7 @@ __ClassInterpretSenseInfo_ProcessingInvalidSenseBuffer:
                         logError = FALSE;
                     } else if (cdbOpcode == SCSIOP_MODE_SENSE10) {
                         USHORT allocationLength;
-                        REVERSE_BYTES_SHORT(&(cdb->MODE_SENSE10.AllocationLength), &allocationLength);
+                        REVERSE_BYTES_SHORT(&allocationLength, &(cdb->MODE_SENSE10.AllocationLength));
                         if (SrbGetDataTransferLength(Srb) <= allocationLength) {
                             *Status = STATUS_SUCCESS;
                             logErrorInternal = FALSE;
@@ -6278,7 +6278,7 @@ __ClassInterpretSenseInfo_ProcessingInvalidSenseBuffer:
                         }
                     } else if (ClasspIsReceiveTokenInformation(cdb)) {
                         ULONG allocationLength;
-                        REVERSE_BYTES(&(cdb->RECEIVE_TOKEN_INFORMATION.AllocationLength), &allocationLength);
+                        REVERSE_BYTES(&allocationLength, &(cdb->RECEIVE_TOKEN_INFORMATION.AllocationLength));
                         if (SrbGetDataTransferLength(Srb) <= allocationLength) {
                             *Status = STATUS_SUCCESS;
                             logErrorInternal = FALSE;

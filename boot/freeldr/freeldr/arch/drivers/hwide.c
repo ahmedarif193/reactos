@@ -75,7 +75,7 @@ AtapWaitForNotBusy(
     _In_range_(>, 0) ULONG Timeout,
     _Out_opt_ PUCHAR Result)
 {
-    UCHAR IdeStatus;
+    UCHAR IdeStatus = 0;
     ULONG i;
 
     ASSERT(Timeout != 0);
