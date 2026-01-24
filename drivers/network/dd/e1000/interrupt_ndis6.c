@@ -707,71 +707,37 @@ E1000MiniportInterruptDpc(
         DbgPrint("E1000: DPC - Receive overrun detected!\n");
     }
 
-    /* Process TX completions */
-    if (ProcessTx)
-    {
-        DbgPrint("E1000: DPC - calling E1000ProcessTxCompletions(Queue0)\n");
-        E1000ProcessTxCompletions(&Adapter->TxQueues[0]);
+    /*
+     * Process TX completions unconditionally.
+     * Linux e1000e always calls e1000_clean_tx_irq() in its NAPI poll handler
+     * regardless of which ICR bits triggered the interrupt. This is the correct
+     * approach as TX completion processing is cheap and ensures descriptors are
+     * reclaimed promptly.
+     */
+    DbgPrint("E1000: DPC - calling E1000ProcessTxCompletions(Queue0)\n");
+    E1000ProcessTxCompletions(&Adapter->TxQueues[0]);
 
-        if (Adapter->TxQueueCount > 1)
-        {
-            DbgPrint("E1000: DPC - calling E1000ProcessTxCompletions(Queue1)\n");
-            E1000ProcessTxCompletions(&Adapter->TxQueues[1]);
-        }
-    }
-    else
+    if (Adapter->TxQueueCount > 1)
     {
-        /*
-         * Workaround: QEMU e1000e may not set TX interrupt bits correctly.
-         * Check TX ring status even if no TX interrupt was signaled.
-         */
-        PE1000_TX_QUEUE TxQueue = &Adapter->TxQueues[0];
-
-        if (TxQueue->Descriptors != NULL && TxQueue->Head != TxQueue->Tail)
-        {
-            volatile PE1000_TRANSMIT_DESCRIPTOR TxDesc = &TxQueue->Descriptors[TxQueue->Head];
-            if (TxDesc->Status & E1000_TDESC_STATUS_DD)
-            {
-                DbgPrint("E1000: DPC - TX poll: found completed descriptor at head %u\n", TxQueue->Head);
-                E1000ProcessTxCompletions(&Adapter->TxQueues[0]);
-            }
-        }
+        DbgPrint("E1000: DPC - calling E1000ProcessTxCompletions(Queue1)\n");
+        E1000ProcessTxCompletions(&Adapter->TxQueues[1]);
     }
 
-    /* Process received packets */
-    if (ProcessRx)
+    /*
+     * Process received packets unconditionally.
+     * Same rationale as TX - Linux always processes RX in its poll handler.
+     */
+    DbgPrint("E1000: DPC - calling E1000IndicateReceive(Queue0)\n");
+    E1000IndicateReceive(&Adapter->RxQueues[0]);
+
+    if (Adapter->RxQueueCount > 1)
     {
-        DbgPrint("E1000: DPC - calling E1000IndicateReceive(Queue0)\n");
-        E1000IndicateReceive(&Adapter->RxQueues[0]);
-
-        if (Adapter->RxQueueCount > 1)
-        {
-            DbgPrint("E1000: DPC - calling E1000IndicateReceive(Queue1)\n");
-            E1000IndicateReceive(&Adapter->RxQueues[1]);
-        }
+        DbgPrint("E1000: DPC - calling E1000IndicateReceive(Queue1)\n");
+        E1000IndicateReceive(&Adapter->RxQueues[1]);
     }
-    else
-    {
-        /*
-         * Workaround: QEMU e1000e may not set RX interrupt bits correctly.
-         * Check RX ring status even if no RX interrupt was signaled.
-         */
-        PE1000_RX_QUEUE RxQueue = &Adapter->RxQueues[0];
-        ULONG RxHead;
 
-        if (RxQueue->Descriptors != NULL)
-        {
-            volatile PE1000_RECEIVE_DESCRIPTOR RxDesc = &RxQueue->Descriptors[RxQueue->Head];
-
-            RxHead = E1000_READ_REG(Adapter, E1000_REG_RDH);
-            if (RxDesc->Status & E1000_RDESC_STATUS_DD)
-            {
-                DbgPrint("E1000: DPC - RX poll: found pending packet at head %u (hw RDH=%u), Status=0x%02x\n",
-                         RxQueue->Head, RxHead, RxDesc->Status);
-                E1000IndicateReceive(&Adapter->RxQueues[0]);
-            }
-        }
-    }
+    DBG_UNREFERENCED_LOCAL_VARIABLE(ProcessTx);
+    DBG_UNREFERENCED_LOCAL_VARIABLE(ProcessRx);
 
     /* Handle link status change */
     if (LinkChange)
