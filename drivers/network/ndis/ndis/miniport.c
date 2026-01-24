@@ -1165,14 +1165,14 @@ MiniIsNdis6Adapter(
     Handler = (PVOID)DriverHandle->MiniportCharacteristics.QueryInformationHandler;
 
     /*
-     * Valid kernel function pointers on x64 are typically in the range 0xFFFFF80000000000 to 0xFFFFFFFFFFFFFFFF
-     * and are 16-byte aligned (function entry points).
-     * If the pointer doesn't look valid, assume NDIS 6.x.
+     * Valid kernel function pointers on x64 are typically in the range 0xFFFFF80000000000 to 0xFFFFFFFFFFFFFFFF.
+     * Note: Functions are NOT always 16-byte aligned - compilers typically use 4-byte or no alignment.
+     * Only check if the pointer is in valid kernel address range.
+     * If no driver extension was found and handler looks valid, assume NDIS 5.x.
      */
 #ifdef _M_AMD64
     if (Handler == NULL ||
-        (ULONG_PTR)Handler < 0xFFFFF80000000000ULL ||
-        ((ULONG_PTR)Handler & 0xF) != 0)
+        (ULONG_PTR)Handler < 0xFFFFF80000000000ULL)
     {
         return TRUE;
     }

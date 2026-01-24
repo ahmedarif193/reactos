@@ -23,6 +23,14 @@ extern VOID RndisDecrementPendingIo(IN PRNDIS_ADAPTER Adapter);
 static IO_COMPLETION_ROUTINE RndisRxComplete;
 static IO_COMPLETION_ROUTINE RndisTxComplete;
 
+/* Forward declarations for DPC routines */
+static VOID NTAPI RndisRxResubmitDpc(PKDPC Dpc, PVOID DeferredContext, PVOID SystemArgument1, PVOID SystemArgument2);
+static VOID NTAPI RndisRxBackoffDpc(PKDPC Dpc, PVOID DeferredContext, PVOID SystemArgument1, PVOID SystemArgument2);
+static VOID NTAPI RndisRxDelayDpc(PKDPC Dpc, PVOID DeferredContext, PVOID SystemArgument1, PVOID SystemArgument2);
+
+/* Forward declaration for alternate setting selection */
+static NTSTATUS RndisUsbSelectAlternate(IN PRNDIS_ADAPTER Adapter, IN UCHAR InterfaceNumber, IN UCHAR AlternateSetting);
+
 /*
  * RndisUsbGetDescriptor
  *
@@ -279,7 +287,6 @@ RndisUsbParseConfiguration(
     PUCHAR CurrentDesc;
     PUSB_INTERFACE_DESCRIPTOR InterfaceDesc;
     BOOLEAN FoundControlInterface = FALSE;
-    BOOLEAN FoundDataInterface = FALSE;
 
     DescStart = (PUCHAR)Adapter->ConfigurationDescriptor;
     DescEnd = DescStart + Adapter->ConfigurationDescriptor->wTotalLength;
@@ -320,7 +327,6 @@ RndisUsbParseConfiguration(
                 FoundControlInterface = TRUE;
                 RndisUsbFindEndpoints(Adapter, InterfaceDesc, DescEnd, TRUE);
                 /* Wireless RNDIS often combines control and data */
-                FoundDataInterface = TRUE;
                 Adapter->DataInterfaceNumber = InterfaceDesc->bInterfaceNumber;
             }
             /* Pattern 3: Miscellaneous class (ActiveSync RNDIS) */
@@ -333,13 +339,50 @@ RndisUsbParseConfiguration(
                 FoundControlInterface = TRUE;
                 RndisUsbFindEndpoints(Adapter, InterfaceDesc, DescEnd, FALSE);
             }
+            /* Pattern 4: CDC-ECM (Ethernet Control Model) - no RNDIS wrapping needed */
+            else if (InterfaceDesc->bInterfaceClass == USB_CLASS_COMM &&
+                     InterfaceDesc->bInterfaceSubClass == USB_CDC_SUBCLASS_ECM)
+            {
+                DPRINT1("USBRNDIS: Found CDC-ECM interface (Ethernet Control Model)\n");
+                Adapter->ControlInterfaceNumber = InterfaceDesc->bInterfaceNumber;
+                Adapter->IsCdcEcm = TRUE;  /* CDC-ECM mode - no RNDIS messages */
+                FoundControlInterface = TRUE;
+                RndisUsbFindEndpoints(Adapter, InterfaceDesc, DescEnd, FALSE);
+            }
+            /* Pattern 5: CDC-NCM (Network Control Model) - uses NTB framing */
+            else if (InterfaceDesc->bInterfaceClass == USB_CLASS_COMM &&
+                     InterfaceDesc->bInterfaceSubClass == USB_CDC_SUBCLASS_NCM)
+            {
+                /*
+                 * CDC-NCM uses NTB (Network Transfer Block) framing which wraps
+                 * Ethernet frames in NTH16/NDP16 structures. This requires special
+                 * TX/RX handling in rndisdata.c.
+                 */
+                DPRINT1("USBRNDIS: Found CDC-NCM interface (Network Control Model)\n");
+                Adapter->ControlInterfaceNumber = InterfaceDesc->bInterfaceNumber;
+                Adapter->IsCdcNcm = TRUE;  /* CDC-NCM mode - NTB framing required */
+                FoundControlInterface = TRUE;
+                RndisUsbFindEndpoints(Adapter, InterfaceDesc, DescEnd, FALSE);
+            }
             /* Check for CDC Data interface */
             else if (InterfaceDesc->bInterfaceClass == USB_CLASS_CDC_DATA)
             {
-                DPRINT("USBRNDIS: Found CDC Data interface\n");
-                Adapter->DataInterfaceNumber = InterfaceDesc->bInterfaceNumber;
-                FoundDataInterface = TRUE;
-                RndisUsbFindEndpoints(Adapter, InterfaceDesc, DescEnd, TRUE);
+                DPRINT("USBRNDIS: Found CDC Data interface (Alt=%u Endpoints=%u)\n",
+                       InterfaceDesc->bAlternateSetting, InterfaceDesc->bNumEndpoints);
+                /*
+                 * CDC Data interfaces often have:
+                 * - Alternate setting 0 with 0 endpoints (inactive)
+                 * - Alternate setting 1 with 2 bulk endpoints (active)
+                 * We want the one with endpoints.
+                 */
+                if (InterfaceDesc->bNumEndpoints >= 2)
+                {
+                    Adapter->DataInterfaceNumber = InterfaceDesc->bInterfaceNumber;
+                    Adapter->DataAlternateSetting = InterfaceDesc->bAlternateSetting;
+                    RndisUsbFindEndpoints(Adapter, InterfaceDesc, DescEnd, TRUE);
+                    DPRINT("USBRNDIS: Using CDC Data Alt %u with %u endpoints\n",
+                           InterfaceDesc->bAlternateSetting, InterfaceDesc->bNumEndpoints);
+                }
             }
         }
 
@@ -395,9 +438,13 @@ RndisUsbSelectConfiguration(
         return Status;
     }
 
-    /* Count interfaces we need to claim */
+    /*
+     * Count interfaces we need to claim.
+     * DataInterfaceNumber == 0xFF means no separate data interface was found.
+     */
     InterfaceCount = 1; /* At least control interface */
-    if (Adapter->DataInterfaceNumber != Adapter->ControlInterfaceNumber)
+    if (Adapter->DataInterfaceNumber != 0xFF &&
+        Adapter->DataInterfaceNumber != Adapter->ControlInterfaceNumber)
     {
         InterfaceCount = 2; /* Separate data interface */
     }
@@ -431,18 +478,32 @@ RndisUsbSelectConfiguration(
     /* Find data interface descriptor if separate */
     if (InterfaceCount > 1)
     {
+        /*
+         * For CDC-NCM/ECM, the data interface has alternate settings:
+         * - Alt 0: 0 endpoints (inactive)
+         * - Alt 1: 2 bulk endpoints (active)
+         * We must select the alternate setting with endpoints.
+         */
         InterfaceDescriptor = USBD_ParseConfigurationDescriptorEx(
             Adapter->ConfigurationDescriptor,
             Adapter->ConfigurationDescriptor,
             Adapter->DataInterfaceNumber,
-            -1,
+            Adapter->DataAlternateSetting, /* Use the alt setting with endpoints */
             -1, -1, -1);
 
         if (InterfaceDescriptor)
         {
+            DPRINT1("USBRNDIS: Data interface descriptor: Alt=%u Endpoints=%u\n",
+                   InterfaceDescriptor->bAlternateSetting,
+                   InterfaceDescriptor->bNumEndpoints);
             InterfaceList[i].InterfaceDescriptor = InterfaceDescriptor;
             InterfaceList[i].Interface = NULL;
             i++;
+        }
+        else
+        {
+            DPRINT1("USBRNDIS: Failed to find data interface %u alt %u\n",
+                   Adapter->DataInterfaceNumber, Adapter->DataAlternateSetting);
         }
     }
 
@@ -513,16 +574,20 @@ RndisUsbSelectConfiguration(
         {
             PUSBD_PIPE_INFORMATION Pipe = &InterfaceInfo->Pipes[j];
 
-            DPRINT("USBRNDIS: Pipe %u: Address=0x%02X Type=%u Handle=%p\n",
-                   j, Pipe->EndpointAddress, Pipe->PipeType, Pipe->PipeHandle);
+            DPRINT1("USBRNDIS: Config Pipe %lu: Address=0x%02X Type=%u Handle=%p\n",
+                    j, Pipe->EndpointAddress, Pipe->PipeType, Pipe->PipeHandle);
 
             if (Pipe->EndpointAddress == Adapter->BulkInEndpoint.EndpointAddress)
             {
                 Adapter->BulkInEndpoint.PipeHandle = Pipe->PipeHandle;
+                DPRINT1("USBRNDIS: Matched Bulk IN endpoint 0x%02X -> Handle=%p\n",
+                        Pipe->EndpointAddress, Pipe->PipeHandle);
             }
             else if (Pipe->EndpointAddress == Adapter->BulkOutEndpoint.EndpointAddress)
             {
                 Adapter->BulkOutEndpoint.PipeHandle = Pipe->PipeHandle;
+                DPRINT1("USBRNDIS: Matched Bulk OUT endpoint 0x%02X -> Handle=%p\n",
+                        Pipe->EndpointAddress, Pipe->PipeHandle);
             }
             else if (Pipe->EndpointAddress == Adapter->InterruptEndpoint.EndpointAddress)
             {
@@ -560,8 +625,139 @@ RndisUsbSelectConfiguration(
         DPRINT("USBRNDIS: Interrupt endpoint available but not used (polling mode)\n");
     }
 
+    /*
+     * For CDC-ECM/NCM, the data interface typically has:
+     * - Alt 0: No endpoints (inactive)
+     * - Alt 1: Bulk IN/OUT endpoints (active)
+     *
+     * USBD_CreateConfigurationRequestEx should select the alternate setting
+     * we specified in the interface list. However, if we didn't get pipe handles,
+     * we may need to explicitly select the alternate setting.
+     *
+     * Only call SELECT_INTERFACE if we don't have pipe handles yet - calling it
+     * when already selected can cause long delays (10+ seconds) on some USB stacks.
+     */
+    if ((Adapter->IsCdcEcm || Adapter->IsCdcNcm) &&
+        Adapter->DataAlternateSetting > 0 &&
+        Adapter->DataInterfaceNumber != Adapter->ControlInterfaceNumber &&
+        (!Adapter->BulkInEndpoint.PipeHandle || !Adapter->BulkOutEndpoint.PipeHandle))
+    {
+        NTSTATUS AltStatus;
+        DPRINT1("USBRNDIS: No pipe handles from config, selecting alt %u explicitly\n",
+                Adapter->DataAlternateSetting);
+        AltStatus = RndisUsbSelectAlternate(Adapter,
+                                            Adapter->DataInterfaceNumber,
+                                            Adapter->DataAlternateSetting);
+        if (!NT_SUCCESS(AltStatus))
+        {
+            DPRINT1("USBRNDIS: Failed to select data interface alt %u (0x%08X)\n",
+                    Adapter->DataAlternateSetting, AltStatus);
+            return STATUS_DEVICE_CONFIGURATION_ERROR;
+        }
+    }
+
     DPRINT("USBRNDIS: Configuration selected successfully\n");
     return STATUS_SUCCESS;
+}
+
+/*
+ * RndisUsbSelectAlternate
+ *
+ * Select an alternate setting for an interface.
+ * Required for CDC-ECM/NCM to activate the data interface endpoints.
+ */
+static
+NTSTATUS
+RndisUsbSelectAlternate(
+    IN PRNDIS_ADAPTER Adapter,
+    IN UCHAR InterfaceNumber,
+    IN UCHAR AlternateSetting)
+{
+    PURB Urb;
+    NTSTATUS Status;
+    PUSB_INTERFACE_DESCRIPTOR InterfaceDesc;
+    ULONG UrbSize;
+
+    DPRINT1("USBRNDIS: Selecting alternate setting %u for interface %u\n",
+            AlternateSetting, InterfaceNumber);
+
+    /* Find the interface descriptor for the alternate setting */
+    InterfaceDesc = USBD_ParseConfigurationDescriptorEx(
+        Adapter->ConfigurationDescriptor,
+        Adapter->ConfigurationDescriptor,
+        InterfaceNumber,
+        AlternateSetting,
+        -1, -1, -1);
+
+    if (!InterfaceDesc)
+    {
+        DPRINT1("USBRNDIS: Interface descriptor not found\n");
+        return STATUS_NOT_FOUND;
+    }
+
+    /* Calculate URB size for interface with endpoints */
+    UrbSize = GET_SELECT_INTERFACE_REQUEST_SIZE(InterfaceDesc->bNumEndpoints);
+
+    Urb = RndisAllocateMemory(NonPagedPool, UrbSize);
+    if (!Urb)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    /* Build select interface URB */
+    UsbBuildSelectInterfaceRequest(
+        Urb,
+        (USHORT)UrbSize,
+        Adapter->ConfigurationHandle,
+        InterfaceNumber,
+        AlternateSetting);
+
+    /* Fill in interface descriptor info */
+    Urb->UrbSelectInterface.Interface.Length =
+        sizeof(USBD_INTERFACE_INFORMATION) +
+        (InterfaceDesc->bNumEndpoints - 1) * sizeof(USBD_PIPE_INFORMATION);
+    Urb->UrbSelectInterface.Interface.InterfaceNumber = InterfaceNumber;
+    Urb->UrbSelectInterface.Interface.AlternateSetting = AlternateSetting;
+    Urb->UrbSelectInterface.Interface.NumberOfPipes = InterfaceDesc->bNumEndpoints;
+
+    Status = RndisSyncUrbRequest(Adapter->LowerDeviceObject, Urb);
+
+    if (NT_SUCCESS(Status))
+    {
+        PUSBD_INTERFACE_INFORMATION InterfaceInfo = &Urb->UrbSelectInterface.Interface;
+        ULONG j;
+
+        DPRINT1("USBRNDIS: Interface %u alt %u selected, %u pipes\n",
+                InterfaceNumber, AlternateSetting, InterfaceInfo->NumberOfPipes);
+
+        /* Update pipe handles from the new interface info */
+        for (j = 0; j < InterfaceInfo->NumberOfPipes; j++)
+        {
+            PUSBD_PIPE_INFORMATION Pipe = &InterfaceInfo->Pipes[j];
+
+            DPRINT1("USBRNDIS: Pipe %u: Address=0x%02X Type=%u Handle=%p MaxPacket=%u\n",
+                    j, Pipe->EndpointAddress, Pipe->PipeType, Pipe->PipeHandle,
+                    Pipe->MaximumPacketSize);
+
+            if (Pipe->EndpointAddress == Adapter->BulkInEndpoint.EndpointAddress)
+            {
+                Adapter->BulkInEndpoint.PipeHandle = Pipe->PipeHandle;
+                Adapter->BulkInEndpoint.MaxPacketSize = Pipe->MaximumPacketSize;
+            }
+            else if (Pipe->EndpointAddress == Adapter->BulkOutEndpoint.EndpointAddress)
+            {
+                Adapter->BulkOutEndpoint.PipeHandle = Pipe->PipeHandle;
+                Adapter->BulkOutEndpoint.MaxPacketSize = Pipe->MaximumPacketSize;
+            }
+        }
+    }
+    else
+    {
+        DPRINT1("USBRNDIS: Select interface failed (0x%08X)\n", Status);
+    }
+
+    RndisFreeMemory(Urb);
+    return Status;
 }
 
 /*
@@ -654,10 +850,195 @@ RndisUsbReceiveControlResponse(
 }
 
 /*
+ * RndisNcmSetNtbInputSize
+ *
+ * Set the maximum NTB input size for CDC-NCM device.
+ * This tells the device the maximum size of NTBs we can receive.
+ * Per USB CDC NCM 1.0 specification, section 6.2.5.
+ */
+static
+NTSTATUS
+RndisNcmSetNtbInputSize(
+    IN PRNDIS_ADAPTER Adapter,
+    IN ULONG NtbInputSize)
+{
+    PURB Urb;
+    NTSTATUS Status;
+    PULONG SizeBuffer;
+
+    DPRINT1("USBRNDIS: Setting NCM NTB input size to %lu\n", NtbInputSize);
+
+    /* Allocate buffer for the size value */
+    SizeBuffer = RndisAllocateMemory(NonPagedPool, sizeof(ULONG));
+    if (!SizeBuffer)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    *SizeBuffer = NtbInputSize;
+
+    Urb = RndisAllocateMemory(NonPagedPool, sizeof(URB));
+    if (!Urb)
+    {
+        RndisFreeMemory(SizeBuffer);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    /* Build class request for SET_NTB_INPUT_SIZE */
+    Urb->UrbControlVendorClassRequest.Hdr.Length = sizeof(struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST);
+    Urb->UrbControlVendorClassRequest.Hdr.Function = URB_FUNCTION_CLASS_INTERFACE;
+    Urb->UrbControlVendorClassRequest.TransferFlags = USBD_TRANSFER_DIRECTION_OUT;
+    Urb->UrbControlVendorClassRequest.TransferBufferLength = sizeof(ULONG);
+    Urb->UrbControlVendorClassRequest.TransferBuffer = SizeBuffer;
+    Urb->UrbControlVendorClassRequest.TransferBufferMDL = NULL;
+    Urb->UrbControlVendorClassRequest.Request = USB_CDC_NCM_SET_NTB_INPUT_SIZE;
+    Urb->UrbControlVendorClassRequest.Value = 0;
+    Urb->UrbControlVendorClassRequest.Index = Adapter->ControlInterfaceNumber;
+
+    Status = RndisSyncUrbRequest(Adapter->LowerDeviceObject, Urb);
+
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("USBRNDIS: SET_NTB_INPUT_SIZE failed (0x%08X)\n", Status);
+    }
+
+    RndisFreeMemory(Urb);
+    RndisFreeMemory(SizeBuffer);
+    return Status;
+}
+
+/*
+ * RndisNcmGetNtbParameters
+ *
+ * Query NCM NTB parameters from the device.
+ * Per USB CDC NCM 1.0 specification, section 6.2.1.
+ */
+static
+NTSTATUS
+RndisNcmGetNtbParameters(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    PURB Urb;
+    NTSTATUS Status;
+    PNCM_NTB_PARAMETERS Params;
+
+    DPRINT1("USBRNDIS: Getting NCM NTB parameters\n");
+
+    /* Allocate buffer for parameters */
+    Params = RndisAllocateMemory(NonPagedPool, sizeof(NCM_NTB_PARAMETERS));
+    if (!Params)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Urb = RndisAllocateMemory(NonPagedPool, sizeof(URB));
+    if (!Urb)
+    {
+        RndisFreeMemory(Params);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    /* Build class request for GET_NTB_PARAMETERS */
+    Urb->UrbControlVendorClassRequest.Hdr.Length = sizeof(struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST);
+    Urb->UrbControlVendorClassRequest.Hdr.Function = URB_FUNCTION_CLASS_INTERFACE;
+    Urb->UrbControlVendorClassRequest.TransferFlags = USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK;
+    Urb->UrbControlVendorClassRequest.TransferBufferLength = sizeof(NCM_NTB_PARAMETERS);
+    Urb->UrbControlVendorClassRequest.TransferBuffer = Params;
+    Urb->UrbControlVendorClassRequest.TransferBufferMDL = NULL;
+    Urb->UrbControlVendorClassRequest.Request = USB_CDC_NCM_GET_NTB_PARAMETERS;
+    Urb->UrbControlVendorClassRequest.Value = 0;
+    Urb->UrbControlVendorClassRequest.Index = Adapter->ControlInterfaceNumber;
+
+    Status = RndisSyncUrbRequest(Adapter->LowerDeviceObject, Urb);
+
+    if (NT_SUCCESS(Status))
+    {
+        DPRINT1("USBRNDIS: NCM NTB Parameters:\n");
+        DPRINT1("  wLength: %u\n", Params->wLength);
+        DPRINT1("  bmNtbFormatsSupported: 0x%04X\n", Params->bmNtbFormatsSupported);
+        DPRINT1("  dwNtbInMaxSize: %lu\n", Params->dwNtbInMaxSize);
+        DPRINT1("  wNdpInDivisor: %u\n", Params->wNdpInDivisor);
+        DPRINT1("  wNdpInPayloadRemainder: %u\n", Params->wNdpInPayloadRemainder);
+        DPRINT1("  wNdpInAlignment: %u\n", Params->wNdpInAlignment);
+        DPRINT1("  dwNtbOutMaxSize: %lu\n", Params->dwNtbOutMaxSize);
+        DPRINT1("  wNdpOutDivisor: %u\n", Params->wNdpOutDivisor);
+        DPRINT1("  wNdpOutPayloadRemainder: %u\n", Params->wNdpOutPayloadRemainder);
+        DPRINT1("  wNdpOutAlignment: %u\n", Params->wNdpOutAlignment);
+        DPRINT1("  wNtbOutMaxDatagrams: %u\n", Params->wNtbOutMaxDatagrams);
+
+        /*
+         * Store parameters in adapter context.
+         * For TX (building NTBs), use OUT parameters.
+         * For RX (SET_NTB_INPUT_SIZE), use our buffer size capped to IN max.
+         */
+        Adapter->NcmNtbMaxSize = (Params->dwNtbInMaxSize < RNDIS_MAX_TRANSFER_SIZE) ?
+                                  Params->dwNtbInMaxSize : RNDIS_MAX_TRANSFER_SIZE;
+        Adapter->NcmNtbOutMaxSize = (Params->dwNtbOutMaxSize < RNDIS_MAX_TRANSFER_SIZE) ?
+                                    Params->dwNtbOutMaxSize : RNDIS_MAX_TRANSFER_SIZE;
+        Adapter->NcmNdpDivisor = Params->wNdpOutDivisor;
+        Adapter->NcmNdpRemainder = Params->wNdpOutPayloadRemainder;
+        Adapter->NcmNdpAlignment = Params->wNdpOutAlignment;
+
+        /* Ensure minimum alignment */
+        if (Adapter->NcmNdpAlignment == 0)
+        {
+            Adapter->NcmNdpAlignment = 4;
+        }
+        if (Adapter->NcmNdpDivisor == 0)
+        {
+            Adapter->NcmNdpDivisor = 4;
+        }
+    }
+    else
+    {
+        DPRINT1("USBRNDIS: GET_NTB_PARAMETERS failed (0x%08X), using defaults\n", Status);
+        /* Use defaults already set in usbrndis.c */
+    }
+
+    RndisFreeMemory(Urb);
+    RndisFreeMemory(Params);
+    return Status;
+}
+
+/*
+ * RndisNcmSetup
+ *
+ * Perform CDC-NCM specific setup after configuration is selected.
+ * This includes:
+ * 1. Query NTB parameters from device
+ * 2. Set NTB input size to tell device our max receive buffer
+ */
+NTSTATUS
+RndisNcmSetup(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    NTSTATUS Status;
+
+    DPRINT1("USBRNDIS: Performing CDC-NCM setup\n");
+
+    /* Query device's NTB parameters */
+    Status = RndisNcmGetNtbParameters(Adapter);
+    /* Continue even if this fails - we'll use defaults */
+
+    /* Tell device our max NTB receive size */
+    Status = RndisNcmSetNtbInputSize(Adapter, Adapter->NcmNtbMaxSize);
+    if (!NT_SUCCESS(Status))
+    {
+        /* Some devices may not support this command, continue anyway */
+        DPRINT1("USBRNDIS: SET_NTB_INPUT_SIZE failed, continuing\n");
+    }
+
+    DPRINT1("USBRNDIS: CDC-NCM setup complete\n");
+    return STATUS_SUCCESS;
+}
+
+/*
  * RndisAsyncUrbRequest
  *
  * Submit a URB asynchronously with a completion routine.
  * Increments PendingIoCount which must be decremented in the completion routine.
+ *
+ * Returns STATUS_PENDING on async submit, or STATUS_SUCCESS/error if completed
+ * synchronously (in which case completion routine has already run).
  */
 NTSTATUS
 RndisAsyncUrbRequest(
@@ -669,6 +1050,7 @@ RndisAsyncUrbRequest(
 {
     PIRP Irp;
     PIO_STACK_LOCATION IoStack;
+    NTSTATUS Status;
 
     /* Increment pending I/O count before submitting */
     if (InterlockedIncrement(&Adapter->PendingIoCount) == 1)
@@ -701,10 +1083,122 @@ RndisAsyncUrbRequest(
         *OutIrp = Irp;
     }
 
-    /* Submit to lower driver - do not wait */
-    IoCallDriver(Adapter->LowerDeviceObject, Irp);
+    /* Submit to lower driver */
+    Status = IoCallDriver(Adapter->LowerDeviceObject, Irp);
 
-    return STATUS_PENDING;
+    /*
+     * IoCallDriver returns STATUS_PENDING if the IRP will be completed async,
+     * or the actual completion status if it completed synchronously.
+     * In both cases, our completion routine has been/will be called.
+     * Return the status so callers know if they should store the IRP pointer.
+     */
+    return Status;
+}
+
+/*
+ * RndisRxResubmitDpc
+ *
+ * DPC routine to resubmit RX URB. Called at DISPATCH_LEVEL to avoid
+ * stack overflow from synchronous completion in the completion routine.
+ */
+static
+VOID
+NTAPI
+RndisRxResubmitDpc(
+    IN PKDPC Dpc,
+    IN PVOID DeferredContext,
+    IN PVOID SystemArgument1,
+    IN PVOID SystemArgument2)
+{
+    PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    if (!Adapter->Halting)
+    {
+        RndisUsbSubmitBulkRead(Adapter);
+    }
+}
+
+/*
+ * RndisRxBackoffDpc
+ *
+ * DPC routine called when RX backoff timer expires.
+ * Resets error counter and resumes RX after backoff period.
+ */
+static
+VOID
+NTAPI
+RndisRxBackoffDpc(
+    IN PKDPC Dpc,
+    IN PVOID DeferredContext,
+    IN PVOID SystemArgument1,
+    IN PVOID SystemArgument2)
+{
+    PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    DPRINT("USBRNDIS: RX backoff timer expired, resuming RX\n");
+
+    /* Reset error counter */
+    InterlockedExchange((PLONG)&Adapter->RxConsecutiveErrors, 0);
+
+    /* Resume RX */
+    if (!Adapter->Halting)
+    {
+        RndisUsbSubmitBulkRead(Adapter);
+    }
+}
+
+/*
+ * RndisRxDelayDpc
+ *
+ * DPC routine called when RX delay timer expires (after NAK).
+ * This provides a small delay before resubmitting after device NAK
+ * to prevent CPU spinning when no data is available.
+ */
+static
+VOID
+NTAPI
+RndisRxDelayDpc(
+    IN PKDPC Dpc,
+    IN PVOID DeferredContext,
+    IN PVOID SystemArgument1,
+    IN PVOID SystemArgument2)
+{
+    PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    /* Resubmit RX after delay */
+    if (!Adapter->Halting)
+    {
+        RndisUsbSubmitBulkRead(Adapter);
+    }
+}
+
+/*
+ * RndisInitializeRxDpc
+ *
+ * Initialize DPC and timer for RX resubmission and backoff recovery.
+ * Called from adapter initialization.
+ */
+VOID
+RndisInitializeRxDpc(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    KeInitializeDpc(&Adapter->RxResubmitDpc, RndisRxResubmitDpc, Adapter);
+    KeInitializeTimer(&Adapter->RxBackoffTimer);
+    KeInitializeDpc(&Adapter->RxBackoffDpc, RndisRxBackoffDpc, Adapter);
+    KeInitializeTimer(&Adapter->RxDelayTimer);
+    KeInitializeDpc(&Adapter->RxDelayDpc, RndisRxDelayDpc, Adapter);
 }
 
 /*
@@ -724,6 +1218,9 @@ RndisRxComplete(
     PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)Context;
     NTSTATUS Status;
     ULONG TransferLength;
+    BOOLEAN ShouldResubmit = TRUE;
+    BOOLEAN UseDelayedResubmit = FALSE;
+    ULONG ConsecutiveErrors;
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
@@ -743,21 +1240,107 @@ RndisRxComplete(
     if (NT_SUCCESS(Status) && TransferLength > 0 && !Adapter->Halting)
     {
         DPRINT("USBRNDIS: RX complete, %u bytes received\n", TransferLength);
+        Adapter->RxConsecutiveErrors = 0;  /* Reset error counter on success */
         RndisProcessReceivedPacket(Adapter, Adapter->RxBuffer, TransferLength);
+        /* Data received - use immediate resubmission for low latency */
+    }
+    else if (NT_SUCCESS(Status) && TransferLength == 0)
+    {
+        /* Zero-length transfer - not an error, just no data */
+        Adapter->RxConsecutiveErrors = 0;
+        /* Use delayed resubmission to avoid tight loop */
+        UseDelayedResubmit = TRUE;
     }
     else if (!NT_SUCCESS(Status) && Status != STATUS_CANCELLED)
     {
-        DPRINT1("USBRNDIS: RX failed with status 0x%08X\n", Status);
-        Adapter->RxErrorCount++;
+        USBD_STATUS UsbdStatus = Adapter->RxUrb.UrbBulkOrInterruptTransfer.Hdr.Status;
+
+        /*
+         * STATUS_DEVICE_BUSY (0x80000011) with USBD_STATUS=0 indicates the
+         * device NAKed the transfer - this is normal when no data is available.
+         * Treat this as "no data" rather than an error, but use delayed
+         * resubmission to prevent CPU spinning.
+         *
+         * Similarly, STATUS_IO_TIMEOUT can occur briefly during power
+         * state transitions.
+         */
+        if ((Status == STATUS_DEVICE_BUSY && UsbdStatus == USBD_STATUS_SUCCESS) ||
+            Status == STATUS_IO_TIMEOUT)
+        {
+            /* Not a real error - just no data available */
+            DPRINT("USBRNDIS: RX NAK (no data available)\n");
+            Adapter->RxConsecutiveErrors = 0;  /* Reset counter for NAKs */
+            /*
+             * Use delayed resubmission to prevent infinite tight loop.
+             * Without this delay, the driver would spin at 100% CPU.
+             */
+            UseDelayedResubmit = TRUE;
+        }
+        else
+        {
+            DPRINT1("USBRNDIS: RX failed with status 0x%08X (USBD_STATUS=0x%08X)\n",
+                    Status, UsbdStatus);
+            Adapter->RxErrorCount++;
+
+            /*
+             * Track consecutive errors for backoff.
+             * If we get too many errors in a row, stop resubmitting to avoid
+             * loop-hammering a broken device.
+             */
+            ConsecutiveErrors = InterlockedIncrement((PLONG)&Adapter->RxConsecutiveErrors);
+            if (ConsecutiveErrors > 10)
+            {
+                DPRINT1("USBRNDIS: Too many consecutive RX errors (%u), entering backoff\n",
+                        ConsecutiveErrors);
+                ShouldResubmit = FALSE;
+
+                /*
+                 * Start backoff timer to recover after 1 second.
+                 * This prevents permanent RX failure and allows recovery
+                 * if the device recovers from its error state.
+                 */
+                {
+                    LARGE_INTEGER DueTime;
+                    DueTime.QuadPart = -10000000LL; /* 1 second in 100ns units, negative = relative */
+                    KeSetTimer(&Adapter->RxBackoffTimer, DueTime, &Adapter->RxBackoffDpc);
+                }
+            }
+            else
+            {
+                /* Use delayed resubmission for transient errors */
+                UseDelayedResubmit = TRUE;
+            }
+        }
     }
 
     /* Decrement pending I/O count */
     RndisDecrementPendingIo(Adapter);
 
-    /* Resubmit RX URB if not halting */
-    if (!Adapter->Halting)
+    /*
+     * Resubmit RX URB if not halting and not in error backoff.
+     * CRITICAL: We use a DPC to avoid stack overflow from synchronous
+     * completion. If RndisUsbSubmitBulkRead completes synchronously,
+     * it would call this completion routine again, causing infinite
+     * recursion and stack overflow.
+     *
+     * For NAK/no-data cases, use a timer-based delay (20ms) to prevent
+     * CPU spinning. For successful data reception, use immediate DPC
+     * for low latency.
+     */
+    if (!Adapter->Halting && ShouldResubmit)
     {
-        RndisUsbSubmitBulkRead(Adapter);
+        if (UseDelayedResubmit)
+        {
+            /* Delay 20ms before resubmitting - prevents CPU spin on NAK */
+            LARGE_INTEGER DueTime;
+            DueTime.QuadPart = -200000LL; /* 20ms in 100ns units, negative = relative */
+            KeSetTimer(&Adapter->RxDelayTimer, DueTime, &Adapter->RxDelayDpc);
+        }
+        else
+        {
+            /* Immediate resubmission via DPC for data reception */
+            KeInsertQueueDpc(&Adapter->RxResubmitDpc, NULL, NULL);
+        }
     }
 
     return STATUS_MORE_PROCESSING_REQUIRED;
@@ -798,7 +1381,8 @@ RndisUsbSubmitBulkRead(
     Adapter->RxSubmitted = TRUE;
     NdisReleaseSpinLock(&Adapter->RxLock);
 
-    DPRINT("USBRNDIS: Submitting async bulk read\n");
+    DPRINT1("USBRNDIS: Submitting async bulk read (PipeHandle=%p)\n",
+            Adapter->BulkInEndpoint.PipeHandle);
 
     /* Build the URB */
     Urb = &Adapter->RxUrb;
@@ -818,18 +1402,27 @@ RndisUsbSubmitBulkRead(
     Status = RndisAsyncUrbRequest(Adapter, Urb, RndisRxComplete, Adapter, &Irp);
     if (Status == STATUS_PENDING)
     {
-        /* Store IRP for cancellation */
+        /*
+         * Store IRP for cancellation, but only if completion hasn't run yet.
+         * Check RxSubmitted - if completion ran, it set RxSubmitted = FALSE
+         * and freed the IRP, so we must not store a freed pointer.
+         */
         NdisAcquireSpinLock(&Adapter->RxLock);
-        Adapter->RxIrp = Irp;
+        if (Adapter->RxSubmitted)
+        {
+            Adapter->RxIrp = Irp;
+        }
+        /* else completion already ran, IRP is freed, don't store */
         NdisReleaseSpinLock(&Adapter->RxLock);
     }
-    else
+    else if (!NT_SUCCESS(Status))
     {
-        /* Failed to submit */
+        /* Failed to submit - completion won't run, clean up ourselves */
         NdisAcquireSpinLock(&Adapter->RxLock);
         Adapter->RxSubmitted = FALSE;
         NdisReleaseSpinLock(&Adapter->RxLock);
     }
+    /* else STATUS_SUCCESS: completion already ran (sync completion) */
 
     return Status;
 }
@@ -852,10 +1445,12 @@ RndisTxComplete(
     NTSTATUS Status;
     PNDIS_PACKET Packet;
     NDIS_STATUS NdisStatus;
+    BOOLEAN WasPending;
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
     Status = Irp->IoStatus.Status;
+    WasPending = Irp->PendingReturned;
 
     /* Retrieve the pending packet and clear TX state under lock */
     NdisAcquireSpinLock(&Adapter->TxLock);
@@ -882,8 +1477,13 @@ RndisTxComplete(
         NdisStatus = NDIS_STATUS_FAILURE;
     }
 
-    /* Notify NDIS that send is complete */
-    if (Packet)
+    /*
+     * Only call NdisMSendComplete if the IRP was actually pended.
+     * If WasPending is FALSE, the IRP completed synchronously and
+     * RndisSend() will return the status directly (not NDIS_STATUS_PENDING).
+     * Calling NdisMSendComplete before returning PENDING is undefined in NDIS5.
+     */
+    if (Packet && WasPending)
     {
         NdisMSendComplete(Adapter->MiniportAdapterHandle, Packet, NdisStatus);
     }
@@ -940,11 +1540,20 @@ RndisUsbSubmitBulkWrite(
     Status = RndisAsyncUrbRequest(Adapter, Urb, RndisTxComplete, Adapter, &Irp);
     if (Status == STATUS_PENDING)
     {
-        /* Store IRP for cancellation */
+        /*
+         * Store IRP for cancellation, but only if completion hasn't run yet.
+         * Check TxBusy - if completion ran, it set TxBusy = FALSE
+         * and freed the IRP, so we must not store a freed pointer.
+         */
         NdisAcquireSpinLock(&Adapter->TxLock);
-        Adapter->TxIrp = Irp;
+        if (Adapter->TxBusy)
+        {
+            Adapter->TxIrp = Irp;
+        }
+        /* else completion already ran, IRP is freed, don't store */
         NdisReleaseSpinLock(&Adapter->TxLock);
     }
+    /* else sync completion: completion already ran */
 
     return Status;
 }

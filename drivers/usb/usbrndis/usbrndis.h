@@ -133,6 +133,14 @@
 #define USB_CDC_GET_ENCAPSULATED_RESPONSE   0x01
 
 /*
+ * USB CDC NCM Class Request Codes
+ * Per USB CDC NCM 1.0 specification, Table 6-2
+ */
+#define USB_CDC_NCM_GET_NTB_PARAMETERS      0x80
+#define USB_CDC_NCM_GET_NTB_INPUT_SIZE      0x85
+#define USB_CDC_NCM_SET_NTB_INPUT_SIZE      0x86
+
+/*
  * USB Class Codes
  */
 #define USB_CLASS_COMM                  0x02
@@ -141,15 +149,18 @@
 #define USB_CLASS_MISC                  0xEF
 
 /*
- * USB CDC Subclass for RNDIS
+ * USB CDC Subclass codes
  */
-#define USB_CDC_SUBCLASS_ACM            0x02
+#define USB_CDC_SUBCLASS_ACM            0x02  /* Abstract Control Model (used by RNDIS) */
+#define USB_CDC_SUBCLASS_ECM            0x06  /* Ethernet Control Model (CDC-ECM) */
+#define USB_CDC_SUBCLASS_NCM            0x0D  /* Network Control Model (CDC-NCM) */
 
 /*
  * USB CDC Protocol for RNDIS
  * RNDIS uses vendor-specific protocol 0xFF on ACM subclass
  */
 #define USB_CDC_PROTOCOL_RNDIS          0xFF
+#define USB_CDC_PROTOCOL_NONE           0x00
 
 /*
  * RNDIS Control Buffer Size
@@ -179,11 +190,99 @@
 #define RNDIS_MAX_TRANSFER_SIZE         (ETHERNET_MAX_FRAME_SIZE + RNDIS_PACKET_HEADER_SIZE + 32)
 
 /*
+ * CDC-NCM (Network Control Model) Constants
+ * Per USB CDC NCM 1.0 specification
+ */
+#define NCM_NTH16_SIGNATURE             0x484D434E  /* "NCMH" in little-endian */
+#define NCM_NDP16_SIGNATURE_NOCRC       0x304D434E  /* "NCM0" - no CRC */
+#define NCM_NDP16_SIGNATURE_CRC         0x314D434E  /* "NCM1" - with CRC */
+
+#define NCM_NTH16_LENGTH                12          /* Size of NTH16 header */
+#define NCM_NDP16_MIN_LENGTH            16          /* Minimum NDP16 size (header + 1 entry + terminator) */
+
+/*
+ * NCM default parameters (used if GET_NTB_PARAMETERS fails)
+ * These are safe conservative defaults per NCM 1.0 specification
+ */
+#define NCM_DEFAULT_NTB_MAX_SIZE        2048        /* Conservative default */
+#define NCM_DEFAULT_NDP_ALIGNMENT       4           /* 4-byte alignment */
+#define NCM_DEFAULT_NDP_DIVISOR         4           /* Datagram alignment divisor */
+#define NCM_DEFAULT_NDP_REMAINDER       0           /* Datagram alignment remainder */
+
+/*
  * Maximum number of multicast addresses
  */
 #define RNDIS_MAX_MULTICAST_ADDRESSES   32
 
 #include <pshpack1.h>
+
+/*
+ * CDC-NCM NTH16 (NCM Transfer Header - 16-bit)
+ * Per USB CDC NCM 1.0 specification, Table 3-1
+ *
+ * This header starts every NTB (Network Transfer Block) sent over USB.
+ * It contains the signature, sequence number, total block length, and
+ * offset to the first NDP (NCM Datagram Pointer) table.
+ */
+typedef struct _NCM_NTH16 {
+    ULONG dwSignature;          /* NCM_NTH16_SIGNATURE ("NCMH") */
+    USHORT wHeaderLength;       /* Size of this header (12 bytes) */
+    USHORT wSequence;           /* Sequence number, incremented per transfer */
+    USHORT wBlockLength;        /* Total size of this NTB */
+    USHORT wNdpIndex;           /* Offset to first NDP16 from start of NTH16 */
+} NCM_NTH16, *PNCM_NTH16;
+
+C_ASSERT(sizeof(NCM_NTH16) == 12);
+
+/*
+ * CDC-NCM NDP16 Entry (Datagram Pointer Entry)
+ * Per USB CDC NCM 1.0 specification, Table 3-3
+ *
+ * Each entry points to one Ethernet datagram within the NTB.
+ * The array is terminated by an entry with both fields set to 0.
+ */
+typedef struct _NCM_NDP16_ENTRY {
+    USHORT wDatagramIndex;      /* Offset to datagram from start of NTH16 */
+    USHORT wDatagramLength;     /* Length of the datagram */
+} NCM_NDP16_ENTRY, *PNCM_NDP16_ENTRY;
+
+C_ASSERT(sizeof(NCM_NDP16_ENTRY) == 4);
+
+/*
+ * CDC-NCM NDP16 Header (NCM Datagram Pointer - 16-bit)
+ * Per USB CDC NCM 1.0 specification, Table 3-2
+ *
+ * Contains signature, header length, pointer to next NDP (if any),
+ * followed by an array of NDP16 entries pointing to each datagram.
+ */
+typedef struct _NCM_NDP16 {
+    ULONG dwSignature;          /* NCM_NDP16_SIGNATURE_NOCRC or _CRC */
+    USHORT wLength;             /* Size of this NDP16 including entries */
+    USHORT wNextNdpIndex;       /* Offset to next NDP16, or 0 if last */
+    NCM_NDP16_ENTRY Datagram[1];/* Variable-length array of datagram pointers */
+} NCM_NDP16, *PNCM_NDP16;
+
+/*
+ * CDC-NCM NTB Parameters
+ * Retrieved via GET_NTB_PARAMETERS request
+ * Per USB CDC NCM 1.0 specification, Table 6-3
+ */
+typedef struct _NCM_NTB_PARAMETERS {
+    USHORT wLength;                 /* Size of this structure */
+    USHORT bmNtbFormatsSupported;   /* Bit 0: NTB-16, Bit 1: NTB-32 */
+    ULONG dwNtbInMaxSize;           /* Max NTB size for IN (device to host) */
+    USHORT wNdpInDivisor;           /* Divisor for IN datagram alignment */
+    USHORT wNdpInPayloadRemainder;  /* Remainder for IN datagram alignment */
+    USHORT wNdpInAlignment;         /* NDP alignment for IN transfers */
+    USHORT Reserved1;
+    ULONG dwNtbOutMaxSize;          /* Max NTB size for OUT (host to device) */
+    USHORT wNdpOutDivisor;          /* Divisor for OUT datagram alignment */
+    USHORT wNdpOutPayloadRemainder; /* Remainder for OUT datagram alignment */
+    USHORT wNdpOutAlignment;        /* NDP alignment for OUT transfers */
+    USHORT wNtbOutMaxDatagrams;     /* Max datagrams per OUT NTB (0 = no limit) */
+} NCM_NTB_PARAMETERS, *PNCM_NTB_PARAMETERS;
+
+C_ASSERT(sizeof(NCM_NTB_PARAMETERS) == 28);
 
 /*
  * RNDIS Message Header
@@ -411,6 +510,7 @@ typedef struct _RNDIS_ADAPTER {
     RNDIS_USB_ENDPOINT InterruptEndpoint;
     UCHAR ControlInterfaceNumber;
     UCHAR DataInterfaceNumber;
+    UCHAR DataAlternateSetting;         /* Alternate setting for data interface */
 
     /* RNDIS Protocol State */
     RNDIS_STATE State;
@@ -418,6 +518,16 @@ typedef struct _RNDIS_ADAPTER {
     ULONG MaxTransferSize;
     ULONG PacketAlignmentFactor;
     ULONG MaxPacketsPerMessage;
+    BOOLEAN IsCdcEcm;               /* TRUE if CDC-ECM mode (no RNDIS messages) */
+    BOOLEAN IsCdcNcm;               /* TRUE if CDC-NCM mode (NTB framing) */
+
+    /* CDC-NCM Parameters (only valid if IsCdcNcm is TRUE) */
+    USHORT NcmTxSequence;           /* TX NTB sequence number */
+    ULONG NcmNtbMaxSize;            /* Max NTB size for RX (device->host) */
+    ULONG NcmNtbOutMaxSize;         /* Max NTB size for TX (host->device) */
+    USHORT NcmNdpDivisor;           /* Datagram alignment divisor (OUT) */
+    USHORT NcmNdpRemainder;         /* Datagram alignment remainder (OUT) */
+    USHORT NcmNdpAlignment;         /* NDP alignment (OUT) */
 
     /* Network Configuration */
     UCHAR PermanentMacAddress[ETHERNET_ADDRESS_LENGTH];
@@ -458,7 +568,13 @@ typedef struct _RNDIS_ADAPTER {
     NDIS_SPIN_LOCK RxLock;
     PIRP RxIrp;                     /* Pending RX IRP for cancellation */
     BOOLEAN RxSubmitted;            /* RX URB has been submitted */
+    ULONG RxConsecutiveErrors;      /* Consecutive RX failures for backoff */
     URB RxUrb;
+    KDPC RxResubmitDpc;             /* DPC for deferred RX resubmission */
+    KTIMER RxBackoffTimer;          /* Timer for RX backoff recovery */
+    KDPC RxBackoffDpc;              /* DPC for backoff timer */
+    KTIMER RxDelayTimer;            /* Timer for delayed RX resubmission on NAK */
+    KDPC RxDelayDpc;                /* DPC for NAK delay timer */
 
     /* Work Items */
     NDIS_WORK_ITEM ResetWorkItem;
@@ -466,7 +582,7 @@ typedef struct _RNDIS_ADAPTER {
 
     /* Synchronization */
     KEVENT ControlEvent;
-    NDIS_SPIN_LOCK ControlLock;     /* Use NDIS spinlock for consistency */
+    KMUTEX ControlMutex;            /* Mutex for control channel (PASSIVE_LEVEL only) */
 
 } RNDIS_ADAPTER, *PRNDIS_ADAPTER;
 
@@ -527,6 +643,14 @@ RndisUsbSubmitBulkWrite(
     IN PRNDIS_ADAPTER Adapter,
     IN PUCHAR Data,
     IN ULONG Length);
+
+VOID
+RndisInitializeRxDpc(
+    IN PRNDIS_ADAPTER Adapter);
+
+NTSTATUS
+RndisNcmSetup(
+    IN PRNDIS_ADAPTER Adapter);
 
 /*
  * Async I/O Helper Functions

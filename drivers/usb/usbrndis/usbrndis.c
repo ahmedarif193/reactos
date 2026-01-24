@@ -237,14 +237,22 @@ RndisInitialize(
     Adapter->RxIrp = NULL;
     Adapter->TxIrp = NULL;
     Adapter->PendingTxPacket = NULL;
+    Adapter->IsCdcEcm = FALSE;
+    Adapter->IsCdcNcm = FALSE;
     Adapter->RxSubmitted = FALSE;
+    Adapter->RxConsecutiveErrors = 0;
+    Adapter->DataInterfaceNumber = 0xFF;  /* Sentinel - no data interface found yet */
+    Adapter->DataAlternateSetting = 0;    /* Default to alt setting 0 */
 
     /* Initialize synchronization */
     KeInitializeEvent(&Adapter->ControlEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&Adapter->RemoveEvent, NotificationEvent, TRUE); /* Initially signaled */
-    NdisAllocateSpinLock(&Adapter->ControlLock);
+    KeInitializeMutex(&Adapter->ControlMutex, 0);  /* Mutex for control channel (PASSIVE_LEVEL) */
     NdisAllocateSpinLock(&Adapter->TxLock);
     NdisAllocateSpinLock(&Adapter->RxLock);
+
+    /* Initialize RX DPC and backoff timer early so RndisHalt can safely cancel them */
+    RndisInitializeRxDpc(Adapter);
 
     /* Get the physical device object */
     NdisMGetDeviceProperty(
@@ -257,6 +265,10 @@ RndisInitialize(
 
     Adapter->PhysicalDeviceObject = PhysicalDeviceObject;
     Adapter->LowerDeviceObject = LowerDeviceObject;
+
+    DPRINT1("USBRNDIS: PDO=%p LowerDO=%p (StackSize=%u)\n",
+            PhysicalDeviceObject, LowerDeviceObject,
+            LowerDeviceObject ? LowerDeviceObject->StackSize : 0);
 
     /* Set NDIS attributes */
     NdisMSetAttributesEx(
@@ -330,44 +342,135 @@ RndisInitialize(
         goto Cleanup;
     }
 
-    /* Initialize RNDIS protocol */
-    Adapter->State = RndisStateInitializing;
-    NtStatus = RndisInitializeDevice(Adapter);
-    if (!NT_SUCCESS(NtStatus))
+    if (Adapter->IsCdcEcm || Adapter->IsCdcNcm)
     {
-        DPRINT1("USBRNDIS: Failed to initialize RNDIS device (0x%08X)\n", NtStatus);
-        NdisStatus = NDIS_STATUS_FAILURE;
-        goto Cleanup;
+        /*
+         * CDC-ECM/NCM mode: No RNDIS initialization needed.
+         * For CDC-ECM: Ethernet frames are sent raw without wrapping.
+         * For CDC-NCM: Ethernet frames are wrapped in NTB (NTH16/NDP16).
+         */
+        if (Adapter->IsCdcNcm)
+        {
+            DPRINT1("USBRNDIS: CDC-NCM mode - using NTB framing\n");
+
+            /*
+             * Initialize NCM parameters with safe defaults first.
+             * These may be updated by RndisNcmSetup() if device responds.
+             */
+            Adapter->NcmTxSequence = 0;
+            Adapter->NcmNtbMaxSize = NCM_DEFAULT_NTB_MAX_SIZE;
+            Adapter->NcmNtbOutMaxSize = NCM_DEFAULT_NTB_MAX_SIZE;
+            Adapter->NcmNdpDivisor = NCM_DEFAULT_NDP_DIVISOR;
+            Adapter->NcmNdpRemainder = NCM_DEFAULT_NDP_REMAINDER;
+            Adapter->NcmNdpAlignment = NCM_DEFAULT_NDP_ALIGNMENT;
+
+            /* Perform NCM-specific setup (query params, set NTB size) */
+            RndisNcmSetup(Adapter);
+
+            DPRINT1("USBRNDIS: NCM params after setup: MaxNTB=%lu Divisor=%u Remainder=%u Alignment=%u\n",
+                    Adapter->NcmNtbMaxSize, Adapter->NcmNdpDivisor,
+                    Adapter->NcmNdpRemainder, Adapter->NcmNdpAlignment);
+        }
+        else
+        {
+            DPRINT1("USBRNDIS: CDC-ECM mode - skipping RNDIS initialization\n");
+        }
+
+        /* Set default values for CDC-ECM/NCM */
+        Adapter->MaxTransferSize = RNDIS_MAX_TRANSFER_SIZE;
+        Adapter->PacketAlignmentFactor = 0;
+        Adapter->MaxPacketsPerMessage = 1;
+
+        /*
+         * Generate a locally-administered MAC address.
+         * Locally-administered MACs have bit 1 of first byte set (0x02).
+         * Use device VID/PID and interface number for uniqueness.
+         *
+         * TODO: Parse CDC Ethernet Networking Functional Descriptor (subtype 0x0F)
+         * to get the actual MAC address from iMACAddress string descriptor index.
+         */
+        {
+            LARGE_INTEGER TickCount;
+            KeQueryTickCount(&TickCount);
+
+            Adapter->PermanentMacAddress[0] = 0x02;  /* Locally administered, unicast */
+            Adapter->PermanentMacAddress[1] = (UCHAR)(Adapter->DeviceDescriptor->idVendor >> 8);
+            Adapter->PermanentMacAddress[2] = (UCHAR)(Adapter->DeviceDescriptor->idVendor & 0xFF);
+            Adapter->PermanentMacAddress[3] = (UCHAR)(Adapter->DeviceDescriptor->idProduct >> 8);
+            Adapter->PermanentMacAddress[4] = (UCHAR)(Adapter->DeviceDescriptor->idProduct & 0xFF);
+            Adapter->PermanentMacAddress[5] = (UCHAR)(TickCount.LowPart & 0xFF);
+        }
+        NdisMoveMemory(Adapter->CurrentMacAddress, Adapter->PermanentMacAddress, 6);
+
+        DPRINT1("USBRNDIS: %s MAC Address: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                Adapter->IsCdcNcm ? "CDC-NCM" : "CDC-ECM",
+                Adapter->PermanentMacAddress[0], Adapter->PermanentMacAddress[1],
+                Adapter->PermanentMacAddress[2], Adapter->PermanentMacAddress[3],
+                Adapter->PermanentMacAddress[4], Adapter->PermanentMacAddress[5]);
+
+        Adapter->State = RndisStateDataInitialized;
+    }
+    else
+    {
+        /* Initialize RNDIS protocol */
+        Adapter->State = RndisStateInitializing;
+        NtStatus = RndisInitializeDevice(Adapter);
+        if (!NT_SUCCESS(NtStatus))
+        {
+            DPRINT1("USBRNDIS: Failed to initialize RNDIS device (0x%08X)\n", NtStatus);
+            NdisStatus = NDIS_STATUS_FAILURE;
+            goto Cleanup;
+        }
+
+        Adapter->State = RndisStateInitialized;
+
+        /* Get MAC address from device */
+        NtStatus = RndisGetMacAddress(Adapter);
+        if (!NT_SUCCESS(NtStatus))
+        {
+            DPRINT1("USBRNDIS: Failed to get MAC address (0x%08X)\n", NtStatus);
+            NdisStatus = NDIS_STATUS_FAILURE;
+            goto Cleanup;
+        }
+
+        DPRINT1("USBRNDIS: MAC Address: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                Adapter->PermanentMacAddress[0], Adapter->PermanentMacAddress[1],
+                Adapter->PermanentMacAddress[2], Adapter->PermanentMacAddress[3],
+                Adapter->PermanentMacAddress[4], Adapter->PermanentMacAddress[5]);
+
+        /* Set default packet filter to enable data transfer */
+        NtStatus = RndisSetPacketFilter(Adapter, RNDIS_DEFAULT_FILTER);
+        if (!NT_SUCCESS(NtStatus))
+        {
+            DPRINT1("USBRNDIS: Failed to set packet filter (0x%08X)\n", NtStatus);
+            /* Non-fatal, some devices may not support this */
+        }
+
+        Adapter->State = RndisStateDataInitialized;
     }
 
-    Adapter->State = RndisStateInitialized;
-
-    /* Get MAC address from device */
-    NtStatus = RndisGetMacAddress(Adapter);
-    if (!NT_SUCCESS(NtStatus))
+    /*
+     * Query/set media connect status.
+     * RNDIS devices: Query via RNDIS control message.
+     * CDC-ECM/NCM: Assume connected - these don't use RNDIS protocol.
+     *              Real media status would come from CDC notification endpoint.
+     */
+    if (Adapter->IsCdcEcm || Adapter->IsCdcNcm)
     {
-        DPRINT1("USBRNDIS: Failed to get MAC address (0x%08X)\n", NtStatus);
-        NdisStatus = NDIS_STATUS_FAILURE;
-        goto Cleanup;
+        /*
+         * CDC-ECM/NCM: Assume media connected.
+         * The device is ready to use as soon as we select the data interface
+         * alternate setting. If the device supports CDC notifications (interrupt
+         * IN endpoint), we could monitor for NETWORK_CONNECTION notifications,
+         * but for simplicity we assume connected.
+         */
+        Adapter->MediaState = NdisMediaStateConnected;
+        DPRINT1("USBRNDIS: %s media state: Connected (assumed)\n",
+                Adapter->IsCdcNcm ? "CDC-NCM" : "CDC-ECM");
     }
-
-    DPRINT1("USBRNDIS: MAC Address: %02X:%02X:%02X:%02X:%02X:%02X\n",
-            Adapter->PermanentMacAddress[0], Adapter->PermanentMacAddress[1],
-            Adapter->PermanentMacAddress[2], Adapter->PermanentMacAddress[3],
-            Adapter->PermanentMacAddress[4], Adapter->PermanentMacAddress[5]);
-
-    /* Set default packet filter to enable data transfer */
-    NtStatus = RndisSetPacketFilter(Adapter, RNDIS_DEFAULT_FILTER);
-    if (!NT_SUCCESS(NtStatus))
+    else
     {
-        DPRINT1("USBRNDIS: Failed to set packet filter (0x%08X)\n", NtStatus);
-        /* Non-fatal, some devices may not support this */
-    }
-
-    Adapter->State = RndisStateDataInitialized;
-
-    /* Query actual media connect status from device */
-    {
+        /* RNDIS: Query media status via control message */
         ULONG MediaConnectStatus = 0;
         ULONG BytesWritten = 0;
         NTSTATUS NtStatus;
@@ -445,21 +548,48 @@ RndisHalt(
     /* Signal that we are halting - prevents URB resubmission */
     Adapter->Halting = TRUE;
 
-    /* Send RNDIS halt message to device */
-    if (Adapter->State >= RndisStateInitialized)
+    /* Cancel RX timers if running */
+    KeCancelTimer(&Adapter->RxBackoffTimer);
+    KeCancelTimer(&Adapter->RxDelayTimer);
+
+    /*
+     * Remove any queued DPCs. KeCancelTimer prevents future expirations but
+     * if a timer already expired and queued a DPC, it can still run.
+     * We must remove queued DPCs to prevent use-after-free when we free
+     * the adapter structure. KeRemoveQueueDpc returns TRUE if DPC was removed.
+     */
+    KeRemoveQueueDpc(&Adapter->RxResubmitDpc);
+    KeRemoveQueueDpc(&Adapter->RxBackoffDpc);
+    KeRemoveQueueDpc(&Adapter->RxDelayDpc);
+
+    /*
+     * Acquire ControlMutex before sending halt to ensure no control
+     * channel operations are in progress. This synchronizes with
+     * rndisctl.c functions that also hold this mutex.
+     */
+    KeWaitForSingleObject(&Adapter->ControlMutex, Executive, KernelMode, FALSE, NULL);
+
+    /* Send RNDIS halt message to device (skip for CDC-ECM/NCM) */
+    if (Adapter->State >= RndisStateInitialized && !Adapter->IsCdcEcm && !Adapter->IsCdcNcm)
     {
         RndisHaltDevice(Adapter);
     }
+
+    /* Release mutex after halt message sent */
+    KeReleaseMutex(&Adapter->ControlMutex, FALSE);
 
     Adapter->State = RndisStateHalted;
 
     /*
      * Cancel pending RX IRP.
-     * We need to capture the IRP pointer under lock because the
-     * completion routine may clear it.
+     * Atomically capture-and-null the IRP pointer under lock.
+     * This prevents the completion routine (which may run on another CPU)
+     * from seeing a stale pointer after we've called IoCancelIrp.
+     * The completion routine checks for NULL before using the IRP.
      */
     NdisAcquireSpinLock(&Adapter->RxLock);
     RxIrp = Adapter->RxIrp;
+    Adapter->RxIrp = NULL;  /* Null it under lock to prevent completion routine race */
     NdisReleaseSpinLock(&Adapter->RxLock);
 
     if (RxIrp)
@@ -470,9 +600,11 @@ RndisHalt(
 
     /*
      * Cancel pending TX IRP.
+     * Same atomic capture-and-null pattern.
      */
     NdisAcquireSpinLock(&Adapter->TxLock);
     TxIrp = Adapter->TxIrp;
+    Adapter->TxIrp = NULL;  /* Null it under lock to prevent completion routine race */
     NdisReleaseSpinLock(&Adapter->TxLock);
 
     if (TxIrp)
@@ -504,10 +636,9 @@ RndisHalt(
         Adapter->BusInterface.InterfaceDereference = NULL;
     }
 
-    /* Free spin locks */
+    /* Free spin locks (mutex doesn't need explicit cleanup) */
     NdisFreeSpinLock(&Adapter->TxLock);
     NdisFreeSpinLock(&Adapter->RxLock);
-    NdisFreeSpinLock(&Adapter->ControlLock);
 
     /* Free buffers */
     if (Adapter->RxBuffer)

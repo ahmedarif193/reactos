@@ -28,9 +28,10 @@ extern VOID RndisFreeMemory(IN PVOID Buffer);
  * 2. Poll for response via GET_ENCAPSULATED_RESPONSE
  * 3. Handle keepalive messages that may arrive during polling
  *
- * Note: This function acquires ControlLock to serialize access to
- * the shared ControlBuffer. The lock is held for the entire
+ * Note: This function acquires ControlMutex to serialize access to
+ * the shared ControlBuffer. The mutex is held for the entire
  * request/response cycle to prevent concurrent control operations.
+ * MUST be called at PASSIVE_LEVEL.
  */
 static
 NTSTATUS
@@ -52,8 +53,8 @@ RndisCommand(
 
     RequestId = Request->RequestId;
 
-    /* Serialize control channel access */
-    NdisAcquireSpinLock(&Adapter->ControlLock);
+    /* Serialize control channel access using mutex (PASSIVE_LEVEL only) */
+    KeWaitForSingleObject(&Adapter->ControlMutex, Executive, KernelMode, FALSE, NULL);
 
     /* Get start time for timeout tracking */
     KeQueryPerformanceCounter(&Frequency);
@@ -65,7 +66,7 @@ RndisCommand(
     {
         DPRINT1("USBRNDIS: Failed to send command type 0x%08X (0x%08X)\n",
                 Request->MessageType, Status);
-        NdisReleaseSpinLock(&Adapter->ControlLock);
+        KeReleaseMutex(&Adapter->ControlMutex, FALSE);
         return Status;
     }
 
@@ -78,7 +79,7 @@ RndisCommand(
         if (ElapsedMs.QuadPart >= RNDIS_CONTROL_TIMEOUT_MS)
         {
             DPRINT1("USBRNDIS: Control command timeout after %u ms\n", (ULONG)ElapsedMs.QuadPart);
-            NdisReleaseSpinLock(&Adapter->ControlLock);
+            KeReleaseMutex(&Adapter->ControlMutex, FALSE);
             return STATUS_IO_TIMEOUT;
         }
 
@@ -123,7 +124,7 @@ RndisCommand(
                 ExpectedResponseType == RNDIS_MSG_RESET_C)
             {
                 *BytesReceived = Received;
-                NdisReleaseSpinLock(&Adapter->ControlLock);
+                KeReleaseMutex(&Adapter->ControlMutex, FALSE);
                 return STATUS_SUCCESS;
             }
             /* Request ID mismatch, might be old response */
@@ -171,7 +172,7 @@ RndisCommand(
     }
 
     DPRINT1("USBRNDIS: Response timeout for command 0x%08X\n", Request->MessageType);
-    NdisReleaseSpinLock(&Adapter->ControlLock);
+    KeReleaseMutex(&Adapter->ControlMutex, FALSE);
     return STATUS_IO_TIMEOUT;
 }
 

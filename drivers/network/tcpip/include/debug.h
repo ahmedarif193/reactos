@@ -67,6 +67,9 @@
 
 #else /* _MSC_VER */
 
+#ifdef UNIMPLEMENTED
+#undef UNIMPLEMENTED
+#endif
 #define UNIMPLEMENTED \
     TI_DbgPrint(MIN_TRACE, ("(%s:%d)(%s) is unimplemented, \
         but come back another day.\n", __FILE__, __LINE__, __FUNCTION__));
