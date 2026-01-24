@@ -38,8 +38,8 @@ LibTCPDumpPcb(PVOID SocketContext)
     struct tcp_pcb *pcb = (struct tcp_pcb*)SocketContext;
     unsigned int addr = lwip_ntohl(pcb->remote_ip.addr);
 
-    DbgPrint("\tState: %s\n", tcp_state_str[pcb->state]);
-    DbgPrint("\tRemote: (%d.%d.%d.%d, %d)\n",
+    DPRINT1("\tState: %s\n", tcp_state_str[pcb->state]);
+    DPRINT1("\tRemote: (%d.%d.%d.%d, %d)\n",
     (addr >> 24) & 0xFF,
     (addr >> 16) & 0xFF,
     (addr >> 8) & 0xFF,
@@ -692,7 +692,7 @@ LibTCPShutdownCallback(void *arg)
     }
     else {
         /* This case shouldn't happen */
-        DbgPrint("Requested socket shutdown(0, 0) !\n");
+        DPRINT1("Requested socket shutdown(0, 0) !\n");
     }
 
     if (!msg->Output.Shutdown.Error)

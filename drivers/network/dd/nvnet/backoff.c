@@ -95,7 +95,7 @@ NvNetBackoffReseed(
     BOOLEAN RestartTransmitter = FALSE;
     LARGE_INTEGER Sample = KeQueryPerformanceCounter(NULL);
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     if ((Sample.LowPart & NVREG_SLOTTIME_MASK) == 0)
     {
@@ -129,7 +129,7 @@ NvNetBackoffReseedEx(
     ULONG Seed[3], ReversedSeed[2], CombinedSeed, SeedSet;
     ULONG i, Temp;
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     Sample = KeQueryPerformanceCounter(NULL);
     Seed[0] = Sample.LowPart & 0x0FFF;

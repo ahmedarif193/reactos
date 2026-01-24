@@ -24,7 +24,7 @@ UINT TdiAddressSizeFromType( UINT AddressType ) {
     case TDI_ADDRESS_TYPE_VNS:
         return TDI_ADDRESS_LENGTH_VNS;
     default:
-        DbgPrint("TdiAddressSizeFromType - invalid type: %x\n", AddressType);
+        DPRINT1("TdiAddressSizeFromType - invalid type: %x\n", AddressType);
         return 0;
     }
 }
@@ -38,7 +38,7 @@ UINT TaLengthOfAddress( PTA_ADDRESS Addr )
 
     AddrLen += 2 * sizeof( USHORT );
 
-    AFD_DbgPrint(MID_TRACE,("AddrLen %x\n", AddrLen));
+    DPRINT1("AddrLen %x\n", AddrLen);
 
     return AddrLen;
 }
@@ -52,7 +52,7 @@ UINT TaLengthOfTransportAddress( PTRANSPORT_ADDRESS Addr )
 
     AddrLen += sizeof(ULONG);
 
-    AFD_DbgPrint(MID_TRACE,("AddrLen %x\n", AddrLen));
+    DPRINT1("AddrLen %x\n", AddrLen);
 
     return AddrLen;
 }
@@ -66,7 +66,7 @@ UINT TaLengthOfTransportAddressByType(UINT AddressType)
 
     AddrLen += sizeof(ULONG) + 2 * sizeof(USHORT);
 
-    AFD_DbgPrint(MID_TRACE,("AddrLen %x\n", AddrLen));
+    DPRINT1("AddrLen %x\n", AddrLen);
 
     return AddrLen;
 }
@@ -151,7 +151,7 @@ NTSTATUS TdiBuildNullConnectionInfoInPlace
     TdiAddressSize = TaLengthOfTransportAddressByType(Type);
     if (!TdiAddressSize)
     {
-        AFD_DbgPrint(MIN_TRACE,("Invalid parameter\n"));
+        DPRINT1("Invalid parameter\n");
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -186,7 +186,7 @@ NTSTATUS TdiBuildNullConnectionInfo
 
     TdiAddressSize = TaLengthOfTransportAddressByType(Type);
     if (!TdiAddressSize) {
-        AFD_DbgPrint(MIN_TRACE,("Invalid parameter\n"));
+        DPRINT1("Invalid parameter\n");
         *ConnectionInfo = NULL;
         return STATUS_INVALID_PARAMETER;
     }

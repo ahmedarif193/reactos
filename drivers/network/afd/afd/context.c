@@ -31,7 +31,7 @@ AfdGetContext( PDEVICE_OBJECT DeviceObject, PIRP Irp,
         Status = STATUS_SUCCESS;
     }
 
-    AFD_DbgPrint(MID_TRACE,("Returning %x\n", Status));
+    DPRINT1("Returning %x\n", Status);
 
     return UnlockAndMaybeComplete( FCB, Status, Irp, ContextSize );
 }
@@ -49,7 +49,7 @@ AfdGetContextSize( PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     if (IrpSp->Parameters.DeviceIoControl.OutputBufferLength < sizeof(ULONG))
     {
-        AFD_DbgPrint(MIN_TRACE,("Buffer too small\n"));
+        DPRINT1("Buffer too small\n");
         return UnlockAndMaybeComplete(FCB, STATUS_BUFFER_TOO_SMALL, Irp, sizeof(ULONG));
     }
 

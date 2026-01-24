@@ -34,22 +34,22 @@ static VOID DisplayIPHeader(
     /* FIXME: IPv4 only */
     PIPv4_HEADER IPHeader = (PIPv4_HEADER)Header;
 
-    DbgPrint("IPv4 header:\n");
-    DbgPrint("VerIHL: 0x%x (version 0x%x, length %d 32-bit words)\n",
+    DPRINT1("IPv4 header:\n");
+    DPRINT1("VerIHL: 0x%x (version 0x%x, length %d 32-bit words)\n",
       IPHeader->VerIHL, (IPHeader->VerIHL & 0xF0) >> 4, IPHeader->VerIHL & 0x0F);
-    DbgPrint("  Tos: %d\n", IPHeader->Tos);
-    DbgPrint("  TotalLength: %d\n", WN2H(IPHeader->TotalLength));
-    DbgPrint("  Id: %d\n", WN2H(IPHeader->Id));
-    DbgPrint("  FlagsFragOfs: 0x%x (offset 0x%x)\n", WN2H(IPHeader->FlagsFragOfs), WN2H(IPHeader->FlagsFragOfs) & IPv4_FRAGOFS_MASK);
-    if ((WN2H(IPHeader->FlagsFragOfs) & IPv4_DF_MASK) > 0) DbgPrint("    IPv4_DF - Don't fragment\n");
-    if ((WN2H(IPHeader->FlagsFragOfs) & IPv4_MF_MASK) > 0) DbgPrint("    IPv4_MF - More fragments\n");
-    DbgPrint("  Ttl: %d\n", IPHeader->Ttl);
-    DbgPrint("  Protocol: %d\n", IPHeader->Protocol);
-    DbgPrint("  Checksum: 0x%x\n", WN2H(IPHeader->Checksum));
-    DbgPrint("  SrcAddr: %d.%d.%d.%d\n",
+    DPRINT("  Tos: %d\n", IPHeader->Tos);
+    DPRINT("  TotalLength: %d\n", WN2H(IPHeader->TotalLength));
+    DPRINT("  Id: %d\n", WN2H(IPHeader->Id));
+    DPRINT("  FlagsFragOfs: 0x%x (offset 0x%x)\n", WN2H(IPHeader->FlagsFragOfs), WN2H(IPHeader->FlagsFragOfs) & IPv4_FRAGOFS_MASK);
+    if ((WN2H(IPHeader->FlagsFragOfs) & IPv4_DF_MASK) > 0) DPRINT("    IPv4_DF - Don't fragment\n");
+    if ((WN2H(IPHeader->FlagsFragOfs) & IPv4_MF_MASK) > 0) DPRINT("    IPv4_MF - More fragments\n");
+    DPRINT("  Ttl: %d\n", IPHeader->Ttl);
+    DPRINT("  Protocol: %d\n", IPHeader->Protocol);
+    DPRINT("  Checksum: 0x%x\n", WN2H(IPHeader->Checksum));
+    DPRINT1("  SrcAddr: %d.%d.%d.%d\n",
       ((IPHeader->SrcAddr >> 0) & 0xFF), ((IPHeader->SrcAddr >> 8) & 0xFF),
       ((IPHeader->SrcAddr >> 16) & 0xFF), ((IPHeader->SrcAddr >> 24) & 0xFF));
-    DbgPrint("  DstAddr: %d.%d.%d.%d\n",
+    DPRINT1("  DstAddr: %d.%d.%d.%d\n",
       ((IPHeader->DstAddr >> 0) & 0xFF), ((IPHeader->DstAddr >> 8) & 0xFF),
       ((IPHeader->DstAddr >> 16) & 0xFF), ((IPHeader->DstAddr >> 24) & 0xFF));
 }

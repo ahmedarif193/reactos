@@ -14,7 +14,7 @@ NTSTATUS AfdEventError(
     IN PVOID TdiEventContext,
     IN NTSTATUS Status)
 {
-    AFD_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     return STATUS_SUCCESS;
 }
@@ -29,7 +29,7 @@ NTSTATUS AfdEventDisconnect(
     IN PVOID DisconnectInformation,
     IN ULONG DisconnectFlags)
 {
-    AFD_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     return STATUS_SUCCESS;
 }
@@ -50,10 +50,10 @@ NTSTATUS AfdEventReceive(
     PAFD_BUFFER Buffer;
     KIRQL OldIrql;
 
-    AFD_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
-    AFD_DbgPrint(MID_TRACE, ("Receiving (%d) bytes on socket\n",
-                             BytesAvailable));
+    DPRINT1("Receiving (%d) bytes on socket\n",
+                             BytesAvailable);
 
     ReceiveBuffer = ExAllocatePoolWithTag(NonPagedPool,
                                           BytesAvailable,
@@ -90,7 +90,7 @@ NTSTATUS AfdEventReceive(
 
     *BytesTaken = BytesAvailable;
 
-    AFD_DbgPrint(MAX_TRACE, ("Leaving.\n"));
+    DPRINT("Leaving.\n");
 
     return STATUS_SUCCESS;
 }
@@ -106,7 +106,7 @@ TDI_STATUS ClientEventReceiveExpedited(
     IN PVOID Tsdu,
     OUT PIRP *IoRequestPacket)
 {
-    AFD_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     return STATUS_SUCCESS;
 }
@@ -121,7 +121,7 @@ NTSTATUS ClientEventChainedReceive(
     IN PMDL Tsdu,
     IN PVOID TsduDescriptor)
 {
-    AFD_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     return STATUS_SUCCESS;
 }
@@ -150,10 +150,10 @@ NTSTATUS AfdEventReceiveDatagramHandler(
     ULONG Count;
     BOOLEAN CompleteIrp;
 
-    AFD_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
-    AFD_DbgPrint(MID_TRACE, ("Receiving (%d) bytes from (0x%X).\n",
-                             BytesAvailable, *(PULONG)SourceAddress));
+    DPRINT1("Receiving (%d) bytes from (0x%X).\n",
+                             BytesAvailable, *(PULONG)SourceAddress);
 
     ReceiveBuffer = ExAllocatePoolWithTag(NonPagedPool,
                                           BytesAvailable,
@@ -187,7 +187,7 @@ NTSTATUS AfdEventReceiveDatagramHandler(
     KeAcquireSpinLock(&FCB->ReceiveQueueLock, &OldIrql);
 
     if (CompleteIrp = !IsListEmpty(&FCB->ReadRequestQueue)) {
-        AFD_DbgPrint(MAX_TRACE, ("Satisfying read request.\n"));
+        DPRINT("Satisfying read request.\n");
 
         Entry = RemoveHeadList(&FCB->ReceiveQueue);
         ReadRequest = CONTAINING_RECORD(Entry, AFD_READ_REQUEST, ListEntry);
@@ -207,12 +207,12 @@ NTSTATUS AfdEventReceiveDatagramHandler(
     KeReleaseSpinLock(&FCB->ReceiveQueueLock, OldIrql);
 
     if (CompleteIrp) {
-        AFD_DbgPrint(MAX_TRACE, ("Completing IRP at (0x%X).\n", ReadRequest->Irp));
+        DPRINT("Completing IRP at (0x%X).\n", ReadRequest->Irp);
         IoCompleteRequest(ReadRequest->Irp, IO_NETWORK_INCREMENT);
         *BytesTaken = BytesAvailable;
     }
 
-    AFD_DbgPrint(MAX_TRACE, ("Leaving.\n"));
+    DPRINT("Leaving.\n");
 
     return STATUS_SUCCESS;
 }

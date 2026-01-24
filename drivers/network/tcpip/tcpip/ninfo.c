@@ -321,7 +321,7 @@ TDI_STATUS InfoTdiSetRoute(PIP_INTERFACE IF, PVOID Buffer, UINT BufferSize)
 
     if (IF == Loopback)
     {
-        DbgPrint("Failing attempt to add route to loopback adapter\n");
+        DPRINT1("Failing attempt to add route to loopback adapter\n");
         return TDI_INVALID_PARAMETER;
     }
 

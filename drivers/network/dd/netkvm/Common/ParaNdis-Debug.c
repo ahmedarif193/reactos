@@ -142,8 +142,8 @@ DEBUGPRINTFUNC VirtioDebugPrintProc = DebugPrint;
 #else //DPFLTR_MASK
 #pragma message("DebugPrint for Win2K")
 
-DEBUGPRINTFUNC pDebugPrint = DbgPrint;
-DEBUGPRINTFUNC VirtioDebugPrintProc = DbgPrint;
+DEBUGPRINTFUNC pDebugPrint = DPRINT1;
+DEBUGPRINTFUNC VirtioDebugPrintProc = DPRINT1;
 
 #endif //DPFLTR_MASK
 #endif //!defined(WPP_EVENT_TRACING) || defined(WPP_USE_BYPASS)

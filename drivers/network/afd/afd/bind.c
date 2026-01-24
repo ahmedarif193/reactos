@@ -13,15 +13,15 @@
 NTSTATUS WarmSocketForBind( PAFD_FCB FCB, ULONG ShareType ) {
     NTSTATUS Status;
 
-    AFD_DbgPrint(MID_TRACE,("Called (AF %u)\n",
-                            FCB->LocalAddress->Address[0].AddressType));
+    DPRINT1("Called (AF %u)\n",
+                            FCB->LocalAddress->Address[0].AddressType);
 
     if( !FCB->TdiDeviceName.Length || !FCB->TdiDeviceName.Buffer ) {
-        AFD_DbgPrint(MIN_TRACE,("Null Device\n"));
+        DPRINT1("Null Device\n");
         return STATUS_NO_SUCH_DEVICE;
     }
     if( !FCB->LocalAddress ) {
-        AFD_DbgPrint(MIN_TRACE,("No local address\n"));
+        DPRINT1("No local address\n");
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -67,7 +67,7 @@ NTSTATUS WarmSocketForBind( PAFD_FCB FCB, ULONG ShareType ) {
         }
     }
 
-    AFD_DbgPrint(MID_TRACE,("Returning %x\n", Status));
+    DPRINT1("Returning %x\n", Status);
 
     return Status;
 }
@@ -83,7 +83,7 @@ AfdBindSocket(PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
-    AFD_DbgPrint(MID_TRACE,("Called\n"));
+    DPRINT1("Called\n");
 
     if( !SocketAcquireStateLock( FCB ) ) return LostSocket( Irp );
     if( !(BindReq = LockRequest( Irp, IrpSp, FALSE, NULL )) )
@@ -103,7 +103,7 @@ AfdBindSocket(PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     if( NT_SUCCESS(Status) )
         Status = WarmSocketForBind( FCB, BindReq->ShareType );
-    AFD_DbgPrint(MID_TRACE,("FCB->Flags %x\n", FCB->Flags));
+    DPRINT1("FCB->Flags %x\n", FCB->Flags);
 
     if (NT_SUCCESS(Status))
     {

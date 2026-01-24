@@ -32,7 +32,7 @@ NvNetClearStatisticsCounters(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     if (Adapter->Features & DEV_HAS_STATISTICS_V2)
         CounterEnd = NvRegRxDropFrame;
@@ -60,7 +60,7 @@ NvNetResetMac(
 {
     ULONG Temp[3];
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     if (!(Adapter->Features & DEV_HAS_POWER_CNTRL))
         return;
@@ -106,7 +106,7 @@ NvNetStartReceiver(
 {
     ULONG RxControl;
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     RxControl = NV_READ(Adapter, NvRegReceiverControl);
     if ((NV_READ(Adapter, NvRegReceiverControl) & NVREG_RCVCTL_START) &&
@@ -132,7 +132,7 @@ NvNetStartTransmitter(
 {
     ULONG TxControl;
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     TxControl = NV_READ(Adapter, NvRegTransmitterControl);
     TxControl |= NVREG_XMITCTL_START;
@@ -149,7 +149,7 @@ NvNetStopReceiver(
 {
     ULONG RxControl, i;
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     RxControl = NV_READ(Adapter, NvRegReceiverControl);
     if (!(Adapter->Flags & NV_MAC_IN_USE))
@@ -180,7 +180,7 @@ NvNetStopTransmitter(
 {
     ULONG TxControl, i;
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     TxControl = NV_READ(Adapter, NvRegTransmitterControl);
     if (!(Adapter->Flags & NV_MAC_IN_USE))
@@ -243,7 +243,7 @@ NvNetUpdatePauseFrame(
     _Inout_ PNVNET_ADAPTER Adapter,
     _In_ ULONG PauseFlags)
 {
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     Adapter->PauseFlags &= ~(NV_PAUSEFRAME_TX_ENABLE | NV_PAUSEFRAME_RX_ENABLE);
 
@@ -295,7 +295,7 @@ NvNetToggleClockPowerGating(
     _In_ PNVNET_ADAPTER Adapter,
     _In_ BOOLEAN Gate)
 {
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     if (!(Adapter->Flags & NV_MAC_IN_USE) && (Adapter->Features & DEV_HAS_POWER_CNTRL))
     {
@@ -324,7 +324,7 @@ NvNetMediaDetectionDpc(
     UNREFERENCED_PARAMETER(SystemSpecific2);
     UNREFERENCED_PARAMETER(SystemSpecific3);
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     NdisDprAcquireSpinLock(&Adapter->Lock);
 
@@ -371,7 +371,7 @@ NvNetInitPhaseSynchronized(
 {
     PNVNET_ADAPTER Adapter = SynchronizeContext;
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     /* Enable interrupts on the NIC */
     NvNetApplyInterruptMask(Adapter);
@@ -407,7 +407,7 @@ NvNetInitNIC(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     /* Disable WOL */
     NV_WRITE(Adapter, NvRegWakeUpFlags, 0);
@@ -546,7 +546,7 @@ NvNetGetPermanentMacAddress(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     Temp[0] = NV_READ(Adapter, NvRegMacAddrA);
     Temp[1] = NV_READ(Adapter, NvRegMacAddrB);
@@ -603,13 +603,13 @@ NvNetGetPermanentMacAddress(
     Adapter->OriginalMacAddress[0] = Temp[0];
     Adapter->OriginalMacAddress[1] = Temp[1];
 
-    NDIS_DbgPrint(MIN_TRACE, ("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+    DPRINT1("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
                               MacAddress[0],
                               MacAddress[1],
                               MacAddress[2],
                               MacAddress[3],
                               MacAddress[4],
-                              MacAddress[5]));
+                              MacAddress[5]);
 
     if (ETH_IS_MULTICAST(MacAddress) || ETH_IS_EMPTY(MacAddress))
         return NDIS_STATUS_INVALID_ADDRESS;
@@ -625,7 +625,7 @@ NvNetSetupMacAddress(
 {
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     NV_WRITE(Adapter, NvRegMacAddrA,
              MacAddress[3] << 24 | MacAddress[2] << 16 | MacAddress[1] << 8 | MacAddress[0]);
@@ -680,7 +680,7 @@ NvNetRecognizeHardware(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     Bytes = NdisReadPciSlotInformation(Adapter->AdapterHandle,
                                        0,
@@ -898,7 +898,7 @@ NvNetRecognizeHardware(
     }
     if (Adapter->Flags & NV_SEND_ERRATA_PRESENT)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Transmit workaround active\n"));
+        DPRINT1("Transmit workaround active\n");
     }
 
     /* Initialize the interrupt mask */

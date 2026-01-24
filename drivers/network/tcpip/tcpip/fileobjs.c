@@ -114,7 +114,7 @@ LogActiveObjects(VOID)
     PADDRESS_FILE AddrFile;
     PCONNECTION_ENDPOINT Conn;
 
-    DbgPrint("----------- TCP/IP Active Object Dump -------------\n");
+    DPRINT("----------- TCP/IP Active Object Dump -------------\n");
 
     TcpipAcquireSpinLock(&AddressFileListLock, &OldIrql);
 
@@ -123,26 +123,26 @@ LogActiveObjects(VOID)
     {
         AddrFile = CONTAINING_RECORD(CurrentEntry, ADDRESS_FILE, ListEntry);
 
-        DbgPrint("Address File (%s, %d, %d) @ 0x%p | Ref count: %d | Sharers: %d\n",
+        DPRINT1("Address File (%s, %d, %d) @ 0x%p | Ref count: %d | Sharers: %d\n",
                  A2S(&AddrFile->Address), WN2H(AddrFile->Port), AddrFile->Protocol,
                  AddrFile, AddrFile->RefCount, AddrFile->Sharers);
-        DbgPrint("\tListener: ");
+        DPRINT1("\tListener: ");
         if (AddrFile->Listener == NULL)
-            DbgPrint("<None>\n");
+            DPRINT1("<None>\n");
         else
-            DbgPrint("0x%p\n", AddrFile->Listener);
-        DbgPrint("\tAssociated endpoints: ");
+            DPRINT1("0x%p\n", AddrFile->Listener);
+        DPRINT1("\tAssociated endpoints: ");
         if (AddrFile->Connection == NULL)
-            DbgPrint("<None>\n");
+            DPRINT1("<None>\n");
         else
         {
             Conn = AddrFile->Connection;
             while (Conn)
             {
-                DbgPrint("0x%p ", Conn);
+                DPRINT1("0x%p ", Conn);
                 Conn = Conn->Next;
             }
-            DbgPrint("\n");
+            DPRINT1("\n");
         }
 
         CurrentEntry = CurrentEntry->Flink;
@@ -157,33 +157,33 @@ LogActiveObjects(VOID)
     {
         Conn = CONTAINING_RECORD(CurrentEntry, CONNECTION_ENDPOINT, ListEntry);
 
-        DbgPrint("Connection @ 0x%p | Ref count: %d\n", Conn, Conn->RefCount);
-        DbgPrint("\tPCB: ");
+        DPRINT1("Connection @ 0x%p | Ref count: %d\n", Conn, Conn->RefCount);
+        DPRINT1("\tPCB: ");
         if (Conn->SocketContext == NULL)
-            DbgPrint("<None>\n");
+            DPRINT1("<None>\n");
         else
         {
-            DbgPrint("0x%p\n", Conn->SocketContext);
+            DPRINT1("0x%p\n", Conn->SocketContext);
             LibTCPDumpPcb(Conn->SocketContext);
         }
-        DbgPrint("\tPacket queue status: %s\n", IsListEmpty(&Conn->PacketQueue) ? "Empty" : "Not Empty");
-        DbgPrint("\tRequest lists: Connect: %s | Recv: %s | Send: %s | Shutdown: %s | Listen: %s\n",
+        DPRINT("\tPacket queue status: %s\n", IsListEmpty(&Conn->PacketQueue) ? "Empty" : "Not Empty");
+        DPRINT1("\tRequest lists: Connect: %s | Recv: %s | Send: %s | Shutdown: %s | Listen: %s\n",
                  IsListEmpty(&Conn->ConnectRequest) ? "Empty" : "Not Empty",
                  IsListEmpty(&Conn->ReceiveRequest) ? "Empty" : "Not Empty",
                  IsListEmpty(&Conn->SendRequest) ? "Empty" : "Not Empty",
                  IsListEmpty(&Conn->ShutdownRequest) ? "Empty" : "Not Empty",
                  IsListEmpty(&Conn->ListenRequest) ? "Empty" : "Not Empty");
-        DbgPrint("\tSend shutdown: %s\n", Conn->SendShutdown ? "Yes" : "No");
-        DbgPrint("\tReceive shutdown: %s\n", Conn->ReceiveShutdown ? "Yes" : "No");
-        if (Conn->ReceiveShutdown) DbgPrint("\tReceive shutdown status: 0x%x\n", Conn->ReceiveShutdownStatus);
-        DbgPrint("\tClosing: %s\n", Conn->Closing ? "Yes" : "No");
+        DPRINT1("\tSend shutdown: %s\n", Conn->SendShutdown ? "Yes" : "No");
+        DPRINT1("\tReceive shutdown: %s\n", Conn->ReceiveShutdown ? "Yes" : "No");
+        if (Conn->ReceiveShutdown) DPRINT1("\tReceive shutdown status: 0x%x\n", Conn->ReceiveShutdownStatus);
+        DPRINT1("\tClosing: %s\n", Conn->Closing ? "Yes" : "No");
 
         CurrentEntry = CurrentEntry->Flink;
     }
 
     TcpipReleaseSpinLock(&ConnectionEndpointListLock, OldIrql);
 
-    DbgPrint("---------------------------------------------------\n");
+    DPRINT1("---------------------------------------------------\n");
 #endif
 }
 

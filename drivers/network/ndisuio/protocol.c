@@ -438,7 +438,7 @@ BindAdapterByName(PNDIS_STRING DeviceName)
                            PROTOCOL_RESERVED_SIZE_IN_PACKET);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DPRINT1("Failed to allocate packet pool with status 0x%x\n", Status);
+        DPRINT("Failed to allocate packet pool with status 0x%x\n", Status);
         NdisFreeBufferPool(AdapterContext->BufferPoolHandle);
         RtlFreeUnicodeString(&AdapterContext->DeviceName);
         ExFreePool(AdapterContext);

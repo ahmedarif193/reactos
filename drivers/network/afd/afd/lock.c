@@ -51,7 +51,7 @@ PVOID LockRequest( PIRP Irp,
                 } _SEH2_END;
 
                 if( LockFailed ) {
-                    AFD_DbgPrint(MIN_TRACE,("Failed to lock pages\n"));
+                    DPRINT1("Failed to lock pages\n");
                     IoFreeMdl( Irp->MdlAddress );
                     Irp->MdlAddress = NULL;
                     return NULL;
@@ -61,7 +61,7 @@ PVOID LockRequest( PIRP Irp,
                 Irp->Tail.Overlay.DriverContext[1] = MmGetSystemAddressForMdlSafe(Irp->MdlAddress, NormalPagePriority);
                 if (!Irp->Tail.Overlay.DriverContext[1])
                 {
-                    AFD_DbgPrint(MIN_TRACE,("Failed to get mapped address\n"));
+                    DPRINT1("Failed to get mapped address\n");
                     MmUnlockPages(Irp->MdlAddress);
                     IoFreeMdl( Irp->MdlAddress );
                     Irp->MdlAddress = NULL;
@@ -75,7 +75,7 @@ PVOID LockRequest( PIRP Irp,
 
                 if (!Irp->Tail.Overlay.DriverContext[0])
                 {
-                    AFD_DbgPrint(MIN_TRACE,("Failed to allocate memory\n"));
+                    DPRINT1("Failed to allocate memory\n");
                     MmUnlockPages(Irp->MdlAddress);
                     IoFreeMdl( Irp->MdlAddress );
                     Irp->MdlAddress = NULL;
@@ -122,7 +122,7 @@ PVOID LockRequest( PIRP Irp,
                 } _SEH2_END;
 
                 if( LockFailed ) {
-                    AFD_DbgPrint(MIN_TRACE,("Failed to lock pages\n"));
+                    DPRINT1("Failed to lock pages\n");
                     IoFreeMdl( Irp->MdlAddress );
                     Irp->MdlAddress = NULL;
                     return NULL;
@@ -135,7 +135,7 @@ PVOID LockRequest( PIRP Irp,
 
                 if (!AfdInfo)
                 {
-                    AFD_DbgPrint(MIN_TRACE,("Failed to allocate memory\n"));
+                    DPRINT1("Failed to allocate memory\n");
                     MmUnlockPages(Irp->MdlAddress);
                     IoFreeMdl( Irp->MdlAddress );
                     Irp->MdlAddress = NULL;
@@ -214,7 +214,7 @@ PAFD_WSABUF LockBuffers( PAFD_WSABUF Buf, UINT Count,
     BOOLEAN LockFailed = FALSE;
     PAFD_MAPBUF MapBuf;
 
-    AFD_DbgPrint(MID_TRACE,("Called(%p)\n", NewBuf));
+    DPRINT("Called(%p)\n", NewBuf);
 
     if( NewBuf ) {
         RtlZeroMemory(NewBuf, Size);
@@ -233,16 +233,16 @@ PAFD_WSABUF LockBuffers( PAFD_WSABUF Buf, UINT Count,
                 Count += 2;
             }
         } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-            AFD_DbgPrint(MIN_TRACE,("Access violation copying buffer info "
+            DPRINT1("Access violation copying buffer info "
                                     "from userland (%p %p)\n",
-                                    Buf, AddressLen));
+                                    Buf, AddressLen);
             ExFreePoolWithTag(NewBuf, TAG_AFD_WSA_BUFFER);
             _SEH2_YIELD(return NULL);
         } _SEH2_END;
 
         for( i = 0; i < Count; i++ ) {
-            AFD_DbgPrint(MID_TRACE,("Locking buffer %u (%p:%u)\n",
-                                    i, NewBuf[i].buf, NewBuf[i].len));
+            DPRINT("Locking buffer %u (%p:%u)\n",
+                   i, NewBuf[i].buf, NewBuf[i].len);
 
             if( NewBuf[i].buf && NewBuf[i].len ) {
                 MapBuf[i].Mdl = IoAllocateMdl( NewBuf[i].buf,
@@ -255,20 +255,20 @@ PAFD_WSABUF LockBuffers( PAFD_WSABUF Buf, UINT Count,
                 continue;
             }
 
-            AFD_DbgPrint(MID_TRACE,("NewMdl @ %p\n", MapBuf[i].Mdl));
+            DPRINT("NewMdl @ %p\n", MapBuf[i].Mdl);
 
             if( MapBuf[i].Mdl ) {
-                AFD_DbgPrint(MID_TRACE,("Probe and lock pages\n"));
+                DPRINT("Probe and lock pages\n");
                 _SEH2_TRY {
                     MmProbeAndLockPages( MapBuf[i].Mdl, LockMode,
                                          Write ? IoModifyAccess : IoReadAccess );
                 } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
                     LockFailed = TRUE;
                 } _SEH2_END;
-                AFD_DbgPrint(MID_TRACE,("MmProbeAndLock finished\n"));
+                DPRINT("MmProbeAndLock finished\n");
 
                 if( LockFailed ) {
-            AFD_DbgPrint(MIN_TRACE,("Failed to lock pages\n"));
+            DPRINT1("Failed to lock pages\n");
                     IoFreeMdl( MapBuf[i].Mdl );
                     MapBuf[i].Mdl = NULL;
                     ExFreePoolWithTag(NewBuf, TAG_AFD_WSA_BUFFER);
@@ -281,7 +281,7 @@ PAFD_WSABUF LockBuffers( PAFD_WSABUF Buf, UINT Count,
         }
     }
 
-    AFD_DbgPrint(MID_TRACE,("Leaving %p\n", NewBuf));
+    DPRINT("Leaving %p\n", NewBuf);
 
     return NewBuf;
 }
@@ -332,7 +332,7 @@ PAFD_HANDLE LockHandles( PAFD_HANDLE HandleArray, UINT HandleCount ) {
 
         if( !NT_SUCCESS(Status) )
         {
-            AFD_DbgPrint(MIN_TRACE,("Failed to reference handles (0x%x)\n", Status));
+            DPRINT1("Failed to reference handles (0x%x)\n", Status);
             FileObjects[i].Handle = 0;
         }
     }
@@ -386,7 +386,7 @@ NTSTATUS NTAPI UnlockAndMaybeComplete
 
 NTSTATUS LostSocket( PIRP Irp ) {
     NTSTATUS Status = STATUS_FILE_CLOSED;
-    AFD_DbgPrint(MIN_TRACE,("Called.\n"));
+    DPRINT1("Called.\n");
     Irp->IoStatus.Information = 0;
     Irp->IoStatus.Status = Status;
     if ( Irp->MdlAddress ) UnlockRequest( Irp, IoGetCurrentIrpStackLocation( Irp ) );

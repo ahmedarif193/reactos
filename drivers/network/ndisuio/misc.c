@@ -29,7 +29,7 @@ AllocateAndChainBuffer(PNDISUIO_ADAPTER_CONTEXT AdapterContext,
                        BufferSize);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DPRINT1("No free buffer descriptors\n");
+        DPRINT("No free buffer descriptors\n");
         return Status;
     }
 
@@ -62,7 +62,7 @@ CreatePacketFromPoolBuffer(PNDISUIO_ADAPTER_CONTEXT AdapterContext,
                        AdapterContext->PacketPoolHandle);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DPRINT1("No free packet descriptors\n");
+        DPRINT("No free packet descriptors\n");
         return NULL;
     }
 

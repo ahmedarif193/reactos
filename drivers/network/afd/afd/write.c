@@ -37,9 +37,9 @@ static NTSTATUS NTAPI SendComplete
      * processed).
      */
 
-    AFD_DbgPrint(MID_TRACE,("Called, status %x, %u bytes used\n",
+    DPRINT1("Called, status %x, %u bytes used\n",
                             Irp->IoStatus.Status,
-                            Irp->IoStatus.Information));
+                            Irp->IoStatus.Information);
 
     if( !SocketAcquireStateLock( FCB ) )
         return STATUS_FILE_CLOSED;
@@ -160,7 +160,7 @@ static NTSTATUS NTAPI SendComplete
         SendReq = GetLockedData(NextIrp, NextIrpSp);
         Map = (PAFD_MAPBUF)(SendReq->BufferArray + SendReq->BufferCount);
 
-        AFD_DbgPrint(MID_TRACE,("SendReq @ %p\n", SendReq));
+        DPRINT1("SendReq @ %p\n", SendReq);
 
         SpaceAvail = FCB->Send.Size - FCB->Send.BytesUsed;
         TotalBytesCopied = 0;
@@ -266,9 +266,9 @@ static NTSTATUS NTAPI PacketSocketSendComplete
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
-    AFD_DbgPrint(MID_TRACE,("Called, status %x, %u bytes used\n",
+    DPRINT1("Called, status %x, %u bytes used\n",
                             Irp->IoStatus.Status,
-                            Irp->IoStatus.Information));
+                            Irp->IoStatus.Information);
 
     if( !SocketAcquireStateLock( FCB ) )
         return STATUS_FILE_CLOSED;
@@ -335,7 +335,7 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     UNREFERENCED_PARAMETER(DeviceObject);
     UNREFERENCED_PARAMETER(Short);
 
-    AFD_DbgPrint(MID_TRACE,("Called on %p\n", FCB));
+    DPRINT1("Called on %p\n", FCB);
 
     if( !SocketAcquireStateLock( FCB ) ) return LostSocket( Irp );
 
@@ -349,7 +349,7 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         /* Check that the socket is bound */
         if( FCB->State != SOCKET_STATE_BOUND || !FCB->RemoteAddress )
         {
-            AFD_DbgPrint(MIN_TRACE,("Invalid parameter\n"));
+            DPRINT1("Invalid parameter\n");
             return UnlockAndMaybeComplete( FCB, STATUS_INVALID_PARAMETER, Irp,
                                            0 );
         }
@@ -410,7 +410,7 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     if (FCB->PollState & AFD_EVENT_CLOSE)
     {
-        AFD_DbgPrint(MIN_TRACE,("Connection reset by remote peer\n"));
+        DPRINT1("Connection reset by remote peer\n");
 
         /* This is an unexpected remote disconnect */
         return UnlockAndMaybeComplete(FCB, FCB->PollStatus[FD_CLOSE_BIT], Irp, 0);
@@ -418,7 +418,7 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     if (FCB->PollState & AFD_EVENT_ABORT)
     {
-        AFD_DbgPrint(MIN_TRACE,("Connection aborted\n"));
+        DPRINT1("Connection aborted\n");
 
         /* This is an abortive socket closure on our side */
         return UnlockAndMaybeComplete(FCB, FCB->PollStatus[FD_CLOSE_BIT], Irp, 0);
@@ -426,7 +426,7 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     if (FCB->SendClosed)
     {
-        AFD_DbgPrint(MIN_TRACE,("No more sends\n"));
+        DPRINT1("No more sends\n");
 
         /* This is a graceful send closure */
         return UnlockAndMaybeComplete(FCB, STATUS_FILE_CLOSED, Irp, 0);
@@ -446,21 +446,21 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
                                        Irp, 0 );
     }
 
-    AFD_DbgPrint(MID_TRACE,("Socket state %u\n", FCB->State));
+    DPRINT1("Socket state %u\n", FCB->State);
 
     if( FCB->State != SOCKET_STATE_CONNECTED ) {
-        AFD_DbgPrint(MID_TRACE,("Socket not connected\n"));
+        DPRINT1("Socket not connected\n");
         UnlockBuffers( SendReq->BufferArray, SendReq->BufferCount, FALSE );
         return UnlockAndMaybeComplete( FCB, STATUS_INVALID_CONNECTION, Irp, 0 );
     }
 
-    AFD_DbgPrint(MID_TRACE,("FCB->Send.BytesUsed = %u\n",
-                            FCB->Send.BytesUsed));
+    DPRINT1("FCB->Send.BytesUsed = %u\n",
+                            FCB->Send.BytesUsed);
 
     SpaceAvail = FCB->Send.Size - FCB->Send.BytesUsed;
 
-    AFD_DbgPrint(MID_TRACE,("We can accept %u bytes\n",
-                            SpaceAvail));
+    DPRINT1("We can accept %u bytes\n",
+                            SpaceAvail);
 
     /* Count the total transfer size */
     SendLength = 0;
@@ -502,11 +502,11 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     {
         BytesCopied = MIN(SendReq->BufferArray[i].len, SpaceAvail);
 
-        AFD_DbgPrint(MID_TRACE,("Copying Buffer %u, %p:%u to %p\n",
+        DPRINT1("Copying Buffer %u, %p:%u to %p\n",
                                 i,
                                 SendReq->BufferArray[i].buf,
                                 BytesCopied,
-                                FCB->Send.Window + FCB->Send.BytesUsed));
+                                FCB->Send.Window + FCB->Send.BytesUsed);
 
         RtlCopyMemory(FCB->Send.Window + FCB->Send.BytesUsed,
                       SendReq->BufferArray[i].buf,
@@ -520,7 +520,7 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     Irp->IoStatus.Information = TotalBytesCopied;
 
     if( TotalBytesCopied == 0 ) {
-        AFD_DbgPrint(MID_TRACE,("Empty send\n"));
+        DPRINT1("Empty send\n");
         UnlockBuffers( SendReq->BufferArray, SendReq->BufferCount, FALSE );
         return UnlockAndMaybeComplete
         ( FCB, STATUS_SUCCESS, Irp, TotalBytesCopied );
@@ -569,7 +569,7 @@ AfdPacketSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
-    AFD_DbgPrint(MID_TRACE,("Called on %p\n", FCB));
+    DPRINT1("Called on %p\n", FCB);
 
     if( !SocketAcquireStateLock( FCB ) ) return LostSocket( Irp );
 
@@ -579,13 +579,13 @@ AfdPacketSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     if( FCB->State != SOCKET_STATE_BOUND &&
         FCB->State != SOCKET_STATE_CREATED)
     {
-        AFD_DbgPrint(MIN_TRACE,("Invalid socket state\n"));
+        DPRINT1("Invalid socket state\n");
         return UnlockAndMaybeComplete(FCB, STATUS_INVALID_PARAMETER, Irp, 0);
     }
 
     if (FCB->SendClosed)
     {
-        AFD_DbgPrint(MIN_TRACE,("No more sends\n"));
+        DPRINT1("No more sends\n");
         return UnlockAndMaybeComplete(FCB, STATUS_FILE_CLOSED, Irp, 0);
     }
 
@@ -624,12 +624,11 @@ AfdPacketSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         return UnlockAndMaybeComplete( FCB, STATUS_ACCESS_VIOLATION,
                                        Irp, 0 );
 
-    AFD_DbgPrint
-        (MID_TRACE,("RemoteAddress #%d Type %u\n",
+    DPRINT1("RemoteAddress #%d Type %u\n",
                     ((PTRANSPORT_ADDRESS)SendReq->TdiConnection.RemoteAddress)->
                     TAAddressCount,
                     ((PTRANSPORT_ADDRESS)SendReq->TdiConnection.RemoteAddress)->
-                    Address[0].AddressType));
+                    Address[0].AddressType);
 
     Status = TdiBuildConnectionInfo( &TargetAddress,
                             ((PTRANSPORT_ADDRESS)SendReq->TdiConnection.RemoteAddress) );

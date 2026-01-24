@@ -157,12 +157,12 @@ typedef struct _DISCARD_HEADER {
 } DISCARD_HEADER, *PDISCARD_HEADER;
 
 #define NICDisableInterrupts(Adapter) { \
-    NDIS_DbgPrint(MAX_TRACE, ("NICDisableInterrupts()\n")); \
+    DPRINT("NICDisableInterrupts()\n"); \
     NdisRawWritePortUchar((Adapter)->IOBase + PG0_IMR, 0x00); \
 }
 
 #define NICEnableInterrupts(Adapter) { \
-    NDIS_DbgPrint(MAX_TRACE, ("NICEnableInterrupts() Mask (0x%X)\n", (Adapter)->InterruptMask)); \
+    DPRINT("NICEnableInterrupts() Mask (0x%X)\n", (Adapter)->InterruptMask); \
     NdisRawWritePortUchar((Adapter)->IOBase + PG0_IMR, (Adapter)->InterruptMask); \
 }
 

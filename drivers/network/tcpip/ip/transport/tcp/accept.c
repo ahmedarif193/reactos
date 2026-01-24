@@ -24,7 +24,7 @@ NTSTATUS TCPCheckPeerForAccept(PVOID Context,
     ip_addr_t ipaddr;
 
     if (Request->RequestFlags & TDI_QUERY_ACCEPT)
-        DbgPrint("TDI_QUERY_ACCEPT NOT SUPPORTED!!!\n");
+        DPRINT1("TDI_QUERY_ACCEPT NOT SUPPORTED!!!\n");
 
     WhoIsConnecting = (PTDI_CONNECTION_INFORMATION)Request->ReturnConnectionInformation;
     RemoteAddress = (PTA_IP_ADDRESS)WhoIsConnecting->RemoteAddress;
@@ -81,7 +81,7 @@ NTSTATUS TCPListen(PCONNECTION_ENDPOINT Connection, UINT Backlog)
                 /* This should never fail unless all ports are in use */
                 if (AllocatedPort == (UINT) -1)
                 {
-                    DbgPrint("ERR: No more ports available.\n");
+                    DPRINT1("ERR: No more ports available.\n");
                     UnlockObject(Connection);
                     return STATUS_TOO_MANY_ADDRESSES;
                 }

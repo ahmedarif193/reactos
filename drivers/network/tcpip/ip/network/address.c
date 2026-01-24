@@ -223,7 +223,7 @@ BOOLEAN AddrIsEqual(
     PIP_ADDRESS Address2)
 {
     if (Address1->Type != Address2->Type) {
-        DbgPrint("AddrIsEqual: Unequal Address Types\n");
+        DPRINT1("AddrIsEqual: Unequal Address Types\n");
         return FALSE;
     }
 
@@ -237,7 +237,7 @@ BOOLEAN AddrIsEqual(
             break;
 
         default:
-            DbgPrint("AddrIsEqual: Bad address type\n");
+            DPRINT1("AddrIsEqual: Bad address type\n");
             break;
     }
 

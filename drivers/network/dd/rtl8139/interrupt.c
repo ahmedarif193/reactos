@@ -85,7 +85,7 @@ MiniportHandleInterrupt (
 
     NdisDprAcquireSpinLock(&adapter->Lock);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Interrupts pending: 0x%x\n", adapter->InterruptPending));
+    DPRINT("Interrupts pending: 0x%x\n", adapter->InterruptPending);
 
     //
     // Handle a link change
@@ -121,8 +121,8 @@ MiniportHandleInterrupt (
                 break;
             }
 
-            NDIS_DbgPrint(MAX_TRACE, ("Transmission for desc %d complete: 0x%x\n",
-                                      adapter->DirtyTxDesc, txStatus));
+            DPRINT("Transmission for desc %d complete: 0x%x\n",
+                                      adapter->DirtyTxDesc, txStatus);
 
             if (txStatus & R_TXS_STATOK)
             {
@@ -159,15 +159,15 @@ MiniportHandleInterrupt (
 
             adapter->ReceiveOffset %= RECEIVE_BUFFER_SIZE;
 
-            NDIS_DbgPrint(MAX_TRACE, ("Looking for a packet at offset 0x%x\n",
-                            adapter->ReceiveOffset));
+            DPRINT("Looking for a packet at offset 0x%x\n",
+                            adapter->ReceiveOffset);
             nicHeader = (PPACKET_HEADER)(adapter->ReceiveBuffer + adapter->ReceiveOffset);
             if (!(nicHeader->Status & RSR_ROK))
             {
                 //
                 // Receive failed
                 //
-                NDIS_DbgPrint(MIN_TRACE, ("Receive failed: 0x%x\n", nicHeader->Status));
+                DPRINT1("Receive failed: 0x%x\n", nicHeader->Status);
 
                 if (nicHeader->Status & RSR_FAE)
                 {
@@ -182,8 +182,8 @@ MiniportHandleInterrupt (
                 goto NextPacket;
             }
 
-            NDIS_DbgPrint(MAX_TRACE, ("Indicating %d byte packet to NDIS\n",
-                           nicHeader->PacketLength - RECV_CRC_LENGTH));
+            DPRINT("Indicating %d byte packet to NDIS\n",
+                           nicHeader->PacketLength - RECV_CRC_LENGTH);
 
             ethHeader = (PETH_HEADER)(nicHeader + 1);
             NdisMEthIndicateReceive(adapter->MiniportAdapterHandle,

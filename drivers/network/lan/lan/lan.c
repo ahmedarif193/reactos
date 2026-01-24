@@ -11,7 +11,6 @@
 
 #include "precomp.h"
 
-ULONG DebugTraceLevel = 0x7ffffff;
 PDEVICE_OBJECT LanDeviceObject  = NULL;
 
 /*!
@@ -103,7 +102,7 @@ ProtocolOpenAdapterComplete(
 {
     PLAN_ADAPTER Adapter = (PLAN_ADAPTER)BindingContext;
 
-    LA_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
+    DPRINT("Called.\n");
 
     KeSetEvent(&Adapter->Event, 0, FALSE);
 }
@@ -123,7 +122,7 @@ ProtocolCloseAdapterComplete(
 {
     PLAN_ADAPTER Adapter = (PLAN_ADAPTER)BindingContext;
 
-    LA_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
+    DPRINT("Called.\n");
 
     Adapter->NdisStatus = Status;
 
@@ -143,7 +142,7 @@ ProtocolResetComplete(
     NDIS_HANDLE BindingContext,
     NDIS_STATUS Status)
 {
-    LA_DbgPrint(MID_TRACE, ("Called.\n"));
+    DPRINT1("Called.\n");
 }
 
 
@@ -163,7 +162,7 @@ ProtocolRequestComplete(
 {
     PLAN_ADAPTER Adapter = (PLAN_ADAPTER)BindingContext;
 
-    LA_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* Save status of request and signal an event */
     Adapter->NdisStatus = Status;
@@ -188,9 +187,9 @@ ProtocolSendComplete(
 {
     /*PLAN_ADAPTER Adapter = (PLAN_ADAPTER)BindingContext;*/
 
-    LA_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
+    DPRINT("Called.\n");
     /*(*PC(Packet)->DLComplete)(Adapter->Context, Packet, Status);*/
-    LA_DbgPrint(DEBUG_DATALINK, ("Finished\n"));
+    DPRINT("Finished\n");
 }
 
 
@@ -225,7 +224,7 @@ ProtocolTransferDataComplete(
     LAN_PACKET LPPacket;
     PLAN_ADAPTER Adapter = (PLAN_ADAPTER)BindingContext;
 
-    LA_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
+    DPRINT("Called.\n");
 
     KeAcquireSpinLock(&DeviceExt->Lock, &OldIrql);
 
@@ -248,10 +247,9 @@ ProtocolTransferDataComplete(
 
         PacketType = LPPacket.EthHeader->EType;
 
-        LA_DbgPrint(DEBUG_DATALINK,
-                    ("Ether Type = %x Total = %d Packet %x Payload %x\n",
+        DPRINT("Ether Type = %x Total = %d Packet %x Payload %x\n",
                      PacketType, LPPacket.TotalSize, LPPacket.EthHeader,
-                     LPPacket.EthHeader + 1));
+                     LPPacket.EthHeader + 1);
 
         NdisBuffer->Next = NULL;
 
@@ -260,12 +258,12 @@ ProtocolTransferDataComplete(
              ListEntry = ListEntry->Flink)
         {
             Proto = CONTAINING_RECORD(ListEntry, LAN_PROTOCOL, ListEntry);
-            LA_DbgPrint(MID_TRACE,("Examining protocol %x\n", Proto));
+            DPRINT1("Examining protocol %x\n", Proto);
 
             for (i = 0; i < Proto->NumEtherTypes; i++)
             {
-                LA_DbgPrint(MID_TRACE,(".Accepts proto %x\n",
-                                       Proto->EtherType[i]));
+                DPRINT1(".Accepts proto %x\n",
+                                       Proto->EtherType[i]);
 
                 if (Proto->EtherType[i] == PacketType &&
                     !IsListEmpty(&Proto->ReadIrpListHead))
@@ -274,13 +272,12 @@ ProtocolTransferDataComplete(
                     ReadIrp = CONTAINING_RECORD(ReadListEntry,
                                                 IRP,
                                                 Tail.Overlay.ListEntry);
-                    LA_DbgPrint(MID_TRACE,("..Irp %x\n", ReadIrp));
+                    DPRINT1("..Irp %x\n", ReadIrp);
 
                     _SEH2_TRY
                     {
                         Header = ReadIrp->AssociatedIrp.SystemBuffer;
-                        LA_DbgPrint(MID_TRACE,
-                                    ("Writing packet at %x\n", Header));
+                        DPRINT1("Writing packet at %x\n", Header);
 
                         Header->Fixed.Adapter = Adapter->Index;
                         Header->Fixed.AddressType = Adapter->Media;
@@ -293,7 +290,7 @@ ProtocolTransferDataComplete(
 
                         if (Proto->Buffered)
                         {
-                            LA_DbgPrint(MID_TRACE,("Buffered copy\n"));
+                            DPRINT1("Buffered copy\n");
                             RtlCopyMemory(Header->Address + IEEE_802_ADDR_LENGTH,
                                           LPPacket.EthHeader + 1,
                                           LPPacket.TotalSize -
@@ -310,16 +307,15 @@ ProtocolTransferDataComplete(
                              sizeof(*LPPacket.EthHeader)) -
                             (PCHAR)Header;
 
-                        LA_DbgPrint(MID_TRACE,("Bytes returned %d\n",
-                        ReadIrp->IoStatus.Information));
+                        DPRINT1("Bytes returned %d\n",
+                        ReadIrp->IoStatus.Information);
 
                         #error move this out of SEH!
                         IoCompleteRequest(ReadIrp, IO_NETWORK_INCREMENT);
                     }
                     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                     {
-                        LA_DbgPrint(MIN_TRACE,
-                                    ("Failed write to packet in client\n"));
+                        DPRINT1("Failed write to packet in client\n");
                         ReadIrp->IoStatus.Status = STATUS_ACCESS_VIOLATION;
                         ReadIrp->IoStatus.Information = 0;
                         IoCompleteRequest(ReadIrp, IO_NETWORK_INCREMENT);
@@ -368,17 +364,17 @@ ProtocolReceive(
     PNDIS_PACKET NdisPacket;
     PLAN_ADAPTER Adapter = (PLAN_ADAPTER)BindingContext;
 
-    LA_DbgPrint(DEBUG_DATALINK, ("Called. (packetsize %d)\n",PacketSize));
+    DPRINT("Called. (packetsize %d)\n",PacketSize);
 
     if (Adapter->State != LAN_STATE_STARTED)
     {
-        LA_DbgPrint(DEBUG_DATALINK, ("Adapter is stopped.\n"));
+        DPRINT("Adapter is stopped.\n");
         return NDIS_STATUS_NOT_ACCEPTED;
     }
 
     if (HeaderBufferSize < Adapter->HeaderSize)
     {
-        LA_DbgPrint(DEBUG_DATALINK, ("Runt frame received.\n"));
+        DPRINT("Runt frame received.\n");
         return NDIS_STATUS_NOT_ACCEPTED;
     }
 
@@ -393,9 +389,8 @@ ProtocolReceive(
         return NDIS_STATUS_NOT_ACCEPTED;
     }
 
-    LA_DbgPrint(DEBUG_DATALINK,
-                ("pretransfer LookaheadBufferSize %d packsize %d\n",
-                 LookaheadBufferSize,PacketSize));
+    DPRINT("pretransfer LookaheadBufferSize %d packsize %d\n",
+                 LookaheadBufferSize,PacketSize);
 
     {
         UINT temp;
@@ -403,9 +398,8 @@ ProtocolReceive(
         GetDataPtr(NdisPacket, 0, &BufferData, &temp);
     }
 
-    LA_DbgPrint(DEBUG_DATALINK,
-                ("pretransfer LookaheadBufferSize %d HeaderBufferSize %d packsize %d\n",
-                 LookaheadBufferSize,HeaderBufferSize,PacketSize));
+    DPRINT("pretransfer LookaheadBufferSize %d HeaderBufferSize %d packsize %d\n",
+                 LookaheadBufferSize,HeaderBufferSize,PacketSize);
 
     /* Get the data */
     NdisTransferData(&NdisStatus,
@@ -416,7 +410,7 @@ ProtocolReceive(
                      NdisPacket,
                      &BytesTransferred);
 
-    LA_DbgPrint(DEBUG_DATALINK, ("Calling complete\n"));
+    DPRINT("Calling complete\n");
 
     if (NdisStatus != NDIS_STATUS_PENDING)
     {
@@ -428,7 +422,7 @@ ProtocolReceive(
 
     /* Release the packet descriptor */
     KeReleaseSpinLockFromDpcLevel(&Adapter->Lock);
-    LA_DbgPrint(DEBUG_DATALINK, ("leaving\n"));
+    DPRINT("leaving\n");
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -444,7 +438,7 @@ NTAPI
 ProtocolReceiveComplete(
     NDIS_HANDLE BindingContext)
 {
-    LA_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
+    DPRINT("Called.\n");
 }
 
 
@@ -464,7 +458,7 @@ ProtocolStatus(
     PVOID StatusBuffer,
     UINT StatusBufferSize)
 {
-    LA_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
+    DPRINT("Called.\n");
 }
 
 
@@ -478,7 +472,7 @@ NTAPI
 ProtocolStatusComplete(
     NDIS_HANDLE NdisBindingContext)
 {
-    LA_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
+    DPRINT("Called.\n");
 }
 
 /*!
@@ -503,7 +497,7 @@ ProtocolBindAdapter(
 {
     /* XXX confirm that this is still true, or re-word the following comment */
     /* we get to ignore BindContext because we will never pend an operation with NDIS */
-    LA_DbgPrint(DEBUG_DATALINK, ("Called with registry path %wZ\n", SystemSpecific1));
+    DPRINT("Called with registry path %wZ\n", SystemSpecific1);
     *Status = LANRegisterAdapter(DeviceName, SystemSpecific1);
 }
 
@@ -525,7 +519,7 @@ LANTransmit(
 {
     NDIS_STATUS NdisStatus;
 
-    LA_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
+    DPRINT("Called.\n");
 
     if (Adapter->State == LAN_STATE_STARTED)
     {
@@ -566,8 +560,8 @@ LANTransmitInternal(PLAN_PACKET_HEADER ToWrite, UINT OverallLength)
     GetDataPtr(NdisPacket, 0, (PCHAR *)&EthHeader, &Size);
     if (!EthHeader) goto end;
 
-    LA_DbgPrint(MID_TRACE,("Writing %d bytes of Dst\n",
-                           ToWrite->Fixed.AddressLen));
+    DPRINT1("Writing %d bytes of Dst\n",
+                           ToWrite->Fixed.AddressLen);
 
     /* Handle broadcast for other media types here */
     if (ToWrite->Fixed.AddressLen)
@@ -579,15 +573,13 @@ LANTransmitInternal(PLAN_PACKET_HEADER ToWrite, UINT OverallLength)
     else
         memset(EthHeader->DstAddr, -1, sizeof(EthHeader->DstAddr));
 
-    LA_DbgPrint(MID_TRACE,
-                ("Writing %d bytes of Src\n", Adapter->HWAddressLength));
+    DPRINT1("Writing %d bytes of Src\n", Adapter->HWAddressLength);
 
     RtlCopyMemory(EthHeader->SrcAddr,
                   Adapter->HWAddress,
                   Adapter->HWAddressLength);
 
-    LA_DbgPrint(MID_TRACE,
-                ("Writing %d bytes of payload\n", PayloadSize));
+    DPRINT1("Writing %d bytes of payload\n", PayloadSize);
 
     EthHeader->EType = ToWrite->Fixed.PacketType;
     RtlCopyMemory(EthHeader + 1,
@@ -621,7 +613,7 @@ BindAdapter(PLAN_ADAPTER Adapter, PNDIS_STRING RegistryPath)
     /*NTSTATUS Status;*/
     /*HANDLE RegHandle = 0;*/
 
-    LA_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
+    DPRINT("Called.\n");
 
 }
 
@@ -647,12 +639,12 @@ LANRegisterAdapter(
     UINT Speed;
     PLAN_DEVICE_EXT DeviceExt = LanDeviceObject->DeviceExtension;
 
-    LA_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
+    DPRINT("Called.\n");
 
     Adapter = exAllocatePool(NonPagedPool, sizeof(LAN_ADAPTER));
     if (!Adapter)
     {
-        LA_DbgPrint(MIN_TRACE, ("Insufficient resources.\n"));
+        DPRINT1("Insufficient resources.\n");
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -673,7 +665,7 @@ LANRegisterAdapter(
     /* Initialize array with media IDs we support */
     MediaArray[MEDIA_ETH] = NdisMedium802_3;
 
-    LA_DbgPrint(DEBUG_DATALINK,("opening adapter %wZ\n", AdapterName));
+    DPRINT("opening adapter %wZ\n", AdapterName);
 
     /* Open the adapter. */
     NdisOpenAdapter(&NdisStatus,
@@ -718,7 +710,7 @@ LANRegisterAdapter(
 
     default:
         /* Unsupported media */
-        LA_DbgPrint(MIN_TRACE, ("Unsupported media.\n"));
+        DPRINT1("Unsupported media.\n");
         exFreePool(Adapter);
         return NDIS_STATUS_NOT_SUPPORTED;
     }
@@ -743,7 +735,7 @@ LANRegisterAdapter(
                           sizeof(UINT));
     if (NdisStatus != NDIS_STATUS_SUCCESS)
     {
-        LA_DbgPrint(MIN_TRACE, ("Query for maximum packet size failed.\n"));
+        DPRINT1("Query for maximum packet size failed.\n");
         exFreePool(Adapter);
         return NdisStatus;
     }
@@ -769,7 +761,7 @@ LANRegisterAdapter(
                           Adapter->HWAddressLength);
     if (NdisStatus != NDIS_STATUS_SUCCESS)
     {
-        LA_DbgPrint(MIN_TRACE, ("Query for current hardware address failed.\n"));
+        DPRINT1("Query for current hardware address failed.\n");
         exFreePool(Adapter);
         return NdisStatus;
     }
@@ -782,7 +774,7 @@ LANRegisterAdapter(
                           sizeof(UINT));
     if (NdisStatus != NDIS_STATUS_SUCCESS)
     {
-        LA_DbgPrint(MIN_TRACE, ("Query for maximum link speed failed.\n"));
+        DPRINT1("Query for maximum link speed failed.\n");
         exFreePool(Adapter);
         return NdisStatus;
     }
@@ -809,9 +801,8 @@ LANRegisterAdapter(
                           sizeof(ULONG));
     if (NdisStatus != NDIS_STATUS_SUCCESS)
     {
-        LA_DbgPrint(MID_TRACE,
-                    ("Could not set lookahead buffer size (0x%X).\n",
-                     NdisStatus));
+        DPRINT1("Could not set lookahead buffer size (0x%X).\n",
+                     NdisStatus);
         return NdisStatus;
     }
 
@@ -823,14 +814,14 @@ LANRegisterAdapter(
                           sizeof(UINT));
     if (NdisStatus != NDIS_STATUS_SUCCESS)
     {
-        LA_DbgPrint(MID_TRACE, ("Could not set packet filter (0x%X).\n",
-                                NdisStatus));
+        DPRINT1("Could not set packet filter (0x%X).\n",
+                                NdisStatus);
         return NdisStatus;
     }
 
     Adapter->State = LAN_STATE_STARTED;
 
-    LA_DbgPrint(DEBUG_DATALINK, ("Leaving.\n"));
+    DPRINT("Leaving.\n");
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -851,7 +842,7 @@ LANUnregisterAdapter(
     NDIS_HANDLE NdisHandle;
     NDIS_STATUS NdisStatus = NDIS_STATUS_SUCCESS;
 
-    LA_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* Unlink the adapter from the list */
     RemoveEntryList(&Adapter->ListEntry);
@@ -896,7 +887,7 @@ LANRegisterProtocol(PNDIS_STRING Name)
     NDIS_PROTOCOL_CHARACTERISTICS ProtChars;
     PLAN_DEVICE_EXT DeviceExt = LanDeviceObject->DeviceExtension;
 
-    LA_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
+    DPRINT("Called.\n");
 
     InitializeListHead(&DeviceExt->AdapterListHead);
     InitializeListHead(&DeviceExt->ProtocolListHead);
@@ -927,7 +918,7 @@ LANRegisterProtocol(PNDIS_STRING Name)
                          sizeof(NDIS_PROTOCOL_CHARACTERISTICS));
     if (NdisStatus != NDIS_STATUS_SUCCESS)
     {
-        LA_DbgPrint(MID_TRACE, ("NdisRegisterProtocol failed, status 0x%x\n", NdisStatus));
+        DPRINT1("NdisRegisterProtocol failed, status 0x%x\n", NdisStatus);
         return (NTSTATUS)NdisStatus;
     }
 
@@ -944,7 +935,7 @@ LANUnregisterProtocol(VOID)
 {
     PLAN_DEVICE_EXT DeviceExt = LanDeviceObject->DeviceExtension;
 
-    LA_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
+    DPRINT("Called.\n");
 
     NDIS_STATUS NdisStatus;
     PLIST_ENTRY CurrentEntry;
@@ -1000,7 +991,7 @@ LanCreateProtocol(
     Proto->NumEtherTypes = EaInfo->EaValueLength / sizeof(USHORT);
     ProtoNumbersToMatch = EaInfo->EaName + EaInfo->EaNameLength + 1;
 
-    LA_DbgPrint(MID_TRACE,("NumEtherTypes: %d\n", Proto->NumEtherTypes));
+    DPRINT1("NumEtherTypes: %d\n", Proto->NumEtherTypes);
 
     RtlCopyMemory(Proto->EtherType,
                   ProtoNumbersToMatch,
@@ -1010,7 +1001,7 @@ LanCreateProtocol(
 
     FileObject->FsContext = Proto;
 
-    LA_DbgPrint(MID_TRACE,("DeviceExt: %x, Proto %x\n", DeviceExt, Proto));
+    DPRINT1("DeviceExt: %x, Proto %x\n", DeviceExt, Proto);
 
     ExInterlockedInsertTailList(&DeviceExt->ProtocolListHead,
                                 &Proto->ListEntry,
@@ -1019,7 +1010,7 @@ LanCreateProtocol(
     Irp->IoStatus.Information = 0;
     Irp->IoStatus.Status = STATUS_SUCCESS;
 
-    LA_DbgPrint(MID_TRACE,("Status %x\n", Irp->IoStatus.Status));
+    DPRINT1("Status %x\n", Irp->IoStatus.Status);
 
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
@@ -1040,7 +1031,7 @@ LanCloseProtocol(
     PIRP ReadIrp;
     NTSTATUS Status;
 
-    LA_DbgPrint(MID_TRACE,("Called\n"));
+    DPRINT1("Called\n");
 
     KeAcquireSpinLock(&DeviceExt->Lock, &OldIrql);
 
@@ -1060,7 +1051,7 @@ LanCloseProtocol(
 
     KeReleaseSpinLock(&DeviceExt->Lock, OldIrql);
 
-    LA_DbgPrint(MID_TRACE,("Deleting %x\n"));
+    DPRINT1("Deleting %x\n");
 
     ExFreePool(Proto);
 
@@ -1106,7 +1097,7 @@ LanWriteData(
     PLAN_PACKET_HEADER ToWrite = Irp->AssociatedIrp.SystemBuffer;
     NTSTATUS Status = STATUS_SUCCESS;
 
-    LA_DbgPrint(MID_TRACE,("Called\n"));
+    DPRINT1("Called\n");
 
     Irp->IoStatus.Information =
         LANTransmitInternal(ToWrite, IrpSp->Parameters.Write.Length);
@@ -1128,15 +1119,15 @@ LanReadData(
     PFILE_OBJECT FileObject = IrpSp->FileObject;
     PLAN_PROTOCOL Proto = FileObject->FsContext;
 
-    LA_DbgPrint(MID_TRACE,("Called on %x (%x)\n", Proto, Irp));
+    DPRINT1("Called on %x (%x)\n", Proto, Irp);
 
     ExInterlockedInsertTailList(&Proto->ReadIrpListHead,
                                 &Irp->Tail.Overlay.ListEntry,
                                 &DeviceExt->Lock);
 
-    LA_DbgPrint(MID_TRACE,("List: %x %x\n",
+    DPRINT1("List: %x %x\n",
                            Proto->ReadIrpListHead.Flink,
-                           Irp->Tail.Overlay.ListEntry.Flink));
+                           Irp->Tail.Overlay.ListEntry.Flink);
 
     IoMarkIrpPending(Irp);
     return STATUS_PENDING;
@@ -1157,7 +1148,7 @@ LanEnumAdapters(
     PUINT Output = Irp->AssociatedIrp.SystemBuffer;
     KIRQL OldIrql;
 
-    LA_DbgPrint(MID_TRACE,("Called\n"));
+    DPRINT1("Called\n");
 
     KeAcquireSpinLock(&DeviceExt->Lock, &OldIrql);
 
@@ -1184,7 +1175,7 @@ LanEnumAdapters(
 
     KeReleaseSpinLock(&DeviceExt->Lock, OldIrql);
 
-    LA_DbgPrint(MID_TRACE,("Ending\n"));
+    DPRINT1("Ending\n");
 
     Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information = (PCHAR)Output -
@@ -1214,7 +1205,7 @@ LanAdapterInfo(
     PLAN_ADAPTER_INFO_S Info;
     KIRQL OldIrql;
 
-    LA_DbgPrint(MID_TRACE,("Called\n"));
+    DPRINT1("Called\n");
 
     KeAcquireSpinLock(&DeviceExt->Lock, &OldIrql);
 
@@ -1303,7 +1294,7 @@ LanAdapterInfo(
 
     KeReleaseSpinLock(&DeviceExt->Lock, OldIrql);
 
-    LA_DbgPrint(MID_TRACE,("Ending (%d bytes)\n", BytesNeeded));
+    DPRINT1("Ending (%d bytes)\n", BytesNeeded);
 
     Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information = BytesNeeded;
@@ -1326,7 +1317,7 @@ LanSetBufferedMode(
     NTSTATUS Status = STATUS_SUCCESS;
     KIRQL OldIrql;
 
-    LA_DbgPrint(MID_TRACE,("Called %x\n", Proto));
+    DPRINT1("Called %x\n", Proto);
 
     KeAcquireSpinLock(&DeviceExt->Lock, &OldIrql);
 
@@ -1340,7 +1331,7 @@ LanSetBufferedMode(
 
     KeReleaseSpinLock(&DeviceExt->Lock, OldIrql);
 
-    LA_DbgPrint(MID_TRACE,("Set buffered for %x to %d\n", Proto->Buffered));
+    DPRINT1("Set buffered for %x to %d\n", Proto->Buffered);
 
     Status = Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information = 0;
@@ -1358,11 +1349,11 @@ LanDispatch(
     PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
     NTSTATUS Status = STATUS_SUCCESS;
 
-    LA_DbgPrint(MID_TRACE,("LanDispatch: %d\n", IrpSp->MajorFunction));
+    DPRINT1("LanDispatch: %d\n", IrpSp->MajorFunction);
     if (IrpSp->MajorFunction != IRP_MJ_CREATE)
     {
-        LA_DbgPrint(MID_TRACE,("FO %x, IrpSp->FO %x\n",
-                               FileObject, IrpSp->FileObject));
+        DPRINT1("FO %x, IrpSp->FO %x\n",
+                               FileObject, IrpSp->FileObject);
         ASSERT(FileObject == IrpSp->FileObject);
     }
 
@@ -1387,9 +1378,9 @@ LanDispatch(
 
     case IRP_MJ_DEVICE_CONTROL:
     {
-        LA_DbgPrint(MID_TRACE,("DeviceIoControl: %x\n",
+        DPRINT1("DeviceIoControl: %x\n",
                                IrpSp->Parameters.DeviceIoControl.
-                               IoControlCode));
+                               IoControlCode);
         switch (IrpSp->Parameters.DeviceIoControl.IoControlCode)
         {
         case IOCTL_IF_ENUM_ADAPTERS:
@@ -1404,9 +1395,9 @@ LanDispatch(
         default:
             Status = STATUS_NOT_IMPLEMENTED;
             Irp->IoStatus.Information = 0;
-            LA_DbgPrint(MIN_TRACE, ("Unknown IOCTL (0x%x)\n",
+            DPRINT1("Unknown IOCTL (0x%x)\n",
                                     IrpSp->Parameters.DeviceIoControl.
-                                    IoControlCode));
+                                    IoControlCode);
             break;
         }
         break;
@@ -1415,13 +1406,12 @@ LanDispatch(
     /* unsupported operations */
     default:
         Status = STATUS_NOT_IMPLEMENTED;
-        LA_DbgPrint(MIN_TRACE,
-                    ("Irp: Unknown Major code was %x\n",
-                     IrpSp->MajorFunction));
+        DPRINT1("Irp: Unknown Major code was %x\n",
+                     IrpSp->MajorFunction);
         break;
     }
 
-    LA_DbgPrint(MID_TRACE, ("Returning %x\n", Status));
+    DPRINT1("Returning %x\n", Status);
     Irp->IoStatus.Status = Status;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
@@ -1486,8 +1476,8 @@ DriverEntry(
 
     DeviceObject->Flags |= DO_BUFFERED_IO;
 
-    LA_DbgPrint(MID_TRACE,("Device created: object %x ext %x\n",
-                           DeviceObject, DeviceExt));
+    DPRINT1("Device created: object %x ext %x\n",
+                           DeviceObject, DeviceExt);
 
     return (Status);
 }

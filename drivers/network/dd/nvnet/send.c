@@ -495,7 +495,7 @@ MiniportSend(
     UINT TotalLength;
     NDIS_STATUS Status;
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     NdisQueryPacketLength(Packet, &TotalLength);
 

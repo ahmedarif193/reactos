@@ -30,8 +30,8 @@ ProcessTransmitDescriptorsLegacy(
         if (Flags & NV_TX_VALID)
             break;
 
-        NDIS_DbgPrint(MIN_TRACE, ("Packet transmitted (flags %lx)\n",
-                                  Flags & FLAG_MASK_V1));
+        DPRINT1("Packet transmitted (flags %lx)\n",
+                                  Flags & FLAG_MASK_V1);
 
         if (Flags & NV_TX_ERROR)
         {
@@ -97,8 +97,8 @@ ProcessTransmitDescriptors32(
         if (Flags & NV_TX_VALID)
             break;
 
-        NDIS_DbgPrint(MIN_TRACE, ("Packet transmitted (flags %lx)\n",
-                                  Flags & FLAG_MASK_V2));
+        DPRINT1("Packet transmitted (flags %lx)\n",
+                                  Flags & FLAG_MASK_V2);
 
         if (Flags & NV_TX2_ERROR)
         {
@@ -165,8 +165,8 @@ ProcessTransmitDescriptors64(
             }
         }
 
-        NDIS_DbgPrint(MIN_TRACE, ("Packet transmitted (flags %lx)\n",
-                                  Flags & FLAG_MASK_V2));
+        DPRINT1("Packet transmitted (flags %lx)\n",
+                                  Flags & FLAG_MASK_V2);
 
         if (Flags & NV_TX2_ERROR)
         {
@@ -205,12 +205,12 @@ HandleLengthError(
     DBG_UNREFERENCED_LOCAL_VARIABLE(Buffer);
 
     /* TODO */
-    NDIS_DbgPrint(MAX_TRACE, ("() Length error detected (%u): \n", *Length));
+    DPRINT("() Length error detected (%u): \n", *Length);
     for (i = 0; i < *Length; ++i)
     {
-        NDIS_DbgPrint(MAX_TRACE, ("%02x ", Buffer[i]));
+        DPRINT("%02x ", Buffer[i]);
     }
-    NDIS_DbgPrint(MAX_TRACE, ("\n\n*** Please report it to the team! ***\n\n"));
+    DPRINT("\n\n*** Please report it to the team! ***\n\n");
 
     return FALSE;
 }
@@ -278,8 +278,8 @@ ProcessReceiveDescriptors(
                 }
             }
 
-            NDIS_DbgPrint(MIN_TRACE, ("Packet %d received (length %d, flags %lx)\n",
-                                      Adapter->CurrentRx, Length, Flags & FLAG_MASK_V2));
+            DPRINT1("Packet %d received (length %d, flags %lx)\n",
+                                      Adapter->CurrentRx, Length, Flags & FLAG_MASK_V2);
         }
         else
         {
@@ -319,8 +319,8 @@ ProcessReceiveDescriptors(
             }
             ++Adapter->Statistics.ReceiveOk;
 
-            NDIS_DbgPrint(MIN_TRACE, ("Packet %d received (length %d, flags %lx)\n",
-                                      Adapter->CurrentRx, Length, Flags & FLAG_MASK_V1));
+            DPRINT1("Packet %d received (length %d, flags %lx)\n",
+                                      Adapter->CurrentRx, Length, Flags & FLAG_MASK_V1);
         }
 
         NdisMEthIndicateReceive(Adapter->AdapterHandle,
@@ -387,7 +387,7 @@ HandleLinkStateChange(
     ULONG MiiStatus;
     BOOLEAN Connected, Report = FALSE;
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     NdisDprAcquireSpinLock(&Adapter->Lock);
 
@@ -441,7 +441,7 @@ HandleRecoverableError(
     _In_ PNVNET_ADAPTER Adapter)
 {
     /* TODO */
-    NDIS_DbgPrint(MAX_TRACE, ("() Recoverable error detected\n"));
+    DPRINT("() Recoverable error detected\n");
 }
 
 VOID
@@ -454,7 +454,7 @@ MiniportHandleInterrupt(
     ULONG RxProcessed, TotalTxProcessed = 0, TotalRxProcessed = 0;
     LIST_ENTRY SendReadyList;
 
-    NDIS_DbgPrint(MIN_TRACE, ("() Events 0x%lx\n", InterruptStatus));
+    DPRINT1("() Events 0x%lx\n", InterruptStatus);
 
     if (!(Adapter->Flags & NV_ACTIVE))
         return;
@@ -486,7 +486,7 @@ MiniportHandleInterrupt(
         TotalRxProcessed += RxProcessed;
     }
 
-    NDIS_DbgPrint(MIN_TRACE, ("Total TX: %d, RX: %d\n", TotalTxProcessed, TotalRxProcessed));
+    DPRINT1("Total TX: %d, RX: %d\n", TotalTxProcessed, TotalRxProcessed);
 
     /* Moderate the interrupts */
     if (Adapter->OptimizationMode == NV_OPTIMIZATION_MODE_DYNAMIC)
@@ -523,7 +523,7 @@ MiniportISR(
     PNVNET_ADAPTER Adapter = (PNVNET_ADAPTER)MiniportAdapterContext;
     ULONG InterruptStatus;
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     InterruptStatus = NV_READ(Adapter, NvRegIrqStatus);
 

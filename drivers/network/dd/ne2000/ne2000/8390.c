@@ -29,7 +29,7 @@ static BOOLEAN ProbeAddressForNIC(
 {
     UCHAR Tmp;
 
-    NDIS_DbgPrint(MID_TRACE, ("Probing address 0x%x\n", address));
+    DPRINT1("Probing address 0x%x\n", address);
 
     /* Disable interrupts */
     NdisRawWritePortUchar(address + PG0_IMR, 0);
@@ -62,12 +62,12 @@ BOOLEAN NICCheck(
 {
     int i;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called\n"));
+    DPRINT("Called\n");
 
     /* first try the supplied value */
     if(ProbeAddressForNIC(Adapter->IoBaseAddress))
     {
-        NDIS_DbgPrint(MID_TRACE, ("Found adapter at 0x%x\n", Adapter->IoBaseAddress));
+        DPRINT1("Found adapter at 0x%x\n", Adapter->IoBaseAddress);
         return TRUE;
     }
 
@@ -76,13 +76,13 @@ BOOLEAN NICCheck(
     {
         if(ProbeAddressForNIC(ProbeAddressList[i]))
         {
-            NDIS_DbgPrint(MID_TRACE, ("Found adapter at address 0x%x\n", ProbeAddressList[i]));
+            DPRINT1("Found adapter at address 0x%x\n", ProbeAddressList[i]);
             Adapter->IoBaseAddress = ProbeAddressList[i];
             return TRUE;
         }
     }
 
-    NDIS_DbgPrint(MIN_TRACE,("Adapter NOT found!\n"));
+    DPRINT1("Adapter NOT found!\n");
     return FALSE;
 }
 
@@ -131,7 +131,7 @@ static BOOLEAN NICTestRAM(
 {
     ULONG_PTR Base;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* Locate RAM base address */
     for (Base = 0x0400; Base < 0x10000; Base += 0x0400) {
@@ -141,7 +141,7 @@ static BOOLEAN NICTestRAM(
 
     if (Base == 0x10000) {
         /* No RAM on this board */
-        NDIS_DbgPrint(MIN_TRACE, ("No RAM found on board.\n"));
+        DPRINT1("No RAM found on board.\n");
         return FALSE;
     }
 
@@ -155,8 +155,8 @@ static BOOLEAN NICTestRAM(
 
     Adapter->RamSize = (UINT)(Base - (ULONG_PTR)Adapter->RamBase);
 
-    NDIS_DbgPrint(MID_TRACE, ("RAM is at (0x%X). Size is (0x%X).\n",
-        Adapter->RamBase, Adapter->RamSize));
+    DPRINT1("RAM is at (0x%X). Size is (0x%X).\n",
+        Adapter->RamBase, Adapter->RamSize);
 
     return TRUE;
 }
@@ -231,7 +231,7 @@ static BOOLEAN NICReadSAPROM(
     UCHAR Buffer[32];
     UCHAR WordLength;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* Read Station Address PROM (SAPROM) which is 16 bytes at remote DMA address 0.
        Some cards double the data read which we must compensate for */
@@ -258,7 +258,7 @@ static BOOLEAN NICReadSAPROM(
 
     /* If WordLength is 2 the data read before was doubled. We must compensate for this */
     if (WordLength == 2) {
-        NDIS_DbgPrint(MAX_TRACE,("NE2000 or compatible network adapter found.\n"));
+        DPRINT("NE2000 or compatible network adapter found.\n");
 
         Adapter->WordMode = TRUE;
 
@@ -277,7 +277,7 @@ static BOOLEAN NICReadSAPROM(
 
         return TRUE;
     } else {
-        NDIS_DbgPrint(MAX_TRACE, ("NE1000 or compatible network adapter found.\n"));
+        DPRINT("NE1000 or compatible network adapter found.\n");
 
         Adapter->WordMode = FALSE;
 
@@ -300,7 +300,7 @@ NDIS_STATUS NICInitialize(
 {
     UCHAR Tmp;
 
-    NDIS_DbgPrint(MID_TRACE, ("Called.\n"));
+    DPRINT1("Called.\n");
 
     /* Reset the NIC */
     NdisRawReadPortUchar(Adapter->IOBase + NIC_RESET, &Tmp);
@@ -331,10 +331,10 @@ NDIS_STATUS NICInitialize(
     if (!NICReadSAPROM(Adapter))
         return NDIS_STATUS_ADAPTER_NOT_FOUND;
 
-    NDIS_DbgPrint(MID_TRACE, ("Station address is (%02X %02X %02X %02X %02X %02X).\n",
+    DPRINT1("Station address is (%02X %02X %02X %02X %02X %02X).\n",
         Adapter->StationAddress[0], Adapter->StationAddress[1],
         Adapter->StationAddress[2], Adapter->StationAddress[3],
-        Adapter->StationAddress[4], Adapter->StationAddress[5]));
+        Adapter->StationAddress[4], Adapter->StationAddress[5]);
 
     /* Select page 0 and start NIC */
     NdisRawWritePortUchar(Adapter->IOBase + PG0_CR, CR_STA | CR_RD2 | CR_PAGE0);
@@ -361,7 +361,7 @@ NDIS_STATUS NICSetup(
  *     The NIC is put into loopback mode
  */
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     if (Adapter->WordMode ) {
         /* Initialize DCR - Data Configuration Register (word mode/4 words FIFO) */
@@ -420,7 +420,7 @@ NDIS_STATUS NICSetup(
     Adapter->ReceiveError           = FALSE;
     Adapter->TransmitError          = FALSE;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Leaving.\n"));
+    DPRINT("Leaving.\n");
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -436,7 +436,7 @@ NDIS_STATUS NICStart(
  *     Status of operation
  */
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* Take NIC out of loopback mode */
     NdisRawWritePortUchar(Adapter->IOBase + PG0_TCR, 0x00);
@@ -461,7 +461,7 @@ NDIS_STATUS NICStop(
     UCHAR Tmp;
     UINT i;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* Select page 0 and stop NIC */
     NdisRawWritePortUchar(Adapter->IOBase + PG0_CR, CR_STP | CR_RD2 | CR_PAGE0);
@@ -481,7 +481,7 @@ NDIS_STATUS NICStop(
 
 #if DBG
     if (i == 4)
-        NDIS_DbgPrint(MIN_TRACE, ("NIC was not reset after 2ms.\n"));
+        DPRINT1("NIC was not reset after 2ms.\n");
 #endif
 
     /* Initialize RCR - Receive Configuration Register (monitor mode) */
@@ -509,7 +509,7 @@ NDIS_STATUS NICReset(
 {
     UCHAR Tmp;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* Stop the NIC */
     NICStop(Adapter);
@@ -542,7 +542,7 @@ static VOID NICStartTransmit(
 	UCHAR FrameStart;
     UCHAR Tmp;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     if (Adapter->TXCurrent < 0) return;
 
@@ -556,7 +556,7 @@ static VOID NICStartTransmit(
 //        Adapter->TXStart + Adapter->TXCurrent * DRIVER_BLOCK_SIZE);
 
     NdisRawWritePortUchar(Adapter->IOBase + PG0_TPSR, FrameStart);
-    //NDIS_DbgPrint(MID_TRACE, ("Setting start of frame to (%d).\n", FrameStart));
+    //DPRINT1("Setting start of frame to (%d).\n", FrameStart);
 
     /* Set length of frame */
     Length = Adapter->TXSize[Adapter->TXCurrent];
@@ -566,11 +566,11 @@ static VOID NICStartTransmit(
     /* Start transmitting */
     NdisRawWritePortUchar(Adapter->IOBase + PG0_CR, CR_STA | CR_TXP | CR_RD2);
 
-    NDIS_DbgPrint(MID_TRACE, ("Transmitting. FrameStart (%d)  TXCurrent (%d)  TXStart (%d)  Length (%d).\n\n",
+    DPRINT1("Transmitting. FrameStart (%d)  TXCurrent (%d)  TXStart (%d)  Length (%d).\n\n",
 		FrameStart,
         Adapter->TXCurrent,
 		Adapter->TXStart,
-        Length));
+        Length);
 
 }
 
@@ -626,7 +626,7 @@ VOID NICUpdateCounters(
 {
     UCHAR Tmp;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     NdisRawReadPortUchar(Adapter->IOBase + PG0_CNTR0, &Tmp);
     Adapter->FrameAlignmentErrors += Tmp;
@@ -688,7 +688,7 @@ VOID NICReadDataAlign(
 
 #if DBG
     if (Count == 0xFFFF)
-        NDIS_DbgPrint(MIN_TRACE, ("Remote DMA did not complete.\n"));
+        DPRINT1("Remote DMA did not complete.\n");
 #endif
 
     /* Clear remote DMA bit in ISR - Interrupt Status Register */
@@ -743,7 +743,7 @@ VOID NICWriteDataAlign(
 
 #if DBG
     if (Count == 0xFFFF)
-        NDIS_DbgPrint(MIN_TRACE, ("Remote DMA did not complete.\n"));
+        DPRINT1("Remote DMA did not complete.\n");
 #endif
 
     /* Clear remote DMA bit in ISR - Interrupt Status Register */
@@ -780,7 +780,7 @@ VOID NICWriteDataAlign(
 
 #if DBG
     if (Count == 0xFFFF)
-        NDIS_DbgPrint(MIN_TRACE, ("Remote DMA did not complete.\n"));
+        DPRINT1("Remote DMA did not complete.\n");
 #endif
 
     /* Clear remote DMA bit in ISR - Interrupt Status Register */
@@ -905,13 +905,13 @@ static VOID NICIndicatePacket(
                 Adapter->PacketOffset + sizeof(PACKET_HEADER),
                 IndicateLength + DRIVER_HEADER_SIZE);
 
-    NDIS_DbgPrint(MID_TRACE, ("Indicating (%d) bytes.\n", IndicateLength));
-    NDIS_DbgPrint(MID_TRACE, ("ne2000!NICIndicatePacket: Indicating (%d) bytes.\n", IndicateLength));
+    DPRINT1("Indicating (%d) bytes.\n", IndicateLength);
+    DPRINT1("ne2000!NICIndicatePacket: Indicating (%d) bytes.\n", IndicateLength);
 
 #if 0
-    NDIS_DbgPrint(MAX_TRACE, ("FRAME:\n"));
+    DPRINT("FRAME:\n");
     for (i = 0; i < (IndicateLength + 7) / 8; i++) {
-        NDIS_DbgPrint(MAX_TRACE, ("%02X %02X %02X %02X %02X %02X %02X %02X\n",
+        DPRINT("%02X %02X %02X %02X %02X %02X %02X %02X\n",
             Adapter->Lookahead[i*8+0],
             Adapter->Lookahead[i*8+1],
             Adapter->Lookahead[i*8+2],
@@ -919,13 +919,13 @@ static VOID NICIndicatePacket(
             Adapter->Lookahead[i*8+4],
             Adapter->Lookahead[i*8+5],
             Adapter->Lookahead[i*8+6],
-            Adapter->Lookahead[i*8+7]));
+            Adapter->Lookahead[i*8+7]);
     }
 #endif
 
     if (IndicateLength >= DRIVER_HEADER_SIZE) {
-	NDIS_DbgPrint(MAX_TRACE,("Adapter->MiniportAdapterHandle: %x\n",
-				 Adapter->MiniportAdapterHandle));
+	DPRINT("Adapter->MiniportAdapterHandle: %x\n",
+				 Adapter->MiniportAdapterHandle);
         NdisMEthIndicateReceive(Adapter->MiniportAdapterHandle,
                                 NULL,
                                 (PVOID)&Adapter->Lookahead,
@@ -955,7 +955,7 @@ static VOID NICReadPacket(
 {
     BOOLEAN SkipPacket = FALSE;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* Get the header of the next packet in the receive ring */
     Adapter->PacketOffset = Adapter->NextPacket << 8;
@@ -964,14 +964,14 @@ static VOID NICReadPacket(
                 Adapter->PacketOffset,
                 sizeof(PACKET_HEADER));
 
-    NDIS_DbgPrint(MAX_TRACE, ("HEADER: (Status)       (0x%X)\n", Adapter->PacketHeader.Status));
-    NDIS_DbgPrint(MAX_TRACE, ("HEADER: (NextPacket)   (0x%X)\n", Adapter->PacketHeader.NextPacket));
-    NDIS_DbgPrint(MAX_TRACE, ("HEADER: (PacketLength) (0x%X)\n", Adapter->PacketHeader.PacketLength));
+    DPRINT("HEADER: (Status)       (0x%X)\n", Adapter->PacketHeader.Status);
+    DPRINT("HEADER: (NextPacket)   (0x%X)\n", Adapter->PacketHeader.NextPacket);
+    DPRINT("HEADER: (PacketLength) (0x%X)\n", Adapter->PacketHeader.PacketLength);
 
     if (Adapter->PacketHeader.PacketLength < 64  ||
         Adapter->PacketHeader.PacketLength > 1518) {	/* XXX I don't think the CRC will show up... should be 1514 */
-        NDIS_DbgPrint(MAX_TRACE, ("Bogus packet size (%d).\n",
-            Adapter->PacketHeader.PacketLength));
+        DPRINT("Bogus packet size (%d).\n",
+            Adapter->PacketHeader.PacketLength);
         SkipPacket = TRUE;
     }
 
@@ -979,8 +979,8 @@ static VOID NICReadPacket(
         /* Skip packet */
         Adapter->NextPacket = Adapter->CurrentPage;
     } else {
-	NDIS_DbgPrint(MAX_TRACE,("Adapter->MiniportAdapterHandle: %x\n",
-				 Adapter->MiniportAdapterHandle));
+	DPRINT("Adapter->MiniportAdapterHandle: %x\n",
+				 Adapter->MiniportAdapterHandle);
         NICIndicatePacket(Adapter);
 
         /* Go to the next free buffer in receive ring */
@@ -1011,7 +1011,7 @@ static VOID NICWritePacket(
     UINT TXStart;
     UINT TXStop;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     TXStart = Adapter->TXStart * DRIVER_BLOCK_SIZE;
     TXStop  = (Adapter->TXStart + Adapter->TXCount) * DRIVER_BLOCK_SIZE;
@@ -1022,9 +1022,9 @@ static VOID NICWritePacket(
                     &SrcBuffer,
                     &Adapter->TXSize[Adapter->TXNext]);
 
-    NDIS_DbgPrint(MID_TRACE, ("Packet (%d) is now size (%d).\n",
+    DPRINT1("Packet (%d) is now size (%d).\n",
         Adapter->TXNext,
-        Adapter->TXSize[Adapter->TXNext]));
+        Adapter->TXSize[Adapter->TXNext]);
 
     NdisQueryBuffer(SrcBuffer, (PVOID)&SrcData, &SrcSize);
 
@@ -1077,7 +1077,7 @@ static BOOLEAN NICPrepareForTransmit(
     UINT BufferCount;
     PNDIS_PACKET Packet;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     /* Calculate number of buffers needed to transmit packet */
     NdisQueryPacket(Adapter->TXQueueHead,
@@ -1089,8 +1089,8 @@ static BOOLEAN NICPrepareForTransmit(
     BufferCount = (Length + DRIVER_BLOCK_SIZE - 1) / DRIVER_BLOCK_SIZE;
 
     if (BufferCount > Adapter->TXFree) {
-        NDIS_DbgPrint(MID_TRACE, ("No transmit resources. Have (%d) buffers, need (%d).\n",
-            Adapter->TXFree, BufferCount));
+        DPRINT1("No transmit resources. Have (%d) buffers, need (%d).\n",
+            Adapter->TXFree, BufferCount);
         /* We don't have the resources to transmit this packet right now */
         return FALSE;
     }
@@ -1131,7 +1131,7 @@ VOID NICTransmit(
  *     There must be at least one packet in the transmit queue
  */
 {
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     if (Adapter->TXCurrent == -1) {
         /* NIC is not transmitting, so start transmitting now */
@@ -1157,7 +1157,7 @@ static VOID HandleReceive(
     UCHAR Tmp;
     UINT PacketCount;
 
-    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+    DPRINT("Called.\n");
 
     Adapter->DoneIndicating = FALSE;
     PacketCount = 0;
@@ -1166,7 +1166,7 @@ static VOID HandleReceive(
 
     if (Adapter->BufferOverflow) {
 
-        NDIS_DbgPrint(MID_TRACE, ("Receive ring overflow.\n"));
+        DPRINT1("Receive ring overflow.\n");
 
         /* Select page 0 and stop the NIC */
         NdisRawWritePortUchar(Adapter->IOBase + PG0_CR, CR_STP | CR_RD2 | CR_PAGE0);
@@ -1186,7 +1186,7 @@ static VOID HandleReceive(
 
 #if DBG
         if (i == 4)
-            NDIS_DbgPrint(MIN_TRACE, ("NIC was not reset after 2ms.\n"));
+            DPRINT1("NIC was not reset after 2ms.\n");
 #endif
 
         if ((Adapter->InterruptStatus & (ISR_PTX | ISR_TXE)) == 0) {
@@ -1206,7 +1206,7 @@ static VOID HandleReceive(
     }
 
     if (Adapter->ReceiveError) {
-        NDIS_DbgPrint(MID_TRACE, ("Receive error.\n"));
+        DPRINT1("Receive error.\n");
 
         /* Skip this packet */
         Adapter->NextPacket = Adapter->CurrentPage;
@@ -1218,18 +1218,18 @@ static VOID HandleReceive(
     for (;;) {
         NICGetCurrentPage(Adapter);
 
-        NDIS_DbgPrint(MID_TRACE, ("Current page (0x%X)  NextPacket (0x%X).\n",
+        DPRINT1("Current page (0x%X)  NextPacket (0x%X).\n",
             Adapter->CurrentPage,
-            Adapter->NextPacket));
+            Adapter->NextPacket);
 
         if (Adapter->CurrentPage == Adapter->NextPacket) {
-            NDIS_DbgPrint(MID_TRACE, ("No more packets.\n"));
+            DPRINT1("No more packets.\n");
             break;
         } else {
-            NDIS_DbgPrint(MID_TRACE, ("Got a packet in the receive ring.\n"));
+            DPRINT1("Got a packet in the receive ring.\n");
 
-	    NDIS_DbgPrint(MAX_TRACE,("Adapter->MiniportAdapterHandle: %x\n",
-				     Adapter->MiniportAdapterHandle));
+	    DPRINT("Adapter->MiniportAdapterHandle: %x\n",
+				     Adapter->MiniportAdapterHandle);
             /* Read packet from receive buffer ring */
             NICReadPacket(Adapter);
 
@@ -1244,7 +1244,7 @@ static VOID HandleReceive(
     }
 
     if ((Adapter->TransmitPending) && (Adapter->TXCurrent != -1)) {
-        NDIS_DbgPrint(MID_TRACE, ("Retransmitting current packet at (%d).\n", Adapter->TXCurrent));
+        DPRINT1("Retransmitting current packet at (%d).\n", Adapter->TXCurrent);
         /* Retransmit packet */
         NICStartTransmit(Adapter);
         Adapter->TransmitPending = FALSE;
@@ -1279,16 +1279,16 @@ static VOID HandleTransmit(
     Length      = Adapter->TXSize[Adapter->TXCurrent];
     BufferCount = (Length + DRIVER_BLOCK_SIZE - 1) / DRIVER_BLOCK_SIZE;
 
-    NDIS_DbgPrint(MID_TRACE, ("Freeing (%d) buffers at (%d).\n",
+    DPRINT1("Freeing (%d) buffers at (%d).\n",
         BufferCount,
-        Adapter->TXCurrent));
+        Adapter->TXCurrent);
 
     Adapter->TXFree += BufferCount;
     Adapter->TXSize[Adapter->TXCurrent] = 0;
     Adapter->TXCurrent = (Adapter->TXCurrent + BufferCount) % Adapter->TXCount;
 
     if (Adapter->TXSize[Adapter->TXCurrent] == 0) {
-        NDIS_DbgPrint(MID_TRACE, ("No more packets in transmit buffer.\n"));
+        DPRINT1("No more packets in transmit buffer.\n");
 
         Adapter->TXCurrent = -1;
     }
@@ -1320,7 +1320,7 @@ VOID NTAPI MiniportHandleInterrupt(
     ISRMask = Adapter->InterruptMask;
     NdisRawReadPortUchar(Adapter->IOBase + PG0_ISR, &ISRValue);
 
-    NDIS_DbgPrint(MID_TRACE, ("ISRValue (0x%X).\n", ISRValue));
+    DPRINT1("ISRValue (0x%X).\n", ISRValue);
 
     Adapter->InterruptStatus |= (ISRValue & ISRMask);
 
@@ -1333,8 +1333,8 @@ VOID NTAPI MiniportHandleInterrupt(
             Mask = 0x01;
         }
 
-        NDIS_DbgPrint(MID_TRACE, ("Adapter->InterruptStatus (0x%X)  Mask (0x%X).\n",
-            Adapter->InterruptStatus, Mask));
+        DPRINT1("Adapter->InterruptStatus (0x%X)  Mask (0x%X).\n",
+            Adapter->InterruptStatus, Mask);
 
         /* Find next interrupt type */
         while (((Adapter->InterruptStatus & Mask) == 0) && (Mask < ISRMask))
@@ -1342,47 +1342,47 @@ VOID NTAPI MiniportHandleInterrupt(
 
         switch (Adapter->InterruptStatus & Mask) {
         case ISR_OVW:
-            NDIS_DbgPrint(MID_TRACE, ("Overflow interrupt.\n"));
+            DPRINT1("Overflow interrupt.\n");
             /* Overflow. Handled almost the same way as a receive interrupt */
             Adapter->BufferOverflow = TRUE;
 
-	    NDIS_DbgPrint(MAX_TRACE,("Adapter->MiniportAdapterHandle: %x\n",
-				     Adapter->MiniportAdapterHandle));
+	    DPRINT("Adapter->MiniportAdapterHandle: %x\n",
+				     Adapter->MiniportAdapterHandle);
 	    if(Adapter->MiniportAdapterHandle)
 		HandleReceive(Adapter);
 	    else
-		NDIS_DbgPrint(MAX_TRACE,("No miniport adapter yet\n"));
+		DPRINT("No miniport adapter yet\n");
 
             Adapter->InterruptStatus &= ~ISR_OVW;
             break;
 
         case ISR_RXE:
-            NDIS_DbgPrint(MID_TRACE, ("Receive error interrupt.\n"));
+            DPRINT1("Receive error interrupt.\n");
             NICUpdateCounters(Adapter);
 
             Adapter->ReceiveError = TRUE;
             break;
         case ISR_PRX:
-            NDIS_DbgPrint(MID_TRACE, ("Receive interrupt.\n"));
+            DPRINT1("Receive interrupt.\n");
 
-	    NDIS_DbgPrint(MAX_TRACE,("Adapter->MiniportAdapterHandle: %x\n",
-				     Adapter->MiniportAdapterHandle));
+	    DPRINT("Adapter->MiniportAdapterHandle: %x\n",
+				     Adapter->MiniportAdapterHandle);
 	    if(Adapter->MiniportAdapterHandle)
 		HandleReceive(Adapter);
 	    else
-		NDIS_DbgPrint(MAX_TRACE,("No miniport adapter yet\n"));
+		DPRINT("No miniport adapter yet\n");
 
             Adapter->InterruptStatus &= ~(ISR_PRX | ISR_RXE);
             break;
 
         case ISR_TXE:
-            NDIS_DbgPrint(MID_TRACE, ("Transmit error interrupt.\n"));
+            DPRINT1("Transmit error interrupt.\n");
             NICUpdateCounters(Adapter);
 
             Adapter->TransmitError = TRUE;
             break;
         case ISR_PTX:
-            NDIS_DbgPrint(MID_TRACE, ("Transmit interrupt.\n"));
+            DPRINT1("Transmit interrupt.\n");
 
             HandleTransmit(Adapter);
 
@@ -1390,7 +1390,7 @@ VOID NTAPI MiniportHandleInterrupt(
             break;
 
         case ISR_CNT:
-            NDIS_DbgPrint(MID_TRACE, ("Counter interrupt.\n"));
+            DPRINT1("Counter interrupt.\n");
             /* Counter overflow. Read counters from the NIC */
             NICUpdateCounters(Adapter);
 
@@ -1398,7 +1398,7 @@ VOID NTAPI MiniportHandleInterrupt(
             break;
 
         default:
-            NDIS_DbgPrint(MID_TRACE, ("Unknown interrupt. Adapter->InterruptStatus (0x%X).\n", Adapter->InterruptStatus));
+            DPRINT1("Unknown interrupt. Adapter->InterruptStatus (0x%X).\n", Adapter->InterruptStatus);
             Adapter->InterruptStatus &= ~Mask;
             break;
         }
@@ -1409,7 +1409,7 @@ VOID NTAPI MiniportHandleInterrupt(
 
         NdisRawReadPortUchar(Adapter->IOBase + PG0_ISR, &ISRValue);
 
-        NDIS_DbgPrint(MID_TRACE, ("ISRValue (0x%X).\n", ISRValue));
+        DPRINT1("ISRValue (0x%X).\n", ISRValue);
 
         Adapter->InterruptStatus |= (ISRValue & ISRMask);
     }

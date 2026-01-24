@@ -11,6 +11,10 @@
 #ifndef _AFD_H
 #define _AFD_H
 
+#ifndef NDEBUG
+#define NDEBUG
+#endif
+
 #include <ntifs.h>
 #include <ndk/obtypes.h>
 #include <tdi.h>

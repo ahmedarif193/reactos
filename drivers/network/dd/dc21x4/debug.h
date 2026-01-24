@@ -6,12 +6,14 @@
  */
 
 #pragma once
+#include <reactos/debug.h>
 
 #ifndef __RELFILE__
 #define __RELFILE__ __FILE__
 #endif
 
 #if DBG
+
 
 // #define DEBUG_TRACE
 // #define DEBUG_INFO
@@ -22,8 +24,7 @@
 #ifdef DEBUG_TRACE
 #define TRACE(fmt, ...) \
     do { \
-      if (DbgPrint("(%s:%d) %s " fmt, __RELFILE__, __LINE__, __FUNCTION__, ##__VA_ARGS__)) \
-          DbgPrint("(%s:%d) DbgPrint() failed!\n", __RELFILE__, __LINE__); \
+        DPRINT("%s: " fmt, __FUNCTION__, ##__VA_ARGS__); \
     } while (0)
 
 #else
@@ -33,8 +34,7 @@
 #ifdef DEBUG_INFO
 #define INFO(fmt, ...) \
     do { \
-      if (DbgPrint("(%s:%d) %s " fmt, __RELFILE__, __LINE__, __FUNCTION__, ##__VA_ARGS__)) \
-          DbgPrint("(%s:%d) DbgPrint() failed!\n", __RELFILE__, __LINE__); \
+        DPRINT1("%s: " fmt, __FUNCTION__, ##__VA_ARGS__); \
     } while (0)
 
 #else
@@ -44,8 +44,7 @@
 #ifdef DEBUG_INFO_VERB
 #define INFO_VERB(fmt, ...) \
     do { \
-      if (DbgPrint("(%s:%d) %s " fmt, __RELFILE__, __LINE__, __FUNCTION__, ##__VA_ARGS__)) \
-          DbgPrint("(%s:%d) DbgPrint() failed!\n", __RELFILE__, __LINE__); \
+        DPRINT("%s: " fmt, __FUNCTION__, ##__VA_ARGS__); \
     } while (0)
 
 #else
@@ -55,8 +54,7 @@
 #ifdef DEBUG_WARN
 #define WARN(fmt, ...) \
     do { \
-      if (DbgPrint("(%s:%d) %s " fmt, __RELFILE__, __LINE__, __FUNCTION__, ##__VA_ARGS__)) \
-          DbgPrint("(%s:%d) DbgPrint() failed!\n", __RELFILE__, __LINE__); \
+        DPRINT1("%s: " fmt, __FUNCTION__, ##__VA_ARGS__); \
     } while (0)
 
 #else
@@ -66,8 +64,7 @@
 #ifdef DEBUG_ERR
 #define ERR(fmt, ...) \
     do { \
-      if (DbgPrint("(%s:%d) %s " fmt, __RELFILE__, __LINE__, __FUNCTION__, ##__VA_ARGS__)) \
-          DbgPrint("(%s:%d) DbgPrint() failed!\n", __RELFILE__, __LINE__); \
+        DPRINT1("%s: " fmt, __FUNCTION__, ##__VA_ARGS__); \
     } while (0)
 
 #else
@@ -84,6 +81,7 @@ DcDbgBusError(
     _In_ ULONG InterruptStatus);
 
 #else
+
 
 #define TRACE
 #define INFO

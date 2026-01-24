@@ -25,7 +25,7 @@ TDI_STATUS SetConnectionInfo(TDIObjectID *ID,
             return TCPSetNoDelay(Connection, Set);
         }
         default:
-            DbgPrint("TCPIP: Unknown connection info ID: %u.\n", ID->toi_id);
+            DPRINT1("TCPIP: Unknown connection info ID: %u.\n", ID->toi_id);
     }
 
     return TDI_INVALID_PARAMETER;

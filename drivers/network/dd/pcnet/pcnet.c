@@ -404,7 +404,7 @@ MiAllocateSharedMemory(
 
       if (((ULONG_PTR)Adapter->TransmitDescriptorRingVirt & 0x00000003) != 0)
       {
-         DPRINT1("address 0x%x not dword-aligned\n", Adapter->TransmitDescriptorRingVirt);
+         DPRINT("address 0x%x not dword-aligned\n", Adapter->TransmitDescriptorRingVirt);
          return NDIS_STATUS_RESOURCES;
       }
 
@@ -426,7 +426,7 @@ MiAllocateSharedMemory(
 
       if (((ULONG_PTR)Adapter->ReceiveDescriptorRingVirt & 0x00000003) != 0)
       {
-          DPRINT1("address 0x%x not dword-aligned\n", Adapter->ReceiveDescriptorRingVirt);
+          DPRINT("address 0x%x not dword-aligned\n", Adapter->ReceiveDescriptorRingVirt);
           return NDIS_STATUS_RESOURCES;
       }
 
@@ -956,7 +956,7 @@ MiniportInitialize(
           Adapter->InterruptVector, TRUE, TRUE, NdisInterruptLevelSensitive);
       if(Status != NDIS_STATUS_SUCCESS)
         {
-          DPRINT1("NdisMRegisterInterrupt failed: 0x%x\n", Status);
+          DPRINT("NdisMRegisterInterrupt failed: 0x%x\n", Status);
           break;
         }
 
@@ -1210,11 +1210,11 @@ MiniportSend(
     for (Position = 0; Position < TotalPacketLength; Position++)
       {
         if (Position % 16 == 0)
-          DbgPrint("\n");
-        DbgPrint("%x ", *Ptr++);
+          DPRINT1("\n");
+        DPRINT1("%x ", *Ptr++);
       }
   }
-  DbgPrint("\n");
+  DPRINT1("\n");
 #endif
 
   Adapter->CurrentTransmitEndIndex++;

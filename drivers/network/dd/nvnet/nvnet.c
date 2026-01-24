@@ -137,7 +137,7 @@ MiniportCheckForHang(
     {
         if (++Adapter->Send.StuckCount > NVNET_TRANSMIT_HANG_THRESHOLD)
         {
-            NDIS_DbgPrint(MAX_TRACE, ("Transmit timeout!\n"));
+            DPRINT("Transmit timeout!\n");
 
 #if defined(SARCH_XBOX)
             /* Apply a HACK to make XQEMU happy... */
@@ -164,7 +164,7 @@ MiniportHalt(
     PNVNET_ADAPTER Adapter = (PNVNET_ADAPTER)MiniportAdapterContext;
     BOOLEAN IsActive = !!(Adapter->Flags & NV_ACTIVE);
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     PAGED_CODE();
 
@@ -208,7 +208,7 @@ MiniportReset(
 {
     PNVNET_ADAPTER Adapter = (PNVNET_ADAPTER)MiniportAdapterContext;
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     if (_InterlockedCompareExchange(&Adapter->ResetLock, 1, 0))
     {
@@ -231,7 +231,7 @@ MiniportShutdown(
 {
     PNVNET_ADAPTER Adapter = (PNVNET_ADAPTER)MiniportAdapterContext;
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     if (Adapter->Flags & NV_ACTIVE)
     {

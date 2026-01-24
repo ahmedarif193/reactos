@@ -126,7 +126,7 @@ VOID FreeNdisPacketX
 {
     PNDIS_BUFFER Buffer, NextBuffer;
 
-    LA_DbgPrint(DEBUG_PBUFFER, ("Packet (0x%X)\n", Packet));
+    DPRINT("Packet (0x%X)\n", Packet);
 
     /* Free all the buffers in the packet first */
     NdisQueryPacket(Packet, NULL, NULL, &Buffer, NULL);

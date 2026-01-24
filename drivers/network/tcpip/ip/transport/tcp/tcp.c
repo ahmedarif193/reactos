@@ -287,7 +287,7 @@ NTSTATUS TCPTranslateError(const err_t err)
         case ERR_ARG: Status = STATUS_INVALID_PARAMETER; break; //-14
         case ERR_IF: Status = STATUS_UNEXPECTED_NETWORK_ERROR; break; //-15
         default:
-            DbgPrint("Invalid error value: %d\n", err);
+            DPRINT1("Invalid error value: %d\n", err);
             ASSERT(FALSE);
             Status = STATUS_UNSUCCESSFUL;
             break;
@@ -385,7 +385,7 @@ NTSTATUS TCPConnect
         /* This should never fail unless all ports are in use */
         if (AllocatedPort == (UINT) -1)
         {
-            DbgPrint("ERR: No more ports available.\n");
+            DPRINT1("ERR: No more ports available.\n");
             UnlockObject(Connection);
             return STATUS_TOO_MANY_ADDRESSES;
         }

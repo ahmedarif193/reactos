@@ -168,7 +168,7 @@ MiniportQueryInformation (
             break;
 
         case OID_GEN_PROTOCOL_OPTIONS:
-            NDIS_DbgPrint(MIN_TRACE, ("OID_GEN_PROTOCOL_OPTIONS is unimplemented\n"));
+            DPRINT1("OID_GEN_PROTOCOL_OPTIONS is unimplemented\n");
             status = NDIS_STATUS_NOT_SUPPORTED;
             break;
 
@@ -242,7 +242,7 @@ MiniportQueryInformation (
             break;
 
         default:
-            NDIS_DbgPrint(MIN_TRACE, ("Unknown OID\n"));
+            DPRINT1("Unknown OID\n");
             status = NDIS_STATUS_NOT_SUPPORTED;
             break;
     }
@@ -270,8 +270,8 @@ MiniportQueryInformation (
 
     NdisReleaseSpinLock(&adapter->Lock);
 
-    NDIS_DbgPrint(MAX_TRACE, ("Query OID 0x%x: Completed with status 0x%x (%d, %d)\n",
-                              Oid, status, *BytesWritten, *BytesNeeded));
+    DPRINT("Query OID 0x%x: Completed with status 0x%x (%d, %d)\n",
+                              Oid, status, *BytesWritten, *BytesNeeded);
 
     return status;
 }
@@ -327,7 +327,7 @@ MiniportSetInformation (
             status = NICApplyPacketFilter(adapter);
             if (status != NDIS_STATUS_SUCCESS)
             {
-                NDIS_DbgPrint(MIN_TRACE, ("Failed to apply new packet filter\n"));
+                DPRINT1("Failed to apply new packet filter\n");
                 break;
             }
 
@@ -379,7 +379,7 @@ MiniportSetInformation (
             break;
 
         default:
-            NDIS_DbgPrint(MIN_TRACE, ("Unknown OID\n"));
+            DPRINT1("Unknown OID\n");
             status = NDIS_STATUS_NOT_SUPPORTED;
             *BytesRead = 0;
             *BytesNeeded = 0;

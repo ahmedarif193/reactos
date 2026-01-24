@@ -21,8 +21,8 @@ AfdGetInfo( PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
-    AFD_DbgPrint(MID_TRACE,("Called %p %x\n", InfoReq,
-                            InfoReq ? InfoReq->InformationClass : 0));
+    DPRINT1("Called %p %x\n", InfoReq,
+                            InfoReq ? InfoReq->InformationClass : 0);
 
     if( !SocketAcquireStateLock( FCB ) ) return LostSocket( Irp );
 
@@ -37,13 +37,13 @@ AfdGetInfo( PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
         case AFD_INFO_SEND_WINDOW_SIZE:
             InfoReq->Information.Ulong = FCB->Send.Size;
-            AFD_DbgPrint(MID_TRACE,("Send window size %u\n", FCB->Send.Size));
+            DPRINT1("Send window size %u\n", FCB->Send.Size);
             break;
 
         case AFD_INFO_GROUP_ID_TYPE:
             InfoReq->Information.LargeInteger.u.HighPart = FCB->GroupType;
             InfoReq->Information.LargeInteger.u.LowPart = FCB->GroupID;
-            AFD_DbgPrint(MID_TRACE, ("Group ID: %u Group Type: %u\n", FCB->GroupID, FCB->GroupType));
+            DPRINT1("Group ID: %u Group Type: %u\n", FCB->GroupID, FCB->GroupType);
             break;
 
         case AFD_INFO_BLOCKING_MODE:
@@ -83,17 +83,17 @@ AfdGetInfo( PDEVICE_OBJECT DeviceObject, PIRP Irp,
         break;
 
         default:
-            AFD_DbgPrint(MIN_TRACE,("Unknown info id %x\n",
-                                    InfoReq->InformationClass));
+            DPRINT1("Unknown info id %x\n",
+                                    InfoReq->InformationClass);
             Status = STATUS_INVALID_PARAMETER;
             break;
         }
     } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-        AFD_DbgPrint(MIN_TRACE,("Exception executing GetInfo\n"));
+        DPRINT1("Exception executing GetInfo\n");
         Status = STATUS_INVALID_PARAMETER;
     } _SEH2_END;
 
-    AFD_DbgPrint(MID_TRACE,("Returning %x\n", Status));
+    DPRINT1("Returning %x\n", Status);
 
     return UnlockAndMaybeComplete( FCB, Status, Irp, 0 );
 }
@@ -117,7 +117,7 @@ AfdSetInfo( PDEVICE_OBJECT DeviceObject, PIRP Irp,
     _SEH2_TRY {
         switch (InfoReq->InformationClass) {
             case AFD_INFO_BLOCKING_MODE:
-                AFD_DbgPrint(MID_TRACE,("Blocking mode set to %u\n", InfoReq->Information.Boolean));
+                DPRINT("Blocking mode set to %u\n", InfoReq->Information.Boolean);
                 FCB->NonBlocking = InfoReq->Information.Boolean;
                 break;
             case AFD_INFO_INLINING_MODE:
@@ -215,15 +215,15 @@ AfdSetInfo( PDEVICE_OBJECT DeviceObject, PIRP Irp,
                 }
                 break;
             default:
-                AFD_DbgPrint(MIN_TRACE,("Unknown request %u\n", InfoReq->InformationClass));
+                DPRINT1("Unknown request %u\n", InfoReq->InformationClass);
                 break;
         }
     } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-        AFD_DbgPrint(MIN_TRACE,("Exception executing SetInfo\n"));
+        DPRINT1("Exception executing SetInfo\n");
         Status = STATUS_INVALID_PARAMETER;
     } _SEH2_END;
 
-    AFD_DbgPrint(MID_TRACE,("Returning %x\n", Status));
+    DPRINT("Returning %x\n", Status);
 
     return UnlockAndMaybeComplete(FCB, Status, Irp, 0);
 }
@@ -255,7 +255,7 @@ AfdGetSockName( PDEVICE_OBJECT DeviceObject, PIRP Irp,
         _SEH2_TRY {
             MmProbeAndLockPages( Mdl, Irp->RequestorMode, IoModifyAccess );
         } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-            AFD_DbgPrint(MIN_TRACE, ("MmProbeAndLockPages() failed.\n"));
+            DPRINT1("MmProbeAndLockPages() failed.\n");
             Status = _SEH2_GetExceptionCode();
         } _SEH2_END;
 
@@ -289,7 +289,7 @@ AfdGetPeerName( PDEVICE_OBJECT DeviceObject, PIRP Irp,
     if( !SocketAcquireStateLock( FCB ) ) return LostSocket( Irp );
 
     if (FCB->RemoteAddress == NULL) {
-        AFD_DbgPrint(MIN_TRACE,("Invalid parameter\n"));
+        DPRINT1("Invalid parameter\n");
         return UnlockAndMaybeComplete( FCB, STATUS_INVALID_PARAMETER, Irp, 0 );
     }
 
@@ -300,7 +300,7 @@ AfdGetPeerName( PDEVICE_OBJECT DeviceObject, PIRP Irp,
     }
     else
     {
-        AFD_DbgPrint(MIN_TRACE,("Buffer too small\n"));
+        DPRINT1("Buffer too small\n");
         Status = STATUS_BUFFER_TOO_SMALL;
     }
 

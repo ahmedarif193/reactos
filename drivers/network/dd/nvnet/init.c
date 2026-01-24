@@ -39,7 +39,7 @@ QueryInteger(
                           NdisParameterInteger);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MIN_TRACE, ("'%S' request failed\n", EntryName));
+        DPRINT1("'%S' request failed\n", EntryName);
 
         *EntryContext = DefaultValue;
     }
@@ -52,13 +52,13 @@ QueryInteger(
         }
         else
         {
-            NDIS_DbgPrint(MAX_TRACE, ("'%S' value out of range\n", EntryName));
+            DPRINT("'%S' value out of range\n", EntryName);
 
             *EntryContext = DefaultValue;
         }
     }
 
-    NDIS_DbgPrint(MIN_TRACE, ("Set '%S' to %d\n", EntryName, *EntryContext));
+    DPRINT1("Set '%S' to %d\n", EntryName, *EntryContext);
 }
 
 static
@@ -75,7 +75,7 @@ NvNetReadConfiguration(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     NdisOpenConfiguration(&Status,
                           &ConfigurationHandle,
@@ -185,17 +185,17 @@ NvNetReadConfiguration(
         if ((ETH_IS_MULTICAST(NetworkAddress) || ETH_IS_BROADCAST(NetworkAddress)) ||
             !ETH_IS_LOCALLY_ADMINISTERED(NetworkAddress))
         {
-            NDIS_DbgPrint(MAX_TRACE, ("Invalid software MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+            DPRINT("Invalid software MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
                                       NetworkAddress[0],
                                       NetworkAddress[1],
                                       NetworkAddress[2],
                                       NetworkAddress[3],
                                       NetworkAddress[4],
-                                      NetworkAddress[5]));
+                                      NetworkAddress[5]);
         }
         else
         {
-            NDIS_DbgPrint(MIN_TRACE, ("Using software MAC\n"));
+            DPRINT1("Using software MAC\n");
 
             ETH_COPY_NETWORK_ADDRESS(Adapter->CurrentMacAddress, NetworkAddress);
 
@@ -221,7 +221,7 @@ NvNetInitializeAdapterResources(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     NdisMQueryAdapterResources(&Status,
                                Adapter->WrapperConfigurationHandle,
@@ -286,12 +286,12 @@ NvNetInitializeAdapterResources(
         goto Cleanup;
     }
 
-    NDIS_DbgPrint(MIN_TRACE, ("MEM at [%I64X-%I64X]\n",
+    DPRINT1("MEM at [%I64X-%I64X]\n",
                               Adapter->IoAddress.QuadPart,
-                              Adapter->IoAddress.QuadPart + Adapter->IoLength));
-    NDIS_DbgPrint(MIN_TRACE, ("IRQ Vector %d Level %d\n",
+                              Adapter->IoAddress.QuadPart + Adapter->IoLength);
+    DPRINT1("IRQ Vector %d Level %d\n",
                               Adapter->InterruptVector,
-                              Adapter->InterruptLevel));
+                              Adapter->InterruptLevel);
 
     Status = NdisMMapIoSpace((PVOID*)&Adapter->IoBase,
                              Adapter->AdapterHandle,
@@ -600,7 +600,7 @@ NvNetFreeAdapter(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     for (i = 0; i < RTL_NUMBER_OF(Adapter->WakeFrames); ++i)
     {
@@ -713,7 +713,7 @@ MiniportInitialize(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     for (i = 0; i < MediumArraySize; ++i)
     {
@@ -725,7 +725,7 @@ MiniportInitialize(
     }
     if (i == MediumArraySize)
     {
-        NDIS_DbgPrint(MAX_TRACE, ("No supported media\n"));
+        DPRINT("No supported media\n");
         return NDIS_STATUS_UNSUPPORTED_MEDIA;
     }
 
@@ -736,7 +736,7 @@ MiniportInitialize(
                                        NVNET_TAG);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MAX_TRACE, ("Failed to allocate adapter\n"));
+        DPRINT("Failed to allocate adapter\n");
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -794,7 +794,7 @@ MiniportInitialize(
     Status = AllocateAdapterMemory(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MAX_TRACE, ("Failed to allocate adapter memory\n"));
+        DPRINT("Failed to allocate adapter memory\n");
 
         NvNetLogError(Adapter, NDIS_ERROR_CODE_OUT_OF_RESOURCES);
         goto Failure;
@@ -840,7 +840,7 @@ MiniportInitialize(
     Status = NvNetInitNIC(Adapter, TRUE);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        NDIS_DbgPrint(MAX_TRACE, ("Failed to initialize the NIC\n"));
+        DPRINT("Failed to initialize the NIC\n");
 
         NvNetLogError(Adapter, NDIS_ERROR_CODE_HARDWARE_FAILURE);
         goto Failure;

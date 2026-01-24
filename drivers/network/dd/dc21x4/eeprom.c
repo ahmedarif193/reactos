@@ -1275,20 +1275,20 @@ SRomDumpContents(
 
     PAGED_CODE();
 
-    DbgPrint("SROM data:\n");
+    DPRINT1("SROM data:\n");
 
     Offset = 0;
     while (Offset < Length)
     {
-        DbgPrint("%04x:\t", Offset);
+        DPRINT1("%04x:\t", Offset);
 
         Count = min(Length - Offset, 16);
         for (i = 0; i < Count; ++i, ++Offset)
         {
-            DbgPrint("0x%02x, ", Data[Offset], (i == 7) ? '-' : ' ');
+            DPRINT1("0x%02x, ", Data[Offset], (i == 7) ? '-' : ' ');
         }
 
-        DbgPrint("\n");
+        DPRINT1("\n");
     }
 }
 #endif // DBG

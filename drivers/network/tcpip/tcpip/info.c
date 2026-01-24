@@ -83,7 +83,7 @@ PVOID GetContext(TDIEntityID ID)
     if (i == EntityCount)
     {
         TcpipReleaseSpinLock(&EntityListLock, OldIrql);
-        DbgPrint("WARNING: Unable to get context for %d %d\n", ID.tei_entity, ID.tei_instance);
+        DPRINT1("WARNING: Unable to get context for %d %d\n", ID.tei_entity, ID.tei_instance);
         return NULL;
     }
 
@@ -445,13 +445,13 @@ TDI_STATUS InfoTdiSetInformationEx
                     }
                 }
                 default:
-                    DbgPrint("TCPIP: IOCTL_TCP_SET_INFORMATION_EX - Unrecognized information type for INFO_CLASS_PROTOCOL: %#x.\n", ID->toi_type);
+                    DPRINT1("TCPIP: IOCTL_TCP_SET_INFORMATION_EX - Unrecognized information type for INFO_CLASS_PROTOCOL: %#x.\n", ID->toi_type);
                     return TDI_INVALID_PARAMETER;
             }
             break;
         }
         default:
-            DbgPrint("TCPIP: IOCTL_TCP_SET_INFORMATION_EX - Unrecognized information class %#x.\n", ID->toi_class);
+            DPRINT1("TCPIP: IOCTL_TCP_SET_INFORMATION_EX - Unrecognized information class %#x.\n", ID->toi_class);
             return TDI_INVALID_REQUEST;
     }
 }

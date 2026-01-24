@@ -124,7 +124,7 @@ PhyInitRealtek8211b(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     for (i = 0; i < RTL_NUMBER_OF(Sequence); ++i)
     {
@@ -145,7 +145,7 @@ PhyInitRealtek8211c(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     PowerState = NV_READ(Adapter, NvRegPowerState2);
 
@@ -188,7 +188,7 @@ PhyInitRealtek8201(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     if (Adapter->Features & DEV_NEED_PHY_INIT_FIX)
     {
@@ -227,7 +227,7 @@ PhyInitCicadaSemiconductor(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     if (PhyInterface & PHY_RGMII)
     {
@@ -261,7 +261,7 @@ PhyInitVitesseSemiconductor(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     if (!MiiWrite(Adapter, Adapter->PhyAddress, PHY_VITESSE_INIT_REG1, PHY_VITESSE_INIT1))
         return FALSE;
@@ -331,7 +331,7 @@ PhyReset(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     if (!MiiWrite(Adapter, Adapter->PhyAddress, MII_CONTROL, MiiControl))
         return FALSE;
@@ -362,7 +362,7 @@ PhyInit(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     /* PHY errata for E3016 PHY */
     if (Adapter->PhyModel == PHY_MODEL_MARVELL_E3016)
@@ -371,7 +371,7 @@ PhyInit(
         MiiRegister &= ~PHY_MARVELL_E3016_INITMASK;
         if (!MiiWrite(Adapter, Adapter->PhyAddress, PHY_MARVELL_INIT_REG1, MiiRegister))
         {
-            NDIS_DbgPrint(MAX_TRACE, ("PHY init failed\n"));
+            DPRINT("PHY init failed\n");
             return NDIS_STATUS_FAILURE;
         }
     }
@@ -383,7 +383,7 @@ PhyInit(
         {
             if (!PhyInitRealtek8211b(Adapter))
             {
-                NDIS_DbgPrint(MAX_TRACE, ("PHY init failed\n"));
+                DPRINT("PHY init failed\n");
                 return NDIS_STATUS_FAILURE;
             }
         }
@@ -392,7 +392,7 @@ PhyInit(
         {
             if (!PhyInitRealtek8211c(Adapter))
             {
-                NDIS_DbgPrint(MAX_TRACE, ("PHY init failed\n"));
+                DPRINT("PHY init failed\n");
                 return NDIS_STATUS_FAILURE;
             }
         }
@@ -400,7 +400,7 @@ PhyInit(
         {
             if (!PhyInitRealtek8201(Adapter, FALSE))
             {
-                NDIS_DbgPrint(MAX_TRACE, ("PHY init failed\n"));
+                DPRINT("PHY init failed\n");
                 return NDIS_STATUS_FAILURE;
             }
         }
@@ -449,7 +449,7 @@ PhyInit(
     }
     if (!MiiWrite(Adapter, Adapter->PhyAddress, MII_AUTONEG_ADVERTISE, MiiRegister))
     {
-        NDIS_DbgPrint(MAX_TRACE, ("PHY init failed!\n"));
+        DPRINT("PHY init failed!\n");
         return NDIS_STATUS_FAILURE;
     }
 
@@ -472,7 +472,7 @@ PhyInit(
             MiiControl1000 &= ~MII_MS_CR_1000T_FD;
         if (!MiiWrite(Adapter, Adapter->PhyAddress, MII_MASTER_SLAVE_CONTROL, MiiControl1000))
         {
-            NDIS_DbgPrint(MAX_TRACE, ("PHY init failed\n"));
+            DPRINT("PHY init failed\n");
             return NDIS_STATUS_FAILURE;
         }
     }
@@ -491,7 +491,7 @@ PhyInit(
         MiiControl |= MII_CR_AUTONEG_RESTART;
         if (!MiiWrite(Adapter, Adapter->PhyAddress, MII_CONTROL, MiiControl))
         {
-            NDIS_DbgPrint(MAX_TRACE, ("PHY init failed\n"));
+            DPRINT("PHY init failed\n");
             return NDIS_STATUS_FAILURE;
         }
     }
@@ -500,7 +500,7 @@ PhyInit(
         /* Reset the PHY (certain PHYs need BMCR to be setup with reset) */
         if (!PhyReset(Adapter, MiiControl))
         {
-            NDIS_DbgPrint(MAX_TRACE, ("PHY reset failed\n"));
+            DPRINT("PHY reset failed\n");
             return NDIS_STATUS_FAILURE;
         }
     }
@@ -510,7 +510,7 @@ PhyInit(
     {
         if (!PhyInitCicadaSemiconductor(Adapter, PhyInterface))
         {
-            NDIS_DbgPrint(MAX_TRACE, ("PHY init failed\n"));
+            DPRINT("PHY init failed\n");
             return NDIS_STATUS_FAILURE;
         }
     }
@@ -518,7 +518,7 @@ PhyInit(
     {
         if (!PhyInitVitesseSemiconductor(Adapter))
         {
-            NDIS_DbgPrint(MAX_TRACE, ("PHY init failed\n"));
+            DPRINT("PHY init failed\n");
             return NDIS_STATUS_FAILURE;
         }
     }
@@ -530,7 +530,7 @@ PhyInit(
             /* Reset could have cleared these out, set them back */
             if (!PhyInitRealtek8211b(Adapter))
             {
-                NDIS_DbgPrint(MAX_TRACE, ("PHY init failed\n"));
+                DPRINT("PHY init failed\n");
                 return NDIS_STATUS_FAILURE;
             }
         }
@@ -538,7 +538,7 @@ PhyInit(
         {
             if (!PhyInitRealtek8201(Adapter, TRUE))
             {
-                NDIS_DbgPrint(MAX_TRACE, ("PHY init failed\n"));
+                DPRINT("PHY init failed\n");
                 return NDIS_STATUS_FAILURE;
             }
         }
@@ -566,7 +566,7 @@ FindPhyDevice(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     for (Phy = 1; Phy <= 32; ++Phy)
     {
@@ -601,10 +601,10 @@ FindPhyDevice(
             Adapter->PhyRevision = PhyRevision & PHY_REV_MASK;
         }
 
-        NDIS_DbgPrint(MIN_TRACE, ("Found PHY %X %X %X\n",
+        DPRINT1("Found PHY %X %X %X\n",
                                   Adapter->PhyAddress,
                                   Adapter->PhyModel,
-                                  Adapter->PhyOui));
+                                  Adapter->PhyOui);
         break;
     }
     if (Phy == 33)
@@ -625,7 +625,7 @@ SidebandUnitAcquireSemaphore(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     for (i = 10; i > 0; --i)
     {
@@ -688,7 +688,7 @@ SidebandUnitGetVersion(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     DataReady = NV_READ(Adapter, NvRegTransmitterControl);
 
@@ -993,7 +993,7 @@ NvNetUpdateLinkSpeed(
     ULONG MiiAdvertise, MiiLinkPartnerAbility, LinkSpeed;
     BOOLEAN FullDuplex, LinkUp;
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     LinkUp = MiiGetSpeedAndDuplex(Adapter,
                                   &MiiAdvertise,
@@ -1005,11 +1005,11 @@ NvNetUpdateLinkSpeed(
         return LinkUp;
     }
 
-    NDIS_DbgPrint(MIN_TRACE, ("Configuring MAC from '%lx %s-duplex' to '%lx %s-duplex'\n",
+    DPRINT1("Configuring MAC from '%lx %s-duplex' to '%lx %s-duplex'\n",
                               Adapter->LinkSpeed,
                               Adapter->FullDuplex ? "full" : "half",
                               LinkSpeed,
-                              FullDuplex ? "full" : "half"));
+                              FullDuplex ? "full" : "half");
 
     Adapter->FullDuplex = FullDuplex;
     Adapter->LinkSpeed = LinkSpeed;
@@ -1041,7 +1041,7 @@ NvNetPhyInit(
 
     PAGED_CODE();
 
-    NDIS_DbgPrint(MIN_TRACE, ("()\n"));
+    DPRINT1("()\n");
 
     /* Take PHY and NIC out of low power mode */
     if (Adapter->Features & DEV_HAS_POWER_CNTRL)
@@ -1090,7 +1090,7 @@ NvNetPhyInit(
                 Adapter->Flags |= NV_MAC_IN_USE;
             }
 
-            NDIS_DbgPrint(MIN_TRACE, ("Management unit is running. MAC in use\n"));
+            DPRINT1("Management unit is running. MAC in use\n");
 
             /* Management unit setup the PHY already? */
             if ((Adapter->Flags & NV_MAC_IN_USE) &&
@@ -1100,7 +1100,7 @@ NvNetPhyInit(
                 /* PHY is inited by management unit */
                 PhyInitialized = TRUE;
 
-                NDIS_DbgPrint(MIN_TRACE, ("PHY already initialized by management unit\n"));
+                DPRINT1("PHY already initialized by management unit\n");
             }
         }
     }
@@ -1108,7 +1108,7 @@ NvNetPhyInit(
     /* Find a suitable PHY */
     if (!FindPhyDevice(Adapter))
     {
-        NDIS_DbgPrint(MAX_TRACE, ("Could not find a valid PHY\n"));
+        DPRINT("Could not find a valid PHY\n");
         goto Failure;
     }
 

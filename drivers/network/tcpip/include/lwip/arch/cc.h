@@ -1,6 +1,7 @@
 /* ReactOS-Specific lwIP binding header - by Cameron Gutman */
 
 #include <wdm.h>
+#include <reactos/debug.h>
 
 /* ROS-specific mem defs */
 void *
@@ -30,7 +31,7 @@ realloc(void *mem, size_t size);
 #define LWIP_CHKSUM_ALGORITHM 3
 
 /* Diagnostics */
-#define LWIP_PLATFORM_DIAG(x) (DbgPrint x)
+#define LWIP_PLATFORM_DIAG(x) (DPRINT1 x)
 #define LWIP_PLATFORM_ASSERT(x) ASSERTMSG(x, FALSE)
 
 /* Synchronization */
@@ -41,4 +42,3 @@ realloc(void *mem, size_t size);
 /* Compiler hints for packing structures */
 #define PACK_STRUCT_STRUCT
 #define PACK_STRUCT_USE_INCLUDES
-

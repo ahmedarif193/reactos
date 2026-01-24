@@ -8,6 +8,8 @@
  */
 
 #pragma once
+#include <ntddk.h>
+#include <reactos/debug.h>
 
 #define MIN_TRACE      ((1 << DPFLTR_WARNING_LEVEL))
 #define MID_TRACE      ((1 << DPFLTR_WARNING_LEVEL) | (1 << DPFLTR_TRACE_LEVEL))
@@ -47,12 +49,18 @@
 #endif /* DBG */
 
 
+#ifdef assert
+#undef assert
+#endif
 #define assert(x) ASSERT(x)
 #define assert_irql(x) ASSERT_IRQL(x)
 
 
 #ifdef _MSC_VER
 
+#ifdef UNIMPLEMENTED
+#undef UNIMPLEMENTED
+#endif
 #define UNIMPLEMENTED \
     TI_DbgPrint(MIN_TRACE, ("The function at %s:%d is unimplemented, \
         but come back another day.\n", __FILE__, __LINE__));
