@@ -843,6 +843,16 @@ HalEnableSystemInterrupt(
         HalpVectorToIndex[Vector] = APIC_RESERVED_VECTOR;
         return TRUE;
     }
+    else if (Index == APIC_RESERVED_VECTOR)
+    {
+        /*
+         * This vector is already marked as reserved (MSI/MSI-X).
+         * Treat this as a success (idempotent enable).
+         */
+        DPRINT1("HalEnableSystemInterrupt: Vector=%u is already marked reserved (MSI/MSI-X)\n",
+                Vector);
+        return TRUE;
+    }
 
     /* Read the redirection entry */
     ReDirReg = ApicReadIORedirectionEntry(Index);
