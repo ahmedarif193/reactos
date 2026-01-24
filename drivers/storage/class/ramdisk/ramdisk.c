@@ -3010,13 +3010,6 @@ RamdiskReadWriteReal(IN PIRP Irp,
                    IoStackLocation->Parameters.Read.ByteOffset.QuadPart,
                    CurrentOffset.QuadPart);
     }
-    DbgPrintEx(DPFLTR_DEFAULT_ID,
-               DPFLTR_ERROR_LEVEL,
-               "RamdiskReadWriteReal[Drive]: Reading at offset %I64x (orig %I64x) Hidden=%lu\n",
-               CurrentOffset.QuadPart,
-               IoStackLocation->Parameters.Read.ByteOffset.QuadPart,
-               DeviceExtension->HiddenSectors);
-
     if (IoStackLocation->MajorFunction == IRP_MJ_WRITE &&
         (DeviceExtension->DiskOptions.Readonly || DeviceExtension->DiskOptions.ExportAsCd))
     {
@@ -3152,21 +3145,6 @@ RamdiskReadWriteReal(IN PIRP Irp,
                            (ULONGLONG)ISO9660_PRIMARY_VOLUME_DESCRIPTOR_OFFSET,
                            raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7]);
             }
-        }
-        /* Debug: dump boot sector reads (original offset 0 from filesystem) */
-        if ((IoStackLocation->MajorFunction == IRP_MJ_READ) &&
-            (IoStackLocation->Parameters.Read.ByteOffset.QuadPart == 0) &&
-            CopyLength >= 32)
-        {
-            const PUCHAR raw = (PUCHAR)BaseAddress;
-            PHYSICAL_ADDRESS PhysAddr = MmGetPhysicalAddress((PVOID)raw);
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_ERROR_LEVEL,
-                       "RamdiskReadWriteReal[Drive]: Boot sector dump (FS offset 0 -> disk offset %I64x, VA=%p, PA=%I64x):\n"
-                       "  %02X %02X %02X %02X %02X %02X %02X %02X | %02X %02X %02X %02X %02X %02X %02X %02X\n",
-                       CurrentOffset.QuadPart, raw, PhysAddr.QuadPart,
-                       raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
-                       raw[8], raw[9], raw[10], raw[11], raw[12], raw[13], raw[14], raw[15]);
         }
         if ((IoStackLocation->MajorFunction == IRP_MJ_READ) &&
             (CurrentOffset.QuadPart == 0) &&
@@ -3371,13 +3349,6 @@ RamdiskReadWrite(IN PDEVICE_OBJECT DeviceObject,
     // Length = IoStackLocation->Parameters.Read.Length;
     // ByteOffset = IoStackLocation->Parameters.Read.ByteOffset;
 
-    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-               "RamdiskReadWrite[Drive]: %s offset=%I64x len=%lu DiskType=%lu\n",
-               IoStackLocation->MajorFunction == IRP_MJ_READ ? "READ" : "WRITE",
-               IoStackLocation->Parameters.Read.ByteOffset.QuadPart,
-               IoStackLocation->Parameters.Read.Length,
-               DeviceExtension->DiskType);
-
     /* FIXME: Validate offset */
 
     /* FIXME: Validate sector */
@@ -3395,18 +3366,11 @@ RamdiskReadWrite(IN PDEVICE_OBJECT DeviceObject,
     if (DeviceExtension->DiskType > RAMDISK_MEMORY_MAPPED_DISK)
     {
         /* Do it sync */
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                   "RamdiskReadWrite[Drive]: calling RamdiskReadWriteReal (sync path)\n");
         Status = RamdiskReadWriteReal(Irp, DeviceExtension);
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                   "RamdiskReadWrite[Drive]: RamdiskReadWriteReal returned 0x%lx, info=%lu\n",
-                   Status, (ULONG)Irp->IoStatus.Information);
         goto Complete;
     }
 
     /* Queue it to the worker */
-    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-               "RamdiskReadWrite[Drive]: queueing to worker thread (async path)\n");
     Status = SendIrpToThread(DeviceObject, Irp);
     ReturnStatus = STATUS_PENDING;
 
@@ -3415,16 +3379,10 @@ RamdiskReadWrite(IN PDEVICE_OBJECT DeviceObject,
     {
 Complete:
         /* Complete the IRP */
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                   "RamdiskReadWrite[Drive]: completing IRP status=0x%lx info=%lu\n",
-                   Status, (ULONG)Irp->IoStatus.Information);
         Irp->IoStatus.Status = Status;
         IoCompleteRequest(Irp, IO_DISK_INCREMENT);
         ReturnStatus = Status;
     }
-
-    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-               "RamdiskReadWrite[Drive]: returning 0x%lx\n", ReturnStatus);
 
     /* Return to caller */
     return ReturnStatus;
