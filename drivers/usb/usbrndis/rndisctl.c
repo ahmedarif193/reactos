@@ -444,8 +444,32 @@ RndisSetPacketFilter(
     IN ULONG PacketFilter)
 {
     NTSTATUS Status;
+    USHORT CdcFilter;
 
     DPRINT("USBRNDIS: Setting packet filter to 0x%08X\n", PacketFilter);
+
+    if (Adapter->IsCdcEcm || Adapter->IsCdcNcm)
+    {
+        CdcFilter = 0;
+        if (PacketFilter & NDIS_PACKET_TYPE_DIRECTED)
+            CdcFilter |= CDC_ECM_PACKET_TYPE_DIRECTED;
+        if (PacketFilter & NDIS_PACKET_TYPE_MULTICAST)
+            CdcFilter |= CDC_ECM_PACKET_TYPE_MULTICAST;
+        if (PacketFilter & NDIS_PACKET_TYPE_BROADCAST)
+            CdcFilter |= CDC_ECM_PACKET_TYPE_BROADCAST;
+        if (PacketFilter & NDIS_PACKET_TYPE_PROMISCUOUS)
+            CdcFilter |= CDC_ECM_PACKET_TYPE_PROMISCUOUS;
+        if (PacketFilter & NDIS_PACKET_TYPE_ALL_MULTICAST)
+            CdcFilter |= CDC_ECM_PACKET_TYPE_ALL_MULTICAST;
+
+        Status = RndisUsbSetEthernetPacketFilter(Adapter, CdcFilter);
+        if (NT_SUCCESS(Status))
+        {
+            Adapter->PacketFilter = PacketFilter;
+        }
+
+        return Status;
+    }
 
     Status = RndisSetOid(Adapter, RNDIS_OID_GEN_CURRENT_PACKET_FILTER,
                          &PacketFilter, sizeof(PacketFilter));

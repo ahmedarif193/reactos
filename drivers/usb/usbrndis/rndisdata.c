@@ -1,10 +1,11 @@
 /*
  * PROJECT:     ReactOS USB RNDIS Network Driver
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     RNDIS data packet handling (send/receive)
+ * PURPOSE:     RNDIS data packet handling (send/receive) - NDIS 6.x
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  *
- * This file handles RNDIS data packet encapsulation and decapsulation.
+ * This file handles RNDIS data packet encapsulation and decapsulation
+ * using NDIS 6.x NET_BUFFER_LIST structures.
  * RNDIS wraps Ethernet frames in RNDIS_PACKET_MSG headers for transport
  * over USB bulk endpoints.
  */
@@ -88,6 +89,16 @@ RndisBuildNcmNtb(
     {
         DPRINT1("USBRNDIS: NCM NTB too large (%lu bytes, max=%lu)\n",
                 TotalLength, Adapter->NcmNtbOutMaxSize);
+        return 0;
+    }
+
+    /*
+     * NTB16 uses 16-bit fields for wBlockLength. Ensure TotalLength fits
+     * in USHORT to avoid truncation when assigned to Nth16->wBlockLength.
+     */
+    if (TotalLength > 0xFFFF)
+    {
+        DPRINT1("USBRNDIS: NCM NTB16 block length overflow (%lu > 65535)\n", TotalLength);
         return 0;
     }
 
@@ -184,47 +195,100 @@ RndisBuildPacketMessage(
 }
 
 /*
- * RndisIndicateEthernetFrameInternal
+ * RndisIndicateReceiveNbl
  *
- * Internal helper to indicate a single Ethernet frame to NDIS.
- * Does NOT call NdisMEthIndicateReceiveComplete - caller must do that
- * after indicating all frames in a batch.
- *
- * Returns TRUE if frame was indicated, FALSE on validation error.
+ * Build and indicate a NET_BUFFER_LIST for a received Ethernet frame.
+ * This is the NDIS 6.x replacement for NdisMEthIndicateReceive.
  */
 static
-BOOLEAN
-RndisIndicateEthernetFrameInternal(
+VOID
+RndisIndicateReceiveNbl(
     IN PRNDIS_ADAPTER Adapter,
     IN PUCHAR EthernetData,
     IN ULONG EthernetLength)
 {
+    PNET_BUFFER_LIST Nbl;
+    PNET_BUFFER Nb;
+    PMDL Mdl;
+    PUCHAR DataCopy;
+
     /* Validate Ethernet frame length */
     if (EthernetLength < ETHERNET_HEADER_SIZE || EthernetLength > ETHERNET_MAX_FRAME_SIZE)
     {
         DPRINT1("USBRNDIS: Invalid Ethernet frame length %u\n", EthernetLength);
         Adapter->RxErrorCount++;
-        return FALSE;
+        return;
     }
+
+    /* Allocate memory for the data copy - required because USB RX buffer is reused */
+    DataCopy = NdisAllocateMemoryWithTagPriority(
+                    Adapter->MiniportAdapterHandle,
+                    EthernetLength,
+                    USBRNDIS_TAG,
+                    NormalPoolPriority);
+
+    if (DataCopy == NULL)
+    {
+        DPRINT1("USBRNDIS: Failed to allocate RX data copy buffer\n");
+        Adapter->RxNoBufferCount++;
+        return;
+    }
+
+    /* Copy the Ethernet frame data */
+    NdisMoveMemory(DataCopy, EthernetData, EthernetLength);
+
+    /* Allocate MDL for the data */
+    Mdl = NdisAllocateMdl(
+            Adapter->MiniportAdapterHandle,
+            DataCopy,
+            EthernetLength);
+
+    if (Mdl == NULL)
+    {
+        DPRINT1("USBRNDIS: Failed to allocate RX MDL\n");
+        NdisFreeMemory(DataCopy, EthernetLength, 0);
+        Adapter->RxNoBufferCount++;
+        return;
+    }
+
+    /* Allocate NET_BUFFER_LIST with attached NET_BUFFER */
+    Nbl = NdisAllocateNetBufferAndNetBufferList(
+            Adapter->RxNblPool,
+            0,      /* Context size */
+            0,      /* Context backfill */
+            Mdl,
+            0,      /* Data offset */
+            EthernetLength);
+
+    if (Nbl == NULL)
+    {
+        DPRINT1("USBRNDIS: Failed to allocate RX NBL\n");
+        NdisFreeMdl(Mdl);
+        NdisFreeMemory(DataCopy, EthernetLength, 0);
+        Adapter->RxNoBufferCount++;
+        return;
+    }
+
+    /* Store the data buffer pointer in NBL context for cleanup */
+    NET_BUFFER_LIST_INFO(Nbl, MediaSpecificInformation) = DataCopy;
+
+    /* Set source handle */
+    Nbl->SourceHandle = Adapter->MiniportAdapterHandle;
 
     /* Update statistics */
     Adapter->RxOkCount++;
+    Adapter->RxBytes += EthernetLength;
 
-    /*
-     * Use NdisMEthIndicateReceive to indicate received Ethernet frame.
-     * This is simpler than managing packet pools and works well for
-     * low-throughput USB devices.
-     */
-    NdisMEthIndicateReceive(
+    DPRINT("USBRNDIS: Indicating RX NBL (%lu bytes)\n", EthernetLength);
+
+    /* Indicate to NDIS */
+    NdisMIndicateReceiveNetBufferLists(
         Adapter->MiniportAdapterHandle,
-        NULL,                           /* MacReceiveContext - not used */
-        (PCHAR)EthernetData,            /* HeaderBuffer - Ethernet header */
-        ETHERNET_HEADER_SIZE,           /* HeaderBufferSize */
-        (PCHAR)EthernetData + ETHERNET_HEADER_SIZE,  /* LookaheadBuffer */
-        EthernetLength - ETHERNET_HEADER_SIZE,       /* LookaheadBufferSize */
-        EthernetLength - ETHERNET_HEADER_SIZE);      /* PacketSize */
-
-    return TRUE;
+        Nbl,
+        0,      /* Port number */
+        1,      /* Number of NBLs */
+        0       /* Flags - not at dispatch level from USB completion */
+        );
 }
 
 /*
@@ -369,27 +433,17 @@ RndisProcessNcmNtb(
             DPRINT("USBRNDIS: NCM datagram[%lu]: offset=%u length=%u\n",
                    EntryIndex, Entry->wDatagramIndex, Entry->wDatagramLength);
 
-            /* Indicate the Ethernet frame to NDIS (no ReceiveComplete yet) */
-            if (RndisIndicateEthernetFrameInternal(
-                    Adapter,
-                    Data + Entry->wDatagramIndex,
-                    Entry->wDatagramLength))
-            {
-                FramesProcessed++;
-            }
+            /* Indicate the Ethernet frame to NDIS via NBL */
+            RndisIndicateReceiveNbl(
+                Adapter,
+                Data + Entry->wDatagramIndex,
+                Entry->wDatagramLength);
+
+            FramesProcessed++;
         }
 
         /* Move to next NDP16 in chain */
         NdpOffset = Ndp16->wNextNdpIndex;
-    }
-
-    /*
-     * Call ReceiveComplete once after indicating all frames in this NTB.
-     * This is more efficient than calling it per-frame.
-     */
-    if (FramesProcessed > 0)
-    {
-        NdisMEthIndicateReceiveComplete(Adapter->MiniportAdapterHandle);
     }
 
     DPRINT("USBRNDIS: NCM NTB processing complete: %lu frames\n", FramesProcessed);
@@ -399,8 +453,9 @@ RndisProcessNcmNtb(
 /*
  * RndisProcessReceivedPacket
  *
- * Process received RNDIS packet data and deliver to NDIS
+ * Process received RNDIS packet data and deliver to NDIS.
  * Handles RNDIS, CDC-ECM, and CDC-NCM formats.
+ * Uses NDIS 6.x NET_BUFFER_LIST indication.
  */
 VOID
 RndisProcessReceivedPacket(
@@ -414,6 +469,13 @@ RndisProcessReceivedPacket(
     ULONG DataOffset;
 
     DPRINT("USBRNDIS: Processing received data (%u bytes)\n", Length);
+
+    /* Check if paused */
+    if (Adapter->Paused)
+    {
+        DPRINT("USBRNDIS: Adapter paused, dropping received packet\n");
+        return;
+    }
 
     /*
      * CDC-NCM mode: Parse NTB (Network Transfer Block) structure.
@@ -497,283 +559,373 @@ RndisProcessReceivedPacket(
         DPRINT("USBRNDIS: Received RNDIS Ethernet frame (%u bytes)\n", EthernetLength);
     }
 
-    /*
-     * Indicate Ethernet frame to NDIS using common helper.
-     * Stats are updated inside the helper (single source of truth).
-     */
-    if (RndisIndicateEthernetFrameInternal(Adapter, EthernetData, EthernetLength))
-    {
-        /* Complete the receive indication for this single frame */
-        NdisMEthIndicateReceiveComplete(Adapter->MiniportAdapterHandle);
-    }
+    /* Indicate Ethernet frame to NDIS using NBL */
+    RndisIndicateReceiveNbl(Adapter, EthernetData, EthernetLength);
 }
 
 /*
- * RndisSend
+ * RndisSendNetBufferLists
  *
- * NDIS miniport send handler - send a single packet.
- * Returns NDIS_STATUS_PENDING and calls NdisMSendComplete from completion routine.
+ * NDIS 6.x miniport send handler - send NET_BUFFER_LISTs.
+ * Since USB RNDIS can only have one TX pending at a time, we send the first
+ * NET_BUFFER and complete remaining NBLs with NDIS_STATUS_RESOURCES.
  */
-NDIS_STATUS
+VOID
 NTAPI
-RndisSend(
-    IN NDIS_HANDLE MiniportAdapterContext,
-    IN PNDIS_PACKET Packet,
-    IN UINT Flags)
+RndisSendNetBufferLists(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ PNET_BUFFER_LIST NetBufferList,
+    _In_ NDIS_PORT_NUMBER PortNumber,
+    _In_ ULONG SendFlags)
 {
     PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)MiniportAdapterContext;
-    PNDIS_BUFFER Buffer;
+    PNET_BUFFER_LIST CurrentNbl;
+    PNET_BUFFER_LIST NextNbl;
+    PNET_BUFFER_LIST FailedNbls = NULL;
+    PNET_BUFFER CurrentNb;
+    PMDL Mdl;
     PVOID VirtualAddress;
-    UINT BufferLength;
-    ULONG TotalLength;
-    UINT PacketTotalLength;
+    ULONG DataLength;
+    ULONG DataOffset;
     ULONG PacketLength;
+    ULONG TotalLength;
     NTSTATUS Status;
+    BOOLEAN DispatchLevel;
+    BOOLEAN FirstPacketSent = FALSE;
 
-    UNREFERENCED_PARAMETER(Flags);
+    UNREFERENCED_PARAMETER(PortNumber);
 
-    DPRINT("USBRNDIS: RndisSend called\n");
+    DPRINT("USBRNDIS: RndisSendNetBufferLists called\n");
 
-    if (Adapter->State != RndisStateDataInitialized)
+    DispatchLevel = NDIS_TEST_SEND_AT_DISPATCH_LEVEL(SendFlags);
+
+    /* Check adapter state */
+    if (Adapter->State != RndisStateDataInitialized || Adapter->Paused)
     {
-        DPRINT1("USBRNDIS: Send called but adapter not initialized\n");
-        return NDIS_STATUS_FAILURE;
+        DPRINT1("USBRNDIS: Send called but adapter not ready (state=%d, paused=%d)\n",
+                Adapter->State, Adapter->Paused);
+
+        /* Complete all NBLs with failure */
+        for (CurrentNbl = NetBufferList; CurrentNbl != NULL; CurrentNbl = NextNbl)
+        {
+            NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
+            NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
+            NET_BUFFER_LIST_STATUS(CurrentNbl) = Adapter->Paused ?
+                                                 NDIS_STATUS_PAUSED : NDIS_STATUS_FAILURE;
+        }
+
+        NdisMSendNetBufferListsComplete(
+            Adapter->MiniportAdapterHandle,
+            NetBufferList,
+            DispatchLevel ? NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL : 0);
+        return;
     }
 
     /* Check if halting */
     if (Adapter->Halting)
     {
-        return NDIS_STATUS_FAILURE;
+        for (CurrentNbl = NetBufferList; CurrentNbl != NULL; CurrentNbl = NextNbl)
+        {
+            NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
+            NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
+            NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_FAILURE;
+        }
+
+        NdisMSendNetBufferListsComplete(
+            Adapter->MiniportAdapterHandle,
+            NetBufferList,
+            DispatchLevel ? NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL : 0);
+        return;
     }
 
-    /* Acquire TX lock */
-    NdisAcquireSpinLock(&Adapter->TxLock);
-
-    if (Adapter->TxBusy)
+    /* Process each NBL */
+    for (CurrentNbl = NetBufferList; CurrentNbl != NULL; CurrentNbl = NextNbl)
     {
-        NdisReleaseSpinLock(&Adapter->TxLock);
-        DPRINT1("USBRNDIS: TX busy\n");
-        return NDIS_STATUS_RESOURCES;
-    }
+        NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
+        NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
 
-    Adapter->TxBusy = TRUE;
-    Adapter->PendingTxPacket = Packet;  /* Store packet for completion callback */
-    NdisReleaseSpinLock(&Adapter->TxLock);
+        /* USB RNDIS only supports one TX at a time */
+        if (FirstPacketSent)
+        {
+            /* Queue this NBL for failure completion */
+            NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_RESOURCES;
+            NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = FailedNbls;
+            FailedNbls = CurrentNbl;
+            continue;
+        }
 
-    /* Calculate total packet length */
-    NdisQueryPacket(Packet, NULL, NULL, NULL, &PacketTotalLength);
-
-    if (PacketTotalLength > ETHERNET_MAX_FRAME_SIZE)
-    {
-        DPRINT1("USBRNDIS: Packet too large (%u bytes)\n", PacketTotalLength);
+        /* Acquire TX lock */
         NdisAcquireSpinLock(&Adapter->TxLock);
-        Adapter->TxBusy = FALSE;
-        Adapter->PendingTxPacket = NULL;
+
+        if (Adapter->TxBusy)
+        {
+            NdisReleaseSpinLock(&Adapter->TxLock);
+            NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_RESOURCES;
+            NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = FailedNbls;
+            FailedNbls = CurrentNbl;
+            continue;
+        }
+
+        Adapter->TxBusy = TRUE;
+        Adapter->PendingTxNbl = CurrentNbl;
         NdisReleaseSpinLock(&Adapter->TxLock);
-        Adapter->TxErrorCount++;
-        return NDIS_STATUS_FAILURE;
-    }
 
-    /*
-     * Copy packet data to TX buffer.
-     * For RNDIS: Copy after header space, then prepend RNDIS header.
-     * For CDC-ECM: Copy directly to start of buffer (no header).
-     * For CDC-NCM: Copy to temp area, then build NTB with NTH16/NDP16.
-     */
-    PacketLength = 0;
-    NdisQueryPacket(Packet, NULL, NULL, &Buffer, NULL);
-
-    if (Adapter->IsCdcEcm)
-    {
-        /* CDC-ECM: Copy Ethernet frame directly */
-        while (Buffer)
+        /* Get the first NET_BUFFER from this NBL */
+        CurrentNb = NET_BUFFER_LIST_FIRST_NB(CurrentNbl);
+        if (CurrentNb == NULL)
         {
-            NdisQueryBuffer(Buffer, &VirtualAddress, &BufferLength);
-
-            if (PacketLength + BufferLength > ETHERNET_MAX_FRAME_SIZE)
-            {
-                DPRINT1("USBRNDIS: Packet overflow during copy\n");
-                NdisAcquireSpinLock(&Adapter->TxLock);
-                Adapter->TxBusy = FALSE;
-                Adapter->PendingTxPacket = NULL;
-                NdisReleaseSpinLock(&Adapter->TxLock);
-                Adapter->TxErrorCount++;
-                return NDIS_STATUS_FAILURE;
-            }
-
-            NdisMoveMemory(Adapter->TxBuffer + PacketLength, VirtualAddress, BufferLength);
-            PacketLength += BufferLength;
-
-            NdisGetNextBuffer(Buffer, &Buffer);
-        }
-
-        TotalLength = PacketLength;
-        DPRINT("USBRNDIS: CDC-ECM TX frame (%u bytes)\n", TotalLength);
-    }
-    else if (Adapter->IsCdcNcm)
-    {
-        /*
-         * CDC-NCM: Copy Ethernet frame to temp area in buffer (after max NTB header space),
-         * then build NTB from start of buffer. Max NTB overhead is ~64 bytes.
-         */
-        ULONG TempOffset = 64;  /* Reserve space for NTH16 + NDP16 */
-
-        while (Buffer)
-        {
-            NdisQueryBuffer(Buffer, &VirtualAddress, &BufferLength);
-
-            if (PacketLength + BufferLength > ETHERNET_MAX_FRAME_SIZE)
-            {
-                DPRINT1("USBRNDIS: Packet overflow during copy\n");
-                NdisAcquireSpinLock(&Adapter->TxLock);
-                Adapter->TxBusy = FALSE;
-                Adapter->PendingTxPacket = NULL;
-                NdisReleaseSpinLock(&Adapter->TxLock);
-                Adapter->TxErrorCount++;
-                return NDIS_STATUS_FAILURE;
-            }
-
-            NdisMoveMemory(Adapter->TxBuffer + TempOffset + PacketLength,
-                           VirtualAddress, BufferLength);
-            PacketLength += BufferLength;
-
-            NdisGetNextBuffer(Buffer, &Buffer);
-        }
-
-        /* Build NCM NTB (this writes NTH16 + NDP16 + copies frame to proper offset) */
-        TotalLength = RndisBuildNcmNtb(Adapter,
-                                       Adapter->TxBuffer + TempOffset,
-                                       PacketLength,
-                                       Adapter->TxBuffer);
-
-        if (TotalLength == 0)
-        {
-            DPRINT1("USBRNDIS: Failed to build NCM NTB\n");
+            DPRINT1("USBRNDIS: NBL has no NET_BUFFER\n");
             NdisAcquireSpinLock(&Adapter->TxLock);
             Adapter->TxBusy = FALSE;
-            Adapter->PendingTxPacket = NULL;
+            Adapter->PendingTxNbl = NULL;
+            NdisReleaseSpinLock(&Adapter->TxLock);
+            NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_FAILURE;
+            NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = FailedNbls;
+            FailedNbls = CurrentNbl;
+            continue;
+        }
+
+        /* Get data length and MDL */
+        DataLength = NET_BUFFER_DATA_LENGTH(CurrentNb);
+        Mdl = NET_BUFFER_CURRENT_MDL(CurrentNb);
+        DataOffset = NET_BUFFER_CURRENT_MDL_OFFSET(CurrentNb);
+
+        if (DataLength > ETHERNET_MAX_FRAME_SIZE)
+        {
+            DPRINT1("USBRNDIS: Packet too large (%u bytes)\n", DataLength);
+            NdisAcquireSpinLock(&Adapter->TxLock);
+            Adapter->TxBusy = FALSE;
+            Adapter->PendingTxNbl = NULL;
             NdisReleaseSpinLock(&Adapter->TxLock);
             Adapter->TxErrorCount++;
-            return NDIS_STATUS_FAILURE;
+            NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_INVALID_LENGTH;
+            NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = FailedNbls;
+            FailedNbls = CurrentNbl;
+            continue;
         }
 
-        DPRINT("USBRNDIS: CDC-NCM TX NTB (%lu bytes, frame %lu bytes)\n",
-               TotalLength, PacketLength);
-    }
-    else
-    {
-        /* RNDIS: Copy after header space */
-        while (Buffer)
+        /* Map the MDL to get virtual address */
+        VirtualAddress = MmGetSystemAddressForMdlSafe(Mdl, NormalPagePriority);
+        if (VirtualAddress == NULL)
         {
-            NdisQueryBuffer(Buffer, &VirtualAddress, &BufferLength);
+            DPRINT1("USBRNDIS: Failed to map MDL\n");
+            NdisAcquireSpinLock(&Adapter->TxLock);
+            Adapter->TxBusy = FALSE;
+            Adapter->PendingTxNbl = NULL;
+            NdisReleaseSpinLock(&Adapter->TxLock);
+            NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_RESOURCES;
+            NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = FailedNbls;
+            FailedNbls = CurrentNbl;
+            continue;
+        }
 
-            if (PacketLength + BufferLength > ETHERNET_MAX_FRAME_SIZE)
+        VirtualAddress = (PUCHAR)VirtualAddress + DataOffset;
+
+        /*
+         * Copy packet data to TX buffer and build protocol-specific header.
+         */
+        if (Adapter->IsCdcEcm)
+        {
+            /* CDC-ECM: Copy Ethernet frame directly */
+            NdisMoveMemory(Adapter->TxBuffer, VirtualAddress, DataLength);
+            TotalLength = DataLength;
+            DPRINT("USBRNDIS: CDC-ECM TX frame (%u bytes)\n", TotalLength);
+        }
+        else if (Adapter->IsCdcNcm)
+        {
+            /*
+             * CDC-NCM: Build NTB with NTH16/NDP16 headers.
+             * Copy frame to temp area then build NTB from it.
+             */
+            ULONG TempOffset = 64;  /* Reserve space for NTH16 + NDP16 */
+
+            NdisMoveMemory(Adapter->TxBuffer + TempOffset, VirtualAddress, DataLength);
+
+            TotalLength = RndisBuildNcmNtb(Adapter,
+                                           Adapter->TxBuffer + TempOffset,
+                                           DataLength,
+                                           Adapter->TxBuffer);
+
+            if (TotalLength == 0)
             {
-                DPRINT1("USBRNDIS: Packet overflow during copy\n");
+                DPRINT1("USBRNDIS: Failed to build NCM NTB\n");
                 NdisAcquireSpinLock(&Adapter->TxLock);
                 Adapter->TxBusy = FALSE;
-                Adapter->PendingTxPacket = NULL;
+                Adapter->PendingTxNbl = NULL;
                 NdisReleaseSpinLock(&Adapter->TxLock);
                 Adapter->TxErrorCount++;
-                return NDIS_STATUS_FAILURE;
+                NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_FAILURE;
+                NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = FailedNbls;
+                FailedNbls = CurrentNbl;
+                continue;
             }
 
-            NdisMoveMemory(Adapter->TxBuffer + sizeof(RNDIS_PACKET_MSG) + PacketLength,
-                           VirtualAddress, BufferLength);
-            PacketLength += BufferLength;
+            DPRINT("USBRNDIS: CDC-NCM TX NTB (%lu bytes, frame %lu bytes)\n",
+                   TotalLength, DataLength);
+        }
+        else
+        {
+            /* RNDIS: Build RNDIS_PACKET_MSG wrapper */
+            NdisMoveMemory(Adapter->TxBuffer + sizeof(RNDIS_PACKET_MSG),
+                           VirtualAddress, DataLength);
 
-            NdisGetNextBuffer(Buffer, &Buffer);
+            TotalLength = RndisBuildPacketMessage(Adapter,
+                                                  Adapter->TxBuffer + sizeof(RNDIS_PACKET_MSG),
+                                                  DataLength,
+                                                  Adapter->TxBuffer);
+
+            DPRINT("USBRNDIS: RNDIS TX packet (%lu bytes, frame %lu bytes)\n",
+                   TotalLength, DataLength);
         }
 
-        /* Build RNDIS packet message (this overwrites the header area) */
-        TotalLength = RndisBuildPacketMessage(Adapter,
-                                              Adapter->TxBuffer + sizeof(RNDIS_PACKET_MSG),
-                                              PacketLength,
-                                              Adapter->TxBuffer);
+        /* Send via USB bulk endpoint - async operation */
+        Status = RndisUsbSubmitBulkWrite(Adapter, Adapter->TxBuffer, TotalLength);
+
+        if (Status == STATUS_PENDING)
+        {
+            /*
+             * URB submitted successfully, will complete asynchronously.
+             * NdisMSendNetBufferListsComplete will be called from completion routine.
+             */
+            DPRINT("USBRNDIS: TX submitted async (%lu bytes)\n", DataLength);
+            Adapter->TxBytes += DataLength;
+            FirstPacketSent = TRUE;
+        }
+        else if (NT_SUCCESS(Status))
+        {
+            /*
+             * URB completed synchronously (STATUS_SUCCESS).
+             * The completion routine has ALREADY run.
+             * Mark as success and complete immediately.
+             */
+            DPRINT("USBRNDIS: TX completed sync (%lu bytes)\n", DataLength);
+            Adapter->TxBytes += DataLength;
+            FirstPacketSent = TRUE;
+            /* Completion callback already handled TxBusy and stats */
+        }
+        else
+        {
+            /*
+             * Failed to submit URB. Clean up and fail this NBL.
+             */
+            DPRINT1("USBRNDIS: Failed to submit TX (0x%08X)\n", Status);
+            NdisAcquireSpinLock(&Adapter->TxLock);
+            Adapter->TxBusy = FALSE;
+            Adapter->PendingTxNbl = NULL;
+            NdisReleaseSpinLock(&Adapter->TxLock);
+            Adapter->TxErrorCount++;
+            NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_FAILURE;
+            NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = FailedNbls;
+            FailedNbls = CurrentNbl;
+        }
     }
 
-    /* Send via USB bulk endpoint - async operation */
-    Status = RndisUsbSubmitBulkWrite(Adapter, Adapter->TxBuffer, TotalLength);
-
-    if (Status == STATUS_PENDING)
+    /* Complete failed NBLs */
+    if (FailedNbls != NULL)
     {
-        /*
-         * URB submitted successfully, will complete asynchronously.
-         * NdisMSendComplete will be called from RndisTxComplete completion routine
-         * (because Irp->PendingReturned will be TRUE).
-         */
-        DPRINT("USBRNDIS: TX submitted async (%lu bytes)\n", PacketLength);
-        return NDIS_STATUS_PENDING;
-    }
-    else if (NT_SUCCESS(Status))
-    {
-        /*
-         * URB completed synchronously (STATUS_SUCCESS).
-         * The completion routine has ALREADY run, but did NOT call NdisMSendComplete
-         * (because Irp->PendingReturned was FALSE).
-         *
-         * Return NDIS_STATUS_SUCCESS so RndisSendPackets will call NdisMSendComplete.
-         * The completion routine already cleared TxBusy/PendingTxPacket and updated stats.
-         */
-        DPRINT("USBRNDIS: TX completed sync (%lu bytes)\n", PacketLength);
-        return NDIS_STATUS_SUCCESS;
-    }
-    else
-    {
-        /*
-         * Failed to submit URB (STATUS_INSUFFICIENT_RESOURCES or other error).
-         * The completion callback will NOT occur, so clean up here.
-         */
-        DPRINT1("USBRNDIS: Failed to submit TX (0x%08X)\n", Status);
-        NdisAcquireSpinLock(&Adapter->TxLock);
-        Adapter->TxBusy = FALSE;
-        Adapter->PendingTxPacket = NULL;
-        NdisReleaseSpinLock(&Adapter->TxLock);
-        Adapter->TxErrorCount++;
-        return NDIS_STATUS_FAILURE;
+        NdisMSendNetBufferListsComplete(
+            Adapter->MiniportAdapterHandle,
+            FailedNbls,
+            DispatchLevel ? NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL : 0);
     }
 }
 
 /*
- * RndisSendPackets
+ * RndisReturnNetBufferLists
  *
- * NDIS miniport send packets handler - send multiple packets.
- * Since we can only have one TX pending at a time, we send the first
- * and queue/fail the rest.
+ * NDIS 6.x handler for returning NET_BUFFER_LISTs after receive indication.
+ * Called by NDIS when protocol drivers are done with indicated NBLs.
  */
 VOID
 NTAPI
-RndisSendPackets(
-    IN NDIS_HANDLE MiniportAdapterContext,
-    IN PPNDIS_PACKET PacketArray,
-    IN UINT NumberOfPackets)
+RndisReturnNetBufferLists(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ PNET_BUFFER_LIST NetBufferLists,
+    _In_ ULONG ReturnFlags)
 {
     PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)MiniportAdapterContext;
-    UINT i;
-    NDIS_STATUS Status;
+    PNET_BUFFER_LIST CurrentNbl;
+    PNET_BUFFER_LIST NextNbl;
+    PNET_BUFFER Nb;
+    PMDL Mdl;
+    PUCHAR DataBuffer;
 
-    DPRINT("USBRNDIS: RndisSendPackets called (%u packets)\n", NumberOfPackets);
+    UNREFERENCED_PARAMETER(ReturnFlags);
 
-    for (i = 0; i < NumberOfPackets; i++)
+    DPRINT("USBRNDIS: RndisReturnNetBufferLists called\n");
+
+    /* Process returned NBLs */
+    for (CurrentNbl = NetBufferLists; CurrentNbl != NULL; CurrentNbl = NextNbl)
     {
-        Status = RndisSend(MiniportAdapterContext, PacketArray[i], 0);
+        NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
 
-        /*
-         * Set packet status for NDIS.
-         * RndisSend returns:
-         *   NDIS_STATUS_PENDING - completion handled by RndisTxComplete callback
-         *   NDIS_STATUS_FAILURE - immediate failure, must complete here
-         *   NDIS_STATUS_RESOURCES - TX busy, must complete here
-         */
-        NDIS_SET_PACKET_STATUS(PacketArray[i], Status);
+        /* Retrieve the data buffer pointer we stored during indication */
+        DataBuffer = (PUCHAR)NET_BUFFER_LIST_INFO(CurrentNbl, MediaSpecificInformation);
 
-        if (Status != NDIS_STATUS_PENDING)
+        /* Get the NET_BUFFER and its MDL */
+        Nb = NET_BUFFER_LIST_FIRST_NB(CurrentNbl);
+        if (Nb != NULL)
         {
-            /*
-             * Immediate completion for non-pending statuses.
-             * For PENDING, RndisTxComplete will call NdisMSendComplete.
-             */
-            NdisMSendComplete(Adapter->MiniportAdapterHandle, PacketArray[i], Status);
+            Mdl = NET_BUFFER_FIRST_MDL(Nb);
+            if (Mdl != NULL)
+            {
+                /* Free the MDL */
+                NdisFreeMdl(Mdl);
+            }
+        }
+
+        /* Free the NBL */
+        NdisFreeNetBufferList(CurrentNbl);
+
+        /* Free the data buffer */
+        if (DataBuffer != NULL)
+        {
+            NdisFreeMemory(DataBuffer, 0, 0);
         }
     }
+}
+
+/*
+ * RndisCancelSend
+ *
+ * NDIS 6.x handler for cancelling pending sends with a matching cancel ID.
+ * USB RNDIS has limited cancellation capability since URBs in progress
+ * cannot be easily cancelled.
+ */
+VOID
+NTAPI
+RndisCancelSend(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ PVOID CancelId)
+{
+    PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)MiniportAdapterContext;
+    PNET_BUFFER_LIST CancelledNbl = NULL;
+
+    DPRINT("USBRNDIS: RndisCancelSend called (CancelId=%p)\n", CancelId);
+
+    /*
+     * For USB RNDIS, once the URB is submitted, we cannot cancel it easily.
+     * We can only cancel NBLs that are queued but not yet submitted.
+     * Since we only have one pending TX at a time and it's immediately
+     * submitted to USB, there's nothing to cancel.
+     *
+     * Check if the pending NBL matches the cancel ID.
+     */
+    NdisAcquireSpinLock(&Adapter->TxLock);
+
+    if (Adapter->PendingTxNbl != NULL &&
+        NDIS_GET_NET_BUFFER_LIST_CANCEL_ID(Adapter->PendingTxNbl) == CancelId)
+    {
+        /*
+         * The pending NBL matches, but it's already submitted to USB.
+         * We cannot cancel the USB transfer, so we don't do anything here.
+         * The completion routine will handle it normally.
+         */
+        DPRINT("USBRNDIS: Cannot cancel in-flight TX\n");
+    }
+
+    NdisReleaseSpinLock(&Adapter->TxLock);
+
+    /* No queued NBLs to cancel in this simple implementation */
+    UNREFERENCED_PARAMETER(CancelledNbl);
 }

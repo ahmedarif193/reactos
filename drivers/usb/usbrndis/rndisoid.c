@@ -1,12 +1,11 @@
 /*
  * PROJECT:     ReactOS USB RNDIS Network Driver
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     NDIS OID query/set handler
+ * PURPOSE:     NDIS 6.x OID request handler
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  *
- * This file handles NDIS OID requests from the network stack.
- * Many OIDs can be answered locally from cached information,
- * while others are forwarded to the RNDIS device.
+ * This file handles NDIS OID requests from the network stack using the
+ * NDIS 6.x MiniportOidRequest unified handler pattern.
  */
 
 #include "usbrndis.h"
@@ -37,6 +36,16 @@ static const NDIS_OID SupportedOidList[] = {
     OID_GEN_MAC_OPTIONS,
     OID_GEN_MEDIA_CONNECT_STATUS,
     OID_GEN_MAXIMUM_SEND_PACKETS,
+    OID_GEN_VENDOR_DRIVER_VERSION,
+    OID_GEN_PHYSICAL_MEDIUM,
+
+    /* NDIS 6.x OIDs */
+    OID_GEN_LINK_SPEED_EX,
+    OID_GEN_MAX_LINK_SPEED,
+    OID_GEN_MEDIA_CONNECT_STATUS_EX,
+    OID_GEN_MEDIA_DUPLEX_STATE,
+    OID_GEN_LINK_STATE,
+    OID_GEN_STATISTICS,
 
     /* Statistics OIDs */
     OID_GEN_XMIT_OK,
@@ -53,34 +62,132 @@ static const NDIS_OID SupportedOidList[] = {
     OID_802_3_RCV_ERROR_ALIGNMENT,
     OID_802_3_XMIT_ONE_COLLISION,
     OID_802_3_XMIT_MORE_COLLISIONS,
+
+    /* Power Management OIDs */
+    OID_PNP_CAPABILITIES,
+    OID_PNP_SET_POWER,
+    OID_PNP_QUERY_POWER,
 };
 
 /* Vendor description */
 static const CHAR VendorDescription[] = "USB RNDIS Network Adapter";
 
 /*
+ * NDIS 6.x OID values (if not defined in headers)
+ */
+#ifndef OID_GEN_LINK_SPEED_EX
+#define OID_GEN_LINK_SPEED_EX               0x00010206
+#endif
+
+#ifndef OID_GEN_MAX_LINK_SPEED
+#define OID_GEN_MAX_LINK_SPEED              0x00010207
+#endif
+
+#ifndef OID_GEN_MEDIA_CONNECT_STATUS_EX
+#define OID_GEN_MEDIA_CONNECT_STATUS_EX     0x00010208
+#endif
+
+#ifndef OID_GEN_MEDIA_DUPLEX_STATE
+#define OID_GEN_MEDIA_DUPLEX_STATE          0x00010209
+#endif
+
+#ifndef OID_GEN_LINK_STATE
+#define OID_GEN_LINK_STATE                  0x0001020A
+#endif
+
+#ifndef OID_GEN_STATISTICS
+#define OID_GEN_STATISTICS                  0x00020106
+#endif
+
+/*
+ * NDIS_LINK_SPEED structure for NDIS 6.x
+ */
+#ifndef NDIS_LINK_SPEED_DEFINED
+typedef struct _NDIS_LINK_SPEED {
+    ULONG64 XmitLinkSpeed;
+    ULONG64 RcvLinkSpeed;
+} NDIS_LINK_SPEED, *PNDIS_LINK_SPEED;
+#define NDIS_LINK_SPEED_DEFINED 1
+#endif
+
+/*
+ * NDIS_STATISTICS_INFO structure
+ */
+#ifndef NDIS_STATISTICS_INFO_REVISION_1
+#define NDIS_STATISTICS_INFO_REVISION_1     1
+#endif
+
+#ifndef NDIS_STATISTICS_FLAGS_VALID_BYTES_RCV
+#define NDIS_STATISTICS_FLAGS_VALID_BYTES_RCV           0x00000001
+#define NDIS_STATISTICS_FLAGS_VALID_BYTES_XMIT          0x00000002
+#define NDIS_STATISTICS_FLAGS_VALID_RCV_DISCARDS        0x00000004
+#define NDIS_STATISTICS_FLAGS_VALID_RCV_ERROR           0x00000008
+#define NDIS_STATISTICS_FLAGS_VALID_XMIT_ERROR          0x00000010
+#define NDIS_STATISTICS_FLAGS_VALID_XMIT_DISCARDS       0x00000020
+#endif
+
+#ifndef NDIS_STATISTICS_INFO_DEFINED
+typedef struct _NDIS_STATISTICS_INFO {
+    NDIS_OBJECT_HEADER  Header;
+    ULONG               SupportedStatistics;
+    ULONG64             ifInDiscards;
+    ULONG64             ifInErrors;
+    ULONG64             ifHCInOctets;
+    ULONG64             ifHCInUcastPkts;
+    ULONG64             ifHCInMulticastPkts;
+    ULONG64             ifHCInBroadcastPkts;
+    ULONG64             ifHCOutOctets;
+    ULONG64             ifHCOutUcastPkts;
+    ULONG64             ifHCOutMulticastPkts;
+    ULONG64             ifHCOutBroadcastPkts;
+    ULONG64             ifOutErrors;
+    ULONG64             ifOutDiscards;
+    ULONG64             ifHCInUcastOctets;
+    ULONG64             ifHCInMulticastOctets;
+    ULONG64             ifHCInBroadcastOctets;
+    ULONG64             ifHCOutUcastOctets;
+    ULONG64             ifHCOutMulticastOctets;
+    ULONG64             ifHCOutBroadcastOctets;
+} NDIS_STATISTICS_INFO, *PNDIS_STATISTICS_INFO;
+#define NDIS_STATISTICS_INFO_DEFINED 1
+#endif
+
+/*
  * RndisQueryInformation
  *
- * NDIS miniport query information handler
+ * Handle query OID requests
  */
 NDIS_STATUS
-NTAPI
 RndisQueryInformation(
-    IN NDIS_HANDLE MiniportAdapterContext,
-    IN NDIS_OID Oid,
-    IN PVOID InformationBuffer,
-    IN ULONG InformationBufferLength,
-    OUT PULONG BytesWritten,
-    OUT PULONG BytesNeeded)
+    _In_ PRNDIS_ADAPTER Adapter,
+    _In_ PNDIS_OID_REQUEST OidRequest)
 {
-    PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)MiniportAdapterContext;
+    NDIS_OID Oid = OidRequest->DATA.QUERY_INFORMATION.Oid;
+    PVOID InfoBuffer = OidRequest->DATA.QUERY_INFORMATION.InformationBuffer;
+    ULONG InfoBufferLength = OidRequest->DATA.QUERY_INFORMATION.InformationBufferLength;
+    PUINT BytesWritten = &OidRequest->DATA.QUERY_INFORMATION.BytesWritten;
+    PUINT BytesNeeded = &OidRequest->DATA.QUERY_INFORMATION.BytesNeeded;
+
     NDIS_STATUS Status = NDIS_STATUS_SUCCESS;
-    PVOID SourceBuffer = NULL;
-    ULONG SourceLength = 0;
-    ULONG GenericUlong;
-    USHORT GenericUshort;
-    NDIS_MEDIUM Medium = NdisMedium802_3;
-    NDIS_HARDWARE_STATUS HardwareStatus = NdisHardwareStatusReady;
+    ULONG CopyLength = 0;
+    PVOID CopySource = NULL;
+
+    /* Union for temporary data storage */
+    union
+    {
+        ULONG Ulong;
+        ULONG64 Ulong64;
+        USHORT Ushort;
+        NDIS_MEDIUM Medium;
+        NDIS_HARDWARE_STATUS HardwareStatus;
+        NDIS_MEDIA_CONNECT_STATE MediaConnectState;
+        NDIS_MEDIA_DUPLEX_STATE MediaDuplexState;
+        NDIS_PHYSICAL_MEDIUM PhysicalMedium;
+        NDIS_LINK_STATE LinkState;
+        NDIS_LINK_SPEED LinkSpeed;
+        NDIS_STATISTICS_INFO Statistics;
+        UCHAR MacAddress[ETH_LENGTH_OF_ADDRESS];
+    } Data;
 
     DPRINT("USBRNDIS: QueryInformation OID 0x%08X\n", Oid);
 
@@ -92,214 +199,304 @@ RndisQueryInformation(
         /* === General Required OIDs === */
 
         case OID_GEN_SUPPORTED_LIST:
-            SourceBuffer = (PVOID)SupportedOidList;
-            SourceLength = sizeof(SupportedOidList);
+            CopySource = (PVOID)SupportedOidList;
+            CopyLength = sizeof(SupportedOidList);
             break;
 
         case OID_GEN_HARDWARE_STATUS:
             if (Adapter->State >= RndisStateInitialized)
             {
-                HardwareStatus = NdisHardwareStatusReady;
+                Data.HardwareStatus = NdisHardwareStatusReady;
             }
             else
             {
-                HardwareStatus = NdisHardwareStatusNotReady;
+                Data.HardwareStatus = NdisHardwareStatusNotReady;
             }
-            SourceBuffer = &HardwareStatus;
-            SourceLength = sizeof(HardwareStatus);
+            CopySource = &Data.HardwareStatus;
+            CopyLength = sizeof(NDIS_HARDWARE_STATUS);
             break;
 
         case OID_GEN_MEDIA_SUPPORTED:
         case OID_GEN_MEDIA_IN_USE:
-            SourceBuffer = &Medium;
-            SourceLength = sizeof(Medium);
+            Data.Medium = NdisMedium802_3;
+            CopySource = &Data.Medium;
+            CopyLength = sizeof(NDIS_MEDIUM);
+            break;
+
+        case OID_GEN_PHYSICAL_MEDIUM:
+            Data.PhysicalMedium = NdisPhysicalMedium802_3;
+            CopySource = &Data.PhysicalMedium;
+            CopyLength = sizeof(NDIS_PHYSICAL_MEDIUM);
             break;
 
         case OID_GEN_MAXIMUM_LOOKAHEAD:
         case OID_GEN_CURRENT_LOOKAHEAD:
-            GenericUlong = ETHERNET_MAX_FRAME_SIZE - ETHERNET_HEADER_SIZE;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            Data.Ulong = ETHERNET_MAX_FRAME_SIZE - ETHERNET_HEADER_SIZE;
+            CopySource = &Data.Ulong;
+            CopyLength = sizeof(ULONG);
             break;
 
         case OID_GEN_MAXIMUM_FRAME_SIZE:
-            GenericUlong = ETHERNET_MAX_MTU;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            Data.Ulong = ETHERNET_MAX_MTU;
+            CopySource = &Data.Ulong;
+            CopyLength = sizeof(ULONG);
             break;
 
         case OID_GEN_LINK_SPEED:
-            GenericUlong = Adapter->LinkSpeed;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            /* NDIS 5.x style: return in 100 bps units */
+            Data.Ulong = (ULONG)(Adapter->LinkSpeed / 100);
+            CopySource = &Data.Ulong;
+            CopyLength = sizeof(ULONG);
+            break;
+
+        case OID_GEN_LINK_SPEED_EX:
+        case OID_GEN_MAX_LINK_SPEED:
+            /* NDIS 6.x style: return in bps */
+            Data.LinkSpeed.XmitLinkSpeed = Adapter->LinkSpeed;
+            Data.LinkSpeed.RcvLinkSpeed = Adapter->LinkSpeed;
+            CopySource = &Data.LinkSpeed;
+            CopyLength = sizeof(NDIS_LINK_SPEED);
             break;
 
         case OID_GEN_TRANSMIT_BUFFER_SPACE:
-            GenericUlong = ETHERNET_MAX_FRAME_SIZE;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            Data.Ulong = ETHERNET_MAX_FRAME_SIZE;
+            CopySource = &Data.Ulong;
+            CopyLength = sizeof(ULONG);
             break;
 
         case OID_GEN_RECEIVE_BUFFER_SPACE:
-            GenericUlong = RNDIS_MAX_TRANSFER_SIZE;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            Data.Ulong = RNDIS_MAX_TRANSFER_SIZE;
+            CopySource = &Data.Ulong;
+            CopyLength = sizeof(ULONG);
             break;
 
         case OID_GEN_TRANSMIT_BLOCK_SIZE:
         case OID_GEN_RECEIVE_BLOCK_SIZE:
-            GenericUlong = 1;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            Data.Ulong = 1;
+            CopySource = &Data.Ulong;
+            CopyLength = sizeof(ULONG);
             break;
 
         case OID_GEN_VENDOR_ID:
-            /*
-             * NDIS expects a 24-bit OUI (Organizationally Unique Identifier).
-             * Try to extract from MAC address OUI (first 3 bytes).
-             * If MAC address is not set, return 0x00FFFFFF (unknown vendor).
-             */
             if (Adapter->PermanentMacAddress[0] != 0 ||
                 Adapter->PermanentMacAddress[1] != 0 ||
                 Adapter->PermanentMacAddress[2] != 0)
             {
-                GenericUlong = (Adapter->PermanentMacAddress[0] << 16) |
-                               (Adapter->PermanentMacAddress[1] << 8) |
-                               Adapter->PermanentMacAddress[2];
+                Data.Ulong = ((ULONG)Adapter->PermanentMacAddress[0] << 16) |
+                             ((ULONG)Adapter->PermanentMacAddress[1] << 8) |
+                             (ULONG)Adapter->PermanentMacAddress[2];
             }
             else
             {
-                /* Unknown vendor OUI */
-                GenericUlong = 0x00FFFFFF;
+                Data.Ulong = 0x00FFFFFF;
             }
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            CopySource = &Data.Ulong;
+            CopyLength = sizeof(ULONG);
             break;
 
         case OID_GEN_VENDOR_DESCRIPTION:
-            SourceBuffer = (PVOID)VendorDescription;
-            SourceLength = sizeof(VendorDescription);
+            CopySource = (PVOID)VendorDescription;
+            CopyLength = sizeof(VendorDescription);
             break;
 
-        case OID_GEN_CURRENT_PACKET_FILTER:
-            GenericUlong = Adapter->PacketFilter;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+        case OID_GEN_VENDOR_DRIVER_VERSION:
+            Data.Ulong = 0x00010000;  /* Version 1.0 */
+            CopySource = &Data.Ulong;
+            CopyLength = sizeof(ULONG);
             break;
 
         case OID_GEN_DRIVER_VERSION:
-            GenericUshort = (NDIS_MINIPORT_MAJOR_VERSION << 8) | NDIS_MINIPORT_MINOR_VERSION;
-            SourceBuffer = &GenericUshort;
-            SourceLength = sizeof(GenericUshort);
+            Data.Ushort = (NDIS_MINIPORT_MAJOR_VERSION << 8) | NDIS_MINIPORT_MINOR_VERSION;
+            CopySource = &Data.Ushort;
+            CopyLength = sizeof(USHORT);
+            break;
+
+        case OID_GEN_CURRENT_PACKET_FILTER:
+            Data.Ulong = Adapter->PacketFilter;
+            CopySource = &Data.Ulong;
+            CopyLength = sizeof(ULONG);
             break;
 
         case OID_GEN_MAXIMUM_TOTAL_SIZE:
-            GenericUlong = ETHERNET_MAX_FRAME_SIZE;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            Data.Ulong = ETHERNET_MAX_FRAME_SIZE;
+            CopySource = &Data.Ulong;
+            CopyLength = sizeof(ULONG);
             break;
 
         case OID_GEN_MAC_OPTIONS:
-            GenericUlong = NDIS_MAC_OPTION_COPY_LOOKAHEAD_DATA |
-                           NDIS_MAC_OPTION_TRANSFERS_NOT_PEND |
-                           NDIS_MAC_OPTION_NO_LOOPBACK;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            Data.Ulong = NDIS_MAC_OPTION_COPY_LOOKAHEAD_DATA |
+                         NDIS_MAC_OPTION_TRANSFERS_NOT_PEND |
+                         NDIS_MAC_OPTION_NO_LOOPBACK;
+            CopySource = &Data.Ulong;
+            CopyLength = sizeof(ULONG);
             break;
 
         case OID_GEN_MEDIA_CONNECT_STATUS:
-            GenericUlong = Adapter->MediaState;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            /* NDIS 5.x style: 0 = connected, 1 = disconnected */
+            Data.Ulong = (Adapter->MediaState == MediaConnectStateConnected) ?
+                         NdisMediaStateConnected : NdisMediaStateDisconnected;
+            CopySource = &Data.Ulong;
+            CopyLength = sizeof(ULONG);
+            break;
+
+        case OID_GEN_MEDIA_CONNECT_STATUS_EX:
+            Data.MediaConnectState = Adapter->MediaState;
+            CopySource = &Data.MediaConnectState;
+            CopyLength = sizeof(NDIS_MEDIA_CONNECT_STATE);
+            break;
+
+        case OID_GEN_MEDIA_DUPLEX_STATE:
+            Data.MediaDuplexState = MediaDuplexStateFull;
+            CopySource = &Data.MediaDuplexState;
+            CopyLength = sizeof(NDIS_MEDIA_DUPLEX_STATE);
+            break;
+
+        case OID_GEN_LINK_STATE:
+            NdisZeroMemory(&Data.LinkState, sizeof(NDIS_LINK_STATE));
+            Data.LinkState.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+            Data.LinkState.Header.Revision = NDIS_LINK_STATE_REVISION_1;
+            Data.LinkState.Header.Size = sizeof(NDIS_LINK_STATE);
+            Data.LinkState.MediaConnectState = Adapter->MediaState;
+            Data.LinkState.MediaDuplexState = MediaDuplexStateFull;
+            Data.LinkState.XmitLinkSpeed = Adapter->LinkSpeed;
+            Data.LinkState.RcvLinkSpeed = Adapter->LinkSpeed;
+            Data.LinkState.PauseFunctions = NdisPauseFunctionsUnsupported;
+            CopySource = &Data.LinkState;
+            CopyLength = sizeof(NDIS_LINK_STATE);
             break;
 
         case OID_GEN_MAXIMUM_SEND_PACKETS:
-            GenericUlong = 1;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            Data.Ulong = 1;
+            CopySource = &Data.Ulong;
+            CopyLength = sizeof(ULONG);
             break;
 
         /* === Statistics OIDs === */
 
         case OID_GEN_XMIT_OK:
-            GenericUlong = (ULONG)Adapter->TxOkCount;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            Data.Ulong64 = Adapter->TxOkCount;
+            CopySource = &Data.Ulong64;
+            CopyLength = sizeof(ULONG64);
             break;
 
         case OID_GEN_RCV_OK:
-            GenericUlong = (ULONG)Adapter->RxOkCount;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            Data.Ulong64 = Adapter->RxOkCount;
+            CopySource = &Data.Ulong64;
+            CopyLength = sizeof(ULONG64);
             break;
 
         case OID_GEN_XMIT_ERROR:
-            GenericUlong = (ULONG)Adapter->TxErrorCount;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            Data.Ulong64 = Adapter->TxErrorCount;
+            CopySource = &Data.Ulong64;
+            CopyLength = sizeof(ULONG64);
             break;
 
         case OID_GEN_RCV_ERROR:
-            GenericUlong = (ULONG)Adapter->RxErrorCount;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            Data.Ulong64 = Adapter->RxErrorCount;
+            CopySource = &Data.Ulong64;
+            CopyLength = sizeof(ULONG64);
             break;
 
         case OID_GEN_RCV_NO_BUFFER:
-            GenericUlong = (ULONG)Adapter->RxNoBufferCount;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            Data.Ulong64 = Adapter->RxNoBufferCount;
+            CopySource = &Data.Ulong64;
+            CopyLength = sizeof(ULONG64);
+            break;
+
+        case OID_GEN_STATISTICS:
+            NdisZeroMemory(&Data.Statistics, sizeof(NDIS_STATISTICS_INFO));
+            Data.Statistics.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+            Data.Statistics.Header.Revision = NDIS_STATISTICS_INFO_REVISION_1;
+            Data.Statistics.Header.Size = sizeof(NDIS_STATISTICS_INFO);
+            Data.Statistics.SupportedStatistics =
+                NDIS_STATISTICS_FLAGS_VALID_BYTES_RCV |
+                NDIS_STATISTICS_FLAGS_VALID_BYTES_XMIT |
+                NDIS_STATISTICS_FLAGS_VALID_RCV_ERROR |
+                NDIS_STATISTICS_FLAGS_VALID_XMIT_ERROR;
+            Data.Statistics.ifHCInOctets = Adapter->RxBytes;
+            Data.Statistics.ifHCOutOctets = Adapter->TxBytes;
+            Data.Statistics.ifInErrors = Adapter->RxErrorCount;
+            Data.Statistics.ifOutErrors = Adapter->TxErrorCount;
+            Data.Statistics.ifHCInUcastPkts = Adapter->RxOkCount;
+            Data.Statistics.ifHCOutUcastPkts = Adapter->TxOkCount;
+            CopySource = &Data.Statistics;
+            CopyLength = sizeof(NDIS_STATISTICS_INFO);
             break;
 
         /* === 802.3 (Ethernet) OIDs === */
 
         case OID_802_3_PERMANENT_ADDRESS:
-            SourceBuffer = Adapter->PermanentMacAddress;
-            SourceLength = ETHERNET_ADDRESS_LENGTH;
+            NdisMoveMemory(Data.MacAddress, Adapter->PermanentMacAddress, ETH_LENGTH_OF_ADDRESS);
+            CopySource = Data.MacAddress;
+            CopyLength = ETH_LENGTH_OF_ADDRESS;
             break;
 
         case OID_802_3_CURRENT_ADDRESS:
-            SourceBuffer = Adapter->CurrentMacAddress;
-            SourceLength = ETHERNET_ADDRESS_LENGTH;
+            NdisMoveMemory(Data.MacAddress, Adapter->CurrentMacAddress, ETH_LENGTH_OF_ADDRESS);
+            CopySource = Data.MacAddress;
+            CopyLength = ETH_LENGTH_OF_ADDRESS;
             break;
 
         case OID_802_3_MULTICAST_LIST:
-            SourceBuffer = Adapter->MulticastList;
-            SourceLength = Adapter->MulticastListCount * ETHERNET_ADDRESS_LENGTH;
+            CopySource = Adapter->MulticastList;
+            CopyLength = Adapter->MulticastListCount * ETH_LENGTH_OF_ADDRESS;
             break;
 
         case OID_802_3_MAXIMUM_LIST_SIZE:
-            GenericUlong = RNDIS_MAX_MULTICAST_ADDRESSES;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            Data.Ulong = RNDIS_MAX_MULTICAST_ADDRESSES;
+            CopySource = &Data.Ulong;
+            CopyLength = sizeof(ULONG);
             break;
 
         case OID_802_3_RCV_ERROR_ALIGNMENT:
         case OID_802_3_XMIT_ONE_COLLISION:
         case OID_802_3_XMIT_MORE_COLLISIONS:
-            /* These are typically 0 for USB devices */
-            GenericUlong = 0;
-            SourceBuffer = &GenericUlong;
-            SourceLength = sizeof(GenericUlong);
+            Data.Ulong = 0;
+            CopySource = &Data.Ulong;
+            CopyLength = sizeof(ULONG);
             break;
+
+        /* === Power Management OIDs === */
+
+        case OID_PNP_CAPABILITIES:
+            *BytesNeeded = sizeof(NDIS_PNP_CAPABILITIES);
+            if (InfoBufferLength < sizeof(NDIS_PNP_CAPABILITIES))
+            {
+                Status = NDIS_STATUS_BUFFER_TOO_SHORT;
+            }
+            else
+            {
+                PNDIS_PNP_CAPABILITIES PmCaps = (PNDIS_PNP_CAPABILITIES)InfoBuffer;
+                NdisZeroMemory(PmCaps, sizeof(NDIS_PNP_CAPABILITIES));
+                PmCaps->WakeUpCapabilities.MinMagicPacketWakeUp = NdisDeviceStateUnspecified;
+                PmCaps->WakeUpCapabilities.MinPatternWakeUp = NdisDeviceStateUnspecified;
+                PmCaps->WakeUpCapabilities.MinLinkChangeWakeUp = NdisDeviceStateUnspecified;
+                *BytesWritten = sizeof(NDIS_PNP_CAPABILITIES);
+            }
+            return Status;
+
+        case OID_PNP_QUERY_POWER:
+            /* We support all power states */
+            return NDIS_STATUS_SUCCESS;
 
         default:
-            DPRINT1("USBRNDIS: Unsupported OID 0x%08X\n", Oid);
+            DPRINT1("USBRNDIS: Unsupported query OID 0x%08X\n", Oid);
             Status = NDIS_STATUS_NOT_SUPPORTED;
-            break;
+            return Status;
     }
 
-    if (Status == NDIS_STATUS_SUCCESS && SourceBuffer && SourceLength > 0)
+    /* Copy data to output buffer */
+    if (Status == NDIS_STATUS_SUCCESS && CopySource != NULL)
     {
-        if (InformationBufferLength < SourceLength)
+        if (InfoBufferLength < CopyLength)
         {
-            *BytesNeeded = SourceLength;
+            *BytesNeeded = CopyLength;
             Status = NDIS_STATUS_BUFFER_TOO_SHORT;
         }
         else
         {
-            NdisMoveMemory(InformationBuffer, SourceBuffer, SourceLength);
-            *BytesWritten = SourceLength;
+            NdisMoveMemory(InfoBuffer, CopySource, CopyLength);
+            *BytesWritten = CopyLength;
         }
     }
 
@@ -309,19 +506,19 @@ RndisQueryInformation(
 /*
  * RndisSetInformation
  *
- * NDIS miniport set information handler
+ * Handle set OID requests
  */
 NDIS_STATUS
-NTAPI
 RndisSetInformation(
-    IN NDIS_HANDLE MiniportAdapterContext,
-    IN NDIS_OID Oid,
-    IN PVOID InformationBuffer,
-    IN ULONG InformationBufferLength,
-    OUT PULONG BytesRead,
-    OUT PULONG BytesNeeded)
+    _In_ PRNDIS_ADAPTER Adapter,
+    _In_ PNDIS_OID_REQUEST OidRequest)
 {
-    PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)MiniportAdapterContext;
+    NDIS_OID Oid = OidRequest->DATA.SET_INFORMATION.Oid;
+    PVOID InfoBuffer = OidRequest->DATA.SET_INFORMATION.InformationBuffer;
+    ULONG InfoBufferLength = OidRequest->DATA.SET_INFORMATION.InformationBufferLength;
+    PUINT BytesRead = &OidRequest->DATA.SET_INFORMATION.BytesRead;
+    PUINT BytesNeeded = &OidRequest->DATA.SET_INFORMATION.BytesNeeded;
+
     NDIS_STATUS Status = NDIS_STATUS_SUCCESS;
     ULONG PacketFilter;
     NTSTATUS NtStatus;
@@ -334,32 +531,61 @@ RndisSetInformation(
     switch (Oid)
     {
         case OID_GEN_CURRENT_PACKET_FILTER:
-            if (InformationBufferLength < sizeof(ULONG))
+            if (InfoBufferLength < sizeof(ULONG))
             {
                 *BytesNeeded = sizeof(ULONG);
                 Status = NDIS_STATUS_INVALID_LENGTH;
                 break;
             }
 
-            NdisMoveMemory(&PacketFilter, InformationBuffer, sizeof(ULONG));
+            PacketFilter = *(PULONG)InfoBuffer;
             DPRINT("USBRNDIS: Setting packet filter to 0x%08X\n", PacketFilter);
+
+            /* Validate filter bits */
+            if (PacketFilter & ~(NDIS_PACKET_TYPE_DIRECTED |
+                                 NDIS_PACKET_TYPE_MULTICAST |
+                                 NDIS_PACKET_TYPE_ALL_MULTICAST |
+                                 NDIS_PACKET_TYPE_BROADCAST |
+                                 NDIS_PACKET_TYPE_PROMISCUOUS))
+            {
+                Status = NDIS_STATUS_NOT_SUPPORTED;
+                break;
+            }
 
             /* Set filter on device */
             NtStatus = RndisSetPacketFilter(Adapter, PacketFilter);
             if (!NT_SUCCESS(NtStatus))
             {
                 DPRINT1("USBRNDIS: Failed to set packet filter (0x%08X)\n", NtStatus);
-                Status = NDIS_STATUS_FAILURE;
+
+                /*
+                 * For CDC-NCM devices, SET_ETHERNET_PACKET_FILTER may not be supported
+                 * (e.g., VirtualBox CDC-NCM). This is non-fatal because CDC-NCM devices
+                 * typically receive all packets anyway. Log a warning but return success
+                 * to allow TCP/IP binding to proceed.
+                 */
+                if (Adapter->IsCdcNcm)
+                {
+                    DPRINT1("USBRNDIS: CDC-NCM: Packet filter failure is non-fatal, proceeding anyway\n");
+                    Adapter->PacketFilter = PacketFilter;
+                    *BytesRead = sizeof(ULONG);
+                    Status = NDIS_STATUS_SUCCESS;
+                }
+                else
+                {
+                    Status = NDIS_STATUS_FAILURE;
+                }
             }
             else
             {
+                Adapter->PacketFilter = PacketFilter;
                 *BytesRead = sizeof(ULONG);
             }
             break;
 
         case OID_GEN_CURRENT_LOOKAHEAD:
             /* Accept any lookahead value */
-            if (InformationBufferLength < sizeof(ULONG))
+            if (InfoBufferLength < sizeof(ULONG))
             {
                 *BytesNeeded = sizeof(ULONG);
                 Status = NDIS_STATUS_INVALID_LENGTH;
@@ -371,29 +597,58 @@ RndisSetInformation(
             break;
 
         case OID_802_3_MULTICAST_LIST:
-            if (InformationBufferLength % ETHERNET_ADDRESS_LENGTH != 0)
+            if (InfoBufferLength % ETH_LENGTH_OF_ADDRESS != 0)
             {
                 Status = NDIS_STATUS_INVALID_LENGTH;
                 break;
             }
 
-            if (InformationBufferLength / ETHERNET_ADDRESS_LENGTH > RNDIS_MAX_MULTICAST_ADDRESSES)
+            if (InfoBufferLength / ETH_LENGTH_OF_ADDRESS > RNDIS_MAX_MULTICAST_ADDRESSES)
             {
+                *BytesNeeded = RNDIS_MAX_MULTICAST_ADDRESSES * ETH_LENGTH_OF_ADDRESS;
                 Status = NDIS_STATUS_MULTICAST_FULL;
                 break;
             }
 
             /* Copy multicast list */
             NdisZeroMemory(Adapter->MulticastList, sizeof(Adapter->MulticastList));
-            Adapter->MulticastListCount = InformationBufferLength / ETHERNET_ADDRESS_LENGTH;
-            NdisMoveMemory(Adapter->MulticastList, InformationBuffer, InformationBufferLength);
+            Adapter->MulticastListCount = InfoBufferLength / ETH_LENGTH_OF_ADDRESS;
+            NdisMoveMemory(Adapter->MulticastList, InfoBuffer, InfoBufferLength);
 
-            /* Optionally set on device */
-            RndisSetOid(Adapter, RNDIS_OID_802_3_MULTICAST_LIST,
-                        Adapter->MulticastList,
-                        Adapter->MulticastListCount * ETHERNET_ADDRESS_LENGTH);
+            /* Program device filters */
+            if (Adapter->IsCdcEcm || Adapter->IsCdcNcm)
+            {
+                NtStatus = RndisUsbSetEthernetMulticastFilters(
+                    Adapter,
+                    (PUCHAR)Adapter->MulticastList,
+                    (USHORT)Adapter->MulticastListCount);
+                if (!NT_SUCCESS(NtStatus))
+                {
+                    Status = NDIS_STATUS_FAILURE;
+                    break;
+                }
+            }
+            else
+            {
+                RndisSetOid(Adapter, RNDIS_OID_802_3_MULTICAST_LIST,
+                            Adapter->MulticastList,
+                            Adapter->MulticastListCount * ETH_LENGTH_OF_ADDRESS);
+            }
 
-            *BytesRead = InformationBufferLength;
+            *BytesRead = InfoBufferLength;
+            break;
+
+        case OID_PNP_SET_POWER:
+            if (InfoBufferLength < sizeof(NDIS_DEVICE_POWER_STATE))
+            {
+                *BytesNeeded = sizeof(NDIS_DEVICE_POWER_STATE);
+                Status = NDIS_STATUS_INVALID_LENGTH;
+            }
+            else
+            {
+                /* Accept power state change */
+                *BytesRead = sizeof(NDIS_DEVICE_POWER_STATE);
+            }
             break;
 
         default:
@@ -403,4 +658,59 @@ RndisSetInformation(
     }
 
     return Status;
+}
+
+/*
+ * RndisOidRequest
+ *
+ * NDIS 6.x unified OID request handler
+ */
+NDIS_STATUS
+NTAPI
+RndisOidRequest(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ PNDIS_OID_REQUEST OidRequest)
+{
+    PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)MiniportAdapterContext;
+    NDIS_STATUS Status;
+
+    switch (OidRequest->RequestType)
+    {
+        case NdisRequestQueryInformation:
+        case NdisRequestQueryStatistics:
+            Status = RndisQueryInformation(Adapter, OidRequest);
+            break;
+
+        case NdisRequestSetInformation:
+            Status = RndisSetInformation(Adapter, OidRequest);
+            break;
+
+        case NdisRequestMethod:
+            /* Method requests not supported */
+            Status = NDIS_STATUS_NOT_SUPPORTED;
+            break;
+
+        default:
+            Status = NDIS_STATUS_NOT_SUPPORTED;
+            break;
+    }
+
+    return Status;
+}
+
+/*
+ * RndisCancelOidRequest
+ *
+ * NDIS 6.x OID request cancellation handler
+ */
+VOID
+NTAPI
+RndisCancelOidRequest(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ PVOID RequestId)
+{
+    UNREFERENCED_PARAMETER(MiniportAdapterContext);
+    UNREFERENCED_PARAMETER(RequestId);
+
+    /* We complete OID requests synchronously, so nothing to cancel */
 }

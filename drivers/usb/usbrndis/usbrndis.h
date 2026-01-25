@@ -17,6 +17,9 @@
 #include <usbbusif.h>
 #include <usbdlib.h>
 
+/* Include NDIS 6.x compatibility layer */
+#include "ndis6_compat.h"
+
 #define USBRNDIS_TAG 'DNRU'
 
 /*
@@ -131,6 +134,40 @@
  */
 #define USB_CDC_SEND_ENCAPSULATED_COMMAND   0x00
 #define USB_CDC_GET_ENCAPSULATED_RESPONSE   0x01
+
+/*
+ * USB CDC ECM/NCM Class Request Codes
+ * Per USB CDC ECM 1.2 specification
+ */
+#define USB_CDC_SET_ETHERNET_MULTICAST_FILTERS 0x40
+#define USB_CDC_SET_ETHERNET_PACKET_FILTER     0x43
+#define USB_CDC_GET_ETHERNET_STATISTIC         0x44
+
+/*
+ * CDC Ethernet Packet Filter Bits (wValue)
+ */
+#define CDC_ECM_PACKET_TYPE_DIRECTED      0x0001
+#define CDC_ECM_PACKET_TYPE_MULTICAST     0x0002
+#define CDC_ECM_PACKET_TYPE_BROADCAST     0x0004
+#define CDC_ECM_PACKET_TYPE_PROMISCUOUS   0x0008
+#define CDC_ECM_PACKET_TYPE_ALL_MULTICAST 0x0010
+
+/*
+ * USB CDC Notification Types
+ */
+#define USB_CDC_NOTIFICATION_NETWORK_CONNECTION       0x00
+#define USB_CDC_NOTIFICATION_RESPONSE_AVAILABLE       0x01
+#define USB_CDC_NOTIFICATION_CONNECTION_SPEED_CHANGE  0x2A
+
+typedef struct _USB_CDC_NOTIFICATION {
+    UCHAR bmRequestType;
+    UCHAR bNotificationType;
+    USHORT wValue;
+    USHORT wIndex;
+    USHORT wLength;
+} USB_CDC_NOTIFICATION, *PUSB_CDC_NOTIFICATION;
+
+C_ASSERT(sizeof(USB_CDC_NOTIFICATION) == 8);
 
 /*
  * USB CDC NCM Class Request Codes
@@ -533,8 +570,8 @@ typedef struct _RNDIS_ADAPTER {
     UCHAR PermanentMacAddress[ETHERNET_ADDRESS_LENGTH];
     UCHAR CurrentMacAddress[ETHERNET_ADDRESS_LENGTH];
     ULONG PacketFilter;
-    ULONG LinkSpeed;                /* In 100 bps units */
-    NDIS_MEDIA_STATE MediaState;
+    ULONG LinkSpeed;                /* In 100 bps units (NDIS 5.x), bps for NDIS 6.x */
+    NDIS_MEDIA_CONNECT_STATE MediaState;  /* NDIS 6.x media connect state */
 
     /* Multicast List */
     ULONG MulticastListCount;
@@ -546,6 +583,8 @@ typedef struct _RNDIS_ADAPTER {
     ULONG64 TxErrorCount;
     ULONG64 RxErrorCount;
     ULONG64 RxNoBufferCount;
+    ULONG64 TxBytes;                /* Total bytes transmitted */
+    ULONG64 RxBytes;                /* Total bytes received */
 
     /* Control Transfer Buffer */
     PUCHAR ControlBuffer;
@@ -554,13 +593,17 @@ typedef struct _RNDIS_ADAPTER {
     LONG PendingIoCount;            /* Count of pending async I/O operations */
     KEVENT RemoveEvent;             /* Signaled when PendingIoCount reaches zero */
     BOOLEAN Halting;                /* Set TRUE during halt to stop resubmission */
+    BOOLEAN Paused;                 /* TRUE when adapter is in paused state */
+
+    /* NDIS 6.x NET_BUFFER_LIST Pool */
+    NDIS_HANDLE RxNblPool;          /* Pool for receive NBLs */
 
     /* Transmit Resources */
     PUCHAR TxBuffer;
     NDIS_SPIN_LOCK TxLock;
     BOOLEAN TxBusy;
     PIRP TxIrp;                     /* Pending TX IRP for cancellation */
-    PNDIS_PACKET PendingTxPacket;   /* Packet awaiting TX completion */
+    PNET_BUFFER_LIST PendingTxNbl;  /* NBL awaiting TX completion */
     URB TxUrb;
 
     /* Receive Resources */
@@ -575,6 +618,16 @@ typedef struct _RNDIS_ADAPTER {
     KDPC RxBackoffDpc;              /* DPC for backoff timer */
     KTIMER RxDelayTimer;            /* Timer for delayed RX resubmission on NAK */
     KDPC RxDelayDpc;                /* DPC for NAK delay timer */
+    volatile LONG RxDelayScheduled; /* Coalescing flag for delayed resubmit */
+
+    /* Interrupt Notification Resources */
+    PUCHAR InterruptBuffer;
+    ULONG InterruptBufferLength;
+    NDIS_SPIN_LOCK InterruptLock;
+    PIRP InterruptIrp;              /* Pending interrupt IRP for cancellation */
+    BOOLEAN InterruptSubmitted;
+    URB InterruptUrb;
+    KDPC InterruptResubmitDpc;
 
     /* Work Items */
     NDIS_WORK_ITEM ResetWorkItem;
@@ -587,28 +640,49 @@ typedef struct _RNDIS_ADAPTER {
 } RNDIS_ADAPTER, *PRNDIS_ADAPTER;
 
 /*
- * Function Prototypes - usbrndis.c
+ * Function Prototypes - usbrndis.c (NDIS 6.x handlers)
  */
 NDIS_STATUS
 NTAPI
-RndisInitialize(
-    OUT PNDIS_STATUS OpenErrorStatus,
-    OUT PUINT SelectedMediumIndex,
-    IN PNDIS_MEDIUM MediumArray,
-    IN UINT MediumArraySize,
-    IN NDIS_HANDLE MiniportAdapterHandle,
-    IN NDIS_HANDLE WrapperConfigurationContext);
+RndisMiniportInitializeEx(
+    _In_ NDIS_HANDLE NdisMiniportHandle,
+    _In_ NDIS_HANDLE MiniportDriverContext,
+    _In_ PNDIS_MINIPORT_INIT_PARAMETERS MiniportInitParameters);
 
 VOID
 NTAPI
-RndisHalt(
-    IN NDIS_HANDLE MiniportAdapterContext);
+RndisMiniportHaltEx(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ NDIS_HALT_ACTION HaltAction);
 
 NDIS_STATUS
 NTAPI
-RndisReset(
-    OUT PBOOLEAN AddressingReset,
-    IN NDIS_HANDLE MiniportAdapterContext);
+RndisMiniportPause(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ PNDIS_MINIPORT_PAUSE_PARAMETERS PauseParameters);
+
+NDIS_STATUS
+NTAPI
+RndisMiniportRestart(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ PNDIS_MINIPORT_RESTART_PARAMETERS RestartParameters);
+
+VOID
+NTAPI
+RndisMiniportShutdownEx(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ NDIS_SHUTDOWN_ACTION ShutdownAction);
+
+VOID
+NTAPI
+RndisMiniportDevicePnPEventNotify(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ PNET_DEVICE_PNP_EVENT NetDevicePnPEvent);
+
+VOID
+NTAPI
+RndisMiniportDriverUnload(
+    _In_ PDRIVER_OBJECT DriverObject);
 
 /*
  * Function Prototypes - rndisusb.c (USB operations)
@@ -635,6 +709,17 @@ RndisUsbReceiveControlResponse(
     OUT PULONG BytesReceived);
 
 NTSTATUS
+RndisUsbSetEthernetPacketFilter(
+    IN PRNDIS_ADAPTER Adapter,
+    IN USHORT PacketFilter);
+
+NTSTATUS
+RndisUsbSetEthernetMulticastFilters(
+    IN PRNDIS_ADAPTER Adapter,
+    IN PUCHAR MulticastList,
+    IN USHORT AddressCount);
+
+NTSTATUS
 RndisUsbSubmitBulkRead(
     IN PRNDIS_ADAPTER Adapter);
 
@@ -644,8 +729,16 @@ RndisUsbSubmitBulkWrite(
     IN PUCHAR Data,
     IN ULONG Length);
 
+NTSTATUS
+RndisUsbSubmitInterruptRead(
+    IN PRNDIS_ADAPTER Adapter);
+
 VOID
 RndisInitializeRxDpc(
+    IN PRNDIS_ADAPTER Adapter);
+
+VOID
+RndisInitializeInterruptDpc(
     IN PRNDIS_ADAPTER Adapter);
 
 NTSTATUS
@@ -703,21 +796,28 @@ RndisGetMacAddress(
     IN PRNDIS_ADAPTER Adapter);
 
 /*
- * Function Prototypes - rndisdata.c (Data transfer)
+ * Function Prototypes - rndisdata.c (Data transfer - NDIS 6.x)
  */
-NDIS_STATUS
+VOID
 NTAPI
-RndisSend(
-    IN NDIS_HANDLE MiniportAdapterContext,
-    IN PNDIS_PACKET Packet,
-    IN UINT Flags);
+RndisSendNetBufferLists(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ PNET_BUFFER_LIST NetBufferList,
+    _In_ NDIS_PORT_NUMBER PortNumber,
+    _In_ ULONG SendFlags);
 
 VOID
 NTAPI
-RndisSendPackets(
-    IN NDIS_HANDLE MiniportAdapterContext,
-    IN PPNDIS_PACKET PacketArray,
-    IN UINT NumberOfPackets);
+RndisReturnNetBufferLists(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ PNET_BUFFER_LIST NetBufferLists,
+    _In_ ULONG ReturnFlags);
+
+VOID
+NTAPI
+RndisCancelSend(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ PVOID CancelId);
 
 VOID
 RndisProcessReceivedPacket(
@@ -726,27 +826,30 @@ RndisProcessReceivedPacket(
     IN ULONG Length);
 
 /*
- * Function Prototypes - rndisoid.c (OID handling)
+ * Function Prototypes - rndisoid.c (OID handling - NDIS 6.x)
  */
 NDIS_STATUS
 NTAPI
+RndisOidRequest(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ PNDIS_OID_REQUEST OidRequest);
+
+VOID
+NTAPI
+RndisCancelOidRequest(
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ PVOID RequestId);
+
+/* Internal OID handlers */
+NDIS_STATUS
 RndisQueryInformation(
-    IN NDIS_HANDLE MiniportAdapterContext,
-    IN NDIS_OID Oid,
-    IN PVOID InformationBuffer,
-    IN ULONG InformationBufferLength,
-    OUT PULONG BytesWritten,
-    OUT PULONG BytesNeeded);
+    _In_ PRNDIS_ADAPTER Adapter,
+    _In_ PNDIS_OID_REQUEST OidRequest);
 
 NDIS_STATUS
-NTAPI
 RndisSetInformation(
-    IN NDIS_HANDLE MiniportAdapterContext,
-    IN NDIS_OID Oid,
-    IN PVOID InformationBuffer,
-    IN ULONG InformationBufferLength,
-    OUT PULONG BytesRead,
-    OUT PULONG BytesNeeded);
+    _In_ PRNDIS_ADAPTER Adapter,
+    _In_ PNDIS_OID_REQUEST OidRequest);
 
 /*
  * Helper Macros

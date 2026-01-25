@@ -30,9 +30,19 @@ typedef struct _NDIS6_MINIPORT_DRIVER_BLOCK {
 /* Forward declarations for NDIS 6.x PnP handlers */
 static NTSTATUS NTAPI Ndis6AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT PhysicalDeviceObject);
 static NTSTATUS NTAPI Ndis6GenericIrpHandler(PDEVICE_OBJECT DeviceObject, PIRP Irp);
+static NTSTATUS NTAPI Ndis6StartDeviceComplete(PDEVICE_OBJECT DeviceObject, PIRP Irp, PVOID Context);
 
 /* Forward declaration for protocol announcement */
 static VOID Ndis6iAnnounceAdapterToProtocols(PDEVICE_OBJECT DeviceObject, PNDIS6_MINIPORT_DRIVER_BLOCK DriverBlock);
+
+/* Forward declarations for NDIS 6.x state machine helpers */
+NDIS_STATUS Ndis6iInitiateAdapterPause(_In_ NDIS_HANDLE MiniportAdapterHandle, _In_ ULONG PauseReason);
+NDIS_STATUS Ndis6iInitiateAdapterRestart(_In_ NDIS_HANDLE MiniportAdapterHandle);
+NDIS_STATUS Ndis6iWaitForPause(_In_ NDIS_HANDLE MiniportAdapterHandle, _In_opt_ PLARGE_INTEGER Timeout);
+NDIS_STATUS Ndis6iWaitForRestart(_In_ NDIS_HANDLE MiniportAdapterHandle, _In_opt_ PLARGE_INTEGER Timeout);
+NDIS_STATUS Ndis6iSetAdapterHalting(_In_ NDIS_HANDLE MiniportAdapterHandle);
+VOID Ndis6iSetAdapterHalted(_In_ NDIS_HANDLE MiniportAdapterHandle);
+NDIS_MINIPORT_ADAPTER_STATE Ndis6iGetAdapterState(_In_ NDIS_HANDLE MiniportAdapterHandle);
 
 /* Unique ID for driver object extension */
 #define NDIS6_DRIVER_EXTENSION_ID ((PVOID)'ND6I')
@@ -49,6 +59,255 @@ static VOID Ndis6iAnnounceAdapterToProtocols(PDEVICE_OBJECT DeviceObject, PNDIS6
 static LIST_ENTRY Ndis6MiniportDriverList;
 static KSPIN_LOCK Ndis6MiniportDriverListLock;
 static BOOLEAN Ndis6MiniportInitialized = FALSE;
+
+/*
+ * Send an IRP down synchronously and return completion status.
+ */
+static NTSTATUS
+Ndis6iSendIrpSynchronously(
+    _In_ PDEVICE_OBJECT NextDeviceObject,
+    _In_ PIRP Irp)
+{
+    KEVENT Event;
+    NTSTATUS Status;
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    IoCopyCurrentIrpStackLocationToNext(Irp);
+    IoSetCompletionRoutine(Irp, Ndis6StartDeviceComplete, &Event, TRUE, TRUE, TRUE);
+
+    Status = IoCallDriver(NextDeviceObject, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = Irp->IoStatus.Status;
+    }
+
+    return Status;
+}
+
+/*
+ * Halt the miniport (NDIS 6.x) if possible.
+ */
+static VOID
+Ndis6iHaltAdapter(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ NDIS_HALT_ACTION HaltAction)
+{
+    PNDIS6_MINIPORT_DRIVER_BLOCK DriverBlock;
+    PVOID MiniportAdapterContext;
+
+    if (DeviceObject == NULL || DeviceObject->DeviceExtension == NULL)
+    {
+        return;
+    }
+
+    DriverBlock = (PNDIS6_MINIPORT_DRIVER_BLOCK)((PVOID*)DeviceObject->DeviceExtension)[0];
+    MiniportAdapterContext = ((PVOID*)DeviceObject->DeviceExtension)[2];
+
+    if (DriverBlock != NULL && DriverBlock->Characteristics.HaltHandlerEx != NULL)
+    {
+        MINIPORT_HALT HaltHandler = (MINIPORT_HALT)DriverBlock->Characteristics.HaltHandlerEx;
+
+        if (HaltHandler == NULL)
+        {
+            return;
+        }
+
+        Ndis6iSetAdapterHalting(DeviceObject);
+        HaltHandler(MiniportAdapterContext, HaltAction);
+        Ndis6iSetAdapterHalted(DeviceObject);
+    }
+}
+
+/*
+ * Cleanup adapter resources after stop/remove.
+ */
+static VOID
+Ndis6iCleanupAdapterResources(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ BOOLEAN DeleteDeviceObject)
+{
+    PLOGICAL_ADAPTER Adapter;
+    PDEVICE_OBJECT NextDeviceObject;
+    PCM_RESOURCE_LIST ResourcesCopy;
+
+    if (DeviceObject == NULL || DeviceObject->DeviceExtension == NULL)
+    {
+        return;
+    }
+
+    Adapter = (PLOGICAL_ADAPTER)((PVOID*)DeviceObject->DeviceExtension)[6];
+    if (Adapter != NULL)
+    {
+        ExInterlockedRemoveEntryList(&Adapter->ListEntry, &AdapterListLock);
+
+        if (Adapter->NdisMiniportBlock.MiniportName.Buffer != NULL)
+        {
+            ExFreePoolWithTag(Adapter->NdisMiniportBlock.MiniportName.Buffer, NDIS_TAG);
+            Adapter->NdisMiniportBlock.MiniportName.Buffer = NULL;
+        }
+
+        ExFreePoolWithTag(Adapter, NDIS_TAG);
+        ((PVOID*)DeviceObject->DeviceExtension)[6] = NULL;
+    }
+
+    ResourcesCopy = (PCM_RESOURCE_LIST)((PVOID*)DeviceObject->DeviceExtension)[5];
+    if (ResourcesCopy != NULL)
+    {
+        ExFreePoolWithTag(ResourcesCopy, NDIS_TAG);
+        ((PVOID*)DeviceObject->DeviceExtension)[5] = NULL;
+    }
+
+    if (DeleteDeviceObject)
+    {
+        NextDeviceObject = (PDEVICE_OBJECT)((PVOID*)DeviceObject->DeviceExtension)[3];
+        if (NextDeviceObject != NULL)
+        {
+            IoDetachDevice(NextDeviceObject);
+        }
+
+        IoDeleteDevice(DeviceObject);
+    }
+}
+
+static BOOLEAN
+Ndis6iIsBindingInAdapterList(
+    _In_ PLOGICAL_ADAPTER Adapter,
+    _In_ PADAPTER_BINDING Binding)
+{
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    if (Adapter == NULL || Binding == NULL)
+    {
+        return FALSE;
+    }
+
+    KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+    for (Entry = Adapter->ProtocolListHead.Flink;
+         Entry != &Adapter->ProtocolListHead;
+         Entry = Entry->Flink)
+    {
+        if (CONTAINING_RECORD(Entry, ADAPTER_BINDING, AdapterListEntry) == Binding)
+        {
+            KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+            return TRUE;
+        }
+    }
+    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+    return FALSE;
+}
+
+static VOID
+Ndis6iUnbindProtocols(
+    _In_ PDEVICE_OBJECT DeviceObject)
+{
+    PLOGICAL_ADAPTER Adapter;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+    ULONG Count = 0;
+    ULONG Index = 0;
+    PADAPTER_BINDING *Bindings = NULL;
+
+    if (DeviceObject == NULL || DeviceObject->DeviceExtension == NULL)
+    {
+        return;
+    }
+
+    Adapter = (PLOGICAL_ADAPTER)((PVOID*)DeviceObject->DeviceExtension)[6];
+    if (Adapter == NULL)
+    {
+        return;
+    }
+
+    KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+    for (Entry = Adapter->ProtocolListHead.Flink;
+         Entry != &Adapter->ProtocolListHead;
+         Entry = Entry->Flink)
+    {
+        Count++;
+    }
+    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+
+    if (Count == 0)
+    {
+        return;
+    }
+
+    Bindings = ExAllocatePoolWithTag(NonPagedPool, sizeof(PADAPTER_BINDING) * Count, NDIS_TAG);
+    if (Bindings == NULL)
+    {
+        DPRINT1("NDIS6: Failed to allocate binding array for unbind\n");
+        return;
+    }
+
+    KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+    for (Entry = Adapter->ProtocolListHead.Flink;
+         Entry != &Adapter->ProtocolListHead && Index < Count;
+         Entry = Entry->Flink)
+    {
+        Bindings[Index++] = CONTAINING_RECORD(Entry, ADAPTER_BINDING, AdapterListEntry);
+    }
+    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        PADAPTER_BINDING Binding = Bindings[Index];
+        PPROTOCOL_BINDING Protocol;
+        NDIS_STATUS UnbindStatus = NDIS_STATUS_SUCCESS;
+
+        if (Binding == NULL)
+        {
+            continue;
+        }
+
+        Protocol = Binding->ProtocolBinding;
+        if (Protocol != NULL && Protocol->Chars.UnbindAdapterHandler != NULL)
+        {
+            Protocol->Chars.UnbindAdapterHandler(&UnbindStatus,
+                                                 Binding->NdisOpenBlock.ProtocolBindingContext,
+                                                 Binding);
+        }
+        else
+        {
+            UnbindStatus = NDIS_STATUS_SUCCESS;
+        }
+
+        if (UnbindStatus != NDIS_STATUS_PENDING)
+        {
+            if (Ndis6iIsBindingInAdapterList(Adapter, Binding))
+            {
+                NDIS_STATUS CloseStatus;
+                NdisCloseAdapter(&CloseStatus, Binding);
+            }
+        }
+    }
+
+    /* Best-effort wait for unbind completion */
+    {
+        ULONG Retries = 20; /* ~2s total */
+        LARGE_INTEGER Interval;
+        Interval.QuadPart = -1000000LL; /* 100ms */
+
+        while (Retries--)
+        {
+            BOOLEAN Empty;
+            KIRQL WaitIrql;
+
+            KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &WaitIrql);
+            Empty = (Adapter->ProtocolListHead.Flink == &Adapter->ProtocolListHead);
+            KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, WaitIrql);
+
+            if (Empty)
+            {
+                break;
+            }
+            KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+        }
+    }
+
+    ExFreePoolWithTag(Bindings, NDIS_TAG);
+}
 
 /*
  * InitializeNdis6MiniportSupport
@@ -606,9 +865,11 @@ done:
          */
         PNDIS6_MINIPORT_DRIVER_BLOCK DriverBlock;
         PVOID MiniportAdapterContext;
+        ULONG ReturnFlags;
 
         DriverBlock = (PNDIS6_MINIPORT_DRIVER_BLOCK)((PVOID*)DeviceObject->DeviceExtension)[0];
         MiniportAdapterContext = ((PVOID*)DeviceObject->DeviceExtension)[2];
+        ReturnFlags = AtDispatchLevel ? NDIS_RETURN_FLAGS_DISPATCH_LEVEL : 0;
 
         if (DriverBlock != NULL && DriverBlock->Characteristics.ReturnNetBufferListsHandler != NULL)
         {
@@ -617,7 +878,7 @@ done:
             DriverBlock->Characteristics.ReturnNetBufferListsHandler(
                 MiniportAdapterContext,
                 NetBufferLists,
-                0);  /* ReturnFlags */
+                ReturnFlags);
 
             DPRINT("ReturnNetBufferListsHandler returned\n");
         }
@@ -1212,12 +1473,179 @@ Ndis6GenericIrpHandler(
                     DPRINT1("NDIS6: IRP_MN_START_DEVICE\n");
                     return Ndis6HandleStartDevice(DeviceObject, Irp);
 
-                case IRP_MN_QUERY_REMOVE_DEVICE:
-                case IRP_MN_REMOVE_DEVICE:
-                case IRP_MN_CANCEL_REMOVE_DEVICE:
-                case IRP_MN_STOP_DEVICE:
                 case IRP_MN_QUERY_STOP_DEVICE:
+                case IRP_MN_QUERY_REMOVE_DEVICE:
+                {
+                    NDIS_STATUS PauseStatus;
+                    LARGE_INTEGER Timeout;
+                    NDIS_MINIPORT_ADAPTER_STATE State;
+
+                    DPRINT1("NDIS6: IRP_MN_QUERY_STOP/REMOVE\n");
+
+                    State = Ndis6iGetAdapterState(DeviceObject);
+                    if (State == NdisMiniportAdapterStatePaused)
+                    {
+                        PauseStatus = NDIS_STATUS_SUCCESS;
+                    }
+                    else
+                    {
+                        PauseStatus = Ndis6iInitiateAdapterPause(DeviceObject, 0);
+                    }
+
+                    if (PauseStatus == NDIS_STATUS_PENDING)
+                    {
+                        Timeout.QuadPart = -300000000LL; /* 30 seconds */
+                        PauseStatus = Ndis6iWaitForPause(DeviceObject, &Timeout);
+                    }
+
+                    if (PauseStatus != NDIS_STATUS_SUCCESS)
+                    {
+                        DPRINT1("NDIS6: Pause failed for QUERY_STOP/REMOVE: 0x%x\n", PauseStatus);
+                        Irp->IoStatus.Status = STATUS_DEVICE_BUSY;
+                        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                        return STATUS_DEVICE_BUSY;
+                    }
+
+                    if (NextDeviceObject != NULL)
+                    {
+                        IoSkipCurrentIrpStackLocation(Irp);
+                        return IoCallDriver(NextDeviceObject, Irp);
+                    }
+
+                    Irp->IoStatus.Status = STATUS_SUCCESS;
+                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    return STATUS_SUCCESS;
+                }
+
                 case IRP_MN_CANCEL_STOP_DEVICE:
+                case IRP_MN_CANCEL_REMOVE_DEVICE:
+                {
+                    NDIS_STATUS RestartStatus;
+                    LARGE_INTEGER Timeout;
+                    NDIS_MINIPORT_ADAPTER_STATE State;
+
+                    DPRINT1("NDIS6: IRP_MN_CANCEL_STOP/REMOVE\n");
+
+                    State = Ndis6iGetAdapterState(DeviceObject);
+                    if (State == NdisMiniportAdapterStateRunning)
+                    {
+                        RestartStatus = NDIS_STATUS_SUCCESS;
+                    }
+                    else
+                    {
+                        RestartStatus = Ndis6iInitiateAdapterRestart(DeviceObject);
+                    }
+
+                    if (RestartStatus == NDIS_STATUS_PENDING)
+                    {
+                        Timeout.QuadPart = -300000000LL; /* 30 seconds */
+                        RestartStatus = Ndis6iWaitForRestart(DeviceObject, &Timeout);
+                    }
+
+                    if (RestartStatus != NDIS_STATUS_SUCCESS)
+                    {
+                        DPRINT1("NDIS6: Restart failed for CANCEL_STOP/REMOVE: 0x%x\n", RestartStatus);
+                        Irp->IoStatus.Status = STATUS_UNSUCCESSFUL;
+                        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                        return STATUS_UNSUCCESSFUL;
+                    }
+
+                    if (NextDeviceObject != NULL)
+                    {
+                        IoSkipCurrentIrpStackLocation(Irp);
+                        return IoCallDriver(NextDeviceObject, Irp);
+                    }
+
+                    Irp->IoStatus.Status = STATUS_SUCCESS;
+                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    return STATUS_SUCCESS;
+                }
+
+                case IRP_MN_STOP_DEVICE:
+                {
+                    NTSTATUS StopStatus = STATUS_SUCCESS;
+                    NDIS_STATUS PauseStatus;
+                    LARGE_INTEGER Timeout;
+                    NDIS_MINIPORT_ADAPTER_STATE State;
+
+                    DPRINT1("NDIS6: IRP_MN_STOP_DEVICE\n");
+
+                    State = Ndis6iGetAdapterState(DeviceObject);
+                    if (State == NdisMiniportAdapterStatePaused)
+                    {
+                        PauseStatus = NDIS_STATUS_SUCCESS;
+                    }
+                    else
+                    {
+                        PauseStatus = Ndis6iInitiateAdapterPause(DeviceObject, 0);
+                    }
+
+                    if (PauseStatus == NDIS_STATUS_PENDING)
+                    {
+                        Timeout.QuadPart = -300000000LL; /* 30 seconds */
+                        PauseStatus = Ndis6iWaitForPause(DeviceObject, &Timeout);
+                    }
+
+                    if (NextDeviceObject != NULL)
+                    {
+                        StopStatus = Ndis6iSendIrpSynchronously(NextDeviceObject, Irp);
+                    }
+
+                    Ndis6iCancelOidRequestsForMiniport(DeviceObject);
+                    Ndis6iUnbindProtocols(DeviceObject);
+                    Ndis6iHaltAdapter(DeviceObject, NdisHaltDeviceStopped);
+                    Ndis6iCleanupAdapterResources(DeviceObject, FALSE);
+
+                    Irp->IoStatus.Status = StopStatus;
+                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    return StopStatus;
+                }
+
+                case IRP_MN_SURPRISE_REMOVAL:
+                    DPRINT1("NDIS6: IRP_MN_SURPRISE_REMOVAL\n");
+                    Ndis6iCancelOidRequestsForMiniport(DeviceObject);
+                    Ndis6iUnbindProtocols(DeviceObject);
+                    Ndis6iHaltAdapter(DeviceObject, NdisHaltDeviceSurpriseRemoved);
+                    Ndis6iCleanupAdapterResources(DeviceObject, FALSE);
+                    break;
+
+                case IRP_MN_REMOVE_DEVICE:
+                {
+                    NTSTATUS RemoveStatus = STATUS_SUCCESS;
+                    NDIS_STATUS PauseStatus;
+                    LARGE_INTEGER Timeout;
+                    NDIS_MINIPORT_ADAPTER_STATE State;
+
+                    DPRINT1("NDIS6: IRP_MN_REMOVE_DEVICE\n");
+
+                    if (NextDeviceObject != NULL)
+                    {
+                        RemoveStatus = Ndis6iSendIrpSynchronously(NextDeviceObject, Irp);
+                    }
+
+                    State = Ndis6iGetAdapterState(DeviceObject);
+                    if (State != NdisMiniportAdapterStatePaused &&
+                        State != NdisMiniportAdapterStateHalted)
+                    {
+                        PauseStatus = Ndis6iInitiateAdapterPause(DeviceObject, 0);
+                        if (PauseStatus == NDIS_STATUS_PENDING)
+                        {
+                            Timeout.QuadPart = -300000000LL; /* 30 seconds */
+                            PauseStatus = Ndis6iWaitForPause(DeviceObject, &Timeout);
+                        }
+                    }
+
+                    Ndis6iCancelOidRequestsForMiniport(DeviceObject);
+                    Ndis6iUnbindProtocols(DeviceObject);
+                    Ndis6iHaltAdapter(DeviceObject, NdisHaltDeviceInstanceDeInitialized);
+                    Ndis6iCleanupAdapterResources(DeviceObject, TRUE);
+
+                    Irp->IoStatus.Status = RemoveStatus;
+                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    return RemoveStatus;
+                }
+
+                default:
                     DPRINT1("NDIS6: PnP minor function 0x%x\n", IrpSp->MinorFunction);
                     break;
             }

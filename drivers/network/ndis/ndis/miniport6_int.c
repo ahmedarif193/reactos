@@ -116,7 +116,10 @@ Ndis6iInterruptIsr(
     if (Claimed && QueueDefaultInterruptDpc)
     {
         /* Queue the DPC */
-        InterlockedIncrement(&IntBlock->DpcPending);
+        if (InterlockedIncrement(&IntBlock->DpcPending) == 1)
+        {
+            KeClearEvent(&IntBlock->DisconnectEvent);
+        }
         KeInsertQueueDpc(&IntBlock->InterruptDpc, NULL, NULL);
     }
 
@@ -216,7 +219,10 @@ Ndis6iMessageIsr(
         /* Queue the DPC for this message */
         if (IntBlock->MessageDpcs != NULL && MessageId < IntBlock->MessageCount)
         {
-            InterlockedIncrement(&IntBlock->DpcPending);
+            if (InterlockedIncrement(&IntBlock->DpcPending) == 1)
+            {
+                KeClearEvent(&IntBlock->DisconnectEvent);
+            }
             KeInsertQueueDpc(&IntBlock->MessageDpcs[MessageId],
                              UlongToPtr(MessageId),
                              NULL);
@@ -1453,10 +1459,13 @@ NdisMDeregisterInterruptEx(
     Ndis6iDisconnectInterrupt(IntBlock);
 
     /* Update adapter's registered interrupt count */
-    Adapter = (PLOGICAL_ADAPTER)IntBlock->MiniportHandle;
-    if (Adapter != NULL)
+    if (Ndis6iGetResourceList(IntBlock->MiniportHandle) == NULL)
     {
-        Adapter->NdisMiniportBlock.RegisteredInterrupts--;
+        Adapter = (PLOGICAL_ADAPTER)IntBlock->MiniportHandle;
+        if (Adapter != NULL)
+        {
+            Adapter->NdisMiniportBlock.RegisteredInterrupts--;
+        }
     }
 
     /* Free the interrupt block */
@@ -1594,7 +1603,10 @@ NdisMQueueDpc(
             }
 
             /* Queue the DPC */
-            InterlockedIncrement(&IntBlock->DpcPending);
+            if (InterlockedIncrement(&IntBlock->DpcPending) == 1)
+            {
+                KeClearEvent(&IntBlock->DisconnectEvent);
+            }
             Queued = KeInsertQueueDpc(Dpc, MiniportDpcContext, UlongToPtr(MessageId));
 
             if (Queued)
@@ -1603,7 +1615,10 @@ NdisMQueueDpc(
             }
             else
             {
-                InterlockedDecrement(&IntBlock->DpcPending);
+                if (InterlockedDecrement(&IntBlock->DpcPending) == 0)
+                {
+                    KeSetEvent(&IntBlock->DisconnectEvent, IO_NO_INCREMENT, FALSE);
+                }
             }
         }
         ProcessorMask >>= 1;

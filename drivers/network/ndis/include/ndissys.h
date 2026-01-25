@@ -85,6 +85,10 @@ NDIS_MINIPORT_ADAPTER_STATE
 Ndis6iGetAdapterState(
     _In_ NDIS_HANDLE MiniportAdapterHandle);
 
+VOID
+Ndis6iCancelOidRequestsForMiniport(
+    _In_ NDIS_HANDLE MiniportHandle);
+
 #endif /* NDIS_SUPPORT_NDIS6 */
 
 #endif /* __NDISSYS_H */

@@ -21,6 +21,7 @@
 #define NDIS_NBL_TAG        'lBNn'   /* nNBl - NDIS NBL allocation */
 #define NDIS_NB_TAG         'bBNn'   /* nNBb - NDIS NB allocation */
 #define NDIS_NBL_CTX_TAG    'cBNn'   /* nNBc - NDIS NBL Context */
+#define NDIS_NBL_DYNAMIC_ALLOC ((PVOID)(ULONG_PTR)0x4E424C44) /* 'NBLD' */
 
 /*
  * Internal structure to track NDIS 6.x NET_BUFFER_LIST pools
@@ -36,6 +37,7 @@ typedef struct _NDIS6_NBL_POOL {
     UCHAR ProtocolId;
     BOOLEAN fAllocateNetBuffer;
     ULONG DataSize;
+    ULONG AllocationSize;
     volatile LONG AllocatedCount;
     /* Associated NB pool for combined allocations */
     struct _NDIS6_NB_POOL *AssociatedNbPool;
@@ -257,7 +259,8 @@ NdisAllocateNetBufferListPool(
     }
 
     /* Validate header */
-    if (Parameters->Header.Type != NDIS_OBJECT_TYPE_DEFAULT ||
+    if ((Parameters->Header.Type != NDIS_OBJECT_TYPE_NBL_POOL_PARAMETERS &&
+         Parameters->Header.Type != NDIS_OBJECT_TYPE_DEFAULT) ||
         Parameters->Header.Revision < NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1)
     {
         DPRINT1("Invalid parameters header\n");
@@ -305,6 +308,7 @@ NdisAllocateNetBufferListPool(
     {
         AllocationSize += sizeof(NET_BUFFER);
     }
+    Pool->AllocationSize = AllocationSize;
 
     /* Initialize lookaside list */
     ExInitializeNPagedLookasideList(&Pool->LookasideList,
@@ -370,6 +374,8 @@ NdisAllocateNetBufferList(
     PNDIS6_NBL_POOL Pool;
     PNET_BUFFER_LIST NetBufferList;
     USHORT EffectiveContextSize;
+    ULONG AllocationSize;
+    BOOLEAN UseLookaside;
 
     DPRINT("NdisAllocateNetBufferList called\n");
 
@@ -384,16 +390,44 @@ NdisAllocateNetBufferList(
     /* Use pool's context size if caller didn't specify one */
     EffectiveContextSize = (ContextSize > 0) ? ContextSize : Pool->ContextSize;
 
-    /* Allocate from lookaside list */
-    NetBufferList = ExAllocateFromNPagedLookasideList(&Pool->LookasideList);
-    if (NetBufferList == NULL)
+    AllocationSize = sizeof(NET_BUFFER_LIST);
+    if (EffectiveContextSize > 0)
     {
-        DPRINT1("Failed to allocate from lookaside list\n");
-        return NULL;
+        AllocationSize += sizeof(NET_BUFFER_LIST_CONTEXT) + EffectiveContextSize + ContextBackFill;
+    }
+    if (Pool->fAllocateNetBuffer)
+    {
+        AllocationSize += sizeof(NET_BUFFER);
+    }
+
+    UseLookaside = (ContextBackFill == 0 && EffectiveContextSize == Pool->ContextSize);
+
+    /* Allocate from lookaside list if possible, otherwise allocate directly */
+    if (UseLookaside)
+    {
+        NetBufferList = ExAllocateFromNPagedLookasideList(&Pool->LookasideList);
+        if (NetBufferList == NULL)
+        {
+            DPRINT1("Failed to allocate from lookaside list\n");
+            return NULL;
+        }
+    }
+    else
+    {
+        NetBufferList = ExAllocatePoolWithTag(NonPagedPool, AllocationSize, Pool->Tag);
+        if (NetBufferList == NULL)
+        {
+            DPRINT1("Failed to allocate NBL dynamically (size=%lu)\n", AllocationSize);
+            return NULL;
+        }
     }
 
     /* Initialize the NBL */
     Ndis6iInitializeNetBufferList(NetBufferList, PoolHandle, EffectiveContextSize, ContextBackFill);
+    if (!UseLookaside)
+    {
+        NetBufferList->NdisReserved[0] = NDIS_NBL_DYNAMIC_ALLOC;
+    }
 
     /* If pool was configured to allocate NB, attach one */
     if (Pool->fAllocateNetBuffer)
@@ -449,14 +483,28 @@ NdisFreeNetBufferList(
         return;
     }
 
+    /* Free separately allocated NB if present */
+    if (NetBufferList->NdisReserved[1] != NULL)
+    {
+        ExFreePoolWithTag(NetBufferList->NdisReserved[1], NDIS_NB_TAG);
+        NetBufferList->NdisReserved[1] = NULL;
+    }
+
     /* Free any separately allocated context */
     /* Note: Inline context (allocated with NBL) is freed automatically */
 
     /* Decrement allocation count */
     InterlockedDecrement(&Pool->AllocatedCount);
 
-    /* Return to lookaside list */
-    ExFreeToNPagedLookasideList(&Pool->LookasideList, NetBufferList);
+    if (NetBufferList->NdisReserved[0] == NDIS_NBL_DYNAMIC_ALLOC)
+    {
+        ExFreePoolWithTag(NetBufferList, Pool->Tag);
+    }
+    else
+    {
+        /* Return to lookaside list */
+        ExFreeToNPagedLookasideList(&Pool->LookasideList, NetBufferList);
+    }
 
     DPRINT("Freed NBL to pool (count=%ld)\n", Pool->AllocatedCount);
 }
@@ -484,7 +532,8 @@ NdisAllocateNetBufferPool(
     }
 
     /* Validate header */
-    if (Parameters->Header.Type != NDIS_OBJECT_TYPE_DEFAULT ||
+    if ((Parameters->Header.Type != NDIS_OBJECT_TYPE_NB_POOL_PARAMETERS &&
+         Parameters->Header.Type != NDIS_OBJECT_TYPE_DEFAULT) ||
         Parameters->Header.Revision < NET_BUFFER_POOL_PARAMETERS_REVISION_1)
     {
         DPRINT1("Invalid parameters header\n");
@@ -728,6 +777,7 @@ NdisAllocateNetBufferAndNetBufferList(
         Ndis6iInitializeNetBuffer(NetBuffer, NULL, MdlChain, DataOffset, ActualDataLength);
 
         NetBufferList->FirstNetBuffer = NetBuffer;
+        NetBufferList->NdisReserved[1] = NetBuffer;
     }
 
     DPRINT("Allocated NBL %p with NB %p\n", NetBufferList, NetBuffer);

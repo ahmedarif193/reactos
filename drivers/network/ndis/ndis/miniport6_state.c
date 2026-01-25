@@ -12,6 +12,16 @@
 
 #if NDIS_SUPPORT_NDIS6
 
+typedef struct _NDIS6_MINIPORT_DRIVER_BLOCK {
+    LIST_ENTRY ListEntry;
+    PDRIVER_OBJECT DriverObject;
+    UNICODE_STRING RegistryPath;
+    NDIS_HANDLE MiniportDriverContext;
+    NDIS_MINIPORT_DRIVER_CHARACTERISTICS Characteristics;
+    ULONG Flags;
+    LONG RefCount;
+} NDIS6_MINIPORT_DRIVER_BLOCK, *PNDIS6_MINIPORT_DRIVER_BLOCK;
+
 /*
  * Internal structure to track NDIS 6.x adapter state
  * This extends the adapter information stored by the miniport driver block
@@ -91,6 +101,58 @@ static const PCSTR StateNames[] = {
     "Halting",
     "Halted"
 };
+
+/*
+ * Resolve driver block and adapter context for a miniport handle.
+ * Handles both DEVICE_OBJECT and LOGICAL_ADAPTER cases.
+ */
+static BOOLEAN
+Ndis6iResolveMiniportContext(
+    _In_ NDIS_HANDLE MiniportAdapterHandle,
+    _Out_ PNDIS_MINIPORT_DRIVER_CHARACTERISTICS *Chars,
+    _Out_ PVOID *MiniportAdapterContext)
+{
+    PDEVICE_OBJECT DeviceObject;
+    PLOGICAL_ADAPTER Adapter;
+    PNDIS6_MINIPORT_DRIVER_BLOCK DriverBlock;
+
+    if (MiniportAdapterHandle == NULL || Chars == NULL || MiniportAdapterContext == NULL)
+    {
+        return FALSE;
+    }
+
+    DeviceObject = (PDEVICE_OBJECT)MiniportAdapterHandle;
+    if (DeviceObject != NULL &&
+        DeviceObject->Type == IO_TYPE_DEVICE &&
+        DeviceObject->Size >= sizeof(DEVICE_OBJECT) &&
+        DeviceObject->DeviceExtension != NULL)
+    {
+        DriverBlock = (PNDIS6_MINIPORT_DRIVER_BLOCK)((PVOID*)DeviceObject->DeviceExtension)[0];
+        *MiniportAdapterContext = ((PVOID*)DeviceObject->DeviceExtension)[2];
+    }
+    else
+    {
+        Adapter = (PLOGICAL_ADAPTER)MiniportAdapterHandle;
+        if (Adapter == NULL ||
+            Adapter->NdisMiniportBlock.DeviceObject == NULL ||
+            Adapter->NdisMiniportBlock.DeviceObject->DeviceExtension == NULL)
+        {
+            return FALSE;
+        }
+
+        DeviceObject = Adapter->NdisMiniportBlock.DeviceObject;
+        DriverBlock = (PNDIS6_MINIPORT_DRIVER_BLOCK)((PVOID*)DeviceObject->DeviceExtension)[0];
+        *MiniportAdapterContext = ((PVOID*)DeviceObject->DeviceExtension)[2];
+    }
+
+    if (DriverBlock == NULL)
+    {
+        return FALSE;
+    }
+
+    *Chars = &DriverBlock->Characteristics;
+    return TRUE;
+}
 
 /*
  * InitializeNdis6AdapterStateSupport
@@ -597,6 +659,9 @@ Ndis6iInitiateAdapterPause(
 {
     PNDIS6_ADAPTER_STATE_BLOCK StateBlock;
     NDIS_STATUS Status;
+    PNDIS_MINIPORT_DRIVER_CHARACTERISTICS Chars;
+    PVOID MiniportAdapterContext;
+    NDIS_MINIPORT_PAUSE_PARAMETERS PauseParams;
 
     DPRINT1("Initiating pause for adapter %p, reason 0x%x\n",
         MiniportAdapterHandle, PauseReason);
@@ -628,16 +693,37 @@ Ndis6iInitiateAdapterPause(
         return Status;
     }
 
-    /*
-     * TODO: Call the miniport's PauseHandler
-     * In a full implementation:
-     * 1. Look up the miniport driver block
-     * 2. Get the PauseHandler from the characteristics
-     * 3. Call the handler with appropriate parameters
-     * 4. Return the handler's status
-     */
+    if (!Ndis6iResolveMiniportContext(MiniportAdapterHandle, &Chars, &MiniportAdapterContext) ||
+        Chars->PauseHandler == NULL)
+    {
+        DPRINT1("PauseHandler not available\n");
+        /* Revert to Running on failure to pause */
+        Ndis6iSetAdapterState(StateBlock, NdisMiniportAdapterStateRunning);
+        return NDIS_STATUS_NOT_SUPPORTED;
+    }
 
-    return NDIS_STATUS_PENDING;
+    RtlZeroMemory(&PauseParams, sizeof(PauseParams));
+    PauseParams.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+    PauseParams.Header.Revision = 1;
+    PauseParams.Header.Size = sizeof(PauseParams);
+    PauseParams.Flags = 0;
+    PauseParams.PauseReason = PauseReason;
+
+    Status = Chars->PauseHandler(MiniportAdapterContext, &PauseParams);
+    if (Status == NDIS_STATUS_SUCCESS)
+    {
+        NdisMPauseComplete(MiniportAdapterHandle);
+        return NDIS_STATUS_SUCCESS;
+    }
+
+    if (Status != NDIS_STATUS_PENDING)
+    {
+        /* Pause failed; revert to Running */
+        DPRINT1("PauseHandler failed: 0x%x\n", Status);
+        Ndis6iSetAdapterState(StateBlock, NdisMiniportAdapterStateRunning);
+    }
+
+    return Status;
 }
 
 /*
@@ -658,6 +744,9 @@ Ndis6iInitiateAdapterRestart(
 {
     PNDIS6_ADAPTER_STATE_BLOCK StateBlock;
     NDIS_STATUS Status;
+    PNDIS_MINIPORT_DRIVER_CHARACTERISTICS Chars;
+    PVOID MiniportAdapterContext;
+    NDIS_MINIPORT_RESTART_PARAMETERS RestartParams;
 
     DPRINT1("Initiating restart for adapter %p\n",
         MiniportAdapterHandle);
@@ -686,17 +775,36 @@ Ndis6iInitiateAdapterRestart(
         return Status;
     }
 
-    /*
-     * TODO: Call the miniport's RestartHandler
-     * In a full implementation:
-     * 1. Look up the miniport driver block
-     * 2. Get the RestartHandler from the characteristics
-     * 3. Prepare restart parameters
-     * 4. Call the handler
-     * 5. Return the handler's status
-     */
+    if (!Ndis6iResolveMiniportContext(MiniportAdapterHandle, &Chars, &MiniportAdapterContext) ||
+        Chars->RestartHandler == NULL)
+    {
+        DPRINT1("RestartHandler not available\n");
+        /* Revert to Paused on failure */
+        Ndis6iSetAdapterState(StateBlock, NdisMiniportAdapterStatePaused);
+        return NDIS_STATUS_NOT_SUPPORTED;
+    }
 
-    return NDIS_STATUS_PENDING;
+    RtlZeroMemory(&RestartParams, sizeof(RestartParams));
+    RestartParams.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+    RestartParams.Header.Revision = 1;
+    RestartParams.Header.Size = sizeof(RestartParams);
+    RestartParams.Flags = 0;
+    RestartParams.RestartAttributes = NULL;
+
+    Status = Chars->RestartHandler(MiniportAdapterContext, &RestartParams);
+    if (Status == NDIS_STATUS_SUCCESS)
+    {
+        NdisMRestartComplete(MiniportAdapterHandle, NDIS_STATUS_SUCCESS);
+        return NDIS_STATUS_SUCCESS;
+    }
+
+    if (Status != NDIS_STATUS_PENDING)
+    {
+        DPRINT1("RestartHandler failed: 0x%x\n", Status);
+        NdisMRestartComplete(MiniportAdapterHandle, Status);
+    }
+
+    return Status;
 }
 
 /*
@@ -728,6 +836,81 @@ Ndis6iGetAdapterState(
     KeReleaseSpinLock(&StateBlock->StateLock, OldIrql);
 
     return State;
+}
+
+/*
+ * Ndis6iWaitForPause
+ * Waits for a pending pause to complete.
+ */
+NDIS_STATUS
+Ndis6iWaitForPause(
+    _In_ NDIS_HANDLE MiniportAdapterHandle,
+    _In_opt_ PLARGE_INTEGER Timeout)
+{
+    PNDIS6_ADAPTER_STATE_BLOCK StateBlock;
+    NTSTATUS WaitStatus;
+
+    StateBlock = Ndis6iFindAdapterStateBlock(MiniportAdapterHandle);
+    if (StateBlock == NULL)
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    if (StateBlock->CurrentState == NdisMiniportAdapterStatePaused)
+    {
+        return NDIS_STATUS_SUCCESS;
+    }
+
+    WaitStatus = KeWaitForSingleObject(&StateBlock->PauseCompleteEvent,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       Timeout);
+
+    if (WaitStatus == STATUS_TIMEOUT)
+    {
+        return NDIS_STATUS_REQUEST_ABORTED;
+    }
+
+    return (StateBlock->CurrentState == NdisMiniportAdapterStatePaused) ?
+           NDIS_STATUS_SUCCESS : NDIS_STATUS_FAILURE;
+}
+
+/*
+ * Ndis6iWaitForRestart
+ * Waits for a pending restart to complete.
+ */
+NDIS_STATUS
+Ndis6iWaitForRestart(
+    _In_ NDIS_HANDLE MiniportAdapterHandle,
+    _In_opt_ PLARGE_INTEGER Timeout)
+{
+    PNDIS6_ADAPTER_STATE_BLOCK StateBlock;
+    NTSTATUS WaitStatus;
+
+    StateBlock = Ndis6iFindAdapterStateBlock(MiniportAdapterHandle);
+    if (StateBlock == NULL)
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    if (StateBlock->CurrentState == NdisMiniportAdapterStateRunning)
+    {
+        return NDIS_STATUS_SUCCESS;
+    }
+
+    WaitStatus = KeWaitForSingleObject(&StateBlock->RestartCompleteEvent,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       Timeout);
+
+    if (WaitStatus == STATUS_TIMEOUT)
+    {
+        return NDIS_STATUS_REQUEST_ABORTED;
+    }
+
+    return StateBlock->LastRestartStatus;
 }
 
 /*

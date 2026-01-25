@@ -30,7 +30,11 @@ typedef struct _NDIS6_OID_REQUEST_CONTEXT {
     PVOID CompletionContext;
     /* Timestamp for timeout handling */
     LARGE_INTEGER SubmitTime;
+    /* Reference count to protect synchronous waiters */
+    LONG RefCount;
 } NDIS6_OID_REQUEST_CONTEXT, *PNDIS6_OID_REQUEST_CONTEXT;
+
+typedef struct _NDIS6_MINIPORT_DRIVER_BLOCK NDIS6_MINIPORT_DRIVER_BLOCK, *PNDIS6_MINIPORT_DRIVER_BLOCK;
 
 /* Global list of pending OID requests */
 static LIST_ENTRY Ndis6OidRequestList;
@@ -50,6 +54,36 @@ InitializeNdis6OidSupport(VOID)
         KeInitializeSpinLock(&Ndis6OidRequestListLock);
         Ndis6OidInitialized = TRUE;
     }
+}
+
+/*
+ * Ndis6iDereferenceOidRequestContext
+ * Decrements the reference count and frees the context when it reaches zero.
+ */
+static VOID
+Ndis6iDereferenceOidRequestContext(
+    _In_ PNDIS6_OID_REQUEST_CONTEXT Context)
+{
+    KIRQL OldIrql;
+
+    if (Context == NULL)
+    {
+        return;
+    }
+
+    if (InterlockedDecrement(&Context->RefCount) != 0)
+    {
+        return;
+    }
+
+    /* Remove from global list */
+    KeAcquireSpinLock(&Ndis6OidRequestListLock, &OldIrql);
+    RemoveEntryList(&Context->ListEntry);
+    KeReleaseSpinLock(&Ndis6OidRequestListLock, OldIrql);
+
+    DPRINT1("Freed OID context %p\n", Context);
+
+    ExFreePoolWithTag(Context, NDIS_TAG);
 }
 
 /*
@@ -93,6 +127,7 @@ Ndis6iAllocateOidRequestContext(
     Context->IsPending = TRUE;
     Context->IsCancelled = FALSE;
     Context->CompletionStatus = NDIS_STATUS_PENDING;
+    Context->RefCount = 1;
 
     KeInitializeEvent(&Context->CompletionEvent, NotificationEvent, FALSE);
     KeQuerySystemTime(&Context->SubmitTime);
@@ -119,21 +154,7 @@ static VOID
 Ndis6iFreeOidRequestContext(
     _In_ PNDIS6_OID_REQUEST_CONTEXT Context)
 {
-    KIRQL OldIrql;
-
-    if (Context == NULL)
-    {
-        return;
-    }
-
-    /* Remove from global list */
-    KeAcquireSpinLock(&Ndis6OidRequestListLock, &OldIrql);
-    RemoveEntryList(&Context->ListEntry);
-    KeReleaseSpinLock(&Ndis6OidRequestListLock, OldIrql);
-
-    DPRINT1("Freed OID context %p\n", Context);
-
-    ExFreePoolWithTag(Context, NDIS_TAG);
+    Ndis6iDereferenceOidRequestContext(Context);
 }
 
 /*
@@ -217,6 +238,52 @@ Ndis6iFindOidRequestContextByRequestId(
 
     KeReleaseSpinLock(&Ndis6OidRequestListLock, OldIrql);
     return NULL;
+}
+
+/*
+ * Ndis6iResolveMiniportContext
+ * Resolves a miniport handle to the driver block and adapter context.
+ *
+ * The handle can be either a DEVICE_OBJECT (NDIS 6.x path) or a LOGICAL_ADAPTER.
+ */
+static BOOLEAN
+Ndis6iResolveMiniportContext(
+    _In_ NDIS_HANDLE MiniportHandle,
+    _Out_ PNDIS6_MINIPORT_DRIVER_BLOCK *DriverBlock,
+    _Out_ PVOID *MiniportAdapterContext)
+{
+    PDEVICE_OBJECT DeviceObject;
+    PLOGICAL_ADAPTER Adapter;
+
+    if (MiniportHandle == NULL || DriverBlock == NULL || MiniportAdapterContext == NULL)
+    {
+        return FALSE;
+    }
+
+    /* First, try to treat handle as a DEVICE_OBJECT */
+    DeviceObject = (PDEVICE_OBJECT)MiniportHandle;
+    if (DeviceObject != NULL &&
+        DeviceObject->Type == IO_TYPE_DEVICE &&
+        DeviceObject->Size >= sizeof(DEVICE_OBJECT) &&
+        DeviceObject->DeviceExtension != NULL)
+    {
+        *DriverBlock = (PNDIS6_MINIPORT_DRIVER_BLOCK)((PVOID*)DeviceObject->DeviceExtension)[0];
+        *MiniportAdapterContext = ((PVOID*)DeviceObject->DeviceExtension)[2];
+        return TRUE;
+    }
+
+    /* Otherwise treat it as a LOGICAL_ADAPTER */
+    Adapter = (PLOGICAL_ADAPTER)MiniportHandle;
+    if (Adapter->NdisMiniportBlock.DeviceObject != NULL &&
+        Adapter->NdisMiniportBlock.DeviceObject->DeviceExtension != NULL)
+    {
+        DeviceObject = Adapter->NdisMiniportBlock.DeviceObject;
+        *DriverBlock = (PNDIS6_MINIPORT_DRIVER_BLOCK)((PVOID*)DeviceObject->DeviceExtension)[0];
+        *MiniportAdapterContext = ((PVOID*)DeviceObject->DeviceExtension)[2];
+        return TRUE;
+    }
+
+    return FALSE;
 }
 
 /*
@@ -452,6 +519,112 @@ typedef struct _NDIS6_MINIPORT_DRIVER_BLOCK {
 } NDIS6_MINIPORT_DRIVER_BLOCK, *PNDIS6_MINIPORT_DRIVER_BLOCK;
 
 /*
+ * Cancel all pending OID requests for a miniport.
+ */
+VOID
+Ndis6iCancelOidRequestsForMiniport(
+    _In_ NDIS_HANDLE MiniportHandle)
+{
+    PLIST_ENTRY Entry;
+    PNDIS6_OID_REQUEST_CONTEXT Context;
+    PNDIS6_OID_REQUEST_CONTEXT *Contexts = NULL;
+    ULONG Count = 0;
+    ULONG Index = 0;
+    KIRQL OldIrql;
+    PNDIS6_MINIPORT_DRIVER_BLOCK DriverBlock;
+    PVOID MiniportAdapterContext;
+    MINIPORT_CANCEL_OID_REQUEST *CancelHandler = NULL;
+#if NDIS_SUPPORT_NDIS61
+    PVOID CancelDirectHandler = NULL;
+#endif
+
+    if (!Ndis6iResolveMiniportContext(MiniportHandle, &DriverBlock, &MiniportAdapterContext))
+    {
+        return;
+    }
+
+    if (DriverBlock != NULL)
+    {
+        CancelHandler = DriverBlock->Characteristics.CancelOidRequestHandler;
+#if NDIS_SUPPORT_NDIS61
+        CancelDirectHandler = DriverBlock->Characteristics.CancelDirectOidRequestHandler;
+#endif
+    }
+
+    KeAcquireSpinLock(&Ndis6OidRequestListLock, &OldIrql);
+    for (Entry = Ndis6OidRequestList.Flink;
+         Entry != &Ndis6OidRequestList;
+         Entry = Entry->Flink)
+    {
+        Context = CONTAINING_RECORD(Entry, NDIS6_OID_REQUEST_CONTEXT, ListEntry);
+        if (Context->MiniportHandle == MiniportHandle && Context->IsPending)
+        {
+            Count++;
+        }
+    }
+    KeReleaseSpinLock(&Ndis6OidRequestListLock, OldIrql);
+
+    if (Count == 0)
+    {
+        return;
+    }
+
+    Contexts = ExAllocatePoolWithTag(NonPagedPool, sizeof(PNDIS6_OID_REQUEST_CONTEXT) * Count, NDIS_TAG);
+    if (Contexts == NULL)
+    {
+        return;
+    }
+
+    KeAcquireSpinLock(&Ndis6OidRequestListLock, &OldIrql);
+    for (Entry = Ndis6OidRequestList.Flink;
+         Entry != &Ndis6OidRequestList && Index < Count;
+         Entry = Entry->Flink)
+    {
+        Context = CONTAINING_RECORD(Entry, NDIS6_OID_REQUEST_CONTEXT, ListEntry);
+        if (Context->MiniportHandle == MiniportHandle && Context->IsPending)
+        {
+            Context->IsCancelled = TRUE;
+            InterlockedIncrement(&Context->RefCount);
+            Contexts[Index++] = Context;
+        }
+    }
+    KeReleaseSpinLock(&Ndis6OidRequestListLock, OldIrql);
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        Context = Contexts[Index];
+        if (Context == NULL)
+        {
+            continue;
+        }
+
+#if NDIS_SUPPORT_NDIS61
+        if (Context->IsDirect && CancelDirectHandler != NULL)
+        {
+            ((MINIPORT_CANCEL_OID_REQUEST*)CancelDirectHandler)(
+                MiniportAdapterContext,
+                Context->OriginalRequestId);
+            Ndis6iDereferenceOidRequestContext(Context);
+            continue;
+        }
+#endif
+
+        if (CancelHandler != NULL)
+        {
+            CancelHandler(MiniportAdapterContext, Context->OriginalRequestId);
+        }
+        else
+        {
+            Ndis6iCompleteOidRequest(Context, NDIS_STATUS_REQUEST_ABORTED, Context->IsDirect);
+        }
+
+        Ndis6iDereferenceOidRequestContext(Context);
+    }
+
+    ExFreePoolWithTag(Contexts, NDIS_TAG);
+}
+
+/*
  * Ndis6iSubmitOidRequest
  * Internal function to submit an OID request to a miniport
  *
@@ -474,8 +647,6 @@ Ndis6iSubmitOidRequest(
     PNDIS6_OID_REQUEST_CONTEXT Context;
     NDIS_STATUS Status;
     NDIS_OID Oid;
-    PDEVICE_OBJECT DeviceObject;
-    PLOGICAL_ADAPTER Adapter;
     PNDIS6_MINIPORT_DRIVER_BLOCK DriverBlock;
     PVOID MiniportAdapterContext;
 
@@ -501,34 +672,9 @@ Ndis6iSubmitOidRequest(
     DPRINT1("NDIS6: Submitting OID 0x%08x, Type=%d\n",
         Oid, Request->RequestType);
 
-    /*
-     * The MiniportHandle can be either:
-     * 1. A DEVICE_OBJECT (from miniport initialization)
-     * 2. A LOGICAL_ADAPTER (from protocol binding)
-     *
-     * We need to handle both cases.
-     */
-    DeviceObject = (PDEVICE_OBJECT)MiniportHandle;
-
-    /* Try to get the LOGICAL_ADAPTER from device extension */
-    if (DeviceObject->DeviceExtension != NULL)
+    if (!Ndis6iResolveMiniportContext(MiniportHandle, &DriverBlock, &MiniportAdapterContext))
     {
-        /* Device extension layout for NDIS 6.x:
-         * [0] = DriverBlock
-         * [2] = AdapterContext
-         * [6] = LOGICAL_ADAPTER
-         */
-        DriverBlock = (PNDIS6_MINIPORT_DRIVER_BLOCK)((PVOID*)DeviceObject->DeviceExtension)[0];
-        MiniportAdapterContext = ((PVOID*)DeviceObject->DeviceExtension)[2];
-        Adapter = (PLOGICAL_ADAPTER)((PVOID*)DeviceObject->DeviceExtension)[6];
-        UNREFERENCED_PARAMETER(Adapter);  /* Used for debugging/future use */
-
-        DPRINT1("NDIS6: DriverBlock=%p, AdapterContext=%p, Adapter=%p\n",
-                 DriverBlock, MiniportAdapterContext, Adapter);
-    }
-    else
-    {
-        DPRINT1("NDIS6: No device extension, cannot submit OID\n");
+        DPRINT1("NDIS6: Cannot resolve miniport context for handle %p\n", MiniportHandle);
         return NDIS_STATUS_INVALID_PARAMETER;
     }
 
@@ -645,25 +791,56 @@ Ndis6iSynchronousOidRequest(
     NDIS_STATUS Status;
     NTSTATUS WaitStatus;
     LARGE_INTEGER Timeout;
+    PNDIS6_MINIPORT_DRIVER_BLOCK DriverBlock;
+    PVOID MiniportAdapterContext;
 
     DPRINT1("Ndis6iSynchronousOidRequest: Handle=%p, Request=%p\n",
         MiniportHandle, Request);
 
-    /* Submit the request */
-    Status = Ndis6iSubmitOidRequest(MiniportHandle, Request, FALSE);
+    /* Validate parameters */
+    if (MiniportHandle == NULL || Request == NULL)
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    /* Validate request header */
+    if (Request->Header.Type != NDIS_OBJECT_TYPE_OID_REQUEST ||
+        Request->Header.Revision < NDIS_OID_REQUEST_REVISION_1)
+    {
+        DPRINT1("NDIS6: Invalid OID request header (sync)\n");
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    if (!Ndis6iResolveMiniportContext(MiniportHandle, &DriverBlock, &MiniportAdapterContext))
+    {
+        DPRINT1("NDIS6: Cannot resolve miniport context (sync)\n");
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    if (DriverBlock == NULL || DriverBlock->Characteristics.OidRequestHandler == NULL)
+    {
+        DPRINT1("NDIS6: No OidRequestHandler (sync)\n");
+        return NDIS_STATUS_NOT_SUPPORTED;
+    }
+
+    /* Allocate tracking context and hold an extra reference for the waiter */
+    Context = Ndis6iAllocateOidRequestContext(MiniportHandle, Request, FALSE);
+    if (Context == NULL)
+    {
+        return NDIS_STATUS_RESOURCES;
+    }
+    InterlockedIncrement(&Context->RefCount);
+
+    /* Call the miniport's OID request handler */
+    Status = DriverBlock->Characteristics.OidRequestHandler(MiniportAdapterContext, Request);
 
     if (Status != NDIS_STATUS_PENDING)
     {
-        /* Request completed synchronously */
+        /* Synchronous completion */
+        Ndis6iCompleteOidRequest(Context, Status, FALSE);
+        Ndis6iDereferenceOidRequestContext(Context); /* completion */
+        Ndis6iDereferenceOidRequestContext(Context); /* waiter */
         return Status;
-    }
-
-    /* Find our context to wait on */
-    Context = Ndis6iFindOidRequestContext(MiniportHandle, Request);
-    if (Context == NULL)
-    {
-        DPRINT1("Context not found after submit\n");
-        return NDIS_STATUS_FAILURE;
     }
 
     /* Wait for completion with timeout */
@@ -695,8 +872,8 @@ Ndis6iSynchronousOidRequest(
         Status = Context->CompletionStatus;
     }
 
-    /* Free the context */
-    Ndis6iFreeOidRequestContext(Context);
+    /* Release waiter's reference; completion path will release its own */
+    Ndis6iDereferenceOidRequestContext(Context);
 
     DPRINT("Ndis6iSynchronousOidRequest returning 0x%x\n", Status);
 
@@ -884,7 +1061,6 @@ Ndis6iHandleOidRequest(
     NDIS_STATUS Status;
     PDEVICE_OBJECT DeviceObject;
     PNDIS6_MINIPORT_DRIVER_BLOCK DriverBlock;
-    PVOID MiniportAdapterContext;
 
     DPRINT("Ndis6iHandleOidRequest - Adapter=%p, Request=%p, Type=%d\n",
            Adapter, NdisRequest, NdisRequest->RequestType);
@@ -899,7 +1075,6 @@ Ndis6iHandleOidRequest(
 
     /* Get the driver block and adapter context from device extension */
     DriverBlock = (PNDIS6_MINIPORT_DRIVER_BLOCK)((PVOID*)DeviceObject->DeviceExtension)[0];
-    MiniportAdapterContext = ((PVOID*)DeviceObject->DeviceExtension)[2];
 
     if (DriverBlock == NULL)
     {
@@ -959,36 +1134,31 @@ Ndis6iHandleOidRequest(
             return NDIS_STATUS_NOT_SUPPORTED;
     }
 
-    /* Call the miniport's OidRequestHandler */
-    Status = DriverBlock->Characteristics.OidRequestHandler(
-                MiniportAdapterContext,
-                &OidRequest);
+    /* Submit synchronously to handle NDIS_STATUS_PENDING correctly */
+    Status = Ndis6iSynchronousOidRequest((NDIS_HANDLE)DeviceObject, &OidRequest);
 
-    DPRINT("OidRequestHandler returned 0x%x\n", Status);
+    DPRINT("OidRequestHandler (sync) returned 0x%x\n", Status);
 
     /* Copy results back to legacy request */
-    if (Status != NDIS_STATUS_PENDING)
+    switch (NdisRequest->RequestType)
     {
-        switch (NdisRequest->RequestType)
-        {
-            case NdisRequestQueryInformation:
-            case NdisRequestQueryStatistics:
-                NdisRequest->DATA.QUERY_INFORMATION.BytesWritten =
-                    OidRequest.DATA.QUERY_INFORMATION.BytesWritten;
-                NdisRequest->DATA.QUERY_INFORMATION.BytesNeeded =
-                    OidRequest.DATA.QUERY_INFORMATION.BytesNeeded;
-                break;
+        case NdisRequestQueryInformation:
+        case NdisRequestQueryStatistics:
+            NdisRequest->DATA.QUERY_INFORMATION.BytesWritten =
+                OidRequest.DATA.QUERY_INFORMATION.BytesWritten;
+            NdisRequest->DATA.QUERY_INFORMATION.BytesNeeded =
+                OidRequest.DATA.QUERY_INFORMATION.BytesNeeded;
+            break;
 
-            case NdisRequestSetInformation:
-                NdisRequest->DATA.SET_INFORMATION.BytesRead =
-                    OidRequest.DATA.SET_INFORMATION.BytesRead;
-                NdisRequest->DATA.SET_INFORMATION.BytesNeeded =
-                    OidRequest.DATA.SET_INFORMATION.BytesNeeded;
-                break;
+        case NdisRequestSetInformation:
+            NdisRequest->DATA.SET_INFORMATION.BytesRead =
+                OidRequest.DATA.SET_INFORMATION.BytesRead;
+            NdisRequest->DATA.SET_INFORMATION.BytesNeeded =
+                OidRequest.DATA.SET_INFORMATION.BytesNeeded;
+            break;
 
-            default:
-                break;
-        }
+        default:
+            break;
     }
 
     return Status;

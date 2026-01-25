@@ -592,6 +592,7 @@ RndisUsbSelectConfiguration(
             else if (Pipe->EndpointAddress == Adapter->InterruptEndpoint.EndpointAddress)
             {
                 Adapter->InterruptEndpoint.PipeHandle = Pipe->PipeHandle;
+                Adapter->InterruptEndpoint.MaxPacketSize = Pipe->MaximumPacketSize;
             }
         }
     }
@@ -607,23 +608,10 @@ RndisUsbSelectConfiguration(
     }
 
     /*
-     * TODO: The interrupt endpoint (if present) should be used for
-     * "response available" notifications from the device. Per CDC-ACM,
-     * the device sends a RESPONSE_AVAILABLE notification (0x01) on the
-     * interrupt endpoint when a response to GET_ENCAPSULATED_RESPONSE
-     * is ready. This allows for event-driven response retrieval instead
-     * of polling.
-     *
-     * Current implementation uses polling in RndisCommand() which works
-     * but is less efficient. A future version could:
-     * 1. Submit an async interrupt IN URB
-     * 2. On completion with RESPONSE_AVAILABLE, call GET_ENCAPSULATED_RESPONSE
-     * 3. Resubmit the interrupt URB for next notification
+     * The interrupt endpoint (if present) is used for CDC notifications
+     * such as NETWORK_CONNECTION. RNDIS RESPONSE_AVAILABLE is still
+     * handled via polling in RndisCommand().
      */
-    if (Adapter->InterruptEndpoint.PipeHandle)
-    {
-        DPRINT("USBRNDIS: Interrupt endpoint available but not used (polling mode)\n");
-    }
 
     /*
      * For CDC-ECM/NCM, the data interface typically has:
@@ -846,6 +834,113 @@ RndisUsbReceiveControlResponse(
     }
 
     RndisFreeMemory(Urb);
+    return Status;
+}
+
+/*
+ * RndisUsbSetEthernetPacketFilter
+ *
+ * Send CDC-ECM/NCM SET_ETHERNET_PACKET_FILTER request.
+ */
+NTSTATUS
+RndisUsbSetEthernetPacketFilter(
+    IN PRNDIS_ADAPTER Adapter,
+    IN USHORT PacketFilter)
+{
+    PURB Urb;
+    NTSTATUS Status;
+
+    DPRINT("USBRNDIS: CDC set packet filter 0x%04X\n", PacketFilter);
+
+    Urb = RndisAllocateMemory(NonPagedPool, sizeof(URB));
+    if (!Urb)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Urb->UrbControlVendorClassRequest.Hdr.Length =
+        sizeof(struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST);
+    Urb->UrbControlVendorClassRequest.Hdr.Function = URB_FUNCTION_CLASS_INTERFACE;
+    Urb->UrbControlVendorClassRequest.TransferFlags = USBD_TRANSFER_DIRECTION_OUT;
+    Urb->UrbControlVendorClassRequest.TransferBufferLength = 0;
+    Urb->UrbControlVendorClassRequest.TransferBuffer = NULL;
+    Urb->UrbControlVendorClassRequest.TransferBufferMDL = NULL;
+    Urb->UrbControlVendorClassRequest.Request = USB_CDC_SET_ETHERNET_PACKET_FILTER;
+    Urb->UrbControlVendorClassRequest.Value = PacketFilter;
+    Urb->UrbControlVendorClassRequest.Index = Adapter->ControlInterfaceNumber;
+
+    Status = RndisSyncUrbRequest(Adapter->LowerDeviceObject, Urb);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("USBRNDIS: SET_ETHERNET_PACKET_FILTER failed (0x%08X)\n", Status);
+    }
+
+    RndisFreeMemory(Urb);
+    return Status;
+}
+
+/*
+ * RndisUsbSetEthernetMulticastFilters
+ *
+ * Send CDC-ECM/NCM SET_ETHERNET_MULTICAST_FILTERS request.
+ */
+NTSTATUS
+RndisUsbSetEthernetMulticastFilters(
+    IN PRNDIS_ADAPTER Adapter,
+    IN PUCHAR MulticastList,
+    IN USHORT AddressCount)
+{
+    PURB Urb;
+    NTSTATUS Status;
+    ULONG BufferLength;
+    PUCHAR Buffer;
+
+    BufferLength = (ULONG)AddressCount * ETH_LENGTH_OF_ADDRESS;
+    Buffer = NULL;
+
+    if (BufferLength > 0)
+    {
+        Buffer = RndisAllocateMemory(NonPagedPool, BufferLength);
+        if (!Buffer)
+        {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlCopyMemory(Buffer, MulticastList, BufferLength);
+    }
+
+    Urb = RndisAllocateMemory(NonPagedPool, sizeof(URB));
+    if (!Urb)
+    {
+        if (Buffer)
+        {
+            RndisFreeMemory(Buffer);
+        }
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Urb->UrbControlVendorClassRequest.Hdr.Length =
+        sizeof(struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST);
+    Urb->UrbControlVendorClassRequest.Hdr.Function = URB_FUNCTION_CLASS_INTERFACE;
+    Urb->UrbControlVendorClassRequest.TransferFlags = USBD_TRANSFER_DIRECTION_OUT;
+    Urb->UrbControlVendorClassRequest.TransferBufferLength = BufferLength;
+    Urb->UrbControlVendorClassRequest.TransferBuffer = Buffer;
+    Urb->UrbControlVendorClassRequest.TransferBufferMDL = NULL;
+    Urb->UrbControlVendorClassRequest.Request = USB_CDC_SET_ETHERNET_MULTICAST_FILTERS;
+    Urb->UrbControlVendorClassRequest.Value = AddressCount;
+    Urb->UrbControlVendorClassRequest.Index = Adapter->ControlInterfaceNumber;
+
+    Status = RndisSyncUrbRequest(Adapter->LowerDeviceObject, Urb);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("USBRNDIS: SET_ETHERNET_MULTICAST_FILTERS failed (0x%08X)\n", Status);
+    }
+
+    RndisFreeMemory(Urb);
+    if (Buffer)
+    {
+        RndisFreeMemory(Buffer);
+    }
+
     return Status;
 }
 
@@ -1177,8 +1272,11 @@ RndisRxDelayDpc(
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    /* Resubmit RX after delay */
-    if (!Adapter->Halting)
+    /* Clear the coalescing flag */
+    InterlockedExchange(&Adapter->RxDelayScheduled, 0);
+
+    /* Resubmit RX after delay, but only if not already submitted */
+    if (!Adapter->Halting && !Adapter->RxSubmitted)
     {
         RndisUsbSubmitBulkRead(Adapter);
     }
@@ -1199,6 +1297,128 @@ RndisInitializeRxDpc(
     KeInitializeDpc(&Adapter->RxBackoffDpc, RndisRxBackoffDpc, Adapter);
     KeInitializeTimer(&Adapter->RxDelayTimer);
     KeInitializeDpc(&Adapter->RxDelayDpc, RndisRxDelayDpc, Adapter);
+    Adapter->RxDelayScheduled = 0;
+}
+
+static
+VOID
+NTAPI
+RndisInterruptResubmitDpc(
+    IN PKDPC Dpc,
+    IN PVOID DeferredContext,
+    IN PVOID SystemArgument1,
+    IN PVOID SystemArgument2)
+{
+    PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    if (!Adapter->Halting)
+    {
+        RndisUsbSubmitInterruptRead(Adapter);
+    }
+}
+
+VOID
+RndisInitializeInterruptDpc(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    KeInitializeDpc(&Adapter->InterruptResubmitDpc, RndisInterruptResubmitDpc, Adapter);
+}
+
+static
+VOID
+RndisIndicateLinkState(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    NDIS_STATUS_INDICATION Indication;
+    NDIS_LINK_STATE LinkState;
+
+    NdisZeroMemory(&LinkState, sizeof(LinkState));
+    LinkState.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+    LinkState.Header.Revision = NDIS_LINK_STATE_REVISION_1;
+    LinkState.Header.Size = sizeof(NDIS_LINK_STATE);
+    LinkState.MediaConnectState = Adapter->MediaState;
+    LinkState.MediaDuplexState = MediaDuplexStateFull;
+    LinkState.XmitLinkSpeed = Adapter->LinkSpeed;
+    LinkState.RcvLinkSpeed = Adapter->LinkSpeed;
+    LinkState.PauseFunctions = NdisPauseFunctionsUnsupported;
+
+    NdisZeroMemory(&Indication, sizeof(Indication));
+    Indication.Header.Type = NDIS_OBJECT_TYPE_STATUS_INDICATION;
+    Indication.Header.Revision = NDIS_STATUS_INDICATION_REVISION_1;
+    Indication.Header.Size = sizeof(NDIS_STATUS_INDICATION);
+    Indication.SourceHandle = Adapter->MiniportAdapterHandle;
+    Indication.StatusCode = NDIS_STATUS_LINK_STATE;
+    Indication.StatusBuffer = &LinkState;
+    Indication.StatusBufferSize = sizeof(LinkState);
+
+    NdisMIndicateStatusEx(Adapter->MiniportAdapterHandle, &Indication);
+}
+
+/*
+ * RndisInterruptComplete
+ *
+ * Completion routine for async interrupt IN URB (CDC notifications).
+ */
+static
+NTSTATUS
+NTAPI
+RndisInterruptComplete(
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PIRP Irp,
+    IN PVOID Context)
+{
+    PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)Context;
+    NTSTATUS Status;
+    ULONG TransferLength;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    Status = Irp->IoStatus.Status;
+    TransferLength = Adapter->InterruptUrb.UrbBulkOrInterruptTransfer.TransferBufferLength;
+
+    NdisAcquireSpinLock(&Adapter->InterruptLock);
+    Adapter->InterruptIrp = NULL;
+    Adapter->InterruptSubmitted = FALSE;
+    NdisReleaseSpinLock(&Adapter->InterruptLock);
+
+    IoFreeIrp(Irp);
+
+    if (NT_SUCCESS(Status) && TransferLength >= sizeof(USB_CDC_NOTIFICATION))
+    {
+        PUSB_CDC_NOTIFICATION Notification;
+        UCHAR NotifyType;
+
+        Notification = (PUSB_CDC_NOTIFICATION)Adapter->InterruptBuffer;
+        NotifyType = Notification->bNotificationType;
+
+        if (NotifyType == USB_CDC_NOTIFICATION_NETWORK_CONNECTION)
+        {
+            NDIS_MEDIA_CONNECT_STATE NewState;
+
+            NewState = (Notification->wValue != 0) ?
+                       MediaConnectStateConnected :
+                       MediaConnectStateDisconnected;
+
+            if (Adapter->MediaState != NewState)
+            {
+                Adapter->MediaState = NewState;
+                RndisIndicateLinkState(Adapter);
+            }
+        }
+    }
+
+    RndisDecrementPendingIo(Adapter);
+
+    if (!Adapter->Halting && Status != STATUS_CANCELLED)
+    {
+        KeInsertQueueDpc(&Adapter->InterruptResubmitDpc, NULL, NULL);
+    }
+
+    return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
 /*
@@ -1331,10 +1551,17 @@ RndisRxComplete(
     {
         if (UseDelayedResubmit)
         {
-            /* Delay 20ms before resubmitting - prevents CPU spin on NAK */
-            LARGE_INTEGER DueTime;
-            DueTime.QuadPart = -200000LL; /* 20ms in 100ns units, negative = relative */
-            KeSetTimer(&Adapter->RxDelayTimer, DueTime, &Adapter->RxDelayDpc);
+            /*
+             * Delay 20ms before resubmitting - prevents CPU spin on NAK.
+             * Use InterlockedExchange to coalesce multiple timer requests
+             * and prevent timer/DPC churn under persistent NAK.
+             */
+            if (InterlockedExchange(&Adapter->RxDelayScheduled, 1) == 0)
+            {
+                LARGE_INTEGER DueTime;
+                DueTime.QuadPart = -200000LL; /* 20ms in 100ns units, negative = relative */
+                KeSetTimer(&Adapter->RxDelayTimer, DueTime, &Adapter->RxDelayDpc);
+            }
         }
         else
         {
@@ -1428,10 +1655,76 @@ RndisUsbSubmitBulkRead(
 }
 
 /*
+ * RndisUsbSubmitInterruptRead
+ *
+ * Submit an async interrupt IN URB for CDC notifications.
+ */
+NTSTATUS
+RndisUsbSubmitInterruptRead(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    PURB Urb;
+    NTSTATUS Status;
+    PIRP Irp;
+
+    if (!Adapter->InterruptEndpoint.PipeHandle || !Adapter->InterruptBuffer)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Adapter->Halting)
+    {
+        return STATUS_DEVICE_NOT_READY;
+    }
+
+    NdisAcquireSpinLock(&Adapter->InterruptLock);
+    if (Adapter->InterruptSubmitted)
+    {
+        NdisReleaseSpinLock(&Adapter->InterruptLock);
+        return STATUS_SUCCESS;
+    }
+    Adapter->InterruptSubmitted = TRUE;
+    NdisReleaseSpinLock(&Adapter->InterruptLock);
+
+    Urb = &Adapter->InterruptUrb;
+    NdisZeroMemory(Urb, sizeof(URB));
+
+    UsbBuildInterruptOrBulkTransferRequest(
+        Urb,
+        sizeof(struct _URB_BULK_OR_INTERRUPT_TRANSFER),
+        Adapter->InterruptEndpoint.PipeHandle,
+        Adapter->InterruptBuffer,
+        NULL,
+        Adapter->InterruptBufferLength,
+        USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK,
+        NULL);
+
+    Status = RndisAsyncUrbRequest(Adapter, Urb, RndisInterruptComplete, Adapter, &Irp);
+    if (Status == STATUS_PENDING)
+    {
+        NdisAcquireSpinLock(&Adapter->InterruptLock);
+        if (Adapter->InterruptSubmitted)
+        {
+            Adapter->InterruptIrp = Irp;
+        }
+        NdisReleaseSpinLock(&Adapter->InterruptLock);
+    }
+    else if (!NT_SUCCESS(Status))
+    {
+        NdisAcquireSpinLock(&Adapter->InterruptLock);
+        Adapter->InterruptSubmitted = FALSE;
+        NdisReleaseSpinLock(&Adapter->InterruptLock);
+    }
+
+    return Status;
+}
+
+/*
  * RndisTxComplete
  *
  * Completion routine for async TX URB.
  * Called at DISPATCH_LEVEL when the USB stack completes the bulk OUT request.
+ * NDIS 6.x version using NET_BUFFER_LIST.
  */
 static
 NTSTATUS
@@ -1443,7 +1736,7 @@ RndisTxComplete(
 {
     PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)Context;
     NTSTATUS Status;
-    PNDIS_PACKET Packet;
+    PNET_BUFFER_LIST Nbl;
     NDIS_STATUS NdisStatus;
     BOOLEAN WasPending;
 
@@ -1452,10 +1745,10 @@ RndisTxComplete(
     Status = Irp->IoStatus.Status;
     WasPending = Irp->PendingReturned;
 
-    /* Retrieve the pending packet and clear TX state under lock */
+    /* Retrieve the pending NBL and clear TX state under lock */
     NdisAcquireSpinLock(&Adapter->TxLock);
-    Packet = Adapter->PendingTxPacket;
-    Adapter->PendingTxPacket = NULL;
+    Nbl = Adapter->PendingTxNbl;
+    Adapter->PendingTxNbl = NULL;
     Adapter->TxIrp = NULL;
     Adapter->TxBusy = FALSE;
     NdisReleaseSpinLock(&Adapter->TxLock);
@@ -1478,14 +1771,17 @@ RndisTxComplete(
     }
 
     /*
-     * Only call NdisMSendComplete if the IRP was actually pended.
-     * If WasPending is FALSE, the IRP completed synchronously and
-     * RndisSend() will return the status directly (not NDIS_STATUS_PENDING).
-     * Calling NdisMSendComplete before returning PENDING is undefined in NDIS5.
+     * Only call NdisMSendNetBufferListsComplete if the IRP was actually pended.
+     * If WasPending is FALSE, the IRP completed synchronously and the
+     * send handler will complete the NBL itself.
      */
-    if (Packet && WasPending)
+    if (Nbl && WasPending)
     {
-        NdisMSendComplete(Adapter->MiniportAdapterHandle, Packet, NdisStatus);
+        NET_BUFFER_LIST_STATUS(Nbl) = NdisStatus;
+        NdisMSendNetBufferListsComplete(
+            Adapter->MiniportAdapterHandle,
+            Nbl,
+            NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL);
     }
 
     /* Decrement pending I/O count */
