@@ -16,74 +16,140 @@
 #include <debug.h>
 
 /*
- * RndisBuildNcmNtb
+ * Maximum datagrams in a single NTB for TX batching.
+ * Each datagram needs 4 bytes in the NDP16 entry table.
+ * Keep this reasonable to avoid excessive latency and buffer usage.
+ */
+#define NCM_MAX_TX_DATAGRAMS 32
+
+/*
+ * NCM TX Datagram descriptor for batching.
+ * Used to collect multiple datagrams before building NTB.
+ */
+typedef struct _NCM_TX_DATAGRAM {
+    PUCHAR Data;
+    ULONG Length;
+} NCM_TX_DATAGRAM, *PNCM_TX_DATAGRAM;
+
+/*
+ * RndisAlignOffset
  *
- * Build a CDC-NCM NTB (Network Transfer Block) containing a single Ethernet frame.
+ * Calculate aligned offset given alignment constraints.
+ * Finds smallest offset >= CurrentOffset where (offset % Divisor == Remainder).
+ */
+static
+__inline
+ULONG
+RndisAlignOffset(
+    IN ULONG CurrentOffset,
+    IN USHORT Divisor,
+    IN USHORT Remainder)
+{
+    if (Divisor == 0 || Divisor == 1)
+    {
+        return CurrentOffset;
+    }
+
+    /* Normalize remainder if it exceeds divisor */
+    if (Remainder >= Divisor)
+    {
+        Remainder = Remainder % Divisor;
+    }
+
+    /* Formula: ((offset + divisor - 1 - remainder) / divisor) * divisor + remainder */
+    return ((CurrentOffset + Divisor - 1 - Remainder) / Divisor) * Divisor + Remainder;
+}
+
+/*
+ * RndisBuildNcmNtbMulti
+ *
+ * Build a CDC-NCM NTB (Network Transfer Block) containing multiple Ethernet frames.
  * Uses NTH16/NDP16 (16-bit pointers) format.
  *
- * NCM NTB layout for single datagram:
- *   [NTH16 (12 bytes)] [NDP16 header + 2 entries (16 bytes)] [Ethernet frame]
+ * NCM NTB layout for multiple datagrams:
+ *   [NTH16 (12 bytes)]
+ *   [NDP16 header + N+1 entries (8 + (N+1)*4 bytes)]
+ *   [Datagram 0 (aligned)]
+ *   [Datagram 1 (aligned)]
+ *   ...
+ *   [Datagram N-1 (aligned)]
  *
  * The NDP16 contains:
  *   - Header (8 bytes): signature, length, next NDP index
- *   - Entry 0 (4 bytes): points to Ethernet frame
- *   - Entry 1 (4 bytes): terminator (0, 0)
+ *   - Entry 0..N-1 (4 bytes each): points to each Ethernet frame
+ *   - Entry N (4 bytes): terminator (0, 0)
+ *
+ * Parameters:
+ *   Adapter - Adapter context
+ *   Datagrams - Array of datagram descriptors
+ *   DatagramCount - Number of datagrams (1 to NCM_MAX_TX_DATAGRAMS)
+ *   OutputBuffer - Output buffer for NTB (must be at least NcmNtbOutMaxSize bytes)
+ *
+ * Returns:
+ *   Total NTB length on success, 0 on failure.
  */
 static
 ULONG
-RndisBuildNcmNtb(
+RndisBuildNcmNtbMulti(
     IN PRNDIS_ADAPTER Adapter,
-    IN PUCHAR EthernetData,
-    IN ULONG EthernetLength,
+    IN PNCM_TX_DATAGRAM Datagrams,
+    IN ULONG DatagramCount,
     OUT PUCHAR OutputBuffer)
 {
     PNCM_NTH16 Nth16;
     PNCM_NDP16 Ndp16;
     ULONG NdpOffset;
-    ULONG DatagramOffset;
+    ULONG DataOffset;
     ULONG TotalLength;
     USHORT NdpLength;
+    ULONG i;
+
+    if (DatagramCount == 0 || DatagramCount > NCM_MAX_TX_DATAGRAMS)
+    {
+        DPRINT1("USBRNDIS: Invalid datagram count %lu\n", DatagramCount);
+        return 0;
+    }
 
     /*
-     * Calculate offsets with alignment.
-     * NDP16 follows NTH16 with specified alignment.
-     * Datagram follows NDP16 with specified alignment.
+     * Calculate NDP offset with alignment.
+     * NDP16 follows NTH16.
      */
     NdpOffset = NCM_NTH16_LENGTH;
-
-    /* Align NDP offset if required */
     if (Adapter->NcmNdpAlignment > 1)
     {
         NdpOffset = (NdpOffset + Adapter->NcmNdpAlignment - 1) &
                     ~(Adapter->NcmNdpAlignment - 1);
     }
 
-    /* NDP16 size: header (8 bytes) + 1 datagram entry (4 bytes) + terminator (4 bytes) = 16 bytes */
-    NdpLength = 16;
-
-    /* Datagram follows NDP16 */
-    DatagramOffset = NdpOffset + NdpLength;
+    /*
+     * Calculate NDP16 size.
+     * Header (8 bytes) + N datagram entries (4 bytes each) + terminator (4 bytes)
+     */
+    NdpLength = (USHORT)(8 + (DatagramCount + 1) * sizeof(NCM_NDP16_ENTRY));
 
     /*
-     * Apply canonical datagram alignment formula.
-     * Goal: find smallest offset >= DatagramOffset where (offset % Divisor == Remainder).
-     * Formula: ((offset + divisor - 1 - remainder) / divisor) * divisor + remainder
-     *
-     * Handle edge case where device reports Remainder >= Divisor by taking modulo.
+     * First datagram follows NDP16 with alignment.
      */
-    if (Adapter->NcmNdpDivisor > 0)
+    DataOffset = NdpOffset + NdpLength;
+    DataOffset = RndisAlignOffset(DataOffset, Adapter->NcmNdpDivisor, Adapter->NcmNdpRemainder);
+
+    /*
+     * Calculate total length by iterating through all datagrams.
+     * Each datagram is placed with required alignment.
+     */
+    TotalLength = DataOffset;
+    for (i = 0; i < DatagramCount; i++)
     {
-        USHORT Divisor = Adapter->NcmNdpDivisor;
-        USHORT Remainder = (Adapter->NcmNdpRemainder < Divisor) ?
-                           Adapter->NcmNdpRemainder : (Adapter->NcmNdpRemainder % Divisor);
-        DatagramOffset = ((DatagramOffset + Divisor - 1 - Remainder) / Divisor) * Divisor + Remainder;
+        if (i > 0)
+        {
+            /* Apply alignment for subsequent datagrams */
+            TotalLength = RndisAlignOffset(TotalLength, Adapter->NcmNdpDivisor, Adapter->NcmNdpRemainder);
+        }
+        TotalLength += Datagrams[i].Length;
     }
 
-    TotalLength = DatagramOffset + EthernetLength;
-
     /*
-     * Validate total length fits within device's OUT max NTB size.
-     * Also cap to our buffer size as a safety check.
+     * Validate total length.
      */
     if (TotalLength > Adapter->NcmNtbOutMaxSize || TotalLength > RNDIS_MAX_TRANSFER_SIZE)
     {
@@ -92,18 +158,14 @@ RndisBuildNcmNtb(
         return 0;
     }
 
-    /*
-     * NTB16 uses 16-bit fields for wBlockLength. Ensure TotalLength fits
-     * in USHORT to avoid truncation when assigned to Nth16->wBlockLength.
-     */
     if (TotalLength > 0xFFFF)
     {
         DPRINT1("USBRNDIS: NCM NTB16 block length overflow (%lu > 65535)\n", TotalLength);
         return 0;
     }
 
-    /* Zero the buffer first */
-    NdisZeroMemory(OutputBuffer, TotalLength);
+    /* Zero the header portion of the buffer */
+    NdisZeroMemory(OutputBuffer, NdpOffset + NdpLength);
 
     /* Build NTH16 header */
     Nth16 = (PNCM_NTH16)OutputBuffer;
@@ -119,21 +181,57 @@ RndisBuildNcmNtb(
     Ndp16->wLength = NdpLength;
     Ndp16->wNextNdpIndex = 0;  /* No more NDPs */
 
-    /* First entry: points to our Ethernet frame */
-    Ndp16->Datagram[0].wDatagramIndex = (USHORT)DatagramOffset;
-    Ndp16->Datagram[0].wDatagramLength = (USHORT)EthernetLength;
+    /* Build NDP entries and copy datagrams */
+    DataOffset = NdpOffset + NdpLength;
+    DataOffset = RndisAlignOffset(DataOffset, Adapter->NcmNdpDivisor, Adapter->NcmNdpRemainder);
+
+    for (i = 0; i < DatagramCount; i++)
+    {
+        if (i > 0)
+        {
+            DataOffset = RndisAlignOffset(DataOffset, Adapter->NcmNdpDivisor, Adapter->NcmNdpRemainder);
+        }
+
+        /* Set NDP entry */
+        Ndp16->Datagram[i].wDatagramIndex = (USHORT)DataOffset;
+        Ndp16->Datagram[i].wDatagramLength = (USHORT)Datagrams[i].Length;
+
+        /* Copy Ethernet frame */
+        NdisMoveMemory(OutputBuffer + DataOffset, Datagrams[i].Data, Datagrams[i].Length);
+
+        DataOffset += Datagrams[i].Length;
+    }
 
     /* Terminator entry: both fields zero */
-    Ndp16->Datagram[1].wDatagramIndex = 0;
-    Ndp16->Datagram[1].wDatagramLength = 0;
+    Ndp16->Datagram[DatagramCount].wDatagramIndex = 0;
+    Ndp16->Datagram[DatagramCount].wDatagramLength = 0;
 
-    /* Copy Ethernet frame */
-    NdisMoveMemory(OutputBuffer + DatagramOffset, EthernetData, EthernetLength);
-
-    DPRINT("USBRNDIS: Built NCM NTB: seq=%u len=%lu ndp@%lu data@%lu\n",
-           Nth16->wSequence, TotalLength, NdpOffset, DatagramOffset);
+    DPRINT1("USBRNDIS: Built NCM NTB with %lu datagrams: seq=%u len=%lu ndp@%lu\n",
+           DatagramCount, Nth16->wSequence, TotalLength, NdpOffset);
 
     return TotalLength;
+}
+
+/*
+ * RndisBuildNcmNtb
+ *
+ * Build a CDC-NCM NTB (Network Transfer Block) containing a single Ethernet frame.
+ * This is a convenience wrapper around RndisBuildNcmNtbMulti for single-datagram case.
+ */
+static
+ULONG
+RndisBuildNcmNtb(
+    IN PRNDIS_ADAPTER Adapter,
+    IN PUCHAR EthernetData,
+    IN ULONG EthernetLength,
+    OUT PUCHAR OutputBuffer)
+{
+    NCM_TX_DATAGRAM Datagram;
+
+    Datagram.Data = EthernetData;
+    Datagram.Length = EthernetLength;
+
+    return RndisBuildNcmNtbMulti(Adapter, &Datagram, 1, OutputBuffer);
 }
 
 /*
@@ -195,17 +293,24 @@ RndisBuildPacketMessage(
 }
 
 /*
- * RndisIndicateReceiveNbl
+ * RndisIndicateReceiveNblEx
  *
  * Build and indicate a NET_BUFFER_LIST for a received Ethernet frame.
  * This is the NDIS 6.x replacement for NdisMEthIndicateReceive.
+ *
+ * Parameters:
+ *   Adapter - Pointer to adapter context
+ *   EthernetData - Pointer to the Ethernet frame data
+ *   EthernetLength - Length of the Ethernet frame
+ *   ChecksumInfo - Optional pointer to checksum validation results from device
  */
 static
 VOID
-RndisIndicateReceiveNbl(
+RndisIndicateReceiveNblEx(
     IN PRNDIS_ADAPTER Adapter,
     IN PUCHAR EthernetData,
-    IN ULONG EthernetLength)
+    IN ULONG EthernetLength,
+    IN PRNDIS_TCPIP_CSUM_INFO ChecksumInfo OPTIONAL)
 {
     PNET_BUFFER_LIST Nbl;
     PNET_BUFFER Nb;
@@ -275,6 +380,54 @@ RndisIndicateReceiveNbl(
     /* Set source handle */
     Nbl->SourceHandle = Adapter->MiniportAdapterHandle;
 
+    /*
+     * Set TCP/IP checksum offload information if provided by device.
+     * This tells the network stack whether hardware verified the checksums.
+     */
+    if (ChecksumInfo != NULL && ChecksumInfo->Value != 0)
+    {
+        NDIS_TCP_IP_CHECKSUM_NET_BUFFER_LIST_INFO NblChecksumInfo;
+
+        NblChecksumInfo.Value = 0;
+
+        /*
+         * Map RNDIS checksum results to NDIS checksum info.
+         * RNDIS uses separate flags for success/failure, NDIS uses succeeded/failed.
+         */
+        if (ChecksumInfo->Receive.TcpChecksumSucceeded)
+        {
+            NblChecksumInfo.Receive.TcpChecksumSucceeded = TRUE;
+        }
+        else if (ChecksumInfo->Receive.TcpChecksumFailed)
+        {
+            NblChecksumInfo.Receive.TcpChecksumFailed = TRUE;
+        }
+
+        if (ChecksumInfo->Receive.UdpChecksumSucceeded)
+        {
+            NblChecksumInfo.Receive.UdpChecksumSucceeded = TRUE;
+        }
+        else if (ChecksumInfo->Receive.UdpChecksumFailed)
+        {
+            NblChecksumInfo.Receive.UdpChecksumFailed = TRUE;
+        }
+
+        if (ChecksumInfo->Receive.IpChecksumSucceeded)
+        {
+            NblChecksumInfo.Receive.IpChecksumSucceeded = TRUE;
+        }
+        else if (ChecksumInfo->Receive.IpChecksumFailed)
+        {
+            NblChecksumInfo.Receive.IpChecksumFailed = TRUE;
+        }
+
+        if (NblChecksumInfo.Value != 0)
+        {
+            NET_BUFFER_LIST_INFO(Nbl, TcpIpChecksumNetBufferListInfo) = NblChecksumInfo.Value;
+            DPRINT("USBRNDIS: Set RX checksum info: 0x%08X\n", NblChecksumInfo.Value);
+        }
+    }
+
     /* Update statistics */
     Adapter->RxOkCount++;
     Adapter->RxBytes += EthernetLength;
@@ -289,6 +442,21 @@ RndisIndicateReceiveNbl(
         1,      /* Number of NBLs */
         0       /* Flags - not at dispatch level from USB completion */
         );
+}
+
+/*
+ * RndisIndicateReceiveNbl
+ *
+ * Wrapper for backward compatibility - indicates without checksum info.
+ */
+static
+VOID
+RndisIndicateReceiveNbl(
+    IN PRNDIS_ADAPTER Adapter,
+    IN PUCHAR EthernetData,
+    IN ULONG EthernetLength)
+{
+    RndisIndicateReceiveNblEx(Adapter, EthernetData, EthernetLength, NULL);
 }
 
 /*
@@ -507,6 +675,11 @@ RndisProcessReceivedPacket(
     else
     {
         /* RNDIS mode: Unwrap Ethernet frame from RNDIS_PACKET_MSG */
+        RNDIS_TCPIP_CSUM_INFO ChecksumInfo;
+        PRNDIS_TCPIP_CSUM_INFO pChecksumInfo = NULL;
+
+        ChecksumInfo.Value = 0;
+
         if (Length < sizeof(RNDIS_PACKET_MSG))
         {
             DPRINT1("USBRNDIS: Received data too short for RNDIS header\n");
@@ -556,10 +729,92 @@ RndisProcessReceivedPacket(
             return;
         }
 
+        /*
+         * Process per-packet info if present.
+         * Per-packet info contains metadata like checksum validation results.
+         * PerPacketInfoOffset is relative to the start of DataOffset field (byte 8).
+         */
+        if (PacketMsg->PerPacketInfoLength > 0 && PacketMsg->PerPacketInfoOffset > 0)
+        {
+            ULONG PpiOffset = PacketMsg->PerPacketInfoOffset + 8; /* Offset from message start */
+            ULONG PpiEndOffset = PpiOffset + PacketMsg->PerPacketInfoLength;
+            PRNDIS_PER_PACKET_INFO PpiEntry;
+
+            DPRINT("USBRNDIS: RNDIS packet has per-packet info: offset=%u length=%u\n",
+                   PacketMsg->PerPacketInfoOffset, PacketMsg->PerPacketInfoLength);
+
+            /* Validate per-packet info bounds */
+            if (PpiEndOffset <= PacketMsg->MessageLength)
+            {
+                /*
+                 * Iterate through per-packet info elements.
+                 * Each element has a Size field indicating total size including header.
+                 */
+                while (PpiOffset + sizeof(RNDIS_PER_PACKET_INFO) <= PpiEndOffset)
+                {
+                    PpiEntry = (PRNDIS_PER_PACKET_INFO)(Data + PpiOffset);
+
+                    /* Validate element size */
+                    if (PpiEntry->Size < sizeof(RNDIS_PER_PACKET_INFO) ||
+                        PpiOffset + PpiEntry->Size > PpiEndOffset)
+                    {
+                        DPRINT1("USBRNDIS: Invalid per-packet info element size %u at offset %u\n",
+                                PpiEntry->Size, PpiOffset);
+                        break;
+                    }
+
+                    DPRINT("USBRNDIS: Per-packet info type=%u size=%u\n",
+                           PpiEntry->Type, PpiEntry->Size);
+
+                    /* Process based on type */
+                    switch (PpiEntry->Type)
+                    {
+                        case RNDIS_PKTINFO_TYPE_TCPIP_CSUM:
+                            /*
+                             * TCP/IP checksum validation results from device.
+                             * The data is at PerPacketInfoOffset within this element.
+                             */
+                            if (PpiEntry->PerPacketInfoOffset > 0 &&
+                                PpiEntry->PerPacketInfoOffset + sizeof(RNDIS_TCPIP_CSUM_INFO) <= PpiEntry->Size)
+                            {
+                                PRNDIS_TCPIP_CSUM_INFO CsumData;
+                                CsumData = (PRNDIS_TCPIP_CSUM_INFO)((PUCHAR)PpiEntry + PpiEntry->PerPacketInfoOffset);
+                                ChecksumInfo.Value = CsumData->Value;
+                                pChecksumInfo = &ChecksumInfo;
+
+                                DPRINT("USBRNDIS: Checksum info from device: 0x%08X\n", ChecksumInfo.Value);
+                            }
+                            break;
+
+                        case RNDIS_PKTINFO_TYPE_802_1Q_INFO:
+                            /* VLAN tag info - not currently processed */
+                            DPRINT("USBRNDIS: 802.1Q VLAN info present (not processed)\n");
+                            break;
+
+                        default:
+                            DPRINT("USBRNDIS: Unknown per-packet info type %u\n", PpiEntry->Type);
+                            break;
+                    }
+
+                    /* Move to next element */
+                    PpiOffset += PpiEntry->Size;
+                }
+            }
+            else
+            {
+                DPRINT1("USBRNDIS: Per-packet info extends past message (end=%u, msglen=%u)\n",
+                        PpiEndOffset, PacketMsg->MessageLength);
+            }
+        }
+
         DPRINT("USBRNDIS: Received RNDIS Ethernet frame (%u bytes)\n", EthernetLength);
+
+        /* Indicate Ethernet frame to NDIS using NBL with checksum info */
+        RndisIndicateReceiveNblEx(Adapter, EthernetData, EthernetLength, pChecksumInfo);
+        return;
     }
 
-    /* Indicate Ethernet frame to NDIS using NBL */
+    /* Indicate Ethernet frame to NDIS using NBL (CDC-ECM path) */
     RndisIndicateReceiveNbl(Adapter, EthernetData, EthernetLength);
 }
 
@@ -668,6 +923,7 @@ RndisSendNetBufferLists(
 
         Adapter->TxBusy = TRUE;
         Adapter->PendingTxNbl = CurrentNbl;
+        Adapter->PendingTxNblCount = 1;  /* Single NBL, may be updated for NCM batching */
         NdisReleaseSpinLock(&Adapter->TxLock);
 
         /* Get the first NET_BUFFER from this NBL */
@@ -735,16 +991,114 @@ RndisSendNetBufferLists(
         {
             /*
              * CDC-NCM: Build NTB with NTH16/NDP16 headers.
-             * Copy frame to temp area then build NTB from it.
+             *
+             * NCM Multi-Datagram TX Batching:
+             * Try to collect multiple pending NBLs and batch them into a single NTB.
+             * This improves throughput by reducing USB transfer overhead.
+             *
+             * We collect datagrams from the current NBL and any additional NBLs
+             * in the chain until we hit limits (max datagrams, max NTB size, or no more NBLs).
              */
-            ULONG TempOffset = 64;  /* Reserve space for NTH16 + NDP16 */
+            NCM_TX_DATAGRAM TxDatagrams[NCM_MAX_TX_DATAGRAMS];
+            PNET_BUFFER_LIST BatchNbls[NCM_MAX_TX_DATAGRAMS];
+            ULONG DatagramCount = 0;
+            ULONG TotalDataLength = 0;
+            ULONG EstimatedNtbSize;
+            ULONG NdpOverhead;
+            PNET_BUFFER_LIST BatchNbl;
+            PNET_BUFFER BatchNb;
+            PMDL BatchMdl;
+            PVOID BatchVa;
+            ULONG BatchDataLen;
+            ULONG BatchDataOff;
+            PUCHAR TempDataArea;
+            ULONG TempDataOffset;
+            ULONG i;
 
-            NdisMoveMemory(Adapter->TxBuffer + TempOffset, VirtualAddress, DataLength);
+            /*
+             * Reserve space at beginning of TxBuffer for NTH16 + NDP16 headers.
+             * We'll copy datagram data after this reserved area, then build the NTB.
+             * NDP overhead: 8-byte header + 4 bytes per datagram entry + 4-byte terminator
+             * Plus some alignment padding.
+             */
+            NdpOverhead = NCM_NTH16_LENGTH + 8 + (NCM_MAX_TX_DATAGRAMS + 1) * 4 + 64;
+            TempDataArea = Adapter->TxBuffer + NdpOverhead;
+            TempDataOffset = 0;
 
-            TotalLength = RndisBuildNcmNtb(Adapter,
-                                           Adapter->TxBuffer + TempOffset,
-                                           DataLength,
-                                           Adapter->TxBuffer);
+            /*
+             * First datagram: already have the current NBL data
+             */
+            if (TempDataOffset + DataLength <= RNDIS_MAX_TRANSFER_SIZE - NdpOverhead)
+            {
+                TxDatagrams[DatagramCount].Data = TempDataArea + TempDataOffset;
+                TxDatagrams[DatagramCount].Length = DataLength;
+                NdisMoveMemory(TempDataArea + TempDataOffset, VirtualAddress, DataLength);
+                TempDataOffset += DataLength;
+                BatchNbls[DatagramCount] = CurrentNbl;
+                DatagramCount++;
+                TotalDataLength += DataLength;
+            }
+
+            /*
+             * Try to batch additional NBLs from the chain.
+             * We look ahead at NextNbl and subsequent NBLs.
+             */
+            BatchNbl = NextNbl;
+            while (BatchNbl != NULL && DatagramCount < NCM_MAX_TX_DATAGRAMS)
+            {
+                /* Get the first NET_BUFFER from this NBL */
+                BatchNb = NET_BUFFER_LIST_FIRST_NB(BatchNbl);
+                if (BatchNb == NULL)
+                {
+                    break;
+                }
+
+                BatchDataLen = NET_BUFFER_DATA_LENGTH(BatchNb);
+                BatchMdl = NET_BUFFER_CURRENT_MDL(BatchNb);
+                BatchDataOff = NET_BUFFER_CURRENT_MDL_OFFSET(BatchNb);
+
+                /* Validate length */
+                if (BatchDataLen > ETHERNET_MAX_FRAME_SIZE)
+                {
+                    break;
+                }
+
+                /* Check if adding this datagram would exceed NTB size limit */
+                EstimatedNtbSize = NdpOverhead + TempDataOffset + BatchDataLen + 64; /* +64 for alignment */
+                if (EstimatedNtbSize > Adapter->NcmNtbOutMaxSize ||
+                    EstimatedNtbSize > RNDIS_MAX_TRANSFER_SIZE)
+                {
+                    /* Would exceed limits, stop batching */
+                    break;
+                }
+
+                /* Map the MDL */
+                BatchVa = MmGetSystemAddressForMdlSafe(BatchMdl, NormalPagePriority);
+                if (BatchVa == NULL)
+                {
+                    break;
+                }
+                BatchVa = (PUCHAR)BatchVa + BatchDataOff;
+
+                /* Add this datagram to the batch */
+                TxDatagrams[DatagramCount].Data = TempDataArea + TempDataOffset;
+                TxDatagrams[DatagramCount].Length = BatchDataLen;
+                NdisMoveMemory(TempDataArea + TempDataOffset, BatchVa, BatchDataLen);
+                TempDataOffset += BatchDataLen;
+                BatchNbls[DatagramCount] = BatchNbl;
+                DatagramCount++;
+                TotalDataLength += BatchDataLen;
+
+                /* Remove this NBL from the chain - we're now handling it */
+                NextNbl = NET_BUFFER_LIST_NEXT_NBL(BatchNbl);
+                NET_BUFFER_LIST_NEXT_NBL(BatchNbl) = NULL;
+
+                /* Move to next NBL */
+                BatchNbl = NextNbl;
+            }
+
+            /* Now build the multi-datagram NTB */
+            TotalLength = RndisBuildNcmNtbMulti(Adapter, TxDatagrams, DatagramCount, Adapter->TxBuffer);
 
             if (TotalLength == 0)
             {
@@ -754,14 +1108,37 @@ RndisSendNetBufferLists(
                 Adapter->PendingTxNbl = NULL;
                 NdisReleaseSpinLock(&Adapter->TxLock);
                 Adapter->TxErrorCount++;
-                NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_FAILURE;
-                NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = FailedNbls;
-                FailedNbls = CurrentNbl;
+
+                /* Fail all NBLs in the batch */
+                for (i = 0; i < DatagramCount; i++)
+                {
+                    NET_BUFFER_LIST_STATUS(BatchNbls[i]) = NDIS_STATUS_FAILURE;
+                    NET_BUFFER_LIST_NEXT_NBL(BatchNbls[i]) = FailedNbls;
+                    FailedNbls = BatchNbls[i];
+                }
                 continue;
             }
 
-            DPRINT("USBRNDIS: CDC-NCM TX NTB (%lu bytes, frame %lu bytes)\n",
-                   TotalLength, DataLength);
+            /*
+             * Store batch info for completion.
+             * We need to complete all NBLs when the USB transfer completes.
+             * For now, we store the list in PendingTxNbl chain.
+             */
+            NdisAcquireSpinLock(&Adapter->TxLock);
+            Adapter->PendingTxNbl = BatchNbls[0];
+            for (i = 1; i < DatagramCount; i++)
+            {
+                /* Chain the batched NBLs together for completion */
+                NET_BUFFER_LIST_NEXT_NBL(BatchNbls[i-1]) = BatchNbls[i];
+            }
+            Adapter->PendingTxNblCount = DatagramCount;
+            NdisReleaseSpinLock(&Adapter->TxLock);
+
+            /* Update stats for all batched datagrams */
+            Adapter->TxBytes += TotalDataLength;
+
+            DPRINT1("USBRNDIS: CDC-NCM TX NTB with %lu datagrams (%lu bytes total, NTB %lu bytes)\n",
+                   DatagramCount, TotalDataLength, TotalLength);
         }
         else
         {

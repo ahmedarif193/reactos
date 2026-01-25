@@ -152,16 +152,41 @@ RndisCommand(
         else if (Response->MessageType == RNDIS_MSG_INDICATE)
         {
             PRNDIS_INDICATE_MSG Indicate = (PRNDIS_INDICATE_MSG)Adapter->ControlBuffer;
+            NDIS_MEDIA_CONNECT_STATE OldState = Adapter->MediaState;
 
-            DPRINT("USBRNDIS: Received indication, status=0x%08X\n", Indicate->Status);
+            DPRINT1("USBRNDIS: Received RNDIS indication, status=0x%08X\n", Indicate->Status);
 
             if (Indicate->Status == RNDIS_STATUS_MEDIA_CONNECT)
             {
-                Adapter->MediaState = NdisMediaStateConnected;
+                Adapter->MediaState = MediaConnectStateConnected;
+                DPRINT1("USBRNDIS: RNDIS media state: Connected\n");
             }
             else if (Indicate->Status == RNDIS_STATUS_MEDIA_DISCONNECT)
             {
-                Adapter->MediaState = NdisMediaStateDisconnected;
+                Adapter->MediaState = MediaConnectStateDisconnected;
+                DPRINT1("USBRNDIS: RNDIS media state: Disconnected\n");
+            }
+            else
+            {
+                DPRINT1("USBRNDIS: Unknown RNDIS indication status 0x%08X\n", Indicate->Status);
+            }
+
+            /*
+             * If media state changed, we should indicate it to NDIS.
+             * However, we're inside RndisCommand() which holds ControlMutex
+             * and is during initialization. The link state will be indicated
+             * after initialization completes or on subsequent status changes.
+             *
+             * For runtime indications (after init), we queue a work item
+             * or use the interrupt endpoint handler.
+             */
+            if (Adapter->State >= RndisStateDataInitialized && OldState != Adapter->MediaState)
+            {
+                /*
+                 * TODO: Queue a passive-level work item to call RndisIndicateLinkState()
+                 * since we're at passive level but holding ControlMutex.
+                 * For now, the state is updated and will be reflected on next query.
+                 */
             }
             /* Continue polling for our response */
         }

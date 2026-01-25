@@ -1106,6 +1106,94 @@ RndisUsbSetEthernetMulticastFilters(
 }
 
 /*
+ * RndisUsbGetEthernetStatistic
+ *
+ * Query a CDC-ECM/NCM device for a specific Ethernet statistic.
+ * Per USB CDC ECM 1.2 specification, section 6.2.4.
+ *
+ * Parameters:
+ *   Adapter - Adapter context
+ *   FeatureSelector - Statistic to query (CDC_ECM_STAT_*)
+ *   StatisticValue - Output: 32-bit statistic value from device
+ *
+ * Returns:
+ *   STATUS_SUCCESS on success
+ *   STATUS_NOT_SUPPORTED if the device doesn't support the statistic
+ *   Error status on failure
+ *
+ * Note: Not all CDC-ECM/NCM devices support this request or all statistics.
+ *       The bmEthernetStatistics field in the CDC Ethernet descriptor
+ *       indicates which statistics are supported.
+ */
+NTSTATUS
+RndisUsbGetEthernetStatistic(
+    IN PRNDIS_ADAPTER Adapter,
+    IN USHORT FeatureSelector,
+    OUT PULONG StatisticValue)
+{
+    PURB Urb;
+    NTSTATUS Status;
+    PULONG ResultBuffer;
+
+    /* Allocate a buffer for the 4-byte result */
+    ResultBuffer = RndisAllocateMemory(NonPagedPool, sizeof(ULONG));
+    if (!ResultBuffer)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    *ResultBuffer = 0;
+
+    Urb = RndisAllocateMemory(NonPagedPool, sizeof(URB));
+    if (!Urb)
+    {
+        RndisFreeMemory(ResultBuffer);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    /*
+     * Build GET_ETHERNET_STATISTIC request.
+     * Request type: Class, Interface, Device-to-Host
+     * wValue: Feature selector (statistic type)
+     * wIndex: Interface number
+     * wLength: 4 (size of ULONG statistic)
+     */
+    Urb->UrbControlVendorClassRequest.Hdr.Length =
+        sizeof(struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST);
+    Urb->UrbControlVendorClassRequest.Hdr.Function = URB_FUNCTION_CLASS_INTERFACE;
+    Urb->UrbControlVendorClassRequest.TransferFlags = USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK;
+    Urb->UrbControlVendorClassRequest.TransferBufferLength = sizeof(ULONG);
+    Urb->UrbControlVendorClassRequest.TransferBuffer = ResultBuffer;
+    Urb->UrbControlVendorClassRequest.TransferBufferMDL = NULL;
+    Urb->UrbControlVendorClassRequest.Request = USB_CDC_GET_ETHERNET_STATISTIC;
+    Urb->UrbControlVendorClassRequest.Value = FeatureSelector;
+    Urb->UrbControlVendorClassRequest.Index = Adapter->ControlInterfaceNumber;
+
+    Status = RndisSyncUrbRequest(Adapter->LowerDeviceObject, Urb);
+
+    if (NT_SUCCESS(Status))
+    {
+        *StatisticValue = *ResultBuffer;
+        DPRINT("USBRNDIS: GET_ETHERNET_STATISTIC selector=%u value=%lu\n",
+               FeatureSelector, *StatisticValue);
+    }
+    else
+    {
+        /*
+         * Many devices don't support this request or specific statistics.
+         * STALL response typically means not supported.
+         */
+        DPRINT("USBRNDIS: GET_ETHERNET_STATISTIC selector=%u failed (0x%08X)\n",
+               FeatureSelector, Status);
+        *StatisticValue = 0;
+    }
+
+    RndisFreeMemory(Urb);
+    RndisFreeMemory(ResultBuffer);
+    return Status;
+}
+
+/*
  * RndisNcmSetNtbInputSize
  *
  * Set the maximum NTB input size for CDC-NCM device.
@@ -1556,19 +1644,76 @@ RndisInterruptComplete(
         Notification = (PUSB_CDC_NOTIFICATION)Adapter->InterruptBuffer;
         NotifyType = Notification->bNotificationType;
 
-        if (NotifyType == USB_CDC_NOTIFICATION_NETWORK_CONNECTION)
+        switch (NotifyType)
         {
-            NDIS_MEDIA_CONNECT_STATE NewState;
-
-            NewState = (Notification->wValue != 0) ?
-                       MediaConnectStateConnected :
-                       MediaConnectStateDisconnected;
-
-            if (Adapter->MediaState != NewState)
+            case USB_CDC_NOTIFICATION_NETWORK_CONNECTION:
             {
-                Adapter->MediaState = NewState;
-                RndisIndicateLinkState(Adapter);
+                NDIS_MEDIA_CONNECT_STATE NewState;
+
+                NewState = (Notification->wValue != 0) ?
+                           MediaConnectStateConnected :
+                           MediaConnectStateDisconnected;
+
+                DPRINT1("USBRNDIS: CDC NETWORK_CONNECTION notification: %s\n",
+                        (NewState == MediaConnectStateConnected) ? "Connected" : "Disconnected");
+
+                if (Adapter->MediaState != NewState)
+                {
+                    Adapter->MediaState = NewState;
+                    RndisIndicateLinkState(Adapter);
+                }
+                break;
             }
+
+            case USB_CDC_NOTIFICATION_CONNECTION_SPEED_CHANGE:
+            {
+                /*
+                 * CONNECTION_SPEED_CHANGE (0x2A) notification contains
+                 * download and upload bit rates following the 8-byte header.
+                 * Per USB CDC ECM 1.2 specification, Table 6.
+                 */
+                if (TransferLength >= sizeof(USB_CDC_NOTIFICATION) + sizeof(USB_CDC_SPEED_CHANGE))
+                {
+                    PUSB_CDC_SPEED_CHANGE SpeedChange;
+                    ULONG64 NewLinkSpeed;
+
+                    SpeedChange = (PUSB_CDC_SPEED_CHANGE)(Adapter->InterruptBuffer + sizeof(USB_CDC_NOTIFICATION));
+
+                    /*
+                     * Use download (DL) bit rate as link speed.
+                     * NDIS 6.x uses bps units for link speed.
+                     */
+                    NewLinkSpeed = SpeedChange->DLBitRRate;
+
+                    DPRINT1("USBRNDIS: CDC SPEED_CHANGE notification: DL=%lu bps, UL=%lu bps\n",
+                            SpeedChange->DLBitRRate, SpeedChange->ULBitRate);
+
+                    if (Adapter->LinkSpeed != NewLinkSpeed)
+                    {
+                        Adapter->LinkSpeed = NewLinkSpeed;
+                        RndisIndicateLinkState(Adapter);
+                    }
+                }
+                else
+                {
+                    DPRINT1("USBRNDIS: CDC SPEED_CHANGE notification too short (%lu bytes)\n",
+                            TransferLength);
+                }
+                break;
+            }
+
+            case USB_CDC_NOTIFICATION_RESPONSE_AVAILABLE:
+                /*
+                 * RESPONSE_AVAILABLE (0x01) indicates an RNDIS response is ready.
+                 * This is handled via polling in RndisCommand() for RNDIS devices.
+                 * For CDC-ECM/NCM, this notification is not expected.
+                 */
+                DPRINT("USBRNDIS: CDC RESPONSE_AVAILABLE notification\n");
+                break;
+
+            default:
+                DPRINT1("USBRNDIS: Unknown CDC notification type 0x%02X\n", NotifyType);
+                break;
         }
     }
 
@@ -1886,6 +2031,9 @@ RndisUsbSubmitInterruptRead(
  * Completion routine for async TX URB.
  * Called at DISPATCH_LEVEL when the USB stack completes the bulk OUT request.
  * NDIS 6.x version using NET_BUFFER_LIST.
+ *
+ * For NCM multi-datagram batching, the pending NBL chain may contain
+ * multiple NBLs that were batched into a single NTB.
  */
 static
 NTSTATUS
@@ -1898,18 +2046,22 @@ RndisTxComplete(
     PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)Context;
     NTSTATUS Status;
     PNET_BUFFER_LIST Nbl;
+    PNET_BUFFER_LIST CurrentNbl;
     NDIS_STATUS NdisStatus;
     BOOLEAN WasPending;
+    ULONG NblCount;
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
     Status = Irp->IoStatus.Status;
     WasPending = Irp->PendingReturned;
 
-    /* Retrieve the pending NBL and clear TX state under lock */
+    /* Retrieve the pending NBL chain and clear TX state under lock */
     NdisAcquireSpinLock(&Adapter->TxLock);
     Nbl = Adapter->PendingTxNbl;
+    NblCount = Adapter->PendingTxNblCount;
     Adapter->PendingTxNbl = NULL;
+    Adapter->PendingTxNblCount = 0;
     Adapter->TxIrp = NULL;
     Adapter->TxBusy = FALSE;
     NdisReleaseSpinLock(&Adapter->TxLock);
@@ -1920,14 +2072,32 @@ RndisTxComplete(
     /* Update statistics and determine NDIS status */
     if (NT_SUCCESS(Status))
     {
-        DPRINT("USBRNDIS: TX complete, packet sent successfully\n");
-        Adapter->TxOkCount++;
+        DPRINT("USBRNDIS: TX complete, %lu packet(s) sent successfully\n", NblCount ? NblCount : 1);
+        /*
+         * For NCM batching, update TxOkCount for each NBL in the batch.
+         * If NblCount is 0, it's a non-batched send (single NBL).
+         */
+        if (NblCount > 1)
+        {
+            Adapter->TxOkCount += NblCount;
+        }
+        else
+        {
+            Adapter->TxOkCount++;
+        }
         NdisStatus = NDIS_STATUS_SUCCESS;
     }
     else
     {
         DPRINT1("USBRNDIS: TX failed with status 0x%08X\n", Status);
-        Adapter->TxErrorCount++;
+        if (NblCount > 1)
+        {
+            Adapter->TxErrorCount += NblCount;
+        }
+        else
+        {
+            Adapter->TxErrorCount++;
+        }
         NdisStatus = NDIS_STATUS_FAILURE;
     }
 
@@ -1935,10 +2105,18 @@ RndisTxComplete(
      * Only call NdisMSendNetBufferListsComplete if the IRP was actually pended.
      * If WasPending is FALSE, the IRP completed synchronously and the
      * send handler will complete the NBL itself.
+     *
+     * Set status on all NBLs in the chain before completing.
      */
     if (Nbl && WasPending)
     {
-        NET_BUFFER_LIST_STATUS(Nbl) = NdisStatus;
+        /* Set status on all NBLs in the chain */
+        for (CurrentNbl = Nbl; CurrentNbl != NULL; CurrentNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl))
+        {
+            NET_BUFFER_LIST_STATUS(CurrentNbl) = NdisStatus;
+        }
+
+        /* Complete the entire chain */
         NdisMSendNetBufferListsComplete(
             Adapter->MiniportAdapterHandle,
             Nbl,

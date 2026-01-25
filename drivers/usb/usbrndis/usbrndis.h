@@ -144,6 +144,41 @@
 #define USB_CDC_GET_ETHERNET_STATISTIC         0x44
 
 /*
+ * CDC Ethernet Statistics Feature Selectors
+ * Per USB CDC ECM 1.2 specification, Table 4.
+ * Used with GET_ETHERNET_STATISTIC request wValue.
+ */
+#define CDC_ECM_STAT_XMIT_OK                    0x01  /* Frames transmitted without errors */
+#define CDC_ECM_STAT_RCV_OK                     0x02  /* Frames received without errors */
+#define CDC_ECM_STAT_XMIT_ERROR                 0x03  /* Frames not transmitted due to errors */
+#define CDC_ECM_STAT_RCV_ERROR                  0x04  /* Frames received with errors */
+#define CDC_ECM_STAT_RCV_NO_BUFFER              0x05  /* Frames missed, no buffers */
+#define CDC_ECM_STAT_DIRECTED_BYTES_XMIT        0x06  /* Directed bytes transmitted */
+#define CDC_ECM_STAT_DIRECTED_FRAMES_XMIT       0x07  /* Directed frames transmitted */
+#define CDC_ECM_STAT_MULTICAST_BYTES_XMIT       0x08  /* Multicast bytes transmitted */
+#define CDC_ECM_STAT_MULTICAST_FRAMES_XMIT      0x09  /* Multicast frames transmitted */
+#define CDC_ECM_STAT_BROADCAST_BYTES_XMIT       0x0A  /* Broadcast bytes transmitted */
+#define CDC_ECM_STAT_BROADCAST_FRAMES_XMIT      0x0B  /* Broadcast frames transmitted */
+#define CDC_ECM_STAT_DIRECTED_BYTES_RCV         0x0C  /* Directed bytes received */
+#define CDC_ECM_STAT_DIRECTED_FRAMES_RCV        0x0D  /* Directed frames received */
+#define CDC_ECM_STAT_MULTICAST_BYTES_RCV        0x0E  /* Multicast bytes received */
+#define CDC_ECM_STAT_MULTICAST_FRAMES_RCV       0x0F  /* Multicast frames received */
+#define CDC_ECM_STAT_BROADCAST_BYTES_RCV        0x10  /* Broadcast bytes received */
+#define CDC_ECM_STAT_BROADCAST_FRAMES_RCV       0x11  /* Broadcast frames received */
+#define CDC_ECM_STAT_RCV_CRC_ERROR              0x12  /* Frames with CRC errors */
+#define CDC_ECM_STAT_TRANSMIT_QUEUE_LENGTH      0x13  /* Current TX queue length */
+#define CDC_ECM_STAT_RCV_ERROR_ALIGNMENT        0x14  /* Frames with alignment errors */
+#define CDC_ECM_STAT_XMIT_ONE_COLLISION         0x15  /* Frames TX'd with one collision */
+#define CDC_ECM_STAT_XMIT_MORE_COLLISIONS       0x16  /* Frames TX'd with multiple collisions */
+#define CDC_ECM_STAT_XMIT_DEFERRED              0x17  /* Frames TX'd after deferring */
+#define CDC_ECM_STAT_XMIT_MAX_COLLISIONS        0x18  /* Frames not TX'd due to collisions */
+#define CDC_ECM_STAT_RCV_OVERRUN                0x19  /* Frames lost due to overrun */
+#define CDC_ECM_STAT_XMIT_UNDERRUN              0x1A  /* Frames not TX'd due to underrun */
+#define CDC_ECM_STAT_XMIT_HEARTBEAT_FAILURE     0x1B  /* Frames TX'd with heartbeat failure */
+#define CDC_ECM_STAT_XMIT_TIMES_CRS_LOST        0x1C  /* Times CRS lost */
+#define CDC_ECM_STAT_XMIT_LATE_COLLISIONS       0x1D  /* Late collision count */
+
+/*
  * CDC Ethernet Packet Filter Bits (wValue)
  */
 #define CDC_ECM_PACKET_TYPE_DIRECTED      0x0001
@@ -168,6 +203,18 @@ typedef struct _USB_CDC_NOTIFICATION {
 } USB_CDC_NOTIFICATION, *PUSB_CDC_NOTIFICATION;
 
 C_ASSERT(sizeof(USB_CDC_NOTIFICATION) == 8);
+
+/*
+ * USB CDC Speed Change Data
+ * Per USB CDC ECM 1.2 specification, Table 6.
+ * Follows USB_CDC_NOTIFICATION for CONNECTION_SPEED_CHANGE (0x2A).
+ */
+typedef struct _USB_CDC_SPEED_CHANGE {
+    ULONG DLBitRRate;           /* Download bit rate in bps */
+    ULONG ULBitRate;            /* Upload bit rate in bps */
+} USB_CDC_SPEED_CHANGE, *PUSB_CDC_SPEED_CHANGE;
+
+C_ASSERT(sizeof(USB_CDC_SPEED_CHANGE) == 8);
 
 /*
  * USB CDC NCM Class Request Codes
@@ -530,10 +577,64 @@ typedef struct _RNDIS_PACKET_MSG {
     /* Variable length data follows at DataOffset */
 } RNDIS_PACKET_MSG, *PRNDIS_PACKET_MSG;
 
+/*
+ * RNDIS Per-Packet Info Element
+ * This structure wraps per-packet metadata in RNDIS packets.
+ * Multiple elements can be chained via Size field.
+ */
+typedef struct _RNDIS_PER_PACKET_INFO {
+    ULONG Size;                     /* Total size of this element including header and data */
+    ULONG Type;                     /* Type of per-packet info (see RNDIS_PER_PACKET_INFO_TYPE) */
+    ULONG PerPacketInfoOffset;      /* Offset from start of this structure to info data */
+    /* Variable length per-packet info data follows */
+} RNDIS_PER_PACKET_INFO, *PRNDIS_PER_PACKET_INFO;
+
+/*
+ * Per-Packet Info Types
+ * These values indicate what type of information is in the per-packet info element.
+ * From RNDIS specification and NDIS OOB data types.
+ */
+#define RNDIS_PKTINFO_TYPE_TCPIP_CSUM               0   /* TCP/IP checksum info */
+#define RNDIS_PKTINFO_TYPE_IPSEC                    1   /* IPsec info */
+#define RNDIS_PKTINFO_TYPE_TCP_LSO                  2   /* TCP Large Send Offload */
+#define RNDIS_PKTINFO_TYPE_CLASSIFICATION_HANDLE   3   /* Classification handle */
+#define RNDIS_PKTINFO_TYPE_RESERVED                 4
+#define RNDIS_PKTINFO_TYPE_802_1Q_INFO              5   /* 802.1Q (VLAN) info */
+#define RNDIS_PKTINFO_TYPE_ORIGINAL_NET_HEADER      6   /* Original network header info */
+#define RNDIS_PKTINFO_TYPE_PACKET_CANCEL_ID         7   /* Packet cancel ID */
+
+/*
+ * TCP/IP Checksum Per-Packet Info
+ * Reports results of hardware checksum validation on received packets.
+ */
+typedef struct _RNDIS_TCPIP_CSUM_INFO {
+    union {
+        struct {
+            ULONG TcpChecksumFailed : 1;    /* TCP checksum failed */
+            ULONG UdpChecksumFailed : 1;    /* UDP checksum failed */
+            ULONG IpChecksumFailed : 1;     /* IP header checksum failed */
+            ULONG TcpChecksumSucceeded : 1; /* TCP checksum passed */
+            ULONG UdpChecksumSucceeded : 1; /* UDP checksum passed */
+            ULONG IpChecksumSucceeded : 1;  /* IP header checksum passed */
+            ULONG Loopback : 1;             /* Packet is a loopback packet */
+            ULONG Reserved : 25;
+        } Receive;
+        struct {
+            ULONG TcpChecksum : 1;          /* Request TCP checksum calculation */
+            ULONG UdpChecksum : 1;          /* Request UDP checksum calculation */
+            ULONG IpHeaderChecksum : 1;     /* Request IP header checksum calculation */
+            ULONG Reserved : 29;
+        } Transmit;
+        ULONG Value;
+    };
+} RNDIS_TCPIP_CSUM_INFO, *PRNDIS_TCPIP_CSUM_INFO;
+
 #include <poppack.h>
 
 C_ASSERT(sizeof(RNDIS_INIT_MSG) == 24);
 C_ASSERT(sizeof(RNDIS_PACKET_MSG) == 44);
+C_ASSERT(sizeof(RNDIS_PER_PACKET_INFO) == 12);
+C_ASSERT(sizeof(RNDIS_TCPIP_CSUM_INFO) == 4);
 
 /*
  * Driver State Enumeration
@@ -639,6 +740,7 @@ typedef struct _RNDIS_ADAPTER {
     BOOLEAN TxBusy;
     PIRP TxIrp;                     /* Pending TX IRP for cancellation */
     PNET_BUFFER_LIST PendingTxNbl;  /* NBL awaiting TX completion */
+    ULONG PendingTxNblCount;        /* Number of NBLs pending (for NCM batching) */
     URB TxUrb;
 
     /* Receive Resources */
@@ -753,6 +855,12 @@ RndisUsbSetEthernetMulticastFilters(
     IN PRNDIS_ADAPTER Adapter,
     IN PUCHAR MulticastList,
     IN USHORT AddressCount);
+
+NTSTATUS
+RndisUsbGetEthernetStatistic(
+    IN PRNDIS_ADAPTER Adapter,
+    IN USHORT FeatureSelector,
+    OUT PULONG StatisticValue);
 
 NTSTATUS
 RndisUsbGetCdcMacAddress(
