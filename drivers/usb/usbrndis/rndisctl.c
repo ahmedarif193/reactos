@@ -12,7 +12,7 @@
 
 #include "usbrndis.h"
 
-#define NDEBUG
+/* Enable debug output for troubleshooting */
 #include <debug.h>
 
 /* External helper functions */

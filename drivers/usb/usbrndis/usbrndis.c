@@ -10,7 +10,7 @@
 
 #include "usbrndis.h"
 
-#define NDEBUG
+/* Enable debug output for troubleshooting */
 #include <debug.h>
 
 /* Global NDIS Miniport Driver Handle */
@@ -580,14 +580,20 @@ RndisMiniportInitializeEx(
         Adapter->MaxPacketsPerMessage = 1;
 
         /*
-         * Generate a locally-administered MAC address.
-         * Use VID, PID, and interface number for stability across boots.
-         * Byte 0 has bit 1 set (locally administered) and bit 0 clear (unicast).
-         * Byte 5 uses control interface number XORed with bcdDevice for uniqueness
-         * across multiple devices of the same VID/PID on different ports.
+         * Get MAC address from USB string descriptor (CDC Ethernet Functional Descriptor).
+         * Fall back to generating a locally-administered MAC if the descriptor is missing.
          */
+        NtStatus = RndisUsbGetCdcMacAddress(Adapter, Adapter->PermanentMacAddress);
+        if (!NT_SUCCESS(NtStatus))
         {
+            /*
+             * Fallback: Generate a locally-administered MAC address.
+             * Use VID, PID, and interface number for stability across boots.
+             * Byte 0 has bit 1 set (locally administered) and bit 0 clear (unicast).
+             */
             USHORT bcdDevice = Adapter->DeviceDescriptor->bcdDevice;
+
+            DPRINT1("USBRNDIS: No MAC in USB descriptor, generating fallback MAC\n");
 
             Adapter->PermanentMacAddress[0] = 0x02;  /* Locally administered, unicast */
             Adapter->PermanentMacAddress[1] = (UCHAR)(Adapter->DeviceDescriptor->idVendor >> 8);

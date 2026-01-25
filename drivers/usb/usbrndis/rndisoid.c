@@ -10,7 +10,7 @@
 
 #include "usbrndis.h"
 
-#define NDEBUG
+/* Enable debug output for OID troubleshooting */
 #include <debug.h>
 
 /* Supported OID list */
@@ -45,6 +45,7 @@ static const NDIS_OID SupportedOidList[] = {
     OID_GEN_MEDIA_CONNECT_STATUS_EX,
     OID_GEN_MEDIA_DUPLEX_STATE,
     OID_GEN_LINK_STATE,
+    OID_GEN_INTERRUPT_MODERATION,
     OID_GEN_STATISTICS,
 
     /* Statistics OIDs */
@@ -53,6 +54,8 @@ static const NDIS_OID SupportedOidList[] = {
     OID_GEN_XMIT_ERROR,
     OID_GEN_RCV_ERROR,
     OID_GEN_RCV_NO_BUFFER,
+    OID_GEN_BYTES_XMIT,
+    OID_GEN_BYTES_RCV,
 
     /* 802.3 (Ethernet) OIDs */
     OID_802_3_PERMANENT_ADDRESS,
@@ -153,6 +156,30 @@ typedef struct _NDIS_STATISTICS_INFO {
 #endif
 
 /*
+ * NDIS_INTERRUPT_MODERATION_PARAMETERS for NDIS 6.x
+ */
+#ifndef OID_GEN_INTERRUPT_MODERATION
+#define OID_GEN_INTERRUPT_MODERATION        0x00010209
+#endif
+
+#ifndef NDIS_SIZEOF_INTERRUPT_MODERATION_PARAMETERS_REVISION_1
+#define NDIS_SIZEOF_INTERRUPT_MODERATION_PARAMETERS_REVISION_1      16
+#endif
+
+#ifndef NDIS_INTERRUPT_MODERATION_PARAMETERS_REVISION_1
+#define NDIS_INTERRUPT_MODERATION_PARAMETERS_REVISION_1     1
+#endif
+
+#ifndef NDIS_INTERRUPT_MODERATION_PARAMETERS_DEFINED
+typedef struct _NDIS_INTERRUPT_MODERATION_PARAMETERS {
+    NDIS_OBJECT_HEADER          Header;
+    ULONG                       Flags;
+    ULONG                       InterruptModeration;  /* NdisInterruptModerationXxx value */
+} NDIS_INTERRUPT_MODERATION_PARAMETERS, *PNDIS_INTERRUPT_MODERATION_PARAMETERS;
+#define NDIS_INTERRUPT_MODERATION_PARAMETERS_DEFINED 1
+#endif
+
+/*
  * RndisQueryInformation
  *
  * Handle query OID requests
@@ -186,10 +213,12 @@ RndisQueryInformation(
         NDIS_LINK_STATE LinkState;
         NDIS_LINK_SPEED LinkSpeed;
         NDIS_STATISTICS_INFO Statistics;
+        NDIS_INTERRUPT_MODERATION_PARAMETERS IntMod;
         UCHAR MacAddress[ETH_LENGTH_OF_ADDRESS];
     } Data;
 
-    DPRINT("USBRNDIS: QueryInformation OID 0x%08X\n", Oid);
+    /* Log all OID queries for debugging */
+    DPRINT1("USBRNDIS: QueryInformation OID 0x%08X, BufferLen=%lu\n", Oid, InfoBufferLength);
 
     *BytesWritten = 0;
     *BytesNeeded = 0;
@@ -371,36 +400,135 @@ RndisQueryInformation(
             CopyLength = sizeof(ULONG);
             break;
 
+        case OID_GEN_INTERRUPT_MODERATION:
+            /*
+             * USB RNDIS doesn't support interrupt moderation.
+             * Return a properly formatted response indicating this.
+             */
+            {
+                NDIS_INTERRUPT_MODERATION_PARAMETERS IntMod;
+                NdisZeroMemory(&IntMod, sizeof(IntMod));
+                IntMod.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+                IntMod.Header.Revision = NDIS_INTERRUPT_MODERATION_PARAMETERS_REVISION_1;
+                IntMod.Header.Size = NDIS_SIZEOF_INTERRUPT_MODERATION_PARAMETERS_REVISION_1;
+                IntMod.Flags = 0;
+                IntMod.InterruptModeration = NdisInterruptModerationNotSupported;
+                NdisMoveMemory(&Data.IntMod, &IntMod, sizeof(IntMod));
+                CopySource = &Data.IntMod;
+                CopyLength = sizeof(NDIS_INTERRUPT_MODERATION_PARAMETERS);
+            }
+            break;
+
         /* === Statistics OIDs === */
+        /*
+         * These statistics OIDs support both ULONG (4-byte) and ULONG64 (8-byte)
+         * responses for NDIS 5.x/6.x compatibility. Return the format that matches
+         * the caller's buffer size.
+         */
 
         case OID_GEN_XMIT_OK:
-            Data.Ulong64 = Adapter->TxOkCount;
-            CopySource = &Data.Ulong64;
-            CopyLength = sizeof(ULONG64);
+            if (InfoBufferLength >= sizeof(ULONG64))
+            {
+                Data.Ulong64 = Adapter->TxOkCount;
+                CopySource = &Data.Ulong64;
+                CopyLength = sizeof(ULONG64);
+            }
+            else
+            {
+                Data.Ulong = (ULONG)Adapter->TxOkCount;
+                CopySource = &Data.Ulong;
+                CopyLength = sizeof(ULONG);
+            }
             break;
 
         case OID_GEN_RCV_OK:
-            Data.Ulong64 = Adapter->RxOkCount;
-            CopySource = &Data.Ulong64;
-            CopyLength = sizeof(ULONG64);
+            if (InfoBufferLength >= sizeof(ULONG64))
+            {
+                Data.Ulong64 = Adapter->RxOkCount;
+                CopySource = &Data.Ulong64;
+                CopyLength = sizeof(ULONG64);
+            }
+            else
+            {
+                Data.Ulong = (ULONG)Adapter->RxOkCount;
+                CopySource = &Data.Ulong;
+                CopyLength = sizeof(ULONG);
+            }
             break;
 
         case OID_GEN_XMIT_ERROR:
-            Data.Ulong64 = Adapter->TxErrorCount;
-            CopySource = &Data.Ulong64;
-            CopyLength = sizeof(ULONG64);
+            if (InfoBufferLength >= sizeof(ULONG64))
+            {
+                Data.Ulong64 = Adapter->TxErrorCount;
+                CopySource = &Data.Ulong64;
+                CopyLength = sizeof(ULONG64);
+            }
+            else
+            {
+                Data.Ulong = (ULONG)Adapter->TxErrorCount;
+                CopySource = &Data.Ulong;
+                CopyLength = sizeof(ULONG);
+            }
             break;
 
         case OID_GEN_RCV_ERROR:
-            Data.Ulong64 = Adapter->RxErrorCount;
-            CopySource = &Data.Ulong64;
-            CopyLength = sizeof(ULONG64);
+            if (InfoBufferLength >= sizeof(ULONG64))
+            {
+                Data.Ulong64 = Adapter->RxErrorCount;
+                CopySource = &Data.Ulong64;
+                CopyLength = sizeof(ULONG64);
+            }
+            else
+            {
+                Data.Ulong = (ULONG)Adapter->RxErrorCount;
+                CopySource = &Data.Ulong;
+                CopyLength = sizeof(ULONG);
+            }
             break;
 
         case OID_GEN_RCV_NO_BUFFER:
-            Data.Ulong64 = Adapter->RxNoBufferCount;
-            CopySource = &Data.Ulong64;
-            CopyLength = sizeof(ULONG64);
+            if (InfoBufferLength >= sizeof(ULONG64))
+            {
+                Data.Ulong64 = Adapter->RxNoBufferCount;
+                CopySource = &Data.Ulong64;
+                CopyLength = sizeof(ULONG64);
+            }
+            else
+            {
+                Data.Ulong = (ULONG)Adapter->RxNoBufferCount;
+                CopySource = &Data.Ulong;
+                CopyLength = sizeof(ULONG);
+            }
+            break;
+
+        case OID_GEN_BYTES_XMIT:
+            if (InfoBufferLength >= sizeof(ULONG64))
+            {
+                Data.Ulong64 = Adapter->TxBytes;
+                CopySource = &Data.Ulong64;
+                CopyLength = sizeof(ULONG64);
+            }
+            else
+            {
+                Data.Ulong = (ULONG)Adapter->TxBytes;
+                CopySource = &Data.Ulong;
+                CopyLength = sizeof(ULONG);
+            }
+            break;
+
+        case OID_GEN_BYTES_RCV:
+            if (InfoBufferLength >= sizeof(ULONG64))
+            {
+                Data.Ulong64 = Adapter->RxBytes;
+                CopySource = &Data.Ulong64;
+                CopyLength = sizeof(ULONG64);
+            }
+            else
+            {
+                Data.Ulong = (ULONG)Adapter->RxBytes;
+                CopySource = &Data.Ulong;
+                CopyLength = sizeof(ULONG);
+            }
             break;
 
         case OID_GEN_STATISTICS:
@@ -492,11 +620,14 @@ RndisQueryInformation(
         {
             *BytesNeeded = CopyLength;
             Status = NDIS_STATUS_BUFFER_TOO_SHORT;
+            DPRINT1("USBRNDIS: OID 0x%08X BUFFER_TOO_SHORT (need %lu, have %lu)\n",
+                    Oid, CopyLength, InfoBufferLength);
         }
         else
         {
             NdisMoveMemory(InfoBuffer, CopySource, CopyLength);
             *BytesWritten = CopyLength;
+            DPRINT1("USBRNDIS: OID 0x%08X SUCCESS (wrote %lu bytes)\n", Oid, CopyLength);
         }
     }
 

@@ -10,7 +10,7 @@
 
 #include "usbrndis.h"
 
-#define NDEBUG
+/* Enable debug output for troubleshooting */
 #include <debug.h>
 
 /* External helper functions from usbrndis.c */
@@ -173,6 +173,165 @@ RndisUsbGetDescriptors(
            Adapter->ConfigurationDescriptor->bNumInterfaces);
 
     return STATUS_SUCCESS;
+}
+
+/*
+ * RndisUsbGetCdcMacAddress
+ *
+ * Read the MAC address from a USB string descriptor for CDC-ECM/NCM devices.
+ * The MAC is stored as a 12-character Unicode hex string (e.g., "080027989E79").
+ *
+ * Returns STATUS_SUCCESS if MAC was successfully read, or error if not available.
+ */
+NTSTATUS
+RndisUsbGetCdcMacAddress(
+    IN PRNDIS_ADAPTER Adapter,
+    OUT PUCHAR MacAddress)
+{
+    NTSTATUS Status;
+    PUSB_STRING_DESCRIPTOR StringDesc;
+    ULONG DescLength;
+    UCHAR i;
+    WCHAR HexByte[3];
+    ULONG ByteValue;
+
+    /* Check if we have a valid MAC string index */
+    if (Adapter->CdcMacAddressIndex == 0)
+    {
+        DPRINT("USBRNDIS: No MAC address string index available\n");
+        return STATUS_NOT_FOUND;
+    }
+
+    /* Allocate buffer for string descriptor (256 bytes max per USB spec) */
+    DescLength = 256;
+    Status = RndisUsbGetDescriptor(
+        Adapter,
+        USB_STRING_DESCRIPTOR_TYPE,
+        Adapter->CdcMacAddressIndex,
+        0x0409,  /* English (US) language ID */
+        (PVOID *)&StringDesc,
+        &DescLength);
+
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("USBRNDIS: Failed to get MAC string descriptor (0x%08X)\n", Status);
+        return Status;
+    }
+
+    /*
+     * Validate string descriptor:
+     * - bLength should be at least 26 bytes (2 + 12*2 for 12 hex chars as Unicode)
+     * - bDescriptorType should be USB_STRING_DESCRIPTOR_TYPE
+     * - String length should be exactly 12 Unicode characters (24 bytes)
+     */
+    if (StringDesc->bLength < 26 ||
+        StringDesc->bDescriptorType != USB_STRING_DESCRIPTOR_TYPE)
+    {
+        DPRINT1("USBRNDIS: Invalid MAC string descriptor (length=%u type=%u)\n",
+                StringDesc->bLength, StringDesc->bDescriptorType);
+        RndisFreeMemory(StringDesc);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* String length is (bLength - 2) / 2 Unicode chars, should be 12 for MAC */
+    if ((StringDesc->bLength - 2) / 2 < 12)
+    {
+        DPRINT1("USBRNDIS: MAC string too short (%u chars)\n",
+                (StringDesc->bLength - 2) / 2);
+        RndisFreeMemory(StringDesc);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    DPRINT1("USBRNDIS: MAC string from USB: %.*ls\n",
+            12, StringDesc->bString);
+
+    /* Parse 12 hex characters into 6 bytes */
+    HexByte[2] = L'\0';
+    for (i = 0; i < 6; i++)
+    {
+        HexByte[0] = StringDesc->bString[i * 2];
+        HexByte[1] = StringDesc->bString[i * 2 + 1];
+
+        /* Convert hex pair to byte value */
+        ByteValue = 0;
+        if (HexByte[0] >= L'0' && HexByte[0] <= L'9')
+            ByteValue = (HexByte[0] - L'0') << 4;
+        else if (HexByte[0] >= L'A' && HexByte[0] <= L'F')
+            ByteValue = (HexByte[0] - L'A' + 10) << 4;
+        else if (HexByte[0] >= L'a' && HexByte[0] <= L'f')
+            ByteValue = (HexByte[0] - L'a' + 10) << 4;
+
+        if (HexByte[1] >= L'0' && HexByte[1] <= L'9')
+            ByteValue |= (HexByte[1] - L'0');
+        else if (HexByte[1] >= L'A' && HexByte[1] <= L'F')
+            ByteValue |= (HexByte[1] - L'A' + 10);
+        else if (HexByte[1] >= L'a' && HexByte[1] <= L'f')
+            ByteValue |= (HexByte[1] - L'a' + 10);
+
+        MacAddress[i] = (UCHAR)ByteValue;
+    }
+
+    DPRINT1("USBRNDIS: Parsed MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+            MacAddress[0], MacAddress[1], MacAddress[2],
+            MacAddress[3], MacAddress[4], MacAddress[5]);
+
+    RndisFreeMemory(StringDesc);
+    return STATUS_SUCCESS;
+}
+
+/*
+ * RndisUsbFindCdcEthernetDescriptor
+ *
+ * Scan CDC class-specific descriptors following an interface to find the
+ * Ethernet Networking Functional Descriptor and extract the iMACAddress
+ * string index.
+ */
+static
+VOID
+RndisUsbFindCdcEthernetDescriptor(
+    IN PRNDIS_ADAPTER Adapter,
+    IN PUSB_INTERFACE_DESCRIPTOR InterfaceDesc,
+    IN PUCHAR DescEnd)
+{
+    PUCHAR CurrentDesc;
+    PUSB_CDC_ETHERNET_DESCRIPTOR EthDesc;
+
+    CurrentDesc = (PUCHAR)InterfaceDesc + InterfaceDesc->bLength;
+
+    /* Scan class-specific descriptors (type 0x24 = CS_INTERFACE) */
+    while (CurrentDesc < DescEnd)
+    {
+        /* Check for CS_INTERFACE descriptor */
+        if (CurrentDesc[1] == USB_CDC_CS_INTERFACE)
+        {
+            /* Check for Ethernet Networking Functional Descriptor (subtype 0x0F) */
+            if (CurrentDesc[2] == USB_CDC_SUBTYPE_ETHERNET && CurrentDesc[0] >= 13)
+            {
+                EthDesc = (PUSB_CDC_ETHERNET_DESCRIPTOR)CurrentDesc;
+
+                DPRINT1("USBRNDIS: Found CDC Ethernet Descriptor: iMACAddress=%u MaxSegment=%u\n",
+                        EthDesc->iMACAddress, EthDesc->wMaxSegmentSize);
+
+                Adapter->CdcMacAddressIndex = EthDesc->iMACAddress;
+                return;
+            }
+        }
+        else if (CurrentDesc[1] == USB_INTERFACE_DESCRIPTOR_TYPE ||
+                 CurrentDesc[1] == USB_ENDPOINT_DESCRIPTOR_TYPE)
+        {
+            /* Reached next interface or endpoints, stop scanning */
+            break;
+        }
+
+        /* Move to next descriptor */
+        if (CurrentDesc[0] == 0)
+        {
+            break;
+        }
+        CurrentDesc += CurrentDesc[0];
+    }
+
+    DPRINT1("USBRNDIS: CDC Ethernet Descriptor not found, will use generated MAC\n");
 }
 
 /*
@@ -347,6 +506,7 @@ RndisUsbParseConfiguration(
                 Adapter->ControlInterfaceNumber = InterfaceDesc->bInterfaceNumber;
                 Adapter->IsCdcEcm = TRUE;  /* CDC-ECM mode - no RNDIS messages */
                 FoundControlInterface = TRUE;
+                RndisUsbFindCdcEthernetDescriptor(Adapter, InterfaceDesc, DescEnd);
                 RndisUsbFindEndpoints(Adapter, InterfaceDesc, DescEnd, FALSE);
             }
             /* Pattern 5: CDC-NCM (Network Control Model) - uses NTB framing */
@@ -362,6 +522,7 @@ RndisUsbParseConfiguration(
                 Adapter->ControlInterfaceNumber = InterfaceDesc->bInterfaceNumber;
                 Adapter->IsCdcNcm = TRUE;  /* CDC-NCM mode - NTB framing required */
                 FoundControlInterface = TRUE;
+                RndisUsbFindCdcEthernetDescriptor(Adapter, InterfaceDesc, DescEnd);
                 RndisUsbFindEndpoints(Adapter, InterfaceDesc, DescEnd, FALSE);
             }
             /* Check for CDC Data interface */
@@ -1459,7 +1620,7 @@ RndisRxComplete(
     /* Process received data if successful and not halting */
     if (NT_SUCCESS(Status) && TransferLength > 0 && !Adapter->Halting)
     {
-        DPRINT("USBRNDIS: RX complete, %u bytes received\n", TransferLength);
+        DPRINT1("USBRNDIS: RX complete, %u bytes received\n", TransferLength);
         Adapter->RxConsecutiveErrors = 0;  /* Reset error counter on success */
         RndisProcessReceivedPacket(Adapter, Adapter->RxBuffer, TransferLength);
         /* Data received - use immediate resubmission for low latency */

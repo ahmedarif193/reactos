@@ -200,6 +200,40 @@ C_ASSERT(sizeof(USB_CDC_NOTIFICATION) == 8);
 #define USB_CDC_PROTOCOL_NONE           0x00
 
 /*
+ * USB CDC Functional Descriptor Types
+ * CS_INTERFACE (0x24) is used for all CDC class-specific interface descriptors.
+ */
+#define USB_CDC_CS_INTERFACE            0x24
+
+/*
+ * USB CDC Functional Descriptor Subtypes
+ * Per USB CDC 1.2 specification, Table 13
+ */
+#define USB_CDC_SUBTYPE_HEADER          0x00  /* Header Functional Descriptor */
+#define USB_CDC_SUBTYPE_UNION           0x06  /* Union Functional Descriptor */
+#define USB_CDC_SUBTYPE_ETHERNET        0x0F  /* Ethernet Networking Functional Descriptor */
+
+/*
+ * CDC Ethernet Networking Functional Descriptor
+ * Per USB CDC ECM 1.2 specification, Table 3
+ * This contains the iMACAddress string index for reading the MAC address.
+ */
+#pragma pack(push, 1)
+typedef struct _USB_CDC_ETHERNET_DESCRIPTOR {
+    UCHAR bLength;              /* Size of this descriptor (13 bytes) */
+    UCHAR bDescriptorType;      /* CS_INTERFACE (0x24) */
+    UCHAR bDescriptorSubtype;   /* Ethernet Networking (0x0F) */
+    UCHAR iMACAddress;          /* String index for MAC address */
+    ULONG bmEthernetStatistics; /* Bitmap of supported statistics */
+    USHORT wMaxSegmentSize;     /* Maximum segment size (typically 1514) */
+    USHORT wNumberMCFilters;    /* Number of multicast filters */
+    UCHAR bNumberPowerFilters;  /* Number of pattern filters for wake */
+} USB_CDC_ETHERNET_DESCRIPTOR, *PUSB_CDC_ETHERNET_DESCRIPTOR;
+#pragma pack(pop)
+
+C_ASSERT(sizeof(USB_CDC_ETHERNET_DESCRIPTOR) == 13);
+
+/*
  * RNDIS Control Buffer Size
  * RNDIS spec requires minimum 1024 bytes, Windows uses 1025
  */
@@ -557,6 +591,7 @@ typedef struct _RNDIS_ADAPTER {
     ULONG MaxPacketsPerMessage;
     BOOLEAN IsCdcEcm;               /* TRUE if CDC-ECM mode (no RNDIS messages) */
     BOOLEAN IsCdcNcm;               /* TRUE if CDC-NCM mode (NTB framing) */
+    UCHAR CdcMacAddressIndex;       /* USB string descriptor index for MAC address (CDC-ECM/NCM) */
 
     /* CDC-NCM Parameters (only valid if IsCdcNcm is TRUE) */
     USHORT NcmTxSequence;           /* TX NTB sequence number */
@@ -718,6 +753,11 @@ RndisUsbSetEthernetMulticastFilters(
     IN PRNDIS_ADAPTER Adapter,
     IN PUCHAR MulticastList,
     IN USHORT AddressCount);
+
+NTSTATUS
+RndisUsbGetCdcMacAddress(
+    IN PRNDIS_ADAPTER Adapter,
+    OUT PUCHAR MacAddress);
 
 NTSTATUS
 RndisUsbSubmitBulkRead(

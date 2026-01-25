@@ -12,7 +12,7 @@
 
 #include "usbrndis.h"
 
-#define NDEBUG
+/* Enable debug output for troubleshooting */
 #include <debug.h>
 
 /*
@@ -468,7 +468,7 @@ RndisProcessReceivedPacket(
     ULONG EthernetLength;
     ULONG DataOffset;
 
-    DPRINT("USBRNDIS: Processing received data (%u bytes)\n", Length);
+    DPRINT1("USBRNDIS: Processing received data (%u bytes)\n", Length);
 
     /* Check if paused */
     if (Adapter->Paused)
