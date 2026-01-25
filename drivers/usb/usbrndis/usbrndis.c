@@ -387,25 +387,39 @@ RndisMiniportInitializeEx(
     Adapter->Halting = FALSE;
     Adapter->Paused = FALSE;
     Adapter->PendingIoCount = 0;
-    Adapter->RxIrp = NULL;
-    Adapter->TxIrp = NULL;
-    Adapter->PendingTxNbl = NULL;
-    Adapter->TxNcmPartialNbl = NULL;
-    Adapter->TxNcmPartialNb = NULL;
-    Adapter->TxResubmitScheduled = 0;
-    Adapter->TxQueueHead = NULL;
-    Adapter->TxQueueTail = NULL;
     Adapter->IsCdcEcm = FALSE;
     Adapter->IsCdcNcm = FALSE;
-    Adapter->RxSubmitted = FALSE;
     Adapter->InterruptIrp = NULL;
     Adapter->InterruptSubmitted = FALSE;
     Adapter->InterruptBuffer = NULL;
     Adapter->InterruptBufferLength = 0;
-    Adapter->RxConsecutiveErrors = 0;
     Adapter->DataInterfaceNumber = 0xFF;
     Adapter->DataAlternateSetting = 0;
     Adapter->RxNblPool = NULL;
+    Adapter->PerCpuStats = NULL;
+    Adapter->NumCpus = 0;
+
+    /* Initialize TX hot path fields */
+    Adapter->TxHot.TxOwner = 0;
+    Adapter->TxHot.TxResubmitScheduled = 0;
+    Adapter->TxHot.TxBuffer = NULL;
+    Adapter->TxHot.TxBusy = FALSE;
+    Adapter->TxHot.TxIrp = NULL;
+    Adapter->TxHot.PendingTxNbl = NULL;
+    Adapter->TxHot.PendingTxNblCount = 0;
+    Adapter->TxHot.PendingTxDatagramCount = 0;
+    Adapter->TxHot.TxNcmPartialNbl = NULL;
+    Adapter->TxHot.TxNcmPartialNb = NULL;
+    Adapter->TxIrpToFree = NULL;
+
+    /* Initialize RX hot path fields */
+    Adapter->RxHot.RxBuffer = NULL;
+    Adapter->RxHot.RxIrp = NULL;
+    Adapter->RxHot.RxSubmitted = 0;
+    Adapter->RxHot.RxPolling = 0;
+    Adapter->RxHot.RxBudgetRemaining = RX_BUDGET_PACKETS;
+    Adapter->RxHot.RxConsecutiveErrors = 0;
+    Adapter->RxIrpToFree = NULL;
 
     /* Initialize synchronization */
     KeInitializeEvent(&Adapter->ControlEvent, NotificationEvent, FALSE);
@@ -419,6 +433,12 @@ RndisMiniportInitializeEx(
     RndisInitializeRxDpc(Adapter);
     RndisInitializeInterruptDpc(Adapter);
     RndisInitializeTxDpc(Adapter);
+
+    /* Initialize per-CPU statistics */
+    RndisInitPerCpuStats(Adapter);
+
+    /* Initialize lock-free TX queue */
+    RndisTxQueueInit(Adapter);
 
     /* Set registration attributes first (required before other attributes) */
     NdisStatus = RndisSetRegistrationAttributes(Adapter);
@@ -500,12 +520,12 @@ RndisMiniportInitializeEx(
     }
 
     /* Allocate transmit buffer */
-    Adapter->TxBuffer = NdisAllocateMemoryWithTagPriority(
+    Adapter->TxHot.TxBuffer = NdisAllocateMemoryWithTagPriority(
         NdisMiniportHandle,
         RNDIS_MAX_TRANSFER_SIZE,
         USBRNDIS_TAG,
         NormalPoolPriority);
-    if (!Adapter->TxBuffer)
+    if (!Adapter->TxHot.TxBuffer)
     {
         DPRINT1("USBRNDIS: Failed to allocate TX buffer\n");
         NdisStatus = NDIS_STATUS_RESOURCES;
@@ -513,12 +533,12 @@ RndisMiniportInitializeEx(
     }
 
     /* Allocate receive buffer */
-    Adapter->RxBuffer = NdisAllocateMemoryWithTagPriority(
+    Adapter->RxHot.RxBuffer = NdisAllocateMemoryWithTagPriority(
         NdisMiniportHandle,
         RNDIS_MAX_TRANSFER_SIZE,
         USBRNDIS_TAG,
         NormalPoolPriority);
-    if (!Adapter->RxBuffer)
+    if (!Adapter->RxHot.RxBuffer)
     {
         DPRINT1("USBRNDIS: Failed to allocate RX buffer\n");
         NdisStatus = NDIS_STATUS_RESOURCES;
@@ -777,16 +797,16 @@ RndisMiniportHaltEx(
     /* Set Halting and RxSubmitted atomically to prevent new RX submissions */
     NdisAcquireSpinLock(&Adapter->RxLock);
     Adapter->Halting = TRUE;
-    Adapter->RxSubmitted = TRUE;  /* Prevent new submissions */
-    RxIrp = Adapter->RxIrp;
-    Adapter->RxIrp = NULL;
+    InterlockedExchange(&Adapter->RxHot.RxSubmitted, 1);  /* Prevent new submissions */
+    RxIrp = Adapter->RxHot.RxIrp;
+    Adapter->RxHot.RxIrp = NULL;
     NdisReleaseSpinLock(&Adapter->RxLock);
 
     /* Set TxBusy to prevent new TX submissions */
     NdisAcquireSpinLock(&Adapter->TxLock);
-    Adapter->TxBusy = TRUE;  /* Prevent new submissions */
-    TxIrp = Adapter->TxIrp;
-    Adapter->TxIrp = NULL;
+    Adapter->TxHot.TxBusy = TRUE;  /* Prevent new submissions */
+    TxIrp = Adapter->TxHot.TxIrp;
+    Adapter->TxHot.TxIrp = NULL;
     NdisReleaseSpinLock(&Adapter->TxLock);
 
     /* Set InterruptSubmitted to prevent new interrupt submissions */
@@ -812,7 +832,7 @@ RndisMiniportHaltEx(
     KeRemoveQueueDpc(&Adapter->InterruptResubmitDpc);
     KeRemoveQueueDpc(&Adapter->InterruptDelayDpc);
     KeRemoveQueueDpc(&Adapter->TxResubmitDpc);
-    InterlockedExchange(&Adapter->TxResubmitScheduled, 0);
+    InterlockedExchange(&Adapter->TxHot.TxResubmitScheduled, 0);
 
     /* Acquire ControlMutex before sending halt */
     KeWaitForSingleObject(&Adapter->ControlMutex, Executive, KernelMode, FALSE, NULL);
@@ -862,37 +882,35 @@ RndisMiniportHaltEx(
     }
 
     /* Fail any in-progress NCM partial NBL that didn't complete */
-    if (Adapter->TxNcmPartialNbl != NULL)
+    if (Adapter->TxHot.TxNcmPartialNbl != NULL)
     {
-        NET_BUFFER_LIST_STATUS(Adapter->TxNcmPartialNbl) = NDIS_STATUS_FAILURE;
+        NET_BUFFER_LIST_STATUS(Adapter->TxHot.TxNcmPartialNbl) = NDIS_STATUS_FAILURE;
         NdisMSendNetBufferListsComplete(
             Adapter->MiniportAdapterHandle,
-            Adapter->TxNcmPartialNbl,
+            Adapter->TxHot.TxNcmPartialNbl,
             0);
-        Adapter->TxNcmPartialNbl = NULL;
-        Adapter->TxNcmPartialNb = NULL;
+        Adapter->TxHot.TxNcmPartialNbl = NULL;
+        Adapter->TxHot.TxNcmPartialNb = NULL;
     }
 
-    /* Fail any queued NBLs */
-    if (Adapter->TxQueueHead != NULL)
+    /* Fail any queued NBLs from lock-free queue */
     {
         PNET_BUFFER_LIST Queued;
         PNET_BUFFER_LIST Nbl;
 
-        NdisAcquireSpinLock(&Adapter->TxLock);
-        Queued = Adapter->TxQueueHead;
-        Adapter->TxQueueHead = NULL;
-        Adapter->TxQueueTail = NULL;
-        NdisReleaseSpinLock(&Adapter->TxLock);
-
-        for (Nbl = Queued; Nbl != NULL; Nbl = NET_BUFFER_LIST_NEXT_NBL(Nbl))
+        Queued = RndisTxQueuePopAll(Adapter);
+        if (Queued != NULL)
         {
-            NET_BUFFER_LIST_STATUS(Nbl) = NDIS_STATUS_FAILURE;
+            /* PopAll returns FIFO order - fail all NBLs */
+            for (Nbl = Queued; Nbl != NULL; Nbl = NET_BUFFER_LIST_NEXT_NBL(Nbl))
+            {
+                NET_BUFFER_LIST_STATUS(Nbl) = NDIS_STATUS_FAILURE;
+            }
+            NdisMSendNetBufferListsComplete(
+                Adapter->MiniportAdapterHandle,
+                Queued,
+                0);
         }
-        NdisMSendNetBufferListsComplete(
-            Adapter->MiniportAdapterHandle,
-            Queued,
-            0);
     }
 
     /*
@@ -936,17 +954,20 @@ RndisMiniportHaltEx(
     NdisFreeSpinLock(&Adapter->RxLock);
     NdisFreeSpinLock(&Adapter->InterruptLock);
 
+    /* Free per-CPU statistics */
+    RndisFreePerCpuStats(Adapter);
+
     /* Free buffers */
-    if (Adapter->RxBuffer)
+    if (Adapter->RxHot.RxBuffer)
     {
-        NdisFreeMemory(Adapter->RxBuffer, 0, 0);
-        Adapter->RxBuffer = NULL;
+        NdisFreeMemory(Adapter->RxHot.RxBuffer, 0, 0);
+        Adapter->RxHot.RxBuffer = NULL;
     }
 
-    if (Adapter->TxBuffer)
+    if (Adapter->TxHot.TxBuffer)
     {
-        NdisFreeMemory(Adapter->TxBuffer, 0, 0);
-        Adapter->TxBuffer = NULL;
+        NdisFreeMemory(Adapter->TxHot.TxBuffer, 0, 0);
+        Adapter->TxHot.TxBuffer = NULL;
     }
 
     if (Adapter->InterruptBuffer)
@@ -1217,4 +1238,314 @@ DriverEntry(
 
     DPRINT1("USBRNDIS: Driver registered successfully, handle = %p\n", g_NdisMiniportDriverHandle);
     return STATUS_SUCCESS;
+}
+
+/* ============================================================================
+ * Per-CPU Statistics Functions
+ * ============================================================================ */
+
+/*
+ * RndisInitPerCpuStats
+ *
+ * Allocate and initialize per-CPU statistics array.
+ * Falls back gracefully to global counters if allocation fails.
+ */
+VOID
+RndisInitPerCpuStats(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    ULONG NumCpus;
+    SIZE_T Size;
+
+    /*
+     * Get active processor count. KeQueryActiveProcessors returns a bitmask.
+     * Count the set bits to get the number of processors.
+     * Use simpler approach for ReactOS compatibility.
+     */
+    {
+        KAFFINITY AffinityMask = KeQueryActiveProcessors();
+        NumCpus = 0;
+        while (AffinityMask != 0)
+        {
+            if (AffinityMask & 1)
+            {
+                NumCpus++;
+            }
+            AffinityMask >>= 1;
+        }
+    }
+    if (NumCpus == 0)
+    {
+        NumCpus = 1;  /* At least one CPU */
+    }
+
+    /* Limit to reasonable maximum */
+    if (NumCpus > 256)
+    {
+        NumCpus = 256;
+    }
+
+    Size = NumCpus * sizeof(RNDIS_PER_CPU_STATS);
+
+    Adapter->PerCpuStats = NdisAllocateMemoryWithTagPriority(
+        Adapter->MiniportAdapterHandle,
+        (UINT)Size,
+        USBRNDIS_TAG,
+        NormalPoolPriority);
+
+    if (Adapter->PerCpuStats)
+    {
+        NdisZeroMemory(Adapter->PerCpuStats, Size);
+        Adapter->NumCpus = NumCpus;
+        DPRINT1("USBRNDIS: Allocated per-CPU stats for %lu CPUs (%lu bytes)\n",
+                NumCpus, (ULONG)Size);
+    }
+    else
+    {
+        /* Allocation failed - driver will use global counters */
+        Adapter->NumCpus = 0;
+        DPRINT1("USBRNDIS: Per-CPU stats allocation failed, using global counters\n");
+    }
+}
+
+/*
+ * RndisFreePerCpuStats
+ *
+ * Free per-CPU statistics array.
+ */
+VOID
+RndisFreePerCpuStats(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    if (Adapter->PerCpuStats)
+    {
+        NdisFreeMemory(Adapter->PerCpuStats, 0, 0);
+        Adapter->PerCpuStats = NULL;
+        Adapter->NumCpus = 0;
+    }
+}
+
+/*
+ * RndisGetAggregatedStats
+ *
+ * Aggregate per-CPU statistics for OID queries.
+ * Returns combined totals from all CPUs.
+ */
+VOID
+RndisGetAggregatedStats(
+    IN PRNDIS_ADAPTER Adapter,
+    OUT PULONG64 TxBytes,
+    OUT PULONG64 RxBytes,
+    OUT PULONG64 TxOkCount,
+    OUT PULONG64 RxOkCount,
+    OUT PULONG64 TxErrorCount,
+    OUT PULONG64 RxErrorCount,
+    OUT PULONG64 RxNoBufferCount)
+{
+    ULONG i;
+    ULONG64 TotalTxBytes = 0;
+    ULONG64 TotalRxBytes = 0;
+    ULONG64 TotalTxOk = 0;
+    ULONG64 TotalRxOk = 0;
+    ULONG64 TotalTxError = 0;
+    ULONG64 TotalRxError = 0;
+    ULONG64 TotalRxNoBuffer = 0;
+
+    if (Adapter->PerCpuStats && Adapter->NumCpus > 0)
+    {
+        /* Aggregate from all CPUs */
+        for (i = 0; i < Adapter->NumCpus; i++)
+        {
+            PRNDIS_PER_CPU_STATS Stats = &Adapter->PerCpuStats[i];
+            TotalTxBytes += Stats->TxBytes;
+            TotalRxBytes += Stats->RxBytes;
+            TotalTxOk += Stats->TxOkCount;
+            TotalRxOk += Stats->RxOkCount;
+            TotalTxError += Stats->TxErrorCount;
+            TotalRxError += Stats->RxErrorCount;
+            TotalRxNoBuffer += Stats->RxNoBufferCount;
+        }
+    }
+    else
+    {
+        /* Use legacy global counters */
+        TotalTxBytes = Adapter->TxBytes;
+        TotalRxBytes = Adapter->RxBytes;
+        TotalTxOk = Adapter->TxOkCount;
+        TotalRxOk = Adapter->RxOkCount;
+        TotalTxError = Adapter->TxErrorCount;
+        TotalRxError = Adapter->RxErrorCount;
+        TotalRxNoBuffer = Adapter->RxNoBufferCount;
+    }
+
+    *TxBytes = TotalTxBytes;
+    *RxBytes = TotalRxBytes;
+    *TxOkCount = TotalTxOk;
+    *RxOkCount = TotalRxOk;
+    *TxErrorCount = TotalTxError;
+    *RxErrorCount = TotalRxError;
+    *RxNoBufferCount = TotalRxNoBuffer;
+}
+
+/* ============================================================================
+ * Lock-Free TX Queue Functions
+ * ============================================================================ */
+
+/*
+ * RndisTxQueueInit
+ *
+ * Initialize the lock-free TX queue using SLIST.
+ */
+VOID
+RndisTxQueueInit(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    InitializeSListHead(&Adapter->TxHot.TxQueue);
+    InterlockedExchange(&Adapter->TxHot.TxOwner, 0);
+}
+
+/*
+ * RndisTxQueuePush
+ *
+ * Push an NBL onto the lock-free TX queue.
+ * Uses the NET_BUFFER_LIST's SLIST_ENTRY for queueing via MiniportReserved.
+ */
+VOID
+RndisTxQueuePush(
+    IN PRNDIS_ADAPTER Adapter,
+    IN PNET_BUFFER_LIST Nbl)
+{
+    PSLIST_ENTRY Entry;
+
+    /*
+     * Use the MiniportReserved field as our SLIST_ENTRY.
+     * The first pointer in MiniportReserved is used for SLIST linkage.
+     * Note: This means NET_BUFFER_LIST_NEXT_NBL chain is separate from queue.
+     */
+    Entry = (PSLIST_ENTRY)&Nbl->MiniportReserved[0];
+    InterlockedPushEntrySList(&Adapter->TxHot.TxQueue, Entry);
+}
+
+/*
+ * RndisTxQueuePopAll
+ *
+ * Pop all entries from the lock-free TX queue.
+ * Returns a chain of NBLs in FIFO order (oldest first).
+ *
+ * Note: InterlockedFlushSList returns LIFO (newest first), but our
+ * prepending loop reverses this to produce FIFO order.
+ */
+PNET_BUFFER_LIST
+RndisTxQueuePopAll(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    PSLIST_ENTRY Entry;
+    PNET_BUFFER_LIST Head = NULL;
+    PNET_BUFFER_LIST Nbl;
+
+    /*
+     * InterlockedFlushSList atomically removes all entries.
+     * Returns them in LIFO order (newest first).
+     */
+    Entry = InterlockedFlushSList(&Adapter->TxHot.TxQueue);
+
+    /*
+     * Convert SLIST_ENTRY chain back to NBL chain.
+     * Prepending to Head reverses the order: LIFO -> FIFO.
+     */
+    while (Entry)
+    {
+        PSLIST_ENTRY Next = Entry->Next;
+
+        /*
+         * Recover NBL pointer from the SLIST_ENTRY.
+         * Entry points to MiniportReserved[0] which is at offset 0 in our usage.
+         */
+        Nbl = CONTAINING_RECORD(Entry, NET_BUFFER_LIST, MiniportReserved[0]);
+
+        /* Link into our chain using NET_BUFFER_LIST_NEXT_NBL */
+        NET_BUFFER_LIST_NEXT_NBL(Nbl) = Head;
+        Head = Nbl;
+
+        Entry = Next;
+    }
+
+    return Head;
+}
+
+/*
+ * RndisTxQueueReverse
+ *
+ * Reverse an NBL chain to achieve FIFO order.
+ * PopAll returns LIFO (newest first), so we reverse to get FIFO (oldest first).
+ */
+PNET_BUFFER_LIST
+RndisTxQueueReverse(
+    IN PNET_BUFFER_LIST Chain)
+{
+    PNET_BUFFER_LIST Prev = NULL;
+    PNET_BUFFER_LIST Current = Chain;
+    PNET_BUFFER_LIST Next;
+
+    while (Current)
+    {
+        Next = NET_BUFFER_LIST_NEXT_NBL(Current);
+        NET_BUFFER_LIST_NEXT_NBL(Current) = Prev;
+        Prev = Current;
+        Current = Next;
+    }
+
+    return Prev;
+}
+
+/*
+ * RndisTxKick
+ *
+ * Owner-drain pattern implementation for TX processing.
+ * Only one thread at a time drains the queue; others just enqueue and return.
+ * This avoids the need for locks on the hot path.
+ */
+VOID
+RndisTxKick(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    PNET_BUFFER_LIST Chain;
+
+    /* Try to become the owner */
+    if (InterlockedCompareExchange(&Adapter->TxHot.TxOwner, 1, 0) != 0)
+    {
+        /* Someone else is draining - our work will be picked up by them */
+        return;
+    }
+
+    /* We are the owner - drain the queue */
+    for (;;)
+    {
+        Chain = RndisTxQueuePopAll(Adapter);
+        if (Chain == NULL)
+        {
+            /* Queue is empty - release ownership */
+            InterlockedExchange(&Adapter->TxHot.TxOwner, 0);
+
+            /*
+             * Memory barrier and recheck for race:
+             * Another thread could have pushed between our PopAll and ownership release.
+             * If queue is non-empty and we can reclaim ownership, continue draining.
+             */
+            if (QueryDepthSList(&Adapter->TxHot.TxQueue) == 0)
+            {
+                break;  /* Queue is truly empty */
+            }
+
+            /* Try to reclaim ownership */
+            if (InterlockedCompareExchange(&Adapter->TxHot.TxOwner, 1, 0) != 0)
+            {
+                break;  /* Someone else got it */
+            }
+            continue;  /* We reclaimed - continue draining */
+        }
+
+        /* PopAll already returns FIFO order - process directly */
+        RndisTxDrainChain(Adapter, Chain);
+    }
 }

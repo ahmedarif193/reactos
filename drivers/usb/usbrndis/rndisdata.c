@@ -40,60 +40,30 @@ typedef struct _NCM_TX_DATAGRAM {
     ULONG Length;
 } NCM_TX_DATAGRAM, *PNCM_TX_DATAGRAM;
 
+/*
+ * Helper to push a chain of NBLs to the lock-free queue.
+ * Each NBL in the chain is pushed individually.
+ */
 static
 __inline
 VOID
-RndisTxQueueAppendWithTailLocked(
+RndisTxQueuePushChain(
     _In_ PRNDIS_ADAPTER Adapter,
-    _In_ PNET_BUFFER_LIST Head,
-    _In_ PNET_BUFFER_LIST Tail)
+    _In_ PNET_BUFFER_LIST Chain)
 {
-    if (Head == NULL || Tail == NULL)
-    {
-        return;
-    }
+    PNET_BUFFER_LIST Nbl;
+    PNET_BUFFER_LIST Next;
 
-    if (Adapter->TxQueueTail != NULL)
+    for (Nbl = Chain; Nbl != NULL; Nbl = Next)
     {
-        NET_BUFFER_LIST_NEXT_NBL(Adapter->TxQueueTail) = Head;
+        Next = NET_BUFFER_LIST_NEXT_NBL(Nbl);
+        /* Clear chain link before queueing (SLIST uses MiniportReserved) */
+        NET_BUFFER_LIST_NEXT_NBL(Nbl) = NULL;
+        RndisTxQueuePush(Adapter, Nbl);
     }
-    else
-    {
-        Adapter->TxQueueHead = Head;
-    }
-
-    Adapter->TxQueueTail = Tail;
 }
 
-static
-__inline
-PNET_BUFFER_LIST
-RndisTxQueueFindTail(
-    _In_ PNET_BUFFER_LIST Head)
-{
-    PNET_BUFFER_LIST Tail = Head;
-
-    while (Tail && NET_BUFFER_LIST_NEXT_NBL(Tail) != NULL)
-    {
-        Tail = NET_BUFFER_LIST_NEXT_NBL(Tail);
-    }
-
-    return Tail;
-}
-
-static
-__inline
-PNET_BUFFER_LIST
-RndisTxQueuePopAllLocked(
-    _In_ PRNDIS_ADAPTER Adapter)
-{
-    PNET_BUFFER_LIST Head = Adapter->TxQueueHead;
-
-    Adapter->TxQueueHead = NULL;
-    Adapter->TxQueueTail = NULL;
-
-    return Head;
-}
+/* RndisTxQueueIsEmpty is defined inline in usbrndis.h */
 
 /*
  * RndisAlignOffset
@@ -944,10 +914,10 @@ RndisSendNetBufferListsInternal(
         if (TxAlreadyOwned)
         {
             NdisAcquireSpinLock(&Adapter->TxLock);
-            Adapter->TxBusy = FALSE;
-            Adapter->PendingTxNbl = NULL;
-            Adapter->PendingTxNblCount = 0;
-            Adapter->PendingTxDatagramCount = 0;
+            Adapter->TxHot.TxBusy = FALSE;
+            Adapter->TxHot.PendingTxNbl = NULL;
+            Adapter->TxHot.PendingTxNblCount = 0;
+            Adapter->TxHot.PendingTxDatagramCount = 0;
             NdisReleaseSpinLock(&Adapter->TxLock);
         }
 
@@ -973,10 +943,10 @@ RndisSendNetBufferListsInternal(
         if (TxAlreadyOwned)
         {
             NdisAcquireSpinLock(&Adapter->TxLock);
-            Adapter->TxBusy = FALSE;
-            Adapter->PendingTxNbl = NULL;
-            Adapter->PendingTxNblCount = 0;
-            Adapter->PendingTxDatagramCount = 0;
+            Adapter->TxHot.TxBusy = FALSE;
+            Adapter->TxHot.PendingTxNbl = NULL;
+            Adapter->TxHot.PendingTxNblCount = 0;
+            Adapter->TxHot.PendingTxDatagramCount = 0;
             NdisReleaseSpinLock(&Adapter->TxLock);
         }
 
@@ -994,36 +964,45 @@ RndisSendNetBufferListsInternal(
         return;
     }
 
-    /* If a TX is in flight or the queue is non-empty (unless ignored), append and kick */
+    /*
+     * Lock-free queue path: if TX is busy or partial NBL in flight, queue and kick.
+     * This uses the lock-free SLIST for queuing without holding TxLock.
+     */
     {
+        BOOLEAN ShouldQueue = FALSE;
         BOOLEAN KickTx = FALSE;
-        PNET_BUFFER_LIST QueueTail = RndisTxQueueFindTail(NetBufferList);
 
         NdisAcquireSpinLock(&Adapter->TxLock);
-        if ((!TxAlreadyOwned && Adapter->TxBusy) || Adapter->TxNcmPartialNbl != NULL ||
-            (!IgnoreQueue && Adapter->TxQueueHead != NULL))
+        if ((!TxAlreadyOwned && Adapter->TxHot.TxBusy) || Adapter->TxHot.TxNcmPartialNbl != NULL ||
+            (!IgnoreQueue && !RndisTxQueueIsEmpty(Adapter)))
         {
-            RndisTxQueueAppendWithTailLocked(Adapter, NetBufferList, QueueTail);
+            ShouldQueue = TRUE;
             if (TxAlreadyOwned)
             {
-                Adapter->TxBusy = FALSE;
-                Adapter->PendingTxNbl = NULL;
-                Adapter->PendingTxNblCount = 0;
-                Adapter->PendingTxDatagramCount = 0;
+                Adapter->TxHot.TxBusy = FALSE;
+                Adapter->TxHot.PendingTxNbl = NULL;
+                Adapter->TxHot.PendingTxNblCount = 0;
+                Adapter->TxHot.PendingTxDatagramCount = 0;
             }
-            if (!Adapter->TxBusy && Adapter->TxNcmPartialNbl == NULL)
+            if (!Adapter->TxHot.TxBusy && Adapter->TxHot.TxNcmPartialNbl == NULL)
             {
-                KickTx = (InterlockedExchange(&Adapter->TxResubmitScheduled, 1) == 0);
+                KickTx = TRUE;
             }
-            NdisReleaseSpinLock(&Adapter->TxLock);
+        }
+        NdisReleaseSpinLock(&Adapter->TxLock);
 
+        if (ShouldQueue)
+        {
+            /* Push all NBLs to lock-free queue */
+            RndisTxQueuePushChain(Adapter, NetBufferList);
+
+            /* Kick TX processing via owner-drain */
             if (KickTx)
             {
-                KeInsertQueueDpc(&Adapter->TxResubmitDpc, NULL, NULL);
+                RndisTxKick(Adapter);
             }
             return;
         }
-        NdisReleaseSpinLock(&Adapter->TxLock);
     }
 
     /* Process each NBL */
@@ -1034,26 +1013,41 @@ RndisSendNetBufferListsInternal(
         /* USB RNDIS only supports one TX at a time */
         if (FirstPacketSent)
         {
-            NdisAcquireSpinLock(&Adapter->TxLock);
-            RndisTxQueueAppendWithTailLocked(Adapter, CurrentNbl, CurrentNbl);
-            NdisReleaseSpinLock(&Adapter->TxLock);
+            /* Queue remaining NBLs using lock-free queue */
+            RndisTxQueuePush(Adapter, CurrentNbl);
+            /* Queue the rest of the chain too */
+            while (NextNbl != NULL)
+            {
+                PNET_BUFFER_LIST TempNext = NET_BUFFER_LIST_NEXT_NBL(NextNbl);
+                NET_BUFFER_LIST_NEXT_NBL(NextNbl) = NULL;
+                RndisTxQueuePush(Adapter, NextNbl);
+                NextNbl = TempNext;
+            }
             break;
         }
 
-        /* Acquire TX lock */
+        /* Acquire TX lock to check/set TxBusy */
         NdisAcquireSpinLock(&Adapter->TxLock);
 
-        if (!TxAlreadyOwned && Adapter->TxBusy)
+        if (!TxAlreadyOwned && Adapter->TxHot.TxBusy)
         {
-            RndisTxQueueAppendWithTailLocked(Adapter, CurrentNbl, CurrentNbl);
             NdisReleaseSpinLock(&Adapter->TxLock);
+            /* Queue this and remaining NBLs */
+            RndisTxQueuePush(Adapter, CurrentNbl);
+            while (NextNbl != NULL)
+            {
+                PNET_BUFFER_LIST TempNext = NET_BUFFER_LIST_NEXT_NBL(NextNbl);
+                NET_BUFFER_LIST_NEXT_NBL(NextNbl) = NULL;
+                RndisTxQueuePush(Adapter, NextNbl);
+                NextNbl = TempNext;
+            }
             break;
         }
 
-        Adapter->TxBusy = TRUE;
-        Adapter->PendingTxNbl = CurrentNbl;
-        Adapter->PendingTxNblCount = 1;  /* Single NBL, may be updated for NCM batching */
-        Adapter->PendingTxDatagramCount = 1;  /* Single packet, may be updated for NCM batching */
+        Adapter->TxHot.TxBusy = TRUE;
+        Adapter->TxHot.PendingTxNbl = CurrentNbl;
+        Adapter->TxHot.PendingTxNblCount = 1;  /* Single NBL, may be updated for NCM batching */
+        Adapter->TxHot.PendingTxDatagramCount = 1;  /* Single packet, may be updated for NCM batching */
         NdisReleaseSpinLock(&Adapter->TxLock);
 
         /* Detach current NBL from the chain before processing */
@@ -1065,8 +1059,8 @@ RndisSendNetBufferListsInternal(
         {
             DPRINT1("USBRNDIS: NBL has no NET_BUFFER\n");
             NdisAcquireSpinLock(&Adapter->TxLock);
-            Adapter->TxBusy = FALSE;
-            Adapter->PendingTxNbl = NULL;
+            Adapter->TxHot.TxBusy = FALSE;
+            Adapter->TxHot.PendingTxNbl = NULL;
             NdisReleaseSpinLock(&Adapter->TxLock);
             NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_FAILURE;
             NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = FailedNbls;
@@ -1083,8 +1077,8 @@ RndisSendNetBufferListsInternal(
         {
             DPRINT1("USBRNDIS: Packet too large (%u bytes)\n", DataLength);
             NdisAcquireSpinLock(&Adapter->TxLock);
-            Adapter->TxBusy = FALSE;
-            Adapter->PendingTxNbl = NULL;
+            Adapter->TxHot.TxBusy = FALSE;
+            Adapter->TxHot.PendingTxNbl = NULL;
             NdisReleaseSpinLock(&Adapter->TxLock);
             Adapter->TxErrorCount++;
             NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_INVALID_LENGTH;
@@ -1093,14 +1087,18 @@ RndisSendNetBufferListsInternal(
             continue;
         }
 
-        /* Map the MDL to get virtual address */
-        VirtualAddress = MmGetSystemAddressForMdlSafe(Mdl, NormalPagePriority);
+        /*
+         * Map the MDL to get virtual address.
+         * Use LowPagePriority for TX path - packet loss is acceptable under
+         * memory pressure. This reduces system resource contention.
+         */
+        VirtualAddress = MmGetSystemAddressForMdlSafe(Mdl, LowPagePriority);
         if (VirtualAddress == NULL)
         {
             DPRINT1("USBRNDIS: Failed to map MDL\n");
             NdisAcquireSpinLock(&Adapter->TxLock);
-            Adapter->TxBusy = FALSE;
-            Adapter->PendingTxNbl = NULL;
+            Adapter->TxHot.TxBusy = FALSE;
+            Adapter->TxHot.PendingTxNbl = NULL;
             NdisReleaseSpinLock(&Adapter->TxLock);
             NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_RESOURCES;
             NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = FailedNbls;
@@ -1116,7 +1114,7 @@ RndisSendNetBufferListsInternal(
         if (Adapter->IsCdcEcm)
         {
             /* CDC-ECM: Copy Ethernet frame directly */
-            NdisMoveMemory(Adapter->TxBuffer, VirtualAddress, DataLength);
+            NdisMoveMemory(Adapter->TxHot.TxBuffer, VirtualAddress, DataLength);
             TotalLength = DataLength;
             DPRINT("USBRNDIS: CDC-ECM TX frame (%u bytes)\n", TotalLength);
         }
@@ -1161,7 +1159,7 @@ RndisSendNetBufferListsInternal(
              * Plus some alignment padding.
              */
             NdpOverhead = NCM_NTH16_LENGTH + 8 + (NCM_MAX_TX_DATAGRAMS + 1) * 4 + 64;
-            TempDataArea = Adapter->TxBuffer + NdpOverhead;
+            TempDataArea = Adapter->TxHot.TxBuffer + NdpOverhead;
             TempDataOffset = 0;
             StopBatching = FALSE;
             CurrentNblComplete = TRUE;
@@ -1220,13 +1218,14 @@ RndisSendNetBufferListsInternal(
                 }
 
                 /*
-                 * Get contiguous data pointer using NdisGetDataBuffer.
+                 * Get contiguous data pointer using NdisGetDataBuffer with LowPagePriority.
+                 * TX path: packet drop acceptable under memory pressure.
                  * This handles NET_BUFFERs that span multiple MDLs properly.
                  * If data is not contiguous, it copies to our temp buffer directly.
                  */
-                BatchVa = NdisGetDataBuffer(BatchNb, BatchDataLen,
-                                            TempDataArea + TempDataOffset,
-                                            1, 0);  /* Alignment=1, offset=0 */
+                BatchVa = NdisGetDataBufferLowPriority(BatchNb, BatchDataLen,
+                                                        TempDataArea + TempDataOffset,
+                                                        1, 0);  /* Alignment=1, offset=0 */
                 if (BatchVa == NULL)
                 {
                     DPRINT1("USBRNDIS: NCM TX: Failed to get data buffer, failing NBL\n");
@@ -1307,12 +1306,12 @@ RndisSendNetBufferListsInternal(
                     }
 
                     /*
-                     * Get contiguous data pointer using NdisGetDataBuffer.
-                     * This handles NET_BUFFERs that span multiple MDLs properly.
+                     * Get contiguous data pointer with LowPagePriority.
+                     * TX path: packet drop acceptable under memory pressure.
                      */
-                    BatchVa = NdisGetDataBuffer(BatchNb, BatchDataLen,
-                                                TempDataArea + TempDataOffset,
-                                                1, 0);
+                    BatchVa = NdisGetDataBufferLowPriority(BatchNb, BatchDataLen,
+                                                            TempDataArea + TempDataOffset,
+                                                            1, 0);
                     if (BatchVa == NULL)
                     {
                         DPRINT1("USBRNDIS: NCM TX: Failed to get data buffer, skipping NBL\n");
@@ -1379,12 +1378,12 @@ RndisSendNetBufferListsInternal(
 FailCurrentNbl:
                 DPRINT1("USBRNDIS: NCM TX: No valid data in NBL, failing\n");
                 NdisAcquireSpinLock(&Adapter->TxLock);
-                Adapter->TxBusy = FALSE;
-                Adapter->PendingTxNbl = NULL;
-                Adapter->PendingTxNblCount = 0;
-                Adapter->PendingTxDatagramCount = 0;
-                Adapter->TxNcmPartialNbl = NULL;
-                Adapter->TxNcmPartialNb = NULL;
+                Adapter->TxHot.TxBusy = FALSE;
+                Adapter->TxHot.PendingTxNbl = NULL;
+                Adapter->TxHot.PendingTxNblCount = 0;
+                Adapter->TxHot.PendingTxDatagramCount = 0;
+                Adapter->TxHot.TxNcmPartialNbl = NULL;
+                Adapter->TxHot.TxNcmPartialNb = NULL;
                 NdisReleaseSpinLock(&Adapter->TxLock);
                 Adapter->TxErrorCount++;
                 NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_INVALID_DATA;
@@ -1394,18 +1393,18 @@ FailCurrentNbl:
             }
 
             /* Now build the multi-datagram NTB */
-            TotalLength = RndisBuildNcmNtbMulti(Adapter, TxDatagrams, DatagramCount, Adapter->TxBuffer);
+            TotalLength = RndisBuildNcmNtbMulti(Adapter, TxDatagrams, DatagramCount, Adapter->TxHot.TxBuffer);
 
             if (TotalLength == 0)
             {
                 DPRINT1("USBRNDIS: Failed to build NCM NTB\n");
                 NdisAcquireSpinLock(&Adapter->TxLock);
-                Adapter->TxBusy = FALSE;
-                Adapter->PendingTxNbl = NULL;
-                Adapter->PendingTxNblCount = 0;
-                Adapter->PendingTxDatagramCount = 0;
-                Adapter->TxNcmPartialNbl = NULL;
-                Adapter->TxNcmPartialNb = NULL;
+                Adapter->TxHot.TxBusy = FALSE;
+                Adapter->TxHot.PendingTxNbl = NULL;
+                Adapter->TxHot.PendingTxNblCount = 0;
+                Adapter->TxHot.PendingTxDatagramCount = 0;
+                Adapter->TxHot.TxNcmPartialNbl = NULL;
+                Adapter->TxHot.TxNcmPartialNb = NULL;
                 NdisReleaseSpinLock(&Adapter->TxLock);
                 Adapter->TxErrorCount++;
 
@@ -1429,8 +1428,8 @@ FailCurrentNbl:
             NdisAcquireSpinLock(&Adapter->TxLock);
             if (!CurrentNblComplete)
             {
-                Adapter->TxNcmPartialNbl = CurrentNbl;
-                Adapter->TxNcmPartialNb = CurrentNblNextNb;
+                Adapter->TxHot.TxNcmPartialNbl = CurrentNbl;
+                Adapter->TxHot.TxNcmPartialNb = CurrentNblNextNb;
                 if (UniqueNblCount > 0)
                 {
                     UniqueNblCount--;
@@ -1438,13 +1437,13 @@ FailCurrentNbl:
             }
             else
             {
-                Adapter->TxNcmPartialNbl = NULL;
-                Adapter->TxNcmPartialNb = NULL;
+                Adapter->TxHot.TxNcmPartialNbl = NULL;
+                Adapter->TxHot.TxNcmPartialNb = NULL;
             }
 
             if (UniqueNblCount > 0)
             {
-                Adapter->PendingTxNbl = BatchNbls[0];
+                Adapter->TxHot.PendingTxNbl = BatchNbls[0];
                 for (i = 1; i < UniqueNblCount; i++)
                 {
                     /* Chain the batched NBLs together for completion */
@@ -1453,10 +1452,10 @@ FailCurrentNbl:
             }
             else
             {
-                Adapter->PendingTxNbl = NULL;
+                Adapter->TxHot.PendingTxNbl = NULL;
             }
-            Adapter->PendingTxNblCount = UniqueNblCount;
-            Adapter->PendingTxDatagramCount = DatagramCount;  /* Actual packet count for stats */
+            Adapter->TxHot.PendingTxNblCount = UniqueNblCount;
+            Adapter->TxHot.PendingTxDatagramCount = DatagramCount;  /* Actual packet count for stats */
             NdisReleaseSpinLock(&Adapter->TxLock);
 
             /* Update stats for all batched datagrams */
@@ -1468,20 +1467,20 @@ FailCurrentNbl:
         else
         {
             /* RNDIS: Build RNDIS_PACKET_MSG wrapper */
-            NdisMoveMemory(Adapter->TxBuffer + sizeof(RNDIS_PACKET_MSG),
+            NdisMoveMemory(Adapter->TxHot.TxBuffer + sizeof(RNDIS_PACKET_MSG),
                            VirtualAddress, DataLength);
 
             TotalLength = RndisBuildPacketMessage(Adapter,
-                                                  Adapter->TxBuffer + sizeof(RNDIS_PACKET_MSG),
+                                                  Adapter->TxHot.TxBuffer + sizeof(RNDIS_PACKET_MSG),
                                                   DataLength,
-                                                  Adapter->TxBuffer);
+                                                  Adapter->TxHot.TxBuffer);
 
             DPRINT("USBRNDIS: RNDIS TX packet (%lu bytes, frame %lu bytes)\n",
                    TotalLength, DataLength);
         }
 
         /* Send via USB bulk endpoint - async operation */
-        Status = RndisUsbSubmitBulkWrite(Adapter, Adapter->TxBuffer, TotalLength);
+        Status = RndisUsbSubmitBulkWrite(Adapter, Adapter->TxHot.TxBuffer, TotalLength);
 
         if (Status == STATUS_PENDING)
         {
@@ -1533,12 +1532,12 @@ FailCurrentNbl:
 
             DPRINT1("USBRNDIS: Failed to submit TX (0x%08X)\n", Status);
             NdisAcquireSpinLock(&Adapter->TxLock);
-            Adapter->TxBusy = FALSE;
-            Adapter->PendingTxNbl = NULL;
-            Adapter->PendingTxNblCount = 0;
-            Adapter->PendingTxDatagramCount = 0;
-            Adapter->TxNcmPartialNbl = NULL;
-            Adapter->TxNcmPartialNb = NULL;
+            Adapter->TxHot.TxBusy = FALSE;
+            Adapter->TxHot.PendingTxNbl = NULL;
+            Adapter->TxHot.PendingTxNblCount = 0;
+            Adapter->TxHot.PendingTxDatagramCount = 0;
+            Adapter->TxHot.TxNcmPartialNbl = NULL;
+            Adapter->TxHot.TxNcmPartialNb = NULL;
             NdisReleaseSpinLock(&Adapter->TxLock);
             Adapter->TxErrorCount++;
 
@@ -1580,18 +1579,18 @@ FailCurrentNbl:
     /* If the last send completed synchronously, kick queued sends */
     if (TxSyncComplete && !Adapter->Halting)
     {
-        BOOLEAN KickTx = FALSE;
+        BOOLEAN ShouldKick = FALSE;
 
         NdisAcquireSpinLock(&Adapter->TxLock);
-        if (Adapter->TxQueueHead != NULL && Adapter->TxNcmPartialNbl == NULL)
+        if (!RndisTxQueueIsEmpty(Adapter) && Adapter->TxHot.TxNcmPartialNbl == NULL)
         {
-            KickTx = (InterlockedExchange(&Adapter->TxResubmitScheduled, 1) == 0);
+            ShouldKick = TRUE;
         }
         NdisReleaseSpinLock(&Adapter->TxLock);
 
-        if (KickTx)
+        if (ShouldKick)
         {
-            KeInsertQueueDpc(&Adapter->TxResubmitDpc, NULL, NULL);
+            RndisTxKick(Adapter);
         }
     }
 
@@ -1666,6 +1665,9 @@ RndisReturnNetBufferLists(
  * NDIS 6.x handler for cancelling pending sends with a matching cancel ID.
  * USB RNDIS has limited cancellation capability since URBs in progress
  * cannot be easily cancelled.
+ *
+ * With the lock-free SLIST queue, we cannot do in-place removal.
+ * We pop all entries, filter out matches, and push back non-cancelled ones.
  */
 VOID
 NTAPI
@@ -1676,7 +1678,9 @@ RndisCancelSend(
     PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)MiniportAdapterContext;
     PNET_BUFFER_LIST CancelledNbl = NULL;
     PNET_BUFFER_LIST CancelledTail = NULL;
-    PNET_BUFFER_LIST PrevNbl;
+    PNET_BUFFER_LIST KeepNbl = NULL;
+    PNET_BUFFER_LIST KeepTail = NULL;
+    PNET_BUFFER_LIST QueuedNbls;
     PNET_BUFFER_LIST Nbl;
     PNET_BUFFER_LIST Next;
 
@@ -1688,35 +1692,28 @@ RndisCancelSend(
      */
     NdisAcquireSpinLock(&Adapter->TxLock);
 
-    if (Adapter->PendingTxNbl != NULL &&
-        NDIS_GET_NET_BUFFER_LIST_CANCEL_ID(Adapter->PendingTxNbl) == CancelId)
+    if (Adapter->TxHot.PendingTxNbl != NULL &&
+        NDIS_GET_NET_BUFFER_LIST_CANCEL_ID(Adapter->TxHot.PendingTxNbl) == CancelId)
     {
         DPRINT("USBRNDIS: Cannot cancel in-flight TX\n");
     }
 
-    PrevNbl = NULL;
-    Nbl = Adapter->TxQueueHead;
-    while (Nbl != NULL)
+    NdisReleaseSpinLock(&Adapter->TxLock);
+
+    /*
+     * Pop all from lock-free queue (returns FIFO order).
+     */
+    QueuedNbls = RndisTxQueuePopAll(Adapter);
+
+    /* Separate cancelled NBLs from ones to keep */
+    for (Nbl = QueuedNbls; Nbl != NULL; Nbl = Next)
     {
         Next = NET_BUFFER_LIST_NEXT_NBL(Nbl);
+        NET_BUFFER_LIST_NEXT_NBL(Nbl) = NULL;
 
         if (NDIS_GET_NET_BUFFER_LIST_CANCEL_ID(Nbl) == CancelId)
         {
-            if (PrevNbl)
-            {
-                NET_BUFFER_LIST_NEXT_NBL(PrevNbl) = Next;
-            }
-            else
-            {
-                Adapter->TxQueueHead = Next;
-            }
-
-            if (Adapter->TxQueueTail == Nbl)
-            {
-                Adapter->TxQueueTail = PrevNbl;
-            }
-
-            NET_BUFFER_LIST_NEXT_NBL(Nbl) = NULL;
+            /* Add to cancelled list */
             if (CancelledTail)
             {
                 NET_BUFFER_LIST_NEXT_NBL(CancelledTail) = Nbl;
@@ -1729,14 +1726,26 @@ RndisCancelSend(
         }
         else
         {
-            PrevNbl = Nbl;
+            /* Add to keep list */
+            if (KeepTail)
+            {
+                NET_BUFFER_LIST_NEXT_NBL(KeepTail) = Nbl;
+            }
+            else
+            {
+                KeepNbl = Nbl;
+            }
+            KeepTail = Nbl;
         }
-
-        Nbl = Next;
     }
 
-    NdisReleaseSpinLock(&Adapter->TxLock);
+    /* Push back the NBLs we want to keep (in FIFO order) */
+    if (KeepNbl != NULL)
+    {
+        RndisTxQueuePushChain(Adapter, KeepNbl);
+    }
 
+    /* Complete cancelled NBLs */
     if (CancelledNbl != NULL)
     {
         for (Nbl = CancelledNbl; Nbl != NULL; Nbl = NET_BUFFER_LIST_NEXT_NBL(Nbl))
@@ -1781,20 +1790,20 @@ RndisNcmContinueTx(
     }
 
     NdisAcquireSpinLock(&Adapter->TxLock);
-    CurrentNbl = Adapter->TxNcmPartialNbl;
-    BatchNb = Adapter->TxNcmPartialNb;
+    CurrentNbl = Adapter->TxHot.TxNcmPartialNbl;
+    BatchNb = Adapter->TxHot.TxNcmPartialNb;
     if (CurrentNbl == NULL || BatchNb == NULL)
     {
-        Adapter->TxNcmPartialNbl = NULL;
-        Adapter->TxNcmPartialNb = NULL;
-        Adapter->TxBusy = FALSE;
+        Adapter->TxHot.TxNcmPartialNbl = NULL;
+        Adapter->TxHot.TxNcmPartialNb = NULL;
+        Adapter->TxHot.TxBusy = FALSE;
         NdisReleaseSpinLock(&Adapter->TxLock);
         return;
     }
     NdisReleaseSpinLock(&Adapter->TxLock);
 
     NdpOverhead = NCM_NTH16_LENGTH + 8 + (NCM_MAX_TX_DATAGRAMS + 1) * 4 + 64;
-    TempDataArea = Adapter->TxBuffer + NdpOverhead;
+    TempDataArea = Adapter->TxHot.TxBuffer + NdpOverhead;
     TempDataOffset = 0;
 
     while (BatchNb != NULL && DatagramCount < NCM_MAX_TX_DATAGRAMS)
@@ -1814,9 +1823,10 @@ RndisNcmContinueTx(
             break;
         }
 
-        BatchVa = NdisGetDataBuffer(BatchNb, BatchDataLen,
-                                    TempDataArea + TempDataOffset,
-                                    1, 0);
+        /* TX path: use LowPagePriority - packet drop acceptable under memory pressure */
+        BatchVa = NdisGetDataBufferLowPriority(BatchNb, BatchDataLen,
+                                                TempDataArea + TempDataOffset,
+                                                1, 0);
         if (BatchVa == NULL)
         {
             DPRINT1("USBRNDIS: NCM TX: Failed to get data buffer, failing NBL\n");
@@ -1844,24 +1854,24 @@ RndisNcmContinueTx(
     }
 
     NdisAcquireSpinLock(&Adapter->TxLock);
-    Adapter->PendingTxDatagramCount = DatagramCount;
+    Adapter->TxHot.PendingTxDatagramCount = DatagramCount;
     if (BatchNb == NULL)
     {
-        Adapter->TxNcmPartialNbl = NULL;
-        Adapter->TxNcmPartialNb = NULL;
-        Adapter->PendingTxNbl = CurrentNbl;
-        Adapter->PendingTxNblCount = 1;
+        Adapter->TxHot.TxNcmPartialNbl = NULL;
+        Adapter->TxHot.TxNcmPartialNb = NULL;
+        Adapter->TxHot.PendingTxNbl = CurrentNbl;
+        Adapter->TxHot.PendingTxNblCount = 1;
     }
     else
     {
-        Adapter->TxNcmPartialNb = BatchNb;
-        Adapter->PendingTxNbl = NULL;
-        Adapter->PendingTxNblCount = 0;
+        Adapter->TxHot.TxNcmPartialNb = BatchNb;
+        Adapter->TxHot.PendingTxNbl = NULL;
+        Adapter->TxHot.PendingTxNblCount = 0;
     }
-    Adapter->TxBusy = TRUE;
+    Adapter->TxHot.TxBusy = TRUE;
     NdisReleaseSpinLock(&Adapter->TxLock);
 
-    TotalLength = RndisBuildNcmNtbMulti(Adapter, TxDatagrams, DatagramCount, Adapter->TxBuffer);
+    TotalLength = RndisBuildNcmNtbMulti(Adapter, TxDatagrams, DatagramCount, Adapter->TxHot.TxBuffer);
     if (TotalLength == 0)
     {
         DPRINT1("USBRNDIS: Failed to build NCM NTB (partial)\n");
@@ -1870,7 +1880,7 @@ RndisNcmContinueTx(
 
     Adapter->TxBytes += TotalDataLength;
 
-    Status = RndisUsbSubmitBulkWrite(Adapter, Adapter->TxBuffer, TotalLength);
+    Status = RndisUsbSubmitBulkWrite(Adapter, Adapter->TxHot.TxBuffer, TotalLength);
 
     if (Status == STATUS_PENDING || NT_SUCCESS(Status))
     {
@@ -1883,12 +1893,12 @@ RndisNcmContinueTx(
 
 FailPartialNbl:
     NdisAcquireSpinLock(&Adapter->TxLock);
-    Adapter->TxNcmPartialNbl = NULL;
-    Adapter->TxNcmPartialNb = NULL;
-    Adapter->PendingTxNbl = NULL;
-    Adapter->PendingTxNblCount = 0;
-    Adapter->PendingTxDatagramCount = 0;
-    Adapter->TxBusy = FALSE;
+    Adapter->TxHot.TxNcmPartialNbl = NULL;
+    Adapter->TxHot.TxNcmPartialNb = NULL;
+    Adapter->TxHot.PendingTxNbl = NULL;
+    Adapter->TxHot.PendingTxNblCount = 0;
+    Adapter->TxHot.PendingTxDatagramCount = 0;
+    Adapter->TxHot.TxBusy = FALSE;
     NdisReleaseSpinLock(&Adapter->TxLock);
     Adapter->TxErrorCount++;
 
@@ -1899,21 +1909,9 @@ FailPartialNbl:
         DispatchLevel ? NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL : 0);
 
     /* Kick queued sends after a partial failure */
-    if (!Adapter->Halting)
+    if (!Adapter->Halting && !RndisTxQueueIsEmpty(Adapter))
     {
-        BOOLEAN KickTx = FALSE;
-
-        NdisAcquireSpinLock(&Adapter->TxLock);
-        if (Adapter->TxQueueHead != NULL)
-        {
-            KickTx = (InterlockedExchange(&Adapter->TxResubmitScheduled, 1) == 0);
-        }
-        NdisReleaseSpinLock(&Adapter->TxLock);
-
-        if (KickTx)
-        {
-            KeInsertQueueDpc(&Adapter->TxResubmitDpc, NULL, NULL);
-        }
+        RndisTxKick(Adapter);
     }
 }
 
@@ -1922,6 +1920,7 @@ FailPartialNbl:
  *
  * Drain queued NBLs and submit the next TX.
  * Called from the TX resubmit DPC when no partial NBL is active.
+ * Now uses the lock-free queue and owner-drain pattern.
  */
 VOID
 RndisTxDequeueAndSend(
@@ -1935,16 +1934,17 @@ RndisTxDequeueAndSend(
     }
 
     NdisAcquireSpinLock(&Adapter->TxLock);
-    if (Adapter->TxBusy || Adapter->TxNcmPartialNbl != NULL)
+    if (Adapter->TxHot.TxBusy || Adapter->TxHot.TxNcmPartialNbl != NULL)
     {
         NdisReleaseSpinLock(&Adapter->TxLock);
         return;
     }
 
-    Queue = RndisTxQueuePopAllLocked(Adapter);
+    /* Pop all from lock-free queue (returns FIFO order) */
+    Queue = RndisTxQueuePopAll(Adapter);
     if (Queue != NULL)
     {
-        Adapter->TxBusy = TRUE;
+        Adapter->TxHot.TxBusy = TRUE;
     }
     NdisReleaseSpinLock(&Adapter->TxLock);
 
@@ -1957,4 +1957,45 @@ RndisTxDequeueAndSend(
             TRUE,
             TRUE);
     }
+}
+
+/*
+ * RndisTxDrainChain
+ *
+ * Process a chain of NBLs from the lock-free queue.
+ * Called from RndisTxKick as part of the owner-drain pattern.
+ * The chain is already in FIFO order after reversal.
+ */
+VOID
+RndisTxDrainChain(
+    IN PRNDIS_ADAPTER Adapter,
+    IN PNET_BUFFER_LIST NblChain)
+{
+    if (NblChain == NULL || Adapter->Halting)
+    {
+        return;
+    }
+
+    /*
+     * Acquire TxBusy under lock before processing.
+     * If TX is already busy (shouldn't happen in owner-drain), queue and return.
+     */
+    NdisAcquireSpinLock(&Adapter->TxLock);
+    if (Adapter->TxHot.TxBusy || Adapter->TxHot.TxNcmPartialNbl != NULL)
+    {
+        NdisReleaseSpinLock(&Adapter->TxLock);
+        /* Re-queue the chain - another thread is handling TX */
+        RndisTxQueuePushChain(Adapter, NblChain);
+        return;
+    }
+    Adapter->TxHot.TxBusy = TRUE;
+    NdisReleaseSpinLock(&Adapter->TxLock);
+
+    /* Process the chain - will complete NBLs as they are sent */
+    RndisSendNetBufferListsInternal(
+        Adapter,
+        NblChain,
+        NDIS_SEND_FLAGS_DISPATCH_LEVEL,
+        TRUE,   /* IgnoreQueue */
+        TRUE);  /* TxAlreadyOwned */
 }

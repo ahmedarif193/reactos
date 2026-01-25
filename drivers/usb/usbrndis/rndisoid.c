@@ -217,11 +217,27 @@ RndisQueryInformation(
         UCHAR MacAddress[ETH_LENGTH_OF_ADDRESS];
     } Data;
 
+    /*
+     * Aggregated statistics from per-CPU counters.
+     * We aggregate once here for all statistics OIDs.
+     */
+    ULONG64 AggTxBytes, AggRxBytes;
+    ULONG64 AggTxOkCount, AggRxOkCount;
+    ULONG64 AggTxErrorCount, AggRxErrorCount;
+    ULONG64 AggRxNoBufferCount;
+
     /* Log all OID queries for debugging */
     DPRINT1("USBRNDIS: QueryInformation OID 0x%08X, BufferLen=%lu\n", Oid, InfoBufferLength);
 
     *BytesWritten = 0;
     *BytesNeeded = 0;
+
+    /* Aggregate per-CPU statistics for any stat-related OID */
+    RndisGetAggregatedStats(Adapter,
+                            &AggTxBytes, &AggRxBytes,
+                            &AggTxOkCount, &AggRxOkCount,
+                            &AggTxErrorCount, &AggRxErrorCount,
+                            &AggRxNoBufferCount);
 
     switch (Oid)
     {
@@ -429,13 +445,13 @@ RndisQueryInformation(
         case OID_GEN_XMIT_OK:
             if (InfoBufferLength >= sizeof(ULONG64))
             {
-                Data.Ulong64 = Adapter->TxOkCount;
+                Data.Ulong64 = AggTxOkCount;
                 CopySource = &Data.Ulong64;
                 CopyLength = sizeof(ULONG64);
             }
             else
             {
-                Data.Ulong = (ULONG)Adapter->TxOkCount;
+                Data.Ulong = (ULONG)AggTxOkCount;
                 CopySource = &Data.Ulong;
                 CopyLength = sizeof(ULONG);
             }
@@ -444,13 +460,13 @@ RndisQueryInformation(
         case OID_GEN_RCV_OK:
             if (InfoBufferLength >= sizeof(ULONG64))
             {
-                Data.Ulong64 = Adapter->RxOkCount;
+                Data.Ulong64 = AggRxOkCount;
                 CopySource = &Data.Ulong64;
                 CopyLength = sizeof(ULONG64);
             }
             else
             {
-                Data.Ulong = (ULONG)Adapter->RxOkCount;
+                Data.Ulong = (ULONG)AggRxOkCount;
                 CopySource = &Data.Ulong;
                 CopyLength = sizeof(ULONG);
             }
@@ -459,13 +475,13 @@ RndisQueryInformation(
         case OID_GEN_XMIT_ERROR:
             if (InfoBufferLength >= sizeof(ULONG64))
             {
-                Data.Ulong64 = Adapter->TxErrorCount;
+                Data.Ulong64 = AggTxErrorCount;
                 CopySource = &Data.Ulong64;
                 CopyLength = sizeof(ULONG64);
             }
             else
             {
-                Data.Ulong = (ULONG)Adapter->TxErrorCount;
+                Data.Ulong = (ULONG)AggTxErrorCount;
                 CopySource = &Data.Ulong;
                 CopyLength = sizeof(ULONG);
             }
@@ -474,13 +490,13 @@ RndisQueryInformation(
         case OID_GEN_RCV_ERROR:
             if (InfoBufferLength >= sizeof(ULONG64))
             {
-                Data.Ulong64 = Adapter->RxErrorCount;
+                Data.Ulong64 = AggRxErrorCount;
                 CopySource = &Data.Ulong64;
                 CopyLength = sizeof(ULONG64);
             }
             else
             {
-                Data.Ulong = (ULONG)Adapter->RxErrorCount;
+                Data.Ulong = (ULONG)AggRxErrorCount;
                 CopySource = &Data.Ulong;
                 CopyLength = sizeof(ULONG);
             }
@@ -489,13 +505,13 @@ RndisQueryInformation(
         case OID_GEN_RCV_NO_BUFFER:
             if (InfoBufferLength >= sizeof(ULONG64))
             {
-                Data.Ulong64 = Adapter->RxNoBufferCount;
+                Data.Ulong64 = AggRxNoBufferCount;
                 CopySource = &Data.Ulong64;
                 CopyLength = sizeof(ULONG64);
             }
             else
             {
-                Data.Ulong = (ULONG)Adapter->RxNoBufferCount;
+                Data.Ulong = (ULONG)AggRxNoBufferCount;
                 CopySource = &Data.Ulong;
                 CopyLength = sizeof(ULONG);
             }
@@ -504,13 +520,13 @@ RndisQueryInformation(
         case OID_GEN_BYTES_XMIT:
             if (InfoBufferLength >= sizeof(ULONG64))
             {
-                Data.Ulong64 = Adapter->TxBytes;
+                Data.Ulong64 = AggTxBytes;
                 CopySource = &Data.Ulong64;
                 CopyLength = sizeof(ULONG64);
             }
             else
             {
-                Data.Ulong = (ULONG)Adapter->TxBytes;
+                Data.Ulong = (ULONG)AggTxBytes;
                 CopySource = &Data.Ulong;
                 CopyLength = sizeof(ULONG);
             }
@@ -519,13 +535,13 @@ RndisQueryInformation(
         case OID_GEN_BYTES_RCV:
             if (InfoBufferLength >= sizeof(ULONG64))
             {
-                Data.Ulong64 = Adapter->RxBytes;
+                Data.Ulong64 = AggRxBytes;
                 CopySource = &Data.Ulong64;
                 CopyLength = sizeof(ULONG64);
             }
             else
             {
-                Data.Ulong = (ULONG)Adapter->RxBytes;
+                Data.Ulong = (ULONG)AggRxBytes;
                 CopySource = &Data.Ulong;
                 CopyLength = sizeof(ULONG);
             }
@@ -541,12 +557,12 @@ RndisQueryInformation(
                 NDIS_STATISTICS_FLAGS_VALID_BYTES_XMIT |
                 NDIS_STATISTICS_FLAGS_VALID_RCV_ERROR |
                 NDIS_STATISTICS_FLAGS_VALID_XMIT_ERROR;
-            Data.Statistics.ifHCInOctets = Adapter->RxBytes;
-            Data.Statistics.ifHCOutOctets = Adapter->TxBytes;
-            Data.Statistics.ifInErrors = Adapter->RxErrorCount;
-            Data.Statistics.ifOutErrors = Adapter->TxErrorCount;
-            Data.Statistics.ifHCInUcastPkts = Adapter->RxOkCount;
-            Data.Statistics.ifHCOutUcastPkts = Adapter->TxOkCount;
+            Data.Statistics.ifHCInOctets = AggRxBytes;
+            Data.Statistics.ifHCOutOctets = AggTxBytes;
+            Data.Statistics.ifInErrors = AggRxErrorCount;
+            Data.Statistics.ifOutErrors = AggTxErrorCount;
+            Data.Statistics.ifHCInUcastPkts = AggRxOkCount;
+            Data.Statistics.ifHCOutUcastPkts = AggTxOkCount;
             CopySource = &Data.Statistics;
             CopyLength = sizeof(NDIS_STATISTICS_INFO);
             break;

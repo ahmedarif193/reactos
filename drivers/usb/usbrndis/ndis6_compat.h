@@ -794,14 +794,17 @@ E1000_NdisAllocateMdl(
  * Returns:
  *   Pointer to contiguous data, or NULL on failure
  * ============================================================================ */
-#ifndef NdisGetDataBuffer
+/*
+ * Internal implementation with page priority parameter
+ */
 static __inline PVOID
-Usbrndis_NdisGetDataBuffer(
+Usbrndis_NdisGetDataBufferEx(
     _In_ PNET_BUFFER NetBuffer,
     _In_ ULONG BytesNeeded,
     _Out_writes_bytes_opt_(BytesNeeded) PVOID Storage,
     _In_ UINT AlignMultiple,
-    _In_ UINT AlignOffset)
+    _In_ UINT AlignOffset,
+    _In_ MM_PAGE_PRIORITY Priority)
 {
     PMDL CurrentMdl;
     ULONG CurrentMdlOffset;
@@ -843,7 +846,7 @@ Usbrndis_NdisGetDataBuffer(
     if (BytesNeeded <= (MdlByteCount - CurrentMdlOffset))
     {
         /* Data fits in a single MDL - return direct pointer */
-        MdlVa = (PUCHAR)MmGetSystemAddressForMdlSafe(CurrentMdl, NormalPagePriority);
+        MdlVa = (PUCHAR)MmGetSystemAddressForMdlSafe(CurrentMdl, Priority);
         if (MdlVa == NULL)
         {
             return NULL;
@@ -885,7 +888,7 @@ Usbrndis_NdisGetDataBuffer(
     while (BytesCopied < BytesNeeded && CurrentMdl != NULL)
     {
         MdlByteCount = MmGetMdlByteCount(CurrentMdl);
-        MdlVa = (PUCHAR)MmGetSystemAddressForMdlSafe(CurrentMdl, NormalPagePriority);
+        MdlVa = (PUCHAR)MmGetSystemAddressForMdlSafe(CurrentMdl, Priority);
         if (MdlVa == NULL)
         {
             goto CopyFailure;
@@ -919,9 +922,45 @@ CopyFailure:
     RtlZeroMemory(Storage, BytesNeeded);
     return NULL;
 }
+
+/*
+ * Standard NdisGetDataBuffer - uses NormalPagePriority
+ */
+#ifndef NdisGetDataBuffer
+static __inline PVOID
+Usbrndis_NdisGetDataBuffer(
+    _In_ PNET_BUFFER NetBuffer,
+    _In_ ULONG BytesNeeded,
+    _Out_writes_bytes_opt_(BytesNeeded) PVOID Storage,
+    _In_ UINT AlignMultiple,
+    _In_ UINT AlignOffset)
+{
+    return Usbrndis_NdisGetDataBufferEx(NetBuffer, BytesNeeded, Storage,
+                                         AlignMultiple, AlignOffset,
+                                         NormalPagePriority);
+}
 #define NdisGetDataBuffer(NetBuffer, BytesNeeded, Storage, AlignMultiple, AlignOffset) \
     Usbrndis_NdisGetDataBuffer((NetBuffer), (BytesNeeded), (Storage), (AlignMultiple), (AlignOffset))
 #endif
+
+/*
+ * NdisGetDataBufferLowPriority - uses LowPagePriority for TX path
+ * Use this in TX path where packet drop is acceptable under memory pressure.
+ */
+static __inline PVOID
+Usbrndis_NdisGetDataBufferLowPriority(
+    _In_ PNET_BUFFER NetBuffer,
+    _In_ ULONG BytesNeeded,
+    _Out_writes_bytes_opt_(BytesNeeded) PVOID Storage,
+    _In_ UINT AlignMultiple,
+    _In_ UINT AlignOffset)
+{
+    return Usbrndis_NdisGetDataBufferEx(NetBuffer, BytesNeeded, Storage,
+                                         AlignMultiple, AlignOffset,
+                                         LowPagePriority);
+}
+#define NdisGetDataBufferLowPriority(NetBuffer, BytesNeeded, Storage, AlignMultiple, AlignOffset) \
+    Usbrndis_NdisGetDataBufferLowPriority((NetBuffer), (BytesNeeded), (Storage), (AlignMultiple), (AlignOffset))
 
 #ifndef NdisMFreeNetBufferSGList
 /* Stub for scatter-gather list freeing - will need proper implementation */

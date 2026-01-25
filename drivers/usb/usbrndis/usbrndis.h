@@ -332,6 +332,69 @@ C_ASSERT(sizeof(USB_CDC_ETHERNET_DESCRIPTOR) == 13);
  */
 #define RNDIS_MAX_MULTICAST_ADDRESSES   32
 
+/*
+ * Performance optimization constants
+ */
+#define RX_BUDGET_PACKETS           32      /* Max packets to process per DPC */
+#define CACHE_LINE_SIZE             64      /* x86/x64 cache line size */
+
+/*
+ * Per-CPU statistics structure - aligned to cache line to avoid false sharing.
+ * Each CPU updates only its own counters, aggregation happens on OID query.
+ */
+typedef struct DECLSPEC_CACHEALIGN _RNDIS_PER_CPU_STATS {
+    volatile ULONG64 TxBytes;
+    volatile ULONG64 RxBytes;
+    volatile ULONG64 TxOkCount;
+    volatile ULONG64 RxOkCount;
+    volatile ULONG64 TxErrorCount;
+    volatile ULONG64 RxErrorCount;
+    volatile ULONG64 RxNoBufferCount;
+    UCHAR Padding[CACHE_LINE_SIZE - (7 * sizeof(ULONG64)) % CACHE_LINE_SIZE];
+} RNDIS_PER_CPU_STATS, *PRNDIS_PER_CPU_STATS;
+
+/*
+ * TX queue entry for lock-free SLIST queueing.
+ * The SLIST_ENTRY must be first for proper SLIST semantics.
+ */
+typedef struct _RNDIS_TX_ENTRY {
+    SLIST_ENTRY ListEntry;
+    PNET_BUFFER_LIST Nbl;
+} RNDIS_TX_ENTRY, *PRNDIS_TX_ENTRY;
+
+/*
+ * TX hot path structure - cache-line aligned for performance.
+ * Groups frequently accessed TX fields together.
+ */
+typedef struct DECLSPEC_CACHEALIGN _RNDIS_TX_HOT {
+    SLIST_HEADER TxQueue;               /* Lock-free TX queue (16 bytes aligned) */
+    volatile LONG TxOwner;              /* Owner drain flag (0=free, 1=owned) */
+    volatile LONG TxResubmitScheduled;  /* Coalescing flag for TX continuation */
+    PUCHAR TxBuffer;                    /* TX data buffer */
+    BOOLEAN TxBusy;                     /* Legacy busy flag for compat */
+    PIRP TxIrp;                         /* Pending TX IRP for cancellation */
+    PNET_BUFFER_LIST PendingTxNbl;      /* NBL awaiting TX completion */
+    ULONG PendingTxNblCount;            /* Number of NBLs pending */
+    ULONG PendingTxDatagramCount;       /* Number of datagrams pending */
+    PNET_BUFFER_LIST TxNcmPartialNbl;   /* Current NCM NBL being segmented */
+    PNET_BUFFER TxNcmPartialNb;         /* Next NET_BUFFER in partial NBL */
+    URB TxUrb;                          /* TX URB structure */
+} RNDIS_TX_HOT, *PRNDIS_TX_HOT;
+
+/*
+ * RX hot path structure - cache-line aligned for performance.
+ * Groups frequently accessed RX fields together.
+ */
+typedef struct DECLSPEC_CACHEALIGN _RNDIS_RX_HOT {
+    PUCHAR RxBuffer;                    /* RX data buffer */
+    PIRP RxIrp;                         /* Pending RX IRP */
+    volatile LONG RxSubmitted;          /* RX submission state (atomic) */
+    volatile LONG RxPolling;            /* NAPI-style polling active */
+    volatile LONG RxBudgetRemaining;    /* Packets remaining in current DPC */
+    ULONG RxConsecutiveErrors;          /* Consecutive failures for backoff */
+    URB RxUrb;                          /* RX URB structure */
+} RNDIS_RX_HOT, *PRNDIS_RX_HOT;
+
 #include <pshpack1.h>
 
 /*
@@ -659,11 +722,48 @@ typedef struct _RNDIS_USB_ENDPOINT {
 /*
  * RNDIS Adapter Context
  * Main driver context structure
+ *
+ * Layout is optimized for cache performance:
+ * - Hot TX/RX paths use separate cache-aligned structures
+ * - Per-CPU stats avoid false sharing between processors
+ * - Cold configuration data is grouped together
  */
 typedef struct _RNDIS_ADAPTER {
-    /* NDIS Handle */
+    /*
+     * ========== HOT TX PATH (cache-line aligned) ==========
+     */
+    RNDIS_TX_HOT TxHot;                 /* Lock-free TX queue and state */
+    KDPC TxResubmitDpc;                 /* DPC for TX continuation */
+    PIRP TxIrpToFree;                   /* IRP deferred for freeing during halt */
+    NDIS_SPIN_LOCK TxLock;              /* Legacy lock for partial NBL state */
+
+    /*
+     * ========== HOT RX PATH (cache-line aligned) ==========
+     */
+    RNDIS_RX_HOT RxHot;                 /* RX state and buffer */
+    KDPC RxResubmitDpc;                 /* DPC for deferred RX resubmission */
+    KTIMER RxBackoffTimer;              /* Timer for RX backoff recovery */
+    KDPC RxBackoffDpc;                  /* DPC for backoff timer */
+    KTIMER RxDelayTimer;                /* Timer for delayed RX resubmission */
+    KDPC RxDelayDpc;                    /* DPC for NAK delay timer */
+    volatile LONG RxDelayScheduled;     /* Coalescing flag for delayed resubmit */
+    PIRP RxIrpToFree;                   /* IRP deferred for freeing during halt */
+    NDIS_SPIN_LOCK RxLock;              /* Lock for RX state transitions */
+
+    /*
+     * ========== PER-CPU STATISTICS ==========
+     */
+    PRNDIS_PER_CPU_STATS PerCpuStats;   /* Per-CPU counter array */
+    ULONG NumCpus;                      /* Number of CPUs for stats */
+
+    /*
+     * ========== NDIS HANDLE (frequently accessed) ==========
+     */
     NDIS_HANDLE MiniportAdapterHandle;
 
+    /*
+     * ========== COLD PATH - Device Configuration ==========
+     */
     /* Device Objects */
     PDEVICE_OBJECT PhysicalDeviceObject;
     PDEVICE_OBJECT LowerDeviceObject;
@@ -713,7 +813,11 @@ typedef struct _RNDIS_ADAPTER {
     ULONG MulticastListCount;
     UCHAR MulticastList[RNDIS_MAX_MULTICAST_ADDRESSES][ETHERNET_ADDRESS_LENGTH];
 
-    /* Statistics */
+    /*
+     * ========== LEGACY GLOBAL STATISTICS (for compatibility) ==========
+     * Note: These are kept for backward compatibility during transition.
+     * New code should use per-CPU stats via RndisGetAggregatedStats().
+     */
     ULONG64 TxOkCount;
     ULONG64 RxOkCount;
     ULONG64 TxErrorCount;
@@ -734,39 +838,9 @@ typedef struct _RNDIS_ADAPTER {
     /* NDIS 6.x NET_BUFFER_LIST Pool */
     NDIS_HANDLE RxNblPool;          /* Pool for receive NBLs */
 
-    /* Transmit Resources */
-    PUCHAR TxBuffer;
-    NDIS_SPIN_LOCK TxLock;
-    BOOLEAN TxBusy;
-    PIRP TxIrp;                     /* Pending TX IRP for cancellation */
-    PIRP TxIrpToFree;               /* IRP deferred for freeing during halt */
-    PNET_BUFFER_LIST PendingTxNbl;  /* NBL awaiting TX completion */
-    ULONG PendingTxNblCount;        /* Number of NBLs pending (for NCM batching) */
-    ULONG PendingTxDatagramCount;   /* Number of datagrams (packets) pending (for stats) */
-    URB TxUrb;
-    PNET_BUFFER_LIST TxNcmPartialNbl; /* Current NCM NBL being segmented */
-    PNET_BUFFER TxNcmPartialNb;       /* Next NET_BUFFER to send in partial NBL */
-    KDPC TxResubmitDpc;               /* DPC for NCM TX continuation */
-    volatile LONG TxResubmitScheduled;/* Coalescing flag for TX continuation */
-    PNET_BUFFER_LIST TxQueueHead;     /* Software TX queue head */
-    PNET_BUFFER_LIST TxQueueTail;     /* Software TX queue tail */
-
-    /* Receive Resources */
-    PUCHAR RxBuffer;
-    NDIS_SPIN_LOCK RxLock;
-    PIRP RxIrp;                     /* Pending RX IRP for cancellation */
-    PIRP RxIrpToFree;               /* IRP deferred for freeing during halt */
-    BOOLEAN RxSubmitted;            /* RX URB has been submitted */
-    ULONG RxConsecutiveErrors;      /* Consecutive RX failures for backoff */
-    URB RxUrb;
-    KDPC RxResubmitDpc;             /* DPC for deferred RX resubmission */
-    KTIMER RxBackoffTimer;          /* Timer for RX backoff recovery */
-    KDPC RxBackoffDpc;              /* DPC for backoff timer */
-    KTIMER RxDelayTimer;            /* Timer for delayed RX resubmission on NAK */
-    KDPC RxDelayDpc;                /* DPC for NAK delay timer */
-    volatile LONG RxDelayScheduled; /* Coalescing flag for delayed resubmit */
-
-    /* Interrupt Notification Resources */
+    /*
+     * ========== INTERRUPT RESOURCES ==========
+     */
     PUCHAR InterruptBuffer;
     ULONG InterruptBufferLength;
     NDIS_SPIN_LOCK InterruptLock;
@@ -835,6 +909,11 @@ RndisNcmContinueTx(
 VOID
 RndisTxDequeueAndSend(
     IN PRNDIS_ADAPTER Adapter);
+
+VOID
+RndisTxDrainChain(
+    IN PRNDIS_ADAPTER Adapter,
+    IN PNET_BUFFER_LIST NblChain);
 
 VOID
 NTAPI
@@ -1030,6 +1109,202 @@ RndisSetInformation(
  */
 #define RNDIS_GET_REQUEST_ID(Adapter) \
     InterlockedIncrement((PLONG)&(Adapter)->RequestId)
+
+/*
+ * Per-CPU statistics helper functions
+ */
+VOID
+RndisInitPerCpuStats(
+    IN PRNDIS_ADAPTER Adapter);
+
+VOID
+RndisFreePerCpuStats(
+    IN PRNDIS_ADAPTER Adapter);
+
+VOID
+RndisGetAggregatedStats(
+    IN PRNDIS_ADAPTER Adapter,
+    OUT PULONG64 TxBytes,
+    OUT PULONG64 RxBytes,
+    OUT PULONG64 TxOkCount,
+    OUT PULONG64 RxOkCount,
+    OUT PULONG64 TxErrorCount,
+    OUT PULONG64 RxErrorCount,
+    OUT PULONG64 RxNoBufferCount);
+
+/*
+ * Lock-free TX queue helper functions
+ */
+VOID
+RndisTxQueueInit(
+    IN PRNDIS_ADAPTER Adapter);
+
+VOID
+RndisTxQueuePush(
+    IN PRNDIS_ADAPTER Adapter,
+    IN PNET_BUFFER_LIST Nbl);
+
+PNET_BUFFER_LIST
+RndisTxQueuePopAll(
+    IN PRNDIS_ADAPTER Adapter);
+
+PNET_BUFFER_LIST
+RndisTxQueueReverse(
+    IN PNET_BUFFER_LIST Chain);
+
+VOID
+RndisTxKick(
+    IN PRNDIS_ADAPTER Adapter);
+
+/*
+ * Inline helper to check if lock-free TX queue is empty.
+ * Safe to call from any context without locks.
+ */
+static __inline
+BOOLEAN
+RndisTxQueueIsEmpty(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    return (QueryDepthSList(&Adapter->TxHot.TxQueue) == 0);
+}
+
+/*
+ * Inline helpers for per-CPU stats updates
+ */
+static __inline
+PRNDIS_PER_CPU_STATS
+RndisGetCurrentCpuStats(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    ULONG CpuIndex;
+    if (Adapter->PerCpuStats == NULL)
+    {
+        return NULL;
+    }
+    CpuIndex = KeGetCurrentProcessorNumber();
+    if (CpuIndex >= Adapter->NumCpus)
+    {
+        CpuIndex = 0;
+    }
+    return &Adapter->PerCpuStats[CpuIndex];
+}
+
+static __inline
+VOID
+RndisIncrementTxBytes(
+    IN PRNDIS_ADAPTER Adapter,
+    IN ULONG64 Bytes)
+{
+    PRNDIS_PER_CPU_STATS Stats = RndisGetCurrentCpuStats(Adapter);
+    if (Stats)
+    {
+        InterlockedExchangeAdd64((volatile LONG64*)&Stats->TxBytes, (LONG64)Bytes);
+    }
+    else
+    {
+        /* Fallback to global counter */
+        InterlockedExchangeAdd64((volatile LONG64*)&Adapter->TxBytes, (LONG64)Bytes);
+    }
+}
+
+static __inline
+VOID
+RndisIncrementRxBytes(
+    IN PRNDIS_ADAPTER Adapter,
+    IN ULONG64 Bytes)
+{
+    PRNDIS_PER_CPU_STATS Stats = RndisGetCurrentCpuStats(Adapter);
+    if (Stats)
+    {
+        InterlockedExchangeAdd64((volatile LONG64*)&Stats->RxBytes, (LONG64)Bytes);
+    }
+    else
+    {
+        InterlockedExchangeAdd64((volatile LONG64*)&Adapter->RxBytes, (LONG64)Bytes);
+    }
+}
+
+static __inline
+VOID
+RndisIncrementTxOk(
+    IN PRNDIS_ADAPTER Adapter,
+    IN ULONG Count)
+{
+    PRNDIS_PER_CPU_STATS Stats = RndisGetCurrentCpuStats(Adapter);
+    if (Stats)
+    {
+        InterlockedExchangeAdd64((volatile LONG64*)&Stats->TxOkCount, (LONG64)Count);
+    }
+    else
+    {
+        InterlockedExchangeAdd64((volatile LONG64*)&Adapter->TxOkCount, (LONG64)Count);
+    }
+}
+
+static __inline
+VOID
+RndisIncrementRxOk(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    PRNDIS_PER_CPU_STATS Stats = RndisGetCurrentCpuStats(Adapter);
+    if (Stats)
+    {
+        InterlockedIncrement64((volatile LONG64*)&Stats->RxOkCount);
+    }
+    else
+    {
+        InterlockedIncrement64((volatile LONG64*)&Adapter->RxOkCount);
+    }
+}
+
+static __inline
+VOID
+RndisIncrementTxError(
+    IN PRNDIS_ADAPTER Adapter,
+    IN ULONG Count)
+{
+    PRNDIS_PER_CPU_STATS Stats = RndisGetCurrentCpuStats(Adapter);
+    if (Stats)
+    {
+        InterlockedExchangeAdd64((volatile LONG64*)&Stats->TxErrorCount, (LONG64)Count);
+    }
+    else
+    {
+        InterlockedExchangeAdd64((volatile LONG64*)&Adapter->TxErrorCount, (LONG64)Count);
+    }
+}
+
+static __inline
+VOID
+RndisIncrementRxError(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    PRNDIS_PER_CPU_STATS Stats = RndisGetCurrentCpuStats(Adapter);
+    if (Stats)
+    {
+        InterlockedIncrement64((volatile LONG64*)&Stats->RxErrorCount);
+    }
+    else
+    {
+        InterlockedIncrement64((volatile LONG64*)&Adapter->RxErrorCount);
+    }
+}
+
+static __inline
+VOID
+RndisIncrementRxNoBuffer(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    PRNDIS_PER_CPU_STATS Stats = RndisGetCurrentCpuStats(Adapter);
+    if (Stats)
+    {
+        InterlockedIncrement64((volatile LONG64*)&Stats->RxNoBufferCount);
+    }
+    else
+    {
+        InterlockedIncrement64((volatile LONG64*)&Adapter->RxNoBufferCount);
+    }
+}
 
 /*
  * Debug Macros

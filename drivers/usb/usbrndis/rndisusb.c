@@ -1466,6 +1466,8 @@ RndisAsyncUrbRequest(
  *
  * DPC routine to resubmit RX URB. Called at DISPATCH_LEVEL to avoid
  * stack overflow from synchronous completion in the completion routine.
+ *
+ * NAPI-style: Reset budget at start of DPC to allow fresh burst.
  */
 static
 VOID
@@ -1484,6 +1486,8 @@ RndisRxResubmitDpc(
 
     if (!Adapter->Halting)
     {
+        /* Reset RX budget for fresh polling burst */
+        InterlockedExchange(&Adapter->RxHot.RxBudgetRemaining, RX_BUDGET_PACKETS);
         RndisUsbSubmitBulkRead(Adapter);
     }
 }
@@ -1512,7 +1516,7 @@ RndisRxBackoffDpc(
     DPRINT("USBRNDIS: RX backoff timer expired, resuming RX\n");
 
     /* Reset error counter */
-    InterlockedExchange((PLONG)&Adapter->RxConsecutiveErrors, 0);
+    InterlockedExchange((PLONG)&Adapter->RxHot.RxConsecutiveErrors, 0);
 
     /* Resume RX */
     if (!Adapter->Halting)
@@ -1547,7 +1551,7 @@ RndisRxDelayDpc(
     InterlockedExchange(&Adapter->RxDelayScheduled, 0);
 
     /* Resubmit RX after delay, but only if not already submitted */
-    if (!Adapter->Halting && !Adapter->RxSubmitted)
+    if (!Adapter->Halting && !Adapter->RxHot.RxSubmitted)
     {
         RndisUsbSubmitBulkRead(Adapter);
     }
@@ -1614,14 +1618,14 @@ RndisTxResubmitDpc(
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    InterlockedExchange(&Adapter->TxResubmitScheduled, 0);
+    InterlockedExchange(&Adapter->TxHot.TxResubmitScheduled, 0);
 
     if (Adapter->Halting)
     {
         return;
     }
 
-    if (Adapter->TxNcmPartialNbl != NULL && Adapter->IsCdcNcm)
+    if (Adapter->TxHot.TxNcmPartialNbl != NULL && Adapter->IsCdcNcm)
     {
         RndisNcmContinueTx(Adapter);
         return;
@@ -1635,7 +1639,7 @@ RndisInitializeTxDpc(
     IN PRNDIS_ADAPTER Adapter)
 {
     KeInitializeDpc(&Adapter->TxResubmitDpc, RndisTxResubmitDpc, Adapter);
-    Adapter->TxResubmitScheduled = 0;
+    Adapter->TxHot.TxResubmitScheduled = 0;
 }
 
 static
@@ -1812,12 +1816,12 @@ RndisRxComplete(
     UNREFERENCED_PARAMETER(DeviceObject);
 
     Status = Irp->IoStatus.Status;
-    TransferLength = Adapter->RxUrb.UrbBulkOrInterruptTransfer.TransferBufferLength;
+    TransferLength = Adapter->RxHot.RxUrb.UrbBulkOrInterruptTransfer.TransferBufferLength;
 
     /* Clear RX IRP pointer under lock */
     NdisAcquireSpinLock(&Adapter->RxLock);
-    Adapter->RxIrp = NULL;
-    Adapter->RxSubmitted = FALSE;
+    Adapter->RxHot.RxIrp = NULL;
+    Adapter->RxHot.RxSubmitted = FALSE;
     NdisReleaseSpinLock(&Adapter->RxLock);
 
     /* Free or defer IRP based on halt state */
@@ -1826,21 +1830,42 @@ RndisRxComplete(
     /* Process received data if successful and not halting */
     if (NT_SUCCESS(Status) && TransferLength > 0 && !Adapter->Halting)
     {
+        LONG BudgetRemaining;
+
         DPRINT1("USBRNDIS: RX complete, %u bytes received\n", TransferLength);
-        Adapter->RxConsecutiveErrors = 0;  /* Reset error counter on success */
-        RndisProcessReceivedPacket(Adapter, Adapter->RxBuffer, TransferLength);
-        /* Data received - use immediate resubmission for low latency */
+        Adapter->RxHot.RxConsecutiveErrors = 0;  /* Reset error counter on success */
+
+        /*
+         * NAPI-style budget tracking: Decrement budget for each received packet.
+         * For NCM, one USB transfer may contain multiple datagrams, but we count
+         * each USB completion as one budget unit since RndisProcessReceivedPacket
+         * handles the demux internally.
+         */
+        BudgetRemaining = InterlockedDecrement(&Adapter->RxHot.RxBudgetRemaining);
+
+        RndisProcessReceivedPacket(Adapter, Adapter->RxHot.RxBuffer, TransferLength);
+
+        /*
+         * If budget exhausted, use delayed resubmit to yield to other work.
+         * Reset budget when deferring to allow fresh burst on next DPC.
+         */
+        if (BudgetRemaining <= 0)
+        {
+            InterlockedExchange(&Adapter->RxHot.RxBudgetRemaining, RX_BUDGET_PACKETS);
+            UseDelayedResubmit = TRUE;
+        }
+        /* Data received and budget ok - use immediate resubmission for low latency */
     }
     else if (NT_SUCCESS(Status) && TransferLength == 0)
     {
         /* Zero-length transfer - not an error, just no data */
-        Adapter->RxConsecutiveErrors = 0;
+        Adapter->RxHot.RxConsecutiveErrors = 0;
         /* Use delayed resubmission to avoid tight loop */
         UseDelayedResubmit = TRUE;
     }
     else if (!NT_SUCCESS(Status) && Status != STATUS_CANCELLED)
     {
-        USBD_STATUS UsbdStatus = Adapter->RxUrb.UrbBulkOrInterruptTransfer.Hdr.Status;
+        USBD_STATUS UsbdStatus = Adapter->RxHot.RxUrb.UrbBulkOrInterruptTransfer.Hdr.Status;
 
         /*
          * STATUS_DEVICE_BUSY (0x80000011) with USBD_STATUS=0 indicates the
@@ -1856,7 +1881,7 @@ RndisRxComplete(
         {
             /* Not a real error - just no data available */
             DPRINT("USBRNDIS: RX NAK (no data available)\n");
-            Adapter->RxConsecutiveErrors = 0;  /* Reset counter for NAKs */
+            Adapter->RxHot.RxConsecutiveErrors = 0;  /* Reset counter for NAKs */
             /*
              * Use delayed resubmission to prevent infinite tight loop.
              * Without this delay, the driver would spin at 100% CPU.
@@ -1874,7 +1899,7 @@ RndisRxComplete(
              * If we get too many errors in a row, stop resubmitting to avoid
              * loop-hammering a broken device.
              */
-            ConsecutiveErrors = InterlockedIncrement((PLONG)&Adapter->RxConsecutiveErrors);
+            ConsecutiveErrors = InterlockedIncrement((PLONG)&Adapter->RxHot.RxConsecutiveErrors);
             if (ConsecutiveErrors > 10)
             {
                 DPRINT1("USBRNDIS: Too many consecutive RX errors (%u), entering backoff\n",
@@ -1932,7 +1957,13 @@ RndisRxComplete(
         }
         else
         {
-            /* Immediate resubmission via DPC for data reception */
+            /*
+             * Immediate resubmission via DPC for data reception.
+             * Set DPC affinity to current CPU to keep RX processing
+             * on the same CPU as the completion for better cache locality.
+             */
+            CCHAR CpuNumber = (CCHAR)KeGetCurrentProcessorNumber();
+            KeSetTargetProcessorDpc(&Adapter->RxResubmitDpc, CpuNumber);
             KeInsertQueueDpc(&Adapter->RxResubmitDpc, NULL, NULL);
         }
     }
@@ -1967,26 +1998,26 @@ RndisUsbSubmitBulkRead(
 
     /* Check if already submitted */
     NdisAcquireSpinLock(&Adapter->RxLock);
-    if (Adapter->RxSubmitted)
+    if (Adapter->RxHot.RxSubmitted)
     {
         NdisReleaseSpinLock(&Adapter->RxLock);
         return STATUS_SUCCESS; /* Already pending */
     }
-    Adapter->RxSubmitted = TRUE;
+    Adapter->RxHot.RxSubmitted = TRUE;
     NdisReleaseSpinLock(&Adapter->RxLock);
 
     DPRINT1("USBRNDIS: Submitting async bulk read (PipeHandle=%p)\n",
             Adapter->BulkInEndpoint.PipeHandle);
 
     /* Build the URB */
-    Urb = &Adapter->RxUrb;
+    Urb = &Adapter->RxHot.RxUrb;
     NdisZeroMemory(Urb, sizeof(URB));
 
     UsbBuildInterruptOrBulkTransferRequest(
         Urb,
         sizeof(struct _URB_BULK_OR_INTERRUPT_TRANSFER),
         Adapter->BulkInEndpoint.PipeHandle,
-        Adapter->RxBuffer,
+        Adapter->RxHot.RxBuffer,
         NULL,
         RNDIS_MAX_TRANSFER_SIZE,
         USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK,
@@ -2002,9 +2033,9 @@ RndisUsbSubmitBulkRead(
          * and freed the IRP, so we must not store a freed pointer.
          */
         NdisAcquireSpinLock(&Adapter->RxLock);
-        if (Adapter->RxSubmitted)
+        if (Adapter->RxHot.RxSubmitted)
         {
-            Adapter->RxIrp = Irp;
+            Adapter->RxHot.RxIrp = Irp;
         }
         /* else completion already ran, IRP is freed, don't store */
         NdisReleaseSpinLock(&Adapter->RxLock);
@@ -2013,7 +2044,7 @@ RndisUsbSubmitBulkRead(
     {
         /* Failed to submit - completion won't run, clean up ourselves */
         NdisAcquireSpinLock(&Adapter->RxLock);
-        Adapter->RxSubmitted = FALSE;
+        Adapter->RxHot.RxSubmitted = FALSE;
         NdisReleaseSpinLock(&Adapter->RxLock);
     }
     /* else STATUS_SUCCESS: completion already ran (sync completion) */
@@ -2119,14 +2150,14 @@ RndisTxComplete(
     Status = Irp->IoStatus.Status;
     /* Retrieve the pending NBL chain and clear TX state under lock */
     NdisAcquireSpinLock(&Adapter->TxLock);
-    Nbl = Adapter->PendingTxNbl;
-    NblCount = Adapter->PendingTxNblCount;
-    PartialNbl = Adapter->TxNcmPartialNbl;
-    Adapter->PendingTxNbl = NULL;
-    Adapter->PendingTxNblCount = 0;
-    Adapter->TxIrp = NULL;
+    Nbl = Adapter->TxHot.PendingTxNbl;
+    NblCount = Adapter->TxHot.PendingTxNblCount;
+    PartialNbl = Adapter->TxHot.TxNcmPartialNbl;
+    Adapter->TxHot.PendingTxNbl = NULL;
+    Adapter->TxHot.PendingTxNblCount = 0;
+    Adapter->TxHot.TxIrp = NULL;
     HasPartial = (PartialNbl != NULL);
-    Adapter->TxBusy = HasPartial ? TRUE : FALSE;
+    Adapter->TxHot.TxBusy = HasPartial ? TRUE : FALSE;
     NdisReleaseSpinLock(&Adapter->TxLock);
 
     /* Free or defer IRP based on halt state */
@@ -2140,8 +2171,11 @@ RndisTxComplete(
     {
         if (NT_SUCCESS(Status) && !Adapter->Halting)
         {
-            if (InterlockedExchange(&Adapter->TxResubmitScheduled, 1) == 0)
+            if (InterlockedExchange(&Adapter->TxHot.TxResubmitScheduled, 1) == 0)
             {
+                /* Set DPC affinity to current CPU for cache locality */
+                CCHAR CpuNumber = (CCHAR)KeGetCurrentProcessorNumber();
+                KeSetTargetProcessorDpc(&Adapter->TxResubmitDpc, CpuNumber);
                 KeInsertQueueDpc(&Adapter->TxResubmitDpc, NULL, NULL);
             }
         }
@@ -2149,9 +2183,9 @@ RndisTxComplete(
         {
             /* Fail the partial NBL on error */
             NdisAcquireSpinLock(&Adapter->TxLock);
-            Adapter->TxNcmPartialNbl = NULL;
-            Adapter->TxNcmPartialNb = NULL;
-            Adapter->TxBusy = FALSE;
+            Adapter->TxHot.TxNcmPartialNbl = NULL;
+            Adapter->TxHot.TxNcmPartialNb = NULL;
+            Adapter->TxHot.TxBusy = FALSE;
             NdisReleaseSpinLock(&Adapter->TxLock);
 
             NET_BUFFER_LIST_STATUS(PartialNbl) = NDIS_STATUS_FAILURE;
@@ -2219,21 +2253,21 @@ RndisTxComplete(
             SendCompleteFlags);
     }
 
-    /* Kick queued sends if any remain */
+    /* Kick queued sends if any remain using lock-free queue */
     if (!Adapter->Halting)
     {
-        BOOLEAN KickTx = FALSE;
+        BOOLEAN ShouldKick = FALSE;
 
         NdisAcquireSpinLock(&Adapter->TxLock);
-        if (Adapter->TxQueueHead != NULL && Adapter->TxNcmPartialNbl == NULL)
+        if (!RndisTxQueueIsEmpty(Adapter) && Adapter->TxHot.TxNcmPartialNbl == NULL)
         {
-            KickTx = (InterlockedExchange(&Adapter->TxResubmitScheduled, 1) == 0);
+            ShouldKick = TRUE;
         }
         NdisReleaseSpinLock(&Adapter->TxLock);
 
-        if (KickTx)
+        if (ShouldKick)
         {
-            KeInsertQueueDpc(&Adapter->TxResubmitDpc, NULL, NULL);
+            RndisTxKick(Adapter);
         }
     }
 
@@ -2272,7 +2306,7 @@ RndisUsbSubmitBulkWrite(
     DPRINT("USBRNDIS: Submitting async bulk write (%u bytes)\n", Length);
 
     /* Build the URB */
-    Urb = &Adapter->TxUrb;
+    Urb = &Adapter->TxHot.TxUrb;
     NdisZeroMemory(Urb, sizeof(URB));
 
     UsbBuildInterruptOrBulkTransferRequest(
@@ -2295,9 +2329,9 @@ RndisUsbSubmitBulkWrite(
          * and freed the IRP, so we must not store a freed pointer.
          */
         NdisAcquireSpinLock(&Adapter->TxLock);
-        if (Adapter->TxBusy)
+        if (Adapter->TxHot.TxBusy)
         {
-            Adapter->TxIrp = Irp;
+            Adapter->TxHot.TxIrp = Irp;
         }
         /* else completion already ran, IRP is freed, don't store */
         NdisReleaseSpinLock(&Adapter->TxLock);
