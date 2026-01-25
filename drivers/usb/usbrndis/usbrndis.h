@@ -210,7 +210,7 @@ C_ASSERT(sizeof(USB_CDC_NOTIFICATION) == 8);
  * Follows USB_CDC_NOTIFICATION for CONNECTION_SPEED_CHANGE (0x2A).
  */
 typedef struct _USB_CDC_SPEED_CHANGE {
-    ULONG DLBitRRate;           /* Download bit rate in bps */
+    ULONG DLBitRate;            /* Download bit rate in bps */
     ULONG ULBitRate;            /* Upload bit rate in bps */
 } USB_CDC_SPEED_CHANGE, *PUSB_CDC_SPEED_CHANGE;
 
@@ -739,14 +739,17 @@ typedef struct _RNDIS_ADAPTER {
     NDIS_SPIN_LOCK TxLock;
     BOOLEAN TxBusy;
     PIRP TxIrp;                     /* Pending TX IRP for cancellation */
+    PIRP TxIrpToFree;               /* IRP deferred for freeing during halt */
     PNET_BUFFER_LIST PendingTxNbl;  /* NBL awaiting TX completion */
     ULONG PendingTxNblCount;        /* Number of NBLs pending (for NCM batching) */
+    ULONG PendingTxDatagramCount;   /* Number of datagrams (packets) pending (for stats) */
     URB TxUrb;
 
     /* Receive Resources */
     PUCHAR RxBuffer;
     NDIS_SPIN_LOCK RxLock;
     PIRP RxIrp;                     /* Pending RX IRP for cancellation */
+    PIRP RxIrpToFree;               /* IRP deferred for freeing during halt */
     BOOLEAN RxSubmitted;            /* RX URB has been submitted */
     ULONG RxConsecutiveErrors;      /* Consecutive RX failures for backoff */
     URB RxUrb;
@@ -762,9 +765,14 @@ typedef struct _RNDIS_ADAPTER {
     ULONG InterruptBufferLength;
     NDIS_SPIN_LOCK InterruptLock;
     PIRP InterruptIrp;              /* Pending interrupt IRP for cancellation */
+    PIRP InterruptIrpToFree;        /* IRP deferred for freeing during halt */
     BOOLEAN InterruptSubmitted;
     URB InterruptUrb;
     KDPC InterruptResubmitDpc;
+    KTIMER InterruptDelayTimer;     /* Timer for delayed interrupt resubmission */
+    KDPC InterruptDelayDpc;         /* DPC for interrupt delay timer */
+    volatile LONG InterruptDelayScheduled;  /* Coalescing flag for interrupt resubmit */
+    ULONG InterruptConsecutiveErrors;  /* Consecutive interrupt failures for backoff */
 
     /* Work Items */
     NDIS_WORK_ITEM ResetWorkItem;

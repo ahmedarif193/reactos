@@ -776,6 +776,153 @@ E1000_NdisAllocateMdl(
 #define NdisFreeMdl(Mdl) IoFreeMdl(Mdl)
 #endif
 
+/* ============================================================================
+ * NdisGetDataBuffer - Get contiguous data from NET_BUFFER
+ *
+ * This function retrieves a contiguous block of data from a NET_BUFFER.
+ * If the data is contiguous in the MDL chain (fits within a single MDL
+ * starting at CurrentMdlOffset), it returns a direct pointer.
+ * If the data spans multiple MDLs, it copies to the provided Storage buffer.
+ *
+ * Parameters:
+ *   NetBuffer    - The NET_BUFFER to get data from
+ *   BytesNeeded  - Number of bytes to retrieve
+ *   Storage      - Optional buffer to copy data if not contiguous
+ *   AlignMultiple - Alignment requirement (1 = no alignment)
+ *   AlignOffset   - Offset within alignment (typically 0)
+ *
+ * Returns:
+ *   Pointer to contiguous data, or NULL on failure
+ * ============================================================================ */
+#ifndef NdisGetDataBuffer
+static __inline PVOID
+Usbrndis_NdisGetDataBuffer(
+    _In_ PNET_BUFFER NetBuffer,
+    _In_ ULONG BytesNeeded,
+    _Out_writes_bytes_opt_(BytesNeeded) PVOID Storage,
+    _In_ UINT AlignMultiple,
+    _In_ UINT AlignOffset)
+{
+    PMDL CurrentMdl;
+    ULONG CurrentMdlOffset;
+    ULONG MdlByteCount;
+    PUCHAR MdlVa;
+    PUCHAR DataVa;
+    ULONG DataLength;
+    PUCHAR StoragePtr;
+    ULONG BytesCopied;
+
+    /* Validate parameters */
+    if (NetBuffer == NULL || BytesNeeded == 0)
+    {
+        return NULL;
+    }
+
+    DataLength = NET_BUFFER_DATA_LENGTH(NetBuffer);
+    if (BytesNeeded > DataLength)
+    {
+        return NULL;
+    }
+
+    CurrentMdl = NET_BUFFER_CURRENT_MDL(NetBuffer);
+    CurrentMdlOffset = NET_BUFFER_CURRENT_MDL_OFFSET(NetBuffer);
+
+    if (CurrentMdl == NULL)
+    {
+        return NULL;
+    }
+
+    /* Get the byte count available in the current MDL */
+    MdlByteCount = MmGetMdlByteCount(CurrentMdl);
+    if (CurrentMdlOffset >= MdlByteCount)
+    {
+        return NULL;
+    }
+
+    /* Check if data is contiguous in the current MDL */
+    if (BytesNeeded <= (MdlByteCount - CurrentMdlOffset))
+    {
+        /* Data fits in a single MDL - return direct pointer */
+        MdlVa = (PUCHAR)MmGetSystemAddressForMdlSafe(CurrentMdl, NormalPagePriority);
+        if (MdlVa == NULL)
+        {
+            return NULL;
+        }
+
+        DataVa = MdlVa + CurrentMdlOffset;
+
+        /*
+         * Check alignment if required.
+         * Per Windows DDK: alignment is satisfied when
+         * ((ptr + AlignOffset) % AlignMultiple) == 0
+         */
+        if (AlignMultiple > 1)
+        {
+            if ((((ULONG_PTR)DataVa + AlignOffset) % AlignMultiple) != 0)
+            {
+                /* Alignment not satisfied - must copy to Storage */
+                if (Storage == NULL)
+                {
+                    return NULL;
+                }
+                RtlCopyMemory(Storage, DataVa, BytesNeeded);
+                return Storage;
+            }
+        }
+
+        return DataVa;
+    }
+
+    /* Data spans multiple MDLs - must copy to Storage */
+    if (Storage == NULL)
+    {
+        return NULL;
+    }
+
+    StoragePtr = (PUCHAR)Storage;
+    BytesCopied = 0;
+
+    while (BytesCopied < BytesNeeded && CurrentMdl != NULL)
+    {
+        MdlByteCount = MmGetMdlByteCount(CurrentMdl);
+        MdlVa = (PUCHAR)MmGetSystemAddressForMdlSafe(CurrentMdl, NormalPagePriority);
+        if (MdlVa == NULL)
+        {
+            goto CopyFailure;
+        }
+
+        /* Calculate bytes available in this MDL */
+        ULONG AvailableBytes = MdlByteCount - CurrentMdlOffset;
+        ULONG BytesToCopy = min(AvailableBytes, BytesNeeded - BytesCopied);
+
+        RtlCopyMemory(StoragePtr + BytesCopied, MdlVa + CurrentMdlOffset, BytesToCopy);
+        BytesCopied += BytesToCopy;
+
+        /* Move to next MDL (offset is 0 for subsequent MDLs) */
+        CurrentMdl = CurrentMdl->Next;
+        CurrentMdlOffset = 0;
+    }
+
+    if (BytesCopied < BytesNeeded)
+    {
+        /* Not enough data in MDL chain */
+        goto CopyFailure;
+    }
+
+    return Storage;
+
+CopyFailure:
+    /*
+     * Ensure caller-provided storage does not contain partial data when
+     * we fail to map or copy across the MDL chain.
+     */
+    RtlZeroMemory(Storage, BytesNeeded);
+    return NULL;
+}
+#define NdisGetDataBuffer(NetBuffer, BytesNeeded, Storage, AlignMultiple, AlignOffset) \
+    Usbrndis_NdisGetDataBuffer((NetBuffer), (BytesNeeded), (Storage), (AlignMultiple), (AlignOffset))
+#endif
+
 #ifndef NdisMFreeNetBufferSGList
 /* Stub for scatter-gather list freeing - will need proper implementation */
 #define NdisMFreeNetBufferSGList(MiniportDmaHandle, ScatterGatherListBuffer, NetBuffer) \

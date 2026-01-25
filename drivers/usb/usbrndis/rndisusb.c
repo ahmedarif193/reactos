@@ -31,6 +31,27 @@ static VOID NTAPI RndisRxDelayDpc(PKDPC Dpc, PVOID DeferredContext, PVOID System
 /* Forward declaration for alternate setting selection */
 static NTSTATUS RndisUsbSelectAlternate(IN PRNDIS_ADAPTER Adapter, IN UCHAR InterfaceNumber, IN UCHAR AlternateSetting);
 
+static __inline
+VOID
+RndisMaybeDeferIrpFree(
+    _In_ PRNDIS_ADAPTER Adapter,
+    _Inout_ PIRP Irp,
+    _Inout_ PIRP *IrpToFree)
+{
+    if (Adapter->Halting)
+    {
+        if (InterlockedCompareExchangePointer((PVOID *)IrpToFree, Irp, NULL) != NULL)
+        {
+            /* Should not happen; avoid leaking IRP */
+            IoFreeIrp(Irp);
+        }
+    }
+    else
+    {
+        IoFreeIrp(Irp);
+    }
+}
+
 /*
  * RndisUsbGetDescriptor
  *
@@ -1634,7 +1655,7 @@ RndisInterruptComplete(
     Adapter->InterruptSubmitted = FALSE;
     NdisReleaseSpinLock(&Adapter->InterruptLock);
 
-    IoFreeIrp(Irp);
+    RndisMaybeDeferIrpFree(Adapter, Irp, &Adapter->InterruptIrpToFree);
 
     if (NT_SUCCESS(Status) && TransferLength >= sizeof(USB_CDC_NOTIFICATION))
     {
@@ -1683,10 +1704,10 @@ RndisInterruptComplete(
                      * Use download (DL) bit rate as link speed.
                      * NDIS 6.x uses bps units for link speed.
                      */
-                    NewLinkSpeed = SpeedChange->DLBitRRate;
+                    NewLinkSpeed = SpeedChange->DLBitRate;
 
                     DPRINT1("USBRNDIS: CDC SPEED_CHANGE notification: DL=%lu bps, UL=%lu bps\n",
-                            SpeedChange->DLBitRRate, SpeedChange->ULBitRate);
+                            SpeedChange->DLBitRate, SpeedChange->ULBitRate);
 
                     if (Adapter->LinkSpeed != NewLinkSpeed)
                     {
@@ -1759,8 +1780,8 @@ RndisRxComplete(
     Adapter->RxSubmitted = FALSE;
     NdisReleaseSpinLock(&Adapter->RxLock);
 
-    /* Free the IRP */
-    IoFreeIrp(Irp);
+    /* Free or defer IRP based on halt state */
+    RndisMaybeDeferIrpFree(Adapter, Irp, &Adapter->RxIrpToFree);
 
     /* Process received data if successful and not halting */
     if (NT_SUCCESS(Status) && TransferLength > 0 && !Adapter->Halting)
@@ -2066,8 +2087,8 @@ RndisTxComplete(
     Adapter->TxBusy = FALSE;
     NdisReleaseSpinLock(&Adapter->TxLock);
 
-    /* Free the IRP */
-    IoFreeIrp(Irp);
+    /* Free or defer IRP based on halt state */
+    RndisMaybeDeferIrpFree(Adapter, Irp, &Adapter->TxIrpToFree);
 
     /* Update statistics and determine NDIS status */
     if (NT_SUCCESS(Status))

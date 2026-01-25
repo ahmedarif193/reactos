@@ -612,6 +612,25 @@ RndisMiniportInitializeEx(
                 Adapter->PermanentMacAddress[2], Adapter->PermanentMacAddress[3],
                 Adapter->PermanentMacAddress[4], Adapter->PermanentMacAddress[5]);
 
+        /*
+         * Set default packet filter for CDC-ECM/NCM.
+         * This is critical for receiving broadcast packets (DHCP)!
+         * Some devices (e.g., VirtualBox CDC-NCM) may not support this command
+         * and return STALL, but we must try anyway. If it fails, we continue
+         * and hope the device receives all packets by default.
+         */
+        NtStatus = RndisSetPacketFilter(Adapter, RNDIS_DEFAULT_FILTER);
+        if (!NT_SUCCESS(NtStatus))
+        {
+            DPRINT1("USBRNDIS: %s: Failed to set default packet filter (0x%08X), continuing\n",
+                    Adapter->IsCdcNcm ? "CDC-NCM" : "CDC-ECM", NtStatus);
+            /*
+             * Even if this fails, set PacketFilter so NDIS sees consistent state.
+             * The device may receive all packets anyway (common for virtual NICs).
+             */
+            Adapter->PacketFilter = RNDIS_DEFAULT_FILTER;
+        }
+
         Adapter->State = RndisStateDataInitialized;
     }
     else
@@ -728,6 +747,7 @@ RndisMiniportHaltEx(
     PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)MiniportAdapterContext;
     PIRP RxIrp;
     PIRP TxIrp;
+    PIRP InterruptIrp;
 
     UNREFERENCED_PARAMETER(HaltAction);
 
@@ -738,18 +758,53 @@ RndisMiniportHaltEx(
         return;
     }
 
-    /* Signal that we are halting */
-    Adapter->Halting = TRUE;
+    /*
+     * Halt synchronization overview:
+     * 1. Set Halting=TRUE and *Submitted=TRUE atomically under each lock
+     *    This prevents DPCs from submitting new IRPs
+     * 2. Read and clear IRP pointers under lock
+     * 3. Cancel timers and clear coalescing flags
+     * 4. Cancel IRPs (safe: IRP still valid, not freed until completion)
+     * 5. Wait for all pending I/O to complete (completion frees IRPs)
+     */
 
-    /* Cancel RX timers */
+    /* Set Halting and RxSubmitted atomically to prevent new RX submissions */
+    NdisAcquireSpinLock(&Adapter->RxLock);
+    Adapter->Halting = TRUE;
+    Adapter->RxSubmitted = TRUE;  /* Prevent new submissions */
+    RxIrp = Adapter->RxIrp;
+    Adapter->RxIrp = NULL;
+    NdisReleaseSpinLock(&Adapter->RxLock);
+
+    /* Set TxBusy to prevent new TX submissions */
+    NdisAcquireSpinLock(&Adapter->TxLock);
+    Adapter->TxBusy = TRUE;  /* Prevent new submissions */
+    TxIrp = Adapter->TxIrp;
+    Adapter->TxIrp = NULL;
+    NdisReleaseSpinLock(&Adapter->TxLock);
+
+    /* Set InterruptSubmitted to prevent new interrupt submissions */
+    NdisAcquireSpinLock(&Adapter->InterruptLock);
+    Adapter->InterruptSubmitted = TRUE;  /* Prevent new submissions */
+    InterruptIrp = Adapter->InterruptIrp;
+    Adapter->InterruptIrp = NULL;
+    NdisReleaseSpinLock(&Adapter->InterruptLock);
+
+    /*
+     * Cancel timers and clear coalescing flags.
+     * Must clear flags to prevent them from staying stuck after halt.
+     */
     KeCancelTimer(&Adapter->RxBackoffTimer);
     KeCancelTimer(&Adapter->RxDelayTimer);
+    KeCancelTimer(&Adapter->InterruptDelayTimer);
+    InterlockedExchange(&Adapter->InterruptDelayScheduled, 0);
 
-    /* Remove any queued DPCs */
+    /* Remove any queued DPCs - they will see Halting=TRUE if they run */
     KeRemoveQueueDpc(&Adapter->RxResubmitDpc);
     KeRemoveQueueDpc(&Adapter->RxBackoffDpc);
     KeRemoveQueueDpc(&Adapter->RxDelayDpc);
     KeRemoveQueueDpc(&Adapter->InterruptResubmitDpc);
+    KeRemoveQueueDpc(&Adapter->InterruptDelayDpc);
 
     /* Acquire ControlMutex before sending halt */
     KeWaitForSingleObject(&Adapter->ControlMutex, Executive, KernelMode, FALSE, NULL);
@@ -764,23 +819,19 @@ RndisMiniportHaltEx(
 
     Adapter->State = RndisStateHalted;
 
-    /* Cancel pending RX IRP */
-    NdisAcquireSpinLock(&Adapter->RxLock);
-    RxIrp = Adapter->RxIrp;
-    Adapter->RxIrp = NULL;
-    NdisReleaseSpinLock(&Adapter->RxLock);
-
+    /*
+     * Cancel IRPs that were read under lock above.
+     * This is safe because:
+     * - We read the IRP pointer under lock before any completion could run
+     * - IRP is still valid (completion hasn't run yet for pending IRPs)
+     * - IoCancelIrp triggers the completion routine which frees the IRP
+     * - We wait for PendingIoCount to reach 0 below
+     */
     if (RxIrp)
     {
         DPRINT1("USBRNDIS: Cancelling pending RX IRP\n");
         IoCancelIrp(RxIrp);
     }
-
-    /* Cancel pending TX IRP */
-    NdisAcquireSpinLock(&Adapter->TxLock);
-    TxIrp = Adapter->TxIrp;
-    Adapter->TxIrp = NULL;
-    NdisReleaseSpinLock(&Adapter->TxLock);
 
     if (TxIrp)
     {
@@ -788,17 +839,10 @@ RndisMiniportHaltEx(
         IoCancelIrp(TxIrp);
     }
 
-    /* Cancel pending interrupt IRP */
-    NdisAcquireSpinLock(&Adapter->InterruptLock);
-    TxIrp = Adapter->InterruptIrp;
-    Adapter->InterruptIrp = NULL;
-    Adapter->InterruptSubmitted = FALSE;
-    NdisReleaseSpinLock(&Adapter->InterruptLock);
-
-    if (TxIrp)
+    if (InterruptIrp)
     {
         DPRINT1("USBRNDIS: Cancelling pending interrupt IRP\n");
-        IoCancelIrp(TxIrp);
+        IoCancelIrp(InterruptIrp);
     }
 
     /* Wait for all pending I/O to complete */
@@ -807,6 +851,28 @@ RndisMiniportHaltEx(
         DPRINT1("USBRNDIS: Waiting for %ld pending I/O operations\n", Adapter->PendingIoCount);
         KeWaitForSingleObject(&Adapter->RemoveEvent, Executive, KernelMode, FALSE, NULL);
         DPRINT1("USBRNDIS: All pending I/O completed\n");
+    }
+
+    /*
+     * Now safe to free any deferred IRPs.
+     * Completion routines deferred freeing because Halting was TRUE and halt
+     * may have held the IRP pointer for IoCancelIrp. Now that all completions
+     * have run, these IRPs are ours to free.
+     */
+    if (Adapter->RxIrpToFree)
+    {
+        IoFreeIrp(Adapter->RxIrpToFree);
+        Adapter->RxIrpToFree = NULL;
+    }
+    if (Adapter->TxIrpToFree)
+    {
+        IoFreeIrp(Adapter->TxIrpToFree);
+        Adapter->TxIrpToFree = NULL;
+    }
+    if (Adapter->InterruptIrpToFree)
+    {
+        IoFreeIrp(Adapter->InterruptIrpToFree);
+        Adapter->InterruptIrpToFree = NULL;
     }
 
     /* Release USB bus interface */

@@ -691,13 +691,20 @@ RndisSetInformation(
 
                 /*
                  * For CDC-NCM devices, SET_ETHERNET_PACKET_FILTER may not be supported
-                 * (e.g., VirtualBox CDC-NCM). This is non-fatal because CDC-NCM devices
-                 * typically receive all packets anyway. Log a warning but return success
-                 * to allow TCP/IP binding to proceed.
+                 * (e.g., VirtualBox CDC-NCM returns STALL). This is non-fatal because
+                 * CDC-NCM devices typically receive all packets anyway.
+                 *
+                 * Only treat "not supported" errors as non-fatal. Hard I/O failures
+                 * like device removed should propagate the error.
                  */
-                if (Adapter->IsCdcNcm)
+                if (Adapter->IsCdcNcm &&
+                    NtStatus != STATUS_NO_SUCH_DEVICE &&
+                    NtStatus != STATUS_DEVICE_NOT_CONNECTED &&
+                    NtStatus != STATUS_DEVICE_REMOVED &&
+                    NtStatus != STATUS_DELETE_PENDING &&
+                    NtStatus != STATUS_INSUFFICIENT_RESOURCES)
                 {
-                    DPRINT1("USBRNDIS: CDC-NCM: Packet filter failure is non-fatal, proceeding anyway\n");
+                    DPRINT1("USBRNDIS: CDC-NCM: Packet filter not supported, proceeding anyway\n");
                     Adapter->PacketFilter = PacketFilter;
                     *BytesRead = sizeof(ULONG);
                     Status = NDIS_STATUS_SUCCESS;

@@ -733,6 +733,9 @@ RndisProcessReceivedPacket(
          * Process per-packet info if present.
          * Per-packet info contains metadata like checksum validation results.
          * PerPacketInfoOffset is relative to the start of DataOffset field (byte 8).
+         *
+         * IMPORTANT: Validate bounds against actual received Length, not just
+         * MessageLength from the device. MessageLength is untrusted device input.
          */
         if (PacketMsg->PerPacketInfoLength > 0 && PacketMsg->PerPacketInfoOffset > 0)
         {
@@ -743,8 +746,8 @@ RndisProcessReceivedPacket(
             DPRINT("USBRNDIS: RNDIS packet has per-packet info: offset=%u length=%u\n",
                    PacketMsg->PerPacketInfoOffset, PacketMsg->PerPacketInfoLength);
 
-            /* Validate per-packet info bounds */
-            if (PpiEndOffset <= PacketMsg->MessageLength)
+            /* Validate per-packet info bounds against BOTH MessageLength AND actual buffer Length */
+            if (PpiEndOffset <= PacketMsg->MessageLength && PpiEndOffset <= Length)
             {
                 /*
                  * Iterate through per-packet info elements.
@@ -924,6 +927,7 @@ RndisSendNetBufferLists(
         Adapter->TxBusy = TRUE;
         Adapter->PendingTxNbl = CurrentNbl;
         Adapter->PendingTxNblCount = 1;  /* Single NBL, may be updated for NCM batching */
+        Adapter->PendingTxDatagramCount = 1;  /* Single packet, may be updated for NCM batching */
         NdisReleaseSpinLock(&Adapter->TxLock);
 
         /* Get the first NET_BUFFER from this NBL */
@@ -996,24 +1000,28 @@ RndisSendNetBufferLists(
              * Try to collect multiple pending NBLs and batch them into a single NTB.
              * This improves throughput by reducing USB transfer overhead.
              *
-             * We collect datagrams from the current NBL and any additional NBLs
-             * in the chain until we hit limits (max datagrams, max NTB size, or no more NBLs).
+             * We collect datagrams from ALL NET_BUFFERs in the current NBL and any
+             * additional NBLs in the chain until we hit limits.
+             *
+             * IMPORTANT: Each NBL may contain multiple NET_BUFFERs (each representing
+             * one packet). We must process all NET_BUFFERs, but track unique NBLs
+             * separately for completion.
              */
             NCM_TX_DATAGRAM TxDatagrams[NCM_MAX_TX_DATAGRAMS];
-            PNET_BUFFER_LIST BatchNbls[NCM_MAX_TX_DATAGRAMS];
+            PNET_BUFFER_LIST BatchNbls[NCM_MAX_TX_DATAGRAMS];  /* Unique NBLs only */
             ULONG DatagramCount = 0;
+            ULONG UniqueNblCount = 0;  /* Number of unique NBLs in BatchNbls */
             ULONG TotalDataLength = 0;
             ULONG EstimatedNtbSize;
             ULONG NdpOverhead;
             PNET_BUFFER_LIST BatchNbl;
             PNET_BUFFER BatchNb;
-            PMDL BatchMdl;
             PVOID BatchVa;
             ULONG BatchDataLen;
-            ULONG BatchDataOff;
             PUCHAR TempDataArea;
             ULONG TempDataOffset;
             ULONG i;
+            BOOLEAN StopBatching;
 
             /*
              * Reserve space at beginning of TxBuffer for NTH16 + NDP16 headers.
@@ -1024,77 +1032,236 @@ RndisSendNetBufferLists(
             NdpOverhead = NCM_NTH16_LENGTH + 8 + (NCM_MAX_TX_DATAGRAMS + 1) * 4 + 64;
             TempDataArea = Adapter->TxBuffer + NdpOverhead;
             TempDataOffset = 0;
+            StopBatching = FALSE;
 
             /*
-             * First datagram: already have the current NBL data
+             * First, process ALL NET_BUFFERs from the current NBL.
+             * CurrentNb is already set to the first NET_BUFFER.
+             *
+             * IMPORTANT: If ANY NET_BUFFER in this NBL is invalid (too large,
+             * unmappable), we must fail the entire NBL. NDIS expects per-NBL
+             * completion semantics - partial sends within an NBL are not valid.
              */
-            if (TempDataOffset + DataLength <= RNDIS_MAX_TRANSFER_SIZE - NdpOverhead)
+            BatchNbls[UniqueNblCount++] = CurrentNbl;  /* Add current NBL to unique list */
+            BatchNb = CurrentNb;
+            while (BatchNb != NULL && DatagramCount < NCM_MAX_TX_DATAGRAMS)
             {
+                BatchDataLen = NET_BUFFER_DATA_LENGTH(BatchNb);
+
+                /*
+                 * Validate length - fail entire NBL if invalid.
+                 * Zero-length frames are invalid; on the wire the minimum is
+                 * 64 bytes including FCS/preamble, but the stack may send
+                 * smaller payloads which the NIC pads.
+                 */
+                if (BatchDataLen > ETHERNET_MAX_FRAME_SIZE)
+                {
+                    DPRINT1("USBRNDIS: NCM TX: NET_BUFFER too large (%lu bytes > %u max), failing NBL\n",
+                            BatchDataLen, ETHERNET_MAX_FRAME_SIZE);
+                    UniqueNblCount--;
+                    DatagramCount = 0;
+                    TempDataOffset = 0;
+                    TotalDataLength = 0;
+                    goto FailCurrentNbl;
+                }
+                if (BatchDataLen == 0)
+                {
+                    DPRINT1("USBRNDIS: NCM TX: Zero-length NET_BUFFER (NBL=%p, NB=%p), failing NBL\n",
+                            CurrentNbl, BatchNb);
+                    UniqueNblCount--;
+                    DatagramCount = 0;
+                    TempDataOffset = 0;
+                    TotalDataLength = 0;
+                    goto FailCurrentNbl;
+                }
+
+                /* Check if adding this datagram would exceed NTB size limit */
+                EstimatedNtbSize = NdpOverhead + TempDataOffset + BatchDataLen + 64;
+                if (EstimatedNtbSize > Adapter->NcmNtbOutMaxSize ||
+                    EstimatedNtbSize > RNDIS_MAX_TRANSFER_SIZE)
+                {
+                    /* Would exceed limits, stop batching entirely */
+                    StopBatching = TRUE;
+                    break;
+                }
+
+                /*
+                 * Get contiguous data pointer using NdisGetDataBuffer.
+                 * This handles NET_BUFFERs that span multiple MDLs properly.
+                 * If data is not contiguous, it copies to our temp buffer directly.
+                 */
+                BatchVa = NdisGetDataBuffer(BatchNb, BatchDataLen,
+                                            TempDataArea + TempDataOffset,
+                                            1, 0);  /* Alignment=1, offset=0 */
+                if (BatchVa == NULL)
+                {
+                    DPRINT1("USBRNDIS: NCM TX: Failed to get data buffer, failing NBL\n");
+                    UniqueNblCount--;
+                    DatagramCount = 0;
+                    TempDataOffset = 0;
+                    TotalDataLength = 0;
+                    goto FailCurrentNbl;
+                }
+
+                /* Add this datagram to the batch */
                 TxDatagrams[DatagramCount].Data = TempDataArea + TempDataOffset;
-                TxDatagrams[DatagramCount].Length = DataLength;
-                NdisMoveMemory(TempDataArea + TempDataOffset, VirtualAddress, DataLength);
-                TempDataOffset += DataLength;
-                BatchNbls[DatagramCount] = CurrentNbl;
+                TxDatagrams[DatagramCount].Length = BatchDataLen;
+
+                /*
+                 * If NdisGetDataBuffer returned a pointer to existing data (contiguous case),
+                 * we need to copy it. If it returned our temp buffer pointer, data is already there.
+                 */
+                if (BatchVa != TempDataArea + TempDataOffset)
+                {
+                    NdisMoveMemory(TempDataArea + TempDataOffset, BatchVa, BatchDataLen);
+                }
+
+                TempDataOffset += BatchDataLen;
                 DatagramCount++;
-                TotalDataLength += DataLength;
+                TotalDataLength += BatchDataLen;
+
+                /* Move to next NET_BUFFER in this NBL */
+                BatchNb = NET_BUFFER_NEXT_NB(BatchNb);
+            }
+
+            /*
+             * Do not allow partial inclusion of the current NBL.
+             * If we couldn't consume all NET_BUFFERs (size/datagram limit),
+             * fail the NBL rather than sending a partial batch.
+             */
+            if (BatchNb != NULL)
+            {
+                DPRINT1("USBRNDIS: NCM TX: Current NBL too large for one NTB, failing NBL\n");
+                UniqueNblCount--;
+                DatagramCount = 0;
+                TempDataOffset = 0;
+                TotalDataLength = 0;
+                goto FailCurrentNbl;
             }
 
             /*
              * Try to batch additional NBLs from the chain.
              * We look ahead at NextNbl and subsequent NBLs.
+             * Process ALL NET_BUFFERs from each additional NBL.
              */
             BatchNbl = NextNbl;
-            while (BatchNbl != NULL && DatagramCount < NCM_MAX_TX_DATAGRAMS)
+            while (BatchNbl != NULL &&
+                   DatagramCount < NCM_MAX_TX_DATAGRAMS &&
+                   UniqueNblCount < NCM_MAX_TX_DATAGRAMS &&  /* Explicit bounds check */
+                   !StopBatching)
             {
-                /* Get the first NET_BUFFER from this NBL */
+                BOOLEAN NblHasValidData = TRUE;
+                ULONG NblStartDatagram = DatagramCount;
+                ULONG NblStartOffset = TempDataOffset;
+                ULONG NblDataLength = 0;
+
+                /* Process ALL NET_BUFFERs from this NBL */
                 BatchNb = NET_BUFFER_LIST_FIRST_NB(BatchNbl);
-                if (BatchNb == NULL)
+                while (BatchNb != NULL && DatagramCount < NCM_MAX_TX_DATAGRAMS)
                 {
-                    break;
+                    BatchDataLen = NET_BUFFER_DATA_LENGTH(BatchNb);
+
+                    /* Validate length - if invalid, fail this entire NBL (don't batch it) */
+                    if (BatchDataLen > ETHERNET_MAX_FRAME_SIZE || BatchDataLen == 0)
+                    {
+                        DPRINT1("USBRNDIS: NCM TX: Invalid NET_BUFFER length %lu, skipping NBL\n", BatchDataLen);
+                        NblHasValidData = FALSE;
+                        break;
+                    }
+
+                    /* Check if adding this datagram would exceed NTB size limit */
+                    EstimatedNtbSize = NdpOverhead + TempDataOffset + BatchDataLen + 64;
+                    if (EstimatedNtbSize > Adapter->NcmNtbOutMaxSize ||
+                        EstimatedNtbSize > RNDIS_MAX_TRANSFER_SIZE)
+                    {
+                        /* Would exceed limits, stop batching entirely */
+                        StopBatching = TRUE;
+                        break;
+                    }
+
+                    /*
+                     * Get contiguous data pointer using NdisGetDataBuffer.
+                     * This handles NET_BUFFERs that span multiple MDLs properly.
+                     */
+                    BatchVa = NdisGetDataBuffer(BatchNb, BatchDataLen,
+                                                TempDataArea + TempDataOffset,
+                                                1, 0);
+                    if (BatchVa == NULL)
+                    {
+                        DPRINT1("USBRNDIS: NCM TX: Failed to get data buffer, skipping NBL\n");
+                        NblHasValidData = FALSE;
+                        break;
+                    }
+
+                    /* Add this datagram to the batch */
+                    TxDatagrams[DatagramCount].Data = TempDataArea + TempDataOffset;
+                    TxDatagrams[DatagramCount].Length = BatchDataLen;
+
+                    /* Copy if NdisGetDataBuffer returned existing pointer */
+                    if (BatchVa != TempDataArea + TempDataOffset)
+                    {
+                        NdisMoveMemory(TempDataArea + TempDataOffset, BatchVa, BatchDataLen);
+                    }
+
+                    TempDataOffset += BatchDataLen;
+                    DatagramCount++;
+                    NblDataLength += BatchDataLen;
+
+                    /* Move to next NET_BUFFER in this NBL */
+                    BatchNb = NET_BUFFER_NEXT_NB(BatchNb);
                 }
 
-                BatchDataLen = NET_BUFFER_DATA_LENGTH(BatchNb);
-                BatchMdl = NET_BUFFER_CURRENT_MDL(BatchNb);
-                BatchDataOff = NET_BUFFER_CURRENT_MDL_OFFSET(BatchNb);
-
-                /* Validate length */
-                if (BatchDataLen > ETHERNET_MAX_FRAME_SIZE)
+                /*
+                 * Only consume this NBL if ALL its NET_BUFFERs were processed.
+                 * If we stopped early (size/datagram limits) or hit invalid data,
+                 * ROLLBACK and leave this NBL for the next send.
+                 */
+                if (NblHasValidData && BatchNb == NULL && DatagramCount > NblStartDatagram)
                 {
+                    /* Add this NBL to our unique NBL tracking list */
+                    BatchNbls[UniqueNblCount++] = BatchNbl;
+                    TotalDataLength += NblDataLength;
+
+                    /* Remove this NBL from the chain - we're now handling it */
+                    NextNbl = NET_BUFFER_LIST_NEXT_NBL(BatchNbl);
+                    NET_BUFFER_LIST_NEXT_NBL(BatchNbl) = NULL;
+                    BatchNbl = NextNbl;
+                }
+                else
+                {
+                    /*
+                     * Couldn't add this NBL - ROLLBACK any partial data we copied.
+                     * This is critical: if we break without rollback, we'd have
+                     * partial data from this NBL in the batch but the NBL itself
+                     * wouldn't be consumed, causing duplication/corruption.
+                     */
+                    DatagramCount = NblStartDatagram;
+                    TempDataOffset = NblStartOffset;
+                    /* Don't add NblDataLength to TotalDataLength - we're rolling back */
+                    /* Stop batching - leave this NBL for the next send or failure */
                     break;
                 }
+            }
 
-                /* Check if adding this datagram would exceed NTB size limit */
-                EstimatedNtbSize = NdpOverhead + TempDataOffset + BatchDataLen + 64; /* +64 for alignment */
-                if (EstimatedNtbSize > Adapter->NcmNtbOutMaxSize ||
-                    EstimatedNtbSize > RNDIS_MAX_TRANSFER_SIZE)
-                {
-                    /* Would exceed limits, stop batching */
-                    break;
-                }
-
-                /* Map the MDL */
-                BatchVa = MmGetSystemAddressForMdlSafe(BatchMdl, NormalPagePriority);
-                if (BatchVa == NULL)
-                {
-                    break;
-                }
-                BatchVa = (PUCHAR)BatchVa + BatchDataOff;
-
-                /* Add this datagram to the batch */
-                TxDatagrams[DatagramCount].Data = TempDataArea + TempDataOffset;
-                TxDatagrams[DatagramCount].Length = BatchDataLen;
-                NdisMoveMemory(TempDataArea + TempDataOffset, BatchVa, BatchDataLen);
-                TempDataOffset += BatchDataLen;
-                BatchNbls[DatagramCount] = BatchNbl;
-                DatagramCount++;
-                TotalDataLength += BatchDataLen;
-
-                /* Remove this NBL from the chain - we're now handling it */
-                NextNbl = NET_BUFFER_LIST_NEXT_NBL(BatchNbl);
-                NET_BUFFER_LIST_NEXT_NBL(BatchNbl) = NULL;
-
-                /* Move to next NBL */
-                BatchNbl = NextNbl;
+            /*
+             * If we have no datagrams to send (all invalid), fail the NBL.
+             * This handles the case where goto FailCurrentNbl was used.
+             */
+            if (DatagramCount == 0)
+            {
+FailCurrentNbl:
+                DPRINT1("USBRNDIS: NCM TX: No valid data in NBL, failing\n");
+                NdisAcquireSpinLock(&Adapter->TxLock);
+                Adapter->TxBusy = FALSE;
+                Adapter->PendingTxNbl = NULL;
+                Adapter->PendingTxNblCount = 0;
+                Adapter->PendingTxDatagramCount = 0;
+                NdisReleaseSpinLock(&Adapter->TxLock);
+                Adapter->TxErrorCount++;
+                NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_INVALID_DATA;
+                NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = FailedNbls;
+                FailedNbls = CurrentNbl;
+                continue;
             }
 
             /* Now build the multi-datagram NTB */
@@ -1106,11 +1273,13 @@ RndisSendNetBufferLists(
                 NdisAcquireSpinLock(&Adapter->TxLock);
                 Adapter->TxBusy = FALSE;
                 Adapter->PendingTxNbl = NULL;
+                Adapter->PendingTxNblCount = 0;
+                Adapter->PendingTxDatagramCount = 0;
                 NdisReleaseSpinLock(&Adapter->TxLock);
                 Adapter->TxErrorCount++;
 
-                /* Fail all NBLs in the batch */
-                for (i = 0; i < DatagramCount; i++)
+                /* Fail all unique NBLs in the batch */
+                for (i = 0; i < UniqueNblCount; i++)
                 {
                     NET_BUFFER_LIST_STATUS(BatchNbls[i]) = NDIS_STATUS_FAILURE;
                     NET_BUFFER_LIST_NEXT_NBL(BatchNbls[i]) = FailedNbls;
@@ -1122,23 +1291,26 @@ RndisSendNetBufferLists(
             /*
              * Store batch info for completion.
              * We need to complete all NBLs when the USB transfer completes.
-             * For now, we store the list in PendingTxNbl chain.
+             * Chain the unique NBLs together in PendingTxNbl.
+             * Note: UniqueNblCount is the number of unique NBLs,
+             * DatagramCount is the total number of datagrams (packets).
              */
             NdisAcquireSpinLock(&Adapter->TxLock);
             Adapter->PendingTxNbl = BatchNbls[0];
-            for (i = 1; i < DatagramCount; i++)
+            for (i = 1; i < UniqueNblCount; i++)
             {
                 /* Chain the batched NBLs together for completion */
                 NET_BUFFER_LIST_NEXT_NBL(BatchNbls[i-1]) = BatchNbls[i];
             }
-            Adapter->PendingTxNblCount = DatagramCount;
+            Adapter->PendingTxNblCount = UniqueNblCount;
+            Adapter->PendingTxDatagramCount = DatagramCount;  /* Actual packet count for stats */
             NdisReleaseSpinLock(&Adapter->TxLock);
 
             /* Update stats for all batched datagrams */
             Adapter->TxBytes += TotalDataLength;
 
-            DPRINT1("USBRNDIS: CDC-NCM TX NTB with %lu datagrams (%lu bytes total, NTB %lu bytes)\n",
-                   DatagramCount, TotalDataLength, TotalLength);
+            DPRINT1("USBRNDIS: CDC-NCM TX NTB with %lu datagrams from %lu NBLs (%lu bytes total, NTB %lu bytes)\n",
+                   DatagramCount, UniqueNblCount, TotalDataLength, TotalLength);
         }
         else
         {
@@ -1164,35 +1336,70 @@ RndisSendNetBufferLists(
              * URB submitted successfully, will complete asynchronously.
              * NdisMSendNetBufferListsComplete will be called from completion routine.
              */
-            DPRINT("USBRNDIS: TX submitted async (%lu bytes)\n", DataLength);
-            Adapter->TxBytes += DataLength;
+            DPRINT("USBRNDIS: TX submitted async (%lu bytes)\n", TotalLength);
+            /*
+             * Update TxBytes only for non-NCM paths.
+             * NCM batching already updated TxBytes with TotalDataLength above.
+             */
+            if (!Adapter->IsCdcNcm)
+            {
+                Adapter->TxBytes += DataLength;
+            }
             FirstPacketSent = TRUE;
         }
         else if (NT_SUCCESS(Status))
         {
             /*
              * URB completed synchronously (STATUS_SUCCESS).
-             * The completion routine has ALREADY run.
-             * Mark as success and complete immediately.
+             * The completion routine has ALREADY run and completed all NBLs.
+             * No additional completion needed here.
              */
-            DPRINT("USBRNDIS: TX completed sync (%lu bytes)\n", DataLength);
-            Adapter->TxBytes += DataLength;
+            DPRINT("USBRNDIS: TX completed sync (%lu bytes)\n", TotalLength);
+            /*
+             * Update TxBytes only for non-NCM paths.
+             * NCM batching already updated TxBytes with TotalDataLength above.
+             */
+            if (!Adapter->IsCdcNcm)
+            {
+                Adapter->TxBytes += DataLength;
+            }
             FirstPacketSent = TRUE;
-            /* Completion callback already handled TxBusy and stats */
         }
         else
         {
             /*
-             * Failed to submit URB. Clean up and fail this NBL.
+             * Failed to submit URB. Clean up and fail the entire NBL chain.
+             * For NCM batching, CurrentNbl may be the head of a chain of
+             * batched NBLs that need to all be failed.
              */
+            PNET_BUFFER_LIST FailNbl;
+            PNET_BUFFER_LIST TailNbl;
+
             DPRINT1("USBRNDIS: Failed to submit TX (0x%08X)\n", Status);
             NdisAcquireSpinLock(&Adapter->TxLock);
             Adapter->TxBusy = FALSE;
             Adapter->PendingTxNbl = NULL;
+            Adapter->PendingTxNblCount = 0;
+            Adapter->PendingTxDatagramCount = 0;
             NdisReleaseSpinLock(&Adapter->TxLock);
             Adapter->TxErrorCount++;
-            NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_FAILURE;
-            NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = FailedNbls;
+
+            /*
+             * Walk the entire chain starting from CurrentNbl.
+             * Set status on each NBL and find the tail.
+             */
+            TailNbl = CurrentNbl;
+            for (FailNbl = CurrentNbl; FailNbl != NULL; FailNbl = NET_BUFFER_LIST_NEXT_NBL(FailNbl))
+            {
+                NET_BUFFER_LIST_STATUS(FailNbl) = NDIS_STATUS_FAILURE;
+                TailNbl = FailNbl;
+            }
+
+            /*
+             * Link the tail to the existing FailedNbls chain,
+             * then set FailedNbls to CurrentNbl (preserving the whole chain).
+             */
+            NET_BUFFER_LIST_NEXT_NBL(TailNbl) = FailedNbls;
             FailedNbls = CurrentNbl;
         }
     }
