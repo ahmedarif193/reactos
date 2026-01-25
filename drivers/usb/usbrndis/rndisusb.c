@@ -27,6 +27,7 @@ static IO_COMPLETION_ROUTINE RndisTxComplete;
 static VOID NTAPI RndisRxResubmitDpc(PKDPC Dpc, PVOID DeferredContext, PVOID SystemArgument1, PVOID SystemArgument2);
 static VOID NTAPI RndisRxBackoffDpc(PKDPC Dpc, PVOID DeferredContext, PVOID SystemArgument1, PVOID SystemArgument2);
 static VOID NTAPI RndisRxDelayDpc(PKDPC Dpc, PVOID DeferredContext, PVOID SystemArgument1, PVOID SystemArgument2);
+static VOID NTAPI RndisTxResubmitDpc(PKDPC Dpc, PVOID DeferredContext, PVOID SystemArgument1, PVOID SystemArgument2);
 
 /* Forward declaration for alternate setting selection */
 static NTSTATUS RndisUsbSelectAlternate(IN PRNDIS_ADAPTER Adapter, IN UCHAR InterfaceNumber, IN UCHAR AlternateSetting);
@@ -1600,6 +1601,45 @@ RndisInitializeInterruptDpc(
 
 static
 VOID
+NTAPI
+RndisTxResubmitDpc(
+    IN PKDPC Dpc,
+    IN PVOID DeferredContext,
+    IN PVOID SystemArgument1,
+    IN PVOID SystemArgument2)
+{
+    PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    InterlockedExchange(&Adapter->TxResubmitScheduled, 0);
+
+    if (Adapter->Halting)
+    {
+        return;
+    }
+
+    if (Adapter->TxNcmPartialNbl != NULL && Adapter->IsCdcNcm)
+    {
+        RndisNcmContinueTx(Adapter);
+        return;
+    }
+
+    RndisTxDequeueAndSend(Adapter);
+}
+
+VOID
+RndisInitializeTxDpc(
+    IN PRNDIS_ADAPTER Adapter)
+{
+    KeInitializeDpc(&Adapter->TxResubmitDpc, RndisTxResubmitDpc, Adapter);
+    Adapter->TxResubmitScheduled = 0;
+}
+
+static
+VOID
 RndisIndicateLinkState(
     IN PRNDIS_ADAPTER Adapter)
 {
@@ -2068,27 +2108,62 @@ RndisTxComplete(
     NTSTATUS Status;
     PNET_BUFFER_LIST Nbl;
     PNET_BUFFER_LIST CurrentNbl;
+    PNET_BUFFER_LIST PartialNbl;
     NDIS_STATUS NdisStatus;
-    BOOLEAN WasPending;
+    ULONG SendCompleteFlags;
     ULONG NblCount;
+    BOOLEAN HasPartial;
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
     Status = Irp->IoStatus.Status;
-    WasPending = Irp->PendingReturned;
-
     /* Retrieve the pending NBL chain and clear TX state under lock */
     NdisAcquireSpinLock(&Adapter->TxLock);
     Nbl = Adapter->PendingTxNbl;
     NblCount = Adapter->PendingTxNblCount;
+    PartialNbl = Adapter->TxNcmPartialNbl;
     Adapter->PendingTxNbl = NULL;
     Adapter->PendingTxNblCount = 0;
     Adapter->TxIrp = NULL;
-    Adapter->TxBusy = FALSE;
+    HasPartial = (PartialNbl != NULL);
+    Adapter->TxBusy = HasPartial ? TRUE : FALSE;
     NdisReleaseSpinLock(&Adapter->TxLock);
 
     /* Free or defer IRP based on halt state */
     RndisMaybeDeferIrpFree(Adapter, Irp, &Adapter->TxIrpToFree);
+
+    /*
+     * For NCM segmentation, an NTB may carry partial data from a single NBL.
+     * In that case, don't complete any NBLs yet; just continue sending.
+     */
+    if (Nbl == NULL && HasPartial)
+    {
+        if (NT_SUCCESS(Status) && !Adapter->Halting)
+        {
+            if (InterlockedExchange(&Adapter->TxResubmitScheduled, 1) == 0)
+            {
+                KeInsertQueueDpc(&Adapter->TxResubmitDpc, NULL, NULL);
+            }
+        }
+        else
+        {
+            /* Fail the partial NBL on error */
+            NdisAcquireSpinLock(&Adapter->TxLock);
+            Adapter->TxNcmPartialNbl = NULL;
+            Adapter->TxNcmPartialNb = NULL;
+            Adapter->TxBusy = FALSE;
+            NdisReleaseSpinLock(&Adapter->TxLock);
+
+            NET_BUFFER_LIST_STATUS(PartialNbl) = NDIS_STATUS_FAILURE;
+            NdisMSendNetBufferListsComplete(
+                Adapter->MiniportAdapterHandle,
+                PartialNbl,
+                NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL);
+        }
+
+        RndisDecrementPendingIo(Adapter);
+        return STATUS_MORE_PROCESSING_REQUIRED;
+    }
 
     /* Update statistics and determine NDIS status */
     if (NT_SUCCESS(Status))
@@ -2123,13 +2198,13 @@ RndisTxComplete(
     }
 
     /*
-     * Only call NdisMSendNetBufferListsComplete if the IRP was actually pended.
-     * If WasPending is FALSE, the IRP completed synchronously and the
-     * send handler will complete the NBL itself.
-     *
-     * Set status on all NBLs in the chain before completing.
+     * Always complete owned NBLs here. Completion may be synchronous or
+     * asynchronous; SendNetBufferLists does not complete on its own.
      */
-    if (Nbl && WasPending)
+    SendCompleteFlags = (KeGetCurrentIrql() == DISPATCH_LEVEL) ?
+                        NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL : 0;
+
+    if (Nbl)
     {
         /* Set status on all NBLs in the chain */
         for (CurrentNbl = Nbl; CurrentNbl != NULL; CurrentNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl))
@@ -2141,7 +2216,25 @@ RndisTxComplete(
         NdisMSendNetBufferListsComplete(
             Adapter->MiniportAdapterHandle,
             Nbl,
-            NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL);
+            SendCompleteFlags);
+    }
+
+    /* Kick queued sends if any remain */
+    if (!Adapter->Halting)
+    {
+        BOOLEAN KickTx = FALSE;
+
+        NdisAcquireSpinLock(&Adapter->TxLock);
+        if (Adapter->TxQueueHead != NULL && Adapter->TxNcmPartialNbl == NULL)
+        {
+            KickTx = (InterlockedExchange(&Adapter->TxResubmitScheduled, 1) == 0);
+        }
+        NdisReleaseSpinLock(&Adapter->TxLock);
+
+        if (KickTx)
+        {
+            KeInsertQueueDpc(&Adapter->TxResubmitDpc, NULL, NULL);
+        }
     }
 
     /* Decrement pending I/O count */

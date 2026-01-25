@@ -390,6 +390,11 @@ RndisMiniportInitializeEx(
     Adapter->RxIrp = NULL;
     Adapter->TxIrp = NULL;
     Adapter->PendingTxNbl = NULL;
+    Adapter->TxNcmPartialNbl = NULL;
+    Adapter->TxNcmPartialNb = NULL;
+    Adapter->TxResubmitScheduled = 0;
+    Adapter->TxQueueHead = NULL;
+    Adapter->TxQueueTail = NULL;
     Adapter->IsCdcEcm = FALSE;
     Adapter->IsCdcNcm = FALSE;
     Adapter->RxSubmitted = FALSE;
@@ -413,6 +418,7 @@ RndisMiniportInitializeEx(
     /* Initialize RX DPC and backoff timer early so halt can safely cancel them */
     RndisInitializeRxDpc(Adapter);
     RndisInitializeInterruptDpc(Adapter);
+    RndisInitializeTxDpc(Adapter);
 
     /* Set registration attributes first (required before other attributes) */
     NdisStatus = RndisSetRegistrationAttributes(Adapter);
@@ -805,6 +811,8 @@ RndisMiniportHaltEx(
     KeRemoveQueueDpc(&Adapter->RxDelayDpc);
     KeRemoveQueueDpc(&Adapter->InterruptResubmitDpc);
     KeRemoveQueueDpc(&Adapter->InterruptDelayDpc);
+    KeRemoveQueueDpc(&Adapter->TxResubmitDpc);
+    InterlockedExchange(&Adapter->TxResubmitScheduled, 0);
 
     /* Acquire ControlMutex before sending halt */
     KeWaitForSingleObject(&Adapter->ControlMutex, Executive, KernelMode, FALSE, NULL);
@@ -851,6 +859,40 @@ RndisMiniportHaltEx(
         DPRINT1("USBRNDIS: Waiting for %ld pending I/O operations\n", Adapter->PendingIoCount);
         KeWaitForSingleObject(&Adapter->RemoveEvent, Executive, KernelMode, FALSE, NULL);
         DPRINT1("USBRNDIS: All pending I/O completed\n");
+    }
+
+    /* Fail any in-progress NCM partial NBL that didn't complete */
+    if (Adapter->TxNcmPartialNbl != NULL)
+    {
+        NET_BUFFER_LIST_STATUS(Adapter->TxNcmPartialNbl) = NDIS_STATUS_FAILURE;
+        NdisMSendNetBufferListsComplete(
+            Adapter->MiniportAdapterHandle,
+            Adapter->TxNcmPartialNbl,
+            0);
+        Adapter->TxNcmPartialNbl = NULL;
+        Adapter->TxNcmPartialNb = NULL;
+    }
+
+    /* Fail any queued NBLs */
+    if (Adapter->TxQueueHead != NULL)
+    {
+        PNET_BUFFER_LIST Queued;
+        PNET_BUFFER_LIST Nbl;
+
+        NdisAcquireSpinLock(&Adapter->TxLock);
+        Queued = Adapter->TxQueueHead;
+        Adapter->TxQueueHead = NULL;
+        Adapter->TxQueueTail = NULL;
+        NdisReleaseSpinLock(&Adapter->TxLock);
+
+        for (Nbl = Queued; Nbl != NULL; Nbl = NET_BUFFER_LIST_NEXT_NBL(Nbl))
+        {
+            NET_BUFFER_LIST_STATUS(Nbl) = NDIS_STATUS_FAILURE;
+        }
+        NdisMSendNetBufferListsComplete(
+            Adapter->MiniportAdapterHandle,
+            Queued,
+            0);
     }
 
     /*

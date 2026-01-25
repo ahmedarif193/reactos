@@ -744,6 +744,12 @@ typedef struct _RNDIS_ADAPTER {
     ULONG PendingTxNblCount;        /* Number of NBLs pending (for NCM batching) */
     ULONG PendingTxDatagramCount;   /* Number of datagrams (packets) pending (for stats) */
     URB TxUrb;
+    PNET_BUFFER_LIST TxNcmPartialNbl; /* Current NCM NBL being segmented */
+    PNET_BUFFER TxNcmPartialNb;       /* Next NET_BUFFER to send in partial NBL */
+    KDPC TxResubmitDpc;               /* DPC for NCM TX continuation */
+    volatile LONG TxResubmitScheduled;/* Coalescing flag for TX continuation */
+    PNET_BUFFER_LIST TxQueueHead;     /* Software TX queue head */
+    PNET_BUFFER_LIST TxQueueTail;     /* Software TX queue tail */
 
     /* Receive Resources */
     PUCHAR RxBuffer;
@@ -817,6 +823,18 @@ NTAPI
 RndisMiniportShutdownEx(
     _In_ NDIS_HANDLE MiniportAdapterContext,
     _In_ NDIS_SHUTDOWN_ACTION ShutdownAction);
+
+VOID
+RndisInitializeTxDpc(
+    IN PRNDIS_ADAPTER Adapter);
+
+VOID
+RndisNcmContinueTx(
+    IN PRNDIS_ADAPTER Adapter);
+
+VOID
+RndisTxDequeueAndSend(
+    IN PRNDIS_ADAPTER Adapter);
 
 VOID
 NTAPI
