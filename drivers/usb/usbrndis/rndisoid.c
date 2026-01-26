@@ -226,9 +226,6 @@ RndisQueryInformation(
     ULONG64 AggTxErrorCount, AggRxErrorCount;
     ULONG64 AggRxNoBufferCount;
 
-    /* Log all OID queries for debugging */
-    DPRINT1("USBRNDIS: QueryInformation OID 0x%08X, BufferLen=%lu\n", Oid, InfoBufferLength);
-
     *BytesWritten = 0;
     *BytesNeeded = 0;
 
@@ -643,7 +640,6 @@ RndisQueryInformation(
         {
             NdisMoveMemory(InfoBuffer, CopySource, CopyLength);
             *BytesWritten = CopyLength;
-            DPRINT1("USBRNDIS: OID 0x%08X SUCCESS (wrote %lu bytes)\n", Oid, CopyLength);
         }
     }
 

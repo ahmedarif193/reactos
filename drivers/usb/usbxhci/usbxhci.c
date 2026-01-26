@@ -7489,16 +7489,6 @@ XHCI_DetectHardwareQuirks(
             Extension->Quirks |= XHCI_QUIRK_FORCE_32BIT_DMA;
         }
 
-        /* QEMU's emulation reports 64-bit DMA capability but still runs on
-         * guests with <4GB of RAM. Keep ring/buffer allocations below 4GB to
-         * avoid programming bogus high addresses that some builds have been
-         * returning for common buffers. */
-        if (VendorId == 0x1B36 && DeviceId == 0x000D &&
-            !(Extension->Quirks & XHCI_QUIRK_FORCE_32BIT_DMA))
-        {
-            Extension->Quirks |= XHCI_QUIRK_FORCE_32BIT_DMA;
-        }
-
         /* Example: early Intel Series 7/8 controllers can be slow to reset. */
         if (VendorId == 0x8086 && Extension->HciVersion <= 0x0100)
         {

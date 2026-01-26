@@ -331,8 +331,6 @@ PortDispatchDeviceControl(
     EXTENSION_TYPE type;
     PIO_STACK_LOCATION stack;
 
-    DbgPrint("storport: PortDispatchDeviceControl(%p %p)\n", DeviceObject, Irp);
-
     deviceExtension = DeviceObject->DeviceExtension;
     if (deviceExtension == NULL)
     {
@@ -348,14 +346,9 @@ PortDispatchDeviceControl(
     switch (type)
     {
         case FdoExtension:
-            DbgPrint("storport: FDO DeviceControl Ioctl=0x%08lx\n",
-                     stack->Parameters.DeviceIoControl.IoControlCode);
             return PortFdoDeviceControl((PFDO_DEVICE_EXTENSION)deviceExtension, Irp);
 
         case PdoExtension:
-            DbgPrint("storport: PDO DeviceControl Ioctl=0x%08lx (Target=%lu)\n",
-                     stack->Parameters.DeviceIoControl.IoControlCode,
-                     ((PPDO_DEVICE_EXTENSION)deviceExtension)->Target);
             return PortPdoDeviceControl((PPDO_DEVICE_EXTENSION)deviceExtension, Irp);
 
         default:
@@ -2392,12 +2385,6 @@ PortHandleAdapterPropertyQuery(
 
     PortBuildAdapterDescriptor(DeviceExtension, &descriptor);
 
-    DbgPrint("storport: AdapterProperty query MaxXfer=%lu PhysPages=%lu AlignMask=0x%lx BusType=%u\n",
-             descriptor.MaximumTransferLength,
-             descriptor.MaximumPhysicalPages,
-             descriptor.AlignmentMask,
-             descriptor.BusType);
-
     if (OutputLength < sizeof(STORAGE_ADAPTER_DESCRIPTOR))
     {
         PSTORAGE_DESCRIPTOR_HEADER header = (PSTORAGE_DESCRIPTOR_HEADER)OutputBuffer;
@@ -2479,13 +2466,6 @@ PortBuildDeviceDescriptor(
     descriptor->CommandQueueing = TRUE;
 
     offset = sizeof(STORAGE_DEVICE_DESCRIPTOR);
-
-    DbgPrint("storport: DeviceProperty query Type=%u Removable=%u VendorLen=%lu ProductLen=%lu RevisionLen=%lu\n",
-             descriptor->DeviceType,
-             descriptor->RemovableMedia,
-             vendorLength,
-             productLength,
-             revisionLength);
 
     if (vendorLength > 0)
     {

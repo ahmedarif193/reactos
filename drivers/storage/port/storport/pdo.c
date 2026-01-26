@@ -353,7 +353,6 @@ PortPdoScsi(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ PIRP Irp)
 {
-    DPRINT("PortPdoScsi(%p %p)\n", DeviceObject, Irp);
     PPDO_DEVICE_EXTENSION PdoExtension;
     PFDO_DEVICE_EXTENSION FdoExtension;
     PIO_STACK_LOCATION Stack;
@@ -396,14 +395,6 @@ PortPdoScsi(
         IoCompleteRequest(Irp, IO_NO_INCREMENT);
         return STATUS_INVALID_DEVICE_REQUEST;
     }
-
-    DPRINT("PortPdoScsi: Major=0x%02x SrbFunc=%s(0x%02x) Srb=%p Buf=%p Len=%lu\n",
-           Stack->MajorFunction,
-           SrbFunctionName(Srb->Function),
-           Srb->Function,
-           Srb,
-           Srb->DataBuffer,
-           (ULONG)Srb->DataTransferLength);
 
     if (Srb->Function == SRB_FUNCTION_CLAIM_DEVICE)
     {
