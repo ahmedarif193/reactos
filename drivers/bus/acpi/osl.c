@@ -125,9 +125,6 @@ AcpiOsMapMemory (
     PHYSICAL_ADDRESS Address;
     PVOID Ptr;
 
-    DPRINT1("AcpiOsMapMemory(phys 0x%llx  size 0x%lX)\n",
-           (unsigned long long)phys, (unsigned long)length);
-
     /*
      * ARM64 fix: Use full 64-bit physical address.
      * Previous code truncated to 32-bit via (ULONG) cast, causing mapping
@@ -147,10 +144,6 @@ AcpiOsMapMemory (
         DPRINT1("AcpiOsMapMemory: MmMapIoSpace failed for phys=0x%llx len=0x%lX\n",
                 (unsigned long long)phys, (unsigned long)length);
     }
-    else
-    {
-        DPRINT1("AcpiOsMapMemory: Mapped to %p\n", Ptr);
-    }
 
     return Ptr;
 }
@@ -160,10 +153,7 @@ AcpiOsUnmapMemory (
     void                    *virt,
     ACPI_SIZE               length)
 {
-    DPRINT1("AcpiOsUnmapMemory(virt 0x%p  size 0x%X)\n", virt, length);
-
     ASSERT(virt);
-
     MmUnmapIoSpace(virt, length);
 }
 

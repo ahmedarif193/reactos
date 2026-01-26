@@ -128,6 +128,56 @@ Bus_FDO_PnP (
         Irp->IoStatus.Status = STATUS_SUCCESS;
         break;
 
+    case IRP_MN_STOP_DEVICE:
+        //
+        // Disable the PCI interface before stopping.
+        // The interface will be re-enabled on next start.
+        //
+        if (DeviceData->PciInterfaceEnabled)
+        {
+            NTSTATUS InterfaceStatus = IoSetDeviceInterfaceState(&DeviceData->PciInterfaceName, FALSE);
+            if (!NT_SUCCESS(InterfaceStatus))
+            {
+                DPRINT1("ACPI: Failed to disable PCI interface (0x%08lx)\n", InterfaceStatus);
+            }
+            DeviceData->PciInterfaceEnabled = FALSE;
+        }
+
+        SET_NEW_PNP_STATE(DeviceData->Common, Stopped);
+        Irp->IoStatus.Status = STATUS_SUCCESS;
+        break;
+
+    case IRP_MN_REMOVE_DEVICE:
+        //
+        // Clean up the PCI device interface.
+        //
+        if (DeviceData->PciInterfaceEnabled)
+        {
+            NTSTATUS InterfaceStatus = IoSetDeviceInterfaceState(&DeviceData->PciInterfaceName, FALSE);
+            if (!NT_SUCCESS(InterfaceStatus))
+            {
+                DPRINT1("ACPI: Failed to disable PCI interface on remove (0x%08lx)\n", InterfaceStatus);
+            }
+            DeviceData->PciInterfaceEnabled = FALSE;
+        }
+
+        if (DeviceData->PciInterfaceRegistered)
+        {
+            RtlFreeUnicodeString(&DeviceData->PciInterfaceName);
+            DeviceData->PciInterfaceRegistered = FALSE;
+            RtlInitUnicodeString(&DeviceData->PciInterfaceName, NULL);
+        }
+
+        //
+        // Terminate ACPI subsystem.
+        // Note: AcpiTerminate() should be safe to call multiple times.
+        //
+        AcpiTerminate();
+
+        SET_NEW_PNP_STATE(DeviceData->Common, Stopped);
+        Irp->IoStatus.Status = STATUS_SUCCESS;
+        break;
+
     case IRP_MN_QUERY_DEVICE_RELATIONS:
         DPRINT("\tQueryDeviceRelation Type: %s\n",
                DbgDeviceRelationString(IrpStack->Parameters.QueryDeviceRelations.Type));
@@ -259,6 +309,42 @@ Bus_StartFdo (
     PoSetPowerState(FdoData->Common.Self, DevicePowerState, powerState);
 
     SET_NEW_PNP_STATE(FdoData->Common, Started);
+
+    //
+    // Register device interface for PCI ACPI services.
+    // This allows the PCI driver to send IOCTLs without importing acpi.sys.
+    //
+    FdoData->PciInterfaceRegistered = FALSE;
+    FdoData->PciInterfaceEnabled = FALSE;
+    RtlInitUnicodeString(&FdoData->PciInterfaceName, NULL);
+
+    status = IoRegisterDeviceInterface(
+        FdoData->UnderlyingPDO,
+        &GUID_ACPI_PCI_INTERFACE,
+        NULL,
+        &FdoData->PciInterfaceName);
+    if (NT_SUCCESS(status))
+    {
+        FdoData->PciInterfaceRegistered = TRUE;
+
+        status = IoSetDeviceInterfaceState(&FdoData->PciInterfaceName, TRUE);
+        if (NT_SUCCESS(status))
+        {
+            FdoData->PciInterfaceEnabled = TRUE;
+            DPRINT1("ACPI: Registered PCI interface: %wZ\n", &FdoData->PciInterfaceName);
+        }
+        else
+        {
+            DPRINT1("ACPI: Failed to enable PCI interface (0x%08lx)\n", status);
+        }
+    }
+    else
+    {
+        DPRINT1("ACPI: Failed to register PCI interface (0x%08lx)\n", status);
+    }
+
+    // Continue with ACPI initialization even if interface registration fails
+    status = STATUS_SUCCESS;
 
     DPRINT1("Bus_StartFdo: Calling AcpiInitializeSubsystem\n");
     //

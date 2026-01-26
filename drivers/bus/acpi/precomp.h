@@ -17,5 +17,6 @@
 #include <acpiioct.h>
 #include <ntintsafe.h>
 #include <reactos/hal/acpi_pci.h>
+#include <reactos/drivers/acpi/acpipci.h>
 
 #endif /* _ACPI_PCH_ */

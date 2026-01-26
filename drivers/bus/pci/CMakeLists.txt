@@ -10,6 +10,8 @@ list(APPEND SOURCE
 
 add_library(pci MODULE ${SOURCE} pci.rc)
 set_module_type(pci kernelmodedriver)
+# Note: PCI no longer imports acpi.sys directly.
+# ACPI method evaluation is done via device interface and IOCTL.
 add_importlibs(pci ntoskrnl hal)
 add_pch(pci pci.h SOURCE)
 add_cd_file(TARGET pci DESTINATION reactos/system32/drivers NO_CAB FOR all)

@@ -99,6 +99,12 @@ typedef struct _FDO_DEVICE_DATA
     // A synchronization for access to the device extension.
     FAST_MUTEX      Mutex;
 
+    // Device interface for PCI ACPI services
+    // Registered when FDO starts, allows PCI driver to send IOCTLs
+    UNICODE_STRING  PciInterfaceName;
+    BOOLEAN         PciInterfaceRegistered;
+    BOOLEAN         PciInterfaceEnabled;
+
 } FDO_DEVICE_DATA, *PFDO_DEVICE_DATA;
 
 #define FDO_FROM_PDO(pdoData) \
@@ -125,6 +131,12 @@ NTSTATUS
 NTAPI
 Bus_PDO_EvalMethod(
     _In_ PPDO_DEVICE_DATA DeviceData,
+    _Inout_ PIRP Irp);
+
+NTSTATUS
+NTAPI
+AcpiEvalMethodForPciDeviceIoctl(
+    _In_ PFDO_DEVICE_DATA FdoData,
     _Inout_ PIRP Irp);
 
 NTSTATUS

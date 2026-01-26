@@ -259,6 +259,9 @@ AcpiInterfaceNotifyThunk(ACPI_HANDLE Handle,
     }
 }
 
+/*
+ * ACPI_INTERFACE_STANDARD callbacks (take PDEVICE_OBJECT as context)
+ */
 NTSTATUS
 NTAPI
 AcpiInterfaceConnectVector(PDEVICE_OBJECT Context,
@@ -311,6 +314,264 @@ AcpiInterfaceClearStatus(PDEVICE_OBJECT Context,
   UNIMPLEMENTED;
 
   return STATUS_NOT_IMPLEMENTED;
+}
+
+/*
+ * ACPI_INTERFACE_STANDARD2 callbacks (take PVOID context directly)
+ */
+static
+PPDO_DEVICE_DATA
+AcpiPdoFromContext2(PVOID Context)
+{
+    /*
+     * For ACPI_INTERFACE_STANDARD2, Context is the PDO itself (Common.Self).
+     * Same as AcpiPdoFromContext but named differently for clarity.
+     */
+    PDEVICE_OBJECT DeviceObject = (PDEVICE_OBJECT)Context;
+
+    if (!DeviceObject || !DeviceObject->DeviceExtension)
+    {
+        return NULL;
+    }
+
+    return (PPDO_DEVICE_DATA)DeviceObject->DeviceExtension;
+}
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_Must_inspect_result_
+static
+NTSTATUS
+NTAPI
+AcpiInterface2ConnectVector(
+    PVOID Context,
+    ULONG GpeNumber,
+    KINTERRUPT_MODE Mode,
+    BOOLEAN Shareable,
+    PGPE_SERVICE_ROUTINE ServiceRoutine,
+    PVOID ServiceContext,
+    PVOID *ObjectContext)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(GpeNumber);
+    UNREFERENCED_PARAMETER(Mode);
+    UNREFERENCED_PARAMETER(Shareable);
+    UNREFERENCED_PARAMETER(ServiceRoutine);
+    UNREFERENCED_PARAMETER(ServiceContext);
+    UNREFERENCED_PARAMETER(ObjectContext);
+
+    UNIMPLEMENTED;
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_Must_inspect_result_
+static
+NTSTATUS
+NTAPI
+AcpiInterface2DisconnectVector(
+    PVOID Context,
+    PVOID ObjectContext)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(ObjectContext);
+
+    UNIMPLEMENTED;
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_Must_inspect_result_
+static
+NTSTATUS
+NTAPI
+AcpiInterface2EnableEvent(
+    PVOID Context,
+    PVOID ObjectContext)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(ObjectContext);
+
+    UNIMPLEMENTED;
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_Must_inspect_result_
+static
+NTSTATUS
+NTAPI
+AcpiInterface2DisableEvent(
+    PVOID Context,
+    PVOID ObjectContext)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(ObjectContext);
+
+    UNIMPLEMENTED;
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_Must_inspect_result_
+static
+NTSTATUS
+NTAPI
+AcpiInterface2ClearStatus(
+    PVOID Context,
+    PVOID ObjectContext)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(ObjectContext);
+
+    UNIMPLEMENTED;
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_Must_inspect_result_
+static
+NTSTATUS
+NTAPI
+AcpiInterface2RegisterNotifications(
+    PVOID Context,
+    PDEVICE_NOTIFY_CALLBACK2 NotificationHandler,
+    PVOID NotificationContext)
+{
+    PPDO_DEVICE_DATA DeviceData;
+    PACPI_NOTIFICATION_ENTRY Entry;
+    KIRQL OldIrql;
+    PLIST_ENTRY Link;
+    BOOLEAN NeedInstall;
+    NTSTATUS Status;
+
+    if (!NotificationHandler)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    DeviceData = AcpiPdoFromContext2(Context);
+    if (!DeviceData)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /*
+     * For STANDARD2, we store the callback with its new signature.
+     * We reuse ACPI_NOTIFICATION_ENTRY since the callback pointer size is the same.
+     * The thunk handles the signature difference.
+     */
+    Entry = ExAllocatePoolWithTag(NonPagedPool,
+                                  sizeof(ACPI_NOTIFICATION_ENTRY),
+                                  ACPI_NOTIFY_TAG);
+    if (!Entry)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    /* Store as PDEVICE_NOTIFY_CALLBACK (same size as PDEVICE_NOTIFY_CALLBACK2) */
+    Entry->Callback = (PDEVICE_NOTIFY_CALLBACK)(ULONG_PTR)NotificationHandler;
+    Entry->Context = NotificationContext;
+
+    KeAcquireSpinLock(&DeviceData->NotificationLock, &OldIrql);
+
+    NeedInstall = (DeviceData->NotificationRegistrationCount == 0);
+    if (NeedInstall)
+    {
+        KeReleaseSpinLock(&DeviceData->NotificationLock, OldIrql);
+
+        Status = AcpiInterfaceInstallNotifyHandlers(DeviceData);
+        if (!NT_SUCCESS(Status))
+        {
+            ExFreePoolWithTag(Entry, ACPI_NOTIFY_TAG);
+            return Status;
+        }
+
+        KeAcquireSpinLock(&DeviceData->NotificationLock, &OldIrql);
+    }
+
+    /* Check for duplicate */
+    for (Link = DeviceData->NotificationList.Flink;
+         Link != &DeviceData->NotificationList;
+         Link = Link->Flink)
+    {
+        PACPI_NOTIFICATION_ENTRY Existing;
+
+        Existing = CONTAINING_RECORD(Link, ACPI_NOTIFICATION_ENTRY, ListEntry);
+        if (Existing->Callback == Entry->Callback &&
+            Existing->Context == Entry->Context)
+        {
+            KeReleaseSpinLock(&DeviceData->NotificationLock, OldIrql);
+            ExFreePoolWithTag(Entry, ACPI_NOTIFY_TAG);
+            return STATUS_SUCCESS;
+        }
+    }
+
+    InsertTailList(&DeviceData->NotificationList, &Entry->ListEntry);
+    DeviceData->NotificationRegistrationCount++;
+    KeReleaseSpinLock(&DeviceData->NotificationLock, OldIrql);
+
+    AcpiInterfaceReference(DeviceData->Common.Self);
+
+    return STATUS_SUCCESS;
+}
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+static
+VOID
+NTAPI
+AcpiInterface2UnregisterNotifications(
+    PVOID Context)
+{
+    PPDO_DEVICE_DATA DeviceData;
+    KIRQL OldIrql;
+    PLIST_ENTRY Link, Next;
+    BOOLEAN RemoveHandlers = FALSE;
+    LIST_ENTRY FreeList;
+
+    DeviceData = AcpiPdoFromContext2(Context);
+    if (!DeviceData)
+    {
+        return;
+    }
+
+    InitializeListHead(&FreeList);
+
+    KeAcquireSpinLock(&DeviceData->NotificationLock, &OldIrql);
+
+    /*
+     * STANDARD2 UnregisterForDeviceNotifications takes no callback parameter,
+     * so it unregisters ALL notifications for this context.
+     */
+    Link = DeviceData->NotificationList.Flink;
+    while (Link != &DeviceData->NotificationList)
+    {
+        Next = Link->Flink;
+        RemoveEntryList(Link);
+        InsertTailList(&FreeList, Link);
+        if (DeviceData->NotificationRegistrationCount > 0)
+        {
+            DeviceData->NotificationRegistrationCount--;
+        }
+        Link = Next;
+    }
+
+    RemoveHandlers = (DeviceData->NotificationRegistrationCount == 0);
+
+    KeReleaseSpinLock(&DeviceData->NotificationLock, OldIrql);
+
+    /* Free entries and dereference outside lock */
+    while (!IsListEmpty(&FreeList))
+    {
+        Link = RemoveHeadList(&FreeList);
+        ExFreePoolWithTag(CONTAINING_RECORD(Link, ACPI_NOTIFICATION_ENTRY, ListEntry),
+                          ACPI_NOTIFY_TAG);
+        AcpiInterfaceDereference(DeviceData->Common.Self);
+    }
+
+    if (RemoveHandlers)
+    {
+        AcpiInterfaceRemoveNotifyHandlers(DeviceData);
+    }
 }
 
 NTSTATUS
@@ -488,6 +749,7 @@ Bus_PDO_QueryInterface(PPDO_DEVICE_DATA DeviceData,
 {
   PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
   PACPI_INTERFACE_STANDARD AcpiInterface;
+  PACPI_INTERFACE_STANDARD2 AcpiInterface2;
 
   if (IrpSp->Parameters.QueryInterface.Version != 1)
   {
@@ -525,6 +787,36 @@ Bus_PDO_QueryInterface(PPDO_DEVICE_DATA DeviceData,
      AcpiInterfaceReference(AcpiInterface->Context);
 
      return STATUS_SUCCESS;
+  }
+  else if (RtlCompareMemory(IrpSp->Parameters.QueryInterface.InterfaceType,
+                             &GUID_ACPI_INTERFACE_STANDARD2, sizeof(GUID)) == sizeof(GUID))
+  {
+      DPRINT("GUID_ACPI_INTERFACE_STANDARD2\n");
+
+      if (IrpSp->Parameters.QueryInterface.Size < sizeof(ACPI_INTERFACE_STANDARD2))
+      {
+          DPRINT1("Buffer too small! (%d)\n", IrpSp->Parameters.QueryInterface.Size);
+          return STATUS_BUFFER_TOO_SMALL;
+      }
+
+      AcpiInterface2 = (PACPI_INTERFACE_STANDARD2)IrpSp->Parameters.QueryInterface.Interface;
+
+      AcpiInterface2->Size = sizeof(ACPI_INTERFACE_STANDARD2);
+      AcpiInterface2->Version = 1;
+      AcpiInterface2->Context = DeviceData->Common.Self;
+      AcpiInterface2->InterfaceReference = AcpiInterfaceReference;
+      AcpiInterface2->InterfaceDereference = AcpiInterfaceDereference;
+      AcpiInterface2->GpeConnectVector = AcpiInterface2ConnectVector;
+      AcpiInterface2->GpeDisconnectVector = AcpiInterface2DisconnectVector;
+      AcpiInterface2->GpeEnableEvent = AcpiInterface2EnableEvent;
+      AcpiInterface2->GpeDisableEvent = AcpiInterface2DisableEvent;
+      AcpiInterface2->GpeClearStatus = AcpiInterface2ClearStatus;
+      AcpiInterface2->RegisterForDeviceNotifications = AcpiInterface2RegisterNotifications;
+      AcpiInterface2->UnregisterForDeviceNotifications = AcpiInterface2UnregisterNotifications;
+
+      AcpiInterfaceReference(AcpiInterface2->Context);
+
+      return STATUS_SUCCESS;
   }
   else
   {

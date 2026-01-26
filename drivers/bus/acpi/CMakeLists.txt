@@ -201,6 +201,9 @@ list(APPEND ACPI_SOURCE
     buspdo.c
     main.c)
 
+# Note: acpi.sys no longer exports functions.
+# PCI uses device interface and IOCTL for ACPI method evaluation.
+
 add_library(acpi MODULE
     ${ACPI_SOURCE}
     acpi.rc)

@@ -4,11 +4,15 @@
 #include <ntifs.h>
 #include <cmreslist.h>
 #include <ntstrsafe.h>
+#include <ntintsafe.h>
 #include <reactos/hal/acpi_pci.h>
 #include <ndk/halfuncs.h>
+#include <acpiioct.h>
+#include <reactos/drivers/acpi/acpipci.h>
 #include "pcidef.h"
 
 #define TAG_PCI '0ICP'
+#define TAG_PCI_ACPI 'aICP'
 
 EXTERN_C const GUID GUID_REACTOS_PCI_ROOT_BUS_INTERFACE;
 
@@ -196,6 +200,19 @@ extern BOOLEAN HasDebuggingDevice;
 extern PCI_TYPE1_CFG_CYCLE_BITS PciDebuggingDevice[2];
 extern BOOLEAN PciMsiEnabledByPolicy;
 extern BOOLEAN PciMsixEnabledByPolicy;
+
+/* ACPI interface for method evaluation (pci.c) */
+NTSTATUS
+PciAcpiEvalMethod(
+    _In_ ULONG Segment,
+    _In_ ULONG Bus,
+    _In_ ULONG Device,
+    _In_ ULONG Function,
+    _In_ PACPI_EVAL_INPUT_BUFFER InputBuffer,
+    _In_ ULONG InputBufferSize,
+    _Out_writes_bytes_opt_(OutputBufferSize) PACPI_EVAL_OUTPUT_BUFFER OutputBuffer,
+    _In_ ULONG OutputBufferSize,
+    _Out_opt_ PULONG BytesReturned);
 
 /* fdo.c */
 
