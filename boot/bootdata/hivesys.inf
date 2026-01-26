@@ -1885,6 +1885,13 @@ HKLM,"SYSTEM\CurrentControlSet\Services\NMIDebug","ImagePath",0x00020000,"system
 HKLM,"SYSTEM\CurrentControlSet\Services\NMIDebug","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\NMIDebug","Type",0x00010001,0x00000001
 
+; Rust kernel test driver
+HKLM,"SYSTEM\CurrentControlSet\Services\rust_ktest","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\rust_ktest","Group",0x00000000,"Boot Bus Extender"
+HKLM,"SYSTEM\CurrentControlSet\Services\rust_ktest","ImagePath",0x00020000,"system32\drivers\rust_ktest.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\rust_ktest","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\rust_ktest","Type",0x00010001,0x00000001
+
 ; Packet driver
 HKLM,"SYSTEM\CurrentControlSet\Services\Packet","ErrorControl",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\Packet","Group",0x00000000,"PNP_TDI"

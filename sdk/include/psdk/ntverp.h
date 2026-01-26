@@ -14,18 +14,18 @@
  */
 
 //
-// Windows NT Build 3790.3959
+// Windows NT Build 19041 (Windows 10 20H1/2004)
 //
-#define VER_PRODUCTBUILD                    3790
-#define VER_PRODUCTBUILD_QFE                3959
+#define VER_PRODUCTBUILD                    19041
+#define VER_PRODUCTBUILD_QFE                0
 
 //
-// Windows NT Version 5.2
+// Windows NT Version 10.0 (Windows 10 / Server 2016+)
 //
-#define VER_PRODUCTMAJORVERSION             5
-#define VER_PRODUCTMINORVERSION             2
-#define VER_PRODUCTVERSION_W                (0x0502)
-#define VER_PRODUCTVERSION_DW               (0x05020000 | VER_PRODUCTBUILD)
+#define VER_PRODUCTMAJORVERSION             10
+#define VER_PRODUCTMINORVERSION             0
+#define VER_PRODUCTVERSION_W                (0x0A00)
+#define VER_PRODUCTVERSION_DW               (0x0A000000 | VER_PRODUCTBUILD)
 
 //
 // Not a beta

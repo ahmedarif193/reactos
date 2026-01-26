@@ -68,6 +68,9 @@ OSLoadingMethods[] =
     {"Windows"     , EditCustomBootNTOS, LoadAndBootWindows},
     {"Windows2003" , EditCustomBootNTOS, LoadAndBootWindows},
     {"WindowsVista", EditCustomBootNTOS, LoadAndBootWindows},
+    {"Windows7"    , EditCustomBootNTOS, LoadAndBootWindows},
+    {"Windows8"    , EditCustomBootNTOS, LoadAndBootWindows},
+    {"Windows10"   , EditCustomBootNTOS, LoadAndBootWindows},
 };
 
 /* FUNCTIONS ******************************************************************/

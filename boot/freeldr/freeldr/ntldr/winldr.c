@@ -801,8 +801,8 @@ WinLdrDetectVersion(VOID)
     }
     RegCloseKey(hKey);
 
-    /* We may here want to read the value of ProductVersion */
-    return _WIN32_WINNT_WS03;
+    /* Return Windows 10 (NT 10.0) to match kernel version */
+    return 0x0A00; /* _WIN32_WINNT_WIN10 */
 }
 
 static
@@ -1297,7 +1297,11 @@ LoadAndBootWindows(
 
     /* Convert it to an OS version */
     if (_stricmp(ArgValue, "Windows") == 0 ||
-        _stricmp(ArgValue, "Windows2003") == 0)
+        _stricmp(ArgValue, "Windows10") == 0)
+    {
+        OperatingSystemVersion = 0x0A00; /* _WIN32_WINNT_WIN10 */
+    }
+    else if (_stricmp(ArgValue, "Windows2003") == 0)
     {
         OperatingSystemVersion = _WIN32_WINNT_WS03;
     }
