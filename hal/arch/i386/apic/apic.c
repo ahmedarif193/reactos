@@ -231,9 +231,11 @@ ApicRequestSelfInterrupt(IN UCHAR Vector, UCHAR TriggerMode)
     Flags = __readeflags();
     _disable();
 
-    /* Wait for the APIC to be idle */
+    /* Wait for the APIC to be idle, using pause to reduce power consumption
+     * and improve performance on modern CPUs with E-cores */
     do
     {
+        YieldProcessor();
         IcrStatus.Long0 = ApicRead(APIC_ICR0);
     } while (IcrStatus.DeliveryStatus);
 

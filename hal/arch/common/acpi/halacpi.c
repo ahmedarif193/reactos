@@ -4597,6 +4597,9 @@ CODE_SEG("INIT")
 VOID
 HalpAcpiPhase1Init(VOID)
 {
+    /* Initialize HPET if available - provides high-resolution timing */
+    HalpHpetInitialize();
+
     /* Allocate per-allocation disable flags if MCFG present and not yet allocated */
     if (HalpAcpiMcfgAllocations && HalpAcpiMcfgAllocationCount && !HalpAcpiMcfgSegDisabled)
     {

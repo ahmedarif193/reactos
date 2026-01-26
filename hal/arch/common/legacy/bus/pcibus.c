@@ -156,6 +156,8 @@ HalpPciInitGsiLock(VOID)
     while (HalpPciGsiLockInitState != 2)
     {
         KeStallExecutionProcessor(1);
+        /* Hint to CPU we are in a spin-wait loop (improves performance on real hardware) */
+        YieldProcessor();
     }
 }
 

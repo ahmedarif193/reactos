@@ -93,9 +93,13 @@ HalpInitializeTsc(VOID)
     /* Read register C, so that the next interrupt can happen */
     HalpReadCmos(RTC_REGISTER_C);
 
-    /* Wait for completion */
+    /* Wait for completion with pause to reduce power consumption */
     _enable();
-    while (TscCalibrationPhase < NUM_SAMPLES) _ReadWriteBarrier();
+    while (TscCalibrationPhase < NUM_SAMPLES)
+    {
+        YieldProcessor();
+        _ReadWriteBarrier();
+    }
     _disable();
 
     /* Disable the periodic interrupt in the CMOS */
@@ -144,6 +148,7 @@ HalpCalibrateStallExecution(VOID)
         Guard = 0;
         while (((CurrentTick - StartTick) & HalpPmTimerMask) == 0 && Guard < (1u << 20))
         {
+            YieldProcessor();
             CurrentTick = HalpAcpiTimerRead();
             ++Guard;
         }
@@ -154,6 +159,7 @@ HalpCalibrateStallExecution(VOID)
         Guard = 0;
         do
         {
+            YieldProcessor();
             CurrentTick = HalpAcpiTimerRead();
             DeltaTicks = (CurrentTick - StartTick) & HalpPmTimerMask;
             ++Guard;
@@ -176,7 +182,9 @@ HalpCalibrateStallExecution(VOID)
 
     if (HalpCpuClockFrequency.QuadPart == 0)
     {
-        HalpCpuClockFrequency.QuadPart = 1000000000ULL; /* 1 GHz fallback */
+        /* 3 GHz fallback - modern CPUs typically run at 3+ GHz.
+         * Using 1 GHz would cause all delays to be 3x+ too long. */
+        HalpCpuClockFrequency.QuadPart = 3000000000ULL;
     }
 
     KeGetPcr()->StallScaleFactor = (ULONG)(HalpCpuClockFrequency.QuadPart / 1000000ULL);
@@ -222,8 +230,14 @@ KeStallExecutionProcessor(ULONG MicroSeconds)
     /* Calculate the ending time */
     EndTime = StartTime + KeGetPcr()->StallScaleFactor * MicroSeconds;
 
-    /* Loop until time is elapsed */
-    while (__rdtsc() < EndTime);
+    /* Loop until time is elapsed, using pause instruction to reduce power
+     * consumption and improve performance on modern CPUs with E-cores
+     * (like Intel Alder Lake-N). Without pause, tight loops cause severe
+     * slowdown on real hardware compared to QEMU emulation. */
+    while (__rdtsc() < EndTime)
+    {
+        YieldProcessor();
+    }
 }
 
 VOID

@@ -425,6 +425,8 @@ VOID APICSendIPI(ULONG Target, ULONG Mode)
    /* Wait up to 100ms for the APIC to become ready */
    for (i = 0; i < 10000; i++)
    {
+      /* Hint to CPU we are in a spin-wait loop (improves performance on real hardware) */
+      YieldProcessor();
       tmp = APICRead(APIC_ICR0);
       /* Check Delivery Status */
       if ((tmp & APIC_ICR0_DS) == 0)
@@ -464,6 +466,8 @@ VOID APICSendIPI(ULONG Target, ULONG Mode)
    /* Wait up to 100ms for the APIC to become ready */
    for (i = 0; i < 10000; i++)
    {
+      /* Hint to CPU we are in a spin-wait loop (improves performance on real hardware) */
+      YieldProcessor();
       tmp = APICRead(APIC_ICR0);
       /* Check Delivery Status */
       if ((tmp & APIC_ICR0_DS) == 0)
@@ -614,6 +618,8 @@ VOID APICSyncArbIDs(VOID)
    /* Wait up to 100ms for the APIC to become ready */
    for (i = 0; i < 10000; i++)
    {
+      /* Hint to CPU we are in a spin-wait loop (improves performance on real hardware) */
+      YieldProcessor();
       tmp = APICRead(APIC_ICR0);
       /* Check Delivery Status */
       if ((tmp & APIC_ICR0_DS) == 0)
@@ -1030,6 +1036,9 @@ HaliStartApplicationProcessor(ULONG Cpu, ULONG Stack)
       do
       {
          KeStallExecutionProcessor(10);
+
+         /* Hint to CPU we are in a spin-wait loop (improves performance on real hardware) */
+         YieldProcessor();
 
          /* Check Delivery Status */
          DeliveryStatus = APICRead(APIC_ICR0) & APIC_ICR0_DS;
