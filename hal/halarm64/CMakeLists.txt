@@ -66,6 +66,7 @@ list(APPEND SOURCES
     ${HAL_COMMON_DIR}/acpi/hpet.c
     ${HAL_COMMON_DIR}/acpi/waet.c
     ${HAL_COMMON_DIR}/acpi/arm64.c
+    ${HAL_COMMON_DIR}/generic/sysinfo_stubs.c
     ${HAL_ARM64_SOURCE_DIR}/halarm64.c
     ${HAL_ARM64_SOURCE_DIR}/halarm64_acpi_int.c
     ${HAL_ARM64_SOURCE_DIR}/smp.c

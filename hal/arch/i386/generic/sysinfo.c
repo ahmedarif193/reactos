@@ -191,3 +191,8 @@ HalGetAcpiSciVector(VOID)
 {
     return HalpSciGsi;
 }
+
+/*
+ * NOTE: Windows 8/8.1/10+ HAL stubs are now in hal/arch/common/generic/sysinfo_stubs.c
+ * and are shared across all architectures (i386, amd64, arm, arm64).
+ */
