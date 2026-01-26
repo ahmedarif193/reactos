@@ -1,7 +1,11 @@
 /*
  * PROJECT:        ReactOS Kernel
  * LICENSE:        GNU GPLv2 only as published by the Free Software Foundation
- * PURPOSE:        AHCI Miniport (SCSIPORT implementation)
+ * PURPOSE:        AHCI Miniport Driver (Storport-based implementation)
+ *
+ * This driver interfaces with the storport driver to provide AHCI controller
+ * support. When AHCI_USE_STORPORT is defined, the driver uses the modern
+ * storport APIs; otherwise it falls back to the legacy scsiport interface.
  */
 
 #pragma once

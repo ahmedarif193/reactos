@@ -107,6 +107,9 @@ HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0301","Clas
 ; Add IDE controller support for AMD64 so setup can locate boot disks
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0101","Service",0x00000000,"pciide"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0101","ClassGUID",0x00000000,"{4D36E96A-E325-11CE-BFC1-08002BE10318}"
+; AHCI controller support - ahciport uses the storport driver stack
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0106","Service",0x00000000,"ahciport"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0106","ClassGUID",0x00000000,"{4D36E96A-E325-11CE-BFC1-08002BE10318}"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_010601","Service",0x00000000,"ahciport"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_010601","ClassGUID",0x00000000,"{4D36E96A-E325-11CE-BFC1-08002BE10318}"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_8086&DEV_2922","Service",0x00000000,"ahciport"
@@ -1983,7 +1986,8 @@ HKLM,"SYSTEM\CurrentControlSet\Services\usbccgp","Type",0x00010001,0x00000001
 ;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","ImagePath",0x00020000,"system32\drivers\atapi.sys"
 ;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Start",0x00010001,0x00000000
 ;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Type",0x00010001,0x00000001
-; storport library (required by storahci and other modern SCSI miniport drivers)
+; storport library (required by ahciport and storahci - modern SCSI miniport drivers)
+; storport provides the driver stack for modern storage miniport drivers
 HKLM,"SYSTEM\CurrentControlSet\Services\storport","ErrorControl",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\storport","Group",0x00000000,"SCSI Miniport"
 HKLM,"SYSTEM\CurrentControlSet\Services\storport","ImagePath",0x00020000,"system32\drivers\storport.sys"
@@ -1998,7 +2002,8 @@ HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Tag",0x00010001,0x00000020
 HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Type",0x00010001,0x00000001
 
-; ahciport miniport (SCSIPORT-based AHCI)
+; ahciport miniport (STORPORT-based AHCI) - primary AHCI driver
+; ahciport uses the storport driver stack for modern AHCI controller support
 HKLM,"SYSTEM\CurrentControlSet\Services\ahciport","ErrorControl",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\ahciport","Group",0x00000000,"SCSI Miniport"
 HKLM,"SYSTEM\CurrentControlSet\Services\ahciport","ImagePath",0x00020000,"system32\drivers\ahciport.sys"
