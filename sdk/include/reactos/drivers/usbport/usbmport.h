@@ -66,13 +66,29 @@ typedef struct _USBPORT_RESOURCES {
   BOOLEAN IsChirpHandled;
   UCHAR Reserved2;
   UCHAR Reserved3;
+  /*
+   * LowerDeviceObject: The device object below the FDO in the stack.
+   * This is typically the ACPI filter (if present) or the PDO.
+   * Miniport drivers can use this to send ACPI IOCTLs for _OSC etc.
+   * Added to support USB _OSC negotiation in xHCI driver.
+   */
+  PDEVICE_OBJECT LowerDeviceObject;
+  /*
+   * PCI location information for ACPI namespace lookup.
+   * Miniport drivers can use these to find their ACPI device node
+   * for evaluating _OSC, _DSM, and other ACPI methods.
+   */
+  ULONG PciSegment;
+  ULONG PciBusNumber;
+  ULONG PciDeviceNumber;
+  ULONG PciFunctionNumber;
 } USBPORT_RESOURCES, *PUSBPORT_RESOURCES;
 
 #if defined(_M_IX86)
 #include <poppack.h>
 #endif
 
-C_ASSERT(sizeof(USBPORT_RESOURCES) == 40 + 6 * sizeof(PVOID));
+C_ASSERT(sizeof(USBPORT_RESOURCES) == 56 + 7 * sizeof(PVOID));
 
 /* USBPORT_RESOURCES::Reserved flags */
 #define USBPORT_RES_DMA_ADDR_32BIT 0x00000001u
