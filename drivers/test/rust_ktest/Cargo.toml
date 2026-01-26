@@ -1,0 +1,33 @@
+[package]
+name = "rust_ktest"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib"]
+name = "rust_ktest_lib"
+path = "src/lib.rs"
+
+[profile.dev]
+opt-level = 2
+debug = false  # CRITICAL: debug=true causes corrupted PE sections on Windows that crash ReactOS kernel
+panic = "abort"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = false
+
+[dependencies]
+# Note: We use manually defined types compatible with Microsoft's wdk-sys
+# because wdk-sys has cross-compilation issues on non-Windows hosts.
+# The types are binary-compatible with Windows NT kernel.
+
+[features]
+default = []
+
+# Enable advanced hardware tests (PCI enumeration, ACPI parsing, I/O ports)
+# Warning: These tests access real hardware and may take longer to run
+advanced_tests = []

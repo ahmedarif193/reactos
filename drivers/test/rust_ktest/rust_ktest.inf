@@ -1,0 +1,46 @@
+; Rust Kernel Test Driver Installation Script
+; Copyright (c) ReactOS Project
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = "ReactOS Project"
+DriverVer   = 01/25/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir = 12  ; DIRID_DRIVERS
+
+[Manufacturer]
+"ReactOS Project" = RustKTest,NTx86,NTamd64,NTarm64
+
+[RustKTest.NTx86]
+%RustKTest.DeviceDesc% = RustKTest_Install,Root\RustKTest
+
+[RustKTest.NTamd64]
+%RustKTest.DeviceDesc% = RustKTest_Install,Root\RustKTest
+
+[RustKTest.NTarm64]
+%RustKTest.DeviceDesc% = RustKTest_Install,Root\RustKTest
+
+[RustKTest_Install]
+CopyFiles = RustKTest.CopyFiles
+
+[RustKTest.CopyFiles]
+rust_ktest.sys
+
+[RustKTest_Install.Services]
+AddService = rust_ktest,%SPSVCINST_ASSOCSERVICE%,RustKTest_Service
+
+[RustKTest_Service]
+DisplayName    = "Rust Kernel Test Driver"
+Description    = "Boot-time kernel testing framework written in Rust"
+ServiceType    = 1  ; SERVICE_KERNEL_DRIVER
+StartType      = 0  ; SERVICE_BOOT_START (loads during boot)
+ErrorControl   = 1  ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\rust_ktest.sys
+LoadOrderGroup = "System Bus Extender"
+
+[Strings]
+SPSVCINST_ASSOCSERVICE = 0x00000002
+RustKTest.DeviceDesc   = "Rust Kernel Test Driver"
