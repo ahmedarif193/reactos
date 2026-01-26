@@ -815,6 +815,15 @@ SpiProcessCompletedRequest(
         SrbInfo->DmaFlags = 0;
     }
 
+    if (SrbInfo->TempMdl != NULL)
+    {
+        if (Irp->MdlAddress == SrbInfo->TempMdl)
+            Irp->MdlAddress = NULL;
+
+        IoFreeMdl(SrbInfo->TempMdl);
+        SrbInfo->TempMdl = NULL;
+    }
+
     /* Clear the request */
     SrbInfo->Srb = NULL;
 
@@ -898,6 +907,7 @@ SpiProcessCompletedRequest(
     SrbInfo->DmaCurrentOffset = 0;
     SrbInfo->DmaFlags = 0;
     SrbInfo->DmaTelemetryLogged = 0;
+    SrbInfo->TempMdl = NULL;
     SrbInfo->DmaWindowCount = 0;
     SrbInfo->DmaBytesMapped = 0;
     SrbInfo->DmaBytesFlushed = 0;
@@ -1842,6 +1852,38 @@ ScsiPortStartIo(
 
     if (Srb->SrbFlags & SRB_FLAGS_UNSPECIFIED_DIRECTION)
     {
+        if (DeviceExtension->MapRegisters &&
+            Irp->MdlAddress == NULL &&
+            Srb->DataTransferLength != 0 &&
+            Srb->DataBuffer != NULL)
+        {
+            PMDL TempMdl = IoAllocateMdl(Srb->DataBuffer,
+                                         Srb->DataTransferLength,
+                                         FALSE,
+                                         FALSE,
+                                         NULL);
+            if (TempMdl == NULL)
+            {
+                DPRINT1("ScsiPortStartIo: Failed to allocate MDL for buffered DMA\n");
+
+                Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+                ScsiPortNotification(RequestComplete,
+                                     DeviceExtension + 1,
+                                     Srb);
+
+                ScsiPortNotification(NextRequest,
+                                     DeviceExtension + 1);
+
+                /* Request DPC for that work */
+                IoRequestDpc(DeviceExtension->Common.DeviceObject, NULL, NULL);
+                return;
+            }
+
+            MmBuildMdlForNonPagedPool(TempMdl);
+            Irp->MdlAddress = TempMdl;
+            SrbInfo->TempMdl = TempMdl;
+        }
+
         PMDL mdl = Irp->MdlAddress;
         /* Guard MDL usage: some internal requests carry no MDL */
         if (mdl)
@@ -1877,36 +1919,44 @@ ScsiPortStartIo(
 
         if (DeviceExtension->MapRegisters)
         {
-            /* Calculate number of needed map registers */
-            SrbInfo->NumberOfMapRegisters = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
-                    Srb->DataBuffer,
-                    Srb->DataTransferLength);
-
-            /* Allocate adapter channel */
-            Status = IoAllocateAdapterChannel(DeviceExtension->AdapterObject,
-                                              DeviceExtension->Common.DeviceObject,
-                                              SrbInfo->NumberOfMapRegisters,
-                                              SpiAdapterControl,
-                                              SrbInfo);
-
-            if (!NT_SUCCESS(Status))
+            /* Only perform DMA mapping if we have an MDL */
+            if (Irp->MdlAddress)
             {
-                DPRINT1("IoAllocateAdapterChannel() failed!\n");
+                /* Calculate number of needed map registers */
+                SrbInfo->NumberOfMapRegisters = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
+                        Srb->DataBuffer,
+                        Srb->DataTransferLength);
 
-                Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
-                ScsiPortNotification(RequestComplete,
-                                     DeviceExtension + 1,
-                                     Srb);
+                /* Allocate adapter channel */
+                Status = IoAllocateAdapterChannel(DeviceExtension->AdapterObject,
+                                                  DeviceExtension->Common.DeviceObject,
+                                                  SrbInfo->NumberOfMapRegisters,
+                                                  SpiAdapterControl,
+                                                  SrbInfo);
 
-                ScsiPortNotification(NextRequest,
-                                     DeviceExtension + 1);
+                if (!NT_SUCCESS(Status))
+                {
+                    DPRINT1("IoAllocateAdapterChannel() failed!\n");
 
-                /* Request DPC for that work */
-                IoRequestDpc(DeviceExtension->Common.DeviceObject, NULL, NULL);
+                    Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+                    ScsiPortNotification(RequestComplete,
+                                         DeviceExtension + 1,
+                                         Srb);
+
+                    ScsiPortNotification(NextRequest,
+                                         DeviceExtension + 1);
+
+                    /* Request DPC for that work */
+                    IoRequestDpc(DeviceExtension->Common.DeviceObject, NULL, NULL);
+                }
+
+                /* Control goes to SpiAdapterControl */
+                return;
             }
-
-            /* Control goes to SpiAdapterControl */
-            return;
+            /*
+             * No MDL present: cannot perform DMA mapping operations.
+             * Fall through to regular packet start path.
+             */
         }
     }
 

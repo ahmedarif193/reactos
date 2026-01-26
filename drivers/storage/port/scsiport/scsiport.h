@@ -151,6 +151,7 @@ typedef struct _SCSI_REQUEST_BLOCK_INFO
     PSCSI_REQUEST_BLOCK Srb;
     PCHAR DataOffset;
     PVOID SaveSenseRequest;
+    PMDL TempMdl;
 
     ULONG SequenceNumber;
 

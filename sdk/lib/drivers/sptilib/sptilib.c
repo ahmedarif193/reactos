@@ -100,6 +100,7 @@ SptiCreateIrpContext(
     IrpContext->Irp = Irp = IoAllocateIrp(DeviceObject->StackSize, 0);
     if (!Irp)
         goto Cleanup;
+    IrpContext->OriginalIrp = OriginalIrp;
 
     Irp->Tail.Overlay.Thread = PsGetCurrentThread();
 
@@ -154,6 +155,9 @@ SptiInitializeOutputBuffer(
 
     PAGED_CODE();
 
+    if (!Irp->AssociatedIrp.SystemBuffer)
+        return;
+
     if (OutputBufferLength > InputBufferLength)
     {
         ULONG_PTR BufferStart = (ULONG_PTR)Irp->AssociatedIrp.SystemBuffer + InputBufferLength;
@@ -174,7 +178,8 @@ SptiCallDriver(
 
     PAGED_CODE();
 
-    SptiInitializeOutputBuffer(Irp);
+    if (IrpContext->OriginalIrp)
+        SptiInitializeOutputBuffer(IrpContext->OriginalIrp);
 
     // TODO: Send the IRP in an asynchronous way (do not block the user app thread)
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
