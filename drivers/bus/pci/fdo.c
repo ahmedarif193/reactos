@@ -92,10 +92,10 @@ FdoEnumerateDevices(
     NTSTATUS Status;
     USHORT Segment;
 
-    DPRINT("Called (seg %u)\n", Segment);
-
     DeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
     Segment = DeviceExtension->BusSegment;
+    DPRINT("PCI: FdoEnumerateDevices called (seg %u bus %lu-%lu)\n",
+           Segment, DeviceExtension->BusRangeStart, DeviceExtension->BusRangeEnd);
 
     DeviceExtension->DeviceListCount = 0;
 
@@ -135,10 +135,28 @@ FdoEnumerateDevices(
             PciConfig.VendorID == PCI_INVALID_VENDORID ||
             PciConfig.VendorID == 0)
         {
-            /* No device at slot 0 function 0 - skip entire bus */
-            DPRINT("Bus %lu: No device at slot 0, skipping entire bus (seg %u)\n",
-                   Bus, Segment);
-            continue;
+            /*
+             * No device at slot 0 function 0.
+             *
+             * NOTE: The PCI specification states that if device 0 does not exist,
+             * the entire bus is empty. However, some hypervisors (like VirtualBox)
+             * do NOT follow this convention and may have devices starting at
+             * non-zero device numbers. We cannot use the early bus termination
+             * optimization in these cases.
+             *
+             * For compatibility, we only skip the bus if we're scanning a
+             * secondary/subordinate bus (bus > 0). For bus 0 (root bus), we
+             * must scan all device numbers because the root complex may have
+             * integrated devices at any slot.
+             */
+            if (Bus > 0)
+            {
+                DPRINT("Bus %lu: No device at slot 0, skipping entire bus (seg %u)\n",
+                       Bus, Segment);
+                continue;
+            }
+            DPRINT1("PCI: Bus %lu slot 0 empty (Size=%lu VendorID=0x%04hx), but scanning root bus anyway (seg %u)\n",
+                   Bus, Size, PciConfig.VendorID, Segment);
         }
 
         /* Bus has at least one device, enumerate all devices on this bus */
@@ -170,22 +188,23 @@ FdoEnumerateDevices(
                                          PCI_COMMON_HDR_LENGTH);
                 }
 
-                DPRINT("Size %lu (seg %u)\n", Size, Segment);
                 if (Size != PCI_COMMON_HDR_LENGTH ||
                     PciConfig.VendorID == PCI_INVALID_VENDORID ||
                     PciConfig.VendorID == 0)
                 {
                     if (FunctionNumber == 0)
                     {
+                        /* No device at this slot, try next device number */
                         break;
                     }
                     else
                     {
+                        /* No function at this number, try next function */
                         continue;
                     }
                 }
 
-                DPRINT("Bus %1lu  Device %2lu  Func %1lu  VenID 0x%04hx  DevID 0x%04hx (seg %u)\n",
+                DPRINT1("PCI: Found Bus %1lu  Device %2lu  Func %1lu  VenID 0x%04hx  DevID 0x%04hx (seg %u)\n",
                        Bus,
                        DeviceNumber,
                        FunctionNumber,
@@ -284,7 +303,7 @@ FdoQueryBusRelations(
     UNREFERENCED_PARAMETER(IrpSp);
 
     Segment = ((PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension)->BusSegment;
-    DPRINT("Called (seg %u)\n", Segment);
+    DPRINT1("PCI: FdoQueryBusRelations called (seg %u)\n", Segment);
 
     ErrorStatus = STATUS_INSUFFICIENT_RESOURCES;
 
@@ -295,6 +314,8 @@ FdoQueryBusRelations(
     FdoEnumerateDevices(DeviceObject);
 
     DeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    DPRINT1("PCI: FdoQueryBusRelations enumerated %lu devices (seg %u)\n",
+            DeviceExtension->DeviceListCount, Segment);
 
     if (Irp->IoStatus.Information)
     {
@@ -365,7 +386,7 @@ FdoQueryBusRelations(
                 break;
             }
 
-            DPRINT("DeviceID: %S (seg %u)\n",
+            DPRINT1("PCI: Created PDO for DeviceID: %S (seg %u)\n",
                    PdoDeviceExtension->DeviceID.Buffer,
                    Segment);
 
@@ -467,7 +488,7 @@ FdoStartDevice(
     DeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
     Segment = DeviceExtension ? DeviceExtension->BusSegment : 0;
 
-    DPRINT("Called (seg %u)\n", Segment);
+    DPRINT1("PCI: FdoStartDevice called (seg %u)\n", Segment);
 
     AllocatedResources = IoGetCurrentIrpStackLocation(Irp)->Parameters.StartDevice.AllocatedResources;
     if (!AllocatedResources)

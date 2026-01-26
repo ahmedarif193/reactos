@@ -81,8 +81,6 @@ Ndis6iDereferenceOidRequestContext(
     RemoveEntryList(&Context->ListEntry);
     KeReleaseSpinLock(&Ndis6OidRequestListLock, OldIrql);
 
-    DPRINT1("Freed OID context %p\n", Context);
-
     ExFreePoolWithTag(Context, NDIS_TAG);
 }
 
@@ -136,9 +134,6 @@ Ndis6iAllocateOidRequestContext(
     KeAcquireSpinLock(&Ndis6OidRequestListLock, &OldIrql);
     InsertTailList(&Ndis6OidRequestList, &Context->ListEntry);
     KeReleaseSpinLock(&Ndis6OidRequestListLock, OldIrql);
-
-    DPRINT1("Allocated OID context %p for request %p (Direct=%d)\n",
-        Context, Request, IsDirect);
 
     return Context;
 }
@@ -332,8 +327,6 @@ Ndis6iCompleteOidRequest(
     _In_ NDIS_STATUS Status,
     _In_ BOOLEAN IsDirect)
 {
-    NDIS_OID Oid;
-
     if (Context == NULL)
     {
         DPRINT1("NULL context in completion\n");
@@ -343,11 +336,6 @@ Ndis6iCompleteOidRequest(
     /* Update context */
     Context->CompletionStatus = Status;
     Context->IsPending = FALSE;
-
-    Oid = Ndis6iGetOidFromRequest(Context->Request);
-
-    DPRINT1("Completing OID 0x%08x with status 0x%x (Direct=%d)\n",
-        Oid, Status, IsDirect);
 
     /* Signal completion event for synchronous waiters */
     KeSetEvent(&Context->CompletionEvent, IO_NO_INCREMENT, FALSE);
@@ -793,9 +781,6 @@ Ndis6iSynchronousOidRequest(
     LARGE_INTEGER Timeout;
     PNDIS6_MINIPORT_DRIVER_BLOCK DriverBlock;
     PVOID MiniportAdapterContext;
-
-    DPRINT1("Ndis6iSynchronousOidRequest: Handle=%p, Request=%p\n",
-        MiniportHandle, Request);
 
     /* Validate parameters */
     if (MiniportHandle == NULL || Request == NULL)
