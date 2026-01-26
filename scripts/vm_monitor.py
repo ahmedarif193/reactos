@@ -23,7 +23,7 @@ import argparse
 import shutil
 import platform
 
-# Configuration
+# Configuration (never change those values)
 LOG_FILE = "/tmp/v.log"
 STALL_TIMEOUT = 6    # Log inactivity timeout
 HARD_TIMEOUT = 30    # Total maximum runtime seconds
@@ -417,7 +417,12 @@ def start_qemu(rpi_mode=False):
                 "-serial", "stdio",
                 "-display", "none",
                 "-no-reboot",
-                "-no-shutdown"
+                "-no-shutdown",
+                "-device", "qemu-xhci,id=xhci",
+                "-device", "usb-kbd,bus=xhci.0",
+                "-device", "usb-mouse,bus=xhci.0",
+                "-drive", f"if=none,id=usbdisk,format=raw,file={FAT32_IMG}",
+                "-device", "usb-storage,bus=xhci.0,drive=usbdisk"
             ]
         else:
             # BIOS boot for i386
@@ -608,10 +613,12 @@ def main():
 
     parser = argparse.ArgumentParser(description='VM Monitor Script')
     parser.add_argument('--qemu', action='store_true', help='Use QEMU instead of VirtualBox')
+    parser.add_argument('--vbox', action='store_true', help='Use VirtualBox (default behavior)')
     parser.add_argument('--rpi', action='store_true', help='Use Raspberry Pi emulation mode (cortex-a76, no HVF)')
     args = parser.parse_args()
 
-    use_qemu = args.qemu
+    # --vbox is explicit but same as default (no --qemu)
+    use_qemu = args.qemu and not args.vbox
 
     # Detect target architecture from CWD
     target_arch = detect_target_arch()

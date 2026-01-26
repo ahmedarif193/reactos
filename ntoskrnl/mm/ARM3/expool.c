@@ -247,61 +247,6 @@ ExpIsCanonicalPointer(_In_ PVOID Pointer)
 }
 #endif
 
-#if DBG
-#define USBPORT_POOL_TAG 'pbsu'
-#define USBPORT_TRACE_MAX_BYTES 64
-#define POOL_TRACE_TAG 'looP'
-#define POOL_TRACE_MAX_BYTES 64
-static LONG ExpPoolTraceBudget = 64;
-#define POOL_TRACE_TARGET_BYTES 24
-static LONG ExpPoolAnyBudget = 256;
-
-FORCEINLINE
-VOID
-ExpLogUsbPortPoolTrace(
-    _In_ PCSTR Action,
-    _In_ PVOID Pointer,
-    _In_ SIZE_T Size,
-    _In_ ULONG Tag)
-{
-    USHORT Frames;
-    PVOID Stack[8];
-    USHORT i;
-
-    if (Tag == USBPORT_POOL_TAG && Size <= USBPORT_TRACE_MAX_BYTES)
-    {
-        /* Always trace USBPORT small-pool activity. */
-    }
-    else if (Tag == POOL_TRACE_TAG && Size <= POOL_TRACE_MAX_BYTES)
-    {
-        /* Trace limited generic Pool tag traffic to catch lookaside corruption. */
-        if (InterlockedDecrement(&ExpPoolTraceBudget) < 0)
-            return;
-    }
-    else if (Size == POOL_TRACE_TARGET_BYTES)
-    {
-        /* Capture a larger sample of size-24 allocations (lookaside index 2). */
-        if (InterlockedDecrement(&ExpPoolAnyBudget) < 0)
-            return;
-    }
-    else
-    {
-        return;
-    }
-
-    Frames = RtlCaptureStackBackTrace(1, RTL_NUMBER_OF(Stack), Stack, NULL);
-    DPRINT1("EX: USBPORT %s size=%Iu ptr=%p tag=%.4s frames=%u\n",
-            Action,
-            Size,
-            Pointer,
-            (char *)&Tag,
-            Frames);
-    for (i = 0; i < Frames; i++)
-    {
-        DPRINT1("        %p\n", Stack[i]);
-    }
-}
-#endif
 
 FORCEINLINE
 PGENERAL_LOOKASIDE
@@ -605,27 +550,12 @@ NTAPI
 ExpCheckPoolLinks(IN PLIST_ENTRY ListHead)
 {
 #if defined(_M_ARM64) || defined(__aarch64__)
-    static LONG CheckCount = 0;
-    LONG Count = InterlockedIncrement(&CheckCount);
-
-    /* Log calls around the crash point to understand call pattern */
-    if (Count <= 10 || (Count >= 40 && Count <= 50))
-    {
-        DPRINT1("ARM64 ExpCheckPoolLinks[%d]: ListHead=%p Flink=%p Blink=%p\n",
-                Count, ListHead, ListHead->Flink, ListHead->Blink);
-    }
-
     {
         PLIST_ENTRY DecodedFlink = ExpDecodePoolLink(ListHead->Flink);
         PLIST_ENTRY DecodedBlink = ExpDecodePoolLink(ListHead->Blink);
 
         if (!ExpIsCanonicalPointer(DecodedFlink) || !ExpIsCanonicalPointer(DecodedBlink))
         {
-            DPRINT1("ARM64 POOL LINK NON-CANONICAL:\n");
-            DPRINT1("  ListHead=%p Flink=%p Blink=%p\n",
-                    ListHead, ListHead->Flink, ListHead->Blink);
-            DPRINT1("  DecodedFlink=%p DecodedBlink=%p\n",
-                    DecodedFlink, DecodedBlink);
             KeBugCheckEx(BAD_POOL_HEADER,
                          POOL_CORRUPTED_LIST,
                          (ULONG_PTR)ListHead,
@@ -637,11 +567,6 @@ ExpCheckPoolLinks(IN PLIST_ENTRY ListHead)
     /* Early check for obviously corrupt links */
     if (ListHead->Flink == NULL || ListHead->Blink == NULL)
     {
-        DPRINT1("ARM64 POOL LINK NULL CHECK FAILED (call #%d):\n", Count);
-        DPRINT1("  ListHead=%p Flink=%p Blink=%p\n",
-                ListHead, ListHead->Flink, ListHead->Blink);
-        DPRINT1("  NonPagedDesc=%p PagedDesc=%p\n",
-                &NonPagedPoolDescriptor, ExpPagedPoolDescriptor[0]);
         KeBugCheckEx(BAD_POOL_HEADER,
                      3,
                      (ULONG_PTR)ListHead,
@@ -652,23 +577,6 @@ ExpCheckPoolLinks(IN PLIST_ENTRY ListHead)
     if ((ExpDecodePoolLink(ExpDecodePoolLink(ListHead->Flink)->Blink) != ListHead) ||
         (ExpDecodePoolLink(ExpDecodePoolLink(ListHead->Blink)->Flink) != ListHead))
     {
-#if defined(_M_ARM64) || defined(__aarch64__)
-        PLIST_ENTRY DecodedFlink = ExpDecodePoolLink(ListHead->Flink);
-        PLIST_ENTRY DecodedBlink = ExpDecodePoolLink(ListHead->Blink);
-        DPRINT1("ARM64 POOL LINK CORRUPTION:\n");
-        DPRINT1("  ListHead=%p Flink=%p (decoded=%p) Blink=%p (decoded=%p)\n",
-                ListHead, ListHead->Flink, DecodedFlink, ListHead->Blink, DecodedBlink);
-        if (MmIsAddressValid(DecodedFlink))
-            DPRINT1("  DecodedFlink->Blink=%p (decoded=%p)\n",
-                    DecodedFlink->Blink, ExpDecodePoolLink(DecodedFlink->Blink));
-        else
-            DPRINT1("  DecodedFlink %p is INVALID address\n", DecodedFlink);
-        if (MmIsAddressValid(DecodedBlink))
-            DPRINT1("  DecodedBlink->Flink=%p (decoded=%p)\n",
-                    DecodedBlink->Flink, ExpDecodePoolLink(DecodedBlink->Flink));
-        else
-            DPRINT1("  DecodedBlink %p is INVALID address\n", DecodedBlink);
-#endif
         KeBugCheckEx(BAD_POOL_HEADER,
                      3,
                      (ULONG_PTR)ListHead,
@@ -732,10 +640,6 @@ ExpInsertPoolTailList(IN PLIST_ENTRY ListHead,
                       IN PLIST_ENTRY Entry)
 {
     PLIST_ENTRY Blink;
-#if defined(_M_ARM64) || defined(__aarch64__)
-    if (ListHead->Flink == NULL || ListHead->Blink == NULL)
-        DPRINT1("ARM64 InsertTail pre: ListHead=%p Flink=%p Entry=%p\n", ListHead, ListHead->Flink, Entry);
-#endif
     ExpCheckPoolLinks(ListHead);
     Blink = ExpDecodePoolLink(ListHead->Blink);
     Entry->Flink = ExpEncodePoolLink(ListHead);
@@ -751,10 +655,6 @@ ExpInsertPoolHeadList(IN PLIST_ENTRY ListHead,
                       IN PLIST_ENTRY Entry)
 {
     PLIST_ENTRY Flink;
-#if defined(_M_ARM64) || defined(__aarch64__)
-    if (ListHead->Flink == NULL || ListHead->Blink == NULL)
-        DPRINT1("ARM64 InsertHead pre: ListHead=%p Flink=%p Entry=%p\n", ListHead, ListHead->Flink, Entry);
-#endif
     ExpCheckPoolLinks(ListHead);
     Flink = ExpDecodePoolLink(ListHead->Flink);
     Entry->Flink = ExpEncodePoolLink(Flink);
@@ -2630,17 +2530,6 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
     OriginalType = PoolType;
     PoolType = PoolType & BASE_POOL_TYPE_MASK;
     PoolDesc = PoolVector[PoolType];
-#if defined(_M_ARM64) || defined(__aarch64__)
-    {
-        static int PoolDescLogCount = 0;
-        if (PoolDescLogCount < 5 || PoolDesc == NULL)
-        {
-            DPRINT1("ARM64 POOL SETUP[%d]: OrigType=%d PoolType=%d PoolDesc=%p NonPagedDesc=%p PagedDesc=%p\n",
-                    PoolDescLogCount, OriginalType, PoolType, PoolDesc, &NonPagedPoolDescriptor, ExpPagedPoolDescriptor[0]);
-            PoolDescLogCount++;
-        }
-    }
-#endif
     ASSERT(PoolDesc != NULL);
 
     //
@@ -2839,12 +2728,6 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
             Entry->PoolTag = Tag;
             (POOL_FREE_BLOCK(Entry))->Flink = NULL;
             (POOL_FREE_BLOCK(Entry))->Blink = NULL;
-#if DBG
-            ExpLogUsbPortPoolTrace("alloc",
-                                   POOL_FREE_BLOCK(Entry),
-                                   Entry->BlockSize * POOL_BLOCK_SIZE,
-                                   Tag);
-#endif
             return POOL_FREE_BLOCK(Entry);
         }
     }
@@ -2856,27 +2739,13 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
     ListHead = &PoolDesc->ListHeads[i];
 #if defined(_M_ARM64) || defined(__aarch64__)
     /* ARM64: Validate PoolDesc and i before starting the loop */
+    if ((ULONG_PTR)PoolDesc < 0xFFFF000000000000ULL)
     {
-        static int LoopStartCount = 0;
-        LoopStartCount++;
-        if (LoopStartCount <= 10 ||
-            (ULONG_PTR)PoolDesc < 0xFFFF000000000000ULL ||
-            i >= POOL_LISTS_PER_PAGE)
-        {
-            DPRINT1("ARM64 LOOP START[%d]: PoolDesc=%p i=%u ListHead=%p (NonPagedDesc=%p PagedDesc=%p)\n",
-                    LoopStartCount, PoolDesc, i, ListHead,
-                    &NonPagedPoolDescriptor, ExpPagedPoolDescriptor[0]);
-        }
-        if ((ULONG_PTR)PoolDesc < 0xFFFF000000000000ULL)
-        {
-            DPRINT1("ARM64 LOOP: CORRUPT PoolDesc=%p! PoolType=%d\n", PoolDesc, PoolType);
-            KeBugCheckEx(BAD_POOL_HEADER, 0xAA65, (ULONG_PTR)PoolDesc, PoolType, i);
-        }
-        if (i >= POOL_LISTS_PER_PAGE)
-        {
-            DPRINT1("ARM64 LOOP: i=%u out of bounds (max=%u)\n", i, POOL_LISTS_PER_PAGE);
-            KeBugCheckEx(BAD_POOL_HEADER, 0xAA66, i, POOL_LISTS_PER_PAGE, (ULONG_PTR)PoolDesc);
-        }
+        KeBugCheckEx(BAD_POOL_HEADER, 0xAA65, (ULONG_PTR)PoolDesc, PoolType, i);
+    }
+    if (i >= POOL_LISTS_PER_PAGE)
+    {
+        KeBugCheckEx(BAD_POOL_HEADER, 0xAA66, i, POOL_LISTS_PER_PAGE, (ULONG_PTR)PoolDesc);
     }
 #endif
     do
@@ -2912,55 +2781,13 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
             // there is a guarantee that any block on this list will either be
             // of the correct size, or perhaps larger.
             //
-#if defined(_M_ARM64) || defined(__aarch64__)
-            {
-                static int DbgAllocCount = 0;
-                extern PPOOL_DESCRIPTOR ExpPagedPoolDescriptor[16 + 1];
-                if (DbgAllocCount < 5 || ListHead->Flink == NULL || ListHead->Blink == NULL)
-                {
-                    DPRINT1("ARM64 POOL ALLOC[%d]: PoolType=%d ListHead=%p Flink=%p Blink=%p PoolDesc=%p (Paged[0]=%p) i=%d\n",
-                            DbgAllocCount, PoolType, ListHead, ListHead->Flink, ListHead->Blink,
-                            PoolDesc, ExpPagedPoolDescriptor[0], i);
-                    DbgAllocCount++;
-                }
-            }
-#endif
             ExpCheckPoolLinks(ListHead);
             Entry = POOL_ENTRY(ExpRemovePoolHeadList(ListHead));
 #if defined(_M_ARM64) || defined(__aarch64__)
             /* ARM64: Validate Entry immediately after removal from free list */
             if ((ULONG_PTR)Entry < 0xFFFF000000000000ULL)
             {
-                DPRINT1("ARM64 ENTRY CORRUPT (low addr): Entry=%p from ListHead=%p (i=%u)\n",
-                        Entry, ListHead, i);
-                DPRINT1("  ListHead Flink=%p Blink=%p\n", ListHead->Flink, ListHead->Blink);
-                DPRINT1("  PoolDesc=%p NonPagedDesc=%p PagedDesc=%p\n",
-                        PoolDesc, &NonPagedPoolDescriptor, ExpPagedPoolDescriptor[0]);
-                /* Cannot continue with a corrupt entry - bugcheck with info */
                 KeBugCheckEx(BAD_POOL_HEADER, 0xAA64, (ULONG_PTR)Entry, (ULONG_PTR)ListHead, i);
-            }
-            /* Also check if Entry is inside the descriptor itself (not pool memory) */
-            if (((ULONG_PTR)Entry >= (ULONG_PTR)PoolDesc &&
-                 (ULONG_PTR)Entry < (ULONG_PTR)PoolDesc + sizeof(POOL_DESCRIPTOR)) ||
-                ((ULONG_PTR)Entry >= (ULONG_PTR)&NonPagedPoolDescriptor &&
-                 (ULONG_PTR)Entry < (ULONG_PTR)&NonPagedPoolDescriptor + sizeof(POOL_DESCRIPTOR)) ||
-                (ExpPagedPoolDescriptor[0] != NULL &&
-                 (ULONG_PTR)Entry >= (ULONG_PTR)ExpPagedPoolDescriptor[0] &&
-                 (ULONG_PTR)Entry < (ULONG_PTR)ExpPagedPoolDescriptor[0] + sizeof(POOL_DESCRIPTOR)))
-            {
-                DPRINT1("ARM64 ENTRY IN DESCRIPTOR: Entry=%p PoolDesc=%p ListHead=%p i=%u\n",
-                        Entry, PoolDesc, ListHead, i);
-                DPRINT1("  NonPagedDesc=%p-%p PagedDesc=%p-%p\n",
-                        &NonPagedPoolDescriptor,
-                        (PUCHAR)&NonPagedPoolDescriptor + sizeof(POOL_DESCRIPTOR),
-                        ExpPagedPoolDescriptor[0],
-                        ExpPagedPoolDescriptor[0] ? (PUCHAR)ExpPagedPoolDescriptor[0] + sizeof(POOL_DESCRIPTOR) : NULL);
-                DPRINT1("  ListHead Flink=%p Blink=%p (decoded: %p %p)\n",
-                        ListHead->Flink, ListHead->Blink,
-                        ExpDecodePoolLink(ListHead->Flink), ExpDecodePoolLink(ListHead->Blink));
-                /* Skip this allocation - return to free list search */
-                ExUnlockPool(PoolDesc, OldIrql);
-                continue;
             }
 #endif
             ExpCheckPoolLinks(ListHead);
@@ -3069,10 +2896,6 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
                 if ((ULONG_PTR)FragmentEntry < 0xFFFF000000000000ULL ||
                     BlockSize == 0 || BlockSize > POOL_LISTS_PER_PAGE)
                 {
-                    DPRINT1("ARM64 FRAGMENT CORRUPT: FragmentEntry=%p BlockSize=%u Entry=%p i=%u\n",
-                            FragmentEntry, BlockSize, Entry, i);
-                    DPRINT1("  PoolDesc=%p ListHeads=%p Computed=%p\n",
-                            PoolDesc, PoolDesc->ListHeads, &PoolDesc->ListHeads[BlockSize - 1]);
                     /* Skip the corruption instead of crashing */
                     Entry->BlockSize = i;
                     Entry->PoolType = OriginalType + 1;
@@ -3121,12 +2944,6 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
             Entry->PoolTag = Tag;
             (POOL_FREE_BLOCK(Entry))->Flink = NULL;
             (POOL_FREE_BLOCK(Entry))->Blink = NULL;
-#if DBG
-            ExpLogUsbPortPoolTrace("alloc",
-                                   POOL_FREE_BLOCK(Entry),
-                                   Entry->BlockSize * POOL_BLOCK_SIZE,
-                                   Tag);
-#endif
             return POOL_FREE_BLOCK(Entry);
         }
     } while (++ListHead != &PoolDesc->ListHeads[POOL_LISTS_PER_PAGE]);
@@ -3270,12 +3087,6 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
     //
     ExpCheckPoolBlocks(Entry);
     Entry->PoolTag = Tag;
-#if DBG
-    ExpLogUsbPortPoolTrace("alloc",
-                           POOL_FREE_BLOCK(Entry),
-                           Entry->BlockSize * POOL_BLOCK_SIZE,
-                           Tag);
-#endif
     return POOL_FREE_BLOCK(Entry);
 }
 
@@ -3601,12 +3412,6 @@ ExFreePoolWithTag(IN PVOID P,
     //
     Tag = Entry->PoolTag;
     if (Tag & PROTECTED_POOL) Tag &= ~PROTECTED_POOL;
-#if DBG
-    ExpLogUsbPortPoolTrace("free",
-                           P,
-                           BlockSize * POOL_BLOCK_SIZE,
-                           Tag);
-#endif
 
     //
     // Check block tag
@@ -3800,19 +3605,6 @@ ExFreePoolWithTag(IN PVOID P,
                 //
                 ExpCheckPoolLinks(POOL_FREE_BLOCK(NextEntry));
                 ExpRemovePoolEntryList(POOL_FREE_BLOCK(NextEntry));
-#if defined(_M_ARM64) || defined(__aarch64__)
-                {
-                    PLIST_ENTRY FreeBlock = POOL_FREE_BLOCK(NextEntry);
-                    PLIST_ENTRY DecodedFlink = ExpDecodePoolLink(FreeBlock->Flink);
-                    PLIST_ENTRY DecodedBlink = ExpDecodePoolLink(FreeBlock->Blink);
-                    if (DecodedFlink->Flink == NULL || DecodedBlink->Flink == NULL)
-                    {
-                        DPRINT1("ARM64 FREE COMBINE1: NextEntry=%p FreeBlock=%p\n", NextEntry, FreeBlock);
-                        DPRINT1("  Flink=%p (decoded=%p) Blink=%p (decoded=%p)\n",
-                                FreeBlock->Flink, DecodedFlink, FreeBlock->Blink, DecodedBlink);
-                    }
-                }
-#endif
                 ExpCheckPoolLinks(ExpDecodePoolLink((POOL_FREE_BLOCK(NextEntry))->Flink));
                 ExpCheckPoolLinks(ExpDecodePoolLink((POOL_FREE_BLOCK(NextEntry))->Blink));
             }
