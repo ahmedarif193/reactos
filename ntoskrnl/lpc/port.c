@@ -313,8 +313,45 @@ NtQueryInformationPort(IN HANDLE PortHandle,
                        IN ULONG PortInformationLength,
                        OUT PULONG ReturnLength)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
-}
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PVOID PortObject;
+    NTSTATUS Status;
 
+    /* Only PortNoInformation is defined/supported here */
+    if (PortInformationClass != PortNoInformation)
+        return STATUS_INVALID_INFO_CLASS;
+
+    Status = ObReferenceObjectByHandle(PortHandle,
+                                       0,
+                                       LpcPortObjectType,
+                                       PreviousMode,
+                                       &PortObject,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* We only needed to prove the handle was valid. We can release the object now. */
+    ObDereferenceObject(PortObject);
+
+    _SEH2_TRY
+    {
+        if (ReturnLength != NULL)
+        {
+            if (PreviousMode != KernelMode)
+                ProbeForWriteUlong(ReturnLength);
+            
+            *ReturnLength = 0;
+        }
+
+        /* No data is returned for PortNoInformation; ignore buffer/length */
+        Status = STATUS_SUCCESS;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
 /* EOF */
