@@ -4006,6 +4006,17 @@ XHCI_ResetDeviceOnPort(
         return MP_STATUS_SUCCESS;
     }
 
+    /*
+     * If the slot is already in Default state (Addressed=FALSE), the device
+     * is already at USB address 0. Skip the redundant command.
+     */
+    if (!Slot->Addressed)
+    {
+        DPRINT1("usbxhci: ResetDeviceOnPort: slot %u already in Default state, skipping RESET_DEV\n",
+                Slot->SlotId);
+        return MP_STATUS_SUCCESS;
+    }
+
     Status = XHCI_SendCommand(Extension,
                               XHCI_TRB_TYPE_RESET_DEV,
                               0,
@@ -4015,7 +4026,14 @@ XHCI_ResetDeviceOnPort(
                               TRUE,
                               NULL,
                               &CompletionCode);
-    if (Status != MP_STATUS_SUCCESS)
+    if (Status == MP_STATUS_SUCCESS)
+    {
+        /* RESET_DEVICE succeeded - slot is now in Default state */
+        Slot->Addressed = FALSE;
+        DPRINT1("usbxhci: ResetDeviceOnPort: RESET_DEV succeeded for slot %u on port %u, now in Default state\n",
+                Slot->SlotId, PortNumber);
+    }
+    else
     {
         DPRINT1("usbxhci: ResetDeviceOnPort: RESET_DEV command failed for slot %u on port %u (Status=%ld Code=%lu)\n",
                 Slot->SlotId,
@@ -6320,10 +6338,13 @@ XHCI_AddressDeviceSlot(
     DelayMs = ADDR_DEV_INITIAL_DELAY_MS;
 
     /*
-     * Check if the port is enabled before issuing ADDRESS_DEVICE.
-     * On real hardware (e.g., Intel N100), the port may still be in the
-     * Polling state (PLS=7) after reset, not yet fully enabled (PED=0).
-     * Wait for port enable to complete to avoid USB_TRANSACTION_ERROR.
+     * Verify the port is enabled before issuing ADDRESS_DEVICE.
+     * After the fix in XHCI_RH_SetFeaturePortReset, the port should already
+     * be enabled (PED=1) when we get here. This check is a safety net.
+     *
+     * If PED=0, the device failed to enumerate at the negotiated speed and
+     * ADDRESS_DEVICE will fail with USB_TRANSACTION_ERROR. Fail early with
+     * a clear error message rather than attempting the command.
      */
     if (EndpointProperties->PortNumber > 0 &&
         EndpointProperties->PortNumber <= Extension->NumberOfPorts)
@@ -6337,7 +6358,7 @@ XHCI_AddressDeviceSlot(
         {
             PortSc = XHCI_READ_REGISTER_ULONG(PortScReg);
 
-            /* Wait for port enable if device is connected but port not yet enabled */
+            /* Brief wait for port enable - should already be set from reset */
             while ((PortSc & XHCI_PORTSC_CCS) &&
                    !(PortSc & XHCI_PORTSC_PED) &&
                    WaitMs < ADDR_DEV_PORT_ENABLE_WAIT_MS)
@@ -6367,6 +6388,34 @@ XHCI_AddressDeviceSlot(
             {
                 DPRINT1("usbxhci: ADDRESS_DEVICE port %u device disconnected\n",
                         EndpointProperties->PortNumber);
+                return MP_STATUS_FAILURE;
+            }
+
+            /*
+             * If port is still not enabled after waiting, fail now rather than
+             * attempting ADDRESS_DEVICE which will certainly fail with
+             * USB_TRANSACTION_ERROR (code 4).
+             */
+            if (!(PortSc & XHCI_PORTSC_PED))
+            {
+                ULONG LinkState = (PortSc & XHCI_PORTSC_PLS_MASK) >> XHCI_PORTSC_PLS_SHIFT;
+                DPRINT1("usbxhci: ADDRESS_DEVICE port %u not enabled (PED=0 PLS=%lu), cannot address device\n",
+                        EndpointProperties->PortNumber, LinkState);
+                DPRINT1("usbxhci: Port %u PORTSC=0x%08lx - device may have failed speed negotiation\n",
+                        EndpointProperties->PortNumber, PortSc);
+
+                if (DisableOnFailure)
+                {
+                    XHCI_SendCommand(Extension,
+                                     XHCI_TRB_TYPE_DISABLE_SLOT,
+                                     0,
+                                     0,
+                                     XHCI_COMMAND_SLOT_FIELD(SlotId),
+                                     XHCI_COMMAND_TIMEOUT_MS,
+                                     FALSE,
+                                     NULL,
+                                     NULL);
+                }
                 return MP_STATUS_FAILURE;
             }
         }
@@ -10499,10 +10548,16 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
     if (IsDefaultPipe)
     {
         Slot = XHCI_FindSlotByAddress(Extension, EndpointProperties->DeviceAddress);
-        if (!Slot &&
-            EndpointProperties->DeviceAddress == 0 &&
-            EndpointProperties->PortNumber != 0)
+        if (!Slot && EndpointProperties->PortNumber != 0)
         {
+            /*
+             * Fallback to port-based lookup. This is needed in two scenarios:
+             * 1. DeviceAddress == 0: Initial enumeration when no address is assigned yet
+             * 2. After RESET_DEVICE: The slot's USB address was cleared to 0 by
+             *    XHCI_UpdateDeviceAddressMap(), but USBPORT still uses the old address.
+             *    The address lookup fails, but the slot is still valid and mapped to
+             *    its port number.
+             */
             Slot = XHCI_FindSlotByPort(Extension, EndpointProperties->PortNumber);
         }
 
@@ -10970,6 +11025,53 @@ XHCI_StartController(PVOID MiniPortExtension,
     }
 
     XHCI_GetRegistryParameters(Extension);
+
+    /*
+     * Evaluate USB _OSC before any hardware configuration.
+     * This must be done at PASSIVE_LEVEL (StartController is called during
+     * PnP IRP_MN_START_DEVICE which runs at PASSIVE_LEVEL).
+     *
+     * _OSC negotiation determines what controls the OS is allowed to exercise:
+     * - Port power switching
+     * - Link state management
+     * - USB-C mux control
+     * - Power state transitions
+     * - Compliance mode recovery
+     * - U1/U2 LPM entry
+     *
+     * If _OSC is not present (legacy platform) or fails, we assume full OS
+     * control to maintain backwards compatibility.
+     */
+    {
+        NTSTATUS OscStatus;
+
+        DPRINT1("usbxhci: Evaluating USB _OSC for capability negotiation\n");
+        OscStatus = XHCI_EvaluateOsc(Extension);
+
+        if (NT_SUCCESS(OscStatus))
+        {
+            DPRINT1("usbxhci: _OSC negotiation complete - Granted=0x%lX, Requested=0x%lX, Available=0x%lX\n",
+                    Extension->OscContext.ControlGranted,
+                    Extension->OscContext.ControlRequested,
+                    Extension->OscContext.ControlAvailable);
+
+            if (Extension->OscContext.FirmwareFirst)
+            {
+                DPRINT1("usbxhci: Running in Firmware First mode (firmware controls USB)\n");
+            }
+        }
+        else if (OscStatus == STATUS_NOT_FOUND ||
+                 OscStatus == STATUS_OBJECT_NAME_NOT_FOUND)
+        {
+            /* _OSC not present - legacy platform with full OS control */
+            DPRINT("usbxhci: No USB _OSC method (legacy platform), assuming full OS control\n");
+        }
+        else
+        {
+            DPRINT1("usbxhci: _OSC evaluation failed: 0x%lX, assuming full OS control\n",
+                    OscStatus);
+        }
+    }
 
     Status = XHCI_DisableLegacySupport(Extension);
     if (Status != MP_STATUS_SUCCESS)
@@ -13137,9 +13239,206 @@ XHCI_RH_SetFeaturePortReset(
         return XHCI_ApplyQemuPortResetQuirk(Extension, Port);
     }
 
-    /* Standard Behavior: Set PR (Port Reset) */
+    /* Standard Behavior: Set PR (Port Reset) and wait for completion */
     DPRINT1("XHCI: Port %u standard reset - writing PORTSC_PR\n", Port);
-    return XHCI_ModifyPortBits(Extension, Port, XHCI_PORTSC_PR, 0, 0);
+
+    {
+        MPSTATUS Status;
+        ULONG PostValue;
+        ULONG WaitAttempts;
+        BOOLEAN ResetComplete = FALSE;
+        PXHCI_DEVICE_SLOT Slot;
+
+        /*
+         * Per xHCI spec section 4.6.11 (Reset Device) and Linux kernel xhci.c
+         * xhci_discover_or_reset_device(): when a USB bus reset occurs on a
+         * port that has an associated slot in Addressed or Configured state,
+         * the xHC must be notified via RESET_DEVICE command to transition
+         * the slot back to Default state.
+         *
+         * On Intel Alder Lake-N (8086:464e, 8086:54ed), if we perform a USB
+         * bus reset while the slot is still in Addressed state, the second
+         * port reset (issued by usbhub after device addressing) fails with
+         * PED=0 and PLS=7 (Polling) - the port never transitions to Enabled.
+         *
+         * The fix is to issue RESET_DEVICE BEFORE the port reset when there's
+         * an associated slot in Addressed state. This puts the slot back into
+         * Default state, allowing the USB bus reset to complete normally.
+         *
+         * Note: We skip RESET_DEVICE for virtual ports and VirtualBox since
+         * they have their own quirks, and for slots already in Default state.
+         */
+        if (!XHCI_IsVirtualPort(Extension, Port) &&
+            !(Extension->Quirks & XHCI_QUIRK_VBOX_POLL_XFERS))
+        {
+            Slot = XHCI_FindSlotByPort(Extension, Port);
+            if (Slot && Slot->Addressed)
+            {
+                ULONG ResetCompletionCode = 0;
+                MPSTATUS ResetStatus;
+
+                DPRINT1("XHCI: Port %u has slot %u in Addressed state, issuing RESET_DEVICE before port reset\n",
+                        Port, Slot->SlotId);
+
+                ResetStatus = XHCI_SendCommand(Extension,
+                                               XHCI_TRB_TYPE_RESET_DEV,
+                                               0,
+                                               0,
+                                               XHCI_COMMAND_SLOT_FIELD(Slot->SlotId),
+                                               XHCI_COMMAND_TIMEOUT_MS,
+                                               TRUE,
+                                               NULL,
+                                               &ResetCompletionCode);
+
+                if (ResetStatus == MP_STATUS_SUCCESS)
+                {
+                    /*
+                     * RESET_DEVICE succeeded - slot is now in Default state.
+                     * Mark it as not addressed so we don't issue redundant
+                     * RESET_DEVICE commands later.
+                     */
+                    Slot->Addressed = FALSE;
+                    DPRINT1("XHCI: RESET_DEVICE succeeded for slot %u, now in Default state\n",
+                            Slot->SlotId);
+                }
+                else
+                {
+                    /*
+                     * RESET_DEVICE failed. Per xHCI spec, this can happen if
+                     * the slot is not in Addressed/Configured state (e.g.,
+                     * already in Default state due to hardware auto-reset).
+                     * Log but continue with port reset - it may still work.
+                     */
+                    DPRINT1("XHCI: RESET_DEVICE failed for slot %u (Status=%ld Code=%lu) - continuing with port reset\n",
+                            Slot->SlotId, ResetStatus, ResetCompletionCode);
+                }
+            }
+        }
+
+        /*
+         * Initiate port reset by writing PR bit. Per xHCI spec 4.19.4, for USB 2.0
+         * devices the controller drives reset signaling for 50ms, then transitions
+         * the port from Polling to Enabled state, setting PED=1 and PRC=1.
+         *
+         * On real Intel hardware (Alder Lake-N), we must wait for PRC and PED to
+         * ensure the reset completes before ADDRESS_DEVICE. Without this wait,
+         * ADDRESS_DEVICE fails with USB_TRANSACTION_ERROR because the port is
+         * still in Polling state.
+         */
+        Status = XHCI_ModifyPortBits(Extension, Port, XHCI_PORTSC_PR, 0, 0);
+        if (Status != MP_STATUS_SUCCESS)
+            return Status;
+
+        /*
+         * Poll for reset completion. USB 2.0 spec requires 10ms reset signaling,
+         * but xHCI typically uses 50ms for USB 2.0 ports. Add margin for device
+         * recovery time (TRSTRCY). Total timeout: 200ms should be plenty.
+         * Poll every 1ms (1000 attempts at 200us each = 200ms total).
+         */
+        #define PORT_RESET_TIMEOUT_ATTEMPTS 1000
+        #define PORT_RESET_POLL_US          200
+
+        for (WaitAttempts = 0; WaitAttempts < PORT_RESET_TIMEOUT_ATTEMPTS; WaitAttempts++)
+        {
+            KeStallExecutionProcessor(PORT_RESET_POLL_US);
+
+            PostValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
+
+            /* Check if device disconnected during reset */
+            if (!(PostValue & XHCI_PORTSC_CCS))
+            {
+                DPRINT1("XHCI: Port %u device disconnected during reset\n", Port);
+                return MP_STATUS_ERROR;
+            }
+
+            /*
+             * Reset is complete when:
+             * - PR bit clears (reset signaling done), AND
+             * - PRC bit is set (Port Reset Change), AND
+             * - PED bit is set (Port Enabled) for USB 2.0 devices
+             *
+             * For USB 2.0 devices behind xHCI, successful reset always results
+             * in PED=1. If PED remains 0 after reset, the device failed to
+             * enumerate at this speed.
+             */
+            if (!(PostValue & XHCI_PORTSC_PR))
+            {
+                /* PR cleared - reset signaling is done */
+                if (PostValue & XHCI_PORTSC_PRC)
+                {
+                    /* PRC set - controller acknowledged reset completion */
+                    if (PostValue & XHCI_PORTSC_PED)
+                    {
+                        /* PED set - port is enabled, reset successful */
+                        ResetComplete = TRUE;
+                        DPRINT1("XHCI: Port %u reset complete after %lu us: PORTSC=0x%08lx (PED=1 PRC=1)\n",
+                                Port, (WaitAttempts + 1) * PORT_RESET_POLL_US, PostValue);
+                        break;
+                    }
+                    else
+                    {
+                        /*
+                         * PRC set but PED=0: Reset signaling completed but port
+                         * did not enable. This can happen if:
+                         * 1. Device doesn't support the current speed
+                         * 2. Cable/connection issues
+                         * 3. Device needs more reset time
+                         *
+                         * On Intel Alder Lake-N, USB 2.0 devices may need the
+                         * link to transition out of Polling state. Check PLS.
+                         */
+                        ULONG LinkState = (PostValue & XHCI_PORTSC_PLS_MASK) >> XHCI_PORTSC_PLS_SHIFT;
+
+                        if (LinkState == 7) /* Still in Polling */
+                        {
+                            /* Continue waiting - device may still be negotiating */
+                            continue;
+                        }
+                        else
+                        {
+                            DPRINT1("XHCI: Port %u reset done but PED=0 (PLS=%lu): PORTSC=0x%08lx\n",
+                                    Port, LinkState, PostValue);
+                            /* Continue to wait a bit more */
+                        }
+                    }
+                }
+            }
+        }
+
+        /*
+         * Log final port state and latch the change bits so the hub driver sees
+         * ResetChange when it polls GetPortStatus.
+         */
+        PostValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
+
+        if (!ResetComplete)
+        {
+            ULONG LinkState = (PostValue & XHCI_PORTSC_PLS_MASK) >> XHCI_PORTSC_PLS_SHIFT;
+            DPRINT1("XHCI: Port %u reset timeout after %lu us: PORTSC=0x%08lx (CCS=%u PED=%u PR=%u PRC=%u PLS=%lu)\n",
+                    Port,
+                    PORT_RESET_TIMEOUT_ATTEMPTS * PORT_RESET_POLL_US,
+                    PostValue,
+                    (PostValue & XHCI_PORTSC_CCS) ? 1 : 0,
+                    (PostValue & XHCI_PORTSC_PED) ? 1 : 0,
+                    (PostValue & XHCI_PORTSC_PR) ? 1 : 0,
+                    (PostValue & XHCI_PORTSC_PRC) ? 1 : 0,
+                    LinkState);
+
+            /*
+             * Even on timeout, latch PRC if present so hub driver can clear it.
+             * Return success to allow hub layer to poll and potentially retry.
+             */
+        }
+
+        /* Latch change bits for hub driver polling */
+        if ((PostValue & XHCI_PORTSC_PRC) && Port >= 1 && Port <= XHCI_MAX_PORTS)
+        {
+            InterlockedOr((volatile LONG *)&Extension->PortChangeMask[Port],
+                          XHCI_PORTSC_PRC);
+        }
+
+        return MP_STATUS_SUCCESS;
+    }
 }
 
 static
@@ -13296,7 +13595,6 @@ NTAPI
 XHCI_RH_DisableIrq(
     _In_ PVOID MiniPortExtension)
 {
-    DPRINT1("XHCI_RH_DisableIrq: Called\n");
     PXHCI_EXTENSION Extension = MiniPortExtension;
 
     if (!Extension)
@@ -13311,7 +13609,6 @@ NTAPI
 XHCI_RH_EnableIrq(
     _In_ PVOID MiniPortExtension)
 {
-    DPRINT1("XHCI_RH_EnableIrq: Called\n");
     PXHCI_EXTENSION Extension = MiniPortExtension;
 
     if (!Extension)

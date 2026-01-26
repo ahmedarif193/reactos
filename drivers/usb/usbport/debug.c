@@ -10,9 +10,8 @@
 #define NDEBUG
 #include <debug.h>
 
-#define NDEBUG_USBPORT_MINIPORT
-#define NDEBUG_USBPORT_URB
-//#define NDEBUG_USBPORT_USB2
+/* Define to disable all USBPORT debug output */
+#define NDEBUG_USBPORT_ALL
 #include "usbdebug.h"
 
 #if DBG
@@ -31,19 +30,10 @@ USBPORT_AllocPoolWithTagDbg(
     _In_ PCSTR File,
     _In_ ULONG Line)
 {
-    PVOID Ptr;
+    UNREFERENCED_PARAMETER(File);
+    UNREFERENCED_PARAMETER(Line);
 
-    Ptr = ExAllocatePoolWithTag(PoolType, NumberOfBytes, Tag);
-    if (Tag == USB_PORT_TAG && NumberOfBytes <= 64)
-    {
-        DPRINT1("USBPORT alloc size=%Iu ptr=%p tag=%.4s at %s:%lu\n",
-                NumberOfBytes,
-                Ptr,
-                (char *)&Tag,
-                File,
-                Line);
-    }
-    return Ptr;
+    return ExAllocatePoolWithTag(PoolType, NumberOfBytes, Tag);
 }
 
 VOID
@@ -53,14 +43,10 @@ USBPORT_FreePoolWithTagDbg(
     _In_ PCSTR File,
     _In_ ULONG Line)
 {
-    if (Tag == USB_PORT_TAG)
-    {
-        DPRINT1("USBPORT free ptr=%p tag=%.4s at %s:%lu\n",
-                P,
-                (char *)&Tag,
-                File,
-                Line);
-    }
+    UNREFERENCED_PARAMETER(File);
+    UNREFERENCED_PARAMETER(Line);
+    UNREFERENCED_PARAMETER(Tag);
+
     ExFreePoolWithTag(P, Tag);
 }
 #endif

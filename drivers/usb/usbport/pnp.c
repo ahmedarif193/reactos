@@ -251,6 +251,216 @@ USBPORT_ProgramMsixTable(
     return STATUS_SUCCESS;
 }
 
+/*
+ * USBPORT_ProgramMsiTable - Program MSI capability registers for the USB controller
+ *
+ * This function programs the MSI capability in the PCI device when MSI-X is not
+ * available. MSI provides a single message vector without a separate table - the
+ * address and data are stored directly in PCI config space.
+ *
+ * MSI Capability Structure (PCI spec):
+ *   Offset 0:   Capability ID (0x05)
+ *   Offset 1:   Next capability pointer
+ *   Offset 2-3: Message Control
+ *               - Bit 0: MSI Enable
+ *               - Bits 1-3: Multiple Message Capable (log2 of max vectors)
+ *               - Bits 4-6: Multiple Message Enable (log2 of allocated vectors)
+ *               - Bit 7: 64-bit Address Capable
+ *               - Bit 8: Per-Vector Masking Capable (optional)
+ *   Offset 4-7: Message Address (lower 32 bits)
+ *   For 64-bit capable devices:
+ *     Offset 8-11:  Message Upper Address
+ *     Offset 12-13: Message Data
+ *   For 32-bit only devices:
+ *     Offset 8-9:   Message Data
+ */
+static
+NTSTATUS
+USBPORT_ProgramMsiTable(
+    _In_ PDEVICE_OBJECT FdoDevice,
+    _In_ PIO_INTERRUPT_MESSAGE_INFO MessageInfo)
+{
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PBUS_INTERFACE_STANDARD BusInterface;
+    PCI_COMMON_CONFIG PciConfig;
+    ULONG BytesRead;
+    UCHAR MsiCapOffset = 0;
+    USHORT MsiControl;
+    BOOLEAN Is64BitCapable;
+    ULONG MessageAddressOffset;
+    ULONG MessageDataOffset;
+    PIO_INTERRUPT_MESSAGE_INFO_ENTRY Entry;
+
+    FdoExtension = FdoDevice->DeviceExtension;
+    BusInterface = &FdoExtension->BusInterface;
+
+    /* Verify we have a valid bus interface */
+    if (!BusInterface->GetBusData || !BusInterface->SetBusData)
+    {
+        DPRINT1("USBPORT_ProgramMsiTable: BusInterface not available\n");
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    /* Read PCI config to find MSI capability */
+    BytesRead = BusInterface->GetBusData(BusInterface->Context,
+                                         PCI_WHICHSPACE_CONFIG,
+                                         &PciConfig,
+                                         0,
+                                         sizeof(PciConfig));
+    if (BytesRead < PCI_COMMON_HDR_LENGTH)
+    {
+        DPRINT1("USBPORT_ProgramMsiTable: Failed to read PCI config\n");
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    /* Find MSI capability (ID = 0x05) */
+    if (PciConfig.Status & PCI_STATUS_CAPABILITIES_LIST)
+    {
+        UCHAR CapPtr = PciConfig.u.type0.CapabilitiesPtr & ~0x3;
+
+        while (CapPtr != 0)
+        {
+            UCHAR CapId;
+            BusInterface->GetBusData(BusInterface->Context,
+                                     PCI_WHICHSPACE_CONFIG,
+                                     &CapId,
+                                     CapPtr,
+                                     sizeof(CapId));
+            if (CapId == 0x05) /* MSI */
+            {
+                MsiCapOffset = CapPtr;
+                break;
+            }
+            BusInterface->GetBusData(BusInterface->Context,
+                                     PCI_WHICHSPACE_CONFIG,
+                                     &CapPtr,
+                                     CapPtr + 1,
+                                     sizeof(CapPtr));
+            CapPtr &= ~0x3;
+        }
+    }
+
+    if (MsiCapOffset == 0)
+    {
+        DPRINT1("USBPORT_ProgramMsiTable: MSI capability not found\n");
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    /* Read MSI Message Control */
+    BusInterface->GetBusData(BusInterface->Context,
+                             PCI_WHICHSPACE_CONFIG,
+                             &MsiControl,
+                             MsiCapOffset + 2,
+                             sizeof(MsiControl));
+
+    /* Check if device supports 64-bit addressing (bit 7) */
+    Is64BitCapable = (MsiControl & 0x0080) != 0;
+
+    DPRINT1("USBPORT_ProgramMsiTable: MSI Cap at 0x%x, Control=0x%04x, 64bit=%s\n",
+            MsiCapOffset, MsiControl, Is64BitCapable ? "yes" : "no");
+
+    /* MSI only supports one message in our case (use first entry) */
+    if (MessageInfo->MessageCount == 0)
+    {
+        DPRINT1("USBPORT_ProgramMsiTable: No message entries available\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Entry = &MessageInfo->MessageInfo[0];
+
+#if defined(_M_ARM64)
+    /*
+     * ARM64: Validate that the message address is a valid GIC ITS or GICv2m
+     * address. If IoConnectInterruptEx couldn't get a proper ARM64 MSI address
+     * from the HAL, it falls back to the x86 APIC address 0xFEE00000 which
+     * doesn't work on ARM64.
+     */
+    if ((Entry->MessageAddress.LowPart & 0xFFF00000) == 0xFEE00000)
+    {
+        DPRINT1("USBPORT_ProgramMsiTable: Invalid x86 APIC address 0x%I64x - MSI not available\n",
+                Entry->MessageAddress.QuadPart);
+        return STATUS_NOT_SUPPORTED;
+    }
+#endif
+
+    /* Calculate offsets based on 64-bit capability */
+    MessageAddressOffset = MsiCapOffset + 4;
+    if (Is64BitCapable)
+    {
+        MessageDataOffset = MsiCapOffset + 12; /* Upper address at +8, data at +12 */
+    }
+    else
+    {
+        MessageDataOffset = MsiCapOffset + 8; /* No upper address, data at +8 */
+    }
+
+    /* Program Message Address (lower 32 bits) */
+    {
+        ULONG AddressLow = Entry->MessageAddress.LowPart;
+        BusInterface->SetBusData(BusInterface->Context,
+                                 PCI_WHICHSPACE_CONFIG,
+                                 &AddressLow,
+                                 MessageAddressOffset,
+                                 sizeof(AddressLow));
+    }
+
+    /* Program Message Upper Address if 64-bit capable */
+    if (Is64BitCapable)
+    {
+        ULONG AddressHigh = Entry->MessageAddress.HighPart;
+        BusInterface->SetBusData(BusInterface->Context,
+                                 PCI_WHICHSPACE_CONFIG,
+                                 &AddressHigh,
+                                 MsiCapOffset + 8,
+                                 sizeof(AddressHigh));
+    }
+
+    /* Program Message Data */
+    {
+        USHORT Data = (USHORT)Entry->MessageData;
+        BusInterface->SetBusData(BusInterface->Context,
+                                 PCI_WHICHSPACE_CONFIG,
+                                 &Data,
+                                 MessageDataOffset,
+                                 sizeof(Data));
+    }
+
+    DPRINT1("USBPORT_ProgramMsiTable: Programmed Addr=0x%I64x Data=0x%x Vector=%u\n",
+            Entry->MessageAddress.QuadPart, Entry->MessageData, Entry->Vector);
+
+    /* Enable MSI: Set bit 0 of Message Control */
+    MsiControl |= 0x0001;
+    /* Set Multiple Message Enable to 0 (use only 1 vector) - bits 4-6 */
+    MsiControl &= ~0x0070;
+
+    BusInterface->SetBusData(BusInterface->Context,
+                             PCI_WHICHSPACE_CONFIG,
+                             &MsiControl,
+                             MsiCapOffset + 2,
+                             sizeof(MsiControl));
+
+    /* Disable legacy INTx */
+    {
+        USHORT Command;
+        BusInterface->GetBusData(BusInterface->Context,
+                                 PCI_WHICHSPACE_CONFIG,
+                                 &Command,
+                                 FIELD_OFFSET(PCI_COMMON_CONFIG, Command),
+                                 sizeof(Command));
+        Command |= 0x400; /* Interrupt Disable (INTx) */
+        BusInterface->SetBusData(BusInterface->Context,
+                                 PCI_WHICHSPACE_CONFIG,
+                                 &Command,
+                                 FIELD_OFFSET(PCI_COMMON_CONFIG, Command),
+                                 sizeof(Command));
+    }
+
+    DPRINT1("USBPORT_ProgramMsiTable: Successfully programmed MSI (Control=0x%04x)\n",
+            MsiControl);
+
+    return STATUS_SUCCESS;
+}
+
 #if defined(_M_ARM64)
 /*
  * USBPORT_GetLegacyInterruptVector - Get legacy INTx vector for ARM64 fallback
@@ -1699,34 +1909,56 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
                 FdoExtension->InterruptMessageInfo);
             if (!NT_SUCCESS(MsixStatus))
             {
-                DPRINT1("USBPORT_StartDevice: MSI-X table programming failed (0x%lx), falling back to INTx\n",
+                NTSTATUS MsiStatus;
+
+                DPRINT1("USBPORT_StartDevice: MSI-X table programming failed (0x%lx), trying MSI fallback\n",
                         MsixStatus);
 
                 /*
-                 * MSI-X programming failed - disconnect message-based interrupt
-                 * and fall back to legacy line-based INTx.
+                 * MSI-X programming failed - try MSI as intermediate fallback.
+                 * MSI uses the same message info from IoConnectInterruptEx but
+                 * programs the simpler MSI capability instead of MSI-X table.
                  */
-                DPRINT1("USBPORT_StartDevice: Disconnecting MSI-X interrupt...\n");
-                if (UsbPortIoDisconnectInterruptEx)
+                MsiStatus = USBPORT_ProgramMsiTable(
+                    FdoDevice,
+                    FdoExtension->InterruptMessageInfo);
+
+                if (NT_SUCCESS(MsiStatus))
                 {
-                    IO_DISCONNECT_INTERRUPT_PARAMETERS DisconnectParameters;
-                    RtlZeroMemory(&DisconnectParameters, sizeof(DisconnectParameters));
-                    DisconnectParameters.Version = CONNECT_MESSAGE_BASED;
-                    DisconnectParameters.ConnectionContext.InterruptMessageTable =
-                        FdoExtension->InterruptMessageInfo;
-                    UsbPortIoDisconnectInterruptEx(&DisconnectParameters);
-                    DPRINT1("USBPORT_StartDevice: MSI-X interrupt disconnected\n");
+                    DPRINT1("USBPORT_StartDevice: MSI fallback successful\n");
+                    /* Keep the message-based interrupt connected, MSI is now active */
                 }
                 else
                 {
-                    DPRINT1("USBPORT_StartDevice: WARNING: UsbPortIoDisconnectInterruptEx is NULL!\n");
-                }
+                    DPRINT1("USBPORT_StartDevice: MSI fallback also failed (0x%lx), falling back to INTx\n",
+                            MsiStatus);
 
-                FdoExtension->InterruptObject = NULL;
-                FdoExtension->InterruptMessageInfo = NULL;
-                FdoExtension->MessageInterruptsEnabled = FALSE;
-                FdoExtension->MessageInterruptCount = 0;
-                FdoExtension->Flags &= ~USBPORT_FLAG_INT_CONNECTED;
+                    /*
+                     * Both MSI-X and MSI programming failed - disconnect message-based
+                     * interrupt and fall back to legacy line-based INTx.
+                     */
+                    DPRINT1("USBPORT_StartDevice: Disconnecting message interrupt...\n");
+                    if (UsbPortIoDisconnectInterruptEx)
+                    {
+                        IO_DISCONNECT_INTERRUPT_PARAMETERS DisconnectParameters;
+                        RtlZeroMemory(&DisconnectParameters, sizeof(DisconnectParameters));
+                        DisconnectParameters.Version = CONNECT_MESSAGE_BASED;
+                        DisconnectParameters.ConnectionContext.InterruptMessageTable =
+                            FdoExtension->InterruptMessageInfo;
+                        UsbPortIoDisconnectInterruptEx(&DisconnectParameters);
+                        DPRINT1("USBPORT_StartDevice: Message interrupt disconnected\n");
+                    }
+                    else
+                    {
+                        DPRINT1("USBPORT_StartDevice: WARNING: UsbPortIoDisconnectInterruptEx is NULL!\n");
+                    }
+
+                    FdoExtension->InterruptObject = NULL;
+                    FdoExtension->InterruptMessageInfo = NULL;
+                    FdoExtension->MessageInterruptsEnabled = FALSE;
+                    FdoExtension->MessageInterruptCount = 0;
+                    FdoExtension->Flags &= ~USBPORT_FLAG_INT_CONNECTED;
+                }
             }
             else
             {
@@ -1860,6 +2092,23 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     {
         FdoExtension->MiniPortCommonBuffer = NULL;
     }
+
+    /*
+     * Provide the lower device object to the miniport.
+     * This allows miniport drivers to send IOCTLs (e.g., ACPI _OSC)
+     * to the device stack below the FDO.
+     */
+    UsbPortResources->LowerDeviceObject = FdoExtension->CommonExtension.LowerDevice;
+
+    /*
+     * Provide PCI location information to the miniport.
+     * This allows miniport drivers to look up their ACPI device node
+     * using AcpiFindPciDeviceInNamespace() for _OSC evaluation.
+     */
+    UsbPortResources->PciSegment = 0;  /* Assume segment 0 for most systems */
+    UsbPortResources->PciBusNumber = FdoExtension->BusNumber;
+    UsbPortResources->PciDeviceNumber = FdoExtension->PciDeviceNumber;
+    UsbPortResources->PciFunctionNumber = FdoExtension->PciFunctionNumber;
 
     MiniPortStatus = Packet->StartController(FdoExtension->MiniPortExt,
                                              UsbPortResources);

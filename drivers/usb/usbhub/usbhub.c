@@ -1720,8 +1720,6 @@ USBH_SyncDisablePort(IN PUSBHUB_FDO_EXTENSION HubExtension,
     NTSTATUS Status;
     BM_REQUEST_TYPE RequestType;
 
-    DPRINT("USBH_SyncDisablePort ... \n");
-
     PortData = &HubExtension->PortData[Port - 1];
 
     RequestType.B = 0;
@@ -1756,8 +1754,6 @@ USBH_HubIsBusPowered(IN PDEVICE_OBJECT DeviceObject,
     USHORT UsbStatus;
     NTSTATUS Status;
 
-    DPRINT("USBH_HubIsBusPowered: ... \n");
-
     Status = USBH_SyncGetStatus(DeviceObject,
                                 &UsbStatus,
                                 URB_FUNCTION_GET_STATUS_FROM_DEVICE,
@@ -1787,8 +1783,6 @@ USBH_ChangeIndicationAckChangeComplete(IN PDEVICE_OBJECT DeviceObject,
     USHORT Port;
 
     HubExtension = Context;
-
-    DPRINT_SCE("USBH_ChangeIndicationAckChangeComplete: ... \n");
 
     ASSERT(HubExtension->Port > 0);
     Port = HubExtension->Port - 1;
@@ -1825,8 +1819,6 @@ USBH_ChangeIndicationAckChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
 {
     PIO_STACK_LOCATION IoStack;
     BM_REQUEST_TYPE RequestType;
-
-    DPRINT_SCE("USBH_ChangeIndicationAckChange: ... \n");
 
     Urb->Hdr.Length = sizeof(struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST);
     Urb->Hdr.Function = URB_FUNCTION_CLASS_OTHER;
@@ -2043,8 +2035,6 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
     PVOID DeviceHandle;
     USHORT RequestValue;
     KIRQL Irql;
-
-    //DPRINT_SCE("USBH_ProcessPortStateChange ... \n");
 
     ASSERT(Port > 0);
     PortData = &HubExtension->PortData[Port - 1];
