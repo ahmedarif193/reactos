@@ -295,7 +295,7 @@ $endif (_NTDDK_)
 $if (_NTDDK_)
 #if (NTDDI_VERSION >= NTDDI_WINXP)
 _IRQL_requires_max_(PASSIVE_LEVEL)
-NTKERNELAPI
+NTHALAPI
 VOID
 FASTCALL
 HalExamineMBR(
@@ -307,6 +307,7 @@ HalExamineMBR(
 
 #if (NTDDI_VERSION >= NTDDI_WIN7)
 
+NTHALAPI
 NTSTATUS
 NTAPI
 HalAllocateHardwareCounters(
@@ -315,6 +316,7 @@ HalAllocateHardwareCounters(
   _In_ PPHYSICAL_COUNTER_RESOURCE_LIST ResourceList,
   _Out_ PHANDLE CounterSetHandle);
 
+NTHALAPI
 NTSTATUS
 NTAPI
 HalFreeHardwareCounters(

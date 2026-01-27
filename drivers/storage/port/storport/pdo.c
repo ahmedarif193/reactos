@@ -110,6 +110,7 @@ PortpUpdateCapacityFromSrb(
     }
 }
 
+#if 0
 static
 const char *
 SrbFunctionName(
@@ -139,6 +140,7 @@ SrbFunctionName(
         default: return "UNKNOWN";
     }
 }
+#endif
 
 NTSTATUS
 PortCreatePdo(

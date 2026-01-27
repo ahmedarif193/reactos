@@ -61,7 +61,7 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
 endif()
 
 target_link_libraries(portcls libcntpr ${PSEH_LIB})
-set_module_type(portcls kernelmodedriver ENTRYPOINT 0 )
+set_module_type(portcls kernelmodedriver ENTRYPOINT DllInitialize 4)
 add_pch(portcls private.hpp "${PCH_SKIP_SOURCE}")
 add_importlibs(portcls ntoskrnl ks drmk hal)
 add_cd_file(TARGET portcls DESTINATION reactos/system32/drivers FOR all)

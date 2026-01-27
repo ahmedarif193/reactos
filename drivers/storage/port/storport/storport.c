@@ -329,7 +329,6 @@ PortDispatchDeviceControl(
 {
     PVOID deviceExtension;
     EXTENSION_TYPE type;
-    PIO_STACK_LOCATION stack;
 
     deviceExtension = DeviceObject->DeviceExtension;
     if (deviceExtension == NULL)
@@ -341,7 +340,6 @@ PortDispatchDeviceControl(
     }
 
     type = *((EXTENSION_TYPE *)deviceExtension);
-    stack = IoGetCurrentIrpStackLocation(Irp);
 
     switch (type)
     {
