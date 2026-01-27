@@ -22,7 +22,7 @@
 @ stdcall -version=0x0A00+ HalSetIommuPolicy(ptr)
 @ stdcall -version=0x0A00+ HalRequestInterrupt(long ptr long long long)
 @ stdcall -version=0x0A00+ HalEnumerateUnmaskedInterrupts(ptr ptr)
-@ stdcall HalExamineMBR(ptr long long ptr)
+@ fastcall HalExamineMBR(ptr long long ptr)
 @ stdcall HalGetDmaAlignment(ptr)
 @ stdcall -version=0x0601+ HalBugCheckSystem(ptr)
 @ stdcall HalAssignSlotResources(ptr ptr ptr ptr long long long ptr)

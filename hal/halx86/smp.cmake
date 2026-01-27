@@ -4,7 +4,8 @@ list(APPEND HAL_SMP_SOURCE
     ${HAL_I386_DIR}/generic/buildtype.c
     ${HAL_I386_DIR}/generic/spinlock.c
     ${HAL_I386_DIR}/smp/ipi.c
-    ${HAL_I386_DIR}/smp/smp.c)
+    ${HAL_I386_DIR}/smp/smp.c
+    ${HAL_COMMON_DIR}/generic/sysinfo_stubs.c)
 
 if(HAL_ARCH STREQUAL "i386")
     list(APPEND HAL_SMP_ASM_SOURCE

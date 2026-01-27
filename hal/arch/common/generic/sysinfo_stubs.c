@@ -25,7 +25,7 @@
  * These are deprecated legacy functions - drivers should use DMA_OPERATIONS instead.
  */
 VOID
-NTAPI
+FASTCALL
 HalExamineMBR(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ ULONG SectorSize,
