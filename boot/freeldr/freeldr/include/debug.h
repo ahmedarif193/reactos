@@ -61,6 +61,24 @@ VOID    DbgParseDebugChannels(PCHAR Value);
 ULONGLONG DbgQueryMicrosecondsSinceBoot(VOID);
 VOID DbgDisableTimestamps(VOID);
 
+/*
+ * Returns the counter frequency used for timestamp calculations.
+ * On x86/x64: TSC frequency in Hz (calibrated via CPUID or PIT)
+ * On ARM64: Generic Timer frequency from cntfrq_el0
+ *
+ * This is passed to the kernel for timestamp continuity.
+ */
+ULONGLONG DbgQueryCounterFrequency(VOID);
+
+/*
+ * Returns the current raw counter value.
+ * On x86/x64: Current TSC value (RDTSC)
+ * On ARM64: Current cntpct_el0 value
+ *
+ * Used to capture a baseline for kernel timestamp calculations.
+ */
+ULONGLONG DbgQueryCurrentCounter(VOID);
+
 #ifdef UEFIBOOT
 VOID UefiSerialDisableFirmware(VOID);
 #endif

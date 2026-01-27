@@ -30,6 +30,16 @@ static BOOLEAN TimestampInitialized = FALSE;
 static BOOLEAN DbgSuppressTimestamps = FALSE;
 
 /*
+ * Module-level counter state for timestamp calculations.
+ * These are used both for GetMicrosecondsSinceBoot() and exported
+ * to the kernel via DbgQueryCounterFrequency/DbgQueryCurrentCounter.
+ */
+#if defined(_M_IX86) || defined(_M_AMD64)
+static ULONGLONG DbgTscHz = 0;             /* TSC frequency in Hz */
+static ULONGLONG DbgBootStartTsc = 0;      /* TSC at first call */
+#endif
+
+/*
  * Return microseconds elapsed since bootloader start, similar to Linux printk
  * time style: a monotonic counter from boot, not wall-clock time.
  *
@@ -41,8 +51,6 @@ static ULONGLONG
 GetMicrosecondsSinceBoot(VOID)
 {
 #if defined(_M_IX86) || defined(_M_AMD64)
-    static ULONGLONG TscHz = 0;             /* TSC frequency in Hz */
-    static ULONGLONG BootStartTsc = 0;      /* TSC at first call */
 
     /* Calibrate on first use */
     if (!TimestampInitialized)
@@ -54,22 +62,22 @@ GetMicrosecondsSinceBoot(VOID)
         if (a != 0 && b != 0 && c != 0)
         {
             /* TSC Hz = crystal_hz * (b/a) */
-            TscHz = ((ULONGLONG)c * (ULONGLONG)b) / (ULONGLONG)a;
+            DbgTscHz = ((ULONGLONG)c * (ULONGLONG)b) / (ULONGLONG)a;
         }
-        if (TscHz == 0)
+        if (DbgTscHz == 0)
         {
             /* Try CPUID 0x16 (base frequency in MHz) */
             __asm__ __volatile__("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0x16) : "cc");
             if (a != 0)
             {
                 /* EAX holds base frequency in MHz */
-                TscHz = (ULONGLONG)a * 1000000ULL;
+                DbgTscHz = (ULONGLONG)a * 1000000ULL;
             }
         }
 #else
         /* Non-GNU toolchain: skip CPUID attempts */
 #endif
-        if (TscHz == 0)
+        if (DbgTscHz == 0)
         {
             /* Calibrate using StallExecutionProcessor (PIT-based) for ~50ms */
             const ULONG CalibrateMicroseconds = 50 * 1000; /* 50 ms */
@@ -79,10 +87,10 @@ GetMicrosecondsSinceBoot(VOID)
             if (t1 > t0)
             {
                 ULONGLONG delta = t1 - t0;
-                TscHz = (delta * 1000000ULL) / CalibrateMicroseconds;
+                DbgTscHz = (delta * 1000000ULL) / CalibrateMicroseconds;
             }
         }
-        if (TscHz == 0)
+        if (DbgTscHz == 0)
         {
             /* Final fallback: coarse calibration using firmware seconds */
             ULONG start_s = ArcGetRelativeTime();
@@ -92,10 +100,10 @@ GetMicrosecondsSinceBoot(VOID)
             ULONGLONG t1 = __rdtsc();
             ULONG elapsed_s = (s > start_s) ? (s - start_s) : 1;
             if (elapsed_s == 0) elapsed_s = 1;
-            if (t1 > t0) TscHz = (t1 - t0) / elapsed_s;
+            if (t1 > t0) DbgTscHz = (t1 - t0) / elapsed_s;
         }
 
-        BootStartTsc = __rdtsc();
+        DbgBootStartTsc = __rdtsc();
         TimestampInitialized = TRUE;
         return 0;
     }
@@ -103,10 +111,10 @@ GetMicrosecondsSinceBoot(VOID)
     /* Convert TSC delta to microseconds using calibrated frequency */
     {
         ULONGLONG now = __rdtsc();
-        ULONGLONG delta = now - BootStartTsc;
-        if (delta == 0 || TscHz == 0) return 0;
+        ULONGLONG delta = now - DbgBootStartTsc;
+        if (delta == 0 || DbgTscHz == 0) return 0;
         /* microseconds = delta * 1e6 / Hz */
-        return (delta * 1000000ULL) / TscHz;
+        return (delta * 1000000ULL) / DbgTscHz;
     }
 #else
 #if defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
@@ -142,6 +150,66 @@ VOID
 DbgDisableTimestamps(VOID)
 {
     DbgSuppressTimestamps = TRUE;
+}
+
+/**
+ * @brief Query the counter frequency used for timestamp calculations.
+ *
+ * On x86/x64: Returns the calibrated TSC frequency in Hz.
+ * On ARM64: Returns the Generic Timer frequency from cntfrq_el0.
+ *
+ * This value is passed to the kernel so it can continue using the same
+ * time base for debug timestamps.
+ *
+ * @return Counter frequency in Hz, or 0 if not yet calibrated.
+ */
+ULONGLONG
+DbgQueryCounterFrequency(VOID)
+{
+    /* Ensure timestamp system is initialized */
+    if (!TimestampInitialized)
+    {
+        (VOID)GetMicrosecondsSinceBoot();
+    }
+
+#if defined(_M_IX86) || defined(_M_AMD64)
+    return DbgTscHz;
+#elif defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+    return Arm64GetTimerFreq();
+#else
+    /* Fallback: 1 Hz (firmware seconds) */
+    return 1;
+#endif
+}
+
+/**
+ * @brief Query the current counter value.
+ *
+ * On x86/x64: Returns the current TSC value.
+ * On ARM64: Returns the current cntpct_el0 value.
+ *
+ * This is used to capture a baseline counter value when transferring
+ * control from the bootloader to the kernel.
+ *
+ * @return Current counter value.
+ */
+ULONGLONG
+DbgQueryCurrentCounter(VOID)
+{
+    /* Ensure timestamp system is initialized */
+    if (!TimestampInitialized)
+    {
+        (VOID)GetMicrosecondsSinceBoot();
+    }
+
+#if defined(_M_IX86) || defined(_M_AMD64)
+    return __rdtsc();
+#elif defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+    return Arm64GetTimerCount();
+#else
+    /* Fallback: firmware seconds */
+    return (ULONGLONG)ArcGetRelativeTime();
+#endif
 }
 
 #define DEBUG_ALL
@@ -606,6 +674,24 @@ DbgQueryMicrosecondsSinceBoot(VOID)
 VOID
 DbgDisableTimestamps(VOID)
 {
+}
+
+ULONGLONG
+DbgQueryCounterFrequency(VOID)
+{
+    /* No timing available in release builds; use a reasonable default */
+    return 1000000000ULL; /* 1 GHz fallback */
+}
+
+ULONGLONG
+DbgQueryCurrentCounter(VOID)
+{
+    /* No timing available in release builds */
+#if defined(_M_IX86) || defined(_M_AMD64)
+    return __rdtsc();
+#else
+    return 0;
+#endif
 }
 
 VOID

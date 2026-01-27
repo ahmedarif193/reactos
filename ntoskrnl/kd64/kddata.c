@@ -150,6 +150,14 @@ ULONGLONG KdpTimeStampOffsetMicroseconds = 0;
 LARGE_INTEGER KdpInitialPerformanceCounter = {0};
 BOOLEAN KdpTimestampConfigured = FALSE;
 
+/*
+ * Bootloader-provided timestamp calibration data.
+ * These allow the kernel to use the same counter frequency as FreeLDR
+ * for timestamp continuity across the bootloader-to-kernel transition.
+ */
+ULONGLONG KdpBootloaderCounterFrequency = 0;    /* Counter frequency in Hz (TSC for x86/x64, cntfrq for ARM64) */
+ULONGLONG KdpBootloaderEndTimeCounter = 0;      /* Counter value when bootloader captured EndTime */
+
 //
 // Debug Filter Masks
 //

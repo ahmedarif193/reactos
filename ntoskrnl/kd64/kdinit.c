@@ -198,7 +198,12 @@ KdInitSystem(
         LoaderBlock->Extension &&
         LoaderBlock->Extension->LoaderPerformanceData)
     {
-        KdpTimeStampOffsetMicroseconds = LoaderBlock->Extension->LoaderPerformanceData->EndTime;
+        PLOADER_PERFORMANCE_DATA PerfData = LoaderBlock->Extension->LoaderPerformanceData;
+
+        KdpTimeStampOffsetMicroseconds = PerfData->EndTime;
+        KdpBootloaderCounterFrequency = PerfData->CounterFrequency;
+        KdpBootloaderEndTimeCounter = PerfData->EndTimeCounter;
+
         /*
          * Skip KdpDprintf here - this is called BEFORE the debugger is fully
          * initialized and would hang on ARM64 due to spinlock/timestamp issues.

@@ -51,13 +51,74 @@ VOID NTAPI KdpReleaseLock(_In_ PKSPIN_LOCK SpinLock, _In_ KIRQL OldIrql);
  *
  * @return Monotonically increasing timestamp in microseconds since boot.
  */
+/**
+ * @brief Read the raw counter value directly (IRQL-safe).
+ *
+ * On x86/x64: Reads TSC via RDTSC instruction.
+ * On ARM64: Reads cntpct_el0 (physical counter).
+ *
+ * This is safe at any IRQL and does not call into HAL.
+ */
+static ULONGLONG
+KdpReadRawCounter(VOID)
+{
+#if defined(_M_AMD64) || defined(_M_IX86)
+    return __rdtsc();
+#elif defined(_M_ARM64)
+    ULONGLONG Counter;
+    __asm__ __volatile__("isb" ::: "memory");
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r" (Counter));
+    return Counter;
+#else
+    /* Fallback: use HAL performance counter if available */
+    LARGE_INTEGER Counter = KeQueryPerformanceCounter(NULL);
+    return (ULONGLONG)Counter.QuadPart;
+#endif
+}
+
+/**
+ * @brief Get counter frequency for the current architecture.
+ *
+ * Prefers the bootloader-provided frequency for timestamp continuity.
+ * Falls back to HAL or architecture-specific methods if not available.
+ */
+static ULONGLONG
+KdpGetCounterFrequency(VOID)
+{
+    /* Prefer bootloader-provided frequency for continuity */
+    if (KdpBootloaderCounterFrequency != 0)
+    {
+        return KdpBootloaderCounterFrequency;
+    }
+
+#if defined(_M_ARM64)
+    /* ARM64: Read cntfrq_el0 directly */
+    {
+        ULONGLONG Freq;
+        __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r" (Freq));
+        if (Freq != 0)
+            return Freq;
+        /* Fallback to common ARM64 frequency */
+        return 24000000ULL;
+    }
+#else
+    /* x86/x64: Use HAL frequency as fallback */
+    if (KdPerformanceCounterRate.QuadPart != 0)
+    {
+        return (ULONGLONG)KdPerformanceCounterRate.QuadPart;
+    }
+    /* Very early fallback: assume ~2GHz */
+    return 2000000000ULL;
+#endif
+}
+
 ULONGLONG
 NTAPI
 KdpAcquireMonotonicTimestamp(VOID)
 {
     ULONGLONG Microseconds = 0;
     ULONGLONG LastTimestamp;
-    LARGE_INTEGER Counter;
+    ULONGLONG CurrentCounter;
     ULONGLONG Frequency;
     ULONGLONG Delta;
     KIRQL OldIrql;
@@ -80,29 +141,55 @@ KdpAcquireMonotonicTimestamp(VOID)
     __asm__ __volatile__("isb" ::: "memory");
 #endif
 
-    /* Get timestamp using performance counter */
-    if (KdPerformanceCounterRate.QuadPart != 0)
+    /*
+     * Use direct counter reads with bootloader-calibrated frequency.
+     * This ensures timestamp continuity between FreeLDR and the kernel
+     * by using the same time base (TSC on x86/x64, cntpct on ARM64).
+     *
+     * The calculation is:
+     *   elapsed_us = ((current_counter - base_counter) * 1000000) / frequency
+     *   total_us = bootloader_end_time + elapsed_us
+     */
+    Frequency = KdpGetCounterFrequency();
+    CurrentCounter = KdpReadRawCounter();
+
+    if (Frequency != 0 && KdpBootloaderEndTimeCounter != 0)
     {
-        Counter = KeQueryPerformanceCounter(NULL);
-        Frequency = (ULONGLONG)KdPerformanceCounterRate.QuadPart;
-
-        /* Calculate time elapsed since kernel start */
-        if (Counter.QuadPart >= KdpInitialPerformanceCounter.QuadPart)
-            Delta = (ULONGLONG)(Counter.QuadPart - KdpInitialPerformanceCounter.QuadPart);
+        /* Calculate time elapsed since bootloader handed off to kernel */
+        if (CurrentCounter >= KdpBootloaderEndTimeCounter)
+            Delta = CurrentCounter - KdpBootloaderEndTimeCounter;
         else
-            Delta = 0;
+            Delta = 0; /* Counter wrapped or invalid state */
 
-        /* Convert to microseconds */
+        /* Convert to microseconds: (delta * 1000000) / frequency */
         Microseconds = (Delta * 1000000ULL) / Frequency;
 
-        /* Add bootloader offset to get continuous timestamp */
+        /* Add bootloader's EndTime to get continuous timestamp since boot */
         Microseconds += KdpTimeStampOffsetMicroseconds;
+    }
+    else if (Frequency != 0)
+    {
+        /*
+         * Bootloader data not available (KdpBootloaderEndTimeCounter == 0).
+         * Fall back to old behavior using HAL performance counter baseline.
+         */
+        if (KdpInitialPerformanceCounter.QuadPart != 0)
+        {
+            Delta = CurrentCounter - (ULONGLONG)KdpInitialPerformanceCounter.QuadPart;
+            Microseconds = (Delta * 1000000ULL) / Frequency;
+            Microseconds += KdpTimeStampOffsetMicroseconds;
+        }
+        else
+        {
+            /* Very early boot - just use raw counter with assumed frequency */
+            Microseconds = (CurrentCounter * 1000000ULL) / Frequency;
+        }
     }
     else
     {
         /*
-         * Fallback when performance counter is not yet initialized.
-         * Use KeQueryInterruptTime if available, otherwise use a simple counter.
+         * Fallback when no frequency is available.
+         * Use KeQueryInterruptTime if available.
          */
         ULONGLONG InterruptTime = KeQueryInterruptTime();
         if (InterruptTime != 0)
@@ -113,15 +200,8 @@ KdpAcquireMonotonicTimestamp(VOID)
         }
         else
         {
-            /* Very early boot - use TSC on x86/x64 or counter on ARM64 */
-#if defined(_M_AMD64) || defined(_M_IX86)
-            ULONGLONG Tsc = __rdtsc();
-            /* Assume ~2GHz CPU (2000 cycles per microsecond) */
-            Microseconds = Tsc / 2000;
-#else
-            /* ARM64 fallback: just return last + 1 to maintain monotonicity */
+            /* Absolute fallback: return last + 1 to maintain monotonicity */
             Microseconds = KdpLastTimestampMicroseconds + 1;
-#endif
         }
     }
 

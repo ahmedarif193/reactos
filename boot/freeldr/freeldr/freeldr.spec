@@ -16,6 +16,8 @@
 @ cdecl DebugDumpBuffer()
 @ cdecl DebugInit()
 @ cdecl DbgQueryMicrosecondsSinceBoot()
+@ cdecl DbgQueryCounterFrequency()
+@ cdecl DbgQueryCurrentCounter()
 @ cdecl FrLdrBugCheckWithMessage()
 @ stdcall KeBugCheckEx(long long long long long)
 

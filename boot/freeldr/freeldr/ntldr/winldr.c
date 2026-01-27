@@ -115,9 +115,13 @@ AllocateAndInitLPB(
      * Seed loader performance data for the kernel debugger timestamping.
      * We start at the current bootloader-relative time (usually 0 on first call)
      * and set EndTime just before transferring control to the kernel.
+     * The CounterFrequency and EndTimeCounter are also captured to allow
+     * the kernel to continue timestamp calculations with the same time base.
      */
     WinLdrSystemBlock->LoaderPerformanceData.StartTime = DbgQueryMicrosecondsSinceBoot();
     WinLdrSystemBlock->LoaderPerformanceData.EndTime = 0;
+    WinLdrSystemBlock->LoaderPerformanceData.CounterFrequency = 0;
+    WinLdrSystemBlock->LoaderPerformanceData.EndTimeCounter = 0;
 
     /* Initialize the Loader Block Extension */
     Extension = &WinLdrSystemBlock->Extension;
@@ -1752,8 +1756,19 @@ LoadAndBootWindowsCommon(
     /*
      * Finalize loader performance data: record how long the bootloader ran
      * so the kernel debugger can maintain a continuous timestamp.
+     *
+     * We capture:
+     * - EndTime: Microseconds since bootloader start (for backward compat)
+     * - CounterFrequency: The calibrated TSC/timer frequency in Hz
+     * - EndTimeCounter: The raw counter value at this moment
+     *
+     * The kernel uses these to continue timestamps without recalibrating:
+     *   elapsed_us = ((current_counter - EndTimeCounter) * 1000000) / CounterFrequency
+     *   total_us = EndTime + elapsed_us
      */
     WinLdrSystemBlock->LoaderPerformanceData.EndTime = DbgQueryMicrosecondsSinceBoot();
+    WinLdrSystemBlock->LoaderPerformanceData.CounterFrequency = DbgQueryCounterFrequency();
+    WinLdrSystemBlock->LoaderPerformanceData.EndTimeCounter = DbgQueryCurrentCounter();
 
 #if defined(_M_ARM64)
     EarlyUartPuts("[winldr] jumping to kernel 0x");

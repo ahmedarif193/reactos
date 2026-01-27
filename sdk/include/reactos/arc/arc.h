@@ -488,6 +488,19 @@ typedef struct _LOADER_PERFORMANCE_DATA
 {
     ULONGLONG StartTime;
     ULONGLONG EndTime;
+    /*
+     * Counter frequency for timestamp continuity between bootloader and kernel.
+     * On x86/x64: TSC frequency in Hz (calibrated via CPUID or PIT)
+     * On ARM64: Generic Timer frequency from cntfrq_el0
+     */
+    ULONGLONG CounterFrequency;
+    /*
+     * Counter value captured at EndTime for the kernel to establish
+     * a baseline. The kernel can then compute elapsed time as:
+     *   elapsed_us = ((current_counter - EndTimeCounter) * 1000000) / CounterFrequency
+     *   total_us = EndTime + elapsed_us
+     */
+    ULONGLONG EndTimeCounter;
 } LOADER_PERFORMANCE_DATA, *PLOADER_PERFORMANCE_DATA;
 
 typedef enum _TPM_BOOT_ENTROPY_RESULT_CODE

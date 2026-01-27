@@ -567,6 +567,8 @@ extern CHAR KdpPathBuffer[KDP_MSG_BUFFER_SIZE];
 extern ULONGLONG KdpTimeStampOffsetMicroseconds;
 extern LARGE_INTEGER KdpInitialPerformanceCounter;
 extern BOOLEAN KdpTimestampConfigured;
+extern ULONGLONG KdpBootloaderCounterFrequency;
+extern ULONGLONG KdpBootloaderEndTimeCounter;
 
 extern CHAR KdPrintDefaultCircularBuffer[KD_DEFAULT_LOG_BUFFER_SIZE];
 extern PCHAR KdPrintWritePointer;
