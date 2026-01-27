@@ -11,6 +11,26 @@ typedef struct _ACPI_CACHED_TABLE
 } ACPI_CACHED_TABLE, *PACPI_CACHED_TABLE;
 
 #pragma pack(push, 1)
+
+/*
+ * HPET Description Table (from ACPI spec)
+ * Hardware ID contains:
+ *   [31:16] = PCI Vendor ID
+ *   [15] = Legacy IRQ Routing Capable
+ *   [14] = Reserved
+ *   [12:8] = Number of Comparators
+ *   [7:0] = Hardware Revision
+ */
+typedef struct _HPET_DESCRIPTION_TABLE
+{
+    DESCRIPTION_HEADER Header;
+    ULONG HardwareId;
+    GEN_ADDR Address;
+    UCHAR HpetNumber;
+    USHORT MinimumPeriodicTickCount;
+    UCHAR PageProtection;
+} HPET_DESCRIPTION_TABLE, *PHPET_DESCRIPTION_TABLE;
+
 typedef struct _HALP_ACPI_MCFG
 {
     DESCRIPTION_HEADER Header;
@@ -31,6 +51,36 @@ typedef struct _HALP_ACPI_MCFG_ALLOCATION
 
 #define ACPI_GAS_SYSTEM_MEMORY 0
 #define ACPI_GAS_SYSTEM_IO     1
+
+/*
+ * HPET Register offsets (from Intel HPET spec)
+ */
+#define HPET_REG_CAPABILITIES       0x000   /* General Capabilities and ID */
+#define HPET_REG_CONFIGURATION      0x010   /* General Configuration */
+#define HPET_REG_INT_STATUS         0x020   /* General Interrupt Status */
+#define HPET_REG_MAIN_COUNTER       0x0F0   /* Main Counter Value */
+#define HPET_REG_TIMER0_CONFIG      0x100   /* Timer 0 Configuration */
+#define HPET_REG_TIMER0_COMPARATOR  0x108   /* Timer 0 Comparator Value */
+
+/* HPET Capabilities Register bits */
+#define HPET_CAP_COUNT_SIZE_64      (1ULL << 13)  /* 64-bit counter */
+#define HPET_CAP_LEGACY_ROUTE       (1ULL << 15)  /* Legacy replacement route */
+#define HPET_CAP_NUM_TIMERS_MASK    0x1F00        /* Number of timers - 1 */
+#define HPET_CAP_NUM_TIMERS_SHIFT   8
+#define HPET_CAP_VENDOR_ID_MASK     0xFFFF0000    /* Vendor ID */
+#define HPET_CAP_VENDOR_ID_SHIFT    16
+#define HPET_CAP_PERIOD_MASK        0xFFFFFFFF00000000ULL  /* Period in femtoseconds */
+#define HPET_CAP_PERIOD_SHIFT       32
+
+/* HPET Configuration Register bits */
+#define HPET_CFG_ENABLE             (1ULL << 0)   /* Overall enable */
+#define HPET_CFG_LEGACY_ROUTE       (1ULL << 1)   /* Legacy replacement route enable */
+
+/* HPET global variables */
+extern BOOLEAN HalpHpetInitialized;
+extern PVOID HalpHpetBase;
+extern ULONGLONG HalpHpetPeriod;        /* Period in femtoseconds */
+extern ULONGLONG HalpHpetFrequency;     /* Frequency in Hz */
 
 extern PHALP_ACPI_MCFG HalpAcpiMcfgTable;
 extern PHALP_ACPI_MCFG_ALLOCATION HalpAcpiMcfgAllocations;
@@ -57,6 +107,15 @@ VOID
 NTAPI
 HalpAcpiDiscoverHpetTable(
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock);
+
+CODE_SEG("INIT")
+NTSTATUS
+NTAPI
+HalpHpetInitialize(VOID);
+
+ULONGLONG
+NTAPI
+HalpHpetQueryCounter(VOID);
 
 CODE_SEG("INIT")
 VOID
