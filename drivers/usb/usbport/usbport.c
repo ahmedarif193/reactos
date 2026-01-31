@@ -1073,7 +1073,7 @@ USBPORT_FlushDoneTransfers(IN PDEVICE_OBJECT FdoDevice)
 
         Transfer = CONTAINING_RECORD(DoneTransferList->Flink,
                                      USBPORT_TRANSFER,
-                                     TransferLink);
+                                     DoneLink);
 
         RemoveHeadList(DoneTransferList);
         KeReleaseSpinLock(&FdoExtension->DoneTransferSpinLock, OldIrql);
@@ -1083,6 +1083,36 @@ USBPORT_FlushDoneTransfers(IN PDEVICE_OBJECT FdoDevice)
         if (Transfer)
         {
             Endpoint = Transfer->Endpoint;
+
+            /*
+             * Remove from TransferList under EndpointSpinLock. The transfer
+             * was left on TransferList by QueueDoneTransfer to avoid a race
+             * with concurrent TransferList iterators (AbortEndpoint,
+             * DmaEndpointPaused). Now that we're in the DPC context and
+             * about to complete, we can safely remove it.
+             */
+            if (Endpoint)
+            {
+                KeAcquireSpinLockAtDpcLevel(&Endpoint->EndpointSpinLock);
+                if (Transfer->TransferLink.Flink != NULL &&
+                    Transfer->TransferLink.Blink != NULL)
+                {
+                    RemoveEntryList(&Transfer->TransferLink);
+                    Transfer->TransferLink.Flink = NULL;
+                    Transfer->TransferLink.Blink = NULL;
+                }
+                KeReleaseSpinLockFromDpcLevel(&Endpoint->EndpointSpinLock);
+            }
+            else
+            {
+                if (Transfer->TransferLink.Flink != NULL &&
+                    Transfer->TransferLink.Blink != NULL)
+                {
+                    RemoveEntryList(&Transfer->TransferLink);
+                    Transfer->TransferLink.Flink = NULL;
+                    Transfer->TransferLink.Blink = NULL;
+                }
+            }
 
             if ((Transfer->Flags & TRANSFER_FLAG_SPLITED))
             {
@@ -1141,7 +1171,8 @@ USBPORT_TransferFlushDpc(IN PRKDPC Dpc,
 BOOLEAN
 NTAPI
 USBPORT_QueueDoneTransfer(IN PUSBPORT_TRANSFER Transfer,
-                          IN USBD_STATUS USBDStatus)
+                          IN USBD_STATUS USBDStatus,
+                          IN BOOLEAN CallerHoldsEndpointLock)
 {
     PDEVICE_OBJECT FdoDevice;
     PUSBPORT_DEVICE_EXTENSION  FdoExtension;
@@ -1170,11 +1201,23 @@ USBPORT_QueueDoneTransfer(IN PUSBPORT_TRANSFER Transfer,
     }
     FdoExtension = FdoDevice->DeviceExtension;
 
-    RemoveEntryList(&Transfer->TransferLink);
+    /*
+     * Do NOT remove from TransferList here. This function can be called
+     * from contexts where EndpointSpinLock is already held (e.g., from
+     * SubmitTransfer via synchronous miniport completion, or from
+     * MapTransfer under EndpointSpinLock). Doing RemoveEntryList without
+     * EndpointSpinLock races with TransferList iterators on other CPUs
+     * (AbortEndpoint, DmaEndpointPaused/Active), causing list corruption.
+     *
+     * Instead, the transfer stays on TransferList and is also linked onto
+     * DoneTransferList via the separate DoneLink. The DoneTransfer path
+     * (FlushDoneTransfers -> DoneTransfer) removes from TransferList
+     * under EndpointSpinLock before completing.
+     */
     Transfer->USBDStatus = USBDStatus;
 
     ExInterlockedInsertTailList(&FdoExtension->DoneTransferList,
-                                &Transfer->TransferLink,
+                                &Transfer->DoneLink,
                                 &FdoExtension->DoneTransferSpinLock);
 
     DPRINT("USBPORT_QueueDoneTransfer: queued Transfer=%p Endpoint=%p USBDStatus=0x%x\n",
@@ -2495,6 +2538,23 @@ USBPORT_MiniportCompleteTransfer(IN PVOID MiniPortExtension,
                 USBDStatus,
                 TransferLength);
 
+    /*
+     * Defense-in-depth: validate the TransferParameters pointer before
+     * deriving the USBPORT_TRANSFER via CONTAINING_RECORD. A miniport
+     * bug or race condition (e.g., deferred completion after device
+     * removal freed the USBPORT_TRANSFER) could pass a stale or invalid
+     * pointer here. Without this check, CONTAINING_RECORD would compute
+     * a garbage Transfer pointer, and accessing Transfer->Flags or
+     * Transfer->Urb would crash with a page fault.
+     */
+    if (!TransferParameters ||
+        (ULONG_PTR)TransferParameters < (ULONG_PTR)MmSystemRangeStart)
+    {
+        DPRINT1("USBPORT_MiniportCompleteTransfer: invalid TransferParameters=%p USBDStatus=%x\n",
+                TransferParameters, USBDStatus);
+        return;
+    }
+
     Transfer = CONTAINING_RECORD(TransferParameters,
                                  USBPORT_TRANSFER,
                                  TransferParameters);
@@ -2538,7 +2598,7 @@ USBPORT_MiniportCompleteTransfer(IN PVOID MiniPortExtension,
     KeReleaseSpinLock(&ParentTransfer->TransferSpinLock, OldIrql);
 
 Exit:
-    USBPORT_QueueDoneTransfer(Transfer, USBDStatus);
+    USBPORT_QueueDoneTransfer(Transfer, USBDStatus, FALSE);
 }
 
 VOID
@@ -3264,6 +3324,8 @@ SkipDmaCleanup:
             Transfer->Irp = NULL;
             Transfer->Urb = NULL;
             Transfer->Event = NULL;
+            Transfer->DoneLink.Flink = NULL;
+            Transfer->DoneLink.Blink = NULL;
 
             Endpoint->ReusableTransfer = Transfer;
             Transfer = NULL; /* Prevent free below */
@@ -3470,7 +3532,7 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
             KeAcquireSpinLock(&Endpoint->EndpointSpinLock,
                               &Endpoint->EndpointOldIrql);
 
-            USBPORT_QueueDoneTransfer(Transfer, USBDStatus);
+            USBPORT_QueueDoneTransfer(Transfer, USBDStatus, TRUE);
 
             KeReleaseSpinLock(&Endpoint->EndpointSpinLock,
                               Endpoint->EndpointOldIrql);
@@ -3670,6 +3732,8 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
         Transfer->NumberOfMapRegisters = 0;
         Transfer->TransferLink.Flink = NULL;
         Transfer->TransferLink.Blink = NULL;
+        Transfer->DoneLink.Flink = NULL;
+        Transfer->DoneLink.Blink = NULL;
         Transfer->Time.QuadPart = 0;
 
         /* Update per-request fields */

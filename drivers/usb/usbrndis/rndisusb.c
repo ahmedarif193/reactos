@@ -1596,11 +1596,47 @@ RndisInterruptResubmitDpc(
     }
 }
 
+/*
+ * RndisInterruptDelayDpc
+ *
+ * DPC routine called when interrupt delay timer expires.
+ * This provides a small delay before resubmitting the interrupt IN
+ * transfer after a NAK or transient error, preventing CPU spinning.
+ */
+static
+VOID
+NTAPI
+RndisInterruptDelayDpc(
+    IN PKDPC Dpc,
+    IN PVOID DeferredContext,
+    IN PVOID SystemArgument1,
+    IN PVOID SystemArgument2)
+{
+    PRNDIS_ADAPTER Adapter = (PRNDIS_ADAPTER)DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    /* Clear the coalescing flag */
+    InterlockedExchange(&Adapter->InterruptDelayScheduled, 0);
+
+    /* Resubmit interrupt read after delay */
+    if (!Adapter->Halting && !Adapter->InterruptSubmitted)
+    {
+        RndisUsbSubmitInterruptRead(Adapter);
+    }
+}
+
 VOID
 RndisInitializeInterruptDpc(
     IN PRNDIS_ADAPTER Adapter)
 {
     KeInitializeDpc(&Adapter->InterruptResubmitDpc, RndisInterruptResubmitDpc, Adapter);
+    KeInitializeTimer(&Adapter->InterruptDelayTimer);
+    KeInitializeDpc(&Adapter->InterruptDelayDpc, RndisInterruptDelayDpc, Adapter);
+    Adapter->InterruptDelayScheduled = 0;
+    Adapter->InterruptConsecutiveErrors = 0;
 }
 
 static

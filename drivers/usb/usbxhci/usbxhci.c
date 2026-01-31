@@ -589,6 +589,7 @@ static VOID NTAPI XHCI_Ep0BringupCallback(IN PVOID MiniportExtension,
                                           IN PVOID CallBackContext);
 static VOID NTAPI XHCI_Ep0BringupWorker(IN PVOID Context);
 static VOID XHCI_DrainDeferredTransferCompletions(PXHCI_EXTENSION Extension);
+static VOID XHCI_FlushDeferredCompletionsForSlot(PXHCI_EXTENSION Extension, UCHAR SlotId);
 static VOID XHCI_HandleTransferEvent(PXHCI_EXTENSION Extension, PXHCI_TRB EventTrb, BOOLEAN AllowCallbacks);
 static MPSTATUS XHCI_SendCommand(PXHCI_EXTENSION Extension,
                                  ULONG TrbType,
@@ -4155,11 +4156,21 @@ XHCI_CompleteSwEnumTransfer(
 
     if (XhciRegPacket.UsbPortCompleteTransfer && Transfer->TransferParameters)
     {
-        XhciRegPacket.UsbPortCompleteTransfer(Extension,
-                                              ActiveEndpoint,
-                                              Transfer->TransferParameters,
-                                              Transfer->UsbdStatus,
-                                              Transfer->BytesTransferred);
+        /* Mark completed before handing to USBPORT to prevent double-completion */
+        if (!InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags,
+                                      7 /* XHCI_TRANSFER_FLAG_COMPLETED bit position */))
+        {
+            XhciRegPacket.UsbPortCompleteTransfer(Extension,
+                                                  ActiveEndpoint,
+                                                  Transfer->TransferParameters,
+                                                  Transfer->UsbdStatus,
+                                                  Transfer->BytesTransferred);
+        }
+        else
+        {
+            DPRINT1("usbxhci: SW-enum completion skipping already-completed transfer %p\n",
+                    Transfer);
+        }
     }
 
     XHCI_DereferenceEndpointForSwEnum(ActiveEndpoint);
@@ -5781,57 +5792,48 @@ XHCI_HandleCommandCompletion(
             DPRINT1("usbxhci: slot %u disabled\n", SlotId);
 
             /*
-             * Before clearing the EndpointTable, force-complete any
-             * active transfers that the xHC did not generate events for.
-             * When a multi-interface device is disconnected, the xHC may
-             * only deliver USB_TRANSACTION_ERROR events for endpoints
-             * that had TDs in-flight at the instant of disconnect.
-             * Endpoints whose TDs were already consumed (or not yet
-             * submitted by the class driver) get no event, leaving their
-             * USBPORT Transfer structures orphaned. USBPORT_AbortTransfers
-             * will eventually timeout and NUKE them, but in the 5-second
-             * window the stale Transfer memory can be accessed by a DPC
-             * or ISR processing, causing a use-after-free crash.
+             * Drain any stale deferred transfer completions for this slot.
+             * Non-DeviceGone transfers that were deferred (AllowCallbacks
+             * was FALSE) should have been drained by
+             * XHCI_DrainDeferredTransferCompletions already, but flush
+             * any stragglers as a safety measure.
+             */
+            XHCI_FlushDeferredCompletionsForSlot(Extension, SlotId);
+
+            /*
+             * NULL out ActiveTransfer on all endpoints belonging to this
+             * slot. Do NOT call UsbPortCompleteTransfer from here.
              *
-             * Complete them now so USBPORT can clean up immediately.
+             * USBPORT's own abort mechanism (AbortTransfers ->
+             * DmaEndpointPaused -> FlushCancelList -> CompleteTransfer)
+             * will handle completing and freeing these transfers. Calling
+             * UsbPortCompleteTransfer from the miniport side races with
+             * USBPORT_AbortTransfers: the miniport's QueueDoneTransfer
+             * does RemoveEntryList on the TransferLink without holding
+             * EndpointSpinLock, corrupting the TransferList that
+             * DmaEndpointPaused iterates under EndpointSpinLock. This
+             * list corruption causes use-after-free crashes.
+             *
+             * The miniport's only job here is to disown the transfers
+             * (NULL ActiveTransfer) so XHCI_AbortTransfer knows there's
+             * nothing to abort on the hardware side.
              */
             for (EpId = 1; EpId <= XHCI_MAX_ENDPOINTS; EpId++)
             {
                 PXHCI_ENDPOINT Ep = Slot->EndpointTable[EpId];
-                PXHCI_TRANSFER ActiveXfer;
                 KIRQL EpIrql;
 
                 if (!Ep)
                     continue;
 
                 KeAcquireSpinLock(&Ep->Lock, &EpIrql);
-                ActiveXfer = Ep->ActiveTransfer;
-                if (ActiveXfer)
+                if (Ep->ActiveTransfer)
                 {
+                    DPRINT1("usbxhci: slot %u ep %u NULLing orphan ActiveTransfer %p (USBPORT will abort)\n",
+                            SlotId, EpId, Ep->ActiveTransfer);
                     Ep->ActiveTransfer = NULL;
-                    KeReleaseSpinLock(&Ep->Lock, EpIrql);
-
-                    DPRINT1("usbxhci: slot %u ep %u force-completing orphan transfer %p\n",
-                            SlotId, EpId, ActiveXfer);
-
-                    ActiveXfer->UsbdStatus = USBD_STATUS_DEVICE_GONE;
-                    ActiveXfer->BytesTransferred = 0;
-
-                    if (XhciRegPacket.UsbPortCompleteTransfer &&
-                        ActiveXfer->TransferParameters)
-                    {
-                        XhciRegPacket.UsbPortCompleteTransfer(
-                            Extension,
-                            Ep,
-                            ActiveXfer->TransferParameters,
-                            USBD_STATUS_DEVICE_GONE,
-                            0);
-                    }
                 }
-                else
-                {
-                    KeReleaseSpinLock(&Ep->Lock, EpIrql);
-                }
+                KeReleaseSpinLock(&Ep->Lock, EpIrql);
             }
 
             Slot->InUse = FALSE;
@@ -6050,6 +6052,97 @@ XHCI_QueueDeferredTransferCompletion(
     KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
 }
 
+/**
+ * @brief Drain deferred transfer completions belonging to a specific slot.
+ *
+ * When a slot is being disabled due to device disconnect, any transfers that
+ * were deferred (queued on DeferredTransferList because AllowCallbacks was
+ * FALSE at the time of the transfer event) must be completed BEFORE the slot
+ * state is torn down. Otherwise, the deferred drain that runs later would
+ * pass stale TransferParameters pointers to USBPORT after the USBPORT_TRANSFER
+ * structures have been freed by the abort path, causing a use-after-free crash.
+ *
+ * This function removes only transfers belonging to the specified slot and
+ * completes them immediately. Transfers for other slots remain on the list.
+ */
+static
+VOID
+XHCI_FlushDeferredCompletionsForSlot(
+    _Inout_ PXHCI_EXTENSION Extension,
+    _In_ UCHAR SlotId)
+{
+    LIST_ENTRY SlotList;
+    LIST_ENTRY KeepList;
+    KIRQL OldIrql;
+
+    if (!Extension)
+        return;
+
+    InitializeListHead(&SlotList);
+    InitializeListHead(&KeepList);
+
+    /* Partition the deferred list: transfers for this slot go to SlotList,
+     * everything else goes to KeepList. */
+    KeAcquireSpinLock(&Extension->DeferredTransferLock, &OldIrql);
+    while (!IsListEmpty(&Extension->DeferredTransferList))
+    {
+        PLIST_ENTRY Entry = RemoveHeadList(&Extension->DeferredTransferList);
+        PXHCI_TRANSFER Transfer = CONTAINING_RECORD(Entry, XHCI_TRANSFER, ListEntry);
+
+        if (Transfer->Endpoint && Transfer->Endpoint->SlotId == SlotId)
+            InsertTailList(&SlotList, Entry);
+        else
+            InsertTailList(&KeepList, Entry);
+    }
+
+    /* Re-populate the deferred list with non-matching transfers */
+    while (!IsListEmpty(&KeepList))
+    {
+        PLIST_ENTRY Entry = RemoveHeadList(&KeepList);
+        InsertTailList(&Extension->DeferredTransferList, Entry);
+    }
+    KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
+
+    /* Now complete the slot's deferred transfers outside the lock */
+    while (!IsListEmpty(&SlotList))
+    {
+        PLIST_ENTRY Entry = RemoveHeadList(&SlotList);
+        PXHCI_TRANSFER Transfer = CONTAINING_RECORD(Entry, XHCI_TRANSFER, ListEntry);
+        PXHCI_ENDPOINT Endpoint = Transfer->Endpoint;
+
+        if (!Endpoint || !Transfer->TransferParameters)
+            continue;
+
+        /* Mark as completed to prevent any other path from double-completing */
+        if (InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags,
+                                     7 /* XHCI_TRANSFER_FLAG_COMPLETED bit position */))
+        {
+            DPRINT1("usbxhci: slot %u deferred flush skipping already-completed transfer %p\n",
+                    SlotId, Transfer);
+            continue;
+        }
+
+        DPRINT1("usbxhci: slot %u flushing deferred transfer %p ep=%u\n",
+                SlotId, Transfer, Endpoint->EndpointId);
+
+        if (Transfer->IsIsochronous && XhciRegPacket.UsbPortCompleteIsoTransfer)
+        {
+            XhciRegPacket.UsbPortCompleteIsoTransfer(Extension,
+                                                     Endpoint,
+                                                     Transfer->TransferParameters,
+                                                     Transfer->BytesTransferred);
+        }
+        else if (XhciRegPacket.UsbPortCompleteTransfer)
+        {
+            XhciRegPacket.UsbPortCompleteTransfer(Extension,
+                                                  Endpoint,
+                                                  Transfer->TransferParameters,
+                                                  Transfer->UsbdStatus,
+                                                  Transfer->BytesTransferred);
+        }
+    }
+}
+
 static
 VOID
 XHCI_DrainDeferredTransferCompletions(
@@ -6079,6 +6172,32 @@ XHCI_DrainDeferredTransferCompletions(
 
         if (!Endpoint)
             continue;
+
+        /*
+         * Guard against double-completion. Another path (disable-slot
+         * force-complete, SW-enum worker, or StopController drain) may
+         * have already handed this transfer to USBPORT. Completing it
+         * again would pass a stale TransferParameters pointer into
+         * USBPORT_MiniportCompleteTransfer, causing a use-after-free
+         * crash when USBPORT does CONTAINING_RECORD on freed memory.
+         *
+         * The XHCI_TRANSFER_FLAG_COMPLETED flag is set atomically by
+         * whichever path completes the transfer first.
+         */
+        if (InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags,
+                                     7 /* XHCI_TRANSFER_FLAG_COMPLETED bit position */))
+        {
+            DPRINT1("usbxhci: deferred drain skipping already-completed transfer %p (flags=0x%lx)\n",
+                    Transfer, Transfer->Flags);
+            continue;
+        }
+
+        if (!Transfer->TransferParameters)
+        {
+            DPRINT1("usbxhci: deferred drain skipping transfer %p with NULL TransferParameters\n",
+                    Transfer);
+            continue;
+        }
 
         if (Transfer->IsIsochronous && XhciRegPacket.UsbPortCompleteIsoTransfer)
         {
@@ -6413,11 +6532,37 @@ XHCI_HandleTransferEvent(
 
     if (DeviceGone)
     {
-        DPRINT1("usbxhci: slot %u removed, completing ep=%u with DEVICE_GONE\n",
+        DPRINT1("usbxhci: slot %u removed, dropping ep=%u transfer (device gone)\n",
                 SlotId, EndpointId);
-        UsbdStatus = USBD_STATUS_DEVICE_GONE;
-        BytesTransferred = 0;
-        goto CompleteTransfer;
+
+        /*
+         * The device is gone (slot disabled or disable-pending). Do NOT
+         * complete this transfer to USBPORT from the miniport side. Instead,
+         * ActiveTransfer was already NULLed above (under the endpoint lock),
+         * so USBPORT's own abort mechanism will handle the completion
+         * through its AbortTransfers -> DmaEndpointPaused -> FlushCancelList
+         * path.
+         *
+         * Completing from here (either directly or via deferred completion)
+         * races with USBPORT_AbortTransfers which also processes this
+         * transfer. The race causes USBPORT_QueueDoneTransfer's
+         * RemoveEntryList (without EndpointSpinLock) to corrupt the
+         * TransferList while USBPORT_DmaEndpointPaused iterates it with
+         * EndpointSpinLock held. The list corruption leads to a
+         * use-after-free crash when USBPORT follows a stale TransferLink
+         * pointer to freed memory.
+         *
+         * Finalize the bounce buffer so USBPORT doesn't see stale DMA
+         * state, and cancel the poll timer if needed.
+         */
+        XHCI_FinalizeBounceBuffer(Transfer);
+        if (Transfer->Flags & XHCI_TRANSFER_FLAG_NEEDS_POLL)
+        {
+            Transfer->Flags &= ~XHCI_TRANSFER_FLAG_NEEDS_POLL;
+            if (InterlockedDecrement(&Extension->TransferPollCounter) <= 0)
+                KeCancelTimer(&Extension->TransferPollTimer);
+        }
+        return;
     }
     XHCI_DBG(XHCI_TRACE_TRANSFERS,
              "XHCI_Event: S%u E%u Code=%u Rem=%u Ptr=%I64x\n",
@@ -6622,7 +6767,6 @@ XHCI_HandleTransferEvent(
                    FALSE);
     }
 
-CompleteTransfer:
     Transfer->CompletionTrbPointer = TrbPointer;
     Transfer->BytesTransferred = BytesTransferred;
     Transfer->UsbdStatus = UsbdStatus;
@@ -6653,6 +6797,11 @@ CompleteTransfer:
         XHCI_QueueDeferredTransferCompletion(Extension, Transfer);
         return;
     }
+
+    /* Mark transfer as completed before handing to USBPORT.
+     * This prevents double-completion if another path (e.g., disable-slot
+     * force-complete or StopController drain) races with us. */
+    InterlockedOr((volatile LONG *)&Transfer->Flags, XHCI_TRANSFER_FLAG_COMPLETED);
 
     if (Transfer->IsIsochronous && XhciRegPacket.UsbPortCompleteIsoTransfer)
     {
@@ -12414,7 +12563,19 @@ XHCI_StopController(PVOID MiniPortExtension,
 
         KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
 
-        if (XhciRegPacket.UsbPortCompleteTransfer)
+        /* Check if already completed by another path (disable-slot, etc.) */
+        if (InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags,
+                                     7 /* XHCI_TRANSFER_FLAG_COMPLETED bit position */))
+        {
+            DPRINT1("usbxhci: StopController drain skipping already-completed transfer %p\n",
+                    Transfer);
+            KeAcquireSpinLock(&Extension->DeferredTransferLock, &OldIrql);
+            continue;
+        }
+
+        if (XhciRegPacket.UsbPortCompleteTransfer &&
+            Transfer->Endpoint &&
+            Transfer->TransferParameters)
         {
             XhciRegPacket.UsbPortCompleteTransfer(Extension,
                                                   Transfer->Endpoint,

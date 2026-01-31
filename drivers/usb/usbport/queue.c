@@ -654,7 +654,13 @@ USBPORT_FlushAbortList(IN PUSBPORT_ENDPOINT Endpoint)
                                      USBPORT_TRANSFER,
                                      TransferLink);
 
-        if (Transfer->Flags & TRANSFER_FLAG_ABORTED)
+        /*
+         * Skip completed transfers -- they are already done and waiting
+         * for FlushDoneTransfers to remove them from TransferList. They
+         * must not block the abort completion.
+         */
+        if (!(Transfer->Flags & TRANSFER_FLAG_COMPLETED) &&
+            (Transfer->Flags & TRANSFER_FLAG_ABORTED))
         {
             DPRINT_CORE("USBPORT_FlushAbortList: Aborted ActiveTransfer - %p\n",
                         Transfer);

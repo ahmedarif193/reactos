@@ -378,6 +378,7 @@ typedef struct _USBPORT_TRANSFER {
   LIST_ENTRY SplitLink; // for splitted transfers
   ULONG Period;
   PUSBPORT_ISO_BLOCK IsoBlockPtr; // pointer on IsoBlock
+  LIST_ENTRY DoneLink; // separate link for DoneTransferList (avoids conflict with TransferLink)
   // SgList should be LAST field
   USBPORT_SCATTER_GATHER_LIST SgList; // variable length
   //USBPORT_ISO_BLOCK IsoBlock; // variable length
@@ -880,7 +881,8 @@ BOOLEAN
 NTAPI
 USBPORT_QueueDoneTransfer(
   IN PUSBPORT_TRANSFER Transfer,
-  IN USBD_STATUS USBDStatus);
+  IN USBD_STATUS USBDStatus,
+  IN BOOLEAN CallerHoldsEndpointLock);
 
 VOID
 NTAPI

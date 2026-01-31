@@ -914,7 +914,7 @@ USBPORT_RootHubEndpointWorker(IN PUSBPORT_ENDPOINT Endpoint)
             USBDStatus = USBD_STATUS_STALL_PID;
 
         KeAcquireSpinLock(&Endpoint->EndpointSpinLock, &Endpoint->EndpointOldIrql);
-        USBPORT_QueueDoneTransfer(Transfer, USBDStatus);
+        USBPORT_QueueDoneTransfer(Transfer, USBDStatus, TRUE);
         KeReleaseSpinLock(&Endpoint->EndpointSpinLock, Endpoint->EndpointOldIrql);
 
         USBPORT_FlushCancelList(Endpoint);

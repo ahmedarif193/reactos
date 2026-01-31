@@ -320,24 +320,33 @@ USBPORT_EndpointHasQueuedTransfers(IN PDEVICE_OBJECT FdoDevice,
 
     if (!IsListEmpty(&Endpoint->TransferList))
     {
-        Result = TRUE;
-
+        /*
+         * Iterate TransferList to count active (non-completed) transfers.
+         * Completed transfers (TRANSFER_FLAG_COMPLETED) are still on the
+         * TransferList waiting for FlushDoneTransfers to remove them, so
+         * they must not count as "queued" -- otherwise AbortTransfers
+         * would spin waiting for them even though they are already done.
+         */
         if (TransferCount)
-        {
             *TransferCount = 0;
 
-            for (Entry = Endpoint->TransferList.Flink;
-                 Entry && Entry != &Endpoint->TransferList;
-                 Entry = Transfer->TransferLink.Flink)
-            {
-                Transfer = CONTAINING_RECORD(Entry,
-                                             USBPORT_TRANSFER,
-                                             TransferLink);
+        for (Entry = Endpoint->TransferList.Flink;
+             Entry && Entry != &Endpoint->TransferList;
+             Entry = Transfer->TransferLink.Flink)
+        {
+            Transfer = CONTAINING_RECORD(Entry,
+                                         USBPORT_TRANSFER,
+                                         TransferLink);
 
-                if (Transfer->Flags & TRANSFER_FLAG_SUBMITED)
-                {
-                    ++*TransferCount;
-                }
+            if (Transfer->Flags & TRANSFER_FLAG_COMPLETED)
+                continue;
+
+            /* At least one non-completed transfer exists */
+            Result = TRUE;
+
+            if (TransferCount && (Transfer->Flags & TRANSFER_FLAG_SUBMITED))
+            {
+                ++*TransferCount;
             }
         }
     }
@@ -1718,6 +1727,18 @@ USBPORT_DmaEndpointPaused(IN PDEVICE_OBJECT FdoDevice,
                                      USBPORT_TRANSFER,
                                      TransferLink);
 
+        /*
+         * Skip transfers that are already completed (TRANSFER_FLAG_COMPLETED).
+         * These are on the DoneTransferList and will be removed from
+         * TransferList and completed by FlushDoneTransfers. Moving them
+         * to CancelList here would cause double-completion.
+         */
+        if (Transfer->Flags & TRANSFER_FLAG_COMPLETED)
+        {
+            Entry = Transfer->TransferLink.Flink;
+            continue;
+        }
+
         if (Transfer->Flags & (TRANSFER_FLAG_CANCELED | TRANSFER_FLAG_ABORTED))
         {
             if (Transfer->Flags & TRANSFER_FLAG_ISO &&
@@ -1812,6 +1833,14 @@ USBPORT_DmaEndpointActive(IN PDEVICE_OBJECT FdoDevice,
         Transfer = CONTAINING_RECORD(Entry,
                                      USBPORT_TRANSFER,
                                      TransferLink);
+
+        /* Skip completed transfers - they are on DoneTransferList and will
+         * be removed from TransferList by FlushDoneTransfers. */
+        if (Transfer->Flags & TRANSFER_FLAG_COMPLETED)
+        {
+            Entry = Transfer->TransferLink.Flink;
+            continue;
+        }
 
         if (Endpoint &&
             (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
