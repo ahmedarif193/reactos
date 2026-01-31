@@ -2128,8 +2128,13 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
             if (DeviceHandle)
             {
+                DPRINT1("USBH_ProcessPortStateChange: Port %u disconnect, calling USBD_RemoveDeviceEx DeviceHandle=%p\n",
+                        Port, DeviceHandle);
                 USBD_RemoveDeviceEx(HubExtension, DeviceHandle, 0);
+                DPRINT1("USBH_ProcessPortStateChange: Port %u USBD_RemoveDeviceEx returned, calling SyncDisablePort\n",
+                        Port);
                 USBH_SyncDisablePort(HubExtension, Port);
+                DPRINT1("USBH_ProcessPortStateChange: Port %u SyncDisablePort returned\n", Port);
             }
 
             HubExtension->HubFlags |= USBHUB_FDO_FLAG_DO_ENUMERATION;
@@ -4692,6 +4697,14 @@ USBH_ProcessDeviceInformation(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension)
                                               -1);
     if (Pid)
     {
+        /* Log the parsed interface descriptor for driver matching diagnostics */
+        DPRINT1("USBH_ProcessDeviceInformation: VID=%04X PID=%04X InterfaceClass=%02X SubClass=%02X Protocol=%02X\n",
+                PortExtension->DeviceDescriptor.idVendor,
+                PortExtension->DeviceDescriptor.idProduct,
+                Pid->bInterfaceClass,
+                Pid->bInterfaceSubClass,
+                Pid->bInterfaceProtocol);
+
         RtlCopyMemory(&PortExtension->InterfaceDescriptor,
                       Pid,
                       sizeof(PortExtension->InterfaceDescriptor));
@@ -4704,6 +4717,9 @@ USBH_ProcessDeviceInformation(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension)
     }
     else
     {
+        DPRINT1("USBH_ProcessDeviceInformation: VID=%04X PID=%04X - NO interface descriptor found!\n",
+                PortExtension->DeviceDescriptor.idVendor,
+                PortExtension->DeviceDescriptor.idProduct);
         Status = STATUS_UNSUCCESSFUL;
     }
 
@@ -5312,7 +5328,11 @@ USBH_LogNewDevice(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension)
             DeviceDescriptor->idVendor,
             DeviceDescriptor->idProduct);
 
-    if (PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_PORT_HIGH_SPEED)
+    if (PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_PORT_SUPER_SPEED)
+    {
+        Speed = "super-speed";
+    }
+    else if (PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_PORT_HIGH_SPEED)
     {
         Speed = "high-speed";
     }
@@ -5460,19 +5480,42 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     SerialNumberBuffer = NULL;
 
-    IsHsDevice = UsbPortStatus.Usb20PortStatus.HighSpeedDeviceAttached;
-    IsLsDevice = UsbPortStatus.Usb20PortStatus.LowSpeedDeviceAttached;
-
-    if (IsLsDevice == 0)
+    /*
+     * Determine device speed from port status. The USB_PORT_STATUS is a union
+     * of USB_20_PORT_STATUS and USB_30_PORT_STATUS with different bit layouts.
+     *
+     * For USB 3.0 root hub ports, the xHCI driver sets NegotiatedDeviceSpeed:
+     *   1 = Full-speed, 2 = Low-speed, 3 = High-speed, 4 = SuperSpeed, 5 = SS+
+     *
+     * For USB 2.0 ports, the speed bits are:
+     *   Bit 9: LowSpeedDeviceAttached
+     *   Bit 10: HighSpeedDeviceAttached
+     *
+     * We check NegotiatedDeviceSpeed first (USB 3.0), and if it indicates
+     * SuperSpeed, use that. Otherwise fall back to USB 2.0 interpretation.
+     */
+    if (UsbPortStatus.Usb30PortStatus.NegotiatedDeviceSpeed >= 4)
     {
-        if (IsHsDevice)
-        {
-            PortExtension->PortPdoFlags = USBHUB_PDO_FLAG_PORT_HIGH_SPEED;
-        }
+        /* SuperSpeed or SuperSpeed+ device */
+        PortExtension->PortPdoFlags = USBHUB_PDO_FLAG_PORT_SUPER_SPEED;
     }
     else
     {
-        PortExtension->PortPdoFlags = USBHUB_PDO_FLAG_PORT_LOW_SPEED;
+        /* USB 2.0 speed detection */
+        IsHsDevice = UsbPortStatus.Usb20PortStatus.HighSpeedDeviceAttached;
+        IsLsDevice = UsbPortStatus.Usb20PortStatus.LowSpeedDeviceAttached;
+
+        if (IsLsDevice == 0)
+        {
+            if (IsHsDevice)
+            {
+                PortExtension->PortPdoFlags = USBHUB_PDO_FLAG_PORT_HIGH_SPEED;
+            }
+        }
+        else
+        {
+            PortExtension->PortPdoFlags = USBHUB_PDO_FLAG_PORT_LOW_SPEED;
+        }
     }
 
     /* Initialize PortExtension->InstanceID */

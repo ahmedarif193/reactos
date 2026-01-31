@@ -1970,7 +1970,12 @@ USBH_PdoQueryId(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
             break;
 
         case BusQueryCompatibleIDs:
-            DPRINT("USBH_PdoQueryId: BusQueryCompatibleIDs\n");
+            DPRINT1("USBH_PdoQueryId: BusQueryCompatibleIDs VID=%04X PID=%04X InterfaceClass=%02X SubClass=%02X Protocol=%02X\n",
+                   DeviceDescriptor->idVendor,
+                   DeviceDescriptor->idProduct,
+                   InterfaceDescriptor->bInterfaceClass,
+                   InterfaceDescriptor->bInterfaceSubClass,
+                   InterfaceDescriptor->bInterfaceProtocol);
 
             if (PortExtension->PortPdoFlags & USBHUB_PDO_FLAG_INIT_PORT_FAILED)
             {
