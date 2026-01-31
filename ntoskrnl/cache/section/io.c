@@ -181,46 +181,9 @@ MiSimpleRead(PFILE_OBJECT FileObject,
         }
     }
 
-    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-               "[_MiSimpleRead] Paging IO Done: Status=0x%lx Info=%lu\n",
-               ReadStatus->Status, (ULONG)ReadStatus->Information);
-
-#if defined(_M_ARM64) || defined(__aarch64__)
-    /*
-     * ARM64 DEBUG (Cycle 57): Dump first bytes of data read to diagnose
-     * if wrong data (FAT metadata) is being returned for driver files
-     */
-    if (NT_SUCCESS(ReadStatus->Status) && ReadStatus->Information >= 16)
-    {
-        PUCHAR RawData = (PUCHAR)Buffer;
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                   "[_MiSimpleRead] File='%wZ' Offset=0x%I64x First16: "
-                   "%02X %02X %02X %02X %02X %02X %02X %02X "
-                   "%02X %02X %02X %02X %02X %02X %02X %02X\n",
-                   &FileObject->FileName, FileOffset->QuadPart,
-                   RawData[0], RawData[1], RawData[2], RawData[3],
-                   RawData[4], RawData[5], RawData[6], RawData[7],
-                   RawData[8], RawData[9], RawData[10], RawData[11],
-                   RawData[12], RawData[13], RawData[14], RawData[15]);
-        /* Check for FAT boot sector signature instead of PE */
-        if (RawData[0] == 0xEB && (RawData[1] == 0x3C || RawData[1] == 0x58 || RawData[1] == 0x76))
-        {
-            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                       "[_MiSimpleRead] WARNING: Data looks like FAT boot sector, not PE file!\n");
-            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                       "[_MiSimpleRead] FileObject=%p DevObj=%p FsContext=%p SOP=%p\n",
-                       FileObject, DeviceObject, FileObject->FsContext,
-                       FileObject->SectionObjectPointer);
-        }
-    }
-#endif
-
     /* When "ReadStatus->Information > 0" is false and "ReadStatus->Status == STATUS_END_OF_FILE" is true
      * it means that read pointer is out of file, so we must fail */
     Status = ReadStatus->Status == STATUS_END_OF_FILE && ReadStatus->Information > 0 ? STATUS_SUCCESS : ReadStatus->Status;
-
-    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-               "[_MiSimpleRead] Returning Status=0x%lx\n", Status);
 
     return Status;
 }

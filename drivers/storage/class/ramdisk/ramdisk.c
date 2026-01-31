@@ -3426,24 +3426,20 @@ RamdiskDeviceControl(IN PDEVICE_OBJECT DeviceObject,
 
     if (IoctlName)
     {
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "RamdiskDeviceControl[%s]: request %s (0x%lx) in=%lu out=%lu\n",
-                   DeviceTypeName,
-                   IoctlName,
-                   IoControlCode,
-                   IoStackLocation->Parameters.DeviceIoControl.InputBufferLength,
-                   IoStackLocation->Parameters.DeviceIoControl.OutputBufferLength);
+        DPRINT("RamdiskDeviceControl[%s]: request %s (0x%lx) in=%lu out=%lu\n",
+               DeviceTypeName,
+               IoctlName,
+               IoControlCode,
+               IoStackLocation->Parameters.DeviceIoControl.InputBufferLength,
+               IoStackLocation->Parameters.DeviceIoControl.OutputBufferLength);
     }
     else
     {
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "RamdiskDeviceControl[%s]: request 0x%lx in=%lu out=%lu\n",
-                   DeviceTypeName,
-                   IoControlCode,
-                   IoStackLocation->Parameters.DeviceIoControl.InputBufferLength,
-                   IoStackLocation->Parameters.DeviceIoControl.OutputBufferLength);
+        DPRINT("RamdiskDeviceControl[%s]: request 0x%lx in=%lu out=%lu\n",
+               DeviceTypeName,
+               IoControlCode,
+               IoStackLocation->Parameters.DeviceIoControl.InputBufferLength,
+               IoStackLocation->Parameters.DeviceIoControl.OutputBufferLength);
     }
 
     /* Check if this is an bus device or the drive */
