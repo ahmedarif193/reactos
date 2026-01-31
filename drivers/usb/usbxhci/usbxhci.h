@@ -179,6 +179,7 @@ typedef struct _XHCI_DEVICE_SLOT {
     BOOLEAN InUse;
     BOOLEAN Addressed;
     BOOLEAN Configured;
+    BOOLEAN DisablePending;
     ULONG Ep0ContextErrorCount;
     ULONG Ep0TransactionErrorCount;
     UCHAR UsbDeviceAddress;
@@ -195,8 +196,6 @@ typedef struct _XHCI_DEVICE_SLOT {
     BOOLEAN MultiTt;
     BOOLEAN HasTtInfo;
     BOOLEAN IsHub;
-    BOOLEAN VirtualDevice;
-    UCHAR VirtualConfigurationValue;
     volatile LONG Ep0NeedsDequeueReset;
     volatile LONG Ep0NeedsStallReset;    /* Set on stall, cleared by next submit at PASSIVE */
     volatile LONG Ep0StallResetQueued;   /* Prevent duplicate stall-reset workers */
@@ -229,10 +228,10 @@ typedef struct _XHCI_EXTENSION {
   BOOLEAN Supports64Bit;
     BOOLEAN PortPowerControl;
     BOOLEAN PortIndicatorsSupported;
-    USHORT HciVersion;
-    PXHCI_HC_RESOURCES HcResources;
-    PHYSICAL_ADDRESS HcResourcesPhysical;
-    SIZE_T CommonBufferSize;
+  USHORT HciVersion;
+  PXHCI_HC_RESOURCES HcResources;
+  PHYSICAL_ADDRESS HcResourcesPhysical;
+  SIZE_T CommonBufferSize;
     PULONGLONG Dcbaa;
     PHYSICAL_ADDRESS DcbaaPhysical;
     PULONGLONG ScratchpadPointerArray;
@@ -282,9 +281,10 @@ typedef struct _XHCI_EXTENSION {
   UCHAR PortLinkState[XHCI_MAX_PORTS + 1];
   BOOLEAN PortConnectStatus[XHCI_MAX_PORTS + 1];
   ULONG PortChangeMask[XHCI_MAX_PORTS + 1];
-  BOOLEAN VirtualPortAnnounced[XHCI_MAX_PORTS + 1];
   UCHAR MaxU1ExitLatency;
   USHORT MaxU2ExitLatency;
+  UCHAR MaxPrimaryStreams;
+  UCHAR ReservedStreamCaps[3];
   UCHAR ProtocolSegmentCount;
   XHCI_PROTOCOL_SEGMENT ProtocolSegments[XHCI_MAX_PROTOCOL_SEGMENTS];
   UCHAR PortProtocol[XHCI_MAX_PORTS + 1];
@@ -310,6 +310,11 @@ typedef struct _XHCI_EXTENSION {
   KTIMER TransferPollTimer;
   KDPC TransferPollDpc;
   volatile LONG TransferPollCounter;
+  /* Frame number wrap tracking for Get32BitFrameNumber.
+   * xHCI MFINDEX is only 14 bits and wraps every ~2 seconds.
+   * USBPORT expects a monotonically increasing 32-bit value. */
+  ULONG LastMfIndex;
+  ULONG FrameHighBits;
   /* Debug counters */
   volatile ULONG IsrCallCount;
   /* ACPI _OSC (Operating System Capabilities) context */
@@ -354,6 +359,13 @@ typedef struct _XHCI_ENDPOINT {
     UCHAR DoorbellTarget;
     UCHAR InterruptTarget;
     USHORT ReservedStreamId;
+    USHORT MaxStreamId;
+    BOOLEAN StreamsEnabled;
+    UCHAR StreamReserved[1];
+    PXHCI_STREAM_CONTEXT StreamContexts;
+    PHYSICAL_ADDRESS StreamContextsPhysical;
+    PXHCI_RING StreamRings;
+    ULONG StreamRingCount;
     BOOLEAN DefaultControl;
     BOOLEAN UsesStaticRing;
     BOOLEAN Isochronous;
@@ -391,6 +403,7 @@ typedef struct _XHCI_TRANSFER {
 #define XHCI_TRANSFER_FLAG_SWENUM_PENDING 0x00000008
 #define XHCI_TRANSFER_FLAG_SWENUM_CANCELED 0x00000010
 #define XHCI_TRANSFER_FLAG_SWENUM_DONE    0x00000020
+#define XHCI_TRANSFER_FLAG_DATA_STAGE_DONE 0x00000040  /* BytesTransferred saved from Data Stage SHORT_PACKET */
 
 BOOLEAN
 XHCI_EndpointNeedsTt(

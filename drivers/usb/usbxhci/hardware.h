@@ -40,6 +40,7 @@
 #define XHCI_HCC_64B_CONTEXT(x)    (((x) >> 2) & 0x1)
 #define XHCI_HCC_PORT_INDICATORS(x)(((x) >> 4) & 0x1)
 #define XHCI_HCC_LIGHT_RESET(x)    (((x) >> 5) & 0x1)
+#define XHCI_HCC_MAX_PSTREAMS(x)   (((x) >> 12) & 0xF)
 #define XHCI_HCC_EXT_CAP_PTR(x)    (((x) >> 16) & 0xFFFF)
 
 #define XHCI_EXT_CAP_ID(cap)       ((cap) & 0xFF)
@@ -113,6 +114,8 @@ typedef struct _XHCI_PROTOCOL_CAPABILITY {
 #define XHCI_PORTSC_PRC            0x00200000
 #define XHCI_PORTSC_PLC            0x00400000
 #define XHCI_PORTSC_CEC            0x00800000
+#define XHCI_PORTSC_CAS            0x01000000
+/* Note: CAS (Cold Attach Status) is Read-Only, not Write-1-to-Clear */
 #define XHCI_PORTSC_CHANGE_MASK   (XHCI_PORTSC_CSC  | \
                                    XHCI_PORTSC_PEC  | \
                                    XHCI_PORTSC_WRC  | \
@@ -120,7 +123,6 @@ typedef struct _XHCI_PROTOCOL_CAPABILITY {
                                    XHCI_PORTSC_PRC  | \
                                    XHCI_PORTSC_PLC  | \
                                    XHCI_PORTSC_CEC)
-#define XHCI_PORTSC_CAS            0x01000000
 #define XHCI_PORTSC_WCE            0x02000000
 #define XHCI_PORTSC_WDE            0x04000000
 #define XHCI_PORTSC_WOE            0x08000000
@@ -177,6 +179,7 @@ typedef struct _XHCI_PROTOCOL_CAPABILITY {
 
 #define XHCI_TRB_CYCLE             0x1
 #define XHCI_TRB_TOGGLE_CYCLE      (1 << 1)
+#define XHCI_TRB_ISP               (1 << 2) /* Interrupt on Short Packet */
 #define XHCI_TRB_CHAIN_BIT         (1 << 4)
 #define XHCI_TRB_IOC               (1 << 5)
 #define XHCI_TRB_IDT               (1 << 6)
@@ -298,6 +301,12 @@ typedef struct DECLSPEC_ALIGN(32) _XHCI_ENDPOINT_CONTEXT {
     ULONG Reserved[3];
 } XHCI_ENDPOINT_CONTEXT, *PXHCI_ENDPOINT_CONTEXT;
 
+typedef struct DECLSPEC_ALIGN(16) _XHCI_STREAM_CONTEXT {
+    ULONG StreamInfo;
+    ULONG Reserved;
+    ULONGLONG TrDequeuePointer;
+} XHCI_STREAM_CONTEXT, *PXHCI_STREAM_CONTEXT;
+
 typedef struct DECLSPEC_ALIGN(64) _XHCI_DEVICE_CONTEXT {
     XHCI_SLOT_CONTEXT SlotContext;
     XHCI_ENDPOINT_CONTEXT EndpointContext[32];
@@ -333,6 +342,10 @@ typedef struct DECLSPEC_ALIGN(64) _XHCI_INPUT_CONTEXT {
 
 #define XHCI_EPCTX_MULT_SHIFT              8
 #define XHCI_EPCTX_MULT_MASK               (0x3 << XHCI_EPCTX_MULT_SHIFT)
+#define XHCI_EPCTX_MAX_PSTREAMS_SHIFT      10
+#define XHCI_EPCTX_MAX_PSTREAMS_MASK       (0x1F << XHCI_EPCTX_MAX_PSTREAMS_SHIFT)
+#define XHCI_EPCTX_LSA_SHIFT               15
+#define XHCI_EPCTX_LSA_FLAG                (1u << XHCI_EPCTX_LSA_SHIFT)
 #define XHCI_EPCTX_INTERVAL_SHIFT          16
 #define XHCI_EPCTX_INTERVAL_MASK           (0xFF << XHCI_EPCTX_INTERVAL_SHIFT)
 #define XHCI_EPCTX_ESIT_HI_SHIFT           24
@@ -346,6 +359,10 @@ typedef struct DECLSPEC_ALIGN(64) _XHCI_INPUT_CONTEXT {
 #define XHCI_EPCTX_MAX_PACKET_MASK         (0xFFFF << XHCI_EPCTX_MAX_PACKET_SHIFT)
 #define XHCI_EPCTX_MAX_ESIT_LO_SHIFT       16
 #define XHCI_EPCTX_MAX_ESIT_LO_MASK        (0xFFFF << XHCI_EPCTX_MAX_ESIT_LO_SHIFT)
+#define XHCI_EPCTX_LSA                     0x1ull
+
+#define XHCI_STREAM_CTX_TYPE_MASK          0x7u
+#define XHCI_STREAM_CTX_TYPE_PRIMARY       0x1u
 
 /* Endpoint context state values (EpInfo bits 0:2) */
 #define XHCI_EPCTX_STATE_MASK              0x7u
