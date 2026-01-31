@@ -435,6 +435,9 @@ USBPORT_OpenInterface(IN PURB Urb,
 
     if (HasAlternates && SendSetInterface)
     {
+        DPRINT("USBPORT_OpenInterface: SET_INTERFACE iface=%u alt=%u\n",
+               InterfaceInfo->InterfaceNumber, InterfaceInfo->AlternateSetting);
+
         RtlZeroMemory(&SetupPacket, sizeof(SetupPacket));
 
         SetupPacket.bmRequestType.Dir = BMREQUEST_HOST_TO_DEVICE;
@@ -452,6 +455,9 @@ USBPORT_OpenInterface(IN PURB Urb,
                                 0,
                                 NULL,
                                 &USBDStatus);
+
+        DPRINT("USBPORT_OpenInterface: SET_INTERFACE done USBDStatus=0x%lx\n", USBDStatus);
+
         if (!USBD_SUCCESS(USBDStatus))
         {
             goto Exit;
@@ -568,15 +574,25 @@ USBPORT_OpenInterface(IN PURB Urb,
 
     if (USBD_SUCCESS(USBDStatus))
     {
+        DPRINT("USBPORT_OpenInterface: opening %lu endpoints\n", NumEndpoints);
+
         for (ix = 0; ix < NumEndpoints; ++ix)
         {
             PipeInfo = &InterfaceInfo->Pipes[ix];
             PipeHandle = &InterfaceHandle->PipeHandle[ix];
 
+            DPRINT("USBPORT_OpenInterface: OpenPipe ix=%lu EP=0x%02x type=%u maxpkt=%u\n",
+                   ix, PipeHandle->EndpointDescriptor.bEndpointAddress,
+                   PipeHandle->EndpointDescriptor.bmAttributes & USB_ENDPOINT_TYPE_MASK,
+                   PipeHandle->EndpointDescriptor.wMaxPacketSize);
+
             Status = USBPORT_OpenPipe(FdoDevice,
                                       DeviceHandle,
                                       PipeHandle,
                                       &USBDStatus);
+
+            DPRINT("USBPORT_OpenInterface: OpenPipe ix=%lu done Status=0x%lx USBDStatus=0x%lx\n",
+                   ix, Status, USBDStatus);
 
             if (!NT_SUCCESS(Status))
                 break;
@@ -761,11 +777,15 @@ USBPORT_HandleSelectConfiguration(IN PDEVICE_OBJECT FdoDevice,
 
     FdoExtension = FdoDevice->DeviceExtension;
 
+    DPRINT("USBPORT_HandleSelectConfiguration: waiting for DeviceSemaphore\n");
+
     KeWaitForSingleObject(&FdoExtension->DeviceSemaphore,
                           Executive,
                           KernelMode,
                           FALSE,
                           NULL);
+
+    DPRINT("USBPORT_HandleSelectConfiguration: DeviceSemaphore acquired\n");
 
     DeviceHandle = Urb->UrbHeader.UsbdDeviceHandle;
     ConfigDescriptor = Urb->UrbSelectConfiguration.ConfigurationDescriptor;
@@ -846,6 +866,9 @@ USBPORT_HandleSelectConfiguration(IN PDEVICE_OBJECT FdoDevice,
     SetupPacket.wIndex.W = 0;
     SetupPacket.wLength = 0;
 
+    DPRINT("USBPORT_HandleSelectConfiguration: sending SET_CONFIGURATION (value=%u, %u interfaces)\n",
+           ConfigDescriptor->bConfigurationValue, iNumber);
+
     USBPORT_SendSetupPacket(DeviceHandle,
                             FdoDevice,
                             &SetupPacket,
@@ -853,6 +876,9 @@ USBPORT_HandleSelectConfiguration(IN PDEVICE_OBJECT FdoDevice,
                             0,
                             NULL,
                             &USBDStatus);
+
+    DPRINT("USBPORT_HandleSelectConfiguration: SET_CONFIGURATION done USBDStatus=0x%lx\n",
+           USBDStatus);
 
     if (USBD_ERROR(USBDStatus))
     {
@@ -873,6 +899,9 @@ USBPORT_HandleSelectConfiguration(IN PDEVICE_OBJECT FdoDevice,
 
     for (ix = 0; ix < iNumber; ++ix)
     {
+        DPRINT("USBPORT_HandleSelectConfiguration: InitInterfaceInfo ix=%lu/%lu InterfaceNumber=%u AltSetting=%u\n",
+               ix, iNumber, InterfaceInfo->InterfaceNumber, InterfaceInfo->AlternateSetting);
+
         USBDStatus = USBPORT_InitInterfaceInfo(InterfaceInfo,
                                                ConfigHandle);
 
@@ -880,6 +909,9 @@ USBPORT_HandleSelectConfiguration(IN PDEVICE_OBJECT FdoDevice,
 
         if (USBD_SUCCESS(USBDStatus))
         {
+            DPRINT("USBPORT_HandleSelectConfiguration: OpenInterface ix=%lu InterfaceNumber=%u NumEPs=%u\n",
+                   ix, InterfaceInfo->InterfaceNumber, InterfaceInfo->NumberOfPipes);
+
             USBDStatus = USBPORT_OpenInterface(Urb,
                                                DeviceHandle,
                                                FdoDevice,
@@ -887,6 +919,14 @@ USBPORT_HandleSelectConfiguration(IN PDEVICE_OBJECT FdoDevice,
                                                InterfaceInfo,
                                                &InterfaceHandle,
                                                TRUE);
+
+            DPRINT("USBPORT_HandleSelectConfiguration: OpenInterface ix=%lu done USBDStatus=0x%lx\n",
+                   ix, USBDStatus);
+        }
+        else
+        {
+            DPRINT1("USBPORT_HandleSelectConfiguration: InitInterfaceInfo FAILED ix=%lu USBDStatus=0x%lx\n",
+                    ix, USBDStatus);
         }
 
         if (InterfaceHandle)
@@ -1044,6 +1084,9 @@ USBPORT_AbortTransfers(IN PDEVICE_OBJECT FdoDevice,
     PLIST_ENTRY HandleList;
     PUSBPORT_PIPE_HANDLE PipeHandle;
     BOOLEAN Result;
+    ULONG WaitCount;
+    ULONG MaxWaitCount;
+    KIRQL OldIrql;
 
     DPRINT("USBPORT_AbortAllTransfers: ... \n");
 
@@ -1076,6 +1119,17 @@ USBPORT_AbortTransfers(IN PDEVICE_OBJECT FdoDevice,
         }
     }
 
+    /*
+     * Wait for all transfers to be drained from the device's endpoints.
+     * Use a timeout (5 seconds) to prevent infinite stalls when the
+     * hardware cannot complete aborts (e.g., device disconnected and
+     * the miniport's AbortTransfer returns early). After the timeout,
+     * set ENDPOINT_FLAG_NUKE on all endpoints to force-complete any
+     * remaining transfers.
+     */
+    WaitCount = 0;
+    MaxWaitCount = 50; /* 50 * 100ms = 5 seconds */
+
     while (TRUE)
     {
         Result = USBPORT_DeviceHasTransfers(FdoDevice, DeviceHandle);
@@ -1083,8 +1137,49 @@ USBPORT_AbortTransfers(IN PDEVICE_OBJECT FdoDevice,
         if (!Result)
             break;
 
+        WaitCount++;
+
+        if (WaitCount >= MaxWaitCount)
+        {
+            DPRINT1("USBPORT_AbortTransfers: timeout after %lu ms, forcing NUKE on endpoints\n",
+                    WaitCount * 100);
+
+            /*
+             * Timeout reached: transfers are stuck because the hardware
+             * cannot abort them (e.g., device physically disconnected).
+             * Set ENDPOINT_FLAG_NUKE on all device endpoints to allow
+             * USBPORT_DmaEndpointPaused to skip the miniport abort call
+             * and directly complete the transfers.
+             */
+            HandleList = DeviceHandle->PipeHandleList.Flink;
+
+            while (HandleList != &DeviceHandle->PipeHandleList)
+            {
+                PipeHandle = CONTAINING_RECORD(HandleList,
+                                               USBPORT_PIPE_HANDLE,
+                                               PipeLink);
+
+                HandleList = HandleList->Flink;
+
+                if (!(PipeHandle->Flags & DEVICE_HANDLE_FLAG_ROOTHUB) &&
+                    PipeHandle->Endpoint)
+                {
+                    KeAcquireSpinLock(&PipeHandle->Endpoint->EndpointSpinLock, &OldIrql);
+                    PipeHandle->Endpoint->Flags |= ENDPOINT_FLAG_NUKE;
+                    KeReleaseSpinLock(&PipeHandle->Endpoint->EndpointSpinLock, OldIrql);
+
+                    /* Re-trigger abort processing with NUKE flag set */
+                    USBPORT_AbortEndpoint(FdoDevice, PipeHandle->Endpoint, NULL);
+                }
+            }
+
+            USBPORT_FlushMapTransfers(FdoDevice);
+        }
+
         USBPORT_Wait(FdoDevice, 100);
     }
+
+    DPRINT("USBPORT_AbortTransfers: completed after %lu iterations\n", WaitCount);
 }
 
 PUSB2_TT_EXTENSION
@@ -2041,7 +2136,16 @@ USBPORT_FetchBosDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
     PUCHAR Ptr;
     PUCHAR End;
 
-    if (DeviceHandle->DeviceDescriptor.bcdUSB < 0x0200)
+    /*
+     * BOS (Binary Object Store) descriptor is only mandatory for USB 3.0+
+     * devices. USB 2.1 (0x0210) devices MAY have BOS for LPM support, but
+     * USB 2.0 (0x0200) and below devices typically do not support BOS and
+     * will STALL the request, causing the endpoint to halt and triggering
+     * expensive reset sequences with 5-second timeouts.
+     *
+     * Skip BOS fetch for USB 2.0 and below to avoid unnecessary stalls.
+     */
+    if (DeviceHandle->DeviceDescriptor.bcdUSB < 0x0201)
         return;
 
     RtlZeroMemory(&BosHeader, sizeof(BosHeader));

@@ -516,6 +516,63 @@ USBPORT_RemovePipeHandle(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
     PipeHandle->PipeLink.Blink = NULL;
 }
 
+VOID
+NTAPI
+USBPORT_CloseStaticStreamsInternal(IN PDEVICE_OBJECT FdoDevice,
+                                   IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
+                                   IN PUSBPORT_PIPE_HANDLE PipeHandle,
+                                   IN BOOLEAN ReconfigureMiniport)
+{
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PUSBPORT_REGISTRATION_PACKET Packet;
+    PUSBPORT_ENDPOINT Endpoint;
+    PLIST_ENTRY Entry;
+    PLIST_ENTRY Next;
+
+    if (!PipeHandle || PipeHandle->StreamCount == 0)
+        return;
+
+    Endpoint = PipeHandle->Endpoint;
+    if (!Endpoint)
+        return;
+
+    if (ReconfigureMiniport && FdoDevice)
+    {
+        FdoExtension = FdoDevice->DeviceExtension;
+        Packet = &FdoExtension->MiniPortInterface->Packet;
+
+        Endpoint->EndpointProperties.Reserved6 = 0;
+
+        if (Packet->ReopenEndpoint)
+        {
+            (VOID)Packet->ReopenEndpoint(FdoExtension->MiniPortExt,
+                                         &Endpoint->EndpointProperties,
+                                         Endpoint + 1);
+        }
+    }
+
+    for (Entry = PipeHandle->StreamList.Flink;
+         Entry != &PipeHandle->StreamList;
+         Entry = Next)
+    {
+        PUSBPORT_PIPE_HANDLE StreamHandle;
+
+        Next = Entry->Flink;
+        StreamHandle = CONTAINING_RECORD(Entry,
+                                         USBPORT_PIPE_HANDLE,
+                                         StreamLink);
+
+        USBPORT_RemovePipeHandle(DeviceHandle, StreamHandle);
+        RemoveEntryList(&StreamHandle->StreamLink);
+        StreamHandle->StreamLink.Flink = NULL;
+        StreamHandle->StreamLink.Blink = NULL;
+        ExFreePoolWithTag(StreamHandle, USB_PORT_TAG);
+    }
+
+    InitializeListHead(&PipeHandle->StreamList);
+    PipeHandle->StreamCount = 0;
+}
+
 BOOLEAN
 NTAPI
 USBPORT_ValidatePipeHandle(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
@@ -669,6 +726,20 @@ USBPORT_ClosePipe(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
     if (PipeHandle->Flags & PIPE_HANDLE_FLAG_NULL_PACKET_SIZE)
     {
         PipeHandle->Flags &= ~PIPE_HANDLE_FLAG_NULL_PACKET_SIZE;
+        return;
+    }
+
+    if (PipeHandle->BasePipe)
+    {
+        if (PipeHandle->BasePipe->StreamCount > 0)
+            PipeHandle->BasePipe->StreamCount--;
+        if (PipeHandle->BasePipe->StreamCount == 0)
+            InitializeListHead(&PipeHandle->BasePipe->StreamList);
+        USBPORT_RemovePipeHandle(DeviceHandle, PipeHandle);
+        RemoveEntryList(&PipeHandle->StreamLink);
+        PipeHandle->StreamLink.Flink = NULL;
+        PipeHandle->StreamLink.Blink = NULL;
+        ExFreePoolWithTag(PipeHandle, USB_PORT_TAG);
         return;
     }
 
@@ -912,6 +983,7 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
         EndpointSize += sizeof(USB2_TT_ENDPOINT);
     }
 
+
     if (PipeHandle->EndpointDescriptor.wMaxPacketSize == 0)
     {
         DPRINT1("USBPORT_OpenPipe: wMaxPacketSize==0 (null pipe) IRQL=%lu\n",
@@ -997,6 +1069,13 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
     }
 
     EndpointProperties->PortNumber = DeviceHandle->PortNumber;
+
+    PipeHandle->StreamId = 0;
+    PipeHandle->StreamCount = 0;
+    PipeHandle->BasePipe = NULL;
+    InitializeListHead(&PipeHandle->StreamList);
+    PipeHandle->StreamLink.Flink = NULL;
+    PipeHandle->StreamLink.Blink = NULL;
 
     switch (EndpointDescriptor->bmAttributes & USB_ENDPOINT_TYPE_MASK)
     {
@@ -1196,7 +1275,15 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
 
             USBPORT_ApplyEndpointLpmPolicy(EndpointProperties, DeviceHandle);
 
+            DPRINT("USBPORT_OpenPipe: calling MiniportOpenEndpoint addr=%u EP=0x%02x type=%lu maxpkt=%lu\n",
+                   EndpointProperties->DeviceAddress,
+                   EndpointProperties->EndpointAddress,
+                   EndpointProperties->TransferType,
+                   EndpointProperties->MaxPacketSize);
+
             MpStatus = MiniportOpenEndpoint(FdoDevice, Endpoint);
+
+            DPRINT("USBPORT_OpenPipe: MiniportOpenEndpoint returned MpStatus=%lx\n", MpStatus);
 
             Endpoint->Flags |= ENDPOINT_FLAG_DMA_TYPE;
             Endpoint->Flags |= ENDPOINT_FLAG_QUEUENE_EMPTY;
@@ -1617,7 +1704,13 @@ USBPORT_DmaEndpointPaused(IN PDEVICE_OBJECT FdoDevice,
     Entry = Endpoint->TransferList.Flink;
 
     if (Entry == &Endpoint->TransferList)
+    {
+        DPRINT_CORE("USBPORT_DmaEndpointPaused: TransferList empty, returning ACTIVE\n");
         return USBPORT_ENDPOINT_ACTIVE;
+    }
+
+    DPRINT("USBPORT_DmaEndpointPaused: Endpoint=%p Flags=0x%lx TransferList not empty\n",
+           Endpoint, Endpoint->Flags);
 
     while (Entry && Entry != &Endpoint->TransferList)
     {
@@ -1669,6 +1762,9 @@ USBPORT_DmaEndpointPaused(IN PDEVICE_OBJECT FdoDevice,
                 }
             }
 
+            DPRINT1("USBPORT_DmaEndpointPaused: moving ABORTED transfer %p to CancelList (Flags=0x%lx NUKE=%u)\n",
+                    Transfer, Transfer->Flags, !!(Endpoint->Flags & ENDPOINT_FLAG_NUKE));
+
             RemoveEntryList(&Transfer->TransferLink);
             Entry = Transfer->TransferLink.Flink;
 
@@ -1686,6 +1782,8 @@ USBPORT_DmaEndpointPaused(IN PDEVICE_OBJECT FdoDevice,
             Entry = Transfer->TransferLink.Flink;
         }
     }
+
+    DPRINT_CORE("USBPORT_DmaEndpointPaused: done processing TransferList\n");
 
     return USBPORT_ENDPOINT_ACTIVE;
 }
@@ -1715,6 +1813,18 @@ USBPORT_DmaEndpointActive(IN PDEVICE_OBJECT FdoDevice,
                                      USBPORT_TRANSFER,
                                      TransferLink);
 
+        if (Endpoint &&
+            (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
+             Transfer->TransferParameters.TransferBufferLength >= 64))
+        {
+            DPRINT("USBPORT_DmaEndpointActive: Ep=%p Transfer=%p Len=%lu Flags=0x%lx Submitted=%u\n",
+                   Endpoint,
+                   Transfer,
+                   Transfer->TransferParameters.TransferBufferLength,
+                   Transfer->TransferParameters.TransferFlags,
+                   !!(Transfer->Flags & TRANSFER_FLAG_SUBMITED));
+        }
+
         if (!(Transfer->Flags & TRANSFER_FLAG_SUBMITED) &&
              !(Endpoint->Flags & ENDPOINT_FLAG_NUKE))
         {
@@ -1743,8 +1853,17 @@ USBPORT_DmaEndpointActive(IN PDEVICE_OBJECT FdoDevice,
 
             KeReleaseSpinLock(&FdoExtension->MiniportSpinLock, OldIrql);
 
+            if (Endpoint &&
+                (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
+                 Transfer->TransferParameters.TransferBufferLength >= 64))
+            {
+                DPRINT("USBPORT_DmaEndpointActive: SubmitTransfer MpStatus=%lu\n",
+                       MpStatus);
+            }
+
             if (MpStatus)
             {
+                DPRINT1("USBPORT_DmaEndpointActive: SubmitTransfer FAILED MpStatus=%lu\n", MpStatus);
                 if ((MpStatus != MP_STATUS_FAILURE) && Transfer->Flags & TRANSFER_FLAG_ISO)
                 {
                     DPRINT1("USBPORT_DmaEndpointActive: FIXME call USBPORT_ErrorCompleteIsoTransfer\n");
@@ -1780,6 +1899,7 @@ USBPORT_DmaEndpointWorker(IN PUSBPORT_ENDPOINT Endpoint)
     ULONG PrevState;
     ULONG EndpointState;
     BOOLEAN IsPaused = FALSE;
+    BOOLEAN NeedRetry = FALSE;
 
     DPRINT_CORE("USBPORT_DmaEndpointWorker ... \n");
 
@@ -1799,12 +1919,35 @@ USBPORT_DmaEndpointWorker(IN PUSBPORT_ENDPOINT Endpoint)
     }
     else
     {
-#ifndef NDEBUG_USBPORT_CORE
-        DPRINT1("USBPORT_DmaEndpointWorker: DbgBreakPoint. EndpointState - %x\n",
-                EndpointState);
-        DbgBreakPoint();
-#endif
-        EndpointState = USBPORT_ENDPOINT_UNKNOWN;
+        DPRINT_CORE("USBPORT_DmaEndpointWorker: PrevState=%x (unknown/transitioning)\n",
+                    PrevState);
+
+        /*
+         * State is UNKNOWN (transitioning between states) or unexpected.
+         * If the endpoint has NUKE or ABORTING flags set, we must still
+         * try to drain transfers. Process them as if we were in PAUSED state
+         * to avoid indefinite stalls during device disconnect.
+         */
+        if (Endpoint->Flags & (ENDPOINT_FLAG_NUKE | ENDPOINT_FLAG_ABORTING))
+        {
+            DPRINT1("USBPORT_DmaEndpointWorker: state=%x but NUKE/ABORTING set, forcing PAUSED processing\n",
+                    PrevState);
+            EndpointState = USBPORT_DmaEndpointPaused(FdoDevice, Endpoint);
+        }
+        else
+        {
+            EndpointState = USBPORT_ENDPOINT_UNKNOWN;
+            /*
+             * If state is unknown and there are pending/active transfers,
+             * schedule a retry to prevent stuck endpoints.
+             */
+            if (!IsListEmpty(&Endpoint->TransferList) ||
+                !IsListEmpty(&Endpoint->PendingTransferList) ||
+                !IsListEmpty(&Endpoint->CancelList))
+            {
+                NeedRetry = TRUE;
+            }
+        }
     }
 
     KeReleaseSpinLock(&Endpoint->EndpointSpinLock, Endpoint->EndpointOldIrql);
@@ -1827,7 +1970,7 @@ USBPORT_DmaEndpointWorker(IN PUSBPORT_ENDPOINT Endpoint)
 
     KeReleaseSpinLock(&Endpoint->EndpointSpinLock, Endpoint->EndpointOldIrql);
 
-    if (IsPaused)
+    if (IsPaused || NeedRetry)
     {
        USBPORT_InvalidateEndpointHandler(FdoDevice,
                                          Endpoint,
@@ -1937,6 +2080,8 @@ USBPORT_EndpointWorker(IN PUSBPORT_ENDPOINT Endpoint,
             return FALSE;
         }
 
+        DPRINT1("USBPORT_EndpointWorker: Endpoint=%p state mismatch! State=%lu StateNext=%lu - deferring\n",
+                Endpoint, EndpointState, Endpoint->StateNext);
         KeReleaseSpinLockFromDpcLevel(&Endpoint->StateChangeSpinLock);
         InterlockedDecrement(&Endpoint->LockCounter);
 

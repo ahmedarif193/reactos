@@ -44,6 +44,11 @@ LIST_ENTRY USBPORT_USB2FdoList = {NULL, NULL};
 KSPIN_LOCK USBPORT_SpinLock;
 BOOLEAN USBPORT_Initialized = FALSE;
 
+static
+VOID
+USBPORT_CleanupTransferOnBadUrb(IN PUSBPORT_TRANSFER Transfer,
+                                IN USBD_STATUS TransferStatus);
+
 VOID
 USBPORT_ReferenceRootHubCallbackData(IN PUSBPORT_ROOT_HUB_CALLBACK_DATA CallbackData)
 {
@@ -985,11 +990,29 @@ USBPORT_DoneTransfer(IN PUSBPORT_TRANSFER Transfer)
     DPRINT_CORE("USBPORT_DoneTransfer: Transfer - %p\n", Transfer);
 
     Endpoint = Transfer->Endpoint;
-    FdoDevice = Endpoint->FdoDevice;
+    FdoDevice = Transfer->FdoDevice;
+    if (!FdoDevice && Endpoint)
+        FdoDevice = Endpoint->FdoDevice;
+    if (!FdoDevice)
+    {
+        DPRINT1("USBPORT_DoneTransfer: missing FdoDevice Transfer=%p\n", Transfer);
+        USBPORT_CleanupTransferOnBadUrb(Transfer, Transfer->USBDStatus);
+        return;
+    }
     FdoExtension = FdoDevice->DeviceExtension;
 
     Urb = Transfer->Urb;
     Irp = Transfer->Irp;
+
+    if (!Urb || (ULONG_PTR)Urb < (ULONG_PTR)MmSystemRangeStart)
+    {
+        DPRINT1("USBPORT_DoneTransfer: invalid Urb=%p Transfer=%p\n", Urb, Transfer);
+        USBPORT_CleanupTransferOnBadUrb(Transfer, Transfer->USBDStatus);
+        return;
+    }
+
+    DPRINT("USBPORT_DoneTransfer: Transfer=%p Endpoint=%p Urb=%p Irp=%p USBDStatus=0x%x CompLen=%lu\n",
+           Transfer, Endpoint, Urb, Irp, Transfer->USBDStatus, Transfer->CompletedTransferLen);
 
     KeAcquireSpinLock(&FdoExtension->FlushTransferSpinLock, &OldIrql);
 
@@ -1010,6 +1033,11 @@ USBPORT_DoneTransfer(IN PUSBPORT_TRANSFER Transfer)
     DPRINT_CORE("USBPORT_DoneTransfer: exit\n");
 }
 
+/* Limit per-DPC iteration count to prevent DPC watchdog timeout.
+   HID completion callbacks synchronously re-submit transfers through
+   the full USB stack, so each iteration can take ~40ms with debug serial. */
+#define USBPORT_MAX_DONE_TRANSFERS_PER_DPC 16
+
 VOID
 NTAPI
 USBPORT_FlushDoneTransfers(IN PDEVICE_OBJECT FdoDevice)
@@ -1018,9 +1046,10 @@ USBPORT_FlushDoneTransfers(IN PDEVICE_OBJECT FdoDevice)
     PLIST_ENTRY DoneTransferList;
     PUSBPORT_TRANSFER Transfer;
     PUSBPORT_ENDPOINT Endpoint;
-    ULONG TransferCount;
+    ULONG TransferCount = 0;
     KIRQL OldIrql;
     BOOLEAN IsHasTransfers;
+    ULONG Iterations = 0;
 
     DPRINT_CORE("USBPORT_FlushDoneTransfers: ...\n");
 
@@ -1034,12 +1063,22 @@ USBPORT_FlushDoneTransfers(IN PDEVICE_OBJECT FdoDevice)
         if (IsListEmpty(DoneTransferList))
             break;
 
+        /* Yield after N transfers to prevent DPC timeout */
+        if (Iterations >= USBPORT_MAX_DONE_TRANSFERS_PER_DPC)
+        {
+            KeReleaseSpinLock(&FdoExtension->DoneTransferSpinLock, OldIrql);
+            KeInsertQueueDpc(&FdoExtension->TransferFlushDpc, NULL, NULL);
+            return;
+        }
+
         Transfer = CONTAINING_RECORD(DoneTransferList->Flink,
                                      USBPORT_TRANSFER,
                                      TransferLink);
 
         RemoveHeadList(DoneTransferList);
         KeReleaseSpinLock(&FdoExtension->DoneTransferSpinLock, OldIrql);
+
+        Iterations++;
 
         if (Transfer)
         {
@@ -1054,12 +1093,26 @@ USBPORT_FlushDoneTransfers(IN PDEVICE_OBJECT FdoDevice)
                 USBPORT_DoneTransfer(Transfer);
             }
 
+            TransferCount = 0;
             IsHasTransfers = USBPORT_EndpointHasQueuedTransfers(FdoDevice,
                                                                 Endpoint,
                                                                 &TransferCount);
 
             if (IsHasTransfers && !TransferCount)
             {
+                /*
+                 * The completion callback queued a new transfer on the
+                 * PendingTransferList but no transfer is on the active
+                 * TransferList yet.  Try to dispatch it directly.
+                 * FlushPendingTransfers has its own reentrancy guard so
+                 * this is safe even if called from a nested context.
+                 *
+                 * We also schedule a WorkerDPC as a fallback, but when
+                 * called from within DpcHandler the WorkerDPC may be
+                 * suppressed by the IsrDpcHandlerCounter check.  The
+                 * direct FlushPendingTransfers call handles that case.
+                 */
+                USBPORT_FlushPendingTransfers(Endpoint);
                 USBPORT_InvalidateEndpointHandler(FdoDevice,
                                                   Endpoint,
                                                   INVALIDATE_ENDPOINT_WORKER_DPC);
@@ -1106,7 +1159,15 @@ USBPORT_QueueDoneTransfer(IN PUSBPORT_TRANSFER Transfer,
         return FALSE;
     }
 
-    FdoDevice = Transfer->Endpoint->FdoDevice;
+    FdoDevice = Transfer->FdoDevice;
+    if (!FdoDevice && Transfer->Endpoint)
+        FdoDevice = Transfer->Endpoint->FdoDevice;
+    if (!FdoDevice)
+    {
+        DPRINT1("USBPORT_QueueDoneTransfer: missing FdoDevice Transfer=%p\n",
+                Transfer);
+        return FALSE;
+    }
     FdoExtension = FdoDevice->DeviceExtension;
 
     RemoveEntryList(&Transfer->TransferLink);
@@ -1115,6 +1176,9 @@ USBPORT_QueueDoneTransfer(IN PUSBPORT_TRANSFER Transfer,
     ExInterlockedInsertTailList(&FdoExtension->DoneTransferList,
                                 &Transfer->TransferLink,
                                 &FdoExtension->DoneTransferSpinLock);
+
+    DPRINT("USBPORT_QueueDoneTransfer: queued Transfer=%p Endpoint=%p USBDStatus=0x%x\n",
+           Transfer, Transfer->Endpoint, USBDStatus);
 
     return KeInsertQueueDpc(&FdoExtension->TransferFlushDpc, NULL, NULL);
 }
@@ -2832,6 +2896,121 @@ USBPORT_FreeReusableTransfer(IN PUSBPORT_ENDPOINT Endpoint)
     }
 }
 
+static
+VOID
+USBPORT_CleanupTransferOnBadUrb(IN PUSBPORT_TRANSFER Transfer,
+                                IN USBD_STATUS TransferStatus)
+{
+    PDEVICE_OBJECT FdoDevice;
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PDMA_OPERATIONS DmaOperations;
+    PMDL Mdl;
+    ULONG_PTR CurrentVa;
+    SIZE_T TransferLength;
+    BOOLEAN WriteToDevice;
+    BOOLEAN IsFlushSuccess;
+    KIRQL OldIrql;
+
+    if (!Transfer)
+        return;
+
+    /* Best-effort cleanup without touching the URB */
+    if (Transfer->Flags & TRANSFER_FLAG_DMA_MAPPED)
+    {
+        FdoDevice = Transfer->FdoDevice;
+        if (FdoDevice)
+        {
+            FdoExtension = FdoDevice->DeviceExtension;
+            DmaOperations = FdoExtension->DmaAdapter->DmaOperations;
+
+            Mdl = Transfer->TransferBufferMDL;
+            if (Mdl && (ULONG_PTR)Mdl >= (ULONG_PTR)MmSystemRangeStart)
+            {
+                WriteToDevice = Transfer->Direction == USBPORT_DMA_DIRECTION_TO_DEVICE;
+                CurrentVa = (ULONG_PTR)MmGetMdlVirtualAddress(Mdl);
+                TransferLength = Transfer->CompletedTransferLen;
+                if (!WriteToDevice &&
+                    TransferLength == 0 &&
+                    Transfer->TransferParameters.TransferBufferLength != 0)
+                {
+                    TransferLength = Transfer->TransferParameters.TransferBufferLength;
+                }
+
+                IsFlushSuccess = DmaOperations->FlushAdapterBuffers(FdoExtension->DmaAdapter,
+                                                                    Mdl,
+                                                                    Transfer->MapRegisterBase,
+                                                                    (PVOID)CurrentVa,
+                                                                    TransferLength,
+                                                                    WriteToDevice);
+
+                if (!IsFlushSuccess)
+                {
+                    DPRINT("USBPORT_CleanupTransferOnBadUrb: no FlushAdapterBuffers !!!\n");
+                    ASSERT(FALSE);
+                }
+            }
+
+            KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+            DmaOperations->FreeMapRegisters(FdoExtension->DmaAdapter,
+                                            Transfer->MapRegisterBase,
+                                            Transfer->NumberOfMapRegisters);
+            KeLowerIrql(OldIrql);
+        }
+    }
+
+    if (Transfer->Flags & TRANSFER_FLAG_BOUNCE)
+    {
+        if (Transfer->BounceBuffer)
+        {
+            PDEVICE_OBJECT BounceFdo = Transfer->FdoDevice;
+            if (BounceFdo)
+                USBPORT_FreeCommonBuffer(BounceFdo, Transfer->BounceBuffer);
+            Transfer->BounceBuffer = NULL;
+        }
+
+        if (Transfer->BounceMdl)
+        {
+            IoFreeMdl(Transfer->BounceMdl);
+            Transfer->BounceMdl = NULL;
+        }
+    }
+
+    if (Transfer->Flags & TRANSFER_FLAG_ALLOCATED_MDL)
+    {
+        if (Transfer->TransferBufferMDL &&
+            (ULONG_PTR)Transfer->TransferBufferMDL >= (ULONG_PTR)MmSystemRangeStart)
+        {
+            IoFreeMdl(Transfer->TransferBufferMDL);
+        }
+        Transfer->Flags &= ~TRANSFER_FLAG_ALLOCATED_MDL;
+    }
+
+    DPRINT1("USBPORT_CleanupTransferOnBadUrb: dropping transfer %p status=%x Urb=%p\n",
+            Transfer, TransferStatus, Transfer->Urb);
+
+    ExFreePoolWithTag(Transfer, USB_PORT_TAG);
+}
+
+VOID
+NTAPI
+USBPORT_CompleteTransferSafe(IN PUSBPORT_TRANSFER Transfer,
+                             IN USBD_STATUS TransferStatus)
+{
+    PURB Urb;
+
+    if (!Transfer)
+        return;
+
+    Urb = Transfer->Urb;
+    if (!Urb || (ULONG_PTR)Urb < (ULONG_PTR)MmSystemRangeStart)
+    {
+        USBPORT_CleanupTransferOnBadUrb(Transfer, TransferStatus);
+        return;
+    }
+
+    USBPORT_CompleteTransfer(Urb, TransferStatus);
+}
+
 VOID
 NTAPI
 USBPORT_CompleteTransfer(IN PURB Urb,
@@ -2856,6 +3035,13 @@ USBPORT_CompleteTransfer(IN PURB Urb,
     DPRINT("USBPORT_CompleteTransfer: Urb - %p, TransferStatus - %X\n",
            Urb,
            TransferStatus);
+
+    if (!Urb || (ULONG_PTR)Urb < (ULONG_PTR)MmSystemRangeStart)
+    {
+        DPRINT1("USBPORT_CompleteTransfer: invalid Urb=%p Status=%X\n",
+                Urb, TransferStatus);
+        return;
+    }
 
     UrbTransfer = &Urb->UrbControlTransfer;
     Transfer = (PUSBPORT_TRANSFER)InterlockedExchangePointer(
@@ -2889,7 +3075,17 @@ USBPORT_CompleteTransfer(IN PURB Urb,
     if (Transfer->Flags & TRANSFER_FLAG_DMA_MAPPED)
     {
         Endpoint = Transfer->Endpoint;
-        FdoDevice = Endpoint->FdoDevice;
+        FdoDevice = Transfer->FdoDevice;
+        if (!FdoDevice && Endpoint)
+        {
+            FdoDevice = Endpoint->FdoDevice;
+        }
+        if (!FdoDevice)
+        {
+            DPRINT1("USBPORT_CompleteTransfer: missing FdoDevice for Transfer=%p\n",
+                    Transfer);
+            goto SkipDmaCleanup;
+        }
         FdoExtension = FdoDevice->DeviceExtension;
         DmaOperations = FdoExtension->DmaAdapter->DmaOperations;
 
@@ -2925,6 +3121,7 @@ USBPORT_CompleteTransfer(IN PURB Urb,
 
         KeLowerIrql(OldIrql);
     }
+SkipDmaCleanup:
 
     if (Transfer->Flags & TRANSFER_FLAG_BOUNCE)
     {
@@ -2949,7 +3146,9 @@ USBPORT_CompleteTransfer(IN PURB Urb,
 
         if (Transfer->BounceBuffer)
         {
-            PDEVICE_OBJECT BounceFdo = Transfer->Endpoint->FdoDevice;
+            PDEVICE_OBJECT BounceFdo = Transfer->FdoDevice;
+            if (!BounceFdo && Transfer->Endpoint)
+                BounceFdo = Transfer->Endpoint->FdoDevice;
             USBPORT_FreeCommonBuffer(BounceFdo, Transfer->BounceBuffer);
             Transfer->BounceBuffer = NULL;
         }
@@ -2998,6 +3197,7 @@ USBPORT_CompleteTransfer(IN PURB Urb,
     {
         IoFreeMdl(Transfer->TransferBufferMDL);
         Urb->UrbHeader.UsbdFlags &= ~USBD_FLAG_ALLOCATED_MDL;
+        Transfer->Flags &= ~TRANSFER_FLAG_ALLOCATED_MDL;
     }
 
     Urb->UrbHeader.UsbdFlags &= ~USBD_FLAG_ALLOCATED_TRANSFER;
@@ -3018,6 +3218,9 @@ USBPORT_CompleteTransfer(IN PURB Urb,
 
         Irp->IoStatus.Status = Status;
         Irp->IoStatus.Information = 0;
+
+        DPRINT("USBPORT_CompleteTransfer: IoCompleteRequest Irp=%p Status=0x%lx USBD=0x%x Len=%lu\n",
+               Irp, Status, TransferStatus, UrbTransfer->TransferBufferLength);
 
         KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
         IoCompleteRequest(Irp, IO_NO_INCREMENT);
@@ -3074,8 +3277,12 @@ USBPORT_CompleteTransfer(IN PURB Urb,
 
     if (Transfer)
     {
-        /* Clear the reusable in-flight flag if we're freeing */
-        if (Endpoint && (Transfer->Flags & TRANSFER_FLAG_REUSABLE))
+        /* Clear the reusable in-flight flag if we're freeing.
+         * Only access Endpoint when the transfer succeeded - on failure
+         * (DEVICE_GONE, CANCELED) the endpoint may already be freed,
+         * and Transfer->Endpoint would be a stale pointer. */
+        if (NT_SUCCESS(Status) && Endpoint &&
+            (Transfer->Flags & TRANSFER_FLAG_REUSABLE))
         {
             InterlockedExchange(&Endpoint->ReusableTransferInFlight, 0);
         }
@@ -3129,6 +3336,19 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
 
     Mdl = Urb->UrbControlTransfer.TransferBufferMDL;
     CurrentVa = (ULONG_PTR)MmGetMdlVirtualAddress(Mdl);
+
+    if (Endpoint &&
+        (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
+         TransferLength >= 64))
+    {
+        DPRINT("USBPORT_MapTransfer: Transfer=%p Ep=%p Len=%lu Flags=0x%lx Mdl=%p VA=%p\n",
+               Transfer,
+               Endpoint,
+               TransferLength,
+               Transfer->TransferParameters.TransferFlags,
+               Mdl,
+               (PVOID)CurrentVa);
+    }
 
     sgList = &Transfer->SgList;
 
@@ -3201,6 +3421,15 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
     while (CurrentLength != Transfer->TransferParameters.TransferBufferLength);
 
     sgList->SgElementCount = ix;
+
+    if (Endpoint &&
+        (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
+         Transfer->TransferParameters.TransferBufferLength >= 64))
+    {
+        DPRINT("USBPORT_MapTransfer: SG count=%lu TotalLen=%lu\n",
+               sgList->SgElementCount,
+               Transfer->TransferParameters.TransferBufferLength);
+    }
 
     if (Endpoint->EndpointProperties.DeviceSpeed == UsbHighSpeed ||
         Endpoint->EndpointProperties.DeviceSpeed == UsbSuperSpeed)
@@ -3303,6 +3532,18 @@ USBPORT_FlushMapTransfers(IN PDEVICE_OBJECT FdoDevice)
         TransferBufferLength = Transfer->TransferParameters.TransferBufferLength;
         VirtualAddr = (ULONG_PTR)MmGetMdlVirtualAddress(Mdl);
 
+        if (Transfer->Endpoint &&
+            (Transfer->Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
+             TransferBufferLength >= 64))
+        {
+            DPRINT("USBPORT_FlushMapTransfers: Transfer=%p Ep=%p Len=%lu Mdl=%p VA=%p\n",
+                   Transfer,
+                   Transfer->Endpoint,
+                   TransferBufferLength,
+                   Mdl,
+                   (PVOID)VirtualAddr);
+        }
+
         NumMapRegisters = ADDRESS_AND_SIZE_TO_SPAN_PAGES(VirtualAddr,
                                                          TransferBufferLength);
 
@@ -3313,6 +3554,14 @@ USBPORT_FlushMapTransfers(IN PDEVICE_OBJECT FdoDevice)
                                                        NumMapRegisters,
                                                        USBPORT_MapTransfer,
                                                        Transfer);
+
+        if (Transfer->Endpoint &&
+            (Transfer->Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
+             TransferBufferLength >= 64))
+        {
+            DPRINT("USBPORT_FlushMapTransfers: AllocateAdapterChannel Status=0x%lx\n",
+                   Status);
+        }
 
         if (!NT_SUCCESS(Status))
             ASSERT(FALSE);
@@ -3412,7 +3661,8 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
         /* Reset the transfer for new use */
         Transfer->Flags &= ~(TRANSFER_FLAG_COMPLETED | TRANSFER_FLAG_SUBMITED |
                              TRANSFER_FLAG_DMA_MAPPED | TRANSFER_FLAG_HIGH_SPEED |
-                             TRANSFER_FLAG_CANCELED | TRANSFER_FLAG_ABORTED);
+                             TRANSFER_FLAG_CANCELED | TRANSFER_FLAG_ABORTED |
+                             TRANSFER_FLAG_ALLOCATED_MDL);
         Transfer->Flags |= TRANSFER_FLAG_REUSABLE;
         Transfer->USBDStatus = USBD_STATUS_SUCCESS;
         Transfer->CompletedTransferLen = 0;
@@ -3426,14 +3676,27 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
         Transfer->Irp = Irp;
         Transfer->Urb = Urb;
         Transfer->Event = Event;
+        Transfer->FdoDevice = FdoDevice;
         Transfer->TransferBufferMDL = Mdl;
         Transfer->TransferParameters.TransferBufferLength = TransferLength;
         Transfer->TransferParameters.TransferFlags = Urb->UrbControlTransfer.TransferFlags;
+        Transfer->TransferParameters.Reserved2 = 0;
+        if (PipeHandle &&
+            PipeHandle->StreamId != 0 &&
+            Endpoint &&
+            Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK &&
+            Endpoint->EndpointProperties.DeviceSpeed == UsbSuperSpeed)
+        {
+            Transfer->TransferParameters.Reserved2 = PipeHandle->StreamId;
+        }
 
         if (Urb->UrbControlTransfer.TransferFlags & USBD_TRANSFER_DIRECTION_IN)
             Transfer->Direction = USBPORT_DMA_DIRECTION_FROM_DEVICE;
         else
             Transfer->Direction = USBPORT_DMA_DIRECTION_TO_DEVICE;
+
+        if (Urb->UrbHeader.UsbdFlags & USBD_FLAG_ALLOCATED_MDL)
+            Transfer->Flags |= TRANSFER_FLAG_ALLOCATED_MDL;
 
         Urb->UrbControlTransfer.hca.Reserved8[0] = Transfer;
         Urb->UrbHeader.UsbdFlags |= USBD_FLAG_ALLOCATED_TRANSFER;
@@ -3482,6 +3745,7 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
     Transfer->Irp = Irp;
     Transfer->Urb = Urb;
     Transfer->Endpoint = PipeHandle->Endpoint;
+    Transfer->FdoDevice = FdoDevice;
     Transfer->Event = Event;
     Transfer->PortTransferLength = PortTransferLength;
     Transfer->FullTransferLength = FullTransferLength;
@@ -3503,6 +3767,7 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
             Transfer->TransferParameters.TransferBufferLength = TransferLength;
             Transfer->TransferParameters.TransferFlags =
                 Urb->UrbIsochronousTransfer.TransferFlags;
+            Transfer->TransferParameters.Reserved2 = 0;
 
             if (Urb->UrbIsochronousTransfer.TransferFlags &
                 USBD_TRANSFER_DIRECTION_IN)
@@ -3523,6 +3788,15 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
             Transfer->TransferParameters.TransferBufferLength = TransferLength;
             Transfer->TransferParameters.TransferFlags =
                 Urb->UrbControlTransfer.TransferFlags;
+            Transfer->TransferParameters.Reserved2 = 0;
+            if (PipeHandle &&
+                PipeHandle->StreamId != 0 &&
+                Endpoint &&
+                Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK &&
+                Endpoint->EndpointProperties.DeviceSpeed == UsbSuperSpeed)
+            {
+                Transfer->TransferParameters.Reserved2 = PipeHandle->StreamId;
+            }
 
             if (Urb->UrbControlTransfer.TransferFlags &
                 USBD_TRANSFER_DIRECTION_IN)
@@ -3535,6 +3809,9 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
             }
             break;
     }
+
+    if (Urb->UrbHeader.UsbdFlags & USBD_FLAG_ALLOCATED_MDL)
+        Transfer->Flags |= TRANSFER_FLAG_ALLOCATED_MDL;
 
     if (IsoBlockLen)
     {

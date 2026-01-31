@@ -177,7 +177,7 @@ USBPORT_CompleteIsoTransfer(IN PVOID MiniPortExtension,
     if (Status == 0)
         Status = USBD_STATUS_SUCCESS;
 
-    USBPORT_CompleteTransfer(Urb, Status);
+    USBPORT_CompleteTransferSafe(Transfer, Status);
 
     return TransferLength;
 }

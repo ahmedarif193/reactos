@@ -1201,6 +1201,15 @@ USBPORT_InvalidateRootHub(PVOID MiniPortExtension)
             USBPORT_InvalidateEndpointHandler(FdoDevice,
                                               Endpoint,
                                               INVALIDATE_ENDPOINT_WORKER_THREAD);
+            /*
+             * Re-enable IRQs after queuing the endpoint worker. The worker will
+             * process the current port changes. If new port changes occur while
+             * the worker is processing, they will trigger new interrupts that
+             * call InvalidateRootHub again. Without this, RhIrqEnabled stays
+             * FALSE after processing changes, causing subsequent port events
+             * to be deferred indefinitely (the re-plug detection bug).
+             */
+            Packet->RH_EnableIrq(FdoExtension->MiniPortExt);
         }
         else if (Endpoint)
         {

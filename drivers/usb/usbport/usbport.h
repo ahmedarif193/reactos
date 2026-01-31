@@ -196,6 +196,7 @@ typedef struct _USBPORT_TIMESYNC_CONTEXT {
 #define TRANSFER_FLAG_PARENT     0x00000400
 #define TRANSFER_FLAG_BOUNCE     0x00000800
 #define TRANSFER_FLAG_REUSABLE   0x00001000
+#define TRANSFER_FLAG_ALLOCATED_MDL 0x00002000
 
 extern KSPIN_LOCK USBPORT_SpinLock;
 extern LIST_ENTRY USBPORT_MiniPortDrivers;
@@ -224,6 +225,11 @@ typedef struct _USBPORT_PIPE_HANDLE {
   USB_ENDPOINT_DESCRIPTOR EndpointDescriptor;
   UCHAR Padded;
   PUSBPORT_ENDPOINT Endpoint;
+  ULONG StreamId;
+  ULONG StreamCount;
+  struct _USBPORT_PIPE_HANDLE *BasePipe;
+  LIST_ENTRY StreamList;
+  LIST_ENTRY StreamLink;
   LIST_ENTRY PipeLink;
 } USBPORT_PIPE_HANDLE, *PUSBPORT_PIPE_HANDLE;
 
@@ -349,6 +355,7 @@ typedef struct _USBPORT_TRANSFER {
   SIZE_T PortTransferLength; // Only port part
   SIZE_T FullTransferLength; // Port + miniport
   PUSBPORT_ENDPOINT Endpoint;
+  PDEVICE_OBJECT FdoDevice;
   USBPORT_TRANSFER_PARAMETERS TransferParameters;
   PMDL TransferBufferMDL;
   PUSBPORT_COMMON_BUFFER_HEADER BounceBuffer;
@@ -852,6 +859,12 @@ USBPORT_CompleteTransfer(
 
 VOID
 NTAPI
+USBPORT_CompleteTransferSafe(
+  IN PUSBPORT_TRANSFER Transfer,
+  IN USBD_STATUS TransferStatus);
+
+VOID
+NTAPI
 USBPORT_DpcHandler(
   IN PDEVICE_OBJECT FdoDevice);
 
@@ -1156,6 +1169,14 @@ NTAPI
 USBPORT_RemovePipeHandle(
   IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
   IN PUSBPORT_PIPE_HANDLE PipeHandle);
+
+VOID
+NTAPI
+USBPORT_CloseStaticStreamsInternal(
+  IN PDEVICE_OBJECT FdoDevice,
+  IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
+  IN PUSBPORT_PIPE_HANDLE PipeHandle,
+  IN BOOLEAN ReconfigureMiniport);
 
 BOOLEAN
 NTAPI

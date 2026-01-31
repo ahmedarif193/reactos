@@ -520,7 +520,7 @@ USBPORT_CancelPendingTransferIrp(IN PDEVICE_OBJECT DeviceObject,
     KeReleaseSpinLockFromDpcLevel(&Endpoint->EndpointSpinLock);
     KeReleaseSpinLock(&FdoExtension->FlushPendingTransferSpinLock, OldIrql);
 
-    USBPORT_CompleteTransfer(Transfer->Urb, USBD_STATUS_CANCELED);
+    USBPORT_CompleteTransferSafe(Transfer, USBD_STATUS_CANCELED);
 }
 
 VOID
@@ -753,19 +753,19 @@ USBPORT_FlushCancelList(IN PUSBPORT_ENDPOINT Endpoint)
 
         if (Endpoint->Flags & ENDPOINT_FLAG_NUKE)
         {
-            USBPORT_CompleteTransfer(Transfer->Urb, USBD_STATUS_DEVICE_GONE);
+            USBPORT_CompleteTransferSafe(Transfer, USBD_STATUS_DEVICE_GONE);
         }
         else
         {
             if (Transfer->Flags & TRANSFER_FLAG_DEVICE_GONE)
             {
-                USBPORT_CompleteTransfer(Transfer->Urb,
-                                         USBD_STATUS_DEVICE_GONE);
+                USBPORT_CompleteTransferSafe(Transfer,
+                                             USBD_STATUS_DEVICE_GONE);
             }
             else
             {
-                USBPORT_CompleteTransfer(Transfer->Urb,
-                                         USBD_STATUS_CANCELED);
+                USBPORT_CompleteTransferSafe(Transfer,
+                                             USBD_STATUS_CANCELED);
             }
         }
 
@@ -927,7 +927,7 @@ USBPORT_FlushPendingTransfers(IN PUSBPORT_ENDPOINT Endpoint)
                 KeReleaseSpinLock(&FdoExtension->FlushTransferSpinLock,
                                   OldIrql);
 
-                USBPORT_CompleteTransfer(Transfer->Urb, USBD_STATUS_CANCELED);
+                USBPORT_CompleteTransferSafe(Transfer, USBD_STATUS_CANCELED);
                 goto Worker;
             }
 
@@ -958,6 +958,31 @@ Worker:
 Next:
         if (IsEnd)
         {
+            /*
+             * Before releasing the lock, re-check if a new transfer was
+             * queued to PendingTransferList while we held FlushPendingLock.
+             * This happens when a completion callback (running on another
+             * CPU via FlushDoneTransfers) submits a follow-up transfer
+             * while this FlushPendingTransfers instance is still active
+             * (e.g. inside EndpointWorker -> PollEndpoint).  Without this
+             * re-check the new transfer would be stranded because the
+             * WorkerDPC scheduled by FlushDoneTransfers is suppressed by
+             * the IsrDpcHandlerCounter reentrancy guard.
+             */
+            KeAcquireSpinLock(&Endpoint->EndpointSpinLock,
+                              &Endpoint->EndpointOldIrql);
+
+            if (!IsListEmpty(&Endpoint->PendingTransferList))
+            {
+                KeReleaseSpinLock(&Endpoint->EndpointSpinLock,
+                                  Endpoint->EndpointOldIrql);
+                IsEnd = FALSE;
+                continue;
+            }
+
+            KeReleaseSpinLock(&Endpoint->EndpointSpinLock,
+                              Endpoint->EndpointOldIrql);
+
             InterlockedDecrement(&Endpoint->FlushPendingLock);
             DPRINT_CORE("USBPORT_FlushPendingTransfers: Endpoint Unlocked. Exit\n");
             return;
@@ -1019,6 +1044,16 @@ USBPORT_QueueActiveUrbToEndpoint(IN PUSBPORT_ENDPOINT Endpoint,
     if (Transfer->TransferParameters.TransferBufferLength == 0 ||
         !(Endpoint->Flags & ENDPOINT_FLAG_DMA_TYPE))
     {
+        if (Endpoint &&
+            (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
+             Transfer->TransferParameters.TransferBufferLength >= 64))
+        {
+            DPRINT("USBPORT_QueueActiveUrbToEndpoint: non-DMA path Ep=%p Len=%lu Flags=0x%lx Mdl=%p\n",
+                   Endpoint,
+                   Transfer->TransferParameters.TransferBufferLength,
+                   Transfer->TransferParameters.TransferFlags,
+                   Transfer->TransferBufferMDL);
+        }
         InsertTailList(&Endpoint->TransferList, &Transfer->TransferLink);
 
         KeReleaseSpinLock(&Endpoint->EndpointSpinLock,
@@ -1038,6 +1073,18 @@ USBPORT_QueueActiveUrbToEndpoint(IN PUSBPORT_ENDPOINT Endpoint,
     InterlockedIncrement(&DeviceHandle->DeviceHandleLock);
 
     KeReleaseSpinLock(&FdoExtension->MapTransferSpinLock, OldIrql);
+
+    if (Endpoint &&
+        (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
+         Transfer->TransferParameters.TransferBufferLength >= 64))
+    {
+        DPRINT("USBPORT_QueueActiveUrbToEndpoint: DMA map queued Ep=%p Len=%lu Flags=0x%lx Mdl=%p Transfer=%p\n",
+               Endpoint,
+               Transfer->TransferParameters.TransferBufferLength,
+               Transfer->TransferParameters.TransferFlags,
+               Transfer->TransferBufferMDL,
+               Transfer);
+    }
 
     //DPRINT_CORE("USBPORT_QueueActiveUrbToEndpoint: return TRUE\n");
     return TRUE;
@@ -1070,7 +1117,7 @@ USBPORT_QueuePendingTransferIrp(IN PIRP Irp)
 
     if (Irp->Cancel && IoSetCancelRoutine(Irp, NULL))
     {
-        USBPORT_CompleteTransfer(Urb, USBD_STATUS_CANCELED);
+        USBPORT_CompleteTransferSafe(Transfer, USBD_STATUS_CANCELED);
     }
     else
     {
@@ -1102,6 +1149,21 @@ USBPORT_QueueTransferUrb(IN PURB Urb)
 
     Parameters->TransferBufferLength = Urb->UrbControlTransfer.TransferBufferLength;
     Parameters->TransferFlags = Urb->UrbControlTransfer.TransferFlags;
+
+    if (Endpoint &&
+        (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
+         Parameters->TransferBufferLength >= 64))
+    {
+        DPRINT("USBPORT_QueueTransferUrb: Ep=%p Type=%lu Dir=%lu Len=%lu Flags=0x%lx Buf=%p Mdl=%p Irp=%p\n",
+               Endpoint,
+               Endpoint->EndpointProperties.TransferType,
+               Endpoint->EndpointProperties.Direction,
+               Parameters->TransferBufferLength,
+               Parameters->TransferFlags,
+               Urb->UrbControlTransfer.TransferBuffer,
+               Urb->UrbControlTransfer.TransferBufferMDL,
+                Transfer->Irp);
+    }
 
     Transfer->TransferBufferMDL = Urb->UrbControlTransfer.TransferBufferMDL;
 
