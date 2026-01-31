@@ -93,6 +93,8 @@ USBSTOR_IssueBulkOrInterruptRequest(
                            TRUE,
                            TRUE);
 
+    DPRINT("USBSTOR_IssueBulk: Irp=%p Len=%lu\n", Irp, TransferBufferLength);
+
     return IoCallDriver(FDODeviceExtension->LowerDeviceObject, Irp);
 }
 
@@ -295,6 +297,9 @@ USBSTOR_DataCompletionRoutine(
         }
 
         Request->DataTransferLength = Context->Urb.UrbBulkOrInterruptTransfer.TransferBufferLength;
+        DPRINT("USBSTOR_DataCompletionRoutine: success, sending CSW (XferLen=%lu DataLen=%lu)\n",
+               Context->Urb.UrbBulkOrInterruptTransfer.TransferBufferLength,
+               Request->DataTransferLength);
         USBSTOR_SendCSWRequest(FDODeviceExtension, Irp);
     }
     else if (USBD_STATUS(Context->Urb.UrbHeader.Status) == USBD_STATUS(USBD_STATUS_STALL_PID))
@@ -340,9 +345,9 @@ USBSTOR_CBWCompletionRoutine(
     PMDL Mdl = NULL;
     PVOID TransferBuffer = NULL;
 
-    DPRINT("USBSTOR_CBWCompletionRoutine Irp %p Ctx %p Status %x\n", Irp, Ctx, Irp->IoStatus.Status);
-
     FDODeviceExtension = (PFDO_DEVICE_EXTENSION)Ctx;
+
+    DPRINT("USBSTOR_CBWCompletionRoutine Irp %p Ctx %p Status %x\n", Irp, Ctx, Irp->IoStatus.Status);
     IoStack = IoGetCurrentIrpStackLocation(Irp);
     Request = IoStack->Parameters.Scsi.Srb;
     PDODeviceExtension = (PPDO_DEVICE_EXTENSION)IoStack->DeviceObject->DeviceExtension;
@@ -352,9 +357,17 @@ USBSTOR_CBWCompletionRoutine(
         goto ResetRecovery;
     }
 
-    // a request without the buffer AND not a sense request
-    // for a sense request we provide just a TransferBuffer, an Mdl will be allocated by usbport (see below)
-    if (!Irp->MdlAddress && Request == FDODeviceExtension->ActiveSrb)
+    /*
+     * Determine whether this SCSI command has a data phase.
+     * A no-data command has DataTransferLength == 0 (e.g. TEST UNIT READY).
+     *
+     * Previously this checked !Irp->MdlAddress, but some SCSI class drivers
+     * send commands with DataTransferLength > 0 and DataBuffer set but no
+     * pre-allocated MDL on the IRP. Checking MdlAddress alone would
+     * incorrectly skip the data phase, sending CSW directly, which violates
+     * the USB mass storage protocol and causes the device to STALL.
+     */
+    if (Request->DataTransferLength == 0 && Request == FDODeviceExtension->ActiveSrb)
     {
         Request->SrbStatus = SRB_STATUS_SUCCESS;
         USBSTOR_SendCSWRequest(FDODeviceExtension, Irp);
@@ -383,12 +396,17 @@ USBSTOR_CBWCompletionRoutine(
     // if it is not a Sense Request
     if (Request == FDODeviceExtension->ActiveSrb)
     {
-        if (MmGetMdlVirtualAddress(Irp->MdlAddress) == Request->DataBuffer)
+        if (Irp->MdlAddress &&
+            MmGetMdlVirtualAddress(Irp->MdlAddress) == Request->DataBuffer)
         {
             Mdl = Irp->MdlAddress;
         }
-        else
+        else if (Irp->MdlAddress)
         {
+            /*
+             * IRP has an MDL but it doesn't point to the SRB DataBuffer.
+             * Allocate a partial MDL that maps the correct region.
+             */
             Mdl = IoAllocateMdl(Request->DataBuffer,
                                 Request->DataTransferLength,
                                 FALSE,
@@ -403,10 +421,30 @@ USBSTOR_CBWCompletionRoutine(
                                   Request->DataTransferLength);
             }
         }
+        else if (Request->DataBuffer)
+        {
+            /*
+             * IRP has no MDL but the SRB has a DataBuffer.
+             * Allocate a fresh MDL and build it from the virtual address.
+             * This happens when the SCSI class driver passes data via
+             * DataBuffer without pre-allocating an MDL on the IRP.
+             */
+            Mdl = IoAllocateMdl(Request->DataBuffer,
+                                Request->DataTransferLength,
+                                FALSE,
+                                FALSE,
+                                NULL);
+
+            if (Mdl)
+            {
+                MmBuildMdlForNonPagedPool(Mdl);
+            }
+        }
 
         if (!Mdl)
         {
-            DPRINT1("USBSTOR_CBWCompletionRoutine: Mdl - %p\n", Mdl);
+            DPRINT1("USBSTOR_CBWCompletionRoutine: Mdl - %p (MdlAddr=%p DataBuf=%p DataLen=%lu)\n",
+                    Mdl, Irp->MdlAddress, Request->DataBuffer, Request->DataTransferLength);
             goto ResetRecovery;
         }
     }
