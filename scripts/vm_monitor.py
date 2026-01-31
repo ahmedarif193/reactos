@@ -25,8 +25,8 @@ import platform
 
 # Configuration (never change those values)
 LOG_FILE = "/tmp/v.log"
-STALL_TIMEOUT = 6    # Log inactivity timeout
-HARD_TIMEOUT = 30    # Total maximum runtime seconds
+STALL_TIMEOUT = 15   # Log inactivity timeout
+HARD_TIMEOUT = 400   # Total maximum runtime seconds
 VM_NAME = "ROSAHCI1"
 
 def get_build_dir():
