@@ -6,7 +6,7 @@
  */
 
 #include <initguid.h>
-#include "acpiproc.h"
+#include "intelppm.h"
 
 #define NDEBUG
 #include <debug.h>

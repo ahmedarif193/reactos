@@ -5,7 +5,7 @@
  * COPYRIGHT:   2025 Ahmed ARIF <arif.ing@outlook.com>
  */
 
-#include "acpiproc.h"
+#include "intelppm.h"
 
 #define NDEBUG
 #include <debug.h>

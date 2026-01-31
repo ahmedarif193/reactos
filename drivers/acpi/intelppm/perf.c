@@ -5,7 +5,7 @@
  * COPYRIGHT:   2025 Ahmed ARIF <arif.ing@outlook.com>
  */
 
-#include "acpiproc.h"
+#include "intelppm.h"
 
 #include <intrin.h>
 
@@ -27,6 +27,108 @@
 
 #define MSR_IA32_PERF_STATUS            0x00000198
 #define MSR_IA32_PERF_CTL               0x00000199
+
+/* Intel Hardware P-States (HWP) MSRs */
+#define MSR_IA32_PM_ENABLE              0x00000770
+#define MSR_IA32_HWP_CAPABILITIES       0x00000771
+#define MSR_IA32_HWP_REQUEST            0x00000774
+
+/* Cached HWP detection result: -1 = not checked, 0 = no, 1 = yes */
+static volatile LONG AcpiprocHwpActive = -1;
+
+/**
+ * @brief Detect whether Intel HWP is enabled on this CPU.
+ *
+ * Checks CPUID leaf 6 EAX[7] for HWP support, then reads MSR 0x770
+ * to see if HWP was enabled (by the HAL at boot time).
+ * Result is cached so CPUID/MSR is only hit once.
+ */
+static
+BOOLEAN
+AcpiprocIsHwpActive(VOID)
+{
+    LONG Cached = InterlockedCompareExchange(&AcpiprocHwpActive, -1, -1);
+    if (Cached >= 0)
+        return (BOOLEAN)Cached;
+
+    {
+        INT32 CpuidRegs[4];
+        BOOLEAN Active = FALSE;
+
+        __cpuid(CpuidRegs, 0);
+        /* Check Intel vendor and max leaf >= 6 */
+        if (CpuidRegs[1] == 0x756E6547 &&  /* "Genu" */
+            CpuidRegs[3] == 0x49656E69 &&  /* "ineI" */
+            CpuidRegs[2] == 0x6C65746E &&  /* "ntel" */
+            (ULONG)CpuidRegs[0] >= 6)
+        {
+            __cpuid(CpuidRegs, 6);
+            /* CPUID.06H:EAX[7] = HWP supported */
+            if (CpuidRegs[0] & (1 << 7))
+            {
+                /* Check if HAL already enabled HWP */
+                ULONGLONG PmEnable = __readmsr(MSR_IA32_PM_ENABLE);
+                Active = (PmEnable & 1) != 0;
+            }
+        }
+
+        InterlockedExchange(&AcpiprocHwpActive, (LONG)Active);
+        DPRINT1("AcpiprocIsHwpActive: %s\n", Active ? "YES" : "NO");
+        return Active;
+    }
+}
+
+/**
+ * @brief Translate a legacy PERF_CTL value into an HWP_REQUEST write.
+ *
+ * The ACPI _PSS control value for fixed-hardware contains the desired
+ * P-state ratio in bits 15:8 (same layout as MSR_IA32_PERF_CTL).
+ * We map that ratio into HWP_REQUEST min/max/desired fields and scale
+ * the EPP based on how far the target is from the highest performance.
+ */
+static
+VOID
+AcpiprocWriteHwpRequest(
+    _In_ ULONGLONG PerfCtlValue)
+{
+    ULONGLONG HwpCaps, HwpReq;
+    ULONG TargetRatio, Highest, Lowest;
+    ULONG Epp;
+
+    /* Extract the target ratio from the PERF_CTL-format value (bits 15:8) */
+    TargetRatio = (ULONG)((PerfCtlValue >> 8) & 0xFF);
+
+    /* Read HWP capabilities for the valid range */
+    HwpCaps = __readmsr(MSR_IA32_HWP_CAPABILITIES);
+    Highest = (ULONG)(HwpCaps & 0xFF);         /* bits 7:0 */
+    Lowest  = (ULONG)((HwpCaps >> 24) & 0xFF); /* bits 31:24 */
+
+    /* Clamp the target ratio to the HWP range */
+    if (TargetRatio > Highest) TargetRatio = Highest;
+    if (TargetRatio < Lowest)  TargetRatio = Lowest;
+
+    /*
+     * Scale EPP linearly: highest ratio → EPP=0 (performance),
+     * lowest ratio → EPP=0xFF (power save).
+     */
+    if (Highest > Lowest)
+        Epp = ((Highest - TargetRatio) * 255) / (Highest - Lowest);
+    else
+        Epp = 0;
+
+    /* Build the HWP_REQUEST value */
+    HwpReq = __readmsr(MSR_IA32_HWP_REQUEST);
+    HwpReq &= ~0x00000000FFFFFFFFULL; /* Clear min/max/desired/EPP */
+    HwpReq |= (ULONGLONG)TargetRatio;          /* bits 7:0  = Minimum */
+    HwpReq |= (ULONGLONG)Highest << 8;         /* bits 15:8 = Maximum */
+    HwpReq |= (ULONGLONG)TargetRatio << 16;    /* bits 23:16 = Desired */
+    HwpReq |= (ULONGLONG)Epp << 24;            /* bits 31:24 = EPP */
+
+    __writemsr(MSR_IA32_HWP_REQUEST, HwpReq);
+
+    DPRINT("HWP: target=%u highest=%u lowest=%u EPP=%u\n",
+           TargetRatio, Highest, Lowest, Epp);
+}
 
 #pragma pack(push, 1)
 typedef struct _ACPIPROC_PCT_GENERIC_REGISTER_DESCRIPTOR {
@@ -287,7 +389,10 @@ AcpiprocRawReadFixedHardware(
     switch (Kind)
     {
         case AcpiprocRegisterKindControl:
-            *Value = __readmsr(MSR_IA32_PERF_CTL);
+            if (AcpiprocIsHwpActive())
+                *Value = __readmsr(MSR_IA32_HWP_REQUEST);
+            else
+                *Value = __readmsr(MSR_IA32_PERF_CTL);
             return STATUS_SUCCESS;
 
         case AcpiprocRegisterKindStatus:
@@ -314,7 +419,10 @@ AcpiprocRawWriteFixedHardware(
     switch (Kind)
     {
         case AcpiprocRegisterKindControl:
-            __writemsr(MSR_IA32_PERF_CTL, Value);
+            if (AcpiprocIsHwpActive())
+                AcpiprocWriteHwpRequest(Value);
+            else
+                __writemsr(MSR_IA32_PERF_CTL, Value);
             return STATUS_SUCCESS;
 
         case AcpiprocRegisterKindStatus:

@@ -1,0 +1,47 @@
+[Version]
+Signature="$ReactOS$"
+Class=Processor
+ClassGuid={50127DC3-0F36-415E-A6CC-4CB3BE910B65}
+Provider=%ReactOS%
+DriverVer=07/01/2025,0.0.1.0
+
+[Manufacturer]
+%ReactOS%=ProcessorMfg,NTamd64
+
+[ProcessorMfg.NTamd64]
+%IntelPpm.DeviceDesc%=IntelPpm_Inst,ACPI\GenuineIntel_-_EM64T_Family_15_Model_107\_0
+%IntelPpm.DeviceDesc%=IntelPpm_Inst,ACPI\GenuineIntel_*
+%IntelPpm.DeviceDesc%=IntelPpm_Inst,ACPI\AuthenticAMD_*
+%IntelPpm.DeviceDesc%=IntelPpm_Inst,ACPI\ACPI0007
+%IntelPpm.DeviceDesc%=IntelPpm_Inst,ACPI\MSFT0007
+
+[IntelPpm_Inst.NT]
+CopyFiles=intelppm.CopyFiles
+
+[IntelPpm_Inst.NT.Services]
+AddService=intelppm,0x00000002,intelppm_Service
+
+[intelppm_Service]
+DisplayName=%IntelPpm.SvcDesc%
+ServiceType=1
+StartType=1
+ErrorControl=1
+LoadOrderGroup=Base
+ServiceBinary=%12%\intelppm.sys
+
+[DestinationDirs]
+intelppm.CopyFiles=12
+
+[intelppm.CopyFiles]
+intelppm.sys
+
+[SourceDisksNames]
+1=%ReactOS%,,,
+
+[SourceDisksFiles]
+intelppm.sys=1
+
+[Strings]
+ReactOS="Ahmed ARIF <arif.ing@outlook.com>"
+IntelPpm.DeviceDesc="Intel Processor Power Management Driver"
+IntelPpm.SvcDesc="Intel Processor Power Management Driver"

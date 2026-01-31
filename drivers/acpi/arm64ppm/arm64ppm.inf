@@ -1,0 +1,44 @@
+[Version]
+Signature="$ReactOS$"
+Class=Processor
+ClassGuid={50127DC3-0F36-415E-A6CC-4CB3BE910B65}
+Provider=%ReactOS%
+DriverVer=07/01/2025,0.0.1.0
+
+[Manufacturer]
+%ReactOS%=ProcessorMfg,NTarm64
+
+[ProcessorMfg.NTarm64]
+%Arm64Ppm.DeviceDesc%=Arm64Ppm_Inst,ACPI\ACPI0007
+%Arm64Ppm.DeviceDesc%=Arm64Ppm_Inst,ACPI\MSFT0007
+
+[Arm64Ppm_Inst.NT]
+CopyFiles=arm64ppm.CopyFiles
+
+[Arm64Ppm_Inst.NT.Services]
+AddService=arm64ppm,0x00000002,arm64ppm_Service
+
+[arm64ppm_Service]
+DisplayName=%Arm64Ppm.SvcDesc%
+ServiceType=1
+StartType=1
+ErrorControl=1
+LoadOrderGroup=Base
+ServiceBinary=%12%\arm64ppm.sys
+
+[DestinationDirs]
+arm64ppm.CopyFiles=12
+
+[arm64ppm.CopyFiles]
+arm64ppm.sys
+
+[SourceDisksNames]
+1=%ReactOS%,,,
+
+[SourceDisksFiles]
+arm64ppm.sys=1
+
+[Strings]
+ReactOS="Ahmed ARIF <arif.ing@outlook.com>"
+Arm64Ppm.DeviceDesc="ARM64 Processor Power Management Driver"
+Arm64Ppm.SvcDesc="ARM64 Processor Power Management Driver"
