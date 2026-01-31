@@ -166,6 +166,32 @@ VOID
 UefiClearDebugState(VOID);
 #endif
 
+/* Network boot capability detection.
+ * Detects PCI NICs, loads external DXE drivers, connects controllers,
+ * and probes for SNP/TCP4 protocols.  Called on-demand from
+ * UefiHttpBootDownload() when the user selects a network boot entry. */
+VOID
+UefiProbeNetworkSupport(VOID);
+
+/* Query network state. */
+BOOLEAN UefiIsNetInitialized(VOID);
+BOOLEAN UefiHasSimpleNetworkProtocol(VOID);
+BOOLEAN UefiHasTcp4ServiceBindingProtocol(VOID);
+ULONG   UefiGetSnpHandleCount(VOID);
+
+/* HTTP boot: initialize SNP + DHCP and prepare for HTTP download (over TCP4).
+ * Called internally by UefiHttpBootDownload(). */
+VOID
+UefiHttpBootInit(VOID);
+
+/* HTTP boot: download an ISO via HTTP into the ramdisk buffer.
+ * Sets gInitRamDiskBase / gInitRamDiskSize on success.
+ * @param Url  ASCII URL of the ISO to download (e.g. "http://192.168.1.100/boot.iso")
+ * @return TRUE on success, FALSE on failure. */
+BOOLEAN
+UefiHttpBootDownload(
+    _In_ PCSTR Url);
+
 BOOLEAN
 UefiIsCdRomHandle(IN EFI_HANDLE Handle);
 

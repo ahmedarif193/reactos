@@ -1419,6 +1419,35 @@ LoadAndBootWindows(
     PCSTR RamDiskSizeOpt;
     ULONG RamDiskSizeOptLen = 0;
 
+#ifdef UEFIBOOT
+    /* HTTP boot: download ISO from network and set up ramdisk */
+    {
+        PCSTR HttpBootUrl = GetArgumentValue(Argc, Argv, "HttpBootUrl");
+        if (HttpBootUrl && *HttpBootUrl)
+        {
+            TRACE("HttpBootUrl: '%s'\n", HttpBootUrl);
+
+            /* Download the ISO via TCP4 -- sets gInitRamDiskBase/gInitRamDiskSize */
+            if (!UefiHttpBootDownload(HttpBootUrl))
+            {
+                UiMessageBox("Failed to download ISO from network.");
+                return ENOEXEC;
+            }
+
+            /* Initialize ramdisk from the downloaded buffer */
+            Status = RamDiskInitialize(TRUE, NULL, NULL);
+            if (Status != ESUCCESS)
+            {
+                UiMessageBox("Failed to initialize ramdisk from downloaded ISO.");
+                return Status;
+            }
+
+            /* BootPath is already set to ramdisk(0)\reactos\ from INI */
+            goto RamDiskReady;
+        }
+    }
+#endif
+
     RamDiskSizeOpt = NtLdrGetOptionEx(BootOptions, "RDRAMSIZE=", &RamDiskSizeOptLen);
     if (RamDiskSizeOpt &&
         RamDiskSizeOptLen >= (sizeof("RDRAMSIZE=") - 1) &&
@@ -1556,6 +1585,9 @@ LoadAndBootWindows(
         }
     }
 
+#ifdef UEFIBOOT
+RamDiskReady:
+#endif
     /* Handle the SOS option */
     SosEnabled = !!NtLdrGetOption(BootOptions, "SOS");
     if (SosEnabled)
@@ -1674,7 +1706,14 @@ LoadAndBootWindowsCommon(
     UiUpdateProgressBar(100, NULL);
 #ifdef UEFIBOOT
     UiClearProgressBar();
-    UefiVideoRefreshBootLogo();
+    /* Re-display BGRT firmware splash before kernel handoff, but skip
+     * in debug mode so the debug banner and serial port info stay visible. */
+    if (NtLdrGetOption(BootOptions, "NODEBUG") ||
+        NtLdrGetOption(BootOptions, "CRASHDEBUG") ||
+        !NtLdrGetOption(BootOptions, "DEBUG"))
+    {
+        UefiVideoRefreshBootLogo();
+    }
 #endif
 
     /* Save entry-point pointer and Loader block VAs */

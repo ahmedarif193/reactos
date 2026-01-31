@@ -1,0 +1,69 @@
+Third-Party UEFI DXE Drivers for LattePanda Mu
+================================================
+
+The binary drivers in this directory are NOT part of the ReactOS project.
+They are third-party firmware components redistributed here solely to
+enable network boot on LattePanda Mu hardware whose built-in UEFI
+firmware does not include these drivers.
+
+These drivers are loaded by FreeLDR (uefildr.efi) at early boot time
+via UEFI Boot Services LoadImage()/StartImage() to provide network
+protocol support (SNP, IP, TCP, HTTP) before the operating system starts.
+
+
+RtkUndiDxe.efi
+---------------
+  Description : Realtek PCIe Gigabit Ethernet UNDI (Universal Network Device
+                Interface) DXE driver v2.077.  Provides
+                EFI_SIMPLE_NETWORK_PROTOCOL for Realtek PCIe Ethernet
+                controllers (RTL8111/8168/8411 family).
+  Origin      : Realtek (https://www.realtek.com/Download/List?cate_id=584)
+  Copyright   : Copyright (c) Realtek Semiconductor Corp.
+  License     : Proprietary.
+  Signed      : Microsoft UEFI CA 2011.
+  Note        : The LattePanda Mu carrier board has an RTL8111/8168 PCIe
+                GbE NIC at PCI 01:00.0 [10ec:8168].
+
+EDK2 NetworkPkg DXE Drivers
+---------------------------
+  The following drivers originate from the TianoCore EDK2 project
+  (https://github.com/tianocore/edk2) and are licensed under the
+  BSD-2-Clause-Patent license.
+
+  Copyright (c) TianoCore contributors.
+  SPDX-License-Identifier: BSD-2-Clause-Patent
+
+  To rebuild them, clone the EDK2 repository and compile the NetworkPkg
+  for the X64 platform:
+
+    git clone https://github.com/tianocore/edk2.git
+    cd edk2 && git submodule update --init
+    source edksetup.sh
+    build -a X64 -t GCC5 -p NetworkPkg/NetworkPkg.dsc -b RELEASE
+
+  Then copy the resulting .efi files from Build/NetworkPkg/RELEASE_GCC5/X64/
+  into this directory.
+
+  Included drivers and their roles:
+
+    DpcDxe.efi              Deferred Procedure Call (dependency of MnpDxe)
+    RngDxe.efi              Random Number Generator (RDRAND, dependency of TcpDxe)
+    MnpDxe.efi              Managed Network Protocol
+    ArpDxe.efi              Address Resolution Protocol
+    Ip4Dxe.efi              IPv4 network layer
+    Udp4Dxe.efi             UDP over IPv4
+    Dhcp4Dxe.efi            DHCPv4 client
+    Mtftp4Dxe.efi           TFTP over IPv4 (for PXE/TFTP boot)
+    TcpDxe.efi              TCP (dual-stack, replaces deprecated Tcp4Dxe)
+    DnsDxe.efi              DNS resolver
+    HttpDxe.efi             HTTP protocol
+    HttpUtilitiesDxe.efi    HTTP header utilities
+
+  Note: HttpBootDxe.efi (the UEFI firmware HTTP Boot orchestrator) is
+  intentionally NOT included.  FreeLDR implements its own boot logic
+  using EFI_HTTP_PROTOCOL directly.
+
+  Not all are required for every boot mode:
+    - TFTP boot:  DpcDxe + MnpDxe + ArpDxe + Ip4Dxe + Udp4Dxe + Dhcp4Dxe
+                  + Mtftp4Dxe
+    - HTTP boot:  All of the above plus TcpDxe + DnsDxe + Http*.efi

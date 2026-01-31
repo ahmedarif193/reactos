@@ -1433,50 +1433,65 @@ UefiInitializeBootDevices(VOID)
             ReadBuffer = FrLdrTempAlloc(NewSize, TAG_HW_DISK_CONTEXT);
             if (!ReadBuffer)
             {
-                ERR("Failed to allocate %lu bytes for CD checksum\n", NewSize);
-                return FALSE;
+                WARN("Failed to allocate %lu bytes for CD checksum; skipping checksum\n", NewSize);
+                ReadBuffer = NULL;
             }
-            TempBufferAllocated = TRUE;
+            else
+            {
+                TempBufferAllocated = TRUE;
+            }
         }
         else
         {
             ReadBuffer = DiskReadBuffer;
         }
 
-        /* Read the ISO primary volume descriptor (at logical block 16) */
-        Status = BootBlockIo->ReadBlocks(BootBlockIo,
-                                         BootBlockIo->Media->MediaId,
-                                         16ULL,
-                                         BlocksToRead * BlockSize,
-                                         ReadBuffer);
-        if (EFI_ERROR(Status))
+        if (ReadBuffer)
         {
-            ERR("ReadBlocks for CD checksum failed (Status=%lx)\n", (ULONG_PTR)Status);
+            /* Read the ISO primary volume descriptor (at logical block 16) */
+            Status = BootBlockIo->ReadBlocks(BootBlockIo,
+                                             BootBlockIo->Media->MediaId,
+                                             16ULL,
+                                             BlocksToRead * BlockSize,
+                                             ReadBuffer);
+            if (EFI_ERROR(Status))
+            {
+                WARN("ReadBlocks for CD checksum failed (Status=%lx); skipping checksum\n",
+                     (ULONG_PTR)Status);
+                if (TempBufferAllocated)
+                    FrLdrTempFree(ReadBuffer, TAG_HW_DISK_CONTEXT);
+                ReadBuffer = NULL;
+            }
+        }
+
+        if (ReadBuffer)
+        {
+            Buffer = (ULONG*)ReadBuffer;
+            Mbr = (PMASTER_BOOT_RECORD)ReadBuffer;
+
+            Signature = Mbr->Signature;
+            TRACE("Signature: %x\n", Signature);
+
+            /* Calculate the MBR checksum */
+            ChecksumBytes = min(BlocksToRead * BlockSize, (ULONG)2048);
+            for (i = 0; i < ChecksumBytes / sizeof(ULONG); i++)
+            {
+                Checksum += Buffer[i];
+            }
+            Checksum = ~Checksum + 1;
+            TRACE("Checksum: %x\n", Checksum);
+
+            /* Fill out the ARC disk block */
+            AddReactOSArcDiskInfo(FrLdrBootPath, Signature, Checksum, TRUE);
+
             if (TempBufferAllocated)
                 FrLdrTempFree(ReadBuffer, TAG_HW_DISK_CONTEXT);
-            return FALSE;
         }
-
-        Buffer = (ULONG*)ReadBuffer;
-        Mbr = (PMASTER_BOOT_RECORD)ReadBuffer;
-
-        Signature = Mbr->Signature;
-        TRACE("Signature: %x\n", Signature);
-
-        /* Calculate the MBR checksum */
-        ChecksumBytes = min(BlocksToRead * BlockSize, (ULONG)2048);
-        for (i = 0; i < ChecksumBytes / sizeof(ULONG); i++)
+        else
         {
-            Checksum += Buffer[i];
+            /* Continue boot even when checksum can't be computed */
+            AddReactOSArcDiskInfo(FrLdrBootPath, 0, 0, FALSE);
         }
-        Checksum = ~Checksum + 1;
-        TRACE("Checksum: %x\n", Checksum);
-
-        /* Fill out the ARC disk block */
-        AddReactOSArcDiskInfo(FrLdrBootPath, Signature, Checksum, TRUE);
-
-        if (TempBufferAllocated)
-            FrLdrTempFree(ReadBuffer, TAG_HW_DISK_CONTEXT);
 
         FsRegisterDevice(FrLdrBootPath, &UefiDiskVtbl);
         PcBiosDiskCount++; // This is not accounted for in the number of pre-enumerated BIOS drives!

@@ -30,11 +30,38 @@ if(DEFINED EFI_PLATFORM_ID)
         list(APPEND _efisys_deps fat)
     endif()
 
+    # Collect third-party UEFI DXE drivers for the selected board variant.
+    # These are deployed into EFI/BOOT/drivers/ on the boot media so that
+    # uefildr.efi can load them at early boot (e.g. network drivers).
+    set(_uefi_drv_fatten_args "")
+    set(_uefi_drv_files "")
+    if(NOT "${UEFI_BOARD_VARIANT}" STREQUAL "")
+        set(_uefi_drv_dir "${REACTOS_SOURCE_DIR}/boot/freeldr/uefi_drivers/${UEFI_BOARD_VARIANT}")
+        if(EXISTS "${_uefi_drv_dir}")
+            file(GLOB _uefi_drv_files "${_uefi_drv_dir}/*.efi")
+            if(_uefi_drv_files)
+                # Create the drivers subdirectory in the FAT image
+                set(_uefi_drv_fatten_args -mkdir EFI/BOOT/drivers)
+                foreach(_drv ${_uefi_drv_files})
+                    get_filename_component(_drv_name "${_drv}" NAME)
+                    list(APPEND _uefi_drv_fatten_args -add "${_drv}" "EFI/BOOT/drivers/${_drv_name}")
+                    list(APPEND _efisys_deps "${_drv}")
+                endforeach()
+                message(STATUS "UEFI board variant '${UEFI_BOARD_VARIANT}': ${_uefi_drv_files}")
+            else()
+                message(WARNING "UEFI board variant '${UEFI_BOARD_VARIANT}': no .efi drivers found in ${_uefi_drv_dir}")
+            endif()
+        else()
+            message(WARNING "UEFI board variant '${UEFI_BOARD_VARIANT}': directory ${_uefi_drv_dir} does not exist")
+        endif()
+    endif()
+
     add_custom_target(efisys
         COMMAND native-fatten ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin -format 8192 EFIBOOT
             ${_efisys_boot_args}
             -add ${REACTOS_SOURCE_DIR}/boot/bootdata/bootcd.ini freeldr.ini
             -mkdir EFI -mkdir EFI/BOOT -add $<TARGET_FILE:uefildr> EFI/BOOT/boot${EFI_PLATFORM_ID}.efi
+            ${_uefi_drv_fatten_args}
         DEPENDS ${_efisys_deps}
         VERBATIM)
 
@@ -42,12 +69,18 @@ if(DEFINED EFI_PLATFORM_ID)
     if(_HAVE_BIOS_BOOT)
         list(APPEND _efisys_livecd_deps fat)
     endif()
+    if(_uefi_drv_files)
+        foreach(_drv ${_uefi_drv_files})
+            list(APPEND _efisys_livecd_deps "${_drv}")
+        endforeach()
+    endif()
 
     add_custom_target(efisys_livecd
         COMMAND native-fatten ${CMAKE_CURRENT_BINARY_DIR}/efisys_livecd.bin -format 8192 EFIBOOT
             ${_efisys_boot_args}
             -add ${REACTOS_SOURCE_DIR}/boot/bootdata/livecd.ini freeldr.ini
             -mkdir EFI -mkdir EFI/BOOT -add $<TARGET_FILE:uefildr> EFI/BOOT/boot${EFI_PLATFORM_ID}.efi
+            ${_uefi_drv_fatten_args}
         DEPENDS ${_efisys_livecd_deps}
         VERBATIM)
 endif()
@@ -473,6 +506,19 @@ if(DEFINED EFI_PLATFORM_ID)
         NO_CAB
         NAME_ON_CD boot${EFI_PLATFORM_ID}.efi
         FOR livecd hybridcd)
+
+    # Deploy board-variant DXE drivers into efi/boot/drivers/ on the ISO
+    if(_uefi_drv_files)
+        foreach(_drv ${_uefi_drv_files})
+            get_filename_component(_drv_name "${_drv}" NAME)
+            add_cd_file(
+                FILE "${_drv}"
+                DESTINATION efi/boot/drivers
+                NO_CAB
+                NAME_ON_CD "${_drv_name}"
+                FOR bootcd livecd hybridcd regtest)
+        endforeach()
+    endif()
 endif()
 
 ## LiveIMG

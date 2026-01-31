@@ -17,6 +17,10 @@
 #include <GraphicsOutput.h>
 #include <UgaDraw.h>
 #include <BlockIo.h>
+#include <SimpleNetwork.h>
+#include <SimpleFileSystem.h>
+#include <Dhcp4.h>
+#include <HttpProtocol.h>
 #include <Acpi.h>
 #include <GlobalVariable.h>
 #include <debug.h>

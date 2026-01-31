@@ -92,6 +92,13 @@ EfiEntry(
         }
     }
 
+    /* Network probe and HTTP boot init are deferred to RunLoader() where
+     * we can read HttpBootUrl from the INI.  If HttpBootUrl is configured,
+     * RunLoader() performs: probe → SNP init → DHCP → download → boot.
+     * If any step fails or HttpBootUrl is absent, we fall through to the
+     * TUI menu.  This avoids hanging on network init when no network is
+     * present and keeps all network logic in one place. */
+
     /* UI pre-initialization */
     if (!UiInitialize(FALSE))
     {
