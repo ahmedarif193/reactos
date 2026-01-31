@@ -203,8 +203,13 @@ NTSTATUS NTAPI HandleSystemQueryPower(IN PDEVICE_OBJECT DeviceObject, IN PIRP Ir
                          systemState - 1,
                          deviceExtension->SysPower - 1));
 
-    // Fail a query for a power state incompatible with waking up the system
-    if ((deviceExtension->WaitWakeEnable) && (systemState > deviceExtension->DeviceCapabilities.SystemWake))
+    // If wake is enabled and the system state is deeper than what we can
+    // wake from, we should cancel wake-up rather than fail the query.
+    // S4 (hibernate) and S5 (shutdown) must NEVER be rejected -- a USB
+    // peripheral cannot prevent system shutdown or hibernate.
+    if ((deviceExtension->WaitWakeEnable) &&
+        (systemState > deviceExtension->DeviceCapabilities.SystemWake) &&
+        (systemState < PowerSystemHibernate))
     {
         FreeBT_DbgPrint(1, ("FBTUSB: HandleSystemQueryPower: Query for an incompatible system power state\n"));
 
@@ -418,7 +423,16 @@ VOID NTAPI SendDeviceIrp(IN PDEVICE_OBJECT DeviceObject, IN PIRP SIrp )
     // Read out the D-IRP out of the S->D mapping array captured in QueryCap's.
     // we can choose deeper sleep states than our mapping but never choose
     // lighter ones.
+    // For S4/S5 (hibernate/shutdown) the bus driver often does not populate
+    // the DeviceState mapping, leaving it as PowerDeviceUnspecified (0) or
+    // garbage. Default to D3 for any unmapped or out-of-range value.
     devState = deviceExtension->DeviceCapabilities.DeviceState[systemState];
+    if (devState == PowerDeviceUnspecified ||
+        devState < PowerDeviceD0 ||
+        devState > PowerDeviceD3)
+    {
+        devState = PowerDeviceD3;
+    }
     powState.DeviceState = devState;
 
     powerContext = (PPOWER_COMPLETION_CONTEXT) ExAllocatePool(NonPagedPool, sizeof(POWER_COMPLETION_CONTEXT));

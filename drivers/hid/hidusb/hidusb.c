@@ -458,15 +458,21 @@ HidUsb_ReadReportCompletion(
     //
     if (NT_SUCCESS(Irp->IoStatus.Status) || Irp->IoStatus.Status == STATUS_CANCELLED || Irp->IoStatus.Status == STATUS_DEVICE_NOT_CONNECTED)
     {
-        //
-        // store result length
-        //
-        Irp->IoStatus.Information = Urb->UrbBulkOrInterruptTransfer.TransferBufferLength;
-
-        //
-        // FIXME handle error
-        //
-        ASSERT(Urb->UrbHeader.Status == USBD_STATUS_SUCCESS || Urb->UrbHeader.Status == USBD_STATUS_DEVICE_GONE);
+        if (NT_SUCCESS(Irp->IoStatus.Status))
+        {
+            //
+            // transfer succeeded - report the actual bytes transferred
+            //
+            Irp->IoStatus.Information = Urb->UrbBulkOrInterruptTransfer.TransferBufferLength;
+        }
+        else
+        {
+            //
+            // transfer was cancelled or device disconnected (e.g., during
+            // system shutdown / suspend) - no valid data was received
+            //
+            Irp->IoStatus.Information = 0;
+        }
 
         //
         // free the urb

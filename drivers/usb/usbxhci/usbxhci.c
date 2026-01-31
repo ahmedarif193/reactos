@@ -5667,13 +5667,22 @@ XHCI_HandleCommandCompletion(
                 CommandPointer);
     }
 
-    /* Extra warning for Context State Error */
+    /* Log Context State Error, but demote to debug trace for Stop Endpoint
+     * since it is benign (endpoint already stopped during shutdown). */
     if (CompletionCode == 19)
     {
-        DPRINT1("usbxhci: *** CONTEXT_STATE_ERROR (19) *** type=%lu slot=%u cmdptr=%I64x\n",
-                CommandContext ? CommandContext->CommandType : 0xFFFFFFFF,
-                SlotId,
-                CommandPointer);
+        if (CommandContext && CommandContext->CommandType == XHCI_TRB_TYPE_STOP_EP)
+        {
+            DPRINT("usbxhci: CONTEXT_STATE_ERROR for StopEndpoint (already stopped) slot=%u\n",
+                   SlotId);
+        }
+        else
+        {
+            DPRINT1("usbxhci: *** CONTEXT_STATE_ERROR (19) *** type=%lu slot=%u cmdptr=%I64x\n",
+                    CommandContext ? CommandContext->CommandType : 0xFFFFFFFF,
+                    SlotId,
+                    CommandPointer);
+        }
     }
 
     if (!CommandContext)
@@ -9290,6 +9299,20 @@ CheckCompletion:
             DPRINT1("usbxhci: CONFIG_EP completed successfully slot=%u\n",
                     CommandContext->SlotId);
         }
+        Result = MP_STATUS_SUCCESS;
+    }
+    else if (CommandContext->CompletionCode == XHCI_COMPLETION_CONTEXT_STATE_ERROR &&
+             CommandContext->CommandType == XHCI_TRB_TYPE_STOP_EP)
+    {
+        /*
+         * CONTEXT_STATE_ERROR (code 19) for Stop Endpoint means the endpoint
+         * is already in a stopped/disabled state or was never running. This is
+         * a benign condition during shutdown suspend when we try to stop
+         * endpoints that have already been torn down. The endpoint is already
+         * in the desired state, so treat this as success.
+         */
+        DPRINT("usbxhci: StopEndpoint got CONTEXT_STATE_ERROR - endpoint already stopped (slot=%u)\n",
+               CommandContext->SlotId);
         Result = MP_STATUS_SUCCESS;
     }
     else

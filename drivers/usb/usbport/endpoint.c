@@ -2109,7 +2109,54 @@ USBPORT_EndpointWorker(IN PUSBPORT_ENDPOINT Endpoint,
             return FALSE;
         }
 
-        DPRINT1("USBPORT_EndpointWorker: Endpoint=%p state mismatch! State=%lu StateNext=%lu - deferring\n",
+        /*
+         * State mismatch: a state transition is in progress (StateLast !=
+         * StateNext). During shutdown the SOF interrupt that normally
+         * completes the transition may no longer fire, leaving the endpoint
+         * stuck. If the endpoint has NUKE or ABORTING flags, or if
+         * StateLast is already in a terminal state (REMOVE/CLOSED), force
+         * the transition to complete so transfers can be drained instead
+         * of deferring indefinitely and wasting CPU cycles.
+         */
+        if (Endpoint->StateLast >= USBPORT_ENDPOINT_REMOVE)
+        {
+            /* StateLast is terminal (REMOVE or CLOSED) but StateNext is
+             * requesting a non-terminal transition (e.g. PAUSED). The
+             * endpoint is already being torn down. Cancel the pending
+             * transition by setting StateNext to match StateLast. */
+            DPRINT1("USBPORT_EndpointWorker: Endpoint=%p terminal StateLast=%lu overrides StateNext=%lu\n",
+                    Endpoint, Endpoint->StateLast, Endpoint->StateNext);
+            Endpoint->StateNext = Endpoint->StateLast;
+            KeReleaseSpinLockFromDpcLevel(&Endpoint->StateChangeSpinLock);
+            InterlockedDecrement(&Endpoint->LockCounter);
+            return FALSE;
+        }
+
+        if (Endpoint->Flags & (ENDPOINT_FLAG_NUKE | ENDPOINT_FLAG_ABORTING))
+        {
+            /* Force the transition to complete so the DMA worker can drain
+             * outstanding transfers during device removal/shutdown. */
+            DPRINT1("USBPORT_EndpointWorker: Endpoint=%p forcing transition StateLast=%lu->StateNext=%lu (NUKE/ABORTING)\n",
+                    Endpoint, Endpoint->StateLast, Endpoint->StateNext);
+            Endpoint->StateLast = Endpoint->StateNext;
+            KeReleaseSpinLockFromDpcLevel(&Endpoint->StateChangeSpinLock);
+
+            if (Endpoint->EndpointWorker)
+            {
+                USBPORT_DmaEndpointWorker(Endpoint);
+            }
+            else
+            {
+                USBPORT_RootHubEndpointWorker(Endpoint);
+            }
+
+            USBPORT_FlushAbortList(Endpoint);
+            InterlockedDecrement(&Endpoint->LockCounter);
+            return FALSE;
+        }
+
+        /* Normal in-progress transition; defer and retry */
+        DPRINT("USBPORT_EndpointWorker: Endpoint=%p state mismatch State=%lu StateNext=%lu - deferring\n",
                 Endpoint, EndpointState, Endpoint->StateNext);
         KeReleaseSpinLockFromDpcLevel(&Endpoint->StateChangeSpinLock);
         InterlockedDecrement(&Endpoint->LockCounter);

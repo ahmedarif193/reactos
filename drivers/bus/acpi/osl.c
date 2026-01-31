@@ -16,6 +16,7 @@ static BOOLEAN AcpiInterruptHandlerRegistered = FALSE;
 static ACPI_OSD_HANDLER AcpiIrqHandler = NULL;
 static PVOID AcpiIrqContext = NULL;
 static ULONG AcpiIrqNumber = 0;
+static KIRQL AcpiSciDirql = HIGH_LEVEL;
 
 ACPI_STATUS
 AcpiOsInitialize (void)
@@ -520,14 +521,35 @@ AcpiOsAcquireLock(
     ACPI_SPINLOCK Handle)
 {
     KIRQL OldIrql;
+    KIRQL RaiseToIrql;
 
-    if ((OldIrql = KeGetCurrentIrql()) >= DISPATCH_LEVEL)
+    /*
+     * ACPICA locks must be safe to acquire from the SCI interrupt handler
+     * (OslIsrStub -> AcpiEvGpeDetect -> AcpiOsAcquireLock). This means we
+     * must raise IRQL high enough to mask the SCI interrupt before acquiring
+     * the spinlock. Otherwise, if the sleep path holds this lock at
+     * DISPATCH_LEVEL and the SCI fires at DIRQL, the ISR will deadlock
+     * trying to re-acquire the same spinlock (SPIN_LOCK_ALREADY_OWNED).
+     *
+     * When the SCI is connected, raise to its DIRQL. Before interrupt
+     * registration (during early init), AcpiSciDirql is HIGH_LEVEL which
+     * is safe but conservative. If already at or above the target IRQL
+     * (e.g., called from within the ISR itself), just acquire at current
+     * level.
+     */
+    RaiseToIrql = AcpiSciDirql;
+    OldIrql = KeGetCurrentIrql();
+
+    if (OldIrql >= RaiseToIrql)
     {
+        /* Already at or above SCI DIRQL; just acquire at current level */
         KeAcquireSpinLockAtDpcLevel((PKSPIN_LOCK)Handle);
     }
     else
     {
-        KeAcquireSpinLock((PKSPIN_LOCK)Handle, &OldIrql);
+        /* Raise to SCI DIRQL to mask the interrupt, then acquire */
+        KeRaiseIrql(RaiseToIrql, &OldIrql);
+        KeAcquireSpinLockAtDpcLevel((PKSPIN_LOCK)Handle);
     }
 
     return (ACPI_CPU_FLAGS)OldIrql;
@@ -540,14 +562,10 @@ AcpiOsReleaseLock(
 {
     KIRQL OldIrql = (KIRQL)Flags;
 
-    if (OldIrql >= DISPATCH_LEVEL)
-    {
-        KeReleaseSpinLockFromDpcLevel((PKSPIN_LOCK)Handle);
-    }
-    else
-    {
-        KeReleaseSpinLock((PKSPIN_LOCK)Handle, OldIrql);
-    }
+    KeReleaseSpinLockFromDpcLevel((PKSPIN_LOCK)Handle);
+
+    /* Restore the IRQL that was saved by AcpiOsAcquireLock */
+    KeLowerIrql(OldIrql);
 }
 
 BOOLEAN NTAPI
@@ -601,6 +619,7 @@ AcpiOsInstallInterruptHandler (
     AcpiIrqHandler = ServiceRoutine;
     AcpiIrqContext = Context;
     AcpiInterruptHandlerRegistered = TRUE;
+    AcpiSciDirql = DIrql;
 
     Status = IoConnectInterrupt(
         &AcpiInterrupt,
