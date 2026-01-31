@@ -399,7 +399,7 @@ FDO_CreateChildPdo(
         if (FDODeviceExtension->FunctionDescriptor[Index].NumberOfInterfaces == 0)
         {
             // Ignore invalid devices
-            DPRINT1("[USBCCGP] Found descriptor with 0 interfaces\n");
+            DPRINT("[USBCCGP] Found descriptor with 0 interfaces\n");
             continue;
         }
 
@@ -465,7 +465,7 @@ FDO_StartDevice(
     FDODeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
     ASSERT(FDODeviceExtension->Common.IsFDO);
 
-    DPRINT1("[USBCCGP] FDO_StartDevice: starting lower device\n");
+    DPRINT("[USBCCGP] FDO_StartDevice: starting lower device\n");
 
     /* First start lower device */
     if (IoForwardIrpSynchronously(FDODeviceExtension->NextDeviceObject, Irp))
@@ -485,7 +485,7 @@ FDO_StartDevice(
         return Status;
     }
 
-    DPRINT1("[USBCCGP] FDO_StartDevice: lower device started, getting descriptors\n");
+    DPRINT("[USBCCGP] FDO_StartDevice: lower device started, getting descriptors\n");
 
     /* Get descriptors */
     Status = USBCCGP_GetDescriptors(DeviceObject);
@@ -497,7 +497,7 @@ FDO_StartDevice(
         return Status;
     }
 
-    DPRINT1("[USBCCGP] FDO_StartDevice: descriptors obtained, querying capabilities\n");
+    DPRINT("[USBCCGP] FDO_StartDevice: descriptors obtained, querying capabilities\n");
 
     /* Get capabilities */
     Status = FDO_QueryCapabilities(DeviceObject,
@@ -510,7 +510,7 @@ FDO_StartDevice(
         return Status;
     }
 
-    DPRINT1("[USBCCGP] FDO_StartDevice: capabilities obtained, selecting configuration\n");
+    DPRINT("[USBCCGP] FDO_StartDevice: capabilities obtained, selecting configuration\n");
 
     /* Now select the configuration */
     Status = USBCCGP_SelectConfiguration(DeviceObject, FDODeviceExtension);
@@ -522,7 +522,7 @@ FDO_StartDevice(
         return Status;
     }
 
-    DPRINT1("[USBCCGP] FDO_StartDevice: configuration selected, querying bus interface\n");
+    DPRINT("[USBCCGP] FDO_StartDevice: configuration selected, querying bus interface\n");
 
     /* Query bus interface */
     Status = USBCCGP_QueryInterface(FDODeviceExtension->NextDeviceObject,
@@ -535,7 +535,7 @@ FDO_StartDevice(
     }
     FDODeviceExtension->BusInterfaceReferenced = InterfaceReferenced;
 
-    DPRINT1("[USBCCGP] FDO_StartDevice: bus interface queried, enumerating functions\n");
+    DPRINT("[USBCCGP] FDO_StartDevice: bus interface queried, enumerating functions\n");
 
     /* Now enumerate the functions */
     Status = USBCCGP_EnumerateFunctions(DeviceObject);
@@ -608,7 +608,7 @@ FDO_CloseConfiguration(
     if (!NT_SUCCESS(Status))
     {
         /* Failed to set configuration */
-        DPRINT1("USBCCGP_SyncUrbRequest failed to unconfigure device\n", Status);
+        DPRINT1("USBCCGP_SyncUrbRequest failed to unconfigure device %x\n", Status);
     }
 
     ExFreePool(Urb);
@@ -638,7 +638,7 @@ FDO_HandlePnp(
         case IRP_MN_REMOVE_DEVICE:
         {
             /* Unconfigure device */
-            DPRINT1("[USBCCGP] FDO IRP_MN_REMOVE\n");
+            DPRINT("[USBCCGP] FDO IRP_MN_REMOVE\n");
             FDO_CloseConfiguration(DeviceObject);
             USBCCGP_FdoCleanup(DeviceObject);
 

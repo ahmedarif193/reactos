@@ -391,7 +391,7 @@ USBCCGP_InitFunctionDescriptor(
             //
             RtlInitUnicodeString(&FunctionDescriptor->FunctionDescription, DescriptionBuffer);
         }
-        DPRINT1("FunctionDescription %wZ\n", &FunctionDescriptor->FunctionDescription);
+        DPRINT("FunctionDescription %wZ\n", &FunctionDescriptor->FunctionDescription);
     }
 
     //
@@ -555,7 +555,7 @@ USBCCG_InitIdsWithInterfaceDescriptor(
             //
             RtlInitUnicodeString(&FunctionDescriptor->FunctionDescription, DescriptionBuffer);
         }
-        DPRINT1("FunctionDescription %wZ\n", &FunctionDescriptor->FunctionDescription);
+        DPRINT("FunctionDescription %wZ\n", &FunctionDescriptor->FunctionDescription);
     }
 
 
@@ -785,7 +785,7 @@ USBCCGP_EnumWithAudioLegacy(
         // get interface descriptor
         //
         InterfaceDescriptor = USBD_ParseConfigurationDescriptorEx(FDODeviceExtension->ConfigurationDescriptor, FDODeviceExtension->ConfigurationDescriptor, Index, 0, -1, -1, -1);
-        DPRINT1("Index %lu Descriptor %p\n", Index, InterfaceDescriptor);
+        DPRINT("Index %lu Descriptor %p\n", Index, InterfaceDescriptor);
         ASSERT(InterfaceDescriptor);
 
         if (InterfaceDescriptor->bInterfaceClass != USB_DEVICE_CLASS_AUDIO)

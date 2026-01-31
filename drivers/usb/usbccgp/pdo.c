@@ -851,7 +851,7 @@ USBCCGP_PDOSelectConfiguration(
     Entry = NULL;
     do
     {
-        DPRINT1("[USBCCGP] SelectConfiguration Function %x InterfaceNumber %x Alternative %x Length %lu InterfaceInformation->Length %lu\n", 
+        DPRINT("[USBCCGP] SelectConfiguration Function %x InterfaceNumber %x Alternative %x Length %lu InterfaceInformation->Length %lu\n",
                PDODeviceExtension->FunctionDescriptor->FunctionNumber, InterfaceInformation->InterfaceNumber, InterfaceInformation->AlternateSetting, Length, InterfaceInformation->Length);
         ASSERT(InterfaceInformation->Length);
         if (InterfaceInformation->Length == 0 || InterfaceInformation->Length > Length)
@@ -954,7 +954,7 @@ USBCCGP_PDOSelectConfiguration(
             //
             // select interface
             //
-            DPRINT1("Selecting InterfaceIndex %lu AlternateSetting %lu NumberOfPipes %lu\n", InterfaceInformation->InterfaceNumber, InterfaceInformation->AlternateSetting, InterfaceInformation->NumberOfPipes);
+            DPRINT("Selecting InterfaceIndex %lu AlternateSetting %lu NumberOfPipes %lu\n", InterfaceInformation->InterfaceNumber, InterfaceInformation->AlternateSetting, InterfaceInformation->NumberOfPipes);
             ASSERT(InterfaceInformation->Length == Entry->Interface->Length);
 
             //
@@ -978,7 +978,7 @@ USBCCGP_PDOSelectConfiguration(
             // now select the interface
             //
             Status = USBCCGP_SyncUrbRequest(PDODeviceExtension->NextDeviceObject, NewUrb);
-            DPRINT1("SelectInterface Status %x\n", Status);
+            DPRINT("SelectInterface Status %x\n", Status);
 
             if (!NT_SUCCESS(Status))
             {
@@ -1031,7 +1031,7 @@ USBCCGP_PDOSelectConfiguration(
     //
     Urb->UrbSelectConfiguration.ConfigurationHandle = PDODeviceExtension->ConfigurationHandle;
 
-    DPRINT1("[USBCCGP] SelectConfiguration Function %x Completed\n", PDODeviceExtension->FunctionDescriptor->FunctionNumber);
+    DPRINT("[USBCCGP] SelectConfiguration Function %x Completed\n", PDODeviceExtension->FunctionDescriptor->FunctionNumber);
 
     //
     // done
@@ -1241,7 +1241,7 @@ PDO_Dispatch(
         case IRP_MJ_POWER:
             return PDO_HandlePower(DeviceObject, Irp);
         default:
-            DPRINT1("PDO_Dispatch Function %x not implemented\n", IoStack->MajorFunction);
+            DPRINT1("[USBCCGP] PDO_Dispatch: unhandled major function %x\n", IoStack->MajorFunction);
             Status = Irp->IoStatus.Status;
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
             return Status;
