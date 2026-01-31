@@ -4158,7 +4158,7 @@ XHCI_CompleteSwEnumTransfer(
     {
         /* Mark completed before handing to USBPORT to prevent double-completion */
         if (!InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags,
-                                      7 /* XHCI_TRANSFER_FLAG_COMPLETED bit position */))
+                                      XHCI_TRANSFER_FLAG_COMPLETED_BIT))
         {
             XhciRegPacket.UsbPortCompleteTransfer(Extension,
                                                   ActiveEndpoint,
@@ -6115,7 +6115,7 @@ XHCI_FlushDeferredCompletionsForSlot(
 
         /* Mark as completed to prevent any other path from double-completing */
         if (InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags,
-                                     7 /* XHCI_TRANSFER_FLAG_COMPLETED bit position */))
+                                     XHCI_TRANSFER_FLAG_COMPLETED_BIT))
         {
             DPRINT1("usbxhci: slot %u deferred flush skipping already-completed transfer %p\n",
                     SlotId, Transfer);
@@ -6185,7 +6185,7 @@ XHCI_DrainDeferredTransferCompletions(
          * whichever path completes the transfer first.
          */
         if (InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags,
-                                     7 /* XHCI_TRANSFER_FLAG_COMPLETED bit position */))
+                                     XHCI_TRANSFER_FLAG_COMPLETED_BIT))
         {
             DPRINT1("usbxhci: deferred drain skipping already-completed transfer %p (flags=0x%lx)\n",
                     Transfer, Transfer->Flags);
@@ -6798,10 +6798,17 @@ XHCI_HandleTransferEvent(
         return;
     }
 
-    /* Mark transfer as completed before handing to USBPORT.
+    /* Atomically test-and-set the COMPLETED flag before handing to USBPORT.
      * This prevents double-completion if another path (e.g., disable-slot
-     * force-complete or StopController drain) races with us. */
-    InterlockedOr((volatile LONG *)&Transfer->Flags, XHCI_TRANSFER_FLAG_COMPLETED);
+     * force-complete or StopController drain) races with us. If the bit
+     * was already set, another path already completed this transfer. */
+    if (InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags,
+                                 XHCI_TRANSFER_FLAG_COMPLETED_BIT))
+    {
+        DPRINT1("usbxhci: transfer %p already completed, skipping double completion\n",
+                Transfer);
+        return;
+    }
 
     if (Transfer->IsIsochronous && XhciRegPacket.UsbPortCompleteIsoTransfer)
     {
@@ -12565,7 +12572,7 @@ XHCI_StopController(PVOID MiniPortExtension,
 
         /* Check if already completed by another path (disable-slot, etc.) */
         if (InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags,
-                                     7 /* XHCI_TRANSFER_FLAG_COMPLETED bit position */))
+                                     XHCI_TRANSFER_FLAG_COMPLETED_BIT))
         {
             DPRINT1("usbxhci: StopController drain skipping already-completed transfer %p\n",
                     Transfer);

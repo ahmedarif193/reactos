@@ -405,6 +405,7 @@ typedef struct _XHCI_TRANSFER {
 #define XHCI_TRANSFER_FLAG_SWENUM_DONE    0x00000020
 #define XHCI_TRANSFER_FLAG_DATA_STAGE_DONE 0x00000040  /* BytesTransferred saved from Data Stage SHORT_PACKET */
 #define XHCI_TRANSFER_FLAG_COMPLETED      0x00000080  /* Transfer already completed to USBPORT; prevents double-completion */
+#define XHCI_TRANSFER_FLAG_COMPLETED_BIT  7           /* Bit position for InterlockedBitTestAndSet */
 
 BOOLEAN
 XHCI_EndpointNeedsTt(

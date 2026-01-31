@@ -842,6 +842,13 @@ USBPORT_FlushPendingTransfers(IN PUSBPORT_ENDPOINT Endpoint)
                                                  USBPORT_TRANSFER,
                                                  TransferLink);
 
+                    /* Skip completed transfers awaiting FlushDoneTransfers removal */
+                    if (Transfer->Flags & TRANSFER_FLAG_COMPLETED)
+                    {
+                        List = Transfer->TransferLink.Flink;
+                        continue;
+                    }
+
                     if (!(Transfer->Flags & TRANSFER_FLAG_SUBMITED))
                     {
                         KeReleaseSpinLockFromDpcLevel(&Endpoint->EndpointSpinLock);
@@ -1295,12 +1302,20 @@ USBPORT_KillEndpointActiveTransfers(IN PDEVICE_OBJECT FdoDevice,
 
     while (ActiveList && ActiveList != &Endpoint->TransferList)
     {
-        ++KilledTransfers;
-
         Transfer = CONTAINING_RECORD(ActiveList,
                                      USBPORT_TRANSFER,
                                      TransferLink);
 
+        /* Skip completed transfers -- they are already on the DoneTransferList
+         * and will be removed by FlushDoneTransfers. Aborting them would be
+         * redundant and inflate the KilledTransfers count. */
+        if (Transfer->Flags & TRANSFER_FLAG_COMPLETED)
+        {
+            ActiveList = Transfer->TransferLink.Flink;
+            continue;
+        }
+
+        ++KilledTransfers;
         Transfer->Flags |= TRANSFER_FLAG_ABORTED;
 
         ActiveList = Transfer->TransferLink.Flink;
@@ -1450,6 +1465,15 @@ USBPORT_AbortEndpoint(IN PDEVICE_OBJECT FdoDevice,
         ActiveTransfer = CONTAINING_RECORD(ActiveList,
                                            USBPORT_TRANSFER,
                                            TransferLink);
+
+        /* Skip completed transfers -- they are already on the DoneTransferList
+         * and will be completed by FlushDoneTransfers. Setting ABORTED on them
+         * is redundant and could interfere with the done-transfer path. */
+        if (ActiveTransfer->Flags & TRANSFER_FLAG_COMPLETED)
+        {
+            ActiveList = ActiveTransfer->TransferLink.Flink;
+            continue;
+        }
 
         DPRINT_CORE("USBPORT_AbortEndpoint: Abort ActiveTransfer - %p\n",
                     ActiveTransfer);

@@ -351,6 +351,9 @@ USBPORT_ResetPipe(IN PDEVICE_OBJECT FdoDevice,
     PUSBPORT_PIPE_HANDLE PipeHandle;
     PUSBPORT_ENDPOINT Endpoint;
     NTSTATUS Status;
+    BOOLEAN HasActiveTransfers;
+    PLIST_ENTRY Entry;
+    PUSBPORT_TRANSFER Transfer;
 
     DPRINT_URB("USBPORT_ResetPipe: ... \n");
 
@@ -369,7 +372,23 @@ USBPORT_ResetPipe(IN PDEVICE_OBJECT FdoDevice,
 
     KeAcquireSpinLock(&Endpoint->EndpointSpinLock, &Endpoint->EndpointOldIrql);
 
-    if (IsListEmpty(&Endpoint->TransferList))
+    /* Check for active (non-completed) transfers on TransferList.
+     * Completed transfers may still be linked here awaiting removal by
+     * FlushDoneTransfers -- they must not prevent the pipe reset. */
+    HasActiveTransfers = FALSE;
+    for (Entry = Endpoint->TransferList.Flink;
+         Entry && Entry != &Endpoint->TransferList;
+         Entry = Entry->Flink)
+    {
+        Transfer = CONTAINING_RECORD(Entry, USBPORT_TRANSFER, TransferLink);
+        if (!(Transfer->Flags & TRANSFER_FLAG_COMPLETED))
+        {
+            HasActiveTransfers = TRUE;
+            break;
+        }
+    }
+
+    if (!HasActiveTransfers)
     {
         if (Urb->UrbHeader.UsbdFlags & USBD_FLAG_NOT_ISO_TRANSFER)
         {

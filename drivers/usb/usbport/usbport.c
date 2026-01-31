@@ -1076,6 +1076,11 @@ USBPORT_FlushDoneTransfers(IN PDEVICE_OBJECT FdoDevice)
                                      DoneLink);
 
         RemoveHeadList(DoneTransferList);
+        /* NULL out DoneLink after removal for defensive hygiene, mirroring
+         * what is done for TransferLink below. This prevents accidental
+         * double-removal if the transfer is erroneously touched again. */
+        Transfer->DoneLink.Flink = NULL;
+        Transfer->DoneLink.Blink = NULL;
         KeReleaseSpinLock(&FdoExtension->DoneTransferSpinLock, OldIrql);
 
         Iterations++;
@@ -1176,6 +1181,8 @@ USBPORT_QueueDoneTransfer(IN PUSBPORT_TRANSFER Transfer,
 {
     PDEVICE_OBJECT FdoDevice;
     PUSBPORT_DEVICE_EXTENSION  FdoExtension;
+
+    UNREFERENCED_PARAMETER(CallerHoldsEndpointLock);
 
     DPRINT_CORE("USBPORT_QueueDoneTransfer: Transfer - %p, USBDStatus - %p\n",
                 Transfer,
