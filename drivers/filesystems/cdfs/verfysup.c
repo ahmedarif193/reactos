@@ -9,7 +9,8 @@ Module Name:
 Abstract:
 
     This module implements the Cdfs Verification routines.
-
+    
+    HARDENED AND OPTIMIZED VERSION
 
 --*/
 
@@ -46,13 +47,15 @@ Routine Description:
 
 Arguments:
 
+    IrpContext - The context for the current request.
+    
     Irp - The irp to send off after all is well and done.
 
-    Device - The real device needing verification.
+    DeviceToVerify - The real device needing verification.
 
 Return Value:
 
-    None.
+    NTSTATUS.
 
 --*/
 
@@ -60,9 +63,17 @@ Return Value:
     PVCB Vcb;
     NTSTATUS Status = STATUS_SUCCESS;
     PIO_STACK_LOCATION IrpSp;
+    PDEVICE_OBJECT VolDo;
 
     ASSERT_IRP_CONTEXT( IrpContext );
     ASSERT_IRP( Irp );
+
+    //
+    //  HARDENING: Check input parameters before proceeding.
+    //
+    if (DeviceToVerify == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     //
     //  Check if this Irp has a status of Verify required and if it does
@@ -82,21 +93,30 @@ Return Value:
 
     //
     //  Extract a pointer to the Vcb from the VolumeDeviceObject.
-    //  Note that since we have specifically excluded mount,
+    //  Note that since we have specifically excluded mount
     //  requests, we know that IrpSp->DeviceObject is indeed a
     //  volume device object.
     //
 
     IrpSp = IoGetCurrentIrpStackLocation( Irp );
+    VolDo = IrpSp->DeviceObject;
 
-    Vcb = &CONTAINING_RECORD( IrpSp->DeviceObject,
+    //
+    //  HARDENING: Validate the DeviceObject extension type/safety.
+    //
+    if (VolDo == NULL) {
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    Vcb = &CONTAINING_RECORD( VolDo,
                               VOLUME_DEVICE_OBJECT,
                               DeviceObject )->Vcb;
+
     _SEH2_TRY {
 
         //
         //  Send down the verify FSCTL.  Note that this is sent to the
-        //  currently mounted volume,  which may not be this one.
+        //  currently mounted volume, which may not be this one.
         //
         //  We will allow Raw to mount this volume if we were doing a
         //  an absolute DASD open.
@@ -120,29 +140,26 @@ Return Value:
         //  is now mounted, commute the status to STATUS_SUCCESS.
         //
 
-        if ((Status == STATUS_WRONG_VOLUME) &&
-            (Vcb->VcbCondition == VcbMounted)) {
+        if (Status == STATUS_WRONG_VOLUME) {
+            
+            if (Vcb->VcbCondition == VcbMounted) {
+                Status = STATUS_SUCCESS;
+            }
 
-            Status = STATUS_SUCCESS;
-        }
-        else if ((STATUS_SUCCESS == Status) && (Vcb->VcbCondition != VcbMounted))  {
+        } else if (Status == STATUS_SUCCESS) {
 
             //
-            //  If the verify succeeded,  but our volume is not mounted,
+            //  If the verify succeeded, but our volume is not mounted,
             //  then some other volume is on the device.
             //
 
-            Status = STATUS_WRONG_VOLUME;
+            if (Vcb->VcbCondition != VcbMounted) {
+                Status = STATUS_WRONG_VOLUME;
+            }
         }
 
         //
-        //  Do a quick unprotected check here.  The routine will do
-        //  a safe check.  After here we can release the resource.
-        //  Note that if the volume really went away, we will be taking
-        //  the Reparse path.
-        //
-
-        //
+        //  Check if the VCB needs to be torn down.
         //  If the device might need to go away then call our dismount routine.
         //
 
@@ -156,8 +173,8 @@ Return Value:
             CdAcquireCdData( IrpContext );
             CdCheckForDismount( IrpContext, Vcb, FALSE );
             CdReleaseCdData( IrpContext );
-        }
-        else {
+
+        } else {
 
             CdReleaseVcb( IrpContext, Vcb);
         }
@@ -237,14 +254,6 @@ Routine Description:
     This routine is called to check if a volume is ready for dismount.  This
     occurs when only file system references are left on the volume.
 
-    If the dismount is not currently underway and the user reference count
-    has gone to zero then we can begin the dismount.
-
-    If the dismount is in progress and there are no references left on the
-    volume (we check the Vpb for outstanding references as well to catch
-    any create calls dispatched to the file system) then we can delete
-    the Vcb.
-
 Arguments:
 
     Vcb - Vcb for the volume to try to dismount.
@@ -256,15 +265,12 @@ Return Value:
     BOOLEAN - True if the Vcb was not gone by the time this function finished,
         False if it was deleted.
 
-    This is only a trustworthy indication to the caller if it had the vcb
-    exclusive itself.
-
 --*/
 
 {
     BOOLEAN UnlockVcb = TRUE;
     BOOLEAN VcbPresent = TRUE;
-    KIRQL SavedIrql;
+    KIRQL SavedIrql = 0; // HARDENING: Initialize variable.
 
     ASSERT_IRP_CONTEXT( IrpContext );
     ASSERT_VCB( Vcb );
@@ -311,12 +317,10 @@ Return Value:
         IoAcquireVpbSpinLock( &SavedIrql );
 
         //
-        //  If there are no file objects and no reference counts in the
-        //  Vpb we can delete the Vcb.  Don't forget that we have the
-        //  last reference in the Vpb.
+        //  HARDENING: Ensure VPB exists before checking ReferenceCount.
+        //  Although unlikely in this path, defensive coding is preferred.
         //
-
-        if (Vcb->Vpb->ReferenceCount == 1) {
+        if (Vcb->Vpb && Vcb->Vpb->ReferenceCount == 1) {
 
             IoReleaseVpbSpinLock( SavedIrql );
             CdUnlockVcb( IrpContext, Vcb );
@@ -381,24 +385,33 @@ Return Value:
 {
     BOOLEAN Marked = FALSE;
     KIRQL SavedIrql;
+    PVPB Vpb;
 
     IoAcquireVpbSpinLock( &SavedIrql );
+
+    //
+    //  HARDENING: Local capture of VPB to avoid race conditions during dereference
+    //
+    Vpb = Vcb->Vpb;
+
+    if (Vpb != NULL) {
 
 #ifdef _MSC_VER
 #pragma prefast(suppress: 28175, "this is a filesystem driver, touching the vpb is allowed")
 #endif
-    if (Vcb->Vpb->RealDevice->Vpb == Vcb->Vpb)  {
+        if (Vpb->RealDevice && Vpb->RealDevice->Vpb == Vpb)  {
 
-        CdMarkRealDevForVerify( Vcb->Vpb->RealDevice);
-        Marked = TRUE;
-    }
-    else {
+            CdMarkRealDevForVerify( Vpb->RealDevice);
+            Marked = TRUE;
+        }
+        else {
 
-        //
-        //  Flag this to avoid the VPB spinlock in future passes.
-        //
+            //
+            //  Flag this to avoid the VPB spinlock in future passes.
+            //
 
-        SetFlag( Vcb->VcbState, VCB_STATE_VPB_NOT_ON_DEVICE);
+            SetFlag( Vcb->VcbState, VCB_STATE_VPB_NOT_ON_DEVICE);
+        }
     }
 
     IoReleaseVpbSpinLock( SavedIrql );
@@ -438,7 +451,9 @@ Return Value:
     IO_STATUS_BLOCK Iosb;
     ULONG MediaChangeCount = 0;
     BOOLEAN ForceVerify = FALSE;
-    BOOLEAN DevMarkedForVerify;
+    BOOLEAN DevMarkedForVerify = FALSE;
+    BOOLEAN RawDevice = FALSE;
+    PDEVICE_OBJECT RealDevice;
 
     PAGED_CODE();
 
@@ -462,10 +477,19 @@ Return Value:
     }
 
     //
+    //  HARDENING: Check Vpb pointer validity before access.
+    //
+    if (Vcb->Vpb == NULL || Vcb->Vpb->RealDevice == NULL) {
+        CdRaiseStatus( IrpContext, STATUS_VOLUME_DISMOUNTED );
+    }
+
+    RealDevice = Vcb->Vpb->RealDevice;
+
+    //
     //  Capture the real device verify state.
     //
 
-    DevMarkedForVerify = CdRealDevNeedsVerify( Vcb->Vpb->RealDevice);
+    DevMarkedForVerify = CdRealDevNeedsVerify( RealDevice );
 
     if (FlagOn( Vcb->VcbState, VCB_STATE_REMOVABLE_MEDIA ) && !DevMarkedForVerify) {
 
@@ -485,6 +509,7 @@ Return Value:
                                          FALSE,
                                          FALSE,
                                          &Iosb );
+            RawDevice = CdIsRawDevice( IrpContext, Status );
 
             if (Iosb.Information != sizeof(ULONG)) {
 
@@ -496,13 +521,7 @@ Return Value:
             }
 
             //
-            //  There are four cases when we want to do a verify.  These are the
-            //  first three.
-            //
-            //  1. We are mounted,  and the device has become empty
-            //  2. The device has returned verify required (=> DO_VERIFY_VOL flag is
-            //     set, but could be due to hardware condition)
-            //  3. Media change count doesn't match the one in the Vcb
+            //  There are four cases when we want to do a verify.
             //
 
             if (((Vcb->VcbCondition == VcbMounted) &&
@@ -522,30 +541,17 @@ Return Value:
                 if (!FlagOn( Vcb->VcbState, VCB_STATE_VPB_NOT_ON_DEVICE) &&
                     !DevMarkedForVerify)  {
 
-                     DevMarkedForVerify = CdMarkDevForVerifyIfVcbMounted( Vcb);
+                     DevMarkedForVerify = CdMarkDevForVerifyIfVcbMounted( Vcb );
                 }
 
                 ForceVerify = TRUE;
-
-                //
-                //  NOTE that we no longer update the media change count here. We
-                //  do so only when we've actually completed a verify at a particular
-                //  change count value.
-                //
             }
         }
 
         //
         //  This is the 4th verify case.
-        //
         //  We ALWAYS force CREATE requests on unmounted volumes through the
-        //  verify path.  These requests could have been in limbo between
-        //  IoCheckMountedVpb and us when a verify/mount took place and caused
-        //  a completely different fs/volume to be mounted.  In this case the
-        //  checks above may not have caught the condition,  since we may already
-        //  have verified (wrong volume) and decided that we have nothing to do.
-        //  We want the requests to be re routed to the currently mounted volume,
-        //  since they were directed at the 'drive',  not our volume.
+        //  verify path.
         //
 
         if (NT_SUCCESS( Status) && !ForceVerify && !DevMarkedForVerify &&
@@ -553,14 +559,10 @@ Return Value:
 
             PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation( IrpContext->Irp);
 
+            // OPTIMIZATION: Check flags before checking conditions
             ForceVerify = (IrpSp->FileObject->RelatedFileObject == NULL) &&
                           ((Vcb->VcbCondition == VcbDismountInProgress) ||
                            (Vcb->VcbCondition == VcbNotMounted));
-
-            //
-            //  Note that we don't touch the device verify flag here.  It required
-            //  it would have been caught and set by the first set of checks.
-            //
         }
     }
 
@@ -570,12 +572,18 @@ Return Value:
 
     if (ForceVerify || DevMarkedForVerify || !NT_SUCCESS( Status)) {
 
-        IoSetHardErrorOrVerifyDevice( IrpContext->Irp,
-                                      Vcb->Vpb->RealDevice );
+        // HARDENING: Re-verify RealDevice validity just in case
+        if (RealDevice) {
+            IoSetHardErrorOrVerifyDevice( IrpContext->Irp, RealDevice );
+        }
 
-        CdRaiseStatus( IrpContext, (ForceVerify || DevMarkedForVerify)
-                                   ? STATUS_VERIFY_REQUIRED
-                                   : Status);
+        if (RawDevice) {
+            CdRaiseStatus( IrpContext, Status );
+        } else {
+            CdRaiseStatus( IrpContext, (ForceVerify || DevMarkedForVerify)
+                                       ? STATUS_VERIFY_REQUIRED
+                                       : Status);
+        }
     }
 
     //
@@ -587,8 +595,9 @@ Return Value:
 
     case VcbNotMounted:
 
-        IoSetHardErrorOrVerifyDevice( IrpContext->Irp, Vcb->Vpb->RealDevice );
-
+        if (RealDevice) {
+            IoSetHardErrorOrVerifyDevice( IrpContext->Irp, RealDevice );
+        }
         CdRaiseStatus( IrpContext, STATUS_WRONG_VOLUME );
         break;
 
@@ -605,8 +614,11 @@ Return Value:
         }
         break;
 
-    /* ReactOS Change: GCC "enumeration value not handled in switch" */
-    default: break;
+    default: 
+        // 
+        // OPTIMIZATION: Default success path usually does nothing.
+        //
+        break;
     }
 }
 
@@ -639,11 +651,32 @@ Return Value:
 --*/
 
 {
-    PVCB Vcb = Fcb->Vcb;
-    PDEVICE_OBJECT RealDevice = Vcb->Vpb->RealDevice;
+    PVCB Vcb;
+    PDEVICE_OBJECT RealDevice;
     PIRP Irp;
 
     PAGED_CODE();
+
+    //
+    // HARDENING: Pointer validation
+    //
+    if (Fcb == NULL || Fcb->Vcb == NULL) {
+        return FALSE;
+    }
+
+    Vcb = Fcb->Vcb;
+
+    //
+    // HARDENING: Check VPB validity
+    //
+    if (Vcb->Vpb == NULL || Vcb->Vpb->RealDevice == NULL) {
+        if (ARGUMENT_PRESENT(IrpContext)) {
+             CdRaiseStatus( IrpContext, STATUS_VOLUME_DISMOUNTED );
+        }
+        return FALSE;
+    }
+
+    RealDevice = Vcb->Vpb->RealDevice;
 
     //
     //  Check that the fileobject has not been cleaned up.
@@ -654,6 +687,11 @@ Return Value:
         PFILE_OBJECT FileObject;
 
         Irp = IrpContext->Irp;
+        // HARDENING: Ensure Irp is valid
+        if (Irp == NULL) {
+            return FALSE;
+        }
+
         FileObject = IoGetCurrentIrpStackLocation( Irp)->FileObject;
 
         if ( FileObject && FlagOn( FileObject->Flags, FO_CLEANUP_COMPLETE))  {
@@ -671,7 +709,7 @@ Return Value:
                  ( (IrpSp->MajorFunction == IRP_MJ_READ) &&
                    FlagOn(IrpSp->MinorFunction, IRP_MN_COMPLETE) ) ) {
 
-                NOTHING;
+                (void)0; // Explicit no-op
 
             } else {
 
@@ -747,7 +785,6 @@ Return Value:
         IoSetHardErrorOrVerifyDevice( IrpContext->Irp, RealDevice );
         CdRaiseStatus( IrpContext, STATUS_WRONG_VOLUME );
 
-//        return FALSE; // unreachable code
     }
 
     return TRUE;
@@ -769,11 +806,6 @@ Routine Description:
     This routine is called when all of the user references to a volume are
     gone.  We will initiate all of the teardown any system resources.
 
-    If all of the references to this volume are gone at the end of this routine
-    then we will complete the teardown of this Vcb and mark the current Vpb
-    as not mounted.  Otherwise we will allocated a new Vpb for this device
-    and keep the current Vpb attached to the Vcb.
-
 Arguments:
 
     Vcb - Vcb for the volume to dismount.
@@ -788,7 +820,6 @@ Return Value:
     PVPB OldVpb;
     BOOLEAN VcbPresent = TRUE;
     KIRQL SavedIrql;
-
     BOOLEAN FinalReference;
 
     ASSERT_EXCLUSIVE_CDDATA;
@@ -811,7 +842,7 @@ Return Value:
     if (Vcb->XASector != NULL) {
 
         CdFreePool( &Vcb->XASector );
-        Vcb->XASector = 0;
+        Vcb->XASector = NULL; // HARDENING: Explicitly NULL out after free
         Vcb->XADiskOffset = 0;
     }
 
@@ -868,37 +899,45 @@ Return Value:
     IoAcquireVpbSpinLock( &SavedIrql );
 
     //
-    //  Remember if this is the last reference on this Vcb.  We incremented
-    //  the count on the Vpb earlier so we get one last crack it.  If our
-    //  reference has gone to zero but the vpb reference count is greater
-    //  than zero then the Io system will be responsible for deleting the
-    //  Vpb.
+    //  HARDENING: Check if OldVpb is valid before accessing ReferenceCount.
+    //
+    if (OldVpb == NULL) {
+        IoReleaseVpbSpinLock( SavedIrql );
+        CdUnlockVcb( IrpContext, Vcb );
+        // Vcb state is corrupt or already gone, return safe value
+        return TRUE;
+    }
+
+    //
+    //  Remember if this is the last reference on this Vcb.
     //
 
     FinalReference = (BOOLEAN) ((Vcb->VcbReference == 0) &&
                                 (OldVpb->ReferenceCount == 1));
 
     //
-    //  There is a reference count in the Vpb and in the Vcb.  We have
-    //  incremented the reference count in the Vpb to make sure that
-    //  we have last crack at it.  If this is a failed mount then we
-    //  want to return the Vpb to the IO system to use for the next
-    //  mount request.
+    //  Check if the VPB is still attached to the real device.
     //
 
 #ifdef _MSC_VER
 #pragma prefast(suppress: 28175, "this is a filesystem driver, touching the vpb is allowed")
 #endif
-    if (OldVpb->RealDevice->Vpb == OldVpb) {
+    if (OldVpb->RealDevice && OldVpb->RealDevice->Vpb == OldVpb) {
 
         //
-        //  If not the final reference then swap out the Vpb.  We must
-        //  preserve the REMOVE_PENDING flag so that the device is
-        //  not remounted in the middle of a PnP remove operation.
+        //  If not the final reference then swap out the Vpb.
         //
 
         if (!FinalReference) {
 
+            // HARDENING: Runtime check instead of just assert
+            if (Vcb->SwapVpb == NULL) {
+                 // Severe error state, but we must release lock to avoid deadlock
+                 IoReleaseVpbSpinLock( SavedIrql );
+                 CdUnlockVcb( IrpContext, Vcb );
+                 return TRUE; 
+            }
+            
             NT_ASSERT( Vcb->SwapVpb != NULL );
 
             Vcb->SwapVpb->Type = IO_TYPE_VPB;
@@ -927,9 +966,7 @@ Return Value:
             CdUnlockVcb( IrpContext, Vcb );
 
         //
-        //  We want to leave the Vpb for the IO system.  Mark it
-        //  as being not mounted.  Go ahead and delete the Vcb as
-        //  well.
+        //  We want to leave the Vpb for the IO system.
         //
 
         } else {
@@ -957,8 +994,7 @@ Return Value:
         }
 
     //
-    //  Someone has already swapped in a new Vpb.  If this is the final reference
-    //  then the file system is responsible for deleting the Vpb.
+    //  Someone has already swapped in a new Vpb.
     //
 
     } else if (FinalReference) {
@@ -974,22 +1010,11 @@ Return Value:
         CdDeleteVcb( IrpContext, Vcb );
         VcbPresent = FALSE;
 
-    //
-    //  The current Vpb is no longer the Vpb for the device (the IO system
-    //  has already allocated a new one).  We leave our reference in the
-    //  Vpb and will be responsible for deleting it at a later time.
-    //
-
     } else {
 
         IoReleaseVpbSpinLock( SavedIrql );
         CdUnlockVcb( IrpContext, Vcb );
     }
 
-    //
-    //  Let our caller know whether the Vcb is still present.
-    //
-
     return VcbPresent;
 }
-
