@@ -62,10 +62,10 @@ USBCCGP_QueryInterface(
     Stack = IoGetNextIrpStackLocation(Irp);
     Stack->MajorFunction = IRP_MJ_PNP;
     Stack->MinorFunction = IRP_MN_QUERY_INTERFACE;
-    Stack->Parameters.QueryInterface.Size = sizeof(BUS_INTERFACE_STANDARD);
+    Stack->Parameters.QueryInterface.Size = sizeof(USBC_DEVICE_CONFIGURATION_INTERFACE_V1);
     Stack->Parameters.QueryInterface.InterfaceType = (LPGUID)&USB_BUS_INTERFACE_USBC_CONFIGURATION_GUID;
-    Stack->Parameters.QueryInterface.Version = 2;
-    Stack->Parameters.QueryInterface.Interface = (PINTERFACE)&BusInterface;
+    Stack->Parameters.QueryInterface.Version = USBC_DEVICE_CONFIGURATION_INTERFACE_VERSION_1;
+    Stack->Parameters.QueryInterface.Interface = (PINTERFACE)BusInterface;
     Stack->Parameters.QueryInterface.InterfaceSpecificData = NULL;
     Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
 
@@ -149,6 +149,7 @@ USBCCGP_CustomEnumWithInterface(
     //
     FDODeviceExtension->FunctionDescriptor = FunctionDescriptorBuffer;
     FDODeviceExtension->FunctionDescriptorCount = FunctionDescriptorBufferLength / sizeof(USBC_FUNCTION_DESCRIPTOR);
+    FDODeviceExtension->FunctionDescriptorOwned = FALSE;
 
     //
     // success
@@ -176,6 +177,9 @@ USBCCGP_CountAssociationDescriptors(
         // get association descriptor
         //
         Descriptor = (PUSB_INTERFACE_ASSOCIATION_DESCRIPTOR)Offset;
+
+        if (Descriptor->bLength == 0)
+            break;
 
         if (Descriptor->bLength == sizeof(USB_INTERFACE_ASSOCIATION_DESCRIPTOR) && Descriptor->bDescriptorType == USB_INTERFACE_ASSOCIATION_DESCRIPTOR_TYPE)
         {
@@ -218,6 +222,9 @@ USBCCGP_GetAssociationDescriptorAtIndex(
         // get association descriptor
         //
         Descriptor = (PUSB_INTERFACE_ASSOCIATION_DESCRIPTOR)Offset;
+
+        if (Descriptor->bLength == 0)
+            break;
 
         if (Descriptor->bLength == sizeof(USB_INTERFACE_ASSOCIATION_DESCRIPTOR) && Descriptor->bDescriptorType == USB_INTERFACE_ASSOCIATION_DESCRIPTOR_TYPE)
         {
@@ -270,6 +277,12 @@ USBCCGP_InitInterfaceListOfFunctionDescriptor(
         //
         Descriptor = (PUSB_INTERFACE_DESCRIPTOR)Offset;
 
+        if (Descriptor->bLength == 0)
+        {
+            DPRINT1("[USBCCGP] Zero-length descriptor in interface list init\n");
+            break;
+        }
+
         if (Descriptor->bLength == sizeof(USB_INTERFACE_DESCRIPTOR) && Descriptor->bDescriptorType == USB_INTERFACE_DESCRIPTOR_TYPE)
         {
             //
@@ -290,10 +303,9 @@ USBCCGP_InitInterfaceListOfFunctionDescriptor(
         if (Descriptor->bLength == sizeof(USB_INTERFACE_ASSOCIATION_DESCRIPTOR) && Descriptor->bDescriptorType == USB_INTERFACE_ASSOCIATION_DESCRIPTOR_TYPE)
         {
             //
-            // WTF? a association descriptor which overlaps the next association descriptor
+            // association descriptor which overlaps the next association descriptor
             //
             DPRINT1("Invalid association descriptor\n");
-            ASSERT(FALSE);
             return STATUS_UNSUCCESSFUL;
         }
 
@@ -476,6 +488,7 @@ USBCCGP_EnumWithAssociationDescriptor(
         DPRINT1("USBCCGP_EnumWithAssociationDescriptor failed to allocate function descriptor count %x\n", DescriptorCount);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
+    FDODeviceExtension->FunctionDescriptorOwned = TRUE;
 
     for (Index = 0; Index < DescriptorCount; Index++)
     {
@@ -635,6 +648,7 @@ USBCCGP_LegacyEnum(
         DPRINT1("USBCCGP_EnumWithAssociationDescriptor failed to allocate function descriptor %lu\n", FDODeviceExtension->ConfigurationDescriptor->bNumInterfaces);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
+    FDODeviceExtension->FunctionDescriptorOwned = TRUE;
 
     //
     // init function descriptors
@@ -650,7 +664,6 @@ USBCCGP_LegacyEnum(
             // failed to find interface descriptor
             //
             DPRINT1("[USBCCGP] Failed to find interface descriptor index %lu\n", Index);
-            ASSERT(FALSE);
             return STATUS_UNSUCCESSFUL;
         }
 
@@ -818,6 +831,7 @@ USBCCGP_EnumWithAudioLegacy(
         DPRINT1("USBCCGP_EnumWithAssociationDescriptor failed to allocate function descriptor count\n");
         return STATUS_INSUFFICIENT_RESOURCES;
     }
+    FDODeviceExtension->FunctionDescriptorOwned = TRUE;
 
     //
     // init function number
