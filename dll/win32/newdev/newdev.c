@@ -1019,112 +1019,162 @@ ClientSideInstallW(
     PWSTR DeviceInstance = NULL;
     PWSTR InstallEventName = NULL;
     HANDLE hInstallEvent;
+    DWORD DevicesProcessed = 0;
 
     /* Open the pipe */
     hPipe = CreateFileW(lpNamedPipeName, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
-    if(hPipe == INVALID_HANDLE_VALUE)
+    if (hPipe == INVALID_HANDLE_VALUE)
     {
         ERR("CreateFileW failed with error %u\n", GetLastError());
         goto cleanup;
     }
 
-    /* Read the data. Some is just included for compatibility with Windows right now and not yet used by ReactOS.
-       See umpnpmgr for more details. */
-    if (!ReadFile(hPipe, &Value, sizeof(Value), &BytesRead, NULL) ||
-        BytesRead != sizeof(Value) ||
-        Value < sizeof(WCHAR) ||
-        (Value % sizeof(WCHAR)) != 0 ||
-        Value > 4 * MAX_PATH * sizeof(WCHAR))
+    /*
+     * Batch installation loop: read and install devices one at a time from the
+     * pipe. The server sends a sequence of (event_name, ShowWizard, device_id)
+     * tuples. A zero-length event name size (DWORD 0) signals end of batch.
+     * For backward compatibility with the single-device protocol, we also
+     * handle pipe closure as a termination condition.
+     */
+    while (TRUE)
     {
-        ERR("ClientSideInstallW: invalid InstallEventName length (%lu, bytesRead=%lu, err=%u)\n",
-            Value, BytesRead, GetLastError());
-        goto cleanup;
+        /* Free per-iteration allocations from previous loop */
+        if (InstallEventName)
+        {
+            HeapFree(GetProcessHeap(), 0, InstallEventName);
+            InstallEventName = NULL;
+        }
+        if (DeviceInstance)
+        {
+            HeapFree(GetProcessHeap(), 0, DeviceInstance);
+            DeviceInstance = NULL;
+        }
+
+        /* Read the InstallEventName size. A zero value is the end-of-batch sentinel. */
+        if (!ReadFile(hPipe, &Value, sizeof(Value), &BytesRead, NULL) ||
+            BytesRead != sizeof(Value))
+        {
+            /* Pipe closed or read error -- end of batch (also handles single-device legacy) */
+            if (DevicesProcessed > 0)
+                break;
+            ERR("ClientSideInstallW: failed reading InstallEventName size (bytesRead=%lu, err=%u)\n",
+                BytesRead, GetLastError());
+            goto cleanup;
+        }
+
+        /* Zero-length sentinel: end of batch */
+        if (Value == 0)
+        {
+            TRACE("ClientSideInstallW: received end-of-batch sentinel after %lu devices\n",
+                  DevicesProcessed);
+            break;
+        }
+
+        if (Value < sizeof(WCHAR) ||
+            (Value % sizeof(WCHAR)) != 0 ||
+            Value > 4 * MAX_PATH * sizeof(WCHAR))
+        {
+            ERR("ClientSideInstallW: invalid InstallEventName length (%lu, bytesRead=%lu, err=%u)\n",
+                Value, BytesRead, GetLastError());
+            goto cleanup;
+        }
+
+        InstallEventName = (PWSTR)HeapAlloc(GetProcessHeap(), 0, Value);
+        if (!InstallEventName)
+        {
+            ERR("ClientSideInstallW: HeapAlloc failed for InstallEventName (%lu bytes)\n", Value);
+            goto cleanup;
+        }
+
+        if (!ReadFile(hPipe, InstallEventName, Value, &BytesRead, NULL) ||
+            BytesRead != Value)
+        {
+            ERR("ClientSideInstallW: failed reading InstallEventName (len=%lu, read=%lu, err=%u)\n",
+                Value, BytesRead, GetLastError());
+            goto cleanup;
+        }
+
+        /* Ensure the event name is NUL-terminated */
+        InstallEventName[(Value / sizeof(WCHAR)) - 1] = UNICODE_NULL;
+
+        /* Read the ShowWizard flag */
+        if (!ReadFile(hPipe, &ShowWizard, sizeof(ShowWizard), &BytesRead, NULL) ||
+            BytesRead != sizeof(ShowWizard))
+        {
+            ERR("ClientSideInstallW: failed reading ShowWizard (read=%lu, err=%u)\n",
+                BytesRead, GetLastError());
+            goto cleanup;
+        }
+
+        /* Read the DeviceInstance size */
+        if (!ReadFile(hPipe, &Value, sizeof(Value), &BytesRead, NULL) ||
+            BytesRead != sizeof(Value) ||
+            Value < sizeof(WCHAR) ||
+            (Value % sizeof(WCHAR)) != 0 ||
+            Value > 4 * MAX_PATH * sizeof(WCHAR))
+        {
+            ERR("ClientSideInstallW: invalid DeviceInstance length (%lu, bytesRead=%lu, err=%u)\n",
+                Value, BytesRead, GetLastError());
+            goto cleanup;
+        }
+
+        DeviceInstance = (PWSTR)HeapAlloc(GetProcessHeap(), 0, Value);
+        if (!DeviceInstance)
+        {
+            ERR("ClientSideInstallW: HeapAlloc failed for DeviceInstance (%lu bytes)\n", Value);
+            goto cleanup;
+        }
+
+        if (!ReadFile(hPipe, DeviceInstance, Value, &BytesRead, NULL) ||
+            BytesRead != Value)
+        {
+            ERR("ClientSideInstallW: failed reading DeviceInstance (len=%lu, read=%lu, err=%u)\n",
+                Value, BytesRead, GetLastError());
+            goto cleanup;
+        }
+
+        /* Ensure the instance ID is NUL-terminated */
+        DeviceInstance[(Value / sizeof(WCHAR)) - 1] = UNICODE_NULL;
+
+        /* Install this device */
+        TRACE("ClientSideInstallW: installing device %lu: %ls\n", DevicesProcessed + 1, DeviceInstance);
+
+        if (DevInstallW(NULL, NULL, DeviceInstance, ShowWizard ? SW_SHOWNOACTIVATE : SW_HIDE))
+        {
+            /* Signal the per-device event on success */
+            hInstallEvent = CreateEventW(NULL, TRUE, FALSE, InstallEventName);
+            if (hInstallEvent)
+            {
+                SetEvent(hInstallEvent);
+                CloseHandle(hInstallEvent);
+            }
+            else
+            {
+                TRACE("CreateEventW('%ls') failed with error %lu\n", InstallEventName, GetLastError());
+            }
+        }
+        else
+        {
+            ERR("DevInstallW failed for '%ls' with error %lu\n", DeviceInstance, GetLastError());
+            /* Continue with next device -- do not abort the batch */
+        }
+
+        DevicesProcessed++;
     }
 
-    InstallEventName = (PWSTR)HeapAlloc(GetProcessHeap(), 0, Value);
-    if (!InstallEventName)
-    {
-        ERR("ClientSideInstallW: HeapAlloc failed for InstallEventName (%lu bytes)\n", Value);
-        goto cleanup;
-    }
-
-    if (!ReadFile(hPipe, InstallEventName, Value, &BytesRead, NULL) ||
-        BytesRead != Value)
-    {
-        ERR("ClientSideInstallW: failed reading InstallEventName (len=%lu, read=%lu, err=%u)\n",
-            Value, BytesRead, GetLastError());
-        goto cleanup;
-    }
-
-    /* Ensure the event name is NUL-terminated */
-    InstallEventName[(Value / sizeof(WCHAR)) - 1] = UNICODE_NULL;
-
-    /* I couldn't figure out what the following value means under Windows XP.
-       Therefore I used it in umpnpmgr to pass the ShowWizard variable. */
-    if (!ReadFile(hPipe, &ShowWizard, sizeof(ShowWizard), &BytesRead, NULL) ||
-        BytesRead != sizeof(ShowWizard))
-    {
-        ERR("ClientSideInstallW: failed reading ShowWizard (read=%lu, err=%u)\n",
-            BytesRead, GetLastError());
-        goto cleanup;
-    }
-
-    /* Next one is again size in bytes of the following string */
-    if (!ReadFile(hPipe, &Value, sizeof(Value), &BytesRead, NULL) ||
-        BytesRead != sizeof(Value) ||
-        Value < sizeof(WCHAR) ||
-        (Value % sizeof(WCHAR)) != 0 ||
-        Value > 4 * MAX_PATH * sizeof(WCHAR))
-    {
-        ERR("ClientSideInstallW: invalid DeviceInstance length (%lu, bytesRead=%lu, err=%u)\n",
-            Value, BytesRead, GetLastError());
-        goto cleanup;
-    }
-
-    DeviceInstance = (PWSTR)HeapAlloc(GetProcessHeap(), 0, Value);
-    if (!DeviceInstance)
-    {
-        ERR("ClientSideInstallW: HeapAlloc failed for DeviceInstance (%lu bytes)\n", Value);
-        goto cleanup;
-    }
-
-    if (!ReadFile(hPipe, DeviceInstance, Value, &BytesRead, NULL) ||
-        BytesRead != Value)
-    {
-        ERR("ClientSideInstallW: failed reading DeviceInstance (len=%lu, read=%lu, err=%u)\n",
-            Value, BytesRead, GetLastError());
-        goto cleanup;
-    }
-
-    /* Ensure the instance ID is NUL-terminated */
-    DeviceInstance[(Value / sizeof(WCHAR)) - 1] = UNICODE_NULL;
-
-    ReturnValue = DevInstallW(NULL, NULL, DeviceInstance, ShowWizard ? SW_SHOWNOACTIVATE : SW_HIDE);
-    if(!ReturnValue)
-    {
-        ERR("DevInstallW failed with error %lu\n", GetLastError());
-        goto cleanup;
-    }
-
-    hInstallEvent = CreateEventW(NULL, TRUE, FALSE, InstallEventName);
-    if(!hInstallEvent)
-    {
-        TRACE("CreateEventW('%ls') failed with error %lu\n", InstallEventName, GetLastError());
-        goto cleanup;
-    }
-
-    SetEvent(hInstallEvent);
-    CloseHandle(hInstallEvent);
+    /* If we processed at least one device, consider it a success */
+    if (DevicesProcessed > 0)
+        ReturnValue = TRUE;
 
 cleanup:
-    if(hPipe != INVALID_HANDLE_VALUE)
+    if (hPipe != INVALID_HANDLE_VALUE)
         CloseHandle(hPipe);
 
-    if(InstallEventName)
+    if (InstallEventName)
         HeapFree(GetProcessHeap(), 0, InstallEventName);
 
-    if(DeviceInstance)
+    if (DeviceInstance)
         HeapFree(GetProcessHeap(), 0, DeviceInstance);
 
     return ReturnValue;
