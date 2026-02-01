@@ -109,6 +109,11 @@
 #define USBHUB_RESET_PORT_POLL_MS    10
 #define USBHUB_MAX_REQUEST_ERRORS    3
 
+/* Adaptive port debounce parameters (USB 2.0 spec section 7.1.7.3 TATTDB) */
+#define USBHUB_DEBOUNCE_TIMEOUT   2000  /* Max total debounce time (ms) */
+#define USBHUB_DEBOUNCE_STEP        25  /* Polling interval (ms) */
+#define USBHUB_DEBOUNCE_STABLE     100  /* Required stable time (ms) */
+
 FORCEINLINE
 BOOLEAN
 USBH_PortStatusIsConnected(
@@ -422,6 +427,13 @@ NTSTATUS
 NTAPI
 USBH_Wait(
   IN ULONG Milliseconds);
+
+NTSTATUS
+NTAPI
+USBH_PortDebounce(
+  IN PUSBHUB_FDO_EXTENSION HubExtension,
+  IN USHORT Port,
+  OUT PUSB_PORT_STATUS_AND_CHANGE PortStatus);
 
 VOID
 NTAPI

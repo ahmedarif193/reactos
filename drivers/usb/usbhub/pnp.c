@@ -1432,14 +1432,22 @@ EnumStart:
             continue;
         }
 
-        USBH_Wait(100);
-
         /*
-         * Certain USB 2.0 controllers (especially the virtual ones we use for
-         * debugging) need a little extra settle time after the debounce delay
-         * before a reset succeeds reliably, so keep the second 100 ms wait.
+         * Adaptive debounce: poll port status until the connection line has
+         * been stable for USBHUB_DEBOUNCE_STABLE ms (USB 2.0 TATTDB), or
+         * give up after USBHUB_DEBOUNCE_TIMEOUT ms of bouncing.
          */
-        USBH_Wait(100);
+        NtStatus = USBH_PortDebounce(HubExtension, Port, &PortData->PortStatus);
+
+        if (!NT_SUCCESS(NtStatus))
+        {
+            DPRINT_ENUM("USBH_FdoQueryBusRelations: debounce failed on port %u (0x%08lx)\n",
+                        Port,
+                        NtStatus);
+            PortData->DeviceObject = NULL;
+            PortData->ConnectionStatus = NoDeviceConnected;
+            continue;
+        }
 
         ResetFailed = FALSE;
 
