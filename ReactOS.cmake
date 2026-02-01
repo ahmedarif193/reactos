@@ -1,6 +1,8 @@
 # ReactOS Build Configuration
 # This file contains all build metadata and configuration options
 
+# Export compile commands for clangd IDE support
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # WOW64 multilib: build a 32-bit SysWOW64 subset inside amd64 builds
 set(WOW64_MULTILIB OFF CACHE BOOL "Build a 32-bit SysWOW64 subset inside amd64 builds (no external i386 root required)")
