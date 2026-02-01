@@ -106,6 +106,11 @@ typedef struct
     UCHAR StopReadReport;
 
     //
+    // device has been removed (surprise removal or remove)
+    //
+    UCHAR DeviceRemoved;
+
+    //
     // keyboard attributes
     //
     KEYBOARD_ATTRIBUTES Attributes;

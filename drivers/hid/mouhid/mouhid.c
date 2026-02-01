@@ -319,7 +319,8 @@ MouHid_ReadCompletion(
     if (Irp->IoStatus.Status == STATUS_PRIVILEGE_NOT_HELD ||
         Irp->IoStatus.Status == STATUS_DEVICE_NOT_CONNECTED ||
         Irp->IoStatus.Status == STATUS_CANCELLED ||
-        DeviceExtension->StopReadReport)
+        DeviceExtension->StopReadReport ||
+        DeviceExtension->DeviceRemoved)
     {
         /* failed to read or should be stopped*/
         DPRINT1("[MOUHID] ReadCompletion terminating read Status %x\n", Irp->IoStatus.Status);
@@ -399,6 +400,18 @@ MouHid_InitiateRead(
 {
     PIO_STACK_LOCATION IoStack;
     NTSTATUS Status;
+
+    /* do not submit a new read if the device is being removed */
+    if (DeviceExtension->StopReadReport || DeviceExtension->DeviceRemoved)
+    {
+        /* report no longer active */
+        DeviceExtension->ReadReportActive = FALSE;
+        DeviceExtension->StopReadReport = FALSE;
+
+        /* signal completion event */
+        KeSetEvent(&DeviceExtension->ReadCompletionEvent, 0, 0);
+        return STATUS_DELETE_PENDING;
+    }
 
     /* re-use irp */
     IoReuseIrp(DeviceExtension->Irp, STATUS_SUCCESS);
@@ -535,11 +548,11 @@ MouHid_Close(
         /* request stopping of the report cycle */
         DeviceExtension->StopReadReport = TRUE;
 
-        /* wait until the reports have been read */
-        KeWaitForSingleObject(&DeviceExtension->ReadCompletionEvent, Executive, KernelMode, FALSE, NULL);
-
-        /* cancel irp */
+        /* cancel irp to trigger the completion routine */
         IoCancelIrp(DeviceExtension->Irp);
+
+        /* wait until the completion routine has signaled */
+        KeWaitForSingleObject(&DeviceExtension->ReadCompletionEvent, Executive, KernelMode, FALSE, NULL);
     }
 
     DPRINT("[MOUHID] IRP_MJ_CLOSE ReadReportActive %x\n", DeviceExtension->ReadReportActive);
@@ -1060,9 +1073,43 @@ MouHid_Pnp(
     switch (IoStack->MinorFunction)
     {
     case IRP_MN_STOP_DEVICE:
-    case IRP_MN_SURPRISE_REMOVAL:
+        /* stop the read cycle before freeing resources */
+        if (DeviceExtension->ReadReportActive)
+        {
+            DeviceExtension->StopReadReport = TRUE;
+            IoCancelIrp(DeviceExtension->Irp);
+            KeWaitForSingleObject(&DeviceExtension->ReadCompletionEvent, Executive, KernelMode, FALSE, NULL);
+        }
         /* free resources */
         MouHid_FreeResources(DeviceObject);
+
+        /* indicate success */
+        Irp->IoStatus.Status = STATUS_SUCCESS;
+
+        /* skip irp stack location */
+        IoSkipCurrentIrpStackLocation(Irp);
+
+        /* dispatch to lower device */
+        return IoCallDriver(DeviceExtension->NextDeviceObject, Irp);
+
+    case IRP_MN_SURPRISE_REMOVAL:
+        /* mark device as removed so ReadCompletion will not resubmit */
+        DeviceExtension->DeviceRemoved = TRUE;
+
+        /*
+         * Stop the read cycle but do NOT free resources here.
+         * Resources will be freed in IRP_MN_REMOVE_DEVICE which
+         * always follows SURPRISE_REMOVAL. Freeing here caused
+         * double-free pool corruption when REMOVE_DEVICE arrived.
+         */
+        if (DeviceExtension->ReadReportActive)
+        {
+            DeviceExtension->StopReadReport = TRUE;
+            IoCancelIrp(DeviceExtension->Irp);
+            KeWaitForSingleObject(&DeviceExtension->ReadCompletionEvent, Executive, KernelMode, FALSE, NULL);
+        }
+
+        /* fall through */
     case IRP_MN_CANCEL_REMOVE_DEVICE:
     case IRP_MN_QUERY_STOP_DEVICE:
     case IRP_MN_CANCEL_STOP_DEVICE:
@@ -1077,15 +1124,33 @@ MouHid_Pnp(
         return IoCallDriver(DeviceExtension->NextDeviceObject, Irp);
 
     case IRP_MN_REMOVE_DEVICE:
-        /* FIXME synchronization */
+        /* mark device as removed */
+        DeviceExtension->DeviceRemoved = TRUE;
 
-        /* request stop */
-        DeviceExtension->StopReadReport = TRUE;
+        /* stop the read cycle and wait for completion */
+        if (DeviceExtension->ReadReportActive)
+        {
+            /* request stop of read cycle */
+            DeviceExtension->StopReadReport = TRUE;
 
-        /* cancel irp */
-        IoCancelIrp(DeviceExtension->Irp);
+            /* cancel irp */
+            IoCancelIrp(DeviceExtension->Irp);
+        }
 
-        /* free resources */
+        /*
+         * Wait for the read completion routine to finish BEFORE
+         * freeing any resources. The completion routine accesses
+         * Report, PreparsedData, etc. from the device extension.
+         * If SURPRISE_REMOVAL already signaled the event, this
+         * returns immediately (NotificationEvent stays signaled).
+         * Skip if the device was never opened (no reads initiated).
+         */
+        if (DeviceExtension->FileObject)
+        {
+            KeWaitForSingleObject(&DeviceExtension->ReadCompletionEvent, Executive, KernelMode, FALSE, NULL);
+        }
+
+        /* now it is safe to free resources */
         MouHid_FreeResources(DeviceObject);
 
         /* indicate success */
@@ -1096,9 +1161,6 @@ MouHid_Pnp(
 
         /* dispatch to lower device */
         Status = IoCallDriver(DeviceExtension->NextDeviceObject, Irp);
-
-        /* wait for completion of stop event */
-        KeWaitForSingleObject(&DeviceExtension->ReadCompletionEvent, Executive, KernelMode, FALSE, NULL);
 
         /* free irp */
         IoFreeIrp(DeviceExtension->Irp);

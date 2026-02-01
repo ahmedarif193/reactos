@@ -115,6 +115,11 @@ typedef struct
     UCHAR StopReadReport;
 
     //
+    // device has been removed (surprise removal or remove)
+    //
+    UCHAR DeviceRemoved;
+
+    //
     // mouse absolute
     //
     UCHAR MouseAbsolute;

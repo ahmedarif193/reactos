@@ -440,6 +440,7 @@ static VOID NTAPI XHCI_RebalanceEndpoint(PVOID MiniPortExtension,
                                          PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
                                          PVOID EndpointHandle);
 static BOOLEAN XHCI_EnablePciBusMaster(PXHCI_EXTENSION Extension);
+static VOID XHCI_DisablePciIntx(PXHCI_EXTENSION Extension);
 static VOID NTAPI XHCI_FlushInterrupts(PVOID MiniPortExtension);
 static MPSTATUS NTAPI XHCI_RH_ChirpRootPort(PVOID MiniPortExtension,
                                             USHORT Port);
@@ -3139,6 +3140,23 @@ XHCI_PerformEndpointResetSequence(
 
     if (Extension->FatalError || Extension->StoppingOrRemoved)
         return;
+
+    /*
+     * Do not issue any commands if the slot has already been disabled or
+     * is being disabled. The xHC rejects commands for disabled slots with
+     * completion code 11 (SLOT_NOT_ENABLED), which generates event ring
+     * activity that keeps IMAN.IP asserted, potentially causing an
+     * interrupt storm on legacy INTx.
+     */
+    if (!Endpoint->Slot->InUse || Endpoint->Slot->DisablePending)
+    {
+        DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u slot disabled (InUse=%u DisablePending=%u), bailing out\n",
+                Endpoint->SlotId,
+                Endpoint->EndpointId,
+                Endpoint->Slot->InUse,
+                Endpoint->Slot->DisablePending);
+        return;
+    }
 
     /*
      * Do NOT clear ActiveTransfer here.  SetEndpointDataToggle already
@@ -8821,6 +8839,61 @@ XHCI_EnableMsix(
 }
 #endif /* !_M_ARM64 */
 
+/*
+ * XHCI_DisablePciIntx - Set the Interrupt Disable bit in PCI Command register
+ *
+ * Per PCI 3.0 spec section 6.8.1, when MSI or MSI-X is enabled, the device
+ * must not assert INTx. The OS must set bit 10 (Interrupt Disable) of the
+ * PCI Command register to prevent the device from generating legacy INTx
+ * interrupts on the PCI bus.
+ *
+ * This is critical because some emulators (e.g., QEMU xhci-pci) may assert
+ * BOTH MSI and INTx simultaneously. If the ISR is only registered on the
+ * MSI vector, the INTx goes to an unhandled vector causing an interrupt storm.
+ *
+ * PCI Command register bit 10 = Interrupt Disable:
+ *   0 = INTx assertion enabled (default)
+ *   1 = INTx assertion disabled
+ */
+static VOID
+XHCI_DisablePciIntx(
+    _Inout_ PXHCI_EXTENSION Extension)
+{
+    USHORT Command;
+
+    if (!Extension || !XhciRegPacket.UsbPortReadWriteConfigSpace)
+        return;
+
+    if (!XHCI_ReadPciConfig(Extension,
+                            PCI_COMMAND_OFFSET,
+                            &Command,
+                            sizeof(Command)))
+    {
+        DPRINT1("usbxhci: DisablePciIntx: failed to read PCI command register\n");
+        return;
+    }
+
+    if (Command & 0x0400)
+    {
+        DPRINT1("usbxhci: PCI INTx already disabled (cmd=0x%04x)\n", Command);
+        return;
+    }
+
+    Command |= 0x0400; /* Interrupt Disable (bit 10) */
+
+    if (XhciRegPacket.UsbPortReadWriteConfigSpace(Extension,
+                                                   FALSE,
+                                                   &Command,
+                                                   PCI_COMMAND_OFFSET,
+                                                   sizeof(Command)) != MP_STATUS_SUCCESS)
+    {
+        DPRINT1("usbxhci: DisablePciIntx: failed to write PCI command register\n");
+        return;
+    }
+
+    DPRINT1("usbxhci: disabled PCI INTx (cmd=0x%04x)\n", Command);
+}
+
 static
 VOID
 XHCI_ProgramInterrupterState(
@@ -12087,6 +12160,21 @@ XHCI_StartController(PVOID MiniPortExtension,
         return MP_STATUS_NOT_SUPPORTED;
     }
 
+    /*
+     * Disable legacy INTx interrupts now that MSI/MSI-X is confirmed active.
+     * Per PCI 3.0 spec section 6.8.1, the device must not assert INTx when
+     * MSI/MSI-X is enabled. Some emulators (notably QEMU xhci-pci) violate
+     * this by asserting BOTH MSI and INTx simultaneously, causing an interrupt
+     * storm on the unhandled legacy vector after device disconnect.
+     *
+     * USBPORT_ProgramMsixTable/USBPORT_ProgramMsiTable also set this bit,
+     * but we set it again here as defense-in-depth in case:
+     * 1. The PCI bus driver restored default Command register state
+     * 2. USBPORT's MSI programming took a different code path
+     * 3. The bit was cleared by a controller reset during startup
+     */
+    XHCI_DisablePciIntx(Extension);
+
     {
         ULONG Messages = UsbPortResources->InterruptMessageCount ?
                          UsbPortResources->InterruptMessageCount : 1;
@@ -12691,10 +12779,48 @@ XHCI_InterruptService(PVOID MiniPortExtension)
     PXHCI_INTERRUPTER_REGISTER_SET Interrupter;
     ULONG Iman;
 
-    if (!Extension || !Extension->OperationalRegisters || Extension->FatalError || Extension->StoppingOrRemoved)
+    if (!Extension || !Extension->OperationalRegisters)
         return FALSE;
 
-    XHCI_DPRINT_SHARED("usbxhci: ISR (IRQL=%lu)\n", (ULONG)KeGetCurrentIrql());
+    /*
+     * When FatalError or StoppingOrRemoved, we must still acknowledge the
+     * hardware interrupt sources to prevent an interrupt storm. The controller
+     * may be asserting IMAN.IP and/or USBSTS bits that keep the interrupt line
+     * active. Simply returning FALSE leaves these bits set, and for level-
+     * triggered interrupts (or emulators like QEMU that assert INTx alongside
+     * MSI), the interrupt will fire again immediately.
+     *
+     * Clear IMAN.IP and USBSTS write-to-clear bits, then return TRUE to
+     * claim the interrupt without queuing a DPC.
+     */
+    if (Extension->FatalError || Extension->StoppingOrRemoved)
+    {
+        ULONG StsAck;
+
+        /* Clear IMAN.IP on interrupter 0 */
+        if (Extension->RuntimeRegisters)
+        {
+            PXHCI_INTERRUPTER_REGISTER_SET Intr = &Extension->RuntimeRegisters->Interrupter[0];
+            ULONG ImanVal = XHCI_READ_REGISTER_ULONG(&Intr->Iman);
+            if (ImanVal & XHCI_IMAN_IP)
+            {
+                /* Write IP=1 (RW1C) to clear, keep IE as-is */
+                XHCI_WRITE_REGISTER_ULONG(&Intr->Iman,
+                                          XHCI_IMAN_IP | (ImanVal & XHCI_IMAN_IE));
+            }
+        }
+
+        /* Clear all write-to-clear status bits */
+        StsAck = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
+        StsAck &= (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD |
+                    XHCI_USBSTS_HSE | XHCI_USBSTS_HCE);
+        if (StsAck)
+        {
+            XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts, StsAck);
+        }
+
+        return TRUE; /* Claim the interrupt, but do not queue DPC */
+    }
 
     Status = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
 
@@ -12738,7 +12864,6 @@ XHCI_InterruptService(PVOID MiniPortExtension)
                  * Trigger the DPC to process any pending events from the Event Ring.
                  * Mark PCD in PendingUsbSts to ensure the DPC checks ports.
                  */
-                DPRINT1("usbxhci: ISR cleared IMAN.IP without UsbSts, Iman=0x%x\n", Iman);
                 InterlockedOr((volatile LONG *)&Extension->PendingUsbSts, XHCI_USBSTS_PCD);
                 return TRUE; /* Claim the interrupt and queue DPC */
             }
@@ -12746,10 +12871,7 @@ XHCI_InterruptService(PVOID MiniPortExtension)
     }
 
     if (!AckMask)
-    {
-        XHCI_DPRINT_SHARED("usbxhci: ISR no-ack (UsbSts=%08lx)\n", Status);
         return FALSE;
-    }
 
     /* If HCE/HSE are set, latch them into PendingUsbSts even when EINT is
      * clear so the DPC can decide whether to ignore or handle them. */
@@ -13073,6 +13195,25 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
          * will handle this via the timeout mechanism that sets ENDPOINT_FLAG_NUKE
          * to force-complete remaining transfers.
          */
+        return;
+    }
+
+    /*
+     * If the slot has already been disabled (or is in the process of being
+     * disabled), we must not issue any xHCI commands (Stop Endpoint, Reset
+     * Endpoint, Set TR Dequeue Pointer) to the hardware. The xHC will
+     * reject commands for disabled slots with completion code 11
+     * (SLOT_NOT_ENABLED), and the resulting command completions keep the
+     * event ring active, which in turn keeps IMAN.IP asserted and can
+     * cause an interrupt storm on the legacy INTx vector.
+     */
+    if (!Endpoint->Slot->InUse || Endpoint->Slot->DisablePending)
+    {
+        DPRINT1("usbxhci: AbortTransfer: slot %u ep %u slot disabled (InUse=%u DisablePending=%u), skipping\n",
+                Endpoint->SlotId,
+                Endpoint->EndpointId,
+                Endpoint->Slot->InUse,
+                Endpoint->Slot->DisablePending);
         return;
     }
 
@@ -13646,15 +13787,32 @@ XHCI_DisableInterrupts(PVOID MiniPortExtension)
 {
     PXHCI_EXTENSION Extension = MiniPortExtension;
     ULONG Command;
+    ULONG StsAck;
     PXHCI_INTERRUPTER_REGISTER_SET Interrupter;
 
     if (!Extension || !Extension->OperationalRegisters)
         return;
 
+    /* Clear INTE in USBCMD to globally disable xHCI interrupts */
     Command = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
     Command &= ~XHCI_USBCMD_INTE;
     XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd, Command);
     Extension->InterruptsEnabled = FALSE;
+
+    /*
+     * Clear all pending USBSTS write-to-clear bits. This deasserts the
+     * interrupt at the controller level. Without this, the controller may
+     * keep its interrupt output asserted, and emulators like QEMU that
+     * assert INTx alongside MSI will cause an interrupt storm on the
+     * unhandled legacy vector.
+     */
+    StsAck = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
+    StsAck &= (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD |
+                XHCI_USBSTS_HSE | XHCI_USBSTS_HCE);
+    if (StsAck)
+    {
+        XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts, StsAck);
+    }
 
     if (Extension->RuntimeRegisters)
     {
@@ -13870,9 +14028,14 @@ XHCI_ResumeController(
 
     /*
      * On resume from D3, the xHCI controller loses all register state.
-     * Reprogram DCBAA, CRCR, CONFIG, and interrupter state before starting
-     * the controller so device contexts and the command ring are accessible.
+     * The PCI bus driver may also have restored default PCI config state,
+     * clearing the INTx Disable bit. Re-establish bus mastering and INTx
+     * disable before reprogramming controller registers.
      */
+    XHCI_EnablePciBusMaster(Extension);
+    if (Extension->MsixEnabled || Extension->MsiEnabled)
+        XHCI_DisablePciIntx(Extension);
+
     XHCI_ReprogramControllerState(Extension);
     XHCI_ProgramInterrupterState(Extension);
 

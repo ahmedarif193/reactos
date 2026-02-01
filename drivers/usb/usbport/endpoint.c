@@ -456,6 +456,56 @@ USBPORT_SetEndpointState(IN PUSBPORT_ENDPOINT Endpoint,
             return;
         }
 
+        /*
+         * When ABORTING is set and we are transitioning to REMOVE,
+         * use the same fast path as NUKE: set both StateLast and
+         * StateNext atomically under the StateChangeSpinLock and
+         * signal the worker.
+         *
+         * The normal path (below) releases StateChangeSpinLock, calls
+         * the miniport SetEndpointState, then sets StateNext without
+         * holding any endpoint lock. During disconnect cleanup, the
+         * endpoint worker DPC may be concurrently forcing state
+         * transitions (NUKE/ABORTING path in USBPORT_EndpointWorker).
+         * This creates a race window where:
+         *
+         * 1. The endpoint worker sees StateLast != StateNext and
+         *    forces StateLast = StateNext (e.g., PAUSED)
+         * 2. DmaEndpointWorker runs and calls SetEndpointState(ACTIVE)
+         *    which goes through the non-NUKE path, setting
+         *    StateNext = ACTIVE without holding StateChangeSpinLock
+         * 3. ClosePipe calls SetEndpointState(REMOVE) which also
+         *    goes through the non-NUKE path
+         * 4. The miniport SetEndpointState(REMOVE) calls
+         *    XHCI_DropSlotEndpoint on an already-disabled slot,
+         *    getting an error
+         * 5. The endpoint state machine becomes corrupted, leading
+         *    to a spinlock being released that was never acquired
+         *    (BSOD 0x10 SPIN_LOCK_NOT_OWNED)
+         *
+         * By forcing the fast path here, we atomically transition
+         * to REMOVE under the lock, avoiding the race entirely.
+         * The miniport will handle endpoint cleanup when the
+         * worker processes the REMOVE state.
+         */
+        if ((Endpoint->Flags & ENDPOINT_FLAG_ABORTING) &&
+            State == USBPORT_ENDPOINT_REMOVE)
+        {
+            DPRINT1("USBPORT_SetEndpointState: ABORTING+REMOVE fast path Endpoint=%p\n",
+                    Endpoint);
+
+            Endpoint->StateLast = State;
+            Endpoint->StateNext = State;
+
+            KeReleaseSpinLock(&Endpoint->StateChangeSpinLock,
+                              Endpoint->EndpointStateOldIrql);
+
+            USBPORT_InvalidateEndpointHandler(FdoDevice,
+                                              Endpoint,
+                                              INVALIDATE_ENDPOINT_WORKER_THREAD);
+            return;
+        }
+
         KeReleaseSpinLock(&Endpoint->StateChangeSpinLock,
                           Endpoint->EndpointStateOldIrql);
 
@@ -1994,7 +2044,34 @@ USBPORT_DmaEndpointWorker(IN PUSBPORT_ENDPOINT Endpoint)
     }
     else
     {
-        USBPORT_SetEndpointState(Endpoint, EndpointState);
+        /*
+         * When NUKE or ABORTING is set and DmaEndpointPaused/Active wants
+         * to transition the endpoint back to ACTIVE, suppress the transition.
+         * The endpoint is being torn down by ClosePipe which will set REMOVE.
+         *
+         * Calling SetEndpointState(ACTIVE) here races with ClosePipe on
+         * another CPU: SetEndpointState releases StateChangeSpinLock then
+         * writes StateNext without holding any lock. ClosePipe's wait loop
+         * can observe the intermediate state (StateLast==StateNext==PAUSED),
+         * break out, and set REMOVE. Then our deferred StateNext=ACTIVE
+         * write overwrites the REMOVE, corrupting the state machine.
+         *
+         * By staying in the current state (PAUSED), we let ClosePipe cleanly
+         * transition to REMOVE without interference.
+         */
+        if ((Endpoint->Flags & (ENDPOINT_FLAG_NUKE | ENDPOINT_FLAG_ABORTING)) &&
+            EndpointState == USBPORT_ENDPOINT_ACTIVE)
+        {
+            DPRINT1("USBPORT_DmaEndpointWorker: suppressing ACTIVE transition (NUKE/ABORTING), staying in state %lu\n",
+                    PrevState);
+            /* Stay in current state; signal worker so ClosePipe's REMOVE
+             * transition can proceed without waiting for SOF. */
+            IsPaused = TRUE;
+        }
+        else
+        {
+            USBPORT_SetEndpointState(Endpoint, EndpointState);
+        }
     }
 
     KeReleaseSpinLock(&Endpoint->EndpointSpinLock, Endpoint->EndpointOldIrql);
