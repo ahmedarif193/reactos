@@ -2132,7 +2132,6 @@ MiReloadBootLoadedDrivers(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         LdrEntry->DllBase = NewImageAddress;
 
         /* Update the thunks */
-        DPRINT("[Mm0]: Updating thunks to: %wZ\n", &LdrEntry->BaseDllName);
         MiUpdateThunks(LoaderBlock,
                        DllBase,
                        NewImageAddress,

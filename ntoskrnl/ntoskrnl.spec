@@ -309,7 +309,6 @@
 @ stdcall FsRtlUninitializeMcb(ptr)
 @ stdcall FsRtlUninitializeOplock(ptr)
 @ extern HalDispatchTable
-@ fastcall HalExamineMBR(ptr long long ptr)
 @ extern HalPrivateDispatchTable
 @ stdcall HeadlessDispatch(long ptr long ptr ptr)
 @ stdcall InbvAcquireDisplayOwnership()
