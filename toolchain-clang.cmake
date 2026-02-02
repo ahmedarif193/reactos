@@ -246,98 +246,64 @@ unset(_REACTOS_CREATE_STATIC_LIBRARY)
 set(CMAKE_C_STANDARD_LIBRARIES "" CACHE STRING "Standard C Libraries")
 set(CMAKE_CXX_STANDARD_LIBRARIES "" CACHE STRING "Standard C++ Libraries")
 
-set(_clang_prefer_gnu_ld FALSE)
-if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
-    # ARM64: Use GNU ld to avoid LLD "misaligned ldr/str offset" errors
-    set(_clang_prefer_gnu_ld TRUE)
-endif()
+# Linker selection for Clang cross-compilation
+# - Use LLD (from llvm-mingw TOOLCHAIN_PATH) for i386 and amd64 for consistency across platforms
+# - ARM64 may use GNU ld if needed to avoid "misaligned ldr/str offset" errors
 set(_CLANG_MINGW_LINKER_NAME "${_CLANG_MINGW_PREFIX}ld${_CLANG_MINGW_SUFFIX}")
-if(_CLANG_USE_HOST_TOOLS AND NOT _clang_prefer_gnu_ld)
-    # Only use LLD when not preferring GNU ld
-    set(_CLANG_MINGW_LINKER_NAME "ld.lld")
-endif()
-set(LD_EXECUTABLE "")
-if(_CLANG_USE_HOST_TOOLS AND NOT _clang_prefer_gnu_ld)
-    # Use LLD only when NOT preferring GNU ld
-    if(EXISTS "/opt/homebrew/bin/ld.lld")
-        set(LD_EXECUTABLE "/opt/homebrew/bin/ld.lld")
-    elseif(EXISTS "/opt/homebrew/opt/llvm/bin/ld.lld")
-        set(LD_EXECUTABLE "/opt/homebrew/opt/llvm/bin/ld.lld")
-    endif()
-endif()
-if(DEFINED CMAKE_LINKER AND NOT "${CMAKE_LINKER}" STREQUAL "")
-    # CMake seeds CMAKE_LINKER with the host default (usually ld.lld) before
-    # the toolchain file runs.  Only reuse it when the user already pointed it
-    # at the MinGW linker we are about to look for; otherwise fall back to the
-    # auto-detection below so we do not silently keep using the host linker and
-    # lose support for linker scripts ("-T").
-    get_filename_component(_clang_existing_linker_name "${CMAKE_LINKER}" NAME)
-    set(_clang_keep_cached_linker TRUE)
+
+# ARM64: Special handling - may use GNU ld if ROS_GNU_MINGW_TOOLCHAIN_PATH is set
+# This works around LLD issues with misaligned ARM64 relocations
+set(_clang_use_gnu_ld_for_arm64 FALSE)
+if(ARCH STREQUAL "arm64")
     if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-        string(FIND "${CMAKE_LINKER}" "${ROS_GNU_MINGW_TOOLCHAIN_PATH}/" _clang_ros_linker_pos)
-        if(_clang_prefer_gnu_ld)
-            if(NOT _clang_ros_linker_pos EQUAL 0)
-                set(_clang_keep_cached_linker FALSE)
-            endif()
-        else()
-            if(_clang_ros_linker_pos EQUAL 0)
-                set(_clang_keep_cached_linker FALSE)
-            endif()
-        endif()
-        unset(_clang_ros_linker_pos)
+        set(_clang_use_gnu_ld_for_arm64 TRUE)
+    elseif(DEFINED ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH} AND NOT "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
+        set(_clang_use_gnu_ld_for_arm64 TRUE)
     endif()
-    if(_clang_existing_linker_name STREQUAL "${_CLANG_MINGW_LINKER_NAME}" AND _clang_keep_cached_linker)
-        set(LD_EXECUTABLE "${CMAKE_LINKER}")
-    endif()
-    unset(_clang_keep_cached_linker)
 endif()
-if(_clang_prefer_gnu_ld)
+
+set(LD_EXECUTABLE "")
+
+# ARM64 with GNU ld: Check ROS_GNU_MINGW_TOOLCHAIN_PATH first
+if(_clang_use_gnu_ld_for_arm64)
     if(NOT LD_EXECUTABLE AND DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-        set(_clang_ros_gnu_linker "${ROS_GNU_MINGW_TOOLCHAIN_PATH}/${_CLANG_MINGW_LINKER_NAME}")
-        if(EXISTS "${_clang_ros_gnu_linker}")
-            set(LD_EXECUTABLE "${_clang_ros_gnu_linker}")
+        set(_clang_gnu_linker "${ROS_GNU_MINGW_TOOLCHAIN_PATH}/${_CLANG_MINGW_LINKER_NAME}")
+        if(EXISTS "${_clang_gnu_linker}")
+            set(LD_EXECUTABLE "${_clang_gnu_linker}")
         endif()
-        unset(_clang_ros_gnu_linker)
+        unset(_clang_gnu_linker)
     elseif(NOT LD_EXECUTABLE AND DEFINED ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH} AND NOT "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-        set(_clang_ros_gnu_linker "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}/${_CLANG_MINGW_LINKER_NAME}")
-        if(EXISTS "${_clang_ros_gnu_linker}")
-            set(LD_EXECUTABLE "${_clang_ros_gnu_linker}")
+        set(_clang_gnu_linker "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}/${_CLANG_MINGW_LINKER_NAME}")
+        if(EXISTS "${_clang_gnu_linker}")
+            set(LD_EXECUTABLE "${_clang_gnu_linker}")
         endif()
-        unset(_clang_ros_gnu_linker)
-    endif()
-    # macOS: Check common MinGW toolchain locations for ARM64
-    if(NOT LD_EXECUTABLE AND ARCH STREQUAL "arm64")
-        set(_macos_mingw_paths
-            "$ENV{HOME}/mingw-toolchains/aarch64-w64-mingw32/bin"
-            "/opt/homebrew/bin"
-            "/usr/local/bin")
-        foreach(_path ${_macos_mingw_paths})
-            if(EXISTS "${_path}/${_CLANG_MINGW_LINKER_NAME}")
-                set(LD_EXECUTABLE "${_path}/${_CLANG_MINGW_LINKER_NAME}")
-                break()
-            endif()
-        endforeach()
-        unset(_macos_mingw_paths)
+        unset(_clang_gnu_linker)
     endif()
 endif()
+
+# Primary linker location: Use TOOLCHAIN_PATH (contains llvm-mingw with LLD)
+# This path is unified across Linux and Darwin - no hardcoded platform-specific paths
 if(NOT LD_EXECUTABLE AND DEFINED TOOLCHAIN_PATH AND NOT "${TOOLCHAIN_PATH}" STREQUAL "")
-    set(_clang_mingw_toolchain_linker "${TOOLCHAIN_PATH}/${_CLANG_MINGW_LINKER_NAME}")
-    if(EXISTS "${_clang_mingw_toolchain_linker}")
-        set(LD_EXECUTABLE "${_clang_mingw_toolchain_linker}")
+    set(_clang_toolchain_linker "${TOOLCHAIN_PATH}/${_CLANG_MINGW_LINKER_NAME}")
+    if(EXISTS "${_clang_toolchain_linker}")
+        set(LD_EXECUTABLE "${_clang_toolchain_linker}")
     endif()
-    unset(_clang_mingw_toolchain_linker)
+    unset(_clang_toolchain_linker)
 endif()
+
+# Fallback: Search in PATH
 if(NOT LD_EXECUTABLE)
     find_program(LD_EXECUTABLE
         NAMES ${_CLANG_MINGW_LINKER_NAME}
         ${_CLANG_MINGW_TOOL_HINT_ARGS})
     if(NOT LD_EXECUTABLE)
-        message(FATAL_ERROR "Unable to find ${_CLANG_MINGW_LINKER_NAME}")
+        message(FATAL_ERROR "Unable to find ${_CLANG_MINGW_LINKER_NAME} in TOOLCHAIN_PATH (${TOOLCHAIN_PATH}) or system PATH")
     endif()
 endif()
+
+unset(_clang_use_gnu_ld_for_arm64)
 message(STATUS "Using linker ${LD_EXECUTABLE}")
 set(CMAKE_LINKER "${LD_EXECUTABLE}" CACHE FILEPATH "Linker executable" FORCE)
-unset(_clang_prefer_gnu_ld)
 execute_process(COMMAND ${CMAKE_LINKER} --version
     OUTPUT_VARIABLE _MINGW_LD_VERSION
     ERROR_QUIET
@@ -427,8 +393,6 @@ if(ARCH STREQUAL "arm64")
         set(CMAKE_DLLTOOL ${_CLANG_MINGW_DLLTOOL} CACHE FILEPATH "MinGW dlltool" FORCE)
         message(WARNING "ARM64: ROS_GNU_MINGW_TOOLCHAIN_PATH not set, using ${_CLANG_MINGW_DLLTOOL}")
     endif()
-elseif(APPLE AND EXISTS "/opt/homebrew/bin/${_CLANG_MINGW_PREFIX}dlltool")
-    set(CMAKE_DLLTOOL "/opt/homebrew/bin/${_CLANG_MINGW_PREFIX}dlltool" CACHE FILEPATH "MinGW dlltool" FORCE)
 else()
     _clang_mingw_require_tool(_CLANG_MINGW_DLLTOOL "dlltool")
     set(CMAKE_DLLTOOL ${_CLANG_MINGW_DLLTOOL} CACHE FILEPATH "MinGW dlltool" FORCE)

@@ -121,16 +121,19 @@ if(NOT TOOLCHAIN_PREFIX)
     endif()
 endif()
 
-if(BUILD_ENVIRONMENT STREQUAL "Clang" AND _REACTOS_HOST_SYSTEM_NAME STREQUAL "Linux")
+# ROS_GNU_MINGW_TOOLCHAIN_PATH: Optional path to GNU MinGW toolchain
+# Only used for ARM64 builds that need GNU ld instead of LLD
+# For i386/amd64, LLD from TOOLCHAIN_PATH is used for consistency across platforms
+if(ARCH STREQUAL "arm64")
     if(NOT DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH OR ROS_GNU_MINGW_TOOLCHAIN_PATH STREQUAL "")
         if(DEFINED ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH} AND NOT "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
             set(ROS_GNU_MINGW_TOOLCHAIN_PATH "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}"
-                CACHE PATH "Path to GNU MinGW toolchain (bin)")
+                CACHE PATH "Path to GNU MinGW toolchain (bin) for ARM64")
         elseif(DEFINED ENV{HOME} AND NOT "$ENV{HOME}" STREQUAL "")
             set(_ros_gnu_toolchain_bin "$ENV{HOME}/mingw-toolchains/${TOOLCHAIN_PREFIX}/bin")
             if(EXISTS "${_ros_gnu_toolchain_bin}")
                 set(ROS_GNU_MINGW_TOOLCHAIN_PATH "${_ros_gnu_toolchain_bin}"
-                    CACHE PATH "Path to GNU MinGW toolchain (bin)")
+                    CACHE PATH "Path to GNU MinGW toolchain (bin) for ARM64")
             endif()
             unset(_ros_gnu_toolchain_bin)
         endif()

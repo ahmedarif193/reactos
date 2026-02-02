@@ -625,7 +625,9 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT CMAKE_HOST_WIN32)
         if(DEFINED ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH} AND NOT "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
             list(APPEND _delay_dlltool_hints "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}")
         endif()
-        list(APPEND _delay_dlltool_hints /usr/bin /usr/local/bin)
+        if(DEFINED TOOLCHAIN_PATH AND NOT TOOLCHAIN_PATH STREQUAL "")
+            list(APPEND _delay_dlltool_hints ${TOOLCHAIN_PATH})
+        endif()
         if(NOT _delay_dlltool_candidate)
             find_program(_delay_dlltool_candidate
                 NAMES ${_delay_dlltool_name}
@@ -906,7 +908,9 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND (ARCH STREQUAL "i386" OR ARCH STREQU
         if(DEFINED ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH} AND NOT "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
             list(APPEND _clang_binutils_as_hints "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}")
         endif()
-        list(APPEND _clang_binutils_as_hints /usr/bin /usr/local/bin)
+        if(DEFINED TOOLCHAIN_PATH AND NOT TOOLCHAIN_PATH STREQUAL "")
+            list(APPEND _clang_binutils_as_hints ${TOOLCHAIN_PATH})
+        endif()
         if(NOT _clang_binutils_as)
             find_program(_clang_binutils_as
                 NAMES ${_clang_binutils_as_name}
