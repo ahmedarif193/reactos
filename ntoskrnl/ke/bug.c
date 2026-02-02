@@ -51,9 +51,33 @@ KiPcToFileHeader(IN PVOID Pc,
     PLDR_DATA_TABLE_ENTRY Entry;
     PLIST_ENTRY ListHead, NextEntry;
 
-    /* Check which list we should use */
-    ListHead = (KeLoaderBlock) ? &KeLoaderBlock->LoadOrderListHead :
-                                 &PsLoadedModuleList;
+    /*
+     * Prefer PsLoadedModuleList which contains ALL loaded modules (both
+     * boot drivers copied by MiInitializeLoadedModuleList and system-start
+     * drivers added by MmLoadSystemImage). Only fall back to the loader
+     * block list during very early boot before PsLoadedModuleList has been
+     * populated.
+     *
+     * Without this, system-start drivers (loaded after boot via
+     * MmLoadSystemImage) are invisible to RtlPcToFileHeader while
+     * KeLoaderBlock is still set, causing RtlLookupFunctionEntry to fail
+     * for those drivers. This breaks AMD64 exception unwinding (no
+     * RUNTIME_FUNCTION data found), leading to corrupted frame pointers
+     * and recursive page faults during exception dispatch.
+     */
+    if (PsLoadedModuleList.Flink != NULL &&
+        PsLoadedModuleList.Flink != &PsLoadedModuleList)
+    {
+        ListHead = &PsLoadedModuleList;
+    }
+    else if (KeLoaderBlock)
+    {
+        ListHead = &KeLoaderBlock->LoadOrderListHead;
+    }
+    else
+    {
+        ListHead = &PsLoadedModuleList;
+    }
 
     /* Assume no */
     *InKernel = FALSE;

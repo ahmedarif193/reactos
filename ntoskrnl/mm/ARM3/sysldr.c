@@ -228,7 +228,6 @@ MiLoadImageSection(_Inout_ PSECTION *SectionPtr,
     *ImageBase = DriverBase;
     DPRINT1("Loading: %wZ at %p with %lx pages\n", FileName, DriverBase, PteCount);
 
-
     /* Lock the PFN database */
     OldIrql = MiAcquirePfnLock();
 

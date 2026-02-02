@@ -925,6 +925,10 @@ Return Value:
 
     Fcb = CallbackData->FileObject->FsContext;
 
+    if (Fcb == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     //
     //  Take main exclusive.
     //

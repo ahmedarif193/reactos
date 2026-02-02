@@ -47,6 +47,22 @@ SehGetAbnormalFlagPointer(VOID)
     return &__seh_abnormal_termination_flag;
 }
 #else
+#if defined(_NTSYSTEM_) || defined(_LIBCNT_)
+/*
+ * Kernel mode with GCC/Clang: emu-TLS (__emutls_get_address) is not available
+ * because TlsGetValue/TlsSetValue don't exist in the NT kernel.
+ * Use a simple static variable instead. This is safe because:
+ * - PSEH2 on amd64 passes the abnormal termination flag via RCX, so the
+ *   _abnormal_termination() macro never reads this global.
+ * - __C_specific_handler only uses it as a scratch pad with save/restore.
+ */
+static LONG __seh_abnormal_termination_flag_fallback;
+static __inline LONG *
+SehGetAbnormalFlagPointer(VOID)
+{
+    return &__seh_abnormal_termination_flag_fallback;
+}
+#else
 typedef struct __emutls_control
 {
     uintptr_t size;
@@ -74,7 +90,8 @@ SehGetAbnormalFlagPointer(VOID)
 {
     return (LONG *)__emutls_get_address(&__seh_abnormal_termination_flag_control);
 }
-#endif
+#endif /* _NTSYSTEM_ || _LIBCNT_ */
+#endif /* _MSC_VER */
 
 LONG *
 __cdecl

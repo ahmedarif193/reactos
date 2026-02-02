@@ -10,6 +10,46 @@
 
 extern LONG *__seh_get_abnormal_termination_flag_pointer(VOID);
 
+/* Minimal UNWIND_INFO header to read FrameRegister/FrameOffset */
+typedef struct _CSH_UNWIND_INFO
+{
+    unsigned char VersionAndFlags;
+    unsigned char SizeOfProlog;
+    unsigned char CountOfCodes;
+    unsigned char FrameRegisterAndOffset;
+} CSH_UNWIND_INFO;
+
+/*
+ * Compute the actual frame pointer for PSEH2 funclets.
+ *
+ * The EstablisherFrame returned by RtlVirtualUnwind is:
+ *   FramePointer - FrameOffset * 16    (for functions with UWOP_SET_FPREG)
+ *   RSP                                (for functions without a frame register)
+ *
+ * PSEH2 funclets access locals via RBP, which the trampoline sets to the
+ * second argument (EstablisherFrame). GCC generates RBP-relative addressing
+ * based on the function's actual frame pointer value during execution, which
+ * is EstablisherFrame + FrameOffset * 16. So we must add FrameOffset back.
+ */
+static __inline PVOID
+CshGetFramePointerForFunclet(
+    _In_ PVOID EstablisherFrame,
+    _In_ struct _DISPATCHER_CONTEXT *DispatcherContext)
+{
+    ULONG64 ImageBase = DispatcherContext->ImageBase;
+    PRUNTIME_FUNCTION FunctionEntry = DispatcherContext->FunctionEntry;
+    CSH_UNWIND_INFO *UnwindInfo = (CSH_UNWIND_INFO*)(ImageBase + FunctionEntry->UnwindData);
+    unsigned char FrameRegister = UnwindInfo->FrameRegisterAndOffset & 0x0F;
+    unsigned char FrameOffset = (UnwindInfo->FrameRegisterAndOffset >> 4) & 0x0F;
+
+    if (FrameRegister != 0)
+    {
+        return (PVOID)((ULONG64)EstablisherFrame + (ULONG64)FrameOffset * 16);
+    }
+
+    return EstablisherFrame;
+}
+
 
 _CRTIMP
 EXCEPTION_DISPOSITION
@@ -29,10 +69,15 @@ __C_specific_handler(
     PTERMINATION_HANDLER TerminationHandler;
     PEXCEPTION_FILTER ExceptionFilter;
     LONG FilterResult;
+    PVOID FramePointerForFunclet;
 
     /* Set up the EXCEPTION_POINTERS */
     ExceptionPointers.ExceptionRecord = ExceptionRecord;
     ExceptionPointers.ContextRecord = ContextRecord;
+
+    /* Compute the actual frame pointer for PSEH2 funclets.
+       EstablisherFrame = RBP - FrameOffset*16, but funclets need RBP itself. */
+    FramePointerForFunclet = CshGetFramePointerForFunclet(EstablisherFrame, DispatcherContext);
 
     /* Get per-thread abnormal termination flag */
     AbnormalFlagPtr = __seh_get_abnormal_termination_flag_pointer();
@@ -86,7 +131,7 @@ __C_specific_handler(
 
                 PreviousAbnormalState = *AbnormalFlagPtr;
                 *AbnormalFlagPtr = TRUE;
-                TerminationHandler(TRUE, EstablisherFrame);
+                TerminationHandler(TRUE, FramePointerForFunclet);
                 *AbnormalFlagPtr = PreviousAbnormalState;
             }
             else if (ScopeTable->ScopeRecord[i].JumpTarget == TargetIpOffset)
@@ -117,7 +162,7 @@ __C_specific_handler(
                 ExceptionFilter = (PEXCEPTION_FILTER)(ImageBase + Handler);
                 PreviousAbnormalState = *AbnormalFlagPtr;
                 *AbnormalFlagPtr = FALSE;
-                FilterResult = ExceptionFilter(&ExceptionPointers, EstablisherFrame);
+                FilterResult = ExceptionFilter(&ExceptionPointers, FramePointerForFunclet);
                 *AbnormalFlagPtr = PreviousAbnormalState;
             }
 

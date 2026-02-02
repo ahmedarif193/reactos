@@ -316,6 +316,7 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     if (!NT_SUCCESS(Status))
     {
         /* We failed; dereference the process and exit */
+        DbgPrint("PspCreateThread: ObCreateObject failed: 0x%lx\n", Status);
         ObDereferenceObject(Process);
         return Status;
     }
@@ -340,6 +341,7 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     if (!Thread->Cid.UniqueThread)
     {
         /* We couldn't create the CID, dereference the thread and fail */
+        DbgPrint("PspCreateThread: ExCreateHandle(CID) failed\n");
         ObDereferenceObject(Thread);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -373,6 +375,7 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
         if (!NT_SUCCESS(Status))
         {
             /* Failed to create the TEB. Release rundown and dereference */
+            DbgPrint("PspCreateThread: MmCreateTeb failed: 0x%lx\n", Status);
             ExReleaseRundownProtection(&Process->RundownProtect);
             ObDereferenceObject(Thread);
             return Status;
@@ -424,6 +427,7 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     if (!NT_SUCCESS(Status))
     {
         /* Delete the TEB if we had done */
+        DbgPrint("PspCreateThread: KeInitThread failed: 0x%lx\n", Status);
         if (TebBase) MmDeleteTeb(Process, TebBase);
 
         /* Release rundown and dereference */
