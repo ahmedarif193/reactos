@@ -110,8 +110,11 @@ if(ARCH STREQUAL "i386")
     endif()
 
 elseif(ARCH STREQUAL "amd64")
+    # Multiboot v1 is 32-bit only and not needed for AMD64 boots
+    # Excluding it avoids R_386_32 relocation issues with LLD
+    # Provide cmdline symbol via lightweight stub instead
     list(APPEND PCATLDR_BASE_ASM_SOURCE
-        arch/i386/multiboot.S)
+        arch/amd64/cmdline_stub.S)
 
     list(APPEND PCATLDR_COMMON_ASM_SOURCE
         arch/amd64/entry.S

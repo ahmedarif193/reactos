@@ -29,13 +29,10 @@ RealEntryPoint:
     //mov word ptr [HEX(b8000)], HEX(0e00) + '1'
 
     /* Setup long mode stack */
-    mov rsp, qword ptr [stack64]
+    mov rsp, qword ptr [rip + stack64]
 
     /* Continue execution */
-    jmp qword ptr [ContinueAddress]
-
-ContinueAddress:
-    .quad FrldrStartup
+    jmp FrldrStartup
 
 FrldrStartup:
 
@@ -53,25 +50,25 @@ FrldrStartup:
 
     /* Store BootDrive and BootPartition */
     mov al, byte ptr [BSS_BootDrive]
-    mov byte ptr [FrldrBootDrive], al
+    mov byte ptr [rip + FrldrBootDrive], al
     xor eax, eax
     mov al, byte ptr [BSS_BootPartition]
-    mov dword ptr [FrldrBootPartition], eax
+    mov dword ptr [rip + FrldrBootPartition], eax
 
     /* Patch long jump with real mode entry point */
     mov eax, dword ptr [BSS_RealModeEntry]
-    mov dword ptr [AddressOfRealModeEntryPoint], eax
+    mov dword ptr [rip + AddressOfRealModeEntryPoint], eax
 
     /* Clean out BSS */
     xor rax, rax
-    mov rdi, offset __bss_start__
-    mov rcx, offset __bss_end__ + 7
+    lea rdi, [rip + __bss_start__]
+    lea rcx, [rip + __bss_end__ + 7]
     sub rcx, rdi
     shr rcx, 3
     rep stosq
 
     /* Pass the command line to BootMain */
-    mov rcx, offset cmdline
+    lea rcx, [rip + cmdline]
 
     /* GO! */
     call BootMain
@@ -172,11 +169,14 @@ PxeCallApi:
 PUBLIC CallRealMode
 CallRealMode:
     /* Save current stack pointer */
-    mov qword ptr [stack64], rsp
+    mov qword ptr [rip + stack64], rsp
 
     /* Set continue address and switch to real mode */
-    lea rax, [CallRealMode_return]
-    mov qword ptr [ContinueAddress], rax
+    lea rax, [rip + CallRealMode_return]
+    mov qword ptr [rip + ContinueAddress], rax
+
+ContinueAddress:
+    .quad 0
 
 SwitchToReal:
     /* Set sane segments */
@@ -190,14 +190,20 @@ SwitchToReal:
     //mov word ptr [HEX(0b8008)], HEX(0e00) + '4'
 
     /* Save 64-bit stack pointer */
-    mov qword ptr [stack64], rsp
+    mov qword ptr [rip + stack64], rsp
 
     /* Step 1 - jump to compatibility segment */
-    jmp fword ptr [jumpvector]
+    /* Use image-relative addressing + runtime fixup for LLD compatibility */
+    lea rax, [rip + jumpvector]
+    lea rbx, [rip + SwitchToRealCompSegment]
+    mov dword ptr [rax], ebx    /* Store absolute address */
+    mov word ptr [rax + 4], CMODE_CS
+    jmp fword ptr [rax]         /* Far jump through computed address */
 
+    .align 8
 jumpvector:
-    .long SwitchToRealCompSegment
-    .word CMODE_CS
+    .long 0
+    .word 0
 
 SwitchToRealCompSegment:
     /* Note: In fact the CPU is in 32 bit mode here. But it will interpret
@@ -219,7 +225,7 @@ AddressOfRealModeEntryPoint:
 
 CallRealMode_return:
     /* restore stack pointer */
-    mov rsp, qword ptr [stack64]
+    mov rsp, qword ptr [rip + stack64]
     ret
 
 /////////////////////////////////////////
