@@ -796,23 +796,34 @@ KdbSymProcessSymbols(
     /*
      * Tell our worker thread to read from it.
      *
-     * ARM64 FIX: Use KeAcquireSpinLock/KeReleaseSpinLock instead of the
-     * AtDpcLevel variants. This function can be called at PASSIVE_LEVEL
-     * (when RosSymCreateFromMem fails at low IRQL), but KeAcquireSpinLockAtDpcLevel
-     * requires IRQL >= DISPATCH_LEVEL and will bugcheck IRQL_NOT_GREATER_OR_EQUAL
-     * if called at lower IRQL.
-     *
-     * KeAcquireSpinLock properly raises IRQL to DISPATCH_LEVEL before acquiring
-     * the lock, avoiding the bugcheck.
+     * Use the appropriate spinlock variant based on current IRQL:
+     * - Below DISPATCH_LEVEL: KeAcquireSpinLock (raises IRQL properly)
+     * - At DISPATCH_LEVEL: KeAcquireSpinLockAtDpcLevel (no IRQL change)
+     * - Above DISPATCH_LEVEL (HIGH_LEVEL): KeAcquireSpinLockAtDpcLevel
+     *   (safe at any IRQL >= DISPATCH), but skip KeSetEvent since
+     *   dispatcher operations are not safe above DISPATCH_LEVEL.
+     *   This occurs when called from inside KdEnterDebugger via the
+     *   KDBG KdSendPacket wrapper for symbol load notifications.
      */
     {
-        KIRQL OldIrql;
-        KeAcquireSpinLock(&SymbolsToLoadLock, &OldIrql);
-        InsertTailList(&SymbolsToLoad, &LdrEntry->InInitializationOrderLinks);
-        KeReleaseSpinLock(&SymbolsToLoadLock, OldIrql);
+        KIRQL CurrentIrql = KeGetCurrentIrql();
+        if (CurrentIrql >= DISPATCH_LEVEL)
+        {
+            KeAcquireSpinLockAtDpcLevel(&SymbolsToLoadLock);
+            InsertTailList(&SymbolsToLoad, &LdrEntry->InInitializationOrderLinks);
+            KeReleaseSpinLockFromDpcLevel(&SymbolsToLoadLock);
+            if (CurrentIrql == DISPATCH_LEVEL)
+                KeSetEvent(&SymbolsToLoadEvent, IO_NO_INCREMENT, FALSE);
+        }
+        else
+        {
+            KIRQL OldIrql;
+            KeAcquireSpinLock(&SymbolsToLoadLock, &OldIrql);
+            InsertTailList(&SymbolsToLoad, &LdrEntry->InInitializationOrderLinks);
+            KeReleaseSpinLock(&SymbolsToLoadLock, OldIrql);
+            KeSetEvent(&SymbolsToLoadEvent, IO_NO_INCREMENT, FALSE);
+        }
     }
-
-    KeSetEvent(&SymbolsToLoadEvent, IO_NO_INCREMENT, FALSE);
 }
 
 

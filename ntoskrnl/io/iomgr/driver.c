@@ -2203,18 +2203,10 @@ IopLoadDriver(
     if (!NT_SUCCESS(Status))
     {
         DPRINT("MmLoadSystemImage() failed (Status %lx)\n", Status);
-#if defined(_M_ARM64)
-        DPRINT1("[arm64] IopLoadDriver: MmLoadSystemImage FAILED with status 0x%lx\n", Status);
-#endif
         ExReleaseResourceLite(&IopDriverLoadResource);
         KeLeaveCriticalRegion();
         return Status;
     }
-
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IopLoadDriver: MmLoadSystemImage succeeded, ModuleObject=%p BaseAddress=%p\n",
-            ModuleObject, BaseAddress);
-#endif
 
     // Display the loading message
     ULONG infoLength;
