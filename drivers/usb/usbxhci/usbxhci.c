@@ -2569,28 +2569,13 @@ XHCI_ConfigureSlotEndpoint(
         }
     }
 
-    /*
-     * QEMU's xHCI (1B36:000D) does not reliably preserve previously-configured
-     * endpoint contexts unless they are explicitly included in a subsequent
-     * CONFIGURE_ENDPOINT (Add Context Flags + matching input endpoint contexts).
-     * This shows up with usb-storage: after opening/configuring bulk IN (DCI=3),
-     * configuring bulk OUT (DCI=4) can leave DCI=3 Disabled, stalling BOT.
-     *
-     * Work around this by re-submitting all already-configured (non-EP0)
-     * endpoints alongside the new one when issuing CONFIGURE_ENDPOINT on QEMU.
-     *
-     * On other controllers, keep the narrower behavior (only expand when adding
-     * a lower DCI after a higher one).
-     */
     ExpandAddFlags = Slot->Configured &&
                      (Slot->HighestEndpointId != 0) &&
-                     (((Extension->Quirks & XHCI_QUIRK_QEMU_CONFIG_EP_ORDER) != 0) ||
-                      (EndpointId < Slot->HighestEndpointId));
+                     (EndpointId < Slot->HighestEndpointId);
     if (ExpandAddFlags)
     {
         UCHAR Id;
-        UCHAR StartId = ((Extension->Quirks & XHCI_QUIRK_QEMU_CONFIG_EP_ORDER) != 0) ?
-                        2 : (UCHAR)(EndpointId + 1);
+        UCHAR StartId = (UCHAR)(EndpointId + 1);
 
         for (Id = StartId;
              Id <= Slot->HighestEndpointId && Id <= XHCI_MAX_ENDPOINTS;
@@ -2883,22 +2868,6 @@ XHCI_ConfigureSlotEndpoint(
 
     XHCI_LOG_IRQL("ConfigureSlotEndpoint before XHCI_SendCommand");
 
-#if DBG
-    if ((Extension->Quirks & XHCI_QUIRK_QEMU_CONFIG_EP_ORDER) &&
-        Slot->SlotId == 1 &&
-        (EndpointId == 3 || EndpointId == 4))
-    {
-        DPRINT1("usbxhci: CONFIG_EP prep slot=%u ep=%u Add=%08lx Drop=%08lx LastCtx(in)=%lu Highest=%u Reconf=%08lx\n",
-                Slot->SlotId,
-                EndpointId,
-                CtrlCtx->AddContextFlags,
-                CtrlCtx->DropContextFlags,
-                XhciSlotContextGetLastCtx(SlotCtx),
-                Slot->HighestEndpointId,
-                ReconfigureMask);
-    }
-#endif
-
     if (ExpandAddFlags && ReconfigureMask != 0)
     {
         UCHAR Id;
@@ -2956,28 +2925,6 @@ XHCI_ConfigureSlotEndpoint(
         }
     }
 
-#if DBG
-    if ((Extension->Quirks & XHCI_QUIRK_QEMU_CONFIG_EP_ORDER) &&
-        Slot->SlotId == 1 &&
-        (EndpointId == 3 || EndpointId == 4))
-    {
-        PVOID DeviceCtxBase = Slot->DeviceContext.VirtualAddress;
-        if (DeviceCtxBase)
-        {
-            PXHCI_ENDPOINT_CONTEXT ActiveEpCtx =
-                XHCI_GetDeviceEndpointContextVa(Extension, DeviceCtxBase, EndpointId - 1);
-            if (ActiveEpCtx)
-            {
-                DPRINT1("usbxhci: CONFIG_EP done slot=%u ep=%u ActiveState=%lu EpInfo=%08lx EpInfo2=%08lx\n",
-                        Slot->SlotId,
-                        EndpointId,
-                        (ULONG)(ActiveEpCtx->EpInfo & XHCI_EPCTX_STATE_MASK),
-                        ActiveEpCtx->EpInfo,
-                        ActiveEpCtx->EpInfo2);
-            }
-        }
-    }
-#endif
     return MP_STATUS_SUCCESS;
 }
 
@@ -9774,37 +9721,6 @@ XHCI_SubmitTransfer(PVOID MiniPortExtension,
     if (Extension->FatalError)
         return MP_STATUS_HW_ERROR;
 
-    /*
-     * USBPORT may transiently tear down and recreate pipes while higher-level
-     * drivers (notably usb-storage) continue queuing transfers. On QEMU's xHCI
-     * this can leave a bulk endpoint context Disabled even though the pipe
-     * handle is still used, which would otherwise stall the boot waiting for a
-     * completion that never arrives. If we observe a Disabled endpoint at
-     * submit-time, attempt a best-effort CONFIGURE_ENDPOINT to re-enable it.
-     */
-    if ((Extension->Quirks & XHCI_QUIRK_QEMU_CONFIG_EP_ORDER) &&
-        KeGetCurrentIrql() <= DISPATCH_LEVEL &&
-        Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK &&
-        Endpoint->Slot &&
-        Endpoint->EndpointId > 1)
-    {
-        PVOID DeviceCtxBase = Endpoint->Slot->DeviceContext.VirtualAddress;
-        if (DeviceCtxBase)
-        {
-            PXHCI_ENDPOINT_CONTEXT EpCtx =
-                XHCI_GetDeviceEndpointContextVa(Extension,
-                                                DeviceCtxBase,
-                                                Endpoint->EndpointId - 1);
-            if (EpCtx && ((EpCtx->EpInfo & XHCI_EPCTX_STATE_MASK) == XHCI_EPCTX_STATE_DISABLED))
-            {
-                (VOID)XHCI_ConfigureSlotEndpoint(Extension,
-                                                 Endpoint->Slot,
-                                                 Endpoint,
-                                                 Endpoint->EndpointId);
-            }
-        }
-    }
-
     if (Endpoint->EndpointProperties.TransferType ==
             USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
     {
@@ -11664,24 +11580,6 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
     if (Status != MP_STATUS_SUCCESS)
         return Status;
 
-    /*
-     * QEMU's xHCI (1B36:000D) can leave lower DCIs disabled if a higher DCI is
-     * configured first (notably usb-storage's bulk OUT at DCI=4 before bulk IN
-     * at DCI=3). Work around this by deferring the initial ConfigureEndpoint
-     * for the bulk OUT pipe (EP 0x02 / DCI 4) until after the bulk IN pipe is
-     * opened and configured.
-     */
-    if ((Extension->Quirks & XHCI_QUIRK_QEMU_CONFIG_EP_ORDER) &&
-        !Slot->Configured &&
-        EndpointProperties->TransferType == USBPORT_TRANSFER_TYPE_BULK &&
-        EndpointProperties->Direction == USBPORT_TRANSFER_DIRECTION_OUT &&
-        EndpointProperties->EndpointAddress == 0x02 &&
-        EndpointId == 4)
-    {
-        Slot->DeferredEndpointTable[EndpointId] = XhciEndpoint;
-        return MP_STATUS_SUCCESS;
-    }
-
     DPRINT1("usbxhci: OpenEndpoint calling ConfigureSlotEndpoint slot=%u ep=%u (before)\n",
             Slot->SlotId, EndpointId);
 
@@ -11697,24 +11595,6 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
     {
         XHCI_FreeTransferRing(&XhciEndpoint->TransferRing);
         return Status;
-    }
-
-    if ((Extension->Quirks & XHCI_QUIRK_QEMU_CONFIG_EP_ORDER) &&
-        Slot->DeferredEndpointTable[4] != NULL &&
-        Slot->EndpointTable[4] == NULL)
-    {
-        PXHCI_ENDPOINT Deferred = Slot->DeferredEndpointTable[4];
-        Slot->DeferredEndpointTable[4] = NULL;
-
-        Status = XHCI_ConfigureSlotEndpoint(Extension,
-                                            Slot,
-                                            Deferred,
-                                            4);
-        if (Status != MP_STATUS_SUCCESS)
-        {
-            Slot->DeferredEndpointTable[4] = Deferred;
-            return Status;
-        }
     }
 
     return MP_STATUS_SUCCESS;
