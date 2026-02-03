@@ -1106,6 +1106,7 @@ TOOLBAR_DrawButton (const TOOLBAR_INFO *infoPtr, TBUTTON_INFO *btnPtr, HDC hdc, 
     tbcd.nmcd.uItemState = TOOLBAR_TranslateState(btnPtr, infoPtr->bCaptured);
     tbcd.nmcd.hdc = hdc;
     tbcd.nmcd.rc = btnPtr->rect;
+    COMCTL32_EnsurePatternBrush();
     tbcd.hbrMonoDither = COMCTL32_hPattern55AABrush;
 
     /* FIXME: what are these used for? */

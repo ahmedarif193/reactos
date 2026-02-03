@@ -583,17 +583,13 @@ CsrParseServerCommandLine(IN ULONG ArgumentCount,
     }
 
     /* Loop through every argument */
-    DPRINT1("CSRSRV: CsrParseServerCommandLine: ArgumentCount=%lu\n", ArgumentCount);
     for (i = 1; i < ArgumentCount; i++)
     {
         /* Split Name and Value */
         ParameterName = Arguments[i];
-        DPRINT1("CSRSRV: Arg[%lu] raw ptr=%p\n", i, ParameterName);
         ParameterValue = NULL;
         ParameterValue = strchr(ParameterName, '=');
-        DPRINT1("CSRSRV: strchr returned %p\n", ParameterValue);
         if (ParameterValue) *ParameterValue++ = ANSI_NULL;
-        DPRINT1("CSRSRV: ParameterValue after increment=%p\n", ParameterValue);
         DPRINT("Name=%s, Value=%s\n", ParameterName, ParameterValue);
 
         /* Check for Object Directory */

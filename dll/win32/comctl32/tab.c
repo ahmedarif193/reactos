@@ -1502,7 +1502,10 @@ TAB_EraseTabInterior(const TAB_INFO *infoPtr, HDC hdc, INT iItem, const RECT *dr
 		* look different from the window background.
 		*/
 		if (comctl32_color.clr3dHilight == comctl32_color.clrWindow)
+		{
+		    COMCTL32_EnsurePatternBrush();
 		    hbr = COMCTL32_hPattern55AABrush;
+		}
 
 		deleteBrush = FALSE;
 	    }

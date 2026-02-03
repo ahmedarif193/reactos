@@ -3,7 +3,7 @@
  *
  * Copyright 1997 Dimitrie O. Paun
  * Copyright 1998,2000 Eric Kohl
- * Copyright 2014-2015 Michael Müller
+ * Copyright 2014-2015 Michael Mï¿½ller
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -79,7 +79,9 @@ static LPWSTR COMCTL32_wSubclass = NULL;
 HMODULE COMCTL32_hModule = 0;
 static LANGID COMCTL32_uiLang = MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL);
 HBRUSH  COMCTL32_hPattern55AABrush = NULL;
-COMCTL32_SysColor  comctl32_color;
+COMCTL32_SysColor  comctl32_color = {0};
+static BOOL COMCTL32_bClassesInitialized = FALSE;
+static BOOL COMCTL32_bPatternBrushInitialized = FALSE;
 
 static HBITMAP COMCTL32_hPattern55AABitmap = NULL;
 
@@ -150,14 +152,14 @@ static HANDLE CreateComctl32ActCtx(BOOL bV6)
     pwstrSource = GetManifestPath(FALSE, bV6);
     if (!pwstrSource)
     {
-        ERR("GetManifestPath failed! bV6=%d\n", bV6);
+        TRACE("GetManifestPath failed! bV6=%d\n", bV6);
         return INVALID_HANDLE_VALUE;
     }
     ActCtx.lpSource = pwstrSource;
     ret = CreateActCtxW(&ActCtx);
     HeapFree(GetProcessHeap(), 0, pwstrSource);
     if (ret == INVALID_HANDLE_VALUE)
-        ERR("CreateActCtxW failed! bV6=%d\n", bV6);
+        TRACE("CreateActCtxW failed! bV6=%d\n", bV6);
     return ret;
 }
 
@@ -242,11 +244,38 @@ static void UnregisterControls(BOOL bV6)
 
 }
 
+/***********************************************************************
+ * COMCTL32_EnsurePatternBrush [internal]
+ *
+ * Lazily initializes the pattern brush on first use.
+ * This is called from tab.c, toolbar.c, and trackbar.c before accessing
+ * COMCTL32_hPattern55AABrush.
+ */
+void COMCTL32_EnsurePatternBrush(void)
+{
+    if (COMCTL32_bPatternBrushInitialized)
+        return;
+
+    COMCTL32_bPatternBrushInitialized = TRUE;
+
+    COMCTL32_hPattern55AABitmap = CreateBitmap (8, 8, 1, 1, wPattern55AA);
+    COMCTL32_hPattern55AABrush = CreatePatternBrush (COMCTL32_hPattern55AABitmap);
+}
+
 static void InitializeClasses()
 {
     HANDLE hActCtx5, hActCtx6;
     BOOL activated;
     ULONG_PTR ulCookie;
+
+    /* Check if already initialized */
+    if (COMCTL32_bClassesInitialized)
+        return;
+
+    COMCTL32_bClassesInitialized = TRUE;
+
+    /* Initialize system colors now that user32 is available */
+    COMCTL32_RefreshSysColors();
 
     /* like comctl32 5.82+ register all the common control classes */
     /* Register the classes once no matter what */
@@ -352,12 +381,15 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
             COMCTL32_wSubclass = (LPWSTR)(DWORD_PTR)GlobalAddAtomW (strCC32SubclassInfo);
             TRACE("Subclassing atom added: %p\n", COMCTL32_wSubclass);
 
-            /* create local pattern brush */
-            COMCTL32_hPattern55AABitmap = CreateBitmap (8, 8, 1, 1, wPattern55AA);
-            COMCTL32_hPattern55AABrush = CreatePatternBrush (COMCTL32_hPattern55AABitmap);
+            /* NOTE: Defer pattern brush/bitmap creation to avoid calling GDI functions during
+             * DLL_PROCESS_ATTACH, as they may trigger callbacks that cause stack overflow or
+             * circular initialization. Pattern brush will be lazy-initialized on first use.
+             */
 
 	    /* Get all the colors at DLL load */
-	    COMCTL32_RefreshSysColors();
+	    /* NOTE: Defer color initialization to avoid calling GetSysColor during DLL_PROCESS_ATTACH
+	     * when user32 may not be fully initialized yet. Colors will be lazy-initialized on first use.
+	     */
 
 #ifndef __REACTOS__
             /* like comctl32 5.82+ register all the common control classes */
@@ -393,7 +425,10 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
             /* subclass user32 controls */
             THEMING_Initialize ();
 #else
-            InitializeClasses();
+            /* NOTE: Defer InitializeClasses() to avoid calling RegisterClassW during DLL_PROCESS_ATTACH
+             * when user32/win32k may not be fully initialized yet. Window classes will be registered
+             * on-demand via RegisterClassNameW() or when a control is actually used.
+             */
 #endif
 
             break;
@@ -1750,7 +1785,7 @@ void COMCTL32_GetFontMetrics(HFONT hFont, TEXTMETRICW *ptm)
  * Some parents reflect notify messages - for some messages sent by the child,
  * they send it back with the message code increased by OCM__BASE (0x2000).
  * This allows better subclassing of controls. We don't need to handle such
- * messages but we don't want to print ERRs for them, so this helper function
+ * messages but we don't want to print TRACEs for them, so this helper function
  * identifies them.
  *
  * Some of the codes are in the CCM_FIRST..CCM_LAST range, but there is no
