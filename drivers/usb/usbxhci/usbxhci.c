@@ -3769,11 +3769,6 @@ XHCI_PrepareBounceBuffer(
     Highest.QuadPart = 0xFFFFFFFFull;
     Boundary.QuadPart = 0;
 
-    /*
-     * QEMU's xHCI advertises 64-bit DMA capability but can still truncate to
-     * 32-bit. Allocate a low-memory bounce buffer so TRBs never reference
-     * addresses above 4 GiB when 32-bit DMA is forced.
-     */
     CacheType = XHCI_GetDmaCacheType(Extension);
     Buffer = MmAllocateContiguousMemorySpecifyCache(Length,
                                                     Lowest,
@@ -14233,23 +14228,6 @@ XHCI_ApplyVBoxPortResetQuirk(
     return MP_STATUS_SUCCESS;
 }
 
-/*
- * XHCI_ApplyQemuPortResetQuirk - Handle QEMU USB port reset issues.
- *
- * QEMU may drop port power during reset. Force PED|PP|PR together.
- */
-static
-MPSTATUS
-XHCI_ApplyQemuPortResetQuirk(
-    _In_ PXHCI_EXTENSION Extension,
-    _In_ USHORT Port)
-{
-    DPRINT1("XHCI: QEMU Quirk - Forcing PED|PP|PR on Port %u\n", Port);
-    return XHCI_ModifyPortBits(Extension, Port,
-                               XHCI_PORTSC_PED | XHCI_PORTSC_PR | XHCI_PORTSC_PP,
-                               0, 0);
-}
-
 static
 MPSTATUS
 NTAPI
@@ -14426,12 +14404,6 @@ XHCI_RH_SetFeaturePortReset(
     if (Extension->Quirks & XHCI_QUIRK_VBOX_PORT_RESET)
     {
         return XHCI_ApplyVBoxPortResetQuirk(Extension, Port, PortStatusReg, PortValue);
-    }
-
-    /* Apply QEMU quirk if detected */
-    if (Extension->Quirks & XHCI_QUIRK_QEMU_PORT_RESET)
-    {
-        return XHCI_ApplyQemuPortResetQuirk(Extension, Port);
     }
 
     /* Standard Behavior: Set PR (Port Reset) and wait for completion */
