@@ -12472,47 +12472,6 @@ XHCI_InterruptService(PVOID MiniPortExtension)
                         XHCI_USBSTS_HSE |
                         XHCI_USBSTS_HCE);
 
-    /*
-     * VirtualBox/QEMU quirk: Some xHCI emulations may assert the interrupt line
-     * (causing the ISR to be called) without setting UsbSts bits, particularly
-     * for port status changes. The interrupt is signaled via IMAN.IP instead.
-     *
-     * On ARM64 with legacy INTx (level-triggered), QEMU's XHCI emulation appears
-     * to use IMAN.IP to signal interrupts without always setting UsbSts.EINT.
-     * Check IMAN.IP and handle events even when UsbSts is empty.
-     *
-     * This is also needed for VirtualBox which has a similar behavior pattern.
-     * We apply this unconditionally when using legacy interrupts since there's
-     * no downside to checking IMAN.IP.
-     */
-    if (Extension->RuntimeRegisters)
-    {
-        Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
-        Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
-        if (Iman & XHCI_IMAN_IP)
-        {
-            /*
-             * Clear IP by writing 1 to it (RW1C). Preserve IE bit only,
-             * mask out reserved bits to avoid propagating garbage.
-             */
-            XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman,
-                                      XHCI_IMAN_IP | (Iman & XHCI_IMAN_IE));
-            if (!AckMask)
-            {
-                /*
-                 * IMAN.IP was set but UsbSts had nothing. This can happen when:
-                 * 1. VirtualBox/QEMU quirk where interrupts use IMAN.IP only
-                 * 2. Port status changes on some controllers
-                 *
-                 * Trigger the DPC to process any pending events from the Event Ring.
-                 * Mark PCD in PendingUsbSts to ensure the DPC checks ports.
-                 */
-                InterlockedOr((volatile LONG *)&Extension->PendingUsbSts, XHCI_USBSTS_PCD);
-                return TRUE; /* Claim the interrupt and queue DPC */
-            }
-        }
-    }
-
     if (!AckMask)
         return FALSE;
 
@@ -12549,8 +12508,8 @@ XHCI_InterruptService(PVOID MiniPortExtension)
      * For MSI/MSI-X (edge-triggered), IP auto-clears after the interrupt message
      * is sent, so we don't need to touch it.
      *
-     * The VirtualBox quirk code above handles the special case where IP is set
-     * but UsbSts shows nothing - that's the only case we should manually clear IP.
+     * Avoid clearing IMAN.IP here; the DPC path updates ERDP and naturally
+     * clears pending interrupts.
      */
 
     InterlockedOr((volatile LONG *)&Extension->PendingUsbSts, AckMask);
@@ -13130,49 +13089,10 @@ static VOID NTAPI
 XHCI_PollController(PVOID MiniPortExtension)
 {
     PXHCI_EXTENSION Extension = (PXHCI_EXTENSION)MiniPortExtension;
-    PXHCI_INTERRUPTER_REGISTER_SET Interrupter;
 
     if (!Extension || Extension->FatalError || Extension->StoppingOrRemoved)
         return;
 
-    /*
-     * VirtualBox and QEMU often miss interrupts or deliver them late.
-     * When called by USBPORT's polling timer, we must aggressively drain
-     * any pending work that interrupts should have triggered.
-     *
-     * Step 1: Clear any pending IMAN.IP that might be blocking new interrupts.
-     * This handles the VirtualBox quirk where IMAN.IP stays set without
-     * corresponding USBSTS bits.
-     */
-    if (Extension->RuntimeRegisters)
-    {
-        Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
-        ULONG Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
-        if (Iman & XHCI_IMAN_IP)
-        {
-            /* Clear IP by writing 1 (RW1C), preserve IE */
-            XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman,
-                                      XHCI_IMAN_IP | (Iman & XHCI_IMAN_IE));
-        }
-    }
-
-    /*
-     * Step 2: Check and acknowledge USBSTS.EINT/PCD directly.
-     * The ISR may have missed these on virtual machines.
-     */
-    if (Extension->OperationalRegisters)
-    {
-        ULONG UsbSts = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
-        if (UsbSts & (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD))
-        {
-            XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
-                                      UsbSts & (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD));
-            InterlockedOr((volatile LONG *)&Extension->PendingUsbSts,
-                          UsbSts & (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD));
-        }
-    }
-
-    /* Step 3: Process all pending work (events, completions, port changes) */
     XHCI_PollForWork(Extension, TRUE);
 }
 
@@ -13341,9 +13261,6 @@ static VOID NTAPI
 XHCI_FlushInterrupts(PVOID MiniPortExtension)
 {
     PXHCI_EXTENSION Extension = (PXHCI_EXTENSION)MiniPortExtension;
-    PXHCI_INTERRUPTER_REGISTER_SET Interrupter;
-    ULONG UsbSts;
-    ULONG Iteration;
 
     XHCI_DBG(XHCI_TRACE_EVENTS,
              "usbxhci: FlushInterrupts (IRQL=%lu)\n",
@@ -13352,47 +13269,9 @@ XHCI_FlushInterrupts(PVOID MiniPortExtension)
     if (!Extension || !Extension->OperationalRegisters || Extension->FatalError)
         return;
 
-    /*
-     * Drain any pending events that may not have triggered an interrupt.
-     * This is critical for QEMU and VirtualBox where interrupts may be
-     * missed or delayed. We perform multiple iterations to ensure all
-     * queued events are processed.
-     */
-    for (Iteration = 0; Iteration < 8; Iteration++)
+    if (XHCI_EventRingHasPendingTrb(Extension))
     {
-        BOOLEAN HadWork = FALSE;
-
-        /* Check and clear pending USBSTS bits */
-        UsbSts = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
-        if (UsbSts & (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD))
-        {
-            XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
-                                      UsbSts & (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD));
-            HadWork = TRUE;
-        }
-
-        /* Clear IMAN.IP if set (deassert interrupt line) */
-        if (Extension->RuntimeRegisters)
-        {
-            Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
-            ULONG Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
-            if (Iman & XHCI_IMAN_IP)
-            {
-                XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman,
-                                          XHCI_IMAN_IP | (Iman & XHCI_IMAN_IE));
-                HadWork = TRUE;
-            }
-        }
-
-        /* Service the event ring without triggering callbacks */
-        if (XHCI_EventRingHasPendingTrb(Extension))
-        {
-            XHCI_ServiceEventRing(Extension, FALSE, FALSE);
-            HadWork = TRUE;
-        }
-
-        if (!HadWork)
-            break;
+        XHCI_ServiceEventRing(Extension, FALSE, FALSE);
     }
 
     /* Scan for port status changes that may have been missed */
@@ -14128,106 +14007,6 @@ XHCI_RH_ClearFeaturePortPower(
     return XHCI_ModifyPortBits(Extension, Port, 0, XHCI_PORTSC_PP, 0);
 }
 
-/*
- * Quirk Handlers
- *
- * Isolated quirk handler functions for vendor-specific workarounds.
- * Quirk detection is centralized in XHCI_DetectHardwareQuirks().
- */
-
-/*
- * XHCI_ApplyVBoxPortResetQuirk - Handle VirtualBox USB 2.0 port reset issues.
- *
- * VirtualBox's xHCI often reports CCS=1 but PED=0. This quirk forces
- * PED|PP|PR and polls for port enable with a 20ms timeout.
- */
-static
-MPSTATUS
-XHCI_ApplyVBoxPortResetQuirk(
-    _In_ PXHCI_EXTENSION Extension,
-    _In_ USHORT Port,
-    _In_ volatile ULONG *PortStatusReg,
-    _In_ ULONG PortValue)
-{
-    ULONG Attempt;
-    ULONG PostValue;
-    BOOLEAN PortEnabled = FALSE;
-
-    DPRINT1("XHCI: VBox Quirk - Port %u reset (CCS=%u PED=%u Speed=%lu)\n",
-            Port,
-            (PortValue & XHCI_PORTSC_CCS) ? 1 : 0,
-            (PortValue & XHCI_PORTSC_PED) ? 1 : 0,
-            (PortValue & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT);
-
-    /* If port is already enabled, skip reset */
-    if (PortValue & XHCI_PORTSC_PED)
-    {
-        DPRINT1("XHCI: VBox Quirk - Port %u already enabled\n", Port);
-        PortEnabled = TRUE;
-    }
-    else
-    {
-        /* Force PED|PP|PR to trigger port enable */
-        DPRINT1("XHCI: VBox Quirk - Port %u forcing PR|PP|PED\n", Port);
-        XHCI_ModifyPortBits(Extension, Port,
-                           XHCI_PORTSC_PR | XHCI_PORTSC_PP | XHCI_PORTSC_PED,
-                           0, 0);
-
-        /* Poll for PED with 20ms timeout (often enables within 1-2ms) */
-        for (Attempt = 0; Attempt < 100; Attempt++)
-        {
-            KeStallExecutionProcessor(200); /* 0.2ms per attempt = 20ms total */
-            PostValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
-            if (PostValue & XHCI_PORTSC_PED)
-            {
-                PortEnabled = TRUE;
-                DPRINT1("XHCI: VBox Quirk - Port %u PED=1 after ~%lu us\n",
-                        Port, (Attempt + 1) * 200);
-                break;
-            }
-        }
-
-        if (!PortEnabled)
-        {
-            PostValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
-            DPRINT1("XHCI: VBox Quirk - Port %u not enabled after 20ms, PORTSC=%08lx\n",
-                    Port, PostValue);
-
-            /* If no device connected, not an error */
-            if (!(PostValue & XHCI_PORTSC_CCS))
-            {
-                DPRINT1("XHCI: VBox Quirk - Port %u no device (CCS=0)\n", Port);
-                return MP_STATUS_SUCCESS;
-            }
-
-            DPRINT1("XHCI: VBox Quirk - Port %u reset failed\n", Port);
-            return MP_STATUS_ERROR;
-        }
-    }
-
-    /* Set shadow PRC to signal reset completion (1-based port indexing) */
-    if (Port >= 1 && Port <= XHCI_MAX_PORTS)
-    {
-        InterlockedOr((volatile LONG *)&Extension->PortChangeMask[Port],
-                      XHCI_PORTSC_PRC);
-        DPRINT1("XHCI: VBox Quirk - Port %u reset complete\n", Port);
-        if (XhciRegPacket.UsbPortInvalidateRootHub)
-        {
-            if (Extension->RhIrqEnabled)
-            {
-                Extension->RhPendingInvalidate = FALSE;
-                XhciRegPacket.UsbPortInvalidateRootHub(Extension);
-            }
-            else
-            {
-                Extension->RhPendingInvalidate = TRUE;
-            }
-        }
-    }
-
-    return MP_STATUS_SUCCESS;
-}
-
 static
 MPSTATUS
 NTAPI
@@ -14398,12 +14177,6 @@ XHCI_RH_SetFeaturePortReset(
         }
 
         return ResetComplete ? MP_STATUS_SUCCESS : MP_STATUS_ERROR;
-    }
-
-    /* Apply VirtualBox quirk if detected */
-    if (Extension->Quirks & XHCI_QUIRK_VBOX_PORT_RESET)
-    {
-        return XHCI_ApplyVBoxPortResetQuirk(Extension, Port, PortStatusReg, PortValue);
     }
 
     /* Standard Behavior: Set PR (Port Reset) and wait for completion */
