@@ -388,8 +388,6 @@ XHCI_CalcTrbTransferChunk(
     return Chunk;
 }
 
-/* Limit how often we log benign HCE on QEMU's xHCI controller. */
-static LONG XhciHceQuirkLogBudget = 1;
 /* Optional callbacks (safe stubs) */
 static MPSTATUS NTAPI XHCI_ReopenEndpoint(PVOID MiniPortExtension,
                                          PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
@@ -8976,16 +8974,6 @@ XHCI_SendCommand(
         RetryCommands = FALSE;
     }
 
-    /* On QEMU with a latched HCE bit, do not wait excessively long for
-     * command completion. This keeps EP0 bring-up responsive even when
-     * the controller misbehaves and allows the miniport to surface the
-     * timeout to upper layers instead of stalling for many seconds. */
-    if (Extension->StartupHcePersistent &&
-        EffectiveTimeout > 1000)
-    {
-        EffectiveTimeout = 1000;
-    }
-
     if (TrbType == XHCI_TRB_TYPE_ENABLE_SLOT ||
         TrbType == XHCI_TRB_TYPE_ADDRESS_DEV ||
         TrbType == XHCI_TRB_TYPE_CONFIG_EP)
@@ -9248,73 +9236,6 @@ Exit:
 
 static
 MPSTATUS
-XHCI_ValidateCommandEngine(
-    _Inout_ PXHCI_EXTENSION Extension)
-{
-    DPRINT1("XHCI_ValidateCommandEngine: Enter\n");
-    MPSTATUS Status;
-    ULONG CompletionCode = 0;
-    ULONG TimeoutMs = XHCI_COMMAND_TIMEOUT_MS;
-    ULONG UsbSts = 0;
-
-    if (!Extension)
-        return MP_STATUS_ERROR;
-
-    if (Extension->OperationalRegisters)
-        UsbSts = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
-
-    if ((UsbSts & XHCI_USBSTS_HCE) &&
-        (Extension->Quirks & XHCI_QUIRK_IGNORE_STARTUP_HCE))
-    {
-        DPRINT1("usbxhci: persistent startup HCE (USBSTS=%08lx) – skipping NO-OP probe per quirk\n",
-                UsbSts);
-        XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
-                             XHCI_USBSTS_HCE |
-                             XHCI_USBSTS_HSE |
-                             XHCI_USBSTS_PCD |
-                             XHCI_USBSTS_EINT);
-        Extension->StartupHcePersistent = TRUE;
-        return MP_STATUS_SUCCESS;
-    }
-
-    if (UsbSts & XHCI_USBSTS_HCE)
-    {
-        XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
-                             XHCI_USBSTS_HCE |
-                             XHCI_USBSTS_HSE |
-                             XHCI_USBSTS_PCD |
-                             XHCI_USBSTS_EINT);
-    }
-
-    /* If the controller already asserts HCE, shorten the probe to avoid long stalls. */
-    if (UsbSts & XHCI_USBSTS_HCE)
-        TimeoutMs = 50;
-
-    /* Make sure the command ring starts from a known state for the probe. */
-    XHCI_ResetCommandRingState(Extension);
-
-    Status = XHCI_SendCommand(Extension,
-                              XHCI_TRB_TYPE_CMD_NOOP,
-                              0,
-                              0,
-                              0,
-                              TimeoutMs,
-                              FALSE,
-                              NULL,
-                              &CompletionCode);
-    if (Status != MP_STATUS_SUCCESS || CompletionCode != XHCI_COMPLETION_SUCCESS)
-    {
-        DPRINT1("usbxhci: startup sanity NO-OP failed (status=%lu completion=%lu)\n",
-                Status,
-                CompletionCode);
-        return MP_STATUS_HW_ERROR;
-    }
-
-    return MP_STATUS_SUCCESS;
-}
-
-static
-MPSTATUS
 XHCI_ResetController(
     _In_ PXHCI_EXTENSION Extension)
 {
@@ -9403,29 +9324,6 @@ XHCI_HandleControllerError(
 {
     if (!Extension)
         return;
-
-    /*
-     * Some virtual xHCI controllers (notably QEMU's 1B36:000D) are prone
-     * to asserting HCE without a corresponding host-system error while
-     * continuing to function. When the dedicated startup quirk is set and
-     * only HCE is present (no HSE), treat this as non-fatal so the
-     * controller is not torn down unnecessarily. To avoid flooding debug
-     * logs, only emit a small number of messages while still clearing the
-     * error condition.
-     */
-    if ((PendingStatus & XHCI_USBSTS_HSE) == 0 &&
-        (PendingStatus & XHCI_USBSTS_HCE) != 0 &&
-        Extension->StartupHcePersistent)
-    {
-        LONG Budget = InterlockedDecrement(&XhciHceQuirkLogBudget);
-        if (Budget >= 0)
-        {
-            DPRINT1("usbxhci: controller HCE observed on QEMU xHCI "
-                    "(USBSTS=%08lx) - ignoring per quirk\n",
-                    PendingStatus);
-        }
-        return;
-    }
 
     DPRINT1("usbxhci: FATAL controller error (USBSTS=%08lx) - dumping controller state\n",
             PendingStatus);
@@ -12292,32 +12190,6 @@ XHCI_StartController(PVOID MiniPortExtension,
     {
         ULONG UsbStsAfter = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
 
-        if ((UsbStsAfter & XHCI_USBSTS_HCE) &&
-            (Extension->Quirks & XHCI_QUIRK_IGNORE_STARTUP_HCE))
-        {
-            if (XHCI_ValidateCommandEngine(Extension) == MP_STATUS_SUCCESS)
-            {
-                DPRINT1("usbxhci: persistent HCE after start on QEMU xHCI "
-                        "(USBSTS=%08lx) – ignoring per startup quirk after NO-OP validation\n",
-                        UsbStsAfter);
-
-                XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts,
-                                     XHCI_USBSTS_HCE |
-                                     XHCI_USBSTS_HSE |
-                                     XHCI_USBSTS_PCD |
-                                     XHCI_USBSTS_EINT);
-
-                Extension->FatalError = FALSE;
-                Extension->ControllerRunning = TRUE;
-                Extension->InterruptsEnabled = TRUE;
-                Extension->StartupHcePersistent = TRUE;
-
-                goto StartSuccess;
-            }
-
-            DPRINT1("usbxhci: persistent HCE after start and command ring is unresponsive\n");
-        }
-
         DPRINT1("usbxhci: FATAL controller error persists after start recovery "
                 "(USBSTS=%08lx HCS2=%08lx HCS3=%08lx MaxSlots=%lu MaxPorts=%lu Scratchpads=%lu) "
                 "– dumping controller state\n",
@@ -12338,7 +12210,6 @@ XHCI_StartController(PVOID MiniPortExtension,
         return MP_STATUS_HW_ERROR;
     }
 
-StartSuccess:
     XHCI_PowerOnAllPorts(Extension);
     XHCI_ConfigureAllPortsLpm(Extension);
     return MP_STATUS_SUCCESS;
@@ -12717,15 +12588,6 @@ XHCI_InterruptDpc(PVOID MiniPortExtension,
     {
         XHCI_DBG(XHCI_TRACE_EVENTS,
                  "usbxhci: DPC observed PCD pending (UsbSts latch)\n");
-    }
-
-    /* HSE is always fatal. HCE is fatal except on platforms where we have
-     * an explicit quirk to ignore QEMU's latched HCE; in that case, clear
-     * the bit here so we do not tear the controller down. */
-    if ((Pending & XHCI_USBSTS_HCE) &&
-        Extension->StartupHcePersistent)
-    {
-        Pending &= ~XHCI_USBSTS_HCE;
     }
 
     /* Host System Error (HSE) and unhandled Host Controller Error (HCE) are
