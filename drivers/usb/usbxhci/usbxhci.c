@@ -8009,12 +8009,7 @@ XHCI_DetectHardwareQuirks(
     if (Extension->HciVersion <= 0x0100)
         Extension->Quirks |= XHCI_QUIRK_LIMIT_U1U2;
 
-    /*
-     * Inspect PCI VID/DID for a few well-known controllers that need
-     * additional quirks beyond the generic capability-based ones.
-     * This does not change behavior yet, but makes it easy to hook
-     * future vendor-specific workarounds in a single place.
-     */
+    /* VID/DID logging only. Vendor-specific quirks are disabled. */
     if (XHCI_ReadPciConfig(Extension, 0x00, &VendorId, sizeof(VendorId)) &&
         XHCI_ReadPciConfig(Extension, 0x02, &DeviceId, sizeof(DeviceId)))
     {
@@ -8022,113 +8017,6 @@ XHCI_DetectHardwareQuirks(
                 VendorId,
                 DeviceId,
                 Extension->HciVersion);
-
-        /* Example: NEC/Renesas often requires strict 32‑bit DMA. */
-        if ((VendorId == 0x1033 || VendorId == 0x1912) &&
-            !(Extension->Quirks & XHCI_QUIRK_FORCE_32BIT_DMA))
-        {
-            Extension->Quirks |= XHCI_QUIRK_FORCE_32BIT_DMA;
-        }
-
-        /* Example: early Intel Series 7/8 controllers can be slow to reset. */
-        if (VendorId == 0x8086 && Extension->HciVersion <= 0x0100)
-        {
-            Extension->Quirks |= XHCI_QUIRK_SLOW_HARD_RESET;
-        }
-
-        /* Many ASMedia/VIA controllers have unreliable 64‑bit DMA even when
-         * they advertise support. Force 32‑bit common-buffer allocations to
-         * avoid programming rings above 4GB, which matches the conservative
-         * behavior of Windows on these parts. */
-        if ((VendorId == 0x1B21 || VendorId == 0x1106) &&
-            !(Extension->Quirks & XHCI_QUIRK_FORCE_32BIT_DMA))
-        {
-            Extension->Quirks |= XHCI_QUIRK_FORCE_32BIT_DMA;
-        }
-
-        /*
-         * QEMU's emulated xHCI controller (1B36:000D) is known to keep the
-         * HCE bit latched after our bring-up sequence even though the
-         * controller otherwise runs and enumerates devices correctly under
-         * Windows. Treat a persistent HCE immediately after start as a
-         * non-fatal quirk for this virtual controller so that we do not
-         * fail StartController just because the bit never clears.
-         */
-        if (VendorId == 0x1B36 && DeviceId == 0x000D)
-        {
-            BOOLEAN EnableQuirk;
-
-            if (g_XhciStartupHceQuirkOverrideValid)
-                EnableQuirk = g_XhciStartupHceQuirkOverride;
-            else
-                EnableQuirk = TRUE;
-
-            if (EnableQuirk)
-            {
-                Extension->Quirks |= XHCI_QUIRK_IGNORE_STARTUP_HCE;
-                Extension->Quirks |= XHCI_QUIRK_QEMU_CONFIG_EP_ORDER;
-                Extension->Quirks |= XHCI_QUIRK_QEMU_PORT_RESET;
-                DPRINT1("usbxhci: QEMU quirks enabled (HCE, CONFIG_EP, PORT_RESET)\n");
-            }
-            else
-            {
-                DPRINT1("usbxhci: startup HCE quirk explicitly disabled via registry\n");
-            }
-        }
-        else if (g_XhciStartupHceQuirkOverrideValid &&
-                 g_XhciStartupHceQuirkOverride)
-        {
-            Extension->Quirks |= XHCI_QUIRK_IGNORE_STARTUP_HCE;
-            DPRINT1("usbxhci: startup HCE quirk forced via registry (VID=%04x DID=%04x)\n",
-                    VendorId,
-                    DeviceId);
-        }
-
-        /*
-         * VirtualBox Detection: VirtualBox's xHCI emulation uses Intel chip IDs
-         * (VID=8086 DID=1e31) but sets subsystem IDs to 0x0000:0x0000, which is
-         * unusual for real hardware. VirtualBox's xHCI has a known issue where
-         * writing the PR (Port Reset) bit to PORTSC causes the emulation to hang.
-         *
-         * Detection strategy:
-         * 1. Check if subsystem vendor ID is 0x80EE (Oracle VirtualBox)
-         * 2. Check if Intel xHCI (VID=8086) with subsystem IDs both zero
-         *    (real Intel hardware always has valid subsystem IDs)
-         */
-        {
-            USHORT SubsystemVendorId = 0;
-            USHORT SubsystemDeviceId = 0;
-
-            if (XHCI_ReadPciConfig(Extension, 0x2C, &SubsystemVendorId, sizeof(SubsystemVendorId)) &&
-                XHCI_ReadPciConfig(Extension, 0x2E, &SubsystemDeviceId, sizeof(SubsystemDeviceId)))
-            {
-                DPRINT1("usbxhci: PCI SubsysVID=%04x SubsysDID=%04x\n",
-                        SubsystemVendorId,
-                        SubsystemDeviceId);
-
-                /* VirtualBox uses subsystem vendor ID 0x80EE (Oracle) */
-                if (SubsystemVendorId == 0x80EE)
-                {
-                    Extension->Quirks |= XHCI_QUIRK_VBOX_PORT_RESET |
-                                         XHCI_QUIRK_VBOX_SPURIOUS_IMAN |
-                                         XHCI_QUIRK_VBOX_POLL_XFERS;
-                    DPRINT1("usbxhci: VirtualBox detected (SubsysVID=80EE) - enabling VBox workarounds\n");
-                }
-                /*
-                 * VirtualBox also emulates Intel xHCI but sets subsystem IDs to zero.
-                 * Real Intel controllers always have valid OEM subsystem IDs.
-                 * DID=1e31 is the Intel 7 Series/C210 Series USB xHCI which VirtualBox uses.
-                 */
-                else if (VendorId == 0x8086 && DeviceId == 0x1e31 &&
-                         SubsystemVendorId == 0x0000 && SubsystemDeviceId == 0x0000)
-                {
-                    Extension->Quirks |= XHCI_QUIRK_VBOX_PORT_RESET |
-                                         XHCI_QUIRK_VBOX_SPURIOUS_IMAN |
-                                         XHCI_QUIRK_VBOX_POLL_XFERS;
-                    DPRINT1("usbxhci: VirtualBox detected (Intel 8086:1e31 with zero subsys) - enabling VBox workarounds\n");
-                }
-            }
-        }
     }
 
     /*
@@ -8144,6 +8032,15 @@ XHCI_DetectHardwareQuirks(
             Extension->Quirks |= XHCI_QUIRK_NON_COHERENT_DMA;
         else
             Extension->Quirks &= ~XHCI_QUIRK_NON_COHERENT_DMA;
+    }
+
+    /* Startup HCE override */
+    if (g_XhciStartupHceQuirkOverrideValid)
+    {
+        if (g_XhciStartupHceQuirkOverride)
+            Extension->Quirks |= XHCI_QUIRK_IGNORE_STARTUP_HCE;
+        else
+            Extension->Quirks &= ~XHCI_QUIRK_IGNORE_STARTUP_HCE;
     }
 
     /* Force 32-bit DMA override */
