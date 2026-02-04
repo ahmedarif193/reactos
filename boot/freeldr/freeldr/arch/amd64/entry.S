@@ -32,7 +32,10 @@ RealEntryPoint:
     mov rsp, qword ptr [rip + stack64]
 
     /* Continue execution */
-    jmp FrldrStartup
+    jmp qword ptr [rip + ContinueAddress]
+
+ContinueAddress:
+    .quad FrldrStartup
 
 FrldrStartup:
 
@@ -175,9 +178,6 @@ CallRealMode:
     lea rax, [rip + CallRealMode_return]
     mov qword ptr [rip + ContinueAddress], rax
 
-ContinueAddress:
-    .quad 0
-
 SwitchToReal:
     /* Set sane segments */
     mov ax, LMODE_DS
@@ -193,17 +193,11 @@ SwitchToReal:
     mov qword ptr [rip + stack64], rsp
 
     /* Step 1 - jump to compatibility segment */
-    /* Use image-relative addressing + runtime fixup for LLD compatibility */
-    lea rax, [rip + jumpvector]
-    lea rbx, [rip + SwitchToRealCompSegment]
-    mov dword ptr [rax], ebx    /* Store absolute address */
-    mov word ptr [rax + 4], CMODE_CS
-    jmp fword ptr [rax]         /* Far jump through computed address */
+    jmp fword ptr [rip + jumpvector]
 
-    .align 8
 jumpvector:
-    .long 0
-    .word 0
+    .long SwitchToRealCompSegment
+    .word CMODE_CS
 
 SwitchToRealCompSegment:
     /* Note: In fact the CPU is in 32 bit mode here. But it will interpret
@@ -220,7 +214,7 @@ SwitchToRealCompSegment:
     .byte HEX(0EA) // 32bit long jmp
 AddressOfRealModeEntryPoint:
     .long 0 // receives address of RealModeEntryPoint
-    .word HEX(20)//RMODE_CS
+    .word L_RMODE_CS
     nop
 
 CallRealMode_return:
