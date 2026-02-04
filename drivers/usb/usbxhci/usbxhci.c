@@ -12419,8 +12419,6 @@ XHCI_InterruptService(PVOID MiniPortExtension)
     ULONG Status;
     ULONG AckMask;
     ULONG UsbSts;
-    PXHCI_INTERRUPTER_REGISTER_SET Interrupter;
-    ULONG Iman;
 
     if (!Extension || !Extension->OperationalRegisters)
         return FALSE;

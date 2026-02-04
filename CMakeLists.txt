@@ -363,11 +363,6 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     include(sdk/cmake/widl-support.cmake)
 
     if(REACTOS_CXX_STL_INCLUDE_DIRS)
-        if(REACTOS_CXX_STL_FORCE_NON_SYSTEM)
-            include_directories(BEFORE ${REACTOS_CXX_STL_INCLUDE_DIRS})
-        else()
-            include_directories(BEFORE SYSTEM ${REACTOS_CXX_STL_INCLUDE_DIRS})
-        endif()
         include_directories(SYSTEM
             sdk/include
             sdk/include/crt
@@ -407,16 +402,6 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
             sdk/include/dxsdk
             sdk/lib/pseh/include
         )
-    endif()
-
-    if(REACTOS_CXX_STL_INCLUDE_DIRS AND NOT REACTOS_CXX_STL_FORCE_NON_SYSTEM)
-        get_directory_property(_reactos_sys_includes SYSTEM_INCLUDE_DIRECTORIES)
-        foreach(_dir IN LISTS REACTOS_CXX_STL_INCLUDE_DIRS)
-            list(REMOVE_ITEM _reactos_sys_includes "${_dir}")
-        endforeach()
-        set_property(DIRECTORY PROPERTY SYSTEM_INCLUDE_DIRECTORIES
-            "${REACTOS_CXX_STL_INCLUDE_DIRS};${_reactos_sys_includes}")
-        unset(_reactos_sys_includes)
     endif()
 
     if(ARCH STREQUAL "arm")

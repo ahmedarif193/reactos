@@ -6,10 +6,7 @@ if(ENABLE_CCACHE)
     set(CMAKE_CXX_USE_RESPONSE_FILE_FOR_INCLUDES OFF)
 endif()
 
-# PDB style debug info
-if(NOT DEFINED SEPARATE_DBG)
-    set(SEPARATE_DBG FALSE)
-endif()
+# SEPARATE_DBG is defined in ReactOS.cmake as a CACHE variable (default: TRUE)
 
 # DWARF debug sections are used directly for ALL architectures.
 # The rossym_new library parses DWARF sections for symbol resolution.
@@ -1243,6 +1240,8 @@ if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
         unset(_LIBGCCEH_TOOLCHAIN_ROOT)
     endif()
     set_target_properties(libgcc_eh PROPERTIES IMPORTED_LOCATION ${LIBGCCEH_LOCATION})
+    # libgcc_eh (emutls) references pthread_* from libwinpthread (GCC 15+)
+    set_property(TARGET libgcc_eh APPEND PROPERTY INTERFACE_LINK_LIBRARIES libwinpthread)
     # libsupc++ requires libgcc_eh, libgcc and stdc++compat
     target_link_libraries(libsupc++ INTERFACE libgcc_eh libgcc stdc++compat)
 else()

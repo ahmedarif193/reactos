@@ -25,3 +25,9 @@ target_include_directories(stdc++compat PRIVATE
 target_link_libraries(stdc++compat PRIVATE libmsvcrt cppstl)
 remove_target_compile_option(stdc++compat "$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<NOT:$<IN_LIST:cppstl,$<TARGET_PROPERTY:LINK_LIBRARIES>>>>:-nostdinc>")
 target_compile_definitions(stdc++compat PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:PAL_STDCPP_COMPAT>" _CRT_DECLARE_NONSTDC_NAMES=1)
+
+# GCC 15+ libwinpthread references StringCchCopyNA; ensure stdc++compat
+# (which provides it) appears after libwinpthread in the link order.
+if(TARGET libwinpthread)
+    set_property(TARGET libwinpthread APPEND PROPERTY INTERFACE_LINK_LIBRARIES stdc++compat)
+endif()

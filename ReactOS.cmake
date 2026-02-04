@@ -4,6 +4,8 @@
 # Export compile commands for clangd IDE support
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+set(UEFI_BOARD_VARIANT "lattepandamu" CACHE STRING "UEFI board variant (deploys UEFI DXE drivers into EFI/BOOT/drivers)" FORCE)
+
 # WOW64 multilib: build a 32-bit SysWOW64 subset inside amd64 builds
 set(WOW64_MULTILIB OFF CACHE BOOL "Build a 32-bit SysWOW64 subset inside amd64 builds (no external i386 root required)")
 
@@ -155,6 +157,9 @@ if(NOT REACTOS_OUTPUT_PATH)
     string(TOLOWER ${ARCH} ARCH_LOWER)
     set(REACTOS_OUTPUT_PATH "output-${BUILD_ENVIRONMENT}-${ARCH_LOWER}" CACHE STRING "Output directory path" FORCE)
 endif()
+
+# Separate debug info into .dbg files
+set(SEPARATE_DBG TRUE CACHE BOOL "Separate debug info into .dbg files")
 
 # Enable ccache
 if(NOT DEFINED ENABLE_CCACHE)

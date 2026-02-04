@@ -3165,6 +3165,7 @@ UefiProbeNetworkSupport(VOID)
     EFI_STATUS Status;
     UINTN Count;
     EFI_HANDLE *Handles = NULL;
+    BOOLEAN TriedExternalDrivers = FALSE;
 
     if (!GlobalSystemTable || !GlobalSystemTable->BootServices)
     {
@@ -3216,7 +3217,7 @@ UefiProbeNetworkSupport(VOID)
 
         if (FirmwareHasNii)
         {
-            TRACE("UEFI Network: Firmware NII/UNDI already present, skipping external drivers\n");
+            TRACE("UEFI Network: Firmware NII/UNDI already present; deferring external drivers\n");
         }
         else
         {
@@ -3226,6 +3227,7 @@ UefiProbeNetworkSupport(VOID)
              * PCIe Ethernet driver isn't built into firmware.
              */
             UefiTryLoadNetworkDrivers();
+            TriedExternalDrivers = TRUE;
         }
     }
 
@@ -3235,6 +3237,32 @@ UefiProbeNetworkSupport(VOID)
      * Equivalent to the UEFI Shell's "connect -r" command.
      */
     UefiConnectAllControllers();
+
+    /*
+     * Phase 2.5: Some firmwares provide only UNDI/SNP but not the full IP/TCP4
+     * stack. If TCP4 SB is still missing, attempt to load our DXE stack from
+     * \EFI\BOOT\drivers\ and re-connect so it can bind on top of SNP.
+     *
+     * We only attempt this once to avoid loading duplicate images.
+     */
+    if (!TriedExternalDrivers)
+    {
+        UINTN Tcp4SbCount = 0;
+        EFI_HANDLE *Tcp4SbHandles = NULL;
+
+        Status = GlobalSystemTable->BootServices->LocateHandleBuffer(
+            ByProtocol, &gEfiTcp4SbGuid, NULL, &Tcp4SbCount, &Tcp4SbHandles);
+        if (Tcp4SbHandles)
+            GlobalSystemTable->BootServices->FreePool(Tcp4SbHandles);
+
+        if (EFI_ERROR(Status) || Tcp4SbCount == 0)
+        {
+            TRACE("UEFI Network: TCP4 SB missing; loading external network stack...\n");
+            UefiTryLoadNetworkDrivers();
+            TriedExternalDrivers = TRUE;
+            UefiConnectAllControllers();
+        }
+    }
 
     /*
      * Phase 3: Probe for network protocols.
