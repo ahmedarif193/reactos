@@ -10,7 +10,6 @@
 
 extern LONG *__seh_get_abnormal_termination_flag_pointer(VOID);
 
-
 _CRTIMP
 EXCEPTION_DISPOSITION
 __cdecl

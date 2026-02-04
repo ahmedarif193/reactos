@@ -396,14 +396,9 @@ else()
 endif()
 
 # LLD linker defaults to 1MB stack size while GNU ld defaults to 2MB.
-# During DLL initialization, deep call chains can exhaust the default stack.
-# Set explicit 8MB stack size for LLD due to infinite recursion in Clang builds.
-#
-# WARNING: This is a workaround, not a fix. There is infinite recursion during
-# DLL initialization that consumes the entire stack regardless of size.
-# See STACK_EXHAUSTION_ANALYSIS.md for the full investigation.
+# Match the GNU ld default of 2MB for consistency across toolchains.
 if(MINGW_LINKER_IS_LLD)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,0x800000")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,0x200000")
 endif()
 
 set(CMAKE_C_COMPILE_OBJECT "<CMAKE_C_COMPILER> <DEFINES> ${_compress_debug_sections_flag} <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>")

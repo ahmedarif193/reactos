@@ -727,11 +727,9 @@ TRACKBAR_DrawThumb (TRACKBAR_INFO *infoPtr, HDC hdc)
 
     if (infoPtr->dwStyle & WS_DISABLED || infoPtr->flags & TB_DRAG_MODE)
     {
+        COMCTL32_EnsurePatternBrush();
         if (comctl32_color.clr3dHilight == comctl32_color.clrWindow)
-        {
-            COMCTL32_EnsurePatternBrush();
             brush = COMCTL32_hPattern55AABrush;
-        }
         else
             brush = GetSysColorBrush(COLOR_SCROLLBAR);
 
