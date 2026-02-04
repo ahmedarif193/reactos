@@ -136,10 +136,6 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
         //
         // Release the System PTE lock and return failure
         //
-        DbgPrint("MiReserveSystemPtes FAIL: Need=%lu Type=%d TotalFree=%lu TotalPtes=%lu\n",
-                 NumberOfPtes, SystemPtePoolType,
-                 MmTotalFreeSystemPtes[SystemPtePoolType],
-                 MmTotalSystemPtes);
         KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
         return NULL;
     }

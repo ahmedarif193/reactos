@@ -310,12 +310,7 @@ Return Value:
         //  expected.
         //
 
-        if (IrpContext->ExceptionStatus != ExceptionCode)
-        {
-            DbgPrint("FATDATA: ExceptionStatus mismatch: IrpCtx=%lx Code=%lx\n",
-                     IrpContext->ExceptionStatus, ExceptionCode);
-            IrpContext->ExceptionStatus = ExceptionCode;
-        }
+        NT_ASSERT( IrpContext->ExceptionStatus == ExceptionCode );
         NT_ASSERT( FsRtlIsNtstatusExpected( ExceptionCode ) );
     }
 

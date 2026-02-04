@@ -245,11 +245,7 @@ RtlCreateUserThread(IN HANDLE ProcessHandle,
                                  StackCommit,
                                  StackZeroBits,
                                  &InitialTeb);
-    if (!NT_SUCCESS(Status))
-    {
-        DbgPrint("RtlCreateUserThread: RtlpCreateUserStack failed: 0x%lx\n", Status);
-        return Status;
-    }
+    if (!NT_SUCCESS(Status)) return Status;
 
     /* Next, we'll set up the Initial Context */
     RtlInitializeContext(ProcessHandle,

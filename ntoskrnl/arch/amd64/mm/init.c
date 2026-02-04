@@ -398,24 +398,8 @@ MiBuildSystemPteSpace(VOID)
     SIZE_T NonPagedSystemSize;
     PVOID SystemPteRangeEnd;
 
-    /*
-     * Use the value already tuned by MmArmInitSystem (mminit.c) as a starting
-     * point, but ensure at least MI_NUMBER_SYSTEM_PTES.  On amd64 the 128 GB
-     * system PTE VA region can hold millions of PTEs, so also scale based on
-     * physical memory: drivers routinely map large device BARs (GPU VRAM etc.)
-     * via MmMapIoSpace, which consumes system PTEs.  Windows x64 auto-tunes
-     * this value and never exposes the static constant to users.
-     */
-    if (MmNumberOfSystemPtes < MI_NUMBER_SYSTEM_PTES)
-        MmNumberOfSystemPtes = MI_NUMBER_SYSTEM_PTES;
-
-    /* Scale: 1 system PTE per 4 physical pages (e.g. 4 GB RAM -> ~256K PTEs) */
-    {
-        PFN_COUNT MemBasedPtes = MmNumberOfPhysicalPages / 4;
-        if (MemBasedPtes > MmNumberOfSystemPtes)
-            MmNumberOfSystemPtes = MemBasedPtes;
-    }
-
+    /* Use the default number of system PTEs */
+    MmNumberOfSystemPtes = MI_NUMBER_SYSTEM_PTES;
     NonPagedSystemSize = (MmNumberOfSystemPtes + 1) * PAGE_SIZE;
 
     /* Put system PTEs at the start of the system VA space */

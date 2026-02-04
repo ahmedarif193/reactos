@@ -2593,8 +2593,6 @@ SmpInit(IN PUNICODE_STRING InitialCommand,
                                  PortHandle,
                                  NULL,
                                  NULL);
-    if (!NT_SUCCESS(Status))
-        DbgPrint("SMSS: RtlCreateUserThread(1) failed: 0x%lx\n", Status);
     ASSERT(NT_SUCCESS(Status));
     Status = RtlCreateUserThread(NtCurrentProcess(),
                                  NULL,

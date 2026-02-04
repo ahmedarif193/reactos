@@ -1131,9 +1131,9 @@ FdoHandleDeviceRelations(
 
         PDEVICE_RELATIONS deviceRelations =
             ExAllocatePoolWithTag(PagedPool,
-                                  FIELD_OFFSET(DEVICE_RELATIONS, Objects)
+                                  sizeof(DEVICE_RELATIONS)
                                   + sizeof(PDEVICE_OBJECT)
-                                  * FdoExtension->EnumeratedPartitionsTotal,
+                                  * (FdoExtension->EnumeratedPartitionsTotal - 1),
                                   TAG_PARTMGR);
 
         if (!deviceRelations)

@@ -328,12 +328,7 @@ MmCreateKernelStack(IN BOOLEAN GuiStack,
     // Reserve stack pages, plus a guard page
     //
     StackPte = MiReserveSystemPtes(StackPtes + 1, SystemPteSpace);
-    if (!StackPte)
-    {
-        DbgPrint("MmCreateKernelStack: MiReserveSystemPtes(%lu) failed! GuiStack=%d\n",
-                 StackPtes + 1, GuiStack);
-        return NULL;
-    }
+    if (!StackPte) return NULL;
 
     //
     // Get the stack address

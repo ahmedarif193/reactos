@@ -164,7 +164,7 @@ CheckFor64BitSupport:
     mov eax, HEX(80000000)
     cpuid
     cmp eax, HEX(80000000)  // Any function > 0x80000000 ?
-    jbe .ProbeLongMode      // If not, try probing directly.
+    jbe .NoLongMode         // If not, no long mode.
     /* Check whether the CPU supports Long Mode */
     xor edx, edx
     mov eax, HEX(80000001)
@@ -173,44 +173,6 @@ CheckFor64BitSupport:
     test edx, edx
     jnz .Success
 
-.ProbeLongMode:
-    /*
-     * CPUID does not advertise Long Mode. Hypervisors (e.g. VirtualBox)
-     * may hide the LM bit while still allowing 64-bit guest execution.
-     * Probe by writing EFER.LME (bit 8) via MSR C0000080h. If the write
-     * succeeds and the bit sticks, Long Mode is usable. A #GP means
-     * the MSR does not exist or LME cannot be set.
-     */
-    xor ax, ax
-    mov es, ax
-    /* Save INT 0Dh vector and SP for fault recovery */
-    mov eax, dword ptr es:[HEX(34)]
-    mov dword ptr ds:[.OldGP], eax
-    mov word ptr ds:[.SavedSP], sp
-    mov word ptr es:[HEX(34)], offset .GPHandler
-    mov word ptr es:[HEX(36)], cs
-    /* Try to set EFER.LME */
-    mov ecx, HEX(C0000080)
-    rdmsr
-    or ah, 1
-    wrmsr
-    rdmsr
-    test ah, 1
-    jz .RestoreGP
-    /* LME stuck - Long Mode works. Clear it and report success. */
-    and ah, HEX(FE)
-    wrmsr
-    /* Restore INT 0Dh and succeed */
-    mov eax, dword ptr ds:[.OldGP]
-    mov dword ptr es:[HEX(34)], eax
-    jmp .Success
-
-.RestoreGP:
-    mov eax, dword ptr ds:[.OldGP]
-    xor bx, bx
-    mov es, bx
-    mov dword ptr es:[HEX(34)], eax
-
 .NoLongMode:
     mov si, offset .Msg_NoLongMode
     call writestr
@@ -218,18 +180,8 @@ CheckFor64BitSupport:
     xor al, al
     ret
 
-.OldGP:
-    .long 0
-.SavedSP:
-    .word 0
-
 .Msg_NoLongMode:
     .ascii "Long mode is not supported.", CR, LF, NUL
-
-    /* #GP handler: restore SP and fall through to vector restore + fail */
-.GPHandler:
-    mov sp, word ptr cs:[.SavedSP]
-    jmp .RestoreGP
 
 .Success:
     popad
