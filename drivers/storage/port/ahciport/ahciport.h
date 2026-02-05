@@ -71,7 +71,7 @@ typedef struct _SCSI_SUPPORTED_CONTROL_TYPE_LIST {
 /* Basic tags and constants */
 #define AHCI_TAG 'IHCA'
 #define AHCI_MAX_PORTS 32
-#define AHCI_MAX_PRDT_ENTRIES 32
+#define AHCI_MAX_PRDT_ENTRIES 256
 #define AHCI_CMD_TABLE_ALLOC_SIZE \
     (sizeof(AHCI_CMD_TABLE) + ((AHCI_MAX_PRDT_ENTRIES - 1) * sizeof(AHCI_PRDT_ENTRY)))
 

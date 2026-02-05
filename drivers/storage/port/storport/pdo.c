@@ -687,9 +687,12 @@ PortPdoPnp(
                 RtlStringCchCopyW(RevisionW, RTL_NUMBER_OF(RevisionW), L"0001");
             }
 
+            /* Use correct SCSI device class prefix based on DeviceType */
             Status = RtlStringCbPrintfW(DeviceIdBuffer,
                                         sizeof(DeviceIdBuffer),
-                                        L"SCSI\\Disk%ws_%ws_%ws",
+                                        (PdoExtension->Device->DeviceType == FILE_DEVICE_CD_ROM)
+                                            ? L"SCSI\\CdRom%ws_%ws_%ws"
+                                            : L"SCSI\\Disk%ws_%ws_%ws",
                                         VendorW,
                                         ProductW,
                                         RevisionW);
@@ -719,8 +722,10 @@ PortPdoPnp(
                 case BusQueryHardwareIDs:
                 case BusQueryCompatibleIDs:
                 {
+                    PCWSTR GenericId = (PdoExtension->Device->DeviceType == FILE_DEVICE_CD_ROM)
+                                       ? L"GenCdRom" : L"GenDisk";
                     SIZE_T DeviceIdChars = wcslen(DeviceIdBuffer) + 1;
-                    SIZE_T GenericChars = wcslen(L"GenDisk") + 1;
+                    SIZE_T GenericChars = wcslen(GenericId) + 1;
                     Length = (DeviceIdChars + GenericChars + 1) * sizeof(WCHAR);
                     Buffer = ExAllocatePoolWithTag(PagedPool, Length, TAG_PDO_ID);
                     if (Buffer == NULL)
@@ -730,7 +735,7 @@ PortPdoPnp(
                     }
                     RtlZeroMemory(Buffer, Length);
                     RtlCopyMemory(Buffer, DeviceIdBuffer, DeviceIdChars * sizeof(WCHAR));
-                    RtlCopyMemory(Buffer + DeviceIdChars, L"GenDisk", GenericChars * sizeof(WCHAR));
+                    RtlCopyMemory(Buffer + DeviceIdChars, GenericId, GenericChars * sizeof(WCHAR));
                     Information = (ULONG_PTR)Buffer;
                     Status = STATUS_SUCCESS;
                     break;

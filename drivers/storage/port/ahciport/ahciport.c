@@ -2119,7 +2119,7 @@ AhciHwFindAdapter(
     ConfigInfo->MapBuffers = TRUE;
     ConfigInfo->NeedPhysicalAddresses = TRUE;
     ConfigInfo->ScatterGather = TRUE;
-    ConfigInfo->NumberOfPhysicalBreaks = AHCI_MAX_PRDT_ENTRIES;
+    ConfigInfo->NumberOfPhysicalBreaks = AHCI_MAX_PRDT_ENTRIES - 1;
     ConfigInfo->MaximumNumberOfTargets = AHCI_MAX_PORTS;
     ConfigInfo->MaximumNumberOfLogicalUnits = 1;
     ConfigInfo->MaximumTransferLength = AHCI_MAX_TRANSFER_LENGTH;

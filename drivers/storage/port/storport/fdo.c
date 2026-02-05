@@ -58,6 +58,59 @@ PortFdoInterruptRoutine(
 
 
 static
+BOOLEAN
+NTAPI
+PortFdoMsiRoutine(
+    _In_ PKINTERRUPT Interrupt,
+    _In_ PVOID ServiceContext,
+    _In_ ULONG MessageId)
+{
+    PFDO_DEVICE_EXTENSION DeviceExtension;
+
+    UNREFERENCED_PARAMETER(Interrupt);
+    UNREFERENCED_PARAMETER(MessageId);
+
+    DeviceExtension = (PFDO_DEVICE_EXTENSION)ServiceContext;
+
+    return MiniportHwInterrupt(&DeviceExtension->Miniport);
+}
+
+
+static
+BOOLEAN
+PortFdoHasMsiResources(
+    _In_ PFDO_DEVICE_EXTENSION DeviceExtension)
+{
+    PCM_FULL_RESOURCE_DESCRIPTOR FullDescriptor;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptor;
+    INT i, j;
+
+    if (DeviceExtension->TranslatedResources == NULL)
+        return FALSE;
+
+    FullDescriptor = DeviceExtension->TranslatedResources->List;
+    for (i = 0; i < (INT)DeviceExtension->TranslatedResources->Count; i++)
+    {
+        for (j = 0; j < (INT)FullDescriptor->PartialResourceList.Count; j++)
+        {
+            PartialDescriptor = FullDescriptor->PartialResourceList.PartialDescriptors + j;
+
+            if (PartialDescriptor->Type == CmResourceTypeInterrupt &&
+                (PartialDescriptor->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+            {
+                return TRUE;
+            }
+        }
+
+        FullDescriptor = (PCM_FULL_RESOURCE_DESCRIPTOR)(FullDescriptor->PartialResourceList.PartialDescriptors +
+                                                        FullDescriptor->PartialResourceList.Count);
+    }
+
+    return FALSE;
+}
+
+
+static
 NTSTATUS
 PortFdoConnectInterrupt(
     _In_ PFDO_DEVICE_EXTENSION DeviceExtension)
@@ -80,7 +133,38 @@ PortFdoConnectInterrupt(
         return STATUS_SUCCESS;
     }
 
-    /* Get the interrupt data from the resource list */
+    /* Try MSI/MSI-X first (Windows 10 style) */
+    if (PortFdoHasMsiResources(DeviceExtension))
+    {
+        IO_CONNECT_INTERRUPT_PARAMETERS ConnectParams;
+
+        DPRINT("PortFdoConnectInterrupt: Using MSI/MSI-X\n");
+
+        RtlZeroMemory(&ConnectParams, sizeof(ConnectParams));
+        ConnectParams.Version = CONNECT_MESSAGE_BASED;
+        ConnectParams.MessageBased.PhysicalDeviceObject = DeviceExtension->PhysicalDevice;
+        ConnectParams.MessageBased.MessageServiceRoutine = PortFdoMsiRoutine;
+        ConnectParams.MessageBased.ServiceContext = DeviceExtension;
+        ConnectParams.MessageBased.ConnectionContext.InterruptMessageTable = &DeviceExtension->MessageInfo;
+        ConnectParams.MessageBased.SpinLock = NULL;
+        ConnectParams.MessageBased.SynchronizeIrql = 0;
+        ConnectParams.MessageBased.FloatingSave = FALSE;
+
+        Status = IoConnectInterruptEx(&ConnectParams);
+        if (NT_SUCCESS(Status))
+        {
+            DeviceExtension->UsingMsi = TRUE;
+            DeviceExtension->InterruptIrql = DeviceExtension->MessageInfo->UnifiedIrql;
+            DPRINT("PortFdoConnectInterrupt: MSI connected, MessageCount=%lu, UnifiedIrql=%u\n",
+                   DeviceExtension->MessageInfo->MessageCount,
+                   DeviceExtension->MessageInfo->UnifiedIrql);
+            return STATUS_SUCCESS;
+        }
+
+        DPRINT1("IoConnectInterruptEx(MSI) failed (Status 0x%08lx), falling back to INTx\n", Status);
+    }
+
+    /* Fallback to legacy INTx */
     Status = GetResourceListInterrupt(DeviceExtension,
                                       &Vector,
                                       &Irql,
@@ -95,7 +179,6 @@ PortFdoConnectInterrupt(
 
     DPRINT("Vector: %lu\n", Vector);
     DPRINT("Irql: %lu\n", Irql);
-
     DPRINT("Affinity: 0x%08lx\n", Affinity);
 
     /* Connect the interrupt */
@@ -112,6 +195,7 @@ PortFdoConnectInterrupt(
                                 FALSE);
     if (NT_SUCCESS(Status))
     {
+        DeviceExtension->UsingMsi = FALSE;
         DeviceExtension->InterruptIrql = Irql;
     }
     else
@@ -590,6 +674,15 @@ PortFdoScanBus(
                 DPRINT("ProductId: %.16s\n", PdoExtension->InquiryBuffer->ProductId);
                 DPRINT("ProductRevisionLevel: %.4s\n", PdoExtension->InquiryBuffer->ProductRevisionLevel);
                 DPRINT("VendorSpecific: %.20s\n", PdoExtension->InquiryBuffer->VendorSpecific);
+
+                /* Fix device type for optical drives - PortCreatePdo creates all
+                 * PDOs as FILE_DEVICE_DISK, but PnP needs the correct type to
+                 * route to cdrom.sys instead of disk.sys */
+                if (PdoExtension->InquiryBuffer->DeviceType == READ_ONLY_DIRECT_ACCESS_DEVICE)
+                {
+                    PdoExtension->Device->DeviceType = FILE_DEVICE_CD_ROM;
+                    DPRINT("Updated PDO DeviceType to FILE_DEVICE_CD_ROM for optical drive\n");
+                }
             }
 
 #if 0
@@ -728,9 +821,21 @@ PortFdoRemoveDevice(
     }
 
     /* Disconnect interrupt if connected */
-    if (DeviceExtension->Interrupt != NULL)
+    if (DeviceExtension->UsingMsi && DeviceExtension->MessageInfo != NULL)
     {
-        DPRINT("PortFdoRemoveDevice: Disconnecting interrupt\n");
+        IO_DISCONNECT_INTERRUPT_PARAMETERS DisconnectParams;
+
+        DPRINT("PortFdoRemoveDevice: Disconnecting MSI interrupt\n");
+        RtlZeroMemory(&DisconnectParams, sizeof(DisconnectParams));
+        DisconnectParams.Version = CONNECT_MESSAGE_BASED;
+        DisconnectParams.ConnectionContext.InterruptMessageTable = DeviceExtension->MessageInfo;
+        IoDisconnectInterruptEx(&DisconnectParams);
+        DeviceExtension->MessageInfo = NULL;
+        DeviceExtension->UsingMsi = FALSE;
+    }
+    else if (DeviceExtension->Interrupt != NULL)
+    {
+        DPRINT("PortFdoRemoveDevice: Disconnecting INTx interrupt\n");
         IoDisconnectInterrupt(DeviceExtension->Interrupt);
         DeviceExtension->Interrupt = NULL;
     }

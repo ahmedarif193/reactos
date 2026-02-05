@@ -23,6 +23,23 @@
 #include <mountdev.h>
 #include <wdmguid.h>
 
+/*
+ * MSI/MSI-X Support
+ * IoConnectInterruptEx/IoDisconnectInterruptEx are gated behind NTDDI_VISTA
+ * but our build uses _WIN32_WINNT=0x502. Declare them here for MSI support.
+ */
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoConnectInterruptEx(
+    _Inout_ PIO_CONNECT_INTERRUPT_PARAMETERS Parameters);
+
+NTKERNELAPI
+VOID
+NTAPI
+IoDisconnectInterruptEx(
+    _In_ PIO_DISCONNECT_INTERRUPT_PARAMETERS Parameters);
+
 /* Memory Tags */
 #define TAG_GLOBAL_DATA     'DGtS'
 #define TAG_INIT_DATA       'DItS'
@@ -162,6 +179,10 @@ typedef struct _FDO_DEVICE_EXTENSION
     PHW_PASSIVE_INITIALIZE_ROUTINE HwPassiveInitRoutine;
     PKINTERRUPT Interrupt;
     ULONG InterruptIrql;
+
+    /* MSI/MSI-X support */
+    BOOLEAN UsingMsi;
+    PIO_INTERRUPT_MESSAGE_INFO MessageInfo;
 
     KSPIN_LOCK PdoListLock;
     LIST_ENTRY PdoListHead;
