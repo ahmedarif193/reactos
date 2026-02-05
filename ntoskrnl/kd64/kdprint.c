@@ -723,7 +723,6 @@ KdpPrint(
     _Out_ PBOOLEAN Handled)
 {
     NTSTATUS Status;
-    BOOLEAN Enable;
     STRING OutputString;
     CHAR LocalBuffer[KD_PRINT_MAX_BYTES];
     USHORT PrefixLength = 0;
@@ -793,10 +792,16 @@ KdpPrint(
         return STATUS_DEVICE_NOT_CONNECTED;
     }
 
-    /* Enter the debugger */
-    Enable = KdEnterDebugger(TrapFrame, ExceptionFrame);
-
-    /* Print the string */
+    /*
+     * Send the string directly without KdEnterDebugger/KdExitDebugger.
+     * The freeze-all-CPUs mechanism is for interactive debugger operations
+     * (breakpoints, exceptions, prompts) where system state must be consistent.
+     * DbgPrint is fire-and-forget diagnostic output — freezing all CPUs for
+     * every print line causes livelock under SMP with many processors.
+     * KdpTrap already routes BREAKPOINT_PRINT here without freezing;
+     * actual debugger entries (KdpReport, KdpSymbol, KdpPrompt) have their
+     * own KdEnterDebugger calls.
+     */
     if (KdpPrintString(&OutputString))
     {
         /* User pressed CTRL-C, breakpoint on return */
@@ -808,8 +813,6 @@ KdpPrint(
         Status = STATUS_SUCCESS;
     }
 
-    /* Exit the debugger and return */
-    KdExitDebugger(Enable);
     *Handled = TRUE;
     return Status;
 }
