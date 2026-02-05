@@ -281,57 +281,6 @@ ComputePartitionIndex(IN EFI_HANDLE PartHandle, OUT ULONG* OutIndex, OUT EFI_HAN
 }
 
 /* -------------------------------------------------------------------------- */
-/* MBR signature reading                                                      */
-/* -------------------------------------------------------------------------- */
-
-static BOOLEAN
-ReadDiskSignature(
-    IN  EFI_BLOCK_IO_PROTOCOL* BlockIo,
-    OUT PULONG Signature,
-    OUT PULONG CheckSum)
-{
-    EFI_STATUS Status;
-    UINT8*     Buffer;
-    ULONG      i, Sum = 0;
-
-    *Signature = 0;
-    *CheckSum  = 0;
-
-    Status = GlobalSystemTable->BootServices->AllocatePool(
-        EfiLoaderData,
-        BlockIo->Media->BlockSize,
-        (VOID**)&Buffer);
-    if (EFI_ERROR(Status)) return FALSE;
-
-    Status = BlockIo->ReadBlocks(
-        BlockIo,
-        BlockIo->Media->MediaId,
-        0,
-        BlockIo->Media->BlockSize,
-        Buffer);
-    if (EFI_ERROR(Status))
-    {
-        GlobalSystemTable->BootServices->FreePool(Buffer);
-        return FALSE;
-    }
-
-    MASTER_BOOT_RECORD* Mbr = (MASTER_BOOT_RECORD*)Buffer;
-    if (Mbr->MasterBootRecordMagic == 0xAA55)
-    {
-        for (i = 0; i < (512u / (UINT32)sizeof(ULONG)); i++)
-            Sum += ((PULONG)Buffer)[i];
-        *CheckSum = ~Sum + 1;
-        *Signature = Mbr->Signature;
-
-        GlobalSystemTable->BootServices->FreePool(Buffer);
-        return TRUE;
-    }
-
-    GlobalSystemTable->BootServices->FreePool(Buffer);
-    return FALSE;
-}
-
-/* -------------------------------------------------------------------------- */
 /* Small helpers to map handles to indices                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -374,31 +323,73 @@ UefiGetCdromCount(VOID)
 BOOLEAN
 UefiEnumerateArcDisks(VOID)
 {
+    ULONG       PhysDiskCount;
+    ULONG       i;
     EFI_STATUS  Status;
     EFI_HANDLE* Handles     = NULL;
     UINTN       HandleCount = 0;
-    UINTN       i;
-    ULONG       ValidDiskCount = 0;
 
     TRACE("UefiEnumerateArcDisks: Starting UEFI disk enumeration\n");
 
+    /* ------------------------------------------------------------------
+     * Phase A — HDD/SSD: Populate UefiDiskHandles[] from the first
+     * enumeration (UefiSetupBlockDevices).  Do NOT call
+     * AddReactOSArcDiskInfo(); it was already done correctly by
+     * GetHarddiskInformation() with consistent rdisk indices.
+     * ------------------------------------------------------------------ */
+    PhysDiskCount = UefiGetPhysicalDiskCount();
+
+    UefiDiskHandles = (UEFI_DISK_HANDLE_ENTRY*)FrLdrHeapAlloc(
+        sizeof(UEFI_DISK_HANDLE_ENTRY) * max(PhysDiskCount, 1), TAG_UEFI_DISK);
+    if (!UefiDiskHandles)
+    {
+        ERR("UEFI ARC: Failed to allocate disk handle table\n");
+        return FALSE;
+    }
+    RtlZeroMemory(UefiDiskHandles, sizeof(UEFI_DISK_HANDLE_ENTRY) * max(PhysDiskCount, 1));
+
+    for (i = 0; i < PhysDiskCount; i++)
+    {
+        EFI_HANDLE H = UefiGetPhysicalDiskHandle(i);
+        EFI_BLOCK_IO_PROTOCOL* BlockIo = NULL;
+
+        if (H)
+        {
+            GlobalSystemTable->BootServices->HandleProtocol(
+                H, &gEfiBlockIoProtocolGuid, (VOID**)&BlockIo);
+        }
+
+        UefiDiskHandles[i].Handle     = H;
+        UefiDiskHandles[i].BlockIo    = BlockIo;
+        UefiDiskHandles[i].DiskNumber = i;
+
+        TRACE("UEFI ARC: Reused rdisk(%lu) handle=%p from first enumeration\n", i, H);
+    }
+    UefiDiskHandleCount = PhysDiskCount;
+
+    /* ------------------------------------------------------------------
+     * Phase B — CD-ROM: Use LocateHandleBuffer to find CD-ROM devices
+     * and register cdrom(K) ARC entries.
+     * ------------------------------------------------------------------ */
     Status = GlobalSystemTable->BootServices->LocateHandleBuffer(
         ByProtocol, &gEfiBlockIoProtocolGuid, NULL, &HandleCount, &Handles);
     if (EFI_ERROR(Status) || HandleCount == 0)
     {
-        ERR("UEFI ARC: No block devices found (Status=%lx)\n", (ULONG_PTR)Status);
-        return FALSE;
+        TRACE("UEFI ARC: No block devices for CD-ROM scan (Status=%lx)\n", (ULONG_PTR)Status);
+        /* HDD-only system is fine */
+        TRACE("UefiEnumerateArcDisks: Found %lu HDD/SSD, 0 CD-ROM\n",
+              (ULONG)UefiDiskHandleCount);
+        return UefiDiskHandleCount > 0;
     }
 
-    /* Allocate worst-case storage for HDDs and CDs (we’ll fill actual counts) */
-    UefiDiskHandles  = (UEFI_DISK_HANDLE_ENTRY*)FrLdrHeapAlloc(sizeof(UEFI_DISK_HANDLE_ENTRY) * HandleCount, TAG_UEFI_DISK);
     UefiCdromHandles = (EFI_HANDLE*)FrLdrHeapAlloc(sizeof(EFI_HANDLE) * HandleCount, TAG_UEFI_DISK);
-    if (!UefiDiskHandles || !UefiCdromHandles)
+    if (!UefiCdromHandles)
     {
-        if (Handles) GlobalSystemTable->BootServices->FreePool(Handles);
-        return FALSE;
+        GlobalSystemTable->BootServices->FreePool(Handles);
+        TRACE("UefiEnumerateArcDisks: Found %lu HDD/SSD, 0 CD-ROM (alloc failure)\n",
+              (ULONG)UefiDiskHandleCount);
+        return UefiDiskHandleCount > 0;
     }
-    RtlZeroMemory(UefiDiskHandles,  sizeof(UEFI_DISK_HANDLE_ENTRY) * HandleCount);
     RtlZeroMemory(UefiCdromHandles, sizeof(EFI_HANDLE) * HandleCount);
 
     for (i = 0; i < HandleCount; i++)
@@ -413,63 +404,24 @@ UefiEnumerateArcDisks(VOID)
         if (!BlockIo->Media->MediaPresent)
             continue;
 
-        /* Identify if this is the boot handle (keep removable if it's the boot device) */
-        BOOLEAN isBootHandle = FALSE;
-        EFI_LOADED_IMAGE_PROTOCOL* LoadedImage = NULL;
-        if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
-                GlobalImageHandle, &gEfiLoadedImageProtocolGuid, (VOID**)&LoadedImage)) &&
-            LoadedImage && LoadedImage->DeviceHandle == H)
-        {
-            isBootHandle = TRUE;
-        }
-
-        BOOLEAN isPartition = BlockIo->Media->LogicalPartition;
-        BOOLEAN isRemovable = BlockIo->Media->RemovableMedia;
-        BOOLEAN isCd        = UefiIsCdRomHandle(H);
-
-        /* We only index physical handles (non-partitions) */
-        if (isPartition) continue;
-
-        /* Skip non-boot removable devices except CD-ROMs (we still index CDs) */
-        if (isRemovable && !isBootHandle && !isCd)
+        /* Only process physical (non-partition) CD-ROM handles */
+        if (BlockIo->Media->LogicalPartition)
             continue;
 
-        if (isCd)
+        if (!UefiIsCdRomHandle(H))
+            continue;
+
         {
-            /* Map cdrom(k) with a sequential index */
             CHAR ArcName[64];
             ULONG idx = UefiCdromCount;
 
-            RtlStringCbPrintfA(ArcName, sizeof(ArcName), "multi(0)disk(0)cdrom(%lu)", (ULONG)idx);
-            /* CDs have no MBR; pass ValidPartitionTable = FALSE */
+            RtlStringCbPrintfA(ArcName, sizeof(ArcName), "multi(0)disk(0)cdrom(%lu)", idx);
             AddReactOSArcDiskInfo(ArcName, 0, 0, FALSE);
             UefiCdromHandles[UefiCdromCount++] = H;
 
-            TRACE("UEFI ARC: Found CD-ROM %lu: %s\n", (ULONG)idx, ArcName);
-        }
-        else
-        {
-            /* HDD/SSD physical disk */
-            CHAR  ArcName[64];
-            ULONG Signature = 0, CheckSum = 0;
-            BOOLEAN HasMbr  = ReadDiskSignature(BlockIo, &Signature, &CheckSum);
-
-            UefiDiskHandles[ValidDiskCount].Handle     = H;
-            UefiDiskHandles[ValidDiskCount].BlockIo    = BlockIo;
-            UefiDiskHandles[ValidDiskCount].DiskNumber = ValidDiskCount;
-
-            RtlStringCbPrintfA(ArcName, sizeof(ArcName), "multi(0)disk(0)rdisk(%lu)", ValidDiskCount);
-
-            AddReactOSArcDiskInfo(ArcName, Signature, CheckSum, HasMbr);
-
-            TRACE("UEFI ARC: Disk %lu -> %s, Sig=0x%08X, Ck=0x%08X, MBR=%d\n",
-                  ValidDiskCount, ArcName, Signature, CheckSum, HasMbr);
-
-            ++ValidDiskCount;
+            TRACE("UEFI ARC: Found CD-ROM %lu: %s\n", idx, ArcName);
         }
     }
-
-    UefiDiskHandleCount = ValidDiskCount;
 
     GlobalSystemTable->BootServices->FreePool(Handles);
 

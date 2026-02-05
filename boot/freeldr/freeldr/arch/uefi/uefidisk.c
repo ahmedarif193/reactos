@@ -996,6 +996,20 @@ UefiSetupBlockDevices(VOID)
         }
     }
 
+ULONG
+UefiGetPhysicalDiskCount(VOID)
+{
+    return PcBiosDiskCount;
+}
+
+EFI_HANDLE
+UefiGetPhysicalDiskHandle(ULONG ArcIndex)
+{
+    if (ArcIndex >= PcBiosDiskCount)
+        return NULL;
+    return handles[InternalUefiDisk[ArcIndex].UefiRootNumber];
+}
+
 static
 BOOLEAN
 UefiSetBootpath(VOID)

@@ -37,6 +37,9 @@ extern ULONG UefiBootDiskArcNumber;
 extern ULONG UefiBootDiskArcPartition;
 ULONG MapToRdiskIndex(IN EFI_HANDLE DiskHandle);
 ULONG MapToCdromIndex(IN EFI_HANDLE CdHandle);
+
+ULONG UefiGetPhysicalDiskCount(VOID);
+EFI_HANDLE UefiGetPhysicalDiskHandle(ULONG ArcIndex);
 #endif /* UEFIBOOT */
 
 #endif /* _UEFI_ARCNAME_H_ */
