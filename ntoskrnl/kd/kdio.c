@@ -39,6 +39,13 @@ static KSPIN_LOCK KdpSerialSpinLock;
 ULONG  SerialPortNumber = DEFAULT_DEBUG_PORT;
 CPPORT SerialPortInfo   = {0, DEFAULT_DEBUG_BAUD_RATE, 0};
 
+/* Serial ring buffer — decouples HIGH_LEVEL copy from UART drain */
+#define KDP_SERIAL_RING_SIZE 8192
+static UCHAR KdpSerialRing[KDP_SERIAL_RING_SIZE];
+static volatile ULONG KdpSerialRingWrite = 0;  /* next write position */
+static volatile ULONG KdpSerialRingRead  = 0;  /* next read position  */
+static volatile LONG  KdpSerialDraining  = 0;  /* interlocked flush guard */
+
 #define KdpScreenLineLengthDefault 80
 static CHAR KdpScreenLineBuffer[KdpScreenLineLengthDefault + 1] = "";
 static ULONG KdpScreenLineBufferPos = 0, KdpScreenLineLength = 0;
@@ -387,31 +394,131 @@ Failure:
 
 /* SERIAL FUNCTIONS **********************************************************/
 
+/*
+ * Drain the serial ring buffer to the UART.
+ * Called at the caller's original IRQL (NOT HIGH_LEVEL), so the CPU
+ * spins on the UART without blocking interrupts or other processors.
+ * Uses an interlocked flag for mutual exclusion on the UART.
+ *
+ * SMP safety (SPSC ring buffer protocol):
+ *   Producer (KdpSerialPrint) writes Ring[] then updates Write cursor.
+ *   The spinlock release provides release semantics for both stores.
+ *   Consumer (here) reads Write cursor then reads Ring[].
+ *   KeMemoryBarrier after reading Write provides acquire semantics,
+ *   ensuring Ring[] loads see the producer's stores.
+ *   This is required for ARM64 (weak memory model); on x86 TSO it
+ *   is a no-op compiler barrier but keeps the code portable.
+ */
+static VOID
+KdpSerialDrain(VOID)
+{
+    ULONG Read, Write, Avail;
+
+    /* Try to acquire drain ownership — non-blocking (full barrier) */
+    if (InterlockedCompareExchange(&KdpSerialDraining, 1, 0) != 0)
+        return;
+
+    do
+    {
+        for (;;)
+        {
+            Read = KdpSerialRingRead;
+            Write = KdpSerialRingWrite;
+
+            /*
+             * Acquire barrier: ensure subsequent Ring[] loads see the
+             * data the producer stored before it updated Write.
+             */
+            KeMemoryBarrier();
+
+            if (Read == Write)
+                break;
+
+            /* Compute contiguous readable bytes (handle wraparound) */
+            if (Write > Read)
+                Avail = Write - Read;
+            else
+                Avail = KDP_SERIAL_RING_SIZE - Read;
+
+            /* Send contiguous chunk to UART via FIFO-aware batch */
+            CpPutBuffer(&SerialPortInfo, &KdpSerialRing[Read], Avail);
+
+            /*
+             * Release barrier: ensure all Ring[] loads from CpPutBuffer
+             * complete before the Read cursor advances. This prevents
+             * the producer from overwriting data we haven't finished
+             * reading (conservative — regions don't actually overlap
+             * in the SPSC protocol, but this is correct by construction).
+             */
+            KeMemoryBarrier();
+
+            /* Advance read cursor */
+            KdpSerialRingRead = (Read + Avail) % KDP_SERIAL_RING_SIZE;
+        }
+
+        InterlockedExchange(&KdpSerialDraining, 0);
+
+        /*
+         * Re-check: data may have arrived between the empty check
+         * and releasing the flag. Re-acquire if needed to avoid
+         * leaving data stranded in the ring buffer.
+         */
+    } while (KdpSerialRingRead != KdpSerialRingWrite &&
+             InterlockedCompareExchange(&KdpSerialDraining, 1, 0) == 0);
+}
+
 static VOID
 NTAPI
 KdpSerialPrint(
     _In_ PCCH String,
     _In_ ULONG Length)
 {
-    PCCH pch = String;
+    UCHAR Buffer[1024];
+    ULONG BufLen = 0;
+    ULONG i, Write, Read, Free, CopyLen, FirstChunk;
     KIRQL OldIrql;
 
-    /* Acquire the printing spinlock without waiting at raised IRQL */
-    OldIrql = KdbpAcquireLock(&KdpSerialSpinLock);
-
-    /* Output the string */
-    while (pch < String + Length && *pch)
+    /* Pre-expand \n -> \r\n into a local buffer (no lock needed) */
+    for (i = 0; i < Length && String[i]; i++)
     {
-        if (*pch == '\n')
+        if (String[i] == '\n')
         {
-            KdPortPutByteEx(&SerialPortInfo, '\r');
+            if (BufLen < sizeof(Buffer))
+                Buffer[BufLen++] = '\r';
         }
-        KdPortPutByteEx(&SerialPortInfo, *pch);
-        ++pch;
+        if (BufLen < sizeof(Buffer))
+            Buffer[BufLen++] = (UCHAR)String[i];
     }
 
-    /* Release the spinlock */
+    /* Acquire spinlock at HIGH_LEVEL — just for the ring buffer copy */
+    OldIrql = KdbpAcquireLock(&KdpSerialSpinLock);
+
+    Write = KdpSerialRingWrite;
+    Read = KdpSerialRingRead;
+    Free = (Read + KDP_SERIAL_RING_SIZE - Write - 1) % KDP_SERIAL_RING_SIZE;
+    CopyLen = min(BufLen, Free);
+
+    /* Copy to ring buffer in up to two contiguous chunks (wraparound) */
+    FirstChunk = min(CopyLen, KDP_SERIAL_RING_SIZE - Write);
+    RtlCopyMemory(&KdpSerialRing[Write], Buffer, FirstChunk);
+    if (CopyLen > FirstChunk)
+        RtlCopyMemory(&KdpSerialRing[0], Buffer + FirstChunk, CopyLen - FirstChunk);
+
+    /*
+     * Release barrier: ensure all Ring[] stores are globally visible
+     * before the Write cursor advances. The consumer reads Write then
+     * reads Ring[] with an acquire barrier — this pairing guarantees
+     * it sees the correct data on ARM64 (weak memory model).
+     * On x86 TSO this is a compiler-only barrier (stores are ordered).
+     */
+    KeMemoryBarrier();
+    KdpSerialRingWrite = (Write + CopyLen) % KDP_SERIAL_RING_SIZE;
+
+    /* Release spinlock — back to caller's IRQL */
     KdbpReleaseLock(&KdpSerialSpinLock, OldIrql);
+
+    /* Drain ring buffer to UART at caller's IRQL (not HIGH_LEVEL) */
+    KdpSerialDrain();
 }
 
 NTSTATUS

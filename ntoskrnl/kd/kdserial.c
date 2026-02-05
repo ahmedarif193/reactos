@@ -17,8 +17,13 @@ VOID
 KdbpSendCommandSerial(
     _In_ PCSTR Command)
 {
-    while (*Command)
-        KdPortPutByteEx(&SerialPortInfo, *Command++);
+    ULONG Length = 0;
+    PCSTR p = Command;
+
+    while (*p++)
+        Length++;
+
+    CpPutBuffer(&SerialPortInfo, (PUCHAR)Command, Length);
 }
 
 CHAR

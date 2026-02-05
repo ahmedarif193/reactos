@@ -26,6 +26,8 @@
 #define CPPORT_FLAG_SUPPRESS_ECHO   0x04
 /* Keep existing UART baud/divisors (do not reprogram) */
 #define CPPORT_FLAG_KEEP_BAUD       0x08
+/* UART has a working TX FIFO (16550+) */
+#define CPPORT_FLAG_HAS_FIFO        0x10
 
 typedef struct _CPPORT
 {
@@ -85,6 +87,14 @@ NTAPI
 CpPutByte(
     IN PCPPORT Port,
     IN UCHAR   Byte
+);
+
+VOID
+NTAPI
+CpPutBuffer(
+    IN PCPPORT Port,
+    IN PUCHAR  Buffer,
+    IN ULONG   Length
 );
 
 /* EOF */

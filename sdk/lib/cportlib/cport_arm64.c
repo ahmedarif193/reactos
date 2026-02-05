@@ -354,4 +354,18 @@ CpPutByte(
     Pl011WriteRegister(Port->Address, PL011_DR_OFFSET, (ULONG)Byte);
 }
 
+VOID
+NTAPI
+CpPutBuffer(
+    IN PCPPORT Port,
+    IN PUCHAR  Buffer,
+    IN ULONG   Length)
+{
+    ULONG i;
+
+    /* PL011 checks TXFF (FIFO full) in CpPutByte, naturally filling the FIFO */
+    for (i = 0; i < Length; i++)
+        CpPutByte(Port, Buffer[i]);
+}
+
 /* EOF */
