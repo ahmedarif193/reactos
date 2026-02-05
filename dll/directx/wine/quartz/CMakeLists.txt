@@ -38,10 +38,14 @@ list(APPEND PCH_SKIP_SOURCE
     ${CMAKE_CURRENT_BINARY_DIR}/proxy.dlldata.c
     ${CMAKE_CURRENT_BINARY_DIR}/quartz_strmif_p.c)
 
-# Suppress uninitialized variable warnings in generated RPC proxy code
+# Suppress warnings in generated RPC proxy code
+set(_quartz_proxy_opts "-Wno-maybe-uninitialized")
+if(ARCH STREQUAL "arm64")
+    list(APPEND _quartz_proxy_opts "-Wno-error")
+endif()
 set_source_files_properties(
     ${CMAKE_CURRENT_BINARY_DIR}/quartz_strmif_p.c
-    PROPERTIES COMPILE_OPTIONS "-Wno-maybe-uninitialized")
+    PROPERTIES COMPILE_OPTIONS "${_quartz_proxy_opts}")
 
 add_library(quartz MODULE
     ${SOURCE}

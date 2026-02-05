@@ -17,7 +17,6 @@ set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
     CLANG_VERSION
     MINGW_TOOLCHAIN_PREFIX
     MINGW_TOOLCHAIN_SUFFIX
-    ROS_GNU_MINGW_TOOLCHAIN_PATH
     TOOLCHAIN_PATH
     TOOLCHAIN_PREFIX
     CMAKE_LINKER
@@ -106,6 +105,10 @@ if(CLANG_SUFFIX)
         if(EXISTS "${TOOLCHAIN_PATH}/${_CLANG_CXX_COMPILER_NAME}")
             set(_CLANG_CXX_COMPILER "${TOOLCHAIN_PATH}/${_CLANG_CXX_COMPILER_NAME}")
             set(_clang_cxx_found TRUE)
+        elseif(EXISTS "${TOOLCHAIN_PATH}/clang++")
+            # Fallback: llvm-mingw may not have versioned clang++, use unversioned
+            set(_CLANG_CXX_COMPILER "${TOOLCHAIN_PATH}/clang++")
+            set(_clang_cxx_found TRUE)
         endif()
     endif()
     if(NOT _clang_cxx_found)
@@ -168,38 +171,11 @@ macro(_clang_mingw_add_hint_from_tool _tool_var)
     endif()
 endmacro()
 
-if(NOT DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH OR "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-    if(DEFINED ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH} AND NOT "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-        set(ROS_GNU_MINGW_TOOLCHAIN_PATH "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}")
-    elseif(DEFINED ENV{HOME} AND NOT "$ENV{HOME}" STREQUAL "")
-        string(REGEX REPLACE "-$" "" _clang_mingw_prefix_dir "${_CLANG_MINGW_PREFIX}")
-        if(NOT _clang_mingw_prefix_dir STREQUAL "")
-            set(_clang_mingw_default_gnu_toolchain_bin
-                "$ENV{HOME}/mingw-toolchains/${_clang_mingw_prefix_dir}/bin")
-            if(EXISTS "${_clang_mingw_default_gnu_toolchain_bin}")
-                set(ROS_GNU_MINGW_TOOLCHAIN_PATH "${_clang_mingw_default_gnu_toolchain_bin}")
-            endif()
-            unset(_clang_mingw_default_gnu_toolchain_bin)
-        endif()
-        unset(_clang_mingw_prefix_dir)
-    endif()
-endif()
-if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-    set(ROS_GNU_MINGW_TOOLCHAIN_PATH "${ROS_GNU_MINGW_TOOLCHAIN_PATH}"
-        CACHE PATH "Path to GNU MinGW toolchain (bin)")
-endif()
-
 if(DEFINED TOOLCHAIN_PATH AND NOT "${TOOLCHAIN_PATH}" STREQUAL "")
     _clang_mingw_add_hint_dir("${TOOLCHAIN_PATH}")
 endif()
 if(DEFINED ENV{TOOLCHAIN_PATH} AND NOT "$ENV{TOOLCHAIN_PATH}" STREQUAL "")
     _clang_mingw_add_hint_dir("$ENV{TOOLCHAIN_PATH}")
-endif()
-if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-    _clang_mingw_add_hint_dir("${ROS_GNU_MINGW_TOOLCHAIN_PATH}")
-endif()
-if(DEFINED ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH} AND NOT "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-    _clang_mingw_add_hint_dir("$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}")
 endif()
 
 _clang_mingw_add_hint_from_tool(CMAKE_ASM_COMPILER)
@@ -207,6 +183,7 @@ _clang_mingw_add_hint_from_tool(CMAKE_MC_COMPILER)
 _clang_mingw_add_hint_from_tool(CMAKE_RC_COMPILER)
 _clang_mingw_add_hint_from_tool(CMAKE_DLLTOOL)
 _clang_mingw_add_hint_from_tool(CMAKE_AR)
+_clang_mingw_add_hint_from_tool(CMAKE_STRIP)
 _clang_mingw_add_hint_from_tool(CMAKE_RANLIB)
 _clang_mingw_add_hint_from_tool(CMAKE_NM)
 _clang_mingw_add_hint_from_tool(CMAKE_OBJCOPY)
@@ -246,74 +223,35 @@ unset(_REACTOS_CREATE_STATIC_LIBRARY)
 set(CMAKE_C_STANDARD_LIBRARIES "" CACHE STRING "Standard C Libraries")
 set(CMAKE_CXX_STANDARD_LIBRARIES "" CACHE STRING "Standard C++ Libraries")
 
-# Linker selection for Clang cross-compilation
-# - Use LLD (from llvm-mingw TOOLCHAIN_PATH) for i386 and amd64 for consistency across platforms
-# - ARM64 may use GNU ld if needed to avoid "misaligned ldr/str offset" errors
-set(_CLANG_MINGW_LINKER_NAME "${_CLANG_MINGW_PREFIX}ld${_CLANG_MINGW_SUFFIX}")
-
-# ARM64: Special handling - may use GNU ld if ROS_GNU_MINGW_TOOLCHAIN_PATH is set
-# This works around LLD issues with misaligned ARM64 relocations
-set(_clang_use_gnu_ld_for_arm64 FALSE)
-if(ARCH STREQUAL "arm64")
-    if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-        set(_clang_use_gnu_ld_for_arm64 TRUE)
-    elseif(DEFINED ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH} AND NOT "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-        set(_clang_use_gnu_ld_for_arm64 TRUE)
-    endif()
-endif()
+# Linker selection — prefer LLD, fall back to GNU ld if not available.
+set(_CLANG_MINGW_LINKER_NAMES "ld.lld" "lld" "${_CLANG_MINGW_PREFIX}ld")
 
 set(LD_EXECUTABLE "")
-
-# ARM64 with GNU ld: Check ROS_GNU_MINGW_TOOLCHAIN_PATH first
-if(_clang_use_gnu_ld_for_arm64)
-    if(NOT LD_EXECUTABLE AND DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-        set(_clang_gnu_linker "${ROS_GNU_MINGW_TOOLCHAIN_PATH}/${_CLANG_MINGW_LINKER_NAME}")
-        if(EXISTS "${_clang_gnu_linker}")
-            set(LD_EXECUTABLE "${_clang_gnu_linker}")
+foreach(_clang_ld_hint IN LISTS _CLANG_MINGW_TOOL_HINT_DIRS)
+    foreach(_clang_ld_name IN LISTS _CLANG_MINGW_LINKER_NAMES)
+        if(NOT LD_EXECUTABLE)
+            set(_clang_ld_candidate "${_clang_ld_hint}/${_clang_ld_name}")
+            if(EXISTS "${_clang_ld_candidate}")
+                set(LD_EXECUTABLE "${_clang_ld_candidate}")
+            endif()
         endif()
-        unset(_clang_gnu_linker)
-    elseif(NOT LD_EXECUTABLE AND DEFINED ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH} AND NOT "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-        set(_clang_gnu_linker "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}/${_CLANG_MINGW_LINKER_NAME}")
-        if(EXISTS "${_clang_gnu_linker}")
-            set(LD_EXECUTABLE "${_clang_gnu_linker}")
-        endif()
-        unset(_clang_gnu_linker)
-    endif()
-endif()
+    endforeach()
+endforeach()
+unset(_clang_ld_candidate)
 
-# Primary linker location: Use TOOLCHAIN_PATH (contains llvm-mingw with LLD)
-# This path is unified across Linux and Darwin - no hardcoded platform-specific paths
-if(NOT LD_EXECUTABLE AND DEFINED TOOLCHAIN_PATH AND NOT "${TOOLCHAIN_PATH}" STREQUAL "")
-    set(_clang_toolchain_linker "${TOOLCHAIN_PATH}/${_CLANG_MINGW_LINKER_NAME}")
-    if(EXISTS "${_clang_toolchain_linker}")
-        set(LD_EXECUTABLE "${_clang_toolchain_linker}")
-    endif()
-    unset(_clang_toolchain_linker)
-endif()
-
-# Fallback: Search in PATH
+# Fallback: search in PATH
 if(NOT LD_EXECUTABLE)
     find_program(LD_EXECUTABLE
-        NAMES ${_CLANG_MINGW_LINKER_NAME}
+        NAMES ${_CLANG_MINGW_LINKER_NAMES}
         ${_CLANG_MINGW_TOOL_HINT_ARGS})
     if(NOT LD_EXECUTABLE)
-        message(FATAL_ERROR "Unable to find ${_CLANG_MINGW_LINKER_NAME} in TOOLCHAIN_PATH (${TOOLCHAIN_PATH}) or system PATH")
+        message(FATAL_ERROR "Unable to find linker (ld.lld, lld, or ${_CLANG_MINGW_PREFIX}ld)")
     endif()
 endif()
+unset(_CLANG_MINGW_LINKER_NAMES)
 
-unset(_clang_use_gnu_ld_for_arm64)
 message(STATUS "Using linker ${LD_EXECUTABLE}")
 set(CMAKE_LINKER "${LD_EXECUTABLE}" CACHE FILEPATH "Linker executable" FORCE)
-execute_process(COMMAND ${CMAKE_LINKER} --version
-    OUTPUT_VARIABLE _MINGW_LD_VERSION
-    ERROR_QUIET
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
-if(_MINGW_LD_VERSION MATCHES "LLD")
-    set(MINGW_LINKER_IS_LLD TRUE CACHE BOOL "MinGW linker is lld" FORCE)
-else()
-    set(MINGW_LINKER_IS_LLD FALSE CACHE BOOL "MinGW linker is lld" FORCE)
-endif()
-unset(_MINGW_LD_VERSION)
 
 set(_CLANG_MINGW_LINKER_FLAG_VARS
     CMAKE_SHARED_LINKER_FLAGS_INIT
@@ -355,48 +293,39 @@ macro(_clang_mingw_require_tool _out_var _tool_name)
     unset(_clang_mingw_tool_names)
 endmacro()
 
-if(_CLANG_USE_HOST_TOOLS)
-    set(CMAKE_ASM_COMPILER ${CMAKE_C_COMPILER} CACHE FILEPATH "Clang used for assembly" FORCE)
-    set(CMAKE_ASM_COMPILER_TARGET ${triplet})
-    if(NOT CMAKE_ASM_FLAGS MATCHES "--target=")
-        set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} --target=${triplet}" CACHE STRING "ASM compiler flags" FORCE)
-    endif()
-else()
-    _clang_mingw_require_tool(_CLANG_MINGW_GCC "gcc")
-    set(CMAKE_ASM_COMPILER ${_CLANG_MINGW_GCC} CACHE FILEPATH "MinGW GCC used for assembly" FORCE)
+# Always use clang directly for ASM, not the GCC wrapper
+# The wrapper adds unwanted flags like --64 that break with -fno-integrated-as
+set(CMAKE_ASM_COMPILER ${CMAKE_C_COMPILER} CACHE FILEPATH "Clang used for assembly" FORCE)
+set(CMAKE_ASM_COMPILER_TARGET ${triplet})
+if(NOT CMAKE_ASM_FLAGS MATCHES "--target=")
+    set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} --target=${triplet}" CACHE STRING "ASM compiler flags" FORCE)
 endif()
-_clang_mingw_require_tool(_CLANG_MINGW_WINDMC "windmc")
-set(CMAKE_MC_COMPILER ${_CLANG_MINGW_WINDMC} CACHE FILEPATH "MinGW message compiler" FORCE)
+# llvm-mingw doesn't ship windmc; search common GNU toolchain locations
+set(_windmc_search_paths)
+if(DEFINED ENV{HOME})
+    string(REGEX REPLACE "-$" "" _clang_mingw_prefix_base "${_CLANG_MINGW_PREFIX}")
+    list(APPEND _windmc_search_paths "$ENV{HOME}/mingw-toolchains/${_clang_mingw_prefix_base}/bin")
+    list(APPEND _windmc_search_paths "$ENV{HOME}/mingw-toolchains/${_clang_mingw_prefix_base}_seh/bin")
+    unset(_clang_mingw_prefix_base)
+endif()
+find_program(_CLANG_MINGW_WINDMC
+    NAMES "${_CLANG_MINGW_PREFIX}windmc${_CLANG_MINGW_SUFFIX}"
+    PATHS ${_windmc_search_paths}
+    NO_DEFAULT_PATH)
+if(NOT _CLANG_MINGW_WINDMC)
+    find_program(_CLANG_MINGW_WINDMC NAMES "${_CLANG_MINGW_PREFIX}windmc${_CLANG_MINGW_SUFFIX}")
+endif()
+unset(_windmc_search_paths)
+if(_CLANG_MINGW_WINDMC)
+    set(CMAKE_MC_COMPILER ${_CLANG_MINGW_WINDMC} CACHE FILEPATH "MinGW message compiler" FORCE)
+else()
+    message(FATAL_ERROR "windmc (${_CLANG_MINGW_PREFIX}windmc${_CLANG_MINGW_SUFFIX}) not found. "
+        "Install GNU binutils for windmc support.")
+endif()
 _clang_mingw_require_tool(_CLANG_MINGW_WINDRES "windres")
 set(CMAKE_RC_COMPILER ${_CLANG_MINGW_WINDRES} CACHE FILEPATH "MinGW resource compiler" FORCE)
-# Prefer GNU binutils dlltool when available; llvm-dlltool lacks --kill-at/--output-lib
-# and generates import stubs with IMAGE_REL_ARM64_ADDR32 relocations that cause overflow.
-# For ARM64, we MUST use binutils dlltool from ROS_GNU_MINGW_TOOLCHAIN_PATH because
-# it generates proper ADRP+LDR sequences with PAGE relocations that work across the
-# full 64-bit address space.
-if(ARCH STREQUAL "arm64")
-    # ARM64 requires binutils dlltool - llvm-dlltool generates short-form imports
-    # that use IMAGE_REL_ARM64_ADDR32 relocations causing linker overflow errors
-    if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-        set(_clang_arm64_binutils_dlltool "${ROS_GNU_MINGW_TOOLCHAIN_PATH}/${_CLANG_MINGW_PREFIX}dlltool${_CLANG_MINGW_SUFFIX}")
-        if(EXISTS "${_clang_arm64_binutils_dlltool}")
-            set(CMAKE_DLLTOOL "${_clang_arm64_binutils_dlltool}" CACHE FILEPATH "MinGW dlltool" FORCE)
-            message(STATUS "ARM64: Using binutils dlltool from ${_clang_arm64_binutils_dlltool}")
-        else()
-            _clang_mingw_require_tool(_CLANG_MINGW_DLLTOOL "dlltool")
-            set(CMAKE_DLLTOOL ${_CLANG_MINGW_DLLTOOL} CACHE FILEPATH "MinGW dlltool" FORCE)
-            message(WARNING "ARM64: Binutils dlltool not found at ${_clang_arm64_binutils_dlltool}, using ${_CLANG_MINGW_DLLTOOL}")
-        endif()
-        unset(_clang_arm64_binutils_dlltool)
-    else()
-        _clang_mingw_require_tool(_CLANG_MINGW_DLLTOOL "dlltool")
-        set(CMAKE_DLLTOOL ${_CLANG_MINGW_DLLTOOL} CACHE FILEPATH "MinGW dlltool" FORCE)
-        message(WARNING "ARM64: ROS_GNU_MINGW_TOOLCHAIN_PATH not set, using ${_CLANG_MINGW_DLLTOOL}")
-    endif()
-else()
-    _clang_mingw_require_tool(_CLANG_MINGW_DLLTOOL "dlltool")
-    set(CMAKE_DLLTOOL ${_CLANG_MINGW_DLLTOOL} CACHE FILEPATH "MinGW dlltool" FORCE)
-endif()
+_clang_mingw_require_tool(_CLANG_MINGW_DLLTOOL "dlltool")
+set(CMAKE_DLLTOOL ${_CLANG_MINGW_DLLTOOL} CACHE FILEPATH "MinGW dlltool" FORCE)
 _clang_mingw_require_tool(_CLANG_MINGW_AR "ar")
 # Always use binutils from the MinGW toolchain for archive creation.
 # This avoids incompatibilities with llvm-dlltool option handling.
@@ -409,6 +338,8 @@ _clang_mingw_require_tool(_CLANG_MINGW_NM "nm")
 set(CMAKE_NM ${_CLANG_MINGW_NM} CACHE FILEPATH "MinGW nm" FORCE)
 _clang_mingw_require_tool(_CLANG_MINGW_RANLIB "ranlib")
 set(CMAKE_RANLIB ${_CLANG_MINGW_RANLIB} CACHE FILEPATH "MinGW ranlib" FORCE)
+_clang_mingw_require_tool(_CLANG_MINGW_STRIP "strip")
+set(CMAKE_STRIP ${_CLANG_MINGW_STRIP} CACHE FILEPATH "MinGW strip" FORCE)
 
 set(CMAKE_USER_MAKE_RULES_OVERRIDE "${CMAKE_CURRENT_LIST_DIR}/overrides-gcc.cmake")
 

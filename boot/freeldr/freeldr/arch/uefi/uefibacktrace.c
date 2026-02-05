@@ -6,7 +6,9 @@
 
 #include <uefildr.h>
 #include <debug.h>
+#ifdef __ROS_ROSSYM__
 #include <reactos/rossym.h>
+#endif
 #include <ntimage.h>
 #include <DevicePath.h>
 #include <arch/uefi/uefisym.h>
@@ -35,10 +37,13 @@ static UEFI_IMAGE_ENTRY* gImageList = NULL;
 static UINTN             gImageCount = 0;
 static ULONG_PTR         gFreeldrBase = 0;
 static SIZE_T            gFreeldrSize = 0;
+#ifdef __ROS_ROSSYM__
 static PROSSYM_INFO      gFreeldrRos = NULL;
 static EFI_BOOT_SERVICES* gBs = NULL;
+#endif
 extern char __ImageBase; /* PE image base symbol */
 
+#ifdef __ROS_ROSSYM__
 static PVOID RosUefiAlloc(ULONG_PTR Size)
 {
     if (!gBs) return NULL;
@@ -52,6 +57,7 @@ static VOID RosUefiFree(PVOID Area)
 {
     if (gBs && Area) gBs->FreePool(Area);
 }
+#endif
 
 /* Minimal PE32+ export resolver for symbol names */
 static BOOLEAN ResolveExport(ULONG_PTR ImageBase, ULONG_PTR Addr, CHAR* NameBuf, SIZE_T NameBufLen, ULONG_PTR* SymAddr)
@@ -126,6 +132,7 @@ FormatAddressWithModule(ULONG_PTR Address)
         CHAR sym[128]; ULONG_PTR symAddr = 0;
 
         /* If available, use .rossym for precise function names + source line */
+#ifdef __ROS_ROSSYM__
         if (!gFreeldrRos && base && size)
         {
             /* Initialize rossym callbacks using UEFI pool allocators */
@@ -179,6 +186,7 @@ FormatAddressWithModule(ULONG_PTR Address)
             }
 #endif
         }
+#endif /* __ROS_ROSSYM__ */
 
         /* Prefer embedded freeldr symbol table when available */
         if (FreeldrLookupEmbeddedSymbol(Address, sym, sizeof(sym), &symAddr))

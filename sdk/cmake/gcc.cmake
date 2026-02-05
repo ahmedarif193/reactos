@@ -167,10 +167,6 @@ elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     add_compile_options($<$<COMPILE_LANGUAGE:C>:-fgnu89-inline>)
     add_compile_options(-Wno-pragma-pack)
     add_compile_options(-fno-associative-math)
-    if(ARCH STREQUAL "i386")
-        add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-fsjlj-exceptions>")
-    endif()
-
     if(CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 12.0)
         # disable "libcall optimization"
         # see https://mudongliang.github.io/2020/12/02/undefined-reference-to-stpcpy.html
@@ -397,7 +393,7 @@ endif()
 
 # LLD linker defaults to 1MB stack size while GNU ld defaults to 2MB.
 # Match the GNU ld default of 2MB for consistency across toolchains.
-if(MINGW_LINKER_IS_LLD)
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,0x200000")
 endif()
 
@@ -431,13 +427,12 @@ function(set_entrypoint MODULE ENTRYPOINT)
         set(_t_arch ${ARCH})
     endif()
     if(${ENTRYPOINT} STREQUAL "0")
-        if(_t_arch STREQUAL "arm64")
+        if(_t_arch STREQUAL "i386")
+            target_link_options(${MODULE} PRIVATE "-Wl,--entry=___ReactOSNoEntry")
+        else()
             target_link_options(${MODULE} PRIVATE "-Wl,--entry=__ReactOSNoEntry")
-            target_sources(${MODULE} PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/crt/startup/noentry_arm64.c)
-        elseif(_t_arch STREQUAL "amd64")
-            target_link_options(${MODULE} PRIVATE "-Wl,--entry=__ReactOSNoEntry")
-            target_sources(${MODULE} PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/crt/startup/noentry_amd64.c)
         endif()
+        target_sources(${MODULE} PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/crt/startup/noentry.c)
     elseif(_t_arch STREQUAL "i386")
         set(_entrysymbol _${ENTRYPOINT})
         if(${ARGC} GREATER 2)
@@ -452,7 +447,7 @@ endfunction()
 function(set_subsystem MODULE SUBSYSTEM)
     if(SUBSYSTEM STREQUAL "EFI_APPLICATION" OR SUBSYSTEM STREQUAL "efi_application" OR SUBSYSTEM STREQUAL "10")
         # GNU ld accepts numeric EFI values, lld requires the named form.
-        if(MINGW_LINKER_IS_LLD)
+        if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
             target_link_options(${MODULE} PRIVATE "-Wl,--subsystem,efi_application")
         else()
             target_link_options(${MODULE} PRIVATE "-Wl,--subsystem,10")
@@ -480,7 +475,7 @@ function(set_module_type_toolchain MODULE TYPE)
         target_link_options(${MODULE} PRIVATE -Wl,--exclude-all-symbols,-file-alignment=0x1000,-section-alignment=0x1000)
 
         if(${TYPE} STREQUAL "wdmdriver")
-            if(NOT MINGW_LINKER_IS_LLD)
+            if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
                 target_link_options(${MODULE} PRIVATE "-Wl,--wdmdriver")
             endif()
         endif()
@@ -542,10 +537,9 @@ function(add_delay_importlibs _module)
     endif()
     # LLD has a bug where it creates multiple .didat sections instead of merging
     # the .didat$N subsections from dlltool-generated delay import libraries.
-    # This causes delay-load RVAs to point to wrong locations (empty data).
-    # ARM64 also doesn't support delay imports properly.
-    # For both cases, convert delay imports to regular imports as a workaround.
-    if(ARCH STREQUAL "arm64" OR MINGW_LINKER_IS_LLD)
+    # ARM64 GNU dlltool doesn't support --output-delaylib.
+    # Convert delay imports to regular imports for both cases.
+    if(CMAKE_C_COMPILER_ID STREQUAL "Clang" OR ARCH STREQUAL "arm64")
         foreach(_lib ${ARGN})
             get_filename_component(_basename "${_lib}" NAME_WE)
             target_link_libraries(${_module} lib${_basename})
@@ -566,16 +560,21 @@ endif()
 # Ensure dlltool gets the correct machine flags
 if(ARCH STREQUAL "i386")
     # Ensure dlltool generates 32-bit code and assembles with 32-bit mode
-    # Derive the 'as' program from the toolchain path (replace ...-gcc with ...-as)
-    set(_dlltool_as ${CMAKE_ASM_COMPILER})
-    get_filename_component(_dlltool_as_name "${_dlltool_as}" NAME)
-    if(_dlltool_as_name MATCHES "gcc(\\.exe)?$")
-        string(REPLACE "gcc" "as" _dlltool_as "${_dlltool_as}")
-    endif()
-    # x86_64-w64-mingw32-as accepts --32 to assemble 32-bit objects
+    # dlltool needs GNU as (not clang) for COFF directives like .rva
     if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-        set(DLLTOOL_EXTRA_ARGS -m i386 --as ${_dlltool_as} --as-flags "-m32 -c")
+        # For Clang, use GNU assembler from toolchain
+        set(_dlltool_as "${TOOLCHAIN_PATH}/${MINGW_TOOLCHAIN_PREFIX}as")
+        if(NOT EXISTS "${_dlltool_as}")
+            message(FATAL_ERROR "dlltool requires GNU as: ${_dlltool_as} not found")
+        endif()
+        set(DLLTOOL_EXTRA_ARGS -m i386 --as ${_dlltool_as} --as-flags=--32)
     else()
+        # For GCC, derive as from gcc executable
+        set(_dlltool_as ${CMAKE_ASM_COMPILER})
+        get_filename_component(_dlltool_as_name "${_dlltool_as}" NAME)
+        if(_dlltool_as_name MATCHES "gcc(\\.exe)?$")
+            string(REPLACE "gcc" "as" _dlltool_as "${_dlltool_as}")
+        endif()
         set(DLLTOOL_EXTRA_ARGS -m i386 --as ${_dlltool_as} --as-flags=--32)
     endif()
 elseif(ARCH STREQUAL "amd64")
@@ -753,6 +752,7 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
         endif()
     endif()
 
+    # ARM64 GNU binutils dlltool doesn't support --output-delaylib
     if(NOT ARCH STREQUAL "arm64")
         # Do the same with delay-import libs
         set(LIBRARY_PRIVATE_DIR ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${_libname}_delayed.dir)
@@ -885,34 +885,12 @@ set(BOOTSECT_ASM_EXTRA_FLAGS)
 set(CLANG_ASM_EXTRA_FLAGS)
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64"))
     if(NOT CMAKE_HOST_WIN32)
+        # llvm-mingw's 'as' is a wrapper to clang, not GNU as.
+        # Search for real GNU binutils assembler in system directories only.
         set(_clang_binutils_as_name "${MINGW_TOOLCHAIN_PREFIX}as")
-        set(_clang_binutils_as)
-        if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT ROS_GNU_MINGW_TOOLCHAIN_PATH STREQUAL "")
-            set(_clang_binutils_as "${ROS_GNU_MINGW_TOOLCHAIN_PATH}/${_clang_binutils_as_name}")
-            if(NOT EXISTS "${_clang_binutils_as}")
-                set(_clang_binutils_as)
-            endif()
-        endif()
-        set(_clang_binutils_as_hints)
-        if(DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT ROS_GNU_MINGW_TOOLCHAIN_PATH STREQUAL "")
-            list(APPEND _clang_binutils_as_hints ${ROS_GNU_MINGW_TOOLCHAIN_PATH})
-        endif()
-        if(DEFINED ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH} AND NOT "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-            list(APPEND _clang_binutils_as_hints "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}")
-        endif()
-        if(DEFINED TOOLCHAIN_PATH AND NOT TOOLCHAIN_PATH STREQUAL "")
-            list(APPEND _clang_binutils_as_hints ${TOOLCHAIN_PATH})
-        endif()
-        if(NOT _clang_binutils_as)
-            find_program(_clang_binutils_as
-                NAMES ${_clang_binutils_as_name}
-                HINTS ${_clang_binutils_as_hints}
-                NO_DEFAULT_PATH)
-        endif()
-        if(NOT _clang_binutils_as)
-            find_program(_clang_binutils_as
-                NAMES ${_clang_binutils_as_name})
-        endif()
+        find_program(_clang_binutils_as NAMES ${_clang_binutils_as_name}
+                     PATHS /usr/bin /usr/local/bin
+                     NO_DEFAULT_PATH)
         if(_clang_binutils_as)
             set(_clang_as_wrapper_dir "${CMAKE_BINARY_DIR}/clang-gnu-tools")
             file(MAKE_DIRECTORY "${_clang_as_wrapper_dir}")
@@ -924,10 +902,23 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND (ARCH STREQUAL "i386" OR ARCH STREQU
             if(NOT _clang_as_link_result EQUAL 0)
                 message(WARNING "Failed to create clang GNU as shim at ${_clang_as_wrapper} (result ${_clang_as_link_result}).")
             endif()
-            set(CLANG_ASM_EXTRA_FLAGS -fno-integrated-as -B${_clang_as_wrapper_dir})
-            add_compile_options("$<$<COMPILE_LANGUAGE:ASM>:-fno-integrated-as>"
-                                "$<$<COMPILE_LANGUAGE:ASM>:-B${_clang_as_wrapper_dir}>")
+            set(CLANG_ASM_EXTRA_FLAGS -fno-integrated-as -B${_clang_as_wrapper_dir} --target=${MINGW_TOOLCHAIN_PREFIX})
+            # Detect whether the ASM compiler is real GNU GCC or a clang wrapper.
+            # llvm-mingw ships GCC-named wrappers that are clang underneath and need
+            # -fno-integrated-as; real GNU GCC rejects this flag.
+            # Do NOT add to C/CXX: clang 21 emits .seh_startepilogue/endepilogue
+            # that GNU as doesn't support.
+            execute_process(
+                COMMAND ${CMAKE_ASM_COMPILER} --version
+                OUTPUT_VARIABLE _asm_compiler_version
+                ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+            if(_asm_compiler_version MATCHES "clang")
+                # llvm-mingw wrapper: enable GNU as for all ASM (including boot sectors)
+                add_compile_options("$<$<COMPILE_LANGUAGE:ASM>:-fno-integrated-as>"
+                                    "$<$<COMPILE_LANGUAGE:ASM>:-B${_clang_as_wrapper_dir}>")
+            endif()
             set(BOOTSECT_ASM_EXTRA_FLAGS ${CLANG_ASM_EXTRA_FLAGS})
+            unset(_asm_compiler_version)
             unset(_clang_as_wrapper_dir)
             unset(_clang_as_wrapper)
             unset(_clang_as_link_result)
@@ -936,7 +927,6 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND (ARCH STREQUAL "i386" OR ARCH STREQU
         endif()
         unset(_clang_binutils_as_name)
         unset(_clang_binutils_as)
-        unset(_clang_binutils_as_hints)
     endif()
 endif()
 
@@ -1014,7 +1004,7 @@ macro(add_asm_files _target)
 endmacro()
 
 function(add_linker_script _target _linker_script_file)
-    if(MINGW_LINKER_IS_LLD)
+    if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
         # lld COFF does not support GNU linker scripts.
         return()
     endif()
@@ -1166,6 +1156,15 @@ if(NOT EXISTS "${_LIBGCC_REALPATH}")
     endif()
     file(GLOB _LIBGCC_BUILTINS_CANDIDATES "${_LIBGCC_TOOLCHAIN_ROOT}/lib/clang/*/lib/windows/libclang_rt.builtins-${_LIBGCC_BUILTINS_ARCH}.a")
     list(LENGTH _LIBGCC_BUILTINS_CANDIDATES _LIBGCC_BUILTINS_COUNT)
+    # For Clang builds, also search in the Clang toolchain directory
+    if(_LIBGCC_BUILTINS_COUNT EQUAL 0 AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        get_filename_component(_CLANG_BIN_DIR "${CMAKE_C_COMPILER}" DIRECTORY)
+        get_filename_component(_CLANG_TOOLCHAIN_ROOT "${_CLANG_BIN_DIR}" DIRECTORY)
+        file(GLOB _LIBGCC_BUILTINS_CANDIDATES "${_CLANG_TOOLCHAIN_ROOT}/lib/clang/*/lib/windows/libclang_rt.builtins-${_LIBGCC_BUILTINS_ARCH}.a")
+        list(LENGTH _LIBGCC_BUILTINS_CANDIDATES _LIBGCC_BUILTINS_COUNT)
+        unset(_CLANG_BIN_DIR)
+        unset(_CLANG_TOOLCHAIN_ROOT)
+    endif()
     if(_LIBGCC_BUILTINS_COUNT GREATER 0)
         list(GET _LIBGCC_BUILTINS_CANDIDATES 0 LIBGCC_LOCATION)
     else()
@@ -1249,7 +1248,13 @@ execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name
 string(STRIP "${LIBMINGWEX_LOCATION}" LIBMINGWEX_LOCATION)
 set_target_properties(libmingwex PROPERTIES IMPORTED_LOCATION ${LIBMINGWEX_LOCATION})
 # libmingwex requires a CRT and imports from kernel32
-target_link_libraries(libmingwex INTERFACE libmsvcrt libkernel32)
+# On ARM64, libmingwex also references libgcc symbols (__extenddftf2 for
+# 128-bit long double, __aarch64_swp4_sync for outline atomics)
+if(ARCH STREQUAL "arm64")
+    target_link_libraries(libmingwex INTERFACE libgcc libmsvcrt libkernel32)
+else()
+    target_link_libraries(libmingwex INTERFACE libmsvcrt libkernel32)
+endif()
 
 add_library(libstdc++ STATIC IMPORTED GLOBAL)
 execute_process(COMMAND ${GXX_EXECUTABLE} ${GXX_MULTIARCH_ARGS} -print-file-name=libstdc++.a OUTPUT_VARIABLE LIBSTDCCXX_LOCATION)

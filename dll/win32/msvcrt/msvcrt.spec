@@ -1587,5 +1587,5 @@
 @ stub -version=0x600+ wprintf_s
 @ varargs wscanf(wstr)
 @ stub -version=0x600+ wscanf_s
-# Provide non-underscored aliases for MinGW C99/ANSI calls used by Wine modules
-@ cdecl -arch=i386 atexit(ptr)
+# i386 atexit is provided by atonexit.c (msvcrtex) embedded in libmsvcrt.a.
+# The generic "@ extern atexit" above supplies __imp__atexit for direct imports.

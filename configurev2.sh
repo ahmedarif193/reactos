@@ -355,27 +355,23 @@ if [ "$(uname -s)" = "Darwin" ] && [ "$USE_CLANG" -eq 1 ]; then
     fi
 fi
 
-# Linux: prefer llvm-mingw UCRT bundle for clang builds on amd64/arm64 if present.
+# Linux: use llvm-mingw UCRT bundle for all clang builds if present.
 if [ "$(uname -s)" = "Linux" ] && [ "$USE_CLANG" -eq 1 ]; then
-    case "$ARCH" in
-        amd64|x86_64|arm64|aarch64)
-            LINUX_LLVM_MINGW_ROOT=""
-            if [ -n "$LLVM_MINGW_ROOT_OVERRIDE" ]; then
-                LINUX_LLVM_MINGW_ROOT="$LLVM_MINGW_ROOT_OVERRIDE"
-            else
-                LINUX_LLVM_MINGW_ROOT="$LLVM_MINGW_LINUX_DEFAULT"
-            fi
-            if [ -d "${LINUX_LLVM_MINGW_ROOT}/bin" ]; then
-                DEFAULT_TOOLCHAIN_ROOT="$LINUX_LLVM_MINGW_ROOT"
-                DEFAULT_TOOLCHAIN_PATH_OVERRIDE="${LINUX_LLVM_MINGW_ROOT}/bin"
-                USE_LLVM_MINGW=1
-                if [ "$CLANG_VERSION_SET" -eq 0 ]; then
-                    CLANG_VERSION=""
-                fi
-            fi
-            unset LINUX_LLVM_MINGW_ROOT
-            ;;
-    esac
+    LINUX_LLVM_MINGW_ROOT=""
+    if [ -n "$LLVM_MINGW_ROOT_OVERRIDE" ]; then
+        LINUX_LLVM_MINGW_ROOT="$LLVM_MINGW_ROOT_OVERRIDE"
+    else
+        LINUX_LLVM_MINGW_ROOT="$LLVM_MINGW_LINUX_DEFAULT"
+    fi
+    if [ -d "${LINUX_LLVM_MINGW_ROOT}/bin" ]; then
+        DEFAULT_TOOLCHAIN_ROOT="$LINUX_LLVM_MINGW_ROOT"
+        DEFAULT_TOOLCHAIN_PATH_OVERRIDE="${LINUX_LLVM_MINGW_ROOT}/bin"
+        USE_LLVM_MINGW=1
+        if [ "$CLANG_VERSION_SET" -eq 0 ]; then
+            CLANG_VERSION=""
+        fi
+    fi
+    unset LINUX_LLVM_MINGW_ROOT
 fi
 
 if [ -z "$TOOLCHAIN_PATH" ]; then

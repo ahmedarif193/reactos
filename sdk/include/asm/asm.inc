@@ -356,7 +356,11 @@ ENDM
 .endm
 
 .macro retf
+#ifdef __x86_64__
     retfq
+#else
+    lret
+#endif
 .endm
 
 /* MASM compatible EXTERN */
