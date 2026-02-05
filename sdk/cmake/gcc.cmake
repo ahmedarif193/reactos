@@ -535,15 +535,31 @@ function(add_delay_importlibs _module)
     if(_module_type STREQUAL "STATIC_LIBRARY")
         message(FATAL_ERROR "Cannot add delay imports to a static library")
     endif()
-    # LLD has a bug where it creates multiple .didat sections instead of merging
-    # the .didat$N subsections from dlltool-generated delay import libraries.
-    # ARM64 GNU dlltool doesn't support --output-delaylib.
-    # Convert delay imports to regular imports for both cases.
-    if(CMAKE_C_COMPILER_ID STREQUAL "Clang" OR ARCH STREQUAL "arm64")
+    if(ARCH STREQUAL "arm64")
+        # ARM64 GNU dlltool doesn't support --output-delaylib, and LLD has
+        # relocation range issues with ARM64 delay import thunks.
+        # Convert delay imports to regular imports as a workaround.
         foreach(_lib ${ARGN})
             get_filename_component(_basename "${_lib}" NAME_WE)
             target_link_libraries(${_module} lib${_basename})
         endforeach()
+    elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        # LLD doesn't merge dlltool-generated .didat$N subsections correctly,
+        # but its native --delayload flag works with regular import libraries.
+        # Use regular import libs + LLD --delayload for each DLL.
+        foreach(_lib ${ARGN})
+            get_filename_component(_basename "${_lib}" NAME_WE)
+            target_link_libraries(${_module} lib${_basename})
+            # Determine the DLL filename: use as-is if it has an extension,
+            # otherwise append .dll
+            if("${_lib}" MATCHES "\\.")
+                set(_dllname "${_lib}")
+            else()
+                set(_dllname "${_lib}.dll")
+            endif()
+            target_link_options(${_module} PRIVATE "-Wl,--delayload,${_dllname}")
+        endforeach()
+        target_link_libraries(${_module} delayimp)
     else()
         foreach(_lib ${ARGN})
             get_filename_component(_basename "${_lib}" NAME_WE)
@@ -1216,6 +1232,9 @@ if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
     if(NOT EXISTS "${_LIBGCCEH_REALPATH}")
         get_filename_component(_LIBGCCEH_BIN_DIR "${GXX_EXECUTABLE}" DIRECTORY)
         get_filename_component(_LIBGCCEH_TOOLCHAIN_ROOT "${_LIBGCCEH_BIN_DIR}" DIRECTORY)
+        # Force static library to avoid runtime libunwind.dll dependency
+        set(_SAVED_SUFFIXES ${CMAKE_FIND_LIBRARY_SUFFIXES})
+        set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
         find_library(_LIBGCCEH_ALT NAMES unwind libunwind PATHS
             "${_LIBGCCEH_TOOLCHAIN_ROOT}/${CMAKE_CXX_COMPILER_TARGET}/lib"
             "${_LIBGCCEH_TOOLCHAIN_ROOT}/${MINGW_TOOLCHAIN_PREFIX}/lib"
@@ -1224,6 +1243,7 @@ if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
             "${_LIBGCCEH_TOOLCHAIN_ROOT}/i686-w64-mingw32/lib"
             "${_LIBGCCEH_TOOLCHAIN_ROOT}/lib"
             NO_DEFAULT_PATH)
+        set(CMAKE_FIND_LIBRARY_SUFFIXES ${_SAVED_SUFFIXES})
         if(_LIBGCCEH_ALT)
             set(LIBGCCEH_LOCATION "${_LIBGCCEH_ALT}")
         else()
