@@ -15,43 +15,15 @@
 
 #include "wmip.h"
 
+/* SMBIOS data structure shared with bootloader */
+#include <reactos/arc/loaderblk.h>
+
 #define NDEBUG
 #include <debug.h>
 
-
 /* FUNCTIONS *****************************************************************/
 
-typedef struct _SMBIOS21_ENTRY_POINT
-{
- 	CHAR AnchorString[4];
- 	UCHAR Checksum;
- 	UCHAR Length;
- 	UCHAR MajorVersion;
- 	UCHAR MinorVersion;
- 	USHORT MaxStructureSize;
- 	UCHAR EntryPointRevision;
- 	CHAR FormattedArea[5];
- 	CHAR AnchorString2[5];
- 	UCHAR Checksum2;
- 	USHORT TableLength;
- 	ULONG TableAddress;
- 	USHORT NumberOfStructures;
- 	UCHAR BCDRevision;
-} SMBIOS21_ENTRY_POINT, *PSMBIOS21_ENTRY_POINT;
-
-typedef struct _SMBIOS30_ENTRY_POINT
-{
- 	CHAR AnchorString[5];
- 	UCHAR Checksum;
- 	UCHAR Length;
- 	UCHAR MajorVersion;
- 	UCHAR MinorVersion;
- 	UCHAR Docref;
-    UCHAR Revision;
-    UCHAR Reserved;
-    ULONG TableMaxSize;
-    ULONG64 TableAddress;
-} SMBIOS30_ENTRY_POINT, *PSMBIOS30_ENTRY_POINT;
+/* SMBIOS entry point structures are defined in loaderblk.h */
 
 static
 BOOLEAN
@@ -61,14 +33,14 @@ GetEntryPointData(
     _Out_ PULONG TableSize,
     _Out_ PMSSmBios_RawSMBiosTables BiosTablesHeader)
 {
-    PSMBIOS21_ENTRY_POINT EntryPoint21;
-    PSMBIOS30_ENTRY_POINT EntryPoint30;
+    PSMBIOS_ENTRY_POINT EntryPoint21;
+    PSMBIOS3_ENTRY_POINT EntryPoint30;
     UCHAR Checksum;
     ULONG i;
 
-    /* Check for SMBIOS 2.1 entry point */
-    EntryPoint21 = (PSMBIOS21_ENTRY_POINT)EntryPointAddress;
-    if (RtlEqualMemory(EntryPoint21->AnchorString, "_SM_", 4))
+    /* Check for SMBIOS 2.x entry point */
+    EntryPoint21 = (PSMBIOS_ENTRY_POINT)EntryPointAddress;
+    if (RtlEqualMemory(EntryPoint21->Anchor, "_SM_", 4))
     {
         if (EntryPoint21->Length > 32)
             return FALSE;
@@ -93,9 +65,9 @@ GetEntryPointData(
         return TRUE;
     }
 
-    /* Check for SMBIOS 3.0 entry point */
-    EntryPoint30 = (PSMBIOS30_ENTRY_POINT)EntryPointAddress;
-    if (RtlEqualMemory(EntryPoint30->AnchorString, "_SM3_", 5))
+    /* Check for SMBIOS 3.0+ entry point */
+    EntryPoint30 = (PSMBIOS3_ENTRY_POINT)EntryPointAddress;
+    if (RtlEqualMemory(EntryPoint30->Anchor, "_SM3_", 5))
     {
         if (EntryPoint30->Length > 32)
             return FALSE;
@@ -111,16 +83,208 @@ GetEntryPointData(
             return FALSE;
 
         *TableAddress = EntryPoint30->TableAddress;
-        *TableSize = EntryPoint30->TableMaxSize;
+        *TableSize = EntryPoint30->MaxStructureSize;
         BiosTablesHeader->Used20CallingMethod = 0;
         BiosTablesHeader->SmbiosMajorVersion = EntryPoint30->MajorVersion;
         BiosTablesHeader->SmbiosMinorVersion = EntryPoint30->MinorVersion;
         BiosTablesHeader->DmiRevision = 3;
-        BiosTablesHeader->Size = EntryPoint30->TableMaxSize;
+        BiosTablesHeader->Size = EntryPoint30->MaxStructureSize;
         return TRUE;
     }
 
     return FALSE;
+}
+
+/*
+ * Try to get SMBIOS data from registry (populated by bootloader for UEFI systems).
+ * Searches HARDWARE\DESCRIPTION\System\MultifunctionAdapter\* for "SMBIOS" identifier.
+ */
+static
+NTSTATUS
+WmipGetSMBiosFromRegistry(
+    _Out_ PULONG64 TableAddress,
+    _Out_ PULONG TableSize,
+    _Out_ PMSSmBios_RawSMBiosTables BiosTablesHeader)
+{
+    UNICODE_STRING MultiKeyPath = RTL_CONSTANT_STRING(
+        L"\\Registry\\Machine\\HARDWARE\\DESCRIPTION\\System\\MultifunctionAdapter");
+    UNICODE_STRING IdentifierName = RTL_CONSTANT_STRING(L"Identifier");
+    UNICODE_STRING ConfigDataName = RTL_CONSTANT_STRING(L"Configuration Data");
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE MultiKey = NULL, SubKey = NULL;
+    NTSTATUS Status;
+    ULONG Index;
+    WCHAR SubKeyName[16];
+    UNICODE_STRING SubKeyString;
+    PKEY_VALUE_PARTIAL_INFORMATION ValueInfo = NULL;
+    ULONG ValueSize;
+    PSMBIOS_BIOS_DATA SmbiosData;
+    PCM_FULL_RESOURCE_DESCRIPTOR FullDesc;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDesc;
+
+    *TableAddress = 0;
+    *TableSize = 0;
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &MultiKeyPath,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+
+    Status = ZwOpenKey(&MultiKey, KEY_READ, &ObjectAttributes);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT("Failed to open MultifunctionAdapter key: 0x%08lx\n", Status);
+        return Status;
+    }
+
+    /* Enumerate subkeys (0, 1, 2, ...) looking for SMBIOS */
+    for (Index = 0; Index < 10; Index++)
+    {
+        swprintf(SubKeyName, L"%lu", Index);
+        RtlInitUnicodeString(&SubKeyString, SubKeyName);
+
+        InitializeObjectAttributes(&ObjectAttributes,
+                                   &SubKeyString,
+                                   OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                   MultiKey,
+                                   NULL);
+
+        Status = ZwOpenKey(&SubKey, KEY_READ, &ObjectAttributes);
+        if (!NT_SUCCESS(Status))
+        {
+            continue;
+        }
+
+        /* Check Identifier value */
+        Status = ZwQueryValueKey(SubKey,
+                                 &IdentifierName,
+                                 KeyValuePartialInformation,
+                                 NULL,
+                                 0,
+                                 &ValueSize);
+
+        if (Status != STATUS_BUFFER_TOO_SMALL)
+        {
+            ZwClose(SubKey);
+            continue;
+        }
+
+        ValueInfo = ExAllocatePoolWithTag(PagedPool, ValueSize, 'BTMS');
+        if (ValueInfo == NULL)
+        {
+            ZwClose(SubKey);
+            continue;
+        }
+
+        Status = ZwQueryValueKey(SubKey,
+                                 &IdentifierName,
+                                 KeyValuePartialInformation,
+                                 ValueInfo,
+                                 ValueSize,
+                                 &ValueSize);
+
+        if (!NT_SUCCESS(Status) || ValueInfo->Type != REG_SZ)
+        {
+            ExFreePoolWithTag(ValueInfo, 'BTMS');
+            ZwClose(SubKey);
+            continue;
+        }
+
+        /* Check if this is the SMBIOS entry */
+        if (_wcsicmp((PWCHAR)ValueInfo->Data, L"SMBIOS") != 0)
+        {
+            ExFreePoolWithTag(ValueInfo, 'BTMS');
+            ZwClose(SubKey);
+            continue;
+        }
+
+        ExFreePoolWithTag(ValueInfo, 'BTMS');
+        ValueInfo = NULL;
+
+        /* Found SMBIOS - get Configuration Data */
+        Status = ZwQueryValueKey(SubKey,
+                                 &ConfigDataName,
+                                 KeyValuePartialInformation,
+                                 NULL,
+                                 0,
+                                 &ValueSize);
+
+        if (Status != STATUS_BUFFER_TOO_SMALL)
+        {
+            DPRINT1("SMBIOS Configuration Data not found\n");
+            ZwClose(SubKey);
+            ZwClose(MultiKey);
+            return STATUS_NOT_FOUND;
+        }
+
+        ValueInfo = ExAllocatePoolWithTag(PagedPool, ValueSize, 'BTMS');
+        if (ValueInfo == NULL)
+        {
+            ZwClose(SubKey);
+            ZwClose(MultiKey);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        Status = ZwQueryValueKey(SubKey,
+                                 &ConfigDataName,
+                                 KeyValuePartialInformation,
+                                 ValueInfo,
+                                 ValueSize,
+                                 &ValueSize);
+
+        ZwClose(SubKey);
+        ZwClose(MultiKey);
+
+        if (!NT_SUCCESS(Status))
+        {
+            ExFreePoolWithTag(ValueInfo, 'BTMS');
+            return Status;
+        }
+
+        /* Configuration Data should be REG_FULL_RESOURCE_DESCRIPTOR */
+        if (ValueInfo->Type != REG_FULL_RESOURCE_DESCRIPTOR)
+        {
+            ExFreePoolWithTag(ValueInfo, 'BTMS');
+            return STATUS_NOT_FOUND;
+        }
+
+        /* Parse CM_FULL_RESOURCE_DESCRIPTOR to get SMBIOS_BIOS_DATA */
+        FullDesc = (PCM_FULL_RESOURCE_DESCRIPTOR)ValueInfo->Data;
+        if (FullDesc->PartialResourceList.Count < 1)
+        {
+            ExFreePoolWithTag(ValueInfo, 'BTMS');
+            return STATUS_NOT_FOUND;
+        }
+
+        PartialDesc = &FullDesc->PartialResourceList.PartialDescriptors[0];
+        if (PartialDesc->Type != CmResourceTypeDeviceSpecific ||
+            PartialDesc->u.DeviceSpecificData.DataSize < sizeof(SMBIOS_BIOS_DATA))
+        {
+            ExFreePoolWithTag(ValueInfo, 'BTMS');
+            return STATUS_NOT_FOUND;
+        }
+
+        /* Get SMBIOS data from after the descriptor */
+        SmbiosData = (PSMBIOS_BIOS_DATA)(PartialDesc + 1);
+
+        *TableAddress = SmbiosData->TableAddress.QuadPart;
+        *TableSize = SmbiosData->TableSize;
+        BiosTablesHeader->Used20CallingMethod = 0;
+        BiosTablesHeader->SmbiosMajorVersion = SmbiosData->MajorVersion;
+        BiosTablesHeader->SmbiosMinorVersion = SmbiosData->MinorVersion;
+        BiosTablesHeader->DmiRevision = SmbiosData->DmiRevision;
+        BiosTablesHeader->Size = SmbiosData->TableSize;
+
+        DPRINT("Got SMBIOS from registry: table at 0x%llx, size %lu\n",
+               *TableAddress, *TableSize);
+
+        ExFreePoolWithTag(ValueInfo, 'BTMS');
+        return STATUS_SUCCESS;
+    }
+
+    ZwClose(MultiKey);
+    return STATUS_NOT_FOUND;
 }
 
 _At_(*OutTableData, __drv_allocatesMem(Mem))
@@ -138,8 +302,23 @@ WmipGetRawSMBiosTableData(
     PVOID BiosTables, TableMapping;
     ULONG Offset, TableSize;
     ULONG64 TableAddress = 0;
+    NTSTATUS Status;
 
-    /* This is where the range for the entry point starts */
+    /*
+     * First try to get SMBIOS from registry (for UEFI systems).
+     * The bootloader passes SMBIOS info via the "SMBIOS" MultiFunctionAdapter.
+     */
+    Status = WmipGetSMBiosFromRegistry(&TableAddress, &TableSize, &BiosTablesHeader);
+    if (NT_SUCCESS(Status) && TableAddress != 0)
+    {
+        DPRINT("Using SMBIOS from bootloader (UEFI path)\n");
+        goto CopyTable;
+    }
+
+    /*
+     * Fallback: scan legacy BIOS memory range 0xF0000-0xFFFFF.
+     * This is where the range for the entry point starts on BIOS systems.
+     */
     PhysicalAddress.QuadPart = 0xF0000;
 
     /* Map the range into the system address space */
@@ -173,6 +352,10 @@ WmipGetRawSMBiosTableData(
         return STATUS_NOT_FOUND;
     }
 
+    DPRINT("Found SMBIOS via legacy scan at 0x%llx, size %lu\n",
+           TableAddress, TableSize);
+
+CopyTable:
     /* Check if the caller asked for the buffer */
     if (OutTableData != NULL)
     {

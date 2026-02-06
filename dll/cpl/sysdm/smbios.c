@@ -281,8 +281,6 @@ BOOL IsGenericSystemName(PCWSTR ven, PCWSTR dev, BOOL * bRemove)
         { L"insyde", TRUE, FALSE },
         { L"Unknow", TRUE, TRUE },
         { L"Not Applicable", TRUE, TRUE },
-        // distinguish between Oracle and older VirtualBox releases (Sun, etc.)
-        { L"innotek GmbH", TRUE, FALSE },
     };
     static const GENERIC_NAME Devices[] =
     {
@@ -557,7 +555,6 @@ BOOL GetSystemName(PWSTR pBuf, SIZE_T cchBuf)
         { L"LLC", FALSE },
         { L"Ltd", FALSE },
         { L"LTDA", FALSE },
-        { L"GmbH", FALSE },
         { L"S.p.A", FALSE },
         { L"A.S.", FALSE },
         { L"S.A", FALSE },

@@ -19,6 +19,8 @@ DBG_DEFAULT_CHANNEL(WARNING);
 /* Signature for the Boot Graphics Resource Table ("BGRT"). */
 #define BGRT_SIGNATURE 0x54524742
 
+/* SMBIOS structures are defined in <reactos/arc/loaderblk.h> included via pcbios.h */
+
 /* GLOBALS *******************************************************************/
 
 extern EFI_SYSTEM_TABLE * GlobalSystemTable;
@@ -254,6 +256,132 @@ DetectAcpiBios(PCONFIGURATION_COMPONENT_DATA SystemKey, ULONG *BusNumber)
     }
 }
 
+/*
+ * Detect SMBIOS and create a component key to pass the table address to the kernel.
+ * This is necessary for UEFI systems where SMBIOS is not in the legacy 0xF0000 range.
+ */
+VOID
+DetectSmbios(PCONFIGURATION_COMPONENT_DATA SystemKey, ULONG *BusNumber)
+{
+    PCONFIGURATION_COMPONENT_DATA BiosKey;
+    PCM_PARTIAL_RESOURCE_LIST PartialResourceList;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptor;
+    PSMBIOS_BIOS_DATA SmbiosBiosData;
+    EFI_GUID Smbios3Guid = SMBIOS3_TABLE_GUID;
+    EFI_GUID SmbiosGuid = SMBIOS_TABLE_GUID;
+    UINTN Index;
+    ULONGLONG EntryPointAddress = 0;
+    ULONGLONG TableAddress = 0;
+    ULONG TableSize = 0;
+    UCHAR MajorVersion = 0;
+    UCHAR MinorVersion = 0;
+    UCHAR DmiRevision = 0;
+
+    if (!GlobalSystemTable)
+        return;
+
+    /* Find SMBIOS entry point in UEFI configuration tables */
+    for (Index = 0; Index < GlobalSystemTable->NumberOfTableEntries; ++Index)
+    {
+        EFI_CONFIGURATION_TABLE *Entry = &GlobalSystemTable->ConfigurationTable[Index];
+
+        /* Prefer SMBIOS 3.0 (64-bit) */
+        if (!memcmp(&Entry->VendorGuid, &Smbios3Guid, sizeof(EFI_GUID)))
+        {
+            PSMBIOS3_ENTRY_POINT Entry3 = (PSMBIOS3_ENTRY_POINT)Entry->VendorTable;
+            if (Entry3 && Entry3->TableAddress != 0)
+            {
+                EntryPointAddress = (ULONGLONG)(UINTN)Entry3;
+                TableAddress = Entry3->TableAddress;
+                TableSize = Entry3->MaxStructureSize;
+                MajorVersion = Entry3->MajorVersion;
+                MinorVersion = Entry3->MinorVersion;
+                DmiRevision = 3;
+                TRACE("Found SMBIOS 3.0 entry point at %p, table at 0x%llX\n",
+                      Entry3, TableAddress);
+                break;
+            }
+        }
+
+        /* Fallback to SMBIOS 2.x (32-bit) */
+        if (!memcmp(&Entry->VendorGuid, &SmbiosGuid, sizeof(EFI_GUID)))
+        {
+            PSMBIOS_ENTRY_POINT Entry2 = (PSMBIOS_ENTRY_POINT)Entry->VendorTable;
+            if (Entry2 && Entry2->TableAddress != 0)
+            {
+                EntryPointAddress = (ULONGLONG)(UINTN)Entry2;
+                TableAddress = (ULONGLONG)Entry2->TableAddress;
+                TableSize = Entry2->TableLength;
+                MajorVersion = Entry2->MajorVersion;
+                MinorVersion = Entry2->MinorVersion;
+                DmiRevision = 2;
+                TRACE("Found SMBIOS 2.x entry point at %p, table at 0x%llX\n",
+                      Entry2, TableAddress);
+                break;
+            }
+        }
+    }
+
+    if (TableAddress == 0)
+    {
+        ERR("SMBIOS not found in EFI configuration tables\n");
+        return;
+    }
+
+    ERR("DetectSmbios: Found SMBIOS %u.%u at 0x%llX, size 0x%lX\n",
+        MajorVersion, MinorVersion, TableAddress, TableSize);
+
+    /* Allocate the partial resource list */
+    PartialResourceList = FrLdrHeapAlloc(sizeof(CM_PARTIAL_RESOURCE_LIST) +
+                                         sizeof(SMBIOS_BIOS_DATA),
+                                         TAG_HW_RESOURCE_LIST);
+    if (PartialResourceList == NULL)
+    {
+        ERR("Failed to allocate resource descriptor for SMBIOS\n");
+        return;
+    }
+
+    RtlZeroMemory(PartialResourceList,
+                  sizeof(CM_PARTIAL_RESOURCE_LIST) + sizeof(SMBIOS_BIOS_DATA));
+    PartialResourceList->Version = 0;
+    PartialResourceList->Revision = 0;
+    PartialResourceList->Count = 1;
+
+    PartialDescriptor = &PartialResourceList->PartialDescriptors[0];
+    PartialDescriptor->Type = CmResourceTypeDeviceSpecific;
+    PartialDescriptor->ShareDisposition = CmResourceShareUndetermined;
+    PartialDescriptor->u.DeviceSpecificData.DataSize = sizeof(SMBIOS_BIOS_DATA);
+
+    /* Fill the SMBIOS data structure */
+    SmbiosBiosData = (PSMBIOS_BIOS_DATA)&PartialResourceList->PartialDescriptors[1];
+    SmbiosBiosData->EntryPointAddress.QuadPart = EntryPointAddress;
+    SmbiosBiosData->TableAddress.QuadPart = TableAddress;
+    SmbiosBiosData->TableSize = TableSize;
+    SmbiosBiosData->MajorVersion = MajorVersion;
+    SmbiosBiosData->MinorVersion = MinorVersion;
+    SmbiosBiosData->DmiRevision = DmiRevision;
+
+    TRACE("SMBIOS %u.%u (DMI rev %u), table size 0x%lX\n",
+          MajorVersion, MinorVersion, DmiRevision, TableSize);
+
+    /* Create new bus key for SMBIOS */
+    FldrCreateComponentKey(SystemKey,
+                           AdapterClass,
+                           MultiFunctionAdapter,
+                           0x0,
+                           0x0,
+                           0xFFFFFFFF,
+                           "SMBIOS",
+                           PartialResourceList,
+                           sizeof(CM_PARTIAL_RESOURCE_LIST) + sizeof(SMBIOS_BIOS_DATA),
+                           &BiosKey);
+
+    ERR("DetectSmbios: Created SMBIOS MultiFunctionAdapter key at bus %lu\n", *BusNumber);
+
+    /* Increment bus number */
+    (*BusNumber)++;
+}
+
 PBGRT_TABLE
 GetBgrtTable(VOID)
 {
@@ -277,29 +405,231 @@ GetBgrtTable(VOID)
     return BgrtTable;
 }
 
+/*
+ * Get a string from SMBIOS structure.
+ * Strings are stored after the formatted area, null-terminated, double-null at end.
+ */
+static const CHAR*
+SmbiosGetString(PSMBIOS_HEADER Header, UCHAR StringIndex)
+{
+    const CHAR *Str;
+    UCHAR Index;
+
+    if (StringIndex == 0)
+        return NULL;
+
+    /* Strings start after the formatted part of the structure */
+    Str = (const CHAR *)((UINTN)Header + Header->Length);
+    Index = 1;
+
+    while (Index < StringIndex)
+    {
+        /* Skip to next string */
+        while (*Str != '\0')
+            Str++;
+        Str++;  /* Skip the null terminator */
+
+        /* Check for end of strings (double null) */
+        if (*Str == '\0')
+            return NULL;
+
+        Index++;
+    }
+
+    return (*Str != '\0') ? Str : NULL;
+}
+
+/*
+ * Move to next SMBIOS structure.
+ */
+static PSMBIOS_HEADER
+SmbiosNextStructure(PSMBIOS_HEADER Header)
+{
+    const CHAR *Str;
+
+    /* Strings start after the formatted part */
+    Str = (const CHAR *)((UINTN)Header + Header->Length);
+
+    /* Skip all strings (null-terminated, double-null at end) */
+    while (*Str != '\0' || *(Str + 1) != '\0')
+        Str++;
+
+    /* Skip the double null terminator */
+    Str += 2;
+
+    return (PSMBIOS_HEADER)Str;
+}
+
+/*
+ * Get system identifier from SMBIOS Type 1 (System Information).
+ * Returns TRUE if successful, FALSE otherwise.
+ * The output buffer will contain "Manufacturer ProductName" string.
+ */
+static BOOLEAN
+GetSmbiosSystemIdentifier(
+    _Out_writes_(BufferSize) PCHAR Buffer,
+    _In_ SIZE_T BufferSize)
+{
+    EFI_GUID Smbios3Guid = SMBIOS3_TABLE_GUID;
+    EFI_GUID SmbiosGuid = SMBIOS_TABLE_GUID;
+    PSMBIOS_HEADER CurrentHeader;
+    ULONGLONG TableAddress = 0;
+    UINTN Index;
+    SIZE_T Len;
+
+    if (!GlobalSystemTable || !Buffer || BufferSize == 0)
+        return FALSE;
+
+    /* Find SMBIOS entry point in UEFI configuration tables */
+    for (Index = 0; Index < GlobalSystemTable->NumberOfTableEntries; ++Index)
+    {
+        EFI_CONFIGURATION_TABLE *Entry = &GlobalSystemTable->ConfigurationTable[Index];
+
+        /* Prefer SMBIOS 3.0 (64-bit) */
+        if (!memcmp(&Entry->VendorGuid, &Smbios3Guid, sizeof(EFI_GUID)))
+        {
+            PSMBIOS3_ENTRY_POINT Entry3 = (PSMBIOS3_ENTRY_POINT)Entry->VendorTable;
+            if (Entry3 && Entry3->TableAddress != 0)
+            {
+                TableAddress = Entry3->TableAddress;
+                TRACE("Found SMBIOS 3.0 table at 0x%llX\n", TableAddress);
+                break;
+            }
+        }
+
+        /* Fallback to SMBIOS 2.x (32-bit) */
+        if (!memcmp(&Entry->VendorGuid, &SmbiosGuid, sizeof(EFI_GUID)))
+        {
+            PSMBIOS_ENTRY_POINT Entry2 = (PSMBIOS_ENTRY_POINT)Entry->VendorTable;
+            if (Entry2 && Entry2->TableAddress != 0)
+            {
+                TableAddress = (ULONGLONG)Entry2->TableAddress;
+                TRACE("Found SMBIOS 2.x table at 0x%llX\n", TableAddress);
+                break;
+            }
+        }
+    }
+
+    if (TableAddress == 0)
+    {
+        ERR("GetSmbiosSystemIdentifier: SMBIOS table not found in EFI config tables\n");
+        return FALSE;
+    }
+
+    ERR("GetSmbiosSystemIdentifier: Found SMBIOS table at 0x%llX\n", TableAddress);
+
+    /* Walk SMBIOS structures looking for System Information (Type 1) */
+    CurrentHeader = (PSMBIOS_HEADER)(UINTN)TableAddress;
+
+    /* Limit iterations to prevent infinite loops */
+    for (Index = 0; Index < 256 && CurrentHeader->Type != 127; ++Index)
+    {
+        if (CurrentHeader->Type == 1)  /* System Information */
+        {
+            PSMBIOS_SYSTEM_INFO SysInfo = (PSMBIOS_SYSTEM_INFO)CurrentHeader;
+            const CHAR *Manufacturer = SmbiosGetString(&SysInfo->Header, SysInfo->Manufacturer);
+            const CHAR *ProductName = SmbiosGetString(&SysInfo->Header, SysInfo->ProductName);
+
+            ERR("GetSmbiosSystemIdentifier: Found Type 1 at %p\n", SysInfo);
+            ERR("GetSmbiosSystemIdentifier: Manufacturer index=%u, ProductName index=%u\n",
+                SysInfo->Manufacturer, SysInfo->ProductName);
+            ERR("GetSmbiosSystemIdentifier: Manufacturer='%s'\n", Manufacturer ? Manufacturer : "(null)");
+            ERR("GetSmbiosSystemIdentifier: ProductName='%s'\n", ProductName ? ProductName : "(null)");
+
+            /* Build the identifier string */
+            Buffer[0] = '\0';
+
+            if (Manufacturer && Manufacturer[0] != '\0')
+            {
+                Len = strlen(Manufacturer);
+                if (Len >= BufferSize)
+                    Len = BufferSize - 1;
+                memcpy(Buffer, Manufacturer, Len);
+                Buffer[Len] = '\0';
+
+                /* Add space separator if we have product name too */
+                if (ProductName && ProductName[0] != '\0' && Len + 1 < BufferSize)
+                {
+                    Buffer[Len] = ' ';
+                    Buffer[Len + 1] = '\0';
+                }
+            }
+
+            if (ProductName && ProductName[0] != '\0')
+            {
+                Len = strlen(Buffer);
+                if (Len < BufferSize - 1)
+                {
+                    SIZE_T ProductLen = strlen(ProductName);
+                    if (Len + ProductLen >= BufferSize)
+                        ProductLen = BufferSize - Len - 1;
+                    memcpy(Buffer + Len, ProductName, ProductLen);
+                    Buffer[Len + ProductLen] = '\0';
+                }
+            }
+
+            /* Return success if we got at least some info */
+            if (Buffer[0] != '\0')
+            {
+                TRACE("System identifier: %s\n", Buffer);
+                return TRUE;
+            }
+
+            break;
+        }
+
+        CurrentHeader = SmbiosNextStructure(CurrentHeader);
+    }
+
+    TRACE("SMBIOS Type 1 not found or empty\n");
+    return FALSE;
+}
+
 PCONFIGURATION_COMPONENT_DATA
 UefiHwDetect(
     _In_opt_ PCSTR Options)
 {
     PCONFIGURATION_COMPONENT_DATA SystemKey;
     ULONG BusNumber = 0;
+    CHAR SmbiosIdentifier[128];
 
     TRACE("DetectHardware()\n");
 
-    /* Create the 'System' key */
+    /*
+     * Create the 'System' key.
+     * Try to get system identifier from SMBIOS (Manufacturer + ProductName).
+     * This provides a descriptive identifier like "Dell Inc. OptiPlex 7010"
+     * instead of a generic architecture string.
+     * SMBIOS is available via EFI configuration tables on all UEFI platforms.
+     */
+    if (GetSmbiosSystemIdentifier(SmbiosIdentifier, sizeof(SmbiosIdentifier)))
+    {
+        ERR("UefiHwDetect: Using SMBIOS system identifier: '%s'\n", SmbiosIdentifier);
+        FldrCreateSystemKey(&SystemKey, SmbiosIdentifier);
+    }
+    else
+    {
+        /* Fallback to architecture-specific generic identifier */
 #if defined(_M_IX86) || defined(_M_AMD64)
-    FldrCreateSystemKey(&SystemKey, "AT/AT COMPATIBLE");
+        ERR("UefiHwDetect: SMBIOS failed, using fallback 'AT/AT COMPATIBLE'\n");
+        FldrCreateSystemKey(&SystemKey, "AT/AT COMPATIBLE");
 #elif defined(_M_IA64)
-    FldrCreateSystemKey(&SystemKey, "Intel Itanium processor family");
+        ERR("UefiHwDetect: SMBIOS failed, using fallback 'Intel Itanium processor family'\n");
+        FldrCreateSystemKey(&SystemKey, "Intel Itanium processor family");
 #elif defined(_M_ARM) || defined(_M_ARM64) || defined(__aarch64__)
-    FldrCreateSystemKey(&SystemKey, "ARM processor family");
+        ERR("UefiHwDetect: SMBIOS failed, using fallback 'ARM processor family'\n");
+        FldrCreateSystemKey(&SystemKey, "ARM processor family");
 #else
-    #error Please define a system key for your architecture
+        #error Please define a system key for your architecture
 #endif
+    }
 
     /* Detect ACPI */
     DetectAcpiBios(SystemKey, &BusNumber);
-    
+
+    /* Detect SMBIOS and pass table address to kernel */
+    DetectSmbios(SystemKey, &BusNumber);
+
     if (AcpiPresent)
     {
         PRSDP_DESCRIPTOR Rsdp = FindAcpiBios();
