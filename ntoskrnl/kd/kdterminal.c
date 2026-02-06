@@ -50,6 +50,8 @@ static CHAR KdTermNextKey = ANSI_NULL; /* 1-character input queue buffer */
 BOOLEAN
 KdpInitTerminal(VOID)
 {
+    BOOLEAN NeedTerminalProbe;
+
     /* Determine whether the controlling terminal is a serial terminal:
      * serial output is enabled *and* KDSERIAL is set (i.e. user input
      * through serial). */
@@ -67,63 +69,57 @@ KdpInitTerminal(VOID)
     /* Flush the input buffer */
     KdpFlushTerminalInput();
 
+    /*
+     * In mixed screen+serial debug mode, VT probe sequences leak into
+     * serial logs on some hypervisors and can look like random garbage.
+     * Keep serial input enabled but skip terminal probing in that case.
+     */
+    NeedTerminalProbe = !KdpDebugMode.Screen;
+
     if (KdTermSerial)
     {
-#if defined(_M_ARM64)
-        /*
-         * On ARM64 with QEMU, the PL011 UART output often appears on the
-         * same console as screen output. Sending VT100 escape sequences
-         * causes garbage like "[?7h[c" to appear because the ESC character
-         * is consumed but the rest of the sequence is printed verbatim.
-         *
-         * Skip terminal type detection on ARM64, but still enable serial
-         * input by setting KdTermConnected = TRUE. This allows KDBG CLI
-         * to receive input from the serial console without sending VT100
-         * escape sequences that would cause garbage output.
-         */
-
         /* Drain any pending input to start with clean buffer */
         while (KdbpTryGetCharSerial(1000) != -1);
 
-        /* Enable serial input without VT100 terminal detection */
-        KdTermConnected = TRUE;
-#else
-        ULONG Length;
-
-        /* Drain any pending input before sending commands */
-        while (KdbpTryGetCharSerial(1000) != -1);
-
-        /* Enable line-wrap */
-        KdbpSendCommandSerial("\x1b[?7h");
-
-        /*
-         * Query terminal type.
-         * Historically it was done with CTRL-E ('\x05'), however nowadays
-         * terminals respond to it with an empty (or a user-configurable)
-         * string. Instead, use the VT52-compatible 'ESC Z' sequence or the
-         * VT100-compatible 'ESC[c' one.
-         */
-        KdbpSendCommandSerial("\x1b[c");
-        KeStallExecutionProcessor(100000);
-
-        Length = 0;
-        for (;;)
+        if (!NeedTerminalProbe)
         {
-            /* Verify we get an answer, but don't care about it */
-            if (KdbpTryGetCharSerial(5000) == -1)
-                break;
-            ++Length;
+            KdTermConnected = TRUE;
         }
+        else
+        {
+            ULONG Length;
 
-        /* Terminal is connected (TRUE) or not connected (FALSE) */
-        KdTermConnected = (Length > 0);
+            /* Enable line-wrap */
+            KdbpSendCommandSerial("\x1b[?7h");
 
-        /*
-         * Final drain: consume any remaining characters that might have
-         * been echoed or buffered during terminal detection.
-         */
-        while (KdbpTryGetCharSerial(1000) != -1);
-#endif /* _M_ARM64 */
+            /*
+             * Query terminal type.
+             * Historically it was done with CTRL-E ('\x05'), however nowadays
+             * terminals respond to it with an empty (or a user-configurable)
+             * string. Instead, use the VT52-compatible 'ESC Z' sequence or the
+             * VT100-compatible 'ESC[c' one.
+             */
+            KdbpSendCommandSerial("\x1b[c");
+            KeStallExecutionProcessor(100000);
+
+            Length = 0;
+            for (;;)
+            {
+                /* Verify we get an answer, but don't care about it */
+                if (KdbpTryGetCharSerial(5000) == -1)
+                    break;
+                ++Length;
+            }
+
+            /* Terminal is connected (TRUE) or not connected (FALSE) */
+            KdTermConnected = (Length > 0);
+
+            /*
+             * Final drain: consume any remaining characters that might have
+             * been echoed or buffered during terminal detection.
+             */
+            while (KdbpTryGetCharSerial(1000) != -1);
+        }
     }
     else
     {
