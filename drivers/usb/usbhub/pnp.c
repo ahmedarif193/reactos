@@ -1111,8 +1111,8 @@ USBH_FdoQueryBusRelations(IN PUSBHUB_FDO_EXTENSION HubExtension,
     PLIST_ENTRY Entry;
     ULONG Length;
 
-    DPRINT_ENUM("USBH_FdoQueryBusRelations: HubFlags - %lX\n",
-                HubExtension->HubFlags);
+    DPRINT("USBH_FdoQueryBusRelations: HubFlags - %lX\n",
+           HubExtension->HubFlags);
 
     ASSERT(Irp->IoStatus.Information == 0);
 
@@ -1164,8 +1164,8 @@ USBH_FdoQueryBusRelations(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
         KeReleaseSpinLock(&HubExtension->RelationsWorkerSpinLock, OldIrql);
 
-        DPRINT_ENUM("USBH_FdoQueryBusRelations: snapshot only, Count=%lu\n",
-                    DeviceRelations->Count);
+        DPRINT("USBH_FdoQueryBusRelations: snapshot only, Count=%lu\n",
+               DeviceRelations->Count);
 
         Irp->IoStatus.Status = STATUS_SUCCESS;
         Irp->IoStatus.Information = (ULONG_PTR)DeviceRelations;
@@ -1320,9 +1320,9 @@ EnumStart:
             goto EnumStart;
         }
 
-        DPRINT_ENUM("USBH_FdoQueryBusRelations: Port - %x, ConnectStatus - %x\n",
-                    Port,
-                    USBH_PortStatusIsConnected(&PortData->PortStatus));
+        DPRINT("USBH_FdoQueryBusRelations: Port - %x, ConnectStatus - %x\n",
+               Port,
+               USBH_PortStatusIsConnected(&PortData->PortStatus));
 
         PdoDevice = PortData->DeviceObject;
 
@@ -1593,8 +1593,8 @@ PortEnumerationFailure:
     {
         ULONG idx;
 
-        DPRINT_ENUM("USBH_FdoQueryBusRelations: re-enumeration requested mid-run (Flags=%lX) – restarting\n",
-                    HubExtension->HubFlags);
+        DPRINT("USBH_FdoQueryBusRelations: re-enumeration requested mid-run (Flags=%lX) – restarting\n",
+               HubExtension->HubFlags);
 
         HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_DO_ENUMERATION;
 
@@ -1611,9 +1611,9 @@ PortEnumerationFailure:
 
     HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_NOT_ENUMERATED;
 
-    DPRINT_ENUM("USBH_FdoQueryBusRelations: done Flags=%lX Count=%lu\n",
-                HubExtension->HubFlags,
-                DeviceRelations ? DeviceRelations->Count : 0);
+    DPRINT("USBH_FdoQueryBusRelations: done Flags=%lX Count=%lu\n",
+           HubExtension->HubFlags,
+           DeviceRelations ? DeviceRelations->Count : 0);
 
     KeReleaseSemaphore(&HubExtension->ResetDeviceSemaphore,
                        LOW_REALTIME_PRIORITY,
@@ -1978,7 +1978,7 @@ USBH_PdoQueryId(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
             break;
 
         case BusQueryCompatibleIDs:
-            DPRINT1("USBH_PdoQueryId: BusQueryCompatibleIDs VID=%04X PID=%04X InterfaceClass=%02X SubClass=%02X Protocol=%02X\n",
+            DPRINT("USBH_PdoQueryId: BusQueryCompatibleIDs VID=%04X PID=%04X InterfaceClass=%02X SubClass=%02X Protocol=%02X\n",
                    DeviceDescriptor->idVendor,
                    DeviceDescriptor->idProduct,
                    InterfaceDescriptor->bInterfaceClass,

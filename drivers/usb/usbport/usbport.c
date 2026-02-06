@@ -3291,14 +3291,14 @@ SkipDmaCleanup:
 
             if (Buf && Len >= 6)
             {
-                DPRINT1("USBPORT_CompleteTransfer: CFG DESC len=%lu first=%02x %02x %02x %02x %02x %02x\n",
-                        Len,
-                        Buf[0], Buf[1], Buf[2], Buf[3], Buf[4], Buf[5]);
+                DPRINT("USBPORT_CompleteTransfer: CFG DESC len=%lu first=%02x %02x %02x %02x %02x %02x\n",
+                       Len,
+                       Buf[0], Buf[1], Buf[2], Buf[3], Buf[4], Buf[5]);
             }
             else
             {
-                DPRINT1("USBPORT_CompleteTransfer: CFG DESC len=%lu buf=%p\n",
-                        Len, Buf);
+                DPRINT("USBPORT_CompleteTransfer: CFG DESC len=%lu buf=%p\n",
+                       Len, Buf);
             }
         }
     }

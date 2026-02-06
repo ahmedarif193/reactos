@@ -22,7 +22,7 @@
 
 #if DBG
 #define XHCI_LOG_IRQL(Tag)                                                        \
-    DPRINT1("usbxhci[IRQL]: %s (IRQL=%lu)\n", Tag, (ULONG)KeGetCurrentIrql())
+    DPRINT("usbxhci[IRQL]: %s (IRQL=%lu)\n", Tag, (ULONG)KeGetCurrentIrql())
 #define XHCI_ASSERT_PASSIVE(Tag)                                                  \
     do {                                                                          \
         KIRQL __irql = KeGetCurrentIrql();                                        \

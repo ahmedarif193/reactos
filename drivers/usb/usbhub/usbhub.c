@@ -4740,12 +4740,12 @@ USBH_ProcessDeviceInformation(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension)
     USBHUB_DumpingDeviceDescriptor(&PortExtension->DeviceDescriptor);
     USBHUB_DumpingConfiguration(ConfigDescriptor);
 
-    DPRINT_PNP("USBH_ProcessDeviceInformation: Class - %x, SubClass - %x, Protocol - %x\n",
+    DPRINT("USBH_ProcessDeviceInformation: Class - %x, SubClass - %x, Protocol - %x\n",
                PortExtension->DeviceDescriptor.bDeviceClass,
                PortExtension->DeviceDescriptor.bDeviceSubClass,
                PortExtension->DeviceDescriptor.bDeviceProtocol);
 
-    DPRINT_PNP("USBH_ProcessDeviceInformation: bNumConfigurations - %x, bNumInterfaces - %x\n",
+    DPRINT("USBH_ProcessDeviceInformation: bNumConfigurations - %x, bNumInterfaces - %x\n",
                PortExtension->DeviceDescriptor.bNumConfigurations,
                ConfigDescriptor->bNumInterfaces);
 
@@ -4788,7 +4788,7 @@ USBH_ProcessDeviceInformation(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension)
     if (Pid)
     {
         /* Log the parsed interface descriptor for driver matching diagnostics */
-        DPRINT1("USBH_ProcessDeviceInformation: VID=%04X PID=%04X InterfaceClass=%02X SubClass=%02X Protocol=%02X\n",
+        DPRINT("USBH_ProcessDeviceInformation: VID=%04X PID=%04X InterfaceClass=%02X SubClass=%02X Protocol=%02X\n",
                 PortExtension->DeviceDescriptor.idVendor,
                 PortExtension->DeviceDescriptor.idProduct,
                 Pid->bInterfaceClass,
@@ -4807,7 +4807,7 @@ USBH_ProcessDeviceInformation(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension)
     }
     else
     {
-        DPRINT1("USBH_ProcessDeviceInformation: VID=%04X PID=%04X - NO interface descriptor found!\n",
+        DPRINT("USBH_ProcessDeviceInformation: VID=%04X PID=%04X - NO interface descriptor found!\n",
                 PortExtension->DeviceDescriptor.idVendor,
                 PortExtension->DeviceDescriptor.idProduct);
         Status = STATUS_UNSUCCESSFUL;

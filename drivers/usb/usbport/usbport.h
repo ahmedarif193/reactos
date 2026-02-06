@@ -23,7 +23,7 @@
 
 #if DBG
 #define USBPORT_LOG_IRQL(Tag)                                                      \
-    DPRINT1("USBPORT[IRQL]: %s (IRQL=%lu)\n", Tag, (ULONG)KeGetCurrentIrql())
+    DPRINT("USBPORT[IRQL]: %s (IRQL=%lu)\n", Tag, (ULONG)KeGetCurrentIrql())
 #define USBPORT_ASSERT_PASSIVE(Tag)                                                \
     do {                                                                           \
         KIRQL __irql = KeGetCurrentIrql();                                         \

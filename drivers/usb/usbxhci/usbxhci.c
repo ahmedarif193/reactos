@@ -864,7 +864,7 @@ DriverEntry(
 
     DriverObject->DriverUnload = XHCI_Unload;
 
-    DPRINT1("usbxhci: registering xHCI miniport ver=%lu flags=%08lx ext=%Iu ep=%Iu xfer=%Iu res=%Iu\n",
+    DPRINT("usbxhci: registering xHCI miniport ver=%lu flags=%08lx ext=%Iu ep=%Iu xfer=%Iu res=%Iu\n",
             XhciRegPacket.MiniPortVersion,
             XhciRegPacket.MiniPortFlags,
             XhciRegPacket.MiniPortExtensionSize,
@@ -1106,7 +1106,7 @@ XHCI_ModifyPortBits(
     NewValue |= (AckMask & XHCI_PORTSC_CHANGE_MASK);
 
     if (Port == 5)
-        DPRINT1("ModBits: P%u Read=%08lx Writing=%08lx\n", Port, Value, NewValue & XHCI_PORTSC_WRITE_MASK);
+        DPRINT("ModBits: P%u Read=%08lx Writing=%08lx\n", Port, Value, NewValue & XHCI_PORTSC_WRITE_MASK);
     XHCI_WRITE_REGISTER_ULONG(PortStatusReg, NewValue & XHCI_PORTSC_WRITE_MASK);
 
     return MP_STATUS_SUCCESS;
@@ -1148,7 +1148,7 @@ XHCI_SetPortLinkState(
     NewValue &= ~XHCI_PORTSC_CHANGE_MASK;
 
     if (Port == 5)
-        DPRINT1("ModBits: P%u Read=%08lx Writing=%08lx\n", Port, Value, NewValue & XHCI_PORTSC_WRITE_MASK);
+        DPRINT("ModBits: P%u Read=%08lx Writing=%08lx\n", Port, Value, NewValue & XHCI_PORTSC_WRITE_MASK);
     XHCI_WRITE_REGISTER_ULONG(PortStatusReg, NewValue & XHCI_PORTSC_WRITE_MASK);
 
     return MP_STATUS_SUCCESS;
@@ -1503,7 +1503,7 @@ XHCI_ProgramDcbaaCrcrAndConfig(
 
     CrcrLow |= (Extension->CommandRingCycleState & 0x1);
 
-    DPRINT1("usbxhci: programming DCBAA=%08lx:%08lx CRCR=%08lx:%08lx\n",
+    DPRINT("usbxhci: programming DCBAA=%08lx:%08lx CRCR=%08lx:%08lx\n",
             DcbaaHigh, DcbaaLow, CrcrHigh, CrcrLow);
     XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->DcbaapLow, DcbaaLow);
     XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->DcbaapHigh, DcbaaHigh);
@@ -1535,7 +1535,7 @@ XHCI_ProgramDcbaaCrcrAndConfig(
     }
 #endif
 
-    DPRINT1("usbxhci: USBCMD=%08lx USBSTS=%08lx CONFIG=%08lx\n",
+    DPRINT("usbxhci: USBCMD=%08lx USBSTS=%08lx CONFIG=%08lx\n",
             XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd),
             XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts),
             XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->Config));
@@ -1566,7 +1566,7 @@ XHCI_ConfigurePageSize(
 
     XHCI_WRITE_REGISTER_ULONG(PageSizeReg, XHCI_PAGE_SIZE_4K);
     Extension->ConfiguredPageSize = XHCI_PAGE_SIZE_4K;
-    DPRINT1("usbxhci: configured page size mask=0x%08lx\n",
+    DPRINT("usbxhci: configured page size mask=0x%08lx\n",
             Extension->ConfiguredPageSize);
 
     /* Success path: ensure caller gets a defined success status. */
@@ -4216,8 +4216,8 @@ XHCI_SwEnumWorker(
         {
             MPSTATUS AddrStatus;
 
-            DPRINT1("usbxhci: SwEnumWorker issuing deferred ADDRESS_DEVICE for slot %u\n",
-                    Slot->SlotId);
+            DPRINT("usbxhci: SwEnumWorker issuing deferred ADDRESS_DEVICE for slot %u\n",
+                   Slot->SlotId);
 
             AddrStatus = XHCI_AddressDeviceSlot(Extension,
                                                  Slot,
@@ -4262,8 +4262,8 @@ XHCI_SwEnumWorker(
                 Slot->UsbDeviceAddress = Work->NewAddress;
                 XHCI_UpdateDeviceAddressMap(Extension, Slot, Work->NewAddress);
 
-                DPRINT1("usbxhci: deferred slot %u SET_ADDRESS to addr=%u complete\n",
-                        Slot->SlotId, Work->NewAddress);
+                DPRINT("usbxhci: deferred slot %u SET_ADDRESS to addr=%u complete\n",
+                       Slot->SlotId, Work->NewAddress);
 
                 Transfer->BytesTransferred = 0;
                 Transfer->UsbdStatus = USBD_STATUS_SUCCESS;
@@ -4271,8 +4271,8 @@ XHCI_SwEnumWorker(
         }
         else
         {
-            DPRINT1("usbxhci: deferred SET_ADDRESS map update for slot %u (old=%u new=%u)\n",
-                    Slot->SlotId, Slot->UsbDeviceAddress, Work->NewAddress);
+            DPRINT("usbxhci: deferred SET_ADDRESS map update for slot %u (old=%u new=%u)\n",
+                   Slot->SlotId, Slot->UsbDeviceAddress, Work->NewAddress);
             if (ActiveEndpoint)
                 ActiveEndpoint->EndpointProperties.DeviceAddress = Work->NewAddress;
             Slot->UsbDeviceAddress = Work->NewAddress;
@@ -4428,11 +4428,11 @@ XHCI_HandleEnumerationTransfer(
                                     Endpoint->Slot,
                                     Transfer->NewAddress);
 
-        DPRINT1("usbxhci: device on slot %u set address %u (bmR=0x%02x req=%02x)\n",
-                Endpoint->Slot->SlotId,
-                Transfer->NewAddress,
-                Setup->bmRequestType.B,
-                Setup->bRequest);
+        DPRINT("usbxhci: device on slot %u set address %u (bmR=0x%02x req=%02x)\n",
+               Endpoint->Slot->SlotId,
+               Transfer->NewAddress,
+               Setup->bmRequestType.B,
+               Setup->bRequest);
     }
 
     if (Transfer->Flags & XHCI_TRANSFER_FLAG_GET_DESCRIPTOR)
@@ -4454,16 +4454,16 @@ XHCI_HandleEnumerationTransfer(
                     if (Transfer->SgList && Transfer->SgList->SgElementCount > 0)
                          SgPa = Transfer->SgList->SgElement[0].SgPhysicalAddress;
 
-                    DPRINT1("XHCI: GetDescriptor Data: Len=%d Type=%x VID=%04x PID=%04x\n", 
+                    DPRINT("XHCI: GetDescriptor Data: Len=%d Type=%x VID=%04x PID=%04x\n",
                             BufferLength, D->bDescriptorType, D->idVendor, D->idProduct);
-                    DPRINT1("XHCI: buffer debugging: VA=%p PA=%I64x SG_PA=%I64x\n",
+                    DPRINT("XHCI: buffer debugging: VA=%p PA=%I64x SG_PA=%I64x\n",
                             Buffer, Pa.QuadPart, SgPa.QuadPart);
-                    DPRINT1("XHCI: Raw Bytes: %02x %02x %02x %02x\n",
+                    DPRINT("XHCI: Raw Bytes: %02x %02x %02x %02x\n",
                            ((PUCHAR)Buffer)[0], ((PUCHAR)Buffer)[1], ((PUCHAR)Buffer)[2], ((PUCHAR)Buffer)[3]);
                 }
                 else
                 {
-                     DPRINT1("XHCI: GetDescriptor Data: Len=%d (Header Only/Short)\n", BufferLength);
+                     DPRINT("XHCI: GetDescriptor Data: Len=%d (Header Only/Short)\n", BufferLength);
                 }
             }
             else if (DescriptorType == USB_CONFIGURATION_DESCRIPTOR_TYPE)
@@ -4475,7 +4475,7 @@ XHCI_HandleEnumerationTransfer(
                 if (Transfer->SgList && Transfer->SgList->SgElementCount > 0)
                     SgPa = Transfer->SgList->SgElement[0].SgPhysicalAddress;
 
-                DPRINT1("XHCI: GetDescriptor(CFG) len=%lu first=%02x %02x %02x %02x %02x %02x VA=%p PA=%I64x SG_PA=%I64x\n",
+                DPRINT("XHCI: GetDescriptor(CFG) len=%lu first=%02x %02x %02x %02x %02x %02x VA=%p PA=%I64x SG_PA=%I64x\n",
                         BufferLength,
                         (BufferLength > 0) ? Buffer[0] : 0,
                         (BufferLength > 1) ? Buffer[1] : 0,
@@ -5326,7 +5326,7 @@ XHCI_LogInterrupterState(
         ULONGLONG ErstBase = ((ULONGLONG)XHCI_READ_REGISTER_ULONG(&Interrupter->ErstBaseHigh) << 32) |
                              XHCI_READ_REGISTER_ULONG(&Interrupter->ErstBaseLow);
 
-        DPRINT1("usbxhci: %s IMAN=%08lx IMOD=%08lx ERSTSZ=%lu ERSTBA=%08lx:%08lx "
+        DPRINT("usbxhci: %s IMAN=%08lx IMOD=%08lx ERSTSZ=%lu ERSTBA=%08lx:%08lx "
                 "ERDP=%08lx:%08lx\n",
                 Reason,
                 Iman,
@@ -5338,7 +5338,7 @@ XHCI_LogInterrupterState(
                 (ULONG)(Erdp & 0xFFFFFFFF));
     }
 
-    DPRINT1("usbxhci: %s USBCMD=%08lx USBSTS=%08lx CONFIG=%08lx CRCR=%08lx:%08lx DOORBELL0=%08lx\n",
+    DPRINT("usbxhci: %s USBCMD=%08lx USBSTS=%08lx CONFIG=%08lx CRCR=%08lx:%08lx DOORBELL0=%08lx\n",
             Reason,
             UsbCmd,
             UsbSts,
@@ -5379,24 +5379,24 @@ XHCI_TraceCommandRingState(
     ErstSize = XHCI_READ_REGISTER_ULONG(&Interrupter->ErstSize);
     Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
 
-    DPRINT1("usbxhci: %s type=%lu cmdptr=%I64x cmd_enq=%lu cyc=%lu "
-            "evt_deq=%lu cyc=%lu CRCR=%08lx:%08lx ERST=%08lx:%08lx "
-            "ERSTSZ=%lu ERDP=%08lx:%08lx IMAN=%08lx\n",
-            Reason,
-            TrbType,
-            CommandPointer,
-            Extension->CommandRingEnqueueIndex,
-            Extension->CommandRingCycleState,
-            Extension->EventRingDequeueIndex,
-            Extension->EventRingCycleState,
-            (ULONG)(Crcr >> 32),
-            (ULONG)(Crcr & 0xFFFFFFFF),
-            (ULONG)(ErstBase >> 32),
-            (ULONG)(ErstBase & 0xFFFFFFFF),
-            ErstSize,
-            (ULONG)(Erdp >> 32),
-            (ULONG)(Erdp & 0xFFFFFFFF),
-            Iman);
+    DPRINT("usbxhci: %s type=%lu cmdptr=%I64x cmd_enq=%lu cyc=%lu "
+           "evt_deq=%lu cyc=%lu CRCR=%08lx:%08lx ERST=%08lx:%08lx "
+           "ERSTSZ=%lu ERDP=%08lx:%08lx IMAN=%08lx\n",
+           Reason,
+           TrbType,
+           CommandPointer,
+           Extension->CommandRingEnqueueIndex,
+           Extension->CommandRingCycleState,
+           Extension->EventRingDequeueIndex,
+           Extension->EventRingCycleState,
+           (ULONG)(Crcr >> 32),
+           (ULONG)(Crcr & 0xFFFFFFFF),
+           (ULONG)(ErstBase >> 32),
+           (ULONG)(ErstBase & 0xFFFFFFFF),
+           ErstSize,
+           (ULONG)(Erdp >> 32),
+           (ULONG)(Erdp & 0xFFFFFFFF),
+           Iman);
 }
 #else
 static VOID
@@ -5629,11 +5629,11 @@ XHCI_HandleCommandCompletion(
     /* Log ALL command completions, especially errors */
     if (CommandContext)
     {
-        DPRINT1("usbxhci: CMD_COMPLETE type=%lu code=%lu slot=%u cmdptr=%I64x\n",
-                CommandContext->CommandType,
-                CompletionCode,
-                SlotId,
-                CommandPointer);
+        DPRINT("usbxhci: CMD_COMPLETE type=%lu code=%lu slot=%u cmdptr=%I64x\n",
+               CommandContext->CommandType,
+               CompletionCode,
+               SlotId,
+               CommandPointer);
     }
     else
     {
@@ -5681,7 +5681,7 @@ XHCI_HandleCommandCompletion(
         if (Slot)
         {
             Slot->Addressed = TRUE;
-            DPRINT1("usbxhci: slot %u addressed\n", SlotId);
+            DPRINT("usbxhci: slot %u addressed\n", SlotId);
         }
     }
     else if (CompletionCode == XHCI_COMPLETION_SUCCESS &&
@@ -5689,7 +5689,7 @@ XHCI_HandleCommandCompletion(
              CommandContext->CommandType == XHCI_TRB_TYPE_CONFIG_EP)
     {
         Slot->Configured = TRUE;
-        DPRINT1("usbxhci: slot %u configured\n", SlotId);
+        DPRINT("usbxhci: slot %u configured\n", SlotId);
     }
     else if (CompletionCode == XHCI_COMPLETION_SUCCESS &&
              Slot &&
@@ -5766,7 +5766,7 @@ XHCI_HandleCommandCompletion(
         InterlockedExchange(&Slot->Ep0StallResetQueued, 0);
         KeSetEvent(&Slot->Ep0StallResetEvent, IO_NO_INCREMENT, FALSE);
 
-        DPRINT1("usbxhci: slot %u reset (EP0 ring reset to index 0)\n", SlotId);
+        DPRINT("usbxhci: slot %u reset (EP0 ring reset to index 0)\n", SlotId);
     }
     else if (CommandContext->CommandType == XHCI_TRB_TYPE_DISABLE_SLOT)
     {
@@ -5774,7 +5774,7 @@ XHCI_HandleCommandCompletion(
         {
             UCHAR EpId;
 
-            DPRINT1("usbxhci: slot %u disabled\n", SlotId);
+            DPRINT("usbxhci: slot %u disabled\n", SlotId);
 
             /*
              * Drain any stale deferred transfer completions for this slot.
@@ -5864,9 +5864,9 @@ XHCI_HandlePortChange(
     if (PortScReg)
         PortSc = XHCI_READ_REGISTER_ULONG(PortScReg);
 
-    DPRINT1("usbxhci: port status change on port %u PortSC=0x%08lx\n",
-            PortId,
-            PortSc);
+    DPRINT("usbxhci: port status change on port %u PortSC=0x%08lx\n",
+           PortId,
+           PortSc);
 
     /* If the device disconnected, proactively disable the slot to avoid stale state */
     if ((PortSc & XHCI_PORTSC_CCS) == 0)
@@ -6241,8 +6241,16 @@ XHCI_HandleTransferEvent(
     /* Log errors and short packets (code != 1 = success) */
     if (CompletionCode != 1)
     {
-        DPRINT1("xhci: XFER_EVT slot=%u ep=%u code=%lu remain=%lu ptr=%I64x\n",
-                SlotId, EndpointId, CompletionCode, Remaining, TrbPointer);
+        if (CompletionCode == XHCI_COMPLETION_SHORT_PACKET)
+        {
+            DPRINT("xhci: XFER_EVT slot=%u ep=%u code=%lu remain=%lu ptr=%I64x\n",
+                   SlotId, EndpointId, CompletionCode, Remaining, TrbPointer);
+        }
+        else
+        {
+            DPRINT1("xhci: XFER_EVT slot=%u ep=%u code=%lu remain=%lu ptr=%I64x\n",
+                    SlotId, EndpointId, CompletionCode, Remaining, TrbPointer);
+        }
     }
 
     Slot = XHCI_GetSlot(Extension, SlotId);
@@ -6324,13 +6332,13 @@ XHCI_HandleTransferEvent(
         (Transfer->CompletionTrbPointer != TrbPointer))
     {
         BOOLEAN InTdRange = (Transfer->TdFirstTrbPointer == 0);
-        DPRINT1("usbxhci: TRB_MISMATCH slot=%u ep=%u exp=%I64x got=%I64x first=%I64x isCtrl=%u code=%lu\n",
-                SlotId, EndpointId,
-                (ULONGLONG)Transfer->CompletionTrbPointer,
-                (ULONGLONG)TrbPointer,
-                (ULONGLONG)Transfer->TdFirstTrbPointer,
-                Transfer->IsControl,
-                CompletionCode);
+        DPRINT("usbxhci: TRB_MISMATCH slot=%u ep=%u exp=%I64x got=%I64x first=%I64x isCtrl=%u code=%lu\n",
+               SlotId, EndpointId,
+               (ULONGLONG)Transfer->CompletionTrbPointer,
+               (ULONGLONG)TrbPointer,
+               (ULONGLONG)Transfer->TdFirstTrbPointer,
+               Transfer->IsControl,
+               CompletionCode);
 
         if (Transfer->TdFirstTrbPointer != 0)
         {
@@ -7382,10 +7390,10 @@ XHCI_PrepareDefaultControlContext(
                                 XHCI_TRB_CYCLE);
     }
 
-    DPRINT1("usbxhci: prepared input context for slot %u (MPS=%lu, speed=%lu)\n",
-            Slot->SlotId,
-            MaxPacketSize,
-            SpeedCode);
+    DPRINT("usbxhci: prepared input context for slot %u (MPS=%lu, speed=%lu)\n",
+           Slot->SlotId,
+           MaxPacketSize,
+           SpeedCode);
 }
 
 static MPSTATUS
@@ -7569,10 +7577,10 @@ XHCI_AddressDeviceSlot(
             XHCI_PrepareDefaultControlContext(Extension, Slot, EndpointProperties);
         }
 
-        DPRINT1("usbxhci: EP0 bring-up: issuing ADDRESS_DEV for slot %u port=%u (attempt %lu)\n",
-                SlotId,
-                EndpointProperties->PortNumber,
-                Attempt + 1);
+        DPRINT("usbxhci: EP0 bring-up: issuing ADDRESS_DEV for slot %u port=%u (attempt %lu)\n",
+               SlotId,
+               EndpointProperties->PortNumber,
+               Attempt + 1);
 
         Status = XHCI_SendCommand(Extension,
                                   XHCI_TRB_TYPE_ADDRESS_DEV,
@@ -7701,7 +7709,7 @@ XHCI_BringupDefaultControlEndpoint(
 
     KeInitializeSpinLock(&Endpoint->Lock);
 
-    DPRINT1("usbxhci: EP0 bring-up: issuing ENABLE_SLOT for port %u (MPS=%lu)\n",
+    DPRINT("usbxhci: EP0 bring-up: issuing ENABLE_SLOT for port %u (MPS=%lu)\n",
             EndpointProperties->PortNumber,
             EndpointProperties->MaxPacketSize);
 
@@ -7971,7 +7979,7 @@ XHCI_DetectHardwareQuirks(
     if (XHCI_ReadPciConfig(Extension, 0x00, &VendorId, sizeof(VendorId)) &&
         XHCI_ReadPciConfig(Extension, 0x02, &DeviceId, sizeof(DeviceId)))
     {
-        DPRINT1("usbxhci: PCI VID=%04x DID=%04x HciVer=%04x\n",
+        DPRINT("usbxhci: PCI VID=%04x DID=%04x HciVer=%04x\n",
                 VendorId,
                 DeviceId,
                 Extension->HciVersion);
@@ -8043,7 +8051,7 @@ XHCI_DetectHardwareQuirks(
             Extension->Quirks &= ~XHCI_QUIRK_LIMIT_U1U2;
     }
 
-    DPRINT1("usbxhci: quirks=0x%lx (32b=%u slow=%u legacy=%u nopid=%u limitU=%u noncoh=%u vbox=%u qemu=%u)\n",
+    DPRINT("usbxhci: quirks=0x%lx (32b=%u slow=%u legacy=%u nopid=%u limitU=%u noncoh=%u vbox=%u qemu=%u)\n",
             Extension->Quirks,
             XHCI_QuirkEnabled(Extension, XHCI_QUIRK_FORCE_32BIT_DMA) ? 1 : 0,
             XHCI_QuirkEnabled(Extension, XHCI_QUIRK_SLOW_HARD_RESET) ? 1 : 0,
@@ -8408,7 +8416,7 @@ XHCI_BuildCommonBufferLayout(
     Extension->Ep0TransferRings = (PXHCI_TRB)(BaseVa + Layout.Ep0RingsOffset);
     Extension->Ep0RingArrayPhysical.QuadPart = BasePa + Layout.Ep0RingsOffset;
 
-    DPRINT1("usbxhci: common buffer layout size %Iu/%Iu bytes (CmdRing=%I64x EventRing=%I64x ERST=%I64x)\n",
+    DPRINT("usbxhci: common buffer layout size %Iu/%Iu bytes (CmdRing=%I64x EventRing=%I64x ERST=%I64x)\n",
             Layout.TotalSize,
             RequiredReservation,
             (ULONGLONG)Extension->CommandRingPhysical.QuadPart,
@@ -8555,7 +8563,7 @@ XHCI_EnablePciBusMaster(
     }
     else
     {
-        DPRINT1("usbxhci: PCI MEM/BusMaster already enabled (cmd=%04x)\n", Command);
+        DPRINT("usbxhci: PCI MEM/BusMaster already enabled (cmd=%04x)\n", Command);
     }
 
     return TRUE;
@@ -8628,7 +8636,7 @@ XHCI_ProbeMsiMsix(
             if (XHCI_ReadPciConfig(Extension, CapPtr + 2, &MsixControl, sizeof(MsixControl)))
             {
                 Extension->MsixEnabled = (MsixControl & 0x8000) ? TRUE : FALSE; /* FMask bit is not enable; MSI-X enable is bit 15? Specs: bit 15 is Enable */
-                DPRINT1("usbxhci: MSI-X control=0x%04x TableSize=%u enabled=%u\n",
+                DPRINT("usbxhci: MSI-X control=0x%04x TableSize=%u enabled=%u\n",
                         MsixControl,
                         (MsixControl & 0x07FF) + 1,
                         (MsixControl & 0x8000) ? 1 : 0);
@@ -8640,7 +8648,7 @@ XHCI_ProbeMsiMsix(
         CapPtr = Next;
     }
 
-    DPRINT1("usbxhci: PCI caps: MSI %s (enabled=%u) MSI-X %s (enabled=%u)\n",
+    DPRINT("usbxhci: PCI caps: MSI %s (enabled=%u) MSI-X %s (enabled=%u)\n",
             Extension->MsiSupported ? "yes" : "no",
             Extension->MsiEnabled ? 1 : 0,
             Extension->MsixSupported ? "yes" : "no",
@@ -8730,7 +8738,7 @@ XHCI_DisablePciIntx(
 
     if (Command & 0x0400)
     {
-        DPRINT1("usbxhci: PCI INTx already disabled (cmd=0x%04x)\n", Command);
+        DPRINT("usbxhci: PCI INTx already disabled (cmd=0x%04x)\n", Command);
         return;
     }
 
@@ -8807,7 +8815,7 @@ XHCI_ProgramInterrupterState(
         /* Enable interrupter: set IE and clear any pending IP (RW1C) */
         XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, XHCI_IMAN_IE | XHCI_IMAN_IP);
 
-        DPRINT1("usbxhci: intr%lu IMOD=%08lx ERST=%08lx:%08lx ERDP=%08lx:%08lx IMAN=%08lx\n",
+        DPRINT("usbxhci: intr%lu IMOD=%08lx ERST=%08lx:%08lx ERDP=%08lx:%08lx IMAN=%08lx\n",
                 Index,
                 XHCI_READ_REGISTER_ULONG(&Interrupter->Imod),
                 XHCI_READ_REGISTER_ULONG(&Interrupter->ErstBaseHigh),
@@ -8991,11 +8999,11 @@ XHCI_SendCommand(
         TrbType == XHCI_TRB_TYPE_ADDRESS_DEV ||
         TrbType == XHCI_TRB_TYPE_CONFIG_EP)
     {
-        DPRINT1("usbxhci: SendCommand type=%lu timeout=%lu ms retry=%u IRQL=%lu\n",
-                TrbType,
-                EffectiveTimeout,
-                RetryCommands ? 1u : 0u,
-                (ULONG)CurrentIrql);
+        DPRINT("usbxhci: SendCommand type=%lu timeout=%lu ms retry=%u IRQL=%lu\n",
+               TrbType,
+               EffectiveTimeout,
+               RetryCommands ? 1u : 0u,
+               (ULONG)CurrentIrql);
     }
 
     Attempts = RetryCommands ? 2 : 1;
@@ -9030,7 +9038,7 @@ XHCI_SendCommand(
             }
             if (TrbType == XHCI_TRB_TYPE_CONFIG_EP)
             {
-                DPRINT1("usbxhci: CONFIG_EP queued, waiting for completion...\n");
+                DPRINT("usbxhci: CONFIG_EP queued, waiting for completion...\n");
             }
         }
 
@@ -9126,8 +9134,8 @@ XHCI_WaitForCommandCompletion(
     /* Diagnostic: log CONFIG_EP waits for tracing mass storage enumeration hangs */
     if (CommandContext->CommandType == XHCI_TRB_TYPE_CONFIG_EP)
     {
-        DPRINT1("usbxhci: WaitForCommandCompletion CONFIG_EP: UseEventWait=%u Remaining=%lu IRQL=%lu\n",
-                UseEventWait ? 1u : 0u, Remaining, (ULONG)Irql);
+        DPRINT("usbxhci: WaitForCommandCompletion CONFIG_EP: UseEventWait=%u Remaining=%lu IRQL=%lu\n",
+               UseEventWait ? 1u : 0u, Remaining, (ULONG)Irql);
     }
     if (Remaining == 0)
         Remaining = 1;
@@ -9214,8 +9222,8 @@ CheckCompletion:
         /* Diagnostic for CONFIG_EP success */
         if (CommandContext->CommandType == XHCI_TRB_TYPE_CONFIG_EP)
         {
-            DPRINT1("usbxhci: CONFIG_EP completed successfully slot=%u\n",
-                    CommandContext->SlotId);
+            DPRINT("usbxhci: CONFIG_EP completed successfully slot=%u\n",
+                   CommandContext->SlotId);
         }
         Result = MP_STATUS_SUCCESS;
     }
@@ -9611,7 +9619,7 @@ XHCI_SubmitTransfer(PVOID MiniPortExtension,
     if (Extension && Extension->RhIrqEnabled && !Triggered && XhciRegPacket.UsbPortInvalidateRootHub)
     {
         Triggered = TRUE;
-        DPRINT1("XHCI: Triggering RH Invalidate from SubmitTransfer\n");
+        DPRINT("XHCI: Triggering RH Invalidate from SubmitTransfer\n");
         XhciRegPacket.UsbPortInvalidateRootHub(Extension);
     }
 
@@ -11355,8 +11363,8 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
                 }
                 else
                 {
-                    DPRINT1("usbxhci: EP0 ReopenPipe slot %u - MPS unchanged (current=%lu, requested=%lu)\n",
-                            Slot->SlotId, CurrentMps, RequestedMps);
+                    DPRINT("usbxhci: EP0 ReopenPipe slot %u - MPS unchanged (current=%lu, requested=%lu)\n",
+                           Slot->SlotId, CurrentMps, RequestedMps);
                 }
             }
 
@@ -11377,11 +11385,11 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
             KeInitializeSpinLock(&XhciEndpoint->Lock);
             Slot->EndpointTable[1] = XhciEndpoint;
 
-            DPRINT1("usbxhci: EP0 ReopenPipe complete slot=%u EnqIdx=%lu DeqIdx=%lu Cycle=%lu\n",
-                    Slot->SlotId,
-                    XhciEndpoint->TransferRing.EnqueueIndex,
-                    XhciEndpoint->TransferRing.DequeueIndex,
-                    XhciEndpoint->TransferRing.CycleState);
+            DPRINT("usbxhci: EP0 ReopenPipe complete slot=%u EnqIdx=%lu DeqIdx=%lu Cycle=%lu\n",
+                   Slot->SlotId,
+                   XhciEndpoint->TransferRing.EnqueueIndex,
+                   XhciEndpoint->TransferRing.DequeueIndex,
+                   XhciEndpoint->TransferRing.CycleState);
 
             /* EP0 is already programmed by the Address Device command; nothing
              * more to configure for the default control pipe once a slot exists. */
@@ -11407,8 +11415,8 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
                     sizeof(Ctx),
                     XHCI_Ep0BringupCallback);
 
-                DPRINT1("usbxhci: deferred EP0 bring-up from IRQL=%lu\n",
-                        KeGetCurrentIrql());
+                DPRINT("usbxhci: deferred EP0 bring-up from IRQL=%lu\n",
+                       KeGetCurrentIrql());
                 
             }
 
@@ -11433,14 +11441,14 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
     EndpointId = XHCI_EndpointIdFromProperties(EndpointProperties);
 
     /* Diagnostic: log all non-EP0 endpoint opens to trace mass storage enumeration */
-    DPRINT1("usbxhci: OpenEndpoint addr=%u port=%u epAddr=0x%02x type=%u speed=%u -> EpId=%u slot=%u\n",
-            EndpointProperties->DeviceAddress,
-            EndpointProperties->PortNumber,
-            EndpointProperties->EndpointAddress,
-            EndpointProperties->TransferType,
-            EndpointProperties->DeviceSpeed,
-            EndpointId,
-            Slot->SlotId);
+    DPRINT("usbxhci: OpenEndpoint addr=%u port=%u epAddr=0x%02x type=%u speed=%u -> EpId=%u slot=%u\n",
+           EndpointProperties->DeviceAddress,
+           EndpointProperties->PortNumber,
+           EndpointProperties->EndpointAddress,
+           EndpointProperties->TransferType,
+           EndpointProperties->DeviceSpeed,
+           EndpointId,
+           Slot->SlotId);
     if (EndpointId == 0)
         return MP_STATUS_ERROR;
 
@@ -11451,9 +11459,9 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
     {
         PXHCI_ENDPOINT Existing = Slot->EndpointTable[EndpointId];
 
-        DPRINT1("usbxhci: endpoint %u already configured on slot %u -- refreshing context via EvaluateContext\n",
-                EndpointId,
-                Slot->SlotId);
+        DPRINT("usbxhci: endpoint %u already configured on slot %u -- refreshing context via EvaluateContext\n",
+               EndpointId,
+               Slot->SlotId);
 
         if (Existing && Existing != XhciEndpoint)
         {
@@ -11491,16 +11499,16 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
     if (Status != MP_STATUS_SUCCESS)
         return Status;
 
-    DPRINT1("usbxhci: OpenEndpoint calling ConfigureSlotEndpoint slot=%u ep=%u (before)\n",
-            Slot->SlotId, EndpointId);
+    DPRINT("usbxhci: OpenEndpoint calling ConfigureSlotEndpoint slot=%u ep=%u (before)\n",
+           Slot->SlotId, EndpointId);
 
     Status = XHCI_ConfigureSlotEndpoint(Extension,
                                         Slot,
                                         XhciEndpoint,
                                         EndpointId);
 
-    DPRINT1("usbxhci: OpenEndpoint ConfigureSlotEndpoint returned status=%d slot=%u ep=%u\n",
-            Status, Slot->SlotId, EndpointId);
+    DPRINT("usbxhci: OpenEndpoint ConfigureSlotEndpoint returned status=%d slot=%u ep=%u\n",
+           Status, Slot->SlotId, EndpointId);
 
     if (Status != MP_STATUS_SUCCESS)
     {
@@ -11529,7 +11537,7 @@ XHCI_CloseEndpoint(PVOID MiniPortExtension,
 #if DBG
     if (XhciEndpoint->SlotId == 1 && (XhciEndpoint->EndpointId == 3 || XhciEndpoint->EndpointId == 4))
     {
-        DPRINT1("usbxhci: CloseEndpoint slot=%u ep=%u addr=0x%02x\n",
+        DPRINT("usbxhci: CloseEndpoint slot=%u ep=%u addr=0x%02x\n",
                 XhciEndpoint->SlotId,
                 XhciEndpoint->EndpointId,
                 (UCHAR)(XhciEndpoint->EndpointProperties.EndpointAddress & 0xFF));
@@ -11714,14 +11722,14 @@ XHCI_StartController(PVOID MiniPortExtension,
         /* HciVersion occupies bits 31:16 of the first dword (little-endian) */
         Extension->HciVersion = (USHORT)((CapHeader0 >> 16) & 0xFFFF);
     }
-    DPRINT1("usbxhci: MMIO base=%p CAPLEN=%lu\n", Extension->MmioBase, Extension->CapabilityLength);
+    DPRINT("usbxhci: MMIO base=%p CAPLEN=%lu\n", Extension->MmioBase, Extension->CapabilityLength);
     if (Extension->CapabilityLength < sizeof(XHCI_CAPABILITY_REGISTERS))
     {
         DPRINT1("usbxhci: invalid CAPLENGTH %lu\n", Extension->CapabilityLength);
         return MP_STATUS_ERROR;
     }
 
-    DPRINT1("usbxhci: resource base=%p iospace=%lu startVA=%p startPA=%08lx irq=%lx flags=%lx msgcnt=%lu\n",
+    DPRINT("usbxhci: resource base=%p iospace=%lu startVA=%p startPA=%08lx irq=%lx flags=%lx msgcnt=%lu\n",
             UsbPortResources->ResourceBase,
             UsbPortResources->IoSpaceLength,
             (PVOID)UsbPortResources->StartVA,
@@ -11737,7 +11745,7 @@ XHCI_StartController(PVOID MiniPortExtension,
 
     Extension->DoorbellArray = (PXHCI_DOORBELL_ARRAY)(Base + DbOffset);
     Extension->RuntimeRegisters = (PXHCI_RUNTIME_REGISTERS)(Base + RtOffset);
-    DPRINT1("usbxhci: DB offset=%lu RT offset=%lu Doorbell=%p Runtime=%p\n",
+    DPRINT("usbxhci: DB offset=%lu RT offset=%lu Doorbell=%p Runtime=%p\n",
             DbOffset, RtOffset, Extension->DoorbellArray, Extension->RuntimeRegisters);
 
     /* Dump the first 32 bytes of the capability header to catch mis-mapped BARs. */
@@ -11748,7 +11756,7 @@ XHCI_StartController(PVOID MiniPortExtension,
         {
             CapDump[i] = XHCI_READ_REGISTER_ULONG((volatile ULONG *)(Base + (i * sizeof(ULONG))));
         }
-        DPRINT1("usbxhci: CAP dump 0x00-0x1F: %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
+        DPRINT("usbxhci: CAP dump 0x00-0x1F: %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
                 CapDump[0], CapDump[1], CapDump[2], CapDump[3],
                 CapDump[4], CapDump[5], CapDump[6], CapDump[7]);
     }
@@ -11774,12 +11782,12 @@ XHCI_StartController(PVOID MiniPortExtension,
     {
         NTSTATUS OscStatus;
 
-        DPRINT1("usbxhci: Evaluating USB _OSC for capability negotiation\n");
+        DPRINT("usbxhci: Evaluating USB _OSC for capability negotiation\n");
         OscStatus = XHCI_EvaluateOsc(Extension);
 
         if (NT_SUCCESS(OscStatus))
         {
-            DPRINT1("usbxhci: _OSC negotiation complete - Granted=0x%lX, Requested=0x%lX, Available=0x%lX\n",
+            DPRINT("usbxhci: _OSC negotiation complete - Granted=0x%lX, Requested=0x%lX, Available=0x%lX\n",
                     Extension->OscContext.ControlGranted,
                     Extension->OscContext.ControlRequested,
                     Extension->OscContext.ControlAvailable);
@@ -11866,7 +11874,7 @@ XHCI_StartController(PVOID MiniPortExtension,
     {
         ULONG Messages = UsbPortResources->InterruptMessageCount ?
                          UsbPortResources->InterruptMessageCount : 1;
-        DPRINT1("usbxhci: using message interrupts (%lu vector%s)\n",
+        DPRINT("usbxhci: using message interrupts (%lu vector%s)\n",
                 Messages,
                 (Messages == 1) ? "" : "s");
     }
@@ -11902,11 +11910,11 @@ XHCI_StartController(PVOID MiniPortExtension,
         ULONG CapRaw0 = XHCI_READ_REGISTER_ULONG((volatile ULONG *)Extension->CapabilityRegisters);
         ULONG CapRaw4 = XHCI_READ_REGISTER_ULONG((volatile ULONG *)((PUCHAR)Extension->CapabilityRegisters + 4));
         ULONG CapRaw8 = XHCI_READ_REGISTER_ULONG((volatile ULONG *)((PUCHAR)Extension->CapabilityRegisters + 8));
-        DPRINT1("usbxhci: CAP dwords [0]=%08lx [4]=%08lx [8]=%08lx\n",
+        DPRINT("usbxhci: CAP dwords [0]=%08lx [4]=%08lx [8]=%08lx\n",
                 CapRaw0, CapRaw4, CapRaw8);
     }
 
-    DPRINT1("usbxhci: CAP raw HciVer=%04x (xHCI %u.%02u) HCS1=%08lx HCS2=%08lx HCS3=%08lx HCC=%08lx CAPLEN=%lu DbOff=%lu RtOff=%lu\n",
+    DPRINT("usbxhci: CAP raw HciVer=%04x (xHCI %u.%02u) HCS1=%08lx HCS2=%08lx HCS3=%08lx HCC=%08lx CAPLEN=%lu DbOff=%lu RtOff=%lu\n",
             Extension->HciVersion,
             (Extension->HciVersion >> 8) & 0xFF,
             Extension->HciVersion & 0xFF,
@@ -12622,7 +12630,7 @@ XHCI_EnableInterrupts(PVOID MiniPortExtension)
     Extension->InterruptsEnabled = TRUE;
 
     CommandAfter = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
-    DPRINT1("usbxhci: EnableInterrupts USBCMD before=%08lx after=%08lx (INTE=%u)\n",
+    DPRINT("usbxhci: EnableInterrupts USBCMD before=%08lx after=%08lx (INTE=%u)\n",
             Command & ~XHCI_USBCMD_INTE, CommandAfter, (CommandAfter & XHCI_USBCMD_INTE) ? 1 : 0);
 
     if (Extension->RuntimeRegisters)
@@ -12633,7 +12641,7 @@ XHCI_EnableInterrupts(PVOID MiniPortExtension)
         XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, XHCI_IMAN_IE | XHCI_IMAN_IP);
 
         ImanAfter = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
-        DPRINT1("usbxhci: EnableInterrupts IMAN before=%08lx after=%08lx (IE=%u IP=%u)\n",
+        DPRINT("usbxhci: EnableInterrupts IMAN before=%08lx after=%08lx (IE=%u IP=%u)\n",
                 Iman, ImanAfter,
                 (ImanAfter & XHCI_IMAN_IE) ? 1 : 0,
                 (ImanAfter & XHCI_IMAN_IP) ? 1 : 0);
@@ -14057,7 +14065,7 @@ XHCI_RH_SetFeaturePortReset(
         ULONG WaitAttempts;
         BOOLEAN ResetComplete = FALSE;
 
-        DPRINT1("XHCI: Port %u is SuperSpeed, using Warm Port Reset (WPR)\n", Port);
+        DPRINT("XHCI: Port %u is SuperSpeed, using Warm Port Reset (WPR)\n", Port);
 
         /*
          * Issue RESET_DEVICE before warm port reset if the slot is in
@@ -14077,7 +14085,7 @@ XHCI_RH_SetFeaturePortReset(
                 ULONG ResetCompletionCode = 0;
                 MPSTATUS ResetStatus;
 
-                DPRINT1("XHCI: SS Port %u has slot %u in Addressed state, issuing RESET_DEVICE before WPR\n",
+                DPRINT("XHCI: SS Port %u has slot %u in Addressed state, issuing RESET_DEVICE before WPR\n",
                         Port, Slot->SlotId);
 
                 ResetStatus = XHCI_SendCommand(Extension,
@@ -14093,7 +14101,7 @@ XHCI_RH_SetFeaturePortReset(
                 if (ResetStatus == MP_STATUS_SUCCESS)
                 {
                     Slot->Addressed = FALSE;
-                    DPRINT1("XHCI: SS RESET_DEVICE succeeded for slot %u, now in Default state\n",
+                    DPRINT("XHCI: SS RESET_DEVICE succeeded for slot %u, now in Default state\n",
                             Slot->SlotId);
                 }
                 else
@@ -14144,7 +14152,7 @@ XHCI_RH_SetFeaturePortReset(
             if ((PostValue & XHCI_PORTSC_WRC) && (PostValue & XHCI_PORTSC_PED))
             {
                 ResetComplete = TRUE;
-                DPRINT1("XHCI: Port %u (SS) warm reset complete after %lu us: PORTSC=0x%08lx (PED=1 WRC=1)\n",
+                DPRINT("XHCI: Port %u (SS) warm reset complete after %lu us: PORTSC=0x%08lx (PED=1 WRC=1)\n",
                         Port, (WaitAttempts + 1) * SS_RESET_POLL_US, PostValue);
                 break;
             }
@@ -14157,7 +14165,7 @@ XHCI_RH_SetFeaturePortReset(
             if (PostValue & XHCI_PORTSC_WRC)
             {
                 ULONG LinkState = (PostValue & XHCI_PORTSC_PLS_MASK) >> XHCI_PORTSC_PLS_SHIFT;
-                DPRINT1("XHCI: Port %u (SS) WRC set but PED=0, PLS=%lu - continuing to wait\n",
+                DPRINT("XHCI: Port %u (SS) WRC set but PED=0, PLS=%lu - continuing to wait\n",
                         Port, LinkState);
                 /* Continue waiting - link training may still be in progress */
             }
@@ -14196,7 +14204,7 @@ XHCI_RH_SetFeaturePortReset(
     }
 
     /* Standard Behavior: Set PR (Port Reset) and wait for completion */
-    DPRINT1("XHCI: Port %u standard reset - writing PORTSC_PR\n", Port);
+    DPRINT("XHCI: Port %u standard reset - writing PORTSC_PR\n", Port);
 
     {
         MPSTATUS Status;
@@ -14232,7 +14240,7 @@ XHCI_RH_SetFeaturePortReset(
                 ULONG ResetCompletionCode = 0;
                 MPSTATUS ResetStatus;
 
-                DPRINT1("XHCI: Port %u has slot %u in Addressed state, issuing RESET_DEVICE before port reset\n",
+                DPRINT("XHCI: Port %u has slot %u in Addressed state, issuing RESET_DEVICE before port reset\n",
                         Port, Slot->SlotId);
 
                 ResetStatus = XHCI_SendCommand(Extension,
@@ -14253,7 +14261,7 @@ XHCI_RH_SetFeaturePortReset(
                      * RESET_DEVICE commands later.
                      */
                     Slot->Addressed = FALSE;
-                    DPRINT1("XHCI: RESET_DEVICE succeeded for slot %u, now in Default state\n",
+                    DPRINT("XHCI: RESET_DEVICE succeeded for slot %u, now in Default state\n",
                             Slot->SlotId);
                 }
                 else
@@ -14326,7 +14334,7 @@ XHCI_RH_SetFeaturePortReset(
                     {
                         /* PED set - port is enabled, reset successful */
                         ResetComplete = TRUE;
-                        DPRINT1("XHCI: Port %u reset complete after %lu us: PORTSC=0x%08lx (PED=1 PRC=1)\n",
+                        DPRINT("XHCI: Port %u reset complete after %lu us: PORTSC=0x%08lx (PED=1 PRC=1)\n",
                                 Port, (WaitAttempts + 1) * PORT_RESET_POLL_US, PostValue);
                         break;
                     }

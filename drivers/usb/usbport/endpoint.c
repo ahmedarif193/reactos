@@ -1067,9 +1067,9 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
     }
 
     RtlZeroMemory(Endpoint, EndpointSize);
-    DPRINT1("USBPORT_OpenPipe: endpoint allocated=%p IRQL=%lu\n",
-            Endpoint,
-            KeGetCurrentIrql());
+    DPRINT("USBPORT_OpenPipe: endpoint allocated=%p IRQL=%lu\n",
+           Endpoint,
+           KeGetCurrentIrql());
 
     Endpoint->FdoDevice = FdoDevice;
     Endpoint->DeviceHandle = DeviceHandle;
@@ -1243,11 +1243,11 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
 
     if (Packet->MiniPortFlags & USB_MINIPORT_FLAGS_USB2)
     {
-        DPRINT1("USBPORT_OpenPipe: calling AllocateBandwidthUSB2 IRQL=%lu\n", KeGetCurrentIrql());
+        DPRINT("USBPORT_OpenPipe: calling AllocateBandwidthUSB2 IRQL=%lu\n", KeGetCurrentIrql());
         IsAllocatedBandwidth = USBPORT_AllocateBandwidthUSB2(FdoDevice, Endpoint);
-        DPRINT1("USBPORT_OpenPipe: AllocateBandwidthUSB2 done=%u IRQL=%lu\n",
-                IsAllocatedBandwidth,
-                KeGetCurrentIrql());
+        DPRINT("USBPORT_OpenPipe: AllocateBandwidthUSB2 done=%u IRQL=%lu\n",
+               IsAllocatedBandwidth,
+               KeGetCurrentIrql());
     }
     else
     {
@@ -1255,9 +1255,9 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
                                                                          Endpoint);
 
         IsAllocatedBandwidth = USBPORT_AllocateBandwidth(FdoDevice, Endpoint);
-        DPRINT1("USBPORT_OpenPipe: AllocateBandwidth done=%u IRQL=%lu\n",
-                IsAllocatedBandwidth,
-                KeGetCurrentIrql());
+        DPRINT("USBPORT_OpenPipe: AllocateBandwidth done=%u IRQL=%lu\n",
+               IsAllocatedBandwidth,
+               KeGetCurrentIrql());
     }
 
     if (!IsAllocatedBandwidth)
@@ -1492,7 +1492,7 @@ USBPORT_ReopenPipe(IN PDEVICE_OBJECT FdoDevice,
     KIRQL MiniportOldIrql;
     NTSTATUS Status;
 
-    DPRINT1("USBPORT_ReopenPipe ... \n");
+    DPRINT("USBPORT_ReopenPipe ... \n");
 
     FdoExtension = FdoDevice->DeviceExtension;
     Packet = &FdoExtension->MiniPortInterface->Packet;
