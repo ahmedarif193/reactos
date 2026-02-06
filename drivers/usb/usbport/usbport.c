@@ -44,6 +44,8 @@ LIST_ENTRY USBPORT_USB2FdoList = {NULL, NULL};
 KSPIN_LOCK USBPORT_SpinLock;
 BOOLEAN USBPORT_Initialized = FALSE;
 
+static volatile LONG USBPORT_DuplicateDoneTransferCount = 0;
+
 static
 VOID
 USBPORT_CleanupTransferOnBadUrb(IN PUSBPORT_TRANSFER Transfer,
@@ -1181,8 +1183,13 @@ USBPORT_QueueDoneTransfer(IN PUSBPORT_TRANSFER Transfer,
 {
     PDEVICE_OBJECT FdoDevice;
     PUSBPORT_DEVICE_EXTENSION  FdoExtension;
-
-    UNREFERENCED_PARAMETER(CallerHoldsEndpointLock);
+    PUSBPORT_ENDPOINT Endpoint;
+    PUSBPORT_DEVICE_HANDLE DeviceHandle;
+    ULONG EndpointAddress = 0;
+    ULONG DeviceAddress = 0;
+    ULONG PortNumber = 0;
+    LONG DuplicateCount;
+    PVOID Caller;
 
     DPRINT_CORE("USBPORT_QueueDoneTransfer: Transfer - %p, USBDStatus - %p\n",
                 Transfer,
@@ -1190,10 +1197,46 @@ USBPORT_QueueDoneTransfer(IN PUSBPORT_TRANSFER Transfer,
 
     if (InterlockedBitTestAndSet((PLONG)&Transfer->Flags, TRANSFER_FLAG_COMPLETED_BIT))
     {
-        DPRINT1("USBPORT_QueueDoneTransfer: duplicate completion (Transfer=%p Endpoint=%p Status=%x)\n",
+        Endpoint = Transfer->Endpoint;
+        DeviceHandle = Endpoint ? Endpoint->DeviceHandle : NULL;
+        EndpointAddress = Endpoint ? Endpoint->EndpointProperties.EndpointAddress : 0;
+        if (DeviceHandle)
+        {
+            DeviceAddress = DeviceHandle->DeviceAddress;
+            PortNumber = DeviceHandle->PortNumber;
+        }
+        else if (Endpoint)
+        {
+            DeviceAddress = Endpoint->EndpointProperties.DeviceAddress;
+            PortNumber = Endpoint->EndpointProperties.PortNumber;
+        }
+
+        DuplicateCount = InterlockedIncrement(&USBPORT_DuplicateDoneTransferCount);
+        Caller = USBPORT_RETURN_ADDRESS();
+
+        DPRINT1("USBPORT_QueueDoneTransfer: duplicate completion #%ld "
+                "(Transfer=%p Endpoint=%p Fdo=%p Irp=%p Urb=%p "
+                "Status=0x%08lx FirstStatus=0x%08lx Flags=0x%08lx Caller=%p "
+                "CallerHoldsEndpointLock=%u DevAddr=%lu Port=%lu EpAddr=0x%02lx "
+                "EpStateLast=%lu EpStateNext=%lu EpFlags=0x%08lx EpLock=%ld)\n",
+                DuplicateCount,
                 Transfer,
-                Transfer->Endpoint,
-                USBDStatus);
+                Endpoint,
+                Transfer->FdoDevice,
+                Transfer->Irp,
+                Transfer->Urb,
+                (ULONG)USBDStatus,
+                (ULONG)Transfer->USBDStatus,
+                Transfer->Flags,
+                Caller,
+                CallerHoldsEndpointLock ? 1u : 0u,
+                DeviceAddress,
+                PortNumber,
+                EndpointAddress,
+                Endpoint ? Endpoint->StateLast : 0,
+                Endpoint ? Endpoint->StateNext : 0,
+                Endpoint ? Endpoint->Flags : 0,
+                Endpoint ? Endpoint->LockCounter : 0);
         return FALSE;
     }
 

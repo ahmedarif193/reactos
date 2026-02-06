@@ -899,6 +899,16 @@ USBPORT_RootHubEndpointWorker(IN PUSBPORT_ENDPOINT Endpoint)
         return;
     }
 
+    if (Transfer->Flags & TRANSFER_FLAG_COMPLETED)
+    {
+        KeReleaseSpinLock(&Endpoint->EndpointSpinLock, Endpoint->EndpointOldIrql);
+
+        /* Completion already queued: drain DoneTransferList before reprocessing. */
+        USBPORT_FlushDoneTransfers(FdoDevice);
+        USBPORT_FlushCancelList(Endpoint);
+        return;
+    }
+
     KeReleaseSpinLock(&Endpoint->EndpointSpinLock, Endpoint->EndpointOldIrql);
 
     if (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_CONTROL)
@@ -917,6 +927,8 @@ USBPORT_RootHubEndpointWorker(IN PUSBPORT_ENDPOINT Endpoint)
         USBPORT_QueueDoneTransfer(Transfer, USBDStatus, TRUE);
         KeReleaseSpinLock(&Endpoint->EndpointSpinLock, Endpoint->EndpointOldIrql);
 
+        /* Root hub control transfers are synchronous; flush done queue immediately. */
+        USBPORT_FlushDoneTransfers(FdoDevice);
         USBPORT_FlushCancelList(Endpoint);
         return;
     }

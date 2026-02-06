@@ -4196,6 +4196,22 @@ XHCI_SwEnumWorker(
             Transfer->BytesTransferred = 0;
             Transfer->UsbdStatus = USBD_STATUS_DEV_NOT_RESPONDING;
         }
+        else if (Slot->Addressed && Slot->UsbDeviceAddress == Work->NewAddress)
+        {
+            /*
+             * Guard against redundant deferred SET_ADDRESS work: if another path
+             * already put the slot into the requested addressed state, do not
+             * send ADDRESS_DEVICE again.
+             */
+            DPRINT1("usbxhci: deferred ADDRESS_DEVICE skipped for slot %u (already addressed addr=%u)\n",
+                    Slot->SlotId, Work->NewAddress);
+
+            if (ActiveEndpoint)
+                ActiveEndpoint->EndpointProperties.DeviceAddress = Work->NewAddress;
+            XHCI_UpdateDeviceAddressMap(Extension, Slot, Work->NewAddress);
+            Transfer->BytesTransferred = 0;
+            Transfer->UsbdStatus = USBD_STATUS_SUCCESS;
+        }
         else if (!Slot->Addressed)
         {
             MPSTATUS AddrStatus;
@@ -4255,6 +4271,8 @@ XHCI_SwEnumWorker(
         }
         else
         {
+            DPRINT1("usbxhci: deferred SET_ADDRESS map update for slot %u (old=%u new=%u)\n",
+                    Slot->SlotId, Slot->UsbDeviceAddress, Work->NewAddress);
             if (ActiveEndpoint)
                 ActiveEndpoint->EndpointProperties.DeviceAddress = Work->NewAddress;
             Slot->UsbDeviceAddress = Work->NewAddress;
