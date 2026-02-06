@@ -124,6 +124,8 @@ PortAcquireSpinLock(
             break;
 
         case StartIoLock: /* 2 */
+            KeAcquireSpinLock(&DeviceExtension->StartIoLock,
+                              &LockHandle->Context.OldIrql);
             break;
 
         case InterruptLock: /* 3 */
@@ -152,6 +154,8 @@ PortReleaseSpinLock(
             break;
 
         case StartIoLock: /* 2 */
+            KeReleaseSpinLock(&DeviceExtension->StartIoLock,
+                              LockHandle->Context.OldIrql);
             break;
 
         case InterruptLock: /* 3 */
@@ -220,6 +224,9 @@ PortAddDevice(
 
     KeInitializeSpinLock(&DeviceExtension->PdoListLock);
     InitializeListHead(&DeviceExtension->PdoListHead);
+
+    /* Serialize HwStartIo calls. */
+    KeInitializeSpinLock(&DeviceExtension->StartIoLock);
 
     /* Initialize SRB extension pool spinlock early */
     KeInitializeSpinLock(&DeviceExtension->SrbExtensionPool.Lock);
@@ -1692,8 +1699,40 @@ StorPortSynchronizeAccess(
     _In_ PSTOR_SYNCHRONIZED_ACCESS SynchronizedAccessRoutine,
     _In_opt_ PVOID Context)
 {
+    PMINIPORT_DEVICE_EXTENSION MiniportExtension;
+    PFDO_DEVICE_EXTENSION DeviceExtension;
+    KIRQL OldIrql;
+
     DPRINT("StorPortSynchronizeAccess()\n");
-    UNIMPLEMENTED;
+
+    if (HwDeviceExtension == NULL || SynchronizedAccessRoutine == NULL)
+        return;
+
+    MiniportExtension = CONTAINING_RECORD(HwDeviceExtension,
+                                          MINIPORT_DEVICE_EXTENSION,
+                                          HwDeviceExtension);
+    DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
+
+    /* Synchronize with miniport ISR-level access using interrupt lock. */
+    if (DeviceExtension->Interrupt != NULL)
+    {
+        OldIrql = KeAcquireInterruptSpinLock(DeviceExtension->Interrupt);
+    }
+    else
+    {
+        KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+    }
+
+    SynchronizedAccessRoutine(HwDeviceExtension, Context);
+
+    if (DeviceExtension->Interrupt != NULL)
+    {
+        KeReleaseInterruptSpinLock(DeviceExtension->Interrupt, OldIrql);
+    }
+    else
+    {
+        KeLowerIrql(OldIrql);
+    }
 }
 
 

@@ -9,6 +9,7 @@
 
 #include "precomp.h"
 
+#define NDEBUG
 #include <debug.h>
 
 #ifndef ALIGN_UP_BY
@@ -527,20 +528,30 @@ PortPdoScsi(
         PortSrbExtension->Mdl = IrpMdl;
     }
 
-    if (!MiniportStartIo(&FdoExtension->Miniport, Srb))
+    /* Serialize HwStartIo calls - miniports expect single-threaded dispatch. */
     {
-        PPORT_SRB_EXTENSION PortSrbExtension = PortGetSrbExtensionContext(Srb);
-        if (PortSrbExtension != NULL)
+        KIRQL OldIrql;
+        BOOLEAN StartIoResult;
+
+        KeAcquireSpinLock(&FdoExtension->StartIoLock, &OldIrql);
+        StartIoResult = MiniportStartIo(&FdoExtension->Miniport, Srb);
+        KeReleaseSpinLock(&FdoExtension->StartIoLock, OldIrql);
+
+        if (!StartIoResult)
         {
-            Srb->DataBuffer = PortSrbExtension->OriginalDataBuffer;
+            PPORT_SRB_EXTENSION PortSrbExtension = PortGetSrbExtensionContext(Srb);
+            if (PortSrbExtension != NULL)
+            {
+                Srb->DataBuffer = PortSrbExtension->OriginalDataBuffer;
+            }
+
+            PortpCleanupSrbExtension(Irp);
+
+            Irp->IoStatus.Information = 0;
+            Irp->IoStatus.Status = STATUS_DEVICE_BUSY;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return STATUS_DEVICE_BUSY;
         }
-
-        PortpCleanupSrbExtension(Irp);
-
-        Irp->IoStatus.Information = 0;
-        Irp->IoStatus.Status = STATUS_DEVICE_BUSY;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
-        return STATUS_DEVICE_BUSY;
     }
 
     if (SRB_STATUS(Srb->SrbStatus) == SRB_STATUS_PENDING)

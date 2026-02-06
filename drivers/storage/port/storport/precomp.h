@@ -188,6 +188,8 @@ typedef struct _FDO_DEVICE_EXTENSION
     LIST_ENTRY PdoListHead;
     ULONG PdoCount;
 
+    KSPIN_LOCK StartIoLock;
+
     SRB_EXTENSION_POOL SrbExtensionPool;
 } FDO_DEVICE_EXTENSION, *PFDO_DEVICE_EXTENSION;
 
