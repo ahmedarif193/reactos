@@ -446,9 +446,12 @@ UiIndicateProgress(VOID)
 {
     ULONG Percentage;
 
-
     /* Increase progress */
     UiProgressBar.Indicator.Count++;
+
+    /* No progress bar configured (e.g. headless boot) -- nothing to do */
+    if (UiProgressBar.Indicator.Expected == 0)
+        return;
 
     /* Compute the new percentage - Don't go over 100% */
     Percentage = 100 * UiProgressBar.Indicator.Count /
@@ -689,10 +692,20 @@ UiResetForSOS(VOID)
     /* Re-initialize the UI */
     UiInitialize(TRUE);
 #else
-    /* Reset the UI and switch to MiniTui */
-    UiVtbl.UnInitialize();
-    UiVtbl = MiniTuiVtbl;
-    UiVtbl.Initialize();
+#ifdef UEFIBOOT
+    /* On UEFI without a framebuffer (headless), stay on NoUI */
+    if (!UefiIsFramebufferReady())
+    {
+        UiVtbl = UiNoUiVtbl;
+    }
+    else
+#endif
+    {
+        /* Reset the UI and switch to MiniTui */
+        UiVtbl.UnInitialize();
+        UiVtbl = MiniTuiVtbl;
+        UiVtbl.Initialize();
+    }
 #endif
     /* Disable the progress bar */
     UiProgressBar.Show = FALSE;

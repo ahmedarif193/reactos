@@ -282,6 +282,12 @@ UefiConsFirmwarePutChar(int c)
     if (!BootServicesAvailable())
         return FALSE;
 
+    /* Skip firmware console when no display is attached -- some firmware
+     * implementations divide by zero in OutputString on headless systems.
+     * Once the GOP console is initialised we render text ourselves. */
+    if (UefiGopConsoleIsInitialized() || !UefiIsFramebufferReady())
+        return FALSE;
+
     ConOut = UefiGetConOut();
     if (ConOut == NULL || ConOut->OutputString == NULL)
         return FALSE;
