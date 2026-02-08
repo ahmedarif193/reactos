@@ -991,13 +991,127 @@ DrawBackgroundPreview(LPDRAWITEMSTRUCT draw, PBACKGROUND_DATA pData)
 
 
 static VOID
+GetWallpaperTargetExtent(UINT *width, UINT *height)
+{
+    INT cx, cy;
+
+    cx = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    cy = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    if (cx <= 0 || cy <= 0)
+    {
+        cx = GetSystemMetrics(SM_CXSCREEN);
+        cy = GetSystemMetrics(SM_CYSCREEN);
+    }
+
+    if (cx <= 0)
+        cx = 1;
+    if (cy <= 0)
+        cy = 1;
+
+    *width = (UINT)cx;
+    *height = (UINT)cy;
+}
+
+static BOOL
+GetScaledExtent(UINT srcWidth,
+                UINT srcHeight,
+                UINT maxWidth,
+                UINT maxHeight,
+                UINT *dstWidth,
+                UINT *dstHeight)
+{
+    ULONGLONG lhs, rhs;
+
+    *dstWidth = srcWidth;
+    *dstHeight = srcHeight;
+
+    if (srcWidth == 0 || srcHeight == 0 || maxWidth == 0 || maxHeight == 0)
+        return FALSE;
+
+    if (srcWidth <= maxWidth && srcHeight <= maxHeight)
+        return FALSE;
+
+    lhs = (ULONGLONG)maxWidth * srcHeight;
+    rhs = (ULONGLONG)maxHeight * srcWidth;
+    if (lhs <= rhs)
+    {
+        *dstWidth = maxWidth;
+        *dstHeight = (UINT)(((ULONGLONG)srcHeight * maxWidth) / srcWidth);
+    }
+    else
+    {
+        *dstWidth = (UINT)(((ULONGLONG)srcWidth * maxHeight) / srcHeight);
+        *dstHeight = maxHeight;
+    }
+
+    if (*dstWidth == 0)
+        *dstWidth = 1;
+    if (*dstHeight == 0)
+        *dstHeight = 1;
+
+    return TRUE;
+}
+
+static GpStatus
+CreateScaledWallpaperBitmap(GpImage *sourceImage,
+                            UINT dstWidth,
+                            UINT dstHeight,
+                            GpBitmap **scaledBitmap)
+{
+    GpBitmap *bitmap;
+    GpGraphics *graphics;
+    GpStatus status;
+
+    *scaledBitmap = NULL;
+    bitmap = NULL;
+    graphics = NULL;
+
+    status = GdipCreateBitmapFromScan0((INT)dstWidth,
+                                       (INT)dstHeight,
+                                       0,
+                                       PixelFormat24bppRGB,
+                                       NULL,
+                                       &bitmap);
+    if (status != Ok)
+        return status;
+
+    status = GdipGetImageGraphicsContext((GpImage *)bitmap, &graphics);
+    if (status == Ok)
+        status = GdipSetInterpolationMode(graphics, InterpolationModeHighQualityBicubic);
+    if (status == Ok)
+        status = GdipDrawImageRectI(graphics,
+                                    sourceImage,
+                                    0,
+                                    0,
+                                    (INT)dstWidth,
+                                    (INT)dstHeight);
+
+    if (graphics)
+        GdipDeleteGraphics(graphics);
+
+    if (status != Ok)
+    {
+        GdipDisposeImage((GpImage *)bitmap);
+        return status;
+    }
+
+    *scaledBitmap = bitmap;
+    return Ok;
+}
+
+static VOID
 SetWallpaper(PBACKGROUND_DATA pData)
 {
     HKEY regKey;
     TCHAR szWallpaper[MAX_PATH];
     GpImage *image;
-    CLSID  encoderClsid;
+    GpImage *imageToSave;
+    GpBitmap *scaledBitmap;
+    CLSID encoderClsid;
     GUID guidFormat;
+    BOOL isBmp, needConversion;
+    UINT sourceWidth, sourceHeight, targetWidth, targetHeight;
+    UINT desktopWidth, desktopHeight;
     size_t length = 0;
     GpStatus status;
 
@@ -1049,6 +1163,15 @@ SetWallpaper(PBACKGROUND_DATA pData)
 
     if (pData->backgroundItems[pData->backgroundSelection].bWallpaper != FALSE)
     {
+        image = NULL;
+        imageToSave = NULL;
+        scaledBitmap = NULL;
+        isBmp = FALSE;
+        needConversion = FALSE;
+        sourceWidth = sourceHeight = 0;
+        targetWidth = targetHeight = 0;
+        desktopWidth = desktopHeight = 0;
+
         GdipLoadImageFromFile(pData->backgroundItems[pData->backgroundSelection].szFilename, &image);
         if (!image)
         {
@@ -1056,8 +1179,44 @@ SetWallpaper(PBACKGROUND_DATA pData)
             return;
         }
 
-        GdipGetImageRawFormat(image, &guidFormat);
-        if (IsEqualGUID(&guidFormat, &ImageFormatBMP))
+        if (GdipGetImageRawFormat(image, &guidFormat) != Ok ||
+            GdipGetImageWidth(image, &sourceWidth) != Ok ||
+            GdipGetImageHeight(image, &sourceHeight) != Ok ||
+            sourceWidth == 0 ||
+            sourceHeight == 0)
+        {
+            GdipDisposeImage(image);
+            RegCloseKey(regKey);
+            return;
+        }
+
+        isBmp = IsEqualGUID(&guidFormat, &ImageFormatBMP);
+        targetWidth = sourceWidth;
+        targetHeight = sourceHeight;
+
+        GetWallpaperTargetExtent(&desktopWidth, &desktopHeight);
+        if (pData->placementSelection == PLACEMENT_STRETCH ||
+            pData->placementSelection == PLACEMENT_FIT ||
+            pData->placementSelection == PLACEMENT_FILL)
+        {
+            targetWidth = desktopWidth;
+            targetHeight = desktopHeight;
+        }
+        else
+        {
+            GetScaledExtent(sourceWidth,
+                            sourceHeight,
+                            desktopWidth,
+                            desktopHeight,
+                            &targetWidth,
+                            &targetHeight);
+        }
+
+        needConversion = (!isBmp ||
+                          targetWidth != sourceWidth ||
+                          targetHeight != sourceHeight);
+
+        if (!needConversion)
         {
             GdipDisposeImage(image);
             RegCloseKey(regKey);
@@ -1065,15 +1224,36 @@ SetWallpaper(PBACKGROUND_DATA pData)
             return;
         }
 
+        imageToSave = image;
+        if (targetWidth != sourceWidth || targetHeight != sourceHeight)
+        {
+            status = CreateScaledWallpaperBitmap(image,
+                                                 targetWidth,
+                                                 targetHeight,
+                                                 &scaledBitmap);
+            if (status != Ok)
+            {
+                GdipDisposeImage(image);
+                RegCloseKey(regKey);
+                return;
+            }
+
+            imageToSave = (GpImage *)scaledBitmap;
+        }
+
         if (FAILED(GdipGetEncoderClsid(L"image/bmp", &encoderClsid)))
         {
+            if (scaledBitmap)
+                GdipDisposeImage((GpImage *)scaledBitmap);
             GdipDisposeImage(image);
             RegCloseKey(regKey);
             return;
         }
 
-        status = GdipSaveImageToFile(image, szWallpaper, &encoderClsid, NULL);
+        status = GdipSaveImageToFile(imageToSave, szWallpaper, &encoderClsid, NULL);
 
+        if (scaledBitmap)
+            GdipDisposeImage((GpImage *)scaledBitmap);
         GdipDisposeImage(image);
 
         if (status != Ok)
