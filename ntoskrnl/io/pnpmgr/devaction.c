@@ -1223,17 +1223,11 @@ PiInitializeDevNode(
     OldDeviceObject = IopGetDeviceObjectFromDeviceInstance(&InstancePathU);
     if (OldDeviceObject != NULL)
     {
-        PDEVICE_NODE OldDeviceNode = IopGetDeviceNode(OldDeviceObject);
-
-        DPRINT1("Duplicate device instance '%wZ'\n", &InstancePathU);
-        DPRINT1("Current instance parent: '%wZ'\n", &DeviceNode->Parent->InstancePath);
-        DPRINT1("Old instance parent: '%wZ'\n", &OldDeviceNode->Parent->InstancePath);
-
-        KeBugCheckEx(PNP_DETECTED_FATAL_ERROR,
-                     0x01,
-                     (ULONG_PTR)DeviceNode->PhysicalDeviceObject,
-                     (ULONG_PTR)OldDeviceObject,
-                     0);
+        DPRINT1("Duplicate device instance '%wZ' - skipping second PDO\n", &InstancePathU);
+        ObDereferenceObject(OldDeviceObject);
+        RtlFreeUnicodeString(&InstancePathU);
+        PiSetDevNodeProblem(DeviceNode, CM_PROB_PHANTOM);
+        return STATUS_UNSUCCESSFUL;
     }
 
     DeviceNode->InstancePath = InstancePathU;

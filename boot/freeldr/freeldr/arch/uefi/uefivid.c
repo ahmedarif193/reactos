@@ -511,11 +511,21 @@ UefiInitializeVideo(VOID)
           (unsigned long)PrimaryHandleIndex);
     TRACE("  MaxMode: %d\n", gop->Mode->MaxMode);
     TRACE("  Current Mode: %d\n", gop->Mode->Mode);
+    if (gop->Mode->Info)
+    {
+        TRACE("  Current Res: %ux%u PPSL=%u\n",
+              gop->Mode->Info->HorizontalResolution,
+              gop->Mode->Info->VerticalResolution,
+              gop->Mode->Info->PixelsPerScanLine);
+    }
 
     const BOOLEAN kAllowModeSwitch = FALSE;
     UINT32 targetWidth = 0;
     UINT32 targetHeight = 0;
     BOOLEAN haveTargetResolution = UefiComputeTargetConsoleResolution(&targetWidth, &targetHeight);
+    TRACE("UEFI GOP: mode switch %s (target %ux%u, haveTarget=%d)\n",
+          kAllowModeSwitch ? "enabled" : "disabled",
+          targetWidth, targetHeight, haveTargetResolution ? 1 : 0);
 
     if (kAllowModeSwitch && haveTargetResolution)
     {

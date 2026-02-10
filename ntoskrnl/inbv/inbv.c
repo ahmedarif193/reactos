@@ -10,6 +10,8 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#define NDEBUG
+#include <debug.h>
 #include <reactos/arc/arc.h>
 #include <drivers/bootvid/bootvid.h>
 #include "inbv/logo.h"
@@ -240,6 +242,9 @@ InbvDriverInitialize(
         CommandLine = (LoaderBlock->LoadOptions ? _strupr(LoaderBlock->LoadOptions) : NULL);
         ResetMode   = (CommandLine == NULL) || (strstr(CommandLine, "BOOTLOGO") == NULL);
     }
+    DPRINT1("INBV: ResetMode=%d (BOOTLOGO %s)\n",
+            ResetMode ? 1 : 0,
+            (CommandLine && strstr(CommandLine, "BOOTLOGO")) ? "present" : "absent");
 
     /* Capture GOP framebuffer info from loader (if available) before video init */
     Extension = LoaderBlock->Extension;
@@ -252,6 +257,13 @@ InbvDriverInitialize(
             RtlCopyMemory(&InbvGopFramebuffer, Fb, sizeof(*Fb));
             InbvGopInfoValid = TRUE;
             VidSetBootGraphicsPreservation(TRUE);
+            DPRINT1("INBV: GOP FB %lux%lu PPSL=%lu Base=%I64x Size=0x%lx Format=%lu\n",
+                    Fb->HorizontalResolution,
+                    Fb->VerticalResolution,
+                    Fb->PixelsPerScanLine,
+                    (ULONGLONG)Fb->FrameBufferBase.QuadPart,
+                    Fb->FrameBufferSize,
+                    Fb->PixelFormat);
         }
 
         if (Extension->GopFramebuffers && Extension->GopFramebufferCount)
@@ -279,6 +291,9 @@ InbvDriverInitialize(
         /* Cache GOP mode enumeration if available */
         InbvGopPreferredMode = Extension->GopPreferredMode;
         InbvGopCurrentMode = Extension->GopPreferredMode;
+        DPRINT1("INBV: GOP modes count=%lu preferred=%lu\n",
+                (unsigned long)Extension->GopModeCount,
+                (unsigned long)Extension->GopPreferredMode);
 
         if (Extension->GopModes && Extension->GopModeCount)
         {

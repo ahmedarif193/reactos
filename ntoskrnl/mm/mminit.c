@@ -110,7 +110,7 @@ MiInitSystemMemoryAreas(VOID)
     MiCreateArm3StaticMemoryArea(MmNonPagedPoolStart, MmSizeOfNonPagedPoolInBytes, FALSE);
 
     // System PTE space
-    MiCreateArm3StaticMemoryArea(MmNonPagedSystemStart, (MmNumberOfSystemPtes + 1) * PAGE_SIZE, FALSE);
+    MiCreateArm3StaticMemoryArea(MiSystemPteSpaceStart, (MmNumberOfSystemPtes + 1) * PAGE_SIZE, FALSE);
 
     // Nonpaged pool expansion space
     MiCreateArm3StaticMemoryArea(MmNonPagedPoolExpansionStart, (ULONG_PTR)MmNonPagedPoolEnd - (ULONG_PTR)MmNonPagedPoolExpansionStart, FALSE);
@@ -204,7 +204,9 @@ MiDbgDumpAddressSpace(VOID)
             (ULONG_PTR)MmPagedPoolStart + MmSizeOfPagedPoolInBytes,
             "ARM3 Paged Pool");
     DPRINT1("          0x%p - 0x%p\t%s\n",
-            MmNonPagedSystemStart, MmNonPagedPoolExpansionStart,
+            MiSystemPteSpaceStart,
+            (PVOID)((ULONG_PTR)MiSystemPteSpaceStart +
+                    ((MmNumberOfSystemPtes + 1) * PAGE_SIZE)),
             "System PTE Space");
     DPRINT1("          0x%p - 0x%p\t%s\n",
             MmNonPagedPoolExpansionStart, MmNonPagedPoolEnd,

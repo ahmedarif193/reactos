@@ -7,6 +7,8 @@
 
 /* UEFI bootvid - standalone driver without VGA dependencies */
 #include "precomp.h"
+#define NDEBUG
+#include <debug.h>
 #include <reactos/arc/arc.h>
 BOOLEAN NTAPI InbvGetGopFrameBufferInfo(_Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo);
 /* Use write-combined mapping for the linear framebuffer to improve blit throughput */
@@ -47,6 +49,11 @@ static ULONG RedMax = 0;
 static ULONG GreenMax = 0;
 static ULONG BlueMax = 0;
 static PULONG FrameBuffer = NULL;
+static PVOID FrameBufferMapping = NULL;
+static SIZE_T FrameBufferMappingSize = 0;
+static BOOLEAN FrameBufferMappedWriteCombined = FALSE;
+static PULONG ShadowBuffer = NULL;
+static SIZE_T ShadowBufferSize = 0;
 static BOOLEAN DisplayInitialized = FALSE;
 static ULONG BackgroundColorValue = 0x00000000;
 
@@ -54,6 +61,9 @@ static ULONG UefiMaskShift(ULONG Mask);
 static ULONG UefiMaskMax(ULONG Mask);
 static VOID UefiGopClearScreen(ULONG Color);
 static ULONG UefiColorFromIndex(UCHAR Index);
+static BOOLEAN UefiShadowEnabled(VOID);
+static BOOLEAN UefiShadowInit(VOID);
+static VOID UefiShadowBlitRect(ULONG Left, ULONG Top, ULONG Right, ULONG Bottom);
 
 static
 BOOLEAN
@@ -66,6 +76,14 @@ VidpSetupLinearFramebuffer(
 
     if (!FbInfo || FbInfo->FrameBufferSize == 0)
         return FALSE;
+
+    DPRINT1("UEFI BOOTVID: FbInfo %lux%lu PPSL=%lu Base=%I64x Size=0x%lx Format=%lu\n",
+            FbInfo->HorizontalResolution,
+            FbInfo->VerticalResolution,
+            FbInfo->PixelsPerScanLine,
+            (ULONGLONG)FbInfo->FrameBufferBase.QuadPart,
+            FbInfo->FrameBufferSize,
+            FbInfo->PixelFormat);
 
     FrameBufferBase = FbInfo->FrameBufferBase;
     FrameBufferSize = FbInfo->FrameBufferSize;
@@ -87,16 +105,45 @@ VidpSetupLinearFramebuffer(
     GreenMax = UefiMaskMax(GreenMask >> GreenShift);
     BlueMax = UefiMaskMax(BlueMask >> BlueShift);
 
-    FrameBuffer = (PULONG)MmMapIoSpace(FrameBufferBase, FrameBufferSize, MmWriteCombined);
-    if (!FrameBuffer)
     {
-        /* Fallback: some arch/platforms may not support WC here. Try non-cached. */
-        FrameBuffer = (PULONG)MmMapIoSpace(FrameBufferBase, FrameBufferSize, MmNonCached);
-        if (!FrameBuffer)
+        ULONGLONG BasePhys = (ULONGLONG)FrameBufferBase.QuadPart;
+        SIZE_T Offset = (SIZE_T)(BasePhys & (PAGE_SIZE - 1));
+        PHYSICAL_ADDRESS MappingBase;
+        SIZE_T MappingSize;
+
+        MappingBase.QuadPart = BasePhys - Offset;
+        MappingSize = (SIZE_T)FrameBufferSize + Offset;
+        MappingSize = (MappingSize + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+        FrameBufferMapping = MmMapIoSpace(MappingBase, MappingSize, MmWriteCombined);
+        if (FrameBufferMapping)
         {
-            return FALSE;
+            FrameBuffer = (PULONG)((PUCHAR)FrameBufferMapping + Offset);
+            FrameBufferMappingSize = MappingSize;
+            FrameBufferMappedWriteCombined = TRUE;
+        }
+        else
+        {
+            /* Fallback: some arch/platforms may not support WC here. Try non-cached. */
+            FrameBufferMapping = MmMapIoSpace(MappingBase, MappingSize, MmNonCached);
+            if (!FrameBufferMapping)
+            {
+                return FALSE;
+            }
+
+            FrameBuffer = (PULONG)((PUCHAR)FrameBufferMapping + Offset);
+            FrameBufferMappingSize = MappingSize;
+            FrameBufferMappedWriteCombined = FALSE;
         }
     }
+
+    if (!FrameBuffer)
+        return FALSE;
+
+    (VOID)UefiShadowInit();
+    DPRINT1("UEFI BOOTVID: Map %s, shadow %s\n",
+            FrameBufferMappedWriteCombined ? "WC" : "NC",
+            UefiShadowEnabled() ? "enabled" : "disabled");
 
     VidpScrollRegion[0] = 0;
     VidpScrollRegion[1] = 0;
@@ -148,6 +195,24 @@ static inline ULONG
 UefiLinePitch(VOID)
 {
     return PixelsPerScanLine * sizeof(ULONG);
+}
+
+static __inline BOOLEAN
+UefiShadowEnabled(VOID)
+{
+    return (ShadowBuffer != NULL);
+}
+
+static __inline SIZE_T
+UefiShadowPitch(VOID)
+{
+    return (SIZE_T)ScreenWidth * sizeof(ULONG);
+}
+
+static __inline PUCHAR
+UefiShadowRow(_In_ ULONG y)
+{
+    return (PUCHAR)ShadowBuffer + ((SIZE_T)y * UefiShadowPitch());
 }
 
 static ULONG
@@ -224,6 +289,65 @@ UefiColorFromIndex(UCHAR Index)
     return UefiPackColor(GetRValue(Entry), GetGValue(Entry), GetBValue(Entry));
 }
 
+static BOOLEAN
+UefiShadowInit(VOID)
+{
+    SIZE_T Size;
+
+    if (FrameBufferMappedWriteCombined)
+        return FALSE;
+
+    if (ShadowBuffer)
+        return TRUE;
+
+    if (!ScreenWidth || !ScreenHeight)
+        return FALSE;
+
+    Size = (SIZE_T)ScreenWidth * (SIZE_T)ScreenHeight * sizeof(ULONG);
+    ShadowBuffer = ExAllocatePoolWithTag(NonPagedPool, Size, 'BvSh');
+    if (!ShadowBuffer)
+        return FALSE;
+
+    ShadowBufferSize = Size;
+    if (g_BootvidPreserveBootGraphics && FrameBuffer)
+    {
+        for (ULONG y = 0; y < ScreenHeight; y++)
+        {
+            PUCHAR SrcRow = (PUCHAR)FrameBuffer + y * UefiLinePitch();
+            PUCHAR DstRow = UefiShadowRow(y);
+            RtlCopyMemory(DstRow, SrcRow, (SIZE_T)ScreenWidth * sizeof(ULONG));
+        }
+    }
+    else
+    {
+        RtlZeroMemory(ShadowBuffer, Size);
+    }
+    return TRUE;
+}
+
+static VOID
+UefiShadowBlitRect(ULONG Left, ULONG Top, ULONG Right, ULONG Bottom)
+{
+    if (!ShadowBuffer || !FrameBuffer)
+        return;
+
+    if (Left > Right || Top > Bottom)
+        return;
+
+    if (Right >= ScreenWidth)
+        Right = ScreenWidth - 1;
+    if (Bottom >= ScreenHeight)
+        Bottom = ScreenHeight - 1;
+
+    SIZE_T RowBytes = (SIZE_T)(Right - Left + 1) * sizeof(ULONG);
+    for (ULONG y = Top; y <= Bottom; y++)
+    {
+        PUCHAR SrcRow = UefiShadowRow(y) + Left * sizeof(ULONG);
+        PUCHAR DstRow = (PUCHAR)FrameBuffer + y * UefiLinePitch() + Left * sizeof(ULONG);
+        RtlCopyMemory(DstRow, SrcRow, RowBytes);
+    }
+}
+
 static VOID
 UefiGopClearScreen(ULONG Color)
 {
@@ -231,6 +355,18 @@ UefiGopClearScreen(ULONG Color)
 
     if (!FrameBuffer)
         return;
+
+    if (UefiShadowEnabled())
+    {
+        for (y = 0; y < ScreenHeight; y++)
+        {
+            PUCHAR Row = UefiShadowRow(y);
+            RtlFillMemoryUlong(Row, (SIZE_T)ScreenWidth * sizeof(ULONG), Color);
+        }
+
+        UefiShadowBlitRect(0, 0, ScreenWidth ? ScreenWidth - 1 : 0, ScreenHeight ? ScreenHeight - 1 : 0);
+        return;
+    }
 
     for (y = 0; y < ScreenHeight; y++)
     {
@@ -255,6 +391,18 @@ UefiGopFillRect(ULONG Left, ULONG Top, ULONG Right, ULONG Bottom, ULONG Color)
     if (Bottom >= ScreenHeight)
         Bottom = ScreenHeight - 1;
 
+    if (UefiShadowEnabled())
+    {
+        for (y = Top; y <= Bottom; y++)
+        {
+            PUCHAR Row = UefiShadowRow(y) + Left * sizeof(ULONG);
+            RtlFillMemoryUlong(Row, (SIZE_T)(Right - Left + 1) * sizeof(ULONG), Color);
+        }
+
+        UefiShadowBlitRect(Left, Top, Right, Bottom);
+        return;
+    }
+
     for (y = Top; y <= Bottom; y++)
     {
         PUCHAR Row = (PUCHAR)FrameBuffer + y * UefiLinePitch() + Left * sizeof(ULONG);
@@ -269,6 +417,13 @@ UefiGopSetPixel(ULONG x, ULONG y, ULONG Color)
 
     if (!FrameBuffer || x >= ScreenWidth || y >= ScreenHeight)
         return;
+
+    if (UefiShadowEnabled())
+    {
+        PUCHAR Shadow = UefiShadowRow(y) + x * sizeof(ULONG);
+        *((PULONG)Shadow) = Color;
+        return;
+    }
 
     Pixel = (PUCHAR)FrameBuffer + y * UefiLinePitch() + x * sizeof(ULONG);
     *((PULONG)Pixel) = Color;
@@ -288,6 +443,24 @@ UefiScrollRegion(ULONG Lines, ULONG Left, ULONG Top, ULONG Right, ULONG Bottom)
 
     SIZE_T RowBytes = (SIZE_T)(Right - Left + 1) * sizeof(ULONG);
     ULONG y = 0;
+    if (UefiShadowEnabled())
+    {
+        for (; y < Height - Lines; y++)
+        {
+            PUCHAR DestRow = UefiShadowRow(Top + y) + Left * sizeof(ULONG);
+            PUCHAR SrcRow  = UefiShadowRow(Top + y + Lines) + Left * sizeof(ULONG);
+            RtlMoveMemory(DestRow, SrcRow, RowBytes);
+        }
+        for (; y < Height; y++)
+        {
+            PUCHAR DestRow = UefiShadowRow(Top + y) + Left * sizeof(ULONG);
+            RtlFillMemoryUlong(DestRow, (SIZE_T)(Right - Left + 1) * sizeof(ULONG), BackgroundColorValue);
+        }
+
+        UefiShadowBlitRect(Left, Top, Right, Bottom);
+        return;
+    }
+
     for (; y < Height - Lines; y++)
     {
         PUCHAR DestRow = (PUCHAR)FrameBuffer + (Top + y) * UefiLinePitch() + Left * sizeof(ULONG);
@@ -318,6 +491,57 @@ UefiDrawGlyph(ULONG Left, ULONG Top, UCHAR Character, ULONG FgColor, ULONG BgCol
 
     Glyph = &VidpFontData[Character * BOOTCHAR_HEIGHT];
 
+    if (UefiShadowEnabled())
+    {
+        ULONG RowPixels[BOOTCHAR_WIDTH];
+
+        for (Row = 0; Row < BOOTCHAR_HEIGHT; Row++)
+        {
+            UCHAR Bits = Glyph[Row];
+            PUCHAR DestRow = UefiShadowRow(Top + Row) + Left * sizeof(ULONG);
+
+            for (Column = 0; Column < BOOTCHAR_WIDTH; Column++)
+            {
+                BOOLEAN Set = (Bits & (0x80 >> Column)) != 0;
+                if (Set)
+                    RowPixels[Column] = FgColor;
+                else if (Opaque)
+                    RowPixels[Column] = BgColor;
+                else
+                    RowPixels[Column] = ((PULONG)DestRow)[Column];
+            }
+
+            RtlCopyMemory(DestRow, RowPixels, sizeof(RowPixels));
+        }
+
+        if (Opaque)
+            UefiGopFillRect(Left, Top + BOOTCHAR_HEIGHT, Left + BOOTCHAR_WIDTH - 1, Top + BOOTCHAR_HEIGHT, BgColor);
+
+        return;
+    }
+
+    if (Opaque)
+    {
+        ULONG RowPixels[BOOTCHAR_WIDTH];
+
+        for (Row = 0; Row < BOOTCHAR_HEIGHT; Row++)
+        {
+            UCHAR Bits = Glyph[Row];
+            PUCHAR DestRow = (PUCHAR)FrameBuffer + (Top + Row) * UefiLinePitch() + Left * sizeof(ULONG);
+
+            for (Column = 0; Column < BOOTCHAR_WIDTH; Column++)
+            {
+                BOOLEAN Set = (Bits & (0x80 >> Column)) != 0;
+                RowPixels[Column] = Set ? FgColor : BgColor;
+            }
+
+            RtlCopyMemory(DestRow, RowPixels, sizeof(RowPixels));
+        }
+
+        UefiGopFillRect(Left, Top + BOOTCHAR_HEIGHT, Left + BOOTCHAR_WIDTH - 1, Top + BOOTCHAR_HEIGHT, BgColor);
+        return;
+    }
+
     for (Row = 0; Row < BOOTCHAR_HEIGHT; Row++)
     {
         UCHAR Bits = Glyph[Row];
@@ -327,18 +551,9 @@ UefiDrawGlyph(ULONG Left, ULONG Top, UCHAR Character, ULONG FgColor, ULONG BgCol
             BOOLEAN Set = (Bits & (0x80 >> Column)) != 0;
 
             if (Set)
-            {
                 UefiGopSetPixel(Left + Column, Top + Row, FgColor);
-            }
-            else if (Opaque)
-            {
-                UefiGopSetPixel(Left + Column, Top + Row, BgColor);
-            }
         }
     }
-
-    if (Opaque)
-        UefiGopFillRect(Left, Top + BOOTCHAR_HEIGHT, Left + BOOTCHAR_WIDTH - 1, Top + BOOTCHAR_HEIGHT, BgColor);
 }
 
 static VOID
@@ -523,8 +738,21 @@ UefiVidCleanUp(VOID)
 {
     if (FrameBuffer && DisplayInitialized)
     {
-        MmUnmapIoSpace(FrameBuffer, FrameBufferSize);
+        if (FrameBufferMapping)
+            MmUnmapIoSpace(FrameBufferMapping, FrameBufferMappingSize);
+        else
+            MmUnmapIoSpace(FrameBuffer, FrameBufferSize);
+
         FrameBuffer = NULL;
+        FrameBufferMapping = NULL;
+        FrameBufferMappingSize = 0;
+        FrameBufferMappedWriteCombined = FALSE;
+        if (ShadowBuffer)
+        {
+            ExFreePoolWithTag(ShadowBuffer, 'BvSh');
+            ShadowBuffer = NULL;
+            ShadowBufferSize = 0;
+        }
         DisplayInitialized = FALSE;
     }
 }
@@ -555,6 +783,26 @@ UefiVidScreenToBufferBlt(
 
     if (!FrameBuffer || !Buffer || !Width || !Height)
         return;
+
+    if (UefiShadowEnabled())
+    {
+        for (y = 0; y < Height; y++)
+        {
+            ULONG ScreenY = Top + y;
+            ULONG CopyPixels;
+            PULONG Src;
+
+            if (ScreenY >= ScreenHeight)
+                break;
+            if (Left >= ScreenWidth)
+                break;
+
+            CopyPixels = min(Width, ScreenWidth - Left);
+            Src = (PULONG)(UefiShadowRow(ScreenY) + Left * sizeof(ULONG));
+            RtlCopyMemory(Buffer + y * Delta, Src, CopyPixels * sizeof(ULONG));
+        }
+        return;
+    }
 
     for (y = 0; y < Height; y++)
     {
@@ -595,6 +843,11 @@ UefiVidBufferToScreenBlt(
 
         ULONG CopyPixels = min(Width, ScreenWidth - Left);
         PULONG Src = (PULONG)(Buffer + y * Delta);
+        if (UefiShadowEnabled())
+        {
+            PULONG ShadowDest = (PULONG)(UefiShadowRow(ScreenY) + Left * sizeof(ULONG));
+            RtlCopyMemory(ShadowDest, Src, CopyPixels * sizeof(ULONG));
+        }
         PULONG Dest = (PULONG)((PUCHAR)FrameBuffer + ScreenY * UefiLinePitch() + Left * sizeof(ULONG));
         RtlCopyMemory(Dest, Src, CopyPixels * sizeof(ULONG));
     }
@@ -606,6 +859,9 @@ UefiVidDisplayString(
     _In_z_ PUCHAR String)
 {
     UCHAR Ch;
+    BOOLEAN Shadow = UefiShadowEnabled();
+    ULONG DirtyLeft = 0, DirtyTop = 0, DirtyRight = 0, DirtyBottom = 0;
+    BOOLEAN DirtyValid = FALSE;
 
     if (!FrameBuffer)
         return;
@@ -637,8 +893,35 @@ UefiVidDisplayString(
                       TextColorValue,
                       BackgroundColorValue,
                       FALSE);
+
+        if (Shadow)
+        {
+            ULONG Left = CurrentX;
+            ULONG Top = CurrentY;
+            ULONG Right = CurrentX + BOOTCHAR_WIDTH - 1;
+            ULONG Bottom = CurrentY + BOOTCHAR_HEIGHT - 1;
+
+            if (!DirtyValid)
+            {
+                DirtyLeft = Left;
+                DirtyTop = Top;
+                DirtyRight = Right;
+                DirtyBottom = Bottom;
+                DirtyValid = TRUE;
+            }
+            else
+            {
+                if (Left < DirtyLeft) DirtyLeft = Left;
+                if (Top < DirtyTop) DirtyTop = Top;
+                if (Right > DirtyRight) DirtyRight = Right;
+                if (Bottom > DirtyBottom) DirtyBottom = Bottom;
+            }
+        }
         CurrentX += BOOTCHAR_WIDTH;
     }
+
+    if (Shadow && DirtyValid)
+        UefiShadowBlitRect(DirtyLeft, DirtyTop, DirtyRight, DirtyBottom);
 }
 
 ULONG
@@ -724,6 +1007,9 @@ UefiVidDisplayStringXY(
     ULONG Y = Top;
     UCHAR Ch;
     BOOLEAN Opaque = !Transparent;
+    BOOLEAN Shadow = UefiShadowEnabled();
+    ULONG DirtyLeft = 0, DirtyTop = 0, DirtyRight = 0, DirtyBottom = 0;
+    BOOLEAN DirtyValid = FALSE;
 
     if (!FrameBuffer)
         return;
@@ -744,8 +1030,39 @@ UefiVidDisplayStringXY(
         }
 
         UefiDrawGlyph(X, Y, Ch, TextColorValue, BackgroundColorValue, Opaque);
+
+        if (Shadow)
+        {
+            ULONG GlyphLeft = X;
+            ULONG GlyphTop = Y;
+            ULONG GlyphRight = X + BOOTCHAR_WIDTH - 1;
+            ULONG GlyphBottom = Y + BOOTCHAR_HEIGHT - 1;
+
+            if (Opaque)
+                GlyphBottom = Y + BOOTCHAR_HEIGHT;
+
+            if (!DirtyValid)
+            {
+                DirtyLeft = GlyphLeft;
+                DirtyTop = GlyphTop;
+                DirtyRight = GlyphRight;
+                DirtyBottom = GlyphBottom;
+                DirtyValid = TRUE;
+            }
+            else
+            {
+                if (GlyphLeft < DirtyLeft) DirtyLeft = GlyphLeft;
+                if (GlyphTop < DirtyTop) DirtyTop = GlyphTop;
+                if (GlyphRight > DirtyRight) DirtyRight = GlyphRight;
+                if (GlyphBottom > DirtyBottom) DirtyBottom = GlyphBottom;
+            }
+        }
+
         X += BOOTCHAR_WIDTH;
     }
+
+    if (Shadow && DirtyValid)
+        UefiShadowBlitRect(DirtyLeft, DirtyTop, DirtyRight, DirtyBottom);
 }
 
 VOID
@@ -844,6 +1161,13 @@ UefiVidBitBlt(
     else
     {
         UefiBlit4bpp(BitmapBits, Left, Top, Width, Height, Delta, TopDown, Palette32);
+    }
+
+    if (UefiShadowEnabled())
+    {
+        ULONG Right = (Width > 0) ? (Left + Width - 1) : Left;
+        ULONG Bottom = (Height > 0) ? (Top + Height - 1) : Top;
+        UefiShadowBlitRect(Left, Top, Right, Bottom);
     }
 }
 

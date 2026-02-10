@@ -53,6 +53,7 @@ static KDPC KdpSerialDrainDpc;
 static BOOLEAN KdpSerialDrainThreadActive = FALSE;
 
 #define KdpScreenLineLengthDefault 80
+#define KdpScreenFlushThreshold 64
 static CHAR KdpScreenLineBuffer[KdpScreenLineLengthDefault + 1] = "";
 static ULONG KdpScreenLineBufferPos = 0, KdpScreenLineLength = 0;
 
@@ -704,8 +705,9 @@ KdpScreenPrint(
         ++pch;
     }
 
-    /* Print buffered characters */
-    if (KdpScreenLineBufferPos != KdpScreenLineLength)
+    /* Print buffered characters only when enough data accumulated */
+    if (KdpScreenLineBufferPos != KdpScreenLineLength &&
+        (KdpScreenLineLength - KdpScreenLineBufferPos) >= KdpScreenFlushThreshold)
     {
         HalDisplayString(KdpScreenLineBuffer + KdpScreenLineBufferPos);
         KdpScreenLineBufferPos = KdpScreenLineLength;

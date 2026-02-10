@@ -263,18 +263,6 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
     }
 
     //
-    // Check if this is uncached
-    //
-    if (CacheAttribute != MiCached)
-    {
-        //
-        // Flush all caches
-        //
-        KeFlushEntireTb(TRUE, TRUE);
-        KeInvalidateAllCaches();
-    }
-
-    //
     // Now compute the VA offset
     //
     BaseAddress = (PVOID)((ULONG_PTR)BaseAddress +
@@ -329,12 +317,10 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
 #endif
 
     //
-    // Sanity check and re-flush
+    // Sanity check
     //
     Pfn = (PFN_NUMBER)(PhysicalAddress.QuadPart >> PAGE_SHIFT);
     ASSERT((Pfn1 == MiGetPfnEntry(Pfn)) || (Pfn1 == NULL));
-    KeFlushEntireTb(TRUE, TRUE);
-    KeInvalidateAllCaches();
 
     //
     // Do the mapping
@@ -371,6 +357,21 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
         MI_WRITE_VALID_PTE(PointerPte++, TempPte);
         RemainingPages--;
     } while (--PageCount);
+
+    //
+    // Flush TLB and caches after writing PTEs so stale cached lines from
+    // a previous mapping at the same VA cannot satisfy reads to the new
+    // non-cached / write-combined region.  One flush after all PTEs are
+    // written is sufficient (the old code flushed twice before the PTEs
+    // were even written, which was both redundant and expensive — each
+    // KeInvalidateAllCaches() executes WBINVD which serialises the entire
+    // pipeline and flushes L1/L2/L3).
+    //
+    if (CacheAttribute != MiCached)
+    {
+        KeFlushEntireTb(TRUE, TRUE);
+        KeInvalidateAllCaches();
+    }
 
     //
     // We're done!
