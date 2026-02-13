@@ -77,24 +77,13 @@ ULONG KdpDbgPrint(const char *Format, ...)
         Length = sizeof(Buffer);
     }
 
-    /* Pre-expand \n -> \r\n into an output buffer, then send in one batch */
+    ptr = Buffer;
+    while (Length--)
     {
-        UCHAR OutBuf[1024];
-        ULONG OutLen = 0;
+        if (*ptr == '\n')
+            CpPutByte(&KdDebugComPort, '\r');
 
-        ptr = Buffer;
-        while (Length--)
-        {
-            if (*ptr == '\n')
-            {
-                if (OutLen < sizeof(OutBuf))
-                    OutBuf[OutLen++] = '\r';
-            }
-            if (OutLen < sizeof(OutBuf))
-                OutBuf[OutLen++] = (UCHAR)*ptr;
-            ptr++;
-        }
-        CpPutBuffer(&KdDebugComPort, OutBuf, OutLen);
+        CpPutByte(&KdDebugComPort, *ptr++);
     }
 
     return 0;

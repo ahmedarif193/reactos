@@ -41,9 +41,6 @@
 // Wait timeout value
 #define TIMEOUT_COUNT   1024 * 200
 
-// NS16550 TX FIFO depth (bytes)
-#define SERIAL_TX_FIFO_DEPTH 16
-
 UCHAR RingIndicator;
 
 
@@ -117,11 +114,8 @@ CpInitialize(IN PCPPORT Port,
                      SERIAL_8_DATA | SERIAL_1_STOP | SERIAL_NONE_PARITY);
 
     /* Turn on FIFO */
+    // TODO: Check whether FIFO exists and turn it on in that case.
     CpEnableFifo(Address, TRUE); // for 16550
-
-    /* Detect whether FIFO is present (16550 vs 16450) via IIR bits [7:6] */
-    if (READ_PORT_UCHAR(Address + INTERRUPT_IDENT_REGISTER) & SERIAL_IIR_FIFOS_ENABLED)
-        Port->Flags |= CPPORT_FLAG_HAS_FIFO;
 
     /* Read junk out of the RBR */
     (VOID)READ_PORT_UCHAR(Address + RECEIVE_BUFFER_REGISTER);
@@ -322,39 +316,6 @@ CpPutByte(IN PCPPORT Port,
 
     /* Send the byte */
     WRITE_PORT_UCHAR(Port->Address + TRANSMIT_HOLDING_REGISTER, Byte);
-}
-
-VOID
-NTAPI
-CpPutBuffer(IN PCPPORT Port,
-            IN PUCHAR  Buffer,
-            IN ULONG   Length)
-{
-    ULONG i;
-
-    /* 16450 fallback: no FIFO, send byte-by-byte */
-    if (!(Port->Flags & CPPORT_FLAG_HAS_FIFO))
-    {
-        for (i = 0; i < Length; i++)
-            CpPutByte(Port, Buffer[i]);
-        return;
-    }
-
-    /* 16550+ with FIFO: batch up to SERIAL_TX_FIFO_DEPTH bytes per THRE wait */
-    while (Length > 0)
-    {
-        ULONG Chunk = (Length < SERIAL_TX_FIFO_DEPTH) ? Length : SERIAL_TX_FIFO_DEPTH;
-
-        /* Wait for TX FIFO empty (THRE set means all 16 slots are free) */
-        while ((CpReadLsr(Port, SERIAL_LSR_THRE) & SERIAL_LSR_THRE) == 0)
-            ;
-
-        /* Fill the FIFO */
-        for (i = 0; i < Chunk; i++)
-            WRITE_PORT_UCHAR(Port->Address + TRANSMIT_HOLDING_REGISTER, *Buffer++);
-
-        Length -= Chunk;
-    }
 }
 
 /* EOF */

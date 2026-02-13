@@ -134,7 +134,6 @@
 @ stdcall CpGetByte(ptr ptr long long)
 @ stdcall CpInitialize(ptr ptr long)
 @ stdcall CpPutByte(ptr long)
-@ stdcall CpPutBuffer(ptr ptr long)
 @ cdecl DissectArcPath2()
 @ cdecl -i386 DriveMapMapDrivesInSection()
 @ cdecl FsRegisterDevice()
