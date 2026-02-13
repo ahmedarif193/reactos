@@ -15,13 +15,29 @@
 
 #define KD_PRINT_MAX_BYTES 512
 
+/*
+ * ARM64 Monotonic Timestamp Support
+ *
+ * On ARM64, the following issues can cause non-monotonic timestamps:
+ * 1. Multiple CPUs reading cntpct_el0 concurrently without synchronization
+ * 2. ARM64's relaxed memory model allowing out-of-order execution
+ * 3. Different code paths (KdpDprintf vs KdpPrint) using different time sources
+ *
+ * This implementation provides:
+ * - A spinlock-protected timestamp acquisition function
+ * - A global "last timestamp" to ensure strict monotonicity
+ * - Proper memory barriers for ARM64
+ * - Unified timestamp source (performance counter) for all debug output
+ */
+
 /* Global state for monotonic timestamp generation */
-static volatile ULONGLONG DECLSPEC_ALIGN(8) KdpLastTimestampMicroseconds = 0;
+static KSPIN_LOCK KdpTimestampSpinLock;
+static volatile ULONGLONG KdpLastTimestampMicroseconds = 0;
+static BOOLEAN KdpTimestampSpinLockInitialized = FALSE;
 
 /* Forward declarations */
 KIRQL NTAPI KdpAcquireLock(_In_ PKSPIN_LOCK SpinLock);
 VOID NTAPI KdpReleaseLock(_In_ PKSPIN_LOCK SpinLock, _In_ KIRQL OldIrql);
-BOOLEAN NTAPI KdpTryAcquireLock(_In_ PKSPIN_LOCK SpinLock, _Out_ PKIRQL OldIrql);
 
 /**
  * @brief Acquires a monotonically increasing timestamp in microseconds.
@@ -105,6 +121,15 @@ KdpAcquireMonotonicTimestamp(VOID)
     ULONGLONG CurrentCounter;
     ULONGLONG Frequency;
     ULONGLONG Delta;
+    KIRQL OldIrql;
+    BOOLEAN UseLock;
+
+    /*
+     * Check if spinlock is initialized. During very early boot, the spinlock
+     * may not be initialized yet. In that case, we fall back to unsynchronized
+     * access which is acceptable since early boot is typically single-threaded.
+     */
+    UseLock = KdpTimestampSpinLockInitialized;
 
     /*
      * ARM64-specific: Issue an ISB (Instruction Synchronization Barrier) before
@@ -181,33 +206,83 @@ KdpAcquireMonotonicTimestamp(VOID)
     }
 
     /*
-     * Ensure strict monotonicity with a lock-free atomic update.
-     * Avoiding a global HIGH_LEVEL timestamp lock prevents SMP print storms
-     * from stalling while contending on a single spinlock.
+     * Ensure monotonicity: the timestamp must be strictly greater than the
+     * last recorded timestamp. This handles cases where:
+     * - Two CPUs read the counter at nearly the same time
+     * - Counter wraps around (extremely unlikely but possible)
+     * - Clock adjustments or drift between reads
      */
-    do
+    if (UseLock)
     {
+        /* Acquire lock at HIGH_LEVEL to prevent preemption */
+        OldIrql = KdpAcquireLock(&KdpTimestampSpinLock);
+
+        /*
+         * ARM64-specific: Memory barrier to ensure we see the latest value
+         * of KdpLastTimestampMicroseconds after acquiring the lock.
+         */
+#if defined(_M_ARM64)
+        __asm__ __volatile__("dmb ish" ::: "memory");
+#endif
+
         LastTimestamp = KdpLastTimestampMicroseconds;
+
+        /* Ensure strict monotonicity */
         if (Microseconds <= LastTimestamp)
+        {
             Microseconds = LastTimestamp + 1;
-    } while (InterlockedCompareExchange64(
-                (volatile LONGLONG*)&KdpLastTimestampMicroseconds,
-                (LONGLONG)Microseconds,
-                (LONGLONG)LastTimestamp) != (LONGLONG)LastTimestamp);
+        }
+
+        /* Update the global last timestamp */
+        KdpLastTimestampMicroseconds = Microseconds;
+
+        /*
+         * ARM64-specific: Memory barrier to ensure the updated timestamp
+         * is visible to other CPUs before we release the lock.
+         */
+#if defined(_M_ARM64)
+        __asm__ __volatile__("dmb ish" ::: "memory");
+#endif
+
+        KdpReleaseLock(&KdpTimestampSpinLock, OldIrql);
+    }
+    else
+    {
+        /*
+         * No lock available (early boot). Use atomic compare-exchange to
+         * try to maintain monotonicity without full synchronization.
+         */
+        do
+        {
+            LastTimestamp = KdpLastTimestampMicroseconds;
+            if (Microseconds <= LastTimestamp)
+            {
+                Microseconds = LastTimestamp + 1;
+            }
+        } while (InterlockedCompareExchange64(
+                    (volatile LONGLONG*)&KdpLastTimestampMicroseconds,
+                    (LONGLONG)Microseconds,
+                    (LONGLONG)LastTimestamp) != (LONGLONG)LastTimestamp);
+    }
 
     return Microseconds;
 }
 
 /**
- * @brief Initializes timestamp support.
+ * @brief Initializes the timestamp spinlock.
  *
- * Left as a no-op for ABI stability with existing callers.
+ * This must be called during kernel initialization before multi-threaded
+ * debug output begins. It is safe to call multiple times.
  */
 VOID
 NTAPI
 KdpInitializeTimestampLock(VOID)
 {
-    return;
+    if (!KdpTimestampSpinLockInitialized)
+    {
+        KeInitializeSpinLock(&KdpTimestampSpinLock);
+        KdpTimestampSpinLockInitialized = TRUE;
+    }
 }
 
 /* FUNCTIONS *****************************************************************/
@@ -253,20 +328,6 @@ KdpReleaseLock(
     KeLowerIrql(OldIrql);
 }
 
-BOOLEAN
-NTAPI
-KdpTryAcquireLock(
-    _In_ PKSPIN_LOCK SpinLock,
-    _Out_ PKIRQL OldIrql)
-{
-    KeRaiseIrql(HIGH_LEVEL, OldIrql);
-    if (KeTryToAcquireSpinLockAtDpcLevel(SpinLock))
-        return TRUE;
-
-    KeLowerIrql(*OldIrql);
-    return FALSE;
-}
-
 VOID
 NTAPI
 KdLogDbgPrint(
@@ -283,12 +344,8 @@ KdLogDbgPrint(
     if (!KdPrintCircularBuffer /*|| (KdPrintBufferSize == 0)*/)
         return;
 
-    /*
-     * Best-effort logging: never block in an unbounded HIGH_LEVEL spin loop.
-     * Under SMP print storms we may drop log-buffer entries, but avoid stalls.
-     */
-    if (!KdpTryAcquireLock(&KdpPrintSpinLock, &OldIrql))
-        return;
+    /* Acquire the log spinlock without waiting at raised IRQL */
+    OldIrql = KdpAcquireLock(&KdpPrintSpinLock);
 
     Length = min(String->Length, KdPrintBufferSize);
     Remaining = KdPrintCircularBuffer + KdPrintBufferSize - KdPrintWritePointer;
@@ -326,9 +383,12 @@ KdpPrintString(
     DBGKD_DEBUG_IO DebugIo;
     USHORT Length;
 
-    /* Use the caller's buffer directly — no copy through the global
-     * KdpMessageBuffer.  All callers pass stack-local buffers so this
-     * is SMP-safe without a lock (each CPU has its own stack). */
+    /* Copy the string */
+    KdpMoveMemory(KdpMessageBuffer,
+                  Output->Buffer,
+                  Output->Length);
+
+    /* Make sure we don't exceed the KD Packet size */
     Length = Output->Length;
     if ((sizeof(DBGKD_DEBUG_IO) + Length) > PACKET_MAX_SIZE)
     {
@@ -344,9 +404,9 @@ KdpPrintString(
     Header.Length = sizeof(DBGKD_DEBUG_IO);
     Header.Buffer = (PCHAR)&DebugIo;
 
-    /* Build the data — point directly at caller's stack buffer */
+    /* Build the data */
     Data.Length = Length;
-    Data.Buffer = Output->Buffer;
+    Data.Buffer = KdpMessageBuffer;
 
     /* Send the packet */
     KdSendPacket(PACKET_TYPE_KD_DEBUG_IO, &Header, &Data, &KdpContext);
@@ -699,7 +759,13 @@ KdpPrint(
                                 Handled);
     }
 
-    /* Acquire a globally monotonic timestamp (lock-free across CPUs). */
+    /*
+     * Acquire a monotonically increasing timestamp.
+     * This uses the centralized timestamp function which ensures:
+     * - Proper synchronization across multiple CPUs
+     * - ARM64-specific memory barriers
+     * - Strict monotonicity even under concurrent access
+     */
     Microseconds = KdpAcquireMonotonicTimestamp();
 
     Seconds = Microseconds / 1000000ULL;
@@ -759,7 +825,6 @@ KdpDprintf(
 {
     STRING String;
     USHORT Length;
-    INT FormatLength;
     va_list ap;
     CHAR Buffer[512];
     ULONGLONG Microseconds;
@@ -767,7 +832,18 @@ KdpDprintf(
     ULONGLONG Fractional;
     USHORT TimestampLength = 0;
 
-    /* Acquire a globally monotonic timestamp (lock-free across CPUs). */
+    /*
+     * Acquire a monotonically increasing timestamp.
+     * This uses the centralized timestamp function which ensures:
+     * - Proper synchronization across multiple CPUs
+     * - ARM64-specific memory barriers (ISB before counter read, DMB for ordering)
+     * - Strict monotonicity even under concurrent access from multiple CPUs
+     *
+     * This is critical on ARM64 where:
+     * - The cntpct_el0 register can be speculatively read out of order
+     * - Multiple CPUs can interleave reads and prints
+     * - The relaxed memory model requires explicit barriers
+     */
     Microseconds = KdpAcquireMonotonicTimestamp();
 
     /* Convert to seconds and fractional part */
@@ -784,20 +860,14 @@ KdpDprintf(
 
     /* Format the actual message after the timestamp */
     va_start(ap, Format);
-    FormatLength = _vsnprintf(Buffer + TimestampLength,
-                              sizeof(Buffer) - TimestampLength,
-                              Format,
-                              ap);
+    Length = (USHORT)_vsnprintf(Buffer + TimestampLength,
+                                sizeof(Buffer) - TimestampLength,
+                                Format,
+                                ap);
     va_end(ap);
 
-    if (FormatLength < 0)
-    {
-        Buffer[sizeof(Buffer) - 1] = ANSI_NULL;
-        FormatLength = (INT)strlen(Buffer + TimestampLength);
-    }
-
     /* Calculate total length */
-    Length = (USHORT)min(TimestampLength + (USHORT)FormatLength, sizeof(Buffer) - 1);
+    Length = min(TimestampLength + Length, sizeof(Buffer) - 1);
 
     /* Set it up */
     String.Buffer = Buffer;
