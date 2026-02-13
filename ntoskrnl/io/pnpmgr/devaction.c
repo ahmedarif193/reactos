@@ -1738,7 +1738,7 @@ IopSendRemoveDevice(IN PDEVICE_OBJECT DeviceObject)
     LONG_PTR refCount = ObDereferenceObject(DeviceObject);
     if (refCount != 0)
     {
-        DPRINT1("Leaking device %wZ, refCount = %d\n", &DeviceNode->InstancePath, (INT32)refCount);
+        DPRINT("Leaking device %wZ, refCount = %d\n", &DeviceNode->InstancePath, (INT32)refCount);
     }
 }
 
@@ -1752,6 +1752,9 @@ IopSendRemoveDeviceRelations(PDEVICE_RELATIONS DeviceRelations)
 
     for (i = 0; i < DeviceRelations->Count; i++)
     {
+        PDEVICE_NODE node = IopGetDeviceNode(DeviceRelations->Objects[i]);
+        if (node)
+            PiUnlinkDevNode(node);
         IopSendRemoveDevice(DeviceRelations->Objects[i]);
         DeviceRelations->Objects[i] = NULL;
     }
@@ -1773,6 +1776,7 @@ IopSendRemoveChildDevices(PDEVICE_NODE ParentDeviceNode)
         NextDeviceNode = ChildDeviceNode->Sibling;
         KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
 
+        PiUnlinkDevNode(ChildDeviceNode);
         IopSendRemoveDevice(ChildDeviceNode->PhysicalDeviceObject);
 
         ChildDeviceNode = NextDeviceNode;
@@ -2332,12 +2336,18 @@ PiDevNodeStateMachine(
 
     do
     {
+        PDEVICE_NODE savedParent, savedSibling;
         doProcessAgain = FALSE;
 
         // The device can be removed during processing, but we still need its Parent and Sibling
         // links to continue the tree traversal. So keep the link till the and of a cycle
         referencedObject = currentNode->PhysicalDeviceObject;
         ObReferenceObject(referencedObject);
+
+        // Save navigation pointers before processing. PiUnlinkDevNode may
+        // NULL them out when the node reaches DeviceNodeRemoved state.
+        savedParent = currentNode->Parent;
+        savedSibling = currentNode->Sibling;
 
         // Devices with problems are skipped (unless they are not being removed)
         if (currentNode->Flags & DNF_HAS_PROBLEM &&
@@ -2511,12 +2521,20 @@ PiDevNodeStateMachine(
             case DeviceNodeAwaitingQueuedRemoval:
                 DPRINT("DeviceNodeAwaitingQueuedRemoval %wZ\n", &currentNode->InstancePath);
                 status = IopRemoveDevice(currentNode);
+                /* Node is now DeviceNodeRemoved - unlink from the tree so
+                 * Device Manager no longer sees it. Navigation uses the
+                 * savedParent/savedSibling captured before the switch. */
+                PiUnlinkDevNode(currentNode);
                 break;
             case DeviceNodeQueryRemoved:
                 break;
             case DeviceNodeRemovePendingCloses:
                 break;
             case DeviceNodeRemoved:
+                /* Unlink from the device tree so Device Manager no longer
+                 * sees this device. The node memory will be freed later
+                 * from IopDeleteDevice when the object refcount hits 0. */
+                PiUnlinkDevNode(currentNode);
                 break;
             case DeviceNodeDeletePendingCloses:
                 break;
@@ -2535,7 +2553,25 @@ skipEnum:
                         currentNode, &currentNode->InstancePath);
 #endif
             KIRQL OldIrql;
+            PDEVICE_NODE navParent, navSibling;
             KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
+
+            /*
+             * If the node was unlinked (PiUnlinkDevNode sets Parent to NULL),
+             * the live Sibling/Parent pointers are gone.  Fall back to the
+             * copies we saved before the switch statement.
+             */
+            if (currentNode->Parent == NULL && currentNode != RootNode)
+            {
+                navParent  = savedParent;
+                navSibling = savedSibling;
+            }
+            else
+            {
+                navParent  = currentNode->Parent;
+                navSibling = currentNode->Sibling;
+            }
+
             /* If we have a child, simply go down the tree */
             if (currentNode->State != DeviceNodeRemoved && currentNode->Child != NULL)
             {
@@ -2552,10 +2588,9 @@ skipEnum:
                 while (currentNode != RootNode)
                 {
                     /* All children processed -- go sideways */
-                    if (currentNode->Sibling != NULL)
+                    if (navSibling != NULL)
                     {
-                        ASSERT(currentNode->Sibling->Parent == currentNode->Parent);
-                        currentNode = currentNode->Sibling;
+                        currentNode = navSibling;
 #if defined(_M_ARM64)
                         if (IterationCount <= 50 || IterationCount % 100 == 0)
                             DPRINT1("[arm64] Tree navigation: going sideways to sibling %p %wZ\n",
@@ -2566,13 +2601,15 @@ skipEnum:
                     else
                     {
                         /* We're the last sibling -- go back up */
-                        ASSERT(currentNode->Parent->LastChild == currentNode);
-                        currentNode = currentNode->Parent;
+                        currentNode = navParent;
 #if defined(_M_ARM64)
                         if (IterationCount <= 50 || IterationCount % 100 == 0)
                             DPRINT1("[arm64] Tree navigation: going up to parent %p %wZ\n",
                                     currentNode, &currentNode->InstancePath);
 #endif
+                        /* Use the parent's live pointers for the next round */
+                        navParent  = currentNode->Parent;
+                        navSibling = currentNode->Sibling;
                     }
                     /* We already visited the parent and all its children, so keep looking */
                 }

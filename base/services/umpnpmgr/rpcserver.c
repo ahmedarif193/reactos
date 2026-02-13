@@ -841,10 +841,12 @@ PNP_ValidateDeviceInstance(
     HKEY hDeviceKey = NULL;
 
     UNREFERENCED_PARAMETER(hBinding);
-    UNREFERENCED_PARAMETER(ulFlags);
 
     DPRINT("PNP_ValidateDeviceInstance(%p %S 0x%08lx)\n",
            hBinding, pDeviceID, ulFlags);
+
+    if (ulFlags & ~CM_LOCATE_DEVNODE_BITS)
+        return CR_INVALID_FLAG;
 
     if (!IsValidDeviceInstanceID(pDeviceID))
         return CR_INVALID_DEVINST;
@@ -860,7 +862,16 @@ PNP_ValidateDeviceInstance(
         goto Done;
     }
 
-    /* FIXME: add more tests */
+    /*
+     * CM_LOCATE_DEVNODE_NORMAL must only succeed for present devnodes.
+     * CM_LOCATE_DEVNODE_PHANTOM (or NOVALIDATION) allows locating an
+     * instance that only exists in the Enum registry.
+     */
+    if ((ulFlags & (CM_LOCATE_DEVNODE_PHANTOM | CM_LOCATE_DEVNODE_NOVALIDATION)) == 0)
+    {
+        if (!IsPresentDeviceInstanceID(pDeviceID))
+            ret = CR_NO_SUCH_DEVNODE;
+    }
 
 Done:
     if (hDeviceKey != NULL)
