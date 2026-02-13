@@ -315,30 +315,23 @@ fi
 if [[ -n "$ARM64_BOOT_DIR" && -d "$ARM64_BOOT_DIR" ]]; then
   info "Embedding ARM64 boot files from $ARM64_BOOT_DIR"
 
-  # Raspberry Pi 5 support
-  if [[ -d "$ARM64_BOOT_DIR/rpi5" ]]; then
-    rpi5_dir="$ARM64_BOOT_DIR/rpi5"
+  # Raspberry Pi support (all models)
+  if [[ -d "$ARM64_BOOT_DIR/rpi" ]]; then
+    rpi_dir="$ARM64_BOOT_DIR/rpi"
+    rpi_count=0
 
-    # UEFI firmware
-    if [[ -f "$rpi5_dir/RPI_EFI.fd" ]]; then
-      add_file "$rpi5_dir/RPI_EFI.fd" "/RPI_EFI.fd"
-      info "Added RPI5: RPI_EFI.fd"
-    fi
+    # Copy all boot files: UEFI firmware, device trees, GPU firmware, config
+    for ext in fd dtb elf dat bin txt; do
+      for f in "$rpi_dir"/*."$ext"; do
+        [[ -f "$f" ]] || continue
+        fname="$(basename "$f")"
+        add_file "$f" "/$fname"
+        rpi_count=$((rpi_count + 1))
+      done
+    done
 
-    # Device tree blob
-    if [[ -f "$rpi5_dir/bcm2712-rpi-5-b.dtb" ]]; then
-      add_file "$rpi5_dir/bcm2712-rpi-5-b.dtb" "/bcm2712-rpi-5-b.dtb"
-      info "Added RPI5: bcm2712-rpi-5-b.dtb"
-    fi
-
-    # Boot configuration
-    if [[ -f "$rpi5_dir/config.txt" ]]; then
-      add_file "$rpi5_dir/config.txt" "/config.txt"
-      info "Added RPI5: config.txt"
-    fi
+    info "Added $rpi_count Raspberry Pi boot files"
   fi
-
-  # Future platforms (RPI4, etc.) can be added here
 fi
 
 info "Embedding partition into disk image"
