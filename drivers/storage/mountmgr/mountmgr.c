@@ -834,6 +834,7 @@ MountMgrFreeMountedDeviceInfo(IN PDEVICE_INFORMATION DeviceInformation)
     if (DeviceInformation->TargetDeviceNotificationEntry)
     {
         IoUnregisterPlugPlayNotification(DeviceInformation->TargetDeviceNotificationEntry);
+        DeviceInformation->TargetDeviceNotificationEntry = NULL;
     }
 }
 
@@ -1722,6 +1723,7 @@ MountMgrMountedDeviceRemoval(IN PDEVICE_EXTENSION DeviceExtension,
         if (DeviceInformation->TargetDeviceNotificationEntry)
         {
             IoUnregisterPlugPlayNotification(DeviceInformation->TargetDeviceNotificationEntry);
+            DeviceInformation->TargetDeviceNotificationEntry = NULL;
         }
 
         /*  And leave */

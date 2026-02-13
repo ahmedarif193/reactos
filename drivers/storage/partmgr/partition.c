@@ -290,9 +290,12 @@ PartitionHandleRemove(
     _In_ PPARTITION_EXTENSION PartExt,
     _In_ BOOLEAN FinalRemove)
 {
-    NTSTATUS status;
+    NTSTATUS status, cleanupStatus;
+    BOOLEAN dropInterfaceName;
 
     PAGED_CODE();
+
+    cleanupStatus = STATUS_SUCCESS;
 
     // remove the symbolic link
     if (PartExt->SymlinkCreated)
@@ -310,23 +313,47 @@ PartitionHandleRemove(
 
         if (!NT_SUCCESS(status))
         {
-            return status;
+            ERR("IoDeleteSymbolicLink(%wZ) failed with status 0x%08lx\n",
+                &partitionSymlink, status);
+            if (NT_SUCCESS(cleanupStatus))
+            {
+                cleanupStatus = status;
+            }
         }
-        PartExt->SymlinkCreated = FALSE;
+        else
+        {
+            PartExt->SymlinkCreated = FALSE;
 
-        INFO("Symlink removed %wZ -> %wZ\n", &partitionSymlink, &PartExt->DeviceName);
+            INFO("Symlink removed %wZ -> %wZ\n", &partitionSymlink, &PartExt->DeviceName);
+        }
     }
 
     // release device interfaces
     if (PartExt->PartitionInterfaceName.Buffer)
     {
+        dropInterfaceName = TRUE;
         status = IoSetDeviceInterfaceState(&PartExt->PartitionInterfaceName, FALSE);
         if (!NT_SUCCESS(status))
         {
-            return status;
+            ERR("IoSetDeviceInterfaceState(%wZ, FALSE) failed with status 0x%08lx\n",
+                &PartExt->PartitionInterfaceName, status);
+            if (NT_SUCCESS(cleanupStatus))
+            {
+                cleanupStatus = status;
+            }
+
+            /* Keep the name for a possible later retry on final remove. */
+            if (!FinalRemove)
+            {
+                dropInterfaceName = FALSE;
+            }
         }
-        RtlFreeUnicodeString(&PartExt->PartitionInterfaceName);
-        RtlInitUnicodeString(&PartExt->PartitionInterfaceName, NULL);
+
+        if (dropInterfaceName)
+        {
+            RtlFreeUnicodeString(&PartExt->PartitionInterfaceName);
+            RtlInitUnicodeString(&PartExt->PartitionInterfaceName, NULL);
+        }
     }
 
     if (PartExt->VolumeInterfaceName.Buffer)
@@ -347,10 +374,26 @@ PartitionHandleRemove(
         status = IoSetDeviceInterfaceState(&PartExt->VolumeInterfaceName, FALSE);
         if (!NT_SUCCESS(status))
         {
-            return status;
+            ERR("IoSetDeviceInterfaceState(%wZ, FALSE) failed with status 0x%08lx\n",
+                &PartExt->VolumeInterfaceName, status);
+            if (NT_SUCCESS(cleanupStatus))
+            {
+                cleanupStatus = status;
+            }
+
+            /* Keep the name for a possible later retry on final remove. */
+            dropInterfaceName = FinalRemove;
         }
-        RtlFreeUnicodeString(&PartExt->VolumeInterfaceName);
-        RtlInitUnicodeString(&PartExt->VolumeInterfaceName, NULL);
+        else
+        {
+            dropInterfaceName = TRUE;
+        }
+
+        if (dropInterfaceName)
+        {
+            RtlFreeUnicodeString(&PartExt->VolumeInterfaceName);
+            RtlInitUnicodeString(&PartExt->VolumeInterfaceName, NULL);
+        }
     }
 
     if (FinalRemove)
@@ -363,9 +406,15 @@ PartitionHandleRemove(
         }
 
         IoDeleteDevice(PartExt->DeviceObject);
+
+        /*
+         * Drivers are not expected to fail IRP_MN_REMOVE_DEVICE.
+         * Removal is best-effort for cleanup operations above.
+         */
+        return STATUS_SUCCESS;
     }
 
-    return STATUS_SUCCESS;
+    return cleanupStatus;
 }
 
 static

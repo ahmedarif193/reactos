@@ -214,8 +214,20 @@ MountMgrTargetDeviceNotification(IN PVOID NotificationStructure,
     DeviceExtension = DeviceInformation->DeviceExtension;
     Notification = NotificationStructure;
 
-    /* The notification have to be unregistered already (in device interface change handler) */
-    ASSERT(!IsEqualGUID(&Notification->Event, &GUID_TARGET_DEVICE_REMOVE_COMPLETE));
+    /*
+     * This event is delivered by PnP when the target device is being removed.
+     * Unregister here as a fallback if interface-removal handling didn't do it.
+     */
+    if (IsEqualGUID(&Notification->Event, &GUID_TARGET_DEVICE_REMOVE_COMPLETE))
+    {
+        if (DeviceInformation->TargetDeviceNotificationEntry)
+        {
+            IoUnregisterPlugPlayNotification(DeviceInformation->TargetDeviceNotificationEntry);
+            DeviceInformation->TargetDeviceNotificationEntry = NULL;
+        }
+
+        return STATUS_SUCCESS;
+    }
 
     /* It it's to signal that a volume has been mounted
      * Verify if a database sync is required and execute it
