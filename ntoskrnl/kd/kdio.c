@@ -613,19 +613,25 @@ KdIoPrintf(
     ...)
 {
     va_list ap;
-    ULONG Length;
+    INT Length;
     CHAR Buffer[512];
 
     /* Format the string */
     va_start(ap, Format);
-    Length = (ULONG)_vsnprintf(Buffer,
-                               sizeof(Buffer),
-                               Format,
-                               ap);
+    Length = _vsnprintf(Buffer,
+                        sizeof(Buffer),
+                        Format,
+                        ap);
     va_end(ap);
 
+    if (Length < 0)
+    {
+        Buffer[sizeof(Buffer) - 1] = ANSI_NULL;
+        Length = (INT)strlen(Buffer);
+    }
+
     /* Send it to the display providers */
-    KdIoPrintString(Buffer, Length);
+    KdIoPrintString(Buffer, (ULONG)Length);
 }
 
 #ifdef KDBG
