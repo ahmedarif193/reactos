@@ -150,6 +150,19 @@ AhciIssuePacketCommand(
     _Out_opt_ PULONG BytesTransferred,
     _Out_opt_ PBOOLEAN TaskfileError);
 
+static ULONG
+AhciReadPort(
+    _In_ PAHCI_ADAPTER_EXTENSION Adapter,
+    _In_ ULONG Port,
+    _In_ ULONG Offset);
+
+static VOID
+AhciWritePort(
+    _In_ PAHCI_ADAPTER_EXTENSION Adapter,
+    _In_ ULONG Port,
+    _In_ ULONG Offset,
+    _In_ ULONG Value);
+
 #ifdef AHCI_USE_STORPORT
 static BOOLEAN
 AhciHandleIoControl(
@@ -272,6 +285,34 @@ AhciNotifyBusChange(
 }
 #endif
 
+static VOID
+AhciStartHotplugTimer(
+    _In_ PAHCI_ADAPTER_EXTENSION Adapter)
+{
+    LARGE_INTEGER dueTime;
+
+    if (Adapter == NULL)
+        return;
+
+    InterlockedExchange(&Adapter->HotplugTimerArmed, 1);
+    dueTime.QuadPart = -20000000LL; /* 2 seconds (negative = relative) */
+    KeSetTimerEx(&Adapter->HotplugTimer, dueTime, 2000, &Adapter->HotplugDpc);
+}
+
+static VOID
+AhciStopHotplugTimer(
+    _In_ PAHCI_ADAPTER_EXTENSION Adapter)
+{
+    if (Adapter == NULL)
+        return;
+
+    if (InterlockedExchange(&Adapter->HotplugTimerArmed, 0))
+    {
+        KeCancelTimer(&Adapter->HotplugTimer);
+        KeFlushQueuedDpcs();
+    }
+}
+
 #ifdef AHCI_USE_STORPORT
 static SCSI_ADAPTER_CONTROL_STATUS NTAPI
 AhciHwAdapterControl(
@@ -279,7 +320,7 @@ AhciHwAdapterControl(
     _In_ SCSI_ADAPTER_CONTROL_TYPE ControlType,
     _In_ PVOID Parameters)
 {
-    UNREFERENCED_PARAMETER(DeviceExtension);
+    PAHCI_ADAPTER_EXTENSION adapter = (PAHCI_ADAPTER_EXTENSION)DeviceExtension;
 
     switch (ControlType)
     {
@@ -314,7 +355,44 @@ AhciHwAdapterControl(
         }
 
         case ScsiStopAdapter:
+            if (adapter == NULL)
+                return ScsiAdapterControlUnsuccessful;
+
+            InterlockedExchange(&adapter->HotplugActive, 0);
+            AhciStopHotplugTimer(adapter);
+
+            if (adapter->AbBase != NULL)
+            {
+                ULONG port;
+
+                adapter->AbBase->GHC &= ~AHCI_GHC_IE;
+                for (port = 0; port < adapter->PortCount && port < AHCI_MAX_PORTS; ++port)
+                {
+                    if (!(adapter->PortsImplemented & (1u << port)))
+                        continue;
+
+                    AhciWritePort(adapter, port, AHCI_PxIE, 0);
+                }
+            }
+            return ScsiAdapterControlSuccess;
+
         case ScsiRestartAdapter:
+            if (adapter == NULL || adapter->AbBase == NULL)
+                return ScsiAdapterControlUnsuccessful;
+
+            adapter->AbBase->GHC |= AHCI_GHC_IE;
+            adapter->HotPlugPorts = 0;
+            for (ULONG port = 0; port < adapter->PortCount && port < AHCI_MAX_PORTS; ++port)
+            {
+                if (!(adapter->PortsImplemented & (1u << port)))
+                    continue;
+
+                AhciWritePort(adapter, port, AHCI_PxIE, AHCI_PxIS_HOTPLUG);
+                adapter->LastPortDet[port] = AhciReadPort(adapter, port, AHCI_PxSSTS) & AHCI_PxSSTS_DET_MASK;
+            }
+
+            InterlockedExchange(&adapter->HotplugActive, 1);
+            AhciStartHotplugTimer(adapter);
             return ScsiAdapterControlSuccess;
 
         default:
@@ -741,7 +819,7 @@ AhciResetPort(
     }
 
     AhciWritePort(Adapter, Port, AHCI_PxIS, 0xFFFFFFFF);
-    AhciWritePort(Adapter, Port, AHCI_PxIE, 0);
+    AhciWritePort(Adapter, Port, AHCI_PxIE, AHCI_PxIS_HOTPLUG);  /* Enable hot-plug interrupts */
     AhciWritePort(Adapter, Port, AHCI_PxSERR, 0xFFFFFFFF);
     AhciWritePort(Adapter, Port, AHCI_PxSACT, 0);
     AhciWritePort(Adapter, Port, AHCI_PxCI, 0);
@@ -1071,6 +1149,8 @@ AhciIssueAtaCommand(
 
         if (cmdStatus == AhciCmdStatusTimeout)
         {
+            ULONG cmd;
+
             port->Busy = FALSE;
             if (sactArmed)
             {
@@ -1079,10 +1159,21 @@ AhciIssueAtaCommand(
             }
             AHCI_ERROR("IssueAta: command timeout (op=0x%02x) on port %lu", Command, Port);
             AhciDumpPortState(Adapter, Port, "command timeout");
-            if (!AhciStopPort(Adapter, Port))
-                AHCI_ERROR("IssueAta: soft stop failed after timeout on port %lu", Port);
-            else
-                AhciDumpPortState(Adapter, Port, "after stop");
+
+            /* Stop command engine, clear errors, restart */
+            cmd = AhciReadPort(Adapter, Port, AHCI_PxCMD);
+            if (cmd & AHCI_PxCMD_ST)
+            {
+                cmd &= ~AHCI_PxCMD_ST;
+                AhciWritePort(Adapter, Port, AHCI_PxCMD, cmd);
+                AhciWaitForPortClear(Adapter, Port, AHCI_PxCMD,
+                                     AHCI_PxCMD_CR, AHCI_RESET_TIMEOUT_US);
+            }
+            AhciWritePort(Adapter, Port, AHCI_PxSERR, 0xFFFFFFFF);
+            AhciWritePort(Adapter, Port, AHCI_PxIS, 0xFFFFFFFF);
+            cmd = AhciReadPort(Adapter, Port, AHCI_PxCMD);
+            cmd |= AHCI_PxCMD_FRE | AHCI_PxCMD_ST;
+            AhciWritePort(Adapter, Port, AHCI_PxCMD, cmd);
             return FALSE;
         }
 
@@ -1091,6 +1182,8 @@ AhciIssueAtaCommand(
 
         if (cmdStatus == AhciCmdStatusError || (tfd & AHCI_TFD_STS_ERR))
         {
+            ULONG cmd;
+
             if (sactArmed)
             {
                 AhciWritePort(Adapter, Port, AHCI_PxSACT, 0);
@@ -1098,6 +1191,21 @@ AhciIssueAtaCommand(
             }
             AHCI_WARN("IssueAta: taskfile error (TFD=0x%08lx) on port %lu", tfd, Port);
             AhciDumpPortState(Adapter, Port, "taskfile error");
+
+            /* Stop command engine, clear errors, restart */
+            cmd = AhciReadPort(Adapter, Port, AHCI_PxCMD);
+            if (cmd & AHCI_PxCMD_ST)
+            {
+                cmd &= ~AHCI_PxCMD_ST;
+                AhciWritePort(Adapter, Port, AHCI_PxCMD, cmd);
+                AhciWaitForPortClear(Adapter, Port, AHCI_PxCMD,
+                                     AHCI_PxCMD_CR, AHCI_RESET_TIMEOUT_US);
+            }
+            AhciWritePort(Adapter, Port, AHCI_PxSERR, 0xFFFFFFFF);
+            AhciWritePort(Adapter, Port, AHCI_PxIS, 0xFFFFFFFF);
+            cmd = AhciReadPort(Adapter, Port, AHCI_PxCMD);
+            cmd |= AHCI_PxCMD_FRE | AHCI_PxCMD_ST;
+            AhciWritePort(Adapter, Port, AHCI_PxCMD, cmd);
             return FALSE;
         }
     }
@@ -1237,13 +1345,26 @@ AhciIssuePacketCommand(
 
         if (cmdStatus == AhciCmdStatusTimeout)
         {
+            ULONG cmd;
+
             port->Busy = FALSE;
             AHCI_ERROR("IssuePacket: command timeout on port %lu", Port);
             AhciDumpPortState(Adapter, Port, "packet command timeout");
-            if (!AhciStopPort(Adapter, Port))
-                AHCI_ERROR("IssuePacket: soft stop failed after timeout on port %lu", Port);
-            else
-                AhciDumpPortState(Adapter, Port, "packet after stop");
+
+            /* Stop command engine, clear errors, restart */
+            cmd = AhciReadPort(Adapter, Port, AHCI_PxCMD);
+            if (cmd & AHCI_PxCMD_ST)
+            {
+                cmd &= ~AHCI_PxCMD_ST;
+                AhciWritePort(Adapter, Port, AHCI_PxCMD, cmd);
+                AhciWaitForPortClear(Adapter, Port, AHCI_PxCMD,
+                                     AHCI_PxCMD_CR, AHCI_RESET_TIMEOUT_US);
+            }
+            AhciWritePort(Adapter, Port, AHCI_PxSERR, 0xFFFFFFFF);
+            AhciWritePort(Adapter, Port, AHCI_PxIS, 0xFFFFFFFF);
+            cmd = AhciReadPort(Adapter, Port, AHCI_PxCMD);
+            cmd |= AHCI_PxCMD_FRE | AHCI_PxCMD_ST;
+            AhciWritePort(Adapter, Port, AHCI_PxCMD, cmd);
             return FALSE;
         }
 
@@ -1256,7 +1377,32 @@ AhciIssuePacketCommand(
 
             if (cmdStatus == AhciCmdStatusError || (tfd & AHCI_TFD_STS_ERR))
             {
+                ULONG cmd;
+
                 requestErrored = TRUE;
+
+                /*
+                 * AHCI spec error recovery: stop command engine, clear error
+                 * state, restart.  Without this the CI bit stays set and all
+                 * subsequent commands fail with "slot busy".
+                 */
+                cmd = AhciReadPort(Adapter, Port, AHCI_PxCMD);
+                if (cmd & AHCI_PxCMD_ST)
+                {
+                    cmd &= ~AHCI_PxCMD_ST;
+                    AhciWritePort(Adapter, Port, AHCI_PxCMD, cmd);
+                    AhciWaitForPortClear(Adapter, Port, AHCI_PxCMD,
+                                         AHCI_PxCMD_CR, AHCI_RESET_TIMEOUT_US);
+                }
+
+                /* Clear all error/status bits */
+                AhciWritePort(Adapter, Port, AHCI_PxSERR, 0xFFFFFFFF);
+                AhciWritePort(Adapter, Port, AHCI_PxIS, 0xFFFFFFFF);
+
+                /* Restart command engine */
+                cmd = AhciReadPort(Adapter, Port, AHCI_PxCMD);
+                cmd |= AHCI_PxCMD_ST;
+                AhciWritePort(Adapter, Port, AHCI_PxCMD, cmd);
 
                 if (TaskfileError != NULL)
                 {
@@ -2310,6 +2456,106 @@ AhciHwFindAdapter(
     return SP_RETURN_NOT_FOUND;
 }
 
+/*
+ * Timer-based hot-plug polling DPC.
+ * Periodically checks PxSSTS DET on all ports and re-probes ports
+ * where a device has appeared or disappeared.  This supplements
+ * interrupt-based detection for emulators (e.g. QEMU) that may not
+ * generate PCS/PRCS interrupts on runtime hot-plug events.
+ */
+static VOID NTAPI
+AhciHotplugDpcRoutine(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    PAHCI_ADAPTER_EXTENSION adapter = (PAHCI_ADAPTER_EXTENSION)DeferredContext;
+    ULONG port;
+    BOOLEAN changed = FALSE;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    if (adapter == NULL ||
+        adapter->AbBase == NULL ||
+        InterlockedCompareExchange(&adapter->HotplugActive, 0, 0) == 0)
+        return;
+
+    for (port = 0; port < adapter->PortCount && port < AHCI_MAX_PORTS; ++port)
+    {
+        ULONG ssts, det;
+
+        if (!(adapter->PortsImplemented & (1u << port)))
+            continue;
+
+        ssts = AhciReadPort(adapter, port, AHCI_PxSSTS);
+        det = ssts & AHCI_PxSSTS_DET_MASK;
+
+        if (det == adapter->LastPortDet[port])
+            continue;
+
+        AHCI_TRACE("HOTPLUG-POLL port=%lu DET changed %lu -> %lu", port, adapter->LastPortDet[port], det);
+
+        if (det == AHCI_PxSSTS_DET_PRESENT && !adapter->Ports[port].Present)
+        {
+            BOOLEAN reprobed = FALSE;
+
+            /* Device appeared on this port - re-probe it */
+            if (AhciResetPort(adapter, port))
+            {
+                adapter->Ports[port].Signature = AhciReadPort(adapter, port, AHCI_PxSIG);
+
+                switch (adapter->Ports[port].Signature)
+                {
+                    case AHCI_SIGNATURE_SATA:
+                        AhciIdentifyDevice(adapter, port);
+                        break;
+
+                    case AHCI_SIGNATURE_ATAPI:
+                        adapter->Ports[port].Atapi = TRUE;
+                        adapter->Ports[port].Present = TRUE;
+                        if (adapter->Ports[port].SectorSize == 0)
+                            adapter->Ports[port].SectorSize = 2048;
+                        adapter->Ports[port].SectorCount = 0;
+                        AhciClearSense(&adapter->Ports[port]);
+                        AhciIdentifyPacketDevice(adapter, port);
+                        break;
+
+                    default:
+                        AHCI_WARN("HOTPLUG-POLL port=%lu unknown signature 0x%08lx", port, adapter->Ports[port].Signature);
+                        break;
+                }
+
+                if (adapter->Ports[port].Present)
+                {
+                    adapter->LastPortDet[port] = det;
+                    changed = TRUE;
+                    reprobed = TRUE;
+                }
+            }
+
+            if (!reprobed)
+                AHCI_TRACE("HOTPLUG-POLL port=%lu reprobe failed, keeping DET latch pending", port);
+
+            continue;
+        }
+
+        adapter->LastPortDet[port] = det;
+
+        if (det != AHCI_PxSSTS_DET_PRESENT && adapter->Ports[port].Present)
+        {
+            /* Device disappeared from this port */
+            adapter->Ports[port].Present = FALSE;
+            changed = TRUE;
+        }
+    }
+
+    if (changed)
+        AhciNotifyBusChange(adapter, 0, 0xFF);
+}
+
 static BOOLEAN NTAPI
 AhciHwInitialize(
     _In_ PVOID DeviceExtension)
@@ -2326,7 +2572,7 @@ AhciHwInitialize(
 
     adapter->AbBase->IS = 0xFFFFFFFF;
     adapter->AbBase->GHC |= AHCI_GHC_AE;
-    adapter->AbBase->GHC &= ~AHCI_GHC_IE; /* we poll */
+    adapter->AbBase->GHC |= AHCI_GHC_IE;  /* Enable interrupts for hot-plug detection */
 
     for (port = 0; port < adapter->PortCount && port < AHCI_MAX_PORTS; ++port)
     {
@@ -2407,6 +2653,26 @@ AhciHwInitialize(
     }
 
     AhciNotifyBusChange(adapter, 0, 0xFF);
+
+    /* Initialize hot-plug polling timer.
+     * Record current DET values and start a 2-second periodic timer
+     * that checks for device arrival/departure on all ports. */
+    for (port = 0; port < adapter->PortCount && port < AHCI_MAX_PORTS; ++port)
+    {
+        if (adapter->PortsImplemented & (1u << port))
+        {
+            ULONG ssts = AhciReadPort(adapter, port, AHCI_PxSSTS);
+            adapter->LastPortDet[port] = ssts & AHCI_PxSSTS_DET_MASK;
+        }
+    }
+
+    adapter->HotPlugPorts = 0;
+    InterlockedExchange(&adapter->HotplugTimerArmed, 0);
+    InterlockedExchange(&adapter->HotplugActive, 1);
+
+    KeInitializeDpc(&adapter->HotplugDpc, AhciHotplugDpcRoutine, adapter);
+    KeInitializeTimerEx(&adapter->HotplugTimer, SynchronizationTimer);
+    AhciStartHotplugTimer(adapter);
     return TRUE;
 }
 
@@ -2544,8 +2810,11 @@ AhciHwInterrupt(
     ULONG is;
     ULONG port;
     BOOLEAN handled = FALSE;
+    ULONG hotPlugPorts = 0;
 
     if (adapter == NULL || adapter->AbBase == NULL)
+        return FALSE;
+    if (InterlockedCompareExchange(&adapter->HotplugActive, 0, 0) == 0)
         return FALSE;
 
     is = adapter->AbBase->IS;
@@ -2556,11 +2825,30 @@ AhciHwInterrupt(
 
     for (port = 0; port < AHCI_MAX_PORTS; ++port)
     {
+        ULONG pxis;
+
         if (!(is & (1u << port)))
             continue;
 
-        AhciWritePort(adapter, port, AHCI_PxIS, 0xFFFFFFFF);
+        pxis = AhciReadPort(adapter, port, AHCI_PxIS);
+        AhciWritePort(adapter, port, AHCI_PxIS, pxis);
+
+        /* Detect hot-plug: PhyRdy Change or Port Connect Change */
+        if (pxis & AHCI_PxIS_HOTPLUG)
+        {
+            /* Clear the SError diagnostics that triggered the interrupt */
+            AhciWritePort(adapter, port, AHCI_PxSERR,
+                          AhciReadPort(adapter, port, AHCI_PxSERR));
+            hotPlugPorts |= (1u << port);
+        }
+
         handled = TRUE;
+    }
+
+    if (hotPlugPorts)
+    {
+        adapter->HotPlugPorts |= hotPlugPorts;
+        StorPortNotification(BusChangeDetected, adapter, (ULONG)0, (ULONG)0, (ULONG)0);
     }
 
     return handled;

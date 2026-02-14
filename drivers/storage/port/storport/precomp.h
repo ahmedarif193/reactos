@@ -191,6 +191,10 @@ typedef struct _FDO_DEVICE_EXTENSION
     KSPIN_LOCK StartIoLock;
 
     SRB_EXTENSION_POOL SrbExtensionPool;
+
+    /* Deferred bus re-scan support (for BusChangeDetected from ISR context) */
+    KDPC BusRescanDpc;
+    volatile LONG BusRescanPending;
 } FDO_DEVICE_EXTENSION, *PFDO_DEVICE_EXTENSION;
 
 

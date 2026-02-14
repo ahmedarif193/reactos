@@ -710,7 +710,7 @@ HRESULT WINAPI CDesktopFolder::GetAttributesOf(
                 *rgfInOut &= dwMyComputerAttributes;
             else if (IsRegItem(apidl[i], CLSID_NetworkPlaces))
                 *rgfInOut &= dwMyNetPlacesAttributes;
-            else if (_ILIsFolderOrFile(apidl[i]) || _ILIsSpecialFolder(apidl[i]))
+            else if (_ILIsFolderOrFile(apidl[i]) || _ILIsSpecialFolder(apidl[i]) || _ILIsDrive(apidl[i]))
             {
                 CComPtr<IShellFolder2> psf;
                 HRESULT hr = _GetSFFromPidl(apidl[i], &psf);

@@ -35,6 +35,19 @@
 
 /* FUNCTIONS *****************************************************************/
 
+static const GUID GuidIoMediaArrival = {0xD07433C0, 0xA98E, 0x11D2, {0x91, 0x7A, 0x00, 0xA0, 0xC9, 0x06, 0x8F, 0xF3}};
+static const GUID GuidIoMediaRemoval = {0xD07433C1, 0xA98E, 0x11D2, {0x91, 0x7A, 0x00, 0xA0, 0xC9, 0x06, 0x8F, 0xF3}};
+static const GUID GuidIoVolumeMount = {0xB5804878, 0x1A96, 0x11D2, {0x8F, 0xFD, 0x00, 0xA0, 0xC9, 0xA0, 0x6D, 0x32}};
+static const GUID GuidIoVolumeDismount = {0xD16A55E8, 0x1059, 0x11D2, {0x8F, 0xFD, 0x00, 0xA0, 0xC9, 0xA0, 0x6D, 0x32}};
+static const GUID GuidIoVolumeNameChange = {0x2DE97F83, 0x4C06, 0x11D2, {0xA5, 0x32, 0x00, 0x60, 0x97, 0x13, 0x05, 0x5A}};
+
+static
+VOID
+BroadcastDeviceNodesChanged(VOID)
+{
+    SendMessageW(HWND_BROADCAST, WM_DEVICECHANGE, DBT_DEVNODES_CHANGED, 0);
+}
+
 static
 VOID
 ProcessTargetDeviceEvent(
@@ -56,7 +69,7 @@ ProcessTargetDeviceEvent(
 //                               WM_DEVICECHANGE,
 //                               DBT_DEVNODES_CHANGED,
 //                               0);
-        SendMessageW(HWND_BROADCAST, WM_DEVICECHANGE, DBT_DEVNODES_CHANGED, 0);
+        BroadcastDeviceNodesChanged();
     }
     else if (UuidEqual(&PnpEvent->EventGuid, (UUID*)&GUID_DEVICE_EJECT_VETOED, &RpcStatus))
     {
@@ -78,7 +91,7 @@ ProcessTargetDeviceEvent(
 //                                WM_DEVICECHANGE,
 //                                DBT_DEVNODES_CHANGED,
 //                                0);
-        SendMessageW(HWND_BROADCAST, WM_DEVICECHANGE, DBT_DEVNODES_CHANGED, 0);
+        BroadcastDeviceNodesChanged();
     }
     else if (UuidEqual(&PnpEvent->EventGuid, (UUID*)&GUID_DEVICE_SURPRISE_REMOVAL, &RpcStatus))
     {
@@ -92,7 +105,7 @@ ProcessTargetDeviceEvent(
 //                                WM_DEVICECHANGE,
 //                                DBT_DEVNODES_CHANGED,
 //                                0);
-        SendMessageW(HWND_BROADCAST, WM_DEVICECHANGE, DBT_DEVNODES_CHANGED, 0);
+        BroadcastDeviceNodesChanged();
     }
     else if (UuidEqual(&PnpEvent->EventGuid, (UUID*)&GUID_DEVICE_REMOVAL_VETOED, &RpcStatus))
     {
@@ -112,6 +125,55 @@ ProcessTargetDeviceEvent(
     }
 }
 
+
+static
+VOID
+ProcessCustomDeviceEvent(
+    _In_ PPLUGPLAY_EVENT_BLOCK PnpEvent)
+{
+    RPC_STATUS RpcStatus;
+    BOOL RefreshTopology = FALSE;
+
+    DPRINT("ProcessCustomDeviceEvent(%p)\n", PnpEvent);
+    DPRINT("Device instance: %S\n", PnpEvent->CustomNotification.DeviceIds);
+
+    if (UuidEqual(&PnpEvent->EventGuid, (UUID*)&GuidIoMediaArrival, &RpcStatus))
+    {
+        DPRINT1("Custom media arrival: %S\n", PnpEvent->CustomNotification.DeviceIds);
+        RefreshTopology = TRUE;
+    }
+    else if (UuidEqual(&PnpEvent->EventGuid, (UUID*)&GuidIoMediaRemoval, &RpcStatus))
+    {
+        DPRINT1("Custom media removal: %S\n", PnpEvent->CustomNotification.DeviceIds);
+        RefreshTopology = TRUE;
+    }
+    else if (UuidEqual(&PnpEvent->EventGuid, (UUID*)&GuidIoVolumeMount, &RpcStatus))
+    {
+        DPRINT1("Custom volume mount: %S\n", PnpEvent->CustomNotification.DeviceIds);
+        RefreshTopology = TRUE;
+    }
+    else if (UuidEqual(&PnpEvent->EventGuid, (UUID*)&GuidIoVolumeDismount, &RpcStatus))
+    {
+        DPRINT1("Custom volume dismount: %S\n", PnpEvent->CustomNotification.DeviceIds);
+        RefreshTopology = TRUE;
+    }
+    else if (UuidEqual(&PnpEvent->EventGuid, (UUID*)&GuidIoVolumeNameChange, &RpcStatus))
+    {
+        DPRINT1("Custom volume name change: %S\n", PnpEvent->CustomNotification.DeviceIds);
+        RefreshTopology = TRUE;
+    }
+    else
+    {
+        DPRINT1("Unknown custom event, GUID {%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}\n",
+                PnpEvent->EventGuid.Data1, PnpEvent->EventGuid.Data2, PnpEvent->EventGuid.Data3,
+                PnpEvent->EventGuid.Data4[0], PnpEvent->EventGuid.Data4[1], PnpEvent->EventGuid.Data4[2],
+                PnpEvent->EventGuid.Data4[3], PnpEvent->EventGuid.Data4[4], PnpEvent->EventGuid.Data4[5],
+                PnpEvent->EventGuid.Data4[6], PnpEvent->EventGuid.Data4[7]);
+    }
+
+    if (RefreshTopology)
+        BroadcastDeviceNodesChanged();
+}
 
 static
 VOID
@@ -227,7 +289,7 @@ ProcessDeviceInstallEvent(
 //                                    WM_DEVICECHANGE,
 //                                    DBT_DEVNODES_CHANGED,
 //                                    0);
-            SendMessageW(HWND_BROADCAST, WM_DEVICECHANGE, DBT_DEVNODES_CHANGED, 0);
+            BroadcastDeviceNodesChanged();
         }
     }
 }
@@ -292,7 +354,9 @@ PnpEventThread(
                 ProcessDeviceClassChangeEvent(PnpEvent);
                 break;
 
-//            case CustomDeviceEvent:
+            case CustomDeviceEvent:
+                ProcessCustomDeviceEvent(PnpEvent);
+                break;
 
             case DeviceInstallEvent:
                 ProcessDeviceInstallEvent(PnpEvent);

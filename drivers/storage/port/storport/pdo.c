@@ -620,6 +620,12 @@ PortPdoPnp(
             PdoExtension->PnpState = dsStopped;
             break;
 
+        case IRP_MN_SURPRISE_REMOVAL:
+            DPRINT("PDO PnP: SURPRISE_REMOVAL\n");
+            PdoExtension->PnpState = dsSurpriseRemoved;
+            PdoExtension->Present = FALSE;
+            break;
+
         case IRP_MN_QUERY_REMOVE_DEVICE:
         case IRP_MN_CANCEL_REMOVE_DEVICE:
         case IRP_MN_QUERY_STOP_DEVICE:

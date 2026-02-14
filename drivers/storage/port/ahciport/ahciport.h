@@ -144,11 +144,17 @@ typedef struct _AHCI_HBA_MEM {
 
 /* PxIS status bits */
 #define AHCI_PxIS_TFES          0x40000000
+#define AHCI_PxIS_CPDS          0x80000000
 #define AHCI_PxIS_HBFS          0x08000000
 #define AHCI_PxIS_HBDS          0x04000000
 #define AHCI_PxIS_IFS           0x01000000
+#define AHCI_PxIS_PRCS          0x00400000  /* PhyRdy Change Status */
+#define AHCI_PxIS_PCS           0x00000040  /* Port Connect Change Status */
 #define AHCI_PxIS_DS            0x00000002
 #define AHCI_PxIS_DHRS          0x00000001
+
+/* Mask for hot-plug related PxIS bits */
+#define AHCI_PxIS_HOTPLUG       (AHCI_PxIS_PCS | AHCI_PxIS_PRCS)
 
 /* Taskfile bits */
 #define AHCI_TFD_STS_BSY        0x80
@@ -223,6 +229,15 @@ typedef struct _AHCI_ADAPTER_EXTENSION {
     UCHAR PortCount;
     PVOID NonCachedBase;
     ULONG NonCachedBytes;
+    volatile ULONG HotPlugPorts;  /* Bitmask of ports with pending hot-plug events */
+    volatile LONG HotplugActive;
+    volatile LONG HotplugTimerArmed;
+
+    /* Timer-based hot-plug polling (supplements interrupt-based detection) */
+    KTIMER HotplugTimer;
+    KDPC HotplugDpc;
+    ULONG LastPortDet[AHCI_MAX_PORTS]; /* Last known PxSSTS DET per port */
+
     AHCI_PORT_CONTEXT Ports[AHCI_MAX_PORTS];
 } AHCI_ADAPTER_EXTENSION, *PAHCI_ADAPTER_EXTENSION;
 

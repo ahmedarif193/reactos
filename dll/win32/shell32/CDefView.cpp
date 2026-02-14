@@ -2978,23 +2978,66 @@ LRESULT CDefView::OnChangeNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &
         }
     }
 
+    const BOOL isMyComputerView = _ILIsMyComputer(m_pidlParent);
+
     switch (lEvent)
     {
         case SHCNE_MKDIR:
         case SHCNE_CREATE:
         case SHCNE_DRIVEADD:
-            if (!child0)
-                break;
-            if (LV_FindItemByPidl(child0) < 0)
-                LV_AddItem(child0);
+            if (lEvent == SHCNE_DRIVEADD && isMyComputerView)
+            {
+                Refresh();
+            }
+            else if (child0)
+            {
+                if (LV_FindItemByPidl(child0) < 0)
+                    LV_AddItem(child0);
+                else
+                    LV_UpdateItem(child0);
+            }
+            else if (isMyComputerView)
+            {
+                TRACE("SHCNE_DRIVEADD without child PIDL in MyComputer, forcing refresh\n");
+                Refresh();
+            }
             else
-                LV_UpdateItem(child0);
+            {
+                break;
+            }
+            if (lEvent == SHCNE_DRIVEADD &&
+                m_sortInfo.ListColumn != LISTVIEW_SORT_INFO::UNSPECIFIEDCOLUMN)
+            {
+                _Sort(-1);
+            }
+            UpdateStatusbar();
             break;
         case SHCNE_RMDIR:
         case SHCNE_DELETE:
         case SHCNE_DRIVEREMOVED:
-            if (child0)
+            if (lEvent == SHCNE_DRIVEREMOVED && isMyComputerView)
+            {
+                Refresh();
+            }
+            else if (child0)
+            {
                 LV_DeleteItem(child0);
+            }
+            else if (isMyComputerView)
+            {
+                TRACE("SHCNE_DRIVEREMOVED without child PIDL in MyComputer, forcing refresh\n");
+                Refresh();
+            }
+            else
+            {
+                break;
+            }
+            if (lEvent == SHCNE_DRIVEREMOVED &&
+                m_sortInfo.ListColumn != LISTVIEW_SORT_INFO::UNSPECIFIEDCOLUMN)
+            {
+                _Sort(-1);
+            }
+            UpdateStatusbar();
             break;
         case SHCNE_RENAMEFOLDER:
         case SHCNE_RENAMEITEM:
@@ -3010,14 +3053,40 @@ LRESULT CDefView::OnChangeNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &
                 LV_UpdateItem(child0);
             break;
         case SHCNE_UPDATEIMAGE:
-        case SHCNE_MEDIAINSERTED:
-        case SHCNE_MEDIAREMOVED:
         case SHCNE_ASSOCCHANGED:
             LV_RefreshIcons();
             break;
+        case SHCNE_MEDIAINSERTED:
+        case SHCNE_MEDIAREMOVED:
+            if (isMyComputerView)
+            {
+                /* Drive media changes are frequently delivered without a usable child PIDL. */
+                Refresh();
+            }
+            else if (child0)
+            {
+                LV_UpdateItem(child0);
+            }
+            else
+            {
+                Refresh();
+            }
+
+            if (lEvent == SHCNE_MEDIAINSERTED &&
+                m_sortInfo.ListColumn != LISTVIEW_SORT_INFO::UNSPECIFIEDCOLUMN)
+            {
+                _Sort(-1);
+            }
+            LV_RefreshIcons();
+            UpdateStatusbar();
+            break;
         case SHCNE_UPDATEDIR:
         case SHCNE_ATTRIBUTES:
-            if (child0)
+            if (lEvent == SHCNE_UPDATEDIR && isMyComputerView)
+            {
+                Refresh();
+            }
+            else if (child0)
                 LV_UpdateItem(child0);
             else
                 Refresh();

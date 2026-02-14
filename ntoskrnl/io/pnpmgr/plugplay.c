@@ -183,6 +183,55 @@ IopQueueTargetDeviceEvent(const GUID *Guid,
 }
 
 NTSTATUS
+IopQueueCustomTargetDeviceEvent(
+    _In_ PTARGET_DEVICE_CUSTOM_NOTIFICATION NotificationStructure,
+    _In_ PUNICODE_STRING DeviceIds)
+{
+    PPNP_EVENT_ENTRY EventEntry;
+    UNICODE_STRING Copy;
+    ULONG TotalSize;
+    NTSTATUS Status;
+
+    ASSERT(NotificationStructure);
+    ASSERT(DeviceIds);
+
+    Copy.Length = 0;
+    Copy.MaximumLength = DeviceIds->Length + sizeof(UNICODE_NULL);
+    TotalSize =
+        FIELD_OFFSET(PLUGPLAY_EVENT_BLOCK, CustomNotification.DeviceIds) +
+        Copy.MaximumLength;
+
+    EventEntry = ExAllocatePool(NonPagedPool,
+                                TotalSize + FIELD_OFFSET(PNP_EVENT_ENTRY, Event));
+    if (!EventEntry)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(EventEntry, TotalSize + FIELD_OFFSET(PNP_EVENT_ENTRY, Event));
+
+    RtlCopyMemory(&EventEntry->Event.EventGuid,
+                  &NotificationStructure->Event,
+                  sizeof(GUID));
+    EventEntry->Event.EventCategory = CustomDeviceEvent;
+    EventEntry->Event.TotalSize = TotalSize;
+    EventEntry->Event.CustomNotification.NotificationStructure = NULL;
+
+    Copy.Buffer = EventEntry->Event.CustomNotification.DeviceIds;
+    Status = RtlAppendUnicodeStringToString(&Copy, DeviceIds);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePool(EventEntry);
+        return Status;
+    }
+
+    InsertHeadList(&IopPnpEventQueueHead,
+                   &EventEntry->ListEntry);
+    KeSetEvent(&IopPnpNotifyEvent,
+               0,
+               FALSE);
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
 IopFindDeviceInstanceTraverse(
     _In_ PDEVICE_NODE DeviceNode,
     _Inout_ PVOID Context)

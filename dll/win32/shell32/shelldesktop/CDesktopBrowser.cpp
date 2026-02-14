@@ -27,11 +27,105 @@
 #endif
 
 #include <dbt.h>
+#include <winioctl.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(desktop);
 
 static const WCHAR szProgmanClassName[]  = L"Progman";
 static const WCHAR szProgmanWindowName[] = L"Program Manager";
+static const GUID  kGuidDevInterfaceCdrom = {0x53f56308, 0xb6bf, 0x11d0, {0x94, 0xf2, 0x00, 0xa0, 0xc9, 0x1e, 0xfb, 0x8b}};
+static const GUID  kGuidDevInterfaceVolume = {0x53f5630d, 0xb6bf, 0x11d0, {0x94, 0xf2, 0x00, 0xa0, 0xc9, 0x1e, 0xfb, 0x8b}};
+static const UINT_PTR kDesktopCdromPollTimerId = 0x4344; /* 'CD' */
+static const UINT kDesktopCdromPollIntervalMs = 2000;
+
+static DWORD
+QueryCdromDriveMask(VOID)
+{
+    WCHAR szPath[] = L"A:\\";
+    DWORD dwDrives = GetLogicalDrives();
+    DWORD dwCdromMask = 0;
+
+    for (INT iDrive = 0; iDrive <= 'Z' - 'A'; ++iDrive)
+    {
+        DWORD dwBit = (1u << iDrive);
+        if (!(dwDrives & dwBit))
+            continue;
+
+        szPath[0] = L'A' + iDrive;
+        if (GetDriveTypeW(szPath) == DRIVE_CDROM)
+            dwCdromMask |= dwBit;
+    }
+
+    return dwCdromMask;
+}
+
+static BOOL
+IsCdromMediaPresent(_In_ WCHAR DriveLetter)
+{
+    WCHAR szDevice[] = L"\\\\.\\X:";
+    HANDLE hDevice;
+    DWORD BytesReturned;
+
+    szDevice[4] = DriveLetter;
+    hDevice = CreateFileW(szDevice,
+                          0,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE,
+                          NULL,
+                          OPEN_EXISTING,
+                          FILE_ATTRIBUTE_NORMAL,
+                          NULL);
+    if (hDevice != INVALID_HANDLE_VALUE)
+    {
+        BOOL Present = DeviceIoControl(hDevice,
+                                       IOCTL_STORAGE_CHECK_VERIFY,
+                                       NULL,
+                                       0,
+                                       NULL,
+                                       0,
+                                       &BytesReturned,
+                                       NULL);
+#ifdef IOCTL_STORAGE_CHECK_VERIFY2
+        if (!Present)
+        {
+            Present = DeviceIoControl(hDevice,
+                                      IOCTL_STORAGE_CHECK_VERIFY2,
+                                      NULL,
+                                      0,
+                                      NULL,
+                                      0,
+                                      &BytesReturned,
+                                      NULL);
+        }
+#endif
+        CloseHandle(hDevice);
+        if (Present)
+            return TRUE;
+    }
+    /* Fallback for providers that don't support storage verify IOCTLs. */
+    WCHAR szPath[] = L"A:\\";
+    szPath[0] = DriveLetter;
+    return GetVolumeInformationW(szPath, NULL, 0, NULL, NULL, NULL, NULL, 0);
+}
+
+static DWORD
+QueryCdromMediaMask(VOID)
+{
+    DWORD dwDrives = QueryCdromDriveMask();
+    DWORD dwCdromMediaMask = 0;
+
+    for (INT iDrive = 0; iDrive <= 'Z' - 'A'; ++iDrive)
+    {
+        DWORD dwBit = (1u << iDrive);
+        if (!(dwDrives & dwBit))
+            continue;
+
+        BOOL present = IsCdromMediaPresent(L'A' + iDrive);
+        if (present)
+            dwCdromMediaMask |= dwBit;
+    }
+
+    return dwCdromMediaMask;
+}
 
 static BOOL IsDesktopBrowserForwardShellViewCmd(WORD Cmd)
 {
@@ -57,10 +151,16 @@ private:
 
     CComPtr<IOleWindow>        m_ChangeNotifyServer;
     HWND                       m_hwndChangeNotifyServer;
+    HDEVNOTIFY                 m_hDevNotifyCdrom;
+    HDEVNOTIFY                 m_hDevNotifyVolume;
+    DWORD                      m_dwCdromMediaMask;
+    DWORD                      m_dwCdromDriveMask;
     DWORD m_dwDrives;
 
     LRESULT _NotifyTray(UINT uMsg, WPARAM wParam, LPARAM lParam);
     HRESULT _Resize();
+    BOOL UpdateDriveTopology(UINT_PTR EventTag, BOOL IsTimerPoll, BOOL AllowRemove);
+    VOID UpdateCdromMediaState(UINT_PTR EventTag, BOOL IsTimerPoll);
 
 public:
     CDesktopBrowser();
@@ -105,6 +205,7 @@ public:
     LRESULT OnSetFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnGetChangeNotifyServer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnDeviceChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
+    LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnShowOptionsDlg(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnSaveState(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
 
@@ -121,6 +222,7 @@ BEGIN_MSG_MAP(CBaseBar)
     MESSAGE_HANDLER(WM_SETFOCUS, OnSetFocus)
     MESSAGE_HANDLER(WM_DESKTOP_GET_CNOTIFY_SERVER, OnGetChangeNotifyServer)
     MESSAGE_HANDLER(WM_DEVICECHANGE, OnDeviceChange)
+    MESSAGE_HANDLER(WM_TIMER, OnTimer)
     MESSAGE_HANDLER(WM_PROGMAN_OPENSHELLSETTINGS, OnShowOptionsDlg)
     MESSAGE_HANDLER(WM_PROGMAN_SAVESTATE, OnSaveState)
 END_MSG_MAP()
@@ -137,6 +239,10 @@ CDesktopBrowser::CDesktopBrowser():
     m_hAccel(NULL),
     m_hWndShellView(NULL),
     m_hwndChangeNotifyServer(NULL),
+    m_hDevNotifyCdrom(NULL),
+    m_hDevNotifyVolume(NULL),
+    m_dwCdromMediaMask(0),
+    m_dwCdromDriveMask(0),
     m_dwDrives(::GetLogicalDrives())
 {
     SetTopBrowser();
@@ -144,6 +250,23 @@ CDesktopBrowser::CDesktopBrowser():
 
 CDesktopBrowser::~CDesktopBrowser()
 {
+    if (m_hWnd)
+        ::KillTimer(m_hWnd, kDesktopCdromPollTimerId);
+
+    if (m_hDevNotifyCdrom)
+    {
+        if (!::UnregisterDeviceNotification(m_hDevNotifyCdrom))
+            WARN("UnregisterDeviceNotification(CDROM) failed, gle=%lu\n", GetLastError());
+        m_hDevNotifyCdrom = NULL;
+    }
+
+    if (m_hDevNotifyVolume)
+    {
+        if (!::UnregisterDeviceNotification(m_hDevNotifyVolume))
+            WARN("UnregisterDeviceNotification(VOLUME) failed, gle=%lu\n", GetLastError());
+        m_hDevNotifyVolume = NULL;
+    }
+
     if (m_ShellView.p != NULL && m_hWndShellView != NULL)
     {
         m_ShellView->DestroyViewWindow();
@@ -266,6 +389,40 @@ HRESULT CDesktopBrowser::Initialize(IShellDesktopTray *ShellDesk)
 #endif
     ShowWindow(SW_SHOW);
     UpdateWindow();
+
+    m_dwCdromDriveMask = QueryCdromDriveMask();
+    m_dwCdromMediaMask = QueryCdromMediaMask();
+
+    DEV_BROADCAST_DEVICEINTERFACE_W notifyFilter = {};
+    notifyFilter.dbcc_size = sizeof(notifyFilter);
+    notifyFilter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
+
+    notifyFilter.dbcc_classguid = kGuidDevInterfaceCdrom;
+    m_hDevNotifyCdrom = RegisterDeviceNotificationW(m_hWnd, &notifyFilter, DEVICE_NOTIFY_WINDOW_HANDLE);
+    if (m_hDevNotifyCdrom)
+    {
+        TRACE("Registered cdrom device notifications: handle=%p class=%s\n",
+              m_hDevNotifyCdrom, wine_dbgstr_guid(&kGuidDevInterfaceCdrom));
+    }
+    else
+    {
+        WARN("RegisterDeviceNotificationW(cdrom) failed, gle=%lu\n", GetLastError());
+    }
+
+    notifyFilter.dbcc_classguid = kGuidDevInterfaceVolume;
+    m_hDevNotifyVolume = RegisterDeviceNotificationW(m_hWnd, &notifyFilter, DEVICE_NOTIFY_WINDOW_HANDLE);
+    if (m_hDevNotifyVolume)
+    {
+        TRACE("Registered volume device notifications: handle=%p class=%s\n",
+              m_hDevNotifyVolume, wine_dbgstr_guid(&kGuidDevInterfaceVolume));
+    }
+    else
+    {
+        WARN("RegisterDeviceNotificationW(volume) failed, gle=%lu\n", GetLastError());
+    }
+
+    if (!::SetTimer(m_hWnd, kDesktopCdromPollTimerId, kDesktopCdromPollIntervalMs, NULL))
+        WARN("SetTimer(CDROM poll) failed, gle=%lu\n", GetLastError());
 
     return hRet;
 }
@@ -497,30 +654,158 @@ LRESULT CDesktopBrowser::OnGetChangeNotifyServer(UINT uMsg, WPARAM wParam, LPARA
     return (LRESULT)m_hwndChangeNotifyServer;
 }
 
-// Detect DBT_DEVICEARRIVAL and DBT_DEVICEREMOVECOMPLETE
-LRESULT CDesktopBrowser::OnDeviceChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+VOID CDesktopBrowser::UpdateCdromMediaState(UINT_PTR EventTag, BOOL IsTimerPoll)
 {
-    if (wParam != DBT_DEVICEARRIVAL && wParam != DBT_DEVICEREMOVECOMPLETE)
-        return 0;
+    UNREFERENCED_PARAMETER(EventTag);
+    UNREFERENCED_PARAMETER(IsTimerPoll);
 
-    DWORD dwDrives = ::GetLogicalDrives();
+    DWORD nextCdromDriveMask = QueryCdromDriveMask();
+    if ((nextCdromDriveMask | m_dwCdromDriveMask) == 0)
+    {
+        m_dwCdromDriveMask = 0;
+        m_dwCdromMediaMask = 0;
+        return;
+    }
+
+    DWORD nextCdromMediaMask = QueryCdromMediaMask();
+    DWORD mediaRemoved = m_dwCdromMediaMask & ~nextCdromMediaMask;
+    DWORD mediaInserted = ~m_dwCdromMediaMask & nextCdromMediaMask;
+    DWORD driveTypeChanged = m_dwCdromDriveMask ^ nextCdromDriveMask;
+
+    if (!(mediaRemoved | mediaInserted | driveTypeChanged))
+    {
+        m_dwCdromDriveMask = nextCdromDriveMask;
+        return;
+    }
+
     for (INT iDrive = 0; iDrive <= 'Z' - 'A'; ++iDrive)
     {
         WCHAR szPath[MAX_PATH];
-        DWORD dwBit = (1 << iDrive);
-        if (!(m_dwDrives & dwBit) && (dwDrives & dwBit)) // The drive is added
+        DWORD dwBit = (1u << iDrive);
+
+        PathBuildRootW(szPath, iDrive);
+
+        if (mediaRemoved & dwBit)
+            SHChangeNotify(SHCNE_MEDIAREMOVED, SHCNF_PATHW, szPath, NULL);
+        if (mediaInserted & dwBit)
+            SHChangeNotify(SHCNE_MEDIAINSERTED, SHCNF_PATHW, szPath, NULL);
+    }
+
+    if (driveTypeChanged)
+    {
+        /* Force a broad refresh when CDROM classification changed without a letter topology change. */
+        PIDLIST_ABSOLUTE pidlMyComputer = NULL;
+        if (SUCCEEDED(SHGetSpecialFolderLocation(NULL, CSIDL_DRIVES, &pidlMyComputer)) && pidlMyComputer)
         {
-            PathBuildRootW(szPath, iDrive);
-            SHChangeNotify(SHCNE_DRIVEADD, SHCNF_PATHW, szPath, NULL);
-        }
-        else if ((m_dwDrives & dwBit) && !(dwDrives & dwBit)) // The drive is removed
-        {
-            PathBuildRootW(szPath, iDrive);
-            SHChangeNotify(SHCNE_DRIVEREMOVED, SHCNF_PATHW, szPath, NULL);
+            SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_IDLIST, pidlMyComputer, NULL);
+            ILFree(pidlMyComputer);
         }
     }
 
-    m_dwDrives = dwDrives;
+    m_dwCdromDriveMask = nextCdromDriveMask;
+    m_dwCdromMediaMask = nextCdromMediaMask;
+}
+
+BOOL CDesktopBrowser::UpdateDriveTopology(UINT_PTR EventTag, BOOL IsTimerPoll, BOOL AllowRemove)
+{
+    UNREFERENCED_PARAMETER(IsTimerPoll);
+
+    DWORD dwDrives = ::GetLogicalDrives();
+    DWORD nextDrives = m_dwDrives;
+    BOOL changed = FALSE;
+
+    for (INT iDrive = 0; iDrive <= 'Z' - 'A'; ++iDrive)
+    {
+        WCHAR szPath[MAX_PATH];
+        DWORD dwBit = (1u << iDrive);
+
+        if (!(m_dwDrives & dwBit) && (dwDrives & dwBit))
+        {
+            PathBuildRootW(szPath, iDrive);
+            SHChangeNotify(SHCNE_DRIVEADD, SHCNF_PATHW, szPath, NULL);
+            nextDrives |= dwBit;
+            changed = TRUE;
+        }
+        else if ((m_dwDrives & dwBit) && !(dwDrives & dwBit))
+        {
+            PathBuildRootW(szPath, iDrive);
+            if (AllowRemove)
+            {
+                SHChangeNotify(SHCNE_DRIVEREMOVED, SHCNF_PATHW, szPath, NULL);
+                nextDrives &= ~dwBit;
+                changed = TRUE;
+            }
+            else
+            {
+                TRACE("WM_DEVICECHANGE: suppressed drive remove %s on non-final event=0x%Ix\n",
+                      debugstr_w(szPath),
+                      EventTag);
+            }
+        }
+    }
+
+    m_dwDrives = nextDrives;
+    return changed;
+}
+
+// Detect drive topology changes from PnP notifications.
+LRESULT CDesktopBrowser::OnDeviceChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+{
+    BOOL topologyChanged;
+    BOOL shouldProbeMedia;
+    const BOOL isRemoveComplete = (wParam == DBT_DEVICEREMOVECOMPLETE);
+    const DEV_BROADCAST_HDR *pHdr = reinterpret_cast<const DEV_BROADCAST_HDR *>(lParam);
+    if (pHdr && pHdr->dbch_devicetype == DBT_DEVTYP_DEVICEINTERFACE)
+    {
+        const DEV_BROADCAST_DEVICEINTERFACE_W *pIf = reinterpret_cast<const DEV_BROADCAST_DEVICEINTERFACE_W *>(pHdr);
+        TRACE("WM_DEVICECHANGE: wParam=0x%Ix type=interface class=%s name=%s\n",
+              static_cast<UINT_PTR>(wParam),
+              wine_dbgstr_guid(&pIf->dbcc_classguid),
+              debugstr_w(pIf->dbcc_name));
+    }
+    else
+    {
+        TRACE("WM_DEVICECHANGE: wParam=0x%Ix devtype=0x%lx\n",
+              static_cast<UINT_PTR>(wParam),
+              pHdr ? pHdr->dbch_devicetype : 0);
+    }
+
+    if (wParam != DBT_DEVICEARRIVAL &&
+        wParam != DBT_DEVICEREMOVECOMPLETE &&
+        wParam != DBT_DEVNODES_CHANGED)
+        return 0;
+
+    topologyChanged = UpdateDriveTopology(static_cast<UINT_PTR>(wParam), FALSE, isRemoveComplete);
+    shouldProbeMedia = topologyChanged || (wParam == DBT_DEVNODES_CHANGED);
+
+    if (!shouldProbeMedia && pHdr)
+    {
+        if (pHdr->dbch_devicetype == DBT_DEVTYP_VOLUME)
+        {
+            shouldProbeMedia = TRUE;
+        }
+        else if (pHdr->dbch_devicetype == DBT_DEVTYP_DEVICEINTERFACE)
+        {
+            const DEV_BROADCAST_DEVICEINTERFACE_W *pIf = reinterpret_cast<const DEV_BROADCAST_DEVICEINTERFACE_W *>(pHdr);
+            shouldProbeMedia = IsEqualGUID(pIf->dbcc_classguid, kGuidDevInterfaceCdrom) ||
+                               IsEqualGUID(pIf->dbcc_classguid, kGuidDevInterfaceVolume);
+        }
+    }
+
+    if (shouldProbeMedia)
+        UpdateCdromMediaState(static_cast<UINT_PTR>(wParam), FALSE);
+
+    return 0;
+}
+
+LRESULT CDesktopBrowser::OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+{
+    if (wParam == kDesktopCdromPollTimerId)
+    {
+        BOOL topologyChanged = UpdateDriveTopology(static_cast<UINT_PTR>(wParam), TRUE, TRUE);
+        if (topologyChanged || m_dwCdromDriveMask != 0)
+            UpdateCdromMediaState(static_cast<UINT_PTR>(wParam), TRUE);
+    }
     return 0;
 }
 

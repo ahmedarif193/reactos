@@ -13,6 +13,9 @@
 WINE_DEFAULT_DEBUG_CHANNEL (shell);
 
 static HRESULT SHELL32_GetCLSIDForDirectory(LPCWSTR pwszDir, LPCWSTR KeyName, CLSID* pclsidFolder);
+static const DWORD dwDriveAttributes =
+    SFGAO_HASSUBFOLDER | SFGAO_FILESYSTEM | SFGAO_FOLDER | SFGAO_FILESYSANCESTOR |
+    SFGAO_DROPTARGET | SFGAO_HASPROPSHEET | SFGAO_CANRENAME | SFGAO_CANLINK | SFGAO_CANCOPY;
 
 static BOOL ItemIsFolder(PCUITEMID_CHILD pidl)
 {
@@ -1291,13 +1294,7 @@ HRESULT WINAPI CFSFolder::GetAttributesOf(UINT cidl,
         }
         else if (_ILIsDrive(rpidl))
         {
-            IShellFolder *psfParent = NULL;
-            hr = SHBindToParent(m_pidlRoot, IID_PPV_ARG(IShellFolder, &psfParent), NULL);
-            if(SUCCEEDED(hr))
-            {
-                hr = psfParent->GetAttributesOf(1, &rpidl, (SFGAOF*)rgfInOut);
-                psfParent->Release();
-            }
+            *rgfInOut &= dwDriveAttributes;
         }
         else
         {
@@ -1308,11 +1305,20 @@ HRESULT WINAPI CFSFolder::GetAttributesOf(UINT cidl,
     {
         while (cidl > 0 && *apidl)
         {
+            PCUITEMID_CHILD pidl = *apidl;
             pdump(*apidl);
-            if (_ILIsFolderOrFile(*apidl))
-                SHELL32_GetFSItemAttributes(this, *apidl, rgfInOut);
+            if (_ILIsFolderOrFile(pidl))
+            {
+                SHELL32_GetFSItemAttributes(this, pidl, rgfInOut);
+            }
+            else if (_ILIsDrive(pidl))
+            {
+                *rgfInOut &= dwDriveAttributes;
+            }
             else
+            {
                 ERR("Got an unknown type of pidl!!!\n");
+            }
             apidl++;
             cidl--;
         }

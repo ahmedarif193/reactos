@@ -700,6 +700,11 @@ IopQueueTargetDeviceEvent(
     _In_ PUNICODE_STRING DeviceIds);
 
 NTSTATUS
+IopQueueCustomTargetDeviceEvent(
+    _In_ PTARGET_DEVICE_CUSTOM_NOTIFICATION NotificationStructure,
+    _In_ PUNICODE_STRING DeviceIds);
+
+NTSTATUS
 IopQueueDeviceInstallEvent(
     _In_ const GUID *Guid,
     _In_ PUNICODE_STRING DeviceId);

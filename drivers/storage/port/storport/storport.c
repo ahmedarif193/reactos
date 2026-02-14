@@ -170,6 +170,30 @@ PortReleaseSpinLock(
 
 
 static
+VOID
+NTAPI
+PortBusRescanDpcRoutine(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    PFDO_DEVICE_EXTENSION DeviceExtension = (PFDO_DEVICE_EXTENSION)DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    if (DeviceExtension != NULL &&
+        DeviceExtension->PhysicalDevice != NULL &&
+        InterlockedExchange(&DeviceExtension->BusRescanPending, 0))
+    {
+        IoInvalidateDeviceRelations(DeviceExtension->PhysicalDevice,
+                                    BusRelations);
+    }
+}
+
+static
 NTSTATUS
 NTAPI
 PortAddDevice(
@@ -230,6 +254,12 @@ PortAddDevice(
 
     /* Initialize SRB extension pool spinlock early */
     KeInitializeSpinLock(&DeviceExtension->SrbExtensionPool.Lock);
+
+    /* Initialize the deferred bus rescan DPC */
+    KeInitializeDpc(&DeviceExtension->BusRescanDpc,
+                    PortBusRescanDpcRoutine,
+                    DeviceExtension);
+    DeviceExtension->BusRescanPending = 0;
 
     Status = IoAttachDeviceToDeviceStackSafe(Fdo,
                                              PhysicalDeviceObject,
@@ -927,11 +957,11 @@ StorPortGetPhysicalAddress(
             return PhysicalAddress;
         }
 
-        DPRINT1("StorPortGetPhysicalAddress: Cannot translate address at elevated IRQL=%u (no MDL)\n",
-                KeGetCurrentIrql());
-        *Length = 0;
-        PhysicalAddress.QuadPart = 0;
-        return PhysicalAddress;
+        /*
+         * No MDL available at elevated IRQL.  Fall through to
+         * MmGetPhysicalAddress which is safe at any IRQL for
+         * nonpaged pool buffers (which is all StorPort should use).
+         */
     }
 
     PhysicalAddress = MmGetPhysicalAddress(VirtualAddress);
@@ -1442,8 +1472,20 @@ StorPortNotification(
             if ((DeviceExtension != NULL) &&
                 (DeviceExtension->PhysicalDevice != NULL))
             {
-                IoInvalidateDeviceRelations(DeviceExtension->PhysicalDevice,
-                                            BusRelations);
+                if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+                {
+                    /*
+                     * Called from ISR context (DIRQL).  IoInvalidateDeviceRelations
+                     * requires IRQL <= DISPATCH_LEVEL, so defer the work to a DPC.
+                     */
+                    InterlockedExchange(&DeviceExtension->BusRescanPending, 1);
+                    KeInsertQueueDpc(&DeviceExtension->BusRescanDpc, NULL, NULL);
+                }
+                else
+                {
+                    IoInvalidateDeviceRelations(DeviceExtension->PhysicalDevice,
+                                                BusRelations);
+                }
             }
             break;
         }

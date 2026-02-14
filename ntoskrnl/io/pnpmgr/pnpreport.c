@@ -10,6 +10,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <ioevent.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -117,6 +118,11 @@ PpSetCustomTargetEvent(IN PDEVICE_OBJECT DeviceObject,
                        IN PVOID Context OPTIONAL,
                        IN PTARGET_DEVICE_CUSTOM_NOTIFICATION NotificationStructure)
 {
+    static const UNICODE_STRING EmptyDeviceIds = RTL_CONSTANT_STRING(L"");
+    PDEVICE_NODE DeviceNode;
+    NTSTATUS EventStatus;
+    BOOLEAN QueueToUserMode;
+
     ASSERT(NotificationStructure != NULL);
     ASSERT(DeviceObject != NULL);
 
@@ -128,6 +134,31 @@ PpSetCustomTargetEvent(IN PDEVICE_OBJECT DeviceObject,
 
     /* That call is totally wrong but notifications handler must be fixed first */
     PiNotifyTargetDeviceChange(&GUID_PNP_CUSTOM_NOTIFICATION, DeviceObject, NotificationStructure);
+
+    QueueToUserMode =
+        IsEqualGUID(&NotificationStructure->Event, &GUID_IO_MEDIA_ARRIVAL) ||
+        IsEqualGUID(&NotificationStructure->Event, &GUID_IO_MEDIA_REMOVAL) ||
+        IsEqualGUID(&NotificationStructure->Event, &GUID_IO_VOLUME_MOUNT) ||
+        IsEqualGUID(&NotificationStructure->Event, &GUID_IO_VOLUME_DISMOUNT) ||
+        IsEqualGUID(&NotificationStructure->Event, &GUID_IO_VOLUME_NAME_CHANGE);
+
+    if (QueueToUserMode)
+    {
+        DeviceNode = IopGetDeviceNode(DeviceObject);
+        if (DeviceNode && DeviceNode->InstancePath.Buffer)
+            EventStatus = IopQueueCustomTargetDeviceEvent(NotificationStructure, &DeviceNode->InstancePath);
+        else
+            EventStatus = IopQueueCustomTargetDeviceEvent(NotificationStructure, (PUNICODE_STRING)&EmptyDeviceIds);
+
+        if (!NT_SUCCESS(EventStatus))
+        {
+            DPRINT1("IopQueueCustomTargetDeviceEvent failed for event {%08lX-%04X-%04X-...} with status 0x%08lX\n",
+                    NotificationStructure->Event.Data1,
+                    NotificationStructure->Event.Data2,
+                    NotificationStructure->Event.Data3,
+                    EventStatus);
+        }
+    }
 
     if (SyncEvent)
     {

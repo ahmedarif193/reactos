@@ -653,6 +653,19 @@ PortFdoScanBus(
             PdoExtension = PortFindPdo(DeviceExtension, Bus, Target, 0);
             KeReleaseInStackQueuedSpinLock(&LockHandle);
 
+            /*
+             * If the existing PDO was surprise-removed, it is stale.
+             * PnP has already detached it; we must create a fresh PDO
+             * so that PnP sees a new device object and re-enumerates.
+             */
+            if (PdoExtension != NULL &&
+                PdoExtension->PnpState >= dsSurpriseRemoved)
+            {
+                DPRINT("PortFdoScanBus: stale PDO at %lu:%lu, creating new one\n", Bus, Target);
+                PdoExtension->Present = FALSE;
+                PdoExtension = NULL;
+            }
+
             if (PdoExtension == NULL)
             {
                 Status = PortCreatePdo(DeviceExtension, Bus, Target, 0, &PdoExtension);

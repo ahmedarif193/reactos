@@ -5118,6 +5118,15 @@ Return Value:
 
         if (NT_SUCCESS(status))
         {
+            /*
+             * TEST_UNIT_READY succeeded — media is present.  Update the
+             * internal media state so that shell polling (which compares
+             * media-change counts) notices the transition from absent to
+             * present.  The MCN polling path already does this (see
+             * RequestPostWorkMcnRequest), but CHECK_VERIFY was missing it.
+             */
+            DeviceSetMediaChangeStateEx(DeviceExtension, MediaPresent, NULL);
+
             if((RequestParameters.Parameters.DeviceIoControl.IoControlCode == IOCTL_STORAGE_CHECK_VERIFY) &&
                (RequestParameters.Parameters.DeviceIoControl.OutputBufferLength))
             {
