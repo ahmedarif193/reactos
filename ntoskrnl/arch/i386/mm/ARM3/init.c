@@ -37,6 +37,9 @@ MMPTE PrototypePte = {{(MM_READWRITE << MM_PTE_SOFTWARE_PROTECTION_BITS) |
 /* Template PTE for decommited page */
 MMPTE MmDecommittedPte = {{MM_DECOMMIT << MM_PTE_SOFTWARE_PROTECTION_BITS}};
 
+/* Start of system PTE space (equals MmNonPagedSystemStart on x86) */
+PVOID MiSystemPteSpaceStart;
+
 /* PRIVATE FUNCTIONS **********************************************************/
 
 CODE_SEG("INIT")
@@ -324,6 +327,11 @@ MiInitMachineDependent(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         MmNumberOfSystemPtes--;
         ASSERT(MmNumberOfSystemPtes > 1000);
     }
+
+    //
+    // System PTE space starts at MmNonPagedSystemStart on x86
+    //
+    MiSystemPteSpaceStart = MmNonPagedSystemStart;
 
     //
     // Check if we are in a situation where the size of the paged pool
