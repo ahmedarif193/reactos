@@ -74,6 +74,17 @@ typedef struct _PDEV
    PVOID FallbackMapping;
    PVOID FallbackSection;
 
+   /* Shadow buffer for WC/uncached VRAM performance */
+   PVOID ShadowBuffer;    /* System RAM shadow copy */
+   PVOID ShadowSection;   /* Section handle for EngFreeSectionMem */
+   PVOID VramPtr;         /* Real VRAM pointer (for flush target) */
+   BOOLEAN UsingShadow;   /* Whether shadow is active */
+   HSURF hShadowBitmap;   /* Shadow bitmap surface for Eng* punt */
+   SURFOBJ *psoShadow;    /* Persistently locked shadow SURFOBJ */
+   LONG CursorWidth;      /* Cached cursor dimensions for flush */
+   LONG CursorHeight;
+   RECTL OldCursorRect;   /* Last known cursor bounds for flush on move/hide */
+
 #ifdef EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
    VIDEO_POINTER_ATTRIBUTES PointerAttributes;
    XLATEOBJ *PointerXlateObject;
@@ -282,5 +293,155 @@ IntSetPalette(
    IN PPALETTEENTRY ppalent,
    IN ULONG iStart,
    IN ULONG cColors);
+
+VOID
+FbShadowFlushRect(
+   _In_ PPDEV ppdev,
+   _In_ const RECTL *prcl);
+
+BOOL APIENTRY
+DrvTextOut(
+   SURFOBJ *pso,
+   STROBJ *pstro,
+   FONTOBJ *pfo,
+   CLIPOBJ *pco,
+   RECTL *prclExtra,
+   RECTL *prclOpaque,
+   BRUSHOBJ *pboFore,
+   BRUSHOBJ *pboOpaque,
+   POINTL *pptlOrg,
+   MIX mix);
+
+BOOL APIENTRY
+DrvLineTo(
+   SURFOBJ *pso,
+   CLIPOBJ *pco,
+   BRUSHOBJ *pbo,
+   LONG x1,
+   LONG y1,
+   LONG x2,
+   LONG y2,
+   RECTL *prclBounds,
+   MIX mix);
+
+BOOL APIENTRY
+DrvStrokePath(
+   SURFOBJ *pso,
+   PATHOBJ *ppo,
+   CLIPOBJ *pco,
+   XFORMOBJ *pxo,
+   BRUSHOBJ *pbo,
+   POINTL *pptlBrushOrg,
+   LINEATTRS *plineattrs,
+   MIX mix);
+
+BOOL APIENTRY
+DrvFillPath(
+   SURFOBJ *pso,
+   PATHOBJ *ppo,
+   CLIPOBJ *pco,
+   BRUSHOBJ *pbo,
+   POINTL *pptlBrushOrg,
+   MIX mix,
+   FLONG flOptions);
+
+BOOL APIENTRY
+DrvStrokeAndFillPath(
+   SURFOBJ *pso,
+   PATHOBJ *ppo,
+   CLIPOBJ *pco,
+   XFORMOBJ *pxo,
+   BRUSHOBJ *pboStroke,
+   LINEATTRS *plineattrs,
+   BRUSHOBJ *pboFill,
+   POINTL *pptlBrushOrg,
+   MIX mixFill,
+   FLONG flOptions);
+
+BOOL APIENTRY
+DrvPaint(
+   SURFOBJ *pso,
+   CLIPOBJ *pco,
+   BRUSHOBJ *pbo,
+   POINTL *pptlBrushOrg,
+   MIX mix);
+
+BOOL APIENTRY
+DrvStretchBlt(
+   SURFOBJ *psoDest,
+   SURFOBJ *psoSrc,
+   SURFOBJ *psoMask,
+   CLIPOBJ *pco,
+   XLATEOBJ *pxlo,
+   COLORADJUSTMENT *pca,
+   POINTL *pptlHTOrg,
+   RECTL *prclDest,
+   RECTL *prclSrc,
+   POINTL *pptlMask,
+   ULONG iMode);
+
+BOOL APIENTRY
+DrvStretchBltROP(
+   SURFOBJ *psoDest,
+   SURFOBJ *psoSrc,
+   SURFOBJ *psoMask,
+   CLIPOBJ *pco,
+   XLATEOBJ *pxlo,
+   COLORADJUSTMENT *pca,
+   POINTL *pptlHTOrg,
+   RECTL *prclDest,
+   RECTL *prclSrc,
+   POINTL *pptlMask,
+   ULONG iMode,
+   BRUSHOBJ *pbo,
+   ROP4 rop4);
+
+BOOL APIENTRY
+DrvAlphaBlend(
+   SURFOBJ *psoDest,
+   SURFOBJ *psoSrc,
+   CLIPOBJ *pco,
+   XLATEOBJ *pxlo,
+   RECTL *prclDest,
+   RECTL *prclSrc,
+   BLENDOBJ *pBlendObj);
+
+BOOL APIENTRY
+DrvTransparentBlt(
+   SURFOBJ *psoDst,
+   SURFOBJ *psoSrc,
+   CLIPOBJ *pco,
+   XLATEOBJ *pxlo,
+   RECTL *prclDst,
+   RECTL *prclSrc,
+   ULONG iTransColor,
+   ULONG ulReserved);
+
+BOOL APIENTRY
+DrvGradientFill(
+   SURFOBJ *pso,
+   CLIPOBJ *pco,
+   XLATEOBJ *pxlo,
+   TRIVERTEX *pVertex,
+   ULONG nVertex,
+   PVOID pMesh,
+   ULONG nMesh,
+   RECTL *prclExtents,
+   POINTL *pptlDitherOrg,
+   ULONG ulMode);
+
+BOOL APIENTRY
+DrvPlgBlt(
+   SURFOBJ *psoTrg,
+   SURFOBJ *psoSrc,
+   SURFOBJ *psoMsk,
+   CLIPOBJ *pco,
+   XLATEOBJ *pxlo,
+   COLORADJUSTMENT *pca,
+   POINTL *pptlBrushOrg,
+   POINTFIX *pptfx,
+   RECTL *prclSrc,
+   POINTL *pptlMask,
+   ULONG iMode);
 
 #endif /* _FRAMEBUF_PCH_ */

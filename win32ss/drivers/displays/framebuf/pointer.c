@@ -28,7 +28,7 @@
  * Sets the new pointer shape.
  *
  * Status
- *    @unimplemented
+ *    @implemented
  */
 
 ULONG APIENTRY
@@ -44,8 +44,54 @@ DrvSetPointerShape(
    IN RECTL *prcl,
    IN FLONG fl)
 {
-/*   return SPS_DECLINE;*/
-   return EngSetPointerShape(pso, psoMask, psoColor, pxlo, xHot, yHot, x, y, prcl, fl);
+   PPDEV ppdev = pso ? (PPDEV)pso->dhpdev : NULL;
+
+   /* Track cursor dimensions for shadow flush in DrvMovePointer */
+   if (ppdev && psoMask)
+   {
+      ppdev->CursorWidth = psoMask->sizlBitmap.cx;
+      /* AND mask + XOR mask stacked vertically, so height is half */
+      ppdev->CursorHeight = psoMask->sizlBitmap.cy / 2;
+   }
+   else if (ppdev && psoColor)
+   {
+      ppdev->CursorWidth = psoColor->sizlBitmap.cx;
+      ppdev->CursorHeight = psoColor->sizlBitmap.cy;
+   }
+
+   {
+      /*
+       * Pass the original device surface to EngSetPointerShape.  The engine
+       * needs hdev (device association) from the surface to find the PDEVOBJ.
+       * Cursor drawing inside the engine uses IntEngBitBlt, which dispatches
+       * to our DrvBitBlt where shadow substitution and VRAM flush happen.
+       */
+      ULONG ret = EngSetPointerShape(pso, psoMask, psoColor, pxlo, xHot, yHot, x, y, prcl, fl);
+
+      /* Flush the cursor area so the new shape is visible on VRAM */
+      if (ppdev && ppdev->UsingShadow)
+      {
+         if (prcl)
+         {
+            FbShadowFlushRect(ppdev, prcl);
+            ppdev->OldCursorRect = *prcl;
+         }
+         else if (x >= 0)
+         {
+            LONG cw = ppdev->CursorWidth > 0 ? ppdev->CursorWidth : 32;
+            LONG ch = ppdev->CursorHeight > 0 ? ppdev->CursorHeight : 32;
+            RECTL cursorRect;
+            cursorRect.left = x - cw;
+            cursorRect.top = y - ch;
+            cursorRect.right = x + cw;
+            cursorRect.bottom = y + ch;
+            FbShadowFlushRect(ppdev, &cursorRect);
+            ppdev->OldCursorRect = cursorRect;
+         }
+      }
+
+      return ret;
+   }
 }
 
 /*
@@ -55,7 +101,7 @@ DrvSetPointerShape(
  * with the display of the pointer.
  *
  * Status
- *    @unimplemented
+ *    @implemented
  */
 
 VOID APIENTRY
@@ -65,7 +111,99 @@ DrvMovePointer(
    IN LONG y,
    IN RECTL *prcl)
 {
+   PPDEV ppdev = pso ? (PPDEV)pso->dhpdev : NULL;
+   RECTL oldRect;
+   RECTL newRect;
+   BOOLEAN haveOld = FALSE;
+   BOOLEAN haveNew = FALSE;
+   BOOLEAN sameRect = FALSE;
+
+   if (ppdev && ppdev->UsingShadow)
+   {
+      oldRect = ppdev->OldCursorRect;
+      haveOld = (oldRect.left < oldRect.right) && (oldRect.top < oldRect.bottom);
+   }
+
+   /*
+    * Pass the original device surface to EngMovePointer.  The engine needs
+    * hdev from the surface.  Cursor drawing dispatches through DrvBitBlt
+    * where shadow substitution and VRAM flush happen automatically.
+    */
    EngMovePointer(pso, x, y, prcl);
+
+   /* Update tracked position and flush areas after shadow update */
+   if (ppdev && ppdev->UsingShadow)
+   {
+      if (x == -1)
+      {
+         if (haveOld)
+            FbShadowFlushRect(ppdev, &oldRect);
+
+         /* Cursor hidden; clear the rect so next move doesn't flush stale area */
+         ppdev->OldCursorRect.left = 0;
+         ppdev->OldCursorRect.top = 0;
+         ppdev->OldCursorRect.right = 0;
+         ppdev->OldCursorRect.bottom = 0;
+      }
+      else
+      {
+         if (prcl)
+         {
+            newRect = *prcl;
+         }
+         else
+         {
+            LONG cw = ppdev->CursorWidth > 0 ? ppdev->CursorWidth : 32;
+            LONG ch = ppdev->CursorHeight > 0 ? ppdev->CursorHeight : 32;
+            newRect.left = x - cw;
+            newRect.top = y - ch;
+            newRect.right = x + cw;
+            newRect.bottom = y + ch;
+         }
+
+         haveNew = (newRect.left < newRect.right) && (newRect.top < newRect.bottom);
+
+         if (haveOld && haveNew)
+         {
+            sameRect = (oldRect.left == newRect.left) &&
+                       (oldRect.top == newRect.top) &&
+                       (oldRect.right == newRect.right) &&
+                       (oldRect.bottom == newRect.bottom);
+         }
+
+         if (haveOld || haveNew)
+         {
+            RECTL flushRect;
+
+            if (haveOld && haveNew && !sameRect)
+            {
+               flushRect.left = min(oldRect.left, newRect.left);
+               flushRect.top = min(oldRect.top, newRect.top);
+               flushRect.right = max(oldRect.right, newRect.right);
+               flushRect.bottom = max(oldRect.bottom, newRect.bottom);
+               FbShadowFlushRect(ppdev, &flushRect);
+            }
+            else if (haveOld)
+            {
+               FbShadowFlushRect(ppdev, &oldRect);
+            }
+            else
+            {
+               FbShadowFlushRect(ppdev, &newRect);
+            }
+         }
+
+         if (haveNew)
+            ppdev->OldCursorRect = newRect;
+         else
+         {
+            ppdev->OldCursorRect.left = 0;
+            ppdev->OldCursorRect.top = 0;
+            ppdev->OldCursorRect.right = 0;
+            ppdev->OldCursorRect.bottom = 0;
+         }
+      }
+   }
 }
 
 #else

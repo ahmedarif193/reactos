@@ -89,6 +89,113 @@ FbClipRectToScreen(_In_ PPDEV ppdev,
     return (Rect->left < Rect->right) && (Rect->top < Rect->bottom);
 }
 
+/*
+ * FbShadowFlushRect
+ *
+ * Copy a dirty rectangle from the shadow buffer to VRAM.
+ * Clips to screen bounds to avoid overflows.
+ */
+VOID
+FbShadowFlushRect(
+   _In_ PPDEV ppdev,
+   _In_ const RECTL *prcl)
+{
+   RECTL rcl;
+   LONG y;
+   PUCHAR shadowRow;
+   PUCHAR vramRow;
+   SIZE_T rowBytes;
+
+   if (!ppdev->UsingShadow || !ppdev->ShadowBuffer || !ppdev->VramPtr || !prcl)
+      return;
+
+   rcl = *prcl;
+
+   /* Normalize reversed rectangles (directional BitBlt can pass left>right or top>bottom) */
+   if (rcl.left > rcl.right)
+   {
+      LONG t = rcl.left;
+      rcl.left = rcl.right;
+      rcl.right = t;
+   }
+   if (rcl.top > rcl.bottom)
+   {
+      LONG t = rcl.top;
+      rcl.top = rcl.bottom;
+      rcl.bottom = t;
+   }
+
+   /* Clip to screen bounds */
+   if (rcl.left < 0)
+      rcl.left = 0;
+   if (rcl.top < 0)
+      rcl.top = 0;
+   if (rcl.right > (LONG)ppdev->ScreenWidth)
+      rcl.right = (LONG)ppdev->ScreenWidth;
+   if (rcl.bottom > (LONG)ppdev->ScreenHeight)
+      rcl.bottom = (LONG)ppdev->ScreenHeight;
+
+   if (rcl.left >= rcl.right || rcl.top >= rcl.bottom)
+      return;
+
+   rowBytes = (SIZE_T)(rcl.right - rcl.left) * ((ppdev->BitsPerPixel + 7) / 8);
+
+   shadowRow = (PUCHAR)ppdev->ShadowBuffer +
+               (SIZE_T)rcl.top * ppdev->ScreenDelta +
+               (SIZE_T)rcl.left * ((ppdev->BitsPerPixel + 7) / 8);
+   vramRow = (PUCHAR)ppdev->VramPtr +
+             (SIZE_T)rcl.top * ppdev->ScreenDelta +
+             (SIZE_T)rcl.left * ((ppdev->BitsPerPixel + 7) / 8);
+
+   for (y = rcl.top; y < rcl.bottom; y++)
+   {
+      RtlCopyMemory(vramRow, shadowRow, rowBytes);
+      shadowRow += ppdev->ScreenDelta;
+      vramRow += ppdev->ScreenDelta;
+   }
+}
+
+/*
+ * FbPuntSurface
+ *
+ * If the given SURFOBJ is our device surface (STYPE_DEVICE), return the
+ * shadow bitmap SURFOBJ instead.  Eng* functions need a STYPE_BITMAP
+ * surface with pvScan0 to operate on; the device surface has no backing.
+ */
+FORCEINLINE SURFOBJ *
+FbPuntSurface(_In_ PPDEV ppdev, _In_opt_ SURFOBJ *pso)
+{
+    if (pso && pso->dhpdev == (DHPDEV)ppdev && pso->iType == STYPE_DEVICE)
+        return ppdev->psoShadow;
+    return pso;
+}
+
+/*
+ * FbShadowPpdevFromSurfaces
+ *
+ * Extract ppdev from whichever surface is our STYPE_DEVICE surface in shadow
+ * mode.  Returns NULL if neither surface belongs to our device in shadow mode.
+ * This is needed because the engine may dispatch to us for either surface
+ * (e.g. EngCopyBits dispatches when EITHER surface has HOOK_COPYBITS).
+ */
+FORCEINLINE PPDEV
+FbShadowPpdevFromSurfaces(_In_opt_ SURFOBJ *pso1, _In_opt_ SURFOBJ *pso2)
+{
+    if (pso1 && pso1->iType == STYPE_DEVICE && pso1->dhpdev)
+    {
+        PPDEV ppdev = (PPDEV)pso1->dhpdev;
+        if (ppdev->UsingShadow && ppdev->psoShadow)
+            return ppdev;
+    }
+    if (pso2 && pso2->iType == STYPE_DEVICE && pso2->dhpdev)
+    {
+        PPDEV ppdev = (PPDEV)pso2->dhpdev;
+        if (ppdev->UsingShadow && ppdev->psoShadow)
+            return ppdev;
+    }
+    return NULL;
+}
+
 typedef struct _FB_RECT_PARAMS
 {
     LONG DstLeft;
@@ -936,7 +1043,33 @@ DrvCopyBits(SURFOBJ *psoDst,
             RECTL *prclDst,
             POINTL *pptlSrc)
 {
-    PPDEV ppdev = (PPDEV)psoDst->dhpdev;
+    PPDEV ppdev;
+
+    /*
+     * Shadow buffer path: substitute any device surface with shadow bitmap,
+     * punt via EngBitBlt(SRCCOPY), and flush if dest was ours.
+     *
+     * EngCopyBits dispatches here when EITHER surface has HOOK_COPYBITS
+     * (including when only the source is our device surface).  We must
+     * substitute before calling back to avoid infinite recursion.
+     * We use EngBitBlt (not EngCopyBits) for the same reason.
+     */
+    ppdev = FbShadowPpdevFromSurfaces(psoDst, psoSrc);
+    if (ppdev)
+    {
+        BOOLEAN dstIsOurs = (psoDst->iType == STYPE_DEVICE &&
+                             psoDst->dhpdev == (DHPDEV)ppdev);
+        BOOL result = EngBitBlt(FbPuntSurface(ppdev, psoDst),
+                                FbPuntSurface(ppdev, psoSrc),
+                                NULL, pco, pxlo,
+                                prclDst, pptlSrc, NULL, NULL, NULL,
+                                ROP3_TO_ROP4(SRCCOPY));
+        if (result && dstIsOurs && prclDst)
+            FbShadowFlushRect(ppdev, prclDst);
+        return result;
+    }
+
+    ppdev = (PPDEV)psoDst->dhpdev;
 
     if (ppdev &&
         psoDst->iType == STYPE_DEVICE &&
@@ -1009,7 +1142,24 @@ DrvBitBlt(SURFOBJ *psoDst,
           POINTL *pptlBrush,
           ROP4 rop4)
 {
-    PPDEV ppdev = (PPDEV)psoDst->dhpdev;
+    PPDEV ppdev;
+
+    /* Shadow buffer path: substitute any device surface, punt to EngBitBlt */
+    ppdev = FbShadowPpdevFromSurfaces(psoDst, psoSrc);
+    if (ppdev)
+    {
+        BOOLEAN dstIsOurs = (psoDst->iType == STYPE_DEVICE &&
+                             psoDst->dhpdev == (DHPDEV)ppdev);
+        BOOL result = EngBitBlt(FbPuntSurface(ppdev, psoDst),
+                                FbPuntSurface(ppdev, psoSrc),
+                                psoMask, pco, pxlo,
+                                prclDst, pptlSrc, pptlMask, pbo, pptlBrush, rop4);
+        if (result && dstIsOurs && prclDst)
+            FbShadowFlushRect(ppdev, prclDst);
+        return result;
+    }
+
+    ppdev = (PPDEV)psoDst->dhpdev;
 
     if (ppdev && (!pco || pco->iDComplexity == DC_TRIVIAL))
     {
@@ -1209,4 +1359,394 @@ DrvRealizeBrush(BRUSHOBJ *pbo,
     }
 
     return TRUE;
+}
+
+/* ---- Shadow buffer DDI hooks ---- */
+
+BOOL APIENTRY
+DrvTextOut(
+   SURFOBJ *pso,
+   STROBJ *pstro,
+   FONTOBJ *pfo,
+   CLIPOBJ *pco,
+   RECTL *prclExtra,
+   RECTL *prclOpaque,
+   BRUSHOBJ *pboFore,
+   BRUSHOBJ *pboOpaque,
+   POINTL *pptlOrg,
+   MIX mix)
+{
+    PPDEV ppdev = (PPDEV)pso->dhpdev;
+    BOOL result;
+
+    if (ppdev && ppdev->UsingShadow && pso->iType == STYPE_DEVICE)
+    {
+        result = EngTextOut(ppdev->psoShadow, pstro, pfo, pco, prclExtra,
+                            prclOpaque, pboFore, pboOpaque, pptlOrg, mix);
+        if (result)
+        {
+            if (pstro)
+                FbShadowFlushRect(ppdev, &pstro->rclBkGround);
+            if (prclOpaque)
+                FbShadowFlushRect(ppdev, prclOpaque);
+        }
+        return result;
+    }
+    return EngTextOut(pso, pstro, pfo, pco, prclExtra, prclOpaque,
+                      pboFore, pboOpaque, pptlOrg, mix);
+}
+
+BOOL APIENTRY
+DrvLineTo(
+   SURFOBJ *pso,
+   CLIPOBJ *pco,
+   BRUSHOBJ *pbo,
+   LONG x1,
+   LONG y1,
+   LONG x2,
+   LONG y2,
+   RECTL *prclBounds,
+   MIX mix)
+{
+    PPDEV ppdev = (PPDEV)pso->dhpdev;
+    BOOL result;
+
+    if (ppdev && ppdev->UsingShadow && pso->iType == STYPE_DEVICE)
+    {
+        result = EngLineTo(ppdev->psoShadow, pco, pbo, x1, y1, x2, y2,
+                           prclBounds, mix);
+        if (result && prclBounds)
+            FbShadowFlushRect(ppdev, prclBounds);
+        return result;
+    }
+    return EngLineTo(pso, pco, pbo, x1, y1, x2, y2, prclBounds, mix);
+}
+
+BOOL APIENTRY
+DrvStrokePath(
+   SURFOBJ *pso,
+   PATHOBJ *ppo,
+   CLIPOBJ *pco,
+   XFORMOBJ *pxo,
+   BRUSHOBJ *pbo,
+   POINTL *pptlBrushOrg,
+   LINEATTRS *plineattrs,
+   MIX mix)
+{
+    PPDEV ppdev = (PPDEV)pso->dhpdev;
+    BOOL result;
+
+    if (ppdev && ppdev->UsingShadow && pso->iType == STYPE_DEVICE)
+    {
+        result = EngStrokePath(ppdev->psoShadow, ppo, pco, pxo, pbo,
+                               pptlBrushOrg, plineattrs, mix);
+        if (result)
+        {
+            if (pco)
+                FbShadowFlushRect(ppdev, &pco->rclBounds);
+            else
+            {
+                RECTL rclFull = { 0, 0, ppdev->ScreenWidth, ppdev->ScreenHeight };
+                FbShadowFlushRect(ppdev, &rclFull);
+            }
+        }
+        return result;
+    }
+    return EngStrokePath(pso, ppo, pco, pxo, pbo, pptlBrushOrg, plineattrs, mix);
+}
+
+BOOL APIENTRY
+DrvFillPath(
+   SURFOBJ *pso,
+   PATHOBJ *ppo,
+   CLIPOBJ *pco,
+   BRUSHOBJ *pbo,
+   POINTL *pptlBrushOrg,
+   MIX mix,
+   FLONG flOptions)
+{
+    PPDEV ppdev = (PPDEV)pso->dhpdev;
+    BOOL result;
+
+    if (ppdev && ppdev->UsingShadow && pso->iType == STYPE_DEVICE)
+    {
+        result = EngFillPath(ppdev->psoShadow, ppo, pco, pbo, pptlBrushOrg,
+                             mix, flOptions);
+        if (result)
+        {
+            if (pco)
+                FbShadowFlushRect(ppdev, &pco->rclBounds);
+            else
+            {
+                RECTL rclFull = { 0, 0, ppdev->ScreenWidth, ppdev->ScreenHeight };
+                FbShadowFlushRect(ppdev, &rclFull);
+            }
+        }
+        return result;
+    }
+    return EngFillPath(pso, ppo, pco, pbo, pptlBrushOrg, mix, flOptions);
+}
+
+BOOL APIENTRY
+DrvStrokeAndFillPath(
+   SURFOBJ *pso,
+   PATHOBJ *ppo,
+   CLIPOBJ *pco,
+   XFORMOBJ *pxo,
+   BRUSHOBJ *pboStroke,
+   LINEATTRS *plineattrs,
+   BRUSHOBJ *pboFill,
+   POINTL *pptlBrushOrg,
+   MIX mixFill,
+   FLONG flOptions)
+{
+    PPDEV ppdev = (PPDEV)pso->dhpdev;
+    BOOL result;
+
+    if (ppdev && ppdev->UsingShadow && pso->iType == STYPE_DEVICE)
+    {
+        result = EngStrokeAndFillPath(ppdev->psoShadow, ppo, pco, pxo,
+                                      pboStroke, plineattrs, pboFill,
+                                      pptlBrushOrg, mixFill, flOptions);
+        if (result)
+        {
+            if (pco)
+                FbShadowFlushRect(ppdev, &pco->rclBounds);
+            else
+            {
+                RECTL rclFull = { 0, 0, ppdev->ScreenWidth, ppdev->ScreenHeight };
+                FbShadowFlushRect(ppdev, &rclFull);
+            }
+        }
+        return result;
+    }
+    return EngStrokeAndFillPath(pso, ppo, pco, pxo, pboStroke, plineattrs,
+                                pboFill, pptlBrushOrg, mixFill, flOptions);
+}
+
+BOOL APIENTRY
+DrvPaint(
+   SURFOBJ *pso,
+   CLIPOBJ *pco,
+   BRUSHOBJ *pbo,
+   POINTL *pptlBrushOrg,
+   MIX mix)
+{
+    PPDEV ppdev = (PPDEV)pso->dhpdev;
+    BOOL result;
+
+    if (ppdev && ppdev->UsingShadow && pso->iType == STYPE_DEVICE)
+    {
+        result = EngPaint(ppdev->psoShadow, pco, pbo, pptlBrushOrg, mix);
+        if (result)
+        {
+            if (pco)
+                FbShadowFlushRect(ppdev, &pco->rclBounds);
+            else
+            {
+                RECTL rclFull = { 0, 0, ppdev->ScreenWidth, ppdev->ScreenHeight };
+                FbShadowFlushRect(ppdev, &rclFull);
+            }
+        }
+        return result;
+    }
+    return EngPaint(pso, pco, pbo, pptlBrushOrg, mix);
+}
+
+BOOL APIENTRY
+DrvStretchBlt(
+   SURFOBJ *psoDest,
+   SURFOBJ *psoSrc,
+   SURFOBJ *psoMask,
+   CLIPOBJ *pco,
+   XLATEOBJ *pxlo,
+   COLORADJUSTMENT *pca,
+   POINTL *pptlHTOrg,
+   RECTL *prclDest,
+   RECTL *prclSrc,
+   POINTL *pptlMask,
+   ULONG iMode)
+{
+    PPDEV ppdev = FbShadowPpdevFromSurfaces(psoDest, psoSrc);
+    BOOL result;
+
+    if (ppdev)
+    {
+        BOOLEAN dstIsOurs = (psoDest->iType == STYPE_DEVICE &&
+                             psoDest->dhpdev == (DHPDEV)ppdev);
+        result = EngStretchBlt(FbPuntSurface(ppdev, psoDest),
+                               FbPuntSurface(ppdev, psoSrc),
+                               psoMask, pco, pxlo, pca,
+                               pptlHTOrg, prclDest, prclSrc, pptlMask, iMode);
+        if (result && dstIsOurs && prclDest)
+            FbShadowFlushRect(ppdev, prclDest);
+        return result;
+    }
+    return EngStretchBlt(psoDest, psoSrc, psoMask, pco, pxlo, pca,
+                         pptlHTOrg, prclDest, prclSrc, pptlMask, iMode);
+}
+
+BOOL APIENTRY
+DrvStretchBltROP(
+   SURFOBJ *psoDest,
+   SURFOBJ *psoSrc,
+   SURFOBJ *psoMask,
+   CLIPOBJ *pco,
+   XLATEOBJ *pxlo,
+   COLORADJUSTMENT *pca,
+   POINTL *pptlHTOrg,
+   RECTL *prclDest,
+   RECTL *prclSrc,
+   POINTL *pptlMask,
+   ULONG iMode,
+   BRUSHOBJ *pbo,
+   ROP4 rop4)
+{
+    PPDEV ppdev = FbShadowPpdevFromSurfaces(psoDest, psoSrc);
+    BOOL result;
+
+    if (ppdev)
+    {
+        BOOLEAN dstIsOurs = (psoDest->iType == STYPE_DEVICE &&
+                             psoDest->dhpdev == (DHPDEV)ppdev);
+        result = EngStretchBltROP(FbPuntSurface(ppdev, psoDest),
+                                  FbPuntSurface(ppdev, psoSrc),
+                                  psoMask, pco, pxlo, pca,
+                                  pptlHTOrg, prclDest, prclSrc, pptlMask,
+                                  iMode, pbo, rop4);
+        if (result && dstIsOurs && prclDest)
+            FbShadowFlushRect(ppdev, prclDest);
+        return result;
+    }
+    return EngStretchBltROP(psoDest, psoSrc, psoMask, pco, pxlo, pca,
+                            pptlHTOrg, prclDest, prclSrc, pptlMask,
+                            iMode, pbo, rop4);
+}
+
+BOOL APIENTRY
+DrvAlphaBlend(
+   SURFOBJ *psoDest,
+   SURFOBJ *psoSrc,
+   CLIPOBJ *pco,
+   XLATEOBJ *pxlo,
+   RECTL *prclDest,
+   RECTL *prclSrc,
+   BLENDOBJ *pBlendObj)
+{
+    PPDEV ppdev = FbShadowPpdevFromSurfaces(psoDest, psoSrc);
+    BOOL result;
+
+    if (ppdev)
+    {
+        BOOLEAN dstIsOurs = (psoDest->iType == STYPE_DEVICE &&
+                             psoDest->dhpdev == (DHPDEV)ppdev);
+        result = EngAlphaBlend(FbPuntSurface(ppdev, psoDest),
+                               FbPuntSurface(ppdev, psoSrc),
+                               pco, pxlo, prclDest, prclSrc, pBlendObj);
+        if (result && dstIsOurs && prclDest)
+            FbShadowFlushRect(ppdev, prclDest);
+        return result;
+    }
+    return EngAlphaBlend(psoDest, psoSrc, pco, pxlo,
+                         prclDest, prclSrc, pBlendObj);
+}
+
+BOOL APIENTRY
+DrvTransparentBlt(
+   SURFOBJ *psoDst,
+   SURFOBJ *psoSrc,
+   CLIPOBJ *pco,
+   XLATEOBJ *pxlo,
+   RECTL *prclDst,
+   RECTL *prclSrc,
+   ULONG iTransColor,
+   ULONG ulReserved)
+{
+    PPDEV ppdev = FbShadowPpdevFromSurfaces(psoDst, psoSrc);
+    BOOL result;
+
+    if (ppdev)
+    {
+        BOOLEAN dstIsOurs = (psoDst->iType == STYPE_DEVICE &&
+                             psoDst->dhpdev == (DHPDEV)ppdev);
+        result = EngTransparentBlt(FbPuntSurface(ppdev, psoDst),
+                                   FbPuntSurface(ppdev, psoSrc),
+                                   pco, pxlo, prclDst, prclSrc,
+                                   iTransColor, ulReserved);
+        if (result && dstIsOurs && prclDst)
+            FbShadowFlushRect(ppdev, prclDst);
+        return result;
+    }
+    return EngTransparentBlt(psoDst, psoSrc, pco, pxlo,
+                             prclDst, prclSrc, iTransColor, ulReserved);
+}
+
+BOOL APIENTRY
+DrvGradientFill(
+   SURFOBJ *pso,
+   CLIPOBJ *pco,
+   XLATEOBJ *pxlo,
+   TRIVERTEX *pVertex,
+   ULONG nVertex,
+   PVOID pMesh,
+   ULONG nMesh,
+   RECTL *prclExtents,
+   POINTL *pptlDitherOrg,
+   ULONG ulMode)
+{
+    PPDEV ppdev = (PPDEV)pso->dhpdev;
+    BOOL result;
+
+    if (ppdev && ppdev->UsingShadow && pso->iType == STYPE_DEVICE)
+    {
+        result = EngGradientFill(ppdev->psoShadow, pco, pxlo, pVertex,
+                                 nVertex, pMesh, nMesh, prclExtents,
+                                 pptlDitherOrg, ulMode);
+        if (result && prclExtents)
+            FbShadowFlushRect(ppdev, prclExtents);
+        return result;
+    }
+    return EngGradientFill(pso, pco, pxlo, pVertex, nVertex,
+                           pMesh, nMesh, prclExtents, pptlDitherOrg, ulMode);
+}
+
+BOOL APIENTRY
+DrvPlgBlt(
+   SURFOBJ *psoTrg,
+   SURFOBJ *psoSrc,
+   SURFOBJ *psoMsk,
+   CLIPOBJ *pco,
+   XLATEOBJ *pxlo,
+   COLORADJUSTMENT *pca,
+   POINTL *pptlBrushOrg,
+   POINTFIX *pptfx,
+   RECTL *prclSrc,
+   POINTL *pptlMask,
+   ULONG iMode)
+{
+    PPDEV ppdev = FbShadowPpdevFromSurfaces(psoTrg, psoSrc);
+    BOOL result;
+
+    if (ppdev)
+    {
+        BOOLEAN dstIsOurs = (psoTrg->iType == STYPE_DEVICE &&
+                             psoTrg->dhpdev == (DHPDEV)ppdev);
+        result = EngPlgBlt(FbPuntSurface(ppdev, psoTrg),
+                           FbPuntSurface(ppdev, psoSrc),
+                           psoMsk, pco, pxlo, pca,
+                           pptlBrushOrg, pptfx, prclSrc, pptlMask, iMode);
+        if (result && dstIsOurs)
+        {
+            if (pco)
+                FbShadowFlushRect(ppdev, &pco->rclBounds);
+            else
+            {
+                RECTL rclFull = { 0, 0, ppdev->ScreenWidth, ppdev->ScreenHeight };
+                FbShadowFlushRect(ppdev, &rclFull);
+            }
+        }
+        return result;
+    }
+    return EngPlgBlt(psoTrg, psoSrc, psoMsk, pco, pxlo, pca,
+                     pptlBrushOrg, pptfx, prclSrc, pptlMask, iMode);
 }

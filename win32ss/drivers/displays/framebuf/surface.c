@@ -368,6 +368,46 @@ MapFramebuffer:
        ppdev->FramebufferBytes = fbLength;
    }
 
+   /*
+    * Allocate shadow buffer for real VRAM surfaces.
+    * GDI draws on the shadow (fast cached RAM) and we flush dirty rects
+    * to VRAM (efficient burst writes to WC memory).
+    */
+   ppdev->UsingShadow = FALSE;
+   ppdev->ShadowBuffer = NULL;
+   ppdev->ShadowSection = NULL;
+   ppdev->VramPtr = NULL;
+
+   if (!ppdev->UsingFallbackSurface && ppdev->ScreenPtr)
+   {
+      SIZE_T shadowSize = (SIZE_T)ppdev->ScreenDelta * (SIZE_T)ppdev->ScreenHeight;
+      PVOID shadowMapping;
+
+      shadowMapping = EngAllocSectionMem(&ppdev->ShadowSection,
+                                          FL_ZERO_MEMORY,
+                                          shadowSize,
+                                          ALLOC_TAG);
+      if (shadowMapping)
+      {
+         ppdev->VramPtr = ppdev->ScreenPtr;
+         ppdev->ShadowBuffer = shadowMapping;
+         ppdev->UsingShadow = TRUE;
+
+         /* Preserve boot screen content */
+         RtlCopyMemory(shadowMapping, ppdev->VramPtr, shadowSize);
+
+         /* GDI will draw on the shadow */
+         ppdev->ScreenPtr = shadowMapping;
+
+         FB_DBG("Shadow buffer allocated @ %p (%lu bytes), VRAM @ %p\n",
+                shadowMapping, (unsigned long)shadowSize, ppdev->VramPtr);
+      }
+      else
+      {
+         FB_DBG("Shadow buffer allocation failed, using direct VRAM\n");
+      }
+   }
+
    switch (ppdev->BitsPerPixel)
    {
       case 8:
@@ -396,35 +436,104 @@ MapFramebuffer:
    ScreenSize.cx = ppdev->ScreenWidth;
    ScreenSize.cy = ppdev->ScreenHeight;
 
-   hSurface = (HSURF)EngCreateDeviceSurface((DHSURF)ppdev, ScreenSize, BitmapType);
+   ppdev->hShadowBitmap = NULL;
+   ppdev->psoShadow = NULL;
+
+   if (ppdev->UsingShadow)
+   {
+      /*
+       * Shadow mode: the primary surface must be STYPE_DEVICE so that the
+       * GDI engine dispatches all drawing operations through our Drv* hooks.
+       * A separate shadow bitmap (STYPE_BITMAP) provides the backing store
+       * that Eng* functions actually draw on when the driver punts.
+       *
+       * ReactOS's EngCopyBits and IntEngPaint skip hook dispatch for
+       * STYPE_BITMAP surfaces, so using EngCreateBitmap for the primary
+       * surface would cause most UI painting to bypass our flush logic.
+       */
+      FLONG hooks = HOOK_BITBLT | HOOK_COPYBITS | HOOK_TEXTOUT |
+                    HOOK_STROKEPATH | HOOK_FILLPATH | HOOK_STROKEANDFILLPATH |
+                    HOOK_LINETO | HOOK_STRETCHBLT | HOOK_STRETCHBLTROP |
+                    HOOK_ALPHABLEND | HOOK_TRANSPARENTBLT | HOOK_GRADIENTFILL |
+                    HOOK_PAINT | HOOK_PLGBLT;
+
+      /* Create shadow bitmap for Eng* to draw on */
+      ppdev->hShadowBitmap = (HSURF)EngCreateBitmap(ScreenSize,
+                                                     ppdev->ScreenDelta,
+                                                     BitmapType,
+                                                     (ppdev->ScreenDelta > 0) ? BMF_TOPDOWN : 0,
+                                                     ppdev->ScreenPtr);
+      if (ppdev->hShadowBitmap == NULL)
+      {
+         FB_DBG("EngCreateBitmap for shadow bitmap failed\n");
+         goto ShadowFailed;
+      }
+
+      ppdev->psoShadow = EngLockSurface(ppdev->hShadowBitmap);
+      if (ppdev->psoShadow == NULL)
+      {
+         FB_DBG("EngLockSurface for shadow bitmap failed\n");
+         EngDeleteSurface(ppdev->hShadowBitmap);
+         ppdev->hShadowBitmap = NULL;
+         goto ShadowFailed;
+      }
+
+      /* Create device surface (STYPE_DEVICE) so hooks dispatch */
+      hSurface = (HSURF)EngCreateDeviceSurface((DHSURF)ppdev, ScreenSize, BitmapType);
+      if (hSurface == NULL)
+      {
+         FB_DBG("EngCreateDeviceSurface failed\n");
+         EngUnlockSurface(ppdev->psoShadow);
+         ppdev->psoShadow = NULL;
+         EngDeleteSurface(ppdev->hShadowBitmap);
+         ppdev->hShadowBitmap = NULL;
+         goto ShadowFailed;
+      }
+
+      if (!EngAssociateSurface(hSurface, ppdev->hDevEng, hooks))
+      {
+         FB_DBG("EngAssociateSurface failed for device surface\n");
+         EngDeleteSurface(hSurface);
+         EngUnlockSurface(ppdev->psoShadow);
+         ppdev->psoShadow = NULL;
+         EngDeleteSurface(ppdev->hShadowBitmap);
+         ppdev->hShadowBitmap = NULL;
+         goto ShadowFailed;
+      }
+
+      ppdev->hSurfEng = hSurface;
+      return hSurface;
+
+ShadowFailed:
+      /* Shadow setup failed — tear down and fall back to direct VRAM */
+      FB_DBG("Shadow setup failed, falling back to direct VRAM\n");
+      EngFreeSectionMem(ppdev->ShadowSection, ppdev->ShadowBuffer);
+      ppdev->ScreenPtr = ppdev->VramPtr;
+      ppdev->ShadowBuffer = NULL;
+      ppdev->ShadowSection = NULL;
+      ppdev->VramPtr = NULL;
+      ppdev->UsingShadow = FALSE;
+   }
+
+   /* Non-shadow path: standard bitmap surface */
+   hSurface = (HSURF)EngCreateBitmap(ScreenSize, ppdev->ScreenDelta, BitmapType,
+                                     (ppdev->ScreenDelta > 0) ? BMF_TOPDOWN : 0,
+                                     ppdev->ScreenPtr);
    if (hSurface == NULL)
    {
-      FB_DBG("EngCreateDeviceSurface failed (size %ux%u, bmf %u)\n",
+      FB_DBG("EngCreateBitmap failed (size %ux%u, delta %u, bmf %u, base %p)\n",
              (unsigned int)ScreenSize.cx,
              (unsigned int)ScreenSize.cy,
-             (unsigned int)BitmapType);
+             (unsigned int)ppdev->ScreenDelta,
+             (unsigned int)BitmapType,
+             ppdev->ScreenPtr);
       return NULL;
    }
 
-   /*
-    * Attach framebuffer memory and hook drawing calls so DrvCopyBits /
-    * DrvBitBlt are invoked by GDI.  When pvScan0 is provided, GDI can
-    * still fall back to its software routines for operations the driver
-    * does not handle.
-    */
-
-   if (!EngModifySurface(hSurface,
-                          ppdev->hDevEng,
-                          HOOK_COPYBITS | HOOK_BITBLT,
-                          ppdev->UsingFallbackSurface ? 0 : MS_NOTSYSTEMMEMORY,
-                          (DHSURF)ppdev,
-                          ppdev->ScreenPtr,
-                          ppdev->ScreenDelta,
-                          NULL))
+   if (!EngAssociateSurface(hSurface, ppdev->hDevEng, 0))
    {
       EngDeleteSurface(hSurface);
-      FB_DBG("EngModifySurface failed (hdev %p, hsurf %p, base %p)\n",
-             ppdev->hDevEng, hSurface, ppdev->ScreenPtr);
+      FB_DBG("EngAssociateSurface failed\n");
       return NULL;
    }
 
@@ -458,6 +567,27 @@ DrvDisableSurface(
    /* Clear all mouse pointer surfaces. */
    DrvSetPointerShape(NULL, NULL, NULL, NULL, 0, 0, 0, 0, NULL, 0);
 #endif
+
+   /* Free shadow surfaces and buffer before unmapping VRAM */
+   if (ppdev->UsingShadow)
+   {
+      if (ppdev->psoShadow)
+      {
+         EngUnlockSurface(ppdev->psoShadow);
+         ppdev->psoShadow = NULL;
+      }
+      if (ppdev->hShadowBitmap)
+      {
+         EngDeleteSurface(ppdev->hShadowBitmap);
+         ppdev->hShadowBitmap = NULL;
+      }
+      EngFreeSectionMem(ppdev->ShadowSection, ppdev->ShadowBuffer);
+      ppdev->ScreenPtr = ppdev->VramPtr;
+      ppdev->ShadowBuffer = NULL;
+      ppdev->ShadowSection = NULL;
+      ppdev->VramPtr = NULL;
+      ppdev->UsingShadow = FALSE;
+   }
 
    if (ppdev->UsingFallbackSurface)
    {
@@ -514,6 +644,17 @@ DrvAssertMode(
       if (ppdev->BitsPerPixel == 8)
       {
 	     IntSetPalette(dhpdev, ppdev->PaletteEntries, 0, 256);
+      }
+
+      /* After mode set, flush entire shadow to VRAM */
+      if (ppdev->UsingShadow)
+      {
+         RECTL rclScreen;
+         rclScreen.left = 0;
+         rclScreen.top = 0;
+         rclScreen.right = ppdev->ScreenWidth;
+         rclScreen.bottom = ppdev->ScreenHeight;
+         FbShadowFlushRect(ppdev, &rclScreen);
       }
 
       return TRUE;

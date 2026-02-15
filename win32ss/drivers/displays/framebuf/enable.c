@@ -37,7 +37,18 @@ static DRVFN DrvFunctionTable[] =
    {INDEX_DrvRealizeBrush, (PFN)DrvRealizeBrush},
    {INDEX_DrvEnableDirectDraw, (PFN)DrvEnableDirectDraw},
    {INDEX_DrvDisableDirectDraw, (PFN)DrvDisableDirectDraw},
-
+   {INDEX_DrvTextOut, (PFN)DrvTextOut},
+   {INDEX_DrvLineTo, (PFN)DrvLineTo},
+   {INDEX_DrvStrokePath, (PFN)DrvStrokePath},
+   {INDEX_DrvFillPath, (PFN)DrvFillPath},
+   {INDEX_DrvStrokeAndFillPath, (PFN)DrvStrokeAndFillPath},
+   {INDEX_DrvPaint, (PFN)DrvPaint},
+   {INDEX_DrvStretchBlt, (PFN)DrvStretchBlt},
+   {INDEX_DrvStretchBltROP, (PFN)DrvStretchBltROP},
+   {INDEX_DrvAlphaBlend, (PFN)DrvAlphaBlend},
+   {INDEX_DrvTransparentBlt, (PFN)DrvTransparentBlt},
+   {INDEX_DrvGradientFill, (PFN)DrvGradientFill},
+   {INDEX_DrvPlgBlt, (PFN)DrvPlgBlt},
 };
 
 /*
