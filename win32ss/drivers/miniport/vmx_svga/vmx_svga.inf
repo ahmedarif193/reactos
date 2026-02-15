@@ -39,7 +39,7 @@ AddService = vmx_svga, 0x00000002, VBox_Service
 
 [VBox_Service]
 ServiceType   = 1
-StartType     = 0  ; boot-start so the miniport is active before win32k initializes
+StartType     = 3  ; demand-start: PnP loads the driver when PCI\VEN_80EE&DEV_BEEF is enumerated
 ErrorControl  = 1
 ServiceBinary = %12%\vmx_svga.sys
 LoadOrderGroup = Video

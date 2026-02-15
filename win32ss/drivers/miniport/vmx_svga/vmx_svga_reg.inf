@@ -5,7 +5,7 @@ HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_80EE&DEV_B
 HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga","ErrorControl",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga","Group",0x00000000,"Video"
 HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga","ImagePath",0x00020000,"system32\drivers\vmx_svga.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga","Start",0x00010001,0x00000003
 HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga\Video","Service",0x00000000,"vmx_svga"
 
@@ -14,11 +14,3 @@ HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga\Device0","InstalledDisplayDrive
 HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga\Device0","VgaCompatible",0x00010001,0
 HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga\Device0","DefaultSettings.XResolution",0x00010001,1024
 HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga\Device0","DefaultSettings.YResolution",0x00010001,768
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_80EE&DEV_BEEF","Service",0x00000000,"vmx_svga"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_80EE&DEV_BEEF","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
-
-HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga","ErrorControl",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga","Group",0x00000000,"Video"
-HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga","ImagePath",0x00020000,"system32\drivers\vmx_svga.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga","Start",0x00010001,0x00000000
-HKLM,"SYSTEM\CurrentControlSet\Services\vmx_svga","Type",0x00010001,0x00000001

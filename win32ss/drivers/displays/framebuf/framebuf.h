@@ -26,7 +26,6 @@
 #include <wingdi.h>
 #include <winddi.h>
 #include <ntddvdeo.h>
-#include <vmware/vmx_ioctl.h>
 #include <uefifb/uefifb_ioctl.h>
 
 //#define EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
@@ -42,6 +41,8 @@ static __inline VOID FB_DBG(_In_z_ PCCH Format, ...)
 #else
 #define FB_DBG(...) do { } while (0)
 #endif
+
+typedef struct _FB_ACCEL_BACKEND FB_ACCEL_BACKEND, *PFB_ACCEL_BACKEND;
 
 typedef struct _PDEV
 {
@@ -60,8 +61,6 @@ typedef struct _PDEV
    PVOID ScreenPtr;
    HPALETTE DefaultPalette;
    PALETTEENTRY *PaletteEntries;
-   BOOLEAN VmwareFifo;
-   ULONG VmwareCaps;
    BOOLEAN UefiLinearOnly;
    BOOLEAN UefiLargeFramebuffer;
    BOOLEAN UefiCapsValid;
@@ -92,7 +91,21 @@ typedef struct _PDEV
    VIDEOMEMORY* pvmList;
    BOOL bDDInitialized;
    DDPIXELFORMAT ddpfDisplay;
+   const FB_ACCEL_BACKEND *AccelBackend;
+   PVOID BackendContext;
 } PDEV, *PPDEV;
+
+typedef struct _FB_ACCEL_BACKEND
+{
+   BOOL (*RectCopy)(
+      _In_ PPDEV ppdev,
+      _In_ const RECTL *DestRect,
+      _In_ const POINTL *SrcPoint);
+   BOOL (*RectFill)(
+      _In_ PPDEV ppdev,
+      _In_ const RECTL *Rect,
+      _In_ ULONG Color);
+} FB_ACCEL_BACKEND, *PFB_ACCEL_BACKEND;
 
 #define DEVICE_NAME	L"framebuf"
 #define ALLOC_TAG	'FUBF'
@@ -153,6 +166,26 @@ BOOLEAN
 FbMapFramebufferFallback(
    _Inout_ PPDEV ppdev,
    ULONGLONG Length);
+
+VOID
+FbSelectAccelerationBackend(
+   _Inout_ PPDEV ppdev);
+
+VOID
+FbCleanupAccelerationBackend(
+   _Inout_ PPDEV ppdev);
+
+BOOL
+FbBackendRectCopy(
+   _In_ PPDEV ppdev,
+   _In_ const RECTL *DestRect,
+   _In_ const POINTL *SrcPoint);
+
+BOOL
+FbBackendRectFill(
+   _In_ PPDEV ppdev,
+   _In_ const RECTL *Rect,
+   _In_ ULONG Color);
 
 BOOL APIENTRY
 DrvAssertMode(

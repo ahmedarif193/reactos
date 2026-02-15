@@ -1,6 +1,7 @@
 
 list(APPEND SOURCE
     enable.c
+    backend.c
     accel.c
     palette.c
     pointer.c

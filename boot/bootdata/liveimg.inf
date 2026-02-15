@@ -48,11 +48,11 @@ HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Enum","Count",0x00010001,0x000000
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Enum","NextInstance",0x00010001,0x00000001
 ; Match Windows-style XPDM device software settings location under Hardware Profiles
 HKLM,"SYSTEM\CurrentControlSet\Hardware Profiles\Current\System\CurrentControlSet\Services\uefifb\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
-HKLM,"SYSTEM\CurrentControlSet\Hardware Profiles\Current\System\CurrentControlSet\Services\uefifb\Device0","VgaCompatible",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Hardware Profiles\Current\System\CurrentControlSet\Services\uefifb\Device0","VgaCompatible",0x00010001,0x00000001
 ; Also seed the legacy device profile key expected by videoprt for settings copy
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0",,0x00000012
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
-HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","VgaCompatible",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","VgaCompatible",0x00010001,0x00000001
 ; Optional default resolution (used by GDI UI; uefifb uses current GOP until runtime switch is implemented)
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.XResolution",0x00010001,1024
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.YResolution",0x00010001,768

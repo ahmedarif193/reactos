@@ -1,5 +1,5 @@
 /*
- * ReactOS Generic Framebuffer VMware acceleration helpers
+ * ReactOS Generic Framebuffer CPU acceleration helpers
  *
  * Copyright (C) 2024 ReactOS Team
  *
@@ -28,12 +28,6 @@ typedef struct _FB_RECT_ENUM
     ULONG c;
     RECTL arcl[FB_RECT_ENUM_LIMIT];
 } FB_RECT_ENUM;
-
-FORCEINLINE BOOL
-FbIsTrivialClip(CLIPOBJ *Clip)
-{
-    return (!Clip) || (Clip->iDComplexity == DC_TRIVIAL);
-}
 
 FORCEINLINE LONG
 FbBytesPerPixel(_In_ PPDEV ppdev)
@@ -617,7 +611,7 @@ FbCpuIndexedBitmapToDeviceCopy(_In_ PPDEV ppdev,
                 {
                     LONG nibbleIndex = nibbleStart + col;
                     UCHAR byteValue = src[nibbleIndex >> 1];
-                    ULONG index = (nibbleIndex & 1) ? (byteValue >> 4) : (byteValue & 0x0F);
+                    ULONG index = (nibbleIndex & 1) ? (byteValue & 0x0F) : (byteValue >> 4);
                     ULONG color = XLATEOBJ_iXlate(xlate, index);
                     ULONG packed = FbPackColorForTarget(ppdev, color);
                     FbStoreColor(dstPixel, packed, bytesPerPixel);
@@ -934,70 +928,6 @@ FbProcessClippedRects(_In_ PPDEV ppdev,
 #define ROP3_TO_ROP4(Rop3) ((((Rop3) >> 8) & 0xff00) | (((Rop3) >> 16) & 0x00ff))
 #endif
 
-static BOOL
-FbVmwareRectCopy(_In_ PPDEV ppdev,
-                 _In_ const RECTL *DestRect,
-                 _In_ const POINTL *SrcPoint)
-{
-    VMWARE_VIDEO_BLIT cmd = {0};
-    DWORD returned = 0;
-
-    cmd.DestX = DestRect->left;
-    cmd.DestY = DestRect->top;
-    cmd.Width = DestRect->right - DestRect->left;
-    cmd.Height = DestRect->bottom - DestRect->top;
-
-    if (cmd.Width == 0 || cmd.Height == 0)
-        return TRUE;
-
-    cmd.SrcX = SrcPoint->x;
-    cmd.SrcY = SrcPoint->y;
-
-    if (!EngDeviceIoControl(ppdev->hDriver,
-                            IOCTL_VIDEO_VMWARE_FIFO_BLIT,
-                            &cmd,
-                            sizeof(cmd),
-                            NULL,
-                            0,
-                            &returned))
-    {
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
-static BOOL
-FbVmwareRectFill(_In_ PPDEV ppdev,
-                 _In_ const RECTL *Rect,
-                 _In_ ULONG Color)
-{
-    VMWARE_VIDEO_FILL cmd = {0};
-    DWORD returned = 0;
-
-    cmd.X = Rect->left;
-    cmd.Y = Rect->top;
-    cmd.Width = Rect->right - Rect->left;
-    cmd.Height = Rect->bottom - Rect->top;
-    cmd.Color = Color;
-
-    if (cmd.Width == 0 || cmd.Height == 0)
-        return TRUE;
-
-    if (!EngDeviceIoControl(ppdev->hDriver,
-                            IOCTL_VIDEO_VMWARE_FIFO_FILL,
-                            &cmd,
-                            sizeof(cmd),
-                            NULL,
-                            0,
-                            &returned))
-    {
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
 BOOL APIENTRY
 DrvCopyBits(SURFOBJ *psoDst,
             SURFOBJ *psoSrc,
@@ -1052,14 +982,14 @@ DrvCopyBits(SURFOBJ *psoDst,
         }
     }
 
-    if (ppdev && ppdev->VmwareFifo &&
+    if (ppdev &&
         psoDst->iType == STYPE_DEVICE &&
         psoSrc && psoSrc->iType == STYPE_DEVICE &&
         pptlSrc != NULL &&
         (!pco || pco->iDComplexity == DC_TRIVIAL) &&
         (!pxlo || (pxlo->flXlate & XO_TRIVIAL)))
     {
-        if (FbVmwareRectCopy(ppdev, prclDst, pptlSrc))
+        if (FbBackendRectCopy(ppdev, prclDst, pptlSrc))
             return TRUE;
     }
 
@@ -1081,7 +1011,7 @@ DrvBitBlt(SURFOBJ *psoDst,
 {
     PPDEV ppdev = (PPDEV)psoDst->dhpdev;
 
-    if (ppdev && ppdev->VmwareFifo && (!pco || pco->iDComplexity == DC_TRIVIAL))
+    if (ppdev && (!pco || pco->iDComplexity == DC_TRIVIAL))
     {
         BOOL trivialXlate = (!pxlo) || (pxlo->flXlate & XO_TRIVIAL);
 
@@ -1092,7 +1022,7 @@ DrvBitBlt(SURFOBJ *psoDst,
             pptlSrc != NULL &&
             trivialXlate)
         {
-            if (FbVmwareRectCopy(ppdev, prclDst, pptlSrc))
+            if (FbBackendRectCopy(ppdev, prclDst, pptlSrc))
                 return TRUE;
         }
         else if (rop4 == ROP3_TO_ROP4(PATCOPY) &&
@@ -1104,7 +1034,7 @@ DrvBitBlt(SURFOBJ *psoDst,
                  ppdev->BitsPerPixel >= 15 &&
                  trivialXlate)
         {
-            if (FbVmwareRectFill(ppdev, prclDst, pbo->iSolidColor))
+            if (FbBackendRectFill(ppdev, prclDst, pbo->iSolidColor))
                 return TRUE;
         }
     }

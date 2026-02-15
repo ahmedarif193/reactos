@@ -2059,7 +2059,15 @@ VmxFindAdapter(IN PVOID HwDeviceExtension,
         ConfigInfo->BusInterruptLevel  = DeviceExtension->PciInterruptLine;
         ConfigInfo->BusInterruptVector = DeviceExtension->PciInterruptLine;
         ConfigInfo->InterruptShareable = TRUE;
-        DPRINT1("VMX: exposing IRQ line %u\n", DeviceExtension->PciInterruptLine);
+        DPRINT1("VMX: exposing IRQ line %u (from PCI config)\n", DeviceExtension->PciInterruptLine);
+    }
+    else if (ConfigInfo->BusInterruptLevel != 0)
+    {
+        /* PCI config InterruptLine is 0/0xFF but the video port already
+         * assigned an interrupt via PnP/ACPI routing.  Trust it. */
+        ConfigInfo->InterruptShareable = TRUE;
+        DPRINT1("VMX: using PnP-assigned IRQ %lu (PCI config line was %u)\n",
+                ConfigInfo->BusInterruptLevel, DeviceExtension->PciInterruptLine);
     }
     else
     {

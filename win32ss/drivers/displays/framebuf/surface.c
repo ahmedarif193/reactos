@@ -349,31 +349,9 @@ MapFramebuffer:
           (unsigned int)ppdev->BitsPerPixel,
           ppdev->UsingFallbackSurface ? " (fallback)" : "");
 
-   ppdev->VmwareFifo = FALSE;
-   ppdev->VmwareCaps = 0;
    ppdev->UefiLinearOnly = FALSE;
    ppdev->UefiLargeFramebuffer = FALSE;
-
-   if (!ppdev->UsingFallbackSurface && ppdev->BitsPerPixel >= 15)
-   {
-       VMWARE_VIDEO_CAPS caps = {0};
-       DWORD returned = 0;
-
-       if (!EngDeviceIoControl(ppdev->hDriver,
-                               IOCTL_VIDEO_VMWARE_QUERY_CAPS,
-                               NULL,
-                               0,
-                               &caps,
-                               sizeof(caps),
-                               &returned) &&
-           returned >= sizeof(caps) &&
-           caps.Version == VMWARE_VIDEO_CAPS_VERSION &&
-           (caps.Caps & VMWARE_VIDEO_CAP_FIFO))
-       {
-           ppdev->VmwareFifo = TRUE;
-           ppdev->VmwareCaps = caps.Caps;
-       }
-   }
+   FbSelectAccelerationBackend(ppdev);
 
    (VOID)FbQueryUefiCaps(ppdev);
 
@@ -418,30 +396,35 @@ MapFramebuffer:
    ScreenSize.cx = ppdev->ScreenWidth;
    ScreenSize.cy = ppdev->ScreenHeight;
 
-   hSurface = (HSURF)EngCreateBitmap(ScreenSize, ppdev->ScreenDelta, BitmapType,
-                                     (ppdev->ScreenDelta > 0) ? BMF_TOPDOWN : 0,
-                                     ppdev->ScreenPtr);
+   hSurface = (HSURF)EngCreateDeviceSurface((DHSURF)ppdev, ScreenSize, BitmapType);
    if (hSurface == NULL)
    {
-      FB_DBG("EngCreateBitmap failed (size %ux%u, delta %u, bmf %u, topdown %u, base %p)\n",
+      FB_DBG("EngCreateDeviceSurface failed (size %ux%u, bmf %u)\n",
              (unsigned int)ScreenSize.cx,
              (unsigned int)ScreenSize.cy,
-             (unsigned int)ppdev->ScreenDelta,
-             (unsigned int)BitmapType,
-             (ppdev->ScreenDelta > 0) ? 1u : 0u,
-             ppdev->ScreenPtr);
+             (unsigned int)BitmapType);
       return NULL;
    }
 
    /*
-    * Associate the surface with our device.
+    * Attach framebuffer memory and hook drawing calls so DrvCopyBits /
+    * DrvBitBlt are invoked by GDI.  When pvScan0 is provided, GDI can
+    * still fall back to its software routines for operations the driver
+    * does not handle.
     */
 
-   if (!EngAssociateSurface(hSurface, ppdev->hDevEng, 0))
+   if (!EngModifySurface(hSurface,
+                          ppdev->hDevEng,
+                          HOOK_COPYBITS | HOOK_BITBLT,
+                          ppdev->UsingFallbackSurface ? 0 : MS_NOTSYSTEMMEMORY,
+                          (DHSURF)ppdev,
+                          ppdev->ScreenPtr,
+                          ppdev->ScreenDelta,
+                          NULL))
    {
       EngDeleteSurface(hSurface);
-      FB_DBG("EngAssociateSurface failed (hdev %p, hsurf %p)\n",
-             ppdev->hDevEng, hSurface);
+      FB_DBG("EngModifySurface failed (hdev %p, hsurf %p, base %p)\n",
+             ppdev->hDevEng, hSurface, ppdev->ScreenPtr);
       return NULL;
    }
 
@@ -516,13 +499,17 @@ DrvAssertMode(
              (unsigned int)ppdev->ScreenWidth,
              (unsigned int)ppdev->ScreenHeight,
              (unsigned int)ppdev->BitsPerPixel);
-      if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_SET_CURRENT_MODE,
-                             &(ppdev->ModeIndex), sizeof(ULONG), NULL, 0,
-                             &ulTemp))
       {
-          /* We failed, bail out */
-          FB_DBG("DrvAssertMode(TRUE) IOCTL_VIDEO_SET_CURRENT_MODE failed\n");
-          return FALSE;
+          VIDEO_MODE setMode = {0};
+          setMode.RequestedMode = ppdev->ModeIndex;
+          if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_SET_CURRENT_MODE,
+                                 &setMode, sizeof(setMode), NULL, 0,
+                                 &ulTemp))
+          {
+              /* We failed, bail out */
+              FB_DBG("DrvAssertMode(TRUE) IOCTL_VIDEO_SET_CURRENT_MODE failed\n");
+              return FALSE;
+          }
       }
       if (ppdev->BitsPerPixel == 8)
       {

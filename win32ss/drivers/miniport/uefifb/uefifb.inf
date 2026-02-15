@@ -36,7 +36,7 @@ framebuf.dll
 
 [UefiFb_SoftwareSettings]
 HKR,, InstalledDisplayDrivers, %REG_MULTI_SZ%, framebuf
-HKR,, VgaCompatible, %REG_DWORD%, 0
+HKR,, VgaCompatible, %REG_DWORD%, 1
 ; Optional defaults inherited from service for desired resolution
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.XResolution",%REG_DWORD%,1024
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.YResolution",%REG_DWORD%,768

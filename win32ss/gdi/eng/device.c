@@ -34,6 +34,24 @@ InitDeviceImpl(VOID)
 
 static
 BOOLEAN
+EngpGraphicsDeviceIsLinked(
+    _In_ PGRAPHICS_DEVICE pGraphicsDevice)
+{
+    PGRAPHICS_DEVICE pCurrent;
+
+    for (pCurrent = gpGraphicsDeviceFirst;
+         pCurrent;
+         pCurrent = pCurrent->pNextGraphicsDevice)
+    {
+        if (pCurrent == pGraphicsDevice)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static
+BOOLEAN
 EngpHasVgaDriver(
     _In_ PGRAPHICS_DEVICE pGraphicsDevice)
 {
@@ -94,8 +112,9 @@ EngpHasVgaDriver(
         return FALSE;
     }
 
-    /* Device is using VGA driver if service name is 'VGASave' (case insensitive) */
-    return (_wcsicmp(awcServiceName, L"VGASave") == 0);
+    /* Device is using a base video driver if service name matches known fallbacks */
+    return (_wcsicmp(awcServiceName, L"VGASave") == 0 ||
+            _wcsicmp(awcServiceName, L"uefifb") == 0);
 }
 
 /*
@@ -249,8 +268,9 @@ EngpUpdateGraphicsDeviceList(VOID)
     {
         if (pGraphicsDevice == gpVgaGraphicsDevice)
             continue;
-        if (pGraphicsDevice->StateFlags & DISPLAY_DEVICE_VGA_COMPATIBLE && EngpHasVgaDriver(pGraphicsDevice))
+        if (EngpHasVgaDriver(pGraphicsDevice))
         {
+            pGraphicsDevice->StateFlags |= DISPLAY_DEVICE_VGA_COMPATIBLE;
             gpVgaGraphicsDevice = pGraphicsDevice;
             break;
         }
@@ -291,8 +311,16 @@ EngpUpdateGraphicsDeviceList(VOID)
         EngReleaseSemaphore(ghsemGraphicsDeviceList);
     }
 
-    /* Choose a primary device (if none already exists) */
-    if (!gpPrimaryGraphicsDevice)
+    /* Keep global pointers valid if a device was removed from the list */
+    if (gpPrimaryGraphicsDevice && !EngpGraphicsDeviceIsLinked(gpPrimaryGraphicsDevice))
+        gpPrimaryGraphicsDevice = NULL;
+    if (gpVgaGraphicsDevice && !EngpGraphicsDeviceIsLinked(gpVgaGraphicsDevice))
+        gpVgaGraphicsDevice = NULL;
+
+    /* Choose/promote a primary device.
+     * If current primary is a base video fallback (VGASave/uefifb),
+     * promote the first non-fallback adapter when it appears. */
+    if (!gpPrimaryGraphicsDevice || EngpHasVgaDriver(gpPrimaryGraphicsDevice))
     {
         for (pGraphicsDevice = gpGraphicsDeviceFirst;
              pGraphicsDevice;
@@ -304,10 +332,15 @@ EngpUpdateGraphicsDeviceList(VOID)
                 break;
             }
         }
-        if (!pNewPrimaryGraphicsDevice)
+        if (!pNewPrimaryGraphicsDevice && !gpPrimaryGraphicsDevice)
             pNewPrimaryGraphicsDevice = gpGraphicsDeviceFirst;
-        if (pNewPrimaryGraphicsDevice)
+
+        if (pNewPrimaryGraphicsDevice &&
+            pNewPrimaryGraphicsDevice != gpPrimaryGraphicsDevice)
         {
+            if (gpPrimaryGraphicsDevice)
+                gpPrimaryGraphicsDevice->StateFlags &= ~DISPLAY_DEVICE_PRIMARY_DEVICE;
+
             pNewPrimaryGraphicsDevice->StateFlags |= DISPLAY_DEVICE_PRIMARY_DEVICE;
             gpPrimaryGraphicsDevice = pNewPrimaryGraphicsDevice;
         }
